@@ -1,0 +1,923 @@
+{
+  "timestamp": "2026-09-23T16:16:54.195Z",
+  "sheet.html": {
+    "initialJs": {
+      "raw": 7883195,
+      "gzip": 2018704,
+      "count": 3,
+      "files": [
+        {
+          "file": "assets/facade-BCO5i-bu.js",
+          "raw": 5091086,
+          "gzip": 1210100
+        },
+        {
+          "file": "assets/sheet-BHx241ik.js",
+          "raw": 2570386,
+          "gzip": 739799
+        },
+        {
+          "file": "assets/jsx-runtime-DVKHqdS6.js",
+          "raw": 221723,
+          "gzip": 68805
+        }
+      ]
+    },
+    "initialCss": {
+      "raw": 155119,
+      "gzip": 23416,
+      "count": 3,
+      "files": [
+        {
+          "file": "assets/facade-7vUCyHNp.css",
+          "raw": 114621,
+          "gzip": 16391
+        },
+        {
+          "file": "assets/sheet-DDpCQ7w7.css",
+          "raw": 39997,
+          "gzip": 6670
+        },
+        {
+          "file": "assets/jsx-runtime--Nk3ZDL8.css",
+          "raw": 501,
+          "gzip": 355
+        }
+      ]
+    },
+    "lazyJs": {
+      "raw": 4577595,
+      "gzip": 1035740,
+      "count": 79,
+      "files": [
+        {
+          "file": "assets/hu-DVk7Y_ka-Ct1fysVO.js",
+          "raw": 765402,
+          "gzip": 172832
+        },
+        {
+          "file": "assets/nn-ntZvarUK-BWT83oy8.js",
+          "raw": 341708,
+          "gzip": 87857
+        },
+        {
+          "file": "assets/nb-DI8u59ch-BfDSp4tN.js",
+          "raw": 341708,
+          "gzip": 87856
+        },
+        {
+          "file": "assets/no-B8ItS0F3-Cjg1mxae.js",
+          "raw": 341691,
+          "gzip": 87845
+        },
+        {
+          "file": "assets/de-1901-CWoAOigE-BlgpCKr2.js",
+          "raw": 270036,
+          "gzip": 71854
+        },
+        {
+          "file": "assets/de-1996-BL6awyxG-BjfWxQKM.js",
+          "raw": 266936,
+          "gzip": 71064
+        },
+        {
+          "file": "assets/de-ch-1901-hVThVHVb-_Xg3_np3.js",
+          "raw": 264335,
+          "gzip": 70489
+        },
+        {
+          "file": "assets/af-DK_CjRn6-CZxsvT2y.js",
+          "raw": 179532,
+          "gzip": 38941
+        },
+        {
+          "file": "assets/cu-CBUlrW6Y-BRCy0UAr.js",
+          "raw": 168797,
+          "gzip": 26163
+        },
+        {
+          "file": "assets/nl-BHQJ6Gvn-8_OIBsy0.js",
+          "raw": 138438,
+          "gzip": 36094
+        },
+        {
+          "file": "assets/lv-Q2BBHnzp-CLjYDJHB.js",
+          "raw": 112674,
+          "gzip": 16084
+        },
+        {
+          "file": "assets/en-gb-B7Al27b_-COWGBqwJ.js",
+          "raw": 105376,
+          "gzip": 26104
+        },
+        {
+          "file": "assets/ru-v4l-ayaq-DLdM0nWP.js",
+          "raw": 84951,
+          "gzip": 16945
+        },
+        {
+          "file": "assets/ga-Cn6LkudM-CDuqe3gr.js",
+          "raw": 82061,
+          "gzip": 20055
+        },
+        {
+          "file": "assets/cy-BBPa6z2x-Cag4snSk.js",
+          "raw": 80194,
+          "gzip": 19041
+        },
+        {
+          "file": "assets/grc-DOlGgO8T-DANBReIg.js",
+          "raw": 71611,
+          "gzip": 8913
+        },
+        {
+          "file": "assets/th-DWX5iPSo-CFfNau1h.js",
+          "raw": 68620,
+          "gzip": 13253
+        },
+        {
+          "file": "assets/uk-Dir3oxLs-DGVpthWV.js",
+          "raw": 63990,
+          "gzip": 8637
+        },
+        {
+          "file": "assets/bg-CrQqGwni-B5xv6TfF.js",
+          "raw": 56922,
+          "gzip": 4820
+        },
+        {
+          "file": "assets/sv-CFm5y56M-DeQDoAsB.js",
+          "raw": 56807,
+          "gzip": 14410
+        },
+        {
+          "file": "assets/is-BT8UVRze-DWEBuJpb.js",
+          "raw": 48407,
+          "gzip": 12715
+        },
+        {
+          "file": "assets/et-B_spaleu-H7jVbiHv.js",
+          "raw": 47206,
+          "gzip": 11413
+        },
+        {
+          "file": "assets/pl-9fg-ESVt-Bv_p-a9x.js",
+          "raw": 46089,
+          "gzip": 7694
+        },
+        {
+          "file": "assets/es-DcaaHPU_-CnHE1eri.js",
+          "raw": 44127,
+          "gzip": 6264
+        },
+        {
+          "file": "assets/cs-CmAteokq-BI5q4aVA.js",
+          "raw": 39755,
+          "gzip": 9954
+        },
+        {
+          "file": "assets/gl-DZGc-K_G-D9_oxkqv.js",
+          "raw": 33639,
+          "gzip": 4257
+        },
+        {
+          "file": "assets/sh-cyrl-BpCRFOmq-UY09gie6.js",
+          "raw": 32273,
+          "gzip": 5457
+        },
+        {
+          "file": "assets/sk-_iOeDNrQ-DC8Al4lF.js",
+          "raw": 31691,
+          "gzip": 6791
+        },
+        {
+          "file": "assets/sr-cyrl-Dpzrbd0W-yGc0Jz1j.js",
+          "raw": 31347,
+          "gzip": 5572
+        },
+        {
+          "file": "assets/sh-latn-sRy4Tuaj-De-tA-2J.js",
+          "raw": 29560,
+          "gzip": 5291
+        },
+        {
+          "file": "assets/be-CrQ0smca-BYVdQd18.js",
+          "raw": 27828,
+          "gzip": 2222
+        },
+        {
+          "file": "assets/ka-jyoLzyDE-BU45urC7.js",
+          "raw": 26186,
+          "gzip": 4503
+        },
+        {
+          "file": "assets/fr-BC2onEz9-Dc1KqFHa.js",
+          "raw": 24133,
+          "gzip": 4290
+        },
+        {
+          "file": "assets/la-x-liturgic-CXeQb4FY-BpDOy20C.js",
+          "raw": 22818,
+          "gzip": 5710
+        },
+        {
+          "file": "assets/el-polyton-ogVWcTzh-B5J5pGHR.js",
+          "raw": 17623,
+          "gzip": 2862
+        },
+        {
+          "file": "assets/tk-BMbKB10q-UHPz-lif.js",
+          "raw": 16959,
+          "gzip": 980
+        },
+        {
+          "file": "assets/lt-BBe8DlDF-B3cgXplB.js",
+          "raw": 14766,
+          "gzip": 3594
+        },
+        {
+          "file": "assets/hsb-DC_ITc1e-kb5QeNH1.js",
+          "raw": 13954,
+          "gzip": 1942
+        },
+        {
+          "file": "assets/da-CCDXfXtG-BWliw5hZ.js",
+          "raw": 12718,
+          "gzip": 3448
+        },
+        {
+          "file": "assets/sl-DpiklF-D-B8FnrXi1.js",
+          "raw": 12599,
+          "gzip": 3393
+        },
+        {
+          "file": "assets/mn-cyrl-lHM4n0oC-DN6sz9R4.js",
+          "raw": 12149,
+          "gzip": 2142
+        },
+        {
+          "file": "assets/hy-e995ysyO-Cjfrs2ZM.js",
+          "raw": 11931,
+          "gzip": 301
+        },
+        {
+          "file": "assets/hr-DT1SBBes-D_vEJhf2.js",
+          "raw": 11360,
+          "gzip": 950
+        },
+        {
+          "file": "assets/sa-CKY9c_Vq-CvBCyoRG.js",
+          "raw": 9709,
+          "gzip": 1651
+        },
+        {
+          "file": "assets/la-x-classic-yTyAOQEt-aO_2QO0y.js",
+          "raw": 8925,
+          "gzip": 2304
+        },
+        {
+          "file": "assets/ca-SUf6Y2Om-DrduLk3W.js",
+          "raw": 7819,
+          "gzip": 1135
+        },
+        {
+          "file": "assets/ro-0fmdH0HA-Bov_DAVD.js",
+          "raw": 7266,
+          "gzip": 2130
+        },
+        {
+          "file": "assets/cop-C3sk0IUo-Dw82IjCr.js",
+          "raw": 6886,
+          "gzip": 701
+        },
+        {
+          "file": "assets/ia-Cr4TJH0c-B1i9kDPT.js",
+          "raw": 6486,
+          "gzip": 1821
+        },
+        {
+          "file": "assets/el-monoton-D3aKqTz2-CuqNQIvE.js",
+          "raw": 4868,
+          "gzip": 885
+        },
+        {
+          "file": "assets/mn-cyrl-x-lmc-3aetruI8-BJqn49ay.js",
+          "raw": 4822,
+          "gzip": 1201
+        },
+        {
+          "file": "assets/tr-CIHIuzqc-DvQDK0dA.js",
+          "raw": 3965,
+          "gzip": 338
+        },
+        {
+          "file": "assets/fur-AC12wySk-tJv2icDr.js",
+          "raw": 3899,
+          "gzip": 1016
+        },
+        {
+          "file": "assets/mul-ethi-D_CMSMEq-D6ioGuYP.js",
+          "raw": 3684,
+          "gzip": 913
+        },
+        {
+          "file": "assets/rm-C0MIK9N4-CNhvXnnG.js",
+          "raw": 3668,
+          "gzip": 944
+        },
+        {
+          "file": "assets/it-Bt_Meacx-HiFRunf5.js",
+          "raw": 3624,
+          "gzip": 872
+        },
+        {
+          "file": "assets/pms-BRGfm5gS-DfOt2RSi.js",
+          "raw": 3375,
+          "gzip": 910
+        },
+        {
+          "file": "assets/la-DuvHjUWw-Bwiuou7l.js",
+          "raw": 3189,
+          "gzip": 628
+        },
+        {
+          "file": "assets/fi-RW5VB8Yp-mParSSSy.js",
+          "raw": 3189,
+          "gzip": 779
+        },
+        {
+          "file": "assets/kmr-Cfwhwuff-DfPyPgkK.js",
+          "raw": 2729,
+          "gzip": 799
+        },
+        {
+          "file": "assets/oc-P_i3-xLA-W5_I63nO.js",
+          "raw": 2555,
+          "gzip": 672
+        },
+        {
+          "file": "assets/id-DifDyWg9-C3Hzl2m4.js",
+          "raw": 2434,
+          "gzip": 639
+        },
+        {
+          "file": "assets/pt-Cum2_NUC-CrkeeQaZ.js",
+          "raw": 2288,
+          "gzip": 301
+        },
+        {
+          "file": "assets/eu-Ctv_kq9Z-D1jw9zt8.js",
+          "raw": 1512,
+          "gzip": 211
+        },
+        {
+          "file": "assets/zh-latn-pinyin-BdYb-Ey_-CW52gdb_.js",
+          "raw": 1276,
+          "gzip": 216
+        },
+        {
+          "file": "assets/pi-B9cgjyG1-o9084kBf.js",
+          "raw": 853,
+          "gzip": 350
+        },
+        {
+          "file": "assets/ml-2xLVYkVY-Ct0js8Am.js",
+          "raw": 805,
+          "gzip": 292
+        },
+        {
+          "file": "assets/ta-BcghgTbD-B5_ztYXp.js",
+          "raw": 709,
+          "gzip": 246
+        },
+        {
+          "file": "assets/kn-C6Lov-DP-BuXzi7S-.js",
+          "raw": 631,
+          "gzip": 250
+        },
+        {
+          "file": "assets/te-B5Spl2Jk-BjTOzs5s.js",
+          "raw": 623,
+          "gzip": 247
+        },
+        {
+          "file": "assets/bn-NCLZcWHi-BGS6_hxH.js",
+          "raw": 623,
+          "gzip": 257
+        },
+        {
+          "file": "assets/as-BPtSu6VN-F6qyW8uH.js",
+          "raw": 623,
+          "gzip": 257
+        },
+        {
+          "file": "assets/mr-CjWJPVmH-DGtESPcG.js",
+          "raw": 607,
+          "gzip": 244
+        },
+        {
+          "file": "assets/hi-DsAaTPCC-CiihDo6Q.js",
+          "raw": 607,
+          "gzip": 244
+        },
+        {
+          "file": "assets/gu-Bjl0l-cf-COW9d1dt.js",
+          "raw": 575,
+          "gzip": 238
+        },
+        {
+          "file": "assets/or-50rxpoq4-Cf5-bcl5.js",
+          "raw": 567,
+          "gzip": 236
+        },
+        {
+          "file": "assets/pa-C54UG8eN-Bj-XExX_.js",
+          "raw": 527,
+          "gzip": 228
+        },
+        {
+          "file": "assets/minimal-OVL4a5-e.js",
+          "raw": 439,
+          "gzip": 325
+        },
+        {
+          "file": "assets/minimal-DWJHukzg.js",
+          "raw": 331,
+          "gzip": 258
+        }
+      ]
+    },
+    "workers": {
+      "raw": 2830041,
+      "gzip": 688190,
+      "count": 1,
+      "files": [
+        {
+          "file": "assets/sheet-formula.worker-Cr_j1odP.js",
+          "raw": 2830041,
+          "gzip": 688190
+        }
+      ]
+    }
+  },
+  "doc.html": {
+    "initialJs": {
+      "raw": 5505959,
+      "gzip": 1328633,
+      "count": 3,
+      "files": [
+        {
+          "file": "assets/facade-BCO5i-bu.js",
+          "raw": 5091086,
+          "gzip": 1210100
+        },
+        {
+          "file": "assets/jsx-runtime-DVKHqdS6.js",
+          "raw": 221723,
+          "gzip": 68805
+        },
+        {
+          "file": "assets/doc-CSbRKJlT.js",
+          "raw": 193150,
+          "gzip": 49728
+        }
+      ]
+    },
+    "initialCss": {
+      "raw": 119952,
+      "gzip": 18078,
+      "count": 3,
+      "files": [
+        {
+          "file": "assets/facade-7vUCyHNp.css",
+          "raw": 114621,
+          "gzip": 16391
+        },
+        {
+          "file": "assets/doc-C9tVtSRm.css",
+          "raw": 4830,
+          "gzip": 1332
+        },
+        {
+          "file": "assets/jsx-runtime--Nk3ZDL8.css",
+          "raw": 501,
+          "gzip": 355
+        }
+      ]
+    },
+    "lazyJs": {
+      "raw": 4577595,
+      "gzip": 1035740,
+      "count": 79,
+      "files": [
+        {
+          "file": "assets/hu-DVk7Y_ka-Ct1fysVO.js",
+          "raw": 765402,
+          "gzip": 172832
+        },
+        {
+          "file": "assets/nn-ntZvarUK-BWT83oy8.js",
+          "raw": 341708,
+          "gzip": 87857
+        },
+        {
+          "file": "assets/nb-DI8u59ch-BfDSp4tN.js",
+          "raw": 341708,
+          "gzip": 87856
+        },
+        {
+          "file": "assets/no-B8ItS0F3-Cjg1mxae.js",
+          "raw": 341691,
+          "gzip": 87845
+        },
+        {
+          "file": "assets/de-1901-CWoAOigE-BlgpCKr2.js",
+          "raw": 270036,
+          "gzip": 71854
+        },
+        {
+          "file": "assets/de-1996-BL6awyxG-BjfWxQKM.js",
+          "raw": 266936,
+          "gzip": 71064
+        },
+        {
+          "file": "assets/de-ch-1901-hVThVHVb-_Xg3_np3.js",
+          "raw": 264335,
+          "gzip": 70489
+        },
+        {
+          "file": "assets/af-DK_CjRn6-CZxsvT2y.js",
+          "raw": 179532,
+          "gzip": 38941
+        },
+        {
+          "file": "assets/cu-CBUlrW6Y-BRCy0UAr.js",
+          "raw": 168797,
+          "gzip": 26163
+        },
+        {
+          "file": "assets/nl-BHQJ6Gvn-8_OIBsy0.js",
+          "raw": 138438,
+          "gzip": 36094
+        },
+        {
+          "file": "assets/lv-Q2BBHnzp-CLjYDJHB.js",
+          "raw": 112674,
+          "gzip": 16084
+        },
+        {
+          "file": "assets/en-gb-B7Al27b_-COWGBqwJ.js",
+          "raw": 105376,
+          "gzip": 26104
+        },
+        {
+          "file": "assets/ru-v4l-ayaq-DLdM0nWP.js",
+          "raw": 84951,
+          "gzip": 16945
+        },
+        {
+          "file": "assets/ga-Cn6LkudM-CDuqe3gr.js",
+          "raw": 82061,
+          "gzip": 20055
+        },
+        {
+          "file": "assets/cy-BBPa6z2x-Cag4snSk.js",
+          "raw": 80194,
+          "gzip": 19041
+        },
+        {
+          "file": "assets/grc-DOlGgO8T-DANBReIg.js",
+          "raw": 71611,
+          "gzip": 8913
+        },
+        {
+          "file": "assets/th-DWX5iPSo-CFfNau1h.js",
+          "raw": 68620,
+          "gzip": 13253
+        },
+        {
+          "file": "assets/uk-Dir3oxLs-DGVpthWV.js",
+          "raw": 63990,
+          "gzip": 8637
+        },
+        {
+          "file": "assets/bg-CrQqGwni-B5xv6TfF.js",
+          "raw": 56922,
+          "gzip": 4820
+        },
+        {
+          "file": "assets/sv-CFm5y56M-DeQDoAsB.js",
+          "raw": 56807,
+          "gzip": 14410
+        },
+        {
+          "file": "assets/is-BT8UVRze-DWEBuJpb.js",
+          "raw": 48407,
+          "gzip": 12715
+        },
+        {
+          "file": "assets/et-B_spaleu-H7jVbiHv.js",
+          "raw": 47206,
+          "gzip": 11413
+        },
+        {
+          "file": "assets/pl-9fg-ESVt-Bv_p-a9x.js",
+          "raw": 46089,
+          "gzip": 7694
+        },
+        {
+          "file": "assets/es-DcaaHPU_-CnHE1eri.js",
+          "raw": 44127,
+          "gzip": 6264
+        },
+        {
+          "file": "assets/cs-CmAteokq-BI5q4aVA.js",
+          "raw": 39755,
+          "gzip": 9954
+        },
+        {
+          "file": "assets/gl-DZGc-K_G-D9_oxkqv.js",
+          "raw": 33639,
+          "gzip": 4257
+        },
+        {
+          "file": "assets/sh-cyrl-BpCRFOmq-UY09gie6.js",
+          "raw": 32273,
+          "gzip": 5457
+        },
+        {
+          "file": "assets/sk-_iOeDNrQ-DC8Al4lF.js",
+          "raw": 31691,
+          "gzip": 6791
+        },
+        {
+          "file": "assets/sr-cyrl-Dpzrbd0W-yGc0Jz1j.js",
+          "raw": 31347,
+          "gzip": 5572
+        },
+        {
+          "file": "assets/sh-latn-sRy4Tuaj-De-tA-2J.js",
+          "raw": 29560,
+          "gzip": 5291
+        },
+        {
+          "file": "assets/be-CrQ0smca-BYVdQd18.js",
+          "raw": 27828,
+          "gzip": 2222
+        },
+        {
+          "file": "assets/ka-jyoLzyDE-BU45urC7.js",
+          "raw": 26186,
+          "gzip": 4503
+        },
+        {
+          "file": "assets/fr-BC2onEz9-Dc1KqFHa.js",
+          "raw": 24133,
+          "gzip": 4290
+        },
+        {
+          "file": "assets/la-x-liturgic-CXeQb4FY-BpDOy20C.js",
+          "raw": 22818,
+          "gzip": 5710
+        },
+        {
+          "file": "assets/el-polyton-ogVWcTzh-B5J5pGHR.js",
+          "raw": 17623,
+          "gzip": 2862
+        },
+        {
+          "file": "assets/tk-BMbKB10q-UHPz-lif.js",
+          "raw": 16959,
+          "gzip": 980
+        },
+        {
+          "file": "assets/lt-BBe8DlDF-B3cgXplB.js",
+          "raw": 14766,
+          "gzip": 3594
+        },
+        {
+          "file": "assets/hsb-DC_ITc1e-kb5QeNH1.js",
+          "raw": 13954,
+          "gzip": 1942
+        },
+        {
+          "file": "assets/da-CCDXfXtG-BWliw5hZ.js",
+          "raw": 12718,
+          "gzip": 3448
+        },
+        {
+          "file": "assets/sl-DpiklF-D-B8FnrXi1.js",
+          "raw": 12599,
+          "gzip": 3393
+        },
+        {
+          "file": "assets/mn-cyrl-lHM4n0oC-DN6sz9R4.js",
+          "raw": 12149,
+          "gzip": 2142
+        },
+        {
+          "file": "assets/hy-e995ysyO-Cjfrs2ZM.js",
+          "raw": 11931,
+          "gzip": 301
+        },
+        {
+          "file": "assets/hr-DT1SBBes-D_vEJhf2.js",
+          "raw": 11360,
+          "gzip": 950
+        },
+        {
+          "file": "assets/sa-CKY9c_Vq-CvBCyoRG.js",
+          "raw": 9709,
+          "gzip": 1651
+        },
+        {
+          "file": "assets/la-x-classic-yTyAOQEt-aO_2QO0y.js",
+          "raw": 8925,
+          "gzip": 2304
+        },
+        {
+          "file": "assets/ca-SUf6Y2Om-DrduLk3W.js",
+          "raw": 7819,
+          "gzip": 1135
+        },
+        {
+          "file": "assets/ro-0fmdH0HA-Bov_DAVD.js",
+          "raw": 7266,
+          "gzip": 2130
+        },
+        {
+          "file": "assets/cop-C3sk0IUo-Dw82IjCr.js",
+          "raw": 6886,
+          "gzip": 701
+        },
+        {
+          "file": "assets/ia-Cr4TJH0c-B1i9kDPT.js",
+          "raw": 6486,
+          "gzip": 1821
+        },
+        {
+          "file": "assets/el-monoton-D3aKqTz2-CuqNQIvE.js",
+          "raw": 4868,
+          "gzip": 885
+        },
+        {
+          "file": "assets/mn-cyrl-x-lmc-3aetruI8-BJqn49ay.js",
+          "raw": 4822,
+          "gzip": 1201
+        },
+        {
+          "file": "assets/tr-CIHIuzqc-DvQDK0dA.js",
+          "raw": 3965,
+          "gzip": 338
+        },
+        {
+          "file": "assets/fur-AC12wySk-tJv2icDr.js",
+          "raw": 3899,
+          "gzip": 1016
+        },
+        {
+          "file": "assets/mul-ethi-D_CMSMEq-D6ioGuYP.js",
+          "raw": 3684,
+          "gzip": 913
+        },
+        {
+          "file": "assets/rm-C0MIK9N4-CNhvXnnG.js",
+          "raw": 3668,
+          "gzip": 944
+        },
+        {
+          "file": "assets/it-Bt_Meacx-HiFRunf5.js",
+          "raw": 3624,
+          "gzip": 872
+        },
+        {
+          "file": "assets/pms-BRGfm5gS-DfOt2RSi.js",
+          "raw": 3375,
+          "gzip": 910
+        },
+        {
+          "file": "assets/la-DuvHjUWw-Bwiuou7l.js",
+          "raw": 3189,
+          "gzip": 628
+        },
+        {
+          "file": "assets/fi-RW5VB8Yp-mParSSSy.js",
+          "raw": 3189,
+          "gzip": 779
+        },
+        {
+          "file": "assets/kmr-Cfwhwuff-DfPyPgkK.js",
+          "raw": 2729,
+          "gzip": 799
+        },
+        {
+          "file": "assets/oc-P_i3-xLA-W5_I63nO.js",
+          "raw": 2555,
+          "gzip": 672
+        },
+        {
+          "file": "assets/id-DifDyWg9-C3Hzl2m4.js",
+          "raw": 2434,
+          "gzip": 639
+        },
+        {
+          "file": "assets/pt-Cum2_NUC-CrkeeQaZ.js",
+          "raw": 2288,
+          "gzip": 301
+        },
+        {
+          "file": "assets/eu-Ctv_kq9Z-D1jw9zt8.js",
+          "raw": 1512,
+          "gzip": 211
+        },
+        {
+          "file": "assets/zh-latn-pinyin-BdYb-Ey_-CW52gdb_.js",
+          "raw": 1276,
+          "gzip": 216
+        },
+        {
+          "file": "assets/pi-B9cgjyG1-o9084kBf.js",
+          "raw": 853,
+          "gzip": 350
+        },
+        {
+          "file": "assets/ml-2xLVYkVY-Ct0js8Am.js",
+          "raw": 805,
+          "gzip": 292
+        },
+        {
+          "file": "assets/ta-BcghgTbD-B5_ztYXp.js",
+          "raw": 709,
+          "gzip": 246
+        },
+        {
+          "file": "assets/kn-C6Lov-DP-BuXzi7S-.js",
+          "raw": 631,
+          "gzip": 250
+        },
+        {
+          "file": "assets/te-B5Spl2Jk-BjTOzs5s.js",
+          "raw": 623,
+          "gzip": 247
+        },
+        {
+          "file": "assets/bn-NCLZcWHi-BGS6_hxH.js",
+          "raw": 623,
+          "gzip": 257
+        },
+        {
+          "file": "assets/as-BPtSu6VN-F6qyW8uH.js",
+          "raw": 623,
+          "gzip": 257
+        },
+        {
+          "file": "assets/mr-CjWJPVmH-DGtESPcG.js",
+          "raw": 607,
+          "gzip": 244
+        },
+        {
+          "file": "assets/hi-DsAaTPCC-CiihDo6Q.js",
+          "raw": 607,
+          "gzip": 244
+        },
+        {
+          "file": "assets/gu-Bjl0l-cf-COW9d1dt.js",
+          "raw": 575,
+          "gzip": 238
+        },
+        {
+          "file": "assets/or-50rxpoq4-Cf5-bcl5.js",
+          "raw": 567,
+          "gzip": 236
+        },
+        {
+          "file": "assets/pa-C54UG8eN-Bj-XExX_.js",
+          "raw": 527,
+          "gzip": 228
+        },
+        {
+          "file": "assets/minimal-OVL4a5-e.js",
+          "raw": 439,
+          "gzip": 325
+        },
+        {
+          "file": "assets/minimal-DWJHukzg.js",
+          "raw": 331,
+          "gzip": 258
+        }
+      ]
+    },
+    "workers": {
+      "raw": 1260744,
+      "gzip": 393394,
+      "count": 1,
+      "files": [
+        {
+          "file": "assets/doc-layout.worker-CZDuqPRm.js",
+          "raw": 1260744,
+          "gzip": 393394
+        }
+      ]
+    }
+  }
+}
