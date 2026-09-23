@@ -1,0 +1,71 @@
+{
+  "check": "V02",
+  "scenario": "doc-main",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-23T16:13:48.909Z",
+  "timings": {
+    "ready": 32.700000047683716,
+    "rendered": 365.8000000715256,
+    "steady": 3368.8000000715256
+  },
+  "functional": [
+    {
+      "name": "正文包含键盘输入",
+      "expected": true,
+      "actual": true,
+      "pass": true
+    },
+    {
+      "name": "原有内容保留",
+      "expected": true,
+      "actual": true,
+      "pass": true
+    },
+    {
+      "name": "全文加粗（工具栏）",
+      "expected": 15,
+      "actual": 15,
+      "pass": true
+    }
+  ],
+  "ui": {
+    "namedStyleMenuDomDelta": 46
+  },
+  "worker": {
+    "expected": false,
+    "started": [],
+    "stats": {
+      "created": 0,
+      "messagesToWorker": 0,
+      "messagesFromWorker": 0
+    }
+  },
+  "enforceViolations": [],
+  "probeViolations": {
+    "total": 4,
+    "groups": [
+      {
+        "directive": "style-src-elem",
+        "blocked": "inline",
+        "sourceFile": "/assets/facade-BCO5i-bu.js",
+        "count": 4
+      }
+    ]
+  },
+  "pageSideViolationCount": 4,
+  "requests": {
+    "total": 12,
+    "byOrigin": {
+      "http://127.0.0.1:4700": 12
+    },
+    "crossOrigin": []
+  },
+  "pageErrors": [],
+  "consoleErrors": [],
+  "consoleWarningCount": 0
+}

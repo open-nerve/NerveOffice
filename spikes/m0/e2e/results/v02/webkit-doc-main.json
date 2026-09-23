@@ -1,0 +1,71 @@
+{
+  "check": "V02",
+  "scenario": "doc-main",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T16:14:18.574Z",
+  "timings": {
+    "ready": 44,
+    "rendered": 378,
+    "steady": 3382
+  },
+  "functional": [
+    {
+      "name": "正文包含键盘输入",
+      "expected": true,
+      "actual": true,
+      "pass": true
+    },
+    {
+      "name": "原有内容保留",
+      "expected": true,
+      "actual": true,
+      "pass": true
+    },
+    {
+      "name": "全文加粗（工具栏）",
+      "expected": 15,
+      "actual": 15,
+      "pass": true
+    }
+  ],
+  "ui": {
+    "namedStyleMenuDomDelta": 43
+  },
+  "worker": {
+    "expected": false,
+    "started": [],
+    "stats": {
+      "created": 0,
+      "messagesToWorker": 0,
+      "messagesFromWorker": 0
+    }
+  },
+  "enforceViolations": [],
+  "probeViolations": {
+    "total": 4,
+    "groups": [
+      {
+        "directive": "style-src-elem",
+        "blocked": "inline",
+        "sourceFile": "/assets/facade-BCO5i-bu.js",
+        "count": 4
+      }
+    ]
+  },
+  "pageSideViolationCount": 4,
+  "requests": {
+    "total": 12,
+    "byOrigin": {
+      "http://127.0.0.1:4700": 12
+    },
+    "crossOrigin": []
+  },
+  "pageErrors": [],
+  "consoleErrors": [],
+  "consoleWarningCount": 0
+}

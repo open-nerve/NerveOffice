@@ -83,6 +83,7 @@ export interface M0Window {
     editor?: EditorHandle;
     events: PageEvents;
     params: Record<string, unknown>;
+    workerStats: { created: number; messagesToWorker: number; messagesFromWorker: number };
 }
 
 declare global {

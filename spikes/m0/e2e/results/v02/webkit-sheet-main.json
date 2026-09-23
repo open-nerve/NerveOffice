@@ -1,0 +1,90 @@
+{
+  "check": "V02",
+  "scenario": "sheet-main",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T16:14:04.084Z",
+  "timings": {
+    "ready": 25,
+    "rendered": 486,
+    "steady": 3538
+  },
+  "functional": [
+    {
+      "name": "B2 值（键盘输入）",
+      "expected": "hello 你好",
+      "actual": "hello 你好",
+      "pass": true
+    },
+    {
+      "name": "B2 加粗（工具栏）",
+      "expected": 1,
+      "actual": 1,
+      "pass": true
+    },
+    {
+      "name": "B3 公式",
+      "expected": "=SUM(1,2)",
+      "actual": "=SUM(1,2)",
+      "pass": true
+    },
+    {
+      "name": "B3 计算结果",
+      "expected": 3,
+      "actual": 3,
+      "pass": true
+    }
+  ],
+  "ui": {
+    "numfmtMenuDomDelta": 51,
+    "contextMenuDomDelta": 116
+  },
+  "worker": {
+    "expected": false,
+    "started": [],
+    "stats": {
+      "created": 0,
+      "messagesToWorker": 0,
+      "messagesFromWorker": 0
+    }
+  },
+  "enforceViolations": [],
+  "probeViolations": {
+    "total": 88,
+    "groups": [
+      {
+        "directive": "img-src",
+        "blocked": "data",
+        "sourceFile": "/assets/sheet-BHx241ik.js",
+        "count": 83
+      },
+      {
+        "directive": "style-src-elem",
+        "blocked": "inline",
+        "sourceFile": "/assets/facade-BCO5i-bu.js",
+        "count": 4
+      },
+      {
+        "directive": "img-src",
+        "blocked": "data",
+        "sourceFile": "/assets/facade-BCO5i-bu.js",
+        "count": 1
+      }
+    ]
+  },
+  "pageSideViolationCount": 88,
+  "requests": {
+    "total": 96,
+    "byOrigin": {
+      "http://127.0.0.1:4700": 96
+    },
+    "crossOrigin": []
+  },
+  "pageErrors": [],
+  "consoleErrors": [],
+  "consoleWarningCount": 0
+}

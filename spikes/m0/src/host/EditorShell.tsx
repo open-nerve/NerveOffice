@@ -31,6 +31,20 @@ export function EditorShell({ profile, defaultSample, createWorker }: EditorShel
         if (container == null || startedRef.current) return;
         startedRef.current = true;
 
+        const workerStats = { created: 0, messagesToWorker: 0, messagesFromWorker: 0 };
+        // 包一层计数，用来证明 Worker 确实参与了计算或排版。
+        const createCountingWorker = (): Worker => {
+            const worker = createWorker();
+            workerStats.created++;
+            worker.addEventListener('message', () => workerStats.messagesFromWorker++);
+            const post = worker.postMessage.bind(worker) as (...args: unknown[]) => void;
+            worker.postMessage = ((...args: unknown[]) => {
+                workerStats.messagesToWorker++;
+                post(...args);
+            }) as Worker['postMessage'];
+            return worker;
+        };
+
         const ready = (async (): Promise<EditorHandle> => {
             if (params.mode === 'read') {
                 throw new Error('阅读模式在 P3 实现');
@@ -40,11 +54,11 @@ export function EditorShell({ profile, defaultSample, createWorker }: EditorShel
                 profile,
                 container,
                 data,
-                createWorker: params.worker ? createWorker : undefined,
+                createWorker: params.worker ? createCountingWorker : undefined,
             });
         })();
 
-        window.__m0 = { kind: profile.kind, ready, events: pageEvents, params: { ...params } };
+        window.__m0 = { kind: profile.kind, ready, events: pageEvents, params: { ...params }, workerStats };
 
         ready.then(
             (editor) => {
