@@ -1,0 +1,225 @@
+{
+  "check": "V03",
+  "sample": "sheet/minimal",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T18:17:15.420Z",
+  "resourceHooks": [
+    {
+      "name": "DOC_DRAWING_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_NOTE_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_OBJECT_PERMISSION_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_WORD_STYLES_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "SHEET_AuthzIoMockService_PLUGIN",
+      "businesses": [
+        2,
+        1,
+        3,
+        6
+      ]
+    },
+    {
+      "name": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_DATA_VALIDATION_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_DEFINED_NAME_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_DRAWING_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_FILTER_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_NOTE_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_RANGE_PROTECTION_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_RANGE_THEME_MODEL_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN",
+      "businesses": [
+        2
+      ]
+    }
+  ],
+  "stable12": true,
+  "stable12Diff": [],
+  "stable12EmptyEquivalent": [
+    {
+      "path": "$.resources[7].data",
+      "kind": "changed",
+      "before": "\"\"",
+      "after": "{}"
+    }
+  ],
+  "stable23": true,
+  "stable23Diff": [],
+  "fidelity": {
+    "added": 17,
+    "removed": 0,
+    "changed": 0,
+    "emptyEquivalent": 0,
+    "entries": [
+      {
+        "path": "$.sheets.sheet-1.tabColor",
+        "kind": "added",
+        "after": "\"\""
+      },
+      {
+        "path": "$.sheets.sheet-1.hidden",
+        "kind": "added",
+        "after": "0"
+      },
+      {
+        "path": "$.sheets.sheet-1.zoomRatio",
+        "kind": "added",
+        "after": "1"
+      },
+      {
+        "path": "$.sheets.sheet-1.freeze",
+        "kind": "added",
+        "after": "{\"xSplit\":0,\"ySplit\":0,\"startRow\":-1,\"startColumn\":-1}"
+      },
+      {
+        "path": "$.sheets.sheet-1.scrollTop",
+        "kind": "added",
+        "after": "0"
+      },
+      {
+        "path": "$.sheets.sheet-1.scrollLeft",
+        "kind": "added",
+        "after": "0"
+      },
+      {
+        "path": "$.sheets.sheet-1.defaultColumnWidth",
+        "kind": "added",
+        "after": "88"
+      },
+      {
+        "path": "$.sheets.sheet-1.defaultRowHeight",
+        "kind": "added",
+        "after": "24"
+      },
+      {
+        "path": "$.sheets.sheet-1.mergeData",
+        "kind": "added",
+        "after": "[]"
+      },
+      {
+        "path": "$.sheets.sheet-1.rowData",
+        "kind": "added",
+        "after": "{}"
+      },
+      {
+        "path": "$.sheets.sheet-1.columnData",
+        "kind": "added",
+        "after": "{}"
+      },
+      {
+        "path": "$.sheets.sheet-1.showGridlines",
+        "kind": "added",
+        "after": "1"
+      },
+      {
+        "path": "$.sheets.sheet-1.rowHeader",
+        "kind": "added",
+        "after": "{\"width\":46,\"hidden\":0}"
+      },
+      {
+        "path": "$.sheets.sheet-1.columnHeader",
+        "kind": "added",
+        "after": "{\"height\":20,\"hidden\":0}"
+      },
+      {
+        "path": "$.sheets.sheet-1.rightToLeft",
+        "kind": "added",
+        "after": "0"
+      },
+      {
+        "path": "$.appVersion",
+        "kind": "added",
+        "after": "\"1.0.0\""
+      },
+      {
+        "path": "$.resources",
+        "kind": "added",
+        "after": "[{\"name\":\"SHEET_RANGE_PROTECTION_PLUGIN\",\"data\":\"\"},{\"name\":\"SHEET_AuthzIoMockService_PLUGIN\",\"data\":{}},{\"name\":\"SHEET_WORKSHEET_PROTECTION_PLUGIN\",\"data\":{..."
+      }
+    ]
+  },
+  "resources": {
+    "unknown": [],
+    "missing": [],
+    "emptied": [],
+    "changed": []
+  },
+  "hashes": {
+    "s0": "efa192ad553df1bcf654b3e34d68a6d337b04271ef87440e96cd4b394366d78e",
+    "s1": "fd3d4b16de51627e73c8f2f5c64f7010749f54c27ff0063f3d936c13712bfaa8",
+    "s2": "86f17d9ccbe315dff5b9f7c73bead56257fe1ccf587f05eeb7bdcc59a3808b86",
+    "s3": "86f17d9ccbe315dff5b9f7c73bead56257fe1ccf587f05eeb7bdcc59a3808b86"
+  },
+  "pageErrors": [],
+  "consoleErrors": []
+}

@@ -1,0 +1,22 @@
+{
+  "check": "V03-protection",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T18:13:49.966Z",
+  "protectedCellA1AfterTyping": "尝试修改",
+  "unprotectedCellD10AfterTyping": "可以修改",
+  "sheets": [
+    {
+      "name": "数据",
+      "isProtected": false
+    },
+    {
+      "name": "整表保护",
+      "isProtected": true
+    }
+  ]
+}

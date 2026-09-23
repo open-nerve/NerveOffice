@@ -1,0 +1,69 @@
+{
+  "check": "V03",
+  "sample": "doc/doc-list",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T18:19:27.147Z",
+  "resourceHooks": [
+    {
+      "name": "DOC_DRAWING_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_HYPER_LINK_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_NOTE_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_OBJECT_PERMISSION_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_WORD_STYLES_PLUGIN",
+      "businesses": [
+        1
+      ]
+    }
+  ],
+  "stable12": true,
+  "stable12Diff": [],
+  "stable12EmptyEquivalent": [],
+  "stable23": true,
+  "stable23Diff": [],
+  "fidelity": {
+    "added": 0,
+    "removed": 0,
+    "changed": 0,
+    "emptyEquivalent": 0,
+    "entries": []
+  },
+  "resources": {
+    "unknown": [],
+    "missing": [],
+    "emptied": [],
+    "changed": []
+  },
+  "hashes": {
+    "s0": "ffed8e4312227bfbab006c48e45661f6a4e440ade8e9d0879c170bca8687b85f",
+    "s1": "ffed8e4312227bfbab006c48e45661f6a4e440ade8e9d0879c170bca8687b85f",
+    "s2": "ffed8e4312227bfbab006c48e45661f6a4e440ade8e9d0879c170bca8687b85f",
+    "s3": "ffed8e4312227bfbab006c48e45661f6a4e440ade8e9d0879c170bca8687b85f"
+  },
+  "pageErrors": [],
+  "consoleErrors": []
+}

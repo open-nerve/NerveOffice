@@ -36,14 +36,23 @@ export function isEmptyResourceData(data: unknown): boolean {
     return false;
 }
 
-/** 键排序后序列化，用于比较两份资源的内容是否相同。 */
+/** 去掉取值为空的键（例如某个工作表对应的空规则数组），它们与"没有这个键"在内容上等价。 */
+function pruneEmpty(v: unknown): unknown {
+    if (Array.isArray(v)) return v.map(pruneEmpty);
+    if (v != null && typeof v === 'object') {
+        return Object.fromEntries(
+            Object.keys(v as Record<string, unknown>)
+                .sort()
+                .filter((k) => !isEmptyResourceData((v as Record<string, unknown>)[k]))
+                .map((k) => [k, pruneEmpty((v as Record<string, unknown>)[k])]),
+        );
+    }
+    return v;
+}
+
+/** 键排序、去掉空值后序列化，用于比较两份资源的内容是否相同。 */
 export function canonical(value: unknown): string {
-    const v = parse(value);
-    return JSON.stringify(v, (_k, x) =>
-        x != null && typeof x === 'object' && !Array.isArray(x)
-            ? Object.fromEntries(Object.keys(x as Record<string, unknown>).sort().map((k) => [k, (x as Record<string, unknown>)[k]]))
-            : x,
-    );
+    return JSON.stringify(pruneEmpty(parse(value)));
 }
 
 export function compareResources(

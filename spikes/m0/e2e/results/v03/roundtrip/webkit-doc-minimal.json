@@ -1,0 +1,190 @@
+{
+  "check": "V03",
+  "sample": "doc/minimal",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T18:19:05.662Z",
+  "resourceHooks": [
+    {
+      "name": "DOC_DRAWING_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_HYPER_LINK_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_NOTE_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_OBJECT_PERMISSION_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_WORD_STYLES_PLUGIN",
+      "businesses": [
+        1
+      ]
+    }
+  ],
+  "stable12": true,
+  "stable12Diff": [],
+  "stable12EmptyEquivalent": [],
+  "stable23": true,
+  "stable23Diff": [],
+  "fidelity": {
+    "added": 24,
+    "removed": 0,
+    "changed": 0,
+    "emptyEquivalent": 0,
+    "entries": [
+      {
+        "path": "$.body.sectionBreaks[0].sectionId",
+        "kind": "added",
+        "after": "\"section_5tyx7E6Nqtdy\""
+      },
+      {
+        "path": "$.documentStyle.autoHyphenation",
+        "kind": "added",
+        "after": "1"
+      },
+      {
+        "path": "$.documentStyle.doNotHyphenateCaps",
+        "kind": "added",
+        "after": "0"
+      },
+      {
+        "path": "$.documentStyle.consecutiveHyphenLimit",
+        "kind": "added",
+        "after": "2"
+      },
+      {
+        "path": "$.documentStyle.defaultHeaderId",
+        "kind": "added",
+        "after": "\"\""
+      },
+      {
+        "path": "$.documentStyle.defaultFooterId",
+        "kind": "added",
+        "after": "\"\""
+      },
+      {
+        "path": "$.documentStyle.evenPageHeaderId",
+        "kind": "added",
+        "after": "\"\""
+      },
+      {
+        "path": "$.documentStyle.evenPageFooterId",
+        "kind": "added",
+        "after": "\"\""
+      },
+      {
+        "path": "$.documentStyle.firstPageHeaderId",
+        "kind": "added",
+        "after": "\"\""
+      },
+      {
+        "path": "$.documentStyle.firstPageFooterId",
+        "kind": "added",
+        "after": "\"\""
+      },
+      {
+        "path": "$.documentStyle.evenAndOddHeaders",
+        "kind": "added",
+        "after": "0"
+      },
+      {
+        "path": "$.documentStyle.useFirstPageHeaderFooter",
+        "kind": "added",
+        "after": "0"
+      },
+      {
+        "path": "$.documentStyle.marginHeader",
+        "kind": "added",
+        "after": "30"
+      },
+      {
+        "path": "$.documentStyle.marginFooter",
+        "kind": "added",
+        "after": "30"
+      },
+      {
+        "path": "$.documentStyle.renderConfig",
+        "kind": "added",
+        "after": "{\"zeroWidthParagraphBreak\":0,\"vertexAngle\":0,\"centerAngle\":0,\"background\":{\"rgb\":\"#ccc\"}}"
+      },
+      {
+        "path": "$.tableSource",
+        "kind": "added",
+        "after": "{}"
+      },
+      {
+        "path": "$.drawings",
+        "kind": "added",
+        "after": "{}"
+      },
+      {
+        "path": "$.drawingsOrder",
+        "kind": "added",
+        "after": "[]"
+      },
+      {
+        "path": "$.headers",
+        "kind": "added",
+        "after": "{}"
+      },
+      {
+        "path": "$.footers",
+        "kind": "added",
+        "after": "{}"
+      },
+      {
+        "path": "$.notes",
+        "kind": "added",
+        "after": "{}"
+      },
+      {
+        "path": "$.noteSettings",
+        "kind": "added",
+        "after": "{}"
+      },
+      {
+        "path": "$.settings",
+        "kind": "added",
+        "after": "{}"
+      },
+      {
+        "path": "$.resources",
+        "kind": "added",
+        "after": "[{\"name\":\"DOC_OBJECT_PERMISSION_PLUGIN\",\"data\":[]},{\"name\":\"DOC_WORD_STYLES_PLUGIN\",\"data\":\"\"},{\"name\":\"DOC_NOTE_PLUGIN\",\"data\":\"\"},{\"name\":\"DOC_DRAWING_PLUG..."
+      }
+    ]
+  },
+  "resources": {
+    "unknown": [],
+    "missing": [],
+    "emptied": [],
+    "changed": []
+  },
+  "hashes": {
+    "s0": "bbb8036b30b0824670b0fd6cff422e55ed26dcf9576f90e5ca61fc5bce22a21d",
+    "s1": "3d36cbca751edbc4377c251c872510ca6acafc93a42973a0c653b23870132686",
+    "s2": "3d36cbca751edbc4377c251c872510ca6acafc93a42973a0c653b23870132686",
+    "s3": "3d36cbca751edbc4377c251c872510ca6acafc93a42973a0c653b23870132686"
+  },
+  "pageErrors": [],
+  "consoleErrors": []
+}

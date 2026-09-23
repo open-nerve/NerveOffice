@@ -1,0 +1,132 @@
+{
+  "check": "V03",
+  "sample": "sheet/sheet-all",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T18:18:54.927Z",
+  "resourceHooks": [
+    {
+      "name": "DOC_DRAWING_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_NOTE_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_OBJECT_PERMISSION_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_WORD_STYLES_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "SHEET_AuthzIoMockService_PLUGIN",
+      "businesses": [
+        2,
+        1,
+        3,
+        6
+      ]
+    },
+    {
+      "name": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_DATA_VALIDATION_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_DEFINED_NAME_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_DRAWING_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_FILTER_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_NOTE_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_RANGE_PROTECTION_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_RANGE_THEME_MODEL_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN",
+      "businesses": [
+        2
+      ]
+    }
+  ],
+  "stable12": true,
+  "stable12Diff": [],
+  "stable12EmptyEquivalent": [],
+  "stable23": true,
+  "stable23Diff": [],
+  "fidelity": {
+    "added": 0,
+    "removed": 0,
+    "changed": 0,
+    "emptyEquivalent": 4,
+    "entries": []
+  },
+  "resources": {
+    "unknown": [],
+    "missing": [],
+    "emptied": [],
+    "changed": []
+  },
+  "hashes": {
+    "s0": "55883cc2f83ab18bbd550a9d65c20488416ae7ce3a064801617e17e8f610d00d",
+    "s1": "d2393e125105e1af110eaf41f63283b1750db0bb485830fb26621e8a600aad5e",
+    "s2": "d2393e125105e1af110eaf41f63283b1750db0bb485830fb26621e8a600aad5e",
+    "s3": "d2393e125105e1af110eaf41f63283b1750db0bb485830fb26621e8a600aad5e"
+  },
+  "pageErrors": [],
+  "consoleErrors": []
+}

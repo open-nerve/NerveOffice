@@ -1,0 +1,132 @@
+{
+  "check": "V03",
+  "sample": "sheet/sheet-dv",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T18:11:22.785Z",
+  "resourceHooks": [
+    {
+      "name": "DOC_DRAWING_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_NOTE_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_OBJECT_PERMISSION_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_WORD_STYLES_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "SHEET_AuthzIoMockService_PLUGIN",
+      "businesses": [
+        2,
+        1,
+        3,
+        6
+      ]
+    },
+    {
+      "name": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_DATA_VALIDATION_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_DEFINED_NAME_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_DRAWING_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_FILTER_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_NOTE_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_RANGE_PROTECTION_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_RANGE_THEME_MODEL_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN",
+      "businesses": [
+        2
+      ]
+    }
+  ],
+  "stable12": true,
+  "stable12Diff": [],
+  "stable12EmptyEquivalent": [],
+  "stable23": true,
+  "stable23Diff": [],
+  "fidelity": {
+    "added": 0,
+    "removed": 0,
+    "changed": 0,
+    "emptyEquivalent": 1,
+    "entries": []
+  },
+  "resources": {
+    "unknown": [],
+    "missing": [],
+    "emptied": [],
+    "changed": []
+  },
+  "hashes": {
+    "s0": "0736d4ae7d7e930b423591a6a486fc365d1f6902a8e9fbba47db970821ab56ad",
+    "s1": "1c219bc8a99ca446edb3169c33ab618161b750ad9253d34b11118dabaa14ba50",
+    "s2": "1c219bc8a99ca446edb3169c33ab618161b750ad9253d34b11118dabaa14ba50",
+    "s3": "1c219bc8a99ca446edb3169c33ab618161b750ad9253d34b11118dabaa14ba50"
+  },
+  "pageErrors": [],
+  "consoleErrors": []
+}

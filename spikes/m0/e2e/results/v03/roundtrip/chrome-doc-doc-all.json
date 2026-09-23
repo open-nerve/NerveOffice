@@ -1,0 +1,69 @@
+{
+  "check": "V03",
+  "sample": "doc/doc-all",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-23T18:16:58.503Z",
+  "resourceHooks": [
+    {
+      "name": "DOC_DRAWING_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_HYPER_LINK_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_NOTE_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_OBJECT_PERMISSION_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_WORD_STYLES_PLUGIN",
+      "businesses": [
+        1
+      ]
+    }
+  ],
+  "stable12": true,
+  "stable12Diff": [],
+  "stable12EmptyEquivalent": [],
+  "stable23": true,
+  "stable23Diff": [],
+  "fidelity": {
+    "added": 0,
+    "removed": 0,
+    "changed": 0,
+    "emptyEquivalent": 0,
+    "entries": []
+  },
+  "resources": {
+    "unknown": [],
+    "missing": [],
+    "emptied": [],
+    "changed": []
+  },
+  "hashes": {
+    "s0": "c2e37d619d1ee1a6632dd374b5a1e70103dd7f04d081fbcebada756fb3f713cc",
+    "s1": "c2e37d619d1ee1a6632dd374b5a1e70103dd7f04d081fbcebada756fb3f713cc",
+    "s2": "c2e37d619d1ee1a6632dd374b5a1e70103dd7f04d081fbcebada756fb3f713cc",
+    "s3": "c2e37d619d1ee1a6632dd374b5a1e70103dd7f04d081fbcebada756fb3f713cc"
+  },
+  "pageErrors": [],
+  "consoleErrors": []
+}

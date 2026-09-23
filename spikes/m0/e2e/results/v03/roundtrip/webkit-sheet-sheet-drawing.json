@@ -1,0 +1,141 @@
+{
+  "check": "V03",
+  "sample": "sheet/sheet-drawing",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T18:18:32.807Z",
+  "resourceHooks": [
+    {
+      "name": "DOC_DRAWING_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_NOTE_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_OBJECT_PERMISSION_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_WORD_STYLES_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "SHEET_AuthzIoMockService_PLUGIN",
+      "businesses": [
+        2,
+        1,
+        3,
+        6
+      ]
+    },
+    {
+      "name": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_DATA_VALIDATION_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_DEFINED_NAME_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_DRAWING_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_FILTER_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_NOTE_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_RANGE_PROTECTION_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_RANGE_THEME_MODEL_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN",
+      "businesses": [
+        2
+      ]
+    }
+  ],
+  "stable12": true,
+  "stable12Diff": [],
+  "stable12EmptyEquivalent": [],
+  "stable23": true,
+  "stable23Diff": [],
+  "fidelity": {
+    "added": 0,
+    "removed": 0,
+    "changed": 1,
+    "emptyEquivalent": 2,
+    "entries": [
+      {
+        "path": "$.resources[4].data.sheet-1.data.XkgJYJ.transform.height",
+        "kind": "changed",
+        "before": "80",
+        "after": "99"
+      }
+    ]
+  },
+  "resources": {
+    "unknown": [],
+    "missing": [],
+    "emptied": [],
+    "changed": [
+      "SHEET_DRAWING_PLUGIN"
+    ]
+  },
+  "hashes": {
+    "s0": "808f509add765b08f79251f2ed9a41e80f762ee99346f7d0d64edfb469bec516",
+    "s1": "9b365bc3245058086b01aea2504277748c5f59bff535ffbe974fe9075743488c",
+    "s2": "9b365bc3245058086b01aea2504277748c5f59bff535ffbe974fe9075743488c",
+    "s3": "9b365bc3245058086b01aea2504277748c5f59bff535ffbe974fe9075743488c"
+  },
+  "pageErrors": [],
+  "consoleErrors": []
+}
