@@ -7,11 +7,12 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T16:13:05.794Z",
+  "timestamp": "2026-09-23T17:11:23.854Z",
+  "timingsNote": "从 createEditor 调用开始计时，不含脚本下载解析与样本加载",
   "timings": {
-    "ready": 24.899999976158142,
-    "rendered": 435.2000000476837,
-    "steady": 3485.600000023842
+    "ready": 22.399999976158142,
+    "rendered": 427,
+    "steady": 3475.399999976158
   },
   "functional": [
     {
@@ -48,21 +49,73 @@
     "started": [],
     "stats": {
       "created": 0,
-      "messagesToWorker": 0,
-      "messagesFromWorker": 0
-    }
+      "toWorker": {},
+      "fromWorker": {}
+    },
+    "failures": []
   },
   "enforceViolations": [],
   "probeViolations": {
-    "total": 5,
+    "total": 183,
     "groups": [
       {
+        "channel": "console",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "img-src",
+        "blocked": "data",
+        "sourceFile": "/sheet.html?sample=minimal",
+        "count": 85
+      },
+      {
+        "channel": "page-event",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "img-src",
+        "blocked": "data",
+        "sourceFile": "",
+        "count": 84
+      },
+      {
+        "channel": "page-event",
+        "scope": "page",
+        "policy": "probe",
         "directive": "style-src-elem",
         "blocked": "inline",
-        "sourceFile": "/assets/facade-BCO5i-bu.js",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
         "count": 4
       },
       {
+        "channel": "server-report",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "style-src-elem",
+        "blocked": "inline",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 4
+      },
+      {
+        "channel": "console",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "style-src",
+        "blocked": "",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 4
+      },
+      {
+        "channel": "server-report",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "img-src",
+        "blocked": "data",
+        "sourceFile": "/sheet.html",
+        "count": 1
+      },
+      {
+        "channel": "server-report",
+        "scope": "page",
+        "policy": "probe",
         "directive": "img-src",
         "blocked": "data",
         "sourceFile": "",
@@ -70,15 +123,15 @@
       }
     ]
   },
-  "pageSideViolationCount": 88,
   "requests": {
-    "total": 13,
+    "total": 16,
     "byOrigin": {
-      "http://127.0.0.1:4700": 13
+      "http://127.0.0.1:4700": 16
     },
     "crossOrigin": []
   },
   "pageErrors": [],
-  "consoleErrors": [],
-  "consoleWarningCount": 0
+  "scriptConsoleErrors": [],
+  "scriptConsoleWarningCount": 0,
+  "browserConsoleErrors": []
 }

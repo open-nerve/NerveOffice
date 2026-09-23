@@ -7,11 +7,12 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T16:14:11.311Z",
+  "timestamp": "2026-09-23T17:13:37.149Z",
+  "timingsNote": "从 createEditor 调用开始计时，不含脚本下载解析与样本加载",
   "timings": {
-    "ready": 26,
-    "rendered": 497,
-    "steady": 3550
+    "ready": 22,
+    "rendered": 487,
+    "steady": 3537
   },
   "functional": [
     {
@@ -50,43 +51,110 @@
     ],
     "stats": {
       "created": 1,
-      "messagesToWorker": 34,
-      "messagesFromWorker": 34
-    }
+      "toWorker": {
+        "REQUEST_INITIALIZATION": 1,
+        "INITIALIZE": 2,
+        "CALL univer.remote-instance-service.whenReady": 1,
+        "CALL univer.remote-instance-service.createInstance": 1,
+        "CALL univer.remote-instance-service.syncMutation": 10,
+        "CALL_SUCCESS": 19
+      },
+      "fromWorker": {
+        "REQUEST_INITIALIZATION": 1,
+        "INITIALIZE": 2,
+        "CALL_SUCCESS": 12,
+        "CALL rpc.remote-sync.service.syncMutation": 19
+      }
+    },
+    "failures": []
   },
   "enforceViolations": [],
   "probeViolations": {
-    "total": 88,
+    "total": 264,
     "groups": [
       {
+        "channel": "console",
+        "scope": "page",
+        "policy": "probe",
         "directive": "img-src",
         "blocked": "data",
-        "sourceFile": "/assets/sheet-BHx241ik.js",
+        "sourceFile": "",
+        "count": 84
+      },
+      {
+        "channel": "page-event",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "img-src",
+        "blocked": "data",
+        "sourceFile": "/assets/sheet-D_K5KmZI.js",
         "count": 83
       },
       {
+        "channel": "server-report",
+        "scope": "worker",
+        "policy": "probe",
+        "directive": "img-src",
+        "blocked": "data",
+        "sourceFile": "/assets/sheet-D_K5KmZI.js",
+        "count": 83
+      },
+      {
+        "channel": "page-event",
+        "scope": "page",
+        "policy": "probe",
         "directive": "style-src-elem",
         "blocked": "inline",
-        "sourceFile": "/assets/facade-BCO5i-bu.js",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
         "count": 4
       },
       {
+        "channel": "server-report",
+        "scope": "worker",
+        "policy": "probe",
+        "directive": "style-src-elem",
+        "blocked": "inline",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 4
+      },
+      {
+        "channel": "console",
+        "scope": "worker",
+        "policy": "probe",
+        "directive": "style-src",
+        "blocked": "",
+        "sourceFile": "/sheet.html?sample=minimal&worker=1",
+        "count": 4
+      },
+      {
+        "channel": "page-event",
+        "scope": "page",
+        "policy": "probe",
         "directive": "img-src",
         "blocked": "data",
-        "sourceFile": "/assets/facade-BCO5i-bu.js",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 1
+      },
+      {
+        "channel": "server-report",
+        "scope": "worker",
+        "policy": "probe",
+        "directive": "img-src",
+        "blocked": "data",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
         "count": 1
       }
     ]
   },
-  "pageSideViolationCount": 88,
   "requests": {
-    "total": 97,
+    "total": 99,
     "byOrigin": {
-      "http://127.0.0.1:4700": 97
+      "http://127.0.0.1:4700": 99
     },
     "crossOrigin": []
   },
   "pageErrors": [],
-  "consoleErrors": [],
-  "consoleWarningCount": 0
+  "scriptConsoleErrors": [],
+  "scriptConsoleWarningCount": 0,
+  "browserConsoleErrors": []
 }

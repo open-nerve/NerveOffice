@@ -1,0 +1,58 @@
+{
+  "check": "V01-network",
+  "scenario": "sheet-worker",
+  "csp": "off",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-23T17:11:59.847Z",
+  "functional": [
+    {
+      "name": "B2 值（键盘输入）",
+      "expected": "hello 你好",
+      "actual": "hello 你好",
+      "pass": true
+    },
+    {
+      "name": "B2 加粗（工具栏）",
+      "expected": 1,
+      "actual": 1,
+      "pass": true
+    },
+    {
+      "name": "B3 公式",
+      "expected": "=SUM(1,2)",
+      "actual": "=SUM(1,2)",
+      "pass": true
+    },
+    {
+      "name": "B3 计算结果",
+      "expected": 3,
+      "actual": 3,
+      "pass": true
+    }
+  ],
+  "requests": {
+    "total": 11,
+    "byOrigin": {
+      "http://127.0.0.1:4701": 11
+    },
+    "crossOrigin": []
+  },
+  "urls": [
+    "http://127.0.0.1:4701/sheet.html",
+    "http://127.0.0.1:4701/assets/sheet-D_K5KmZI.js",
+    "http://127.0.0.1:4701/assets/jsx-runtime-BCoScHCP.js",
+    "http://127.0.0.1:4701/assets/modulepreload-polyfill-P2Xu9kJm.js",
+    "http://127.0.0.1:4701/assets/events-C1TuS8fw.js",
+    "http://127.0.0.1:4701/assets/facade--SKdPPvM.js",
+    "http://127.0.0.1:4701/assets/jsx-runtime--Nk3ZDL8.css",
+    "http://127.0.0.1:4701/assets/facade-7vUCyHNp.css",
+    "http://127.0.0.1:4701/assets/sheet-DDpCQ7w7.css",
+    "http://127.0.0.1:4701/assets/minimal-DWJHukzg.js",
+    "http://127.0.0.1:4701/assets/sheet-formula.worker-Cr_j1odP.js"
+  ]
+}

@@ -16,12 +16,13 @@
 npx -y pnpm@12.6.0 install --frozen-lockfile
 npx vite                      # 开发模式，http://127.0.0.1:4600
 npx vite build                # 生产构建到 dist/
-node server/serve.ts          # 带 CSP 头的静态服务，http://127.0.0.1:4700
+node server/serve.ts          # 带 CSP 头的静态服务，http://127.0.0.1:4700（--csp full|off|html-only）
 
 node scripts/deps-report.ts   # V01：版本一致性、Pro 检查、安装脚本、许可分类
 node scripts/url-scan.ts      # V01：构建产物中的外部地址与联网代码（需先构建）
 node scripts/bundle-size.ts   # P1：按入口统计包体积（需先构建）
-npx playwright test           # 全部浏览器验证（需先构建；会自动启动 server/serve.ts）
+npx playwright test           # 全部浏览器验证（需先构建；会自动启动 4700/4701/4702 三个服务）
+node scripts/safari-selftest.ts  # 真实 Safari 自检（后台打开 Safari，结束后留下一个标签页）
 ```
 
 验证结果以 JSON 写入 `e2e/results/`，随代码入库，作为验证报告的证据。
@@ -34,8 +35,8 @@ npx playwright test           # 全部浏览器验证（需先构建；会自动
 | `src/harness/` | 创建编辑器、加载样本、收集页面事件；向页面暴露 `window.__m0` |
 | `src/host/` | React 宿主页面 |
 | `src/workers/` | 表格公式 Worker、文字文档排版 Worker |
-| `server/` | 验证用静态服务：CSP 响应头（强制策略 + 探测策略）、违规报告接收 |
-| `scripts/` | V01 与包体积的统计脚本 |
+| `server/` | 验证用静态服务：CSP 响应头（强制策略 + 探测策略；full / off / html-only 三种模式）、违规报告与自检结果接收 |
+| `scripts/` | V01 与包体积的统计脚本、真实 Safari 自检 |
 | `e2e/` | Playwright 验证脚本与结果 |
 | `fixtures/` | 样本文档 |
 
@@ -44,5 +45,7 @@ npx playwright test           # 全部浏览器验证（需先构建；会自动
 - `index.html`：样本列表
 - `sheet.html?sample=<名称>&worker=0|1`：表格编辑器，`worker=1` 时公式在 Web Worker 中计算
 - `doc.html?sample=<名称>&worker=0|1`：文字文档编辑器，`worker=1` 时排版在 Web Worker 中进行
+- `csp-probe.html?target=<跨源地址>`：CSP 阳性对照，在页面与 Worker 中各发起一次跨源请求和动态代码执行
+- 编辑器页面加上 `selftest=<场景>&next=<下一步>` 时进入自检模式：用 Facade 完成编辑、把结果交回服务，再跳转到下一步
 
 每个编辑器页面整页加载，一页只承载一份文档。

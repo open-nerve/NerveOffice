@@ -1,0 +1,227 @@
+{
+  "check": "V02-safari",
+  "step": "probe-html-only",
+  "csp": "html-only",
+  "safariVersion": "26.5",
+  "kind": "probe",
+  "mode": "html-only",
+  "target": "http://127.0.0.1:4711/index.html",
+  "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15",
+  "timestamp": "2026-09-23T17:10:07.132Z",
+  "page": {
+    "fetch": "blocked:TypeError",
+    "eval": "blocked:EvalError",
+    "fn": "blocked:EvalError"
+  },
+  "worker": {
+    "fetch": "allowed",
+    "eval": "allowed",
+    "fn": "allowed"
+  },
+  "events": {
+    "cspViolations": [
+      {
+        "directive": "connect-src",
+        "effectiveDirective": "connect-src",
+        "blockedURI": "http://127.0.0.1:4711/index.html?from=page",
+        "sourceFile": "http://127.0.0.1:4712/assets/csp-probe-C4Hdf7cm.js",
+        "lineNumber": 1,
+        "disposition": "enforce",
+        "sample": ""
+      },
+      {
+        "directive": "connect-src",
+        "effectiveDirective": "connect-src",
+        "blockedURI": "http://127.0.0.1:4711/index.html?from=page",
+        "sourceFile": "http://127.0.0.1:4712/assets/csp-probe-C4Hdf7cm.js",
+        "lineNumber": 1,
+        "disposition": "report",
+        "sample": ""
+      },
+      {
+        "directive": "script-src",
+        "effectiveDirective": "script-src",
+        "blockedURI": "eval",
+        "sourceFile": "http://127.0.0.1:4712/assets/csp-probe-C4Hdf7cm.js",
+        "lineNumber": 1,
+        "disposition": "enforce",
+        "sample": ""
+      },
+      {
+        "directive": "script-src",
+        "effectiveDirective": "script-src",
+        "blockedURI": "eval",
+        "sourceFile": "http://127.0.0.1:4712/assets/csp-probe-C4Hdf7cm.js",
+        "lineNumber": 1,
+        "disposition": "report",
+        "sample": ""
+      },
+      {
+        "directive": "script-src",
+        "effectiveDirective": "script-src",
+        "blockedURI": "eval",
+        "sourceFile": "http://127.0.0.1:4712/assets/csp-probe-C4Hdf7cm.js",
+        "lineNumber": 1,
+        "disposition": "enforce",
+        "sample": ""
+      },
+      {
+        "directive": "script-src",
+        "effectiveDirective": "script-src",
+        "blockedURI": "eval",
+        "sourceFile": "http://127.0.0.1:4712/assets/csp-probe-C4Hdf7cm.js",
+        "lineNumber": 1,
+        "disposition": "report",
+        "sample": ""
+      },
+      {
+        "directive": "img-src",
+        "effectiveDirective": "img-src",
+        "blockedURI": "data",
+        "sourceFile": "",
+        "lineNumber": 0,
+        "disposition": "report",
+        "sample": ""
+      }
+    ],
+    "errors": [],
+    "consoleErrors": [],
+    "consoleWarnings": []
+  },
+  "serverReports": [
+    {
+      "policy": "enforce",
+      "body": {
+        "type": "csp-violation",
+        "url": "http://127.0.0.1:4712/csp-probe.html?report=html-only&target=http%3A%2F%2F127.0.0.1%3A4711%2Findex.html&next=http%3A%2F%2F127.0.0.1%3A4711%2Fcsp-probe.html%3Freport%3Doff%26target%3Dhttp%253A%252F%252F127.0.0.1%253A4710%252Findex.html%26next%3Dhttp%253A%252F%252F127.0.0.1%253A4711%252Findex.html",
+        "csp-report": {
+          "document-uri": "http://127.0.0.1:4712/csp-probe.html?report=html-only&target=http%3A%2F%2F127.0.0.1%3A4711%2Findex.html&next=http%3A%2F%2F127.0.0.1%3A4711%2Fcsp-probe.html%3Freport%3Doff%26target%3Dhttp%253A%252F%252F127.0.0.1%253A4710%252Findex.html%26next%3Dhttp%253A%252F%252F127.0.0.1%253A4711%252Findex.html",
+          "referrer": "http://127.0.0.1:4710/",
+          "violated-directive": "connect-src",
+          "effective-directive": "connect-src",
+          "original-policy": "default-src 'self'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; report-uri /csp-report?policy=enforce",
+          "blocked-uri": "http://127.0.0.1:4711/index.html?from=page",
+          "status-code": 200,
+          "source-file": "http://127.0.0.1:4712/assets/csp-probe-C4Hdf7cm.js",
+          "line-number": 1,
+          "column-number": 129
+        }
+      }
+    },
+    {
+      "policy": "probe",
+      "body": {
+        "type": "csp-violation",
+        "url": "http://127.0.0.1:4712/csp-probe.html?report=html-only&target=http%3A%2F%2F127.0.0.1%3A4711%2Findex.html&next=http%3A%2F%2F127.0.0.1%3A4711%2Fcsp-probe.html%3Freport%3Doff%26target%3Dhttp%253A%252F%252F127.0.0.1%253A4710%252Findex.html%26next%3Dhttp%253A%252F%252F127.0.0.1%253A4711%252Findex.html",
+        "csp-report": {
+          "document-uri": "http://127.0.0.1:4712/csp-probe.html?report=html-only&target=http%3A%2F%2F127.0.0.1%3A4711%2Findex.html&next=http%3A%2F%2F127.0.0.1%3A4711%2Fcsp-probe.html%3Freport%3Doff%26target%3Dhttp%253A%252F%252F127.0.0.1%253A4710%252Findex.html%26next%3Dhttp%253A%252F%252F127.0.0.1%253A4711%252Findex.html",
+          "referrer": "http://127.0.0.1:4710/",
+          "violated-directive": "connect-src",
+          "effective-directive": "connect-src",
+          "original-policy": "default-src 'self'; img-src 'self'; connect-src 'self'; font-src 'self'; style-src 'self'; script-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; report-uri /csp-report?policy=probe",
+          "blocked-uri": "http://127.0.0.1:4711/index.html?from=page",
+          "status-code": 200,
+          "source-file": "http://127.0.0.1:4712/assets/csp-probe-C4Hdf7cm.js",
+          "line-number": 1,
+          "column-number": 129
+        }
+      }
+    },
+    {
+      "policy": "enforce",
+      "body": {
+        "type": "csp-violation",
+        "url": "http://127.0.0.1:4712/csp-probe.html?report=html-only&target=http%3A%2F%2F127.0.0.1%3A4711%2Findex.html&next=http%3A%2F%2F127.0.0.1%3A4711%2Fcsp-probe.html%3Freport%3Doff%26target%3Dhttp%253A%252F%252F127.0.0.1%253A4710%252Findex.html%26next%3Dhttp%253A%252F%252F127.0.0.1%253A4711%252Findex.html",
+        "csp-report": {
+          "document-uri": "http://127.0.0.1:4712/csp-probe.html?report=html-only&target=http%3A%2F%2F127.0.0.1%3A4711%2Findex.html&next=http%3A%2F%2F127.0.0.1%3A4711%2Fcsp-probe.html%3Freport%3Doff%26target%3Dhttp%253A%252F%252F127.0.0.1%253A4710%252Findex.html%26next%3Dhttp%253A%252F%252F127.0.0.1%253A4711%252Findex.html",
+          "referrer": "http://127.0.0.1:4710/",
+          "violated-directive": "script-src",
+          "effective-directive": "script-src",
+          "original-policy": "default-src 'self'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; report-uri /csp-report?policy=enforce",
+          "blocked-uri": "eval",
+          "status-code": 200,
+          "source-file": "http://127.0.0.1:4712/assets/csp-probe-C4Hdf7cm.js",
+          "line-number": 1,
+          "column-number": 256
+        }
+      }
+    },
+    {
+      "policy": "probe",
+      "body": {
+        "type": "csp-violation",
+        "url": "http://127.0.0.1:4712/csp-probe.html?report=html-only&target=http%3A%2F%2F127.0.0.1%3A4711%2Findex.html&next=http%3A%2F%2F127.0.0.1%3A4711%2Fcsp-probe.html%3Freport%3Doff%26target%3Dhttp%253A%252F%252F127.0.0.1%253A4710%252Findex.html%26next%3Dhttp%253A%252F%252F127.0.0.1%253A4711%252Findex.html",
+        "csp-report": {
+          "document-uri": "http://127.0.0.1:4712/csp-probe.html?report=html-only&target=http%3A%2F%2F127.0.0.1%3A4711%2Findex.html&next=http%3A%2F%2F127.0.0.1%3A4711%2Fcsp-probe.html%3Freport%3Doff%26target%3Dhttp%253A%252F%252F127.0.0.1%253A4710%252Findex.html%26next%3Dhttp%253A%252F%252F127.0.0.1%253A4711%252Findex.html",
+          "referrer": "http://127.0.0.1:4710/",
+          "violated-directive": "script-src",
+          "effective-directive": "script-src",
+          "original-policy": "default-src 'self'; img-src 'self'; connect-src 'self'; font-src 'self'; style-src 'self'; script-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; report-uri /csp-report?policy=probe",
+          "blocked-uri": "eval",
+          "status-code": 200,
+          "source-file": "http://127.0.0.1:4712/assets/csp-probe-C4Hdf7cm.js",
+          "line-number": 1,
+          "column-number": 256
+        }
+      }
+    },
+    {
+      "policy": "enforce",
+      "body": {
+        "type": "csp-violation",
+        "url": "http://127.0.0.1:4712/csp-probe.html?report=html-only&target=http%3A%2F%2F127.0.0.1%3A4711%2Findex.html&next=http%3A%2F%2F127.0.0.1%3A4711%2Fcsp-probe.html%3Freport%3Doff%26target%3Dhttp%253A%252F%252F127.0.0.1%253A4710%252Findex.html%26next%3Dhttp%253A%252F%252F127.0.0.1%253A4711%252Findex.html",
+        "csp-report": {
+          "document-uri": "http://127.0.0.1:4712/csp-probe.html?report=html-only&target=http%3A%2F%2F127.0.0.1%3A4711%2Findex.html&next=http%3A%2F%2F127.0.0.1%3A4711%2Fcsp-probe.html%3Freport%3Doff%26target%3Dhttp%253A%252F%252F127.0.0.1%253A4710%252Findex.html%26next%3Dhttp%253A%252F%252F127.0.0.1%253A4711%252Findex.html",
+          "referrer": "http://127.0.0.1:4710/",
+          "violated-directive": "script-src",
+          "effective-directive": "script-src",
+          "original-policy": "default-src 'self'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; report-uri /csp-report?policy=enforce",
+          "blocked-uri": "eval",
+          "status-code": 200,
+          "source-file": "http://127.0.0.1:4712/assets/csp-probe-C4Hdf7cm.js",
+          "line-number": 1,
+          "column-number": 373
+        }
+      }
+    },
+    {
+      "policy": "probe",
+      "body": {
+        "type": "csp-violation",
+        "url": "http://127.0.0.1:4712/csp-probe.html?report=html-only&target=http%3A%2F%2F127.0.0.1%3A4711%2Findex.html&next=http%3A%2F%2F127.0.0.1%3A4711%2Fcsp-probe.html%3Freport%3Doff%26target%3Dhttp%253A%252F%252F127.0.0.1%253A4710%252Findex.html%26next%3Dhttp%253A%252F%252F127.0.0.1%253A4711%252Findex.html",
+        "csp-report": {
+          "document-uri": "http://127.0.0.1:4712/csp-probe.html?report=html-only&target=http%3A%2F%2F127.0.0.1%3A4711%2Findex.html&next=http%3A%2F%2F127.0.0.1%3A4711%2Fcsp-probe.html%3Freport%3Doff%26target%3Dhttp%253A%252F%252F127.0.0.1%253A4710%252Findex.html%26next%3Dhttp%253A%252F%252F127.0.0.1%253A4711%252Findex.html",
+          "referrer": "http://127.0.0.1:4710/",
+          "violated-directive": "script-src",
+          "effective-directive": "script-src",
+          "original-policy": "default-src 'self'; img-src 'self'; connect-src 'self'; font-src 'self'; style-src 'self'; script-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; report-uri /csp-report?policy=probe",
+          "blocked-uri": "eval",
+          "status-code": 200,
+          "source-file": "http://127.0.0.1:4712/assets/csp-probe-C4Hdf7cm.js",
+          "line-number": 1,
+          "column-number": 373
+        }
+      }
+    },
+    {
+      "policy": "probe",
+      "body": {
+        "type": "csp-violation",
+        "url": "http://127.0.0.1:4712/csp-probe.html?report=html-only&target=http%3A%2F%2F127.0.0.1%3A4711%2Findex.html&next=http%3A%2F%2F127.0.0.1%3A4711%2Fcsp-probe.html%3Freport%3Doff%26target%3Dhttp%253A%252F%252F127.0.0.1%253A4710%252Findex.html%26next%3Dhttp%253A%252F%252F127.0.0.1%253A4711%252Findex.html",
+        "csp-report": {
+          "document-uri": "http://127.0.0.1:4712/csp-probe.html?report=html-only&target=http%3A%2F%2F127.0.0.1%3A4711%2Findex.html&next=http%3A%2F%2F127.0.0.1%3A4711%2Fcsp-probe.html%3Freport%3Doff%26target%3Dhttp%253A%252F%252F127.0.0.1%253A4710%252Findex.html%26next%3Dhttp%253A%252F%252F127.0.0.1%253A4711%252Findex.html",
+          "referrer": "http://127.0.0.1:4710/",
+          "violated-directive": "img-src",
+          "effective-directive": "img-src",
+          "original-policy": "default-src 'self'; img-src 'self'; connect-src 'self'; font-src 'self'; style-src 'self'; script-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; report-uri /csp-report?policy=probe",
+          "blocked-uri": "data",
+          "status-code": 200
+        }
+      }
+    }
+  ],
+  "enforceViolations": {
+    "pageEvents": 3,
+    "serverReports": 3
+  }
+}

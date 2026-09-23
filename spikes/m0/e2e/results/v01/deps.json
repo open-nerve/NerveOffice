@@ -1,6 +1,6 @@
 {
   "check": "V01",
-  "timestamp": "2026-09-23T16:15:41.673Z",
+  "timestamp": "2026-09-23T17:10:41.775Z",
   "node": "v24.3.0",
   "packageCount": 147,
   "univer": {
@@ -275,6 +275,7 @@
   },
   "proPackages": [],
   "duplicates": [],
+  "multiInstance": [],
   "singletonDuplicates": [],
   "installScripts": [
     {
@@ -283,6 +284,14 @@
         "postinstall": "node scripts/postinstall"
       }
     }
+  ],
+  "missingLicenseFile": [
+    "@univerjs/protocol@1.0.0",
+    "franc-min@6.2.0",
+    "ot-json1@1.0.2",
+    "ot-text-unicode@4.0.0",
+    "react-remove-scroll-bar@2.3.8",
+    "unicount@1.1.0"
   ],
   "licenses": {
     "byLicense": {

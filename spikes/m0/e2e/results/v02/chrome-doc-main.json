@@ -7,11 +7,12 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-23T16:13:48.909Z",
+  "timestamp": "2026-09-23T17:12:40.538Z",
+  "timingsNote": "从 createEditor 调用开始计时，不含脚本下载解析与样本加载",
   "timings": {
-    "ready": 32.700000047683716,
-    "rendered": 365.8000000715256,
-    "steady": 3368.8000000715256
+    "ready": 32,
+    "rendered": 367.2999999523163,
+    "steady": 3369.5
   },
   "functional": [
     {
@@ -41,31 +42,71 @@
     "started": [],
     "stats": {
       "created": 0,
-      "messagesToWorker": 0,
-      "messagesFromWorker": 0
-    }
+      "toWorker": {},
+      "fromWorker": {}
+    },
+    "failures": []
   },
   "enforceViolations": [],
   "probeViolations": {
-    "total": 4,
+    "total": 14,
     "groups": [
       {
+        "channel": "page-event",
+        "scope": "page",
+        "policy": "probe",
         "directive": "style-src-elem",
         "blocked": "inline",
-        "sourceFile": "/assets/facade-BCO5i-bu.js",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
         "count": 4
+      },
+      {
+        "channel": "server-report",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "style-src-elem",
+        "blocked": "inline",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 4
+      },
+      {
+        "channel": "console",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "style-src",
+        "blocked": "",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 4
+      },
+      {
+        "channel": "server-report",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "img-src",
+        "blocked": "data",
+        "sourceFile": "/doc.html",
+        "count": 1
+      },
+      {
+        "channel": "console",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "img-src",
+        "blocked": "data",
+        "sourceFile": "/doc.html?sample=minimal",
+        "count": 1
       }
     ]
   },
-  "pageSideViolationCount": 4,
   "requests": {
-    "total": 12,
+    "total": 15,
     "byOrigin": {
-      "http://127.0.0.1:4700": 12
+      "http://127.0.0.1:4700": 15
     },
     "crossOrigin": []
   },
   "pageErrors": [],
-  "consoleErrors": [],
-  "consoleWarningCount": 0
+  "scriptConsoleErrors": [],
+  "scriptConsoleWarningCount": 0,
+  "browserConsoleErrors": []
 }

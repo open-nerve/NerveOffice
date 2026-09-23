@@ -10,6 +10,8 @@ export default defineConfig({
     build: {
         target: 'es2022',
         manifest: true,
+        // 生成打包依赖的许可清单（dist/.vite/license.md）；M1 用它随部署包分发第三方许可
+        license: true,
         sourcemap: false,
         chunkSizeWarningLimit: 20_000,
         rolldownOptions: {
@@ -17,6 +19,8 @@ export default defineConfig({
                 index: resolve(import.meta.dirname, 'index.html'),
                 sheet: resolve(import.meta.dirname, 'sheet.html'),
                 doc: resolve(import.meta.dirname, 'doc.html'),
+                // CSP 阳性对照页面（只用于验证，不属于编辑器产物）
+                'csp-probe': resolve(import.meta.dirname, 'csp-probe.html'),
             },
         },
     },

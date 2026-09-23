@@ -1,0 +1,181 @@
+{
+  "check": "V02-positive-control",
+  "mode": "html-only",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T17:13:22.691Z",
+  "target": "http://127.0.0.1:4701/index.html",
+  "expected": {
+    "page": "blocked",
+    "worker": "allowed"
+  },
+  "outcomes": {
+    "page": {
+      "fetch": "blocked",
+      "eval": "blocked",
+      "fn": "blocked"
+    },
+    "worker": {
+      "fetch": "allowed",
+      "eval": "allowed",
+      "fn": "allowed"
+    }
+  },
+  "raw": {
+    "page": {
+      "fetch": "blocked:TypeError",
+      "eval": "blocked:EvalError",
+      "fn": "blocked:EvalError"
+    },
+    "worker": {
+      "fetch": "allowed",
+      "eval": "allowed",
+      "fn": "allowed"
+    }
+  },
+  "coverage": {
+    "page-fetch": [
+      "page-event",
+      "server-report",
+      "console"
+    ],
+    "page-dyncode": [
+      "page-event",
+      "server-report"
+    ],
+    "worker-fetch": [],
+    "worker-dyncode": []
+  },
+  "violations": [
+    {
+      "channel": "page-event",
+      "scope": "page",
+      "policy": "enforce",
+      "directive": "connect-src",
+      "blocked": "http://127.0.0.1:4701/*",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 1
+    },
+    {
+      "channel": "page-event",
+      "scope": "page",
+      "policy": "probe",
+      "directive": "connect-src",
+      "blocked": "http://127.0.0.1:4701/*",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 1
+    },
+    {
+      "channel": "page-event",
+      "scope": "page",
+      "policy": "enforce",
+      "directive": "script-src",
+      "blocked": "eval",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 1
+    },
+    {
+      "channel": "page-event",
+      "scope": "page",
+      "policy": "probe",
+      "directive": "script-src",
+      "blocked": "eval",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 1
+    },
+    {
+      "channel": "page-event",
+      "scope": "page",
+      "policy": "enforce",
+      "directive": "script-src",
+      "blocked": "eval",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 1
+    },
+    {
+      "channel": "page-event",
+      "scope": "page",
+      "policy": "probe",
+      "directive": "script-src",
+      "blocked": "eval",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 1
+    },
+    {
+      "channel": "server-report",
+      "scope": "page",
+      "policy": "enforce",
+      "directive": "connect-src",
+      "blocked": "http://127.0.0.1:4701/*",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 1
+    },
+    {
+      "channel": "server-report",
+      "scope": "page",
+      "policy": "probe",
+      "directive": "connect-src",
+      "blocked": "http://127.0.0.1:4701/*",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 1
+    },
+    {
+      "channel": "server-report",
+      "scope": "page",
+      "policy": "enforce",
+      "directive": "script-src",
+      "blocked": "eval",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 1
+    },
+    {
+      "channel": "server-report",
+      "scope": "page",
+      "policy": "probe",
+      "directive": "script-src",
+      "blocked": "eval",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 1
+    },
+    {
+      "channel": "server-report",
+      "scope": "page",
+      "policy": "enforce",
+      "directive": "script-src",
+      "blocked": "eval",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 1
+    },
+    {
+      "channel": "server-report",
+      "scope": "page",
+      "policy": "probe",
+      "directive": "script-src",
+      "blocked": "eval",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 1
+    },
+    {
+      "channel": "console",
+      "scope": "page",
+      "policy": "enforce",
+      "directive": "connect-src",
+      "blocked": "http://127.0.0.1:4701/*",
+      "sourceFile": "",
+      "line": 0
+    },
+    {
+      "channel": "console",
+      "scope": "page",
+      "policy": "probe",
+      "directive": "connect-src",
+      "blocked": "http://127.0.0.1:4701/*",
+      "sourceFile": "",
+      "line": 0
+    }
+  ]
+}

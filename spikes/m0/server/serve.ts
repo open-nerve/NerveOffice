@@ -4,6 +4,8 @@ import { appendFile, mkdir, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { extname, join, normalize, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import type { CspMode } from './csp.ts';
+
 import { cspHeaders } from './csp.ts';
 
 const { values } = parseArgs({
@@ -17,7 +19,7 @@ const { values } = parseArgs({
 
 const root = resolve(values.dist);
 const port = Number(values.port);
-const cspMode = values.csp === 'off' ? 'off' : 'full';
+const cspMode: CspMode = values.csp === 'off' ? 'off' : values.csp === 'html-only' ? 'html-only' : 'full';
 
 const MIME: Record<string, string> = {
     '.html': 'text/html; charset=utf-8',
@@ -45,6 +47,8 @@ export interface CspReport {
 }
 
 const reports: CspReport[] = [];
+/** 真实 Safari 自检页面回传的结果（Playwright 无法驱动真实 Safari）。 */
+const selftests: unknown[] = [];
 
 async function readBody(req: import('node:http').IncomingMessage, limit = 1024 * 1024): Promise<string> {
     const chunks: Buffer[] = [];
@@ -95,6 +99,21 @@ const server = createServer(async (req, res) => {
             res.end(JSON.stringify(reports));
             return;
         }
+        if (url.pathname === '/__selftest') {
+            if (req.method === 'POST') {
+                selftests.push(JSON.parse(await readBody(req)));
+                res.writeHead(204).end();
+                return;
+            }
+            if (req.method === 'DELETE') {
+                selftests.length = 0;
+                res.writeHead(204).end();
+                return;
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+            res.end(JSON.stringify(selftests));
+            return;
+        }
         if (req.method !== 'GET' && req.method !== 'HEAD') {
             res.writeHead(405).end();
             return;
@@ -117,7 +136,7 @@ const server = createServer(async (req, res) => {
             'Content-Length': info.size,
             'Cache-Control': 'no-store',
             'X-Content-Type-Options': 'nosniff',
-            ...cspHeaders(cspMode),
+            ...cspHeaders(cspMode, extname(filePath) === '.html'),
         });
         if (req.method === 'HEAD') {
             res.end();

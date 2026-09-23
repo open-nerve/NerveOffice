@@ -1,0 +1,284 @@
+{
+  "check": "V02-positive-control",
+  "mode": "full",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-23T17:12:17.627Z",
+  "target": "http://127.0.0.1:4701/index.html",
+  "expected": {
+    "page": "blocked",
+    "worker": "blocked"
+  },
+  "outcomes": {
+    "page": {
+      "fetch": "blocked",
+      "eval": "blocked",
+      "fn": "blocked"
+    },
+    "worker": {
+      "fetch": "blocked",
+      "eval": "blocked",
+      "fn": "blocked"
+    }
+  },
+  "raw": {
+    "page": {
+      "fetch": "blocked:TypeError",
+      "eval": "blocked:EvalError",
+      "fn": "blocked:EvalError"
+    },
+    "worker": {
+      "fetch": "blocked:TypeError",
+      "eval": "blocked:EvalError",
+      "fn": "blocked:EvalError"
+    }
+  },
+  "coverage": {
+    "page-fetch": [
+      "page-event",
+      "server-report",
+      "console"
+    ],
+    "page-dyncode": [
+      "page-event",
+      "server-report"
+    ],
+    "worker-fetch": [
+      "server-report"
+    ],
+    "worker-dyncode": [
+      "server-report"
+    ]
+  },
+  "violations": [
+    {
+      "channel": "page-event",
+      "scope": "page",
+      "policy": "enforce",
+      "directive": "connect-src",
+      "blocked": "http://127.0.0.1:4701/*",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 1
+    },
+    {
+      "channel": "page-event",
+      "scope": "page",
+      "policy": "probe",
+      "directive": "connect-src",
+      "blocked": "http://127.0.0.1:4701/*",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 1
+    },
+    {
+      "channel": "page-event",
+      "scope": "page",
+      "policy": "enforce",
+      "directive": "script-src",
+      "blocked": "eval",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 1
+    },
+    {
+      "channel": "page-event",
+      "scope": "page",
+      "policy": "probe",
+      "directive": "script-src",
+      "blocked": "eval",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 1
+    },
+    {
+      "channel": "page-event",
+      "scope": "page",
+      "policy": "enforce",
+      "directive": "script-src",
+      "blocked": "eval",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 1
+    },
+    {
+      "channel": "page-event",
+      "scope": "page",
+      "policy": "probe",
+      "directive": "script-src",
+      "blocked": "eval",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 1
+    },
+    {
+      "channel": "server-report",
+      "scope": "page",
+      "policy": "probe",
+      "directive": "img-src",
+      "blocked": "data",
+      "sourceFile": "/csp-probe.html",
+      "line": 6
+    },
+    {
+      "channel": "server-report",
+      "scope": "page",
+      "policy": "enforce",
+      "directive": "connect-src",
+      "blocked": "http://127.0.0.1:4701/*",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 1
+    },
+    {
+      "channel": "server-report",
+      "scope": "page",
+      "policy": "probe",
+      "directive": "connect-src",
+      "blocked": "http://127.0.0.1:4701/*",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 1
+    },
+    {
+      "channel": "server-report",
+      "scope": "page",
+      "policy": "enforce",
+      "directive": "script-src",
+      "blocked": "eval",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 1
+    },
+    {
+      "channel": "server-report",
+      "scope": "page",
+      "policy": "probe",
+      "directive": "script-src",
+      "blocked": "eval",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 1
+    },
+    {
+      "channel": "server-report",
+      "scope": "page",
+      "policy": "enforce",
+      "directive": "script-src",
+      "blocked": "eval",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 1
+    },
+    {
+      "channel": "server-report",
+      "scope": "page",
+      "policy": "probe",
+      "directive": "script-src",
+      "blocked": "eval",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 1
+    },
+    {
+      "channel": "server-report",
+      "scope": "worker",
+      "policy": "enforce",
+      "directive": "connect-src",
+      "blocked": "http://127.0.0.1:4701/*",
+      "sourceFile": "/assets/csp-probe.worker-BLFiutv5.js",
+      "line": 1
+    },
+    {
+      "channel": "server-report",
+      "scope": "worker",
+      "policy": "probe",
+      "directive": "connect-src",
+      "blocked": "http://127.0.0.1:4701/*",
+      "sourceFile": "/assets/csp-probe.worker-BLFiutv5.js",
+      "line": 1
+    },
+    {
+      "channel": "server-report",
+      "scope": "worker",
+      "policy": "enforce",
+      "directive": "script-src",
+      "blocked": "eval",
+      "sourceFile": "/assets/csp-probe.worker-BLFiutv5.js",
+      "line": 1
+    },
+    {
+      "channel": "server-report",
+      "scope": "worker",
+      "policy": "probe",
+      "directive": "script-src",
+      "blocked": "eval",
+      "sourceFile": "/assets/csp-probe.worker-BLFiutv5.js",
+      "line": 1
+    },
+    {
+      "channel": "server-report",
+      "scope": "worker",
+      "policy": "enforce",
+      "directive": "script-src",
+      "blocked": "eval",
+      "sourceFile": "/assets/csp-probe.worker-BLFiutv5.js",
+      "line": 1
+    },
+    {
+      "channel": "server-report",
+      "scope": "worker",
+      "policy": "probe",
+      "directive": "script-src",
+      "blocked": "eval",
+      "sourceFile": "/assets/csp-probe.worker-BLFiutv5.js",
+      "line": 1
+    },
+    {
+      "channel": "console",
+      "scope": "page",
+      "policy": "probe",
+      "directive": "img-src",
+      "blocked": "data",
+      "sourceFile": "/csp-probe.html?target=http%3A%2F%2F127.0.0.1%3A4701%2Findex.html",
+      "line": 0
+    },
+    {
+      "channel": "console",
+      "scope": "page",
+      "policy": "enforce",
+      "directive": "connect-src",
+      "blocked": "http://127.0.0.1:4701/*",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 0
+    },
+    {
+      "channel": "console",
+      "scope": "page",
+      "policy": "probe",
+      "directive": "connect-src",
+      "blocked": "http://127.0.0.1:4701/*",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 0
+    },
+    {
+      "channel": "console",
+      "scope": "page",
+      "policy": "enforce",
+      "directive": "",
+      "blocked": "http://127.0.0.1:4701/*",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 0
+    },
+    {
+      "channel": "console",
+      "scope": "page",
+      "policy": "probe",
+      "directive": "script-src",
+      "blocked": "eval",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 0
+    },
+    {
+      "channel": "console",
+      "scope": "page",
+      "policy": "probe",
+      "directive": "script-src",
+      "blocked": "eval",
+      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
+      "line": 0
+    }
+  ]
+}

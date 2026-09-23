@@ -7,11 +7,12 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T16:14:04.084Z",
+  "timestamp": "2026-09-23T17:13:29.859Z",
+  "timingsNote": "从 createEditor 调用开始计时，不含脚本下载解析与样本加载",
   "timings": {
-    "ready": 25,
-    "rendered": 486,
-    "steady": 3538
+    "ready": 24,
+    "rendered": 475,
+    "steady": 3526
   },
   "functional": [
     {
@@ -48,43 +49,98 @@
     "started": [],
     "stats": {
       "created": 0,
-      "messagesToWorker": 0,
-      "messagesFromWorker": 0
-    }
+      "toWorker": {},
+      "fromWorker": {}
+    },
+    "failures": []
   },
   "enforceViolations": [],
   "probeViolations": {
-    "total": 88,
+    "total": 264,
     "groups": [
       {
+        "channel": "console",
+        "scope": "page",
+        "policy": "probe",
         "directive": "img-src",
         "blocked": "data",
-        "sourceFile": "/assets/sheet-BHx241ik.js",
+        "sourceFile": "",
+        "count": 84
+      },
+      {
+        "channel": "page-event",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "img-src",
+        "blocked": "data",
+        "sourceFile": "/assets/sheet-D_K5KmZI.js",
         "count": 83
       },
       {
+        "channel": "server-report",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "img-src",
+        "blocked": "data",
+        "sourceFile": "/assets/sheet-D_K5KmZI.js",
+        "count": 83
+      },
+      {
+        "channel": "page-event",
+        "scope": "page",
+        "policy": "probe",
         "directive": "style-src-elem",
         "blocked": "inline",
-        "sourceFile": "/assets/facade-BCO5i-bu.js",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
         "count": 4
       },
       {
+        "channel": "server-report",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "style-src-elem",
+        "blocked": "inline",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 4
+      },
+      {
+        "channel": "console",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "style-src",
+        "blocked": "",
+        "sourceFile": "/sheet.html?sample=minimal",
+        "count": 4
+      },
+      {
+        "channel": "page-event",
+        "scope": "page",
+        "policy": "probe",
         "directive": "img-src",
         "blocked": "data",
-        "sourceFile": "/assets/facade-BCO5i-bu.js",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 1
+      },
+      {
+        "channel": "server-report",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "img-src",
+        "blocked": "data",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
         "count": 1
       }
     ]
   },
-  "pageSideViolationCount": 88,
   "requests": {
-    "total": 96,
+    "total": 98,
     "byOrigin": {
-      "http://127.0.0.1:4700": 96
+      "http://127.0.0.1:4700": 98
     },
     "crossOrigin": []
   },
   "pageErrors": [],
-  "consoleErrors": [],
-  "consoleWarningCount": 0
+  "scriptConsoleErrors": [],
+  "scriptConsoleWarningCount": 0,
+  "browserConsoleErrors": []
 }

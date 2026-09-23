@@ -1,7 +1,7 @@
 // V01：生产依赖图的版本一致性、重复实例、Pro 检查、安装脚本与许可分类。
 // 用法：node scripts/deps-report.ts（需先 pnpm install）
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -38,12 +38,17 @@ function classify(license: string): 'permissive' | 'weak-copyleft' | 'strong-cop
 
 const tree = pnpmJson(['ls', '--prod', '--depth', 'Infinity', '--json']) as { dependencies: Record<string, LsNode> }[];
 const versions = new Map<string, Set<string>>();
+/** 按安装路径区分实例：同一版本也可能因 peer 依赖不同而装成多份（pnpm 的 peer 变体）。 */
+const instances = new Map<string, Set<string>>();
 const paths = new Map<string, string>();
 const walk = (deps: Record<string, LsNode> | undefined) => {
     for (const [name, node] of Object.entries(deps ?? {})) {
         const set = versions.get(name) ?? new Set();
         set.add(node.version);
         versions.set(name, set);
+        const inst = instances.get(name) ?? new Set();
+        inst.add(node.path);
+        instances.set(name, inst);
         paths.set(`${name}@${node.version}`, node.path);
         walk(node.dependencies);
     }
@@ -59,7 +64,10 @@ const univerMismatch = univer
     .map(([n, v]) => ({ name: n, versions: [...v] }));
 const pro = [...versions.keys()].filter((n) => n.startsWith('@univerjs-pro/') || /univer-?pro/i.test(n));
 const duplicates = [...versions.entries()].filter(([, v]) => v.size > 1).map(([n, v]) => ({ name: n, versions: [...v] }));
-const singletonDuplicates = duplicates.filter((d) => SINGLETONS.includes(d.name) || d.name.startsWith('@univerjs/'));
+const multiInstance = [...instances.entries()]
+    .filter(([, p]) => p.size > 1)
+    .map(([n, p]) => ({ name: n, instances: [...p].map((x) => x.replace(/^.*\/node_modules\/\.pnpm\//, '')) }));
+const singletonDuplicates = multiInstance.filter((d) => SINGLETONS.includes(d.name) || d.name.startsWith('@univerjs/'));
 
 // 安装脚本：供应链风险点，需要显式放行或拒绝
 const installScripts: { pkg: string; scripts: Record<string, string> }[] = [];
@@ -68,6 +76,12 @@ for (const [key, dir] of paths) {
     const s = Object.fromEntries(Object.entries(pkg.scripts ?? {}).filter(([k]) => ['preinstall', 'install', 'postinstall'].includes(k)));
     if (Object.keys(s).length > 0) installScripts.push({ pkg: key, scripts: s });
 }
+
+// 发布包里是否带许可文本：构建产物会压缩掉许可注释，分发时需要单独生成第三方许可清单（M1）
+const missingLicenseFile = [...paths.entries()]
+    .filter(([, dir]) => !readdirSync(dir).some((f) => /^(licen[cs]e|copying)([.\-_]|$)/i.test(f)))
+    .map(([key]) => key)
+    .sort();
 
 const licensesRaw = pnpmJson(['licenses', 'list', '--prod', '--json']) as Record<string, { name: string; versions: string[]; license: string; author?: string; homepage?: string }[]>;
 const licenseRows = Object.values(licensesRaw)
@@ -94,8 +108,10 @@ const summary = {
     },
     proPackages: pro,
     duplicates,
+    multiInstance,
     singletonDuplicates,
     installScripts,
+    missingLicenseFile,
     licenses: { byLicense, byCategory, nonPermissive },
     verdict: {
         univerVersionsLocked: univerMismatch.length === 0,
@@ -108,4 +124,4 @@ const summary = {
 await mkdir(OUT, { recursive: true });
 await writeFile(join(OUT, 'deps.json'), `${JSON.stringify(summary, null, 2)}\n`);
 await writeFile(join(OUT, 'licenses.json'), `${JSON.stringify(licenseRows, null, 2)}\n`);
-console.log(JSON.stringify({ packageCount: summary.packageCount, univerPackages: univer.length, ...summary.verdict, duplicates: duplicates.length, installScripts: installScripts.map((i) => i.pkg), byLicense }, null, 2));
+console.log(JSON.stringify({ packageCount: summary.packageCount, univerPackages: univer.length, ...summary.verdict, duplicates: duplicates.length, multiInstance: multiInstance.length, missingLicenseFile, installScripts: installScripts.map((i) => i.pkg), byLicense }, null, 2));

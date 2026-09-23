@@ -1,25 +1,35 @@
 {
-  "timestamp": "2026-09-23T16:16:54.195Z",
+  "timestamp": "2026-09-23T17:10:42.032Z",
   "sheet.html": {
     "initialJs": {
-      "raw": 7883195,
-      "gzip": 2018704,
-      "count": 3,
+      "raw": 7885844,
+      "gzip": 2020033,
+      "count": 5,
       "files": [
         {
-          "file": "assets/facade-BCO5i-bu.js",
-          "raw": 5091086,
-          "gzip": 1210100
+          "file": "assets/facade--SKdPPvM.js",
+          "raw": 5092670,
+          "gzip": 1210783
         },
         {
-          "file": "assets/sheet-BHx241ik.js",
-          "raw": 2570386,
-          "gzip": 739799
+          "file": "assets/sheet-D_K5KmZI.js",
+          "raw": 2570460,
+          "gzip": 739869
         },
         {
-          "file": "assets/jsx-runtime-DVKHqdS6.js",
-          "raw": 221723,
-          "gzip": 68805
+          "file": "assets/jsx-runtime-BCoScHCP.js",
+          "raw": 221049,
+          "gzip": 68522
+        },
+        {
+          "file": "assets/events-C1TuS8fw.js",
+          "raw": 995,
+          "gzip": 470
+        },
+        {
+          "file": "assets/modulepreload-polyfill-P2Xu9kJm.js",
+          "raw": 670,
+          "gzip": 389
         }
       ]
     },
@@ -46,9 +56,9 @@
       ]
     },
     "lazyJs": {
-      "raw": 4577595,
-      "gzip": 1035740,
-      "count": 79,
+      "raw": 4576825,
+      "gzip": 1035157,
+      "count": 77,
       "files": [
         {
           "file": "assets/hu-DVk7Y_ka-Ct1fysVO.js",
@@ -434,7 +444,14 @@
           "file": "assets/pa-C54UG8eN-Bj-XExX_.js",
           "raw": 527,
           "gzip": 228
-        },
+        }
+      ]
+    },
+    "fixtureChunks": {
+      "raw": 770,
+      "gzip": 583,
+      "count": 2,
+      "files": [
         {
           "file": "assets/minimal-OVL4a5-e.js",
           "raw": 439,
@@ -462,24 +479,34 @@
   },
   "doc.html": {
     "initialJs": {
-      "raw": 5505959,
-      "gzip": 1328633,
-      "count": 3,
+      "raw": 5508608,
+      "gzip": 1329935,
+      "count": 5,
       "files": [
         {
-          "file": "assets/facade-BCO5i-bu.js",
-          "raw": 5091086,
-          "gzip": 1210100
+          "file": "assets/facade--SKdPPvM.js",
+          "raw": 5092670,
+          "gzip": 1210783
         },
         {
-          "file": "assets/jsx-runtime-DVKHqdS6.js",
-          "raw": 221723,
-          "gzip": 68805
+          "file": "assets/jsx-runtime-BCoScHCP.js",
+          "raw": 221049,
+          "gzip": 68522
         },
         {
-          "file": "assets/doc-CSbRKJlT.js",
-          "raw": 193150,
-          "gzip": 49728
+          "file": "assets/doc-8_JlB7Jd.js",
+          "raw": 193224,
+          "gzip": 49771
+        },
+        {
+          "file": "assets/events-C1TuS8fw.js",
+          "raw": 995,
+          "gzip": 470
+        },
+        {
+          "file": "assets/modulepreload-polyfill-P2Xu9kJm.js",
+          "raw": 670,
+          "gzip": 389
         }
       ]
     },
@@ -506,9 +533,9 @@
       ]
     },
     "lazyJs": {
-      "raw": 4577595,
-      "gzip": 1035740,
-      "count": 79,
+      "raw": 4576825,
+      "gzip": 1035157,
+      "count": 77,
       "files": [
         {
           "file": "assets/hu-DVk7Y_ka-Ct1fysVO.js",
@@ -894,7 +921,14 @@
           "file": "assets/pa-C54UG8eN-Bj-XExX_.js",
           "raw": 527,
           "gzip": 228
-        },
+        }
+      ]
+    },
+    "fixtureChunks": {
+      "raw": 770,
+      "gzip": 583,
+      "count": 2,
+      "files": [
         {
           "file": "assets/minimal-OVL4a5-e.js",
           "raw": 439,

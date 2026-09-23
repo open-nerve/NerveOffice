@@ -7,11 +7,12 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T16:13:12.732Z",
+  "timestamp": "2026-09-23T17:11:30.809Z",
+  "timingsNote": "从 createEditor 调用开始计时，不含脚本下载解析与样本加载",
   "timings": {
-    "ready": 23.199999928474426,
-    "rendered": 421.2999999523163,
-    "steady": 3463.6999999284744
+    "ready": 22.600000023841858,
+    "rendered": 426.89999997615814,
+    "steady": 3474.7000000476837
   },
   "functional": [
     {
@@ -50,21 +51,85 @@
     ],
     "stats": {
       "created": 1,
-      "messagesToWorker": 34,
-      "messagesFromWorker": 34
-    }
+      "toWorker": {
+        "REQUEST_INITIALIZATION": 1,
+        "INITIALIZE": 2,
+        "CALL univer.remote-instance-service.whenReady": 1,
+        "CALL univer.remote-instance-service.createInstance": 1,
+        "CALL univer.remote-instance-service.syncMutation": 10,
+        "CALL_SUCCESS": 19
+      },
+      "fromWorker": {
+        "REQUEST_INITIALIZATION": 1,
+        "INITIALIZE": 2,
+        "CALL_SUCCESS": 12,
+        "CALL rpc.remote-sync.service.syncMutation": 19
+      }
+    },
+    "failures": []
   },
   "enforceViolations": [],
   "probeViolations": {
-    "total": 5,
+    "total": 183,
     "groups": [
       {
+        "channel": "console",
+        "scope": "worker",
+        "policy": "probe",
+        "directive": "img-src",
+        "blocked": "data",
+        "sourceFile": "/sheet.html?sample=minimal&worker=1",
+        "count": 85
+      },
+      {
+        "channel": "page-event",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "img-src",
+        "blocked": "data",
+        "sourceFile": "",
+        "count": 84
+      },
+      {
+        "channel": "page-event",
+        "scope": "page",
+        "policy": "probe",
         "directive": "style-src-elem",
         "blocked": "inline",
-        "sourceFile": "/assets/facade-BCO5i-bu.js",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
         "count": 4
       },
       {
+        "channel": "server-report",
+        "scope": "worker",
+        "policy": "probe",
+        "directive": "style-src-elem",
+        "blocked": "inline",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 4
+      },
+      {
+        "channel": "console",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "style-src",
+        "blocked": "",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 4
+      },
+      {
+        "channel": "server-report",
+        "scope": "worker",
+        "policy": "probe",
+        "directive": "img-src",
+        "blocked": "data",
+        "sourceFile": "/sheet.html",
+        "count": 1
+      },
+      {
+        "channel": "server-report",
+        "scope": "worker",
+        "policy": "probe",
         "directive": "img-src",
         "blocked": "data",
         "sourceFile": "",
@@ -72,15 +137,15 @@
       }
     ]
   },
-  "pageSideViolationCount": 88,
   "requests": {
-    "total": 14,
+    "total": 17,
     "byOrigin": {
-      "http://127.0.0.1:4700": 14
+      "http://127.0.0.1:4700": 17
     },
     "crossOrigin": []
   },
   "pageErrors": [],
-  "consoleErrors": [],
-  "consoleWarningCount": 0
+  "scriptConsoleErrors": [],
+  "scriptConsoleWarningCount": 0,
+  "browserConsoleErrors": []
 }

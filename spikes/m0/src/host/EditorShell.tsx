@@ -6,6 +6,8 @@ import { createEditor } from '../harness/create-editor';
 import { pageEvents } from '../harness/events';
 import { loadFixture } from '../harness/fixtures';
 import { readPageParams } from '../harness/params';
+import { runSelftest } from '../harness/selftest';
+import { countingWorkerFactory, createWorkerStats } from '../harness/worker-stats';
 
 interface EditorShellProps {
     profile: EditorProfile;
@@ -31,19 +33,8 @@ export function EditorShell({ profile, defaultSample, createWorker }: EditorShel
         if (container == null || startedRef.current) return;
         startedRef.current = true;
 
-        const workerStats = { created: 0, messagesToWorker: 0, messagesFromWorker: 0 };
-        // 包一层计数，用来证明 Worker 确实参与了计算或排版。
-        const createCountingWorker = (): Worker => {
-            const worker = createWorker();
-            workerStats.created++;
-            worker.addEventListener('message', () => workerStats.messagesFromWorker++);
-            const post = worker.postMessage.bind(worker) as (...args: unknown[]) => void;
-            worker.postMessage = ((...args: unknown[]) => {
-                workerStats.messagesToWorker++;
-                post(...args);
-            }) as Worker['postMessage'];
-            return worker;
-        };
+        const workerStats = createWorkerStats();
+        const createCountingWorker = countingWorkerFactory(createWorker, workerStats);
 
         const ready = (async (): Promise<EditorHandle> => {
             if (params.mode === 'read') {
@@ -61,10 +52,14 @@ export function EditorShell({ profile, defaultSample, createWorker }: EditorShel
         window.__m0 = { kind: profile.kind, ready, events: pageEvents, params: { ...params }, workerStats };
 
         ready.then(
-            (editor) => {
+            async (editor) => {
                 window.__m0!.editor = editor;
                 setStatus('ready');
                 setMessage(`steady ${Math.round(editor.timings.steady ?? -1)} ms`);
+                if (params.selftest != null) {
+                    await runSelftest(editor, params.selftest, { events: pageEvents, workerStats });
+                    if (params.next != null) location.href = params.next;
+                }
             },
             (error: unknown) => {
                 setStatus('error');

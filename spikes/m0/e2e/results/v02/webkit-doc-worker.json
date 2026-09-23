@@ -7,11 +7,12 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T16:14:25.933Z",
+  "timestamp": "2026-09-23T17:13:51.772Z",
+  "timingsNote": "从 createEditor 调用开始计时，不含脚本下载解析与样本加载",
   "timings": {
-    "ready": 27,
-    "rendered": 407,
-    "steady": 3411
+    "ready": 26,
+    "rendered": 400,
+    "steady": 3405
   },
   "functional": [
     {
@@ -43,31 +44,64 @@
     ],
     "stats": {
       "created": 1,
-      "messagesToWorker": 8,
-      "messagesFromWorker": 8
-    }
+      "toWorker": {
+        "REQUEST_INITIALIZATION": 1,
+        "INITIALIZE": 2,
+        "CALL univer.docs-layout-worker.initialize": 1,
+        "CALL univer.docs-layout-worker.getCapabilities": 1,
+        "CALL univer.docs-layout-worker.createSession": 1,
+        "CALL univer.docs-layout-worker.startLayout": 2
+      },
+      "fromWorker": {
+        "REQUEST_INITIALIZATION": 1,
+        "INITIALIZE": 2,
+        "CALL_SUCCESS": 5
+      }
+    },
+    "failures": []
   },
   "enforceViolations": [],
   "probeViolations": {
-    "total": 4,
+    "total": 12,
     "groups": [
       {
+        "channel": "page-event",
+        "scope": "page",
+        "policy": "probe",
         "directive": "style-src-elem",
         "blocked": "inline",
-        "sourceFile": "/assets/facade-BCO5i-bu.js",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 4
+      },
+      {
+        "channel": "server-report",
+        "scope": "worker",
+        "policy": "probe",
+        "directive": "style-src-elem",
+        "blocked": "inline",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 4
+      },
+      {
+        "channel": "console",
+        "scope": "worker",
+        "policy": "probe",
+        "directive": "style-src",
+        "blocked": "",
+        "sourceFile": "/doc.html?sample=minimal&worker=1",
         "count": 4
       }
     ]
   },
-  "pageSideViolationCount": 4,
   "requests": {
-    "total": 13,
+    "total": 15,
     "byOrigin": {
-      "http://127.0.0.1:4700": 13
+      "http://127.0.0.1:4700": 15
     },
     "crossOrigin": []
   },
   "pageErrors": [],
-  "consoleErrors": [],
-  "consoleWarningCount": 0
+  "scriptConsoleErrors": [],
+  "scriptConsoleWarningCount": 0,
+  "browserConsoleErrors": []
 }

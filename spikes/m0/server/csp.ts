@@ -27,8 +27,15 @@ export const PROBE_POLICY = [
     "form-action 'self'",
 ].join('; ');
 
-export function cspHeaders(mode: 'full' | 'off'): Record<string, string> {
-    if (mode === 'off') return {};
+/**
+ * full：所有响应都带策略（Worker 内生效的是它自己脚本响应上的策略）。
+ * html-only：只有 HTML 带策略，模拟"只给页面加头"的常见部署写法，用来证明 Worker 会因此失去约束。
+ * off：不带任何策略，用来核验运行时网络行为（被 CSP 拦截的请求不会出现在请求记录里）。
+ */
+export type CspMode = 'full' | 'html-only' | 'off';
+
+export function cspHeaders(mode: CspMode, isHtml: boolean): Record<string, string> {
+    if (mode === 'off' || (mode === 'html-only' && !isHtml)) return {};
     return {
         'Content-Security-Policy': `${ENFORCED_POLICY}; report-uri /csp-report?policy=enforce`,
         'Content-Security-Policy-Report-Only': `${PROBE_POLICY}; report-uri /csp-report?policy=probe`,

@@ -1,6 +1,7 @@
 import type { IDocumentData, IWorkbookData } from '@univerjs/core';
 import type { EditorProfile } from '../profiles/types';
 import type { PageEvents } from './events';
+import type { WorkerStats } from './worker-stats';
 
 import { LifecycleService, LifecycleStages, LocaleType, LogLevel, Univer } from '@univerjs/core';
 import { FUniver } from '@univerjs/core/facade';
@@ -83,7 +84,7 @@ export interface M0Window {
     editor?: EditorHandle;
     events: PageEvents;
     params: Record<string, unknown>;
-    workerStats: { created: number; messagesToWorker: number; messagesFromWorker: number };
+    workerStats: WorkerStats;
 }
 
 declare global {

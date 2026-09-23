@@ -57,7 +57,10 @@ const report: Record<string, unknown> = { timestamp: new Date().toISOString() };
 for (const entry of ['sheet.html', 'doc.html']) {
     const initial = closure([entry], 'imports');
     const all = closure([entry], 'dynamicImports');
-    const lazy = [...all].filter((k) => !initial.has(k));
+    // 按需加载的块里，样本 JSON（import.meta.glob）属于验证工程，单独统计
+    const lazyAll = [...all].filter((k) => !initial.has(k));
+    const lazy = lazyAll.filter((k) => !k.startsWith('fixtures/'));
+    const fixtures = lazyAll.filter((k) => k.startsWith('fixtures/'));
     const js = [...initial].map((k) => manifest[k].file);
     const css = [...new Set([...initial].flatMap((k) => manifest[k].css ?? []))];
     const workers = (manifest[entry].assets ?? []).filter((a) => a.includes('worker'));
@@ -65,6 +68,7 @@ for (const entry of ['sheet.html', 'doc.html']) {
         initialJs: sum(js),
         initialCss: sum(css),
         lazyJs: sum(lazy.map((k) => manifest[k].file)),
+        fixtureChunks: sum(fixtures.map((k) => manifest[k].file)),
         workers: sum(workers),
     };
     report[entry] = r;
