@@ -1,0 +1,31 @@
+{
+    "id": "m0-doc-minimal",
+    "title": "最小文字文档样本",
+    "locale": "zhCN",
+    "body": {
+        "dataStream": "M0 文字文档样本\r\n",
+        "textRuns": [],
+        "paragraphs": [
+            {
+                "startIndex": 9,
+                "paragraphStyle": {}
+            }
+        ],
+        "sectionBreaks": [
+            {
+                "startIndex": 10
+            }
+        ]
+    },
+    "documentStyle": {
+        "documentFlavor": 2,
+        "pageSize": {
+            "width": 793.7,
+            "height": 1122.5
+        },
+        "marginTop": 50,
+        "marginBottom": 50,
+        "marginLeft": 50,
+        "marginRight": 50
+    }
+}
