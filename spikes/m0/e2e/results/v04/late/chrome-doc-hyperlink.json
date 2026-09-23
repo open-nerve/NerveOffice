@@ -1,0 +1,26 @@
+{
+  "check": "V04-late-register",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-23T18:29:48.527Z",
+  "case": {
+    "kind": "doc",
+    "group": "hyperlink",
+    "sample": "doc-hyperlink",
+    "resource": "DOC_HYPER_LINK_PLUGIN"
+  },
+  "comparison": {
+    "unknown": [],
+    "missing": [],
+    "emptied": [],
+    "changed": []
+  },
+  "serverRejects": false,
+  "openCheckFails": false,
+  "pageErrors": [],
+  "consoleErrors": []
+}

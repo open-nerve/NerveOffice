@@ -33,6 +33,8 @@ export interface EditorHandle {
     timings: Record<string, number>;
     /** 运行时注册的资源 hook：决定 save() 会输出哪些资源。 */
     resourceHooks(): ResourceHookInfo[];
+    /** 文档创建之后再注册某个插件组（V04：验证晚注册的插件能否补加载资源）。 */
+    lateRegister(groupId: string): void;
 }
 
 /** 按档案创建 Univer 实例与文档单元，等到生命周期进入 Steady 后返回。 */
@@ -89,7 +91,16 @@ export async function createEditor(options: CreateEditorOptions): Promise<Editor
             .map((h) => ({ name: h.pluginName, businesses: [...h.businesses] }))
             .sort((a, b) => a.name.localeCompare(b.name));
 
-    return { kind: profile.kind, profileId: profile.id, univer, univerAPI, save, timings, resourceHooks };
+    const lateRegister = (groupId: string): void => {
+        if (!without.includes(groupId)) throw new Error(`插件组 ${groupId} 已经注册`);
+        const group = profile.groups.find((g) => g.id === groupId);
+        if (group == null) throw new Error(`没有插件组：${groupId}`);
+        for (const entry of group.plugins({ container, createWorker })) {
+            if (entry != null) univer.registerPlugin(entry[0], entry[1] as never);
+        }
+    };
+
+    return { kind: profile.kind, profileId: profile.id, univer, univerAPI, save, timings, resourceHooks, lateRegister };
 }
 
 /** 验证脚本通过 window.__m0 访问编辑器。 */

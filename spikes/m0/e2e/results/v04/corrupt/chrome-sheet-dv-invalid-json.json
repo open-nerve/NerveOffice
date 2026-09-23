@@ -1,0 +1,43 @@
+{
+  "check": "V04-corrupt-resource",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-23T18:28:36.925Z",
+  "case": {
+    "kind": "sheet",
+    "sample": "sheet-dv",
+    "resource": "SHEET_DATA_VALIDATION_PLUGIN",
+    "mode": "invalid-json"
+  },
+  "afterLoad": "{}",
+  "serverCheckAgainstPrevious": {
+    "comparison": {
+      "unknown": [],
+      "missing": [],
+      "emptied": [
+        "SHEET_DATA_VALIDATION_PLUGIN"
+      ],
+      "changed": []
+    },
+    "serverRejects": false,
+    "openCheckFails": true
+  },
+  "openCheckAgainstLoaded": {
+    "comparison": {
+      "unknown": [],
+      "missing": [],
+      "emptied": [
+        "SHEET_DATA_VALIDATION_PLUGIN"
+      ],
+      "changed": []
+    },
+    "serverRejects": false,
+    "openCheckFails": true
+  },
+  "pageErrors": [],
+  "consoleErrors": []
+}

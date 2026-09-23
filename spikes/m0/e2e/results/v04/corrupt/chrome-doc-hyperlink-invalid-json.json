@@ -1,0 +1,43 @@
+{
+  "check": "V04-corrupt-resource",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-23T18:29:21.630Z",
+  "case": {
+    "kind": "doc",
+    "sample": "doc-hyperlink",
+    "resource": "DOC_HYPER_LINK_PLUGIN",
+    "mode": "invalid-json"
+  },
+  "afterLoad": "{\"links\":[{\"id\":\"waiYsCiSeqCbXze8cL6B6\",\"payload\":\"https://example.com/doc\"},{\"id\":\"ytLf41EA9o2jnm0usCxsj\",\"payload\":\"mailto:someone@example.com\"}]}",
+  "serverCheckAgainstPrevious": {
+    "comparison": {
+      "unknown": [],
+      "missing": [],
+      "emptied": [],
+      "changed": []
+    },
+    "serverRejects": false,
+    "openCheckFails": false
+  },
+  "openCheckAgainstLoaded": {
+    "comparison": {
+      "unknown": [],
+      "missing": [],
+      "emptied": [],
+      "changed": [
+        "DOC_HYPER_LINK_PLUGIN"
+      ]
+    },
+    "serverRejects": false,
+    "openCheckFails": false
+  },
+  "pageErrors": [],
+  "consoleErrors": [
+    "\u001b[97;104m[ResourceManagerService]\u001b[0m loadResources error SyntaxError: Unterminated string in JSON at position 74 (line 1 column 75)"
+  ]
+}

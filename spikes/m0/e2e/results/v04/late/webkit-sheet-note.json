@@ -1,0 +1,26 @@
+{
+  "check": "V04-late-register",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T18:32:05.724Z",
+  "case": {
+    "kind": "sheet",
+    "group": "note",
+    "sample": "sheet-note",
+    "resource": "SHEET_NOTE_PLUGIN"
+  },
+  "comparison": {
+    "unknown": [],
+    "missing": [],
+    "emptied": [],
+    "changed": []
+  },
+  "serverRejects": false,
+  "openCheckFails": false,
+  "pageErrors": [],
+  "consoleErrors": []
+}

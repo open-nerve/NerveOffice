@@ -1,0 +1,45 @@
+{
+  "check": "V04-corrupt-resource",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-23T18:28:59.429Z",
+  "case": {
+    "kind": "sheet",
+    "sample": "sheet-filter",
+    "resource": "SHEET_FILTER_PLUGIN",
+    "mode": "invalid-json"
+  },
+  "afterLoad": "{}",
+  "serverCheckAgainstPrevious": {
+    "comparison": {
+      "unknown": [],
+      "missing": [],
+      "emptied": [
+        "SHEET_FILTER_PLUGIN"
+      ],
+      "changed": []
+    },
+    "serverRejects": false,
+    "openCheckFails": true
+  },
+  "openCheckAgainstLoaded": {
+    "comparison": {
+      "unknown": [],
+      "missing": [],
+      "emptied": [
+        "SHEET_FILTER_PLUGIN"
+      ],
+      "changed": []
+    },
+    "serverRejects": false,
+    "openCheckFails": true
+  },
+  "pageErrors": [],
+  "consoleErrors": [
+    "Load Workbook{m0-sheet-filter} Resources{SHEET_FILTER_PLUGIN} Data Error."
+  ]
+}

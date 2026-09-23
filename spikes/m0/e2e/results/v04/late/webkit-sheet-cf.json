@@ -1,0 +1,26 @@
+{
+  "check": "V04-late-register",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T18:31:56.737Z",
+  "case": {
+    "kind": "sheet",
+    "group": "cf",
+    "sample": "sheet-cf",
+    "resource": "SHEET_CONDITIONAL_FORMATTING_PLUGIN"
+  },
+  "comparison": {
+    "unknown": [],
+    "missing": [],
+    "emptied": [],
+    "changed": []
+  },
+  "serverRejects": false,
+  "openCheckFails": false,
+  "pageErrors": [],
+  "consoleErrors": []
+}

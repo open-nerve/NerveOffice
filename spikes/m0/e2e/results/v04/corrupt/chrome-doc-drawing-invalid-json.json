@@ -1,0 +1,43 @@
+{
+  "check": "V04-corrupt-resource",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-23T18:29:14.280Z",
+  "case": {
+    "kind": "doc",
+    "sample": "doc-drawing",
+    "resource": "DOC_DRAWING_PLUGIN",
+    "mode": "invalid-json"
+  },
+  "afterLoad": "{\"data\":{},\"order\":[]}",
+  "serverCheckAgainstPrevious": {
+    "comparison": {
+      "unknown": [],
+      "missing": [],
+      "emptied": [
+        "DOC_DRAWING_PLUGIN"
+      ],
+      "changed": []
+    },
+    "serverRejects": false,
+    "openCheckFails": true
+  },
+  "openCheckAgainstLoaded": {
+    "comparison": {
+      "unknown": [],
+      "missing": [],
+      "emptied": [
+        "DOC_DRAWING_PLUGIN"
+      ],
+      "changed": []
+    },
+    "serverRejects": false,
+    "openCheckFails": true
+  },
+  "pageErrors": [],
+  "consoleErrors": []
+}

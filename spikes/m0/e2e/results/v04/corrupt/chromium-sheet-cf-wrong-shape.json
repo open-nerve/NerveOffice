@@ -1,0 +1,61 @@
+{
+  "check": "V04-corrupt-resource",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T18:25:45.845Z",
+  "case": {
+    "kind": "sheet",
+    "sample": "sheet-cf",
+    "resource": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+    "mode": "wrong-shape"
+  },
+  "afterLoad": "{\"unexpected\":[\"e\"]}",
+  "serverCheckAgainstPrevious": {
+    "comparison": {
+      "unknown": [],
+      "missing": [],
+      "emptied": [],
+      "changed": [
+        "SHEET_CONDITIONAL_FORMATTING_PLUGIN"
+      ]
+    },
+    "serverRejects": false,
+    "openCheckFails": false
+  },
+  "openCheckAgainstLoaded": {
+    "comparison": {
+      "unknown": [],
+      "missing": [],
+      "emptied": [],
+      "changed": [
+        "SHEET_CONDITIONAL_FORMATTING_PLUGIN"
+      ]
+    },
+    "serverRejects": false,
+    "openCheckFails": false
+  },
+  "pageErrors": [
+    "Cannot read properties of undefined (reading 'map')",
+    "Cannot read properties of undefined (reading 'type')",
+    "Cannot read properties of undefined (reading 'type')",
+    "Cannot read properties of undefined (reading 'map')",
+    "Cannot read properties of undefined (reading 'type')",
+    "Cannot read properties of undefined (reading 'type')",
+    "Cannot read properties of undefined (reading 'map')",
+    "Cannot read properties of undefined (reading 'type')",
+    "Cannot read properties of undefined (reading 'type')",
+    "Cannot read properties of undefined (reading 'map')",
+    "Cannot read properties of undefined (reading 'type')",
+    "Cannot read properties of undefined (reading 'type')",
+    "Cannot read properties of undefined (reading 'map')",
+    "Cannot read properties of undefined (reading 'type')",
+    "Cannot read properties of undefined (reading 'type')"
+  ],
+  "consoleErrors": [
+    "\u001b[97;104m[ResourceManagerService]\u001b[0m loadResources error TypeError: t[n] is not iterable"
+  ]
+}

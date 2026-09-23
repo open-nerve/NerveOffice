@@ -1,0 +1,43 @@
+{
+  "check": "V04-corrupt-resource",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T18:31:18.353Z",
+  "case": {
+    "kind": "sheet",
+    "sample": "sheet-drawing",
+    "resource": "SHEET_DRAWING_PLUGIN",
+    "mode": "invalid-json"
+  },
+  "afterLoad": "{}",
+  "serverCheckAgainstPrevious": {
+    "comparison": {
+      "unknown": [],
+      "missing": [],
+      "emptied": [
+        "SHEET_DRAWING_PLUGIN"
+      ],
+      "changed": []
+    },
+    "serverRejects": false,
+    "openCheckFails": true
+  },
+  "openCheckAgainstLoaded": {
+    "comparison": {
+      "unknown": [],
+      "missing": [],
+      "emptied": [
+        "SHEET_DRAWING_PLUGIN"
+      ],
+      "changed": []
+    },
+    "serverRejects": false,
+    "openCheckFails": true
+  },
+  "pageErrors": [],
+  "consoleErrors": []
+}

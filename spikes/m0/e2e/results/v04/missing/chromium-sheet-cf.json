@@ -1,0 +1,47 @@
+{
+  "check": "V04-missing-plugin",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T18:24:09.752Z",
+  "case": {
+    "kind": "sheet",
+    "group": "cf",
+    "sample": "sheet-cf",
+    "resource": "SHEET_CONDITIONAL_FORMATTING_PLUGIN"
+  },
+  "hooksWithoutGroup": [
+    "DOC_DRAWING_PLUGIN",
+    "DOC_NOTE_PLUGIN",
+    "DOC_OBJECT_PERMISSION_PLUGIN",
+    "DOC_WORD_STYLES_PLUGIN",
+    "SHEET_AuthzIoMockService_PLUGIN",
+    "SHEET_DATA_VALIDATION_PLUGIN",
+    "SHEET_DEFINED_NAME_PLUGIN",
+    "SHEET_DRAWING_PLUGIN",
+    "SHEET_FILTER_PLUGIN",
+    "SHEET_NOTE_PLUGIN",
+    "SHEET_RANGE_PROTECTION_PLUGIN",
+    "SHEET_RANGE_THEME_MODEL_PLUGIN",
+    "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+    "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN"
+  ],
+  "comparison": {
+    "unknown": [],
+    "missing": [
+      "SHEET_CONDITIONAL_FORMATTING_PLUGIN"
+    ],
+    "emptied": [],
+    "changed": []
+  },
+  "serverRejects": true,
+  "openCheckFails": true,
+  "inline": {
+    "cellsWithCustomRanges": 0
+  },
+  "pageErrors": [],
+  "consoleErrors": []
+}
