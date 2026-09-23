@@ -1,5 +1,5 @@
-// 表格候选档案（P1）：00 号计划书 §4.2 范围内的全部开源插件，按官方 preset 的顺序组装。
-import type { EditorProfile, PluginEntry, ProfileOptions } from './types';
+// 表格插件档案 v1 草案（P2）：00 号计划书 §4.2 范围内的全部开源插件，按官方 preset 的顺序组装，按插件组组织。
+import type { EditorProfile, PluginGroup } from './types';
 
 import { mergeLocales } from '@univerjs/core';
 import { UniverDataValidationPlugin } from '@univerjs/data-validation';
@@ -94,59 +94,112 @@ import '@univerjs/sheets-hyper-link/facade';
 import '@univerjs/sheets-hyper-link-ui/facade';
 import '@univerjs/sheets-note/facade';
 
-function plugins({ container, createWorker }: ProfileOptions): PluginEntry[] {
-    const useWorker = createWorker != null;
-    const entries: (PluginEntry | null)[] = [
+const groups: PluginGroup[] = [
+    {
         // 核心：与 UniverSheetsCorePreset 相同，但不注册 UniverNetworkPlugin（没有任何插件使用它）。
-        [UniverDocsPlugin],
-        [UniverRenderEnginePlugin],
-        [UniverUIPlugin, { container }],
-        [UniverDocsUIPlugin],
-        useWorker ? [UniverRPCMainThreadPlugin, { workerURL: createWorker() }] : null,
-        [UniverFormulaEnginePlugin, { notExecuteFormula: useWorker }],
-        [UniverSheetsPlugin, { notExecuteFormula: useWorker, onlyRegisterFormulaRelatedMutations: false }],
-        [UniverSheetsUIPlugin],
-        [UniverSheetsNumfmtPlugin],
-        [UniverSheetsNumfmtUIPlugin],
-        [UniverSheetsFormulaPlugin, { notExecuteFormula: useWorker }],
-        [UniverSheetsFormulaUIPlugin],
+        id: 'core',
+        resources: [
+            'SHEET_AuthzIoMockService_PLUGIN',
+            'SHEET_DEFINED_NAME_PLUGIN',
+            'SHEET_RANGE_THEME_MODEL_PLUGIN',
+            'SHEET_RANGE_PROTECTION_PLUGIN',
+            'SHEET_WORKSHEET_PROTECTION_PLUGIN',
+            'SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN',
+        ],
+        removable: false,
+        plugins: ({ container, createWorker }) => {
+            const useWorker = createWorker != null;
+            return [
+                [UniverDocsPlugin],
+                [UniverRenderEnginePlugin],
+                [UniverUIPlugin, { container }],
+                [UniverDocsUIPlugin],
+                useWorker ? [UniverRPCMainThreadPlugin, { workerURL: createWorker() }] : null,
+                [UniverFormulaEnginePlugin, { notExecuteFormula: useWorker }],
+                [UniverSheetsPlugin, { notExecuteFormula: useWorker, onlyRegisterFormulaRelatedMutations: false }],
+                [UniverSheetsUIPlugin],
+            ];
+        },
+    },
+    {
+        id: 'numfmt',
+        resources: [],
+        removable: false,
+        plugins: () => [[UniverSheetsNumfmtPlugin], [UniverSheetsNumfmtUIPlugin]],
+    },
+    {
+        id: 'formula',
+        resources: [],
+        removable: false,
+        plugins: ({ createWorker }) => [
+            [UniverSheetsFormulaPlugin, { notExecuteFormula: createWorker != null }],
+            [UniverSheetsFormulaUIPlugin],
+        ],
+    },
+    {
         // 浮动图片与单元格图片
-        [UniverDrawingPlugin],
-        [UniverDocsDrawingPlugin],
-        [UniverDrawingUIPlugin],
-        [UniverSheetsDrawingPlugin],
-        [UniverSheetsDrawingUIPlugin],
-        // 条件格式
-        [UniverSheetsConditionalFormattingPlugin],
-        [UniverSheetsConditionalFormattingUIPlugin],
-        // 筛选
-        [UniverSheetsFilterPlugin],
-        [UniverSheetsFilterUIPlugin],
-        // 超链接
-        [UniverSheetsHyperLinkPlugin],
-        [UniverSheetsHyperLinkUIPlugin],
-        // 数据验证
-        [UniverDataValidationPlugin],
-        [UniverSheetsDataValidationPlugin],
-        [UniverSheetsDataValidationUIPlugin],
-        // 查找替换
-        [UniverFindReplacePlugin],
-        [UniverSheetsFindReplacePlugin],
-        // 备注
-        [UniverSheetsNotePlugin],
-        [UniverSheetsNoteUIPlugin],
-        // 排序
-        [UniverSheetsSortPlugin],
-        [UniverSheetsSortUIPlugin],
-    ];
-    return entries.filter((e): e is PluginEntry => e != null);
-}
+        id: 'drawing',
+        resources: ['SHEET_DRAWING_PLUGIN'],
+        removable: true,
+        plugins: () => [
+            [UniverDrawingPlugin],
+            [UniverDocsDrawingPlugin],
+            [UniverDrawingUIPlugin],
+            [UniverSheetsDrawingPlugin],
+            [UniverSheetsDrawingUIPlugin],
+        ],
+    },
+    {
+        id: 'cf',
+        resources: ['SHEET_CONDITIONAL_FORMATTING_PLUGIN'],
+        removable: true,
+        plugins: () => [[UniverSheetsConditionalFormattingPlugin], [UniverSheetsConditionalFormattingUIPlugin]],
+    },
+    {
+        id: 'filter',
+        resources: ['SHEET_FILTER_PLUGIN'],
+        removable: true,
+        plugins: () => [[UniverSheetsFilterPlugin], [UniverSheetsFilterUIPlugin]],
+    },
+    {
+        // 超链接存在单元格富文本的 customRanges 里，不走资源
+        id: 'hyperlink',
+        resources: [],
+        removable: true,
+        plugins: () => [[UniverSheetsHyperLinkPlugin], [UniverSheetsHyperLinkUIPlugin]],
+    },
+    {
+        id: 'dv',
+        resources: ['SHEET_DATA_VALIDATION_PLUGIN'],
+        removable: true,
+        plugins: () => [[UniverDataValidationPlugin], [UniverSheetsDataValidationPlugin], [UniverSheetsDataValidationUIPlugin]],
+    },
+    {
+        id: 'find-replace',
+        resources: [],
+        removable: true,
+        plugins: () => [[UniverFindReplacePlugin], [UniverSheetsFindReplacePlugin]],
+    },
+    {
+        id: 'note',
+        resources: ['SHEET_NOTE_PLUGIN'],
+        removable: true,
+        plugins: () => [[UniverSheetsNotePlugin], [UniverSheetsNoteUIPlugin]],
+    },
+    {
+        id: 'sort',
+        resources: [],
+        removable: true,
+        plugins: () => [[UniverSheetsSortPlugin], [UniverSheetsSortUIPlugin]],
+    },
+];
 
-export const sheetCandidateProfile: EditorProfile = {
-    id: 'sheet@candidate-p1',
+export const sheetProfile: EditorProfile = {
+    id: 'sheet@1-draft',
     kind: 'sheet',
+    sdkVersion: '1.0.0',
     worker: 'formula',
-    plugins,
+    groups,
     locale: mergeLocales(
         DesignZhCN,
         UIZhCN,

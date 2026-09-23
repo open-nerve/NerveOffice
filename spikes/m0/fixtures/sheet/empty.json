@@ -1,0 +1,16 @@
+{
+    "id": "m0-sheet-empty",
+    "name": "空白表格",
+    "locale": "zhCN",
+    "styles": {},
+    "sheetOrder": ["sheet-1"],
+    "sheets": {
+        "sheet-1": {
+            "id": "sheet-1",
+            "name": "数据",
+            "rowCount": 200,
+            "columnCount": 26,
+            "cellData": {}
+        }
+    }
+}

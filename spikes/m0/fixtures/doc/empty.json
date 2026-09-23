@@ -1,0 +1,30 @@
+{
+    "id": "m0-doc-empty",
+    "title": "空白文字文档",
+    "locale": "zhCN",
+    "body": {
+        "dataStream": "\r\n",
+        "textRuns": [],
+        "paragraphs": [
+            {
+                "startIndex": 0
+            }
+        ],
+        "sectionBreaks": [
+            {
+                "startIndex": 1
+            }
+        ]
+    },
+    "documentStyle": {
+        "documentFlavor": 2,
+        "pageSize": {
+            "width": 793.7,
+            "height": 1122.5
+        },
+        "marginTop": 50,
+        "marginBottom": 50,
+        "marginLeft": 50,
+        "marginRight": 50
+    }
+}

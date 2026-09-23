@@ -49,6 +49,10 @@ export interface CspReport {
 const reports: CspReport[] = [];
 /** 真实 Safari 自检页面回传的结果（Playwright 无法驱动真实 Safari）。 */
 const selftests: unknown[] = [];
+/** 文档存储（内存）：P2 起用于保存重开、复制等实验。键是文档 id，值是快照 JSON 原文。 */
+const documents = new Map<string, string>();
+const DOC_PATH = /^\/api\/docs\/([\w.-]+)$/;
+const DOC_COPY_PATH = /^\/api\/docs\/([\w.-]+)\/copy$/;
 
 async function readBody(req: import('node:http').IncomingMessage, limit = 1024 * 1024): Promise<string> {
     const chunks: Buffer[] = [];
@@ -97,6 +101,43 @@ const server = createServer(async (req, res) => {
             }
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
             res.end(JSON.stringify(reports));
+            return;
+        }
+        const docMatch = DOC_PATH.exec(url.pathname);
+        if (docMatch != null) {
+            const id = docMatch[1];
+            if (req.method === 'PUT') {
+                const text = await readBody(req, 64 * 1024 * 1024);
+                JSON.parse(text); // 只接受合法 JSON
+                documents.set(id, text);
+                res.writeHead(204).end();
+                return;
+            }
+            if (req.method === 'DELETE') {
+                documents.delete(id);
+                res.writeHead(204).end();
+                return;
+            }
+            const text = documents.get(id);
+            if (text == null) {
+                res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('document not found');
+                return;
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+            res.end(text);
+            return;
+        }
+        const copyMatch = DOC_COPY_PATH.exec(url.pathname);
+        if (copyMatch != null && req.method === 'POST') {
+            const source = documents.get(copyMatch[1]);
+            const to = url.searchParams.get('to');
+            if (source == null || to == null || !/^[\w.-]+$/.test(to)) {
+                res.writeHead(400).end();
+                return;
+            }
+            // 原样复制：不改 unitId 与工作表 id（00 号计划书 §8.3）
+            documents.set(to, source);
+            res.writeHead(204).end();
             return;
         }
         if (url.pathname === '/__selftest') {
