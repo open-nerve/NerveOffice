@@ -7,7 +7,7 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T17:11:15.290Z",
+  "timestamp": "2026-09-23T17:35:08.320Z",
   "target": "http://127.0.0.1:4701/index.html",
   "expected": {
     "page": "blocked",
@@ -112,15 +112,6 @@
     {
       "channel": "server-report",
       "scope": "page",
-      "policy": "probe",
-      "directive": "img-src",
-      "blocked": "data",
-      "sourceFile": "/csp-probe.html",
-      "line": 6
-    },
-    {
-      "channel": "server-report",
-      "scope": "page",
       "policy": "enforce",
       "directive": "connect-src",
       "blocked": "http://127.0.0.1:4701/*",
@@ -225,15 +216,6 @@
       "blocked": "eval",
       "sourceFile": "/assets/csp-probe.worker-BLFiutv5.js",
       "line": 1
-    },
-    {
-      "channel": "console",
-      "scope": "page",
-      "policy": "probe",
-      "directive": "img-src",
-      "blocked": "data",
-      "sourceFile": "/csp-probe.html?target=http%3A%2F%2F127.0.0.1%3A4701%2Findex.html",
-      "line": 0
     },
     {
       "channel": "console",
@@ -249,15 +231,6 @@
       "scope": "page",
       "policy": "probe",
       "directive": "connect-src",
-      "blocked": "http://127.0.0.1:4701/*",
-      "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
-      "line": 0
-    },
-    {
-      "channel": "console",
-      "scope": "page",
-      "policy": "enforce",
-      "directive": "",
       "blocked": "http://127.0.0.1:4701/*",
       "sourceFile": "/assets/csp-probe-C4Hdf7cm.js",
       "line": 0

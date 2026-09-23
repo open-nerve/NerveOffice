@@ -7,7 +7,7 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T17:13:20.941Z",
+  "timestamp": "2026-09-23T17:37:13.914Z",
   "target": "http://127.0.0.1:4701/index.html",
   "expected": {
     "page": "blocked",
@@ -190,25 +190,7 @@
     },
     {
       "channel": "console",
-      "scope": "page",
-      "policy": "enforce",
-      "directive": "connect-src",
-      "blocked": "http://127.0.0.1:4701/*",
-      "sourceFile": "",
-      "line": 0
-    },
-    {
-      "channel": "console",
       "scope": "worker",
-      "policy": "probe",
-      "directive": "connect-src",
-      "blocked": "http://127.0.0.1:4701/*",
-      "sourceFile": "",
-      "line": 0
-    },
-    {
-      "channel": "console",
-      "scope": "page",
       "policy": "probe",
       "directive": "connect-src",
       "blocked": "http://127.0.0.1:4701/*",

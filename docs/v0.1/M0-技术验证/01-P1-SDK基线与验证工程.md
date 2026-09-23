@@ -109,8 +109,8 @@ P1 只需要一份"尽量接近最终档案"的候选集合，用来做依赖清
 3. 每个场景从三条渠道收集违规：页面内的 `securitypolicyviolation` 事件、服务端收到的报告（区分强制与探测）、浏览器控制台（含 Worker 作用域）；另外收集未捕获错误、Worker 往来的 RPC 方法与响应类型。
    - **阳性对照**：在页面与 Worker 中各发起一次跨源请求和动态代码执行，分别在 `off`、`full`、`html-only` 三种模式下运行，确认策略确实生效，并记录每个浏览器中各渠道的覆盖范围（审查后补充）。
    - **真实 Safari**：Playwright 无法驱动真实 Safari。页面带 `selftest` 参数时，用 Facade 命令完成同样的编辑并把结果交回服务；`scripts/safari-selftest.ts` 用 `open -g -a Safari` 在后台打开自检链接并汇总（审查后补充）。
-4. 浏览器矩阵：Playwright 自带的 Chromium、本机 Google Chrome 153（`channel: 'chrome'`）、Playwright 自带的 WebKit（作为 Safari 引擎的代理）。
-   - Edge 未安装；真实 Safari 需要管理员开启远程自动化。这两项登记为补充验证（见 §7），不阻塞本 Phase 的结论。
+4. 浏览器矩阵：Playwright 自带的 Chromium、本机 Google Chrome 153（`channel: 'chrome'`）、Playwright 自带的 WebKit；真实 Safari 26.5 用页面自检覆盖（见上）。
+   - Edge 未安装，登记为 DEF-001，在 M1 建立 E2E 浏览器矩阵时补测，不阻塞本 Phase 的结论。
 5. **通过标准**：三个浏览器的四个场景中，强制策略的违规为零，编辑与公式结果正确，非同源请求为零。否则逐条列出必须放宽的指令及原因。探测策略的报告用来说明强制策略中每一项放宽的必要性。
 
 **包体积**：读取 Vite 的构建清单（manifest），按 `sheet.html`、`doc.html` 两个入口分别统计首屏需要的 JS、CSS 与 Worker 块，记录原始体积与 gzip 体积。
@@ -157,7 +157,7 @@ M0 不交付产品功能，不为验证工程本身补测试（M0 总设计 §6�
 
 | 风险 / 问题 | 应对 |
 |---|---|
-| 真实 Safari 与 Edge 本机无法自动化 | WebKit 与 Chromium 的引擎结论作为主要证据；真实浏览器的冒烟补测登记为延期项，在 M1 建立 E2E 浏览器矩阵时完成 |
+| 真实 Safari 无法用 Playwright 驱动；本机没有 Edge | 真实 Safari 改用页面自检覆盖（审查后补充）；Edge 登记为 DEF-001，在 M1 建立 E2E 浏览器矩阵时补测 |
 | 构建工具与 Univer 的兼容问题（Vite 8、React 19.3） | 版本与 Univer 仓库自身使用的一致；出现问题时先查上游示例的配置 |
 | CSP 违规来自构建工具而不是 SDK | 报告中区分来源；构建工具产生的问题在验证工程里解决，并记为 M1 的构建约束 |
 | 1.0.0 发布当天可能有紧急修复版本 | 按 M0 总设计 §11：锁定后不跟随，除非新版本修复了阻断问题 |

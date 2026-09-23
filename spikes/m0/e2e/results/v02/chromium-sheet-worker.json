@@ -7,12 +7,12 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T17:11:30.809Z",
+  "timestamp": "2026-09-23T17:35:23.803Z",
   "timingsNote": "从 createEditor 调用开始计时，不含脚本下载解析与样本加载",
   "timings": {
-    "ready": 22.600000023841858,
-    "rendered": 426.89999997615814,
-    "steady": 3474.7000000476837
+    "ready": 22,
+    "rendered": 418.5,
+    "steady": 3465.2000000476837
   },
   "functional": [
     {
@@ -70,17 +70,8 @@
   },
   "enforceViolations": [],
   "probeViolations": {
-    "total": 183,
+    "total": 181,
     "groups": [
-      {
-        "channel": "console",
-        "scope": "worker",
-        "policy": "probe",
-        "directive": "img-src",
-        "blocked": "data",
-        "sourceFile": "/sheet.html?sample=minimal&worker=1",
-        "count": 85
-      },
       {
         "channel": "page-event",
         "scope": "page",
@@ -88,6 +79,15 @@
         "directive": "img-src",
         "blocked": "data",
         "sourceFile": "",
+        "count": 84
+      },
+      {
+        "channel": "console",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "img-src",
+        "blocked": "data",
+        "sourceFile": "/sheet.html?sample=minimal&worker=1",
         "count": 84
       },
       {
@@ -101,7 +101,7 @@
       },
       {
         "channel": "server-report",
-        "scope": "worker",
+        "scope": "page",
         "policy": "probe",
         "directive": "style-src-elem",
         "blocked": "inline",
@@ -119,16 +119,7 @@
       },
       {
         "channel": "server-report",
-        "scope": "worker",
-        "policy": "probe",
-        "directive": "img-src",
-        "blocked": "data",
-        "sourceFile": "/sheet.html",
-        "count": 1
-      },
-      {
-        "channel": "server-report",
-        "scope": "worker",
+        "scope": "page",
         "policy": "probe",
         "directive": "img-src",
         "blocked": "data",
@@ -138,9 +129,9 @@
     ]
   },
   "requests": {
-    "total": 17,
+    "total": 16,
     "byOrigin": {
-      "http://127.0.0.1:4700": 17
+      "http://127.0.0.1:4700": 16
     },
     "crossOrigin": []
   },

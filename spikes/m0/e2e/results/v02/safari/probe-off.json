@@ -7,7 +7,7 @@
   "mode": "off",
   "target": "http://127.0.0.1:4710/index.html",
   "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15",
-  "timestamp": "2026-09-23T17:10:08.751Z",
+  "timestamp": "2026-09-23T17:38:25.654Z",
   "page": {
     "fetch": "allowed",
     "eval": "allowed",

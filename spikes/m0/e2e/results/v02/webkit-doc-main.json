@@ -7,12 +7,12 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T17:13:44.439Z",
+  "timestamp": "2026-09-23T17:37:37.514Z",
   "timingsNote": "从 createEditor 调用开始计时，不含脚本下载解析与样本加载",
   "timings": {
-    "ready": 44,
-    "rendered": 382,
-    "steady": 3385
+    "ready": 45,
+    "rendered": 394,
+    "steady": 3397
   },
   "functional": [
     {

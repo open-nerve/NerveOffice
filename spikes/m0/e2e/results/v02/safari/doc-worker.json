@@ -6,7 +6,7 @@
   "kind": "editor",
   "scenario": "doc-worker",
   "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15",
-  "timestamp": "2026-09-23T17:10:03.824Z",
+  "timestamp": "2026-09-23T17:38:20.435Z",
   "checks": [
     {
       "name": "正文包含插入的文字",
@@ -28,9 +28,9 @@
     }
   ],
   "timings": {
-    "ready": 21,
-    "rendered": 352,
-    "steady": 3496
+    "ready": 20,
+    "rendered": 351,
+    "steady": 3480
   },
   "events": {
     "cspViolations": [
@@ -49,15 +49,6 @@
         "blockedURI": "inline",
         "sourceFile": "http://127.0.0.1:4710/assets/facade--SKdPPvM.js",
         "lineNumber": 73,
-        "disposition": "report",
-        "sample": ""
-      },
-      {
-        "directive": "img-src",
-        "effectiveDirective": "img-src",
-        "blockedURI": "data",
-        "sourceFile": "",
-        "lineNumber": 0,
         "disposition": "report",
         "sample": ""
       },
@@ -136,22 +127,6 @@
           "source-file": "http://127.0.0.1:4710/assets/facade--SKdPPvM.js",
           "line-number": 73,
           "column-number": 44979
-        }
-      }
-    },
-    {
-      "policy": "probe",
-      "body": {
-        "type": "csp-violation",
-        "url": "http://127.0.0.1:4710/doc.html?sample=minimal&worker=1&selftest=doc-worker&next=http%3A%2F%2F127.0.0.1%3A4710%2Fcsp-probe.html%3Freport%3Dfull%26target%3Dhttp%253A%252F%252F127.0.0.1%253A4711%252Findex.html%26next%3Dhttp%253A%252F%252F127.0.0.1%253A4712%252Fcsp-probe.html%253Freport%253Dhtml-only%2526target%253Dhttp%25253A%25252F%25252F127.0.0.1%25253A4711%25252Findex.html%2526next%253Dhttp%25253A%25252F%25252F127.0.0.1%25253A4711%25252Fcsp-probe.html%25253Freport%25253Doff%252526target%25253Dhttp%2525253A%2525252F%2525252F127.0.0.1%2525253A4710%2525252Findex.html%252526next%25253Dhttp%2525253A%2525252F%2525252F127.0.0.1%2525253A4711%2525252Findex.html",
-        "csp-report": {
-          "document-uri": "http://127.0.0.1:4710/doc.html?sample=minimal&worker=1&selftest=doc-worker&next=http%3A%2F%2F127.0.0.1%3A4710%2Fcsp-probe.html%3Freport%3Dfull%26target%3Dhttp%253A%252F%252F127.0.0.1%253A4711%252Findex.html%26next%3Dhttp%253A%252F%252F127.0.0.1%253A4712%252Fcsp-probe.html%253Freport%253Dhtml-only%2526target%253Dhttp%25253A%25252F%25252F127.0.0.1%25253A4711%25252Findex.html%2526next%253Dhttp%25253A%25252F%25252F127.0.0.1%25253A4711%25252Fcsp-probe.html%25253Freport%25253Doff%252526target%25253Dhttp%2525253A%2525252F%2525252F127.0.0.1%2525253A4710%2525252Findex.html%252526next%25253Dhttp%2525253A%2525252F%2525252F127.0.0.1%2525253A4711%2525252Findex.html",
-          "referrer": "http://127.0.0.1:4710/doc.html?sample=minimal&selftest=doc-main&next=http%3A%2F%2F127.0.0.1%3A4710%2Fdoc.html%3Fsample%3Dminimal%26worker%3D1%26selftest%3Ddoc-worker%26next%3Dhttp%253A%252F%252F127.0.0.1%253A4710%252Fcsp-probe.html%253Freport%253Dfull%2526target%253Dhttp%25253A%25252F%25252F127.0.0.1%25253A4711%25252Findex.html%2526next%253Dhttp%25253A%25252F%25252F127.0.0.1%25253A4712%25252Fcsp-probe.html%25253Freport%25253Dhtml-only%252526target%25253Dhttp%2525253A%2525252F%2525252F127.0.0.1%2525253A4711%2525252Findex.html%252526next%25253Dhttp%2525253A%2525252F%2525252F127.0.0.1%2525253A4711%2525252Fcsp-probe.html%2525253Freport%2525253Doff%25252526target%2525253Dhttp%252525253A%252525252F%252525252F127.0.0.1%252525253A4710%252525252Findex.html%25252526next%2525253Dhttp%252525253A%252525252F%252525252F127.0.0.1%252525253A4711%252525252Findex.html",
-          "violated-directive": "img-src",
-          "effective-directive": "img-src",
-          "original-policy": "default-src 'self'; img-src 'self'; connect-src 'self'; font-src 'self'; style-src 'self'; script-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; report-uri /csp-report?policy=probe",
-          "blocked-uri": "data",
-          "status-code": 200
         }
       }
     },

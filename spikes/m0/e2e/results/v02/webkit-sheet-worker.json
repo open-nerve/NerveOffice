@@ -7,12 +7,12 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T17:13:37.149Z",
+  "timestamp": "2026-09-23T17:37:30.194Z",
   "timingsNote": "从 createEditor 调用开始计时，不含脚本下载解析与样本加载",
   "timings": {
-    "ready": 22,
-    "rendered": 487,
-    "steady": 3537
+    "ready": 25,
+    "rendered": 490,
+    "steady": 3541
   },
   "functional": [
     {
@@ -92,7 +92,7 @@
       },
       {
         "channel": "server-report",
-        "scope": "worker",
+        "scope": "page",
         "policy": "probe",
         "directive": "img-src",
         "blocked": "data",
@@ -110,7 +110,7 @@
       },
       {
         "channel": "server-report",
-        "scope": "worker",
+        "scope": "page",
         "policy": "probe",
         "directive": "style-src-elem",
         "blocked": "inline",
@@ -119,7 +119,7 @@
       },
       {
         "channel": "console",
-        "scope": "worker",
+        "scope": "page",
         "policy": "probe",
         "directive": "style-src",
         "blocked": "",
@@ -137,7 +137,7 @@
       },
       {
         "channel": "server-report",
-        "scope": "worker",
+        "scope": "page",
         "policy": "probe",
         "directive": "img-src",
         "blocked": "data",

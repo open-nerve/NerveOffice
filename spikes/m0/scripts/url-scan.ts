@@ -3,7 +3,7 @@
 // 用法：先 vite build，再 node scripts/url-scan.ts
 import { readFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 const ROOT = join(import.meta.dirname, '..');
 const DIST = join(ROOT, 'dist');
@@ -32,6 +32,19 @@ function editorFiles(): string[] {
         for (const css of c.css ?? []) files.add(css);
         for (const a of c.assets ?? []) if (/\.(js|css)$/.test(a)) files.add(a);
         stack.push(...(c.imports ?? []), ...(c.dynamicImports ?? []));
+    }
+    // Worker 自己导入的块（例如排版 Worker 按需加载的断字词典）不在构建清单里，从 Worker 文件中解析出来
+    const pending = [...files].filter((f) => /\.worker-[\w-]+\.js$/.test(f));
+    while (pending.length > 0) {
+        const file = pending.pop()!;
+        const text = readFileSync(join(DIST, file), 'utf8');
+        for (const m of text.matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*)["'`]\.\/([^"'`]+\.js)["'`]/g)) {
+            const dep = join(dirname(file), m[1]);
+            if (!files.has(dep)) {
+                files.add(dep);
+                pending.push(dep);
+            }
+        }
     }
     return [...files].sort();
 }

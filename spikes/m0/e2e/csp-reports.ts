@@ -31,7 +31,14 @@ function stripOrigin(file: string): string {
     return file.replace(/^https?:\/\/[^/]+/, '');
 }
 
-const isWorkerUrl = (u: string) => /worker/i.test(u);
+/** 按脚本路径识别 Worker（Vite 产物命名为 *.worker-<hash>.js）；不能匹配整个 URL，页面地址里的 worker=1 会误判。 */
+function isWorkerUrl(u: string): boolean {
+    try {
+        return /\.worker-[\w-]+\.js$/.test(new URL(u).pathname);
+    } catch {
+        return false;
+    }
+}
 
 export function fromPageEvents(events: { effectiveDirective: string; blockedURI: string; sourceFile: string; lineNumber: number; disposition: string }[]): Violation[] {
     return events.map((v) => ({
@@ -68,7 +75,10 @@ export async function fromServer(request: APIRequestContext, baseURL: string): P
 /** 控制台里的 CSP 提示：只能拿到文本，指令与被拦截地址按关键字粗略提取。 */
 export function fromConsole(list: ConsoleRecord[]): Violation[] {
     const out: Violation[] = [];
+    // WebKit 会把 Worker 的控制台消息同时发给页面与 Worker 两个监听器，且页面那份没有位置信息：去掉这份重复
+    const workerTexts = new Set(list.filter((m) => m.scope === 'worker').map((m) => m.text));
     for (const m of list) {
+        if (m.scope === 'page' && m.url === '' && workerTexts.has(m.text)) continue;
         const policy = classifyCspConsole(m.text);
         if (policy == null) continue;
         const directive = /(connect-src|script-src|style-src(?:-elem|-attr)?|img-src|font-src|worker-src|default-src)/.exec(m.text)?.[1] ?? '';

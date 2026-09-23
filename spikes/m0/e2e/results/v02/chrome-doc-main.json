@@ -7,12 +7,12 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-23T17:12:40.538Z",
+  "timestamp": "2026-09-23T17:36:33.409Z",
   "timingsNote": "从 createEditor 调用开始计时，不含脚本下载解析与样本加载",
   "timings": {
-    "ready": 32,
-    "rendered": 367.2999999523163,
-    "steady": 3369.5
+    "ready": 32.89999997615814,
+    "rendered": 368.2000000476837,
+    "steady": 3371.399999976158
   },
   "functional": [
     {
@@ -49,7 +49,7 @@
   },
   "enforceViolations": [],
   "probeViolations": {
-    "total": 14,
+    "total": 12,
     "groups": [
       {
         "channel": "page-event",
@@ -77,24 +77,6 @@
         "blocked": "",
         "sourceFile": "/assets/facade--SKdPPvM.js",
         "count": 4
-      },
-      {
-        "channel": "server-report",
-        "scope": "page",
-        "policy": "probe",
-        "directive": "img-src",
-        "blocked": "data",
-        "sourceFile": "/doc.html",
-        "count": 1
-      },
-      {
-        "channel": "console",
-        "scope": "page",
-        "policy": "probe",
-        "directive": "img-src",
-        "blocked": "data",
-        "sourceFile": "/doc.html?sample=minimal",
-        "count": 1
       }
     ]
   },

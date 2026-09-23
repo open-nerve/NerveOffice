@@ -8,7 +8,7 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-23T17:11:52.816Z",
+  "timestamp": "2026-09-23T17:35:45.623Z",
   "functional": [
     {
       "name": "B2 值（键盘输入）",
@@ -36,9 +36,9 @@
     }
   ],
   "requests": {
-    "total": 10,
+    "total": 11,
     "byOrigin": {
-      "http://127.0.0.1:4701": 10
+      "http://127.0.0.1:4701": 11
     },
     "crossOrigin": []
   },
@@ -52,6 +52,7 @@
     "http://127.0.0.1:4701/assets/jsx-runtime--Nk3ZDL8.css",
     "http://127.0.0.1:4701/assets/facade-7vUCyHNp.css",
     "http://127.0.0.1:4701/assets/sheet-DDpCQ7w7.css",
-    "http://127.0.0.1:4701/assets/minimal-DWJHukzg.js"
+    "http://127.0.0.1:4701/assets/minimal-DWJHukzg.js",
+    "http://127.0.0.1:4701/favicon.svg"
   ]
 }

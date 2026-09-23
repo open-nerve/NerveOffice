@@ -2,8 +2,8 @@
 <html lang="zh-CN">
     <head>
         <meta charset="UTF-8" />
-        <!-- 空图标：避免浏览器自动请求 /favicon.ico 产生 404 噪音 -->
-        <link rel="icon" href="data:," />
+        <!-- 同源图标：避免浏览器自动请求 /favicon.ico 产生 404；不用 data: 图标，否则会触发探测策略的 img-src 违规 -->
+        <link rel="icon" href="/favicon.svg" />
         <title>M0 验证 · CSP 阳性对照</title>
     </head>
     <body>

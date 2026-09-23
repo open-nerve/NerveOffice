@@ -6,7 +6,7 @@
   "kind": "editor",
   "scenario": "sheet-worker",
   "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15",
-  "timestamp": "2026-09-23T17:09:51.024Z",
+  "timestamp": "2026-09-23T17:38:08.123Z",
   "checks": [
     {
       "name": "B2 值",
@@ -35,8 +35,8 @@
   ],
   "timings": {
     "ready": 21,
-    "rendered": 434,
-    "steady": 3540
+    "rendered": 436,
+    "steady": 3672
   },
   "events": {
     "cspViolations": [
@@ -55,15 +55,6 @@
         "blockedURI": "inline",
         "sourceFile": "http://127.0.0.1:4710/assets/facade--SKdPPvM.js",
         "lineNumber": 73,
-        "disposition": "report",
-        "sample": ""
-      },
-      {
-        "directive": "img-src",
-        "effectiveDirective": "img-src",
-        "blockedURI": "data",
-        "sourceFile": "",
-        "lineNumber": 0,
         "disposition": "report",
         "sample": ""
       },
@@ -899,22 +890,6 @@
           "source-file": "http://127.0.0.1:4710/assets/facade--SKdPPvM.js",
           "line-number": 73,
           "column-number": 44979
-        }
-      }
-    },
-    {
-      "policy": "probe",
-      "body": {
-        "type": "csp-violation",
-        "url": "http://127.0.0.1:4710/sheet.html?sample=minimal&worker=1&selftest=sheet-worker&next=http%3A%2F%2F127.0.0.1%3A4710%2Fdoc.html%3Fsample%3Dminimal%26selftest%3Ddoc-main%26next%3Dhttp%253A%252F%252F127.0.0.1%253A4710%252Fdoc.html%253Fsample%253Dminimal%2526worker%253D1%2526selftest%253Ddoc-worker%2526next%253Dhttp%25253A%25252F%25252F127.0.0.1%25253A4710%25252Fcsp-probe.html%25253Freport%25253Dfull%252526target%25253Dhttp%2525253A%2525252F%2525252F127.0.0.1%2525253A4711%2525252Findex.html%252526next%25253Dhttp%2525253A%2525252F%2525252F127.0.0.1%2525253A4712%2525252Fcsp-probe.html%2525253Freport%2525253Dhtml-only%25252526target%2525253Dhttp%252525253A%252525252F%252525252F127.0.0.1%252525253A4711%252525252Findex.html%25252526next%2525253Dhttp%252525253A%252525252F%252525252F127.0.0.1%252525253A4711%252525252Fcsp-probe.html%252525253Freport%252525253Doff%2525252526target%252525253Dhttp%25252525253A%25252525252F%25252525252F127.0.0.1%25252525253A4710%25252525252Findex.html%2525252526next%252525253Dhttp%25252525253A%25252525252F%25252525252F127.0.0.1%25252525253A4711%25252525252Findex.html",
-        "csp-report": {
-          "document-uri": "http://127.0.0.1:4710/sheet.html?sample=minimal&worker=1&selftest=sheet-worker&next=http%3A%2F%2F127.0.0.1%3A4710%2Fdoc.html%3Fsample%3Dminimal%26selftest%3Ddoc-main%26next%3Dhttp%253A%252F%252F127.0.0.1%253A4710%252Fdoc.html%253Fsample%253Dminimal%2526worker%253D1%2526selftest%253Ddoc-worker%2526next%253Dhttp%25253A%25252F%25252F127.0.0.1%25253A4710%25252Fcsp-probe.html%25253Freport%25253Dfull%252526target%25253Dhttp%2525253A%2525252F%2525252F127.0.0.1%2525253A4711%2525252Findex.html%252526next%25253Dhttp%2525253A%2525252F%2525252F127.0.0.1%2525253A4712%2525252Fcsp-probe.html%2525253Freport%2525253Dhtml-only%25252526target%2525253Dhttp%252525253A%252525252F%252525252F127.0.0.1%252525253A4711%252525252Findex.html%25252526next%2525253Dhttp%252525253A%252525252F%252525252F127.0.0.1%252525253A4711%252525252Fcsp-probe.html%252525253Freport%252525253Doff%2525252526target%252525253Dhttp%25252525253A%25252525252F%25252525252F127.0.0.1%25252525253A4710%25252525252Findex.html%2525252526next%252525253Dhttp%25252525253A%25252525252F%25252525252F127.0.0.1%25252525253A4711%25252525252Findex.html",
-          "referrer": "http://127.0.0.1:4710/sheet.html?sample=minimal&selftest=sheet-main&next=http%3A%2F%2F127.0.0.1%3A4710%2Fsheet.html%3Fsample%3Dminimal%26worker%3D1%26selftest%3Dsheet-worker%26next%3Dhttp%253A%252F%252F127.0.0.1%253A4710%252Fdoc.html%253Fsample%253Dminimal%2526selftest%253Ddoc-main%2526next%253Dhttp%25253A%25252F%25252F127.0.0.1%25253A4710%25252Fdoc.html%25253Fsample%25253Dminimal%252526worker%25253D1%252526selftest%25253Ddoc-worker%252526next%25253Dhttp%2525253A%2525252F%2525252F127.0.0.1%2525253A4710%2525252Fcsp-probe.html%2525253Freport%2525253Dfull%25252526target%2525253Dhttp%252525253A%252525252F%252525252F127.0.0.1%252525253A4711%252525252Findex.html%25252526next%2525253Dhttp%252525253A%252525252F%252525252F127.0.0.1%252525253A4712%252525252Fcsp-probe.html%252525253Freport%252525253Dhtml-only%2525252526target%252525253Dhttp%25252525253A%25252525252F%25252525252F127.0.0.1%25252525253A4711%25252525252Findex.html%2525252526next%252525253Dhttp%25252525253A%25252525252F%25252525252F127.0.0.1%25252525253A4711%25252525252Fcsp-probe.html%25252525253Freport%25252525253Doff%252525252526target%25252525253Dhttp%2525252525253A%2525252525252F%2525252525252F127.0.0.1%2525252525253A4710%2525252525252Findex.html%252525252526next%25252525253Dhttp%2525252525253A%2525252525252F%2525252525252F127.0.0.1%2525252525253A4711%2525252525252Findex.html",
-          "violated-directive": "img-src",
-          "effective-directive": "img-src",
-          "original-policy": "default-src 'self'; img-src 'self'; connect-src 'self'; font-src 'self'; style-src 'self'; script-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; report-uri /csp-report?policy=probe",
-          "blocked-uri": "data",
-          "status-code": 200
         }
       }
     },
@@ -2510,7 +2485,7 @@
           "status-code": 200,
           "source-file": "http://127.0.0.1:4710/assets/sheet-D_K5KmZI.js",
           "line-number": 20,
-          "column-number": 69520
+          "column-number": 67997
         }
       }
     },
@@ -2529,7 +2504,7 @@
           "status-code": 200,
           "source-file": "http://127.0.0.1:4710/assets/sheet-D_K5KmZI.js",
           "line-number": 20,
-          "column-number": 67997
+          "column-number": 69520
         }
       }
     },

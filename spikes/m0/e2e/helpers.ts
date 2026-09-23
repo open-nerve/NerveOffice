@@ -77,6 +77,8 @@ export function recordConsole(page: Page): ConsoleRecord[] {
 /** 判断一条控制台消息是否是 CSP 违规提示，以及属于强制策略还是只报告的探测策略。 */
 export function classifyCspConsole(text: string): 'enforce' | 'probe' | null {
     const t = text.toLowerCase();
+    // Chromium 在请求被拦截后还会追加一条 "Fetch API cannot load … Refused to connect…"，与主消息重复，不计入
+    if (t.startsWith('fetch api cannot load')) return null;
     const isCsp = t.includes('content security policy') || t.includes('content-security-policy') || /refused to (load|connect|execute|apply|evaluate|create)/.test(t);
     if (!isCsp) return null;
     if (t.includes('report-only') || t.includes('[report only]')) return 'probe';

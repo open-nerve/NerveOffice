@@ -7,12 +7,12 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T17:11:45.193Z",
+  "timestamp": "2026-09-23T17:35:38.132Z",
   "timingsNote": "从 createEditor 调用开始计时，不含脚本下载解析与样本加载",
   "timings": {
-    "ready": 23.299999952316284,
-    "rendered": 363.09999990463257,
-    "steady": 3366.0999999046326
+    "ready": 22.5,
+    "rendered": 359.3000000715256,
+    "steady": 3365.7000000476837
   },
   "functional": [
     {
@@ -62,7 +62,7 @@
   },
   "enforceViolations": [],
   "probeViolations": {
-    "total": 14,
+    "total": 12,
     "groups": [
       {
         "channel": "page-event",
@@ -75,7 +75,7 @@
       },
       {
         "channel": "server-report",
-        "scope": "worker",
+        "scope": "page",
         "policy": "probe",
         "directive": "style-src-elem",
         "blocked": "inline",
@@ -90,31 +90,13 @@
         "blocked": "",
         "sourceFile": "/assets/facade--SKdPPvM.js",
         "count": 4
-      },
-      {
-        "channel": "server-report",
-        "scope": "worker",
-        "policy": "probe",
-        "directive": "img-src",
-        "blocked": "data",
-        "sourceFile": "/doc.html",
-        "count": 1
-      },
-      {
-        "channel": "console",
-        "scope": "worker",
-        "policy": "probe",
-        "directive": "img-src",
-        "blocked": "data",
-        "sourceFile": "/doc.html?sample=minimal&worker=1",
-        "count": 1
       }
     ]
   },
   "requests": {
-    "total": 16,
+    "total": 15,
     "byOrigin": {
-      "http://127.0.0.1:4700": 16
+      "http://127.0.0.1:4700": 15
     },
     "crossOrigin": []
   },

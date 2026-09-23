@@ -7,12 +7,12 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T17:11:23.854Z",
+  "timestamp": "2026-09-23T17:35:16.846Z",
   "timingsNote": "从 createEditor 调用开始计时，不含脚本下载解析与样本加载",
   "timings": {
-    "ready": 22.399999976158142,
-    "rendered": 427,
-    "steady": 3475.399999976158
+    "ready": 21.699999928474426,
+    "rendered": 425.39999997615814,
+    "steady": 3466.399999976158
   },
   "functional": [
     {
@@ -56,17 +56,8 @@
   },
   "enforceViolations": [],
   "probeViolations": {
-    "total": 183,
+    "total": 181,
     "groups": [
-      {
-        "channel": "console",
-        "scope": "page",
-        "policy": "probe",
-        "directive": "img-src",
-        "blocked": "data",
-        "sourceFile": "/sheet.html?sample=minimal",
-        "count": 85
-      },
       {
         "channel": "page-event",
         "scope": "page",
@@ -74,6 +65,15 @@
         "directive": "img-src",
         "blocked": "data",
         "sourceFile": "",
+        "count": 84
+      },
+      {
+        "channel": "console",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "img-src",
+        "blocked": "data",
+        "sourceFile": "/sheet.html?sample=minimal",
         "count": 84
       },
       {
@@ -109,24 +109,15 @@
         "policy": "probe",
         "directive": "img-src",
         "blocked": "data",
-        "sourceFile": "/sheet.html",
-        "count": 1
-      },
-      {
-        "channel": "server-report",
-        "scope": "page",
-        "policy": "probe",
-        "directive": "img-src",
-        "blocked": "data",
         "sourceFile": "",
         "count": 1
       }
     ]
   },
   "requests": {
-    "total": 16,
+    "total": 15,
     "byOrigin": {
-      "http://127.0.0.1:4700": 16
+      "http://127.0.0.1:4700": 15
     },
     "crossOrigin": []
   },
