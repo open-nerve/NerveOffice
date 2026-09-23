@@ -48,7 +48,8 @@ const groups: PluginGroup[] = [
         // 核心：与 UniverDocsCorePreset 相同，但不注册 UniverNetworkPlugin。
         // 公式引擎在官方 preset 中存在，是否必需在 P5 核实。
         id: 'core',
-        resources: ['DOC_WORD_STYLES_PLUGIN', 'DOC_NOTE_PLUGIN', 'SHEET_AuthzIoMockService_PLUGIN'],
+        // 运行时核对（V03）：docs 插件注册 Word 元数据透传的两项与文档权限规则；文字文档不写 SHEET_AuthzIoMockService_PLUGIN
+        resources: ['DOC_WORD_STYLES_PLUGIN', 'DOC_NOTE_PLUGIN', 'DOC_OBJECT_PERMISSION_PLUGIN'],
         removable: false,
         plugins: ({ container }) => [
             [UniverDocsPlugin],
