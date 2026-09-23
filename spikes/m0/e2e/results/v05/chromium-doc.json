@@ -1,0 +1,39 @@
+{
+  "check": "V05",
+  "kind": "doc",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T18:33:29.304Z",
+  "unitIds": [
+    "m0-doc-all",
+    "m0-doc-all"
+  ],
+  "isolation": {
+    "aHasOwnEdit": true,
+    "aHasOtherEdit": false,
+    "bHasOwnEdit": true,
+    "bHasOtherEdit": false
+  },
+  "resourcesA": {
+    "unknown": [],
+    "missing": [],
+    "emptied": [],
+    "changed": []
+  },
+  "resourcesB": {
+    "unknown": [],
+    "missing": [],
+    "emptied": [],
+    "changed": []
+  },
+  "internalLinksResolveInCopy": true,
+  "internalLinks": [],
+  "errors": {
+    "A": [],
+    "B": []
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "check": "V05",
+  "kind": "sheet",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T18:33:13.073Z",
+  "unitIds": [
+    "m0-sheet-all",
+    "m0-sheet-all"
+  ],
+  "isolation": {
+    "aHasOwnEdit": true,
+    "aHasOtherEdit": false,
+    "bHasOwnEdit": true,
+    "bHasOtherEdit": false
+  },
+  "resourcesA": {
+    "unknown": [],
+    "missing": [],
+    "emptied": [],
+    "changed": []
+  },
+  "resourcesB": {
+    "unknown": [],
+    "missing": [],
+    "emptied": [],
+    "changed": []
+  },
+  "internalLinksResolveInCopy": true,
+  "internalLinks": [
+    "sheet-1"
+  ],
+  "errors": {
+    "A": [],
+    "B": []
+  }
+}

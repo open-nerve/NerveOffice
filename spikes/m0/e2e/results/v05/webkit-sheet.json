@@ -1,0 +1,41 @@
+{
+  "check": "V05",
+  "kind": "sheet",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T18:34:23.253Z",
+  "unitIds": [
+    "m0-sheet-all",
+    "m0-sheet-all"
+  ],
+  "isolation": {
+    "aHasOwnEdit": true,
+    "aHasOtherEdit": false,
+    "bHasOwnEdit": true,
+    "bHasOtherEdit": false
+  },
+  "resourcesA": {
+    "unknown": [],
+    "missing": [],
+    "emptied": [],
+    "changed": []
+  },
+  "resourcesB": {
+    "unknown": [],
+    "missing": [],
+    "emptied": [],
+    "changed": []
+  },
+  "internalLinksResolveInCopy": true,
+  "internalLinks": [
+    "sheet-1"
+  ],
+  "errors": {
+    "A": [],
+    "B": []
+  }
+}

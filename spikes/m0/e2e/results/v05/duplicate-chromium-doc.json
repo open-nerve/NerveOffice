@@ -1,0 +1,13 @@
+{
+  "check": "V05-duplicate-unitId",
+  "kind": "doc",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T18:33:33.022Z",
+  "threw": true,
+  "message": "[UniverInstanceService]: cannot create a unit with the same unit id: m0-doc-all."
+}
