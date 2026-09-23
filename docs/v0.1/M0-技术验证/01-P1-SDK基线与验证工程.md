@@ -1,6 +1,6 @@
 # M0-P1 SDK 基线与验证工程：架构设计与实施规划
 
-> 状态：进行中｜日期：2026-09-23｜基于代码版本：`6808cda`（main）
+> 状态：已完成｜日期：2026-09-23（2026-09-24 按审查意见补充 §3.4 的阳性对照、网络核验与真实 Safari 自检）｜基于代码版本：`6808cda`（main）
 
 ## 1. 目标与范围
 
@@ -74,7 +74,9 @@ spikes/m0/
 CSP 由启动参数选择，默认同时发送两个头：
 
 - **强制策略**（`Content-Security-Policy`）：原样使用 00 号计划书 §11.3 的策略，加上 `report-uri /csp-report`。
-- **探测策略**（`Content-Security-Policy-Report-Only`）：比强制策略更严格，去掉 `style-src` 的 `'unsafe-inline'`、`img-src`/`font-src` 的 `data:`、`worker-src` 的 `blob:`。它不拦截任何东西，只用来回答"强制策略里放宽的每一项，是否真的需要"。
+- **探测策略**（`Content-Security-Policy-Report-Only`）：比强制策略更严格，去掉 `style-src` 的 `'unsafe-inline'`、`img-src`/`font-src` 的 `data:`、`img-src`/`worker-src` 的 `blob:`。它不拦截任何东西，只用来回答"强制策略里放宽的每一项，是否真的需要"。
+
+同一份构建产物由三个服务提供：`full`（所有响应都带上面两个头，端口 4700）、`off`（不带策略，4701）、`html-only`（只有 HTML 带策略，4702）。后两者分别用于 V01 的网络核验和 V02 的阳性对照。另有 `/__selftest` 接口接收真实 Safari 自检页面回传的结果。
 
 ### 3.3 候选插件档案（P1 版）
 
@@ -94,7 +96,7 @@ P1 只需要一份"尽量接近最终档案"的候选集合，用来做依赖清
 4. 许可清单：`pnpm licenses list --prod --json` 生成生产依赖的许可清单；按宽松许可（MIT、Apache-2.0、ISC、BSD、0BSD 等）、弱 copyleft、强 copyleft、未知分类，后三类逐个说明。
 5. 远程运行依赖：
    - 静态扫描：从构建产物中提取全部绝对 URL，按主机分类，逐个说明用途（XML 命名空间、文档链接、错误信息等），找出任何会在运行时被请求的地址；
-   - 动态核验：V02 的每个场景都记录页面发出的全部网络请求，非同源请求必须为零。
+   - 动态核验：**关闭 CSP**（`off` 模式）运行 V02 的四个场景，记录页面与 Worker 发出的全部请求，非同源请求必须为零。CSP 开启时被拦截的请求在发出前就被取消，请求记录里看不到，所以必须关闭 CSP（审查后修正）。
 
 **V02 严格 CSP 下能否运行**
 
@@ -104,7 +106,9 @@ P1 只需要一份"尽量接近最终档案"的候选集合，用来做依赖清
    - **表格（公式在 Web Worker）**：同上，公式由 Worker 计算；另外核对 Worker 确实启动、确实返回了结果；
    - **文字文档**：加载 → 在正文用键盘输入英文与中文 → 使用工具栏加粗 → 通过快照核对内容 → `save()`；
    - **文字文档（排版在 Web Worker）**：同上，使用官方的 `UniverDocsLayoutWorkerPlugin`。它不在官方 preset 中，是否启用由 P5 决定；这里只验证它在 CSP 下能否工作。
-3. 每个场景收集：页面内的 `securitypolicyviolation` 事件、服务端收到的报告（区分强制与探测）、未捕获错误与控制台错误、全部请求的来源。
+3. 每个场景从三条渠道收集违规：页面内的 `securitypolicyviolation` 事件、服务端收到的报告（区分强制与探测）、浏览器控制台（含 Worker 作用域）；另外收集未捕获错误、Worker 往来的 RPC 方法与响应类型。
+   - **阳性对照**：在页面与 Worker 中各发起一次跨源请求和动态代码执行，分别在 `off`、`full`、`html-only` 三种模式下运行，确认策略确实生效，并记录每个浏览器中各渠道的覆盖范围（审查后补充）。
+   - **真实 Safari**：Playwright 无法驱动真实 Safari。页面带 `selftest` 参数时，用 Facade 命令完成同样的编辑并把结果交回服务；`scripts/safari-selftest.ts` 用 `open -g -a Safari` 在后台打开自检链接并汇总（审查后补充）。
 4. 浏览器矩阵：Playwright 自带的 Chromium、本机 Google Chrome 153（`channel: 'chrome'`）、Playwright 自带的 WebKit（作为 Safari 引擎的代理）。
    - Edge 未安装；真实 Safari 需要管理员开启远程自动化。这两项登记为补充验证（见 §7），不阻塞本 Phase 的结论。
 5. **通过标准**：三个浏览器的四个场景中，强制策略的违规为零，编辑与公式结果正确，非同源请求为零。否则逐条列出必须放宽的指令及原因。探测策略的报告用来说明强制策略中每一项放宽的必要性。
@@ -125,7 +129,10 @@ M0 不交付产品功能，不为验证工程本身补测试（M0 总设计 §6�
 |---|---|---|
 | 版本一致性、Pro 检查、许可清单 | `scripts/deps-report.ts` | V01 |
 | 构建产物 URL 扫描 | `scripts/url-scan.ts` | V01 |
-| 三浏览器 × 四场景的 CSP 与编辑 | `e2e/v02-csp.spec.ts` | V01（动态核验）、V02 |
+| 三浏览器 × 四场景的 CSP 与编辑 | `e2e/v02-csp.spec.ts` | V02 |
+| 阳性对照（三种 CSP 模式） | `e2e/v02-csp-probe.spec.ts` | V02 |
+| 关闭 CSP 的网络核验 | `e2e/v01-network.spec.ts` | V01 |
+| 真实 Safari 自检 | `scripts/safari-selftest.ts` | V02 |
 | 包体积 | `scripts/bundle-size.ts` | P1 产出 |
 
 ## 5. 约束符合性检查
@@ -157,8 +164,8 @@ M0 不交付产品功能，不为验证工程本身补测试（M0 总设计 §6�
 
 ## 8. 完成定义
 
-- [ ] S1–S4 完成，验证脚本可以一键重跑
-- [ ] V01、V02 的结论与证据写入 `reports/P1-验证报告.md`
-- [ ] 结论审查完成，问题已修复并复验（`reviews/P1-审查报告.md`）
-- [ ] 交接单已编写（`handoffs/P1-交接单.md`），延期项已登记
-- [ ] M0 阶段没有架构总览可更新；对 00 号计划书的影响记录在报告中，M0 结束时统一更新到 r3
+- [x] S1–S4 完成，验证脚本可以一键重跑
+- [x] V01、V02 的结论与证据写入 `reports/P1-验证报告.md`
+- [x] 结论审查完成，问题已修复并复验（`reviews/P1-审查报告.md`）
+- [x] 交接单已编写（`handoffs/P1-交接单.md`），延期项已登记
+- [x] M0 阶段没有架构总览可更新；对 00 号计划书的影响记录在报告中，M0 结束时统一更新到 r3
