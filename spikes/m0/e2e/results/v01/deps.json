@@ -1,0 +1,306 @@
+{
+  "check": "V01",
+  "timestamp": "2026-09-23T16:15:41.673Z",
+  "node": "v24.3.0",
+  "packageCount": 147,
+  "univer": {
+    "expected": "1.0.0",
+    "packages": [
+      {
+        "name": "@univerjs/core",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/data-validation",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/design",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/docs",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/docs-drawing",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/docs-drawing-ui",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/docs-find-replace",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/docs-hyper-link",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/docs-hyper-link-ui",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/docs-toc",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/docs-toc-ui",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/docs-ui",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/drawing",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/drawing-ui",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/engine-formula",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/engine-render",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/find-replace",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/icons",
+        "versions": [
+          "1.43.0"
+        ]
+      },
+      {
+        "name": "@univerjs/protocol",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/rpc",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/sheets",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/sheets-conditional-formatting",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/sheets-conditional-formatting-ui",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/sheets-data-validation",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/sheets-data-validation-ui",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/sheets-drawing",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/sheets-drawing-ui",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/sheets-filter",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/sheets-filter-ui",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/sheets-find-replace",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/sheets-formula",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/sheets-formula-ui",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/sheets-hyper-link",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/sheets-hyper-link-ui",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/sheets-note",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/sheets-note-ui",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/sheets-numfmt",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/sheets-numfmt-ui",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/sheets-sort",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/sheets-sort-ui",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/sheets-ui",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/telemetry",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/themes",
+        "versions": [
+          "1.0.0"
+        ]
+      },
+      {
+        "name": "@univerjs/ui",
+        "versions": [
+          "1.0.0"
+        ]
+      }
+    ],
+    "mismatches": []
+  },
+  "proPackages": [],
+  "duplicates": [],
+  "singletonDuplicates": [],
+  "installScripts": [
+    {
+      "pkg": "protobufjs@7.6.6",
+      "scripts": {
+        "postinstall": "node scripts/postinstall"
+      }
+    }
+  ],
+  "licenses": {
+    "byLicense": {
+      "MIT": 75,
+      "Apache-2.0": 49,
+      "BSD-3-Clause": 10,
+      "ISC": 9,
+      "0BSD": 1
+    },
+    "byCategory": {
+      "permissive": 144
+    },
+    "nonPermissive": []
+  },
+  "verdict": {
+    "univerVersionsLocked": true,
+    "noPro": true,
+    "noSingletonDuplicates": true,
+    "allLicensesPermissive": true
+  }
+}

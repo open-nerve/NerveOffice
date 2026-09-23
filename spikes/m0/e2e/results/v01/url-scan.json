@@ -1,0 +1,209 @@
+{
+  "check": "V01-url-scan",
+  "timestamp": "2026-09-23T16:16:06.408Z",
+  "hosts": [
+    {
+      "host": "support.microsoft.com",
+      "count": 509,
+      "files": [
+        "assets/facade-BCO5i-bu.js"
+      ],
+      "samples": [
+        "用于研究样本中一定部分的变化情况，例如，人们一天中看电视的时间比率。`,links:[{title:`教学`,url:`https://support.microsoft.com/zh-cn/excel/functions/betadist",
+        "用于项目设计，在已知预期的完成时间和变化参数后，模拟可能的完成时间。`,links:[{title:`教学`,url:`https://support.microsoft.com/zh-cn/excel/functions/betainv-",
+        "，BINOMDIST 可以计算三个即将出生的婴儿中两个是男孩的概率。`,links:[{title:`教学`,url:`https://support.microsoft.com/zh-cn/excel/functions/binomdis"
+      ]
+    },
+    {
+      "host": "www.w3.org",
+      "count": 262,
+      "files": [
+        "assets/doc-CSbRKJlT.js",
+        "assets/facade-BCO5i-bu.js",
+        "assets/jsx-runtime-DVKHqdS6.js",
+        "assets/sheet-BHx241ik.js"
+      ],
+      "samples": [
+        "#3A60F7`,yi=`#1D3EA6`;function bi(e,t,n){let r=`<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"${t}\" height=\"${n}\" viewB",
+        "O.displayName=`UniverIcon`;var gwe={tag:`svg`,attrs:{xmlns:`http://www.w3.org/2000/svg`,fill:`none`,viewBox:`0 0 16 16`,",
+        "displayName=`ActivityIcon`;var _we={tag:`svg`,attrs:{xmlns:`http://www.w3.org/2000/svg`,fill:`none`,viewBox:`0 0 16 16`,"
+      ]
+    },
+    {
+      "host": "support.google.com",
+      "count": 17,
+      "files": [
+        "assets/facade-BCO5i-bu.js"
+      ],
+      "samples": [
+        "数组结果的大小。`,abstract:`以给定值约束数组结果的大小。`,links:[{title:`教学`,url:`https://support.google.com/docs/answer/3267036?hl=zh-Hans`}]",
+        "单列。`,abstract:`将一个或多个范围中的所有值合并到单列。`,links:[{title:`教学`,url:`https://support.google.com/docs/answer/10307761?hl=zh-Hans`}",
+        "以秒、毫秒或微秒为单位）转换为世界协调时间 (UTC) 的日期时间。`,links:[{title:`教学`,url:`https://support.google.com/docs/answer/13193461?hl=zh-Hans`}"
+      ]
+    },
+    {
+      "host": "github.com",
+      "count": 9,
+      "files": [
+        "assets/doc-layout.worker-CZDuqPRm.js",
+        "assets/facade-BCO5i-bu.js",
+        "assets/sheet-formula.worker-Cr_j1odP.js"
+      ],
+      "samples": [
+        "ons.length-1];return this}};V(I_,`id`,`text-x`),V(I_,`uri`,`https://github.com/dream-num/univer#text-x`),Object.definePr",
+        "p(e,t=[`body`]){return ls.editOp(t,I_.name,e)}};V(L_,`uri`,`https://github.com/dream-num/univer#json-x`),V(L_,`_subTypes",
+        "ons.length-1];return this}};F(yf,`id`,`text-x`),F(yf,`uri`,`https://github.com/dream-num/univer#text-x`),Object.definePr"
+      ]
+    },
+    {
+      "host": "redi.wzhu.dev",
+      "count": 6,
+      "files": [
+        "assets/doc-layout.worker-CZDuqPRm.js",
+        "assets/facade-BCO5i-bu.js",
+        "assets/sheet-formula.worker-Cr_j1odP.js"
+      ],
+      "samples": [
+        " using \"forwardRef\". For more info please visit our website https://redi.wzhu.dev/docs/faq#could-not-find-dependency-reg",
+        "t versions of redi. For more info please visit our website: https://redi.wzhu.dev/en-US/docs/faq#import-scripts-of-redi-",
+        " using \"forwardRef\". For more info please visit our website https://redi.wzhu.dev/docs/faq#could-not-find-dependency-reg"
+      ]
+    },
+    {
+      "host": "sharejs.org",
+      "count": 6,
+      "files": [
+        "assets/doc-layout.worker-CZDuqPRm.js",
+        "assets/facade-BCO5i-bu.js",
+        "assets/sheet-formula.worker-Cr_j1odP.js"
+      ],
+      "samples": [
+        "`&&(t=!1)}),t}function b(t){return{name:`text-unicode`,uri:`http://sharejs.org/types/text-unicode`,trim:d,normalize:o,ch",
+        ",t){if(!e)throw Error(t)}let c=!1;e.type={name:`json1`,uri:`http://sharejs.org/types/JSONv1`,readCursor:i.readCursor,wri",
+        "`&&(t=!1)}),t}function b(t){return{name:`text-unicode`,uri:`http://sharejs.org/types/text-unicode`,trim:d,normalize:o,ch"
+      ]
+    },
+    {
+      "host": "$",
+      "count": 5,
+      "files": [
+        "assets/doc-CSbRKJlT.js",
+        "assets/doc-layout.worker-CZDuqPRm.js",
+        "assets/facade-BCO5i-bu.js",
+        "assets/sheet-BHx241ik.js",
+        "assets/sheet-formula.worker-Cr_j1odP.js"
+      ],
+      "samples": [
+        "est(e)}function ys(e){return _s(e)?e:vs(e)?`mailto://${e}`:`https://${e}`}function bs(){let e=I(ks),t=c(e.editingLink$,e",
+        "est(e)}function Ps(e){return Ms(e)?e:Ns(e)?`mailto://${e}`:`https://${e}`}function Fs(e,t){return H.getValueType(e)===H.",
+        "st(e)}function Ei(e){return Ti(e)?e:Vie(e)?`mailto://${e}`:`https://${e}`}function Di(e){if(!e||typeof e!=`string`)retur"
+      ]
+    },
+    {
+      "host": "univer.ai",
+      "count": 4,
+      "files": [
+        "assets/facade-BCO5i-bu.js",
+        "assets/sheet-formula.worker-Cr_j1odP.js"
+      ],
+      "samples": [
+        "ctionList.HYPERLINK.functionParameter.url.detail`,example:`\"https://univer.ai/\"`,require:1,repeat:0},{name:`engine-formu",
+        "tionList.ENCODEURL.functionParameter.text.detail`,example:`\"https://univer.ai/\"`,require:1,repeat:0}]},{functionName:`FI",
+        "ctionList.HYPERLINK.functionParameter.url.detail`,example:`\"https://univer.ai/\"`,require:1,repeat:0},{name:`engine-formu"
+      ]
+    },
+    {
+      "host": "localhost:5173",
+      "count": 3,
+      "files": [
+        "assets/doc-layout.worker-CZDuqPRm.js",
+        "assets/facade-BCO5i-bu.js",
+        "assets/sheet-formula.worker-Cr_j1odP.js"
+      ],
+      "samples": [
+        "nction js(e){if(!Number.isNaN(+e))return!1;if(e.startsWith(`http://localhost:5173`)||e.startsWith(`localhost:5173`))retu",
+        "ction Bie(e){if(!Number.isNaN(+e))return!1;if(e.startsWith(`http://localhost:5173`)||e.startsWith(`localhost:5173`))retu",
+        "nction Ms(e){if(!Number.isNaN(+e))return!1;if(e.startsWith(`http://localhost:5173`)||e.startsWith(`localhost:5173`))retu"
+      ]
+    },
+    {
+      "host": "universheet.net",
+      "count": 3,
+      "files": [
+        "assets/doc-layout.worker-CZDuqPRm.js",
+        "assets/facade-BCO5i-bu.js",
+        "assets/sheet-formula.worker-Cr_j1odP.js"
+      ],
+      "samples": [
+        "sole.error(`Unable to get data URL. ${t} For more info read https://universheet.net/docs/Canvas.html.`),``}}}},bC=class{",
+        "sole.error(`Unable to get data URL. ${t} For more info read https://universheet.net/docs/Canvas.html.`),``}}}},W_=class ",
+        "sole.error(`Unable to get data URL. ${t} For more info read https://universheet.net/docs/Canvas.html.`),``}}}},vB=class{"
+      ]
+    },
+    {
+      "host": "example.com",
+      "count": 3,
+      "files": [
+        "assets/facade-7vUCyHNp.css",
+        "assets/facade-BCO5i-bu.js",
+        "assets/sheet-formula.worker-Cr_j1odP.js"
+      ],
+      "samples": [
+        "(https\\:\\/\\/example\\.com\\/a-b\\.svg\\)\\]{background-image:url(https://example.com/a-b.svg)}.univer-bg-gradient-to-br{backg",
+        "tionList.WEBSERVICE.functionParameter.url.detail`,example:`\"https://example.com/api\"`,require:1,repeat:0}]}],p8e=[...i8e",
+        "tionList.WEBSERVICE.functionParameter.url.detail`,example:`\"https://example.com/api\"`,require:1,repeat:0}]}],yL=[...uL,."
+      ]
+    },
+    {
+      "host": "react.dev",
+      "count": 2,
+      "files": [
+        "assets/jsx-runtime-DVKHqdS6.js"
+      ],
+      "samples": [
+        "=>{t.exports=d()})),p=o((e=>{var t=f();function n(e){var t=`https://react.dev/errors/`+e;if(1<arguments.length){t+=`?arg",
+        "=p()})),h=o((e=>{var t=u(),n=f(),r=m();function i(e){var t=`https://react.dev/errors/`+e;if(1<arguments.length){t+=`?arg"
+      ]
+    },
+    {
+      "host": "localhost",
+      "count": 1,
+      "files": [
+        "assets/facade-BCO5i-bu.js"
+      ],
+      "samples": [
+        "=typeof window<`u`&&window.location?window.location.origin:`http://localhost`,n=new URL(e,t);return[`http:`,`https:`,`ma"
+      ]
+    },
+    {
+      "host": "www.wps.cn",
+      "count": 1,
+      "files": [
+        "assets/facade-BCO5i-bu.js"
+      ],
+      "samples": [
+        "将数字转换为中文字符串`,abstract:`将数字转换为中文字符串`,links:[{title:`教学`,url:`https://www.wps.cn/learning/course/detail/id/340.html?chan=p"
+      ]
+    }
+  ],
+  "networkApis": {
+    "fetch(": {
+      "count": 4,
+      "files": {
+        "assets/facade-BCO5i-bu.js": 2,
+        "assets/jsx-runtime-DVKHqdS6.js": 1,
+        "assets/sheet-BHx241ik.js": 1
+      }
+    }
+  },
+  "keywords": {
+    "telemetry": {
+      "count": 3,
+      "samples": [
+        "assets/sheet-BHx241ik.js: )){let r=gD(e[n]);r!==void 0&&(t[n]=r)}return t}var wne=wl(`telemetry.service`),Z=i();function _D(e,t){if(e==null)return",
+        "assets/sheet-BHx241ik.js: e=n,this._sheetRenderService=r,this._commandService=i,this._telemetryService=a,Q(this,`_renderMetric$`,new pt),Q(this,`r",
+        "assets/sheet-BHx241ik.js: sedTimeToStart:a,...i};this._renderMetric$.next(o),(t=this._telemetryService)==null||t.capture(`sheet_render_cost`,o)}_a"
+      ]
+    }
+  }
+}

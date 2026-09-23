@@ -1,0 +1,1442 @@
+[
+  {
+    "name": "@flatten-js/interval-tree",
+    "versions": [
+      "1.1.3"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Alex Bol",
+    "homepage": "https://github.com/alexbol99/flatten-interval-tree#readme"
+  },
+  {
+    "name": "@floating-ui/core",
+    "versions": [
+      "1.8.0"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "atomiks",
+    "homepage": "https://floating-ui.com"
+  },
+  {
+    "name": "@floating-ui/dom",
+    "versions": [
+      "1.8.0"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "atomiks",
+    "homepage": "https://floating-ui.com"
+  },
+  {
+    "name": "@floating-ui/react-dom",
+    "versions": [
+      "2.1.9"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "atomiks",
+    "homepage": "https://floating-ui.com/docs/react-dom"
+  },
+  {
+    "name": "@floating-ui/utils",
+    "versions": [
+      "0.2.12"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "atomiks",
+    "homepage": "https://floating-ui.com"
+  },
+  {
+    "name": "@grpc/grpc-js",
+    "versions": [
+      "1.14.5"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "Google Inc.",
+    "homepage": "https://grpc.io/"
+  },
+  {
+    "name": "@grpc/proto-loader",
+    "versions": [
+      "0.8.1"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "Google Inc.",
+    "homepage": "https://grpc.io/"
+  },
+  {
+    "name": "@js-sdsl/ordered-map",
+    "versions": [
+      "4.4.2"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "ZLY201",
+    "homepage": "https://js-sdsl.org"
+  },
+  {
+    "name": "@protobufjs/aspromise",
+    "versions": [
+      "1.1.2"
+    ],
+    "license": "BSD-3-Clause",
+    "category": "permissive",
+    "author": "Daniel Wirtz",
+    "homepage": "https://github.com/dcodeIO/protobuf.js#readme"
+  },
+  {
+    "name": "@protobufjs/base64",
+    "versions": [
+      "1.1.2"
+    ],
+    "license": "BSD-3-Clause",
+    "category": "permissive",
+    "author": "Daniel Wirtz",
+    "homepage": "https://github.com/dcodeIO/protobuf.js#readme"
+  },
+  {
+    "name": "@protobufjs/codegen",
+    "versions": [
+      "2.0.5"
+    ],
+    "license": "BSD-3-Clause",
+    "category": "permissive",
+    "author": "Daniel Wirtz",
+    "homepage": "https://github.com/dcodeIO/protobuf.js#readme"
+  },
+  {
+    "name": "@protobufjs/eventemitter",
+    "versions": [
+      "1.1.1"
+    ],
+    "license": "BSD-3-Clause",
+    "category": "permissive",
+    "author": "Daniel Wirtz",
+    "homepage": "https://github.com/dcodeIO/protobuf.js#readme"
+  },
+  {
+    "name": "@protobufjs/fetch",
+    "versions": [
+      "1.1.1"
+    ],
+    "license": "BSD-3-Clause",
+    "category": "permissive",
+    "author": "Daniel Wirtz",
+    "homepage": "https://github.com/dcodeIO/protobuf.js#readme"
+  },
+  {
+    "name": "@protobufjs/float",
+    "versions": [
+      "1.0.2"
+    ],
+    "license": "BSD-3-Clause",
+    "category": "permissive",
+    "author": "Daniel Wirtz",
+    "homepage": "https://github.com/dcodeIO/protobuf.js#readme"
+  },
+  {
+    "name": "@protobufjs/path",
+    "versions": [
+      "1.1.2"
+    ],
+    "license": "BSD-3-Clause",
+    "category": "permissive",
+    "author": "Daniel Wirtz",
+    "homepage": "https://github.com/dcodeIO/protobuf.js#readme"
+  },
+  {
+    "name": "@protobufjs/pool",
+    "versions": [
+      "1.1.0"
+    ],
+    "license": "BSD-3-Clause",
+    "category": "permissive",
+    "author": "Daniel Wirtz",
+    "homepage": "https://github.com/dcodeIO/protobuf.js#readme"
+  },
+  {
+    "name": "@protobufjs/utf8",
+    "versions": [
+      "1.1.2"
+    ],
+    "license": "BSD-3-Clause",
+    "category": "permissive",
+    "author": "Daniel Wirtz",
+    "homepage": "https://github.com/protobufjs/protobuf.js#readme"
+  },
+  {
+    "name": "@radix-ui/primitive",
+    "versions": [
+      "1.1.7"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-arrow",
+    "versions": [
+      "1.1.15"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-collection",
+    "versions": [
+      "1.1.15"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-compose-refs",
+    "versions": [
+      "1.1.5"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-context",
+    "versions": [
+      "1.2.2"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-dialog",
+    "versions": [
+      "1.1.23"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-direction",
+    "versions": [
+      "1.1.4"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-dismissable-layer",
+    "versions": [
+      "1.1.19"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-dropdown-menu",
+    "versions": [
+      "2.1.24"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-focus-guards",
+    "versions": [
+      "1.1.6"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-focus-scope",
+    "versions": [
+      "1.1.16"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-hover-card",
+    "versions": [
+      "1.1.23"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-id",
+    "versions": [
+      "1.1.4"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-menu",
+    "versions": [
+      "2.1.24"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-popover",
+    "versions": [
+      "1.1.23"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-popper",
+    "versions": [
+      "1.3.7"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-portal",
+    "versions": [
+      "1.1.17"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-presence",
+    "versions": [
+      "1.1.10"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-primitive",
+    "versions": [
+      "2.1.10"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-roving-focus",
+    "versions": [
+      "1.1.19"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-separator",
+    "versions": [
+      "1.1.15"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-slot",
+    "versions": [
+      "1.3.3"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-use-callback-ref",
+    "versions": [
+      "1.1.4"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-use-controllable-state",
+    "versions": [
+      "1.2.6"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-use-effect-event",
+    "versions": [
+      "0.0.5"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-use-is-hydrated",
+    "versions": [
+      "0.1.3"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-use-layout-effect",
+    "versions": [
+      "1.1.4"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-use-rect",
+    "versions": [
+      "1.1.4"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/react-use-size",
+    "versions": [
+      "1.1.4"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@radix-ui/rect",
+    "versions": [
+      "1.1.3"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://radix-ui.com/primitives"
+  },
+  {
+    "name": "@types/node",
+    "versions": [
+      "24.13.6"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/node"
+  },
+  {
+    "name": "@univerjs/core",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/data-validation",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/design",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/docs",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/docs-drawing",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/docs-drawing-ui",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/docs-find-replace",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/docs-hyper-link",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/docs-hyper-link-ui",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/docs-toc",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/docs-toc-ui",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/docs-ui",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/drawing",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/drawing-ui",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/engine-formula",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/engine-render",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/find-replace",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/icons",
+    "versions": [
+      "1.43.0"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://docs.univer.ai/icons"
+  },
+  {
+    "name": "@univerjs/protocol",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/rpc",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/sheets",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/sheets-conditional-formatting",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/sheets-conditional-formatting-ui",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/sheets-data-validation",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/sheets-data-validation-ui",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/sheets-drawing",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/sheets-drawing-ui",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/sheets-filter",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/sheets-filter-ui",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/sheets-find-replace",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/sheets-formula",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/sheets-formula-ui",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/sheets-hyper-link",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/sheets-hyper-link-ui",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/sheets-note",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/sheets-note-ui",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/sheets-numfmt",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/sheets-numfmt-ui",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/sheets-sort",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/sheets-sort-ui",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/sheets-ui",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/telemetry",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/themes",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@univerjs/ui",
+    "versions": [
+      "1.0.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "DreamNum Co., Ltd.",
+    "homepage": "https://univer.ai"
+  },
+  {
+    "name": "@wendellhu/redi",
+    "versions": [
+      "1.1.3"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Evan",
+    "homepage": "https://github.com/wzhudev/redi#readme"
+  },
+  {
+    "name": "ansi-regex",
+    "versions": [
+      "5.0.1"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Sindre Sorhus",
+    "homepage": "https://github.com/chalk/ansi-regex#readme"
+  },
+  {
+    "name": "ansi-styles",
+    "versions": [
+      "4.3.0"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Sindre Sorhus",
+    "homepage": "https://github.com/chalk/ansi-styles#readme"
+  },
+  {
+    "name": "aria-hidden",
+    "versions": [
+      "1.2.6"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Anton Korzunov",
+    "homepage": "https://github.com/theKashey/aria-hidden#readme"
+  },
+  {
+    "name": "async-lock",
+    "versions": [
+      "1.4.1"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Rogier Schouten",
+    "homepage": "https://github.com/rogierschouten/async-lock"
+  },
+  {
+    "name": "class-variance-authority",
+    "versions": [
+      "0.7.1"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "Joe Bell",
+    "homepage": "https://github.com/joe-bell/cva#readme"
+  },
+  {
+    "name": "cliui",
+    "versions": [
+      "8.0.1"
+    ],
+    "license": "ISC",
+    "category": "permissive",
+    "author": "Ben Coe",
+    "homepage": "https://github.com/yargs/cliui#readme"
+  },
+  {
+    "name": "clsx",
+    "versions": [
+      "2.1.1"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Luke Edwards",
+    "homepage": "https://github.com/lukeed/clsx#readme"
+  },
+  {
+    "name": "cmdk",
+    "versions": [
+      "1.1.1"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Paco",
+    "homepage": "https://github.com/pacocoursey/cmdk#readme"
+  },
+  {
+    "name": "collapse-white-space",
+    "versions": [
+      "2.1.0"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Titus Wormer",
+    "homepage": "https://github.com/wooorm/collapse-white-space#readme"
+  },
+  {
+    "name": "color-convert",
+    "versions": [
+      "2.0.1"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Heather Arthur",
+    "homepage": "https://github.com/Qix-/color-convert#readme"
+  },
+  {
+    "name": "color-name",
+    "versions": [
+      "1.1.4"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "DY",
+    "homepage": "https://github.com/colorjs/color-name"
+  },
+  {
+    "name": "decimal.js",
+    "versions": [
+      "10.6.0"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Michael Mclaughlin",
+    "homepage": "https://github.com/MikeMcl/decimal.js#readme"
+  },
+  {
+    "name": "detect-node-es",
+    "versions": [
+      "1.1.0"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Ilya Kantor",
+    "homepage": "https://github.com/thekashey/detect-node"
+  },
+  {
+    "name": "emoji-regex",
+    "versions": [
+      "8.0.0"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Mathias Bynens",
+    "homepage": "https://mths.be/emoji-regex"
+  },
+  {
+    "name": "escalade",
+    "versions": [
+      "3.2.0"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Luke Edwards",
+    "homepage": "https://github.com/lukeed/escalade#readme"
+  },
+  {
+    "name": "fast-diff",
+    "versions": [
+      "1.3.0"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "Jason Chen",
+    "homepage": "https://github.com/jhchen/fast-diff#readme"
+  },
+  {
+    "name": "franc-min",
+    "versions": [
+      "6.2.0"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Titus Wormer",
+    "homepage": "https://github.com/wooorm/franc/tree/main#readme"
+  },
+  {
+    "name": "get-caller-file",
+    "versions": [
+      "2.0.5"
+    ],
+    "license": "ISC",
+    "category": "permissive",
+    "author": "Stefan Penner",
+    "homepage": "https://github.com/stefanpenner/get-caller-file#readme"
+  },
+  {
+    "name": "get-nonce",
+    "versions": [
+      "1.0.1"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Anton Korzunov",
+    "homepage": "https://github.com/theKashey/get-nonce"
+  },
+  {
+    "name": "is-fullwidth-code-point",
+    "versions": [
+      "3.0.0"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Sindre Sorhus",
+    "homepage": "https://github.com/sindresorhus/is-fullwidth-code-point#readme"
+  },
+  {
+    "name": "kdbush",
+    "versions": [
+      "4.1.0"
+    ],
+    "license": "ISC",
+    "category": "permissive",
+    "author": "Vladimir Agafonkin",
+    "homepage": "https://github.com/mourner/kdbush#readme"
+  },
+  {
+    "name": "lodash-es",
+    "versions": [
+      "4.18.1"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "John-David Dalton",
+    "homepage": "https://lodash.com/custom-builds"
+  },
+  {
+    "name": "lodash.camelcase",
+    "versions": [
+      "4.3.0"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "John-David Dalton",
+    "homepage": "https://lodash.com/"
+  },
+  {
+    "name": "long",
+    "versions": [
+      "5.3.2"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "Daniel Wirtz",
+    "homepage": "https://github.com/dcodeIO/long.js#readme"
+  },
+  {
+    "name": "n-gram",
+    "versions": [
+      "2.0.2"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Titus Wormer",
+    "homepage": "https://github.com/words/n-gram#readme"
+  },
+  {
+    "name": "ot-json1",
+    "versions": [
+      "1.0.2"
+    ],
+    "license": "ISC",
+    "category": "permissive",
+    "author": "Joseph Gentle",
+    "homepage": "https://github.com/josephg/json1#readme"
+  },
+  {
+    "name": "ot-text-unicode",
+    "versions": [
+      "4.0.0"
+    ],
+    "license": "ISC",
+    "category": "permissive",
+    "author": "Joseph Gentle",
+    "homepage": "https://github.com/ottypes/text"
+  },
+  {
+    "name": "protobufjs",
+    "versions": [
+      "7.6.6"
+    ],
+    "license": "BSD-3-Clause",
+    "category": "permissive",
+    "author": "Daniel Wirtz",
+    "homepage": "https://protobufjs.github.io/protobuf.js/"
+  },
+  {
+    "name": "quickselect",
+    "versions": [
+      "3.0.0"
+    ],
+    "license": "ISC",
+    "category": "permissive",
+    "author": "Vladimir Agafonkin",
+    "homepage": "https://github.com/mourner/quickselect#readme"
+  },
+  {
+    "name": "rbush",
+    "versions": [
+      "4.0.1"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Volodymyr Agafonkin",
+    "homepage": "https://github.com/mourner/rbush"
+  },
+  {
+    "name": "react",
+    "versions": [
+      "19.3.0"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://react.dev/"
+  },
+  {
+    "name": "react-dom",
+    "versions": [
+      "19.3.0"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://react.dev/"
+  },
+  {
+    "name": "react-remove-scroll",
+    "versions": [
+      "2.7.2"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Anton Korzunov",
+    "homepage": "https://github.com/theKashey/react-remove-scroll#readme"
+  },
+  {
+    "name": "react-remove-scroll-bar",
+    "versions": [
+      "2.3.8"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Anton Korzunov",
+    "homepage": "https://github.com/theKashey/react-remove-scroll-bar#readme"
+  },
+  {
+    "name": "react-style-singleton",
+    "versions": [
+      "2.2.3"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Anton Korzunov",
+    "homepage": "https://github.com/theKashey/react-style-singleton#readme"
+  },
+  {
+    "name": "require-directory",
+    "versions": [
+      "2.1.1"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Troy Goode",
+    "homepage": "https://github.com/troygoode/node-require-directory/"
+  },
+  {
+    "name": "rxjs",
+    "versions": [
+      "7.8.2"
+    ],
+    "license": "Apache-2.0",
+    "category": "permissive",
+    "author": "Ben Lesh",
+    "homepage": "https://rxjs.dev"
+  },
+  {
+    "name": "scheduler",
+    "versions": [
+      "0.28.0"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://react.dev/"
+  },
+  {
+    "name": "sonner",
+    "versions": [
+      "2.0.8"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Emil Kowalski",
+    "homepage": "https://sonner.emilkowal.ski/"
+  },
+  {
+    "name": "string-width",
+    "versions": [
+      "4.2.3"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Sindre Sorhus",
+    "homepage": "https://github.com/sindresorhus/string-width#readme"
+  },
+  {
+    "name": "strip-ansi",
+    "versions": [
+      "6.0.1"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Sindre Sorhus",
+    "homepage": "https://github.com/chalk/strip-ansi#readme"
+  },
+  {
+    "name": "trigram-utils",
+    "versions": [
+      "2.0.1"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Titus Wormer",
+    "homepage": "https://github.com/wooorm/trigram-utils#readme"
+  },
+  {
+    "name": "tslib",
+    "versions": [
+      "2.8.1"
+    ],
+    "license": "0BSD",
+    "category": "permissive",
+    "author": "Microsoft Corp.",
+    "homepage": "https://www.typescriptlang.org/"
+  },
+  {
+    "name": "undici-types",
+    "versions": [
+      "7.18.2"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://undici.nodejs.org"
+  },
+  {
+    "name": "unicount",
+    "versions": [
+      "1.1.0"
+    ],
+    "license": "ISC",
+    "category": "permissive",
+    "author": "Joseph Gentle",
+    "homepage": "https://github.com/josephg/unicount#readme"
+  },
+  {
+    "name": "use-callback-ref",
+    "versions": [
+      "1.3.3"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "theKashey",
+    "homepage": ""
+  },
+  {
+    "name": "use-sidecar",
+    "versions": [
+      "1.1.3"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "theKashey",
+    "homepage": "https://github.com/theKashey/use-sidecar"
+  },
+  {
+    "name": "wrap-ansi",
+    "versions": [
+      "7.0.0"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "Sindre Sorhus",
+    "homepage": "https://github.com/chalk/wrap-ansi#readme"
+  },
+  {
+    "name": "y18n",
+    "versions": [
+      "5.0.8"
+    ],
+    "license": "ISC",
+    "category": "permissive",
+    "author": "Ben Coe",
+    "homepage": "https://github.com/yargs/y18n"
+  },
+  {
+    "name": "yargs",
+    "versions": [
+      "17.7.3"
+    ],
+    "license": "MIT",
+    "category": "permissive",
+    "author": "",
+    "homepage": "https://yargs.js.org/"
+  },
+  {
+    "name": "yargs-parser",
+    "versions": [
+      "21.1.1"
+    ],
+    "license": "ISC",
+    "category": "permissive",
+    "author": "Ben Coe",
+    "homepage": "https://github.com/yargs/yargs-parser#readme"
+  }
+]
