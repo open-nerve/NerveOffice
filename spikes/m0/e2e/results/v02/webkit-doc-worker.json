@@ -1,0 +1,107 @@
+{
+  "check": "V02",
+  "scenario": "doc-worker",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T17:37:44.811Z",
+  "timingsNote": "从 createEditor 调用开始计时，不含脚本下载解析与样本加载",
+  "timings": {
+    "ready": 24,
+    "rendered": 390,
+    "steady": 3394
+  },
+  "functional": [
+    {
+      "name": "正文包含键盘输入",
+      "expected": true,
+      "actual": true,
+      "pass": true
+    },
+    {
+      "name": "原有内容保留",
+      "expected": true,
+      "actual": true,
+      "pass": true
+    },
+    {
+      "name": "全文加粗（工具栏）",
+      "expected": 15,
+      "actual": 15,
+      "pass": true
+    }
+  ],
+  "ui": {
+    "namedStyleMenuDomDelta": 43
+  },
+  "worker": {
+    "expected": true,
+    "started": [
+      "http://127.0.0.1:4700/assets/doc-layout.worker-CZDuqPRm.js"
+    ],
+    "stats": {
+      "created": 1,
+      "toWorker": {
+        "REQUEST_INITIALIZATION": 1,
+        "INITIALIZE": 2,
+        "CALL univer.docs-layout-worker.initialize": 1,
+        "CALL univer.docs-layout-worker.getCapabilities": 1,
+        "CALL univer.docs-layout-worker.createSession": 1,
+        "CALL univer.docs-layout-worker.startLayout": 2
+      },
+      "fromWorker": {
+        "REQUEST_INITIALIZATION": 1,
+        "INITIALIZE": 2,
+        "CALL_SUCCESS": 5
+      }
+    },
+    "failures": []
+  },
+  "enforceViolations": [],
+  "probeViolations": {
+    "total": 12,
+    "groups": [
+      {
+        "channel": "page-event",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "style-src-elem",
+        "blocked": "inline",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 4
+      },
+      {
+        "channel": "server-report",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "style-src-elem",
+        "blocked": "inline",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 4
+      },
+      {
+        "channel": "console",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "style-src",
+        "blocked": "",
+        "sourceFile": "/doc.html?sample=minimal&worker=1",
+        "count": 4
+      }
+    ]
+  },
+  "requests": {
+    "total": 15,
+    "byOrigin": {
+      "http://127.0.0.1:4700": 15
+    },
+    "crossOrigin": []
+  },
+  "pageErrors": [],
+  "scriptConsoleErrors": [],
+  "scriptConsoleWarningCount": 0,
+  "browserConsoleErrors": []
+}

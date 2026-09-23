@@ -1,0 +1,110 @@
+{
+  "safariVersion": "26.5",
+  "timestamp": "2026-09-23T17:38:25.938Z",
+  "steps": [
+    {
+      "id": "sheet-main",
+      "status": "ok",
+      "checks": true,
+      "enforceViolations": {
+        "pageEvents": 0,
+        "serverReports": 0
+      },
+      "pageErrors": 0,
+      "scriptConsoleErrors": 0
+    },
+    {
+      "id": "sheet-worker",
+      "status": "ok",
+      "checks": true,
+      "enforceViolations": {
+        "pageEvents": 0,
+        "serverReports": 0
+      },
+      "pageErrors": 0,
+      "scriptConsoleErrors": 0
+    },
+    {
+      "id": "doc-main",
+      "status": "ok",
+      "checks": true,
+      "enforceViolations": {
+        "pageEvents": 0,
+        "serverReports": 0
+      },
+      "pageErrors": 0,
+      "scriptConsoleErrors": 0
+    },
+    {
+      "id": "doc-worker",
+      "status": "ok",
+      "checks": true,
+      "enforceViolations": {
+        "pageEvents": 0,
+        "serverReports": 0
+      },
+      "pageErrors": 0,
+      "scriptConsoleErrors": 0
+    },
+    {
+      "id": "probe-full",
+      "status": "ok",
+      "page": {
+        "fetch": "blocked:TypeError",
+        "eval": "blocked:EvalError",
+        "fn": "blocked:EvalError"
+      },
+      "worker": {
+        "fetch": "blocked:TypeError",
+        "eval": "blocked:EvalError",
+        "fn": "blocked:EvalError"
+      },
+      "enforceViolations": {
+        "pageEvents": 3,
+        "serverReports": 3
+      },
+      "pageErrors": 0,
+      "scriptConsoleErrors": 0
+    },
+    {
+      "id": "probe-html-only",
+      "status": "ok",
+      "page": {
+        "fetch": "blocked:TypeError",
+        "eval": "blocked:EvalError",
+        "fn": "blocked:EvalError"
+      },
+      "worker": {
+        "fetch": "allowed",
+        "eval": "allowed",
+        "fn": "allowed"
+      },
+      "enforceViolations": {
+        "pageEvents": 3,
+        "serverReports": 3
+      },
+      "pageErrors": 0,
+      "scriptConsoleErrors": 0
+    },
+    {
+      "id": "probe-off",
+      "status": "ok",
+      "page": {
+        "fetch": "allowed",
+        "eval": "allowed",
+        "fn": "allowed"
+      },
+      "worker": {
+        "fetch": "allowed",
+        "eval": "allowed",
+        "fn": "allowed"
+      },
+      "enforceViolations": {
+        "pageEvents": 0,
+        "serverReports": 0
+      },
+      "pageErrors": 0,
+      "scriptConsoleErrors": 0
+    }
+  ]
+}

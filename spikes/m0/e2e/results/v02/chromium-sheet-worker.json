@@ -1,0 +1,142 @@
+{
+  "check": "V02",
+  "scenario": "sheet-worker",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T17:35:23.803Z",
+  "timingsNote": "从 createEditor 调用开始计时，不含脚本下载解析与样本加载",
+  "timings": {
+    "ready": 22,
+    "rendered": 418.5,
+    "steady": 3465.2000000476837
+  },
+  "functional": [
+    {
+      "name": "B2 值（键盘输入）",
+      "expected": "hello 你好",
+      "actual": "hello 你好",
+      "pass": true
+    },
+    {
+      "name": "B2 加粗（工具栏）",
+      "expected": 1,
+      "actual": 1,
+      "pass": true
+    },
+    {
+      "name": "B3 公式",
+      "expected": "=SUM(1,2)",
+      "actual": "=SUM(1,2)",
+      "pass": true
+    },
+    {
+      "name": "B3 计算结果",
+      "expected": 3,
+      "actual": 3,
+      "pass": true
+    }
+  ],
+  "ui": {
+    "numfmtMenuDomDelta": 54,
+    "contextMenuDomDelta": 116
+  },
+  "worker": {
+    "expected": true,
+    "started": [
+      "http://127.0.0.1:4700/assets/sheet-formula.worker-Cr_j1odP.js"
+    ],
+    "stats": {
+      "created": 1,
+      "toWorker": {
+        "REQUEST_INITIALIZATION": 1,
+        "INITIALIZE": 2,
+        "CALL univer.remote-instance-service.whenReady": 1,
+        "CALL univer.remote-instance-service.createInstance": 1,
+        "CALL univer.remote-instance-service.syncMutation": 10,
+        "CALL_SUCCESS": 19
+      },
+      "fromWorker": {
+        "REQUEST_INITIALIZATION": 1,
+        "INITIALIZE": 2,
+        "CALL_SUCCESS": 12,
+        "CALL rpc.remote-sync.service.syncMutation": 19
+      }
+    },
+    "failures": []
+  },
+  "enforceViolations": [],
+  "probeViolations": {
+    "total": 181,
+    "groups": [
+      {
+        "channel": "page-event",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "img-src",
+        "blocked": "data",
+        "sourceFile": "",
+        "count": 84
+      },
+      {
+        "channel": "console",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "img-src",
+        "blocked": "data",
+        "sourceFile": "/sheet.html?sample=minimal&worker=1",
+        "count": 84
+      },
+      {
+        "channel": "page-event",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "style-src-elem",
+        "blocked": "inline",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 4
+      },
+      {
+        "channel": "server-report",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "style-src-elem",
+        "blocked": "inline",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 4
+      },
+      {
+        "channel": "console",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "style-src",
+        "blocked": "",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 4
+      },
+      {
+        "channel": "server-report",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "img-src",
+        "blocked": "data",
+        "sourceFile": "",
+        "count": 1
+      }
+    ]
+  },
+  "requests": {
+    "total": 16,
+    "byOrigin": {
+      "http://127.0.0.1:4700": 16
+    },
+    "crossOrigin": []
+  },
+  "pageErrors": [],
+  "scriptConsoleErrors": [],
+  "scriptConsoleWarningCount": 0,
+  "browserConsoleErrors": []
+}

@@ -1,0 +1,128 @@
+{
+  "check": "V02",
+  "scenario": "sheet-main",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-23T17:36:19.173Z",
+  "timingsNote": "从 createEditor 调用开始计时，不含脚本下载解析与样本加载",
+  "timings": {
+    "ready": 21.5,
+    "rendered": 427.2000000476837,
+    "steady": 3478
+  },
+  "functional": [
+    {
+      "name": "B2 值（键盘输入）",
+      "expected": "hello 你好",
+      "actual": "hello 你好",
+      "pass": true
+    },
+    {
+      "name": "B2 加粗（工具栏）",
+      "expected": 1,
+      "actual": 1,
+      "pass": true
+    },
+    {
+      "name": "B3 公式",
+      "expected": "=SUM(1,2)",
+      "actual": "=SUM(1,2)",
+      "pass": true
+    },
+    {
+      "name": "B3 计算结果",
+      "expected": 3,
+      "actual": 3,
+      "pass": true
+    }
+  ],
+  "ui": {
+    "numfmtMenuDomDelta": 54,
+    "contextMenuDomDelta": 116
+  },
+  "worker": {
+    "expected": false,
+    "started": [],
+    "stats": {
+      "created": 0,
+      "toWorker": {},
+      "fromWorker": {}
+    },
+    "failures": []
+  },
+  "enforceViolations": [],
+  "probeViolations": {
+    "total": 181,
+    "groups": [
+      {
+        "channel": "page-event",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "img-src",
+        "blocked": "data",
+        "sourceFile": "",
+        "count": 84
+      },
+      {
+        "channel": "console",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "img-src",
+        "blocked": "data",
+        "sourceFile": "/sheet.html?sample=minimal",
+        "count": 84
+      },
+      {
+        "channel": "page-event",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "style-src-elem",
+        "blocked": "inline",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 4
+      },
+      {
+        "channel": "server-report",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "style-src-elem",
+        "blocked": "inline",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 4
+      },
+      {
+        "channel": "console",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "style-src",
+        "blocked": "",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 4
+      },
+      {
+        "channel": "server-report",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "img-src",
+        "blocked": "data",
+        "sourceFile": "",
+        "count": 1
+      }
+    ]
+  },
+  "requests": {
+    "total": 16,
+    "byOrigin": {
+      "http://127.0.0.1:4700": 16
+    },
+    "crossOrigin": []
+  },
+  "pageErrors": [],
+  "scriptConsoleErrors": [],
+  "scriptConsoleWarningCount": 0,
+  "browserConsoleErrors": []
+}

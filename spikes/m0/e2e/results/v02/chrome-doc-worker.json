@@ -1,0 +1,107 @@
+{
+  "check": "V02",
+  "scenario": "doc-worker",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-23T17:36:40.654Z",
+  "timingsNote": "从 createEditor 调用开始计时，不含脚本下载解析与样本加载",
+  "timings": {
+    "ready": 23.699999928474426,
+    "rendered": 367.2999999523163,
+    "steady": 3371.6999999284744
+  },
+  "functional": [
+    {
+      "name": "正文包含键盘输入",
+      "expected": true,
+      "actual": true,
+      "pass": true
+    },
+    {
+      "name": "原有内容保留",
+      "expected": true,
+      "actual": true,
+      "pass": true
+    },
+    {
+      "name": "全文加粗（工具栏）",
+      "expected": 15,
+      "actual": 15,
+      "pass": true
+    }
+  ],
+  "ui": {
+    "namedStyleMenuDomDelta": 46
+  },
+  "worker": {
+    "expected": true,
+    "started": [
+      "http://127.0.0.1:4700/assets/doc-layout.worker-CZDuqPRm.js"
+    ],
+    "stats": {
+      "created": 1,
+      "toWorker": {
+        "REQUEST_INITIALIZATION": 1,
+        "INITIALIZE": 2,
+        "CALL univer.docs-layout-worker.initialize": 1,
+        "CALL univer.docs-layout-worker.getCapabilities": 1,
+        "CALL univer.docs-layout-worker.createSession": 1,
+        "CALL univer.docs-layout-worker.startLayout": 2
+      },
+      "fromWorker": {
+        "REQUEST_INITIALIZATION": 1,
+        "INITIALIZE": 2,
+        "CALL_SUCCESS": 5
+      }
+    },
+    "failures": []
+  },
+  "enforceViolations": [],
+  "probeViolations": {
+    "total": 12,
+    "groups": [
+      {
+        "channel": "page-event",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "style-src-elem",
+        "blocked": "inline",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 4
+      },
+      {
+        "channel": "server-report",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "style-src-elem",
+        "blocked": "inline",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 4
+      },
+      {
+        "channel": "console",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "style-src",
+        "blocked": "",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 4
+      }
+    ]
+  },
+  "requests": {
+    "total": 16,
+    "byOrigin": {
+      "http://127.0.0.1:4700": 16
+    },
+    "crossOrigin": []
+  },
+  "pageErrors": [],
+  "scriptConsoleErrors": [],
+  "scriptConsoleWarningCount": 0,
+  "browserConsoleErrors": []
+}

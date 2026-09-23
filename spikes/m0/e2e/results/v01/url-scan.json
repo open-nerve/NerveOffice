@@ -1,0 +1,416 @@
+{
+  "check": "V01-url-scan",
+  "timestamp": "2026-09-23T17:34:09.971Z",
+  "scope": {
+    "entries": [
+      "sheet.html",
+      "doc.html"
+    ],
+    "fileCount": 168,
+    "files": [
+      "assets/af-DK_CjRn6-B3cQlgzW.js",
+      "assets/af-DK_CjRn6-CZxsvT2y.js",
+      "assets/as-BPtSu6VN-DunnKA_7.js",
+      "assets/as-BPtSu6VN-F6qyW8uH.js",
+      "assets/be-CrQ0smca-BP6DIqAr.js",
+      "assets/be-CrQ0smca-BYVdQd18.js",
+      "assets/bg-CrQqGwni-4LoaLrdy.js",
+      "assets/bg-CrQqGwni-B5xv6TfF.js",
+      "assets/bn-NCLZcWHi-BGS6_hxH.js",
+      "assets/bn-NCLZcWHi-BmauH5Zv.js",
+      "assets/ca-SUf6Y2Om-DrduLk3W.js",
+      "assets/ca-SUf6Y2Om-mft-Fiqq.js",
+      "assets/cop-C3sk0IUo-Dw82IjCr.js",
+      "assets/cop-C3sk0IUo-vOhJicMJ.js",
+      "assets/cs-CmAteokq-4IFj4aJJ.js",
+      "assets/cs-CmAteokq-BI5q4aVA.js",
+      "assets/cu-CBUlrW6Y-BRCy0UAr.js",
+      "assets/cu-CBUlrW6Y-CYTkrcDI.js",
+      "assets/cy-BBPa6z2x-C5kOUDIa.js",
+      "assets/cy-BBPa6z2x-Cag4snSk.js",
+      "assets/da-CCDXfXtG-BWliw5hZ.js",
+      "assets/da-CCDXfXtG-CPImDgbY.js",
+      "assets/de-1901-CWoAOigE-BlgpCKr2.js",
+      "assets/de-1901-CWoAOigE-D4MyfiWT.js",
+      "assets/de-1996-BL6awyxG-BjfWxQKM.js",
+      "assets/de-1996-BL6awyxG-xCq45uhE.js",
+      "assets/de-ch-1901-hVThVHVb-Dyc1NCUd.js",
+      "assets/de-ch-1901-hVThVHVb-_Xg3_np3.js",
+      "assets/doc-8_JlB7Jd.js",
+      "assets/doc-C9tVtSRm.css",
+      "assets/doc-layout.worker-CZDuqPRm.js",
+      "assets/el-monoton-D3aKqTz2-CE4COwx8.js",
+      "assets/el-monoton-D3aKqTz2-CuqNQIvE.js",
+      "assets/el-polyton-ogVWcTzh-B5J5pGHR.js",
+      "assets/el-polyton-ogVWcTzh-Bk3_etlN.js",
+      "assets/en-gb-B7Al27b_-COWGBqwJ.js",
+      "assets/en-gb-B7Al27b_-CuKnymKP.js",
+      "assets/es-DcaaHPU_-Chuh8Nra.js",
+      "assets/es-DcaaHPU_-CnHE1eri.js",
+      "assets/et-B_spaleu-D6GiqDnM.js",
+      "assets/et-B_spaleu-H7jVbiHv.js",
+      "assets/eu-Ctv_kq9Z-D1jw9zt8.js",
+      "assets/eu-Ctv_kq9Z-DOJD-8rb.js",
+      "assets/events-C1TuS8fw.js",
+      "assets/facade--SKdPPvM.js",
+      "assets/facade-7vUCyHNp.css",
+      "assets/fi-RW5VB8Yp-Dc1iWTv5.js",
+      "assets/fi-RW5VB8Yp-mParSSSy.js",
+      "assets/fr-BC2onEz9-Dc1KqFHa.js",
+      "assets/fr-BC2onEz9-lvAnI1c0.js",
+      "assets/fur-AC12wySk-Bpp59RdA.js",
+      "assets/fur-AC12wySk-tJv2icDr.js",
+      "assets/ga-Cn6LkudM-CDuqe3gr.js",
+      "assets/ga-Cn6LkudM-kCUSwO_k.js",
+      "assets/gl-DZGc-K_G-D9_oxkqv.js",
+      "assets/gl-DZGc-K_G-DGSI2XUp.js",
+      "assets/grc-DOlGgO8T-DANBReIg.js",
+      "assets/grc-DOlGgO8T-DjT0EhJc.js",
+      "assets/gu-Bjl0l-cf-COW9d1dt.js",
+      "assets/gu-Bjl0l-cf-_cv0HmjK.js",
+      "assets/hi-DsAaTPCC-6mOr2vJz.js",
+      "assets/hi-DsAaTPCC-CiihDo6Q.js",
+      "assets/hr-DT1SBBes-CtH8PhDQ.js",
+      "assets/hr-DT1SBBes-D_vEJhf2.js",
+      "assets/hsb-DC_ITc1e-BYXQNPLv.js",
+      "assets/hsb-DC_ITc1e-kb5QeNH1.js",
+      "assets/hu-DVk7Y_ka-BSdIhDuG.js",
+      "assets/hu-DVk7Y_ka-Ct1fysVO.js",
+      "assets/hy-e995ysyO-Cjfrs2ZM.js",
+      "assets/hy-e995ysyO-Va7R-UYf.js",
+      "assets/ia-Cr4TJH0c-B1i9kDPT.js",
+      "assets/ia-Cr4TJH0c-KU-ClVL-.js",
+      "assets/id-DifDyWg9-C3Hzl2m4.js",
+      "assets/id-DifDyWg9-CK46V2Fa.js",
+      "assets/is-BT8UVRze-DWEBuJpb.js",
+      "assets/is-BT8UVRze-I1IsByja.js",
+      "assets/it-Bt_Meacx-B3PITTd7.js",
+      "assets/it-Bt_Meacx-HiFRunf5.js",
+      "assets/jsx-runtime--Nk3ZDL8.css",
+      "assets/jsx-runtime-BCoScHCP.js",
+      "assets/ka-jyoLzyDE-BU45urC7.js",
+      "assets/ka-jyoLzyDE-WIVXn-f7.js",
+      "assets/kmr-Cfwhwuff-DeiTGcJ1.js",
+      "assets/kmr-Cfwhwuff-DfPyPgkK.js",
+      "assets/kn-C6Lov-DP-BuXzi7S-.js",
+      "assets/kn-C6Lov-DP-CGzPswPX.js",
+      "assets/la-DuvHjUWw-Bwiuou7l.js",
+      "assets/la-DuvHjUWw-kNvO-pCq.js",
+      "assets/la-x-classic-yTyAOQEt-C8gkGYzP.js",
+      "assets/la-x-classic-yTyAOQEt-aO_2QO0y.js",
+      "assets/la-x-liturgic-CXeQb4FY-BpDOy20C.js",
+      "assets/la-x-liturgic-CXeQb4FY-CERmdey-.js",
+      "assets/lt-BBe8DlDF-B2ddVsu6.js",
+      "assets/lt-BBe8DlDF-B3cgXplB.js",
+      "assets/lv-Q2BBHnzp-CLjYDJHB.js",
+      "assets/lv-Q2BBHnzp-cVtwbn4t.js",
+      "assets/minimal-DWJHukzg.js",
+      "assets/minimal-OVL4a5-e.js",
+      "assets/ml-2xLVYkVY-Ct0js8Am.js",
+      "assets/ml-2xLVYkVY-DlzQ8KmZ.js",
+      "assets/mn-cyrl-lHM4n0oC-C3oDHkT0.js",
+      "assets/mn-cyrl-lHM4n0oC-DN6sz9R4.js",
+      "assets/mn-cyrl-x-lmc-3aetruI8-BJqn49ay.js",
+      "assets/mn-cyrl-x-lmc-3aetruI8-DFosWwgd.js",
+      "assets/modulepreload-polyfill-P2Xu9kJm.js",
+      "assets/mr-CjWJPVmH-CbZJOW1K.js",
+      "assets/mr-CjWJPVmH-DGtESPcG.js",
+      "assets/mul-ethi-D_CMSMEq-D6ioGuYP.js",
+      "assets/mul-ethi-D_CMSMEq-DSD3yfFX.js",
+      "assets/nb-DI8u59ch-BfDSp4tN.js",
+      "assets/nb-DI8u59ch-D26YJwBw.js",
+      "assets/nl-BHQJ6Gvn-8_OIBsy0.js",
+      "assets/nl-BHQJ6Gvn-DR9le1Ku.js",
+      "assets/nn-ntZvarUK-BWT83oy8.js",
+      "assets/nn-ntZvarUK-CisAOyMX.js",
+      "assets/no-B8ItS0F3-CaEfCzD5.js",
+      "assets/no-B8ItS0F3-Cjg1mxae.js",
+      "assets/oc-P_i3-xLA-DcflVACw.js",
+      "assets/oc-P_i3-xLA-W5_I63nO.js",
+      "assets/or-50rxpoq4-Cf5-bcl5.js",
+      "assets/or-50rxpoq4-DCkVU6Ko.js",
+      "assets/pa-C54UG8eN-BNwHx5e8.js",
+      "assets/pa-C54UG8eN-Bj-XExX_.js",
+      "assets/pi-B9cgjyG1-TpqBZ4Cr.js",
+      "assets/pi-B9cgjyG1-o9084kBf.js",
+      "assets/pl-9fg-ESVt-Bv_p-a9x.js",
+      "assets/pl-9fg-ESVt-srdLJiCD.js",
+      "assets/pms-BRGfm5gS-CmTxgG4x.js",
+      "assets/pms-BRGfm5gS-DfOt2RSi.js",
+      "assets/pt-Cum2_NUC-Bayt-WZ1.js",
+      "assets/pt-Cum2_NUC-CrkeeQaZ.js",
+      "assets/rm-C0MIK9N4-CNhvXnnG.js",
+      "assets/rm-C0MIK9N4-CspOpP2h.js",
+      "assets/ro-0fmdH0HA-Bov_DAVD.js",
+      "assets/ro-0fmdH0HA-CzPJI035.js",
+      "assets/ru-v4l-ayaq-CCvNx-bH.js",
+      "assets/ru-v4l-ayaq-DLdM0nWP.js",
+      "assets/sa-CKY9c_Vq-Bz50MtzC.js",
+      "assets/sa-CKY9c_Vq-CvBCyoRG.js",
+      "assets/sh-cyrl-BpCRFOmq-UY09gie6.js",
+      "assets/sh-cyrl-BpCRFOmq-iXcSGR78.js",
+      "assets/sh-latn-sRy4Tuaj-Bj83ckNg.js",
+      "assets/sh-latn-sRy4Tuaj-De-tA-2J.js",
+      "assets/sheet-DDpCQ7w7.css",
+      "assets/sheet-D_K5KmZI.js",
+      "assets/sheet-formula.worker-Cr_j1odP.js",
+      "assets/sk-_iOeDNrQ-C-ASCGW0.js",
+      "assets/sk-_iOeDNrQ-DC8Al4lF.js",
+      "assets/sl-DpiklF-D-B8FnrXi1.js",
+      "assets/sl-DpiklF-D-Dsi5IBiW.js",
+      "assets/sr-cyrl-Dpzrbd0W-XEn9NLu2.js",
+      "assets/sr-cyrl-Dpzrbd0W-yGc0Jz1j.js",
+      "assets/sv-CFm5y56M-BavwOzx2.js",
+      "assets/sv-CFm5y56M-DeQDoAsB.js",
+      "assets/ta-BcghgTbD-B5_ztYXp.js",
+      "assets/ta-BcghgTbD-BMgKH4Yo.js",
+      "assets/te-B5Spl2Jk-BE9oLms_.js",
+      "assets/te-B5Spl2Jk-BjTOzs5s.js",
+      "assets/th-DWX5iPSo-C2wPMPwC.js",
+      "assets/th-DWX5iPSo-CFfNau1h.js",
+      "assets/tk-BMbKB10q-DAsmcZrn.js",
+      "assets/tk-BMbKB10q-UHPz-lif.js",
+      "assets/tr-CIHIuzqc-5smNiDr_.js",
+      "assets/tr-CIHIuzqc-DvQDK0dA.js",
+      "assets/uk-Dir3oxLs-DAF32q4m.js",
+      "assets/uk-Dir3oxLs-DGVpthWV.js",
+      "assets/zh-latn-pinyin-BdYb-Ey_-BLxoTyrI.js",
+      "assets/zh-latn-pinyin-BdYb-Ey_-CW52gdb_.js"
+    ]
+  },
+  "hosts": [
+    {
+      "host": "support.microsoft.com",
+      "count": 509,
+      "files": [
+        "assets/facade--SKdPPvM.js"
+      ],
+      "samples": [
+        "用于研究样本中一定部分的变化情况，例如，人们一天中看电视的时间比率。`,links:[{title:`教学`,url:`https://support.microsoft.com/zh-cn/excel/functions/betadist",
+        "用于项目设计，在已知预期的完成时间和变化参数后，模拟可能的完成时间。`,links:[{title:`教学`,url:`https://support.microsoft.com/zh-cn/excel/functions/betainv-",
+        "，BINOMDIST 可以计算三个即将出生的婴儿中两个是男孩的概率。`,links:[{title:`教学`,url:`https://support.microsoft.com/zh-cn/excel/functions/binomdis"
+      ]
+    },
+    {
+      "host": "www.w3.org",
+      "count": 262,
+      "files": [
+        "assets/doc-8_JlB7Jd.js",
+        "assets/facade--SKdPPvM.js",
+        "assets/jsx-runtime-BCoScHCP.js",
+        "assets/sheet-D_K5KmZI.js"
+      ],
+      "samples": [
+        "#3A60F7`,yi=`#1D3EA6`;function bi(e,t,n){let r=`<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"${t}\" height=\"${n}\" viewB",
+        "O.displayName=`UniverIcon`;var Mwe={tag:`svg`,attrs:{xmlns:`http://www.w3.org/2000/svg`,fill:`none`,viewBox:`0 0 16 16`,",
+        "displayName=`ActivityIcon`;var Nwe={tag:`svg`,attrs:{xmlns:`http://www.w3.org/2000/svg`,fill:`none`,viewBox:`0 0 16 16`,"
+      ]
+    },
+    {
+      "host": "support.google.com",
+      "count": 17,
+      "files": [
+        "assets/facade--SKdPPvM.js"
+      ],
+      "samples": [
+        "数组结果的大小。`,abstract:`以给定值约束数组结果的大小。`,links:[{title:`教学`,url:`https://support.google.com/docs/answer/3267036?hl=zh-Hans`}]",
+        "单列。`,abstract:`将一个或多个范围中的所有值合并到单列。`,links:[{title:`教学`,url:`https://support.google.com/docs/answer/10307761?hl=zh-Hans`}",
+        "以秒、毫秒或微秒为单位）转换为世界协调时间 (UTC) 的日期时间。`,links:[{title:`教学`,url:`https://support.google.com/docs/answer/13193461?hl=zh-Hans`}"
+      ]
+    },
+    {
+      "host": "github.com",
+      "count": 9,
+      "files": [
+        "assets/doc-layout.worker-CZDuqPRm.js",
+        "assets/facade--SKdPPvM.js",
+        "assets/sheet-formula.worker-Cr_j1odP.js"
+      ],
+      "samples": [
+        "ons.length-1];return this}};V(I_,`id`,`text-x`),V(I_,`uri`,`https://github.com/dream-num/univer#text-x`),Object.definePr",
+        "p(e,t=[`body`]){return ls.editOp(t,I_.name,e)}};V(L_,`uri`,`https://github.com/dream-num/univer#json-x`),V(L_,`_subTypes",
+        "ons.length-1];return this}};I(hf,`id`,`text-x`),I(hf,`uri`,`https://github.com/dream-num/univer#text-x`),Object.definePr"
+      ]
+    },
+    {
+      "host": "redi.wzhu.dev",
+      "count": 6,
+      "files": [
+        "assets/doc-layout.worker-CZDuqPRm.js",
+        "assets/facade--SKdPPvM.js",
+        "assets/sheet-formula.worker-Cr_j1odP.js"
+      ],
+      "samples": [
+        " using \"forwardRef\". For more info please visit our website https://redi.wzhu.dev/docs/faq#could-not-find-dependency-reg",
+        "t versions of redi. For more info please visit our website: https://redi.wzhu.dev/en-US/docs/faq#import-scripts-of-redi-",
+        " using \"forwardRef\". For more info please visit our website https://redi.wzhu.dev/docs/faq#could-not-find-dependency-reg"
+      ]
+    },
+    {
+      "host": "sharejs.org",
+      "count": 6,
+      "files": [
+        "assets/doc-layout.worker-CZDuqPRm.js",
+        "assets/facade--SKdPPvM.js",
+        "assets/sheet-formula.worker-Cr_j1odP.js"
+      ],
+      "samples": [
+        "`&&(t=!1)}),t}function b(t){return{name:`text-unicode`,uri:`http://sharejs.org/types/text-unicode`,trim:d,normalize:o,ch",
+        ",t){if(!e)throw Error(t)}let c=!1;e.type={name:`json1`,uri:`http://sharejs.org/types/JSONv1`,readCursor:i.readCursor,wri",
+        "`&&(t=!1)}),t}function b(t){return{name:`text-unicode`,uri:`http://sharejs.org/types/text-unicode`,trim:d,normalize:o,ch"
+      ]
+    },
+    {
+      "host": "$",
+      "count": 5,
+      "files": [
+        "assets/doc-8_JlB7Jd.js",
+        "assets/doc-layout.worker-CZDuqPRm.js",
+        "assets/facade--SKdPPvM.js",
+        "assets/sheet-D_K5KmZI.js",
+        "assets/sheet-formula.worker-Cr_j1odP.js"
+      ],
+      "samples": [
+        "est(e)}function ys(e){return _s(e)?e:vs(e)?`mailto://${e}`:`https://${e}`}function bs(){let e=I(ks),t=c(e.editingLink$,e",
+        "est(e)}function Ps(e){return Ms(e)?e:Ns(e)?`mailto://${e}`:`https://${e}`}function Fs(e,t){return H.getValueType(e)===H.",
+        "st(e)}function Oi(e){return Di(e)?e:Pie(e)?`mailto://${e}`:`https://${e}`}function ki(e){if(!e||typeof e!=`string`)retur"
+      ]
+    },
+    {
+      "host": "univer.ai",
+      "count": 4,
+      "files": [
+        "assets/facade--SKdPPvM.js",
+        "assets/sheet-formula.worker-Cr_j1odP.js"
+      ],
+      "samples": [
+        "ctionList.HYPERLINK.functionParameter.url.detail`,example:`\"https://univer.ai/\"`,require:1,repeat:0},{name:`engine-formu",
+        "tionList.ENCODEURL.functionParameter.text.detail`,example:`\"https://univer.ai/\"`,require:1,repeat:0}]},{functionName:`FI",
+        "ctionList.HYPERLINK.functionParameter.url.detail`,example:`\"https://univer.ai/\"`,require:1,repeat:0},{name:`engine-formu"
+      ]
+    },
+    {
+      "host": "localhost:5173",
+      "count": 3,
+      "files": [
+        "assets/doc-layout.worker-CZDuqPRm.js",
+        "assets/facade--SKdPPvM.js",
+        "assets/sheet-formula.worker-Cr_j1odP.js"
+      ],
+      "samples": [
+        "nction js(e){if(!Number.isNaN(+e))return!1;if(e.startsWith(`http://localhost:5173`)||e.startsWith(`localhost:5173`))retu",
+        "ction Nie(e){if(!Number.isNaN(+e))return!1;if(e.startsWith(`http://localhost:5173`)||e.startsWith(`localhost:5173`))retu",
+        "nction Ms(e){if(!Number.isNaN(+e))return!1;if(e.startsWith(`http://localhost:5173`)||e.startsWith(`localhost:5173`))retu"
+      ]
+    },
+    {
+      "host": "universheet.net",
+      "count": 3,
+      "files": [
+        "assets/doc-layout.worker-CZDuqPRm.js",
+        "assets/facade--SKdPPvM.js",
+        "assets/sheet-formula.worker-Cr_j1odP.js"
+      ],
+      "samples": [
+        "sole.error(`Unable to get data URL. ${t} For more info read https://universheet.net/docs/Canvas.html.`),``}}}},bC=class{",
+        "sole.error(`Unable to get data URL. ${t} For more info read https://universheet.net/docs/Canvas.html.`),``}}}},ov=class ",
+        "sole.error(`Unable to get data URL. ${t} For more info read https://universheet.net/docs/Canvas.html.`),``}}}},vB=class{"
+      ]
+    },
+    {
+      "host": "example.com",
+      "count": 3,
+      "files": [
+        "assets/facade--SKdPPvM.js",
+        "assets/facade-7vUCyHNp.css",
+        "assets/sheet-formula.worker-Cr_j1odP.js"
+      ],
+      "samples": [
+        "tionList.WEBSERVICE.functionParameter.url.detail`,example:`\"https://example.com/api\"`,require:1,repeat:0}]}],b8e=[...d8e",
+        "(https\\:\\/\\/example\\.com\\/a-b\\.svg\\)\\]{background-image:url(https://example.com/a-b.svg)}.univer-bg-gradient-to-br{backg",
+        "tionList.WEBSERVICE.functionParameter.url.detail`,example:`\"https://example.com/api\"`,require:1,repeat:0}]}],yL=[...uL,."
+      ]
+    },
+    {
+      "host": "react.dev",
+      "count": 2,
+      "files": [
+        "assets/jsx-runtime-BCoScHCP.js"
+      ],
+      "samples": [
+        "=>{t.exports=d()})),p=o((e=>{var t=f();function n(e){var t=`https://react.dev/errors/`+e;if(1<arguments.length){t+=`?arg",
+        "=p()})),h=o((e=>{var t=u(),n=f(),r=m();function i(e){var t=`https://react.dev/errors/`+e;if(1<arguments.length){t+=`?arg"
+      ]
+    },
+    {
+      "host": "localhost",
+      "count": 1,
+      "files": [
+        "assets/facade--SKdPPvM.js"
+      ],
+      "samples": [
+        "=typeof window<`u`&&window.location?window.location.origin:`http://localhost`,n=new URL(e,t);return[`http:`,`https:`,`ma"
+      ]
+    },
+    {
+      "host": "www.wps.cn",
+      "count": 1,
+      "files": [
+        "assets/facade--SKdPPvM.js"
+      ],
+      "samples": [
+        "将数字转换为中文字符串`,abstract:`将数字转换为中文字符串`,links:[{title:`教学`,url:`https://www.wps.cn/learning/course/detail/id/340.html?chan=p"
+      ]
+    }
+  ],
+  "networkApis": {
+    "fetch(": {
+      "count": 5,
+      "samples": [
+        "assets/facade--SKdPPvM.js: }`:String(e)}await new Promise(e=>setTimeout(e,1500)),await fetch(`/__selftest`,{method:`POST`,headers:{\"Content-Type\":`",
+        "assets/facade--SKdPPvM.js: {let t=await this._urlImageDownloader(e);return await(await fetch(t)).blob()}catch(t){console.error(`Custom downloader f",
+        "assets/facade--SKdPPvM.js: ${e}, falling back to default fetch:`,t)}return await(await fetch(e)).blob()}};function ID(e,t){return function(n,r){t(n"
+      ],
+      "files": {
+        "assets/facade--SKdPPvM.js": 3,
+        "assets/modulepreload-polyfill-P2Xu9kJm.js": 1,
+        "assets/sheet-D_K5KmZI.js": 1
+      }
+    }
+  },
+  "dynamicCode": {
+    "Function('…')": {
+      "count": 3,
+      "samples": [
+        "assets/doc-layout.worker-CZDuqPRm.js: self==`object`&&self&&self.Object===Object&&self,Wn=Hn||Un||Function(`return this`)(),Gn=Wn.Symbol,Kn=Object.prototype,q",
+        "assets/facade--SKdPPvM.js: elf==`object`&&self&&self.Object===Object&&self,An=kn||_te||Function(`return this`)(),jn=An.Symbol,Mn=Object.prototype,v",
+        "assets/sheet-formula.worker-Cr_j1odP.js: self==`object`&&self&&self.Object===Object&&self,or=ir||ar||Function(`return this`)(),sr=or.Symbol,cr=Object.prototype,l"
+      ]
+    }
+  },
+  "keywords": {
+    "telemetry": {
+      "count": 3,
+      "samples": [
+        "assets/sheet-D_K5KmZI.js: )){let r=gD(e[n]);r!==void 0&&(t[n]=r)}return t}var wne=wl(`telemetry.service`),Z=i();function _D(e,t){if(e==null)return",
+        "assets/sheet-D_K5KmZI.js: e=n,this._sheetRenderService=r,this._commandService=i,this._telemetryService=a,Q(this,`_renderMetric$`,new pt),Q(this,`r",
+        "assets/sheet-D_K5KmZI.js: sedTimeToStart:a,...i};this._renderMetric$.next(o),(t=this._telemetryService)==null||t.capture(`sheet_render_cost`,o)}_a"
+      ]
+    }
+  },
+  "keywordsSearched": [
+    "univerjs-pro",
+    "univer-pro",
+    "licenseKey",
+    "license-key",
+    "watermark",
+    "telemetry",
+    "posthog",
+    "sentry",
+    "google-analytics",
+    "gtag(",
+    "mixpanel",
+    "grpc",
+    "protobuf"
+  ]
+}

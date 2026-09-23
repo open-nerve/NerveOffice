@@ -1,0 +1,51 @@
+{
+  "check": "V01-network",
+  "scenario": "doc-main",
+  "csp": "off",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T17:37:03.152Z",
+  "functional": [
+    {
+      "name": "正文包含键盘输入",
+      "expected": true,
+      "actual": true,
+      "pass": true
+    },
+    {
+      "name": "原有内容保留",
+      "expected": true,
+      "actual": true,
+      "pass": true
+    },
+    {
+      "name": "全文加粗（工具栏）",
+      "expected": 15,
+      "actual": 15,
+      "pass": true
+    }
+  ],
+  "requests": {
+    "total": 10,
+    "byOrigin": {
+      "http://127.0.0.1:4701": 10
+    },
+    "crossOrigin": []
+  },
+  "urls": [
+    "http://127.0.0.1:4701/doc.html",
+    "http://127.0.0.1:4701/assets/doc-8_JlB7Jd.js",
+    "http://127.0.0.1:4701/assets/jsx-runtime-BCoScHCP.js",
+    "http://127.0.0.1:4701/assets/modulepreload-polyfill-P2Xu9kJm.js",
+    "http://127.0.0.1:4701/assets/events-C1TuS8fw.js",
+    "http://127.0.0.1:4701/assets/facade--SKdPPvM.js",
+    "http://127.0.0.1:4701/assets/jsx-runtime--Nk3ZDL8.css",
+    "http://127.0.0.1:4701/assets/facade-7vUCyHNp.css",
+    "http://127.0.0.1:4701/assets/doc-C9tVtSRm.css",
+    "http://127.0.0.1:4701/assets/minimal-OVL4a5-e.js"
+  ]
+}

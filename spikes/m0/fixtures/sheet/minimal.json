@@ -1,0 +1,18 @@
+{
+    "id": "m0-sheet-minimal",
+    "name": "最小表格样本",
+    "locale": "zhCN",
+    "styles": {},
+    "sheetOrder": ["sheet-1"],
+    "sheets": {
+        "sheet-1": {
+            "id": "sheet-1",
+            "name": "工作表1",
+            "rowCount": 1000,
+            "columnCount": 26,
+            "cellData": {
+                "0": { "0": { "v": "M0 样本" } }
+            }
+        }
+    }
+}

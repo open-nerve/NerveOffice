@@ -1,0 +1,94 @@
+{
+  "check": "V02",
+  "scenario": "doc-main",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T17:37:37.514Z",
+  "timingsNote": "从 createEditor 调用开始计时，不含脚本下载解析与样本加载",
+  "timings": {
+    "ready": 45,
+    "rendered": 394,
+    "steady": 3397
+  },
+  "functional": [
+    {
+      "name": "正文包含键盘输入",
+      "expected": true,
+      "actual": true,
+      "pass": true
+    },
+    {
+      "name": "原有内容保留",
+      "expected": true,
+      "actual": true,
+      "pass": true
+    },
+    {
+      "name": "全文加粗（工具栏）",
+      "expected": 15,
+      "actual": 15,
+      "pass": true
+    }
+  ],
+  "ui": {
+    "namedStyleMenuDomDelta": 43
+  },
+  "worker": {
+    "expected": false,
+    "started": [],
+    "stats": {
+      "created": 0,
+      "toWorker": {},
+      "fromWorker": {}
+    },
+    "failures": []
+  },
+  "enforceViolations": [],
+  "probeViolations": {
+    "total": 12,
+    "groups": [
+      {
+        "channel": "page-event",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "style-src-elem",
+        "blocked": "inline",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 4
+      },
+      {
+        "channel": "server-report",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "style-src-elem",
+        "blocked": "inline",
+        "sourceFile": "/assets/facade--SKdPPvM.js",
+        "count": 4
+      },
+      {
+        "channel": "console",
+        "scope": "page",
+        "policy": "probe",
+        "directive": "style-src",
+        "blocked": "",
+        "sourceFile": "/doc.html?sample=minimal",
+        "count": 4
+      }
+    ]
+  },
+  "requests": {
+    "total": 14,
+    "byOrigin": {
+      "http://127.0.0.1:4700": 14
+    },
+    "crossOrigin": []
+  },
+  "pageErrors": [],
+  "scriptConsoleErrors": [],
+  "scriptConsoleWarningCount": 0,
+  "browserConsoleErrors": []
+}

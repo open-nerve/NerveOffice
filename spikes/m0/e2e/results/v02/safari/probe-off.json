@@ -1,0 +1,32 @@
+{
+  "check": "V02-safari",
+  "step": "probe-off",
+  "csp": "off",
+  "safariVersion": "26.5",
+  "kind": "probe",
+  "mode": "off",
+  "target": "http://127.0.0.1:4710/index.html",
+  "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Safari/605.1.15",
+  "timestamp": "2026-09-23T17:38:25.654Z",
+  "page": {
+    "fetch": "allowed",
+    "eval": "allowed",
+    "fn": "allowed"
+  },
+  "worker": {
+    "fetch": "allowed",
+    "eval": "allowed",
+    "fn": "allowed"
+  },
+  "events": {
+    "cspViolations": [],
+    "errors": [],
+    "consoleErrors": [],
+    "consoleWarnings": []
+  },
+  "serverReports": [],
+  "enforceViolations": {
+    "pageEvents": 0,
+    "serverReports": 0
+  }
+}
