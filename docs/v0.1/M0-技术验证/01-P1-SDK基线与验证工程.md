@@ -37,9 +37,9 @@ spikes/m0/
 │   ├── host/             React 宿主：顶部状态栏 + 编辑器容器
 │   ├── profiles/         候选插件档案：sheet.ts、doc.ts（插件、配置、语言包）
 │   ├── harness/          创建编辑器、捕获快照、收集页面事件；向页面暴露 window.__m0
-│   ├── workers/          公式 Web Worker 入口
+│   ├── workers/          Web Worker 入口：表格公式、文字文档排版
 │   └── experiments/      按验证项组织的实验代码（P1 基本不用）
-├── server/serve.ts       静态服务：输出 CSP 响应头、接收 CSP 违规报告
+├── server/             静态服务（serve.ts）与 CSP 策略（csp.ts）：输出 CSP 响应头、接收违规报告
 ├── scripts/              V01 依赖与许可报告、URL 扫描、包体积统计
 ├── e2e/                  Playwright 验证脚本；results/ 保存 JSON 结果（入库）
 ├── fixtures/             样本文档（P1 只放最小样本）
@@ -50,24 +50,25 @@ spikes/m0/
 
 ### 3.2 接口约定
 
-**页面参数**：`sheet.html?sample=<名称>&mode=edit|read&worker=0|1`，`doc.html?sample=<名称>&mode=edit|read`。
+**页面参数**：`sheet.html?sample=<名称>&worker=0|1`，`doc.html?sample=<名称>&worker=0|1`。另保留 `mode=edit|read`，阅读模式在 P3 实现，P1 传入 `read` 时页面直接报错。
 
 **`window.__m0`**（只供验证脚本使用）：
 
 | 成员 | 说明 |
 |---|---|
 | `kind` | `'sheet'` 或 `'doc'` |
-| `ready` | Promise：文档单元创建完成、首帧渲染完成后兑现 |
-| `univer`、`univerAPI` | Univer 实例与 Facade，供实验直接调用 |
-| `save()` | 调用 `FWorkbook.save()` / `FDocument.save()` 返回快照 |
-| `events` | 页面内收集的 `securitypolicyviolation` 事件、未捕获错误、控制台错误 |
+| `ready` | Promise：生命周期进入 `Steady` 后兑现，值为 `editor` |
+| `editor` | 就绪后的编辑器句柄：`univer`、`univerAPI`、`save()`（调用 `FWorkbook.save()` / `FDocument.save()`）、`timings`（各生命周期阶段的耗时） |
+| `events` | 页面内收集的 `securitypolicyviolation` 事件、未捕获错误、控制台错误与警告 |
+| `workerStats` | Worker 的创建次数与收发消息数，用来证明 Worker 确实参与了工作 |
+| `params` | 解析后的页面参数 |
 
 **服务端**（`server/serve.ts`，只用于验证）：
 
 | 路径 | 说明 |
 |---|---|
-| `GET /*` | 提供 `dist/` 下的静态文件；HTML 响应带 CSP 头 |
-| `POST /csp-report` | 接收违规报告（兼容 `application/csp-report` 与 `application/reports+json`），追加到内存列表与 `e2e/results/` 下的 JSONL |
+| `GET /*` | 提供 `dist/` 下的静态文件；所有响应（包括 Worker 脚本）都带 CSP 头，因为 Worker 内生效的是它自己脚本响应上的策略 |
+| `POST /csp-report` | 接收违规报告（兼容 `report-uri` 与 Reporting API 两种格式），追加到内存列表；指定 `--report-log` 时另写一份 JSONL |
 | `GET /__csp-reports`、`DELETE /__csp-reports` | 供验证脚本读取、清空报告 |
 
 CSP 由启动参数选择，默认同时发送两个头：
@@ -98,14 +99,15 @@ P1 只需要一份"尽量接近最终档案"的候选集合，用来做依赖清
 **V02 严格 CSP 下能否运行**
 
 1. 以生产模式构建（`vite build`），由 `server/serve.ts` 提供，同时发送强制策略与探测策略（§3.2）。
-2. Playwright 在每个浏览器中执行三个场景：
+2. Playwright 在每个浏览器中执行四个场景：
    - **表格（公式在主线程）**：加载 → 用真实键盘在单元格输入文字和公式（`=SUM(1,2)`）→ 通过 Facade 核对值与计算结果 → 打开工具栏下拉菜单与右键菜单 → 调用 `save()`；
    - **表格（公式在 Web Worker）**：同上，公式由 Worker 计算；另外核对 Worker 确实启动、确实返回了结果；
-   - **文字文档**：加载 → 在正文用键盘输入英文与中文 → 使用工具栏加粗 → 通过快照核对内容 → `save()`。
+   - **文字文档**：加载 → 在正文用键盘输入英文与中文 → 使用工具栏加粗 → 通过快照核对内容 → `save()`；
+   - **文字文档（排版在 Web Worker）**：同上，使用官方的 `UniverDocsLayoutWorkerPlugin`。它不在官方 preset 中，是否启用由 P5 决定；这里只验证它在 CSP 下能否工作。
 3. 每个场景收集：页面内的 `securitypolicyviolation` 事件、服务端收到的报告（区分强制与探测）、未捕获错误与控制台错误、全部请求的来源。
 4. 浏览器矩阵：Playwright 自带的 Chromium、本机 Google Chrome 153（`channel: 'chrome'`）、Playwright 自带的 WebKit（作为 Safari 引擎的代理）。
    - Edge 未安装；真实 Safari 需要管理员开启远程自动化。这两项登记为补充验证（见 §7），不阻塞本 Phase 的结论。
-5. **通过标准**：三个浏览器的三个场景中，强制策略的违规为零，编辑与公式结果正确，非同源请求为零。否则逐条列出必须放宽的指令及原因。探测策略的报告用来说明强制策略中每一项放宽的必要性。
+5. **通过标准**：三个浏览器的四个场景中，强制策略的违规为零，编辑与公式结果正确，非同源请求为零。否则逐条列出必须放宽的指令及原因。探测策略的报告用来说明强制策略中每一项放宽的必要性。
 
 **包体积**：读取 Vite 的构建清单（manifest），按 `sheet.html`、`doc.html` 两个入口分别统计首屏需要的 JS、CSS 与 Worker 块，记录原始体积与 gzip 体积。
 
@@ -123,7 +125,7 @@ M0 不交付产品功能，不为验证工程本身补测试（M0 总设计 §6�
 |---|---|---|
 | 版本一致性、Pro 检查、许可清单 | `scripts/deps-report.ts` | V01 |
 | 构建产物 URL 扫描 | `scripts/url-scan.ts` | V01 |
-| 三浏览器 × 三场景的 CSP 与编辑 | `e2e/v02-csp.spec.ts` | V01（动态核验）、V02 |
+| 三浏览器 × 四场景的 CSP 与编辑 | `e2e/v02-csp.spec.ts` | V01（动态核验）、V02 |
 | 包体积 | `scripts/bundle-size.ts` | P1 产出 |
 
 ## 5. 约束符合性检查
@@ -141,7 +143,7 @@ M0 不交付产品功能，不为验证工程本身补测试（M0 总设计 §6�
 |---|---|---|---|---|
 | S1 验证工程骨架 | 建好 `spikes/m0/`：依赖锁定、多页面构建、React 宿主、候选档案、harness、CSP 服务、Playwright 配置 | 无 | 否 | 表格与文字文档页面在开发模式和生产构建下都能加载、能输入；`window.__m0` 可用 |
 | S2 V01 依赖与许可 | 版本一致性、Pro 检查、许可清单、URL 扫描 | S1 | 否 | 结果 JSON 生成；每一项都有结论 |
-| S3 V02 CSP 验证 | 三浏览器 × 三场景的 CSP 与编辑验证 | S1 | 否 | 结果 JSON 生成；每个场景都有结论 |
+| S3 V02 CSP 验证 | 三浏览器 × 四场景的 CSP 与编辑验证 | S1 | 否 | 结果 JSON 生成；每个场景都有结论 |
 | S4 包体积与报告 | 统计包体积；编写 `reports/P1-验证报告.md` | S2、S3 | 否 | 报告按 M0 总设计 §7 的格式写全 V01、V02 |
 
 ## 7. 风险与未决问题
