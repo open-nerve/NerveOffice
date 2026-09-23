@@ -6,30 +6,17 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T18:24:39.394Z",
+  "timestamp": "2026-09-23T20:17:38.882Z",
   "case": {
     "kind": "sheet",
     "group": "drawing",
     "sample": "sheet-drawing",
     "resource": "SHEET_DRAWING_PLUGIN"
   },
-  "hooksWithoutGroup": [
-    "DOC_NOTE_PLUGIN",
-    "DOC_OBJECT_PERMISSION_PLUGIN",
-    "DOC_WORD_STYLES_PLUGIN",
-    "SHEET_AuthzIoMockService_PLUGIN",
-    "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
-    "SHEET_DATA_VALIDATION_PLUGIN",
-    "SHEET_DEFINED_NAME_PLUGIN",
-    "SHEET_FILTER_PLUGIN",
-    "SHEET_NOTE_PLUGIN",
-    "SHEET_RANGE_PROTECTION_PLUGIN",
-    "SHEET_RANGE_THEME_MODEL_PLUGIN",
-    "SHEET_WORKSHEET_PROTECTION_PLUGIN",
-    "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN"
-  ],
   "comparison": {
     "unknown": [],
+    "duplicates": [],
+    "invalid": [],
     "missing": [
       "SHEET_DRAWING_PLUGIN"
     ],
@@ -39,7 +26,14 @@
   "serverRejects": true,
   "openCheckFails": true,
   "inline": {
-    "cellsWithCustomRanges": 0
+    "before": {
+      "cellHyperlinks": 0,
+      "cellImages": 1
+    },
+    "after": {
+      "cellHyperlinks": 0,
+      "cellImages": 1
+    }
   },
   "pageErrors": [],
   "consoleErrors": []

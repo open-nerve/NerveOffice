@@ -7,7 +7,7 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T18:18:32.807Z",
+  "timestamp": "2026-09-23T20:50:39.930Z",
   "resourceHooks": [
     {
       "name": "DOC_DRAWING_PLUGIN",
@@ -103,6 +103,81 @@
       ]
     }
   ],
+  "declaredResources": [
+    "SHEET_AuthzIoMockService_PLUGIN",
+    "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+    "SHEET_DATA_VALIDATION_PLUGIN",
+    "SHEET_DEFINED_NAME_PLUGIN",
+    "SHEET_DRAWING_PLUGIN",
+    "SHEET_FILTER_PLUGIN",
+    "SHEET_NOTE_PLUGIN",
+    "SHEET_RANGE_PROTECTION_PLUGIN",
+    "SHEET_RANGE_THEME_MODEL_PLUGIN",
+    "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+    "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN"
+  ],
+  "semantics": {
+    "afterFirstOpen": {
+      "sheets": [
+        {
+          "name": "数据",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 1
+        }
+      ],
+      "definedNames": 0,
+      "formulas": 0,
+      "richTextCells": 0,
+      "cellImages": 1,
+      "hyperlinks": 0
+    },
+    "afterReopen": {
+      "sheets": [
+        {
+          "name": "数据",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 1
+        }
+      ],
+      "definedNames": 0,
+      "formulas": 0,
+      "richTextCells": 0,
+      "cellImages": 1,
+      "hyperlinks": 0
+    },
+    "expected": {
+      "sheets": [
+        {
+          "name": "数据",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 1
+        }
+      ],
+      "definedNames": 0,
+      "formulas": 0,
+      "richTextCells": 0,
+      "cellImages": 1,
+      "hyperlinks": 0
+    }
+  },
   "stable12": true,
   "stable12Diff": [],
   "stable12EmptyEquivalent": [],
@@ -122,8 +197,18 @@
       }
     ]
   },
+  "baseline": {
+    "realDiff": [
+      "changed $.resources[*].data.sheet-1.data.*.transform.height"
+    ],
+    "resourcesChanged": [
+      "SHEET_DRAWING_PLUGIN"
+    ]
+  },
   "resources": {
     "unknown": [],
+    "duplicates": [],
+    "invalid": [],
     "missing": [],
     "emptied": [],
     "changed": [
@@ -131,10 +216,10 @@
     ]
   },
   "hashes": {
-    "s0": "808f509add765b08f79251f2ed9a41e80f762ee99346f7d0d64edfb469bec516",
-    "s1": "9b365bc3245058086b01aea2504277748c5f59bff535ffbe974fe9075743488c",
-    "s2": "9b365bc3245058086b01aea2504277748c5f59bff535ffbe974fe9075743488c",
-    "s3": "9b365bc3245058086b01aea2504277748c5f59bff535ffbe974fe9075743488c"
+    "s0": "e1647e91c72511013076b4a751afbc7aed581d0c9e9348f7b7f2587d952310d6",
+    "s1": "b3b79558cf04021965cc4191e54cc212a4d0f37a4fd187a7364242a29250f161",
+    "s2": "b3b79558cf04021965cc4191e54cc212a4d0f37a4fd187a7364242a29250f161",
+    "s3": "b3b79558cf04021965cc4191e54cc212a4d0f37a4fd187a7364242a29250f161"
   },
   "pageErrors": [],
   "consoleErrors": []

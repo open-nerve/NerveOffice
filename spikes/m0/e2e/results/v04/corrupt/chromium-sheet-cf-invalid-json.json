@@ -6,38 +6,34 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T18:25:08.766Z",
+  "timestamp": "2026-09-23T20:18:11.854Z",
   "case": {
     "kind": "sheet",
     "sample": "sheet-cf",
     "resource": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
-    "mode": "invalid-json"
+    "mode": "invalid-json",
+    "expect": "emptied"
   },
   "afterLoad": "",
-  "serverCheckAgainstPrevious": {
-    "comparison": {
-      "unknown": [],
-      "missing": [],
-      "emptied": [
-        "SHEET_CONDITIONAL_FORMATTING_PLUGIN"
-      ],
-      "changed": []
-    },
-    "serverRejects": false,
-    "openCheckFails": true
+  "comparison": {
+    "unknown": [],
+    "duplicates": [],
+    "invalid": [],
+    "missing": [],
+    "emptied": [
+      "SHEET_CONDITIONAL_FORMATTING_PLUGIN"
+    ],
+    "changed": []
   },
-  "openCheckAgainstLoaded": {
-    "comparison": {
-      "unknown": [],
-      "missing": [],
-      "emptied": [
-        "SHEET_CONDITIONAL_FORMATTING_PLUGIN"
-      ],
-      "changed": []
-    },
-    "serverRejects": false,
-    "openCheckFails": true
-  },
+  "serverRejects": false,
+  "openCheckFails": true,
+  "loadErrorCapture": [
+    {
+      "name": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+      "kind": "parse-swallowed",
+      "message": "非空输入（1054 字符）被解析为空值"
+    }
+  ],
   "pageErrors": [],
   "consoleErrors": []
 }

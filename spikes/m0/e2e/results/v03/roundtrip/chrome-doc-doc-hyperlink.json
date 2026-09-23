@@ -7,7 +7,7 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-23T18:16:25.686Z",
+  "timestamp": "2026-09-23T20:48:31.671Z",
   "resourceHooks": [
     {
       "name": "DOC_DRAWING_PLUGIN",
@@ -40,6 +40,51 @@
       ]
     }
   ],
+  "declaredResources": [
+    "DOC_DRAWING_PLUGIN",
+    "DOC_HYPER_LINK_PLUGIN",
+    "DOC_NOTE_PLUGIN",
+    "DOC_OBJECT_PERMISSION_PLUGIN",
+    "DOC_WORD_STYLES_PLUGIN"
+  ],
+  "semantics": {
+    "afterFirstOpen": {
+      "textLength": 20,
+      "namedStyles": {},
+      "lists": {},
+      "tables": 0,
+      "images": {
+        "inline": 0,
+        "floating": 0,
+        "facade": 0
+      },
+      "hyperlinks": 2
+    },
+    "afterReopen": {
+      "textLength": 20,
+      "namedStyles": {},
+      "lists": {},
+      "tables": 0,
+      "images": {
+        "inline": 0,
+        "floating": 0,
+        "facade": 0
+      },
+      "hyperlinks": 2
+    },
+    "expected": {
+      "namedStyles": {},
+      "lists": {},
+      "tables": 0,
+      "images": {
+        "inline": 0,
+        "floating": 0,
+        "facade": 0
+      },
+      "hyperlinks": 2,
+      "textLength": 20
+    }
+  },
   "stable12": true,
   "stable12Diff": [],
   "stable12EmptyEquivalent": [],
@@ -52,17 +97,23 @@
     "emptyEquivalent": 0,
     "entries": []
   },
+  "baseline": {
+    "realDiff": [],
+    "resourcesChanged": []
+  },
   "resources": {
     "unknown": [],
+    "duplicates": [],
+    "invalid": [],
     "missing": [],
     "emptied": [],
     "changed": []
   },
   "hashes": {
-    "s0": "426dffa5aaaef8d7e44ba86571fbb141847a41a8e862fc899071c5234d4e30a5",
-    "s1": "426dffa5aaaef8d7e44ba86571fbb141847a41a8e862fc899071c5234d4e30a5",
-    "s2": "426dffa5aaaef8d7e44ba86571fbb141847a41a8e862fc899071c5234d4e30a5",
-    "s3": "426dffa5aaaef8d7e44ba86571fbb141847a41a8e862fc899071c5234d4e30a5"
+    "s0": "de7804eeaa96a146795f8869454810c519e264d5527bb93cd6f666ca15b050a8",
+    "s1": "de7804eeaa96a146795f8869454810c519e264d5527bb93cd6f666ca15b050a8",
+    "s2": "de7804eeaa96a146795f8869454810c519e264d5527bb93cd6f666ca15b050a8",
+    "s3": "de7804eeaa96a146795f8869454810c519e264d5527bb93cd6f666ca15b050a8"
   },
   "pageErrors": [],
   "consoleErrors": []

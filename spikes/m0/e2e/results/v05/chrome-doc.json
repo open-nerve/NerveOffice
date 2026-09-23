@@ -7,7 +7,7 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-23T18:34:05.591Z",
+  "timestamp": "2026-09-23T20:30:37.836Z",
   "unitIds": [
     "m0-doc-all",
     "m0-doc-all"
@@ -20,17 +20,103 @@
   },
   "resourcesA": {
     "unknown": [],
+    "duplicates": [],
+    "invalid": [],
     "missing": [],
     "emptied": [],
     "changed": []
   },
   "resourcesB": {
     "unknown": [],
+    "duplicates": [],
+    "invalid": [],
     "missing": [],
     "emptied": [],
     "changed": []
   },
   "internalLinksResolveInCopy": true,
+  "diffOutsideEdit": {
+    "A": [],
+    "B": []
+  },
+  "docBodyUnchangedExceptEdit": true,
+  "semantics": {
+    "original": {
+      "textLength": 230,
+      "namedStyles": {
+        "2": 1,
+        "3": 1,
+        "4": 1,
+        "5": 1,
+        "6": 1,
+        "7": 1,
+        "8": 1
+      },
+      "lists": {
+        "BULLET_LIST": 2,
+        "ORDER_LIST": 2,
+        "CHECK_LIST": 1,
+        "CHECK_LIST_CHECKED": 1
+      },
+      "tables": 1,
+      "images": {
+        "inline": 1,
+        "floating": 1,
+        "facade": 2
+      },
+      "hyperlinks": 2
+    },
+    "A": {
+      "textLength": 235,
+      "namedStyles": {
+        "2": 1,
+        "3": 1,
+        "4": 1,
+        "5": 1,
+        "6": 1,
+        "7": 1,
+        "8": 1
+      },
+      "lists": {
+        "BULLET_LIST": 2,
+        "ORDER_LIST": 2,
+        "CHECK_LIST": 1,
+        "CHECK_LIST_CHECKED": 1
+      },
+      "tables": 1,
+      "images": {
+        "inline": 1,
+        "floating": 1,
+        "facade": 2
+      },
+      "hyperlinks": 2
+    },
+    "B": {
+      "textLength": 235,
+      "namedStyles": {
+        "2": 1,
+        "3": 1,
+        "4": 1,
+        "5": 1,
+        "6": 1,
+        "7": 1,
+        "8": 1
+      },
+      "lists": {
+        "BULLET_LIST": 2,
+        "ORDER_LIST": 2,
+        "CHECK_LIST": 1,
+        "CHECK_LIST_CHECKED": 1
+      },
+      "tables": 1,
+      "images": {
+        "inline": 1,
+        "floating": 1,
+        "facade": 2
+      },
+      "hyperlinks": 2
+    }
+  },
   "internalLinks": [],
   "errors": {
     "A": [],

@@ -7,7 +7,7 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T18:34:27.128Z",
+  "timestamp": "2026-09-23T20:39:38.354Z",
   "threw": true,
   "message": "[UniverInstanceService]: cannot create a unit with the same unit id: m0-sheet-all."
 }

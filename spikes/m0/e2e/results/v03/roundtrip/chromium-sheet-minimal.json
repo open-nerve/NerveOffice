@@ -7,7 +7,7 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T18:10:49.698Z",
+  "timestamp": "2026-09-23T20:41:05.195Z",
   "resourceHooks": [
     {
       "name": "DOC_DRAWING_PLUGIN",
@@ -103,6 +103,62 @@
       ]
     }
   ],
+  "declaredResources": [
+    "SHEET_AuthzIoMockService_PLUGIN",
+    "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+    "SHEET_DATA_VALIDATION_PLUGIN",
+    "SHEET_DEFINED_NAME_PLUGIN",
+    "SHEET_DRAWING_PLUGIN",
+    "SHEET_FILTER_PLUGIN",
+    "SHEET_NOTE_PLUGIN",
+    "SHEET_RANGE_PROTECTION_PLUGIN",
+    "SHEET_RANGE_THEME_MODEL_PLUGIN",
+    "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+    "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN"
+  ],
+  "semantics": {
+    "afterFirstOpen": {
+      "sheets": [
+        {
+          "name": "工作表1",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        }
+      ],
+      "definedNames": 0,
+      "formulas": 0,
+      "richTextCells": 0,
+      "cellImages": 0,
+      "hyperlinks": 0
+    },
+    "afterReopen": {
+      "sheets": [
+        {
+          "name": "工作表1",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        }
+      ],
+      "definedNames": 0,
+      "formulas": 0,
+      "richTextCells": 0,
+      "cellImages": 0,
+      "hyperlinks": 0
+    },
+    "expected": null
+  },
   "stable12": true,
   "stable12Diff": [],
   "stable12EmptyEquivalent": [
@@ -208,17 +264,41 @@
       }
     ]
   },
+  "baseline": {
+    "realDiff": [
+      "added $.appVersion",
+      "added $.resources",
+      "added $.sheets.sheet-1.columnData",
+      "added $.sheets.sheet-1.columnHeader",
+      "added $.sheets.sheet-1.defaultColumnWidth",
+      "added $.sheets.sheet-1.defaultRowHeight",
+      "added $.sheets.sheet-1.freeze",
+      "added $.sheets.sheet-1.hidden",
+      "added $.sheets.sheet-1.mergeData",
+      "added $.sheets.sheet-1.rightToLeft",
+      "added $.sheets.sheet-1.rowData",
+      "added $.sheets.sheet-1.rowHeader",
+      "added $.sheets.sheet-1.scrollLeft",
+      "added $.sheets.sheet-1.scrollTop",
+      "added $.sheets.sheet-1.showGridlines",
+      "added $.sheets.sheet-1.tabColor",
+      "added $.sheets.sheet-1.zoomRatio"
+    ],
+    "resourcesChanged": []
+  },
   "resources": {
     "unknown": [],
+    "duplicates": [],
+    "invalid": [],
     "missing": [],
     "emptied": [],
     "changed": []
   },
   "hashes": {
-    "s0": "efa192ad553df1bcf654b3e34d68a6d337b04271ef87440e96cd4b394366d78e",
-    "s1": "fd3d4b16de51627e73c8f2f5c64f7010749f54c27ff0063f3d936c13712bfaa8",
-    "s2": "86f17d9ccbe315dff5b9f7c73bead56257fe1ccf587f05eeb7bdcc59a3808b86",
-    "s3": "86f17d9ccbe315dff5b9f7c73bead56257fe1ccf587f05eeb7bdcc59a3808b86"
+    "s0": "7333e41a44c8a06eedd50d61e69acfeb8e4de8577d0da34c29c4a0ea62e412ba",
+    "s1": "a97c6e5916f6572dd2e16e24d631d4a2ccccbe715e440d31007f48f933ab0492",
+    "s2": "34c5a994263889b247a22057cc9fe9ca9e58ba6a670013456824f1d8d3ad999f",
+    "s3": "34c5a994263889b247a22057cc9fe9ca9e58ba6a670013456824f1d8d3ad999f"
   },
   "pageErrors": [],
   "consoleErrors": []

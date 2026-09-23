@@ -1,0 +1,14 @@
+{
+  "check": "V03-worker",
+  "sample": "doc/doc-table",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T20:45:36.319Z",
+  "sameAsPlain": true,
+  "diff": [],
+  "workerStarted": 1
+}

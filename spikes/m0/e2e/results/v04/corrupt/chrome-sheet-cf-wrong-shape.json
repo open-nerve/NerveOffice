@@ -6,38 +6,35 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-23T18:29:06.924Z",
+  "timestamp": "2026-09-23T20:28:32.277Z",
   "case": {
     "kind": "sheet",
     "sample": "sheet-cf",
     "resource": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
-    "mode": "wrong-shape"
+    "mode": "wrong-shape",
+    "expect": "garbage"
   },
   "afterLoad": "{\"unexpected\":[\"e\"]}",
-  "serverCheckAgainstPrevious": {
-    "comparison": {
-      "unknown": [],
-      "missing": [],
-      "emptied": [],
-      "changed": [
-        "SHEET_CONDITIONAL_FORMATTING_PLUGIN"
-      ]
-    },
-    "serverRejects": false,
-    "openCheckFails": false
+  "comparison": {
+    "unknown": [],
+    "duplicates": [],
+    "invalid": [],
+    "missing": [],
+    "emptied": [],
+    "changed": [
+      "SHEET_CONDITIONAL_FORMATTING_PLUGIN"
+    ]
   },
-  "openCheckAgainstLoaded": {
-    "comparison": {
-      "unknown": [],
-      "missing": [],
-      "emptied": [],
-      "changed": [
-        "SHEET_CONDITIONAL_FORMATTING_PLUGIN"
-      ]
-    },
-    "serverRejects": false,
-    "openCheckFails": false
-  },
+  "serverRejects": false,
+  "openCheckFails": false,
+  "loadErrorCapture": [
+    {
+      "name": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+      "kind": "load-threw",
+      "unitId": "m0-sheet-cf",
+      "message": "TypeError: t[n] is not iterable"
+    }
+  ],
   "pageErrors": [
     "Cannot read properties of undefined (reading 'map')",
     "Cannot read properties of undefined (reading 'type')",

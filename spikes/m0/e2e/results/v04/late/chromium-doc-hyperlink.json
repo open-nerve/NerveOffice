@@ -6,21 +6,34 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T18:26:27.041Z",
+  "timestamp": "2026-09-23T20:20:17.322Z",
   "case": {
     "kind": "doc",
     "group": "hyperlink",
-    "sample": "doc-hyperlink",
-    "resource": "DOC_HYPER_LINK_PLUGIN"
+    "sample": "doc-hyperlink"
   },
   "comparison": {
     "unknown": [],
+    "duplicates": [],
+    "invalid": [],
     "missing": [],
     "emptied": [],
     "changed": []
   },
   "serverRejects": false,
   "openCheckFails": false,
+  "semantics": {
+    "textLength": 20,
+    "namedStyles": {},
+    "lists": {},
+    "tables": 0,
+    "images": {
+      "inline": 0,
+      "floating": 0,
+      "facade": 0
+    },
+    "hyperlinks": 2
+  },
   "pageErrors": [],
   "consoleErrors": []
 }

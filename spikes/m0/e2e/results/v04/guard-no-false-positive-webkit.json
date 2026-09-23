@@ -1,0 +1,16 @@
+{
+  "check": "V04-guard-no-false-positive",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T20:38:35.964Z",
+  "results": {
+    "sheet/sheet-all": [],
+    "doc/doc-all": [],
+    "sheet/minimal": [],
+    "doc/minimal": []
+  }
+}

@@ -7,7 +7,7 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T18:18:43.875Z",
+  "timestamp": "2026-09-23T20:50:50.996Z",
   "resourceHooks": [
     {
       "name": "DOC_DRAWING_PLUGIN",
@@ -103,6 +103,114 @@
       ]
     }
   ],
+  "declaredResources": [
+    "SHEET_AuthzIoMockService_PLUGIN",
+    "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+    "SHEET_DATA_VALIDATION_PLUGIN",
+    "SHEET_DEFINED_NAME_PLUGIN",
+    "SHEET_DRAWING_PLUGIN",
+    "SHEET_FILTER_PLUGIN",
+    "SHEET_NOTE_PLUGIN",
+    "SHEET_RANGE_PROTECTION_PLUGIN",
+    "SHEET_RANGE_THEME_MODEL_PLUGIN",
+    "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+    "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN"
+  ],
+  "semantics": {
+    "afterFirstOpen": {
+      "sheets": [
+        {
+          "name": "数据",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        },
+        {
+          "name": "整表保护",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        }
+      ],
+      "definedNames": 0,
+      "formulas": 0,
+      "richTextCells": 0,
+      "cellImages": 0,
+      "hyperlinks": 0
+    },
+    "afterReopen": {
+      "sheets": [
+        {
+          "name": "数据",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        },
+        {
+          "name": "整表保护",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        }
+      ],
+      "definedNames": 0,
+      "formulas": 0,
+      "richTextCells": 0,
+      "cellImages": 0,
+      "hyperlinks": 0
+    },
+    "expected": {
+      "sheets": [
+        {
+          "name": "数据",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        },
+        {
+          "name": "整表保护",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        }
+      ],
+      "definedNames": 0,
+      "formulas": 0,
+      "richTextCells": 0,
+      "cellImages": 0,
+      "hyperlinks": 0
+    }
+  },
   "stable12": true,
   "stable12Diff": [],
   "stable12EmptyEquivalent": [],
@@ -115,17 +223,23 @@
     "emptyEquivalent": 3,
     "entries": []
   },
+  "baseline": {
+    "realDiff": [],
+    "resourcesChanged": []
+  },
   "resources": {
     "unknown": [],
+    "duplicates": [],
+    "invalid": [],
     "missing": [],
     "emptied": [],
     "changed": []
   },
   "hashes": {
-    "s0": "583b52efd390f9cc71748c8c4a77f5e494427af83dc7f4b6e19dd154940f7816",
-    "s1": "61e30ec86df429a154d83b220ba8a68aa4ee15fda3d28262c684ee7371893648",
-    "s2": "61e30ec86df429a154d83b220ba8a68aa4ee15fda3d28262c684ee7371893648",
-    "s3": "61e30ec86df429a154d83b220ba8a68aa4ee15fda3d28262c684ee7371893648"
+    "s0": "e18f9f1a669db62993853729f92652aa61b320cd9a119ba47842f8cab26c94f2",
+    "s1": "6f21e746114e9539f79382b43ed0a8d77616efe8f5dbb213f2c74696738d49e2",
+    "s2": "6f21e746114e9539f79382b43ed0a8d77616efe8f5dbb213f2c74696738d49e2",
+    "s3": "6f21e746114e9539f79382b43ed0a8d77616efe8f5dbb213f2c74696738d49e2"
   },
   "pageErrors": [],
   "consoleErrors": []

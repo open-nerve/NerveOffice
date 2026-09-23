@@ -6,21 +6,42 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T18:31:56.737Z",
+  "timestamp": "2026-09-23T20:38:52.186Z",
   "case": {
     "kind": "sheet",
     "group": "cf",
-    "sample": "sheet-cf",
-    "resource": "SHEET_CONDITIONAL_FORMATTING_PLUGIN"
+    "sample": "sheet-cf"
   },
   "comparison": {
     "unknown": [],
+    "duplicates": [],
+    "invalid": [],
     "missing": [],
     "emptied": [],
     "changed": []
   },
   "serverRejects": false,
   "openCheckFails": false,
+  "semantics": {
+    "sheets": [
+      {
+        "name": "数据",
+        "hidden": false,
+        "merges": 0,
+        "frozen": "0x0",
+        "conditionalFormats": 6,
+        "dataValidations": 0,
+        "filter": null,
+        "notes": 0,
+        "floatingImages": 0
+      }
+    ],
+    "definedNames": 0,
+    "formulas": 0,
+    "richTextCells": 0,
+    "cellImages": 0,
+    "hyperlinks": 0
+  },
   "pageErrors": [],
   "consoleErrors": []
 }

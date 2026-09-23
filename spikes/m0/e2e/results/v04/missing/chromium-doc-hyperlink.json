@@ -6,21 +6,17 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T18:25:01.333Z",
+  "timestamp": "2026-09-23T20:18:00.832Z",
   "case": {
     "kind": "doc",
     "group": "hyperlink",
     "sample": "doc-hyperlink",
     "resource": "DOC_HYPER_LINK_PLUGIN"
   },
-  "hooksWithoutGroup": [
-    "DOC_DRAWING_PLUGIN",
-    "DOC_NOTE_PLUGIN",
-    "DOC_OBJECT_PERMISSION_PLUGIN",
-    "DOC_WORD_STYLES_PLUGIN"
-  ],
   "comparison": {
     "unknown": [],
+    "duplicates": [],
+    "invalid": [],
     "missing": [
       "DOC_HYPER_LINK_PLUGIN"
     ],
@@ -30,8 +26,14 @@
   "serverRejects": true,
   "openCheckFails": true,
   "inline": {
-    "bodyDrawings": 0,
-    "bodyHyperlinks": 2
+    "before": {
+      "bodyDrawings": 0,
+      "bodyHyperlinks": 2
+    },
+    "after": {
+      "bodyDrawings": 0,
+      "bodyHyperlinks": 2
+    }
   },
   "pageErrors": [],
   "consoleErrors": []

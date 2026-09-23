@@ -1,0 +1,14 @@
+{
+  "check": "V03-worker",
+  "sample": "doc/doc-drawing",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T20:45:43.592Z",
+  "sameAsPlain": true,
+  "diff": [],
+  "workerStarted": 1
+}

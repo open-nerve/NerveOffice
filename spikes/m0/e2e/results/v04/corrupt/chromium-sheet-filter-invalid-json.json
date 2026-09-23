@@ -6,38 +6,34 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T18:25:38.422Z",
+  "timestamp": "2026-09-23T20:18:56.007Z",
   "case": {
     "kind": "sheet",
     "sample": "sheet-filter",
     "resource": "SHEET_FILTER_PLUGIN",
-    "mode": "invalid-json"
+    "mode": "invalid-json",
+    "expect": "emptied"
   },
   "afterLoad": "{}",
-  "serverCheckAgainstPrevious": {
-    "comparison": {
-      "unknown": [],
-      "missing": [],
-      "emptied": [
-        "SHEET_FILTER_PLUGIN"
-      ],
-      "changed": []
-    },
-    "serverRejects": false,
-    "openCheckFails": true
+  "comparison": {
+    "unknown": [],
+    "duplicates": [],
+    "invalid": [],
+    "missing": [],
+    "emptied": [
+      "SHEET_FILTER_PLUGIN"
+    ],
+    "changed": []
   },
-  "openCheckAgainstLoaded": {
-    "comparison": {
-      "unknown": [],
-      "missing": [],
-      "emptied": [
-        "SHEET_FILTER_PLUGIN"
-      ],
-      "changed": []
-    },
-    "serverRejects": false,
-    "openCheckFails": true
-  },
+  "serverRejects": false,
+  "openCheckFails": true,
+  "loadErrorCapture": [
+    {
+      "name": "SHEET_FILTER_PLUGIN",
+      "kind": "parse-threw",
+      "message": "SyntaxError: Unterminated string in JSON at position 95 (line 1 column 96)"
+    }
+  ],
   "pageErrors": [],
   "consoleErrors": [
     "Load Workbook{m0-sheet-filter} Resources{SHEET_FILTER_PLUGIN} Data Error."

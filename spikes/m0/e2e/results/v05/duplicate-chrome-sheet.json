@@ -7,7 +7,7 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-23T18:33:51.997Z",
+  "timestamp": "2026-09-23T20:30:12.977Z",
   "threw": true,
   "message": "[UniverInstanceService]: cannot create a unit with the same unit id: m0-sheet-all."
 }

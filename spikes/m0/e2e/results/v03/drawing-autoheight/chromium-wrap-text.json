@@ -1,0 +1,56 @@
+{
+  "check": "DEF-002",
+  "case": "wrap-text",
+  "trigger": true,
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T20:11:26.200Z",
+  "afterInsert": {
+    "width": 120,
+    "height": 80,
+    "modelSize": "120x80",
+    "toAnchor": {
+      "row": 5,
+      "rowOffset": 8,
+      "column": 3,
+      "columnOffset": 32
+    }
+  },
+  "afterTrigger": {
+    "width": 120,
+    "height": 80,
+    "modelSize": "120x80",
+    "toAnchor": {
+      "row": 5,
+      "rowOffset": 8,
+      "column": 3,
+      "columnOffset": 32
+    }
+  },
+  "afterSwitch": {
+    "width": 120,
+    "height": 186,
+    "modelSize": "120x186",
+    "toAnchor": {
+      "row": 5,
+      "rowOffset": 8,
+      "column": 3,
+      "columnOffset": 32
+    }
+  },
+  "afterReopen": {
+    "width": 120,
+    "height": 186,
+    "modelSize": "120x186",
+    "toAnchor": {
+      "row": 5,
+      "rowOffset": 8,
+      "column": 3,
+      "columnOffset": 32
+    }
+  }
+}

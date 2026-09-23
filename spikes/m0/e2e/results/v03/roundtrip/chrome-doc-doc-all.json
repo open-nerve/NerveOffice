@@ -7,7 +7,7 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-23T18:16:58.503Z",
+  "timestamp": "2026-09-23T20:49:04.511Z",
   "resourceHooks": [
     {
       "name": "DOC_DRAWING_PLUGIN",
@@ -40,6 +40,90 @@
       ]
     }
   ],
+  "declaredResources": [
+    "DOC_DRAWING_PLUGIN",
+    "DOC_HYPER_LINK_PLUGIN",
+    "DOC_NOTE_PLUGIN",
+    "DOC_OBJECT_PERMISSION_PLUGIN",
+    "DOC_WORD_STYLES_PLUGIN"
+  ],
+  "semantics": {
+    "afterFirstOpen": {
+      "textLength": 230,
+      "namedStyles": {
+        "2": 1,
+        "3": 1,
+        "4": 1,
+        "5": 1,
+        "6": 1,
+        "7": 1,
+        "8": 1
+      },
+      "lists": {
+        "BULLET_LIST": 2,
+        "ORDER_LIST": 2,
+        "CHECK_LIST": 1,
+        "CHECK_LIST_CHECKED": 1
+      },
+      "tables": 1,
+      "images": {
+        "inline": 1,
+        "floating": 1,
+        "facade": 2
+      },
+      "hyperlinks": 2
+    },
+    "afterReopen": {
+      "textLength": 230,
+      "namedStyles": {
+        "2": 1,
+        "3": 1,
+        "4": 1,
+        "5": 1,
+        "6": 1,
+        "7": 1,
+        "8": 1
+      },
+      "lists": {
+        "BULLET_LIST": 2,
+        "ORDER_LIST": 2,
+        "CHECK_LIST": 1,
+        "CHECK_LIST_CHECKED": 1
+      },
+      "tables": 1,
+      "images": {
+        "inline": 1,
+        "floating": 1,
+        "facade": 2
+      },
+      "hyperlinks": 2
+    },
+    "expected": {
+      "namedStyles": {
+        "2": 1,
+        "3": 1,
+        "4": 1,
+        "5": 1,
+        "6": 1,
+        "7": 1,
+        "8": 1
+      },
+      "lists": {
+        "BULLET_LIST": 2,
+        "ORDER_LIST": 2,
+        "CHECK_LIST": 1,
+        "CHECK_LIST_CHECKED": 1
+      },
+      "tables": 1,
+      "images": {
+        "inline": 1,
+        "floating": 1,
+        "facade": 2
+      },
+      "hyperlinks": 2,
+      "textLength": 230
+    }
+  },
   "stable12": true,
   "stable12Diff": [],
   "stable12EmptyEquivalent": [],
@@ -52,17 +136,23 @@
     "emptyEquivalent": 0,
     "entries": []
   },
+  "baseline": {
+    "realDiff": [],
+    "resourcesChanged": []
+  },
   "resources": {
     "unknown": [],
+    "duplicates": [],
+    "invalid": [],
     "missing": [],
     "emptied": [],
     "changed": []
   },
   "hashes": {
-    "s0": "c2e37d619d1ee1a6632dd374b5a1e70103dd7f04d081fbcebada756fb3f713cc",
-    "s1": "c2e37d619d1ee1a6632dd374b5a1e70103dd7f04d081fbcebada756fb3f713cc",
-    "s2": "c2e37d619d1ee1a6632dd374b5a1e70103dd7f04d081fbcebada756fb3f713cc",
-    "s3": "c2e37d619d1ee1a6632dd374b5a1e70103dd7f04d081fbcebada756fb3f713cc"
+    "s0": "c0233662f09f513a6cae327fb57667b064e26258341a128436e0937677c607b1",
+    "s1": "c0233662f09f513a6cae327fb57667b064e26258341a128436e0937677c607b1",
+    "s2": "c0233662f09f513a6cae327fb57667b064e26258341a128436e0937677c607b1",
+    "s3": "c0233662f09f513a6cae327fb57667b064e26258341a128436e0937677c607b1"
   },
   "pageErrors": [],
   "consoleErrors": []

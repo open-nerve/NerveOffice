@@ -7,7 +7,7 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T18:13:01.476Z",
+  "timestamp": "2026-09-23T20:43:17.068Z",
   "resourceHooks": [
     {
       "name": "DOC_DRAWING_PLUGIN",
@@ -40,6 +40,66 @@
       ]
     }
   ],
+  "declaredResources": [
+    "DOC_DRAWING_PLUGIN",
+    "DOC_HYPER_LINK_PLUGIN",
+    "DOC_NOTE_PLUGIN",
+    "DOC_OBJECT_PERMISSION_PLUGIN",
+    "DOC_WORD_STYLES_PLUGIN"
+  ],
+  "semantics": {
+    "afterFirstOpen": {
+      "textLength": 54,
+      "namedStyles": {},
+      "lists": {
+        "BULLET_LIST": 2,
+        "ORDER_LIST": 2,
+        "CHECK_LIST": 1,
+        "CHECK_LIST_CHECKED": 1
+      },
+      "tables": 0,
+      "images": {
+        "inline": 0,
+        "floating": 0,
+        "facade": 0
+      },
+      "hyperlinks": 0
+    },
+    "afterReopen": {
+      "textLength": 54,
+      "namedStyles": {},
+      "lists": {
+        "BULLET_LIST": 2,
+        "ORDER_LIST": 2,
+        "CHECK_LIST": 1,
+        "CHECK_LIST_CHECKED": 1
+      },
+      "tables": 0,
+      "images": {
+        "inline": 0,
+        "floating": 0,
+        "facade": 0
+      },
+      "hyperlinks": 0
+    },
+    "expected": {
+      "namedStyles": {},
+      "lists": {
+        "BULLET_LIST": 2,
+        "ORDER_LIST": 2,
+        "CHECK_LIST": 1,
+        "CHECK_LIST_CHECKED": 1
+      },
+      "tables": 0,
+      "images": {
+        "inline": 0,
+        "floating": 0,
+        "facade": 0
+      },
+      "hyperlinks": 0,
+      "textLength": 54
+    }
+  },
   "stable12": true,
   "stable12Diff": [],
   "stable12EmptyEquivalent": [],
@@ -52,17 +112,23 @@
     "emptyEquivalent": 0,
     "entries": []
   },
+  "baseline": {
+    "realDiff": [],
+    "resourcesChanged": []
+  },
   "resources": {
     "unknown": [],
+    "duplicates": [],
+    "invalid": [],
     "missing": [],
     "emptied": [],
     "changed": []
   },
   "hashes": {
-    "s0": "ffed8e4312227bfbab006c48e45661f6a4e440ade8e9d0879c170bca8687b85f",
-    "s1": "ffed8e4312227bfbab006c48e45661f6a4e440ade8e9d0879c170bca8687b85f",
-    "s2": "ffed8e4312227bfbab006c48e45661f6a4e440ade8e9d0879c170bca8687b85f",
-    "s3": "ffed8e4312227bfbab006c48e45661f6a4e440ade8e9d0879c170bca8687b85f"
+    "s0": "c450f87acde2740727ec71924f93671857c4edd3a12312d2cc68701a97c686ee",
+    "s1": "c450f87acde2740727ec71924f93671857c4edd3a12312d2cc68701a97c686ee",
+    "s2": "c450f87acde2740727ec71924f93671857c4edd3a12312d2cc68701a97c686ee",
+    "s3": "c450f87acde2740727ec71924f93671857c4edd3a12312d2cc68701a97c686ee"
   },
   "pageErrors": [],
   "consoleErrors": []

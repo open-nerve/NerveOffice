@@ -1,0 +1,16 @@
+{
+  "check": "V04-guard-no-false-positive",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T20:19:43.374Z",
+  "results": {
+    "sheet/sheet-all": [],
+    "doc/doc-all": [],
+    "sheet/minimal": [],
+    "doc/minimal": []
+  }
+}

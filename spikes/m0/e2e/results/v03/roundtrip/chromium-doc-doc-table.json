@@ -7,7 +7,7 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T18:13:23.186Z",
+  "timestamp": "2026-09-23T20:43:38.772Z",
   "resourceHooks": [
     {
       "name": "DOC_DRAWING_PLUGIN",
@@ -40,6 +40,51 @@
       ]
     }
   ],
+  "declaredResources": [
+    "DOC_DRAWING_PLUGIN",
+    "DOC_HYPER_LINK_PLUGIN",
+    "DOC_NOTE_PLUGIN",
+    "DOC_OBJECT_PERMISSION_PLUGIN",
+    "DOC_WORD_STYLES_PLUGIN"
+  ],
+  "semantics": {
+    "afterFirstOpen": {
+      "textLength": 52,
+      "namedStyles": {},
+      "lists": {},
+      "tables": 1,
+      "images": {
+        "inline": 0,
+        "floating": 0,
+        "facade": 0
+      },
+      "hyperlinks": 0
+    },
+    "afterReopen": {
+      "textLength": 52,
+      "namedStyles": {},
+      "lists": {},
+      "tables": 1,
+      "images": {
+        "inline": 0,
+        "floating": 0,
+        "facade": 0
+      },
+      "hyperlinks": 0
+    },
+    "expected": {
+      "namedStyles": {},
+      "lists": {},
+      "tables": 1,
+      "images": {
+        "inline": 0,
+        "floating": 0,
+        "facade": 0
+      },
+      "hyperlinks": 0,
+      "textLength": 52
+    }
+  },
   "stable12": true,
   "stable12Diff": [],
   "stable12EmptyEquivalent": [],
@@ -52,17 +97,23 @@
     "emptyEquivalent": 0,
     "entries": []
   },
+  "baseline": {
+    "realDiff": [],
+    "resourcesChanged": []
+  },
   "resources": {
     "unknown": [],
+    "duplicates": [],
+    "invalid": [],
     "missing": [],
     "emptied": [],
     "changed": []
   },
   "hashes": {
-    "s0": "fdf2d02be78d7ab2379a93a7eb1e0469b091a745c1f83fd017d31ece22307b1e",
-    "s1": "fdf2d02be78d7ab2379a93a7eb1e0469b091a745c1f83fd017d31ece22307b1e",
-    "s2": "fdf2d02be78d7ab2379a93a7eb1e0469b091a745c1f83fd017d31ece22307b1e",
-    "s3": "fdf2d02be78d7ab2379a93a7eb1e0469b091a745c1f83fd017d31ece22307b1e"
+    "s0": "8d35ec7f9861ece761010eb5137c6a1bd145344093228800a932aa6fb8443c41",
+    "s1": "8d35ec7f9861ece761010eb5137c6a1bd145344093228800a932aa6fb8443c41",
+    "s2": "8d35ec7f9861ece761010eb5137c6a1bd145344093228800a932aa6fb8443c41",
+    "s3": "8d35ec7f9861ece761010eb5137c6a1bd145344093228800a932aa6fb8443c41"
   },
   "pageErrors": [],
   "consoleErrors": []

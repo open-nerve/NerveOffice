@@ -6,9 +6,10 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T18:20:15.333Z",
+  "timestamp": "2026-09-23T20:52:24.109Z",
   "protectedCellA1AfterTyping": "尝试修改",
   "unprotectedCellD10AfterTyping": "可以修改",
+  "currentUser": "Owner_dbDo8RFL",
   "sheets": [
     {
       "name": "数据",
@@ -18,5 +19,6 @@
       "name": "整表保护",
       "isProtected": true
     }
-  ]
+  ],
+  "screenshot": "protection-webkit.png"
 }

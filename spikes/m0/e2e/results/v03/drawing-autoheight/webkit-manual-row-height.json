@@ -1,0 +1,56 @@
+{
+  "check": "DEF-002",
+  "case": "manual-row-height",
+  "trigger": false,
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T20:32:31.030Z",
+  "afterInsert": {
+    "width": 120,
+    "height": 80,
+    "modelSize": "120x80",
+    "toAnchor": {
+      "row": 5,
+      "rowOffset": 8,
+      "column": 3,
+      "columnOffset": 32
+    }
+  },
+  "afterTrigger": {
+    "width": 120,
+    "height": 80,
+    "modelSize": "120x80",
+    "toAnchor": {
+      "column": 3,
+      "columnOffset": 32,
+      "row": 3,
+      "rowOffset": 56
+    }
+  },
+  "afterSwitch": {
+    "width": 120,
+    "height": 80,
+    "modelSize": "120x80",
+    "toAnchor": {
+      "column": 3,
+      "columnOffset": 32,
+      "row": 3,
+      "rowOffset": 56
+    }
+  },
+  "afterReopen": {
+    "width": 120,
+    "height": 80,
+    "modelSize": "120x80",
+    "toAnchor": {
+      "column": 3,
+      "columnOffset": 32,
+      "row": 3,
+      "rowOffset": 56
+    }
+  }
+}

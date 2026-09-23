@@ -6,9 +6,10 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-23T18:17:03.604Z",
+  "timestamp": "2026-09-23T20:49:10.909Z",
   "protectedCellA1AfterTyping": "尝试修改",
   "unprotectedCellD10AfterTyping": "可以修改",
+  "currentUser": "Owner_R451_cPh",
   "sheets": [
     {
       "name": "数据",
@@ -18,5 +19,6 @@
       "name": "整表保护",
       "isProtected": true
     }
-  ]
+  ],
+  "screenshot": "protection-chrome.png"
 }

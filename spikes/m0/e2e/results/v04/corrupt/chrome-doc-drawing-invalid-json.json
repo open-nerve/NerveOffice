@@ -6,38 +6,34 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-23T18:29:14.280Z",
+  "timestamp": "2026-09-23T20:28:43.203Z",
   "case": {
     "kind": "doc",
     "sample": "doc-drawing",
     "resource": "DOC_DRAWING_PLUGIN",
-    "mode": "invalid-json"
+    "mode": "invalid-json",
+    "expect": "emptied"
   },
   "afterLoad": "{\"data\":{},\"order\":[]}",
-  "serverCheckAgainstPrevious": {
-    "comparison": {
-      "unknown": [],
-      "missing": [],
-      "emptied": [
-        "DOC_DRAWING_PLUGIN"
-      ],
-      "changed": []
-    },
-    "serverRejects": false,
-    "openCheckFails": true
+  "comparison": {
+    "unknown": [],
+    "duplicates": [],
+    "invalid": [],
+    "missing": [],
+    "emptied": [
+      "DOC_DRAWING_PLUGIN"
+    ],
+    "changed": []
   },
-  "openCheckAgainstLoaded": {
-    "comparison": {
-      "unknown": [],
-      "missing": [],
-      "emptied": [
-        "DOC_DRAWING_PLUGIN"
-      ],
-      "changed": []
-    },
-    "serverRejects": false,
-    "openCheckFails": true
-  },
+  "serverRejects": false,
+  "openCheckFails": true,
+  "loadErrorCapture": [
+    {
+      "name": "DOC_DRAWING_PLUGIN",
+      "kind": "parse-swallowed",
+      "message": "非空输入（504 字符）被解析为空值"
+    }
+  ],
   "pageErrors": [],
   "consoleErrors": []
 }

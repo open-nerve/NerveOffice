@@ -6,21 +6,42 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-23T18:29:39.650Z",
+  "timestamp": "2026-09-23T20:29:34.208Z",
   "case": {
     "kind": "sheet",
     "group": "note",
-    "sample": "sheet-note",
-    "resource": "SHEET_NOTE_PLUGIN"
+    "sample": "sheet-note"
   },
   "comparison": {
     "unknown": [],
+    "duplicates": [],
+    "invalid": [],
     "missing": [],
     "emptied": [],
     "changed": []
   },
   "serverRejects": false,
   "openCheckFails": false,
+  "semantics": {
+    "sheets": [
+      {
+        "name": "数据",
+        "hidden": false,
+        "merges": 0,
+        "frozen": "0x0",
+        "conditionalFormats": 0,
+        "dataValidations": 0,
+        "filter": null,
+        "notes": 2,
+        "floatingImages": 0
+      }
+    ],
+    "definedNames": 0,
+    "formulas": 0,
+    "richTextCells": 0,
+    "cellImages": 0,
+    "hyperlinks": 0
+  },
   "pageErrors": [],
   "consoleErrors": []
 }

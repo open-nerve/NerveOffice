@@ -7,6 +7,7 @@ import { pageEvents } from '../harness/events';
 import { loadFixture } from '../harness/fixtures';
 import { readPageParams } from '../harness/params';
 import { runSelftest } from '../harness/selftest';
+import { resourceLoadFailures } from '../harness/guarded-resource-manager';
 import { countingWorkerFactory, createWorkerStats } from '../harness/worker-stats';
 
 interface EditorShellProps {
@@ -57,6 +58,7 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
                 data,
                 createWorker: params.worker ? createCountingWorker : undefined,
                 without: params.without,
+                guard: params.guard,
             });
         })();
 
@@ -70,7 +72,7 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
             if (!res.ok) throw new Error(`写回失败：${res.status}`);
         };
 
-        window.__m0 = { kind: profile.kind, ready, events: pageEvents, params: { ...params }, workerStats, persist, builders };
+        window.__m0 = { kind: profile.kind, ready, events: pageEvents, params: { ...params }, workerStats, persist, builders, resourceLoadFailures };
 
         ready.then(
             async (editor) => {

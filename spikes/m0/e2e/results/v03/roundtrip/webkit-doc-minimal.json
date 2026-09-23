@@ -7,7 +7,7 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-23T18:19:05.662Z",
+  "timestamp": "2026-09-23T20:51:12.815Z",
   "resourceHooks": [
     {
       "name": "DOC_DRAWING_PLUGIN",
@@ -40,6 +40,40 @@
       ]
     }
   ],
+  "declaredResources": [
+    "DOC_DRAWING_PLUGIN",
+    "DOC_HYPER_LINK_PLUGIN",
+    "DOC_NOTE_PLUGIN",
+    "DOC_OBJECT_PERMISSION_PLUGIN",
+    "DOC_WORD_STYLES_PLUGIN"
+  ],
+  "semantics": {
+    "afterFirstOpen": {
+      "textLength": 11,
+      "namedStyles": {},
+      "lists": {},
+      "tables": 0,
+      "images": {
+        "inline": 0,
+        "floating": 0,
+        "facade": 0
+      },
+      "hyperlinks": 0
+    },
+    "afterReopen": {
+      "textLength": 11,
+      "namedStyles": {},
+      "lists": {},
+      "tables": 0,
+      "images": {
+        "inline": 0,
+        "floating": 0,
+        "facade": 0
+      },
+      "hyperlinks": 0
+    },
+    "expected": null
+  },
   "stable12": true,
   "stable12Diff": [],
   "stable12EmptyEquivalent": [],
@@ -54,7 +88,7 @@
       {
         "path": "$.body.sectionBreaks[0].sectionId",
         "kind": "added",
-        "after": "\"section_5tyx7E6Nqtdy\""
+        "after": "\"section_Gs5vyRG6T9OC\""
       },
       {
         "path": "$.documentStyle.autoHyphenation",
@@ -173,17 +207,48 @@
       }
     ]
   },
+  "baseline": {
+    "realDiff": [
+      "added $.body.sectionBreaks[0].sectionId",
+      "added $.documentStyle.autoHyphenation",
+      "added $.documentStyle.consecutiveHyphenLimit",
+      "added $.documentStyle.defaultFooterId",
+      "added $.documentStyle.defaultHeaderId",
+      "added $.documentStyle.doNotHyphenateCaps",
+      "added $.documentStyle.evenAndOddHeaders",
+      "added $.documentStyle.evenPageFooterId",
+      "added $.documentStyle.evenPageHeaderId",
+      "added $.documentStyle.firstPageFooterId",
+      "added $.documentStyle.firstPageHeaderId",
+      "added $.documentStyle.marginFooter",
+      "added $.documentStyle.marginHeader",
+      "added $.documentStyle.renderConfig",
+      "added $.documentStyle.useFirstPageHeaderFooter",
+      "added $.drawings",
+      "added $.drawingsOrder",
+      "added $.footers",
+      "added $.headers",
+      "added $.noteSettings",
+      "added $.notes",
+      "added $.resources",
+      "added $.settings",
+      "added $.tableSource"
+    ],
+    "resourcesChanged": []
+  },
   "resources": {
     "unknown": [],
+    "duplicates": [],
+    "invalid": [],
     "missing": [],
     "emptied": [],
     "changed": []
   },
   "hashes": {
-    "s0": "bbb8036b30b0824670b0fd6cff422e55ed26dcf9576f90e5ca61fc5bce22a21d",
-    "s1": "3d36cbca751edbc4377c251c872510ca6acafc93a42973a0c653b23870132686",
-    "s2": "3d36cbca751edbc4377c251c872510ca6acafc93a42973a0c653b23870132686",
-    "s3": "3d36cbca751edbc4377c251c872510ca6acafc93a42973a0c653b23870132686"
+    "s0": "01cc8e9988ea5040dde60dccc9fc89b9844b252ffaa7ace16de61af979e9d884",
+    "s1": "e220c4f350375bc5e03685e6935de6087bee4d712c32b328b1fa6fd54b350dac",
+    "s2": "e220c4f350375bc5e03685e6935de6087bee4d712c32b328b1fa6fd54b350dac",
+    "s3": "e220c4f350375bc5e03685e6935de6087bee4d712c32b328b1fa6fd54b350dac"
   },
   "pageErrors": [],
   "consoleErrors": []
