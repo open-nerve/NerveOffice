@@ -22,7 +22,7 @@ import { UniverSheetsDrawingUIPlugin } from '@univerjs/sheets-drawing-ui';
 import { UniverSheetsFilterPlugin } from '@univerjs/sheets-filter';
 import { UniverSheetsFilterUIPlugin } from '@univerjs/sheets-filter-ui';
 import { UniverSheetsFindReplacePlugin } from '@univerjs/sheets-find-replace';
-import { UniverSheetsFormulaPlugin } from '@univerjs/sheets-formula';
+import { CalculationMode, UniverSheetsFormulaPlugin } from '@univerjs/sheets-formula';
 import { UniverSheetsFormulaUIPlugin } from '@univerjs/sheets-formula-ui';
 import { UniverSheetsHyperLinkPlugin } from '@univerjs/sheets-hyper-link';
 import { UniverSheetsHyperLinkUIPlugin } from '@univerjs/sheets-hyper-link-ui';
@@ -34,6 +34,7 @@ import { UniverSheetsSortPlugin } from '@univerjs/sheets-sort';
 import { UniverSheetsSortUIPlugin } from '@univerjs/sheets-sort-ui';
 import { UniverSheetsUIPlugin } from '@univerjs/sheets-ui';
 import { UniverUIPlugin } from '@univerjs/ui';
+import { sheetUi } from './ui-config';
 
 import DataValidationZhCN from '@univerjs/data-validation/locale/zh-CN';
 import DesignZhCN from '@univerjs/design/locale/zh-CN';
@@ -107,17 +108,22 @@ const groups: PluginGroup[] = [
             'SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN',
         ],
         removable: false,
-        plugins: ({ container, createWorker }) => {
+        plugins: ({ container, createWorker, ui, largeSheetSplit }) => {
             const useWorker = createWorker != null;
             return [
                 [UniverDocsPlugin],
                 [UniverRenderEnginePlugin],
-                [UniverUIPlugin, { container }],
+                [UniverUIPlugin, { container, menu: ui.menu }],
                 [UniverDocsUIPlugin],
                 useWorker ? [UniverRPCMainThreadPlugin, { workerURL: createWorker() }] : null,
                 [UniverFormulaEnginePlugin, { notExecuteFormula: useWorker }],
-                [UniverSheetsPlugin, { notExecuteFormula: useWorker, onlyRegisterFormulaRelatedMutations: false }],
-                [UniverSheetsUIPlugin],
+                [UniverSheetsPlugin, {
+                    notExecuteFormula: useWorker,
+                    onlyRegisterFormulaRelatedMutations: false,
+                    // 关掉拆分：复制大工作表时全部内容同步执行，不再走 syncOnly + 空闲时 onlyLocal 的懒执行（V06）
+                    largeSheetOperation: largeSheetSplit ? undefined : { largeSheetCellCountThreshold: Number.MAX_SAFE_INTEGER },
+                }],
+                [UniverSheetsUIPlugin, { footer: { addSheetButtonConfig: { show: ui.addSheetButton } } }],
             ];
         },
     },
@@ -131,8 +137,11 @@ const groups: PluginGroup[] = [
         id: 'formula',
         resources: [],
         removable: false,
-        plugins: ({ createWorker }) => [
-            [UniverSheetsFormulaPlugin, { notExecuteFormula: createWorker != null }],
+        plugins: ({ createWorker, calcMode }) => [
+            [UniverSheetsFormulaPlugin, {
+                notExecuteFormula: createWorker != null,
+                initialFormulaComputing: calcMode === 'forced' ? CalculationMode.FORCED : undefined,
+            }],
             [UniverSheetsFormulaUIPlugin],
         ],
     },
@@ -200,6 +209,8 @@ export const sheetProfile: EditorProfile = {
     sdkVersion: '1.0.0',
     worker: 'formula',
     groups,
+    ui: sheetUi,
+    changeDetectionExclude: [],
     locale: mergeLocales(
         DesignZhCN,
         UIZhCN,

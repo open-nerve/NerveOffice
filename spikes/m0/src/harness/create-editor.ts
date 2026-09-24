@@ -1,9 +1,13 @@
 import type { IDocumentData, IWorkbookData } from '@univerjs/core';
 import type { EditorProfile } from '../profiles/types';
+import type { UiOptions } from '../profiles/ui-config';
+import type { ChangeDetector } from './change-detector';
 import type { PageEvents } from './events';
+import type { ReadModeHandle } from './read-mode';
 import type { WorkerStats } from './worker-stats';
 
 import { IResourceManagerService, LifecycleService, LifecycleStages, LocaleType, LogLevel, Univer, UserManagerService } from '@univerjs/core';
+import { createChangeDetector } from './change-detector';
 import { GuardedResourceManagerService } from './guarded-resource-manager';
 import { describeDocument } from './semantics';
 import { FUniver } from '@univerjs/core/facade';
@@ -19,6 +23,12 @@ export interface CreateEditorOptions {
     without?: string[];
     /** 启用资源加载错误捕获（V04）。 */
     guard?: boolean;
+    /** 界面配置（P3）：默认取档案的编辑模式配置。 */
+    ui?: UiOptions;
+    /** 大表操作拆分（默认开启，与 SDK 一致）。 */
+    largeSheetSplit?: boolean;
+    /** 打开时的公式计算模式（V07 的重算基准用 forced）。 */
+    calcMode?: 'default' | 'forced';
 }
 
 export interface ResourceHookInfo {
@@ -31,6 +41,12 @@ export interface EditorHandle {
     profileId: string;
     univer: Univer;
     univerAPI: FUniver;
+    /** 文档单元的 id。 */
+    unitId(): string;
+    /** 变更检测原型（P3）：在创建文档单元之前挂上。 */
+    detector: ChangeDetector;
+    /** 销毁 Univer 实例（V09：销毁重建）。 */
+    dispose(): void;
     /** 捕获快照：FWorkbook.save() / FDocument.save()。 */
     save(): IWorkbookData | IDocumentData;
     /** 从开始创建到各生命周期阶段的耗时（毫秒）。 */
@@ -50,6 +66,13 @@ export interface EditorHandle {
 /** 按档案创建 Univer 实例与文档单元，等到生命周期进入 Steady 后返回。 */
 export async function createEditor(options: CreateEditorOptions): Promise<EditorHandle> {
     const { profile, container, data, createWorker, without = [], guard = false } = options;
+    const pluginOptions = {
+        container,
+        createWorker,
+        ui: options.ui ?? profile.ui.edit,
+        largeSheetSplit: options.largeSheetSplit ?? true,
+        calcMode: options.calcMode ?? 'default',
+    };
     const t0 = performance.now();
     const timings: Record<string, number> = {};
 
@@ -61,7 +84,7 @@ export async function createEditor(options: CreateEditorOptions): Promise<Editor
         override: guard ? [[IResourceManagerService, { useClass: GuardedResourceManagerService }]] : [],
     });
 
-    for (const [plugin, config] of resolvePlugins(profile, { container, createWorker }, without)) {
+    for (const [plugin, config] of resolvePlugins(profile, pluginOptions, without)) {
         univer.registerPlugin(plugin, config as never);
     }
 
@@ -77,11 +100,15 @@ export async function createEditor(options: CreateEditorOptions): Promise<Editor
         if (name != null && timings[name] == null) timings[name] = performance.now() - t0;
     });
 
-    if (profile.kind === 'sheet') {
-        univerAPI.createWorkbook(data as Partial<IWorkbookData>);
-    } else {
-        univerAPI.createDocument(data as Partial<IDocumentData>);
-    }
+    // 检测器必须先于文档单元挂上，才能看到加载过程中执行的命令
+    const detector = createChangeDetector(univer, {
+        unitId: typeof data.id === 'string' ? data.id : undefined,
+        exclude: profile.changeDetectionExclude,
+    });
+    const unitId = profile.kind === 'sheet'
+        ? univerAPI.createWorkbook(data as Partial<IWorkbookData>).getId()
+        : univerAPI.createDocument(data as Partial<IDocumentData>).getId();
+    detector.setUnitId(unitId);
 
     await lifecycle.onStage(LifecycleStages.Steady);
     sub.unsubscribe();
@@ -109,7 +136,7 @@ export async function createEditor(options: CreateEditorOptions): Promise<Editor
         if (!without.includes(groupId)) throw new Error(`插件组 ${groupId} 已经注册`);
         const group = profile.groups.find((g) => g.id === groupId);
         if (group == null) throw new Error(`没有插件组：${groupId}`);
-        for (const entry of group.plugins({ container, createWorker })) {
+        for (const entry of group.plugins(pluginOptions)) {
             if (entry != null) univer.registerPlugin(entry[0], entry[1] as never);
         }
     };
@@ -119,6 +146,12 @@ export async function createEditor(options: CreateEditorOptions): Promise<Editor
         profileId: profile.id,
         univer,
         univerAPI,
+        unitId: () => unitId,
+        detector,
+        dispose: () => {
+            detector.dispose();
+            univer.dispose();
+        },
         save,
         timings,
         resourceHooks,
@@ -143,6 +176,10 @@ export interface M0Window {
     resourceLoadFailures?: import('./guarded-resource-manager').ResourceLoadFailure[];
     ready: Promise<EditorHandle>;
     editor?: EditorHandle;
+    /** 阅读模式（mode=read 时）。 */
+    readMode?: ReadModeHandle;
+    /** 销毁当前实例并按指定模式从文档存储重新创建（V09 的"销毁重建"）。 */
+    remount?: (opts: { mode: 'edit' | 'read'; doc: string; ro?: string }) => Promise<{ ms: number }>;
     events: PageEvents;
     params: Record<string, unknown>;
     workerStats: WorkerStats;

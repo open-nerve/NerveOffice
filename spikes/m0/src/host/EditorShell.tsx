@@ -3,6 +3,7 @@ import type { EditorProfile } from '../profiles/types';
 
 import { useEffect, useRef, useState } from 'react';
 import { createEditor } from '../harness/create-editor';
+import { enterReadMode, READ_STRATEGIES } from '../harness/read-mode';
 import { pageEvents } from '../harness/events';
 import { loadFixture } from '../harness/fixtures';
 import { readPageParams } from '../harness/params';
@@ -46,21 +47,38 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
         const workerStats = createWorkerStats();
         const createCountingWorker = countingWorkerFactory(createWorker, workerStats);
 
-        const ready = (async (): Promise<EditorHandle> => {
-            if (params.mode === 'read') {
-                throw new Error('阅读模式在 P3 实现');
-            }
-            const data = params.doc != null ? await loadStoredDocument(params.doc) : await loadFixture(profile.kind, params.sample);
-            if (params.unit != null) data.id = params.unit;
-            return createEditor({
+        const open = async (mode: 'edit' | 'read', data: Record<string, unknown>, ro: string): Promise<EditorHandle> => {
+            if (mode === 'read' && !READ_STRATEGIES.includes(ro as never)) throw new Error(`没有这种阅读模式方案：${ro}`);
+            const editor = await createEditor({
                 profile,
                 container,
                 data,
                 createWorker: params.worker ? createCountingWorker : undefined,
                 without: params.without,
                 guard: params.guard,
+                ui: profile.ui[mode],
+                largeSheetSplit: params.split,
+                calcMode: params.calc,
             });
+            window.__m0!.readMode = mode === 'read' ? await enterReadMode(editor, ro as never) : undefined;
+            return editor;
+        };
+
+        const ready = (async (): Promise<EditorHandle> => {
+            const data = params.doc != null ? await loadStoredDocument(params.doc) : await loadFixture(profile.kind, params.sample);
+            if (params.unit != null) data.id = params.unit;
+            return open(params.mode, data, params.ro);
         })();
+
+        // 销毁当前实例，按指定模式从文档存储重新创建（V09 的"销毁重建"）
+        const remount = async (opts: { mode: 'edit' | 'read'; doc: string; ro?: string }): Promise<{ ms: number }> => {
+            const t0 = performance.now();
+            window.__m0!.editor?.dispose();
+            window.__m0!.editor = undefined;
+            const editor = await open(opts.mode, await loadStoredDocument(opts.doc), opts.ro ?? params.ro);
+            window.__m0!.editor = editor;
+            return { ms: performance.now() - t0 };
+        };
 
         const persist = async (id: string): Promise<void> => {
             const editor = await ready;
@@ -72,7 +90,7 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
             if (!res.ok) throw new Error(`写回失败：${res.status}`);
         };
 
-        window.__m0 = { kind: profile.kind, ready, events: pageEvents, params: { ...params }, workerStats, persist, builders, resourceLoadFailures };
+        window.__m0 = { kind: profile.kind, ready, events: pageEvents, params: { ...params }, workerStats, persist, remount, builders, resourceLoadFailures };
 
         ready.then(
             async (editor) => {
@@ -97,7 +115,7 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
                 <strong>{profile.id}</strong>
                 <span>{params.doc != null ? `文档：${params.doc}` : `样本：${params.sample}`}</span>
                 {params.without.length > 0 && <span>去掉：{params.without.join('、')}</span>}
-                <span>模式：{params.mode}</span>
+                <span>模式：{params.mode}{params.mode === 'read' ? `（${params.ro}）` : ''}</span>
                 <span>Worker：{params.worker ? '开' : '关'}</span>
                 <span data-testid="m0-status">{status}</span>
                 <span>{message}</span>
