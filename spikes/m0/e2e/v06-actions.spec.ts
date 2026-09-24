@@ -110,6 +110,12 @@ const SHEET: Action[] = [
         pre: "ws.setRowCount(2000); ws.getRange('M1:M1500').setValues(Array.from({ length: 1500 }, (_, i) => ['行' + i]));",
         run: "ws.getRange('M1:M1500').setFontSize(28);",
     },
+    {
+        // 2 万行：空闲时的自动行高持续约 1 秒，用来检验"排除自动行高"（00 号计划书 §7.3）会不会让捕获早于迟到的行高变化
+        id: 'lazy-autoheight-20k', kind: 'sheet', expect: 'change', method: 'F',
+        pre: "ws.setRowCount(20100); ws.getRange('N1:N20000').setValues(Array.from({ length: 20000 }, (_, i) => ['行' + i]));",
+        run: "ws.getRange('N1:N20000').setFontSize(28);",
+    },
     { id: 'freeze', kind: 'sheet', expect: 'change', method: 'F', run: 'ws.setFrozenRows(3);' },
     { id: 'add-sheet', kind: 'sheet', expect: 'change', method: 'F', run: "wb.insertSheet('新表');" },
     { id: 'delete-sheet', kind: 'sheet', expect: 'change', method: 'F', run: "wb.deleteSheet(wb.getSheetByName('汇总'));" },
@@ -270,6 +276,16 @@ for (const a of [...SHEET, ...DOC]) {
             verdict = changed ? '只改视图的动作改变了内容' : detected ? '误报' : late ? '迟到的内容变化' : '通过';
         }
 
+        // 若按 00 号计划书 §7.3 排除自动行高：捕获发生在最后一次其他检测之后 1 秒，此后到达的行高变化不会再被检测到
+        const AUTO_HEIGHT = 'sheet.mutation.set-worksheet-row-auto-height';
+        const timeline = during.mutations.map((r) => ({ dt: Math.round(r.t - tAction), id: r.id, verdict: r.verdict }));
+        const autoHeight = timeline.filter((x) => x.id === AUTO_HEIGHT);
+        const others = timeline.filter((x) => x.verdict === 'detected' && x.id !== AUTO_HEIGHT);
+        const planRule = autoHeight.length === 0 || others.length === 0 ? null : (() => {
+            const captureAt = Math.max(...others.map((x) => x.dt)) + 1000;
+            return { captureAtMs: captureAt, autoHeightMutations: autoHeight.length, lastAutoHeightMs: Math.max(...autoHeight.map((x) => x.dt)), missed: autoHeight.filter((x) => x.dt > captureAt).length };
+        })();
+
         await writeResult(`v06/actions/${testInfo.project.name}-${a.kind}-${a.id}.json`, {
             check: 'V06-actions',
             action: a.id,
@@ -282,8 +298,9 @@ for (const a of [...SHEET, ...DOC]) {
             quiet,
             during: brief(during),
             after: brief(after),
-            // 检测时间线（相对动作开始，毫秒）：用来判断"排除自动行高"会不会让捕获早于迟到的行高变化
-            timeline: during.mutations.map((r) => ({ dt: Math.round(r.t - tAction), id: r.id, verdict: r.verdict })),
+            // 检测时间线（相对动作开始，毫秒）与按 §7.3 规则的推演
+            timeline: timeline.slice(0, 100),
+            planRule,
             diff: diff01.slice(0, 30),
             diffCount: diff01.length,
             lateDiff: diff12.slice(0, 30),

@@ -28,37 +28,35 @@ const CONFIGS = [
     { id: 'split-off-worker', split: false, worker: true },
 ];
 
-for (const c of CONFIGS) {
-    test(`V06 大表复制：${c.id}`, async ({ page, request }, testInfo) => {
+// perf-50k：5 万单元格（数据表）；big-5m：约 23 万单元格（明细）
+const SAMPLES = [
+    { builder: 'perf-50k', sheet: '数据表' },
+    { builder: 'big-5m', sheet: '明细' },
+];
+
+for (const sample of SAMPLES) for (const c of CONFIGS) {
+    test(`V06 大表复制：${sample.builder}-${c.id}`, async ({ page, request }, testInfo) => {
         test.setTimeout(240_000);
-        const id = await ensureGenerated(page, request, 'sheet', 'perf-50k');
+        const id = await ensureGenerated(page, request, 'sheet', sample.builder);
         await page.goto(`/sheet.html?doc=${id}${c.split ? '' : '&split=0'}${c.worker ? '&worker=1' : ''}`);
         await waitForEditor(page);
         await waitQuiet(page);
         const s0 = await snapshotText(page);
         const m0 = await detectorMark(page);
 
-        // 复制并测量同步部分的耗时，以及随后空闲执行期间的最长阻塞
-        const copy = await page.evaluate(async () => {
+        // 复制：只测同步部分的耗时；事件循环延迟探针一直开到 S2，用来测懒执行期间的最长阻塞。
+        // 之后按平台的时机捕获：最后一次检测之后静默 1 秒（不额外等待懒执行）。
+        const copy = await page.evaluate((sheet) => {
+            const w = window as unknown as { __probe?: { stop(): { maxGap: number } } };
             const wb = window.__m0!.editor!.univerAPI.getActiveWorkbook()!;
-            let maxGap = 0;
-            let last = performance.now();
-            let running = true;
-            const tick = () => {
-                const now = performance.now();
-                maxGap = Math.max(maxGap, now - last);
-                last = now;
-                if (running) setTimeout(tick, 0);
-            };
             const t0 = performance.now();
-            const copied = wb.duplicateSheet(wb.getSheetByName('数据表')!);
+            const copied = wb.duplicateSheet(wb.getSheetByName(sheet)!);
             const syncMs = performance.now() - t0;
-            last = performance.now();
-            setTimeout(tick, 0);
-            await new Promise((r) => setTimeout(r, 3000));
-            running = false;
-            return { syncMs, idleMaxGapMs: maxGap, name: copied.getSheetName() };
-        });
+            // 立即捕获：对应"释放编辑权、标签页转入后台时立即上传"（00 号计划书 §7.2）
+            const immediate = JSON.stringify(window.__m0!.editor!.save());
+            w.__probe = window.__m0!.perf!.probeEventLoopLag();
+            return { syncMs, t0, name: copied.getSheetName(), immediate };
+        }, sample.sheet);
         const quiet = await waitQuiet(page);
         const s1 = await snapshotText(page);
         const m1 = await detectorMark(page);
@@ -66,35 +64,48 @@ for (const c of CONFIGS) {
         await page.waitForTimeout(5000);
         const s2 = await snapshotText(page);
         const after = await detectorState(page, m1);
+        const idleMaxGapMs = await page.evaluate(() => (window as unknown as { __probe: { stop(): { maxGap: number } } }).__probe.stop().maxGap);
+        const rel = (t: number | null) => (t == null ? null : Math.round(t - copy.t0));
+        const localDone = rel(during.localMutations.lastT);
+        const localLast = rel(after.localMutations.lastT ?? during.localMutations.lastT);
+        const capturedAt = Math.round(quiet.waitedMs);
 
-        const source = cellCount(s0, '数据表');
+        const source = cellCount(s0, sample.sheet);
+        const copiedImmediately = cellCount(copy.immediate, copy.name);
         const copiedAtS1 = cellCount(s1, copy.name);
         const copiedAtS2 = cellCount(s2, copy.name);
         const lateDiff = contentDiff(s1, s2);
         // 复制品中第一个行合计公式（J2）的结果应当与原表一致
-        const formulaOk = cellValue(s2, copy.name, 1, 9) === cellValue(s2, '数据表', 1, 9);
+        const formulaCol = sample.builder === 'perf-50k' ? 9 : 19;
+        const formulaRow = sample.builder === 'perf-50k' ? 1 : 10;
+        const formulaOk = cellValue(s2, copy.name, formulaRow, formulaCol) === cellValue(s2, sample.sheet, formulaRow, formulaCol);
 
         // 删除大工作表：检测与撤销栈
         const m2 = await detectorMark(page);
-        const removal = await page.evaluate(() => {
+        const removal = await page.evaluate((sheet) => {
             const editor = window.__m0!.editor!;
             const wb = editor.univerAPI.getActiveWorkbook()!;
             const undoBefore = editor.undoStatus();
-            const ok = wb.deleteSheet(wb.getSheetByName('数据表')!);
+            const ok = wb.deleteSheet(wb.getSheetByName(sheet)!);
             return { ok, undoBefore };
-        });
+        }, sample.sheet);
         await waitQuiet(page);
         const removalState = await detectorState(page, m2);
         const undoAfterRemove = await page.evaluate(() => window.__m0!.editor!.undoStatus());
 
         const result = {
             check: 'V06-large-copy',
+            sample: sample.builder,
             config: c,
             browser: browserInfo(page, testInfo),
             timestamp: new Date().toISOString(),
-            copy,
+            copy: { syncMs: copy.syncMs, name: copy.name, idleMaxGapMs },
             quiet,
+            // 本地 mutation（懒执行与公式结果，均为 onlyLocal）：捕获前、全部的最后一条相对复制开始的时间
+            localMutations: { beforeS1: during.localMutations.count, afterS1: after.localMutations.count, lastBeforeS1Ms: localDone, lastMs: localLast },
+            capturedAfterMs: capturedAt,
             sourceCells: source,
+            copiedCellsImmediately: copiedImmediately,
             copiedCellsAtS1: copiedAtS1,
             copiedCellsAtS2: copiedAtS2,
             during: brief(during),
@@ -104,7 +115,7 @@ for (const c of CONFIGS) {
             formulaInCopyMatches: formulaOk,
             removal: { ...removal, ...brief(removalState), undoAfterRemove },
         };
-        await writeResult(`v06/large-copy/${testInfo.project.name}-${c.id}.json`, result);
+        await writeResult(`v06/large-copy/${testInfo.project.name}-${sample.builder}-${c.id}.json`, result);
 
         // 断言按"平台需要的行为"写：捕获时复制已完整；没有未被检测到的迟到变化
         expect.soft(result.during.detections.length, '复制被检测到').toBeGreaterThan(0);

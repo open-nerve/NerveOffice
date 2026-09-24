@@ -36,6 +36,8 @@ export interface ChangeDetectorState {
     mutations: ClassifiedRecord[];
     /** 只经协同钩子送出的 syncOnly mutation（onCommandExecuted 收不到）。 */
     syncOnly: CommandRecord[];
+    /** onlyLocal 的 mutation（公式结果、懒执行等）：只统计条数与最后一条的时间。 */
+    localMutations: { count: number; lastT: number | null };
     lastDetectionAt: number | null;
 }
 
@@ -49,6 +51,12 @@ export interface ChangeDetector {
     classify(record: CommandRecord): Verdict;
     /** 最近一次"检测到修改"的时间（performance.now()），没有则为 null。 */
     lastDetectionAt(): number | null;
+    /**
+     * 最近一次"活动"的时间：检测到的修改，或者公式结果写回（带 applyFormulaCalculationResult 的 mutation）。
+     * 捕获前的静默窗口按它计算：Worker 模式下各工作表的公式结果逐条到达，等待接口在第一条到达后就返回（V07）。
+     * 公式结果写回只延长已有的等待，本身不算"有修改"。
+     */
+    lastActivityAt(): number | null;
     dispose(): void;
 }
 
@@ -110,10 +118,18 @@ export function createChangeDetector(univer: Univer, init: { unitId?: string; ex
             for (let i = records.length - 1; i >= 0; i--) if (classify(records[i]) === 'detected') return records[i].t;
             return null;
         },
+        lastActivityAt() {
+            for (let i = records.length - 1; i >= 0; i--) {
+                const r = records[i];
+                if (classify(r) === 'detected' || (r.kind === 'mutation' && r.options.includes('applyFormulaCalculationResult'))) return r.t;
+            }
+            return null;
+        },
         state(since = 0) {
             const slice = records.slice(since).map((r) => ({ ...r, verdict: classify(r) }));
             const detections = slice.filter((r) => r.verdict === 'detected');
             const firstT = records[since]?.t ?? Number.POSITIVE_INFINITY;
+            const local = slice.filter((r) => r.kind === 'mutation' && r.options.includes('onlyLocal'));
             return {
                 unitId,
                 exclude: [...exclude],
@@ -121,6 +137,7 @@ export function createChangeDetector(univer: Univer, init: { unitId?: string; ex
                 detections,
                 mutations: slice.filter((r) => r.kind === 'mutation' && !r.options.includes('onlyLocal')),
                 syncOnly: syncOnly.filter((r) => r.t >= firstT),
+                localMutations: { count: local.length, lastT: local.length > 0 ? local[local.length - 1].t : null },
                 lastDetectionAt: detections.length > 0 ? detections[detections.length - 1].t : null,
             };
         },

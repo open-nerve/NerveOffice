@@ -49,8 +49,8 @@ export interface QuietResult {
 }
 
 /**
- * 等待编辑落定：表格先等公式结果写回，再等到距最后一次"检测到修改"至少 quietMs。
- * 对应平台管道的"修改停止 1 秒后捕获"（00 号计划书 §7.2）。
+ * 等待编辑落定（P3 建议的捕获时机）：表格先等公式结果写回，再等到距最后一次"活动"至少 quietMs。
+ * 活动包括检测到的修改与公式结果写回（见 ChangeDetector.lastActivityAt），对应平台管道的"修改停止 1 秒后捕获"（00 号计划书 §7.2）。
  */
 export async function waitQuiet(page: Page, quietMs = 1000, maxMs = 15_000): Promise<QuietResult> {
     return page.evaluate(async ({ quietMs, maxMs }) => {
@@ -66,7 +66,7 @@ export async function waitQuiet(page: Page, quietMs = 1000, maxMs = 15_000): Pro
             }
         }
         while (performance.now() - t0 < maxMs) {
-            const last = editor.detector.lastDetectionAt() ?? 0;
+            const last = editor.detector.lastActivityAt() ?? 0;
             if (performance.now() - Math.max(last, t0) >= quietMs) break;
             await new Promise((r) => setTimeout(r, 100));
         }
