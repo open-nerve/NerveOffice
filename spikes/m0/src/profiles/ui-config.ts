@@ -6,6 +6,11 @@ export interface UiOptions {
     menu: MenuConfig;
     /** 表格底栏的"新增工作表"按钮（它不是菜单项，只能用 UniverSheetsUIPlugin 的 footer 配置隐藏）。 */
     addSheetButton: boolean;
+    /** 工具栏与右键菜单（UniverUIPlugin 的 toolbar、contextMenu）：阅读模式整体关掉，而不是逐项隐藏。 */
+    toolbar: boolean;
+    contextMenu: boolean;
+    /** 表格底栏的菜单（网格线开关等，UniverSheetsUIPlugin 的 footer.menus）：网格线会写进快照，阅读模式关掉。 */
+    footerMenus: boolean;
 }
 
 const hide = (ids: readonly string[]): MenuConfig => Object.fromEntries(ids.map((id) => [id, { hidden: true }]));
@@ -41,12 +46,12 @@ export const SHEET_READ_MODE_MENUS = [
 ] as const;
 
 export const sheetUi = {
-    edit: { menu: hide([...SHEET_PROTECTION_MENUS, ...SHEET_UNSUPPORTED_MENUS]), addSheetButton: true },
-    read: { menu: hide([...SHEET_PROTECTION_MENUS, ...SHEET_UNSUPPORTED_MENUS, ...SHEET_READ_MODE_MENUS]), addSheetButton: false },
+    edit: { menu: hide([...SHEET_PROTECTION_MENUS, ...SHEET_UNSUPPORTED_MENUS]), addSheetButton: true, toolbar: true, contextMenu: true, footerMenus: true },
+    read: { menu: hide([...SHEET_PROTECTION_MENUS, ...SHEET_UNSUPPORTED_MENUS, ...SHEET_READ_MODE_MENUS]), addSheetButton: false, toolbar: false, contextMenu: false, footerMenus: false },
 } satisfies Record<'edit' | 'read', UiOptions>;
 
 /** 文字文档：开源版没有保护相关的菜单；不支持功能的入口由 P5 按能力矩阵补充。 */
 export const docUi = {
-    edit: { menu: {}, addSheetButton: false },
-    read: { menu: {}, addSheetButton: false },
+    edit: { menu: {}, addSheetButton: false, toolbar: true, contextMenu: true, footerMenus: false },
+    read: { menu: {}, addSheetButton: false, toolbar: false, contextMenu: false, footerMenus: false },
 } satisfies Record<'edit' | 'read', UiOptions>;

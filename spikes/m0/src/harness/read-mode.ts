@@ -3,6 +3,7 @@
 //           文字文档 getPermission().setReadOnly()。
 // - points：只在本地设置权限点（IPermissionService，内部 API），不创建任何规则。
 // - firewall：兜底。BeforeCommandExecute 取消所有不带 onlyLocal 的 mutation，单独评估它能挡住哪些入口。
+// - combined：points + firewall（P3 的候选推荐：权限点让界面进入只读状态，防火墙兜住权限检查没有覆盖的入口）。
 import type { IDisposable } from '@univerjs/core';
 import type { EditorHandle } from './create-editor';
 
@@ -10,9 +11,9 @@ import { CommandType, IPermissionService, IUndoRedoService } from '@univerjs/cor
 import { setDocumentPermissionValue } from '@univerjs/docs';
 import { getAllWorksheetPermissionPoint, getAllWorksheetPermissionPointByPointPanel, WorksheetViewPermission } from '@univerjs/sheets';
 
-export type ReadStrategy = 'facade' | 'points' | 'firewall';
+export type ReadStrategy = 'facade' | 'points' | 'firewall' | 'combined';
 
-export const READ_STRATEGIES: readonly ReadStrategy[] = ['facade', 'points', 'firewall'];
+export const READ_STRATEGIES: readonly ReadStrategy[] = ['facade', 'points', 'firewall', 'combined'];
 
 /** @univerjs/protocol 的 UnitAction.Edit（验证工程没有直接依赖 protocol 包）。 */
 const UNIT_ACTION_EDIT = 1;
@@ -97,7 +98,8 @@ export async function enterReadMode(editor: EditorHandle, strategy: ReadStrategy
             const doc = univerAPI.getActiveDocument()!;
             await run(steps, 'document.getPermission().setReadOnly()', () => doc.getPermission().setReadOnly());
         }
-    } else if (strategy === 'points') {
+    }
+    if (strategy === 'points' || strategy === 'combined') {
         if (editor.kind === 'sheet') {
             const wb = univerAPI.getActiveWorkbook()!;
             await run(steps, 'workbook.setEditable(false)', () => wb.setEditable(false));
@@ -113,7 +115,8 @@ export async function enterReadMode(editor: EditorHandle, strategy: ReadStrategy
         } else {
             await run(steps, '文档编辑权限点 = false（本地）', () => setDocumentPermissionValue(permissionService, unitId, unitId, UNIT_ACTION_EDIT as never, false));
         }
-    } else {
+    }
+    if (strategy === 'firewall' || strategy === 'combined') {
         disposables.push(univerAPI.addEvent(univerAPI.Event.BeforeCommandExecute, (e) => {
             if (e.type === CommandType.MUTATION && e.options?.onlyLocal !== true) {
                 e.cancel = true;
@@ -143,7 +146,8 @@ export async function enterReadMode(editor: EditorHandle, strategy: ReadStrategy
             } else {
                 await run(exitSteps, 'document.getPermission().setEditable(true)', () => univerAPI.getActiveDocument()!.getPermission().setEditable(true));
             }
-        } else if (strategy === 'points') {
+        }
+        if (strategy === 'points' || strategy === 'combined') {
             if (editor.kind === 'sheet') {
                 await run(exitSteps, '工作表编辑类权限点 = true（本地）', () => {
                     for (const subUnitId of sheetIds()) {

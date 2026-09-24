@@ -113,7 +113,7 @@ const groups: PluginGroup[] = [
             return [
                 [UniverDocsPlugin],
                 [UniverRenderEnginePlugin],
-                [UniverUIPlugin, { container, menu: ui.menu }],
+                [UniverUIPlugin, { container, menu: ui.menu, toolbar: ui.toolbar, contextMenu: ui.contextMenu }],
                 [UniverDocsUIPlugin],
                 useWorker ? [UniverRPCMainThreadPlugin, { workerURL: createWorker() }] : null,
                 [UniverFormulaEnginePlugin, { notExecuteFormula: useWorker }],
@@ -123,7 +123,7 @@ const groups: PluginGroup[] = [
                     // 关掉拆分：复制大工作表时全部内容同步执行，不再走 syncOnly + 空闲时 onlyLocal 的懒执行（V06）
                     largeSheetOperation: largeSheetSplit ? undefined : { largeSheetCellCountThreshold: Number.MAX_SAFE_INTEGER },
                 }],
-                [UniverSheetsUIPlugin, { footer: { addSheetButtonConfig: { show: ui.addSheetButton } } }],
+                [UniverSheetsUIPlugin, { footer: { menus: ui.footerMenus, addSheetButtonConfig: { show: ui.addSheetButton } } }],
             ];
         },
     },

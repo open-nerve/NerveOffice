@@ -55,7 +55,7 @@ const groups: PluginGroup[] = [
         plugins: ({ container, ui }) => [
             [UniverDocsPlugin],
             [UniverRenderEnginePlugin],
-            [UniverUIPlugin, { container, menu: ui.menu }],
+            [UniverUIPlugin, { container, menu: ui.menu, toolbar: ui.toolbar, contextMenu: ui.contextMenu }],
             [UniverDocsUIPlugin],
             [UniverFormulaEnginePlugin],
         ],

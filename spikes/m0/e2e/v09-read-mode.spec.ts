@@ -11,7 +11,7 @@ import { brief, contentDiff, detectorMark, detectorState, runFacade, snapshotTex
 
 test.use({ baseURL: SERVERS.off });
 
-const STRATEGIES = ['facade', 'points', 'firewall'] as const;
+const STRATEGIES = ['facade', 'points', 'firewall', 'combined'] as const;
 
 type Step = string | ((page: Page) => Promise<void>);
 
@@ -238,6 +238,7 @@ for (const kind of ['sheet', 'doc'] as const) {
             for (const entry of entries) {
                 const s0 = await snapshotText(page);
                 const m0 = await detectorMark(page);
+                const errorsBefore = await page.evaluate(() => window.__m0!.events.errors.length + window.__m0!.events.consoleErrors.length);
                 const error = await step(page, kind, entry.run);
                 await waitQuiet(page);
                 await page.waitForTimeout(300);
@@ -245,8 +246,10 @@ for (const kind of ['sheet', 'doc'] as const) {
                 const state = await detectorState(page, m0);
                 const diff = contentDiff(s0, s1);
                 const canceled = await page.evaluate(() => window.__m0!.readMode!.report.canceled.length);
+                // 拦截时页面上报的错误（未捕获异常与控制台错误），用来评估对体验的影响
+                const pageErrors = await page.evaluate((n) => [...window.__m0!.events.errors, ...window.__m0!.events.consoleErrors].slice(n).map((x) => x.slice(0, 120)), errorsBefore);
                 const verdict = diff.length === 0 ? '拦截' : state.detections.length > 0 ? '未拦截-被检测到' : '未拦截-未检测到';
-                results.push({ entry: entry.id, method: entry.method, verdict, error, detections: brief(state).detections, diff: diff.slice(0, 5), canceledSoFar: canceled });
+                results.push({ entry: entry.id, method: entry.method, verdict, error, pageErrors, detections: brief(state).detections, diff: diff.slice(0, 5), canceledSoFar: canceled });
                 // 模型被改动过：重新加载，下一个入口从干净的状态开始
                 if (diff.length > 0 || state.detections.length > 0) await openRead(page, kind, strategy);
             }
@@ -360,12 +363,19 @@ for (const kind of ['sheet', 'doc'] as const) {
         await page.goto(`/${kind}.html?sample=${sample}`);
         await waitForEditor(page);
         await page.evaluate((docId) => window.__m0!.persist!(docId), id);
-        const toRead = await page.evaluate((docId) => window.__m0!.remount!({ mode: 'read', doc: docId, ro: 'points' }), id);
+        const toRead = await page.evaluate(async (docId) => {
+            const r = await window.__m0!.remount!({ mode: 'read', doc: docId, ro: 'combined' });
+            return { ...r, rendered: window.__m0!.editor!.timings.rendered };
+        }, id);
         const readUndo = await page.evaluate(() => window.__m0!.editor!.undoStatus());
-        const toEdit = await page.evaluate((docId) => window.__m0!.remount!({ mode: 'edit', doc: docId }), id);
+        const toEdit = await page.evaluate(async (docId) => {
+            const r = await window.__m0!.remount!({ mode: 'edit', doc: docId });
+            return { ...r, rendered: window.__m0!.editor!.timings.rendered };
+        }, id);
         const stored = JSON.stringify(await (await request.get(`${SERVERS.off}/api/docs/${id}`)).json());
         const rebuilt = await snapshotText(page);
-        out.remount = { toReadMs: toRead.ms, toEditMs: toEdit.ms, readUndo, leftover: contentDiff(stored, rebuilt).slice(0, 10) };
+        // ms 含 createEditor 等到 Steady（Rendered 之后固定约 3 秒）；用户可见的切换耗时以 rendered 为准
+        out.remount = { toReadMs: toRead.ms, toReadRenderedMs: toRead.rendered, toEditMs: toEdit.ms, toEditRenderedMs: toEdit.rendered, readUndo, leftover: contentDiff(stored, rebuilt).slice(0, 10) };
 
         await writeResult(`v09/switch/${testInfo.project.name}-${kind}.json`, {
             check: 'V09-switch',
@@ -384,7 +394,13 @@ test('V09 入口隐藏：表格', async ({ page }, testInfo) => {
         await page.waitForTimeout(500);
         const items = await page.evaluate(() => window.__m0!.auditMenus!());
         const toolbarCommands = await page.evaluate(() => [...document.querySelectorAll('[data-u-command]')].map((e) => e.getAttribute('data-u-command')));
-        return { items, toolbarCommands };
+        // 右键菜单：在单元格上右键，看菜单中的"选择性粘贴"是否出现
+        const p = await cellCenter(page, 'C3');
+        await page.mouse.click(p.x, p.y, { button: 'right' });
+        await page.waitForTimeout(500);
+        const contextMenuShown = await page.getByText('选择性粘贴').first().isVisible().catch(() => false);
+        await page.keyboard.press('Escape');
+        return { items, toolbarCommands, contextMenuShown };
     };
     const edit = await audit('edit');
     await page.screenshot({ path: `e2e/results/v09/menus/${testInfo.project.name}-sheet-edit.png` });
@@ -403,18 +419,26 @@ test('V09 入口隐藏：表格', async ({ page }, testInfo) => {
             visibleButShouldHide: visible(edit.items, shouldHideEdit),
             foundIds: shouldHideEdit.filter((id) => edit.items.some((i) => i.id === id)),
             toolbarProtectionButton: edit.toolbarCommands.includes('sheet.command.add-range-protection-from-toolbar'),
+            toolbarButtons: edit.toolbarCommands.length,
+            contextMenuShown: edit.contextMenuShown,
         },
         read: {
             visibleButShouldHide: visible(read.items, shouldHideRead),
             foundIds: shouldHideRead.filter((id) => read.items.some((i) => i.id === id)),
-            // 阅读模式下仍然可见、且未禁用的菜单项（供报告逐项说明）
-            enabledItems: read.items.filter((i) => i.hidden !== true && i.disabled !== true).map((i) => i.id),
+            // 阅读模式关掉了工具栏与右键菜单：DOM 中的工具栏按钮数、右键菜单是否出现
+            toolbarButtons: read.toolbarCommands.length,
+            contextMenuShown: read.contextMenuShown,
+            // 服务层仍然登记、且未禁用的菜单项（界面上已不可达，仅供参考）
+            enabledItems: [...new Set(read.items.filter((i) => i.hidden !== true && i.disabled !== true).map((i) => i.id))],
         },
     };
     await writeResult('v09/menus/' + testInfo.project.name + '-sheet.json', result);
     expect.soft(result.edit.visibleButShouldHide, '编辑模式：应隐藏的菜单').toEqual([]);
     expect.soft(result.read.visibleButShouldHide, '阅读模式：应隐藏的菜单').toEqual([]);
     expect.soft(result.edit.toolbarProtectionButton, '工具栏没有保护按钮').toBe(false);
+    expect.soft(result.read.toolbarButtons, '阅读模式没有工具栏按钮').toBe(0);
+    expect.soft(result.read.contextMenuShown, '阅读模式没有右键菜单').toBe(false);
+    expect.soft(result.edit.contextMenuShown, '编辑模式有右键菜单（对照）').toBe(true);
 });
 
 test('V09 真实用户身份', async ({ page }, testInfo) => {
@@ -424,20 +448,27 @@ test('V09 真实用户身份', async ({ page }, testInfo) => {
         await page.goto(`/sheet.html?sample=${sample}`);
         await waitForEditor(page);
         const user = await page.evaluate(() => window.__m0!.editor!.currentUserId());
-        const before = await snapshotText(page);
-        const m0 = await detectorMark(page);
+        // 对照：默认的 Owner_ 身份下，在非冻结区域 K3 键入
+        const typeAt = async (a1: string, text: string) => {
+            const before = await snapshotText(page);
+            const m = await detectorMark(page);
+            await clickCell(page, a1);
+            await page.keyboard.type(text);
+            await page.keyboard.press('Enter');
+            await waitQuiet(page);
+            return { changed: contentDiff(before, await snapshotText(page)).length > 0, detections: brief(await detectorState(page, m)).detections };
+        };
+        const control = await typeAt('K3', '默认身份');
         await page.evaluate(() => window.__m0!.editor!.setCurrentUser({ userID: 'user-reader-1', name: '普通成员' }));
-        await clickCell(page, 'A1');
-        await page.keyboard.type('身份验证');
-        await page.keyboard.press('Enter');
-        await waitQuiet(page);
-        const after = await snapshotText(page);
+        const afterK4 = await typeAt('K4', '真实身份');
+        const afterA1 = await typeAt('A1', '真实身份');
         out.push({
             sample,
             userBefore: user,
             userAfter: await page.evaluate(() => window.__m0!.editor!.currentUserId()),
-            a1Changed: contentDiff(before, after).some((d) => d.path.includes('cellData.0.0')),
-            detections: brief(await detectorState(page, m0)).detections,
+            controlK3: control,
+            realUserK4: afterK4,
+            realUserA1: afterA1,
         });
     }
     await writeResult(`v09/identity/${testInfo.project.name}.json`, {
