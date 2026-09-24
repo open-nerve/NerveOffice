@@ -15,11 +15,15 @@ import { readPageParams } from '../harness/params';
 import { runSelftest } from '../harness/selftest';
 import { resourceLoadFailures } from '../harness/guarded-resource-manager';
 import { countingWorkerFactory, createWorkerStats } from '../harness/worker-stats';
+import { imageEvents } from '../harness/platform-image-io';
+import { IImageIoService } from '@univerjs/core';
+import type { ImageFunctionPolicy } from '../harness/image-function-policy';
 
 interface EditorShellProps {
     profile: EditorProfile;
     defaultSample: string;
-    createWorker: () => Worker;
+    /** 创建 Worker：表格为公式 Worker（P4 起经 name 传入 IMAGE() 的处理），文字文档为排版 Worker。 */
+    createWorker: (options: { imageFunction: ImageFunctionPolicy }) => Worker;
     /** 样本构建器（P2），通过 window.__m0.builders 供验证脚本调用。 */
     builders?: Record<string, SampleBuilder>;
 }
@@ -50,7 +54,7 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
         startedRef.current = true;
 
         const workerStats = createWorkerStats();
-        const createCountingWorker = countingWorkerFactory(createWorker, workerStats);
+        const createCountingWorker = countingWorkerFactory(() => createWorker({ imageFunction: params.imagefn }), workerStats);
 
         const open = async (mode: 'edit' | 'read', data: Record<string, unknown>, ro: string): Promise<EditorHandle> => {
             if (mode === 'read' && !READ_STRATEGIES.includes(ro as never)) throw new Error(`没有这种阅读模式方案：${ro}`);
@@ -66,6 +70,8 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
                 largeSheetSplit: params.split,
                 calcMode: params.calc,
                 formulaIntervalCount: params.interval,
+                imageService: params.img,
+                imageFunction: params.imagefn,
             });
             window.__m0!.readMode = mode === 'read' ? await enterReadMode(editor, ro as never) : undefined;
             return editor;
@@ -110,6 +116,7 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
             auditMenus: audit,
             content,
             waitForCapture: async (options) => waitForCapture(window.__m0!.editor ?? await ready, options),
+            images: { events: imageEvents, io: () => (window.__m0!.editor!).univer.__getInjector().get(IImageIoService) },
         };
 
         ready.then(

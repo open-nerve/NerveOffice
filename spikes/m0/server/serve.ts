@@ -1,4 +1,5 @@
-// 验证用静态服务：提供 dist/，为所有响应加 CSP 头，接收 CSP 违规报告。只监听 127.0.0.1，不进入生产。
+// 验证用静态服务：提供 dist/，为所有响应加 CSP 头，接收 CSP 违规报告；P2 起提供文档存储，P4 起提供图片资源（assets.ts）。
+// 只监听 127.0.0.1，不进入生产。
 import { createReadStream } from 'node:fs';
 import { appendFile, mkdir, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
@@ -6,7 +7,9 @@ import { extname, join, normalize, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { CspMode } from './csp.ts';
 
+import { copyLinks, handleAssets, removeLinks, sessionCookieHeader, updateLinks } from './assets.ts';
 import { cspHeaders } from './csp.ts';
+import { extractImages } from './snapshot-images.ts';
 
 const { values } = parseArgs({
     options: {
@@ -93,6 +96,7 @@ const server = createServer(async (req, res) => {
             res.writeHead(204).end();
             return;
         }
+        if (await handleAssets(req, res, url)) return;
         if (url.pathname === '/__csp-reports') {
             if (req.method === 'DELETE') {
                 reports.length = 0;
@@ -108,13 +112,25 @@ const server = createServer(async (req, res) => {
             const id = docMatch[1];
             if (req.method === 'PUT') {
                 const text = await readBody(req, 64 * 1024 * 1024);
-                JSON.parse(text); // 只接受合法 JSON
+                const snapshot = JSON.parse(text); // 只接受合法 JSON
+                // 保存校验（P4，00 号计划书 §11.3）：validate=1 时拒绝含非平台图片地址的快照
+                if (url.searchParams.get('validate') === '1') {
+                    const { images } = extractImages(snapshot, `http://${req.headers.host}`);
+                    const rejected = images.filter((i) => i.kind !== 'platform');
+                    if (rejected.length > 0) {
+                        res.writeHead(422, { 'Content-Type': 'application/json; charset=utf-8' });
+                        res.end(JSON.stringify({ error: 'non-platform-image', images: rejected.map((i) => ({ ...i, source: i.source.slice(0, 120) })) }));
+                        return;
+                    }
+                }
                 documents.set(id, text);
+                updateLinks(id, text);
                 res.writeHead(204).end();
                 return;
             }
             if (req.method === 'DELETE') {
                 documents.delete(id);
+                removeLinks(id);
                 res.writeHead(204).end();
                 return;
             }
@@ -135,8 +151,9 @@ const server = createServer(async (req, res) => {
                 res.writeHead(400).end();
                 return;
             }
-            // 原样复制：不改 unitId 与工作表 id（00 号计划书 §8.3）
+            // 原样复制：不改 unitId 与工作表 id（00 号计划书 §8.3）；只新增引用关系，不复制图片文件（§8.5）
             documents.set(to, source);
+            copyLinks(copyMatch[1], to);
             res.writeHead(204).end();
             return;
         }
@@ -178,6 +195,8 @@ const server = createServer(async (req, res) => {
             'Cache-Control': 'no-store',
             'X-Content-Type-Options': 'nosniff',
             ...cspHeaders(cspMode, extname(filePath) === '.html'),
+            // 页面响应下发会话 Cookie：图片读取按会话鉴权（P4）
+            ...(extname(filePath) === '.html' ? sessionCookieHeader(req) : {}),
         });
         if (req.method === 'HEAD') {
             res.end();

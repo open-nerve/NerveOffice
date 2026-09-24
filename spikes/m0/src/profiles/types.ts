@@ -17,6 +17,8 @@ export interface ProfileOptions {
     calcMode: 'default' | 'forced';
     /** 公式引擎每执行多少个公式让出一次主线程；缺省用 SDK 的默认值 500（V10 比较让出间隔）。 */
     formulaIntervalCount?: number;
+    /** 图片服务（P4）：platform 时经 UniverDrawingPlugin 的 override 换成平台图片服务。 */
+    imageService?: 'default' | 'platform';
 }
 
 /**

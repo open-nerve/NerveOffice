@@ -35,6 +35,7 @@ import { UniverSheetsSortUIPlugin } from '@univerjs/sheets-sort-ui';
 import { UniverSheetsUIPlugin } from '@univerjs/sheets-ui';
 import { UniverUIPlugin } from '@univerjs/ui';
 import { sheetUi } from './ui-config';
+import { drawingPluginConfig } from './image-service';
 
 import DataValidationZhCN from '@univerjs/data-validation/locale/zh-CN';
 import DesignZhCN from '@univerjs/design/locale/zh-CN';
@@ -150,8 +151,8 @@ const groups: PluginGroup[] = [
         id: 'drawing',
         resources: ['SHEET_DRAWING_PLUGIN'],
         removable: true,
-        plugins: () => [
-            [UniverDrawingPlugin],
+        plugins: ({ imageService }) => [
+            [UniverDrawingPlugin, drawingPluginConfig(imageService)],
             [UniverDocsDrawingPlugin],
             [UniverDrawingUIPlugin],
             [UniverSheetsDrawingPlugin],
