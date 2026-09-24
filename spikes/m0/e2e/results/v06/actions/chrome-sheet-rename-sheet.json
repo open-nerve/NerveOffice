@@ -1,0 +1,59 @@
+{
+  "check": "V06-actions",
+  "action": "rename-sheet",
+  "kind": "sheet",
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T06:32:19.280Z",
+  "quiet": {
+    "waitedMs": 1022.5,
+    "formula": "applied"
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.set-worksheet-name"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.set-worksheet-name",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 21
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 21
+  },
+  "timeline": [
+    {
+      "dt": 5,
+      "id": "sheet.mutation.set-worksheet-name",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.sheets.3EB0bwApYxHAp_aL_pN0v.name",
+      "kind": "changed",
+      "before": "\"汇总\"",
+      "after": "\"汇总二\""
+    }
+  ],
+  "diffCount": 1,
+  "lateDiff": [],
+  "errors": []
+}

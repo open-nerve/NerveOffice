@@ -1,0 +1,73 @@
+{
+  "check": "V06-actions",
+  "action": "bold",
+  "kind": "sheet",
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T06:29:21.464Z",
+  "quiet": {
+    "waitedMs": 1020.7999999523163,
+    "formula": "applied"
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.set-range-values"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.set-range-values",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 21
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 21
+  },
+  "timeline": [
+    {
+      "dt": 3,
+      "id": "sheet.mutation.set-range-values",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.sheets.sheet-1.cellData.1.0.s",
+      "kind": "added",
+      "after": "\"XYmMx8\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.1.1.s",
+      "kind": "added",
+      "after": "\"XYmMx8\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.2.0.s",
+      "kind": "added",
+      "after": "\"XYmMx8\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.2.1.s",
+      "kind": "added",
+      "after": "\"XYmMx8\""
+    }
+  ],
+  "diffCount": 4,
+  "lateDiff": [],
+  "errors": []
+}

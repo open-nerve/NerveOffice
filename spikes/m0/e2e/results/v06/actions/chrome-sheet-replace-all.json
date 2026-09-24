@@ -1,0 +1,71 @@
+{
+  "check": "V06-actions",
+  "action": "replace-all",
+  "kind": "sheet",
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T06:34:42.536Z",
+  "quiet": {
+    "waitedMs": 1031.1000000238419,
+    "formula": "applied"
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.set-range-values"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.set-range-values",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 39
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 39
+  },
+  "timeline": [
+    {
+      "dt": 21,
+      "id": "sheet.mutation.set-range-values",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.sheets.sheet-1.cellData.1.0.v",
+      "kind": "changed",
+      "before": "\"苹果\"",
+      "after": "\"苹果X\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.1.6.v",
+      "kind": "changed",
+      "before": "\"苹果-12\"",
+      "after": "\"苹果X-12\""
+    },
+    {
+      "path": "$.sheets.3EB0bwApYxHAp_aL_pN0v.cellData.1.0.v",
+      "kind": "changed",
+      "before": "\"苹果\"",
+      "after": "\"苹果X\""
+    }
+  ],
+  "diffCount": 3,
+  "lateDiff": [],
+  "errors": []
+}

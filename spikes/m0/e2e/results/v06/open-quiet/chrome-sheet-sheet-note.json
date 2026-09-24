@@ -1,0 +1,36 @@
+{
+  "check": "V06-open-quiet",
+  "sample": "sheet-note",
+  "kind": "sheet",
+  "generated": false,
+  "worker": false,
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T06:42:52.195Z",
+  "bytes": 1410,
+  "timings": {
+    "t0": 269.90000009536743,
+    "ready": 22,
+    "rendered": 419.59999990463257,
+    "steady": 3467.6999999284744
+  },
+  "detections": [],
+  "mutations": [
+    {
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit",
+      "options": [],
+      "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+    }
+  ],
+  "syncOnly": [],
+  "total": 15,
+  "lateDiff": [],
+  "openDiffCount": 0,
+  "openDiff": [],
+  "errors": []
+}

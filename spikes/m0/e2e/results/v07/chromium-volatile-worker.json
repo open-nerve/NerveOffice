@@ -1,0 +1,67 @@
+{
+  "check": "V07",
+  "scenario": "volatile",
+  "worker": true,
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T06:19:30.780Z",
+  "idleWaitMs": 501,
+  "idleCalcSessions": 0,
+  "waitMs": {
+    "noWait": 3.100000023841858,
+    "waited": 13.100000023841858,
+    "platformExtra": 1031.1000000238419,
+    "timeoutAttempt": 23.600000023841858,
+    "recapture": 520,
+    "recapturePlatformExtra": 1026.5
+  },
+  "timeoutOutcome": "applied",
+  "forcedRecalcMs": 503.5,
+  "checks": {
+    "noWait": {
+      "checked": 2,
+      "mismatches": 0,
+      "sample": []
+    },
+    "waited": {
+      "checked": 2,
+      "mismatches": 0,
+      "sample": []
+    },
+    "platform": {
+      "checked": 2,
+      "mismatches": 0,
+      "sample": []
+    },
+    "timedOut": {
+      "checked": 2,
+      "mismatches": 0,
+      "sample": []
+    },
+    "recapture": {
+      "checked": 2,
+      "mismatches": 0,
+      "sample": []
+    },
+    "recapturePlatform": {
+      "checked": 2,
+      "mismatches": 0,
+      "sample": []
+    },
+    "reopened": {
+      "checked": 2,
+      "mismatches": 0,
+      "sample": []
+    },
+    "forced": {
+      "checked": 2,
+      "mismatches": 0,
+      "sample": []
+    }
+  },
+  "detections": 2
+}

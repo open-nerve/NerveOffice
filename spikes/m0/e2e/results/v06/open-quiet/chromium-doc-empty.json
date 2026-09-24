@@ -1,0 +1,145 @@
+{
+  "check": "V06-open-quiet",
+  "sample": "empty",
+  "kind": "doc",
+  "generated": false,
+  "worker": false,
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T06:14:17.086Z",
+  "bytes": 1128,
+  "timings": {
+    "t0": 253.39999997615814,
+    "ready": 28.699999928474426,
+    "rendered": 359.60000002384186,
+    "steady": 3364
+  },
+  "detections": [],
+  "mutations": [],
+  "syncOnly": [],
+  "total": 3,
+  "lateDiff": [],
+  "openDiffCount": 23,
+  "openDiff": [
+    {
+      "path": "$.body.sectionBreaks[0].sectionId",
+      "kind": "added",
+      "after": "\"section_02Jj4-V0Vmeg\""
+    },
+    {
+      "path": "$.documentStyle.autoHyphenation",
+      "kind": "added",
+      "after": "1"
+    },
+    {
+      "path": "$.documentStyle.doNotHyphenateCaps",
+      "kind": "added",
+      "after": "0"
+    },
+    {
+      "path": "$.documentStyle.consecutiveHyphenLimit",
+      "kind": "added",
+      "after": "2"
+    },
+    {
+      "path": "$.documentStyle.defaultHeaderId",
+      "kind": "added",
+      "after": "\"\""
+    },
+    {
+      "path": "$.documentStyle.defaultFooterId",
+      "kind": "added",
+      "after": "\"\""
+    },
+    {
+      "path": "$.documentStyle.evenPageHeaderId",
+      "kind": "added",
+      "after": "\"\""
+    },
+    {
+      "path": "$.documentStyle.evenPageFooterId",
+      "kind": "added",
+      "after": "\"\""
+    },
+    {
+      "path": "$.documentStyle.firstPageHeaderId",
+      "kind": "added",
+      "after": "\"\""
+    },
+    {
+      "path": "$.documentStyle.firstPageFooterId",
+      "kind": "added",
+      "after": "\"\""
+    },
+    {
+      "path": "$.documentStyle.evenAndOddHeaders",
+      "kind": "added",
+      "after": "0"
+    },
+    {
+      "path": "$.documentStyle.useFirstPageHeaderFooter",
+      "kind": "added",
+      "after": "0"
+    },
+    {
+      "path": "$.documentStyle.marginHeader",
+      "kind": "added",
+      "after": "30"
+    },
+    {
+      "path": "$.documentStyle.marginFooter",
+      "kind": "added",
+      "after": "30"
+    },
+    {
+      "path": "$.documentStyle.renderConfig",
+      "kind": "added",
+      "after": "{\"zeroWidthParagraphBreak\":0,\"vertexAngle\":0,\"centerAngle\":0,\"background\":{\"rgb\":\"#ccc\"}}"
+    },
+    {
+      "path": "$.tableSource",
+      "kind": "added",
+      "after": "{}"
+    },
+    {
+      "path": "$.drawings",
+      "kind": "added",
+      "after": "{}"
+    },
+    {
+      "path": "$.drawingsOrder",
+      "kind": "added",
+      "after": "[]"
+    },
+    {
+      "path": "$.headers",
+      "kind": "added",
+      "after": "{}"
+    },
+    {
+      "path": "$.footers",
+      "kind": "added",
+      "after": "{}"
+    },
+    {
+      "path": "$.notes",
+      "kind": "added",
+      "after": "{}"
+    },
+    {
+      "path": "$.noteSettings",
+      "kind": "added",
+      "after": "{}"
+    },
+    {
+      "path": "$.resources",
+      "kind": "added",
+      "after": "[{\"name\":\"DOC_DRAWING_PLUGIN\",\"data\":null},{\"name\":\"DOC_HYPER_LINK_PLUGIN\",\"data\":null},{\"name\":\"DOC_NOTE_PLUGIN\",\"data\":null},{\"name\":\"DOC_OBJECT_PERMISSION..."
+    }
+  ],
+  "errors": []
+}

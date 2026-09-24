@@ -1,0 +1,29 @@
+{
+  "check": "V06-open-quiet",
+  "sample": "doc-text",
+  "kind": "doc",
+  "generated": false,
+  "worker": false,
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T06:45:23.986Z",
+  "bytes": 2535,
+  "timings": {
+    "t0": 261,
+    "ready": 40.199999928474426,
+    "rendered": 372.09999990463257,
+    "steady": 3377.399999976158
+  },
+  "detections": [],
+  "mutations": [],
+  "syncOnly": [],
+  "total": 3,
+  "lateDiff": [],
+  "openDiffCount": 0,
+  "openDiff": [],
+  "errors": []
+}

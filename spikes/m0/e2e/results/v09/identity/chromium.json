@@ -1,0 +1,50 @@
+{
+  "check": "V09-identity",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T06:27:59.743Z",
+  "results": [
+    {
+      "sample": "sheet-all",
+      "userBefore": "Owner_dM_O9ABH",
+      "userAfter": "user-reader-1",
+      "controlK3": {
+        "changed": true,
+        "detections": [
+          "sheet.mutation.set-range-values"
+        ]
+      },
+      "realUserK4": {
+        "changed": false,
+        "detections": []
+      },
+      "realUserA1": {
+        "changed": false,
+        "detections": []
+      }
+    },
+    {
+      "sample": "sheet-protection",
+      "userBefore": "Owner_JpLg9YcN",
+      "userAfter": "user-reader-1",
+      "controlK3": {
+        "changed": true,
+        "detections": [
+          "sheet.mutation.set-range-values"
+        ]
+      },
+      "realUserK4": {
+        "changed": false,
+        "detections": []
+      },
+      "realUserA1": {
+        "changed": false,
+        "detections": []
+      }
+    }
+  ]
+}

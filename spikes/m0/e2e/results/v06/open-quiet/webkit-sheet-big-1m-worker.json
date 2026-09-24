@@ -1,0 +1,36 @@
+{
+  "check": "V06-open-quiet",
+  "sample": "big-1m",
+  "kind": "sheet",
+  "generated": true,
+  "worker": true,
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T07:13:38.389Z",
+  "bytes": 1003495,
+  "timings": {
+    "t0": 172,
+    "ready": 26,
+    "rendered": 476,
+    "steady": 3534
+  },
+  "detections": [],
+  "mutations": [
+    {
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit",
+      "options": [],
+      "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+    }
+  ],
+  "syncOnly": [],
+  "total": 13,
+  "lateDiff": [],
+  "openDiffCount": 0,
+  "openDiff": [],
+  "errors": []
+}

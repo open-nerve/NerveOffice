@@ -1,0 +1,50 @@
+{
+  "check": "V06-actions",
+  "action": "zoom",
+  "kind": "sheet",
+  "method": "F",
+  "expect": "view",
+  "verdict": "通过",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T06:04:55.434Z",
+  "quiet": {
+    "waitedMs": 1033.3999999761581,
+    "formula": "applied"
+  },
+  "during": {
+    "detections": [],
+    "mutations": [
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      }
+    ],
+    "syncOnly": [],
+    "total": 26
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 26
+  },
+  "timeline": [
+    {
+      "dt": 9,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    }
+  ],
+  "planRule": null,
+  "diff": [],
+  "diffCount": 0,
+  "lateDiff": [],
+  "errors": []
+}

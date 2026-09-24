@@ -1,0 +1,29 @@
+{
+  "check": "V06-open-quiet",
+  "sample": "doc-table",
+  "kind": "doc",
+  "generated": false,
+  "worker": false,
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T06:15:09.507Z",
+  "bytes": 4604,
+  "timings": {
+    "t0": 258.1999999284744,
+    "ready": 34,
+    "rendered": 360.10000002384186,
+    "steady": 3368.5
+  },
+  "detections": [],
+  "mutations": [],
+  "syncOnly": [],
+  "total": 3,
+  "lateDiff": [],
+  "openDiffCount": 0,
+  "openDiff": [],
+  "errors": []
+}

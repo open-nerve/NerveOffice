@@ -1,0 +1,91 @@
+{
+  "check": "V09-switch",
+  "kind": "doc",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T07:27:22.599Z",
+  "inPlace": [
+    {
+      "strategy": "facade",
+      "ms": 20,
+      "undoInRead": {
+        "undos": 0,
+        "redos": 0
+      },
+      "exitSteps": [
+        {
+          "step": "document.getPermission().setEditable(true)",
+          "ok": true
+        }
+      ],
+      "detectionsWhileSwitching": [],
+      "leftover": [],
+      "protectionResourcesAfter": [],
+      "editableAfterExit": true
+    },
+    {
+      "strategy": "points",
+      "ms": 15,
+      "undoInRead": {
+        "undos": 0,
+        "redos": 0
+      },
+      "exitSteps": [
+        {
+          "step": "文档编辑权限点 = true（本地）",
+          "ok": true
+        }
+      ],
+      "detectionsWhileSwitching": [],
+      "leftover": [],
+      "protectionResourcesAfter": [],
+      "editableAfterExit": true
+    },
+    {
+      "strategy": "firewall",
+      "ms": 32,
+      "undoInRead": {
+        "undos": 0,
+        "redos": 0
+      },
+      "exitSteps": [],
+      "detectionsWhileSwitching": [],
+      "leftover": [],
+      "protectionResourcesAfter": [],
+      "editableAfterExit": true
+    },
+    {
+      "strategy": "combined",
+      "ms": 14,
+      "undoInRead": {
+        "undos": 0,
+        "redos": 0
+      },
+      "exitSteps": [
+        {
+          "step": "文档编辑权限点 = true（本地）",
+          "ok": true
+        }
+      ],
+      "detectionsWhileSwitching": [],
+      "leftover": [],
+      "protectionResourcesAfter": [],
+      "editableAfterExit": true
+    }
+  ],
+  "remount": {
+    "toReadMs": 3346,
+    "toReadRenderedMs": 332,
+    "toEditMs": 3352,
+    "toEditRenderedMs": 340,
+    "readUndo": {
+      "undos": 0,
+      "redos": 0
+    },
+    "leftover": []
+  }
+}

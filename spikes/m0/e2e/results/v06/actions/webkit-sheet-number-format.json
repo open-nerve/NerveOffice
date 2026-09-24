@@ -1,0 +1,83 @@
+{
+  "check": "V06-actions",
+  "action": "number-format",
+  "kind": "sheet",
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T06:59:34.861Z",
+  "quiet": {
+    "waitedMs": 1003,
+    "formula": "applied"
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.set.numfmt"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.set.numfmt",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 20
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 20
+  },
+  "timeline": [
+    {
+      "dt": 5,
+      "id": "sheet.mutation.set.numfmt",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.styles.xD4PEO",
+      "kind": "added",
+      "after": "{\"n\":{\"pattern\":\"0.0\"}}"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.1.1.s",
+      "kind": "added",
+      "after": "\"xD4PEO\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.2.1.s",
+      "kind": "added",
+      "after": "\"xD4PEO\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.3.1.s",
+      "kind": "added",
+      "after": "\"xD4PEO\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.4.1.s",
+      "kind": "added",
+      "after": "\"xD4PEO\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.5.1.s",
+      "kind": "added",
+      "after": "\"xD4PEO\""
+    }
+  ],
+  "diffCount": 6,
+  "lateDiff": [],
+  "errors": []
+}

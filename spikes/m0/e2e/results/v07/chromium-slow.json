@@ -1,0 +1,93 @@
+{
+  "check": "V07",
+  "scenario": "slow",
+  "worker": false,
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T06:17:11.786Z",
+  "idleWaitMs": 503.10000002384186,
+  "idleCalcSessions": 0,
+  "waitMs": {
+    "noWait": 4.100000023841858,
+    "waited": 518.6000000238419,
+    "platformExtra": 1023.3999999761581,
+    "timeoutAttempt": 2149.399999976158,
+    "recapture": 519.4000000953674,
+    "recapturePlatformExtra": 1012.2000000476837
+  },
+  "timeoutOutcome": "applied",
+  "forcedRecalcMs": 502.6999999284744,
+  "checks": {
+    "noWait": {
+      "checked": 200,
+      "mismatches": 200,
+      "sample": [
+        {
+          "cell": "慢!A1",
+          "expected": 10016042,
+          "actual": 9927165
+        },
+        {
+          "cell": "慢!A2",
+          "expected": 10015711,
+          "actual": 9926834
+        },
+        {
+          "cell": "慢!A3",
+          "expected": 10014845,
+          "actual": 9925968
+        },
+        {
+          "cell": "慢!A4",
+          "expected": 10013435,
+          "actual": 9924547
+        },
+        {
+          "cell": "慢!A5",
+          "expected": 10011938,
+          "actual": 9923050
+        }
+      ]
+    },
+    "waited": {
+      "checked": 200,
+      "mismatches": 0,
+      "sample": []
+    },
+    "platform": {
+      "checked": 200,
+      "mismatches": 0,
+      "sample": []
+    },
+    "timedOut": {
+      "checked": 200,
+      "mismatches": 0,
+      "sample": []
+    },
+    "recapture": {
+      "checked": 200,
+      "mismatches": 0,
+      "sample": []
+    },
+    "recapturePlatform": {
+      "checked": 200,
+      "mismatches": 0,
+      "sample": []
+    },
+    "reopened": {
+      "checked": 200,
+      "mismatches": 0,
+      "sample": []
+    },
+    "forced": {
+      "checked": 200,
+      "mismatches": 0,
+      "sample": []
+    }
+  },
+  "detections": 2
+}

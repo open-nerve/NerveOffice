@@ -1,0 +1,92 @@
+{
+  "check": "V06-actions",
+  "action": "wrap-autoheight",
+  "kind": "sheet",
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T06:00:52.728Z",
+  "quiet": {
+    "waitedMs": 1019.4000000953674,
+    "formula": "applied"
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-worksheet-row-auto-height"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.set-range-values",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-range-values",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 31
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 31
+  },
+  "timeline": [
+    {
+      "dt": 4,
+      "id": "sheet.mutation.set-range-values",
+      "verdict": "detected"
+    },
+    {
+      "dt": 6,
+      "id": "sheet.mutation.set-range-values",
+      "verdict": "detected"
+    },
+    {
+      "dt": 7,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": {
+    "captureAtMs": 1006,
+    "autoHeightMutations": 1,
+    "lastAutoHeightMs": 7,
+    "missed": 0
+  },
+  "diff": [
+    {
+      "path": "$.sheets.sheet-1.cellData.11",
+      "kind": "added",
+      "after": "{\"10\":{\"v\":\"很长的一段文字，用来触发自动换行后的行高自适应；很长的一段文字，很长的一段文字。\",\"t\":1,\"s\":\"gsHuCJ\"}}"
+    },
+    {
+      "path": "$.sheets.sheet-1.rowData.11",
+      "kind": "added",
+      "after": "{\"ah\":130}"
+    }
+  ],
+  "diffCount": 2,
+  "lateDiff": [],
+  "errors": []
+}

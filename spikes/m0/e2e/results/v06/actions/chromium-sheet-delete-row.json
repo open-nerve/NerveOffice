@@ -1,0 +1,166 @@
+{
+  "check": "V06-actions",
+  "action": "delete-row",
+  "kind": "sheet",
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T05:59:57.940Z",
+  "quiet": {
+    "waitedMs": 1033.7000000476837,
+    "formula": "applied"
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.remove-rows",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "formula.mutation.set-defined-name"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.remove-rows",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-range-values",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "sheet.mutation.set-range-values",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "formula.mutation.set-defined-name",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      }
+    ],
+    "syncOnly": [],
+    "total": 50
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 50
+  },
+  "timeline": [
+    {
+      "dt": 7,
+      "id": "sheet.mutation.remove-rows",
+      "verdict": "detected"
+    },
+    {
+      "dt": 11,
+      "id": "sheet.mutation.set-range-values",
+      "verdict": "detected"
+    },
+    {
+      "dt": 13,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 14,
+      "id": "sheet.mutation.set-range-values",
+      "verdict": "detected"
+    },
+    {
+      "dt": 14,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 15,
+      "id": "formula.mutation.set-defined-name",
+      "verdict": "detected"
+    },
+    {
+      "dt": 40,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.sheets.sheet-1.rowCount",
+      "kind": "changed",
+      "before": "200",
+      "after": "199"
+    },
+    {
+      "path": "$.sheets.sheet-1.mergeData[0].startAbsoluteRefType",
+      "kind": "removed",
+      "before": "0"
+    },
+    {
+      "path": "$.sheets.sheet-1.mergeData[0].endAbsoluteRefType",
+      "kind": "removed",
+      "before": "0"
+    },
+    {
+      "path": "$.sheets.sheet-1.mergeData[0].unitId",
+      "kind": "removed",
+      "before": "\"m0-sheet-all\""
+    },
+    {
+      "path": "$.sheets.sheet-1.mergeData[0].sheetId",
+      "kind": "removed",
+      "before": "\"sheet-1\""
+    },
+    {
+      "path": "$.sheets.3EB0bwApYxHAp_aL_pN0v.cellData.0.0.f",
+      "kind": "changed",
+      "before": "\"=SUM('数据'!B2:B6)\"",
+      "after": "\"=SUM(数据!B2:B6)\""
+    },
+    {
+      "path": "$.sheets.3EB0bwApYxHAp_aL_pN0v.cellData.1.0.f",
+      "kind": "changed",
+      "before": "\"='数据'!A2\"",
+      "after": "\"=数据!A2\""
+    },
+    {
+      "path": "$.resources[3].data.xvxcIWa9V5.formulaOrRefString",
+      "kind": "changed",
+      "before": "\"'数据'!$B$2:$B$6\"",
+      "after": "\"数据!$B$2:$B$6\""
+    }
+  ],
+  "diffCount": 8,
+  "lateDiff": [],
+  "errors": []
+}

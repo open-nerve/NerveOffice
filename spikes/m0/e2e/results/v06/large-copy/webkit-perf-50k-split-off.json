@@ -1,0 +1,97 @@
+{
+  "check": "V06-large-copy",
+  "sample": "perf-50k",
+  "config": {
+    "id": "split-off",
+    "split": false,
+    "worker": false
+  },
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T07:08:41.677Z",
+  "copy": {
+    "syncMs": 25,
+    "name": "数据表 （副本）",
+    "idleMaxGapMs": 49
+  },
+  "quiet": {
+    "waitedMs": 1008,
+    "formula": "applied"
+  },
+  "localMutations": {
+    "beforeS1": 12,
+    "afterS1": 0,
+    "lastBeforeS1Ms": 114,
+    "lastMs": 114
+  },
+  "capturedAfterMs": 1008,
+  "sourceCells": 50010,
+  "copiedCellsImmediately": 50010,
+  "copiedCellsAtS1": 50010,
+  "copiedCellsAtS2": 50010,
+  "during": {
+    "detections": [
+      "sheet.mutation.insert-sheet"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.insert-sheet",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "p3-sheet-perf-50k"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      }
+    ],
+    "syncOnly": [],
+    "total": 33
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 33
+  },
+  "lateDiffCount": 0,
+  "lateDiff": [],
+  "formulaInCopyMatches": true,
+  "removal": {
+    "ok": true,
+    "undoBefore": {
+      "undos": 1,
+      "redos": 0
+    },
+    "detections": [
+      "sheet.mutation.remove-sheet",
+      "sheet.mutation.set-range-values"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.remove-sheet",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "p3-sheet-perf-50k"
+      },
+      {
+        "id": "sheet.mutation.set-range-values",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "p3-sheet-perf-50k"
+      }
+    ],
+    "syncOnly": [],
+    "total": 49,
+    "undoAfterRemove": {
+      "undos": 2,
+      "redos": 0
+    }
+  }
+}

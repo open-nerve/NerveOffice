@@ -1,0 +1,59 @@
+{
+  "check": "V06-actions",
+  "action": "hide-sheet",
+  "kind": "sheet",
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T06:02:21.997Z",
+  "quiet": {
+    "waitedMs": 1019.2000000476837,
+    "formula": "applied"
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.set-worksheet-hidden"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.set-worksheet-hidden",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 21
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 21
+  },
+  "timeline": [
+    {
+      "dt": 3,
+      "id": "sheet.mutation.set-worksheet-hidden",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.sheets.3EB0bwApYxHAp_aL_pN0v.hidden",
+      "kind": "changed",
+      "before": "0",
+      "after": "1"
+    }
+  ],
+  "diffCount": 1,
+  "lateDiff": [],
+  "errors": []
+}

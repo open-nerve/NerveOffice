@@ -1,0 +1,97 @@
+{
+  "check": "V09-undo-redo",
+  "kind": "sheet",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T06:24:26.926Z",
+  "results": [
+    {
+      "strategy": "facade",
+      "undoBefore": {
+        "undos": 1,
+        "redos": 0
+      },
+      "undoChanged": false,
+      "redoChanged": false,
+      "canceled": [
+        {
+          "id": "univer.command.undo",
+          "kind": "command"
+        },
+        {
+          "id": "univer.command.redo",
+          "kind": "command"
+        }
+      ]
+    },
+    {
+      "strategy": "points",
+      "undoBefore": {
+        "undos": 1,
+        "redos": 0
+      },
+      "undoChanged": false,
+      "redoChanged": false,
+      "canceled": [
+        {
+          "id": "univer.command.undo",
+          "kind": "command"
+        },
+        {
+          "id": "univer.command.redo",
+          "kind": "command"
+        }
+      ]
+    },
+    {
+      "strategy": "firewall",
+      "undoBefore": {
+        "undos": 1,
+        "redos": 0
+      },
+      "undoChanged": false,
+      "redoChanged": false,
+      "canceled": [
+        {
+          "id": "doc.mutation.rich-text-editing",
+          "kind": "mutation"
+        },
+        {
+          "id": "univer.command.undo",
+          "kind": "command"
+        },
+        {
+          "id": "univer.command.redo",
+          "kind": "command"
+        }
+      ]
+    },
+    {
+      "strategy": "combined",
+      "undoBefore": {
+        "undos": 1,
+        "redos": 0
+      },
+      "undoChanged": false,
+      "redoChanged": false,
+      "canceled": [
+        {
+          "id": "doc.mutation.rich-text-editing",
+          "kind": "mutation"
+        },
+        {
+          "id": "univer.command.undo",
+          "kind": "command"
+        },
+        {
+          "id": "univer.command.redo",
+          "kind": "command"
+        }
+      ]
+    }
+  ]
+}

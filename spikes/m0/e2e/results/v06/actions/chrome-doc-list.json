@@ -1,0 +1,58 @@
+{
+  "check": "V06-actions",
+  "action": "list",
+  "kind": "doc",
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T06:36:33.676Z",
+  "quiet": {
+    "waitedMs": 1018.7999999523163,
+    "formula": "n/a"
+  },
+  "during": {
+    "detections": [
+      "doc.mutation.rich-text-editing"
+    ],
+    "mutations": [
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-doc-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 8
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 8
+  },
+  "timeline": [
+    {
+      "dt": 321,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.body.paragraphs[5].bullet",
+      "kind": "added",
+      "after": "{\"nestingLevel\":0,\"listType\":\"BULLET_LIST\",\"listId\":\"2pF1sT\"}"
+    }
+  ],
+  "diffCount": 1,
+  "lateDiff": [],
+  "errors": []
+}

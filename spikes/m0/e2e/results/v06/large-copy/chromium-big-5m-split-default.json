@@ -1,0 +1,180 @@
+{
+  "check": "V06-large-copy",
+  "sample": "big-5m",
+  "config": {
+    "id": "split-default",
+    "split": true,
+    "worker": false
+  },
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T06:09:06.699Z",
+  "copy": {
+    "syncMs": 29.100000023841858,
+    "name": "明细 （副本）",
+    "idleMaxGapMs": 306.09999990463257
+  },
+  "quiet": {
+    "waitedMs": 1010.7000000476837,
+    "formula": "applied"
+  },
+  "localMutations": {
+    "beforeS1": 99,
+    "afterS1": 0,
+    "lastBeforeS1Ms": 360,
+    "lastMs": 360
+  },
+  "capturedAfterMs": 1011,
+  "sourceCells": 265800,
+  "copiedCellsImmediately": 3000,
+  "copiedCellsAtS1": 265800,
+  "copiedCellsAtS2": 265800,
+  "during": {
+    "detections": [
+      "sheet.mutation.insert-sheet"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.insert-sheet",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "p3-sheet-big-5m"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      }
+    ],
+    "syncOnly": [
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.copy-worksheet-end"
+    ],
+    "total": 210
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 210
+  },
+  "lateDiffCount": 0,
+  "lateDiff": [],
+  "formulaInCopyMatches": true,
+  "removal": {
+    "ok": true,
+    "undoBefore": {
+      "undos": 1,
+      "redos": 0
+    },
+    "detections": [
+      "sheet.mutation.remove-sheet"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.remove-sheet",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "p3-sheet-big-5m"
+      }
+    ],
+    "syncOnly": [],
+    "total": 218,
+    "undoAfterRemove": {
+      "undos": 0,
+      "redos": 0
+    }
+  }
+}

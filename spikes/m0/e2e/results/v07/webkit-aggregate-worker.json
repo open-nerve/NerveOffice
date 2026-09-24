@@ -1,0 +1,104 @@
+{
+  "check": "V07",
+  "scenario": "aggregate",
+  "worker": true,
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T07:18:10.956Z",
+  "idleWaitMs": 501,
+  "idleCalcSessions": 0,
+  "waitMs": {
+    "noWait": 6,
+    "waited": 857,
+    "platformExtra": 1005,
+    "timeoutAttempt": 53,
+    "recapture": 752,
+    "recapturePlatformExtra": 1005
+  },
+  "timeoutOutcome": "timeout",
+  "forcedRecalcMs": 501,
+  "checks": {
+    "noWait": {
+      "checked": 4,
+      "mismatches": 4,
+      "sample": [
+        {
+          "cell": "聚合!C1",
+          "expected": 10027153,
+          "actual": 9927165
+        },
+        {
+          "cell": "聚合!C2",
+          "expected": 501.35765,
+          "actual": 496.35825
+        },
+        {
+          "cell": "聚合!C3",
+          "expected": 9959,
+          "actual": 9958
+        },
+        {
+          "cell": "聚合!C4",
+          "expected": 99999,
+          "actual": 1000
+        }
+      ]
+    },
+    "waited": {
+      "checked": 4,
+      "mismatches": 0,
+      "sample": []
+    },
+    "platform": {
+      "checked": 4,
+      "mismatches": 0,
+      "sample": []
+    },
+    "timedOut": {
+      "checked": 4,
+      "mismatches": 3,
+      "sample": [
+        {
+          "cell": "聚合!C1",
+          "expected": 9939499,
+          "actual": 10027153
+        },
+        {
+          "cell": "聚合!C2",
+          "expected": 496.97495,
+          "actual": 501.35765
+        },
+        {
+          "cell": "聚合!C4",
+          "expected": 12345,
+          "actual": 99999
+        }
+      ]
+    },
+    "recapture": {
+      "checked": 4,
+      "mismatches": 0,
+      "sample": []
+    },
+    "recapturePlatform": {
+      "checked": 4,
+      "mismatches": 0,
+      "sample": []
+    },
+    "reopened": {
+      "checked": 4,
+      "mismatches": 0,
+      "sample": []
+    },
+    "forced": {
+      "checked": 4,
+      "mismatches": 0,
+      "sample": []
+    }
+  },
+  "detections": 2
+}

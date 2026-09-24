@@ -1,0 +1,68 @@
+{
+  "check": "V06-actions",
+  "action": "insert-image",
+  "kind": "sheet",
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T07:04:22.481Z",
+  "quiet": {
+    "waitedMs": 1006,
+    "formula": "applied"
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.set-drawing-apply"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.set-drawing-apply",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.operation.clear-drawing-transformer",
+        "verdict": "excluded",
+        "options": []
+      }
+    ],
+    "syncOnly": [],
+    "total": 21
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 21
+  },
+  "timeline": [
+    {
+      "dt": 24,
+      "id": "sheet.mutation.set-drawing-apply",
+      "verdict": "detected"
+    },
+    {
+      "dt": 25,
+      "id": "sheet.operation.clear-drawing-transformer",
+      "verdict": "excluded"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.resources[4].data.sheet-1",
+      "kind": "added",
+      "after": "{\"data\":{\"r8GM3R\":{\"axisAlignSheetTransform\":{\"angle\":0,\"flipX\":false,\"flipY\":false,\"from\":{\"column\":12,\"columnOffset\":0,\"row\":12,\"rowOffset\":0},\"skewX\":0,\"s..."
+    }
+  ],
+  "diffCount": 1,
+  "lateDiff": [],
+  "errors": []
+}

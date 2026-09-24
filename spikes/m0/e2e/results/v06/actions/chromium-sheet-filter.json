@@ -1,0 +1,69 @@
+{
+  "check": "V06-actions",
+  "action": "filter",
+  "kind": "sheet",
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T06:03:05.779Z",
+  "quiet": {
+    "waitedMs": 1049.0999999046326,
+    "formula": "applied"
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.set-filter-range"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.set-filter-range",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      }
+    ],
+    "syncOnly": [],
+    "total": 35
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 35
+  },
+  "timeline": [
+    {
+      "dt": 2,
+      "id": "sheet.mutation.set-filter-range",
+      "verdict": "detected"
+    },
+    {
+      "dt": 19,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.resources[5].data.sheet-1",
+      "kind": "added",
+      "after": "{\"ref\":{\"endColumn\":5,\"endRow\":5,\"rangeType\":0,\"startColumn\":0,\"startRow\":0}}"
+    }
+  ],
+  "diffCount": 1,
+  "lateDiff": [],
+  "errors": []
+}

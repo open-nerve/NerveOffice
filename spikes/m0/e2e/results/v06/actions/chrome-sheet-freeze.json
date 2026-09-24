@@ -1,0 +1,65 @@
+{
+  "check": "V06-actions",
+  "action": "freeze",
+  "kind": "sheet",
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T06:31:46.228Z",
+  "quiet": {
+    "waitedMs": 1018.8999999761581,
+    "formula": "applied"
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.set-frozen"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.set-frozen",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 23
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 23
+  },
+  "timeline": [
+    {
+      "dt": 3,
+      "id": "sheet.mutation.set-frozen",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.sheets.sheet-1.freeze.startRow",
+      "kind": "changed",
+      "before": "1",
+      "after": "3"
+    },
+    {
+      "path": "$.sheets.sheet-1.freeze.ySplit",
+      "kind": "changed",
+      "before": "1",
+      "after": "3"
+    }
+  ],
+  "diffCount": 2,
+  "lateDiff": [],
+  "errors": []
+}

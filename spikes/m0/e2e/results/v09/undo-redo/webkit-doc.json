@@ -1,0 +1,89 @@
+{
+  "check": "V09-undo-redo",
+  "kind": "doc",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T07:26:45.276Z",
+  "results": [
+    {
+      "strategy": "facade",
+      "undoBefore": {
+        "undos": 1,
+        "redos": 0
+      },
+      "undoChanged": false,
+      "redoChanged": false,
+      "canceled": [
+        {
+          "id": "univer.command.undo",
+          "kind": "command"
+        },
+        {
+          "id": "univer.command.redo",
+          "kind": "command"
+        }
+      ]
+    },
+    {
+      "strategy": "points",
+      "undoBefore": {
+        "undos": 1,
+        "redos": 0
+      },
+      "undoChanged": false,
+      "redoChanged": false,
+      "canceled": [
+        {
+          "id": "univer.command.undo",
+          "kind": "command"
+        },
+        {
+          "id": "univer.command.redo",
+          "kind": "command"
+        }
+      ]
+    },
+    {
+      "strategy": "firewall",
+      "undoBefore": {
+        "undos": 1,
+        "redos": 0
+      },
+      "undoChanged": false,
+      "redoChanged": false,
+      "canceled": [
+        {
+          "id": "univer.command.undo",
+          "kind": "command"
+        },
+        {
+          "id": "univer.command.redo",
+          "kind": "command"
+        }
+      ]
+    },
+    {
+      "strategy": "combined",
+      "undoBefore": {
+        "undos": 1,
+        "redos": 0
+      },
+      "undoChanged": false,
+      "redoChanged": false,
+      "canceled": [
+        {
+          "id": "univer.command.undo",
+          "kind": "command"
+        },
+        {
+          "id": "univer.command.redo",
+          "kind": "command"
+        }
+      ]
+    }
+  ]
+}

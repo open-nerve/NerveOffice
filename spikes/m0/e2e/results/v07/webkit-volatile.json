@@ -1,0 +1,67 @@
+{
+  "check": "V07",
+  "scenario": "volatile",
+  "worker": false,
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T07:17:27.511Z",
+  "idleWaitMs": 500,
+  "idleCalcSessions": 0,
+  "waitMs": {
+    "noWait": 6,
+    "waited": 524,
+    "platformExtra": 1006,
+    "timeoutAttempt": 32,
+    "recapture": 523,
+    "recapturePlatformExtra": 1006
+  },
+  "timeoutOutcome": "applied",
+  "forcedRecalcMs": 501,
+  "checks": {
+    "noWait": {
+      "checked": 2,
+      "mismatches": 0,
+      "sample": []
+    },
+    "waited": {
+      "checked": 2,
+      "mismatches": 0,
+      "sample": []
+    },
+    "platform": {
+      "checked": 2,
+      "mismatches": 0,
+      "sample": []
+    },
+    "timedOut": {
+      "checked": 2,
+      "mismatches": 0,
+      "sample": []
+    },
+    "recapture": {
+      "checked": 2,
+      "mismatches": 0,
+      "sample": []
+    },
+    "recapturePlatform": {
+      "checked": 2,
+      "mismatches": 0,
+      "sample": []
+    },
+    "reopened": {
+      "checked": 2,
+      "mismatches": 0,
+      "sample": []
+    },
+    "forced": {
+      "checked": 2,
+      "mismatches": 0,
+      "sample": []
+    }
+  },
+  "detections": 2
+}

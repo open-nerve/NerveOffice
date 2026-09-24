@@ -1,0 +1,37 @@
+{
+  "check": "V06-actions",
+  "action": "scroll",
+  "kind": "doc",
+  "method": "U",
+  "expect": "view",
+  "verdict": "通过",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T07:08:05.617Z",
+  "quiet": {
+    "waitedMs": 1010,
+    "formula": "n/a"
+  },
+  "during": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 3
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 3
+  },
+  "timeline": [],
+  "planRule": null,
+  "diff": [],
+  "diffCount": 0,
+  "lateDiff": [],
+  "errors": []
+}

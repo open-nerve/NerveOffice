@@ -1,0 +1,43 @@
+{
+  "check": "V06-open-quiet",
+  "sample": "sheet-drawing",
+  "kind": "sheet",
+  "generated": false,
+  "worker": false,
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T07:11:42.164Z",
+  "bytes": 3775,
+  "timings": {
+    "t0": 163,
+    "ready": 23,
+    "rendered": 457,
+    "steady": 3511
+  },
+  "detections": [],
+  "mutations": [
+    {
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit",
+      "options": [],
+      "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+    }
+  ],
+  "syncOnly": [],
+  "total": 13,
+  "lateDiff": [],
+  "openDiffCount": 1,
+  "openDiff": [
+    {
+      "path": "$.resources[4].data.sheet-1.data.XkgJYJ.transform.height",
+      "kind": "changed",
+      "before": "80",
+      "after": "99"
+    }
+  ],
+  "errors": []
+}

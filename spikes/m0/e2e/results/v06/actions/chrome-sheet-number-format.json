@@ -1,0 +1,83 @@
+{
+  "check": "V06-actions",
+  "action": "number-format",
+  "kind": "sheet",
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T06:29:32.461Z",
+  "quiet": {
+    "waitedMs": 1025.1999999284744,
+    "formula": "applied"
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.set.numfmt"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.set.numfmt",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 21
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 21
+  },
+  "timeline": [
+    {
+      "dt": 4,
+      "id": "sheet.mutation.set.numfmt",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.styles.pjNRWZ",
+      "kind": "added",
+      "after": "{\"n\":{\"pattern\":\"0.0\"}}"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.1.1.s",
+      "kind": "added",
+      "after": "\"pjNRWZ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.2.1.s",
+      "kind": "added",
+      "after": "\"pjNRWZ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.3.1.s",
+      "kind": "added",
+      "after": "\"pjNRWZ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.4.1.s",
+      "kind": "added",
+      "after": "\"pjNRWZ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.5.1.s",
+      "kind": "added",
+      "after": "\"pjNRWZ\""
+    }
+  ],
+  "diffCount": 6,
+  "lateDiff": [],
+  "errors": []
+}

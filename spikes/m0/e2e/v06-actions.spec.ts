@@ -116,6 +116,12 @@ const SHEET: Action[] = [
         pre: "ws.setRowCount(20100); ws.getRange('N1:N20000').setValues(Array.from({ length: 20000 }, (_, i) => ['行' + i]));",
         run: "ws.getRange('N1:N20000').setFontSize(28);",
     },
+    {
+        // 5 万行：空闲时的自动行高明显超过 1 秒（2 万行在本机约 0.9–1.1 秒，处在临界点）
+        id: 'lazy-autoheight-50k', kind: 'sheet', expect: 'change', method: 'F',
+        pre: "ws.setRowCount(50100); ws.getRange('N1:N50000').setValues(Array.from({ length: 50000 }, (_, i) => ['行' + i]));",
+        run: "ws.getRange('N1:N50000').setFontSize(28);",
+    },
     { id: 'freeze', kind: 'sheet', expect: 'change', method: 'F', run: 'ws.setFrozenRows(3);' },
     { id: 'add-sheet', kind: 'sheet', expect: 'change', method: 'F', run: "wb.insertSheet('新表');" },
     { id: 'delete-sheet', kind: 'sheet', expect: 'change', method: 'F', run: "wb.deleteSheet(wb.getSheetByName('汇总'));" },

@@ -1,0 +1,119 @@
+{
+  "check": "V09-entries",
+  "kind": "doc",
+  "strategy": "points",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T06:25:46.705Z",
+  "traces": {
+    "steps": [
+      {
+        "step": "文档编辑权限点 = false（本地）",
+        "ok": true
+      }
+    ],
+    "detections": [],
+    "protectionResources": [],
+    "contentDiff": []
+  },
+  "entries": [
+    {
+      "entry": "type",
+      "method": "U",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "delete",
+      "method": "U",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "paste",
+      "method": "U",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "bold",
+      "method": "U",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "heading",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "list",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "table",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "image",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    }
+  ],
+  "summary": {
+    "blocked": [
+      "type",
+      "delete",
+      "paste",
+      "bold",
+      "heading",
+      "list",
+      "table",
+      "image"
+    ],
+    "detected": [],
+    "undetected": []
+  }
+}

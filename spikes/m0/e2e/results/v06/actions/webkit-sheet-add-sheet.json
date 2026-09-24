@@ -1,0 +1,74 @@
+{
+  "check": "V06-actions",
+  "action": "add-sheet",
+  "kind": "sheet",
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T07:01:59.400Z",
+  "quiet": {
+    "waitedMs": 1004,
+    "formula": "applied"
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.insert-sheet"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.insert-sheet",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      }
+    ],
+    "syncOnly": [],
+    "total": 34
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 34
+  },
+  "timeline": [
+    {
+      "dt": 5,
+      "id": "sheet.mutation.insert-sheet",
+      "verdict": "detected"
+    },
+    {
+      "dt": 13,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.sheetOrder[5]",
+      "kind": "added",
+      "after": "\"xau_j35VB522_PU4zDM6V\""
+    },
+    {
+      "path": "$.sheets.xau_j35VB522_PU4zDM6V",
+      "kind": "added",
+      "after": "{\"id\":\"xau_j35VB522_PU4zDM6V\",\"name\":\"新表\",\"tabColor\":\"\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24,\"showGridli..."
+    }
+  ],
+  "diffCount": 2,
+  "lateDiff": [],
+  "errors": []
+}

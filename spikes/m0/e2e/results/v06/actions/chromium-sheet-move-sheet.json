@@ -1,0 +1,65 @@
+{
+  "check": "V06-actions",
+  "action": "move-sheet",
+  "kind": "sheet",
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T06:02:11.045Z",
+  "quiet": {
+    "waitedMs": 1017.0999999046326,
+    "formula": "applied"
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.set-worksheet-order"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.set-worksheet-order",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 21
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 21
+  },
+  "timeline": [
+    {
+      "dt": 3,
+      "id": "sheet.mutation.set-worksheet-order",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.sheetOrder[0]",
+      "kind": "changed",
+      "before": "\"sheet-1\"",
+      "after": "\"3EB0bwApYxHAp_aL_pN0v\""
+    },
+    {
+      "path": "$.sheetOrder[1]",
+      "kind": "changed",
+      "before": "\"3EB0bwApYxHAp_aL_pN0v\"",
+      "after": "\"sheet-1\""
+    }
+  ],
+  "diffCount": 2,
+  "lateDiff": [],
+  "errors": []
+}

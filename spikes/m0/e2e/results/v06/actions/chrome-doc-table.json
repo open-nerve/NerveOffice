@@ -1,0 +1,136 @@
+{
+  "check": "V06-actions",
+  "action": "table",
+  "kind": "doc",
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T06:36:44.924Z",
+  "quiet": {
+    "waitedMs": 1023.6999999284744,
+    "formula": "n/a"
+  },
+  "during": {
+    "detections": [
+      "doc.mutation.rich-text-editing"
+    ],
+    "mutations": [
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-doc-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 7
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 7
+  },
+  "timeline": [
+    {
+      "dt": 320,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.tableSource.tQ68Rk",
+      "kind": "added",
+      "after": "{\"tableRows\":[{\"tableCells\":[{\"margin\":{\"start\":{\"v\":10},\"end\":{\"v\":10},\"top\":{\"v\":5},\"bottom\":{\"v\":5}}},{\"margin\":{\"start\":{\"v\":10},\"end\":{\"v\":10},\"top\":{\"v..."
+    },
+    {
+      "path": "$.body.dataStream",
+      "kind": "changed",
+      "before": "\"文档标题\\r副标题：M0 文字文档样本\\r一级标题\\r正文段落：加粗、斜体、下划线、删除线、H2O、x2、红色、高亮、大号宋体。中英文混排 English text 与标点，检查换行。\\r居中段落\\r右对齐段落\\r二级标题\\r三级标题\\r四级标题\\r五级标题\\r\\r无序列表第一项\\r无序列表嵌套项\\r有序列表第...",
+      "after": "\"文档标题\\r副标题：M0 文字文档样本\\r一级标题\\r正文段落：加粗、斜体、下划线、删除线、H2O、x2、红色、高亮、大号宋体。中英文混排 English text 与标点，检查换行。\\r居中段落\\r右对齐段落\\r二级标题\\r三级标题\\r四级标题\\r五级标题\\r\\r无序列表第一项\\r无序列表嵌套项\\r有序列表第..."
+    },
+    {
+      "path": "$.body.paragraphs[29].startIndex",
+      "kind": "changed",
+      "before": "228",
+      "after": "231"
+    },
+    {
+      "path": "$.body.paragraphs[29].paragraphId",
+      "kind": "changed",
+      "before": "\"para_8MdDDBuv2fSL\"",
+      "after": "\"para_kPUP4K6zV_Wq\""
+    },
+    {
+      "path": "$.body.paragraphs[29].paragraphStyle",
+      "kind": "added",
+      "after": "{\"spaceAbove\":{\"v\":3},\"lineSpacing\":2,\"spaceBelow\":{\"v\":0}}"
+    },
+    {
+      "path": "$.body.paragraphs[30]",
+      "kind": "added",
+      "after": "{\"startIndex\":235,\"paragraphId\":\"para_V-qCQU-9JIKn\",\"paragraphStyle\":{\"spaceAbove\":{\"v\":3},\"lineSpacing\":2,\"spaceBelow\":{\"v\":0}}}"
+    },
+    {
+      "path": "$.body.paragraphs[31]",
+      "kind": "added",
+      "after": "{\"startIndex\":241,\"paragraphId\":\"para_F9nUSOAkTyoa\",\"paragraphStyle\":{\"spaceAbove\":{\"v\":3},\"lineSpacing\":2,\"spaceBelow\":{\"v\":0}}}"
+    },
+    {
+      "path": "$.body.paragraphs[32]",
+      "kind": "added",
+      "after": "{\"startIndex\":245,\"paragraphId\":\"para_olgl5R7nMA1O\",\"paragraphStyle\":{\"spaceAbove\":{\"v\":3},\"lineSpacing\":2,\"spaceBelow\":{\"v\":0}}}"
+    },
+    {
+      "path": "$.body.paragraphs[33]",
+      "kind": "added",
+      "after": "{\"startIndex\":250,\"paragraphId\":\"para_toPb__dweIRo\"}"
+    },
+    {
+      "path": "$.body.paragraphs[34]",
+      "kind": "added",
+      "after": "{\"startIndex\":251,\"paragraphId\":\"para_8MdDDBuv2fSL\"}"
+    },
+    {
+      "path": "$.body.textRuns[10]",
+      "kind": "added",
+      "after": "{\"st\":228,\"ed\":250,\"ts\":{\"cl\":{\"rgb\":\"#1B1C1F\"}}}"
+    },
+    {
+      "path": "$.body.tables[1]",
+      "kind": "added",
+      "after": "{\"startIndex\":228,\"endIndex\":250,\"tableId\":\"tQ68Rk\"}"
+    },
+    {
+      "path": "$.body.sectionBreaks[9]",
+      "kind": "added",
+      "after": "{\"sectionId\":\"section_AWt9SykRNLXq\",\"startIndex\":232}"
+    },
+    {
+      "path": "$.body.sectionBreaks[10]",
+      "kind": "added",
+      "after": "{\"sectionId\":\"section_CFKWEU7H35QC\",\"startIndex\":236}"
+    },
+    {
+      "path": "$.body.sectionBreaks[11]",
+      "kind": "added",
+      "after": "{\"sectionId\":\"section_4QGIbSULvw5u\",\"startIndex\":242}"
+    },
+    {
+      "path": "$.body.sectionBreaks[12]",
+      "kind": "added",
+      "after": "{\"sectionId\":\"section_TdZV_EaBTT6R\",\"startIndex\":246}"
+    }
+  ],
+  "diffCount": 16,
+  "lateDiff": [],
+  "errors": []
+}

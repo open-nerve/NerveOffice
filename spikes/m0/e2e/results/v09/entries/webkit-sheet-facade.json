@@ -1,0 +1,554 @@
+{
+  "check": "V09-entries",
+  "kind": "sheet",
+  "strategy": "facade",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T07:20:44.647Z",
+  "traces": {
+    "steps": [
+      {
+        "step": "workbook.setEditable(false)",
+        "ok": true
+      },
+      {
+        "step": "数据: setReadOnly()",
+        "ok": false,
+        "error": "Cannot set WorksheetEdit permission point because worksheet protection does not exist. Call protect() first."
+      },
+      {
+        "step": "数据: protect()",
+        "ok": true
+      },
+      {
+        "step": "数据: setReadOnly()（protect 之后）",
+        "ok": true
+      },
+      {
+        "step": "汇总: setReadOnly()",
+        "ok": false,
+        "error": "Cannot set WorksheetEdit permission point because worksheet protection does not exist. Call protect() first."
+      },
+      {
+        "step": "汇总: protect()",
+        "ok": true
+      },
+      {
+        "step": "汇总: setReadOnly()（protect 之后）",
+        "ok": true
+      },
+      {
+        "step": "隐藏: setReadOnly()",
+        "ok": false,
+        "error": "Cannot set WorksheetEdit permission point because worksheet protection does not exist. Call protect() first."
+      },
+      {
+        "step": "隐藏: protect()",
+        "ok": true
+      },
+      {
+        "step": "隐藏: setReadOnly()（protect 之后）",
+        "ok": true
+      },
+      {
+        "step": "功能: setReadOnly()",
+        "ok": false,
+        "error": "Cannot set WorksheetEdit permission point because worksheet protection does not exist. Call protect() first."
+      },
+      {
+        "step": "功能: protect()",
+        "ok": true
+      },
+      {
+        "step": "功能: setReadOnly()（protect 之后）",
+        "ok": true
+      },
+      {
+        "step": "筛选: setReadOnly()",
+        "ok": false,
+        "error": "Cannot set WorksheetEdit permission point because worksheet protection does not exist. Call protect() first."
+      },
+      {
+        "step": "筛选: protect()",
+        "ok": true
+      },
+      {
+        "step": "筛选: setReadOnly()（protect 之后）",
+        "ok": true
+      }
+    ],
+    "detections": [
+      "sheet.mutation.add-worksheet-protection",
+      "sheet.mutation.add-worksheet-protection",
+      "sheet.mutation.add-worksheet-protection",
+      "sheet.mutation.add-worksheet-protection",
+      "sheet.mutation.add-worksheet-protection"
+    ],
+    "protectionResources": [
+      "SHEET_AuthzIoMockService_PLUGIN",
+      "SHEET_WORKSHEET_PROTECTION_PLUGIN"
+    ],
+    "contentDiff": [
+      {
+        "path": "$.resources[0].data",
+        "kind": "changed",
+        "before": "null",
+        "after": "{\"DjfoFpP4\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"unitID\":\"m0-sheet-all\"},\"KSLqclQ0\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"..."
+      },
+      {
+        "path": "$.resources[9].data",
+        "kind": "changed",
+        "before": "null",
+        "after": "{\"m0-sheet-all\":[{\"editState\":\"onlyMe\",\"permissionId\":\"fywMi6K_\",\"subUnitId\":\"sheet-1\",\"unitId\":\"m0-sheet-all\",\"unitType\":2,\"viewState\":\"othersCanView\"},{\"ed..."
+      }
+    ]
+  },
+  "entries": [
+    {
+      "entry": "type-value",
+      "method": "U",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "delete-content",
+      "method": "U",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "paste",
+      "method": "U",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "cut-paste",
+      "method": "U",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "drag-fill",
+      "method": "U",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "formula-bar",
+      "method": "U",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "filter",
+      "method": "F",
+      "verdict": "未拦截-被检测到",
+      "error": null,
+      "pageErrors": [],
+      "detections": [
+        "sheet.mutation.set-filter-range"
+      ],
+      "diff": [
+        {
+          "path": "$.resources[5].data.sheet-1",
+          "kind": "added",
+          "after": "{\"ref\":{\"endColumn\":5,\"endRow\":5,\"rangeType\":0,\"startColumn\":0,\"startRow\":0}}"
+        }
+      ],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "sort",
+      "method": "F",
+      "verdict": "未拦截-被检测到",
+      "error": null,
+      "pageErrors": [],
+      "detections": [
+        "sheet.mutation.reorder-range"
+      ],
+      "diff": [
+        {
+          "path": "$.sheets.sheet-1.cellData.1.0.v",
+          "kind": "changed",
+          "before": "\"苹果\"",
+          "after": "\"橙子\""
+        },
+        {
+          "path": "$.sheets.sheet-1.cellData.1.1.v",
+          "kind": "changed",
+          "before": "12",
+          "after": "30"
+        },
+        {
+          "path": "$.sheets.sheet-1.cellData.1.2.v",
+          "kind": "changed",
+          "before": "45200",
+          "after": "45202"
+        },
+        {
+          "path": "$.sheets.sheet-1.cellData.1.3.v",
+          "kind": "changed",
+          "before": "0.125",
+          "after": "0.05"
+        },
+        {
+          "path": "$.sheets.sheet-1.cellData.1.4.v",
+          "kind": "changed",
+          "before": "1234.5",
+          "after": "1500"
+        }
+      ],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "add-sheet",
+      "method": "F",
+      "verdict": "未拦截-被检测到",
+      "error": null,
+      "pageErrors": [],
+      "detections": [
+        "sheet.mutation.insert-sheet"
+      ],
+      "diff": [
+        {
+          "path": "$.sheetOrder[5]",
+          "kind": "added",
+          "after": "\"2LvzMptbQUrlnUAF9Djaq\""
+        },
+        {
+          "path": "$.sheets.2LvzMptbQUrlnUAF9Djaq",
+          "kind": "added",
+          "after": "{\"id\":\"2LvzMptbQUrlnUAF9Djaq\",\"name\":\"新表\",\"tabColor\":\"\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24,\"showGridli..."
+        }
+      ],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "delete-sheet",
+      "method": "F",
+      "verdict": "未拦截-被检测到",
+      "error": null,
+      "pageErrors": [],
+      "detections": [
+        "sheet.mutation.remove-sheet"
+      ],
+      "diff": [
+        {
+          "path": "$.sheetOrder[1]",
+          "kind": "changed",
+          "before": "\"3EB0bwApYxHAp_aL_pN0v\"",
+          "after": "\"BosGI6KRewWr9iRx1e2-J\""
+        },
+        {
+          "path": "$.sheetOrder[2]",
+          "kind": "changed",
+          "before": "\"BosGI6KRewWr9iRx1e2-J\"",
+          "after": "\"qu7F_0n49etB111SblNln\""
+        },
+        {
+          "path": "$.sheetOrder[3]",
+          "kind": "changed",
+          "before": "\"qu7F_0n49etB111SblNln\"",
+          "after": "\"3pom9bUkA1bNL7bRVYpBX\""
+        },
+        {
+          "path": "$.sheetOrder[4]",
+          "kind": "removed",
+          "before": "\"3pom9bUkA1bNL7bRVYpBX\""
+        },
+        {
+          "path": "$.sheets.3EB0bwApYxHAp_aL_pN0v",
+          "kind": "removed",
+          "before": "{\"id\":\"3EB0bwApYxHAp_aL_pN0v\",\"name\":\"汇总\",\"tabColor\":\"#16a34a\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24,\"sho..."
+        }
+      ],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "rename-sheet",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "copy-sheet",
+      "method": "F",
+      "verdict": "未拦截-被检测到",
+      "error": null,
+      "pageErrors": [],
+      "detections": [
+        "sheet.mutation.insert-sheet"
+      ],
+      "diff": [
+        {
+          "path": "$.sheetOrder[2]",
+          "kind": "changed",
+          "before": "\"BosGI6KRewWr9iRx1e2-J\"",
+          "after": "\"3aybRzJSC_ohd556uz0o-\""
+        },
+        {
+          "path": "$.sheetOrder[3]",
+          "kind": "changed",
+          "before": "\"qu7F_0n49etB111SblNln\"",
+          "after": "\"BosGI6KRewWr9iRx1e2-J\""
+        },
+        {
+          "path": "$.sheetOrder[4]",
+          "kind": "changed",
+          "before": "\"3pom9bUkA1bNL7bRVYpBX\"",
+          "after": "\"qu7F_0n49etB111SblNln\""
+        },
+        {
+          "path": "$.sheetOrder[5]",
+          "kind": "added",
+          "after": "\"3pom9bUkA1bNL7bRVYpBX\""
+        },
+        {
+          "path": "$.sheets.3aybRzJSC_ohd556uz0o-",
+          "kind": "added",
+          "after": "{\"id\":\"3aybRzJSC_ohd556uz0o-\",\"name\":\"汇总 （副本）\",\"tabColor\":\"#16a34a\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24..."
+        }
+      ],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "hide-sheet",
+      "method": "F",
+      "verdict": "未拦截-被检测到",
+      "error": null,
+      "pageErrors": [],
+      "detections": [
+        "sheet.mutation.set-worksheet-hidden"
+      ],
+      "diff": [
+        {
+          "path": "$.sheets.3EB0bwApYxHAp_aL_pN0v.hidden",
+          "kind": "changed",
+          "before": "0",
+          "after": "1"
+        }
+      ],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "move-sheet",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "move-image",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "delete-image",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "row-height",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "insert-row",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "delete-row",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "merge",
+      "method": "F",
+      "verdict": "未拦截-被检测到",
+      "error": null,
+      "pageErrors": [],
+      "detections": [
+        "sheet.mutation.add-worksheet-merge"
+      ],
+      "diff": [
+        {
+          "path": "$.sheets.sheet-1.mergeData[1]",
+          "kind": "added",
+          "after": "{\"startRow\":9,\"startColumn\":10,\"endRow\":10,\"endColumn\":11,\"startAbsoluteRefType\":0,\"endAbsoluteRefType\":0,\"rangeType\":0,\"unitId\":\"m0-sheet-all\",\"sheetId\":\"sh..."
+        }
+      ],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "bold",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "conditional-format",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "data-validation",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "hyperlink",
+      "method": "F",
+      "verdict": "未拦截-被检测到",
+      "error": null,
+      "pageErrors": [],
+      "detections": [
+        "sheet.mutation.set-range-values"
+      ],
+      "diff": [
+        {
+          "path": "$.sheets.sheet-1.cellData.30",
+          "kind": "added",
+          "after": "{\"10\":{\"p\":{\"id\":\"d\",\"locale\":\"enUS\",\"title\":\"\",\"tableSource\":{},\"drawings\":{},\"drawingsOrder\":[],\"headers\":{},\"footers\":{},\"notes\":{},\"noteSettings\":{},\"bod..."
+        }
+      ],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "note",
+      "method": "F",
+      "verdict": "未拦截-被检测到",
+      "error": null,
+      "pageErrors": [],
+      "detections": [
+        "sheet.mutation.update-note"
+      ],
+      "diff": [
+        {
+          "path": "$.resources[6].data.sheet-1",
+          "kind": "added",
+          "after": "{\"29\":{\"10\":{\"col\":10,\"height\":60,\"id\":\"Dpd8Mw\",\"note\":\"新备注\",\"row\":29,\"width\":160}}}"
+        }
+      ],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "replace-all",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    }
+  ],
+  "summary": {
+    "blocked": [
+      "type-value",
+      "delete-content",
+      "paste",
+      "cut-paste",
+      "drag-fill",
+      "formula-bar",
+      "rename-sheet",
+      "move-sheet",
+      "move-image",
+      "delete-image",
+      "row-height",
+      "insert-row",
+      "delete-row",
+      "bold",
+      "conditional-format",
+      "data-validation",
+      "replace-all"
+    ],
+    "detected": [
+      "filter",
+      "sort",
+      "add-sheet",
+      "delete-sheet",
+      "copy-sheet",
+      "hide-sheet",
+      "merge",
+      "hyperlink",
+      "note"
+    ],
+    "undetected": []
+  }
+}

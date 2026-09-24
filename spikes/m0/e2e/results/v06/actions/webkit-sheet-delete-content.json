@@ -1,0 +1,109 @@
+{
+  "check": "V06-actions",
+  "action": "delete-content",
+  "kind": "sheet",
+  "method": "U",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T06:58:37.627Z",
+  "quiet": {
+    "waitedMs": 1005,
+    "formula": "applied"
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.set-range-values"
+    ],
+    "mutations": [
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "sheet.mutation.set-range-values",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      }
+    ],
+    "syncOnly": [],
+    "total": 45
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 45
+  },
+  "timeline": [
+    {
+      "dt": 16,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 200,
+      "id": "sheet.mutation.set-range-values",
+      "verdict": "detected"
+    },
+    {
+      "dt": 202,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 215,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.sheets.sheet-1.cellData.1.0",
+      "kind": "removed",
+      "before": "{\"v\":\"苹果\",\"t\":1}"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.1.6.v",
+      "kind": "changed",
+      "before": "\"苹果-12\"",
+      "after": "\"-12\""
+    },
+    {
+      "path": "$.sheets.3EB0bwApYxHAp_aL_pN0v.cellData.1.0.v",
+      "kind": "changed",
+      "before": "\"苹果\"",
+      "after": "0"
+    },
+    {
+      "path": "$.sheets.3EB0bwApYxHAp_aL_pN0v.cellData.1.0.t",
+      "kind": "changed",
+      "before": "1",
+      "after": "2"
+    }
+  ],
+  "diffCount": 4,
+  "lateDiff": [],
+  "errors": []
+}

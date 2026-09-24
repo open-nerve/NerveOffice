@@ -1,0 +1,70 @@
+{
+  "check": "V06-actions",
+  "action": "row-height",
+  "kind": "sheet",
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T06:00:30.840Z",
+  "quiet": {
+    "waitedMs": 1014.6000000238419,
+    "formula": "applied"
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.set-worksheet-row-height",
+      "sheet.mutation.set-worksheet-row-is-auto-height"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.set-worksheet-row-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-is-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 22
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 22
+  },
+  "timeline": [
+    {
+      "dt": 3,
+      "id": "sheet.mutation.set-worksheet-row-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 6,
+      "id": "sheet.mutation.set-worksheet-row-is-auto-height",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.sheets.sheet-1.rowData.5",
+      "kind": "added",
+      "after": "{\"h\":40,\"ia\":0}"
+    }
+  ],
+  "diffCount": 1,
+  "lateDiff": [],
+  "errors": []
+}

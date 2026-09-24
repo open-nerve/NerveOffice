@@ -1,0 +1,220 @@
+{
+  "check": "V06-actions",
+  "action": "sort",
+  "kind": "sheet",
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T06:33:36.373Z",
+  "quiet": {
+    "waitedMs": 1024.6000000238419,
+    "formula": "applied"
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.reorder-range"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.reorder-range",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      }
+    ],
+    "syncOnly": [],
+    "total": 36
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 36
+  },
+  "timeline": [
+    {
+      "dt": 5,
+      "id": "sheet.mutation.reorder-range",
+      "verdict": "detected"
+    },
+    {
+      "dt": 25,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.sheets.sheet-1.cellData.1.0.v",
+      "kind": "changed",
+      "before": "\"苹果\"",
+      "after": "\"橙子\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.1.1.v",
+      "kind": "changed",
+      "before": "12",
+      "after": "30"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.1.2.v",
+      "kind": "changed",
+      "before": "45200",
+      "after": "45202"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.1.3.v",
+      "kind": "changed",
+      "before": "0.125",
+      "after": "0.05"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.1.4.v",
+      "kind": "changed",
+      "before": "1234.5",
+      "after": "1500"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.1.5.v",
+      "kind": "changed",
+      "before": "3.14159",
+      "after": "1.41421"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.1.6.v",
+      "kind": "changed",
+      "before": "\"苹果-12\"",
+      "after": "\"橙子-30\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.2.0.v",
+      "kind": "changed",
+      "before": "\"香蕉\"",
+      "after": "\"葡萄\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.2.1.v",
+      "kind": "changed",
+      "before": "7",
+      "after": "18"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.2.2.v",
+      "kind": "changed",
+      "before": "45201",
+      "after": "45203"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.2.3.v",
+      "kind": "changed",
+      "before": "0.3",
+      "after": "0.75"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.2.4.v",
+      "kind": "changed",
+      "before": "88",
+      "after": "42.75"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.2.5.v",
+      "kind": "changed",
+      "before": "2.71828",
+      "after": "1.73205"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.3.0.v",
+      "kind": "changed",
+      "before": "\"橙子\"",
+      "after": "\"苹果\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.3.1.v",
+      "kind": "changed",
+      "before": "30",
+      "after": "12"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.3.2.v",
+      "kind": "changed",
+      "before": "45202",
+      "after": "45200"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.3.3.v",
+      "kind": "changed",
+      "before": "0.05",
+      "after": "0.125"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.3.4.v",
+      "kind": "changed",
+      "before": "1500",
+      "after": "1234.5"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.3.5.v",
+      "kind": "changed",
+      "before": "1.41421",
+      "after": "3.14159"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.4.0.v",
+      "kind": "changed",
+      "before": "\"葡萄\"",
+      "after": "\"香蕉\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.4.1.v",
+      "kind": "changed",
+      "before": "18",
+      "after": "7"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.4.2.v",
+      "kind": "changed",
+      "before": "45203",
+      "after": "45201"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.4.3.v",
+      "kind": "changed",
+      "before": "0.75",
+      "after": "0.3"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.4.4.v",
+      "kind": "changed",
+      "before": "42.75",
+      "after": "88"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.4.5.v",
+      "kind": "changed",
+      "before": "1.73205",
+      "after": "2.71828"
+    },
+    {
+      "path": "$.sheets.3EB0bwApYxHAp_aL_pN0v.cellData.1.0.v",
+      "kind": "changed",
+      "before": "\"苹果\"",
+      "after": "\"橙子\""
+    }
+  ],
+  "diffCount": 26,
+  "lateDiff": [],
+  "errors": []
+}

@@ -1,0 +1,139 @@
+{
+  "check": "V09-switch",
+  "kind": "sheet",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T06:25:04.748Z",
+  "inPlace": [
+    {
+      "strategy": "facade",
+      "ms": 71,
+      "undoInRead": {
+        "undos": 0,
+        "redos": 0
+      },
+      "exitSteps": [
+        {
+          "step": "数据: unprotect()",
+          "ok": true
+        },
+        {
+          "step": "汇总: unprotect()",
+          "ok": true
+        },
+        {
+          "step": "隐藏: unprotect()",
+          "ok": true
+        },
+        {
+          "step": "功能: unprotect()",
+          "ok": true
+        },
+        {
+          "step": "筛选: unprotect()",
+          "ok": true
+        },
+        {
+          "step": "workbook.setEditable(true)",
+          "ok": true
+        }
+      ],
+      "detectionsWhileSwitching": [
+        "sheet.mutation.add-worksheet-protection",
+        "sheet.mutation.add-worksheet-protection",
+        "sheet.mutation.add-worksheet-protection",
+        "sheet.mutation.add-worksheet-protection",
+        "sheet.mutation.add-worksheet-protection",
+        "sheet.mutation.delete-worksheet-protection",
+        "sheet.mutation.delete-worksheet-protection",
+        "sheet.mutation.delete-worksheet-protection",
+        "sheet.mutation.delete-worksheet-protection",
+        "sheet.mutation.delete-worksheet-protection"
+      ],
+      "leftover": [
+        {
+          "path": "$.resources[0].data",
+          "kind": "changed",
+          "before": "null",
+          "after": "{\"Lqp4AwBs\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"unitID\":\"m0-sheet-all\"},\"T09jkqIy\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"..."
+        }
+      ],
+      "protectionResourcesAfter": [
+        "SHEET_AuthzIoMockService_PLUGIN"
+      ],
+      "editableAfterExit": true
+    },
+    {
+      "strategy": "points",
+      "ms": 48,
+      "undoInRead": {
+        "undos": 0,
+        "redos": 0
+      },
+      "exitSteps": [
+        {
+          "step": "工作表编辑类权限点 = true（本地）",
+          "ok": true
+        },
+        {
+          "step": "workbook.setEditable(true)",
+          "ok": true
+        }
+      ],
+      "detectionsWhileSwitching": [],
+      "leftover": [],
+      "protectionResourcesAfter": [],
+      "editableAfterExit": true
+    },
+    {
+      "strategy": "firewall",
+      "ms": 9,
+      "undoInRead": {
+        "undos": 0,
+        "redos": 0
+      },
+      "exitSteps": [],
+      "detectionsWhileSwitching": [],
+      "leftover": [],
+      "protectionResourcesAfter": [],
+      "editableAfterExit": true
+    },
+    {
+      "strategy": "combined",
+      "ms": 42,
+      "undoInRead": {
+        "undos": 0,
+        "redos": 0
+      },
+      "exitSteps": [
+        {
+          "step": "工作表编辑类权限点 = true（本地）",
+          "ok": true
+        },
+        {
+          "step": "workbook.setEditable(true)",
+          "ok": true
+        }
+      ],
+      "detectionsWhileSwitching": [],
+      "leftover": [],
+      "protectionResourcesAfter": [],
+      "editableAfterExit": true
+    }
+  ],
+  "remount": {
+    "toReadMs": 3353.899999976158,
+    "toReadRenderedMs": 331.89999997615814,
+    "toEditMs": 3382.100000023842,
+    "toEditRenderedMs": 354.39999997615814,
+    "readUndo": {
+      "undos": 0,
+      "redos": 0
+    },
+    "leftover": []
+  }
+}

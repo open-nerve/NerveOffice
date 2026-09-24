@@ -1,0 +1,58 @@
+{
+  "check": "V06-actions",
+  "action": "merge",
+  "kind": "sheet",
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T05:59:24.997Z",
+  "quiet": {
+    "waitedMs": 1014.2000000476837,
+    "formula": "applied"
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.add-worksheet-merge"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.add-worksheet-merge",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 22
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 22
+  },
+  "timeline": [
+    {
+      "dt": 3,
+      "id": "sheet.mutation.add-worksheet-merge",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.sheets.sheet-1.mergeData[1]",
+      "kind": "added",
+      "after": "{\"startRow\":9,\"startColumn\":10,\"endRow\":10,\"endColumn\":11,\"startAbsoluteRefType\":0,\"endAbsoluteRefType\":0,\"rangeType\":0,\"unitId\":\"m0-sheet-all\",\"sheetId\":\"sh..."
+    }
+  ],
+  "diffCount": 1,
+  "lateDiff": [],
+  "errors": []
+}

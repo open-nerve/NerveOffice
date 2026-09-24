@@ -1,0 +1,50 @@
+{
+  "check": "V09-identity",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T07:27:47.581Z",
+  "results": [
+    {
+      "sample": "sheet-all",
+      "userBefore": "Owner_gOQdbsTv",
+      "userAfter": "user-reader-1",
+      "controlK3": {
+        "changed": true,
+        "detections": [
+          "sheet.mutation.set-range-values"
+        ]
+      },
+      "realUserK4": {
+        "changed": false,
+        "detections": []
+      },
+      "realUserA1": {
+        "changed": false,
+        "detections": []
+      }
+    },
+    {
+      "sample": "sheet-protection",
+      "userBefore": "Owner_mbslhmAq",
+      "userAfter": "user-reader-1",
+      "controlK3": {
+        "changed": true,
+        "detections": [
+          "sheet.mutation.set-range-values"
+        ]
+      },
+      "realUserK4": {
+        "changed": false,
+        "detections": []
+      },
+      "realUserA1": {
+        "changed": false,
+        "detections": []
+      }
+    }
+  ]
+}

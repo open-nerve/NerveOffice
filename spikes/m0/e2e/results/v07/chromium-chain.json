@@ -1,0 +1,93 @@
+{
+  "check": "V07",
+  "scenario": "chain",
+  "worker": false,
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T06:15:54.074Z",
+  "idleWaitMs": 506.89999997615814,
+  "idleCalcSessions": 0,
+  "waitMs": {
+    "noWait": 7.799999952316284,
+    "waited": 520,
+    "platformExtra": 1031.6999999284744,
+    "timeoutAttempt": 39.799999952316284,
+    "recapture": 519.2000000476837,
+    "recapturePlatformExtra": 1021
+  },
+  "timeoutOutcome": "applied",
+  "forcedRecalcMs": 501.89999997615814,
+  "checks": {
+    "noWait": {
+      "checked": 199,
+      "mismatches": 199,
+      "sample": [
+        {
+          "cell": "链!A2",
+          "expected": 1001,
+          "actual": 2
+        },
+        {
+          "cell": "链!A3",
+          "expected": 1002,
+          "actual": 3
+        },
+        {
+          "cell": "链!A4",
+          "expected": 1003,
+          "actual": 4
+        },
+        {
+          "cell": "链!A5",
+          "expected": 1004,
+          "actual": 5
+        },
+        {
+          "cell": "链!A6",
+          "expected": 1005,
+          "actual": 6
+        }
+      ]
+    },
+    "waited": {
+      "checked": 199,
+      "mismatches": 0,
+      "sample": []
+    },
+    "platform": {
+      "checked": 199,
+      "mismatches": 0,
+      "sample": []
+    },
+    "timedOut": {
+      "checked": 199,
+      "mismatches": 0,
+      "sample": []
+    },
+    "recapture": {
+      "checked": 199,
+      "mismatches": 0,
+      "sample": []
+    },
+    "recapturePlatform": {
+      "checked": 199,
+      "mismatches": 0,
+      "sample": []
+    },
+    "reopened": {
+      "checked": 199,
+      "mismatches": 0,
+      "sample": []
+    },
+    "forced": {
+      "checked": 199,
+      "mismatches": 0,
+      "sample": []
+    }
+  },
+  "detections": 2
+}

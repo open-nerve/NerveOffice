@@ -1,0 +1,101 @@
+{
+  "check": "V07",
+  "scenario": "cross-sheet",
+  "worker": true,
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T06:18:44.509Z",
+  "idleWaitMs": 500.89999997615814,
+  "idleCalcSessions": 0,
+  "waitMs": {
+    "noWait": 3.5,
+    "waited": 2283.899999976158,
+    "platformExtra": 1031.1000000238419,
+    "timeoutAttempt": 60.299999952316284,
+    "recapture": 2210.5,
+    "recapturePlatformExtra": 1038.3999999761581
+  },
+  "timeoutOutcome": "timeout",
+  "forcedRecalcMs": 501.09999990463257,
+  "checks": {
+    "noWait": {
+      "checked": 3,
+      "mismatches": 2,
+      "sample": [
+        {
+          "cell": "跨表!A2",
+          "expected": 10004932,
+          "actual": 9927166
+        },
+        {
+          "cell": "跨表!A3",
+          "expected": 9849388,
+          "actual": 9927154
+        }
+      ]
+    },
+    "waited": {
+      "checked": 3,
+      "mismatches": 1,
+      "sample": [
+        {
+          "cell": "跨表!A2",
+          "expected": 10004932,
+          "actual": 9927166
+        }
+      ]
+    },
+    "platform": {
+      "checked": 3,
+      "mismatches": 0,
+      "sample": []
+    },
+    "timedOut": {
+      "checked": 3,
+      "mismatches": 2,
+      "sample": [
+        {
+          "cell": "跨表!A2",
+          "expected": 9982710,
+          "actual": 10004932
+        },
+        {
+          "cell": "跨表!A3",
+          "expected": 9949376,
+          "actual": 9927154
+        }
+      ]
+    },
+    "recapture": {
+      "checked": 3,
+      "mismatches": 1,
+      "sample": [
+        {
+          "cell": "跨表!A2",
+          "expected": 9982710,
+          "actual": 10004932
+        }
+      ]
+    },
+    "recapturePlatform": {
+      "checked": 3,
+      "mismatches": 0,
+      "sample": []
+    },
+    "reopened": {
+      "checked": 3,
+      "mismatches": 0,
+      "sample": []
+    },
+    "forced": {
+      "checked": 3,
+      "mismatches": 0,
+      "sample": []
+    }
+  },
+  "detections": 2
+}
