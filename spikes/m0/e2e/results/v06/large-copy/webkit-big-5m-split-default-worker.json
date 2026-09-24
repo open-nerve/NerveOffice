@@ -12,24 +12,24 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T14:37:58.614Z",
+  "timestamp": "2026-09-24T15:45:51.047Z",
   "copy": {
     "syncMs": 59,
     "name": "明细 （副本）",
-    "idleMaxGapMs": 162
+    "idleMaxGapMs": 167
   },
   "quiet": {
-    "waitedMs": 776,
+    "waitedMs": 772,
     "formula": "settled",
     "restarts": 0
   },
   "localMutations": {
     "beforeS1": 99,
     "afterS1": 0,
-    "lastBeforeS1Ms": 299,
-    "lastMs": 299
+    "lastBeforeS1Ms": 296,
+    "lastMs": 296
   },
-  "capturedAfterMs": 776,
+  "capturedAfterMs": 772,
   "sourceCells": 265800,
   "copiedCellsImmediately": 3000,
   "copiedCellsAtS1": 265800,

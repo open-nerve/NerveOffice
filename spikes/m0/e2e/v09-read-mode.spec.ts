@@ -1,6 +1,7 @@
 // V09 阅读模式（00 号计划书 §6.5）：每个编辑入口都被拦截，或者不会产生可提交的内容；模式切换；入口隐藏；真实用户身份。
 // 三种候选方案（Phase 文档 §3.3）：facade（官方接口）、points（本地权限点）、firewall（取消非本地 mutation）。
 // 每个入口的结论：拦截（内容不变）/ 没有拦截但被检测到（进入编辑前必须重新加载）/ 没有拦截也没有被检测到（不可接受）。
+// 选定的 combined 方案在表格的公式 Worker 模式下另跑一遍入口矩阵与原地切换（V10 据性能数据选定 Worker 模式）。
 import type { Page } from '@playwright/test';
 import type { DocKind } from './p3-helpers';
 
@@ -202,8 +203,8 @@ async function step(page: Page, kind: DocKind, s: Step): Promise<string | null> 
     }
 }
 
-async function openRead(page: Page, kind: DocKind, strategy: string): Promise<void> {
-    await page.goto(`/${kind}.html?sample=${kind === 'sheet' ? 'sheet-all' : 'doc-all'}&mode=read&ro=${strategy}`);
+async function openRead(page: Page, kind: DocKind, strategy: string, worker = false): Promise<void> {
+    await page.goto(`/${kind}.html?sample=${kind === 'sheet' ? 'sheet-all' : 'doc-all'}&mode=read&ro=${strategy}${worker ? '&worker=1' : ''}`);
     await waitForEditor(page);
     await waitQuiet(page);
 }
@@ -232,16 +233,21 @@ function nonEmptyProtection(text: string): string[] {
 }
 
 for (const kind of ['sheet', 'doc'] as const) {
-    for (const strategy of STRATEGIES) {
-        test(`V09 入口矩阵：${kind}-${strategy}`, async ({ page, context }, testInfo) => {
+    const variants: { strategy: (typeof STRATEGIES)[number]; worker: boolean }[] = [
+        ...STRATEGIES.map((strategy) => ({ strategy, worker: false })),
+        ...(kind === 'sheet' ? [{ strategy: 'combined' as const, worker: true }] : []),
+    ];
+    for (const { strategy, worker } of variants) {
+        const name = `${kind}-${strategy}${worker ? '-worker' : ''}`;
+        test(`V09 入口矩阵：${name}`, async ({ page, context }, testInfo) => {
             test.setTimeout(900_000);
             if (testInfo.project.name !== 'webkit') await context.grantPermissions(['clipboard-read', 'clipboard-write']);
 
             // 1. 痕迹：进入阅读模式本身是否产生 mutation、是否写入保护类数据
-            await page.goto(`/${kind}.html?sample=${kind === 'sheet' ? 'sheet-all' : 'doc-all'}`);
+            await page.goto(`/${kind}.html?sample=${kind === 'sheet' ? 'sheet-all' : 'doc-all'}${worker ? '&worker=1' : ''}`);
             await waitForEditor(page);
             const editText = await snapshotText(page);
-            await openRead(page, kind, strategy);
+            await openRead(page, kind, strategy, worker);
             const readText = await snapshotText(page);
             const entering = await detectorState(page);
             const report = await page.evaluate(() => window.__m0!.readMode!.report);
@@ -271,13 +277,14 @@ for (const kind of ['sheet', 'doc'] as const) {
                 const verdict = diff.length === 0 ? '拦截' : state.detections.length > 0 ? '未拦截-被检测到' : '未拦截-未检测到';
                 results.push({ entry: entry.id, method: entry.method, verdict, error, pageErrors, detections: brief(state).detections, diff: diff.slice(0, 5), canceledSoFar: canceled });
                 // 模型被改动过：重新加载，下一个入口从干净的状态开始
-                if (diff.length > 0 || state.detections.length > 0) await openRead(page, kind, strategy);
+                if (diff.length > 0 || state.detections.length > 0) await openRead(page, kind, strategy, worker);
             }
 
-            await writeResult(`v09/entries/${testInfo.project.name}-${kind}-${strategy}.json`, {
+            await writeResult(`v09/entries/${testInfo.project.name}-${name}.json`, {
                 check: 'V09-entries',
                 kind,
                 strategy,
+                worker,
                 browser: browserInfo(page, testInfo),
                 timestamp: new Date().toISOString(),
                 traces,
@@ -427,10 +434,12 @@ for (const kind of ['sheet', 'doc'] as const) {
             return shown;
         };
         const inPlace: Record<string, unknown>[] = [];
-        for (const variant of [...STRATEGIES, 'combined+ui'] as const) {
-            const strategy = variant === 'combined+ui' ? 'combined' : variant;
+        const variants = [...STRATEGIES, 'combined+ui', ...(kind === 'sheet' ? ['combined+worker' as const] : [])] as const;
+        for (const variant of variants) {
+            const strategy = variant === 'combined+ui' || variant === 'combined+worker' ? 'combined' : variant;
             const ui = variant === 'combined+ui';
-            await page.goto(`/${kind}.html?sample=${sample}`);
+            const worker = variant === 'combined+worker';
+            await page.goto(`/${kind}.html?sample=${sample}${worker ? '&worker=1' : ''}`);
             await waitForEditor(page);
             await waitQuiet(page);
             const before = await snapshotText(page);

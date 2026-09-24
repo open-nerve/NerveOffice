@@ -1,6 +1,6 @@
 // V10 性能基线（00 号计划书 §12.1、§12.2）：5 万单元格 + 1,000 公式的表格样本。
 // 首屏（从导航开始到 Rendered，第一次打开与之后的打开分开）、第一次键盘输入被接受的时间、编辑响应（按键到下一帧）、
-// 公式计算（增量与全量，以及计算期间主线程的最长阻塞）、内存（Chromium 内核：页面与公式 Worker 各自的 JS 堆）、打开过程中的长任务。
+// 公式计算（增量与全量，以及计算期间主线程的最长阻塞与界面冻结）、内存（Chromium 内核：页面与公式 Worker 各自的 JS 堆）、打开过程中的长任务。
 // 数据只作相对基线（M0 总设计 §7），正式压测在 M7；Playwright 以无头模式运行；n = 5 时 p95 就是最大值。
 import type { CDPSession, Page } from '@playwright/test';
 
@@ -158,35 +158,40 @@ for (const worker of [false, true]) {
         await page.waitForTimeout(500);
         const keyLatency = await page.evaluate(() => (window as unknown as { __keyLatency: number[] }).__keyLatency);
 
-        // 4. 公式计算：增量（修改一个数据单元格）与全量（强制重算全部公式）；同时测计算期间主线程的最长阻塞（界面冻结）
+        // 4. 公式计算：增量（修改 D 列的一个数据单元格，牵动约 320 个公式：行合计、D 列的统计与条件统计、300 个 VLOOKUP）
+        //    与全量（强制重算全部公式）。同时测计算期间界面的冻结，三种口径互相印证：
+        //    事件循环延迟探针（三个浏览器）、帧间隔（三个浏览器）、最长的长任务（只有 Chromium 内核支持 Long Tasks）。
         const formula = await page.evaluate(async () => {
             const m0 = window.__m0!;
+            const perf = m0.perf!;
             const api = m0.editor!.univerAPI;
             const f = api.getFormula();
             const ws = api.getActiveWorkbook()!.getSheetByName('数据表')!;
-            const incremental: number[] = [];
-            const incrementalBlock: number[] = [];
-            for (let i = 0; i < 5; i++) {
-                const probe = m0.perf!.probeEventLoopLag();
+            await m0.waitForCapture!({ debounceMs: 0 });
+            const measure = async (act: () => void) => {
+                const lag = perf.probeEventLoopLag();
+                const frames = perf.probeFrameGap();
+                const tasks = perf.observeLongTasks();
                 const t0 = performance.now();
-                ws.getRange(`D${i + 2}`).setValue(500 + i);
-                await m0.waitForCapture!({ debounceMs: 0 });
-                incremental.push(performance.now() - t0);
-                incrementalBlock.push(probe.stop().maxGap);
-            }
-            const full: number[] = [];
-            const fullBlock: number[] = [];
-            for (let i = 0; i < 3; i++) {
-                const probe = m0.perf!.probeEventLoopLag();
-                const t0 = performance.now();
-                f.executeCalculation();
-                await f.onCalculationResultApplied(120_000);
-                await m0.waitForCapture!({ debounceMs: 0 });
-                full.push(performance.now() - t0);
-                fullBlock.push(probe.stop().maxGap);
-            }
-            return { incremental, full, incrementalBlock, fullBlock };
+                act();
+                // 只用捕获等待（其中已发起等待接口，并逐表收齐）；再单独调一次等待接口会多出约 500 ms 的起始等待
+                await m0.waitForCapture!({ debounceMs: 0, timeoutMs: 120_000 });
+                const ms = performance.now() - t0;
+                const blockMs = lag.stop().maxGap;
+                const frameGapMs = frames.stop().maxGap;
+                const longTasks = await tasks.stop();
+                return { ms, blockMs, frameGapMs, longestTaskMs: tasks.supported ? Math.max(0, ...longTasks.map((x) => x.duration)) : null };
+            };
+            const incremental = [];
+            for (let i = 0; i < 5; i++) incremental.push(await measure(() => ws.getRange(`D${i + 2}`).setValue(500 + i)));
+            const full = [];
+            for (let i = 0; i < 3; i++) full.push(await measure(() => f.executeCalculation()));
+            return { incremental, full };
         });
+        const pick = (xs: typeof formula.full, key: 'ms' | 'blockMs' | 'frameGapMs' | 'longestTaskMs') => {
+            const values = xs.map((x) => x[key]).filter((v): v is number => v != null);
+            return values.length === 0 ? null : stats(values);
+        };
 
         // 5. 内存：再做 50 次编辑后读取
         await page.evaluate(async () => {
@@ -213,11 +218,57 @@ for (const worker of [false, true]) {
             firstInput,
             keyLatencyMs: stats(keyLatency),
             // 从修改到这一轮公式结果逐表收齐（capture-timing.ts 的判定，不含 1 秒防抖）
-            formulaMs: { incremental: stats(formula.incremental), full: stats(formula.full) },
+            formulaMs: { incremental: pick(formula.incremental, 'ms'), full: pick(formula.full, 'ms') },
             // 计算期间主线程的最长阻塞（事件循环延迟探针，分辨率约 4 ms）
-            formulaBlockMs: { incremental: stats(formula.incrementalBlock), full: stats(formula.fullBlock) },
+            formulaBlockMs: { incremental: pick(formula.incremental, 'blockMs'), full: pick(formula.full, 'blockMs') },
+            // 计算期间界面最长没有刷新的时间（帧间隔）
+            formulaFrameGapMs: { incremental: pick(formula.incremental, 'frameGapMs'), full: pick(formula.full, 'frameGapMs') },
+            // 计算期间最长的长任务（只有 Chromium 内核有数据）
+            formulaLongestTaskMs: { incremental: pick(formula.incremental, 'longestTaskMs'), full: pick(formula.full, 'longestTaskMs') },
             heapBytes: { afterOpen: heapAfterOpen, afterEdits: heapAfterEdits },
             raw: { opens, keyLatency, formula },
         });
     });
 }
+
+// 主线程模式的另一种做法：调小公式引擎的让出间隔（intervalCount，SDK 默认每 500 个公式让出一次主线程）。
+// 同样的增量与全量计算，比较到结果收齐的时间与计算期间的冻结；只测公式计算，不重复首屏与内存。
+test('V10 公式的让出间隔（主线程模式）', async ({ page, request }, testInfo) => {
+    test.setTimeout(600_000);
+    const id = await ensureGenerated(page, request, 'sheet', 'perf-50k');
+    const out: Record<string, unknown>[] = [];
+    for (const interval of [500, 100, 20, 5]) {
+        await page.goto(`/sheet.html?doc=${id}&interval=${interval}`);
+        await waitForEditor(page);
+        await waitQuiet(page);
+        const r = await page.evaluate(async () => {
+            const m0 = window.__m0!;
+            const perf = m0.perf!;
+            const api = m0.editor!.univerAPI;
+            const ws = api.getActiveWorkbook()!.getSheetByName('数据表')!;
+            const measure = async (act: () => void) => {
+                const lag = perf.probeEventLoopLag();
+                const frames = perf.probeFrameGap();
+                const t0 = performance.now();
+                act();
+                await m0.waitForCapture!({ debounceMs: 0, timeoutMs: 120_000 });
+                const ms = performance.now() - t0;
+                const blockMs = lag.stop().maxGap;
+                const frame = frames.stop();
+                return { ms, blockMs, frameGapMs: frame.maxGap, frames: frame.frames };
+            };
+            const incremental = [];
+            for (let i = 0; i < 3; i++) incremental.push(await measure(() => ws.getRange(`D${i + 2}`).setValue(600 + i)));
+            const full = [];
+            for (let i = 0; i < 2; i++) full.push(await measure(() => api.getFormula().executeCalculation()));
+            return { incremental, full };
+        });
+        out.push({ interval, ...r });
+    }
+    await writeResult(`v10/interval/${testInfo.project.name}.json`, {
+        check: 'V10-interval',
+        browser: browserInfo(page, testInfo),
+        timestamp: new Date().toISOString(),
+        results: out,
+    });
+});

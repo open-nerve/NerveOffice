@@ -12,24 +12,24 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T14:02:13.116Z",
+  "timestamp": "2026-09-24T15:41:30.213Z",
   "copy": {
-    "syncMs": 29.799999952316284,
+    "syncMs": 29.699999928474426,
     "name": "明细 （副本）",
-    "idleMaxGapMs": 297.09999990463257
+    "idleMaxGapMs": 299
   },
   "quiet": {
-    "waitedMs": 764.8000000715256,
+    "waitedMs": 768.3999999761581,
     "formula": "settled",
     "restarts": 0
   },
   "localMutations": {
     "beforeS1": 99,
     "afterS1": 0,
-    "lastBeforeS1Ms": 334,
-    "lastMs": 334
+    "lastBeforeS1Ms": 323,
+    "lastMs": 323
   },
-  "capturedAfterMs": 765,
+  "capturedAfterMs": 768,
   "sourceCells": 265800,
   "copiedCellsImmediately": 3000,
   "copiedCellsAtS1": 265800,

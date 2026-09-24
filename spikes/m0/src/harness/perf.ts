@@ -8,26 +8,39 @@ export interface LongTaskRecord {
     duration: number;
 }
 
-/** Long Tasks 观察器；浏览器不支持时 supported 为 false。 */
-export function observeLongTasks(): { supported: boolean; stop(): LongTaskRecord[] } {
+/**
+ * Long Tasks 观察器；浏览器不支持时 supported 为 false。
+ * 长任务的记录在任务结束之后才送达：被测的工作在一个长任务末尾完成、await 的后续代码在同一个任务里调用 stop() 时，
+ * 这个任务还没结束，记录会晚到，落进下一段观察。所以 stop() 先让出宏任务与一帧再收集，
+ * 并且只保留与观察窗口重叠的任务（结束时刻不早于开始观察的时刻），把上一段测量晚到的记录排除在外。
+ */
+export function observeLongTasks(): { supported: boolean; stop(): Promise<LongTaskRecord[]> } {
     const list: LongTaskRecord[] = [];
+    const since = performance.now();
     const supported = typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('longtask') === true;
-    if (!supported) return { supported, stop: () => list };
+    if (!supported) return { supported, stop: async () => list };
     const observer = new PerformanceObserver((entries) => {
         for (const e of entries.getEntries()) list.push({ start: e.startTime, duration: e.duration });
     });
     observer.observe({ type: 'longtask', buffered: false });
     return {
         supported,
-        stop() {
+        async stop() {
+            await new Promise((r) => setTimeout(r, 0));
+            await new Promise((r) => requestAnimationFrame(r));
+            await new Promise((r) => setTimeout(r, 0));
             observer.takeRecords().forEach((e) => list.push({ start: e.startTime, duration: e.duration }));
             observer.disconnect();
-            return list;
+            return list.filter((t) => t.start + t.duration >= since);
         },
     };
 }
 
-/** 事件循环延迟探针：两次 setTimeout(0) 回调之间的最大间隔，近似主线程的最长阻塞（分辨率约 4 ms）。 */
+/**
+ * 事件循环延迟探针：两次 setTimeout(0) 回调之间的最大间隔，近似主线程的最长阻塞（分辨率约 4 ms）。
+ * stop() 把"上一次回调到现在"也算进去：被测的工作在一段长阻塞末尾完成、await 的后续代码在同一个任务里调用 stop() 时，
+ * 下一次回调还没轮到执行，不这样算就会漏掉最后这段阻塞。
+ */
 export function probeEventLoopLag(): { stop(): { maxGap: number; samples: number } } {
     let running = true;
     let last = performance.now();
@@ -43,8 +56,36 @@ export function probeEventLoopLag(): { stop(): { maxGap: number; samples: number
     setTimeout(tick, 0);
     return {
         stop() {
+            if (running) maxGap = Math.max(maxGap, performance.now() - last);
             running = false;
             return { maxGap, samples };
+        },
+    };
+}
+
+/**
+ * 帧间隔探针：两次 requestAnimationFrame 回调之间的最大间隔，即界面最长没有刷新的时间（用户看到的冻结）。
+ * 与事件循环延迟探针一样，stop() 把"上一帧到现在"也算进去。
+ */
+export function probeFrameGap(): { stop(): { maxGap: number; frames: number } } {
+    let running = true;
+    let last = performance.now();
+    let maxGap = 0;
+    let frames = 0;
+    const frame = () => {
+        if (!running) return;
+        const now = performance.now();
+        maxGap = Math.max(maxGap, now - last);
+        last = now;
+        frames += 1;
+        requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+    return {
+        stop() {
+            if (running) maxGap = Math.max(maxGap, performance.now() - last);
+            running = false;
+            return { maxGap, frames };
         },
     };
 }
@@ -94,7 +135,7 @@ export async function measureCapture(editor: EditorHandle): Promise<CaptureMeasu
     await sha256Hex(zipped);
     const t4 = performance.now();
     const gap = lag.stop();
-    const tasks = longTasks.stop();
+    const tasks = await longTasks.stop();
     return {
         saveMs: t1 - t0,
         stringifyMs: t2 - t1,

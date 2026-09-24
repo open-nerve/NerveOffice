@@ -58,7 +58,7 @@ function v06(): string {
 
     const copy = load('v06/large-copy');
     out.push('### 大表复制', table(
-        ['浏览器', '样本', '配置', '同步复制 ms', '立即捕获', 'S1', '原表', '本地 mutation 最后 ms', '捕获时刻 ms', '懒执行期间最长阻塞 ms', '复制品公式', '删除前后撤销数'],
+        ['浏览器', '样本', '配置', '同步复制 ms', '立即捕获', 'S1', '原表', '本地 mutation 最后（从复制开始）ms', '捕获等待（从复制返回起）ms', '懒执行期间最长阻塞 ms', '复制品公式', '删除前后撤销数'],
         copy.map((x) => {
             const d = x.data;
             return [browserOf(x.file), d.sample, d.config.id, r0(d.copy.syncMs), String(d.copiedCellsImmediately), String(d.copiedCellsAtS1), String(d.sourceCells), r0(d.localMutations.lastMs), r0(d.capturedAfterMs), r0(d.copy.idleMaxGapMs), d.formulaInCopyMatches ? '一致' : '不一致', `${d.removal.undoBefore.undos}→${d.removal.undoAfterRemove.undos}`];
@@ -139,7 +139,7 @@ function v09(): string {
         entries.map((x) => {
             const d = x.data;
             const errs = d.entries.filter((e: Json) => (e.pageErrors ?? []).length > 0).map((e: Json) => e.entry);
-            return [browserOf(x.file), d.kind, d.strategy, String(d.summary.blocked.length), d.summary.detected.join('、') || '—', d.summary.undetected.join('、') || '—', String(d.traces.detections.length), d.traces.protectionResources.join('、') || '—', errs.join('、') || '—'];
+            return [browserOf(x.file), d.kind, `${d.strategy}${d.worker ? '（Worker 模式）' : ''}`, String(d.summary.blocked.length), d.summary.detected.join('、') || '—', d.summary.undetected.join('、') || '—', String(d.traces.detections.length), d.traces.protectionResources.join('、') || '—', errs.join('、') || '—'];
         }),
     ));
     const control = load('v09/control');
@@ -182,15 +182,34 @@ function v10(): string {
     const out: string[] = ['## V10 性能基线（p50 / p95，毫秒）'];
     const list = load('v10');
     out.push(table(
-        ['浏览器', 'Worker', '到 Rendered：第一次 / 之后（中位数）', 'Rendered 前最长长任务', '第一次键入被接受（提交时刻 ms，3 次）', '按键到下一帧', '增量计算', '其间最长阻塞', '全量重算', '其间最长阻塞', 'JS 堆（页面 + Worker）：打开后 / 50 次编辑后'],
+        ['浏览器', 'Worker', '到 Rendered：第一次 / 之后（中位数）', 'Rendered 前最长长任务', '第一次键入被接受（提交时刻 ms，3 次）', '按键到下一帧', 'JS 堆（页面 + Worker）：打开后 / 50 次编辑后'],
         list.map((x) => {
             const d = x.data;
             const mib = (h: Json | null) => (h == null ? '无法测量' : `${(h.main / 1048576).toFixed(1)}${h.workers.length > 0 ? ` + ${h.workers.map((w: number) => (w / 1048576).toFixed(1)).join(' + ')}` : ''} MiB`);
             const heap = d.heapBytes.afterOpen == null ? '无法测量' : `${mib(d.heapBytes.afterOpen)} / ${mib(d.heapBytes.afterEdits)}`;
             const first = (d.firstInput as Json[]).map((f) => (f.accepted ? r0(f.committedAt) : `未进入 K3${f.detections.length > 0 ? `（${f.diff.map((g: Json) => g.path).join('，') || '无内容差异'}）` : ''}`)).join('、');
-            return [browserOf(x.file), d.worker ? '是' : '否', `${r0(d.firstScreen.renderedColdMs)} / ${r0(d.firstScreen.renderedWarmMedianMs)}`, stat(d.firstScreen.longestTaskBeforeRenderedMs), first, stat(d.keyLatencyMs, 1), stat(d.formulaMs.incremental), stat(d.formulaBlockMs?.incremental), stat(d.formulaMs.full), stat(d.formulaBlockMs?.full), heap];
+            return [browserOf(x.file), d.worker ? '是' : '否', `${r0(d.firstScreen.renderedColdMs)} / ${r0(d.firstScreen.renderedWarmMedianMs)}`, stat(d.firstScreen.longestTaskBeforeRenderedMs), first, stat(d.keyLatencyMs, 1), heap];
         }),
     ));
+    out.push('### 公式计算与计算期间的界面冻结（增量 n = 5，全量 n = 3）');
+    out.push(table(
+        ['浏览器', 'Worker', '增量：到结果收齐', '最长阻塞（探针）', '帧间隔', '最长长任务', '全量：到结果收齐', '最长阻塞（探针）', '帧间隔', '最长长任务'],
+        list.map((x) => {
+            const d = x.data;
+            const cols = (k: 'incremental' | 'full') => [stat(d.formulaMs[k]), stat(d.formulaBlockMs?.[k]), stat(d.formulaFrameGapMs?.[k]), d.formulaLongestTaskMs?.[k] == null ? '不支持' : stat(d.formulaLongestTaskMs[k])];
+            return [browserOf(x.file), d.worker ? '是' : '否', ...cols('incremental'), ...cols('full')];
+        }),
+    ));
+    const interval = load('v10/interval');
+    if (interval.length > 0) {
+        const mid = (xs: Json[], k: string) => r0([...xs.map((x) => x[k] as number)].sort((a, b) => a - b)[Math.floor((xs.length - 1) / 2)]);
+        const max = (xs: Json[], k: string) => r0(Math.max(...xs.map((x) => x[k] as number)));
+        out.push('### 主线程模式调小让出间隔（`intervalCount`；增量 n = 3、全量 n = 2，中位数 / 最大值）');
+        out.push(table(
+            ['浏览器', '让出间隔', '增量：到结果收齐', '最长阻塞', '帧间隔', '全量：到结果收齐', '最长阻塞', '帧间隔'],
+            interval.flatMap((x) => x.data.results.map((r: Json) => [browserOf(x.file), String(r.interval), `${mid(r.incremental, 'ms')} / ${max(r.incremental, 'ms')}`, `${mid(r.incremental, 'blockMs')} / ${max(r.incremental, 'blockMs')}`, `${mid(r.incremental, 'frameGapMs')} / ${max(r.incremental, 'frameGapMs')}`, `${mid(r.full, 'ms')} / ${max(r.full, 'ms')}`, `${mid(r.full, 'blockMs')} / ${max(r.full, 'blockMs')}`, `${mid(r.full, 'frameGapMs')} / ${max(r.full, 'frameGapMs')}`])),
+        ));
+    }
     return out.join('\n\n');
 }
 

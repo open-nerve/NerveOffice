@@ -17,6 +17,8 @@ export interface PageParams {
     calc: 'default' | 'forced';
     /** 大表操作拆分：split=0 关掉（V06）。 */
     split: boolean;
+    /** 公式引擎每执行多少个公式让出一次主线程（interval=N；缺省用 SDK 的 500，V10 比较让出间隔）。 */
+    interval?: number;
     worker: boolean;
     /** 真实 Safari 自检：场景名；完成后跳转到 next。 */
     selftest?: string;
@@ -35,6 +37,7 @@ export function readPageParams(defaultSample: string): PageParams {
         ro: q.get('ro') ?? 'points',
         calc: q.get('calc') === 'forced' ? 'forced' : 'default',
         split: q.get('split') !== '0',
+        interval: q.get('interval') == null ? undefined : Number(q.get('interval')),
         worker: q.get('worker') === '1',
         selftest: q.get('selftest') ?? undefined,
         next: q.get('next') ?? undefined,

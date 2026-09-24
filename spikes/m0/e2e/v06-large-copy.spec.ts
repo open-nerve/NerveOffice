@@ -68,6 +68,7 @@ for (const sample of SAMPLES) for (const c of CONFIGS) {
         const rel = (t: number | null) => (t == null ? null : Math.round(t - copy.t0));
         const localDone = rel(during.localMutations.lastT);
         const localLast = rel(after.localMutations.lastT ?? during.localMutations.lastT);
+        // 捕获等待从 waitQuiet 开始计（复制的 page.evaluate 返回之后，含立即捕获的序列化），与上面相对复制开始的时刻起点不同
         const capturedAt = Math.round(quiet.waitedMs);
 
         const source = cellCount(s0, sample.sheet);

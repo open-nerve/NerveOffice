@@ -7,12 +7,12 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T13:46:04.226Z",
+  "timestamp": "2026-09-24T16:04:11.217Z",
   "inPlace": [
     {
       "strategy": "facade",
-      "enterMs": 19,
-      "exitMs": 26,
+      "enterMs": 32,
+      "exitMs": 17,
       "undoInRead": {
         "undos": 0,
         "redos": 0
@@ -60,7 +60,7 @@
           "path": "$.resources[0].data",
           "kind": "changed",
           "before": "null",
-          "after": "{\"1O66PbH_\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"unitID\":\"m0-sheet-all\"},\"9ssa7hO4\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"..."
+          "after": "{\"7WBa0iF-\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"unitID\":\"m0-sheet-all\"},\"apKN65Kv\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"..."
         }
       ],
       "protectionResourcesAfter": [
@@ -116,8 +116,8 @@
     },
     {
       "strategy": "combined",
-      "enterMs": 19,
-      "exitMs": 13,
+      "enterMs": 15,
+      "exitMs": 16,
       "undoInRead": {
         "undos": 0,
         "redos": 0
@@ -142,8 +142,8 @@
     },
     {
       "strategy": "combined+ui",
-      "enterMs": 11,
-      "exitMs": 33,
+      "enterMs": 10,
+      "exitMs": 32,
       "undoInRead": {
         "undos": 0,
         "redos": 0
@@ -183,13 +183,39 @@
         "toolbarButtons": 57,
         "contextMenu": true
       }
+    },
+    {
+      "strategy": "combined+worker",
+      "enterMs": 14,
+      "exitMs": 16,
+      "undoInRead": {
+        "undos": 0,
+        "redos": 0
+      },
+      "exitSteps": [
+        {
+          "step": "工作表编辑类权限点 = true（本地）",
+          "ok": true
+        },
+        {
+          "step": "workbook.setEditable(true)",
+          "ok": true
+        }
+      ],
+      "detectionsWhileSwitching": [],
+      "leftover": [],
+      "protectionResourcesAfter": [],
+      "editableAfterExit": true,
+      "editedValue": "苹果X",
+      "uiInRead": null,
+      "uiAfterExit": null
     }
   ],
   "remount": {
-    "toReadMs": 3355.2000000476837,
-    "toReadRenderedMs": 333.60000002384186,
-    "toEditMs": 3375.7000000476837,
-    "toEditRenderedMs": 346.2999999523163,
+    "toReadMs": 3355.100000023842,
+    "toReadRenderedMs": 332.10000002384186,
+    "toEditMs": 3370.8000000715256,
+    "toEditRenderedMs": 349.7999999523163,
     "readUndo": {
       "undos": 0,
       "redos": 0

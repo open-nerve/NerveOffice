@@ -7,20 +7,22 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T08:24:51.356Z",
+  "timestamp": "2026-09-24T15:58:41.263Z",
   "firstScreen": {
     "renderedMs": {
-      "p50": 529,
-      "p95": 647,
-      "max": 647,
-      "min": 505,
+      "p50": 525,
+      "p95": 641,
+      "max": 641,
+      "min": 515,
       "n": 5
     },
+    "renderedColdMs": 641,
+    "renderedWarmMedianMs": 516,
     "steadyMs": {
       "p50": 3564,
       "p95": 3705,
       "max": 3705,
-      "min": 3538,
+      "min": 3555,
       "n": 5
     },
     "longTasksBeforeRendered": [
@@ -38,44 +40,135 @@
       "n": 5
     }
   },
+  "firstInput": [
+    {
+      "canvasAt": 657,
+      "typedAt": 843,
+      "rendered": 544,
+      "committedAt": 781,
+      "k3": "abc",
+      "accepted": true,
+      "detections": [
+        "sheet.mutation.set-range-values"
+      ],
+      "diff": [
+        {
+          "path": "$.styles.yzrSkv",
+          "kind": "added",
+          "after": "{\"cl\":{\"rgb\":\"#1B1C1F\"}}"
+        },
+        {
+          "path": "$.sheets.KEh89li0b5lSMemb7GmAc.cellData.2.10",
+          "kind": "added",
+          "after": "{\"v\":\"abc\",\"s\":\"yzrSkv\",\"t\":1}"
+        }
+      ]
+    },
+    {
+      "canvasAt": 625,
+      "typedAt": 764,
+      "rendered": 515,
+      "committedAt": 710,
+      "k3": "abc",
+      "accepted": true,
+      "detections": [
+        "sheet.mutation.set-range-values"
+      ],
+      "diff": [
+        {
+          "path": "$.styles.zts4zc",
+          "kind": "added",
+          "after": "{\"cl\":{\"rgb\":\"#1B1C1F\"}}"
+        },
+        {
+          "path": "$.sheets.KEh89li0b5lSMemb7GmAc.cellData.2.10",
+          "kind": "added",
+          "after": "{\"v\":\"abc\",\"s\":\"zts4zc\",\"t\":1}"
+        }
+      ]
+    },
+    {
+      "canvasAt": 620,
+      "typedAt": 777,
+      "rendered": 513,
+      "committedAt": 719,
+      "k3": "abc",
+      "accepted": true,
+      "detections": [
+        "sheet.mutation.set-range-values"
+      ],
+      "diff": [
+        {
+          "path": "$.styles.rmDIgK",
+          "kind": "added",
+          "after": "{\"cl\":{\"rgb\":\"#1B1C1F\"}}"
+        },
+        {
+          "path": "$.sheets.KEh89li0b5lSMemb7GmAc.cellData.2.10",
+          "kind": "added",
+          "after": "{\"v\":\"abc\",\"s\":\"rmDIgK\",\"t\":1}"
+        }
+      ]
+    }
+  ],
   "keyLatencyMs": {
-    "p50": 24,
+    "p50": 25,
     "p95": 32,
-    "max": 43,
+    "max": 48,
     "min": 9,
-    "n": 60
+    "n": 90
   },
   "formulaMs": {
     "incremental": {
-      "p50": 656,
-      "p95": 673,
-      "max": 673,
-      "min": 639,
+      "p50": 682,
+      "p95": 708,
+      "max": 708,
+      "min": 671,
       "n": 5
     },
     "full": {
-      "p50": 715,
-      "p95": 723,
-      "max": 723,
-      "min": 706,
+      "p50": 750,
+      "p95": 752,
+      "max": 752,
+      "min": 746,
       "n": 3
     }
   },
   "formulaBlockMs": {
     "incremental": {
-      "p50": 16,
-      "p95": 23,
-      "max": 23,
-      "min": 12,
+      "p50": 656,
+      "p95": 666,
+      "max": 666,
+      "min": 640,
       "n": 5
     },
     "full": {
-      "p50": 26,
-      "p95": 38,
-      "max": 38,
-      "min": 23,
+      "p50": 695,
+      "p95": 708,
+      "max": 708,
+      "min": 688,
       "n": 3
     }
+  },
+  "formulaFrameGapMs": {
+    "incremental": {
+      "p50": 661,
+      "p95": 664,
+      "max": 664,
+      "min": 641,
+      "n": 5
+    },
+    "full": {
+      "p50": 699,
+      "p95": 703,
+      "max": 703,
+      "min": 691,
+      "n": 3
+    }
+  },
+  "formulaLongestTaskMs": {
+    "incremental": null,
+    "full": null
   },
   "heapBytes": {
     "afterOpen": null,
@@ -84,122 +177,180 @@
   "raw": {
     "opens": [
       {
-        "rendered": 647,
+        "rendered": 641,
         "steady": 3705,
         "longTasks": -1,
         "longestTask": 0
       },
       {
-        "rendered": 529,
+        "rendered": 537,
+        "steady": 3578,
+        "longTasks": -1,
+        "longestTask": 0
+      },
+      {
+        "rendered": 515,
+        "steady": 3555,
+        "longTasks": -1,
+        "longestTask": 0
+      },
+      {
+        "rendered": 525,
         "steady": 3564,
         "longTasks": -1,
         "longestTask": 0
       },
       {
-        "rendered": 518,
-        "steady": 3553,
-        "longTasks": -1,
-        "longestTask": 0
-      },
-      {
-        "rendered": 535,
-        "steady": 3570,
-        "longTasks": -1,
-        "longestTask": 0
-      },
-      {
-        "rendered": 505,
-        "steady": 3538,
+        "rendered": 516,
+        "steady": 3558,
         "longTasks": -1,
         "longestTask": 0
       }
     ],
     "keyLatency": [
-      27,
-      27,
-      31,
-      27,
-      24,
-      30,
-      24,
-      21,
-      27,
-      22,
-      18,
-      21,
-      23,
-      31,
-      20,
-      18,
-      31,
-      19,
-      18,
-      30,
-      33,
-      29,
-      30,
-      18,
-      18,
-      43,
-      22,
-      21,
-      32,
-      18,
-      15,
-      18,
-      31,
-      29,
-      26,
-      18,
-      31,
       28,
-      24,
-      24,
-      26,
-      18,
-      28,
-      26,
-      23,
-      9,
-      23,
-      31,
-      23,
-      20,
+      27,
       32,
+      17,
       29,
-      31,
-      18,
+      26,
+      17,
+      30,
       21,
-      20,
-      23,
+      31,
+      22,
+      17,
+      29,
       25,
-      35,
-      17
+      23,
+      17,
+      26,
+      23,
+      21,
+      21,
+      23,
+      20,
+      41,
+      24,
+      21,
+      18,
+      18,
+      27,
+      36,
+      24,
+      22,
+      32,
+      25,
+      22,
+      19,
+      19,
+      25,
+      25,
+      29,
+      27,
+      28,
+      32,
+      30,
+      26,
+      26,
+      33,
+      23,
+      20,
+      48,
+      9,
+      22,
+      22,
+      23,
+      18,
+      22,
+      20,
+      31,
+      31,
+      18,
+      31,
+      26,
+      18,
+      18,
+      32,
+      32,
+      28,
+      25,
+      31,
+      29,
+      24,
+      15,
+      19,
+      28,
+      30,
+      30,
+      24,
+      19,
+      29,
+      27,
+      18,
+      18,
+      22,
+      25,
+      20,
+      25,
+      22,
+      19,
+      26,
+      25,
+      25
     ],
     "formula": {
       "incremental": [
-        673,
-        667,
-        639,
-        649,
-        656
+        {
+          "ms": 708,
+          "blockMs": 665,
+          "frameGapMs": 661,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 690,
+          "blockMs": 666,
+          "frameGapMs": 664,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 671,
+          "blockMs": 649,
+          "frameGapMs": 661,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 673,
+          "blockMs": 640,
+          "frameGapMs": 641,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 682,
+          "blockMs": 656,
+          "frameGapMs": 654,
+          "longestTaskMs": null
+        }
       ],
       "full": [
-        723,
-        706,
-        715
-      ],
-      "incrementalBlock": [
-        23,
-        18,
-        12,
-        15,
-        16
-      ],
-      "fullBlock": [
-        38,
-        23,
-        26
+        {
+          "ms": 752,
+          "blockMs": 708,
+          "frameGapMs": 703,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 750,
+          "blockMs": 695,
+          "frameGapMs": 699,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 746,
+          "blockMs": 688,
+          "frameGapMs": 691,
+          "longestTaskMs": null
+        }
       ]
     }
   }

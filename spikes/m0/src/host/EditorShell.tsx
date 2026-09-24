@@ -65,6 +65,7 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
                 ui: profile.ui[mode],
                 largeSheetSplit: params.split,
                 calcMode: params.calc,
+                formulaIntervalCount: params.interval,
             });
             window.__m0!.readMode = mode === 'read' ? await enterReadMode(editor, ro as never) : undefined;
             return editor;

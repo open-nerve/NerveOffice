@@ -29,6 +29,8 @@ export interface CreateEditorOptions {
     largeSheetSplit?: boolean;
     /** 打开时的公式计算模式（V07 的重算基准用 forced）。 */
     calcMode?: 'default' | 'forced';
+    /** 公式引擎的让出间隔（V10）。 */
+    formulaIntervalCount?: number;
 }
 
 export interface ResourceHookInfo {
@@ -76,6 +78,7 @@ export async function createEditor(options: CreateEditorOptions): Promise<Editor
         ui: options.ui ?? profile.ui.edit,
         largeSheetSplit: options.largeSheetSplit ?? true,
         calcMode: options.calcMode ?? 'default',
+        formulaIntervalCount: options.formulaIntervalCount,
     };
     const t0 = performance.now();
     const timings: Record<string, number> = { t0 };

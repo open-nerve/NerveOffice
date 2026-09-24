@@ -108,7 +108,7 @@ const groups: PluginGroup[] = [
             'SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN',
         ],
         removable: false,
-        plugins: ({ container, createWorker, ui, largeSheetSplit }) => {
+        plugins: ({ container, createWorker, ui, largeSheetSplit, formulaIntervalCount }) => {
             const useWorker = createWorker != null;
             return [
                 [UniverDocsPlugin],
@@ -116,7 +116,7 @@ const groups: PluginGroup[] = [
                 [UniverUIPlugin, { container, menu: ui.menu, toolbar: ui.toolbar, contextMenu: ui.contextMenu }],
                 [UniverDocsUIPlugin],
                 useWorker ? [UniverRPCMainThreadPlugin, { workerURL: createWorker() }] : null,
-                [UniverFormulaEnginePlugin, { notExecuteFormula: useWorker }],
+                [UniverFormulaEnginePlugin, { notExecuteFormula: useWorker, intervalCount: formulaIntervalCount }],
                 [UniverSheetsPlugin, {
                     notExecuteFormula: useWorker,
                     onlyRegisterFormulaRelatedMutations: false,

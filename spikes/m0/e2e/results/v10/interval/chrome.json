@@ -1,0 +1,160 @@
+{
+  "check": "V10-interval",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T16:01:25.667Z",
+  "results": [
+    {
+      "interval": 500,
+      "incremental": [
+        {
+          "ms": 878,
+          "blockMs": 861.7000000476837,
+          "frameGapMs": 836,
+          "frames": 2
+        },
+        {
+          "ms": 821.3999999761581,
+          "blockMs": 797,
+          "frameGapMs": 794.6000000238419,
+          "frames": 3
+        },
+        {
+          "ms": 814.8999999761581,
+          "blockMs": 804,
+          "frameGapMs": 790,
+          "frames": 3
+        }
+      ],
+      "full": [
+        {
+          "ms": 906.3000000715256,
+          "blockMs": 862.6000000238419,
+          "frameGapMs": 862.6000000238419,
+          "frames": 4
+        },
+        {
+          "ms": 905.3999999761581,
+          "blockMs": 865.3999999761581,
+          "frameGapMs": 865.3000000715256,
+          "frames": 5
+        }
+      ]
+    },
+    {
+      "interval": 100,
+      "incremental": [
+        {
+          "ms": 849,
+          "blockMs": 493.5,
+          "frameGapMs": 268.39999997615814,
+          "frames": 4
+        },
+        {
+          "ms": 822.5,
+          "blockMs": 493.39999997615814,
+          "frameGapMs": 250.89999997615814,
+          "frames": 6
+        },
+        {
+          "ms": 818.1000000238419,
+          "blockMs": 494.2999999523163,
+          "frameGapMs": 262.60000002384186,
+          "frames": 6
+        }
+      ],
+      "full": [
+        {
+          "ms": 925.6999999284744,
+          "blockMs": 495.2999999523163,
+          "frameGapMs": 273.5,
+          "frames": 8
+        },
+        {
+          "ms": 918.4000000953674,
+          "blockMs": 520.6999999284744,
+          "frameGapMs": 272.89999997615814,
+          "frames": 7
+        }
+      ]
+    },
+    {
+      "interval": 20,
+      "incremental": [
+        {
+          "ms": 879.5,
+          "blockMs": 137.60000002384186,
+          "frameGapMs": 85.39999997615814,
+          "frames": 18
+        },
+        {
+          "ms": 825.2999999523163,
+          "blockMs": 128,
+          "frameGapMs": 78,
+          "frames": 18
+        },
+        {
+          "ms": 827.6000000238419,
+          "blockMs": 124,
+          "frameGapMs": 75.39999997615814,
+          "frames": 18
+        }
+      ],
+      "full": [
+        {
+          "ms": 923,
+          "blockMs": 105,
+          "frameGapMs": 76.80000007152557,
+          "frames": 23
+        },
+        {
+          "ms": 924.7000000476837,
+          "blockMs": 108.20000004768372,
+          "frameGapMs": 80.10000002384186,
+          "frames": 23
+        }
+      ]
+    },
+    {
+      "interval": 5,
+      "incremental": [
+        {
+          "ms": 860.6999999284744,
+          "blockMs": 55.700000047683716,
+          "frameGapMs": 45.39999997615814,
+          "frames": 50
+        },
+        {
+          "ms": 831,
+          "blockMs": 53.299999952316284,
+          "frameGapMs": 50.700000047683716,
+          "frames": 49
+        },
+        {
+          "ms": 826.3000000715256,
+          "blockMs": 51.10000002384186,
+          "frameGapMs": 39,
+          "frames": 50
+        }
+      ],
+      "full": [
+        {
+          "ms": 925.6999999284744,
+          "blockMs": 52.59999990463257,
+          "frameGapMs": 54.60000002384186,
+          "frames": 54
+        },
+        {
+          "ms": 928.5,
+          "blockMs": 53.699999928474426,
+          "frameGapMs": 49.800000071525574,
+          "frames": 55
+        }
+      ]
+    }
+  ]
+}

@@ -7,20 +7,22 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T08:25:24.301Z",
+  "timestamp": "2026-09-24T15:59:32.169Z",
   "firstScreen": {
     "renderedMs": {
-      "p50": 515,
+      "p50": 548,
       "p95": 647,
       "max": 647,
-      "min": 507,
+      "min": 521,
       "n": 5
     },
+    "renderedColdMs": 647,
+    "renderedWarmMedianMs": 524,
     "steadyMs": {
-      "p50": 3549,
-      "p95": 3707,
-      "max": 3707,
-      "min": 3542,
+      "p50": 3586,
+      "p95": 3712,
+      "max": 3712,
+      "min": 3558,
       "n": 5
     },
     "longTasksBeforeRendered": [
@@ -38,34 +40,105 @@
       "n": 5
     }
   },
+  "firstInput": [
+    {
+      "canvasAt": 607,
+      "typedAt": 744,
+      "rendered": 526,
+      "committedAt": 694,
+      "k3": "abc",
+      "accepted": true,
+      "detections": [
+        "sheet.mutation.set-range-values"
+      ],
+      "diff": [
+        {
+          "path": "$.styles.Kas_7z",
+          "kind": "added",
+          "after": "{\"cl\":{\"rgb\":\"#1B1C1F\"}}"
+        },
+        {
+          "path": "$.sheets.KEh89li0b5lSMemb7GmAc.cellData.2.10",
+          "kind": "added",
+          "after": "{\"v\":\"abc\",\"s\":\"Kas_7z\",\"t\":1}"
+        }
+      ]
+    },
+    {
+      "canvasAt": 603,
+      "typedAt": 738,
+      "rendered": 520,
+      "committedAt": 697,
+      "k3": "abc",
+      "accepted": true,
+      "detections": [
+        "sheet.mutation.set-range-values"
+      ],
+      "diff": [
+        {
+          "path": "$.styles.Njhb2y",
+          "kind": "added",
+          "after": "{\"cl\":{\"rgb\":\"#1B1C1F\"}}"
+        },
+        {
+          "path": "$.sheets.KEh89li0b5lSMemb7GmAc.cellData.2.10",
+          "kind": "added",
+          "after": "{\"v\":\"abc\",\"s\":\"Njhb2y\",\"t\":1}"
+        }
+      ]
+    },
+    {
+      "canvasAt": 597,
+      "typedAt": 714,
+      "rendered": 513,
+      "committedAt": 677,
+      "k3": "abc",
+      "accepted": true,
+      "detections": [
+        "sheet.mutation.set-range-values"
+      ],
+      "diff": [
+        {
+          "path": "$.styles.cXzMxf",
+          "kind": "added",
+          "after": "{\"cl\":{\"rgb\":\"#1B1C1F\"}}"
+        },
+        {
+          "path": "$.sheets.KEh89li0b5lSMemb7GmAc.cellData.2.10",
+          "kind": "added",
+          "after": "{\"v\":\"abc\",\"s\":\"cXzMxf\",\"t\":1}"
+        }
+      ]
+    }
+  ],
   "keyLatencyMs": {
-    "p50": 25,
-    "p95": 32,
+    "p50": 27,
+    "p95": 34,
     "max": 42,
     "min": 7,
-    "n": 60
+    "n": 90
   },
   "formulaMs": {
     "incremental": {
-      "p50": 685,
-      "p95": 705,
-      "max": 705,
-      "min": 680,
+      "p50": 735,
+      "p95": 757,
+      "max": 757,
+      "min": 725,
       "n": 5
     },
     "full": {
-      "p50": 745,
-      "p95": 749,
-      "max": 749,
-      "min": 740,
+      "p50": 802,
+      "p95": 809,
+      "max": 809,
+      "min": 797,
       "n": 3
     }
   },
   "formulaBlockMs": {
     "incremental": {
       "p50": 10,
-      "p95": 16,
-      "max": 16,
+      "p95": 21,
+      "max": 21,
       "min": 10,
       "n": 5
     },
@@ -77,6 +150,26 @@
       "n": 3
     }
   },
+  "formulaFrameGapMs": {
+    "incremental": {
+      "p50": 27,
+      "p95": 35,
+      "max": 35,
+      "min": 26,
+      "n": 5
+    },
+    "full": {
+      "p50": 25,
+      "p95": 27,
+      "max": 27,
+      "min": 25,
+      "n": 3
+    }
+  },
+  "formulaLongestTaskMs": {
+    "incremental": null,
+    "full": null
+  },
   "heapBytes": {
     "afterOpen": null,
     "afterEdits": null
@@ -85,121 +178,179 @@
     "opens": [
       {
         "rendered": 647,
-        "steady": 3707,
+        "steady": 3712,
         "longTasks": -1,
         "longestTask": 0
       },
       {
-        "rendered": 513,
-        "steady": 3546,
+        "rendered": 552,
+        "steady": 3587,
         "longTasks": -1,
         "longestTask": 0
       },
       {
-        "rendered": 507,
-        "steady": 3542,
+        "rendered": 521,
+        "steady": 3558,
         "longTasks": -1,
         "longestTask": 0
       },
       {
-        "rendered": 529,
-        "steady": 3563,
+        "rendered": 524,
+        "steady": 3558,
         "longTasks": -1,
         "longestTask": 0
       },
       {
-        "rendered": 515,
-        "steady": 3549,
+        "rendered": 548,
+        "steady": 3586,
         "longTasks": -1,
         "longestTask": 0
       }
     ],
     "keyLatency": [
-      10,
-      18,
+      34,
       31,
-      32,
-      28,
-      9,
-      29,
-      27,
-      31,
-      27,
-      26,
-      13,
-      24,
-      22,
-      26,
-      22,
-      29,
-      8,
+      30,
       25,
-      25,
-      23,
-      25,
-      22,
-      8,
-      23,
-      28,
-      32,
       17,
-      28,
-      8,
-      15,
-      31,
       29,
+      25,
+      31,
+      7,
+      34,
+      31,
+      27,
+      27,
+      16,
+      29,
+      27,
+      34,
+      7,
+      33,
       25,
       21,
-      22,
-      30,
       42,
-      16,
+      24,
+      19,
+      38,
+      25,
+      7,
+      32,
+      23,
+      20,
+      39,
+      23,
+      20,
+      17,
+      25,
+      7,
       30,
-      27,
+      19,
+      31,
+      28,
+      33,
+      31,
+      28,
+      31,
       7,
       22,
-      24,
-      34,
+      19,
+      29,
+      28,
+      19,
+      33,
+      29,
       17,
-      32,
-      14,
-      26,
-      20,
-      18,
-      31,
-      34,
       11,
+      34,
       30,
-      29,
-      30,
-      29,
+      28,
       26,
+      31,
+      31,
+      24,
+      33,
+      10,
+      24,
+      18,
+      29,
+      27,
+      18,
+      33,
+      30,
+      17,
+      12,
+      24,
+      17,
+      30,
+      29,
+      16,
+      31,
+      28,
+      18,
+      11,
+      23,
+      31,
+      28,
+      23,
+      32,
+      29,
+      28,
+      17,
       11
     ],
     "formula": {
       "incremental": [
-        705,
-        688,
-        685,
-        680,
-        685
+        {
+          "ms": 757,
+          "blockMs": 21,
+          "frameGapMs": 26,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 737,
+          "blockMs": 10,
+          "frameGapMs": 35,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 735,
+          "blockMs": 10,
+          "frameGapMs": 27,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 725,
+          "blockMs": 10,
+          "frameGapMs": 27,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 731,
+          "blockMs": 10,
+          "frameGapMs": 27,
+          "longestTaskMs": null
+        }
       ],
       "full": [
-        749,
-        745,
-        740
-      ],
-      "incrementalBlock": [
-        13,
-        10,
-        16,
-        10,
-        10
-      ],
-      "fullBlock": [
-        10,
-        10,
-        10
+        {
+          "ms": 802,
+          "blockMs": 10,
+          "frameGapMs": 25,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 809,
+          "blockMs": 10,
+          "frameGapMs": 27,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 797,
+          "blockMs": 10,
+          "frameGapMs": 25,
+          "longestTaskMs": null
+        }
       ]
     }
   }

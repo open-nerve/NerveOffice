@@ -15,6 +15,8 @@ export interface ProfileOptions {
     largeSheetSplit: boolean;
     /** 打开时的公式计算模式：默认 WHEN_EMPTY；forced 用作 V07 的重算基准。 */
     calcMode: 'default' | 'forced';
+    /** 公式引擎每执行多少个公式让出一次主线程；缺省用 SDK 的默认值 500（V10 比较让出间隔）。 */
+    formulaIntervalCount?: number;
 }
 
 /**
