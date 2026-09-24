@@ -7,7 +7,7 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:50:23.522Z",
+  "timestamp": "2026-09-24T23:00:21.361Z",
   "copyToSystem": {
     "ok": false,
     "error": "无头 WebKit 不能读剪贴板"
@@ -24,7 +24,7 @@
   "preview": {
     "images": [
       {
-        "src": "http://127.0.0.1:4780/api/assets/cbc0b706-8f58-4bd0-a7ac-2d4",
+        "src": "http://127.0.0.1:4780/api/assets/b98cb621-c2c7-4837-a0bc-a74",
         "complete": true,
         "width": 120
       }

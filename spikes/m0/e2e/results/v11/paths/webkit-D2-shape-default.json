@@ -13,18 +13,20 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:47:39.356Z",
+  "timestamp": "2026-09-24T22:56:07.190Z",
   "verdict": "含非平台地址：data",
+  "expectedCount": 0,
+  "addedCount": 1,
   "actionError": null,
   "added": [
     {
-      "where": "/drawings/I1XcXD",
+      "where": "/drawings/hRtIle",
       "kind": "data",
       "imageSourceType": "BASE64",
       "source": "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22144%22%20height%3D%2296"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/I1XcXD",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/hRtIle",
       "kind": "data",
       "imageSourceType": "BASE64",
       "source": "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22144%22%20height%3D%2296"

@@ -13,8 +13,10 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:46:58.196Z",
+  "timestamp": "2026-09-24T22:55:23.751Z",
   "verdict": "被命令守卫取消",
+  "expectedCount": 0,
+  "addedCount": 0,
   "actionError": null,
   "added": [],
   "addedKinds": [],

@@ -13,21 +13,23 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T20:33:59.142Z",
+  "timestamp": "2026-09-24T22:40:24.524Z",
   "verdict": "全部为平台地址",
+  "expectedCount": 1,
+  "addedCount": 1,
   "actionError": null,
   "added": [
     {
-      "where": "/drawings/pce63w",
+      "where": "/drawings/0N1nEZ",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/71d84616-5e9d-46cd-b1bc-16f8d0548f29"
+      "source": "/api/assets/b2648c85-d7d6-4adc-82e3-2fb655641b87"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/pce63w",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/0N1nEZ",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/71d84616-5e9d-46cd-b1bc-16f8d0548f29"
+      "source": "/api/assets/b2648c85-d7d6-4adc-82e3-2fb655641b87"
     }
   ],
   "addedKinds": [
@@ -52,7 +54,7 @@
   ],
   "load": [
     {
-      "source": "/api/assets/71d84616-5e9d-46cd-b1bc-16f8d0548f29",
+      "source": "/api/assets/b2648c85-d7d6-4adc-82e3-2fb655641b87",
       "cached": true,
       "complete": true,
       "width": 120
@@ -62,12 +64,12 @@
     {
       "kind": "paste-upload",
       "ok": true,
-      "detail": "/api/assets/71d84616-5e9d-46cd-b1bc-16f8d0548f29"
+      "detail": "/api/assets/b2648c85-d7d6-4adc-82e3-2fb655641b87"
     },
     {
       "kind": "paste-normalize",
       "ok": true,
-      "detail": "http://127.0.0.1:4780/api/assets/71d84616-5e9d-46cd-b1bc-16f8d0548f29"
+      "detail": "normalize /drawings/00JlTH"
     }
   ],
   "detections": [

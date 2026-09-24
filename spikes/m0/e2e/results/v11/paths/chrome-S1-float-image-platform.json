@@ -13,15 +13,17 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T20:27:38.340Z",
+  "timestamp": "2026-09-24T22:34:49.950Z",
   "verdict": "全部为平台地址",
+  "expectedCount": 1,
+  "addedCount": 1,
   "actionError": null,
   "added": [
     {
-      "where": "resources.SHEET_DRAWING_PLUGIN/sheet-1/data/s2L22k",
+      "where": "resources.SHEET_DRAWING_PLUGIN/sheet-1/data/eZkYo6",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/d7e95143-7dca-4ad3-abf1-94940edf9a05"
+      "source": "/api/assets/d964987f-5431-436c-a6c1-9fd51c33fc11"
     }
   ],
   "addedKinds": [
@@ -46,7 +48,7 @@
   ],
   "load": [
     {
-      "source": "/api/assets/d7e95143-7dca-4ad3-abf1-94940edf9a05",
+      "source": "/api/assets/d964987f-5431-436c-a6c1-9fd51c33fc11",
       "cached": true,
       "complete": true,
       "width": 120
@@ -56,7 +58,7 @@
     {
       "kind": "save",
       "ok": true,
-      "detail": "/api/assets/d7e95143-7dca-4ad3-abf1-94940edf9a05"
+      "detail": "/api/assets/d964987f-5431-436c-a6c1-9fd51c33fc11"
     }
   ],
   "detections": [

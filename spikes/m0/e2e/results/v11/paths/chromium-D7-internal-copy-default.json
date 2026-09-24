@@ -13,30 +13,32 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:20:10.467Z",
+  "timestamp": "2026-09-24T22:24:44.921Z",
   "verdict": "含非平台地址：data",
+  "expectedCount": 2,
+  "addedCount": 2,
   "actionError": null,
   "added": [
     {
-      "where": "/drawings/dHISzh",
+      "where": "/drawings/tx9OPI",
       "kind": "data",
       "imageSourceType": "BASE64",
       "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr"
     },
     {
-      "where": "/drawings/tp5uUo",
+      "where": "/drawings/wnYJov",
       "kind": "data",
       "imageSourceType": "BASE64",
       "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/dHISzh",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/tx9OPI",
       "kind": "data",
       "imageSourceType": "BASE64",
       "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/tp5uUo",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/wnYJov",
       "kind": "data",
       "imageSourceType": "BASE64",
       "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr"

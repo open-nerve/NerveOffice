@@ -13,21 +13,23 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T20:33:05.985Z",
+  "timestamp": "2026-09-24T22:39:36.208Z",
   "verdict": "全部为平台地址",
+  "expectedCount": 1,
+  "addedCount": 1,
   "actionError": null,
   "added": [
     {
-      "where": "/drawings/3y3TsF",
+      "where": "/drawings/xqkigm",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/d07e45f7-b13c-416d-a766-e931164b651f"
+      "source": "/api/assets/fd86b092-ea7a-4b76-a16f-0e13e35a15c2"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/3y3TsF",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/xqkigm",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/d07e45f7-b13c-416d-a766-e931164b651f"
+      "source": "/api/assets/fd86b092-ea7a-4b76-a16f-0e13e35a15c2"
     }
   ],
   "addedKinds": [
@@ -58,7 +60,7 @@
   ],
   "load": [
     {
-      "source": "/api/assets/d07e45f7-b13c-416d-a766-e931164b651f",
+      "source": "/api/assets/fd86b092-ea7a-4b76-a16f-0e13e35a15c2",
       "cached": true,
       "complete": true,
       "width": 120
@@ -68,7 +70,7 @@
     {
       "kind": "save",
       "ok": true,
-      "detail": "/api/assets/d07e45f7-b13c-416d-a766-e931164b651f"
+      "detail": "/api/assets/fd86b092-ea7a-4b76-a16f-0e13e35a15c2"
     }
   ],
   "detections": [

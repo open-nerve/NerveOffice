@@ -7,7 +7,7 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:50:10.773Z",
+  "timestamp": "2026-09-24T23:00:08.549Z",
   "copyToSystem": {
     "ok": false,
     "error": "无头 WebKit 不能读剪贴板"

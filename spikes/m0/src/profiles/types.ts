@@ -38,6 +38,8 @@ export interface PluginGroup {
  * P2 起为 v1 草案，M0 结束时定稿（00 号计划书 §8.2）。
  */
 export interface EditorProfile {
+    /** img=platform 时另外安装的平台图片补救（P4：表格复制浮动图片写入剪贴板）。 */
+    platformImageExtras?: (univer: import('@univerjs/core').Univer) => import('@univerjs/core').IDisposable;
     id: string;
     kind: 'sheet' | 'doc';
     sdkVersion: string;

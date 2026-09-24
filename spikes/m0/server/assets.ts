@@ -2,7 +2,9 @@
 // - 上传：按文件头识别 PNG、JPEG、WebP、GIF（不接受 SVG、HTML 等主动内容），单张不超过 5 MiB，限制像素数；
 //   每次上传生成独立的 assetId、记下上传者的会话，文件按 SHA-256 去重存储。
 // - 读取：要求会话 Cookie；能读取引用它的文档（验证服务里所有会话都能读所有文档），或者是 24 小时内的上传者，才允许读取。
-// - 引用关系：保存文档时按 /api/assets/{uuid} 模式扫描快照文本得出（snapshot-images.ts）。
+//   无权读取与不存在都返回 404（审查 S5：不让人借此探测 assetId 是否存在）。
+// - 引用关系：保存文档时扫描快照中的平台地址（snapshot-images.ts），但只为保存者有权读取的图片建立引用（00 号计划书 §8.5 的保存校验，
+//   审查 R2）：否则任何人把别人的地址写进自己的文档并保存，就能获得读取权。无权的地址不建立引用，保存照常成功。
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { createHash, randomUUID } from 'node:crypto';
@@ -121,7 +123,7 @@ export function sniffImage(b: Buffer): SniffResult | null {
 
 const EXTENSIONS: Record<ImageType, string[]> = {
     'image/png': ['png'],
-    'image/jpeg': ['jpg', 'jpeg'],
+    'image/jpeg': ['jpg', 'jpeg', 'jpe', 'jfif'],
     'image/gif': ['gif'],
     'image/webp': ['webp'],
 };
@@ -197,8 +199,27 @@ export function sessionCookieHeader(req: IncomingMessage): Record<string, string
     return { 'Set-Cookie': `${SESSION_COOKIE}=${randomUUID()}; Path=/; HttpOnly; SameSite=Strict` };
 }
 
-export function updateLinks(docId: string, snapshotText: string): void {
-    links.set(docId, new Set(scanAssetRefs(snapshotText)));
+export interface LinkUpdate {
+    linked: string[];
+    /** 没有建立引用的地址：不存在，或者保存者无权读取（见 canLink）。 */
+    ignored: string[];
+}
+
+/**
+ * 保存文档时更新引用关系：快照里的平台地址，只有这几种情况才建立引用：
+ * 这份文档原来就引用它；保存者是 24 小时内的上传者；它已被其他文档引用（验证服务里所有会话都能读所有文档，生产上要求保存者能读那份文档）。
+ */
+export function updateLinks(docId: string, snapshot: unknown, session: string | null): LinkUpdate {
+    const previous = links.get(docId) ?? new Set<string>();
+    const linked: string[] = [];
+    const ignored: string[] = [];
+    for (const id of scanAssetRefs(snapshot)) {
+        const record = assets.get(id);
+        const allowed = record != null && (previous.has(id) || record.assetId === PLACEHOLDER_ASSET_ID || (session != null && (isFreshUpload(record, session) || referenced(id, docId))));
+        (allowed ? linked : ignored).push(id);
+    }
+    links.set(docId, new Set(linked));
+    return { linked, ignored };
 }
 
 export function copyLinks(from: string, to: string): void {
@@ -209,15 +230,19 @@ export function removeLinks(docId: string): void {
     links.delete(docId);
 }
 
-function referenced(assetId: string): boolean {
-    for (const set of links.values()) if (set.has(assetId)) return true;
+/** 是否被某份文档引用（exceptDoc 除外）。 */
+function referenced(assetId: string, exceptDoc?: string): boolean {
+    for (const [doc, set] of links) if (doc !== exceptDoc && set.has(assetId)) return true;
     return false;
+}
+
+function isFreshUpload(record: AssetRecord, session: string): boolean {
+    return record.uploader === session && Date.now() - record.uploadedAt < UPLOADER_WINDOW_MS;
 }
 
 function canRead(record: AssetRecord, session: string): boolean {
     if (record.assetId === PLACEHOLDER_ASSET_ID) return true;
-    if (record.uploader === session && Date.now() - record.uploadedAt < UPLOADER_WINDOW_MS) return true;
-    return referenced(record.assetId);
+    return isFreshUpload(record, session) || referenced(record.assetId);
 }
 
 async function readBytes(req: IncomingMessage, limit: number): Promise<Buffer | null> {
@@ -240,7 +265,7 @@ const ASSET_URL = /^\/api\/assets\/([0-9a-f-]{36})$/;
 
 export interface AssetOptions {
     /**
-     * 读取失败（401、403、404）时返回平台的占位图（200，状态放在 X-Asset-Status 头里），而不是错误状态码。
+     * 读取失败（401、404）时返回平台的占位图（200，状态放在 X-Asset-Status 头里），而不是错误状态码。
      * 编辑器用 <img> 读取图片，读取失败时 SDK 的渲染可能对破损的图片调用 drawImage，抛出未捕获的 InvalidStateError（P4 报告）。
      */
     fallback?: boolean;
@@ -297,7 +322,7 @@ export async function handleAssets(req: IncomingMessage, res: ServerResponse, ur
     if (m != null && (req.method === 'GET' || req.method === 'HEAD')) {
         const session = sessionOf(req);
         const record = assets.get(m[1]);
-        const status = session == null ? 401 : record == null ? 404 : canRead(record, session) ? 200 : 403;
+        const status = session == null ? 401 : record != null && canRead(record, session) ? 200 : 404;
         reads.push({
             assetId: m[1],
             at: new Date().toISOString(),
@@ -321,6 +346,7 @@ export async function handleAssets(req: IncomingMessage, res: ServerResponse, ur
             // 资源不可变；验证服务不缓存，便于核对每次读取都经过鉴权
             'Cache-Control': 'private, no-store',
             'Content-Security-Policy': "default-src 'none'; sandbox",
+            'Cross-Origin-Resource-Policy': 'same-origin',
         });
         res.end(req.method === 'HEAD' ? undefined : bytes);
         return true;

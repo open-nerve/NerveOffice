@@ -13,8 +13,10 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:17:56.331Z",
+  "timestamp": "2026-09-24T22:22:35.343Z",
   "verdict": "含非平台地址：external",
+  "expectedCount": 0,
+  "addedCount": 1,
   "actionError": null,
   "added": [
     {

@@ -7,10 +7,15 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T20:35:57.985Z",
+  "timestamp": "2026-09-24T22:44:00.681Z",
   "copyToSystem": {
     "ok": true,
-    "items": []
+    "items": [
+      {
+        "type": "image/png",
+        "size": 423
+      }
+    ]
   },
   "saveCellImage": {
     "executed": true,
@@ -24,7 +29,7 @@
   "preview": {
     "images": [
       {
-        "src": "http://127.0.0.1:4780/api/assets/1a7d3760-38e9-4a38-8981-12b",
+        "src": "http://127.0.0.1:4780/api/assets/ba4601cc-844a-4558-b074-110",
         "complete": true,
         "width": 120
       }

@@ -13,51 +13,53 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T20:34:06.323Z",
-  "verdict": "含非平台地址：blob、external、file",
+  "timestamp": "2026-09-24T22:40:31.719Z",
+  "verdict": "含非平台地址：blob、file、external",
+  "expectedCount": 3,
+  "addedCount": 3,
   "actionError": null,
   "added": [
     {
-      "where": "/drawings/FlCvBZ",
+      "where": "/drawings/ZfHXTg",
       "kind": "blob",
       "imageSourceType": "URL",
       "source": "blob:https://example.invalid/0f3e"
     },
     {
-      "where": "/drawings/NM2Cpc",
-      "kind": "external",
-      "imageSourceType": "URL",
-      "source": "https://example.invalid/tracking.png"
-    },
-    {
-      "where": "/drawings/bOhIwx",
+      "where": "/drawings/edTlDT",
       "kind": "file",
       "imageSourceType": "URL",
       "source": "file:///C:/Users/me/a.png"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/FlCvBZ",
+      "where": "/drawings/ySR22C",
+      "kind": "external",
+      "imageSourceType": "URL",
+      "source": "https://example.invalid/tracking.png"
+    },
+    {
+      "where": "resources.DOC_DRAWING_PLUGIN/data/ZfHXTg",
       "kind": "blob",
       "imageSourceType": "URL",
       "source": "blob:https://example.invalid/0f3e"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/NM2Cpc",
-      "kind": "external",
-      "imageSourceType": "URL",
-      "source": "https://example.invalid/tracking.png"
-    },
-    {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/bOhIwx",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/edTlDT",
       "kind": "file",
       "imageSourceType": "URL",
       "source": "file:///C:/Users/me/a.png"
+    },
+    {
+      "where": "resources.DOC_DRAWING_PLUGIN/data/ySR22C",
+      "kind": "external",
+      "imageSourceType": "URL",
+      "source": "https://example.invalid/tracking.png"
     }
   ],
   "addedKinds": [
     "blob",
-    "external",
-    "file"
+    "file",
+    "external"
   ],
   "stray": [],
   "uploads": [],
@@ -75,6 +77,11 @@
     },
     {
       "directive": "img-src",
+      "blocked": "file",
+      "disposition": "report"
+    },
+    {
+      "directive": "img-src",
       "blocked": "https://example.invalid/tracking.png",
       "disposition": "report"
     },
@@ -82,11 +89,6 @@
       "directive": "img-src",
       "blocked": "https://example.invalid/tracking.png",
       "disposition": "enforce"
-    },
-    {
-      "directive": "img-src",
-      "blocked": "file",
-      "disposition": "report"
     },
     {
       "directive": "img-src",
@@ -104,9 +106,7 @@
       "disposition": "report"
     }
   ],
-  "pageErrors": [
-    "Uncaught InvalidStateError: Failed to execute 'drawImage' on 'CanvasRenderingContext2D': The HTMLImageElement provided is in the 'broken' state. @ http://127.0."
-  ],
+  "pageErrors": [],
   "facadeError": null,
   "snapshotBytes": 4118
 }

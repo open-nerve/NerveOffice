@@ -13,21 +13,23 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:48:10.809Z",
+  "timestamp": "2026-09-24T22:56:31.740Z",
   "verdict": "全部为平台地址",
+  "expectedCount": 1,
+  "addedCount": 1,
   "actionError": null,
   "added": [
     {
-      "where": "/drawings/wTYLlo",
+      "where": "/drawings/5nojJr",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/fb0c4227-1b9f-4d31-9d70-2d0a8f576e69"
+      "source": "/api/assets/aefe2768-925f-4b20-be0c-6f809cf390f1"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/wTYLlo",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/5nojJr",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/fb0c4227-1b9f-4d31-9d70-2d0a8f576e69"
+      "source": "/api/assets/aefe2768-925f-4b20-be0c-6f809cf390f1"
     }
   ],
   "addedKinds": [
@@ -52,7 +54,7 @@
   ],
   "load": [
     {
-      "source": "/api/assets/fb0c4227-1b9f-4d31-9d70-2d0a8f576e69",
+      "source": "/api/assets/aefe2768-925f-4b20-be0c-6f809cf390f1",
       "cached": true,
       "complete": true,
       "width": 120
@@ -62,12 +64,12 @@
     {
       "kind": "paste-upload",
       "ok": true,
-      "detail": "/api/assets/fb0c4227-1b9f-4d31-9d70-2d0a8f576e69"
+      "detail": "/api/assets/aefe2768-925f-4b20-be0c-6f809cf390f1"
     },
     {
       "kind": "paste-normalize",
       "ok": true,
-      "detail": "http://127.0.0.1:4780/api/assets/fb0c4227-1b9f-4d31-9d70-2d0a8f576e69"
+      "detail": "normalize /drawings/Bhir-9"
     }
   ],
   "detections": [

@@ -1,7 +1,7 @@
 {
   "check": "V11-fallback",
   "kind": "sheet",
-  "timestamp": "2026-09-24T20:11:52.366Z",
+  "timestamp": "2026-09-24T22:16:43.824Z",
   "results": [
     {
       "server": "error-status",
@@ -11,9 +11,7 @@
         200,
         401
       ],
-      "errors": [
-        "Uncaught InvalidStateError: Failed to execute 'drawImage' on 'CanvasRenderingContext2D': The HTMLImageElement provided is in the 'broken' state. @ http://127.0."
-      ]
+      "errors": []
     },
     {
       "server": "error-status",

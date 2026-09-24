@@ -7,10 +7,10 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T20:23:52.825Z",
+  "timestamp": "2026-09-24T22:30:38.200Z",
   "sources": [
-    "/api/assets/c8d729be-792a-41d6-839b-cf197cf79d62",
-    "/api/assets/dc421d29-c246-4ccf-9138-325960ad6b28"
+    "/api/assets/67b37359-4aad-4e0d-b368-10e307b6fad5",
+    "/api/assets/b7fd0e71-62e0-4310-9218-135e52120cd5"
   ],
   "uploaderCookie": [
     {
@@ -34,13 +34,13 @@
     ],
     "load": [
       {
-        "source": "/api/assets/c8d729be-792a-41d6-839b-cf197cf79d62",
+        "source": "/api/assets/67b37359-4aad-4e0d-b368-10e307b6fad5",
         "cached": false,
         "complete": false,
         "width": 0
       },
       {
-        "source": "/api/assets/dc421d29-c246-4ccf-9138-325960ad6b28",
+        "source": "/api/assets/b7fd0e71-62e0-4310-9218-135e52120cd5",
         "cached": true,
         "complete": true,
         "width": 120
@@ -61,29 +61,29 @@
     ],
     "load": [
       {
-        "source": "/api/assets/c8d729be-792a-41d6-839b-cf197cf79d62",
+        "source": "/api/assets/67b37359-4aad-4e0d-b368-10e307b6fad5",
         "cached": false,
         "complete": false,
         "width": 0
       },
       {
-        "source": "/api/assets/dc421d29-c246-4ccf-9138-325960ad6b28",
+        "source": "/api/assets/b7fd0e71-62e0-4310-9218-135e52120cd5",
         "cached": true,
         "complete": true,
         "width": 120
       }
     ],
-    "orphanStatus": 403,
+    "orphanStatus": 404,
     "orphanStatusForUploader": 200,
     "referencedStatus": 200,
     "errors": []
   },
   "copy": {
-    "filesBefore": 3,
-    "filesAfter": 3,
+    "filesBefore": 6,
+    "filesAfter": 6,
     "links": [
-      "c8d729be-792a-41d6-839b-cf197cf79d62",
-      "dc421d29-c246-4ccf-9138-325960ad6b28"
+      "67b37359-4aad-4e0d-b368-10e307b6fad5",
+      "b7fd0e71-62e0-4310-9218-135e52120cd5"
     ],
     "statusAfterSourceDeleted": 200
   },
@@ -101,13 +101,13 @@
     ],
     "load": [
       {
-        "source": "/api/assets/c8d729be-792a-41d6-839b-cf197cf79d62",
+        "source": "/api/assets/67b37359-4aad-4e0d-b368-10e307b6fad5",
         "cached": false,
         "complete": false,
         "width": 0
       },
       {
-        "source": "/api/assets/dc421d29-c246-4ccf-9138-325960ad6b28",
+        "source": "/api/assets/b7fd0e71-62e0-4310-9218-135e52120cd5",
         "cached": false,
         "complete": false,
         "width": 0

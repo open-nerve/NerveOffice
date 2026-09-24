@@ -13,21 +13,23 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:47:32.230Z",
+  "timestamp": "2026-09-24T22:55:57.911Z",
   "verdict": "全部为平台地址",
+  "expectedCount": 1,
+  "addedCount": 1,
   "actionError": null,
   "added": [
     {
-      "where": "/drawings/Uuu071",
+      "where": "/drawings/-RahtB",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/86628fe6-785b-4674-a3ed-0c43a982b7f1"
+      "source": "/api/assets/a1ef93fd-323e-4544-a992-fe83b38b2d43"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/Uuu071",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/-RahtB",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/86628fe6-785b-4674-a3ed-0c43a982b7f1"
+      "source": "/api/assets/a1ef93fd-323e-4544-a992-fe83b38b2d43"
     }
   ],
   "addedKinds": [
@@ -58,7 +60,7 @@
   ],
   "load": [
     {
-      "source": "/api/assets/86628fe6-785b-4674-a3ed-0c43a982b7f1",
+      "source": "/api/assets/a1ef93fd-323e-4544-a992-fe83b38b2d43",
       "cached": true,
       "complete": true,
       "width": 120
@@ -68,7 +70,7 @@
     {
       "kind": "save",
       "ok": true,
-      "detail": "/api/assets/86628fe6-785b-4674-a3ed-0c43a982b7f1"
+      "detail": "/api/assets/a1ef93fd-323e-4544-a992-fe83b38b2d43"
     }
   ],
   "detections": [

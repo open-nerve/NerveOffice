@@ -13,50 +13,52 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:19:39.886Z",
-  "verdict": "含非平台地址：external、blob、file",
+  "timestamp": "2026-09-24T22:24:14.306Z",
+  "verdict": "含非平台地址：blob、external、file",
+  "expectedCount": 3,
+  "addedCount": 3,
   "actionError": null,
   "added": [
     {
-      "where": "/drawings/aEaDCG",
-      "kind": "external",
-      "imageSourceType": "URL",
-      "source": "https://example.invalid/tracking.png"
-    },
-    {
-      "where": "/drawings/c6d2ER",
+      "where": "/drawings/ftFyCD",
       "kind": "blob",
       "imageSourceType": "URL",
       "source": "blob:https://example.invalid/0f3e"
     },
     {
-      "where": "/drawings/oJMs_8",
+      "where": "/drawings/pjoO0U",
+      "kind": "external",
+      "imageSourceType": "URL",
+      "source": "https://example.invalid/tracking.png"
+    },
+    {
+      "where": "/drawings/tQew_R",
       "kind": "file",
       "imageSourceType": "URL",
       "source": "file:///C:/Users/me/a.png"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/aEaDCG",
-      "kind": "external",
-      "imageSourceType": "URL",
-      "source": "https://example.invalid/tracking.png"
-    },
-    {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/c6d2ER",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/ftFyCD",
       "kind": "blob",
       "imageSourceType": "URL",
       "source": "blob:https://example.invalid/0f3e"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/oJMs_8",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/pjoO0U",
+      "kind": "external",
+      "imageSourceType": "URL",
+      "source": "https://example.invalid/tracking.png"
+    },
+    {
+      "where": "resources.DOC_DRAWING_PLUGIN/data/tQew_R",
       "kind": "file",
       "imageSourceType": "URL",
       "source": "file:///C:/Users/me/a.png"
     }
   ],
   "addedKinds": [
-    "external",
     "blob",
+    "external",
     "file"
   ],
   "stray": [],
@@ -70,6 +72,11 @@
   "cspViolations": [
     {
       "directive": "img-src",
+      "blocked": "blob",
+      "disposition": "report"
+    },
+    {
+      "directive": "img-src",
       "blocked": "https://example.invalid/tracking.png",
       "disposition": "report"
     },
@@ -77,11 +84,6 @@
       "directive": "img-src",
       "blocked": "https://example.invalid/tracking.png",
       "disposition": "enforce"
-    },
-    {
-      "directive": "img-src",
-      "blocked": "blob",
-      "disposition": "report"
     },
     {
       "directive": "img-src",

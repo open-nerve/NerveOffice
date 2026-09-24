@@ -13,18 +13,20 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:18:47.256Z",
+  "timestamp": "2026-09-24T22:23:28.536Z",
   "verdict": "含非平台地址：data",
+  "expectedCount": 0,
+  "addedCount": 1,
   "actionError": null,
   "added": [
     {
-      "where": "/drawings/JPYQ8N",
+      "where": "/drawings/zvGil1",
       "kind": "data",
       "imageSourceType": "BASE64",
       "source": "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22144%22%20height%3D%2296"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/JPYQ8N",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/zvGil1",
       "kind": "data",
       "imageSourceType": "BASE64",
       "source": "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22144%22%20height%3D%2296"

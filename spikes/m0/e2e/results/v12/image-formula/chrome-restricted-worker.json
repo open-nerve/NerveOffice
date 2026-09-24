@@ -8,7 +8,7 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T20:37:28.299Z",
+  "timestamp": "2026-09-24T22:46:00.371Z",
   "runs": [
     {
       "csp": "full",
@@ -26,7 +26,7 @@
           "hasP": false
         },
         {
-          "f": "=IMAGE(\"/api/assets/f408729b-bebe-4d23-b4e7-9411aec62833\")",
+          "f": "=IMAGE(\"/api/assets/3fe46ecf-90b5-4e82-90d5-26a238ddbe62\")",
           "v": "",
           "hasP": false
         },
@@ -55,7 +55,7 @@
           "hasP": false
         },
         {
-          "f": "=IMAGE(\"/api/assets/836713b4-f3a0-4b3e-a3a1-8998c0822cae\")",
+          "f": "=IMAGE(\"/api/assets/928d5757-91b3-4a09-b25d-06fefb6342a3\")",
           "v": "",
           "hasP": false
         },

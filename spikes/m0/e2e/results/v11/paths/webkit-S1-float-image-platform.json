@@ -13,15 +13,17 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:42:04.963Z",
+  "timestamp": "2026-09-24T22:51:10.597Z",
   "verdict": "全部为平台地址",
+  "expectedCount": 1,
+  "addedCount": 1,
   "actionError": null,
   "added": [
     {
-      "where": "resources.SHEET_DRAWING_PLUGIN/sheet-1/data/-XwCda",
+      "where": "resources.SHEET_DRAWING_PLUGIN/sheet-1/data/5SeGgz",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/7887621b-9fc1-41eb-a3a3-0cae5437841e"
+      "source": "/api/assets/0989ec81-c7df-4306-a156-79b5c5ff40e0"
     }
   ],
   "addedKinds": [
@@ -46,7 +48,7 @@
   ],
   "load": [
     {
-      "source": "/api/assets/7887621b-9fc1-41eb-a3a3-0cae5437841e",
+      "source": "/api/assets/0989ec81-c7df-4306-a156-79b5c5ff40e0",
       "cached": true,
       "complete": true,
       "width": 120
@@ -56,7 +58,7 @@
     {
       "kind": "save",
       "ok": true,
-      "detail": "/api/assets/7887621b-9fc1-41eb-a3a3-0cae5437841e"
+      "detail": "/api/assets/0989ec81-c7df-4306-a156-79b5c5ff40e0"
     }
   ],
   "detections": [

@@ -7,9 +7,9 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:38:42.086Z",
+  "timestamp": "2026-09-24T22:47:21.512Z",
   "sources": [
-    "/api/assets/dc23929f-e618-4e32-8496-3b34b4165523"
+    "/api/assets/b1e30790-66bd-4199-9e2e-f3c5fee93e16"
   ],
   "uploaderCookie": [
     {
@@ -28,7 +28,7 @@
     ],
     "load": [
       {
-        "source": "/api/assets/dc23929f-e618-4e32-8496-3b34b4165523",
+        "source": "/api/assets/b1e30790-66bd-4199-9e2e-f3c5fee93e16",
         "cached": true,
         "complete": true,
         "width": 120
@@ -45,22 +45,22 @@
     ],
     "load": [
       {
-        "source": "/api/assets/dc23929f-e618-4e32-8496-3b34b4165523",
+        "source": "/api/assets/b1e30790-66bd-4199-9e2e-f3c5fee93e16",
         "cached": true,
         "complete": true,
         "width": 120
       }
     ],
-    "orphanStatus": 403,
+    "orphanStatus": 404,
     "orphanStatusForUploader": 200,
     "referencedStatus": 200,
     "errors": []
   },
   "copy": {
-    "filesBefore": 3,
-    "filesAfter": 3,
+    "filesBefore": 6,
+    "filesAfter": 6,
     "links": [
-      "dc23929f-e618-4e32-8496-3b34b4165523"
+      "b1e30790-66bd-4199-9e2e-f3c5fee93e16"
     ],
     "statusAfterSourceDeleted": 200
   },
@@ -74,7 +74,7 @@
     ],
     "load": [
       {
-        "source": "/api/assets/dc23929f-e618-4e32-8496-3b34b4165523",
+        "source": "/api/assets/b1e30790-66bd-4199-9e2e-f3c5fee93e16",
         "cached": false,
         "complete": false,
         "width": 0

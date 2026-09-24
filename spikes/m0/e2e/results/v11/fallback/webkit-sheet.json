@@ -1,7 +1,7 @@
 {
   "check": "V11-fallback",
   "kind": "sheet",
-  "timestamp": "2026-09-24T20:40:41.223Z",
+  "timestamp": "2026-09-24T22:49:20.449Z",
   "results": [
     {
       "server": "error-status",
@@ -12,7 +12,7 @@
         401
       ],
       "errors": [
-        "InvalidStateError: The HTMLImageElement provided is in the 'broken' state. @ http://127.0.0.1:4780/assets/facade-B-_6XV8X.js:33"
+        "InvalidStateError: The HTMLImageElement provided is in the 'broken' state. @ http://127.0.0.1:4780/assets/facade-Tx0LIZVm.js:33"
       ]
     },
     {
@@ -24,7 +24,7 @@
         401
       ],
       "errors": [
-        "InvalidStateError: The HTMLImageElement provided is in the 'broken' state. @ http://127.0.0.1:4780/assets/facade-B-_6XV8X.js:33"
+        "InvalidStateError: The HTMLImageElement provided is in the 'broken' state. @ http://127.0.0.1:4780/assets/facade-Tx0LIZVm.js:33"
       ]
     },
     {
@@ -35,9 +35,7 @@
         401,
         401
       ],
-      "errors": [
-        "InvalidStateError: The HTMLImageElement provided is in the 'broken' state. @ http://127.0.0.1:4780/assets/facade-B-_6XV8X.js:33"
-      ]
+      "errors": []
     },
     {
       "server": "placeholder",

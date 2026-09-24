@@ -36,6 +36,7 @@ import { UniverSheetsUIPlugin } from '@univerjs/sheets-ui';
 import { UniverUIPlugin } from '@univerjs/ui';
 import { sheetUi } from './ui-config';
 import { drawingPluginConfig } from './image-service';
+import { installSheetImageCopy } from '../harness/sheet-image-copy';
 
 import DataValidationZhCN from '@univerjs/data-validation/locale/zh-CN';
 import DesignZhCN from '@univerjs/design/locale/zh-CN';
@@ -213,6 +214,8 @@ export const sheetProfile: EditorProfile = {
     ui: sheetUi,
     // V06：类型声明为 MUTATION、实际只清除界面上的图片变换框的命令（不改内容）
     changeDetectionExclude: ['sheet.operation.clear-drawing-transformer'],
+    // P4：复制 URL 类型的浮动图片时写入剪贴板（审查 R4）
+    platformImageExtras: installSheetImageCopy,
     locale: mergeLocales(
         DesignZhCN,
         UIZhCN,

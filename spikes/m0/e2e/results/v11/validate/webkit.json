@@ -6,19 +6,19 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:39:48.539Z",
+  "timestamp": "2026-09-24T22:48:27.882Z",
   "results": [
     {
       "img": "default",
       "kind": "sheet",
       "status": 422,
-      "body": "{\"error\":\"non-platform-image\",\"images\":[{\"where\":\"resources.SHEET_DRAWING_PLUGIN/sheet-1/data/lJkdEZ\",\"source\":\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr\",\"kind\":\"data\",\"imageSourceType\":\"BASE64\"}]}"
+      "body": "{\"error\":\"non-platform-image\",\"images\":[{\"where\":\"resources.SHEET_DRAWING_PLUGIN/sheet-1/data/tDhH5v\",\"source\":\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr\",\"kind\":\"data\",\"imageSourceType\":\"BASE64\"}]}"
     },
     {
       "img": "default",
       "kind": "doc",
       "status": 422,
-      "body": "{\"error\":\"non-platform-image\",\"images\":[{\"where\":\"/drawings/WrZwoH\",\"source\":\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr\",\"kind\":\"data\",\"imageSourceType\":\"BASE64\"},{\"where\":\"resources.DOC_DRAWING_PLUGIN/data/WrZwoH\",\"sourc"
+      "body": "{\"error\":\"non-platform-image\",\"images\":[{\"where\":\"/drawings/4GEsl3\",\"source\":\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr\",\"kind\":\"data\",\"imageSourceType\":\"BASE64\"},{\"where\":\"resources.DOC_DRAWING_PLUGIN/data/4GEsl3\",\"sourc"
     },
     {
       "img": "platform",

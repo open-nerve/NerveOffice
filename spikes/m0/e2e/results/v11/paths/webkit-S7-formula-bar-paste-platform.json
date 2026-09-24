@@ -13,8 +13,10 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:44:44.392Z",
+  "timestamp": "2026-09-24T22:53:22.162Z",
   "verdict": "没有新增图片",
+  "expectedCount": 0,
+  "addedCount": 0,
   "actionError": null,
   "added": [],
   "addedKinds": [],
@@ -33,12 +35,12 @@
     {
       "kind": "paste-upload",
       "ok": true,
-      "detail": "/api/assets/0537fb87-885a-41d6-8ce1-bd23447e3ff7"
+      "detail": "/api/assets/b8e9b0d5-8db3-4cf7-9a38-0a6eac63cb15"
     },
     {
       "kind": "paste-normalize",
       "ok": true,
-      "detail": "http://127.0.0.1:4780/api/assets/0537fb87-885a-41d6-8ce1-bd23447e3ff7"
+      "detail": "normalize /drawings/nTrTZa"
     }
   ],
   "detections": [],

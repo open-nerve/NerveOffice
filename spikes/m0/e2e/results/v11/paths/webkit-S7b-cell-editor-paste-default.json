@@ -13,8 +13,10 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:45:02.809Z",
+  "timestamp": "2026-09-24T22:53:33.623Z",
   "verdict": "没有新增图片",
+  "expectedCount": 0,
+  "addedCount": 0,
   "actionError": null,
   "added": [],
   "addedKinds": [],

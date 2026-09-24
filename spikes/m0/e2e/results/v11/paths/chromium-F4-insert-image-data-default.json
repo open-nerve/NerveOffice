@@ -13,12 +13,14 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:18:15.926Z",
+  "timestamp": "2026-09-24T22:22:54.975Z",
   "verdict": "含非平台地址：data",
+  "expectedCount": 0,
+  "addedCount": 1,
   "actionError": null,
   "added": [
     {
-      "where": "resources.SHEET_DRAWING_PLUGIN/sheet-1/data/A-599o",
+      "where": "resources.SHEET_DRAWING_PLUGIN/sheet-1/data/8Yk5EL",
       "kind": "data",
       "imageSourceType": "URL",
       "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr"

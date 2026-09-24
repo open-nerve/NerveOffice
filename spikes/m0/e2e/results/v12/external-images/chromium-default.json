@@ -7,12 +7,19 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:23:14.256Z",
+  "timestamp": "2026-09-24T22:29:56.098Z",
   "results": [
     {
       "path": "文字文档粘贴外链图片",
       "requests": [
         "https://example.invalid/pasted.png"
+      ]
+    },
+    {
+      "path": "文字文档粘贴内部片段（文字填充图片、数组 source）",
+      "requests": [
+        "https://example.invalid/pasted.png?textfill",
+        "https://example.invalid/pasted.png?array"
       ]
     },
     {

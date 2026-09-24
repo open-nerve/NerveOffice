@@ -15,14 +15,30 @@ test.use({ baseURL: SERVERS.full });
 const EXTERNAL = 'https://example.invalid/tracking.png';
 const png = (): PasteFile => fixtureFile('blue-120x80.png');
 
+/** 文字文档的"内部片段"：HTML 注释里放 base64 的 JSON（docs-ui 的 internal-fragment.ts:237-253）。 */
+const fragment = (doc: unknown) => `<!--univer-doc-fragment:${Buffer.from(JSON.stringify({ version: 1, kind: 'univer-doc-fragment', doc })).toString('base64')}-->`;
+const TEXT_FILL_DOC = { body: { dataStream: 'TF\r', textRuns: [{ st: 0, ed: 2, ts: { fs: 28, textFill: { type: 'picture', picture: { source: `${EXTERNAL}?textfill` } } } }], paragraphs: [{ startIndex: 2, paragraphId: 'p4tf' }] } };
+function drawingDoc(source: unknown, imageSourceType: string | undefined) {
+    return {
+        body: { dataStream: '\bX\r', customBlocks: [{ startIndex: 0, blockId: 'p4img' }], paragraphs: [{ startIndex: 2, paragraphId: 'p4p' }] },
+        drawings: {
+            p4img: {
+                drawingId: 'p4img', unitId: '', subUnitId: '', drawingType: 0, ...(imageSourceType == null ? {} : { imageSourceType }), source, title: '', description: '', layoutType: 0,
+                transform: { width: 40, height: 30, angle: 0 },
+                docTransform: { angle: 0, size: { width: 40, height: 30 }, positionH: { relativeFrom: 2, posOffset: 0 }, positionV: { relativeFrom: 2, posOffset: 0 } },
+            },
+        },
+    };
+}
+
 interface PathCase {
     id: string;
     kind: 'sheet' | 'doc';
     method: 'F' | 'P' | 'U';
     /** 路径说明（写进结果文件）。 */
     what: string;
-    /** 预期会新增图片（平台配置下）；false 表示预期被丢弃或被拦截。 */
-    adds: boolean;
+    /** 平台配置下预期新增的图片数（文字文档只数正文的 drawings，不数资源里的副本）；0 表示预期被丢弃、拦截或去掉。 */
+    expect: number;
     run: (page: Page) => Promise<void>;
 }
 
@@ -66,31 +82,31 @@ async function facade(page: Page, action: FacadeAction, url: string): Promise<vo
 
 const CASES: PathCase[] = [
     // ---- 表格 ----
-    { id: 'S1-float-image', kind: 'sheet', method: 'F', what: '工具栏"插入浮动图片"（sheet.command.insert-float-image，文件选择框）', adds: true, run: async (page) => {
+    { id: 'S1-float-image', kind: 'sheet', method: 'F', what: '工具栏"插入浮动图片"（sheet.command.insert-float-image，文件选择框）', expect: 1, run: async (page) => {
         await clickCell(page, 'C3');
         await insertViaFileChooser(page, 'sheet.command.insert-float-image', [png()]);
     } },
-    { id: 'S2-cell-image', kind: 'sheet', method: 'F', what: '工具栏"插入单元格图片"（sheet.command.insert-cell-image，文件选择框）', adds: true, run: async (page) => {
+    { id: 'S2-cell-image', kind: 'sheet', method: 'F', what: '工具栏"插入单元格图片"（sheet.command.insert-cell-image，文件选择框）', expect: 1, run: async (page) => {
         await clickCell(page, 'C3');
         await insertViaFileChooser(page, 'sheet.command.insert-cell-image', [png()]);
     } },
-    { id: 'S4-paste-file', kind: 'sheet', method: 'P', what: '粘贴图片文件', adds: true, run: async (page) => {
+    { id: 'S4-paste-file', kind: 'sheet', method: 'P', what: '粘贴图片文件', expect: 1, run: async (page) => {
         await clickCell(page, 'C3');
         await syntheticPaste(page, { files: [png()] });
     } },
-    { id: 'S5a-paste-html-data', kind: 'sheet', method: 'P', what: '粘贴 HTML：<img src="data:...">（剪贴板里没有文件）', adds: false, run: async (page) => {
+    { id: 'S5a-paste-html-data', kind: 'sheet', method: 'P', what: '粘贴 HTML：<img src="data:...">（剪贴板里没有文件）', expect: 0, run: async (page) => {
         await clickCell(page, 'C3');
         await syntheticPaste(page, { html: `<table><tr><td>文字</td><td><img src="${dataUrl(png())}"></td></tr></table>` });
     } },
-    { id: 'S5b-paste-html-external', kind: 'sheet', method: 'P', what: '粘贴 HTML：外链 <img>', adds: false, run: async (page) => {
+    { id: 'S5b-paste-html-external', kind: 'sheet', method: 'P', what: '粘贴 HTML：外链 <img>', expect: 0, run: async (page) => {
         await clickCell(page, 'C3');
         await syntheticPaste(page, { html: `<table><tr><td>文字</td><td><img src="${EXTERNAL}"></td></tr></table>` });
     } },
-    { id: 'S5c-paste-file-and-html', kind: 'sheet', method: 'P', what: '粘贴"图片文件 + 外链 <img> 的 HTML"（浏览器"复制图片"的形态）', adds: true, run: async (page) => {
+    { id: 'S5c-paste-file-and-html', kind: 'sheet', method: 'P', what: '粘贴"图片文件 + 外链 <img> 的 HTML"（浏览器"复制图片"的形态）', expect: 0, run: async (page) => {
         await clickCell(page, 'C3');
         await syntheticPaste(page, { files: [png()], html: `<img src="${EXTERNAL}">` });
     } },
-    { id: 'S7-formula-bar-paste', kind: 'sheet', method: 'P', what: '编辑栏里粘贴图片文件', adds: true, run: async (page) => {
+    { id: 'S7-formula-bar-paste', kind: 'sheet', method: 'P', what: '编辑栏里粘贴图片文件', expect: 0, run: async (page) => {
         await clickCell(page, 'C3');
         const box = (await page.locator('[data-u-comp="formula-bar"]').boundingBox())!;
         await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
@@ -99,7 +115,7 @@ const CASES: PathCase[] = [
         await page.waitForTimeout(800);
         await page.keyboard.press('Enter');
     } },
-    { id: 'S7b-cell-editor-paste', kind: 'sheet', method: 'P', what: '单元格编辑器里（双击进入编辑）粘贴图片文件', adds: true, run: async (page) => {
+    { id: 'S7b-cell-editor-paste', kind: 'sheet', method: 'P', what: '单元格编辑器里（双击进入编辑）粘贴图片文件', expect: 0, run: async (page) => {
         const p = await cellCenter(page, 'C3');
         await page.mouse.dblclick(p.x, p.y);
         await page.waitForTimeout(400);
@@ -107,45 +123,48 @@ const CASES: PathCase[] = [
         await page.waitForTimeout(800);
         await page.keyboard.press('Enter');
     } },
-    { id: 'S8-internal-copy', kind: 'sheet', method: 'U', what: '插入浮动图片后，快捷键复制、在别处粘贴（内部复制）', adds: true, run: async (page) => {
+    { id: 'S8-internal-copy', kind: 'sheet', method: 'U', what: '插入浮动图片后，快捷键复制、在别处粘贴（内部复制）', expect: 2, run: async (page) => {
         await clickCell(page, 'C3');
         await insertViaFileChooser(page, 'sheet.command.insert-float-image', [png()]);
         await page.waitForTimeout(1200);
+        // 先点选图片（左上角对齐 C3），否则复制的是单元格（P4 审查 R3）
+        await page.keyboard.press('Escape');
+        await clickCell(page, 'C3');
         await page.keyboard.press('Meta+C');
-        await page.waitForTimeout(300);
+        await page.waitForTimeout(600);
         await clickCell(page, 'H12');
         await page.keyboard.press('Meta+V');
     } },
-    { id: 'F1-insert-image-url', kind: 'sheet', method: 'F', what: 'FWorksheet.insertImage(外链)', adds: false, run: (page) => facade(page, 'insertImageUrl', EXTERNAL) },
-    { id: 'F2-cell-image-url', kind: 'sheet', method: 'F', what: 'FRange.insertCellImageAsync(外链)', adds: false, run: (page) => facade(page, 'cellImageUrl', EXTERNAL) },
-    { id: 'F3-background-url', kind: 'sheet', method: 'F', what: 'FWorksheet.setBackgroundImage(外链)（入口已隐藏）', adds: false, run: (page) => facade(page, 'backgroundUrl', EXTERNAL) },
-    { id: 'F4-insert-image-data', kind: 'sheet', method: 'F', what: 'FWorksheet.insertImage(data URL)', adds: false, run: (page) => facade(page, 'insertImageData', dataUrl(png())) },
+    { id: 'F1-insert-image-url', kind: 'sheet', method: 'F', what: 'FWorksheet.insertImage(外链)', expect: 0, run: (page) => facade(page, 'insertImageUrl', EXTERNAL) },
+    { id: 'F2-cell-image-url', kind: 'sheet', method: 'F', what: 'FRange.insertCellImageAsync(外链)', expect: 0, run: (page) => facade(page, 'cellImageUrl', EXTERNAL) },
+    { id: 'F3-background-url', kind: 'sheet', method: 'F', what: 'FWorksheet.setBackgroundImage(外链)（入口已隐藏）', expect: 0, run: (page) => facade(page, 'backgroundUrl', EXTERNAL) },
+    { id: 'F4-insert-image-data', kind: 'sheet', method: 'F', what: 'FWorksheet.insertImage(data URL)', expect: 0, run: (page) => facade(page, 'insertImageData', dataUrl(png())) },
     // ---- 文字文档 ----
-    { id: 'D1-insert-image', kind: 'doc', method: 'F', what: '工具栏"插入图片"（doc.command.insert-float-image，文件选择框）', adds: true, run: async (page) => {
+    { id: 'D1-insert-image', kind: 'doc', method: 'F', what: '工具栏"插入图片"（doc.command.insert-float-image，文件选择框）', expect: 1, run: async (page) => {
         await clickDocEnd(page);
         await insertViaFileChooser(page, 'doc.command.insert-float-image', [png()]);
     } },
-    { id: 'D2-shape', kind: 'doc', method: 'F', what: '插入形状（doc.command.insert-float-shape.rectangle）', adds: true, run: async (page) => {
+    { id: 'D2-shape', kind: 'doc', method: 'F', what: '插入形状（doc.command.insert-float-shape.rectangle）', expect: 0, run: async (page) => {
         await clickDocEnd(page);
         await facade(page, 'shape', '');
     } },
-    { id: 'D3-paste-file', kind: 'doc', method: 'P', what: '粘贴图片文件', adds: true, run: async (page) => {
+    { id: 'D3-paste-file', kind: 'doc', method: 'P', what: '粘贴图片文件', expect: 1, run: async (page) => {
         await clickDocEnd(page);
         await syntheticPaste(page, { files: [png()] });
     } },
-    { id: 'D4-paste-html-data', kind: 'doc', method: 'P', what: '粘贴 HTML：<img src="data:...">', adds: true, run: async (page) => {
+    { id: 'D4-paste-html-data', kind: 'doc', method: 'P', what: '粘贴 HTML：<img src="data:...">', expect: 1, run: async (page) => {
         await clickDocEnd(page);
         await syntheticPaste(page, { html: `<p>前<img src="${dataUrl(png())}">后</p>` });
     } },
-    { id: 'D5-paste-html-external', kind: 'doc', method: 'P', what: '粘贴 HTML：外链、file:、blob: 的 <img>', adds: true, run: async (page) => {
+    { id: 'D5-paste-html-external', kind: 'doc', method: 'P', what: '粘贴 HTML：外链、file:、blob: 的 <img>', expect: 3, run: async (page) => {
         await clickDocEnd(page);
         await syntheticPaste(page, { html: `<p>一<img src="${EXTERNAL}">二<img src="file:///C:/Users/me/a.png">三<img src="blob:https://example.invalid/0f3e">四</p>` });
     } },
-    { id: 'D6-paste-file-and-html', kind: 'doc', method: 'P', what: '粘贴"图片文件 + 外链 <img> 的 HTML"', adds: true, run: async (page) => {
+    { id: 'D6-paste-file-and-html', kind: 'doc', method: 'P', what: '粘贴"图片文件 + 外链 <img> 的 HTML"', expect: 2, run: async (page) => {
         await clickDocEnd(page);
         await syntheticPaste(page, { files: [png()], html: `<img src="${EXTERNAL}">` });
     } },
-    { id: 'D7-internal-copy', kind: 'doc', method: 'U', what: '插入图片后，选中它快捷键复制、在别处粘贴（内部复制）', adds: true, run: async (page) => {
+    { id: 'D7-internal-copy', kind: 'doc', method: 'U', what: '插入图片后，选中它快捷键复制、在别处粘贴（内部复制）', expect: 2, run: async (page) => {
         await clickDocEnd(page);
         await insertViaFileChooser(page, 'doc.command.insert-float-image', [png()]);
         await page.waitForTimeout(1200);
@@ -164,8 +183,33 @@ const CASES: PathCase[] = [
         await page.waitForTimeout(300);
         await page.keyboard.press('Meta+V');
     } },
-    { id: 'F5-doc-insert-url', kind: 'doc', method: 'F', what: 'FDocument.insertImage(外链)', adds: false, run: (page) => facade(page, 'docInsertUrl', EXTERNAL) },
-    { id: 'F6-doc-insert-data', kind: 'doc', method: 'F', what: 'FDocument.insertImage(data URL)', adds: false, run: (page) => facade(page, 'docInsertData', dataUrl(png())) },
+    // 粘贴带"内部片段"的 HTML（P4 审查 R1）：SDK 直接采用片段，不经过 HTML 转换；任何网页都能在复制时把它放进剪贴板
+    { id: 'D8a-fragment-textfill', kind: 'doc', method: 'P', what: '粘贴内部片段：文字填充图片（ts.textFill.picture.source 为外链）', expect: 0, run: async (page) => {
+        await clickDocEnd(page);
+        await syntheticPaste(page, { html: `${fragment(TEXT_FILL_DOC)}<p>TF</p>` });
+    } },
+    { id: 'D8b-fragment-array-source', kind: 'doc', method: 'P', what: '粘贴内部片段：source 为数组的图片', expect: 1, run: async (page) => {
+        await clickDocEnd(page);
+        await syntheticPaste(page, { html: fragment(drawingDoc([`${EXTERNAL}?array`], 'URL')) });
+    } },
+    { id: 'D8c-fragment-no-type', kind: 'doc', method: 'P', what: '粘贴内部片段：没有 imageSourceType 的外链图片', expect: 1, run: async (page) => {
+        await clickDocEnd(page);
+        await syntheticPaste(page, { html: fragment(drawingDoc(`${EXTERNAL}?notype`, undefined)) });
+    } },
+    { id: 'D8d-fragment-external', kind: 'doc', method: 'P', what: '粘贴内部片段：外链图片（对照）', expect: 1, run: async (page) => {
+        await clickDocEnd(page);
+        await syntheticPaste(page, { html: fragment(drawingDoc(`${EXTERNAL}?string`, 'URL')) });
+    } },
+    { id: 'S9-cell-editor-fragment', kind: 'sheet', method: 'P', what: '单元格编辑器里粘贴内部片段（外链图片）', expect: 0, run: async (page) => {
+        const p = await cellCenter(page, 'C3');
+        await page.mouse.dblclick(p.x, p.y);
+        await page.waitForTimeout(400);
+        await syntheticPaste(page, { html: fragment(drawingDoc(`${EXTERNAL}?cell`, 'URL')) });
+        await page.waitForTimeout(800);
+        await page.keyboard.press('Escape');
+    } },
+    { id: 'F5-doc-insert-url', kind: 'doc', method: 'F', what: 'FDocument.insertImage(外链)', expect: 0, run: (page) => facade(page, 'docInsertUrl', EXTERNAL) },
+    { id: 'F6-doc-insert-data', kind: 'doc', method: 'F', what: 'FDocument.insertImage(data URL)', expect: 0, run: (page) => facade(page, 'docInsertData', dataUrl(png())) },
 ];
 
 /** 等到快照里出现新增图片，或者超时（预期不新增的路径等满 3 秒）。 */
@@ -207,7 +251,7 @@ for (const c of CASES) {
             } catch (e) {
                 actionError = String(e).split('\n')[0].slice(0, 200);
             }
-            await settle(page, beforeCount, c.adds);
+            await settle(page, beforeCount, c.expect > 0);
 
             const afterText = await page.evaluate(() => JSON.stringify(window.__m0!.editor!.save()));
             const after = snapshotImages(afterText, origin);
@@ -225,6 +269,8 @@ for (const c of CASES) {
 
             const kinds = [...new Set(added.map((i) => i.kind))];
             const nonPlatform = added.filter((i) => i.kind !== 'platform');
+            // 新增的图片数：文字文档只数正文的 drawings（资源 DOC_DRAWING_PLUGIN 里还有一份副本），表格全部都数
+            const addedCount = added.filter((i) => c.kind === 'sheet' || i.where.startsWith('/drawings/')).length;
             const verdict = added.length === 0
                 ? (page4.imageEvents.some((e) => e.kind === 'guard-cancel') ? '被命令守卫取消' : '没有新增图片')
                 : nonPlatform.length === 0 ? '全部为平台地址' : `含非平台地址：${[...new Set(nonPlatform.map((i) => i.kind))].join('、')}`;
@@ -236,6 +282,8 @@ for (const c of CASES) {
                 browser: browserInfo(page, testInfo),
                 timestamp: new Date().toISOString(),
                 verdict,
+                expectedCount: c.expect,
+                addedCount,
                 actionError,
                 added: added.map((i) => ({ where: i.where, kind: i.kind, imageSourceType: i.imageSourceType, source: i.source.slice(0, 120) })),
                 addedKinds: kinds,
@@ -254,9 +302,19 @@ for (const c of CASES) {
             // 平台配置下的要求：新增的图片全部是平台地址（含占位图）；平台地址都能读、读取都带会话；不产生 CSP 违规
             if (img === 'platform') {
                 expect.soft(nonPlatform.map((i) => `${i.kind} ${i.where}`), '新增图片全部是平台地址').toEqual([]);
+                expect.soft(addedCount, '新增图片数符合预期（P4 审查 R3）').toBe(c.expect);
                 expect.soft(load.filter((l) => !(l.complete && l.width > 0) && l.cached).map((l) => l.source), '平台地址的图片加载成功').toEqual([]);
                 expect.soft(assets.reads.filter((r) => r.session == null || r.status !== 200).length, '读取都带会话且成功').toBe(0);
             }
         });
     }
 }
+
+// 文字文档的形状入口已隐藏（插件档案 v1 §5.1；P4 审查 S6）
+test('V11 文字文档的形状入口已隐藏', async ({ page }) => {
+    await page.goto('/doc.html?sample=minimal');
+    await waitForEditor(page);
+    const items = await page.evaluate(() => window.__m0!.auditMenus!().filter((i) => i.id === 'doc.command.menu-insert-shape' || i.id === 'doc.command.menu-insert-shape.below'));
+    expect(items.length, '找到两个形状入口').toBe(2);
+    expect(items.every((i) => i.hidden === true), '两个形状入口都已隐藏').toBe(true);
+});

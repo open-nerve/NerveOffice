@@ -13,51 +13,53 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:48:32.176Z",
-  "verdict": "含非平台地址：file、external、blob",
+  "timestamp": "2026-09-24T22:56:53.090Z",
+  "verdict": "含非平台地址：blob、file、external",
+  "expectedCount": 3,
+  "addedCount": 3,
   "actionError": null,
   "added": [
     {
-      "where": "/drawings/CA1lxK",
-      "kind": "file",
-      "imageSourceType": "URL",
-      "source": "file:///C:/Users/me/a.png"
-    },
-    {
-      "where": "/drawings/M0NFEE",
-      "kind": "external",
-      "imageSourceType": "URL",
-      "source": "https://example.invalid/tracking.png"
-    },
-    {
-      "where": "/drawings/ZNz_d2",
+      "where": "/drawings/5D5PNN",
       "kind": "blob",
       "imageSourceType": "URL",
       "source": "blob:https://example.invalid/0f3e"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/CA1lxK",
+      "where": "/drawings/fMUVs-",
       "kind": "file",
       "imageSourceType": "URL",
       "source": "file:///C:/Users/me/a.png"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/M0NFEE",
+      "where": "/drawings/k8MDiB",
       "kind": "external",
       "imageSourceType": "URL",
       "source": "https://example.invalid/tracking.png"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/ZNz_d2",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/5D5PNN",
       "kind": "blob",
       "imageSourceType": "URL",
       "source": "blob:https://example.invalid/0f3e"
+    },
+    {
+      "where": "resources.DOC_DRAWING_PLUGIN/data/fMUVs-",
+      "kind": "file",
+      "imageSourceType": "URL",
+      "source": "file:///C:/Users/me/a.png"
+    },
+    {
+      "where": "resources.DOC_DRAWING_PLUGIN/data/k8MDiB",
+      "kind": "external",
+      "imageSourceType": "URL",
+      "source": "https://example.invalid/tracking.png"
     }
   ],
   "addedKinds": [
+    "blob",
     "file",
-    "external",
-    "blob"
+    "external"
   ],
   "stray": [],
   "uploads": [],

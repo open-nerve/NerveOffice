@@ -13,18 +13,20 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:20:28.703Z",
+  "timestamp": "2026-09-24T22:26:36.142Z",
   "verdict": "含非平台地址：external",
+  "expectedCount": 0,
+  "addedCount": 1,
   "actionError": null,
   "added": [
     {
-      "where": "/drawings/JKWw7B",
+      "where": "/drawings/2jAldM",
       "kind": "external",
       "imageSourceType": "URL",
       "source": "https://example.invalid/tracking.png"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/JKWw7B",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/2jAldM",
       "kind": "external",
       "imageSourceType": "URL",
       "source": "https://example.invalid/tracking.png"
@@ -58,9 +60,7 @@
       "disposition": "report"
     }
   ],
-  "pageErrors": [
-    "Uncaught InvalidStateError: Failed to execute 'drawImage' on 'CanvasRenderingContext2D': The HTMLImageElement provided is in the 'broken' state. @ http://127.0."
-  ],
+  "pageErrors": [],
   "facadeError": null,
   "snapshotBytes": 2329
 }

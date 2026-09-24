@@ -13,21 +13,23 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T20:33:44.823Z",
+  "timestamp": "2026-09-24T22:40:10.181Z",
   "verdict": "全部为平台地址",
+  "expectedCount": 1,
+  "addedCount": 1,
   "actionError": null,
   "added": [
     {
-      "where": "/drawings/ekeS31",
+      "where": "/drawings/JOB3xj",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/de3b3c6c-0607-4f37-9ae7-b66727eefdef"
+      "source": "/api/assets/ad4e338f-f1e6-4997-ac86-af7844846279"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/ekeS31",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/JOB3xj",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/de3b3c6c-0607-4f37-9ae7-b66727eefdef"
+      "source": "/api/assets/ad4e338f-f1e6-4997-ac86-af7844846279"
     }
   ],
   "addedKinds": [
@@ -52,7 +54,7 @@
   ],
   "load": [
     {
-      "source": "/api/assets/de3b3c6c-0607-4f37-9ae7-b66727eefdef",
+      "source": "/api/assets/ad4e338f-f1e6-4997-ac86-af7844846279",
       "cached": true,
       "complete": true,
       "width": 120
@@ -62,12 +64,12 @@
     {
       "kind": "paste-upload",
       "ok": true,
-      "detail": "/api/assets/de3b3c6c-0607-4f37-9ae7-b66727eefdef"
+      "detail": "/api/assets/ad4e338f-f1e6-4997-ac86-af7844846279"
     },
     {
       "kind": "paste-normalize",
       "ok": true,
-      "detail": "http://127.0.0.1:4780/api/assets/de3b3c6c-0607-4f37-9ae7-b66727eefdef"
+      "detail": "normalize /drawings/KmMPLv"
     }
   ],
   "detections": [

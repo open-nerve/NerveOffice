@@ -13,33 +13,35 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T20:34:46.559Z",
+  "timestamp": "2026-09-24T22:41:11.947Z",
   "verdict": "全部为平台地址",
+  "expectedCount": 2,
+  "addedCount": 2,
   "actionError": null,
   "added": [
     {
-      "where": "/drawings/2KuyA4",
+      "where": "/drawings/v5C4J6",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/1d58de0e-e657-4d64-9a60-5305a37f93c0"
+      "source": "/api/assets/d0b0fb4b-cdc3-4a48-8fe8-74f7823f5b3b"
     },
     {
-      "where": "/drawings/49gjeq",
+      "where": "/drawings/pVWa9n",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/1d58de0e-e657-4d64-9a60-5305a37f93c0"
+      "source": "/api/assets/d0b0fb4b-cdc3-4a48-8fe8-74f7823f5b3b"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/2KuyA4",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/v5C4J6",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/1d58de0e-e657-4d64-9a60-5305a37f93c0"
+      "source": "/api/assets/d0b0fb4b-cdc3-4a48-8fe8-74f7823f5b3b"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/49gjeq",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/pVWa9n",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/1d58de0e-e657-4d64-9a60-5305a37f93c0"
+      "source": "/api/assets/d0b0fb4b-cdc3-4a48-8fe8-74f7823f5b3b"
     }
   ],
   "addedKinds": [
@@ -70,7 +72,7 @@
   ],
   "load": [
     {
-      "source": "/api/assets/1d58de0e-e657-4d64-9a60-5305a37f93c0",
+      "source": "/api/assets/d0b0fb4b-cdc3-4a48-8fe8-74f7823f5b3b",
       "cached": true,
       "complete": true,
       "width": 120
@@ -80,7 +82,7 @@
     {
       "kind": "save",
       "ok": true,
-      "detail": "/api/assets/1d58de0e-e657-4d64-9a60-5305a37f93c0"
+      "detail": "/api/assets/d0b0fb4b-cdc3-4a48-8fe8-74f7823f5b3b"
     }
   ],
   "detections": [

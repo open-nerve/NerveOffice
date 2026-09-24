@@ -13,12 +13,20 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:45:39.687Z",
+  "timestamp": "2026-09-24T22:54:04.264Z",
   "verdict": "含非平台地址：data",
+  "expectedCount": 2,
+  "addedCount": 2,
   "actionError": null,
   "added": [
     {
-      "where": "resources.SHEET_DRAWING_PLUGIN/sheet-1/data/4mwJVg",
+      "where": "resources.SHEET_DRAWING_PLUGIN/sheet-1/data/Yichw_",
+      "kind": "data",
+      "imageSourceType": "BASE64",
+      "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr"
+    },
+    {
+      "where": "resources.SHEET_DRAWING_PLUGIN/sheet-1/data/FMHHbsO4h8LjcVrVdzrYu",
       "kind": "data",
       "imageSourceType": "BASE64",
       "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr"
@@ -34,7 +42,7 @@
   "imageEvents": [],
   "detections": [
     "sheet.mutation.set-drawing-apply",
-    "sheet.mutation.set-range-values"
+    "sheet.mutation.set-drawing-apply"
   ],
   "cspViolations": [
     {
@@ -50,5 +58,5 @@
   ],
   "pageErrors": [],
   "facadeError": null,
-  "snapshotBytes": 2172
+  "snapshotBytes": 3251
 }

@@ -13,18 +13,20 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:49:21.040Z",
+  "timestamp": "2026-09-24T22:59:15.229Z",
   "verdict": "含非平台地址：external",
+  "expectedCount": 0,
+  "addedCount": 1,
   "actionError": null,
   "added": [
     {
-      "where": "/drawings/2sfkLN",
+      "where": "/drawings/6WqU0M",
       "kind": "external",
       "imageSourceType": "URL",
       "source": "https://example.invalid/tracking.png"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/2sfkLN",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/6WqU0M",
       "kind": "external",
       "imageSourceType": "URL",
       "source": "https://example.invalid/tracking.png"

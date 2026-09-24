@@ -1,0 +1,64 @@
+{
+  "check": "V11-paths",
+  "case": {
+    "id": "D8c-fragment-no-type",
+    "kind": "doc",
+    "method": "P",
+    "what": "粘贴内部片段：没有 imageSourceType 的外链图片"
+  },
+  "img": "default",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T22:25:43.172Z",
+  "verdict": "含非平台地址：external",
+  "expectedCount": 1,
+  "addedCount": 1,
+  "actionError": null,
+  "added": [
+    {
+      "where": "/drawings/iwU2nh",
+      "kind": "external",
+      "source": "https://example.invalid/tracking.png?notype"
+    },
+    {
+      "where": "resources.DOC_DRAWING_PLUGIN/data/iwU2nh",
+      "kind": "external",
+      "source": "https://example.invalid/tracking.png?notype"
+    }
+  ],
+  "addedKinds": [
+    "external"
+  ],
+  "stray": [],
+  "uploads": [],
+  "reads": [],
+  "load": [],
+  "imageEvents": [],
+  "detections": [
+    "doc.mutation.rich-text-editing"
+  ],
+  "cspViolations": [
+    {
+      "directive": "img-src",
+      "blocked": "https://example.invalid/tracking.png?notype",
+      "disposition": "report"
+    },
+    {
+      "directive": "img-src",
+      "blocked": "https://example.invalid/tracking.png?notype",
+      "disposition": "enforce"
+    },
+    {
+      "directive": "img-src",
+      "blocked": "data",
+      "disposition": "report"
+    }
+  ],
+  "pageErrors": [],
+  "facadeError": null,
+  "snapshotBytes": 2128
+}

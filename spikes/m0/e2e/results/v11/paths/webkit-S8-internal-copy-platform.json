@@ -13,15 +13,23 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:45:58.197Z",
+  "timestamp": "2026-09-24T22:54:23.387Z",
   "verdict": "全部为平台地址",
+  "expectedCount": 2,
+  "addedCount": 2,
   "actionError": null,
   "added": [
     {
-      "where": "resources.SHEET_DRAWING_PLUGIN/sheet-1/data/3jv4zC",
+      "where": "resources.SHEET_DRAWING_PLUGIN/sheet-1/data/SJT8NJ",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/f167690d-8852-48c2-a7eb-dcf31f3bed31"
+      "source": "/api/assets/a9c5b32a-8cc9-46cf-900b-5b0d4e1b6354"
+    },
+    {
+      "where": "resources.SHEET_DRAWING_PLUGIN/sheet-1/data/SRBRDa9gWTATMPzir9qTV",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/a9c5b32a-8cc9-46cf-900b-5b0d4e1b6354"
     }
   ],
   "addedKinds": [
@@ -46,7 +54,7 @@
   ],
   "load": [
     {
-      "source": "/api/assets/f167690d-8852-48c2-a7eb-dcf31f3bed31",
+      "source": "/api/assets/a9c5b32a-8cc9-46cf-900b-5b0d4e1b6354",
       "cached": true,
       "complete": true,
       "width": 120
@@ -56,15 +64,20 @@
     {
       "kind": "save",
       "ok": true,
-      "detail": "/api/assets/f167690d-8852-48c2-a7eb-dcf31f3bed31"
+      "detail": "/api/assets/a9c5b32a-8cc9-46cf-900b-5b0d4e1b6354"
+    },
+    {
+      "kind": "copy-image",
+      "ok": true,
+      "detail": "/api/assets/a9c5b32a-8cc9-46cf-900b-5b0d4e1b6354"
     }
   ],
   "detections": [
     "sheet.mutation.set-drawing-apply",
-    "sheet.mutation.set-range-values"
+    "sheet.mutation.set-drawing-apply"
   ],
   "cspViolations": [],
   "pageErrors": [],
   "facadeError": null,
-  "snapshotBytes": 1943
+  "snapshotBytes": 2793
 }

@@ -13,33 +13,35 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:48:53.520Z",
+  "timestamp": "2026-09-24T22:57:14.462Z",
   "verdict": "全部为平台地址",
+  "expectedCount": 2,
+  "addedCount": 2,
   "actionError": null,
   "added": [
     {
-      "where": "/drawings/31f0Sf",
+      "where": "/drawings/Jp7lQ8",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/3d6ae336-d79b-4aa5-a8b1-db3e597d324b"
+    },
+    {
+      "where": "/drawings/qrytE7",
       "kind": "platform",
       "imageSourceType": "URL",
       "source": "/api/assets/00000000-0000-4000-8000-000000000000"
     },
     {
-      "where": "/drawings/ZDNaRZ",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/Jp7lQ8",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/86d0d326-131f-4706-b89d-1184dadbcc3c"
+      "source": "/api/assets/3d6ae336-d79b-4aa5-a8b1-db3e597d324b"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/31f0Sf",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/qrytE7",
       "kind": "platform",
       "imageSourceType": "URL",
       "source": "/api/assets/00000000-0000-4000-8000-000000000000"
-    },
-    {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/ZDNaRZ",
-      "kind": "platform",
-      "imageSourceType": "URL",
-      "source": "/api/assets/86d0d326-131f-4706-b89d-1184dadbcc3c"
     }
   ],
   "addedKinds": [
@@ -70,33 +72,33 @@
   ],
   "load": [
     {
+      "source": "/api/assets/3d6ae336-d79b-4aa5-a8b1-db3e597d324b",
+      "cached": true,
+      "complete": true,
+      "width": 120
+    },
+    {
       "source": "/api/assets/00000000-0000-4000-8000-000000000000",
       "cached": true,
       "complete": true,
       "width": 160
-    },
-    {
-      "source": "/api/assets/86d0d326-131f-4706-b89d-1184dadbcc3c",
-      "cached": true,
-      "complete": true,
-      "width": 120
     }
   ],
   "imageEvents": [
     {
       "kind": "paste-upload",
       "ok": true,
-      "detail": "/api/assets/86d0d326-131f-4706-b89d-1184dadbcc3c"
+      "detail": "/api/assets/3d6ae336-d79b-4aa5-a8b1-db3e597d324b"
     },
     {
       "kind": "paste-replace",
       "ok": true,
-      "detail": "external：https://example.invalid/tracking.png"
+      "detail": "replace external /drawings/QlIItn https://example.invalid/tracking.png"
     },
     {
       "kind": "paste-normalize",
       "ok": true,
-      "detail": "http://127.0.0.1:4780/api/assets/86d0d326-131f-4706-b89d-1184dadbcc3c"
+      "detail": "normalize /drawings/iW2u8K"
     }
   ],
   "detections": [

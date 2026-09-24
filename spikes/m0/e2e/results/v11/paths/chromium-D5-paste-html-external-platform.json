@@ -13,42 +13,44 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:19:46.967Z",
+  "timestamp": "2026-09-24T22:24:21.414Z",
   "verdict": "全部为平台地址",
+  "expectedCount": 3,
+  "addedCount": 3,
   "actionError": null,
   "added": [
     {
-      "where": "/drawings/HHi76F",
+      "where": "/drawings/3r3gbX",
       "kind": "platform",
       "imageSourceType": "URL",
       "source": "/api/assets/00000000-0000-4000-8000-000000000000"
     },
     {
-      "where": "/drawings/ntbElT",
+      "where": "/drawings/OMpbGA",
       "kind": "platform",
       "imageSourceType": "URL",
       "source": "/api/assets/00000000-0000-4000-8000-000000000000"
     },
     {
-      "where": "/drawings/xA4J2P",
+      "where": "/drawings/ieftU-",
       "kind": "platform",
       "imageSourceType": "URL",
       "source": "/api/assets/00000000-0000-4000-8000-000000000000"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/HHi76F",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/3r3gbX",
       "kind": "platform",
       "imageSourceType": "URL",
       "source": "/api/assets/00000000-0000-4000-8000-000000000000"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/ntbElT",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/OMpbGA",
       "kind": "platform",
       "imageSourceType": "URL",
       "source": "/api/assets/00000000-0000-4000-8000-000000000000"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/xA4J2P",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/ieftU-",
       "kind": "platform",
       "imageSourceType": "URL",
       "source": "/api/assets/00000000-0000-4000-8000-000000000000"
@@ -79,17 +81,17 @@
     {
       "kind": "paste-replace",
       "ok": true,
-      "detail": "external：https://example.invalid/tracking.png"
+      "detail": "replace external /drawings/8OdCM8 https://example.invalid/tracking.png"
     },
     {
       "kind": "paste-replace",
       "ok": true,
-      "detail": "file：file:///C:/Users/me/a.png"
+      "detail": "replace file /drawings/KXp8q0 file:///C:/Users/me/a.png"
     },
     {
       "kind": "paste-replace",
       "ok": true,
-      "detail": "blob：blob:https://example.invalid/0f3e"
+      "detail": "replace blob /drawings/u-tA-f blob:https://example.invalid/0f3e"
     }
   ],
   "detections": [

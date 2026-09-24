@@ -13,33 +13,35 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:20:01.180Z",
+  "timestamp": "2026-09-24T22:24:35.639Z",
   "verdict": "全部为平台地址",
+  "expectedCount": 2,
+  "addedCount": 2,
   "actionError": null,
   "added": [
     {
-      "where": "/drawings/eklDs0",
+      "where": "/drawings/4gY_Ng",
       "kind": "platform",
       "imageSourceType": "URL",
       "source": "/api/assets/00000000-0000-4000-8000-000000000000"
     },
     {
-      "where": "/drawings/so58Cc",
+      "where": "/drawings/HlEZE-",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/b4c0f73a-84d1-42b7-8c56-016372fb629a"
+      "source": "/api/assets/ad8d49fc-8e9d-4c41-bd21-1e699ed21e29"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/eklDs0",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/4gY_Ng",
       "kind": "platform",
       "imageSourceType": "URL",
       "source": "/api/assets/00000000-0000-4000-8000-000000000000"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/so58Cc",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/HlEZE-",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/b4c0f73a-84d1-42b7-8c56-016372fb629a"
+      "source": "/api/assets/ad8d49fc-8e9d-4c41-bd21-1e699ed21e29"
     }
   ],
   "addedKinds": [
@@ -76,7 +78,7 @@
       "width": 160
     },
     {
-      "source": "/api/assets/b4c0f73a-84d1-42b7-8c56-016372fb629a",
+      "source": "/api/assets/ad8d49fc-8e9d-4c41-bd21-1e699ed21e29",
       "cached": true,
       "complete": true,
       "width": 120
@@ -86,17 +88,17 @@
     {
       "kind": "paste-upload",
       "ok": true,
-      "detail": "/api/assets/b4c0f73a-84d1-42b7-8c56-016372fb629a"
+      "detail": "/api/assets/ad8d49fc-8e9d-4c41-bd21-1e699ed21e29"
     },
     {
       "kind": "paste-replace",
       "ok": true,
-      "detail": "external：https://example.invalid/tracking.png"
+      "detail": "replace external /drawings/myRQIi https://example.invalid/tracking.png"
     },
     {
       "kind": "paste-normalize",
       "ok": true,
-      "detail": "http://127.0.0.1:4780/api/assets/b4c0f73a-84d1-42b7-8c56-016372fb629a"
+      "detail": "normalize /drawings/AkROnu"
     }
   ],
   "detections": [

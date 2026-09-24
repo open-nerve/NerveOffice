@@ -13,21 +13,23 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:19:18.575Z",
+  "timestamp": "2026-09-24T22:23:53.014Z",
   "verdict": "全部为平台地址",
+  "expectedCount": 1,
+  "addedCount": 1,
   "actionError": null,
   "added": [
     {
-      "where": "/drawings/vuaNOq",
+      "where": "/drawings/4ikckB",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/e99d168e-0e8b-4a53-a792-82a71684adbf"
+      "source": "/api/assets/e4ee56db-ca84-4edc-93d2-35a9e47cfabc"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/vuaNOq",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/4ikckB",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/e99d168e-0e8b-4a53-a792-82a71684adbf"
+      "source": "/api/assets/e4ee56db-ca84-4edc-93d2-35a9e47cfabc"
     }
   ],
   "addedKinds": [
@@ -52,7 +54,7 @@
   ],
   "load": [
     {
-      "source": "/api/assets/e99d168e-0e8b-4a53-a792-82a71684adbf",
+      "source": "/api/assets/e4ee56db-ca84-4edc-93d2-35a9e47cfabc",
       "cached": true,
       "complete": true,
       "width": 120
@@ -62,12 +64,12 @@
     {
       "kind": "paste-upload",
       "ok": true,
-      "detail": "/api/assets/e99d168e-0e8b-4a53-a792-82a71684adbf"
+      "detail": "/api/assets/e4ee56db-ca84-4edc-93d2-35a9e47cfabc"
     },
     {
       "kind": "paste-normalize",
       "ok": true,
-      "detail": "http://127.0.0.1:4780/api/assets/e99d168e-0e8b-4a53-a792-82a71684adbf"
+      "detail": "normalize /drawings/gP-MxT"
     }
   ],
   "detections": [

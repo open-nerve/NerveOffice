@@ -13,38 +13,40 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:48:46.431Z",
-  "verdict": "含非平台地址：data、external",
+  "timestamp": "2026-09-24T22:57:07.348Z",
+  "verdict": "含非平台地址：external、data",
+  "expectedCount": 2,
+  "addedCount": 2,
   "actionError": null,
   "added": [
     {
-      "where": "/drawings/JRzNgZ",
-      "kind": "data",
-      "imageSourceType": "BASE64",
-      "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr"
-    },
-    {
-      "where": "/drawings/m62hnM",
+      "where": "/drawings/GAaB8j",
       "kind": "external",
       "imageSourceType": "URL",
       "source": "https://example.invalid/tracking.png"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/JRzNgZ",
+      "where": "/drawings/Hxqp59",
       "kind": "data",
       "imageSourceType": "BASE64",
       "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/m62hnM",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/GAaB8j",
       "kind": "external",
       "imageSourceType": "URL",
       "source": "https://example.invalid/tracking.png"
+    },
+    {
+      "where": "resources.DOC_DRAWING_PLUGIN/data/Hxqp59",
+      "kind": "data",
+      "imageSourceType": "BASE64",
+      "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr"
     }
   ],
   "addedKinds": [
-    "data",
-    "external"
+    "external",
+    "data"
   ],
   "stray": [],
   "uploads": [],

@@ -7,12 +7,19 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:52:06.534Z",
+  "timestamp": "2026-09-24T23:02:07.964Z",
   "results": [
     {
       "path": "文字文档粘贴外链图片",
       "requests": [
         "https://example.invalid/pasted.png"
+      ]
+    },
+    {
+      "path": "文字文档粘贴内部片段（文字填充图片、数组 source）",
+      "requests": [
+        "https://example.invalid/pasted.png?textfill",
+        "https://example.invalid/pasted.png?array"
       ]
     },
     {

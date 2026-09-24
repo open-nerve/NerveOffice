@@ -13,8 +13,10 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T20:35:05.560Z",
+  "timestamp": "2026-09-24T22:43:04.455Z",
   "verdict": "被命令守卫取消",
+  "expectedCount": 0,
+  "addedCount": 0,
   "actionError": null,
   "added": [],
   "addedKinds": [],

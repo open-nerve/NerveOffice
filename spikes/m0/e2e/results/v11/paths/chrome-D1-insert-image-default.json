@@ -13,18 +13,20 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T20:32:58.808Z",
+  "timestamp": "2026-09-24T22:39:29.035Z",
   "verdict": "含非平台地址：data",
+  "expectedCount": 1,
+  "addedCount": 1,
   "actionError": null,
   "added": [
     {
-      "where": "/drawings/gQj6uc",
+      "where": "/drawings/v81KZo",
       "kind": "data",
       "imageSourceType": "BASE64",
       "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/gQj6uc",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/v81KZo",
       "kind": "data",
       "imageSourceType": "BASE64",
       "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr"

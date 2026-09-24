@@ -102,6 +102,15 @@ for (const img of ['default', 'platform'] as const) {
         await page.waitForTimeout(2000);
         await waitQuiet(page);
         out.push({ path: '文字文档粘贴外链图片', requests: external.slice(before) });
+        // 粘贴内部片段（P4 审查 R1）：文字填充图片、source 为数组的图片
+        const fragment = (doc: unknown) => `<!--univer-doc-fragment:${Buffer.from(JSON.stringify({ version: 1, kind: 'univer-doc-fragment', doc })).toString('base64')}-->`;
+        const beforeFragment = external.length;
+        await syntheticPaste(page, { html: `${fragment({ body: { dataStream: 'TF\r', textRuns: [{ st: 0, ed: 2, ts: { textFill: { type: 'picture', picture: { source: `${EXTERNAL_IMG}?textfill` } } } }], paragraphs: [{ startIndex: 2 }] } })}<p>TF</p>` });
+        await page.waitForTimeout(1500);
+        await syntheticPaste(page, { html: fragment({ body: { dataStream: '\bX\r', customBlocks: [{ startIndex: 0, blockId: 'p4a' }], paragraphs: [{ startIndex: 2 }] }, drawings: { p4a: { drawingId: 'p4a', unitId: '', subUnitId: '', drawingType: 0, imageSourceType: 'URL', source: [`${EXTERNAL_IMG}?array`], layoutType: 0, transform: { width: 40, height: 30, angle: 0 }, docTransform: { angle: 0, size: { width: 40, height: 30 }, positionH: { relativeFrom: 2, posOffset: 0 }, positionV: { relativeFrom: 2, posOffset: 0 } } } } }) });
+        await page.waitForTimeout(2000);
+        await waitQuiet(page);
+        out.push({ path: '文字文档粘贴内部片段（文字填充图片、数组 source）', requests: external.slice(beforeFragment) });
         // Facade：FDocument.insertImage(外链)
         const before2 = external.length;
         await page.evaluate(async (url) => {
@@ -129,6 +138,9 @@ for (const img of ['default', 'platform'] as const) {
         await page.waitForTimeout(2000);
         out.push({ path: 'FWorksheet.insertImage(外链)', requests: external.slice(before3) });
         await writeResult(`v12/external-images/${testInfo.project.name}-${img}.json`, { check: 'V12-external-images', img, browser: browserInfo(page, testInfo), timestamp: new Date().toISOString(), results: out });
-        if (img === 'platform') expect.soft((out[0].requests as string[]).length, '平台配置：粘贴外链图片不发出外部请求').toBe(0);
+        if (img === 'platform') {
+            expect.soft((out[0].requests as string[]).length, '平台配置：粘贴外链图片不发出外部请求').toBe(0);
+            expect.soft((out[1].requests as string[]).length, '平台配置：粘贴内部片段不发出外部请求').toBe(0);
+        }
     });
 }

@@ -192,3 +192,43 @@ test('V12 CSP 定稿：平台配置下的违规汇总', async ({ page, context }
     await summarize('文字文档：插入、粘贴文件、粘贴外链 HTML、全选复制粘贴');
     await writeResult(`v12/csp/${testInfo.project.name}.json`, { check: 'V12-csp', browser: browserInfo(page, testInfo), timestamp: new Date().toISOString(), results: out });
 });
+
+// 跨文档复制浮动图片（P4 审查 R4）：A 标签页复制，B 标签页粘贴。SDK 对 URL 类型的图片往系统剪贴板写空文本，
+// 平台方案另由表格档案的复制补救（src/harness/sheet-image-copy.ts）把同源图片转成 PNG 写入剪贴板。只在 Chromium 内核上测（无头 WebKit 不能读写剪贴板）。
+for (const img of ['default', 'platform'] as const) {
+    test(`V12 跨文档复制浮动图片：${img}`, async ({ context }, testInfo) => {
+        test.skip(testInfo.project.name === 'webkit', '无头 WebKit 不能读写剪贴板');
+        test.setTimeout(180_000);
+        await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+        const a = await context.newPage();
+        const b = await context.newPage();
+        for (const p of [a, b]) {
+            await p.goto(`/sheet.html?sample=minimal&img=${img}&worker=1`);
+            await waitForEditor(p);
+        }
+        await a.bringToFront();
+        await clickCell(a, 'C3');
+        await insertViaFileChooser(a, 'sheet.command.insert-float-image', [fixtureFile('blue-120x80.png')]);
+        await a.waitForTimeout(1500);
+        await a.keyboard.press('Escape');
+        await clickCell(a, 'C3');
+        await a.keyboard.press('Meta+C');
+        await a.waitForTimeout(1200);
+        const clipboard = await a.evaluate(async () => {
+            const items = await navigator.clipboard.read();
+            return items.flatMap((i) => i.types);
+        });
+        await b.bringToFront();
+        await clickCell(b, 'E6');
+        await b.keyboard.press('Meta+V');
+        await b.waitForTimeout(2500);
+        const pasted = await b.evaluate(() => {
+            const images = window.__m0!.editor!.univerAPI.getActiveWorkbook()!.getActiveSheet().getImages();
+            return images.map((i) => i.toBuilder().getSource().slice(0, 60));
+        });
+        const events = await a.evaluate(() => window.__m0!.images!.events.filter((e) => e.kind === 'copy-image').map((e) => ({ ok: e.ok, detail: e.detail })));
+        await writeResult(`v12/cross-copy/${testInfo.project.name}-${img}.json`, { check: 'V12-cross-copy', img, browser: browserInfo(b, testInfo), timestamp: new Date().toISOString(), clipboard, pasted, copyEvents: events });
+        expect.soft(pasted.length, '另一个文档里粘贴出一张图片').toBe(1);
+        if (img === 'platform') expect.soft(pasted.every((s) => s.startsWith('/api/assets/')), '粘贴出的图片是平台地址（重新上传）').toBe(true);
+    });
+}

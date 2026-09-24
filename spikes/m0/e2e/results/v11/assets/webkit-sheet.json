@@ -7,10 +7,10 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:38:21.011Z",
+  "timestamp": "2026-09-24T22:47:00.384Z",
   "sources": [
-    "/api/assets/3c8d30d0-6d54-48bb-a310-2e84f0600e86",
-    "/api/assets/405707e5-3359-4663-93e0-aaef270b13e5"
+    "/api/assets/196c7dea-7378-40bd-9b9a-5e1baef90b27",
+    "/api/assets/ec147a56-a1e5-4eb7-9028-1b60e559f80e"
   ],
   "uploaderCookie": [
     {
@@ -34,13 +34,13 @@
     ],
     "load": [
       {
-        "source": "/api/assets/3c8d30d0-6d54-48bb-a310-2e84f0600e86",
+        "source": "/api/assets/196c7dea-7378-40bd-9b9a-5e1baef90b27",
         "cached": false,
         "complete": false,
         "width": 0
       },
       {
-        "source": "/api/assets/405707e5-3359-4663-93e0-aaef270b13e5",
+        "source": "/api/assets/ec147a56-a1e5-4eb7-9028-1b60e559f80e",
         "cached": true,
         "complete": true,
         "width": 120
@@ -61,29 +61,29 @@
     ],
     "load": [
       {
-        "source": "/api/assets/3c8d30d0-6d54-48bb-a310-2e84f0600e86",
+        "source": "/api/assets/196c7dea-7378-40bd-9b9a-5e1baef90b27",
         "cached": false,
         "complete": false,
         "width": 0
       },
       {
-        "source": "/api/assets/405707e5-3359-4663-93e0-aaef270b13e5",
+        "source": "/api/assets/ec147a56-a1e5-4eb7-9028-1b60e559f80e",
         "cached": true,
         "complete": true,
         "width": 120
       }
     ],
-    "orphanStatus": 403,
+    "orphanStatus": 404,
     "orphanStatusForUploader": 200,
     "referencedStatus": 200,
     "errors": []
   },
   "copy": {
-    "filesBefore": 3,
-    "filesAfter": 3,
+    "filesBefore": 6,
+    "filesAfter": 6,
     "links": [
-      "3c8d30d0-6d54-48bb-a310-2e84f0600e86",
-      "405707e5-3359-4663-93e0-aaef270b13e5"
+      "196c7dea-7378-40bd-9b9a-5e1baef90b27",
+      "ec147a56-a1e5-4eb7-9028-1b60e559f80e"
     ],
     "statusAfterSourceDeleted": 200
   },
@@ -101,20 +101,20 @@
     ],
     "load": [
       {
-        "source": "/api/assets/3c8d30d0-6d54-48bb-a310-2e84f0600e86",
+        "source": "/api/assets/196c7dea-7378-40bd-9b9a-5e1baef90b27",
         "cached": false,
         "complete": false,
         "width": 0
       },
       {
-        "source": "/api/assets/405707e5-3359-4663-93e0-aaef270b13e5",
+        "source": "/api/assets/ec147a56-a1e5-4eb7-9028-1b60e559f80e",
         "cached": false,
         "complete": false,
         "width": 0
       }
     ],
     "errors": [
-      "InvalidStateError: The HTMLImageElement provided is in the 'broken' state. @ http://127.0.0.1:4780/assets/facade-B-_6XV8X.js:33"
+      "InvalidStateError: The HTMLImageElement provided is in the 'broken' state. @ http://127.0.0.1:4780/assets/facade-Tx0LIZVm.js:33"
     ]
   }
 }

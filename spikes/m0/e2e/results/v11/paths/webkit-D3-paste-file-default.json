@@ -13,18 +13,20 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:48:03.684Z",
+  "timestamp": "2026-09-24T22:56:24.603Z",
   "verdict": "含非平台地址：data",
+  "expectedCount": 1,
+  "addedCount": 1,
   "actionError": null,
   "added": [
     {
-      "where": "/drawings/Hb6DgI",
+      "where": "/drawings/DsySW1",
       "kind": "data",
       "imageSourceType": "BASE64",
       "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/Hb6DgI",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/DsySW1",
       "kind": "data",
       "imageSourceType": "BASE64",
       "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr"

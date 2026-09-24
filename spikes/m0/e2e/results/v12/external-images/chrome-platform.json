@@ -7,10 +7,14 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T20:37:56.020Z",
+  "timestamp": "2026-09-24T22:46:35.109Z",
   "results": [
     {
       "path": "文字文档粘贴外链图片",
+      "requests": []
+    },
+    {
+      "path": "文字文档粘贴内部片段（文字填充图片、数组 source）",
       "requests": []
     },
     {

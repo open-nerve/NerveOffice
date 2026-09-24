@@ -13,18 +13,20 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T20:34:55.534Z",
+  "timestamp": "2026-09-24T22:42:54.461Z",
   "verdict": "含非平台地址：external",
+  "expectedCount": 0,
+  "addedCount": 1,
   "actionError": null,
   "added": [
     {
-      "where": "/drawings/emvBtT",
+      "where": "/drawings/Sl1Kwy",
       "kind": "external",
       "imageSourceType": "URL",
       "source": "https://example.invalid/tracking.png"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/emvBtT",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/Sl1Kwy",
       "kind": "external",
       "imageSourceType": "URL",
       "source": "https://example.invalid/tracking.png"

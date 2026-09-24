@@ -6,19 +6,19 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:11:00.435Z",
+  "timestamp": "2026-09-24T22:15:51.915Z",
   "results": [
     {
       "img": "default",
       "kind": "sheet",
       "status": 422,
-      "body": "{\"error\":\"non-platform-image\",\"images\":[{\"where\":\"resources.SHEET_DRAWING_PLUGIN/sheet-1/data/mbohDN\",\"source\":\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr\",\"kind\":\"data\",\"imageSourceType\":\"BASE64\"}]}"
+      "body": "{\"error\":\"non-platform-image\",\"images\":[{\"where\":\"resources.SHEET_DRAWING_PLUGIN/sheet-1/data/T3S8AW\",\"source\":\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr\",\"kind\":\"data\",\"imageSourceType\":\"BASE64\"}]}"
     },
     {
       "img": "default",
       "kind": "doc",
       "status": 422,
-      "body": "{\"error\":\"non-platform-image\",\"images\":[{\"where\":\"/drawings/vc0a8B\",\"source\":\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr\",\"kind\":\"data\",\"imageSourceType\":\"BASE64\"},{\"where\":\"resources.DOC_DRAWING_PLUGIN/data/vc0a8B\",\"sourc"
+      "body": "{\"error\":\"non-platform-image\",\"images\":[{\"where\":\"/drawings/VyO93f\",\"source\":\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr\",\"kind\":\"data\",\"imageSourceType\":\"BASE64\"},{\"where\":\"resources.DOC_DRAWING_PLUGIN/data/VyO93f\",\"sourc"
     },
     {
       "img": "platform",

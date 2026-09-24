@@ -1,5 +1,6 @@
 // P4：把 V11、V12 的结果文件汇总成报告用的表格（Markdown），报告中的数字都可以用它重新得出。
-// 用法：先跑完 P4 的用例，再 node scripts/p4-summary.ts [章节…]，章节为 paths assets limits validate fallback formula external degradation csp，缺省为全部。
+// 用法：先跑完 P4 的用例，再 node scripts/p4-summary.ts [章节…]，
+// 章节为 paths assets links formats limits validate validateConstructed fallback formula external degradation crosscopy csp，缺省为全部。
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -34,9 +35,10 @@ function paths(): string {
         const events = merged(of('platform').map((x) => ({ browser: browserOf(x.file), value: [...new Set((x.data.imageEvents as Json[]).map((e) => `${e.kind}${e.ok ? '' : '（失败）'}`))].join('、') || '—' })));
         const enforce = (img: string) => merged(of(img).map((x) => ({ browser: browserOf(x.file), value: String((x.data.cspViolations as Json[]).filter((v) => v.disposition === 'enforce').length) })));
         const errors = (img: string) => merged(of(img).map((x) => ({ browser: browserOf(x.file), value: String((x.data.pageErrors as string[]).length + (x.data.actionError ? 1 : 0)) })));
-        return [id, any.case.method, any.case.what, verdict('default'), `${enforce('default')} / ${errors('default')}`, verdict('platform'), events, `${enforce('platform')} / ${errors('platform')}`];
+        const count = (img: string) => merged(of(img).map((x) => ({ browser: browserOf(x.file), value: String(x.data.addedCount) })));
+        return [id, any.case.method, any.case.what, verdict('default'), count('default'), `${enforce('default')} / ${errors('default')}`, verdict('platform'), `${count('platform')}（预期 ${any.expectedCount}）`, events, `${enforce('platform')} / ${errors('platform')}`];
     });
-    return ['## V11 图片路径矩阵（严格 CSP）', table(['编号', '方式', '路径', 'default：新增图片', 'default：CSP 强制违规 / 页面错误', 'platform：新增图片', 'platform：平台的处理', 'platform：CSP 强制违规 / 页面错误'], rows)].join('\n\n');
+    return ['## V11 图片路径矩阵（严格 CSP）', table(['编号', '方式', '路径', 'default：新增图片', 'default：张数', 'default：CSP 强制违规 / 页面错误', 'platform：新增图片', 'platform：张数', 'platform：平台的处理', 'platform：CSP 强制违规 / 页面错误'], rows)].join('\n\n');
 }
 
 function assets(): string {
@@ -55,6 +57,15 @@ function assets(): string {
     return ['## V11 同源读取与授权', table(['浏览器', '文档', '同一会话重开', '另一个会话', '复制文档', '没有会话 Cookie'], rows)].join('\n\n');
 }
 
+function links(): string {
+    const list = load('v11/links');
+    const rows = list.map((x) => {
+        const d = x.data;
+        return [browserOf(x.file), d.bSavesForeignRef.links, String(d.bReadAfterOwnSave), String(d.bReadAfterASaved), d.bSavesAgain.links, `${d.escapedHasPlainPath ? '有' : '无'}明文；引用 ${d.escapedLinks.length}`];
+    });
+    return ['## V11 引用关系的保存校验', table(['浏览器', 'B 引用 A 未保存的图片', 'B 读取', 'A 保存后 B 读取', 'B 再次保存', '转义的地址'], rows)].join('\n\n');
+}
+
 function limits(): string {
     const list = load('v11/limits');
     const rows = list.flatMap((x) => (x.data.results as Json[]).map((r) => [browserOf(x.file), r.kind, r.case, String(r.added), (r.uploads as Json[]).map((u) => `${u.status}${u.reason ? `（${u.reason}）` : ''}`).join('、') || '没有上传', (r.messages as string[]).join('、') || '—', String((r.errors as string[]).length)]));
@@ -65,6 +76,22 @@ function validate(): string {
     const list = load('v11/validate');
     const rows = list.flatMap((x) => (x.data.results as Json[]).map((r) => [browserOf(x.file), r.kind, r.img, String(r.status)]));
     return ['## V11 服务端的保存校验', table(['浏览器', '文档', '图片服务', '保存（validate=1）'], rows)].join('\n\n');
+}
+
+function validateConstructed(): string {
+    const list = load('v11/validate-constructed');
+    const cases = [...new Set(list.flatMap((x) => (x.data.results as Json[]).map((r) => r.case as string)))];
+    const rows = cases.map((c) => [c, merged(list.map((x) => ({ browser: browserOf(x.file), value: String((x.data.results as Json[]).find((r) => r.case === c)?.status ?? '—') })))]);
+    return ['## V11 保存校验：构造的快照', table(['情形', '保存（validate=1）'], rows)].join('\n\n');
+}
+
+function formats(): string {
+    const list = load('v11/formats');
+    const rows = list.map((x) => {
+        const d = x.data;
+        return [browserOf(x.file), d.img, d.sheetFloatAccept, d.docAccept, String(d.sheetPasteWebp.added), String(d.docPasteGif.added)];
+    });
+    return ['## V11 图片格式', table(['浏览器', '图片服务', '表格插入的文件选择框', '文字文档插入的文件选择框', '表格粘贴 WebP：新增', '文字文档粘贴 GIF：新增（正文与资源）'], rows)].join('\n\n');
 }
 
 function fallback(): string {
@@ -106,6 +133,12 @@ function degradation(): string {
     return ['## V12 功能降级（严格 CSP）', table(['浏览器', '图片服务', '复制浮动图片到系统剪贴板', '保存单元格图片', '双击预览', '移动图片', '拖放文件（合成事件）'], rows)].join('\n\n');
 }
 
+function crosscopy(): string {
+    const list = load('v12/cross-copy');
+    const rows = list.map((x) => [browserOf(x.file), x.data.img, (x.data.clipboard as string[]).join('、') || '空', (x.data.pasted as string[]).map((s) => (s.startsWith('/api/assets/') ? '平台地址' : s.startsWith('data:') ? 'data URL' : s)).join('、') || '没有粘贴出图片', (x.data.copyEvents as Json[]).map((e) => (e.ok ? '写入成功' : '写入失败')).join('、') || '—']);
+    return ['## V12 跨文档复制浮动图片（Chromium 内核）', table(['浏览器', '图片服务', '复制后的剪贴板', '另一个文档粘贴出', '平台的复制补救'], rows)].join('\n\n');
+}
+
 function csp(): string {
     const list = load('v12/csp');
     const rows = list.flatMap((x) => (x.data.results as Json[]).map((r) => {
@@ -115,6 +148,6 @@ function csp(): string {
     return ['## V12 CSP：平台配置下的违规（强制策略 / 探测策略）', table(['浏览器', '步骤', '强制策略', '探测策略（去掉 data:、blob:、unsafe-inline）'], rows)].join('\n\n');
 }
 
-const SECTIONS: Record<string, () => string> = { paths, assets, limits, validate, fallback, formula, external, degradation, csp };
+const SECTIONS: Record<string, () => string> = { paths, assets, links, formats, limits, validate, validateConstructed, fallback, formula, external, degradation, crosscopy, csp };
 const wanted = process.argv.slice(2).length > 0 ? process.argv.slice(2) : Object.keys(SECTIONS);
 console.log(wanted.map((k) => SECTIONS[k]()).join('\n\n'));

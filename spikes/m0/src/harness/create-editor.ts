@@ -11,6 +11,7 @@ import { IResourceManagerService, IUndoRedoService, LifecycleService, LifecycleS
 import { createChangeDetector } from './change-detector';
 import { installImageFunctionPolicy } from './image-function-policy';
 import { installImageGuards } from './image-guards';
+import { alignImageFormats } from '../profiles/image-service';
 import { GuardedResourceManagerService } from './guarded-resource-manager';
 import { describeDocument } from './semantics';
 import { FUniver } from '@univerjs/core/facade';
@@ -101,6 +102,8 @@ export async function createEditor(options: CreateEditorOptions): Promise<Editor
         override: guard ? [[IResourceManagerService, { useClass: GuardedResourceManagerService }]] : [],
     });
 
+    // 平台图片服务：各入口接受的格式与平台一致（P4 审查 G4）
+    if (options.imageService === 'platform') alignImageFormats();
     for (const [plugin, config] of resolvePlugins(profile, pluginOptions, without)) {
         univer.registerPlugin(plugin, config as never);
     }
@@ -132,7 +135,7 @@ export async function createEditor(options: CreateEditorOptions): Promise<Editor
 
     await lifecycle.onStage(LifecycleStages.Steady);
     sub.unsubscribe();
-    const imageGuards = options.imageService === 'platform' ? installImageGuards(univer, univerAPI) : null;
+    const imageGuards = options.imageService === 'platform' ? [installImageGuards(univer, univerAPI), profile.platformImageExtras?.(univer)] : [];
 
     const save = (): IWorkbookData | IDocumentData => {
         if (profile.kind === 'sheet') {
@@ -170,7 +173,7 @@ export async function createEditor(options: CreateEditorOptions): Promise<Editor
         unitId: () => unitId,
         detector,
         dispose: () => {
-            imageGuards?.dispose();
+            imageGuards.forEach((d) => d?.dispose());
             detector.dispose();
             univer.dispose();
         },

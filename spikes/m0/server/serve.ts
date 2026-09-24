@@ -7,7 +7,7 @@ import { extname, join, normalize, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { CspMode } from './csp.ts';
 
-import { copyLinks, handleAssets, removeLinks, sessionCookieHeader, updateLinks } from './assets.ts';
+import { copyLinks, handleAssets, removeLinks, sessionCookieHeader, sessionOf, updateLinks } from './assets.ts';
 import { cspHeaders } from './csp.ts';
 import { extractImages } from './snapshot-images.ts';
 
@@ -24,6 +24,8 @@ const { values } = parseArgs({
 
 const root = resolve(values.dist);
 const port = Number(values.port);
+/** 本站的 origin 取自服务配置，不取自请求的 Host 头（P4 审查 G5）。 */
+const origin = `http://127.0.0.1:${port}`;
 const cspMode: CspMode = values.csp === 'off' ? 'off' : values.csp === 'html-only' ? 'html-only' : 'full';
 
 const MIME: Record<string, string> = {
@@ -115,9 +117,9 @@ const server = createServer(async (req, res) => {
             if (req.method === 'PUT') {
                 const text = await readBody(req, 64 * 1024 * 1024);
                 const snapshot = JSON.parse(text); // 只接受合法 JSON
-                // 保存校验（P4，00 号计划书 §11.3）：validate=1 时拒绝含非平台图片地址的快照
+                // 保存校验（P4，00 号计划书 §11.3）：validate=1 时拒绝含非平台图片地址的快照（默认拒绝：任何 source 字段）
                 if (url.searchParams.get('validate') === '1') {
-                    const { images } = extractImages(snapshot, `http://${req.headers.host}`);
+                    const { images } = extractImages(snapshot, origin);
                     const rejected = images.filter((i) => i.kind !== 'platform');
                     if (rejected.length > 0) {
                         res.writeHead(422, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -126,8 +128,9 @@ const server = createServer(async (req, res) => {
                     }
                 }
                 documents.set(id, text);
-                updateLinks(id, text);
-                res.writeHead(204).end();
+                // 引用关系：只为保存者有权读取的图片建立（00 号计划书 §8.5，P4 审查 R2），没有建立的写进响应头供验证
+                const update = updateLinks(id, snapshot, sessionOf(req));
+                res.writeHead(204, { 'X-Asset-Links': `linked=${update.linked.length}; ignored=${update.ignored.join(',')}` }).end();
                 return;
             }
             if (req.method === 'DELETE') {

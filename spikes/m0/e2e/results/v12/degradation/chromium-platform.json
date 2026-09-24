@@ -7,10 +7,15 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:21:30.829Z",
+  "timestamp": "2026-09-24T22:27:41.939Z",
   "copyToSystem": {
     "ok": true,
-    "items": []
+    "items": [
+      {
+        "type": "image/png",
+        "size": 423
+      }
+    ]
   },
   "saveCellImage": {
     "executed": true,
@@ -24,7 +29,7 @@
   "preview": {
     "images": [
       {
-        "src": "http://127.0.0.1:4780/api/assets/82b2f10d-f16c-48bf-9d8b-ed1",
+        "src": "http://127.0.0.1:4780/api/assets/851c7062-5f29-42f3-a9f6-63f",
         "complete": true,
         "width": 120
       }

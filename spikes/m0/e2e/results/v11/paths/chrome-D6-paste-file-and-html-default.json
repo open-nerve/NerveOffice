@@ -13,30 +13,32 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T20:34:20.690Z",
+  "timestamp": "2026-09-24T22:40:46.085Z",
   "verdict": "含非平台地址：data、external",
+  "expectedCount": 2,
+  "addedCount": 2,
   "actionError": null,
   "added": [
     {
-      "where": "/drawings/SLpEt2",
+      "where": "/drawings/0DXYIb",
       "kind": "data",
       "imageSourceType": "BASE64",
       "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr"
     },
     {
-      "where": "/drawings/t6vPwC",
+      "where": "/drawings/BjiEsU",
       "kind": "external",
       "imageSourceType": "URL",
       "source": "https://example.invalid/tracking.png"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/SLpEt2",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/0DXYIb",
       "kind": "data",
       "imageSourceType": "BASE64",
       "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/t6vPwC",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/BjiEsU",
       "kind": "external",
       "imageSourceType": "URL",
       "source": "https://example.invalid/tracking.png"
@@ -86,7 +88,9 @@
       "disposition": "report"
     }
   ],
-  "pageErrors": [],
+  "pageErrors": [
+    "Uncaught InvalidStateError: Failed to execute 'drawImage' on 'CanvasRenderingContext2D': The HTMLImageElement provided is in the 'broken' state. @ http://127.0."
+  ],
   "facadeError": null,
   "snapshotBytes": 3662
 }

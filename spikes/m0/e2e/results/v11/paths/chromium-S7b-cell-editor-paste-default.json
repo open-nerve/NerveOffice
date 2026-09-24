@@ -13,8 +13,10 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:16:11.735Z",
+  "timestamp": "2026-09-24T22:20:55.964Z",
   "verdict": "没有新增图片",
+  "expectedCount": 0,
+  "addedCount": 0,
   "actionError": null,
   "added": [],
   "addedKinds": [],

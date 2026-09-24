@@ -13,8 +13,10 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T20:30:17.695Z",
+  "timestamp": "2026-09-24T22:37:01.163Z",
   "verdict": "没有新增图片",
+  "expectedCount": 0,
+  "addedCount": 0,
   "actionError": null,
   "added": [],
   "addedKinds": [],
@@ -33,12 +35,12 @@
     {
       "kind": "paste-upload",
       "ok": true,
-      "detail": "/api/assets/cf8de6a2-4183-4c99-ac50-4397df0c963b"
+      "detail": "/api/assets/65131cd9-92f3-4e63-9a15-a482f575e3f8"
     },
     {
       "kind": "paste-normalize",
       "ok": true,
-      "detail": "http://127.0.0.1:4780/api/assets/cf8de6a2-4183-4c99-ac50-4397df0c963b"
+      "detail": "normalize /drawings/htLSr2"
     }
   ],
   "detections": [],

@@ -30,8 +30,11 @@ export class UploadError extends Error {
 /** 平台的图片操作记录（验证用，页面里经 window.__m0.images.log 读取）。 */
 export interface ImageEvent {
     at: number;
-    /** save：图片服务上传；paste-upload：剪贴板钩子上传；paste-replace：粘贴时替换成占位图；guard-cancel：命令守卫取消。 */
-    kind: 'save' | 'paste-upload' | 'paste-replace' | 'paste-normalize' | 'guard-cancel';
+    /**
+     * save：图片服务上传；paste-upload：剪贴板钩子上传；paste-replace：粘贴时替换成占位图或去掉；paste-normalize：本站绝对地址规范为相对地址；
+     * guard-cancel：命令守卫取消；copy-image：复制浮动图片时写入剪贴板（表格）。
+     */
+    kind: 'save' | 'paste-upload' | 'paste-replace' | 'paste-normalize' | 'guard-cancel' | 'copy-image';
     ok: boolean;
     detail: string;
 }

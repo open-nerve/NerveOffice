@@ -13,21 +13,23 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:48:25.053Z",
+  "timestamp": "2026-09-24T22:56:45.950Z",
   "verdict": "全部为平台地址",
+  "expectedCount": 1,
+  "addedCount": 1,
   "actionError": null,
   "added": [
     {
-      "where": "/drawings/K-xkQG",
+      "where": "/drawings/gXPbCv",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/c8fff475-b6ef-4401-83be-e66b4827e61b"
+      "source": "/api/assets/a7c0b1e9-6df9-4206-8c99-d32191dc1a10"
     },
     {
-      "where": "resources.DOC_DRAWING_PLUGIN/data/K-xkQG",
+      "where": "resources.DOC_DRAWING_PLUGIN/data/gXPbCv",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/c8fff475-b6ef-4401-83be-e66b4827e61b"
+      "source": "/api/assets/a7c0b1e9-6df9-4206-8c99-d32191dc1a10"
     }
   ],
   "addedKinds": [
@@ -52,7 +54,7 @@
   ],
   "load": [
     {
-      "source": "/api/assets/c8fff475-b6ef-4401-83be-e66b4827e61b",
+      "source": "/api/assets/a7c0b1e9-6df9-4206-8c99-d32191dc1a10",
       "cached": true,
       "complete": true,
       "width": 120
@@ -62,12 +64,12 @@
     {
       "kind": "paste-upload",
       "ok": true,
-      "detail": "/api/assets/c8fff475-b6ef-4401-83be-e66b4827e61b"
+      "detail": "/api/assets/a7c0b1e9-6df9-4206-8c99-d32191dc1a10"
     },
     {
       "kind": "paste-normalize",
       "ok": true,
-      "detail": "http://127.0.0.1:4780/api/assets/c8fff475-b6ef-4401-83be-e66b4827e61b"
+      "detail": "normalize /drawings/pfTVif"
     }
   ],
   "detections": [

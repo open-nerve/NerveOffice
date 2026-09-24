@@ -13,15 +13,23 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T20:31:31.695Z",
+  "timestamp": "2026-09-24T22:38:02.100Z",
   "verdict": "全部为平台地址",
+  "expectedCount": 2,
+  "addedCount": 2,
   "actionError": null,
   "added": [
     {
-      "where": "resources.SHEET_DRAWING_PLUGIN/sheet-1/data/o94t9Q",
+      "where": "resources.SHEET_DRAWING_PLUGIN/sheet-1/data/X_nhbP",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/e699f8ef-4b0c-4ff7-9eec-91d7a8517181"
+      "source": "/api/assets/1284ffb2-dae4-4f02-9f2d-ba0700cc50d7"
+    },
+    {
+      "where": "resources.SHEET_DRAWING_PLUGIN/sheet-1/data/8y2MGOuxtr6i5Ro9TMlz_",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/1284ffb2-dae4-4f02-9f2d-ba0700cc50d7"
     }
   ],
   "addedKinds": [
@@ -46,7 +54,7 @@
   ],
   "load": [
     {
-      "source": "/api/assets/e699f8ef-4b0c-4ff7-9eec-91d7a8517181",
+      "source": "/api/assets/1284ffb2-dae4-4f02-9f2d-ba0700cc50d7",
       "cached": true,
       "complete": true,
       "width": 120
@@ -56,19 +64,19 @@
     {
       "kind": "save",
       "ok": true,
-      "detail": "/api/assets/e699f8ef-4b0c-4ff7-9eec-91d7a8517181"
+      "detail": "/api/assets/1284ffb2-dae4-4f02-9f2d-ba0700cc50d7"
+    },
+    {
+      "kind": "copy-image",
+      "ok": true,
+      "detail": "/api/assets/1284ffb2-dae4-4f02-9f2d-ba0700cc50d7"
     }
   ],
   "detections": [
     "sheet.mutation.set-drawing-apply",
-    "sheet.mutation.set-range-values"
+    "sheet.mutation.set-drawing-apply"
   ],
   "cspViolations": [
-    {
-      "directive": "style-src-attr",
-      "blocked": "inline",
-      "disposition": "report"
-    },
     {
       "directive": "style-src-attr",
       "blocked": "inline",
@@ -77,5 +85,5 @@
   ],
   "pageErrors": [],
   "facadeError": null,
-  "snapshotBytes": 1943
+  "snapshotBytes": 2793
 }

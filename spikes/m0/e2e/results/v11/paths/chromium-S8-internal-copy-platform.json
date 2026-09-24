@@ -13,15 +13,23 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T20:17:06.720Z",
+  "timestamp": "2026-09-24T22:21:45.536Z",
   "verdict": "全部为平台地址",
+  "expectedCount": 2,
+  "addedCount": 2,
   "actionError": null,
   "added": [
     {
-      "where": "resources.SHEET_DRAWING_PLUGIN/sheet-1/data/afbeBC",
+      "where": "resources.SHEET_DRAWING_PLUGIN/sheet-1/data/71yQr_",
       "kind": "platform",
       "imageSourceType": "URL",
-      "source": "/api/assets/25323290-0a59-4629-b506-023ffdc7311a"
+      "source": "/api/assets/40b8305c-711e-443f-915e-f18b2315c184"
+    },
+    {
+      "where": "resources.SHEET_DRAWING_PLUGIN/sheet-1/data/L_UAqUg5broPgG_3CF7L8",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/40b8305c-711e-443f-915e-f18b2315c184"
     }
   ],
   "addedKinds": [
@@ -46,7 +54,7 @@
   ],
   "load": [
     {
-      "source": "/api/assets/25323290-0a59-4629-b506-023ffdc7311a",
+      "source": "/api/assets/40b8305c-711e-443f-915e-f18b2315c184",
       "cached": true,
       "complete": true,
       "width": 120
@@ -56,19 +64,19 @@
     {
       "kind": "save",
       "ok": true,
-      "detail": "/api/assets/25323290-0a59-4629-b506-023ffdc7311a"
+      "detail": "/api/assets/40b8305c-711e-443f-915e-f18b2315c184"
+    },
+    {
+      "kind": "copy-image",
+      "ok": true,
+      "detail": "/api/assets/40b8305c-711e-443f-915e-f18b2315c184"
     }
   ],
   "detections": [
     "sheet.mutation.set-drawing-apply",
-    "sheet.mutation.set-range-values"
+    "sheet.mutation.set-drawing-apply"
   ],
   "cspViolations": [
-    {
-      "directive": "style-src-attr",
-      "blocked": "inline",
-      "disposition": "report"
-    },
     {
       "directive": "style-src-attr",
       "blocked": "inline",
@@ -77,5 +85,5 @@
   ],
   "pageErrors": [],
   "facadeError": null,
-  "snapshotBytes": 1943
+  "snapshotBytes": 2793
 }
