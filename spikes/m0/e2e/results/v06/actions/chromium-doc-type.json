@@ -1,0 +1,258 @@
+{
+  "check": "V06-actions",
+  "action": "type",
+  "kind": "doc",
+  "method": "U",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T17:11:49.593Z",
+  "quiet": {
+    "waitedMs": 700.6000000238419,
+    "formula": "n/a",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [
+      "doc.mutation.rich-text-editing",
+      "doc.mutation.rich-text-editing",
+      "doc.mutation.rich-text-editing"
+    ],
+    "mutations": [
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-doc-all"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-doc-all"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-doc-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 13
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 13
+  },
+  "timeline": [
+    {
+      "dt": 236,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "detected"
+    },
+    {
+      "dt": 249,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "detected"
+    },
+    {
+      "dt": 257,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.body.dataStream",
+      "kind": "changed",
+      "before": "\"文档标题\\r副标题：M0 文字文档样本\\r一级标题\\r正文段落：加粗、斜体、下划线、删除线、H2O、x2、红色、高亮、大号宋体。中英文混排 English text 与标点，检查换行。\\r居中段落\\r右对齐段落\\r二级标题\\r三级标题\\r四级标题\\r五级标题\\r\\r无序列表第一项\\r无序列表嵌套项\\r有序列表第...",
+      "after": "\"文档标题新文字\\r副标题：M0 文字文档样本\\r一级标题\\r正文段落：加粗、斜体、下划线、删除线、H2O、x2、红色、高亮、大号宋体。中英文混排 English text 与标点，检查换行。\\r居中段落\\r右对齐段落\\r二级标题\\r三级标题\\r四级标题\\r五级标题\\r\\r无序列表第一项\\r无序列表嵌套项\\r有序..."
+    },
+    {
+      "path": "$.body.customBlocks[0].startIndex",
+      "kind": "changed",
+      "before": "180",
+      "after": "183"
+    },
+    {
+      "path": "$.body.customBlocks[1].startIndex",
+      "kind": "changed",
+      "before": "181",
+      "after": "184"
+    },
+    {
+      "path": "$.body.customRanges[0].startIndex",
+      "kind": "changed",
+      "before": "171",
+      "after": "174"
+    },
+    {
+      "path": "$.body.customRanges[0].endIndex",
+      "kind": "changed",
+      "before": "174",
+      "after": "177"
+    },
+    {
+      "path": "$.body.customRanges[1].startIndex",
+      "kind": "changed",
+      "before": "176",
+      "after": "179"
+    },
+    {
+      "path": "$.body.customRanges[1].endIndex",
+      "kind": "changed",
+      "before": "178",
+      "after": "181"
+    },
+    {
+      "path": "$.body.paragraphs[0].startIndex",
+      "kind": "changed",
+      "before": "4",
+      "after": "7"
+    },
+    {
+      "path": "$.body.paragraphs[1].startIndex",
+      "kind": "changed",
+      "before": "18",
+      "after": "21"
+    },
+    {
+      "path": "$.body.paragraphs[2].startIndex",
+      "kind": "changed",
+      "before": "23",
+      "after": "26"
+    },
+    {
+      "path": "$.body.paragraphs[3].startIndex",
+      "kind": "changed",
+      "before": "89",
+      "after": "92"
+    },
+    {
+      "path": "$.body.paragraphs[4].startIndex",
+      "kind": "changed",
+      "before": "94",
+      "after": "97"
+    },
+    {
+      "path": "$.body.paragraphs[5].startIndex",
+      "kind": "changed",
+      "before": "100",
+      "after": "103"
+    },
+    {
+      "path": "$.body.paragraphs[6].startIndex",
+      "kind": "changed",
+      "before": "105",
+      "after": "108"
+    },
+    {
+      "path": "$.body.paragraphs[7].startIndex",
+      "kind": "changed",
+      "before": "110",
+      "after": "113"
+    },
+    {
+      "path": "$.body.paragraphs[8].startIndex",
+      "kind": "changed",
+      "before": "115",
+      "after": "118"
+    },
+    {
+      "path": "$.body.paragraphs[9].startIndex",
+      "kind": "changed",
+      "before": "120",
+      "after": "123"
+    },
+    {
+      "path": "$.body.paragraphs[10].startIndex",
+      "kind": "changed",
+      "before": "121",
+      "after": "124"
+    },
+    {
+      "path": "$.body.paragraphs[11].startIndex",
+      "kind": "changed",
+      "before": "129",
+      "after": "132"
+    },
+    {
+      "path": "$.body.paragraphs[12].startIndex",
+      "kind": "changed",
+      "before": "137",
+      "after": "140"
+    },
+    {
+      "path": "$.body.paragraphs[13].startIndex",
+      "kind": "changed",
+      "before": "145",
+      "after": "148"
+    },
+    {
+      "path": "$.body.paragraphs[14].startIndex",
+      "kind": "changed",
+      "before": "153",
+      "after": "156"
+    },
+    {
+      "path": "$.body.paragraphs[15].startIndex",
+      "kind": "changed",
+      "before": "160",
+      "after": "163"
+    },
+    {
+      "path": "$.body.paragraphs[16].startIndex",
+      "kind": "changed",
+      "before": "167",
+      "after": "170"
+    },
+    {
+      "path": "$.body.paragraphs[17].startIndex",
+      "kind": "changed",
+      "before": "179",
+      "after": "182"
+    },
+    {
+      "path": "$.body.paragraphs[18].startIndex",
+      "kind": "changed",
+      "before": "182",
+      "after": "185"
+    },
+    {
+      "path": "$.body.paragraphs[19].startIndex",
+      "kind": "changed",
+      "before": "186",
+      "after": "189"
+    },
+    {
+      "path": "$.body.paragraphs[20].startIndex",
+      "kind": "changed",
+      "before": "190",
+      "after": "193"
+    },
+    {
+      "path": "$.body.paragraphs[21].startIndex",
+      "kind": "changed",
+      "before": "194",
+      "after": "197"
+    },
+    {
+      "path": "$.body.paragraphs[22].startIndex",
+      "kind": "changed",
+      "before": "200",
+      "after": "203"
+    }
+  ],
+  "diffCount": 82,
+  "lateDiff": [],
+  "errors": []
+}

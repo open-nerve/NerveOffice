@@ -1,0 +1,42 @@
+{
+  "check": "V07-edit-during-calc",
+  "case": {
+    "id": "D-worker",
+    "worker": true,
+    "first": [
+      "聚合",
+      "B1"
+    ],
+    "second": [
+      "链",
+      "A1"
+    ]
+  },
+  "waitFrom": "first",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T18:26:25.566Z",
+  "secondEditAtMs": 307,
+  "firstSessionRunningAtSecondEdit": true,
+  "sessionsAfterSecondEdit": 1,
+  "oldRule": {
+    "capturedAtMs": 1830,
+    "checked": 406,
+    "mismatches": 0
+  },
+  "newRule": {
+    "capturedAtMs": 1866,
+    "restarts": 1,
+    "formula": "settled",
+    "checked": 406,
+    "mismatches": 0
+  },
+  "settled": {
+    "checked": 406,
+    "mismatches": 0
+  }
+}

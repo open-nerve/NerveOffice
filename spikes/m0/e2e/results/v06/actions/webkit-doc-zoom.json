@@ -1,0 +1,39 @@
+{
+  "check": "V06-actions",
+  "action": "zoom",
+  "kind": "doc",
+  "worker": false,
+  "method": "F",
+  "expect": "view",
+  "verdict": "通过",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T17:50:37.998Z",
+  "quiet": {
+    "waitedMs": 1022,
+    "formula": "n/a",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 7
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 7
+  },
+  "timeline": [],
+  "planRule": null,
+  "diff": [],
+  "diffCount": 0,
+  "lateDiff": [],
+  "errors": []
+}

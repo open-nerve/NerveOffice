@@ -1,0 +1,229 @@
+{
+  "check": "V08-capture",
+  "sample": "big-5m",
+  "kind": "sheet",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T18:06:05.524Z",
+  "capture": {
+    "saveMs": {
+      "p50": 42.200000047683716,
+      "p95": 48.200000047683716,
+      "max": 48.200000047683716,
+      "min": 33.700000047683716,
+      "n": 10
+    },
+    "stringifyMs": {
+      "p50": 19.5,
+      "p95": 20.5,
+      "max": 20.5,
+      "min": 18.299999952316284,
+      "n": 10
+    },
+    "syncMs": {
+      "p50": 61.299999952316284,
+      "p95": 68.5,
+      "max": 68.5,
+      "min": 53.10000002384186,
+      "n": 10
+    },
+    "gzipMs": {
+      "p50": 97,
+      "p95": 98.5,
+      "max": 98.5,
+      "min": 95,
+      "n": 10
+    },
+    "hashMs": {
+      "p50": 0.5,
+      "p95": 0.6000000238418579,
+      "max": 0.6000000238418579,
+      "min": 0.3999999761581421,
+      "n": 10
+    },
+    "totalMs": {
+      "p50": 159.5,
+      "p95": 166,
+      "max": 166,
+      "min": 151.89999997615814,
+      "n": 10
+    },
+    "asyncMaxGapMs": {
+      "p50": 89.5,
+      "p95": 91.29999995231628,
+      "max": 91.29999995231628,
+      "min": 88.5,
+      "n": 10
+    },
+    "longestTaskMs": {
+      "p50": 88,
+      "p95": 89,
+      "max": 89,
+      "min": 87,
+      "n": 10
+    },
+    "jsonBytes": 5117805,
+    "gzipBytes": 1288607,
+    "ratio": 0.2517889993854787
+  },
+  "selfCheckMs": {
+    "p50": 37.800000071525574,
+    "p95": 40.700000047683716,
+    "max": 40.700000047683716,
+    "min": 28.90000009536743,
+    "n": 10
+  },
+  "canonical": {
+    "canonicalMs": {
+      "p50": 82.20000004768372,
+      "p95": 85.10000002384186,
+      "max": 85.10000002384186,
+      "min": 81.19999992847443,
+      "n": 5
+    },
+    "hashMs": {
+      "p50": 7.700000047683716,
+      "p95": 7.899999976158142,
+      "max": 7.899999976158142,
+      "min": 7.199999928474426,
+      "n": 5
+    }
+  },
+  "endToEndMs": null,
+  "raw": [
+    {
+      "saveMs": 42.200000047683716,
+      "stringifyMs": 19.09999990463257,
+      "syncMs": 61.299999952316284,
+      "gzipMs": 98.40000009536743,
+      "hashMs": 0.5,
+      "totalMs": 160.20000004768372,
+      "jsonBytes": 5117805,
+      "gzipBytes": 1288607,
+      "asyncMaxGapMs": 91,
+      "longTasks": 2,
+      "finishedAt": 5679.400000095367
+    },
+    {
+      "saveMs": 42.39999997615814,
+      "stringifyMs": 20,
+      "syncMs": 62.39999997615814,
+      "gzipMs": 96.60000002384186,
+      "hashMs": 0.5,
+      "totalMs": 159.5,
+      "jsonBytes": 5117805,
+      "gzipBytes": 1288607,
+      "asyncMaxGapMs": 89.60000002384186,
+      "longTasks": 2,
+      "finishedAt": 6056.400000095367
+    },
+    {
+      "saveMs": 47.5,
+      "stringifyMs": 20.299999952316284,
+      "syncMs": 67.79999995231628,
+      "gzipMs": 97,
+      "hashMs": 0.5,
+      "totalMs": 165.29999995231628,
+      "jsonBytes": 5117805,
+      "gzipBytes": 1288607,
+      "asyncMaxGapMs": 89.29999995231628,
+      "longTasks": 2,
+      "finishedAt": 6460.200000047684
+    },
+    {
+      "saveMs": 40.200000047683716,
+      "stringifyMs": 19.399999976158142,
+      "syncMs": 59.60000002384186,
+      "gzipMs": 97.19999992847443,
+      "hashMs": 0.5,
+      "totalMs": 157.29999995231628,
+      "jsonBytes": 5117805,
+      "gzipBytes": 1288607,
+      "asyncMaxGapMs": 89.70000004768372,
+      "longTasks": 2,
+      "finishedAt": 6847.5
+    },
+    {
+      "saveMs": 48.200000047683716,
+      "stringifyMs": 20.299999952316284,
+      "syncMs": 68.5,
+      "gzipMs": 97.10000002384186,
+      "hashMs": 0.3999999761581421,
+      "totalMs": 166,
+      "jsonBytes": 5117805,
+      "gzipBytes": 1288607,
+      "asyncMaxGapMs": 89.10000002384186,
+      "longTasks": 2,
+      "finishedAt": 7234.200000047684
+    },
+    {
+      "saveMs": 38,
+      "stringifyMs": 18.299999952316284,
+      "syncMs": 56.299999952316284,
+      "gzipMs": 95,
+      "hashMs": 0.6000000238418579,
+      "totalMs": 151.89999997615814,
+      "jsonBytes": 5117805,
+      "gzipBytes": 1288607,
+      "asyncMaxGapMs": 88.5,
+      "longTasks": 2,
+      "finishedAt": 7601.100000023842
+    },
+    {
+      "saveMs": 33.700000047683716,
+      "stringifyMs": 19.399999976158142,
+      "syncMs": 53.10000002384186,
+      "gzipMs": 98.5,
+      "hashMs": 0.3999999761581421,
+      "totalMs": 152,
+      "jsonBytes": 5117805,
+      "gzipBytes": 1288607,
+      "asyncMaxGapMs": 91.29999995231628,
+      "longTasks": 2,
+      "finishedAt": 7971.600000023842
+    },
+    {
+      "saveMs": 44.10000002384186,
+      "stringifyMs": 20.5,
+      "syncMs": 64.60000002384186,
+      "gzipMs": 96.39999997615814,
+      "hashMs": 0.5,
+      "totalMs": 161.5,
+      "jsonBytes": 5117805,
+      "gzipBytes": 1288607,
+      "asyncMaxGapMs": 88.79999995231628,
+      "longTasks": 2,
+      "finishedAt": 8358.800000071526
+    },
+    {
+      "saveMs": 39.60000002384186,
+      "stringifyMs": 19.899999976158142,
+      "syncMs": 59.5,
+      "gzipMs": 97.10000002384186,
+      "hashMs": 0.5,
+      "totalMs": 157.10000002384186,
+      "jsonBytes": 5117805,
+      "gzipBytes": 1288607,
+      "asyncMaxGapMs": 90,
+      "longTasks": 2,
+      "finishedAt": 8740.300000071526
+    },
+    {
+      "saveMs": 45.700000047683716,
+      "stringifyMs": 19.5,
+      "syncMs": 65.20000004768372,
+      "gzipMs": 97,
+      "hashMs": 0.6000000238418579,
+      "totalMs": 162.80000007152557,
+      "jsonBytes": 5117805,
+      "gzipBytes": 1288607,
+      "asyncMaxGapMs": 89.5,
+      "longTasks": 2,
+      "finishedAt": 9139.400000095367
+    }
+  ]
+}

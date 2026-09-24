@@ -1,0 +1,39 @@
+{
+  "check": "V06-actions",
+  "action": "zoom",
+  "kind": "doc",
+  "worker": false,
+  "method": "F",
+  "expect": "view",
+  "verdict": "通过",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T17:32:38.600Z",
+  "quiet": {
+    "waitedMs": 1010.3000000715256,
+    "formula": "n/a",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 7
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 7
+  },
+  "timeline": [],
+  "planRule": null,
+  "diff": [],
+  "diffCount": 0,
+  "lateDiff": [],
+  "errors": []
+}

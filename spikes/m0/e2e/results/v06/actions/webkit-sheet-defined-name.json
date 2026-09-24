@@ -1,0 +1,60 @@
+{
+  "check": "V06-actions",
+  "action": "defined-name",
+  "kind": "sheet",
+  "worker": false,
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T17:46:33.931Z",
+  "quiet": {
+    "waitedMs": 998,
+    "formula": "settled",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [
+      "formula.mutation.set-defined-name"
+    ],
+    "mutations": [
+      {
+        "id": "formula.mutation.set-defined-name",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 26
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 26
+  },
+  "timeline": [
+    {
+      "dt": 7,
+      "id": "formula.mutation.set-defined-name",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.resources[3].data.ZxkHckUz9r",
+      "kind": "added",
+      "after": "{\"formulaOrRefString\":\"'数据'!$A$2:$A$6\",\"id\":\"ZxkHckUz9r\",\"localSheetId\":\"AllDefaultWorkbook\",\"name\":\"新名称\"}"
+    }
+  ],
+  "diffCount": 1,
+  "lateDiff": [],
+  "errors": []
+}

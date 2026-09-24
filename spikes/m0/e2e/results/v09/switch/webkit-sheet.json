@@ -1,0 +1,225 @@
+{
+  "check": "V09-switch",
+  "kind": "sheet",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T17:41:04.210Z",
+  "inPlace": [
+    {
+      "strategy": "facade",
+      "enterMs": 22,
+      "exitMs": 17,
+      "undoInRead": {
+        "undos": 0,
+        "redos": 0
+      },
+      "exitSteps": [
+        {
+          "step": "数据: unprotect()",
+          "ok": true
+        },
+        {
+          "step": "汇总: unprotect()",
+          "ok": true
+        },
+        {
+          "step": "隐藏: unprotect()",
+          "ok": true
+        },
+        {
+          "step": "功能: unprotect()",
+          "ok": true
+        },
+        {
+          "step": "筛选: unprotect()",
+          "ok": true
+        },
+        {
+          "step": "workbook.setEditable(true)",
+          "ok": true
+        }
+      ],
+      "detectionsWhileSwitching": [
+        "sheet.mutation.add-worksheet-protection",
+        "sheet.mutation.add-worksheet-protection",
+        "sheet.mutation.add-worksheet-protection",
+        "sheet.mutation.add-worksheet-protection",
+        "sheet.mutation.add-worksheet-protection",
+        "sheet.mutation.delete-worksheet-protection",
+        "sheet.mutation.delete-worksheet-protection",
+        "sheet.mutation.delete-worksheet-protection",
+        "sheet.mutation.delete-worksheet-protection",
+        "sheet.mutation.delete-worksheet-protection"
+      ],
+      "leftover": [
+        {
+          "path": "$.resources[0].data",
+          "kind": "changed",
+          "before": "null",
+          "after": "{\"DGv7vaTf\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"unitID\":\"m0-sheet-all\"},\"N2yxCVx6\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"..."
+        }
+      ],
+      "protectionResourcesAfter": [
+        "SHEET_AuthzIoMockService_PLUGIN"
+      ],
+      "editableAfterExit": true,
+      "editedValue": "苹果X",
+      "uiInRead": null,
+      "uiAfterExit": null
+    },
+    {
+      "strategy": "points",
+      "enterMs": 17,
+      "exitMs": 12,
+      "undoInRead": {
+        "undos": 0,
+        "redos": 0
+      },
+      "exitSteps": [
+        {
+          "step": "工作表编辑类权限点 = true（本地）",
+          "ok": true
+        },
+        {
+          "step": "workbook.setEditable(true)",
+          "ok": true
+        }
+      ],
+      "detectionsWhileSwitching": [],
+      "leftover": [],
+      "protectionResourcesAfter": [],
+      "editableAfterExit": true,
+      "editedValue": "苹果X",
+      "uiInRead": null,
+      "uiAfterExit": null
+    },
+    {
+      "strategy": "firewall",
+      "enterMs": 2,
+      "exitMs": 2,
+      "undoInRead": {
+        "undos": 0,
+        "redos": 0
+      },
+      "exitSteps": [],
+      "detectionsWhileSwitching": [],
+      "leftover": [],
+      "protectionResourcesAfter": [],
+      "editableAfterExit": true,
+      "editedValue": "苹果X",
+      "uiInRead": null,
+      "uiAfterExit": null
+    },
+    {
+      "strategy": "combined",
+      "enterMs": 15,
+      "exitMs": 14,
+      "undoInRead": {
+        "undos": 0,
+        "redos": 0
+      },
+      "exitSteps": [
+        {
+          "step": "工作表编辑类权限点 = true（本地）",
+          "ok": true
+        },
+        {
+          "step": "workbook.setEditable(true)",
+          "ok": true
+        }
+      ],
+      "detectionsWhileSwitching": [],
+      "leftover": [],
+      "protectionResourcesAfter": [],
+      "editableAfterExit": true,
+      "editedValue": "苹果X",
+      "uiInRead": null,
+      "uiAfterExit": null
+    },
+    {
+      "strategy": "combined+ui",
+      "enterMs": 16,
+      "exitMs": 50,
+      "undoInRead": {
+        "undos": 0,
+        "redos": 0
+      },
+      "exitSteps": [
+        {
+          "step": "工作表编辑类权限点 = true（本地）",
+          "ok": true
+        },
+        {
+          "step": "workbook.setEditable(true)",
+          "ok": true
+        },
+        {
+          "step": "显示工具栏",
+          "ok": true
+        },
+        {
+          "step": "启用右键菜单",
+          "ok": true
+        },
+        {
+          "step": "恢复阅读模式专用的菜单项",
+          "ok": true
+        }
+      ],
+      "detectionsWhileSwitching": [],
+      "leftover": [],
+      "protectionResourcesAfter": [],
+      "editableAfterExit": true,
+      "editedValue": "苹果X",
+      "uiInRead": {
+        "toolbarButtons": 0,
+        "contextMenu": false
+      },
+      "uiAfterExit": {
+        "toolbarButtons": 57,
+        "contextMenu": true
+      }
+    },
+    {
+      "strategy": "combined+worker",
+      "enterMs": 18,
+      "exitMs": 14,
+      "undoInRead": {
+        "undos": 0,
+        "redos": 0
+      },
+      "exitSteps": [
+        {
+          "step": "工作表编辑类权限点 = true（本地）",
+          "ok": true
+        },
+        {
+          "step": "workbook.setEditable(true)",
+          "ok": true
+        }
+      ],
+      "detectionsWhileSwitching": [],
+      "leftover": [],
+      "protectionResourcesAfter": [],
+      "editableAfterExit": true,
+      "editedValue": "苹果X",
+      "uiInRead": null,
+      "uiAfterExit": null
+    }
+  ],
+  "remount": {
+    "toReadMs": 3362,
+    "toReadRenderedMs": 335,
+    "toEditMs": 3385,
+    "toEditRenderedMs": 354,
+    "readUndo": {
+      "undos": 0,
+      "redos": 0
+    },
+    "leftover": []
+  }
+}

@@ -48,7 +48,7 @@ export function isEmptyResourceData(data: unknown): boolean {
 }
 
 /** 去掉取值为空的键（例如某个工作表对应的空规则数组），它们与"没有这个键"在内容上等价。 */
-function pruneEmpty(v: unknown): unknown {
+export function pruneEmpty(v: unknown): unknown {
     if (Array.isArray(v)) return v.map(pruneEmpty);
     if (v != null && typeof v === 'object') {
         return Object.fromEntries(

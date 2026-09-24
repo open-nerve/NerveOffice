@@ -1,0 +1,60 @@
+{
+  "check": "V06-actions",
+  "action": "conditional-format",
+  "kind": "sheet",
+  "worker": true,
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T17:29:31.978Z",
+  "quiet": {
+    "waitedMs": 1000,
+    "formula": "settled",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.add-conditional-rule"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.add-conditional-rule",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 20
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 20
+  },
+  "timeline": [
+    {
+      "dt": 3,
+      "id": "sheet.mutation.add-conditional-rule",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.resources[1].data.sheet-1",
+      "kind": "added",
+      "after": "[{\"cfId\":\"qZXFNQJZ\",\"ranges\":[{\"endAbsoluteRefType\":0,\"endColumn\":10,\"endRow\":19,\"rangeType\":0,\"sheetId\":\"sheet-1\",\"startAbsoluteRefType\":0,\"startColumn\":10,..."
+    }
+  ],
+  "diffCount": 1,
+  "lateDiff": [],
+  "errors": []
+}

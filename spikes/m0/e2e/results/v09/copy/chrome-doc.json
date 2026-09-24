@@ -1,0 +1,38 @@
+{
+  "check": "V09-copy",
+  "kind": "doc",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T17:30:10.099Z",
+  "results": [
+    {
+      "mode": "edit",
+      "clipboard": "标题",
+      "copied": true
+    },
+    {
+      "mode": "facade",
+      "clipboard": "标题",
+      "copied": true
+    },
+    {
+      "mode": "points",
+      "clipboard": "标题",
+      "copied": true
+    },
+    {
+      "mode": "firewall",
+      "clipboard": "标题",
+      "copied": true
+    },
+    {
+      "mode": "combined",
+      "clipboard": "标题",
+      "copied": true
+    }
+  ]
+}

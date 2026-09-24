@@ -1,0 +1,34 @@
+{
+  "check": "V07-timeline",
+  "worker": true,
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T18:26:54.412Z",
+  "slowA1": {
+    "before": 9927165,
+    "atResolve": 9927165,
+    "after": 10016042
+  },
+  "staleAtResolve": true,
+  "resolvedAtMs": 929,
+  "maxSampleGapMs": 254,
+  "log": [
+    "16 start  慢!A1=9927165",
+    "34 notification stage=1 慢!A1=9927165",
+    "35 notification stage=2 慢!A1=9927165",
+    "41 notification stage=3 慢!A1=9927165",
+    "928 notification stage=4 慢!A1=9927165",
+    "928 notification stage=8 慢!A1=9927165",
+    "929 result sheets=聚合、跨表、慢、易变 慢!A1=9927165",
+    "929 写回 聚合 慢!A1=9927165",
+    "929 ==== 等待接口返回 慢!A1=9927165",
+    "929 写回 跨表 慢!A1=9927165",
+    "930 写回 慢 慢!A1=10016042",
+    "933 写回 易变 慢!A1=10016042",
+    "935 notification executed=3 慢!A1=10016042"
+  ]
+}

@@ -1,0 +1,89 @@
+{
+  "check": "V07",
+  "scenario": "aggregate",
+  "worker": false,
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T18:00:08.808Z",
+  "idleWaitMs": 502.40000009536743,
+  "idleCalcSessions": 0,
+  "waitMs": {
+    "api": 521.3000000715256,
+    "rule": 2186.899999976158,
+    "timeoutAttempt": 2160.1999999284744,
+    "recaptureApi": 520.5,
+    "recaptureRule": 504.2999999523163
+  },
+  "ruleOutcome": "settled",
+  "timeoutOutcome": "applied",
+  "volatileRecalculated": null,
+  "forcedRecalcMs": 506.8000000715256,
+  "checks": {
+    "noWait": {
+      "checked": 4,
+      "mismatches": 4,
+      "sample": [
+        {
+          "cell": "聚合!C1",
+          "expected": 10027153,
+          "actual": 9927165
+        },
+        {
+          "cell": "聚合!C2",
+          "expected": 501.35765,
+          "actual": 496.35825
+        },
+        {
+          "cell": "聚合!C3",
+          "expected": 9959,
+          "actual": 9958
+        },
+        {
+          "cell": "聚合!C4",
+          "expected": 99999,
+          "actual": 1000
+        }
+      ]
+    },
+    "api": {
+      "checked": 4,
+      "mismatches": 0,
+      "sample": []
+    },
+    "rule": {
+      "checked": 4,
+      "mismatches": 0,
+      "sample": []
+    },
+    "timedOut": {
+      "checked": 4,
+      "mismatches": 0,
+      "sample": []
+    },
+    "recaptureApi": {
+      "checked": 4,
+      "mismatches": 0,
+      "sample": []
+    },
+    "recaptureRule": {
+      "checked": 4,
+      "mismatches": 0,
+      "sample": []
+    },
+    "reopened": {
+      "checked": 4,
+      "mismatches": 0,
+      "sample": []
+    },
+    "forced": {
+      "checked": 4,
+      "mismatches": 0,
+      "sample": []
+    }
+  },
+  "detections": 3
+}

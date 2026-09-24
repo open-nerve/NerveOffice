@@ -1,0 +1,72 @@
+{
+  "check": "V06-actions",
+  "action": "row-height",
+  "kind": "sheet",
+  "worker": true,
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T17:27:05.620Z",
+  "quiet": {
+    "waitedMs": 1002,
+    "formula": "settled",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.set-worksheet-row-height",
+      "sheet.mutation.set-worksheet-row-is-auto-height"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.set-worksheet-row-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-is-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 21
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 21
+  },
+  "timeline": [
+    {
+      "dt": 2,
+      "id": "sheet.mutation.set-worksheet-row-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 5,
+      "id": "sheet.mutation.set-worksheet-row-is-auto-height",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.sheets.sheet-1.rowData.5",
+      "kind": "added",
+      "after": "{\"h\":40,\"ia\":0}"
+    }
+  ],
+  "diffCount": 1,
+  "lateDiff": [],
+  "errors": []
+}

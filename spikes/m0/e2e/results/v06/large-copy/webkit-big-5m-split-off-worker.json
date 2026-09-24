@@ -1,0 +1,91 @@
+{
+  "check": "V06-large-copy",
+  "sample": "big-5m",
+  "config": {
+    "id": "split-off-worker",
+    "split": false,
+    "worker": true
+  },
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T18:44:01.252Z",
+  "copy": {
+    "syncMs": 110,
+    "name": "明细 （副本）",
+    "idleMaxGapMs": 145
+  },
+  "quiet": {
+    "waitedMs": 651,
+    "formula": "settled",
+    "restarts": 0
+  },
+  "localMutations": {
+    "beforeS1": 13,
+    "afterS1": 0,
+    "lastBeforeS1Ms": 471,
+    "lastMs": 471
+  },
+  "capturedAfterMs": 651,
+  "sourceCells": 265800,
+  "copiedCellsImmediately": 265800,
+  "copiedCellsAtS1": 265800,
+  "copiedCellsAtS2": 265800,
+  "during": {
+    "detections": [
+      "sheet.mutation.insert-sheet"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.insert-sheet",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "p3-sheet-big-5m"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      }
+    ],
+    "syncOnly": [],
+    "total": 34
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 34
+  },
+  "lateDiffCount": 0,
+  "lateDiff": [],
+  "formulaInCopyMatches": true,
+  "removal": {
+    "ok": true,
+    "undoBefore": {
+      "undos": 1,
+      "redos": 0
+    },
+    "detections": [
+      "sheet.mutation.remove-sheet"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.remove-sheet",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "p3-sheet-big-5m"
+      }
+    ],
+    "syncOnly": [],
+    "total": 42,
+    "undoAfterRemove": {
+      "undos": 2,
+      "redos": 0
+    }
+  }
+}

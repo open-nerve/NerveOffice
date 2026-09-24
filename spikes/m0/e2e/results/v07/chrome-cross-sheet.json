@@ -1,0 +1,74 @@
+{
+  "check": "V07",
+  "scenario": "cross-sheet",
+  "worker": false,
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T18:11:55.627Z",
+  "idleWaitMs": 503.5,
+  "idleCalcSessions": 0,
+  "waitMs": {
+    "api": 518.5,
+    "rule": 2216.899999976158,
+    "timeoutAttempt": 2216.2000000476837,
+    "recaptureApi": 519.3999999761581,
+    "recaptureRule": 503
+  },
+  "ruleOutcome": "settled",
+  "timeoutOutcome": "applied",
+  "volatileRecalculated": null,
+  "forcedRecalcMs": 500.60000002384186,
+  "checks": {
+    "noWait": {
+      "checked": 3,
+      "mismatches": 1,
+      "sample": [
+        {
+          "cell": "跨表!A2",
+          "expected": 10004932,
+          "actual": 9927166
+        }
+      ]
+    },
+    "api": {
+      "checked": 3,
+      "mismatches": 0,
+      "sample": []
+    },
+    "rule": {
+      "checked": 3,
+      "mismatches": 0,
+      "sample": []
+    },
+    "timedOut": {
+      "checked": 3,
+      "mismatches": 0,
+      "sample": []
+    },
+    "recaptureApi": {
+      "checked": 3,
+      "mismatches": 0,
+      "sample": []
+    },
+    "recaptureRule": {
+      "checked": 3,
+      "mismatches": 0,
+      "sample": []
+    },
+    "reopened": {
+      "checked": 3,
+      "mismatches": 0,
+      "sample": []
+    },
+    "forced": {
+      "checked": 3,
+      "mismatches": 0,
+      "sample": []
+    }
+  },
+  "detections": 3
+}

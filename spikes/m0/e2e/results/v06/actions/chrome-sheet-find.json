@@ -1,0 +1,39 @@
+{
+  "check": "V06-actions",
+  "action": "find",
+  "kind": "sheet",
+  "worker": false,
+  "method": "F",
+  "expect": "view",
+  "verdict": "通过",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T17:30:02.698Z",
+  "quiet": {
+    "waitedMs": 1006.1000000238419,
+    "formula": "settled",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 25
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 25
+  },
+  "timeline": [],
+  "planRule": null,
+  "diff": [],
+  "diffCount": 0,
+  "lateDiff": [],
+  "errors": []
+}

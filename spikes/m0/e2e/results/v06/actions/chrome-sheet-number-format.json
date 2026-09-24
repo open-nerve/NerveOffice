@@ -1,0 +1,85 @@
+{
+  "check": "V06-actions",
+  "action": "number-format",
+  "kind": "sheet",
+  "worker": false,
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T17:23:41.630Z",
+  "quiet": {
+    "waitedMs": 999,
+    "formula": "settled",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.set.numfmt"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.set.numfmt",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 21
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 21
+  },
+  "timeline": [
+    {
+      "dt": 2,
+      "id": "sheet.mutation.set.numfmt",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.styles.WoH0UR",
+      "kind": "added",
+      "after": "{\"n\":{\"pattern\":\"0.0\"}}"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.1.1.s",
+      "kind": "added",
+      "after": "\"WoH0UR\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.2.1.s",
+      "kind": "added",
+      "after": "\"WoH0UR\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.3.1.s",
+      "kind": "added",
+      "after": "\"WoH0UR\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.4.1.s",
+      "kind": "added",
+      "after": "\"WoH0UR\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.5.1.s",
+      "kind": "added",
+      "after": "\"WoH0UR\""
+    }
+  ],
+  "diffCount": 6,
+  "lateDiff": [],
+  "errors": []
+}

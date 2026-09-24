@@ -1,0 +1,137 @@
+{
+  "check": "V06-actions",
+  "action": "hyperlink",
+  "kind": "doc",
+  "worker": false,
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T17:31:31.511Z",
+  "quiet": {
+    "waitedMs": 984.2999999523163,
+    "formula": "n/a",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [
+      "doc.mutation.rich-text-editing"
+    ],
+    "mutations": [
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-doc-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 7
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 7
+  },
+  "timeline": [
+    {
+      "dt": 309,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.body.customRanges[0].rangeId",
+      "kind": "changed",
+      "before": "\"XAOjhp2d9f2YI8R97Lf9W\"",
+      "after": "\"sJaydraVwx8mS0K0aRbd0\""
+    },
+    {
+      "path": "$.body.customRanges[0].properties.url",
+      "kind": "changed",
+      "before": "\"https://example.com/doc\"",
+      "after": "\"https://example.com/x\""
+    },
+    {
+      "path": "$.body.customRanges[0].startIndex",
+      "kind": "changed",
+      "before": "171",
+      "after": "0"
+    },
+    {
+      "path": "$.body.customRanges[0].endIndex",
+      "kind": "changed",
+      "before": "174",
+      "after": "1"
+    },
+    {
+      "path": "$.body.customRanges[1].rangeId",
+      "kind": "changed",
+      "before": "\"Ak25cf7rYQcF3-1wz8pc8\"",
+      "after": "\"XAOjhp2d9f2YI8R97Lf9W\""
+    },
+    {
+      "path": "$.body.customRanges[1].properties.url",
+      "kind": "changed",
+      "before": "\"mailto:someone@example.com\"",
+      "after": "\"https://example.com/doc\""
+    },
+    {
+      "path": "$.body.customRanges[1].startIndex",
+      "kind": "changed",
+      "before": "176",
+      "after": "171"
+    },
+    {
+      "path": "$.body.customRanges[1].endIndex",
+      "kind": "changed",
+      "before": "178",
+      "after": "174"
+    },
+    {
+      "path": "$.body.customRanges[2]",
+      "kind": "added",
+      "after": "{\"rangeType\":0,\"rangeId\":\"Ak25cf7rYQcF3-1wz8pc8\",\"properties\":{\"url\":\"mailto:someone@example.com\"},\"startIndex\":176,\"endIndex\":178}"
+    },
+    {
+      "path": "$.resources[1].data.links[0].id",
+      "kind": "changed",
+      "before": "\"XAOjhp2d9f2YI8R97Lf9W\"",
+      "after": "\"sJaydraVwx8mS0K0aRbd0\""
+    },
+    {
+      "path": "$.resources[1].data.links[0].payload",
+      "kind": "changed",
+      "before": "\"https://example.com/doc\"",
+      "after": "\"https://example.com/x\""
+    },
+    {
+      "path": "$.resources[1].data.links[1].id",
+      "kind": "changed",
+      "before": "\"Ak25cf7rYQcF3-1wz8pc8\"",
+      "after": "\"XAOjhp2d9f2YI8R97Lf9W\""
+    },
+    {
+      "path": "$.resources[1].data.links[1].payload",
+      "kind": "changed",
+      "before": "\"mailto:someone@example.com\"",
+      "after": "\"https://example.com/doc\""
+    },
+    {
+      "path": "$.resources[1].data.links[2]",
+      "kind": "added",
+      "after": "{\"id\":\"Ak25cf7rYQcF3-1wz8pc8\",\"payload\":\"mailto:someone@example.com\"}"
+    }
+  ],
+  "diffCount": 14,
+  "lateDiff": [],
+  "errors": []
+}

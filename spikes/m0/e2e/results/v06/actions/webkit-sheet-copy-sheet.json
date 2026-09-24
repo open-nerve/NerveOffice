@@ -1,0 +1,105 @@
+{
+  "check": "V06-actions",
+  "action": "copy-sheet",
+  "kind": "sheet",
+  "worker": false,
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T17:45:16.944Z",
+  "quiet": {
+    "waitedMs": 981,
+    "formula": "settled",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.insert-sheet"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.insert-sheet",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      }
+    ],
+    "syncOnly": [],
+    "total": 40
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 40
+  },
+  "timeline": [
+    {
+      "dt": 6,
+      "id": "sheet.mutation.insert-sheet",
+      "verdict": "detected"
+    },
+    {
+      "dt": 14,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 47,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.sheetOrder[2]",
+      "kind": "changed",
+      "before": "\"BosGI6KRewWr9iRx1e2-J\"",
+      "after": "\"PdsclluLVGr6e5dLFsxOv\""
+    },
+    {
+      "path": "$.sheetOrder[3]",
+      "kind": "changed",
+      "before": "\"qu7F_0n49etB111SblNln\"",
+      "after": "\"BosGI6KRewWr9iRx1e2-J\""
+    },
+    {
+      "path": "$.sheetOrder[4]",
+      "kind": "changed",
+      "before": "\"3pom9bUkA1bNL7bRVYpBX\"",
+      "after": "\"qu7F_0n49etB111SblNln\""
+    },
+    {
+      "path": "$.sheetOrder[5]",
+      "kind": "added",
+      "after": "\"3pom9bUkA1bNL7bRVYpBX\""
+    },
+    {
+      "path": "$.sheets.PdsclluLVGr6e5dLFsxOv",
+      "kind": "added",
+      "after": "{\"id\":\"PdsclluLVGr6e5dLFsxOv\",\"name\":\"汇总 （副本）\",\"tabColor\":\"#16a34a\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24..."
+    }
+  ],
+  "diffCount": 5,
+  "lateDiff": [],
+  "errors": []
+}

@@ -17,6 +17,7 @@ import { UniverFormulaEnginePlugin } from '@univerjs/engine-formula';
 import { UniverRenderEnginePlugin } from '@univerjs/engine-render';
 import { UniverFindReplacePlugin } from '@univerjs/find-replace';
 import { UniverUIPlugin } from '@univerjs/ui';
+import { docUi } from './ui-config';
 
 import DesignZhCN from '@univerjs/design/locale/zh-CN';
 import DocsDrawingUIZhCN from '@univerjs/docs-drawing-ui/locale/zh-CN';
@@ -51,10 +52,10 @@ const groups: PluginGroup[] = [
         // 运行时核对（V03）：docs 插件注册 Word 元数据透传的两项与文档权限规则；文字文档不写 SHEET_AuthzIoMockService_PLUGIN
         resources: ['DOC_WORD_STYLES_PLUGIN', 'DOC_NOTE_PLUGIN', 'DOC_OBJECT_PERMISSION_PLUGIN'],
         removable: false,
-        plugins: ({ container }) => [
+        plugins: ({ container, ui }) => [
             [UniverDocsPlugin],
             [UniverRenderEnginePlugin],
-            [UniverUIPlugin, { container }],
+            [UniverUIPlugin, { container, menu: ui.menu, toolbar: ui.toolbar, contextMenu: ui.contextMenu }],
             [UniverDocsUIPlugin],
             [UniverFormulaEnginePlugin],
         ],
@@ -101,6 +102,9 @@ export const docProfile: EditorProfile = {
     sdkVersion: '1.0.0',
     worker: 'layout',
     groups,
+    ui: docUi,
+    // V06：类型声明为 MUTATION、实际只清除界面上的图片变换框的命令（不改内容）
+    changeDetectionExclude: ['doc.operation.clear-drawing-transformer'],
     locale: mergeLocales(
         DesignZhCN,
         UIZhCN,

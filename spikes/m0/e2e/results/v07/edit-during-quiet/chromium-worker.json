@@ -1,0 +1,27 @@
+{
+  "check": "V07-edit-during-quiet",
+  "worker": true,
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T18:03:44.086Z",
+  "oldRule": {
+    "capturedAtMs": 1331,
+    "checked": 399,
+    "mismatches": 200
+  },
+  "newRule": {
+    "capturedAtMs": 3130,
+    "restarts": 1,
+    "formula": "settled",
+    "checked": 399,
+    "mismatches": 0
+  },
+  "settled": {
+    "checked": 399,
+    "mismatches": 0
+  }
+}

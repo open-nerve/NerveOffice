@@ -1,0 +1,222 @@
+{
+  "check": "V06-actions",
+  "action": "bold",
+  "kind": "doc",
+  "worker": false,
+  "method": "U",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T17:48:35.612Z",
+  "quiet": {
+    "waitedMs": 1003,
+    "formula": "n/a",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [
+      "doc.mutation.rich-text-editing"
+    ],
+    "mutations": [
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-doc-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 12
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 12
+  },
+  "timeline": [
+    {
+      "dt": 311,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.body.textRuns[0].st",
+      "kind": "changed",
+      "before": "29",
+      "after": "2"
+    },
+    {
+      "path": "$.body.textRuns[0].ed",
+      "kind": "changed",
+      "before": "31",
+      "after": "4"
+    },
+    {
+      "path": "$.body.textRuns[1].ts.it",
+      "kind": "removed",
+      "before": "1"
+    },
+    {
+      "path": "$.body.textRuns[1].ts.bl",
+      "kind": "added",
+      "after": "1"
+    },
+    {
+      "path": "$.body.textRuns[1].st",
+      "kind": "changed",
+      "before": "32",
+      "after": "29"
+    },
+    {
+      "path": "$.body.textRuns[1].ed",
+      "kind": "changed",
+      "before": "34",
+      "after": "31"
+    },
+    {
+      "path": "$.body.textRuns[2].ts.ul",
+      "kind": "removed",
+      "before": "{\"s\":1,\"t\":12}"
+    },
+    {
+      "path": "$.body.textRuns[2].ts.it",
+      "kind": "added",
+      "after": "1"
+    },
+    {
+      "path": "$.body.textRuns[2].st",
+      "kind": "changed",
+      "before": "35",
+      "after": "32"
+    },
+    {
+      "path": "$.body.textRuns[2].ed",
+      "kind": "changed",
+      "before": "38",
+      "after": "34"
+    },
+    {
+      "path": "$.body.textRuns[3].ts.st",
+      "kind": "removed",
+      "before": "{\"s\":1}"
+    },
+    {
+      "path": "$.body.textRuns[3].ts.ul",
+      "kind": "added",
+      "after": "{\"s\":1,\"t\":12}"
+    },
+    {
+      "path": "$.body.textRuns[3].st",
+      "kind": "changed",
+      "before": "39",
+      "after": "35"
+    },
+    {
+      "path": "$.body.textRuns[3].ed",
+      "kind": "changed",
+      "before": "42",
+      "after": "38"
+    },
+    {
+      "path": "$.body.textRuns[4].ts.va",
+      "kind": "removed",
+      "before": "2"
+    },
+    {
+      "path": "$.body.textRuns[4].ts.st",
+      "kind": "added",
+      "after": "{\"s\":1}"
+    },
+    {
+      "path": "$.body.textRuns[4].st",
+      "kind": "changed",
+      "before": "44",
+      "after": "39"
+    },
+    {
+      "path": "$.body.textRuns[4].ed",
+      "kind": "changed",
+      "before": "45",
+      "after": "42"
+    },
+    {
+      "path": "$.body.textRuns[5].ts.va",
+      "kind": "changed",
+      "before": "3",
+      "after": "2"
+    },
+    {
+      "path": "$.body.textRuns[5].st",
+      "kind": "changed",
+      "before": "48",
+      "after": "44"
+    },
+    {
+      "path": "$.body.textRuns[5].ed",
+      "kind": "changed",
+      "before": "49",
+      "after": "45"
+    },
+    {
+      "path": "$.body.textRuns[6].ts.cl",
+      "kind": "removed",
+      "before": "{\"rgb\":\"#dc2626\"}"
+    },
+    {
+      "path": "$.body.textRuns[6].ts.va",
+      "kind": "added",
+      "after": "3"
+    },
+    {
+      "path": "$.body.textRuns[6].st",
+      "kind": "changed",
+      "before": "50",
+      "after": "48"
+    },
+    {
+      "path": "$.body.textRuns[6].ed",
+      "kind": "changed",
+      "before": "52",
+      "after": "49"
+    },
+    {
+      "path": "$.body.textRuns[7].ts.bg",
+      "kind": "removed",
+      "before": "{\"rgb\":\"#fef08a\"}"
+    },
+    {
+      "path": "$.body.textRuns[7].ts.cl",
+      "kind": "added",
+      "after": "{\"rgb\":\"#dc2626\"}"
+    },
+    {
+      "path": "$.body.textRuns[7].st",
+      "kind": "changed",
+      "before": "53",
+      "after": "50"
+    },
+    {
+      "path": "$.body.textRuns[7].ed",
+      "kind": "changed",
+      "before": "55",
+      "after": "52"
+    },
+    {
+      "path": "$.body.textRuns[8].ts.ff",
+      "kind": "removed",
+      "before": "\"SimSun\""
+    }
+  ],
+  "diffCount": 40,
+  "lateDiff": [],
+  "errors": []
+}

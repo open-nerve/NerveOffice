@@ -1,0 +1,38 @@
+{
+  "check": "V06-actions",
+  "action": "scroll",
+  "kind": "doc",
+  "method": "U",
+  "expect": "view",
+  "verdict": "通过",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T17:14:02.453Z",
+  "quiet": {
+    "waitedMs": 1012.5,
+    "formula": "n/a",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 3
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 3
+  },
+  "timeline": [],
+  "planRule": null,
+  "diff": [],
+  "diffCount": 0,
+  "lateDiff": [],
+  "errors": []
+}

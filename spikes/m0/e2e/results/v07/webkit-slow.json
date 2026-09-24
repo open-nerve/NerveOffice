@@ -1,0 +1,94 @@
+{
+  "check": "V07",
+  "scenario": "slow",
+  "worker": false,
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T18:23:07.304Z",
+  "idleWaitMs": 500,
+  "idleCalcSessions": 0,
+  "waitMs": {
+    "api": 534,
+    "rule": 1016,
+    "timeoutAttempt": 933,
+    "recaptureApi": 537,
+    "recaptureRule": 502
+  },
+  "ruleOutcome": "settled",
+  "timeoutOutcome": "applied",
+  "volatileRecalculated": null,
+  "forcedRecalcMs": 501,
+  "checks": {
+    "noWait": {
+      "checked": 200,
+      "mismatches": 200,
+      "sample": [
+        {
+          "cell": "慢!A1",
+          "expected": 10016042,
+          "actual": 9927165
+        },
+        {
+          "cell": "慢!A2",
+          "expected": 10015711,
+          "actual": 9926834
+        },
+        {
+          "cell": "慢!A3",
+          "expected": 10014845,
+          "actual": 9925968
+        },
+        {
+          "cell": "慢!A4",
+          "expected": 10013435,
+          "actual": 9924547
+        },
+        {
+          "cell": "慢!A5",
+          "expected": 10011938,
+          "actual": 9923050
+        }
+      ]
+    },
+    "api": {
+      "checked": 200,
+      "mismatches": 0,
+      "sample": []
+    },
+    "rule": {
+      "checked": 200,
+      "mismatches": 0,
+      "sample": []
+    },
+    "timedOut": {
+      "checked": 200,
+      "mismatches": 0,
+      "sample": []
+    },
+    "recaptureApi": {
+      "checked": 200,
+      "mismatches": 0,
+      "sample": []
+    },
+    "recaptureRule": {
+      "checked": 200,
+      "mismatches": 0,
+      "sample": []
+    },
+    "reopened": {
+      "checked": 200,
+      "mismatches": 0,
+      "sample": []
+    },
+    "forced": {
+      "checked": 200,
+      "mismatches": 0,
+      "sample": []
+    }
+  },
+  "detections": 3
+}

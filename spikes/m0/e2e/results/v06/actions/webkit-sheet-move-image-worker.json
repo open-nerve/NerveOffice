@@ -1,0 +1,174 @@
+{
+  "check": "V06-actions",
+  "action": "move-image",
+  "kind": "sheet",
+  "worker": true,
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T17:30:59.859Z",
+  "quiet": {
+    "waitedMs": 1000,
+    "formula": "settled",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.set-drawing-apply"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.set-drawing-apply",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.operation.clear-drawing-transformer",
+        "verdict": "excluded",
+        "options": []
+      }
+    ],
+    "syncOnly": [],
+    "total": 24
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 24
+  },
+  "timeline": [
+    {
+      "dt": 5,
+      "id": "sheet.mutation.set-drawing-apply",
+      "verdict": "detected"
+    },
+    {
+      "dt": 5,
+      "id": "sheet.operation.clear-drawing-transformer",
+      "verdict": "excluded"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.resources[4].data.sheet-1.data.vEKaHz.axisAlignSheetTransform.from.column",
+      "kind": "changed",
+      "before": "12",
+      "after": "14"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.vEKaHz.axisAlignSheetTransform.from.row",
+      "kind": "changed",
+      "before": "12",
+      "after": "20"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.vEKaHz.axisAlignSheetTransform.to.column",
+      "kind": "changed",
+      "before": "13",
+      "after": "15"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.vEKaHz.axisAlignSheetTransform.to.row",
+      "kind": "changed",
+      "before": "14",
+      "after": "23"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.vEKaHz.axisAlignSheetTransform.to.rowOffset",
+      "kind": "changed",
+      "before": "16",
+      "after": "8"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.vEKaHz.column",
+      "kind": "changed",
+      "before": "12",
+      "after": "14"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.vEKaHz.row",
+      "kind": "changed",
+      "before": "12",
+      "after": "20"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.vEKaHz.sheetTransform.from.column",
+      "kind": "changed",
+      "before": "12",
+      "after": "14"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.vEKaHz.sheetTransform.from.row",
+      "kind": "changed",
+      "before": "12",
+      "after": "20"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.vEKaHz.sheetTransform.to.column",
+      "kind": "changed",
+      "before": "13",
+      "after": "15"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.vEKaHz.sheetTransform.to.row",
+      "kind": "changed",
+      "before": "14",
+      "after": "23"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.vEKaHz.sheetTransform.to.rowOffset",
+      "kind": "changed",
+      "before": "16",
+      "after": "8"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.vEKaHz.transform.left",
+      "kind": "changed",
+      "before": "1046",
+      "after": "1222"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.vEKaHz.transform.top",
+      "kind": "changed",
+      "before": "350",
+      "after": "534"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.vEKaHz.angle",
+      "kind": "added",
+      "after": "0"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.vEKaHz.flipX",
+      "kind": "added",
+      "after": "false"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.vEKaHz.flipY",
+      "kind": "added",
+      "after": "false"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.vEKaHz.skewX",
+      "kind": "added",
+      "after": "0"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.vEKaHz.skewY",
+      "kind": "added",
+      "after": "0"
+    }
+  ],
+  "diffCount": 19,
+  "lateDiff": [],
+  "errors": []
+}

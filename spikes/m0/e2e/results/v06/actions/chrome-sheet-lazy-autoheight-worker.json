@@ -1,0 +1,258 @@
+{
+  "check": "V06-actions",
+  "action": "lazy-autoheight",
+  "kind": "sheet",
+  "worker": true,
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T18:38:27.265Z",
+  "quiet": {
+    "waitedMs": 1560,
+    "formula": "settled",
+    "restarts": 1
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.set-range-values",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 36
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 36
+  },
+  "timeline": [
+    {
+      "dt": 9,
+      "id": "sheet.mutation.set-range-values",
+      "verdict": "detected"
+    },
+    {
+      "dt": 12,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 44,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 68,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 79,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": {
+    "captureAtMs": 1009,
+    "autoHeightMutations": 4,
+    "lastAutoHeightMs": 79,
+    "missed": 0
+  },
+  "diff": [
+    {
+      "path": "$.styles.wGPjtJ",
+      "kind": "added",
+      "after": "{\"fs\":28}"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.0.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.1.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.2.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.3.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.4.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.5.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.6.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.7.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.8.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.9.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.10.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.11.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.12.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.13.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.14.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.15.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.16.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.17.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.18.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.19.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.20.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.21.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.22.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.23.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.24.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.25.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.26.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.27.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.28.12.s",
+      "kind": "added",
+      "after": "\"wGPjtJ\""
+    }
+  ],
+  "diffCount": 2999,
+  "lateDiff": [],
+  "errors": []
+}

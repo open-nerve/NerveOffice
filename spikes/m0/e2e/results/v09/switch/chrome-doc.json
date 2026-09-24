@@ -1,0 +1,147 @@
+{
+  "check": "V09-switch",
+  "kind": "doc",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T17:31:16.970Z",
+  "inPlace": [
+    {
+      "strategy": "facade",
+      "enterMs": 7,
+      "exitMs": 4,
+      "undoInRead": {
+        "undos": 0,
+        "redos": 0
+      },
+      "exitSteps": [
+        {
+          "step": "document.getPermission().setEditable(true)",
+          "ok": true
+        }
+      ],
+      "detectionsWhileSwitching": [],
+      "leftover": [],
+      "protectionResourcesAfter": [],
+      "editableAfterExit": true,
+      "editedValue": null,
+      "uiInRead": null,
+      "uiAfterExit": null
+    },
+    {
+      "strategy": "points",
+      "enterMs": 4,
+      "exitMs": 3,
+      "undoInRead": {
+        "undos": 0,
+        "redos": 0
+      },
+      "exitSteps": [
+        {
+          "step": "document.getPermission().setEditable(true)",
+          "ok": true
+        }
+      ],
+      "detectionsWhileSwitching": [],
+      "leftover": [],
+      "protectionResourcesAfter": [],
+      "editableAfterExit": true,
+      "editedValue": null,
+      "uiInRead": null,
+      "uiAfterExit": null
+    },
+    {
+      "strategy": "firewall",
+      "enterMs": 2,
+      "exitMs": 2,
+      "undoInRead": {
+        "undos": 0,
+        "redos": 0
+      },
+      "exitSteps": [],
+      "detectionsWhileSwitching": [],
+      "leftover": [],
+      "protectionResourcesAfter": [],
+      "editableAfterExit": true,
+      "editedValue": null,
+      "uiInRead": null,
+      "uiAfterExit": null
+    },
+    {
+      "strategy": "combined",
+      "enterMs": 6,
+      "exitMs": 4,
+      "undoInRead": {
+        "undos": 0,
+        "redos": 0
+      },
+      "exitSteps": [
+        {
+          "step": "document.getPermission().setEditable(true)",
+          "ok": true
+        }
+      ],
+      "detectionsWhileSwitching": [],
+      "leftover": [],
+      "protectionResourcesAfter": [],
+      "editableAfterExit": true,
+      "editedValue": null,
+      "uiInRead": null,
+      "uiAfterExit": null
+    },
+    {
+      "strategy": "combined+ui",
+      "enterMs": 5,
+      "exitMs": 1,
+      "undoInRead": {
+        "undos": 0,
+        "redos": 0
+      },
+      "exitSteps": [
+        {
+          "step": "document.getPermission().setEditable(true)",
+          "ok": true
+        },
+        {
+          "step": "显示工具栏",
+          "ok": true
+        },
+        {
+          "step": "启用右键菜单",
+          "ok": true
+        },
+        {
+          "step": "恢复阅读模式专用的菜单项",
+          "ok": true
+        }
+      ],
+      "detectionsWhileSwitching": [],
+      "leftover": [],
+      "protectionResourcesAfter": [],
+      "editableAfterExit": true,
+      "editedValue": null,
+      "uiInRead": {
+        "toolbarButtons": 0,
+        "contextMenu": false
+      },
+      "uiAfterExit": {
+        "toolbarButtons": 46,
+        "contextMenu": true
+      }
+    }
+  ],
+  "remount": {
+    "toReadMs": 3332.7999999523163,
+    "toReadRenderedMs": 324.40000009536743,
+    "toEditMs": 3342.1999999284744,
+    "toEditRenderedMs": 331.3000000715256,
+    "readUndo": {
+      "undos": 0,
+      "redos": 0
+    },
+    "leftover": []
+  }
+}

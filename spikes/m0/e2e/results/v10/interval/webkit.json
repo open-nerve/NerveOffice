@@ -1,0 +1,180 @@
+{
+  "check": "V10-interval",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T18:31:41.305Z",
+  "results": [
+    {
+      "interval": 500,
+      "incremental": [
+        {
+          "ms": 714,
+          "blockMs": 674,
+          "frameGapMs": 675,
+          "frames": 2,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 699,
+          "blockMs": 659,
+          "frameGapMs": 660,
+          "frames": 3,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 694,
+          "blockMs": 657,
+          "frameGapMs": 654,
+          "frames": 4,
+          "longestTaskMs": null
+        }
+      ],
+      "full": [
+        {
+          "ms": 776,
+          "blockMs": 719,
+          "frameGapMs": 719,
+          "frames": 4,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 750,
+          "blockMs": 705,
+          "frameGapMs": 704,
+          "frames": 3,
+          "longestTaskMs": null
+        }
+      ]
+    },
+    {
+      "interval": 100,
+      "incremental": [
+        {
+          "ms": 710,
+          "blockMs": 229,
+          "frameGapMs": 226,
+          "frames": 4,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 755,
+          "blockMs": 230,
+          "frameGapMs": 231,
+          "frames": 7,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 712,
+          "blockMs": 219,
+          "frameGapMs": 220,
+          "frames": 7,
+          "longestTaskMs": null
+        }
+      ],
+      "full": [
+        {
+          "ms": 815,
+          "blockMs": 231,
+          "frameGapMs": 231,
+          "frames": 9,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 779,
+          "blockMs": 232,
+          "frameGapMs": 232,
+          "frames": 6,
+          "longestTaskMs": null
+        }
+      ]
+    },
+    {
+      "interval": 20,
+      "incremental": [
+        {
+          "ms": 764,
+          "blockMs": 64,
+          "frameGapMs": 65,
+          "frames": 17,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 760,
+          "blockMs": 74,
+          "frameGapMs": 75,
+          "frames": 17,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 746,
+          "blockMs": 66,
+          "frameGapMs": 67,
+          "frames": 18,
+          "longestTaskMs": null
+        }
+      ],
+      "full": [
+        {
+          "ms": 817,
+          "blockMs": 68,
+          "frameGapMs": 68,
+          "frames": 22,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 817,
+          "blockMs": 74,
+          "frameGapMs": 74,
+          "frames": 22,
+          "longestTaskMs": null
+        }
+      ]
+    },
+    {
+      "interval": 5,
+      "incremental": [
+        {
+          "ms": 800,
+          "blockMs": 38,
+          "frameGapMs": 38,
+          "frames": 45,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 784,
+          "blockMs": 32,
+          "frameGapMs": 37,
+          "frames": 48,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 780,
+          "blockMs": 36,
+          "frameGapMs": 43,
+          "frames": 44,
+          "longestTaskMs": null
+        }
+      ],
+      "full": [
+        {
+          "ms": 865,
+          "blockMs": 42,
+          "frameGapMs": 42,
+          "frames": 52,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 860,
+          "blockMs": 40,
+          "frameGapMs": 44,
+          "frames": 52,
+          "longestTaskMs": null
+        }
+      ]
+    }
+  ]
+}

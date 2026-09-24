@@ -1,0 +1,172 @@
+{
+  "check": "V07",
+  "scenario": "slow",
+  "worker": true,
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T18:14:35.616Z",
+  "idleWaitMs": 500.5,
+  "idleCalcSessions": 0,
+  "waitMs": {
+    "api": 2341.5,
+    "rule": 2359.600000023842,
+    "timeoutAttempt": 61.10000002384186,
+    "recaptureApi": 2291.100000023842,
+    "recaptureRule": 505.89999997615814
+  },
+  "ruleOutcome": "settled",
+  "timeoutOutcome": "timeout",
+  "volatileRecalculated": null,
+  "forcedRecalcMs": 503.10000002384186,
+  "checks": {
+    "noWait": {
+      "checked": 200,
+      "mismatches": 200,
+      "sample": [
+        {
+          "cell": "慢!A1",
+          "expected": 10016042,
+          "actual": 9927165
+        },
+        {
+          "cell": "慢!A2",
+          "expected": 10015711,
+          "actual": 9926834
+        },
+        {
+          "cell": "慢!A3",
+          "expected": 10014845,
+          "actual": 9925968
+        },
+        {
+          "cell": "慢!A4",
+          "expected": 10013435,
+          "actual": 9924547
+        },
+        {
+          "cell": "慢!A5",
+          "expected": 10011938,
+          "actual": 9923050
+        }
+      ]
+    },
+    "api": {
+      "checked": 200,
+      "mismatches": 200,
+      "sample": [
+        {
+          "cell": "慢!A1",
+          "expected": 10016042,
+          "actual": 9927165
+        },
+        {
+          "cell": "慢!A2",
+          "expected": 10015711,
+          "actual": 9926834
+        },
+        {
+          "cell": "慢!A3",
+          "expected": 10014845,
+          "actual": 9925968
+        },
+        {
+          "cell": "慢!A4",
+          "expected": 10013435,
+          "actual": 9924547
+        },
+        {
+          "cell": "慢!A5",
+          "expected": 10011938,
+          "actual": 9923050
+        }
+      ]
+    },
+    "rule": {
+      "checked": 200,
+      "mismatches": 0,
+      "sample": []
+    },
+    "timedOut": {
+      "checked": 200,
+      "mismatches": 200,
+      "sample": [
+        {
+          "cell": "慢!A1",
+          "expected": 9949376,
+          "actual": 9971598
+        },
+        {
+          "cell": "慢!A2",
+          "expected": 9949045,
+          "actual": 9971267
+        },
+        {
+          "cell": "慢!A3",
+          "expected": 9948179,
+          "actual": 9970401
+        },
+        {
+          "cell": "慢!A4",
+          "expected": 9946769,
+          "actual": 9968991
+        },
+        {
+          "cell": "慢!A5",
+          "expected": 9945272,
+          "actual": 9967494
+        }
+      ]
+    },
+    "recaptureApi": {
+      "checked": 200,
+      "mismatches": 200,
+      "sample": [
+        {
+          "cell": "慢!A1",
+          "expected": 9949376,
+          "actual": 9971598
+        },
+        {
+          "cell": "慢!A2",
+          "expected": 9949045,
+          "actual": 9971267
+        },
+        {
+          "cell": "慢!A3",
+          "expected": 9948179,
+          "actual": 9970401
+        },
+        {
+          "cell": "慢!A4",
+          "expected": 9946769,
+          "actual": 9968991
+        },
+        {
+          "cell": "慢!A5",
+          "expected": 9945272,
+          "actual": 9967494
+        }
+      ]
+    },
+    "recaptureRule": {
+      "checked": 200,
+      "mismatches": 0,
+      "sample": []
+    },
+    "reopened": {
+      "checked": 200,
+      "mismatches": 0,
+      "sample": []
+    },
+    "forced": {
+      "checked": 200,
+      "mismatches": 0,
+      "sample": []
+    }
+  },
+  "detections": 3
+}

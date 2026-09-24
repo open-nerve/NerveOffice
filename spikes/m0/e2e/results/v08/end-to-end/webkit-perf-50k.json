@@ -1,0 +1,42 @@
+{
+  "check": "V08-end-to-end",
+  "sample": "perf-50k",
+  "worker": false,
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T18:28:02.838Z",
+  "totalMs": {
+    "p50": 1055,
+    "p95": 1066,
+    "max": 1066,
+    "min": 1044,
+    "n": 5
+  },
+  "waitMs": {
+    "p50": 1009,
+    "p95": 1014,
+    "max": 1014,
+    "min": 1001,
+    "n": 5
+  },
+  "raw": {
+    "totals": [
+      1066,
+      1066,
+      1051,
+      1044,
+      1055
+    ],
+    "waits": [
+      1014,
+      1012,
+      1009,
+      1001,
+      1004
+    ]
+  }
+}

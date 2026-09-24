@@ -1,0 +1,67 @@
+{
+  "check": "V06-open-quiet",
+  "sample": "formula-scenarios",
+  "kind": "sheet",
+  "generated": true,
+  "worker": false,
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T17:56:41.878Z",
+  "bytes": 497381,
+  "timings": {
+    "t0": 171,
+    "ready": 31,
+    "rendered": 464,
+    "steady": 3522
+  },
+  "detections": [],
+  "mutations": [
+    {
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit",
+      "options": [],
+      "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+    },
+    {
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit",
+      "options": [],
+      "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+    }
+  ],
+  "syncOnly": [],
+  "total": 20,
+  "lateDiff": [],
+  "openDiffCount": 4,
+  "openDiff": [
+    {
+      "path": "$.sheets.PHIVDbu_Ev16LdRzFirLI.cellData.0.0.v",
+      "kind": "changed",
+      "before": "46290.05585648148",
+      "after": "46290.0809375"
+    },
+    {
+      "path": "$.sheets.PHIVDbu_Ev16LdRzFirLI.cellData.2.0.v",
+      "kind": "changed",
+      "before": "0.01465037357664567",
+      "after": "0.7067391608722159"
+    },
+    {
+      "path": "$.sheets.PHIVDbu_Ev16LdRzFirLI.cellData.3.0.v",
+      "kind": "changed",
+      "before": "424369",
+      "after": "449807"
+    },
+    {
+      "path": "$.sheets.PHIVDbu_Ev16LdRzFirLI.cellData.4.0.v",
+      "kind": "changed",
+      "before": "0.02930074715329134",
+      "after": "1.4134783217444318"
+    }
+  ],
+  "errors": []
+}

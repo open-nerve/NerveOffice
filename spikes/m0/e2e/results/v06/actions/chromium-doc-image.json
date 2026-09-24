@@ -1,0 +1,91 @@
+{
+  "check": "V06-actions",
+  "action": "image",
+  "kind": "doc",
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T17:12:55.597Z",
+  "quiet": {
+    "waitedMs": 991.8000000715256,
+    "formula": "n/a",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [
+      "doc.mutation.rich-text-editing"
+    ],
+    "mutations": [
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-doc-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 6
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 6
+  },
+  "timeline": [
+    {
+      "dt": 12,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.drawings.icpVuR",
+      "kind": "added",
+      "after": "{\"unitId\":\"m0-doc-all\",\"subUnitId\":\"m0-doc-all\",\"drawingId\":\"icpVuR\",\"drawingType\":0,\"imageSourceType\":\"URL\",\"source\":\"/fixtures-assets/blue-120x80.png\",\"tra..."
+    },
+    {
+      "path": "$.drawingsOrder[2]",
+      "kind": "added",
+      "after": "\"icpVuR\""
+    },
+    {
+      "path": "$.body.dataStream",
+      "kind": "changed",
+      "before": "\"文档标题\\r副标题：M0 文字文档样本\\r一级标题\\r正文段落：加粗、斜体、下划线、删除线、H2O、x2、红色、高亮、大号宋体。中英文混排 English text 与标点，检查换行。\\r居中段落\\r右对齐段落\\r二级标题\\r三级标题\\r四级标题\\r五级标题\\r\\r无序列表第一项\\r无序列表嵌套项\\r有序列表第...",
+      "after": "\"文档标题\\r副标题：M0 文字文档样本\\r一级标题\\r正文段落：加粗、斜体、下划线、删除线、H2O、x2、红色、高亮、大号宋体。中英文混排 English text 与标点，检查换行。\\r居中段落\\r右对齐段落\\r二级标题\\r三级标题\\r四级标题\\r五级标题\\r\\r无序列表第一项\\r无序列表嵌套项\\r有序列表第..."
+    },
+    {
+      "path": "$.body.customBlocks[2]",
+      "kind": "added",
+      "after": "{\"startIndex\":228,\"blockId\":\"icpVuR\"}"
+    },
+    {
+      "path": "$.body.paragraphs[29].startIndex",
+      "kind": "changed",
+      "before": "228",
+      "after": "229"
+    },
+    {
+      "path": "$.resources[0].data.data.icpVuR",
+      "kind": "added",
+      "after": "{\"behindDoc\":0,\"distB\":0,\"distL\":0,\"distR\":0,\"distT\":0,\"docTransform\":{\"angle\":0,\"positionH\":{\"posOffset\":0,\"relativeFrom\":0},\"positionV\":{\"posOffset\":0,\"rel..."
+    },
+    {
+      "path": "$.resources[0].data.order[2]",
+      "kind": "added",
+      "after": "\"icpVuR\""
+    }
+  ],
+  "diffCount": 7,
+  "lateDiff": [],
+  "errors": []
+}

@@ -1,0 +1,208 @@
+{
+  "check": "V08-capture",
+  "sample": "doc-1m",
+  "kind": "doc",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T18:27:52.632Z",
+  "capture": {
+    "saveMs": {
+      "p50": 3,
+      "p95": 4,
+      "max": 4,
+      "min": 2,
+      "n": 10
+    },
+    "stringifyMs": {
+      "p50": 1,
+      "p95": 2,
+      "max": 2,
+      "min": 1,
+      "n": 10
+    },
+    "syncMs": {
+      "p50": 4,
+      "p95": 6,
+      "max": 6,
+      "min": 3,
+      "n": 10
+    },
+    "gzipMs": {
+      "p50": 37,
+      "p95": 47,
+      "max": 47,
+      "min": 31,
+      "n": 10
+    },
+    "hashMs": {
+      "p50": 0,
+      "p95": 1,
+      "max": 1,
+      "min": 0,
+      "n": 10
+    },
+    "totalMs": {
+      "p50": 41,
+      "p95": 53,
+      "max": 53,
+      "min": 35,
+      "n": 10
+    },
+    "asyncMaxGapMs": {
+      "p50": 36,
+      "p95": 42,
+      "max": 42,
+      "min": 28,
+      "n": 10
+    },
+    "longestTaskMs": null,
+    "jsonBytes": 1016638,
+    "gzipBytes": 442901,
+    "ratio": 0.4356526118441372
+  },
+  "selfCheckMs": {
+    "p50": 3,
+    "p95": 6,
+    "max": 6,
+    "min": 2,
+    "n": 10
+  },
+  "canonical": null,
+  "endToEndMs": null,
+  "raw": [
+    {
+      "saveMs": 4,
+      "stringifyMs": 1,
+      "syncMs": 5,
+      "gzipMs": 47,
+      "hashMs": 1,
+      "totalMs": 53,
+      "jsonBytes": 1016638,
+      "gzipBytes": 442901,
+      "asyncMaxGapMs": 42,
+      "longTasks": null,
+      "finishedAt": 6309
+    },
+    {
+      "saveMs": 3,
+      "stringifyMs": 2,
+      "syncMs": 5,
+      "gzipMs": 36,
+      "hashMs": 0,
+      "totalMs": 41,
+      "jsonBytes": 1016638,
+      "gzipBytes": 442901,
+      "asyncMaxGapMs": 36,
+      "longTasks": null,
+      "finishedAt": 6556
+    },
+    {
+      "saveMs": 3,
+      "stringifyMs": 1,
+      "syncMs": 4,
+      "gzipMs": 41,
+      "hashMs": 0,
+      "totalMs": 45,
+      "jsonBytes": 1016638,
+      "gzipBytes": 442901,
+      "asyncMaxGapMs": 36,
+      "longTasks": null,
+      "finishedAt": 6803
+    },
+    {
+      "saveMs": 3,
+      "stringifyMs": 1,
+      "syncMs": 4,
+      "gzipMs": 31,
+      "hashMs": 0,
+      "totalMs": 35,
+      "jsonBytes": 1016638,
+      "gzipBytes": 442901,
+      "asyncMaxGapMs": 28,
+      "longTasks": null,
+      "finishedAt": 7041
+    },
+    {
+      "saveMs": 3,
+      "stringifyMs": 1,
+      "syncMs": 4,
+      "gzipMs": 38,
+      "hashMs": 1,
+      "totalMs": 43,
+      "jsonBytes": 1016638,
+      "gzipBytes": 442901,
+      "asyncMaxGapMs": 38,
+      "longTasks": null,
+      "finishedAt": 7287
+    },
+    {
+      "saveMs": 2,
+      "stringifyMs": 1,
+      "syncMs": 3,
+      "gzipMs": 37,
+      "hashMs": 0,
+      "totalMs": 40,
+      "jsonBytes": 1016638,
+      "gzipBytes": 442901,
+      "asyncMaxGapMs": 36,
+      "longTasks": null,
+      "finishedAt": 7528
+    },
+    {
+      "saveMs": 4,
+      "stringifyMs": 2,
+      "syncMs": 6,
+      "gzipMs": 42,
+      "hashMs": 1,
+      "totalMs": 49,
+      "jsonBytes": 1016638,
+      "gzipBytes": 442901,
+      "asyncMaxGapMs": 38,
+      "longTasks": null,
+      "finishedAt": 7778
+    },
+    {
+      "saveMs": 3,
+      "stringifyMs": 1,
+      "syncMs": 4,
+      "gzipMs": 34,
+      "hashMs": 0,
+      "totalMs": 38,
+      "jsonBytes": 1016638,
+      "gzipBytes": 442901,
+      "asyncMaxGapMs": 30,
+      "longTasks": null,
+      "finishedAt": 8018
+    },
+    {
+      "saveMs": 2,
+      "stringifyMs": 1,
+      "syncMs": 3,
+      "gzipMs": 34,
+      "hashMs": 0,
+      "totalMs": 37,
+      "jsonBytes": 1016638,
+      "gzipBytes": 442901,
+      "asyncMaxGapMs": 31,
+      "longTasks": null,
+      "finishedAt": 8256
+    },
+    {
+      "saveMs": 2,
+      "stringifyMs": 1,
+      "syncMs": 3,
+      "gzipMs": 38,
+      "hashMs": 0,
+      "totalMs": 41,
+      "jsonBytes": 1016638,
+      "gzipBytes": 442901,
+      "asyncMaxGapMs": 35,
+      "longTasks": null,
+      "finishedAt": 8498
+    }
+  ]
+}

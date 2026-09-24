@@ -1,0 +1,76 @@
+{
+  "check": "V06-actions",
+  "action": "add-sheet",
+  "kind": "sheet",
+  "worker": false,
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T17:26:22.475Z",
+  "quiet": {
+    "waitedMs": 972.8999999761581,
+    "formula": "settled",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.insert-sheet"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.insert-sheet",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      }
+    ],
+    "syncOnly": [],
+    "total": 35
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 35
+  },
+  "timeline": [
+    {
+      "dt": 4,
+      "id": "sheet.mutation.insert-sheet",
+      "verdict": "detected"
+    },
+    {
+      "dt": 12,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.sheetOrder[5]",
+      "kind": "added",
+      "after": "\"jAEaNHX-WxXLxHLfx2POA\""
+    },
+    {
+      "path": "$.sheets.jAEaNHX-WxXLxHLfx2POA",
+      "kind": "added",
+      "after": "{\"id\":\"jAEaNHX-WxXLxHLfx2POA\",\"name\":\"新表\",\"tabColor\":\"\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24,\"showGridli..."
+    }
+  ],
+  "diffCount": 2,
+  "lateDiff": [],
+  "errors": []
+}

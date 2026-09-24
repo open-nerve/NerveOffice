@@ -1,0 +1,61 @@
+{
+  "check": "V06-actions",
+  "action": "hide-sheet",
+  "kind": "sheet",
+  "worker": false,
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T17:27:06.598Z",
+  "quiet": {
+    "waitedMs": 991.7999999523163,
+    "formula": "settled",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.set-worksheet-hidden"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.set-worksheet-hidden",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 21
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 21
+  },
+  "timeline": [
+    {
+      "dt": 3,
+      "id": "sheet.mutation.set-worksheet-hidden",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.sheets.3EB0bwApYxHAp_aL_pN0v.hidden",
+      "kind": "changed",
+      "before": "0",
+      "after": "1"
+    }
+  ],
+  "diffCount": 1,
+  "lateDiff": [],
+  "errors": []
+}

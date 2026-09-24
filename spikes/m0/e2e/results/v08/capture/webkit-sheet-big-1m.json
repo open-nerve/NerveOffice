@@ -1,0 +1,238 @@
+{
+  "check": "V08-capture",
+  "sample": "big-1m",
+  "kind": "sheet",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T18:27:22.422Z",
+  "capture": {
+    "saveMs": {
+      "p50": 19,
+      "p95": 21,
+      "max": 21,
+      "min": 15,
+      "n": 10
+    },
+    "stringifyMs": {
+      "p50": 10,
+      "p95": 11,
+      "max": 11,
+      "min": 5,
+      "n": 10
+    },
+    "syncMs": {
+      "p50": 29,
+      "p95": 32,
+      "max": 32,
+      "min": 21,
+      "n": 10
+    },
+    "gzipMs": {
+      "p50": 23,
+      "p95": 24,
+      "max": 24,
+      "min": 20,
+      "n": 10
+    },
+    "hashMs": {
+      "p50": 0,
+      "p95": 0,
+      "max": 0,
+      "min": 0,
+      "n": 10
+    },
+    "totalMs": {
+      "p50": 53,
+      "p95": 56,
+      "max": 56,
+      "min": 41,
+      "n": 10
+    },
+    "asyncMaxGapMs": {
+      "p50": 19,
+      "p95": 24,
+      "max": 24,
+      "min": 18,
+      "n": 10
+    },
+    "longestTaskMs": null,
+    "jsonBytes": 1024915,
+    "gzipBytes": 271930,
+    "ratio": 0.2653195630857193
+  },
+  "selfCheckMs": {
+    "p50": 17,
+    "p95": 22,
+    "max": 22,
+    "min": 9,
+    "n": 10
+  },
+  "canonical": {
+    "canonicalMs": {
+      "p50": 19,
+      "p95": 23,
+      "max": 23,
+      "min": 17,
+      "n": 5
+    },
+    "hashMs": {
+      "p50": 2,
+      "p95": 2,
+      "max": 2,
+      "min": 1,
+      "n": 5
+    }
+  },
+  "endToEndMs": {
+    "noDependent": {
+      "p50": 1076,
+      "p95": 1085,
+      "max": 1085,
+      "min": 1052,
+      "n": 5
+    },
+    "oneFormula": {
+      "p50": 1071,
+      "p95": 1081,
+      "max": 1081,
+      "min": 1061,
+      "n": 5
+    }
+  },
+  "raw": [
+    {
+      "saveMs": 21,
+      "stringifyMs": 11,
+      "syncMs": 32,
+      "gzipMs": 24,
+      "hashMs": 0,
+      "totalMs": 56,
+      "jsonBytes": 1024915,
+      "gzipBytes": 271930,
+      "asyncMaxGapMs": 20,
+      "longTasks": null,
+      "finishedAt": 5310
+    },
+    {
+      "saveMs": 15,
+      "stringifyMs": 9,
+      "syncMs": 24,
+      "gzipMs": 23,
+      "hashMs": 0,
+      "totalMs": 47,
+      "jsonBytes": 1024915,
+      "gzipBytes": 271930,
+      "asyncMaxGapMs": 19,
+      "longTasks": null,
+      "finishedAt": 5559
+    },
+    {
+      "saveMs": 15,
+      "stringifyMs": 10,
+      "syncMs": 25,
+      "gzipMs": 22,
+      "hashMs": 0,
+      "totalMs": 47,
+      "jsonBytes": 1024915,
+      "gzipBytes": 271930,
+      "asyncMaxGapMs": 19,
+      "longTasks": null,
+      "finishedAt": 5807
+    },
+    {
+      "saveMs": 19,
+      "stringifyMs": 11,
+      "syncMs": 30,
+      "gzipMs": 24,
+      "hashMs": 0,
+      "totalMs": 54,
+      "jsonBytes": 1024915,
+      "gzipBytes": 271930,
+      "asyncMaxGapMs": 24,
+      "longTasks": null,
+      "finishedAt": 6066
+    },
+    {
+      "saveMs": 19,
+      "stringifyMs": 10,
+      "syncMs": 29,
+      "gzipMs": 24,
+      "hashMs": 0,
+      "totalMs": 53,
+      "jsonBytes": 1024915,
+      "gzipBytes": 271930,
+      "asyncMaxGapMs": 20,
+      "longTasks": null,
+      "finishedAt": 6321
+    },
+    {
+      "saveMs": 16,
+      "stringifyMs": 10,
+      "syncMs": 26,
+      "gzipMs": 23,
+      "hashMs": 0,
+      "totalMs": 49,
+      "jsonBytes": 1024915,
+      "gzipBytes": 271930,
+      "asyncMaxGapMs": 19,
+      "longTasks": null,
+      "finishedAt": 6572
+    },
+    {
+      "saveMs": 19,
+      "stringifyMs": 11,
+      "syncMs": 30,
+      "gzipMs": 24,
+      "hashMs": 0,
+      "totalMs": 54,
+      "jsonBytes": 1024915,
+      "gzipBytes": 271930,
+      "asyncMaxGapMs": 20,
+      "longTasks": null,
+      "finishedAt": 6827
+    },
+    {
+      "saveMs": 16,
+      "stringifyMs": 5,
+      "syncMs": 21,
+      "gzipMs": 20,
+      "hashMs": 0,
+      "totalMs": 41,
+      "jsonBytes": 1024915,
+      "gzipBytes": 271930,
+      "asyncMaxGapMs": 18,
+      "longTasks": null,
+      "finishedAt": 7069
+    },
+    {
+      "saveMs": 21,
+      "stringifyMs": 10,
+      "syncMs": 31,
+      "gzipMs": 24,
+      "hashMs": 0,
+      "totalMs": 55,
+      "jsonBytes": 1024915,
+      "gzipBytes": 271930,
+      "asyncMaxGapMs": 21,
+      "longTasks": null,
+      "finishedAt": 7326
+    },
+    {
+      "saveMs": 20,
+      "stringifyMs": 11,
+      "syncMs": 31,
+      "gzipMs": 23,
+      "hashMs": 0,
+      "totalMs": 54,
+      "jsonBytes": 1024915,
+      "gzipBytes": 271930,
+      "asyncMaxGapMs": 19,
+      "longTasks": null,
+      "finishedAt": 7582
+    }
+  ]
+}

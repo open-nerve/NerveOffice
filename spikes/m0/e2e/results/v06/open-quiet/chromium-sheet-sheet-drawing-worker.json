@@ -1,0 +1,43 @@
+{
+  "check": "V06-open-quiet",
+  "sample": "sheet-drawing",
+  "kind": "sheet",
+  "generated": false,
+  "worker": true,
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T17:18:11.616Z",
+  "bytes": 3775,
+  "timings": {
+    "t0": 279.7000000476837,
+    "ready": 22.5,
+    "rendered": 420.2999999523163,
+    "steady": 3469.7000000476837
+  },
+  "detections": [],
+  "mutations": [
+    {
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit",
+      "options": [],
+      "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+    }
+  ],
+  "syncOnly": [],
+  "total": 14,
+  "lateDiff": [],
+  "openDiffCount": 1,
+  "openDiff": [
+    {
+      "path": "$.resources[4].data.sheet-1.data.XkgJYJ.transform.height",
+      "kind": "changed",
+      "before": "80",
+      "after": "99"
+    }
+  ],
+  "errors": []
+}

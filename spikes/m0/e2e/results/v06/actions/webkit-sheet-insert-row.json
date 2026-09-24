@@ -1,0 +1,298 @@
+{
+  "check": "V06-actions",
+  "action": "insert-row",
+  "kind": "sheet",
+  "worker": false,
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T17:42:17.661Z",
+  "quiet": {
+    "waitedMs": 975,
+    "formula": "settled",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.insert-row",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "formula.mutation.set-defined-name"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.insert-row",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-range-values",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-range-values",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "sheet.mutation.set-range-values",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "formula.mutation.set-defined-name",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      }
+    ],
+    "syncOnly": [],
+    "total": 52
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 52
+  },
+  "timeline": [
+    {
+      "dt": 7,
+      "id": "sheet.mutation.insert-row",
+      "verdict": "detected"
+    },
+    {
+      "dt": 11,
+      "id": "sheet.mutation.set-range-values",
+      "verdict": "detected"
+    },
+    {
+      "dt": 12,
+      "id": "sheet.mutation.set-range-values",
+      "verdict": "detected"
+    },
+    {
+      "dt": 14,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 16,
+      "id": "sheet.mutation.set-range-values",
+      "verdict": "detected"
+    },
+    {
+      "dt": 17,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 18,
+      "id": "formula.mutation.set-defined-name",
+      "verdict": "detected"
+    },
+    {
+      "dt": 20,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.sheets.sheet-1.rowCount",
+      "kind": "changed",
+      "before": "200",
+      "after": "201"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.4.0",
+      "kind": "removed",
+      "before": "{\"v\":\"葡萄\",\"t\":1}"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.4.1",
+      "kind": "removed",
+      "before": "{\"v\":18,\"t\":2}"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.4.2.v",
+      "kind": "removed",
+      "before": "45203"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.4.2.t",
+      "kind": "removed",
+      "before": "2"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.4.3.v",
+      "kind": "removed",
+      "before": "0.75"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.4.3.t",
+      "kind": "removed",
+      "before": "2"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.4.4.v",
+      "kind": "removed",
+      "before": "42.75"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.4.4.t",
+      "kind": "removed",
+      "before": "2"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.4.5.v",
+      "kind": "removed",
+      "before": "1.73205"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.4.5.t",
+      "kind": "removed",
+      "before": "2"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.5.0.v",
+      "kind": "changed",
+      "before": "\"西瓜\"",
+      "after": "\"葡萄\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.5.1.v",
+      "kind": "changed",
+      "before": "3",
+      "after": "18"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.5.2.v",
+      "kind": "changed",
+      "before": "45204",
+      "after": "45203"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.5.3.v",
+      "kind": "changed",
+      "before": "1",
+      "after": "0.75"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.5.4.v",
+      "kind": "changed",
+      "before": "9999.99",
+      "after": "42.75"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.5.5.v",
+      "kind": "changed",
+      "before": "0.57721",
+      "after": "1.73205"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.6.1.f",
+      "kind": "removed",
+      "before": "\"=SUM(B2:B6)\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.6.1.v",
+      "kind": "changed",
+      "before": "70",
+      "after": "3"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.6.0",
+      "kind": "added",
+      "after": "{\"v\":\"西瓜\",\"t\":1}"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.6.2",
+      "kind": "added",
+      "after": "{\"v\":45204,\"t\":2,\"s\":\"bIIa-Y\"}"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.6.3",
+      "kind": "added",
+      "after": "{\"v\":1,\"t\":2,\"s\":\"cDV5VH\"}"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.6.4",
+      "kind": "added",
+      "after": "{\"v\":9999.99,\"t\":2,\"s\":\"NiLJOc\"}"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.6.5",
+      "kind": "added",
+      "after": "{\"v\":0.57721,\"t\":2,\"s\":\"sRnxM1\"}"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.7.1.f",
+      "kind": "changed",
+      "before": "\"=AVERAGE(B2:B6)\"",
+      "after": "\"=SUM(B2:B7)\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.7.1.v",
+      "kind": "changed",
+      "before": "14",
+      "after": "70"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.8.1.f",
+      "kind": "changed",
+      "before": "\"=SUM(数量合计区)\"",
+      "after": "\"=AVERAGE(B2:B7)\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.8.1.v",
+      "kind": "changed",
+      "before": "70",
+      "after": "14"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.9.0",
+      "kind": "removed",
+      "before": "{\"p\":{\"id\":\"d\",\"documentStyle\":{},\"drawings\":{},\"drawingsOrder\":[],\"body\":{\"dataStream\":\"普通、加粗、红色斜体\\r\\n\",\"customBlocks\":[],\"customRanges\":[],\"paragraphs\":[{\"..."
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.9.1",
+      "kind": "added",
+      "after": "{\"f\":\"=SUM(数量合计区)\",\"v\":70,\"t\":2}"
+    }
+  ],
+  "diffCount": 58,
+  "lateDiff": [],
+  "errors": []
+}

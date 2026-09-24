@@ -1,0 +1,60 @@
+{
+  "check": "V06-actions",
+  "action": "defined-name",
+  "kind": "sheet",
+  "worker": true,
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T17:14:57.509Z",
+  "quiet": {
+    "waitedMs": 1011.1000000238419,
+    "formula": "settled",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [
+      "formula.mutation.set-defined-name"
+    ],
+    "mutations": [
+      {
+        "id": "formula.mutation.set-defined-name",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 27
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 27
+  },
+  "timeline": [
+    {
+      "dt": 4,
+      "id": "formula.mutation.set-defined-name",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.resources[3].data.uUiPUiLA0e",
+      "kind": "added",
+      "after": "{\"formulaOrRefString\":\"'数据'!$A$2:$A$6\",\"id\":\"uUiPUiLA0e\",\"localSheetId\":\"AllDefaultWorkbook\",\"name\":\"新名称\"}"
+    }
+  ],
+  "diffCount": 1,
+  "lateDiff": [],
+  "errors": []
+}

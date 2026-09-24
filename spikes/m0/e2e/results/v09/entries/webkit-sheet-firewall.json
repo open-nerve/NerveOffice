@@ -1,0 +1,340 @@
+{
+  "check": "V09-entries",
+  "kind": "sheet",
+  "strategy": "firewall",
+  "worker": false,
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T17:35:18.534Z",
+  "traces": {
+    "steps": [
+      {
+        "step": "BeforeCommandExecute：取消作用于本文档的非本地 mutation",
+        "ok": true
+      }
+    ],
+    "detections": [],
+    "protectionResources": [],
+    "contentDiff": []
+  },
+  "entries": [
+    {
+      "entry": "type-value",
+      "method": "U",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 1
+    },
+    {
+      "entry": "delete-content",
+      "method": "U",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 2
+    },
+    {
+      "entry": "paste",
+      "method": "U",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 3
+    },
+    {
+      "entry": "cut-paste",
+      "method": "U",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 4
+    },
+    {
+      "entry": "drag-fill",
+      "method": "U",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 5
+    },
+    {
+      "entry": "formula-bar",
+      "method": "U",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 6
+    },
+    {
+      "entry": "filter",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 7
+    },
+    {
+      "entry": "sort",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 8
+    },
+    {
+      "entry": "add-sheet",
+      "method": "F",
+      "verdict": "拦截",
+      "error": "page.evaluate: TypeError: undefined is not an object (evaluating 'this._workbook.getSheets()[i].getSheetId')",
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 9
+    },
+    {
+      "entry": "delete-sheet",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 10
+    },
+    {
+      "entry": "rename-sheet",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 11
+    },
+    {
+      "entry": "copy-sheet",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 12
+    },
+    {
+      "entry": "hide-sheet",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 13
+    },
+    {
+      "entry": "move-sheet",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 14
+    },
+    {
+      "entry": "move-image",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 15
+    },
+    {
+      "entry": "delete-image",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 16
+    },
+    {
+      "entry": "resize-image",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 17
+    },
+    {
+      "entry": "row-resize-drag",
+      "method": "U",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 18
+    },
+    {
+      "entry": "row-height",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 19
+    },
+    {
+      "entry": "insert-row",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 20
+    },
+    {
+      "entry": "delete-row",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 21
+    },
+    {
+      "entry": "merge",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 22
+    },
+    {
+      "entry": "bold",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 23
+    },
+    {
+      "entry": "conditional-format",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 24
+    },
+    {
+      "entry": "data-validation",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 25
+    },
+    {
+      "entry": "hyperlink",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 26
+    },
+    {
+      "entry": "note",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 27
+    },
+    {
+      "entry": "replace-all",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 28
+    }
+  ],
+  "summary": {
+    "blocked": [
+      "type-value",
+      "delete-content",
+      "paste",
+      "cut-paste",
+      "drag-fill",
+      "formula-bar",
+      "filter",
+      "sort",
+      "add-sheet",
+      "delete-sheet",
+      "rename-sheet",
+      "copy-sheet",
+      "hide-sheet",
+      "move-sheet",
+      "move-image",
+      "delete-image",
+      "resize-image",
+      "row-resize-drag",
+      "row-height",
+      "insert-row",
+      "delete-row",
+      "merge",
+      "bold",
+      "conditional-format",
+      "data-validation",
+      "hyperlink",
+      "note",
+      "replace-all"
+    ],
+    "detected": [],
+    "undetected": []
+  }
+}

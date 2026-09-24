@@ -1,0 +1,105 @@
+{
+  "check": "V07",
+  "scenario": "aggregate",
+  "worker": true,
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T18:02:21.389Z",
+  "idleWaitMs": 501.7000000476837,
+  "idleCalcSessions": 0,
+  "waitMs": {
+    "api": 2296.3000000715256,
+    "rule": 2318.7000000476837,
+    "timeoutAttempt": 68.20000004768372,
+    "recaptureApi": 2234.899999976158,
+    "recaptureRule": 510.5
+  },
+  "ruleOutcome": "settled",
+  "timeoutOutcome": "timeout",
+  "volatileRecalculated": null,
+  "forcedRecalcMs": 503.2000000476837,
+  "checks": {
+    "noWait": {
+      "checked": 4,
+      "mismatches": 4,
+      "sample": [
+        {
+          "cell": "聚合!C1",
+          "expected": 10027153,
+          "actual": 9927165
+        },
+        {
+          "cell": "聚合!C2",
+          "expected": 501.35765,
+          "actual": 496.35825
+        },
+        {
+          "cell": "聚合!C3",
+          "expected": 9959,
+          "actual": 9958
+        },
+        {
+          "cell": "聚合!C4",
+          "expected": 99999,
+          "actual": 1000
+        }
+      ]
+    },
+    "api": {
+      "checked": 4,
+      "mismatches": 0,
+      "sample": []
+    },
+    "rule": {
+      "checked": 4,
+      "mismatches": 0,
+      "sample": []
+    },
+    "timedOut": {
+      "checked": 4,
+      "mismatches": 3,
+      "sample": [
+        {
+          "cell": "聚合!C1",
+          "expected": 9981475,
+          "actual": 9939499
+        },
+        {
+          "cell": "聚合!C2",
+          "expected": 499.07375,
+          "actual": 496.97495
+        },
+        {
+          "cell": "聚合!C4",
+          "expected": 54321,
+          "actual": 12345
+        }
+      ]
+    },
+    "recaptureApi": {
+      "checked": 4,
+      "mismatches": 0,
+      "sample": []
+    },
+    "recaptureRule": {
+      "checked": 4,
+      "mismatches": 0,
+      "sample": []
+    },
+    "reopened": {
+      "checked": 4,
+      "mismatches": 0,
+      "sample": []
+    },
+    "forced": {
+      "checked": 4,
+      "mismatches": 0,
+      "sample": []
+    }
+  },
+  "detections": 3
+}

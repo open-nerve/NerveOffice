@@ -1,0 +1,107 @@
+{
+  "check": "V06-open-quiet",
+  "sample": "empty",
+  "kind": "sheet",
+  "generated": false,
+  "worker": true,
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T17:16:43.106Z",
+  "bytes": 1117,
+  "timings": {
+    "t0": 279.60000002384186,
+    "ready": 23.100000023841858,
+    "rendered": 423.60000002384186,
+    "steady": 3462.899999976158
+  },
+  "detections": [],
+  "mutations": [
+    {
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit",
+      "options": [],
+      "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+    }
+  ],
+  "syncOnly": [],
+  "total": 15,
+  "lateDiff": [],
+  "openDiffCount": 14,
+  "openDiff": [
+    {
+      "path": "$.sheets.sheet-1.tabColor",
+      "kind": "added",
+      "after": "\"\""
+    },
+    {
+      "path": "$.sheets.sheet-1.hidden",
+      "kind": "added",
+      "after": "0"
+    },
+    {
+      "path": "$.sheets.sheet-1.freeze",
+      "kind": "added",
+      "after": "{\"xSplit\":0,\"ySplit\":0,\"startRow\":-1,\"startColumn\":-1}"
+    },
+    {
+      "path": "$.sheets.sheet-1.defaultColumnWidth",
+      "kind": "added",
+      "after": "88"
+    },
+    {
+      "path": "$.sheets.sheet-1.defaultRowHeight",
+      "kind": "added",
+      "after": "24"
+    },
+    {
+      "path": "$.sheets.sheet-1.mergeData",
+      "kind": "added",
+      "after": "[]"
+    },
+    {
+      "path": "$.sheets.sheet-1.rowData",
+      "kind": "added",
+      "after": "{}"
+    },
+    {
+      "path": "$.sheets.sheet-1.columnData",
+      "kind": "added",
+      "after": "{}"
+    },
+    {
+      "path": "$.sheets.sheet-1.showGridlines",
+      "kind": "added",
+      "after": "1"
+    },
+    {
+      "path": "$.sheets.sheet-1.rowHeader",
+      "kind": "added",
+      "after": "{\"width\":46,\"hidden\":0}"
+    },
+    {
+      "path": "$.sheets.sheet-1.columnHeader",
+      "kind": "added",
+      "after": "{\"height\":20,\"hidden\":0}"
+    },
+    {
+      "path": "$.sheets.sheet-1.rightToLeft",
+      "kind": "added",
+      "after": "0"
+    },
+    {
+      "path": "$.appVersion",
+      "kind": "added",
+      "after": "\"1.0.0\""
+    },
+    {
+      "path": "$.resources",
+      "kind": "added",
+      "after": "[{\"name\":\"SHEET_AuthzIoMockService_PLUGIN\",\"data\":null},{\"name\":\"SHEET_CONDITIONAL_FORMATTING_PLUGIN\",\"data\":null},{\"name\":\"SHEET_DATA_VALIDATION_PLUGIN\",\"da..."
+    }
+  ],
+  "errors": []
+}

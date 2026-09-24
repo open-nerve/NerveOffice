@@ -1,4 +1,5 @@
 import type { ILanguagePack, Plugin, PluginCtor } from '@univerjs/core';
+import type { UiOptions } from './ui-config';
 
 /** 一个插件及其配置，按注册顺序排列。 */
 export type PluginEntry = readonly [PluginCtor<Plugin>, unknown?];
@@ -8,6 +9,14 @@ export interface ProfileOptions {
     container: HTMLElement;
     /** 可选的 Web Worker 工厂：表格用于公式计算，文字文档用于排版。 */
     createWorker?: () => Worker;
+    /** 界面配置：菜单隐藏等，按编辑 / 阅读模式取值（P3）。 */
+    ui: UiOptions;
+    /** 大表操作拆分（SDK 默认开启）。关掉后复制大工作表同步执行（V06）。 */
+    largeSheetSplit: boolean;
+    /** 打开时的公式计算模式：默认 WHEN_EMPTY；forced 用作 V07 的重算基准。 */
+    calcMode: 'default' | 'forced';
+    /** 公式引擎每执行多少个公式让出一次主线程；缺省用 SDK 的默认值 500（V10 比较让出间隔）。 */
+    formulaIntervalCount?: number;
 }
 
 /**
@@ -34,6 +43,10 @@ export interface EditorProfile {
     worker?: 'formula' | 'layout';
     groups: PluginGroup[];
     locale: ILanguagePack;
+    /** 界面配置（P3）。 */
+    ui: Record<'edit' | 'read', UiOptions>;
+    /** 变更检测的排除名单（P3）：随 SDK 版本维护，并纳入回归。 */
+    changeDetectionExclude: string[];
 }
 
 /** 按档案展开插件列表；`without` 中的组被去掉（只允许去掉可单独去掉的组）。 */

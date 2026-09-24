@@ -1,0 +1,138 @@
+{
+  "check": "V06-actions",
+  "action": "table",
+  "kind": "doc",
+  "worker": false,
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T17:31:09.417Z",
+  "quiet": {
+    "waitedMs": 995.3999999761581,
+    "formula": "n/a",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [
+      "doc.mutation.rich-text-editing"
+    ],
+    "mutations": [
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-doc-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 7
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 7
+  },
+  "timeline": [
+    {
+      "dt": 308,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.tableSource.iN8CQL",
+      "kind": "added",
+      "after": "{\"tableRows\":[{\"tableCells\":[{\"margin\":{\"start\":{\"v\":10},\"end\":{\"v\":10},\"top\":{\"v\":5},\"bottom\":{\"v\":5}}},{\"margin\":{\"start\":{\"v\":10},\"end\":{\"v\":10},\"top\":{\"v..."
+    },
+    {
+      "path": "$.body.dataStream",
+      "kind": "changed",
+      "before": "\"文档标题\\r副标题：M0 文字文档样本\\r一级标题\\r正文段落：加粗、斜体、下划线、删除线、H2O、x2、红色、高亮、大号宋体。中英文混排 English text 与标点，检查换行。\\r居中段落\\r右对齐段落\\r二级标题\\r三级标题\\r四级标题\\r五级标题\\r\\r无序列表第一项\\r无序列表嵌套项\\r有序列表第...",
+      "after": "\"文档标题\\r副标题：M0 文字文档样本\\r一级标题\\r正文段落：加粗、斜体、下划线、删除线、H2O、x2、红色、高亮、大号宋体。中英文混排 English text 与标点，检查换行。\\r居中段落\\r右对齐段落\\r二级标题\\r三级标题\\r四级标题\\r五级标题\\r\\r无序列表第一项\\r无序列表嵌套项\\r有序列表第..."
+    },
+    {
+      "path": "$.body.paragraphs[29].startIndex",
+      "kind": "changed",
+      "before": "228",
+      "after": "231"
+    },
+    {
+      "path": "$.body.paragraphs[29].paragraphId",
+      "kind": "changed",
+      "before": "\"para_8MdDDBuv2fSL\"",
+      "after": "\"para_tC424Ms7yYrz\""
+    },
+    {
+      "path": "$.body.paragraphs[29].paragraphStyle",
+      "kind": "added",
+      "after": "{\"spaceAbove\":{\"v\":3},\"lineSpacing\":2,\"spaceBelow\":{\"v\":0}}"
+    },
+    {
+      "path": "$.body.paragraphs[30]",
+      "kind": "added",
+      "after": "{\"startIndex\":235,\"paragraphId\":\"para_eWSuRJiceuyI\",\"paragraphStyle\":{\"spaceAbove\":{\"v\":3},\"lineSpacing\":2,\"spaceBelow\":{\"v\":0}}}"
+    },
+    {
+      "path": "$.body.paragraphs[31]",
+      "kind": "added",
+      "after": "{\"startIndex\":241,\"paragraphId\":\"para_guIZwkQt3QAW\",\"paragraphStyle\":{\"spaceAbove\":{\"v\":3},\"lineSpacing\":2,\"spaceBelow\":{\"v\":0}}}"
+    },
+    {
+      "path": "$.body.paragraphs[32]",
+      "kind": "added",
+      "after": "{\"startIndex\":245,\"paragraphId\":\"para_GuS18LEKCZXG\",\"paragraphStyle\":{\"spaceAbove\":{\"v\":3},\"lineSpacing\":2,\"spaceBelow\":{\"v\":0}}}"
+    },
+    {
+      "path": "$.body.paragraphs[33]",
+      "kind": "added",
+      "after": "{\"startIndex\":250,\"paragraphId\":\"para_xXa8XtPl49EZ\"}"
+    },
+    {
+      "path": "$.body.paragraphs[34]",
+      "kind": "added",
+      "after": "{\"startIndex\":251,\"paragraphId\":\"para_8MdDDBuv2fSL\"}"
+    },
+    {
+      "path": "$.body.textRuns[10]",
+      "kind": "added",
+      "after": "{\"st\":228,\"ed\":250,\"ts\":{\"cl\":{\"rgb\":\"#1B1C1F\"}}}"
+    },
+    {
+      "path": "$.body.tables[1]",
+      "kind": "added",
+      "after": "{\"startIndex\":228,\"endIndex\":250,\"tableId\":\"iN8CQL\"}"
+    },
+    {
+      "path": "$.body.sectionBreaks[9]",
+      "kind": "added",
+      "after": "{\"sectionId\":\"section_TfS7_3UZd9wd\",\"startIndex\":232}"
+    },
+    {
+      "path": "$.body.sectionBreaks[10]",
+      "kind": "added",
+      "after": "{\"sectionId\":\"section_6lt8Z3zLm_wS\",\"startIndex\":236}"
+    },
+    {
+      "path": "$.body.sectionBreaks[11]",
+      "kind": "added",
+      "after": "{\"sectionId\":\"section_saK4pQ4bTXv9\",\"startIndex\":242}"
+    },
+    {
+      "path": "$.body.sectionBreaks[12]",
+      "kind": "added",
+      "after": "{\"sectionId\":\"section_EjmFHe53DuQ-\",\"startIndex\":246}"
+    }
+  ],
+  "diffCount": 16,
+  "lateDiff": [],
+  "errors": []
+}

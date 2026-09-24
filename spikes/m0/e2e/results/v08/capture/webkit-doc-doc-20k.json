@@ -1,0 +1,208 @@
+{
+  "check": "V08-capture",
+  "sample": "doc-20k",
+  "kind": "doc",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T18:27:42.702Z",
+  "capture": {
+    "saveMs": {
+      "p50": 1,
+      "p95": 2,
+      "max": 2,
+      "min": 0,
+      "n": 10
+    },
+    "stringifyMs": {
+      "p50": 0,
+      "p95": 0,
+      "max": 0,
+      "min": 0,
+      "n": 10
+    },
+    "syncMs": {
+      "p50": 1,
+      "p95": 2,
+      "max": 2,
+      "min": 0,
+      "n": 10
+    },
+    "gzipMs": {
+      "p50": 7,
+      "p95": 11,
+      "max": 11,
+      "min": 6,
+      "n": 10
+    },
+    "hashMs": {
+      "p50": 0,
+      "p95": 2,
+      "max": 2,
+      "min": 0,
+      "n": 10
+    },
+    "totalMs": {
+      "p50": 9,
+      "p95": 12,
+      "max": 12,
+      "min": 7,
+      "n": 10
+    },
+    "asyncMaxGapMs": {
+      "p50": 7,
+      "p95": 8,
+      "max": 8,
+      "min": 4,
+      "n": 10
+    },
+    "longestTaskMs": null,
+    "jsonBytes": 92373,
+    "gzipBytes": 42970,
+    "ratio": 0.46517921903586545
+  },
+  "selfCheckMs": {
+    "p50": 1,
+    "p95": 2,
+    "max": 2,
+    "min": 0,
+    "n": 10
+  },
+  "canonical": null,
+  "endToEndMs": null,
+  "raw": [
+    {
+      "saveMs": 1,
+      "stringifyMs": 0,
+      "syncMs": 1,
+      "gzipMs": 7,
+      "hashMs": 0,
+      "totalMs": 8,
+      "jsonBytes": 92373,
+      "gzipBytes": 42970,
+      "asyncMaxGapMs": 7,
+      "longTasks": null,
+      "finishedAt": 5190
+    },
+    {
+      "saveMs": 2,
+      "stringifyMs": 0,
+      "syncMs": 2,
+      "gzipMs": 7,
+      "hashMs": 2,
+      "totalMs": 11,
+      "jsonBytes": 92373,
+      "gzipBytes": 42970,
+      "asyncMaxGapMs": 8,
+      "longTasks": null,
+      "finishedAt": 5402
+    },
+    {
+      "saveMs": 1,
+      "stringifyMs": 0,
+      "syncMs": 1,
+      "gzipMs": 7,
+      "hashMs": 0,
+      "totalMs": 8,
+      "jsonBytes": 92373,
+      "gzipBytes": 42970,
+      "asyncMaxGapMs": 6,
+      "longTasks": null,
+      "finishedAt": 5611
+    },
+    {
+      "saveMs": 1,
+      "stringifyMs": 0,
+      "syncMs": 1,
+      "gzipMs": 9,
+      "hashMs": 1,
+      "totalMs": 11,
+      "jsonBytes": 92373,
+      "gzipBytes": 42970,
+      "asyncMaxGapMs": 7,
+      "longTasks": null,
+      "finishedAt": 5825
+    },
+    {
+      "saveMs": 1,
+      "stringifyMs": 0,
+      "syncMs": 1,
+      "gzipMs": 6,
+      "hashMs": 0,
+      "totalMs": 7,
+      "jsonBytes": 92373,
+      "gzipBytes": 42970,
+      "asyncMaxGapMs": 5,
+      "longTasks": null,
+      "finishedAt": 6033
+    },
+    {
+      "saveMs": 1,
+      "stringifyMs": 0,
+      "syncMs": 1,
+      "gzipMs": 8,
+      "hashMs": 0,
+      "totalMs": 9,
+      "jsonBytes": 92373,
+      "gzipBytes": 42970,
+      "asyncMaxGapMs": 6,
+      "longTasks": null,
+      "finishedAt": 6243
+    },
+    {
+      "saveMs": 0,
+      "stringifyMs": 0,
+      "syncMs": 0,
+      "gzipMs": 7,
+      "hashMs": 0,
+      "totalMs": 7,
+      "jsonBytes": 92373,
+      "gzipBytes": 42970,
+      "asyncMaxGapMs": 4,
+      "longTasks": null,
+      "finishedAt": 6453
+    },
+    {
+      "saveMs": 1,
+      "stringifyMs": 0,
+      "syncMs": 1,
+      "gzipMs": 10,
+      "hashMs": 0,
+      "totalMs": 11,
+      "jsonBytes": 92373,
+      "gzipBytes": 42970,
+      "asyncMaxGapMs": 7,
+      "longTasks": null,
+      "finishedAt": 6665
+    },
+    {
+      "saveMs": 1,
+      "stringifyMs": 0,
+      "syncMs": 1,
+      "gzipMs": 11,
+      "hashMs": 0,
+      "totalMs": 12,
+      "jsonBytes": 92373,
+      "gzipBytes": 42970,
+      "asyncMaxGapMs": 8,
+      "longTasks": null,
+      "finishedAt": 6878
+    },
+    {
+      "saveMs": 1,
+      "stringifyMs": 0,
+      "syncMs": 1,
+      "gzipMs": 10,
+      "hashMs": 0,
+      "totalMs": 11,
+      "jsonBytes": 92373,
+      "gzipBytes": 42970,
+      "asyncMaxGapMs": 7,
+      "longTasks": null,
+      "finishedAt": 7091
+    }
+  ]
+}

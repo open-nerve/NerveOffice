@@ -1,0 +1,62 @@
+{
+  "check": "V09-control",
+  "kind": "doc",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T17:29:47.724Z",
+  "entries": [
+    {
+      "entry": "type",
+      "method": "U",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "delete",
+      "method": "U",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "paste",
+      "method": "U",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "bold",
+      "method": "U",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "heading",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "list",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "table",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "image",
+      "method": "F",
+      "changed": true,
+      "error": null
+    }
+  ],
+  "notChanged": []
+}

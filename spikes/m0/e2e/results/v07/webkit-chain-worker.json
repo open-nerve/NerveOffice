@@ -1,0 +1,94 @@
+{
+  "check": "V07",
+  "scenario": "chain",
+  "worker": true,
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T18:23:58.642Z",
+  "idleWaitMs": 500,
+  "idleCalcSessions": 0,
+  "waitMs": {
+    "api": 1034,
+    "rule": 1051,
+    "timeoutAttempt": 48,
+    "recaptureApi": 530,
+    "recaptureRule": 501
+  },
+  "ruleOutcome": "settled",
+  "timeoutOutcome": "applied",
+  "volatileRecalculated": null,
+  "forcedRecalcMs": 501,
+  "checks": {
+    "noWait": {
+      "checked": 199,
+      "mismatches": 199,
+      "sample": [
+        {
+          "cell": "链!A2",
+          "expected": 1001,
+          "actual": 2
+        },
+        {
+          "cell": "链!A3",
+          "expected": 1002,
+          "actual": 3
+        },
+        {
+          "cell": "链!A4",
+          "expected": 1003,
+          "actual": 4
+        },
+        {
+          "cell": "链!A5",
+          "expected": 1004,
+          "actual": 5
+        },
+        {
+          "cell": "链!A6",
+          "expected": 1005,
+          "actual": 6
+        }
+      ]
+    },
+    "api": {
+      "checked": 199,
+      "mismatches": 0,
+      "sample": []
+    },
+    "rule": {
+      "checked": 199,
+      "mismatches": 0,
+      "sample": []
+    },
+    "timedOut": {
+      "checked": 199,
+      "mismatches": 0,
+      "sample": []
+    },
+    "recaptureApi": {
+      "checked": 199,
+      "mismatches": 0,
+      "sample": []
+    },
+    "recaptureRule": {
+      "checked": 199,
+      "mismatches": 0,
+      "sample": []
+    },
+    "reopened": {
+      "checked": 199,
+      "mismatches": 0,
+      "sample": []
+    },
+    "forced": {
+      "checked": 199,
+      "mismatches": 0,
+      "sample": []
+    }
+  },
+  "detections": 3
+}

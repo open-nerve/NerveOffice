@@ -1,0 +1,357 @@
+{
+  "check": "V10",
+  "worker": true,
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T18:31:06.956Z",
+  "firstScreen": {
+    "renderedMs": {
+      "p50": 530,
+      "p95": 651,
+      "max": 651,
+      "min": 518,
+      "n": 5
+    },
+    "renderedColdMs": 651,
+    "renderedWarmMedianMs": 527,
+    "steadyMs": {
+      "p50": 3569,
+      "p95": 3715,
+      "max": 3715,
+      "min": 3552,
+      "n": 5
+    },
+    "longTasksBeforeRendered": [
+      -1,
+      -1,
+      -1,
+      -1,
+      -1
+    ],
+    "longestTaskBeforeRenderedMs": {
+      "p50": 0,
+      "p95": 0,
+      "max": 0,
+      "min": 0,
+      "n": 5
+    }
+  },
+  "firstInput": [
+    {
+      "canvasAt": 600,
+      "typedAt": 739,
+      "rendered": 520,
+      "committedAt": 687,
+      "k3": "abc",
+      "accepted": true,
+      "detections": [
+        "sheet.mutation.set-range-values"
+      ],
+      "diff": [
+        {
+          "path": "$.styles.Ejds9Z",
+          "kind": "added",
+          "after": "{\"cl\":{\"rgb\":\"#1B1C1F\"}}"
+        },
+        {
+          "path": "$.sheets.XnWlhlYRmiq-1hTUg5gdf.cellData.2.10",
+          "kind": "added",
+          "after": "{\"v\":\"abc\",\"s\":\"Ejds9Z\",\"t\":1}"
+        }
+      ]
+    },
+    {
+      "canvasAt": 597,
+      "typedAt": 709,
+      "rendered": 515,
+      "committedAt": 672,
+      "k3": "abc",
+      "accepted": true,
+      "detections": [
+        "sheet.mutation.set-range-values"
+      ],
+      "diff": [
+        {
+          "path": "$.styles.Nv4tlD",
+          "kind": "added",
+          "after": "{\"cl\":{\"rgb\":\"#1B1C1F\"}}"
+        },
+        {
+          "path": "$.sheets.XnWlhlYRmiq-1hTUg5gdf.cellData.2.10",
+          "kind": "added",
+          "after": "{\"v\":\"abc\",\"s\":\"Nv4tlD\",\"t\":1}"
+        }
+      ]
+    },
+    {
+      "canvasAt": 599,
+      "typedAt": 716,
+      "rendered": 516,
+      "committedAt": 678,
+      "k3": "abc",
+      "accepted": true,
+      "detections": [
+        "sheet.mutation.set-range-values"
+      ],
+      "diff": [
+        {
+          "path": "$.styles.-Vetfe",
+          "kind": "added",
+          "after": "{\"cl\":{\"rgb\":\"#1B1C1F\"}}"
+        },
+        {
+          "path": "$.sheets.XnWlhlYRmiq-1hTUg5gdf.cellData.2.10",
+          "kind": "added",
+          "after": "{\"v\":\"abc\",\"s\":\"-Vetfe\",\"t\":1}"
+        }
+      ]
+    }
+  ],
+  "keyLatencyMs": {
+    "p50": 24,
+    "p95": 34,
+    "max": 47,
+    "min": 6,
+    "n": 90
+  },
+  "formulaMs": {
+    "incremental": {
+      "p50": 739,
+      "p95": 752,
+      "max": 752,
+      "min": 731,
+      "n": 5
+    },
+    "full": {
+      "p50": 802,
+      "p95": 804,
+      "max": 804,
+      "min": 799,
+      "n": 3
+    }
+  },
+  "formulaBlockMs": {
+    "incremental": {
+      "p50": 10,
+      "p95": 15,
+      "max": 15,
+      "min": 10,
+      "n": 5
+    },
+    "full": {
+      "p50": 10,
+      "p95": 10,
+      "max": 10,
+      "min": 10,
+      "n": 3
+    }
+  },
+  "formulaFrameGapMs": {
+    "incremental": {
+      "p50": 27,
+      "p95": 34,
+      "max": 34,
+      "min": 26,
+      "n": 5
+    },
+    "full": {
+      "p50": 27,
+      "p95": 28,
+      "max": 28,
+      "min": 27,
+      "n": 3
+    }
+  },
+  "formulaLongestTaskMs": {
+    "incremental": null,
+    "full": null
+  },
+  "heapBytes": {
+    "afterOpen": null,
+    "afterEdits": null
+  },
+  "raw": {
+    "opens": [
+      {
+        "rendered": 651,
+        "steady": 3715,
+        "longTasks": -1,
+        "longestTask": 0
+      },
+      {
+        "rendered": 530,
+        "steady": 3569,
+        "longTasks": -1,
+        "longestTask": 0
+      },
+      {
+        "rendered": 518,
+        "steady": 3552,
+        "longTasks": -1,
+        "longestTask": 0
+      },
+      {
+        "rendered": 538,
+        "steady": 3578,
+        "longTasks": -1,
+        "longestTask": 0
+      },
+      {
+        "rendered": 527,
+        "steady": 3567,
+        "longTasks": -1,
+        "longestTask": 0
+      }
+    ],
+    "keyLatency": [
+      38,
+      24,
+      31,
+      29,
+      25,
+      16,
+      29,
+      25,
+      9,
+      47,
+      16,
+      31,
+      26,
+      16,
+      29,
+      24,
+      31,
+      7,
+      31,
+      29,
+      25,
+      18,
+      30,
+      29,
+      18,
+      31,
+      7,
+      28,
+      37,
+      23,
+      21,
+      18,
+      24,
+      20,
+      18,
+      7,
+      25,
+      29,
+      28,
+      24,
+      18,
+      32,
+      27,
+      24,
+      8,
+      32,
+      22,
+      20,
+      18,
+      24,
+      21,
+      16,
+      25,
+      7,
+      34,
+      10,
+      22,
+      20,
+      21,
+      22,
+      18,
+      26,
+      6,
+      30,
+      21,
+      20,
+      42,
+      22,
+      20,
+      19,
+      24,
+      7,
+      28,
+      23,
+      26,
+      30,
+      28,
+      31,
+      26,
+      18,
+      11,
+      24,
+      17,
+      29,
+      27,
+      19,
+      32,
+      30,
+      18,
+      11
+    ],
+    "formula": {
+      "incremental": [
+        {
+          "ms": 752,
+          "blockMs": 15,
+          "frameGapMs": 34,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 739,
+          "blockMs": 10,
+          "frameGapMs": 26,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 742,
+          "blockMs": 12,
+          "frameGapMs": 30,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 731,
+          "blockMs": 10,
+          "frameGapMs": 26,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 732,
+          "blockMs": 10,
+          "frameGapMs": 27,
+          "longestTaskMs": null
+        }
+      ],
+      "full": [
+        {
+          "ms": 804,
+          "blockMs": 10,
+          "frameGapMs": 27,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 799,
+          "blockMs": 10,
+          "frameGapMs": 27,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 802,
+          "blockMs": 10,
+          "frameGapMs": 28,
+          "longestTaskMs": null
+        }
+      ]
+    }
+  }
+}

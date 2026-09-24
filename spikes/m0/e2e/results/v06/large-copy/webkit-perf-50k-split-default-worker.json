@@ -1,0 +1,116 @@
+{
+  "check": "V06-large-copy",
+  "sample": "perf-50k",
+  "config": {
+    "id": "split-default-worker",
+    "split": true,
+    "worker": true
+  },
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T18:42:54.181Z",
+  "copy": {
+    "syncMs": 17,
+    "name": "数据表 （副本）",
+    "idleMaxGapMs": 53
+  },
+  "quiet": {
+    "waitedMs": 929,
+    "formula": "settled",
+    "restarts": 0
+  },
+  "localMutations": {
+    "beforeS1": 28,
+    "afterS1": 0,
+    "lastBeforeS1Ms": 154,
+    "lastMs": 154
+  },
+  "capturedAfterMs": 929,
+  "sourceCells": 50010,
+  "copiedCellsImmediately": 3000,
+  "copiedCellsAtS1": 50010,
+  "copiedCellsAtS2": 50010,
+  "during": {
+    "detections": [
+      "sheet.mutation.insert-sheet"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.insert-sheet",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "p3-sheet-perf-50k"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      }
+    ],
+    "syncOnly": [
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.copy-worksheet-end"
+    ],
+    "total": 66
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 66
+  },
+  "lateDiffCount": 0,
+  "lateDiff": [],
+  "formulaInCopyMatches": true,
+  "removal": {
+    "ok": true,
+    "undoBefore": {
+      "undos": 1,
+      "redos": 0
+    },
+    "detections": [
+      "sheet.mutation.remove-sheet",
+      "sheet.mutation.set-range-values"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.remove-sheet",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "p3-sheet-perf-50k"
+      },
+      {
+        "id": "sheet.mutation.set-range-values",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "p3-sheet-perf-50k"
+      }
+    ],
+    "syncOnly": [],
+    "total": 82,
+    "undoAfterRemove": {
+      "undos": 2,
+      "redos": 0
+    }
+  }
+}
