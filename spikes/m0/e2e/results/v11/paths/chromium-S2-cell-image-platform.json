@@ -1,0 +1,70 @@
+{
+  "check": "V11-paths",
+  "case": {
+    "id": "S2-cell-image",
+    "kind": "sheet",
+    "method": "F",
+    "what": "工具栏\"插入单元格图片\"（sheet.command.insert-cell-image，文件选择框）"
+  },
+  "img": "platform",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T20:13:30.055Z",
+  "verdict": "全部为平台地址",
+  "actionError": null,
+  "added": [
+    {
+      "where": "/sheets/sheet-1/cellData/2/2/p/drawings/2d5iqX",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/5a9f0b7f-4b56-4ebc-b047-02e01ba0029e"
+    }
+  ],
+  "addedKinds": [
+    "platform"
+  ],
+  "stray": [],
+  "uploads": [
+    {
+      "status": 201,
+      "bytes": 188,
+      "reason": null,
+      "hasSession": true
+    }
+  ],
+  "reads": [
+    {
+      "status": 200,
+      "hasSession": true,
+      "mode": "no-cors",
+      "dest": "image"
+    }
+  ],
+  "load": [
+    {
+      "source": "/api/assets/5a9f0b7f-4b56-4ebc-b047-02e01ba0029e",
+      "cached": true,
+      "complete": true,
+      "width": 120
+    }
+  ],
+  "imageEvents": [
+    {
+      "kind": "save",
+      "ok": true,
+      "detail": "/api/assets/5a9f0b7f-4b56-4ebc-b047-02e01ba0029e"
+    }
+  ],
+  "detections": [
+    "sheet.mutation.set-range-values",
+    "sheet.mutation.set-worksheet-row-auto-height"
+  ],
+  "cspViolations": [],
+  "pageErrors": [],
+  "facadeError": null,
+  "snapshotBytes": 2848
+}

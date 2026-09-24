@@ -17,6 +17,8 @@ const { values } = parseArgs({
         dist: { type: 'string', default: 'dist' },
         csp: { type: 'string', default: 'full' },
         'report-log': { type: 'string', default: '' },
+        // P4：读取图片失败（401、403、404）时返回占位图，状态放在 X-Asset-Status 头里
+        'asset-fallback': { type: 'boolean', default: false },
     },
 });
 
@@ -96,7 +98,7 @@ const server = createServer(async (req, res) => {
             res.writeHead(204).end();
             return;
         }
-        if (await handleAssets(req, res, url)) return;
+        if (await handleAssets(req, res, url, { fallback: values['asset-fallback'] })) return;
         if (url.pathname === '/__csp-reports') {
             if (req.method === 'DELETE') {
                 reports.length = 0;
@@ -195,8 +197,8 @@ const server = createServer(async (req, res) => {
             'Cache-Control': 'no-store',
             'X-Content-Type-Options': 'nosniff',
             ...cspHeaders(cspMode, extname(filePath) === '.html'),
-            // 页面响应下发会话 Cookie：图片读取按会话鉴权（P4）
-            ...(extname(filePath) === '.html' ? sessionCookieHeader(req) : {}),
+            // 页面响应下发会话 Cookie：图片读取按会话鉴权（P4）；nosession=1 时不下发，用来验证没有会话时的读取
+            ...(extname(filePath) === '.html' && url.searchParams.get('nosession') !== '1' ? sessionCookieHeader(req) : {}),
         });
         if (req.method === 'HEAD') {
             res.end();

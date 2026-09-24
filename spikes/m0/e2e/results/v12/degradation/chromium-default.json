@@ -1,0 +1,58 @@
+{
+  "check": "V12-degradation",
+  "img": "default",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T20:21:18.181Z",
+  "copyToSystem": {
+    "ok": true,
+    "items": [
+      {
+        "type": "image/png",
+        "size": 423
+      }
+    ]
+  },
+  "saveCellImage": {
+    "executed": false,
+    "download": {
+      "ok": false,
+      "error": "TimeoutError: page.waitForEvent: Timeout 8000ms exceeded while waiting for event \"download\""
+    },
+    "csp": [
+      "connect-src data"
+    ],
+    "errors": [
+      "Failed to download image B8.png: TypeError: Failed to fetch",
+      "Failed to download image: TypeError: Failed to fetch"
+    ]
+  },
+  "preview": {
+    "images": [
+      {
+        "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAA",
+        "complete": true,
+        "width": 120
+      }
+    ],
+    "reads": []
+  },
+  "move": {
+    "moved": true,
+    "reads": [],
+    "errors": [
+      "Failed to download image B8.png: TypeError: Failed to fetch",
+      "Failed to download image: TypeError: Failed to fetch"
+    ]
+  },
+  "drop": {
+    "dragoverPrevented": true,
+    "dropPrevented": false,
+    "inserted": 0,
+    "url": "http://127.0.0.1:4780/sheet.html?sample=minimal&img=default&worker=1"
+  }
+}

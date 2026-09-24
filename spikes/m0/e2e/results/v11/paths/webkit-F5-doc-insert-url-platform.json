@@ -1,0 +1,37 @@
+{
+  "check": "V11-paths",
+  "case": {
+    "id": "F5-doc-insert-url",
+    "kind": "doc",
+    "method": "F",
+    "what": "FDocument.insertImage(外链)"
+  },
+  "img": "platform",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T20:49:31.009Z",
+  "verdict": "被命令守卫取消",
+  "actionError": null,
+  "added": [],
+  "addedKinds": [],
+  "stray": [],
+  "uploads": [],
+  "reads": [],
+  "load": [],
+  "imageEvents": [
+    {
+      "kind": "guard-cancel",
+      "ok": true,
+      "detail": "doc.command.insert-doc-image：external https://example.invalid/tracking.png"
+    }
+  ],
+  "detections": [],
+  "cspViolations": [],
+  "pageErrors": [],
+  "facadeError": null,
+  "snapshotBytes": 1162
+}

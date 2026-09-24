@@ -1,0 +1,112 @@
+{
+  "check": "V11-paths",
+  "case": {
+    "id": "D5-paste-html-external",
+    "kind": "doc",
+    "method": "P",
+    "what": "粘贴 HTML：外链、file:、blob: 的 <img>"
+  },
+  "img": "default",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T20:19:39.886Z",
+  "verdict": "含非平台地址：external、blob、file",
+  "actionError": null,
+  "added": [
+    {
+      "where": "/drawings/aEaDCG",
+      "kind": "external",
+      "imageSourceType": "URL",
+      "source": "https://example.invalid/tracking.png"
+    },
+    {
+      "where": "/drawings/c6d2ER",
+      "kind": "blob",
+      "imageSourceType": "URL",
+      "source": "blob:https://example.invalid/0f3e"
+    },
+    {
+      "where": "/drawings/oJMs_8",
+      "kind": "file",
+      "imageSourceType": "URL",
+      "source": "file:///C:/Users/me/a.png"
+    },
+    {
+      "where": "resources.DOC_DRAWING_PLUGIN/data/aEaDCG",
+      "kind": "external",
+      "imageSourceType": "URL",
+      "source": "https://example.invalid/tracking.png"
+    },
+    {
+      "where": "resources.DOC_DRAWING_PLUGIN/data/c6d2ER",
+      "kind": "blob",
+      "imageSourceType": "URL",
+      "source": "blob:https://example.invalid/0f3e"
+    },
+    {
+      "where": "resources.DOC_DRAWING_PLUGIN/data/oJMs_8",
+      "kind": "file",
+      "imageSourceType": "URL",
+      "source": "file:///C:/Users/me/a.png"
+    }
+  ],
+  "addedKinds": [
+    "external",
+    "blob",
+    "file"
+  ],
+  "stray": [],
+  "uploads": [],
+  "reads": [],
+  "load": [],
+  "imageEvents": [],
+  "detections": [
+    "doc.mutation.rich-text-editing"
+  ],
+  "cspViolations": [
+    {
+      "directive": "img-src",
+      "blocked": "https://example.invalid/tracking.png",
+      "disposition": "report"
+    },
+    {
+      "directive": "img-src",
+      "blocked": "https://example.invalid/tracking.png",
+      "disposition": "enforce"
+    },
+    {
+      "directive": "img-src",
+      "blocked": "blob",
+      "disposition": "report"
+    },
+    {
+      "directive": "img-src",
+      "blocked": "file",
+      "disposition": "report"
+    },
+    {
+      "directive": "img-src",
+      "blocked": "data",
+      "disposition": "report"
+    },
+    {
+      "directive": "img-src",
+      "blocked": "data",
+      "disposition": "report"
+    },
+    {
+      "directive": "img-src",
+      "blocked": "data",
+      "disposition": "report"
+    }
+  ],
+  "pageErrors": [
+    "Uncaught InvalidStateError: Failed to execute 'drawImage' on 'CanvasRenderingContext2D': The HTMLImageElement provided is in the 'broken' state. @ http://127.0."
+  ],
+  "facadeError": null,
+  "snapshotBytes": 4118
+}

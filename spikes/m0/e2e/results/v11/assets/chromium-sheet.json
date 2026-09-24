@@ -1,0 +1,120 @@
+{
+  "check": "V11-assets",
+  "kind": "sheet",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T20:09:32.577Z",
+  "sources": [
+    "/api/assets/a3a686cc-b2e4-4dc9-89d3-8db999540e31",
+    "/api/assets/fff398eb-05f2-4991-a6e7-239f0372dd6a"
+  ],
+  "uploaderCookie": [
+    {
+      "name": "m0_sid",
+      "httpOnly": true,
+      "sameSite": "Strict"
+    }
+  ],
+  "sameSession": {
+    "reads": [
+      {
+        "status": 200,
+        "hasSession": true,
+        "mode": "no-cors"
+      },
+      {
+        "status": 200,
+        "hasSession": true,
+        "mode": "cors"
+      }
+    ],
+    "load": [
+      {
+        "source": "/api/assets/a3a686cc-b2e4-4dc9-89d3-8db999540e31",
+        "cached": false,
+        "complete": false,
+        "width": 0
+      },
+      {
+        "source": "/api/assets/fff398eb-05f2-4991-a6e7-239f0372dd6a",
+        "cached": true,
+        "complete": true,
+        "width": 120
+      }
+    ],
+    "errors": []
+  },
+  "otherSession": {
+    "reads": [
+      {
+        "status": 200,
+        "hasSession": true
+      },
+      {
+        "status": 200,
+        "hasSession": true
+      }
+    ],
+    "load": [
+      {
+        "source": "/api/assets/a3a686cc-b2e4-4dc9-89d3-8db999540e31",
+        "cached": false,
+        "complete": false,
+        "width": 0
+      },
+      {
+        "source": "/api/assets/fff398eb-05f2-4991-a6e7-239f0372dd6a",
+        "cached": true,
+        "complete": true,
+        "width": 120
+      }
+    ],
+    "orphanStatus": 403,
+    "orphanStatusForUploader": 200,
+    "referencedStatus": 200,
+    "errors": []
+  },
+  "copy": {
+    "filesBefore": 3,
+    "filesAfter": 3,
+    "links": [
+      "a3a686cc-b2e4-4dc9-89d3-8db999540e31",
+      "fff398eb-05f2-4991-a6e7-239f0372dd6a"
+    ],
+    "statusAfterSourceDeleted": 200
+  },
+  "noCookie": {
+    "cookies": 0,
+    "reads": [
+      {
+        "status": 401,
+        "hasSession": false
+      },
+      {
+        "status": 401,
+        "hasSession": false
+      }
+    ],
+    "load": [
+      {
+        "source": "/api/assets/a3a686cc-b2e4-4dc9-89d3-8db999540e31",
+        "cached": false,
+        "complete": false,
+        "width": 0
+      },
+      {
+        "source": "/api/assets/fff398eb-05f2-4991-a6e7-239f0372dd6a",
+        "cached": false,
+        "complete": false,
+        "width": 0
+      }
+    ],
+    "errors": [
+      "Uncaught InvalidStateError: Failed to execute 'drawImage' on 'CanvasRenderingContext2D': The HTMLImageElement provided is in the 'broken' state. @ http://127.0."
+    ]
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "check": "V11-validate",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T20:39:48.539Z",
+  "results": [
+    {
+      "img": "default",
+      "kind": "sheet",
+      "status": 422,
+      "body": "{\"error\":\"non-platform-image\",\"images\":[{\"where\":\"resources.SHEET_DRAWING_PLUGIN/sheet-1/data/lJkdEZ\",\"source\":\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr\",\"kind\":\"data\",\"imageSourceType\":\"BASE64\"}]}"
+    },
+    {
+      "img": "default",
+      "kind": "doc",
+      "status": 422,
+      "body": "{\"error\":\"non-platform-image\",\"images\":[{\"where\":\"/drawings/WrZwoH\",\"source\":\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr\",\"kind\":\"data\",\"imageSourceType\":\"BASE64\"},{\"where\":\"resources.DOC_DRAWING_PLUGIN/data/WrZwoH\",\"sourc"
+    },
+    {
+      "img": "platform",
+      "kind": "sheet",
+      "status": 204,
+      "body": null
+    },
+    {
+      "img": "platform",
+      "kind": "doc",
+      "status": 204,
+      "body": null
+    }
+  ]
+}

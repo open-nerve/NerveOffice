@@ -1,0 +1,81 @@
+{
+  "check": "V11-paths",
+  "case": {
+    "id": "S8-internal-copy",
+    "kind": "sheet",
+    "method": "U",
+    "what": "插入浮动图片后，快捷键复制、在别处粘贴（内部复制）"
+  },
+  "img": "platform",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T20:31:31.695Z",
+  "verdict": "全部为平台地址",
+  "actionError": null,
+  "added": [
+    {
+      "where": "resources.SHEET_DRAWING_PLUGIN/sheet-1/data/o94t9Q",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/e699f8ef-4b0c-4ff7-9eec-91d7a8517181"
+    }
+  ],
+  "addedKinds": [
+    "platform"
+  ],
+  "stray": [],
+  "uploads": [
+    {
+      "status": 201,
+      "bytes": 188,
+      "reason": null,
+      "hasSession": true
+    }
+  ],
+  "reads": [
+    {
+      "status": 200,
+      "hasSession": true,
+      "mode": "no-cors",
+      "dest": "image"
+    }
+  ],
+  "load": [
+    {
+      "source": "/api/assets/e699f8ef-4b0c-4ff7-9eec-91d7a8517181",
+      "cached": true,
+      "complete": true,
+      "width": 120
+    }
+  ],
+  "imageEvents": [
+    {
+      "kind": "save",
+      "ok": true,
+      "detail": "/api/assets/e699f8ef-4b0c-4ff7-9eec-91d7a8517181"
+    }
+  ],
+  "detections": [
+    "sheet.mutation.set-drawing-apply",
+    "sheet.mutation.set-range-values"
+  ],
+  "cspViolations": [
+    {
+      "directive": "style-src-attr",
+      "blocked": "inline",
+      "disposition": "report"
+    },
+    {
+      "directive": "style-src-attr",
+      "blocked": "inline",
+      "disposition": "report"
+    }
+  ],
+  "pageErrors": [],
+  "facadeError": null,
+  "snapshotBytes": 1943
+}

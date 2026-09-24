@@ -238,8 +238,16 @@ function json(res: ServerResponse, status: number, body: unknown): void {
 
 const ASSET_URL = /^\/api\/assets\/([0-9a-f-]{36})$/;
 
+export interface AssetOptions {
+    /**
+     * 读取失败（401、403、404）时返回平台的占位图（200，状态放在 X-Asset-Status 头里），而不是错误状态码。
+     * 编辑器用 <img> 读取图片，读取失败时 SDK 的渲染可能对破损的图片调用 drawImage，抛出未捕获的 InvalidStateError（P4 报告）。
+     */
+    fallback?: boolean;
+}
+
 /** 处理 /api/assets 与 /__assets；不是这些路径时返回 false。 */
-export async function handleAssets(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
+export async function handleAssets(req: IncomingMessage, res: ServerResponse, url: URL, options: AssetOptions = {}): Promise<boolean> {
     if (url.pathname === '/api/assets' && req.method === 'POST') {
         const session = sessionOf(req);
         const claimedType = req.headers['content-type'];
@@ -299,13 +307,15 @@ export async function handleAssets(req: IncomingMessage, res: ServerResponse, ur
             secFetchDest: req.headers['sec-fetch-dest'] as string | undefined,
             secFetchSite: req.headers['sec-fetch-site'] as string | undefined,
         });
-        if (status !== 200) {
+        if (status !== 200 && !options.fallback) {
             res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }).end(String(status));
             return true;
         }
-        const bytes = files.get(record!.fileHash)!;
+        const served = status === 200 ? record! : assets.get(PLACEHOLDER_ASSET_ID)!;
+        const bytes = files.get(served.fileHash)!;
         res.writeHead(200, {
-            'Content-Type': record!.type,
+            'Content-Type': served.type,
+            'X-Asset-Status': String(status),
             'Content-Length': bytes.length,
             'X-Content-Type-Options': 'nosniff',
             // 资源不可变；验证服务不缓存，便于核对每次读取都经过鉴权

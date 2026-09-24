@@ -53,8 +53,17 @@ export const sheetUi = {
     read: { menu: hide([...SHEET_PROTECTION_MENUS, ...SHEET_UNSUPPORTED_MENUS, ...SHEET_READ_MODE_MENUS]), addSheetButton: false, toolbar: false, contextMenu: false, footerMenus: false },
 } satisfies Record<'edit' | 'read', UiOptions>;
 
-/** 文字文档：开源版没有保护相关的菜单；不支持功能的入口由 P5 按能力矩阵补充。 */
+/**
+ * 文字文档本期不提供的入口（P4 起）：形状（00 号计划书 §4.3 要求隐藏）。形状写入 SVG 的 data URL，
+ * 平台配置下会被命令守卫取消，按钮点了没有反应，所以隐藏入口（P4 报告 §2.3）。其余入口由 P5 按能力矩阵补充。
+ */
+export const DOC_UNSUPPORTED_MENUS = [
+    'doc.command.menu-insert-shape',
+    'doc.command.menu-insert-shape.below',
+] as const;
+
+/** 文字文档：开源版没有保护相关的菜单。 */
 export const docUi = {
-    edit: { menu: {}, addSheetButton: false, toolbar: true, contextMenu: true, footerMenus: false },
-    read: { menu: {}, addSheetButton: false, toolbar: false, contextMenu: false, footerMenus: false },
+    edit: { menu: hide(DOC_UNSUPPORTED_MENUS), addSheetButton: false, toolbar: true, contextMenu: true, footerMenus: false },
+    read: { menu: hide(DOC_UNSUPPORTED_MENUS), addSheetButton: false, toolbar: false, contextMenu: false, footerMenus: false },
 } satisfies Record<'edit' | 'read', UiOptions>;

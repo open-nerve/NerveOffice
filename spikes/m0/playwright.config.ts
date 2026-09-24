@@ -1,12 +1,12 @@
 import { defineConfig } from '@playwright/test';
 
 // 端口、构建目录与输出目录可以用环境变量改掉，便于两套用例并行（例如回归与新 Phase 的功能用例）：
-// M0_PORT_BASE（默认 4700，占用 +0、+1、+2 三个端口）、M0_DIST（默认 dist）、M0_OUTPUT（默认 test-results）。
+// M0_PORT_BASE（默认 4700，占用 +0 到 +3 四个端口）、M0_DIST（默认 dist）、M0_OUTPUT（默认 test-results）。
 // 性能测量（V08、V10）必须单独运行。
 const PORT = Number(process.env.M0_PORT_BASE ?? 4700);
 const DIST = process.env.M0_DIST ?? 'dist';
-const server = (offset: number, csp: string) => ({
-    command: `node server/serve.ts --port ${PORT + offset} --csp ${csp} --dist ${DIST}`,
+const server = (offset: number, csp: string, extra = '') => ({
+    command: `node server/serve.ts --port ${PORT + offset} --csp ${csp} --dist ${DIST}${extra}`,
     url: `http://127.0.0.1:${PORT + offset}/index.html`,
     reuseExistingServer: false,
 });
@@ -26,7 +26,8 @@ export default defineConfig({
         trace: 'retain-on-failure',
     },
     // 同一份 dist 的三种 CSP 模式：full（全部响应带策略）、off（不带策略）、html-only（只有 HTML 带策略）
-    webServer: [server(0, 'full'), server(1, 'off'), server(2, 'html-only')],
+    // P4 另加一个：严格 CSP，读取图片失败时返回占位图（--asset-fallback）
+    webServer: [server(0, 'full'), server(1, 'off'), server(2, 'html-only'), server(3, 'full', ' --asset-fallback')],
     // 不使用 devices 预设：预设会改写 UA（例如把 Chromium 伪装成 Windows），
     // 而 Univer 按 UA 判断快捷键的修饰键。这里保持浏览器在本机的真实 UA。
     projects: [

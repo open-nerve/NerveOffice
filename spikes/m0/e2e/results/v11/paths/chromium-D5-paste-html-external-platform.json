@@ -1,0 +1,102 @@
+{
+  "check": "V11-paths",
+  "case": {
+    "id": "D5-paste-html-external",
+    "kind": "doc",
+    "method": "P",
+    "what": "粘贴 HTML：外链、file:、blob: 的 <img>"
+  },
+  "img": "platform",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T20:19:46.967Z",
+  "verdict": "全部为平台地址",
+  "actionError": null,
+  "added": [
+    {
+      "where": "/drawings/HHi76F",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/00000000-0000-4000-8000-000000000000"
+    },
+    {
+      "where": "/drawings/ntbElT",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/00000000-0000-4000-8000-000000000000"
+    },
+    {
+      "where": "/drawings/xA4J2P",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/00000000-0000-4000-8000-000000000000"
+    },
+    {
+      "where": "resources.DOC_DRAWING_PLUGIN/data/HHi76F",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/00000000-0000-4000-8000-000000000000"
+    },
+    {
+      "where": "resources.DOC_DRAWING_PLUGIN/data/ntbElT",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/00000000-0000-4000-8000-000000000000"
+    },
+    {
+      "where": "resources.DOC_DRAWING_PLUGIN/data/xA4J2P",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/00000000-0000-4000-8000-000000000000"
+    }
+  ],
+  "addedKinds": [
+    "platform"
+  ],
+  "stray": [],
+  "uploads": [],
+  "reads": [
+    {
+      "status": 200,
+      "hasSession": true,
+      "mode": "cors",
+      "dest": "image"
+    }
+  ],
+  "load": [
+    {
+      "source": "/api/assets/00000000-0000-4000-8000-000000000000",
+      "cached": true,
+      "complete": true,
+      "width": 160
+    }
+  ],
+  "imageEvents": [
+    {
+      "kind": "paste-replace",
+      "ok": true,
+      "detail": "external：https://example.invalid/tracking.png"
+    },
+    {
+      "kind": "paste-replace",
+      "ok": true,
+      "detail": "file：file:///C:/Users/me/a.png"
+    },
+    {
+      "kind": "paste-replace",
+      "ok": true,
+      "detail": "blob：blob:https://example.invalid/0f3e"
+    }
+  ],
+  "detections": [
+    "doc.mutation.rich-text-editing"
+  ],
+  "cspViolations": [],
+  "pageErrors": [],
+  "facadeError": null,
+  "snapshotBytes": 4218
+}

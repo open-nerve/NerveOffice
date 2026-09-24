@@ -1,0 +1,85 @@
+{
+  "check": "V11-assets",
+  "kind": "doc",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T20:38:42.086Z",
+  "sources": [
+    "/api/assets/dc23929f-e618-4e32-8496-3b34b4165523"
+  ],
+  "uploaderCookie": [
+    {
+      "name": "m0_sid",
+      "httpOnly": true,
+      "sameSite": "Strict"
+    }
+  ],
+  "sameSession": {
+    "reads": [
+      {
+        "status": 200,
+        "hasSession": true,
+        "mode": "cors"
+      }
+    ],
+    "load": [
+      {
+        "source": "/api/assets/dc23929f-e618-4e32-8496-3b34b4165523",
+        "cached": true,
+        "complete": true,
+        "width": 120
+      }
+    ],
+    "errors": []
+  },
+  "otherSession": {
+    "reads": [
+      {
+        "status": 200,
+        "hasSession": true
+      }
+    ],
+    "load": [
+      {
+        "source": "/api/assets/dc23929f-e618-4e32-8496-3b34b4165523",
+        "cached": true,
+        "complete": true,
+        "width": 120
+      }
+    ],
+    "orphanStatus": 403,
+    "orphanStatusForUploader": 200,
+    "referencedStatus": 200,
+    "errors": []
+  },
+  "copy": {
+    "filesBefore": 3,
+    "filesAfter": 3,
+    "links": [
+      "dc23929f-e618-4e32-8496-3b34b4165523"
+    ],
+    "statusAfterSourceDeleted": 200
+  },
+  "noCookie": {
+    "cookies": 0,
+    "reads": [
+      {
+        "status": 401,
+        "hasSession": false
+      }
+    ],
+    "load": [
+      {
+        "source": "/api/assets/dc23929f-e618-4e32-8496-3b34b4165523",
+        "cached": false,
+        "complete": false,
+        "width": 0
+      }
+    ],
+    "errors": []
+  }
+}

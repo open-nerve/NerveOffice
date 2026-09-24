@@ -1,0 +1,67 @@
+{
+  "check": "V11-fallback",
+  "kind": "doc",
+  "timestamp": "2026-09-24T20:12:42.421Z",
+  "results": [
+    {
+      "server": "error-status",
+      "run": 0,
+      "reads": [
+        200,
+        200,
+        401
+      ],
+      "errors": []
+    },
+    {
+      "server": "error-status",
+      "run": 1,
+      "reads": [
+        200,
+        401,
+        401
+      ],
+      "errors": []
+    },
+    {
+      "server": "error-status",
+      "run": 2,
+      "reads": [
+        401,
+        401,
+        401
+      ],
+      "errors": []
+    },
+    {
+      "server": "placeholder",
+      "run": 0,
+      "reads": [
+        200,
+        200,
+        401
+      ],
+      "errors": []
+    },
+    {
+      "server": "placeholder",
+      "run": 1,
+      "reads": [
+        200,
+        401,
+        401
+      ],
+      "errors": []
+    },
+    {
+      "server": "placeholder",
+      "run": 2,
+      "reads": [
+        401,
+        401,
+        401
+      ],
+      "errors": []
+    }
+  ]
+}

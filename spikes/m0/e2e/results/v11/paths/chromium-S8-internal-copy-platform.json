@@ -1,0 +1,81 @@
+{
+  "check": "V11-paths",
+  "case": {
+    "id": "S8-internal-copy",
+    "kind": "sheet",
+    "method": "U",
+    "what": "插入浮动图片后，快捷键复制、在别处粘贴（内部复制）"
+  },
+  "img": "platform",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T20:17:06.720Z",
+  "verdict": "全部为平台地址",
+  "actionError": null,
+  "added": [
+    {
+      "where": "resources.SHEET_DRAWING_PLUGIN/sheet-1/data/afbeBC",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/25323290-0a59-4629-b506-023ffdc7311a"
+    }
+  ],
+  "addedKinds": [
+    "platform"
+  ],
+  "stray": [],
+  "uploads": [
+    {
+      "status": 201,
+      "bytes": 188,
+      "reason": null,
+      "hasSession": true
+    }
+  ],
+  "reads": [
+    {
+      "status": 200,
+      "hasSession": true,
+      "mode": "no-cors",
+      "dest": "image"
+    }
+  ],
+  "load": [
+    {
+      "source": "/api/assets/25323290-0a59-4629-b506-023ffdc7311a",
+      "cached": true,
+      "complete": true,
+      "width": 120
+    }
+  ],
+  "imageEvents": [
+    {
+      "kind": "save",
+      "ok": true,
+      "detail": "/api/assets/25323290-0a59-4629-b506-023ffdc7311a"
+    }
+  ],
+  "detections": [
+    "sheet.mutation.set-drawing-apply",
+    "sheet.mutation.set-range-values"
+  ],
+  "cspViolations": [
+    {
+      "directive": "style-src-attr",
+      "blocked": "inline",
+      "disposition": "report"
+    },
+    {
+      "directive": "style-src-attr",
+      "blocked": "inline",
+      "disposition": "report"
+    }
+  ],
+  "pageErrors": [],
+  "facadeError": null,
+  "snapshotBytes": 1943
+}

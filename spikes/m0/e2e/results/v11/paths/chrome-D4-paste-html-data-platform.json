@@ -1,0 +1,80 @@
+{
+  "check": "V11-paths",
+  "case": {
+    "id": "D4-paste-html-data",
+    "kind": "doc",
+    "method": "P",
+    "what": "粘贴 HTML：<img src=\"data:...\">"
+  },
+  "img": "platform",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T20:33:59.142Z",
+  "verdict": "全部为平台地址",
+  "actionError": null,
+  "added": [
+    {
+      "where": "/drawings/pce63w",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/71d84616-5e9d-46cd-b1bc-16f8d0548f29"
+    },
+    {
+      "where": "resources.DOC_DRAWING_PLUGIN/data/pce63w",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/71d84616-5e9d-46cd-b1bc-16f8d0548f29"
+    }
+  ],
+  "addedKinds": [
+    "platform"
+  ],
+  "stray": [],
+  "uploads": [
+    {
+      "status": 201,
+      "bytes": 188,
+      "reason": null,
+      "hasSession": true
+    }
+  ],
+  "reads": [
+    {
+      "status": 200,
+      "hasSession": true,
+      "mode": "cors",
+      "dest": "image"
+    }
+  ],
+  "load": [
+    {
+      "source": "/api/assets/71d84616-5e9d-46cd-b1bc-16f8d0548f29",
+      "cached": true,
+      "complete": true,
+      "width": 120
+    }
+  ],
+  "imageEvents": [
+    {
+      "kind": "paste-upload",
+      "ok": true,
+      "detail": "/api/assets/71d84616-5e9d-46cd-b1bc-16f8d0548f29"
+    },
+    {
+      "kind": "paste-normalize",
+      "ok": true,
+      "detail": "http://127.0.0.1:4780/api/assets/71d84616-5e9d-46cd-b1bc-16f8d0548f29"
+    }
+  ],
+  "detections": [
+    "doc.mutation.rich-text-editing"
+  ],
+  "cspViolations": [],
+  "pageErrors": [],
+  "facadeError": null,
+  "snapshotBytes": 2254
+}

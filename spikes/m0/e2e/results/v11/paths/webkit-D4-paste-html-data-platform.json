@@ -1,0 +1,80 @@
+{
+  "check": "V11-paths",
+  "case": {
+    "id": "D4-paste-html-data",
+    "kind": "doc",
+    "method": "P",
+    "what": "粘贴 HTML：<img src=\"data:...\">"
+  },
+  "img": "platform",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T20:48:25.053Z",
+  "verdict": "全部为平台地址",
+  "actionError": null,
+  "added": [
+    {
+      "where": "/drawings/K-xkQG",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/c8fff475-b6ef-4401-83be-e66b4827e61b"
+    },
+    {
+      "where": "resources.DOC_DRAWING_PLUGIN/data/K-xkQG",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/c8fff475-b6ef-4401-83be-e66b4827e61b"
+    }
+  ],
+  "addedKinds": [
+    "platform"
+  ],
+  "stray": [],
+  "uploads": [
+    {
+      "status": 201,
+      "bytes": 188,
+      "reason": null,
+      "hasSession": true
+    }
+  ],
+  "reads": [
+    {
+      "status": 200,
+      "hasSession": true,
+      "mode": "cors",
+      "dest": "image"
+    }
+  ],
+  "load": [
+    {
+      "source": "/api/assets/c8fff475-b6ef-4401-83be-e66b4827e61b",
+      "cached": true,
+      "complete": true,
+      "width": 120
+    }
+  ],
+  "imageEvents": [
+    {
+      "kind": "paste-upload",
+      "ok": true,
+      "detail": "/api/assets/c8fff475-b6ef-4401-83be-e66b4827e61b"
+    },
+    {
+      "kind": "paste-normalize",
+      "ok": true,
+      "detail": "http://127.0.0.1:4780/api/assets/c8fff475-b6ef-4401-83be-e66b4827e61b"
+    }
+  ],
+  "detections": [
+    "doc.mutation.rich-text-editing"
+  ],
+  "cspViolations": [],
+  "pageErrors": [],
+  "facadeError": null,
+  "snapshotBytes": 2254
+}

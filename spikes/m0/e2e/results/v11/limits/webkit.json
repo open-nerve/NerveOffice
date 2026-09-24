@@ -1,0 +1,176 @@
+{
+  "check": "V11-limits",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T20:39:25.732Z",
+  "results": [
+    {
+      "kind": "sheet",
+      "case": "server-503",
+      "added": 0,
+      "uploads": [
+        {
+          "status": 503,
+          "reason": "故障注入"
+        }
+      ],
+      "imageEvents": [
+        {
+          "kind": "save",
+          "ok": false,
+          "detail": "image/png 188：upload failed: 503 → 4"
+        }
+      ],
+      "messages": [
+        "无效图片"
+      ],
+      "errors": [],
+      "error": null
+    },
+    {
+      "kind": "sheet",
+      "case": "client-too-large",
+      "added": 0,
+      "uploads": [],
+      "imageEvents": [
+        {
+          "kind": "save",
+          "ok": false,
+          "detail": "image/png 6291456：1 → 1"
+        }
+      ],
+      "messages": [
+        "图片大小超过限制, 限制为5M"
+      ],
+      "errors": [],
+      "error": null
+    },
+    {
+      "kind": "sheet",
+      "case": "client-svg",
+      "added": 0,
+      "uploads": [],
+      "imageEvents": [
+        {
+          "kind": "save",
+          "ok": false,
+          "detail": "image/svg+xml 71：2 → 2"
+        }
+      ],
+      "messages": [
+        "图片类型错误"
+      ],
+      "errors": [],
+      "error": null
+    },
+    {
+      "kind": "sheet",
+      "case": "server-fake-png",
+      "added": 0,
+      "uploads": [
+        {
+          "status": 415,
+          "reason": "不是 PNG、JPEG、WebP、GIF"
+        }
+      ],
+      "imageEvents": [
+        {
+          "kind": "save",
+          "ok": false,
+          "detail": "image/png 38：upload failed: 415 → 2"
+        }
+      ],
+      "messages": [
+        "图片类型错误"
+      ],
+      "errors": [],
+      "error": null
+    },
+    {
+      "kind": "doc",
+      "case": "server-503",
+      "added": 0,
+      "uploads": [
+        {
+          "status": 503,
+          "reason": "故障注入"
+        }
+      ],
+      "imageEvents": [
+        {
+          "kind": "save",
+          "ok": false,
+          "detail": "image/png 188：upload failed: 503 → 4"
+        }
+      ],
+      "messages": [
+        "无效图片"
+      ],
+      "errors": [],
+      "error": null
+    },
+    {
+      "kind": "doc",
+      "case": "client-too-large",
+      "added": 0,
+      "uploads": [],
+      "imageEvents": [
+        {
+          "kind": "save",
+          "ok": false,
+          "detail": "image/png 6291456：1 → 1"
+        }
+      ],
+      "messages": [
+        "图片大小超过限制, 限制为5M"
+      ],
+      "errors": [],
+      "error": null
+    },
+    {
+      "kind": "doc",
+      "case": "client-svg",
+      "added": 0,
+      "uploads": [],
+      "imageEvents": [
+        {
+          "kind": "save",
+          "ok": false,
+          "detail": "image/svg+xml 71：2 → 2"
+        }
+      ],
+      "messages": [
+        "图片类型错误"
+      ],
+      "errors": [],
+      "error": null
+    },
+    {
+      "kind": "doc",
+      "case": "server-fake-png",
+      "added": 0,
+      "uploads": [
+        {
+          "status": 415,
+          "reason": "不是 PNG、JPEG、WebP、GIF"
+        }
+      ],
+      "imageEvents": [
+        {
+          "kind": "save",
+          "ok": false,
+          "detail": "image/png 38：upload failed: 415 → 2"
+        }
+      ],
+      "messages": [
+        "图片类型错误"
+      ],
+      "errors": [],
+      "error": null
+    }
+  ]
+}

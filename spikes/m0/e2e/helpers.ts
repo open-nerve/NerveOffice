@@ -11,6 +11,8 @@ export const SERVERS = {
     full: `http://127.0.0.1:${PORT}`,
     off: `http://127.0.0.1:${PORT + 1}`,
     htmlOnly: `http://127.0.0.1:${PORT + 2}`,
+    /** 严格 CSP，读取图片失败时返回占位图（P4 的 --asset-fallback），见 server/assets.ts。 */
+    fallback: `http://127.0.0.1:${PORT + 3}`,
 } as const;
 
 /** 等待编辑器进入 Steady；页面报错时直接失败。 */
