@@ -17,7 +17,7 @@ function load(dir: string): { file: string; data: Json }[] {
         .map((f) => ({ file: f, data: JSON.parse(readFileSync(join(full, f), 'utf8')) as Json }));
 }
 
-const browserOf = (file: string) => BROWSERS.find((b) => file.startsWith(`${b}-`)) ?? '?';
+const browserOf = (file: string) => BROWSERS.find((b) => file.startsWith(`${b}-`) || file === `${b}.json`) ?? '?';
 const r0 = (x: number | null | undefined) => (x == null || Number.isNaN(x) ? '—' : String(Math.round(x)));
 const r1 = (x: number | null | undefined) => (x == null || Number.isNaN(x) ? '—' : x.toFixed(1));
 const kib = (x: number) => `${(x / 1024).toFixed(0)} KiB`;
@@ -147,11 +147,11 @@ function v10(): string {
     const out: string[] = ['## V10 性能基线（p50 / p95，毫秒）'];
     const list = load('v10');
     out.push(table(
-        ['浏览器', 'Worker', '到 Rendered', '到 Steady', 'Rendered 前最长长任务', '按键到下一帧', '增量计算', '全量重算', 'JS 堆：打开后 / 50 次编辑后'],
+        ['浏览器', 'Worker', '到 Rendered', '到 Steady', 'Rendered 前最长长任务', '按键到下一帧', '增量计算', '其间最长阻塞', '全量重算', '其间最长阻塞', 'JS 堆：打开后 / 50 次编辑后'],
         list.map((x) => {
             const d = x.data;
             const heap = d.heapBytes.afterOpen == null ? '无法测量' : `${(d.heapBytes.afterOpen / 1048576).toFixed(0)} / ${(d.heapBytes.afterEdits / 1048576).toFixed(0)} MiB`;
-            return [browserOf(x.file), d.worker ? '是' : '否', stat(d.firstScreen.renderedMs), stat(d.firstScreen.steadyMs), stat(d.firstScreen.longestTaskBeforeRenderedMs), stat(d.keyLatencyMs, 1), stat(d.formulaMs.incremental), stat(d.formulaMs.full), heap];
+            return [browserOf(x.file), d.worker ? '是' : '否', stat(d.firstScreen.renderedMs), stat(d.firstScreen.steadyMs), stat(d.firstScreen.longestTaskBeforeRenderedMs), stat(d.keyLatencyMs, 1), stat(d.formulaMs.incremental), stat(d.formulaBlockMs?.incremental), stat(d.formulaMs.full), stat(d.formulaBlockMs?.full), heap];
         }),
     ));
     return out.join('\n\n');

@@ -1,0 +1,43 @@
+{
+  "check": "V08-guard-overhead",
+  "sample": "doc-all",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T08:17:14.341Z",
+  "renderedMs": {
+    "off": {
+      "p50": 352,
+      "p95": 424,
+      "max": 424,
+      "min": 349,
+      "n": 5
+    },
+    "on": {
+      "p50": 346,
+      "p95": 349,
+      "max": 349,
+      "min": 344,
+      "n": 5
+    }
+  },
+  "raw": {
+    "off": [
+      424,
+      350,
+      349,
+      352,
+      357
+    ],
+    "on": [
+      344,
+      346,
+      348,
+      349,
+      345
+    ]
+  }
+}

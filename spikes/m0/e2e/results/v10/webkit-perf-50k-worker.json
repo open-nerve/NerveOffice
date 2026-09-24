@@ -1,0 +1,206 @@
+{
+  "check": "V10",
+  "worker": true,
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T08:25:24.301Z",
+  "firstScreen": {
+    "renderedMs": {
+      "p50": 515,
+      "p95": 647,
+      "max": 647,
+      "min": 507,
+      "n": 5
+    },
+    "steadyMs": {
+      "p50": 3549,
+      "p95": 3707,
+      "max": 3707,
+      "min": 3542,
+      "n": 5
+    },
+    "longTasksBeforeRendered": [
+      -1,
+      -1,
+      -1,
+      -1,
+      -1
+    ],
+    "longestTaskBeforeRenderedMs": {
+      "p50": 0,
+      "p95": 0,
+      "max": 0,
+      "min": 0,
+      "n": 5
+    }
+  },
+  "keyLatencyMs": {
+    "p50": 25,
+    "p95": 32,
+    "max": 42,
+    "min": 7,
+    "n": 60
+  },
+  "formulaMs": {
+    "incremental": {
+      "p50": 685,
+      "p95": 705,
+      "max": 705,
+      "min": 680,
+      "n": 5
+    },
+    "full": {
+      "p50": 745,
+      "p95": 749,
+      "max": 749,
+      "min": 740,
+      "n": 3
+    }
+  },
+  "formulaBlockMs": {
+    "incremental": {
+      "p50": 10,
+      "p95": 16,
+      "max": 16,
+      "min": 10,
+      "n": 5
+    },
+    "full": {
+      "p50": 10,
+      "p95": 10,
+      "max": 10,
+      "min": 10,
+      "n": 3
+    }
+  },
+  "heapBytes": {
+    "afterOpen": null,
+    "afterEdits": null
+  },
+  "raw": {
+    "opens": [
+      {
+        "rendered": 647,
+        "steady": 3707,
+        "longTasks": -1,
+        "longestTask": 0
+      },
+      {
+        "rendered": 513,
+        "steady": 3546,
+        "longTasks": -1,
+        "longestTask": 0
+      },
+      {
+        "rendered": 507,
+        "steady": 3542,
+        "longTasks": -1,
+        "longestTask": 0
+      },
+      {
+        "rendered": 529,
+        "steady": 3563,
+        "longTasks": -1,
+        "longestTask": 0
+      },
+      {
+        "rendered": 515,
+        "steady": 3549,
+        "longTasks": -1,
+        "longestTask": 0
+      }
+    ],
+    "keyLatency": [
+      10,
+      18,
+      31,
+      32,
+      28,
+      9,
+      29,
+      27,
+      31,
+      27,
+      26,
+      13,
+      24,
+      22,
+      26,
+      22,
+      29,
+      8,
+      25,
+      25,
+      23,
+      25,
+      22,
+      8,
+      23,
+      28,
+      32,
+      17,
+      28,
+      8,
+      15,
+      31,
+      29,
+      25,
+      21,
+      22,
+      30,
+      42,
+      16,
+      30,
+      27,
+      7,
+      22,
+      24,
+      34,
+      17,
+      32,
+      14,
+      26,
+      20,
+      18,
+      31,
+      34,
+      11,
+      30,
+      29,
+      30,
+      29,
+      26,
+      11
+    ],
+    "formula": {
+      "incremental": [
+        705,
+        688,
+        685,
+        680,
+        685
+      ],
+      "full": [
+        749,
+        745,
+        740
+      ],
+      "incrementalBlock": [
+        13,
+        10,
+        16,
+        10,
+        10
+      ],
+      "fullBlock": [
+        10,
+        10,
+        10
+      ]
+    }
+  }
+}

@@ -73,26 +73,33 @@ for (const worker of [false, true]) {
         await page.waitForTimeout(500);
         const keyLatency = await page.evaluate(() => (window as unknown as { __keyLatency: number[] }).__keyLatency);
 
-        // 3. 公式计算：增量（修改一个数据单元格）与全量（强制重算全部公式）
+        // 3. 公式计算：增量（修改一个数据单元格）与全量（强制重算全部公式）；同时测计算期间主线程的最长阻塞（界面冻结）
         const formula = await page.evaluate(async () => {
-            const api = window.__m0!.editor!.univerAPI;
+            const m0 = window.__m0!;
+            const api = m0.editor!.univerAPI;
             const f = api.getFormula();
             const ws = api.getActiveWorkbook()!.getSheetByName('数据表')!;
             const incremental: number[] = [];
+            const incrementalBlock: number[] = [];
             for (let i = 0; i < 5; i++) {
+                const probe = m0.perf!.probeEventLoopLag();
                 const t0 = performance.now();
                 ws.getRange(`D${i + 2}`).setValue(500 + i);
                 await f.onCalculationResultApplied(120_000);
                 incremental.push(performance.now() - t0);
+                incrementalBlock.push(probe.stop().maxGap);
             }
             const full: number[] = [];
+            const fullBlock: number[] = [];
             for (let i = 0; i < 3; i++) {
+                const probe = m0.perf!.probeEventLoopLag();
                 const t0 = performance.now();
                 f.executeCalculation();
                 await f.onCalculationResultApplied(120_000);
                 full.push(performance.now() - t0);
+                fullBlock.push(probe.stop().maxGap);
             }
-            return { incremental, full };
+            return { incremental, full, incrementalBlock, fullBlock };
         });
 
         // 4. 内存：再做 50 次编辑后读取
@@ -117,6 +124,8 @@ for (const worker of [false, true]) {
             },
             keyLatencyMs: stats(keyLatency),
             formulaMs: { incremental: stats(formula.incremental), full: stats(formula.full) },
+            // 计算期间主线程的最长阻塞（事件循环延迟探针，分辨率约 4 ms）
+            formulaBlockMs: { incremental: stats(formula.incrementalBlock), full: stats(formula.fullBlock) },
             heapBytes: { afterOpen: heapAfterOpen, afterEdits: heapAfterEdits },
             raw: { opens, keyLatency, formula },
         });
