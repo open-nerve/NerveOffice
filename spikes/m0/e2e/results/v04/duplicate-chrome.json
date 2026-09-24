@@ -1,0 +1,30 @@
+{
+  "check": "V04-duplicate-resource",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-23T20:29:16.182Z",
+  "bodyUrlsAfterLoad": [
+    "https://evil.example/phish",
+    "https://evil.example/phish"
+  ],
+  "serverCheckOnForged": {
+    "comparison": {
+      "unknown": [],
+      "duplicates": [
+        "DOC_HYPER_LINK_PLUGIN"
+      ],
+      "invalid": [],
+      "missing": [],
+      "emptied": [],
+      "changed": [
+        "DOC_HYPER_LINK_PLUGIN"
+      ]
+    },
+    "serverRejects": true,
+    "openCheckFails": true
+  }
+}

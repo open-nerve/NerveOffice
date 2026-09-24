@@ -1,0 +1,591 @@
+{
+  "id": "m0-sheet-core",
+  "sheetOrder": [
+    "sheet-1",
+    "3V7YELx3fhYhSXMiDMiiu",
+    "yYV6JgMIv_9J5akuNpOla"
+  ],
+  "name": "空白表格",
+  "appVersion": "1.0.0",
+  "locale": "zhCN",
+  "styles": {
+    "4nwD7-": {
+      "bl": 1
+    },
+    "HCS6ow": {
+      "bl": 1,
+      "bg": {
+        "rgb": "#dbeafe"
+      }
+    },
+    "l0tbUT": {
+      "bl": 1,
+      "bg": {
+        "rgb": "#dbeafe"
+      },
+      "ht": 2
+    },
+    "xa1NF8": {
+      "bl": 1,
+      "bg": {
+        "rgb": "#dbeafe"
+      },
+      "ht": 2,
+      "bd": {
+        "b": {
+          "s": 8,
+          "cl": {
+            "rgb": "#1d4ed8"
+          }
+        }
+      }
+    },
+    "Kf8h3-": {
+      "n": {
+        "pattern": "yyyy-mm-dd"
+      }
+    },
+    "h0YL83": {
+      "n": {
+        "pattern": "0.00%"
+      }
+    },
+    "WJA68-": {
+      "n": {
+        "pattern": "\"¥\"#,##0.00"
+      }
+    },
+    "uZoStZ": {
+      "n": {
+        "pattern": "0.000"
+      }
+    },
+    "jpqsO_": {
+      "tb": 3
+    },
+    "BYgKru": {
+      "tr": {
+        "a": 45
+      }
+    },
+    "0z8nxr": {
+      "ul": {
+        "s": 1
+      }
+    },
+    "Fmezow": {
+      "st": {
+        "s": 1
+      }
+    },
+    "Yi0TyT": {
+      "fs": 18
+    },
+    "megmV1": {
+      "ff": "SimSun"
+    },
+    "11b3zu": {
+      "ht": 3,
+      "vt": 3
+    }
+  },
+  "sheets": {
+    "sheet-1": {
+      "id": "sheet-1",
+      "name": "数据",
+      "rowCount": 200,
+      "columnCount": 26,
+      "cellData": {
+        "0": {
+          "0": {
+            "v": "名称",
+            "t": 1,
+            "s": "xa1NF8"
+          },
+          "1": {
+            "v": "数量",
+            "t": 1,
+            "s": "xa1NF8"
+          },
+          "2": {
+            "v": "日期",
+            "t": 1,
+            "s": "xa1NF8"
+          },
+          "3": {
+            "v": "比例",
+            "t": 1,
+            "s": "xa1NF8"
+          },
+          "4": {
+            "v": "金额",
+            "t": 1,
+            "s": "xa1NF8"
+          },
+          "5": {
+            "v": "精度",
+            "t": 1,
+            "s": "xa1NF8"
+          },
+          "6": {
+            "v": "拼接",
+            "t": 1,
+            "s": "xa1NF8"
+          }
+        },
+        "1": {
+          "0": {
+            "v": "苹果",
+            "t": 1
+          },
+          "1": {
+            "v": 12,
+            "t": 2
+          },
+          "2": {
+            "v": 45200,
+            "t": 2,
+            "s": "Kf8h3-"
+          },
+          "3": {
+            "v": 0.125,
+            "t": 2,
+            "s": "h0YL83"
+          },
+          "4": {
+            "v": 1234.5,
+            "t": 2,
+            "s": "WJA68-"
+          },
+          "5": {
+            "v": 3.14159,
+            "t": 2,
+            "s": "uZoStZ"
+          },
+          "6": {
+            "f": "=A2&\"-\"&B2",
+            "v": "苹果-12",
+            "t": 1
+          }
+        },
+        "2": {
+          "0": {
+            "v": "香蕉",
+            "t": 1
+          },
+          "1": {
+            "v": 7,
+            "t": 2
+          },
+          "2": {
+            "v": 45201,
+            "t": 2,
+            "s": "Kf8h3-"
+          },
+          "3": {
+            "v": 0.3,
+            "t": 2,
+            "s": "h0YL83"
+          },
+          "4": {
+            "v": 88,
+            "t": 2,
+            "s": "WJA68-"
+          },
+          "5": {
+            "v": 2.71828,
+            "t": 2,
+            "s": "uZoStZ"
+          }
+        },
+        "3": {
+          "0": {
+            "v": "橙子",
+            "t": 1
+          },
+          "1": {
+            "v": 30,
+            "t": 2
+          },
+          "2": {
+            "v": 45202,
+            "t": 2,
+            "s": "Kf8h3-"
+          },
+          "3": {
+            "v": 0.05,
+            "t": 2,
+            "s": "h0YL83"
+          },
+          "4": {
+            "v": 1500,
+            "t": 2,
+            "s": "WJA68-"
+          },
+          "5": {
+            "v": 1.41421,
+            "t": 2,
+            "s": "uZoStZ"
+          }
+        },
+        "4": {
+          "0": {
+            "v": "葡萄",
+            "t": 1
+          },
+          "1": {
+            "v": 18,
+            "t": 2
+          },
+          "2": {
+            "v": 45203,
+            "t": 2,
+            "s": "Kf8h3-"
+          },
+          "3": {
+            "v": 0.75,
+            "t": 2,
+            "s": "h0YL83"
+          },
+          "4": {
+            "v": 42.75,
+            "t": 2,
+            "s": "WJA68-"
+          },
+          "5": {
+            "v": 1.73205,
+            "t": 2,
+            "s": "uZoStZ"
+          }
+        },
+        "5": {
+          "0": {
+            "v": "西瓜",
+            "t": 1
+          },
+          "1": {
+            "v": 3,
+            "t": 2
+          },
+          "2": {
+            "v": 45204,
+            "t": 2,
+            "s": "Kf8h3-"
+          },
+          "3": {
+            "v": 1,
+            "t": 2,
+            "s": "h0YL83"
+          },
+          "4": {
+            "v": 9999.99,
+            "t": 2,
+            "s": "WJA68-"
+          },
+          "5": {
+            "v": 0.57721,
+            "t": 2,
+            "s": "uZoStZ"
+          }
+        },
+        "6": {
+          "1": {
+            "f": "=SUM(B2:B6)",
+            "v": 70,
+            "t": 2
+          }
+        },
+        "7": {
+          "1": {
+            "f": "=AVERAGE(B2:B6)",
+            "v": 14,
+            "t": 2
+          }
+        },
+        "8": {
+          "1": {
+            "f": "=SUM(数量合计区)",
+            "v": 70,
+            "t": 2
+          }
+        },
+        "9": {
+          "0": {
+            "p": {
+              "id": "d",
+              "documentStyle": {},
+              "drawings": {},
+              "drawingsOrder": [],
+              "body": {
+                "dataStream": "普通、加粗、红色斜体\r\n",
+                "customBlocks": [],
+                "customRanges": [],
+                "paragraphs": [
+                  {
+                    "startIndex": 10,
+                    "paragraphId": "para_7z70mAWiSR0T"
+                  }
+                ],
+                "textRuns": [
+                  {
+                    "ts": {
+                      "bl": 1
+                    },
+                    "st": 3,
+                    "ed": 5
+                  },
+                  {
+                    "ts": {
+                      "it": 1,
+                      "cl": {
+                        "rgb": "#dc2626"
+                      }
+                    },
+                    "st": 6,
+                    "ed": 10
+                  }
+                ],
+                "tables": [],
+                "sectionBreaks": [],
+                "customDecorations": []
+              }
+            }
+          }
+        },
+        "10": {
+          "0": {
+            "v": "换行的长文本：用来验证单元格内自动换行与行高的保存",
+            "t": 1,
+            "s": "jpqsO_"
+          },
+          "1": {
+            "v": "旋转45°",
+            "t": 1,
+            "s": "BYgKru"
+          },
+          "2": {
+            "v": "下划线",
+            "t": 1,
+            "s": "0z8nxr"
+          },
+          "3": {
+            "v": "删除线",
+            "t": 1,
+            "s": "Fmezow"
+          },
+          "4": {
+            "v": "大号字",
+            "t": 1,
+            "s": "Yi0TyT"
+          },
+          "5": {
+            "v": "宋体",
+            "t": 1,
+            "s": "megmV1"
+          },
+          "6": {
+            "v": "右下对齐",
+            "s": "11b3zu",
+            "t": 1
+          }
+        },
+        "12": {
+          "0": {
+            "v": "合并单元格 A13:C14",
+            "t": 1
+          }
+        }
+      },
+      "tabColor": "",
+      "hidden": 0,
+      "zoomRatio": 1,
+      "freeze": {
+        "startRow": 1,
+        "startColumn": 1,
+        "ySplit": 1,
+        "xSplit": 1
+      },
+      "scrollTop": 0,
+      "scrollLeft": 0,
+      "defaultColumnWidth": 88,
+      "defaultRowHeight": 24,
+      "mergeData": [
+        {
+          "startRow": 12,
+          "startColumn": 0,
+          "endRow": 13,
+          "endColumn": 2,
+          "startAbsoluteRefType": 0,
+          "endAbsoluteRefType": 0,
+          "rangeType": 0,
+          "unitId": "m0-sheet-core",
+          "sheetId": "sheet-1"
+        }
+      ],
+      "rowData": {
+        "10": {
+          "ah": 66
+        },
+        "13": {
+          "h": 40,
+          "ia": 0
+        },
+        "15": {
+          "hd": 1
+        }
+      },
+      "columnData": {
+        "0": {
+          "w": 120
+        },
+        "8": {
+          "hd": 1
+        }
+      },
+      "showGridlines": 1,
+      "rowHeader": {
+        "width": 46,
+        "hidden": 0
+      },
+      "columnHeader": {
+        "height": 20,
+        "hidden": 0
+      },
+      "rightToLeft": 0
+    },
+    "3V7YELx3fhYhSXMiDMiiu": {
+      "id": "3V7YELx3fhYhSXMiDMiiu",
+      "name": "汇总",
+      "tabColor": "#16a34a",
+      "hidden": 0,
+      "rowCount": 1000,
+      "columnCount": 20,
+      "zoomRatio": 1,
+      "scrollTop": 0,
+      "scrollLeft": 0,
+      "defaultColumnWidth": 88,
+      "defaultRowHeight": 24,
+      "showGridlines": 0,
+      "rightToLeft": 0,
+      "freeze": {
+        "xSplit": 0,
+        "ySplit": 0,
+        "startRow": -1,
+        "startColumn": -1
+      },
+      "rowHeader": {
+        "width": 46,
+        "hidden": 0
+      },
+      "columnHeader": {
+        "height": 20,
+        "hidden": 0
+      },
+      "mergeData": [],
+      "cellData": {
+        "0": {
+          "0": {
+            "f": "=SUM('数据'!B2:B6)",
+            "v": 70,
+            "t": 2
+          }
+        },
+        "1": {
+          "0": {
+            "f": "='数据'!A2",
+            "v": "苹果",
+            "t": 1
+          }
+        }
+      },
+      "rowData": {},
+      "columnData": {}
+    },
+    "yYV6JgMIv_9J5akuNpOla": {
+      "id": "yYV6JgMIv_9J5akuNpOla",
+      "name": "隐藏",
+      "tabColor": "",
+      "hidden": 1,
+      "rowCount": 1000,
+      "columnCount": 20,
+      "zoomRatio": 1,
+      "scrollTop": 0,
+      "scrollLeft": 0,
+      "defaultColumnWidth": 88,
+      "defaultRowHeight": 24,
+      "showGridlines": 1,
+      "rightToLeft": 0,
+      "freeze": {
+        "xSplit": 0,
+        "ySplit": 0,
+        "startRow": -1,
+        "startColumn": -1
+      },
+      "rowHeader": {
+        "width": 46,
+        "hidden": 0
+      },
+      "columnHeader": {
+        "height": 20,
+        "hidden": 0
+      },
+      "mergeData": [],
+      "cellData": {
+        "0": {
+          "0": {
+            "v": "隐藏工作表中的内容",
+            "t": 1
+          }
+        }
+      },
+      "rowData": {},
+      "columnData": {}
+    }
+  },
+  "resources": [
+    {
+      "name": "SHEET_RANGE_PROTECTION_PLUGIN",
+      "data": ""
+    },
+    {
+      "name": "SHEET_AuthzIoMockService_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_DRAWING_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+      "data": ""
+    },
+    {
+      "name": "SHEET_NOTE_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_DEFINED_NAME_PLUGIN",
+      "data": "{\"8Rx0dWzpYz\":{\"id\":\"8Rx0dWzpYz\",\"name\":\"数量合计区\",\"formulaOrRefString\":\"'数据'!$B$2:$B$6\",\"localSheetId\":\"AllDefaultWorkbook\"}}"
+    },
+    {
+      "name": "SHEET_RANGE_THEME_MODEL_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_FILTER_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_DATA_VALIDATION_PLUGIN",
+      "data": "{\"sheet-1\":[],\"3V7YELx3fhYhSXMiDMiiu\":[],\"yYV6JgMIv_9J5akuNpOla\":[]}"
+    }
+  ]
+}

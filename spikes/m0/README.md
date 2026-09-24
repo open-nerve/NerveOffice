@@ -27,6 +27,16 @@ node scripts/safari-selftest.ts  # 真实 Safari 自检（后台打开 Safari，
 
 验证结果以 JSON 写入 `e2e/results/`，随代码入库，作为验证报告的证据。
 
+P2 起的样本与存储：
+
+```bash
+M0_BUILD_SAMPLES=check npx playwright test e2e/v03-build-samples.spec.ts --project=chromium   # 核对样本构建器与预期语义
+M0_BUILD_SAMPLES=1 npx playwright test e2e/v03-build-samples.spec.ts --project=chromium       # 重新生成 fixtures（之后必须再 vite build）
+```
+
+- 文档存储（内存）：`GET/PUT /api/docs/:id`、`POST /api/docs/:id/copy?to=<新 id>`
+- 页面参数：`doc=<id>` 从存储加载；`without=<组,…>` 去掉插件组；`unit=<id>` 覆盖空白样本的 unitId；`guard=1` 启用资源加载错误捕获
+
 ## 目录
 
 | 路径 | 内容 |

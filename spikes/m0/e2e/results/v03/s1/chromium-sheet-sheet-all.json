@@ -1,0 +1,1456 @@
+{
+  "id": "m0-sheet-all",
+  "sheetOrder": [
+    "sheet-1",
+    "3EB0bwApYxHAp_aL_pN0v",
+    "BosGI6KRewWr9iRx1e2-J",
+    "qu7F_0n49etB111SblNln",
+    "3pom9bUkA1bNL7bRVYpBX"
+  ],
+  "name": "空白表格",
+  "appVersion": "1.0.0",
+  "locale": "zhCN",
+  "styles": {
+    "XYmMx8": {
+      "bl": 1
+    },
+    "georvE": {
+      "bl": 1,
+      "bg": {
+        "rgb": "#dbeafe"
+      }
+    },
+    "CMJM5E": {
+      "bl": 1,
+      "bg": {
+        "rgb": "#dbeafe"
+      },
+      "ht": 2
+    },
+    "kM4LyE": {
+      "bl": 1,
+      "bg": {
+        "rgb": "#dbeafe"
+      },
+      "ht": 2,
+      "bd": {
+        "b": {
+          "s": 8,
+          "cl": {
+            "rgb": "#1d4ed8"
+          }
+        }
+      }
+    },
+    "bIIa-Y": {
+      "n": {
+        "pattern": "yyyy-mm-dd"
+      }
+    },
+    "cDV5VH": {
+      "n": {
+        "pattern": "0.00%"
+      }
+    },
+    "NiLJOc": {
+      "n": {
+        "pattern": "\"¥\"#,##0.00"
+      }
+    },
+    "sRnxM1": {
+      "n": {
+        "pattern": "0.000"
+      }
+    },
+    "gsHuCJ": {
+      "tb": 3
+    },
+    "s9oe3g": {
+      "tr": {
+        "a": 45
+      }
+    },
+    "MuY1JE": {
+      "ul": {
+        "s": 1
+      }
+    },
+    "fOQP0U": {
+      "st": {
+        "s": 1
+      }
+    },
+    "wxoh2U": {
+      "fs": 18
+    },
+    "BR1mrp": {
+      "ff": "SimSun"
+    },
+    "A_YrCw": {
+      "ht": 3,
+      "vt": 3
+    }
+  },
+  "sheets": {
+    "sheet-1": {
+      "id": "sheet-1",
+      "name": "数据",
+      "rowCount": 200,
+      "columnCount": 26,
+      "cellData": {
+        "0": {
+          "0": {
+            "v": "名称",
+            "t": 1,
+            "s": "kM4LyE"
+          },
+          "1": {
+            "v": "数量",
+            "t": 1,
+            "s": "kM4LyE"
+          },
+          "2": {
+            "v": "日期",
+            "t": 1,
+            "s": "kM4LyE"
+          },
+          "3": {
+            "v": "比例",
+            "t": 1,
+            "s": "kM4LyE"
+          },
+          "4": {
+            "v": "金额",
+            "t": 1,
+            "s": "kM4LyE"
+          },
+          "5": {
+            "v": "精度",
+            "t": 1,
+            "s": "kM4LyE"
+          },
+          "6": {
+            "v": "拼接",
+            "t": 1,
+            "s": "kM4LyE"
+          }
+        },
+        "1": {
+          "0": {
+            "v": "苹果",
+            "t": 1
+          },
+          "1": {
+            "v": 12,
+            "t": 2
+          },
+          "2": {
+            "v": 45200,
+            "t": 2,
+            "s": "bIIa-Y"
+          },
+          "3": {
+            "v": 0.125,
+            "t": 2,
+            "s": "cDV5VH"
+          },
+          "4": {
+            "v": 1234.5,
+            "t": 2,
+            "s": "NiLJOc"
+          },
+          "5": {
+            "v": 3.14159,
+            "t": 2,
+            "s": "sRnxM1"
+          },
+          "6": {
+            "f": "=A2&\"-\"&B2",
+            "v": "苹果-12",
+            "t": 1
+          }
+        },
+        "2": {
+          "0": {
+            "v": "香蕉",
+            "t": 1
+          },
+          "1": {
+            "v": 7,
+            "t": 2
+          },
+          "2": {
+            "v": 45201,
+            "t": 2,
+            "s": "bIIa-Y"
+          },
+          "3": {
+            "v": 0.3,
+            "t": 2,
+            "s": "cDV5VH"
+          },
+          "4": {
+            "v": 88,
+            "t": 2,
+            "s": "NiLJOc"
+          },
+          "5": {
+            "v": 2.71828,
+            "t": 2,
+            "s": "sRnxM1"
+          }
+        },
+        "3": {
+          "0": {
+            "v": "橙子",
+            "t": 1
+          },
+          "1": {
+            "v": 30,
+            "t": 2
+          },
+          "2": {
+            "v": 45202,
+            "t": 2,
+            "s": "bIIa-Y"
+          },
+          "3": {
+            "v": 0.05,
+            "t": 2,
+            "s": "cDV5VH"
+          },
+          "4": {
+            "v": 1500,
+            "t": 2,
+            "s": "NiLJOc"
+          },
+          "5": {
+            "v": 1.41421,
+            "t": 2,
+            "s": "sRnxM1"
+          }
+        },
+        "4": {
+          "0": {
+            "v": "葡萄",
+            "t": 1
+          },
+          "1": {
+            "v": 18,
+            "t": 2
+          },
+          "2": {
+            "v": 45203,
+            "t": 2,
+            "s": "bIIa-Y"
+          },
+          "3": {
+            "v": 0.75,
+            "t": 2,
+            "s": "cDV5VH"
+          },
+          "4": {
+            "v": 42.75,
+            "t": 2,
+            "s": "NiLJOc"
+          },
+          "5": {
+            "v": 1.73205,
+            "t": 2,
+            "s": "sRnxM1"
+          }
+        },
+        "5": {
+          "0": {
+            "v": "西瓜",
+            "t": 1
+          },
+          "1": {
+            "v": 3,
+            "t": 2
+          },
+          "2": {
+            "v": 45204,
+            "t": 2,
+            "s": "bIIa-Y"
+          },
+          "3": {
+            "v": 1,
+            "t": 2,
+            "s": "cDV5VH"
+          },
+          "4": {
+            "v": 9999.99,
+            "t": 2,
+            "s": "NiLJOc"
+          },
+          "5": {
+            "v": 0.57721,
+            "t": 2,
+            "s": "sRnxM1"
+          }
+        },
+        "6": {
+          "1": {
+            "f": "=SUM(B2:B6)",
+            "v": 70,
+            "t": 2
+          }
+        },
+        "7": {
+          "1": {
+            "f": "=AVERAGE(B2:B6)",
+            "v": 14,
+            "t": 2
+          }
+        },
+        "8": {
+          "1": {
+            "f": "=SUM(数量合计区)",
+            "v": 70,
+            "t": 2
+          }
+        },
+        "9": {
+          "0": {
+            "p": {
+              "id": "d",
+              "documentStyle": {},
+              "drawings": {},
+              "drawingsOrder": [],
+              "body": {
+                "dataStream": "普通、加粗、红色斜体\r\n",
+                "customBlocks": [],
+                "customRanges": [],
+                "paragraphs": [
+                  {
+                    "startIndex": 10,
+                    "paragraphId": "para_9ARYvqmqULbm"
+                  }
+                ],
+                "textRuns": [
+                  {
+                    "ts": {
+                      "bl": 1
+                    },
+                    "st": 3,
+                    "ed": 5
+                  },
+                  {
+                    "ts": {
+                      "it": 1,
+                      "cl": {
+                        "rgb": "#dc2626"
+                      }
+                    },
+                    "st": 6,
+                    "ed": 10
+                  }
+                ],
+                "tables": [],
+                "sectionBreaks": [],
+                "customDecorations": []
+              }
+            }
+          }
+        },
+        "10": {
+          "0": {
+            "v": "换行的长文本：用来验证单元格内自动换行与行高的保存",
+            "t": 1,
+            "s": "gsHuCJ"
+          },
+          "1": {
+            "v": "旋转45°",
+            "t": 1,
+            "s": "s9oe3g"
+          },
+          "2": {
+            "v": "下划线",
+            "t": 1,
+            "s": "MuY1JE"
+          },
+          "3": {
+            "v": "删除线",
+            "t": 1,
+            "s": "fOQP0U"
+          },
+          "4": {
+            "v": "大号字",
+            "t": 1,
+            "s": "wxoh2U"
+          },
+          "5": {
+            "v": "宋体",
+            "t": 1,
+            "s": "BR1mrp"
+          },
+          "6": {
+            "v": "右下对齐",
+            "s": "A_YrCw",
+            "t": 1
+          }
+        },
+        "12": {
+          "0": {
+            "v": "合并单元格 A13:C14",
+            "t": 1
+          }
+        }
+      },
+      "tabColor": "",
+      "hidden": 0,
+      "zoomRatio": 1,
+      "freeze": {
+        "startRow": 1,
+        "startColumn": 1,
+        "ySplit": 1,
+        "xSplit": 1
+      },
+      "scrollTop": 0,
+      "scrollLeft": 0,
+      "defaultColumnWidth": 88,
+      "defaultRowHeight": 24,
+      "mergeData": [
+        {
+          "startRow": 12,
+          "startColumn": 0,
+          "endRow": 13,
+          "endColumn": 2,
+          "startAbsoluteRefType": 0,
+          "endAbsoluteRefType": 0,
+          "rangeType": 0,
+          "unitId": "m0-sheet-all",
+          "sheetId": "sheet-1"
+        }
+      ],
+      "rowData": {
+        "10": {
+          "ah": 66
+        },
+        "13": {
+          "h": 40,
+          "ia": 0
+        },
+        "15": {
+          "hd": 1
+        }
+      },
+      "columnData": {
+        "0": {
+          "w": 120
+        },
+        "8": {
+          "hd": 1
+        }
+      },
+      "showGridlines": 1,
+      "rowHeader": {
+        "width": 46,
+        "hidden": 0
+      },
+      "columnHeader": {
+        "height": 20,
+        "hidden": 0
+      },
+      "rightToLeft": 0
+    },
+    "3EB0bwApYxHAp_aL_pN0v": {
+      "id": "3EB0bwApYxHAp_aL_pN0v",
+      "name": "汇总",
+      "tabColor": "#16a34a",
+      "hidden": 0,
+      "rowCount": 1000,
+      "columnCount": 20,
+      "zoomRatio": 1,
+      "scrollTop": 0,
+      "scrollLeft": 0,
+      "defaultColumnWidth": 88,
+      "defaultRowHeight": 24,
+      "showGridlines": 0,
+      "rightToLeft": 0,
+      "freeze": {
+        "xSplit": 0,
+        "ySplit": 0,
+        "startRow": -1,
+        "startColumn": -1
+      },
+      "rowHeader": {
+        "width": 46,
+        "hidden": 0
+      },
+      "columnHeader": {
+        "height": 20,
+        "hidden": 0
+      },
+      "mergeData": [],
+      "cellData": {
+        "0": {
+          "0": {
+            "f": "=SUM('数据'!B2:B6)",
+            "v": 70,
+            "t": 2
+          }
+        },
+        "1": {
+          "0": {
+            "f": "='数据'!A2",
+            "v": "苹果",
+            "t": 1
+          }
+        }
+      },
+      "rowData": {},
+      "columnData": {}
+    },
+    "BosGI6KRewWr9iRx1e2-J": {
+      "id": "BosGI6KRewWr9iRx1e2-J",
+      "name": "隐藏",
+      "tabColor": "",
+      "hidden": 1,
+      "rowCount": 1000,
+      "columnCount": 20,
+      "zoomRatio": 1,
+      "scrollTop": 0,
+      "scrollLeft": 0,
+      "defaultColumnWidth": 88,
+      "defaultRowHeight": 24,
+      "showGridlines": 1,
+      "rightToLeft": 0,
+      "freeze": {
+        "xSplit": 0,
+        "ySplit": 0,
+        "startRow": -1,
+        "startColumn": -1
+      },
+      "rowHeader": {
+        "width": 46,
+        "hidden": 0
+      },
+      "columnHeader": {
+        "height": 20,
+        "hidden": 0
+      },
+      "mergeData": [],
+      "cellData": {
+        "0": {
+          "0": {
+            "v": "隐藏工作表中的内容",
+            "t": 1
+          }
+        }
+      },
+      "rowData": {},
+      "columnData": {}
+    },
+    "qu7F_0n49etB111SblNln": {
+      "id": "qu7F_0n49etB111SblNln",
+      "name": "功能",
+      "tabColor": "",
+      "hidden": 0,
+      "rowCount": 1000,
+      "columnCount": 20,
+      "zoomRatio": 1,
+      "scrollTop": 0,
+      "scrollLeft": 0,
+      "defaultColumnWidth": 88,
+      "defaultRowHeight": 24,
+      "showGridlines": 1,
+      "rightToLeft": 0,
+      "freeze": {
+        "xSplit": 0,
+        "ySplit": 0,
+        "startRow": -1,
+        "startColumn": -1
+      },
+      "rowHeader": {
+        "width": 46,
+        "hidden": 0
+      },
+      "columnHeader": {
+        "height": 20,
+        "hidden": 0
+      },
+      "mergeData": [],
+      "cellData": {
+        "0": {
+          "0": {
+            "v": 1,
+            "t": 2
+          },
+          "1": {
+            "v": 3,
+            "t": 2
+          },
+          "2": {
+            "v": 10,
+            "t": 2
+          },
+          "3": {
+            "v": 0,
+            "t": 2
+          },
+          "4": {
+            "v": "项目0",
+            "t": 1
+          },
+          "7": {
+            "v": "备注在这里",
+            "t": 1
+          }
+        },
+        "1": {
+          "0": {
+            "v": 2,
+            "t": 2
+          },
+          "1": {
+            "v": 6,
+            "t": 2
+          },
+          "2": {
+            "v": 9,
+            "t": 2
+          },
+          "3": {
+            "v": 1,
+            "t": 2
+          },
+          "4": {
+            "v": "项目1",
+            "t": 1
+          },
+          "7": {
+            "p": {
+              "id": "d",
+              "locale": "enUS",
+              "title": "",
+              "tableSource": {},
+              "drawings": {},
+              "drawingsOrder": [],
+              "headers": {},
+              "footers": {},
+              "notes": {},
+              "noteSettings": {},
+              "body": {
+                "dataStream": "回到数据表\r\n",
+                "textRuns": [],
+                "paragraphs": [
+                  {
+                    "startIndex": 5,
+                    "paragraphId": "para_n_WSZIGymVT7",
+                    "paragraphStyle": {
+                      "horizontalAlign": 0
+                    }
+                  }
+                ],
+                "sectionBreaks": [
+                  {
+                    "sectionId": "section_FIj-tVbMvhkV",
+                    "startIndex": 6
+                  }
+                ],
+                "customRanges": [
+                  {
+                    "startIndex": 0,
+                    "endIndex": 4,
+                    "rangeType": 0,
+                    "rangeId": "gnwpo1f90MChtTwg2tB5-",
+                    "properties": {
+                      "url": "#gid=sheet-1&range=A1"
+                    }
+                  }
+                ],
+                "customDecorations": []
+              },
+              "documentStyle": {
+                "pageSize": {
+                  "width": null,
+                  "height": null
+                },
+                "documentFlavor": 0,
+                "marginTop": 0,
+                "marginBottom": 2,
+                "marginRight": 2,
+                "marginLeft": 2,
+                "autoHyphenation": 1,
+                "doNotHyphenateCaps": 0,
+                "consecutiveHyphenLimit": 2,
+                "defaultHeaderId": "",
+                "defaultFooterId": "",
+                "evenPageHeaderId": "",
+                "evenPageFooterId": "",
+                "firstPageHeaderId": "",
+                "firstPageFooterId": "",
+                "evenAndOddHeaders": 0,
+                "useFirstPageHeaderFooter": 0,
+                "marginHeader": 30,
+                "marginFooter": 30,
+                "textStyle": {},
+                "defaultParagraphStyle": {
+                  "horizontalAlign": 0
+                },
+                "paragraphLineGapDefault": 0,
+                "renderConfig": {
+                  "horizontalAlign": 0,
+                  "verticalAlign": 0,
+                  "centerAngle": 0,
+                  "vertexAngle": 0,
+                  "wrapStrategy": 0
+                }
+              },
+              "settings": {}
+            }
+          }
+        },
+        "2": {
+          "0": {
+            "v": 3,
+            "t": 2
+          },
+          "1": {
+            "v": 9,
+            "t": 2
+          },
+          "2": {
+            "v": 8,
+            "t": 2
+          },
+          "3": {
+            "v": 2,
+            "t": 2
+          },
+          "4": {
+            "v": "项目2",
+            "t": 1
+          },
+          "7": {
+            "p": {
+              "id": "d",
+              "locale": "enUS",
+              "title": "",
+              "tableSource": {},
+              "drawings": {},
+              "drawingsOrder": [],
+              "headers": {},
+              "footers": {},
+              "notes": {},
+              "noteSettings": {},
+              "body": {
+                "dataStream": "外部链接\r\n",
+                "textRuns": [],
+                "paragraphs": [
+                  {
+                    "startIndex": 4,
+                    "paragraphId": "para_7iYNypofPyW6",
+                    "paragraphStyle": {
+                      "horizontalAlign": 0
+                    }
+                  }
+                ],
+                "sectionBreaks": [
+                  {
+                    "sectionId": "section_kXbxydCdRAa6",
+                    "startIndex": 5
+                  }
+                ],
+                "customRanges": [
+                  {
+                    "startIndex": 0,
+                    "endIndex": 3,
+                    "rangeType": 0,
+                    "rangeId": "vSOPb5qSg4IyexcSltiqp",
+                    "properties": {
+                      "url": "https://example.com/all"
+                    }
+                  }
+                ],
+                "customDecorations": []
+              },
+              "documentStyle": {
+                "pageSize": {
+                  "width": null,
+                  "height": null
+                },
+                "documentFlavor": 0,
+                "marginTop": 0,
+                "marginBottom": 2,
+                "marginRight": 2,
+                "marginLeft": 2,
+                "autoHyphenation": 1,
+                "doNotHyphenateCaps": 0,
+                "consecutiveHyphenLimit": 2,
+                "defaultHeaderId": "",
+                "defaultFooterId": "",
+                "evenPageHeaderId": "",
+                "evenPageFooterId": "",
+                "firstPageHeaderId": "",
+                "firstPageFooterId": "",
+                "evenAndOddHeaders": 0,
+                "useFirstPageHeaderFooter": 0,
+                "marginHeader": 30,
+                "marginFooter": 30,
+                "textStyle": {},
+                "defaultParagraphStyle": {
+                  "horizontalAlign": 0
+                },
+                "paragraphLineGapDefault": 0,
+                "renderConfig": {
+                  "horizontalAlign": 0,
+                  "verticalAlign": 0,
+                  "centerAngle": 0,
+                  "vertexAngle": 0,
+                  "wrapStrategy": 0
+                }
+              },
+              "settings": {}
+            }
+          }
+        },
+        "3": {
+          "0": {
+            "v": 4,
+            "t": 2
+          },
+          "1": {
+            "v": 12,
+            "t": 2
+          },
+          "2": {
+            "v": 7,
+            "t": 2
+          },
+          "3": {
+            "v": 3,
+            "t": 2
+          },
+          "4": {
+            "v": "项目0",
+            "t": 1
+          }
+        },
+        "4": {
+          "0": {
+            "v": 5,
+            "t": 2
+          },
+          "1": {
+            "v": 15,
+            "t": 2
+          },
+          "2": {
+            "v": 6,
+            "t": 2
+          },
+          "3": {
+            "v": 0,
+            "t": 2
+          },
+          "4": {
+            "v": "项目1",
+            "t": 1
+          },
+          "7": {
+            "p": {
+              "id": "d",
+              "locale": "enUS",
+              "title": "",
+              "tableSource": {},
+              "drawings": {
+                "cPrq-dKrbM9OmzU-Yksw6": {
+                  "unitId": "d",
+                  "subUnitId": "d",
+                  "drawingId": "cPrq-dKrbM9OmzU-Yksw6",
+                  "drawingType": 0,
+                  "imageSourceType": "URL",
+                  "source": "/fixtures-assets/orange-64x64.png",
+                  "transform": {
+                    "left": 0,
+                    "top": 0,
+                    "width": 41,
+                    "height": 41
+                  },
+                  "docTransform": {
+                    "size": {
+                      "width": 41,
+                      "height": 41
+                    },
+                    "positionH": {
+                      "relativeFrom": 0,
+                      "posOffset": 0
+                    },
+                    "positionV": {
+                      "relativeFrom": 1,
+                      "posOffset": 0
+                    },
+                    "angle": 0
+                  },
+                  "behindDoc": 0,
+                  "title": "",
+                  "description": "",
+                  "layoutType": 0,
+                  "wrapText": 0,
+                  "distB": 0,
+                  "distL": 0,
+                  "distR": 0,
+                  "distT": 0
+                }
+              },
+              "drawingsOrder": [
+                "cPrq-dKrbM9OmzU-Yksw6"
+              ],
+              "headers": {},
+              "footers": {},
+              "notes": {},
+              "noteSettings": {},
+              "body": {
+                "dataStream": "\r\b\r\n",
+                "textRuns": [],
+                "paragraphs": [
+                  {
+                    "startIndex": 0,
+                    "paragraphId": "para_u1lrz5e4x58F",
+                    "paragraphStyle": {
+                      "horizontalAlign": 0
+                    }
+                  },
+                  {
+                    "startIndex": 2,
+                    "paragraphId": "para_ODq0a9JK3HZz"
+                  }
+                ],
+                "sectionBreaks": [
+                  {
+                    "sectionId": "section_g5_Rr_8FpFT2",
+                    "startIndex": 3
+                  }
+                ],
+                "customBlocks": [
+                  {
+                    "startIndex": 1,
+                    "blockId": "cPrq-dKrbM9OmzU-Yksw6"
+                  }
+                ],
+                "customRanges": [],
+                "customDecorations": []
+              },
+              "documentStyle": {
+                "pageSize": {
+                  "width": null,
+                  "height": null
+                },
+                "documentFlavor": 0,
+                "marginTop": 0,
+                "marginBottom": 2,
+                "marginRight": 2,
+                "marginLeft": 2,
+                "autoHyphenation": 1,
+                "doNotHyphenateCaps": 0,
+                "consecutiveHyphenLimit": 2,
+                "defaultHeaderId": "",
+                "defaultFooterId": "",
+                "evenPageHeaderId": "",
+                "evenPageFooterId": "",
+                "firstPageHeaderId": "",
+                "firstPageFooterId": "",
+                "evenAndOddHeaders": 0,
+                "useFirstPageHeaderFooter": 0,
+                "marginHeader": 30,
+                "marginFooter": 30,
+                "textStyle": {},
+                "defaultParagraphStyle": {
+                  "horizontalAlign": 0
+                },
+                "paragraphLineGapDefault": 0,
+                "renderConfig": {
+                  "horizontalAlign": 0,
+                  "verticalAlign": 0,
+                  "centerAngle": 0,
+                  "vertexAngle": 0,
+                  "wrapStrategy": 0
+                }
+              },
+              "settings": {}
+            }
+          }
+        },
+        "5": {
+          "0": {
+            "v": 6,
+            "t": 2
+          },
+          "1": {
+            "v": 18,
+            "t": 2
+          },
+          "2": {
+            "v": 5,
+            "t": 2
+          },
+          "3": {
+            "v": 1,
+            "t": 2
+          },
+          "4": {
+            "v": "项目2",
+            "t": 1
+          }
+        },
+        "6": {
+          "0": {
+            "v": 7,
+            "t": 2
+          },
+          "1": {
+            "v": 21,
+            "t": 2
+          },
+          "2": {
+            "v": 4,
+            "t": 2
+          },
+          "3": {
+            "v": 2,
+            "t": 2
+          },
+          "4": {
+            "v": "项目0",
+            "t": 1
+          }
+        },
+        "7": {
+          "0": {
+            "v": 8,
+            "t": 2
+          },
+          "1": {
+            "v": 24,
+            "t": 2
+          },
+          "2": {
+            "v": 3,
+            "t": 2
+          },
+          "3": {
+            "v": 3,
+            "t": 2
+          },
+          "4": {
+            "v": "项目1",
+            "t": 1
+          }
+        },
+        "8": {
+          "0": {
+            "v": 9,
+            "t": 2
+          },
+          "1": {
+            "v": 27,
+            "t": 2
+          },
+          "2": {
+            "v": 2,
+            "t": 2
+          },
+          "3": {
+            "v": 0,
+            "t": 2
+          },
+          "4": {
+            "v": "项目2",
+            "t": 1
+          }
+        },
+        "9": {
+          "0": {
+            "v": 10,
+            "t": 2
+          },
+          "1": {
+            "v": 30,
+            "t": 2
+          },
+          "2": {
+            "v": 1,
+            "t": 2
+          },
+          "3": {
+            "v": 1,
+            "t": 2
+          },
+          "4": {
+            "v": "项目0",
+            "t": 1
+          }
+        }
+      },
+      "rowData": {
+        "4": {
+          "ah": 62
+        }
+      },
+      "columnData": {}
+    },
+    "3pom9bUkA1bNL7bRVYpBX": {
+      "id": "3pom9bUkA1bNL7bRVYpBX",
+      "name": "筛选",
+      "tabColor": "",
+      "hidden": 0,
+      "rowCount": 1000,
+      "columnCount": 20,
+      "zoomRatio": 1,
+      "scrollTop": 0,
+      "scrollLeft": 0,
+      "defaultColumnWidth": 88,
+      "defaultRowHeight": 24,
+      "showGridlines": 1,
+      "rightToLeft": 0,
+      "freeze": {
+        "xSplit": 0,
+        "ySplit": 0,
+        "startRow": -1,
+        "startColumn": -1
+      },
+      "rowHeader": {
+        "width": 46,
+        "hidden": 0
+      },
+      "columnHeader": {
+        "height": 20,
+        "hidden": 0
+      },
+      "mergeData": [],
+      "cellData": {
+        "0": {
+          "0": {
+            "v": "部门",
+            "t": 1
+          },
+          "1": {
+            "v": "姓名",
+            "t": 1
+          },
+          "2": {
+            "v": "金额",
+            "t": 1
+          }
+        },
+        "1": {
+          "0": {
+            "v": "研发",
+            "t": 1
+          },
+          "1": {
+            "v": "员工1",
+            "t": 1
+          },
+          "2": {
+            "v": 100,
+            "t": 2
+          }
+        },
+        "2": {
+          "0": {
+            "v": "市场",
+            "t": 1
+          },
+          "1": {
+            "v": "员工2",
+            "t": 1
+          },
+          "2": {
+            "v": 200,
+            "t": 2
+          }
+        },
+        "3": {
+          "0": {
+            "v": "运营",
+            "t": 1
+          },
+          "1": {
+            "v": "员工3",
+            "t": 1
+          },
+          "2": {
+            "v": 300,
+            "t": 2
+          }
+        },
+        "4": {
+          "0": {
+            "v": "研发",
+            "t": 1
+          },
+          "1": {
+            "v": "员工4",
+            "t": 1
+          },
+          "2": {
+            "v": 400,
+            "t": 2
+          }
+        },
+        "5": {
+          "0": {
+            "v": "市场",
+            "t": 1
+          },
+          "1": {
+            "v": "员工5",
+            "t": 1
+          },
+          "2": {
+            "v": 500,
+            "t": 2
+          }
+        },
+        "6": {
+          "0": {
+            "v": "运营",
+            "t": 1
+          },
+          "1": {
+            "v": "员工6",
+            "t": 1
+          },
+          "2": {
+            "v": 600,
+            "t": 2
+          }
+        },
+        "7": {
+          "0": {
+            "v": "研发",
+            "t": 1
+          },
+          "1": {
+            "v": "员工7",
+            "t": 1
+          },
+          "2": {
+            "v": 700,
+            "t": 2
+          }
+        },
+        "8": {
+          "0": {
+            "v": "市场",
+            "t": 1
+          },
+          "1": {
+            "v": "员工8",
+            "t": 1
+          },
+          "2": {
+            "v": 800,
+            "t": 2
+          }
+        },
+        "9": {
+          "0": {
+            "v": "运营",
+            "t": 1
+          },
+          "1": {
+            "v": "员工9",
+            "t": 1
+          },
+          "2": {
+            "v": 900,
+            "t": 2
+          }
+        },
+        "10": {
+          "0": {
+            "v": "研发",
+            "t": 1
+          },
+          "1": {
+            "v": "员工10",
+            "t": 1
+          },
+          "2": {
+            "v": 1000,
+            "t": 2
+          }
+        },
+        "11": {
+          "0": {
+            "v": "市场",
+            "t": 1
+          },
+          "1": {
+            "v": "员工11",
+            "t": 1
+          },
+          "2": {
+            "v": 1100,
+            "t": 2
+          }
+        },
+        "12": {
+          "0": {
+            "v": "运营",
+            "t": 1
+          },
+          "1": {
+            "v": "员工12",
+            "t": 1
+          },
+          "2": {
+            "v": 1200,
+            "t": 2
+          }
+        },
+        "13": {
+          "0": {
+            "v": "研发",
+            "t": 1
+          },
+          "1": {
+            "v": "员工13",
+            "t": 1
+          },
+          "2": {
+            "v": 1300,
+            "t": 2
+          }
+        },
+        "14": {
+          "0": {
+            "v": "市场",
+            "t": 1
+          },
+          "1": {
+            "v": "员工14",
+            "t": 1
+          },
+          "2": {
+            "v": 1400,
+            "t": 2
+          }
+        },
+        "15": {
+          "0": {
+            "v": "运营",
+            "t": 1
+          },
+          "1": {
+            "v": "员工15",
+            "t": 1
+          },
+          "2": {
+            "v": 1500,
+            "t": 2
+          }
+        },
+        "16": {
+          "0": {
+            "v": "研发",
+            "t": 1
+          },
+          "1": {
+            "v": "员工16",
+            "t": 1
+          },
+          "2": {
+            "v": 1600,
+            "t": 2
+          }
+        },
+        "17": {
+          "0": {
+            "v": "市场",
+            "t": 1
+          },
+          "1": {
+            "v": "员工17",
+            "t": 1
+          },
+          "2": {
+            "v": 1700,
+            "t": 2
+          }
+        },
+        "18": {
+          "0": {
+            "v": "运营",
+            "t": 1
+          },
+          "1": {
+            "v": "员工18",
+            "t": 1
+          },
+          "2": {
+            "v": 1800,
+            "t": 2
+          }
+        },
+        "19": {
+          "0": {
+            "v": "研发",
+            "t": 1
+          },
+          "1": {
+            "v": "员工19",
+            "t": 1
+          },
+          "2": {
+            "v": 1900,
+            "t": 2
+          }
+        }
+      },
+      "rowData": {},
+      "columnData": {}
+    }
+  },
+  "resources": [
+    {
+      "name": "SHEET_RANGE_PROTECTION_PLUGIN",
+      "data": ""
+    },
+    {
+      "name": "SHEET_AuthzIoMockService_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_DRAWING_PLUGIN",
+      "data": "{\"qu7F_0n49etB111SblNln\":{\"data\":{\"_txDmN\":{\"drawingId\":\"_txDmN\",\"drawingType\":0,\"imageSourceType\":\"URL\",\"source\":\"/fixtures-assets/blue-120x80.png\",\"unitId\":\"m0-sheet-all\",\"subUnitId\":\"qu7F_0n49etB111SblNln\",\"column\":9,\"columnOffset\":0,\"row\":1,\"rowOffset\":0,\"width\":120,\"height\":80,\"axisAlignSheetTransform\":{\"flipY\":false,\"flipX\":false,\"angle\":0,\"skewX\":0,\"skewY\":0,\"from\":{\"row\":1,\"rowOffset\":0,\"column\":9,\"columnOffset\":0},\"to\":{\"row\":4,\"rowOffset\":8,\"column\":10,\"columnOffset\":32}},\"sheetTransform\":{\"from\":{\"column\":9,\"columnOffset\":0,\"row\":1,\"rowOffset\":0},\"to\":{\"row\":4,\"rowOffset\":8,\"column\":10,\"columnOffset\":32},\"flipY\":false,\"flipX\":false,\"angle\":0,\"skewX\":0,\"skewY\":0},\"transform\":{\"flipY\":false,\"flipX\":false,\"angle\":0,\"skewX\":0,\"skewY\":0,\"left\":838,\"top\":44,\"width\":120,\"height\":80}}},\"order\":[\"_txDmN\"]}}"
+    },
+    {
+      "name": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+      "data": "{\"qu7F_0n49etB111SblNln\":[{\"rule\":{\"type\":\"highlightCell\",\"subType\":\"duplicateValues\",\"operator\":\"containsText\",\"value\":\"abc\",\"style\":{\"bg\":{\"rgb\":\"rgb(191,219,254)\"}}},\"ranges\":[{\"startRow\":0,\"startColumn\":3,\"endRow\":9,\"endColumn\":3,\"startAbsoluteRefType\":0,\"endAbsoluteRefType\":0,\"rangeType\":0,\"unitId\":\"m0-sheet-all\",\"sheetId\":\"qu7F_0n49etB111SblNln\"}],\"cfId\":\"ts4PKWPS\",\"stopIfTrue\":false},{\"rule\":{\"type\":\"highlightCell\",\"subType\":\"text\",\"operator\":\"containsText\",\"value\":\"1\",\"style\":{\"it\":1}},\"ranges\":[{\"startRow\":0,\"startColumn\":4,\"endRow\":9,\"endColumn\":4,\"startAbsoluteRefType\":0,\"endAbsoluteRefType\":0,\"rangeType\":0,\"unitId\":\"m0-sheet-all\",\"sheetId\":\"qu7F_0n49etB111SblNln\"}],\"cfId\":\"EzCpv29c\",\"stopIfTrue\":false},{\"rule\":{\"type\":\"highlightCell\",\"subType\":\"formula\",\"operator\":\"containsText\",\"value\":\"=D1>1\",\"style\":{\"cl\":{\"rgb\":\"rgb(124,58,237)\"},\"bl\":1}},\"ranges\":[{\"startRow\":0,\"startColumn\":3,\"endRow\":9,\"endColumn\":3,\"startAbsoluteRefType\":0,\"endAbsoluteRefType\":0,\"rangeType\":0,\"unitId\":\"m0-sheet-all\",\"sheetId\":\"qu7F_0n49etB111SblNln\"}],\"cfId\":\"Ded7zWrd\",\"stopIfTrue\":false},{\"rule\":{\"type\":\"colorScale\",\"config\":[{\"index\":0,\"color\":\"#f87171\",\"value\":{\"type\":\"min\"}},{\"index\":1,\"color\":\"#34d399\",\"value\":{\"type\":\"max\"}}]},\"ranges\":[{\"startRow\":0,\"startColumn\":2,\"endRow\":9,\"endColumn\":2,\"startAbsoluteRefType\":0,\"endAbsoluteRefType\":0,\"rangeType\":0,\"unitId\":\"m0-sheet-all\",\"sheetId\":\"qu7F_0n49etB111SblNln\"}],\"cfId\":\"K6b6TS3O\",\"stopIfTrue\":false},{\"rule\":{\"type\":\"dataBar\",\"isShowValue\":false,\"config\":{\"min\":{\"type\":\"min\"},\"max\":{\"type\":\"max\"},\"positiveColor\":\"#22c55e\",\"nativeColor\":\"#ef4444\",\"isGradient\":true}},\"ranges\":[{\"startRow\":0,\"startColumn\":1,\"endRow\":9,\"endColumn\":1,\"startAbsoluteRefType\":0,\"endAbsoluteRefType\":0,\"rangeType\":0,\"unitId\":\"m0-sheet-all\",\"sheetId\":\"qu7F_0n49etB111SblNln\"}],\"cfId\":\"oDK0-Tdn\",\"stopIfTrue\":false},{\"rule\":{\"type\":\"highlightCell\",\"subType\":\"number\",\"operator\":\"greaterThan\",\"value\":5,\"style\":{\"bg\":{\"rgb\":\"rgb(253,230,138)\"}}},\"ranges\":[{\"startRow\":0,\"startColumn\":0,\"endRow\":9,\"endColumn\":0,\"startAbsoluteRefType\":0,\"endAbsoluteRefType\":0,\"rangeType\":0,\"unitId\":\"m0-sheet-all\",\"sheetId\":\"qu7F_0n49etB111SblNln\"}],\"cfId\":\"YYE5f6Jg\",\"stopIfTrue\":false}]}"
+    },
+    {
+      "name": "SHEET_NOTE_PLUGIN",
+      "data": "{\"qu7F_0n49etB111SblNln\":{\"0\":{\"7\":{\"note\":\"综合样本中的备注\",\"width\":160,\"height\":60,\"id\":\"BQpT0T\",\"row\":0,\"col\":7}}}}"
+    },
+    {
+      "name": "SHEET_DEFINED_NAME_PLUGIN",
+      "data": "{\"xvxcIWa9V5\":{\"id\":\"xvxcIWa9V5\",\"name\":\"数量合计区\",\"formulaOrRefString\":\"'数据'!$B$2:$B$6\",\"localSheetId\":\"AllDefaultWorkbook\"}}"
+    },
+    {
+      "name": "SHEET_RANGE_THEME_MODEL_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_FILTER_PLUGIN",
+      "data": "{\"3pom9bUkA1bNL7bRVYpBX\":{\"ref\":{\"startRow\":0,\"startColumn\":0,\"endRow\":19,\"endColumn\":2,\"rangeType\":0},\"filterColumns\":[{\"colId\":0,\"filters\":{\"filters\":[\"研发\",\"运营\"]}}],\"cachedFilteredOut\":[11,14,17,2,5,8]}}"
+    },
+    {
+      "name": "SHEET_DATA_VALIDATION_PLUGIN",
+      "data": "{\"qu7F_0n49etB111SblNln\":[{\"uid\":\"XijnkCPgUtFN3p5wkr25q\",\"ranges\":[{\"startRow\":0,\"startColumn\":6,\"endRow\":9,\"endColumn\":6,\"startAbsoluteRefType\":0,\"endAbsoluteRefType\":0,\"rangeType\":0,\"unitId\":\"m0-sheet-all\",\"sheetId\":\"qu7F_0n49etB111SblNln\"}],\"type\":\"list\",\"formula1\":\"[\\\"是\\\",\\\"否\\\"]\",\"showDropDown\":true}]}"
+    }
+  ]
+}

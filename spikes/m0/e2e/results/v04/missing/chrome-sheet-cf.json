@@ -1,0 +1,40 @@
+{
+  "check": "V04-missing-plugin",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-23T20:26:33.370Z",
+  "case": {
+    "kind": "sheet",
+    "group": "cf",
+    "sample": "sheet-cf",
+    "resource": "SHEET_CONDITIONAL_FORMATTING_PLUGIN"
+  },
+  "comparison": {
+    "unknown": [],
+    "duplicates": [],
+    "invalid": [],
+    "missing": [
+      "SHEET_CONDITIONAL_FORMATTING_PLUGIN"
+    ],
+    "emptied": [],
+    "changed": []
+  },
+  "serverRejects": true,
+  "openCheckFails": true,
+  "inline": {
+    "before": {
+      "cellHyperlinks": 0,
+      "cellImages": 0
+    },
+    "after": {
+      "cellHyperlinks": 0,
+      "cellImages": 0
+    }
+  },
+  "pageErrors": [],
+  "consoleErrors": []
+}

@@ -1,0 +1,183 @@
+{
+  "id": "m0-sheet-protection",
+  "sheetOrder": [
+    "sheet-1",
+    "2PgQ1RzfJkDtZl5ucKU0v"
+  ],
+  "name": "空白表格",
+  "appVersion": "1.0.0",
+  "locale": "zhCN",
+  "styles": {},
+  "sheets": {
+    "sheet-1": {
+      "id": "sheet-1",
+      "name": "数据",
+      "rowCount": 200,
+      "columnCount": 26,
+      "cellData": {
+        "0": {
+          "0": {
+            "v": "受保护区域",
+            "t": 1
+          },
+          "1": {
+            "v": "受保护区域",
+            "t": 1
+          }
+        },
+        "1": {
+          "0": {
+            "v": "受保护区域",
+            "t": 1
+          },
+          "1": {
+            "v": "受保护区域",
+            "t": 1
+          }
+        },
+        "2": {
+          "0": {
+            "v": "受保护区域",
+            "t": 1
+          },
+          "1": {
+            "v": "受保护区域",
+            "t": 1
+          }
+        },
+        "3": {
+          "0": {
+            "v": "受保护区域",
+            "t": 1
+          },
+          "1": {
+            "v": "受保护区域",
+            "t": 1
+          }
+        },
+        "4": {
+          "0": {
+            "v": "受保护区域",
+            "t": 1
+          },
+          "1": {
+            "v": "受保护区域",
+            "t": 1
+          }
+        }
+      },
+      "tabColor": "",
+      "hidden": 0,
+      "zoomRatio": 1,
+      "freeze": {
+        "xSplit": 0,
+        "ySplit": 0,
+        "startRow": -1,
+        "startColumn": -1
+      },
+      "scrollTop": 0,
+      "scrollLeft": 0,
+      "defaultColumnWidth": 88,
+      "defaultRowHeight": 24,
+      "mergeData": [],
+      "rowData": {},
+      "columnData": {},
+      "showGridlines": 1,
+      "rowHeader": {
+        "width": 46,
+        "hidden": 0
+      },
+      "columnHeader": {
+        "height": 20,
+        "hidden": 0
+      },
+      "rightToLeft": 0
+    },
+    "2PgQ1RzfJkDtZl5ucKU0v": {
+      "id": "2PgQ1RzfJkDtZl5ucKU0v",
+      "name": "整表保护",
+      "tabColor": "",
+      "hidden": 0,
+      "rowCount": 1000,
+      "columnCount": 20,
+      "zoomRatio": 1,
+      "scrollTop": 0,
+      "scrollLeft": 0,
+      "defaultColumnWidth": 88,
+      "defaultRowHeight": 24,
+      "showGridlines": 1,
+      "rightToLeft": 0,
+      "freeze": {
+        "xSplit": 0,
+        "ySplit": 0,
+        "startRow": -1,
+        "startColumn": -1
+      },
+      "rowHeader": {
+        "width": 46,
+        "hidden": 0
+      },
+      "columnHeader": {
+        "height": 20,
+        "hidden": 0
+      },
+      "mergeData": [],
+      "cellData": {
+        "0": {
+          "0": {
+            "v": "整个工作表受保护",
+            "t": 1
+          }
+        }
+      },
+      "rowData": {},
+      "columnData": {}
+    }
+  },
+  "resources": [
+    {
+      "name": "SHEET_RANGE_PROTECTION_PLUGIN",
+      "data": "{\"sheet-1\":[{\"ranges\":[{\"startRow\":0,\"startColumn\":0,\"endRow\":4,\"endColumn\":1,\"startAbsoluteRefType\":0,\"endAbsoluteRefType\":0,\"rangeType\":0,\"unitId\":\"m0-sheet-protection\",\"sheetId\":\"sheet-1\"}],\"permissionId\":\"N9jYh3WY\",\"id\":\"ruleId_W_B38Z\",\"description\":\"保护区域\",\"unitType\":3,\"unitId\":\"m0-sheet-protection\",\"subUnitId\":\"sheet-1\",\"viewState\":\"othersCanView\",\"editState\":\"onlyMe\"}]}"
+    },
+    {
+      "name": "SHEET_AuthzIoMockService_PLUGIN",
+      "data": "{\"N9jYh3WY\":{\"objectType\":3,\"unitID\":\"m0-sheet-protection\",\"name\":\"保护区域\",\"strategies\":[{\"action\":6,\"role\":2},{\"action\":16,\"role\":2},{\"action\":17,\"role\":2},{\"action\":18,\"role\":2},{\"action\":19,\"role\":2},{\"action\":33,\"role\":2},{\"action\":34,\"role\":2},{\"action\":35,\"role\":2},{\"action\":36,\"role\":2},{\"action\":37,\"role\":2},{\"action\":38,\"role\":2},{\"action\":39,\"role\":2},{\"action\":40,\"role\":2}],\"selectRangeObject\":{\"collaborators\":[],\"unitID\":\"m0-sheet-protection\",\"name\":\"保护区域\",\"scope\":{\"edit\":2,\"read\":1}}},\"l5ufiBmr\":{\"objectType\":2,\"unitID\":\"m0-sheet-protection\",\"name\":\"\",\"strategies\":[{\"action\":6,\"role\":2},{\"action\":16,\"role\":2},{\"action\":17,\"role\":2},{\"action\":18,\"role\":2},{\"action\":19,\"role\":2},{\"action\":33,\"role\":2},{\"action\":34,\"role\":2},{\"action\":35,\"role\":2},{\"action\":36,\"role\":2},{\"action\":37,\"role\":2},{\"action\":38,\"role\":2},{\"action\":39,\"role\":2},{\"action\":40,\"role\":2}]}}"
+    },
+    {
+      "name": "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+      "data": "{\"m0-sheet-protection\":[{\"permissionId\":\"l5ufiBmr\",\"unitType\":2,\"unitId\":\"m0-sheet-protection\",\"subUnitId\":\"2PgQ1RzfJkDtZl5ucKU0v\",\"viewState\":\"othersCanView\",\"editState\":\"onlyMe\"}]}"
+    },
+    {
+      "name": "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_DRAWING_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+      "data": ""
+    },
+    {
+      "name": "SHEET_NOTE_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_DEFINED_NAME_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_RANGE_THEME_MODEL_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_FILTER_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_DATA_VALIDATION_PLUGIN",
+      "data": "{}"
+    }
+  ]
+}

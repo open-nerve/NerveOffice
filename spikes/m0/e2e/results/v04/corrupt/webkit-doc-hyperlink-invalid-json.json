@@ -1,0 +1,41 @@
+{
+  "check": "V04-corrupt-resource",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T20:38:21.442Z",
+  "case": {
+    "kind": "doc",
+    "sample": "doc-hyperlink",
+    "resource": "DOC_HYPER_LINK_PLUGIN",
+    "mode": "invalid-json",
+    "expect": "regenerated"
+  },
+  "afterLoad": "{\"links\":[{\"id\":\"waiYsCiSeqCbXze8cL6B6\",\"payload\":\"https://example.com/doc\"},{\"id\":\"ytLf41EA9o2jnm0usCxsj\",\"payload\":\"mailto:someone@example.com\"}]}",
+  "comparison": {
+    "unknown": [],
+    "duplicates": [],
+    "invalid": [],
+    "missing": [],
+    "emptied": [],
+    "changed": [
+      "DOC_HYPER_LINK_PLUGIN"
+    ]
+  },
+  "serverRejects": false,
+  "openCheckFails": false,
+  "loadErrorCapture": [
+    {
+      "name": "DOC_HYPER_LINK_PLUGIN",
+      "kind": "parse-threw",
+      "message": "SyntaxError: JSON Parse error: Unterminated string"
+    }
+  ],
+  "pageErrors": [],
+  "consoleErrors": [
+    "\u001b[97;104m[ResourceManagerService]\u001b[0m loadResources error SyntaxError: JSON Parse error: Unterminated string"
+  ]
+}

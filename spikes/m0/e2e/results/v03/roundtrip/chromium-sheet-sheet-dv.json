@@ -1,0 +1,213 @@
+{
+  "check": "V03",
+  "sample": "sheet/sheet-dv",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T21:41:34.316Z",
+  "resourceHooks": [
+    {
+      "name": "DOC_DRAWING_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_NOTE_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_OBJECT_PERMISSION_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_WORD_STYLES_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "SHEET_AuthzIoMockService_PLUGIN",
+      "businesses": [
+        2,
+        1,
+        3,
+        6
+      ]
+    },
+    {
+      "name": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_DATA_VALIDATION_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_DEFINED_NAME_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_DRAWING_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_FILTER_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_NOTE_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_RANGE_PROTECTION_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_RANGE_THEME_MODEL_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN",
+      "businesses": [
+        2
+      ]
+    }
+  ],
+  "declaredResources": [
+    "SHEET_AuthzIoMockService_PLUGIN",
+    "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+    "SHEET_DATA_VALIDATION_PLUGIN",
+    "SHEET_DEFINED_NAME_PLUGIN",
+    "SHEET_DRAWING_PLUGIN",
+    "SHEET_FILTER_PLUGIN",
+    "SHEET_NOTE_PLUGIN",
+    "SHEET_RANGE_PROTECTION_PLUGIN",
+    "SHEET_RANGE_THEME_MODEL_PLUGIN",
+    "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+    "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN"
+  ],
+  "semantics": {
+    "afterFirstOpen": {
+      "sheets": [
+        {
+          "name": "数据",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 5,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        }
+      ],
+      "definedNames": 0,
+      "formulas": 0,
+      "richTextCells": 0,
+      "cellImages": 0,
+      "hyperlinks": 0
+    },
+    "afterReopen": {
+      "sheets": [
+        {
+          "name": "数据",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 5,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        }
+      ],
+      "definedNames": 0,
+      "formulas": 0,
+      "richTextCells": 0,
+      "cellImages": 0,
+      "hyperlinks": 0
+    },
+    "expected": {
+      "sheets": [
+        {
+          "name": "数据",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 5,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        }
+      ],
+      "definedNames": 0,
+      "formulas": 0,
+      "richTextCells": 0,
+      "cellImages": 0,
+      "hyperlinks": 0
+    }
+  },
+  "stable12": true,
+  "stable12Diff": [],
+  "stable12EmptyEquivalent": [],
+  "stable23": true,
+  "stable23Diff": [],
+  "fidelity": {
+    "added": 0,
+    "removed": 0,
+    "changed": 0,
+    "emptyEquivalent": 1,
+    "entries": []
+  },
+  "baseline": {
+    "realDiff": [],
+    "resourcesChanged": []
+  },
+  "resources": {
+    "unknown": [],
+    "duplicates": [],
+    "invalid": [],
+    "missing": [],
+    "emptied": [],
+    "changed": []
+  },
+  "hashes": {
+    "s0": "4be5bb0d847db4e7086f2e2ef514460c860561e1261df896d9ee9b25018c690d",
+    "s1": "40705d9db25c083c1ea0a2b19b13c2a0f50524dc39a63a6f29a8c845c3a62aeb",
+    "s2": "40705d9db25c083c1ea0a2b19b13c2a0f50524dc39a63a6f29a8c845c3a62aeb",
+    "s3": "40705d9db25c083c1ea0a2b19b13c2a0f50524dc39a63a6f29a8c845c3a62aeb"
+  },
+  "pageErrors": [],
+  "consoleErrors": []
+}

@@ -1,0 +1,469 @@
+{
+  "id": "m0-sheet-hyperlink",
+  "sheetOrder": [
+    "sheet-1",
+    "93jJsfJ7wKzSP2pjS-eGz"
+  ],
+  "name": "空白表格",
+  "appVersion": "1.0.0",
+  "locale": "zhCN",
+  "styles": {},
+  "sheets": {
+    "sheet-1": {
+      "id": "sheet-1",
+      "name": "数据",
+      "rowCount": 200,
+      "columnCount": 26,
+      "cellData": {
+        "0": {
+          "0": {
+            "p": {
+              "id": "d",
+              "locale": "enUS",
+              "title": "",
+              "tableSource": {},
+              "drawings": {},
+              "drawingsOrder": [],
+              "headers": {},
+              "footers": {},
+              "notes": {},
+              "noteSettings": {},
+              "body": {
+                "dataStream": "外部网页\r\n",
+                "textRuns": [],
+                "paragraphs": [
+                  {
+                    "startIndex": 4,
+                    "paragraphId": "para_Bu6PaaTQNEfL",
+                    "paragraphStyle": {
+                      "horizontalAlign": 0
+                    }
+                  }
+                ],
+                "sectionBreaks": [
+                  {
+                    "sectionId": "section_weifLlcYPIrY",
+                    "startIndex": 5
+                  }
+                ],
+                "customRanges": [
+                  {
+                    "startIndex": 0,
+                    "endIndex": 3,
+                    "rangeType": 0,
+                    "rangeId": "POEAb8U5EzTIE8x98UBZg",
+                    "properties": {
+                      "url": "https://example.com/docs"
+                    }
+                  }
+                ],
+                "customDecorations": []
+              },
+              "documentStyle": {
+                "pageSize": {
+                  "width": null,
+                  "height": null
+                },
+                "documentFlavor": 0,
+                "marginTop": 0,
+                "marginBottom": 2,
+                "marginRight": 2,
+                "marginLeft": 2,
+                "autoHyphenation": 1,
+                "doNotHyphenateCaps": 0,
+                "consecutiveHyphenLimit": 2,
+                "defaultHeaderId": "",
+                "defaultFooterId": "",
+                "evenPageHeaderId": "",
+                "evenPageFooterId": "",
+                "firstPageHeaderId": "",
+                "firstPageFooterId": "",
+                "evenAndOddHeaders": 0,
+                "useFirstPageHeaderFooter": 0,
+                "marginHeader": 30,
+                "marginFooter": 30,
+                "textStyle": {},
+                "defaultParagraphStyle": {
+                  "horizontalAlign": 0
+                },
+                "paragraphLineGapDefault": 0,
+                "renderConfig": {
+                  "horizontalAlign": 0,
+                  "verticalAlign": 0,
+                  "centerAngle": 0,
+                  "vertexAngle": 0,
+                  "wrapStrategy": 0
+                }
+              },
+              "settings": {}
+            }
+          }
+        },
+        "1": {
+          "0": {
+            "p": {
+              "id": "d",
+              "locale": "enUS",
+              "title": "",
+              "tableSource": {},
+              "drawings": {},
+              "drawingsOrder": [],
+              "headers": {},
+              "footers": {},
+              "notes": {},
+              "noteSettings": {},
+              "body": {
+                "dataStream": "发邮件\r\n",
+                "textRuns": [],
+                "paragraphs": [
+                  {
+                    "startIndex": 3,
+                    "paragraphId": "para_L5IQzp6zzCpb",
+                    "paragraphStyle": {
+                      "horizontalAlign": 0
+                    }
+                  }
+                ],
+                "sectionBreaks": [
+                  {
+                    "sectionId": "section_-34bvLaKC_5l",
+                    "startIndex": 4
+                  }
+                ],
+                "customRanges": [
+                  {
+                    "startIndex": 0,
+                    "endIndex": 2,
+                    "rangeType": 0,
+                    "rangeId": "CYvyD7-hk05MLdPhM50YA",
+                    "properties": {
+                      "url": "mailto:someone@example.com"
+                    }
+                  }
+                ],
+                "customDecorations": []
+              },
+              "documentStyle": {
+                "pageSize": {
+                  "width": null,
+                  "height": null
+                },
+                "documentFlavor": 0,
+                "marginTop": 0,
+                "marginBottom": 2,
+                "marginRight": 2,
+                "marginLeft": 2,
+                "autoHyphenation": 1,
+                "doNotHyphenateCaps": 0,
+                "consecutiveHyphenLimit": 2,
+                "defaultHeaderId": "",
+                "defaultFooterId": "",
+                "evenPageHeaderId": "",
+                "evenPageFooterId": "",
+                "firstPageHeaderId": "",
+                "firstPageFooterId": "",
+                "evenAndOddHeaders": 0,
+                "useFirstPageHeaderFooter": 0,
+                "marginHeader": 30,
+                "marginFooter": 30,
+                "textStyle": {},
+                "defaultParagraphStyle": {
+                  "horizontalAlign": 0
+                },
+                "paragraphLineGapDefault": 0,
+                "renderConfig": {
+                  "horizontalAlign": 0,
+                  "verticalAlign": 0,
+                  "centerAngle": 0,
+                  "vertexAngle": 0,
+                  "wrapStrategy": 0
+                }
+              },
+              "settings": {}
+            }
+          }
+        },
+        "2": {
+          "0": {
+            "p": {
+              "id": "d",
+              "locale": "enUS",
+              "title": "",
+              "tableSource": {},
+              "drawings": {},
+              "drawingsOrder": [],
+              "headers": {},
+              "footers": {},
+              "notes": {},
+              "noteSettings": {},
+              "body": {
+                "dataStream": "跳到另一个工作表\r\n",
+                "textRuns": [],
+                "paragraphs": [
+                  {
+                    "startIndex": 8,
+                    "paragraphId": "para_kDuvz2EkwuXA",
+                    "paragraphStyle": {
+                      "horizontalAlign": 0
+                    }
+                  }
+                ],
+                "sectionBreaks": [
+                  {
+                    "sectionId": "section_qWozl6xq0DJP",
+                    "startIndex": 9
+                  }
+                ],
+                "customRanges": [
+                  {
+                    "startIndex": 0,
+                    "endIndex": 7,
+                    "rangeType": 0,
+                    "rangeId": "tWteGP17yMaIN1qlOpVW1",
+                    "properties": {
+                      "url": "#gid=93jJsfJ7wKzSP2pjS-eGz"
+                    }
+                  }
+                ],
+                "customDecorations": []
+              },
+              "documentStyle": {
+                "pageSize": {
+                  "width": null,
+                  "height": null
+                },
+                "documentFlavor": 0,
+                "marginTop": 0,
+                "marginBottom": 2,
+                "marginRight": 2,
+                "marginLeft": 2,
+                "autoHyphenation": 1,
+                "doNotHyphenateCaps": 0,
+                "consecutiveHyphenLimit": 2,
+                "defaultHeaderId": "",
+                "defaultFooterId": "",
+                "evenPageHeaderId": "",
+                "evenPageFooterId": "",
+                "firstPageHeaderId": "",
+                "firstPageFooterId": "",
+                "evenAndOddHeaders": 0,
+                "useFirstPageHeaderFooter": 0,
+                "marginHeader": 30,
+                "marginFooter": 30,
+                "textStyle": {},
+                "defaultParagraphStyle": {
+                  "horizontalAlign": 0
+                },
+                "paragraphLineGapDefault": 0,
+                "renderConfig": {
+                  "horizontalAlign": 0,
+                  "verticalAlign": 0,
+                  "centerAngle": 0,
+                  "vertexAngle": 0,
+                  "wrapStrategy": 0
+                }
+              },
+              "settings": {}
+            }
+          }
+        },
+        "3": {
+          "0": {
+            "p": {
+              "id": "d",
+              "locale": "enUS",
+              "title": "",
+              "tableSource": {},
+              "drawings": {},
+              "drawingsOrder": [],
+              "headers": {},
+              "footers": {},
+              "notes": {},
+              "noteSettings": {},
+              "body": {
+                "dataStream": "跳到另一个工作表的单元格\r\n",
+                "textRuns": [],
+                "paragraphs": [
+                  {
+                    "startIndex": 12,
+                    "paragraphId": "para_g2mAimvBMcSO",
+                    "paragraphStyle": {
+                      "horizontalAlign": 0
+                    }
+                  }
+                ],
+                "sectionBreaks": [
+                  {
+                    "sectionId": "section_ilXZK8lq2AiB",
+                    "startIndex": 13
+                  }
+                ],
+                "customRanges": [
+                  {
+                    "startIndex": 0,
+                    "endIndex": 11,
+                    "rangeType": 0,
+                    "rangeId": "GRZA2bYpTyKh9IsJ3iIUy",
+                    "properties": {
+                      "url": "#gid=93jJsfJ7wKzSP2pjS-eGz&range=B2"
+                    }
+                  }
+                ],
+                "customDecorations": []
+              },
+              "documentStyle": {
+                "pageSize": {
+                  "width": null,
+                  "height": null
+                },
+                "documentFlavor": 0,
+                "marginTop": 0,
+                "marginBottom": 2,
+                "marginRight": 2,
+                "marginLeft": 2,
+                "autoHyphenation": 1,
+                "doNotHyphenateCaps": 0,
+                "consecutiveHyphenLimit": 2,
+                "defaultHeaderId": "",
+                "defaultFooterId": "",
+                "evenPageHeaderId": "",
+                "evenPageFooterId": "",
+                "firstPageHeaderId": "",
+                "firstPageFooterId": "",
+                "evenAndOddHeaders": 0,
+                "useFirstPageHeaderFooter": 0,
+                "marginHeader": 30,
+                "marginFooter": 30,
+                "textStyle": {},
+                "defaultParagraphStyle": {
+                  "horizontalAlign": 0
+                },
+                "paragraphLineGapDefault": 0,
+                "renderConfig": {
+                  "horizontalAlign": 0,
+                  "verticalAlign": 0,
+                  "centerAngle": 0,
+                  "vertexAngle": 0,
+                  "wrapStrategy": 0
+                }
+              },
+              "settings": {}
+            }
+          }
+        }
+      },
+      "tabColor": "",
+      "hidden": 0,
+      "zoomRatio": 1,
+      "freeze": {
+        "xSplit": 0,
+        "ySplit": 0,
+        "startRow": -1,
+        "startColumn": -1
+      },
+      "scrollTop": 0,
+      "scrollLeft": 0,
+      "defaultColumnWidth": 88,
+      "defaultRowHeight": 24,
+      "mergeData": [],
+      "rowData": {},
+      "columnData": {},
+      "showGridlines": 1,
+      "rowHeader": {
+        "width": 46,
+        "hidden": 0
+      },
+      "columnHeader": {
+        "height": 20,
+        "hidden": 0
+      },
+      "rightToLeft": 0
+    },
+    "93jJsfJ7wKzSP2pjS-eGz": {
+      "id": "93jJsfJ7wKzSP2pjS-eGz",
+      "name": "目标",
+      "tabColor": "",
+      "hidden": 0,
+      "rowCount": 1000,
+      "columnCount": 20,
+      "zoomRatio": 1,
+      "scrollTop": 0,
+      "scrollLeft": 0,
+      "defaultColumnWidth": 88,
+      "defaultRowHeight": 24,
+      "showGridlines": 1,
+      "rightToLeft": 0,
+      "freeze": {
+        "xSplit": 0,
+        "ySplit": 0,
+        "startRow": -1,
+        "startColumn": -1
+      },
+      "rowHeader": {
+        "width": 46,
+        "hidden": 0
+      },
+      "columnHeader": {
+        "height": 20,
+        "hidden": 0
+      },
+      "mergeData": [],
+      "cellData": {
+        "1": {
+          "1": {
+            "v": "内部链接的目标",
+            "t": 1
+          }
+        }
+      },
+      "rowData": {},
+      "columnData": {}
+    }
+  },
+  "resources": [
+    {
+      "name": "SHEET_RANGE_PROTECTION_PLUGIN",
+      "data": ""
+    },
+    {
+      "name": "SHEET_AuthzIoMockService_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_DRAWING_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+      "data": ""
+    },
+    {
+      "name": "SHEET_NOTE_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_DEFINED_NAME_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_RANGE_THEME_MODEL_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_FILTER_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_DATA_VALIDATION_PLUGIN",
+      "data": "{}"
+    }
+  ]
+}

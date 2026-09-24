@@ -1,5 +1,5 @@
-// 文字文档候选档案（P1）：00 号计划书 §4.3 范围内的开源插件，按官方 preset 的顺序组装。
-import type { EditorProfile, PluginEntry, ProfileOptions } from './types';
+// 文字文档插件档案 v1 草案（P2）：00 号计划书 §4.3 范围内的开源插件，按官方 preset 的顺序组装，按插件组组织。
+import type { EditorProfile, PluginGroup } from './types';
 
 import { mergeLocales } from '@univerjs/core';
 import { UniverDocsLayoutWorkerPlugin, UniverDocsPlugin } from '@univerjs/docs';
@@ -43,40 +43,64 @@ import '@univerjs/docs-ui/facade';
 import '@univerjs/docs-drawing/facade';
 import '@univerjs/engine-formula/facade';
 
-function plugins({ container, createWorker }: ProfileOptions): PluginEntry[] {
-    const entries: (PluginEntry | null)[] = [
+const groups: PluginGroup[] = [
+    {
         // 核心：与 UniverDocsCorePreset 相同，但不注册 UniverNetworkPlugin。
         // 公式引擎在官方 preset 中存在，是否必需在 P5 核实。
-        [UniverDocsPlugin],
-        [UniverRenderEnginePlugin],
-        [UniverUIPlugin, { container }],
-        [UniverDocsUIPlugin],
-        [UniverFormulaEnginePlugin],
-        // 可选：排版放到 Web Worker（官方示例中单独注册）。
-        createWorker != null ? [UniverDocsLayoutWorkerPlugin, { workerFactory: createWorker }] : null,
-        // 图片
-        [UniverDrawingPlugin],
-        [UniverDrawingUIPlugin],
-        [UniverDocsDrawingPlugin],
-        [UniverDocsDrawingUIPlugin],
-        // 超链接
-        [UniverDocsHyperLinkPlugin],
-        [UniverDocsHyperLinkUIPlugin],
-        // 查找替换
-        [UniverFindReplacePlugin],
-        [UniverDocsFindReplacePlugin],
+        id: 'core',
+        // 运行时核对（V03）：docs 插件注册 Word 元数据透传的两项与文档权限规则；文字文档不写 SHEET_AuthzIoMockService_PLUGIN
+        resources: ['DOC_WORD_STYLES_PLUGIN', 'DOC_NOTE_PLUGIN', 'DOC_OBJECT_PERMISSION_PLUGIN'],
+        removable: false,
+        plugins: ({ container }) => [
+            [UniverDocsPlugin],
+            [UniverRenderEnginePlugin],
+            [UniverUIPlugin, { container }],
+            [UniverDocsUIPlugin],
+            [UniverFormulaEnginePlugin],
+        ],
+    },
+    {
+        // 可选：排版放到 Web Worker（官方示例中单独注册，是否启用由 P5 决定）
+        id: 'layout-worker',
+        resources: [],
+        removable: true,
+        plugins: ({ createWorker }) => [
+            createWorker != null ? [UniverDocsLayoutWorkerPlugin, { workerFactory: createWorker }] : null,
+        ],
+    },
+    {
+        id: 'drawing',
+        resources: ['DOC_DRAWING_PLUGIN'],
+        removable: true,
+        plugins: () => [[UniverDrawingPlugin], [UniverDrawingUIPlugin], [UniverDocsDrawingPlugin], [UniverDocsDrawingUIPlugin]],
+    },
+    {
+        id: 'hyperlink',
+        resources: ['DOC_HYPER_LINK_PLUGIN'],
+        removable: true,
+        plugins: () => [[UniverDocsHyperLinkPlugin], [UniverDocsHyperLinkUIPlugin]],
+    },
+    {
+        id: 'find-replace',
+        resources: [],
+        removable: true,
+        plugins: () => [[UniverFindReplacePlugin], [UniverDocsFindReplacePlugin]],
+    },
+    {
         // 目录（候选，是否纳入在 P5 决定）
-        [UniverDocsTocPlugin],
-        [UniverDocsTocUIPlugin],
-    ];
-    return entries.filter((e): e is PluginEntry => e != null);
-}
+        id: 'toc',
+        resources: [],
+        removable: true,
+        plugins: () => [[UniverDocsTocPlugin], [UniverDocsTocUIPlugin]],
+    },
+];
 
-export const docCandidateProfile: EditorProfile = {
-    id: 'doc@candidate-p1',
+export const docProfile: EditorProfile = {
+    id: 'doc@1-draft',
     kind: 'doc',
+    sdkVersion: '1.0.0',
     worker: 'layout',
-    plugins,
+    groups,
     locale: mergeLocales(
         DesignZhCN,
         UIZhCN,

@@ -1,0 +1,39 @@
+{
+  "check": "V04-corrupt-resource",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T20:18:11.854Z",
+  "case": {
+    "kind": "sheet",
+    "sample": "sheet-cf",
+    "resource": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+    "mode": "invalid-json",
+    "expect": "emptied"
+  },
+  "afterLoad": "",
+  "comparison": {
+    "unknown": [],
+    "duplicates": [],
+    "invalid": [],
+    "missing": [],
+    "emptied": [
+      "SHEET_CONDITIONAL_FORMATTING_PLUGIN"
+    ],
+    "changed": []
+  },
+  "serverRejects": false,
+  "openCheckFails": true,
+  "loadErrorCapture": [
+    {
+      "name": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+      "kind": "parse-swallowed",
+      "message": "非空输入（1054 字符）被解析为空值"
+    }
+  ],
+  "pageErrors": [],
+  "consoleErrors": []
+}

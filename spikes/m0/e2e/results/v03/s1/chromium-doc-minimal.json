@@ -1,0 +1,83 @@
+{
+  "id": "m0-doc-minimal",
+  "locale": "zhCN",
+  "title": "最小文字文档样本",
+  "tableSource": {},
+  "drawings": {},
+  "drawingsOrder": [],
+  "headers": {},
+  "footers": {},
+  "notes": {},
+  "noteSettings": {},
+  "body": {
+    "dataStream": "M0 文字文档样本\r\n",
+    "textRuns": [],
+    "paragraphs": [
+      {
+        "startIndex": 9,
+        "paragraphStyle": {}
+      }
+    ],
+    "sectionBreaks": [
+      {
+        "startIndex": 10,
+        "sectionId": "section_MRxO9SY8jb2W"
+      }
+    ]
+  },
+  "documentStyle": {
+    "pageSize": {
+      "width": 793.7,
+      "height": 1122.5
+    },
+    "documentFlavor": 2,
+    "marginTop": 50,
+    "marginBottom": 50,
+    "marginRight": 50,
+    "marginLeft": 50,
+    "autoHyphenation": 1,
+    "doNotHyphenateCaps": 0,
+    "consecutiveHyphenLimit": 2,
+    "defaultHeaderId": "",
+    "defaultFooterId": "",
+    "evenPageHeaderId": "",
+    "evenPageFooterId": "",
+    "firstPageHeaderId": "",
+    "firstPageFooterId": "",
+    "evenAndOddHeaders": 0,
+    "useFirstPageHeaderFooter": 0,
+    "marginHeader": 30,
+    "marginFooter": 30,
+    "renderConfig": {
+      "zeroWidthParagraphBreak": 0,
+      "vertexAngle": 0,
+      "centerAngle": 0,
+      "background": {
+        "rgb": "#ccc"
+      }
+    }
+  },
+  "settings": {},
+  "resources": [
+    {
+      "name": "DOC_OBJECT_PERMISSION_PLUGIN",
+      "data": "[]"
+    },
+    {
+      "name": "DOC_WORD_STYLES_PLUGIN",
+      "data": ""
+    },
+    {
+      "name": "DOC_NOTE_PLUGIN",
+      "data": ""
+    },
+    {
+      "name": "DOC_DRAWING_PLUGIN",
+      "data": "{\"data\":{},\"order\":[]}"
+    },
+    {
+      "name": "DOC_HYPER_LINK_PLUGIN",
+      "data": "{\"links\":[]}"
+    }
+  ]
+}

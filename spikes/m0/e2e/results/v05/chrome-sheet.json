@@ -1,0 +1,257 @@
+{
+  "check": "V05",
+  "kind": "sheet",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T04:26:18.707Z",
+  "unitIds": [
+    "m0-sheet-all",
+    "m0-sheet-all"
+  ],
+  "isolation": {
+    "aHasOwnEdit": true,
+    "aHasOtherEdit": false,
+    "bHasOwnEdit": true,
+    "bHasOtherEdit": false
+  },
+  "resourcesA": {
+    "unknown": [],
+    "duplicates": [],
+    "invalid": [],
+    "missing": [],
+    "emptied": [],
+    "changed": []
+  },
+  "resourcesB": {
+    "unknown": [],
+    "duplicates": [],
+    "invalid": [],
+    "missing": [],
+    "emptied": [],
+    "changed": []
+  },
+  "internalLinksResolveInCopy": true,
+  "diffOutsideEdit": {
+    "A": [],
+    "B": []
+  },
+  "docBodyUnchangedExceptEdit": null,
+  "docDiffBetweenAB": null,
+  "semantics": {
+    "original": {
+      "sheets": [
+        {
+          "name": "数据",
+          "hidden": false,
+          "merges": 1,
+          "frozen": "1x1",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        },
+        {
+          "name": "汇总",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        },
+        {
+          "name": "隐藏",
+          "hidden": true,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        },
+        {
+          "name": "功能",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 6,
+          "dataValidations": 1,
+          "filter": null,
+          "notes": 1,
+          "floatingImages": 1
+        },
+        {
+          "name": "筛选",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": {
+            "range": "A1:C20",
+            "columnsWithCriteria": 1,
+            "filteredOutRows": 6
+          },
+          "notes": 0,
+          "floatingImages": 0
+        }
+      ],
+      "definedNames": 1,
+      "formulas": 6,
+      "richTextCells": 1,
+      "cellImages": 1,
+      "hyperlinks": 2
+    },
+    "A": {
+      "sheets": [
+        {
+          "name": "数据",
+          "hidden": false,
+          "merges": 1,
+          "frozen": "1x1",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        },
+        {
+          "name": "汇总",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        },
+        {
+          "name": "隐藏",
+          "hidden": true,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        },
+        {
+          "name": "功能",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 6,
+          "dataValidations": 1,
+          "filter": null,
+          "notes": 1,
+          "floatingImages": 1
+        },
+        {
+          "name": "筛选",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": {
+            "range": "A1:C20",
+            "columnsWithCriteria": 1,
+            "filteredOutRows": 6
+          },
+          "notes": 0,
+          "floatingImages": 0
+        }
+      ],
+      "definedNames": 1,
+      "formulas": 6,
+      "richTextCells": 1,
+      "cellImages": 1,
+      "hyperlinks": 2
+    },
+    "B": {
+      "sheets": [
+        {
+          "name": "数据",
+          "hidden": false,
+          "merges": 1,
+          "frozen": "1x1",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        },
+        {
+          "name": "汇总",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        },
+        {
+          "name": "隐藏",
+          "hidden": true,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        },
+        {
+          "name": "功能",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 6,
+          "dataValidations": 1,
+          "filter": null,
+          "notes": 1,
+          "floatingImages": 1
+        },
+        {
+          "name": "筛选",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": {
+            "range": "A1:C20",
+            "columnsWithCriteria": 1,
+            "filteredOutRows": 6
+          },
+          "notes": 0,
+          "floatingImages": 0
+        }
+      ],
+      "definedNames": 1,
+      "formulas": 6,
+      "richTextCells": 1,
+      "cellImages": 1,
+      "hyperlinks": 2
+    }
+  },
+  "internalLinks": [
+    "sheet-1"
+  ],
+  "errors": {
+    "A": [],
+    "B": []
+  }
+}

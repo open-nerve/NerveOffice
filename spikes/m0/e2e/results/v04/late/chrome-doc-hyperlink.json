@@ -1,0 +1,39 @@
+{
+  "check": "V04-late-register",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-23T20:29:43.047Z",
+  "case": {
+    "kind": "doc",
+    "group": "hyperlink",
+    "sample": "doc-hyperlink"
+  },
+  "comparison": {
+    "unknown": [],
+    "duplicates": [],
+    "invalid": [],
+    "missing": [],
+    "emptied": [],
+    "changed": []
+  },
+  "serverRejects": false,
+  "openCheckFails": false,
+  "semantics": {
+    "textLength": 20,
+    "namedStyles": {},
+    "lists": {},
+    "tables": 0,
+    "images": {
+      "inline": 0,
+      "floating": 0,
+      "facade": 0
+    },
+    "hyperlinks": 2
+  },
+  "pageErrors": [],
+  "consoleErrors": []
+}

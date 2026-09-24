@@ -1,0 +1,39 @@
+{
+  "check": "V04-corrupt-resource",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T20:38:10.724Z",
+  "case": {
+    "kind": "doc",
+    "sample": "doc-drawing",
+    "resource": "DOC_DRAWING_PLUGIN",
+    "mode": "invalid-json",
+    "expect": "emptied"
+  },
+  "afterLoad": "{\"data\":{},\"order\":[]}",
+  "comparison": {
+    "unknown": [],
+    "duplicates": [],
+    "invalid": [],
+    "missing": [],
+    "emptied": [
+      "DOC_DRAWING_PLUGIN"
+    ],
+    "changed": []
+  },
+  "serverRejects": false,
+  "openCheckFails": true,
+  "loadErrorCapture": [
+    {
+      "name": "DOC_DRAWING_PLUGIN",
+      "kind": "parse-swallowed",
+      "message": "非空输入（504 字符）被解析为空值"
+    }
+  ],
+  "pageErrors": [],
+  "consoleErrors": []
+}

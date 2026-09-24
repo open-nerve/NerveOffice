@@ -1,0 +1,13 @@
+{
+  "check": "V05-duplicate-unitId",
+  "kind": "sheet",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T04:26:22.634Z",
+  "threw": true,
+  "message": "[UniverInstanceService]: cannot create a unit with the same unit id: m0-sheet-all."
+}

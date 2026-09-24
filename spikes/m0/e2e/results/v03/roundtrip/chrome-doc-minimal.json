@@ -1,0 +1,255 @@
+{
+  "check": "V03",
+  "sample": "doc/minimal",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-23T21:48:50.398Z",
+  "resourceHooks": [
+    {
+      "name": "DOC_DRAWING_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_HYPER_LINK_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_NOTE_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_OBJECT_PERMISSION_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_WORD_STYLES_PLUGIN",
+      "businesses": [
+        1
+      ]
+    }
+  ],
+  "declaredResources": [
+    "DOC_DRAWING_PLUGIN",
+    "DOC_HYPER_LINK_PLUGIN",
+    "DOC_NOTE_PLUGIN",
+    "DOC_OBJECT_PERMISSION_PLUGIN",
+    "DOC_WORD_STYLES_PLUGIN"
+  ],
+  "semantics": {
+    "afterFirstOpen": {
+      "textLength": 11,
+      "namedStyles": {},
+      "lists": {},
+      "tables": 0,
+      "images": {
+        "inline": 0,
+        "floating": 0,
+        "facade": 0
+      },
+      "hyperlinks": 0
+    },
+    "afterReopen": {
+      "textLength": 11,
+      "namedStyles": {},
+      "lists": {},
+      "tables": 0,
+      "images": {
+        "inline": 0,
+        "floating": 0,
+        "facade": 0
+      },
+      "hyperlinks": 0
+    },
+    "expected": null
+  },
+  "stable12": true,
+  "stable12Diff": [],
+  "stable12EmptyEquivalent": [],
+  "stable23": true,
+  "stable23Diff": [],
+  "fidelity": {
+    "added": 24,
+    "removed": 0,
+    "changed": 0,
+    "emptyEquivalent": 0,
+    "entries": [
+      {
+        "path": "$.body.sectionBreaks[0].sectionId",
+        "kind": "added",
+        "after": "\"section_ycaEobFQ3WVX\""
+      },
+      {
+        "path": "$.documentStyle.autoHyphenation",
+        "kind": "added",
+        "after": "1"
+      },
+      {
+        "path": "$.documentStyle.doNotHyphenateCaps",
+        "kind": "added",
+        "after": "0"
+      },
+      {
+        "path": "$.documentStyle.consecutiveHyphenLimit",
+        "kind": "added",
+        "after": "2"
+      },
+      {
+        "path": "$.documentStyle.defaultHeaderId",
+        "kind": "added",
+        "after": "\"\""
+      },
+      {
+        "path": "$.documentStyle.defaultFooterId",
+        "kind": "added",
+        "after": "\"\""
+      },
+      {
+        "path": "$.documentStyle.evenPageHeaderId",
+        "kind": "added",
+        "after": "\"\""
+      },
+      {
+        "path": "$.documentStyle.evenPageFooterId",
+        "kind": "added",
+        "after": "\"\""
+      },
+      {
+        "path": "$.documentStyle.firstPageHeaderId",
+        "kind": "added",
+        "after": "\"\""
+      },
+      {
+        "path": "$.documentStyle.firstPageFooterId",
+        "kind": "added",
+        "after": "\"\""
+      },
+      {
+        "path": "$.documentStyle.evenAndOddHeaders",
+        "kind": "added",
+        "after": "0"
+      },
+      {
+        "path": "$.documentStyle.useFirstPageHeaderFooter",
+        "kind": "added",
+        "after": "0"
+      },
+      {
+        "path": "$.documentStyle.marginHeader",
+        "kind": "added",
+        "after": "30"
+      },
+      {
+        "path": "$.documentStyle.marginFooter",
+        "kind": "added",
+        "after": "30"
+      },
+      {
+        "path": "$.documentStyle.renderConfig",
+        "kind": "added",
+        "after": "{\"zeroWidthParagraphBreak\":0,\"vertexAngle\":0,\"centerAngle\":0,\"background\":{\"rgb\":\"#ccc\"}}"
+      },
+      {
+        "path": "$.tableSource",
+        "kind": "added",
+        "after": "{}"
+      },
+      {
+        "path": "$.drawings",
+        "kind": "added",
+        "after": "{}"
+      },
+      {
+        "path": "$.drawingsOrder",
+        "kind": "added",
+        "after": "[]"
+      },
+      {
+        "path": "$.headers",
+        "kind": "added",
+        "after": "{}"
+      },
+      {
+        "path": "$.footers",
+        "kind": "added",
+        "after": "{}"
+      },
+      {
+        "path": "$.notes",
+        "kind": "added",
+        "after": "{}"
+      },
+      {
+        "path": "$.noteSettings",
+        "kind": "added",
+        "after": "{}"
+      },
+      {
+        "path": "$.settings",
+        "kind": "added",
+        "after": "{}"
+      },
+      {
+        "path": "$.resources",
+        "kind": "added",
+        "after": "[{\"name\":\"DOC_OBJECT_PERMISSION_PLUGIN\",\"data\":[]},{\"name\":\"DOC_WORD_STYLES_PLUGIN\",\"data\":\"\"},{\"name\":\"DOC_NOTE_PLUGIN\",\"data\":\"\"},{\"name\":\"DOC_DRAWING_PLUG..."
+      }
+    ]
+  },
+  "baseline": {
+    "realDiff": [
+      "added $.body.sectionBreaks[0].sectionId",
+      "added $.documentStyle.autoHyphenation",
+      "added $.documentStyle.consecutiveHyphenLimit",
+      "added $.documentStyle.defaultFooterId",
+      "added $.documentStyle.defaultHeaderId",
+      "added $.documentStyle.doNotHyphenateCaps",
+      "added $.documentStyle.evenAndOddHeaders",
+      "added $.documentStyle.evenPageFooterId",
+      "added $.documentStyle.evenPageHeaderId",
+      "added $.documentStyle.firstPageFooterId",
+      "added $.documentStyle.firstPageHeaderId",
+      "added $.documentStyle.marginFooter",
+      "added $.documentStyle.marginHeader",
+      "added $.documentStyle.renderConfig",
+      "added $.documentStyle.useFirstPageHeaderFooter",
+      "added $.drawings",
+      "added $.drawingsOrder",
+      "added $.footers",
+      "added $.headers",
+      "added $.noteSettings",
+      "added $.notes",
+      "added $.resources",
+      "added $.settings",
+      "added $.tableSource"
+    ],
+    "resourcesChanged": []
+  },
+  "resources": {
+    "unknown": [],
+    "duplicates": [],
+    "invalid": [],
+    "missing": [],
+    "emptied": [],
+    "changed": []
+  },
+  "hashes": {
+    "s0": "01cc8e9988ea5040dde60dccc9fc89b9844b252ffaa7ace16de61af979e9d884",
+    "s1": "17801e1cb1f487ea2669da1b172171cf615fc2348384249c44aeb93cd3a5894a",
+    "s2": "17801e1cb1f487ea2669da1b172171cf615fc2348384249c44aeb93cd3a5894a",
+    "s3": "17801e1cb1f487ea2669da1b172171cf615fc2348384249c44aeb93cd3a5894a"
+  },
+  "pageErrors": [],
+  "consoleErrors": []
+}

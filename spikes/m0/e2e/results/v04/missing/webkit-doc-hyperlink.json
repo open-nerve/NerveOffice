@@ -1,0 +1,40 @@
+{
+  "check": "V04-missing-plugin",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T20:36:53.839Z",
+  "case": {
+    "kind": "doc",
+    "group": "hyperlink",
+    "sample": "doc-hyperlink",
+    "resource": "DOC_HYPER_LINK_PLUGIN"
+  },
+  "comparison": {
+    "unknown": [],
+    "duplicates": [],
+    "invalid": [],
+    "missing": [
+      "DOC_HYPER_LINK_PLUGIN"
+    ],
+    "emptied": [],
+    "changed": []
+  },
+  "serverRejects": true,
+  "openCheckFails": true,
+  "inline": {
+    "before": {
+      "bodyDrawings": 0,
+      "bodyHyperlinks": 2
+    },
+    "after": {
+      "bodyDrawings": 0,
+      "bodyHyperlinks": 2
+    }
+  },
+  "pageErrors": [],
+  "consoleErrors": []
+}

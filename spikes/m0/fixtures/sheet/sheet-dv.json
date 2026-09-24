@@ -1,0 +1,142 @@
+{
+  "id": "m0-sheet-dv",
+  "sheetOrder": [
+    "sheet-1"
+  ],
+  "name": "空白表格",
+  "appVersion": "1.0.0",
+  "locale": "zhCN",
+  "styles": {},
+  "sheets": {
+    "sheet-1": {
+      "id": "sheet-1",
+      "name": "数据",
+      "rowCount": 200,
+      "columnCount": 26,
+      "cellData": {
+        "0": {
+          "0": {
+            "v": "下拉",
+            "t": 1
+          },
+          "1": {
+            "v": "复选框",
+            "t": 1
+          },
+          "2": {
+            "v": "整数 1-100",
+            "t": 1
+          },
+          "3": {
+            "v": "日期范围",
+            "t": 1
+          },
+          "4": {
+            "v": "自定义公式",
+            "t": 1
+          }
+        },
+        "1": {
+          "0": {
+            "v": "是",
+            "t": 1
+          },
+          "1": {
+            "v": 1,
+            "t": 3
+          },
+          "2": {
+            "v": 50,
+            "t": 2
+          }
+        },
+        "2": {
+          "0": {
+            "v": "否",
+            "t": 1
+          },
+          "1": {
+            "v": 0,
+            "t": 3
+          },
+          "2": {
+            "v": 120,
+            "t": 2
+          }
+        }
+      },
+      "tabColor": "",
+      "hidden": 0,
+      "zoomRatio": 1,
+      "freeze": {
+        "xSplit": 0,
+        "ySplit": 0,
+        "startRow": -1,
+        "startColumn": -1
+      },
+      "scrollTop": 0,
+      "scrollLeft": 0,
+      "defaultColumnWidth": 88,
+      "defaultRowHeight": 24,
+      "mergeData": [],
+      "rowData": {},
+      "columnData": {},
+      "showGridlines": 1,
+      "rowHeader": {
+        "width": 46,
+        "hidden": 0
+      },
+      "columnHeader": {
+        "height": 20,
+        "hidden": 0
+      },
+      "rightToLeft": 0
+    }
+  },
+  "resources": [
+    {
+      "name": "SHEET_RANGE_PROTECTION_PLUGIN",
+      "data": ""
+    },
+    {
+      "name": "SHEET_AuthzIoMockService_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_DRAWING_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+      "data": ""
+    },
+    {
+      "name": "SHEET_NOTE_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_DEFINED_NAME_PLUGIN",
+      "data": ""
+    },
+    {
+      "name": "SHEET_RANGE_THEME_MODEL_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_FILTER_PLUGIN",
+      "data": "{}"
+    },
+    {
+      "name": "SHEET_DATA_VALIDATION_PLUGIN",
+      "data": "{\"sheet-1\":[{\"uid\":\"bCGd-_0N7tEhWYfj2X1WV\",\"ranges\":[{\"startRow\":1,\"startColumn\":0,\"endRow\":9,\"endColumn\":0,\"startAbsoluteRefType\":0,\"endAbsoluteRefType\":0,\"rangeType\":0,\"unitId\":\"m0-sheet-dv\",\"sheetId\":\"sheet-1\"}],\"type\":\"list\",\"formula1\":\"[\\\"是\\\",\\\"否\\\",\\\"待定\\\"]\",\"showDropDown\":true},{\"uid\":\"U2GTQN3rheqgjAZjIsSj5\",\"ranges\":[{\"startRow\":1,\"startColumn\":1,\"endRow\":9,\"endColumn\":1,\"startAbsoluteRefType\":0,\"endAbsoluteRefType\":0,\"rangeType\":0,\"unitId\":\"m0-sheet-dv\",\"sheetId\":\"sheet-1\"}],\"type\":\"checkbox\"},{\"uid\":\"yNs8lnqwlpqmalK7BWzga\",\"ranges\":[{\"startRow\":1,\"startColumn\":2,\"endRow\":9,\"endColumn\":2,\"startAbsoluteRefType\":0,\"endAbsoluteRefType\":0,\"rangeType\":0,\"unitId\":\"m0-sheet-dv\",\"sheetId\":\"sheet-1\"}],\"type\":\"whole\",\"formula1\":\"1\",\"formula2\":\"100\",\"operator\":\"between\"},{\"uid\":\"WT_6nYu2C1uk9cmp_UZ1p\",\"ranges\":[{\"startRow\":1,\"startColumn\":3,\"endRow\":9,\"endColumn\":3,\"startAbsoluteRefType\":0,\"endAbsoluteRefType\":0,\"rangeType\":0,\"unitId\":\"m0-sheet-dv\",\"sheetId\":\"sheet-1\"}],\"type\":\"date\",\"formula1\":\"2026-01-01\",\"formula2\":\"2026-12-31\",\"operator\":\"between\"},{\"uid\":\"c2Kz7LeHHgJVvZXIVURY8\",\"ranges\":[{\"startRow\":1,\"startColumn\":4,\"endRow\":9,\"endColumn\":4,\"startAbsoluteRefType\":0,\"endAbsoluteRefType\":0,\"rangeType\":0,\"unitId\":\"m0-sheet-dv\",\"sheetId\":\"sheet-1\"}],\"type\":\"custom\",\"formula1\":\"=LEN(E2)<=5\"}]}"
+    }
+  ]
+}

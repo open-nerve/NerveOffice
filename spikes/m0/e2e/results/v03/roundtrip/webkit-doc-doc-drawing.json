@@ -1,0 +1,120 @@
+{
+  "check": "V03",
+  "sample": "doc/doc-drawing",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T21:53:56.736Z",
+  "resourceHooks": [
+    {
+      "name": "DOC_DRAWING_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_HYPER_LINK_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_NOTE_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_OBJECT_PERMISSION_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_WORD_STYLES_PLUGIN",
+      "businesses": [
+        1
+      ]
+    }
+  ],
+  "declaredResources": [
+    "DOC_DRAWING_PLUGIN",
+    "DOC_HYPER_LINK_PLUGIN",
+    "DOC_NOTE_PLUGIN",
+    "DOC_OBJECT_PERMISSION_PLUGIN",
+    "DOC_WORD_STYLES_PLUGIN"
+  ],
+  "semantics": {
+    "afterFirstOpen": {
+      "textLength": 29,
+      "namedStyles": {},
+      "lists": {},
+      "tables": 0,
+      "images": {
+        "inline": 1,
+        "floating": 1,
+        "facade": 2
+      },
+      "hyperlinks": 0
+    },
+    "afterReopen": {
+      "textLength": 29,
+      "namedStyles": {},
+      "lists": {},
+      "tables": 0,
+      "images": {
+        "inline": 1,
+        "floating": 1,
+        "facade": 2
+      },
+      "hyperlinks": 0
+    },
+    "expected": {
+      "namedStyles": {},
+      "lists": {},
+      "tables": 0,
+      "images": {
+        "inline": 1,
+        "floating": 1,
+        "facade": 2
+      },
+      "hyperlinks": 0,
+      "textLength": 29
+    }
+  },
+  "stable12": true,
+  "stable12Diff": [],
+  "stable12EmptyEquivalent": [],
+  "stable23": true,
+  "stable23Diff": [],
+  "fidelity": {
+    "added": 0,
+    "removed": 0,
+    "changed": 0,
+    "emptyEquivalent": 0,
+    "entries": []
+  },
+  "baseline": {
+    "realDiff": [],
+    "resourcesChanged": []
+  },
+  "resources": {
+    "unknown": [],
+    "duplicates": [],
+    "invalid": [],
+    "missing": [],
+    "emptied": [],
+    "changed": []
+  },
+  "hashes": {
+    "s0": "141e5ed1ad1d96a2ce297a58c0a8becb733e687d9c64146a16fdbd68921b3b4a",
+    "s1": "141e5ed1ad1d96a2ce297a58c0a8becb733e687d9c64146a16fdbd68921b3b4a",
+    "s2": "141e5ed1ad1d96a2ce297a58c0a8becb733e687d9c64146a16fdbd68921b3b4a",
+    "s3": "141e5ed1ad1d96a2ce297a58c0a8becb733e687d9c64146a16fdbd68921b3b4a"
+  },
+  "pageErrors": [],
+  "consoleErrors": []
+}

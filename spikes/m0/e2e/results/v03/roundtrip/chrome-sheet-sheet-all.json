@@ -1,0 +1,357 @@
+{
+  "check": "V03",
+  "sample": "sheet/sheet-all",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-23T21:48:39.462Z",
+  "resourceHooks": [
+    {
+      "name": "DOC_DRAWING_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_NOTE_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_OBJECT_PERMISSION_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "DOC_WORD_STYLES_PLUGIN",
+      "businesses": [
+        1
+      ]
+    },
+    {
+      "name": "SHEET_AuthzIoMockService_PLUGIN",
+      "businesses": [
+        2,
+        1,
+        3,
+        6
+      ]
+    },
+    {
+      "name": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_DATA_VALIDATION_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_DEFINED_NAME_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_DRAWING_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_FILTER_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_NOTE_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_RANGE_PROTECTION_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_RANGE_THEME_MODEL_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+      "businesses": [
+        2
+      ]
+    },
+    {
+      "name": "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN",
+      "businesses": [
+        2
+      ]
+    }
+  ],
+  "declaredResources": [
+    "SHEET_AuthzIoMockService_PLUGIN",
+    "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+    "SHEET_DATA_VALIDATION_PLUGIN",
+    "SHEET_DEFINED_NAME_PLUGIN",
+    "SHEET_DRAWING_PLUGIN",
+    "SHEET_FILTER_PLUGIN",
+    "SHEET_NOTE_PLUGIN",
+    "SHEET_RANGE_PROTECTION_PLUGIN",
+    "SHEET_RANGE_THEME_MODEL_PLUGIN",
+    "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+    "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN"
+  ],
+  "semantics": {
+    "afterFirstOpen": {
+      "sheets": [
+        {
+          "name": "数据",
+          "hidden": false,
+          "merges": 1,
+          "frozen": "1x1",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        },
+        {
+          "name": "汇总",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        },
+        {
+          "name": "隐藏",
+          "hidden": true,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        },
+        {
+          "name": "功能",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 6,
+          "dataValidations": 1,
+          "filter": null,
+          "notes": 1,
+          "floatingImages": 1
+        },
+        {
+          "name": "筛选",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": {
+            "range": "A1:C20",
+            "columnsWithCriteria": 1,
+            "filteredOutRows": 6
+          },
+          "notes": 0,
+          "floatingImages": 0
+        }
+      ],
+      "definedNames": 1,
+      "formulas": 6,
+      "richTextCells": 1,
+      "cellImages": 1,
+      "hyperlinks": 2
+    },
+    "afterReopen": {
+      "sheets": [
+        {
+          "name": "数据",
+          "hidden": false,
+          "merges": 1,
+          "frozen": "1x1",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        },
+        {
+          "name": "汇总",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        },
+        {
+          "name": "隐藏",
+          "hidden": true,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        },
+        {
+          "name": "功能",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 6,
+          "dataValidations": 1,
+          "filter": null,
+          "notes": 1,
+          "floatingImages": 1
+        },
+        {
+          "name": "筛选",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": {
+            "range": "A1:C20",
+            "columnsWithCriteria": 1,
+            "filteredOutRows": 6
+          },
+          "notes": 0,
+          "floatingImages": 0
+        }
+      ],
+      "definedNames": 1,
+      "formulas": 6,
+      "richTextCells": 1,
+      "cellImages": 1,
+      "hyperlinks": 2
+    },
+    "expected": {
+      "sheets": [
+        {
+          "name": "数据",
+          "hidden": false,
+          "merges": 1,
+          "frozen": "1x1",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        },
+        {
+          "name": "汇总",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        },
+        {
+          "name": "隐藏",
+          "hidden": true,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": null,
+          "notes": 0,
+          "floatingImages": 0
+        },
+        {
+          "name": "功能",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 6,
+          "dataValidations": 1,
+          "filter": null,
+          "notes": 1,
+          "floatingImages": 1
+        },
+        {
+          "name": "筛选",
+          "hidden": false,
+          "merges": 0,
+          "frozen": "0x0",
+          "conditionalFormats": 0,
+          "dataValidations": 0,
+          "filter": {
+            "range": "A1:C20",
+            "columnsWithCriteria": 1,
+            "filteredOutRows": 6
+          },
+          "notes": 0,
+          "floatingImages": 0
+        }
+      ],
+      "definedNames": 1,
+      "formulas": 6,
+      "richTextCells": 1,
+      "cellImages": 1,
+      "hyperlinks": 2
+    }
+  },
+  "stable12": true,
+  "stable12Diff": [],
+  "stable12EmptyEquivalent": [],
+  "stable23": true,
+  "stable23Diff": [],
+  "fidelity": {
+    "added": 0,
+    "removed": 0,
+    "changed": 0,
+    "emptyEquivalent": 4,
+    "entries": []
+  },
+  "baseline": {
+    "realDiff": [],
+    "resourcesChanged": []
+  },
+  "resources": {
+    "unknown": [],
+    "duplicates": [],
+    "invalid": [],
+    "missing": [],
+    "emptied": [],
+    "changed": []
+  },
+  "hashes": {
+    "s0": "321e7f59bf2d2f80bc85fc4ff3d9ede788da8142c6f4ee5f5cabb301bc4ea039",
+    "s1": "c822b71a26c474f9dd2c46018b75b9cc11c1bdbc2afc13684c789b3018f7c91c",
+    "s2": "c822b71a26c474f9dd2c46018b75b9cc11c1bdbc2afc13684c789b3018f7c91c",
+    "s3": "c822b71a26c474f9dd2c46018b75b9cc11c1bdbc2afc13684c789b3018f7c91c"
+  },
+  "pageErrors": [],
+  "consoleErrors": []
+}

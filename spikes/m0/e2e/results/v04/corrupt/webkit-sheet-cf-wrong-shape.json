@@ -1,0 +1,58 @@
+{
+  "check": "V04-corrupt-resource",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-23T20:37:59.997Z",
+  "case": {
+    "kind": "sheet",
+    "sample": "sheet-cf",
+    "resource": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+    "mode": "wrong-shape",
+    "expect": "garbage"
+  },
+  "afterLoad": "{\"unexpected\":[\"e\"]}",
+  "comparison": {
+    "unknown": [],
+    "duplicates": [],
+    "invalid": [],
+    "missing": [],
+    "emptied": [],
+    "changed": [
+      "SHEET_CONDITIONAL_FORMATTING_PLUGIN"
+    ]
+  },
+  "serverRejects": false,
+  "openCheckFails": false,
+  "loadErrorCapture": [
+    {
+      "name": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+      "kind": "load-threw",
+      "unitId": "m0-sheet-cf",
+      "message": "TypeError: Spread syntax requires ...iterable[Symbol.iterator] to be a function"
+    }
+  ],
+  "pageErrors": [
+    "undefined is not an object (evaluating 'r.map')",
+    "undefined is not an object (evaluating 'n.rule.type')",
+    "undefined is not an object (evaluating 'n.type')",
+    "undefined is not an object (evaluating 'r.map')",
+    "undefined is not an object (evaluating 'n.rule.type')",
+    "undefined is not an object (evaluating 'n.type')",
+    "undefined is not an object (evaluating 'r.map')",
+    "undefined is not an object (evaluating 'n.rule.type')",
+    "undefined is not an object (evaluating 'n.type')",
+    "undefined is not an object (evaluating 'r.map')",
+    "undefined is not an object (evaluating 'n.rule.type')",
+    "undefined is not an object (evaluating 'n.type')",
+    "undefined is not an object (evaluating 'r.map')",
+    "undefined is not an object (evaluating 'n.rule.type')",
+    "undefined is not an object (evaluating 'n.type')"
+  ],
+  "consoleErrors": [
+    "\u001b[97;104m[ResourceManagerService]\u001b[0m loadResources error TypeError: Spread syntax requires ...iterable[Symbol.iterator] to be a function"
+  ]
+}
