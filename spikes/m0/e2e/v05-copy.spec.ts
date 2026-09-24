@@ -4,7 +4,7 @@ import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { compareResources, isEmptyResourceData } from '../src/harness/resource-guard';
+import { compareResources, isEmptyValue } from '../src/harness/resource-guard';
 import { diffJson, expandResources } from './diff';
 import { browserInfo, cellCenter, SERVERS, waitForEditor, writeResult } from './helpers';
 
@@ -35,8 +35,8 @@ async function snapshotText(page: Page): Promise<string> {
     return page.evaluate(() => JSON.stringify(window.__m0!.editor!.save()));
 }
 
-/** 与原文档的差异：去掉资源内部的"空值等价"后，只应剩下这次编辑本身。 */
-function realDiff(original: Snapshot, edited: Snapshot) {
+/** 两份快照的实际差异：去掉资源内部的"空值等价"后逐路径列出。 */
+function realDiff(before: Snapshot, after: Snapshot) {
     const parse = (x?: string) => {
         if (x == null) return undefined;
         try {
@@ -45,8 +45,8 @@ function realDiff(original: Snapshot, edited: Snapshot) {
             return x;
         }
     };
-    return diffJson(expandResources(original), expandResources(edited)).filter(
-        (d) => !(/^\$\.resources\[\d+\]\.data/.test(d.path) && isEmptyResourceData(parse(d.before)) && isEmptyResourceData(parse(d.after))),
+    return diffJson(expandResources(before), expandResources(after)).filter(
+        (d) => !(/^\$\.resources\[\d+\]\.data/.test(d.path) && isEmptyValue(parse(d.before)) && isEmptyValue(parse(d.after))),
     );
 }
 
@@ -124,6 +124,8 @@ for (const c of CASES) {
             ? bodyWithoutEdit(snapA, 'A 的修改') === (original as { body?: { dataStream?: string } }).body?.dataStream
                 && bodyWithoutEdit(snapB, 'B 的修改') === (original as { body?: { dataStream?: string } }).body?.dataStream
             : null;
+        // 文字文档：A、B 在同一位置插入了等长的文字，两份快照之间应当只差正文里的这几个字
+        const diffAB = c.kind === 'doc' ? realDiff(snapA, snapB) : null;
         // 语义：除了正文长度，复制品与原文档一致（条件格式、图片、链接、筛选等都在）
         const withoutLength = (x: unknown) => ({ ...(x as object), textLength: undefined });
 
@@ -148,6 +150,7 @@ for (const c of CASES) {
             internalLinksResolveInCopy: internalLinks.every((gid) => sheetIdsB.includes(gid)),
             diffOutsideEdit: { A: outsideEdit(diffA, snapA).slice(0, 50), B: outsideEdit(diffB, snapB).slice(0, 50) },
             docBodyUnchangedExceptEdit: docBodyUnchanged,
+            docDiffBetweenAB: diffAB?.slice(0, 50) ?? null,
             semantics: { original: semanticsOriginal, A: semanticsA, B: semanticsB },
             internalLinks,
             errors: { A: errorsA, B: errorsB },
@@ -159,7 +162,10 @@ for (const c of CASES) {
         expect.soft([...resA.missing, ...resA.emptied, ...resB.missing, ...resB.emptied], '资源丢失或变空').toEqual([]);
         expect.soft(result.internalLinksResolveInCopy, '复制品中的内部链接有效').toBe(true);
         expect.soft([...outsideEdit(diffA, snapA), ...outsideEdit(diffB, snapB)], '除被编辑的单元格外没有其他差异').toEqual([]);
-        if (c.kind === 'doc') expect.soft(docBodyUnchanged, '正文除插入的文字外不变').toBe(true);
+        if (c.kind === 'doc') {
+            expect.soft(docBodyUnchanged, '正文除插入的文字外不变').toBe(true);
+            expect.soft(diffAB!.map((d) => d.path), 'A 与 B 只差插入的文字').toEqual(['$.body.dataStream']);
+        }
         expect.soft(withoutLength(semanticsA), '复制品 A 的语义与原文档一致').toEqual(withoutLength(semanticsOriginal));
         expect.soft(withoutLength(semanticsB), '复制品 B 的语义与原文档一致').toEqual(withoutLength(semanticsOriginal));
         expect.soft([...errorsA, ...errorsB], '页面错误').toEqual([]);

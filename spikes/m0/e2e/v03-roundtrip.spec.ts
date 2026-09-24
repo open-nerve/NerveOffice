@@ -7,7 +7,7 @@ import { expect, test } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { compareResources, isEmptyResourceData } from '../src/harness/resource-guard';
+import { compareResources, isEmptyValue } from '../src/harness/resource-guard';
 import { canonicalJson, diffJson, expandResources } from './diff';
 import { browserInfo, cellCenter, RESULTS_DIR, SERVERS, waitForEditor, writeResult } from './helpers';
 import { BUSINESS, EXPECTED_SEMANTICS } from './samples-expected';
@@ -47,7 +47,7 @@ function isEmptyEquivalent(d: DiffEntry): boolean {
             return x; // 预览被截断的长值：肯定不是空值
         }
     };
-    return isEmptyResourceData(parse(d.before)) && isEmptyResourceData(parse(d.after));
+    return isEmptyValue(parse(d.before)) && isEmptyValue(parse(d.after));
 }
 
 function split(diff: DiffEntry[]) {

@@ -8,11 +8,17 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-23T20:22:49.130Z",
+  "timestamp": "2026-09-23T21:39:14.803Z",
   "afterInsert": {
     "width": 120,
     "height": 80,
     "modelSize": "120x80",
+    "fromAnchor": {
+      "column": 2,
+      "columnOffset": 0,
+      "row": 2,
+      "rowOffset": 0
+    },
     "toAnchor": {
       "row": 5,
       "rowOffset": 8,
@@ -24,6 +30,12 @@
     "width": 120,
     "height": 80,
     "modelSize": "120x80",
+    "fromAnchor": {
+      "column": 2,
+      "columnOffset": 0,
+      "row": 2,
+      "rowOffset": 0
+    },
     "toAnchor": {
       "row": 5,
       "rowOffset": 8,
@@ -35,6 +47,12 @@
     "width": 120,
     "height": 111,
     "modelSize": "120x111",
+    "fromAnchor": {
+      "column": 2,
+      "columnOffset": 0,
+      "row": 2,
+      "rowOffset": 0
+    },
     "toAnchor": {
       "row": 5,
       "rowOffset": 8,
@@ -46,6 +64,12 @@
     "width": 120,
     "height": 111,
     "modelSize": "120x111",
+    "fromAnchor": {
+      "column": 2,
+      "columnOffset": 0,
+      "row": 2,
+      "rowOffset": 0
+    },
     "toAnchor": {
       "row": 5,
       "rowOffset": 8,

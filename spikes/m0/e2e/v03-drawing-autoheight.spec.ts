@@ -1,6 +1,7 @@
 // DEF-002 的可复现证据：浮动图片（默认 Position 锚点：随单元格移动、保持尺寸）所跨的行因自动行高变高后，
 // SDK 只在内存里保留了图片尺寸，没有回写终点锚点；之后凡是按锚点重算的时机（切换工作表、重新打开）图片都会被拉伸。
-// 触发方式：单元格图片、换行文字、大号字；阴性对照：手动改行高、插入行（走显式命令，锚点会同步更新）。
+// 触发方式：单元格图片、换行文字、大号字；阴性对照：手动改行高、在图片上方插入行（走显式命令，锚点会同步更新）。
+// 断言写的是"缺陷特征"（触发后锚点不变、切表与重开后被拉高）：SDK 修复后这些断言会失败，届时把它们翻转为"尺寸不变"。
 import type { Page } from '@playwright/test';
 
 import { expect, test } from '@playwright/test';
@@ -15,8 +16,11 @@ const CASES = [
     { id: 'wrap-text', trigger: true, run: `const r = ws.getRange('A4'); r.setValue('${LONG_TEXT}'); r.setWrap(true);` },
     { id: 'font-36', trigger: true, run: "const r = ws.getRange('A4'); r.setValue('大字'); r.setFontSize(36);" },
     { id: 'manual-row-height', trigger: false, run: 'ws.setRowHeight(3, 60);' },
-    { id: 'insert-row', trigger: false, run: 'ws.insertRowAfter(3);' },
+    // 在图片上方插入一行：起点锚点应当下移一行，尺寸不变
+    { id: 'insert-row-above', trigger: false, run: 'ws.insertRowBefore(1);' },
 ] as const;
+
+type Anchor = { row: number; rowOffset: number; column: number; columnOffset: number };
 
 async function measure(page: Page) {
     return page.evaluate(() => {
@@ -25,15 +29,20 @@ async function measure(page: Page) {
         const p = ws.getImages()[0].getPlacement();
         const snap = editor.save() as { resources: { name: string; data: string }[] };
         const drawings = JSON.parse(snap.resources.find((r) => r.name === 'SHEET_DRAWING_PLUGIN')!.data)[ws.getSheetId()].data;
-        const d = Object.values(drawings)[0] as { sheetTransform: { to: unknown }; transform: { width: number; height: number } };
+        const d = Object.values(drawings)[0] as { sheetTransform: { from: unknown; to: unknown }; transform: { width: number; height: number } };
         const size = p as unknown as { width: number; height: number };
-        return { width: size.width, height: size.height, modelSize: `${d.transform.width}x${d.transform.height}`, toAnchor: d.sheetTransform.to };
+        return {
+            width: size.width,
+            height: size.height,
+            modelSize: `${d.transform.width}x${d.transform.height}`,
+            fromAnchor: d.sheetTransform.from as Anchor,
+            toAnchor: d.sheetTransform.to as Anchor,
+        };
     });
 }
 
 for (const c of CASES) {
     test(`DEF-002 ${c.id}`, async ({ page, request }, testInfo) => {
-        test.fail(c.trigger, 'DEF-002：自动行高后浮动图片被拉伸（SDK 1.0.0 缺陷）');
         const id = `def002-${testInfo.project.name}-${c.id}`;
         await page.goto(`/sheet.html?sample=empty&unit=${id}`);
         await waitForEditor(page);
@@ -82,8 +91,18 @@ for (const c of CASES) {
             afterSwitch,
             afterReopen,
         });
-        // 正确的行为：Position 锚点的图片在行高变化后保持 120×80
-        expect.soft(`${afterSwitch.width}x${afterSwitch.height}`, '切换工作表后尺寸不变').toBe('120x80');
-        expect(`${afterReopen.width}x${afterReopen.height}`, '重开后尺寸不变').toBe('120x80');
+        expect(`${afterInsert.width}x${afterInsert.height}`, '插入后尺寸').toBe('120x80');
+        if (c.trigger) {
+            // DEF-002 的缺陷特征（SDK 1.0.0）：触发后界面尺寸不变、终点锚点没有回写；切表与重开后按旧锚点被拉高
+            expect(`${afterTrigger.width}x${afterTrigger.height}`, '触发后界面尺寸不变').toBe('120x80');
+            expect(afterTrigger.toAnchor, '终点锚点没有回写').toEqual(afterInsert.toAnchor);
+            expect(afterSwitch.height, '切换工作表后被拉高').toBeGreaterThan(80);
+            expect(afterReopen.height, '重开后保持被拉高的尺寸').toBe(afterSwitch.height);
+        } else {
+            expect(`${afterSwitch.width}x${afterSwitch.height}`, '切换工作表后尺寸不变').toBe('120x80');
+            expect(`${afterReopen.width}x${afterReopen.height}`, '重开后尺寸不变').toBe('120x80');
+            if (c.id === 'manual-row-height') expect(afterTrigger.toAnchor, '显式改行高时终点锚点已更新').not.toEqual(afterInsert.toAnchor);
+            if (c.id === 'insert-row-above') expect(afterTrigger.fromAnchor.row, '上方插入行后起点锚点下移').toBe(afterInsert.fromAnchor.row + 1);
+        }
     });
 }

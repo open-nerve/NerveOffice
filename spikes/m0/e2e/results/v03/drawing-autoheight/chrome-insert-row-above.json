@@ -1,18 +1,24 @@
 {
   "check": "DEF-002",
-  "case": "insert-row",
+  "case": "insert-row-above",
   "trigger": false,
   "browser": {
-    "project": "chromium",
+    "project": "chrome",
     "name": "chromium",
-    "version": "153.0.8010.12",
-    "channel": "bundled"
+    "version": "153.0.8010.53",
+    "channel": "chrome"
   },
-  "timestamp": "2026-09-23T20:11:59.751Z",
+  "timestamp": "2026-09-23T21:39:37.361Z",
   "afterInsert": {
     "width": 120,
     "height": 80,
     "modelSize": "120x80",
+    "fromAnchor": {
+      "column": 2,
+      "columnOffset": 0,
+      "row": 2,
+      "rowOffset": 0
+    },
     "toAnchor": {
       "row": 5,
       "rowOffset": 8,
@@ -24,33 +30,51 @@
     "width": 120,
     "height": 80,
     "modelSize": "120x80",
+    "fromAnchor": {
+      "column": 2,
+      "columnOffset": 0,
+      "rowOffset": 0,
+      "row": 3
+    },
     "toAnchor": {
-      "row": 5,
       "rowOffset": 8,
       "column": 3,
-      "columnOffset": 32
+      "columnOffset": 32,
+      "row": 6
     }
   },
   "afterSwitch": {
     "width": 120,
     "height": 80,
     "modelSize": "120x80",
+    "fromAnchor": {
+      "column": 2,
+      "columnOffset": 0,
+      "rowOffset": 0,
+      "row": 3
+    },
     "toAnchor": {
-      "row": 5,
       "rowOffset": 8,
       "column": 3,
-      "columnOffset": 32
+      "columnOffset": 32,
+      "row": 6
     }
   },
   "afterReopen": {
     "width": 120,
     "height": 80,
     "modelSize": "120x80",
+    "fromAnchor": {
+      "column": 2,
+      "columnOffset": 0,
+      "rowOffset": 0,
+      "row": 3
+    },
     "toAnchor": {
-      "row": 5,
       "rowOffset": 8,
       "column": 3,
-      "columnOffset": 32
+      "columnOffset": 32,
+      "row": 6
     }
   }
 }
