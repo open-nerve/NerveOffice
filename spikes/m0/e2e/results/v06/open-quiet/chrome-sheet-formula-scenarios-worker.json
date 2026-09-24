@@ -10,13 +10,13 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T14:06:56.642Z",
-  "bytes": 497385,
+  "timestamp": "2026-09-24T17:38:53.849Z",
+  "bytes": 497387,
   "timings": {
-    "t0": 283.2999999523163,
-    "ready": 25.40000009536743,
-    "rendered": 437.90000009536743,
-    "steady": 3487.100000023842
+    "t0": 286.60000002384186,
+    "ready": 25.299999952316284,
+    "rendered": 436.2999999523163,
+    "steady": 3492.1999999284744
   },
   "detections": [],
   "mutations": [
@@ -39,28 +39,28 @@
   "openDiffCount": 4,
   "openDiff": [
     {
-      "path": "$.sheets.fwIzE90Auc69GrZLRB70v.cellData.0.0.v",
+      "path": "$.sheets.PHIVDbu_Ev16LdRzFirLI.cellData.0.0.v",
       "kind": "changed",
-      "before": "46289.89640046296",
-      "after": "46289.92138888889"
+      "before": "46290.05585648148",
+      "after": "46290.06857638889"
     },
     {
-      "path": "$.sheets.fwIzE90Auc69GrZLRB70v.cellData.2.0.v",
+      "path": "$.sheets.PHIVDbu_Ev16LdRzFirLI.cellData.2.0.v",
       "kind": "changed",
-      "before": "0.9913977157117299",
-      "after": "0.8814724706654883"
+      "before": "0.01465037357664567",
+      "after": "0.10232749057901946"
     },
     {
-      "path": "$.sheets.fwIzE90Auc69GrZLRB70v.cellData.3.0.v",
+      "path": "$.sheets.PHIVDbu_Ev16LdRzFirLI.cellData.3.0.v",
       "kind": "changed",
-      "before": "308929",
-      "after": "200558"
+      "before": "424369",
+      "after": "205474"
     },
     {
-      "path": "$.sheets.fwIzE90Auc69GrZLRB70v.cellData.4.0.v",
+      "path": "$.sheets.PHIVDbu_Ev16LdRzFirLI.cellData.4.0.v",
       "kind": "changed",
-      "before": "1.9827954314234597",
-      "after": "1.7629449413309766"
+      "before": "0.02930074715329134",
+      "after": "0.20465498115803893"
     }
   ],
   "errors": []

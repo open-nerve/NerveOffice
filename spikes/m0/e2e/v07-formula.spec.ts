@@ -297,3 +297,124 @@ for (const worker of [false, true]) {
         expect.soft(result.settled.mismatches, '计算结束后模型正确').toBe(0);
     });
 }
+
+// 计算进行中再改一次（第二轮审查 S1）：SDK 不把新的修改并进正在进行的一轮，而是排队到这一轮的完成通知之后再开始；
+// 与正在计算的范围相交时先发 stop，但计算只在让出点检查 stop，常常照样算完。
+// 先改一个牵动慢计算的单元格，300 ms 后（第一轮还在算）再改一处，同时按新旧两种规则等待并各自捕获，核对全部 406 个公式：
+//   - 旧规则：审查 S1 之前的 capture-timing.ts（只等"最近一轮"收齐，遇到 stop 视为收齐），在这里内联复现，用来证明场景确实走到了排队的路径；
+//   - 新规则：当前的 capture-timing.ts（最近一轮开始之后又有会触发计算的修改、或这一轮被 stop，都不算收齐）。
+// 两种等待起点：first 从第一次修改开始等（第二次修改在等待中被检测到、从头重来）；
+// second 在第二次修改之后才开始一次新的等待，这时第一轮还在算（对应"打开时的计算还没算完用户就改了"，或检测到修改就立即重新开始等待的实现）。
+const QUEUED_CASES = [
+    // A：两次都改 聚合!B1，范围相交，走 stop
+    { id: 'A-stop', worker: true, interval: undefined, first: ['聚合', 'B1'], second: ['聚合', 'B1'] },
+    // B：第一轮只有"聚合"一张表有结果，第二次改 链!A1
+    { id: 'B-one-sheet', worker: true, interval: undefined, first: ['聚合', 'B2'], second: ['链', 'A1'] },
+    // C：主线程模式的退路（让出间隔 20），第二次修改在两段计算之间执行
+    { id: 'C-main-interval20', worker: false, interval: 20, first: ['聚合', 'B1'], second: ['链', 'A1'] },
+    // D：对照，Worker，第一轮四张表都有结果
+    { id: 'D-worker', worker: true, interval: undefined, first: ['聚合', 'B1'], second: ['链', 'A1'] },
+    // E：对照，主线程默认让出间隔：计算整段阻塞主线程，第二次修改要等这一轮算完才执行
+    { id: 'E-main', worker: false, interval: undefined, first: ['聚合', 'B1'], second: ['链', 'A1'] },
+] as const;
+
+for (const c of QUEUED_CASES) for (const waitFrom of ['first', 'second'] as const) {
+    test(`V07 计算进行中再改一次：${c.id}（从${waitFrom === 'first' ? '第一次' : '第二次'}修改开始等）`, async ({ page, request }, testInfo) => {
+        test.setTimeout(300_000);
+        const source = await ensureGenerated(page, request, 'sheet', 'formula-scenarios');
+        await page.goto(`/sheet.html?doc=${source}${c.worker ? '&worker=1' : ''}${c.interval == null ? '' : `&interval=${c.interval}`}`);
+        await waitForEditor(page);
+        await page.evaluate(() => window.__m0!.waitForCapture!({ debounceMs: 0, timeoutMs: 60_000 }));
+        const r = await page.evaluate(async ({ c, waitFrom }) => {
+            const m0 = window.__m0!;
+            const editor = m0.editor!;
+            const api = editor.univerAPI;
+            const f = api.getFormula();
+            const wb = api.getActiveWorkbook()!;
+            const detector = editor.detector;
+            const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
+            // 审查 S1 之前的判定（内联复现）
+            const legacyPending = () => {
+                const p = detector.formulaProgress();
+                if (!p.started || p.stopped) return false;
+                if (p.resultSheets == null) return !p.completed;
+                return p.resultSheets.some((key) => {
+                    const [unitId, sheetId] = key.split('/');
+                    return unitId === wb.getId() && wb.getSheetBySheetId(sheetId) != null && !p.appliedSheets.includes(key);
+                });
+            };
+            const legacyWait = async () => {
+                const q0 = performance.now();
+                const left = () => Math.max(0, q0 + 15_000 - performance.now());
+                for (;;) {
+                    const lastEdit = detector.lastDetectionAt();
+                    try {
+                        await f.onCalculationResultApplied(Math.max(1, left()));
+                    } catch {
+                        // 照常
+                    }
+                    while (performance.now() - (detector.lastDetectionAt() ?? q0) < 1000 && left() > 0) await sleep(20);
+                    while (legacyPending() && left() > 0) await sleep(20);
+                    if (detector.lastDetectionAt() !== lastEdit && left() > 0) continue;
+                    break;
+                }
+            };
+            const t0 = performance.now();
+            const startWaits = () => [
+                (async () => {
+                    await legacyWait();
+                    return { at: performance.now() - t0, text: JSON.stringify(editor.save()), restarts: 0, formula: '—' };
+                })(),
+                (async () => {
+                    const wait = await m0.waitForCapture!();
+                    return { at: performance.now() - t0, text: JSON.stringify(editor.save()), restarts: wait.restarts, formula: wait.formula };
+                })(),
+            ];
+            wb.getSheetByName(c.first[0])!.getRange(c.first[1]).setValue(66_666);
+            const early = waitFrom === 'first' ? startWaits() : null;
+            await sleep(300);
+            // 第二次修改时第一轮是否还在算（主线程默认让出间隔下，这个计时器要等计算结束才触发）
+            const before = detector.formulaProgress();
+            const secondAt = performance.now() - t0;
+            wb.getSheetByName(c.second[0])!.getRange(c.second[1]).setValue(c.second[1] === 'A1' ? 4343 : 55_555);
+            const [old, next] = await Promise.all(early ?? startWaits());
+            await m0.waitForCapture!();
+            const after = detector.formulaProgress();
+            return {
+                secondAtMs: secondAt,
+                firstSessionRunningAtSecondEdit: before.started && !before.completed,
+                sessions: after.session - before.session,
+                old,
+                next,
+                settled: JSON.stringify(editor.save()),
+            };
+        }, { c, waitFrom });
+        const check = (text: string) => {
+            let checked = 0;
+            let mismatches = 0;
+            for (const s of ['chain', 'aggregate', 'cross-sheet', 'slow']) {
+                const x = independentCheck(s, text);
+                checked += x.checked;
+                mismatches += x.mismatches.length;
+            }
+            return { checked, mismatches };
+        };
+        const result = {
+            check: 'V07-edit-during-calc',
+            case: c,
+            waitFrom,
+            browser: browserInfo(page, testInfo),
+            timestamp: new Date().toISOString(),
+            secondEditAtMs: Math.round(r.secondAtMs),
+            firstSessionRunningAtSecondEdit: r.firstSessionRunningAtSecondEdit,
+            sessionsAfterSecondEdit: r.sessions,
+            oldRule: { capturedAtMs: Math.round(r.old.at), ...check(r.old.text) },
+            newRule: { capturedAtMs: Math.round(r.next.at), restarts: r.next.restarts, formula: r.next.formula, ...check(r.next.text) },
+            settled: check(r.settled),
+        };
+        await writeResult(`v07/edit-during-calc/${testInfo.project.name}-${c.id}-from-${waitFrom}.json`, result);
+        expect.soft(result.newRule.mismatches, '新规则：捕获时公式结果完整').toBe(0);
+        expect.soft(result.newRule.formula, '新规则：没有超时').toBe('settled');
+        expect.soft(result.settled.mismatches, '计算结束后模型正确').toBe(0);
+    });
+}

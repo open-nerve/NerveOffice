@@ -7,14 +7,14 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T14:48:00.987Z",
+  "timestamp": "2026-09-24T18:25:36.529Z",
   "oldRule": {
-    "capturedAtMs": 2211,
+    "capturedAtMs": 2218,
     "checked": 399,
     "mismatches": 0
   },
   "newRule": {
-    "capturedAtMs": 1831,
+    "capturedAtMs": 1826,
     "restarts": 1,
     "formula": "settled",
     "checked": 399,

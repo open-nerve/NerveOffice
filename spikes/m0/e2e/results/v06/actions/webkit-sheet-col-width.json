@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "col-width",
   "kind": "sheet",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,7 +12,7 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T14:29:02.248Z",
+  "timestamp": "2026-09-24T17:43:12.477Z",
   "quiet": {
     "waitedMs": 976,
     "formula": "settled",
@@ -40,7 +41,7 @@
   },
   "timeline": [
     {
-      "dt": 5,
+      "dt": 4,
       "id": "sheet.mutation.set-worksheet-col-width",
       "verdict": "detected"
     }

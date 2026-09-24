@@ -7,14 +7,14 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T13:36:54.738Z",
+  "timestamp": "2026-09-24T18:03:44.086Z",
   "oldRule": {
-    "capturedAtMs": 1317,
+    "capturedAtMs": 1331,
     "checked": 399,
     "mismatches": 200
   },
   "newRule": {
-    "capturedAtMs": 3180,
+    "capturedAtMs": 3130,
     "restarts": 1,
     "formula": "settled",
     "checked": 399,

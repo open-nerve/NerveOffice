@@ -8,20 +8,20 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T14:10:52.625Z",
-  "idleWaitMs": 502.5,
+  "timestamp": "2026-09-24T18:13:15.390Z",
+  "idleWaitMs": 502.8000000715256,
   "idleCalcSessions": 0,
   "waitMs": {
-    "api": 30,
-    "rule": 1027.7000000476837,
-    "timeoutAttempt": 44.700000047683716,
-    "recaptureApi": 519.4000000953674,
-    "recaptureRule": 504.5
+    "api": 29.799999952316284,
+    "rule": 1016.5,
+    "timeoutAttempt": 44.799999952316284,
+    "recaptureApi": 522.2999999523163,
+    "recaptureRule": 501.7999999523163
   },
   "ruleOutcome": "settled",
   "timeoutOutcome": "applied",
   "volatileRecalculated": null,
-  "forcedRecalcMs": 507.10000002384186,
+  "forcedRecalcMs": 500.89999997615814,
   "checks": {
     "noWait": {
       "checked": 199,

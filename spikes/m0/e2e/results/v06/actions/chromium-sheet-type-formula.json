@@ -11,9 +11,9 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T13:14:36.624Z",
+  "timestamp": "2026-09-24T17:04:13.626Z",
   "quiet": {
-    "waitedMs": 656.2000000476837,
+    "waitedMs": 667,
     "formula": "settled",
     "restarts": 0
   },
@@ -318,37 +318,47 @@
       }
     ],
     "syncOnly": [],
-    "total": 166
+    "total": 164
   },
   "after": {
     "detections": [],
     "mutations": [],
     "syncOnly": [],
-    "total": 166
+    "total": 164
   },
   "timeline": [
     {
-      "dt": 14,
+      "dt": 12,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 201,
+      "dt": 199,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 201,
+      "dt": 200,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 210,
+      "dt": 208,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 210,
+      "dt": 208,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 216,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 216,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
@@ -368,22 +378,17 @@
       "verdict": "other-unit"
     },
     {
-      "dt": 220,
+      "dt": 221,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 225,
+      "dt": 222,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 225,
-      "id": "doc.mutation.rich-text-editing",
-      "verdict": "other-unit"
-    },
-    {
-      "dt": 226,
+      "dt": 222,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
@@ -393,12 +398,17 @@
       "verdict": "other-unit"
     },
     {
-      "dt": 229,
+      "dt": 226,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 229,
+      "dt": 227,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 227,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
@@ -413,17 +423,12 @@
       "verdict": "other-unit"
     },
     {
-      "dt": 232,
+      "dt": 231,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 232,
-      "id": "doc.mutation.rich-text-editing",
-      "verdict": "other-unit"
-    },
-    {
-      "dt": 233,
+      "dt": 231,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
@@ -433,82 +438,107 @@
       "verdict": "other-unit"
     },
     {
-      "dt": 235,
+      "dt": 233,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 235,
+      "dt": 234,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 236,
+      "dt": 234,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 236,
+      "dt": 237,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 241,
+      "dt": 238,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 241,
+      "dt": 239,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 242,
+      "dt": 239,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 242,
+      "dt": 244,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 246,
+      "dt": 244,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 246,
+      "dt": 245,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 247,
+      "dt": 245,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 247,
+      "dt": 248,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 254,
+      "dt": 248,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 255,
+      "dt": 249,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 256,
+      "dt": 249,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 256,
+      "dt": 252,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 252,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 253,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 253,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 259,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 260,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
@@ -518,57 +548,27 @@
       "verdict": "other-unit"
     },
     {
-      "dt": 262,
+      "dt": 261,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 263,
+      "dt": 270,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 263,
-      "id": "doc.mutation.rich-text-editing",
-      "verdict": "other-unit"
-    },
-    {
-      "dt": 266,
-      "id": "doc.mutation.rich-text-editing",
-      "verdict": "other-unit"
-    },
-    {
-      "dt": 266,
-      "id": "doc.mutation.rich-text-editing",
-      "verdict": "other-unit"
-    },
-    {
-      "dt": 267,
-      "id": "doc.mutation.rich-text-editing",
-      "verdict": "other-unit"
-    },
-    {
-      "dt": 267,
-      "id": "doc.mutation.rich-text-editing",
-      "verdict": "other-unit"
-    },
-    {
-      "dt": 285,
-      "id": "doc.mutation.rich-text-editing",
-      "verdict": "other-unit"
-    },
-    {
-      "dt": 286,
+      "dt": 270,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
     {
-      "dt": 287,
+      "dt": 271,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 299,
+      "dt": 283,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }

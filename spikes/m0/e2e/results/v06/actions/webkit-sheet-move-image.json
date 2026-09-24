@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "move-image",
   "kind": "sheet",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T14:32:45.654Z",
+  "timestamp": "2026-09-24T17:46:55.949Z",
   "quiet": {
-    "waitedMs": 999,
+    "waitedMs": 1000,
     "formula": "settled",
     "restarts": 0
   },
@@ -50,7 +51,7 @@
       "verdict": "detected"
     },
     {
-      "dt": 6,
+      "dt": 7,
       "id": "sheet.operation.clear-drawing-transformer",
       "verdict": "excluded"
     }
@@ -58,111 +59,111 @@
   "planRule": null,
   "diff": [
     {
-      "path": "$.resources[4].data.sheet-1.data.nHCAw8.axisAlignSheetTransform.from.column",
+      "path": "$.resources[4].data.sheet-1.data.3h0SPf.axisAlignSheetTransform.from.column",
       "kind": "changed",
       "before": "12",
       "after": "14"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.nHCAw8.axisAlignSheetTransform.from.row",
+      "path": "$.resources[4].data.sheet-1.data.3h0SPf.axisAlignSheetTransform.from.row",
       "kind": "changed",
       "before": "12",
       "after": "20"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.nHCAw8.axisAlignSheetTransform.to.column",
+      "path": "$.resources[4].data.sheet-1.data.3h0SPf.axisAlignSheetTransform.to.column",
       "kind": "changed",
       "before": "13",
       "after": "15"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.nHCAw8.axisAlignSheetTransform.to.row",
+      "path": "$.resources[4].data.sheet-1.data.3h0SPf.axisAlignSheetTransform.to.row",
       "kind": "changed",
       "before": "14",
       "after": "23"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.nHCAw8.axisAlignSheetTransform.to.rowOffset",
+      "path": "$.resources[4].data.sheet-1.data.3h0SPf.axisAlignSheetTransform.to.rowOffset",
       "kind": "changed",
       "before": "16",
       "after": "8"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.nHCAw8.column",
+      "path": "$.resources[4].data.sheet-1.data.3h0SPf.column",
       "kind": "changed",
       "before": "12",
       "after": "14"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.nHCAw8.row",
+      "path": "$.resources[4].data.sheet-1.data.3h0SPf.row",
       "kind": "changed",
       "before": "12",
       "after": "20"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.nHCAw8.sheetTransform.from.column",
+      "path": "$.resources[4].data.sheet-1.data.3h0SPf.sheetTransform.from.column",
       "kind": "changed",
       "before": "12",
       "after": "14"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.nHCAw8.sheetTransform.from.row",
+      "path": "$.resources[4].data.sheet-1.data.3h0SPf.sheetTransform.from.row",
       "kind": "changed",
       "before": "12",
       "after": "20"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.nHCAw8.sheetTransform.to.column",
+      "path": "$.resources[4].data.sheet-1.data.3h0SPf.sheetTransform.to.column",
       "kind": "changed",
       "before": "13",
       "after": "15"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.nHCAw8.sheetTransform.to.row",
+      "path": "$.resources[4].data.sheet-1.data.3h0SPf.sheetTransform.to.row",
       "kind": "changed",
       "before": "14",
       "after": "23"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.nHCAw8.sheetTransform.to.rowOffset",
+      "path": "$.resources[4].data.sheet-1.data.3h0SPf.sheetTransform.to.rowOffset",
       "kind": "changed",
       "before": "16",
       "after": "8"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.nHCAw8.transform.left",
+      "path": "$.resources[4].data.sheet-1.data.3h0SPf.transform.left",
       "kind": "changed",
       "before": "1046",
       "after": "1222"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.nHCAw8.transform.top",
+      "path": "$.resources[4].data.sheet-1.data.3h0SPf.transform.top",
       "kind": "changed",
       "before": "350",
       "after": "534"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.nHCAw8.angle",
+      "path": "$.resources[4].data.sheet-1.data.3h0SPf.angle",
       "kind": "added",
       "after": "0"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.nHCAw8.flipX",
+      "path": "$.resources[4].data.sheet-1.data.3h0SPf.flipX",
       "kind": "added",
       "after": "false"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.nHCAw8.flipY",
+      "path": "$.resources[4].data.sheet-1.data.3h0SPf.flipY",
       "kind": "added",
       "after": "false"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.nHCAw8.skewX",
+      "path": "$.resources[4].data.sheet-1.data.3h0SPf.skewX",
       "kind": "added",
       "after": "0"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.nHCAw8.skewY",
+      "path": "$.resources[4].data.sheet-1.data.3h0SPf.skewY",
       "kind": "added",
       "after": "0"
     }

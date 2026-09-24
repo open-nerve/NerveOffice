@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "merge",
   "kind": "sheet",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T14:27:45.202Z",
+  "timestamp": "2026-09-24T17:41:55.671Z",
   "quiet": {
-    "waitedMs": 975,
+    "waitedMs": 998,
     "formula": "settled",
     "restarts": 0
   },
@@ -40,7 +41,7 @@
   },
   "timeline": [
     {
-      "dt": 6,
+      "dt": 5,
       "id": "sheet.mutation.add-worksheet-merge",
       "verdict": "detected"
     }

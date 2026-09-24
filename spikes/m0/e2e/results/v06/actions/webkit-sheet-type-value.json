@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "type-value",
   "kind": "sheet",
+  "worker": false,
   "method": "U",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T14:26:14.716Z",
+  "timestamp": "2026-09-24T17:40:25.381Z",
   "quiet": {
-    "waitedMs": 669,
+    "waitedMs": 665,
     "formula": "settled",
     "restarts": 0
   },
@@ -94,52 +95,52 @@
   },
   "timeline": [
     {
-      "dt": 17,
+      "dt": 12,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 211,
+      "dt": 196,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 212,
+      "dt": 197,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 236,
+      "dt": 224,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 237,
+      "dt": 224,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 232,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 233,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
       "dt": 244,
-      "id": "doc.mutation.rich-text-editing",
-      "verdict": "other-unit"
-    },
-    {
-      "dt": 245,
-      "id": "doc.mutation.rich-text-editing",
-      "verdict": "other-unit"
-    },
-    {
-      "dt": 258,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
     {
-      "dt": 260,
+      "dt": 247,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 277,
+      "dt": 264,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }
@@ -147,14 +148,14 @@
   "planRule": null,
   "diff": [
     {
-      "path": "$.styles.uyo-A_",
+      "path": "$.styles.P-MYO0",
       "kind": "added",
       "after": "{\"cl\":{\"rgb\":\"#1B1C1F\"}}"
     },
     {
       "path": "$.sheets.sheet-1.cellData.2.10",
       "kind": "added",
-      "after": "{\"v\":123,\"s\":\"uyo-A_\",\"t\":2}"
+      "after": "{\"v\":123,\"s\":\"P-MYO0\",\"t\":2}"
     }
   ],
   "diffCount": 2,

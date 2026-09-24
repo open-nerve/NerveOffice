@@ -11,9 +11,9 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T13:22:35.408Z",
+  "timestamp": "2026-09-24T17:12:11.724Z",
   "quiet": {
-    "waitedMs": 987.7999999523163,
+    "waitedMs": 1006,
     "formula": "n/a",
     "restarts": 0
   },
@@ -40,7 +40,7 @@
   },
   "timeline": [
     {
-      "dt": 265,
+      "dt": 242,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "detected"
     }

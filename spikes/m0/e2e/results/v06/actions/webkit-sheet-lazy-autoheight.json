@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "lazy-autoheight",
   "kind": "sheet",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T14:29:24.313Z",
+  "timestamp": "2026-09-24T18:41:03.790Z",
   "quiet": {
-    "waitedMs": 998,
+    "waitedMs": 997,
     "formula": "settled",
     "restarts": 0
   },
@@ -68,187 +69,187 @@
   },
   "timeline": [
     {
-      "dt": 12,
+      "dt": 11,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
     {
-      "dt": 18,
+      "dt": 17,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 44,
+      "dt": 36,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 58,
+      "dt": 50,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 62,
+      "dt": 54,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     }
   ],
   "planRule": {
-    "captureAtMs": 1012,
+    "captureAtMs": 1011,
     "autoHeightMutations": 4,
-    "lastAutoHeightMs": 62,
+    "lastAutoHeightMs": 54,
     "missed": 0
   },
   "diff": [
     {
-      "path": "$.styles.V6XrbF",
+      "path": "$.styles.BJ4q-9",
       "kind": "added",
       "after": "{\"fs\":28}"
     },
     {
       "path": "$.sheets.sheet-1.cellData.0.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.1.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.2.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.3.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.4.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.5.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.6.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.7.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.8.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.9.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.10.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.11.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.12.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.13.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.14.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.15.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.16.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.17.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.18.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.19.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.20.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.21.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.22.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.23.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.24.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.25.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.26.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.27.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.28.12.s",
       "kind": "added",
-      "after": "\"V6XrbF\""
+      "after": "\"BJ4q-9\""
     }
   ],
   "diffCount": 2999,

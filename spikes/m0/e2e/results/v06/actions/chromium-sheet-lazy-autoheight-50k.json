@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "lazy-autoheight-50k",
   "kind": "sheet",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T13:18:02.120Z",
+  "timestamp": "2026-09-24T18:34:29.360Z",
   "quiet": {
-    "waitedMs": 4010.6999999284744,
+    "waitedMs": 4020.1999999284744,
     "formula": "settled",
     "restarts": 1
   },
@@ -747,7 +748,7 @@
   },
   "timeline": [
     {
-      "dt": 60,
+      "dt": 59,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
@@ -757,652 +758,652 @@
       "verdict": "detected"
     },
     {
-      "dt": 123,
+      "dt": 121,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 153,
+      "dt": 144,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 176,
+      "dt": 172,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 202,
+      "dt": 195,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 225,
+      "dt": 220,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 257,
+      "dt": 245,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 284,
+      "dt": 272,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 306,
+      "dt": 294,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 334,
+      "dt": 322,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 356,
+      "dt": 344,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 384,
+      "dt": 365,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 405,
+      "dt": 389,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 427,
+      "dt": 411,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 452,
+      "dt": 440,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 474,
+      "dt": 463,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 502,
+      "dt": 488,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 524,
+      "dt": 510,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 552,
+      "dt": 532,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 574,
+      "dt": 558,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 612,
+      "dt": 592,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 637,
+      "dt": 615,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 659,
+      "dt": 639,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 684,
+      "dt": 663,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 706,
+      "dt": 687,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 735,
+      "dt": 714,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 757,
+      "dt": 739,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 783,
+      "dt": 760,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 805,
+      "dt": 782,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 836,
+      "dt": 810,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 859,
+      "dt": 843,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 883,
+      "dt": 865,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 905,
+      "dt": 889,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 927,
+      "dt": 910,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 952,
+      "dt": 933,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 975,
+      "dt": 960,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1003,
+      "dt": 982,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1025,
+      "dt": 1006,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1071,
+      "dt": 1056,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1098,
+      "dt": 1078,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1120,
+      "dt": 1102,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1142,
+      "dt": 1127,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1164,
+      "dt": 1147,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1185,
+      "dt": 1174,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1206,
+      "dt": 1195,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1236,
+      "dt": 1219,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1257,
+      "dt": 1240,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1285,
+      "dt": 1261,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1311,
+      "dt": 1293,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1333,
+      "dt": 1314,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1355,
+      "dt": 1338,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1375,
+      "dt": 1359,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1401,
+      "dt": 1381,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1421,
+      "dt": 1409,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1451,
+      "dt": 1431,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1474,
+      "dt": 1460,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1502,
+      "dt": 1482,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1523,
+      "dt": 1506,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1551,
+      "dt": 1528,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1573,
+      "dt": 1559,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1602,
+      "dt": 1582,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1638,
+      "dt": 1618,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1663,
+      "dt": 1641,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1687,
+      "dt": 1662,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1708,
+      "dt": 1688,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1733,
+      "dt": 1710,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1755,
+      "dt": 1732,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1776,
+      "dt": 1756,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1802,
+      "dt": 1777,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1824,
+      "dt": 1809,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1853,
+      "dt": 1833,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1874,
+      "dt": 1857,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1900,
+      "dt": 1879,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1922,
+      "dt": 1909,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1950,
+      "dt": 1932,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 1973,
+      "dt": 1960,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 2001,
+      "dt": 1982,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 2025,
+      "dt": 2006,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 2053,
+      "dt": 2030,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 2076,
+      "dt": 2060,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 2102,
+      "dt": 2090,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 2125,
+      "dt": 2113,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 2152,
+      "dt": 2139,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 2176,
+      "dt": 2164,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 2202,
+      "dt": 2191,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 2227,
+      "dt": 2217,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 2253,
+      "dt": 2243,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 2276,
+      "dt": 2266,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 2325,
+      "dt": 2317,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 2350,
+      "dt": 2345,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 2373,
+      "dt": 2376,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 2402,
+      "dt": 2401,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 2425,
+      "dt": 2427,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 2452,
+      "dt": 2450,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 2475,
+      "dt": 2476,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 2502,
+      "dt": 2512,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 2525,
+      "dt": 2540,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 2552,
+      "dt": 2564,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 2575,
+      "dt": 2589,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     }
   ],
   "planRule": {
-    "captureAtMs": 1060,
+    "captureAtMs": 1059,
     "autoHeightMutations": 101,
-    "lastAutoHeightMs": 2615,
-    "missed": 63
+    "lastAutoHeightMs": 2628,
+    "missed": 62
   },
   "diff": [
     {
-      "path": "$.styles.W1dfNP",
+      "path": "$.styles.FScHm7",
       "kind": "added",
       "after": "{\"fs\":28}"
     },
     {
       "path": "$.sheets.sheet-1.cellData.0.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.1.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.2.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.3.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.4.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.5.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.6.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.7.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.8.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.9.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.10.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.11.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.12.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.13.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.14.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.15.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.16.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.17.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.18.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.19.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.20.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.21.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.22.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.23.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.24.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.25.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.26.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.27.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.28.13.s",
       "kind": "added",
-      "after": "\"W1dfNP\""
+      "after": "\"FScHm7\""
     }
   ],
   "diffCount": 99999,

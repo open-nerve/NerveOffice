@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "redo",
   "kind": "sheet",
+  "worker": false,
   "method": "U",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T13:51:21.335Z",
+  "timestamp": "2026-09-24T17:23:19.600Z",
   "quiet": {
-    "waitedMs": 1002.8999999761581,
+    "waitedMs": 998.5,
     "formula": "settled",
     "restarts": 0
   },
@@ -57,12 +58,12 @@
       "verdict": "other-unit"
     },
     {
-      "dt": 182,
+      "dt": 181,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
     {
-      "dt": 185,
+      "dt": 184,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }
@@ -72,7 +73,7 @@
     {
       "path": "$.sheets.sheet-1.cellData.7.10",
       "kind": "added",
-      "after": "{\"v\":\"重做前\",\"s\":\"Yg8Mos\",\"t\":1}"
+      "after": "{\"v\":\"重做前\",\"s\":\"9MnWzQ\",\"t\":1}"
     }
   ],
   "diffCount": 1,

@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "hyperlink",
   "kind": "doc",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T13:59:33.742Z",
+  "timestamp": "2026-09-24T17:31:31.511Z",
   "quiet": {
-    "waitedMs": 981.1000000238419,
+    "waitedMs": 984.2999999523163,
     "formula": "n/a",
     "restarts": 0
   },
@@ -40,7 +41,7 @@
   },
   "timeline": [
     {
-      "dt": 315,
+      "dt": 309,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "detected"
     }
@@ -51,7 +52,7 @@
       "path": "$.body.customRanges[0].rangeId",
       "kind": "changed",
       "before": "\"XAOjhp2d9f2YI8R97Lf9W\"",
-      "after": "\"ZG018JUt7FQRC8iaDQ3VT\""
+      "after": "\"sJaydraVwx8mS0K0aRbd0\""
     },
     {
       "path": "$.body.customRanges[0].properties.url",
@@ -104,7 +105,7 @@
       "path": "$.resources[1].data.links[0].id",
       "kind": "changed",
       "before": "\"XAOjhp2d9f2YI8R97Lf9W\"",
-      "after": "\"ZG018JUt7FQRC8iaDQ3VT\""
+      "after": "\"sJaydraVwx8mS0K0aRbd0\""
     },
     {
       "path": "$.resources[1].data.links[0].payload",

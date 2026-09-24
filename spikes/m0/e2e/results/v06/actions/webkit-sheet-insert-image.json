@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "insert-image",
   "kind": "sheet",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T14:32:34.639Z",
+  "timestamp": "2026-09-24T17:46:44.943Z",
   "quiet": {
-    "waitedMs": 999,
+    "waitedMs": 1000,
     "formula": "settled",
     "restarts": 0
   },
@@ -50,7 +51,7 @@
       "verdict": "detected"
     },
     {
-      "dt": 10,
+      "dt": 11,
       "id": "sheet.operation.clear-drawing-transformer",
       "verdict": "excluded"
     }
@@ -60,7 +61,7 @@
     {
       "path": "$.resources[4].data.sheet-1",
       "kind": "added",
-      "after": "{\"data\":{\"YgZ1T_\":{\"axisAlignSheetTransform\":{\"angle\":0,\"flipX\":false,\"flipY\":false,\"from\":{\"column\":12,\"columnOffset\":0,\"row\":12,\"rowOffset\":0},\"skewX\":0,\"s..."
+      "after": "{\"data\":{\"N9DfZw\":{\"axisAlignSheetTransform\":{\"angle\":0,\"flipX\":false,\"flipY\":false,\"from\":{\"column\":12,\"columnOffset\":0,\"row\":12,\"rowOffset\":0},\"skewX\":0,\"s..."
     }
   ],
   "diffCount": 1,

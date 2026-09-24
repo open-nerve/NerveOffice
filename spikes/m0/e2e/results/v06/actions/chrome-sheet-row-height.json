@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "row-height",
   "kind": "sheet",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T13:53:00.478Z",
+  "timestamp": "2026-09-24T17:24:58.570Z",
   "quiet": {
-    "waitedMs": 1002.7000000476837,
+    "waitedMs": 1000.8999999761581,
     "formula": "settled",
     "restarts": 0
   },
@@ -47,12 +48,12 @@
   },
   "timeline": [
     {
-      "dt": 3,
+      "dt": 2,
       "id": "sheet.mutation.set-worksheet-row-height",
       "verdict": "detected"
     },
     {
-      "dt": 6,
+      "dt": 4,
       "id": "sheet.mutation.set-worksheet-row-is-auto-height",
       "verdict": "detected"
     }

@@ -10,13 +10,13 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T14:42:40.617Z",
-  "bytes": 497385,
+  "timestamp": "2026-09-24T17:56:50.957Z",
+  "bytes": 497388,
   "timings": {
-    "t0": 178,
+    "t0": 173,
     "ready": 31,
     "rendered": 478,
-    "steady": 3538
+    "steady": 3539
   },
   "detections": [],
   "mutations": [
@@ -39,28 +39,28 @@
   "openDiffCount": 4,
   "openDiff": [
     {
-      "path": "$.sheets.fwIzE90Auc69GrZLRB70v.cellData.0.0.v",
+      "path": "$.sheets.PHIVDbu_Ev16LdRzFirLI.cellData.0.0.v",
       "kind": "changed",
-      "before": "46289.89640046296",
-      "after": "46289.9462037037"
+      "before": "46290.05585648148",
+      "after": "46290.081041666665"
     },
     {
-      "path": "$.sheets.fwIzE90Auc69GrZLRB70v.cellData.2.0.v",
+      "path": "$.sheets.PHIVDbu_Ev16LdRzFirLI.cellData.2.0.v",
       "kind": "changed",
-      "before": "0.9913977157117299",
-      "after": "0.25292493318154563"
+      "before": "0.01465037357664567",
+      "after": "0.16524289191952768"
     },
     {
-      "path": "$.sheets.fwIzE90Auc69GrZLRB70v.cellData.3.0.v",
+      "path": "$.sheets.PHIVDbu_Ev16LdRzFirLI.cellData.3.0.v",
       "kind": "changed",
-      "before": "308929",
-      "after": "714230"
+      "before": "424369",
+      "after": "501100"
     },
     {
-      "path": "$.sheets.fwIzE90Auc69GrZLRB70v.cellData.4.0.v",
+      "path": "$.sheets.PHIVDbu_Ev16LdRzFirLI.cellData.4.0.v",
       "kind": "changed",
-      "before": "1.9827954314234597",
-      "after": "0.5058498663630913"
+      "before": "0.02930074715329134",
+      "after": "0.33048578383905536"
     }
   ],
   "errors": []

@@ -1,6 +1,7 @@
 // V06-2 动作矩阵：用户的每一类编辑都能被检测到；只改视图的动作不被检测；检测安静之后没有未被检测到的迟到变化。
 // 每个动作：S0 → 执行动作 → 等到检测静默 1 秒、公式结果写回 → S1 → 再等 5 秒 → S2。
 // 执行方式：F 为 Facade 或命令（与界面走同一个命令），U 为真实的键盘鼠标操作。
+// 表格动作另在公式 Worker 模式下跑一遍（平台默认启用公式 Worker，P3 报告 §6.3；第二轮审查 S12）。
 import type { Page } from '@playwright/test';
 import type { DocKind } from './p3-helpers';
 
@@ -249,10 +250,17 @@ async function step(page: Page, kind: DocKind, s: Step): Promise<void> {
     else await s(page);
 }
 
-for (const a of [...SHEET, ...DOC]) {
-    test(`V06 动作：${a.kind}-${a.id}`, async ({ page, context }, testInfo) => {
+const RUNS = [
+    ...SHEET.map((a) => ({ a, worker: false })),
+    ...SHEET.map((a) => ({ a, worker: true })),
+    ...DOC.map((a) => ({ a, worker: false })),
+];
+
+for (const { a, worker } of RUNS) {
+    const name = `${a.kind}-${a.id}${worker ? '-worker' : ''}`;
+    test(`V06 动作：${name}`, async ({ page, context }, testInfo) => {
         if (testInfo.project.name !== 'webkit') await context.grantPermissions(['clipboard-read', 'clipboard-write']);
-        await page.goto(`/${a.kind}.html?sample=${a.kind === 'sheet' ? 'sheet-all' : 'doc-all'}`);
+        await page.goto(`/${a.kind}.html?sample=${a.kind === 'sheet' ? 'sheet-all' : 'doc-all'}${worker ? '&worker=1' : ''}`);
         await waitForEditor(page);
         if (a.pre != null) await step(page, a.kind, a.pre);
         await waitQuiet(page);
@@ -293,10 +301,11 @@ for (const a of [...SHEET, ...DOC]) {
             return { captureAtMs: captureAt, autoHeightMutations: autoHeight.length, lastAutoHeightMs: Math.max(...autoHeight.map((x) => x.dt)), missed: autoHeight.filter((x) => x.dt > captureAt).length };
         })();
 
-        await writeResult(`v06/actions/${testInfo.project.name}-${a.kind}-${a.id}.json`, {
+        await writeResult(`v06/actions/${testInfo.project.name}-${name}.json`, {
             check: 'V06-actions',
             action: a.id,
             kind: a.kind,
+            worker,
             method: a.method,
             expect: a.expect,
             verdict,

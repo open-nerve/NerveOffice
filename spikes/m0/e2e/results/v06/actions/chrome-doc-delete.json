@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "delete",
   "kind": "doc",
+  "worker": false,
   "method": "U",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T13:58:27.014Z",
+  "timestamp": "2026-09-24T17:30:24.991Z",
   "quiet": {
-    "waitedMs": 1004.3000000715256,
+    "waitedMs": 995.6000000238419,
     "formula": "n/a",
     "restarts": 0
   },
@@ -54,17 +55,17 @@
   },
   "timeline": [
     {
-      "dt": 245,
+      "dt": 238,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "detected"
     },
     {
-      "dt": 264,
+      "dt": 253,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "detected"
     },
     {
-      "dt": 276,
+      "dt": 267,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "detected"
     }

@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "defined-name",
   "kind": "sheet",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T14:32:23.623Z",
+  "timestamp": "2026-09-24T17:46:33.931Z",
   "quiet": {
-    "waitedMs": 1000,
+    "waitedMs": 998,
     "formula": "settled",
     "restarts": 0
   },
@@ -40,7 +41,7 @@
   },
   "timeline": [
     {
-      "dt": 6,
+      "dt": 7,
       "id": "formula.mutation.set-defined-name",
       "verdict": "detected"
     }
@@ -48,9 +49,9 @@
   "planRule": null,
   "diff": [
     {
-      "path": "$.resources[3].data.MydKTtxW82",
+      "path": "$.resources[3].data.ZxkHckUz9r",
       "kind": "added",
-      "after": "{\"formulaOrRefString\":\"'数据'!$A$2:$A$6\",\"id\":\"MydKTtxW82\",\"localSheetId\":\"AllDefaultWorkbook\",\"name\":\"新名称\"}"
+      "after": "{\"formulaOrRefString\":\"'数据'!$A$2:$A$6\",\"id\":\"ZxkHckUz9r\",\"localSheetId\":\"AllDefaultWorkbook\",\"name\":\"新名称\"}"
     }
   ],
   "diffCount": 1,

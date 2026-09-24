@@ -8,15 +8,15 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T14:45:32.031Z",
-  "idleWaitMs": 501,
+  "timestamp": "2026-09-24T18:23:07.304Z",
+  "idleWaitMs": 500,
   "idleCalcSessions": 0,
   "waitMs": {
-    "api": 535,
-    "rule": 1023,
-    "timeoutAttempt": 945,
-    "recaptureApi": 530,
-    "recaptureRule": 501
+    "api": 534,
+    "rule": 1016,
+    "timeoutAttempt": 933,
+    "recaptureApi": 537,
+    "recaptureRule": 502
   },
   "ruleOutcome": "settled",
   "timeoutOutcome": "applied",

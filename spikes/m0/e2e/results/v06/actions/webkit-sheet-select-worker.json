@@ -1,0 +1,52 @@
+{
+  "check": "V06-actions",
+  "action": "select",
+  "kind": "sheet",
+  "worker": true,
+  "method": "F",
+  "expect": "view",
+  "verdict": "通过",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T17:31:21.850Z",
+  "quiet": {
+    "waitedMs": 1024,
+    "formula": "settled",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [],
+    "mutations": [
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      }
+    ],
+    "syncOnly": [],
+    "total": 23
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 23
+  },
+  "timeline": [
+    {
+      "dt": 6,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    }
+  ],
+  "planRule": null,
+  "diff": [],
+  "diffCount": 0,
+  "lateDiff": [],
+  "errors": []
+}

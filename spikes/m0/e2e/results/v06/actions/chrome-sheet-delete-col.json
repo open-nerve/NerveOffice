@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "delete-col",
   "kind": "sheet",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T13:52:49.418Z",
+  "timestamp": "2026-09-24T17:24:47.599Z",
   "quiet": {
-    "waitedMs": 991.7999999523163,
+    "waitedMs": 991.8999999761581,
     "formula": "settled",
     "restarts": 0
   },
@@ -79,22 +80,22 @@
   },
   "timeline": [
     {
-      "dt": 6,
+      "dt": 5,
       "id": "sheet.mutation.remove-col",
       "verdict": "detected"
     },
     {
-      "dt": 9,
+      "dt": 8,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
     {
-      "dt": 11,
+      "dt": 10,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 12,
+      "dt": 11,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
@@ -109,7 +110,7 @@
       "verdict": "detected"
     },
     {
-      "dt": 33,
+      "dt": 34,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }

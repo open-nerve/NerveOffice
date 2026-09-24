@@ -3,11 +3,15 @@
 //   2. 待捕获时循环：
 //      a. 记下最后一次修改的时刻，发起一次 onCalculationResultApplied（在最后一次修改之后发起）；
 //      b. 等到距最后一次修改满 1 秒（管道的防抖）；
-//      c. 等最近一轮公式计算"逐表收齐"：结果 mutation 中带结果的每张工作表都收到了写回（Worker 模式下等待接口在第一张表写回后就返回）；
-//         这一轮没有结果 mutation、只收到"计算完成"通知时（修改没有牵动公式），视为收齐；
+//      c. 等公式计算收齐：
+//         - 最近一轮 start 之后没有再执行会触发计算的命令（否则新的一轮还在排队：SDK 不把新修改并进正在进行的一轮，
+//           要等这一轮的完成通知之后再过 10 ms 才开始；判断口径与 SDK 的触发服务一致，见 change-detector.ts）；
+//         - 这一轮没有被 stop（被 stop 的一轮会带着没算完的部分重新开始）；
+//         - 结果 mutation 中带结果的每张工作表都收到了写回（Worker 模式下等待接口在第一张表写回后就返回）；
+//           这一轮没有结果 mutation、只收到"计算完成"通知时（修改没有牵动公式），视为收齐；
 //      d. 等待期间又检测到修改，就从 a 重来；否则捕获。
 //   3. 超过总时限仍未收齐：照常捕获并标记"公式待更新"，由调用方在收齐后补捕获。
-// 捕获时刻 ≈ max（最后一次修改 + 1 秒，这一轮公式结果收齐）。
+// 捕获时刻 ≈ max（最后一次修改 + 1 秒，最后一次修改所触发的那一轮公式结果收齐）。
 import type { EditorHandle } from './create-editor';
 
 export interface CaptureWait {
@@ -26,11 +30,15 @@ export interface CaptureWaitOptions {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** 最近一轮公式计算是否还没收齐（只看仍然存在的工作表：写回控制器会跳过已删除的工作表）。 */
+/** 公式计算是否还没收齐（只看仍然存在的工作表：写回控制器会跳过已删除的工作表）。 */
 export function formulaPending(editor: EditorHandle): boolean {
     if (editor.kind !== 'sheet') return false;
     const p = editor.detector.formulaProgress();
-    if (!p.started || p.stopped) return false;
+    // 最近一轮开始之后又有会触发计算的修改：新的一轮还在排队
+    if (p.queued) return true;
+    if (!p.started) return false;
+    // 被 stop 的一轮：SDK 会把它没算完的部分并进下一轮重新开始
+    if (p.stopped) return true;
     // 还没有结果：计算结束（completed）说明这一轮没有需要写回的结果；否则仍在计算
     if (p.resultSheets == null) return !p.completed;
     const wb = editor.univerAPI.getActiveWorkbook();

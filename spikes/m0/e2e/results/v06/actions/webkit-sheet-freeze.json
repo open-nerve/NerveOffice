@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "freeze",
   "kind": "sheet",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,7 +12,7 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T14:30:00.598Z",
+  "timestamp": "2026-09-24T17:44:11.013Z",
   "quiet": {
     "waitedMs": 997,
     "formula": "settled",
@@ -40,7 +41,7 @@
   },
   "timeline": [
     {
-      "dt": 2,
+      "dt": 3,
       "id": "sheet.mutation.set-frozen",
       "verdict": "detected"
     }

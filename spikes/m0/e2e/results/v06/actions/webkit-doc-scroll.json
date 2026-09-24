@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "scroll",
   "kind": "doc",
+  "worker": false,
   "method": "U",
   "expect": "view",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T14:36:16.694Z",
+  "timestamp": "2026-09-24T17:50:27.096Z",
   "quiet": {
-    "waitedMs": 1022,
+    "waitedMs": 1000,
     "formula": "n/a",
     "restarts": 0
   },

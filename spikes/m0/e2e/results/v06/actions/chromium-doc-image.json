@@ -11,9 +11,9 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T13:23:19.297Z",
+  "timestamp": "2026-09-24T17:12:55.597Z",
   "quiet": {
-    "waitedMs": 992.7000000476837,
+    "waitedMs": 991.8000000715256,
     "formula": "n/a",
     "restarts": 0
   },
@@ -40,7 +40,7 @@
   },
   "timeline": [
     {
-      "dt": 11,
+      "dt": 12,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "detected"
     }
@@ -48,14 +48,14 @@
   "planRule": null,
   "diff": [
     {
-      "path": "$.drawings.CcZvy1",
+      "path": "$.drawings.icpVuR",
       "kind": "added",
-      "after": "{\"unitId\":\"m0-doc-all\",\"subUnitId\":\"m0-doc-all\",\"drawingId\":\"CcZvy1\",\"drawingType\":0,\"imageSourceType\":\"URL\",\"source\":\"/fixtures-assets/blue-120x80.png\",\"tra..."
+      "after": "{\"unitId\":\"m0-doc-all\",\"subUnitId\":\"m0-doc-all\",\"drawingId\":\"icpVuR\",\"drawingType\":0,\"imageSourceType\":\"URL\",\"source\":\"/fixtures-assets/blue-120x80.png\",\"tra..."
     },
     {
       "path": "$.drawingsOrder[2]",
       "kind": "added",
-      "after": "\"CcZvy1\""
+      "after": "\"icpVuR\""
     },
     {
       "path": "$.body.dataStream",
@@ -66,7 +66,7 @@
     {
       "path": "$.body.customBlocks[2]",
       "kind": "added",
-      "after": "{\"startIndex\":228,\"blockId\":\"CcZvy1\"}"
+      "after": "{\"startIndex\":228,\"blockId\":\"icpVuR\"}"
     },
     {
       "path": "$.body.paragraphs[29].startIndex",
@@ -75,14 +75,14 @@
       "after": "229"
     },
     {
-      "path": "$.resources[0].data.data.CcZvy1",
+      "path": "$.resources[0].data.data.icpVuR",
       "kind": "added",
       "after": "{\"behindDoc\":0,\"distB\":0,\"distL\":0,\"distR\":0,\"distT\":0,\"docTransform\":{\"angle\":0,\"positionH\":{\"posOffset\":0,\"relativeFrom\":0},\"positionV\":{\"posOffset\":0,\"rel..."
     },
     {
       "path": "$.resources[0].data.order[2]",
       "kind": "added",
-      "after": "\"CcZvy1\""
+      "after": "\"icpVuR\""
     }
   ],
   "diffCount": 7,

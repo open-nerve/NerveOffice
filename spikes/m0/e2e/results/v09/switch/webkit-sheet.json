@@ -7,12 +7,12 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T16:07:46.278Z",
+  "timestamp": "2026-09-24T17:41:04.210Z",
   "inPlace": [
     {
       "strategy": "facade",
-      "enterMs": 26,
-      "exitMs": 24,
+      "enterMs": 22,
+      "exitMs": 17,
       "undoInRead": {
         "undos": 0,
         "redos": 0
@@ -60,7 +60,7 @@
           "path": "$.resources[0].data",
           "kind": "changed",
           "before": "null",
-          "after": "{\"20ilIKC0\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"unitID\":\"m0-sheet-all\"},\"bmiEITmm\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"..."
+          "after": "{\"DGv7vaTf\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"unitID\":\"m0-sheet-all\"},\"N2yxCVx6\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"..."
         }
       ],
       "protectionResourcesAfter": [
@@ -73,8 +73,8 @@
     },
     {
       "strategy": "points",
-      "enterMs": 18,
-      "exitMs": 16,
+      "enterMs": 17,
+      "exitMs": 12,
       "undoInRead": {
         "undos": 0,
         "redos": 0
@@ -99,8 +99,8 @@
     },
     {
       "strategy": "firewall",
-      "enterMs": 4,
-      "exitMs": 4,
+      "enterMs": 2,
+      "exitMs": 2,
       "undoInRead": {
         "undos": 0,
         "redos": 0
@@ -116,8 +116,8 @@
     },
     {
       "strategy": "combined",
-      "enterMs": 27,
-      "exitMs": 17,
+      "enterMs": 15,
+      "exitMs": 14,
       "undoInRead": {
         "undos": 0,
         "redos": 0
@@ -142,8 +142,8 @@
     },
     {
       "strategy": "combined+ui",
-      "enterMs": 21,
-      "exitMs": 43,
+      "enterMs": 16,
+      "exitMs": 50,
       "undoInRead": {
         "undos": 0,
         "redos": 0
@@ -186,8 +186,8 @@
     },
     {
       "strategy": "combined+worker",
-      "enterMs": 19,
-      "exitMs": 17,
+      "enterMs": 18,
+      "exitMs": 14,
       "undoInRead": {
         "undos": 0,
         "redos": 0
@@ -212,10 +212,10 @@
     }
   ],
   "remount": {
-    "toReadMs": 3371,
-    "toReadRenderedMs": 338,
-    "toEditMs": 3398,
-    "toEditRenderedMs": 361,
+    "toReadMs": 3362,
+    "toReadRenderedMs": 335,
+    "toEditMs": 3385,
+    "toEditRenderedMs": 354,
     "readUndo": {
       "undos": 0,
       "redos": 0

@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "move-image",
   "kind": "sheet",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T13:56:58.409Z",
+  "timestamp": "2026-09-24T17:28:56.637Z",
   "quiet": {
-    "waitedMs": 1006.2999999523163,
+    "waitedMs": 1016.5,
     "formula": "settled",
     "restarts": 0
   },
@@ -58,111 +59,111 @@
   "planRule": null,
   "diff": [
     {
-      "path": "$.resources[4].data.sheet-1.data.gbKoUQ.axisAlignSheetTransform.from.column",
+      "path": "$.resources[4].data.sheet-1.data.ma6KJe.axisAlignSheetTransform.from.column",
       "kind": "changed",
       "before": "12",
       "after": "14"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.gbKoUQ.axisAlignSheetTransform.from.row",
+      "path": "$.resources[4].data.sheet-1.data.ma6KJe.axisAlignSheetTransform.from.row",
       "kind": "changed",
       "before": "12",
       "after": "20"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.gbKoUQ.axisAlignSheetTransform.to.column",
+      "path": "$.resources[4].data.sheet-1.data.ma6KJe.axisAlignSheetTransform.to.column",
       "kind": "changed",
       "before": "13",
       "after": "15"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.gbKoUQ.axisAlignSheetTransform.to.row",
+      "path": "$.resources[4].data.sheet-1.data.ma6KJe.axisAlignSheetTransform.to.row",
       "kind": "changed",
       "before": "14",
       "after": "23"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.gbKoUQ.axisAlignSheetTransform.to.rowOffset",
+      "path": "$.resources[4].data.sheet-1.data.ma6KJe.axisAlignSheetTransform.to.rowOffset",
       "kind": "changed",
       "before": "16",
       "after": "8"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.gbKoUQ.column",
+      "path": "$.resources[4].data.sheet-1.data.ma6KJe.column",
       "kind": "changed",
       "before": "12",
       "after": "14"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.gbKoUQ.row",
+      "path": "$.resources[4].data.sheet-1.data.ma6KJe.row",
       "kind": "changed",
       "before": "12",
       "after": "20"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.gbKoUQ.sheetTransform.from.column",
+      "path": "$.resources[4].data.sheet-1.data.ma6KJe.sheetTransform.from.column",
       "kind": "changed",
       "before": "12",
       "after": "14"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.gbKoUQ.sheetTransform.from.row",
+      "path": "$.resources[4].data.sheet-1.data.ma6KJe.sheetTransform.from.row",
       "kind": "changed",
       "before": "12",
       "after": "20"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.gbKoUQ.sheetTransform.to.column",
+      "path": "$.resources[4].data.sheet-1.data.ma6KJe.sheetTransform.to.column",
       "kind": "changed",
       "before": "13",
       "after": "15"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.gbKoUQ.sheetTransform.to.row",
+      "path": "$.resources[4].data.sheet-1.data.ma6KJe.sheetTransform.to.row",
       "kind": "changed",
       "before": "14",
       "after": "23"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.gbKoUQ.sheetTransform.to.rowOffset",
+      "path": "$.resources[4].data.sheet-1.data.ma6KJe.sheetTransform.to.rowOffset",
       "kind": "changed",
       "before": "16",
       "after": "8"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.gbKoUQ.transform.left",
+      "path": "$.resources[4].data.sheet-1.data.ma6KJe.transform.left",
       "kind": "changed",
       "before": "1046",
       "after": "1222"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.gbKoUQ.transform.top",
+      "path": "$.resources[4].data.sheet-1.data.ma6KJe.transform.top",
       "kind": "changed",
       "before": "350",
       "after": "534"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.gbKoUQ.angle",
+      "path": "$.resources[4].data.sheet-1.data.ma6KJe.angle",
       "kind": "added",
       "after": "0"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.gbKoUQ.flipX",
+      "path": "$.resources[4].data.sheet-1.data.ma6KJe.flipX",
       "kind": "added",
       "after": "false"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.gbKoUQ.flipY",
+      "path": "$.resources[4].data.sheet-1.data.ma6KJe.flipY",
       "kind": "added",
       "after": "false"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.gbKoUQ.skewX",
+      "path": "$.resources[4].data.sheet-1.data.ma6KJe.skewX",
       "kind": "added",
       "after": "0"
     },
     {
-      "path": "$.resources[4].data.sheet-1.data.gbKoUQ.skewY",
+      "path": "$.resources[4].data.sheet-1.data.ma6KJe.skewY",
       "kind": "added",
       "after": "0"
     }

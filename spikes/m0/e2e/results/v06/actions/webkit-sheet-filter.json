@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "filter",
   "kind": "sheet",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T14:31:39.602Z",
+  "timestamp": "2026-09-24T17:45:49.963Z",
   "quiet": {
-    "waitedMs": 1010,
+    "waitedMs": 981,
     "formula": "settled",
     "restarts": 0
   },
@@ -46,12 +47,12 @@
   },
   "timeline": [
     {
-      "dt": 4,
+      "dt": 3,
       "id": "sheet.mutation.set-filter-range",
       "verdict": "detected"
     },
     {
-      "dt": 21,
+      "dt": 35,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }

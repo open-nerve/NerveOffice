@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "heading",
   "kind": "doc",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T14:34:35.932Z",
+  "timestamp": "2026-09-24T17:48:46.478Z",
   "quiet": {
-    "waitedMs": 1001,
+    "waitedMs": 997,
     "formula": "n/a",
     "restarts": 0
   },
@@ -40,7 +41,7 @@
   },
   "timeline": [
     {
-      "dt": 10,
+      "dt": 11,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "detected"
     }

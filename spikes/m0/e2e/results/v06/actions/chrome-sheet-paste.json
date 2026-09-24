@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "paste",
   "kind": "sheet",
+  "worker": false,
   "method": "U",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T13:50:58.148Z",
+  "timestamp": "2026-09-24T17:22:56.394Z",
   "quiet": {
-    "waitedMs": 1542.3000000715256,
+    "waitedMs": 1535,
     "formula": "settled",
     "restarts": 1
   },
@@ -58,7 +59,7 @@
   },
   "timeline": [
     {
-      "dt": 13,
+      "dt": 10,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
@@ -68,12 +69,12 @@
       "verdict": "other-unit"
     },
     {
-      "dt": 707,
+      "dt": 715,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
     {
-      "dt": 709,
+      "dt": 716,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }

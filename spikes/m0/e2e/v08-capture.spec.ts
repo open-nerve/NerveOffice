@@ -111,8 +111,8 @@ for (const s of SAMPLES) {
                     const t0 = performance.now();
                     ws.getRange(cell).setValue(1000 + i);
                     await m0.waitForCapture!();
-                    await m0.perf!.measureCapture(editor);
-                    return performance.now() - t0;
+                    // 计到哈希完成为止（measureCapture 返回前还要让出一帧收集长任务记录，不算在内）
+                    return (await m0.perf!.measureCapture(editor)).finishedAt - t0;
                 };
                 const out: Record<string, number[]> = { noDependent: [], oneFormula: [] };
                 for (let i = 0; i < n; i++) out.noDependent.push(await run('D2', i));
@@ -154,8 +154,7 @@ for (const worker of [false, true]) {
                 const t0 = performance.now();
                 ws.getRange(`D${i + 2}`).setValue(700 + i);
                 const wait = await m0.waitForCapture!();
-                await m0.perf!.measureCapture(editor);
-                totals.push(performance.now() - t0);
+                totals.push((await m0.perf!.measureCapture(editor)).finishedAt - t0);
                 waits.push(wait.waitedMs);
             }
             return { totals, waits };

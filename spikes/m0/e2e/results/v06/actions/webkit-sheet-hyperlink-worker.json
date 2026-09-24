@@ -1,0 +1,60 @@
+{
+  "check": "V06-actions",
+  "action": "hyperlink",
+  "kind": "sheet",
+  "worker": true,
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T17:30:26.913Z",
+  "quiet": {
+    "waitedMs": 1010,
+    "formula": "settled",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.set-range-values"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.set-range-values",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 26
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 26
+  },
+  "timeline": [
+    {
+      "dt": 4,
+      "id": "sheet.mutation.set-range-values",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.sheets.sheet-1.cellData.30",
+      "kind": "added",
+      "after": "{\"10\":{\"p\":{\"id\":\"d\",\"locale\":\"enUS\",\"title\":\"\",\"tableSource\":{},\"drawings\":{},\"drawingsOrder\":[],\"headers\":{},\"footers\":{},\"notes\":{},\"noteSettings\":{},\"bod..."
+    }
+  ],
+  "diffCount": 1,
+  "lateDiff": [],
+  "errors": []
+}

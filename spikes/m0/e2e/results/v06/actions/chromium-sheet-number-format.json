@@ -11,9 +11,9 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T13:15:44.599Z",
+  "timestamp": "2026-09-24T17:05:21.485Z",
   "quiet": {
-    "waitedMs": 1005.1999999284744,
+    "waitedMs": 1003.8999999761581,
     "formula": "settled",
     "restarts": 0
   },
@@ -40,7 +40,7 @@
   },
   "timeline": [
     {
-      "dt": 3,
+      "dt": 2,
       "id": "sheet.mutation.set.numfmt",
       "verdict": "detected"
     }
@@ -48,34 +48,34 @@
   "planRule": null,
   "diff": [
     {
-      "path": "$.styles.qI8Xnz",
+      "path": "$.styles.Jublyt",
       "kind": "added",
       "after": "{\"n\":{\"pattern\":\"0.0\"}}"
     },
     {
       "path": "$.sheets.sheet-1.cellData.1.1.s",
       "kind": "added",
-      "after": "\"qI8Xnz\""
+      "after": "\"Jublyt\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.2.1.s",
       "kind": "added",
-      "after": "\"qI8Xnz\""
+      "after": "\"Jublyt\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.3.1.s",
       "kind": "added",
-      "after": "\"qI8Xnz\""
+      "after": "\"Jublyt\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.4.1.s",
       "kind": "added",
-      "after": "\"qI8Xnz\""
+      "after": "\"Jublyt\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.5.1.s",
       "kind": "added",
-      "after": "\"qI8Xnz\""
+      "after": "\"Jublyt\""
     }
   ],
   "diffCount": 6,

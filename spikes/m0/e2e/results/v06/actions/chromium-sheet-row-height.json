@@ -11,9 +11,9 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T13:17:01.045Z",
+  "timestamp": "2026-09-24T17:06:37.779Z",
   "quiet": {
-    "waitedMs": 989.8999999761581,
+    "waitedMs": 999.7000000476837,
     "formula": "settled",
     "restarts": 0
   },
@@ -47,12 +47,12 @@
   },
   "timeline": [
     {
-      "dt": 3,
+      "dt": 2,
       "id": "sheet.mutation.set-worksheet-row-height",
       "verdict": "detected"
     },
     {
-      "dt": 5,
+      "dt": 3,
       "id": "sheet.mutation.set-worksheet-row-is-auto-height",
       "verdict": "detected"
     }

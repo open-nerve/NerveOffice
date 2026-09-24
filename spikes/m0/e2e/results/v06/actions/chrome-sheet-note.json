@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "note",
   "kind": "sheet",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T13:56:14.302Z",
+  "timestamp": "2026-09-24T17:28:12.602Z",
   "quiet": {
-    "waitedMs": 1003.8000000715256,
+    "waitedMs": 992.7000000476837,
     "formula": "settled",
     "restarts": 0
   },
@@ -50,7 +51,7 @@
     {
       "path": "$.resources[6].data.sheet-1",
       "kind": "added",
-      "after": "{\"29\":{\"10\":{\"col\":10,\"height\":60,\"id\":\"d671Fa\",\"note\":\"新备注\",\"row\":29,\"width\":160}}}"
+      "after": "{\"29\":{\"10\":{\"col\":10,\"height\":60,\"id\":\"bTTHqv\",\"note\":\"新备注\",\"row\":29,\"width\":160}}}"
     }
   ],
   "diffCount": 1,

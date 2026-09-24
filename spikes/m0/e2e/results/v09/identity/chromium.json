@@ -6,11 +6,11 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T13:50:11.060Z",
+  "timestamp": "2026-09-24T17:17:43.350Z",
   "results": [
     {
       "sample": "sheet-all",
-      "userBefore": "Owner_TYj6BCZn",
+      "userBefore": "Owner_9s3zAhDV",
       "userAfter": "user-reader-1",
       "controlK3": {
         "changed": true,
@@ -29,7 +29,7 @@
     },
     {
       "sample": "sheet-protection",
-      "userBefore": "Owner_rXy8S2Rr",
+      "userBefore": "Owner_X6FiJECo",
       "userAfter": "user-reader-1",
       "controlK3": {
         "changed": true,

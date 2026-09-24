@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "list",
   "kind": "doc",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T13:59:00.312Z",
+  "timestamp": "2026-09-24T17:30:58.235Z",
   "quiet": {
-    "waitedMs": 980.0999999046326,
+    "waitedMs": 1002.7000000476837,
     "formula": "n/a",
     "restarts": 0
   },
@@ -40,7 +41,7 @@
   },
   "timeline": [
     {
-      "dt": 315,
+      "dt": 308,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "detected"
     }
@@ -50,7 +51,7 @@
     {
       "path": "$.body.paragraphs[5].bullet",
       "kind": "added",
-      "after": "{\"nestingLevel\":0,\"listType\":\"BULLET_LIST\",\"listId\":\"B54pRK\"}"
+      "after": "{\"nestingLevel\":0,\"listType\":\"BULLET_LIST\",\"listId\":\"E2nrOg\"}"
     }
   ],
   "diffCount": 1,

@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "freeze",
   "kind": "sheet",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T13:54:13.136Z",
+  "timestamp": "2026-09-24T17:26:11.446Z",
   "quiet": {
-    "waitedMs": 990.7999999523163,
+    "waitedMs": 999.1000000238419,
     "formula": "settled",
     "restarts": 0
   },

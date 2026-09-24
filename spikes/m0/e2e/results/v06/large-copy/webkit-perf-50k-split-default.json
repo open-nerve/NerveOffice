@@ -12,14 +12,14 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T15:44:32.336Z",
+  "timestamp": "2026-09-24T18:42:29.294Z",
   "copy": {
-    "syncMs": 17,
+    "syncMs": 16,
     "name": "数据表 （副本）",
     "idleMaxGapMs": 61
   },
   "quiet": {
-    "waitedMs": 909,
+    "waitedMs": 908,
     "formula": "settled",
     "restarts": 0
   },
@@ -29,7 +29,7 @@
     "lastBeforeS1Ms": 120,
     "lastMs": 120
   },
-  "capturedAfterMs": 909,
+  "capturedAfterMs": 908,
   "sourceCells": 50010,
   "copiedCellsImmediately": 3000,
   "copiedCellsAtS1": 50010,

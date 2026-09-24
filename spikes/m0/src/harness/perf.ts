@@ -119,6 +119,8 @@ export interface CaptureMeasurement {
     /** 异步段期间的最长阻塞。 */
     asyncMaxGapMs: number;
     longTasks: LongTaskRecord[] | null;
+    /** 哈希完成的时刻（performance.now()）：端到端按它计时，不含收集长任务记录时的让出。 */
+    finishedAt: number;
 }
 
 /** 按平台管道的顺序做一次完整捕获：save() → 序列化 → gzip → SHA-256（00 号计划书 §7.2 的 ①）。 */
@@ -147,6 +149,7 @@ export async function measureCapture(editor: EditorHandle): Promise<CaptureMeasu
         gzipBytes: zipped.length,
         asyncMaxGapMs: gap.maxGap,
         longTasks: longTasks.supported ? tasks : null,
+        finishedAt: t4,
     };
 }
 

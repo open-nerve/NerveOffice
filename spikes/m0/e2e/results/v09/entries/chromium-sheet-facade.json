@@ -2,13 +2,14 @@
   "check": "V09-entries",
   "kind": "sheet",
   "strategy": "facade",
+  "worker": false,
   "browser": {
     "project": "chromium",
     "name": "chromium",
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T13:38:32.268Z",
+  "timestamp": "2026-09-24T17:05:10.941Z",
   "traces": {
     "steps": [
       {
@@ -97,13 +98,13 @@
         "path": "$.resources[0].data",
         "kind": "changed",
         "before": "null",
-        "after": "{\"5dsh_qDz\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"unitID\":\"m0-sheet-all\"},\"M_b8uqHj\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"..."
+        "after": "{\"C3CHGMYu\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"unitID\":\"m0-sheet-all\"},\"EfGq6ImY\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"..."
       },
       {
         "path": "$.resources[9].data",
         "kind": "changed",
         "before": "null",
-        "after": "{\"m0-sheet-all\":[{\"editState\":\"onlyMe\",\"permissionId\":\"pCmBzml0\",\"subUnitId\":\"sheet-1\",\"unitId\":\"m0-sheet-all\",\"unitType\":2,\"viewState\":\"othersCanView\"},{\"ed..."
+        "after": "{\"m0-sheet-all\":[{\"editState\":\"onlyMe\",\"permissionId\":\"TSgB03BE\",\"subUnitId\":\"sheet-1\",\"unitId\":\"m0-sheet-all\",\"unitType\":2,\"viewState\":\"othersCanView\"},{\"ed..."
       }
     ]
   },
@@ -242,12 +243,12 @@
         {
           "path": "$.sheetOrder[5]",
           "kind": "added",
-          "after": "\"Gv2MjpYVUp5bfldFtisUO\""
+          "after": "\"2izAcaACgqItGcZ5jKj_E\""
         },
         {
-          "path": "$.sheets.Gv2MjpYVUp5bfldFtisUO",
+          "path": "$.sheets.2izAcaACgqItGcZ5jKj_E",
           "kind": "added",
-          "after": "{\"id\":\"Gv2MjpYVUp5bfldFtisUO\",\"name\":\"新表\",\"tabColor\":\"\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24,\"showGridli..."
+          "after": "{\"id\":\"2izAcaACgqItGcZ5jKj_E\",\"name\":\"新表\",\"tabColor\":\"\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24,\"showGridli..."
         }
       ],
       "canceledSoFar": 0
@@ -317,7 +318,7 @@
           "path": "$.sheetOrder[2]",
           "kind": "changed",
           "before": "\"BosGI6KRewWr9iRx1e2-J\"",
-          "after": "\"UbL7HjPZkh17Rvz6dfsgw\""
+          "after": "\"2rrnOgeIzELu2JWYBwR23\""
         },
         {
           "path": "$.sheetOrder[3]",
@@ -337,9 +338,9 @@
           "after": "\"3pom9bUkA1bNL7bRVYpBX\""
         },
         {
-          "path": "$.sheets.UbL7HjPZkh17Rvz6dfsgw",
+          "path": "$.sheets.2rrnOgeIzELu2JWYBwR23",
           "kind": "added",
-          "after": "{\"id\":\"UbL7HjPZkh17Rvz6dfsgw\",\"name\":\"汇总 （副本）\",\"tabColor\":\"#16a34a\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24..."
+          "after": "{\"id\":\"2rrnOgeIzELu2JWYBwR23\",\"name\":\"汇总 （副本）\",\"tabColor\":\"#16a34a\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24..."
         }
       ],
       "canceledSoFar": 0
@@ -522,7 +523,7 @@
         {
           "path": "$.resources[6].data.sheet-1",
           "kind": "added",
-          "after": "{\"29\":{\"10\":{\"col\":10,\"height\":60,\"id\":\"TOykU5\",\"note\":\"新备注\",\"row\":29,\"width\":160}}}"
+          "after": "{\"29\":{\"10\":{\"col\":10,\"height\":60,\"id\":\"oCBEKz\",\"note\":\"新备注\",\"row\":29,\"width\":160}}}"
         }
       ],
       "canceledSoFar": 0

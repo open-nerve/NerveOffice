@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "zoom",
   "kind": "doc",
+  "worker": false,
   "method": "F",
   "expect": "view",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T14:36:27.626Z",
+  "timestamp": "2026-09-24T17:50:37.998Z",
   "quiet": {
-    "waitedMs": 1024,
+    "waitedMs": 1022,
     "formula": "n/a",
     "restarts": 0
   },

@@ -2,13 +2,14 @@
   "check": "V09-entries",
   "kind": "sheet",
   "strategy": "firewall",
+  "worker": false,
   "browser": {
     "project": "chrome",
     "name": "chromium",
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T14:16:39.555Z",
+  "timestamp": "2026-09-24T17:21:21.999Z",
   "traces": {
     "steps": [
       {

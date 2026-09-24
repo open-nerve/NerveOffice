@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "data-validation",
   "kind": "sheet",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T13:55:41.285Z",
+  "timestamp": "2026-09-24T17:27:39.572Z",
   "quiet": {
-    "waitedMs": 1015.2999999523163,
+    "waitedMs": 1014.6999999284744,
     "formula": "settled",
     "restarts": 0
   },
@@ -40,7 +41,7 @@
   },
   "timeline": [
     {
-      "dt": 4,
+      "dt": 2,
       "id": "data-validation.mutation.addRule",
       "verdict": "detected"
     }

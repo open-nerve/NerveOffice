@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "undo",
   "kind": "sheet",
+  "worker": false,
   "method": "U",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T13:51:09.565Z",
+  "timestamp": "2026-09-24T17:23:07.801Z",
   "quiet": {
-    "waitedMs": 975.4000000953674,
+    "waitedMs": 986.6999999284744,
     "formula": "settled",
     "restarts": 0
   },
@@ -57,12 +58,12 @@
       "verdict": "other-unit"
     },
     {
-      "dt": 185,
+      "dt": 181,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
     {
-      "dt": 188,
+      "dt": 184,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }
@@ -72,7 +73,7 @@
     {
       "path": "$.sheets.sheet-1.cellData.7.10",
       "kind": "removed",
-      "before": "{\"v\":\"撤销前\",\"s\":\"my9d7m\",\"t\":1}"
+      "before": "{\"v\":\"撤销前\",\"s\":\"Ok3irF\",\"t\":1}"
     }
   ],
   "diffCount": 1,

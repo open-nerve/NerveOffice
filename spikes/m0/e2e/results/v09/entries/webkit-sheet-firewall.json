@@ -2,13 +2,14 @@
   "check": "V09-entries",
   "kind": "sheet",
   "strategy": "firewall",
+  "worker": false,
   "browser": {
     "project": "webkit",
     "name": "webkit",
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T14:51:56.443Z",
+  "timestamp": "2026-09-24T17:35:18.534Z",
   "traces": {
     "steps": [
       {

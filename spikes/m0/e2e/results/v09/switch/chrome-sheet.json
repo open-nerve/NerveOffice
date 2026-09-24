@@ -7,12 +7,12 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T16:05:58.198Z",
+  "timestamp": "2026-09-24T17:27:32.273Z",
   "inPlace": [
     {
       "strategy": "facade",
-      "enterMs": 20,
-      "exitMs": 19,
+      "enterMs": 50,
+      "exitMs": 13,
       "undoInRead": {
         "undos": 0,
         "redos": 0
@@ -60,7 +60,7 @@
           "path": "$.resources[0].data",
           "kind": "changed",
           "before": "null",
-          "after": "{\"1KA6H4rY\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"unitID\":\"m0-sheet-all\"},\"5Guk2kNL\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"..."
+          "after": "{\"At_gCTtT\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"unitID\":\"m0-sheet-all\"},\"SM7u9QDo\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"..."
         }
       ],
       "protectionResourcesAfter": [
@@ -73,8 +73,8 @@
     },
     {
       "strategy": "points",
-      "enterMs": 26,
-      "exitMs": 19,
+      "enterMs": 14,
+      "exitMs": 12,
       "undoInRead": {
         "undos": 0,
         "redos": 0
@@ -99,8 +99,8 @@
     },
     {
       "strategy": "firewall",
-      "enterMs": 4,
-      "exitMs": 6,
+      "enterMs": 2,
+      "exitMs": 3,
       "undoInRead": {
         "undos": 0,
         "redos": 0
@@ -116,8 +116,8 @@
     },
     {
       "strategy": "combined",
-      "enterMs": 15,
-      "exitMs": 19,
+      "enterMs": 16,
+      "exitMs": 13,
       "undoInRead": {
         "undos": 0,
         "redos": 0
@@ -142,8 +142,8 @@
     },
     {
       "strategy": "combined+ui",
-      "enterMs": 19,
-      "exitMs": 33,
+      "enterMs": 10,
+      "exitMs": 6,
       "undoInRead": {
         "undos": 0,
         "redos": 0
@@ -186,8 +186,8 @@
     },
     {
       "strategy": "combined+worker",
-      "enterMs": 18,
-      "exitMs": 19,
+      "enterMs": 12,
+      "exitMs": 12,
       "undoInRead": {
         "undos": 0,
         "redos": 0
@@ -212,10 +212,10 @@
     }
   ],
   "remount": {
-    "toReadMs": 3359,
-    "toReadRenderedMs": 337.5,
-    "toEditMs": 3373.5,
-    "toEditRenderedMs": 345.10000002384186,
+    "toReadMs": 3347.100000023842,
+    "toReadRenderedMs": 327.7000000476837,
+    "toEditMs": 3367.7999999523163,
+    "toEditRenderedMs": 340.40000009536743,
     "readUndo": {
       "undos": 0,
       "redos": 0

@@ -12,11 +12,11 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T15:44:44.838Z",
+  "timestamp": "2026-09-24T18:42:41.754Z",
   "copy": {
-    "syncMs": 26,
+    "syncMs": 27,
     "name": "数据表 （副本）",
-    "idleMaxGapMs": 49
+    "idleMaxGapMs": 44
   },
   "quiet": {
     "waitedMs": 902,
@@ -26,8 +26,8 @@
   "localMutations": {
     "beforeS1": 12,
     "afterS1": 0,
-    "lastBeforeS1Ms": 115,
-    "lastMs": 115
+    "lastBeforeS1Ms": 118,
+    "lastMs": 118
   },
   "capturedAfterMs": 902,
   "sourceCells": 50010,

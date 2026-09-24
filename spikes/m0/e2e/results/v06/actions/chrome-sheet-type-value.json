@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "type-value",
   "kind": "sheet",
+  "worker": false,
   "method": "U",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T13:50:23.347Z",
+  "timestamp": "2026-09-24T17:22:21.672Z",
   "quiet": {
-    "waitedMs": 645.7999999523163,
+    "waitedMs": 658.8999999761581,
     "formula": "settled",
     "restarts": 0
   },
@@ -94,7 +95,7 @@
   },
   "timeline": [
     {
-      "dt": 14,
+      "dt": 15,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
@@ -109,22 +110,22 @@
       "verdict": "other-unit"
     },
     {
-      "dt": 224,
+      "dt": 223,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 225,
+      "dt": 223,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 230,
+      "dt": 228,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 230,
+      "dt": 229,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
@@ -134,12 +135,12 @@
       "verdict": "detected"
     },
     {
-      "dt": 241,
+      "dt": 240,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 257,
+      "dt": 255,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }
@@ -147,14 +148,14 @@
   "planRule": null,
   "diff": [
     {
-      "path": "$.styles.32CXpY",
+      "path": "$.styles.9KlXAs",
       "kind": "added",
       "after": "{\"cl\":{\"rgb\":\"#1B1C1F\"}}"
     },
     {
       "path": "$.sheets.sheet-1.cellData.2.10",
       "kind": "added",
-      "after": "{\"v\":123,\"s\":\"32CXpY\",\"t\":2}"
+      "after": "{\"v\":123,\"s\":\"9KlXAs\",\"t\":2}"
     }
   ],
   "diffCount": 2,

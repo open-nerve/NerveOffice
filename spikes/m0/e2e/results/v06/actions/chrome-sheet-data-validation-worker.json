@@ -1,0 +1,60 @@
+{
+  "check": "V06-actions",
+  "action": "data-validation",
+  "kind": "sheet",
+  "worker": true,
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T17:21:54.337Z",
+  "quiet": {
+    "waitedMs": 1001.0999999046326,
+    "formula": "settled",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [
+      "data-validation.mutation.addRule"
+    ],
+    "mutations": [
+      {
+        "id": "data-validation.mutation.addRule",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 21
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 21
+  },
+  "timeline": [
+    {
+      "dt": 3,
+      "id": "data-validation.mutation.addRule",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.resources[2].data.sheet-1",
+      "kind": "added",
+      "after": "[{\"formula1\":\"1\",\"formula2\":\"10\",\"operator\":\"between\",\"ranges\":[{\"endAbsoluteRefType\":0,\"endColumn\":10,\"endRow\":24,\"rangeType\":0,\"sheetId\":\"sheet-1\",\"startAb..."
+    }
+  ],
+  "diffCount": 1,
+  "lateDiff": [],
+  "errors": []
+}

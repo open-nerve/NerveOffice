@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "select",
   "kind": "sheet",
+  "worker": false,
   "method": "F",
   "expect": "view",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T13:57:20.514Z",
+  "timestamp": "2026-09-24T17:29:18.665Z",
   "quiet": {
-    "waitedMs": 1016.8999999761581,
+    "waitedMs": 1014.1000000238419,
     "formula": "settled",
     "restarts": 0
   },
@@ -38,7 +39,7 @@
   },
   "timeline": [
     {
-      "dt": 8,
+      "dt": 5,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }

@@ -2,13 +2,14 @@
   "check": "V09-entries",
   "kind": "sheet",
   "strategy": "combined",
+  "worker": false,
   "browser": {
     "project": "chromium",
     "name": "chromium",
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T13:41:38.801Z",
+  "timestamp": "2026-09-24T17:08:16.732Z",
   "traces": {
     "steps": [
       {

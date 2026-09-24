@@ -2,13 +2,14 @@
   "check": "V09-entries",
   "kind": "doc",
   "strategy": "points",
+  "worker": false,
   "browser": {
     "project": "webkit",
     "name": "webkit",
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T14:57:30.747Z",
+  "timestamp": "2026-09-24T17:41:46.265Z",
   "traces": {
     "steps": [
       {

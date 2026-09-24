@@ -7,28 +7,28 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T14:12:51.738Z",
+  "timestamp": "2026-09-24T18:16:39.149Z",
   "slowA1": {
     "before": 9927165,
     "atResolve": 9927165,
     "after": 10016042
   },
   "staleAtResolve": true,
-  "resolvedAtMs": 2416,
-  "maxSampleGapMs": 257,
+  "resolvedAtMs": 2426,
+  "maxSampleGapMs": 260,
   "log": [
-    "17 start  慢!A1=9927165",
-    "31 notification stage=1 慢!A1=9927165",
-    "32 notification stage=2 慢!A1=9927165",
-    "38 notification stage=3 慢!A1=9927165",
-    "2415 notification stage=4 慢!A1=9927165",
-    "2415 notification stage=8 慢!A1=9927165",
-    "2416 result sheets=聚合、跨表、慢、易变 慢!A1=9927165",
-    "2416 写回 聚合 慢!A1=9927165",
-    "2416 ==== 等待接口返回 慢!A1=9927165",
-    "2416 写回 跨表 慢!A1=9927165",
-    "2416 写回 慢 慢!A1=10016042",
-    "2418 写回 易变 慢!A1=10016042",
-    "2419 notification executed=3 慢!A1=10016042"
+    "16 start  慢!A1=9927165",
+    "28 notification stage=1 慢!A1=9927165",
+    "28 notification stage=2 慢!A1=9927165",
+    "35 notification stage=3 慢!A1=9927165",
+    "2425 notification stage=4 慢!A1=9927165",
+    "2425 notification stage=8 慢!A1=9927165",
+    "2425 result sheets=聚合、跨表、慢、易变 慢!A1=9927165",
+    "2425 写回 聚合 慢!A1=9927165",
+    "2426 ==== 等待接口返回 慢!A1=9927165",
+    "2426 写回 跨表 慢!A1=9927165",
+    "2427 写回 慢 慢!A1=10016042",
+    "2429 写回 易变 慢!A1=10016042",
+    "2430 notification executed=3 慢!A1=10016042"
   ]
 }

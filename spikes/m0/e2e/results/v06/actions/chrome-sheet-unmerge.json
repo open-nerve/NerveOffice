@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "unmerge",
   "kind": "sheet",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T13:52:05.329Z",
+  "timestamp": "2026-09-24T17:24:03.608Z",
   "quiet": {
-    "waitedMs": 993.7999999523163,
+    "waitedMs": 986.8999999761581,
     "formula": "settled",
     "restarts": 0
   },
@@ -52,7 +53,7 @@
       "verdict": "detected"
     },
     {
-      "dt": 3,
+      "dt": 4,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     }

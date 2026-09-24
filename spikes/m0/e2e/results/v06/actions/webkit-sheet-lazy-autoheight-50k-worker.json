@@ -1,0 +1,1412 @@
+{
+  "check": "V06-actions",
+  "action": "lazy-autoheight-50k",
+  "kind": "sheet",
+  "worker": true,
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T18:42:16.794Z",
+  "quiet": {
+    "waitedMs": 873,
+    "formula": "settled",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.set-range-values",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height",
+      "sheet.mutation.set-worksheet-row-auto-height"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.set-range-values",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.mutation.set-worksheet-row-auto-height",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 132
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 132
+  },
+  "timeline": [
+    {
+      "dt": 67,
+      "id": "sheet.mutation.set-range-values",
+      "verdict": "detected"
+    },
+    {
+      "dt": 129,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 169,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 185,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 197,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 209,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 221,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 237,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 251,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 264,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 276,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 288,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 300,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 313,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 325,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 337,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 348,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 360,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 375,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 388,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 401,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 414,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 426,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 438,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 450,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 463,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 475,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 487,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 500,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 517,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 531,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 545,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 559,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 571,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 584,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 598,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 613,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 627,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 640,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 653,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 671,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 684,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 698,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 714,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 729,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 745,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 761,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 777,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 793,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 810,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 830,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 847,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 865,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 883,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 899,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 917,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 934,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 952,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 969,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 985,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1003,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1024,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1042,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1060,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1078,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1095,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1113,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1132,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1150,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1168,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1186,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1205,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1228,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1247,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1267,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1286,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1305,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1324,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1343,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1362,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1381,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1400,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1419,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1442,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1461,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1483,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1503,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1520,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1537,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1555,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1572,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1591,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1609,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1628,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1649,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1669,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1688,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1705,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1723,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    },
+    {
+      "dt": 1741,
+      "id": "sheet.mutation.set-worksheet-row-auto-height",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": {
+    "captureAtMs": 1067,
+    "autoHeightMutations": 101,
+    "lastAutoHeightMs": 1769,
+    "missed": 38
+  },
+  "diff": [
+    {
+      "path": "$.styles.h9Auaa",
+      "kind": "added",
+      "after": "{\"fs\":28}"
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.0.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.1.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.2.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.3.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.4.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.5.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.6.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.7.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.8.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.9.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.10.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.11.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.12.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.13.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.14.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.15.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.16.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.17.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.18.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.19.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.20.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.21.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.22.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.23.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.24.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.25.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.26.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.27.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    },
+    {
+      "path": "$.sheets.sheet-1.cellData.28.13.s",
+      "kind": "added",
+      "after": "\"h9Auaa\""
+    }
+  ],
+  "diffCount": 99999,
+  "lateDiff": [],
+  "errors": []
+}

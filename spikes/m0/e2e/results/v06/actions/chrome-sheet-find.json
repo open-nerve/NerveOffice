@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "find",
   "kind": "sheet",
+  "worker": false,
   "method": "F",
   "expect": "view",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T13:58:04.636Z",
+  "timestamp": "2026-09-24T17:30:02.698Z",
   "quiet": {
-    "waitedMs": 1013.1999999284744,
+    "waitedMs": 1006.1000000238419,
     "formula": "settled",
     "restarts": 0
   },

@@ -45,9 +45,10 @@ function v06(): string {
     out.push('打开后与原快照不同（没有 mutation）的样本（任一浏览器）：', table(['样本', '差异数：示例路径'], [...openDiff].map(([k, v]) => [k, v])));
 
     const actions = load('v06/actions');
-    const ids = [...new Set(actions.map((x) => `${x.data.kind}-${x.data.action}`))];
+    const actionId = (d: Json) => `${d.kind}-${d.action}${d.worker ? '（Worker）' : ''}`;
+    const ids = [...new Set(actions.map((x) => actionId(x.data)))];
     const rows = ids.map((id) => {
-        const cells = BROWSERS.map((b) => actions.find((x) => browserOf(x.file) === b && `${x.data.kind}-${x.data.action}` === id)?.data);
+        const cells = BROWSERS.map((b) => actions.find((x) => browserOf(x.file) === b && actionId(x.data) === id)?.data);
         const any = cells.find((c) => c != null)!;
         const dets = [...new Set(cells.flatMap((c) => c?.during.detections ?? []))];
         return [id, any.method, any.expect === 'change' ? '改内容' : '只改视图', ...cells.map((c) => c?.verdict ?? '—'), dets.join('、') || '—'];
@@ -95,6 +96,14 @@ function v07(): string {
     out.push('公式写回时间线（修改"聚合!B1"）：', table(
         ['浏览器', 'Worker', '等待接口返回时刻', '返回时"慢!A1"仍是旧值', '250 ms 采样的最大间隔'],
         tl.map((x) => [browserOf(x.file), x.data.worker ? '是' : '否', `${x.data.resolvedAtMs} ms`, x.data.staleAtResolve ? '是' : '否', `${x.data.maxSampleGapMs} ms`]),
+    ));
+    const dc = load('v07/edit-during-calc');
+    out.push('计算进行中再改一次（第二轮审查 S1；核对全部 406 个公式）：', table(
+        ['浏览器', '情形', '等待起点', '第二次修改时第一轮仍在算', '旧规则：捕获时刻 / 不一致', '新规则：捕获时刻 / 不一致 / 重来次数', '计算结束后'],
+        dc.map((x) => {
+            const d = x.data;
+            return [browserOf(x.file), d.case.id, d.waitFrom === 'first' ? '第一次修改' : '第二次修改', d.firstSessionRunningAtSecondEdit ? '是' : '否', `${d.oldRule.capturedAtMs} ms / ${d.oldRule.mismatches}/${d.oldRule.checked}`, `${d.newRule.capturedAtMs} ms / ${d.newRule.mismatches}/${d.newRule.checked} / ${d.newRule.restarts}`, `${d.settled.mismatches}/${d.settled.checked}`];
+        }),
     ));
     return out.join('\n\n');
 }
@@ -204,10 +213,11 @@ function v10(): string {
     if (interval.length > 0) {
         const mid = (xs: Json[], k: string) => r0([...xs.map((x) => x[k] as number)].sort((a, b) => a - b)[Math.floor((xs.length - 1) / 2)]);
         const max = (xs: Json[], k: string) => r0(Math.max(...xs.map((x) => x[k] as number)));
+        const pair = (xs: Json[], k: string) => (xs.every((x) => x[k] == null) ? '不支持' : `${mid(xs, k)} / ${max(xs, k)}`);
         out.push('### 主线程模式调小让出间隔（`intervalCount`；增量 n = 3、全量 n = 2，中位数 / 最大值）');
         out.push(table(
-            ['浏览器', '让出间隔', '增量：到结果收齐', '最长阻塞', '帧间隔', '全量：到结果收齐', '最长阻塞', '帧间隔'],
-            interval.flatMap((x) => x.data.results.map((r: Json) => [browserOf(x.file), String(r.interval), `${mid(r.incremental, 'ms')} / ${max(r.incremental, 'ms')}`, `${mid(r.incremental, 'blockMs')} / ${max(r.incremental, 'blockMs')}`, `${mid(r.incremental, 'frameGapMs')} / ${max(r.incremental, 'frameGapMs')}`, `${mid(r.full, 'ms')} / ${max(r.full, 'ms')}`, `${mid(r.full, 'blockMs')} / ${max(r.full, 'blockMs')}`, `${mid(r.full, 'frameGapMs')} / ${max(r.full, 'frameGapMs')}`])),
+            ['浏览器', '让出间隔', '增量：到结果收齐', '最长阻塞（探针）', '帧间隔', '最长长任务', '全量：到结果收齐', '最长阻塞（探针）', '帧间隔', '最长长任务'],
+            interval.flatMap((x) => x.data.results.map((r: Json) => [browserOf(x.file), String(r.interval), ...['incremental', 'full'].flatMap((k) => [pair(r[k], 'ms'), pair(r[k], 'blockMs'), pair(r[k], 'frameGapMs'), pair(r[k], 'longestTaskMs')])])),
         ));
     }
     return out.join('\n\n');

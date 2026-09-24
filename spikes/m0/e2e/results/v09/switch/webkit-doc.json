@@ -7,11 +7,11 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T15:00:11.532Z",
+  "timestamp": "2026-09-24T17:44:26.109Z",
   "inPlace": [
     {
       "strategy": "facade",
-      "enterMs": 11,
+      "enterMs": 9,
       "exitMs": 5,
       "undoInRead": {
         "undos": 0,
@@ -33,7 +33,7 @@
     },
     {
       "strategy": "points",
-      "enterMs": 9,
+      "enterMs": 5,
       "exitMs": 4,
       "undoInRead": {
         "undos": 0,
@@ -55,7 +55,7 @@
     },
     {
       "strategy": "firewall",
-      "enterMs": 4,
+      "enterMs": 3,
       "exitMs": 2,
       "undoInRead": {
         "undos": 0,
@@ -72,8 +72,8 @@
     },
     {
       "strategy": "combined",
-      "enterMs": 6,
-      "exitMs": 3,
+      "enterMs": 21,
+      "exitMs": 4,
       "undoInRead": {
         "undos": 0,
         "redos": 0
@@ -95,7 +95,7 @@
     {
       "strategy": "combined+ui",
       "enterMs": 6,
-      "exitMs": 32,
+      "exitMs": 27,
       "undoInRead": {
         "undos": 0,
         "redos": 0
@@ -134,10 +134,10 @@
     }
   ],
   "remount": {
-    "toReadMs": 3345,
-    "toReadRenderedMs": 331,
-    "toEditMs": 3349,
-    "toEditRenderedMs": 338,
+    "toReadMs": 3337,
+    "toReadRenderedMs": 327,
+    "toEditMs": 3335,
+    "toEditRenderedMs": 330,
     "readUndo": {
       "undos": 0,
       "redos": 0

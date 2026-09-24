@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "bold",
   "kind": "doc",
+  "worker": false,
   "method": "U",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T13:58:38.191Z",
+  "timestamp": "2026-09-24T17:30:36.147Z",
   "quiet": {
-    "waitedMs": 982.3000000715256,
+    "waitedMs": 999.5,
     "formula": "n/a",
     "restarts": 0
   },
@@ -40,7 +41,7 @@
   },
   "timeline": [
     {
-      "dt": 271,
+      "dt": 261,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "detected"
     }

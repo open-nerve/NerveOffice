@@ -10,13 +10,13 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T14:04:32.315Z",
+  "timestamp": "2026-09-24T17:36:29.692Z",
   "bytes": 3775,
   "timings": {
-    "t0": 277.5,
-    "ready": 23.5,
-    "rendered": 425.89999997615814,
-    "steady": 3483
+    "t0": 289.2000000476837,
+    "ready": 24.199999928474426,
+    "rendered": 432,
+    "steady": 3485.399999976158
   },
   "detections": [],
   "mutations": [

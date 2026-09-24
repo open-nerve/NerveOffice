@@ -2,13 +2,14 @@
   "check": "V09-entries",
   "kind": "doc",
   "strategy": "combined",
+  "worker": false,
   "browser": {
     "project": "chrome",
     "name": "chromium",
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T14:23:18.234Z",
+  "timestamp": "2026-09-24T17:28:55.839Z",
   "traces": {
     "steps": [
       {

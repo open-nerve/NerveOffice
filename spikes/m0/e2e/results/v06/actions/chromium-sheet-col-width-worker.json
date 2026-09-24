@@ -1,0 +1,60 @@
+{
+  "check": "V06-actions",
+  "action": "col-width",
+  "kind": "sheet",
+  "worker": true,
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T17:11:34.692Z",
+  "quiet": {
+    "waitedMs": 978.7000000476837,
+    "formula": "settled",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.set-worksheet-col-width"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.set-worksheet-col-width",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 21
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 21
+  },
+  "timeline": [
+    {
+      "dt": 2,
+      "id": "sheet.mutation.set-worksheet-col-width",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.sheets.sheet-1.columnData.5",
+      "kind": "added",
+      "after": "{\"w\":150}"
+    }
+  ],
+  "diffCount": 1,
+  "lateDiff": [],
+  "errors": []
+}

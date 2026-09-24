@@ -1,0 +1,60 @@
+{
+  "check": "V06-actions",
+  "action": "note",
+  "kind": "sheet",
+  "worker": true,
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T17:30:15.900Z",
+  "quiet": {
+    "waitedMs": 995,
+    "formula": "settled",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.update-note"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.update-note",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 19
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 19
+  },
+  "timeline": [
+    {
+      "dt": 3,
+      "id": "sheet.mutation.update-note",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.resources[6].data.sheet-1",
+      "kind": "added",
+      "after": "{\"29\":{\"10\":{\"col\":10,\"height\":60,\"id\":\"f2hKLR\",\"note\":\"新备注\",\"row\":29,\"width\":160}}}"
+    }
+  ],
+  "diffCount": 1,
+  "lateDiff": [],
+  "errors": []
+}

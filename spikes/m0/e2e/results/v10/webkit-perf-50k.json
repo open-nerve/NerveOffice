@@ -7,22 +7,22 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T15:58:41.263Z",
+  "timestamp": "2026-09-24T18:30:16.052Z",
   "firstScreen": {
     "renderedMs": {
-      "p50": 525,
-      "p95": 641,
-      "max": 641,
-      "min": 515,
+      "p50": 519,
+      "p95": 638,
+      "max": 638,
+      "min": 513,
       "n": 5
     },
-    "renderedColdMs": 641,
-    "renderedWarmMedianMs": 516,
+    "renderedColdMs": 638,
+    "renderedWarmMedianMs": 515,
     "steadyMs": {
-      "p50": 3564,
-      "p95": 3705,
-      "max": 3705,
-      "min": 3555,
+      "p50": 3561,
+      "p95": 3706,
+      "max": 3706,
+      "min": 3552,
       "n": 5
     },
     "longTasksBeforeRendered": [
@@ -42,33 +42,10 @@
   },
   "firstInput": [
     {
-      "canvasAt": 657,
-      "typedAt": 843,
-      "rendered": 544,
-      "committedAt": 781,
-      "k3": "abc",
-      "accepted": true,
-      "detections": [
-        "sheet.mutation.set-range-values"
-      ],
-      "diff": [
-        {
-          "path": "$.styles.yzrSkv",
-          "kind": "added",
-          "after": "{\"cl\":{\"rgb\":\"#1B1C1F\"}}"
-        },
-        {
-          "path": "$.sheets.KEh89li0b5lSMemb7GmAc.cellData.2.10",
-          "kind": "added",
-          "after": "{\"v\":\"abc\",\"s\":\"yzrSkv\",\"t\":1}"
-        }
-      ]
-    },
-    {
-      "canvasAt": 625,
-      "typedAt": 764,
+      "canvasAt": 615,
+      "typedAt": 774,
       "rendered": 515,
-      "committedAt": 710,
+      "committedAt": 720,
       "k3": "abc",
       "accepted": true,
       "detections": [
@@ -76,22 +53,22 @@
       ],
       "diff": [
         {
-          "path": "$.styles.zts4zc",
+          "path": "$.styles.vRa5CD",
           "kind": "added",
           "after": "{\"cl\":{\"rgb\":\"#1B1C1F\"}}"
         },
         {
-          "path": "$.sheets.KEh89li0b5lSMemb7GmAc.cellData.2.10",
+          "path": "$.sheets.XnWlhlYRmiq-1hTUg5gdf.cellData.2.10",
           "kind": "added",
-          "after": "{\"v\":\"abc\",\"s\":\"zts4zc\",\"t\":1}"
+          "after": "{\"v\":\"abc\",\"s\":\"vRa5CD\",\"t\":1}"
         }
       ]
     },
     {
-      "canvasAt": 620,
-      "typedAt": 777,
-      "rendered": 513,
-      "committedAt": 719,
+      "canvasAt": 617,
+      "typedAt": 765,
+      "rendered": 512,
+      "committedAt": 707,
       "k3": "abc",
       "accepted": true,
       "detections": [
@@ -99,70 +76,93 @@
       ],
       "diff": [
         {
-          "path": "$.styles.rmDIgK",
+          "path": "$.styles.kNL9q_",
           "kind": "added",
           "after": "{\"cl\":{\"rgb\":\"#1B1C1F\"}}"
         },
         {
-          "path": "$.sheets.KEh89li0b5lSMemb7GmAc.cellData.2.10",
+          "path": "$.sheets.XnWlhlYRmiq-1hTUg5gdf.cellData.2.10",
           "kind": "added",
-          "after": "{\"v\":\"abc\",\"s\":\"rmDIgK\",\"t\":1}"
+          "after": "{\"v\":\"abc\",\"s\":\"kNL9q_\",\"t\":1}"
+        }
+      ]
+    },
+    {
+      "canvasAt": 617,
+      "typedAt": 755,
+      "rendered": 510,
+      "committedAt": 699,
+      "k3": "abc",
+      "accepted": true,
+      "detections": [
+        "sheet.mutation.set-range-values"
+      ],
+      "diff": [
+        {
+          "path": "$.styles.pesBzD",
+          "kind": "added",
+          "after": "{\"cl\":{\"rgb\":\"#1B1C1F\"}}"
+        },
+        {
+          "path": "$.sheets.XnWlhlYRmiq-1hTUg5gdf.cellData.2.10",
+          "kind": "added",
+          "after": "{\"v\":\"abc\",\"s\":\"pesBzD\",\"t\":1}"
         }
       ]
     }
   ],
   "keyLatencyMs": {
-    "p50": 25,
-    "p95": 32,
-    "max": 48,
-    "min": 9,
+    "p50": 26,
+    "p95": 36,
+    "max": 43,
+    "min": 16,
     "n": 90
   },
   "formulaMs": {
     "incremental": {
-      "p50": 682,
-      "p95": 708,
-      "max": 708,
-      "min": 671,
+      "p50": 686,
+      "p95": 702,
+      "max": 702,
+      "min": 678,
       "n": 5
     },
     "full": {
-      "p50": 750,
-      "p95": 752,
-      "max": 752,
-      "min": 746,
+      "p50": 751,
+      "p95": 774,
+      "max": 774,
+      "min": 747,
       "n": 3
     }
   },
   "formulaBlockMs": {
     "incremental": {
       "p50": 656,
-      "p95": 666,
-      "max": 666,
-      "min": 640,
+      "p95": 670,
+      "max": 670,
+      "min": 649,
       "n": 5
     },
     "full": {
-      "p50": 695,
-      "p95": 708,
-      "max": 708,
-      "min": 688,
+      "p50": 708,
+      "p95": 710,
+      "max": 710,
+      "min": 698,
       "n": 3
     }
   },
   "formulaFrameGapMs": {
     "incremental": {
-      "p50": 661,
-      "p95": 664,
-      "max": 664,
-      "min": 641,
+      "p50": 660,
+      "p95": 671,
+      "max": 671,
+      "min": 649,
       "n": 5
     },
     "full": {
-      "p50": 699,
-      "p95": 703,
-      "max": 703,
-      "min": 691,
+      "p50": 709,
+      "p95": 711,
+      "max": 711,
+      "min": 699,
       "n": 3
     }
   },
@@ -177,178 +177,178 @@
   "raw": {
     "opens": [
       {
-        "rendered": 641,
-        "steady": 3705,
+        "rendered": 638,
+        "steady": 3706,
         "longTasks": -1,
         "longestTask": 0
       },
       {
-        "rendered": 537,
-        "steady": 3578,
+        "rendered": 527,
+        "steady": 3561,
+        "longTasks": -1,
+        "longestTask": 0
+      },
+      {
+        "rendered": 513,
+        "steady": 3552,
         "longTasks": -1,
         "longestTask": 0
       },
       {
         "rendered": 515,
-        "steady": 3555,
+        "steady": 3552,
         "longTasks": -1,
         "longestTask": 0
       },
       {
-        "rendered": 525,
-        "steady": 3564,
-        "longTasks": -1,
-        "longestTask": 0
-      },
-      {
-        "rendered": 516,
-        "steady": 3558,
+        "rendered": 519,
+        "steady": 3561,
         "longTasks": -1,
         "longestTask": 0
       }
     ],
     "keyLatency": [
-      28,
-      27,
-      32,
-      17,
-      29,
-      26,
-      17,
-      30,
-      21,
       31,
-      22,
-      17,
-      29,
-      25,
-      23,
-      17,
-      26,
-      23,
-      21,
-      21,
-      23,
-      20,
-      41,
       24,
-      21,
-      18,
-      18,
-      27,
-      36,
-      24,
-      22,
-      32,
-      25,
-      22,
       19,
       19,
-      25,
-      25,
-      29,
-      27,
+      23,
+      18,
       28,
-      32,
+      16,
+      21,
+      23,
+      21,
+      22,
+      31,
+      27,
+      24,
+      21,
+      17,
+      22,
+      23,
+      31,
+      26,
+      18,
+      29,
+      28,
+      16,
       30,
+      23,
+      28,
+      29,
       26,
+      31,
+      29,
       26,
+      21,
+      29,
+      26,
+      22,
+      29,
+      16,
+      30,
+      43,
+      18,
+      31,
+      29,
+      19,
+      22,
+      26,
+      16,
+      31,
+      29,
+      18,
+      31,
+      26,
+      18,
+      25,
+      26,
+      30,
+      27,
+      23,
       33,
-      23,
-      20,
-      48,
-      9,
-      22,
-      22,
-      23,
+      29,
+      29,
       18,
-      22,
-      20,
-      31,
-      31,
-      18,
-      31,
+      38,
+      32,
+      30,
       26,
-      18,
-      18,
-      32,
-      32,
-      28,
-      25,
       31,
-      29,
-      24,
-      15,
-      19,
-      28,
-      30,
-      30,
-      24,
-      19,
-      29,
       27,
+      28,
+      36,
       18,
       18,
-      22,
-      25,
+      27,
+      32,
+      35,
+      24,
       20,
-      25,
-      22,
+      43,
+      24,
       19,
-      26,
+      37,
+      28,
+      20,
+      30,
+      30,
+      27,
       25,
-      25
+      24,
+      18
     ],
     "formula": {
       "incremental": [
         {
-          "ms": 708,
-          "blockMs": 665,
-          "frameGapMs": 661,
+          "ms": 702,
+          "blockMs": 670,
+          "frameGapMs": 668,
           "longestTaskMs": null
         },
         {
-          "ms": 690,
-          "blockMs": 666,
-          "frameGapMs": 664,
+          "ms": 678,
+          "blockMs": 655,
+          "frameGapMs": 671,
           "longestTaskMs": null
         },
         {
-          "ms": 671,
+          "ms": 686,
           "blockMs": 649,
-          "frameGapMs": 661,
+          "frameGapMs": 649,
           "longestTaskMs": null
         },
         {
-          "ms": 673,
-          "blockMs": 640,
-          "frameGapMs": 641,
-          "longestTaskMs": null
-        },
-        {
-          "ms": 682,
+          "ms": 684,
           "blockMs": 656,
           "frameGapMs": 654,
+          "longestTaskMs": null
+        },
+        {
+          "ms": 689,
+          "blockMs": 662,
+          "frameGapMs": 660,
           "longestTaskMs": null
         }
       ],
       "full": [
         {
-          "ms": 752,
-          "blockMs": 708,
-          "frameGapMs": 703,
+          "ms": 774,
+          "blockMs": 710,
+          "frameGapMs": 709,
           "longestTaskMs": null
         },
         {
-          "ms": 750,
-          "blockMs": 695,
+          "ms": 751,
+          "blockMs": 698,
           "frameGapMs": 699,
           "longestTaskMs": null
         },
         {
-          "ms": 746,
-          "blockMs": 688,
-          "frameGapMs": 691,
+          "ms": 747,
+          "blockMs": 708,
+          "frameGapMs": 711,
           "longestTaskMs": null
         }
       ]

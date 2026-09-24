@@ -79,9 +79,12 @@ async function openTimings(page: Page) {
 }
 
 for (const worker of [false, true]) {
-    test(`V10 性能基线：perf-50k${worker ? '-worker' : ''}`, async ({ page, request, browserName }, testInfo) => {
+    test(`V10 性能基线：perf-50k${worker ? '-worker' : ''}`, async ({ page, request, browser, browserName }, testInfo) => {
         test.setTimeout(900_000);
-        const id = await ensureGenerated(page, request, 'sheet', 'perf-50k');
+        // 样本在另一个浏览器上下文里生成：同一个上下文生成过样本，编辑器代码已经进了缓存，"第一次打开"就不是冷启动（第二轮审查 S2）
+        const generator = await browser.newContext({ baseURL: SERVERS.off });
+        const id = await ensureGenerated(await generator.newPage(), request, 'sheet', 'perf-50k');
+        await generator.close();
         const url = `/sheet.html?doc=${id}${worker ? '&worker=1' : ''}`;
         const cdp = browserName === 'chromium' ? await page.context().newCDPSession(page) : null;
         const workers = cdp == null ? new Map<string, string>() : watchWorkers(cdp);
@@ -249,13 +252,16 @@ test('V10 公式的让出间隔（主线程模式）', async ({ page, request },
             const measure = async (act: () => void) => {
                 const lag = perf.probeEventLoopLag();
                 const frames = perf.probeFrameGap();
+                const tasks = perf.observeLongTasks();
                 const t0 = performance.now();
                 act();
                 await m0.waitForCapture!({ debounceMs: 0, timeoutMs: 120_000 });
                 const ms = performance.now() - t0;
                 const blockMs = lag.stop().maxGap;
                 const frame = frames.stop();
-                return { ms, blockMs, frameGapMs: frame.maxGap, frames: frame.frames };
+                const longTasks = await tasks.stop();
+                // 最长的长任务：区分"主线程真的被一段计算占住"与"setTimeout 被其他任务推后"（第二轮审查 S8）
+                return { ms, blockMs, frameGapMs: frame.maxGap, frames: frame.frames, longestTaskMs: tasks.supported ? Math.max(0, ...longTasks.map((x) => x.duration)) : null };
             };
             const incremental = [];
             for (let i = 0; i < 3; i++) incremental.push(await measure(() => ws.getRange(`D${i + 2}`).setValue(600 + i)));

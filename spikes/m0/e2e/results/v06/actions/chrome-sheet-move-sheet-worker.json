@@ -1,0 +1,67 @@
+{
+  "check": "V06-actions",
+  "action": "move-sheet",
+  "kind": "sheet",
+  "worker": true,
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T17:21:10.308Z",
+  "quiet": {
+    "waitedMs": 1006.5,
+    "formula": "settled",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.set-worksheet-order"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.set-worksheet-order",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 21
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 21
+  },
+  "timeline": [
+    {
+      "dt": 2,
+      "id": "sheet.mutation.set-worksheet-order",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.sheetOrder[0]",
+      "kind": "changed",
+      "before": "\"sheet-1\"",
+      "after": "\"3EB0bwApYxHAp_aL_pN0v\""
+    },
+    {
+      "path": "$.sheetOrder[1]",
+      "kind": "changed",
+      "before": "\"3EB0bwApYxHAp_aL_pN0v\"",
+      "after": "\"sheet-1\""
+    }
+  ],
+  "diffCount": 2,
+  "lateDiff": [],
+  "errors": []
+}

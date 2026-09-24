@@ -11,9 +11,9 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T13:15:11.140Z",
+  "timestamp": "2026-09-24T17:04:48.029Z",
   "quiet": {
-    "waitedMs": 984.6000000238419,
+    "waitedMs": 997.5999999046326,
     "formula": "settled",
     "restarts": 0
   },
@@ -52,17 +52,17 @@
   },
   "timeline": [
     {
-      "dt": 10,
+      "dt": 15,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 186,
+      "dt": 187,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
     {
-      "dt": 190,
+      "dt": 189,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }
@@ -72,7 +72,7 @@
     {
       "path": "$.sheets.sheet-1.cellData.7.10",
       "kind": "removed",
-      "before": "{\"v\":\"撤销前\",\"s\":\"4WVlsA\",\"t\":1}"
+      "before": "{\"v\":\"撤销前\",\"s\":\"QxHmkm\",\"t\":1}"
     }
   ],
   "diffCount": 1,

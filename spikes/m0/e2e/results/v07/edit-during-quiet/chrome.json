@@ -7,14 +7,14 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T14:10:30.863Z",
+  "timestamp": "2026-09-24T18:12:53.662Z",
   "oldRule": {
-    "capturedAtMs": 3658,
+    "capturedAtMs": 3638,
     "checked": 399,
     "mismatches": 0
   },
   "newRule": {
-    "capturedAtMs": 3152,
+    "capturedAtMs": 3140,
     "restarts": 1,
     "formula": "settled",
     "checked": 399,

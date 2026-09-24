@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "insert-col",
   "kind": "sheet",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T14:28:29.206Z",
+  "timestamp": "2026-09-24T17:42:39.631Z",
   "quiet": {
-    "waitedMs": 977,
+    "waitedMs": 976,
     "formula": "settled",
     "restarts": 0
   },
@@ -86,8 +87,13 @@
   },
   "timeline": [
     {
-      "dt": 9,
+      "dt": 8,
       "id": "sheet.mutation.insert-col",
+      "verdict": "detected"
+    },
+    {
+      "dt": 11,
+      "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
     {
@@ -96,32 +102,27 @@
       "verdict": "detected"
     },
     {
-      "dt": 14,
-      "id": "sheet.mutation.set-range-values",
-      "verdict": "detected"
+      "dt": 15,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
     },
     {
       "dt": 16,
-      "id": "doc.mutation.rich-text-editing",
-      "verdict": "other-unit"
-    },
-    {
-      "dt": 18,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
     {
-      "dt": 19,
+      "dt": 17,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 20,
+      "dt": 19,
       "id": "formula.mutation.set-defined-name",
       "verdict": "detected"
     },
     {
-      "dt": 23,
+      "dt": 20,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }

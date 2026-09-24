@@ -12,22 +12,22 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T15:36:02.428Z",
+  "timestamp": "2026-09-24T18:36:13.691Z",
   "copy": {
-    "syncMs": 21.700000047683716,
+    "syncMs": 18,
     "name": "数据表 （副本）",
-    "idleMaxGapMs": 70.69999992847443
+    "idleMaxGapMs": 73.10000002384186
   },
   "quiet": {
-    "waitedMs": 918.3000000715256,
+    "waitedMs": 918.1000000238419,
     "formula": "settled",
     "restarts": 0
   },
   "localMutations": {
     "beforeS1": 12,
     "afterS1": 0,
-    "lastBeforeS1Ms": 138,
-    "lastMs": 138
+    "lastBeforeS1Ms": 129,
+    "lastMs": 129
   },
   "capturedAfterMs": 918,
   "sourceCells": 50010,

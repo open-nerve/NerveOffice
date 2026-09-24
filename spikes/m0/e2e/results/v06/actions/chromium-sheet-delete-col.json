@@ -11,9 +11,9 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T13:16:50.123Z",
+  "timestamp": "2026-09-24T17:06:26.895Z",
   "quiet": {
-    "waitedMs": 989.1000000238419,
+    "waitedMs": 988.1999999284744,
     "formula": "settled",
     "restarts": 0
   },
@@ -79,12 +79,22 @@
   },
   "timeline": [
     {
-      "dt": 5,
+      "dt": 4,
       "id": "sheet.mutation.remove-col",
       "verdict": "detected"
     },
     {
+      "dt": 7,
+      "id": "sheet.mutation.set-range-values",
+      "verdict": "detected"
+    },
+    {
       "dt": 8,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 9,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
@@ -94,22 +104,12 @@
       "verdict": "other-unit"
     },
     {
-      "dt": 11,
-      "id": "sheet.mutation.set-range-values",
-      "verdict": "detected"
-    },
-    {
-      "dt": 11,
-      "id": "doc.mutation.rich-text-editing",
-      "verdict": "other-unit"
-    },
-    {
-      "dt": 12,
+      "dt": 10,
       "id": "formula.mutation.set-defined-name",
       "verdict": "detected"
     },
     {
-      "dt": 40,
+      "dt": 31,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }

@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "lazy-autoheight",
   "kind": "sheet",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T13:53:34.135Z",
+  "timestamp": "2026-09-24T18:37:36.814Z",
   "quiet": {
-    "waitedMs": 1578.3000000715256,
+    "waitedMs": 1586.1000000238419,
     "formula": "settled",
     "restarts": 1
   },
@@ -68,187 +69,187 @@
   },
   "timeline": [
     {
-      "dt": 7,
+      "dt": 9,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
     {
-      "dt": 10,
+      "dt": 13,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 41,
+      "dt": 44,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 64,
+      "dt": 69,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 79,
+      "dt": 80,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     }
   ],
   "planRule": {
-    "captureAtMs": 1007,
+    "captureAtMs": 1009,
     "autoHeightMutations": 4,
-    "lastAutoHeightMs": 79,
+    "lastAutoHeightMs": 80,
     "missed": 0
   },
   "diff": [
     {
-      "path": "$.styles.gHpBpj",
+      "path": "$.styles.d51tGy",
       "kind": "added",
       "after": "{\"fs\":28}"
     },
     {
       "path": "$.sheets.sheet-1.cellData.0.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.1.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.2.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.3.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.4.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.5.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.6.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.7.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.8.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.9.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.10.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.11.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.12.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.13.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.14.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.15.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.16.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.17.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.18.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.19.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.20.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.21.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.22.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.23.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.24.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.25.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.26.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.27.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.28.12.s",
       "kind": "added",
-      "after": "\"gHpBpj\""
+      "after": "\"d51tGy\""
     }
   ],
   "diffCount": 2999,

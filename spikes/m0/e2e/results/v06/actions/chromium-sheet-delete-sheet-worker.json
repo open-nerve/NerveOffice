@@ -1,0 +1,83 @@
+{
+  "check": "V06-actions",
+  "action": "delete-sheet",
+  "kind": "sheet",
+  "worker": true,
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T17:12:57.726Z",
+  "quiet": {
+    "waitedMs": 1006.2000000476837,
+    "formula": "settled",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.remove-sheet"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.remove-sheet",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      }
+    ],
+    "syncOnly": [],
+    "total": 27
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 27
+  },
+  "timeline": [
+    {
+      "dt": 5,
+      "id": "sheet.mutation.remove-sheet",
+      "verdict": "detected"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.sheetOrder[1]",
+      "kind": "changed",
+      "before": "\"3EB0bwApYxHAp_aL_pN0v\"",
+      "after": "\"BosGI6KRewWr9iRx1e2-J\""
+    },
+    {
+      "path": "$.sheetOrder[2]",
+      "kind": "changed",
+      "before": "\"BosGI6KRewWr9iRx1e2-J\"",
+      "after": "\"qu7F_0n49etB111SblNln\""
+    },
+    {
+      "path": "$.sheetOrder[3]",
+      "kind": "changed",
+      "before": "\"qu7F_0n49etB111SblNln\"",
+      "after": "\"3pom9bUkA1bNL7bRVYpBX\""
+    },
+    {
+      "path": "$.sheetOrder[4]",
+      "kind": "removed",
+      "before": "\"3pom9bUkA1bNL7bRVYpBX\""
+    },
+    {
+      "path": "$.sheets.3EB0bwApYxHAp_aL_pN0v",
+      "kind": "removed",
+      "before": "{\"id\":\"3EB0bwApYxHAp_aL_pN0v\",\"name\":\"汇总\",\"tabColor\":\"#16a34a\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24,\"sho..."
+    }
+  ],
+  "diffCount": 5,
+  "lateDiff": [],
+  "errors": []
+}

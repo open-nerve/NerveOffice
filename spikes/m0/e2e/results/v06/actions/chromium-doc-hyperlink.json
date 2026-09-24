@@ -11,9 +11,9 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T13:23:30.422Z",
+  "timestamp": "2026-09-24T17:13:06.718Z",
   "quiet": {
-    "waitedMs": 1001.5,
+    "waitedMs": 1005.5,
     "formula": "n/a",
     "restarts": 0
   },
@@ -40,7 +40,7 @@
   },
   "timeline": [
     {
-      "dt": 309,
+      "dt": 306,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "detected"
     }
@@ -51,7 +51,7 @@
       "path": "$.body.customRanges[0].rangeId",
       "kind": "changed",
       "before": "\"XAOjhp2d9f2YI8R97Lf9W\"",
-      "after": "\"e0JhlulZ5SX-q7_rJEBzo\""
+      "after": "\"jAKMQ2zJYGsqyqaU8kxxe\""
     },
     {
       "path": "$.body.customRanges[0].properties.url",
@@ -104,7 +104,7 @@
       "path": "$.resources[1].data.links[0].id",
       "kind": "changed",
       "before": "\"XAOjhp2d9f2YI8R97Lf9W\"",
-      "after": "\"e0JhlulZ5SX-q7_rJEBzo\""
+      "after": "\"jAKMQ2zJYGsqyqaU8kxxe\""
     },
     {
       "path": "$.resources[1].data.links[0].payload",

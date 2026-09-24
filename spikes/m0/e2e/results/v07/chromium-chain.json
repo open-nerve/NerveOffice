@@ -8,20 +8,20 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T13:32:52.655Z",
-  "idleWaitMs": 502,
+  "timestamp": "2026-09-24T17:59:41.805Z",
+  "idleWaitMs": 506,
   "idleCalcSessions": 0,
   "waitMs": {
-    "api": 525.3999999761581,
-    "rule": 1038.6000000238419,
-    "timeoutAttempt": 45.799999952316284,
-    "recaptureApi": 518.1000000238419,
-    "recaptureRule": 504
+    "api": 523.5999999046326,
+    "rule": 1017.7000000476837,
+    "timeoutAttempt": 47,
+    "recaptureApi": 520.1000000238419,
+    "recaptureRule": 509
   },
   "ruleOutcome": "settled",
   "timeoutOutcome": "applied",
   "volatileRecalculated": null,
-  "forcedRecalcMs": 501.3000000715256,
+  "forcedRecalcMs": 503.59999990463257,
   "checks": {
     "noWait": {
       "checked": 199,

@@ -1,0 +1,174 @@
+{
+  "check": "V06-actions",
+  "action": "move-image",
+  "kind": "sheet",
+  "worker": true,
+  "method": "F",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T17:23:11.368Z",
+  "quiet": {
+    "waitedMs": 1016.6000000238419,
+    "formula": "settled",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.set-drawing-apply"
+    ],
+    "mutations": [
+      {
+        "id": "sheet.mutation.set-drawing-apply",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "sheet.operation.clear-drawing-transformer",
+        "verdict": "excluded",
+        "options": []
+      }
+    ],
+    "syncOnly": [],
+    "total": 25
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 25
+  },
+  "timeline": [
+    {
+      "dt": 4,
+      "id": "sheet.mutation.set-drawing-apply",
+      "verdict": "detected"
+    },
+    {
+      "dt": 4,
+      "id": "sheet.operation.clear-drawing-transformer",
+      "verdict": "excluded"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.resources[4].data.sheet-1.data.SfBFnN.axisAlignSheetTransform.from.column",
+      "kind": "changed",
+      "before": "12",
+      "after": "14"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.SfBFnN.axisAlignSheetTransform.from.row",
+      "kind": "changed",
+      "before": "12",
+      "after": "20"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.SfBFnN.axisAlignSheetTransform.to.column",
+      "kind": "changed",
+      "before": "13",
+      "after": "15"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.SfBFnN.axisAlignSheetTransform.to.row",
+      "kind": "changed",
+      "before": "14",
+      "after": "23"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.SfBFnN.axisAlignSheetTransform.to.rowOffset",
+      "kind": "changed",
+      "before": "16",
+      "after": "8"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.SfBFnN.column",
+      "kind": "changed",
+      "before": "12",
+      "after": "14"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.SfBFnN.row",
+      "kind": "changed",
+      "before": "12",
+      "after": "20"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.SfBFnN.sheetTransform.from.column",
+      "kind": "changed",
+      "before": "12",
+      "after": "14"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.SfBFnN.sheetTransform.from.row",
+      "kind": "changed",
+      "before": "12",
+      "after": "20"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.SfBFnN.sheetTransform.to.column",
+      "kind": "changed",
+      "before": "13",
+      "after": "15"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.SfBFnN.sheetTransform.to.row",
+      "kind": "changed",
+      "before": "14",
+      "after": "23"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.SfBFnN.sheetTransform.to.rowOffset",
+      "kind": "changed",
+      "before": "16",
+      "after": "8"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.SfBFnN.transform.left",
+      "kind": "changed",
+      "before": "1046",
+      "after": "1222"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.SfBFnN.transform.top",
+      "kind": "changed",
+      "before": "350",
+      "after": "534"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.SfBFnN.angle",
+      "kind": "added",
+      "after": "0"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.SfBFnN.flipX",
+      "kind": "added",
+      "after": "false"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.SfBFnN.flipY",
+      "kind": "added",
+      "after": "false"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.SfBFnN.skewX",
+      "kind": "added",
+      "after": "0"
+    },
+    {
+      "path": "$.resources[4].data.sheet-1.data.SfBFnN.skewY",
+      "kind": "added",
+      "after": "0"
+    }
+  ],
+  "diffCount": 19,
+  "lateDiff": [],
+  "errors": []
+}

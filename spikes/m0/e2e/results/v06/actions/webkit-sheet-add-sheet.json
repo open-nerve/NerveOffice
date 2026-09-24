@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "add-sheet",
   "kind": "sheet",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T14:30:11.588Z",
+  "timestamp": "2026-09-24T17:44:21.962Z",
   "quiet": {
-    "waitedMs": 979,
+    "waitedMs": 972,
     "formula": "settled",
     "restarts": 0
   },
@@ -46,12 +47,12 @@
   },
   "timeline": [
     {
-      "dt": 4,
+      "dt": 3,
       "id": "sheet.mutation.insert-sheet",
       "verdict": "detected"
     },
     {
-      "dt": 12,
+      "dt": 9,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }
@@ -61,12 +62,12 @@
     {
       "path": "$.sheetOrder[5]",
       "kind": "added",
-      "after": "\"34hRgCB6I6WyiAnd20j5D\""
+      "after": "\"ZLlVpKeS9vBr5QlTShbhV\""
     },
     {
-      "path": "$.sheets.34hRgCB6I6WyiAnd20j5D",
+      "path": "$.sheets.ZLlVpKeS9vBr5QlTShbhV",
       "kind": "added",
-      "after": "{\"id\":\"34hRgCB6I6WyiAnd20j5D\",\"name\":\"新表\",\"tabColor\":\"\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24,\"showGridli..."
+      "after": "{\"id\":\"ZLlVpKeS9vBr5QlTShbhV\",\"name\":\"新表\",\"tabColor\":\"\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24,\"showGridli..."
     }
   ],
   "diffCount": 2,

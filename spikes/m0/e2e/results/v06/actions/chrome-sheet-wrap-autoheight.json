@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "wrap-autoheight",
   "kind": "sheet",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T13:53:22.508Z",
+  "timestamp": "2026-09-24T18:37:25.180Z",
   "quiet": {
-    "waitedMs": 1002.2000000476837,
+    "waitedMs": 995.8999999761581,
     "formula": "settled",
     "restarts": 0
   },

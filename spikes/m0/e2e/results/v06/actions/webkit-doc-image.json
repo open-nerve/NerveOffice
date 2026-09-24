@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "image",
   "kind": "doc",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T14:35:09.232Z",
+  "timestamp": "2026-09-24T17:49:19.732Z",
   "quiet": {
-    "waitedMs": 999,
+    "waitedMs": 976,
     "formula": "n/a",
     "restarts": 0
   },
@@ -40,7 +41,7 @@
   },
   "timeline": [
     {
-      "dt": 13,
+      "dt": 16,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "detected"
     }
@@ -48,14 +49,14 @@
   "planRule": null,
   "diff": [
     {
-      "path": "$.drawings.4rRw82",
+      "path": "$.drawings.90sIOL",
       "kind": "added",
-      "after": "{\"unitId\":\"m0-doc-all\",\"subUnitId\":\"m0-doc-all\",\"drawingId\":\"4rRw82\",\"drawingType\":0,\"imageSourceType\":\"URL\",\"source\":\"/fixtures-assets/blue-120x80.png\",\"tra..."
+      "after": "{\"unitId\":\"m0-doc-all\",\"subUnitId\":\"m0-doc-all\",\"drawingId\":\"90sIOL\",\"drawingType\":0,\"imageSourceType\":\"URL\",\"source\":\"/fixtures-assets/blue-120x80.png\",\"tra..."
     },
     {
       "path": "$.drawingsOrder[2]",
       "kind": "added",
-      "after": "\"4rRw82\""
+      "after": "\"90sIOL\""
     },
     {
       "path": "$.body.dataStream",
@@ -66,7 +67,7 @@
     {
       "path": "$.body.customBlocks[2]",
       "kind": "added",
-      "after": "{\"startIndex\":228,\"blockId\":\"4rRw82\"}"
+      "after": "{\"startIndex\":228,\"blockId\":\"90sIOL\"}"
     },
     {
       "path": "$.body.paragraphs[29].startIndex",
@@ -75,14 +76,14 @@
       "after": "229"
     },
     {
-      "path": "$.resources[0].data.data.4rRw82",
+      "path": "$.resources[0].data.data.90sIOL",
       "kind": "added",
       "after": "{\"behindDoc\":0,\"distB\":0,\"distL\":0,\"distR\":0,\"distT\":0,\"docTransform\":{\"angle\":0,\"positionH\":{\"posOffset\":0,\"relativeFrom\":0},\"positionV\":{\"posOffset\":0,\"rel..."
     },
     {
       "path": "$.resources[0].data.order[2]",
       "kind": "added",
-      "after": "\"4rRw82\""
+      "after": "\"90sIOL\""
     }
   ],
   "diffCount": 7,

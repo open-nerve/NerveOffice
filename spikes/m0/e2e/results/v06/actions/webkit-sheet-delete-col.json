@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "delete-col",
   "kind": "sheet",
+  "worker": false,
   "method": "F",
   "expect": "change",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T14:28:40.221Z",
+  "timestamp": "2026-09-24T17:42:50.562Z",
   "quiet": {
-    "waitedMs": 951,
+    "waitedMs": 976,
     "formula": "settled",
     "restarts": 0
   },
@@ -79,37 +80,37 @@
   },
   "timeline": [
     {
-      "dt": 7,
+      "dt": 5,
       "id": "sheet.mutation.remove-col",
       "verdict": "detected"
     },
     {
-      "dt": 10,
+      "dt": 9,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
+    },
+    {
+      "dt": 11,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
     },
     {
       "dt": 13,
-      "id": "doc.mutation.rich-text-editing",
-      "verdict": "other-unit"
-    },
-    {
-      "dt": 14,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
     {
-      "dt": 15,
+      "dt": 14,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 16,
+      "dt": 15,
       "id": "formula.mutation.set-defined-name",
       "verdict": "detected"
     },
     {
-      "dt": 41,
+      "dt": 34,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }

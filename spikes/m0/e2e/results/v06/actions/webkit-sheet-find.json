@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "find",
   "kind": "sheet",
+  "worker": false,
   "method": "F",
   "expect": "view",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T14:33:51.642Z",
+  "timestamp": "2026-09-24T17:48:02.138Z",
   "quiet": {
-    "waitedMs": 1001,
+    "waitedMs": 1024,
     "formula": "settled",
     "restarts": 0
   },

@@ -11,9 +11,9 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T13:15:55.528Z",
+  "timestamp": "2026-09-24T17:05:32.355Z",
   "quiet": {
-    "waitedMs": 990.5,
+    "waitedMs": 1006.5,
     "formula": "settled",
     "restarts": 0
   },
@@ -40,7 +40,7 @@
   },
   "timeline": [
     {
-      "dt": 5,
+      "dt": 3,
       "id": "sheet.mutation.add-worksheet-merge",
       "verdict": "detected"
     }

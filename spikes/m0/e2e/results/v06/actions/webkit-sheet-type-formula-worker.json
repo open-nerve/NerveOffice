@@ -1,0 +1,588 @@
+{
+  "check": "V06-actions",
+  "action": "type-formula",
+  "kind": "sheet",
+  "worker": true,
+  "method": "U",
+  "expect": "change",
+  "verdict": "通过",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T17:24:40.792Z",
+  "quiet": {
+    "waitedMs": 667,
+    "formula": "settled",
+    "restarts": 0
+  },
+  "during": {
+    "detections": [
+      "sheet.mutation.set-range-values"
+    ],
+    "mutations": [
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_FORMULA_BAR"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_FORMULA_BAR"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_FORMULA_BAR"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_FORMULA_BAR"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_FORMULA_BAR"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_FORMULA_BAR"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_FORMULA_BAR"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_FORMULA_BAR"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_FORMULA_BAR"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_FORMULA_BAR"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_FORMULA_BAR"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_FORMULA_BAR"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_FORMULA_BAR"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_FORMULA_BAR"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_FORMULA_BAR"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_FORMULA_BAR"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_FORMULA_BAR"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_FORMULA_BAR"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_FORMULA_BAR"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_FORMULA_BAR"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_FORMULA_BAR"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_FORMULA_BAR"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "sheet.mutation.set-range-values",
+        "verdict": "detected",
+        "options": [],
+        "unitId": "m0-sheet-all"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      },
+      {
+        "id": "doc.mutation.rich-text-editing",
+        "verdict": "other-unit",
+        "options": [],
+        "unitId": "__INTERNAL_EDITOR__DOCS_NORMAL"
+      }
+    ],
+    "syncOnly": [],
+    "total": 166
+  },
+  "after": {
+    "detections": [],
+    "mutations": [],
+    "syncOnly": [],
+    "total": 166
+  },
+  "timeline": [
+    {
+      "dt": 15,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 198,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 199,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 211,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 211,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 227,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 227,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 229,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 230,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 236,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 237,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 239,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 240,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 247,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 248,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 250,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 250,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 257,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 258,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 259,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 260,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 264,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 265,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 267,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 267,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 273,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 274,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 276,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 276,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 289,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 291,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 293,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 293,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 301,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 302,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 304,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 304,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 312,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 313,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 314,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 314,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 322,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 322,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 325,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 325,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 352,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 354,
+      "id": "sheet.mutation.set-range-values",
+      "verdict": "detected"
+    },
+    {
+      "dt": 355,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 371,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    }
+  ],
+  "planRule": null,
+  "diff": [
+    {
+      "path": "$.sheets.sheet-1.cellData.3.10",
+      "kind": "added",
+      "after": "{\"f\":\"=SUM(B2:B6)\",\"v\":70,\"t\":2}"
+    }
+  ],
+  "diffCount": 1,
+  "lateDiff": [],
+  "errors": []
+}

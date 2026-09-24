@@ -2,6 +2,7 @@
   "check": "V06-actions",
   "action": "scroll",
   "kind": "sheet",
+  "worker": false,
   "method": "U",
   "expect": "view",
   "verdict": "通过",
@@ -11,9 +12,9 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T13:57:31.560Z",
+  "timestamp": "2026-09-24T17:29:29.688Z",
   "quiet": {
-    "waitedMs": 1017.5,
+    "waitedMs": 1000.2999999523163,
     "formula": "settled",
     "restarts": 0
   },

@@ -11,9 +11,9 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T13:19:40.233Z",
+  "timestamp": "2026-09-24T17:09:16.894Z",
   "quiet": {
-    "waitedMs": 999.1000000238419,
+    "waitedMs": 1001.5,
     "formula": "settled",
     "restarts": 0
   },
@@ -40,7 +40,7 @@
   },
   "timeline": [
     {
-      "dt": 4,
+      "dt": 2,
       "id": "data-validation.mutation.addRule",
       "verdict": "detected"
     }
