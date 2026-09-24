@@ -47,6 +47,8 @@ export interface ChangeDetector {
     state(since?: number): ChangeDetectorState;
     /** 某条记录是否被候选规则判定为"有修改"。 */
     classify(record: CommandRecord): Verdict;
+    /** 最近一次"检测到修改"的时间（performance.now()），没有则为 null。 */
+    lastDetectionAt(): number | null;
     dispose(): void;
 }
 
@@ -104,6 +106,10 @@ export function createChangeDetector(univer: Univer, init: { unitId?: string; ex
         },
         mark: () => records.length,
         classify,
+        lastDetectionAt() {
+            for (let i = records.length - 1; i >= 0; i--) if (classify(records[i]) === 'detected') return records[i].t;
+            return null;
+        },
         state(since = 0) {
             const slice = records.slice(since).map((r) => ({ ...r, verdict: classify(r) }));
             const detections = slice.filter((r) => r.verdict === 'detected');

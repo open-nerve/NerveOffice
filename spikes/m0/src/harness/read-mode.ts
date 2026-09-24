@@ -53,7 +53,12 @@ async function run(steps: ReadModeStep[], step: string, fn: () => unknown): Prom
     }
 }
 
-export async function enterReadMode(editor: EditorHandle, strategy: ReadStrategy): Promise<ReadModeHandle> {
+export interface EnterReadModeOptions {
+    /** 是否清空撤销栈（默认清空，00 号计划书 §6.5）。实验中关掉它，用来单独验证撤销重做的拦截。 */
+    clearUndo?: boolean;
+}
+
+export async function enterReadMode(editor: EditorHandle, strategy: ReadStrategy, options: EnterReadModeOptions = {}): Promise<ReadModeHandle> {
     const { univerAPI, univer } = editor;
     const injector = univer.__getInjector();
     const permissionService = injector.get(IPermissionService);
@@ -120,7 +125,7 @@ export async function enterReadMode(editor: EditorHandle, strategy: ReadStrategy
 
     // 失去编辑权时清空撤销栈（00 号计划书 §6.5；Facade 没有暴露，通过注入器获取）
     const undoRedo = injector.get(IUndoRedoService);
-    undoRedo.clearUndoRedo(unitId);
+    if (options.clearUndo !== false) undoRedo.clearUndoRedo(unitId);
     const undoStackAfterClear = undoRedo.getUndoRedoStatus(unitId);
 
     const report: ReadModeReport = { strategy, steps, canceled, undoStackAfterClear };

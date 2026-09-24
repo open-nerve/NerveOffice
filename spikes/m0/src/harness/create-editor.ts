@@ -6,7 +6,7 @@ import type { PageEvents } from './events';
 import type { ReadModeHandle } from './read-mode';
 import type { WorkerStats } from './worker-stats';
 
-import { IResourceManagerService, LifecycleService, LifecycleStages, LocaleType, LogLevel, Univer, UserManagerService } from '@univerjs/core';
+import { IResourceManagerService, IUndoRedoService, LifecycleService, LifecycleStages, LocaleType, LogLevel, Univer, UserManagerService } from '@univerjs/core';
 import { createChangeDetector } from './change-detector';
 import { GuardedResourceManagerService } from './guarded-resource-manager';
 import { describeDocument } from './semantics';
@@ -47,9 +47,11 @@ export interface EditorHandle {
     detector: ChangeDetector;
     /** 销毁 Univer 实例（V09：销毁重建）。 */
     dispose(): void;
+    /** 本文档的撤销栈状态（IUndoRedoService，Facade 没有暴露）。 */
+    undoStatus(): { undos: number; redos: number };
     /** 捕获快照：FWorkbook.save() / FDocument.save()。 */
     save(): IWorkbookData | IDocumentData;
-    /** 从开始创建到各生命周期阶段的耗时（毫秒）。 */
+    /** 从开始创建到各生命周期阶段的耗时（毫秒）；t0 是开始创建时的 performance.now()。 */
     timings: Record<string, number>;
     /** 运行时注册的资源 hook：决定 save() 会输出哪些资源。 */
     resourceHooks(): ResourceHookInfo[];
@@ -59,6 +61,8 @@ export interface EditorHandle {
     semantics(): ReturnType<typeof describeDocument>;
     /** SDK 眼中的当前用户 id（本地模拟的授权服务会把它设成 Owner_xxx）。 */
     currentUserId(): string;
+    /** 设置当前用户（V09：真实用户身份对本地授权服务的影响；UserManagerService 是内部 API）。 */
+    setCurrentUser(user: { userID: string; name: string }): void;
     /** 文档创建之后再注册某个插件组（V04：验证晚注册的插件能否补加载资源）。 */
     lateRegister(groupId: string): void;
 }
@@ -74,7 +78,7 @@ export async function createEditor(options: CreateEditorOptions): Promise<Editor
         calcMode: options.calcMode ?? 'default',
     };
     const t0 = performance.now();
-    const timings: Record<string, number> = {};
+    const timings: Record<string, number> = { t0 };
 
     const univer = new Univer({
         locale: LocaleType.ZH_CN,
@@ -152,6 +156,7 @@ export async function createEditor(options: CreateEditorOptions): Promise<Editor
             detector.dispose();
             univer.dispose();
         },
+        undoStatus: () => univer.__getInjector().get(IUndoRedoService).getUndoRedoStatus(unitId),
         save,
         timings,
         resourceHooks,
@@ -159,6 +164,7 @@ export async function createEditor(options: CreateEditorOptions): Promise<Editor
         lateRegister,
         semantics: () => describeDocument(handle),
         currentUserId: () => univer.__getInjector().get(UserManagerService).getCurrentUser().userID,
+        setCurrentUser: (user) => univer.__getInjector().get(UserManagerService).setCurrentUser(user as never),
     };
     return handle;
 }
@@ -176,8 +182,18 @@ export interface M0Window {
     resourceLoadFailures?: import('./guarded-resource-manager').ResourceLoadFailure[];
     ready: Promise<EditorHandle>;
     editor?: EditorHandle;
-    /** 阅读模式（mode=read 时）。 */
+    /** 阅读模式（mode=read 时，或者用 enterReadMode 原地进入之后）。 */
     readMode?: ReadModeHandle;
+    /** 原地进入阅读模式（V09 的撤销重做拦截与原地切换实验）。 */
+    enterReadMode?: (ro: string, options?: import('./read-mode').EnterReadModeOptions) => Promise<ReadModeHandle>;
+    /** 菜单审计（V09）。 */
+    auditMenus?: () => import('./menu-audit').MenuAuditItem[];
+    /** 计时工具（V08、V10）。 */
+    perf?: typeof import('./perf');
+    /** 资源比较（V08 测打开自检的耗时）。 */
+    guard?: typeof import('./resource-guard');
+    /** 加载时的快照文本（创建文档单元之前序列化，SDK 会改动传入的对象）。 */
+    loadedText?: string;
     /** 销毁当前实例并按指定模式从文档存储重新创建（V09 的"销毁重建"）。 */
     remount?: (opts: { mode: 'edit' | 'read'; doc: string; ro?: string }) => Promise<{ ms: number }>;
     events: PageEvents;

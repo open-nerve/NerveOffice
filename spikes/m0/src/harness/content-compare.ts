@@ -6,6 +6,9 @@ import { isEmptyValue, pruneEmpty } from './resource-guard';
 /** 工作表中的视图状态：不产生 mutation，随下一次真实修改保存（00 号计划书 §7.3）。 */
 export const VIEW_STATE_FIELDS = ['zoomRatio', 'scrollTop', 'scrollLeft'] as const;
 
+/** 文字文档的视图状态：缩放比例由 operation 直接写进 settings.zoomRatio。 */
+export const DOC_VIEW_STATE_FIELDS = ['settings.zoomRatio'] as const;
+
 type Json = Record<string, unknown>;
 
 function parseResourceData(data: unknown): unknown {
@@ -33,6 +36,11 @@ export function normalizeContent(snapshotText: string): Json {
         for (const sheet of Object.values(sheets)) {
             for (const f of VIEW_STATE_FIELDS) delete sheet[f];
         }
+    }
+    const settings = snap.settings as Json | undefined;
+    if (settings != null) {
+        delete settings.zoomRatio;
+        if (Object.keys(settings).length === 0) delete snap.settings;
     }
     return snap;
 }

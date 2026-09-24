@@ -16,9 +16,19 @@ export interface PageEvents {
     errors: string[];
     consoleErrors: string[];
     consoleWarnings: string[];
+    /** 长任务（Chromium 支持；从页面开始记录，V10 用来统计打开过程中的长任务）。 */
+    longTasks: { start: number; duration: number }[] | null;
 }
 
-export const pageEvents: PageEvents = { cspViolations: [], errors: [], consoleErrors: [], consoleWarnings: [] };
+export const pageEvents: PageEvents = { cspViolations: [], errors: [], consoleErrors: [], consoleWarnings: [], longTasks: null };
+
+if (typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
+    const list: { start: number; duration: number }[] = [];
+    pageEvents.longTasks = list;
+    new PerformanceObserver((entries) => {
+        for (const e of entries.getEntries()) list.push({ start: e.startTime, duration: e.duration });
+    }).observe({ type: 'longtask', buffered: true });
+}
 
 document.addEventListener('securitypolicyviolation', (e) => {
     pageEvents.cspViolations.push({

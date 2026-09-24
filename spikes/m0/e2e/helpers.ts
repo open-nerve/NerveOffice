@@ -5,11 +5,12 @@ import { dirname, join } from 'node:path';
 
 export const RESULTS_DIR = join(import.meta.dirname, 'results');
 
-/** 三个验证服务：同一份 dist，不同的 CSP 模式（见 server/csp.ts）。 */
+/** 三个验证服务：同一份 dist，不同的 CSP 模式（见 server/csp.ts）。端口基数可用 M0_PORT_BASE 改掉（见 playwright.config.ts）。 */
+const PORT = Number(process.env.M0_PORT_BASE ?? 4700);
 export const SERVERS = {
-    full: 'http://127.0.0.1:4700',
-    off: 'http://127.0.0.1:4701',
-    htmlOnly: 'http://127.0.0.1:4702',
+    full: `http://127.0.0.1:${PORT}`,
+    off: `http://127.0.0.1:${PORT + 1}`,
+    htmlOnly: `http://127.0.0.1:${PORT + 2}`,
 } as const;
 
 /** 等待编辑器进入 Steady；页面报错时直接失败。 */

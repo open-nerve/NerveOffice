@@ -210,7 +210,8 @@ export const sheetProfile: EditorProfile = {
     worker: 'formula',
     groups,
     ui: sheetUi,
-    changeDetectionExclude: [],
+    // V06：类型声明为 MUTATION、实际只清除界面上的图片变换框的命令（不改内容）
+    changeDetectionExclude: ['sheet.operation.clear-drawing-transformer'],
     locale: mergeLocales(
         DesignZhCN,
         UIZhCN,

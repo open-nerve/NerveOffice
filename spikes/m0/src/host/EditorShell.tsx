@@ -3,7 +3,10 @@ import type { EditorProfile } from '../profiles/types';
 
 import { useEffect, useRef, useState } from 'react';
 import { createEditor } from '../harness/create-editor';
+import * as perf from '../harness/perf';
 import { enterReadMode, READ_STRATEGIES } from '../harness/read-mode';
+import * as guard from '../harness/resource-guard';
+import { auditMenus } from '../harness/menu-audit';
 import { pageEvents } from '../harness/events';
 import { loadFixture } from '../harness/fixtures';
 import { readPageParams } from '../harness/params';
@@ -49,6 +52,7 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
 
         const open = async (mode: 'edit' | 'read', data: Record<string, unknown>, ro: string): Promise<EditorHandle> => {
             if (mode === 'read' && !READ_STRATEGIES.includes(ro as never)) throw new Error(`没有这种阅读模式方案：${ro}`);
+            window.__m0!.loadedText = JSON.stringify(data);
             const editor = await createEditor({
                 profile,
                 container,
@@ -90,7 +94,18 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
             if (!res.ok) throw new Error(`写回失败：${res.status}`);
         };
 
-        window.__m0 = { kind: profile.kind, ready, events: pageEvents, params: { ...params }, workerStats, persist, remount, builders, resourceLoadFailures };
+        const enterRead = async (ro: string, options?: Parameters<typeof enterReadMode>[2]) => {
+            const editor = await ready;
+            window.__m0!.readMode = await enterReadMode(window.__m0!.editor ?? editor, ro as never, options);
+            return window.__m0!.readMode;
+        };
+        const audit = () => auditMenus(window.__m0!.editor!.univer);
+
+        window.__m0 = {
+            kind: profile.kind, ready, events: pageEvents, params: { ...params }, workerStats, persist, remount, builders, resourceLoadFailures, perf, guard,
+            enterReadMode: enterRead,
+            auditMenus: audit,
+        };
 
         ready.then(
             async (editor) => {
