@@ -11,10 +11,11 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T06:02:32.982Z",
+  "timestamp": "2026-09-24T13:19:18.451Z",
   "quiet": {
-    "waitedMs": 1027.2999999523163,
-    "formula": "applied"
+    "waitedMs": 983.6000000238419,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -51,17 +52,17 @@
   },
   "timeline": [
     {
-      "dt": 5,
+      "dt": 6,
       "id": "sheet.mutation.insert-sheet",
       "verdict": "detected"
     },
     {
-      "dt": 12,
+      "dt": 13,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 39,
+      "dt": 40,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }
@@ -72,7 +73,7 @@
       "path": "$.sheetOrder[2]",
       "kind": "changed",
       "before": "\"BosGI6KRewWr9iRx1e2-J\"",
-      "after": "\"G0RnmxZO0sTwlrhVdXBcF\""
+      "after": "\"CJEXMLlzzjlcpRs0WSNT3\""
     },
     {
       "path": "$.sheetOrder[3]",
@@ -92,9 +93,9 @@
       "after": "\"3pom9bUkA1bNL7bRVYpBX\""
     },
     {
-      "path": "$.sheets.G0RnmxZO0sTwlrhVdXBcF",
+      "path": "$.sheets.CJEXMLlzzjlcpRs0WSNT3",
       "kind": "added",
-      "after": "{\"id\":\"G0RnmxZO0sTwlrhVdXBcF\",\"name\":\"汇总 （副本）\",\"tabColor\":\"#16a34a\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24..."
+      "after": "{\"id\":\"CJEXMLlzzjlcpRs0WSNT3\",\"name\":\"汇总 （副本）\",\"tabColor\":\"#16a34a\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24..."
     }
   ],
   "diffCount": 5,

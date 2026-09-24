@@ -11,10 +11,11 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T06:00:08.937Z",
+  "timestamp": "2026-09-24T13:16:39.193Z",
   "quiet": {
-    "waitedMs": 1029.4000000953674,
-    "formula": "applied"
+    "waitedMs": 970.6000000238419,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -110,17 +111,17 @@
       "verdict": "detected"
     },
     {
-      "dt": 15,
+      "dt": 14,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 16,
+      "dt": 15,
       "id": "formula.mutation.set-defined-name",
       "verdict": "detected"
     },
     {
-      "dt": 18,
+      "dt": 17,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }

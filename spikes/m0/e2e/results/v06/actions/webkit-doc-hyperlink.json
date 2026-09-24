@@ -11,10 +11,11 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T07:07:08.867Z",
+  "timestamp": "2026-09-24T14:35:20.420Z",
   "quiet": {
-    "waitedMs": 1008,
-    "formula": "n/a"
+    "waitedMs": 995,
+    "formula": "n/a",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -39,7 +40,7 @@
   },
   "timeline": [
     {
-      "dt": 318,
+      "dt": 319,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "detected"
     }
@@ -50,7 +51,7 @@
       "path": "$.body.customRanges[0].rangeId",
       "kind": "changed",
       "before": "\"XAOjhp2d9f2YI8R97Lf9W\"",
-      "after": "\"p6p9aRVXt2bloO2Nz04iI\""
+      "after": "\"oPukOGMe2IfCvIQL7jkLh\""
     },
     {
       "path": "$.body.customRanges[0].properties.url",
@@ -103,7 +104,7 @@
       "path": "$.resources[1].data.links[0].id",
       "kind": "changed",
       "before": "\"XAOjhp2d9f2YI8R97Lf9W\"",
-      "after": "\"p6p9aRVXt2bloO2Nz04iI\""
+      "after": "\"oPukOGMe2IfCvIQL7jkLh\""
     },
     {
       "path": "$.resources[1].data.links[0].payload",

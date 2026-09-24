@@ -11,10 +11,11 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T07:04:11.515Z",
+  "timestamp": "2026-09-24T14:32:23.623Z",
   "quiet": {
-    "waitedMs": 1018,
-    "formula": "applied"
+    "waitedMs": 1000,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -39,7 +40,7 @@
   },
   "timeline": [
     {
-      "dt": 7,
+      "dt": 6,
       "id": "formula.mutation.set-defined-name",
       "verdict": "detected"
     }
@@ -47,9 +48,9 @@
   "planRule": null,
   "diff": [
     {
-      "path": "$.resources[3].data.AIVhgFhzEx",
+      "path": "$.resources[3].data.MydKTtxW82",
       "kind": "added",
-      "after": "{\"formulaOrRefString\":\"'数据'!$A$2:$A$6\",\"id\":\"AIVhgFhzEx\",\"localSheetId\":\"AllDefaultWorkbook\",\"name\":\"新名称\"}"
+      "after": "{\"formulaOrRefString\":\"'数据'!$A$2:$A$6\",\"id\":\"MydKTtxW82\",\"localSheetId\":\"AllDefaultWorkbook\",\"name\":\"新名称\"}"
     }
   ],
   "diffCount": 1,

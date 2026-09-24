@@ -11,10 +11,11 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T07:01:48.379Z",
+  "timestamp": "2026-09-24T14:30:00.598Z",
   "quiet": {
-    "waitedMs": 1005,
-    "formula": "applied"
+    "waitedMs": 997,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -39,7 +40,7 @@
   },
   "timeline": [
     {
-      "dt": 3,
+      "dt": 2,
       "id": "sheet.mutation.set-frozen",
       "verdict": "detected"
     }

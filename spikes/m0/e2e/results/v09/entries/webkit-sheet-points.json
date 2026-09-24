@@ -8,7 +8,7 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T07:22:12.397Z",
+  "timestamp": "2026-09-24T14:51:07.057Z",
   "traces": {
     "steps": [
       {
@@ -16,7 +16,7 @@
         "ok": true
       },
       {
-        "step": "工作表编辑类权限点 = false（本地）",
+        "step": "工作表编辑类权限点 = false（本地，保留查看与复制）",
         "ok": true
       }
     ],
@@ -159,12 +159,12 @@
         {
           "path": "$.sheetOrder[5]",
           "kind": "added",
-          "after": "\"fqwrieWg9k-KfnDoBmWMu\""
+          "after": "\"Pzx-AxZ_2u_MKAe6ea3qj\""
         },
         {
-          "path": "$.sheets.fqwrieWg9k-KfnDoBmWMu",
+          "path": "$.sheets.Pzx-AxZ_2u_MKAe6ea3qj",
           "kind": "added",
-          "after": "{\"id\":\"fqwrieWg9k-KfnDoBmWMu\",\"name\":\"新表\",\"tabColor\":\"\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24,\"showGridli..."
+          "after": "{\"id\":\"Pzx-AxZ_2u_MKAe6ea3qj\",\"name\":\"新表\",\"tabColor\":\"\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24,\"showGridli..."
         }
       ],
       "canceledSoFar": 0
@@ -234,7 +234,7 @@
           "path": "$.sheetOrder[2]",
           "kind": "changed",
           "before": "\"BosGI6KRewWr9iRx1e2-J\"",
-          "after": "\"dkVVN-kF3T97ru9GJukt4\""
+          "after": "\"DaBKKu1Xue9iPAhzHCvBU\""
         },
         {
           "path": "$.sheetOrder[3]",
@@ -254,9 +254,9 @@
           "after": "\"3pom9bUkA1bNL7bRVYpBX\""
         },
         {
-          "path": "$.sheets.dkVVN-kF3T97ru9GJukt4",
+          "path": "$.sheets.DaBKKu1Xue9iPAhzHCvBU",
           "kind": "added",
-          "after": "{\"id\":\"dkVVN-kF3T97ru9GJukt4\",\"name\":\"汇总 （副本）\",\"tabColor\":\"#16a34a\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24..."
+          "after": "{\"id\":\"DaBKKu1Xue9iPAhzHCvBU\",\"name\":\"汇总 （副本）\",\"tabColor\":\"#16a34a\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24..."
         }
       ],
       "canceledSoFar": 0
@@ -303,6 +303,26 @@
     {
       "entry": "delete-image",
       "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "resize-image",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "row-resize-drag",
+      "method": "U",
       "verdict": "拦截",
       "error": null,
       "pageErrors": [],
@@ -419,7 +439,7 @@
         {
           "path": "$.resources[6].data.sheet-1",
           "kind": "added",
-          "after": "{\"29\":{\"10\":{\"col\":10,\"height\":60,\"id\":\"zUGeBu\",\"note\":\"新备注\",\"row\":29,\"width\":160}}}"
+          "after": "{\"29\":{\"10\":{\"col\":10,\"height\":60,\"id\":\"S9TMVt\",\"note\":\"新备注\",\"row\":29,\"width\":160}}}"
         }
       ],
       "canceledSoFar": 0
@@ -447,6 +467,8 @@
       "move-sheet",
       "move-image",
       "delete-image",
+      "resize-image",
+      "row-resize-drag",
       "row-height",
       "insert-row",
       "delete-row",

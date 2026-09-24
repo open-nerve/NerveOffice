@@ -11,10 +11,11 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T06:28:58.621Z",
+  "timestamp": "2026-09-24T13:51:09.565Z",
   "quiet": {
-    "waitedMs": 1029.8000000715256,
-    "formula": "applied"
+    "waitedMs": 975.4000000953674,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -41,27 +42,27 @@
       }
     ],
     "syncOnly": [],
-    "total": 91
+    "total": 90
   },
   "after": {
     "detections": [],
     "mutations": [],
     "syncOnly": [],
-    "total": 91
+    "total": 90
   },
   "timeline": [
     {
-      "dt": 10,
+      "dt": 8,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 183,
+      "dt": 185,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
     {
-      "dt": 186,
+      "dt": 188,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }
@@ -71,7 +72,7 @@
     {
       "path": "$.sheets.sheet-1.cellData.7.10",
       "kind": "removed",
-      "before": "{\"v\":\"撤销前\",\"s\":\"NUZVz9\",\"t\":1}"
+      "before": "{\"v\":\"撤销前\",\"s\":\"my9d7m\",\"t\":1}"
     }
   ],
   "diffCount": 1,

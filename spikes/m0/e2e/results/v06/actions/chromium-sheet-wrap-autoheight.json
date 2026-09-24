@@ -11,10 +11,11 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T06:00:52.728Z",
+  "timestamp": "2026-09-24T13:17:22.873Z",
   "quiet": {
-    "waitedMs": 1019.4000000953674,
-    "formula": "applied"
+    "waitedMs": 991.2999999523163,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -58,20 +59,20 @@
       "verdict": "detected"
     },
     {
-      "dt": 6,
+      "dt": 7,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
     {
-      "dt": 7,
+      "dt": 8,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     }
   ],
   "planRule": {
-    "captureAtMs": 1006,
+    "captureAtMs": 1007,
     "autoHeightMutations": 1,
-    "lastAutoHeightMs": 7,
+    "lastAutoHeightMs": 8,
     "missed": 0
   },
   "diff": [

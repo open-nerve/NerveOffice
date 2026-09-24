@@ -11,10 +11,11 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T06:34:42.536Z",
+  "timestamp": "2026-09-24T13:57:09.460Z",
   "quiet": {
-    "waitedMs": 1031.1000000238419,
-    "formula": "applied"
+    "waitedMs": 991.1000000238419,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -39,7 +40,7 @@
   },
   "timeline": [
     {
-      "dt": 21,
+      "dt": 22,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     }

@@ -11,10 +11,11 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T06:29:32.461Z",
+  "timestamp": "2026-09-24T13:51:43.308Z",
   "quiet": {
-    "waitedMs": 1025.1999999284744,
-    "formula": "applied"
+    "waitedMs": 992.6000000238419,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -39,7 +40,7 @@
   },
   "timeline": [
     {
-      "dt": 4,
+      "dt": 3,
       "id": "sheet.mutation.set.numfmt",
       "verdict": "detected"
     }
@@ -47,34 +48,34 @@
   "planRule": null,
   "diff": [
     {
-      "path": "$.styles.pjNRWZ",
+      "path": "$.styles.JHlvPS",
       "kind": "added",
       "after": "{\"n\":{\"pattern\":\"0.0\"}}"
     },
     {
       "path": "$.sheets.sheet-1.cellData.1.1.s",
       "kind": "added",
-      "after": "\"pjNRWZ\""
+      "after": "\"JHlvPS\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.2.1.s",
       "kind": "added",
-      "after": "\"pjNRWZ\""
+      "after": "\"JHlvPS\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.3.1.s",
       "kind": "added",
-      "after": "\"pjNRWZ\""
+      "after": "\"JHlvPS\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.4.1.s",
       "kind": "added",
-      "after": "\"pjNRWZ\""
+      "after": "\"JHlvPS\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.5.1.s",
       "kind": "added",
-      "after": "\"pjNRWZ\""
+      "after": "\"JHlvPS\""
     }
   ],
   "diffCount": 6,

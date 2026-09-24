@@ -11,10 +11,11 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T06:36:55.850Z",
+  "timestamp": "2026-09-24T13:59:22.512Z",
   "quiet": {
-    "waitedMs": 1021.5999999046326,
-    "formula": "n/a"
+    "waitedMs": 1000.3999999761581,
+    "formula": "n/a",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -39,7 +40,7 @@
   },
   "timeline": [
     {
-      "dt": 9,
+      "dt": 12,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "detected"
     }
@@ -47,14 +48,14 @@
   "planRule": null,
   "diff": [
     {
-      "path": "$.drawings.DK72FW",
+      "path": "$.drawings.lIhWN7",
       "kind": "added",
-      "after": "{\"unitId\":\"m0-doc-all\",\"subUnitId\":\"m0-doc-all\",\"drawingId\":\"DK72FW\",\"drawingType\":0,\"imageSourceType\":\"URL\",\"source\":\"/fixtures-assets/blue-120x80.png\",\"tra..."
+      "after": "{\"unitId\":\"m0-doc-all\",\"subUnitId\":\"m0-doc-all\",\"drawingId\":\"lIhWN7\",\"drawingType\":0,\"imageSourceType\":\"URL\",\"source\":\"/fixtures-assets/blue-120x80.png\",\"tra..."
     },
     {
       "path": "$.drawingsOrder[2]",
       "kind": "added",
-      "after": "\"DK72FW\""
+      "after": "\"lIhWN7\""
     },
     {
       "path": "$.body.dataStream",
@@ -65,7 +66,7 @@
     {
       "path": "$.body.customBlocks[2]",
       "kind": "added",
-      "after": "{\"startIndex\":228,\"blockId\":\"DK72FW\"}"
+      "after": "{\"startIndex\":228,\"blockId\":\"lIhWN7\"}"
     },
     {
       "path": "$.body.paragraphs[29].startIndex",
@@ -74,14 +75,14 @@
       "after": "229"
     },
     {
-      "path": "$.resources[0].data.data.DK72FW",
+      "path": "$.resources[0].data.data.lIhWN7",
       "kind": "added",
       "after": "{\"behindDoc\":0,\"distB\":0,\"distL\":0,\"distR\":0,\"distT\":0,\"docTransform\":{\"angle\":0,\"positionH\":{\"posOffset\":0,\"relativeFrom\":0},\"positionV\":{\"posOffset\":0,\"rel..."
     },
     {
       "path": "$.resources[0].data.order[2]",
       "kind": "added",
-      "after": "\"DK72FW\""
+      "after": "\"lIhWN7\""
     }
   ],
   "diffCount": 7,

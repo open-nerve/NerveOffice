@@ -8,37 +8,22 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T06:18:44.509Z",
-  "idleWaitMs": 500.89999997615814,
+  "timestamp": "2026-09-24T13:35:58.442Z",
+  "idleWaitMs": 507.7000000476837,
   "idleCalcSessions": 0,
   "waitMs": {
-    "noWait": 3.5,
-    "waited": 2283.899999976158,
-    "platformExtra": 1031.1000000238419,
-    "timeoutAttempt": 60.299999952316284,
-    "recapture": 2210.5,
-    "recapturePlatformExtra": 1038.3999999761581
+    "api": 2279.4000000953674,
+    "rule": 2315.100000023842,
+    "timeoutAttempt": 62.59999990463257,
+    "recaptureApi": 2228.2999999523163,
+    "recaptureRule": 509.60000002384186
   },
+  "ruleOutcome": "settled",
   "timeoutOutcome": "timeout",
-  "forcedRecalcMs": 501.09999990463257,
+  "volatileRecalculated": null,
+  "forcedRecalcMs": 504.39999997615814,
   "checks": {
     "noWait": {
-      "checked": 3,
-      "mismatches": 2,
-      "sample": [
-        {
-          "cell": "跨表!A2",
-          "expected": 10004932,
-          "actual": 9927166
-        },
-        {
-          "cell": "跨表!A3",
-          "expected": 9849388,
-          "actual": 9927154
-        }
-      ]
-    },
-    "waited": {
       "checked": 3,
       "mismatches": 1,
       "sample": [
@@ -49,39 +34,45 @@
         }
       ]
     },
-    "platform": {
+    "api": {
+      "checked": 3,
+      "mismatches": 1,
+      "sample": [
+        {
+          "cell": "跨表!A2",
+          "expected": 10004932,
+          "actual": 9927166
+        }
+      ]
+    },
+    "rule": {
       "checked": 3,
       "mismatches": 0,
       "sample": []
     },
     "timedOut": {
       "checked": 3,
-      "mismatches": 2,
+      "mismatches": 1,
       "sample": [
         {
           "cell": "跨表!A2",
-          "expected": 9982710,
-          "actual": 10004932
-        },
-        {
-          "cell": "跨表!A3",
-          "expected": 9949376,
-          "actual": 9927154
+          "expected": 9960488,
+          "actual": 9982710
         }
       ]
     },
-    "recapture": {
+    "recaptureApi": {
       "checked": 3,
       "mismatches": 1,
       "sample": [
         {
           "cell": "跨表!A2",
-          "expected": 9982710,
-          "actual": 10004932
+          "expected": 9960488,
+          "actual": 9982710
         }
       ]
     },
-    "recapturePlatform": {
+    "recaptureRule": {
       "checked": 3,
       "mismatches": 0,
       "sample": []
@@ -97,5 +88,5 @@
       "sample": []
     }
   },
-  "detections": 2
+  "detections": 3
 }

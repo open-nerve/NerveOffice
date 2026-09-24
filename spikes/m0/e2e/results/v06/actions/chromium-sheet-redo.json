@@ -11,10 +11,11 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T05:58:52.149Z",
+  "timestamp": "2026-09-24T13:15:22.791Z",
   "quiet": {
-    "waitedMs": 1035.6999999284744,
-    "formula": "applied"
+    "waitedMs": 977.6000000238419,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -41,27 +42,27 @@
       }
     ],
     "syncOnly": [],
-    "total": 104
+    "total": 102
   },
   "after": {
     "detections": [],
     "mutations": [],
     "syncOnly": [],
-    "total": 104
+    "total": 102
   },
   "timeline": [
     {
-      "dt": 11,
+      "dt": 9,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 184,
+      "dt": 182,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
     {
-      "dt": 187,
+      "dt": 185,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }
@@ -71,7 +72,7 @@
     {
       "path": "$.sheets.sheet-1.cellData.7.10",
       "kind": "added",
-      "after": "{\"v\":\"重做前\",\"s\":\"8wXWlr\",\"t\":1}"
+      "after": "{\"v\":\"重做前\",\"s\":\"HOJvao\",\"t\":1}"
     }
   ],
   "diffCount": 1,

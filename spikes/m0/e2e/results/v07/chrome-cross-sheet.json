@@ -8,42 +8,38 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T06:46:46.149Z",
-  "idleWaitMs": 503.60000002384186,
+  "timestamp": "2026-09-24T14:09:32.873Z",
+  "idleWaitMs": 508.39999997615814,
   "idleCalcSessions": 0,
   "waitMs": {
-    "noWait": 4.299999952316284,
-    "waited": 519.1000000238419,
-    "platformExtra": 1022.8999999761581,
-    "timeoutAttempt": 2097.6999999284744,
-    "recapture": 524.7000000476837,
-    "recapturePlatformExtra": 1022.1000000238419
+    "api": 519,
+    "rule": 2227.1999999284744,
+    "timeoutAttempt": 2216,
+    "recaptureApi": 515.6999999284744,
+    "recaptureRule": 502.7999999523163
   },
+  "ruleOutcome": "settled",
   "timeoutOutcome": "applied",
-  "forcedRecalcMs": 500.89999997615814,
+  "volatileRecalculated": null,
+  "forcedRecalcMs": 501.60000002384186,
   "checks": {
     "noWait": {
       "checked": 3,
-      "mismatches": 2,
+      "mismatches": 1,
       "sample": [
         {
           "cell": "跨表!A2",
           "expected": 10004932,
           "actual": 9927166
-        },
-        {
-          "cell": "跨表!A3",
-          "expected": 9849388,
-          "actual": 9927154
         }
       ]
     },
-    "waited": {
+    "api": {
       "checked": 3,
       "mismatches": 0,
       "sample": []
     },
-    "platform": {
+    "rule": {
       "checked": 3,
       "mismatches": 0,
       "sample": []
@@ -53,12 +49,12 @@
       "mismatches": 0,
       "sample": []
     },
-    "recapture": {
+    "recaptureApi": {
       "checked": 3,
       "mismatches": 0,
       "sample": []
     },
-    "recapturePlatform": {
+    "recaptureRule": {
       "checked": 3,
       "mismatches": 0,
       "sample": []
@@ -74,5 +70,5 @@
       "sample": []
     }
   },
-  "detections": 2
+  "detections": 3
 }

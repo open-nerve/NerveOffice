@@ -8,11 +8,11 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T06:26:07.693Z",
+  "timestamp": "2026-09-24T13:47:06.828Z",
   "traces": {
     "steps": [
       {
-        "step": "BeforeCommandExecute：取消非本地 mutation",
+        "step": "BeforeCommandExecute：取消作用于本文档的非本地 mutation",
         "ok": true
       }
     ],

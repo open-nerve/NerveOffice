@@ -8,19 +8,20 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T07:15:55.593Z",
-  "idleWaitMs": 502,
+  "timestamp": "2026-09-24T14:44:21.388Z",
+  "idleWaitMs": 501,
   "idleCalcSessions": 0,
   "waitMs": {
-    "noWait": 11,
-    "waited": 531,
-    "platformExtra": 1007,
-    "timeoutAttempt": 41,
-    "recapture": 529,
-    "recapturePlatformExtra": 1007
+    "api": 541,
+    "rule": 1037,
+    "timeoutAttempt": 51,
+    "recaptureApi": 537,
+    "recaptureRule": 501
   },
+  "ruleOutcome": "settled",
   "timeoutOutcome": "applied",
-  "forcedRecalcMs": 500,
+  "volatileRecalculated": null,
+  "forcedRecalcMs": 501,
   "checks": {
     "noWait": {
       "checked": 199,
@@ -53,12 +54,12 @@
         }
       ]
     },
-    "waited": {
+    "api": {
       "checked": 199,
       "mismatches": 0,
       "sample": []
     },
-    "platform": {
+    "rule": {
       "checked": 199,
       "mismatches": 0,
       "sample": []
@@ -68,12 +69,12 @@
       "mismatches": 0,
       "sample": []
     },
-    "recapture": {
+    "recaptureApi": {
       "checked": 199,
       "mismatches": 0,
       "sample": []
     },
-    "recapturePlatform": {
+    "recaptureRule": {
       "checked": 199,
       "mismatches": 0,
       "sample": []
@@ -89,5 +90,5 @@
       "sample": []
     }
   },
-  "detections": 2
+  "detections": 3
 }

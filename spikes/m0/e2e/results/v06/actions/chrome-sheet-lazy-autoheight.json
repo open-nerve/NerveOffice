@@ -11,10 +11,11 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T06:31:22.857Z",
+  "timestamp": "2026-09-24T13:53:34.135Z",
   "quiet": {
-    "waitedMs": 1128.2000000476837,
-    "formula": "applied"
+    "waitedMs": 1578.3000000715256,
+    "formula": "settled",
+    "restarts": 1
   },
   "during": {
     "detections": [
@@ -67,7 +68,7 @@
   },
   "timeline": [
     {
-      "dt": 6,
+      "dt": 7,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
@@ -77,177 +78,177 @@
       "verdict": "detected"
     },
     {
-      "dt": 40,
+      "dt": 41,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 60,
+      "dt": 64,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     },
     {
-      "dt": 69,
+      "dt": 79,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     }
   ],
   "planRule": {
-    "captureAtMs": 1006,
+    "captureAtMs": 1007,
     "autoHeightMutations": 4,
-    "lastAutoHeightMs": 69,
+    "lastAutoHeightMs": 79,
     "missed": 0
   },
   "diff": [
     {
-      "path": "$.styles.OLOS9M",
+      "path": "$.styles.gHpBpj",
       "kind": "added",
       "after": "{\"fs\":28}"
     },
     {
       "path": "$.sheets.sheet-1.cellData.0.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.1.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.2.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.3.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.4.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.5.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.6.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.7.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.8.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.9.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.10.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.11.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.12.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.13.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.14.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.15.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.16.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.17.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.18.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.19.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.20.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.21.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.22.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.23.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.24.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.25.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.26.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.27.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.28.12.s",
       "kind": "added",
-      "after": "\"OLOS9M\""
+      "after": "\"gHpBpj\""
     }
   ],
   "diffCount": 2999,

@@ -8,19 +8,20 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T06:48:20.006Z",
-  "idleWaitMs": 501,
+  "timestamp": "2026-09-24T14:11:19.286Z",
+  "idleWaitMs": 503.89999997615814,
   "idleCalcSessions": 0,
   "waitMs": {
-    "noWait": 3.6999999284744263,
-    "waited": 2233.2999999523163,
-    "platformExtra": 1017.7000000476837,
-    "timeoutAttempt": 57.300000071525574,
-    "recapture": 2156.7999999523163,
-    "recapturePlatformExtra": 1024.6000000238419
+    "api": 2349.2999999523163,
+    "rule": 2377.899999976158,
+    "timeoutAttempt": 58.799999952316284,
+    "recaptureApi": 2282.399999976158,
+    "recaptureRule": 503.2000000476837
   },
+  "ruleOutcome": "settled",
   "timeoutOutcome": "timeout",
-  "forcedRecalcMs": 503.3000000715256,
+  "volatileRecalculated": null,
+  "forcedRecalcMs": 509.3000000715256,
   "checks": {
     "noWait": {
       "checked": 4,
@@ -48,12 +49,12 @@
         }
       ]
     },
-    "waited": {
+    "api": {
       "checked": 4,
       "mismatches": 0,
       "sample": []
     },
-    "platform": {
+    "rule": {
       "checked": 4,
       "mismatches": 0,
       "sample": []
@@ -64,27 +65,27 @@
       "sample": [
         {
           "cell": "聚合!C1",
-          "expected": 9939499,
-          "actual": 10027153
+          "expected": 9981475,
+          "actual": 9939499
         },
         {
           "cell": "聚合!C2",
-          "expected": 496.97495,
-          "actual": 501.35765
+          "expected": 499.07375,
+          "actual": 496.97495
         },
         {
           "cell": "聚合!C4",
-          "expected": 12345,
-          "actual": 99999
+          "expected": 54321,
+          "actual": 12345
         }
       ]
     },
-    "recapture": {
+    "recaptureApi": {
       "checked": 4,
       "mismatches": 0,
       "sample": []
     },
-    "recapturePlatform": {
+    "recaptureRule": {
       "checked": 4,
       "mismatches": 0,
       "sample": []
@@ -100,5 +101,5 @@
       "sample": []
     }
   },
-  "detections": 2
+  "detections": 3
 }

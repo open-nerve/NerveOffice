@@ -6,7 +6,7 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T06:57:47.019Z",
+  "timestamp": "2026-09-24T14:25:49.530Z",
   "edit": {
     "visibleButShouldHide": [],
     "foundIds": [
@@ -93,7 +93,9 @@
       "sheet.toolbar.sheet-frozen",
       "sheet.menu.zoom-ratio",
       "base-ui.operation.toggle-fullscreen",
+      "sheet.command.copy",
       "sheet.menu.copy-special",
+      "sheet.command.copy-formula-only",
       "sheet.menu.paste-special",
       "sheet.menu.clear-selection",
       "sheet.menu.sheet-frozen",

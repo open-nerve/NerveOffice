@@ -11,10 +11,11 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T07:06:57.614Z",
+  "timestamp": "2026-09-24T14:35:09.232Z",
   "quiet": {
-    "waitedMs": 1010,
-    "formula": "n/a"
+    "waitedMs": 999,
+    "formula": "n/a",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -39,7 +40,7 @@
   },
   "timeline": [
     {
-      "dt": 15,
+      "dt": 13,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "detected"
     }
@@ -47,14 +48,14 @@
   "planRule": null,
   "diff": [
     {
-      "path": "$.drawings.mq7aHp",
+      "path": "$.drawings.4rRw82",
       "kind": "added",
-      "after": "{\"unitId\":\"m0-doc-all\",\"subUnitId\":\"m0-doc-all\",\"drawingId\":\"mq7aHp\",\"drawingType\":0,\"imageSourceType\":\"URL\",\"source\":\"/fixtures-assets/blue-120x80.png\",\"tra..."
+      "after": "{\"unitId\":\"m0-doc-all\",\"subUnitId\":\"m0-doc-all\",\"drawingId\":\"4rRw82\",\"drawingType\":0,\"imageSourceType\":\"URL\",\"source\":\"/fixtures-assets/blue-120x80.png\",\"tra..."
     },
     {
       "path": "$.drawingsOrder[2]",
       "kind": "added",
-      "after": "\"mq7aHp\""
+      "after": "\"4rRw82\""
     },
     {
       "path": "$.body.dataStream",
@@ -65,7 +66,7 @@
     {
       "path": "$.body.customBlocks[2]",
       "kind": "added",
-      "after": "{\"startIndex\":228,\"blockId\":\"mq7aHp\"}"
+      "after": "{\"startIndex\":228,\"blockId\":\"4rRw82\"}"
     },
     {
       "path": "$.body.paragraphs[29].startIndex",
@@ -74,14 +75,14 @@
       "after": "229"
     },
     {
-      "path": "$.resources[0].data.data.mq7aHp",
+      "path": "$.resources[0].data.data.4rRw82",
       "kind": "added",
       "after": "{\"behindDoc\":0,\"distB\":0,\"distL\":0,\"distR\":0,\"distT\":0,\"docTransform\":{\"angle\":0,\"positionH\":{\"posOffset\":0,\"relativeFrom\":0},\"positionV\":{\"posOffset\":0,\"rel..."
     },
     {
       "path": "$.resources[0].data.order[2]",
       "kind": "added",
-      "after": "\"mq7aHp\""
+      "after": "\"4rRw82\""
     }
   ],
   "diffCount": 7,

@@ -11,10 +11,11 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T05:57:54.349Z",
+  "timestamp": "2026-09-24T13:14:25.443Z",
   "quiet": {
-    "waitedMs": 1018.8999999761581,
-    "formula": "applied"
+    "waitedMs": 642,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -98,22 +99,27 @@
       "verdict": "other-unit"
     },
     {
-      "dt": 203,
+      "dt": 202,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 204,
+      "dt": 202,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 219,
+      "dt": 218,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 220,
+      "dt": 218,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
+    },
+    {
+      "dt": 221,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
@@ -123,22 +129,17 @@
       "verdict": "other-unit"
     },
     {
-      "dt": 223,
-      "id": "doc.mutation.rich-text-editing",
-      "verdict": "other-unit"
-    },
-    {
       "dt": 232,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
     {
-      "dt": 234,
+      "dt": 233,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 249,
+      "dt": 250,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }
@@ -146,14 +147,14 @@
   "planRule": null,
   "diff": [
     {
-      "path": "$.styles.TwOMzY",
+      "path": "$.styles.Iq_8B1",
       "kind": "added",
       "after": "{\"cl\":{\"rgb\":\"#1B1C1F\"}}"
     },
     {
       "path": "$.sheets.sheet-1.cellData.2.10",
       "kind": "added",
-      "after": "{\"v\":123,\"s\":\"TwOMzY\",\"t\":2}"
+      "after": "{\"v\":123,\"s\":\"Iq_8B1\",\"t\":2}"
     }
   ],
   "diffCount": 2,

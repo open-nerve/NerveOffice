@@ -10,13 +10,13 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T07:14:05.629Z",
-  "bytes": 497383,
+  "timestamp": "2026-09-24T14:42:31.557Z",
+  "bytes": 497385,
   "timings": {
-    "t0": 172,
+    "t0": 174,
     "ready": 31,
-    "rendered": 466,
-    "steady": 3519
+    "rendered": 465,
+    "steady": 3525
   },
   "detections": [],
   "mutations": [
@@ -39,28 +39,28 @@
   "openDiffCount": 4,
   "openDiff": [
     {
-      "path": "$.sheets.nmH6Qi1IuWwvLAu-YTp8v.cellData.0.0.v",
+      "path": "$.sheets.fwIzE90Auc69GrZLRB70v.cellData.0.0.v",
       "kind": "changed",
-      "before": "46289.592939814815",
-      "after": "46289.6346875"
+      "before": "46289.89640046296",
+      "after": "46289.94609953704"
     },
     {
-      "path": "$.sheets.nmH6Qi1IuWwvLAu-YTp8v.cellData.2.0.v",
+      "path": "$.sheets.fwIzE90Auc69GrZLRB70v.cellData.2.0.v",
       "kind": "changed",
-      "before": "0.23507916437696486",
-      "after": "0.04553082979653922"
+      "before": "0.9913977157117299",
+      "after": "0.8079957152275579"
     },
     {
-      "path": "$.sheets.nmH6Qi1IuWwvLAu-YTp8v.cellData.3.0.v",
+      "path": "$.sheets.fwIzE90Auc69GrZLRB70v.cellData.3.0.v",
       "kind": "changed",
-      "before": "611485",
-      "after": "664765"
+      "before": "308929",
+      "after": "369240"
     },
     {
-      "path": "$.sheets.nmH6Qi1IuWwvLAu-YTp8v.cellData.4.0.v",
+      "path": "$.sheets.fwIzE90Auc69GrZLRB70v.cellData.4.0.v",
       "kind": "changed",
-      "before": "0.4701583287539297",
-      "after": "0.09106165959307844"
+      "before": "1.9827954314234597",
+      "after": "1.6159914304551157"
     }
   ],
   "errors": []

@@ -11,10 +11,11 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T05:59:35.961Z",
+  "timestamp": "2026-09-24T13:16:06.436Z",
   "quiet": {
-    "waitedMs": 1030.1000000238419,
-    "formula": "applied"
+    "waitedMs": 987.6000000238419,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -46,12 +47,12 @@
   },
   "timeline": [
     {
-      "dt": 2,
+      "dt": 3,
       "id": "sheet.mutation.remove-worksheet-merge",
       "verdict": "detected"
     },
     {
-      "dt": 2,
+      "dt": 3,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     }

@@ -11,10 +11,11 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T05:59:46.956Z",
+  "timestamp": "2026-09-24T13:16:17.353Z",
   "quiet": {
-    "waitedMs": 1015.8999999761581,
-    "formula": "applied"
+    "waitedMs": 983.7999999523163,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -90,37 +91,37 @@
       "verdict": "detected"
     },
     {
+      "dt": 10,
+      "id": "sheet.mutation.set-range-values",
+      "verdict": "detected"
+    },
+    {
       "dt": 11,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
     {
-      "dt": 12,
-      "id": "sheet.mutation.set-range-values",
-      "verdict": "detected"
+      "dt": 13,
+      "id": "doc.mutation.rich-text-editing",
+      "verdict": "other-unit"
     },
     {
       "dt": 14,
-      "id": "doc.mutation.rich-text-editing",
-      "verdict": "other-unit"
-    },
-    {
-      "dt": 15,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
     {
-      "dt": 16,
+      "dt": 15,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 17,
+      "dt": 16,
       "id": "formula.mutation.set-defined-name",
       "verdict": "detected"
     },
     {
-      "dt": 19,
+      "dt": 18,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }

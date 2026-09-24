@@ -8,15 +8,15 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T07:26:16.265Z",
+  "timestamp": "2026-09-24T14:58:12.990Z",
   "traces": {
     "steps": [
       {
-        "step": "文档编辑权限点 = false（本地）",
+        "step": "document.getPermission().setReadOnly()",
         "ok": true
       },
       {
-        "step": "BeforeCommandExecute：取消非本地 mutation",
+        "step": "BeforeCommandExecute：取消作用于本文档的非本地 mutation",
         "ok": true
       }
     ],

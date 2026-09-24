@@ -11,10 +11,11 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T06:04:00.559Z",
+  "timestamp": "2026-09-24T13:20:45.666Z",
   "quiet": {
-    "waitedMs": 1027.3000000715256,
-    "formula": "applied"
+    "waitedMs": 993,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -44,12 +45,12 @@
   },
   "timeline": [
     {
-      "dt": 5,
+      "dt": 7,
       "id": "sheet.mutation.set-drawing-apply",
       "verdict": "detected"
     },
     {
-      "dt": 6,
+      "dt": 8,
       "id": "sheet.operation.clear-drawing-transformer",
       "verdict": "excluded"
     }
@@ -59,7 +60,7 @@
     {
       "path": "$.resources[4].data.sheet-1",
       "kind": "added",
-      "after": "{\"data\":{\"LFnlMi\":{\"axisAlignSheetTransform\":{\"angle\":0,\"flipX\":false,\"flipY\":false,\"from\":{\"column\":12,\"columnOffset\":0,\"row\":12,\"rowOffset\":0},\"skewX\":0,\"s..."
+      "after": "{\"data\":{\"4n7tH9\":{\"axisAlignSheetTransform\":{\"angle\":0,\"flipX\":false,\"flipY\":false,\"from\":{\"column\":12,\"columnOffset\":0,\"row\":12,\"rowOffset\":0},\"skewX\":0,\"s..."
     }
   ],
   "diffCount": 1,

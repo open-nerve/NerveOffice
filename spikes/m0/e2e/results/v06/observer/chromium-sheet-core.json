@@ -1,0 +1,23 @@
+{
+  "check": "V06-observer",
+  "sample": "sheet-core",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T13:26:42.535Z",
+  "readers": [
+    "getDataValidations",
+    "getConditionalFormattingRules",
+    "getFilter",
+    "getImages"
+  ],
+  "bytesChanged": true,
+  "contentDiff": [],
+  "detections": [],
+  "mutations": [],
+  "syncOnly": [],
+  "total": 14
+}

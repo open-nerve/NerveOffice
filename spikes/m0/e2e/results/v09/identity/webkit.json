@@ -6,11 +6,11 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T07:27:47.581Z",
+  "timestamp": "2026-09-24T15:00:34.398Z",
   "results": [
     {
       "sample": "sheet-all",
-      "userBefore": "Owner_gOQdbsTv",
+      "userBefore": "Owner_Dx_VUYbF",
       "userAfter": "user-reader-1",
       "controlK3": {
         "changed": true,
@@ -29,7 +29,7 @@
     },
     {
       "sample": "sheet-protection",
-      "userBefore": "Owner_mbslhmAq",
+      "userBefore": "Owner_Kmek7Cs3",
       "userAfter": "user-reader-1",
       "controlK3": {
         "changed": true,

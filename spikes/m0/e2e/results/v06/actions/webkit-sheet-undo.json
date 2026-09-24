@@ -11,10 +11,11 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T06:59:01.151Z",
+  "timestamp": "2026-09-24T14:27:00.423Z",
   "quiet": {
-    "waitedMs": 1003,
-    "formula": "applied"
+    "waitedMs": 978,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -41,27 +42,27 @@
       }
     ],
     "syncOnly": [],
-    "total": 90
+    "total": 89
   },
   "after": {
     "detections": [],
     "mutations": [],
     "syncOnly": [],
-    "total": 90
+    "total": 89
   },
   "timeline": [
     {
-      "dt": 28,
+      "dt": 10,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 204,
+      "dt": 187,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
     {
-      "dt": 208,
+      "dt": 190,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }
@@ -71,7 +72,7 @@
     {
       "path": "$.sheets.sheet-1.cellData.7.10",
       "kind": "removed",
-      "before": "{\"v\":\"撤销前\",\"s\":\"0G8nKZ\",\"t\":1}"
+      "before": "{\"v\":\"撤销前\",\"s\":\"lKzWLd\",\"t\":1}"
     }
   ],
   "diffCount": 1,

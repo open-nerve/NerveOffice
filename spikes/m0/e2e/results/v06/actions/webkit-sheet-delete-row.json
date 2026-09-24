@@ -11,10 +11,11 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T07:00:19.059Z",
+  "timestamp": "2026-09-24T14:28:18.241Z",
   "quiet": {
-    "waitedMs": 1006,
-    "formula": "applied"
+    "waitedMs": 966,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [

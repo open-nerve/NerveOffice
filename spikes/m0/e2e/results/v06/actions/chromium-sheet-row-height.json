@@ -11,10 +11,11 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T06:00:30.840Z",
+  "timestamp": "2026-09-24T13:17:01.045Z",
   "quiet": {
-    "waitedMs": 1014.6000000238419,
-    "formula": "applied"
+    "waitedMs": 989.8999999761581,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -51,7 +52,7 @@
       "verdict": "detected"
     },
     {
-      "dt": 6,
+      "dt": 5,
       "id": "sheet.mutation.set-worksheet-row-is-auto-height",
       "verdict": "detected"
     }

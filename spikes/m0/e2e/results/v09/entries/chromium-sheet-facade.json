@@ -8,7 +8,7 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T06:20:58.533Z",
+  "timestamp": "2026-09-24T13:38:32.268Z",
   "traces": {
     "steps": [
       {
@@ -97,13 +97,13 @@
         "path": "$.resources[0].data",
         "kind": "changed",
         "before": "null",
-        "after": "{\"E5xEAzBC\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"unitID\":\"m0-sheet-all\"},\"OccaqmPE\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"..."
+        "after": "{\"5dsh_qDz\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"unitID\":\"m0-sheet-all\"},\"M_b8uqHj\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"..."
       },
       {
         "path": "$.resources[9].data",
         "kind": "changed",
         "before": "null",
-        "after": "{\"m0-sheet-all\":[{\"editState\":\"onlyMe\",\"permissionId\":\"xG3g8GtO\",\"subUnitId\":\"sheet-1\",\"unitId\":\"m0-sheet-all\",\"unitType\":2,\"viewState\":\"othersCanView\"},{\"ed..."
+        "after": "{\"m0-sheet-all\":[{\"editState\":\"onlyMe\",\"permissionId\":\"pCmBzml0\",\"subUnitId\":\"sheet-1\",\"unitId\":\"m0-sheet-all\",\"unitType\":2,\"viewState\":\"othersCanView\"},{\"ed..."
       }
     ]
   },
@@ -242,12 +242,12 @@
         {
           "path": "$.sheetOrder[5]",
           "kind": "added",
-          "after": "\"53JrglpuplCqSiijuVK5w\""
+          "after": "\"Gv2MjpYVUp5bfldFtisUO\""
         },
         {
-          "path": "$.sheets.53JrglpuplCqSiijuVK5w",
+          "path": "$.sheets.Gv2MjpYVUp5bfldFtisUO",
           "kind": "added",
-          "after": "{\"id\":\"53JrglpuplCqSiijuVK5w\",\"name\":\"新表\",\"tabColor\":\"\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24,\"showGridli..."
+          "after": "{\"id\":\"Gv2MjpYVUp5bfldFtisUO\",\"name\":\"新表\",\"tabColor\":\"\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24,\"showGridli..."
         }
       ],
       "canceledSoFar": 0
@@ -317,7 +317,7 @@
           "path": "$.sheetOrder[2]",
           "kind": "changed",
           "before": "\"BosGI6KRewWr9iRx1e2-J\"",
-          "after": "\"hCVfdWhruw7wPsLYLXLdU\""
+          "after": "\"UbL7HjPZkh17Rvz6dfsgw\""
         },
         {
           "path": "$.sheetOrder[3]",
@@ -337,9 +337,9 @@
           "after": "\"3pom9bUkA1bNL7bRVYpBX\""
         },
         {
-          "path": "$.sheets.hCVfdWhruw7wPsLYLXLdU",
+          "path": "$.sheets.UbL7HjPZkh17Rvz6dfsgw",
           "kind": "added",
-          "after": "{\"id\":\"hCVfdWhruw7wPsLYLXLdU\",\"name\":\"汇总 （副本）\",\"tabColor\":\"#16a34a\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24..."
+          "after": "{\"id\":\"UbL7HjPZkh17Rvz6dfsgw\",\"name\":\"汇总 （副本）\",\"tabColor\":\"#16a34a\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24..."
         }
       ],
       "canceledSoFar": 0
@@ -386,6 +386,26 @@
     {
       "entry": "delete-image",
       "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "resize-image",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 0
+    },
+    {
+      "entry": "row-resize-drag",
+      "method": "U",
       "verdict": "拦截",
       "error": null,
       "pageErrors": [],
@@ -502,7 +522,7 @@
         {
           "path": "$.resources[6].data.sheet-1",
           "kind": "added",
-          "after": "{\"29\":{\"10\":{\"col\":10,\"height\":60,\"id\":\"sGZlsI\",\"note\":\"新备注\",\"row\":29,\"width\":160}}}"
+          "after": "{\"29\":{\"10\":{\"col\":10,\"height\":60,\"id\":\"TOykU5\",\"note\":\"新备注\",\"row\":29,\"width\":160}}}"
         }
       ],
       "canceledSoFar": 0
@@ -530,6 +550,8 @@
       "move-sheet",
       "move-image",
       "delete-image",
+      "resize-image",
+      "row-resize-drag",
       "row-height",
       "insert-row",
       "delete-row",

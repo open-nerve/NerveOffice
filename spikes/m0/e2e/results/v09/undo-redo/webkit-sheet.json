@@ -7,7 +7,7 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T07:24:13.720Z",
+  "timestamp": "2026-09-24T14:55:57.860Z",
   "results": [
     {
       "strategy": "facade",
@@ -57,10 +57,6 @@
       "redoChanged": false,
       "canceled": [
         {
-          "id": "doc.mutation.rich-text-editing",
-          "kind": "mutation"
-        },
-        {
           "id": "univer.command.undo",
           "kind": "command"
         },
@@ -79,10 +75,6 @@
       "undoChanged": false,
       "redoChanged": false,
       "canceled": [
-        {
-          "id": "doc.mutation.rich-text-editing",
-          "kind": "mutation"
-        },
         {
           "id": "univer.command.undo",
           "kind": "command"

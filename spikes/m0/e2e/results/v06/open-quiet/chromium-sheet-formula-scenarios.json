@@ -10,13 +10,13 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T06:13:59.384Z",
-  "bytes": 497387,
+  "timestamp": "2026-09-24T13:30:57.838Z",
+  "bytes": 497385,
   "timings": {
-    "t0": 88.29999995231628,
+    "t0": 88.89999997615814,
     "ready": 12.5,
-    "rendered": 456.2000000476837,
-    "steady": 3483.2000000476837
+    "rendered": 453.90000009536743,
+    "steady": 3485.4000000953674
   },
   "detections": [],
   "mutations": [
@@ -36,31 +36,25 @@
   "syncOnly": [],
   "total": 21,
   "lateDiff": [],
-  "openDiffCount": 4,
+  "openDiffCount": 3,
   "openDiff": [
     {
-      "path": "$.sheets.nmH6Qi1IuWwvLAu-YTp8v.cellData.0.0.v",
+      "path": "$.sheets.fwIzE90Auc69GrZLRB70v.cellData.2.0.v",
       "kind": "changed",
-      "before": "46289.592939814815",
-      "after": "46289.59295138889"
+      "before": "0.9913977157117299",
+      "after": "0.7301292069730798"
     },
     {
-      "path": "$.sheets.nmH6Qi1IuWwvLAu-YTp8v.cellData.2.0.v",
+      "path": "$.sheets.fwIzE90Auc69GrZLRB70v.cellData.3.0.v",
       "kind": "changed",
-      "before": "0.23507916437696486",
-      "after": "0.10744539562580102"
+      "before": "308929",
+      "after": "828860"
     },
     {
-      "path": "$.sheets.nmH6Qi1IuWwvLAu-YTp8v.cellData.3.0.v",
+      "path": "$.sheets.fwIzE90Auc69GrZLRB70v.cellData.4.0.v",
       "kind": "changed",
-      "before": "611485",
-      "after": "123767"
-    },
-    {
-      "path": "$.sheets.nmH6Qi1IuWwvLAu-YTp8v.cellData.4.0.v",
-      "kind": "changed",
-      "before": "0.4701583287539297",
-      "after": "0.21489079125160204"
+      "before": "1.9827954314234597",
+      "after": "1.4602584139461596"
     }
   ],
   "errors": []

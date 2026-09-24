@@ -11,10 +11,11 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T07:03:16.458Z",
+  "timestamp": "2026-09-24T14:31:28.551Z",
   "quiet": {
-    "waitedMs": 1009,
-    "formula": "applied"
+    "waitedMs": 1003,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -39,7 +40,7 @@
   },
   "timeline": [
     {
-      "dt": 4,
+      "dt": 22,
       "id": "data-validation.mutation.addRule",
       "verdict": "detected"
     }

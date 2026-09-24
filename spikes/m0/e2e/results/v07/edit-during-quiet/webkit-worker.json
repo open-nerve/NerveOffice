@@ -1,0 +1,27 @@
+{
+  "check": "V07-edit-during-quiet",
+  "worker": true,
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T14:48:00.987Z",
+  "oldRule": {
+    "capturedAtMs": 2211,
+    "checked": 399,
+    "mismatches": 0
+  },
+  "newRule": {
+    "capturedAtMs": 1831,
+    "restarts": 1,
+    "formula": "settled",
+    "checked": 399,
+    "mismatches": 0
+  },
+  "settled": {
+    "checked": 399,
+    "mismatches": 0
+  }
+}

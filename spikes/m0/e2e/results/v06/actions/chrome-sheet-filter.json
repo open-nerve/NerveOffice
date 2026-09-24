@@ -11,10 +11,11 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T06:33:25.360Z",
+  "timestamp": "2026-09-24T13:55:52.305Z",
   "quiet": {
-    "waitedMs": 1019.3000000715256,
-    "formula": "applied"
+    "waitedMs": 993.3000000715256,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -50,7 +51,7 @@
       "verdict": "detected"
     },
     {
-      "dt": 25,
+      "dt": 26,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }

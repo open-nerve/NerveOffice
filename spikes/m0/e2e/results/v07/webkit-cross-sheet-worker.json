@@ -8,37 +8,22 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T07:18:33.215Z",
+  "timestamp": "2026-09-24T14:47:08.016Z",
   "idleWaitMs": 501,
   "idleCalcSessions": 0,
   "waitMs": {
-    "noWait": 6,
-    "waited": 841,
-    "platformExtra": 1008,
-    "timeoutAttempt": 52,
-    "recapture": 762,
-    "recapturePlatformExtra": 1008
+    "api": 883,
+    "rule": 1031,
+    "timeoutAttempt": 64,
+    "recaptureApi": 804,
+    "recaptureRule": 501
   },
+  "ruleOutcome": "settled",
   "timeoutOutcome": "timeout",
+  "volatileRecalculated": null,
   "forcedRecalcMs": 501,
   "checks": {
     "noWait": {
-      "checked": 3,
-      "mismatches": 2,
-      "sample": [
-        {
-          "cell": "跨表!A2",
-          "expected": 10004932,
-          "actual": 9927166
-        },
-        {
-          "cell": "跨表!A3",
-          "expected": 9849388,
-          "actual": 9927154
-        }
-      ]
-    },
-    "waited": {
       "checked": 3,
       "mismatches": 1,
       "sample": [
@@ -49,39 +34,45 @@
         }
       ]
     },
-    "platform": {
+    "api": {
+      "checked": 3,
+      "mismatches": 1,
+      "sample": [
+        {
+          "cell": "跨表!A2",
+          "expected": 10004932,
+          "actual": 9927166
+        }
+      ]
+    },
+    "rule": {
       "checked": 3,
       "mismatches": 0,
       "sample": []
     },
     "timedOut": {
       "checked": 3,
-      "mismatches": 2,
+      "mismatches": 1,
       "sample": [
         {
           "cell": "跨表!A2",
-          "expected": 9982710,
-          "actual": 10004932
-        },
-        {
-          "cell": "跨表!A3",
-          "expected": 9949376,
-          "actual": 9927154
+          "expected": 9960488,
+          "actual": 9982710
         }
       ]
     },
-    "recapture": {
+    "recaptureApi": {
       "checked": 3,
       "mismatches": 1,
       "sample": [
         {
           "cell": "跨表!A2",
-          "expected": 9982710,
-          "actual": 10004932
+          "expected": 9960488,
+          "actual": 9982710
         }
       ]
     },
-    "recapturePlatform": {
+    "recaptureRule": {
       "checked": 3,
       "mismatches": 0,
       "sample": []
@@ -97,5 +88,5 @@
       "sample": []
     }
   },
-  "detections": 2
+  "detections": 3
 }

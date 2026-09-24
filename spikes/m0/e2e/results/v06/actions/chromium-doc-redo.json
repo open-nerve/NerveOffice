@@ -11,10 +11,11 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T06:07:20.403Z",
+  "timestamp": "2026-09-24T13:24:04.234Z",
   "quiet": {
-    "waitedMs": 1024.2000000476837,
-    "formula": "n/a"
+    "waitedMs": 999.1000000238419,
+    "formula": "n/a",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -29,13 +30,13 @@
       }
     ],
     "syncOnly": [],
-    "total": 19
+    "total": 17
   },
   "after": {
     "detections": [],
     "mutations": [],
     "syncOnly": [],
-    "total": 19
+    "total": 17
   },
   "timeline": [
     {

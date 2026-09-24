@@ -8,19 +8,20 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T06:18:19.462Z",
-  "idleWaitMs": 504,
+  "timestamp": "2026-09-24T13:35:32.072Z",
+  "idleWaitMs": 501.59999990463257,
   "idleCalcSessions": 0,
   "waitMs": {
-    "noWait": 4,
-    "waited": 2276.600000023842,
-    "platformExtra": 1026.3000000715256,
-    "timeoutAttempt": 58.89999997615814,
-    "recapture": 2202.5,
-    "recapturePlatformExtra": 1027.8999999761581
+    "api": 2277,
+    "rule": 2313.5,
+    "timeoutAttempt": 64.20000004768372,
+    "recaptureApi": 2218.5,
+    "recaptureRule": 502.89999997615814
   },
+  "ruleOutcome": "settled",
   "timeoutOutcome": "timeout",
-  "forcedRecalcMs": 507.39999997615814,
+  "volatileRecalculated": null,
+  "forcedRecalcMs": 505.09999990463257,
   "checks": {
     "noWait": {
       "checked": 4,
@@ -48,12 +49,12 @@
         }
       ]
     },
-    "waited": {
+    "api": {
       "checked": 4,
       "mismatches": 0,
       "sample": []
     },
-    "platform": {
+    "rule": {
       "checked": 4,
       "mismatches": 0,
       "sample": []
@@ -64,27 +65,27 @@
       "sample": [
         {
           "cell": "聚合!C1",
-          "expected": 9939499,
-          "actual": 10027153
+          "expected": 9981475,
+          "actual": 9939499
         },
         {
           "cell": "聚合!C2",
-          "expected": 496.97495,
-          "actual": 501.35765
+          "expected": 499.07375,
+          "actual": 496.97495
         },
         {
           "cell": "聚合!C4",
-          "expected": 12345,
-          "actual": 99999
+          "expected": 54321,
+          "actual": 12345
         }
       ]
     },
-    "recapture": {
+    "recaptureApi": {
       "checked": 4,
       "mismatches": 0,
       "sample": []
     },
-    "recapturePlatform": {
+    "recaptureRule": {
       "checked": 4,
       "mismatches": 0,
       "sample": []
@@ -100,5 +101,5 @@
       "sample": []
     }
   },
-  "detections": 2
+  "detections": 3
 }

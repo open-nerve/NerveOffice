@@ -8,19 +8,20 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T06:49:10.355Z",
-  "idleWaitMs": 505.5,
+  "timestamp": "2026-09-24T14:12:12.901Z",
+  "idleWaitMs": 508.5,
   "idleCalcSessions": 0,
   "waitMs": {
-    "noWait": 3.8000000715255737,
-    "waited": 2256.100000023842,
-    "platformExtra": 1033.8999999761581,
-    "timeoutAttempt": 61.10000002384186,
-    "recapture": 2169.2000000476837,
-    "recapturePlatformExtra": 1016.7999999523163
+    "api": 2349,
+    "rule": 2386.5,
+    "timeoutAttempt": 69.20000004768372,
+    "recaptureApi": 2292.399999976158,
+    "recaptureRule": 502
   },
+  "ruleOutcome": "settled",
   "timeoutOutcome": "timeout",
-  "forcedRecalcMs": 502.7999999523163,
+  "volatileRecalculated": null,
+  "forcedRecalcMs": 500.5,
   "checks": {
     "noWait": {
       "checked": 200,
@@ -53,7 +54,7 @@
         }
       ]
     },
-    "waited": {
+    "api": {
       "checked": 200,
       "mismatches": 200,
       "sample": [
@@ -84,7 +85,7 @@
         }
       ]
     },
-    "platform": {
+    "rule": {
       "checked": 200,
       "mismatches": 0,
       "sample": []
@@ -95,63 +96,63 @@
       "sample": [
         {
           "cell": "慢!A1",
-          "expected": 9971598,
-          "actual": 10016042
+          "expected": 9949376,
+          "actual": 9971598
         },
         {
           "cell": "慢!A2",
-          "expected": 9971267,
-          "actual": 10015711
+          "expected": 9949045,
+          "actual": 9971267
         },
         {
           "cell": "慢!A3",
-          "expected": 9970401,
-          "actual": 10014845
+          "expected": 9948179,
+          "actual": 9970401
         },
         {
           "cell": "慢!A4",
-          "expected": 9968991,
-          "actual": 10013435
+          "expected": 9946769,
+          "actual": 9968991
         },
         {
           "cell": "慢!A5",
-          "expected": 9967494,
-          "actual": 10011938
+          "expected": 9945272,
+          "actual": 9967494
         }
       ]
     },
-    "recapture": {
+    "recaptureApi": {
       "checked": 200,
       "mismatches": 200,
       "sample": [
         {
           "cell": "慢!A1",
-          "expected": 9971598,
-          "actual": 10016042
+          "expected": 9949376,
+          "actual": 9971598
         },
         {
           "cell": "慢!A2",
-          "expected": 9971267,
-          "actual": 10015711
+          "expected": 9949045,
+          "actual": 9971267
         },
         {
           "cell": "慢!A3",
-          "expected": 9970401,
-          "actual": 10014845
+          "expected": 9948179,
+          "actual": 9970401
         },
         {
           "cell": "慢!A4",
-          "expected": 9968991,
-          "actual": 10013435
+          "expected": 9946769,
+          "actual": 9968991
         },
         {
           "cell": "慢!A5",
-          "expected": 9967494,
-          "actual": 10011938
+          "expected": 9945272,
+          "actual": 9967494
         }
       ]
     },
-    "recapturePlatform": {
+    "recaptureRule": {
       "checked": 200,
       "mismatches": 0,
       "sample": []
@@ -167,5 +168,5 @@
       "sample": []
     }
   },
-  "detections": 2
+  "detections": 3
 }

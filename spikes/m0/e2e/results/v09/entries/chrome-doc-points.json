@@ -8,11 +8,11 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T06:55:48.538Z",
+  "timestamp": "2026-09-24T14:22:36.283Z",
   "traces": {
     "steps": [
       {
-        "step": "文档编辑权限点 = false（本地）",
+        "step": "document.getPermission().setReadOnly()",
         "ok": true
       }
     ],

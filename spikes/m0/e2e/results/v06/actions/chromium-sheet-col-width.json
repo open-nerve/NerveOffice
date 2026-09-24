@@ -11,10 +11,11 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T06:00:41.780Z",
+  "timestamp": "2026-09-24T13:17:11.947Z",
   "quiet": {
-    "waitedMs": 1023.2000000476837,
-    "formula": "applied"
+    "waitedMs": 987.5,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -39,7 +40,7 @@
   },
   "timeline": [
     {
-      "dt": 4,
+      "dt": 3,
       "id": "sheet.mutation.set-worksheet-col-width",
       "verdict": "detected"
     }

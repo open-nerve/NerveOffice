@@ -11,10 +11,11 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T06:36:33.676Z",
+  "timestamp": "2026-09-24T13:59:00.312Z",
   "quiet": {
-    "waitedMs": 1018.7999999523163,
-    "formula": "n/a"
+    "waitedMs": 980.0999999046326,
+    "formula": "n/a",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -39,7 +40,7 @@
   },
   "timeline": [
     {
-      "dt": 321,
+      "dt": 315,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "detected"
     }
@@ -49,7 +50,7 @@
     {
       "path": "$.body.paragraphs[5].bullet",
       "kind": "added",
-      "after": "{\"nestingLevel\":0,\"listType\":\"BULLET_LIST\",\"listId\":\"2pF1sT\"}"
+      "after": "{\"nestingLevel\":0,\"listType\":\"BULLET_LIST\",\"listId\":\"B54pRK\"}"
     }
   ],
   "diffCount": 1,

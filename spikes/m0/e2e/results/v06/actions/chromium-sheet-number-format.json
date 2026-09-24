@@ -11,10 +11,11 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T05:59:14.062Z",
+  "timestamp": "2026-09-24T13:15:44.599Z",
   "quiet": {
-    "waitedMs": 1037.2000000476837,
-    "formula": "applied"
+    "waitedMs": 1005.1999999284744,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -39,7 +40,7 @@
   },
   "timeline": [
     {
-      "dt": 4,
+      "dt": 3,
       "id": "sheet.mutation.set.numfmt",
       "verdict": "detected"
     }
@@ -47,34 +48,34 @@
   "planRule": null,
   "diff": [
     {
-      "path": "$.styles.8ajI0D",
+      "path": "$.styles.qI8Xnz",
       "kind": "added",
       "after": "{\"n\":{\"pattern\":\"0.0\"}}"
     },
     {
       "path": "$.sheets.sheet-1.cellData.1.1.s",
       "kind": "added",
-      "after": "\"8ajI0D\""
+      "after": "\"qI8Xnz\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.2.1.s",
       "kind": "added",
-      "after": "\"8ajI0D\""
+      "after": "\"qI8Xnz\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.3.1.s",
       "kind": "added",
-      "after": "\"8ajI0D\""
+      "after": "\"qI8Xnz\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.4.1.s",
       "kind": "added",
-      "after": "\"8ajI0D\""
+      "after": "\"qI8Xnz\""
     },
     {
       "path": "$.sheets.sheet-1.cellData.5.1.s",
       "kind": "added",
-      "after": "\"8ajI0D\""
+      "after": "\"qI8Xnz\""
     }
   ],
   "diffCount": 6,

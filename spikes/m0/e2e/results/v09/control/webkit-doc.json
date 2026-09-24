@@ -1,0 +1,62 @@
+{
+  "check": "V09-control",
+  "kind": "doc",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T14:59:04.582Z",
+  "entries": [
+    {
+      "entry": "type",
+      "method": "U",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "delete",
+      "method": "U",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "paste",
+      "method": "U",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "bold",
+      "method": "U",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "heading",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "list",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "table",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "image",
+      "method": "F",
+      "changed": true,
+      "error": null
+    }
+  ],
+  "notChanged": []
+}

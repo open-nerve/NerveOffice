@@ -11,10 +11,11 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T06:37:52.820Z",
+  "timestamp": "2026-09-24T14:00:19.218Z",
   "quiet": {
-    "waitedMs": 1020.2000000476837,
-    "formula": "n/a"
+    "waitedMs": 1007.7999999523163,
+    "formula": "n/a",
+    "restarts": 0
   },
   "during": {
     "detections": [],

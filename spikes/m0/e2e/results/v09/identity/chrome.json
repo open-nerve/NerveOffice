@@ -6,11 +6,11 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T06:58:02.181Z",
+  "timestamp": "2026-09-24T14:26:02.465Z",
   "results": [
     {
       "sample": "sheet-all",
-      "userBefore": "Owner_HOoHZCwG",
+      "userBefore": "Owner_LHNxowFj",
       "userAfter": "user-reader-1",
       "controlK3": {
         "changed": true,
@@ -29,7 +29,7 @@
     },
     {
       "sample": "sheet-protection",
-      "userBefore": "Owner_oPEVQc0_",
+      "userBefore": "Owner_SUyrf3k_",
       "userAfter": "user-reader-1",
       "controlK3": {
         "changed": true,

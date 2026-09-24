@@ -11,10 +11,11 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T06:05:06.388Z",
+  "timestamp": "2026-09-24T13:21:51.231Z",
   "quiet": {
-    "waitedMs": 1029.1999999284744,
-    "formula": "applied"
+    "waitedMs": 1010.1999999284744,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [],

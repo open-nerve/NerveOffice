@@ -11,10 +11,11 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T07:01:59.400Z",
+  "timestamp": "2026-09-24T14:30:11.588Z",
   "quiet": {
-    "waitedMs": 1004,
-    "formula": "applied"
+    "waitedMs": 979,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -45,12 +46,12 @@
   },
   "timeline": [
     {
-      "dt": 5,
+      "dt": 4,
       "id": "sheet.mutation.insert-sheet",
       "verdict": "detected"
     },
     {
-      "dt": 13,
+      "dt": 12,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }
@@ -60,12 +61,12 @@
     {
       "path": "$.sheetOrder[5]",
       "kind": "added",
-      "after": "\"xau_j35VB522_PU4zDM6V\""
+      "after": "\"34hRgCB6I6WyiAnd20j5D\""
     },
     {
-      "path": "$.sheets.xau_j35VB522_PU4zDM6V",
+      "path": "$.sheets.34hRgCB6I6WyiAnd20j5D",
       "kind": "added",
-      "after": "{\"id\":\"xau_j35VB522_PU4zDM6V\",\"name\":\"新表\",\"tabColor\":\"\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24,\"showGridli..."
+      "after": "{\"id\":\"34hRgCB6I6WyiAnd20j5D\",\"name\":\"新表\",\"tabColor\":\"\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24,\"showGridli..."
     }
   ],
   "diffCount": 2,

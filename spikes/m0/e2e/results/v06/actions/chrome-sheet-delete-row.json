@@ -11,10 +11,11 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T06:30:16.589Z",
+  "timestamp": "2026-09-24T13:52:27.383Z",
   "quiet": {
-    "waitedMs": 1038.3000000715256,
-    "formula": "applied"
+    "waitedMs": 984.2999999523163,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -78,7 +79,7 @@
   },
   "timeline": [
     {
-      "dt": 7,
+      "dt": 6,
       "id": "sheet.mutation.remove-rows",
       "verdict": "detected"
     },
@@ -108,7 +109,7 @@
       "verdict": "detected"
     },
     {
-      "dt": 37,
+      "dt": 36,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }

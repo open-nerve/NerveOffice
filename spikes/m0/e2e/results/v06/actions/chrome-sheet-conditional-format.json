@@ -11,10 +11,11 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T06:33:03.304Z",
+  "timestamp": "2026-09-24T13:55:30.269Z",
   "quiet": {
-    "waitedMs": 1022,
-    "formula": "applied"
+    "waitedMs": 995.7000000476837,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -39,7 +40,7 @@
   },
   "timeline": [
     {
-      "dt": 2,
+      "dt": 3,
       "id": "sheet.mutation.add-conditional-rule",
       "verdict": "detected"
     }
@@ -49,7 +50,7 @@
     {
       "path": "$.resources[1].data.sheet-1",
       "kind": "added",
-      "after": "[{\"cfId\":\"1WSolm96\",\"ranges\":[{\"endAbsoluteRefType\":0,\"endColumn\":10,\"endRow\":19,\"rangeType\":0,\"sheetId\":\"sheet-1\",\"startAbsoluteRefType\":0,\"startColumn\":10,..."
+      "after": "[{\"cfId\":\"MO9ZhzCP\",\"ranges\":[{\"endAbsoluteRefType\":0,\"endColumn\":10,\"endRow\":19,\"rangeType\":0,\"sheetId\":\"sheet-1\",\"startAbsoluteRefType\":0,\"startColumn\":10,..."
     }
   ],
   "diffCount": 1,

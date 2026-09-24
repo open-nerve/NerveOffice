@@ -8,31 +8,32 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T06:17:33.346Z",
-  "idleWaitMs": 513.0999999046326,
+  "timestamp": "2026-09-24T13:34:35.594Z",
+  "idleWaitMs": 507.89999997615814,
   "idleCalcSessions": 0,
   "waitMs": {
-    "noWait": 3.200000047683716,
-    "waited": 530.5,
-    "platformExtra": 1014.6000000238419,
-    "timeoutAttempt": 24.09999990463257,
-    "recapture": 523.7999999523163,
-    "recapturePlatformExtra": 1018.6999999284744
+    "api": 524.2000000476837,
+    "rule": 1026.3999999761581,
+    "timeoutAttempt": 39.299999952316284,
+    "recaptureApi": 522.2999999523163,
+    "recaptureRule": 500.7000000476837
   },
+  "ruleOutcome": "settled",
   "timeoutOutcome": "applied",
-  "forcedRecalcMs": 503.89999997615814,
+  "volatileRecalculated": true,
+  "forcedRecalcMs": 501,
   "checks": {
     "noWait": {
       "checked": 2,
       "mismatches": 0,
       "sample": []
     },
-    "waited": {
+    "api": {
       "checked": 2,
       "mismatches": 0,
       "sample": []
     },
-    "platform": {
+    "rule": {
       "checked": 2,
       "mismatches": 0,
       "sample": []
@@ -42,12 +43,12 @@
       "mismatches": 0,
       "sample": []
     },
-    "recapture": {
+    "recaptureApi": {
       "checked": 2,
       "mismatches": 0,
       "sample": []
     },
-    "recapturePlatform": {
+    "recaptureRule": {
       "checked": 2,
       "mismatches": 0,
       "sample": []
@@ -63,5 +64,5 @@
       "sample": []
     }
   },
-  "detections": 2
+  "detections": 3
 }

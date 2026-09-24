@@ -11,10 +11,11 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T06:04:22.527Z",
+  "timestamp": "2026-09-24T13:21:07.498Z",
   "quiet": {
-    "waitedMs": 1034,
-    "formula": "applied"
+    "waitedMs": 981.4000000953674,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -39,7 +40,7 @@
   },
   "timeline": [
     {
-      "dt": 17,
+      "dt": 21,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     }

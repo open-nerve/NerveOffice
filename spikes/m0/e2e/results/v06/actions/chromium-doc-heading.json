@@ -11,10 +11,11 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T06:06:01.798Z",
+  "timestamp": "2026-09-24T13:22:46.224Z",
   "quiet": {
-    "waitedMs": 1021.6000000238419,
-    "formula": "n/a"
+    "waitedMs": 1004.6000000238419,
+    "formula": "n/a",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -39,7 +40,7 @@
   },
   "timeline": [
     {
-      "dt": 7,
+      "dt": 8,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "detected"
     }

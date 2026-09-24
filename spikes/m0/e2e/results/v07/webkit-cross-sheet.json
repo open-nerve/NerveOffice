@@ -8,42 +8,38 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T07:16:42.360Z",
+  "timestamp": "2026-09-24T14:45:08.300Z",
   "idleWaitMs": 501,
   "idleCalcSessions": 0,
   "waitMs": {
-    "noWait": 6,
-    "waited": 529,
-    "platformExtra": 1004,
-    "timeoutAttempt": 869,
-    "recapture": 533,
-    "recapturePlatformExtra": 1004
+    "api": 529,
+    "rule": 1027,
+    "timeoutAttempt": 925,
+    "recaptureApi": 540,
+    "recaptureRule": 501
   },
+  "ruleOutcome": "settled",
   "timeoutOutcome": "applied",
-  "forcedRecalcMs": 501,
+  "volatileRecalculated": null,
+  "forcedRecalcMs": 502,
   "checks": {
     "noWait": {
       "checked": 3,
-      "mismatches": 2,
+      "mismatches": 1,
       "sample": [
         {
           "cell": "跨表!A2",
           "expected": 10004932,
           "actual": 9927166
-        },
-        {
-          "cell": "跨表!A3",
-          "expected": 9849388,
-          "actual": 9927154
         }
       ]
     },
-    "waited": {
+    "api": {
       "checked": 3,
       "mismatches": 0,
       "sample": []
     },
-    "platform": {
+    "rule": {
       "checked": 3,
       "mismatches": 0,
       "sample": []
@@ -53,12 +49,12 @@
       "mismatches": 0,
       "sample": []
     },
-    "recapture": {
+    "recaptureApi": {
       "checked": 3,
       "mismatches": 0,
       "sample": []
     },
-    "recapturePlatform": {
+    "recaptureRule": {
       "checked": 3,
       "mismatches": 0,
       "sample": []
@@ -74,5 +70,5 @@
       "sample": []
     }
   },
-  "detections": 2
+  "detections": 3
 }

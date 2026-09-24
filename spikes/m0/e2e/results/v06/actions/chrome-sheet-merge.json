@@ -11,10 +11,11 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T06:29:43.474Z",
+  "timestamp": "2026-09-24T13:51:54.334Z",
   "quiet": {
-    "waitedMs": 1037.4000000953674,
-    "formula": "applied"
+    "waitedMs": 998.1999999284744,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -39,7 +40,7 @@
   },
   "timeline": [
     {
-      "dt": 4,
+      "dt": 5,
       "id": "sheet.mutation.add-worksheet-merge",
       "verdict": "detected"
     }

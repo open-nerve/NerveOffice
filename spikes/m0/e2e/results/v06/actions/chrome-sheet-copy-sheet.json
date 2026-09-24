@@ -11,10 +11,11 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T06:32:52.310Z",
+  "timestamp": "2026-09-24T13:55:19.245Z",
   "quiet": {
-    "waitedMs": 1018.3000000715256,
-    "formula": "applied"
+    "waitedMs": 981.2000000476837,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -51,17 +52,17 @@
   },
   "timeline": [
     {
-      "dt": 6,
+      "dt": 5,
       "id": "sheet.mutation.insert-sheet",
       "verdict": "detected"
     },
     {
-      "dt": 13,
+      "dt": 11,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 37,
+      "dt": 35,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }
@@ -72,7 +73,7 @@
       "path": "$.sheetOrder[2]",
       "kind": "changed",
       "before": "\"BosGI6KRewWr9iRx1e2-J\"",
-      "after": "\"A-Y4K1Djtk2rEZjrX2LMn\""
+      "after": "\"uywqTR_m0pCUGwUtyGybN\""
     },
     {
       "path": "$.sheetOrder[3]",
@@ -92,9 +93,9 @@
       "after": "\"3pom9bUkA1bNL7bRVYpBX\""
     },
     {
-      "path": "$.sheets.A-Y4K1Djtk2rEZjrX2LMn",
+      "path": "$.sheets.uywqTR_m0pCUGwUtyGybN",
       "kind": "added",
-      "after": "{\"id\":\"A-Y4K1Djtk2rEZjrX2LMn\",\"name\":\"汇总 （副本）\",\"tabColor\":\"#16a34a\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24..."
+      "after": "{\"id\":\"uywqTR_m0pCUGwUtyGybN\",\"name\":\"汇总 （副本）\",\"tabColor\":\"#16a34a\",\"hidden\":0,\"rowCount\":1000,\"columnCount\":20,\"defaultColumnWidth\":88,\"defaultRowHeight\":24..."
     }
   ],
   "diffCount": 5,

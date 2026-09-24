@@ -1,0 +1,34 @@
+{
+  "check": "V07-timeline",
+  "worker": true,
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T13:37:03.560Z",
+  "slowA1": {
+    "before": 9927165,
+    "atResolve": 9927165,
+    "after": 10016042
+  },
+  "staleAtResolve": true,
+  "resolvedAtMs": 2351,
+  "maxSampleGapMs": 263,
+  "log": [
+    "23 start  慢!A1=9927165",
+    "35 notification stage=1 慢!A1=9927165",
+    "35 notification stage=2 慢!A1=9927165",
+    "42 notification stage=3 慢!A1=9927165",
+    "2349 notification stage=4 慢!A1=9927165",
+    "2350 notification stage=8 慢!A1=9927165",
+    "2350 result sheets=聚合、跨表、慢、易变 慢!A1=9927165",
+    "2350 写回 聚合 慢!A1=9927165",
+    "2351 ==== 等待接口返回 慢!A1=9927165",
+    "2351 写回 跨表 慢!A1=9927165",
+    "2351 写回 慢 慢!A1=10016042",
+    "2353 写回 易变 慢!A1=10016042",
+    "2354 notification executed=3 慢!A1=10016042"
+  ]
+}

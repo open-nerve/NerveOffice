@@ -1,0 +1,23 @@
+{
+  "check": "V06-observer",
+  "sample": "sheet-dv",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T14:02:44.938Z",
+  "readers": [
+    "getDataValidations",
+    "getConditionalFormattingRules",
+    "getFilter",
+    "getImages"
+  ],
+  "bytesChanged": false,
+  "contentDiff": [],
+  "detections": [],
+  "mutations": [],
+  "syncOnly": [],
+  "total": 19
+}

@@ -1,0 +1,23 @@
+{
+  "check": "V06-observer",
+  "sample": "sheet-dv",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T14:38:29.994Z",
+  "readers": [
+    "getDataValidations",
+    "getConditionalFormattingRules",
+    "getFilter",
+    "getImages"
+  ],
+  "bytesChanged": false,
+  "contentDiff": [],
+  "detections": [],
+  "mutations": [],
+  "syncOnly": [],
+  "total": 18
+}

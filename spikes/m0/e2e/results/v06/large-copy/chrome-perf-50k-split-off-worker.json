@@ -12,23 +12,24 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T06:39:05.259Z",
+  "timestamp": "2026-09-24T14:01:30.984Z",
   "copy": {
-    "syncMs": 18,
+    "syncMs": 17.5,
     "name": "数据表 （副本）",
-    "idleMaxGapMs": 72.39999997615814
+    "idleMaxGapMs": 72.30000007152557
   },
   "quiet": {
-    "waitedMs": 1057.1000000238419,
-    "formula": "applied"
+    "waitedMs": 898.9000000953674,
+    "formula": "settled",
+    "restarts": 0
   },
   "localMutations": {
     "beforeS1": 12,
     "afterS1": 0,
-    "lastBeforeS1Ms": 125,
-    "lastMs": 125
+    "lastBeforeS1Ms": 130,
+    "lastMs": 130
   },
-  "capturedAfterMs": 1057,
+  "capturedAfterMs": 899,
   "sourceCells": 50010,
   "copiedCellsImmediately": 50010,
   "copiedCellsAtS1": 50010,

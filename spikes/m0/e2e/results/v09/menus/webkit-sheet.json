@@ -6,7 +6,7 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T07:27:32.389Z",
+  "timestamp": "2026-09-24T15:00:21.257Z",
   "edit": {
     "visibleButShouldHide": [],
     "foundIds": [
@@ -93,7 +93,9 @@
       "sheet.toolbar.sheet-frozen",
       "sheet.menu.zoom-ratio",
       "base-ui.operation.toggle-fullscreen",
+      "sheet.command.copy",
       "sheet.menu.copy-special",
+      "sheet.command.copy-formula-only",
       "sheet.menu.paste-special",
       "sheet.menu.clear-selection",
       "sheet.menu.sheet-frozen",

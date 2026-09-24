@@ -8,11 +8,11 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T07:25:33.872Z",
+  "timestamp": "2026-09-24T14:57:30.747Z",
   "traces": {
     "steps": [
       {
-        "step": "文档编辑权限点 = false（本地）",
+        "step": "document.getPermission().setReadOnly()",
         "ok": true
       }
     ],

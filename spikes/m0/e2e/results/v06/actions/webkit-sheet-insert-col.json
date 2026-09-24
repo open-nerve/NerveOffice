@@ -11,10 +11,11 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T07:00:30.105Z",
+  "timestamp": "2026-09-24T14:28:29.206Z",
   "quiet": {
-    "waitedMs": 1012,
-    "formula": "applied"
+    "waitedMs": 977,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -85,7 +86,7 @@
   },
   "timeline": [
     {
-      "dt": 8,
+      "dt": 9,
       "id": "sheet.mutation.insert-col",
       "verdict": "detected"
     },
@@ -95,32 +96,32 @@
       "verdict": "detected"
     },
     {
-      "dt": 13,
+      "dt": 14,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
     {
-      "dt": 15,
+      "dt": 16,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
-    },
-    {
-      "dt": 17,
-      "id": "sheet.mutation.set-range-values",
-      "verdict": "detected"
     },
     {
       "dt": 18,
+      "id": "sheet.mutation.set-range-values",
+      "verdict": "detected"
+    },
+    {
+      "dt": 19,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 19,
+      "dt": 20,
       "id": "formula.mutation.set-defined-name",
       "verdict": "detected"
     },
     {
-      "dt": 21,
+      "dt": 23,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }

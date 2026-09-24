@@ -11,10 +11,11 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T07:03:27.504Z",
+  "timestamp": "2026-09-24T14:31:39.602Z",
   "quiet": {
-    "waitedMs": 1012,
-    "formula": "applied"
+    "waitedMs": 1010,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -50,7 +51,7 @@
       "verdict": "detected"
     },
     {
-      "dt": 30,
+      "dt": 21,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }

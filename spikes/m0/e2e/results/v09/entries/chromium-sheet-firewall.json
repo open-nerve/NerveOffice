@@ -8,11 +8,11 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T06:23:12.090Z",
+  "timestamp": "2026-09-24T13:40:50.556Z",
   "traces": {
     "steps": [
       {
-        "step": "BeforeCommandExecute：取消非本地 mutation",
+        "step": "BeforeCommandExecute：取消作用于本文档的非本地 mutation",
         "ok": true
       }
     ],
@@ -29,7 +29,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 5
+      "canceledSoFar": 1
     },
     {
       "entry": "delete-content",
@@ -39,7 +39,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 7
+      "canceledSoFar": 2
     },
     {
       "entry": "paste",
@@ -49,7 +49,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 9
+      "canceledSoFar": 3
     },
     {
       "entry": "cut-paste",
@@ -59,7 +59,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 12
+      "canceledSoFar": 4
     },
     {
       "entry": "drag-fill",
@@ -69,7 +69,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 14
+      "canceledSoFar": 5
     },
     {
       "entry": "formula-bar",
@@ -79,7 +79,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 21
+      "canceledSoFar": 6
     },
     {
       "entry": "filter",
@@ -89,7 +89,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 22
+      "canceledSoFar": 7
     },
     {
       "entry": "sort",
@@ -99,7 +99,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 23
+      "canceledSoFar": 8
     },
     {
       "entry": "add-sheet",
@@ -109,7 +109,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 24
+      "canceledSoFar": 9
     },
     {
       "entry": "delete-sheet",
@@ -119,7 +119,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 25
+      "canceledSoFar": 10
     },
     {
       "entry": "rename-sheet",
@@ -129,7 +129,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 26
+      "canceledSoFar": 11
     },
     {
       "entry": "copy-sheet",
@@ -139,7 +139,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 27
+      "canceledSoFar": 12
     },
     {
       "entry": "hide-sheet",
@@ -149,7 +149,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 28
+      "canceledSoFar": 13
     },
     {
       "entry": "move-sheet",
@@ -159,7 +159,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 29
+      "canceledSoFar": 14
     },
     {
       "entry": "move-image",
@@ -169,7 +169,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 30
+      "canceledSoFar": 15
     },
     {
       "entry": "delete-image",
@@ -179,7 +179,27 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 31
+      "canceledSoFar": 16
+    },
+    {
+      "entry": "resize-image",
+      "method": "F",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 17
+    },
+    {
+      "entry": "row-resize-drag",
+      "method": "U",
+      "verdict": "拦截",
+      "error": null,
+      "pageErrors": [],
+      "detections": [],
+      "diff": [],
+      "canceledSoFar": 18
     },
     {
       "entry": "row-height",
@@ -189,7 +209,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 32
+      "canceledSoFar": 19
     },
     {
       "entry": "insert-row",
@@ -199,7 +219,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 33
+      "canceledSoFar": 20
     },
     {
       "entry": "delete-row",
@@ -209,7 +229,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 34
+      "canceledSoFar": 21
     },
     {
       "entry": "merge",
@@ -219,7 +239,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 35
+      "canceledSoFar": 22
     },
     {
       "entry": "bold",
@@ -229,7 +249,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 36
+      "canceledSoFar": 23
     },
     {
       "entry": "conditional-format",
@@ -239,7 +259,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 37
+      "canceledSoFar": 24
     },
     {
       "entry": "data-validation",
@@ -249,7 +269,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 38
+      "canceledSoFar": 25
     },
     {
       "entry": "hyperlink",
@@ -259,7 +279,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 39
+      "canceledSoFar": 26
     },
     {
       "entry": "note",
@@ -269,7 +289,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 40
+      "canceledSoFar": 27
     },
     {
       "entry": "replace-all",
@@ -279,7 +299,7 @@
       "pageErrors": [],
       "detections": [],
       "diff": [],
-      "canceledSoFar": 41
+      "canceledSoFar": 28
     }
   ],
   "summary": {
@@ -300,6 +320,8 @@
       "move-sheet",
       "move-image",
       "delete-image",
+      "resize-image",
+      "row-resize-drag",
       "row-height",
       "insert-row",
       "delete-row",

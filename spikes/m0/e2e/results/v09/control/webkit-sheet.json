@@ -1,0 +1,182 @@
+{
+  "check": "V09-control",
+  "kind": "sheet",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T14:55:32.510Z",
+  "entries": [
+    {
+      "entry": "type-value",
+      "method": "U",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "delete-content",
+      "method": "U",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "paste",
+      "method": "U",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "cut-paste",
+      "method": "U",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "drag-fill",
+      "method": "U",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "formula-bar",
+      "method": "U",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "filter",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "sort",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "add-sheet",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "delete-sheet",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "rename-sheet",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "copy-sheet",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "hide-sheet",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "move-sheet",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "move-image",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "delete-image",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "resize-image",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "row-resize-drag",
+      "method": "U",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "row-height",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "insert-row",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "delete-row",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "merge",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "bold",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "conditional-format",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "data-validation",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "hyperlink",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "note",
+      "method": "F",
+      "changed": true,
+      "error": null
+    },
+    {
+      "entry": "replace-all",
+      "method": "F",
+      "changed": true,
+      "error": null
+    }
+  ],
+  "notChanged": []
+}

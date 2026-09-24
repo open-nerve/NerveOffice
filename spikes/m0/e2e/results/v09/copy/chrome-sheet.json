@@ -1,0 +1,38 @@
+{
+  "check": "V09-copy",
+  "kind": "sheet",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T14:20:39.239Z",
+  "results": [
+    {
+      "mode": "edit",
+      "clipboard": "苹果",
+      "copied": true
+    },
+    {
+      "mode": "facade",
+      "clipboard": "（空）",
+      "copied": false
+    },
+    {
+      "mode": "points",
+      "clipboard": "苹果",
+      "copied": true
+    },
+    {
+      "mode": "firewall",
+      "clipboard": "苹果",
+      "copied": true
+    },
+    {
+      "mode": "combined",
+      "clipboard": "苹果",
+      "copied": true
+    }
+  ]
+}

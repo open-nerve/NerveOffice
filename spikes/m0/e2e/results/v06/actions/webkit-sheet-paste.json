@@ -11,10 +11,11 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T06:58:49.334Z",
+  "timestamp": "2026-09-24T14:26:48.967Z",
   "quiet": {
-    "waitedMs": 1004,
-    "formula": "applied"
+    "waitedMs": 978,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -57,22 +58,22 @@
   },
   "timeline": [
     {
-      "dt": 17,
+      "dt": 15,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 567,
+      "dt": 542,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 754,
+      "dt": 723,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
     {
-      "dt": 755,
+      "dt": 725,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }

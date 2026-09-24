@@ -11,10 +11,11 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T06:28:12.246Z",
+  "timestamp": "2026-09-24T13:50:23.347Z",
   "quiet": {
-    "waitedMs": 1028.8999999761581,
-    "formula": "applied"
+    "waitedMs": 645.7999999523163,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -108,22 +109,22 @@
       "verdict": "other-unit"
     },
     {
-      "dt": 222,
+      "dt": 224,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 223,
+      "dt": 225,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 226,
+      "dt": 230,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
     {
-      "dt": 226,
+      "dt": 230,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     },
@@ -138,7 +139,7 @@
       "verdict": "other-unit"
     },
     {
-      "dt": 258,
+      "dt": 257,
       "id": "doc.mutation.rich-text-editing",
       "verdict": "other-unit"
     }
@@ -146,14 +147,14 @@
   "planRule": null,
   "diff": [
     {
-      "path": "$.styles.pYkGFF",
+      "path": "$.styles.32CXpY",
       "kind": "added",
       "after": "{\"cl\":{\"rgb\":\"#1B1C1F\"}}"
     },
     {
       "path": "$.sheets.sheet-1.cellData.2.10",
       "kind": "added",
-      "after": "{\"v\":123,\"s\":\"pYkGFF\",\"t\":2}"
+      "after": "{\"v\":123,\"s\":\"32CXpY\",\"t\":2}"
     }
   ],
   "diffCount": 2,

@@ -7,11 +7,12 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T07:24:51.590Z",
+  "timestamp": "2026-09-24T14:56:48.492Z",
   "inPlace": [
     {
       "strategy": "facade",
-      "ms": 75,
+      "enterMs": 46,
+      "exitMs": 27,
       "undoInRead": {
         "undos": 0,
         "redos": 0
@@ -59,17 +60,21 @@
           "path": "$.resources[0].data",
           "kind": "changed",
           "before": "null",
-          "after": "{\"Vxeshtdm\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"unitID\":\"m0-sheet-all\"},\"ilPts4Z3\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"..."
+          "after": "{\"1KG23qVD\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"unitID\":\"m0-sheet-all\"},\"84-_74ur\":{\"objectType\":2,\"strategies\":[{\"action\":32,\"role\":2}],\"..."
         }
       ],
       "protectionResourcesAfter": [
         "SHEET_AuthzIoMockService_PLUGIN"
       ],
-      "editableAfterExit": true
+      "editableAfterExit": true,
+      "editedValue": "苹果X",
+      "uiInRead": null,
+      "uiAfterExit": null
     },
     {
       "strategy": "points",
-      "ms": 52,
+      "enterMs": 31,
+      "exitMs": 20,
       "undoInRead": {
         "undos": 0,
         "redos": 0
@@ -87,11 +92,15 @@
       "detectionsWhileSwitching": [],
       "leftover": [],
       "protectionResourcesAfter": [],
-      "editableAfterExit": true
+      "editableAfterExit": true,
+      "editedValue": "苹果X",
+      "uiInRead": null,
+      "uiAfterExit": null
     },
     {
       "strategy": "firewall",
-      "ms": 9,
+      "enterMs": 4,
+      "exitMs": 2,
       "undoInRead": {
         "undos": 0,
         "redos": 0
@@ -100,11 +109,15 @@
       "detectionsWhileSwitching": [],
       "leftover": [],
       "protectionResourcesAfter": [],
-      "editableAfterExit": true
+      "editableAfterExit": true,
+      "editedValue": "苹果X",
+      "uiInRead": null,
+      "uiAfterExit": null
     },
     {
       "strategy": "combined",
-      "ms": 58,
+      "enterMs": 17,
+      "exitMs": 22,
       "undoInRead": {
         "undos": 0,
         "redos": 0
@@ -122,14 +135,61 @@
       "detectionsWhileSwitching": [],
       "leftover": [],
       "protectionResourcesAfter": [],
-      "editableAfterExit": true
+      "editableAfterExit": true,
+      "editedValue": "苹果X",
+      "uiInRead": null,
+      "uiAfterExit": null
+    },
+    {
+      "strategy": "combined+ui",
+      "enterMs": 31,
+      "exitMs": 49,
+      "undoInRead": {
+        "undos": 0,
+        "redos": 0
+      },
+      "exitSteps": [
+        {
+          "step": "工作表编辑类权限点 = true（本地）",
+          "ok": true
+        },
+        {
+          "step": "workbook.setEditable(true)",
+          "ok": true
+        },
+        {
+          "step": "显示工具栏",
+          "ok": true
+        },
+        {
+          "step": "启用右键菜单",
+          "ok": true
+        },
+        {
+          "step": "恢复阅读模式专用的菜单项",
+          "ok": true
+        }
+      ],
+      "detectionsWhileSwitching": [],
+      "leftover": [],
+      "protectionResourcesAfter": [],
+      "editableAfterExit": true,
+      "editedValue": "苹果X",
+      "uiInRead": {
+        "toolbarButtons": 0,
+        "contextMenu": false
+      },
+      "uiAfterExit": {
+        "toolbarButtons": 57,
+        "contextMenu": true
+      }
     }
   ],
   "remount": {
-    "toReadMs": 3389,
-    "toReadRenderedMs": 337,
-    "toEditMs": 3400,
-    "toEditRenderedMs": 364,
+    "toReadMs": 3381,
+    "toReadRenderedMs": 344,
+    "toEditMs": 3413,
+    "toEditRenderedMs": 372,
     "readUndo": {
       "undos": 0,
       "redos": 0

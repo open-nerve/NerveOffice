@@ -11,10 +11,11 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-24T06:31:11.659Z",
+  "timestamp": "2026-09-24T13:53:22.508Z",
   "quiet": {
-    "waitedMs": 1060.8000000715256,
-    "formula": "applied"
+    "waitedMs": 1002.2000000476837,
+    "formula": "settled",
+    "restarts": 0
   },
   "during": {
     "detections": [
@@ -53,25 +54,25 @@
   },
   "timeline": [
     {
-      "dt": 3,
+      "dt": 4,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
     {
-      "dt": 5,
+      "dt": 7,
       "id": "sheet.mutation.set-range-values",
       "verdict": "detected"
     },
     {
-      "dt": 5,
+      "dt": 7,
       "id": "sheet.mutation.set-worksheet-row-auto-height",
       "verdict": "detected"
     }
   ],
   "planRule": {
-    "captureAtMs": 1005,
+    "captureAtMs": 1007,
     "autoHeightMutations": 1,
-    "lastAutoHeightMs": 5,
+    "lastAutoHeightMs": 7,
     "missed": 0
   },
   "diff": [

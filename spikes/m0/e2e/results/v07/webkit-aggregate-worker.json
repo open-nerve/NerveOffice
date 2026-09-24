@@ -8,19 +8,20 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-24T07:18:10.956Z",
+  "timestamp": "2026-09-24T14:46:45.656Z",
   "idleWaitMs": 501,
   "idleCalcSessions": 0,
   "waitMs": {
-    "noWait": 6,
-    "waited": 857,
-    "platformExtra": 1005,
-    "timeoutAttempt": 53,
-    "recapture": 752,
-    "recapturePlatformExtra": 1005
+    "api": 893,
+    "rule": 1028,
+    "timeoutAttempt": 64,
+    "recaptureApi": 807,
+    "recaptureRule": 501
   },
+  "ruleOutcome": "settled",
   "timeoutOutcome": "timeout",
-  "forcedRecalcMs": 501,
+  "volatileRecalculated": null,
+  "forcedRecalcMs": 502,
   "checks": {
     "noWait": {
       "checked": 4,
@@ -48,12 +49,12 @@
         }
       ]
     },
-    "waited": {
+    "api": {
       "checked": 4,
       "mismatches": 0,
       "sample": []
     },
-    "platform": {
+    "rule": {
       "checked": 4,
       "mismatches": 0,
       "sample": []
@@ -64,27 +65,27 @@
       "sample": [
         {
           "cell": "聚合!C1",
-          "expected": 9939499,
-          "actual": 10027153
+          "expected": 9981475,
+          "actual": 9939499
         },
         {
           "cell": "聚合!C2",
-          "expected": 496.97495,
-          "actual": 501.35765
+          "expected": 499.07375,
+          "actual": 496.97495
         },
         {
           "cell": "聚合!C4",
-          "expected": 12345,
-          "actual": 99999
+          "expected": 54321,
+          "actual": 12345
         }
       ]
     },
-    "recapture": {
+    "recaptureApi": {
       "checked": 4,
       "mismatches": 0,
       "sample": []
     },
-    "recapturePlatform": {
+    "recaptureRule": {
       "checked": 4,
       "mismatches": 0,
       "sample": []
@@ -100,5 +101,5 @@
       "sample": []
     }
   },
-  "detections": 2
+  "detections": 3
 }
