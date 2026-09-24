@@ -3,6 +3,8 @@ import type { EditorProfile } from '../profiles/types';
 
 import { useEffect, useRef, useState } from 'react';
 import { createEditor } from '../harness/create-editor';
+import { waitForCapture } from '../harness/capture-timing';
+import * as content from '../harness/content-compare';
 import * as perf from '../harness/perf';
 import { enterReadMode, READ_STRATEGIES } from '../harness/read-mode';
 import * as guard from '../harness/resource-guard';
@@ -105,6 +107,8 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
             kind: profile.kind, ready, events: pageEvents, params: { ...params }, workerStats, persist, remount, builders, resourceLoadFailures, perf, guard,
             enterReadMode: enterRead,
             auditMenus: audit,
+            content,
+            waitForCapture: async (options) => waitForCapture(window.__m0!.editor ?? await ready, options),
         };
 
         ready.then(

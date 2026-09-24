@@ -45,6 +45,9 @@ export const SHEET_READ_MODE_MENUS = [
     'sheet.command.set-worksheet-hidden',
 ] as const;
 
+/** 原地进入阅读模式时，在运行时隐藏的菜单项：工作表标签菜单里的结构性操作，以及底栏的网格线开关（它会写进快照）。 */
+export const SHEET_READ_MODE_RUNTIME_MENUS = [...SHEET_READ_MODE_MENUS, 'sheet.command.toggle-gridlines'] as const;
+
 export const sheetUi = {
     edit: { menu: hide([...SHEET_PROTECTION_MENUS, ...SHEET_UNSUPPORTED_MENUS]), addSheetButton: true, toolbar: true, contextMenu: true, footerMenus: true },
     read: { menu: hide([...SHEET_PROTECTION_MENUS, ...SHEET_UNSUPPORTED_MENUS, ...SHEET_READ_MODE_MENUS]), addSheetButton: false, toolbar: false, contextMenu: false, footerMenus: false },

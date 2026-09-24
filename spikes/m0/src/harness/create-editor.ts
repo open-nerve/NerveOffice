@@ -105,7 +105,7 @@ export async function createEditor(options: CreateEditorOptions): Promise<Editor
     });
 
     // 检测器必须先于文档单元挂上，才能看到加载过程中执行的命令
-    const detector = createChangeDetector(univer, {
+    const detector = createChangeDetector(univer, univerAPI, {
         unitId: typeof data.id === 'string' ? data.id : undefined,
         exclude: profile.changeDetectionExclude,
     });
@@ -190,6 +190,10 @@ export interface M0Window {
     auditMenus?: () => import('./menu-audit').MenuAuditItem[];
     /** 计时工具（V08、V10）。 */
     perf?: typeof import('./perf');
+    /** 内容比较（V08 测规范化与哈希的开销）。 */
+    content?: typeof import('./content-compare');
+    /** P3 报告 §3.4 的捕获时机（审查后修订）。 */
+    waitForCapture?: (options?: import('./capture-timing').CaptureWaitOptions) => Promise<import('./capture-timing').CaptureWait>;
     /** 资源比较（V08 测打开自检的耗时）。 */
     guard?: typeof import('./resource-guard');
     /** 加载时的快照文本（创建文档单元之前序列化，SDK 会改动传入的对象）。 */

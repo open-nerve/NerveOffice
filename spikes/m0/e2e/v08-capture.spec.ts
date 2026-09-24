@@ -1,5 +1,6 @@
 // V08 捕获成本（00 号计划书 §7.2 ①、§12.2）：save()、序列化、gzip、SHA-256 的耗时与主线程阻塞。
-// 另测：打开自检（捕获 + 资源比较）、资源加载错误捕获（guard=1）的开销、从修改停止到哈希完成的端到端耗时。
+// 另测：打开自检（捕获 + 资源比较）、资源加载错误捕获（guard=1）的开销、规范化内容哈希的开销（审查 R7），
+// 以及按 P3 报告 §3.4 的捕获时机，从修改到压缩与哈希完成的端到端耗时（审查 R3：没有依赖公式、牵动少量公式、牵动约 320 个公式三种修改）。
 import type { CaptureMeasurement } from '../src/harness/perf';
 
 import { test } from '@playwright/test';
@@ -77,22 +78,45 @@ for (const s of SAMPLES) {
             return times;
         }, RUNS);
 
-        // 3. 端到端（只测表格 1 MiB）：修改 → 1 秒防抖 → 等公式写回 → 捕获管道
-        let endToEnd: number[] | null = null;
+        // 3. 规范化内容哈希（跨加载比较、服务端"内容相同不递增修订号"要用的口径）：规范化 + SHA-256，只测表格
+        let canonical: { canonicalMs: number[]; hashMs: number[] } | null = null;
+        if (s.kind === 'sheet') {
+            canonical = await page.evaluate(async (n) => {
+                const m0 = window.__m0!;
+                const canonicalMs: number[] = [];
+                const hashMs: number[] = [];
+                for (let i = 0; i < n; i++) {
+                    const text = JSON.stringify(m0.editor!.save());
+                    const t0 = performance.now();
+                    const c = m0.content!.canonicalContent(text);
+                    const t1 = performance.now();
+                    await m0.perf!.sha256Hex(new TextEncoder().encode(c));
+                    canonicalMs.push(t1 - t0);
+                    hashMs.push(performance.now() - t1);
+                    await new Promise((res) => setTimeout(res, 100));
+                }
+                return { canonicalMs, hashMs };
+            }, 5);
+        }
+
+        // 4. 端到端（表格 1 MiB）：修改 → 按捕获时机等待（capture-timing.ts）→ 捕获管道。
+        //    没有依赖公式：改 D2；牵动一个行合计公式：改 D11（T11 = SUM(D11:S11)）。
+        let endToEnd: Record<string, number[]> | null = null;
         if (s.builder === 'big-1m') {
             endToEnd = await page.evaluate(async (n) => {
                 const m0 = window.__m0!;
                 const editor = m0.editor!;
                 const ws = editor.univerAPI.getActiveWorkbook()!.getActiveSheet();
-                const out: number[] = [];
-                for (let i = 0; i < n; i++) {
+                const run = async (cell: string, i: number) => {
                     const t0 = performance.now();
-                    ws.getRange(`D${i + 2}`).setValue(i * 7);
-                    await new Promise((res) => setTimeout(res, 1000));
-                    await editor.univerAPI.getFormula().onCalculationResultApplied(30_000);
+                    ws.getRange(cell).setValue(1000 + i);
+                    await m0.waitForCapture!();
                     await m0.perf!.measureCapture(editor);
-                    out.push(performance.now() - t0);
-                }
+                    return performance.now() - t0;
+                };
+                const out: Record<string, number[]> = { noDependent: [], oneFormula: [] };
+                for (let i = 0; i < n; i++) out.noDependent.push(await run('D2', i));
+                for (let i = 0; i < n; i++) out.oneFormula.push(await run('D11', i));
                 return out;
             }, 5);
         }
@@ -105,8 +129,46 @@ for (const s of SAMPLES) {
             timestamp: new Date().toISOString(),
             capture: summarize(runs),
             selfCheckMs: stats(selfCheck),
-            endToEndMs: endToEnd == null ? null : stats(endToEnd),
+            canonical: canonical == null ? null : { canonicalMs: stats(canonical.canonicalMs), hashMs: stats(canonical.hashMs) },
+            endToEndMs: endToEnd == null ? null : Object.fromEntries(Object.entries(endToEnd).map(([k, xs]) => [k, stats(xs)])),
             raw: runs.map((r) => ({ ...r, longTasks: r.longTasks?.length ?? null })),
+        });
+    });
+}
+
+// 端到端（性能基线样本）：改数据表 D 列（被约 320 个公式依赖）→ 按捕获时机等待 → 捕获管道；主线程与 Worker 两种模式
+for (const worker of [false, true]) {
+    test(`V08 端到端：perf-50k${worker ? '-worker' : ''}`, async ({ page, request }, testInfo) => {
+        test.setTimeout(300_000);
+        const id = await ensureGenerated(page, request, 'sheet', 'perf-50k');
+        await page.goto(`/sheet.html?doc=${id}${worker ? '&worker=1' : ''}`);
+        await waitForEditor(page);
+        await waitQuiet(page);
+        const out = await page.evaluate(async (n) => {
+            const m0 = window.__m0!;
+            const editor = m0.editor!;
+            const ws = editor.univerAPI.getActiveWorkbook()!.getSheetByName('数据表')!;
+            const totals: number[] = [];
+            const waits: number[] = [];
+            for (let i = 0; i < n; i++) {
+                const t0 = performance.now();
+                ws.getRange(`D${i + 2}`).setValue(700 + i);
+                const wait = await m0.waitForCapture!();
+                await m0.perf!.measureCapture(editor);
+                totals.push(performance.now() - t0);
+                waits.push(wait.waitedMs);
+            }
+            return { totals, waits };
+        }, 5);
+        await writeResult(`v08/end-to-end/${testInfo.project.name}-perf-50k${worker ? '-worker' : ''}.json`, {
+            check: 'V08-end-to-end',
+            sample: 'perf-50k',
+            worker,
+            browser: browserInfo(page, testInfo),
+            timestamp: new Date().toISOString(),
+            totalMs: stats(out.totals),
+            waitMs: stats(out.waits),
+            raw: out,
         });
     });
 }

@@ -44,34 +44,14 @@ export async function detectorState(page: Page, since = 0): Promise<ChangeDetect
 
 export interface QuietResult {
     waitedMs: number;
-    /** 表格：公式结果是否已写回（等待超时记为 timeout）。 */
-    formula: 'applied' | 'timeout' | 'n/a';
+    /** settled：公式结果已收齐（或没有计算）；pending：超时仍未收齐；n/a：文字文档。 */
+    formula: 'settled' | 'pending' | 'n/a';
+    restarts: number;
 }
 
-/**
- * 等待编辑落定（P3 建议的捕获时机）：表格先等公式结果写回，再等到距最后一次"活动"至少 quietMs。
- * 活动包括检测到的修改与公式结果写回（见 ChangeDetector.lastActivityAt），对应平台管道的"修改停止 1 秒后捕获"（00 号计划书 §7.2）。
- */
-export async function waitQuiet(page: Page, quietMs = 1000, maxMs = 15_000): Promise<QuietResult> {
-    return page.evaluate(async ({ quietMs, maxMs }) => {
-        const editor = window.__m0!.editor!;
-        const t0 = performance.now();
-        let formula: 'applied' | 'timeout' | 'n/a' = 'n/a';
-        if (editor.kind === 'sheet') {
-            try {
-                await editor.univerAPI.getFormula().onCalculationResultApplied(maxMs);
-                formula = 'applied';
-            } catch {
-                formula = 'timeout';
-            }
-        }
-        while (performance.now() - t0 < maxMs) {
-            const last = editor.detector.lastActivityAt() ?? 0;
-            if (performance.now() - Math.max(last, t0) >= quietMs) break;
-            await new Promise((r) => setTimeout(r, 100));
-        }
-        return { waitedMs: performance.now() - t0, formula };
-    }, { quietMs, maxMs });
+/** 按 P3 报告 §3.4 的捕获时机等待（审查后修订的规则，实现在 src/harness/capture-timing.ts）。 */
+export async function waitQuiet(page: Page, debounceMs = 1000, timeoutMs = 15_000): Promise<QuietResult> {
+    return page.evaluate(({ debounceMs, timeoutMs }) => window.__m0!.waitForCapture!({ debounceMs, timeoutMs }), { debounceMs, timeoutMs });
 }
 
 /** 两份快照的内容差异（按 Phase 文档 §3.4 的口径规范化后逐路径比较）。 */

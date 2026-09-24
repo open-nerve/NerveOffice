@@ -64,19 +64,37 @@ function v06(): string {
             return [browserOf(x.file), d.sample, d.config.id, r0(d.copy.syncMs), String(d.copiedCellsImmediately), String(d.copiedCellsAtS1), String(d.sourceCells), r0(d.localMutations.lastMs), r0(d.capturedAfterMs), r0(d.copy.idleMaxGapMs), d.formulaInCopyMatches ? '一致' : '不一致', `${d.removal.undoBefore.undos}→${d.removal.undoAfterRemove.undos}`];
         }),
     ));
+    const observer = load('v06/observer');
+    out.push('### 观察者效应', table(
+        ['浏览器', '样本', '调用的读取方法', '保存字节变化', '规范化内容差异', '检测到修改', '非本地 mutation'],
+        observer.map((x) => [browserOf(x.file), x.data.sample, x.data.readers.join('、'), x.data.bytesChanged ? '是' : '否', String(x.data.contentDiff.length), String(x.data.detections.length), String(x.data.mutations.length)]),
+    ));
     return out.join('\n\n');
 }
 
 function v07(): string {
     const out: string[] = ['## V07 公式一致性'];
     const list = load('v07');
-    const kinds = ['noWait', 'waited', 'platform', 'timedOut', 'recapture', 'recapturePlatform', 'reopened', 'forced'];
+    const kinds = ['noWait', 'api', 'rule', 'timedOut', 'recaptureApi', 'recaptureRule', 'reopened', 'forced'];
     out.push(table(
-        ['浏览器', '场景', 'Worker', ...kinds, '起始等待 ms', '等待 ms', '超时尝试'],
+        ['浏览器', '场景', 'Worker', ...kinds, '起始等待 ms', '只用接口 ms', '按规则 ms', '超时尝试', '易变函数被重算'],
         list.map((x) => {
             const d = x.data;
-            return [browserOf(x.file), d.scenario, d.worker ? '是' : '否', ...kinds.map((k) => `${d.checks[k].mismatches}/${d.checks[k].checked}`), r0(d.idleWaitMs), r0(d.waitMs.waited), d.timeoutOutcome];
+            return [browserOf(x.file), d.scenario, d.worker ? '是' : '否', ...kinds.map((k) => `${d.checks[k].mismatches}/${d.checks[k].checked}`), r0(d.idleWaitMs), r0(d.waitMs.api), r0(d.waitMs.rule), d.timeoutOutcome, d.volatileRecalculated == null ? '—' : d.volatileRecalculated ? '是' : '否'];
         }),
+    ));
+    const dq = load('v07/edit-during-quiet');
+    out.push('静默窗口内再改一次（快 + 慢）：', table(
+        ['浏览器', 'Worker', '旧规则：捕获时刻 / 不一致', '新规则：捕获时刻 / 不一致 / 重来次数', '计算结束后'],
+        dq.map((x) => {
+            const d = x.data;
+            return [browserOf(x.file), d.worker ? '是' : '否', `${d.oldRule.capturedAtMs} ms / ${d.oldRule.mismatches}/${d.oldRule.checked}`, `${d.newRule.capturedAtMs} ms / ${d.newRule.mismatches}/${d.newRule.checked} / ${d.newRule.restarts}`, `${d.settled.mismatches}/${d.settled.checked}`];
+        }),
+    ));
+    const tl = load('v07/timeline');
+    out.push('公式写回时间线（修改"聚合!B1"）：', table(
+        ['浏览器', 'Worker', '等待接口返回时刻', '返回时"慢!A1"仍是旧值', '250 ms 采样的最大间隔'],
+        tl.map((x) => [browserOf(x.file), x.data.worker ? '是' : '否', `${x.data.resolvedAtMs} ms`, x.data.staleAtResolve ? '是' : '否', `${x.data.maxSampleGapMs} ms`]),
     ));
     return out.join('\n\n');
 }
@@ -91,13 +109,20 @@ function v08(): string {
     const out: string[] = ['## V08 捕获成本（p50 / p95，毫秒）'];
     const list = load('v08/capture');
     out.push(table(
-        ['浏览器', '样本', 'JSON', 'gzip', '压缩率', 'save()', '序列化', '同步段', 'gzip', 'SHA-256', '合计', '异步段最长阻塞', '最长长任务', '打开自检', '端到端'],
+        ['浏览器', '样本', 'JSON', 'gzip', '压缩率', 'save()', '序列化', '同步段', 'gzip', 'SHA-256', '合计', '异步段最长阻塞', '最长长任务', '打开自检', '规范化', '规范化后 SHA-256'],
         list.map((x) => {
             const d = x.data;
             const c = d.capture;
-            return [browserOf(x.file), `${d.kind}-${d.sample}`, kib(c.jsonBytes), kib(c.gzipBytes), `${(c.ratio * 100).toFixed(1)}%`, stat(c.saveMs, 1), stat(c.stringifyMs, 1), stat(c.syncMs, 1), stat(c.gzipMs, 1), stat(c.hashMs, 1), stat(c.totalMs), stat(c.asyncMaxGapMs), stat(c.longestTaskMs), stat(d.selfCheckMs, 1), stat(d.endToEndMs)];
+            return [browserOf(x.file), `${d.kind}-${d.sample}`, kib(c.jsonBytes), kib(c.gzipBytes), `${(c.ratio * 100).toFixed(1)}%`, stat(c.saveMs, 1), stat(c.stringifyMs, 1), stat(c.syncMs, 1), stat(c.gzipMs, 1), stat(c.hashMs, 1), stat(c.totalMs), stat(c.asyncMaxGapMs), stat(c.longestTaskMs), stat(d.selfCheckMs, 1), stat(d.canonical?.canonicalMs, 1), stat(d.canonical?.hashMs, 1)];
         }),
     ));
+    const e2eRows: string[][] = [];
+    for (const x of list) {
+        if (x.data.endToEndMs == null) continue;
+        for (const [k, v] of Object.entries(x.data.endToEndMs as Record<string, Json>)) e2eRows.push([browserOf(x.file), `${x.data.sample}：${k === 'noDependent' ? '没有依赖公式' : '牵动一个行合计'}`, '主线程', stat(v)]);
+    }
+    for (const x of load('v08/end-to-end')) e2eRows.push([browserOf(x.file), `${x.data.sample}：牵动约 320 个公式`, x.data.worker ? 'Worker' : '主线程', stat(x.data.totalMs)]);
+    out.push('端到端：修改 → 按捕获时机等待 → 捕获、压缩、哈希（p50 / p95）：', table(['浏览器', '修改', '模式', '耗时 ms'], e2eRows));
     const guard = load('v08/guard-overhead');
     out.push('资源加载错误捕获的开销（到 Rendered，p50 / p95）：', table(
         ['浏览器', '样本', '不开', '开'],
@@ -117,6 +142,16 @@ function v09(): string {
             return [browserOf(x.file), d.kind, d.strategy, String(d.summary.blocked.length), d.summary.detected.join('、') || '—', d.summary.undetected.join('、') || '—', String(d.traces.detections.length), d.traces.protectionResources.join('、') || '—', errs.join('、') || '—'];
         }),
     ));
+    const control = load('v09/control');
+    out.push('编辑模式对照（同样的入口必须真的改变内容）：', table(
+        ['浏览器', '文档', '入口数', '没有改变内容的入口'],
+        control.map((x) => [browserOf(x.file), x.data.kind, String(x.data.entries.length), x.data.notChanged.join('、') || '无']),
+    ));
+    const copy = load('v09/copy');
+    out.push('阅读模式下复制（Chromium 内核）：', table(
+        ['浏览器', '文档', ...['edit', 'facade', 'points', 'firewall', 'combined']],
+        copy.map((x) => [browserOf(x.file), x.data.kind, ...['edit', 'facade', 'points', 'firewall', 'combined'].map((m) => (x.data.results.find((r: Json) => r.mode === m)?.copied ? '可以' : '不行'))]),
+    ));
     const undo = load('v09/undo-redo');
     out.push('撤销重做（编辑模式下先产生一条记录，再原地进入阅读模式、不清空撤销栈）：', table(
         ['浏览器', '文档', '方案', '撤销改了内容', '重做改了内容'],
@@ -124,10 +159,10 @@ function v09(): string {
     ));
     const sw = load('v09/switch');
     out.push('模式切换：', table(
-        ['浏览器', '文档', '方式', '耗时 ms', '退出后残留', '非空的保护类资源', '退出后可编辑'],
+        ['浏览器', '文档', '方式', '进入 / 退出 ms', '退出后残留', '非空的保护类资源', '退出后可编辑', '退出后 F2 编辑 A2', '运行时界面：阅读中 / 退出后（工具栏按钮、右键菜单）'],
         sw.flatMap((x) => [
-            ...x.data.inPlace.map((r: Json) => [browserOf(x.file), x.data.kind, `原地：${r.strategy}`, r0(r.ms), String(r.leftover.length), r.protectionResourcesAfter.join('、') || '—', r.editableAfterExit ? '是' : '否']),
-            [browserOf(x.file), x.data.kind, '销毁重建：进入阅读 / 回到编辑（到 Rendered）', `${r0(x.data.remount.toReadRenderedMs)} / ${r0(x.data.remount.toEditRenderedMs)}`, String(x.data.remount.leftover.length), '—', '是'],
+            ...x.data.inPlace.map((r: Json) => [browserOf(x.file), x.data.kind, `原地：${r.strategy}`, `${r0(r.enterMs)} / ${r0(r.exitMs)}`, String(r.leftover.length), r.protectionResourcesAfter.join('、') || '—', r.editableAfterExit ? '是' : '否', r.editedValue == null ? '—' : String(r.editedValue), r.uiInRead == null ? '—' : `${r.uiInRead.toolbarButtons}、${r.uiInRead.contextMenu ? '有' : '无'} / ${r.uiAfterExit.toolbarButtons}、${r.uiAfterExit.contextMenu ? '有' : '无'}`]),
+            [browserOf(x.file), x.data.kind, '销毁重建：进入阅读 / 回到编辑（到 Rendered）', `${r0(x.data.remount.toReadRenderedMs)} / ${r0(x.data.remount.toEditRenderedMs)}`, String(x.data.remount.leftover.length), '—', '是', '—', '—'],
         ]),
     ));
     const menus = load('v09/menus');
@@ -147,11 +182,13 @@ function v10(): string {
     const out: string[] = ['## V10 性能基线（p50 / p95，毫秒）'];
     const list = load('v10');
     out.push(table(
-        ['浏览器', 'Worker', '到 Rendered', '到 Steady', 'Rendered 前最长长任务', '按键到下一帧', '增量计算', '其间最长阻塞', '全量重算', '其间最长阻塞', 'JS 堆：打开后 / 50 次编辑后'],
+        ['浏览器', 'Worker', '到 Rendered：第一次 / 之后（中位数）', 'Rendered 前最长长任务', '第一次键入被接受（提交时刻 ms，3 次）', '按键到下一帧', '增量计算', '其间最长阻塞', '全量重算', '其间最长阻塞', 'JS 堆（页面 + Worker）：打开后 / 50 次编辑后'],
         list.map((x) => {
             const d = x.data;
-            const heap = d.heapBytes.afterOpen == null ? '无法测量' : `${(d.heapBytes.afterOpen / 1048576).toFixed(0)} / ${(d.heapBytes.afterEdits / 1048576).toFixed(0)} MiB`;
-            return [browserOf(x.file), d.worker ? '是' : '否', stat(d.firstScreen.renderedMs), stat(d.firstScreen.steadyMs), stat(d.firstScreen.longestTaskBeforeRenderedMs), stat(d.keyLatencyMs, 1), stat(d.formulaMs.incremental), stat(d.formulaBlockMs?.incremental), stat(d.formulaMs.full), stat(d.formulaBlockMs?.full), heap];
+            const mib = (h: Json | null) => (h == null ? '无法测量' : `${(h.main / 1048576).toFixed(1)}${h.workers.length > 0 ? ` + ${h.workers.map((w: number) => (w / 1048576).toFixed(1)).join(' + ')}` : ''} MiB`);
+            const heap = d.heapBytes.afterOpen == null ? '无法测量' : `${mib(d.heapBytes.afterOpen)} / ${mib(d.heapBytes.afterEdits)}`;
+            const first = (d.firstInput as Json[]).map((f) => (f.accepted ? r0(f.committedAt) : `未进入 K3${f.detections.length > 0 ? `（${f.diff.map((g: Json) => g.path).join('，') || '无内容差异'}）` : ''}`)).join('、');
+            return [browserOf(x.file), d.worker ? '是' : '否', `${r0(d.firstScreen.renderedColdMs)} / ${r0(d.firstScreen.renderedWarmMedianMs)}`, stat(d.firstScreen.longestTaskBeforeRenderedMs), first, stat(d.keyLatencyMs, 1), stat(d.formulaMs.incremental), stat(d.formulaBlockMs?.incremental), stat(d.formulaMs.full), stat(d.formulaBlockMs?.full), heap];
         }),
     ));
     return out.join('\n\n');

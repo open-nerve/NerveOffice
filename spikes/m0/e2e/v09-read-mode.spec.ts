@@ -109,6 +109,26 @@ const SHEET_ENTRIES: Entry[] = [
     { id: 'move-sheet', method: 'F', run: "wb.moveSheet(wb.getSheetByName('汇总'), 0);" },
     { id: 'move-image', method: 'F', run: "await wb.getSheetByName('功能').getImages()[0].setPositionAsync(12, 12);" },
     { id: 'delete-image', method: 'F', run: "wb.getSheetByName('功能').getImages()[0].remove();" },
+    { id: 'resize-image', method: 'F', run: "await wb.getSheetByName('功能').getImages()[0].setSizeAsync(200, 150);" },
+    {
+        // 拖动行标题上第 5、6 行之间的分隔线，把第 5 行拉高 30 像素
+        id: 'row-resize-drag', method: 'U',
+        run: async (page) => {
+            const p = await page.evaluate(() => {
+                const canvas = document.querySelector('canvas[id^="univer-sheet-main-canvas"]')!;
+                const rect = canvas.getBoundingClientRect();
+                const ws = window.__m0!.editor!.univerAPI.getActiveWorkbook()!.getActiveSheet();
+                const a5 = ws.getRange('A5').getCell();
+                return { x: rect.left + 20, y: rect.top + a5.endY };
+            });
+            await page.mouse.move(p.x, p.y - 8);
+            await page.mouse.move(p.x, p.y, { steps: 4 });
+            await page.waitForTimeout(150);
+            await page.mouse.down();
+            await page.mouse.move(p.x, p.y + 30, { steps: 6 });
+            await page.mouse.up();
+        },
+    },
     { id: 'row-height', method: 'F', run: 'ws.setRowHeight(5, 40);' },
     { id: 'insert-row', method: 'F', run: 'ws.insertRowAfter(3);' },
     { id: 'delete-row', method: 'F', run: 'ws.deleteRows(16, 1);' },
@@ -273,6 +293,73 @@ for (const kind of ['sheet', 'doc'] as const) {
         });
     }
 
+    test(`V09 入口对照（编辑模式）：${kind}`, async ({ page, context }, testInfo) => {
+        // 对照组：同样的入口在编辑模式下必须真的改变内容，阅读模式下的"拦截"才有意义（审查 R8）
+        test.setTimeout(900_000);
+        if (testInfo.project.name !== 'webkit') await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+        const open = async () => {
+            await page.goto(`/${kind}.html?sample=${kind === 'sheet' ? 'sheet-all' : 'doc-all'}`);
+            await waitForEditor(page);
+            await waitQuiet(page);
+        };
+        await open();
+        const results: Record<string, unknown>[] = [];
+        for (const entry of kind === 'sheet' ? SHEET_ENTRIES : DOC_ENTRIES) {
+            const s0 = await snapshotText(page);
+            const error = await step(page, kind, entry.run);
+            await waitQuiet(page);
+            const diff = contentDiff(s0, await snapshotText(page));
+            results.push({ entry: entry.id, method: entry.method, changed: diff.length > 0, error });
+            if (diff.length > 0) await open();
+        }
+        await writeResult(`v09/control/${testInfo.project.name}-${kind}.json`, {
+            check: 'V09-control',
+            kind,
+            browser: browserInfo(page, testInfo),
+            timestamp: new Date().toISOString(),
+            entries: results,
+            notChanged: results.filter((r) => !r.changed).map((r) => r.entry),
+        });
+        expect.soft(results.filter((r) => !r.changed).map((r) => r.entry), '编辑模式下每个入口都改变了内容').toEqual([]);
+    });
+
+    test(`V09 阅读模式下复制：${kind}`, async ({ page, context }, testInfo) => {
+        // 阅读模式是所有未持有编辑权的人的默认状态，复制必须可用（审查 R6）；WebKit 不能读剪贴板，只在 Chromium 内核上判定
+        test.skip(testInfo.project.name === 'webkit', 'WebKit 不支持读取剪贴板');
+        await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+        const out: Record<string, unknown>[] = [];
+        for (const mode of ['edit', ...STRATEGIES] as const) {
+            await page.goto(`/${kind}.html?sample=${kind === 'sheet' ? 'sheet-all' : 'doc-all'}${mode === 'edit' ? '' : `&mode=read&ro=${mode}`}`);
+            await waitForEditor(page);
+            // 剪贴板接口加超时保护：拿不到结果时记为"（超时）"，不让整条用例卡住
+            const clipboard = (op: 'reset' | 'read') => page.evaluate((op) => Promise.race([
+                op === 'reset' ? navigator.clipboard.writeText('（空）').then(() => '') : navigator.clipboard.readText(),
+                new Promise<string>((res) => setTimeout(() => res('（超时）'), 5000)),
+            ]), op);
+            await clipboard('reset');
+            if (kind === 'sheet') {
+                await clickCell(page, 'A2');
+                await page.waitForTimeout(300);
+            } else {
+                await clickDoc(page);
+                await page.keyboard.press('Shift+ArrowLeft');
+                await page.keyboard.press('Shift+ArrowLeft');
+            }
+            await page.keyboard.press('Meta+C');
+            await page.waitForTimeout(600);
+            const clip = await clipboard('read');
+            out.push({ mode, clipboard: clip.slice(0, 40), copied: clip !== '（空）' && clip !== '（超时）' && clip.length > 0 });
+        }
+        await writeResult(`v09/copy/${testInfo.project.name}-${kind}.json`, {
+            check: 'V09-copy',
+            kind,
+            browser: browserInfo(page, testInfo),
+            timestamp: new Date().toISOString(),
+            results: out,
+        });
+        for (const r of out) if (r.mode === 'edit' || r.mode === 'points' || r.mode === 'combined' || r.mode === 'firewall') expect.soft(r.copied, `${r.mode}：可以复制`).toBe(true);
+    });
+
     test(`V09 撤销重做的拦截：${kind}`, async ({ page }, testInfo) => {
         const out: Record<string, unknown>[] = [];
         for (const strategy of STRATEGIES) {
@@ -325,36 +412,75 @@ for (const kind of ['sheet', 'doc'] as const) {
         const out: Record<string, unknown> = {};
 
         // 原地切换：每种方案进入再退出，比较退出后的快照与进入前是否相同、撤销栈是否已清空、之后能否正常编辑
+        const toolbarButtons = () => page.evaluate(() => document.querySelectorAll('[data-u-command]').length);
+        const contextMenuShown = async () => {
+            if (kind === 'sheet') {
+                const p = await cellCenter(page, 'C3');
+                await page.mouse.click(p.x, p.y, { button: 'right' });
+            } else {
+                const box = (await page.locator('canvas#univer-doc-main-canvas').boundingBox())!;
+                await page.mouse.click(box.x + box.width / 2, box.y + 120, { button: 'right' });
+            }
+            await page.waitForTimeout(500);
+            const shown = await page.getByText(kind === 'sheet' ? '选择性粘贴' : '粘贴').first().isVisible().catch(() => false);
+            await page.keyboard.press('Escape');
+            return shown;
+        };
         const inPlace: Record<string, unknown>[] = [];
-        for (const strategy of STRATEGIES) {
+        for (const variant of [...STRATEGIES, 'combined+ui'] as const) {
+            const strategy = variant === 'combined+ui' ? 'combined' : variant;
+            const ui = variant === 'combined+ui';
             await page.goto(`/${kind}.html?sample=${sample}`);
             await waitForEditor(page);
             await waitQuiet(page);
             const before = await snapshotText(page);
             const m0 = await detectorMark(page);
             const t0 = Date.now();
-            await page.evaluate((ro) => window.__m0!.enterReadMode!(ro), strategy);
+            await page.evaluate(({ ro, ui }) => window.__m0!.enterReadMode!(ro, { ui }), { ro: strategy, ui });
+            const enterMs = Date.now() - t0;
             const undoInRead = await page.evaluate(() => window.__m0!.editor!.undoStatus());
+            // 阅读模式下点选几个单元格：单元格编辑器的同步不能被防火墙挡住（审查 R2）
+            if (kind === 'sheet') for (const a1 of ['A2', 'B3', 'C4']) await clickCell(page, a1);
+            const uiInRead = ui ? { toolbarButtons: await toolbarButtons(), contextMenu: await contextMenuShown() } : null;
+            const t1 = Date.now();
             const exitSteps = await page.evaluate(() => window.__m0!.readMode!.exit());
-            const ms = Date.now() - t0;
+            const exitMs = Date.now() - t1;
             await waitQuiet(page);
             const after = await snapshotText(page);
             const state = await detectorState(page, m0);
-            // 退出后能否编辑
+            const uiAfterExit = ui ? { toolbarButtons: await toolbarButtons(), contextMenu: await contextMenuShown() } : null;
+            // 退出后经界面编辑当前单元格（表格：点 A2，F2 进入编辑，End，键入 X，回车）；文字文档：点正文键入
+            let editedValue: unknown = null;
             const m1 = await detectorMark(page);
-            if (kind === 'sheet') await runFacade(page, kind, "ws.getRange('K3').setValue('退出后编辑');");
-            else await runFacade(page, kind, "doc.insertText(1, '退出后编辑');");
-            await waitQuiet(page);
+            if (kind === 'sheet') {
+                await clickCell(page, 'A2');
+                await page.keyboard.press('F2');
+                await page.waitForTimeout(150);
+                await page.keyboard.press('End');
+                await page.keyboard.type('X');
+                await page.keyboard.press('Enter');
+                await waitQuiet(page);
+                // 经单元格编辑器编辑后单元格存成富文本（p），getValue() 为空，按显示值判断
+                editedValue = await page.evaluate(() => window.__m0!.editor!.univerAPI.getActiveWorkbook()!.getActiveSheet().getRange('A2').getDisplayValue());
+            } else {
+                await clickDoc(page);
+                await page.keyboard.type('Y');
+                await waitQuiet(page);
+            }
             const editable = (await detectorState(page, m1)).detections.length > 0;
             inPlace.push({
-                strategy,
-                ms,
+                strategy: variant,
+                enterMs,
+                exitMs,
                 undoInRead,
                 exitSteps,
                 detectionsWhileSwitching: brief(state).detections,
                 leftover: contentDiff(before, after).slice(0, 10),
                 protectionResourcesAfter: nonEmptyProtection(after),
                 editableAfterExit: editable,
+                editedValue,
+                uiInRead,
+                uiAfterExit,
             });
         }
         out.inPlace = inPlace;
@@ -384,6 +510,16 @@ for (const kind of ['sheet', 'doc'] as const) {
             timestamp: new Date().toISOString(),
             ...out,
         });
+        for (const r of inPlace) {
+            if (r.strategy === 'facade') continue;
+            expect.soft(r.leftover, `${r.strategy}：原地切换没有残留`).toEqual([]);
+            expect.soft(r.editableAfterExit, `${r.strategy}：退出后可以编辑`).toBe(true);
+            if (kind === 'sheet') expect.soft(r.editedValue, `${r.strategy}：退出后经单元格编辑器编辑 A2`).toBe('苹果X');
+        }
+        const withUi = inPlace.find((r) => r.strategy === 'combined+ui')!;
+        expect.soft(withUi.uiInRead, '运行时切换界面：阅读模式没有工具栏按钮、没有右键菜单').toEqual({ toolbarButtons: 0, contextMenu: false });
+        expect.soft((withUi.uiAfterExit as { contextMenu: boolean }).contextMenu, '退出后右键菜单恢复').toBe(true);
+        expect.soft((withUi.uiAfterExit as { toolbarButtons: number }).toolbarButtons, '退出后工具栏恢复').toBeGreaterThan(0);
     });
 }
 

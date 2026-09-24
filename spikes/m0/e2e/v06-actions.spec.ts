@@ -105,7 +105,8 @@ const SHEET: Action[] = [
     { id: 'col-width', kind: 'sheet', expect: 'change', method: 'F', run: 'ws.setColumnWidth(5, 150);' },
     { id: 'wrap-autoheight', kind: 'sheet', expect: 'change', method: 'F', run: `const r = ws.getRange('K12'); r.setValue('${LONG}'); r.setWrap(true);` },
     {
-        // 超过 maxAutoHeightCount（1000 行）的部分交给空闲时的自动行高任务，行高变化迟到
+        // 命令内只同步计算视口附近的 ceil(10000 / 列数) 行（"数据"表 26 列，约 385 行），其余交给空闲任务、每轮 500 行，行高变化迟到
+        // （sheets/src/commands/commands/util.ts 的 getSuitableRangesInView；sheets-ui 的 auto-height.service.ts）
         id: 'lazy-autoheight', kind: 'sheet', expect: 'change', method: 'F',
         pre: "ws.setRowCount(2000); ws.getRange('M1:M1500').setValues(Array.from({ length: 1500 }, (_, i) => ['行' + i]));",
         run: "ws.getRange('M1:M1500').setFontSize(28);",
