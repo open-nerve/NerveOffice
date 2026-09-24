@@ -4,6 +4,7 @@
 //      a. 记下最后一次修改的时刻，发起一次 onCalculationResultApplied（在最后一次修改之后发起）；
 //      b. 等到距最后一次修改满 1 秒（管道的防抖）；
 //      c. 等最近一轮公式计算"逐表收齐"：结果 mutation 中带结果的每张工作表都收到了写回（Worker 模式下等待接口在第一张表写回后就返回）；
+//         这一轮没有结果 mutation、只收到"计算完成"通知时（修改没有牵动公式），视为收齐；
 //      d. 等待期间又检测到修改，就从 a 重来；否则捕获。
 //   3. 超过总时限仍未收齐：照常捕获并标记"公式待更新"，由调用方在收齐后补捕获。
 // 捕获时刻 ≈ max（最后一次修改 + 1 秒，这一轮公式结果收齐）。
@@ -30,7 +31,8 @@ export function formulaPending(editor: EditorHandle): boolean {
     if (editor.kind !== 'sheet') return false;
     const p = editor.detector.formulaProgress();
     if (!p.started || p.stopped) return false;
-    if (p.resultSheets == null) return true;
+    // 还没有结果：计算结束（completed）说明这一轮没有需要写回的结果；否则仍在计算
+    if (p.resultSheets == null) return !p.completed;
     const wb = editor.univerAPI.getActiveWorkbook();
     if (wb == null) return false;
     return p.resultSheets.some((key) => {

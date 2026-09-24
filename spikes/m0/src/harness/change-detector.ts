@@ -46,14 +46,17 @@ export interface ChangeDetectorState {
 /**
  * 最近一轮公式计算的进度（V07）：
  * - started：见过 set-formula-calculation-start；stopped：之后见过 stop；
+ * - completed：见过带 functionsExecutedState 的 notification（这一轮计算结束；没有需要重算的公式时只有它，没有结果 mutation）；
  * - resultSheets：最近一条 set-formula-calculation-result 中带结果的工作表（`unitId/sheetId`），还没收到结果时为 null；
  * - appliedSheets：本轮已经收到的公式结果写回（带 applyFormulaCalculationResult 的 set-range-values）。
  * Worker 模式下结果按工作表逐条同步回主线程，等待接口在第一条写回后就返回；逐表收齐才算这一轮完成。
+ * 顺序（calculate.controller.ts）：结果 mutation → 各表写回 → 完成 notification。
  */
 export interface FormulaProgress {
     session: number;
     started: boolean;
     stopped: boolean;
+    completed: boolean;
     resultSheets: string[] | null;
     appliedSheets: string[];
 }
@@ -83,6 +86,7 @@ const MAX_RECORDS = 50_000;
 export const FORMULA_START = 'formula.mutation.set-formula-calculation-start';
 export const FORMULA_STOP = 'formula.mutation.set-formula-calculation-stop';
 export const FORMULA_RESULT = 'formula.mutation.set-formula-calculation-result';
+export const FORMULA_NOTIFICATION = 'formula.mutation.set-formula-calculation-notification';
 export const SET_RANGE_VALUES = 'sheet.mutation.set-range-values';
 
 interface RawCommand {
@@ -121,7 +125,7 @@ export function createChangeDetector(univer: Univer, univerAPI: FUniver, init: {
     const syncOnly: CommandRecord[] = [];
     let total = 0;
     let lastDetection: number | null = null;
-    let formula: FormulaProgress = { session: 0, started: false, stopped: false, resultSheets: null, appliedSheets: [] };
+    let formula: FormulaProgress = { session: 0, started: false, stopped: false, completed: false, resultSheets: null, appliedSheets: [] };
 
     const classify = (r: CommandRecord): Verdict => {
         if (r.kind !== 'mutation') return 'not-mutation';
@@ -134,7 +138,9 @@ export function createChangeDetector(univer: Univer, univerAPI: FUniver, init: {
 
     const trackFormula = (r: CommandRecord, params: unknown) => {
         if (r.id === FORMULA_START) {
-            formula = { session: formula.session + 1, started: true, stopped: false, resultSheets: null, appliedSheets: [] };
+            formula = { session: formula.session + 1, started: true, stopped: false, completed: false, resultSheets: null, appliedSheets: [] };
+        } else if (r.id === FORMULA_NOTIFICATION && (params as { functionsExecutedState?: unknown } | undefined)?.functionsExecutedState !== undefined) {
+            formula = { ...formula, completed: true };
         } else if (r.id === FORMULA_STOP) {
             formula = { ...formula, stopped: true };
         } else if (r.id === FORMULA_RESULT) {
