@@ -1,0 +1,18 @@
+{
+  "check": "V12-cross-copy",
+  "img": "default",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T22:44:35.045Z",
+  "clipboard": [
+    "image/png"
+  ],
+  "pasted": [
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAA"
+  ],
+  "copyEvents": []
+}

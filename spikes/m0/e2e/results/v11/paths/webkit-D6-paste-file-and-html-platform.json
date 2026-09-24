@@ -1,0 +1,117 @@
+{
+  "check": "V11-paths",
+  "case": {
+    "id": "D6-paste-file-and-html",
+    "kind": "doc",
+    "method": "P",
+    "what": "粘贴\"图片文件 + 外链 <img> 的 HTML\""
+  },
+  "img": "platform",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T22:57:14.462Z",
+  "verdict": "全部为平台地址",
+  "expectedCount": 2,
+  "addedCount": 2,
+  "actionError": null,
+  "added": [
+    {
+      "where": "/drawings/Jp7lQ8",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/3d6ae336-d79b-4aa5-a8b1-db3e597d324b"
+    },
+    {
+      "where": "/drawings/qrytE7",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/00000000-0000-4000-8000-000000000000"
+    },
+    {
+      "where": "resources.DOC_DRAWING_PLUGIN/data/Jp7lQ8",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/3d6ae336-d79b-4aa5-a8b1-db3e597d324b"
+    },
+    {
+      "where": "resources.DOC_DRAWING_PLUGIN/data/qrytE7",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/00000000-0000-4000-8000-000000000000"
+    }
+  ],
+  "addedKinds": [
+    "platform"
+  ],
+  "stray": [],
+  "uploads": [
+    {
+      "status": 201,
+      "bytes": 188,
+      "reason": null,
+      "hasSession": true
+    }
+  ],
+  "reads": [
+    {
+      "status": 200,
+      "hasSession": true,
+      "mode": "cors",
+      "dest": "image"
+    },
+    {
+      "status": 200,
+      "hasSession": true,
+      "mode": "cors",
+      "dest": "image"
+    }
+  ],
+  "load": [
+    {
+      "source": "/api/assets/3d6ae336-d79b-4aa5-a8b1-db3e597d324b",
+      "cached": true,
+      "complete": true,
+      "width": 120
+    },
+    {
+      "source": "/api/assets/00000000-0000-4000-8000-000000000000",
+      "cached": true,
+      "complete": true,
+      "width": 160
+    }
+  ],
+  "imageEvents": [
+    {
+      "kind": "paste-upload",
+      "ok": true,
+      "detail": "/api/assets/3d6ae336-d79b-4aa5-a8b1-db3e597d324b"
+    },
+    {
+      "kind": "paste-replace",
+      "ok": true,
+      "detail": "replace external /drawings/QlIItn https://example.invalid/tracking.png"
+    },
+    {
+      "kind": "paste-normalize",
+      "ok": true,
+      "detail": "normalize /drawings/iW2u8K"
+    }
+  ],
+  "detections": [
+    "doc.mutation.rich-text-editing"
+  ],
+  "cspViolations": [
+    {
+      "directive": "img-src",
+      "blocked": "blob",
+      "disposition": "report"
+    }
+  ],
+  "pageErrors": [],
+  "facadeError": null,
+  "snapshotBytes": 3228
+}

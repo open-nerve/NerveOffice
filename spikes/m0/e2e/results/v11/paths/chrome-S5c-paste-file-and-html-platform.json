@@ -1,0 +1,33 @@
+{
+  "check": "V11-paths",
+  "case": {
+    "id": "S5c-paste-file-and-html",
+    "kind": "sheet",
+    "method": "P",
+    "what": "粘贴\"图片文件 + 外链 <img> 的 HTML\"（浏览器\"复制图片\"的形态）"
+  },
+  "img": "platform",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T22:36:38.045Z",
+  "verdict": "没有新增图片",
+  "expectedCount": 0,
+  "addedCount": 0,
+  "actionError": null,
+  "added": [],
+  "addedKinds": [],
+  "stray": [],
+  "uploads": [],
+  "reads": [],
+  "load": [],
+  "imageEvents": [],
+  "detections": [],
+  "cspViolations": [],
+  "pageErrors": [],
+  "facadeError": null,
+  "snapshotBytes": 1147
+}

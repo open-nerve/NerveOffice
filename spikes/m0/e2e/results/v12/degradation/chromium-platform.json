@@ -1,0 +1,50 @@
+{
+  "check": "V12-degradation",
+  "img": "platform",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T22:27:41.939Z",
+  "copyToSystem": {
+    "ok": true,
+    "items": [
+      {
+        "type": "image/png",
+        "size": 423
+      }
+    ]
+  },
+  "saveCellImage": {
+    "executed": true,
+    "download": {
+      "ok": true,
+      "name": "B8.png"
+    },
+    "csp": [],
+    "errors": []
+  },
+  "preview": {
+    "images": [
+      {
+        "src": "http://127.0.0.1:4780/api/assets/851c7062-5f29-42f3-a9f6-63f",
+        "complete": true,
+        "width": 120
+      }
+    ],
+    "reads": []
+  },
+  "move": {
+    "moved": true,
+    "reads": [],
+    "errors": []
+  },
+  "drop": {
+    "dragoverPrevented": true,
+    "dropPrevented": false,
+    "inserted": 0,
+    "url": "http://127.0.0.1:4780/sheet.html?sample=minimal&img=platform&worker=1"
+  }
+}

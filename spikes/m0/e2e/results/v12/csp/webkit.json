@@ -1,0 +1,39 @@
+{
+  "check": "V12-csp",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T23:00:41.043Z",
+  "results": [
+    {
+      "step": "表格：加载 sheet-all",
+      "enforce": {},
+      "probe": {
+        "style-src-elem inline": 4,
+        "img-src data": 84
+      }
+    },
+    {
+      "step": "表格：插入、复制粘贴、单元格图片、粘贴文件、IMAGE()",
+      "enforce": {},
+      "probe": {}
+    },
+    {
+      "step": "文字文档：加载 doc-all",
+      "enforce": {},
+      "probe": {
+        "style-src-elem inline": 4
+      }
+    },
+    {
+      "step": "文字文档：插入、粘贴文件、粘贴外链 HTML、全选复制粘贴",
+      "enforce": {},
+      "probe": {
+        "img-src blob": 1
+      }
+    }
+  ]
+}

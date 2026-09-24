@@ -1,0 +1,72 @@
+{
+  "check": "V12-image-formula",
+  "policy": "off",
+  "worker": false,
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T22:45:24.992Z",
+  "runs": [
+    {
+      "csp": "full",
+      "installed": true,
+      "display": {
+        "external": "#NAME?",
+        "platform": "#NAME?",
+        "data": "#NAME?",
+        "len": "3"
+      },
+      "snapshot": [
+        {
+          "f": "=IMAGE(\"https://example.invalid/image-formula.png\")",
+          "v": "#NAME?",
+          "hasP": false
+        },
+        {
+          "f": "=IMAGE(\"/api/assets/9f265e3e-b87a-406d-a07c-7b620da5f21d\")",
+          "v": "#NAME?",
+          "hasP": false
+        },
+        {
+          "f": "=IMAGE(\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAT0lEQVR42u3PQQkAAAgEsEthUdP7M4JvYbACy3S9FgEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQGBywJ9TCFpNWCOBAAAAABJRU5ErkJggg==\")",
+          "v": "#NAME?",
+          "hasP": false
+        }
+      ],
+      "externalRequests": [],
+      "cspEnforced": []
+    },
+    {
+      "csp": "off",
+      "installed": true,
+      "display": {
+        "external": "#NAME?",
+        "platform": "#NAME?",
+        "data": "#NAME?",
+        "len": "3"
+      },
+      "snapshot": [
+        {
+          "f": "=IMAGE(\"https://example.invalid/image-formula.png\")",
+          "v": "#NAME?",
+          "hasP": false
+        },
+        {
+          "f": "=IMAGE(\"/api/assets/29acbfad-0257-4f2c-ac5c-c9e6ab25a67e\")",
+          "v": "#NAME?",
+          "hasP": false
+        },
+        {
+          "f": "=IMAGE(\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAT0lEQVR42u3PQQkAAAgEsEthUdP7M4JvYbACy3S9FgEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQGBywJ9TCFpNWCOBAAAAABJRU5ErkJggg==\")",
+          "v": "#NAME?",
+          "hasP": false
+        }
+      ],
+      "externalRequests": [],
+      "cspEnforced": []
+    }
+  ]
+}

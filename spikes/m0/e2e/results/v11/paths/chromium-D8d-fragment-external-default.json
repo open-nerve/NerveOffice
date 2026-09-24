@@ -1,0 +1,68 @@
+{
+  "check": "V11-paths",
+  "case": {
+    "id": "D8d-fragment-external",
+    "kind": "doc",
+    "method": "P",
+    "what": "粘贴内部片段：外链图片（对照）"
+  },
+  "img": "default",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T22:25:57.406Z",
+  "verdict": "含非平台地址：external",
+  "expectedCount": 1,
+  "addedCount": 1,
+  "actionError": null,
+  "added": [
+    {
+      "where": "/drawings/0Qfmey",
+      "kind": "external",
+      "imageSourceType": "URL",
+      "source": "https://example.invalid/tracking.png?string"
+    },
+    {
+      "where": "resources.DOC_DRAWING_PLUGIN/data/0Qfmey",
+      "kind": "external",
+      "imageSourceType": "URL",
+      "source": "https://example.invalid/tracking.png?string"
+    }
+  ],
+  "addedKinds": [
+    "external"
+  ],
+  "stray": [],
+  "uploads": [],
+  "reads": [],
+  "load": [],
+  "imageEvents": [],
+  "detections": [
+    "doc.mutation.rich-text-editing"
+  ],
+  "cspViolations": [
+    {
+      "directive": "img-src",
+      "blocked": "https://example.invalid/tracking.png?string",
+      "disposition": "report"
+    },
+    {
+      "directive": "img-src",
+      "blocked": "https://example.invalid/tracking.png?string",
+      "disposition": "enforce"
+    },
+    {
+      "directive": "img-src",
+      "blocked": "data",
+      "disposition": "report"
+    }
+  ],
+  "pageErrors": [
+    "Uncaught InvalidStateError: Failed to execute 'drawImage' on 'CanvasRenderingContext2D': The HTMLImageElement provided is in the 'broken' state. @ http://127.0."
+  ],
+  "facadeError": null,
+  "snapshotBytes": 2180
+}

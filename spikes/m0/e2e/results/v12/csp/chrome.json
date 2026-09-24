@@ -1,0 +1,43 @@
+{
+  "check": "V12-csp",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T22:44:20.343Z",
+  "results": [
+    {
+      "step": "表格：加载 sheet-all",
+      "enforce": {},
+      "probe": {
+        "style-src-elem inline": 4,
+        "img-src data": 84
+      }
+    },
+    {
+      "step": "表格：插入、复制粘贴、单元格图片、粘贴文件、IMAGE()",
+      "enforce": {},
+      "probe": {
+        "style-src-attr inline": 2
+      }
+    },
+    {
+      "step": "文字文档：加载 doc-all",
+      "enforce": {},
+      "probe": {
+        "style-src-elem inline": 4
+      }
+    },
+    {
+      "step": "文字文档：插入、粘贴文件、粘贴外链 HTML、全选复制粘贴",
+      "enforce": {},
+      "probe": {
+        "img-src blob": 1,
+        "style-src-elem inline": 1,
+        "style-src-attr inline": 32
+      }
+    }
+  ]
+}

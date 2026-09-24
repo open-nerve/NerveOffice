@@ -1,0 +1,72 @@
+{
+  "check": "V12-image-formula",
+  "policy": "restricted",
+  "worker": false,
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T23:01:39.027Z",
+  "runs": [
+    {
+      "csp": "full",
+      "installed": true,
+      "display": {
+        "external": "#VALUE!",
+        "platform": "\r\b",
+        "data": "#VALUE!",
+        "len": "3"
+      },
+      "snapshot": [
+        {
+          "f": "=IMAGE(\"https://example.invalid/image-formula.png\")",
+          "v": "#VALUE!",
+          "hasP": false
+        },
+        {
+          "f": "=IMAGE(\"/api/assets/5846ffad-0311-438f-8e3c-1529ea15f01a\")",
+          "v": "",
+          "hasP": false
+        },
+        {
+          "f": "=IMAGE(\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAT0lEQVR42u3PQQkAAAgEsEthUdP7M4JvYbACy3S9FgEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQGBywJ9TCFpNWCOBAAAAABJRU5ErkJggg==\")",
+          "v": "#VALUE!",
+          "hasP": false
+        }
+      ],
+      "externalRequests": [],
+      "cspEnforced": []
+    },
+    {
+      "csp": "off",
+      "installed": true,
+      "display": {
+        "external": "#VALUE!",
+        "platform": "\r\b",
+        "data": "#VALUE!",
+        "len": "3"
+      },
+      "snapshot": [
+        {
+          "f": "=IMAGE(\"https://example.invalid/image-formula.png\")",
+          "v": "#VALUE!",
+          "hasP": false
+        },
+        {
+          "f": "=IMAGE(\"/api/assets/d2a96203-526a-4c4c-94b1-0fa36ae34598\")",
+          "v": "",
+          "hasP": false
+        },
+        {
+          "f": "=IMAGE(\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAT0lEQVR42u3PQQkAAAgEsEthUdP7M4JvYbACy3S9FgEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQGBywJ9TCFpNWCOBAAAAABJRU5ErkJggg==\")",
+          "v": "#VALUE!",
+          "hasP": false
+        }
+      ],
+      "externalRequests": [],
+      "cspEnforced": []
+    }
+  ]
+}

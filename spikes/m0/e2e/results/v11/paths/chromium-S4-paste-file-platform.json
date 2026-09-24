@@ -1,0 +1,71 @@
+{
+  "check": "V11-paths",
+  "case": {
+    "id": "S4-paste-file",
+    "kind": "sheet",
+    "method": "P",
+    "what": "粘贴图片文件"
+  },
+  "img": "platform",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T22:19:21.741Z",
+  "verdict": "全部为平台地址",
+  "expectedCount": 1,
+  "addedCount": 1,
+  "actionError": null,
+  "added": [
+    {
+      "where": "resources.SHEET_DRAWING_PLUGIN/sheet-1/data/xiJO0w",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/fa338dd8-ea4b-4aeb-a2fe-5570c92d41ce"
+    }
+  ],
+  "addedKinds": [
+    "platform"
+  ],
+  "stray": [],
+  "uploads": [
+    {
+      "status": 201,
+      "bytes": 188,
+      "reason": null,
+      "hasSession": true
+    }
+  ],
+  "reads": [
+    {
+      "status": 200,
+      "hasSession": true,
+      "mode": "no-cors",
+      "dest": "image"
+    }
+  ],
+  "load": [
+    {
+      "source": "/api/assets/fa338dd8-ea4b-4aeb-a2fe-5570c92d41ce",
+      "cached": true,
+      "complete": true,
+      "width": 120
+    }
+  ],
+  "imageEvents": [
+    {
+      "kind": "save",
+      "ok": true,
+      "detail": "/api/assets/fa338dd8-ea4b-4aeb-a2fe-5570c92d41ce"
+    }
+  ],
+  "detections": [
+    "sheet.mutation.set-drawing-apply"
+  ],
+  "cspViolations": [],
+  "pageErrors": [],
+  "facadeError": null,
+  "snapshotBytes": 1929
+}

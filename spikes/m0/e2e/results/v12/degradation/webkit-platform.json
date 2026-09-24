@@ -1,0 +1,45 @@
+{
+  "check": "V12-degradation",
+  "img": "platform",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T23:00:21.361Z",
+  "copyToSystem": {
+    "ok": false,
+    "error": "无头 WebKit 不能读剪贴板"
+  },
+  "saveCellImage": {
+    "executed": true,
+    "download": {
+      "ok": true,
+      "name": "B8.png"
+    },
+    "csp": [],
+    "errors": []
+  },
+  "preview": {
+    "images": [
+      {
+        "src": "http://127.0.0.1:4780/api/assets/b98cb621-c2c7-4837-a0bc-a74",
+        "complete": true,
+        "width": 120
+      }
+    ],
+    "reads": []
+  },
+  "move": {
+    "moved": true,
+    "reads": [],
+    "errors": []
+  },
+  "drop": {
+    "dragoverPrevented": true,
+    "dropPrevented": false,
+    "inserted": 0,
+    "url": "http://127.0.0.1:4780/sheet.html?sample=minimal&img=platform&worker=1"
+  }
+}

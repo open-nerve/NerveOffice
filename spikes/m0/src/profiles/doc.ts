@@ -18,6 +18,7 @@ import { UniverRenderEnginePlugin } from '@univerjs/engine-render';
 import { UniverFindReplacePlugin } from '@univerjs/find-replace';
 import { UniverUIPlugin } from '@univerjs/ui';
 import { docUi } from './ui-config';
+import { drawingPluginConfig } from './image-service';
 
 import DesignZhCN from '@univerjs/design/locale/zh-CN';
 import DocsDrawingUIZhCN from '@univerjs/docs-drawing-ui/locale/zh-CN';
@@ -73,7 +74,7 @@ const groups: PluginGroup[] = [
         id: 'drawing',
         resources: ['DOC_DRAWING_PLUGIN'],
         removable: true,
-        plugins: () => [[UniverDrawingPlugin], [UniverDrawingUIPlugin], [UniverDocsDrawingPlugin], [UniverDocsDrawingUIPlugin]],
+        plugins: ({ imageService }) => [[UniverDrawingPlugin, drawingPluginConfig(imageService)], [UniverDrawingUIPlugin], [UniverDocsDrawingPlugin], [UniverDocsDrawingUIPlugin]],
     },
     {
         id: 'hyperlink',

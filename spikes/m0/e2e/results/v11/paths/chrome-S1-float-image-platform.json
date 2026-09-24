@@ -1,0 +1,71 @@
+{
+  "check": "V11-paths",
+  "case": {
+    "id": "S1-float-image",
+    "kind": "sheet",
+    "method": "F",
+    "what": "工具栏\"插入浮动图片\"（sheet.command.insert-float-image，文件选择框）"
+  },
+  "img": "platform",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T22:34:49.950Z",
+  "verdict": "全部为平台地址",
+  "expectedCount": 1,
+  "addedCount": 1,
+  "actionError": null,
+  "added": [
+    {
+      "where": "resources.SHEET_DRAWING_PLUGIN/sheet-1/data/eZkYo6",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/d964987f-5431-436c-a6c1-9fd51c33fc11"
+    }
+  ],
+  "addedKinds": [
+    "platform"
+  ],
+  "stray": [],
+  "uploads": [
+    {
+      "status": 201,
+      "bytes": 188,
+      "reason": null,
+      "hasSession": true
+    }
+  ],
+  "reads": [
+    {
+      "status": 200,
+      "hasSession": true,
+      "mode": "no-cors",
+      "dest": "image"
+    }
+  ],
+  "load": [
+    {
+      "source": "/api/assets/d964987f-5431-436c-a6c1-9fd51c33fc11",
+      "cached": true,
+      "complete": true,
+      "width": 120
+    }
+  ],
+  "imageEvents": [
+    {
+      "kind": "save",
+      "ok": true,
+      "detail": "/api/assets/d964987f-5431-436c-a6c1-9fd51c33fc11"
+    }
+  ],
+  "detections": [
+    "sheet.mutation.set-drawing-apply"
+  ],
+  "cspViolations": [],
+  "pageErrors": [],
+  "facadeError": null,
+  "snapshotBytes": 1929
+}

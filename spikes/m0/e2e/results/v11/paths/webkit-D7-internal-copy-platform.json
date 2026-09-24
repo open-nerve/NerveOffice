@@ -1,0 +1,96 @@
+{
+  "check": "V11-paths",
+  "case": {
+    "id": "D7-internal-copy",
+    "kind": "doc",
+    "method": "U",
+    "what": "插入图片后，选中它快捷键复制、在别处粘贴（内部复制）"
+  },
+  "img": "platform",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T22:57:33.055Z",
+  "verdict": "全部为平台地址",
+  "expectedCount": 2,
+  "addedCount": 2,
+  "actionError": null,
+  "added": [
+    {
+      "where": "/drawings/GNubX9",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/f0627e6f-998a-4f52-a251-c2fb4fda3bcd"
+    },
+    {
+      "where": "/drawings/WqfFXx",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/f0627e6f-998a-4f52-a251-c2fb4fda3bcd"
+    },
+    {
+      "where": "resources.DOC_DRAWING_PLUGIN/data/GNubX9",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/f0627e6f-998a-4f52-a251-c2fb4fda3bcd"
+    },
+    {
+      "where": "resources.DOC_DRAWING_PLUGIN/data/WqfFXx",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/f0627e6f-998a-4f52-a251-c2fb4fda3bcd"
+    }
+  ],
+  "addedKinds": [
+    "platform"
+  ],
+  "stray": [],
+  "uploads": [
+    {
+      "status": 201,
+      "bytes": 188,
+      "reason": null,
+      "hasSession": true
+    }
+  ],
+  "reads": [
+    {
+      "status": 200,
+      "hasSession": true,
+      "mode": "no-cors",
+      "dest": "image"
+    },
+    {
+      "status": 200,
+      "hasSession": true,
+      "mode": "cors",
+      "dest": "image"
+    }
+  ],
+  "load": [
+    {
+      "source": "/api/assets/f0627e6f-998a-4f52-a251-c2fb4fda3bcd",
+      "cached": true,
+      "complete": true,
+      "width": 120
+    }
+  ],
+  "imageEvents": [
+    {
+      "kind": "save",
+      "ok": true,
+      "detail": "/api/assets/f0627e6f-998a-4f52-a251-c2fb4fda3bcd"
+    }
+  ],
+  "detections": [
+    "doc.mutation.rich-text-editing",
+    "doc.mutation.rich-text-editing"
+  ],
+  "cspViolations": [],
+  "pageErrors": [],
+  "facadeError": null,
+  "snapshotBytes": 3690
+}

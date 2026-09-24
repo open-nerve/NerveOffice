@@ -1,0 +1,76 @@
+{
+  "check": "V12-image-formula",
+  "policy": "default",
+  "worker": false,
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T23:00:52.616Z",
+  "runs": [
+    {
+      "csp": "full",
+      "installed": null,
+      "display": {
+        "external": "#VALUE!",
+        "platform": "\r\b",
+        "data": "\r\b",
+        "len": "3"
+      },
+      "snapshot": [
+        {
+          "f": "=IMAGE(\"https://example.invalid/image-formula.png\")",
+          "v": "",
+          "hasP": false
+        },
+        {
+          "f": "=IMAGE(\"/api/assets/2b288c4d-6fcc-4c5d-ac80-c4f7e749e960\")",
+          "v": "",
+          "hasP": false
+        },
+        {
+          "f": "=IMAGE(\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAT0lEQVR42u3PQQkAAAgEsEthUdP7M4JvYbACy3S9FgEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQGBywJ9TCFpNWCOBAAAAABJRU5ErkJggg==\")",
+          "v": "",
+          "hasP": false
+        }
+      ],
+      "externalRequests": [],
+      "cspEnforced": [
+        "img-src https://example.invalid/image-formula.png"
+      ]
+    },
+    {
+      "csp": "off",
+      "installed": null,
+      "display": {
+        "external": "#VALUE!",
+        "platform": "\r\b",
+        "data": "\r\b",
+        "len": "3"
+      },
+      "snapshot": [
+        {
+          "f": "=IMAGE(\"https://example.invalid/image-formula.png\")",
+          "v": "",
+          "hasP": false
+        },
+        {
+          "f": "=IMAGE(\"/api/assets/57a6bb25-73a4-43f0-b38c-f50bb43f49b7\")",
+          "v": "",
+          "hasP": false
+        },
+        {
+          "f": "=IMAGE(\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAT0lEQVR42u3PQQkAAAgEsEthUdP7M4JvYbACy3S9FgEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQGBywJ9TCFpNWCOBAAAAABJRU5ErkJggg==\")",
+          "v": "",
+          "hasP": false
+        }
+      ],
+      "externalRequests": [
+        "https://example.invalid/image-formula.png"
+      ],
+      "cspEnforced": []
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "check": "V11-paths",
+  "case": {
+    "id": "S7-formula-bar-paste",
+    "kind": "sheet",
+    "method": "P",
+    "what": "编辑栏里粘贴图片文件"
+  },
+  "img": "default",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T22:53:10.618Z",
+  "verdict": "没有新增图片",
+  "expectedCount": 0,
+  "addedCount": 0,
+  "actionError": null,
+  "added": [],
+  "addedKinds": [],
+  "stray": [],
+  "uploads": [],
+  "reads": [],
+  "load": [],
+  "imageEvents": [],
+  "detections": [],
+  "cspViolations": [
+    {
+      "directive": "img-src",
+      "blocked": "blob",
+      "disposition": "report"
+    }
+  ],
+  "pageErrors": [
+    "\u001b[97;104m[DocClipboardController]\u001b[0m clipboard is empty."
+  ],
+  "facadeError": null,
+  "snapshotBytes": 1147
+}

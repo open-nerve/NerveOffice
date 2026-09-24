@@ -1,0 +1,27 @@
+{
+  "check": "V11-links",
+  "timestamp": "2026-09-24T22:17:34.643Z",
+  "assetId": "39a82ded-3d4c-4ede-90a0-bb65668f475c",
+  "bSavesForeignRef": {
+    "status": 204,
+    "links": "linked=0; ignored=39a82ded-3d4c-4ede-90a0-bb65668f475c"
+  },
+  "bReadAfterOwnSave": 404,
+  "aSavesOwnRef": {
+    "status": 204,
+    "links": "linked=1; ignored="
+  },
+  "bReadAfterASaved": 200,
+  "bSavesAgain": {
+    "status": 204,
+    "links": "linked=1; ignored="
+  },
+  "escapedHasPlainPath": false,
+  "aSavesEscaped": {
+    "status": 204,
+    "links": "linked=1; ignored="
+  },
+  "escapedLinks": [
+    "39a82ded-3d4c-4ede-90a0-bb65668f475c"
+  ]
+}

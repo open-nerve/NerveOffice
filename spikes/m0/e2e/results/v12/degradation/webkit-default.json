@@ -1,0 +1,53 @@
+{
+  "check": "V12-degradation",
+  "img": "default",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T23:00:08.549Z",
+  "copyToSystem": {
+    "ok": false,
+    "error": "无头 WebKit 不能读剪贴板"
+  },
+  "saveCellImage": {
+    "executed": false,
+    "download": {
+      "ok": false,
+      "error": "TimeoutError: page.waitForEvent: Timeout 8000ms exceeded while waiting for event \"download\""
+    },
+    "csp": [
+      "connect-src data"
+    ],
+    "errors": [
+      "Failed to download image B8.png: TypeError: Load failed",
+      "Failed to download image: TypeError: Load failed"
+    ]
+  },
+  "preview": {
+    "images": [
+      {
+        "src": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAA",
+        "complete": true,
+        "width": 120
+      }
+    ],
+    "reads": []
+  },
+  "move": {
+    "moved": true,
+    "reads": [],
+    "errors": [
+      "Failed to download image B8.png: TypeError: Load failed",
+      "Failed to download image: TypeError: Load failed"
+    ]
+  },
+  "drop": {
+    "dragoverPrevented": true,
+    "dropPrevented": false,
+    "inserted": 0,
+    "url": "http://127.0.0.1:4780/sheet.html?sample=minimal&img=default&worker=1"
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "check": "V11-paths",
+  "case": {
+    "id": "F5-doc-insert-url",
+    "kind": "doc",
+    "method": "F",
+    "what": "FDocument.insertImage(外链)"
+  },
+  "img": "default",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T22:59:15.229Z",
+  "verdict": "含非平台地址：external",
+  "expectedCount": 0,
+  "addedCount": 1,
+  "actionError": null,
+  "added": [
+    {
+      "where": "/drawings/6WqU0M",
+      "kind": "external",
+      "imageSourceType": "URL",
+      "source": "https://example.invalid/tracking.png"
+    },
+    {
+      "where": "resources.DOC_DRAWING_PLUGIN/data/6WqU0M",
+      "kind": "external",
+      "imageSourceType": "URL",
+      "source": "https://example.invalid/tracking.png"
+    }
+  ],
+  "addedKinds": [
+    "external"
+  ],
+  "stray": [],
+  "uploads": [],
+  "reads": [],
+  "load": [],
+  "imageEvents": [],
+  "detections": [
+    "doc.mutation.rich-text-editing"
+  ],
+  "cspViolations": [
+    {
+      "directive": "img-src",
+      "blocked": "https://example.invalid/tracking.png",
+      "disposition": "enforce"
+    },
+    {
+      "directive": "img-src",
+      "blocked": "https://example.invalid/tracking.png",
+      "disposition": "report"
+    },
+    {
+      "directive": "img-src",
+      "blocked": "data",
+      "disposition": "report"
+    }
+  ],
+  "pageErrors": [],
+  "facadeError": null,
+  "snapshotBytes": 2329
+}

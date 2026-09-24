@@ -1,0 +1,31 @@
+{
+  "check": "V12-external-images",
+  "img": "platform",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T22:30:13.398Z",
+  "results": [
+    {
+      "path": "文字文档粘贴外链图片",
+      "requests": []
+    },
+    {
+      "path": "文字文档粘贴内部片段（文字填充图片、数组 source）",
+      "requests": []
+    },
+    {
+      "path": "FDocument.insertImage(外链)",
+      "requests": []
+    },
+    {
+      "path": "FWorksheet.insertImage(外链)",
+      "requests": [
+        "https://example.invalid/pasted.png?sheet"
+      ]
+    }
+  ]
+}

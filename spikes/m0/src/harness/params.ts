@@ -19,6 +19,10 @@ export interface PageParams {
     split: boolean;
     /** 公式引擎每执行多少个公式让出一次主线程（interval=N；缺省用 SDK 的 500，V10 比较让出间隔）。 */
     interval?: number;
+    /** 图片服务（P4）：default 为 SDK 的默认实现（图片读成 data URL）；platform 为上传到平台、只存同源地址，并安装粘贴钩子与命令守卫。 */
+    img: 'default' | 'platform';
+    /** IMAGE() 公式的处理（P4）：default、off（反注册）、restricted（只允许平台资源地址）。 */
+    imagefn: 'default' | 'off' | 'restricted';
     worker: boolean;
     /** 真实 Safari 自检：场景名；完成后跳转到 next。 */
     selftest?: string;
@@ -38,6 +42,8 @@ export function readPageParams(defaultSample: string): PageParams {
         calc: q.get('calc') === 'forced' ? 'forced' : 'default',
         split: q.get('split') !== '0',
         interval: q.get('interval') == null ? undefined : Number(q.get('interval')),
+        img: q.get('img') === 'platform' ? 'platform' : 'default',
+        imagefn: q.get('imagefn') === 'off' ? 'off' : q.get('imagefn') === 'restricted' ? 'restricted' : 'default',
         worker: q.get('worker') === '1',
         selftest: q.get('selftest') ?? undefined,
         next: q.get('next') ?? undefined,

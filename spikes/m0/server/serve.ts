@@ -1,4 +1,5 @@
-// 验证用静态服务：提供 dist/，为所有响应加 CSP 头，接收 CSP 违规报告。只监听 127.0.0.1，不进入生产。
+// 验证用静态服务：提供 dist/，为所有响应加 CSP 头，接收 CSP 违规报告；P2 起提供文档存储，P4 起提供图片资源（assets.ts）。
+// 只监听 127.0.0.1，不进入生产。
 import { createReadStream } from 'node:fs';
 import { appendFile, mkdir, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
@@ -6,7 +7,9 @@ import { extname, join, normalize, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import type { CspMode } from './csp.ts';
 
+import { copyLinks, handleAssets, removeLinks, sessionCookieHeader, sessionOf, updateLinks } from './assets.ts';
 import { cspHeaders } from './csp.ts';
+import { extractImages } from './snapshot-images.ts';
 
 const { values } = parseArgs({
     options: {
@@ -14,11 +17,15 @@ const { values } = parseArgs({
         dist: { type: 'string', default: 'dist' },
         csp: { type: 'string', default: 'full' },
         'report-log': { type: 'string', default: '' },
+        // P4：读取图片失败（401、403、404）时返回占位图，状态放在 X-Asset-Status 头里
+        'asset-fallback': { type: 'boolean', default: false },
     },
 });
 
 const root = resolve(values.dist);
 const port = Number(values.port);
+/** 本站的 origin 取自服务配置，不取自请求的 Host 头（P4 审查 G5）。 */
+const origin = `http://127.0.0.1:${port}`;
 const cspMode: CspMode = values.csp === 'off' ? 'off' : values.csp === 'html-only' ? 'html-only' : 'full';
 
 const MIME: Record<string, string> = {
@@ -93,6 +100,7 @@ const server = createServer(async (req, res) => {
             res.writeHead(204).end();
             return;
         }
+        if (await handleAssets(req, res, url, { fallback: values['asset-fallback'] })) return;
         if (url.pathname === '/__csp-reports') {
             if (req.method === 'DELETE') {
                 reports.length = 0;
@@ -108,13 +116,26 @@ const server = createServer(async (req, res) => {
             const id = docMatch[1];
             if (req.method === 'PUT') {
                 const text = await readBody(req, 64 * 1024 * 1024);
-                JSON.parse(text); // 只接受合法 JSON
+                const snapshot = JSON.parse(text); // 只接受合法 JSON
+                // 保存校验（P4，00 号计划书 §11.3）：validate=1 时拒绝含非平台图片地址的快照（默认拒绝：任何 source 字段）
+                if (url.searchParams.get('validate') === '1') {
+                    const { images } = extractImages(snapshot, origin);
+                    const rejected = images.filter((i) => i.kind !== 'platform');
+                    if (rejected.length > 0) {
+                        res.writeHead(422, { 'Content-Type': 'application/json; charset=utf-8' });
+                        res.end(JSON.stringify({ error: 'non-platform-image', images: rejected.map((i) => ({ ...i, source: i.source.slice(0, 120) })) }));
+                        return;
+                    }
+                }
                 documents.set(id, text);
-                res.writeHead(204).end();
+                // 引用关系：只为保存者有权读取的图片建立（00 号计划书 §8.5，P4 审查 R2），没有建立的写进响应头供验证
+                const update = updateLinks(id, snapshot, sessionOf(req));
+                res.writeHead(204, { 'X-Asset-Links': `linked=${update.linked.length}; ignored=${update.ignored.join(',')}` }).end();
                 return;
             }
             if (req.method === 'DELETE') {
                 documents.delete(id);
+                removeLinks(id);
                 res.writeHead(204).end();
                 return;
             }
@@ -135,8 +156,9 @@ const server = createServer(async (req, res) => {
                 res.writeHead(400).end();
                 return;
             }
-            // 原样复制：不改 unitId 与工作表 id（00 号计划书 §8.3）
+            // 原样复制：不改 unitId 与工作表 id（00 号计划书 §8.3）；只新增引用关系，不复制图片文件（§8.5）
             documents.set(to, source);
+            copyLinks(copyMatch[1], to);
             res.writeHead(204).end();
             return;
         }
@@ -178,6 +200,8 @@ const server = createServer(async (req, res) => {
             'Cache-Control': 'no-store',
             'X-Content-Type-Options': 'nosniff',
             ...cspHeaders(cspMode, extname(filePath) === '.html'),
+            // 页面响应下发会话 Cookie：图片读取按会话鉴权（P4）；nosession=1 时不下发，用来验证没有会话时的读取
+            ...(extname(filePath) === '.html' && url.searchParams.get('nosession') !== '1' ? sessionCookieHeader(req) : {}),
         });
         if (req.method === 'HEAD') {
             res.end();

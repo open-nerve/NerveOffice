@@ -1,0 +1,76 @@
+{
+  "check": "V12-image-formula",
+  "policy": "default",
+  "worker": false,
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T22:45:01.441Z",
+  "runs": [
+    {
+      "csp": "full",
+      "installed": null,
+      "display": {
+        "external": "#VALUE!",
+        "platform": "\r\b",
+        "data": "\r\b",
+        "len": "3"
+      },
+      "snapshot": [
+        {
+          "f": "=IMAGE(\"https://example.invalid/image-formula.png\")",
+          "v": "",
+          "hasP": false
+        },
+        {
+          "f": "=IMAGE(\"/api/assets/e2ea032c-6ac1-4f5e-9c7d-514fa082b194\")",
+          "v": "",
+          "hasP": false
+        },
+        {
+          "f": "=IMAGE(\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAT0lEQVR42u3PQQkAAAgEsEthUdP7M4JvYbACy3S9FgEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQGBywJ9TCFpNWCOBAAAAABJRU5ErkJggg==\")",
+          "v": "",
+          "hasP": false
+        }
+      ],
+      "externalRequests": [],
+      "cspEnforced": [
+        "img-src https://example.invalid/image-formula.png"
+      ]
+    },
+    {
+      "csp": "off",
+      "installed": null,
+      "display": {
+        "external": "#VALUE!",
+        "platform": "\r\b",
+        "data": "\r\b",
+        "len": "3"
+      },
+      "snapshot": [
+        {
+          "f": "=IMAGE(\"https://example.invalid/image-formula.png\")",
+          "v": "",
+          "hasP": false
+        },
+        {
+          "f": "=IMAGE(\"/api/assets/05aa87cb-391b-4a96-8989-9c578430a106\")",
+          "v": "",
+          "hasP": false
+        },
+        {
+          "f": "=IMAGE(\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAT0lEQVR42u3PQQkAAAgEsEthUdP7M4JvYbACy3S9FgEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQGBywJ9TCFpNWCOBAAAAABJRU5ErkJggg==\")",
+          "v": "",
+          "hasP": false
+        }
+      ],
+      "externalRequests": [
+        "https://example.invalid/image-formula.png"
+      ],
+      "cspEnforced": []
+    }
+  ]
+}

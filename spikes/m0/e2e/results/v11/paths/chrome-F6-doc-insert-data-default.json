@@ -1,0 +1,61 @@
+{
+  "check": "V11-paths",
+  "case": {
+    "id": "F6-doc-insert-data",
+    "kind": "doc",
+    "method": "F",
+    "what": "FDocument.insertImage(data URL)"
+  },
+  "img": "default",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T22:43:13.462Z",
+  "verdict": "含非平台地址：data",
+  "expectedCount": 0,
+  "addedCount": 1,
+  "actionError": null,
+  "added": [
+    {
+      "where": "/drawings/jCcG8a",
+      "kind": "data",
+      "imageSourceType": "BASE64",
+      "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr"
+    },
+    {
+      "where": "resources.DOC_DRAWING_PLUGIN/data/jCcG8a",
+      "kind": "data",
+      "imageSourceType": "BASE64",
+      "source": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAHgAAABQCAIAAABd+SbeAAAAg0lEQVR42u3QMQ0AAAgDsKlCDf4d8OOCcDSpgqZ6OBAFokUjWr"
+    }
+  ],
+  "addedKinds": [
+    "data"
+  ],
+  "stray": [],
+  "uploads": [],
+  "reads": [],
+  "load": [],
+  "imageEvents": [],
+  "detections": [
+    "doc.mutation.rich-text-editing"
+  ],
+  "cspViolations": [
+    {
+      "directive": "img-src",
+      "blocked": "data",
+      "disposition": "report"
+    },
+    {
+      "directive": "img-src",
+      "blocked": "data",
+      "disposition": "report"
+    }
+  ],
+  "pageErrors": [],
+  "facadeError": null,
+  "snapshotBytes": 2811
+}

@@ -1,0 +1,23 @@
+{
+  "check": "V11-formats",
+  "img": "platform",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T22:34:16.448Z",
+  "sheetFloatAccept": ".png,.jpeg,.jpg,.gif,.webp",
+  "sheetCellAccept": ".png,.jpeg,.jpg,.gif,.webp",
+  "sheetPasteWebp": {
+    "added": 1,
+    "events": [
+      "save"
+    ]
+  },
+  "docAccept": ".png,.jpeg,.jpg,.gif,.webp",
+  "docPasteGif": {
+    "added": 2
+  }
+}

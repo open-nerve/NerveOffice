@@ -1,0 +1,42 @@
+{
+  "check": "V11-validate-constructed",
+  "timestamp": "2026-09-24T22:33:50.645Z",
+  "results": [
+    {
+      "case": "文字填充图片",
+      "status": 422
+    },
+    {
+      "case": "列表符号图片",
+      "status": 422
+    },
+    {
+      "case": "页面背景",
+      "status": 422
+    },
+    {
+      "case": "没有 imageSourceType 的图片",
+      "status": 422
+    },
+    {
+      "case": "source 为数组的图片",
+      "status": 422
+    },
+    {
+      "case": "资源数据里的图片",
+      "status": 422
+    },
+    {
+      "case": "协议相对地址",
+      "status": 422
+    },
+    {
+      "case": "大写的 DATA:",
+      "status": 422
+    },
+    {
+      "case": "平台地址（对照）",
+      "status": 204
+    }
+  ]
+}

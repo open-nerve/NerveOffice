@@ -1,0 +1,83 @@
+{
+  "check": "V11-paths",
+  "case": {
+    "id": "D1-insert-image",
+    "kind": "doc",
+    "method": "F",
+    "what": "工具栏\"插入图片\"（doc.command.insert-float-image，文件选择框）"
+  },
+  "img": "platform",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T22:23:19.277Z",
+  "verdict": "全部为平台地址",
+  "expectedCount": 1,
+  "addedCount": 1,
+  "actionError": null,
+  "added": [
+    {
+      "where": "/drawings/jxGX8f",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/6e33c3f0-2a40-4690-85bd-6543cbbe7b32"
+    },
+    {
+      "where": "resources.DOC_DRAWING_PLUGIN/data/jxGX8f",
+      "kind": "platform",
+      "imageSourceType": "URL",
+      "source": "/api/assets/6e33c3f0-2a40-4690-85bd-6543cbbe7b32"
+    }
+  ],
+  "addedKinds": [
+    "platform"
+  ],
+  "stray": [],
+  "uploads": [
+    {
+      "status": 201,
+      "bytes": 188,
+      "reason": null,
+      "hasSession": true
+    }
+  ],
+  "reads": [
+    {
+      "status": 200,
+      "hasSession": true,
+      "mode": "no-cors",
+      "dest": "image"
+    },
+    {
+      "status": 200,
+      "hasSession": true,
+      "mode": "cors",
+      "dest": "image"
+    }
+  ],
+  "load": [
+    {
+      "source": "/api/assets/6e33c3f0-2a40-4690-85bd-6543cbbe7b32",
+      "cached": true,
+      "complete": true,
+      "width": 120
+    }
+  ],
+  "imageEvents": [
+    {
+      "kind": "save",
+      "ok": true,
+      "detail": "/api/assets/6e33c3f0-2a40-4690-85bd-6543cbbe7b32"
+    }
+  ],
+  "detections": [
+    "doc.mutation.rich-text-editing"
+  ],
+  "cspViolations": [],
+  "pageErrors": [],
+  "facadeError": null,
+  "snapshotBytes": 2453
+}

@@ -5,9 +5,13 @@ import type { ChangeDetector } from './change-detector';
 import type { PageEvents } from './events';
 import type { ReadModeHandle } from './read-mode';
 import type { WorkerStats } from './worker-stats';
+import type { ImageFunctionPolicy } from './image-function-policy';
 
 import { IResourceManagerService, IUndoRedoService, LifecycleService, LifecycleStages, LocaleType, LogLevel, Univer, UserManagerService } from '@univerjs/core';
 import { createChangeDetector } from './change-detector';
+import { installImageFunctionPolicy } from './image-function-policy';
+import { installImageGuards } from './image-guards';
+import { alignImageFormats } from '../profiles/image-service';
 import { GuardedResourceManagerService } from './guarded-resource-manager';
 import { describeDocument } from './semantics';
 import { FUniver } from '@univerjs/core/facade';
@@ -31,6 +35,10 @@ export interface CreateEditorOptions {
     calcMode?: 'default' | 'forced';
     /** 公式引擎的让出间隔（V10）。 */
     formulaIntervalCount?: number;
+    /** 图片服务（P4）。 */
+    imageService?: 'default' | 'platform';
+    /** IMAGE() 的处理（P4）：主线程在这里安装，Worker 里由 Worker 自己安装（经 Worker 的 name 传入）。 */
+    imageFunction?: ImageFunctionPolicy;
 }
 
 export interface ResourceHookInfo {
@@ -51,6 +59,8 @@ export interface EditorHandle {
     dispose(): void;
     /** 本文档的撤销栈状态（IUndoRedoService，Facade 没有暴露）。 */
     undoStatus(): { undos: number; redos: number };
+    /** IMAGE() 的限制是否已装上（P4；null 表示没有要求或还没到 Ready）。 */
+    imageFunctionInstalled(): boolean | null;
     /** 捕获快照：FWorkbook.save() / FDocument.save()。 */
     save(): IWorkbookData | IDocumentData;
     /** 从开始创建到各生命周期阶段的耗时（毫秒）；t0 是开始创建时的 performance.now()。 */
@@ -79,6 +89,7 @@ export async function createEditor(options: CreateEditorOptions): Promise<Editor
         largeSheetSplit: options.largeSheetSplit ?? true,
         calcMode: options.calcMode ?? 'default',
         formulaIntervalCount: options.formulaIntervalCount,
+        imageService: options.imageService ?? 'default',
     };
     const t0 = performance.now();
     const timings: Record<string, number> = { t0 };
@@ -91,12 +102,17 @@ export async function createEditor(options: CreateEditorOptions): Promise<Editor
         override: guard ? [[IResourceManagerService, { useClass: GuardedResourceManagerService }]] : [],
     });
 
+    // 平台图片服务：各入口接受的格式与平台一致（P4 审查 G4）
+    if (options.imageService === 'platform') alignImageFormats();
     for (const [plugin, config] of resolvePlugins(profile, pluginOptions, without)) {
         univer.registerPlugin(plugin, config as never);
     }
 
     const univerAPI = FUniver.newAPI(univer);
     const lifecycle = univer.__getInjector().get(LifecycleService);
+    // IMAGE() 的限制：主线程也装（函数说明与自动补全在主线程；主线程模式下计算也在这里）
+    const imageFunctionInstalled = { value: null as boolean | null };
+    if (profile.kind === 'sheet') installImageFunctionPolicy(univer.__getInjector(), options.imageFunction ?? 'default', (ok) => { imageFunctionInstalled.value = ok; });
     const stageNames: Partial<Record<LifecycleStages, string>> = {
         [LifecycleStages.Ready]: 'ready',
         [LifecycleStages.Rendered]: 'rendered',
@@ -119,6 +135,7 @@ export async function createEditor(options: CreateEditorOptions): Promise<Editor
 
     await lifecycle.onStage(LifecycleStages.Steady);
     sub.unsubscribe();
+    const imageGuards = options.imageService === 'platform' ? [installImageGuards(univer, univerAPI), profile.platformImageExtras?.(univer)] : [];
 
     const save = (): IWorkbookData | IDocumentData => {
         if (profile.kind === 'sheet') {
@@ -156,9 +173,11 @@ export async function createEditor(options: CreateEditorOptions): Promise<Editor
         unitId: () => unitId,
         detector,
         dispose: () => {
+            imageGuards.forEach((d) => d?.dispose());
             detector.dispose();
             univer.dispose();
         },
+        imageFunctionInstalled: () => imageFunctionInstalled.value,
         undoStatus: () => univer.__getInjector().get(IUndoRedoService).getUndoRedoStatus(unitId),
         save,
         timings,
@@ -201,6 +220,8 @@ export interface M0Window {
     guard?: typeof import('./resource-guard');
     /** 加载时的快照文本（创建文档单元之前序列化，SDK 会改动传入的对象）。 */
     loadedText?: string;
+    /** 平台图片服务、粘贴钩子与命令守卫的操作记录（P4）。 */
+    images?: { events: import('./platform-image-io').ImageEvent[]; io: () => import('@univerjs/core').IImageIoService };
     /** 销毁当前实例并按指定模式从文档存储重新创建（V09 的"销毁重建"）。 */
     remount?: (opts: { mode: 'edit' | 'read'; doc: string; ro?: string }) => Promise<{ ms: number }>;
     events: PageEvents;

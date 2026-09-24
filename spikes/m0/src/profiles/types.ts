@@ -17,6 +17,8 @@ export interface ProfileOptions {
     calcMode: 'default' | 'forced';
     /** 公式引擎每执行多少个公式让出一次主线程；缺省用 SDK 的默认值 500（V10 比较让出间隔）。 */
     formulaIntervalCount?: number;
+    /** 图片服务（P4）：platform 时经 UniverDrawingPlugin 的 override 换成平台图片服务。 */
+    imageService?: 'default' | 'platform';
 }
 
 /**
@@ -36,6 +38,8 @@ export interface PluginGroup {
  * P2 起为 v1 草案，M0 结束时定稿（00 号计划书 §8.2）。
  */
 export interface EditorProfile {
+    /** img=platform 时另外安装的平台图片补救（P4：表格复制浮动图片写入剪贴板）。 */
+    platformImageExtras?: (univer: import('@univerjs/core').Univer) => import('@univerjs/core').IDisposable;
     id: string;
     kind: 'sheet' | 'doc';
     sdkVersion: string;

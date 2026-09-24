@@ -1,0 +1,61 @@
+{
+  "check": "V11-paths",
+  "case": {
+    "id": "D2-shape",
+    "kind": "doc",
+    "method": "F",
+    "what": "插入形状（doc.command.insert-float-shape.rectangle）"
+  },
+  "img": "default",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-24T22:39:45.523Z",
+  "verdict": "含非平台地址：data",
+  "expectedCount": 0,
+  "addedCount": 1,
+  "actionError": null,
+  "added": [
+    {
+      "where": "/drawings/RB_NYn",
+      "kind": "data",
+      "imageSourceType": "BASE64",
+      "source": "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22144%22%20height%3D%2296"
+    },
+    {
+      "where": "resources.DOC_DRAWING_PLUGIN/data/RB_NYn",
+      "kind": "data",
+      "imageSourceType": "BASE64",
+      "source": "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22144%22%20height%3D%2296"
+    }
+  ],
+  "addedKinds": [
+    "data"
+  ],
+  "stray": [],
+  "uploads": [],
+  "reads": [],
+  "load": [],
+  "imageEvents": [],
+  "detections": [
+    "doc.mutation.rich-text-editing"
+  ],
+  "cspViolations": [
+    {
+      "directive": "img-src",
+      "blocked": "data",
+      "disposition": "report"
+    },
+    {
+      "directive": "img-src",
+      "blocked": "data",
+      "disposition": "report"
+    }
+  ],
+  "pageErrors": [],
+  "facadeError": null,
+  "snapshotBytes": 3007
+}

@@ -1,0 +1,120 @@
+{
+  "check": "V11-assets",
+  "kind": "sheet",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-24T22:47:00.384Z",
+  "sources": [
+    "/api/assets/196c7dea-7378-40bd-9b9a-5e1baef90b27",
+    "/api/assets/ec147a56-a1e5-4eb7-9028-1b60e559f80e"
+  ],
+  "uploaderCookie": [
+    {
+      "name": "m0_sid",
+      "httpOnly": true,
+      "sameSite": "Strict"
+    }
+  ],
+  "sameSession": {
+    "reads": [
+      {
+        "status": 200,
+        "hasSession": true,
+        "mode": "no-cors"
+      },
+      {
+        "status": 200,
+        "hasSession": true,
+        "mode": "cors"
+      }
+    ],
+    "load": [
+      {
+        "source": "/api/assets/196c7dea-7378-40bd-9b9a-5e1baef90b27",
+        "cached": false,
+        "complete": false,
+        "width": 0
+      },
+      {
+        "source": "/api/assets/ec147a56-a1e5-4eb7-9028-1b60e559f80e",
+        "cached": true,
+        "complete": true,
+        "width": 120
+      }
+    ],
+    "errors": []
+  },
+  "otherSession": {
+    "reads": [
+      {
+        "status": 200,
+        "hasSession": true
+      },
+      {
+        "status": 200,
+        "hasSession": true
+      }
+    ],
+    "load": [
+      {
+        "source": "/api/assets/196c7dea-7378-40bd-9b9a-5e1baef90b27",
+        "cached": false,
+        "complete": false,
+        "width": 0
+      },
+      {
+        "source": "/api/assets/ec147a56-a1e5-4eb7-9028-1b60e559f80e",
+        "cached": true,
+        "complete": true,
+        "width": 120
+      }
+    ],
+    "orphanStatus": 404,
+    "orphanStatusForUploader": 200,
+    "referencedStatus": 200,
+    "errors": []
+  },
+  "copy": {
+    "filesBefore": 6,
+    "filesAfter": 6,
+    "links": [
+      "196c7dea-7378-40bd-9b9a-5e1baef90b27",
+      "ec147a56-a1e5-4eb7-9028-1b60e559f80e"
+    ],
+    "statusAfterSourceDeleted": 200
+  },
+  "noCookie": {
+    "cookies": 0,
+    "reads": [
+      {
+        "status": 401,
+        "hasSession": false
+      },
+      {
+        "status": 401,
+        "hasSession": false
+      }
+    ],
+    "load": [
+      {
+        "source": "/api/assets/196c7dea-7378-40bd-9b9a-5e1baef90b27",
+        "cached": false,
+        "complete": false,
+        "width": 0
+      },
+      {
+        "source": "/api/assets/ec147a56-a1e5-4eb7-9028-1b60e559f80e",
+        "cached": false,
+        "complete": false,
+        "width": 0
+      }
+    ],
+    "errors": [
+      "InvalidStateError: The HTMLImageElement provided is in the 'broken' state. @ http://127.0.0.1:4780/assets/facade-Tx0LIZVm.js:33"
+    ]
+  }
+}

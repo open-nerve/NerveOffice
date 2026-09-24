@@ -1,0 +1,71 @@
+{
+  "check": "V11-fallback",
+  "kind": "sheet",
+  "timestamp": "2026-09-24T22:49:20.449Z",
+  "results": [
+    {
+      "server": "error-status",
+      "run": 0,
+      "reads": [
+        200,
+        200,
+        401
+      ],
+      "errors": [
+        "InvalidStateError: The HTMLImageElement provided is in the 'broken' state. @ http://127.0.0.1:4780/assets/facade-Tx0LIZVm.js:33"
+      ]
+    },
+    {
+      "server": "error-status",
+      "run": 1,
+      "reads": [
+        200,
+        401,
+        401
+      ],
+      "errors": [
+        "InvalidStateError: The HTMLImageElement provided is in the 'broken' state. @ http://127.0.0.1:4780/assets/facade-Tx0LIZVm.js:33"
+      ]
+    },
+    {
+      "server": "error-status",
+      "run": 2,
+      "reads": [
+        401,
+        401,
+        401
+      ],
+      "errors": []
+    },
+    {
+      "server": "placeholder",
+      "run": 0,
+      "reads": [
+        401,
+        200,
+        401
+      ],
+      "errors": []
+    },
+    {
+      "server": "placeholder",
+      "run": 1,
+      "reads": [
+        200,
+        401,
+        401
+      ],
+      "errors": []
+    },
+    {
+      "server": "placeholder",
+      "run": 2,
+      "reads": [
+        401,
+        401,
+        401
+      ],
+      "errors": []
+    }
+  ]
+}
