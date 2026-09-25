@@ -1,0 +1,52 @@
+{
+  "check": "V15-replay",
+  "scenario": "sheet-paste",
+  "mode": "plain",
+  "kind": "sheet",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T10:50:09.320Z",
+  "log": {
+    "stats": {
+      "logged": 1,
+      "skipped": {
+        "otherUnit": 2,
+        "onlyLocal": 6
+      },
+      "clone": {
+        "totalMs": 0,
+        "maxMs": 0
+      },
+      "cloneErrors": [],
+      "pending": 0,
+      "flushes": 1,
+      "flush": {
+        "totalMs": 0,
+        "maxMs": 0
+      },
+      "bytes": 0
+    },
+    "entries": 1,
+    "bytes": 422,
+    "ids": {
+      "sheet.mutation.set-range-values": 1
+    }
+  },
+  "replay": {
+    "executed": 1,
+    "failed": [],
+    "ms": 0,
+    "entries": 1
+  },
+  "known": null,
+  "strict": false,
+  "resolved": true,
+  "diffs": [],
+  "diffCount": 0,
+  "danglingOriginal": [],
+  "danglingReplayed": []
+}

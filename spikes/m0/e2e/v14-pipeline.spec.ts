@@ -3,15 +3,32 @@
 // - 管道各段：save()、序列化、编码、去重哈希、gzip、加密、写入 IndexedDB；主线程的同步段与异步段的最长阻塞（事件循环延迟探针，Chromium 内核另有 Long Tasks）；
 // - 恢复路径：读取、解密、解压、解析；
 // - 端到端：修改 → 按捕获时机等待 → 写入发件箱完成（"已保存在本机"），对照 §12.2 的 2 秒。
+import type { Page } from '@playwright/test';
 import type { PipelineResult } from '../src/harness/outbox/pipeline';
 
-import { test } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { browserInfo, SERVERS, writeResult } from './helpers';
 import { ensureGenerated, waitQuiet } from './p3-helpers';
 import { stats } from './perf-helpers';
 import { edit, openWithOutbox } from './p6-helpers';
 
 test.use({ baseURL: SERVERS.off });
+
+type E2eDetail = { e2eMs: number; trigger: string; formulaPending: boolean; skipped: boolean; waitMs: number; pipelineMs: number; syncMs: number; gzipMs: number; putMs: number; workerRoundTripMs: number | null };
+
+/** 最后一次自动保存：端到端、触发原因，以及"等待捕获"（修改 → 管道开始）与"管道"两段。 */
+function lastAutosave(page: Page): Promise<E2eDetail> {
+    return page.evaluate(() => {
+        const h = window.__m0!.outbox!.autosave()!.history;
+        const last = h[h.length - 1];
+        const r = last.result;
+        return {
+            e2eMs: last.e2eMs, trigger: last.trigger, formulaPending: last.formulaPending, skipped: r.skipped,
+            waitMs: r.startedAt - last.editAt, pipelineMs: r.finishedAt - r.startedAt,
+            syncMs: r.syncMs, gzipMs: r.gzipMs, putMs: r.putMs, workerRoundTripMs: r.workerRoundTripMs,
+        };
+    });
+}
 
 const SAMPLES = [
     { kind: 'sheet' as const, builder: 'big-1m' },
@@ -82,15 +99,16 @@ for (const s of SAMPLES) {
                 return out;
             });
 
-            // 3. 端到端：修改后停止，等写入发件箱完成
+            // 3. 端到端：修改后停止，等写入发件箱完成；拆成"等待捕获"（修改 → 管道开始）与"管道"两段，便于解释离群值
             const e2e: number[] = [];
+            const e2eDetail: E2eDetail[] = [];
             for (let i = 0; i < 5; i++) {
                 await edit(page, s.kind, `P6PERF${i}`);
                 await page.evaluate(() => window.__m0!.outbox!.autosave()!.idle(20_000));
-                e2e.push(await page.evaluate(() => {
-                    const h = window.__m0!.outbox!.autosave()!.history;
-                    return h[h.length - 1].e2eMs;
-                }));
+                const d = await lastAutosave(page);
+                expect.soft(d.skipped, `第 ${i + 1} 次修改：捕获真的写入了（没有被去重跳过）`).toBe(false);
+                e2e.push(d.e2eMs);
+                e2eDetail.push(d);
                 await page.waitForTimeout(500);
             }
 
@@ -103,7 +121,7 @@ for (const s of SAMPLES) {
                     gunzipMs: stats(recovery.map((r) => r.gunzipMs)),
                     parseMs: stats(recovery.map((r) => r.parseMs)),
                 },
-                e2e: { runs: e2e, ...stats(e2e) },
+                e2e: { runs: e2e, ...stats(e2e), detail: e2eDetail },
             });
         });
     }
@@ -121,15 +139,13 @@ for (const formulaWorker of [false, true]) {
         const user = `perf-f-${testInfo.project.name}-${Date.now()}`;
         await openWithOutbox(page, SERVERS.off, { kind: 'sheet', doc: id, outbox: 'worker', user, extra: formulaWorker ? 'worker=1' : '' });
         await waitQuiet(page);
-        const runs: { e2eMs: number; trigger: string; formulaPending: boolean }[] = [];
+        const runs: E2eDetail[] = [];
         for (let i = 0; i < 5; i++) {
             await page.evaluate((i) => window.__m0!.editor!.univerAPI.getActiveWorkbook()!.getSheetByName('数据表')!.getRange(`D${i + 2}`).setValue(700 + i), i);
             await page.evaluate(() => window.__m0!.outbox!.autosave()!.idle(30_000));
-            runs.push(await page.evaluate(() => {
-                const h = window.__m0!.outbox!.autosave()!.history;
-                const last = h[h.length - 1];
-                return { e2eMs: last.e2eMs, trigger: last.trigger, formulaPending: last.formulaPending };
-            }));
+            const d = await lastAutosave(page);
+            expect.soft(d.skipped, `第 ${i + 1} 次修改：捕获真的写入了（没有被去重跳过）`).toBe(false);
+            runs.push(d);
             await page.waitForTimeout(500);
         }
         const e2e = runs.map((r) => r.e2eMs);

@@ -1,0 +1,49 @@
+{
+  "check": "V15-replay",
+  "scenario": "doc-paste",
+  "mode": "plain",
+  "kind": "doc",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T10:51:51.757Z",
+  "log": {
+    "stats": {
+      "logged": 1,
+      "skipped": {},
+      "clone": {
+        "totalMs": 0,
+        "maxMs": 0
+      },
+      "cloneErrors": [],
+      "pending": 0,
+      "flushes": 1,
+      "flush": {
+        "totalMs": 1,
+        "maxMs": 1
+      },
+      "bytes": 0
+    },
+    "entries": 1,
+    "bytes": 7465,
+    "ids": {
+      "doc.mutation.rich-text-editing": 1
+    }
+  },
+  "replay": {
+    "executed": 1,
+    "failed": [],
+    "ms": 9,
+    "entries": 1
+  },
+  "known": null,
+  "strict": true,
+  "resolved": true,
+  "diffs": [],
+  "diffCount": 0,
+  "danglingOriginal": [],
+  "danglingReplayed": []
+}

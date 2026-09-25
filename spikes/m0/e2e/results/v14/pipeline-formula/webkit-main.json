@@ -1,0 +1,45 @@
+{
+  "check": "V14-pipeline-formula",
+  "formulaWorker": false,
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T11:04:37.866Z",
+  "runs": [
+    {
+      "e2eMs": 1032,
+      "trigger": "quiet",
+      "formulaPending": false
+    },
+    {
+      "e2eMs": 1028,
+      "trigger": "quiet",
+      "formulaPending": false
+    },
+    {
+      "e2eMs": 1033,
+      "trigger": "quiet",
+      "formulaPending": false
+    },
+    {
+      "e2eMs": 1036,
+      "trigger": "quiet",
+      "formulaPending": false
+    },
+    {
+      "e2eMs": 1044,
+      "trigger": "quiet",
+      "formulaPending": false
+    }
+  ],
+  "e2e": {
+    "p50": 1033,
+    "p95": 1044,
+    "max": 1044,
+    "min": 1028,
+    "n": 5
+  }
+}

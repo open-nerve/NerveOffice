@@ -1,0 +1,45 @@
+{
+  "check": "V14-pipeline-formula",
+  "formulaWorker": false,
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-25T10:59:43.430Z",
+  "runs": [
+    {
+      "e2eMs": 1055.6999999284744,
+      "trigger": "quiet",
+      "formulaPending": false
+    },
+    {
+      "e2eMs": 1037.2999999523163,
+      "trigger": "quiet",
+      "formulaPending": false
+    },
+    {
+      "e2eMs": 1023.2999999523163,
+      "trigger": "quiet",
+      "formulaPending": false
+    },
+    {
+      "e2eMs": 1033,
+      "trigger": "quiet",
+      "formulaPending": false
+    },
+    {
+      "e2eMs": 1028.6000000238419,
+      "trigger": "quiet",
+      "formulaPending": false
+    }
+  ],
+  "e2e": {
+    "p50": 1033,
+    "p95": 1055.6999999284744,
+    "max": 1055.6999999284744,
+    "min": 1023.2999999523163,
+    "n": 5
+  }
+}

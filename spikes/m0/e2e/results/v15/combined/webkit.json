@@ -1,0 +1,63 @@
+{
+  "check": "V15-combined",
+  "browser": {
+    "project": "webkit"
+  },
+  "timestamp": "2026-09-25T10:52:38.690Z",
+  "runs": [
+    {
+      "kind": "sheet",
+      "info": "restorable",
+      "mark": {
+        "logId": "p6-combined-sheet-webkit:fmy9uoqf",
+        "logSeq": 2
+      },
+      "snapshotOnly": {
+        "l1": true,
+        "l4": false
+      },
+      "replay": {
+        "executed": 6,
+        "failed": [],
+        "ms": 2,
+        "entries": 6
+      },
+      "withLog": {
+        "l4": true
+      },
+      "strict": true,
+      "resolved": true,
+      "diffs": [],
+      "diffCount": 0,
+      "danglingOriginal": [],
+      "danglingReplayed": []
+    },
+    {
+      "kind": "doc",
+      "info": "restorable",
+      "mark": {
+        "logId": "p6-combined-doc-webkit:qtz53oe1",
+        "logSeq": 1
+      },
+      "snapshotOnly": {
+        "l1": true,
+        "l4": false
+      },
+      "replay": {
+        "executed": 3,
+        "failed": [],
+        "ms": 12,
+        "entries": 3
+      },
+      "withLog": {
+        "l4": true
+      },
+      "strict": true,
+      "resolved": true,
+      "diffs": [],
+      "diffCount": 0,
+      "danglingOriginal": [],
+      "danglingReplayed": []
+    }
+  ]
+}

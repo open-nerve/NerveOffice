@@ -1,0 +1,19 @@
+{
+  "check": "V14-locks-readonly",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T10:44:27.450Z",
+  "typedWhileBusy": false,
+  "takeover": {
+    "state": "editing",
+    "ms": 3398
+  },
+  "reloads": 1,
+  "hasServer": true,
+  "typedAfter": true,
+  "saved": "saved-local"
+}

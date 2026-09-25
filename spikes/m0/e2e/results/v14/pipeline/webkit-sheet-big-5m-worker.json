@@ -1,0 +1,226 @@
+{
+  "check": "V14-pipeline",
+  "sample": "sheet-big-5m",
+  "placement": "worker",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T11:01:29.387Z",
+  "capture": {
+    "default": {
+      "saveMs": {
+        "p50": 46,
+        "p95": 50,
+        "max": 50,
+        "min": 42,
+        "n": 10
+      },
+      "stringifyMs": {
+        "p50": 24,
+        "p95": 26,
+        "max": 26,
+        "min": 24,
+        "n": 10
+      },
+      "encodeMs": {
+        "p50": 3,
+        "p95": 4,
+        "max": 4,
+        "min": 2,
+        "n": 10
+      },
+      "syncMs": {
+        "p50": 73,
+        "p95": 78,
+        "max": 78,
+        "min": 69,
+        "n": 10
+      },
+      "hashMs": {
+        "p50": 2,
+        "p95": 2,
+        "max": 2,
+        "min": 1,
+        "n": 10
+      },
+      "gzipMs": {
+        "p50": 65,
+        "p95": 66,
+        "max": 66,
+        "min": 64,
+        "n": 10
+      },
+      "encryptMs": {
+        "p50": 0,
+        "p95": 1,
+        "max": 1,
+        "min": 0,
+        "n": 10
+      },
+      "putMs": {
+        "p50": 1,
+        "p95": 1,
+        "max": 1,
+        "min": 0,
+        "n": 10
+      },
+      "workerRoundTripMs": {
+        "p50": 69,
+        "p95": 70,
+        "max": 70,
+        "min": 67,
+        "n": 10
+      },
+      "totalMs": {
+        "p50": 142,
+        "p95": 147,
+        "max": 147,
+        "min": 137,
+        "n": 10
+      },
+      "asyncMaxGapMs": {
+        "p50": 9,
+        "p95": 10,
+        "max": 10,
+        "min": 9,
+        "n": 10
+      },
+      "longestTaskMs": null,
+      "jsonBytes": 5117805,
+      "gzipBytes": 1349629,
+      "cipherBytes": 1349645,
+      "errors": 0
+    },
+    "strict": {
+      "saveMs": {
+        "p50": 48,
+        "p95": 53,
+        "max": 53,
+        "min": 37,
+        "n": 10
+      },
+      "stringifyMs": {
+        "p50": 25,
+        "p95": 27,
+        "max": 27,
+        "min": 24,
+        "n": 10
+      },
+      "encodeMs": {
+        "p50": 3,
+        "p95": 4,
+        "max": 4,
+        "min": 3,
+        "n": 10
+      },
+      "syncMs": {
+        "p50": 76,
+        "p95": 84,
+        "max": 84,
+        "min": 64,
+        "n": 10
+      },
+      "hashMs": {
+        "p50": 2,
+        "p95": 2,
+        "max": 2,
+        "min": 1,
+        "n": 10
+      },
+      "gzipMs": {
+        "p50": 65,
+        "p95": 67,
+        "max": 67,
+        "min": 64,
+        "n": 10
+      },
+      "encryptMs": {
+        "p50": 1,
+        "p95": 1,
+        "max": 1,
+        "min": 0,
+        "n": 10
+      },
+      "putMs": {
+        "p50": 1,
+        "p95": 1,
+        "max": 1,
+        "min": 1,
+        "n": 10
+      },
+      "workerRoundTripMs": {
+        "p50": 69,
+        "p95": 71,
+        "max": 71,
+        "min": 68,
+        "n": 10
+      },
+      "totalMs": {
+        "p50": 145,
+        "p95": 152,
+        "max": 152,
+        "min": 133,
+        "n": 10
+      },
+      "asyncMaxGapMs": {
+        "p50": 9,
+        "p95": 11,
+        "max": 11,
+        "min": 9,
+        "n": 10
+      },
+      "longestTaskMs": null,
+      "jsonBytes": 5117805,
+      "gzipBytes": 1349629,
+      "cipherBytes": 1349645,
+      "errors": 0
+    }
+  },
+  "recovery": {
+    "readMs": {
+      "p50": 1,
+      "p95": 1,
+      "max": 1,
+      "min": 0,
+      "n": 5
+    },
+    "decryptMs": {
+      "p50": 1,
+      "p95": 1,
+      "max": 1,
+      "min": 0,
+      "n": 5
+    },
+    "gunzipMs": {
+      "p50": 5,
+      "p95": 8,
+      "max": 8,
+      "min": 4,
+      "n": 5
+    },
+    "parseMs": {
+      "p50": 15,
+      "p95": 21,
+      "max": 21,
+      "min": 13,
+      "n": 5
+    }
+  },
+  "e2e": {
+    "runs": [
+      1178,
+      1113,
+      1115,
+      2097,
+      1106
+    ],
+    "p50": 1115,
+    "p95": 2097,
+    "max": 2097,
+    "min": 1106,
+    "n": 5
+  }
+}

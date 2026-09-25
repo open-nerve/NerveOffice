@@ -1,14 +1,14 @@
 {
   "check": "V16",
   "node": "v24.3.0",
-  "timestamp": "2026-09-25T07:11:30.647Z",
+  "timestamp": "2026-09-25T11:36:53.819Z",
   "rows": [
     {
       "sample": "sheet/empty",
       "stage": "Ready",
-      "loadMs": 18,
+      "loadMs": 19,
       "totalMs": 1522,
-      "heapMiB": 2.3,
+      "heapMiB": 1.7,
       "hooks": [
         "SHEET_AuthzIoMockService_PLUGIN",
         "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
@@ -124,8 +124,8 @@
     {
       "sample": "sheet/minimal",
       "stage": "Ready",
-      "loadMs": 11,
-      "totalMs": 1514,
+      "loadMs": 6,
+      "totalMs": 1508,
       "heapMiB": 3.4,
       "hooks": [
         "SHEET_AuthzIoMockService_PLUGIN",
@@ -242,9 +242,9 @@
     {
       "sample": "sheet/sheet-all",
       "stage": "Ready",
-      "loadMs": 20,
-      "totalMs": 1524,
-      "heapMiB": 9.3,
+      "loadMs": 6,
+      "totalMs": 1509,
+      "heapMiB": 9.4,
       "hooks": [
         "SHEET_AuthzIoMockService_PLUGIN",
         "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
@@ -278,9 +278,9 @@
     {
       "sample": "sheet/sheet-cf",
       "stage": "Ready",
-      "loadMs": 12,
-      "totalMs": 1514,
-      "heapMiB": -6.8,
+      "loadMs": 4,
+      "totalMs": 1505,
+      "heapMiB": -6.5,
       "hooks": [
         "SHEET_AuthzIoMockService_PLUGIN",
         "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
@@ -314,9 +314,9 @@
     {
       "sample": "sheet/sheet-core",
       "stage": "Ready",
-      "loadMs": 12,
-      "totalMs": 1514,
-      "heapMiB": 4.3,
+      "loadMs": 5,
+      "totalMs": 1507,
+      "heapMiB": 4.4,
       "hooks": [
         "SHEET_AuthzIoMockService_PLUGIN",
         "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
@@ -350,8 +350,8 @@
     {
       "sample": "sheet/sheet-drawing",
       "stage": "Ready",
-      "loadMs": 10,
-      "totalMs": 1512,
+      "loadMs": 5,
+      "totalMs": 1507,
       "heapMiB": 2.8,
       "hooks": [
         "SHEET_AuthzIoMockService_PLUGIN",
@@ -393,9 +393,9 @@
     {
       "sample": "sheet/sheet-dv",
       "stage": "Ready",
-      "loadMs": 12,
-      "totalMs": 1515,
-      "heapMiB": -20.2,
+      "loadMs": 3,
+      "totalMs": 1506,
+      "heapMiB": -20,
       "hooks": [
         "SHEET_AuthzIoMockService_PLUGIN",
         "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
@@ -429,8 +429,8 @@
     {
       "sample": "sheet/sheet-filter",
       "stage": "Ready",
-      "loadMs": 10,
-      "totalMs": 1513,
+      "loadMs": 5,
+      "totalMs": 1507,
       "heapMiB": 2.8,
       "hooks": [
         "SHEET_AuthzIoMockService_PLUGIN",
@@ -465,8 +465,8 @@
     {
       "sample": "sheet/sheet-hyperlink",
       "stage": "Ready",
-      "loadMs": 9,
-      "totalMs": 1511,
+      "loadMs": 4,
+      "totalMs": 1506,
       "heapMiB": 2.9,
       "hooks": [
         "SHEET_AuthzIoMockService_PLUGIN",
@@ -501,9 +501,9 @@
     {
       "sample": "sheet/sheet-note",
       "stage": "Ready",
-      "loadMs": 8,
-      "totalMs": 1511,
-      "heapMiB": 2.6,
+      "loadMs": 4,
+      "totalMs": 1506,
+      "heapMiB": 2.8,
       "hooks": [
         "SHEET_AuthzIoMockService_PLUGIN",
         "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
@@ -537,8 +537,8 @@
     {
       "sample": "sheet/sheet-protection",
       "stage": "Ready",
-      "loadMs": 12,
-      "totalMs": 1515,
+      "loadMs": 5,
+      "totalMs": 1507,
       "heapMiB": 2.9,
       "hooks": [
         "SHEET_AuthzIoMockService_PLUGIN",
@@ -573,8 +573,8 @@
     {
       "sample": "doc/doc-all",
       "stage": "Ready",
-      "loadMs": 5,
-      "totalMs": 1509,
+      "loadMs": 2,
+      "totalMs": 1504,
       "heapMiB": 0.5,
       "hooks": [
         "DOC_DRAWING_PLUGIN",
@@ -603,7 +603,7 @@
     {
       "sample": "doc/doc-drawing",
       "stage": "Ready",
-      "loadMs": 2,
+      "loadMs": 1,
       "totalMs": 1504,
       "heapMiB": 0.3,
       "hooks": [
@@ -633,9 +633,9 @@
     {
       "sample": "doc/doc-hyperlink",
       "stage": "Ready",
-      "loadMs": 2,
-      "totalMs": 1505,
-      "heapMiB": 0.1,
+      "loadMs": 1,
+      "totalMs": 1502,
+      "heapMiB": 0.3,
       "hooks": [
         "DOC_DRAWING_PLUGIN",
         "DOC_HYPER_LINK_PLUGIN",
@@ -663,8 +663,8 @@
     {
       "sample": "doc/doc-list",
       "stage": "Ready",
-      "loadMs": 2,
-      "totalMs": 1504,
+      "loadMs": 0,
+      "totalMs": 1501,
       "heapMiB": 0.3,
       "hooks": [
         "DOC_DRAWING_PLUGIN",
@@ -693,9 +693,9 @@
     {
       "sample": "doc/doc-table",
       "stage": "Ready",
-      "loadMs": 2,
-      "totalMs": 1505,
-      "heapMiB": 0.4,
+      "loadMs": 1,
+      "totalMs": 1503,
+      "heapMiB": 0.6,
       "hooks": [
         "DOC_DRAWING_PLUGIN",
         "DOC_HYPER_LINK_PLUGIN",
@@ -723,8 +723,8 @@
     {
       "sample": "doc/doc-text",
       "stage": "Ready",
-      "loadMs": 2,
-      "totalMs": 1504,
+      "loadMs": 0,
+      "totalMs": 1502,
       "heapMiB": 0.3,
       "hooks": [
         "DOC_DRAWING_PLUGIN",
@@ -754,7 +754,7 @@
       "sample": "doc/empty",
       "stage": "Ready",
       "loadMs": 1,
-      "totalMs": 1504,
+      "totalMs": 1503,
       "heapMiB": 0.3,
       "hooks": [
         "DOC_DRAWING_PLUGIN",
@@ -771,8 +771,8 @@
           {
             "path": "$.body.sectionBreaks[0].sectionId",
             "kind": "changed",
-            "before": "\"section_k-c8WtNb4GMy\"",
-            "after": "\"section_1fSqRRKhPeS1\""
+            "before": "\"section__oP2R7xqzuRv\"",
+            "after": "\"section_D3Tvc8uPdns3\""
           }
         ]
       },
@@ -783,7 +783,7 @@
           {
             "path": "$.body.sectionBreaks[0].sectionId",
             "kind": "added",
-            "after": "\"section_4abwQ0cIQphl\""
+            "after": "\"section_RhdYOqjoAb7U\""
           },
           {
             "path": "$.documentStyle.autoHyphenation",
@@ -829,7 +829,7 @@
           {
             "path": "$.body.sectionBreaks[0].sectionId",
             "kind": "added",
-            "after": "\"section_1fSqRRKhPeS1\""
+            "after": "\"section_D3Tvc8uPdns3\""
           },
           {
             "path": "$.documentStyle.autoHyphenation",
@@ -873,7 +873,7 @@
       "sample": "doc/minimal",
       "stage": "Ready",
       "loadMs": 1,
-      "totalMs": 1503,
+      "totalMs": 1500,
       "heapMiB": 0.3,
       "hooks": [
         "DOC_DRAWING_PLUGIN",
@@ -890,8 +890,8 @@
           {
             "path": "$.body.sectionBreaks[0].sectionId",
             "kind": "changed",
-            "before": "\"section_aafsfzsAMgxT\"",
-            "after": "\"section_c2MoUAD2S-ou\""
+            "before": "\"section_2lFqmgUITuxZ\"",
+            "after": "\"section_aU5VJmItREM4\""
           }
         ]
       },
@@ -902,7 +902,7 @@
           {
             "path": "$.body.sectionBreaks[0].sectionId",
             "kind": "added",
-            "after": "\"section_K9eAAJgDtaCf\""
+            "after": "\"section_uSOwdbGGwRkp\""
           },
           {
             "path": "$.documentStyle.autoHyphenation",
@@ -948,7 +948,7 @@
           {
             "path": "$.body.sectionBreaks[0].sectionId",
             "kind": "added",
-            "after": "\"section_c2MoUAD2S-ou\""
+            "after": "\"section_aU5VJmItREM4\""
           },
           {
             "path": "$.documentStyle.autoHyphenation",
@@ -991,8 +991,8 @@
     {
       "sample": "doc/p5-cap",
       "stage": "Ready",
-      "loadMs": 2,
-      "totalMs": 1504,
+      "loadMs": 0,
+      "totalMs": 1502,
       "heapMiB": 0.3,
       "hooks": [
         "DOC_DRAWING_PLUGIN",
@@ -1009,8 +1009,8 @@
           {
             "path": "$.body.sectionBreaks[0].sectionId",
             "kind": "changed",
-            "before": "\"section_6WiB0zuH1vrj\"",
-            "after": "\"section_30Oh7r_S6MPQ\""
+            "before": "\"section_57wXEIGktwWT\"",
+            "after": "\"section_2yDW4SLAIFAC\""
           }
         ]
       },
@@ -1021,7 +1021,7 @@
           {
             "path": "$.body.sectionBreaks[0].sectionId",
             "kind": "added",
-            "after": "\"section_9PYn4Srr4-Hi\""
+            "after": "\"section_WPwScxlg8KgM\""
           },
           {
             "path": "$.documentStyle.autoHyphenation",
@@ -1067,7 +1067,7 @@
           {
             "path": "$.body.sectionBreaks[0].sectionId",
             "kind": "added",
-            "after": "\"section_30Oh7r_S6MPQ\""
+            "after": "\"section_2yDW4SLAIFAC\""
           },
           {
             "path": "$.documentStyle.autoHyphenation",

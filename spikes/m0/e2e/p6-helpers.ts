@@ -79,17 +79,22 @@ export async function waitSavedLocal(page: Page, timeoutMs = 15_000): Promise<st
     return page.evaluate(async (t) => window.__m0!.outbox!.autosave()!.idle(t), timeoutMs);
 }
 
-/** 修改内容（Facade）：表格写单元格，文字文档在正文开头插入文字。返回修改后的文本标记。 */
+/** 修改内容（Facade）：表格写单元格，文字文档在正文开头插入文字。每次都是真实的内容变化。 */
 export async function edit(page: Page, kind: DocKind, mark: string): Promise<void> {
     await page.evaluate(({ kind, mark }) => {
         const api = window.__m0!.editor!.univerAPI;
         if (kind === 'sheet') {
-            // 最后一列：第一行是计数，之后每次修改往下写一格
+            // 最后一列：第一行是计数，之后每次修改往下写一格。
+            // 第一行已有非数字内容时（P3 大样本的表头"合计"）改用最后一行计数、往上写：否则计数得到 NaN，
+            // 第二次起写的都是同样的内容，捕获被去重跳过，端到端量不到写入（P6 收尾时发现）
             const ws = api.getActiveWorkbook()!.getActiveSheet();
             const col = ws.getMaxColumns() - 1;
-            const n = Number(ws.getRange(0, col).getValue() ?? 0) + 1;
-            ws.getRange(n, col).setValue(mark);
-            ws.getRange(0, col).setValue(n);
+            const head = ws.getRange(0, col).getValue();
+            const bottom = head != null && head !== '' && !Number.isFinite(Number(head));
+            const counterRow = bottom ? ws.getMaxRows() - 1 : 0;
+            const n = Number(ws.getRange(counterRow, col).getValue() ?? 0) + 1;
+            ws.getRange(bottom ? counterRow - n : n, col).setValue(mark);
+            ws.getRange(counterRow, col).setValue(n);
         } else {
             api.getActiveDocument()!.insertText(0, mark);
         }

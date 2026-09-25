@@ -1,0 +1,80 @@
+{
+  "check": "V14-pipeline-formula",
+  "formulaWorker": true,
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T12:09:43.632Z",
+  "runs": [
+    {
+      "e2eMs": 1082.5,
+      "trigger": "quiet",
+      "formulaPending": false,
+      "skipped": false,
+      "waitMs": 1060.6000000238419,
+      "pipelineMs": 21.899999976158142,
+      "syncMs": 9.100000023841858,
+      "gzipMs": 11.400000095367432,
+      "putMs": 0.6000000238418579,
+      "workerRoundTripMs": 12.799999952316284
+    },
+    {
+      "e2eMs": 1070.6000000238419,
+      "trigger": "quiet",
+      "formulaPending": false,
+      "skipped": false,
+      "waitMs": 1049.6000000238419,
+      "pipelineMs": 21,
+      "syncMs": 8.600000023841858,
+      "gzipMs": 11.300000071525574,
+      "putMs": 0.3999999761581421,
+      "workerRoundTripMs": 12.399999976158142
+    },
+    {
+      "e2eMs": 1044.3000000715256,
+      "trigger": "quiet",
+      "formulaPending": false,
+      "skipped": false,
+      "waitMs": 1023.6000000238419,
+      "pipelineMs": 20.700000047683716,
+      "syncMs": 8.700000047683716,
+      "gzipMs": 11,
+      "putMs": 0.3999999761581421,
+      "workerRoundTripMs": 12
+    },
+    {
+      "e2eMs": 1038.3999999761581,
+      "trigger": "quiet",
+      "formulaPending": false,
+      "skipped": false,
+      "waitMs": 1017.1000000238419,
+      "pipelineMs": 21.299999952316284,
+      "syncMs": 8.399999976158142,
+      "gzipMs": 11.600000023841858,
+      "putMs": 0.5,
+      "workerRoundTripMs": 12.899999976158142
+    },
+    {
+      "e2eMs": 1042.6999999284744,
+      "trigger": "quiet",
+      "formulaPending": false,
+      "skipped": false,
+      "waitMs": 1022.2999999523163,
+      "pipelineMs": 20.399999976158142,
+      "syncMs": 8.399999976158142,
+      "gzipMs": 11,
+      "putMs": 0.3999999761581421,
+      "workerRoundTripMs": 12
+    }
+  ],
+  "e2e": {
+    "p50": 1044.3000000715256,
+    "p95": 1082.5,
+    "max": 1082.5,
+    "min": 1038.3999999761581,
+    "n": 5
+  }
+}

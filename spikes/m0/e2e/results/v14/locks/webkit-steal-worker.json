@@ -1,0 +1,27 @@
+{
+  "check": "V14-locks-steal",
+  "placement": "worker",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T10:44:14.048Z",
+  "seqBefore": 1,
+  "lost": {
+    "state": "lost",
+    "ms": 0
+  },
+  "bState": "recovery-pending",
+  "bRecovery": "restorable",
+  "seqAfter": 1,
+  "aAutosave": "stopped",
+  "captureError": "没有文档的锁（lost），不写发件箱",
+  "fenced": "FenceError",
+  "seqFinal": 1,
+  "generations": {
+    "a": 1,
+    "b": 2
+  }
+}

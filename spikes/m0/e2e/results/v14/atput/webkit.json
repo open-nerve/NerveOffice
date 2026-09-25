@@ -1,0 +1,73 @@
+{
+  "check": "V14-atput",
+  "browser": {
+    "project": "webkit"
+  },
+  "timestamp": "2026-09-25T10:42:23.613Z",
+  "runs": [
+    {
+      "run": 0,
+      "first": 1,
+      "status": "restorable",
+      "seq": 2,
+      "error": null,
+      "killNote": "有 1 个别的 WebKit 实例在跑，没有杀 XPC 服务"
+    },
+    {
+      "run": 1,
+      "first": 3,
+      "status": "restorable",
+      "seq": 4,
+      "error": null,
+      "killNote": "有 1 个别的 WebKit 实例在跑，没有杀 XPC 服务"
+    },
+    {
+      "run": 2,
+      "first": 5,
+      "status": "restorable",
+      "seq": 6,
+      "error": null,
+      "killNote": "有 1 个别的 WebKit 实例在跑，没有杀 XPC 服务"
+    },
+    {
+      "run": 3,
+      "first": 7,
+      "status": "restorable",
+      "seq": 8,
+      "error": null,
+      "killNote": "有 1 个别的 WebKit 实例在跑，没有杀 XPC 服务"
+    },
+    {
+      "run": 4,
+      "first": 9,
+      "status": "restorable",
+      "seq": 10,
+      "error": null,
+      "killNote": "有 1 个别的 WebKit 实例在跑，没有杀 XPC 服务"
+    },
+    {
+      "run": 5,
+      "first": 11,
+      "status": "restorable",
+      "seq": 12,
+      "error": null,
+      "killNote": "有 1 个别的 WebKit 实例在跑，没有杀 XPC 服务"
+    },
+    {
+      "run": 6,
+      "first": 13,
+      "status": "restorable",
+      "seq": 14,
+      "error": null,
+      "killNote": "有 1 个别的 WebKit 实例在跑，没有杀 XPC 服务"
+    },
+    {
+      "run": 7,
+      "first": 15,
+      "status": "restorable",
+      "seq": 16,
+      "error": null,
+      "killNote": "有 1 个别的 WebKit 实例在跑，没有杀 XPC 服务"
+    }
+  ]
+}

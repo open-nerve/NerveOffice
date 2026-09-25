@@ -1,0 +1,80 @@
+{
+  "check": "V14-pipeline-formula",
+  "formulaWorker": false,
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T12:09:30.689Z",
+  "runs": [
+    {
+      "e2eMs": 1074.9000000953674,
+      "trigger": "quiet",
+      "formulaPending": false,
+      "skipped": false,
+      "waitMs": 1051.4000000953674,
+      "pipelineMs": 23.5,
+      "syncMs": 9.5,
+      "gzipMs": 12.700000047683716,
+      "putMs": 0.5,
+      "workerRoundTripMs": 14
+    },
+    {
+      "e2eMs": 1027.3999999761581,
+      "trigger": "quiet",
+      "formulaPending": false,
+      "skipped": false,
+      "waitMs": 1004.5,
+      "pipelineMs": 22.899999976158142,
+      "syncMs": 9.299999952316284,
+      "gzipMs": 12.600000023841858,
+      "putMs": 0.3999999761581421,
+      "workerRoundTripMs": 13.600000023841858
+    },
+    {
+      "e2eMs": 1028.3999999761581,
+      "trigger": "quiet",
+      "formulaPending": false,
+      "skipped": false,
+      "waitMs": 1005.7000000476837,
+      "pipelineMs": 22.699999928474426,
+      "syncMs": 9,
+      "gzipMs": 12.5,
+      "putMs": 0.3999999761581421,
+      "workerRoundTripMs": 13.699999928474426
+    },
+    {
+      "e2eMs": 1023.3999999761581,
+      "trigger": "quiet",
+      "formulaPending": false,
+      "skipped": false,
+      "waitMs": 1000.5999999046326,
+      "pipelineMs": 22.800000071525574,
+      "syncMs": 9.300000071525574,
+      "gzipMs": 12.399999976158142,
+      "putMs": 0.5,
+      "workerRoundTripMs": 13.5
+    },
+    {
+      "e2eMs": 1043.1999999284744,
+      "trigger": "quiet",
+      "formulaPending": false,
+      "skipped": false,
+      "waitMs": 1019.7999999523163,
+      "pipelineMs": 23.399999976158142,
+      "syncMs": 9.700000047683716,
+      "gzipMs": 12.399999976158142,
+      "putMs": 0.5,
+      "workerRoundTripMs": 13.699999928474426
+    }
+  ],
+  "e2e": {
+    "p50": 1028.3999999761581,
+    "p95": 1074.9000000953674,
+    "max": 1074.9000000953674,
+    "min": 1023.3999999761581,
+    "n": 5
+  }
+}
