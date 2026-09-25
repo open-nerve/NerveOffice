@@ -1,0 +1,57 @@
+{
+  "check": "V14-locks",
+  "release": "crash",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T06:41:27.259Z",
+  "initial": {
+    "a": {
+      "state": "editing",
+      "lock": "held",
+      "recovery": {
+        "status": "none",
+        "record": null,
+        "serverRevision": null,
+        "error": null
+      },
+      "autosave": "idle",
+      "saves": 0,
+      "lastError": null
+    },
+    "b": {
+      "state": "busy",
+      "lock": "busy",
+      "recovery": null,
+      "autosave": null,
+      "saves": 0,
+      "lastError": null
+    }
+  },
+  "bWritesWhileBusy": 0,
+  "takeover": {
+    "state": "recovery-pending",
+    "ms": 12.599999904632568
+  },
+  "after": {
+    "state": "recovery-pending",
+    "lock": "held",
+    "recovery": {
+      "status": "restorable",
+      "record": {
+        "localSeq": 1,
+        "baseRevision": 1,
+        "updatedAt": 1790318487199,
+        "jsonBytes": 5406
+      },
+      "serverRevision": 1,
+      "error": null
+    },
+    "autosave": null,
+    "saves": 0,
+    "lastError": null
+  }
+}

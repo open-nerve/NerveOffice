@@ -9,6 +9,7 @@ import type { CspMode } from './csp.ts';
 
 import { copyLinks, handleAssets, removeLinks, sessionCookieHeader, sessionOf, updateLinks } from './assets.ts';
 import { cspHeaders } from './csp.ts';
+import { handleKeys } from './keys.ts';
 import { extractImages } from './snapshot-images.ts';
 
 const { values } = parseArgs({
@@ -62,6 +63,8 @@ const selftests: unknown[] = [];
 const imeLogs = new Map<string, { session: string }>();
 /** 文档存储（内存）：P2 起用于保存重开、复制等实验。键是文档 id，值是快照 JSON 原文。 */
 const documents = new Map<string, string>();
+/** 修订号（P6）：每次保存加一；PUT 带 ?base=N 时是条件写入，修订号不等返回 409（模拟 00 号计划书 §7.4 的 baseRevision 检查）。 */
+const revisions = new Map<string, number>();
 const DOC_PATH = /^\/api\/docs\/([\w.-]+)$/;
 const DOC_COPY_PATH = /^\/api\/docs\/([\w.-]+)\/copy$/;
 
@@ -105,6 +108,7 @@ const server = createServer(async (req, res) => {
             return;
         }
         if (await handleAssets(req, res, url, { fallback: values['asset-fallback'] })) return;
+        if (handleKeys(req, res, url)) return;
         if (url.pathname === '/__csp-reports') {
             if (req.method === 'DELETE') {
                 reports.length = 0;
@@ -131,14 +135,23 @@ const server = createServer(async (req, res) => {
                         return;
                     }
                 }
+                const current = revisions.get(id) ?? 0;
+                const base = url.searchParams.get('base');
+                if (base != null && Number(base) !== current) {
+                    res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8', 'X-Revision': String(current) });
+                    res.end(JSON.stringify({ error: 'revision-conflict', revision: current }));
+                    return;
+                }
                 documents.set(id, text);
+                revisions.set(id, current + 1);
                 // 引用关系：只为保存者有权读取的图片建立（00 号计划书 §8.5，P4 审查 R2），没有建立的写进响应头供验证
                 const update = updateLinks(id, snapshot, sessionOf(req));
-                res.writeHead(204, { 'X-Asset-Links': `linked=${update.linked.length}; ignored=${update.ignored.join(',')}` }).end();
+                res.writeHead(204, { 'X-Asset-Links': `linked=${update.linked.length}; ignored=${update.ignored.join(',')}`, 'X-Revision': String(current + 1) }).end();
                 return;
             }
             if (req.method === 'DELETE') {
                 documents.delete(id);
+                revisions.delete(id);
                 removeLinks(id);
                 res.writeHead(204).end();
                 return;
@@ -148,7 +161,7 @@ const server = createServer(async (req, res) => {
                 res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('document not found');
                 return;
             }
-            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Revision': String(revisions.get(id) ?? 0) });
             res.end(text);
             return;
         }
@@ -162,6 +175,7 @@ const server = createServer(async (req, res) => {
             }
             // 原样复制：不改 unitId 与工作表 id（00 号计划书 §8.3）；只新增引用关系，不复制图片文件（§8.5）
             documents.set(to, source);
+            revisions.set(to, 1);
             copyLinks(copyMatch[1], to);
             res.writeHead(204).end();
             return;

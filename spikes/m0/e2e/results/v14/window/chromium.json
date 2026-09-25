@@ -1,0 +1,53 @@
+{
+  "check": "V14-window",
+  "browser": {
+    "project": "chromium"
+  },
+  "timestamp": "2026-09-25T06:41:06.703Z",
+  "intervalMs": 200,
+  "runs": [
+    {
+      "edits": 16,
+      "editingMs": 3252,
+      "recovered": 15,
+      "lossMs": 424,
+      "contiguous": true,
+      "history": [
+        {
+          "trigger": "cap",
+          "e2eMs": 21
+        }
+      ]
+    },
+    {
+      "edits": 23,
+      "editingMs": 4704,
+      "recovered": 15,
+      "lossMs": 1924,
+      "contiguous": true,
+      "history": [
+        {
+          "trigger": "cap",
+          "e2eMs": 68
+        }
+      ]
+    },
+    {
+      "edits": 30,
+      "editingMs": 6187,
+      "recovered": 30,
+      "lossMs": 208,
+      "contiguous": true,
+      "history": [
+        {
+          "trigger": "cap",
+          "e2eMs": 73
+        },
+        {
+          "trigger": "cap",
+          "e2eMs": 19
+        }
+      ]
+    }
+  ]
+}

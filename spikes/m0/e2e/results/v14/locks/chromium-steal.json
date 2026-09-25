@@ -1,0 +1,17 @@
+{
+  "check": "V14-locks-steal",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T06:41:43.403Z",
+  "lost": {
+    "state": "lost",
+    "ms": 0
+  },
+  "before": 0,
+  "afterWrites": 0,
+  "captureError": "没有文档的锁（lost），不写发件箱"
+}

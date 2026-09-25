@@ -1,0 +1,47 @@
+{
+  "check": "V14-conflict",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T06:37:09.394Z",
+  "conflict": {
+    "state": "recovery-pending",
+    "lock": "held",
+    "recovery": {
+      "status": "conflict",
+      "record": {
+        "localSeq": 1,
+        "baseRevision": 1,
+        "updatedAt": 1790318217393,
+        "jsonBytes": 5406
+      },
+      "serverRevision": 2,
+      "error": null
+    },
+    "autosave": null,
+    "saves": 0,
+    "lastError": null
+  },
+  "restoreError": "不能恢复：conflict",
+  "revoked": {
+    "state": "recovery-pending",
+    "lock": "held",
+    "recovery": {
+      "status": "undecryptable",
+      "record": {
+        "localSeq": 1,
+        "baseRevision": 1,
+        "updatedAt": 1790318225719,
+        "jsonBytes": 5406
+      },
+      "serverRevision": 1,
+      "error": "OperationError"
+    },
+    "autosave": null,
+    "saves": 0,
+    "lastError": null
+  }
+}

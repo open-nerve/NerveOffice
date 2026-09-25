@@ -32,6 +32,14 @@ export interface PageParams {
     outline: boolean;
     /** 目录块插件（P5 评估用，docs-toc 与 docs-toc-ui）：doc@1 不注册，tocblock=1 时注册。 */
     tocblock: boolean;
+    /** 本机发件箱（P6）：off 不启用；main、worker 为写入管道的放置方式（压缩、加密、写入在主线程或 Worker）。 */
+    outbox: 'off' | 'main' | 'worker';
+    /** 当前用户（P6：发件箱按用户隔离，密钥按用户下发）。 */
+    user: string;
+    /** 发件箱写入的持久性（P6）：default 为浏览器默认，strict 要求落盘后才完成。 */
+    durability: 'default' | 'strict';
+    /** mutation 增量日志（P6，V15）。 */
+    mutlog: boolean;
     /** 真实 Safari 自检：场景名；完成后跳转到 next。 */
     selftest?: string;
     next?: string;
@@ -57,6 +65,10 @@ export function readPageParams(defaultSample: string): PageParams {
         imelog: q.get('imelog') === '1',
         outline: q.get('outline') === '1',
         tocblock: q.get('tocblock') === '1',
+        outbox: q.get('outbox') === 'main' ? 'main' : q.get('outbox') === 'worker' ? 'worker' : 'off',
+        user: /^[\w.-]+$/.test(q.get('user') ?? '') ? q.get('user')! : 'u1',
+        durability: q.get('durability') === 'strict' ? 'strict' : 'default',
+        mutlog: q.get('mutlog') === '1',
         selftest: q.get('selftest') ?? undefined,
         next: q.get('next') ?? undefined,
     };

@@ -18,6 +18,7 @@ import { countingWorkerFactory, createWorkerStats } from '../harness/worker-stat
 import { imageEvents } from '../harness/platform-image-io';
 import { docPolicyEvents } from '../harness/doc-policy';
 import { installImeRecorder } from '../harness/ime-recorder';
+import { installOutbox } from '../harness/outbox/index';
 import { IImageIoService } from '@univerjs/core';
 import { DocSelectionManagerService } from '@univerjs/docs';
 import type { ImageFunctionPolicy } from '../harness/image-function-policy';
@@ -31,10 +32,11 @@ interface EditorShellProps {
     builders?: Record<string, SampleBuilder>;
 }
 
-/** 从验证服务的文档存储读取快照。 */
+/** 从验证服务的文档存储读取快照；服务端当前的修订号（P6）记进 window.__m0.loadedRevision。 */
 async function loadStoredDocument(id: string): Promise<Record<string, unknown>> {
     const res = await fetch(`/api/docs/${encodeURIComponent(id)}`, { cache: 'no-store' });
     if (!res.ok) throw new Error(`文档不存在：${id}`);
+    if (window.__m0 != null) window.__m0.loadedRevision = Number(res.headers.get('X-Revision') ?? '0');
     return (await res.json()) as Record<string, unknown>;
 }
 
@@ -130,12 +132,38 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
             },
         };
 
+        // 用给定的快照重建编辑器（P6：从发件箱恢复）
+        const reopen = async (data: Record<string, unknown>): Promise<EditorHandle> => {
+            window.__m0!.editor?.dispose();
+            window.__m0!.editor = undefined;
+            const editor = await open('edit', data, params.ro);
+            window.__m0!.editor = editor;
+            return editor;
+        };
+
         ready.then(
             async (editor) => {
                 window.__m0!.editor = editor;
                 if (params.imelog && profile.kind === 'doc') window.__m0!.imeRecorder = installImeRecorder(editor);
                 setStatus('ready');
                 setMessage(`steady ${Math.round(editor.timings.steady ?? -1)} ms`);
+                // 发件箱（P6）在编辑器就绪之后安装：用例用 window.__m0.outbox 是否出现来判断装好了没有
+                if (params.outbox !== 'off' && params.mode === 'edit') {
+                    try {
+                        window.__m0!.outbox = await installOutbox({
+                            editor: () => window.__m0!.editor!,
+                            reopen,
+                            user: params.user,
+                            docId: params.doc ?? editor.unitId(),
+                            revision: window.__m0!.loadedRevision ?? 0,
+                            placement: params.outbox,
+                            durability: params.durability,
+                        });
+                    } catch (error) {
+                        window.__m0!.outboxError = error instanceof Error ? error.message : String(error);
+                    }
+                }
+
                 if (params.selftest != null) {
                     await runSelftest(editor, params.selftest, { events: pageEvents, workerStats });
                     if (params.next != null) location.href = params.next;

@@ -1,0 +1,42 @@
+{
+  "check": "V14-quota-full",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T06:43:23.876Z",
+  "quotaSize": 8388608,
+  "writes": 31,
+  "failed": {
+    "key": "fill-30",
+    "error": "QuotaExceededError",
+    "cipherBytes": 259771,
+    "localSeq": 0
+  },
+  "estimate": {
+    "quota": 10745692160,
+    "usage": 8273920,
+    "usageDetails": {
+      "indexedDB": 8273920
+    }
+  },
+  "checks": {
+    "first": "conflict",
+    "failed": "none"
+  },
+  "autosave": {
+    "state": "editing",
+    "lock": "held",
+    "recovery": {
+      "status": "none",
+      "record": null,
+      "serverRevision": null,
+      "error": null
+    },
+    "autosave": "error",
+    "saves": 0,
+    "lastError": "QuotaExceededError"
+  }
+}
