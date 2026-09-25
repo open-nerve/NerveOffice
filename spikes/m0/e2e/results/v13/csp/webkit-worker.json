@@ -7,7 +7,7 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T02:54:30.452Z",
+  "timestamp": "2026-09-25T08:30:59.673Z",
   "steps": [
     {
       "step": "加载 doc-all（含大纲侧栏）",

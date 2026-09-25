@@ -291,7 +291,10 @@ test('V13 候选框锚点：隐藏输入元素里的组合文字与画布光标'
     for (const [zoom, nowrap] of [[1, false], [1.5, false], [1, true]] as const) {
         await openDoc(page, 'sample=p5-cap');
         if (nowrap) {
-            await page.addStyleTag({ content: 'div[id^="__editor_"] { white-space: pre !important; }' });
+            // 用 CSSOM 设置（不插入 <style>）：严格 CSP 的探测策略不含 'unsafe-inline'，WebKit 下 addStyleTag 会被报告为违规而失败
+            await page.evaluate(() => {
+                for (const el of document.querySelectorAll<HTMLElement>('div[id^="__editor_"]')) el.style.setProperty('white-space', 'pre', 'important');
+            });
         }
         await focusEditor(page);
         if (zoom !== 1) {

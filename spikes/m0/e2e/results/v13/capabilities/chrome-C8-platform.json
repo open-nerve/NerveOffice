@@ -6,7 +6,7 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-25T02:54:15.184Z",
+  "timestamp": "2026-09-25T08:06:45.612Z",
   "id": "C8",
   "name": "`/` 快捷插入",
   "config": "platform",
@@ -53,6 +53,11 @@
       }
     },
     {
+      "step": "不经过按键输入的 `/`：原样插入，其后的字不丢",
+      "ok": true,
+      "detail": "段落甲：用于标题样式。"
+    },
+    {
       "step": "粗体文字中间键入 `/`：沿用粗体",
       "ok": true,
       "detail": {
@@ -74,7 +79,7 @@
     }
   ],
   "undo": {
-    "count": 6,
+    "count": 7,
     "restored": true,
     "redone": true
   },
@@ -94,23 +99,27 @@
     },
     {
       "kind": "slash-insert",
-      "detail": "offset 44"
+      "detail": "keydown offset 44"
     },
     {
       "kind": "slash-insert",
-      "detail": "offset 51"
+      "detail": "keydown offset 51"
     },
     {
       "kind": "slash-insert",
-      "detail": "offset 53"
+      "detail": "keydown offset 53"
     },
     {
       "kind": "slash-insert",
-      "detail": "offset 37"
+      "detail": "beforeinput offset 64"
     },
     {
       "kind": "slash-insert",
-      "detail": "offset 95"
+      "detail": "keydown offset 37"
+    },
+    {
+      "kind": "slash-insert",
+      "detail": "keydown offset 97"
     }
   ],
   "summary": {
@@ -118,7 +127,7 @@
       "paragraphs": 8
     },
     "after": {
-      "text": "能力矩阵样本\r段落甲：用于标题样式。\r段落乙：用于字符格式，这里有一段可以/选中的文字 a/b 2026/9/25。\r段落丙：用于对齐。\r段落丁：列表第一项\r段落戊：列表第二项\r段落己：链接/文字与查找替换，查找目标出现两次：查找目标。\r\r\u001a\u001b\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u000e\u001b\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u000e\u001b\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u000e\u000f\r\n",
+      "text": "能力矩阵样本\r段落甲：用于标题样式。\r段落乙：用于字符格式，这里有一段可以/选中的文字 a/b 2026/9/25。\r段落丙：用于/x对齐。\r段落丁：列表第一项\r段落戊：列表第二项\r段落己：链接/文字与查找替换，查找目标出现两次：查找目标。\r\r\u001a\u001b\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u000e\u001b\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u000e\u001b\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u000e\u000f\r\n",
       "paragraphs": [
         {
           "text": "能力矩阵样本",
@@ -145,7 +154,7 @@
           "inTable": false
         },
         {
-          "text": "段落丙：用于对齐。",
+          "text": "段落丙：用于/x对齐。",
           "style": null,
           "align": null,
           "list": null,
@@ -334,6 +343,14 @@
         },
         {
           "text": " a/b 2026/9/25",
+          "ts": {
+            "cl": {
+              "rgb": "#1B1C1F"
+            }
+          }
+        },
+        {
+          "text": "x",
           "ts": {
             "cl": {
               "rgb": "#1B1C1F"

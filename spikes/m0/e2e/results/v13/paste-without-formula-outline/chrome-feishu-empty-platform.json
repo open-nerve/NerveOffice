@@ -1,0 +1,89 @@
+{
+  "check": "V13-paste",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-25T09:07:59.788Z",
+  "source": "feishu",
+  "target": "empty",
+  "config": "platform",
+  "dispatched": {
+    "target": "div",
+    "defaultPrevented": true
+  },
+  "changed": true,
+  "diff": {
+    "paragraphs": 7,
+    "headings": [
+      "4:迭代计划"
+    ],
+    "lists": [
+      "ORDER_LIST/0:梳理能力清单",
+      "ORDER_LIST/0:补齐测试样本",
+      "BULLET_LIST/0:风险：真实输入法需要"
+    ],
+    "aligns": [],
+    "tables": [],
+    "links": [
+      "另一篇文档→https://example.feishu.cn/docx/doxcnExample0002"
+    ],
+    "images": [],
+    "runs": [
+      {
+        "text": "迭代计划",
+        "ts": {
+          "fs": 19.5,
+          "bl": 1
+        }
+      },
+      {
+        "text": "文字文档",
+        "ts": {
+          "bl": 1
+        }
+      },
+      {
+        "text": "不做",
+        "ts": {
+          "st": {
+            "s": 1
+          },
+          "cl": {
+            "rgb": "rgb(200,30,30)"
+          }
+        }
+      },
+      {
+        "text": "高亮的文字",
+        "ts": {
+          "bg": {
+            "rgb": "rgb(255,246,122)"
+          }
+        }
+      }
+    ]
+  },
+  "features": {
+    "标题": true,
+    "粗体": true,
+    "删除线": true,
+    "编号列表": true,
+    "项目符号": true,
+    "高亮": true,
+    "链接": true
+  },
+  "pwned": null,
+  "unsafeLinks": [],
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  },
+  "policyEvents": [],
+  "roundtrip": {
+    "firstDiff": [],
+    "secondDiff": []
+  }
+}

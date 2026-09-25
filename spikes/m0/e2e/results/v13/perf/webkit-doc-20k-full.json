@@ -8,7 +8,7 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T02:38:22.688Z",
+  "timestamp": "2026-09-25T10:36:28.716Z",
   "size": {
     "chars": 20780,
     "tables": 8,
@@ -19,24 +19,24 @@
     "runs": [
       {
         "ready": 213,
-        "rendered": 556,
-        "steady": 3559
+        "rendered": 560,
+        "steady": 3565
       },
       {
-        "ready": 159,
-        "rendered": 495,
-        "steady": 3497
+        "ready": 162,
+        "rendered": 489,
+        "steady": 3491
       },
       {
-        "ready": 160,
-        "rendered": 493,
-        "steady": 3495
+        "ready": 165,
+        "rendered": 494,
+        "steady": 3496
       }
     ],
     "median": {
-      "ready": 160,
-      "rendered": 495,
-      "steady": 3497
+      "ready": 165,
+      "rendered": 494,
+      "steady": 3496
     }
   },
   "heap": {
@@ -45,33 +45,48 @@
   },
   "typing": {
     "latency": {
-      "p50": 73,
-      "p95": 89,
-      "max": 104,
-      "min": 63,
+      "p50": 72,
+      "p95": 83,
+      "max": 93,
+      "min": 62,
       "n": 100
     },
-    "blockMs": 88,
-    "frameGapMs": 96
+    "painted": {
+      "p50": 94,
+      "p95": 554,
+      "max": 554,
+      "min": 87,
+      "n": 10
+    },
+    "blockMs": 81,
+    "frameGapMs": 88
   },
   "ime": {
     "driver": "webkit",
     "update": {
-      "p50": 71,
-      "p95": 82,
-      "max": 86,
-      "min": 63,
+      "p50": 70,
+      "p95": 81,
+      "max": 91,
+      "min": 62,
       "n": 60
     },
+    "updatePainted": {
+      "p50": 90,
+      "p95": 941,
+      "max": 966,
+      "min": 76,
+      "n": 20
+    },
     "end": {
-      "p50": 68,
-      "p95": 81,
-      "max": 81,
+      "p50": 73,
+      "p95": 83,
+      "max": 83,
       "min": 65,
       "n": 10
     },
     "committed": 10,
     "blockMs": 78,
-    "frameGapMs": 97
-  }
+    "frameGapMs": 94
+  },
+  "paintMissed": 0
 }

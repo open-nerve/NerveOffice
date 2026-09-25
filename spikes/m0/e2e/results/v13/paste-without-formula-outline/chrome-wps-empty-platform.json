@@ -1,0 +1,138 @@
+{
+  "check": "V13-paste",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-25T09:07:08.284Z",
+  "source": "wps",
+  "target": "empty",
+  "config": "platform",
+  "dispatched": {
+    "target": "div",
+    "defaultPrevented": true
+  },
+  "changed": true,
+  "diff": {
+    "paragraphs": 9,
+    "headings": [],
+    "lists": [
+      "ORDER_LIST/0:表格与文字文档",
+      "ORDER_LIST/0:本地优先保存"
+    ],
+    "aligns": [
+      "2:指标",
+      "2:数值"
+    ],
+    "tables": [
+      "2×2"
+    ],
+    "links": [],
+    "images": [],
+    "runs": [
+      {
+        "text": "季度总结",
+        "ts": {
+          "bl": 1,
+          "ff": "微软雅黑",
+          "fs": 22
+        }
+      },
+      {
+        "text": "本季度的",
+        "ts": {
+          "ff": "宋体",
+          "fs": 10
+        }
+      },
+      {
+        "text": "重点",
+        "ts": {
+          "bl": 1,
+          "ff": "宋体",
+          "fs": 10
+        }
+      },
+      {
+        "text": "是交付",
+        "ts": {
+          "ff": "宋体",
+          "cl": {
+            "rgb": "rgb(255,0,0)"
+          },
+          "fs": 10
+        }
+      },
+      {
+        "text": "在线文档平台。",
+        "ts": {
+          "ff": "宋体",
+          "fs": 10
+        }
+      },
+      {
+        "text": "表格与文字文档",
+        "ts": {
+          "ff": "宋体",
+          "fs": 10
+        }
+      },
+      {
+        "text": "本地优先保存",
+        "ts": {
+          "ff": "宋体",
+          "fs": 10
+        }
+      },
+      {
+        "text": "指标",
+        "ts": {
+          "ff": "宋体",
+          "fs": 10
+        }
+      },
+      {
+        "text": "数值",
+        "ts": {
+          "ff": "宋体",
+          "fs": 10
+        }
+      },
+      {
+        "text": "用户数",
+        "ts": {
+          "ff": "宋体",
+          "fs": 10
+        }
+      },
+      {
+        "text": "100",
+        "ts": {
+          "ff": "Calibri",
+          "fs": 10
+        }
+      }
+    ]
+  },
+  "features": {
+    "标题": false,
+    "粗体": true,
+    "红色": true,
+    "下划线": false,
+    "编号列表": true,
+    "表格": true
+  },
+  "pwned": null,
+  "unsafeLinks": [],
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  },
+  "policyEvents": [],
+  "roundtrip": {
+    "firstDiff": [],
+    "secondDiff": []
+  }
+}

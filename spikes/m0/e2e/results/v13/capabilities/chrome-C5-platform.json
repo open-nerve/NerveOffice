@@ -6,7 +6,7 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-25T02:51:53.141Z",
+  "timestamp": "2026-09-25T08:03:41.501Z",
   "id": "C5",
   "name": "基础表格",
   "config": "platform",
@@ -119,7 +119,7 @@
   "policyEvents": [
     {
       "kind": "slash-insert",
-      "detail": "offset 128"
+      "detail": "keydown offset 128"
     }
   ],
   "summary": {

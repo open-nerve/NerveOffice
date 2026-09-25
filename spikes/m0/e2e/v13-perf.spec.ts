@@ -108,7 +108,11 @@ for (const sample of ['doc-20k-full', 'p5-cap'] as const) {
                     };
                     requestAnimationFrame(poll);
                 };
-                document.addEventListener('keydown', (e) => watch(w.__paint.key, e.timeStamp), true);
+                // 只量键入：WebKit 的合成输入法驱动会派发 keyCode 229 的 keydown，它们的画面变化来自之后的组合更新，不能算进键入
+                document.addEventListener('keydown', (e) => {
+                    if (e.isComposing || e.keyCode === 229) return;
+                    watch(w.__paint.key, e.timeStamp);
+                }, true);
                 document.addEventListener('compositionupdate', (e) => watch(w.__paint.update, e.timeStamp), true);
             });
             await page.keyboard.type('abcdefghij', { delay: 350 });

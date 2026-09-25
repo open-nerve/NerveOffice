@@ -6,7 +6,7 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-25T02:51:12.090Z",
+  "timestamp": "2026-09-25T08:17:22.589Z",
   "facadeHeadings": {
     "inserted": false,
     "paragraphs": [
@@ -44,7 +44,7 @@
       "type": 0,
       "text": "段落甲：用于标题样式。\t\u001f1\u001e",
       "properties": {
-        "headingId": "sLz4hu",
+        "headingId": "rcLKzq",
         "textStyleMode": "text"
       }
     },
@@ -53,7 +53,7 @@
       "text": "\u001f1\u001e",
       "properties": {
         "fieldType": "PAGEREF",
-        "instruction": "PAGEREF sLz4hu \\h",
+        "instruction": "PAGEREF rcLKzq \\h",
         "cachedResult": "1",
         "sourceKind": "complex"
       }
@@ -62,7 +62,7 @@
       "type": 0,
       "text": "段落乙：用于字符格式，这里有一段可以选中",
       "properties": {
-        "headingId": "UpnEL1",
+        "headingId": "9lJmMl",
         "textStyleMode": "text"
       }
     },
@@ -71,7 +71,7 @@
       "text": "\u001f1\u001e",
       "properties": {
         "fieldType": "PAGEREF",
-        "instruction": "PAGEREF UpnEL1 \\h",
+        "instruction": "PAGEREF 9lJmMl \\h",
         "cachedResult": "1",
         "sourceKind": "complex"
       }
@@ -80,7 +80,7 @@
       "type": 0,
       "text": "段落丙：用于对齐。\t\u001f1\u001e",
       "properties": {
-        "headingId": "Qq5WVO",
+        "headingId": "I5mHpl",
         "textStyleMode": "text"
       }
     },
@@ -89,7 +89,7 @@
       "text": "\u001f1\u001e",
       "properties": {
         "fieldType": "PAGEREF",
-        "instruction": "PAGEREF Qq5WVO \\h",
+        "instruction": "PAGEREF I5mHpl \\h",
         "cachedResult": "1",
         "sourceKind": "complex"
       }

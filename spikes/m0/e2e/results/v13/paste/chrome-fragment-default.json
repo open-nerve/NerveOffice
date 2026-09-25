@@ -7,9 +7,9 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-25T03:24:28.760Z",
+  "timestamp": "2026-09-25T08:24:15.007Z",
   "diff": {
-    "paragraphs": 1,
+    "paragraphs": 3,
     "headings": [
       "4:恶意链接与标题"
     ],
@@ -17,11 +17,14 @@
     "aligns": [],
     "tables": [],
     "links": [
-      "恶意链接→javascript:window.__p5_pwned=1"
+      "恶意链接→javascript:window.__p5_pwned=1",
+      "引号链接→https://x.test/\"><b id=p5inj>注入</b>"
     ],
     "images": [],
     "runs": []
   },
+  "sectionBreaksOutsideTables": 2,
+  "quoteLink": "https://x.test/\"><b id=p5inj>注入</b>",
   "policyEvents": [],
   "health": {
     "errors": [],

@@ -6,24 +6,24 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T05:01:06.455Z",
+  "timestamp": "2026-09-25T10:34:44.371Z",
   "results": [
     {
       "zoom": 1,
       "zoomRatio": 1,
       "nowrap": false,
       "start": {
-        "x": 748.6875,
+        "x": 741.65625,
         "y": 267.15625
       },
       "samples": [
         {
           "text": "ni",
           "canvasCaret": {
-            "x": 760.09375,
+            "x": 753.0625,
             "y": 267.15625
           },
-          "domCompositionRight": 772.765625,
+          "domCompositionRight": 765.734375,
           "domTop": 267.15625,
           "dx": 13,
           "dy": 0,
@@ -33,10 +33,10 @@
         {
           "text": "ni hao",
           "canvasCaret": {
-            "x": 788.625,
+            "x": 781.59375,
             "y": 267.15625
           },
-          "domCompositionRight": 815.390625,
+          "domCompositionRight": 808.359375,
           "domTop": 285.15625,
           "dx": 27,
           "dy": 18,
@@ -46,15 +46,15 @@
         {
           "text": "ni hao shi jie",
           "canvasCaret": {
-            "x": 830.1875,
+            "x": 823.140625,
             "y": 267.15625
           },
-          "domCompositionRight": 846.296875,
+          "domCompositionRight": 839.25,
           "domTop": 321.15625,
           "dx": 16,
           "dy": 54,
           "font": "16px -apple-system, \"system-ui\", \"PingFang SC",
-          "compositionOffsetOnCanvas": 82
+          "compositionOffsetOnCanvas": 81
         }
       ]
     },
@@ -63,17 +63,17 @@
       "zoomRatio": 1.5,
       "nowrap": false,
       "start": {
-        "x": 763.03125,
+        "x": 752.484375,
         "y": 347.75
       },
       "samples": [
         {
           "text": "ni",
           "canvasCaret": {
-            "x": 780.140625,
+            "x": 769.59375,
             "y": 347.75
           },
-          "domCompositionRight": 792.8125,
+          "domCompositionRight": 782.265625,
           "domTop": 347.75,
           "dx": 13,
           "dy": 0,
@@ -83,10 +83,10 @@
         {
           "text": "ni hao",
           "canvasCaret": {
-            "x": 822.953125,
+            "x": 812.390625,
             "y": 347.75
           },
-          "domCompositionRight": 849.71875,
+          "domCompositionRight": 839.15625,
           "domTop": 365.75,
           "dx": 27,
           "dy": 18,
@@ -96,10 +96,10 @@
         {
           "text": "ni hao shi jie",
           "canvasCaret": {
-            "x": 885.28125,
+            "x": 874.71875,
             "y": 347.75
           },
-          "domCompositionRight": 901.390625,
+          "domCompositionRight": 890.828125,
           "domTop": 401.75,
           "dx": 16,
           "dy": 54,
@@ -113,17 +113,17 @@
       "zoomRatio": 1,
       "nowrap": true,
       "start": {
-        "x": 748.6875,
+        "x": 741.65625,
         "y": 267.15625
       },
       "samples": [
         {
           "text": "ni",
           "canvasCaret": {
-            "x": 760.09375,
+            "x": 753.0625,
             "y": 267.15625
           },
-          "domCompositionRight": 772.765625,
+          "domCompositionRight": 765.734375,
           "domTop": 267.15625,
           "dx": 13,
           "dy": 0,
@@ -133,10 +133,10 @@
         {
           "text": "ni hao",
           "canvasCaret": {
-            "x": 788.625,
+            "x": 781.59375,
             "y": 267.15625
           },
-          "domCompositionRight": 832.234375,
+          "domCompositionRight": 825.203125,
           "domTop": 267.15625,
           "dx": 44,
           "dy": 0,
@@ -146,15 +146,15 @@
         {
           "text": "ni hao shi jie",
           "canvasCaret": {
-            "x": 830.1875,
+            "x": 823.140625,
             "y": 267.15625
           },
-          "domCompositionRight": 919.078125,
+          "domCompositionRight": 912.03125,
           "domTop": 267.15625,
           "dx": 89,
           "dy": 0,
           "font": "16px -apple-system, \"system-ui\", \"PingFang SC",
-          "compositionOffsetOnCanvas": 82
+          "compositionOffsetOnCanvas": 81
         }
       ]
     }
