@@ -64,7 +64,7 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
         const workerStats = createWorkerStats();
         const createCountingWorker = countingWorkerFactory(() => createWorker({ imageFunction: params.imagefn }), workerStats);
 
-        const open = async (mode: 'edit' | 'read', data: Record<string, unknown>, ro: string): Promise<EditorHandle> => {
+        const open = async (mode: 'edit' | 'read', data: Record<string, unknown>, ro: string, calc: 'default' | 'forced' = params.calc): Promise<EditorHandle> => {
             if (mode === 'read' && !READ_STRATEGIES.includes(ro as never)) throw new Error(`没有这种阅读模式方案：${ro}`);
             window.__m0!.loadedText = JSON.stringify(data);
             const editor = await createEditor({
@@ -76,7 +76,7 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
                 guard: params.guard,
                 ui: profile.ui[mode],
                 largeSheetSplit: params.split,
-                calcMode: params.calc,
+                calcMode: calc,
                 formulaIntervalCount: params.interval,
                 imageService: params.img,
                 imageFunction: params.imagefn,
@@ -147,11 +147,11 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
             });
         };
 
-        // 用给定的快照重建编辑器（P6：从发件箱恢复）
-        const reopen = async (data: Record<string, unknown>): Promise<EditorHandle> => {
+        // 用给定的快照重建编辑器（P6：从发件箱恢复；快照带"公式待更新"时打开后强制全量重算）
+        const reopen = async (data: Record<string, unknown>, options: { forceCalc?: boolean } = {}): Promise<EditorHandle> => {
             window.__m0!.editor?.dispose();
             window.__m0!.editor = undefined;
-            const editor = await open('edit', data, params.ro);
+            const editor = await open('edit', data, params.ro, options.forceCalc ? 'forced' : params.calc);
             window.__m0!.editor = editor;
             if (params.mutlog) startLogger(editor);
             return editor;

@@ -1,0 +1,29 @@
+{
+  "check": "V14-formula-cap",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-25T09:30:43.077Z",
+  "pendingCapture": true,
+  "history": [
+    {
+      "trigger": "cap",
+      "formulaPending": true
+    }
+  ],
+  "reopened": "restorable",
+  "recordPending": true,
+  "restoreMs": 3897,
+  "idle": "saved-local",
+  "slowCheck": {
+    "checked": 201,
+    "mismatches": 0
+  },
+  "after": {
+    "localSeq": 2,
+    "formulaPending": false
+  }
+}

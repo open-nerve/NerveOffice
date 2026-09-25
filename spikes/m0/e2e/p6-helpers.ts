@@ -101,25 +101,74 @@ export function contains(page: Page, mark: string): Promise<boolean> {
     return page.evaluate((m) => JSON.stringify(window.__m0!.editor!.save()).includes(m), mark);
 }
 
-/** 持久化的浏览器上下文（进程被杀的实验）：每次一个独立的用户目录。 */
-export async function launchPersistent(browserType: BrowserType, testInfo: TestInfo, dir?: string): Promise<{ context: BrowserContext; dir: string }> {
+/** 持久化的浏览器上下文（进程被杀的实验）：每次一个独立的用户目录；记下启动时刻，供杀进程时识别 WebKit 的 XPC 服务。 */
+export async function launchPersistent(browserType: BrowserType, testInfo: TestInfo, dir?: string): Promise<{ context: BrowserContext; dir: string; launchedAt: number }> {
     const userDir = dir ?? mkdtempSync(join(tmpdir(), 'm0-p6-profile-'));
     const channel = (testInfo.project.use as { channel?: string }).channel;
+    const launchedAt = Date.now();
     const context = await browserType.launchPersistentContext(userDir, { channel, viewport: { width: 1440, height: 900 }, locale: 'zh-CN' });
-    return { context, dir: userDir };
+    return { context, dir: userDir, launchedAt };
 }
 
-/** 杀掉这个用户目录的全部浏览器进程（SIGKILL），返回杀掉的进程数。 */
-export function killProfile(dir: string): number {
-    const pids = execSync(`pgrep -f "${dir}" || true`).toString().trim().split('\n').filter(Boolean).map(Number).filter((p) => p !== process.pid);
-    for (const p of pids) {
+export interface KilledProcess {
+    pid: number;
+    name: string;
+}
+
+export interface KillResult {
+    killed: KilledProcess[];
+    /** WebKit：同时有别的 WebKit 实例在跑时，不杀 XPC 服务（分不清归属），这里记下原因。 */
+    note: string | null;
+}
+
+function psLines(): { pid: number; ppid: number; start: number; command: string }[] {
+    return execSync('ps -axo pid=,ppid=,lstart=,command=').toString().trim().split('\n').map((line) => {
+        const m = /^\s*(\d+)\s+(\d+)\s+(\w{3} \w{3}\s+\d+ [\d:]{8} \d{4})\s+(.*)$/.exec(line);
+        return m == null ? null : { pid: Number(m[1]), ppid: Number(m[2]), start: new Date(m[3]).getTime(), command: m[4] };
+    }).filter((x): x is { pid: number; ppid: number; start: number; command: string } => x != null);
+}
+
+/**
+ * 杀掉这个用户目录的浏览器（SIGKILL，P6 审查 G6）：
+ * - 命令行里带用户目录的进程，以及它们的整棵子进程树；
+ * - WebKit 的网络、渲染、GPU 进程是 launchd 拉起的 XPC 服务（父进程为 1），不在进程树里；IndexedDB 由网络进程承载。
+ *   只有这一个 Playwright WebKit 实例在跑时，把启动之后出现的这些 XPC 服务一并杀掉；否则不杀并记下原因。
+ */
+export function killProfile(dir: string, options: { browserName?: string; launchedAt?: number } = {}): KillResult {
+    const all = psLines();
+    const roots = all.filter((p) => p.command.includes(dir) && p.pid !== process.pid).map((p) => p.pid);
+    const targets = new Set<number>(roots);
+    let grew = true;
+    while (grew) {
+        grew = false;
+        for (const p of all) {
+            if (targets.has(p.ppid) && !targets.has(p.pid)) {
+                targets.add(p.pid);
+                grew = true;
+            }
+        }
+    }
+    let note: string | null = null;
+    if (options.browserName === 'webkit') {
+        const uiProcesses = all.filter((p) => /ms-playwright\/webkit-[^/]+\/Playwright\.app\/Contents\/MacOS\/Playwright/.test(p.command));
+        const mine = uiProcesses.filter((p) => targets.has(p.pid));
+        if (uiProcesses.length > mine.length) note = `有 ${uiProcesses.length - mine.length} 个别的 WebKit 实例在跑，没有杀 XPC 服务`;
+        else {
+            const since = (options.launchedAt ?? Date.now()) - 2000;
+            for (const p of all) if (/ms-playwright\/webkit-[^/]+\/com\.apple\.WebKit\./.test(p.command) && p.start >= since) targets.add(p.pid);
+        }
+    }
+    const killed: KilledProcess[] = [];
+    for (const pid of targets) {
         try {
-            process.kill(p, 'SIGKILL');
+            process.kill(pid, 'SIGKILL');
+            const cmd = all.find((p) => p.pid === pid)?.command ?? '';
+            killed.push({ pid, name: cmd.split('/').pop()?.split(' ')[0] ?? cmd.slice(0, 40) });
         } catch {
             // 已经退出
         }
     }
-    return pids.length;
+    return { killed, note };
 }
 
 export function removeProfile(dir: string): void {

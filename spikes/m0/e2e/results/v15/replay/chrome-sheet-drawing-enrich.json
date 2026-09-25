@@ -1,0 +1,55 @@
+{
+  "check": "V15-replay",
+  "scenario": "sheet-drawing",
+  "mode": "enrich",
+  "kind": "sheet",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-25T09:36:06.601Z",
+  "log": {
+    "stats": {
+      "logged": 4,
+      "skipped": {
+        "otherUnit": 1,
+        "excluded": 1,
+        "onlyLocal": 12
+      },
+      "clone": {
+        "totalMs": 0.10000002384185791,
+        "maxMs": 0.10000002384185791
+      },
+      "cloneErrors": [],
+      "pending": 0,
+      "flushes": 1,
+      "flush": {
+        "totalMs": 0.6000000238418579,
+        "maxMs": 0.6000000238418579
+      },
+      "bytes": 0
+    },
+    "entries": 4,
+    "bytes": 3686,
+    "ids": {
+      "sheet.mutation.set-range-values": 2,
+      "sheet.mutation.set-drawing-apply": 1,
+      "sheet.mutation.set-worksheet-row-auto-height": 1
+    }
+  },
+  "replay": {
+    "executed": 4,
+    "failed": [],
+    "ms": 4.700000047683716,
+    "entries": 4
+  },
+  "known": null,
+  "strict": true,
+  "resolved": true,
+  "diffs": [],
+  "diffCount": 0,
+  "danglingOriginal": [],
+  "danglingReplayed": []
+}

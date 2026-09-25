@@ -1,15 +1,18 @@
 // 恢复（P6，00 号计划书 §7.5）：拿到文档的锁之后，读发件箱里这份文档的记录，重新向服务端取密钥解密、解压、解析，
 // 再与服务端当前的修订号比较：
 // - 相等：可以一键恢复（restorable）；
-// - 不等：别人在中间保存过，是真冲突（conflict），不自动恢复（另存为副本由 M4 实现）；
-// - 解密失败（密钥被吊销、记录被篡改或调换）：记录作废（undecryptable）。
+// - 不等：服务端在记录的基准之后又有保存（conflict）。本原型不上传，所以一律按真冲突处理；
+//   生产上还要按 §7.5 先用原来的 requestId 幂等重试，修订号是本机早先的请求产生的就不算冲突（"自己追自己"，本 Phase 未验证）；
+// - 密钥版本与记录不同：密钥已被吊销、换新（revoked），记录作废；
+// - 密钥版本相同但解密失败：记录被篡改、调换或损坏（undecryptable），记录作废。
+// 明文元数据都绑定在 AAD 里（crypto.ts），改动其中任何一项都会让解密失败，所以状态判断用的元数据是可信的。
 import type { UserKey } from './crypto';
 import type { OutboxRecord } from './store';
 
 import { aadOf, gunzipBytes, unseal } from './crypto';
 import { getRecord } from './store';
 
-export type RecoveryStatus = 'none' | 'restorable' | 'conflict' | 'undecryptable';
+export type RecoveryStatus = 'none' | 'restorable' | 'conflict' | 'revoked' | 'undecryptable';
 
 export interface RecoveryInfo {
     status: RecoveryStatus;
@@ -40,10 +43,13 @@ export async function inspectRecovery(db: IDBDatabase, userId: string, docId: st
     if (rec == null) return { status: 'none', record: null, serverRevision: null, error: null, timings, snapshot: null };
     const { iv: _iv, ciphertext: _c, ...meta } = rec;
     const revision = await serverRevision(docId);
+    if (rec.keyVersion !== key.version) {
+        return { status: 'revoked', record: meta, serverRevision: revision, error: `密钥版本 ${rec.keyVersion} → ${key.version}`, timings, snapshot: null };
+    }
     let snapshot: Record<string, unknown> | null = null;
     try {
         const t1 = performance.now();
-        const gz = await unseal(key.key, rec, aadOf(userId, docId, rec.localSeq));
+        const gz = await unseal(key.key, rec, aadOf({ ...rec, formulaPending: rec.formulaPending ?? false }));
         const t2 = performance.now();
         const bytes = await gunzipBytes(gz);
         const t3 = performance.now();

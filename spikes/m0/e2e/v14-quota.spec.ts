@@ -27,10 +27,13 @@ test('V14 配额：写满时', async ({ page, request, context }, testInfo) => {
     const big = await request.get(`${SERVERS.off}/api/docs/${source}`);
     await request.put(`${SERVERS.off}/api/docs/${id}`, { data: await big.json() });
     const user = `quota-${testInfo.project.name}-${Date.now()}`;
-    await openWithOutbox(page, SERVERS.off, { kind: 'sheet', doc: id, user });
     const quotaSize = 8 * 1024 * 1024;
+    // 配额覆盖必须在本站第一次写入 IndexedDB 之前设置，否则不生效（P6 审查 S3）；发件箱一装上就会写持有者记录，
+    // 所以先在同源的空白页上设置，再带发件箱打开文档
+    await page.goto(`${SERVERS.off}/index.html`);
     const cdp = await context.newCDPSession(page);
     await cdp.send('Storage.overrideQuotaForOrigin', { origin: new URL(SERVERS.off).origin, quotaSize });
+    await openWithOutbox(page, SERVERS.off, { kind: 'sheet', doc: id, user });
     const fill = await page.evaluate(async () => {
         const out: { key: string; error: string | null; cipherBytes: number; localSeq: number }[] = [];
         for (let i = 0; i < 200; i++) {
@@ -43,9 +46,18 @@ test('V14 配额：写满时', async ({ page, request, context }, testInfo) => {
     const failed = fill.writes.find((w) => w.error != null) ?? null;
     const checks = await page.evaluate(async (failedKey) => {
         const o = window.__m0!.outbox!;
+        const firstBefore = (await o.inspect('fill-0')).record?.localSeq ?? null;
+        // 覆盖已有的记录时配额不足：把内容变大再写同一个键，原记录应当不变
+        const ws = window.__m0!.editor!.univerAPI.getActiveWorkbook()!.getActiveSheet();
+        ws.getRange(0, 0, 200, 10).setValues(Array.from({ length: 200 }, (_, r) => Array.from({ length: 10 }, (_, c) => `扩大内容 ${r}-${c} ${Math.random()}`)));
+        const overwrite = await o.capture({ force: true, docId: 'fill-0' });
+        const firstAfter = await o.inspect('fill-0');
         return {
-            first: (await o.inspect('fill-0')).status,
+            first: firstAfter.status,
             failed: failedKey == null ? null : (await o.inspect(failedKey)).status,
+            overwriteError: overwrite.error,
+            firstSeqBefore: firstBefore,
+            firstSeqAfter: firstAfter.record?.localSeq ?? null,
         };
     }, failed?.key ?? null);
     // 自动保存遇到配额不足：报告错误，已有记录不动
@@ -62,6 +74,8 @@ test('V14 配额：写满时', async ({ page, request, context }, testInfo) => {
     expect(checks.failed, '失败的写入没有留下记录').toBe('none');
     // fill-* 不是服务端的文档（没有修订号），能解密时状态为 conflict；解密失败才是 undecryptable
     expect(['restorable', 'conflict'], '之前的记录仍能解密').toContain(checks.first);
+    expect(checks.overwriteError, '覆盖已有记录时配额不足').toBe('QuotaExceededError');
+    expect(checks.firstSeqAfter, '覆盖失败：原记录不变').toBe(checks.firstSeqBefore);
     expect(autosave.autosave, '自动保存报告错误').toBe('error');
     expect(autosave.lastError).toBe('QuotaExceededError');
 });

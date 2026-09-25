@@ -9,7 +9,7 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T07:38:17.090Z",
+  "timestamp": "2026-09-25T09:25:36.905Z",
   "log": {
     "stats": {
       "logged": 1,
@@ -22,8 +22,8 @@
       "pending": 0,
       "flushes": 1,
       "flush": {
-        "totalMs": 0.7000000476837158,
-        "maxMs": 0.7000000476837158
+        "totalMs": 0.5,
+        "maxMs": 0.5
       },
       "bytes": 0
     },
@@ -36,7 +36,7 @@
   "replay": {
     "executed": 1,
     "failed": [],
-    "ms": 5.700000047683716,
+    "ms": 6.700000047683716,
     "entries": 1
   },
   "known": null,

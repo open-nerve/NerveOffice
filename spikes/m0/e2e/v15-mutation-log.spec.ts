@@ -294,7 +294,7 @@ test('V15 组合恢复：快照 + 快照之后的日志', async ({ playwright, b
     for (const kind of ['sheet', 'doc'] as const) {
         const id = `p6-combined-${kind}-${testInfo.project.name}`;
         await storeFixture(request, SERVERS.full, kind, kind === 'sheet' ? 'sheet-core' : 'doc-text', id);
-        let { context, dir } = await launchPersistent(browserType, testInfo);
+        let { context, dir, launchedAt } = await launchPersistent(browserType, testInfo);
         try {
             let page = await context.newPage();
             await openWithOutbox(page, SERVERS.full, { kind, doc: id, extra: 'mutlog=1' });
@@ -308,10 +308,10 @@ test('V15 组合恢复：快照 + 快照之后的日志', async ({ playwright, b
             await page.waitForTimeout(250);
             await page.evaluate(() => window.__m0!.mutlog!.logger().flush());
             const beforeKill = await snapshotText(page);
-            killProfile(dir);
+            killProfile(dir, { browserName, launchedAt });
             await context.close().catch(() => undefined);
             await new Promise((r) => setTimeout(r, 500));
-            ({ context } = await launchPersistent(browserType, testInfo, dir));
+            ({ context, launchedAt } = await launchPersistent(browserType, testInfo, dir));
             page = await context.newPage();
             await openWithOutbox(page, SERVERS.full, { kind, doc: id, extra: 'mutlog=1' });
             const info = await outboxInfo(page);

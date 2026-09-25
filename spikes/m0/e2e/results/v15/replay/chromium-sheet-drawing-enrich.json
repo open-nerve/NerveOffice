@@ -9,7 +9,7 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T07:34:25.147Z",
+  "timestamp": "2026-09-25T09:21:44.666Z",
   "log": {
     "stats": {
       "logged": 4,
@@ -19,8 +19,8 @@
         "onlyLocal": 12
       },
       "clone": {
-        "totalMs": 0.10000002384185791,
-        "maxMs": 0.10000002384185791
+        "totalMs": 0.29999983310699463,
+        "maxMs": 0.19999992847442627
       },
       "cloneErrors": [],
       "pending": 0,
@@ -32,7 +32,7 @@
       "bytes": 0
     },
     "entries": 4,
-    "bytes": 3680,
+    "bytes": 3694,
     "ids": {
       "sheet.mutation.set-range-values": 2,
       "sheet.mutation.set-drawing-apply": 1,
@@ -42,7 +42,7 @@
   "replay": {
     "executed": 4,
     "failed": [],
-    "ms": 5.899999976158142,
+    "ms": 4.700000047683716,
     "entries": 4
   },
   "known": null,

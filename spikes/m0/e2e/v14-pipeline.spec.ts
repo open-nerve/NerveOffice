@@ -108,3 +108,34 @@ for (const s of SAMPLES) {
         });
     }
 }
+
+// 端到端（P6 审查 R2）：牵动约 320 个公式的修改（V08 的 perf-50k，改数据表 D 列），公式主线程与公式 Worker 两种模式，
+// 发件箱用 Worker 放置（M4 的建议）。"从修改停止到已保存在本机"含公式等待，对照 §12.2 的 2 秒；第一次修改是打开后的第一次
+for (const formulaWorker of [false, true]) {
+    test(`V14 端到端：perf-50k 牵动约 320 个公式${formulaWorker ? '（公式 Worker）' : '（公式主线程）'}`, async ({ page, request }, testInfo) => {
+        test.setTimeout(600_000);
+        const source = await ensureGenerated(page, request, 'sheet', 'perf-50k');
+        const id = `p6-perf-formula-${formulaWorker ? 'worker' : 'main'}-${testInfo.project.name}`;
+        const res = await request.get(`${SERVERS.off}/api/docs/${source}`);
+        await request.put(`${SERVERS.off}/api/docs/${id}`, { data: await res.json() });
+        const user = `perf-f-${testInfo.project.name}-${Date.now()}`;
+        await openWithOutbox(page, SERVERS.off, { kind: 'sheet', doc: id, outbox: 'worker', user, extra: formulaWorker ? 'worker=1' : '' });
+        await waitQuiet(page);
+        const runs: { e2eMs: number; trigger: string; formulaPending: boolean }[] = [];
+        for (let i = 0; i < 5; i++) {
+            await page.evaluate((i) => window.__m0!.editor!.univerAPI.getActiveWorkbook()!.getSheetByName('数据表')!.getRange(`D${i + 2}`).setValue(700 + i), i);
+            await page.evaluate(() => window.__m0!.outbox!.autosave()!.idle(30_000));
+            runs.push(await page.evaluate(() => {
+                const h = window.__m0!.outbox!.autosave()!.history;
+                const last = h[h.length - 1];
+                return { e2eMs: last.e2eMs, trigger: last.trigger, formulaPending: last.formulaPending };
+            }));
+            await page.waitForTimeout(500);
+        }
+        const e2e = runs.map((r) => r.e2eMs);
+        await writeResult(`v14/pipeline-formula/${testInfo.project.name}-${formulaWorker ? 'worker' : 'main'}.json`, {
+            check: 'V14-pipeline-formula', formulaWorker, browser: browserInfo(page, testInfo), timestamp: new Date().toISOString(), runs, e2e: stats(e2e),
+        });
+    });
+}
+

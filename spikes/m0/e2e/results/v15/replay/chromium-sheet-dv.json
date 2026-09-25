@@ -9,7 +9,7 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T07:32:10.444Z",
+  "timestamp": "2026-09-25T09:19:29.770Z",
   "log": {
     "stats": {
       "logged": 7,
@@ -18,20 +18,20 @@
         "onlyLocal": 11
       },
       "clone": {
-        "totalMs": 0.09999990463256836,
-        "maxMs": 0.09999990463256836
+        "totalMs": 0,
+        "maxMs": 0
       },
       "cloneErrors": [],
       "pending": 0,
       "flushes": 1,
       "flush": {
-        "totalMs": 0.5,
-        "maxMs": 0.5
+        "totalMs": 0.3999999761581421,
+        "maxMs": 0.3999999761581421
       },
       "bytes": 0
     },
     "entries": 7,
-    "bytes": 3511,
+    "bytes": 3524,
     "ids": {
       "sheet.mutation.set-range-values": 2,
       "data-validation.mutation.addRule": 5
@@ -40,7 +40,7 @@
   "replay": {
     "executed": 7,
     "failed": [],
-    "ms": 3.5,
+    "ms": 3.4000000953674316,
     "entries": 7
   },
   "known": null,

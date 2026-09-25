@@ -6,25 +6,28 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T06:43:23.876Z",
+  "timestamp": "2026-09-25T09:18:15.074Z",
   "quotaSize": 8388608,
-  "writes": 31,
+  "writes": 32,
   "failed": {
-    "key": "fill-30",
+    "key": "fill-31",
     "error": "QuotaExceededError",
-    "cipherBytes": 259771,
-    "localSeq": 0
+    "cipherBytes": 259772,
+    "localSeq": 1
   },
   "estimate": {
-    "quota": 10745692160,
-    "usage": 8273920,
+    "quota": 8598470656,
+    "usage": 8536064,
     "usageDetails": {
-      "indexedDB": 8273920
+      "indexedDB": 8536064
     }
   },
   "checks": {
     "first": "conflict",
-    "failed": "none"
+    "failed": "none",
+    "overwriteError": "QuotaExceededError",
+    "firstSeqBefore": 1,
+    "firstSeqAfter": 1
   },
   "autosave": {
     "state": "editing",

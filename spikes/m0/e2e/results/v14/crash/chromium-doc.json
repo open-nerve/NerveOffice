@@ -6,7 +6,7 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T06:36:19.906Z",
+  "timestamp": "2026-09-25T09:12:38.485Z",
   "revision": 1,
   "opened": {
     "state": "editing",
@@ -23,10 +23,18 @@
   },
   "saved": "saved-local",
   "e2e": [
-    1018
+    1013
   ],
   "killedAfterMs": 50,
-  "killed": 1,
+  "killed": 5,
+  "killedProcesses": [
+    "m0-p6-profile-jz5Oj9",
+    "chrome-headless-shell",
+    "chrome-headless-shell",
+    "chrome-headless-shell",
+    "chrome-headless-shell"
+  ],
+  "killNote": null,
   "reopened": {
     "state": "recovery-pending",
     "lock": "held",
@@ -35,7 +43,7 @@
       "record": {
         "localSeq": 1,
         "baseRevision": 1,
-        "updatedAt": 1790318171046,
+        "updatedAt": 1790327549598,
         "jsonBytes": 2729
       },
       "serverRevision": 1,
@@ -46,9 +54,9 @@
     "lastError": null
   },
   "timings": {
-    "readMs": 0.10000002384185791,
-    "decryptMs": 0,
-    "gunzipMs": 0.20000004768371582,
+    "readMs": 0.20000004768371582,
+    "decryptMs": 0.10000002384185791,
+    "gunzipMs": 0.30000007152557373,
     "parseMs": 0.09999990463256836
   },
   "restored": {

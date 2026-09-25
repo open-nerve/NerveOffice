@@ -1,0 +1,72 @@
+{
+  "check": "V14-crash",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-25T09:26:38.259Z",
+  "revision": 1,
+  "opened": {
+    "state": "editing",
+    "lock": "held",
+    "recovery": {
+      "status": "none",
+      "record": null,
+      "serverRevision": null,
+      "error": null
+    },
+    "autosave": "idle",
+    "saves": 0,
+    "lastError": null
+  },
+  "saved": "saved-local",
+  "e2e": [
+    1025
+  ],
+  "killedAfterMs": 50,
+  "killed": 8,
+  "killedProcesses": [
+    "m0-p6-profile-pwpe1N",
+    "m0-p6-profile-pwpe1N",
+    "m0-p6-profile-pwpe1N",
+    "m0-p6-profile-pwpe1N",
+    "m0-p6-profile-pwpe1N",
+    "m0-p6-profile-pwpe1N",
+    "m0-p6-profile-pwpe1N",
+    "m0-p6-profile-pwpe1N"
+  ],
+  "killNote": null,
+  "reopened": {
+    "state": "recovery-pending",
+    "lock": "held",
+    "recovery": {
+      "status": "restorable",
+      "record": {
+        "localSeq": 1,
+        "baseRevision": 1,
+        "updatedAt": 1790328389028,
+        "jsonBytes": 5406
+      },
+      "serverRevision": 1,
+      "error": null
+    },
+    "autosave": null,
+    "saves": 0,
+    "lastError": null
+  },
+  "timings": {
+    "readMs": 0.09999990463256836,
+    "decryptMs": 0.10000002384185791,
+    "gunzipMs": 0.2999999523162842,
+    "parseMs": 0.10000002384185791
+  },
+  "restored": {
+    "m1": true,
+    "m2": false,
+    "state": "editing"
+  },
+  "afterRestore": "saved-local",
+  "seqAfter": 2
+}

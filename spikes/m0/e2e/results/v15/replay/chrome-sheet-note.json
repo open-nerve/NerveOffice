@@ -1,0 +1,65 @@
+{
+  "check": "V15-replay",
+  "scenario": "sheet-note",
+  "mode": "plain",
+  "kind": "sheet",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-25T09:35:20.885Z",
+  "log": {
+    "stats": {
+      "logged": 4,
+      "skipped": {
+        "onlyLocal": 6
+      },
+      "clone": {
+        "totalMs": 0.10000002384185791,
+        "maxMs": 0.10000002384185791
+      },
+      "cloneErrors": [],
+      "pending": 0,
+      "flushes": 1,
+      "flush": {
+        "totalMs": 0.6000000238418579,
+        "maxMs": 0.6000000238418579
+      },
+      "bytes": 0
+    },
+    "entries": 4,
+    "bytes": 1092,
+    "ids": {
+      "sheet.mutation.set-range-values": 2,
+      "sheet.mutation.update-note": 2
+    }
+  },
+  "replay": {
+    "executed": 4,
+    "failed": [],
+    "ms": 1.2000000476837158,
+    "entries": 4
+  },
+  "known": "批注 id 在 SheetsNoteModel.updateNote 里随机生成",
+  "strict": false,
+  "resolved": false,
+  "diffs": [
+    {
+      "path": "$.resources[6].data.sheet-1.1.1.id",
+      "kind": "changed",
+      "before": "\"Dci160\"",
+      "after": "\"kzEwlh\""
+    },
+    {
+      "path": "$.resources[6].data.sheet-1.4.3.id",
+      "kind": "changed",
+      "before": "\"XthYr9\"",
+      "after": "\"Mc_xPy\""
+    }
+  ],
+  "diffCount": 2,
+  "danglingOriginal": [],
+  "danglingReplayed": []
+}

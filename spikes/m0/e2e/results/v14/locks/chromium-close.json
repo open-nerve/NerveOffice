@@ -7,7 +7,7 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T06:41:17.027Z",
+  "timestamp": "2026-09-25T09:17:05.955Z",
   "initial": {
     "a": {
       "state": "editing",
@@ -34,7 +34,7 @@
   "bWritesWhileBusy": 0,
   "takeover": {
     "state": "recovery-pending",
-    "ms": 14.699999928474426
+    "ms": 11.5
   },
   "after": {
     "state": "recovery-pending",
@@ -44,7 +44,7 @@
       "record": {
         "localSeq": 1,
         "baseRevision": 1,
-        "updatedAt": 1790318476951,
+        "updatedAt": 1790327825889,
         "jsonBytes": 5406
       },
       "serverRevision": 1,

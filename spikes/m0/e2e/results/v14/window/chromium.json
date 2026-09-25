@@ -3,49 +3,58 @@
   "browser": {
     "project": "chromium"
   },
-  "timestamp": "2026-09-25T06:41:06.703Z",
+  "timestamp": "2026-09-25T09:13:28.475Z",
   "intervalMs": 200,
   "runs": [
     {
       "edits": 16,
-      "editingMs": 3252,
+      "editingMs": 3114,
       "recovered": 15,
-      "lossMs": 424,
+      "lost": 1,
+      "lossMs": 205,
+      "lastRecoveredToKillMs": 411,
       "contiguous": true,
+      "killNote": null,
       "history": [
         {
           "trigger": "cap",
-          "e2eMs": 21
+          "e2eMs": 125
         }
       ]
     },
     {
       "edits": 23,
-      "editingMs": 4704,
+      "editingMs": 4556,
       "recovered": 15,
-      "lossMs": 1924,
+      "lost": 8,
+      "lossMs": 1651,
+      "lastRecoveredToKillMs": 1858,
       "contiguous": true,
+      "killNote": null,
       "history": [
         {
           "trigger": "cap",
-          "e2eMs": 68
+          "e2eMs": 139
         }
       ]
     },
     {
       "edits": 30,
-      "editingMs": 6187,
+      "editingMs": 5994,
       "recovered": 30,
-      "lossMs": 208,
+      "lost": 0,
+      "lossMs": 0,
+      "lastRecoveredToKillMs": 205,
       "contiguous": true,
+      "killNote": null,
       "history": [
         {
           "trigger": "cap",
-          "e2eMs": 73
+          "e2eMs": 155
         },
         {
           "trigger": "cap",
-          "e2eMs": 19
+          "e2eMs": 161
         }
       ]
     }

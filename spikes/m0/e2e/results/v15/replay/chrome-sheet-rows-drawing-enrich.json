@@ -1,0 +1,58 @@
+{
+  "check": "V15-replay",
+  "scenario": "sheet-rows-drawing",
+  "mode": "enrich",
+  "kind": "sheet",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-25T09:37:05.723Z",
+  "log": {
+    "stats": {
+      "logged": 9,
+      "skipped": {
+        "otherUnit": 2,
+        "excluded": 4,
+        "onlyLocal": 12
+      },
+      "clone": {
+        "totalMs": 0.20000004768371582,
+        "maxMs": 0.10000002384185791
+      },
+      "cloneErrors": [],
+      "pending": 0,
+      "flushes": 2,
+      "flush": {
+        "totalMs": 1.1999999284744263,
+        "maxMs": 0.6000000238418579
+      },
+      "bytes": 0
+    },
+    "entries": 9,
+    "bytes": 4519,
+    "ids": {
+      "sheet.mutation.set-range-values": 1,
+      "sheet.mutation.set-drawing-apply": 4,
+      "sheet.mutation.insert-row": 1,
+      "sheet.mutation.remove-rows": 1,
+      "sheet.mutation.set-worksheet-row-height": 1,
+      "sheet.mutation.set-worksheet-row-is-auto-height": 1
+    }
+  },
+  "replay": {
+    "executed": 9,
+    "failed": [],
+    "ms": 6.900000095367432,
+    "entries": 9
+  },
+  "known": null,
+  "strict": true,
+  "resolved": true,
+  "diffs": [],
+  "diffCount": 0,
+  "danglingOriginal": [],
+  "danglingReplayed": []
+}

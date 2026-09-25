@@ -9,7 +9,7 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T07:33:39.738Z",
+  "timestamp": "2026-09-25T09:20:59.178Z",
   "log": {
     "stats": {
       "logged": 4,
@@ -30,7 +30,7 @@
       "bytes": 0
     },
     "entries": 4,
-    "bytes": 1088,
+    "bytes": 1099,
     "ids": {
       "sheet.mutation.set-range-values": 2,
       "sheet.mutation.update-note": 2
@@ -39,7 +39,7 @@
   "replay": {
     "executed": 4,
     "failed": [],
-    "ms": 1.100000023841858,
+    "ms": 1,
     "entries": 4
   },
   "known": "批注 id 在 SheetsNoteModel.updateNote 里随机生成",
@@ -49,14 +49,14 @@
     {
       "path": "$.resources[6].data.sheet-1.1.1.id",
       "kind": "changed",
-      "before": "\"EDpIdB\"",
-      "after": "\"U7AwQj\""
+      "before": "\"zKw46k\"",
+      "after": "\"HIFdR9\""
     },
     {
       "path": "$.resources[6].data.sheet-1.4.3.id",
       "kind": "changed",
-      "before": "\"oOpj4v\"",
-      "after": "\"UuTzqg\""
+      "before": "\"ryZBIF\"",
+      "after": "\"4dmDGR\""
     }
   ],
   "diffCount": 2,

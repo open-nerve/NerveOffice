@@ -6,9 +6,9 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T06:42:50.302Z",
+  "timestamp": "2026-09-25T09:18:04.509Z",
   "estimate": {
-    "quota": 10737418240,
+    "quota": 8589934592,
     "usage": 0,
     "usageDetails": {}
   },

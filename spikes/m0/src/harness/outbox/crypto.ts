@@ -1,7 +1,7 @@
 // 本机发件箱的加密（P6，00 号计划书 §7.6）：AES-GCM-256。
 // - 密钥按用户由服务端下发（验证服务的 /api/keys/:user），导入为不可导出的 CryptoKey，只放在内存里，不写进任何存储；
 // - 每条记录一个随机的 96 位 IV；
-// - 附加数据（AAD）绑定用户、文档与本地序号：记录被调换或篡改时解密失败。
+// - 附加数据（AAD）绑定用户、文档、本地序号与其他参与恢复决策的明文元数据：记录被调换、元数据被改动时解密失败。
 // 主线程与发件箱 Worker 共用（不依赖 DOM）。
 
 export interface UserKey {
@@ -29,9 +29,29 @@ export async function fetchUserKey(user: string): Promise<UserKey> {
     }
 }
 
-/** 附加数据：用户、文档与本地序号。 */
-export function aadOf(userId: string, docId: string, localSeq: number): Uint8Array<ArrayBuffer> {
-    return new TextEncoder().encode(`${userId}\n${docId}\n${localSeq}`);
+/** 参与恢复决策的明文元数据：都绑定进 AAD，改动任何一项都会让解密失败（P6 审查 G1）。 */
+export interface AadFields {
+    userId: string;
+    docId: string;
+    localSeq: number;
+    baseRevision: number;
+    writeEpoch: number;
+    keyVersion: number;
+    clientBuild: string;
+    formulaPending: boolean;
+    logId?: string;
+    logSeq?: number;
+}
+
+/**
+ * 附加数据：固定字段顺序的 JSON（不用分隔符拼接，避免字段内容里的分隔符造成歧义）。
+ * 注意：AAD 防不住"把同一文档的旧记录整条写回"（本机回滚），这一点作为已接受的风险记在 P6 报告里。
+ */
+export function aadOf(f: AadFields): Uint8Array<ArrayBuffer> {
+    const canonical = JSON.stringify([
+        'nerve-outbox/v1', f.userId, f.docId, f.localSeq, f.baseRevision, f.writeEpoch, f.keyVersion, f.clientBuild, f.formulaPending, f.logId ?? null, f.logSeq ?? null,
+    ]);
+    return new TextEncoder().encode(canonical) as Uint8Array<ArrayBuffer>;
 }
 
 export async function seal(key: CryptoKey, plain: Uint8Array<ArrayBuffer>, aad: Uint8Array<ArrayBuffer>): Promise<Sealed> {
