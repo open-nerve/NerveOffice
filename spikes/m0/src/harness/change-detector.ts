@@ -70,6 +70,18 @@ export interface FormulaProgress {
     queued: boolean;
 }
 
+/**
+ * 组合输入（输入法）的状态（P5）：SDK 在每次 compositionupdate 时就把中间文字写进模型，
+ * 这些 mutation 会被检测为"有修改"；组合进行中捕获，快照里就是拼音。按隐藏输入元素（id 以 __editor_ 开头）上的 DOM 事件判断。
+ */
+export interface CompositionState {
+    active: boolean;
+    /** 开始过的组合次数。 */
+    count: number;
+    lastStartAt: number | null;
+    lastEndAt: number | null;
+}
+
 export interface ChangeDetector {
     /** 文档单元创建后设置 unitId；之前的记录按新的 unitId 重新判定。 */
     setUnitId(unitId: string): void;
@@ -81,6 +93,7 @@ export interface ChangeDetector {
     /** 最近一次"检测到修改"的时间（performance.now()），没有则为 null。 */
     lastDetectionAt(): number | null;
     formulaProgress(): FormulaProgress;
+    composition(): CompositionState;
     dispose(): void;
 }
 
@@ -220,6 +233,22 @@ export function createChangeDetector(univer: Univer, univerAPI: FUniver, init: {
         trackFormula(r, e.params);
         trackTrigger(e, e.options);
     });
+    // 组合输入：捕获阶段监听 document（输入法事件冒泡；P5 的事件归一也在捕获阶段，互不影响）
+    const composition: CompositionState = { active: false, count: 0, lastStartAt: null, lastEndAt: null };
+    const isEditorInput = (t: EventTarget | null) => t instanceof HTMLElement && t.id.startsWith('__editor_');
+    const onCompositionStart = (e: Event) => {
+        if (!isEditorInput(e.target)) return;
+        composition.active = true;
+        composition.count += 1;
+        composition.lastStartAt = performance.now();
+    };
+    const onCompositionEnd = (e: Event) => {
+        if (!isEditorInput(e.target)) return;
+        composition.active = false;
+        composition.lastEndAt = performance.now();
+    };
+    document.addEventListener('compositionstart', onCompositionStart, true);
+    document.addEventListener('compositionend', onCompositionEnd, true);
     // 内部 API（只用于分析）：只取 syncOnly 的 mutation，CommandExecuted 收不到它们
     const d2 = univer.__getInjector().get(ICommandService).onMutationExecutedForCollab((info, options) => {
         if (options?.syncOnly) {
@@ -238,6 +267,7 @@ export function createChangeDetector(univer: Univer, univerAPI: FUniver, init: {
         classify,
         lastDetectionAt: () => lastDetection,
         formulaProgress: () => ({ ...formula, appliedSheets: [...formula.appliedSheets], queued: queued() }),
+        composition: () => ({ ...composition }),
         state(since = 0) {
             const slice = records.slice(since).map((r) => ({ ...r, verdict: classify(r) }));
             const detections = slice.filter((r) => r.verdict === 'detected');
@@ -257,6 +287,8 @@ export function createChangeDetector(univer: Univer, univerAPI: FUniver, init: {
         dispose() {
             d1.dispose();
             d2.dispose();
+            document.removeEventListener('compositionstart', onCompositionStart, true);
+            document.removeEventListener('compositionend', onCompositionEnd, true);
         },
     };
 }

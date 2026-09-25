@@ -13,11 +13,11 @@ import { UniverDocsTocUIPlugin } from '@univerjs/docs-toc-ui';
 import { UniverDocsUIPlugin } from '@univerjs/docs-ui';
 import { UniverDrawingPlugin } from '@univerjs/drawing';
 import { UniverDrawingUIPlugin } from '@univerjs/drawing-ui';
-import { UniverFormulaEnginePlugin } from '@univerjs/engine-formula';
 import { UniverRenderEnginePlugin } from '@univerjs/engine-render';
 import { UniverFindReplacePlugin } from '@univerjs/find-replace';
 import { UniverUIPlugin } from '@univerjs/ui';
 import { docUi } from './ui-config';
+import { docFormulaGroup, docFormulaLocale } from './doc-formula';
 import { drawingPluginConfig } from './image-service';
 
 import DesignZhCN from '@univerjs/design/locale/zh-CN';
@@ -26,7 +26,6 @@ import DocsHyperLinkUIZhCN from '@univerjs/docs-hyper-link-ui/locale/zh-CN';
 import DocsTocUIZhCN from '@univerjs/docs-toc-ui/locale/zh-CN';
 import DocsUIZhCN from '@univerjs/docs-ui/locale/zh-CN';
 import DrawingUIZhCN from '@univerjs/drawing-ui/locale/zh-CN';
-import FormulaZhCN from '@univerjs/engine-formula/locale/zh-CN';
 import FindReplaceZhCN from '@univerjs/find-replace/locale/zh-CN';
 import UIZhCN from '@univerjs/ui/locale/zh-CN';
 
@@ -43,24 +42,24 @@ import '@univerjs/ui/facade';
 import '@univerjs/docs/facade';
 import '@univerjs/docs-ui/facade';
 import '@univerjs/docs-drawing/facade';
-import '@univerjs/engine-formula/facade';
 
 const groups: PluginGroup[] = [
     {
-        // 核心：与 UniverDocsCorePreset 相同，但不注册 UniverNetworkPlugin。
-        // 公式引擎在官方 preset 中存在，是否必需在 P5 核实。
+        // 核心：与 UniverDocsCorePreset 相同，但不注册 UniverNetworkPlugin；公式引擎单独成组（P5）。
         id: 'core',
         // 运行时核对（V03）：docs 插件注册 Word 元数据透传的两项与文档权限规则；文字文档不写 SHEET_AuthzIoMockService_PLUGIN
         resources: ['DOC_WORD_STYLES_PLUGIN', 'DOC_NOTE_PLUGIN', 'DOC_OBJECT_PERMISSION_PLUGIN'],
         removable: false,
-        plugins: ({ container, ui }) => [
+        plugins: ({ container, ui, outline }) => [
             [UniverDocsPlugin],
             [UniverRenderEnginePlugin],
             [UniverUIPlugin, { container, menu: ui.menu, toolbar: ui.toolbar, contextMenu: ui.contextMenu }],
-            [UniverDocsUIPlugin],
-            [UniverFormulaEnginePlugin],
+            // toc：只读的大纲侧栏（按标题导航，不写内容），P5 评估"目录"的两种形态
+            [UniverDocsUIPlugin, { toc: outline === true }],
         ],
     },
+    // 公式引擎（官方 preset 中存在；P5 核实文字文档不需要它）
+    docFormulaGroup,
     {
         // 可选：排版放到 Web Worker（官方示例中单独注册，是否启用由 P5 决定）
         id: 'layout-worker',
@@ -110,7 +109,7 @@ export const docProfile: EditorProfile = {
         DesignZhCN,
         UIZhCN,
         DocsUIZhCN,
-        FormulaZhCN,
+        docFormulaLocale,
         DrawingUIZhCN,
         DocsDrawingUIZhCN,
         DocsHyperLinkUIZhCN,

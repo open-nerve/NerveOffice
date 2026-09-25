@@ -1,0 +1,355 @@
+{
+  "check": "V13-capability",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T01:40:54.235Z",
+  "id": "C8",
+  "name": "`/` 快捷插入",
+  "config": "platform",
+  "steps": [
+    {
+      "step": "空段落里键入 `/`：弹出菜单，只含已启用的能力",
+      "ok": true,
+      "detail": [
+        "标题1",
+        "标题2",
+        "标题3",
+        "标题4",
+        "标题5",
+        "有序列表",
+        "无序列表",
+        "任务列表",
+        "水平分割线",
+        "插入表格",
+        "插入图片",
+        "粘贴",
+        "拖动块"
+      ]
+    },
+    {
+      "step": "`/` 菜单：插入表格",
+      "ok": true,
+      "detail": [
+        {
+          "rows": 3,
+          "cols": 5
+        }
+      ]
+    },
+    {
+      "step": "段落中间键入 `/`：原样插入",
+      "ok": true,
+      "detail": {
+        "text": "段落乙：用于字符格式，这里有一段可以选中的文字 a/b 2026/9/25。",
+        "style": null,
+        "align": null,
+        "list": null,
+        "level": null,
+        "inTable": false
+      }
+    },
+    {
+      "step": "粗体文字中间键入 `/`：沿用粗体",
+      "ok": true,
+      "detail": {
+        "text": "可以/选中",
+        "ts": {
+          "bl": 1
+        }
+      }
+    },
+    {
+      "step": "链接文字中间键入 `/`：仍在链接里",
+      "ok": true,
+      "detail": [
+        {
+          "text": "链接/文字",
+          "url": "https://example.com/slash"
+        }
+      ]
+    }
+  ],
+  "undo": {
+    "count": 6,
+    "restored": true,
+    "redone": true
+  },
+  "roundtrip": {
+    "firstDiff": [],
+    "secondDiff": [],
+    "preserved": true
+  },
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  },
+  "policyEvents": [
+    {
+      "kind": "slash-menu",
+      "detail": "offset 103"
+    },
+    {
+      "kind": "slash-insert",
+      "detail": "offset 44"
+    },
+    {
+      "kind": "slash-insert",
+      "detail": "offset 51"
+    },
+    {
+      "kind": "slash-insert",
+      "detail": "offset 53"
+    },
+    {
+      "kind": "slash-insert",
+      "detail": "offset 37"
+    },
+    {
+      "kind": "slash-insert",
+      "detail": "offset 95"
+    }
+  ],
+  "summary": {
+    "before": {
+      "paragraphs": 8
+    },
+    "after": {
+      "text": "能力矩阵样本\r段落甲：用于标题样式。\r段落乙：用于字符格式，这里有一段可以/选中的文字 a/b 2026/9/25。\r段落丙：用于对齐。\r段落丁：列表第一项\r段落戊：列表第二项\r段落己：链接/文字与查找替换，查找目标出现两次：查找目标。\r\r\u001a\u001b\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u000e\u001b\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u000e\u001b\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u000e\u000f\r\n",
+      "paragraphs": [
+        {
+          "text": "能力矩阵样本",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落甲：用于标题样式。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落乙：用于字符格式，这里有一段可以/选中的文字 a/b 2026/9/25。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落丙：用于对齐。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落丁：列表第一项",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落戊：列表第二项",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落己：链接/文字与查找替换，查找目标出现两次：查找目标。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": true
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": true
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": true
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": true
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": true
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": true
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": true
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": true
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": true
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": true
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": true
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": true
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": true
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": true
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": true
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        }
+      ],
+      "tables": [
+        {
+          "rows": 3,
+          "cols": 5
+        }
+      ],
+      "links": [
+        {
+          "text": "链接/文字",
+          "url": "https://example.com/slash"
+        }
+      ],
+      "runs": [
+        {
+          "text": "可以/选中",
+          "ts": {
+            "bl": 1
+          }
+        },
+        {
+          "text": " a/b 2026/9/25",
+          "ts": {
+            "cl": {
+              "rgb": "#1B1C1F"
+            }
+          }
+        },
+        {
+          "text": "\u001a\u001b\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u000e\u001b\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u000e\u001b\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u001c\r\n\u001d\u000e\u000f",
+          "ts": {
+            "cl": {
+              "rgb": "#1B1C1F"
+            }
+          }
+        }
+      ],
+      "images": []
+    }
+  }
+}

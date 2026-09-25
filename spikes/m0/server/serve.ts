@@ -1,7 +1,7 @@
 // 验证用静态服务：提供 dist/，为所有响应加 CSP 头，接收 CSP 违规报告；P2 起提供文档存储，P4 起提供图片资源（assets.ts）。
 // 只监听 127.0.0.1，不进入生产。
 import { createReadStream } from 'node:fs';
-import { appendFile, mkdir, stat } from 'node:fs/promises';
+import { appendFile, mkdir, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { extname, join, normalize, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -19,6 +19,8 @@ const { values } = parseArgs({
         'report-log': { type: 'string', default: '' },
         // P4：读取图片失败（401、403、404）时返回占位图，状态放在 X-Asset-Status 头里
         'asset-fallback': { type: 'boolean', default: false },
+        // P5：输入法记录页（imelog=1）交回的记录另外写到这个目录（每个会话一个文件）
+        'imelog-dir': { type: 'string', default: '' },
     },
 });
 
@@ -56,6 +58,8 @@ export interface CspReport {
 const reports: CspReport[] = [];
 /** 真实 Safari 自检页面回传的结果（Playwright 无法驱动真实 Safari）。 */
 const selftests: unknown[] = [];
+/** 输入法记录（P5）：键是会话 id。 */
+const imeLogs = new Map<string, { session: string }>();
 /** 文档存储（内存）：P2 起用于保存重开、复制等实验。键是文档 id，值是快照 JSON 原文。 */
 const documents = new Map<string, string>();
 const DOC_PATH = /^\/api\/docs\/([\w.-]+)$/;
@@ -160,6 +164,30 @@ const server = createServer(async (req, res) => {
             documents.set(to, source);
             copyLinks(copyMatch[1], to);
             res.writeHead(204).end();
+            return;
+        }
+        if (url.pathname === '/__imelog') {
+            if (req.method === 'POST') {
+                const log = JSON.parse(await readBody(req, 16 * 1024 * 1024)) as { session: string };
+                if (typeof log.session !== 'string' || !/^[\w.-]+$/.test(log.session)) {
+                    res.writeHead(400).end();
+                    return;
+                }
+                imeLogs.set(log.session, log);
+                if (values['imelog-dir']) {
+                    await mkdir(resolve(values['imelog-dir']), { recursive: true });
+                    await writeFile(join(resolve(values['imelog-dir']), `${log.session}.json`), `${JSON.stringify(log, null, 2)}\n`);
+                }
+                res.writeHead(204).end();
+                return;
+            }
+            if (req.method === 'DELETE') {
+                imeLogs.clear();
+                res.writeHead(204).end();
+                return;
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+            res.end(JSON.stringify([...imeLogs.values()]));
             return;
         }
         if (url.pathname === '/__selftest') {

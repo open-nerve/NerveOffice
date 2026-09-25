@@ -1,0 +1,214 @@
+{
+  "check": "V13-capability",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T01:48:36.826Z",
+  "id": "C5b",
+  "name": "单元格里插入图片",
+  "config": "platform",
+  "steps": [
+    {
+      "step": "单元格里：工具栏的图片按钮（记录）",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "step": "单元格里执行\"插入图片\"（记录）",
+      "ok": true,
+      "detail": {
+        "images": 0
+      }
+    },
+    {
+      "step": "单元格里粘贴图片文件（记录）",
+      "ok": true,
+      "detail": {
+        "images": 0
+      }
+    },
+    {
+      "step": "平台配置：单元格里没有图片",
+      "ok": true,
+      "detail": {
+        "viaCommand": 0,
+        "viaPaste": 0
+      }
+    }
+  ],
+  "undo": {
+    "count": 2,
+    "restored": true,
+    "redone": true
+  },
+  "roundtrip": null,
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  },
+  "policyEvents": [
+    {
+      "kind": "guard-cancel",
+      "detail": "doc.command.insert-doc-image：表格单元格里不能插入图片（offset 106）"
+    },
+    {
+      "kind": "paste-cell-image",
+      "detail": "粘贴到表格单元格：去掉图片 oWiqi5"
+    },
+    {
+      "kind": "paste-cell-image",
+      "detail": "粘贴到表格单元格：去掉图片 oWiqi5"
+    }
+  ],
+  "summary": {
+    "before": {
+      "paragraphs": 8
+    },
+    "after": {
+      "text": "能力矩阵样本\r段落甲：用于标题样式。\r段落乙：用于字符格式，这里有一段可以选中的文字。\r段落丙：用于对齐。\r段落丁：列表第一项\r段落戊：列表第二项\r段落己：链接文字与查找替换，查找目标出现两次：查找目标。\r\u001a\u001b\u001c\r\n\u001d\u001c\r\r\n\u001d\u000e\u001b\u001c\r\n\u001d\u001c\r\n\u001d\u000e\u000f\r\r\n",
+      "paragraphs": [
+        {
+          "text": "能力矩阵样本",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落甲：用于标题样式。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落乙：用于字符格式，这里有一段可以选中的文字。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落丙：用于对齐。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落丁：列表第一项",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落戊：列表第二项",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落己：链接文字与查找替换，查找目标出现两次：查找目标。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": true
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": true
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": true
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": true
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": true
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        }
+      ],
+      "tables": [
+        {
+          "rows": 2,
+          "cols": 2
+        }
+      ],
+      "links": [],
+      "runs": [
+        {
+          "text": "\u001a\u001b\u001c\r\n\u001d\u001c",
+          "ts": {
+            "cl": {
+              "rgb": "#1B1C1F"
+            }
+          }
+        },
+        {
+          "text": "\r\n\u001d\u000e\u001b\u001c\r\n\u001d\u001c\r\n\u001d\u000e\u000f",
+          "ts": {
+            "cl": {
+              "rgb": "#1B1C1F"
+            }
+          }
+        }
+      ],
+      "images": []
+    }
+  }
+}

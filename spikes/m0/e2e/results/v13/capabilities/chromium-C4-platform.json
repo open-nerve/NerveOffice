@@ -1,0 +1,223 @@
+{
+  "check": "V13-capability",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T01:37:54.262Z",
+  "id": "C4",
+  "name": "列表",
+  "config": "platform",
+  "steps": [
+    {
+      "step": "工具栏：两段设为有序列表",
+      "ok": true,
+      "detail": {
+        "d": {
+          "text": "段落丁：列表第一项",
+          "style": null,
+          "align": null,
+          "list": "ORDER_LIST",
+          "level": 0,
+          "inTable": false
+        },
+        "w": {
+          "text": "段落戊：列表第二项",
+          "style": null,
+          "align": null,
+          "list": "ORDER_LIST",
+          "level": 0,
+          "inTable": false
+        }
+      }
+    },
+    {
+      "step": "Tab：第二项降一级",
+      "ok": true,
+      "detail": {
+        "text": "段落戊：列表第二项",
+        "style": null,
+        "align": null,
+        "list": "ORDER_LIST",
+        "level": 1,
+        "inTable": false
+      }
+    },
+    {
+      "step": "快捷键 ⌘⇧8：无序列表",
+      "ok": true,
+      "detail": {
+        "text": "段落丙：用于对齐。",
+        "style": null,
+        "align": null,
+        "list": "BULLET_LIST",
+        "level": 0,
+        "inTable": false
+      }
+    },
+    {
+      "step": "工具栏：任务列表",
+      "ok": true,
+      "detail": {
+        "text": "段落甲：用于标题样式。",
+        "style": null,
+        "align": null,
+        "list": "CHECK_LIST",
+        "level": 0,
+        "inTable": false
+      }
+    },
+    {
+      "step": "点击复选框：勾选",
+      "ok": true,
+      "detail": {
+        "at": {
+          "x": 410.8125,
+          "y": 232.265625
+        },
+        "p": {
+          "text": "段落甲：用于标题样式。",
+          "style": null,
+          "align": null,
+          "list": "CHECK_LIST_CHECKED",
+          "level": 0,
+          "inTable": false
+        }
+      }
+    },
+    {
+      "step": "键入 \"1. \" 自动编号；空项回车退出列表",
+      "ok": true,
+      "detail": {
+        "auto": {
+          "text": "自动编号",
+          "style": null,
+          "align": null,
+          "list": "ORDER_LIST",
+          "level": 0,
+          "inTable": false
+        },
+        "next": {
+          "text": "列表之后",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        }
+      }
+    }
+  ],
+  "undo": {
+    "count": 8,
+    "restored": true,
+    "redone": true
+  },
+  "roundtrip": {
+    "firstDiff": [],
+    "secondDiff": [],
+    "preserved": true
+  },
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  },
+  "policyEvents": [],
+  "summary": {
+    "before": {
+      "paragraphs": 8
+    },
+    "after": {
+      "text": "能力矩阵样本\r段落甲：用于标题样式。\r段落乙：用于字符格式，这里有一段可以选中的文字。\r段落丙：用于对齐。\r段落丁：列表第一项\r段落戊：列表第二项\r段落己：链接文字与查找替换，查找目标出现两次：查找目标。\r自动编号\r列表之后\r\n",
+      "paragraphs": [
+        {
+          "text": "能力矩阵样本",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落甲：用于标题样式。",
+          "style": null,
+          "align": null,
+          "list": "CHECK_LIST_CHECKED",
+          "level": 0,
+          "inTable": false
+        },
+        {
+          "text": "段落乙：用于字符格式，这里有一段可以选中的文字。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落丙：用于对齐。",
+          "style": null,
+          "align": null,
+          "list": "BULLET_LIST",
+          "level": 0,
+          "inTable": false
+        },
+        {
+          "text": "段落丁：列表第一项",
+          "style": null,
+          "align": null,
+          "list": "ORDER_LIST",
+          "level": 0,
+          "inTable": false
+        },
+        {
+          "text": "段落戊：列表第二项",
+          "style": null,
+          "align": null,
+          "list": "ORDER_LIST",
+          "level": 1,
+          "inTable": false
+        },
+        {
+          "text": "段落己：链接文字与查找替换，查找目标出现两次：查找目标。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "自动编号",
+          "style": null,
+          "align": null,
+          "list": "ORDER_LIST",
+          "level": 0,
+          "inTable": false
+        },
+        {
+          "text": "列表之后",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        }
+      ],
+      "tables": [],
+      "links": [],
+      "runs": [
+        {
+          "text": "自动编号\r列表之后\r",
+          "ts": {
+            "cl": {
+              "rgb": "#1B1C1F"
+            }
+          }
+        }
+      ],
+      "images": []
+    }
+  }
+}
