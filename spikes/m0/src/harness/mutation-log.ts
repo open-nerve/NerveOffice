@@ -22,6 +22,8 @@ export interface LogEntry {
     params: unknown;
     /** performance.now()，记录时刻。 */
     t: number;
+    /** 附带记录（mutation-log-enrich.ts）：自上一条日志以来样式表新增的样式，重放这一条之前先装入。 */
+    styles?: Record<string, unknown>;
 }
 
 export interface MutationLogStats {
@@ -70,6 +72,8 @@ export interface MutationLoggerOptions {
     batch?: number;
     /** 参数补全（mutation-log-enrich.ts）：记录时从模型读回处理器里随机生成的值。 */
     enrich?: (id: string, params: Record<string, unknown>) => Record<string, unknown>;
+    /** 附带记录：每条日志附上的样式增量（mutation-log-enrich.ts 的 createStyleTracker）。 */
+    styles?: () => Record<string, unknown> | null;
 }
 
 export function startMutationLogger(univer: Univer, unitId: string, logId: string, options: MutationLoggerOptions): MutationLogger {
@@ -146,7 +150,8 @@ export function startMutationLogger(univer: Univer, unitId: string, logId: strin
             stats.clone.maxMs = Math.max(stats.clone.maxMs, ms);
             stats.logged += 1;
             lastSeq = Math.max(lastSeq, seq);
-            buffer.push({ logId, seq, id: info.id, params, t: performance.now() });
+            const styles = options.styles?.() ?? undefined;
+            buffer.push({ logId, seq, id: info.id, params, t: performance.now(), ...(styles != null ? { styles } : {}) });
             schedule();
         } catch (e) {
             stats.cloneErrors.push({ id: info.id, error: `记录失败：${e instanceof Error ? e.message : String(e)}` });
@@ -190,13 +195,14 @@ export interface ReplayResult {
     ms: number;
 }
 
-/** 按序号逐条在顶层重放（fromCollab：保留公式重算与渲染，不写撤销栈）。 */
-export function replayEntries(univerAPI: FUniver, entries: LogEntry[]): ReplayResult {
+/** 按序号逐条在顶层重放（fromCollab：保留公式重算与渲染，不写撤销栈）；before 在每条执行前调用（装入附带的样式）。 */
+export function replayEntries(univerAPI: FUniver, entries: LogEntry[], before?: (e: LogEntry) => void): ReplayResult {
     const t0 = performance.now();
     const failed: ReplayResult['failed'] = [];
     let executed = 0;
     for (const e of entries) {
         try {
+            before?.(e);
             const ok = univerAPI.syncExecuteCommand(e.id, e.params as object, { fromCollab: true });
             if (ok === false) failed.push({ seq: e.seq, id: e.id, error: '返回 false' });
             else executed += 1;

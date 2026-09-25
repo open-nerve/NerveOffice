@@ -9,7 +9,7 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T07:02:40.856Z",
+  "timestamp": "2026-09-25T07:34:39.218Z",
   "log": {
     "stats": {
       "logged": 5,
@@ -18,20 +18,20 @@
         "onlyLocal": 7
       },
       "clone": {
-        "totalMs": 0.20000004768371582,
+        "totalMs": 0.10000002384185791,
         "maxMs": 0.10000002384185791
       },
       "cloneErrors": [],
       "pending": 0,
       "flushes": 1,
       "flush": {
-        "totalMs": 0.6000000238418579,
-        "maxMs": 0.6000000238418579
+        "totalMs": 0.5,
+        "maxMs": 0.5
       },
       "bytes": 0
     },
     "entries": 5,
-    "bytes": 2438,
+    "bytes": 2440,
     "ids": {
       "sheet.mutation.set-range-values": 4,
       "sheet.mutation.insert-sheet": 1
@@ -40,7 +40,7 @@
   "replay": {
     "executed": 5,
     "failed": [],
-    "ms": 5.100000023841858,
+    "ms": 4.800000071525574,
     "entries": 5
   },
   "known": "复制工作表的单元格按字符串引用样式 id，重放的实例里没有这些 id",
@@ -48,36 +48,36 @@
   "resolved": false,
   "diffs": [
     {
-      "path": "$.sheets.YpjkgG4xMdLabhAqTsTu3.cellData.0.0.s",
+      "path": "$.sheets.DOBmBPHrcJ28RAPxR17h3.cellData.0.0.s",
       "kind": "changed",
       "before": "{\"bl\":1}",
-      "after": "\"悬空:7Wc-qg\""
+      "after": "\"悬空:WTCOLv\""
     },
     {
-      "path": "$.sheets.YpjkgG4xMdLabhAqTsTu3.cellData.0.1.s",
+      "path": "$.sheets.DOBmBPHrcJ28RAPxR17h3.cellData.0.1.s",
       "kind": "changed",
       "before": "{\"bl\":1}",
-      "after": "\"悬空:7Wc-qg\""
+      "after": "\"悬空:WTCOLv\""
     },
     {
-      "path": "$.sheets.YpjkgG4xMdLabhAqTsTu3.cellData.0.2.s",
+      "path": "$.sheets.DOBmBPHrcJ28RAPxR17h3.cellData.0.2.s",
       "kind": "changed",
       "before": "{\"bl\":1}",
-      "after": "\"悬空:7Wc-qg\""
+      "after": "\"悬空:WTCOLv\""
     },
     {
-      "path": "$.sheets.YpjkgG4xMdLabhAqTsTu3.cellData.1.1.s",
+      "path": "$.sheets.DOBmBPHrcJ28RAPxR17h3.cellData.1.1.s",
       "kind": "changed",
       "before": "{\"bg\":{\"rgb\":\"#fde68a\"}}",
-      "after": "\"悬空:Bgy2Fg\""
+      "after": "\"悬空:PqPRAD\""
     }
   ],
   "diffCount": 4,
   "danglingOriginal": [],
   "danglingReplayed": [
-    "数据 （副本）!R0C0 → 7Wc-qg",
-    "数据 （副本）!R0C1 → 7Wc-qg",
-    "数据 （副本）!R0C2 → 7Wc-qg",
-    "数据 （副本）!R1C1 → Bgy2Fg"
+    "数据 （副本）!R0C0 → WTCOLv",
+    "数据 （副本）!R0C1 → WTCOLv",
+    "数据 （副本）!R0C2 → WTCOLv",
+    "数据 （副本）!R1C1 → PqPRAD"
   ]
 }

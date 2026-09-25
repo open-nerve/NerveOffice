@@ -9,7 +9,7 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T07:00:57.149Z",
+  "timestamp": "2026-09-25T07:31:40.691Z",
   "log": {
     "stats": {
       "logged": 7,
@@ -18,20 +18,20 @@
         "onlyLocal": 11
       },
       "clone": {
-        "totalMs": 0.09999990463256836,
-        "maxMs": 0.09999990463256836
+        "totalMs": 0,
+        "maxMs": 0
       },
       "cloneErrors": [],
       "pending": 0,
       "flushes": 1,
       "flush": {
-        "totalMs": 0.5,
-        "maxMs": 0.5
+        "totalMs": 0.7000000476837158,
+        "maxMs": 0.7000000476837158
       },
       "bytes": 0
     },
     "entries": 7,
-    "bytes": 6379,
+    "bytes": 6393,
     "ids": {
       "sheet.mutation.set-range-values": 1,
       "sheet.mutation.add-conditional-rule": 6

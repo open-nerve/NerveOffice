@@ -9,7 +9,7 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T07:05:36.580Z",
+  "timestamp": "2026-09-25T07:38:32.575Z",
   "log": {
     "stats": {
       "logged": 7,
@@ -22,13 +22,13 @@
       "pending": 0,
       "flushes": 4,
       "flush": {
-        "totalMs": 1.5,
+        "totalMs": 1.4000000953674316,
         "maxMs": 0.5
       },
       "bytes": 0
     },
     "entries": 7,
-    "bytes": 4334,
+    "bytes": 4336,
     "ids": {
       "doc.mutation.rich-text-editing": 7
     }
@@ -36,7 +36,7 @@
   "replay": {
     "executed": 7,
     "failed": [],
-    "ms": 5,
+    "ms": 4.900000095367432,
     "entries": 7
   },
   "known": null,

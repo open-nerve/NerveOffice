@@ -9,26 +9,26 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T07:04:52.783Z",
+  "timestamp": "2026-09-25T07:37:48.783Z",
   "log": {
     "stats": {
       "logged": 14,
       "skipped": {},
       "clone": {
-        "totalMs": 0.7999998331069946,
-        "maxMs": 0.19999992847442627
+        "totalMs": 0.30000007152557373,
+        "maxMs": 0.10000002384185791
       },
       "cloneErrors": [],
       "pending": 0,
       "flushes": 3,
       "flush": {
-        "totalMs": 1.100000023841858,
-        "maxMs": 0.6000000238418579
+        "totalMs": 1.1000001430511475,
+        "maxMs": 0.5
       },
       "bytes": 0
     },
     "entries": 14,
-    "bytes": 10597,
+    "bytes": 10620,
     "ids": {
       "doc.mutation.rich-text-editing": 14
     }
@@ -36,7 +36,7 @@
   "replay": {
     "executed": 14,
     "failed": [],
-    "ms": 10,
+    "ms": 10.299999952316284,
     "entries": 14
   },
   "known": null,

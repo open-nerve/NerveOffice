@@ -1,43 +1,46 @@
 {
   "check": "V15-replay",
-  "scenario": "doc-typing",
-  "mode": "plain",
-  "kind": "doc",
+  "scenario": "sheet-paste",
+  "mode": "enrich",
+  "kind": "sheet",
   "browser": {
     "project": "chromium",
     "name": "chromium",
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T07:37:03.326Z",
+  "timestamp": "2026-09-25T07:36:48.585Z",
   "log": {
     "stats": {
-      "logged": 18,
-      "skipped": {},
+      "logged": 1,
+      "skipped": {
+        "otherUnit": 2,
+        "onlyLocal": 6
+      },
       "clone": {
-        "totalMs": 0.2999999523162842,
-        "maxMs": 0.10000002384185791
+        "totalMs": 0,
+        "maxMs": 0
       },
       "cloneErrors": [],
       "pending": 0,
-      "flushes": 4,
+      "flushes": 1,
       "flush": {
-        "totalMs": 12.5,
-        "maxMs": 9.800000071525574
+        "totalMs": 1.5,
+        "maxMs": 1.5
       },
       "bytes": 0
     },
-    "entries": 18,
-    "bytes": 9068,
+    "entries": 1,
+    "bytes": 509,
     "ids": {
-      "doc.mutation.rich-text-editing": 18
+      "sheet.mutation.set-range-values": 1
     }
   },
   "replay": {
-    "executed": 18,
+    "executed": 1,
     "failed": [],
-    "ms": 10.799999952316284,
-    "entries": 18
+    "ms": 0.5,
+    "entries": 1
   },
   "known": null,
   "strict": true,

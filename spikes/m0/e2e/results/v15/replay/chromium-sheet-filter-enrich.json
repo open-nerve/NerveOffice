@@ -1,6 +1,6 @@
 {
   "check": "V15-replay",
-  "scenario": "sheet-style-copy",
+  "scenario": "sheet-filter",
   "mode": "enrich",
   "kind": "sheet",
   "browser": {
@@ -9,39 +9,41 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T07:34:53.339Z",
+  "timestamp": "2026-09-25T07:32:55.057Z",
   "log": {
     "stats": {
-      "logged": 5,
+      "logged": 4,
       "skipped": {
-        "otherUnit": 3,
-        "onlyLocal": 7
+        "otherUnit": 1,
+        "onlyLocal": 6
       },
       "clone": {
-        "totalMs": 0.10000002384185791,
+        "totalMs": 0.20000004768371582,
         "maxMs": 0.10000002384185791
       },
       "cloneErrors": [],
       "pending": 0,
       "flushes": 1,
       "flush": {
-        "totalMs": 0.5,
-        "maxMs": 0.5
+        "totalMs": 0.6000000238418579,
+        "maxMs": 0.6000000238418579
       },
       "bytes": 0
     },
-    "entries": 5,
-    "bytes": 2563,
+    "entries": 4,
+    "bytes": 4737,
     "ids": {
-      "sheet.mutation.set-range-values": 4,
-      "sheet.mutation.insert-sheet": 1
+      "sheet.mutation.set-range-values": 1,
+      "sheet.mutation.set-filter-range": 1,
+      "sheet.mutation.set-filter-criteria": 1,
+      "sheet.mutation.mark-dirty-filter-change": 1
     }
   },
   "replay": {
-    "executed": 5,
+    "executed": 4,
     "failed": [],
-    "ms": 4.599999904632568,
-    "entries": 5
+    "ms": 8.5,
+    "entries": 4
   },
   "known": null,
   "strict": true,

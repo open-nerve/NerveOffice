@@ -1,6 +1,6 @@
 {
   "check": "V15-replay",
-  "scenario": "sheet-style-copy",
+  "scenario": "sheet-autoheight",
   "mode": "enrich",
   "kind": "sheet",
   "browser": {
@@ -9,39 +9,39 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T07:34:53.339Z",
+  "timestamp": "2026-09-25T07:35:52.225Z",
   "log": {
     "stats": {
-      "logged": 5,
+      "logged": 6,
       "skipped": {
-        "otherUnit": 3,
-        "onlyLocal": 7
+        "otherUnit": 2,
+        "onlyLocal": 6
       },
       "clone": {
-        "totalMs": 0.10000002384185791,
-        "maxMs": 0.10000002384185791
+        "totalMs": 0.09999990463256836,
+        "maxMs": 0.09999990463256836
       },
       "cloneErrors": [],
       "pending": 0,
       "flushes": 1,
       "flush": {
-        "totalMs": 0.5,
-        "maxMs": 0.5
+        "totalMs": 0.7000000476837158,
+        "maxMs": 0.7000000476837158
       },
       "bytes": 0
     },
-    "entries": 5,
-    "bytes": 2563,
+    "entries": 6,
+    "bytes": 1898,
     "ids": {
       "sheet.mutation.set-range-values": 4,
-      "sheet.mutation.insert-sheet": 1
+      "sheet.mutation.set-worksheet-row-auto-height": 2
     }
   },
   "replay": {
-    "executed": 5,
+    "executed": 6,
     "failed": [],
-    "ms": 4.599999904632568,
-    "entries": 5
+    "ms": 13.300000071525574,
+    "entries": 6
   },
   "known": null,
   "strict": true,

@@ -9,7 +9,7 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T07:03:38.479Z",
+  "timestamp": "2026-09-25T07:36:06.277Z",
   "log": {
     "stats": {
       "logged": 7,
@@ -25,13 +25,13 @@
       "pending": 0,
       "flushes": 1,
       "flush": {
-        "totalMs": 0.6000000238418579,
-        "maxMs": 0.6000000238418579
+        "totalMs": 0.5,
+        "maxMs": 0.5
       },
       "bytes": 0
     },
     "entries": 7,
-    "bytes": 2124,
+    "bytes": 2097,
     "ids": {
       "sheet.mutation.set-range-values": 7
     }
@@ -39,7 +39,7 @@
   "replay": {
     "executed": 7,
     "failed": [],
-    "ms": 3.600000023841858,
+    "ms": 3.3000000715255737,
     "entries": 7
   },
   "known": null,

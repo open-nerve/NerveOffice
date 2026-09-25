@@ -235,7 +235,8 @@ const KNOWN_PLAIN: Record<string, { reason: string; check: (r: ReturnType<typeof
     'sheet-note': { reason: '批注 id 在 SheetsNoteModel.updateNote 里随机生成', check: (r) => r.diffCount > 0 && r.diffs.every((d) => /\.id$/.test(d.path) && d.path.includes('resources')) },
     'sheet-style-copy': { reason: '复制工作表的单元格按字符串引用样式 id，重放的实例里没有这些 id', check: (r) => r.danglingReplayed.length > 0 },
 };
-const ENRICH = ['sheet-note', 'sheet-style-copy'];
+/** 补全参数（样式附带记录 + 批注 id）对所有表格场景都跑一遍：样式 id 也应当一致（规范化内容逐字节相同）。 */
+const ENRICH = SCENARIOS.filter((x) => x.kind === 'sheet').map((x) => x.name);
 
 for (const s of SCENARIOS) {
     for (const mode of ENRICH.includes(s.name) ? (['plain', 'enrich'] as const) : (['plain'] as const)) {
@@ -281,6 +282,7 @@ for (const s of SCENARIOS) {
                 expect.soft(result.resolved, `重放后内容一致（样式按 id 展开）：${JSON.stringify(result.diffs.slice(0, 3))}`).toBe(true);
                 expect.soft(result.danglingReplayed, '重放后没有悬空的样式引用').toEqual([]);
             }
+            if (mode === 'enrich') expect.soft(result.strict, '补全之后规范化内容逐字节相同（样式 id 也一致）').toBe(true);
         });
     }
 }

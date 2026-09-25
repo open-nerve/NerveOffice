@@ -1,7 +1,7 @@
 {
   "check": "V15-replay",
   "scenario": "sheet-core",
-  "mode": "plain",
+  "mode": "enrich",
   "kind": "sheet",
   "browser": {
     "project": "chromium",
@@ -9,7 +9,7 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T07:31:10.810Z",
+  "timestamp": "2026-09-25T07:31:25.821Z",
   "log": {
     "stats": {
       "logged": 48,
@@ -18,20 +18,20 @@
         "onlyLocal": 31
       },
       "clone": {
-        "totalMs": 0.5,
+        "totalMs": 0.19999992847442627,
         "maxMs": 0.10000002384185791
       },
       "cloneErrors": [],
       "pending": 0,
       "flushes": 1,
       "flush": {
-        "totalMs": 13.199999928474426,
-        "maxMs": 13.199999928474426
+        "totalMs": 13.399999976158142,
+        "maxMs": 13.399999976158142
       },
       "bytes": 0
     },
     "entries": 48,
-    "bytes": 18054,
+    "bytes": 18851,
     "ids": {
       "sheet.mutation.set-range-values": 28,
       "sheet.mutation.set.numfmt": 4,
@@ -53,11 +53,11 @@
   "replay": {
     "executed": 48,
     "failed": [],
-    "ms": 20.5,
+    "ms": 20.700000047683716,
     "entries": 48
   },
   "known": null,
-  "strict": false,
+  "strict": true,
   "resolved": true,
   "diffs": [],
   "diffCount": 0,

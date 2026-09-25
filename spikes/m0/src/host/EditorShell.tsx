@@ -21,7 +21,7 @@ import { installImeRecorder } from '../harness/ime-recorder';
 import { installOutbox } from '../harness/outbox/index';
 import type { MutationLogger } from '../harness/mutation-log';
 import { clearLog, readLog, replayEntries, startMutationLogger } from '../harness/mutation-log';
-import { enrichParams } from '../harness/mutation-log-enrich';
+import { createStyleTracker, enrichParams, preloadStyles } from '../harness/mutation-log-enrich';
 import { IImageIoService } from '@univerjs/core';
 import { DocSelectionManagerService } from '@univerjs/docs';
 import type { ImageFunctionPolicy } from '../harness/image-function-policy';
@@ -143,6 +143,7 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
             logger = startMutationLogger(editor.univer, editor.unitId(), logId, {
                 exclude: profile.changeDetectionExclude,
                 enrich: params.mutlogEnrich ? (id, p) => enrichParams(editor.univer, id, p) : undefined,
+                styles: params.mutlogEnrich ? createStyleTracker(editor.univer, editor.unitId()) as () => Record<string, unknown> | null : undefined,
             });
         };
 
@@ -169,7 +170,9 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
                         read: readLog,
                         replay: async (logId, afterSeq = 0) => {
                             const entries = await readLog(logId, afterSeq);
-                            return { ...replayEntries(window.__m0!.editor!.univerAPI, entries), entries: entries.length };
+                            const current = window.__m0!.editor!;
+                            const before = (e: { styles?: Record<string, unknown> }) => preloadStyles(current.univer, current.unitId(), e.styles as never);
+                            return { ...replayEntries(current.univerAPI, entries, before), entries: entries.length };
                         },
                         clear: clearLog,
                     };

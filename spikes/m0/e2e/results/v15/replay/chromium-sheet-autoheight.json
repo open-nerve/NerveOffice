@@ -9,7 +9,7 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T07:03:24.381Z",
+  "timestamp": "2026-09-25T07:35:38.127Z",
   "log": {
     "stats": {
       "logged": 6,
@@ -18,20 +18,20 @@
         "onlyLocal": 6
       },
       "clone": {
-        "totalMs": 0,
-        "maxMs": 0
+        "totalMs": 0.20000004768371582,
+        "maxMs": 0.10000002384185791
       },
       "cloneErrors": [],
       "pending": 0,
       "flushes": 1,
       "flush": {
-        "totalMs": 0.6000000238418579,
-        "maxMs": 0.6000000238418579
+        "totalMs": 0.7000000476837158,
+        "maxMs": 0.7000000476837158
       },
       "bytes": 0
     },
     "entries": 6,
-    "bytes": 1832,
+    "bytes": 1803,
     "ids": {
       "sheet.mutation.set-range-values": 4,
       "sheet.mutation.set-worksheet-row-auto-height": 2
@@ -40,7 +40,7 @@
   "replay": {
     "executed": 6,
     "failed": [],
-    "ms": 13.5,
+    "ms": 12.5,
     "entries": 6
   },
   "known": null,
