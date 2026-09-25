@@ -12,6 +12,9 @@ export interface OutboxTarget {
     baseRevision: number;
     writeEpoch: number;
     clientBuild: string;
+    /** V15：快照所含的最后一条 mutation 日志（恢复时只重放序号更大的条目）。 */
+    logId?: string;
+    logSeq?: number;
 }
 
 export interface WriteOptions {

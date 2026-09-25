@@ -48,6 +48,8 @@ export interface InstallOutboxOptions {
     revision: number;
     placement: Placement;
     durability: Durability;
+    /** V15：mutation 日志的当前位置（捕获时与 save() 在同一个同步段里读取）。 */
+    logMark?: () => { logId: string; logSeq: number } | null;
 }
 
 const withoutSnapshot = (r: RecoveryResult): RecoveryInfo => {
@@ -63,7 +65,8 @@ export async function installOutbox(options: InstallOutboxOptions): Promise<Outb
     let state: OutboxState = 'busy';
     const db = await openOutbox();
     const pipeline = await createPipeline(placement, key);
-    const target = (id = docId) => ({ userId: user, docId: id, baseRevision: revision, writeEpoch: 0, clientBuild: 'm0-p6' });
+    // target() 与 capture 里的 save() 之间没有 await：日志位置与快照内容一致
+    const target = (id = docId) => ({ userId: user, docId: id, baseRevision: revision, writeEpoch: 0, clientBuild: 'm0-p6', ...(options.logMark?.() ?? {}) });
     let autosave: AutosaveHandle | null = null;
     let recovery: RecoveryResult | null = null;
 

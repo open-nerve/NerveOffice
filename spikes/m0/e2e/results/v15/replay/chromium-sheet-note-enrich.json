@@ -1,0 +1,52 @@
+{
+  "check": "V15-replay",
+  "scenario": "sheet-note",
+  "mode": "enrich",
+  "kind": "sheet",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T07:02:11.565Z",
+  "log": {
+    "stats": {
+      "logged": 4,
+      "skipped": {
+        "onlyLocal": 6
+      },
+      "clone": {
+        "totalMs": 0,
+        "maxMs": 0
+      },
+      "cloneErrors": [],
+      "pending": 0,
+      "flushes": 1,
+      "flush": {
+        "totalMs": 0.5,
+        "maxMs": 0.5
+      },
+      "bytes": 0
+    },
+    "entries": 4,
+    "bytes": 1131,
+    "ids": {
+      "sheet.mutation.set-range-values": 2,
+      "sheet.mutation.update-note": 2
+    }
+  },
+  "replay": {
+    "executed": 4,
+    "failed": [],
+    "ms": 1.2000000476837158,
+    "entries": 4
+  },
+  "known": null,
+  "strict": true,
+  "resolved": true,
+  "diffs": [],
+  "diffCount": 0,
+  "danglingOriginal": [],
+  "danglingReplayed": []
+}

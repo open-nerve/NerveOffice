@@ -38,8 +38,9 @@ export interface PageParams {
     user: string;
     /** 发件箱写入的持久性（P6）：default 为浏览器默认，strict 要求落盘后才完成。 */
     durability: 'default' | 'strict';
-    /** mutation 增量日志（P6，V15）。 */
+    /** mutation 增量日志（P6，V15）：mutlog=1 记录；mutlog=enrich 记录并补全处理器里随机生成的 id。 */
     mutlog: boolean;
+    mutlogEnrich: boolean;
     /** 真实 Safari 自检：场景名；完成后跳转到 next。 */
     selftest?: string;
     next?: string;
@@ -68,7 +69,8 @@ export function readPageParams(defaultSample: string): PageParams {
         outbox: q.get('outbox') === 'main' ? 'main' : q.get('outbox') === 'worker' ? 'worker' : 'off',
         user: /^[\w.-]+$/.test(q.get('user') ?? '') ? q.get('user')! : 'u1',
         durability: q.get('durability') === 'strict' ? 'strict' : 'default',
-        mutlog: q.get('mutlog') === '1',
+        mutlog: q.get('mutlog') === '1' || q.get('mutlog') === 'enrich',
+        mutlogEnrich: q.get('mutlog') === 'enrich',
         selftest: q.get('selftest') ?? undefined,
         next: q.get('next') ?? undefined,
     };

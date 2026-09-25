@@ -24,6 +24,9 @@ export interface OutboxRecord extends Sealed {
     gzipBytes: number;
     /** Date.now()。 */
     updatedAt: number;
+    /** V15：快照所含的最后一条 mutation 日志。 */
+    logId?: string;
+    logSeq?: number;
 }
 
 export type Durability = 'default' | 'strict' | 'relaxed';

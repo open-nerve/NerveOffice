@@ -19,6 +19,9 @@ import { imageEvents } from '../harness/platform-image-io';
 import { docPolicyEvents } from '../harness/doc-policy';
 import { installImeRecorder } from '../harness/ime-recorder';
 import { installOutbox } from '../harness/outbox/index';
+import type { MutationLogger } from '../harness/mutation-log';
+import { clearLog, readLog, replayEntries, startMutationLogger } from '../harness/mutation-log';
+import { enrichParams } from '../harness/mutation-log-enrich';
 import { IImageIoService } from '@univerjs/core';
 import { DocSelectionManagerService } from '@univerjs/docs';
 import type { ImageFunctionPolicy } from '../harness/image-function-policy';
@@ -132,12 +135,24 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
             },
         };
 
+        // mutation 增量日志（P6，V15）：每个编辑器实例一个记录器，日志 id 带会话随机串
+        let logger: MutationLogger | null = null;
+        const startLogger = (editor: EditorHandle) => {
+            logger?.dispose();
+            const logId = `${params.doc ?? editor.unitId()}:${Math.random().toString(36).slice(2, 10)}`;
+            logger = startMutationLogger(editor.univer, editor.unitId(), logId, {
+                exclude: profile.changeDetectionExclude,
+                enrich: params.mutlogEnrich ? (id, p) => enrichParams(editor.univer, id, p) : undefined,
+            });
+        };
+
         // 用给定的快照重建编辑器（P6：从发件箱恢复）
         const reopen = async (data: Record<string, unknown>): Promise<EditorHandle> => {
             window.__m0!.editor?.dispose();
             window.__m0!.editor = undefined;
             const editor = await open('edit', data, params.ro);
             window.__m0!.editor = editor;
+            if (params.mutlog) startLogger(editor);
             return editor;
         };
 
@@ -147,6 +162,18 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
                 if (params.imelog && profile.kind === 'doc') window.__m0!.imeRecorder = installImeRecorder(editor);
                 setStatus('ready');
                 setMessage(`steady ${Math.round(editor.timings.steady ?? -1)} ms`);
+                if (params.mutlog && params.mode === 'edit') {
+                    startLogger(editor);
+                    window.__m0!.mutlog = {
+                        logger: () => logger!,
+                        read: readLog,
+                        replay: async (logId, afterSeq = 0) => {
+                            const entries = await readLog(logId, afterSeq);
+                            return { ...replayEntries(window.__m0!.editor!.univerAPI, entries), entries: entries.length };
+                        },
+                        clear: clearLog,
+                    };
+                }
                 // 发件箱（P6）在编辑器就绪之后安装：用例用 window.__m0.outbox 是否出现来判断装好了没有
                 if (params.outbox !== 'off' && params.mode === 'edit') {
                     try {
@@ -158,6 +185,7 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
                             revision: window.__m0!.loadedRevision ?? 0,
                             placement: params.outbox,
                             durability: params.durability,
+                            logMark: params.mutlog ? () => (logger == null ? null : { logId: logger.logId, logSeq: logger.seq() }) : undefined,
                         });
                     } catch (error) {
                         window.__m0!.outboxError = error instanceof Error ? error.message : String(error);

@@ -245,6 +245,14 @@ export interface M0Window {
     outboxError?: string;
     /** 加载时服务端的修订号（P6，从文档存储加载时）。 */
     loadedRevision?: number;
+    /** mutation 增量日志（P6，V15，mutlog=1）。 */
+    mutlog?: {
+        logger(): import('./mutation-log').MutationLogger;
+        read(logId: string, afterSeq?: number): Promise<import('./mutation-log').LogEntry[]>;
+        /** 读出日志并在当前编辑器上重放。 */
+        replay(logId: string, afterSeq?: number): Promise<import('./mutation-log').ReplayResult & { entries: number }>;
+        clear(logId: string): Promise<void>;
+    };
     /** 平台图片服务、粘贴钩子与命令守卫的操作记录（P4）。 */
     images?: { events: import('./platform-image-io').ImageEvent[]; io: () => import('@univerjs/core').IImageIoService };
     /** 销毁当前实例并按指定模式从文档存储重新创建（V09 的"销毁重建"）。 */
