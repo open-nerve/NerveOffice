@@ -1,0 +1,49 @@
+{
+  "check": "V13-paste",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T02:22:04.041Z",
+  "source": "plain",
+  "target": "heading",
+  "config": "platform",
+  "dispatched": {
+    "target": "div",
+    "defaultPrevented": true
+  },
+  "changed": true,
+  "diff": {
+    "paragraphs": 2,
+    "headings": [
+      "5:https://exam"
+    ],
+    "lists": [],
+    "aligns": [],
+    "tables": [],
+    "links": [
+      "https://ex→https://example.com/plain"
+    ],
+    "images": [],
+    "runs": []
+  },
+  "features": {
+    "多行成段": true,
+    "网址成链接": true
+  },
+  "pwned": null,
+  "unsafeLinks": [],
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  },
+  "policyEvents": [
+    {
+      "kind": "paste-link",
+      "detail": "修正链接地址为链接文字 https://example.com/plain"
+    }
+  ],
+  "roundtrip": null
+}

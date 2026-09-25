@@ -1,0 +1,299 @@
+{
+  "check": "V13-paste",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T02:12:27.262Z",
+  "source": "web-article",
+  "target": "heading",
+  "config": "platform",
+  "dispatched": {
+    "target": "div",
+    "defaultPrevented": true
+  },
+  "changed": true,
+  "diff": {
+    "paragraphs": 18,
+    "headings": [
+      "4:段落甲：用于标题样式。快",
+      "5:准备工作",
+      "5:\u0011"
+    ],
+    "lists": [
+      "ORDER_LIST/0:安装 Node.js",
+      "BULLET_LIST/1:准备数据库Postg",
+      "BULLET_LIST/1:开启逻辑复制WAL ",
+      "ORDER_LIST/0:配置反向代理"
+    ],
+    "aligns": [],
+    "tables": [
+      "3×2"
+    ],
+    "links": [
+      "代码仓库→https://example.com/repo"
+    ],
+    "images": [],
+    "runs": [
+      {
+        "text": "快速开始",
+        "ts": {
+          "bl": 1,
+          "cl": {
+            "rgb": "rgb(31,35,40)"
+          },
+          "ff": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Sans\", Helvetica, Arial, sans-serif",
+          "bg": {
+            "rgb": "rgb(255,255,255)"
+          }
+        }
+      },
+      {
+        "text": "本文介绍如何部署",
+        "ts": {
+          "cl": {
+            "rgb": "rgb(31,35,40)"
+          },
+          "ff": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Sans\", Helvetica, Arial, sans-serif",
+          "fs": 12,
+          "bg": {
+            "rgb": "rgb(255,255,255)"
+          }
+        }
+      },
+      {
+        "text": "团队文档平台",
+        "ts": {
+          "cl": {
+            "rgb": "rgb(31,35,40)"
+          },
+          "ff": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Sans\", Helvetica, Arial, sans-serif",
+          "fs": 12,
+          "bg": {
+            "rgb": "rgb(255,255,255)"
+          },
+          "bl": 1
+        }
+      },
+      {
+        "text": "，并说明",
+        "ts": {
+          "cl": {
+            "rgb": "rgb(31,35,40)"
+          },
+          "ff": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Sans\", Helvetica, Arial, sans-serif",
+          "fs": 12,
+          "bg": {
+            "rgb": "rgb(255,255,255)"
+          }
+        }
+      },
+      {
+        "text": "常见问题",
+        "ts": {
+          "cl": {
+            "rgb": "rgb(31,35,40)"
+          },
+          "ff": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Sans\", Helvetica, Arial, sans-serif",
+          "fs": 12,
+          "bg": {
+            "rgb": "rgb(255,255,255)"
+          },
+          "bl": 1
+        }
+      },
+      {
+        "text": "。源码见",
+        "ts": {
+          "cl": {
+            "rgb": "rgb(31,35,40)"
+          },
+          "ff": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Sans\", Helvetica, Arial, sans-serif",
+          "fs": 12,
+          "bg": {
+            "rgb": "rgb(255,255,255)"
+          }
+        }
+      },
+      {
+        "text": "代码仓库",
+        "ts": {
+          "cl": {
+            "rgb": "rgb(9,105,218)"
+          },
+          "ff": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Sans\", Helvetica, Arial, sans-serif",
+          "fs": 12,
+          "bg": {
+            "rgb": "rgb(255,255,255)"
+          }
+        }
+      },
+      {
+        "text": "，配置项用",
+        "ts": {
+          "cl": {
+            "rgb": "rgb(31,35,40)"
+          },
+          "ff": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Sans\", Helvetica, Arial, sans-serif",
+          "fs": 12,
+          "bg": {
+            "rgb": "rgb(255,255,255)"
+          }
+        }
+      },
+      {
+        "text": "config.yaml",
+        "ts": {
+          "cl": {
+            "rgb": "rgb(31,35,40)"
+          },
+          "ff": "ui-monospace, SFMono-Regular, \"SF Mono\", Menlo, Consolas, \"Liberation Mono\", monospace",
+          "fs": 9.75,
+          "bg": {
+            "rgb": "rgba(129,139,152,0.12)"
+          }
+        }
+      },
+      {
+        "text": "。",
+        "ts": {
+          "cl": {
+            "rgb": "rgb(31,35,40)"
+          },
+          "ff": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Sans\", Helvetica, Arial, sans-serif",
+          "fs": 12,
+          "bg": {
+            "rgb": "rgb(255,255,255)"
+          }
+        }
+      },
+      {
+        "text": "准备工作",
+        "ts": {
+          "bl": 1,
+          "cl": {
+            "rgb": "rgb(31,35,40)"
+          },
+          "ff": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Sans\", Helvetica, Arial, sans-serif",
+          "bg": {
+            "rgb": "rgb(255,255,255)"
+          }
+        }
+      },
+      {
+        "text": "安装 Node.js 24",
+        "ts": {
+          "cl": {
+            "rgb": "rgb(31,35,40)"
+          },
+          "ff": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Sans\", Helvetica, Arial, sans-serif",
+          "fs": 12,
+          "bg": {
+            "rgb": "rgb(255,255,255)"
+          }
+        }
+      },
+      {
+        "text": "准备数据库PostgreSQL ",
+        "ts": {
+          "cl": {
+            "rgb": "rgb(31,35,40)"
+          },
+          "ff": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Sans\", Helvetica, Arial, sans-serif",
+          "fs": 12,
+          "bg": {
+            "rgb": "rgb(255,255,255)"
+          }
+        }
+      },
+      {
+        "text": "开启逻辑复制WAL 归档",
+        "ts": {
+          "cl": {
+            "rgb": "rgb(31,35,40)"
+          },
+          "ff": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Sans\", Helvetica, Arial, sans-serif",
+          "fs": 12,
+          "bg": {
+            "rgb": "rgb(255,255,255)"
+          }
+        }
+      },
+      {
+        "text": "配置反向代理",
+        "ts": {
+          "cl": {
+            "rgb": "rgb(31,35,40)"
+          },
+          "ff": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Sans\", Helvetica, Arial, sans-serif",
+          "fs": 12,
+          "bg": {
+            "rgb": "rgb(255,255,255)"
+          }
+        }
+      },
+      {
+        "text": "注意：生产环境必须开启 HTTP",
+        "ts": {
+          "cl": {
+            "rgb": "rgb(89,99,110)"
+          },
+          "ff": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Sans\", Helvetica, Arial, sans-serif",
+          "fs": 12,
+          "bg": {
+            "rgb": "rgb(255,255,255)"
+          }
+        }
+      },
+      {
+        "text": "第一行第二行（同一段里的换行）",
+        "ts": {
+          "cl": {
+            "rgb": "rgb(31,35,40)"
+          },
+          "ff": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Sans\", Helvetica, Arial, sans-serif",
+          "fs": 12,
+          "bg": {
+            "rgb": "rgb(255,255,255)"
+          }
+        }
+      },
+      {
+        "text": "六级标题",
+        "ts": {
+          "bl": 1,
+          "cl": {
+            "rgb": "rgb(89,99,110)"
+          },
+          "ff": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", \"Noto Sans\", Helvetica, Arial, sans-serif",
+          "bg": {
+            "rgb": "rgb(255,255,255)"
+          }
+        }
+      }
+    ]
+  },
+  "features": {
+    "一级标题": false,
+    "二级标题": true,
+    "六级标题": false,
+    "粗体": true,
+    "强调是斜体": false,
+    "链接": true,
+    "有序列表": false,
+    "嵌套列表": true,
+    "删除线": false,
+    "表格": true,
+    "段内换行": false
+  },
+  "pwned": null,
+  "unsafeLinks": [],
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  },
+  "policyEvents": [],
+  "roundtrip": null
+}

@@ -1,0 +1,41 @@
+{
+  "check": "V13-ime",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T02:23:28.704Z",
+  "sessions": 1,
+  "events": 20,
+  "compositionEnd": {
+    "t": 677,
+    "type": "compositionend",
+    "target": "__editor_m0-doc-minimal",
+    "data": "你好",
+    "trusted": false
+  },
+  "checkpoints": [
+    {
+      "t": 403,
+      "reason": "start",
+      "text": "M0 文字文档样本",
+      "paragraphs": 1,
+      "undo": {
+        "undos": 0,
+        "redos": 0
+      }
+    },
+    {
+      "t": 1080,
+      "reason": "compositionend",
+      "text": "M0 文字文档样本你好",
+      "paragraphs": 1,
+      "undo": {
+        "undos": 1,
+        "redos": 0
+      }
+    }
+  ]
+}

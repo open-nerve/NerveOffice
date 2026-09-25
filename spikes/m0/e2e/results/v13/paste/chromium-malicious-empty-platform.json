@@ -1,0 +1,50 @@
+{
+  "check": "V13-paste",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T02:11:33.991Z",
+  "source": "malicious",
+  "target": "empty",
+  "config": "platform",
+  "dispatched": {
+    "target": "div",
+    "defaultPrevented": true
+  },
+  "changed": true,
+  "diff": {
+    "paragraphs": 3,
+    "headings": [],
+    "lists": [],
+    "aligns": [],
+    "tables": [],
+    "links": [
+      "带事件的正常链接→https://example.com/ok",
+      "本站相对地址→http://127.0.0.1:4760/relative/path",
+      "文档内锚点→http://127.0.0.1:4760/doc.html?sample=p5-cap&img=platform&docpolicy=platform#heading-1"
+    ],
+    "images": [
+      "/api/assets/00000000-0000-4000-8000-0000"
+    ],
+    "runs": []
+  },
+  "features": {
+    "安全链接保留": true,
+    "本站相对地址": true,
+    "文档内锚点": true
+  },
+  "pwned": null,
+  "unsafeLinks": [],
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  },
+  "policyEvents": [],
+  "roundtrip": {
+    "firstDiff": [],
+    "secondDiff": []
+  }
+}

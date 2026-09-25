@@ -1,0 +1,47 @@
+{
+  "check": "V13-paste",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-25T02:16:17.799Z",
+  "source": "plain",
+  "target": "empty",
+  "config": "default",
+  "dispatched": {
+    "target": "div",
+    "defaultPrevented": true
+  },
+  "changed": true,
+  "diff": {
+    "paragraphs": 2,
+    "headings": [],
+    "lists": [],
+    "aligns": [],
+    "tables": [],
+    "links": [
+      "https://ex→第一行纯文本\n第二行纯文本\nhttps://example.com/plain"
+    ],
+    "images": [],
+    "runs": []
+  },
+  "features": {
+    "多行成段": true,
+    "网址成链接": true
+  },
+  "pwned": null,
+  "unsafeLinks": [
+    {
+      "text": "https://example.com/plain",
+      "url": "第一行纯文本\n第二行纯文本\nhttps://example.com/plain"
+    }
+  ],
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  },
+  "policyEvents": [],
+  "roundtrip": null
+}

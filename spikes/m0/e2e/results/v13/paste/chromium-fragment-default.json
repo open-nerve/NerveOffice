@@ -1,0 +1,30 @@
+{
+  "check": "V13-paste-fragment",
+  "config": "default",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T02:13:31.210Z",
+  "diff": {
+    "paragraphs": 1,
+    "headings": [
+      "4:恶意链接与标题"
+    ],
+    "lists": [],
+    "aligns": [],
+    "tables": [],
+    "links": [
+      "恶意链接→javascript:window.__p5_pwned=1"
+    ],
+    "images": [],
+    "runs": []
+  },
+  "policyEvents": [],
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  }
+}

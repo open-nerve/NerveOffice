@@ -77,6 +77,7 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
                 imageFunction: params.imagefn,
                 docPolicy: params.docpolicy,
                 outline: params.outline,
+                tocBlock: params.tocblock,
             });
             window.__m0!.readMode = mode === 'read' ? await enterReadMode(editor, ro as never) : undefined;
             return editor;

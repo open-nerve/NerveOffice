@@ -218,9 +218,16 @@ export function installDocPolicy(univer: Univer, univerAPI: FUniver, unitId: str
             const bodies = [body, context.documentData.body].filter((b, i, all): b is IDocumentBody => b != null && all.indexOf(b) === i);
             for (const b of bodies) {
                 const bad = (b.customRanges ?? []).filter((r: ICustomRange) => r.rangeType === CustomRangeType.HYPERLINK && !isAllowedLinkUrl(r.properties?.url));
-                if (bad.length > 0) {
-                    b.customRanges = (b.customRanges ?? []).filter((r) => !bad.includes(r));
-                    for (const r of bad) record('paste-link', `去掉链接 ${String(r.properties?.url).slice(0, 80)}`);
+                for (const r of bad) {
+                    // SDK 的纯文本路径把"像网址的行"变成链接，地址却是整段粘贴的文字（parse.ts:65-74）：链接文字本身是合法地址时改用它
+                    const text = b.dataStream.slice(r.startIndex, r.endIndex + 1);
+                    if (isAllowedLinkUrl(text)) {
+                        r.properties = { ...r.properties, url: text };
+                        record('paste-link', `修正链接地址为链接文字 ${text.slice(0, 80)}`);
+                    } else {
+                        b.customRanges = (b.customRanges ?? []).filter((x) => x !== r);
+                        record('paste-link', `去掉链接 ${String(r.properties?.url).slice(0, 80)}`);
+                    }
                 }
             }
             const target = selection.getActiveTextRange();

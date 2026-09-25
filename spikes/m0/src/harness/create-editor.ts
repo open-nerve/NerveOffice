@@ -44,6 +44,8 @@ export interface CreateEditorOptions {
     docPolicy?: 'default' | 'platform';
     /** 文字文档的大纲侧栏（P5）。 */
     outline?: boolean;
+    /** 文字文档的目录块插件（P5 评估用）。 */
+    tocBlock?: boolean;
 }
 
 export interface ResourceHookInfo {
@@ -96,6 +98,7 @@ export async function createEditor(options: CreateEditorOptions): Promise<Editor
         formulaIntervalCount: options.formulaIntervalCount,
         imageService: options.imageService ?? 'default',
         outline: options.outline ?? false,
+        tocBlock: options.tocBlock ?? false,
     };
     const t0 = performance.now();
     const timings: Record<string, number> = { t0 };

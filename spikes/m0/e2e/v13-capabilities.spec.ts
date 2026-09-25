@@ -8,7 +8,7 @@ import { expect, test } from '@playwright/test';
 import { browserInfo, writeResult } from './helpers';
 import {
     caretPoint, clickToolbar, docId, docSummary, docText, endOffset, fillLinkPopup, findColorBox, focusEditor, imageToolbarButtons, offsetOf, openDoc,
-    openedWindows, pageHealth, PLATFORM, policyEvents, press, redo, resetHealth, ribbonTab, roundtrip, selectText, setSelection, stubWindowOpen, undo,
+    openedWindows, pageHealth, PLATFORM, policyEvents, press, redo, resetHealth, ribbonTab, roundtrip, selectText, setSelection, stubWindowOpen, undo, VARIANT,
 } from './p5-helpers';
 import { fixtureFile, insertViaFileChooser, syntheticPaste } from './p4-helpers';
 
@@ -70,7 +70,7 @@ async function capability(
         rt = { ...r, preserved: contentOf(await docSummary(page)) === contentOf(after) };
     }
     const result: CapabilityResult = { id: meta.id, name: meta.name, config, steps, undo: { count, restored, redone }, roundtrip: rt, health, policyEvents: events };
-    await writeResult(`v13/capabilities/${testInfo.project.name}-${meta.id}-${config}.json`, {
+    await writeResult(`v13/capabilities${VARIANT}/${testInfo.project.name}-${meta.id}-${config}.json`, {
         check: 'V13-capability', browser: browserInfo(page, testInfo), timestamp: new Date().toISOString(), ...result,
         summary: { before: { paragraphs: before.paragraphs.length }, after },
     });

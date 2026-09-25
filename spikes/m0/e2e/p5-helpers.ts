@@ -267,8 +267,15 @@ export async function pageHealth(page: Page): Promise<PageHealth> {
     return { errors, cspEnforce: csp.filter((v) => v.disposition === 'enforce').map((v) => `${v.directive} ${v.blocked}`) };
 }
 
+/**
+ * 额外的页面参数（环境变量 M0_P5_QUERY）：用同一套用例回归档案的变体，例如 worker=1（排版 Worker）、without=formula（去掉公式引擎）。
+ */
+export const EXTRA_QUERY = process.env.M0_P5_QUERY ?? '';
+/** 结果目录的后缀：变体的结果单独存放，例如 v13/capabilities-worker/。 */
+export const VARIANT = EXTRA_QUERY === '' ? '' : `-${EXTRA_QUERY.replace(/=1\b/g, '').replace(/[^\w]+/g, '-')}`;
+
 export async function openDoc(page: Page, query: string, base: string = SERVERS.full): Promise<void> {
-    await page.goto(`${base}/doc.html?${query}`);
+    await page.goto(`${base}/doc.html?${query}${EXTRA_QUERY === '' ? '' : `&${EXTRA_QUERY}`}`);
     await waitForEditor(page);
 }
 
