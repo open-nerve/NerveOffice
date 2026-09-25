@@ -1,0 +1,16 @@
+{
+  "check": "V13-paste-plain-links",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T09:24:26.793Z",
+  "links": [
+    {
+      "text": "https://example.com/plain",
+      "url": "第一行纯文本\n第二行纯文本\nhttps://example.com/plain"
+    }
+  ]
+}

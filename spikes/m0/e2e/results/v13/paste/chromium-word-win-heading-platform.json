@@ -1,0 +1,345 @@
+{
+  "check": "V13-paste",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T05:07:55.649Z",
+  "source": "word-win",
+  "target": "heading",
+  "config": "platform",
+  "dispatched": {
+    "target": "div",
+    "defaultPrevented": true
+  },
+  "changed": true,
+  "diff": {
+    "paragraphs": 18,
+    "headings": [
+      "4:段落甲：用于标题样式。项",
+      "5:一、进展",
+      "5:二、数据",
+      "5:"
+    ],
+    "lists": [
+      "ORDER_LIST/0:完成能力矩阵",
+      "ORDER_LIST/0:中文输入法验证",
+      "ORDER_LIST/1:拼音",
+      "BULLET_LIST/0:l项目符号：第一条",
+      "BULLET_LIST/0:l项目符号：第二条"
+    ],
+    "aligns": [
+      "2:居中的段落",
+      "3:右对齐的段落",
+      "2:已完成"
+    ],
+    "tables": [
+      "2×3"
+    ],
+    "links": [
+      "完整报告→https://example.com/weekly/39",
+      "pm@example→mailto:pm@example.com"
+    ],
+    "images": [],
+    "runs": [
+      {
+        "text": "项目周报",
+        "ts": {
+          "ff": "等线"
+        }
+      },
+      {
+        "text": "年第",
+        "ts": {
+          "ff": "等线"
+        }
+      },
+      {
+        "text": "周",
+        "ts": {
+          "ff": "等线"
+        }
+      },
+      {
+        "text": "本周完成了",
+        "ts": {
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "文字文档",
+        "ts": {
+          "bl": 1,
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "的验证：",
+        "ts": {
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "斜体",
+        "ts": {
+          "it": 1,
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "、",
+        "ts": {
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "下划线",
+        "ts": {
+          "ul": {
+            "s": 1
+          },
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "、",
+        "ts": {
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "删除线",
+        "ts": {
+          "st": {
+            "s": 1
+          },
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "、",
+        "ts": {
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "2",
+        "ts": {
+          "va": 2
+        }
+      },
+      {
+        "text": "、",
+        "ts": {
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "2",
+        "ts": {
+          "va": 3
+        }
+      },
+      {
+        "text": "、",
+        "ts": {
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "红色文字",
+        "ts": {
+          "ff": "宋体",
+          "cl": {
+            "rgb": "rgb(255,0,0)"
+          }
+        }
+      },
+      {
+        "text": "、",
+        "ts": {
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "黄色高亮",
+        "ts": {
+          "ff": "宋体",
+          "bg": {
+            "rgb": "rgb(255,255,0)"
+          }
+        }
+      },
+      {
+        "text": "、",
+        "ts": {
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "四号黑体",
+        "ts": {
+          "fs": 14,
+          "ff": "黑体"
+        }
+      },
+      {
+        "text": "。",
+        "ts": {
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "居中的段落",
+        "ts": {
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "右对齐的段落",
+        "ts": {
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "一、进展",
+        "ts": {
+          "ff": "等线"
+        }
+      },
+      {
+        "text": "完成能力矩阵",
+        "ts": {
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "中文输入法验证",
+        "ts": {
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "拼音",
+        "ts": {
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "l",
+        "ts": {
+          "ff": "Wingdings"
+        }
+      },
+      {
+        "text": "项目符号：第一条",
+        "ts": {
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "l",
+        "ts": {
+          "ff": "Wingdings"
+        }
+      },
+      {
+        "text": "项目符号：第二条",
+        "ts": {
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "二、数据",
+        "ts": {
+          "ff": "等线"
+        }
+      },
+      {
+        "text": "事项",
+        "ts": {
+          "bl": 1,
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "负责人",
+        "ts": {
+          "bl": 1,
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "状态",
+        "ts": {
+          "bl": 1,
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "能力矩阵",
+        "ts": {
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "张三",
+        "ts": {
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "已完成",
+        "ts": {
+          "ff": "宋体",
+          "cl": {
+            "rgb": "rgb(0,176,80)"
+          }
+        }
+      },
+      {
+        "text": "详见完整报告，或联系",
+        "ts": {
+          "ff": "宋体"
+        }
+      },
+      {
+        "text": "。",
+        "ts": {
+          "ff": "宋体"
+        }
+      }
+    ]
+  },
+  "features": {
+    "一级标题": false,
+    "二级标题": true,
+    "粗体": true,
+    "斜体": true,
+    "下划线": true,
+    "删除线": true,
+    "下标": true,
+    "文字颜色": true,
+    "高亮": true,
+    "字号": true,
+    "居中": true,
+    "右对齐": true,
+    "编号列表": true,
+    "二级编号": true,
+    "项目符号": true,
+    "列表标记已去掉": false,
+    "表格": true,
+    "网址链接": true,
+    "邮件链接": true
+  },
+  "pwned": null,
+  "unsafeLinks": [],
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  },
+  "policyEvents": [],
+  "roundtrip": null
+}

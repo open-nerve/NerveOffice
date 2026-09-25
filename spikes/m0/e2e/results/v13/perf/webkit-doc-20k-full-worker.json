@@ -1,0 +1,92 @@
+{
+  "check": "V13-perf",
+  "sample": "doc-20k-full",
+  "worker": true,
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T10:37:09.166Z",
+  "size": {
+    "chars": 20780,
+    "tables": 8,
+    "images": 10,
+    "bytes": 146290
+  },
+  "open": {
+    "runs": [
+      {
+        "ready": 27,
+        "rendered": 363,
+        "steady": 3365
+      },
+      {
+        "ready": 13,
+        "rendered": 355,
+        "steady": 3357
+      },
+      {
+        "ready": 13,
+        "rendered": 354,
+        "steady": 3356
+      }
+    ],
+    "median": {
+      "ready": 13,
+      "rendered": 355,
+      "steady": 3357
+    }
+  },
+  "heap": {
+    "afterOpen": null,
+    "afterEdit": null
+  },
+  "typing": {
+    "latency": {
+      "p50": 32,
+      "p95": 47,
+      "max": 52,
+      "min": 20,
+      "n": 100
+    },
+    "painted": {
+      "p50": 70,
+      "p95": 430,
+      "max": 430,
+      "min": 51,
+      "n": 10
+    },
+    "blockMs": 25,
+    "frameGapMs": 37
+  },
+  "ime": {
+    "driver": "webkit",
+    "update": {
+      "p50": 31,
+      "p95": 46,
+      "max": 51,
+      "min": 26,
+      "n": 60
+    },
+    "updatePainted": {
+      "p50": 63,
+      "p95": 764,
+      "max": 781,
+      "min": 50,
+      "n": 20
+    },
+    "end": {
+      "p50": 31,
+      "p95": 47,
+      "max": 47,
+      "min": 27,
+      "n": 10
+    },
+    "committed": 10,
+    "blockMs": 25,
+    "frameGapMs": 40
+  },
+  "paintMissed": 0
+}

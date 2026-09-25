@@ -16,7 +16,10 @@ import { runSelftest } from '../harness/selftest';
 import { resourceLoadFailures } from '../harness/guarded-resource-manager';
 import { countingWorkerFactory, createWorkerStats } from '../harness/worker-stats';
 import { imageEvents } from '../harness/platform-image-io';
+import { docPolicyEvents } from '../harness/doc-policy';
+import { installImeRecorder } from '../harness/ime-recorder';
 import { IImageIoService } from '@univerjs/core';
+import { DocSelectionManagerService } from '@univerjs/docs';
 import type { ImageFunctionPolicy } from '../harness/image-function-policy';
 
 interface EditorShellProps {
@@ -72,6 +75,9 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
                 formulaIntervalCount: params.interval,
                 imageService: params.img,
                 imageFunction: params.imagefn,
+                docPolicy: params.docpolicy,
+                outline: params.outline,
+                tocBlock: params.tocblock,
             });
             window.__m0!.readMode = mode === 'read' ? await enterReadMode(editor, ro as never) : undefined;
             return editor;
@@ -117,11 +123,17 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
             content,
             waitForCapture: async (options) => waitForCapture(window.__m0!.editor ?? await ready, options),
             images: { events: imageEvents, io: () => (window.__m0!.editor!).univer.__getInjector().get(IImageIoService) },
+            docPolicy: { events: docPolicyEvents },
+            activeTextRange: () => {
+                const r = window.__m0!.editor!.univer.__getInjector().get(DocSelectionManagerService).getActiveTextRange();
+                return r == null ? null : { startOffset: r.startOffset, endOffset: r.endOffset, segmentId: r.segmentId ?? '' };
+            },
         };
 
         ready.then(
             async (editor) => {
                 window.__m0!.editor = editor;
+                if (params.imelog && profile.kind === 'doc') window.__m0!.imeRecorder = installImeRecorder(editor);
                 setStatus('ready');
                 setMessage(`steady ${Math.round(editor.timings.steady ?? -1)} ms`);
                 if (params.selftest != null) {

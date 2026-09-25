@@ -1,0 +1,39 @@
+{
+  "check": "V13-ime",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-25T09:06:24.174Z",
+  "config": "platform",
+  "driver": "cdp",
+  "mid": {
+    "wait": {
+      "waitedMs": 2885.2999999523163,
+      "formula": "n/a",
+      "restarts": 0,
+      "composing": true
+    },
+    "hasPinyin": true,
+    "composition": {
+      "active": true,
+      "count": 1,
+      "lastStartAt": 4005.7999999523163,
+      "lastEndAt": null
+    }
+  },
+  "end": {
+    "wait": {
+      "waitedMs": 1015.0999999046326,
+      "formula": "n/a",
+      "restarts": 0,
+      "composing": false
+    },
+    "hasFinal": true,
+    "hasPinyin": false
+  },
+  "elapsedMs": 1018,
+  "finalText": "\r段落戊：列表第二项\r段落己：链接文字与查找替换，查找目标出现两次：查找目标。\r"
+}

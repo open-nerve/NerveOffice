@@ -1,0 +1,162 @@
+{
+  "check": "V13-ime",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T10:35:16.350Z",
+  "results": [
+    {
+      "zoom": 1,
+      "zoomRatio": 1,
+      "nowrap": false,
+      "start": {
+        "x": 741.8125,
+        "y": 265.15625
+      },
+      "samples": [
+        {
+          "text": "ni",
+          "canvasCaret": {
+            "x": 753.21875,
+            "y": 265.15625
+          },
+          "domCompositionRight": 765.8828125,
+          "domTop": 264.734375,
+          "dx": 13,
+          "dy": 0,
+          "font": "16px -apple-system, BlinkMacSystemFont, PingF",
+          "compositionOffsetOnCanvas": 11
+        },
+        {
+          "text": "ni hao",
+          "canvasCaret": {
+            "x": 781.765625,
+            "y": 265.15625
+          },
+          "domCompositionRight": 808.5234375,
+          "domTop": 282.734375,
+          "dx": 27,
+          "dy": 18,
+          "font": "16px -apple-system, BlinkMacSystemFont, PingF",
+          "compositionOffsetOnCanvas": 40
+        },
+        {
+          "text": "ni hao shi jie",
+          "canvasCaret": {
+            "x": 823.34375,
+            "y": 265.15625
+          },
+          "domCompositionRight": 839.4453125,
+          "domTop": 318.734375,
+          "dx": 16,
+          "dy": 54,
+          "font": "16px -apple-system, BlinkMacSystemFont, PingF",
+          "compositionOffsetOnCanvas": 82
+        }
+      ]
+    },
+    {
+      "zoom": 1.5,
+      "zoomRatio": 1.5,
+      "nowrap": false,
+      "start": {
+        "x": 752.71875,
+        "y": 345.75
+      },
+      "samples": [
+        {
+          "text": "ni",
+          "canvasCaret": {
+            "x": 769.84375,
+            "y": 345.75
+          },
+          "domCompositionRight": 782.5078125,
+          "domTop": 345.328125,
+          "dx": 13,
+          "dy": 0,
+          "font": "16px -apple-system, BlinkMacSystemFont, PingF",
+          "compositionOffsetOnCanvas": 17
+        },
+        {
+          "text": "ni hao",
+          "canvasCaret": {
+            "x": 812.65625,
+            "y": 345.75
+          },
+          "domCompositionRight": 839.4140625,
+          "domTop": 363.328125,
+          "dx": 27,
+          "dy": 18,
+          "font": "16px -apple-system, BlinkMacSystemFont, PingF",
+          "compositionOffsetOnCanvas": 60
+        },
+        {
+          "text": "ni hao shi jie",
+          "canvasCaret": {
+            "x": 875.015625,
+            "y": 345.75
+          },
+          "domCompositionRight": 891.1171875,
+          "domTop": 399.328125,
+          "dx": 16,
+          "dy": 54,
+          "font": "16px -apple-system, BlinkMacSystemFont, PingF",
+          "compositionOffsetOnCanvas": 122
+        }
+      ]
+    },
+    {
+      "zoom": 1,
+      "zoomRatio": 1,
+      "nowrap": true,
+      "start": {
+        "x": 741.8125,
+        "y": 265.15625
+      },
+      "samples": [
+        {
+          "text": "ni",
+          "canvasCaret": {
+            "x": 753.21875,
+            "y": 265.15625
+          },
+          "domCompositionRight": 765.8828125,
+          "domTop": 264.734375,
+          "dx": 13,
+          "dy": 0,
+          "font": "16px -apple-system, BlinkMacSystemFont, PingF",
+          "compositionOffsetOnCanvas": 11
+        },
+        {
+          "text": "ni hao",
+          "canvasCaret": {
+            "x": 781.765625,
+            "y": 265.15625
+          },
+          "domCompositionRight": 825.375,
+          "domTop": 264.734375,
+          "dx": 44,
+          "dy": 0,
+          "font": "16px -apple-system, BlinkMacSystemFont, PingF",
+          "compositionOffsetOnCanvas": 40
+        },
+        {
+          "text": "ni hao shi jie",
+          "canvasCaret": {
+            "x": 823.34375,
+            "y": 265.15625
+          },
+          "domCompositionRight": 912.234375,
+          "domTop": 264.734375,
+          "dx": 89,
+          "dy": 0,
+          "font": "16px -apple-system, BlinkMacSystemFont, PingF",
+          "compositionOffsetOnCanvas": 82
+        }
+      ]
+    }
+  ]
+}

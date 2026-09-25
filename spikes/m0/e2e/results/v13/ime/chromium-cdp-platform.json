@@ -1,0 +1,352 @@
+{
+  "check": "V13-ime",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T04:55:15.414Z",
+  "driver": "cdp",
+  "config": "platform",
+  "cases": [
+    {
+      "id": "pinyin@end",
+      "input": "pinyin",
+      "position": "end",
+      "before": "可以选中的文字。⏎段落丙：用于对齐。⏎段落丁：列",
+      "expected": "可以选中的文字。你好⏎段落丙：用于对齐。⏎段落丁",
+      "after": "可以选中的文字。你好⏎段落丙：用于对齐。⏎段落丁",
+      "ok": {
+        "text": true,
+        "paragraphs": true,
+        "caret": true,
+        "undo": true,
+        "redo": true,
+        "extra": true
+      },
+      "caret": {
+        "expected": 45,
+        "actual": 45
+      },
+      "undone": "可以选中的文字。⏎段落丙：用于对齐。⏎段落丁：列",
+      "redone": "可以选中的文字。你好⏎段落丙：用于对齐。⏎段落丁"
+    },
+    {
+      "id": "sentence@end",
+      "input": "sentence",
+      "position": "end",
+      "before": "可以选中的文字。⏎段落丙：用于对齐。⏎段落丁：列",
+      "expected": "可以选中的文字。中文输入⏎段落丙：用于对齐。⏎段",
+      "after": "可以选中的文字。中文输入⏎段落丙：用于对齐。⏎段",
+      "ok": {
+        "text": true,
+        "paragraphs": true,
+        "caret": true,
+        "undo": true,
+        "redo": true,
+        "extra": true
+      },
+      "caret": {
+        "expected": 47,
+        "actual": 47
+      },
+      "undone": "可以选中的文字。⏎段落丙：用于对齐。⏎段落丁：列",
+      "redone": "可以选中的文字。中文输入⏎段落丙：用于对齐。⏎段"
+    },
+    {
+      "id": "wubi@end",
+      "input": "wubi",
+      "position": "end",
+      "before": "可以选中的文字。⏎段落丙：用于对齐。⏎段落丁：列",
+      "expected": "可以选中的文字。你好⏎段落丙：用于对齐。⏎段落丁",
+      "after": "可以选中的文字。你好⏎段落丙：用于对齐。⏎段落丁",
+      "ok": {
+        "text": true,
+        "paragraphs": true,
+        "caret": true,
+        "undo": true,
+        "redo": true,
+        "extra": true
+      },
+      "caret": {
+        "expected": 45,
+        "actual": 45
+      },
+      "undone": "可以选中的文字。⏎段落丙：用于对齐。⏎段落丁：列",
+      "redone": "可以选中的文字。你好⏎段落丙：用于对齐。⏎段落丁"
+    },
+    {
+      "id": "cancel@end",
+      "input": "cancel",
+      "position": "end",
+      "before": "可以选中的文字。⏎段落丙：用于对齐。⏎段落丁：列",
+      "expected": "可以选中的文字。⏎段落丙：用于对齐。⏎段落丁：列",
+      "after": "可以选中的文字。⏎段落丙：用于对齐。⏎段落丁：列",
+      "ok": {
+        "text": true,
+        "paragraphs": true,
+        "caret": true,
+        "undo": true,
+        "redo": true,
+        "extra": true
+      },
+      "caret": {
+        "expected": 43,
+        "actual": 43
+      },
+      "undone": "可以选中的文字。⏎段落丙：用于对齐。⏎段落丁：列",
+      "redone": "可以选中的文字。⏎段落丙：用于对齐。⏎段落丁：列"
+    },
+    {
+      "id": "enterRaw@end",
+      "input": "enterRaw",
+      "position": "end",
+      "before": "可以选中的文字。⏎段落丙：用于对齐。⏎段落丁：列",
+      "expected": "可以选中的文字。hello⏎段落丙：用于对齐。⏎",
+      "after": "可以选中的文字。hello⏎段落丙：用于对齐。⏎",
+      "ok": {
+        "text": true,
+        "paragraphs": true,
+        "caret": true,
+        "undo": true,
+        "redo": true,
+        "extra": true
+      },
+      "caret": {
+        "expected": 48,
+        "actual": 48
+      },
+      "undone": "可以选中的文字。⏎段落丙：用于对齐。⏎段落丁：列",
+      "redone": "可以选中的文字。hello⏎段落丙：用于对齐。⏎"
+    },
+    {
+      "id": "pinyin@start",
+      "input": "pinyin",
+      "position": "start",
+      "before": "以选中的文字。⏎段落丙：用于对齐。⏎段落丁：列表",
+      "expected": "以选中的文字。⏎你好段落丙：用于对齐。⏎段落丁：",
+      "after": "以选中的文字。⏎你好段落丙：用于对齐。⏎段落丁：",
+      "ok": {
+        "text": true,
+        "paragraphs": true,
+        "caret": true,
+        "undo": true,
+        "redo": true,
+        "extra": true
+      },
+      "caret": {
+        "expected": 46,
+        "actual": 46
+      },
+      "undone": "以选中的文字。⏎段落丙：用于对齐。⏎段落丁：列表",
+      "redone": "以选中的文字。⏎你好段落丙：用于对齐。⏎段落丁："
+    },
+    {
+      "id": "pinyin@middle",
+      "input": "pinyin",
+      "position": "middle",
+      "before": "对齐。⏎段落丁：列表第一项⏎段落戊：列表第二项⏎",
+      "expected": "对齐。⏎段落丁：你好列表第一项⏎段落戊：列表第二",
+      "after": "对齐。⏎段落丁：你好列表第一项⏎段落戊：列表第二",
+      "ok": {
+        "text": true,
+        "paragraphs": true,
+        "caret": true,
+        "undo": true,
+        "redo": true,
+        "extra": true
+      },
+      "caret": {
+        "expected": 60,
+        "actual": 60
+      },
+      "undone": "对齐。⏎段落丁：列表第一项⏎段落戊：列表第二项⏎",
+      "redone": "对齐。⏎段落丁：你好列表第一项⏎段落戊：列表第二"
+    },
+    {
+      "id": "pinyin@heading",
+      "input": "pinyin",
+      "position": "heading",
+      "before": "：用于标题样式。⏎段落乙：用于字符格式，这里有一",
+      "expected": "：用于标题样式。你好⏎段落乙：用于字符格式，这里",
+      "after": "：用于标题样式。你好⏎段落乙：用于字符格式，这里",
+      "ok": {
+        "text": true,
+        "paragraphs": true,
+        "caret": true,
+        "undo": true,
+        "redo": true,
+        "extra": true
+      },
+      "caret": {
+        "expected": 20,
+        "actual": 20
+      },
+      "undone": "：用于标题样式。⏎段落乙：用于字符格式，这里有一",
+      "redone": "：用于标题样式。你好⏎段落乙：用于字符格式，这里",
+      "extra": {
+        "text": "段落甲：用于标题样式。你好",
+        "style": 4,
+        "align": null,
+        "list": null,
+        "level": null,
+        "inTable": false
+      }
+    },
+    {
+      "id": "pinyin@list",
+      "input": "pinyin",
+      "position": "list",
+      "before": "落戊：列表第二项⏎段落己：链接文字与查找替换，查",
+      "expected": "落戊：列表第二项你好⏎段落己：链接文字与查找替换",
+      "after": "落戊：列表第二项你好⏎段落己：链接文字与查找替换",
+      "ok": {
+        "text": true,
+        "paragraphs": true,
+        "caret": true,
+        "undo": true,
+        "redo": true,
+        "extra": true
+      },
+      "caret": {
+        "expected": 75,
+        "actual": 75
+      },
+      "undone": "落戊：列表第二项⏎段落己：链接文字与查找替换，查",
+      "redone": "落戊：列表第二项你好⏎段落己：链接文字与查找替换",
+      "extra": {
+        "text": "段落戊：列表第二项你好",
+        "style": null,
+        "align": null,
+        "list": "BULLET_LIST",
+        "level": 0,
+        "inTable": false
+      }
+    },
+    {
+      "id": "pinyin@cell",
+      "input": "pinyin",
+      "position": "cell",
+      "before": "找目标。⏎\u001a\u001b\u001c⏎\n\u001d\u001c⏎\n\u001d\u000e\u001b\u001c⏎\n\u001d\u001c⏎\n",
+      "expected": "找目标。⏎\u001a\u001b\u001c你好⏎\n\u001d\u001c⏎\n\u001d\u000e\u001b\u001c⏎\n\u001d\u001c",
+      "after": "找目标。⏎\u001a\u001b\u001c你好⏎\n\u001d\u001c⏎\n\u001d\u000e\u001b\u001c⏎\n\u001d\u001c",
+      "ok": {
+        "text": true,
+        "paragraphs": true,
+        "caret": true,
+        "undo": true,
+        "redo": true,
+        "extra": true
+      },
+      "caret": {
+        "expected": 108,
+        "actual": 108
+      },
+      "undone": "找目标。⏎\u001a\u001b\u001c⏎\n\u001d\u001c⏎\n\u001d\u000e\u001b\u001c⏎\n\u001d\u001c⏎\n",
+      "redone": "找目标。⏎\u001a\u001b\u001c你好⏎\n\u001d\u001c⏎\n\u001d\u000e\u001b\u001c⏎\n\u001d\u001c",
+      "extra": [
+        "你好",
+        "",
+        "",
+        ""
+      ]
+    },
+    {
+      "id": "pinyin@bold",
+      "input": "pinyin",
+      "position": "bold",
+      "before": "，这里有一段可以选中的文字。⏎段落丙：用于对齐。",
+      "expected": "，这里有一段可以你好选中的文字。⏎段落丙：用于对",
+      "after": "，这里有一段可以你好选中的文字。⏎段落丙：用于对",
+      "ok": {
+        "text": true,
+        "paragraphs": true,
+        "caret": true,
+        "undo": true,
+        "redo": true,
+        "extra": true
+      },
+      "caret": {
+        "expected": 39,
+        "actual": 39
+      },
+      "undone": "，这里有一段可以选中的文字。⏎段落丙：用于对齐。",
+      "redone": "，这里有一段可以你好选中的文字。⏎段落丙：用于对",
+      "extra": {
+        "text": "你好",
+        "ts": {
+          "cl": {
+            "rgb": "#1B1C1F"
+          },
+          "bl": 1
+        }
+      }
+    },
+    {
+      "id": "pinyin@link",
+      "input": "pinyin",
+      "position": "link",
+      "before": "项⏎段落己：链接文字与查找替换，查找目标出现两次",
+      "expected": "项⏎段落己：链接你好文字与查找替换，查找目标出现",
+      "after": "项⏎段落己：链接你好文字与查找替换，查找目标出现",
+      "ok": {
+        "text": true,
+        "paragraphs": true,
+        "caret": true,
+        "undo": true,
+        "redo": true,
+        "extra": true
+      },
+      "caret": {
+        "expected": 82,
+        "actual": 82
+      },
+      "undone": "项⏎段落己：链接文字与查找替换，查找目标出现两次",
+      "redone": "项⏎段落己：链接你好文字与查找替换，查找目标出现",
+      "extra": [
+        {
+          "text": "链接你好文字",
+          "url": "https://example.com/ime"
+        }
+      ]
+    },
+    {
+      "id": "pinyin@replace",
+      "input": "pinyin",
+      "position": "replace",
+      "before": "文字。⏎段落丙：用于对齐。⏎段落丁：列表第一项⏎",
+      "expected": "文字。⏎段落丙：你好。⏎段落丁：列表第一项⏎段落",
+      "after": "文字。⏎段落丙：你好。⏎段落丁：列表第一项⏎段落",
+      "ok": {
+        "text": true,
+        "paragraphs": true,
+        "caret": true,
+        "undo": true,
+        "redo": true,
+        "extra": true
+      },
+      "caret": {
+        "expected": 50,
+        "actual": 50
+      },
+      "undone": "文字。⏎段落丙：用于对齐。⏎段落丁：列表第一项⏎",
+      "redone": "文字。⏎段落丙：你好。⏎段落丁：列表第一项⏎段落"
+    }
+  ],
+  "mixed": {
+    "after": "\r段落戊：列表第二项\r段落己：链接文字与查找替换，查找目标出现两次：查找目标。\r",
+    "expected": "\r段落戊：列表第二项\r段落己：链接文字与查找替换，查找目标出现两次：查找目标。\r",
+    "undos": [
+      "\r段落戊：列表第二项\r段落己：链接文字与查找替换，查找目标出现两次：查找目标。\r",
+      "\r段落戊：列表第二项\r段落己：链接文字与查找替换，查找目标出现两次：查找目标。\r",
+      "\r段落戊：列表第二项\r段落己：链接文字与查找替换，查找目标出现两次：查找目标。\r",
+      "\r段落戊：列表第二项\r段落己：链接文字与查找替换，查找目标出现两次：查找目标。\r"
+    ],
+    "restored": true
+  },
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  }
+}

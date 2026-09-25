@@ -1,0 +1,61 @@
+{
+  "check": "V13-layout-handle",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T05:02:57.378Z",
+  "steps": [
+    {
+      "step": "把手菜单：删除段落",
+      "ok": true
+    },
+    {
+      "step": "把手菜单：复制段落后粘贴",
+      "ok": true,
+      "detail": 2
+    },
+    {
+      "step": "把手菜单：剪切段落后粘贴",
+      "ok": true
+    },
+    {
+      "step": "拖动把手移动段落",
+      "ok": true,
+      "detail": "能力矩阵样本⏎段落乙：用于字符格式，这里有一段可以选中的文字。⏎段落丁：列表第一"
+    },
+    {
+      "step": "粘贴选项：仅保留文本",
+      "ok": true,
+      "detail": {
+        "text": "粗体的剪贴板内容",
+        "ts": {
+          "ff": "Arial",
+          "fs": 11,
+          "cl": {
+            "rgb": "#1B1C1F"
+          }
+        }
+      }
+    },
+    {
+      "step": "撤销回到原文、重做恢复",
+      "ok": true,
+      "detail": {
+        "undos": 6,
+        "restored": true,
+        "redone": true
+      }
+    }
+  ],
+  "roundtrip": {
+    "firstDiff": [],
+    "secondDiff": []
+  },
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  }
+}

@@ -1,0 +1,114 @@
+{
+  "check": "V13-capability",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T09:36:17.556Z",
+  "id": "C7b",
+  "name": "链接地址的校验",
+  "config": "default",
+  "steps": [
+    {
+      "step": "在链接框里输入危险地址（记录）",
+      "ok": true,
+      "detail": {
+        "javascript://x@example.com/%0Aalert(1)": "javascript://x@example.com/%0Aalert(1)",
+        "data://text/html,<b>x</b>": null,
+        "vbscript://x": null,
+        "javascript:alert(1)": null
+      }
+    }
+  ],
+  "undo": {
+    "count": 0,
+    "restored": true,
+    "redone": true
+  },
+  "roundtrip": null,
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  },
+  "policyEvents": [],
+  "summary": {
+    "before": {
+      "paragraphs": 8
+    },
+    "after": {
+      "text": "能力矩阵样本\r段落甲：用于标题样式。\r段落乙：用于字符格式，这里有一段可以选中的文字。\r段落丙：用于对齐。\r段落丁：列表第一项\r段落戊：列表第二项\r段落己：链接文字与查找替换，查找目标出现两次：查找目标。\r\r\n",
+      "paragraphs": [
+        {
+          "text": "能力矩阵样本",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落甲：用于标题样式。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落乙：用于字符格式，这里有一段可以选中的文字。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落丙：用于对齐。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落丁：列表第一项",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落戊：列表第二项",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落己：链接文字与查找替换，查找目标出现两次：查找目标。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        }
+      ],
+      "tables": [],
+      "links": [],
+      "runs": [],
+      "images": []
+    }
+  }
+}

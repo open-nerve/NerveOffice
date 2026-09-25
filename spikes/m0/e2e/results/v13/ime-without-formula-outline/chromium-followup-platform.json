@@ -1,0 +1,15 @@
+{
+  "check": "V13-ime",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T05:27:17.867Z",
+  "config": "platform",
+  "results": {
+    "chrome": "你好，⏎段落丙：",
+    "webkit": "你好，你好，⏎段"
+  }
+}

@@ -54,12 +54,45 @@ export const sheetUi = {
 } satisfies Record<'edit' | 'read', UiOptions>;
 
 /**
- * 文字文档本期不提供的入口（P4 起）：形状（00 号计划书 §4.3 要求隐藏）。形状写入 SVG 的 data URL，
- * 平台配置下会被命令守卫取消，按钮点了没有反应，所以隐藏入口（P4 报告 §2.3）。其余入口由 P5 按能力矩阵补充。
+ * 文字文档本期不提供的入口（00 号计划书 §4.3）：
+ * - 形状（P4）：写入 SVG 的 data URL，平台配置下会被命令守卫取消；父菜单隐藏后子项仍能被功能搜索找到，子项一并隐藏（P5 审查 G6）；
+ * - 页面设置（P5）：MODERN 版式下是"内容宽度"，并且会改写 documentFlavor；
+ * - 页眉页脚、分隔符（分栏符、各类分节符）、分节设置（P5）：MODERN 版式下 SDK 已自动隐藏，平台显式隐藏，不依赖 SDK 的判断；
+ * - 浮动图片的组合、层级、多图对齐（P5 审查 G9）：§4.3 之外，没有验证。
+ * 隐藏菜单不会停用命令与快捷键，平台另用命令守卫取消会写入不支持内容的命令（src/harness/doc-policy.ts）。
+ * 目录块插件不注册（P5），它的入口随之消失；"目录"由只读的大纲侧栏提供。
  */
 export const DOC_UNSUPPORTED_MENUS = [
     'doc.command.menu-insert-shape',
     'doc.command.menu-insert-shape.below',
+    'doc.command.insert-float-shape.rectangle',
+    'doc.command.insert-float-shape.ellipse',
+    'doc.command.insert-float-shape.rectangle.below',
+    'doc.command.insert-float-shape.ellipse.below',
+    'drawing.operation.set-drawing-group',
+    'drawing.operation.cancel-drawing-group',
+    'drawing.operation.set-drawing-arrange-front',
+    'drawing.operation.set-drawing-arrange-back',
+    'drawing.operation.set-drawing-arrange-forward',
+    'drawing.operation.set-drawing-arrange-backward',
+    'sheet.operation.set-drawing-align-left',
+    'sheet.operation.set-drawing-align-center',
+    'sheet.operation.set-drawing-align-right',
+    'sheet.operation.set-drawing-align-top',
+    'sheet.operation.set-drawing-align-middle',
+    'sheet.operation.set-drawing-align-bottom',
+    'sheet.operation.set-drawing-align-horizon',
+    'sheet.operation.set-drawing-align-vertical',
+    'docs.operation.open-page-setting',
+    'doc.command.open-header-footer-panel',
+    'doc.menu.breaks',
+    'docs.operation.insert-column-break',
+    'doc.menu.section-break.next-page',
+    'doc.menu.section-break.continuous',
+    'doc.menu.section-break.next-column',
+    'doc.menu.section-break.even-page',
+    'doc.menu.section-break.odd-page',
+    'sidebar.operation.doc-section-setting-panel',
 ] as const;
 
 /** 文字文档：开源版没有保护相关的菜单。 */

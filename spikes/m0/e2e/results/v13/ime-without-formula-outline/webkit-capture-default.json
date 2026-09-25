@@ -1,0 +1,39 @@
+{
+  "check": "V13-ime",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T09:22:14.059Z",
+  "config": "default",
+  "driver": "webkit",
+  "mid": {
+    "wait": {
+      "waitedMs": 977,
+      "formula": "n/a",
+      "restarts": 0,
+      "composing": true
+    },
+    "hasPinyin": true,
+    "composition": {
+      "active": true,
+      "count": 1,
+      "lastStartAt": 3896,
+      "lastEndAt": null
+    }
+  },
+  "end": {
+    "wait": {
+      "waitedMs": 975,
+      "formula": "n/a",
+      "restarts": 0,
+      "composing": false
+    },
+    "hasFinal": true,
+    "hasPinyin": false
+  },
+  "elapsedMs": 978,
+  "finalText": "\r段落戊：列表第二项\r段落己：链接文字与查找替换，查找目标出现两次：查找目标。\r"
+}

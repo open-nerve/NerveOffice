@@ -1,0 +1,64 @@
+{
+  "check": "V13-paste",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T05:31:27.726Z",
+  "source": "plain",
+  "target": "cell",
+  "config": "platform",
+  "dispatched": {
+    "target": "div",
+    "defaultPrevented": true
+  },
+  "changed": true,
+  "diff": {
+    "paragraphs": 2,
+    "headings": [],
+    "lists": [],
+    "aligns": [],
+    "tables": [],
+    "links": [
+      "https://ex→https://example.com/plain"
+    ],
+    "images": [],
+    "runs": [
+      {
+        "text": "\u001a\u001b\u001c",
+        "ts": {
+          "cl": {
+            "rgb": "#1B1C1F"
+          }
+        }
+      },
+      {
+        "text": "\r\n\u001d\u001c\r\n\u001d\u000e\u001b\u001c\r\n\u001d\u001c\r\n",
+        "ts": {
+          "cl": {
+            "rgb": "#1B1C1F"
+          }
+        }
+      }
+    ]
+  },
+  "features": {
+    "多行成段": true,
+    "网址成链接": true
+  },
+  "pwned": null,
+  "unsafeLinks": [],
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  },
+  "policyEvents": [
+    {
+      "kind": "paste-link",
+      "detail": "修正链接地址为链接文字 https://example.com/plain"
+    }
+  ],
+  "roundtrip": null
+}

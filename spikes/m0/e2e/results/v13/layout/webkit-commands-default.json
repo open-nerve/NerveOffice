@@ -1,0 +1,82 @@
+{
+  "check": "V13-layout-commands-default",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T08:37:28.142Z",
+  "config": "default",
+  "commands": [
+    {
+      "id": "doc.command.switch-mode",
+      "result": true,
+      "changed": true,
+      "flavor": 1,
+      "headers": 0,
+      "drawings": 0
+    },
+    {
+      "id": "docs.command.page-setup",
+      "result": true,
+      "changed": true,
+      "flavor": 2,
+      "headers": 0,
+      "drawings": 0
+    },
+    {
+      "id": "doc.command.insert-section-break",
+      "result": false,
+      "changed": false,
+      "flavor": 2,
+      "headers": 0,
+      "drawings": 0
+    },
+    {
+      "id": "doc.command.insert-column-break",
+      "result": false,
+      "changed": false,
+      "flavor": 2,
+      "headers": 0,
+      "drawings": 0
+    },
+    {
+      "id": "doc.command.core-header-footer",
+      "result": false,
+      "changed": false,
+      "flavor": 2,
+      "headers": 0,
+      "drawings": 0
+    },
+    {
+      "id": "doc.command.create-header-footer",
+      "result": false,
+      "changed": false,
+      "flavor": 2,
+      "headers": 0,
+      "drawings": 0
+    },
+    {
+      "id": "doc.command.insert-float-shape.rectangle",
+      "result": true,
+      "changed": true,
+      "flavor": 2,
+      "headers": 0,
+      "drawings": 1
+    },
+    {
+      "id": "doc.command.insert-float-shape.ellipse",
+      "result": true,
+      "changed": true,
+      "flavor": 2,
+      "headers": 0,
+      "drawings": 1
+    }
+  ],
+  "facadeEnsurePageHeader": {
+    "error": "The document is a modern document, header/footer is not supported.",
+    "headers": 0
+  },
+  "policyEvents": []
+}

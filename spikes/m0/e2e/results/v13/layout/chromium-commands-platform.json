@@ -1,0 +1,115 @@
+{
+  "check": "V13-layout-commands-platform",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T05:01:50.341Z",
+  "config": "platform",
+  "commands": [
+    {
+      "id": "doc.command.switch-mode",
+      "result": false,
+      "changed": false,
+      "flavor": 2,
+      "headers": 0,
+      "drawings": 0
+    },
+    {
+      "id": "docs.command.page-setup",
+      "result": false,
+      "changed": false,
+      "flavor": 2,
+      "headers": 0,
+      "drawings": 0
+    },
+    {
+      "id": "doc.command.insert-section-break",
+      "result": false,
+      "changed": false,
+      "flavor": 2,
+      "headers": 0,
+      "drawings": 0
+    },
+    {
+      "id": "doc.command.insert-column-break",
+      "result": false,
+      "changed": false,
+      "flavor": 2,
+      "headers": 0,
+      "drawings": 0
+    },
+    {
+      "id": "doc.command.core-header-footer",
+      "result": false,
+      "changed": false,
+      "flavor": 2,
+      "headers": 0,
+      "drawings": 0
+    },
+    {
+      "id": "doc.command.create-header-footer",
+      "result": false,
+      "changed": false,
+      "flavor": 2,
+      "headers": 0,
+      "drawings": 0
+    },
+    {
+      "id": "doc.command.insert-float-shape.rectangle",
+      "result": false,
+      "changed": false,
+      "flavor": 2,
+      "headers": 0,
+      "drawings": 0
+    },
+    {
+      "id": "doc.command.insert-float-shape.ellipse",
+      "result": false,
+      "changed": false,
+      "flavor": 2,
+      "headers": 0,
+      "drawings": 0
+    }
+  ],
+  "facadeEnsurePageHeader": {
+    "error": "The document is a modern document, header/footer is not supported.",
+    "headers": 0
+  },
+  "policyEvents": [
+    {
+      "kind": "guard-cancel",
+      "detail": "doc.command.switch-mode：本期不支持"
+    },
+    {
+      "kind": "guard-cancel",
+      "detail": "docs.command.page-setup：本期不支持"
+    },
+    {
+      "kind": "guard-cancel",
+      "detail": "doc.command.insert-section-break：本期不支持"
+    },
+    {
+      "kind": "guard-cancel",
+      "detail": "doc.command.insert-column-break：本期不支持"
+    },
+    {
+      "kind": "guard-cancel",
+      "detail": "doc.command.core-header-footer：本期不支持"
+    },
+    {
+      "kind": "guard-cancel",
+      "detail": "doc.command.create-header-footer：本期不支持"
+    },
+    {
+      "kind": "guard-cancel",
+      "detail": "doc.command.insert-float-shape.rectangle：本期不支持"
+    },
+    {
+      "kind": "guard-cancel",
+      "detail": "doc.command.insert-float-shape.ellipse：本期不支持"
+    }
+  ]
+}

@@ -1,0 +1,351 @@
+{
+  "check": "V13-layout-menus",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T08:37:46.234Z",
+  "unsupported": [
+    {
+      "id": "doc.command.open-header-footer-panel",
+      "path": "ribbon/ribbon.start/ribbon.start.layout/doc.command.open-header-footer-panel",
+      "hidden": true
+    },
+    {
+      "id": "docs.operation.open-page-setting",
+      "path": "ribbon/ribbon.start/ribbon.start.layout/docs.operation.open-page-setting",
+      "hidden": true
+    },
+    {
+      "id": "doc.menu.breaks",
+      "path": "ribbon/ribbon.insert/ribbon.insert.media/doc.menu.breaks",
+      "hidden": true
+    },
+    {
+      "id": "docs.operation.insert-column-break",
+      "path": "ribbon/ribbon.insert/ribbon.insert.media/doc.menu.breaks/docs.operation.insert-column-break",
+      "hidden": true
+    },
+    {
+      "id": "doc.menu.section-break.next-page",
+      "path": "ribbon/ribbon.insert/ribbon.insert.media/doc.menu.breaks/doc.menu.section-break.next-page",
+      "hidden": true
+    },
+    {
+      "id": "doc.menu.section-break.continuous",
+      "path": "ribbon/ribbon.insert/ribbon.insert.media/doc.menu.breaks/doc.menu.section-break.continuous",
+      "hidden": true
+    },
+    {
+      "id": "doc.menu.section-break.next-column",
+      "path": "ribbon/ribbon.insert/ribbon.insert.media/doc.menu.breaks/doc.menu.section-break.next-column",
+      "hidden": true
+    },
+    {
+      "id": "doc.menu.section-break.even-page",
+      "path": "ribbon/ribbon.insert/ribbon.insert.media/doc.menu.breaks/doc.menu.section-break.even-page",
+      "hidden": true
+    },
+    {
+      "id": "doc.menu.section-break.odd-page",
+      "path": "ribbon/ribbon.insert/ribbon.insert.media/doc.menu.breaks/doc.menu.section-break.odd-page",
+      "hidden": true
+    },
+    {
+      "id": "sidebar.operation.doc-section-setting-panel",
+      "path": "contextMenu/contextMenu.mainArea/contextMenu.layout/sidebar.operation.doc-section-setting-panel",
+      "hidden": true
+    },
+    {
+      "id": "sidebar.operation.doc-section-setting-panel",
+      "path": "contextMenu/contextMenu.paragraph/doc.menu.empty-paragraph/contextMenu.layout/sidebar.operation.doc-section-setting-panel",
+      "hidden": true
+    },
+    {
+      "id": "doc.command.menu-insert-shape",
+      "path": "contextMenu/contextMenu.paragraph/doc.menu.paragraph-t.insert/insert/doc.command.menu-insert-shape",
+      "hidden": true
+    },
+    {
+      "id": "doc.command.menu-insert-shape.below",
+      "path": "contextMenu/contextMenu.paragraph/doc.menu.paragraph-t.insert-below/insert/doc.command.menu-insert-shape.below",
+      "hidden": true
+    },
+    {
+      "id": "doc.command.insert-float-shape.rectangle",
+      "path": "contextMenu/contextMenu.paragraph/doc.command.menu-insert-shape/shapes/doc.command.insert-float-shape.rectangle",
+      "hidden": true
+    },
+    {
+      "id": "doc.command.insert-float-shape.ellipse",
+      "path": "contextMenu/contextMenu.paragraph/doc.command.menu-insert-shape/shapes/doc.command.insert-float-shape.ellipse",
+      "hidden": true
+    },
+    {
+      "id": "doc.command.insert-float-shape.rectangle.below",
+      "path": "contextMenu/contextMenu.paragraph/doc.command.menu-insert-shape.below/shapes/doc.command.insert-float-shape.rectangle.below",
+      "hidden": true
+    },
+    {
+      "id": "doc.command.insert-float-shape.ellipse.below",
+      "path": "contextMenu/contextMenu.paragraph/doc.command.menu-insert-shape.below/shapes/doc.command.insert-float-shape.ellipse.below",
+      "hidden": true
+    },
+    {
+      "id": "sidebar.operation.doc-section-setting-panel",
+      "path": "contextMenu/contextMenu.paragraph/contextMenu.layout/sidebar.operation.doc-section-setting-panel",
+      "hidden": true
+    },
+    {
+      "id": "drawing.operation.set-drawing-group",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-group/drawing.operation.set-drawing-group",
+      "hidden": true
+    },
+    {
+      "id": "drawing.operation.cancel-drawing-group",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-group/drawing.operation.cancel-drawing-group",
+      "hidden": true
+    },
+    {
+      "id": "drawing.operation.set-drawing-arrange-front",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-arrange/drawing.operation.set-drawing-arrange-front",
+      "hidden": true
+    },
+    {
+      "id": "drawing.operation.set-drawing-arrange-forward",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-arrange/drawing.operation.set-drawing-arrange-forward",
+      "hidden": true
+    },
+    {
+      "id": "drawing.operation.set-drawing-arrange-back",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-arrange/drawing.operation.set-drawing-arrange-back",
+      "hidden": true
+    },
+    {
+      "id": "drawing.operation.set-drawing-arrange-backward",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-arrange/drawing.operation.set-drawing-arrange-backward",
+      "hidden": true
+    },
+    {
+      "id": "sheet.operation.set-drawing-align-left",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-align/sheet.operation.set-drawing-align-left",
+      "hidden": true
+    },
+    {
+      "id": "sheet.operation.set-drawing-align-center",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-align/sheet.operation.set-drawing-align-center",
+      "hidden": true
+    },
+    {
+      "id": "sheet.operation.set-drawing-align-right",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-align/sheet.operation.set-drawing-align-right",
+      "hidden": true
+    },
+    {
+      "id": "sheet.operation.set-drawing-align-top",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-align/sheet.operation.set-drawing-align-top",
+      "hidden": true
+    },
+    {
+      "id": "sheet.operation.set-drawing-align-middle",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-align/sheet.operation.set-drawing-align-middle",
+      "hidden": true
+    },
+    {
+      "id": "sheet.operation.set-drawing-align-bottom",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-align/sheet.operation.set-drawing-align-bottom",
+      "hidden": true
+    },
+    {
+      "id": "sheet.operation.set-drawing-align-horizon",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-align/sheet.operation.set-drawing-align-horizon",
+      "hidden": true
+    },
+    {
+      "id": "sheet.operation.set-drawing-align-vertical",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-align/sheet.operation.set-drawing-align-vertical",
+      "hidden": true
+    }
+  ],
+  "visible": [
+    "base-ui.operation.toggle-shortcut-panel",
+    "doc.command.align-action",
+    "doc.command.align-center",
+    "doc.command.align-justify",
+    "doc.command.align-left",
+    "doc.command.align-right",
+    "doc.command.bullet-list",
+    "doc.command.check-list",
+    "doc.command.copy",
+    "doc.command.copy-current-paragraph",
+    "doc.command.cut-current-paragraph",
+    "doc.command.delete-current-paragraph",
+    "doc.command.delete-left",
+    "doc.command.h1-heading",
+    "doc.command.h2-heading",
+    "doc.command.h3-heading",
+    "doc.command.h4-heading",
+    "doc.command.h5-heading",
+    "doc.command.horizontal-line",
+    "doc.command.insert-bullet-list-bellow",
+    "doc.command.insert-check-list-bellow",
+    "doc.command.insert-float-image",
+    "doc.command.insert-float-image.below",
+    "doc.command.insert-horizontal-line-bellow",
+    "doc.command.insert-order-list-bellow",
+    "doc.command.normal-text-heading",
+    "doc.command.order-list",
+    "doc.command.paste-special",
+    "doc.command.reset-inline-format-text-background-color",
+    "doc.command.reset-inline-format-text-color",
+    "doc.command.set-inline-format-bold",
+    "doc.command.set-inline-format-font-family",
+    "doc.command.set-inline-format-fontsize",
+    "doc.command.set-inline-format-italic",
+    "doc.command.set-inline-format-strikethrough",
+    "doc.command.set-inline-format-subscript",
+    "doc.command.set-inline-format-superscript",
+    "doc.command.set-inline-format-text-background-color",
+    "doc.command.set-inline-format-text-color",
+    "doc.command.set-inline-format-underline",
+    "doc.command.set-paragraph-named-style",
+    "doc.command.subtitle-heading",
+    "doc.command.table-insert-column-left",
+    "doc.command.table-insert-column-right",
+    "doc.command.table-insert-row-above",
+    "doc.command.table-insert-row-bellow",
+    "doc.command.title",
+    "doc.menu.image",
+    "doc.menu.insert-bellow",
+    "doc.menu.insert-emoji",
+    "doc.menu.insert-symbol",
+    "doc.menu.paragraph-t.align",
+    "doc.menu.paragraph-t.background-color.0",
+    "doc.menu.paragraph-t.background-color.1",
+    "doc.menu.paragraph-t.background-color.10",
+    "doc.menu.paragraph-t.background-color.11",
+    "doc.menu.paragraph-t.background-color.12",
+    "doc.menu.paragraph-t.background-color.13",
+    "doc.menu.paragraph-t.background-color.14",
+    "doc.menu.paragraph-t.background-color.2",
+    "doc.menu.paragraph-t.background-color.3",
+    "doc.menu.paragraph-t.background-color.4",
+    "doc.menu.paragraph-t.background-color.5",
+    "doc.menu.paragraph-t.background-color.6",
+    "doc.menu.paragraph-t.background-color.7",
+    "doc.menu.paragraph-t.background-color.8",
+    "doc.menu.paragraph-t.background-color.9",
+    "doc.menu.paragraph-t.colors",
+    "doc.menu.paragraph-t.indent.decrease",
+    "doc.menu.paragraph-t.indent.increase",
+    "doc.menu.paragraph-t.insert-below",
+    "doc.menu.paragraph-t.insert-below.command.h1",
+    "doc.menu.paragraph-t.insert-below.command.h2",
+    "doc.menu.paragraph-t.insert-below.command.h3",
+    "doc.menu.paragraph-t.insert-below.command.h4",
+    "doc.menu.paragraph-t.insert-below.command.h5",
+    "doc.menu.paragraph-t.text-color.0",
+    "doc.menu.paragraph-t.text-color.1",
+    "doc.menu.paragraph-t.text-color.2",
+    "doc.menu.paragraph-t.text-color.3",
+    "doc.menu.paragraph-t.text-color.4",
+    "doc.menu.paragraph-t.text-color.5",
+    "doc.menu.paragraph-t.text-color.6",
+    "doc.menu.table",
+    "doc.operation.create-table",
+    "doc.operation.create-table.below",
+    "doc.operation.show-hyper-link-edit-popup",
+    "doc.table.delete-columns",
+    "doc.table.delete-rows",
+    "doc.table.delete-table",
+    "sidebar.operation.doc-paragraph-setting-panel",
+    "ui.command.clear-formatting",
+    "ui.operation.activate-format-painter",
+    "ui.operation.open-feature-search",
+    "ui.operation.open-find-dialog",
+    "univer.command.cut",
+    "univer.command.paste",
+    "univer.command.redo",
+    "univer.command.undo"
+  ],
+  "search": {
+    "页面设置": [
+      "搜索功能",
+      "未找到当前可用的功能",
+      "Close"
+    ],
+    "页眉": [
+      "搜索功能",
+      "未找到当前可用的功能",
+      "Close"
+    ],
+    "分隔符": [
+      "搜索功能",
+      "未找到当前可用的功能",
+      "Close"
+    ],
+    "分栏符": [
+      "搜索功能",
+      "未找到当前可用的功能",
+      "Close"
+    ],
+    "分节": [
+      "搜索功能",
+      "未找到当前可用的功能",
+      "Close"
+    ],
+    "形状": [
+      "搜索功能",
+      "未找到当前可用的功能",
+      "Close"
+    ],
+    "矩形": [
+      "搜索功能",
+      "未找到当前可用的功能",
+      "Close"
+    ],
+    "椭圆": [
+      "搜索功能",
+      "未找到当前可用的功能",
+      "Close"
+    ],
+    "组合": [
+      "搜索功能",
+      "未找到当前可用的功能",
+      "Close"
+    ],
+    "置于顶层": [
+      "搜索功能",
+      "未找到当前可用的功能",
+      "Close"
+    ],
+    "上移一层": [
+      "搜索功能",
+      "未找到当前可用的功能",
+      "Close"
+    ],
+    "水平分布": [
+      "搜索功能",
+      "未找到当前可用的功能",
+      "Close"
+    ],
+    "顶部对齐": [
+      "搜索功能",
+      "未找到当前可用的功能",
+      "Close"
+    ],
+    "目录": [
+      "搜索功能",
+      "未找到当前可用的功能",
+      "Close"
+    ]
+  },
+  "slash": [
+    "插入",
+    "插入表格",
+    "插入图片",
+    "粘贴"
+  ]
+}

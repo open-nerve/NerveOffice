@@ -1,0 +1,31 @@
+{
+  "check": "V13-paste-plain-mode",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T08:45:16.710Z",
+  "diff": {
+    "paragraphs": 1,
+    "headings": [],
+    "lists": [],
+    "aligns": [],
+    "tables": [],
+    "links": [],
+    "images": [],
+    "runs": [
+      {
+        "text": "项目周报2026年第39周\r本周",
+        "ts": {
+          "ff": "Arial",
+          "fs": 11,
+          "cl": {
+            "rgb": "#1B1C1F"
+          }
+        }
+      }
+    ]
+  }
+}

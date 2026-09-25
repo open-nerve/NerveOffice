@@ -1,0 +1,47 @@
+{
+  "check": "V13-layout-handle",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T08:38:41.706Z",
+  "steps": [
+    {
+      "step": "把手菜单：删除段落",
+      "ok": true
+    },
+    {
+      "step": "把手菜单：复制段落后粘贴",
+      "ok": true,
+      "detail": 2
+    },
+    {
+      "step": "把手菜单：剪切段落后粘贴",
+      "ok": true
+    },
+    {
+      "step": "拖动把手移动段落",
+      "ok": true,
+      "detail": "能力矩阵样本⏎段落乙：用于字符格式，这里有一段可以选中的文字。⏎段落丁：列表第一"
+    },
+    {
+      "step": "撤销回到原文、重做恢复",
+      "ok": true,
+      "detail": {
+        "undos": 5,
+        "restored": true,
+        "redone": true
+      }
+    }
+  ],
+  "roundtrip": {
+    "firstDiff": [],
+    "secondDiff": []
+  },
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  }
+}

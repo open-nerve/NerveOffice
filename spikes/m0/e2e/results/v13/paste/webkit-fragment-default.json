@@ -1,0 +1,33 @@
+{
+  "check": "V13-paste-fragment",
+  "config": "default",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T08:45:05.915Z",
+  "diff": {
+    "paragraphs": 3,
+    "headings": [
+      "4:恶意链接与标题"
+    ],
+    "lists": [],
+    "aligns": [],
+    "tables": [],
+    "links": [
+      "恶意链接→javascript:window.__p5_pwned=1",
+      "引号链接→https://x.test/\"><b id=p5inj>注入</b>"
+    ],
+    "images": [],
+    "runs": []
+  },
+  "sectionBreaksOutsideTables": 2,
+  "quoteLink": "https://x.test/\"><b id=p5inj>注入</b>",
+  "policyEvents": [],
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  }
+}

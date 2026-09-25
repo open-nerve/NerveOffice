@@ -1,0 +1,240 @@
+{
+  "check": "V13-capability",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-25T08:55:51.964Z",
+  "id": "C6",
+  "name": "图片",
+  "config": "platform",
+  "steps": [
+    {
+      "step": "插入两张图片（内联）",
+      "ok": true,
+      "detail": [
+        {
+          "id": "Yx2oIX",
+          "layoutType": 0,
+          "behindDoc": 0,
+          "wrapText": 0,
+          "source": "/api/assets/d5b16ff1-0b31-46ae-aae4-81e50606b8b5",
+          "size": [
+            120,
+            80
+          ],
+          "pos": [
+            434,
+            0
+          ]
+        },
+        {
+          "id": "h1Vdsi",
+          "layoutType": 0,
+          "behindDoc": 0,
+          "wrapText": 0,
+          "source": "/api/assets/9bd54ad6-c41c-42e1-8e1e-db8a2a2fbccd",
+          "size": [
+            64,
+            64
+          ],
+          "pos": [
+            434,
+            0
+          ]
+        }
+      ]
+    },
+    {
+      "step": "点击图片：弹出浮动工具条（环绕、编辑、裁剪、删除）",
+      "ok": true,
+      "detail": 4
+    },
+    {
+      "step": "浮动工具条：环绕方式（上下型、浮于文字上方、四周型）",
+      "ok": true,
+      "detail": {
+        "上下型": {
+          "layoutType": 6,
+          "behindDoc": 0
+        },
+        "浮于文字上方": {
+          "layoutType": 1,
+          "behindDoc": 0
+        },
+        "四周型": {
+          "layoutType": 3,
+          "behindDoc": 0
+        },
+        "衬于文字下方": {
+          "layoutType": 1,
+          "behindDoc": 1
+        }
+      }
+    },
+    {
+      "step": "拖动浮动图片",
+      "ok": true,
+      "detail": {
+        "before": [
+          44,
+          3
+        ],
+        "after": [
+          37,
+          33
+        ]
+      }
+    },
+    {
+      "step": "拖动控制点缩放",
+      "ok": true,
+      "detail": {
+        "before": [
+          120,
+          80
+        ],
+        "after": [
+          161,
+          107
+        ],
+        "pos": [
+          -29,
+          33
+        ]
+      }
+    },
+    {
+      "step": "浮动工具条：衬于文字下方",
+      "ok": true,
+      "detail": {
+        "layoutType": 1,
+        "behindDoc": 1
+      }
+    },
+    {
+      "step": "衬于文字下方的图片能否再次点选（记录）",
+      "ok": true,
+      "detail": true
+    },
+    {
+      "step": "点选图片后按退格键删除",
+      "ok": true,
+      "detail": {
+        "imagesAfterForwardDelete": 2,
+        "images": 1
+      }
+    }
+  ],
+  "undo": {
+    "count": 9,
+    "restored": true,
+    "redone": true
+  },
+  "roundtrip": {
+    "firstDiff": [],
+    "secondDiff": [],
+    "preserved": true
+  },
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  },
+  "policyEvents": [],
+  "summary": {
+    "before": {
+      "paragraphs": 8
+    },
+    "after": {
+      "text": "能力矩阵样本\r段落甲：用于标题样式。\r\b段落乙：用于字符格式，这里有一段可以选中的文字。\r段落丙：用于对齐。\r段落丁：列表第一项\r段落戊：列表第二项\r段落己：链接文字与查找替换，查找目标出现两次：查找目标。\r\r\n",
+      "paragraphs": [
+        {
+          "text": "能力矩阵样本",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落甲：用于标题样式。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落乙：用于字符格式，这里有一段可以选中的文字。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落丙：用于对齐。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落丁：列表第一项",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落戊：列表第二项",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落己：链接文字与查找替换，查找目标出现两次：查找目标。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        }
+      ],
+      "tables": [],
+      "links": [],
+      "runs": [],
+      "images": [
+        {
+          "id": "Yx2oIX",
+          "layoutType": 1,
+          "behindDoc": 1,
+          "wrapText": 0,
+          "source": "/api/assets/d5b16ff1-0b31-46ae-aae4-81e50606b8b5",
+          "size": [
+            161,
+            107
+          ],
+          "pos": [
+            -29,
+            33
+          ]
+        }
+      ]
+    }
+  }
+}

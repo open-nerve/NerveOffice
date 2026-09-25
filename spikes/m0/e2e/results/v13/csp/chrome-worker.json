@@ -1,0 +1,42 @@
+{
+  "check": "V13-csp",
+  "worker": true,
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-25T08:07:25.982Z",
+  "steps": [
+    {
+      "step": "加载 doc-all（含大纲侧栏）",
+      "enforce": {},
+      "probe": {
+        "style-src-elem inline": 4
+      }
+    },
+    {
+      "step": "键入、中文输入、大纲导航",
+      "enforce": {},
+      "probe": {}
+    },
+    {
+      "step": "粘贴 Word 与网页、插入与粘贴图片",
+      "enforce": {},
+      "probe": {
+        "style-src-elem inline": 1,
+        "style-src-attr inline": 106,
+        "img-src blob": 1
+      }
+    },
+    {
+      "step": "表情、符号、查找、复制粘贴",
+      "enforce": {},
+      "probe": {
+        "style-src-elem inline": 1,
+        "style-src-attr inline": 2
+      }
+    }
+  ]
+}

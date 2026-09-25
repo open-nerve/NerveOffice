@@ -1,0 +1,145 @@
+{
+  "check": "V13-paste",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-25T09:06:55.445Z",
+  "source": "word-mac",
+  "target": "empty",
+  "config": "platform",
+  "dispatched": {
+    "target": "div",
+    "defaultPrevented": true
+  },
+  "changed": true,
+  "diff": {
+    "paragraphs": 8,
+    "headings": [
+      "6:议题"
+    ],
+    "lists": [
+      "BULLET_LIST/0:一、文字文档的范围",
+      "BULLET_LIST/1:（一）目录是否纳入",
+      "BULLET_LIST/0:二、中文输入法",
+      "BULLET_LIST/0:§结论：先做拼音"
+    ],
+    "aligns": [],
+    "tables": [],
+    "links": [],
+    "images": [
+      "/api/assets/00000000-0000-4000-8000-0000"
+    ],
+    "runs": [
+      {
+        "text": "会议纪要",
+        "ts": {
+          "ff": "Microsoft YaHei"
+        }
+      },
+      {
+        "text": "时间：",
+        "ts": {
+          "fs": 10,
+          "ff": "PingFang SC"
+        }
+      },
+      {
+        "text": "2026",
+        "ts": {
+          "fs": 10
+        }
+      },
+      {
+        "text": "年",
+        "ts": {
+          "fs": 10,
+          "ff": "PingFang SC"
+        }
+      },
+      {
+        "text": "9",
+        "ts": {
+          "fs": 10
+        }
+      },
+      {
+        "text": "月",
+        "ts": {
+          "fs": 10,
+          "ff": "PingFang SC"
+        }
+      },
+      {
+        "text": "25",
+        "ts": {
+          "fs": 10
+        }
+      },
+      {
+        "text": "日 地点：三楼会议室",
+        "ts": {
+          "fs": 10,
+          "ff": "PingFang SC"
+        }
+      },
+      {
+        "text": "议题",
+        "ts": {
+          "ff": "PingFang SC"
+        }
+      },
+      {
+        "text": "文字文档的范围",
+        "ts": {
+          "ff": "PingFang SC"
+        }
+      },
+      {
+        "text": "目录是否纳入",
+        "ts": {
+          "ff": "PingFang SC"
+        }
+      },
+      {
+        "text": "中文输入法",
+        "ts": {
+          "ff": "PingFang SC"
+        }
+      },
+      {
+        "text": "§",
+        "ts": {
+          "ff": "Wingdings"
+        }
+      },
+      {
+        "text": "结论：先做拼音",
+        "ts": {
+          "ff": "PingFang SC"
+        }
+      }
+    ]
+  },
+  "features": {
+    "标题样式MsoTitle": false,
+    "三级标题": true,
+    "段内换行": false,
+    "中文编号列表": true,
+    "中文编号标记已去掉": false,
+    "图片占位": true
+  },
+  "pwned": null,
+  "unsafeLinks": [],
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  },
+  "policyEvents": [],
+  "roundtrip": {
+    "firstDiff": [],
+    "secondDiff": []
+  }
+}

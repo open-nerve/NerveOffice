@@ -11,6 +11,7 @@ import { IResourceManagerService, IUndoRedoService, LifecycleService, LifecycleS
 import { createChangeDetector } from './change-detector';
 import { installImageFunctionPolicy } from './image-function-policy';
 import { installImageGuards } from './image-guards';
+import { installDocPolicy, normalizeDocFlavor } from './doc-policy';
 import { alignImageFormats } from '../profiles/image-service';
 import { GuardedResourceManagerService } from './guarded-resource-manager';
 import { describeDocument } from './semantics';
@@ -39,6 +40,12 @@ export interface CreateEditorOptions {
     imageService?: 'default' | 'platform';
     /** IMAGE() 的处理（P4）：主线程在这里安装，Worker 里由 Worker 自己安装（经 Worker 的 name 传入）。 */
     imageFunction?: ImageFunctionPolicy;
+    /** 文字文档的平台策略（P5，doc-policy.ts）。 */
+    docPolicy?: 'default' | 'platform';
+    /** 文字文档的大纲侧栏（P5）。 */
+    outline?: boolean;
+    /** 文字文档的目录块插件（P5 评估用）。 */
+    tocBlock?: boolean;
 }
 
 export interface ResourceHookInfo {
@@ -90,6 +97,8 @@ export async function createEditor(options: CreateEditorOptions): Promise<Editor
         calcMode: options.calcMode ?? 'default',
         formulaIntervalCount: options.formulaIntervalCount,
         imageService: options.imageService ?? 'default',
+        outline: options.outline ?? false,
+        tocBlock: options.tocBlock ?? false,
     };
     const t0 = performance.now();
     const timings: Record<string, number> = { t0 };
@@ -128,6 +137,8 @@ export async function createEditor(options: CreateEditorOptions): Promise<Editor
         unitId: typeof data.id === 'string' ? data.id : undefined,
         exclude: profile.changeDetectionExclude,
     });
+    // 平台策略：版式固定为 MODERN（在创建文档单元之前规范）
+    if (profile.kind === 'doc' && options.docPolicy === 'platform') normalizeDocFlavor(data as Partial<IDocumentData>);
     const unitId = profile.kind === 'sheet'
         ? univerAPI.createWorkbook(data as Partial<IWorkbookData>).getId()
         : univerAPI.createDocument(data as Partial<IDocumentData>).getId();
@@ -136,6 +147,7 @@ export async function createEditor(options: CreateEditorOptions): Promise<Editor
     await lifecycle.onStage(LifecycleStages.Steady);
     sub.unsubscribe();
     const imageGuards = options.imageService === 'platform' ? [installImageGuards(univer, univerAPI), profile.platformImageExtras?.(univer)] : [];
+    const docPolicy = profile.kind === 'doc' && options.docPolicy === 'platform' ? installDocPolicy(univer, univerAPI, unitId) : null;
 
     const save = (): IWorkbookData | IDocumentData => {
         if (profile.kind === 'sheet') {
@@ -174,6 +186,7 @@ export async function createEditor(options: CreateEditorOptions): Promise<Editor
         detector,
         dispose: () => {
             imageGuards.forEach((d) => d?.dispose());
+            docPolicy?.dispose();
             detector.dispose();
             univer.dispose();
         },
@@ -220,6 +233,12 @@ export interface M0Window {
     guard?: typeof import('./resource-guard');
     /** 加载时的快照文本（创建文档单元之前序列化，SDK 会改动传入的对象）。 */
     loadedText?: string;
+    /** 文字文档当前的活动选区（P5；DocSelectionManagerService 是内部 API，只用于验证）。 */
+    activeTextRange?: () => { startOffset: number; endOffset: number; segmentId: string } | null;
+    /** 文字文档平台策略的操作记录（P5）。 */
+    docPolicy?: { events: import('./doc-policy').DocPolicyEvent[] };
+    /** 输入法记录页（P5，imelog=1）。 */
+    imeRecorder?: import('@univerjs/core').IDisposable;
     /** 平台图片服务、粘贴钩子与命令守卫的操作记录（P4）。 */
     images?: { events: import('./platform-image-io').ImageEvent[]; io: () => import('@univerjs/core').IImageIoService };
     /** 销毁当前实例并按指定模式从文档存储重新创建（V09 的"销毁重建"）。 */

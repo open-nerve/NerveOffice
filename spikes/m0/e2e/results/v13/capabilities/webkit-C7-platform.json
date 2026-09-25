@@ -1,0 +1,166 @@
+{
+  "check": "V13-capability",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T08:29:05.568Z",
+  "id": "C7",
+  "name": "超链接",
+  "config": "platform",
+  "steps": [
+    {
+      "step": "⌘K 添加链接",
+      "ok": true,
+      "detail": [
+        {
+          "text": "链接文字",
+          "url": "https://example.com/p5"
+        }
+      ]
+    },
+    {
+      "step": "点击链接：显示信息框",
+      "ok": true
+    },
+    {
+      "step": "⌘ 点击：新窗口打开（noopener）",
+      "ok": true,
+      "detail": [
+        [
+          "https://example.com/p5",
+          "_blank",
+          "noopener noreferrer"
+        ]
+      ]
+    },
+    {
+      "step": "信息框：编辑链接地址",
+      "ok": true,
+      "detail": [
+        {
+          "text": "链接文字",
+          "url": "https://example.com/p5-edit"
+        }
+      ]
+    },
+    {
+      "step": "没有协议的地址补上 https://",
+      "ok": true,
+      "detail": {
+        "text": "查找替换",
+        "url": "https://example.com/second"
+      }
+    },
+    {
+      "step": "信息框：取消链接",
+      "ok": true,
+      "detail": [
+        {
+          "text": "链接文字",
+          "url": "https://example.com/p5-edit"
+        }
+      ]
+    }
+  ],
+  "undo": {
+    "count": 4,
+    "restored": true,
+    "redone": true
+  },
+  "roundtrip": {
+    "firstDiff": [],
+    "secondDiff": [],
+    "preserved": true
+  },
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  },
+  "policyEvents": [],
+  "summary": {
+    "before": {
+      "paragraphs": 8
+    },
+    "after": {
+      "text": "能力矩阵样本\r段落甲：用于标题样式。\r段落乙：用于字符格式，这里有一段可以选中的文字。\r段落丙：用于对齐。\r段落丁：列表第一项\r段落戊：列表第二项\r段落己：链接文字与查找替换，查找目标出现两次：查找目标。\r\r\n",
+      "paragraphs": [
+        {
+          "text": "能力矩阵样本",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落甲：用于标题样式。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落乙：用于字符格式，这里有一段可以选中的文字。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落丙：用于对齐。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落丁：列表第一项",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落戊：列表第二项",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落己：链接文字与查找替换，查找目标出现两次：查找目标。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        }
+      ],
+      "tables": [],
+      "links": [
+        {
+          "text": "链接文字",
+          "url": "https://example.com/p5-edit"
+        }
+      ],
+      "runs": [],
+      "images": []
+    }
+  }
+}

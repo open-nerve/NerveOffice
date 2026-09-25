@@ -1,0 +1,46 @@
+{
+  "check": "V13-paste",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T05:31:04.333Z",
+  "source": "google-docs",
+  "target": "cell",
+  "config": "platform",
+  "dispatched": {
+    "target": "div",
+    "defaultPrevented": true
+  },
+  "changed": false,
+  "diff": {
+    "paragraphs": 0,
+    "headings": [],
+    "lists": [],
+    "aligns": [],
+    "tables": [],
+    "links": [],
+    "images": [],
+    "runs": []
+  },
+  "features": {
+    "一级标题": false,
+    "正文不是粗体": true,
+    "粗体": false,
+    "斜体": false,
+    "下划线": false,
+    "无序列表": false,
+    "表格": false,
+    "链接": false
+  },
+  "pwned": null,
+  "unsafeLinks": [],
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  },
+  "policyEvents": [],
+  "roundtrip": null
+}

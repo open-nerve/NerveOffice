@@ -1,0 +1,48 @@
+{
+  "check": "V13-copy-cross",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T05:10:07.570Z",
+  "docToDoc": {
+    "clipboard": {
+      "types": [
+        "text/plain",
+        "text/html"
+      ],
+      "hasFragment": false,
+      "hasHeadingClass": true,
+      "length": 3819
+    },
+    "headings": [
+      "2:文档标题",
+      "3:副标题：M0 文字文档样",
+      "4:一级标题"
+    ],
+    "runs": 9,
+    "aligns": [
+      "2:居中段落"
+    ]
+  },
+  "sheetToDoc": {
+    "tables": [
+      "2×2"
+    ],
+    "paragraphs": 5
+  },
+  "docToSheet": [
+    "段落甲：用于标题样式。段落乙",
+    null,
+    null
+  ],
+  "health": {
+    "doc": {
+      "errors": [],
+      "cspEnforce": []
+    },
+    "sheet": []
+  }
+}

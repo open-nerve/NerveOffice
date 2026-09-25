@@ -1,0 +1,31 @@
+{
+  "check": "V13-paste-plain-mode",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-25T08:24:25.752Z",
+  "diff": {
+    "paragraphs": 1,
+    "headings": [],
+    "lists": [],
+    "aligns": [],
+    "tables": [],
+    "links": [],
+    "images": [],
+    "runs": [
+      {
+        "text": "项目周报2026年第39周\r本周",
+        "ts": {
+          "ff": "Arial",
+          "fs": 11,
+          "cl": {
+            "rgb": "#1B1C1F"
+          }
+        }
+      }
+    ]
+  }
+}

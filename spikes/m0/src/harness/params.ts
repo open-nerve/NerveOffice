@@ -24,6 +24,14 @@ export interface PageParams {
     /** IMAGE() 公式的处理（P4）：default、off（反注册）、restricted（只允许平台资源地址）。 */
     imagefn: 'default' | 'off' | 'restricted';
     worker: boolean;
+    /** 文字文档的平台策略（P5）：default 为 SDK 行为；platform 安装 `/` 键、输入法事件归一、命令守卫、粘贴清洗与版式规范（src/harness/doc-policy.ts）。 */
+    docpolicy: 'default' | 'platform';
+    /** 输入法记录页（P5）：记录真实输入法的事件序列，交回验证服务。 */
+    imelog: boolean;
+    /** 文字文档的大纲侧栏（P5，docs-ui 的 toc 配置）。 */
+    outline: boolean;
+    /** 目录块插件（P5 评估用，docs-toc 与 docs-toc-ui）：doc@1 不注册，tocblock=1 时注册。 */
+    tocblock: boolean;
     /** 真实 Safari 自检：场景名；完成后跳转到 next。 */
     selftest?: string;
     next?: string;
@@ -45,6 +53,10 @@ export function readPageParams(defaultSample: string): PageParams {
         img: q.get('img') === 'platform' ? 'platform' : 'default',
         imagefn: q.get('imagefn') === 'off' ? 'off' : q.get('imagefn') === 'restricted' ? 'restricted' : 'default',
         worker: q.get('worker') === '1',
+        docpolicy: q.get('docpolicy') === 'platform' ? 'platform' : 'default',
+        imelog: q.get('imelog') === '1',
+        outline: q.get('outline') === '1',
+        tocblock: q.get('tocblock') === '1',
         selftest: q.get('selftest') ?? undefined,
         next: q.get('next') ?? undefined,
     };

@@ -1,0 +1,59 @@
+{
+    "id": "m0-doc-p5-cap",
+    "title": "P5 能力矩阵样本",
+    "locale": "zhCN",
+    "body": {
+        "dataStream": "能力矩阵样本\r段落甲：用于标题样式。\r段落乙：用于字符格式，这里有一段可以选中的文字。\r段落丙：用于对齐。\r段落丁：列表第一项\r段落戊：列表第二项\r段落己：链接文字与查找替换，查找目标出现两次：查找目标。\r\r\n",
+        "textRuns": [],
+        "paragraphs": [
+            {
+                "startIndex": 6,
+                "paragraphStyle": {}
+            },
+            {
+                "startIndex": 18,
+                "paragraphStyle": {}
+            },
+            {
+                "startIndex": 43,
+                "paragraphStyle": {}
+            },
+            {
+                "startIndex": 53,
+                "paragraphStyle": {}
+            },
+            {
+                "startIndex": 63,
+                "paragraphStyle": {}
+            },
+            {
+                "startIndex": 73,
+                "paragraphStyle": {}
+            },
+            {
+                "startIndex": 102,
+                "paragraphStyle": {}
+            },
+            {
+                "startIndex": 103,
+                "paragraphStyle": {}
+            }
+        ],
+        "sectionBreaks": [
+            {
+                "startIndex": 104
+            }
+        ]
+    },
+    "documentStyle": {
+        "documentFlavor": 2,
+        "pageSize": {
+            "width": 793.7,
+            "height": 1122.5
+        },
+        "marginTop": 50,
+        "marginBottom": 50,
+        "marginLeft": 50,
+        "marginRight": 50
+    }
+}

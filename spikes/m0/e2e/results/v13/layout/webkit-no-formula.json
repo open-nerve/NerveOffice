@@ -1,0 +1,92 @@
+{
+  "check": "V13-layout-no-formula",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T08:41:25.525Z",
+  "samples": [
+    {
+      "sample": "minimal",
+      "sameAsWithFormula": true,
+      "roundtrip": {
+        "firstDiff": [],
+        "secondDiff": []
+      }
+    },
+    {
+      "sample": "doc-text",
+      "sameAsWithFormula": true,
+      "roundtrip": {
+        "firstDiff": [],
+        "secondDiff": []
+      }
+    },
+    {
+      "sample": "doc-list",
+      "sameAsWithFormula": true,
+      "roundtrip": {
+        "firstDiff": [],
+        "secondDiff": []
+      }
+    },
+    {
+      "sample": "doc-hyperlink",
+      "sameAsWithFormula": true,
+      "roundtrip": {
+        "firstDiff": [],
+        "secondDiff": []
+      }
+    },
+    {
+      "sample": "doc-table",
+      "sameAsWithFormula": true,
+      "roundtrip": {
+        "firstDiff": [],
+        "secondDiff": []
+      }
+    },
+    {
+      "sample": "doc-drawing",
+      "sameAsWithFormula": true,
+      "roundtrip": {
+        "firstDiff": [],
+        "secondDiff": []
+      }
+    },
+    {
+      "sample": "doc-all",
+      "sameAsWithFormula": true,
+      "roundtrip": {
+        "firstDiff": [],
+        "secondDiff": []
+      }
+    },
+    {
+      "sample": "p5-cap",
+      "sameAsWithFormula": true,
+      "roundtrip": {
+        "firstDiff": [],
+        "secondDiff": []
+      }
+    }
+  ],
+  "edits": {
+    "bold": true,
+    "list": true,
+    "tables": 1
+  },
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  },
+  "resourceHooks": [
+    "DOC_DRAWING_PLUGIN",
+    "DOC_HYPER_LINK_PLUGIN",
+    "DOC_NOTE_PLUGIN",
+    "DOC_OBJECT_PERMISSION_PLUGIN",
+    "DOC_WORD_STYLES_PLUGIN"
+  ]
+}

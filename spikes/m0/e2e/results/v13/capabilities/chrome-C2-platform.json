@@ -1,0 +1,222 @@
+{
+  "check": "V13-capability",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-25T08:02:14.696Z",
+  "id": "C2",
+  "name": "字符格式",
+  "config": "platform",
+  "steps": [
+    {
+      "step": "快捷键：粗体、斜体、下划线、删除线",
+      "ok": true,
+      "detail": {
+        "bl": 1,
+        "it": 1,
+        "ul": {
+          "s": 1
+        },
+        "st": {
+          "s": 1
+        }
+      }
+    },
+    {
+      "step": "工具栏：下标",
+      "ok": true,
+      "detail": {
+        "va": 2
+      }
+    },
+    {
+      "step": "工具栏：上标",
+      "ok": true,
+      "detail": {
+        "va": 3
+      }
+    },
+    {
+      "step": "工具栏：字号 18",
+      "ok": true,
+      "detail": {
+        "fs": 18
+      }
+    },
+    {
+      "step": "工具栏：字体 宋体",
+      "ok": true,
+      "detail": {
+        "ff": "宋体"
+      }
+    },
+    {
+      "step": "工具栏：文字颜色",
+      "ok": true,
+      "detail": {
+        "cl": {
+          "rgb": "#f05252"
+        }
+      }
+    },
+    {
+      "step": "工具栏：高亮",
+      "ok": true,
+      "detail": {
+        "bg": {
+          "rgb": "#fff4b9"
+        }
+      }
+    }
+  ],
+  "undo": {
+    "count": 10,
+    "restored": true,
+    "redone": true
+  },
+  "roundtrip": {
+    "firstDiff": [],
+    "secondDiff": [],
+    "preserved": true
+  },
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  },
+  "policyEvents": [],
+  "summary": {
+    "before": {
+      "paragraphs": 8
+    },
+    "after": {
+      "text": "能力矩阵样本\r段落甲：用于标题样式。\r段落乙：用于字符格式，这里有一段可以选中的文字。\r段落丙：用于对齐。\r段落丁：列表第一项\r段落戊：列表第二项\r段落己：链接文字与查找替换，查找目标出现两次：查找目标。\r\r\n",
+      "paragraphs": [
+        {
+          "text": "能力矩阵样本",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落甲：用于标题样式。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落乙：用于字符格式，这里有一段可以选中的文字。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落丙：用于对齐。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落丁：列表第一项",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落戊：列表第二项",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落己：链接文字与查找替换，查找目标出现两次：查找目标。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        }
+      ],
+      "tables": [],
+      "links": [],
+      "runs": [
+        {
+          "text": "段落乙",
+          "ts": {
+            "va": 3
+          }
+        },
+        {
+          "text": "用于字符格式",
+          "ts": {
+            "fs": 18
+          }
+        },
+        {
+          "text": "这里有",
+          "ts": {
+            "ff": "宋体"
+          }
+        },
+        {
+          "text": "一段",
+          "ts": {
+            "cl": {
+              "rgb": "#f05252"
+            }
+          }
+        },
+        {
+          "text": "可以选中",
+          "ts": {
+            "bl": 1,
+            "it": 1,
+            "ul": {
+              "s": 1
+            },
+            "st": {
+              "s": 1
+            }
+          }
+        },
+        {
+          "text": "文字。",
+          "ts": {
+            "va": 2
+          }
+        },
+        {
+          "text": "用于对齐",
+          "ts": {
+            "bg": {
+              "rgb": "#fff4b9"
+            }
+          }
+        }
+      ],
+      "images": []
+    }
+  }
+}

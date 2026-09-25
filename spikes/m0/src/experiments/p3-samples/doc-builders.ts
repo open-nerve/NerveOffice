@@ -8,8 +8,8 @@ import { hanziText, mulberry32 } from './random';
 
 const settle = (ms = 800) => new Promise((r) => setTimeout(r, ms));
 
-/** 生成正文，直到达到目标字数或目标字节数（字节数每 200 段核对一次正文的 JSON 体积）。 */
-function body(target: { chars?: number; bytes?: number }): RichTextBuilder {
+/** 生成正文，直到达到目标字数或目标字节数（字节数每 200 段核对一次正文的 JSON 体积）。P5 的 doc-20k-full 复用它。 */
+export function body(target: { chars?: number; bytes?: number }): RichTextBuilder {
     const rand = mulberry32(2024);
     const builder = RichTextBuilder.create();
     let chars = 0;
