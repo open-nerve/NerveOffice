@@ -1,0 +1,1111 @@
+{
+  "check": "V16",
+  "node": "v24.3.0",
+  "timestamp": "2026-09-25T07:11:30.647Z",
+  "rows": [
+    {
+      "sample": "sheet/empty",
+      "stage": "Ready",
+      "loadMs": 18,
+      "totalMs": 1522,
+      "heapMiB": 2.3,
+      "hooks": [
+        "SHEET_AuthzIoMockService_PLUGIN",
+        "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+        "SHEET_DATA_VALIDATION_PLUGIN",
+        "SHEET_DEFINED_NAME_PLUGIN",
+        "SHEET_DRAWING_PLUGIN",
+        "SHEET_FILTER_PLUGIN",
+        "SHEET_NOTE_PLUGIN",
+        "SHEET_RANGE_PROTECTION_PLUGIN",
+        "SHEET_RANGE_THEME_MODEL_PLUGIN",
+        "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+        "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN"
+      ],
+      "errors": [],
+      "vsBrowser": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "noCalcVsFixture": {
+        "equal": false,
+        "diffCount": 14,
+        "diffs": [
+          {
+            "path": "$.sheets.sheet-1.tabColor",
+            "kind": "added",
+            "after": "\"\""
+          },
+          {
+            "path": "$.sheets.sheet-1.hidden",
+            "kind": "added",
+            "after": "0"
+          },
+          {
+            "path": "$.sheets.sheet-1.freeze",
+            "kind": "added",
+            "after": "{\"xSplit\":0,\"ySplit\":0,\"startRow\":-1,\"startColumn\":-1}"
+          },
+          {
+            "path": "$.sheets.sheet-1.defaultColumnWidth",
+            "kind": "added",
+            "after": "88"
+          },
+          {
+            "path": "$.sheets.sheet-1.defaultRowHeight",
+            "kind": "added",
+            "after": "24"
+          },
+          {
+            "path": "$.sheets.sheet-1.mergeData",
+            "kind": "added",
+            "after": "[]"
+          },
+          {
+            "path": "$.sheets.sheet-1.rowData",
+            "kind": "added",
+            "after": "{}"
+          },
+          {
+            "path": "$.sheets.sheet-1.columnData",
+            "kind": "added",
+            "after": "{}"
+          }
+        ]
+      },
+      "defaultVsFixture": {
+        "equal": false,
+        "diffCount": 14,
+        "diffs": [
+          {
+            "path": "$.sheets.sheet-1.tabColor",
+            "kind": "added",
+            "after": "\"\""
+          },
+          {
+            "path": "$.sheets.sheet-1.hidden",
+            "kind": "added",
+            "after": "0"
+          },
+          {
+            "path": "$.sheets.sheet-1.freeze",
+            "kind": "added",
+            "after": "{\"xSplit\":0,\"ySplit\":0,\"startRow\":-1,\"startColumn\":-1}"
+          },
+          {
+            "path": "$.sheets.sheet-1.defaultColumnWidth",
+            "kind": "added",
+            "after": "88"
+          },
+          {
+            "path": "$.sheets.sheet-1.defaultRowHeight",
+            "kind": "added",
+            "after": "24"
+          },
+          {
+            "path": "$.sheets.sheet-1.mergeData",
+            "kind": "added",
+            "after": "[]"
+          },
+          {
+            "path": "$.sheets.sheet-1.rowData",
+            "kind": "added",
+            "after": "{}"
+          },
+          {
+            "path": "$.sheets.sheet-1.columnData",
+            "kind": "added",
+            "after": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "sample": "sheet/minimal",
+      "stage": "Ready",
+      "loadMs": 11,
+      "totalMs": 1514,
+      "heapMiB": 3.4,
+      "hooks": [
+        "SHEET_AuthzIoMockService_PLUGIN",
+        "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+        "SHEET_DATA_VALIDATION_PLUGIN",
+        "SHEET_DEFINED_NAME_PLUGIN",
+        "SHEET_DRAWING_PLUGIN",
+        "SHEET_FILTER_PLUGIN",
+        "SHEET_NOTE_PLUGIN",
+        "SHEET_RANGE_PROTECTION_PLUGIN",
+        "SHEET_RANGE_THEME_MODEL_PLUGIN",
+        "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+        "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN"
+      ],
+      "errors": [],
+      "vsBrowser": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "noCalcVsFixture": {
+        "equal": false,
+        "diffCount": 14,
+        "diffs": [
+          {
+            "path": "$.sheets.sheet-1.tabColor",
+            "kind": "added",
+            "after": "\"\""
+          },
+          {
+            "path": "$.sheets.sheet-1.hidden",
+            "kind": "added",
+            "after": "0"
+          },
+          {
+            "path": "$.sheets.sheet-1.freeze",
+            "kind": "added",
+            "after": "{\"xSplit\":0,\"ySplit\":0,\"startRow\":-1,\"startColumn\":-1}"
+          },
+          {
+            "path": "$.sheets.sheet-1.defaultColumnWidth",
+            "kind": "added",
+            "after": "88"
+          },
+          {
+            "path": "$.sheets.sheet-1.defaultRowHeight",
+            "kind": "added",
+            "after": "24"
+          },
+          {
+            "path": "$.sheets.sheet-1.mergeData",
+            "kind": "added",
+            "after": "[]"
+          },
+          {
+            "path": "$.sheets.sheet-1.rowData",
+            "kind": "added",
+            "after": "{}"
+          },
+          {
+            "path": "$.sheets.sheet-1.columnData",
+            "kind": "added",
+            "after": "{}"
+          }
+        ]
+      },
+      "defaultVsFixture": {
+        "equal": false,
+        "diffCount": 14,
+        "diffs": [
+          {
+            "path": "$.sheets.sheet-1.tabColor",
+            "kind": "added",
+            "after": "\"\""
+          },
+          {
+            "path": "$.sheets.sheet-1.hidden",
+            "kind": "added",
+            "after": "0"
+          },
+          {
+            "path": "$.sheets.sheet-1.freeze",
+            "kind": "added",
+            "after": "{\"xSplit\":0,\"ySplit\":0,\"startRow\":-1,\"startColumn\":-1}"
+          },
+          {
+            "path": "$.sheets.sheet-1.defaultColumnWidth",
+            "kind": "added",
+            "after": "88"
+          },
+          {
+            "path": "$.sheets.sheet-1.defaultRowHeight",
+            "kind": "added",
+            "after": "24"
+          },
+          {
+            "path": "$.sheets.sheet-1.mergeData",
+            "kind": "added",
+            "after": "[]"
+          },
+          {
+            "path": "$.sheets.sheet-1.rowData",
+            "kind": "added",
+            "after": "{}"
+          },
+          {
+            "path": "$.sheets.sheet-1.columnData",
+            "kind": "added",
+            "after": "{}"
+          }
+        ]
+      }
+    },
+    {
+      "sample": "sheet/sheet-all",
+      "stage": "Ready",
+      "loadMs": 20,
+      "totalMs": 1524,
+      "heapMiB": 9.3,
+      "hooks": [
+        "SHEET_AuthzIoMockService_PLUGIN",
+        "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+        "SHEET_DATA_VALIDATION_PLUGIN",
+        "SHEET_DEFINED_NAME_PLUGIN",
+        "SHEET_DRAWING_PLUGIN",
+        "SHEET_FILTER_PLUGIN",
+        "SHEET_NOTE_PLUGIN",
+        "SHEET_RANGE_PROTECTION_PLUGIN",
+        "SHEET_RANGE_THEME_MODEL_PLUGIN",
+        "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+        "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN"
+      ],
+      "errors": [],
+      "vsBrowser": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "noCalcVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "defaultVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      }
+    },
+    {
+      "sample": "sheet/sheet-cf",
+      "stage": "Ready",
+      "loadMs": 12,
+      "totalMs": 1514,
+      "heapMiB": -6.8,
+      "hooks": [
+        "SHEET_AuthzIoMockService_PLUGIN",
+        "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+        "SHEET_DATA_VALIDATION_PLUGIN",
+        "SHEET_DEFINED_NAME_PLUGIN",
+        "SHEET_DRAWING_PLUGIN",
+        "SHEET_FILTER_PLUGIN",
+        "SHEET_NOTE_PLUGIN",
+        "SHEET_RANGE_PROTECTION_PLUGIN",
+        "SHEET_RANGE_THEME_MODEL_PLUGIN",
+        "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+        "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN"
+      ],
+      "errors": [],
+      "vsBrowser": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "noCalcVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "defaultVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      }
+    },
+    {
+      "sample": "sheet/sheet-core",
+      "stage": "Ready",
+      "loadMs": 12,
+      "totalMs": 1514,
+      "heapMiB": 4.3,
+      "hooks": [
+        "SHEET_AuthzIoMockService_PLUGIN",
+        "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+        "SHEET_DATA_VALIDATION_PLUGIN",
+        "SHEET_DEFINED_NAME_PLUGIN",
+        "SHEET_DRAWING_PLUGIN",
+        "SHEET_FILTER_PLUGIN",
+        "SHEET_NOTE_PLUGIN",
+        "SHEET_RANGE_PROTECTION_PLUGIN",
+        "SHEET_RANGE_THEME_MODEL_PLUGIN",
+        "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+        "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN"
+      ],
+      "errors": [],
+      "vsBrowser": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "noCalcVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "defaultVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      }
+    },
+    {
+      "sample": "sheet/sheet-drawing",
+      "stage": "Ready",
+      "loadMs": 10,
+      "totalMs": 1512,
+      "heapMiB": 2.8,
+      "hooks": [
+        "SHEET_AuthzIoMockService_PLUGIN",
+        "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+        "SHEET_DATA_VALIDATION_PLUGIN",
+        "SHEET_DEFINED_NAME_PLUGIN",
+        "SHEET_DRAWING_PLUGIN",
+        "SHEET_FILTER_PLUGIN",
+        "SHEET_NOTE_PLUGIN",
+        "SHEET_RANGE_PROTECTION_PLUGIN",
+        "SHEET_RANGE_THEME_MODEL_PLUGIN",
+        "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+        "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN"
+      ],
+      "errors": [],
+      "vsBrowser": {
+        "equal": false,
+        "diffCount": 1,
+        "diffs": [
+          {
+            "path": "$.resources[4].data.sheet-1.data.XkgJYJ.transform.height",
+            "kind": "changed",
+            "before": "99",
+            "after": "80"
+          }
+        ]
+      },
+      "noCalcVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "defaultVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      }
+    },
+    {
+      "sample": "sheet/sheet-dv",
+      "stage": "Ready",
+      "loadMs": 12,
+      "totalMs": 1515,
+      "heapMiB": -20.2,
+      "hooks": [
+        "SHEET_AuthzIoMockService_PLUGIN",
+        "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+        "SHEET_DATA_VALIDATION_PLUGIN",
+        "SHEET_DEFINED_NAME_PLUGIN",
+        "SHEET_DRAWING_PLUGIN",
+        "SHEET_FILTER_PLUGIN",
+        "SHEET_NOTE_PLUGIN",
+        "SHEET_RANGE_PROTECTION_PLUGIN",
+        "SHEET_RANGE_THEME_MODEL_PLUGIN",
+        "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+        "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN"
+      ],
+      "errors": [],
+      "vsBrowser": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "noCalcVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "defaultVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      }
+    },
+    {
+      "sample": "sheet/sheet-filter",
+      "stage": "Ready",
+      "loadMs": 10,
+      "totalMs": 1513,
+      "heapMiB": 2.8,
+      "hooks": [
+        "SHEET_AuthzIoMockService_PLUGIN",
+        "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+        "SHEET_DATA_VALIDATION_PLUGIN",
+        "SHEET_DEFINED_NAME_PLUGIN",
+        "SHEET_DRAWING_PLUGIN",
+        "SHEET_FILTER_PLUGIN",
+        "SHEET_NOTE_PLUGIN",
+        "SHEET_RANGE_PROTECTION_PLUGIN",
+        "SHEET_RANGE_THEME_MODEL_PLUGIN",
+        "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+        "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN"
+      ],
+      "errors": [],
+      "vsBrowser": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "noCalcVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "defaultVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      }
+    },
+    {
+      "sample": "sheet/sheet-hyperlink",
+      "stage": "Ready",
+      "loadMs": 9,
+      "totalMs": 1511,
+      "heapMiB": 2.9,
+      "hooks": [
+        "SHEET_AuthzIoMockService_PLUGIN",
+        "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+        "SHEET_DATA_VALIDATION_PLUGIN",
+        "SHEET_DEFINED_NAME_PLUGIN",
+        "SHEET_DRAWING_PLUGIN",
+        "SHEET_FILTER_PLUGIN",
+        "SHEET_NOTE_PLUGIN",
+        "SHEET_RANGE_PROTECTION_PLUGIN",
+        "SHEET_RANGE_THEME_MODEL_PLUGIN",
+        "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+        "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN"
+      ],
+      "errors": [],
+      "vsBrowser": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "noCalcVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "defaultVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      }
+    },
+    {
+      "sample": "sheet/sheet-note",
+      "stage": "Ready",
+      "loadMs": 8,
+      "totalMs": 1511,
+      "heapMiB": 2.6,
+      "hooks": [
+        "SHEET_AuthzIoMockService_PLUGIN",
+        "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+        "SHEET_DATA_VALIDATION_PLUGIN",
+        "SHEET_DEFINED_NAME_PLUGIN",
+        "SHEET_DRAWING_PLUGIN",
+        "SHEET_FILTER_PLUGIN",
+        "SHEET_NOTE_PLUGIN",
+        "SHEET_RANGE_PROTECTION_PLUGIN",
+        "SHEET_RANGE_THEME_MODEL_PLUGIN",
+        "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+        "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN"
+      ],
+      "errors": [],
+      "vsBrowser": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "noCalcVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "defaultVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      }
+    },
+    {
+      "sample": "sheet/sheet-protection",
+      "stage": "Ready",
+      "loadMs": 12,
+      "totalMs": 1515,
+      "heapMiB": 2.9,
+      "hooks": [
+        "SHEET_AuthzIoMockService_PLUGIN",
+        "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+        "SHEET_DATA_VALIDATION_PLUGIN",
+        "SHEET_DEFINED_NAME_PLUGIN",
+        "SHEET_DRAWING_PLUGIN",
+        "SHEET_FILTER_PLUGIN",
+        "SHEET_NOTE_PLUGIN",
+        "SHEET_RANGE_PROTECTION_PLUGIN",
+        "SHEET_RANGE_THEME_MODEL_PLUGIN",
+        "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+        "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN"
+      ],
+      "errors": [],
+      "vsBrowser": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "noCalcVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "defaultVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      }
+    },
+    {
+      "sample": "doc/doc-all",
+      "stage": "Ready",
+      "loadMs": 5,
+      "totalMs": 1509,
+      "heapMiB": 0.5,
+      "hooks": [
+        "DOC_DRAWING_PLUGIN",
+        "DOC_HYPER_LINK_PLUGIN",
+        "DOC_NOTE_PLUGIN",
+        "DOC_OBJECT_PERMISSION_PLUGIN",
+        "DOC_WORD_STYLES_PLUGIN"
+      ],
+      "errors": [],
+      "vsBrowser": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "noCalcVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "defaultVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      }
+    },
+    {
+      "sample": "doc/doc-drawing",
+      "stage": "Ready",
+      "loadMs": 2,
+      "totalMs": 1504,
+      "heapMiB": 0.3,
+      "hooks": [
+        "DOC_DRAWING_PLUGIN",
+        "DOC_HYPER_LINK_PLUGIN",
+        "DOC_NOTE_PLUGIN",
+        "DOC_OBJECT_PERMISSION_PLUGIN",
+        "DOC_WORD_STYLES_PLUGIN"
+      ],
+      "errors": [],
+      "vsBrowser": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "noCalcVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "defaultVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      }
+    },
+    {
+      "sample": "doc/doc-hyperlink",
+      "stage": "Ready",
+      "loadMs": 2,
+      "totalMs": 1505,
+      "heapMiB": 0.1,
+      "hooks": [
+        "DOC_DRAWING_PLUGIN",
+        "DOC_HYPER_LINK_PLUGIN",
+        "DOC_NOTE_PLUGIN",
+        "DOC_OBJECT_PERMISSION_PLUGIN",
+        "DOC_WORD_STYLES_PLUGIN"
+      ],
+      "errors": [],
+      "vsBrowser": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "noCalcVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "defaultVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      }
+    },
+    {
+      "sample": "doc/doc-list",
+      "stage": "Ready",
+      "loadMs": 2,
+      "totalMs": 1504,
+      "heapMiB": 0.3,
+      "hooks": [
+        "DOC_DRAWING_PLUGIN",
+        "DOC_HYPER_LINK_PLUGIN",
+        "DOC_NOTE_PLUGIN",
+        "DOC_OBJECT_PERMISSION_PLUGIN",
+        "DOC_WORD_STYLES_PLUGIN"
+      ],
+      "errors": [],
+      "vsBrowser": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "noCalcVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "defaultVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      }
+    },
+    {
+      "sample": "doc/doc-table",
+      "stage": "Ready",
+      "loadMs": 2,
+      "totalMs": 1505,
+      "heapMiB": 0.4,
+      "hooks": [
+        "DOC_DRAWING_PLUGIN",
+        "DOC_HYPER_LINK_PLUGIN",
+        "DOC_NOTE_PLUGIN",
+        "DOC_OBJECT_PERMISSION_PLUGIN",
+        "DOC_WORD_STYLES_PLUGIN"
+      ],
+      "errors": [],
+      "vsBrowser": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "noCalcVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "defaultVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      }
+    },
+    {
+      "sample": "doc/doc-text",
+      "stage": "Ready",
+      "loadMs": 2,
+      "totalMs": 1504,
+      "heapMiB": 0.3,
+      "hooks": [
+        "DOC_DRAWING_PLUGIN",
+        "DOC_HYPER_LINK_PLUGIN",
+        "DOC_NOTE_PLUGIN",
+        "DOC_OBJECT_PERMISSION_PLUGIN",
+        "DOC_WORD_STYLES_PLUGIN"
+      ],
+      "errors": [],
+      "vsBrowser": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "noCalcVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      },
+      "defaultVsFixture": {
+        "equal": true,
+        "diffCount": 0,
+        "diffs": []
+      }
+    },
+    {
+      "sample": "doc/empty",
+      "stage": "Ready",
+      "loadMs": 1,
+      "totalMs": 1504,
+      "heapMiB": 0.3,
+      "hooks": [
+        "DOC_DRAWING_PLUGIN",
+        "DOC_HYPER_LINK_PLUGIN",
+        "DOC_NOTE_PLUGIN",
+        "DOC_OBJECT_PERMISSION_PLUGIN",
+        "DOC_WORD_STYLES_PLUGIN"
+      ],
+      "errors": [],
+      "vsBrowser": {
+        "equal": false,
+        "diffCount": 1,
+        "diffs": [
+          {
+            "path": "$.body.sectionBreaks[0].sectionId",
+            "kind": "changed",
+            "before": "\"section_k-c8WtNb4GMy\"",
+            "after": "\"section_1fSqRRKhPeS1\""
+          }
+        ]
+      },
+      "noCalcVsFixture": {
+        "equal": false,
+        "diffCount": 23,
+        "diffs": [
+          {
+            "path": "$.body.sectionBreaks[0].sectionId",
+            "kind": "added",
+            "after": "\"section_4abwQ0cIQphl\""
+          },
+          {
+            "path": "$.documentStyle.autoHyphenation",
+            "kind": "added",
+            "after": "1"
+          },
+          {
+            "path": "$.documentStyle.doNotHyphenateCaps",
+            "kind": "added",
+            "after": "0"
+          },
+          {
+            "path": "$.documentStyle.consecutiveHyphenLimit",
+            "kind": "added",
+            "after": "2"
+          },
+          {
+            "path": "$.documentStyle.defaultHeaderId",
+            "kind": "added",
+            "after": "\"\""
+          },
+          {
+            "path": "$.documentStyle.defaultFooterId",
+            "kind": "added",
+            "after": "\"\""
+          },
+          {
+            "path": "$.documentStyle.evenPageHeaderId",
+            "kind": "added",
+            "after": "\"\""
+          },
+          {
+            "path": "$.documentStyle.evenPageFooterId",
+            "kind": "added",
+            "after": "\"\""
+          }
+        ]
+      },
+      "defaultVsFixture": {
+        "equal": false,
+        "diffCount": 23,
+        "diffs": [
+          {
+            "path": "$.body.sectionBreaks[0].sectionId",
+            "kind": "added",
+            "after": "\"section_1fSqRRKhPeS1\""
+          },
+          {
+            "path": "$.documentStyle.autoHyphenation",
+            "kind": "added",
+            "after": "1"
+          },
+          {
+            "path": "$.documentStyle.doNotHyphenateCaps",
+            "kind": "added",
+            "after": "0"
+          },
+          {
+            "path": "$.documentStyle.consecutiveHyphenLimit",
+            "kind": "added",
+            "after": "2"
+          },
+          {
+            "path": "$.documentStyle.defaultHeaderId",
+            "kind": "added",
+            "after": "\"\""
+          },
+          {
+            "path": "$.documentStyle.defaultFooterId",
+            "kind": "added",
+            "after": "\"\""
+          },
+          {
+            "path": "$.documentStyle.evenPageHeaderId",
+            "kind": "added",
+            "after": "\"\""
+          },
+          {
+            "path": "$.documentStyle.evenPageFooterId",
+            "kind": "added",
+            "after": "\"\""
+          }
+        ]
+      }
+    },
+    {
+      "sample": "doc/minimal",
+      "stage": "Ready",
+      "loadMs": 1,
+      "totalMs": 1503,
+      "heapMiB": 0.3,
+      "hooks": [
+        "DOC_DRAWING_PLUGIN",
+        "DOC_HYPER_LINK_PLUGIN",
+        "DOC_NOTE_PLUGIN",
+        "DOC_OBJECT_PERMISSION_PLUGIN",
+        "DOC_WORD_STYLES_PLUGIN"
+      ],
+      "errors": [],
+      "vsBrowser": {
+        "equal": false,
+        "diffCount": 1,
+        "diffs": [
+          {
+            "path": "$.body.sectionBreaks[0].sectionId",
+            "kind": "changed",
+            "before": "\"section_aafsfzsAMgxT\"",
+            "after": "\"section_c2MoUAD2S-ou\""
+          }
+        ]
+      },
+      "noCalcVsFixture": {
+        "equal": false,
+        "diffCount": 23,
+        "diffs": [
+          {
+            "path": "$.body.sectionBreaks[0].sectionId",
+            "kind": "added",
+            "after": "\"section_K9eAAJgDtaCf\""
+          },
+          {
+            "path": "$.documentStyle.autoHyphenation",
+            "kind": "added",
+            "after": "1"
+          },
+          {
+            "path": "$.documentStyle.doNotHyphenateCaps",
+            "kind": "added",
+            "after": "0"
+          },
+          {
+            "path": "$.documentStyle.consecutiveHyphenLimit",
+            "kind": "added",
+            "after": "2"
+          },
+          {
+            "path": "$.documentStyle.defaultHeaderId",
+            "kind": "added",
+            "after": "\"\""
+          },
+          {
+            "path": "$.documentStyle.defaultFooterId",
+            "kind": "added",
+            "after": "\"\""
+          },
+          {
+            "path": "$.documentStyle.evenPageHeaderId",
+            "kind": "added",
+            "after": "\"\""
+          },
+          {
+            "path": "$.documentStyle.evenPageFooterId",
+            "kind": "added",
+            "after": "\"\""
+          }
+        ]
+      },
+      "defaultVsFixture": {
+        "equal": false,
+        "diffCount": 23,
+        "diffs": [
+          {
+            "path": "$.body.sectionBreaks[0].sectionId",
+            "kind": "added",
+            "after": "\"section_c2MoUAD2S-ou\""
+          },
+          {
+            "path": "$.documentStyle.autoHyphenation",
+            "kind": "added",
+            "after": "1"
+          },
+          {
+            "path": "$.documentStyle.doNotHyphenateCaps",
+            "kind": "added",
+            "after": "0"
+          },
+          {
+            "path": "$.documentStyle.consecutiveHyphenLimit",
+            "kind": "added",
+            "after": "2"
+          },
+          {
+            "path": "$.documentStyle.defaultHeaderId",
+            "kind": "added",
+            "after": "\"\""
+          },
+          {
+            "path": "$.documentStyle.defaultFooterId",
+            "kind": "added",
+            "after": "\"\""
+          },
+          {
+            "path": "$.documentStyle.evenPageHeaderId",
+            "kind": "added",
+            "after": "\"\""
+          },
+          {
+            "path": "$.documentStyle.evenPageFooterId",
+            "kind": "added",
+            "after": "\"\""
+          }
+        ]
+      }
+    },
+    {
+      "sample": "doc/p5-cap",
+      "stage": "Ready",
+      "loadMs": 2,
+      "totalMs": 1504,
+      "heapMiB": 0.3,
+      "hooks": [
+        "DOC_DRAWING_PLUGIN",
+        "DOC_HYPER_LINK_PLUGIN",
+        "DOC_NOTE_PLUGIN",
+        "DOC_OBJECT_PERMISSION_PLUGIN",
+        "DOC_WORD_STYLES_PLUGIN"
+      ],
+      "errors": [],
+      "vsBrowser": {
+        "equal": false,
+        "diffCount": 1,
+        "diffs": [
+          {
+            "path": "$.body.sectionBreaks[0].sectionId",
+            "kind": "changed",
+            "before": "\"section_6WiB0zuH1vrj\"",
+            "after": "\"section_30Oh7r_S6MPQ\""
+          }
+        ]
+      },
+      "noCalcVsFixture": {
+        "equal": false,
+        "diffCount": 23,
+        "diffs": [
+          {
+            "path": "$.body.sectionBreaks[0].sectionId",
+            "kind": "added",
+            "after": "\"section_9PYn4Srr4-Hi\""
+          },
+          {
+            "path": "$.documentStyle.autoHyphenation",
+            "kind": "added",
+            "after": "1"
+          },
+          {
+            "path": "$.documentStyle.doNotHyphenateCaps",
+            "kind": "added",
+            "after": "0"
+          },
+          {
+            "path": "$.documentStyle.consecutiveHyphenLimit",
+            "kind": "added",
+            "after": "2"
+          },
+          {
+            "path": "$.documentStyle.defaultHeaderId",
+            "kind": "added",
+            "after": "\"\""
+          },
+          {
+            "path": "$.documentStyle.defaultFooterId",
+            "kind": "added",
+            "after": "\"\""
+          },
+          {
+            "path": "$.documentStyle.evenPageHeaderId",
+            "kind": "added",
+            "after": "\"\""
+          },
+          {
+            "path": "$.documentStyle.evenPageFooterId",
+            "kind": "added",
+            "after": "\"\""
+          }
+        ]
+      },
+      "defaultVsFixture": {
+        "equal": false,
+        "diffCount": 23,
+        "diffs": [
+          {
+            "path": "$.body.sectionBreaks[0].sectionId",
+            "kind": "added",
+            "after": "\"section_30Oh7r_S6MPQ\""
+          },
+          {
+            "path": "$.documentStyle.autoHyphenation",
+            "kind": "added",
+            "after": "1"
+          },
+          {
+            "path": "$.documentStyle.doNotHyphenateCaps",
+            "kind": "added",
+            "after": "0"
+          },
+          {
+            "path": "$.documentStyle.consecutiveHyphenLimit",
+            "kind": "added",
+            "after": "2"
+          },
+          {
+            "path": "$.documentStyle.defaultHeaderId",
+            "kind": "added",
+            "after": "\"\""
+          },
+          {
+            "path": "$.documentStyle.defaultFooterId",
+            "kind": "added",
+            "after": "\"\""
+          },
+          {
+            "path": "$.documentStyle.evenPageHeaderId",
+            "kind": "added",
+            "after": "\"\""
+          },
+          {
+            "path": "$.documentStyle.evenPageFooterId",
+            "kind": "added",
+            "after": "\"\""
+          }
+        ]
+      }
+    }
+  ]
+}

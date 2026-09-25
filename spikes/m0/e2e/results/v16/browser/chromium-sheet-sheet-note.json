@@ -1,0 +1,114 @@
+{
+  "check": "V16-browser-save",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T07:10:08.313Z",
+  "saved": {
+    "id": "m0-sheet-note",
+    "sheetOrder": [
+      "sheet-1"
+    ],
+    "name": "空白表格",
+    "appVersion": "1.0.0",
+    "locale": "zhCN",
+    "styles": {},
+    "sheets": {
+      "sheet-1": {
+        "id": "sheet-1",
+        "name": "数据",
+        "rowCount": 200,
+        "columnCount": 26,
+        "cellData": {
+          "1": {
+            "1": {
+              "v": "有备注",
+              "t": 1
+            }
+          },
+          "4": {
+            "3": {
+              "v": "显示的备注",
+              "t": 1
+            }
+          }
+        },
+        "tabColor": "",
+        "hidden": 0,
+        "zoomRatio": 1,
+        "freeze": {
+          "xSplit": 0,
+          "ySplit": 0,
+          "startRow": -1,
+          "startColumn": -1
+        },
+        "scrollTop": 0,
+        "scrollLeft": 0,
+        "defaultColumnWidth": 88,
+        "defaultRowHeight": 24,
+        "mergeData": [],
+        "rowData": {},
+        "columnData": {},
+        "showGridlines": 1,
+        "rowHeader": {
+          "width": 46,
+          "hidden": 0
+        },
+        "columnHeader": {
+          "height": 20,
+          "hidden": 0
+        },
+        "rightToLeft": 0
+      }
+    },
+    "resources": [
+      {
+        "name": "SHEET_RANGE_PROTECTION_PLUGIN",
+        "data": ""
+      },
+      {
+        "name": "SHEET_AuthzIoMockService_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_DRAWING_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+        "data": ""
+      },
+      {
+        "name": "SHEET_NOTE_PLUGIN",
+        "data": "{\"sheet-1\":{\"1\":{\"1\":{\"note\":\"这是一条普通备注\",\"width\":200,\"height\":80,\"id\":\"fNZe0o\",\"row\":1,\"col\":1}},\"4\":{\"3\":{\"note\":\"这条备注始终显示\",\"width\":180,\"height\":60,\"show\":true,\"id\":\"7dzqoH\",\"row\":4,\"col\":3}}}}"
+      },
+      {
+        "name": "SHEET_DEFINED_NAME_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_RANGE_THEME_MODEL_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_FILTER_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_DATA_VALIDATION_PLUGIN",
+        "data": "{}"
+      }
+    ]
+  }
+}

@@ -1,0 +1,121 @@
+{
+  "check": "V16-browser-save",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T07:10:55.821Z",
+  "saved": {
+    "id": "m0-doc-p5-cap",
+    "locale": "zhCN",
+    "title": "P5 能力矩阵样本",
+    "tableSource": {},
+    "drawings": {},
+    "drawingsOrder": [],
+    "headers": {},
+    "footers": {},
+    "notes": {},
+    "noteSettings": {},
+    "body": {
+      "dataStream": "能力矩阵样本\r段落甲：用于标题样式。\r段落乙：用于字符格式，这里有一段可以选中的文字。\r段落丙：用于对齐。\r段落丁：列表第一项\r段落戊：列表第二项\r段落己：链接文字与查找替换，查找目标出现两次：查找目标。\r\r\n",
+      "textRuns": [],
+      "paragraphs": [
+        {
+          "startIndex": 6,
+          "paragraphStyle": {}
+        },
+        {
+          "startIndex": 18,
+          "paragraphStyle": {}
+        },
+        {
+          "startIndex": 43,
+          "paragraphStyle": {}
+        },
+        {
+          "startIndex": 53,
+          "paragraphStyle": {}
+        },
+        {
+          "startIndex": 63,
+          "paragraphStyle": {}
+        },
+        {
+          "startIndex": 73,
+          "paragraphStyle": {}
+        },
+        {
+          "startIndex": 102,
+          "paragraphStyle": {}
+        },
+        {
+          "startIndex": 103,
+          "paragraphStyle": {}
+        }
+      ],
+      "sectionBreaks": [
+        {
+          "startIndex": 104,
+          "sectionId": "section_6WiB0zuH1vrj"
+        }
+      ]
+    },
+    "documentStyle": {
+      "pageSize": {
+        "width": 793.7,
+        "height": 1122.5
+      },
+      "documentFlavor": 2,
+      "marginTop": 50,
+      "marginBottom": 50,
+      "marginRight": 50,
+      "marginLeft": 50,
+      "autoHyphenation": 1,
+      "doNotHyphenateCaps": 0,
+      "consecutiveHyphenLimit": 2,
+      "defaultHeaderId": "",
+      "defaultFooterId": "",
+      "evenPageHeaderId": "",
+      "evenPageFooterId": "",
+      "firstPageHeaderId": "",
+      "firstPageFooterId": "",
+      "evenAndOddHeaders": 0,
+      "useFirstPageHeaderFooter": 0,
+      "marginHeader": 30,
+      "marginFooter": 30,
+      "renderConfig": {
+        "zeroWidthParagraphBreak": 0,
+        "vertexAngle": 0,
+        "centerAngle": 0,
+        "background": {
+          "rgb": "#ccc"
+        }
+      }
+    },
+    "settings": {},
+    "resources": [
+      {
+        "name": "DOC_OBJECT_PERMISSION_PLUGIN",
+        "data": "[]"
+      },
+      {
+        "name": "DOC_WORD_STYLES_PLUGIN",
+        "data": ""
+      },
+      {
+        "name": "DOC_NOTE_PLUGIN",
+        "data": ""
+      },
+      {
+        "name": "DOC_DRAWING_PLUGIN",
+        "data": "{\"data\":{},\"order\":[]}"
+      },
+      {
+        "name": "DOC_HYPER_LINK_PLUGIN",
+        "data": "{\"links\":[]}"
+      }
+    ]
+  }
+}

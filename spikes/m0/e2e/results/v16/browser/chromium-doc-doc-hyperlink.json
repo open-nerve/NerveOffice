@@ -1,0 +1,119 @@
+{
+  "check": "V16-browser-save",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T07:10:27.381Z",
+  "saved": {
+    "id": "m0-doc-hyperlink",
+    "locale": "zhCN",
+    "title": "空白文字文档",
+    "tableSource": {},
+    "drawings": {},
+    "drawingsOrder": [],
+    "headers": {},
+    "footers": {},
+    "notes": {},
+    "noteSettings": {},
+    "body": {
+      "dataStream": "超链接样本\r链接：外部网页、发邮件\r\r\n",
+      "customBlocks": [],
+      "customRanges": [
+        {
+          "rangeType": 0,
+          "rangeId": "waiYsCiSeqCbXze8cL6B6",
+          "properties": {
+            "url": "https://example.com/doc"
+          },
+          "startIndex": 9,
+          "endIndex": 12
+        },
+        {
+          "rangeType": 0,
+          "rangeId": "ytLf41EA9o2jnm0usCxsj",
+          "properties": {
+            "url": "mailto:someone@example.com"
+          },
+          "startIndex": 14,
+          "endIndex": 16
+        }
+      ],
+      "paragraphs": [
+        {
+          "startIndex": 5,
+          "paragraphId": "para_Zd9CEH1A9lWH"
+        },
+        {
+          "startIndex": 17,
+          "paragraphId": "para_bs0meOp_guSQ"
+        },
+        {
+          "startIndex": 18,
+          "paragraphId": "para_wXR98zgKlWdz"
+        }
+      ],
+      "textRuns": [],
+      "tables": [],
+      "sectionBreaks": [],
+      "customDecorations": []
+    },
+    "documentStyle": {
+      "pageSize": {
+        "width": 793.7,
+        "height": 1122.5
+      },
+      "documentFlavor": 2,
+      "marginTop": 50,
+      "marginBottom": 50,
+      "marginRight": 50,
+      "marginLeft": 50,
+      "autoHyphenation": 1,
+      "doNotHyphenateCaps": 0,
+      "consecutiveHyphenLimit": 2,
+      "defaultHeaderId": "",
+      "defaultFooterId": "",
+      "evenPageHeaderId": "",
+      "evenPageFooterId": "",
+      "firstPageHeaderId": "",
+      "firstPageFooterId": "",
+      "evenAndOddHeaders": 0,
+      "useFirstPageHeaderFooter": 0,
+      "marginHeader": 30,
+      "marginFooter": 30,
+      "renderConfig": {
+        "zeroWidthParagraphBreak": 0,
+        "vertexAngle": 0,
+        "centerAngle": 0,
+        "background": {
+          "rgb": "#ccc"
+        }
+      }
+    },
+    "settings": {},
+    "resources": [
+      {
+        "name": "DOC_OBJECT_PERMISSION_PLUGIN",
+        "data": "[]"
+      },
+      {
+        "name": "DOC_WORD_STYLES_PLUGIN",
+        "data": ""
+      },
+      {
+        "name": "DOC_NOTE_PLUGIN",
+        "data": ""
+      },
+      {
+        "name": "DOC_DRAWING_PLUGIN",
+        "data": "{\"data\":{},\"order\":[]}"
+      },
+      {
+        "name": "DOC_HYPER_LINK_PLUGIN",
+        "data": "{\"links\":[{\"id\":\"waiYsCiSeqCbXze8cL6B6\",\"payload\":\"https://example.com/doc\"},{\"id\":\"ytLf41EA9o2jnm0usCxsj\",\"payload\":\"mailto:someone@example.com\"}]}"
+      }
+    ]
+  }
+}
