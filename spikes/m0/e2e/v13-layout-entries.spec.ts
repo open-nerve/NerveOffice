@@ -15,8 +15,8 @@ import { DOC_UNSUPPORTED_MENUS } from '../src/profiles/ui-config';
 import { browserInfo, SERVERS, writeResult } from './helpers';
 import { snapshotText } from './p3-helpers';
 import {
-    caretPoint, clickToolbar, docId, docSummary, docText, endOffset, focusEditor, offsetOf, openDoc, pageHealth, PLATFORM, policyEvents, press, resetHealth,
-    ribbonTab, roundtrip, selectText, setSelection,
+    caretPoint, clickToolbar, docId, docSummary, docText, endOffset, focusEditor, offsetOf, openDoc, pageHealth, PLATFORM, policyEvents, press, redo, resetHealth,
+    ribbonTab, roundtrip, selectText, setSelection, undo,
 } from './p5-helpers';
 
 const FIXTURES = join(import.meta.dirname, '..', 'fixtures', 'doc');
@@ -116,7 +116,8 @@ test('L3 菜单审计：doc@1 的隐藏清单', async ({ page }, testInfo) => {
     await page.evaluate(() => window.__m0!.editor!.univerAPI.executeCommand('ui.operation.open-feature-search'));
     await page.waitForTimeout(500);
     const search: Record<string, string[]> = {};
-    for (const q of ['页面设置', '页眉', '分隔符', '分节', '形状', '目录']) {
+    // 覆盖每个隐藏项的标题（页面设置、页眉页脚、分隔符与各类分节符、分节设置、形状及其子项、组合、层级、多图对齐）与目录
+    for (const q of ['页面设置', '页眉', '分隔符', '分栏符', '分节', '形状', '矩形', '椭圆', '组合', '置于顶层', '上移一层', '水平分布', '顶部对齐', '目录']) {
         await page.getByPlaceholder(/输入功能或菜单名称/).fill(q);
         await page.waitForTimeout(300);
         search[q] = (await page.getByRole('dialog').innerText()).split('\n').slice(1, 6);
@@ -196,6 +197,88 @@ test('L4b 目录：目录块插件（评估）', async ({ page }, testInfo) => {
     await result(testInfo, 'tocblock', { facadeHeadings, ranges, update, occurrencesAfterUpdate, roundtrip: rt, health }, page);
     expect.soft(ranges.some((r) => r.type === 1 && (r.properties as { fieldType?: string })?.fieldType === 'TOC'), '插入了 TOC 区间').toBe(true);
     expect.soft(rt.secondDiff, '再保存一致').toEqual([]);
+});
+
+/** 悬停在段落上，点开左侧的把手（"拖动块"），在把手菜单里点选一项。 */
+async function handleMenu(page: Page, paragraphText: string, item: string): Promise<void> {
+    await setSelection(page, (await offsetOf(page, paragraphText)) + 1);
+    const at = await caretPoint(page);
+    await page.mouse.move(at.x + 20, at.y + 8);
+    await page.waitForTimeout(400);
+    await page.getByRole('button', { name: '拖动块' }).first().click();
+    await page.waitForTimeout(400);
+    await page.getByText(item, { exact: true }).last().click();
+    await page.waitForTimeout(400);
+}
+
+test('L5b 段落把手与粘贴选项（G9：保留的可见入口）', async ({ page, context }, testInfo) => {
+    const clipboard = testInfo.project.name !== 'webkit';
+    if (clipboard) await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: new URL(SERVERS.full).origin });
+    await openDoc(page, `sample=p5-cap&${PLATFORM}`);
+    await focusEditor(page);
+    await resetHealth(page);
+    const steps: { step: string; ok: boolean; detail?: unknown }[] = [];
+    const count = async (t: string) => (await docText(page)).split(t).length - 1;
+    const undos = () => page.evaluate(() => window.__m0!.editor!.undoStatus().undos);
+    const text0 = await docText(page);
+    const undos0 = await undos();
+    await handleMenu(page, '段落丙', '删除');
+    steps.push({ step: '把手菜单：删除段落', ok: (await count('段落丙')) === 0 });
+    await handleMenu(page, '段落丁', '复制');
+    await setSelection(page, await endOffset(page));
+    await press(page, 'Mod+v');
+    await page.waitForTimeout(600);
+    steps.push({ step: '把手菜单：复制段落后粘贴', ok: (await count('段落丁')) === 2, detail: await count('段落丁') });
+    await handleMenu(page, '段落戊', '剪切');
+    const cutGone = (await count('段落戊')) === 0;
+    await setSelection(page, await endOffset(page));
+    await press(page, 'Mod+v');
+    await page.waitForTimeout(600);
+    steps.push({ step: '把手菜单：剪切段落后粘贴', ok: cutGone && (await count('段落戊')) === 1 });
+    // 拖动把手：把"段落甲"拖到"段落己"之后
+    await setSelection(page, (await offsetOf(page, '段落甲')) + 1);
+    const a = await caretPoint(page);
+    await page.mouse.move(a.x + 20, a.y + 8);
+    await page.waitForTimeout(400);
+    const handle = (await page.getByRole('button', { name: '拖动块' }).first().boundingBox())!;
+    await setSelection(page, (await offsetOf(page, '查找目标。')) + 5);
+    const b = await caretPoint(page);
+    await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(handle.x + handle.width / 2, b.y + 20, { steps: 12 });
+    await page.mouse.up();
+    await page.waitForTimeout(600);
+    const text = await docText(page);
+    steps.push({ step: '拖动把手移动段落', ok: text.indexOf('段落甲') > text.indexOf('段落己'), detail: text.slice(0, 40).replace(/\r/g, '⏎') });
+    // 粘贴选项（工具栏）：先用剪贴板接口写入 HTML，再选"仅保留文本"
+    if (clipboard) {
+        await page.evaluate(async () => {
+            const html = '<p><b>粗体的剪贴板内容</b></p>';
+            await navigator.clipboard.write([new ClipboardItem({ 'text/html': new Blob([html], { type: 'text/html' }), 'text/plain': new Blob(['粗体的剪贴板内容'], { type: 'text/plain' }) })]);
+        });
+        await setSelection(page, await endOffset(page));
+        const box = (await page.locator('[data-u-command="doc.command.paste-special"]').first().boundingBox())!;
+        await page.mouse.click(box.x + box.width - 8, box.y + box.height / 2);
+        await page.waitForTimeout(400);
+        await page.getByText('仅保留文本', { exact: true }).last().click();
+        await page.waitForTimeout(800);
+        const run = (await docSummary(page)).runs.find((r) => r.text.includes('粗体的剪贴板内容'));
+        steps.push({ step: '粘贴选项：仅保留文本', ok: (await count('粗体的剪贴板内容')) === 1 && run?.ts.bl !== 1, detail: run ?? null });
+    }
+    // 这些入口都会改结构：按撤销栈的增量逐步撤销回到原文，再逐步重做
+    const text1 = await docText(page);
+    const n = (await undos()) - undos0;
+    for (let i = 0; i < n; i++) await undo(page);
+    const restored = (await docText(page)) === text0;
+    for (let i = 0; i < n; i++) await redo(page);
+    const redone = (await docText(page)) === text1;
+    steps.push({ step: '撤销回到原文、重做恢复', ok: n > 0 && restored && redone, detail: { undos: n, restored, redone } });
+    const rt = await roundtrip(page, docId(testInfo, 'handle'), PLATFORM);
+    const health = await pageHealth(page);
+    await result(testInfo, 'handle', { steps, roundtrip: rt, health }, page);
+    for (const s of steps) expect.soft(s.ok, `${s.step}：${JSON.stringify(s.detail)?.slice(0, 200)}`).toBe(true);
+    expect.soft(rt.secondDiff, '再保存一致').toEqual([]);
+    expect.soft(health.errors).toEqual([]);
 });
 
 test('L5 附加能力', async ({ page }, testInfo) => {

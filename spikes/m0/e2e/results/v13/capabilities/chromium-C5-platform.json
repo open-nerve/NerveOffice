@@ -6,7 +6,7 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T02:47:11.179Z",
+  "timestamp": "2026-09-25T04:49:21.268Z",
   "id": "C5",
   "name": "基础表格",
   "config": "platform",
@@ -119,7 +119,7 @@
   "policyEvents": [
     {
       "kind": "slash-insert",
-      "detail": "offset 128"
+      "detail": "keydown offset 128"
     }
   ],
   "summary": {

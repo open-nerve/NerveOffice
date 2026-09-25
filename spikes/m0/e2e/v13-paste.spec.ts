@@ -253,11 +253,16 @@ for (const config of ['default', 'platform'] as const) {
         await focusEditor(page);
         await setSelection(page, await endOffset(page));
         const before = await docSummary(page);
+        // 另带：https 地址里的引号（复制时 href 不转义，会注入 HTML，P5 审查 G3）与一个分节符（P5 审查 S6）
         const doc = {
             body: {
-                dataStream: '恶意链接与标题\r',
-                customRanges: [{ rangeId: 'p5evil', rangeType: 0, startIndex: 0, endIndex: 3, properties: { url: 'javascript:window.__p5_pwned=1' } }],
-                paragraphs: [{ startIndex: 7, paragraphStyle: { namedStyleType: 4 } }],
+                dataStream: '恶意链接与标题\r引号链接\r分节\n之后\r',
+                customRanges: [
+                    { rangeId: 'p5evil', rangeType: 0, startIndex: 0, endIndex: 3, properties: { url: 'javascript:window.__p5_pwned=1' } },
+                    { rangeId: 'p5quote', rangeType: 0, startIndex: 8, endIndex: 11, properties: { url: 'https://x.test/"><b id=p5inj>注入</b>' } },
+                ],
+                paragraphs: [{ startIndex: 7, paragraphStyle: { namedStyleType: 4 } }, { startIndex: 12 }, { startIndex: 18 }],
+                sectionBreaks: [{ startIndex: 15 }],
             },
         };
         await syntheticPaste(page, { html: fragmentHtml(doc), text: '片段' });
@@ -266,9 +271,19 @@ for (const config of ['default', 'platform'] as const) {
         const diff = added(before, after);
         const events = await policyEvents(page);
         const health = await pageHealth(page);
-        await writeResult(`v13/paste${VARIANT}/${testInfo.project.name}-fragment-${config}.json`, { check: 'V13-paste-fragment', config, browser: browserInfo(page, testInfo), timestamp: new Date().toISOString(), diff, policyEvents: events, health });
+        const sections = await page.evaluate(() => {
+            const b = window.__m0!.editor!.univerAPI.getActiveDocument()!.getBody();
+            const inTable = (i: number) => (b.tables ?? []).some((t) => i > t.startIndex && i < t.endIndex);
+            return (b.sectionBreaks ?? []).filter((x) => !inTable(x.startIndex)).length;
+        });
+        const quoteLink = after.links.find((l) => l.text.startsWith('引号'))?.url ?? null;
+        await writeResult(`v13/paste${VARIANT}/${testInfo.project.name}-fragment-${config}.json`, { check: 'V13-paste-fragment', config, browser: browserInfo(page, testInfo), timestamp: new Date().toISOString(), diff, sectionBreaksOutsideTables: sections, quoteLink, policyEvents: events, health });
         expect.soft(diff.headings.length, '片段里的标题样式保留').toBe(1);
-        if (config === 'platform') expect.soft(diff.links, '平台配置：去掉 javascript: 链接').toEqual([]);
+        if (config === 'platform') {
+            expect.soft(diff.links.some((l) => l.includes('javascript')), '平台配置：去掉 javascript: 链接').toBe(false);
+            expect.soft(quoteLink == null || !/["<>]/.test(quoteLink), `平台配置：链接地址里的引号与尖括号被编码：${quoteLink}`).toBe(true);
+            expect.soft(sections, '平台配置：表格之外只剩文末的分节符').toBe(1);
+        }
         expect.soft(health.errors).toEqual([]);
     });
 }

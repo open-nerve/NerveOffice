@@ -240,6 +240,50 @@ for (const driver of ['cdp', 'chrome', 'webkit'] as const) {
     }
 }
 
+for (const config of ['default', 'platform'] as const) {
+    test(`V13 输入法：提交后同一任务里紧接着输入（${config}）`, async ({ page }, testInfo) => {
+        // 事件归一把 compositionend 延后一个宏任务；这期间来的输入要先把它补上，否则被当成组合中的输入丢掉（P5 审查 G5）
+        await openDoc(page, `sample=p5-cap${config === 'platform' ? `&${PLATFORM}` : ''}`);
+        await focusEditor(page);
+        const at = (await offsetOf(page, '的文字。')) + 4;
+        await setSelection(page, at);
+        const out: Record<string, string> = {};
+        for (const order of ['chrome', 'webkit'] as const) {
+            await setSelection(page, (await offsetOf(page, '的文字。')) + 4);
+            await page.evaluate(async (order) => {
+                const el = document.activeElement as HTMLElement;
+                const drain = async () => {
+                    for (let i = 0; i < 20; i++) await null;
+                };
+                const fire = async (e: Event) => {
+                    el.dispatchEvent(e);
+                    await drain();
+                };
+                await fire(new CompositionEvent('compositionstart', { data: '', bubbles: true }));
+                for (const t of ['n', 'ni', 'ni hao']) {
+                    await fire(new CompositionEvent('compositionupdate', { data: t, bubbles: true }));
+                    await new Promise((r) => setTimeout(r, 30));
+                }
+                if (order === 'chrome') await fire(new CompositionEvent('compositionupdate', { data: '你好', bubbles: true }));
+                else await fire(new InputEvent('input', { data: '你好', inputType: 'insertFromComposition', isComposing: true, bubbles: true }));
+                await fire(new CompositionEvent('compositionend', { data: '你好', bubbles: true }));
+                // 同一个任务里（只清空微任务）紧接着输入一个中文逗号
+                await fire(new InputEvent('beforeinput', { data: '，', inputType: 'insertText', bubbles: true, cancelable: true }));
+                el.textContent = '，';
+                await fire(new InputEvent('input', { data: '，', inputType: 'insertText', bubbles: true }));
+            }, order);
+            await page.waitForTimeout(500);
+            const text = await docText(page);
+            out[order] = text.slice(at, at + 8).replace(/\r/g, '⏎');
+        }
+        await writeCases(page, testInfo, `followup-${config}`, { config, results: out });
+        if (config === 'platform') {
+            expect.soft(out.chrome.startsWith('你好，'), `Chrome 顺序：${out.chrome}`).toBe(true);
+            expect.soft(out.webkit.startsWith('你好，'), `WebKit 顺序：${out.webkit}`).toBe(true);
+        }
+    });
+}
+
 test('V13 候选框锚点：隐藏输入元素里的组合文字与画布光标', async ({ page }, testInfo) => {
     // 系统输入法的候选框贴着隐藏输入元素里的 DOM 光标（组合文字的末尾）；画布上的组合文字由 SDK 绘制。比较两者的位置
     const out: Record<string, unknown>[] = [];
@@ -332,7 +376,7 @@ for (const config of ['default', 'platform'] as const) {
         }
         const mid = await page.evaluate(async (respect) => {
             const m0 = window.__m0!;
-            const wait = await m0.waitForCapture!({ debounceMs: 1000, timeoutMs: 2500, respectComposition: respect });
+            const wait = await m0.waitForCapture!({ debounceMs: 1000, timeoutMs: 6000, respectComposition: respect });
             const text = JSON.stringify(m0.editor!.save());
             return { wait, hasPinyin: text.includes('ni h'), composition: m0.editor!.detector.composition() };
         }, respect);
@@ -366,7 +410,8 @@ for (const config of ['default', 'platform'] as const) {
         expect.soft(text.includes('的文字。你好'), '组合中的 save() 不打断输入').toBe(true);
         expect.soft(end.hasFinal && !end.hasPinyin, '提交后的捕获是最终文字').toBe(true);
         if (config === 'platform') {
-            expect.soft(mid.wait.composing, '组合进行中：等到超时也不捕获').toBe(true);
+            // 平台规则：组合进行中不捕获，直到组合持续满 3 秒（上限）才照常捕获；组合开始后已停了约 1.5 秒，所以还要再等约 1.5 秒
+            expect.soft(mid.wait.waitedMs, '组合进行中：等到组合持续满 3 秒才捕获').toBeGreaterThan(1200);
         } else {
             expect.soft(mid.hasPinyin, 'P3 原规则：组合进行中捕获到拼音（对照）').toBe(true);
         }

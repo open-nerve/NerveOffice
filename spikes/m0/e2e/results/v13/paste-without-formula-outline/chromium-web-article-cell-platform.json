@@ -1,0 +1,49 @@
+{
+  "check": "V13-paste",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T05:30:40.916Z",
+  "source": "web-article",
+  "target": "cell",
+  "config": "platform",
+  "dispatched": {
+    "target": "div",
+    "defaultPrevented": true
+  },
+  "changed": false,
+  "diff": {
+    "paragraphs": 0,
+    "headings": [],
+    "lists": [],
+    "aligns": [],
+    "tables": [],
+    "links": [],
+    "images": [],
+    "runs": []
+  },
+  "features": {
+    "一级标题": false,
+    "二级标题": false,
+    "六级标题": false,
+    "粗体": false,
+    "强调是斜体": false,
+    "链接": false,
+    "有序列表": false,
+    "嵌套列表": false,
+    "删除线": false,
+    "表格": false,
+    "段内换行": true
+  },
+  "pwned": null,
+  "unsafeLinks": [],
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  },
+  "policyEvents": [],
+  "roundtrip": null
+}

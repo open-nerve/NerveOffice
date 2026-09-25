@@ -6,7 +6,7 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T03:28:17.878Z",
+  "timestamp": "2026-09-25T05:35:14.171Z",
   "id": "C5b",
   "name": "单元格里插入图片",
   "config": "default",
@@ -14,7 +14,7 @@
     {
       "step": "单元格里：工具栏的图片按钮（记录）",
       "ok": true,
-      "detail": null
+      "detail": "class:disabled"
     },
     {
       "step": "单元格里执行\"插入图片\"（记录）",
@@ -29,14 +29,27 @@
       "detail": {
         "images": 1
       }
+    },
+    {
+      "step": "把浮动图片拖进单元格（记录）",
+      "ok": true,
+      "detail": {
+        "floating": true,
+        "dragged": true,
+        "anchorInCell": true
+      }
     }
   ],
   "undo": {
-    "count": 3,
+    "count": 4,
     "restored": true,
     "redone": true
   },
-  "roundtrip": null,
+  "roundtrip": {
+    "firstDiff": [],
+    "secondDiff": [],
+    "preserved": true
+  },
   "health": {
     "errors": [],
     "cspEnforce": []
@@ -47,7 +60,7 @@
       "paragraphs": 8
     },
     "after": {
-      "text": "能力矩阵样本\r段落甲：用于标题样式。\r段落乙：用于字符格式，这里有一段可以选中的文字。\r段落丙：用于对齐。\r段落丁：列表第一项\r段落戊：列表第二项\r段落己：链接文字与查找替换，查找目标出现两次：查找目标。\r\u001a\u001b\u001c\b\r\n\u001d\u001c\b\r\r\n\u001d\u000e\u001b\u001c\r\n\u001d\u001c\r\n\u001d\u000e\u000f\r\r\n",
+      "text": "能力矩阵样本\r段落甲：用于标题样式。\r段落乙\b：用于字符格式，这里有一段可以选中的文字。\r段落丙：用于对齐。\r段落丁：列表第一项\r段落戊：列表第二项\r段落己：链接文字与查找替换，查找目标出现两次：查找目标。\r\u001a\u001b\u001c\b\r\n\u001d\u001c\b\r\r\n\u001d\u000e\u001b\u001c\r\n\u001d\u001c\r\n\u001d\u000e\u000f\r\r\n",
       "paragraphs": [
         {
           "text": "能力矩阵样本",
@@ -197,7 +210,7 @@
       ],
       "images": [
         {
-          "id": "0QEkNM",
+          "id": "G3xXhT",
           "layoutType": 0,
           "behindDoc": 0,
           "wrapText": 0,
@@ -212,7 +225,7 @@
           ]
         },
         {
-          "id": "pHAb2I",
+          "id": "PdamPk",
           "layoutType": 0,
           "behindDoc": null,
           "wrapText": null,
@@ -220,6 +233,21 @@
           "size": [
             64,
             64
+          ],
+          "pos": [
+            0,
+            0
+          ]
+        },
+        {
+          "id": "_vxNwa",
+          "layoutType": 3,
+          "behindDoc": 0,
+          "wrapText": 0,
+          "source": "/fixtures-assets/blue-120x80.png",
+          "size": [
+            120,
+            80
           ],
           "pos": [
             0,

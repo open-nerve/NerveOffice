@@ -247,8 +247,15 @@ export function createChangeDetector(univer: Univer, univerAPI: FUniver, init: {
         composition.active = false;
         composition.lastEndAt = performance.now();
     };
+    // 失焦复位（P5 审查 G4）：compositionend 因失焦、元素重建而没有到达时，不让"组合中"一直挡住捕获
+    const onFocusOut = (e: Event) => {
+        if (!isEditorInput(e.target) || !composition.active) return;
+        composition.active = false;
+        composition.lastEndAt = performance.now();
+    };
     document.addEventListener('compositionstart', onCompositionStart, true);
     document.addEventListener('compositionend', onCompositionEnd, true);
+    document.addEventListener('focusout', onFocusOut, true);
     // 内部 API（只用于分析）：只取 syncOnly 的 mutation，CommandExecuted 收不到它们
     const d2 = univer.__getInjector().get(ICommandService).onMutationExecutedForCollab((info, options) => {
         if (options?.syncOnly) {
@@ -289,6 +296,7 @@ export function createChangeDetector(univer: Univer, univerAPI: FUniver, init: {
             d2.dispose();
             document.removeEventListener('compositionstart', onCompositionStart, true);
             document.removeEventListener('compositionend', onCompositionEnd, true);
+            document.removeEventListener('focusout', onFocusOut, true);
         },
     };
 }

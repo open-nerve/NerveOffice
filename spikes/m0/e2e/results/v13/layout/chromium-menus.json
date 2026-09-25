@@ -6,7 +6,7 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T02:46:20.797Z",
+  "timestamp": "2026-09-25T05:01:59.951Z",
   "unsupported": [
     {
       "id": "doc.command.open-header-footer-panel",
@@ -74,8 +74,98 @@
       "hidden": true
     },
     {
+      "id": "doc.command.insert-float-shape.rectangle",
+      "path": "contextMenu/contextMenu.paragraph/doc.command.menu-insert-shape/shapes/doc.command.insert-float-shape.rectangle",
+      "hidden": true
+    },
+    {
+      "id": "doc.command.insert-float-shape.ellipse",
+      "path": "contextMenu/contextMenu.paragraph/doc.command.menu-insert-shape/shapes/doc.command.insert-float-shape.ellipse",
+      "hidden": true
+    },
+    {
+      "id": "doc.command.insert-float-shape.rectangle.below",
+      "path": "contextMenu/contextMenu.paragraph/doc.command.menu-insert-shape.below/shapes/doc.command.insert-float-shape.rectangle.below",
+      "hidden": true
+    },
+    {
+      "id": "doc.command.insert-float-shape.ellipse.below",
+      "path": "contextMenu/contextMenu.paragraph/doc.command.menu-insert-shape.below/shapes/doc.command.insert-float-shape.ellipse.below",
+      "hidden": true
+    },
+    {
       "id": "sidebar.operation.doc-section-setting-panel",
       "path": "contextMenu/contextMenu.paragraph/contextMenu.layout/sidebar.operation.doc-section-setting-panel",
+      "hidden": true
+    },
+    {
+      "id": "drawing.operation.set-drawing-group",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-group/drawing.operation.set-drawing-group",
+      "hidden": true
+    },
+    {
+      "id": "drawing.operation.cancel-drawing-group",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-group/drawing.operation.cancel-drawing-group",
+      "hidden": true
+    },
+    {
+      "id": "drawing.operation.set-drawing-arrange-front",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-arrange/drawing.operation.set-drawing-arrange-front",
+      "hidden": true
+    },
+    {
+      "id": "drawing.operation.set-drawing-arrange-forward",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-arrange/drawing.operation.set-drawing-arrange-forward",
+      "hidden": true
+    },
+    {
+      "id": "drawing.operation.set-drawing-arrange-back",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-arrange/drawing.operation.set-drawing-arrange-back",
+      "hidden": true
+    },
+    {
+      "id": "drawing.operation.set-drawing-arrange-backward",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-arrange/drawing.operation.set-drawing-arrange-backward",
+      "hidden": true
+    },
+    {
+      "id": "sheet.operation.set-drawing-align-left",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-align/sheet.operation.set-drawing-align-left",
+      "hidden": true
+    },
+    {
+      "id": "sheet.operation.set-drawing-align-center",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-align/sheet.operation.set-drawing-align-center",
+      "hidden": true
+    },
+    {
+      "id": "sheet.operation.set-drawing-align-right",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-align/sheet.operation.set-drawing-align-right",
+      "hidden": true
+    },
+    {
+      "id": "sheet.operation.set-drawing-align-top",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-align/sheet.operation.set-drawing-align-top",
+      "hidden": true
+    },
+    {
+      "id": "sheet.operation.set-drawing-align-middle",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-align/sheet.operation.set-drawing-align-middle",
+      "hidden": true
+    },
+    {
+      "id": "sheet.operation.set-drawing-align-bottom",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-align/sheet.operation.set-drawing-align-bottom",
+      "hidden": true
+    },
+    {
+      "id": "sheet.operation.set-drawing-align-horizon",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-align/sheet.operation.set-drawing-align-horizon",
+      "hidden": true
+    },
+    {
+      "id": "sheet.operation.set-drawing-align-vertical",
+      "path": "contextMenu/contextMenu.drawing/contextMenu.others/contextMenu.drawing-align/sheet.operation.set-drawing-align-vertical",
       "hidden": true
     }
   ],
@@ -103,10 +193,6 @@
     "doc.command.insert-check-list-bellow",
     "doc.command.insert-float-image",
     "doc.command.insert-float-image.below",
-    "doc.command.insert-float-shape.ellipse",
-    "doc.command.insert-float-shape.ellipse.below",
-    "doc.command.insert-float-shape.rectangle",
-    "doc.command.insert-float-shape.rectangle.below",
     "doc.command.insert-horizontal-line-bellow",
     "doc.command.insert-order-list-bellow",
     "doc.command.normal-text-heading",
@@ -174,20 +260,6 @@
     "doc.table.delete-columns",
     "doc.table.delete-rows",
     "doc.table.delete-table",
-    "drawing.operation.cancel-drawing-group",
-    "drawing.operation.set-drawing-arrange-back",
-    "drawing.operation.set-drawing-arrange-backward",
-    "drawing.operation.set-drawing-arrange-forward",
-    "drawing.operation.set-drawing-arrange-front",
-    "drawing.operation.set-drawing-group",
-    "sheet.operation.set-drawing-align-bottom",
-    "sheet.operation.set-drawing-align-center",
-    "sheet.operation.set-drawing-align-horizon",
-    "sheet.operation.set-drawing-align-left",
-    "sheet.operation.set-drawing-align-middle",
-    "sheet.operation.set-drawing-align-right",
-    "sheet.operation.set-drawing-align-top",
-    "sheet.operation.set-drawing-align-vertical",
     "sidebar.operation.doc-paragraph-setting-panel",
     "ui.command.clear-formatting",
     "ui.operation.activate-format-painter",
@@ -214,12 +286,52 @@
       "未找到当前可用的功能",
       "Close"
     ],
+    "分栏符": [
+      "搜索功能",
+      "未找到当前可用的功能",
+      "Close"
+    ],
     "分节": [
       "搜索功能",
       "未找到当前可用的功能",
       "Close"
     ],
     "形状": [
+      "搜索功能",
+      "未找到当前可用的功能",
+      "Close"
+    ],
+    "矩形": [
+      "搜索功能",
+      "未找到当前可用的功能",
+      "Close"
+    ],
+    "椭圆": [
+      "搜索功能",
+      "未找到当前可用的功能",
+      "Close"
+    ],
+    "组合": [
+      "搜索功能",
+      "未找到当前可用的功能",
+      "Close"
+    ],
+    "置于顶层": [
+      "搜索功能",
+      "未找到当前可用的功能",
+      "Close"
+    ],
+    "上移一层": [
+      "搜索功能",
+      "未找到当前可用的功能",
+      "Close"
+    ],
+    "水平分布": [
+      "搜索功能",
+      "未找到当前可用的功能",
+      "Close"
+    ],
+    "顶部对齐": [
       "搜索功能",
       "未找到当前可用的功能",
       "Close"

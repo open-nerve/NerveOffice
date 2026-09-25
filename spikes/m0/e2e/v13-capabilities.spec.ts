@@ -8,7 +8,7 @@ import { expect, test } from '@playwright/test';
 import { browserInfo, writeResult } from './helpers';
 import {
     caretPoint, clickToolbar, docId, docSummary, docText, endOffset, fillLinkPopup, findColorBox, focusEditor, imageToolbarButtons, offsetOf, openDoc,
-    openedWindows, pageHealth, PLATFORM, policyEvents, press, redo, resetHealth, ribbonTab, roundtrip, selectText, setSelection, stubWindowOpen, undo, VARIANT,
+    openedWindows, pageHealth, plainInsert, PLATFORM, policyEvents, press, redo, resetHealth, ribbonTab, roundtrip, selectText, setSelection, stubWindowOpen, undo, VARIANT,
 } from './p5-helpers';
 import { fixtureFile, insertViaFileChooser, syntheticPaste } from './p4-helpers';
 
@@ -407,14 +407,15 @@ test('C5c 删除表格', async ({ page }, testInfo) => {
 
 for (const config of ['default', 'platform'] as const) {
     test(`C5b 单元格里插入图片：${config}`, async ({ page }, testInfo) => {
-        // 00 号计划书 §4.3：单元格里不能插入图片。SDK 只在工具栏按钮上禁用；平台以命令守卫与粘贴清洗落实
-        const r = await capability(page, testInfo, { id: 'C5b', name: '单元格里插入图片', config, roundtrip: false }, async (steps) => {
+        // 00 号计划书 §4.3：单元格里不能插入图片。SDK 只在工具栏按钮上禁用；平台以命令守卫与粘贴清洗落实。
+        // SDK 默认下另做保存重开，记录单元格图片的实际表现（供以后评估放宽这条限制）
+        const r = await capability(page, testInfo, { id: 'C5b', name: '单元格里插入图片', config, roundtrip: config === 'default' }, async (steps) => {
             await setSelection(page, await endOffset(page));
             await page.evaluate(() => window.__m0!.editor!.univerAPI.executeCommand('doc.command.create-table', { rowCount: 2, colCount: 2 }));
             await page.waitForTimeout(500);
             await setSelection(page, await cellOffset(page, 0));
             await ribbonTab(page, '插入');
-            const toolbarDisabled = await page.locator('[data-u-command="doc.menu.image"]').first().evaluate((e) => e.getAttribute('data-disabled') ?? e.getAttribute('aria-disabled'));
+            const toolbarDisabled = await page.locator('[data-u-command="doc.menu.image"]').first().evaluate((e) => e.getAttribute('data-disabled') ?? e.getAttribute('aria-disabled') ?? e.querySelector('[aria-disabled]')?.getAttribute('aria-disabled') ?? (/disabled/.test(String(e.className)) ? 'class:disabled' : `未标注：${e.outerHTML.slice(0, 120)}`));
             await ribbonTab(page, '开始');
             steps.push({ step: '单元格里：工具栏的图片按钮（记录）', ok: true, detail: toolbarDisabled });
             // 段落菜单与 `/` 菜单的"插入图片"执行的是同一个命令（打开文件选择框，再插入）
@@ -428,7 +429,39 @@ for (const config of ['default', 'platform'] as const) {
             await page.waitForTimeout(1500);
             const viaPaste = (await docSummary(page)).images.length - viaCommand;
             steps.push({ step: '单元格里粘贴图片文件（记录）', ok: true, detail: { images: viaPaste } });
-            if (config === 'platform') steps.push({ step: '平台配置：单元格里没有图片', ok: viaCommand === 0 && viaPaste === 0, detail: { viaCommand, viaPaste } });
+            // 把表格外的浮动图片（四周型）拖进单元格（P5 审查 R3：锚点会落进单元格，再改成内联就得到单元格里的内联图片）
+            const source = await page.evaluate(async () => {
+                const blob = await (await fetch('/fixtures-assets/blue-120x80.png')).blob();
+                const r = await window.__m0!.images!.io().saveImage(new File([blob], 'blue.png', { type: 'image/png' }));
+                return r!.source;
+            });
+            const imagesBefore = (await docSummary(page)).images.length;
+            await page.evaluate(async (source) => {
+                const doc = window.__m0!.editor!.univerAPI.getActiveDocument()!;
+                const at = doc.getBody().dataStream.indexOf('段落乙') + 3;
+                await doc.insertImage({ source, imageSourceType: 'URL' as never, width: 120, wrappingStyle: 'wrapSquare' as never, textRange: { startOffset: at, endOffset: at } } as never);
+            }, source.startsWith('/api/') || config === 'platform' ? source : '/fixtures-assets/blue-120x80.png');
+            await page.waitForTimeout(1200);
+            const floating = (await docSummary(page)).images.length > imagesBefore;
+            const box = await findColorBox(page, [54, 92, 245], 30);
+            await setSelection(page, await cellOffset(page, 3));
+            const cell = await caretPoint(page);
+            if (box != null) {
+                await page.keyboard.press('Escape');
+                await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+                await page.waitForTimeout(300);
+                await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+                await page.mouse.down();
+                await page.mouse.move(cell.x + 20, cell.y + 10, { steps: 12 });
+                await page.mouse.up();
+                await page.waitForTimeout(800);
+            }
+            const anchorInCell = await page.evaluate(() => {
+                const snap = window.__m0!.editor!.univerAPI.getActiveDocument()!.save() as unknown as { body: { customBlocks?: { startIndex: number }[]; tables?: { startIndex: number; endIndex: number }[] } };
+                return (snap.body.customBlocks ?? []).some((b) => (snap.body.tables ?? []).some((t) => b.startIndex > t.startIndex && b.startIndex < t.endIndex));
+            });
+            steps.push({ step: '把浮动图片拖进单元格（记录）', ok: true, detail: { floating, dragged: box != null, anchorInCell } });
+            if (config === 'platform') steps.push({ step: '平台配置：单元格里没有图片', ok: viaCommand === 0 && viaPaste === 0 && !anchorInCell, detail: { viaCommand, viaPaste, anchorInCell } });
         });
         expectCapability(r, { undo: false });
     });
@@ -611,6 +644,75 @@ for (const config of ['default', 'platform'] as const) {
     });
 }
 
+/** 直接执行链接命令（链接框之外的来源：Facade、协同回放等），返回命令结果或错误。 */
+const execLink = (page: Page, id: string, params: Record<string, unknown>) =>
+    page.evaluate(async ({ id, params }) => {
+        const editor = window.__m0!.editor!;
+        try {
+            return await editor.univerAPI.executeCommand(id, { unitId: editor.unitId(), ...params });
+        } catch (error) {
+            return `错误：${error instanceof Error ? error.message.slice(0, 80) : String(error)}`;
+        }
+    }, { id, params });
+
+for (const config of ['default', 'platform'] as const) {
+    test(`C7c 链接地址的规范化：命令路径（${config}）`, async ({ page }, testInfo) => {
+        // 命令守卫按"规范化后的地址"判定并保存（P5 审查 G3）：相对地址里的制表符、换行会被浏览器去掉，变成协议相对地址；
+        // https 地址里的引号在复制时不转义，会注入 HTML。期望值 null 表示不保存
+        const cases: [string, string | null][] = [
+            ['/\t/evil.example', null],
+            ['/\n/evil.example', null],
+            ['/\t\\evil.example', null],
+            ['//evil.example/x', null],
+            ['/\\evil.example', null],
+            ['HTTPS://Example.COM/a b', 'https://example.com/a%20b'],
+            ['/docs/abc?x=1#h', '/docs/abc?x=1#h'],
+            ['#heading-1', '#heading-1'],
+            ['mailto:a@example.com', 'mailto:a@example.com'],
+        ];
+        const quote = 'https://x.test/"><b id=p5inj>注入</b>';
+        const r = await capability(page, testInfo, { id: 'C7c', name: '链接地址的规范化（命令路径）', config, roundtrip: false }, async (steps) => {
+            const stored: Record<string, string | null> = {};
+            const add = async (url: string) => {
+                const before = (await docSummary(page)).links.length;
+                await selectText(page, '段落己');
+                await execLink(page, 'docs.command.add-hyper-link', { payload: url });
+                await page.waitForTimeout(150);
+                const s = await docSummary(page);
+                stored[url] = s.links.length > before ? s.links[s.links.length - 1].url : null;
+                if (s.links.length > before) await undo(page);
+            };
+            for (const [url] of cases) await add(url);
+            await add(quote);
+            steps.push({ step: '添加链接的命令（记录）', ok: true, detail: stored });
+            // 修改链接的命令：先加一个合法链接，再改成相对地址里带制表符的地址
+            await selectText(page, '段落己');
+            await execLink(page, 'docs.command.add-hyper-link', { payload: 'https://example.com/ok' });
+            await page.waitForTimeout(150);
+            const link = await page.evaluate(() => {
+                const ranges = window.__m0!.editor!.univerAPI.getActiveDocument()!.getBody().customRanges ?? [];
+                return ranges.find((x) => x.properties?.url === 'https://example.com/ok')?.rangeId ?? null;
+            });
+            // 修改命令替换的是当前选区（链接框打开时选区就是链接文字）
+            await selectText(page, '段落己');
+            await execLink(page, 'docs.command.update-hyper-link', { linkId: link, payload: '/\t/evil.example', label: '段落己', segmentId: '' });
+            await page.waitForTimeout(150);
+            const urls = (await docSummary(page)).links.map((l) => l.url);
+            steps.push({ step: '修改链接的命令改成 `/\\t/evil.example`（记录）', ok: true, detail: urls });
+            if (config === 'platform') {
+                const wrong = cases.filter(([url, expected]) => stored[url] !== expected);
+                steps.push({ step: '平台配置：按规范写法保存，绕过写法都不保存', ok: wrong.length === 0, detail: wrong.map(([url, expected]) => ({ url, expected, stored: stored[url] })) });
+                steps.push({ step: '平台配置：https 地址里的引号与尖括号被编码', ok: stored[quote] != null && stored[quote]!.startsWith('https://x.test/') && !/["<>\s]/.test(stored[quote]!), detail: stored[quote] });
+                const cancelled = (await policyEvents(page)).some((e) => e.kind === 'guard-cancel' && e.detail.startsWith('docs.command.update-hyper-link'));
+                steps.push({ step: '平台配置：修改链接的命令被取消，地址不变', ok: cancelled && urls.includes('https://example.com/ok') && !urls.some((u) => u.includes('evil')), detail: { cancelled, urls } });
+            } else {
+                steps.push({ step: 'SDK 默认：命令路径不校验（对照）', ok: true, detail: { evilStored: Object.values(stored).filter((v) => v?.includes('evil')).length, updatedToEvil: urls.some((u) => u.includes('evil')) } });
+            }
+        });
+        expectCapability(r, { undo: false });
+    });
+}
+
 test('C8 `/` 快捷插入', async ({ page }, testInfo) => {
     const r = await capability(page, testInfo, { id: 'C8', name: '`/` 快捷插入' }, async (steps) => {
         await setSelection(page, await endOffset(page));
@@ -625,6 +727,13 @@ test('C8 `/` 快捷插入', async ({ page }, testInfo) => {
         await page.waitForTimeout(300);
         s = await docSummary(page);
         steps.push({ step: '段落中间键入 `/`：原样插入', ok: s.text.includes('文字 a/b 2026/9/25'), detail: s.paragraphs.find((p) => p.text.includes('a/b')) });
+        // 不经过 `/` 键的输入（系统文字替换、CDP 的 insertText 等）：走 beforeinput / input 路径（P5 审查 G1）
+        await setSelection(page, (await offsetOf(page, '用于对齐')) + 2);
+        await plainInsert(page, testInfo.project.name === 'webkit' ? 'webkit' : 'cdp', '/');
+        await page.keyboard.type('x', { delay: 30 });
+        await page.waitForTimeout(300);
+        s = await docSummary(page);
+        steps.push({ step: '不经过按键输入的 `/`：原样插入，其后的字不丢', ok: s.text.includes('用于/x对齐'), detail: s.paragraphs.find((p) => p.text.includes('用于'))?.text });
         await selectText(page, '可以选中');
         await press(page, 'Mod+b');
         await setSelection(page, (await offsetOf(page, '可以选中')) + 2);
@@ -658,6 +767,16 @@ test('C8b `/` 键（SDK 默认，对照）', async ({ page }, testInfo) => {
         const text = (await docSummary(page)).paragraphs.find((p) => p.text.startsWith('段落乙'))?.text;
         const menu = await page.getByRole('button', { name: '插入表格' }).last().isVisible().catch(() => false);
         steps.push({ step: '段落中间键入 ` a/b 2026/9/25`（记录）', ok: true, detail: { text, menuOpen: menu } });
+        await page.keyboard.press('Escape');
+        await setSelection(page, await endOffset(page));
+        await page.evaluate(() => window.__m0!.editor!.univerAPI.executeCommand('doc.command.create-table', { rowCount: 1, colCount: 2 }));
+        await page.waitForTimeout(400);
+        await setSelection(page, await cellOffset(page, 0));
+        await page.keyboard.type('a/b', { delay: 60 });
+        await page.waitForTimeout(300);
+        const cellText = (await docSummary(page)).paragraphs.filter((p) => p.inTable).map((p) => p.text);
+        const menuInCell = await page.getByRole('button', { name: '插入表格' }).last().isVisible().catch(() => false);
+        steps.push({ step: '表格单元格里键入 `a/b`（记录）', ok: true, detail: { cellText, menuOpen: menuInCell } });
     });
     for (const s of r.steps) expect.soft(s.ok).toBe(true);
 });

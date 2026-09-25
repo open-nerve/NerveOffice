@@ -6,7 +6,7 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T03:19:41.749Z",
+  "timestamp": "2026-09-25T05:07:25.835Z",
   "source": "malicious",
   "target": "empty",
   "config": "platform",
@@ -23,8 +23,8 @@
     "tables": [],
     "links": [
       "带事件的正常链接→https://example.com/ok",
-      "本站相对地址→http://127.0.0.1:4760/relative/path",
-      "文档内锚点→http://127.0.0.1:4760/doc.html?sample=p5-cap&img=platform&docpolicy=platform#heading-1"
+      "本站相对地址→http://127.0.0.1:4860/relative/path",
+      "文档内锚点→http://127.0.0.1:4860/doc.html?sample=p5-cap&img=platform&docpolicy=platform#heading-1"
     ],
     "images": [
       "/api/assets/00000000-0000-4000-8000-0000"

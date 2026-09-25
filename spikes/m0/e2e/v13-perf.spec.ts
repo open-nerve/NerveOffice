@@ -2,10 +2,12 @@
 // doc-20k-full（约 2 万汉字，含标题、列表、8 个表格、10 张图片）与小样本 p5-cap，主线程与排版 Worker 各测一次：
 // - 打开：Ready、Rendered、Steady（各打开 3 次取中位数）；
 // - 内存：页面与 Worker 的 JS 堆（CDP，只有 Chromium 内核）；
-// - 键入响应：在正文中间键入 30 个 ASCII 字符，每次 keydown 到两次 requestAnimationFrame 之后；
-// - 输入法响应：10 次拼音组合（每次 6 次更新），每次 compositionupdate 与 compositionend 到两次 requestAnimationFrame 之后
-//   （Chromium 内核用 CDP，WebKit 用合成事件）；
-// - 事件循环与帧间隔：键入与组合期间的最长阻塞。
+// - 键入与输入法的响应，两种口径（P5 审查 R1）：
+//   · 画出来：从事件的 timeStamp 起，到光标右侧一段画布的像素发生变化（每帧检查），键入间隔 350 ms（不排队）；
+//     排版 Worker 模式下排版结果异步回到主线程，只有这个口径量得到"画出来"；
+//   · 两帧：从监听器执行起到两次 requestAnimationFrame 之后（P3 的口径），键入间隔 40 ms；只在主线程模式下等于"画出来"；
+// - 输入法：10 次拼音组合（每次 6 次更新），Chromium 内核用 CDP，WebKit 用合成事件；
+// - 事件循环与帧间隔：快速键入与组合期间的最长阻塞。
 import type { CDPSession, Page } from '@playwright/test';
 
 import { test } from '@playwright/test';
@@ -74,7 +76,55 @@ for (const sample of ['doc-20k-full', 'p5-cap'] as const) {
             });
             await page.waitForTimeout(1500);
             const heapAfterOpen = await heaps(cdp, workers);
-            // 2. 键入响应
+            // 2a. 画出来的口径：键入间隔 350 ms、每次一个组合更新之后停 350 ms
+            const paintAt = await middleOffset(page);
+            await focusAt(page, paintAt);
+            await page.evaluate(() => {
+                const w = window as unknown as { __paint: { key: number[]; update: number[]; missed: number } };
+                w.__paint = { key: [], update: [], missed: 0 };
+                const canvas = document.querySelector('canvas#univer-doc-main-canvas') as HTMLCanvasElement;
+                const ctx = canvas.getContext('2d')!;
+                const id = window.__m0!.editor!.unitId();
+                /** 光标右侧 3–240 px、一行高的区域的像素摘要（避开光标本身的闪烁）。 */
+                const regionHash = (): number => {
+                    const el = document.getElementById(`univer-doc-selection-container-${id}`);
+                    const rect = canvas.getBoundingClientRect();
+                    const r = el?.getBoundingClientRect();
+                    const sx = canvas.width / rect.width;
+                    const sy = canvas.height / rect.height;
+                    const x = Math.max(0, Math.round(((r?.left ?? rect.left) - rect.left + 3) * sx));
+                    const y = Math.max(0, Math.round(((r?.top ?? rect.top) - rect.top) * sy));
+                    const d = ctx.getImageData(x, y, Math.round(240 * sx), Math.round(22 * sy)).data;
+                    let h = 0;
+                    for (let i = 0; i < d.length; i += 8) h = (Math.imul(h, 31) + d[i] + d[i + 1] * 3 + d[i + 2] * 7) >>> 0;
+                    return h;
+                };
+                const watch = (bucket: number[], t0: number) => {
+                    const before = regionHash();
+                    const poll = () => {
+                        if (regionHash() !== before) bucket.push(performance.now() - t0);
+                        else if (performance.now() - t0 < 2000) requestAnimationFrame(poll);
+                        else w.__paint.missed += 1;
+                    };
+                    requestAnimationFrame(poll);
+                };
+                document.addEventListener('keydown', (e) => watch(w.__paint.key, e.timeStamp), true);
+                document.addEventListener('compositionupdate', (e) => watch(w.__paint.update, e.timeStamp), true);
+            });
+            await page.keyboard.type('abcdefghij', { delay: 350 });
+            await page.waitForTimeout(800);
+            const paintDriver = browserName === 'webkit' ? 'webkit' : 'cdp';
+            for (let k = 0; k < 5; k++) {
+                await imeCompose(page, paintDriver, { steps: ['z', 'zh', 'zho', 'zhon'], commit: '中' }, 350);
+                await page.waitForTimeout(300);
+            }
+            await page.waitForTimeout(800);
+            const paint = await page.evaluate(() => (window as unknown as { __paint: { key: number[]; update: number[]; missed: number } }).__paint);
+            // 重新打开，免得画出来口径的监听器干扰后面的测量
+            await page.goto(url);
+            await waitForEditor(page);
+            await page.waitForTimeout(1000);
+            // 2b. 两帧口径与阻塞：快速键入
             await focusAt(page, await middleOffset(page));
             await page.evaluate(() => {
                 const w = window as unknown as { __lat: { key: number[]; update: number[]; end: number[] }; __probe?: unknown };
@@ -119,8 +169,9 @@ for (const sample of ['doc-20k-full', 'p5-cap'] as const) {
                 check: 'V13-perf', sample, worker, browser: browserInfo(page, testInfo), timestamp: new Date().toISOString(), size,
                 open: { runs: opens, median: { ready: median(opens.map((o) => o.ready)), rendered: median(opens.map((o) => o.rendered)), steady: median(opens.map((o) => o.steady)) } },
                 heap: { afterOpen: heapAfterOpen, afterEdit: heapAfterEdit },
-                typing: { latency: lat.key.length > 0 ? stats(lat.key) : null, ...typing },
-                ime: { driver, update: lat.update.length > 0 ? stats(lat.update) : null, end: lat.end.length > 0 ? stats(lat.end) : null, committed, ...ime },
+                typing: { latency: lat.key.length > 0 ? stats(lat.key) : null, painted: paint.key.length > 0 ? stats(paint.key) : null, ...typing },
+                ime: { driver, update: lat.update.length > 0 ? stats(lat.update) : null, updatePainted: paint.update.length > 0 ? stats(paint.update) : null, end: lat.end.length > 0 ? stats(lat.end) : null, committed, ...ime },
+                paintMissed: paint.missed,
             });
         });
     }

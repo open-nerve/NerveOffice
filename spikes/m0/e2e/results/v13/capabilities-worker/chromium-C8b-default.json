@@ -6,7 +6,7 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T03:30:16.859Z",
+  "timestamp": "2026-09-25T05:37:48.932Z",
   "id": "C8b",
   "name": "`/` 键（对照）",
   "config": "default",
@@ -18,11 +18,22 @@
         "text": "段落乙：用于字符格式，这里有一段可以选中的文字 a。",
         "menuOpen": true
       }
+    },
+    {
+      "step": "表格单元格里键入 `a/b`（记录）",
+      "ok": true,
+      "detail": {
+        "cellText": [
+          "ab",
+          ""
+        ],
+        "menuOpen": false
+      }
     }
   ],
   "undo": {
-    "count": 1,
-    "restored": false,
+    "count": 3,
+    "restored": true,
     "redone": true
   },
   "roundtrip": null,
@@ -36,7 +47,7 @@
       "paragraphs": 8
     },
     "after": {
-      "text": "能力矩阵样本\r段落甲：用于标题样式。\r段落乙：用于字符格式，这里有一段可以选中的文字 a。\r段落丙：用于对齐。\r段落丁：列表第一项\r段落戊：列表第二项\r段落己：链接文字与查找替换，查找目标出现两次：查找目标。\r\r\n",
+      "text": "能力矩阵样本\r段落甲：用于标题样式。\r段落乙：用于字符格式，这里有一段可以选中的文字 a。\r段落丙：用于对齐。\r段落丁：列表第一项\r段落戊：列表第二项\r段落己：链接文字与查找替换，查找目标出现两次：查找目标。\r\u001a\u001b\u001cab\r\n\u001d\u001c\r\n\u001d\u000e\u000f\r\r\n",
       "paragraphs": [
         {
           "text": "能力矩阵样本",
@@ -95,6 +106,30 @@
           "inTable": false
         },
         {
+          "text": "ab",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": true
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": true
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
           "text": "",
           "style": null,
           "align": null,
@@ -103,11 +138,24 @@
           "inTable": false
         }
       ],
-      "tables": [],
+      "tables": [
+        {
+          "rows": 1,
+          "cols": 2
+        }
+      ],
       "links": [],
       "runs": [
         {
           "text": " a",
+          "ts": {
+            "cl": {
+              "rgb": "#1B1C1F"
+            }
+          }
+        },
+        {
+          "text": "\u001a\u001b\u001cab\r\n\u001d\u001c\r\n\u001d\u000e\u000f",
           "ts": {
             "cl": {
               "rgb": "#1B1C1F"

@@ -1,0 +1,185 @@
+{
+  "check": "V13-capability",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T05:18:26.109Z",
+  "id": "C7c",
+  "name": "链接地址的规范化（命令路径）",
+  "config": "platform",
+  "steps": [
+    {
+      "step": "添加链接的命令（记录）",
+      "ok": true,
+      "detail": {
+        "/\t/evil.example": null,
+        "/\n/evil.example": null,
+        "/\t\\evil.example": null,
+        "//evil.example/x": null,
+        "/\\evil.example": null,
+        "HTTPS://Example.COM/a b": "https://example.com/a%20b",
+        "/docs/abc?x=1#h": "/docs/abc?x=1#h",
+        "#heading-1": "#heading-1",
+        "mailto:a@example.com": "mailto:a@example.com",
+        "https://x.test/\"><b id=p5inj>注入</b>": "https://x.test/%22%3E%3Cb%20id=p5inj%3E%E6%B3%A8%E5%85%A5%3C/b%3E"
+      }
+    },
+    {
+      "step": "修改链接的命令改成 `/\\t/evil.example`（记录）",
+      "ok": true,
+      "detail": [
+        "https://example.com/ok"
+      ]
+    },
+    {
+      "step": "平台配置：按规范写法保存，绕过写法都不保存",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "step": "平台配置：https 地址里的引号与尖括号被编码",
+      "ok": true,
+      "detail": "https://x.test/%22%3E%3Cb%20id=p5inj%3E%E6%B3%A8%E5%85%A5%3C/b%3E"
+    },
+    {
+      "step": "平台配置：修改链接的命令被取消，地址不变",
+      "ok": true,
+      "detail": {
+        "cancelled": true,
+        "urls": [
+          "https://example.com/ok"
+        ]
+      }
+    }
+  ],
+  "undo": {
+    "count": 1,
+    "restored": true,
+    "redone": true
+  },
+  "roundtrip": null,
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  },
+  "policyEvents": [
+    {
+      "kind": "guard-cancel",
+      "detail": "docs.command.add-hyper-link：链接地址 /\t/evil.example"
+    },
+    {
+      "kind": "guard-cancel",
+      "detail": "docs.command.add-hyper-link：链接地址 /\n/evil.example"
+    },
+    {
+      "kind": "guard-cancel",
+      "detail": "docs.command.add-hyper-link：链接地址 /\t\\evil.example"
+    },
+    {
+      "kind": "guard-cancel",
+      "detail": "docs.command.add-hyper-link：链接地址 //evil.example/x"
+    },
+    {
+      "kind": "guard-cancel",
+      "detail": "docs.command.add-hyper-link：链接地址 /\\evil.example"
+    },
+    {
+      "kind": "guard-normalize",
+      "detail": "docs.command.add-hyper-link：链接地址规范为 https://example.com/a%20b"
+    },
+    {
+      "kind": "guard-normalize",
+      "detail": "docs.command.add-hyper-link：链接地址规范为 https://x.test/%22%3E%3Cb%20id=p5inj%3E%E6%B3%A8%E5%85%A5%3C/b%3E"
+    },
+    {
+      "kind": "guard-cancel",
+      "detail": "docs.command.update-hyper-link：链接地址 /\t/evil.example"
+    }
+  ],
+  "summary": {
+    "before": {
+      "paragraphs": 8
+    },
+    "after": {
+      "text": "能力矩阵样本\r段落甲：用于标题样式。\r段落乙：用于字符格式，这里有一段可以选中的文字。\r段落丙：用于对齐。\r段落丁：列表第一项\r段落戊：列表第二项\r段落己：链接文字与查找替换，查找目标出现两次：查找目标。\r\r\n",
+      "paragraphs": [
+        {
+          "text": "能力矩阵样本",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落甲：用于标题样式。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落乙：用于字符格式，这里有一段可以选中的文字。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落丙：用于对齐。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落丁：列表第一项",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落戊：列表第二项",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "段落己：链接文字与查找替换，查找目标出现两次：查找目标。",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        },
+        {
+          "text": "",
+          "style": null,
+          "align": null,
+          "list": null,
+          "level": null,
+          "inTable": false
+        }
+      ],
+      "tables": [],
+      "links": [
+        {
+          "text": "段落己",
+          "url": "https://example.com/ok"
+        }
+      ],
+      "runs": [],
+      "images": []
+    }
+  }
+}

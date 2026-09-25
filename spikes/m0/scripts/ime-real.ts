@@ -54,7 +54,8 @@ for (const log of logs) {
     const browser = /Chrome\//.test(log.userAgent) ? 'Chrome' : /Safari\//.test(log.userAgent) ? 'Safari' : log.userAgent;
     console.log(`\n== ${browser}（${log.session}，${log.url.includes('docpolicy=platform') ? '平台策略' : 'SDK 默认'}）`);
     let lastUpdate = '';
-    for (const e of log.events) {
+    // 只看浏览器产生的事件：平台策略页面上补发的事件（输入法事件归一）不是 trusted（P5 审查 S1）
+    for (const e of log.events.filter((x) => x.trusted)) {
         if (e.type === 'compositionupdate') lastUpdate = e.data ?? '';
         if (e.type === 'compositionend') {
             const same = (e.data ?? '') === lastUpdate;
@@ -63,6 +64,8 @@ for (const log of logs) {
         if (e.type === 'input' && (e.inputType === 'insertFromComposition' || e.inputType === 'deleteCompositionText')) {
             console.log(`  input ${e.inputType} data="${e.data ?? ''}"`);
         }
+        if (e.type === 'keydown' && (e.key === '/' || e.code === 'Slash')) console.log(`  keydown key="${e.key}" code=${e.code} keyCode=${e.keyCode} isComposing=${e.isComposing}`);
+        if (e.type === 'beforeinput' && e.inputType === 'insertText') console.log(`  beforeinput insertText data="${e.data ?? ''}"`);
     }
     for (const c of log.checkpoints) console.log(`  [${c.reason}] 段落 ${c.paragraphs}，撤销栈 ${c.undo.undos}/${c.undo.redos}：${c.text.slice(-40)}`);
 }

@@ -58,8 +58,11 @@ export async function imeCompose(page: Page, driver: ImeDriver, input: ImeInput,
         if (el == null || !el.id.startsWith('__editor_')) throw new Error(`焦点不在编辑器的隐藏输入元素上：${el?.tagName ?? 'null'}#${el?.id ?? ''}`);
         const wait = () => new Promise((r) => setTimeout(r, stepDelayMs));
         // 浏览器派发原生事件时，每个监听器执行完都会清空微任务队列；脚本里 dispatchEvent 是同步的，不会。
-        // SDK 在异步流程里记下组合文字（doc-ime-input.controller.ts:160-176），所以每次派发之后都让出一个宏任务，与原生行为一致。
-        const tick = () => new Promise((r) => setTimeout(r, 0));
+        // SDK 在异步流程里记下组合文字（doc-ime-input.controller.ts:160-176），所以每次派发之后都清空一次微任务队列（近似），
+        // 与原生行为一致；同一次提交里的几个事件之间不让出宏任务（原生也是在同一个任务里派发的，P5 审查 G5）。
+        const tick = async () => {
+            for (let i = 0; i < 20; i++) await null;
+        };
         const key = (k: string, composing: boolean) => {
             const e = new KeyboardEvent('keydown', { key: k, isComposing: composing, bubbles: true, cancelable: true });
             Object.defineProperty(e, 'keyCode', { get: () => 229 });
@@ -395,7 +398,10 @@ export async function plainInsert(page: Page, driver: ImeDriver, text: string): 
     }
     await page.evaluate((text) => {
         const el = document.activeElement as HTMLElement;
-        el.dispatchEvent(new InputEvent('beforeinput', { data: text, inputType: 'insertText', bubbles: true, cancelable: true }));
+        const before = new InputEvent('beforeinput', { data: text, inputType: 'insertText', bubbles: true, cancelable: true });
+        el.dispatchEvent(before);
+        // 与浏览器一致：beforeinput 被取消时不插入，也没有 input 事件
+        if (before.defaultPrevented) return;
         el.textContent = text;
         el.dispatchEvent(new InputEvent('input', { data: text, inputType: 'insertText', bubbles: true }));
     }, text);

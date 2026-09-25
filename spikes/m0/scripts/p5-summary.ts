@@ -41,7 +41,14 @@ function capabilityRows(dir: string): string[][] {
 }
 
 function capabilities(): string {
-    return ['## V13 能力矩阵（平台配置，严格 CSP）', table(['编号', '能力', '配置', '步骤通过', '撤销重做', '保存重开', '页面错误 / CSP 强制违规'], capabilityRows('capabilities'))].join('\n\n');
+    const rows = capabilityRows('capabilities');
+    const head = ['编号', '能力', '配置', '步骤通过', '撤销重做', '保存重开', '页面错误 / CSP 强制违规'];
+    return [
+        '## V13 能力矩阵（平台配置，严格 CSP）',
+        table(head, rows.filter((r) => r[2] === 'platform')),
+        '### 对照（SDK 默认；只记录，撤销重做的"不一致"来自被测的缺陷本身）',
+        table(head, rows.filter((r) => r[2] !== 'platform')),
+    ].join('\n\n');
 }
 
 function capabilityRecords(): string {
@@ -62,9 +69,9 @@ function variants(): string {
             const bad = matrix.flatMap((x) => (x.data.cases as Json[]).filter((c) => !Object.entries(c.ok).every(([k, v]) => v || ((k === 'undo' || k === 'redo') && x.data.driver === 'webkit' && x.data.config === 'default'))).map((c) => `${browserOf(x.file)} ${x.data.driver}/${x.data.config} ${c.id}`));
             parts.push(`- \`${dir}\`：${matrix.length} 组输入法矩阵，异常 ${bad.length} 项${bad.length > 0 ? `（${bad.slice(0, 5).join('；')}）` : ''}`);
         } else {
-            const cases = list.filter((x) => x.data.source != null);
+            const cases = list.filter((x) => x.data.source != null && x.data.config === 'platform');
             const bad = cases.filter((x) => x.data.pwned != null || (x.data.unsafeLinks ?? []).length > 0 || (x.data.health?.errors ?? []).length > 0);
-            parts.push(`- \`${dir}\`：${cases.length} 个粘贴结果，安全或页面错误问题 ${bad.length} 项`);
+            parts.push(`- \`${dir}\`：${cases.length} 个粘贴结果（平台配置），安全或页面错误问题 ${bad.length} 项`);
         }
     }
     return ['## V13 档案变体的回归', parts.join('\n') || '（没有变体结果）'].join('\n\n');
@@ -100,12 +107,16 @@ function capture(): string {
     const list = load('ime').filter((x) => x.file.includes('capture-'));
     const rows = list.map((x) => {
         const mid = x.data.mid;
-        const midText = x.data.config === 'platform'
-            ? (mid.wait.composing ? `等到时限（${ms(mid.wait.waitedMs)} ms）仍在组合，不捕获` : `${ms(mid.wait.waitedMs)} ms 后捕获`)
-            : `${ms(mid.wait.waitedMs)} ms 后捕获，快照${mid.hasPinyin ? '含拼音' : '无拼音'}`;
+        const midText = `${ms(mid.wait.waitedMs)} ms 后捕获${mid.wait.composing ? '（组合仍在进行）' : ''}，快照${mid.hasPinyin ? '含拼音' : '无拼音'}`;
         return [browserOf(x.file), x.data.config, x.data.driver, midText, `${ms(x.data.end.wait.waitedMs)} ms 后捕获，${x.data.end.hasFinal && !x.data.end.hasPinyin ? '是最终文字' : '异常'}`, x.data.finalText.slice(-12)];
     });
-    return ['## V13 组合进行中的捕获（停在候选上 1.5 秒，去抖 1 秒、时限 2.5 秒）', table(['浏览器', '配置', '驱动', '组合进行中', '提交后', '最终正文（末尾）'], rows)].join('\n\n');
+    const followup = list.length === 0 ? [] : load('ime').filter((x) => x.file.includes('followup-')).map((x) => [browserOf(x.file), x.data.config, x.data.results.chrome, x.data.results.webkit]);
+    return [
+        '## V13 组合进行中的捕获（停在候选上约 1.5 秒后开始等待，去抖 1 秒；平台规则：组合进行中不捕获，组合持续满 3 秒后照常捕获）',
+        table(['浏览器', '配置', '驱动', '组合进行中', '提交后', '最终正文（末尾）'], rows),
+        '## V13 提交后在同一个任务里紧接着输入"，"（事件归一的延后派发）',
+        table(['浏览器', '配置', 'Chrome 顺序', 'WebKit 顺序'], followup),
+    ].join('\n\n');
 }
 
 function paste(): string {
@@ -171,6 +182,7 @@ function layout(): string {
     const menus = pick('menus').map((x) => [browserOf(x.file), `${(x.data.unsupported as Json[]).filter((m) => m.hidden === true).length}/${(x.data.unsupported as Json[]).length}`, Object.entries(x.data.search as Record<string, string[]>).map(([q, l]) => `${q}：${l.some((t) => t.includes('未找到')) ? '找不到' : l.join('/')}`).join('；'), (x.data.slash as string[]).join('、')]);
     const outline = pick('outline').map((x) => [browserOf(x.file), (x.data.edit.entries as string[]).join('、'), String(x.data.edit.detections), (x.data.read.entries as string[]).length > 0 ? '有' : '无']);
     const toc = pick('tocblock').map((x) => [browserOf(x.file), x.data.facadeHeadings.inserted ? '插入了' : '没有插入（标题没有 headingId、outlineLevel）', (x.data.ranges as Json[]).map((r) => `${r.type === 1 ? `FIELD ${r.properties?.fieldType}` : r.type === 0 ? `HYPERLINK ${r.properties?.url ?? `#${r.properties?.headingId}`}` : r.type}`).slice(0, 4).join('、'), String(x.data.update), x.data.roundtrip.firstDiff.length > 0 ? `首次保存补 ${x.data.roundtrip.firstDiff.length} 处` : '无', x.data.roundtrip.secondDiff.length === 0 ? '一致' : '不一致']);
+    const handle = pick('handle').flatMap((x) => [...(x.data.steps as Json[]).map((s) => [browserOf(x.file), s.step, s.ok ? '通过' : '未通过']), [browserOf(x.file), '保存重开', x.data.roundtrip.secondDiff.length === 0 ? '一致' : '不一致']]);
     const extras = pick('extras').flatMap((x) => (x.data.steps as Json[]).map((s) => [browserOf(x.file), s.step, s.ok ? '可用' : '不可用', JSON.stringify(s.detail)?.slice(0, 80) ?? '—']));
     const noFormula = pick('no-formula').map((x) => [browserOf(x.file), `${(x.data.samples as Json[]).filter((s) => s.sameAsWithFormula).length}/${(x.data.samples as Json[]).length}`, `${(x.data.samples as Json[]).filter((s) => s.roundtrip.secondDiff.length === 0).length}/${(x.data.samples as Json[]).length}`, JSON.stringify(x.data.edits), String(x.data.health.errors.length)]);
     return [
@@ -184,6 +196,8 @@ function layout(): string {
         table(['浏览器', '大纲条目', '点击后的内容改动', '阅读模式'], outline),
         '## V13 目录：目录块插件（评估）',
         table(['浏览器', '用样本构建器设置的标题', '插入后的区间（前 4 个）', '更新命令', '首次保存', '再保存'], toc),
+        '## V13 保留的入口：段落把手与粘贴选项（平台配置）',
+        table(['浏览器', '步骤', '结果'], handle),
         '## V13 附加能力',
         table(['浏览器', '能力', '结论', '数据'], extras),
         '## V13 去掉公式引擎',
@@ -205,11 +219,16 @@ function perf(): string {
     const rows = list.map((x) => {
         const d = x.data;
         const heap = d.heap.afterOpen == null ? '—' : `${mib(d.heap.afterOpen.main)}${d.heap.afterOpen.workers.length > 0 ? ` + ${d.heap.afterOpen.workers.map(mib).join('+')}` : ''}`;
-        return [browserOf(x.file), d.sample, d.worker ? 'Worker' : '主线程', `${d.size.chars} 字，表格 ${d.size.tables}，图片 ${d.size.images}，${mib(d.size.bytes)} MiB`, `${ms(d.open.median.rendered)} / ${ms(d.open.median.steady)}`, heap,
-            d.typing.latency == null ? '—' : `${ms(d.typing.latency.p50)} / ${ms(d.typing.latency.p95)}`, `${ms(d.typing.blockMs)} / ${ms(d.typing.frameGapMs)}`,
-            d.ime.update == null ? '—' : `${ms(d.ime.update.p50)} / ${ms(d.ime.update.p95)}`, d.ime.end == null ? '—' : `${ms(d.ime.end.p50)} / ${ms(d.ime.end.p95)}`, `${ms(d.ime.blockMs)} / ${ms(d.ime.frameGapMs)}`, String(d.ime.committed)];
+        const pair = (x: Json | null | undefined) => (x == null ? '—' : `${ms(x.p50)} / ${ms(x.p95)}`);
+        return [browserOf(x.file), d.sample, d.worker ? 'Worker' : '主线程', `${d.size.chars} 字，表格 ${d.size.tables}，图片 ${d.size.images}`, ms(d.open.median.rendered), heap,
+            pair(d.typing.painted), pair(d.ime.updatePainted), pair(d.typing.latency), pair(d.ime.update),
+            `${ms(d.typing.blockMs)} / ${ms(d.typing.frameGapMs)}`, `${ms(d.ime.blockMs)} / ${ms(d.ime.frameGapMs)}`, String(d.paintMissed ?? '—')];
     });
-    return ['## V13 性能（毫秒；堆为 MiB，只有 Chromium）', table(['浏览器', '样本', '模式', '规模', '打开：Rendered / Steady', 'JS 堆（页面 + Worker）', '键入 p50 / p95', '键入期间：最长阻塞 / 帧间隔', '组合更新 p50 / p95', '提交 p50 / p95', '组合期间：最长阻塞 / 帧间隔', '提交次数'], rows)].join('\n\n');
+    return [
+        '## V13 性能（毫秒；堆为 MiB，只有 Chromium）',
+        '"画出来"从事件的 timeStamp 起，到光标右侧的画布像素变化为止（键入间隔 350 ms）；"两帧"从监听器执行起到两次 requestAnimationFrame 之后（键入间隔 40 ms，只在主线程模式下等于画出来）。Steady 有约 3 秒的固定延迟，不列。',
+        table(['浏览器', '样本', '模式', '规模', '打开：Rendered', 'JS 堆（页面 + Worker）', '键入：画出来 p50 / p95', '组合更新：画出来 p50 / p95', '键入：两帧 p50 / p95', '组合更新：两帧 p50 / p95', '快速键入：最长阻塞 / 帧间隔', '组合期间：最长阻塞 / 帧间隔', '没检测到变化'], rows),
+    ].join('\n\n');
 }
 
 function bundle(): string {
