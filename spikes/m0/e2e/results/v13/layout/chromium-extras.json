@@ -1,0 +1,102 @@
+{
+  "check": "V13-layout-extras",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T02:47:09.306Z",
+  "steps": [
+    {
+      "step": "水平分割线",
+      "ok": true,
+      "detail": 1
+    },
+    {
+      "step": "符号",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "step": "表情",
+      "ok": true,
+      "detail": "😀"
+    },
+    {
+      "step": "格式刷",
+      "ok": true,
+      "detail": {
+        "text": "用于对齐",
+        "ts": {
+          "ff": "Arial",
+          "fs": 11,
+          "cl": {
+            "rgb": "#1B1C1F"
+          },
+          "bl": 1,
+          "it": 0,
+          "ul": {
+            "s": 0
+          },
+          "st": {
+            "s": 0
+          },
+          "ol": {
+            "s": 0
+          },
+          "va": 1,
+          "bg": null,
+          "caps": false,
+          "smallCaps": false
+        }
+      }
+    },
+    {
+      "step": "清除格式",
+      "ok": true,
+      "detail": {
+        "text": "可以选中",
+        "ts": {
+          "ff": "Arial",
+          "fs": 11,
+          "cl": {
+            "rgb": "#1B1C1F"
+          },
+          "bl": 0,
+          "it": 0,
+          "ul": {
+            "s": 0
+          },
+          "st": {
+            "s": 0
+          },
+          "ol": {
+            "s": 0
+          },
+          "va": 1,
+          "bg": null,
+          "caps": false,
+          "smallCaps": false
+        }
+      }
+    },
+    {
+      "step": "段落设置：首行缩进",
+      "ok": true,
+      "detail": {
+        "indentFirstLine": {
+          "v": 24
+        }
+      }
+    }
+  ],
+  "roundtrip": {
+    "firstDiff": [],
+    "secondDiff": []
+  },
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  }
+}

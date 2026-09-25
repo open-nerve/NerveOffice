@@ -1,0 +1,77 @@
+{
+  "check": "V13-perf",
+  "sample": "doc-20k-full",
+  "worker": true,
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T02:38:43.553Z",
+  "size": {
+    "chars": 20780,
+    "tables": 8,
+    "images": 10,
+    "bytes": 146290
+  },
+  "open": {
+    "runs": [
+      {
+        "ready": 26,
+        "rendered": 401,
+        "steady": 3404
+      },
+      {
+        "ready": 13,
+        "rendered": 354,
+        "steady": 3357
+      },
+      {
+        "ready": 13,
+        "rendered": 342,
+        "steady": 3345
+      }
+    ],
+    "median": {
+      "ready": 13,
+      "rendered": 354,
+      "steady": 3357
+    }
+  },
+  "heap": {
+    "afterOpen": null,
+    "afterEdit": null
+  },
+  "typing": {
+    "latency": {
+      "p50": 32,
+      "p95": 51,
+      "max": 54,
+      "min": 11,
+      "n": 100
+    },
+    "blockMs": 29,
+    "frameGapMs": 37
+  },
+  "ime": {
+    "driver": "webkit",
+    "update": {
+      "p50": 34,
+      "p95": 52,
+      "max": 53,
+      "min": 26,
+      "n": 60
+    },
+    "end": {
+      "p50": 41,
+      "p95": 49,
+      "max": 49,
+      "min": 27,
+      "n": 10
+    },
+    "committed": 10,
+    "blockMs": 27,
+    "frameGapMs": 42
+  }
+}

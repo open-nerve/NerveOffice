@@ -6,7 +6,7 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T01:39:47.376Z",
+  "timestamp": "2026-09-25T02:48:25.118Z",
   "id": "C6",
   "name": "图片",
   "config": "platform",
@@ -16,11 +16,11 @@
       "ok": true,
       "detail": [
         {
-          "id": "fjoe6G",
+          "id": "NKpOaz",
           "layoutType": 0,
           "behindDoc": 0,
           "wrapText": 0,
-          "source": "/api/assets/b50a07ad-91a5-4229-bca1-d29bd81df906",
+          "source": "/api/assets/f5224a0f-4539-4463-8b92-07685cc9ba46",
           "size": [
             120,
             80
@@ -31,11 +31,11 @@
           ]
         },
         {
-          "id": "VG0X81",
+          "id": "no6Zi9",
           "layoutType": 0,
           "behindDoc": 0,
           "wrapText": 0,
-          "source": "/api/assets/fb008479-3160-41ca-b4bd-b5fde499b856",
+          "source": "/api/assets/d327eac1-5c58-4501-8791-4cbb0431a63e",
           "size": [
             64,
             64
@@ -220,11 +220,11 @@
       "runs": [],
       "images": [
         {
-          "id": "fjoe6G",
+          "id": "NKpOaz",
           "layoutType": 1,
           "behindDoc": 1,
           "wrapText": 0,
-          "source": "/api/assets/b50a07ad-91a5-4229-bca1-d29bd81df906",
+          "source": "/api/assets/f5224a0f-4539-4463-8b92-07685cc9ba46",
           "size": [
             161,
             107

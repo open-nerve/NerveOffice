@@ -30,6 +30,8 @@ export interface PageParams {
     imelog: boolean;
     /** 文字文档的大纲侧栏（P5，docs-ui 的 toc 配置）。 */
     outline: boolean;
+    /** 目录块插件（P5 评估用，docs-toc 与 docs-toc-ui）：doc@1 不注册，tocblock=1 时注册。 */
+    tocblock: boolean;
     /** 真实 Safari 自检：场景名；完成后跳转到 next。 */
     selftest?: string;
     next?: string;
@@ -54,6 +56,7 @@ export function readPageParams(defaultSample: string): PageParams {
         docpolicy: q.get('docpolicy') === 'platform' ? 'platform' : 'default',
         imelog: q.get('imelog') === '1',
         outline: q.get('outline') === '1',
+        tocblock: q.get('tocblock') === '1',
         selftest: q.get('selftest') ?? undefined,
         next: q.get('next') ?? undefined,
     };

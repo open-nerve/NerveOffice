@@ -1,0 +1,41 @@
+{
+  "check": "V13-ime",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T03:39:00.496Z",
+  "sessions": 1,
+  "events": 20,
+  "compositionEnd": {
+    "t": 626.9,
+    "type": "compositionend",
+    "target": "__editor_m0-doc-minimal",
+    "data": "你好",
+    "trusted": false
+  },
+  "checkpoints": [
+    {
+      "t": 405.4,
+      "reason": "start",
+      "text": "M0 文字文档样本n",
+      "paragraphs": 1,
+      "undo": {
+        "undos": 0,
+        "redos": 0
+      }
+    },
+    {
+      "t": 1030.6,
+      "reason": "compositionend",
+      "text": "M0 文字文档样本你好",
+      "paragraphs": 1,
+      "undo": {
+        "undos": 1,
+        "redos": 0
+      }
+    }
+  ]
+}

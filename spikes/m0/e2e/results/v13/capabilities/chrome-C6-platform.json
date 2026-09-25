@@ -6,7 +6,7 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-25T01:44:29.195Z",
+  "timestamp": "2026-09-25T02:53:07.615Z",
   "id": "C6",
   "name": "图片",
   "config": "platform",
@@ -16,11 +16,11 @@
       "ok": true,
       "detail": [
         {
-          "id": "QM34mr",
+          "id": "JXMQ8r",
           "layoutType": 0,
           "behindDoc": 0,
           "wrapText": 0,
-          "source": "/api/assets/0b212125-9273-4c4d-940e-e7908e8ee058",
+          "source": "/api/assets/93237e3c-804c-40a9-a4da-cc7d8c71c021",
           "size": [
             120,
             80
@@ -31,11 +31,11 @@
           ]
         },
         {
-          "id": "2la4ZY",
+          "id": "-udKNc",
           "layoutType": 0,
           "behindDoc": 0,
           "wrapText": 0,
-          "source": "/api/assets/bc01c263-2167-47ff-8409-5fcd261d7676",
+          "source": "/api/assets/0ae66f46-4f68-4174-8942-0eac90d7f0ef",
           "size": [
             64,
             64
@@ -220,11 +220,11 @@
       "runs": [],
       "images": [
         {
-          "id": "QM34mr",
+          "id": "JXMQ8r",
           "layoutType": 1,
           "behindDoc": 1,
           "wrapText": 0,
-          "source": "/api/assets/0b212125-9273-4c4d-940e-e7908e8ee058",
+          "source": "/api/assets/93237e3c-804c-40a9-a4da-cc7d8c71c021",
           "size": [
             161,
             107

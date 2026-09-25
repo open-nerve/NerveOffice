@@ -6,12 +6,12 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T02:08:50.743Z",
+  "timestamp": "2026-09-25T02:53:33.442Z",
   "config": "platform",
   "driver": "cdp",
   "mid": {
     "wait": {
-      "waitedMs": 2501.3000000715256,
+      "waitedMs": 2520.3000000715256,
       "formula": "n/a",
       "restarts": 0,
       "composing": true
@@ -20,13 +20,13 @@
     "composition": {
       "active": true,
       "count": 1,
-      "lastStartAt": 3983.2999999523163,
+      "lastStartAt": 4021.0999999046326,
       "lastEndAt": null
     }
   },
   "end": {
     "wait": {
-      "waitedMs": 1008.8999999761581,
+      "waitedMs": 1008.6000000238419,
       "formula": "n/a",
       "restarts": 0,
       "composing": false
@@ -34,6 +34,6 @@
     "hasFinal": true,
     "hasPinyin": false
   },
-  "elapsedMs": 1012,
+  "elapsedMs": 1011,
   "finalText": "\r段落戊：列表第二项\r段落己：链接文字与查找替换，查找目标出现两次：查找目标。\r"
 }

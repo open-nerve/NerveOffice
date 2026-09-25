@@ -1,0 +1,37 @@
+{
+  "check": "V13-csp",
+  "worker": true,
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T02:54:30.452Z",
+  "steps": [
+    {
+      "step": "加载 doc-all（含大纲侧栏）",
+      "enforce": {},
+      "probe": {
+        "style-src-elem inline": 4
+      }
+    },
+    {
+      "step": "键入、中文输入、大纲导航",
+      "enforce": {},
+      "probe": {}
+    },
+    {
+      "step": "粘贴 Word 与网页、插入与粘贴图片",
+      "enforce": {},
+      "probe": {
+        "img-src blob": 1
+      }
+    },
+    {
+      "step": "表情、符号、查找、复制粘贴",
+      "enforce": {},
+      "probe": {}
+    }
+  ]
+}

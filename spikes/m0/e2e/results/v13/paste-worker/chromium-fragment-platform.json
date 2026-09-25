@@ -1,0 +1,37 @@
+{
+  "check": "V13-paste-fragment",
+  "config": "platform",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T03:42:45.165Z",
+  "diff": {
+    "paragraphs": 1,
+    "headings": [
+      "4:恶意链接与标题"
+    ],
+    "lists": [],
+    "aligns": [],
+    "tables": [],
+    "links": [],
+    "images": [],
+    "runs": []
+  },
+  "policyEvents": [
+    {
+      "kind": "paste-link",
+      "detail": "去掉链接 javascript:window.__p5_pwned=1"
+    },
+    {
+      "kind": "paste-link",
+      "detail": "去掉链接 javascript:window.__p5_pwned=1"
+    }
+  ],
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  }
+}

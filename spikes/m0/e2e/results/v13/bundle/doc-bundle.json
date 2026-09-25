@@ -1,0 +1,43 @@
+{
+  "timestamp": "2026-09-25T02:29:07.442Z",
+  "withFormula": {
+    "js": {
+      "raw": 9957314,
+      "gzip": 2321866
+    },
+    "css": {
+      "raw": 115118,
+      "gzip": 16495
+    },
+    "files": 79,
+    "initialJs": {
+      "raw": 5380489,
+      "gzip": 1286709,
+      "chunks": 1
+    }
+  },
+  "noFormula": {
+    "js": {
+      "raw": 8509139,
+      "gzip": 2076695
+    },
+    "css": {
+      "raw": 115118,
+      "gzip": 16495
+    },
+    "files": 79,
+    "initialJs": {
+      "raw": 3932314,
+      "gzip": 1041538,
+      "chunks": 1
+    }
+  },
+  "saving": {
+    "jsRaw": 1448175,
+    "jsGzip": 245171,
+    "ratioRaw": 0.145,
+    "initialRaw": 1448175,
+    "initialGzip": 245171,
+    "initialRatioRaw": 0.269
+  }
+}

@@ -161,14 +161,16 @@ async function runCase(page: Page, driver: ImeDriver, config: Config, input: Ime
         await redo(page);
         redone = await docText(page);
     }
-    const caretExpected = input.commit === '' ? at + (replace > 0 ? 0 : 0) : at + input.commit.length;
+    const caretExpected = input.commit === '' ? at : at + input.commit.length;
+    // 记录插入点附近的一段（缺陷出现在插入点，不在文末）
+    const around = (text: string) => text.slice(Math.max(0, at - 8), at + 16).replace(/\r/g, '⏎');
     return {
         id: `${inputId}@${pos.id}`,
         input: inputId,
         position: pos.id,
-        before: strip(before).slice(-60),
-        expected: strip(expected).slice(-60),
-        after: strip(after).slice(-60),
+        before: around(before),
+        expected: around(expected),
+        after: around(after),
         ok: {
             text: after === expected,
             paragraphs: afterParagraphs === paragraphs,
@@ -178,8 +180,8 @@ async function runCase(page: Page, driver: ImeDriver, config: Config, input: Ime
             extra: extra.ok,
         },
         caret: { expected: caretExpected, actual: caret?.startOffset ?? null },
-        undone: strip(undone).slice(-60),
-        redone: strip(redone).slice(-60),
+        undone: around(undone),
+        redone: around(redone),
         extra: extra.detail,
     };
 }
@@ -241,8 +243,12 @@ for (const driver of ['cdp', 'chrome', 'webkit'] as const) {
 test('V13 候选框锚点：隐藏输入元素里的组合文字与画布光标', async ({ page }, testInfo) => {
     // 系统输入法的候选框贴着隐藏输入元素里的 DOM 光标（组合文字的末尾）；画布上的组合文字由 SDK 绘制。比较两者的位置
     const out: Record<string, unknown>[] = [];
-    for (const zoom of [1, 1.5]) {
+    // nowrap：缓解思路——隐藏输入元素不换行（white-space: pre），组合文字变长时 DOM 光标不再往下移
+    for (const [zoom, nowrap] of [[1, false], [1.5, false], [1, true]] as const) {
         await openDoc(page, 'sample=p5-cap');
+        if (nowrap) {
+            await page.addStyleTag({ content: 'div[id^="__editor_"] { white-space: pre !important; }' });
+        }
         await focusEditor(page);
         if (zoom !== 1) {
             await page.evaluate((z) => {
@@ -292,7 +298,7 @@ test('V13 候选框锚点：隐藏输入元素里的组合文字与画布光标'
             delete el.dataset.p5Composing;
         });
         const zoomRatio = await page.evaluate(() => (window.__m0!.editor!.save() as { settings?: { zoomRatio?: number } }).settings?.zoomRatio ?? 1);
-        out.push({ zoom, zoomRatio, start, samples });
+        out.push({ zoom, zoomRatio, nowrap, start, samples: samples.map((x) => ({ ...x, compositionOffsetOnCanvas: Math.round((x.canvasCaret as { x: number }).x - start.x) })) });
     }
     await writeCases(page, testInfo, 'candidate-anchor', { results: out });
 });

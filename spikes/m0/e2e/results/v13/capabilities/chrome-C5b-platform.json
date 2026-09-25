@@ -6,7 +6,7 @@
     "version": "153.0.8010.53",
     "channel": "chrome"
   },
-  "timestamp": "2026-09-25T01:43:54.070Z",
+  "timestamp": "2026-09-25T02:52:32.369Z",
   "id": "C5b",
   "name": "单元格里插入图片",
   "config": "platform",
@@ -56,11 +56,11 @@
     },
     {
       "kind": "paste-cell-image",
-      "detail": "粘贴到表格单元格：去掉图片 a6Jirj"
+      "detail": "粘贴到表格单元格：去掉图片 uaV4ri"
     },
     {
       "kind": "paste-cell-image",
-      "detail": "粘贴到表格单元格：去掉图片 a6Jirj"
+      "detail": "粘贴到表格单元格：去掉图片 uaV4ri"
     }
   ],
   "summary": {

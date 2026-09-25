@@ -88,11 +88,12 @@ const groups: PluginGroup[] = [
         plugins: () => [[UniverFindReplacePlugin], [UniverDocsFindReplacePlugin]],
     },
     {
-        // 目录（候选，是否纳入在 P5 决定）
+        // 目录块（在正文里插入目录，写入 FIELD、HYPERLINK 区间）：P5 结论为 doc@1 不纳入，"目录"由只读的大纲侧栏提供（docs-ui 的 toc 配置）。
+        // 保留这一组只为评估（页面参数 tocblock=1）。
         id: 'toc',
         resources: [],
         removable: true,
-        plugins: () => [[UniverDocsTocPlugin], [UniverDocsTocUIPlugin]],
+        plugins: ({ tocBlock }) => (tocBlock === true ? [[UniverDocsTocPlugin], [UniverDocsTocUIPlugin]] : []),
     },
 ];
 

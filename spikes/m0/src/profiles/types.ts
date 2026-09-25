@@ -21,6 +21,8 @@ export interface ProfileOptions {
     imageService?: 'default' | 'platform';
     /** 文字文档的大纲侧栏（P5，docs-ui 的 toc 配置）。 */
     outline?: boolean;
+    /** 文字文档的目录块插件（P5 评估用；doc@1 不注册）。 */
+    tocBlock?: boolean;
 }
 
 /**

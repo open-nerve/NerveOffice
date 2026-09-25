@@ -1,0 +1,31 @@
+{
+  "check": "V13-layout-traditional-platform",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T02:54:37.966Z",
+  "config": "platform",
+  "flavor": 2,
+  "headers": [
+    "hdr1"
+  ],
+  "menus": [
+    {
+      "id": "doc.command.open-header-footer-panel",
+      "hidden": true
+    },
+    {
+      "id": "doc.menu.breaks",
+      "hidden": true
+    }
+  ],
+  "policyEvents": [
+    {
+      "kind": "flavor-normalize",
+      "detail": "1 → 2"
+    }
+  ]
+}

@@ -6,11 +6,12 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T02:08:36.809Z",
+  "timestamp": "2026-09-25T02:53:19.446Z",
   "results": [
     {
       "zoom": 1,
       "zoomRatio": 1,
+      "nowrap": false,
       "start": {
         "x": 741.65625,
         "y": 267.15625
@@ -26,7 +27,8 @@
           "domTop": 267.15625,
           "dx": 13,
           "dy": 0,
-          "font": "16px -apple-system, \"system-ui\", \"PingFang SC"
+          "font": "16px -apple-system, \"system-ui\", \"PingFang SC",
+          "compositionOffsetOnCanvas": 11
         },
         {
           "text": "ni hao",
@@ -38,7 +40,8 @@
           "domTop": 285.15625,
           "dx": 27,
           "dy": 18,
-          "font": "16px -apple-system, \"system-ui\", \"PingFang SC"
+          "font": "16px -apple-system, \"system-ui\", \"PingFang SC",
+          "compositionOffsetOnCanvas": 40
         },
         {
           "text": "ni hao shi jie",
@@ -50,13 +53,15 @@
           "domTop": 321.15625,
           "dx": 16,
           "dy": 54,
-          "font": "16px -apple-system, \"system-ui\", \"PingFang SC"
+          "font": "16px -apple-system, \"system-ui\", \"PingFang SC",
+          "compositionOffsetOnCanvas": 81
         }
       ]
     },
     {
       "zoom": 1.5,
       "zoomRatio": 1.5,
+      "nowrap": false,
       "start": {
         "x": 752.484375,
         "y": 347.75
@@ -72,7 +77,8 @@
           "domTop": 347.75,
           "dx": 13,
           "dy": 0,
-          "font": "16px -apple-system, \"system-ui\", \"PingFang SC"
+          "font": "16px -apple-system, \"system-ui\", \"PingFang SC",
+          "compositionOffsetOnCanvas": 17
         },
         {
           "text": "ni hao",
@@ -84,7 +90,8 @@
           "domTop": 365.75,
           "dx": 27,
           "dy": 18,
-          "font": "16px -apple-system, \"system-ui\", \"PingFang SC"
+          "font": "16px -apple-system, \"system-ui\", \"PingFang SC",
+          "compositionOffsetOnCanvas": 60
         },
         {
           "text": "ni hao shi jie",
@@ -96,7 +103,58 @@
           "domTop": 401.75,
           "dx": 16,
           "dy": 54,
-          "font": "16px -apple-system, \"system-ui\", \"PingFang SC"
+          "font": "16px -apple-system, \"system-ui\", \"PingFang SC",
+          "compositionOffsetOnCanvas": 122
+        }
+      ]
+    },
+    {
+      "zoom": 1,
+      "zoomRatio": 1,
+      "nowrap": true,
+      "start": {
+        "x": 741.65625,
+        "y": 267.15625
+      },
+      "samples": [
+        {
+          "text": "ni",
+          "canvasCaret": {
+            "x": 753.0625,
+            "y": 267.15625
+          },
+          "domCompositionRight": 765.734375,
+          "domTop": 267.15625,
+          "dx": 13,
+          "dy": 0,
+          "font": "16px -apple-system, \"system-ui\", \"PingFang SC",
+          "compositionOffsetOnCanvas": 11
+        },
+        {
+          "text": "ni hao",
+          "canvasCaret": {
+            "x": 781.59375,
+            "y": 267.15625
+          },
+          "domCompositionRight": 825.203125,
+          "domTop": 267.15625,
+          "dx": 44,
+          "dy": 0,
+          "font": "16px -apple-system, \"system-ui\", \"PingFang SC",
+          "compositionOffsetOnCanvas": 40
+        },
+        {
+          "text": "ni hao shi jie",
+          "canvasCaret": {
+            "x": 823.140625,
+            "y": 267.15625
+          },
+          "domCompositionRight": 912.03125,
+          "domTop": 267.15625,
+          "dx": 89,
+          "dy": 0,
+          "font": "16px -apple-system, \"system-ui\", \"PingFang SC",
+          "compositionOffsetOnCanvas": 81
         }
       ]
     }

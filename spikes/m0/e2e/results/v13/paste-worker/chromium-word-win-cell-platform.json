@@ -1,0 +1,57 @@
+{
+  "check": "V13-paste",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T03:41:24.545Z",
+  "source": "word-win",
+  "target": "cell",
+  "config": "platform",
+  "dispatched": {
+    "target": "div",
+    "defaultPrevented": true
+  },
+  "changed": false,
+  "diff": {
+    "paragraphs": 0,
+    "headings": [],
+    "lists": [],
+    "aligns": [],
+    "tables": [],
+    "links": [],
+    "images": [],
+    "runs": []
+  },
+  "features": {
+    "一级标题": false,
+    "二级标题": false,
+    "粗体": false,
+    "斜体": false,
+    "下划线": false,
+    "删除线": false,
+    "下标": false,
+    "文字颜色": false,
+    "高亮": false,
+    "字号": false,
+    "居中": false,
+    "右对齐": false,
+    "编号列表": false,
+    "二级编号": false,
+    "项目符号": false,
+    "列表标记已去掉": true,
+    "表格": false,
+    "网址链接": false,
+    "邮件链接": false
+  },
+  "pwned": null,
+  "unsafeLinks": [],
+  "health": {
+    "errors": [],
+    "cspEnforce": []
+  },
+  "policyEvents": [],
+  "roundtrip": null
+}

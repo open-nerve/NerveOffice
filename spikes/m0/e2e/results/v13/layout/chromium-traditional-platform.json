@@ -1,0 +1,31 @@
+{
+  "check": "V13-layout-traditional-platform",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T02:45:57.580Z",
+  "config": "platform",
+  "flavor": 2,
+  "headers": [
+    "hdr1"
+  ],
+  "menus": [
+    {
+      "id": "doc.command.open-header-footer-panel",
+      "hidden": true
+    },
+    {
+      "id": "doc.menu.breaks",
+      "hidden": true
+    }
+  ],
+  "policyEvents": [
+    {
+      "kind": "flavor-normalize",
+      "detail": "1 → 2"
+    }
+  ]
+}
