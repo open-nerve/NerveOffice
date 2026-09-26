@@ -13,6 +13,8 @@ import { createTestDatabase } from '../support/database.ts'
 import { captureLogs } from '../support/log-capture.ts'
 
 const INDEX_HTML = '<!doctype html><html><head><title>NerveOffice</title></head><body><div id="root"></div></body></html>'
+const EDITOR_HTML = '<!doctype html><html><head><title>NerveOffice</title></head><body><div id="sheet-editor"></div></body></html>'
+const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 const CSP_PREFIX = 'default-src \'self\''
 
 let database: TestDatabase
@@ -25,6 +27,7 @@ beforeAll(async () => {
   webRoot = join(mkdtempSync(join(tmpdir(), 'nerve-web-')), '.hidden-parent', 'dist')
   mkdirSync(join(webRoot, 'assets'), { recursive: true })
   writeFileSync(join(webRoot, 'index.html'), INDEX_HTML)
+  writeFileSync(join(webRoot, 'editor.html'), EDITOR_HTML)
   writeFileSync(join(webRoot, 'assets/index-abc123.js'), 'console.log("app")')
   writeFileSync(join(webRoot, 'assets/worker-def456.js'), 'self.onmessage = () => {}')
   writeFileSync(join(webRoot, 'favicon.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>')
@@ -53,11 +56,21 @@ describe('US-M1-09 托管前端产物', () => {
     expect(await response.text()).toBe(INDEX_HTML)
   })
 
-  it('页面路由（没有扩展名的路径）回退到入口页', async () => {
-    for (const path of ['/login', '/documents/0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d', '/no-such-page']) {
+  it('页面路由（没有扩展名的路径）回退到平台页面', async () => {
+    for (const path of ['/login', '/documents', '/documents/not-a-uuid', `/documents/${DOCUMENT_ID}/`, `/documents/${DOCUMENT_ID}/x`, '/no-such-page']) {
       const response = await get(path)
       expect(response.status, path).toBe(200)
-      expect(await response.text()).toBe(INDEX_HTML)
+      expect(await response.text(), path).toBe(INDEX_HTML)
+    }
+  })
+
+  it('编辑器页的地址（/documents/<id>）：编辑器页，同样带 CSP、不缓存（P4 设计 §3.8）', async () => {
+    for (const path of [`/documents/${DOCUMENT_ID}`, `/documents/${DOCUMENT_ID.toUpperCase()}`, `/documents/${DOCUMENT_ID}?from=list`]) {
+      const response = await get(path)
+      expect(response.status, path).toBe(200)
+      expect(response.headers.get('content-security-policy')).toMatch(new RegExp(`^${CSP_PREFIX}`))
+      expect(response.headers.get('cache-control')).toBe('no-store')
+      expect(await response.text(), path).toBe(EDITOR_HTML)
     }
   })
 
@@ -121,6 +134,9 @@ describe('没有配置或配置错了', () => {
     try {
       const config = loadConfig(testEnvironment(database.url, { NERVE_WEB_ROOT: empty }))
       await expect(createApplication(config, { logDestination: captureLogs().destination })).rejects.toThrow(/没有入口页 index\.html/)
+      // 只有平台页面、没有编辑器页（例如指向了旧的构建目录）同样启动失败
+      writeFileSync(join(empty, 'index.html'), INDEX_HTML)
+      await expect(createApplication(config, { logDestination: captureLogs().destination })).rejects.toThrow(/没有入口页 editor\.html/)
     }
     finally {
       rmSync(empty, { recursive: true, force: true })

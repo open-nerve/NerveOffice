@@ -139,6 +139,24 @@ describe('US-M1-02 登录与退出', () => {
     expect(currentPath(app)).toBe('/?view=list')
   })
 
+  it('登录后要回到编辑器页：整页打开（编辑器页是另一个入口，P4 设计 §3.8）', async () => {
+    const editorPath = `/documents/${document(7).id}`
+    installFakeApi({ ...LOGGED_OUT, 'POST /api/auth/login': () => json(200, SESSION) })
+    const app = renderApp(`/login?from=${encodeURIComponent(editorPath)}`)
+    await fillLogin('alice', 'correct horse')
+    await waitFor(() => expect(app.page.visits).toEqual([editorPath]))
+    expect(currentPath(app)).toBe(`/login?from=${encodeURIComponent(editorPath)}`)
+  })
+
+  it('已登录时打开登录页、要去的是编辑器页：整页打开，只打开一次', async () => {
+    const editorPath = `/documents/${document(7).id}?x=1`
+    installFakeApi(LOGGED_IN)
+    const app = renderApp(`/login?from=${encodeURIComponent(editorPath)}`)
+    await waitFor(() => expect(app.page.visits).toEqual([editorPath]))
+    await settle()
+    expect(app.page.visits).toEqual([editorPath])
+  })
+
   it('已登录时打开登录页：确认会话之前显示骨架屏、不显示表单，随后直接回到首页（审查 B14）', async () => {
     const pending = deferred()
     installFakeApi({ 'GET /api/auth/session': pending.handler, ...NO_DOCUMENTS })
@@ -416,6 +434,12 @@ describe('US-M1-03 个人空间的文档列表', () => {
     expect(screen.queryByRole('status', { name: '正在加载文档列表…' })).not.toBeInTheDocument()
   })
 
+  it('条目是整页打开编辑器页的链接（编辑器页是另一个入口）', async () => {
+    installFakeApi({ ...LOGGED_IN, 'GET /api/documents': () => json(200, { items: [document(1)], nextCursor: null }) })
+    renderApp('/')
+    expect(await screen.findByRole('link', { name: /文档 1/ })).toHaveAttribute('href', `/documents/${document(1).id}`)
+  })
+
   it('空列表：明确的说明', async () => {
     installFakeApi({ ...LOGGED_IN, ...NO_DOCUMENTS })
     renderApp('/')
@@ -471,6 +495,46 @@ describe('US-M1-03 个人空间的文档列表', () => {
     expect(await screen.findByRole('alert', {}, { timeout: 3000 })).toHaveTextContent('网络连接失败，请检查网络后重试')
     expect(screen.getByText('文档 1')).toBeInTheDocument()
     expect(requestCount(api, 'GET /api/documents?cursor=c1')).toBe(2)
+  })
+})
+
+describe('US-M1-04 新建表格', () => {
+  const created = { ...document(9), title: '未命名表格', spaceId: SESSION.personalSpace.id, revision: 1, profile: 'sheet@1', formatVersion: 1, permissions: { canEdit: true } }
+
+  it('新建：带 requestId 发出请求，建好之后整页打开编辑器页；进行中与离开之前按钮都标为不可用，重复点击不再请求', async () => {
+    const pending = deferred()
+    const api = installFakeApi({ ...LOGGED_IN, ...NO_DOCUMENTS, 'POST /api/documents': pending.handler })
+    const app = renderApp('/')
+    fireEvent.click(await screen.findByRole('button', { name: '新建表格' }))
+    const busy = await screen.findByRole('button', { name: '正在新建…' })
+    expect(busy).toHaveAttribute('aria-disabled', 'true')
+    fireEvent.click(busy)
+    pending.resolve(json(201, created))
+    await waitFor(() => expect(app.page.visits).toEqual([`assign /documents/${created.id}`]))
+    expect(screen.getByRole('button', { name: '正在新建…' })).toHaveAttribute('aria-disabled', 'true')
+    fireEvent.click(screen.getByRole('button', { name: '正在新建…' }))
+    await settle()
+    expect(requestCount(api, 'POST /api/documents')).toBe(1)
+    const body = api.requests.find(request => request.key === 'POST /api/documents')?.body
+    expect(body).toEqual({ type: 'sheet', requestId: expect.stringMatching(/^[\da-f-]{36}$/) as unknown })
+    expect(api.requests.find(request => request.key === 'POST /api/documents')?.headers['x-csrf-token']).toBe('csrf-1')
+  })
+
+  it('网络错误：提示失败，再点沿用同一个 requestId（同一次新建只生成一份）；确定失败之后再点换一个', async () => {
+    const api = installFakeApi({ ...LOGGED_IN, ...NO_DOCUMENTS, 'POST /api/documents': networkFailure })
+    const app = renderApp('/')
+    fireEvent.click(await screen.findByRole('button', { name: '新建表格' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('新建表格失败：网络连接失败，请检查网络后重试')
+    api.on('POST /api/documents', () => apiError(400, 'REQUEST_INVALID'))
+    fireEvent.click(screen.getByRole('button', { name: '新建表格' }))
+    await waitFor(() => expect(requestCount(api, 'POST /api/documents')).toBe(2))
+    expect(await screen.findByRole('alert')).toHaveTextContent('新建表格失败：请求的内容不合法')
+    api.on('POST /api/documents', () => json(201, created))
+    fireEvent.click(screen.getByRole('button', { name: '新建表格' }))
+    await waitFor(() => expect(app.page.visits).toEqual([`assign /documents/${created.id}`]))
+    const ids = api.requests.filter(request => request.key === 'POST /api/documents').map(request => (request.body as { requestId: string }).requestId)
+    expect(ids[1]).toBe(ids[0])
+    expect(ids[2]).not.toBe(ids[0])
   })
 })
 

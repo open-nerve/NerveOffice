@@ -14,6 +14,7 @@ export {
   UNIVER_SDK_VERSION,
 } from './documents/content.ts'
 export type { RevisionConflictDetails, SaveContentQuery, SaveContentResponse } from './documents/content.ts'
+export { DOCUMENT_PAGE_PATTERN, documentIdFromPagePath, documentPagePath } from './documents/document-page.ts'
 export {
   createDocumentRequestSchema,
   DEFAULT_DOCUMENT_TITLES,

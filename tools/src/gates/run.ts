@@ -12,7 +12,7 @@ import { commandJson, packageName, readJson, readText, readWorkspaceConfig, REPO
 import { checkStories, parseDesignStoryIds, parseRegistry, testsFromPlaywrightList, testsFromVitestList } from '../stories/stories.ts'
 import { checkFileTypes, checkTestOnlyArtifacts, classifyArtifact, scanArtifacts } from './artifacts.ts'
 import { checkAudit } from './audit.ts'
-import { checkBudgets, viteManifestSchema } from './budgets.ts'
+import { checkBudgets, initialFiles, initialStyles, viteManifestSchema } from './budgets.ts'
 import { checkGraphComplete, checkSingletons, checkUniver, collectInstalled } from './dependency-graph.ts'
 import { bundledPackagesSchema, checkLicenseBundle } from './license-bundle.ts'
 import { checkDevelopmentLicenses, checkProductionLicenses, flattenLicenseReport, licensesByPath } from './licenses.ts'
@@ -21,7 +21,7 @@ import { MIGRATIONS_DIR } from './migrations.ts'
 import { checkPins } from './pins.ts'
 import { checkPnpmConfig, checkPnpmfiles, PNPMFILE_NAMES } from './pnpm-config.ts'
 import { auditReportSchema, licenseReportSchema, lsOutputSchema } from './pnpm-outputs.ts'
-import { ARTIFACT_POLICY, AUDIT_EXCEPTIONS, ENTRY_BUDGETS, LICENSE_EXCEPTIONS, PNPM_POLICY, PRODUCTION_LICENSES, SINGLETON_PACKAGES, UNIVER_POLICY } from './policy.ts'
+import { ARTIFACT_POLICY, AUDIT_EXCEPTIONS, ENTRY_BUDGETS, LICENSE_EXCEPTIONS, PLATFORM_ENTRIES, PNPM_POLICY, PRODUCTION_LICENSES, SINGLETON_PACKAGES, UNIVER_POLICY, WORKER_BUDGETS } from './policy.ts'
 import { runSchemaGate } from './schema-gate.ts'
 
 export const GATE_NAMES = ['pins', 'config', 'stories', 'migrations', 'schema', 'deps', 'licenses', 'artifacts', 'budgets', 'audit'] as const
@@ -129,6 +129,17 @@ function filesIn(dir: string): string[] {
     .sort()
 }
 
+function readManifest(distDir: string): ReturnType<typeof viteManifestSchema.parse> | undefined {
+  const manifestFile = join(distDir, '.vite', 'manifest.json')
+  return existsSync(manifestFile) ? viteManifestSchema.parse(JSON.parse(readFileSync(manifestFile, 'utf8'))) : undefined
+}
+
+/** 平台页面的产物（入口页、首屏的 JS 与样式）：地址只按具体地址放行，前缀的登记不适用（P4 设计 §3.9） */
+function platformFiles(distDir: string): Set<string> {
+  const manifest = readManifest(distDir) ?? {}
+  return new Set(PLATFORM_ENTRIES.flatMap(entry => [entry, ...(initialFiles(manifest, entry) ?? []), ...initialStyles(manifest, entry)]))
+}
+
 /** distDir 是 web 构建产物的目录（绝对路径）。 */
 export function artifactsGate(distDir: string): GateOutcome {
   const title = '产物扫描与第三方许可清单'
@@ -136,7 +147,8 @@ export function artifactsGate(distDir: string): GateOutcome {
     return { name: 'artifacts', title, violations: [{ rule: 'artifacts/missing-build', subject: relative(REPO_ROOT, distDir), detail: '没有构建产物，先执行 pnpm build' }], notes: [] }
   const files = filesIn(distDir)
   const textFiles = files.filter(path => classifyArtifact(path) === 'text')
-  const { violations, hosts, runtimeHosts, unusedAddresses, knownDynamicCode } = scanArtifacts(textFiles.map(path => ({ path, content: readFileSync(join(distDir, path), 'utf8') })), ARTIFACT_POLICY)
+  const scanned = textFiles.map(path => ({ path, content: readFileSync(join(distDir, path), 'utf8') }))
+  const { violations, hosts, runtimeHosts, unusedAddresses, knownDynamicCode, globalThisProbes } = scanArtifacts(scanned, ARTIFACT_POLICY, { strictFiles: platformFiles(distDir) })
   const bundleFile = join(distDir, '.vite', 'third-party-packages.json')
   const bundle = existsSync(bundleFile) ? bundledPackagesSchema.parse(JSON.parse(readFileSync(bundleFile, 'utf8'))) : undefined
   const bundleViolations: Violation[] = bundle === undefined
@@ -152,7 +164,7 @@ export function artifactsGate(distDir: string): GateOutcome {
       `${files.length} 个文件，扫描其中 ${textFiles.length} 个；打进产物的第三方包 ${bundle?.length ?? 0} 个`,
       `出现的主机：${hostSummary}；主机在运行时拼出的地址 ${runtimeHosts} 处（由 CSP 兜底）`,
       `允许清单里这次没出现的地址（核对后删除）：${unusedAddresses.join('、') || '无'}`,
-      `已登记的动态代码（出现次数为 0 的登记已经过时，核对后删除）：${knownSummary}`,
+      `已登记的动态代码（出现次数为 0 的登记已经过时，核对后删除）：${knownSummary}；全局对象探测 ${globalThisProbes} 处（上限 ${ARTIFACT_POLICY.globalThisProbeMax}）`,
     ],
   }
 }
@@ -160,11 +172,17 @@ export function artifactsGate(distDir: string): GateOutcome {
 /** distDir 是 web 构建产物的目录（绝对路径）。 */
 export function budgetsGate(distDir: string): GateOutcome {
   const title = '首屏体积预算'
-  const manifestFile = join(distDir, '.vite', 'manifest.json')
-  if (!existsSync(manifestFile))
+  const manifest = readManifest(distDir)
+  if (manifest === undefined)
     return { name: 'budgets', title, violations: [{ rule: 'budgets/missing-build', subject: relative(REPO_ROOT, distDir), detail: '没有构建清单，先执行 pnpm build' }], notes: [] }
-  const manifest = viteManifestSchema.parse(JSON.parse(readFileSync(manifestFile, 'utf8')))
-  return { name: 'budgets', title, ...checkBudgets(manifest, ENTRY_BUDGETS, file => gzipSync(readFileSync(join(distDir, file))).length) }
+  return {
+    name: 'budgets',
+    title,
+    ...checkBudgets(manifest, ENTRY_BUDGETS, WORKER_BUDGETS, {
+      gzipSize: file => gzipSync(readFileSync(join(distDir, file))).length,
+      readText: file => readFileSync(join(distDir, file), 'utf8'),
+    }),
+  }
 }
 
 /** today 是当天的日期（YYYY-MM-DD）。 */

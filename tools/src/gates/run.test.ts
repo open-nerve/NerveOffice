@@ -73,7 +73,7 @@ describe('US-M1-11 产物门禁的装配', () => {
     expect(outcome.violations).toEqual([])
     expect(outcome.notes).toEqual(expect.arrayContaining([
       '出现的主机：www.w3.org×1；主机在运行时拼出的地址 1 处（由 CSP 兜底）',
-      '已登记的动态代码（出现次数为 0 的登记已经过时，核对后删除）：zod 的 JIT 探测×0、zod 的 JIT 编译器×0',
+      '已登记的动态代码（出现次数为 0 的登记已经过时，核对后删除）：zod 的 JIT 探测×0、zod 的 JIT 编译器×0；全局对象探测 0 处（上限 2）',
     ]))
     expect(outcome.notes.find(note => note.startsWith('允许清单里这次没出现的地址'))).toContain('http://localhost')
   })
@@ -92,13 +92,30 @@ describe('US-M1-11 产物门禁的装配', () => {
 })
 
 describe('US-M1-11 体积预算门禁的装配', () => {
+  /** 两个入口与编辑器页创建的公式 Worker */
+  function dist(indexContent: string): string {
+    return writeDist({
+      '.vite/manifest.json': JSON.stringify({ 'index.html': { file: 'assets/index.js' }, 'editor.html': { file: 'assets/editor.js' } }),
+      'assets/index.js': indexContent,
+      'assets/editor.js': 'new Worker(new URL(`/assets/formula.worker-a1.js`,``+import.meta.url),{type:`module`})',
+      'assets/formula.worker-a1.js': 'self.onmessage=()=>{}',
+    })
+  }
+
   it('按构建清单与产物文件计算：小的产物通过；平台页面超出预算时违规', () => {
-    const small = writeDist({ '.vite/manifest.json': JSON.stringify({ 'index.html': { file: 'assets/index.js' } }), 'assets/index.js': 'console.log(1)' })
-    expect(budgetsGate(small).violations).toEqual([])
+    expect(budgetsGate(dist('console.log(1)')).violations).toEqual([])
     // 随机数据几乎压缩不了：200 KiB 随机字节的 base64（约 273 KiB 文本）gzip 之后仍超过 180 KiB 的预算
     const random = randomBytes(200 * 1024).toString('base64')
-    const large = writeDist({ '.vite/manifest.json': JSON.stringify({ 'index.html': { file: 'assets/index.js' } }), 'assets/index.js': random })
-    expect(budgetsGate(large).violations.map(v => v.rule)).toEqual(['budgets/exceeded'])
+    expect(budgetsGate(dist(random)).violations.map(v => v.rule)).toEqual(['budgets/exceeded'])
+  })
+
+  it('编辑器页的入口没有引用公式 Worker：违规', () => {
+    const noWorker = writeDist({
+      '.vite/manifest.json': JSON.stringify({ 'index.html': { file: 'assets/index.js' }, 'editor.html': { file: 'assets/editor.js' } }),
+      'assets/index.js': 'console.log(1)',
+      'assets/editor.js': 'console.log(2)',
+    })
+    expect(budgetsGate(noWorker).violations.map(v => v.rule)).toEqual(['budgets/missing-worker'])
   })
 
   it('违规：没有构建清单', () => {

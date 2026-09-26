@@ -4,8 +4,9 @@ import type { DataRouter, RouteObject } from 'react-router'
 import type { PageLocation } from '../shared/lib/page-location.ts'
 import type { SessionChannel } from '../shared/lib/session-channel.ts'
 import { createBrowserRouter } from 'react-router'
-import { isLoginPage, LOGIN_PATH, loginPath, requestSession, sessionQueryOptions } from '../features/auth/index.ts'
-import { isAuthenticationError, setCsrfToken } from '../shared/api/index.ts'
+import { sessionQueryOptions } from '../features/auth/index.ts'
+import { isAuthenticationError, requestSession, setCsrfToken } from '../shared/api/index.ts'
+import { isLoginPage, LOGIN_PATH, loginPath } from '../shared/lib/login-path.ts'
 import { browserPageLocation } from '../shared/lib/page-location.ts'
 import { openSessionChannel } from '../shared/lib/session-channel.ts'
 import { createQueryClient } from './query-client.ts'
@@ -14,6 +15,8 @@ import { appRoutes } from './routes.ts'
 export interface AppRuntime {
   readonly router: DataRouter
   readonly queryClient: QueryClient
+  /** 整页跳转：组件经 PageLocationContext 取用 */
+  readonly page: PageLocation
   /** 不再接收其他标签页的消息。页面上随页面一起结束；测试里每个用例结束时调用 */
   readonly dispose: () => void
 }
@@ -141,6 +144,7 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
   return {
     router,
     queryClient,
+    page,
     dispose: () => {
       unsubscribe()
       channel.close()

@@ -1,6 +1,7 @@
 import type { RouteObject } from 'react-router'
-import { LOGIN_PATH, LoginPage, RequireSession } from '../features/auth/index.ts'
+import { LoginPage, RequireSession } from '../features/auth/index.ts'
 import { DocumentListPage } from '../features/documents/index.ts'
+import { LOGIN_PATH } from '../shared/lib/login-path.ts'
 import { AppShell } from './layout/app-shell.tsx'
 import { ErrorPage } from './pages/error-page.tsx'
 import { NotFoundPage } from './pages/not-found-page.tsx'

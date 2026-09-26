@@ -79,7 +79,8 @@ test.describe('US-M1-03 个人空间的文档列表', () => {
     await loadMore.focus()
     await page.keyboard.press('Enter')
     await expect(items).toHaveCount(DOCUMENT_LIST_DEFAULT_LIMIT + 5)
-    await expect(items.nth(DOCUMENT_LIST_DEFAULT_LIMIT)).toBeFocused()
+    // 条目是打开编辑器页的链接：焦点在第一个新条目的链接上
+    await expect(items.nth(DOCUMENT_LIST_DEFAULT_LIMIT).getByRole('link')).toBeFocused()
     // 没有下一页了，按钮不再显示
     await expect(loadMore).toBeHidden()
   })

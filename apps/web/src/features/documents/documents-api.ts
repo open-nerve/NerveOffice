@@ -1,5 +1,5 @@
-import type { DocumentListResponse } from '@nerve-office/contracts'
-import { documentListResponseSchema } from '@nerve-office/contracts'
+import type { CreateDocumentRequest, DocumentDetail, DocumentListResponse } from '@nerve-office/contracts'
+import { documentDetailSchema, documentListResponseSchema } from '@nerve-office/contracts'
 import { infiniteQueryOptions } from '@tanstack/react-query'
 import { apiRequest } from '../../shared/api/index.ts'
 
@@ -18,4 +18,9 @@ export function personalDocumentsQueryOptions() {
     initialPageParam: null as string | null,
     getNextPageParam: page => page.nextCursor,
   })
+}
+
+/** 新建文档（US-M1-04）：同一个 requestId 重试只建一份。 */
+export async function createDocument(request: CreateDocumentRequest): Promise<DocumentDetail> {
+  return apiRequest('/api/documents', { method: 'POST', body: request, schema: documentDetailSchema })
 }

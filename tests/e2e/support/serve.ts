@@ -99,7 +99,7 @@ async function dropDatabase(name: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  for (const path of [`${API_DIST}/app/main.js`, `${WEB_ROOT}/index.html`]) {
+  for (const path of [`${API_DIST}/app/main.js`, `${WEB_ROOT}/index.html`, `${WEB_ROOT}/editor.html`]) {
     if (!existsSync(path))
       throw new Error(`找不到 ${path}：先构建后端与测试构建（pnpm test:e2e 会自动构建）`)
   }
