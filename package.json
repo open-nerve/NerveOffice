@@ -35,6 +35,7 @@
     "gate:deps": "node tools/src/gates/cli.ts deps",
     "gate:licenses": "node tools/src/gates/cli.ts licenses",
     "gate:artifacts": "node tools/src/gates/cli.ts artifacts",
+    "gate:budgets": "node tools/src/gates/cli.ts budgets",
     "gate:audit": "node tools/src/gates/cli.ts audit",
     "verify": "node tools/src/verify/cli.ts",
     "clean": "node tools/src/verify/clean-cli.ts"
