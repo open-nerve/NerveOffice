@@ -33,6 +33,7 @@ describe('US-M1-11 A01 产物里 eval 与 Function 的引用（语法树）', ()
     ['全局对象上的 Function 赋给变量', 'const F=globalThis.Function;F(code)()'],
     ['用下标从全局对象上取', 'const F=window["Function"]'],
     ['Reflect.construct 的参数', 'Reflect.construct(Function,["x"])'],
+    ['new 的参数', 'new Proxy(Function,{})'],
     ['apply、call、bind', 'Function.apply(null,["x"])'],
     ['逗号表达式里的间接 eval', '(0,eval)(code)'],
     ['eval 赋给变量', 'const e=eval;e(code)'],
@@ -56,6 +57,7 @@ describe('US-M1-11 A01 产物里 eval 与 Function 的引用（语法树）', ()
     ['名字里含 Function 或 eval 的标识符', 'isFunction(x);b.myFunction("x");obj.eval2=1;a.evaluate(x)'],
     ['字符串与模板里的字样', 'const t="[object Function]";const u=\'AsyncFunction\';const v=`GeneratorFunction eval(x)`'],
     ['typeof、instanceof 的右边与相等比较', 'typeof x==="function";x instanceof Function;typeof Function;f===Function;g!=eval'],
+    ['其他一元与二元运算', 'const a=!eval,b=+Function,c="call" in Function,d=Function+""'],
     ['取 prototype', 'Function.prototype.call.bind(f);Function.prototype.toString.call(f);Function["prototype"];window.Function.prototype'],
     ['其他对象上的同名属性与方法', 'node.eval(scope);obj.Function(x)'],
     ['对象的键、方法名与类的成员', '({Function:1,eval(){}});class A{eval(){}static Function=1}'],
@@ -79,7 +81,8 @@ describe('US-M1-11 A01 产物里 eval 与 Function 的引用（语法树）', ()
   })
 
   it('很深的表达式（很长的拼接）不会耗尽调用栈', () => {
-    const code = `x=${Array.from({ length: 20_000 }).fill('a').join('+')}+Function`
+    // 左结合的拼接里，最左边的操作数在语法树的最深处
+    const code = `x=f(Function)+${Array.from({ length: 20_000 }).fill('a').join('+')}`
     expect(usages(code)).toEqual(['Function value'])
   })
 

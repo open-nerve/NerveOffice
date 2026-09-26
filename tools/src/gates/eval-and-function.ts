@@ -38,7 +38,6 @@ interface Visit {
 const NAMES: ReadonlySet<string> = new Set(['eval', 'Function'])
 /** 全局对象的各种写法：Worker 里是 self，页面里是 window，通用的是 globalThis；脚本顶层的 this 也是全局对象。 */
 const GLOBAL_OBJECTS: ReadonlySet<string> = new Set(['globalThis', 'window', 'self', 'global'])
-const EQUALITY: ReadonlySet<string> = new Set(['==', '===', '!=', '!=='])
 
 /** 这些字段里的标识符是名字（属性名、对象的键、标签、导入导出的名字），不是对全局绑定的引用；computed 为 true 时除外。 */
 const NAME_FIELDS: Readonly<Record<string, readonly string[]>> = {
@@ -120,16 +119,18 @@ function usageOf(parent: SyntaxNode, field: string): Usage | undefined {
       return field === 'callee' ? 'call' : 'value'
     case 'NewExpression':
       return field === 'callee' ? 'new' : 'value'
+    // 标签模板里只有标签可能是引用（模板本身是另一个节点）
     case 'TaggedTemplateExpression':
-      return field === 'tag' ? 'tag' : 'value'
+      return 'tag'
     // 取 prototype 不会生成代码，例如 Function.prototype.call.bind(f)、Function.prototype.toString.call(f)
     case 'MemberExpression':
       return field === 'object' && propertyName(parent) === 'prototype' ? undefined : 'value'
-    // 相等比较、instanceof 的右边只用来比较；instanceof 的左边会被交给右边对象的 Symbol.hasInstance，算作传出
-    case 'BinaryExpression':
-      return (parent.operator === 'instanceof' && field === 'right') || (typeof parent.operator === 'string' && EQUALITY.has(parent.operator)) ? undefined : 'value'
+    // 一元与二元运算（typeof、比较、instanceof 的右边等）只读取或比较它，交不出去；
+    // 例外是 instanceof 的左边：它会被交给右边对象的 Symbol.hasInstance，算作传出
     case 'UnaryExpression':
-      return parent.operator === 'typeof' ? undefined : 'value'
+      return undefined
+    case 'BinaryExpression':
+      return parent.operator === 'instanceof' && field === 'left' ? 'value' : undefined
     default:
       return 'value'
   }

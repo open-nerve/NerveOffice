@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { readJson } from '../shared/repo.ts'
 import { readFixture } from './fixtures.ts'
+import { ARTIFACT_POLICY } from './policy.ts'
 import { artifactsGate, auditGate, budgetsGate, GATE_NAMES, runGate } from './run.ts'
 
 describe('US-M1-11 门禁对仓库现状通过', () => {
@@ -63,6 +64,30 @@ describe('US-M1-11 产物门禁的装配', () => {
     const { '.vite/third-party-packages.json': _omitted, ...withoutBundle } = clean
     const outcome = artifactsGate(writeDist({ ...withoutBundle, 'assets/w.js': 'self.eval(x)', 'config.json': '{"endpoint":"https://evil.example.com"}', 'notes.md': '说明' }))
     expect(outcome.violations.map(v => v.rule).sort()).toEqual(['artifacts/address', 'artifacts/dynamic-code', 'artifacts/file-type', 'license-bundle/missing-file'])
+  })
+
+  it('说明列出出现的主机、主机在运行时拼出的地址、允许清单里这次没出现的地址与已登记的动态代码', () => {
+    // 样例是产物里的模板字符串原文，不是要插值
+    // eslint-disable-next-line no-template-curly-in-string
+    const outcome = artifactsGate(writeDist({ ...clean, 'assets/index.js': 'const ns="http://www.w3.org/2000/svg";const u=`http://[${e}]`' }))
+    expect(outcome.violations).toEqual([])
+    expect(outcome.notes).toEqual(expect.arrayContaining([
+      '出现的主机：www.w3.org×1；主机在运行时拼出的地址 1 处（由 CSP 兜底）',
+      '已登记的动态代码（出现次数为 0 的登记已经过时，核对后删除）：zod 的 JIT 探测×0、zod 的 JIT 编译器×0',
+    ]))
+    expect(outcome.notes.find(note => note.startsWith('允许清单里这次没出现的地址'))).toContain('http://localhost')
+  })
+
+  it('说明：没有出现地址时，主机写"无"', () => {
+    const outcome = artifactsGate(writeDist({ ...clean, 'assets/index.js': 'export const x = 1' }))
+    expect(outcome.notes).toContain('出现的主机：无；主机在运行时拼出的地址 0 处（由 CSP 兜底）')
+  })
+
+  it('说明：允许清单里的地址都出现时，没出现的地址写"无"', () => {
+    const every = ARTIFACT_POLICY.allowedAddresses.map(entry => JSON.stringify(entry.address)).join(',')
+    const outcome = artifactsGate(writeDist({ ...clean, 'assets/index.js': `export const addresses = [${every}]` }))
+    expect(outcome.violations).toEqual([])
+    expect(outcome.notes).toContain('允许清单里这次没出现的地址（核对后删除）：无')
   })
 })
 

@@ -104,8 +104,8 @@ function isJavaScript(path: string): boolean {
  * 模板字符串里不带花括号的插值 ${…} 算作地址的一部分，由 addressShape 分出固定的部分与运行时拼出的部分（审查 B2）。
  */
 const ABSOLUTE_URL = /\b(?:https?|wss?):(?:\\{0,2}\/){2}(?:[^\s"'`()<>\\,;{}$]|\\{1,2}\/|\$(?!\{)|\$\{[^{}]*\})+/gi
-/** 字符串里的协议相对地址：整个字符串就是地址，主机是固定的域名。 */
-const PROTOCOL_RELATIVE_URL = /["'`](\/\/(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?(?:[/?#][^"'`\s]*)?)["'`]/gi
+/** 字符串里的协议相对地址：整个字符串就是地址（前后紧挨着引号），主机是固定的域名。 */
+const PROTOCOL_RELATIVE_URL = /(?<=["'`])\/\/(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?(?:[/?#][^"'`\s]*)?(?=["'`])/gi
 const INTERPOLATION = /\$\{[^{}]*\}/g
 /** 插值在地址里的占位：地址里不会出现这个字符 */
 const HOLE = '\0'
@@ -132,6 +132,18 @@ function hostOf(hostAndPort: string): string {
   }
 }
 
+/** text 在第一个匹配之前的部分；没有匹配时是整个 text。 */
+function before(text: string, pattern: string | RegExp): string {
+  const index = typeof pattern === 'string' ? text.indexOf(pattern) : text.search(pattern)
+  return index < 0 ? text : text.slice(0, index)
+}
+
+/** 地址（以 协议:// 或 // 开头）里协议、用户信息与主机、端口这一段结束的位置：之后是路径、查询或片段。 */
+function authorityEnd(address: string): number {
+  const start = address.indexOf('//') + 2
+  return start + before(address.slice(start), /[/?#]/).length
+}
+
 /**
  * 地址原文（绝对地址，或以 // 开头的协议相对地址）的形状。插值之后的部分在运行时才有值：
  * 主机固定时按插值之前的部分检查（插值在路径、查询或端口里，例如 `https://t.example/c?u=${user}`）；
@@ -139,25 +151,20 @@ function hostOf(hostAndPort: string): string {
  */
 function addressShape(raw: string): AddressShape {
   const text = raw.replace(/\\+\//g, '/').replace(INTERPOLATION, HOLE)
-  const authority = /^(?:[a-z]+:)?\/\/([^/?#]*)/i.exec(text)?.[1] ?? ''
+  const authority = text.slice(text.indexOf('//') + 2, authorityEnd(text))
   const hostAndPort = authority.slice(authority.lastIndexOf('@') + 1)
   if (hostAndPort.replace(/^\[/, '').startsWith(HOLE)) {
-    const suffix = hostAndPort.slice(hostAndPort.lastIndexOf(HOLE) + 1).split(/[:\]]/, 1)[0] ?? ''
+    const suffix = before(hostAndPort.slice(hostAndPort.lastIndexOf(HOLE) + 1), /[:\]]/)
     return /\.[a-z]/i.test(suffix) ? { kind: 'suffix', host: `*${suffix.toLowerCase()}` } : { kind: 'runtime' }
   }
-  return {
-    kind: 'fixed',
-    address: text.split(HOLE, 1)[0] ?? text,
-    host: hostOf(hostAndPort.split(HOLE, 1)[0] ?? hostAndPort),
-    hostComplete: !hostAndPort.includes(HOLE),
-  }
+  return { kind: 'fixed', address: before(text, HOLE), host: hostOf(before(hostAndPort, HOLE)), hostComplete: !hostAndPort.includes(HOLE) }
 }
 
 /** 比较用的写法：协议与主机不区分大小写；句末的句点不属于地址（例如错误信息里的 "See https://….")。 */
 function comparableAddress(address: string): string {
   const trimmed = address.replace(/\.+$/, '')
-  const origin = /^(?:[a-z][\w+.-]*:)?\/\/[^/?#]*/i.exec(trimmed)?.[0] ?? ''
-  return origin.toLowerCase() + trimmed.slice(origin.length)
+  const end = authorityEnd(trimmed)
+  return trimmed.slice(0, end).toLowerCase() + trimmed.slice(end)
 }
 
 export function scanArtifacts(files: readonly ArtifactFile[], policy: ArtifactPolicy): ArtifactScan {
@@ -185,14 +192,15 @@ export function scanArtifacts(files: readonly ArtifactFile[], policy: ArtifactPo
     violations.push({ rule: 'artifacts/address', subject: file.path, detail: `${address ?? shape.host} 不在允许清单里（主机 ${shape.host}）：${context(file.content, index)}` })
   }
 
-  const knownCounts = new Map(policy.knownDynamicCode.map(known => [known.name, 0]))
+  // 已登记的动态代码每出现一次记一个名字
+  const knownHits: string[] = []
   for (const file of files) {
     // 已登记的动态代码所在的位置：落在这里的动态代码不算违规，按登记项计数
     const knownRanges: [number, number][] = []
     for (const known of policy.knownDynamicCode) {
       for (const match of file.content.matchAll(new RegExp(known.pattern.source, 'g'))) {
         knownRanges.push([match.index, match.index + match[0].length])
-        knownCounts.set(known.name, (knownCounts.get(known.name) ?? 0) + 1)
+        knownHits.push(known.name)
       }
     }
     const reportDynamicCode = (name: string, index: number): void => {
@@ -227,7 +235,7 @@ export function scanArtifacts(files: readonly ArtifactFile[], policy: ArtifactPo
     for (const match of file.content.matchAll(ABSOLUTE_URL))
       noteAddress(file, match[0], match.index)
     for (const match of file.content.matchAll(PROTOCOL_RELATIVE_URL))
-      noteAddress(file, match[1] ?? '', match.index)
+      noteAddress(file, match[0], match.index)
     const lower = file.content.toLowerCase()
     for (const keyword of policy.forbiddenKeywords) {
       const index = lower.indexOf(keyword.toLowerCase())
@@ -243,15 +251,15 @@ export function scanArtifacts(files: readonly ArtifactFile[], policy: ArtifactPo
       detail: `Function('return this') 出现 ${probes} 次，登记的上限是 ${policy.globalThisProbeMax} 次`,
     })
   }
-  for (const known of policy.knownDynamicCode) {
-    const count = knownCounts.get(known.name) ?? 0
+  const knownCounts = policy.knownDynamicCode.map(known => ({ known, count: knownHits.filter(name => name === known.name).length }))
+  for (const { known, count } of knownCounts) {
     if (count > known.max)
       violations.push({ rule: 'artifacts/known-dynamic-code', subject: known.name, detail: `出现 ${count} 次，登记的上限是 ${known.max} 次` })
   }
   for (const [keyword, sample] of keywordSamples)
     violations.push({ rule: 'artifacts/keyword', subject: keyword, detail: sample })
   const unusedAddresses = [...allowed].filter(([address]) => !usedAddresses.has(address)).map(([, original]) => original)
-  return { violations, hosts, runtimeHosts, unusedAddresses, knownDynamicCode: knownCounts }
+  return { violations, hosts, runtimeHosts, unusedAddresses, knownDynamicCode: new Map(knownCounts.map(({ known, count }) => [known.name, count])) }
 }
 
 /** 构建产物里允许出现的文件类型：text 类扫描内容（含 .json），binary 类只放行。 */
