@@ -23,6 +23,13 @@ describe('errorResponseSchema', () => {
   })
 
   it('多出的字段被丢弃：将来错误响应加字段时，旧页面仍然认得错误码', () => {
-    expect(errorResponseSchema.parse({ error: { ...valid.error, details: { field: 'x' } }, debug: true })).toEqual(valid)
+    expect(errorResponseSchema.parse({ error: { ...valid.error, stack: 'x' }, debug: true })).toEqual(valid)
+  })
+
+  it('可选的 details 是对象，原样保留', () => {
+    const details = { currentRevision: 3, source: null }
+    expect(errorResponseSchema.parse({ error: { ...valid.error, details } })).toEqual({ error: { ...valid.error, details } })
+    for (const invalid of [[1], 'x', null])
+      expect(errorResponseSchema.safeParse({ error: { ...valid.error, details: invalid } }).success, JSON.stringify(invalid)).toBe(false)
   })
 })

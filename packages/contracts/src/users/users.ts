@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { codePointLength, hasControlCharacters } from '../text/text.ts'
 
 /** 系统角色（00 号计划书 §5.2）。新增取值时，同时用迁移更新 users.system_role 的 CHECK 约束。 */
 export const USER_SYSTEM_ROLES = ['admin', 'member'] as const
@@ -25,21 +26,13 @@ export const usernameSchema = z.string()
   .transform(normalizeUsername)
   .pipe(z.string().regex(USERNAME_PATTERN, '用户名为 3–32 个字符，只能包含小写字母、数字与 . _ -，并以字母或数字开头'))
 
-/** 按码点计的长度：与 PostgreSQL 的 char_length 一致（JavaScript 的 length 按 UTF-16 计，表情符号算两个）。 */
-export function codePointLength(value: string): number {
-  return [...value].length
-}
-
-// eslint-disable-next-line no-control-regex -- 显示名与密码里不允许控制字符，要匹配的正是它们
-const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F-\u009F]/
-
 export const DISPLAY_NAME_MAX_LENGTH = 64
 
 /** 显示名：去掉首尾空白之后 1–64 个字符，不含控制字符。 */
 export const displayNameSchema = z.string()
   .trim()
   .refine(value => codePointLength(value) >= 1 && codePointLength(value) <= DISPLAY_NAME_MAX_LENGTH, `显示名为 1–${DISPLAY_NAME_MAX_LENGTH} 个字符`)
-  .refine(value => !CONTROL_CHARACTERS.test(value), '显示名不能包含控制字符')
+  .refine(value => !hasControlCharacters(value), '显示名不能包含控制字符')
 
 export const NEW_PASSWORD_MIN_LENGTH = 12
 export const NEW_PASSWORD_MAX_LENGTH = 256
@@ -52,4 +45,4 @@ export const NEW_PASSWORD_MAX_LENGTH = 256
 export const newPasswordSchema = z.string()
   .refine(value => codePointLength(value) >= NEW_PASSWORD_MIN_LENGTH, `密码至少 ${NEW_PASSWORD_MIN_LENGTH} 个字符`)
   .refine(value => codePointLength(value) <= NEW_PASSWORD_MAX_LENGTH, `密码最多 ${NEW_PASSWORD_MAX_LENGTH} 个字符`)
-  .refine(value => !CONTROL_CHARACTERS.test(value), '密码不能包含控制字符（例如换行、制表符）')
+  .refine(value => !hasControlCharacters(value), '密码不能包含控制字符（例如换行、制表符）')

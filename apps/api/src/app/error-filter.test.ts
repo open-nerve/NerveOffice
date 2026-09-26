@@ -9,6 +9,12 @@ describe('mapException', () => {
     expect(mapException(new AppError('SERVICE_UNAVAILABLE', '正在退出'))).toEqual({ status: 503, code: 'SERVICE_UNAVAILABLE', message: '正在退出', unexpected: false, headers: {} })
   })
 
+  it('AppError 带的详情原样带出；不带时没有这个字段', () => {
+    const details = { currentRevision: 4, source: null }
+    expect(mapException(new AppError('DOCUMENT_REVISION_CONFLICT', undefined, { details }))).toMatchObject({ status: 409, details })
+    expect(mapException(new AppError('NOT_FOUND'))).not.toHaveProperty('details')
+  })
+
   it('没有匹配的路由 → NOT_FOUND，用默认说明，不用框架的说明', () => {
     expect(mapException(new NotFoundException('Cannot GET /api/x'))).toEqual({ status: 404, code: 'NOT_FOUND', message: '请求的资源不存在或无权访问', unexpected: false, headers: {} })
   })
@@ -84,6 +90,14 @@ describe('HttpErrorFilter', () => {
     expect(response.statusCode).toBe(404)
     expect(response.body).toEqual({ error: { code: 'NOT_FOUND', message: '请求的资源不存在或无权访问', requestId: 'req-1' } })
     expect(response.err).toBeUndefined()
+  })
+
+  it('AppError 带了详情时，错误响应里加上 details', () => {
+    const response = fakeResponse()
+    const details = { currentRevision: 7, source: { clientInstanceId: '0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0d', localSeq: 3 } }
+    filter.catch(new AppError('DOCUMENT_REVISION_CONFLICT', undefined, { details }), hostFor({ id: 'req-d' }, response))
+    expect(response.statusCode).toBe(409)
+    expect(response.body).toEqual({ error: { code: 'DOCUMENT_REVISION_CONFLICT', message: '别处保存了更新的版本，本次保存没有写入', requestId: 'req-d', details } })
   })
 
   it('意外错误把异常挂到 response.err，由请求日志记下异常与堆栈', () => {

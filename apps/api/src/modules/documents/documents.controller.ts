@@ -1,14 +1,32 @@
-import type { DocumentDetail, DocumentListQuery, DocumentListResponse } from '@nerve-office/contracts'
+import type { CreateDocumentRequest, DocumentDetail, DocumentListQuery, DocumentListResponse } from '@nerve-office/contracts'
+import type { AuditOrigin } from '../audit/index.ts'
 import type { Principal } from '../auth/index.ts'
-import { documentIdSchema, documentListQuerySchema } from '@nerve-office/contracts'
-import { Controller, Get, Param, Query } from '@nestjs/common'
+import { createDocumentRequestSchema, documentIdSchema, documentListQuerySchema } from '@nerve-office/contracts'
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common'
+import { RequestOrigin } from '../audit/index.ts'
 import { CurrentPrincipal } from '../auth/index.ts'
+import { DocumentCreationService } from './document-creation.service.ts'
 import { DocumentsService } from './documents.service.ts'
 
-/** 文档（P3 设计 §3.3）：个人空间的列表与元数据。 */
+type HttpOrigin = Extract<AuditOrigin, { source: 'http' }>
+
+/** 文档（P3 设计 §3.3、P4 设计 §3.3）：个人空间的列表、元数据与新建。 */
 @Controller('documents')
 export class DocumentsController {
-  constructor(private readonly documents: DocumentsService) {}
+  constructor(
+    private readonly documents: DocumentsService,
+    private readonly creation: DocumentCreationService,
+  ) {}
+
+  /** 同一个 requestId 的重放同样是 201，返回那份文档的当前元数据：与原请求相同的状态（P4 设计 §3.3）。 */
+  @Post()
+  async create(
+    @CurrentPrincipal() principal: Principal,
+    @Body({ schema: createDocumentRequestSchema }) body: CreateDocumentRequest,
+    @RequestOrigin() origin: HttpOrigin,
+  ): Promise<DocumentDetail> {
+    return this.creation.create(principal.user.id, body, origin)
+  }
 
   @Get()
   async list(

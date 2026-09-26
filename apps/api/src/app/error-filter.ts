@@ -1,6 +1,7 @@
 import type { ErrorCode, ErrorResponse } from '@nerve-office/contracts'
 import type { ArgumentsHost, ExceptionFilter } from '@nestjs/common'
 import type { Request, Response } from 'express'
+import type { ErrorDetails } from '../shared/errors/app-error.ts'
 import { ERROR_CODES } from '@nerve-office/contracts'
 import { Catch, HttpException } from '@nestjs/common'
 import { AppError } from '../shared/errors/app-error.ts'
@@ -13,6 +14,8 @@ export interface MappedError {
   readonly unexpected: boolean
   /** 随错误响应下发的响应头（AppError 带的，例如 Retry-After） */
   readonly headers: Readonly<Record<string, string>>
+  /** 随错误响应下发的详情（AppError 带的，例如修订号冲突的当前修订号） */
+  readonly details?: ErrorDetails
 }
 
 /**
@@ -26,8 +29,10 @@ const FRAMEWORK_CLIENT_ERRORS: ReadonlyMap<number, ErrorCode> = new Map([
 
 /** 把任意异常映射为统一的错误响应（P2 设计 §3.5，ADR-006）。只有 AppError 的说明会返回给客户端。 */
 export function mapException(exception: unknown): MappedError {
-  if (exception instanceof AppError)
-    return { status: exception.status, code: exception.code, message: exception.message, unexpected: false, headers: exception.headers }
+  if (exception instanceof AppError) {
+    const mapped = { status: exception.status, code: exception.code, message: exception.message, unexpected: false, headers: exception.headers }
+    return exception.details === undefined ? mapped : { ...mapped, details: exception.details }
+  }
   const code = exception instanceof HttpException ? FRAMEWORK_CLIENT_ERRORS.get(exception.getStatus()) : undefined
   if (code !== undefined)
     return { status: ERROR_CODES[code].status, code, message: ERROR_CODES[code].message, unexpected: false, headers: {} }
@@ -38,7 +43,7 @@ function asError(exception: unknown): Error {
   return exception instanceof Error ? exception : new Error('抛出的不是 Error', { cause: exception })
 }
 
-/** 全局异常过滤器：所有异常都得到 `{ error: { code, message, requestId } }`。 */
+/** 全局异常过滤器：所有异常都得到 `{ error: { code, message, requestId } }`，AppError 带了详情时再加上 `details`。 */
 @Catch()
 export class HttpErrorFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost): void {
@@ -62,7 +67,8 @@ export class HttpErrorFilter implements ExceptionFilter {
     }
     // 请求标识由排在前面的请求日志中间件生成；万一没有，也要给出合法的错误响应
     const requestId = typeof request.id === 'string' ? request.id : 'unknown'
-    const body: ErrorResponse = { error: { code: mapped.code, message: mapped.message, requestId } }
+    const error: ErrorResponse['error'] = { code: mapped.code, message: mapped.message, requestId }
+    const body: ErrorResponse = { error: mapped.details === undefined ? error : { ...error, details: mapped.details } }
     for (const [name, value] of Object.entries(mapped.headers))
       response.setHeader(name, value)
     response.status(mapped.status).json(body)

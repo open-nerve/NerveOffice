@@ -23,4 +23,10 @@ describe('AppError', () => {
     expect(new AppError('TOO_MANY_ATTEMPTS', undefined, { headers: { 'Retry-After': '60' } }).headers).toEqual({ 'Retry-After': '60' })
     expect(new AppError('NOT_FOUND').headers).toEqual({})
   })
+
+  it('可以带上随错误响应下发的详情', () => {
+    const details = { currentRevision: 3, source: null }
+    expect(new AppError('DOCUMENT_REVISION_CONFLICT', undefined, { details }).details).toEqual(details)
+    expect(new AppError('NOT_FOUND').details).toBeUndefined()
+  })
 })
