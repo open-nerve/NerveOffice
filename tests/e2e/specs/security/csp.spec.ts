@@ -1,5 +1,5 @@
 // CSP 与安全头（P3，US-M1-09）：所有响应都带定稿的策略；页面与 Worker 两个作用域的阳性对照中，违规的请求被拦截。
-// 表格编辑器（含公式 Worker）在策略下正常工作的部分随 P4 的编辑器页补上。
+// 表格编辑器（含公式 Worker）在策略下正常工作的部分在 specs/editor/csp.spec.ts（P4）。
 import type { Page } from '@playwright/test'
 import type { LocalServer } from '../../support/servers.ts'
 import { expect, test } from '../../support/fixtures.ts'

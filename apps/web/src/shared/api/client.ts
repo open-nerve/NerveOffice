@@ -65,7 +65,7 @@ export interface RequestOptions<T> {
 export interface RawRequestOptions {
   method?: HttpMethod
   /** 请求体与它的内容类型 */
-  body?: { readonly contentType: string, readonly data: Blob | string }
+  body?: { readonly contentType: string, readonly data: Uint8Array<ArrayBuffer> | string }
   /** 期望的响应类型，默认 JSON */
   accept?: string
   signal?: AbortSignal

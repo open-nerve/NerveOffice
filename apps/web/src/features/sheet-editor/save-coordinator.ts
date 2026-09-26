@@ -87,8 +87,10 @@ interface UnconfirmedSave {
   readonly settled: boolean
 }
 
+const UTF8 = new TextEncoder()
+
 function utf8Length(text: string): number {
-  return new Blob([text]).size
+  return UTF8.encode(text).byteLength
 }
 
 function conflictDetails(error: unknown): RevisionConflictDetails | null | undefined {

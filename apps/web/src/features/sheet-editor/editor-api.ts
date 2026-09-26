@@ -27,12 +27,22 @@ export async function fetchContent(documentId: string, signal?: AbortSignal): Pr
   return { snapshot: await response.text(), revision }
 }
 
-/** 快照压缩成 gzip（CompressionStream，主线程；5 MiB 时阻塞接近 100 ms，放进 Worker 是 M4 发件箱的设计）。 */
-export async function gzipText(text: string): Promise<Blob> {
-  return new Response(new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'))).blob()
+/**
+ * 快照压缩成 gzip（CompressionStream，主线程；5 MiB 时阻塞接近 100 ms，放进 Worker 是 M4 发件箱的设计）。
+ * 全程在内存的字节上做，不经 Blob：WebKit 读取 Blob 要经它的网络进程（离线时读不出来，测试工具也看不到这样的请求体）。
+ */
+export async function gzipText(text: string): Promise<Uint8Array<ArrayBuffer>> {
+  const bytes = new TextEncoder().encode(text)
+  const source = new ReadableStream<Uint8Array<ArrayBuffer>>({
+    start(controller) {
+      controller.enqueue(bytes)
+      controller.close()
+    },
+  })
+  return new Uint8Array(await new Response(source.pipeThrough(new CompressionStream('gzip'))).arrayBuffer())
 }
 
-export async function saveContent(documentId: string, request: SaveRequest, compressed: Blob): Promise<SaveContentResponse> {
+export async function saveContent(documentId: string, request: SaveRequest, compressed: Uint8Array<ArrayBuffer>): Promise<SaveContentResponse> {
   const query = new URLSearchParams({
     baseRevision: String(request.baseRevision),
     requestId: request.requestId,
