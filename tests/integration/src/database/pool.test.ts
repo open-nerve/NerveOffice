@@ -1,9 +1,9 @@
 // 连接池（P2 设计 §3.3、§3.7）：超时设置取自配置；连接出错不让进程退出（审查 A1）；数据库报错的日志不带参数（审查 A2）。
-import type { Database } from '@nerve-office/api'
+import type { Database, Transaction } from '@nerve-office/api'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import { setTimeout as delay } from 'node:timers/promises'
-import { DATABASE, DatabaseModule, TransactionRunner } from '@nerve-office/api'
+import { AppError, DATABASE, DatabaseModule, TransactionRunner } from '@nerve-office/api'
 import { Controller, Get, Inject, Module } from '@nestjs/common'
 import { sql } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -80,5 +80,44 @@ describe('连接池', () => {
     const entry = app.logs.entries().find(log => log.requestId === requestId && log.level === 'error')
     expect(entry).toMatchObject({ err: { type: 'DrizzleQueryError', query: 'SELECT $1::uuid', cause: { type: 'DatabaseError', sqlState: '22P02' } } })
     expect(app.logs.text()).not.toContain(SENSITIVE)
+  })
+})
+
+describe('事务的连接（TransactionRunner，复验 N8）', () => {
+  // 连接池只有一个连接：放回的连接一定被下一个事务借到，换没换连接看后端的进程号
+  let single: TestApp
+
+  beforeAll(async () => {
+    single = await startTestApp({ databaseUrl: database.url, env: { NERVE_DATABASE_POOL_MAX: '1' } })
+  })
+
+  afterAll(async () => {
+    await single.close()
+  })
+
+  /** 测试直接在事务上查询（应用代码只能把事务交给仓储） */
+  async function backendPid(transaction: Transaction): Promise<number> {
+    const result = await (transaction as unknown as Database).execute<{ pid: number }>(sql`SELECT pg_backend_pid() AS pid`)
+    return Number(result.rows[0]?.pid)
+  }
+
+  it('业务错误结束的事务：回滚后连接照常放回；其他失败：丢弃这个连接，之后的事务用新连接', async () => {
+    const runner = single.runtime.get(TransactionRunner)
+    const first = await runner.run(backendPid)
+    await expect(runner.run(async (transaction) => {
+      await backendPid(transaction)
+      throw new AppError('NOT_FOUND')
+    })).rejects.toBeInstanceOf(AppError)
+    expect(await runner.run(backendPid)).toBe(first)
+
+    await expect(runner.run(async (transaction) => {
+      await (transaction as unknown as Database).execute(sql`SELECT ${'不是 UUID'}::uuid`)
+    })).rejects.toMatchObject({ cause: { code: '22P02' } })
+    const replaced = await runner.run(backendPid)
+    expect(replaced).not.toBe(first)
+    // 被丢弃的连接确实断开了
+    const db = single.runtime.get<Database>(DATABASE)
+    const alive = await db.execute<{ count: string }>(sql`SELECT count(*) AS count FROM pg_stat_activity WHERE pid = ${first}`)
+    expect(alive.rows[0]?.count).toBe('0')
   })
 })

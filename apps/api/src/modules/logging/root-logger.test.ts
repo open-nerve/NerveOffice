@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { captureLogs, drizzleError, SECRET_VALUE } from './logging.test-support.ts'
+import { captureLogs, drizzleError, pgError, SECRET_VALUE } from './logging.test-support.ts'
 import { createRootLogger, REDACTED_KEYS, REDACTION_CENSOR } from './root-logger.ts'
 
 describe('createRootLogger', () => {
@@ -43,6 +43,30 @@ describe('createRootLogger', () => {
     for (const entry of entries)
       expect(entry).toMatchObject({ err: { type: 'DrizzleQueryError', message: '数据库查询失败', query: 'select $1::uuid' } })
     expect(JSON.stringify(entries)).not.toContain(SECRET_VALUE)
+  })
+
+  it('只传异常、不给消息时，数据库错误的消息同样换成不带值的说明（复验 F4）', () => {
+    const logs = captureLogs()
+    const root = createRootLogger({ level: 'info', destination: logs.destination })
+    root.error({ err: drizzleError() })
+    root.error(pgError())
+    root.child({ requestId: 'req-1' }).error({ err: pgError() })
+    expect(logs.entries().map(entry => entry.msg)).toEqual(['数据库查询失败', '数据库报错（SQLSTATE 22P02）', '数据库报错（SQLSTATE 22P02）'])
+    expect(JSON.stringify(logs.entries())).not.toContain(SECRET_VALUE)
+  })
+
+  it('其他写法不变：普通异常用它自己的消息；给了消息就用给的；没有异常时不补消息', () => {
+    const logs = captureLogs()
+    const root = createRootLogger({ level: 'info', destination: logs.destination })
+    root.error(new Error('普通的错误'))
+    root.error({ err: pgError() }, '写入失败')
+    root.info({ port: 3000 })
+    root.info('只有消息')
+    const [plain, given, noError, onlyMessage] = logs.entries()
+    expect(plain).toMatchObject({ msg: '普通的错误', err: { message: '普通的错误' } })
+    expect(given).toMatchObject({ msg: '写入失败', err: { sqlState: '22P02' } })
+    expect(noError).not.toHaveProperty('msg')
+    expect(onlyMessage).toMatchObject({ msg: '只有消息' })
   })
 
   it.each(REDACTED_KEYS)('清单里的 %s 在各层都被脱敏', (key) => {

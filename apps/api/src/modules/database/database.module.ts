@@ -1,12 +1,11 @@
 import type { OnApplicationShutdown } from '@nestjs/common'
 import type { AppConfig } from '../config/index.ts'
 import { Inject, Injectable, Module } from '@nestjs/common'
-import { drizzle } from 'drizzle-orm/node-postgres'
 import pg from 'pg'
 import { APP_CONFIG } from '../config/index.ts'
 import { AppLogger } from '../logging/index.ts'
 import { DatabaseReadiness } from './database-readiness.ts'
-import { DATABASE, PG_POOL } from './database.ts'
+import { createDatabase, DATABASE, PG_POOL } from './database.ts'
 import { createPool } from './pool.ts'
 import { TransactionRunner } from './transaction-runner.ts'
 
@@ -33,7 +32,7 @@ class PoolLifecycle implements OnApplicationShutdown {
     {
       provide: DATABASE,
       inject: [PG_POOL],
-      useFactory: (pool: pg.Pool) => drizzle({ client: pool }),
+      useFactory: (pool: pg.Pool) => createDatabase(pool),
     },
     DatabaseReadiness,
     TransactionRunner,

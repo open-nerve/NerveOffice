@@ -38,6 +38,11 @@ describe('表定义与迁移同步', () => {
     expect(result.violations).toMatchObject([{ rule: 'schema/unknown', detail: expect.stringContaining('TTY') as unknown }])
   })
 
+  it('说没有变化，但标准错误里有内容：同样不算同步（复验 F7）', () => {
+    const result = runSchemaGate(migrations, () => ({ stdout: IN_SYNC.stdout, stderr: 'Error: failed to load schema\n' }))
+    expect(result.violations).toMatchObject([{ rule: 'schema/unknown', detail: expect.stringContaining('failed to load schema') as unknown }])
+  })
+
   it('没有任何输出也不算同步', () => {
     expect(runSchemaGate(migrations, () => ({ stdout: '', stderr: '' })).violations).toMatchObject([{ rule: 'schema/unknown' }])
   })

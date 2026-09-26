@@ -1,4 +1,5 @@
 import type { ShutdownSteps } from './shutdown.ts'
+import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createRootLogger } from '../modules/logging/index.ts'
 import { InFlightRequests } from './in-flight-requests.ts'
@@ -58,7 +59,6 @@ describe('shutdownGracefully', () => {
   it('等在途请求完成之后才关闭应用', async () => {
     const events: string[] = []
     const inFlight = new InFlightRequests()
-    const { EventEmitter } = await import('node:events')
     const response = Object.assign(new EventEmitter(), { headersSent: false, setHeader: vi.fn() })
     inFlight.middleware()({} as never, response as never, () => {})
     const shutdown = shutdownGracefully(steps(events, inFlight, fakeServer(events)))
@@ -73,7 +73,6 @@ describe('shutdownGracefully', () => {
   it('在途请求超过时限：强制断开，结果为强制退出，仍然关闭应用', async () => {
     const events: string[] = []
     const inFlight = new InFlightRequests()
-    const { EventEmitter } = await import('node:events')
     inFlight.middleware()({} as never, Object.assign(new EventEmitter(), { headersSent: true, setHeader: vi.fn() }) as never, () => {})
     const server = fakeServer(events)
     const shutdown = shutdownGracefully(steps(events, inFlight, server))

@@ -93,7 +93,7 @@ function severity(entry: Linter.RuleEntry | undefined): unknown {
 
 interface RestrictedImports {
   paths?: { name: string, importNames?: string[] }[]
-  patterns?: { group?: string[] }[]
+  patterns?: { group?: string[], regex?: string }[]
 }
 
 function restrictedImports(config: Linter.Config): RestrictedImports {
@@ -101,8 +101,9 @@ function restrictedImports(config: Linter.Config): RestrictedImports {
   return Array.isArray(entry) ? entry[1] as RestrictedImports : {}
 }
 
+/** 受限导入的模式：group 里的每一项与 regex。 */
 function restrictedPatterns(config: Linter.Config): string[] {
-  return (restrictedImports(config).patterns ?? []).flatMap(p => p.group ?? [])
+  return (restrictedImports(config).patterns ?? []).flatMap(p => [...(p.group ?? []), ...(p.regex === undefined ? [] : [p.regex])])
 }
 
 describe('US-M1-11 lint 规则的自测：受限导入', () => {
@@ -214,12 +215,11 @@ describe('US-M1-11 lint 规则的自测：后端', () => {
   })
 
   it('只有 database 模块、仓储与表定义能引用 drizzle-orm 与 pg', async () => {
+    const code = 'import { sql } from \'drizzle-orm\'\n\nexport const s = sql\n'
     expect(await rulesFor('import pg from \'pg\'\n\nexport const Pool = pg.Pool\n', API_SERVICE)).toContain('no-restricted-imports')
-    expect(await rulesFor('import { sql } from \'drizzle-orm\'\n\nexport const s = sql\n', API_SERVICE)).toContain('no-restricted-imports')
-    // 按路径计算配置不需要文件存在
+    expect(await rulesFor(code, API_SERVICE)).toContain('no-restricted-imports')
     for (const allowed of ['apps/api/src/modules/audit/audit.repository.ts', 'apps/api/src/modules/database/pool.ts', 'apps/api/src/db/schema/audit/index.ts'])
-      expect(restrictedPatterns(await configFor(allowed))).not.toContain('drizzle-orm')
-    expect(restrictedPatterns(await configFor(API_SERVICE))).toContain('drizzle-orm')
+      expect(await rulesFor(code, allowed), allowed).not.toContain('no-restricted-imports')
   })
 
   it('控制器不引用仓储；输入必须带 schema；不用 @Req、@Res', async () => {
@@ -254,6 +254,10 @@ describe('US-M1-11 lint 规则的自测：后端', () => {
     // concat() 与 + 一样是拼接（复验 N6）
     expect(await rulesFor(withQuery('db.query(\'SELECT * FROM t WHERE id = \'.concat(id))'), API_SERVICE)).toContain('no-restricted-syntax')
     expect(await rulesFor(withQuery('db.query({ text: \'SELECT * FROM t WHERE id = \'.concat(id) })'), API_SERVICE)).toContain('no-restricted-syntax')
+    // 只看第一个参数（SQL 文本）：后面的参数是绑定的值（复验 F5）
+    expect(await rulesFor(withQuery('db.query(\'SELECT $1, $2\', [\'a\'].concat([id]))'), API_SERVICE)).not.toContain('no-restricted-syntax')
+    expect(await rulesFor(withQuery(`db.query('SELECT $1', \`\${id}\`, 'a' + id)`), API_SERVICE)).not.toContain('no-restricted-syntax')
+    expect(await rulesFor(withQuery('db.query({ text: \'SELECT $1\', values: [\'a\'].concat([id]) })'), API_SERVICE)).not.toContain('no-restricted-syntax')
   })
 
   it('服务拿不到数据库句柄：DATABASE、数据库类型与表定义只有仓储能引用；开事务用 TransactionRunner；不能动态导入数据库的库', async () => {
@@ -266,15 +270,26 @@ describe('US-M1-11 lint 规则的自测：后端', () => {
     expect(await rulesFor('export async function load(): Promise<unknown> {\n  return import(\'pg\')\n}\n', API_SERVICE)).toContain('no-restricted-syntax')
   })
 
-  it('数据库的库的子路径与 pg-* 同样拦下，静态引用与动态导入一致（复验 N6）', async () => {
-    expect(await rulesFor('import Client from \'pg/lib/client\'\n\nexport const C = Client\n', API_SERVICE)).toContain('no-restricted-imports')
-    expect(await rulesFor('import Pool from \'pg-pool\'\n\nexport const P = Pool\n', API_SERVICE)).toContain('no-restricted-imports')
-    for (const source of ['pg/lib/client', 'pg-pool', 'drizzle-orm/node-postgres']) {
+  it('数据库的库：包本身、子路径与 pg-* 都拦下；名字只是以 pg 开头的包与本地文件不算（复验 N6、F1）', async () => {
+    const importOf = (source: string): string => `import value from '${source}'\n\nexport const v = value\n`
+    for (const source of ['pg/lib/client', 'pg-pool', 'drizzle-orm/node-postgres'])
+      expect(await rulesFor(importOf(source), API_SERVICE), source).toContain('no-restricted-imports')
+    for (const source of ['pgx-utils', './pg-errors.ts', '../../shared/pg-codes.ts'])
+      expect(await rulesFor(importOf(source), API_SERVICE), source).not.toContain('no-restricted-imports')
+  })
+
+  it('后端不用动态导入：受限导入与模块边界都只检查静态引用（复验 F3）', async () => {
+    for (const source of ['pg', '../database/index.ts', 'node:events']) {
       const code = `export async function load(): Promise<unknown> {\n  return import('${source}')\n}\n`
       expect(await rulesFor(code, API_SERVICE), source).toContain('no-restricted-syntax')
     }
-    // 名字只是以 pg 开头的包不算
-    expect(await rulesFor('export async function load(): Promise<unknown> {\n  return import(\'pgx-utils\')\n}\n', API_SERVICE)).not.toContain('no-restricted-syntax')
+  })
+
+  it('相对引用写 .ts：写成 .js 同样能解析到源文件，按路径生效的限制却认不出来（复验 F3）', async () => {
+    expect(await rulesFor('import { DATABASE } from \'../database/index.js\'\n\nexport const token = DATABASE\n', API_SERVICE)).toContain('no-restricted-imports')
+    const report = await lint('import { TransactionRunner } from \'../database/index.js\'\n\nexport const runner = TransactionRunner\n', API_CONTROLLER)
+    expect(report.messages.some(message => message.includes('扩展名 .ts'))).toBe(true)
+    expect(await rulesFor('import { loadConfig } from \'../config/index.ts\'\n\nexport const f = loadConfig\n', API_SERVICE)).not.toContain('no-restricted-imports')
   })
 
   it('app 层只有程序接口（index.ts）能转出数据库句柄，app 层的其他文件同样拿不到（复验 N6）', async () => {
@@ -335,6 +350,10 @@ describe('US-M1-11 lint 规则的自测：后端', () => {
     expect(report.rules).toContain('no-restricted-imports')
     expect(report.messages.some(message => message.includes('不经校验的参数装饰器'))).toBe(true)
     expect(await rulesFor('import { UploadedFile } from \'@nestjs/common\'\n\nexport const decorator = UploadedFile\n', API_SERVICE)).toContain('no-restricted-imports')
+    // 包里的深层路径同样拦下，Logger 也一样（复验 F2）
+    expect(await rulesFor('import { Req as R } from \'@nestjs/common/decorators/http/route-params.decorator.js\'\n\nexport const decorator = R\n', API_SERVICE)).toContain('no-restricted-imports')
+    expect(await rulesFor('import { Logger } from \'@nestjs/common/services/logger.service.js\'\n\nexport const logger = Logger\n', API_SERVICE)).toContain('no-restricted-imports')
+    expect(await rulesFor('import * as common from \'@nestjs/common\'\n\nexport const decorator = common.Req\n', API_SERVICE)).toContain('no-restricted-imports')
     // 从别处引来的同名装饰器：按写法拦下
     const uploaded = [
       'import { Controller, Post } from \'@nestjs/common\'',

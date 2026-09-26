@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readMigrationFiles } from 'drizzle-orm/migrator'
 import { describe, expect, it } from 'vitest'
-import { compareMigrations, MigrationError, MIGRATIONS_FOLDER, readExpectedMigrations } from './migrations.ts'
+import { compareMigrations, migrationClientConfig, MigrationError, MIGRATIONS_FOLDER, readExpectedMigrations } from './migrations.ts'
 
 const expected: ExpectedMigration[] = [
   { tag: '0000_a', when: 100, hash: 'h0' },
@@ -32,6 +32,18 @@ describe('compareMigrations', () => {
 
   it('时间戳不同（例如乱序合并）：不一致', () => {
     expect(compareMigrations(expected, [{ hash: 'h0', createdAt: 150 }])).toEqual({ status: 'diverged', reason: '迁移 0000_a 的时间戳与数据库里的记录不同' })
+  })
+})
+
+describe('migrationClientConfig', () => {
+  it('迁移连接：10 秒的连接时限；TCP keepalive 从空闲 10 秒开始探测（审查 A8、复验 N2）', () => {
+    expect(migrationClientConfig('postgres://nerve@127.0.0.1:1/nerve')).toEqual({
+      connectionString: 'postgres://nerve@127.0.0.1:1/nerve',
+      application_name: 'nerve-office-migrate',
+      connectionTimeoutMillis: 10_000,
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 10_000,
+    })
   })
 })
 

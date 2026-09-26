@@ -124,6 +124,17 @@ async function acquireLock(client: pg.Client): Promise<void> {
   }
 }
 
+/** 迁移用的独立连接：带连接时限；TCP keepalive 与连接池一致，从空闲 10 秒开始探测（审查 A8、复验 N2）。 */
+export function migrationClientConfig(connectionString: string): pg.ClientConfig {
+  return {
+    connectionString,
+    application_name: 'nerve-office-migrate',
+    connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
+    keepAlive: true,
+    keepAliveInitialDelayMillis: KEEP_ALIVE_INITIAL_DELAY_MS,
+  }
+}
+
 /**
  * 执行迁移：独立的连接 → 等锁 → 比较 → 在一个事务里执行剩下的迁移 → 释放锁。
  * 数据库里的迁移与这次带来的不一致时拒绝执行（MigrationError）。
@@ -131,13 +142,7 @@ async function acquireLock(client: pg.Client): Promise<void> {
 export async function runMigrations(options: RunMigrationsOptions): Promise<MigrationOutcome> {
   const folder = options.migrationsFolder ?? MIGRATIONS_FOLDER
   const expected = readExpectedMigrations(folder)
-  const client = new pg.Client({
-    connectionString: options.connectionString,
-    application_name: 'nerve-office-migrate',
-    connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
-    keepAlive: true,
-    keepAliveInitialDelayMillis: KEEP_ALIVE_INITIAL_DELAY_MS,
-  })
+  const client = new pg.Client(migrationClientConfig(options.connectionString))
   // 连接在两条语句之间被断开时，pg 在客户端上触发 error；没有监听者会让进程直接退出。
   // 错误会从下一条语句上抛出，这里只防止它成为未监听的事件（审查 A1）
   client.on('error', () => {})

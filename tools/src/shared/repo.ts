@@ -79,13 +79,20 @@ export interface CommandOutput {
   stderr: string
 }
 
-/** 执行命令，返回标准输出与标准错误（有的工具把结论写在标准错误里）；退出码不为 0 时抛出错误。 */
+/**
+ * 执行命令，返回标准输出与标准错误（有的工具把结论写在标准错误里）。
+ * 命令无法执行、退出码不为 0 或被信号结束时抛出错误，说明里带上标准错误的内容。
+ */
 export function commandOutput(command: string, args: readonly string[], options: CommandOptions = {}): CommandOutput {
+  const commandLine = `${command} ${args.join(' ')}`
   const result = spawnSync(command, args, { cwd: options.cwd ?? REPO_ROOT, env: options.env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
   if (result.error !== undefined)
-    throw result.error
-  if (result.status !== 0)
-    throw new Error(`${command} ${args.join(' ')} 失败（退出码 ${String(result.status)}）：${result.stderr.trim()}`)
+    throw new Error(`${commandLine} 无法执行：${result.error.message}`, { cause: result.error })
+  if (result.status !== 0) {
+    const ending = result.signal === null ? `退出码 ${String(result.status)}` : `被信号 ${result.signal} 结束`
+    const stderr = result.stderr.trim()
+    throw new Error(`${commandLine} 失败（${ending}）${stderr === '' ? '' : `：${stderr}`}`)
+  }
   return { stdout: result.stdout, stderr: result.stderr }
 }
 

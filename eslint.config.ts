@@ -40,14 +40,10 @@ const BASE_RESTRICTED_SYNTAX = [...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL
 // ---- 后端（P2 设计 §3.1）----
 // 每个后端文件的限制由 apiRules() 按"这个文件允许什么"组合出来，各覆盖块不各自抄一份，免得改一处漏一处（审查 B15）
 
-// 数据库：只有仓储访问数据库（规范 §1.2，审查 B2）
+// 数据库：只有仓储访问数据库（规范 §1.2，审查 B2）。
+// 按包名锚定开头：包本身、包里的子路径与 pg-* 系列；本地文件（./pg-errors.ts）不算（复验 N6、F1）
 const API_DATABASE_LIBRARIES = {
-  group: ['drizzle-orm', 'drizzle-orm/**', 'pg', 'pg/**', 'pg-*'],
-  message: '只有 database 模块、各模块的 *.repository.ts 与 src/db/schema 能引用数据库的库（规范 §1.2）',
-}
-const API_DYNAMIC_DATABASE_LIBRARIES = {
-  // 与上面的静态引用同一个范围：包本身、包里的子路径与 pg-* 系列（复验 N6）
-  selector: String.raw`ImportExpression[source.value=/^(?:pg|drizzle-orm)(?:$|\W)/]`,
+  regex: String.raw`^(?:pg|drizzle-orm)(?:$|\W)`,
   message: '只有 database 模块、各模块的 *.repository.ts 与 src/db/schema 能引用数据库的库（规范 §1.2）',
 }
 const API_DATABASE_HANDLES = {
@@ -68,6 +64,23 @@ const API_TRANSACTIONS_FROM_CONTROLLER = {
   regex: String.raw`(?:^|/)database/index\.ts$`,
   importNames: ['TransactionRunner'],
   message: '控制器不写业务规则，事务由服务开启（规范 §1.2）',
+}
+// 引用的写法要唯一，按引用路径与包名生效的限制才可靠（复验 F2、F3）：
+// - 后端不用动态导入：受限导入与模块边界都只检查静态引用；
+// - 相对引用写源文件的扩展名 .ts：写成 .js 同样能解析到源文件，却认不出是 database/index.ts；
+// - Nest 只从包的入口引用：包里的深层路径同样能拿到 Logger 与不经校验的装饰器。
+// 其余写法（例如路径里夹 ./、先在仓储里转出数据库句柄、createRequire）由审查保证
+const API_NO_DYNAMIC_IMPORT = {
+  selector: 'ImportExpression',
+  message: '后端不用动态导入：受限导入与模块边界都只检查静态引用（P2 设计 §3.1）',
+}
+const API_RELATIVE_JS_EXTENSION = {
+  regex: String.raw`^\.{1,2}/(?:.*/)?[^/]+\.[cm]?jsx?$`,
+  message: '相对引用写源文件的扩展名 .ts：同一个文件只有一种写法，按路径生效的限制才可靠（P2 设计 §3.1）',
+}
+const API_NEST_DEEP_IMPORTS = {
+  regex: String.raw`^@nestjs/[^/]+/`,
+  message: '从包的入口引用 Nest（例如 @nestjs/common），不用包里的深层路径：按包名的限制只认入口（P2 设计 §3.1）',
 }
 // Nest 的 Logger 经进程级的静态实例转发，同一个进程里后建的应用会接管先建的应用的日志；应用代码用注入的 AppLogger（P2 设计 §3.4）
 const API_NO_NEST_LOGGER = {
@@ -91,22 +104,29 @@ const API_PROCESS_ENV_SYNTAX = [
   { selector: `${PROCESS_MODULE} > ImportDefaultSpecifier[local.name!='process']`, message: PROCESS_ALIAS_MESSAGE },
   { selector: `${PROCESS_MODULE} > ImportNamespaceSpecifier`, message: PROCESS_ALIAS_MESSAGE },
 ]
-// 只用参数化查询（规范 §5）：sql 模板标签会把插值变成参数。自动检查覆盖直接写在 query()、execute() 参数里的拼接
-// （模板字符串、+、concat()，含对象写法的 text）与任何 .raw（含解构与别名）；先拼成变量再传进去的写法由审查保证（审查 B7、复验 N6）
+// 只用参数化查询（规范 §5）：sql 模板标签会把插值变成参数。
+// 自动检查覆盖 query()、execute() 的第一个参数（SQL 文本；含对象写法的 text）直接写成的拼接：带插值的模板字符串、+、concat()；
+// 以及任何 .raw（含解构与别名）。其余写法（先拼成变量再传入，join()、replace()、String()、类型断言、三元表达式里的拼接）由审查保证（审查 B7、复验 N6、F5）
 const SQL_CALL = 'CallExpression[callee.property.name=/^(?:query|execute)$/]'
 const SQL_TEMPLATE_MESSAGE = 'SQL 不能用带插值的模板字符串拼接，用参数或 sql 模板标签（规范 §5）'
 const SQL_CONCAT_MESSAGE = 'SQL 不能用字符串拼接，用参数或 sql 模板标签（规范 §5）'
-const API_SQL_CONCATENATION = [SQL_CALL, `${SQL_CALL} > ObjectExpression > Property[key.name='text']`].flatMap(text => [
-  { selector: `${text} > TemplateLiteral[expressions.length>0]`, message: SQL_TEMPLATE_MESSAGE },
-  { selector: `${text} > BinaryExpression[operator='+']`, message: SQL_CONCAT_MESSAGE },
-  { selector: `${text} > CallExpression[callee.property.name='concat']`, message: SQL_CONCAT_MESSAGE },
+/** SQL 文本的位置：第一个参数本身，或者第一个参数是对象时它的 text；后面的参数是绑定的值，不管 */
+const SQL_TEXT_POSITIONS = [
+  (node: string) => `${SQL_CALL} > ${node}:first-child`,
+  (node: string) => `${SQL_CALL} > ObjectExpression:first-child > Property[key.name='text'] > ${node}`,
+]
+const API_SQL_CONCATENATION = SQL_TEXT_POSITIONS.flatMap(at => [
+  { selector: at('TemplateLiteral[expressions.length>0]'), message: SQL_TEMPLATE_MESSAGE },
+  { selector: at('BinaryExpression[operator=\'+\']'), message: SQL_CONCAT_MESSAGE },
+  { selector: at('CallExpression[callee.property.name=\'concat\']'), message: SQL_CONCAT_MESSAGE },
 ])
 const API_NO_RAW = {
   property: 'raw',
   message: '不用 .raw 拼接 SQL：用 sql 模板标签，动态的片段只能来自代码里的白名单（规范 §5）；表定义里的 CHECK 常量除外',
 }
 // 输入都经 contracts 里的结构校验（规范 §4）：参数装饰器必须带 schema；不接受 schema 的装饰器与原始的请求、响应对象会绕过校验（审查 B8）。
-// 不经校验的装饰器在引用处就拦下（改名也拦得住），装饰器的写法再查一遍；经命名空间调用（@common.Req()）等写法由审查保证（复验 N6）
+// 不经校验的装饰器在引用处就拦下（改名、命名空间引用、深层路径都拦得住），装饰器的写法再查一遍；
+// 自己写的参数装饰器能拿到整个请求，由审查把关（复验 N6、F2）
 const UNVALIDATED_PARAMETER_DECORATORS = ['Req', 'Request', 'Res', 'Response', 'Next', 'Headers', 'Ip', 'Session', 'HostParam', 'RawBody', 'UploadedFile', 'UploadedFiles']
 const UNVALIDATED_DECORATOR_MESSAGE = '不用 @Req、@Res、@Headers 等不经校验的参数装饰器：需要请求里的信息时写参数装饰器（P2 设计 §3.1）'
 const API_NO_UNVALIDATED_DECORATORS = {
@@ -150,6 +170,8 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
   const patterns = [
     UNIVER_ONLY_IN_EDITOR,
     NO_UNIVER_PRO,
+    API_RELATIVE_JS_EXTENSION,
+    API_NEST_DEEP_IMPORTS,
     ...(kind.databaseLibraries === true ? [] : [API_DATABASE_LIBRARIES]),
     ...(kind.databaseHandles === true ? [] : [API_DATABASE_HANDLES]),
     ...(kind.tables === true ? [] : [API_TABLES]),
@@ -157,9 +179,9 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
   ]
   const syntax = [
     ...BASE_RESTRICTED_SYNTAX,
+    API_NO_DYNAMIC_IMPORT,
     ...API_SQL_CONCATENATION,
     ...API_PARAMETER_DECORATORS,
-    ...(kind.databaseLibraries === true ? [] : [API_DYNAMIC_DATABASE_LIBRARIES]),
     ...(kind.controller === true ? [] : [API_CONTROLLER_OUTSIDE_CONTROLLER_FILE]),
     ...(kind.processEnv === true ? [] : API_PROCESS_ENV_SYNTAX),
   ]

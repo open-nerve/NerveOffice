@@ -1,4 +1,6 @@
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres'
+import type pg from 'pg'
+import { drizzle } from 'drizzle-orm/node-postgres'
 
 /** Drizzle 实例（连接池上）。只有仓储与 database 模块使用（lint 限制）。 */
 export type Database = NodePgDatabase
@@ -22,6 +24,11 @@ export interface Transaction {
 /** 仓储把服务传来的事务换回执行器；没有事务时用连接池。只有仓储能引用它（lint 限制）。 */
 export function executorOf(db: Database, transaction?: Transaction): DbExecutor {
   return transaction === undefined ? db : transaction as unknown as DbTransaction
+}
+
+/** 在连接池或借出的单个连接上建 Drizzle 实例：连接池上的注入给仓储，单个连接上的给 TransactionRunner，两处用同一套设置。 */
+export function createDatabase(client: pg.Pool | pg.PoolClient): Database {
+  return drizzle({ client })
 }
 
 /** 注入标记：Drizzle 实例（`@Inject(DATABASE) db: Database`），只在仓储里注入。 */
