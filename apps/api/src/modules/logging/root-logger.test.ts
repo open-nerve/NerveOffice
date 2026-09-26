@@ -55,6 +55,14 @@ describe('createRootLogger', () => {
     expect(JSON.stringify(logs.entries())).not.toContain(SECRET_VALUE)
   })
 
+  it('对象里自带 msg 时不补消息：只有一个 msg，用对象里的', () => {
+    const logs = captureLogs()
+    createRootLogger({ level: 'info', destination: logs.destination }).error({ err: pgError(), msg: '对象里的消息' })
+    const [line] = logs.lines()
+    expect(line?.match(/"msg":/g)).toHaveLength(1)
+    expect(logs.entries()[0]).toMatchObject({ msg: '对象里的消息', err: { sqlState: '22P02' } })
+  })
+
   it('其他写法不变：普通异常用它自己的消息；给了消息就用给的；没有异常时不补消息', () => {
     const logs = captureLogs()
     const root = createRootLogger({ level: 'info', destination: logs.destination })

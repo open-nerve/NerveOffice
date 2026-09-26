@@ -120,4 +120,18 @@ describe('事务的连接（TransactionRunner，复验 N8）', () => {
     const alive = await db.execute<{ count: string }>(sql`SELECT count(*) AS count FROM pg_stat_activity WHERE pid = ${first}`)
     expect(alive.rows[0]?.count).toBe('0')
   })
+
+  it('work 吞掉失败的语句却正常返回：事务已中止，不当作成功；预期会失败的语句放进保存点则照常提交', async () => {
+    const runner = single.runtime.get(TransactionRunner)
+    await expect(runner.run(async (transaction) => {
+      await (transaction as unknown as Database).execute(sql`SELECT ${'不是 UUID'}::uuid`).catch(() => {})
+      return '完成'
+    })).rejects.toThrow('事务已中止')
+    await expect(runner.run(async (transaction) => {
+      await (transaction as unknown as Database).transaction(async (savepoint) => {
+        await savepoint.execute(sql`SELECT ${'不是 UUID'}::uuid`)
+      }).catch(() => {})
+      return '完成'
+    })).resolves.toBe('完成')
+  })
 })

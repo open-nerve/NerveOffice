@@ -1,18 +1,37 @@
 import type pg from 'pg'
 import { describe, expect, it, vi } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
-import { TransactionRunner } from './transaction-runner.ts'
+import { TRANSACTION_ABORTED_MESSAGE, TransactionRunner } from './transaction-runner.ts'
 
-/** 假的连接：记下执行过的语句；以 failOn 里的某一项开头的语句执行时报错。 */
+type TransactionStatus = 'I' | 'T' | 'E'
+
+/**
+ * 假的连接：记下执行过的语句；failOn 里的语句（按第一个词）执行时报错。
+ * 事务状态按 PostgreSQL 的规则变化：BEGIN 之后在事务中，事务中的语句失败后事务中止，COMMIT、ROLLBACK 之后空闲。
+ */
 function fakeClient(failOn: readonly string[] = []) {
   const statements: string[] = []
+  let status: TransactionStatus = 'I'
   return {
     statements,
     release: vi.fn(),
+    getTransactionStatus: vi.fn((): TransactionStatus => status),
+    /** 模拟事务里有语句失败，而 work 把错误吞掉了 */
+    abort: () => {
+      status = 'E'
+    },
     query: vi.fn(async (config: { text: string }) => {
       statements.push(config.text)
-      if (failOn.some(prefix => config.text.startsWith(prefix)))
-        throw new Error(`${prefix(config.text)} 失败`)
+      const verb = prefix(config.text)
+      if (failOn.includes(verb)) {
+        if (status === 'T')
+          status = 'E'
+        throw new Error(`${verb} 失败`)
+      }
+      if (verb === 'begin')
+        status = 'T'
+      else if (verb === 'commit' || verb === 'rollback')
+        status = 'I'
       return { rows: [], rowCount: 0, command: '', fields: [] }
     }),
   }
@@ -74,6 +93,25 @@ describe('TransactionRunner', () => {
     await expect(runnerWith(client).run(async () => {
       throw new AppError('NOT_FOUND')
     })).rejects.not.toBeInstanceOf(AppError)
+    expect(client.release).toHaveBeenCalledExactlyOnceWith(true)
+  })
+
+  it('work 吞掉了失败的语句却正常返回：事务已中止，不当作成功，回滚并丢弃连接', async () => {
+    const client = fakeClient()
+    await expect(runnerWith(client).run(async () => {
+      client.abort()
+      return 1
+    })).rejects.toThrow(TRANSACTION_ABORTED_MESSAGE)
+    expect(client.statements.map(prefix)).toEqual(['begin', 'rollback'])
+    expect(client.release).toHaveBeenCalledExactlyOnceWith(true)
+  })
+
+  it('归还时连接不是空闲状态（例如 ROLLBACK 没能发出）：即使是业务错误也丢弃', async () => {
+    const client = fakeClient()
+    client.getTransactionStatus.mockReturnValue('T')
+    await expect(runnerWith(client).run(async () => {
+      throw new AppError('NOT_FOUND')
+    })).rejects.toBeInstanceOf(AppError)
     expect(client.release).toHaveBeenCalledExactlyOnceWith(true)
   })
 

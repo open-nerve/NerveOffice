@@ -37,11 +37,14 @@ const REDACTED_PATHS = REDACTED_KEYS.flatMap(key => [key, `*.${key}`, `*.*.${key
 /** 异常的序列化：数据库错误不带参数与行里的值（审查 A2）。请求日志（pino-http）也要用同一个。 */
 export const LOG_SERIALIZERS = { err: serializeError }
 
-/** 日志参数里的异常：直接传入的 Error，或者 `{ err }` 里的 Error。 */
-function errorIn(value: unknown): Error | undefined {
+/**
+ * 只传了一个参数时，pino 会拿来作消息的异常：直接传入的 Error，或者 `{ err }` 里的 Error。
+ * 对象里自带 msg 时 pino 不会拿异常的消息作消息（与 pino 的 write() 一致）。
+ */
+function errorUsedAsMessage(value: unknown): Error | undefined {
   if (value instanceof Error)
     return value
-  if (typeof value === 'object' && value !== null && 'err' in value && value.err instanceof Error)
+  if (typeof value === 'object' && value !== null && !('msg' in value && value.msg !== undefined) && 'err' in value && value.err instanceof Error)
     return value.err
   return undefined
 }
@@ -64,7 +67,7 @@ export function createRootLogger(options: RootLoggerOptions): Logger {
       // 只传异常、不给消息时（logger.error(err)、logger.error({ err })），pino 用异常原来的消息作 msg；
       // 数据库错误的消息带着值，换成不带值的说明（复验 F4）。子日志（含 pino-http 为每个请求建的）同样经过这里
       logMethod(args, method) {
-        const error = args.length === 1 ? errorIn(args[0]) : undefined
+        const error = args.length === 1 ? errorUsedAsMessage(args[0]) : undefined
         if (error === undefined)
           method.apply(this, args)
         else

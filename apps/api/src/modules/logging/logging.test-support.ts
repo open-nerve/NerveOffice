@@ -4,6 +4,8 @@ import type { DestinationStream } from 'pino'
 export interface LogCapture {
   destination: DestinationStream
   entries: () => Record<string, unknown>[]
+  /** 原始的行：检查重复的键等解析之后看不到的情况 */
+  lines: () => string[]
 }
 
 export function captureLogs(): LogCapture {
@@ -11,6 +13,7 @@ export function captureLogs(): LogCapture {
   return {
     destination: { write: (line: string) => void lines.push(line) },
     entries: () => lines.map(line => JSON.parse(line) as Record<string, unknown>),
+    lines: () => [...lines],
   }
 }
 
