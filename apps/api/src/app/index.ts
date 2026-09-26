@@ -8,6 +8,7 @@ export type { Database, MigrationOutcome, SchemaStatus, Transaction } from '../m
 export { AppLogger } from '../modules/logging/index.ts'
 export type { AdminInitializationInput, InitializedAdmin } from '../modules/users/index.ts'
 export { AppError } from '../shared/errors/app-error.ts'
+export { Public } from '../shared/public.ts'
 export { ApplicationRuntime } from './application-runtime.ts'
 export { createApplication } from './create-application.ts'
 export type { ApplicationOptions } from './create-application.ts'

@@ -20,7 +20,14 @@ export class RequestContextStore {
   /** 排在请求日志之后：之后在这个请求里写的日志都带上请求标识。 */
   middleware(): RequestHandler {
     return (request, _response, next) => {
-      this.#storage.run({ requestId: requestIdOf(request), logger: request.log }, next)
+      // 按需取 request.log：认证之后它换成带 userId 的子日志（identifyRequestUser）
+      const context: RequestContext = {
+        requestId: requestIdOf(request),
+        get logger() {
+          return request.log
+        },
+      }
+      this.#storage.run(context, next)
     }
   }
 }

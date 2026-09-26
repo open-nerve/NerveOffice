@@ -3,6 +3,7 @@ import type { LevelWithSilent, Logger } from 'pino'
 import { REQUEST_ID_HEADER } from '@nerve-office/contracts'
 import { pinoHttp, stdSerializers } from 'pino-http'
 import { resolveRequestId } from './request-id.ts'
+import { requestUserId } from './request-user.ts'
 import { LOG_SERIALIZERS } from './root-logger.ts'
 
 const HEALTH_PROBES = '/api/health/'
@@ -52,6 +53,11 @@ export function createHttpLogger(logger: Logger): ReturnType<typeof pinoHttp<Req
       const id = resolveRequestId(request.headers[REQUEST_ID_HEADER])
       response.setHeader(REQUEST_ID_HEADER, id)
       return id
+    },
+    // 请求结束时再取：认证通过的请求带上 userId（规范 §7）
+    customProps: (request) => {
+      const userId = requestUserId(request)
+      return userId === undefined ? {} : { userId }
     },
     customLogLevel: (request, response, error) => levelFor(request, response, error !== undefined),
     customSuccessObject: (request, response, value: { durationMs: number }) => requestSummary(request, response, value.durationMs),

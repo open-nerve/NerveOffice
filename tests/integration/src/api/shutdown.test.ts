@@ -3,7 +3,7 @@ import type { Database } from '@nerve-office/api'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import { setTimeout as delay } from 'node:timers/promises'
-import { DATABASE, DatabaseModule } from '@nerve-office/api'
+import { DATABASE, DatabaseModule, Public } from '@nerve-office/api'
 import { Controller, Get, Inject, Module } from '@nestjs/common'
 import { sql } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -39,6 +39,8 @@ class Gate {
 
 let gate = new Gate()
 
+// 只在测试里存在的接口：不经登录（认证本身由 auth 的测试覆盖）
+@Public()
 @Controller('__test/slow')
 class SlowController {
   constructor(@Inject(DATABASE) private readonly db: Database) {}

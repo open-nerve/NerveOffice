@@ -33,6 +33,11 @@ export interface AppConfig {
     readonly migrationLockTimeoutMs: number
   }
   readonly http: {
+    /**
+     * 浏览器访问本站的源（协议、主机与端口），例如 https://docs.example.com。
+     * 用于状态变更请求的 Origin 检查与会话 Cookie 的属性（P3 设计 §3.5）
+     */
+    readonly publicOrigin: string
     readonly host: string
     readonly port: number
     readonly jsonBodyLimitBytes: number
@@ -40,6 +45,19 @@ export interface AppConfig {
     readonly headersTimeoutMs: number
     readonly keepAliveTimeoutMs: number
     readonly trustProxy: TrustProxy
+  }
+  readonly session: {
+    /** 空闲过期：随活动顺延，但不超过绝对过期 */
+    readonly idleTimeoutMinutes: number
+    readonly absoluteTimeoutMinutes: number
+  }
+  readonly login: {
+    /** 按用户名：窗口内允许失败的次数，达到后锁定 */
+    readonly maxFailures: number
+    /** 按客户端地址：窗口内允许失败的次数，达到后锁定 */
+    readonly ipMaxFailures: number
+    readonly windowMinutes: number
+    readonly lockoutMinutes: number
   }
   readonly shutdown: { readonly timeoutMs: number }
   readonly log: { readonly level: LogLevel }
@@ -75,6 +93,23 @@ function integer(min: number, max: number) {
     .transform(Number)
     .pipe(z.number().int().min(min, problem).max(max, problem))
 }
+
+/** 只有本机调试时，公开地址可以是 HTTP（Cookie 这时不带 Secure）。URL 的 hostname 里 IPv6 带方括号 */
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['127.0.0.1', 'localhost', '[::1]'])
+const PUBLIC_ORIGIN_PROBLEM = '必须是站点的源（协议、主机与端口，例如 https://docs.example.com），不带路径、查询串与账号；只有本机调试（127.0.0.1、localhost、::1）可以用 http'
+
+/** 规范成 URL 的 origin（去掉末尾的斜杠、默认端口，主机名转成小写）。 */
+const publicOrigin = text().transform((value, ctx): string => {
+  const url = URL.canParse(value) ? new URL(value) : undefined
+  const isOrigin = url !== undefined
+    && (url.protocol === 'https:' || (url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname)))
+    && url.username === '' && url.password === '' && url.pathname === '/' && url.search === '' && url.hash === ''
+  if (url === undefined || !isOrigin) {
+    ctx.issues.push({ code: 'custom', message: PUBLIC_ORIGIN_PROBLEM, input: value })
+    return z.NEVER
+  }
+  return url.origin
+})
 
 const TRUST_PROXY_NAMES: ReadonlySet<string> = new Set(['loopback', 'linklocal', 'uniquelocal'])
 const TRUST_PROXY_PROBLEM = '必须是 1–10 的跳数，或者由 IP 地址、网段与 loopback、linklocal、uniquelocal 组成的逗号分隔列表'
@@ -116,6 +151,7 @@ const environmentSchema = z.object({
   NERVE_DATABASE_LOCK_TIMEOUT_MS: integer(100, 600_000).default(5_000),
   NERVE_DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS: integer(100, 600_000).default(10_000),
   NERVE_MIGRATION_LOCK_TIMEOUT_MS: integer(100, 3_600_000).default(60_000),
+  NERVE_PUBLIC_ORIGIN: publicOrigin,
   NERVE_HTTP_HOST: text().trim().min(1, '不能为空').default('0.0.0.0'),
   NERVE_HTTP_PORT: integer(0, 65_535).default(3_000),
   NERVE_HTTP_JSON_BODY_LIMIT_BYTES: integer(1_024, 16 * 1024 * 1024).default(262_144),
@@ -123,6 +159,12 @@ const environmentSchema = z.object({
   NERVE_HTTP_HEADERS_TIMEOUT_MS: integer(1_000, 600_000).default(20_000),
   NERVE_HTTP_KEEP_ALIVE_TIMEOUT_MS: integer(1_000, 600_000).default(5_000),
   NERVE_TRUST_PROXY: trustProxy.optional(),
+  NERVE_SESSION_IDLE_TIMEOUT_MINUTES: integer(5, 43_200).default(720),
+  NERVE_SESSION_ABSOLUTE_TIMEOUT_MINUTES: integer(5, 525_600).default(10_080),
+  NERVE_LOGIN_MAX_FAILURES: integer(1, 100).default(5),
+  NERVE_LOGIN_IP_MAX_FAILURES: integer(1, 100_000).default(50),
+  NERVE_LOGIN_WINDOW_MINUTES: integer(1, 1_440).default(15),
+  NERVE_LOGIN_LOCKOUT_MINUTES: integer(1, 1_440).default(15),
   NERVE_SHUTDOWN_TIMEOUT_MS: integer(100, 600_000).default(8_000),
   NERVE_LOG_LEVEL: z.enum(LOG_LEVELS, { error: `必须是 ${LOG_LEVELS.join('、')} 之一` }).default('info'),
   // 默认是 OWASP 的最低推荐（内存 19 MiB、迭代 2 次、并行度 1）
@@ -135,9 +177,12 @@ type Environment = z.output<typeof environmentSchema>
 
 /** 变量之间的约束：只在每个变量各自合法之后检查，免得一个错误报两次。 */
 function crossChecks(env: Environment): ConfigIssue[] {
-  return env.NERVE_HTTP_HEADERS_TIMEOUT_MS > env.NERVE_HTTP_REQUEST_TIMEOUT_MS
-    ? [{ variable: 'NERVE_HTTP_HEADERS_TIMEOUT_MS', problem: '不能大于 NERVE_HTTP_REQUEST_TIMEOUT_MS' }]
-    : []
+  const issues: ConfigIssue[] = []
+  if (env.NERVE_HTTP_HEADERS_TIMEOUT_MS > env.NERVE_HTTP_REQUEST_TIMEOUT_MS)
+    issues.push({ variable: 'NERVE_HTTP_HEADERS_TIMEOUT_MS', problem: '不能大于 NERVE_HTTP_REQUEST_TIMEOUT_MS' })
+  if (env.NERVE_SESSION_IDLE_TIMEOUT_MINUTES > env.NERVE_SESSION_ABSOLUTE_TIMEOUT_MINUTES)
+    issues.push({ variable: 'NERVE_SESSION_IDLE_TIMEOUT_MINUTES', problem: '不能大于 NERVE_SESSION_ABSOLUTE_TIMEOUT_MINUTES' })
+  return issues
 }
 
 function toAppConfig(env: Environment): AppConfig {
@@ -152,6 +197,7 @@ function toAppConfig(env: Environment): AppConfig {
       migrationLockTimeoutMs: env.NERVE_MIGRATION_LOCK_TIMEOUT_MS,
     },
     http: {
+      publicOrigin: env.NERVE_PUBLIC_ORIGIN,
       host: env.NERVE_HTTP_HOST,
       port: env.NERVE_HTTP_PORT,
       jsonBodyLimitBytes: env.NERVE_HTTP_JSON_BODY_LIMIT_BYTES,
@@ -159,6 +205,16 @@ function toAppConfig(env: Environment): AppConfig {
       headersTimeoutMs: env.NERVE_HTTP_HEADERS_TIMEOUT_MS,
       keepAliveTimeoutMs: env.NERVE_HTTP_KEEP_ALIVE_TIMEOUT_MS,
       trustProxy: env.NERVE_TRUST_PROXY ?? false,
+    },
+    session: {
+      idleTimeoutMinutes: env.NERVE_SESSION_IDLE_TIMEOUT_MINUTES,
+      absoluteTimeoutMinutes: env.NERVE_SESSION_ABSOLUTE_TIMEOUT_MINUTES,
+    },
+    login: {
+      maxFailures: env.NERVE_LOGIN_MAX_FAILURES,
+      ipMaxFailures: env.NERVE_LOGIN_IP_MAX_FAILURES,
+      windowMinutes: env.NERVE_LOGIN_WINDOW_MINUTES,
+      lockoutMinutes: env.NERVE_LOGIN_LOCKOUT_MINUTES,
     },
     shutdown: { timeoutMs: env.NERVE_SHUTDOWN_TIMEOUT_MS },
     log: { level: env.NERVE_LOG_LEVEL },

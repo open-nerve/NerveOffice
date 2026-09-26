@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest'
 import { ConfigError, loadConfig } from './config.ts'
 
 const DATABASE_URL = 'postgres://nerve:s3cret-password@db.internal:5432/nerve_office'
+const PUBLIC_ORIGIN = 'https://docs.example.com'
+/** 两个必填项 */
+const REQUIRED = { NERVE_DATABASE_URL: DATABASE_URL, NERVE_PUBLIC_ORIGIN: PUBLIC_ORIGIN }
 
 function issuesOf(action: () => unknown): readonly ConfigIssue[] {
   try {
@@ -18,7 +21,7 @@ function issuesOf(action: () => unknown): readonly ConfigIssue[] {
 
 describe('loadConfig', () => {
   it('只给必填项时，其余取默认值', () => {
-    const { database: { url, ...database }, ...rest } = loadConfig({ NERVE_DATABASE_URL: DATABASE_URL })
+    const { database: { url, ...database }, ...rest } = loadConfig({ ...REQUIRED })
     expect(url.reveal()).toBe(DATABASE_URL)
     expect({ database, ...rest }).toEqual({
       database: {
@@ -30,6 +33,7 @@ describe('loadConfig', () => {
         migrationLockTimeoutMs: 60_000,
       },
       http: {
+        publicOrigin: PUBLIC_ORIGIN,
         host: '0.0.0.0',
         port: 3_000,
         jsonBodyLimitBytes: 262_144,
@@ -38,6 +42,8 @@ describe('loadConfig', () => {
         keepAliveTimeoutMs: 5_000,
         trustProxy: false,
       },
+      session: { idleTimeoutMinutes: 720, absoluteTimeoutMinutes: 10_080 },
+      login: { maxFailures: 5, ipMaxFailures: 50, windowMinutes: 15, lockoutMinutes: 15 },
       shutdown: { timeoutMs: 8_000 },
       log: { level: 'info' },
       password: { argon2: { memoryKib: 19_456, iterations: 2, parallelism: 1 } },
@@ -47,6 +53,7 @@ describe('loadConfig', () => {
   it('每个变量都映射到对应的配置项', () => {
     const config = loadConfig({
       NERVE_DATABASE_URL: 'postgresql://u:p@127.0.0.1:5432/db',
+      NERVE_PUBLIC_ORIGIN: 'http://127.0.0.1:5173',
       NERVE_DATABASE_POOL_MAX: '4',
       NERVE_DATABASE_CONNECT_TIMEOUT_MS: '1000',
       NERVE_DATABASE_STATEMENT_TIMEOUT_MS: '2000',
@@ -65,6 +72,12 @@ describe('loadConfig', () => {
       NERVE_PASSWORD_ARGON2_MEMORY_KIB: '47104',
       NERVE_PASSWORD_ARGON2_ITERATIONS: '1',
       NERVE_PASSWORD_ARGON2_PARALLELISM: '2',
+      NERVE_SESSION_IDLE_TIMEOUT_MINUTES: '30',
+      NERVE_SESSION_ABSOLUTE_TIMEOUT_MINUTES: '600',
+      NERVE_LOGIN_MAX_FAILURES: '3',
+      NERVE_LOGIN_IP_MAX_FAILURES: '1000',
+      NERVE_LOGIN_WINDOW_MINUTES: '10',
+      NERVE_LOGIN_LOCKOUT_MINUTES: '20',
     })
     const { url, ...database } = config.database
     expect(url.reveal()).toBe('postgresql://u:p@127.0.0.1:5432/db')
@@ -77,6 +90,7 @@ describe('loadConfig', () => {
       migrationLockTimeoutMs: 5_000,
     })
     expect(config.http).toEqual({
+      publicOrigin: 'http://127.0.0.1:5173',
       host: '127.0.0.1',
       port: 0,
       jsonBodyLimitBytes: 4_096,
@@ -88,15 +102,20 @@ describe('loadConfig', () => {
     expect(config.shutdown.timeoutMs).toBe(9_000)
     expect(config.log.level).toBe('debug')
     expect(config.password.argon2).toEqual({ memoryKib: 47_104, iterations: 1, parallelism: 2 })
+    expect(config.session).toEqual({ idleTimeoutMinutes: 30, absoluteTimeoutMinutes: 600 })
+    expect(config.login).toEqual({ maxFailures: 3, ipMaxFailures: 1_000, windowMinutes: 10, lockoutMinutes: 20 })
   })
 
   it('缺少必填项时失败', () => {
-    expect(issuesOf(() => loadConfig({}))).toEqual([{ variable: 'NERVE_DATABASE_URL', problem: '缺少' }])
+    expect(issuesOf(() => loadConfig({}))).toEqual([
+      { variable: 'NERVE_DATABASE_URL', problem: '缺少' },
+      { variable: 'NERVE_PUBLIC_ORIGIN', problem: '缺少' },
+    ])
   })
 
   it('空字符串视为没有设置', () => {
-    expect(issuesOf(() => loadConfig({ NERVE_DATABASE_URL: '' }))).toEqual([{ variable: 'NERVE_DATABASE_URL', problem: '缺少' }])
-    expect(loadConfig({ NERVE_DATABASE_URL: DATABASE_URL, NERVE_HTTP_PORT: '' }).http.port).toBe(3_000)
+    expect(issuesOf(() => loadConfig({ NERVE_DATABASE_URL: '', NERVE_PUBLIC_ORIGIN: PUBLIC_ORIGIN }))).toEqual([{ variable: 'NERVE_DATABASE_URL', problem: '缺少' }])
+    expect(loadConfig({ ...REQUIRED, NERVE_HTTP_PORT: '' }).http.port).toBe(3_000)
   })
 
   it('一次列出全部问题，说明里只有变量名与原因，不含取值', () => {
@@ -104,6 +123,7 @@ describe('loadConfig', () => {
       try {
         loadConfig({
           NERVE_DATABASE_URL: 'mysql://root:hunter2@db/app',
+          NERVE_PUBLIC_ORIGIN: PUBLIC_ORIGIN,
           NERVE_HTTP_PORT: '80a',
           NERVE_DATABASE_POOL_MAX: '0',
           NERVE_LOG_LEVEL: 'verbose',
@@ -137,52 +157,90 @@ describe('loadConfig', () => {
     ['NERVE_DATABASE_URL', 'not a url'],
     ['NERVE_HTTP_HOST', '   '],
   ])('拒绝超出范围或格式不对的取值：%s=%s', (variable, value) => {
-    const env = { NERVE_DATABASE_URL: DATABASE_URL, [variable]: value }
+    const env = { ...REQUIRED, [variable]: value }
     expect(issuesOf(() => loadConfig(env)).map(issue => issue.variable)).toEqual([variable])
   })
 
   it('请求时限本身不合法时只报它自己，不连带报请求头时限', () => {
-    const issues = issuesOf(() => loadConfig({ NERVE_DATABASE_URL: DATABASE_URL, NERVE_HTTP_REQUEST_TIMEOUT_MS: '999999999' }))
+    const issues = issuesOf(() => loadConfig({ ...REQUIRED, NERVE_HTTP_REQUEST_TIMEOUT_MS: '999999999' }))
     expect(issues.map(issue => issue.variable)).toEqual(['NERVE_HTTP_REQUEST_TIMEOUT_MS'])
   })
 
   it('接收请求头的时限不能超过接收完整请求的时限', () => {
     const issues = issuesOf(() => loadConfig({
-      NERVE_DATABASE_URL: DATABASE_URL,
+      ...REQUIRED,
       NERVE_HTTP_REQUEST_TIMEOUT_MS: '10000',
       NERVE_HTTP_HEADERS_TIMEOUT_MS: '20000',
     }))
     expect(issues.map(issue => issue.variable)).toEqual(['NERVE_HTTP_HEADERS_TIMEOUT_MS'])
   })
 
+  describe('NERVE_PUBLIC_ORIGIN', () => {
+    it.each([
+      ['https://docs.example.com', 'https://docs.example.com'],
+      ['https://Docs.Example.com/', 'https://docs.example.com'],
+      ['https://docs.example.com:443', 'https://docs.example.com'],
+      ['https://docs.example.com:8443', 'https://docs.example.com:8443'],
+      ['http://127.0.0.1:4174', 'http://127.0.0.1:4174'],
+      ['http://localhost:5173', 'http://localhost:5173'],
+      ['http://[::1]:5173', 'http://[::1]:5173'],
+    ])('%s 规范成 %s', (value, expected) => {
+      expect(loadConfig({ ...REQUIRED, NERVE_PUBLIC_ORIGIN: value }).http.publicOrigin).toBe(expected)
+    })
+
+    it.each([
+      'http://docs.example.com',
+      'http://10.0.0.5',
+      'https://docs.example.com/app',
+      'https://docs.example.com/?a=1',
+      'https://docs.example.com/#x',
+      'https://user:pw@docs.example.com',
+      'ftp://docs.example.com',
+      'docs.example.com',
+    ])('拒绝 %s：不是站点的源，或者不是本机却用 http', (value) => {
+      const issues = issuesOf(() => loadConfig({ ...REQUIRED, NERVE_PUBLIC_ORIGIN: value }))
+      expect(issues.map(issue => issue.variable)).toEqual(['NERVE_PUBLIC_ORIGIN'])
+      expect(issues[0]?.problem).toContain('只有本机调试')
+    })
+  })
+
+  it('会话的空闲过期不能大于绝对过期', () => {
+    const issues = issuesOf(() => loadConfig({
+      ...REQUIRED,
+      NERVE_SESSION_IDLE_TIMEOUT_MINUTES: '600',
+      NERVE_SESSION_ABSOLUTE_TIMEOUT_MINUTES: '60',
+    }))
+    expect(issues.map(issue => issue.variable)).toEqual(['NERVE_SESSION_IDLE_TIMEOUT_MINUTES'])
+  })
+
   it('不认识的 NERVE_ 变量（多半是拼写错误）让启动失败；NERVE_TEST_ 留给测试工具，其他前缀不管', () => {
-    const issues = issuesOf(() => loadConfig({ NERVE_DATABASE_URL: DATABASE_URL, NERVE_DATABSE_POOL_MAX: '4' }))
+    const issues = issuesOf(() => loadConfig({ ...REQUIRED, NERVE_DATABSE_POOL_MAX: '4' }))
     expect(issues.map(issue => issue.variable)).toEqual(['NERVE_DATABSE_POOL_MAX'])
     expect(issues[0]?.problem).toContain('不认识')
-    expect(() => loadConfig({ NERVE_DATABASE_URL: DATABASE_URL, NERVE_TEST_DATABASE_URL: 'x', PATH: '/bin', DATABASE_URL: 'x' })).not.toThrow()
+    expect(() => loadConfig({ ...REQUIRED, NERVE_TEST_DATABASE_URL: 'x', PATH: '/bin', DATABASE_URL: 'x' })).not.toThrow()
   })
 
   describe('机密可以用 <变量>_FILE 从文件读取', () => {
     it('读取文件内容，去掉末尾的换行', () => {
-      const config = loadConfig({ NERVE_DATABASE_URL_FILE: '/run/secrets/db' }, path => (path === '/run/secrets/db' ? `${DATABASE_URL}\n` : ''))
+      const config = loadConfig({ NERVE_DATABASE_URL_FILE: '/run/secrets/db', NERVE_PUBLIC_ORIGIN: PUBLIC_ORIGIN }, path => (path === '/run/secrets/db' ? `${DATABASE_URL}\n` : ''))
       expect(config.database.url.reveal()).toBe(DATABASE_URL)
     })
 
     it('文件内容不合法时，问题记在 _FILE 变量上并说明原因；空文件单独说明', () => {
-      const invalid = issuesOf(() => loadConfig({ NERVE_DATABASE_URL_FILE: '/run/secrets/db' }, () => 'mysql://root:hunter2@db/app\n'))
+      const invalid = issuesOf(() => loadConfig({ NERVE_DATABASE_URL_FILE: '/run/secrets/db', NERVE_PUBLIC_ORIGIN: PUBLIC_ORIGIN }, () => 'mysql://root:hunter2@db/app\n'))
       expect(invalid).toEqual([{ variable: 'NERVE_DATABASE_URL_FILE', problem: '文件内容必须是 postgres:// 或 postgresql:// 开头的连接串' }])
       expect(JSON.stringify(invalid)).not.toContain('hunter2')
-      expect(issuesOf(() => loadConfig({ NERVE_DATABASE_URL_FILE: '/run/secrets/db' }, () => '\n'))).toEqual([{ variable: 'NERVE_DATABASE_URL_FILE', problem: '指定的文件是空的' }])
+      expect(issuesOf(() => loadConfig({ NERVE_DATABASE_URL_FILE: '/run/secrets/db', NERVE_PUBLIC_ORIGIN: PUBLIC_ORIGIN }, () => '\n'))).toEqual([{ variable: 'NERVE_DATABASE_URL_FILE', problem: '指定的文件是空的' }])
     })
 
     it('变量与 _FILE 同时设置时失败', () => {
-      const issues = issuesOf(() => loadConfig({ NERVE_DATABASE_URL: DATABASE_URL, NERVE_DATABASE_URL_FILE: '/run/secrets/db' }, () => DATABASE_URL))
+      const issues = issuesOf(() => loadConfig({ ...REQUIRED, NERVE_DATABASE_URL_FILE: '/run/secrets/db' }, () => DATABASE_URL))
       expect(issues.map(issue => issue.variable)).toEqual(['NERVE_DATABASE_URL'])
       expect(issues[0]?.problem).toContain('NERVE_DATABASE_URL_FILE')
     })
 
     it('文件读不到时失败，说明里没有路径以外的内容', () => {
-      const issues = issuesOf(() => loadConfig({ NERVE_DATABASE_URL_FILE: '/run/secrets/missing' }, () => {
+      const issues = issuesOf(() => loadConfig({ NERVE_DATABASE_URL_FILE: '/run/secrets/missing', NERVE_PUBLIC_ORIGIN: PUBLIC_ORIGIN }, () => {
         throw new Error('ENOENT')
       }))
       expect(issues.map(issue => issue.variable)).toEqual(['NERVE_DATABASE_URL_FILE'])
@@ -190,7 +248,7 @@ describe('loadConfig', () => {
     })
 
     it('只有登记为机密的变量支持 _FILE', () => {
-      const issues = issuesOf(() => loadConfig({ NERVE_DATABASE_URL: DATABASE_URL, NERVE_HTTP_PORT_FILE: '/tmp/port' }, () => '3000'))
+      const issues = issuesOf(() => loadConfig({ ...REQUIRED, NERVE_HTTP_PORT_FILE: '/tmp/port' }, () => '3000'))
       expect(issues.map(issue => issue.variable)).toEqual(['NERVE_HTTP_PORT_FILE'])
     })
   })
@@ -202,21 +260,21 @@ describe('loadConfig', () => {
       ['loopback', ['loopback']],
       ['loopback, 10.0.0.0/8,fd00::/8, 172.18.0.2', ['loopback', '10.0.0.0/8', 'fd00::/8', '172.18.0.2']],
     ])('%s', (value, expected) => {
-      expect(loadConfig({ NERVE_DATABASE_URL: DATABASE_URL, NERVE_TRUST_PROXY: value }).http.trustProxy).toEqual(expected)
+      expect(loadConfig({ ...REQUIRED, NERVE_TRUST_PROXY: value }).http.trustProxy).toEqual(expected)
     })
 
     it.each(['true', '0', '11', 'proxy.internal', '10.0.0.0/33', '10.0.0.0/8/1', '10.0.0.0/x', 'loopback,'])('拒绝 %s', (value) => {
-      const issues = issuesOf(() => loadConfig({ NERVE_DATABASE_URL: DATABASE_URL, NERVE_TRUST_PROXY: value }))
+      const issues = issuesOf(() => loadConfig({ ...REQUIRED, NERVE_TRUST_PROXY: value }))
       expect(issues.map(issue => issue.variable)).toEqual(['NERVE_TRUST_PROXY'])
     })
   })
 
   it('连接串是机密：整个配置被序列化时不带密码', () => {
-    expect(JSON.stringify(loadConfig({ NERVE_DATABASE_URL: DATABASE_URL }))).not.toContain('s3cret-password')
+    expect(JSON.stringify(loadConfig({ ...REQUIRED }))).not.toContain('s3cret-password')
   })
 
   it('返回的配置被冻结，运行中不能被改写', () => {
-    const config = loadConfig({ NERVE_DATABASE_URL: DATABASE_URL, NERVE_TRUST_PROXY: 'loopback' })
+    const config = loadConfig({ ...REQUIRED, NERVE_TRUST_PROXY: 'loopback' })
     expect(Object.isFrozen(config)).toBe(true)
     expect(Object.isFrozen(config.http)).toBe(true)
     expect(Object.isFrozen(config.http.trustProxy)).toBe(true)

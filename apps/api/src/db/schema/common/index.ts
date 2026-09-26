@@ -1,7 +1,15 @@
 // 表定义共用的写法（不是一个模块，只有表定义引用它）。
 import type { SQL } from 'drizzle-orm'
 import type { AnyPgColumn } from 'drizzle-orm/pg-core'
+import { Buffer } from 'node:buffer'
 import { sql } from 'drizzle-orm'
+import { customType } from 'drizzle-orm/pg-core'
+
+/** bytea：drizzle 0.45 没有内置这个列类型。pg 驱动读出来就是 Buffer，写入时直接传 Buffer。 */
+export const bytea = customType<{ data: Buffer, driverData: Buffer }>({
+  dataType: () => 'bytea',
+  fromDriver: value => Buffer.from(value),
+})
 
 /** 代码里的常量写成 SQL 字符串字面量（单引号加倍）。只用于表定义：这里只有 DDL 与常量，没有运行时的输入。 */
 export function stringLiteral(value: string): SQL {
