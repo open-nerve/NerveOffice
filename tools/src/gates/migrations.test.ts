@@ -8,12 +8,15 @@ function journal(entries: { idx: number, when: number, tag: string }[]): string 
 const FIRST = { idx: 0, when: 1000, tag: '0000_first' }
 const SECOND = { idx: 1, when: 2000, tag: '0001_second' }
 
-/** 一个合规的迁移目录：journal、SQL 与快照齐全。 */
+const ZERO = '00000000-0000-0000-0000-000000000000'
+
+/** 一个合规的迁移目录：journal、SQL 与快照齐全，快照的 prevId 连成链。 */
 function files(entries: typeof FIRST[], overrides: Record<string, string | undefined> = {}): Map<string, string> {
   const map = new Map<string, string>([['meta/_journal.json', journal(entries)]])
-  for (const entry of entries) {
+  for (const [index, entry] of entries.entries()) {
     map.set(`${entry.tag}.sql`, `-- ${entry.tag}\nCREATE TABLE t${entry.idx} (id int);`)
-    map.set(`meta/${String(entry.idx).padStart(4, '0')}_snapshot.json`, `{"id":"${entry.tag}"}`)
+    const previous = entries[index - 1]
+    map.set(`meta/${String(entry.idx).padStart(4, '0')}_snapshot.json`, JSON.stringify({ id: `id-${entry.tag}`, prevId: previous === undefined ? ZERO : `id-${previous.tag}` }))
   }
   for (const [path, content] of Object.entries(overrides)) {
     if (content === undefined)
@@ -48,6 +51,17 @@ describe('checkMigrations：迁移目录本身', () => {
     expect(rules(checkMigrations(files([FIRST, { ...SECOND, tag: FIRST.tag }]), undefined))).toContain('migrations/sequence')
   })
 
+  it('迁移名必须是"四位序号_名称"，名称只用小写字母、数字与下划线', () => {
+    expect(rules(checkMigrations(files([{ ...FIRST, tag: '0000_审计' }], { '0000_审计.sql': 'SELECT 1' }), undefined))).toContain('migrations/name')
+    expect(rules(checkMigrations(files([{ ...FIRST, tag: '0000_Audit-Events' }]), undefined))).toContain('migrations/name')
+  })
+
+  it('快照的 prevId 连成链：两个分支各自生成的迁移合并后会断开', () => {
+    const broken = files([FIRST, SECOND], { 'meta/0001_snapshot.json': JSON.stringify({ id: 'id-0001_second', prevId: 'id-from-another-branch' }) })
+    expect(checkMigrations(broken, undefined)).toMatchObject([{ rule: 'migrations/snapshots', subject: 'meta/0001_snapshot.json' }])
+    expect(rules(checkMigrations(files([FIRST], { 'meta/0000_snapshot.json': '{' }), undefined))).toEqual(['migrations/snapshots'])
+  })
+
   it('缺少 SQL 或快照；有不在 journal 里的 SQL', () => {
     expect(checkMigrations(files([FIRST], { '0000_first.sql': undefined }), undefined)).toMatchObject([{ rule: 'migrations/files', detail: '缺少 0000_first.sql' }])
     expect(checkMigrations(files([FIRST], { 'meta/0000_snapshot.json': undefined }), undefined)).toMatchObject([{ rule: 'migrations/files' }])
@@ -65,7 +79,8 @@ describe('checkMigrations：与基准版本比较（已合并的迁移只向前�
 
   it('已合并的 SQL 或快照被修改', () => {
     expect(checkMigrations(files([FIRST, SECOND], { '0000_first.sql': 'DROP TABLE t0;' }), base)).toMatchObject([{ rule: 'migrations/immutable', subject: '0000_first.sql' }])
-    expect(checkMigrations(files([FIRST], { 'meta/0000_snapshot.json': '{}' }), base)).toMatchObject([{ rule: 'migrations/immutable', subject: 'meta/0000_snapshot.json' }])
+    const changedSnapshot = JSON.stringify({ id: 'id-0000_first', prevId: ZERO, tables: {} })
+    expect(checkMigrations(files([FIRST], { 'meta/0000_snapshot.json': changedSnapshot }), base)).toMatchObject([{ rule: 'migrations/immutable', subject: 'meta/0000_snapshot.json' }])
   })
 
   it('已合并的迁移被删除、改名或调整了时间戳', () => {

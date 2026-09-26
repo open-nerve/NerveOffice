@@ -57,10 +57,16 @@ export function commandJson(command: string, args: readonly string[]): unknown {
   }
 }
 
+export interface CommandOptions {
+  /** 默认是仓库根目录 */
+  cwd?: string
+  env?: NodeJS.ProcessEnv
+}
+
 /** 执行命令并返回它的标准输出；失败时抛出的错误带上标准错误的内容。 */
-export function commandText(command: string, args: readonly string[]): string {
+export function commandText(command: string, args: readonly string[], options: CommandOptions = {}): string {
   try {
-    return execFileSync(command, args, { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] })
+    return execFileSync(command, args, { cwd: options.cwd ?? REPO_ROOT, env: options.env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] })
   }
   catch (error) {
     const stderr = (error as { stderr?: unknown }).stderr

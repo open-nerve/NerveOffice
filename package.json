@@ -29,6 +29,7 @@
     "gate:config": "node tools/src/gates/cli.ts config",
     "gate:stories": "node tools/src/gates/cli.ts stories",
     "gate:migrations": "node tools/src/gates/cli.ts migrations",
+    "gate:schema": "node tools/src/gates/cli.ts schema",
     "gate:deps": "node tools/src/gates/cli.ts deps",
     "gate:licenses": "node tools/src/gates/cli.ts licenses",
     "gate:artifacts": "node tools/src/gates/cli.ts artifacts",

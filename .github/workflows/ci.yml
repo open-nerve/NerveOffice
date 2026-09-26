@@ -46,8 +46,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # 取两层历史：迁移门禁拿合并前的 main（HEAD^1）作基准，确认已合并的迁移没有被改动（ADR-005）
-          fetch-depth: 2
+          # 取完整历史：迁移门禁拿这次推送之前的提交作基准，确认已合并的迁移没有被改动（ADR-005）
+          fetch-depth: 0
 
       - name: 安装 Node.js（版本见 .node-version）
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -67,6 +67,9 @@ jobs:
 
       - name: pnpm verify --ci
         run: pnpm verify --ci --keep-going
+        env:
+          # 推送事件：迁移门禁拿推送之前的提交作基准，一次推送里的每个提交都在比较范围内；定时与手动触发时为空，门禁改用 HEAD^1
+          GATE_MIGRATIONS_BASE: ${{ github.event_name == 'push' && github.event.before || '' }}
 
       # 总是上传：重试后通过的用例也要能查到报告（规范 §8.4，出现重试即记为不稳定）
       - name: 上传测试报告

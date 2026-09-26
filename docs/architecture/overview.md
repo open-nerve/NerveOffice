@@ -104,7 +104,7 @@ apps/api/src/
 | 门禁 | 时机 | 内容 |
 |---|---|---|
 | 提交钩子（lefthook） | 每次提交 | 暂存文件的 `eslint --fix`；去掉提交说明里的 AI 署名 |
-| `pnpm verify --fast` | pre-push | lint、类型检查、单元测试、静态检查（精确版本、包管理配置、故事对照、迁移只向前） |
+| `pnpm verify --fast` | pre-push | lint、类型检查、单元测试、静态检查（精确版本、包管理配置、故事对照、迁移只向前、表定义与迁移同步） |
 | `pnpm verify` | 合并到 main 之前 | lint、类型检查、静态检查；启动开发数据库；单元与集成测试合在一起跑并统计覆盖率；清理并构建；依赖图与许可、产物扫描与第三方许可清单；E2E（本机三个浏览器） |
 | CI（`.github/workflows/ci.yml`） | 推送 main；每周一次；手动 | `pnpm verify --ci`（PostgreSQL 服务容器）与依赖漏洞扫描；失败的步骤、汇总与失败的 E2E 用例写成 GitHub 注解，不登录也能读取 |
 
@@ -115,7 +115,8 @@ A01 等检查（`pnpm gate <名称>`）：
 | `pins` | 外部依赖都经 pnpm 目录引用，目录里是精确版本；内部包 `workspace:*`；`packageManager` 精确 |
 | `config` | 只有评审过的顶层设置，没有 pnpmfile；发布冷却期不少于 3 天、`trustPolicy`、`engineStrict`；安装脚本、冷却期豁免（只能写"包名@精确版本"）、`overrides`、peer 规则、补丁逐项写明原因 |
 | `stories` | 当前 M 的故事登记表与总设计一致；active 的故事有会执行的测试（取自 Vitest 全部项目与 Playwright 的列举） |
-| `migrations` | journal 与迁移文件一一对应、时间戳递增；与基准版本（本机：与 main 的分叉点；CI：合并前的 main）相比，已合并的迁移没有变化，新迁移只追加在末尾 |
+| `migrations` | journal 与迁移文件一一对应、时间戳递增、迁移名的写法、快照的 prevId 链；与基准版本（本机：与 main 的分叉点；CI：推送之前的提交）相比，已合并的迁移没有变化，新迁移只追加在末尾 |
+| `schema` | 表定义与迁移同步：对迁移目录的副本执行一次 drizzle-kit generate，不应生成新文件 |
 | `deps` | 生产依赖图（含可选依赖，按真实包名）没有 Pro，Univer 版本一致，应为单例的包（React、rxjs、NestJS、reflect-metadata、drizzle-orm 等）只有一份，依赖树完整 |
 | `licenses` | 生产依赖的每个安装实例的许可在白名单内（本机没装的平台专属包以 CI 为准）；开发依赖没有 GPL、AGPL、SSPL 与未声明许可 |
 | `artifacts` | 构建产物只有登记过的文件类型（`.json` 也扫描，只放行三个清单文件）；没有动态代码、没有未登记的外部主机与关键字；第三方许可清单（含 Worker 的产物）完整 |

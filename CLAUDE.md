@@ -92,4 +92,4 @@
 | `pnpm test:integration` | 集成测试（需要数据库；先构建后端，进程测试用构建产物） |
 | `pnpm test:e2e` | 构建前端后跑 E2E |
 | `pnpm build` / `pnpm clean` | 构建 / 删除构建产物 |
-| `pnpm gate [名称…]` | A01 等检查：pins、config、stories、migrations、deps、licenses、artifacts、audit |
+| `pnpm gate [名称…]` | A01 等检查：pins、config、stories、migrations、schema、deps、licenses、artifacts、audit |

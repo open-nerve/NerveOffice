@@ -20,6 +20,13 @@ const journalSchema = z.object({
   entries: z.array(z.object({ idx: z.number().int(), when: z.number().int(), tag: z.string().min(1) })),
 })
 
+/** 迁移名：drizzle-kit 的"四位序号_名称"，名称只用小写字母、数字与下划线（非 ASCII 的名字在 git 与各种工具里都容易出问题）。 */
+const TAG_FORMAT = /^\d{4}_[a-z0-9_]+$/
+
+/** 快照之间的链：第一个快照的 prevId 是全零，之后每个指向前一个的 id；两个分支各自生成的迁移合并时会断开。 */
+const FIRST_PREV_ID = '00000000-0000-0000-0000-000000000000'
+const snapshotSchema = z.object({ id: z.string().min(1), prevId: z.string().min(1) })
+
 /** drizzle-kit 为每个迁移保存的表结构快照，按 journal 的序号命名。 */
 function snapshotOf(entry: JournalEntry): string {
   return `meta/${String(entry.idx).padStart(4, '0')}_snapshot.json`
@@ -50,6 +57,29 @@ function checkSequence(entries: readonly JournalEntry[]): Violation[] {
     if (tags.has(entry.tag))
       violations.push({ rule: 'migrations/sequence', subject: entry.tag, detail: '名称重复' })
     tags.add(entry.tag)
+    if (!TAG_FORMAT.test(entry.tag))
+      violations.push({ rule: 'migrations/name', subject: entry.tag, detail: '迁移名必须是"四位序号_名称"，名称只用小写字母、数字与下划线' })
+  }
+  return violations
+}
+
+function checkSnapshotChain(files: MigrationFiles, entries: readonly JournalEntry[]): Violation[] {
+  const violations: Violation[] = []
+  let previousId = FIRST_PREV_ID
+  for (const entry of entries) {
+    const text = files.get(snapshotOf(entry))
+    if (text === undefined)
+      return violations
+    let snapshot: z.infer<typeof snapshotSchema>
+    try {
+      snapshot = snapshotSchema.parse(JSON.parse(text))
+    }
+    catch {
+      return [...violations, { rule: 'migrations/snapshots', subject: snapshotOf(entry), detail: '不是合法的 drizzle-kit 快照' }]
+    }
+    if (snapshot.prevId !== previousId)
+      violations.push({ rule: 'migrations/snapshots', subject: snapshotOf(entry), detail: '快照的 prevId 没有指向前一个快照：两个分支各自生成的迁移合并了，需要在合并后的代码上重新生成' })
+    previousId = snapshot.id
   }
   return violations
 }
@@ -95,6 +125,7 @@ export function checkMigrations(current: MigrationFiles, base: MigrationFiles | 
   return [
     ...checkSequence(entries),
     ...checkFiles(current, entries),
+    ...checkSnapshotChain(current, entries),
     ...(base === undefined ? [] : checkAppendOnly(current, entries, base)),
   ]
 }
