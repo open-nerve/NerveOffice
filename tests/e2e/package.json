@@ -6,6 +6,8 @@
   "description": "Playwright E2E：按模块与用户故事组织",
   "license": "Apache-2.0",
   "scripts": {
+    "test": "NODE_OPTIONS=\"${NODE_OPTIONS:-} --conditions=@nerve-office/source\" playwright test",
+    "list": "NODE_OPTIONS=\"${NODE_OPTIONS:-} --conditions=@nerve-office/source\" playwright test --list --reporter=json",
     "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {
