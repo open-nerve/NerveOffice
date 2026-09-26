@@ -54,6 +54,27 @@ function templateName(): string {
   return `${TEMPLATE_PREFIX}${digest.digest('hex').slice(0, 12)}`
 }
 
+/** 进程还在的测试库属于正在运行的测试文件（可能在别的 worktree 里）；进程已经不在的，是中断的测试运行留下的。 */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  }
+  catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/** 删除中断的测试运行留下的库（名字里带着创建它的进程号，审查 A15）。 */
+async function dropAbandoned(client: pg.Client): Promise<void> {
+  const databases = await client.query<{ datname: string }>('SELECT datname FROM pg_database WHERE starts_with(datname, $1)', [DATABASE_PREFIX])
+  for (const { datname } of databases.rows) {
+    const pid = /^nerve_it_(\d+)_[\da-f]+$/.exec(datname)?.[1]
+    if (pid !== undefined && !isAlive(Number(pid)))
+      await client.query(`DROP DATABASE IF EXISTS ${pg.escapeIdentifier(datname)} WITH (FORCE)`)
+  }
+}
+
 /** 确保当前迁移的模板存在：先用临时名创建并迁移，完成后再改名，半成品永远不会被复用；顺带删除旧模板。 */
 async function ensureTemplate(client: pg.Client): Promise<string> {
   const template = templateName()
@@ -82,6 +103,7 @@ export async function createTestDatabase(options: { migrated?: boolean } = {}): 
   await withClient(async (client) => {
     await client.query(TEMPLATE_LOCK)
     try {
+      await dropAbandoned(client)
       const template = options.migrated === false ? undefined : await ensureTemplate(client)
       await client.query(template === undefined
         ? `CREATE DATABASE ${pg.escapeIdentifier(name)}`

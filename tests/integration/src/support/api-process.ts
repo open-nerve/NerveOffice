@@ -2,7 +2,8 @@
 // pnpm test:integration 会先构建 api。
 import type { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
@@ -10,6 +11,24 @@ import { fileURLToPath } from 'node:url'
 const ENTRIES = {
   main: fileURLToPath(new URL('../../../../apps/api/dist/app/main.js', import.meta.url)),
   migrate: fileURLToPath(new URL('../../../../apps/api/dist/cli/migrate.js', import.meta.url)),
+}
+/** 构建产物的来源：api 与 contracts 的源码（包括迁移文件）。 */
+const SOURCES = ['../../../../apps/api/src', '../../../../packages/contracts/src'].map(path => fileURLToPath(new URL(path, import.meta.url)))
+
+function newestModification(dir: string): number {
+  return Math.max(0, ...readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter(entry => entry.isFile())
+    .map(entry => statSync(join(entry.parentPath, entry.name)).mtimeMs))
+}
+
+/** 构建产物必须比源码新：直接运行 vitest 时容易拿旧的产物测旧的代码（审查 B14）。 */
+function assertBuildIsFresh(script: string): void {
+  const hint = 'pnpm test:integration 会先构建 api；单独运行时先执行 pnpm --filter "@nerve-office/api..." run build'
+  if (!existsSync(script))
+    throw new Error(`找不到 ${script}：${hint}`)
+  const built = statSync(script).mtimeMs
+  if (SOURCES.some(dir => newestModification(dir) > built))
+    throw new Error(`构建产物比源码旧：${hint}`)
 }
 
 export interface ProcessExit {
@@ -50,8 +69,7 @@ function findEntry(output: string, predicate: (entry: LogEntry) => boolean): Log
 /** 启动 api 的进程（默认是应用，也可以是迁移命令）。环境变量只有 PATH 与给定的这些，不继承测试进程的环境。 */
 export function startApiProcess(env: Readonly<Record<string, string>>, entry: keyof typeof ENTRIES = 'main'): ApiProcess {
   const script = ENTRIES[entry]
-  if (!existsSync(script))
-    throw new Error(`找不到 ${script}：先构建 api（pnpm test:integration 会自动构建）`)
+  assertBuildIsFresh(script)
   const child = spawn(process.execPath, [script], {
     env: { PATH: process.env.PATH ?? '', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -70,8 +88,9 @@ export function startApiProcess(env: Readonly<Record<string, string>>, entry: ke
   }
   child.stdout.on('data', append)
   child.stderr.on('data', append)
+  // 用 close 而不是 exit：exit 时标准输出与标准错误可能还没读完，随后找日志会漏掉最后几行（审查 B14）
   const exited = new Promise<ProcessExit>((resolve) => {
-    child.once('exit', (code, signal) => {
+    child.once('close', (code, signal) => {
       hasExited = true
       resolve({ code, signal })
       notify()

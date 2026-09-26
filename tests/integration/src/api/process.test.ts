@@ -1,5 +1,6 @@
 // 真实进程的启动与退出、迁移命令（P2 设计 §3.3、§3.7、§3.9）：用构建产物启动。
 import type { ApiProcess } from '../support/api-process.ts'
+import type { TestDatabase } from '../support/database.ts'
 import { readExpectedMigrations } from '@nerve-office/api'
 import { afterEach, describe, expect, it } from 'vitest'
 import { testEnvironment } from '../support/api-app.ts'
@@ -7,6 +8,7 @@ import { startApiProcess } from '../support/api-process.ts'
 import { createTestDatabase } from '../support/database.ts'
 
 const started: ApiProcess[] = []
+const databases: TestDatabase[] = []
 
 function start(env: Readonly<Record<string, string>>, entry?: 'main' | 'migrate'): ApiProcess {
   const api = startApiProcess(env, entry)
@@ -14,10 +16,12 @@ function start(env: Readonly<Record<string, string>>, entry?: 'main' | 'migrate'
   return api
 }
 
-afterEach(() => {
+afterEach(async () => {
   // 用例失败时不留下进程
   for (const api of started.splice(0))
     api.kill('SIGKILL')
+  for (const database of databases.splice(0))
+    await database.drop()
 })
 
 describe('迁移命令', () => {
@@ -52,7 +56,9 @@ describe('api 进程', () => {
   })
 
   it('启动后开始监听；收到 SIGTERM 后退出，退出码 0', async () => {
-    const api = start(testEnvironment())
+    const database = await createTestDatabase()
+    databases.push(database)
+    const api = start(testEnvironment(database.url))
     const listening = await api.waitForLog(entry => entry.msg === 'HTTP 服务已启动')
     const response = await fetch(`http://127.0.0.1:${String(listening.port)}/api/health/live`)
     expect(response.status).toBe(200)

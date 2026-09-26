@@ -32,8 +32,8 @@ let app: TestApp
 beforeAll(async () => {
   database = await createTestDatabase()
   app = await startTestApp({
+    databaseUrl: database.url,
     env: {
-      NERVE_DATABASE_URL: database.url,
       NERVE_DATABASE_STATEMENT_TIMEOUT_MS: '300',
       NERVE_DATABASE_LOCK_TIMEOUT_MS: '400',
       NERVE_DATABASE_IDLE_IN_TRANSACTION_TIMEOUT_MS: '500',

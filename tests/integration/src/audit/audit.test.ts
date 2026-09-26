@@ -50,7 +50,7 @@ let app: TestApp
 
 beforeAll(async () => {
   database = await createTestDatabase()
-  app = await startTestApp({ env: { NERVE_DATABASE_URL: database.url }, additionalModules: [AuditProbeModule] })
+  app = await startTestApp({ databaseUrl: database.url, additionalModules: [AuditProbeModule] })
 })
 
 afterAll(async () => {

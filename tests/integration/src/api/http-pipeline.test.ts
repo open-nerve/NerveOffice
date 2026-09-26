@@ -1,6 +1,7 @@
 // HTTP 管线（P2 设计 §3.2–§3.6）：经真实应用验证错误响应、安全头、请求标识与请求日志。
 // 用一个只在测试里存在的控制器制造各种情况。
 import type { TestApp } from '../support/api-app.ts'
+import type { TestDatabase } from '../support/database.ts'
 import type { LogEntry } from '../support/log-capture.ts'
 import { setTimeout as delay } from 'node:timers/promises'
 import { gzipSync } from 'node:zlib'
@@ -10,6 +11,7 @@ import { Body, Controller, Get, Module, Post } from '@nestjs/common'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { startTestApp } from '../support/api-app.ts'
+import { createTestDatabase } from '../support/database.ts'
 import { waitFor } from '../support/wait.ts'
 
 const echoSchema = z.strictObject({ name: z.string().min(1).max(20), password: z.string().optional() })
@@ -52,14 +54,17 @@ class PipelineProbeModule {}
 const EXPECTED_CSP = 'default-src \'self\'; img-src \'self\' data: blob:; connect-src \'self\'; font-src \'self\'; style-src \'self\' \'unsafe-inline\'; script-src \'self\'; worker-src \'self\'; frame-ancestors \'none\'; base-uri \'self\'; form-action \'self\''
 const JSON_HEADERS = { 'content-type': 'application/json' }
 
+let database: TestDatabase
 let app: TestApp
 
 beforeAll(async () => {
-  app = await startTestApp({ env: { NERVE_HTTP_JSON_BODY_LIMIT_BYTES: '65536' }, additionalModules: [PipelineProbeModule] })
+  database = await createTestDatabase()
+  app = await startTestApp({ databaseUrl: database.url, env: { NERVE_HTTP_JSON_BODY_LIMIT_BYTES: '65536' }, additionalModules: [PipelineProbeModule] })
 })
 
 afterAll(async () => {
   await app.close()
+  await database.drop()
 })
 
 async function request(path: string, init: RequestInit = {}): Promise<Response> {
@@ -174,7 +179,7 @@ describe('安全响应头（P2 设计 §3.6）', () => {
     const forwardedHttps = { 'x-forwarded-proto': 'https' }
     // 不信任代理时，客户端自己写的 X-Forwarded-Proto 不算数
     expect((await request('/api/health/live', { headers: forwardedHttps })).headers.has('strict-transport-security')).toBe(false)
-    const proxied = await startTestApp({ env: { NERVE_TRUST_PROXY: 'loopback' } })
+    const proxied = await startTestApp({ databaseUrl: database.url, env: { NERVE_TRUST_PROXY: 'loopback' } })
     try {
       expect((await fetch(`${proxied.baseUrl}/api/health/live`, { headers: forwardedHttps })).headers.get('strict-transport-security')).toBe('max-age=31536000')
       expect((await fetch(`${proxied.baseUrl}/api/health/live`)).headers.has('strict-transport-security')).toBe(false)

@@ -11,6 +11,8 @@ coverage/
 .env
 .env.*
 !.env.example
+# 本机开发的环境变量只有开发库的账号（与 deploy/dev/compose.yaml 相同），入库，新克隆即可 pnpm dev:api
+!apps/api/.env.development
 
 # Claude Code 本地文件
 .claude/worktrees/

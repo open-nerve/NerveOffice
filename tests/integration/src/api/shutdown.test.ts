@@ -67,7 +67,7 @@ afterAll(async () => {
 
 async function startApp(env: Record<string, string> = {}): Promise<TestApp> {
   gate = new Gate()
-  return startTestApp({ env: { NERVE_DATABASE_URL: database.url, ...env }, additionalModules: [SlowModule] })
+  return startTestApp({ databaseUrl: database.url, env, additionalModules: [SlowModule] })
 }
 
 async function applicationConnections(): Promise<number> {

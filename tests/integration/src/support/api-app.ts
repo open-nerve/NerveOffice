@@ -2,7 +2,6 @@
 import type { ApplicationOptions, ApplicationRuntime } from '@nerve-office/api'
 import type { LogCapture } from './log-capture.ts'
 import { createApplication, loadConfig } from '@nerve-office/api'
-import { testDatabaseUrl } from './database.ts'
 import { captureLogs } from './log-capture.ts'
 
 export interface TestApp {
@@ -14,16 +13,18 @@ export interface TestApp {
 }
 
 export interface TestAppOptions {
+  /** 这个测试文件自己的数据库（createTestDatabase），规范 §8.1 */
+  databaseUrl: string
   /** 覆盖或补充的环境变量 */
   env?: Readonly<Record<string, string>>
   /** 只在测试里存在的模块（例如挂一个慢请求的控制器） */
   additionalModules?: ApplicationOptions['additionalModules']
 }
 
-/** 测试里应用的默认配置：只监听本机的随机端口；连接池上限 4，免得并行的测试文件用完数据库的连接。 */
-export function testEnvironment(overrides: Readonly<Record<string, string>> = {}): Record<string, string> {
+/** 测试里应用的配置：只监听本机的随机端口；连接池上限 4，免得并行的测试文件用完数据库的连接。 */
+export function testEnvironment(databaseUrl: string, overrides: Readonly<Record<string, string>> = {}): Record<string, string> {
   return {
-    NERVE_DATABASE_URL: testDatabaseUrl(),
+    NERVE_DATABASE_URL: databaseUrl,
     NERVE_HTTP_HOST: '127.0.0.1',
     NERVE_HTTP_PORT: '0',
     NERVE_DATABASE_POOL_MAX: '4',
@@ -31,8 +32,8 @@ export function testEnvironment(overrides: Readonly<Record<string, string>> = {}
   }
 }
 
-export async function startTestApp(options: TestAppOptions = {}): Promise<TestApp> {
-  const config = loadConfig(testEnvironment(options.env))
+export async function startTestApp(options: TestAppOptions): Promise<TestApp> {
+  const config = loadConfig(testEnvironment(options.databaseUrl, options.env))
   const logs = captureLogs()
   const runtime = await createApplication(config, { logDestination: logs.destination, additionalModules: options.additionalModules })
   const { port } = await runtime.listen()

@@ -10,7 +10,7 @@ const apps: TestApp[] = []
 const databases: TestDatabase[] = []
 
 async function appOn(databaseUrl: string): Promise<TestApp> {
-  const app = await startTestApp({ env: { NERVE_DATABASE_URL: databaseUrl } })
+  const app = await startTestApp({ databaseUrl })
   apps.push(app)
   return app
 }
