@@ -1,6 +1,6 @@
 export { LoginPage } from './login-page.tsx'
-export { loginPath } from './login-path.ts'
+export { isLoginPage, LOGIN_PATH, loginPath } from './login-path.ts'
 export type { LoginReason } from './login-path.ts'
 export { RequireSession } from './require-session.tsx'
-export { HANDLES_AUTHENTICATION, SESSION_QUERY_KEY, sessionQueryOptions } from './session.ts'
+export { fetchSession, sessionQueryOptions } from './session.ts'
 export { UserMenu } from './user-menu.tsx'

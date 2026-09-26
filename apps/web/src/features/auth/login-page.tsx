@@ -6,7 +6,8 @@ import { describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { Alert, AlertDescription, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label } from '../../shared/ui/index.ts'
 import { redirectTarget } from './login-path.ts'
-import { HANDLES_AUTHENTICATION, login, SESSION_QUERY_KEY, sessionQueryOptions } from './session.ts'
+import { SessionCheck } from './session-check.tsx'
+import { login, SESSION_QUERY_KEY, sessionQueryOptions, STARTS_SESSION } from './session.ts'
 
 /** 登录页（US-M1-02）：已登录时直接回去；错误分别提示；提交中不能重复提交。 */
 export function LoginPage() {
@@ -21,7 +22,8 @@ export function LoginPage() {
   const target = redirectTarget(params.get('from'))
   const mutation = useMutation({
     mutationFn: login,
-    meta: HANDLES_AUTHENTICATION,
+    // 登录成功由请求缓存的全局处理通知其他标签页（app/runtime.ts）
+    meta: STARTS_SESSION,
     onSuccess: (data) => {
       queryClient.setQueryData(SESSION_QUERY_KEY, data)
       void navigate(target, { replace: true })
@@ -30,6 +32,9 @@ export function LoginPage() {
 
   if (session.data !== undefined && !mutation.isPending)
     return <Navigate to={target} replace />
+  // 还在确认是否已经登录：先不显示表单，免得已登录的人看到它闪一下（审查 B14）
+  if (session.isPending)
+    return <SessionCheck />
 
   function submit(event: SyntheticEvent<HTMLFormElement>): void {
     event.preventDefault()
@@ -67,7 +72,8 @@ export function LoginPage() {
               <Label htmlFor={passwordId}>{messages.auth.password}</Label>
               <Input id={passwordId} name="password" type="password" autoComplete="current-password" required value={password} onChange={event => setPassword(event.target.value)} />
             </div>
-            <Button type="submit" disabled={mutation.isPending || username.trim() === '' || password === ''}>
+            {/* 提交中用 aria-disabled 而不是 disabled：按钮变成 disabled 时浏览器把焦点丢到 body，键盘用户失败后找不到位置（审查 B13）；重复提交由 submit 挡住 */}
+            <Button type="submit" aria-disabled={mutation.isPending} disabled={username.trim() === '' || password === ''}>
               {mutation.isPending ? messages.auth.submitting : messages.auth.submit}
             </Button>
           </form>

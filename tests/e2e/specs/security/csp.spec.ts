@@ -2,7 +2,7 @@
 // 表格编辑器（含公式 Worker）在策略下正常工作的部分随 P4 的编辑器页补上。
 import type { Page } from '@playwright/test'
 import type { LocalServer } from '../../support/servers.ts'
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../../support/fixtures.ts'
 import { startControlServer, startTargetServer } from '../../support/servers.ts'
 
 /** M0 定稿的策略（00 号计划书 §11.3），逐字比较 */
@@ -47,10 +47,14 @@ test.describe('US-M1-09 CSP 与安全头', () => {
     }
   })
 
-  test('阳性对照：页面与 Worker 里违反策略的请求、eval 与 new Function 都被拦截', async ({ page }) => {
+  test('阳性对照：页面与 Worker 里违反策略的请求、eval 与 new Function 都被拦截', async ({ page, cspViolations }) => {
+    // 本用例就是要触发违规：声明预期有违规，夹具不再断言为空
+    cspViolations.expectViolations()
     const result = await probeResult(page, `/csp-probe.html?target=${encodeURIComponent(`${target.origin}/probe`)}`)
     expect(result).toEqual({ page: ALL_BLOCKED, worker: ALL_BLOCKED })
     expect(target.hits()).toBe(0)
+    // 夹具收到了页面里的违规（Worker 里的收不到）：证明所有用例共用的违规收集本身有效（审查 B1）
+    await expect.poll(() => [...new Set(cspViolations.list().map(violation => violation.directive))].sort()).toEqual(['connect-src', 'script-src'])
   })
 
   test('对照：没有 CSP 时同样的探针都能执行（探针有效，目标可达）', async ({ page }) => {

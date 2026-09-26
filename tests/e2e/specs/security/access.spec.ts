@@ -2,14 +2,20 @@
 // 文档页（编辑器）在 P4 建立，届时补上"两种情况的页面相同"。
 import { randomUUID } from 'node:crypto'
 import { errorResponseSchema } from '@nerve-office/contracts'
-import { expect, test } from '@playwright/test'
 import { createDocument, createUser } from '../../support/database.ts'
+import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
 
 test.describe('US-M1-08 未登录与别人的文档', () => {
   test('未登录访问页面：转到登录页', async ({ page }) => {
     await page.goto('/')
     await expect(page).toHaveURL(/\/login$/)
+    await expect(page.getByRole('form', { name: '登录' })).toBeVisible()
+  })
+
+  test('未登录访问不存在的地址：同样先转到登录页，看不出这个地址存不存在（审查 B23）', async ({ page }) => {
+    await page.goto('/no-such-page')
+    await expect(page).toHaveURL(/\/login\?from=%2Fno-such-page$/)
     await expect(page.getByRole('form', { name: '登录' })).toBeVisible()
   })
 

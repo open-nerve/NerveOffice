@@ -2,8 +2,9 @@ import { useQuery } from '@tanstack/react-query'
 import { Navigate, Outlet, useLocation } from 'react-router'
 import { describeError, isAuthenticationError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
-import { Alert, AlertDescription, Button, Skeleton } from '../../shared/ui/index.ts'
+import { Alert, AlertDescription, Button } from '../../shared/ui/index.ts'
 import { loginPath } from './login-path.ts'
+import { SessionCheck } from './session-check.tsx'
 import { sessionQueryOptions } from './session.ts'
 
 /**
@@ -13,14 +14,8 @@ import { sessionQueryOptions } from './session.ts'
 export function RequireSession() {
   const location = useLocation()
   const session = useQuery(sessionQueryOptions())
-  if (session.isPending) {
-    return (
-      <div className="mx-auto flex max-w-3xl flex-col gap-3 p-6" role="status" aria-label={messages.common.loading}>
-        <Skeleton className="h-8 w-40" />
-        <Skeleton className="h-24 w-full" />
-      </div>
-    )
-  }
+  if (session.isPending)
+    return <SessionCheck />
   if (session.isError) {
     if (isAuthenticationError(session.error)) {
       const from = `${location.pathname}${location.search}`
