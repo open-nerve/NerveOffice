@@ -1,0 +1,25 @@
+{
+  "name": "@nerve-office/contracts",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "description": "前后端共享的请求与响应结构、错误码与常量",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": {
+      "@nerve-office/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "catalog:"
+  }
+}

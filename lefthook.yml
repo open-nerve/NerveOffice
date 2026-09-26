@@ -1,0 +1,15 @@
+# 提交钩子（规范 §9）。由根 package.json 的 prepare 脚本安装
+pre-commit:
+  jobs:
+    - name: lint-staged
+      run: pnpm exec lint-staged
+
+commit-msg:
+  jobs:
+    - name: 去掉提交说明里的 AI 署名
+      run: node tools/src/git/commit-msg.ts {1}
+
+pre-push:
+  jobs:
+    - name: verify --fast
+      run: pnpm verify --fast

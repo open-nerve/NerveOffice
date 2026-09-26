@@ -1,0 +1,11 @@
+{
+  "name": "@nerve-office/tools",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "description": "仓库工具：质量门禁、故事对照、提交钩子与 verify",
+  "license": "Apache-2.0",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  }
+}

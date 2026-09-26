@@ -21,3 +21,10 @@ coverage/
 Thumbs.db
 .idea/
 *.log
+
+# 测试与构建的输出
+.vite/
+test-results/
+playwright-report/
+blob-report/
+tools/.gates/
