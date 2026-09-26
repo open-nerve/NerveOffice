@@ -23,11 +23,15 @@ const PLATFORM_ENTRY = 'apps/web/src/entries/platform/main.tsx'
 const CONTRACTS_FILE = 'packages/contracts/src/errors/error-response.ts'
 const TOOLS_TEST_FILE = 'tools/src/git/strip-ai-trailers.test.ts'
 const E2E_FILE = 'tests/e2e/specs/foundation/framework-smoke.spec.ts'
+const API_CONTROLLER = 'apps/api/src/modules/health/health.controller.ts'
+const API_SERVICE = 'apps/api/src/modules/health/application-state.ts'
+const API_CONFIG = 'apps/api/src/modules/config/config.ts'
+const INTEGRATION_FILE = 'tests/integration/src/support/api-app.ts'
 
 // 类型感知的 lint 第一次运行时，要加载整份配置，并为每个 tsconfig 工程建立类型程序；
 // 这是整组用例共用的准备工作，放在 beforeAll 里做完，不算进某一个用例的时限。
 // 本组用到的每个工程各检查一个真实文件，之后的用例只做增量检查。
-const WARM_UP_FILES = [WEB_FILE, CONTRACTS_FILE, TOOLS_TEST_FILE, E2E_FILE]
+const WARM_UP_FILES = [WEB_FILE, CONTRACTS_FILE, TOOLS_TEST_FILE, E2E_FILE, API_CONTROLLER, INTEGRATION_FILE]
 // 冷启动在 CI 的 4 核机器上还要和并行的测试文件抢 CPU，本机约 3 秒，这里留足余量
 const WARM_UP_TIMEOUT = 120_000
 // 预热之后，一个用例最多检查五段代码，本机合计不到 0.2 秒；CI 上按慢几十倍留余量
@@ -87,10 +91,19 @@ function severity(entry: Linter.RuleEntry | undefined): unknown {
   return Array.isArray(entry) ? entry[0] : entry
 }
 
-function restrictedPatterns(config: Linter.Config): string[] {
+interface RestrictedImports {
+  paths?: { name: string, importNames?: string[] }[]
+  patterns?: { group?: string[], regex?: string }[]
+}
+
+function restrictedImports(config: Linter.Config): RestrictedImports {
   const entry = config.rules?.['no-restricted-imports']
-  const options = Array.isArray(entry) ? entry[1] as { patterns?: { group: string[] }[] } : undefined
-  return (options?.patterns ?? []).flatMap(p => p.group)
+  return Array.isArray(entry) ? entry[1] as RestrictedImports : {}
+}
+
+/** 受限导入的模式：group 里的每一项与 regex。 */
+function restrictedPatterns(config: Linter.Config): string[] {
+  return (restrictedImports(config).patterns ?? []).flatMap(p => [...(p.group ?? []), ...(p.regex === undefined ? [] : [p.regex])])
 }
 
 describe('US-M1-11 lint 规则的自测：受限导入', () => {
@@ -177,6 +190,227 @@ describe('US-M1-11 lint 规则的自测：类型与写法', () => {
   })
 }, LINT_TIMEOUT)
 
+describe('US-M1-11 lint 规则的自测：后端', () => {
+  it('模块之间只经对方的 index.ts；模块不能引用应用的组装', async () => {
+    expect(await rulesFor('import { loadConfig } from \'../config/config.ts\'\nexport const f = loadConfig\n', API_SERVICE)).toContain('boundaries/dependencies')
+    expect(await rulesFor('import { loadConfig } from \'../config/index.ts\'\nexport const f = loadConfig\n', API_SERVICE)).not.toContain('boundaries/dependencies')
+    expect(await rulesFor('import { createApplication } from \'../../app/index.ts\'\nexport const f = createApplication\n', API_SERVICE)).toContain('boundaries/dependencies')
+  })
+
+  it('一个模块只能引用自己的表定义：别的模块的表读写不到', async () => {
+    const code = 'import { auditEvents } from \'../../db/schema/audit/index.ts\'\nexport const table = auditEvents\n'
+    expect(await rulesFor(code, API_SERVICE)).toContain('boundaries/dependencies')
+    expect(await rulesFor(code, 'apps/api/src/modules/audit/audit.repository.ts')).not.toContain('boundaries/dependencies')
+  })
+
+  it('集成测试只经 @nerve-office/api 的入口引用后端', async () => {
+    const code = 'import { loadConfig } from \'../../../../apps/api/src/modules/config/index.ts\'\nexport const f = loadConfig\n'
+    expect(await rulesFor(code, INTEGRATION_FILE)).toContain('boundaries/dependencies')
+  })
+
+  it('只有 config 模块读取 process.env', async () => {
+    const code = 'import process from \'node:process\'\n\nexport const url = process.env.NERVE_DATABASE_URL\n'
+    expect(await rulesFor(code, API_SERVICE)).toContain('node/no-process-env')
+    expect(severity((await configFor(API_CONFIG)).rules?.['node/no-process-env'])).toBe(0)
+  })
+
+  it('只有 database 模块、仓储与表定义能引用 drizzle-orm 与 pg', async () => {
+    const code = 'import { sql } from \'drizzle-orm\'\n\nexport const s = sql\n'
+    expect(await rulesFor('import pg from \'pg\'\n\nexport const Pool = pg.Pool\n', API_SERVICE)).toContain('no-restricted-imports')
+    expect(await rulesFor(code, API_SERVICE)).toContain('no-restricted-imports')
+    for (const allowed of ['apps/api/src/modules/audit/audit.repository.ts', 'apps/api/src/modules/database/pool.ts', 'apps/api/src/db/schema/audit/index.ts'])
+      expect(await rulesFor(code, allowed), allowed).not.toContain('no-restricted-imports')
+  })
+
+  it('控制器不引用仓储；输入必须带 schema；不用 @Req、@Res', async () => {
+    expect(await rulesFor('import { AuditRepository } from \'./audit.repository.ts\'\nexport const r = AuditRepository\n', API_CONTROLLER)).toContain('no-restricted-imports')
+    const controller = (parameter: string): string => [
+      'import { Body, Controller, Post, Req } from \'@nestjs/common\'',
+      'import { z } from \'zod\'',
+      '',
+      '@Controller(\'x\')',
+      'export class XController {',
+      '  @Post()',
+      `  create(${parameter}): unknown {`,
+      '    return z',
+      '  }',
+      '}',
+      '',
+    ].join('\n')
+    expect(await rulesFor(controller('@Body() body: unknown'), API_CONTROLLER)).toContain('no-restricted-syntax')
+    expect(await rulesFor(controller('@Req() request: unknown'), API_CONTROLLER)).toContain('no-restricted-syntax')
+    expect(await rulesFor(controller('@Body({ schema: z.object({}) }) body: unknown'), API_CONTROLLER)).not.toContain('no-restricted-syntax')
+  })
+
+  it('SQL 只用参数：不用 sql.raw，query()、execute() 的参数不能拼接', async () => {
+    const withQuery = (call: string): string => `export async function find(db: { query: (text: string, values?: unknown[]) => Promise<unknown> }, id: string): Promise<unknown> {\n  return ${call}\n}\n`
+    expect(await rulesFor(withQuery(`db.query(\`SELECT * FROM t WHERE id = \${id}\`)`), API_SERVICE)).toContain('no-restricted-syntax')
+    expect(await rulesFor(withQuery('db.query(\'SELECT * FROM t WHERE id = \' + id)'), API_SERVICE)).toContain('no-restricted-syntax')
+    expect(await rulesFor(withQuery('db.query(\'SELECT * FROM t WHERE id = $1\', [id])'), API_SERVICE)).not.toContain('no-restricted-syntax')
+    expect(await rulesFor('declare const sql: { raw: (text: string) => unknown }\nexport const s = sql.raw(\'x\')\n', API_SERVICE)).toContain('no-restricted-properties')
+    // 解构与别名同样拦下；写成对象的 query({ text }) 也算
+    expect(await rulesFor('declare const q: { raw: (text: string) => unknown }\nconst { raw } = q\nexport const s = raw(\'x\')\n', API_SERVICE)).toContain('no-restricted-properties')
+    expect(await rulesFor(withQuery(`db.query({ text: \`SELECT * FROM t WHERE id = \${id}\` })`), API_SERVICE)).toContain('no-restricted-syntax')
+    // concat() 与 + 一样是拼接（复验 N6）
+    expect(await rulesFor(withQuery('db.query(\'SELECT * FROM t WHERE id = \'.concat(id))'), API_SERVICE)).toContain('no-restricted-syntax')
+    expect(await rulesFor(withQuery('db.query({ text: \'SELECT * FROM t WHERE id = \'.concat(id) })'), API_SERVICE)).toContain('no-restricted-syntax')
+    // 只看第一个参数（SQL 文本）：后面的参数是绑定的值（复验 F5）
+    expect(await rulesFor(withQuery('db.query(\'SELECT $1, $2\', [\'a\'].concat([id]))'), API_SERVICE)).not.toContain('no-restricted-syntax')
+    expect(await rulesFor(withQuery(`db.query('SELECT $1', \`\${id}\`, 'a' + id)`), API_SERVICE)).not.toContain('no-restricted-syntax')
+    expect(await rulesFor(withQuery('db.query({ text: \'SELECT $1\', values: [\'a\'].concat([id]) })'), API_SERVICE)).not.toContain('no-restricted-syntax')
+  })
+
+  it('服务拿不到数据库句柄：DATABASE、数据库类型与表定义只有仓储能引用；开事务用 TransactionRunner；不能动态导入数据库的库', async () => {
+    expect(await rulesFor('import { DATABASE } from \'../database/index.ts\'\nexport const token = DATABASE\n', API_SERVICE)).toContain('no-restricted-imports')
+    expect(await rulesFor('import type { Database } from \'../database/index.ts\'\nexport type D = Database\n', API_SERVICE)).toContain('no-restricted-imports')
+    expect(await rulesFor('import { TransactionRunner } from \'../database/index.ts\'\nexport const runner = TransactionRunner\n', API_SERVICE)).not.toContain('no-restricted-imports')
+    expect(await rulesFor('import { auditEvents } from \'../../db/schema/audit/index.ts\'\nexport const table = auditEvents\n', 'apps/api/src/modules/audit/audit.service.ts')).toContain('no-restricted-imports')
+    const repository = 'import { auditEvents } from \'../../db/schema/audit/index.ts\'\nimport { DATABASE } from \'../database/index.ts\'\n\nexport const used = [auditEvents, DATABASE]\n'
+    expect(await rulesFor(repository, 'apps/api/src/modules/audit/audit.repository.ts')).not.toContain('no-restricted-imports')
+    expect(await rulesFor('export async function load(): Promise<unknown> {\n  return import(\'pg\')\n}\n', API_SERVICE)).toContain('no-restricted-syntax')
+  })
+
+  it('数据库的库：包本身、子路径与 pg-* 都拦下；名字只是以 pg 开头的包与本地文件不算（复验 N6、F1）', async () => {
+    const importOf = (source: string): string => `import value from '${source}'\n\nexport const v = value\n`
+    for (const source of ['pg/lib/client', 'pg-pool', 'drizzle-orm/node-postgres'])
+      expect(await rulesFor(importOf(source), API_SERVICE), source).toContain('no-restricted-imports')
+    for (const source of ['pgx-utils', './pg-errors.ts', '../../shared/pg-codes.ts'])
+      expect(await rulesFor(importOf(source), API_SERVICE), source).not.toContain('no-restricted-imports')
+  })
+
+  it('后端不用动态导入：受限导入与模块边界都只检查静态引用（复验 F3）', async () => {
+    for (const source of ['pg', '../database/index.ts', 'node:events']) {
+      const code = `export async function load(): Promise<unknown> {\n  return import('${source}')\n}\n`
+      expect(await rulesFor(code, API_SERVICE), source).toContain('no-restricted-syntax')
+    }
+  })
+
+  it('相对引用写 .ts：写成 .js 同样能解析到源文件，按路径生效的限制却认不出来（复验 F3）', async () => {
+    expect(await rulesFor('import { DATABASE } from \'../database/index.js\'\n\nexport const token = DATABASE\n', API_SERVICE)).toContain('no-restricted-imports')
+    const report = await lint('import { TransactionRunner } from \'../database/index.js\'\n\nexport const runner = TransactionRunner\n', API_CONTROLLER)
+    expect(report.messages.some(message => message.includes('扩展名 .ts'))).toBe(true)
+    expect(await rulesFor('import { loadConfig } from \'../config/index.ts\'\n\nexport const f = loadConfig\n', API_SERVICE)).not.toContain('no-restricted-imports')
+  })
+
+  it('app 层只有程序接口（index.ts）能转出数据库句柄，app 层的其他文件同样拿不到（复验 N6）', async () => {
+    const code = 'import { DATABASE } from \'../modules/database/index.ts\'\n\nexport const token = DATABASE\n'
+    expect(await rulesFor(code, 'apps/api/src/app/app.module.ts')).toContain('no-restricted-imports')
+    expect(await rulesFor('export { DATABASE } from \'../modules/database/index.ts\'\n', 'apps/api/src/app/index.ts')).not.toContain('no-restricted-imports')
+  })
+
+  it('控制器不自己开事务', async () => {
+    expect(await rulesFor('import { TransactionRunner } from \'../database/index.ts\'\nexport const runner = TransactionRunner\n', API_CONTROLLER)).toContain('no-restricted-imports')
+  })
+
+  it('环境变量的其他读法同样只能在 config 模块里：import { env }、解构、globalThis.process.env', async () => {
+    expect(await rulesFor('import { env } from \'node:process\'\n\nexport const url = env.NERVE_DATABASE_URL\n', API_SERVICE)).toContain('no-restricted-imports')
+    expect(await rulesFor('import process from \'node:process\'\n\nconst { env } = process\nexport const url = env.NERVE_DATABASE_URL\n', API_SERVICE)).toContain('no-restricted-syntax')
+    expect(await rulesFor('export const url = globalThis.process.env.NERVE_DATABASE_URL\n', API_SERVICE)).toContain('no-restricted-syntax')
+    // 给 process 改名或用命名空间引用：node/no-process-env 认不出来，这里拦下（复验 N6）
+    expect(await rulesFor('import proc from \'node:process\'\n\nexport const url = proc.env.NERVE_DATABASE_URL\n', API_SERVICE)).toContain('no-restricted-syntax')
+    expect(await rulesFor('import * as proc from \'node:process\'\n\nexport const url = proc.env.NERVE_DATABASE_URL\n', API_SERVICE)).toContain('no-restricted-syntax')
+    expect(await rulesFor('import process from \'node:process\'\n\nexport const pid = process.pid\n', API_SERVICE)).toEqual([])
+  })
+
+  it('控制器只写在 *.controller.ts 里；参数的限制对所有后端文件生效；不用 @Headers 等不经校验的装饰器', async () => {
+    const controllerIn = (parameter: string): string => [
+      'import { Body, Controller, Headers, Post } from \'@nestjs/common\'',
+      '',
+      '@Controller(\'x\')',
+      'export class XController {',
+      '  @Post()',
+      `  create(${parameter}): unknown {`,
+      '    return Headers',
+      '  }',
+      '}',
+      '',
+      'export const unused = Body',
+      '',
+    ].join('\n')
+    const inService = await lint(controllerIn('@Body() body: unknown'), API_SERVICE)
+    expect(inService.messages.filter(message => message.includes('*.controller.ts'))).toHaveLength(1)
+    expect(inService.messages.filter(message => message.includes('必须带 schema'))).toHaveLength(1)
+    expect(await rulesFor(controllerIn('@Headers(\'if-match\') header: string'), API_CONTROLLER)).toContain('no-restricted-syntax')
+  })
+
+  it('不经校验的装饰器在引用处就拦下，改名也拦得住；上传文件的装饰器同样不用（复验 N6）', async () => {
+    const aliased = [
+      'import { Controller, Post, Req as R } from \'@nestjs/common\'',
+      '',
+      '@Controller(\'x\')',
+      'export class XController {',
+      '  @Post()',
+      '  create(@R() request: unknown): unknown {',
+      '    return request',
+      '  }',
+      '}',
+      '',
+    ].join('\n')
+    const report = await lint(aliased, API_CONTROLLER)
+    expect(report.rules).toContain('no-restricted-imports')
+    expect(report.messages.some(message => message.includes('不经校验的参数装饰器'))).toBe(true)
+    expect(await rulesFor('import { UploadedFile } from \'@nestjs/common\'\n\nexport const decorator = UploadedFile\n', API_SERVICE)).toContain('no-restricted-imports')
+    // 包里的深层路径同样拦下，Logger 也一样（复验 F2）
+    expect(await rulesFor('import { Req as R } from \'@nestjs/common/decorators/http/route-params.decorator.js\'\n\nexport const decorator = R\n', API_SERVICE)).toContain('no-restricted-imports')
+    expect(await rulesFor('import { Logger } from \'@nestjs/common/services/logger.service.js\'\n\nexport const logger = Logger\n', API_SERVICE)).toContain('no-restricted-imports')
+    expect(await rulesFor('import * as common from \'@nestjs/common\'\n\nexport const decorator = common.Req\n', API_SERVICE)).toContain('no-restricted-imports')
+    // 从别处引来的同名装饰器：按写法拦下
+    const uploaded = [
+      'import { Controller, Post } from \'@nestjs/common\'',
+      '',
+      'declare function UploadedFile(): ParameterDecorator',
+      '',
+      '@Controller(\'x\')',
+      'export class XController {',
+      '  @Post()',
+      '  create(@UploadedFile() file: unknown): unknown {',
+      '    return file',
+      '  }',
+      '}',
+      '',
+    ].join('\n')
+    expect(await rulesFor(uploaded, API_CONTROLLER)).toContain('no-restricted-syntax')
+  })
+
+  it('每类后端文件都仍然禁止 Univer、Pro、Nest 的 Logger 与不经校验的装饰器（各覆盖块由同一个函数组合，审查 B15）', async () => {
+    const files = [
+      API_SERVICE,
+      API_CONTROLLER,
+      API_CONFIG,
+      'apps/api/src/modules/audit/audit.repository.ts',
+      'apps/api/src/modules/database/pool.ts',
+      'apps/api/src/db/schema/audit/index.ts',
+      'apps/api/src/app/index.ts',
+      'apps/api/src/cli/migrate.ts',
+    ]
+    for (const file of files) {
+      const config = await configFor(file)
+      expect(restrictedPatterns(config), file).toEqual(expect.arrayContaining(['@univerjs/*', '@univerjs-pro/*']))
+      expect(restrictedImports(config).paths?.some(path => path.name === '@nestjs/common' && path.importNames?.includes('Logger')), file).toBe(true)
+      expect(restrictedImports(config).paths?.some(path => path.name === '@nestjs/common' && path.importNames?.includes('Req')), file).toBe(true)
+    }
+  })
+
+  it('应用代码不用 Nest 的 Logger（进程级的静态实例），经依赖注入使用 AppLogger', async () => {
+    expect(await rulesFor('import { Logger } from \'@nestjs/common\'\n\nexport const logger = new Logger(\'x\')\n', API_SERVICE)).toContain('no-restricted-imports')
+    expect(await rulesFor('import { Injectable } from \'@nestjs/common\'\n\nexport const decorator = Injectable\n', API_SERVICE)).not.toContain('no-restricted-imports')
+  })
+
+  it('依赖注入要用的类不会被要求改成 import type（开启 emitDecoratorMetadata 时 typescript-eslint 会跳过）', async () => {
+    const code = [
+      'import { Controller } from \'@nestjs/common\'',
+      'import { ApplicationState } from \'./application-state.ts\'',
+      '',
+      '@Controller(\'x\')',
+      'export class XController {',
+      '  constructor(private readonly state: ApplicationState) {}',
+      '}',
+      '',
+    ].join('\n')
+    expect(await rulesFor(code, API_CONTROLLER)).not.toContain('ts/consistent-type-imports')
+  })
+}, LINT_TIMEOUT)
+
 describe('US-M1-11 lint 规则的自测：测试的写法', () => {
   it('不允许 .only', async () => {
     expect(await rulesFor('import { it } from \'vitest\'\n\nit.only(\'x\', () => {})\n', TOOLS_TEST_FILE)).toContain('test/no-only-tests')
@@ -191,7 +425,7 @@ describe('US-M1-11 lint 规则的自测：测试的写法', () => {
   })
 
   it('没有警告级别的规则（规范 §2.2）', async () => {
-    for (const file of [WEB_FILE, CONTRACTS_FILE, 'tools/src/git/strip-ai-trailers.ts', E2E_FILE, 'pnpm-workspace.yaml', 'package.json']) {
+    for (const file of [WEB_FILE, CONTRACTS_FILE, 'tools/src/git/strip-ai-trailers.ts', E2E_FILE, API_CONTROLLER, INTEGRATION_FILE, 'pnpm-workspace.yaml', 'package.json']) {
       const warned = Object.entries((await configFor(file)).rules ?? {}).filter(([, entry]) => [1, 'warn'].includes(severity(entry) as number | string))
       expect(warned.map(([name]) => `${file} ${name}`)).toEqual([])
     }

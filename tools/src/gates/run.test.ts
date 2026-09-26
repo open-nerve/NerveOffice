@@ -8,7 +8,7 @@ import { readFixture } from './fixtures.ts'
 import { artifactsGate, auditGate, runGate } from './run.ts'
 
 describe('US-M1-11 门禁对仓库现状通过', () => {
-  it.each(['pins', 'config', 'stories', 'deps', 'licenses'] as const)('%s', (name) => {
+  it.each(['pins', 'config', 'stories', 'migrations', 'schema', 'deps', 'licenses'] as const)('%s', (name) => {
     const outcome = runGate(name)
     expect(outcome.violations).toEqual([])
     expect(outcome.name).toBe(name)

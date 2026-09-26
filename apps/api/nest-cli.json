@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json.schemastore.org/nest-cli",
+  "sourceRoot": "src",
+  "entryFile": "app/main",
+  "compilerOptions": {
+    "builder": "tsc",
+    "tsConfigPath": "tsconfig.build.json",
+    "deleteOutDir": true,
+    "assets": [
+      {
+        "include": "db/migrations/**/*",
+        "outDir": "dist",
+        "watchAssets": true
+      }
+    ]
+  }
+}

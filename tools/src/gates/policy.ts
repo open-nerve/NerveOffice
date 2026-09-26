@@ -25,8 +25,11 @@ export const UNIVER_POLICY = {
   independent: { '@univerjs/icons': '1.43.0' } as Readonly<Record<string, string>>,
 }
 
-/** 多份实例会破坏依赖注入或 React 上下文的包；每个 `@univerjs/*` 包同样只能有一份。 */
-export const SINGLETON_PACKAGES: readonly string[] = ['react', 'react-dom', 'rxjs', '@wendellhu/redi']
+/**
+ * 多份实例会破坏依赖注入、元数据登记或 React 上下文的包；每个 `@univerjs/*` 包同样只能有一份。
+ * NestJS 的依赖注入与装饰器元数据依赖 @nestjs/common、@nestjs/core 与 reflect-metadata 各只有一份；drizzle-orm 的表定义与查询要来自同一份（P2）。
+ */
+export const SINGLETON_PACKAGES: readonly string[] = ['react', 'react-dom', 'rxjs', '@wendellhu/redi', '@nestjs/common', '@nestjs/core', 'reflect-metadata', 'drizzle-orm']
 
 /** 产物扫描（00 号计划书 §3.3、§11.3）。 */
 export const ARTIFACT_POLICY = {

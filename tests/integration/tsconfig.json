@@ -1,8 +1,10 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "types": ["node"],
-    "erasableSyntaxOnly": true
+    // 集成测试经源码条件引用 api，api 的装饰器与参数属性要按 api 的设置做类型检查（ADR-004）
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "types": ["node"]
   },
   "include": ["src"]
 }

@@ -1,9 +1,11 @@
 // 按名称执行门禁：从仓库读取输入（执行 pnpm、vitest、playwright 的列举命令），交给各检查模块（纯函数）判断。
+// Vitest 列举全部项目，新增项目时不会漏掉。
 // 读取外部输入的方式（执行命令、产物目录、当天日期）可以注入，便于用样例测试装配逻辑。
 import type { CollectedGraph } from './dependency-graph.ts'
 import type { Violation } from './types.ts'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
+import process from 'node:process'
 import { z } from 'zod'
 import { commandJson, packageName, readJson, readText, readWorkspaceConfig, REPO_ROOT, workspacePackageDirs } from '../shared/repo.ts'
 import { checkStories, parseDesignStoryIds, parseRegistry, testsFromPlaywrightList, testsFromVitestList } from '../stories/stories.ts'
@@ -12,12 +14,15 @@ import { checkAudit } from './audit.ts'
 import { checkGraphComplete, checkSingletons, checkUniver, collectInstalled } from './dependency-graph.ts'
 import { bundledPackagesSchema, checkLicenseBundle } from './license-bundle.ts'
 import { checkDevelopmentLicenses, checkProductionLicenses, flattenLicenseReport, licensesByPath } from './licenses.ts'
+import { gitIn, runMigrationsGate } from './migrations-gate.ts'
+import { MIGRATIONS_DIR } from './migrations.ts'
 import { checkPins } from './pins.ts'
 import { checkPnpmConfig, checkPnpmfiles, PNPMFILE_NAMES } from './pnpm-config.ts'
 import { auditReportSchema, licenseReportSchema, lsOutputSchema } from './pnpm-outputs.ts'
 import { ARTIFACT_POLICY, AUDIT_EXCEPTIONS, LICENSE_EXCEPTIONS, PNPM_POLICY, PRODUCTION_LICENSES, SINGLETON_PACKAGES, UNIVER_POLICY } from './policy.ts'
+import { runSchemaGate } from './schema-gate.ts'
 
-export const GATE_NAMES = ['pins', 'config', 'stories', 'deps', 'licenses', 'artifacts', 'audit'] as const
+export const GATE_NAMES = ['pins', 'config', 'stories', 'migrations', 'schema', 'deps', 'licenses', 'artifacts', 'audit'] as const
 export type GateName = typeof GATE_NAMES[number]
 
 export interface GateOutcome {
@@ -70,11 +75,20 @@ function stories(): GateOutcome {
   const registry = parseRegistry(readJson(STORY_REGISTRY))
   const designIds = parseDesignStoryIds(readText(registry.design))
   const tests = [
-    ...testsFromVitestList(commandJson('pnpm', ['exec', 'vitest', 'list', '--json', '--project', 'unit', '--project', 'unit-web', '--project', 'integration']), REPO_ROOT),
+    ...testsFromVitestList(commandJson('pnpm', ['exec', 'vitest', 'list', '--json']), REPO_ROOT),
     ...testsFromPlaywrightList(commandJson('pnpm', ['--filter', '@nerve-office/e2e', 'exec', 'playwright', 'test', '--list', '--reporter=json']), E2E_SPECS),
   ]
   const active = Object.entries(registry.stories).filter(([, s]) => s.status === 'active').map(([id]) => id)
   return { name: 'stories', title: '故事对照', violations: checkStories(designIds, registry, tests), notes: [`${designIds.length} 个故事，active：${active.join('、') || '无'}；列举出 ${tests.length} 个会执行的测试`] }
+}
+
+function migrations(): GateOutcome {
+  const result = runMigrationsGate({ root: REPO_ROOT, env: process.env, git: gitIn(REPO_ROOT) })
+  return { name: 'migrations', title: '迁移只向前', ...result }
+}
+
+function schema(): GateOutcome {
+  return { name: 'schema', title: '表定义与迁移同步', ...runSchemaGate(join(REPO_ROOT, MIGRATIONS_DIR)) }
 }
 
 function deps(): GateOutcome {
@@ -146,6 +160,8 @@ const GATES: Readonly<Record<GateName, () => GateOutcome>> = {
   pins,
   config,
   stories,
+  migrations,
+  schema,
   deps,
   licenses,
   artifacts: () => artifactsGate(WEB_DIST),

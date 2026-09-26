@@ -23,16 +23,14 @@ export interface StepResult {
   durationMs: number
 }
 
-const FAST_STEPS: readonly Step[] = [
-  { id: 'lint', command: ['pnpm', 'lint'] },
-  { id: 'typecheck', command: ['pnpm', 'typecheck'] },
-  { id: 'unit', command: ['pnpm', 'test:coverage'] },
-  { id: 'static-gates', command: ['node', 'tools/src/gates/cli.ts', 'pins', 'config', 'stories'] },
-]
-
+const LINT: Step = { id: 'lint', command: ['pnpm', 'lint'] }
+const TYPECHECK: Step = { id: 'typecheck', command: ['pnpm', 'typecheck'] }
+const UNIT: Step = { id: 'unit', command: ['pnpm', 'test'] }
+const STATIC_GATES: Step = { id: 'static-gates', command: ['node', 'tools/src/gates/cli.ts', 'pins', 'config', 'stories', 'migrations', 'schema'] }
 const DATABASE: Step = { id: 'database', command: ['pnpm', 'db:up'] }
-const FULL_STEPS: readonly Step[] = [
-  { id: 'integration', command: ['pnpm', 'test:integration'] },
+// 单元与集成测试合计的覆盖率（规范 §8.3），需要数据库；已经包含单元测试，完整模式不再单独执行单元测试
+const TESTS: Step = { id: 'tests', command: ['pnpm', 'test:coverage'] }
+const BUILD_AND_E2E: readonly Step[] = [
   // 先删除旧产物，构建没有真正执行时，后面的产物检查会失败
   { id: 'clean', command: ['pnpm', 'clean'] },
   { id: 'build', command: ['pnpm', 'build'] },
@@ -43,9 +41,9 @@ const FULL_STEPS: readonly Step[] = [
 const AUDIT: Step = { id: 'audit', command: ['node', 'tools/src/gates/cli.ts', 'audit'] }
 
 export function planSteps(options: PlanOptions): Step[] {
-  const steps = [...FAST_STEPS]
-  if (!options.fast)
-    steps.push(...(options.ci ? [] : [DATABASE]), ...FULL_STEPS)
+  const steps = options.fast
+    ? [LINT, TYPECHECK, UNIT, STATIC_GATES]
+    : [LINT, TYPECHECK, STATIC_GATES, ...(options.ci ? [] : [DATABASE]), TESTS, ...BUILD_AND_E2E]
   if (options.ci || options.audit)
     steps.push(AUDIT)
   return steps

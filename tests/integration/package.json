@@ -9,9 +9,14 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {
+    "@nerve-office/api": "workspace:*",
+    "@nerve-office/contracts": "workspace:*",
+    "@nestjs/common": "catalog:",
     "@types/node": "catalog:",
     "@types/pg": "catalog:",
+    "drizzle-orm": "catalog:",
     "pg": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "zod": "catalog:"
   }
 }

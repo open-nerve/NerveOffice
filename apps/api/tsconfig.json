@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // NestJS 的依赖注入靠构造参数的类型元数据（ADR-004）；Vitest 的 Oxc 转译同样读取这两项
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "types": ["node"]
+  },
+  "include": ["src", "drizzle.config.ts"]
+}
