@@ -46,7 +46,7 @@ export default defineConfig({
       include: ['packages/*/src/**', 'apps/api/src/**', 'apps/web/src/**', 'apps/web/build/**', 'tools/src/**'],
       exclude: [
         '**/*.test.{ts,tsx}',
-        // 测试辅助（*.test-support.ts、*.test-support.tsx）只在测试里使用，不进构建产物
+        // 测试辅助（*.test-support.ts、*.test-support.tsx）只被测试引用（lint 规则 nerve/test-code-only-in-tests 保证），不进构建产物
         '**/*.test-support.{ts,tsx}',
         // 入口文件只负责挂载，由 E2E 覆盖
         'apps/web/src/entries/**',

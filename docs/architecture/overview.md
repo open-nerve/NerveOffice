@@ -113,9 +113,9 @@ apps/api/src/
 
 ```text
 apps/web/src/
-  entries/platform/   平台页面的入口：挂载应用、关闭 zod 的 JIT（CSP）、从往返缓存恢复时重新加载
+  entries/platform/   平台页面的入口：只写副作用导入，按顺序关掉 zod 的 JIT（CSP）→ 样式 → 挂载（建运行时，从往返缓存恢复时重新加载）
   entries/csp-probe/  CSP 阳性对照（只在测试构建里）
-  app/                路由表、请求缓存（全局的未登录处理）、布局、404 与错误页
+  app/                运行时（路由、请求缓存、会话的全局处理：整页跳转、多标签页）、布局、404 与错误页
   features/auth/      登录页、会话、需要登录的外层路由、退出
   features/documents/ 我的空间的文档列表
   shared/             请求层（api）、界面组件（ui，改写后的 shadcn/ui）、界面文字（i18n）、小工具（lib）
@@ -123,7 +123,9 @@ apps/web/src/
 
 - React Router 8（数据路由的库模式）、TanStack Query 5、Tailwind CSS 4 与 shadcn/ui 的 Radix 版本（ADR-008）。
 - 请求层：同源请求，状态变更的请求带 CSRF 令牌；错误分为 `ApiError`、`NetworkError`、`ResponseFormatError`；成功的响应按 contracts 校验。
-- 任何请求得到未登录或登录已过期：清空缓存，回到登录页，登录后回到原来的地址。
+- 会话结束（任何请求得到未登录或登录已过期、退出）：清掉 CSRF 令牌，整页回到登录页，登录后回到原来的地址；不在单页里清空缓存。
+- 多个标签页：登录与退出经 BroadcastChannel 通知；收到消息或得到 `CSRF_TOKEN_INVALID` 时重新确认会话，换了人整页重新加载。
+- 查询与变更不按浏览器的在线状态挂起，断网时照常失败并提示。
 - 首屏 JS 预算：平台页面 180 KiB（gzip），门禁 `budgets` 检查。
 
 ## 5. 模块边界
@@ -185,7 +187,7 @@ A01 等检查（`pnpm gate <名称>`）：
 - PostgreSQL 18.6，镜像按摘要锁定；新库使用内置的 `C.UTF-8` 排序规则，开启数据页校验和；主键用 `uuidv7()`。
 - 开发：`pnpm db:up`（只监听 `127.0.0.1:54318`），`pnpm db:migrate` 执行迁移，`pnpm db:generate --name <名称>` 按表定义生成迁移。CI 使用同一个镜像的服务容器。
 - 集成测试：每个测试文件从模板库复制一份独立的数据库；模板按迁移的名称、哈希与时间戳命名，迁移不变时复用。
-- E2E：每次运行建一个专用的库（名称带 Playwright 主进程的进程号），由服务脚本迁移、初始化管理员，结束时删除；遗留的库下次清理。
+- E2E：每次运行建一个专用的库（名称带 Playwright 主进程的进程号），由服务脚本迁移、初始化管理员，结束时删除；遗留的库下次清理。端口每次由操作系统分配；后端单独一个进程组，只由服务脚本发一次 SIGTERM，服务脚本被强制结束时后端自行退出；后端日志写进 `tests/e2e/test-results/e2e-server.log`。
 
 | 表 | 模块 | 说明 |
 |---|---|---|
