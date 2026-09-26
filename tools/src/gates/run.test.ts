@@ -52,7 +52,7 @@ describe('US-M1-11 产物门禁的装配', () => {
   it('违规：产物里的动态代码、.json 里的外部地址、未登记的文件类型、缺少许可清单', () => {
     const { '.vite/third-party-packages.json': _omitted, ...withoutBundle } = clean
     const outcome = artifactsGate(writeDist({ ...withoutBundle, 'assets/w.js': 'self.eval(x)', 'config.json': '{"endpoint":"https://evil.example.com"}', 'notes.md': '说明' }))
-    expect(outcome.violations.map(v => v.rule).sort()).toEqual(['artifacts/dynamic-code', 'artifacts/file-type', 'artifacts/host', 'license-bundle/missing-file'])
+    expect(outcome.violations.map(v => v.rule).sort()).toEqual(['artifacts/address', 'artifacts/dynamic-code', 'artifacts/file-type', 'license-bundle/missing-file'])
   })
 })
 

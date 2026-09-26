@@ -135,7 +135,7 @@ export function artifactsGate(distDir: string): GateOutcome {
     return { name: 'artifacts', title, violations: [{ rule: 'artifacts/missing-build', subject: relative(REPO_ROOT, distDir), detail: '没有构建产物，先执行 pnpm build' }], notes: [] }
   const files = filesIn(distDir)
   const textFiles = files.filter(path => classifyArtifact(path) === 'text')
-  const { violations, hosts, knownDynamicCode } = scanArtifacts(textFiles.map(path => ({ path, content: readFileSync(join(distDir, path), 'utf8') })), ARTIFACT_POLICY)
+  const { violations, hosts, runtimeHosts, unusedAddresses, knownDynamicCode } = scanArtifacts(textFiles.map(path => ({ path, content: readFileSync(join(distDir, path), 'utf8') })), ARTIFACT_POLICY)
   const bundleFile = join(distDir, '.vite', 'third-party-packages.json')
   const bundle = existsSync(bundleFile) ? bundledPackagesSchema.parse(JSON.parse(readFileSync(bundleFile, 'utf8'))) : undefined
   const bundleViolations: Violation[] = bundle === undefined
@@ -148,7 +148,9 @@ export function artifactsGate(distDir: string): GateOutcome {
     title,
     violations: [...checkFileTypes(files), ...checkTestOnlyArtifacts(files), ...violations, ...bundleViolations],
     notes: [
-      `${files.length} 个文件，扫描其中 ${textFiles.length} 个；出现的主机：${hostSummary}；打进产物的第三方包 ${bundle?.length ?? 0} 个`,
+      `${files.length} 个文件，扫描其中 ${textFiles.length} 个；打进产物的第三方包 ${bundle?.length ?? 0} 个`,
+      `出现的主机：${hostSummary}；主机在运行时拼出的地址 ${runtimeHosts} 处（由 CSP 兜底）`,
+      `允许清单里这次没出现的地址（核对后删除）：${unusedAddresses.join('、') || '无'}`,
       `已登记的动态代码（出现次数为 0 的登记已经过时，核对后删除）：${knownSummary}`,
     ],
   }

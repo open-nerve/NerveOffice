@@ -26,8 +26,21 @@ export interface KnownDynamicCode {
   max: number
 }
 
+/**
+ * 产物里允许出现的地址：只是字符串（命名空间标识、错误信息里的文档链接、解析地址用的基准），不会被请求。
+ * 按具体地址登记，不按主机放行：同一个主机上的其他地址仍然违规（审查 B21）。
+ */
+export interface AllowedAddress {
+  /** 地址原文。比较时协议与主机不区分大小写，句末的句点不算；路径要完全一致 */
+  address: string
+  /** 来自哪个依赖 */
+  source: string
+  /** 做什么用，为什么不会被请求 */
+  reason: string
+}
+
 export interface ArtifactPolicy {
-  allowedHosts: Readonly<Record<string, string>>
+  allowedAddresses: readonly AllowedAddress[]
   globalThisProbeMax: number
   knownDynamicCode: readonly KnownDynamicCode[]
   forbiddenKeywords: readonly string[]
@@ -35,7 +48,12 @@ export interface ArtifactPolicy {
 
 export interface ArtifactScan {
   violations: Violation[]
+  /** 出现过的主机与次数；主机以插值开头、后面是固定域名的，记为 *.域名 */
   hosts: Map<string, number>
+  /** 主机完全在运行时拼出的地址（例如 `http://[${e}]`）的次数：静态扫描看不到主机，由 CSP 的 connect-src 兜底 */
+  runtimeHosts: number
+  /** 允许清单里这次没有出现的地址：依赖升级后核对，过时的删除，保持清单最小 */
+  unusedAddresses: string[]
   /** 已登记的动态代码各自出现的次数（没出现的记 0，便于发现过时的登记） */
   knownDynamicCode: Map<string, number>
 }
@@ -81,34 +99,90 @@ function isJavaScript(path: string): boolean {
   return /\.m?js$/i.test(path)
 }
 
-/** 绝对地址（含 ws/wss，不区分大小写，含 JSON 转义的 \/ 与再经 JS 字符串转义的 \\/）与字符串里的协议相对地址。 */
-const ABSOLUTE_URL = /\b(?:https?|wss?):(?:\\{0,2}\/){2}[^\s"'`()<>\\,;{}]+/gi
-const PROTOCOL_RELATIVE_URL = /["'`]\/\/((?:[a-z0-9-]+\.)+[a-z]{2,})(?::\d+)?(?:[/?#][^"'`\s]*)?["'`]/gi
+/**
+ * 绝对地址（含 ws/wss，不区分大小写，含 JSON 转义的 \/ 与再经 JS 字符串转义的 \\/，路径里的也算）。
+ * 模板字符串里不带花括号的插值 ${…} 算作地址的一部分，由 addressShape 分出固定的部分与运行时拼出的部分（审查 B2）。
+ */
+const ABSOLUTE_URL = /\b(?:https?|wss?):(?:\\{0,2}\/){2}(?:[^\s"'`()<>\\,;{}$]|\\{1,2}\/|\$(?!\{)|\$\{[^{}]*\})+/gi
+/** 字符串里的协议相对地址：整个字符串就是地址，主机是固定的域名。 */
+const PROTOCOL_RELATIVE_URL = /["'`](\/\/(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?(?:[/?#][^"'`\s]*)?)["'`]/gi
+const INTERPOLATION = /\$\{[^{}]*\}/g
+/** 插值在地址里的占位：地址里不会出现这个字符 */
+const HOLE = '\0'
+
+/** 主机是固定的。address 是第一个插值之前的固定部分；hostComplete 为假时主机或端口里还有插值 */
+interface FixedHost { kind: 'fixed', address: string, host: string, hostComplete: boolean }
+/** 主机以插值开头、后面是固定的域名（例如 `https://${region}.tracker.example/`）：按 *.域名 报出 */
+interface FixedDomainSuffix { kind: 'suffix', host: string }
+/** 主机完全在运行时拼出（例如 zod 的 `http://[${e}]`）：看不到主机，由 CSP 兜底 */
+interface RuntimeHost { kind: 'runtime' }
+type AddressShape = FixedHost | FixedDomainSuffix | RuntimeHost
 
 function context(text: string, index: number): string {
   return text.slice(Math.max(0, index - 40), index + 60).replace(/\s+/g, ' ')
 }
 
-function hostOf(url: string): string {
+/** hostAndPort 形如 example.com:8080 或 [::1]；解析不了时原样返回，照样报出。 */
+function hostOf(hostAndPort: string): string {
   try {
-    return new URL(url.replace(/\\+\//g, '/')).host.toLowerCase()
+    return new URL(`//${hostAndPort}`, 'https://base.invalid').host
   }
   catch {
-    return url
+    return hostAndPort.toLowerCase()
   }
+}
+
+/**
+ * 地址原文（绝对地址，或以 // 开头的协议相对地址）的形状。插值之后的部分在运行时才有值：
+ * 主机固定时按插值之前的部分检查（插值在路径、查询或端口里，例如 `https://t.example/c?u=${user}`）；
+ * 只有主机本身以插值开头时才看不到主机（审查 B2）。
+ */
+function addressShape(raw: string): AddressShape {
+  const text = raw.replace(/\\+\//g, '/').replace(INTERPOLATION, HOLE)
+  const authority = /^(?:[a-z]+:)?\/\/([^/?#]*)/i.exec(text)?.[1] ?? ''
+  const hostAndPort = authority.slice(authority.lastIndexOf('@') + 1)
+  if (hostAndPort.replace(/^\[/, '').startsWith(HOLE)) {
+    const suffix = hostAndPort.slice(hostAndPort.lastIndexOf(HOLE) + 1).split(/[:\]]/, 1)[0] ?? ''
+    return /\.[a-z]/i.test(suffix) ? { kind: 'suffix', host: `*${suffix.toLowerCase()}` } : { kind: 'runtime' }
+  }
+  return {
+    kind: 'fixed',
+    address: text.split(HOLE, 1)[0] ?? text,
+    host: hostOf(hostAndPort.split(HOLE, 1)[0] ?? hostAndPort),
+    hostComplete: !hostAndPort.includes(HOLE),
+  }
+}
+
+/** 比较用的写法：协议与主机不区分大小写；句末的句点不属于地址（例如错误信息里的 "See https://….")。 */
+function comparableAddress(address: string): string {
+  const trimmed = address.replace(/\.+$/, '')
+  const origin = /^(?:[a-z][\w+.-]*:)?\/\/[^/?#]*/i.exec(trimmed)?.[0] ?? ''
+  return origin.toLowerCase() + trimmed.slice(origin.length)
 }
 
 export function scanArtifacts(files: readonly ArtifactFile[], policy: ArtifactPolicy): ArtifactScan {
   const violations: Violation[] = []
   const hosts = new Map<string, number>()
-  const allowedHosts = new Set(Object.keys(policy.allowedHosts).map(h => h.toLowerCase()))
+  let runtimeHosts = 0
+  const allowed = new Map(policy.allowedAddresses.map(entry => [comparableAddress(entry.address), entry.address]))
+  const usedAddresses = new Set<string>()
   let probes = 0
   const keywordSamples = new Map<string, string>()
 
-  const noteHost = (file: ArtifactFile, host: string, index: number): void => {
-    hosts.set(host, (hosts.get(host) ?? 0) + 1)
-    if (!allowedHosts.has(host))
-      violations.push({ rule: 'artifacts/host', subject: file.path, detail: `${host}：${context(file.content, index)}` })
+  const noteAddress = (file: ArtifactFile, raw: string, index: number): void => {
+    const shape = addressShape(raw)
+    if (shape.kind === 'runtime') {
+      runtimeHosts += 1
+      return
+    }
+    hosts.set(shape.host, (hosts.get(shape.host) ?? 0) + 1)
+    // 主机或端口里有插值时，实际的地址不止这段固定部分，允许清单不适用
+    const address = shape.kind === 'fixed' && shape.hostComplete ? comparableAddress(shape.address) : undefined
+    if (address !== undefined && allowed.has(address)) {
+      usedAddresses.add(address)
+      return
+    }
+    violations.push({ rule: 'artifacts/address', subject: file.path, detail: `${address ?? shape.host} 不在允许清单里（主机 ${shape.host}）：${context(file.content, index)}` })
   }
 
   const knownCounts = new Map(policy.knownDynamicCode.map(known => [known.name, 0]))
@@ -150,14 +224,10 @@ export function scanArtifacts(files: readonly ArtifactFile[], policy: ArtifactPo
       for (const match of file.content.matchAll(pattern))
         reportDynamicCode(name, match.index)
     }
-    for (const match of file.content.matchAll(ABSOLUTE_URL)) {
-      // 模板字符串里在运行时拼出的地址（例如 `http://[${host}]`）：没有固定的主机，由 CSP 的 connect-src 兜底
-      if (file.content.startsWith('${', match.index + match[0].length - 1))
-        continue
-      noteHost(file, hostOf(match[0]), match.index)
-    }
+    for (const match of file.content.matchAll(ABSOLUTE_URL))
+      noteAddress(file, match[0], match.index)
     for (const match of file.content.matchAll(PROTOCOL_RELATIVE_URL))
-      noteHost(file, (match[1] ?? '').toLowerCase(), match.index)
+      noteAddress(file, match[1] ?? '', match.index)
     const lower = file.content.toLowerCase()
     for (const keyword of policy.forbiddenKeywords) {
       const index = lower.indexOf(keyword.toLowerCase())
@@ -180,7 +250,8 @@ export function scanArtifacts(files: readonly ArtifactFile[], policy: ArtifactPo
   }
   for (const [keyword, sample] of keywordSamples)
     violations.push({ rule: 'artifacts/keyword', subject: keyword, detail: sample })
-  return { violations, hosts, knownDynamicCode: knownCounts }
+  const unusedAddresses = [...allowed].filter(([address]) => !usedAddresses.has(address)).map(([, original]) => original)
+  return { violations, hosts, runtimeHosts, unusedAddresses, knownDynamicCode: knownCounts }
 }
 
 /** 构建产物里允许出现的文件类型：text 类扫描内容（含 .json），binary 类只放行。 */

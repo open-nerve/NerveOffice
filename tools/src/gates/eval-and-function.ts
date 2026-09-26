@@ -114,9 +114,7 @@ function referencedName(visit: Visit): EvalOrFunction | undefined {
 }
 
 /** 引用的用法；拿不到代码执行能力的用法返回 undefined。 */
-function usageOf({ parent, field }: Visit): Usage | undefined {
-  if (parent === undefined)
-    return 'value'
+function usageOf(parent: SyntaxNode, field: string): Usage | undefined {
   switch (parent.type) {
     case 'CallExpression':
       return field === 'callee' ? 'call' : 'value'
@@ -144,6 +142,20 @@ function literalArguments(call: SyntaxNode): string[] | undefined {
   return values.every((value): value is string => value !== undefined) ? values : undefined
 }
 
+/** 这个位置上对 eval 或 Function 的引用；不是引用，或者用法拿不到代码执行能力时为 undefined。 */
+function referenceAt(visit: Visit): Reference | undefined {
+  // 引用总在某个表达式或声明里，只有根节点（Program）没有父节点
+  const { parent } = visit
+  const name = parent === undefined ? undefined : referencedName(visit)
+  if (parent === undefined || name === undefined)
+    return undefined
+  const usage = usageOf(parent, visit.field)
+  if (usage === undefined)
+    return undefined
+  const invoked = usage === 'call' || usage === 'new' ? literalArguments(parent) : undefined
+  return { name, usage, index: visit.node.start, ...(invoked === undefined ? {} : { literalArguments: invoked }) }
+}
+
 function visitChildren(visit: Visit, stack: Visit[]): void {
   for (const [field, value] of Object.entries(visit.node)) {
     for (const child of Array.isArray(value) ? value : [value]) {
@@ -164,12 +176,9 @@ export function findEvalAndFunction(content: string): ScanOutcome {
   const stack: Visit[] = [{ node: program, parent: undefined, grandparent: undefined, field: '' }]
   for (let visit = stack.pop(); visit !== undefined; visit = stack.pop()) {
     visitChildren(visit, stack)
-    const name = referencedName(visit)
-    const usage = name === undefined ? undefined : usageOf(visit)
-    if (name === undefined || usage === undefined || references.has(visit.node.start))
-      continue
-    const invoked = (usage === 'call' || usage === 'new') && visit.parent !== undefined ? literalArguments(visit.parent) : undefined
-    references.set(visit.node.start, { name, usage, index: visit.node.start, ...(invoked === undefined ? {} : { literalArguments: invoked }) })
+    const reference = referenceAt(visit)
+    if (reference !== undefined && !references.has(reference.index))
+      references.set(reference.index, reference)
   }
   return { references: [...references.values()].sort((a, b) => a.index - b.index) }
 }

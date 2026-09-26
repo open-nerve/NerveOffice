@@ -48,16 +48,24 @@ export const SINGLETON_PACKAGES: readonly string[] = [
 
 /** 产物扫描（00 号计划书 §3.3、§11.3）。 */
 export const ARTIFACT_POLICY: ArtifactPolicy = {
-  /** 产物中允许出现的绝对地址的主机：它们只是字符串，不会被请求。 */
-  allowedHosts: {
-    'react.dev': 'React 错误信息里的文档链接',
-    'www.w3.org': 'XML、SVG 与 MathML 的命名空间标识',
-    'reactrouter.com': 'React Router 错误信息里的文档链接',
-    'github.com': 'React Router 提示加载 URLSearchParams 补丁的说明',
-    'localhost': 'React Router 解析相对地址时用的基准（new URL(path, "http://localhost")），不发请求',
-    'json-schema.org': 'zod 生成 JSON Schema 时写进 $schema 的标识，不发请求',
-    'tailwindcss.com': 'Tailwind CSS 在样式文件开头的许可注释',
-  },
+  /**
+   * 产物中允许出现的地址（审查 B21）：它们只是字符串，不会被请求。按具体地址登记，同一个主机上的其他地址仍然违规；
+   * 门禁的说明会列出这次没出现的地址，依赖升级后核对，过时的删除。
+   */
+  allowedAddresses: [
+    { address: 'http://www.w3.org/2000/svg', source: 'react-dom、lucide-react', reason: 'SVG 的命名空间：react-dom 创建 SVG 元素时用，lucide-react 写进图标的 xmlns 属性' },
+    { address: 'http://www.w3.org/1998/Math/MathML', source: 'react-dom', reason: '创建 MathML 元素时用的命名空间' },
+    { address: 'http://www.w3.org/1999/xlink', source: 'react-dom', reason: 'xlink:href 等属性的命名空间' },
+    { address: 'http://www.w3.org/XML/1998/namespace', source: 'react-dom', reason: 'xml:base、xml:lang、xml:space 属性的命名空间' },
+    { address: 'https://react.dev/errors/', source: 'react-dom', reason: '生产构建的错误信息只带错误码，拼上错误码指向错误说明页，只出现在错误信息里' },
+    { address: 'http://localhost', source: 'react-router', reason: '解析相对地址时用的基准（new URL(path, "http://localhost")），只用来解析，不发请求' },
+    { address: 'https://reactrouter.com/en/main/routers/picking-a-router', source: 'react-router', reason: '在数据路由之外调用数据路由的钩子时，错误信息里的文档链接' },
+    { address: 'https://github.com/ungap/url-search-params', source: 'react-router', reason: '浏览器不支持 URLSearchParams 时的警告里推荐的补丁，只是文字，不加载' },
+    { address: 'https://json-schema.org/draft/2020-12/schema', source: 'zod', reason: 'z.toJSONSchema() 写进 $schema 的标识（draft 2020-12）' },
+    { address: 'http://json-schema.org/draft-07/schema#', source: 'zod', reason: 'z.toJSONSchema() 写进 $schema 的标识（draft-07）' },
+    { address: 'http://json-schema.org/draft-04/schema#', source: 'zod', reason: 'z.toJSONSchema() 写进 $schema 的标识（draft-04）' },
+    { address: 'https://tailwindcss.com', source: 'tailwindcss', reason: '样式文件开头的许可注释' },
+  ],
   /**
    * `Function('return this')()` 这类全局对象探测的次数上限。
    * M0 在 Univer 的产物里见过 3 处（lodash），运行时会被短路（M0-P1 报告 §2）。
