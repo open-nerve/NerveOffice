@@ -19,6 +19,10 @@ const PROBE_FILES = {
 }
 
 const WEB_FILE = 'apps/web/src/app/app.tsx'
+const WEB_TEST_FILE = 'apps/web/src/app/app.test.tsx'
+const WEB_TEST_SUPPORT = 'apps/web/src/app/render-app.test-support.tsx'
+const WEB_SHARED_FILE = 'apps/web/src/shared/lib/format.ts'
+const WEB_FEATURE_FILE = 'apps/web/src/features/auth/session.ts'
 const PLATFORM_ENTRY = 'apps/web/src/entries/platform/main.tsx'
 const CONTRACTS_FILE = 'packages/contracts/src/errors/error-response.ts'
 const TOOLS_TEST_FILE = 'tools/src/git/strip-ai-trailers.test.ts'
@@ -148,6 +152,12 @@ describe('US-M1-11 lint 规则的自测：模块边界与循环依赖', () => {
 
   it('跨元素只能引用公开入口', async () => {
     expect(await rulesFor('import { errorResponseSchema } from \'../../../../packages/contracts/src/errors/error-response.ts\'\nexport const s = errorResponseSchema\n', WEB_FILE)).toContain('boundaries/dependencies')
+  })
+
+  it('前端分层：共享层不能引用应用层；功能模块之间只经对方的公开入口（审查 B23）', async () => {
+    expect(await rulesFor('import { createAppRuntime } from \'../../app/runtime.ts\'\nexport const f = createAppRuntime\n', WEB_SHARED_FILE)).toContain('boundaries/dependencies')
+    expect(await rulesFor('import { fetchPersonalDocuments } from \'../documents/documents-api.ts\'\nexport const f = fetchPersonalDocuments\n', WEB_FEATURE_FILE)).toContain('boundaries/dependencies')
+    expect(await rulesFor('import { DocumentListPage } from \'../documents/index.ts\'\nexport const f = DocumentListPage\n', WEB_FEATURE_FILE)).not.toContain('boundaries/dependencies')
   })
 
   it('TypeScript 文件之间的循环依赖会失败', async () => {
@@ -416,6 +426,38 @@ describe('US-M1-11 lint 规则的自测：后端', () => {
       '',
     ].join('\n')
     expect(await rulesFor(code, API_CONTROLLER)).not.toContain('ts/consistent-type-imports')
+  })
+}, LINT_TIMEOUT)
+
+describe('US-M1-11 lint 规则的自测：测试代码只在测试里（审查 B17）', () => {
+  const EXTRANEOUS = 'import-x/no-extraneous-dependencies'
+
+  it('生产代码与仓库工具不能引用测试库：静态导入、import type 与动态导入都算', async () => {
+    expect(await rulesFor('import { vi } from \'vitest\'\n\nexport const mock = vi.fn\n', WEB_FILE)).toContain(EXTRANEOUS)
+    expect(await rulesFor('import type { Mock } from \'vitest\'\n\nexport type M = Mock\n', WEB_FILE)).toContain(EXTRANEOUS)
+    expect(await rulesFor('export async function load(): Promise<unknown> {\n  return import(\'vitest\')\n}\n', WEB_FILE)).toContain(EXTRANEOUS)
+    expect(await rulesFor('import { render } from \'@testing-library/react\'\n\nexport const r = render\n', WEB_FILE)).toContain(EXTRANEOUS)
+    expect(await rulesFor('import { test } from \'@playwright/test\'\n\nexport const t = test\n', WEB_FILE)).toContain(EXTRANEOUS)
+    expect(await rulesFor('import { Test } from \'@nestjs/testing\'\n\nexport const t = Test\n', API_SERVICE)).toContain(EXTRANEOUS)
+    expect(await rulesFor('import { describe } from \'vitest\'\n\nexport const d = describe\n', 'tools/src/gates/run.ts')).toContain(EXTRANEOUS)
+    // 本包 dependencies 里的包照常引用
+    expect(await rulesFor('import { z } from \'zod\'\n\nexport const s = z.string()\n', WEB_FILE)).not.toContain(EXTRANEOUS)
+  })
+
+  it('生产代码不能引用测试与测试辅助', async () => {
+    expect(await rulesFor('import { renderApp } from \'./render-app.test-support.tsx\'\n\nexport const r = renderApp\n', WEB_FILE)).toContain('ts/no-restricted-imports')
+    expect(await rulesFor('import { installFakeApi } from \'../shared/testing/fake-api.test-support.ts\'\n\nexport const f = installFakeApi\n', WEB_FILE)).toContain('ts/no-restricted-imports')
+  })
+
+  it('测试与测试辅助可以引用测试库与测试辅助；构建配置与构建插件可以用开发依赖', async () => {
+    const code = 'import { render } from \'@testing-library/react\'\nimport { vi } from \'vitest\'\nimport { installFakeApi } from \'../shared/testing/fake-api.test-support.ts\'\n\nexport const used = [render, vi, installFakeApi]\n'
+    for (const file of [WEB_TEST_SUPPORT, WEB_TEST_FILE]) {
+      const rules = await rulesFor(code, file)
+      expect(rules, file).not.toContain(EXTRANEOUS)
+      expect(rules, file).not.toContain('ts/no-restricted-imports')
+    }
+    for (const file of ['apps/web/vite.config.ts', 'apps/web/build/third-party-licenses.ts', 'vitest.config.ts', 'tests/integration/src/support/api-app.ts'])
+      expect(severity((await configFor(file)).rules?.[EXTRANEOUS]), file).toBeUndefined()
   })
 }, LINT_TIMEOUT)
 

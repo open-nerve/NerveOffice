@@ -198,6 +198,17 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
 /** 元素之间只经公开入口引用；同一个元素内部不受限制（ADR-003）。 */
 const PUBLIC_ENTRY = 'index.{ts,tsx}'
 
+// ---- 测试代码只在测试里用（审查 B17）----
+const CODE_FILES = '**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}'
+/** 测试代码：测试、测试辅助、tests/ 下的包与测试的初始化文件。它们可以引用测试库与彼此 */
+const TEST_CODE = ['**/*.test.{ts,tsx,mts,cts,js,jsx,mjs,cjs}', '**/*.test-support.{ts,tsx,mts,cts,js,jsx,mjs,cjs}', 'tests/**', '**/vitest.setup.*']
+/** 构建与工具的配置、web 的构建插件：本来就用开发依赖（Vite、ESLint、drizzle-kit），不进产物 */
+const BUILD_CODE = ['**/*.config.{ts,mts,cts,js,mjs,cjs}', 'apps/*/build/**']
+const TEST_MODULES = {
+  regex: String.raw`\.test(?:-support)?(?:\.[cm]?[jt]sx?)?$`,
+  message: '测试与测试辅助（*.test.*、*.test-support.*）只被测试代码引用，不进入生产代码（审查 B17）',
+}
+
 /** 规范 §2.2：lint 不设警告级别，规则要么是错误，要么关闭。 */
 function promoteRule(entry: Linter.RuleEntry): Linter.RuleEntry {
   if (entry === 'warn' || entry === 1)
@@ -285,6 +296,18 @@ export default antfu(
       // 不允许跳过或占位的用例（规范 §8.4）；确需临时跳过时，用 eslint-disable 注释写明原因，经审查
       'test/no-disabled-tests': 'error',
       'test/warn-todo': 'error',
+    },
+  },
+  {
+    // 测试代码之外（生产代码与仓库工具）只能引用本包 dependencies 里的包：测试库都在 devDependencies 里，或者根本没有声明。
+    // 这条规则同时检查静态导入、动态导入与 import type。本地的测试与测试辅助按路径另外拦下，
+    // 用 typescript-eslint 的同名规则单独配置：no-restricted-imports 已按文件类型组合了好几份，扁平配置里同名规则后者整体覆盖前者
+    name: 'nerve/test-code-only-in-tests',
+    files: [CODE_FILES],
+    ignores: [...TEST_CODE, ...BUILD_CODE],
+    rules: {
+      'import-x/no-extraneous-dependencies': ['error', { devDependencies: false, optionalDependencies: false, peerDependencies: false, includeTypes: true }],
+      'ts/no-restricted-imports': ['error', { patterns: [TEST_MODULES] }],
     },
   },
   {
