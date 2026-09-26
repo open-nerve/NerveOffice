@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { AUDIT_ACTIONS, auditActionSchema } from './audit-actions.ts'
+import { AUDIT_ACTIONS, auditActionSchema } from './audit.ts'
 
 describe('审计动作', () => {
   it('写法是"模块.动作"，没有重复', () => {

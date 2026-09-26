@@ -24,7 +24,7 @@
 | 单元测试与装饰器元数据 | Vite 8 的 Oxc 按文件所属的 tsconfig 读取 `experimentalDecorators`、`emitDecoratorMetadata`，输出装饰器元数据；不需要 SWC，也不需要自定义的转译插件 | `audit.service.test.ts` 经依赖注入取得服务。反向对照：关掉 `emitDecoratorMetadata`，依赖注入失败 |
 | 集成测试 | 集成测试经源码条件引用 `@nerve-office/api`，在测试进程里启动真实的应用与管线 | `tests/integration/src/api/health.test.ts` |
 | 真实进程 | 配置缺失时退出码 1；收到 SIGTERM 后退出码 0 | 进程测试 |
-| lint | 开启 `emitDecoratorMetadata` 时，typescript-eslint 的 `consistent-type-imports` 不要求把依赖注入要用的类改成 `import type`（否则元数据会变成 `Object`） | lint 自测 |
+| lint | 开启 `emitDecoratorMetadata` 时，typescript-eslint 的 `consistent-type-imports` 不要求把依赖注入要用的类改成 `import type`（否则元数据会变成 `Object`）。它的做法是：带装饰器的文件整份跳过这条规则（审查 B 的探针确认） | lint 自测 |
 
 **后端工具链的约定**：
 - **TypeScript**：

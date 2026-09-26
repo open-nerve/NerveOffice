@@ -1,7 +1,6 @@
 import { Buffer } from 'node:buffer'
-import { auditActionSchema } from '@nerve-office/contracts'
+import { AUDIT_DETAILS_MAX_BYTES, AUDIT_TARGET_TYPES, auditActionSchema } from '@nerve-office/contracts'
 import { z } from 'zod'
-import { AUDIT_DETAILS_MAX_BYTES, AUDIT_TARGET_TYPES } from '../../db/schema/audit/index.ts'
 
 /** 客户端地址：数据库的 inet 能存的 IPv4 或 IPv6（不带作用域）。 */
 export const clientIpSchema = z.union([z.ipv4(), z.ipv6()])

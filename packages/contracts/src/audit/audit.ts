@@ -15,3 +15,15 @@ export const AUDIT_ACTIONS = [
 export const auditActionSchema = z.enum(AUDIT_ACTIONS)
 
 export type AuditAction = z.infer<typeof auditActionSchema>
+
+/** 操作者：用户、系统（例如命令行初始化管理员）、未登录的访问者（例如登录失败）。 */
+export const AUDIT_ACTOR_TYPES = ['user', 'system', 'anonymous'] as const
+
+/** 操作的对象。 */
+export const AUDIT_TARGET_TYPES = ['user', 'space', 'document'] as const
+
+/** 来源：HTTP 请求或命令行。 */
+export const AUDIT_SOURCES = ['http', 'cli'] as const
+
+/** 补充信息（details）按 JSON 文本计的上限（字节）。 */
+export const AUDIT_DETAILS_MAX_BYTES = 4096

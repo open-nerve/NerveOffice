@@ -37,10 +37,36 @@ const DYNAMIC_UNIVER_PRO = {
 
 const BASE_RESTRICTED_SYNTAX = [...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER, DYNAMIC_UNIVER_PRO]
 
-// 后端（P2 设计 §3.1）：只有 database 模块、各模块的仓储与表定义能访问数据库
+// ---- 后端（P2 设计 §3.1）----
+// 每个后端文件的限制由 apiRules() 按"这个文件允许什么"组合出来，各覆盖块不各自抄一份，免得改一处漏一处（审查 B15）
+
+// 数据库：只有仓储访问数据库（规范 §1.2，审查 B2）
 const API_DATABASE_LIBRARIES = {
   group: ['drizzle-orm', 'drizzle-orm/**', 'pg'],
-  message: '只有 database 模块、各模块的 *.repository.ts 与 src/db/schema 能访问数据库（规范 §1.2）',
+  message: '只有 database 模块、各模块的 *.repository.ts 与 src/db/schema 能引用数据库的库（规范 §1.2）',
+}
+const API_DYNAMIC_DATABASE_LIBRARIES = {
+  selector: 'ImportExpression[source.value=/^(?:pg$|drizzle-orm)/]',
+  message: '只有 database 模块、各模块的 *.repository.ts 与 src/db/schema 能引用数据库的库（规范 §1.2）',
+}
+const API_DATABASE_HANDLES = {
+  regex: String.raw`(?:^|/)database/index\.ts$`,
+  importNames: ['DATABASE', 'executorOf', 'Database', 'DbExecutor', 'DbTransaction'],
+  message: '只有仓储访问数据库：服务需要事务时用 TransactionRunner 开启，把事务传给仓储（规范 §1.2）',
+}
+const API_TABLES = {
+  regex: String.raw`(?:^|/)db/schema/`,
+  message: '表只由所属模块的仓储读写（规范 §1.2）；共用的枚举放在 contracts',
+}
+// 控制器不访问数据库、不写业务规则，事务由服务开启
+const API_REPOSITORY_FROM_CONTROLLER = {
+  regex: String.raw`\.repository(?:\.ts)?$`,
+  message: '控制器不访问数据库、不写业务规则，经服务调用（规范 §1.2）',
+}
+const API_TRANSACTIONS_FROM_CONTROLLER = {
+  regex: String.raw`(?:^|/)database/index\.ts$`,
+  importNames: ['TransactionRunner'],
+  message: '控制器不写业务规则，事务由服务开启（规范 §1.2）',
 }
 // Nest 的 Logger 经进程级的静态实例转发，同一个进程里后建的应用会接管先建的应用的日志；应用代码用注入的 AppLogger（P2 设计 §3.4）
 const API_NO_NEST_LOGGER = {
@@ -48,36 +74,89 @@ const API_NO_NEST_LOGGER = {
   importNames: ['Logger', 'ConsoleLogger'],
   message: '应用代码经依赖注入使用 AppLogger（modules/logging），不用 Nest 的 Logger（P2 设计 §3.4）',
 }
-const API_REPOSITORY_FROM_CONTROLLER = {
-  regex: String.raw`\.repository(?:\.ts)?$`,
-  message: '控制器不访问数据库、不写业务规则，经服务调用（规范 §1.2）',
-}
-// 只用参数化查询（规范 §5）：sql 模板标签会把插值变成参数；query()、execute() 的参数不能是拼出来的字符串
-const API_NO_SQL_CONCATENATION = [
-  {
-    selector: 'CallExpression[callee.object.name=\'sql\'][callee.property.name=\'raw\']',
-    message: '不用 sql.raw 拼接 SQL：用 sql 模板标签，动态的片段只能来自代码里的白名单（规范 §5）',
-  },
-  {
-    selector: 'CallExpression[callee.property.name=/^(?:query|execute)$/] > TemplateLiteral[expressions.length>0]',
-    message: 'SQL 不能用带插值的模板字符串拼接，用参数或 sql 模板标签（规范 §5）',
-  },
-  {
-    selector: 'CallExpression[callee.property.name=/^(?:query|execute)$/] > BinaryExpression[operator=\'+\']',
-    message: 'SQL 不能用字符串拼接，用参数或 sql 模板标签（规范 §5）',
-  },
+// 只有 config 模块读取 process.env（规范 §7）：node/no-process-env 只认 process.env，其他读法另外拦下（审查 B3）
+const PROCESS_ENV_MESSAGE = '只有 config 模块读取环境变量（规范 §7）'
+const API_PROCESS_ENV_IMPORTS = [
+  { name: 'node:process', importNames: ['env'], message: PROCESS_ENV_MESSAGE },
+  { name: 'process', importNames: ['env'], message: PROCESS_ENV_MESSAGE },
 ]
-// 控制器的输入都经 contracts 里的结构校验（规范 §4）；原始的请求与响应对象会绕过校验与统一的错误响应
-const API_CONTROLLER_PARAMETERS = [
+const API_PROCESS_ENV_SYNTAX = [
+  { selector: 'VariableDeclarator[init.name=\'process\'] > ObjectPattern > Property[key.name=\'env\']', message: PROCESS_ENV_MESSAGE },
+  { selector: 'AssignmentExpression[right.name=\'process\'] > ObjectPattern > Property[key.name=\'env\']', message: PROCESS_ENV_MESSAGE },
+  { selector: 'MemberExpression[property.name=\'env\'][object.property.name=\'process\']', message: PROCESS_ENV_MESSAGE },
+]
+// 只用参数化查询（规范 §5）：sql 模板标签会把插值变成参数。自动检查覆盖直接写在 query()、execute() 参数里的拼接
+// 与任何 .raw（含解构与别名）；先拼成变量再传进去的写法由审查保证（审查 B7）
+const SQL_CALL = 'CallExpression[callee.property.name=/^(?:query|execute)$/]'
+const API_SQL_CONCATENATION = [
+  { selector: `${SQL_CALL} > TemplateLiteral[expressions.length>0]`, message: 'SQL 不能用带插值的模板字符串拼接，用参数或 sql 模板标签（规范 §5）' },
+  { selector: `${SQL_CALL} > BinaryExpression[operator='+']`, message: 'SQL 不能用字符串拼接，用参数或 sql 模板标签（规范 §5）' },
+  { selector: `${SQL_CALL} > ObjectExpression > Property[key.name='text'] > TemplateLiteral[expressions.length>0]`, message: 'SQL 不能用带插值的模板字符串拼接，用参数或 sql 模板标签（规范 §5）' },
+  { selector: `${SQL_CALL} > ObjectExpression > Property[key.name='text'] > BinaryExpression[operator='+']`, message: 'SQL 不能用字符串拼接，用参数或 sql 模板标签（规范 §5）' },
+]
+const API_NO_RAW = {
+  property: 'raw',
+  message: '不用 .raw 拼接 SQL：用 sql 模板标签，动态的片段只能来自代码里的白名单（规范 §5）；表定义里的 CHECK 常量除外',
+}
+// 输入都经 contracts 里的结构校验（规范 §4）：参数装饰器必须带 schema；不接受 schema 的装饰器与原始的请求、响应对象会绕过校验（审查 B8）
+const API_PARAMETER_DECORATORS = [
   {
     selector: 'Decorator > CallExpression[callee.name=/^(?:Body|Query|Param)$/]:not(:has(Property[key.name=\'schema\']))',
-    message: '控制器的输入必须带 schema，例如 @Body({ schema: createDocumentRequestSchema })（规范 §4）',
+    message: '输入必须带 schema，例如 @Body({ schema: createDocumentRequestSchema })（规范 §4）',
   },
   {
-    selector: 'Decorator > CallExpression[callee.name=/^(?:Req|Request|Res|Response|Next)$/]',
-    message: '不用 @Req、@Res、@Next：需要请求里的信息时写参数装饰器（P2 设计 §3.1）',
+    selector: 'Decorator > CallExpression[callee.name=/^(?:Req|Request|Res|Response|Next|Headers|Ip|Session|HostParam|RawBody)$/]',
+    message: '不用 @Req、@Res、@Headers 等不经校验的参数装饰器：需要请求里的信息时写参数装饰器（P2 设计 §3.1）',
   },
 ]
+const API_CONTROLLER_OUTSIDE_CONTROLLER_FILE = {
+  selector: 'Decorator > CallExpression[callee.name=\'Controller\']',
+  message: '控制器只写在 *.controller.ts 里：控制器的限制按文件名生效（P2 设计 §3.1）',
+}
+
+/** 后端文件允许的例外。 */
+interface ApiFileKind {
+  /** 引用 drizzle-orm 与 pg（database 模块、仓储、表定义） */
+  databaseLibraries?: boolean
+  /** 引用 DATABASE、executorOf 与数据库类型（database 模块、仓储；app 层为集成测试转出） */
+  databaseHandles?: boolean
+  /** 引用表定义（仓储、表定义之间） */
+  tables?: boolean
+  /** 用 .raw（表定义里的 CHECK 常量） */
+  rawSql?: boolean
+  /** 控制器：可以写 @Controller；不引用仓储与 TransactionRunner */
+  controller?: boolean
+  /** 读取环境变量（config 模块） */
+  processEnv?: boolean
+}
+
+function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
+  const paths = [API_NO_NEST_LOGGER, ...(kind.processEnv === true ? [] : API_PROCESS_ENV_IMPORTS)]
+  const patterns = [
+    UNIVER_ONLY_IN_EDITOR,
+    NO_UNIVER_PRO,
+    ...(kind.databaseLibraries === true ? [] : [API_DATABASE_LIBRARIES]),
+    ...(kind.databaseHandles === true ? [] : [API_DATABASE_HANDLES]),
+    ...(kind.tables === true ? [] : [API_TABLES]),
+    ...(kind.controller === true ? [API_REPOSITORY_FROM_CONTROLLER, API_TRANSACTIONS_FROM_CONTROLLER] : []),
+  ]
+  const syntax = [
+    ...BASE_RESTRICTED_SYNTAX,
+    ...API_SQL_CONCATENATION,
+    ...API_PARAMETER_DECORATORS,
+    ...(kind.databaseLibraries === true ? [] : [API_DYNAMIC_DATABASE_LIBRARIES]),
+    ...(kind.controller === true ? [] : [API_CONTROLLER_OUTSIDE_CONTROLLER_FILE]),
+    ...(kind.processEnv === true ? [] : API_PROCESS_ENV_SYNTAX),
+  ]
+  return {
+    'no-restricted-imports': ['error', { paths, patterns }],
+    'no-restricted-syntax': ['error', ...syntax],
+    'no-restricted-properties': kind.rawSql === true ? 'off' : ['error', API_NO_RAW],
+    'node/no-process-env': kind.processEnv === true ? 'off' : 'error',
+    // React 的规则把 Nest 的 useFactory、useValue 当作 Hook；后端没有 React
+    'react/no-unnecessary-use-prefix': 'off',
+  }
+}
 
 /** 元素之间只经公开入口引用；同一个元素内部不受限制（ADR-003）。 */
 const PUBLIC_ENTRY = 'index.{ts,tsx}'
@@ -122,8 +201,9 @@ export default antfu(
       '**/playwright-report/**',
       '**/test-results/**',
       '**/blob-report/**',
-      // drizzle-kit 生成、人工审阅的迁移（SQL、journal 与快照）：合并后不再修改（ADR-005），不做 lint 与格式化
-      'apps/api/src/db/migrations/**',
+      // drizzle-kit 生成的 journal 与快照：合并后不再修改（ADR-005），不做 lint 与格式化。
+      // 只忽略这些 JSON：SQL 本来就不检查，误放进迁移目录的代码文件仍然受边界约束（审查 B15）
+      'apps/api/src/db/migrations/meta/**',
     ],
   },
   {
@@ -148,48 +228,16 @@ export default antfu(
       'no-restricted-syntax': ['error', ...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER_PRO],
     },
   },
-  {
-    name: 'nerve/api',
-    files: ['apps/api/src/**/*.ts'],
-    rules: {
-      'no-restricted-imports': ['error', { paths: [API_NO_NEST_LOGGER], patterns: [UNIVER_ONLY_IN_EDITOR, NO_UNIVER_PRO, API_DATABASE_LIBRARIES] }],
-      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...API_NO_SQL_CONCATENATION],
-      // 只有 config 模块读取 process.env（规范 §7）
-      'node/no-process-env': 'error',
-      // React 的规则把 Nest 的 useFactory、useValue 当作 Hook；后端没有 React
-      'react/no-unnecessary-use-prefix': 'off',
-    },
-  },
-  {
-    name: 'nerve/api-database-access',
-    files: ['apps/api/src/modules/database/**/*.ts', 'apps/api/src/modules/*/*.repository.ts', 'apps/api/src/db/**/*.ts'],
-    rules: {
-      'no-restricted-imports': ['error', { paths: [API_NO_NEST_LOGGER], patterns: [UNIVER_ONLY_IN_EDITOR, NO_UNIVER_PRO] }],
-    },
-  },
-  {
-    // 表定义里的 CHECK 约束要把代码里的常量拼成 SQL 字面量（drizzle-kit 不内联参数）；这里只有 DDL 与常量，没有运行时的输入
-    name: 'nerve/api-schema-ddl',
-    files: ['apps/api/src/db/schema/**/*.ts'],
-    rules: {
-      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...API_NO_SQL_CONCATENATION.slice(1)],
-    },
-  },
-  {
-    name: 'nerve/api-controllers',
-    files: ['apps/api/src/**/*.controller.ts'],
-    rules: {
-      'no-restricted-imports': ['error', { paths: [API_NO_NEST_LOGGER], patterns: [UNIVER_ONLY_IN_EDITOR, NO_UNIVER_PRO, API_DATABASE_LIBRARIES, API_REPOSITORY_FROM_CONTROLLER] }],
-      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...API_NO_SQL_CONCATENATION, ...API_CONTROLLER_PARAMETERS],
-    },
-  },
-  {
-    name: 'nerve/api-config-reads-env',
-    files: ['apps/api/src/modules/config/**/*.ts'],
-    rules: {
-      'node/no-process-env': 'off',
-    },
-  },
+  // 后端：先是所有文件的限制，后面的块按文件类型放开各自需要的部分（后面的块覆盖前面的同名规则）
+  { name: 'nerve/api', files: ['apps/api/src/**/*.ts'], rules: apiRules() },
+  // app 层：对外的程序接口为集成测试转出数据库句柄
+  { name: 'nerve/api-app', files: ['apps/api/src/app/**/*.ts'], rules: apiRules({ databaseHandles: true }) },
+  { name: 'nerve/api-database', files: ['apps/api/src/modules/database/**/*.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true }) },
+  { name: 'nerve/api-repositories', files: ['apps/api/src/modules/*/*.repository.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true, tables: true }) },
+  // 表定义里的 CHECK 约束要把代码里的常量拼成 SQL 字面量（drizzle-kit 不内联参数）；这里只有 DDL 与常量，没有运行时的输入
+  { name: 'nerve/api-schema', files: ['apps/api/src/db/schema/**/*.ts'], rules: apiRules({ databaseLibraries: true, tables: true, rawSql: true }) },
+  { name: 'nerve/api-controllers', files: ['apps/api/src/**/*.controller.ts'], rules: apiRules({ controller: true }) },
+  { name: 'nerve/api-config', files: ['apps/api/src/modules/config/**/*.ts'], rules: apiRules({ processEnv: true }) },
   {
     name: 'nerve/tests',
     files: ['**/*.test.{ts,tsx}', 'tests/**/*.ts'],

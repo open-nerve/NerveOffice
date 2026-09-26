@@ -1,16 +1,11 @@
 // audit 模块的表（P2 设计 §3.8）：审计事件，只追加（UPDATE、DELETE、TRUNCATE 由触发器拒绝，见迁移）。
 import type { SQL } from 'drizzle-orm'
 import type { AnyPgColumn } from 'drizzle-orm/pg-core'
-import { AUDIT_ACTIONS } from '@nerve-office/contracts'
+import { AUDIT_ACTIONS, AUDIT_ACTOR_TYPES, AUDIT_DETAILS_MAX_BYTES, AUDIT_SOURCES, AUDIT_TARGET_TYPES } from '@nerve-office/contracts'
 import { sql } from 'drizzle-orm'
 import { check, index, inet, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core'
 
-export const AUDIT_ACTOR_TYPES = ['user', 'system', 'anonymous'] as const
-export const AUDIT_TARGET_TYPES = ['user', 'space', 'document'] as const
-export const AUDIT_SOURCES = ['http', 'cli'] as const
-/** details 按 JSON 文本计的上限（字节），写入前由 audit 模块校验 */
-export const AUDIT_DETAILS_MAX_BYTES = 4096
-/** 数据库的兜底上限：jsonb 转成文本时在冒号、逗号后加空格，比 JSON.stringify 的结果长，留出一倍的余量 */
+/** details 的数据库兜底上限：写入前按 JSON 文本校验 AUDIT_DETAILS_MAX_BYTES；jsonb 转成文本时在冒号、逗号后加空格，比 JSON.stringify 的结果长，留出一倍的余量 */
 const AUDIT_DETAILS_MAX_STORED_BYTES = AUDIT_DETAILS_MAX_BYTES * 2
 
 /**
