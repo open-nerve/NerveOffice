@@ -30,6 +30,8 @@ export interface WriteOptions {
     fenceToken?: string;
     /** 捕获时公式还没收齐。 */
     formulaPending: boolean;
+    /** 已在别处算好的去重哈希（Worker 放置、哈希在主线程上算时由主线程给出）。 */
+    contentHash?: string;
 }
 
 export interface WriteTimings {
@@ -69,7 +71,7 @@ export class OutboxWriter {
 
     private async writeNow(target: OutboxTarget, bytes: Uint8Array<ArrayBuffer>, options: WriteOptions): Promise<WriteTimings> {
         const t0 = performance.now();
-        const contentHash = await sha256Hex(bytes);
+        const contentHash = options.contentHash ?? (await sha256Hex(bytes));
         const t1 = performance.now();
         const base = { hashMs: t1 - t0, gzipMs: 0, encryptMs: 0, putMs: 0, gzipBytes: 0, cipherBytes: 0, localSeq: options.localSeq, error: null };
         if (options.force !== true && this.lastHash.get(target.docId) === contentHash) return { ...base, skipped: true };

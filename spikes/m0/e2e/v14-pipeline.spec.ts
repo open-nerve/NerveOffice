@@ -14,7 +14,11 @@ import { edit, openWithOutbox } from './p6-helpers';
 
 test.use({ baseURL: SERVERS.off });
 
-type E2eDetail = { e2eMs: number; trigger: string; formulaPending: boolean; skipped: boolean; waitMs: number; pipelineMs: number; syncMs: number; gzipMs: number; putMs: number; workerRoundTripMs: number | null };
+type E2eDetail = {
+    e2eMs: number; trigger: string; formulaPending: boolean; skipped: boolean; waitMs: number; pipelineMs: number;
+    syncMs: number; hashMs: number; gzipMs: number; encryptMs: number; putMs: number; asyncMaxGapMs: number;
+    workerRoundTripMs: number | null; toWorkerMs: number | null; workerMs: number | null; fromWorkerMs: number | null;
+};
 
 /** 最后一次自动保存：端到端、触发原因，以及"等待捕获"（修改 → 管道开始）与"管道"两段。 */
 function lastAutosave(page: Page): Promise<E2eDetail> {
@@ -25,7 +29,8 @@ function lastAutosave(page: Page): Promise<E2eDetail> {
         return {
             e2eMs: last.e2eMs, trigger: last.trigger, formulaPending: last.formulaPending, skipped: r.skipped,
             waitMs: r.startedAt - last.editAt, pipelineMs: r.finishedAt - r.startedAt,
-            syncMs: r.syncMs, gzipMs: r.gzipMs, putMs: r.putMs, workerRoundTripMs: r.workerRoundTripMs,
+            syncMs: r.syncMs, hashMs: r.hashMs, gzipMs: r.gzipMs, encryptMs: r.encryptMs, putMs: r.putMs, asyncMaxGapMs: r.asyncMaxGapMs,
+            workerRoundTripMs: r.workerRoundTripMs, toWorkerMs: r.toWorkerMs, workerMs: r.workerMs, fromWorkerMs: r.fromWorkerMs,
         };
     });
 }
@@ -39,6 +44,10 @@ const SAMPLES = [
 
 const RUNS = 10;
 const WARMUP = 2;
+/** 端到端的修改次数；复查离群值时可以用环境变量调大（P6 收尾）。 */
+const E2E_RUNS = Number(process.env.M0_P6_E2E_RUNS ?? 5);
+/** 追加的页面参数；复查离群值时用，例如 outboxhash=main（去重哈希在主线程上算）。 */
+const E2E_EXTRA = process.env.M0_P6_EXTRA ?? '';
 
 type Brief = Omit<PipelineResult, 'longTasks'> & { longestTaskMs: number | null };
 
@@ -73,7 +82,7 @@ for (const s of SAMPLES) {
             const res = await request.get(`${SERVERS.off}/api/docs/${source}`);
             await request.put(`${SERVERS.off}/api/docs/${id}`, { data: await res.json() });
             const user = `perf-${testInfo.project.name}-${Date.now()}`;
-            await openWithOutbox(page, SERVERS.off, { kind: s.kind, doc: id, outbox: placement, user });
+            await openWithOutbox(page, SERVERS.off, { kind: s.kind, doc: id, outbox: placement, user, extra: E2E_EXTRA });
             await waitQuiet(page);
 
             // 1. 管道：两种持久性，预热后各测 RUNS 次
@@ -102,7 +111,7 @@ for (const s of SAMPLES) {
             // 3. 端到端：修改后停止，等写入发件箱完成；拆成"等待捕获"（修改 → 管道开始）与"管道"两段，便于解释离群值
             const e2e: number[] = [];
             const e2eDetail: E2eDetail[] = [];
-            for (let i = 0; i < 5; i++) {
+            for (let i = 0; i < E2E_RUNS; i++) {
                 await edit(page, s.kind, `P6PERF${i}`);
                 await page.evaluate(() => window.__m0!.outbox!.autosave()!.idle(20_000));
                 const d = await lastAutosave(page);

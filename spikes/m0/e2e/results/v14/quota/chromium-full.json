@@ -6,17 +6,17 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T12:09:55.515Z",
+  "timestamp": "2026-09-26T03:51:14.034Z",
   "quotaSize": 8388608,
   "writes": 32,
   "failed": {
     "key": "fill-31",
     "error": "QuotaExceededError",
-    "cipherBytes": 259767,
+    "cipherBytes": 259769,
     "localSeq": 1
   },
   "estimate": {
-    "quota": 9672212480,
+    "quota": 8598470656,
     "usage": 8536064,
     "usageDetails": {
       "indexedDB": 8536064

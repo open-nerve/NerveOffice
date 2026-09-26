@@ -34,6 +34,10 @@ export interface PageParams {
     tocblock: boolean;
     /** 本机发件箱（P6）：off 不启用；main、worker 为写入管道的放置方式（压缩、加密、写入在主线程或 Worker）。 */
     outbox: 'off' | 'main' | 'worker';
+    /** 发件箱 Worker 放置时，去重哈希在哪里算（P6 收尾的对照：WebKit 的 Worker 空闲之后第一次异步操作偶尔多等约 1 秒）。 */
+    outboxHash: 'worker' | 'main';
+    /** 发件箱 Worker 里保持一个 100 ms 的空定时器（P6 收尾：对照 WebKit 的 Worker 空闲之后第一次异步操作偶尔多等约 1 秒）。 */
+    outboxKeepAlive: boolean;
     /** 当前用户（P6：发件箱按用户隔离，密钥按用户下发）。 */
     user: string;
     /** 发件箱写入的持久性（P6）：default 为浏览器默认，strict 要求落盘后才完成。 */
@@ -67,6 +71,8 @@ export function readPageParams(defaultSample: string): PageParams {
         outline: q.get('outline') === '1',
         tocblock: q.get('tocblock') === '1',
         outbox: q.get('outbox') === 'main' ? 'main' : q.get('outbox') === 'worker' ? 'worker' : 'off',
+        outboxHash: q.get('outboxhash') === 'main' ? 'main' : 'worker',
+        outboxKeepAlive: q.get('outboxkeepalive') === '1',
         user: /^[\w.-]+$/.test(q.get('user') ?? '') ? q.get('user')! : 'u1',
         durability: q.get('durability') === 'strict' ? 'strict' : 'default',
         mutlog: q.get('mutlog') === '1' || q.get('mutlog') === 'enrich',

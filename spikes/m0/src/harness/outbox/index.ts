@@ -62,6 +62,10 @@ export interface InstallOutboxOptions {
     docId: string;
     revision: number;
     placement: Placement;
+    /** Worker 放置时去重哈希在哪里算（缺省在 Worker 里）。 */
+    hashOn?: 'worker' | 'main';
+    /** Worker 放置时在 Worker 里保持一个空定时器（对照用）。 */
+    keepAlive?: boolean;
     durability: Durability;
     /** V15：mutation 日志的当前位置（在 save() 的同步段里读取）。 */
     logMark?: () => { logId: string; logSeq: number } | null;
@@ -94,7 +98,7 @@ export async function installOutbox(options: InstallOutboxOptions): Promise<Outb
     let generation: number | null = null;
     let reloads = 0;
     const db = await openOutbox();
-    const pipeline = await createPipeline(placement, key);
+    const pipeline = await createPipeline(placement, key, { hashOn: options.hashOn, keepAlive: options.keepAlive });
     const target = (id = docId) => ({ userId: user, docId: id, baseRevision: revision, writeEpoch: 0, clientBuild: 'm0-p6' });
     const extra = () => options.logMark?.() ?? {};
     let autosave: AutosaveHandle | null = null;

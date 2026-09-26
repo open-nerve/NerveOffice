@@ -7,9 +7,10 @@ import type { EditorHandle } from '../create-editor';
 import type { LongTaskRecord } from '../perf';
 import type { UserKey } from './crypto';
 import type { Durability } from './store';
-import type { OutboxTarget, WriteTimings } from './writer';
+import type { OutboxTarget, WriteOptions, WriteTimings } from './writer';
 
 import { observeLongTasks, probeEventLoopLag } from '../perf';
+import { sha256Hex } from './crypto';
 import { openOutbox } from './store';
 import { OutboxWriter } from './writer';
 
@@ -26,6 +27,13 @@ export interface PipelineResult extends WriteTimings {
     syncMs: number;
     /** worker 放置：把字节交给 Worker 到收到结果的时间（含 Worker 里的全部工作）。 */
     workerRoundTripMs: number | null;
+    /**
+     * worker 放置：往返拆成三段——消息送到 Worker、Worker 里的处理、结果送回主线程。
+     * 两端各用 timeOrigin + now() 换算到同一时间轴（WebKit 的精度为 1 ms）；用来定位往返里多出来的时间（P6 收尾）。
+     */
+    toWorkerMs: number | null;
+    workerMs: number | null;
+    fromWorkerMs: number | null;
     totalMs: number;
     jsonBytes: number;
     /** 同步段之后（异步段）主线程的最长阻塞。 */
@@ -48,7 +56,7 @@ export interface CaptureOptions {
 interface WorkerReply {
     id: number;
     ok: boolean;
-    result?: WriteTimings & { workerMs: number };
+    result?: WriteTimings & { workerMs: number; receivedAt: number; repliedAt: number };
     error?: string;
 }
 
@@ -98,13 +106,19 @@ export interface OutboxPipeline {
     dispose(): void;
 }
 
-export async function createPipeline(placement: Placement, key: UserKey): Promise<OutboxPipeline> {
+/**
+ * 两个对照选项（P6 收尾，报告 §2.3 第 11 条：WebKit 的 Worker 空闲之后，第一次异步操作偶尔多等约 1 秒）：
+ * - hashOn：Worker 放置时去重哈希在哪里算。缺省在 Worker 里；'main' 时主线程在转移字节之前算好（异步，不占用主线程）；
+ * - keepAlive：Worker 里保持一个 100 ms 的空定时器。
+ */
+export async function createPipeline(placement: Placement, key: UserKey, options: { hashOn?: 'worker' | 'main'; keepAlive?: boolean } = {}): Promise<OutboxPipeline> {
+    const hashOnMain = placement === 'worker' && options.hashOn === 'main';
     let writer: OutboxWriter | null = null;
     let client: OutboxWorkerClient | null = null;
     if (placement === 'main') writer = new OutboxWriter(await openOutbox(), key);
     else {
         client = new OutboxWorkerClient();
-        await client.call({ type: 'init', key });
+        await client.call({ type: 'init', key, keepAlive: options.keepAlive === true });
     }
     const encoder = new TextEncoder();
     const seqs = new Map<string, number>();
@@ -126,14 +140,25 @@ export async function createPipeline(placement: Placement, key: UserKey): Promis
         // 转移给 Worker 之后 bytes 的长度变为 0，先记下
         const jsonBytes = bytes.byteLength;
         const lag = probeEventLoopLag();
-        const writeOptions = { durability: options.durability, force: options.force, localSeq, fenceToken: options.fenceToken, formulaPending: options.formulaPending ?? false };
+        const writeOptions: WriteOptions = { durability: options.durability, force: options.force, localSeq, fenceToken: options.fenceToken, formulaPending: options.formulaPending ?? false };
         let w: WriteTimings;
         let roundTrip: number | null = null;
+        let legs: { toWorkerMs: number; workerMs: number; fromWorkerMs: number } | null = null;
         if (writer != null) w = await writer.write(fullTarget, bytes, writeOptions);
         else {
+            let mainHashMs: number | null = null;
+            if (hashOnMain) {
+                const h0 = performance.now();
+                writeOptions.contentHash = await sha256Hex(bytes);
+                mainHashMs = performance.now() - h0;
+            }
+            const sentAt = performance.timeOrigin + performance.now();
             const reply = await client!.call({ type: 'write', target: fullTarget, bytes, options: writeOptions }, [bytes.buffer]);
+            const gotAt = performance.timeOrigin + performance.now();
             roundTrip = performance.now() - t3;
-            w = reply.result!;
+            const { workerMs, receivedAt, repliedAt, ...timings } = reply.result!;
+            w = mainHashMs == null ? timings : { ...timings, hashMs: mainHashMs };
+            legs = { toWorkerMs: receivedAt - sentAt, workerMs, fromWorkerMs: gotAt - repliedAt };
         }
         const t4 = performance.now();
         const gap = lag.stop();
@@ -148,6 +173,9 @@ export async function createPipeline(placement: Placement, key: UserKey): Promis
             encodeMs: t3 - t2,
             syncMs: t3 - t0,
             workerRoundTripMs: roundTrip,
+            toWorkerMs: legs?.toWorkerMs ?? null,
+            workerMs: legs?.workerMs ?? null,
+            fromWorkerMs: legs?.fromWorkerMs ?? null,
             totalMs: t4 - t0,
             jsonBytes,
             asyncMaxGapMs: gap.maxGap,

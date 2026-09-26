@@ -7,39 +7,74 @@
     "version": "26.6",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T11:04:37.866Z",
+  "timestamp": "2026-09-26T03:48:17.411Z",
   "runs": [
     {
-      "e2eMs": 1032,
+      "e2eMs": 1050,
       "trigger": "quiet",
-      "formulaPending": false
+      "formulaPending": false,
+      "skipped": false,
+      "waitMs": 1017,
+      "pipelineMs": 33,
+      "syncMs": 18,
+      "gzipMs": 12,
+      "putMs": 1,
+      "workerRoundTripMs": 15
     },
     {
-      "e2eMs": 1028,
+      "e2eMs": 1045,
       "trigger": "quiet",
-      "formulaPending": false
+      "formulaPending": false,
+      "skipped": false,
+      "waitMs": 1018,
+      "pipelineMs": 27,
+      "syncMs": 15,
+      "gzipMs": 11,
+      "putMs": 1,
+      "workerRoundTripMs": 12
     },
     {
-      "e2eMs": 1033,
+      "e2eMs": 1038,
       "trigger": "quiet",
-      "formulaPending": false
+      "formulaPending": false,
+      "skipped": false,
+      "waitMs": 1010,
+      "pipelineMs": 28,
+      "syncMs": 16,
+      "gzipMs": 11,
+      "putMs": 1,
+      "workerRoundTripMs": 12
     },
     {
-      "e2eMs": 1036,
+      "e2eMs": 1043,
       "trigger": "quiet",
-      "formulaPending": false
+      "formulaPending": false,
+      "skipped": false,
+      "waitMs": 1015,
+      "pipelineMs": 28,
+      "syncMs": 16,
+      "gzipMs": 11,
+      "putMs": 1,
+      "workerRoundTripMs": 12
     },
     {
-      "e2eMs": 1044,
+      "e2eMs": 1046,
       "trigger": "quiet",
-      "formulaPending": false
+      "formulaPending": false,
+      "skipped": false,
+      "waitMs": 1018,
+      "pipelineMs": 28,
+      "syncMs": 16,
+      "gzipMs": 11,
+      "putMs": 1,
+      "workerRoundTripMs": 12
     }
   ],
   "e2e": {
-    "p50": 1033,
-    "p95": 1044,
-    "max": 1044,
-    "min": 1028,
+    "p50": 1045,
+    "p95": 1050,
+    "max": 1050,
+    "min": 1038,
     "n": 5
   }
 }

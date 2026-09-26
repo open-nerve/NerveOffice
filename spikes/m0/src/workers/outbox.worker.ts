@@ -8,17 +8,21 @@ import { openOutbox } from '../harness/outbox/store';
 import { OutboxWriter } from '../harness/outbox/writer';
 
 type Request =
-    | { id: number; type: 'init'; key: UserKey }
+    | { id: number; type: 'init'; key: UserKey; keepAlive?: boolean }
     | { id: number; type: 'hash'; docId: string; contentHash?: string }
     | { id: number; type: 'write'; target: OutboxTarget; bytes: Uint8Array<ArrayBuffer>; options: WriteOptions };
 
 let writer: OutboxWriter | null = null;
 
 self.onmessage = async (e: MessageEvent<Request>) => {
+    // 收到消息的时刻（与主线程换算到同一时间轴），用来拆分往返的耗时
+    const receivedAt = performance.timeOrigin + performance.now();
     const m = e.data;
     try {
         if (m.type === 'init') {
             writer = new OutboxWriter(await openOutbox(), m.key);
+            // 对照用：保持一个空定时器，看 WebKit 的 Worker 空闲之后第一次异步操作多等约 1 秒的现象是否消失（P6 收尾）
+            if (m.keepAlive === true) setInterval(() => undefined, 100);
             self.postMessage({ id: m.id, ok: true });
             return;
         }
@@ -30,7 +34,7 @@ self.onmessage = async (e: MessageEvent<Request>) => {
         }
         const t0 = performance.now();
         const result = await writer.write(m.target, m.bytes, m.options);
-        self.postMessage({ id: m.id, ok: true, result: { ...result, workerMs: performance.now() - t0 } });
+        self.postMessage({ id: m.id, ok: true, result: { ...result, workerMs: performance.now() - t0, receivedAt, repliedAt: performance.timeOrigin + performance.now() } });
     } catch (error) {
         self.postMessage({ id: m.id, ok: false, error: error instanceof Error ? error.message : String(error) });
     }

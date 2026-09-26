@@ -7,74 +7,74 @@
     "version": "153.0.8010.12",
     "channel": "bundled"
   },
-  "timestamp": "2026-09-25T12:09:43.632Z",
+  "timestamp": "2026-09-26T03:39:54.198Z",
   "runs": [
     {
-      "e2eMs": 1082.5,
+      "e2eMs": 1073.5,
       "trigger": "quiet",
       "formulaPending": false,
       "skipped": false,
-      "waitMs": 1060.6000000238419,
-      "pipelineMs": 21.899999976158142,
-      "syncMs": 9.100000023841858,
-      "gzipMs": 11.400000095367432,
-      "putMs": 0.6000000238418579,
-      "workerRoundTripMs": 12.799999952316284
+      "waitMs": 1052.0999999998603,
+      "pipelineMs": 21.4000000001397,
+      "syncMs": 8.900000000139698,
+      "gzipMs": 11.300000000046566,
+      "putMs": 0.4000000001396984,
+      "workerRoundTripMs": 12.5
     },
     {
-      "e2eMs": 1070.6000000238419,
+      "e2eMs": 1063.3999999999069,
       "trigger": "quiet",
       "formulaPending": false,
       "skipped": false,
-      "waitMs": 1049.6000000238419,
-      "pipelineMs": 21,
-      "syncMs": 8.600000023841858,
-      "gzipMs": 11.300000071525574,
-      "putMs": 0.3999999761581421,
-      "workerRoundTripMs": 12.399999976158142
+      "waitMs": 1041.5999999998603,
+      "pipelineMs": 21.800000000046566,
+      "syncMs": 9.100000000093132,
+      "gzipMs": 11.5,
+      "putMs": 0.39999999990686774,
+      "workerRoundTripMs": 12.699999999953434
     },
     {
-      "e2eMs": 1044.3000000715256,
+      "e2eMs": 1062.1999999999534,
       "trigger": "quiet",
       "formulaPending": false,
       "skipped": false,
-      "waitMs": 1023.6000000238419,
-      "pipelineMs": 20.700000047683716,
-      "syncMs": 8.700000047683716,
-      "gzipMs": 11,
-      "putMs": 0.3999999761581421,
-      "workerRoundTripMs": 12
-    },
-    {
-      "e2eMs": 1038.3999999761581,
-      "trigger": "quiet",
-      "formulaPending": false,
-      "skipped": false,
-      "waitMs": 1017.1000000238419,
-      "pipelineMs": 21.299999952316284,
-      "syncMs": 8.399999976158142,
-      "gzipMs": 11.600000023841858,
+      "waitMs": 1041.1000000000931,
+      "pipelineMs": 21.0999999998603,
+      "syncMs": 8.5,
+      "gzipMs": 11.599999999860302,
       "putMs": 0.5,
-      "workerRoundTripMs": 12.899999976158142
+      "workerRoundTripMs": 12.599999999860302
     },
     {
-      "e2eMs": 1042.6999999284744,
+      "e2eMs": 1035.8999999999069,
       "trigger": "quiet",
       "formulaPending": false,
       "skipped": false,
-      "waitMs": 1022.2999999523163,
-      "pipelineMs": 20.399999976158142,
-      "syncMs": 8.399999976158142,
+      "waitMs": 1015.1999999999534,
+      "pipelineMs": 20.699999999953434,
+      "syncMs": 8.599999999860302,
       "gzipMs": 11,
-      "putMs": 0.3999999761581421,
+      "putMs": 0.39999999990686774,
+      "workerRoundTripMs": 12.100000000093132
+    },
+    {
+      "e2eMs": 1029.6000000000931,
+      "trigger": "quiet",
+      "formulaPending": false,
+      "skipped": false,
+      "waitMs": 1009,
+      "pipelineMs": 20.600000000093132,
+      "syncMs": 8.600000000093132,
+      "gzipMs": 11.200000000186265,
+      "putMs": 0.39999999990686774,
       "workerRoundTripMs": 12
     }
   ],
   "e2e": {
-    "p50": 1044.3000000715256,
-    "p95": 1082.5,
-    "max": 1082.5,
-    "min": 1038.3999999761581,
+    "p50": 1062.1999999999534,
+    "p95": 1073.5,
+    "max": 1073.5,
+    "min": 1029.6000000000931,
     "n": 5
   }
 }

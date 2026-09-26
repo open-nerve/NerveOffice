@@ -1,6 +1,6 @@
 // P6：把 V14、V15、V16 的结果文件汇总成报告用的表格（Markdown），报告中的数字都可以用它重新得出。
 // 用法：先跑完 P6 的用例，再 node scripts/p6-summary.ts [章节…]，
-// 章节为 pipeline recovery e2e quota locks crash window midwrite concurrent conflict replay combined node，缺省为全部。
+// 章节为 pipeline recovery e2e stall quota locks crash window midwrite concurrent conflict replay combined node，缺省为全部。
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -50,6 +50,36 @@ function e2e(): string {
     const formula = load('v14/pipeline-formula').map((x) => [browserOf(x.file), x.data.formulaWorker ? '公式 Worker' : '公式主线程', (x.data.runs as Json[]).map((r) => `${Math.round(r.e2eMs)}${r.formulaPending ? '*' : ''}`).join('、'), n1(x.data.e2e.p50), n1(x.data.e2e.max)]);
     return ['## V14 端到端：最后一次修改 → 已保存在本机（毫秒，各 5 次；修改不牵动公式）', table(['浏览器', '样本', '放置', '每次', 'p50', '最大'], rows),
         '## V14 端到端：牵动约 320 个公式的修改（perf-50k，发件箱 Worker 放置；* 为公式没收齐的捕获）', table(['浏览器', '公式', '每次（第一次是打开后的第一次修改）', 'p50', '最大'], formula)].join('\n\n');
+}
+
+/** WebKit 的离群值（P6 收尾，报告 §2.3 第 11 条）：端到端超过 1.5 秒的次数，以及多出的时间落在哪一段。 */
+function stall(): string {
+    const groups: { name: string; files: { dir: string; match: (f: string) => boolean }[] }[] = [
+        { name: '5 MiB 表格，发件箱 Worker 放置（正式一轮 + 复跑 + 诊断）', files: [
+            { dir: 'v14/pipeline', match: (f) => f === 'webkit-sheet-big-5m-worker.json' },
+            { dir: 'v14/pipeline-rerun', match: (f) => f.startsWith('webkit-sheet-big-5m-worker-r') },
+            { dir: 'v14/pipeline-diag', match: (f) => /^webkit-sheet-big-5m-worker-20[ab]\.json$/.test(f) },
+        ] },
+        { name: '同上，去重哈希改在主线程上算（outboxhash=main）', files: [{ dir: 'v14/pipeline-diag', match: (f) => f.startsWith('webkit-sheet-big-5m-worker-hashmain-') }] },
+        { name: '同上，Worker 里保持 100 ms 的空定时器（outboxkeepalive=1）', files: [{ dir: 'v14/pipeline-diag', match: (f) => f.startsWith('webkit-sheet-big-5m-worker-keepalive-') }] },
+        { name: '1 MiB 表格，发件箱 Worker 放置（正式一轮 + 诊断）', files: [
+            { dir: 'v14/pipeline', match: (f) => f === 'webkit-sheet-big-1m-worker.json' },
+            { dir: 'v14/pipeline-diag', match: (f) => f.startsWith('webkit-sheet-big-1m-worker-') },
+        ] },
+        { name: '5 MiB 表格，主线程放置（正式一轮 + 复跑）', files: [
+            { dir: 'v14/pipeline', match: (f) => f === 'webkit-sheet-big-5m-main.json' },
+            { dir: 'v14/pipeline-rerun', match: (f) => f.startsWith('webkit-sheet-big-5m-main-r') },
+        ] },
+    ];
+    const rows = groups.map((g) => {
+        const detail = g.files.flatMap((s) => load(s.dir).filter((x) => s.match(x.file)).flatMap((x) => (x.data.e2e.detail ?? []) as Json[]));
+        const e2eMs = detail.map((d) => d.e2eMs as number).sort((a, b) => a - b);
+        const slow = detail.filter((d) => d.e2eMs > 1500);
+        // 诊断构建记下了 Worker 里各段；多出的时间落在耗时超过 500 ms 的那一段
+        const where = [...new Set(slow.map((d) => ['hashMs', 'gzipMs', 'encryptMs', 'putMs'].find((k) => (d[k] ?? 0) > 500) ?? (d.workerRoundTripMs > 500 ? 'Worker 往返' : '等待捕获')))].join('、');
+        return [g.name, String(e2eMs.length), n1(e2eMs[Math.floor(e2eMs.length / 2)]), n1(e2eMs[e2eMs.length - 1]), String(slow.length), slow.length === 0 ? '—' : where];
+    });
+    return ['## V14 WebKit 的离群值（端到端，毫秒；超过 1.5 秒的次数与多出的时间所在的一段）', table(['条件', '次数', 'p50', '最大', '超过 1.5 秒', '所在的一段'], rows)].join('\n\n');
 }
 
 function quota(): string {
@@ -142,7 +172,7 @@ function node(): string {
     return [`## V16 Node 加载（${d.node}，不用 happy-dom）`, table(['样本', '生命周期', '加载', '与浏览器加载再保存比较', 'NO_CALCULATION 与样本本身比较', '错误'], rows)].join('\n\n');
 }
 
-const SECTIONS: Record<string, () => string> = { pipeline, recovery, e2e, quota, locks, crash, window, midwrite, concurrent, conflict, replay, combined, node };
+const SECTIONS: Record<string, () => string> = { pipeline, recovery, e2e, stall, quota, locks, crash, window, midwrite, concurrent, conflict, replay, combined, node };
 const wanted = process.argv.slice(2);
 for (const name of wanted.length > 0 ? wanted : Object.keys(SECTIONS)) {
     const fn = SECTIONS[name];

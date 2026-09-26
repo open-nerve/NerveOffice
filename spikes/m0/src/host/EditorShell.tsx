@@ -187,6 +187,8 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
                             docId: params.doc ?? editor.unitId(),
                             revision: window.__m0!.loadedRevision ?? 0,
                             placement: params.outbox,
+                            hashOn: params.outboxHash,
+                            keepAlive: params.outboxKeepAlive,
                             durability: params.durability,
                             logMark: params.mutlog ? () => (logger == null ? null : { logId: logger.logId, logSeq: logger.seq() }) : undefined,
                         });
