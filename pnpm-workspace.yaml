@@ -1,6 +1,85 @@
 # 供应链（规范 §3，ADR-001）：新发布的版本满 3 天（4320 分钟）才允许安装；显式配置后默认严格拦截
 minimumReleaseAge: 4320
 minimumReleaseAgeExcludePrune: true
+# 冷却期豁免只写"包名@精确版本"，每一项写明原因（规范 §3）
+minimumReleaseAgeExclude:
+  # M1-P4：2026-09-27T08:07Z 之后冷却期已满，届时删掉这一段。
+  # Univer 1.0.0 里 23 个包是人工发布、没有来源证明，此前的版本都有，trustPolicy 按"可信度降级"拒装；
+  # 1.0.1 由 GitHub Actions 可信发布（有来源证明），但 2026-09-24 才发布。核对过：1.0.1 各包的 ES 产物、样式与语言包
+  # 把内嵌的版本号规范化之后与 1.0.0 逐字节相同，依赖与 exports 也相同（M0 的验证结论随之适用）。下面每一项同此原因
+  - '@univerjs/core@1.0.1'
+  # 同上
+  - '@univerjs/data-validation@1.0.1'
+  # 同上
+  - '@univerjs/design@1.0.1'
+  # 同上
+  - '@univerjs/docs@1.0.1'
+  # 同上
+  - '@univerjs/docs-drawing@1.0.1'
+  # 同上
+  - '@univerjs/docs-ui@1.0.1'
+  # 同上
+  - '@univerjs/drawing@1.0.1'
+  # 同上
+  - '@univerjs/drawing-ui@1.0.1'
+  # 同上
+  - '@univerjs/engine-formula@1.0.1'
+  # 同上
+  - '@univerjs/engine-render@1.0.1'
+  # 同上
+  - '@univerjs/find-replace@1.0.1'
+  # 同上（经 @univerjs/core 间接引入）
+  - '@univerjs/protocol@1.0.1'
+  # 同上
+  - '@univerjs/rpc@1.0.1'
+  # 同上
+  - '@univerjs/sheets@1.0.1'
+  # 同上
+  - '@univerjs/sheets-conditional-formatting@1.0.1'
+  # 同上
+  - '@univerjs/sheets-conditional-formatting-ui@1.0.1'
+  # 同上
+  - '@univerjs/sheets-data-validation@1.0.1'
+  # 同上
+  - '@univerjs/sheets-data-validation-ui@1.0.1'
+  # 同上
+  - '@univerjs/sheets-drawing@1.0.1'
+  # 同上
+  - '@univerjs/sheets-drawing-ui@1.0.1'
+  # 同上
+  - '@univerjs/sheets-filter@1.0.1'
+  # 同上
+  - '@univerjs/sheets-filter-ui@1.0.1'
+  # 同上
+  - '@univerjs/sheets-find-replace@1.0.1'
+  # 同上
+  - '@univerjs/sheets-formula@1.0.1'
+  # 同上
+  - '@univerjs/sheets-formula-ui@1.0.1'
+  # 同上
+  - '@univerjs/sheets-hyper-link@1.0.1'
+  # 同上
+  - '@univerjs/sheets-hyper-link-ui@1.0.1'
+  # 同上
+  - '@univerjs/sheets-note@1.0.1'
+  # 同上
+  - '@univerjs/sheets-note-ui@1.0.1'
+  # 同上
+  - '@univerjs/sheets-numfmt@1.0.1'
+  # 同上
+  - '@univerjs/sheets-numfmt-ui@1.0.1'
+  # 同上
+  - '@univerjs/sheets-sort@1.0.1'
+  # 同上
+  - '@univerjs/sheets-sort-ui@1.0.1'
+  # 同上
+  - '@univerjs/sheets-ui@1.0.1'
+  # 同上（经 @univerjs/sheets-ui 间接引入）
+  - '@univerjs/telemetry@1.0.1'
+  # 同上
+  - '@univerjs/themes@1.0.1'
+  # 同上
+  - '@univerjs/ui@1.0.1'
 
 # 新版本的发布可信度（如来源证明）不得低于旧版本
 trustPolicy: no-downgrade
@@ -26,6 +105,9 @@ allowBuilds:
   esbuild: false
   # postinstall 只是执行 `lefthook install`；根 package.json 的 prepare 已经显式执行
   lefthook: false
+  # 经 @univerjs/core → @univerjs/protocol → @grpc/grpc-js → @grpc/proto-loader 引入（M1-P4）。postinstall 只检查依赖方声明的版本写法、
+  # 打印警告，不构建任何东西；编辑器只用 protocol 的类型与枚举，不加载 protobufjs（M0-P1 报告 §2.2）
+  protobufjs: false
   # postinstall 只检查原生绑定；pnpm 已按平台安装了可选依赖里的绑定
   unrs-resolver: false
 
@@ -49,6 +131,43 @@ catalog:
   '@types/pg': 8.23.1
   '@types/react': 19.3.0
   '@types/react-dom': 19.3.0
+  # Univer：表格编辑器 sheet@1 用到的包（插件档案 v1 §1），全部是同一个精确版本（00 号计划书 §3.2，门禁 deps 按 UNIVER_POLICY 核对）。
+  # 用 1.0.1 而不是 1.0.0：两者的产物相同，1.0.0 的一部分包没有来源证明，过不了 trustPolicy（见上方的冷却期豁免）
+  '@univerjs/core': 1.0.1
+  '@univerjs/data-validation': 1.0.1
+  '@univerjs/design': 1.0.1
+  '@univerjs/docs': 1.0.1
+  '@univerjs/docs-drawing': 1.0.1
+  '@univerjs/docs-ui': 1.0.1
+  '@univerjs/drawing': 1.0.1
+  '@univerjs/drawing-ui': 1.0.1
+  '@univerjs/engine-formula': 1.0.1
+  '@univerjs/engine-render': 1.0.1
+  '@univerjs/find-replace': 1.0.1
+  '@univerjs/rpc': 1.0.1
+  '@univerjs/sheets': 1.0.1
+  '@univerjs/sheets-conditional-formatting': 1.0.1
+  '@univerjs/sheets-conditional-formatting-ui': 1.0.1
+  '@univerjs/sheets-data-validation': 1.0.1
+  '@univerjs/sheets-data-validation-ui': 1.0.1
+  '@univerjs/sheets-drawing': 1.0.1
+  '@univerjs/sheets-drawing-ui': 1.0.1
+  '@univerjs/sheets-filter': 1.0.1
+  '@univerjs/sheets-filter-ui': 1.0.1
+  '@univerjs/sheets-find-replace': 1.0.1
+  '@univerjs/sheets-formula': 1.0.1
+  '@univerjs/sheets-formula-ui': 1.0.1
+  '@univerjs/sheets-hyper-link': 1.0.1
+  '@univerjs/sheets-hyper-link-ui': 1.0.1
+  '@univerjs/sheets-note': 1.0.1
+  '@univerjs/sheets-note-ui': 1.0.1
+  '@univerjs/sheets-numfmt': 1.0.1
+  '@univerjs/sheets-numfmt-ui': 1.0.1
+  '@univerjs/sheets-sort': 1.0.1
+  '@univerjs/sheets-sort-ui': 1.0.1
+  '@univerjs/sheets-ui': 1.0.1
+  '@univerjs/themes': 1.0.1
+  '@univerjs/ui': 1.0.1
   '@vitejs/plugin-react': 6.1.1
   '@vitest/coverage-v8': 4.1.11
   class-variance-authority: 0.7.1

@@ -1,0 +1,17 @@
+// sheet@1 的界面样式：按档案里带界面的插件导入（P4 设计 §3.6.2）。
+// 只在编辑器页加载；编辑器页不加载 Tailwind 的基础重置，免得影响 Univer 的界面（P4 设计 §3.7.3）
+import '@univerjs/design/lib/index.css'
+import '@univerjs/ui/lib/index.css'
+import '@univerjs/docs-ui/lib/index.css'
+import '@univerjs/sheets-ui/lib/index.css'
+import '@univerjs/sheets-numfmt-ui/lib/index.css'
+import '@univerjs/sheets-formula-ui/lib/index.css'
+import '@univerjs/drawing-ui/lib/index.css'
+import '@univerjs/sheets-drawing-ui/lib/index.css'
+import '@univerjs/sheets-conditional-formatting-ui/lib/index.css'
+import '@univerjs/sheets-filter-ui/lib/index.css'
+import '@univerjs/sheets-hyper-link-ui/lib/index.css'
+import '@univerjs/sheets-data-validation-ui/lib/index.css'
+import '@univerjs/find-replace/lib/index.css'
+import '@univerjs/sheets-note-ui/lib/index.css'
+import '@univerjs/sheets-sort-ui/lib/index.css'
