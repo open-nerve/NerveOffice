@@ -44,7 +44,7 @@
 | 提交钩子（lefthook） | 每次提交 | 暂存文件的 `eslint --fix`；去掉提交说明里的 AI 署名 |
 | `pnpm verify --fast` | pre-push | lint、类型检查、单元测试与覆盖率、精确版本、包管理配置、故事对照 |
 | `pnpm verify` | 合并到 main 之前 | 上一行，加上：启动开发数据库、集成测试、清理并构建、依赖图与许可、产物扫描与第三方许可清单、E2E（本机三个浏览器） |
-| CI（`.github/workflows/ci.yml`） | 推送 main；每周一次；手动 | `pnpm verify --ci`（PostgreSQL 服务容器）与依赖漏洞扫描 |
+| CI（`.github/workflows/ci.yml`） | 推送 main；每周一次；手动 | `pnpm verify --ci`（PostgreSQL 服务容器）与依赖漏洞扫描；失败的步骤、汇总与失败的 E2E 用例写成 GitHub 注解，不登录也能读取 |
 
 A01 的检查（`pnpm gate <名称>`）：
 

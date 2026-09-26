@@ -17,6 +17,8 @@ export default defineConfig({
     ['list'],
     ['html', { open: 'never', outputFolder: './playwright-report' }],
     ['json', { outputFile: './test-results/results.json' }],
+    // CI 上把失败与不稳定的用例写成 GitHub 注解，不登录也能从运行结果里看到
+    ...(CI ? [['github'] as const] : []),
   ],
   use: {
     baseURL,
