@@ -9,18 +9,31 @@ const BODY_ERRORS: Readonly<Record<string, (limitBytes: number) => AppError>> = 
   'entity.too.large': limitBytes => new AppError('PAYLOAD_TOO_LARGE', `请求体超过上限（${limitBytes} 字节）`),
   'request.size.invalid': () => new AppError('REQUEST_INVALID', '请求体的长度与声明的不一致'),
   'request.aborted': () => new AppError('REQUEST_INVALID', '请求在传输中被中断'),
-  'charset.unsupported': () => new AppError('UNSUPPORTED_MEDIA_TYPE', '请求体的字符集不受支持，只接受 UTF-8'),
+  'charset.unsupported': () => new AppError('UNSUPPORTED_MEDIA_TYPE', '请求体的字符集不受支持，请使用 UTF-8'),
   'encoding.unsupported': () => new AppError('UNSUPPORTED_MEDIA_TYPE', '请求体的内容编码不受支持'),
+}
+
+/** 解析器没有给出类型的客户端错误（例如压缩的请求体损坏，解压失败），按 HTTP 状态映射（审查 A6）。 */
+const BODY_ERRORS_BY_STATUS: Readonly<Record<number, (limitBytes: number) => AppError>> = {
+  400: () => new AppError('REQUEST_INVALID', '请求体无法解压或解析'),
+  413: limitBytes => new AppError('PAYLOAD_TOO_LARGE', `请求体超过上限（${limitBytes} 字节）`),
+  415: () => new AppError('UNSUPPORTED_MEDIA_TYPE'),
 }
 
 /** 解析器的错误换成 AppError；认不出的原样交给异常过滤器（按意外错误处理）。 */
 export function toBodyError(error: unknown, limitBytes: number): unknown {
-  const type = typeof error === 'object' && error !== null && 'type' in error && typeof error.type === 'string' ? error.type : undefined
-  const create = type === undefined ? undefined : BODY_ERRORS[type]
+  if (typeof error !== 'object' || error === null)
+    return error
+  const type = 'type' in error && typeof error.type === 'string' ? error.type : undefined
+  const status = 'status' in error && typeof error.status === 'number' ? error.status : undefined
+  const create = (type === undefined ? undefined : BODY_ERRORS[type]) ?? (status === undefined ? undefined : BODY_ERRORS_BY_STATUS[status])
   return create === undefined ? error : create(limitBytes)
 }
 
-/** 只解析 JSON，上限取自配置；解析后检查嵌套深度与元素数量（P2 设计 §3.6）。 */
+/**
+ * 只解析 JSON，上限取自配置；解析后检查嵌套深度与元素数量（P2 设计 §3.6）。
+ * 接受 gzip、deflate、br 压缩的请求体：上限按解压后的大小计算，压缩炸弹在解压到上限时就被截住。
+ */
 export function jsonBody(limitBytes: number): RequestHandler {
   const parse = express.json({ limit: limitBytes, strict: true, type: ['application/json', 'application/*+json'] })
   return (request, response, next) => {

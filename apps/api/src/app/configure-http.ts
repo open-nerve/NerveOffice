@@ -30,6 +30,7 @@ export function configureHttp(app: NestExpressApplication, config: AppConfig, pi
   app.use(securityHeaders())
   app.use(jsonBody(config.http.jsonBodyLimitBytes))
   app.setGlobalPrefix('api')
+  app.useGlobalInterceptors(pipeline.inFlight.interceptor())
   app.useGlobalPipes(new StandardSchemaValidationPipe({ exceptionFactory: validationError }))
   app.useGlobalFilters(new HttpErrorFilter())
 }

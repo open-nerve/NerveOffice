@@ -40,7 +40,7 @@ export class ApplicationRuntime {
   }
 
   async #shutdownOnce(reason: string): Promise<ShutdownResult> {
-    this.logger.info({ reason, inFlight: this.inFlight.size }, '开始退出')
+    this.logger.info({ reason, inFlight: this.inFlight.pending }, '开始退出')
     const result = await shutdownGracefully({
       beginShutdown: () => this.app.get(ApplicationState).beginShutdown(),
       inFlight: this.inFlight,

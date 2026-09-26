@@ -83,6 +83,16 @@ describe('shutdownGracefully', () => {
     expect(events.at(-1)).toBe('closeApplication')
   })
 
+  it('关闭应用超过时限：不再等待，结果为强制退出', async () => {
+    const events: string[] = []
+    const shutdown = shutdownGracefully({
+      ...steps(events, new InFlightRequests(), fakeServer(events)),
+      closeApplication: async () => new Promise<void>(() => {}),
+    })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(await shutdown).toBe('forced')
+  })
+
   it('请求都完成了但还有连接没关（例如新请求正在传输）：到时限后强制断开', async () => {
     const events: string[] = []
     const server = fakeServer(events, false)

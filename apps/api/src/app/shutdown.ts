@@ -34,8 +34,9 @@ async function settlesBefore(promise: Promise<unknown>, deadline: number): Promi
  * 在途请求会失去数据库；所以这里先排空在途请求，再关闭应用。
  * 1. 标记为正在退出，在途与之后的响应都带 Connection: close；
  * 2. 不再接受新连接；
- * 3. 等在途请求完成，关闭它们留下的空闲长连接；超过时限就强制断开，结果记为"强制"；
- * 4. 关闭应用（连接池在这里关闭）。
+ * 3. 等在途请求（响应与处理器）完成，关闭它们留下的空闲长连接；超过时限就强制断开，结果记为"强制"；
+ * 4. 关闭应用（连接池在这里关闭）。这一步同样受时限约束：超时就不再等，结果记为"强制"，
+ *    由进程入口直接退出（审查 A3）。
  */
 export async function shutdownGracefully(steps: ShutdownSteps): Promise<ShutdownResult> {
   const deadline = Date.now() + steps.timeoutMs
@@ -49,10 +50,12 @@ export async function shutdownGracefully(steps: ShutdownSteps): Promise<Shutdown
   steps.server.closeIdleConnections()
   const serverClosed = drained && await settlesBefore(closed, deadline)
   if (!serverClosed) {
-    steps.logger.warn({ inFlight: steps.inFlight.size, timeoutMs: steps.timeoutMs }, '在途请求超过退出时限，强制断开')
+    steps.logger.warn({ inFlight: steps.inFlight.pending, timeoutMs: steps.timeoutMs }, '在途请求超过退出时限，强制断开')
     steps.server.closeAllConnections()
     await closed
   }
-  await steps.closeApplication()
-  return serverClosed ? 'graceful' : 'forced'
+  const applicationClosed = await settlesBefore(steps.closeApplication(), deadline)
+  if (!applicationClosed)
+    steps.logger.warn({ timeoutMs: steps.timeoutMs }, '关闭应用超过退出时限，不再等待')
+  return serverClosed && applicationClosed ? 'graceful' : 'forced'
 }

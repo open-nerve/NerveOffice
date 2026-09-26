@@ -6,28 +6,39 @@ function request(originalUrl: string, route?: string): Request {
   return { method: 'GET', originalUrl, route: route === undefined ? undefined : { path: route } } as unknown as Request
 }
 
+function response(statusCode: number, options: { finished?: boolean, err?: Error } = {}): Response {
+  return { statusCode, writableFinished: options.finished ?? true, err: options.err } as unknown as Response
+}
+
 describe('levelFor', () => {
   it.each([
-    ['/api/documents', 200, false, 'info'],
-    ['/api/documents', 404, false, 'warn'],
-    ['/api/documents', 500, false, 'error'],
-    ['/api/documents', 200, true, 'error'],
-    ['/api/health/live', 200, false, 'silent'],
-    ['/api/health/ready?x=1', 200, false, 'silent'],
-    ['/api/health/ready', 503, false, 'error'],
-  ] as const)('%s %d（出错：%s）记 %s', (url, status, failed, level) => {
-    expect(levelFor(request(url), status, failed)).toBe(level)
+    ['/api/documents', response(200), false, 'info'],
+    ['/api/documents', response(404), false, 'warn'],
+    ['/api/documents', response(500), false, 'error'],
+    ['/api/documents', response(200), true, 'error'],
+    ['/api/documents', response(200, { err: new Error('响应头发出后出错') }), false, 'error'],
+    ['/api/documents', response(200, { finished: false }), false, 'warn'],
+    ['/api/health/live', response(200), false, 'silent'],
+    ['/api/health/ready?x=1', response(200), false, 'silent'],
+    ['/api/health/ready', response(503), false, 'error'],
+    ['/api/health/live', response(200, { finished: false }), false, 'warn'],
+  ] as const)('%s（%#）', (url, res, failed, level) => {
+    expect(levelFor(request(url), res, failed)).toBe(level)
   })
 })
 
 describe('requestSummary', () => {
   it('方法、路由模板、不含查询串的路径、状态码与耗时', () => {
-    const summary = requestSummary(request('/api/documents/42?token=secret', '/api/documents/:id'), { statusCode: 200 } as Response, 12)
+    const summary = requestSummary(request('/api/documents/42?token=secret', '/api/documents/:id'), response(200), 12)
     expect(summary).toEqual({ method: 'GET', route: '/api/documents/:id', path: '/api/documents/42', statusCode: 200, durationMs: 12 })
     expect(JSON.stringify(summary)).not.toContain('secret')
   })
 
   it('没有匹配的路由时路由模板为空', () => {
-    expect(requestSummary(request('/api/nope'), { statusCode: 404 } as Response, 1).route).toBeUndefined()
+    expect(requestSummary(request('/api/nope'), response(404), 1).route).toBeUndefined()
+  })
+
+  it('中断的请求不记状态码（只是默认值），另记 aborted', () => {
+    expect(requestSummary(request('/api/documents'), response(200, { finished: false }), 5)).toEqual({ method: 'GET', route: undefined, path: '/api/documents', aborted: true, durationMs: 5 })
   })
 })

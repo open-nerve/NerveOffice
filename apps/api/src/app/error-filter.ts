@@ -32,6 +32,10 @@ export function mapException(exception: unknown): MappedError {
   return { status: ERROR_CODES.INTERNAL_ERROR.status, code: 'INTERNAL_ERROR', message: ERROR_CODES.INTERNAL_ERROR.message, unexpected: true }
 }
 
+function asError(exception: unknown): Error {
+  return exception instanceof Error ? exception : new Error('抛出的不是 Error', { cause: exception })
+}
+
 /** 全局异常过滤器：所有异常都得到 `{ error: { code, message, requestId } }`。 */
 @Catch()
 export class HttpErrorFilter implements ExceptionFilter {
@@ -40,14 +44,21 @@ export class HttpErrorFilter implements ExceptionFilter {
     const request = http.getRequest<Request>()
     const response = http.getResponse<Response>()
     const mapped = mapException(exception)
+    if (response.writableEnded || response.destroyed) {
+      // 连接已经关闭（客户端中途断开）：响应写不出去，请求日志也已经记过"请求中断"。
+      // 意外错误由这里记进这个请求的日志，不能被吞掉（审查 A4）
+      if (mapped.unexpected)
+        request.log.error({ err: asError(exception) }, '请求中断之后处理失败')
+      return
+    }
     if (mapped.unexpected)
-      response.err = exception instanceof Error ? exception : new Error('抛出的不是 Error', { cause: exception })
+      response.err = asError(exception)
     if (response.headersSent) {
-      // 响应已经开始发送，无法改写成错误响应：断开连接，让客户端知道它不完整
+      // 响应已经开始发送，无法改写成错误响应：断开连接，让客户端知道它不完整；请求日志随后记下异常
       response.destroy()
       return
     }
-    // 请求标识由排在最前面的请求日志中间件生成；万一没有，也要给出合法的错误响应
+    // 请求标识由排在前面的请求日志中间件生成；万一没有，也要给出合法的错误响应
     const requestId = typeof request.id === 'string' ? request.id : 'unknown'
     const body: ErrorResponse = { error: { code: mapped.code, message: mapped.message, requestId } }
     response.status(mapped.status).json(body)

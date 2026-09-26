@@ -16,18 +16,24 @@ function routeOf(request: Request): string | undefined {
   return typeof route === 'object' && route !== null && 'path' in route && typeof route.path === 'string' ? route.path : undefined
 }
 
-/** 5xx 与出错记 error，4xx 记 warn；探针的成功请求不记，免得刷屏。 */
-export function levelFor(request: Request, statusCode: number, failed: boolean): LevelWithSilent {
-  if (failed || statusCode >= 500)
+/** 响应没有写完连接就关了：客户端中途断开（或被强制断开），状态码只是默认值，没有意义（审查 A4）。 */
+function aborted(response: Response): boolean {
+  return !response.writableFinished
+}
+
+/** 出错（包括异常过滤器挂上的 response.err）与 5xx 记 error，4xx 与中断的请求记 warn；探针的成功请求不记，免得刷屏。 */
+export function levelFor(request: Request, response: Response, failed: boolean): LevelWithSilent {
+  if (failed || response.err !== undefined || response.statusCode >= 500)
     return 'error'
-  if (statusCode >= 400)
+  if (response.statusCode >= 400 || aborted(response))
     return 'warn'
   return pathOf(request).startsWith(HEALTH_PROBES) ? 'silent' : 'info'
 }
 
-/** 请求结束时记录的字段（规范 §7）。不记请求头、请求体、响应体与查询串。 */
+/** 请求结束时记录的字段（规范 §7）。不记请求头、请求体、响应体与查询串。中断的请求不记状态码，另记 aborted。 */
 export function requestSummary(request: Request, response: Response, durationMs: number): Record<string, unknown> {
-  return { method: request.method, route: routeOf(request), path: pathOf(request), statusCode: response.statusCode, durationMs }
+  const outcome = aborted(response) ? { aborted: true } : { statusCode: response.statusCode }
+  return { method: request.method, route: routeOf(request), path: pathOf(request), ...outcome, durationMs }
 }
 
 /** 请求日志与请求标识，排在管线的最前面（P2 设计 §3.2、§3.4）。 */
@@ -47,14 +53,14 @@ export function createHttpLogger(logger: Logger): ReturnType<typeof pinoHttp<Req
       response.setHeader(REQUEST_ID_HEADER, id)
       return id
     },
-    customLogLevel: (request, response, error) => levelFor(request, response.statusCode, error !== undefined),
+    customLogLevel: (request, response, error) => levelFor(request, response, error !== undefined),
     customSuccessObject: (request, response, value: { durationMs: number }) => requestSummary(request, response, value.durationMs),
     customErrorObject: (request, response, _error, value: { durationMs: number }) => ({
       ...requestSummary(request, response, value.durationMs),
       // 只有异常过滤器判定为意外错误时（response.err），才带上异常与堆栈；预期中的 5xx（例如未就绪）不带
       ...(response.err === undefined ? {} : { err: response.err }),
     }),
-    customSuccessMessage: () => '请求完成',
+    customSuccessMessage: (_request, response) => (aborted(response) ? '请求中断' : '请求完成'),
     customErrorMessage: () => '请求失败',
   })
 }

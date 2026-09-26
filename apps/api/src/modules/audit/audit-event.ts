@@ -3,9 +3,12 @@ import { auditActionSchema } from '@nerve-office/contracts'
 import { z } from 'zod'
 import { AUDIT_DETAILS_MAX_BYTES, AUDIT_TARGET_TYPES } from '../../db/schema/audit/index.ts'
 
+/** 客户端地址：数据库的 inet 能存的 IPv4 或 IPv6（不带作用域）。 */
+export const clientIpSchema = z.union([z.ipv4(), z.ipv6()])
+
 /** 审计事件的来源：HTTP 请求带请求标识与客户端地址；命令行（例如初始化管理员）没有。 */
 export const auditOriginSchema = z.discriminatedUnion('source', [
-  z.strictObject({ source: z.literal('http'), requestId: z.string().min(1).max(128), clientIp: z.union([z.ipv4(), z.ipv6()]).optional() }),
+  z.strictObject({ source: z.literal('http'), requestId: z.string().min(1).max(128), clientIp: clientIpSchema.optional() }),
   z.strictObject({ source: z.literal('cli') }),
 ])
 

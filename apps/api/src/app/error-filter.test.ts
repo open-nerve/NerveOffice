@@ -31,6 +31,8 @@ describe('mapException', () => {
 
 interface FakeResponse {
   headersSent: boolean
+  writableEnded: boolean
+  destroyed: boolean
   statusCode?: number
   body?: unknown
   err?: Error
@@ -39,9 +41,11 @@ interface FakeResponse {
   destroy: () => void
 }
 
-function fakeResponse(headersSent = false): FakeResponse {
+function fakeResponse(headersSent = false, closed = false): FakeResponse {
   const response: FakeResponse = {
     headersSent,
+    writableEnded: false,
+    destroyed: closed,
     status: (code) => {
       response.statusCode = code
       return response
@@ -89,6 +93,17 @@ describe('HttpErrorFilter', () => {
     filter.catch(new Error('写到一半'), hostFor({ id: 'req-4' }, response))
     expect(response.destroy).toHaveBeenCalledOnce()
     expect(response.body).toBeUndefined()
+  })
+
+  it('连接已经关闭（客户端中途断开）：不写响应；意外错误记进这个请求的日志，不被吞掉', () => {
+    const response = fakeResponse(false, true)
+    const log = { error: vi.fn() }
+    const error = new Error('断开之后处理失败')
+    filter.catch(error, hostFor({ id: 'req-5', log }, response))
+    expect(response.body).toBeUndefined()
+    expect(log.error).toHaveBeenCalledWith({ err: error }, '请求中断之后处理失败')
+    filter.catch(new AppError('NOT_FOUND'), hostFor({ id: 'req-6', log }, fakeResponse(false, true)))
+    expect(log.error).toHaveBeenCalledOnce()
   })
 
   it('万一没有请求标识，仍给出合法的错误响应', () => {

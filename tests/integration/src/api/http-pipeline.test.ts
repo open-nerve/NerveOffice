@@ -2,12 +2,15 @@
 // 用一个只在测试里存在的控制器制造各种情况。
 import type { TestApp } from '../support/api-app.ts'
 import type { LogEntry } from '../support/log-capture.ts'
+import { setTimeout as delay } from 'node:timers/promises'
+import { gzipSync } from 'node:zlib'
 import { AppError, AppLogger } from '@nerve-office/api'
 import { errorResponseSchema } from '@nerve-office/contracts'
 import { Body, Controller, Get, Module, Post } from '@nestjs/common'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { startTestApp } from '../support/api-app.ts'
+import { waitFor } from '../support/wait.ts'
 
 const echoSchema = z.strictObject({ name: z.string().min(1).max(20), password: z.string().optional() })
 
@@ -33,6 +36,13 @@ class PipelineProbeController {
   @Get('crash')
   crash(): never {
     throw new Error('内部细节：数据库密码是 hunter2')
+  }
+
+  /** 过一会儿才失败：客户端可以在失败之前断开 */
+  @Get('slow-crash')
+  async slowCrash(): Promise<never> {
+    await delay(300)
+    throw new Error('客户端断开之后处理失败')
   }
 }
 
@@ -113,6 +123,18 @@ describe('错误响应（规范 §4、ADR-006）', () => {
   it('字符集或内容编码不受支持 → 415 UNSUPPORTED_MEDIA_TYPE', async () => {
     await expectError(await postJson('/api/__test/echo', '{"name":"a"}', { 'content-type': 'application/json; charset=gbk' }), 415, 'UNSUPPORTED_MEDIA_TYPE')
     await expectError(await postJson('/api/__test/echo', '{"name":"a"}', { ...JSON_HEADERS, 'content-encoding': 'compress' }), 415, 'UNSUPPORTED_MEDIA_TYPE')
+  })
+
+  it('压缩的请求体：损坏时 400；解压后超过上限（压缩炸弹）时 413，按解压后的大小计算', async () => {
+    const gzip = { ...JSON_HEADERS, 'content-encoding': 'gzip' }
+    const corrupted = await expectError(await postJson('/api/__test/echo', 'not gzip at all', gzip), 400, 'REQUEST_INVALID')
+    expect(corrupted.message).toBe('请求体无法解压或解析')
+    const bomb = gzipSync(JSON.stringify({ name: 'a'.repeat(5 * 1024 * 1024) }))
+    expect(bomb.byteLength).toBeLessThan(65_536)
+    const response = await request('/api/__test/echo', { method: 'POST', body: bomb, headers: gzip })
+    await expectError(response, 413, 'PAYLOAD_TOO_LARGE')
+    const valid = await request('/api/__test/echo', { method: 'POST', body: gzipSync(JSON.stringify({ name: '压缩' })), headers: gzip })
+    expect(await valid.json()).toEqual({ name: '压缩' })
   })
 
   it('校验失败 → 400 REQUEST_INVALID，列出字段路径，不回显取值', async () => {
@@ -198,6 +220,19 @@ describe('请求标识与请求日志（规范 §7）', () => {
     })
     expect(app.logs.text()).not.toContain('another-password')
     expect(app.logs.text()).not.toContain('tok-123456')
+  })
+
+  it('客户端中途断开：记一条"请求中断"（warn，不记状态码）；之后处理器失败也记进这个请求的日志', async () => {
+    const controller = new AbortController()
+    const aborted = fetch(`${app.baseUrl}/api/__test/slow-crash`, { signal: controller.signal, headers: { 'x-request-id': 'abort-trace-1' } }).catch(() => 'aborted')
+    await delay(50)
+    controller.abort()
+    expect(await aborted).toBe('aborted')
+    await waitFor(() => logsOf('abort-trace-1').some(entry => entry.msg === '请求中断之后处理失败'), '处理器失败的日志')
+    const entries = logsOf('abort-trace-1')
+    expect(entries.find(entry => entry.msg === '请求中断')).toMatchObject({ level: 'warn', aborted: true, route: '/api/__test/slow-crash' })
+    expect(entries.find(entry => entry.msg === '请求中断')).not.toHaveProperty('statusCode')
+    expect(entries.find(entry => entry.msg === '请求中断之后处理失败')).toMatchObject({ level: 'error', err: { message: '客户端断开之后处理失败' } })
   })
 
   it('探针的成功请求不记日志', async () => {
