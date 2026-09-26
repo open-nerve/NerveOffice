@@ -20,7 +20,15 @@
     "test:e2e": "pnpm --filter @nerve-office/e2e exec playwright test",
     "build": "pnpm -r --filter ./packages/* --filter ./apps/* run build",
     "db:up": "docker compose -f deploy/dev/compose.yaml up -d --wait",
-    "db:down": "docker compose -f deploy/dev/compose.yaml down"
+    "db:down": "docker compose -f deploy/dev/compose.yaml down",
+    "gate": "node tools/src/gates/cli.ts",
+    "gate:pins": "node tools/src/gates/cli.ts pins",
+    "gate:config": "node tools/src/gates/cli.ts config",
+    "gate:stories": "node tools/src/gates/cli.ts stories",
+    "gate:deps": "node tools/src/gates/cli.ts deps",
+    "gate:licenses": "node tools/src/gates/cli.ts licenses",
+    "gate:artifacts": "node tools/src/gates/cli.ts artifacts",
+    "gate:audit": "node tools/src/gates/cli.ts audit"
   },
   "devDependencies": {
     "@antfu/eslint-config": "catalog:",
