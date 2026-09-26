@@ -4,7 +4,7 @@ import type { DataRouter, RouteObject } from 'react-router'
 import type { PageLocation } from '../shared/lib/page-location.ts'
 import type { SessionChannel } from '../shared/lib/session-channel.ts'
 import { createBrowserRouter } from 'react-router'
-import { fetchSession, isLoginPage, LOGIN_PATH, loginPath, sessionQueryOptions } from '../features/auth/index.ts'
+import { isLoginPage, LOGIN_PATH, loginPath, requestSession, sessionQueryOptions } from '../features/auth/index.ts'
 import { isAuthenticationError, setCsrfToken } from '../shared/api/index.ts'
 import { browserPageLocation } from '../shared/lib/page-location.ts'
 import { openSessionChannel } from '../shared/lib/session-channel.ts'
@@ -64,19 +64,27 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
   })
   const unsubscribe = channel.subscribe(() => void recheckSession())
 
-  /** 整页离开：页面卸载之前，旧页面就不再能发出状态变更的请求 */
-  function leave(url: string): void {
+  /**
+   * 页面开始离开（转到登录页，或者换了人要重新加载）：之后的会话事件都不再处理，CSRF 令牌马上清掉。
+   * 新页面加载完之前旧页面还显示着、还能点：没有令牌，它就发不出状态变更的请求（复验 S2）。
+   */
+  function depart(): boolean {
     if (leaving)
-      return
+      return false
     leaving = true
     setCsrfToken(undefined)
-    page.replace(url)
+    return true
   }
 
-  /** 现在的会话；未登录时为 undefined。网络等其他失败原样抛出 */
+  function leave(url: string): void {
+    if (depart())
+      page.replace(url)
+  }
+
+  /** 现在的会话；未登录时为 undefined。网络等其他失败原样抛出。不改动请求层的令牌 */
   async function currentSession(): Promise<SessionResponse | undefined> {
     try {
-      return await fetchSession()
+      return await requestSession()
     }
     catch (error) {
       if (isAuthenticationError(error))
@@ -94,10 +102,13 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
     }
     checking = true
     try {
-      do {
+      for (;;) {
         checkAgain = false
         await checkSessionOnce()
-      } while (checkAgain && !leaving)
+        // 确认期间又来了消息，而且页面还没开始离开：再确认一次
+        if (!checkAgain || leaving)
+          break
+      }
     }
     finally {
       checking = false
@@ -112,11 +123,13 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
       if (leaving)
         return
       if (current?.user.id !== shown?.user.id) {
-        // 页面显示的是另一个人（或者未登录时）的内容
-        leaving = true
-        page.reload()
+        // 页面显示的是另一个人（或者未登录时）的内容：新会话的令牌不交给这个页面
+        if (depart())
+          page.reload()
       }
       else if (current !== undefined) {
+        // 还是同一个人（例如在别的标签页重新登录）：换上新的会话与令牌，页面不动
+        setCsrfToken(current.csrfToken)
         queryClient.setQueryData(queryKey, current)
       }
     }

@@ -231,15 +231,30 @@ describe('loadConfig', () => {
       expect(loadConfig({ ...REQUIRED, NERVE_PASSWORD_ARGON2_MEMORY_KIB: memory, NERVE_PASSWORD_ARGON2_ITERATIONS: iterations }).password.argon2.memoryKib).toBe(Number(memory))
   })
 
-  it('哈希的并发上限不超过 libuv 线程池（UV_THREADPOOL_SIZE，默认 4）的一半；线程池的大小不合法时报出（复验 R11）', () => {
+  it('哈希的并发上限不超过 libuv 线程池（UV_THREADPOOL_SIZE，默认 4）的一半（复验 R11）', () => {
     const issuesWith = (extra: Record<string, string>) => issuesOf(() => loadConfig({ ...REQUIRED, ...extra }))
     expect(issuesWith({ NERVE_PASSWORD_HASH_CONCURRENCY: '3' }).map(issue => issue.variable)).toEqual(['NERVE_PASSWORD_HASH_CONCURRENCY'])
-    expect(issuesWith({ NERVE_PASSWORD_HASH_CONCURRENCY: '3' })[0]?.problem).toContain('现在是 4')
+    expect(issuesWith({ NERVE_PASSWORD_HASH_CONCURRENCY: '3' })[0]?.problem).toContain('UV_THREADPOOL_SIZE 现在是 4（默认值）')
+    // 说明里写出两边的现值（包括是不是默认值）与两种改法（复验 S4）
+    const problem = issuesWith({ UV_THREADPOOL_SIZE: '3' })[0]?.problem ?? ''
+    expect(problem).toContain('现在是 2（默认值）')
+    expect(problem).toContain('UV_THREADPOOL_SIZE 现在是 3，哈希最多 1 个')
+    expect(problem).toContain('调到至少 4')
     expect(loadConfig({ ...REQUIRED, NERVE_PASSWORD_HASH_CONCURRENCY: '8', UV_THREADPOOL_SIZE: '16' }).password.hashConcurrency).toBe(8)
-    expect(loadConfig({ ...REQUIRED, NERVE_PASSWORD_HASH_CONCURRENCY: '1', UV_THREADPOOL_SIZE: '1' }).password.hashConcurrency).toBe(1)
-    expect(loadConfig({ ...REQUIRED, UV_THREADPOOL_SIZE: '' }).password.hashConcurrency).toBe(2)
-    for (const size of ['0', '1025', 'four', '2.5'])
-      expect(issuesWith({ UV_THREADPOOL_SIZE: size }).map(issue => issue.variable), size).toEqual(['UV_THREADPOOL_SIZE'])
+    expect(loadConfig({ ...REQUIRED, NERVE_PASSWORD_HASH_CONCURRENCY: '1', UV_THREADPOOL_SIZE: '2' }).password.hashConcurrency).toBe(1)
+  })
+
+  it('UV_THREADPOOL_SIZE 要么不设，要么是 2–1024 的整数：libuv 把空值、非数字与 0 当作 1 个线程（复验 S1）', () => {
+    for (const size of ['', '0', '1', '1025', 'four', '2.5', '8abc', ' 4']) {
+      const issues = issuesOf(() => loadConfig({ ...REQUIRED, UV_THREADPOOL_SIZE: size }))
+      expect(issues.map(issue => issue.variable), JSON.stringify(size)).toEqual(['UV_THREADPOOL_SIZE'])
+      expect(issues[0]?.problem).toContain('1 个线程')
+    }
+  })
+
+  it('UV_THREADPOOL_SIZE 不合法时，与别的变量的问题一起报出（复验 S3）', () => {
+    const issues = issuesOf(() => loadConfig({ ...REQUIRED, NERVE_LOG_LEVEL: 'bad', UV_THREADPOOL_SIZE: 'four' }))
+    expect(issues.map(issue => issue.variable).sort()).toEqual(['NERVE_LOG_LEVEL', 'UV_THREADPOOL_SIZE'])
   })
 
   it('不认识的 NERVE_ 变量（多半是拼写错误）让启动失败；NERVE_TEST_ 留给测试工具，其他前缀不管', () => {

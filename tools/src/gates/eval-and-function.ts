@@ -74,11 +74,13 @@ function staticString(value: unknown): string | undefined {
   return typeof text === 'string' ? text : undefined
 }
 
-/** 取属性的名字：a.b 的 b，a["b"] 的 b；下标不是字面量时为 undefined。 */
+/** 取属性的名字：a.b 的 b，a["b"] 的 b；下标不是字面量时为 undefined。私有字段（this.#eval）不是全局的属性，不算（复验 S6）。 */
 function propertyName(member: SyntaxNode): string | undefined {
   if (member.computed === true)
     return staticString(member.property)
-  return isNode(member.property) && typeof member.property.name === 'string' ? member.property.name : undefined
+  if (!isNode(member.property) || member.property.type === 'PrivateIdentifier')
+    return undefined
+  return typeof member.property.name === 'string' ? member.property.name : undefined
 }
 
 function isReferencePosition({ parent, grandparent, field }: Visit): boolean {
@@ -88,9 +90,25 @@ function isReferencePosition({ parent, grandparent, field }: Visit): boolean {
   return parent.type === 'Property' && grandparent?.type === 'ObjectPattern'
 }
 
-/** 字符串是某个成员访问的下标（a["eval"]）：成员访问本身已经算作引用，字符串不再重复计数。 */
-function isMemberKey({ parent, field }: Visit): boolean {
-  return parent?.type === 'MemberExpression' && field === 'property'
+/** 定义成员名字的位置：类的成员、对象字面量的键（不是计算的键）。解构里的键是取出属性，不在此列。 */
+const MEMBER_DEFINITIONS: ReadonlySet<string> = new Set(['MethodDefinition', 'PropertyDefinition', 'AccessorProperty'])
+
+/**
+ * 这个字符串不是按名字取属性，不算引用（复验 S6）：
+ * - 成员访问的下标（a["eval"]）：成员访问本身已经算作引用，字符串不再重复计数；
+ * - 对象字面量的键（{"eval": 1}，与 {eval: 1} 一致）、类成员的名字：只是定义一个名字；
+ * - switch 的 case（case "Function":）：只拿来比较。
+ */
+function isNameOnlyString({ parent, grandparent, field }: Visit): boolean {
+  if (parent === undefined)
+    return false
+  if (parent.type === 'MemberExpression')
+    return field === 'property'
+  if (parent.type === 'SwitchCase')
+    return field === 'test'
+  if (field !== 'key' || parent.computed === true)
+    return false
+  return MEMBER_DEFINITIONS.has(parent.type) || (parent.type === 'Property' && grandparent?.type === 'ObjectExpression')
 }
 
 /**
@@ -111,7 +129,7 @@ function referencedName(visit: Visit): EvalOrFunction | undefined {
   }
   if (node.type === 'Literal' || node.type === 'TemplateLiteral') {
     const value = staticString(node)
-    return isName(value) && !isMemberKey(visit) ? value : undefined
+    return isName(value) && !isNameOnlyString(visit) ? value : undefined
   }
   return undefined
 }
@@ -135,6 +153,9 @@ function usageOf(parent: SyntaxNode, field: string): Usage | undefined {
       return undefined
     case 'BinaryExpression':
       return parent.operator === 'instanceof' && field === 'left' ? 'value' : undefined
+    // case 的值只拿来与 switch 的条件比较（=== 的比较已经放过）
+    case 'SwitchCase':
+      return field === 'test' ? undefined : 'value'
     default:
       return 'value'
   }

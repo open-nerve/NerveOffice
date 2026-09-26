@@ -3,7 +3,7 @@
 // 类型感知的解析只接受 tsconfig 里真实存在的文件，所以 lintText 借用仓库里已有的文件路径；
 // 需要"被引用的目标"时，临时创建探针文件（已加入 .gitignore），用完删除。
 import type { Linter } from 'eslint'
-import { mkdirSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import process from 'node:process'
 import { ESLint } from 'eslint'
@@ -163,6 +163,23 @@ describe('US-M1-11 lint 规则的自测：模块边界与循环依赖', () => {
     expect(JSON.stringify(syntax)).toContain('zod-jitless')
     const probe = await configFor('apps/web/src/entries/csp-probe/main.ts')
     expect(JSON.stringify(probe.rules?.['no-restricted-syntax'])).not.toContain('zod-jitless')
+  })
+
+  it('每个页面（apps/web/*.html）引用的入口脚本都受入口规则约束，CSP 阳性对照除外：入口换了名字或写法也不会漏掉（复验 S7）', async () => {
+    const pages = readdirSync(join(REPO_ROOT, 'apps/web')).filter(name => name.endsWith('.html'))
+    expect(pages).toContain('index.html')
+    for (const page of pages) {
+      const html = readFileSync(join(REPO_ROOT, 'apps/web', page), 'utf8')
+      const scripts = [...html.matchAll(/<script[^>]*\ssrc="\/([^"]+)"/g)].map(match => `apps/web/${match[1] ?? ''}`)
+      expect(scripts, page).not.toEqual([])
+      for (const script of scripts) {
+        const syntax = JSON.stringify((await configFor(script)).rules?.['no-restricted-syntax'])
+        if (page === 'csp-probe.html')
+          expect(syntax, script).not.toContain('zod-jitless')
+        else
+          expect(syntax, script).toContain('zod-jitless')
+      }
+    }
   })
 
   it('不能借"无主"文件中转绕过边界', async () => {
@@ -467,12 +484,14 @@ describe('US-M1-11 lint 规则的自测：测试代码只在测试里（审查 B
 
   it('生产代码不能引用测试与测试辅助', async () => {
     expect(await rulesFor('import { renderApp } from \'./render-app.test-support.tsx\'\n\nexport const r = renderApp\n', WEB_FILE)).toContain('ts/no-restricted-imports')
+    for (const path of ['./render-app.test-support.tsx?raw', './render-app.TEST-SUPPORT.tsx', './app.test.tsx#x'])
+      expect(await rulesFor(`import value from '${path}'\n\nexport const v = value\n`, WEB_FILE), path).toContain('ts/no-restricted-imports')
     expect(await rulesFor('import { installFakeApi } from \'../shared/testing/fake-api.test-support.ts\'\n\nexport const f = installFakeApi\n', WEB_FILE)).toContain('ts/no-restricted-imports')
   })
 
   it('动态导入测试与测试辅助同样拦下（复验 R3）', async () => {
     const load = (path: string): string => `export async function load(): Promise<unknown> {\n  return import('${path}')\n}\n`
-    for (const path of ['../shared/testing/fake-api.test-support.ts', './app.test.tsx', './render-app.test-support'])
+    for (const path of ['../shared/testing/fake-api.test-support.ts', './app.test.tsx', './render-app.test-support', './app.TEST.tsx', '../shared/testing/fake-api.test-support.ts?raw', './app.test.tsx#x'])
       expect(await rulesFor(load(path), WEB_FILE), path).toContain('no-restricted-syntax')
     expect(await rulesFor(load('../../../../tests/integration/src/support/api-app.ts'), 'tools/src/gates/run.ts')).not.toContain('no-restricted-syntax')
   })

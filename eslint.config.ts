@@ -37,7 +37,8 @@ const DYNAMIC_UNIVER_PRO = {
 
 // 测试与测试辅助只被测试静态引用：nerve/test-code-only-in-tests 按路径拦下的是静态导入，动态导入在这里拦（复验 R3）
 const DYNAMIC_TEST_MODULES = {
-  selector: String.raw`ImportExpression[source.value=/\.test(?:-support)?(?:\.[cm]?[jt]sx?)?$/]`,
+  // 带查询或片段（?raw、#x）、大小写不同（不区分大小写的文件系统上照样找得到）也算（复验 S5）
+  selector: String.raw`ImportExpression[source.value=/\.test(?:-support)?(?:\.[cm]?[jt]sx?)?(?:[?#].*)?$/i]`,
   message: '不要动态导入测试与测试辅助（*.test.*、*.test-support.*）：它们只被测试静态引用，不进入生产代码（审查 B17）',
 }
 const BASE_RESTRICTED_SYNTAX = [...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER, DYNAMIC_UNIVER_PRO, DYNAMIC_TEST_MODULES]
@@ -224,7 +225,8 @@ const TEST_CODE = ['**/*.test.{ts,tsx,mts,cts,js,jsx,mjs,cjs}', '**/*.test-suppo
 /** 构建与工具的配置、web 的构建插件：本来就用开发依赖（Vite、ESLint、drizzle-kit），不进产物 */
 const BUILD_CODE = ['**/*.config.{ts,mts,cts,js,mjs,cjs}', 'apps/*/build/**']
 const TEST_MODULES = {
-  regex: String.raw`\.test(?:-support)?(?:\.[cm]?[jt]sx?)?$`,
+  // 不区分大小写（no-restricted-imports 的默认）；带查询或片段（?raw、#x）也算（复验 S5）
+  regex: String.raw`\.test(?:-support)?(?:\.[cm]?[jt]sx?)?(?:[?#].*)?$`,
   message: '测试与测试辅助（*.test.*、*.test-support.*）只被测试代码引用，不进入生产代码（审查 B17）',
 }
 

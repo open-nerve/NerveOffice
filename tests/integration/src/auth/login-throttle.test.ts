@@ -1,7 +1,7 @@
-import type { Buffer } from 'node:buffer'
 // 登录限流在并发与各种来源下的行为（P3 设计 §3.5，P3 审查 A1、A2、A9、A10）：
 // 先占用名额再验证，并发的请求不能都在锁定之前通过；清理在事务之外，并发时不死锁；
 // 地址维度：成功登录只退回自己的名额；IPv6 按 /64；取不到合法地址时归到同一个键。
+import type { Buffer } from 'node:buffer'
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'

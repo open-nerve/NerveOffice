@@ -60,6 +60,8 @@ describe('US-M1-11 A01 产物里 eval 与 Function 的引用（语法树）', ()
     ['按名字取：属性描述', 'Object.getOwnPropertyDescriptor(globalThis,\'eval\')', ['eval value']],
     ['名字先放进变量', 'const k=`Function`;globalThis[k]("x")', ['Function value']],
     ['字符串下标只算一次（成员访问本身已经算了）', 'a["eval"](c)', ['eval call']],
+    ['解构里字符串写的键：是从对象上取出这个属性', 'const {"Function":F}=globalThis', ['Function value']],
+    ['计算键里的字符串', '({["eval"]:1})', ['eval value']],
   ])('别名与按名字取：%s', (_case, code, expected) => {
     expect(usages(code)).toEqual(expected)
   })
@@ -75,6 +77,10 @@ describe('US-M1-11 A01 产物里 eval 与 Function 的引用（语法树）', ()
     ['其他一元与二元运算', 'const a=!eval,b=+Function,c="call" in Function,d=Function+""'],
     ['取 prototype', 'Function.prototype.call.bind(f);Function.prototype.toString.call(f);Function["prototype"];window.Function.prototype'],
     ['对象的键、方法名与类的成员', '({Function:1,eval(){}});class A{eval(){}static Function=1}'],
+    // 只是定义名字或拿来比较，不是按名字取属性（复验 S6）
+    ['字符串写的对象键与类成员名', '({"eval":1,\'Function\':2});class B{"eval"(){}static "Function"=1}'],
+    ['switch 的 case', 'switch(t){case "Function":break;case Function:break}'],
+    ['私有字段', 'class C{#eval=1;#Function(){}m(){return this.#eval+this.#Function()}}'],
     ['注释与正则字面量', '/* eval(x) Function(y) */ /Function\\(/.test(s)'],
   ])('不算引用：%s', (_case, code) => {
     expect(references(code)).toEqual([])

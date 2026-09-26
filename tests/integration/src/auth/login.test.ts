@@ -1,6 +1,6 @@
+// 登录（P3 设计 §3.5，US-M1-02）：会话 Cookie 的属性、统一的错误提示、限流、Origin 检查与审计。
 import type { Buffer } from 'node:buffer'
 import type { TestAccount } from '../support/accounts.ts'
-// 登录（P3 设计 §3.5，US-M1-02）：会话 Cookie 的属性、统一的错误提示、限流、Origin 检查与审计。
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import { createHash } from 'node:crypto'

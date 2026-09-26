@@ -193,22 +193,37 @@ type Environment = z.output<typeof environmentSchema>
  */
 const ARGON2_MIN_COST = 35_840
 
-/** libuv 线程池的大小：UV_THREADPOOL_SIZE 是 libuv 自己读的变量，不设时 4 个线程，上限 1024。 */
+/**
+ * libuv 线程池的大小（UV_THREADPOOL_SIZE）：libuv 自己读这个变量。不设时 4 个线程；设了就按 atoi 解析，
+ * 空值、非数字与 0 都变成 1 个线程，"2.5" 变成 2，不会回到默认值（复验 S1：编排文件里 `VAR=` 的写法会得到 1 个线程）。
+ * 所以这里要求：不设，或者是 2–1024 的整数。1 个线程时哈希、读文件与解析域名只能互相等待，哈希"最多占一半"也做不到。
+ */
 const THREADPOOL_DEFAULT = 4
 const THREADPOOL_VARIABLE = 'UV_THREADPOOL_SIZE'
+const THREADPOOL_PROBLEM = '要么不设（默认 4 个线程），要么是 2–1024 之间的整数：libuv 把空值、非数字与 0 都当作 1 个线程，哈希、读文件与解析域名会互相等待'
 
-/**
- * 线程池的大小：没设（或者空）时是默认值；设了但不是 1–1024 的整数时返回 undefined（libuv 会悄悄用默认值，这里当作配置错误报出）。
- */
-function threadpoolSize(value: string | undefined): number | undefined {
-  if (value === undefined || value === '')
-    return THREADPOOL_DEFAULT
-  const size = /^\d+$/.test(value) ? Number(value) : Number.NaN
-  return Number.isInteger(size) && size >= 1 && size <= 1_024 ? size : undefined
+interface Threadpool {
+  readonly size: number
+  /** 没设这个变量，用的是 libuv 的默认值 */
+  readonly isDefault: boolean
 }
 
-/** 变量之间的约束：只在每个变量各自合法之后检查，免得一个错误报两次。threadpool 是 libuv 线程池的大小（UV_THREADPOOL_SIZE）。 */
-function crossChecks(env: Environment, threadpool: number): ConfigIssue[] {
+/** 线程池的大小；设了但不合法时返回 undefined。 */
+function threadpoolOf(value: string | undefined): Threadpool | undefined {
+  if (value === undefined)
+    return { size: THREADPOOL_DEFAULT, isDefault: true }
+  if (!/^\d+$/.test(value))
+    return undefined
+  const size = Number(value)
+  return size >= 2 && size <= 1_024 ? { size, isDefault: false } : undefined
+}
+
+/**
+ * 变量之间的约束：只在每个变量各自合法之后检查，免得一个错误报两次。
+ * threadpool 是 libuv 线程池的大小，不合法时为 undefined（它自己的问题另外报出，这里不再比较）；
+ * defaults 是没有设置、用了默认值的变量。
+ */
+function crossChecks(env: Environment, threadpool: Threadpool | undefined, defaults: ReadonlySet<string>): ConfigIssue[] {
   const issues: ConfigIssue[] = []
   if (env.NERVE_HTTP_HEADERS_TIMEOUT_MS > env.NERVE_HTTP_REQUEST_TIMEOUT_MS)
     issues.push({ variable: 'NERVE_HTTP_HEADERS_TIMEOUT_MS', problem: '不能大于 NERVE_HTTP_REQUEST_TIMEOUT_MS' })
@@ -221,11 +236,14 @@ function crossChecks(env: Environment, threadpool: number): ConfigIssue[] {
     })
   }
   // 哈希在 libuv 的线程池里计算，线程池也负责读文件与解析域名：哈希最多占一半（复验 R11）
-  const hashLimit = Math.max(1, Math.floor(threadpool / 2))
-  if (env.NERVE_PASSWORD_HASH_CONCURRENCY > hashLimit) {
+  const concurrency = env.NERVE_PASSWORD_HASH_CONCURRENCY
+  if (threadpool !== undefined && concurrency > Math.floor(threadpool.size / 2)) {
+    const current = (value: number, isDefault: boolean): string => `${value}${isDefault ? '（默认值）' : ''}`
     issues.push({
       variable: 'NERVE_PASSWORD_HASH_CONCURRENCY',
-      problem: `不能超过 libuv 线程池（${THREADPOOL_VARIABLE}，现在是 ${threadpool}）的一半，即 ${hashLimit}：线程池也负责读文件与解析域名；要调大，先调大 ${THREADPOOL_VARIABLE}`,
+      problem: `现在是 ${current(concurrency, defaults.has('NERVE_PASSWORD_HASH_CONCURRENCY'))}，不能超过 libuv 线程池的一半：`
+        + `${THREADPOOL_VARIABLE} 现在是 ${current(threadpool.size, threadpool.isDefault)}，哈希最多 ${Math.floor(threadpool.size / 2)} 个（线程池也负责读文件与解析域名）。`
+        + `把它调小，或者把 ${THREADPOOL_VARIABLE} 调到至少 ${concurrency * 2}`,
     })
   }
   return issues
@@ -341,6 +359,11 @@ export function loadConfig(
       issues.push({ variable: name, problem: '不认识的变量（拼写错误？）' })
   }
 
+  // 线程池的大小是 libuv 的变量，与别的变量是否合法无关，单独检查，一次列出全部问题（复验 S3）
+  const threadpool = threadpoolOf(env[THREADPOOL_VARIABLE])
+  if (threadpool === undefined)
+    issues.push({ variable: THREADPOOL_VARIABLE, problem: THREADPOOL_PROBLEM })
+
   const result = environmentSchema.safeParse(input)
   if (!result.success) {
     for (const issue of result.error.issues) {
@@ -353,11 +376,8 @@ export function loadConfig(
     }
   }
   else {
-    const threadpool = threadpoolSize(env[THREADPOOL_VARIABLE])
-    if (threadpool === undefined)
-      issues.push({ variable: THREADPOOL_VARIABLE, problem: '必须是 1–1024 之间的整数（libuv 线程池的大小）' })
-    else
-      issues.push(...crossChecks(result.data, threadpool))
+    const defaults = new Set(Object.keys(environmentSchema.shape).filter(name => !(name in input)))
+    issues.push(...crossChecks(result.data, threadpool, defaults))
   }
   if (!result.success || issues.length > 0)
     throw new ConfigError(issues)

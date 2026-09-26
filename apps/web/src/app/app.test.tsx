@@ -291,6 +291,17 @@ describe('多个标签页（审查 B6）', () => {
     expect(requestCount(api, 'GET /api/auth/session')).toBe(2)
   })
 
+  it('换了人之后、新页面加载出来之前，旧页面上的状态变更请求不带新会话的令牌（复验 S2）', async () => {
+    const { api, app, otherTab } = await openList()
+    api.on('GET /api/auth/session', () => json(200, { ...OTHER_SESSION, csrfToken: 'csrf-of-someone-else' }))
+    otherTab.announce()
+    await waitFor(() => expect(app.page.visits).toEqual(['reload']))
+    // 真实的浏览器里重新加载要一会儿：这期间旧页面还在，还能点"退出"
+    fireEvent.click(screen.getByRole('button', { name: '退出' }))
+    await waitFor(() => expect(requestCount(api, 'POST /api/auth/logout')).toBe(1))
+    expect(api.requests.find(request => request.key === 'POST /api/auth/logout')?.headers['x-csrf-token']).toBeUndefined()
+  })
+
   it('别的标签页退出了：本页向服务端确认，已经未登录，整页重新加载（随后转到登录页）', async () => {
     const { api, app, otherTab } = await openList()
     api.on('GET /api/auth/session', () => apiError(401, 'UNAUTHENTICATED'))

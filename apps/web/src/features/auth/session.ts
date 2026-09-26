@@ -18,8 +18,14 @@ export const STARTS_SESSION = { handlesAuthentication: true, session: 'starts' }
 /** 退出：成功，或者会话本来就不在了（401），都算退出了 */
 export const ENDS_SESSION = { session: 'ends' } as const
 
+/** 向服务端要现在的会话，不改动请求层的 CSRF 令牌：调用方确认是同一个人之后才用它的令牌（复验 S2）。 */
+export async function requestSession(signal?: AbortSignal): Promise<SessionResponse> {
+  return apiRequest('/api/auth/session', { schema: sessionResponseSchema, signal })
+}
+
+/** 会话查询用：拿到会话就把它的 CSRF 令牌交给请求层。 */
 export async function fetchSession(signal?: AbortSignal): Promise<SessionResponse> {
-  const session = await apiRequest('/api/auth/session', { schema: sessionResponseSchema, signal })
+  const session = await requestSession(signal)
   setCsrfToken(session.csrfToken)
   return session
 }
