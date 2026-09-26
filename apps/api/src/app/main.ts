@@ -2,27 +2,19 @@
 import process from 'node:process'
 import { createRootLogger } from '../modules/logging/index.ts'
 import { ConfigError, createApplication, loadConfigFromEnvironment } from './index.ts'
+import { handleFatalErrors, handleShutdownSignals } from './process-handlers.ts'
 
 // 配置读出来之前还没有应用的日志，启动失败的原因写到这里（同步写标准输出，退出前不会丢）
 const bootstrapLogger = createRootLogger({ level: 'info' })
+const exit = (code: number): void => process.exit(code)
+handleFatalErrors({ process, exit, logger: bootstrapLogger })
 
 async function main(): Promise<void> {
   const config = loadConfigFromEnvironment()
   const runtime = await createApplication(config)
   const { address, port } = await runtime.listen()
   runtime.logger.info({ address, port }, 'HTTP 服务已启动')
-
-  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
-    process.once(signal, () => {
-      runtime.shutdown(signal).then(
-        result => process.exit(result === 'graceful' ? 0 : 1),
-        (error: unknown) => {
-          runtime.logger.fatal({ err: error }, '退出失败')
-          process.exit(1)
-        },
-      )
-    })
-  }
+  handleShutdownSignals(async reason => runtime.shutdown(reason), { process, exit, logger: runtime.logger })
 }
 
 main().catch((error: unknown) => {

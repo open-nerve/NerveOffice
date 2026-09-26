@@ -1,21 +1,33 @@
-import { Test } from '@nestjs/testing'
+import type { DatabaseReadiness, DatabaseReadinessResult } from '../database/index.ts'
 import { describe, expect, it } from 'vitest'
 import { ApplicationState } from './application-state.ts'
 import { HealthController } from './health.controller.ts'
-import { HealthModule } from './health.module.ts'
+
+function controllerWith(result: DatabaseReadinessResult): { controller: HealthController, state: ApplicationState } {
+  const state = new ApplicationState()
+  const database = { check: async () => result } as unknown as DatabaseReadiness
+  return { controller: new HealthController(state, database), state }
+}
 
 describe('HealthController', () => {
-  // 控制器的构造参数只按类型声明，能取到实例说明装饰器元数据已经输出（ADR-004 的验证项）
-  it('经依赖注入取得，与模块共用同一个运行状态', async () => {
-    const moduleRef = await Test.createTestingModule({ imports: [HealthModule] }).compile()
-    const controller = moduleRef.get(HealthController)
-    const state = moduleRef.get(ApplicationState)
-
+  it('存活探针在退出过程中也返回', () => {
+    const { controller, state } = controllerWith({ ready: true })
     expect(controller.live()).toEqual({ status: 'ok' })
-    expect(controller.ready()).toEqual({ status: 'ready' })
-
     state.beginShutdown()
     expect(controller.live()).toEqual({ status: 'ok' })
-    expect(() => controller.ready()).toThrow('正在退出')
+  })
+
+  it('就绪：接收请求中且数据库就绪', async () => {
+    await expect(controllerWith({ ready: true }).controller.ready()).resolves.toEqual({ status: 'ready' })
+  })
+
+  it('数据库未就绪时 503，说明里写明原因', async () => {
+    await expect(controllerWith({ ready: false, reason: '数据库不可达' }).controller.ready()).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE', message: '数据库不可达' })
+  })
+
+  it('开始退出后 503，不再检查数据库', async () => {
+    const { controller, state } = controllerWith({ ready: true })
+    state.beginShutdown()
+    await expect(controller.ready()).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE', message: '正在退出' })
   })
 })

@@ -48,8 +48,9 @@ export interface TestDatabase {
 
 function templateName(): string {
   const digest = createHash('sha256')
+  // 名称、内容与时间戳都算进去：迁移器与就绪检查按这三项比较，任何一项变了都要重建模板
   for (const migration of readExpectedMigrations())
-    digest.update(migration.tag).update(migration.hash)
+    digest.update(`${migration.tag}\n${migration.hash}\n${migration.when}\n`)
   return `${TEMPLATE_PREFIX}${digest.digest('hex').slice(0, 12)}`
 }
 

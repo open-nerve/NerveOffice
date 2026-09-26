@@ -3,9 +3,10 @@ import type { NestExpressApplication } from '@nestjs/platform-express'
 import type { AddressInfo } from 'node:net'
 import type { Logger } from 'pino'
 import type { AppConfig } from '../modules/config/index.ts'
+import type { InFlightRequests } from './in-flight-requests.ts'
+import type { ShutdownResult } from './shutdown.ts'
 import { ApplicationState } from '../modules/health/index.ts'
-
-export type ShutdownResult = 'graceful' | 'forced'
+import { shutdownGracefully } from './shutdown.ts'
 
 /** 运行中的应用：监听与退出（P2 设计 §3.9）。 */
 export class ApplicationRuntime {
@@ -16,6 +17,7 @@ export class ApplicationRuntime {
     private readonly config: AppConfig,
     /** 应用的根日志 */
     readonly logger: Logger,
+    private readonly inFlight: InFlightRequests,
   ) {}
 
   async listen(): Promise<AddressInfo> {
@@ -38,10 +40,16 @@ export class ApplicationRuntime {
   }
 
   async #shutdownOnce(reason: string): Promise<ShutdownResult> {
-    this.logger.info({ reason }, '开始退出')
-    this.app.get(ApplicationState).beginShutdown()
-    await this.app.close()
-    this.logger.info('已退出')
-    return 'graceful'
+    this.logger.info({ reason, inFlight: this.inFlight.size }, '开始退出')
+    const result = await shutdownGracefully({
+      beginShutdown: () => this.app.get(ApplicationState).beginShutdown(),
+      inFlight: this.inFlight,
+      server: this.app.getHttpServer(),
+      closeApplication: async () => this.app.close(),
+      timeoutMs: this.config.shutdown.timeoutMs,
+      logger: this.logger,
+    })
+    this.logger.info({ result }, '已退出')
+    return result
   }
 }

@@ -7,6 +7,7 @@ import { AppLogger, createRootLogger, NestPinoLogger, RequestContextStore } from
 import { AppModule } from './app.module.ts'
 import { ApplicationRuntime } from './application-runtime.ts'
 import { configureHttp } from './configure-http.ts'
+import { InFlightRequests } from './in-flight-requests.ts'
 
 export interface ApplicationOptions {
   /** 日志的输出；默认同步写标准输出。集成测试传内存流 */
@@ -28,7 +29,13 @@ export async function createApplication(config: AppConfig, options: ApplicationO
     // 框架自己的日志（启动、路由映射等）经适配写进同一个 pino
     logger: new NestPinoLogger(rootLogger, requestContext),
   })
-  configureHttp(app, config, { rootLogger, requestContext })
+  // Node 按固定的间隔（默认 30 秒）检查接收请求与请求头的时限，实际生效会晚一些
+  const server = app.getHttpServer()
+  server.requestTimeout = config.http.requestTimeoutMs
+  server.headersTimeout = config.http.headersTimeoutMs
+  server.keepAliveTimeout = config.http.keepAliveTimeoutMs
+  const inFlight = new InFlightRequests()
+  configureHttp(app, config, { rootLogger, requestContext, inFlight })
   await app.init()
-  return new ApplicationRuntime(app, config, rootLogger)
+  return new ApplicationRuntime(app, config, rootLogger, inFlight)
 }

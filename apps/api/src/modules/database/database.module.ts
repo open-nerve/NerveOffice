@@ -5,9 +5,9 @@ import { drizzle } from 'drizzle-orm/node-postgres'
 import pg from 'pg'
 import { APP_CONFIG } from '../config/index.ts'
 import { AppLogger } from '../logging/index.ts'
+import { DatabaseReadiness } from './database-readiness.ts'
 import { DATABASE, PG_POOL } from './database.ts'
 import { createPool } from './pool.ts'
-import { SchemaVersion } from './schema-version.ts'
 
 /**
  * 退出时关闭连接池。onApplicationShutdown 在 HTTP 服务关闭之后调用，
@@ -34,9 +34,9 @@ class PoolLifecycle implements OnApplicationShutdown {
       inject: [PG_POOL],
       useFactory: (pool: pg.Pool) => drizzle({ client: pool }),
     },
-    SchemaVersion,
+    DatabaseReadiness,
     PoolLifecycle,
   ],
-  exports: [DATABASE, SchemaVersion],
+  exports: [DATABASE, DatabaseReadiness],
 })
 export class DatabaseModule {}

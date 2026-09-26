@@ -59,6 +59,7 @@ describe('api 进程', () => {
 
     api.kill('SIGTERM')
     expect(await api.exited).toEqual({ code: 0, signal: null })
-    await api.waitForLog(entry => entry.msg === '已退出')
+    await api.waitForLog(entry => entry.msg === '开始退出' && entry.reason === 'SIGTERM')
+    await api.waitForLog(entry => entry.msg === '已退出' && entry.result === 'graceful')
   })
 })

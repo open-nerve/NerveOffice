@@ -1,11 +1,15 @@
 import type { HealthLiveResponse, HealthReadyResponse } from '@nerve-office/contracts'
 import { Controller, Get } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
+import { DatabaseReadiness } from '../database/index.ts'
 import { ApplicationState } from './application-state.ts'
 
 @Controller('health')
 export class HealthController {
-  constructor(private readonly state: ApplicationState) {}
+  constructor(
+    private readonly state: ApplicationState,
+    private readonly database: DatabaseReadiness,
+  ) {}
 
   /** 进程在运行就返回，退出过程中也一样。 */
   @Get('live')
@@ -13,11 +17,14 @@ export class HealthController {
     return { status: 'ok' }
   }
 
-  /** 可以接收请求时返回；数据库与库结构版本的检查在 S4 加入。 */
+  /** 接收请求中、数据库连得上、库结构版本一致时返回；否则 503，说明里写明哪一项不满足（P2 设计 §3.9）。 */
   @Get('ready')
-  ready(): HealthReadyResponse {
+  async ready(): Promise<HealthReadyResponse> {
     if (!this.state.accepting)
       throw new AppError('SERVICE_UNAVAILABLE', '正在退出')
+    const database = await this.database.check()
+    if (!database.ready)
+      throw new AppError('SERVICE_UNAVAILABLE', database.reason)
     return { status: 'ready' }
   }
 }
