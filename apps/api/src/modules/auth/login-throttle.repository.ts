@@ -16,7 +16,7 @@ export type LockedForSeconds = number | undefined
 
 /** 占到的一个名额。 */
 export interface Reservation {
-  /** 占用时所在窗口的开始时间（数据库的文本表示，精确到微秒）：退回时核对，窗口已经重新开始就不退 */
+  /** 占用时所在窗口的开始时间（UTC 文本，精确到微秒）：退回时核对，窗口已经重新开始就不退 */
   readonly window: string
   /** 这次占用使计数达到上限而锁定时，离解锁的秒数 */
   readonly lockedForSeconds: LockedForSeconds
@@ -75,7 +75,8 @@ export class LoginThrottleRepository {
         setWhere: sql`${t.lockedUntil} IS NULL OR ${t.lockedUntil} <= now()`,
       })
       .returning({
-        window: sql<string>`${t.windowStartedAt}::text`,
+        // 与文档列表的游标一样用 UTC 文本：换成 JavaScript 的 Date 会丢掉微秒，也不受连接的时区与日期格式影响
+        window: sql<string>`to_char(${t.windowStartedAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
         lockedForSeconds: sql<string | null>`ceil(extract(epoch from ${t.lockedUntil} - now()))`,
       })
     return row === undefined ? undefined : { window: row.window, lockedForSeconds: toSeconds(row.lockedForSeconds) }
