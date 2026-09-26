@@ -7,6 +7,8 @@ export const APPLICATION_NAME = 'nerve-office-api'
 
 /** 客户端侧的查询时限比语句超时多出的余量：语句超时由数据库执行，这里只兜住数据库没有回应的情况。 */
 const QUERY_TIMEOUT_MARGIN_MS = 5_000
+/** 连接空闲多久开始发 TCP keepalive 探测：不设时用系统默认（常见是 2 小时），等于没开（复验 N2）。 */
+export const KEEP_ALIVE_INITIAL_DELAY_MS = 10_000
 
 /** 连接池与超时（P2 设计 §3.7）：处理时间的上限由语句超时、等锁超时与取连接的超时保证。 */
 export function createPool(settings: AppConfig['database'], logger: AppLogger): pg.Pool {
@@ -21,6 +23,7 @@ export function createPool(settings: AppConfig['database'], logger: AppLogger): 
     idle_in_transaction_session_timeout: settings.idleInTransactionTimeoutMs,
     // 连接静默断开（主机宕机、NAT 丢弃连接）时，TCP keepalive 让它尽快失败，查询不会无限等待（审查 A8）
     keepAlive: true,
+    keepAliveInitialDelayMillis: KEEP_ALIVE_INITIAL_DELAY_MS,
     query_timeout: settings.statementTimeoutMs + QUERY_TIMEOUT_MARGIN_MS,
   })
   // 借出期间连接被断开（事务中空闲超时、数据库重启、管理员终止、网络中断）时，pg 在这个连接上触发 error；

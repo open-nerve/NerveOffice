@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { captureLogs } from './logging.test-support.ts'
+import { captureLogs, drizzleError, SECRET_VALUE } from './logging.test-support.ts'
 import { createRootLogger, REDACTED_KEYS, REDACTION_CENSOR } from './root-logger.ts'
 
 describe('createRootLogger', () => {
@@ -31,6 +31,18 @@ describe('createRootLogger', () => {
       user: { name: '张三', token: REDACTION_CENSOR, profile: { secret: REDACTION_CENSOR } },
       safe: 'ok',
     })
+  })
+
+  it('err 字段里的数据库错误不带参数与行里的值：根日志与子日志都经同一个序列化（复验 N3）', () => {
+    const logs = captureLogs()
+    const root = createRootLogger({ level: 'info', destination: logs.destination })
+    root.error({ err: drizzleError() }, '查询失败')
+    root.child({ requestId: 'req-1' }).error({ err: drizzleError() }, '查询失败')
+    const entries = logs.entries()
+    expect(entries).toHaveLength(2)
+    for (const entry of entries)
+      expect(entry).toMatchObject({ err: { type: 'DrizzleQueryError', message: '数据库查询失败', query: 'select $1::uuid' } })
+    expect(JSON.stringify(entries)).not.toContain(SECRET_VALUE)
   })
 
   it.each(REDACTED_KEYS)('清单里的 %s 在各层都被脱敏', (key) => {

@@ -1,19 +1,20 @@
 import type { Request, Response } from 'express'
 import { describe, expect, it } from 'vitest'
-import { captureLogs } from './logging.test-support.ts'
+import { captureLogs, drizzleError, SECRET_VALUE } from './logging.test-support.ts'
 import { contextAndStack, NestPinoLogger } from './nest-logger.ts'
 import { RequestContextStore } from './request-context.ts'
 import { createRootLogger } from './root-logger.ts'
 
 const STACK = 'Error: 出错了\n    at run (file.ts:1:1)'
+const FRAMES = '    at run (file.ts:1:1)'
 
 describe('contextAndStack', () => {
   it.each([
     ['info', [], {}],
     ['info', ['AppModule'], { context: 'AppModule' }],
     ['info', [{ extra: 1 }, 'AppModule'], { context: 'AppModule' }],
-    ['error', [STACK, 'ExceptionsHandler'], { stack: STACK, context: 'ExceptionsHandler' }],
-    ['error', [STACK], { stack: STACK }],
+    ['error', [STACK, 'ExceptionsHandler'], { stack: FRAMES, context: 'ExceptionsHandler' }],
+    ['error', [STACK], { stack: FRAMES }],
     ['error', ['ExceptionsHandler'], { context: 'ExceptionsHandler' }],
     ['fatal', [], {}],
   ] as const)('%s %j', (level, params, expected) => {
@@ -48,8 +49,20 @@ describe('NestPinoLogger', () => {
     logger.error('处理失败', STACK, 'ExceptionsHandler')
     logger.fatal(new Error('无法继续'))
     const [first, second] = logs.entries()
-    expect(first).toMatchObject({ level: 'error', msg: '处理失败', stack: STACK, context: 'ExceptionsHandler' })
+    expect(first).toMatchObject({ level: 'error', msg: '处理失败', stack: FRAMES, context: 'ExceptionsHandler' })
     expect(second).toMatchObject({ level: 'fatal', msg: '无法继续', err: { message: '无法继续' } })
+  })
+
+  it('数据库错误不带参数：Error 的消息换成不带值的说明，堆栈参数只留调用帧（复验 N4）', () => {
+    const { logs, logger } = setup()
+    const error = drizzleError()
+    logger.error(error)
+    logger.error('处理失败', error.stack, 'ExceptionsHandler')
+    const [first, second] = logs.entries()
+    expect(first).toMatchObject({ level: 'error', msg: '数据库查询失败', err: { type: 'DrizzleQueryError' } })
+    expect(second).toMatchObject({ level: 'error', msg: '处理失败', context: 'ExceptionsHandler' })
+    expect(String(second?.stack)).toMatch(/^\s+at /)
+    expect(JSON.stringify(logs.entries())).not.toContain(SECRET_VALUE)
   })
 
   it('对象消息的字段合并进日志；其他类型的消息转成文字', () => {

@@ -42,11 +42,12 @@ const BASE_RESTRICTED_SYNTAX = [...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL
 
 // 数据库：只有仓储访问数据库（规范 §1.2，审查 B2）
 const API_DATABASE_LIBRARIES = {
-  group: ['drizzle-orm', 'drizzle-orm/**', 'pg'],
+  group: ['drizzle-orm', 'drizzle-orm/**', 'pg', 'pg/**', 'pg-*'],
   message: '只有 database 模块、各模块的 *.repository.ts 与 src/db/schema 能引用数据库的库（规范 §1.2）',
 }
 const API_DYNAMIC_DATABASE_LIBRARIES = {
-  selector: 'ImportExpression[source.value=/^(?:pg$|drizzle-orm)/]',
+  // 与上面的静态引用同一个范围：包本身、包里的子路径与 pg-* 系列（复验 N6）
+  selector: String.raw`ImportExpression[source.value=/^(?:pg|drizzle-orm)(?:$|\W)/]`,
   message: '只有 database 模块、各模块的 *.repository.ts 与 src/db/schema 能引用数据库的库（规范 §1.2）',
 }
 const API_DATABASE_HANDLES = {
@@ -74,8 +75,11 @@ const API_NO_NEST_LOGGER = {
   importNames: ['Logger', 'ConsoleLogger'],
   message: '应用代码经依赖注入使用 AppLogger（modules/logging），不用 Nest 的 Logger（P2 设计 §3.4）',
 }
-// 只有 config 模块读取 process.env（规范 §7）：node/no-process-env 只认 process.env，其他读法另外拦下（审查 B3）
+// 只有 config 模块读取 process.env（规范 §7）：node/no-process-env 只认 process.env，其他读法另外拦下（审查 B3）。
+// 自动检查覆盖 import { env }、解构、globalThis.process.env 与给 process 改名的引用；再绕一层的写法（先赋给别的变量）由审查保证
 const PROCESS_ENV_MESSAGE = '只有 config 模块读取环境变量（规范 §7）'
+const PROCESS_ALIAS_MESSAGE = '引用 process 时不改名、不用命名空间：改了名，环境变量的检查就认不出来（规范 §7）'
+const PROCESS_MODULE = String.raw`ImportDeclaration[source.value=/^(?:node:)?process$/]`
 const API_PROCESS_ENV_IMPORTS = [
   { name: 'node:process', importNames: ['env'], message: PROCESS_ENV_MESSAGE },
   { name: 'process', importNames: ['env'], message: PROCESS_ENV_MESSAGE },
@@ -84,29 +88,40 @@ const API_PROCESS_ENV_SYNTAX = [
   { selector: 'VariableDeclarator[init.name=\'process\'] > ObjectPattern > Property[key.name=\'env\']', message: PROCESS_ENV_MESSAGE },
   { selector: 'AssignmentExpression[right.name=\'process\'] > ObjectPattern > Property[key.name=\'env\']', message: PROCESS_ENV_MESSAGE },
   { selector: 'MemberExpression[property.name=\'env\'][object.property.name=\'process\']', message: PROCESS_ENV_MESSAGE },
+  { selector: `${PROCESS_MODULE} > ImportDefaultSpecifier[local.name!='process']`, message: PROCESS_ALIAS_MESSAGE },
+  { selector: `${PROCESS_MODULE} > ImportNamespaceSpecifier`, message: PROCESS_ALIAS_MESSAGE },
 ]
 // 只用参数化查询（规范 §5）：sql 模板标签会把插值变成参数。自动检查覆盖直接写在 query()、execute() 参数里的拼接
-// 与任何 .raw（含解构与别名）；先拼成变量再传进去的写法由审查保证（审查 B7）
+// （模板字符串、+、concat()，含对象写法的 text）与任何 .raw（含解构与别名）；先拼成变量再传进去的写法由审查保证（审查 B7、复验 N6）
 const SQL_CALL = 'CallExpression[callee.property.name=/^(?:query|execute)$/]'
-const API_SQL_CONCATENATION = [
-  { selector: `${SQL_CALL} > TemplateLiteral[expressions.length>0]`, message: 'SQL 不能用带插值的模板字符串拼接，用参数或 sql 模板标签（规范 §5）' },
-  { selector: `${SQL_CALL} > BinaryExpression[operator='+']`, message: 'SQL 不能用字符串拼接，用参数或 sql 模板标签（规范 §5）' },
-  { selector: `${SQL_CALL} > ObjectExpression > Property[key.name='text'] > TemplateLiteral[expressions.length>0]`, message: 'SQL 不能用带插值的模板字符串拼接，用参数或 sql 模板标签（规范 §5）' },
-  { selector: `${SQL_CALL} > ObjectExpression > Property[key.name='text'] > BinaryExpression[operator='+']`, message: 'SQL 不能用字符串拼接，用参数或 sql 模板标签（规范 §5）' },
-]
+const SQL_TEMPLATE_MESSAGE = 'SQL 不能用带插值的模板字符串拼接，用参数或 sql 模板标签（规范 §5）'
+const SQL_CONCAT_MESSAGE = 'SQL 不能用字符串拼接，用参数或 sql 模板标签（规范 §5）'
+const API_SQL_CONCATENATION = [SQL_CALL, `${SQL_CALL} > ObjectExpression > Property[key.name='text']`].flatMap(text => [
+  { selector: `${text} > TemplateLiteral[expressions.length>0]`, message: SQL_TEMPLATE_MESSAGE },
+  { selector: `${text} > BinaryExpression[operator='+']`, message: SQL_CONCAT_MESSAGE },
+  { selector: `${text} > CallExpression[callee.property.name='concat']`, message: SQL_CONCAT_MESSAGE },
+])
 const API_NO_RAW = {
   property: 'raw',
   message: '不用 .raw 拼接 SQL：用 sql 模板标签，动态的片段只能来自代码里的白名单（规范 §5）；表定义里的 CHECK 常量除外',
 }
-// 输入都经 contracts 里的结构校验（规范 §4）：参数装饰器必须带 schema；不接受 schema 的装饰器与原始的请求、响应对象会绕过校验（审查 B8）
+// 输入都经 contracts 里的结构校验（规范 §4）：参数装饰器必须带 schema；不接受 schema 的装饰器与原始的请求、响应对象会绕过校验（审查 B8）。
+// 不经校验的装饰器在引用处就拦下（改名也拦得住），装饰器的写法再查一遍；经命名空间调用（@common.Req()）等写法由审查保证（复验 N6）
+const UNVALIDATED_PARAMETER_DECORATORS = ['Req', 'Request', 'Res', 'Response', 'Next', 'Headers', 'Ip', 'Session', 'HostParam', 'RawBody', 'UploadedFile', 'UploadedFiles']
+const UNVALIDATED_DECORATOR_MESSAGE = '不用 @Req、@Res、@Headers 等不经校验的参数装饰器：需要请求里的信息时写参数装饰器（P2 设计 §3.1）'
+const API_NO_UNVALIDATED_DECORATORS = {
+  name: '@nestjs/common',
+  importNames: UNVALIDATED_PARAMETER_DECORATORS,
+  message: UNVALIDATED_DECORATOR_MESSAGE,
+}
 const API_PARAMETER_DECORATORS = [
   {
     selector: 'Decorator > CallExpression[callee.name=/^(?:Body|Query|Param)$/]:not(:has(Property[key.name=\'schema\']))',
     message: '输入必须带 schema，例如 @Body({ schema: createDocumentRequestSchema })（规范 §4）',
   },
   {
-    selector: 'Decorator > CallExpression[callee.name=/^(?:Req|Request|Res|Response|Next|Headers|Ip|Session|HostParam|RawBody)$/]',
-    message: '不用 @Req、@Res、@Headers 等不经校验的参数装饰器：需要请求里的信息时写参数装饰器（P2 设计 §3.1）',
+    selector: `Decorator > CallExpression[callee.name=/^(?:${UNVALIDATED_PARAMETER_DECORATORS.join('|')})$/]`,
+    message: UNVALIDATED_DECORATOR_MESSAGE,
   },
 ]
 const API_CONTROLLER_OUTSIDE_CONTROLLER_FILE = {
@@ -118,7 +133,7 @@ const API_CONTROLLER_OUTSIDE_CONTROLLER_FILE = {
 interface ApiFileKind {
   /** 引用 drizzle-orm 与 pg（database 模块、仓储、表定义） */
   databaseLibraries?: boolean
-  /** 引用 DATABASE、executorOf 与数据库类型（database 模块、仓储；app 层为集成测试转出） */
+  /** 引用 DATABASE、executorOf 与数据库类型（database 模块、仓储；app 层的程序接口为集成测试转出） */
   databaseHandles?: boolean
   /** 引用表定义（仓储、表定义之间） */
   tables?: boolean
@@ -131,7 +146,7 @@ interface ApiFileKind {
 }
 
 function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
-  const paths = [API_NO_NEST_LOGGER, ...(kind.processEnv === true ? [] : API_PROCESS_ENV_IMPORTS)]
+  const paths = [API_NO_NEST_LOGGER, API_NO_UNVALIDATED_DECORATORS, ...(kind.processEnv === true ? [] : API_PROCESS_ENV_IMPORTS)]
   const patterns = [
     UNIVER_ONLY_IN_EDITOR,
     NO_UNIVER_PRO,
@@ -230,8 +245,8 @@ export default antfu(
   },
   // 后端：先是所有文件的限制，后面的块按文件类型放开各自需要的部分（后面的块覆盖前面的同名规则）
   { name: 'nerve/api', files: ['apps/api/src/**/*.ts'], rules: apiRules() },
-  // app 层：对外的程序接口为集成测试转出数据库句柄
-  { name: 'nerve/api-app', files: ['apps/api/src/app/**/*.ts'], rules: apiRules({ databaseHandles: true }) },
+  // app 层的程序接口（index.ts）为集成测试转出数据库句柄；app 层的其他文件同样拿不到（复验 N6）
+  { name: 'nerve/api-app-entry', files: ['apps/api/src/app/index.ts'], rules: apiRules({ databaseHandles: true }) },
   { name: 'nerve/api-database', files: ['apps/api/src/modules/database/**/*.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true }) },
   { name: 'nerve/api-repositories', files: ['apps/api/src/modules/*/*.repository.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true, tables: true }) },
   // 表定义里的 CHECK 约束要把代码里的常量拼成 SQL 字面量（drizzle-kit 不内联参数）；这里只有 DDL 与常量，没有运行时的输入

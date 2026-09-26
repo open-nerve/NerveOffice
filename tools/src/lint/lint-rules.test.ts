@@ -251,6 +251,9 @@ describe('US-M1-11 lint 规则的自测：后端', () => {
     // 解构与别名同样拦下；写成对象的 query({ text }) 也算
     expect(await rulesFor('declare const q: { raw: (text: string) => unknown }\nconst { raw } = q\nexport const s = raw(\'x\')\n', API_SERVICE)).toContain('no-restricted-properties')
     expect(await rulesFor(withQuery(`db.query({ text: \`SELECT * FROM t WHERE id = \${id}\` })`), API_SERVICE)).toContain('no-restricted-syntax')
+    // concat() 与 + 一样是拼接（复验 N6）
+    expect(await rulesFor(withQuery('db.query(\'SELECT * FROM t WHERE id = \'.concat(id))'), API_SERVICE)).toContain('no-restricted-syntax')
+    expect(await rulesFor(withQuery('db.query({ text: \'SELECT * FROM t WHERE id = \'.concat(id) })'), API_SERVICE)).toContain('no-restricted-syntax')
   })
 
   it('服务拿不到数据库句柄：DATABASE、数据库类型与表定义只有仓储能引用；开事务用 TransactionRunner；不能动态导入数据库的库', async () => {
@@ -263,6 +266,23 @@ describe('US-M1-11 lint 规则的自测：后端', () => {
     expect(await rulesFor('export async function load(): Promise<unknown> {\n  return import(\'pg\')\n}\n', API_SERVICE)).toContain('no-restricted-syntax')
   })
 
+  it('数据库的库的子路径与 pg-* 同样拦下，静态引用与动态导入一致（复验 N6）', async () => {
+    expect(await rulesFor('import Client from \'pg/lib/client\'\n\nexport const C = Client\n', API_SERVICE)).toContain('no-restricted-imports')
+    expect(await rulesFor('import Pool from \'pg-pool\'\n\nexport const P = Pool\n', API_SERVICE)).toContain('no-restricted-imports')
+    for (const source of ['pg/lib/client', 'pg-pool', 'drizzle-orm/node-postgres']) {
+      const code = `export async function load(): Promise<unknown> {\n  return import('${source}')\n}\n`
+      expect(await rulesFor(code, API_SERVICE), source).toContain('no-restricted-syntax')
+    }
+    // 名字只是以 pg 开头的包不算
+    expect(await rulesFor('export async function load(): Promise<unknown> {\n  return import(\'pgx-utils\')\n}\n', API_SERVICE)).not.toContain('no-restricted-syntax')
+  })
+
+  it('app 层只有程序接口（index.ts）能转出数据库句柄，app 层的其他文件同样拿不到（复验 N6）', async () => {
+    const code = 'import { DATABASE } from \'../modules/database/index.ts\'\n\nexport const token = DATABASE\n'
+    expect(await rulesFor(code, 'apps/api/src/app/app.module.ts')).toContain('no-restricted-imports')
+    expect(await rulesFor('export { DATABASE } from \'../modules/database/index.ts\'\n', 'apps/api/src/app/index.ts')).not.toContain('no-restricted-imports')
+  })
+
   it('控制器不自己开事务', async () => {
     expect(await rulesFor('import { TransactionRunner } from \'../database/index.ts\'\nexport const runner = TransactionRunner\n', API_CONTROLLER)).toContain('no-restricted-imports')
   })
@@ -271,6 +291,10 @@ describe('US-M1-11 lint 规则的自测：后端', () => {
     expect(await rulesFor('import { env } from \'node:process\'\n\nexport const url = env.NERVE_DATABASE_URL\n', API_SERVICE)).toContain('no-restricted-imports')
     expect(await rulesFor('import process from \'node:process\'\n\nconst { env } = process\nexport const url = env.NERVE_DATABASE_URL\n', API_SERVICE)).toContain('no-restricted-syntax')
     expect(await rulesFor('export const url = globalThis.process.env.NERVE_DATABASE_URL\n', API_SERVICE)).toContain('no-restricted-syntax')
+    // 给 process 改名或用命名空间引用：node/no-process-env 认不出来，这里拦下（复验 N6）
+    expect(await rulesFor('import proc from \'node:process\'\n\nexport const url = proc.env.NERVE_DATABASE_URL\n', API_SERVICE)).toContain('no-restricted-syntax')
+    expect(await rulesFor('import * as proc from \'node:process\'\n\nexport const url = proc.env.NERVE_DATABASE_URL\n', API_SERVICE)).toContain('no-restricted-syntax')
+    expect(await rulesFor('import process from \'node:process\'\n\nexport const pid = process.pid\n', API_SERVICE)).toEqual([])
   })
 
   it('控制器只写在 *.controller.ts 里；参数的限制对所有后端文件生效；不用 @Headers 等不经校验的装饰器', async () => {
@@ -294,7 +318,42 @@ describe('US-M1-11 lint 规则的自测：后端', () => {
     expect(await rulesFor(controllerIn('@Headers(\'if-match\') header: string'), API_CONTROLLER)).toContain('no-restricted-syntax')
   })
 
-  it('每类后端文件都仍然禁止 Univer、Pro 与 Nest 的 Logger（各覆盖块由同一个函数组合，审查 B15）', async () => {
+  it('不经校验的装饰器在引用处就拦下，改名也拦得住；上传文件的装饰器同样不用（复验 N6）', async () => {
+    const aliased = [
+      'import { Controller, Post, Req as R } from \'@nestjs/common\'',
+      '',
+      '@Controller(\'x\')',
+      'export class XController {',
+      '  @Post()',
+      '  create(@R() request: unknown): unknown {',
+      '    return request',
+      '  }',
+      '}',
+      '',
+    ].join('\n')
+    const report = await lint(aliased, API_CONTROLLER)
+    expect(report.rules).toContain('no-restricted-imports')
+    expect(report.messages.some(message => message.includes('不经校验的参数装饰器'))).toBe(true)
+    expect(await rulesFor('import { UploadedFile } from \'@nestjs/common\'\n\nexport const decorator = UploadedFile\n', API_SERVICE)).toContain('no-restricted-imports')
+    // 从别处引来的同名装饰器：按写法拦下
+    const uploaded = [
+      'import { Controller, Post } from \'@nestjs/common\'',
+      '',
+      'declare function UploadedFile(): ParameterDecorator',
+      '',
+      '@Controller(\'x\')',
+      'export class XController {',
+      '  @Post()',
+      '  create(@UploadedFile() file: unknown): unknown {',
+      '    return file',
+      '  }',
+      '}',
+      '',
+    ].join('\n')
+    expect(await rulesFor(uploaded, API_CONTROLLER)).toContain('no-restricted-syntax')
+  })
+
+  it('每类后端文件都仍然禁止 Univer、Pro、Nest 的 Logger 与不经校验的装饰器（各覆盖块由同一个函数组合，审查 B15）', async () => {
     const files = [
       API_SERVICE,
       API_CONTROLLER,
@@ -309,6 +368,7 @@ describe('US-M1-11 lint 规则的自测：后端', () => {
       const config = await configFor(file)
       expect(restrictedPatterns(config), file).toEqual(expect.arrayContaining(['@univerjs/*', '@univerjs-pro/*']))
       expect(restrictedImports(config).paths?.some(path => path.name === '@nestjs/common' && path.importNames?.includes('Logger')), file).toBe(true)
+      expect(restrictedImports(config).paths?.some(path => path.name === '@nestjs/common' && path.importNames?.includes('Req')), file).toBe(true)
     }
   })
 

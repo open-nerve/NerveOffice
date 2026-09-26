@@ -1,5 +1,5 @@
 // 读取仓库状态的公共函数：仓库根目录、工作区的包、执行命令并解析 JSON 输出。外部数据一律先校验结构。
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { globSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative, resolve } from 'node:path'
 import { parse } from 'yaml'
@@ -72,6 +72,21 @@ export function commandText(command: string, args: readonly string[], options: C
     const stderr = (error as { stderr?: unknown }).stderr
     throw new Error(`${command} ${args.join(' ')} 失败${typeof stderr === 'string' && stderr.trim() !== '' ? `：${stderr.trim()}` : ''}`, { cause: error })
   }
+}
+
+export interface CommandOutput {
+  stdout: string
+  stderr: string
+}
+
+/** 执行命令，返回标准输出与标准错误（有的工具把结论写在标准错误里）；退出码不为 0 时抛出错误。 */
+export function commandOutput(command: string, args: readonly string[], options: CommandOptions = {}): CommandOutput {
+  const result = spawnSync(command, args, { cwd: options.cwd ?? REPO_ROOT, env: options.env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+  if (result.error !== undefined)
+    throw result.error
+  if (result.status !== 0)
+    throw new Error(`${command} ${args.join(' ')} 失败（退出码 ${String(result.status)}）：${result.stderr.trim()}`)
+  return { stdout: result.stdout, stderr: result.stderr }
 }
 
 /** 递归列出目录下的文件（相对仓库根目录）；目录不存在时返回空数组。 */

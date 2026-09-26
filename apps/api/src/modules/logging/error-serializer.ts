@@ -30,8 +30,17 @@ function isPgDatabaseError(error: Error): error is PgDatabaseError {
 }
 
 /** 只留堆栈里的调用位置：堆栈开头是消息，而消息可能有好几行（drizzle 的消息第二行就是参数）。 */
-function framesOnly(stack: string | undefined): string | undefined {
+export function framesOnly(stack: string | undefined): string | undefined {
   return stack?.split('\n').filter(line => /^\s+at /.test(line)).join('\n')
+}
+
+/** 可以写进日志的异常消息：数据库错误的消息带着值，换成不带值的说明；其他异常原样。 */
+export function safeErrorMessage(error: Error): string {
+  if (isDrizzleQueryError(error))
+    return '数据库查询失败'
+  if (isPgDatabaseError(error))
+    return `数据库报错（SQLSTATE ${error.code}）`
+  return error.message
 }
 
 function defined(fields: Fields): Fields {
@@ -43,11 +52,11 @@ export function serializeError(error: unknown, depth = 0): unknown {
     return error
   const cause = depth < MAX_CAUSE_DEPTH && error.cause !== undefined ? serializeError(error.cause, depth + 1) : undefined
   if (isDrizzleQueryError(error))
-    return defined({ type: 'DrizzleQueryError', message: '数据库查询失败', query: error.query, stack: framesOnly(error.stack), cause })
+    return defined({ type: 'DrizzleQueryError', message: safeErrorMessage(error), query: error.query, stack: framesOnly(error.stack), cause })
   if (isPgDatabaseError(error)) {
     return defined({
       type: 'DatabaseError',
-      message: `数据库报错（SQLSTATE ${error.code}）`,
+      message: safeErrorMessage(error),
       sqlState: error.code,
       severity: error.severity,
       schema: error.schema,
