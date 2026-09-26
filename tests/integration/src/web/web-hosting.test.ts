@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { startTestApp, testEnvironment } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
+import { captureLogs } from '../support/log-capture.ts'
 
 const INDEX_HTML = '<!doctype html><html><head><title>NerveOffice</title></head><body><div id="root"></div></body></html>'
 const CSP_PREFIX = 'default-src \'self\''
@@ -119,7 +120,7 @@ describe('没有配置或配置错了', () => {
     const empty = mkdtempSync(join(tmpdir(), 'nerve-web-empty-'))
     try {
       const config = loadConfig(testEnvironment(database.url, { NERVE_WEB_ROOT: empty }))
-      await expect(createApplication(config)).rejects.toThrow(/没有入口页 index\.html/)
+      await expect(createApplication(config, { logDestination: captureLogs().destination })).rejects.toThrow(/没有入口页 index\.html/)
     }
     finally {
       rmSync(empty, { recursive: true, force: true })
