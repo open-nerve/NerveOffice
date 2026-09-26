@@ -78,7 +78,8 @@ function stories(): GateOutcome {
   const designIds = parseDesignStoryIds(readText(registry.design))
   const tests = [
     ...testsFromVitestList(commandJson('pnpm', ['exec', 'vitest', 'list', '--json']), REPO_ROOT),
-    ...testsFromPlaywrightList(commandJson('pnpm', ['--filter', '@nerve-office/e2e', 'exec', 'playwright', 'test', '--list', '--reporter=json']), E2E_SPECS),
+    // 经 e2e 包的 list 脚本：它按 @nerve-office/source 条件解析工作区的包，用例引用的 contracts 不必先构建（静态检查在构建之前执行）
+    ...testsFromPlaywrightList(commandJson('pnpm', ['--silent', '--filter', '@nerve-office/e2e', 'run', 'list']), E2E_SPECS),
   ]
   const active = Object.entries(registry.stories).filter(([, s]) => s.status === 'active').map(([id]) => id)
   return { name: 'stories', title: '故事对照', violations: checkStories(designIds, registry, tests), notes: [`${designIds.length} 个故事，active：${active.join('、') || '无'}；列举出 ${tests.length} 个会执行的测试`] }
