@@ -2,6 +2,7 @@
 import type { SessionResponse } from '@nerve-office/contracts'
 import { CSRF_TOKEN_HEADER, sessionResponseSchema } from '@nerve-office/contracts'
 import { TEST_PUBLIC_ORIGIN } from './api-app.ts'
+import { parseExact } from './contracts.ts'
 
 /** 测试里的会话 Cookie 名称：公开地址是本机的 HTTP，没有 __Host- 前缀。 */
 export const SESSION_COOKIE = 'nerve_session'
@@ -35,7 +36,7 @@ export async function login(baseUrl: string, username: string, password: string)
   const setCookie = sessionSetCookie(response)
   if (setCookie === undefined)
     throw new Error('登录成功却没有下发会话 Cookie')
-  return { cookie: `${SESSION_COOKIE}=${cookieValue(setCookie)}`, session: sessionResponseSchema.parse(await response.json()) }
+  return { cookie: `${SESSION_COOKIE}=${cookieValue(setCookie)}`, session: parseExact(sessionResponseSchema, await response.json()) }
 }
 
 export interface AuthenticatedRequest {

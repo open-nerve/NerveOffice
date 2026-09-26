@@ -22,8 +22,8 @@ export const documentListQuerySchema = z.strictObject({
 
 export type DocumentListQuery = z.infer<typeof documentListQuerySchema>
 
-/** 文档的摘要：列表的条目。时间是 ISO 8601 的 UTC（规范 §4）。 */
-export const documentSummarySchema = z.strictObject({
+/** 文档的摘要：列表的条目。时间是 ISO 8601 的 UTC（规范 §4）。响应的结构宽松，见 auth 的会话信息。 */
+export const documentSummarySchema = z.object({
   id: z.uuid(),
   title: z.string(),
   type: z.enum(DOCUMENT_TYPES),
@@ -34,7 +34,7 @@ export const documentSummarySchema = z.strictObject({
 export type DocumentSummary = z.infer<typeof documentSummarySchema>
 
 /** 按更新时间从新到旧；还有下一页时给出游标。 */
-export const documentListResponseSchema = z.strictObject({
+export const documentListResponseSchema = z.object({
   items: z.array(documentSummarySchema),
   nextCursor: z.string().nullable(),
 })
@@ -44,7 +44,7 @@ export type DocumentListResponse = z.infer<typeof documentListResponseSchema>
 /** 文档的元数据与调用者的权限（GET /api/documents/{id}）。 */
 export const documentDetailSchema = documentSummarySchema.extend({
   spaceId: z.uuid(),
-  permissions: z.strictObject({ canEdit: z.boolean() }),
+  permissions: z.object({ canEdit: z.boolean() }),
 })
 
 export type DocumentDetail = z.infer<typeof documentDetailSchema>

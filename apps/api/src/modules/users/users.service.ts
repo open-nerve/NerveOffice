@@ -1,3 +1,4 @@
+import type { OnModuleInit } from '@nestjs/common'
 import type { User } from './user.ts'
 import { randomBytes } from 'node:crypto'
 import { usernameSchema } from '@nerve-office/contracts'
@@ -13,7 +14,7 @@ export type CredentialCheck
 
 /** 账户（P3 设计 §3.4）。 */
 @Injectable()
-export class UsersService {
+export class UsersService implements OnModuleInit {
   readonly #logger: AppLogger
   /** 用户名不存在时拿来算一次哈希的假哈希：响应时间与"密码错误"相近，不暴露账户是否存在 */
   #dummyHash: Promise<string> | undefined
@@ -24,6 +25,11 @@ export class UsersService {
     logger: AppLogger,
   ) {
     this.#logger = logger.with({ module: 'users' })
+  }
+
+  /** 启动时就生成假哈希：否则第一个不存在的用户名要多算一次哈希，响应时间暴露账户不存在（P3 审查 A13）。 */
+  async onModuleInit(): Promise<void> {
+    await this.dummyHash()
   }
 
   /** 状态为 active 的账户；停用（M2）或不存在时返回 undefined */

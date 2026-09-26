@@ -30,8 +30,8 @@ export function codePointLength(value: string): number {
   return [...value].length
 }
 
-// eslint-disable-next-line no-control-regex -- 显示名里不允许控制字符，要匹配的正是它们
-const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F]/
+// eslint-disable-next-line no-control-regex -- 显示名与密码里不允许控制字符，要匹配的正是它们
+const CONTROL_CHARACTERS = /[\u0000-\u001F\u007F-\u009F]/
 
 export const DISPLAY_NAME_MAX_LENGTH = 64
 
@@ -46,8 +46,10 @@ export const NEW_PASSWORD_MAX_LENGTH = 256
 
 /**
  * 设置密码时的规则（NIST SP 800-63B）：12–256 个字符，不要求字符种类。
+ * 不含控制字符：浏览器的密码框输入不了它们，混进来的（例如标准输入多了一个换行）会让这个密码再也登录不上。
  * 只用于设置密码；登录时不向外透露这些规则（见 auth 的登录请求）。
  */
 export const newPasswordSchema = z.string()
   .refine(value => codePointLength(value) >= NEW_PASSWORD_MIN_LENGTH, `密码至少 ${NEW_PASSWORD_MIN_LENGTH} 个字符`)
   .refine(value => codePointLength(value) <= NEW_PASSWORD_MAX_LENGTH, `密码最多 ${NEW_PASSWORD_MAX_LENGTH} 个字符`)
+  .refine(value => !CONTROL_CHARACTERS.test(value), '密码不能包含控制字符（例如换行、制表符）')

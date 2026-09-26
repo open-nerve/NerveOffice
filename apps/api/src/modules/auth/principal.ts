@@ -36,6 +36,10 @@ export function principalOf(request: Request): Principal | undefined {
   return (request as AuthenticatedRequest)[PRINCIPAL]
 }
 
+export function sessionCookieOf(request: Request): SessionCookie | undefined {
+  return (request as AuthenticatedRequest)[SESSION_COOKIE]
+}
+
 /** 会话守卫对每个请求（包括公开的接口）先挂上 Cookie 的读写。 */
 export function attachSessionCookie(request: Request, response: Response, settings: SessionCookieSettings): void {
   (request as AuthenticatedRequest)[SESSION_COOKIE] = {
@@ -55,7 +59,7 @@ export const CurrentPrincipal = createParamDecorator((_data: unknown, context: E
 
 /** 控制器的参数装饰器：`login(@SessionCookieJar() cookie: SessionCookie)`。 */
 export const SessionCookieJar = createParamDecorator((_data: unknown, context: ExecutionContext): SessionCookie => {
-  const cookie = (context.switchToHttp().getRequest<Request>() as AuthenticatedRequest)[SESSION_COOKIE]
+  const cookie = sessionCookieOf(context.switchToHttp().getRequest<Request>())
   if (cookie === undefined)
     throw new Error('会话守卫没有挂上 Cookie 的读写：全局守卫是否注册？')
   return cookie

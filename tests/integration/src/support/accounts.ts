@@ -14,6 +14,8 @@ export interface AccountOptions {
   readonly password?: string
   readonly displayName?: string
   readonly systemRole?: 'admin' | 'member'
+  /** 哈希的参数，默认与应用相同；给别的参数可以测"参数过时时重新哈希" */
+  readonly argon2?: { readonly memoryCost: number, readonly timeCost: number, readonly parallelism: number }
 }
 
 export const DEFAULT_PASSWORD = 'correct horse battery staple'
@@ -23,7 +25,7 @@ const ARGON2_DEFAULTS = { memoryCost: 19_456, timeCost: 2, parallelism: 1 }
 
 export async function createAccount(database: TestDatabase, options: AccountOptions): Promise<TestAccount> {
   const password = options.password ?? DEFAULT_PASSWORD
-  const passwordHash = await hash(password, ARGON2_DEFAULTS)
+  const passwordHash = await hash(password, options.argon2 ?? ARGON2_DEFAULTS)
   return database.query(async (client) => {
     const displayName = options.displayName ?? options.username
     const user = await client.query<{ id: string }>(

@@ -73,13 +73,18 @@ export class SessionsRepository {
       .where(and(target, isNull(authSessions.revokedAt)))
   }
 
-  /** 删除一小批过期或撤销已超过 30 天的会话。 */
-  async purgeExpired(transaction?: Transaction): Promise<void> {
-    const expired = this.db
+  /**
+   * 删除一小批过期或撤销已超过 30 天的会话。
+   * 在事务之外执行，跳过别人正锁着的行，不与登录、退出互相等待（P3 审查 A2）；删除时再核对一次过期条件。
+   */
+  async purgeExpired(): Promise<void> {
+    const expired = lt(authSessions.idleExpiresAt, sql`now() - ${RETENTION}`)
+    const batch = this.db
       .select({ id: authSessions.id })
       .from(authSessions)
-      .where(lt(authSessions.idleExpiresAt, sql`now() - ${RETENTION}`))
+      .where(expired)
       .limit(PURGE_BATCH)
-    await executorOf(this.db, transaction).delete(authSessions).where(inArray(authSessions.id, expired))
+      .for('update', { skipLocked: true })
+    await this.db.delete(authSessions).where(and(inArray(authSessions.id, batch), expired))
   }
 }

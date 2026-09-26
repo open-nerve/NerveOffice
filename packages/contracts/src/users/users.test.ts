@@ -27,6 +27,8 @@ describe('显示名', () => {
     expect(displayNameSchema.safeParse('   ').success).toBe(false)
     expect(displayNameSchema.safeParse('张\u0000三').success).toBe(false)
     expect(displayNameSchema.safeParse('张\n三').success).toBe(false)
+    expect(displayNameSchema.safeParse('张\u007F三').success).toBe(false)
+    expect(displayNameSchema.safeParse('张\u0085三').success).toBe(false)
   })
 })
 
@@ -36,5 +38,15 @@ describe('设置密码的规则', () => {
     expect(newPasswordSchema.safeParse('一二三四五六七八九十甲乙').success).toBe(true)
     expect(newPasswordSchema.safeParse('a'.repeat(11)).success).toBe(false)
     expect(newPasswordSchema.safeParse('a'.repeat(257)).success).toBe(false)
+  })
+
+  it('空格与各种文字都可以，控制字符不行（浏览器的密码框输入不了，混进来就再也登录不上）', () => {
+    expect(newPasswordSchema.safeParse('correct horse battery staple').success).toBe(true)
+    expect(newPasswordSchema.safeParse('pässwörd 密码 😀 test').success).toBe(true)
+    for (const control of ['\n', '\r', '\t', '\u0000', '\u001B', '\u007F', '\u0085']) {
+      const result = newPasswordSchema.safeParse(`correct horse${control}battery`)
+      expect(result.success, JSON.stringify(control)).toBe(false)
+      expect(result.error?.issues[0]?.message).toContain('控制字符')
+    }
   })
 })

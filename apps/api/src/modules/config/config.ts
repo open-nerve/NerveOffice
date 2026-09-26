@@ -69,6 +69,11 @@ export interface AppConfig {
   readonly password: {
     /** Argon2id 的参数（00 号计划书 §11.1）：按部署机器的基准测试调整；改了之后，下次登录成功时重新哈希 */
     readonly argon2: { readonly memoryKib: number, readonly iterations: number, readonly parallelism: number }
+    /**
+     * 同时进行的哈希计算的上限。Argon2 在 libuv 的线程池里计算，线程池也负责读文件与解析域名：
+     * 上限不超过线程池（UV_THREADPOOL_SIZE，默认 4）的一半；调大线程池时一并调大
+     */
+    readonly hashConcurrency: number
   }
 }
 
@@ -173,13 +178,20 @@ const environmentSchema = z.object({
   NERVE_LOGIN_LOCKOUT_MINUTES: integer(1, 1_440).default(15),
   NERVE_SHUTDOWN_TIMEOUT_MS: integer(100, 600_000).default(8_000),
   NERVE_LOG_LEVEL: z.enum(LOG_LEVELS, { error: `必须是 ${LOG_LEVELS.join('、')} 之一` }).default('info'),
-  // 默认是 OWASP 的最低推荐（内存 19 MiB、迭代 2 次、并行度 1）
+  // 默认是 OWASP 的最低推荐（内存 19 MiB、迭代 2 次、并行度 1）；内存与迭代次数的乘积另有下限，见交叉检查
   NERVE_PASSWORD_ARGON2_MEMORY_KIB: integer(8_192, 1_048_576).default(19_456),
   NERVE_PASSWORD_ARGON2_ITERATIONS: integer(1, 20).default(2),
   NERVE_PASSWORD_ARGON2_PARALLELISM: integer(1, 16).default(1),
+  NERVE_PASSWORD_HASH_CONCURRENCY: integer(1, 512).default(2),
 })
 
 type Environment = z.output<typeof environmentSchema>
+
+/**
+ * OWASP 给出的几组等强度的 Argon2id 最低参数（内存 KiB × 迭代次数）：47104 × 1、19456 × 2、12288 × 3、9216 × 4、7168 × 5。
+ * 乘积最小的一组是 7168 × 5 = 35840：低于它，任何组合都比最低推荐弱。
+ */
+const ARGON2_MIN_COST = 35_840
 
 /** 变量之间的约束：只在每个变量各自合法之后检查，免得一个错误报两次。 */
 function crossChecks(env: Environment): ConfigIssue[] {
@@ -188,6 +200,12 @@ function crossChecks(env: Environment): ConfigIssue[] {
     issues.push({ variable: 'NERVE_HTTP_HEADERS_TIMEOUT_MS', problem: '不能大于 NERVE_HTTP_REQUEST_TIMEOUT_MS' })
   if (env.NERVE_SESSION_IDLE_TIMEOUT_MINUTES > env.NERVE_SESSION_ABSOLUTE_TIMEOUT_MINUTES)
     issues.push({ variable: 'NERVE_SESSION_IDLE_TIMEOUT_MINUTES', problem: '不能大于 NERVE_SESSION_ABSOLUTE_TIMEOUT_MINUTES' })
+  if (env.NERVE_PASSWORD_ARGON2_MEMORY_KIB * env.NERVE_PASSWORD_ARGON2_ITERATIONS < ARGON2_MIN_COST) {
+    issues.push({
+      variable: 'NERVE_PASSWORD_ARGON2_MEMORY_KIB',
+      problem: `与 NERVE_PASSWORD_ARGON2_ITERATIONS 的乘积不能低于 ${ARGON2_MIN_COST}（OWASP 的最低推荐，例如 19456 × 2、47104 × 1）`,
+    })
+  }
   return issues
 }
 
@@ -231,6 +249,7 @@ function toAppConfig(env: Environment): AppConfig {
         iterations: env.NERVE_PASSWORD_ARGON2_ITERATIONS,
         parallelism: env.NERVE_PASSWORD_ARGON2_PARALLELISM,
       },
+      hashConcurrency: env.NERVE_PASSWORD_HASH_CONCURRENCY,
     },
   }
 }

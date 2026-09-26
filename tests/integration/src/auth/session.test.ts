@@ -9,6 +9,7 @@ import { errorResponseSchema, sessionResponseSchema } from '@nerve-office/contra
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
+import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { asUser, login, SESSION_COOKIE, sessionSetCookie } from '../support/session-client.ts'
 
@@ -37,7 +38,7 @@ async function updateSession(user: LoggedIn, assignments: string): Promise<void>
 
 async function expectSessionExpired(response: Response): Promise<void> {
   expect(response.status).toBe(401)
-  expect(errorResponseSchema.parse(await response.json()).error.code).toBe('SESSION_EXPIRED')
+  expect(parseExact(errorResponseSchema, await response.json()).error.code).toBe('SESSION_EXPIRED')
   // 同时清除浏览器里的 Cookie
   expect(sessionSetCookie(response)).toMatch(/Expires=Thu, 01 Jan 1970/)
 }
@@ -47,7 +48,7 @@ describe('US-M1-02 当前会话', () => {
     const user = await login(app.baseUrl, 'alice', alice.password)
     const response = await asUser(app.baseUrl, user, '/api/auth/session')
     expect(response.status).toBe(200)
-    expect(sessionResponseSchema.parse(await response.json())).toEqual(user.session)
+    expect(parseExact(sessionResponseSchema, await response.json())).toEqual(user.session)
   })
 
   it('空闲过期：SESSION_EXPIRED，并清除 Cookie', async () => {
@@ -108,7 +109,7 @@ describe('US-M1-08 未登录时一律要求先登录', () => {
   it('没有会话 Cookie：401 UNAUTHENTICATED，不是 SESSION_EXPIRED', async () => {
     const response = await fetch(`${app.baseUrl}/api/auth/session`)
     expect(response.status).toBe(401)
-    expect(errorResponseSchema.parse(await response.json()).error.code).toBe('UNAUTHENTICATED')
+    expect(parseExact(errorResponseSchema, await response.json()).error.code).toBe('UNAUTHENTICATED')
   })
 
   it('探针不需要登录', async () => {
@@ -118,6 +119,6 @@ describe('US-M1-08 未登录时一律要求先登录', () => {
   it('不存在的接口：404 NOT_FOUND（没有匹配的路由时不经过守卫；项目开源，接口有哪些本来就不是秘密）', async () => {
     const response = await fetch(`${app.baseUrl}/api/no-such-endpoint`)
     expect(response.status).toBe(404)
-    expect(errorResponseSchema.parse(await response.json()).error.code).toBe('NOT_FOUND')
+    expect(parseExact(errorResponseSchema, await response.json()).error.code).toBe('NOT_FOUND')
   })
 })

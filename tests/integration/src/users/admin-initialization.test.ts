@@ -3,6 +3,7 @@ import type { AppConfig } from '@nerve-office/api'
 import type { TestDatabase } from '../support/database.ts'
 import { AppError, initializeAdmin, loadConfig } from '@nerve-office/api'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { createAccount } from '../support/accounts.ts'
 import { testEnvironment } from '../support/api-app.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { captureLogs } from '../support/log-capture.ts'
@@ -90,8 +91,18 @@ describe('US-M1-01 初始化首个管理员', () => {
     expect(await counts()).toEqual({ users: '1', spaces: '1', audit: '1' })
   })
 
+  it('用户名已被普通账户占用（不区分大小写）：USERNAME_TAKEN，什么都不写', async () => {
+    await createAccount(database, { username: 'alice' })
+    const before = await counts()
+    await expect(initializeAdmin(config, { username: 'ALICE', password: PASSWORD }, { logDestination: captureLogs().destination }))
+      .rejects
+      .toMatchObject({ code: 'USERNAME_TAKEN' })
+    expect(await counts()).toEqual(before)
+  })
+
   it.each([
     ['密码太短', { username: 'admin', password: 'short' }, '密码至少 12 个字符'],
+    ['密码含控制字符（例如标准输入多了一个换行）', { username: 'admin', password: `${PASSWORD}\n` }, '密码不能包含控制字符'],
     ['用户名不合规', { username: '张三', password: PASSWORD }, '用户名为 3–32 个字符'],
     ['显示名含控制字符', { username: 'admin', displayName: '系统\n管理员', password: PASSWORD }, '显示名不能包含控制字符'],
   ])('输入不合法（%s）时拒绝，什么都不写', async (_case, input, message) => {

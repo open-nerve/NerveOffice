@@ -47,7 +47,7 @@ describe('loadConfig', () => {
       web: { root: undefined },
       shutdown: { timeoutMs: 8_000 },
       log: { level: 'info' },
-      password: { argon2: { memoryKib: 19_456, iterations: 2, parallelism: 1 } },
+      password: { argon2: { memoryKib: 19_456, iterations: 2, parallelism: 1 }, hashConcurrency: 2 },
     })
   })
 
@@ -73,6 +73,7 @@ describe('loadConfig', () => {
       NERVE_PASSWORD_ARGON2_MEMORY_KIB: '47104',
       NERVE_PASSWORD_ARGON2_ITERATIONS: '1',
       NERVE_PASSWORD_ARGON2_PARALLELISM: '2',
+      NERVE_PASSWORD_HASH_CONCURRENCY: '8',
       NERVE_SESSION_IDLE_TIMEOUT_MINUTES: '30',
       NERVE_SESSION_ABSOLUTE_TIMEOUT_MINUTES: '600',
       NERVE_LOGIN_MAX_FAILURES: '3',
@@ -103,7 +104,7 @@ describe('loadConfig', () => {
     })
     expect(config.shutdown.timeoutMs).toBe(9_000)
     expect(config.log.level).toBe('debug')
-    expect(config.password.argon2).toEqual({ memoryKib: 47_104, iterations: 1, parallelism: 2 })
+    expect(config.password).toEqual({ argon2: { memoryKib: 47_104, iterations: 1, parallelism: 2 }, hashConcurrency: 8 })
     expect(config.session).toEqual({ idleTimeoutMinutes: 30, absoluteTimeoutMinutes: 600 })
     expect(config.login).toEqual({ maxFailures: 3, ipMaxFailures: 1_000, windowMinutes: 10, lockoutMinutes: 20 })
     expect(config.web.root).toBe('/srv/nerve-office/web')
@@ -215,6 +216,18 @@ describe('loadConfig', () => {
       NERVE_SESSION_ABSOLUTE_TIMEOUT_MINUTES: '60',
     }))
     expect(issues.map(issue => issue.variable)).toEqual(['NERVE_SESSION_IDLE_TIMEOUT_MINUTES'])
+  })
+
+  it('Argon2id 的内存与迭代次数的乘积不能低于 OWASP 最低推荐里最弱的一组（7168 × 5）', () => {
+    const cost = (memory: string, iterations: string) => issuesOf(() => loadConfig({
+      ...REQUIRED,
+      NERVE_PASSWORD_ARGON2_MEMORY_KIB: memory,
+      NERVE_PASSWORD_ARGON2_ITERATIONS: iterations,
+    }))
+    expect(cost('8192', '4').map(issue => issue.variable)).toEqual(['NERVE_PASSWORD_ARGON2_MEMORY_KIB'])
+    expect(cost('19456', '1')[0]?.problem).toContain('35840')
+    for (const [memory, iterations] of [['47104', '1'], ['19456', '2'], ['12288', '3'], ['9216', '4'], ['8192', '5']])
+      expect(loadConfig({ ...REQUIRED, NERVE_PASSWORD_ARGON2_MEMORY_KIB: memory, NERVE_PASSWORD_ARGON2_ITERATIONS: iterations }).password.argon2.memoryKib).toBe(Number(memory))
   })
 
   it('不认识的 NERVE_ 变量（多半是拼写错误）让启动失败；NERVE_TEST_ 留给测试工具，其他前缀不管', () => {

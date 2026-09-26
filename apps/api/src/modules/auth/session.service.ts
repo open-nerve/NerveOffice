@@ -24,7 +24,7 @@ export class SessionService {
     @Inject(APP_CONFIG) private readonly config: AppConfig,
   ) {}
 
-  /** 登录时新建：每次都是新的令牌（防会话固定）；顺带清理一小批早已过期的会话。 */
+  /** 登录时新建：每次都是新的令牌（防会话固定）。 */
   async create(userId: string, transaction?: Transaction): Promise<CreatedSession> {
     const token = generateSessionToken()
     const { idleTimeoutMinutes, absoluteTimeoutMinutes } = this.config.session
@@ -34,7 +34,6 @@ export class SessionService {
       idleMinutes: idleTimeoutMinutes,
       absoluteMinutes: absoluteTimeoutMinutes,
     }, transaction)
-    await this.repository.purgeExpired(transaction)
     return { id, token }
   }
 
@@ -52,6 +51,11 @@ export class SessionService {
 
   async revoke(sessionId: string, reason: 'logout', transaction?: Transaction): Promise<void> {
     await this.repository.revoke({ id: sessionId }, reason, transaction)
+  }
+
+  /** 删除一小批过期或撤销已超过 30 天的会话，表不会无限增长。在事务之外调用。 */
+  async purgeExpired(): Promise<void> {
+    await this.repository.purgeExpired()
   }
 
   /** 同一个浏览器重新登录：原来的会话作废（原因 replaced）。令牌不合法或会话已失效时什么都不做。 */

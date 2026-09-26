@@ -21,6 +21,8 @@ export const ERROR_CODES = {
   NOT_FOUND: { status: 404, message: '请求的资源不存在或无权访问' },
   /** 已有系统管理员，拒绝再次初始化（命令行初始化管理员） */
   ADMIN_ALREADY_INITIALIZED: { status: 409, message: '系统管理员已经初始化，不能重复执行' },
+  /** 用户名已被别的账户使用（用户名不区分大小写） */
+  USERNAME_TAKEN: { status: 409, message: '用户名已被占用' },
   /** 请求体超过上限，或 JSON 的嵌套层数、元素数量超过上限 */
   PAYLOAD_TOO_LARGE: { status: 413, message: '请求体超过上限' },
   /** 不支持的字符集或内容编码 */

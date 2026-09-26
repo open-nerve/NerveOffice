@@ -21,4 +21,9 @@ describe('文档列表的响应', () => {
     expect(documentListResponseSchema.safeParse({ items: [item], nextCursor: null }).success).toBe(true)
     expect(documentListResponseSchema.safeParse({ items: [{ ...item, updatedAt: '2026-09-26 09:00' }], nextCursor: null }).success).toBe(false)
   })
+
+  it('多出的字段被丢弃：接口只做加法时，打开着的旧页面照常工作', () => {
+    const item = { id: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d', title: '周报', type: 'sheet', createdAt: '2026-09-26T08:00:00.000Z', updatedAt: '2026-09-26T09:00:00.000Z' }
+    expect(documentListResponseSchema.parse({ items: [{ ...item, starred: true }], nextCursor: null, total: 1 })).toEqual({ items: [item], nextCursor: null })
+  })
 })

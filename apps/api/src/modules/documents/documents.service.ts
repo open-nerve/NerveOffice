@@ -1,4 +1,5 @@
 import type { DocumentDetail, DocumentListQuery, DocumentListResponse, DocumentSummary } from '@nerve-office/contracts'
+import type { AccessTarget } from './document-access-policy.ts'
 import type { DocumentRow } from './documents.repository.ts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
@@ -6,6 +7,9 @@ import { SpacesService } from '../spaces/index.ts'
 import { DocumentAccessPolicy } from './document-access-policy.ts'
 import { decodeCursor, encodeCursor } from './document-cursor.ts'
 import { DocumentsRepository } from './documents.repository.ts'
+
+/** 不存在的文档也照样判断一次权限，用一个不存在的空间：两条路径做同样的查询，响应时间不暴露文档是否存在（P3 审查 A4）。 */
+const MISSING_DOCUMENT: AccessTarget = { spaceId: '00000000-0000-0000-0000-000000000000' }
 
 function toSummary(row: DocumentRow): DocumentSummary {
   return { id: row.id, title: row.title, type: row.type, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString() }
@@ -42,7 +46,7 @@ export class DocumentsService {
   /** 没有读取权限与不存在返回同一个 NOT_FOUND（规范 §4，US-M1-08）。 */
   async get(userId: string, id: string): Promise<DocumentDetail> {
     const row = await this.repository.findById(id)
-    const access = row === undefined ? undefined : await this.policy.accessOf(userId, row)
+    const access = await this.policy.accessOf(userId, row ?? MISSING_DOCUMENT)
     if (row === undefined || access === undefined)
       throw new AppError('NOT_FOUND')
     return { ...toSummary(row), spaceId: row.spaceId, permissions: { canEdit: access !== 'viewer' } }

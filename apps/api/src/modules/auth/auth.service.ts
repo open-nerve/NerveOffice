@@ -40,37 +40,39 @@ export class AuthService {
   }
 
   /**
-   * 登录：先查限流，再验证（事务外：哈希是计算密集的操作），最后在一个事务里写会话、限流计数与审计。
+   * 登录：
+   * 1. 限流放行：先占用名额，再验证（LoginThrottle）；
+   * 2. 验证用户名与密码，在事务之外：哈希是计算密集的操作；
+   * 3. 失败时写审计；成功时在一个事务里清除限流计数、作废浏览器原来的会话、新建会话、写审计；
+   * 4. 在事务之外顺带清理过期的记录。
    * previousToken 是浏览器原来带着的会话，登录成功后作废。
    */
   async login(request: LoginRequest, origin: HttpOrigin, previousToken?: string): Promise<LoginResult> {
-    const attempt = { username: normalizeUsername(request.username), clientIp: origin.clientIp }
-    const lockedFor = await this.throttle.lockedFor(attempt)
-    if (lockedFor !== undefined) {
+    const admission = await this.throttle.admit({ username: normalizeUsername(request.username), clientIp: origin.clientIp })
+    if (!admission.admitted) {
       // 锁定期间的请求只记日志，不写审计：攻击时不能把审计表写爆
-      this.#logger.warn('登录被限流拒绝', { lockedForSeconds: lockedFor })
-      throw this.tooManyAttempts(lockedFor)
+      this.#logger.warn('登录被限流拒绝', { lockedForSeconds: admission.retryAfterSeconds })
+      throw this.tooManyAttempts(admission.retryAfterSeconds)
     }
 
+    const { ticket } = admission
+    // 验证出错（例如库里的哈希损坏）时名额不退回，按一次失败计
     const check = await this.users.verifyCredentials(request.username, request.password)
     if (!check.valid) {
-      const lockedNow = await this.transactions.run(async (transaction) => {
-        const seconds = await this.throttle.recordFailure(attempt, transaction)
-        await this.audit.record({
-          action: 'auth.login_failed',
-          actor: { type: 'anonymous' },
-          ...(check.user === undefined ? {} : { target: { type: 'user' as const, id: check.user.id } }),
-          origin,
-          details: { reason: 'invalid_credentials', ...(seconds === undefined ? {} : { lockedForSeconds: seconds }) },
-        }, { transaction })
-        return seconds
+      await this.audit.record({
+        action: 'auth.login_failed',
+        actor: { type: 'anonymous' },
+        ...(check.user === undefined ? {} : { target: { type: 'user' as const, id: check.user.id } }),
+        origin,
+        details: { reason: 'invalid_credentials', ...(ticket.lockedForSeconds === undefined ? {} : { lockedForSeconds: ticket.lockedForSeconds }) },
       })
-      throw lockedNow === undefined ? new AppError('INVALID_CREDENTIALS') : this.tooManyAttempts(lockedNow)
+      await this.tidyUp()
+      throw ticket.lockedForSeconds === undefined ? new AppError('INVALID_CREDENTIALS') : this.tooManyAttempts(ticket.lockedForSeconds)
     }
 
     const { user } = check
     const created = await this.transactions.run(async (transaction) => {
-      await this.throttle.succeeded(attempt, transaction)
+      await ticket.succeeded(transaction)
       if (previousToken !== undefined)
         await this.sessions.replace(previousToken, transaction)
       const session = await this.sessions.create(user.id, transaction)
@@ -82,6 +84,7 @@ export class AuthService {
       }, { transaction })
       return session
     })
+    await this.tidyUp()
     return { token: created.token, session: await this.describe(user, csrfTokenFor(created.token)) }
   }
 
@@ -105,6 +108,20 @@ export class AuthService {
       user: { id: user.id, username: user.username, displayName: user.displayName, systemRole: user.systemRole },
       personalSpace: { id: space.id, name: space.name },
       csrfToken,
+    }
+  }
+
+  /**
+   * 验证过密码之后，顺带删除一小批过期的限流计数与会话。
+   * 在事务之外，尽力执行：失败只记日志，不影响这次登录的结果（P3 审查 A2）。
+   */
+  private async tidyUp(): Promise<void> {
+    try {
+      await this.throttle.purgeExpired()
+      await this.sessions.purgeExpired()
+    }
+    catch (error) {
+      this.#logger.warn('清理过期的登录限流计数与会话失败，下次登录时再试', { err: error })
     }
   }
 

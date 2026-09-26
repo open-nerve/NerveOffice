@@ -51,6 +51,11 @@ export class UsersRepository {
     return { user, passwordHash }
   }
 
+  async existsWithUsername(username: string, transaction?: Transaction): Promise<boolean> {
+    const [row] = await executorOf(this.db, transaction).select({ id: users.id }).from(users).where(eq(users.username, username)).limit(1)
+    return row !== undefined
+  }
+
   async existsWithRole(systemRole: UserSystemRole, transaction?: Transaction): Promise<boolean> {
     const [row] = await executorOf(this.db, transaction).select({ id: users.id }).from(users).where(eq(users.systemRole, systemRole)).limit(1)
     return row !== undefined

@@ -5,7 +5,18 @@ import { z } from 'zod'
 /** 更新时间用数据库算出的 UTC 文本，保留微秒：换成 JavaScript 的 Date 会丢掉微秒，同一毫秒内的文档会被跳过或重复。 */
 const POSITION = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/
 
-const cursorSchema = z.strictObject({ t: z.string().regex(POSITION), i: z.uuid() })
+/**
+ * 格式对，日期也真实存在：没有 2 月 30 日、13 月、24 点、0 年。
+ * 数据库解析不了的时间会让查询报错，变成 500（P3 审查 A3）。
+ */
+function isRealInstant(position: string): boolean {
+  const instant = new Date(position)
+  return !Number.isNaN(instant.getTime())
+    && instant.getUTCFullYear() >= 1
+    && instant.toISOString().slice(0, 23) === position.slice(0, 23)
+}
+
+const cursorSchema = z.strictObject({ t: z.string().regex(POSITION).refine(isRealInstant), i: z.uuid() })
 
 export interface DocumentCursor {
   readonly updatedAt: string

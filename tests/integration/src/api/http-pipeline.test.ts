@@ -11,6 +11,7 @@ import { Body, Controller, Get, Module, Post } from '@nestjs/common'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { startTestApp, TEST_PUBLIC_ORIGIN } from '../support/api-app.ts'
+import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { waitFor } from '../support/wait.ts'
 
@@ -82,7 +83,7 @@ async function postJson(path: string, body: string, headers: Record<string, stri
 async function expectError(response: Response, status: number, code: string): Promise<{ code: string, message: string, requestId: string }> {
   expect(response.status).toBe(status)
   expect(response.headers.get('content-type')).toContain('application/json')
-  const { error } = errorResponseSchema.parse(await response.json())
+  const { error } = parseExact(errorResponseSchema, await response.json())
   expect(error.code).toBe(code)
   expect(error.requestId).toBe(response.headers.get('x-request-id'))
   return error

@@ -7,6 +7,7 @@ import { CSRF_TOKEN_HEADER, errorResponseSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
+import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { asUser, login, SESSION_COOKIE, sessionSetCookie } from '../support/session-client.ts'
 
@@ -26,7 +27,7 @@ afterAll(async () => {
 })
 
 async function codeOf(response: Response): Promise<string> {
-  return errorResponseSchema.parse(await response.json()).error.code
+  return parseExact(errorResponseSchema, await response.json()).error.code
 }
 
 describe('US-M1-02 退出', () => {

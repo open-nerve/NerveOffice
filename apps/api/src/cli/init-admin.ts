@@ -4,28 +4,16 @@
 import process from 'node:process'
 import { AppError, ConfigError, initializeAdmin, loadConfigFromEnvironment } from '../app/index.ts'
 import { createRootLogger } from '../modules/logging/index.ts'
+import { readAdminPassword } from './admin-password.ts'
 import { INIT_ADMIN_USAGE, parseInitAdminArguments, UsageError } from './init-admin-arguments.ts'
-import { InputCancelled, promptHidden, readPasswordFromStream } from './password-input.ts'
+import { InputCancelled } from './password-input.ts'
 
 const logger = createRootLogger({ level: 'info' })
-
-async function readPassword(passwordStdin: boolean): Promise<string> {
-  if (passwordStdin)
-    return readPasswordFromStream(process.stdin)
-  if (!process.stdin.isTTY)
-    throw new UsageError('标准输入不是终端：请用 --password-stdin 从标准输入传入密码')
-  // 提示写到标准错误：标准输出只有日志
-  const first = await promptHidden(process.stdin, process.stderr, '密码：')
-  const second = await promptHidden(process.stdin, process.stderr, '再输入一次：')
-  if (first !== second)
-    throw new AppError('REQUEST_INVALID', '两次输入的密码不一致')
-  return first
-}
 
 async function main(): Promise<void> {
   const args = parseInitAdminArguments(process.argv.slice(2))
   const config = loadConfigFromEnvironment()
-  const password = await readPassword(args.passwordStdin)
+  const password = await readAdminPassword(args.passwordStdin, { stdin: process.stdin, stderr: process.stderr })
   const admin = await initializeAdmin(config, { username: args.username, displayName: args.displayName, password })
   logger.info({ userId: admin.userId, username: admin.username, personalSpaceId: admin.personalSpaceId }, '已初始化系统管理员')
 }

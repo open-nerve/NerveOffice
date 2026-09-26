@@ -8,6 +8,7 @@ import { createApplication, loadConfig } from '@nerve-office/api'
 import { errorResponseSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { startTestApp, testEnvironment } from '../support/api-app.ts'
+import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 
 const INDEX_HTML = '<!doctype html><html><head><title>NerveOffice</title></head><body><div id="root"></div></body></html>'
@@ -79,7 +80,7 @@ describe('US-M1-09 托管前端产物', () => {
     for (const path of ['/assets/missing.js', '/.env', '/missing.png']) {
       const response = await get(path)
       expect(response.status, path).toBe(404)
-      expect(errorResponseSchema.parse(await response.json()).error.code).toBe('NOT_FOUND')
+      expect(parseExact(errorResponseSchema, await response.json()).error.code).toBe('NOT_FOUND')
     }
   })
 
@@ -96,7 +97,7 @@ describe('US-M1-09 托管前端产物', () => {
     expect(head.status).toBe(200)
     const post = await fetch(`${app.baseUrl}/login`, { method: 'POST', headers: { origin: 'http://127.0.0.1:4100' } })
     expect(post.status).toBe(404)
-    expect(errorResponseSchema.parse(await post.json()).error.code).toBe('NOT_FOUND')
+    expect(parseExact(errorResponseSchema, await post.json()).error.code).toBe('NOT_FOUND')
   })
 })
 
@@ -106,7 +107,7 @@ describe('没有配置或配置错了', () => {
     try {
       const page = await fetch(`${apiOnly.baseUrl}/`)
       expect(page.status).toBe(404)
-      expect(errorResponseSchema.parse(await page.json()).error.code).toBe('NOT_FOUND')
+      expect(parseExact(errorResponseSchema, await page.json()).error.code).toBe('NOT_FOUND')
       expect((await fetch(`${apiOnly.baseUrl}/api/health/live`)).status).toBe(200)
     }
     finally {

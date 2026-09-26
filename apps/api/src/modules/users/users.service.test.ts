@@ -60,6 +60,15 @@ describe('UsersService.verifyCredentials', () => {
     expect(hasher.hashes).toBe(1)
   })
 
+  it('假哈希在模块初始化时就生成：第一个不存在的用户名也只算一次验证，不多算一次哈希', async () => {
+    const { service, hasher } = setup(undefined)
+    await service.onModuleInit()
+    expect(hasher.hashes).toBe(1)
+    await service.verifyCredentials('nobody', 'secret')
+    expect(hasher.hashes).toBe(1)
+    expect(hasher.verified).toHaveLength(1)
+  })
+
   it('用户名的写法不合法：不查库，同样算一次哈希', async () => {
     const { service, repository, hasher } = setup({ user: ALICE, passwordHash: 'hash:secret' })
     expect(await service.verifyCredentials('a b', 'secret')).toEqual({ valid: false })

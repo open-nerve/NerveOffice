@@ -4,11 +4,13 @@ import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
+import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import { documentDetailSchema, documentListResponseSchema, errorResponseSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
+import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { createDocument } from '../support/documents.ts'
 import { asUser, login } from '../support/session-client.ts'
@@ -45,11 +47,11 @@ afterAll(async () => {
 async function list(user: LoggedIn, query = ''): Promise<DocumentListResponse> {
   const response = await asUser(app.baseUrl, user, `/api/documents${query}`)
   expect(response.status).toBe(200)
-  return documentListResponseSchema.parse(await response.json())
+  return parseExact(documentListResponseSchema, await response.json())
 }
 
 async function errorOf(response: Response): Promise<{ code: string, message: string }> {
-  const { code, message } = errorResponseSchema.parse(await response.json()).error
+  const { code, message } = parseExact(errorResponseSchema, await response.json()).error
   return { code, message }
 }
 
@@ -102,6 +104,15 @@ describe('US-M1-03 个人空间的文档列表', () => {
     }
   })
 
+  it('游标的写法对、时间却不存在（2 月 30 日、13 月、0 年）：400 REQUEST_INVALID，不是 500', async () => {
+    for (const t of ['2026-02-30T00:00:00.000000Z', '2026-13-01T00:00:00.000000Z', '0000-01-01T00:00:00.000000Z']) {
+      const cursor = Buffer.from(JSON.stringify({ t, i: randomUUID() }), 'utf8').toString('base64url')
+      const response = await asUser(app.baseUrl, aliceSession, `/api/documents?cursor=${cursor}`)
+      expect(response.status, t).toBe(400)
+      expect((await errorOf(response)).code).toBe('REQUEST_INVALID')
+    }
+  })
+
   it('没有登录：401 UNAUTHENTICATED', async () => {
     const response = await fetch(`${app.baseUrl}/api/documents`)
     expect(response.status).toBe(401)
@@ -113,7 +124,7 @@ describe('US-M1-08 文档的元数据：别人的与不存在的结果相同', (
   it('自己的文档：元数据与权限', async () => {
     const response = await asUser(app.baseUrl, aliceSession, `/api/documents/${aliceDocuments[0] ?? ''}`)
     expect(response.status).toBe(200)
-    expect(documentDetailSchema.parse(await response.json())).toMatchObject({
+    expect(parseExact(documentDetailSchema, await response.json())).toMatchObject({
       id: aliceDocuments[0],
       title: '最新',
       type: 'sheet',

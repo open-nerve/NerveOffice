@@ -52,6 +52,22 @@ describe('US-M1-01 初始化管理员的命令', () => {
     expect(await userCount()).toBe('0')
   })
 
+  it('标准输入多了一个换行（例如 printf "%s\\n\\n"）：密码规则拒绝，退出码 1，不设下一个登录不上的密码', async () => {
+    const command = run({ args: ['--username', 'admin', '--password-stdin'], stdin: `${PASSWORD}\n\n` })
+    expect((await command.exited).code).toBe(1)
+    await command.waitForLog(entry => entry.code === 'REQUEST_INVALID' && String(entry.msg).includes('密码不能包含控制字符'))
+    expect(command.output()).not.toContain(PASSWORD)
+    expect(await userCount()).toBe('0')
+  })
+
+  it('把密码误当作位置参数：退出码 2，输出里没有密码', async () => {
+    const command = run({ args: ['--username', 'admin', PASSWORD] })
+    expect((await command.exited).code).toBe(2)
+    expect(command.output()).toContain('不接受位置参数')
+    expect(command.output()).not.toContain(PASSWORD)
+    expect(await userCount()).toBe('0')
+  })
+
   it.each([
     ['缺少用户名', ['--password-stdin'], '缺少 --username'],
     ['把密码写在参数里', ['--username', 'admin', `--password=${PASSWORD}`], '密码不能出现在命令行参数里'],

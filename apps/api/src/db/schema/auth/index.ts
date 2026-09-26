@@ -33,6 +33,7 @@ export const authSessions = pgTable('auth_sessions', {
 export const authLoginThrottles = pgTable('auth_login_throttles', {
   // "用户名：xxx""地址：xxx"的摘要：不存用户输入的原文
   keyHash: bytea('key_hash').primaryKey(),
+  // 窗口内失败与正在验证的尝试次数：验证之前先占用名额，成功时退回，所以可以回到 0
   failures: integer('failures').notNull(),
   windowStartedAt: timestamp('window_started_at', { withTimezone: true }).notNull(),
   lockedUntil: timestamp('locked_until', { withTimezone: true }),
@@ -40,5 +41,5 @@ export const authLoginThrottles = pgTable('auth_login_throttles', {
   // 清理窗口与锁定都已过期的计数
   index('auth_login_throttles_window_started_at_idx').on(table.windowStartedAt),
   check('auth_login_throttles_key_hash_check', sql`octet_length(${table.keyHash}) = 32`),
-  check('auth_login_throttles_failures_check', sql`${table.failures} >= 1`),
+  check('auth_login_throttles_failures_check', sql`${table.failures} >= 0`),
 ])

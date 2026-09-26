@@ -8,6 +8,7 @@ import { errorResponseSchema, sessionResponseSchema } from '@nerve-office/contra
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
+import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { asUser, cookieValue, login, postLogin, sessionSetCookie } from '../support/session-client.ts'
 
@@ -37,7 +38,7 @@ async function rows<T extends Record<string, unknown>>(query: string, values: un
 }
 
 async function errorOf(response: Response): Promise<{ code: string, message: string }> {
-  const { code, message } = errorResponseSchema.parse(await response.json()).error
+  const { code, message } = parseExact(errorResponseSchema, await response.json()).error
   return { code, message }
 }
 
@@ -45,7 +46,7 @@ describe('US-M1-02 登录', () => {
   it('成功：返回账户、个人空间与 CSRF 令牌；下发 HttpOnly、SameSite=Lax 的会话 Cookie；库里只存令牌的摘要；记审计', async () => {
     const response = await postLogin(app.baseUrl, { username: 'alice', password: alice.password }, { 'x-request-id': 'login-ok-1' })
     expect(response.status).toBe(200)
-    const session = sessionResponseSchema.parse(await response.json())
+    const session = parseExact(sessionResponseSchema, await response.json())
     expect(session.user).toEqual({ id: alice.id, username: 'alice', displayName: '爱丽丝', systemRole: 'member' })
     expect(session.personalSpace).toEqual({ id: alice.personalSpaceId, name: '爱丽丝' })
 
@@ -107,6 +108,16 @@ describe('US-M1-02 登录', () => {
       expect(response.status, String(origin)).toBe(403)
       expect((await errorOf(response)).code).toBe('ORIGIN_NOT_ALLOWED')
     }
+  })
+
+  it('哈希的参数过时：登录成功后用当前参数重新哈希，之后照常登录', async () => {
+    const carol = await createAccount(database, { username: 'carol', argon2: { memoryCost: 12_288, timeCost: 3, parallelism: 1 } })
+    const hashOf = async () => (await rows<{ password_hash: string }>('SELECT password_hash FROM users WHERE id = $1', [carol.id]))[0]?.password_hash
+    expect(await hashOf()).toMatch(/^\$argon2id\$v=19\$m=12288,t=3,p=1\$/)
+    expect((await postLogin(app.baseUrl, { username: 'carol', password: carol.password })).status).toBe(200)
+    expect(await hashOf()).toMatch(/^\$argon2id\$v=19\$m=19456,t=2,p=1\$/)
+    expect((await postLogin(app.baseUrl, { username: 'carol', password: carol.password })).status).toBe(200)
+    expect((await postLogin(app.baseUrl, { username: 'carol', password: 'wrong' })).status).toBe(401)
   })
 
   it('同一个浏览器重新登录：换新的令牌，原来的会话作废（replaced）', async () => {

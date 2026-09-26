@@ -25,4 +25,18 @@ describe('会话信息', () => {
     expect(sessionResponseSchema.parse(session)).toEqual(session)
     expect(sessionResponseSchema.safeParse({ ...session, user: { ...session.user, systemRole: 'root' } }).success).toBe(false)
   })
+
+  it('响应多出的字段被丢弃，不算格式错误：接口只做加法时，打开着的旧页面照常工作', () => {
+    const session = {
+      user: { id: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d', username: 'admin', displayName: '管理员', systemRole: 'admin', avatar: 'x' },
+      personalSpace: { id: '0199a2c4-2a3b-7c4d-9e5f-6a7b8c9d0e1f', name: '管理员', quota: 1 },
+      csrfToken: 'token',
+      features: [],
+    }
+    expect(sessionResponseSchema.parse(session)).toEqual({
+      user: { id: session.user.id, username: 'admin', displayName: '管理员', systemRole: 'admin' },
+      personalSpace: { id: session.personalSpace.id, name: '管理员' },
+      csrfToken: 'token',
+    })
+  })
 })

@@ -18,7 +18,7 @@ import { UsersService } from './users.service.ts'
     {
       provide: PasswordHasher,
       inject: [APP_CONFIG],
-      useFactory: (config: AppConfig) => new Argon2PasswordHasher(config.password.argon2),
+      useFactory: (config: AppConfig) => new Argon2PasswordHasher(config.password.argon2, config.password.hashConcurrency),
     },
   ],
   exports: [UsersService, AdminInitializationService],

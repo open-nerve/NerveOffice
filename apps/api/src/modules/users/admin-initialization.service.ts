@@ -32,6 +32,7 @@ function parseInput<T extends z.ZodType>(schema: T, value: unknown): z.output<T>
 /**
  * 初始化首个系统管理员（P3 设计 §3.4，US-M1-01）。
  * 已有系统管理员时拒绝，数据不变；两个并发的初始化只有一个成功（事务里的 advisory lock）。
+ * 用户名已被普通账户占用时明确报错，而不是让唯一约束报出笼统的数据库错误。
  */
 @Injectable()
 export class AdminInitializationService {
@@ -53,6 +54,8 @@ export class AdminInitializationService {
       await this.repository.lockAdminInitialization(transaction)
       if (await this.repository.existsWithRole('admin', transaction))
         throw new AppError('ADMIN_ALREADY_INITIALIZED')
+      if (await this.repository.existsWithUsername(username, transaction))
+        throw new AppError('USERNAME_TAKEN')
       const user = await this.repository.insert({ username, displayName, passwordHash, systemRole: 'admin' }, transaction)
       const space = await this.spaces.createPersonalSpace(user.id, user.displayName, { transaction })
       await this.audit.record({

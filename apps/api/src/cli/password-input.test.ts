@@ -16,9 +16,13 @@ function fakeTerminal() {
 }
 
 describe('readPasswordFromStream', () => {
-  it('读取全部内容，只去掉末尾的一个换行', async () => {
+  it('读取全部内容，只去掉末尾的一个换行（echo 与 printf 的输出都能用）', async () => {
     expect(await readPasswordFromStream(Readable.from(['correct horse ', 'battery staple\n']))).toBe('correct horse battery staple')
     expect(await readPasswordFromStream(Readable.from(['密码 带空格 \r\n']))).toBe('密码 带空格 ')
+    expect(await readPasswordFromStream(Readable.from(['printf 的输出没有换行']))).toBe('printf 的输出没有换行')
+  })
+
+  it('多出的换行不去掉，原样交给密码规则：规则拒绝控制字符，初始化失败，而不是设下一个登录不上的密码', async () => {
     expect(await readPasswordFromStream(Readable.from(['two\n\n']))).toBe('two\n')
   })
 })
@@ -35,6 +39,17 @@ describe('promptHidden', () => {
     expect(input.setRawMode.mock.calls).toEqual([[true], [false]])
     expect(input.pause).toHaveBeenCalled()
     expect(input.listenerCount('data')).toBe(0)
+  })
+
+  it('方向键、功能键、Alt 组合键与其他控制键都忽略，不混进密码；拆在两段里的按键序列也能识别', async () => {
+    const { input, output } = fakeTerminal()
+    const reading = promptHidden(input, output, '密码：')
+    // 上、左（CSI）；F1（SS3）；Delete（带参数的 CSI）；Alt+b；Ctrl+U、Tab；已经输入过字符时的 Ctrl+D
+    input.emit('data', 'ab\u001B[A\u001B[D')
+    input.emit('data', 'c\u001BOP\u001B[3~')
+    input.emit('data', '\u001Bbd\u0015\t\u0004e\u001B')
+    input.emit('data', '[1;5Cf\r')
+    expect(await reading).toBe('abcdef')
   })
 
   it('Ctrl+C，或者还没输入时按 Ctrl+D：取消', async () => {
