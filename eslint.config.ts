@@ -37,6 +37,20 @@ const DYNAMIC_UNIVER_PRO = {
 
 const BASE_RESTRICTED_SYNTAX = [...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER, DYNAMIC_UNIVER_PRO]
 
+// 前端应用的入口（entries/*/main.tsx，ADR-008）：按顺序执行的几步，第一步关掉 zod 的 JIT。
+// zod 在创建结构时就读取 jitless，contracts 的结构在模块求值时创建，所以设置它的模块必须最先执行（审查 B1）。
+// 普通的导入会被导入排序规则挪到副作用导入前面，所以入口只写副作用导入，代码放进它导入的模块
+const APP_ENTRY_SYNTAX = [
+  {
+    selector: 'Program > :not(ImportDeclaration[specifiers.length=0])',
+    message: '应用的入口只写副作用导入（import \'…\'），代码放进它导入的模块：普通的导入会被排序规则挪到前面先执行（ADR-008）',
+  },
+  {
+    selector: String.raw`Program > ImportDeclaration:first-child:not([source.value=/\/shared\/lib\/zod-jitless\.ts$/])`,
+    message: '应用的入口第一个导入 shared/lib/zod-jitless.ts：zod 在创建结构时读取 jitless，必须在任何结构创建之前关掉 JIT（ADR-008）',
+  },
+]
+
 // ---- 后端（P2 设计 §3.1）----
 // 每个后端文件的限制由 apiRules() 按"这个文件允许什么"组合出来，各覆盖块不各自抄一份，免得改一处漏一处（审查 B15）
 
@@ -266,6 +280,13 @@ export default antfu(
       'react/dom-no-dangerously-set-innerhtml': 'error',
       'no-restricted-imports': ['error', { patterns: [UNIVER_ONLY_IN_EDITOR, NO_UNIVER_PRO] }],
       'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX],
+    },
+  },
+  {
+    name: 'nerve/web-app-entries',
+    files: ['apps/web/src/entries/*/main.tsx'],
+    rules: {
+      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...APP_ENTRY_SYNTAX],
     },
   },
   {

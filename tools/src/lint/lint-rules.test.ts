@@ -144,6 +144,19 @@ describe('US-M1-11 lint 规则的自测：模块边界与循环依赖', () => {
     expect(report.messages.join('\n')).toContain('平台页面的入口不得引用编辑器')
   })
 
+  it('应用的入口只写副作用导入，第一个是 zod-jitless（ADR-008，审查 B1）', async () => {
+    const valid = 'import \'../../shared/lib/zod-jitless.ts\'\nimport \'../../app/styles.css\'\nimport \'./mount.tsx\'\n'
+    expect(await rulesFor(valid, PLATFORM_ENTRY)).toEqual([])
+    const wrongOrder = 'import \'../../app/styles.css\'\nimport \'../../shared/lib/zod-jitless.ts\'\nimport \'./mount.tsx\'\n'
+    const reordered = await lint(wrongOrder, PLATFORM_ENTRY)
+    expect(reordered.rules).toContain('no-restricted-syntax')
+    expect(reordered.messages.join('\n')).toContain('第一个导入 shared/lib/zod-jitless.ts')
+    const withCode = 'import \'../../shared/lib/zod-jitless.ts\'\nimport { createAppRuntime } from \'../../app/runtime.ts\'\n\ncreateAppRuntime()\n'
+    const mixed = await lint(withCode, PLATFORM_ENTRY)
+    expect(mixed.rules.filter(rule => rule === 'no-restricted-syntax')).toHaveLength(2)
+    expect(mixed.messages.join('\n')).toContain('只写副作用导入')
+  })
+
   it('不能借"无主"文件中转绕过边界', async () => {
     expect(await rulesFor(`import { probe } from '../../${PROBE}.ts'\nexport const p = probe\n`, PLATFORM_ENTRY)).toContain('boundaries/no-unknown-dependencies')
     const config = await configFor('apps/web/src/stray.ts')
