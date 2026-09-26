@@ -30,10 +30,10 @@ export default defineConfig({
     { name: 'msedge', use: { browserName: 'chromium', channel: 'msedge' } },
     { name: 'webkit', use: { browserName: 'webkit' } },
   ],
-  // 本 Phase 测 web 构建产物的预览服务；M1-P3 起换成 api 托管的生产构建
+  // 本 Phase 测 web 构建产物的预览服务（先执行 pnpm build）；M1-P3 起换成 api 托管的生产构建
   webServer: externalBaseUrl === undefined
     ? {
-        command: 'pnpm --filter @nerve-office/web run build && pnpm --filter @nerve-office/web run preview',
+        command: 'pnpm --filter @nerve-office/web run preview',
         url: baseURL,
         reuseExistingServer: !CI,
         timeout: 120_000,

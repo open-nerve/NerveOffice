@@ -52,8 +52,8 @@ describe('US-M1-11 lint 规则的自测', () => {
     expect(await rulesFor(code, WEB_FILE)).toContain('boundaries/dependencies')
   })
 
-  it('禁止 any、非空断言与 console', async () => {
-    const rules = await rulesFor('export function f(x: any, y?: string): string {\n  console.info(x)\n  return y!\n}\n', 'packages/contracts/src/index.ts')
+  it('禁止 any、非空断言与 console（包括 console.error）', async () => {
+    const rules = await rulesFor('export function f(x: any, y?: string): string {\n  console.error(x)\n  return y!\n}\n', 'packages/contracts/src/index.ts')
     expect(rules).toEqual(expect.arrayContaining(['ts/no-explicit-any', 'ts/no-non-null-assertion', 'no-console']))
   })
 

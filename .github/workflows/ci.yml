@@ -1,0 +1,78 @@
+# CI（规范 §9）：推送 main 后在 Linux 上执行与本机 pnpm verify 相同的门禁，另加依赖漏洞扫描。
+# 各个 Action 按提交的 SHA 锁定，注释里写对应的版本。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # 每周一 03:00（UTC）定时执行，发现浏览器与依赖环境的漂移
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: pnpm verify --ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        # 与 deploy/dev/compose.yaml 同一个镜像（18.6-alpine 的多架构索引摘要）
+        image: postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+        env:
+          POSTGRES_USER: nerve
+          POSTGRES_PASSWORD: nerve_ci_only
+          POSTGRES_DB: nerve_office
+          POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale-provider=builtin --builtin-locale=C.UTF-8
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nerve -d nerve_office"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      CI: 'true'
+      NERVE_TEST_DATABASE_URL: postgres://nerve:nerve_ci_only@127.0.0.1:5432/nerve_office
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: 安装 Node.js（版本见 .node-version）
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: 安装 pnpm（版本见 package.json 的 packageManager）
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          cache: true
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 安装浏览器（Chromium、WebKit、Chrome、Edge）及系统依赖
+        run: pnpm --filter @nerve-office/e2e exec playwright install --with-deps chromium webkit chrome msedge
+
+      - name: pnpm verify --ci
+        run: pnpm verify --ci --keep-going
+
+      - name: 上传测试报告
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: reports-${{ github.run_id }}
+          path: |
+            tests/e2e/playwright-report/
+            tests/e2e/test-results/
+            coverage/
+          retention-days: 14

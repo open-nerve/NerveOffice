@@ -60,7 +60,6 @@ export default antfu(
       '**/test-results/**',
       '**/blob-report/**',
       'tools/.gates/**',
-      'tools/test-fixtures/**',
     ],
   },
   {
@@ -69,7 +68,8 @@ export default antfu(
       'ts/no-explicit-any': 'error',
       'ts/no-non-null-assertion': 'error',
       'ts/ban-ts-comment': ['error', { 'ts-expect-error': 'allow-with-description', 'ts-ignore': true, 'ts-nocheck': true }],
-      'no-console': 'error',
+      // 只写 'error' 会保留上游配置里 allow: [warn, error] 的选项，这里用空选项覆盖
+      'no-console': ['error', {}],
       'unicorn/filename-case': ['error', { case: 'kebabCase' }],
       'react/dom-no-dangerously-set-innerhtml': 'error',
       'no-restricted-imports': ['error', { patterns: [UNIVER_ONLY_IN_EDITOR, NO_UNIVER_PRO] }],
@@ -87,14 +87,14 @@ export default antfu(
     files: ['**/*.test.{ts,tsx}', 'tests/**/*.ts'],
     rules: {
       'ts/no-non-null-assertion': 'off',
-      // describe 用被测单元的名字，组件名是 PascalCase；用例标题多为中文
-      'test/prefer-lowercase-title': ['error', { ignore: ['describe'] }],
+      // 用例标题以中文或故事编号（US-M1-05 …）开头，"首字母小写"的约定不适用
+      'test/prefer-lowercase-title': 'off',
     },
   },
   {
     name: 'nerve/cli-output',
     // 命令行入口直接向终端输出
-    files: ['tools/src/**/cli.ts', 'tools/src/git/commit-msg.ts'],
+    files: ['tools/src/**/cli.ts', 'tools/src/**/*-cli.ts', 'tools/src/git/commit-msg.ts'],
     rules: {
       'no-console': 'off',
     },

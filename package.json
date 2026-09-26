@@ -17,8 +17,8 @@
     "test": "vitest run --project unit --project unit-web",
     "test:coverage": "vitest run --project unit --project unit-web --coverage",
     "test:integration": "vitest run --project integration",
-    "test:e2e": "pnpm --filter @nerve-office/e2e exec playwright test",
-    "build": "pnpm -r --filter ./packages/* --filter ./apps/* run build",
+    "test:e2e": "pnpm --filter @nerve-office/web run build && pnpm --filter @nerve-office/e2e exec playwright test",
+    "build": "pnpm -r --filter './packages/*' --filter './apps/*' run build",
     "db:up": "docker compose -f deploy/dev/compose.yaml up -d --wait",
     "db:down": "docker compose -f deploy/dev/compose.yaml down",
     "gate": "node tools/src/gates/cli.ts",
@@ -28,7 +28,9 @@
     "gate:deps": "node tools/src/gates/cli.ts deps",
     "gate:licenses": "node tools/src/gates/cli.ts licenses",
     "gate:artifacts": "node tools/src/gates/cli.ts artifacts",
-    "gate:audit": "node tools/src/gates/cli.ts audit"
+    "gate:audit": "node tools/src/gates/cli.ts audit",
+    "verify": "node tools/src/verify/cli.ts",
+    "clean": "node tools/src/verify/clean-cli.ts"
   },
   "devDependencies": {
     "@antfu/eslint-config": "catalog:",

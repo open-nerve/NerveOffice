@@ -47,6 +47,7 @@ export default defineConfig({
         'apps/web/src/editor/**',
         // 命令行入口只做参数解析与输出，规则本身在各自的模块里测试
         'tools/src/**/cli.ts',
+        'tools/src/**/*-cli.ts',
         'tools/src/git/commit-msg.ts',
       ],
       reporter: ['text-summary', 'html', 'json-summary'],
