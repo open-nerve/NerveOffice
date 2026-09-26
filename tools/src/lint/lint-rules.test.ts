@@ -18,11 +18,26 @@ const PROBE_FILES = {
   stray: `apps/web/src/${PROBE}.ts`,
 }
 
+const WEB_FILE = 'apps/web/src/app/app.tsx'
+const PLATFORM_ENTRY = 'apps/web/src/entries/platform/main.tsx'
+const CONTRACTS_FILE = 'packages/contracts/src/errors/error-response.ts'
+const TOOLS_TEST_FILE = 'tools/src/git/strip-ai-trailers.test.ts'
+const E2E_FILE = 'tests/e2e/specs/foundation/framework-smoke.spec.ts'
+
+// 类型感知的 lint 第一次运行时，要加载整份配置，并为每个 tsconfig 工程建立类型程序；
+// 这是整组用例共用的准备工作，放在 beforeAll 里做完，不算进某一个用例的时限。
+// 本组用到的每个工程各检查一个真实文件，之后的用例只做增量检查。
+const WARM_UP_FILES = [WEB_FILE, CONTRACTS_FILE, TOOLS_TEST_FILE, E2E_FILE]
+// 冷启动在 CI 的 4 核机器上还要和并行的测试文件抢 CPU，本机约 3 秒，这里留足余量
+const WARM_UP_TIMEOUT = 120_000
+// 预热之后，一个用例最多检查五段代码，本机合计不到 0.2 秒；CI 上按慢几十倍留余量
+const LINT_TIMEOUT = 20_000
+
 let eslint: ESLint
 /** 为探针新建的目录，由深到浅。清理时只删空目录，不递归删除，免得删掉同一时间别人写进去的文件。 */
 const createdDirs: string[] = []
 
-beforeAll(() => {
+beforeAll(async () => {
   for (const path of Object.values(PROBE_FILES)) {
     const dir = join(REPO_ROOT, dirname(path))
     const firstCreated = mkdirSync(dir, { recursive: true })
@@ -33,7 +48,8 @@ beforeAll(() => {
     writeFileSync(join(REPO_ROOT, path), 'export const probe = 1\n')
   }
   eslint = new ESLint({ cwd: REPO_ROOT })
-})
+  await eslint.lintFiles(WARM_UP_FILES.map(file => join(REPO_ROOT, file)))
+}, WARM_UP_TIMEOUT)
 
 afterAll(() => {
   for (const path of Object.values(PROBE_FILES))
@@ -77,10 +93,6 @@ function restrictedPatterns(config: Linter.Config): string[] {
   return (options?.patterns ?? []).flatMap(p => p.group)
 }
 
-const WEB_FILE = 'apps/web/src/app/app.tsx'
-const PLATFORM_ENTRY = 'apps/web/src/entries/platform/main.tsx'
-const CONTRACTS_FILE = 'packages/contracts/src/errors/error-response.ts'
-
 describe('US-M1-11 lint 规则的自测：受限导入', () => {
   it('编辑器之外引用 @univerjs/* 或 Pro 会失败，静态导入、再导出与动态导入都算', async () => {
     expect(await rulesFor('import { Univer } from \'@univerjs/core\'\nexport const u = Univer\n', WEB_FILE)).toContain('no-restricted-imports')
@@ -101,7 +113,7 @@ describe('US-M1-11 lint 规则的自测：受限导入', () => {
     expect(restrictedPatterns(editor)).not.toContain('@univerjs/*')
     expect(restrictedPatterns(await configFor(WEB_FILE))).toContain('@univerjs/*')
   })
-})
+}, LINT_TIMEOUT)
 
 describe('US-M1-11 lint 规则的自测：模块边界与循环依赖', () => {
   it('跨越模块边界的引用会失败（平台代码引用仓库工具）', async () => {
@@ -130,7 +142,7 @@ describe('US-M1-11 lint 规则的自测：模块边界与循环依赖', () => {
     const code = 'import { checkLicenseBundle } from \'./license-bundle.ts\'\n\nexport const f = checkLicenseBundle\n'
     expect(await rulesFor(code, 'tools/src/gates/licenses.ts')).toContain('import-x/no-cycle')
   })
-})
+}, LINT_TIMEOUT)
 
 describe('US-M1-11 lint 规则的自测：类型与写法', () => {
   it('禁止 any、非空断言与 console（包括 console.error）', async () => {
@@ -163,27 +175,25 @@ describe('US-M1-11 lint 规则的自测：类型与写法', () => {
   it('文件名必须是短横线小写', async () => {
     expect((await configFor(CONTRACTS_FILE)).rules?.['unicorn/filename-case']).toEqual([2, { case: 'kebabCase' }])
   })
-})
+}, LINT_TIMEOUT)
 
 describe('US-M1-11 lint 规则的自测：测试的写法', () => {
   it('不允许 .only', async () => {
-    expect(await rulesFor('import { it } from \'vitest\'\n\nit.only(\'x\', () => {})\n', 'tools/src/git/strip-ai-trailers.test.ts')).toContain('test/no-only-tests')
-    expect(await rulesFor('import { test } from \'@playwright/test\'\n\ntest.only(\'x\', async () => {})\n', 'tests/e2e/specs/foundation/framework-smoke.spec.ts')).toContain('playwright/no-focused-test')
+    expect(await rulesFor('import { it } from \'vitest\'\n\nit.only(\'x\', () => {})\n', TOOLS_TEST_FILE)).toContain('test/no-only-tests')
+    expect(await rulesFor('import { test } from \'@playwright/test\'\n\ntest.only(\'x\', async () => {})\n', E2E_FILE)).toContain('playwright/no-focused-test')
   })
 
   it('不允许跳过或占位的用例（skip、todo、fixme）', async () => {
-    const vitestFile = 'tools/src/git/strip-ai-trailers.test.ts'
-    expect(await rulesFor('import { it } from \'vitest\'\n\nit.skip(\'x\', () => {})\n', vitestFile)).toContain('test/no-disabled-tests')
-    expect(await rulesFor('import { it } from \'vitest\'\n\nit.todo(\'x\')\n', vitestFile)).toContain('test/warn-todo')
-    const e2eFile = 'tests/e2e/specs/foundation/framework-smoke.spec.ts'
-    expect(await rulesFor('import { test } from \'@playwright/test\'\n\ntest.skip(\'x\', async () => {})\n', e2eFile)).toContain('playwright/no-skipped-test')
-    expect(await rulesFor('import { test } from \'@playwright/test\'\n\ntest.fixme(\'x\', async () => {})\n', e2eFile)).toContain('playwright/no-skipped-test')
+    expect(await rulesFor('import { it } from \'vitest\'\n\nit.skip(\'x\', () => {})\n', TOOLS_TEST_FILE)).toContain('test/no-disabled-tests')
+    expect(await rulesFor('import { it } from \'vitest\'\n\nit.todo(\'x\')\n', TOOLS_TEST_FILE)).toContain('test/warn-todo')
+    expect(await rulesFor('import { test } from \'@playwright/test\'\n\ntest.skip(\'x\', async () => {})\n', E2E_FILE)).toContain('playwright/no-skipped-test')
+    expect(await rulesFor('import { test } from \'@playwright/test\'\n\ntest.fixme(\'x\', async () => {})\n', E2E_FILE)).toContain('playwright/no-skipped-test')
   })
 
   it('没有警告级别的规则（规范 §2.2）', async () => {
-    for (const file of [WEB_FILE, CONTRACTS_FILE, 'tools/src/git/strip-ai-trailers.ts', 'tests/e2e/specs/foundation/framework-smoke.spec.ts', 'pnpm-workspace.yaml', 'package.json']) {
+    for (const file of [WEB_FILE, CONTRACTS_FILE, 'tools/src/git/strip-ai-trailers.ts', E2E_FILE, 'pnpm-workspace.yaml', 'package.json']) {
       const warned = Object.entries((await configFor(file)).rules ?? {}).filter(([, entry]) => [1, 'warn'].includes(severity(entry) as number | string))
       expect(warned.map(([name]) => `${file} ${name}`)).toEqual([])
     }
   })
-}, 60_000)
+}, LINT_TIMEOUT)
