@@ -1,7 +1,10 @@
 import type { ExpectedMigration } from './migrations.ts'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { readMigrationFiles } from 'drizzle-orm/migrator'
 import { describe, expect, it } from 'vitest'
-import { compareMigrations, MIGRATIONS_FOLDER, readExpectedMigrations } from './migrations.ts'
+import { compareMigrations, MigrationError, MIGRATIONS_FOLDER, readExpectedMigrations } from './migrations.ts'
 
 const expected: ExpectedMigration[] = [
   { tag: '0000_a', when: 100, hash: 'h0' },
@@ -38,5 +41,29 @@ describe('readExpectedMigrations', () => {
     expect(migrations.map(migration => migration.tag)).toEqual(['0000_audit_events', '0001_audit_events_append_only'])
     const drizzle = readMigrationFiles({ migrationsFolder: MIGRATIONS_FOLDER })
     expect(migrations.map(migration => [migration.hash, migration.when])).toEqual(drizzle.map(migration => [migration.hash, migration.folderMillis]))
+  })
+})
+
+describe('readExpectedMigrations：迁移文件本身不合法时拒绝', () => {
+  function folderWith(entries: { idx: number, when: number, tag: string }[]): string {
+    const folder = mkdtempSync(join(tmpdir(), 'nerve-migrations-'))
+    mkdirSync(join(folder, 'meta'))
+    writeFileSync(join(folder, 'meta', '_journal.json'), JSON.stringify({ entries }))
+    for (const entry of entries)
+      writeFileSync(join(folder, `${entry.tag}.sql`), 'SELECT 1')
+    return folder
+  }
+
+  it.each([
+    ['时间戳没有递增', [{ idx: 0, when: 200, tag: '0000_a' }, { idx: 1, when: 100, tag: '0001_b' }]],
+    ['序号不连续', [{ idx: 0, when: 100, tag: '0000_a' }, { idx: 2, when: 200, tag: '0002_b' }]],
+  ])('%s', (_case, entries) => {
+    const folder = folderWith(entries)
+    try {
+      expect(() => readExpectedMigrations(folder)).toThrow(MigrationError)
+    }
+    finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
   })
 })

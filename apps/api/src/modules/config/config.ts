@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 import { isIP } from 'node:net'
 import process from 'node:process'
 import { z } from 'zod'
+import { Secret } from '../../shared/secret.ts'
 
 /** 应用的变量都以它开头；不认识的视为拼写错误。 */
 const PREFIX = 'NERVE_'
@@ -22,7 +23,8 @@ export type TrustProxy = false | number | readonly string[]
 
 export interface AppConfig {
   readonly database: {
-    readonly url: string
+    /** 连接串里有密码：只在建立连接时 reveal() */
+    readonly url: Secret
     readonly poolMax: number
     readonly connectTimeoutMs: number
     readonly statementTimeoutMs: number
@@ -119,17 +121,21 @@ const environmentSchema = z.object({
   NERVE_TRUST_PROXY: trustProxy.optional(),
   NERVE_SHUTDOWN_TIMEOUT_MS: integer(100, 600_000).default(8_000),
   NERVE_LOG_LEVEL: z.enum(LOG_LEVELS, { error: `必须是 ${LOG_LEVELS.join('、')} 之一` }).default('info'),
-}).superRefine((env, ctx) => {
-  if (env.NERVE_HTTP_HEADERS_TIMEOUT_MS > env.NERVE_HTTP_REQUEST_TIMEOUT_MS)
-    ctx.issues.push({ code: 'custom', path: ['NERVE_HTTP_HEADERS_TIMEOUT_MS'], message: '不能大于 NERVE_HTTP_REQUEST_TIMEOUT_MS', input: env.NERVE_HTTP_HEADERS_TIMEOUT_MS })
 })
 
 type Environment = z.output<typeof environmentSchema>
 
+/** 变量之间的约束：只在每个变量各自合法之后检查，免得一个错误报两次。 */
+function crossChecks(env: Environment): ConfigIssue[] {
+  return env.NERVE_HTTP_HEADERS_TIMEOUT_MS > env.NERVE_HTTP_REQUEST_TIMEOUT_MS
+    ? [{ variable: 'NERVE_HTTP_HEADERS_TIMEOUT_MS', problem: '不能大于 NERVE_HTTP_REQUEST_TIMEOUT_MS' }]
+    : []
+}
+
 function toAppConfig(env: Environment): AppConfig {
   return {
     database: {
-      url: env.NERVE_DATABASE_URL,
+      url: new Secret(env.NERVE_DATABASE_URL),
       poolMax: env.NERVE_DATABASE_POOL_MAX,
       connectTimeoutMs: env.NERVE_DATABASE_CONNECT_TIMEOUT_MS,
       statementTimeoutMs: env.NERVE_DATABASE_STATEMENT_TIMEOUT_MS,
@@ -171,6 +177,8 @@ export function loadConfig(
   const issues: ConfigIssue[] = []
   /** 已经报告过问题的变量，校验时不再重复报告（例如文件读取失败的机密不再报"缺少"） */
   const reported = new Set<string>()
+  /** 取自文件的机密 → 它的 _FILE 变量名：内容不合法时，问题记在运维实际设置的那个变量上 */
+  const fromFile = new Map<string, string>()
   const input: Record<string, string> = {}
   for (const [name, value] of Object.entries(env)) {
     if (name.startsWith(PREFIX) && !name.startsWith(RESERVED_FOR_TESTS) && value !== undefined && value !== '')
@@ -186,17 +194,27 @@ export function loadConfig(
       issues.push({ variable: name, problem: '不认识的变量（拼写错误？只有机密可以用 _FILE 从文件读取）' })
       continue
     }
-    reported.add(secret)
     if (secret in input) {
+      reported.add(secret)
       issues.push({ variable: secret, problem: `与 ${name} 只能设置一个` })
       continue
     }
+    let content: string
     try {
-      input[secret] = readSecretFile(path).replace(/\r?\n$/, '')
+      content = readSecretFile(path).replace(/\r?\n$/, '')
     }
     catch {
+      reported.add(secret)
       issues.push({ variable: name, problem: '指定的文件读取失败' })
+      continue
     }
+    if (content === '') {
+      reported.add(secret)
+      issues.push({ variable: name, problem: '指定的文件是空的' })
+      continue
+    }
+    input[secret] = content
+    fromFile.set(secret, name)
   }
 
   for (const name of Object.keys(input)) {
@@ -208,9 +226,15 @@ export function loadConfig(
   if (!result.success) {
     for (const issue of result.error.issues) {
       const variable = String(issue.path[0] ?? '')
-      if (!reported.has(variable))
+      const fileVariable = fromFile.get(variable)
+      if (fileVariable !== undefined)
+        issues.push({ variable: fileVariable, problem: `文件内容${issue.message}` })
+      else if (!reported.has(variable))
         issues.push({ variable, problem: issue.message })
     }
+  }
+  else {
+    issues.push(...crossChecks(result.data))
   }
   if (!result.success || issues.length > 0)
     throw new ConfigError(issues)

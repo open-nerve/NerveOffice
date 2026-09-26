@@ -1,8 +1,9 @@
 import type { Request, Response } from 'express'
 import type { LevelWithSilent, Logger } from 'pino'
 import { REQUEST_ID_HEADER } from '@nerve-office/contracts'
-import { pinoHttp } from 'pino-http'
+import { pinoHttp, stdSerializers } from 'pino-http'
 import { resolveRequestId } from './request-id.ts'
+import { LOG_SERIALIZERS } from './root-logger.ts'
 
 const HEALTH_PROBES = '/api/health/'
 
@@ -33,6 +34,10 @@ export function requestSummary(request: Request, response: Response, durationMs:
 export function createHttpLogger(logger: Logger): ReturnType<typeof pinoHttp<Request, Response>> {
   return pinoHttp<Request, Response>({
     logger,
+    // pino-http 建的子日志会用它自己的序列化覆盖根日志的：显式交给它完整的一套，异常用与根日志相同的（审查 A2），
+    // 并且不再套一层标准的；请求与响应沿用它自带的标准序列化（它在内部建子日志时会用到）
+    serializers: { req: stdSerializers.req, res: stdSerializers.res, ...LOG_SERIALIZERS },
+    wrapSerializers: false,
     // 请求内的日志只绑定请求标识，不带整个请求对象
     quietReqLogger: true,
     quietResLogger: true,

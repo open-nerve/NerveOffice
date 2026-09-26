@@ -16,11 +16,11 @@ async function setup() {
 }
 
 describe('AuditService', () => {
-  it('校验后交给仓储写入，事务的执行器原样传下去', async () => {
+  it('校验后交给仓储写入，事务原样传下去', async () => {
     const { service, repository } = await setup()
-    const executor = {} as never
-    await service.record(event, { executor })
-    expect(repository.insert).toHaveBeenCalledWith(event, executor)
+    const transaction = {} as never
+    await service.record(event, { transaction })
+    expect(repository.insert).toHaveBeenCalledWith(event, transaction)
   })
 
   it('事件不合法时直接抛出，不写入', async () => {

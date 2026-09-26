@@ -18,9 +18,10 @@ function issuesOf(action: () => unknown): readonly ConfigIssue[] {
 
 describe('loadConfig', () => {
   it('只给必填项时，其余取默认值', () => {
-    expect(loadConfig({ NERVE_DATABASE_URL: DATABASE_URL })).toEqual({
+    const { database: { url, ...database }, ...rest } = loadConfig({ NERVE_DATABASE_URL: DATABASE_URL })
+    expect(url.reveal()).toBe(DATABASE_URL)
+    expect({ database, ...rest }).toEqual({
       database: {
-        url: DATABASE_URL,
         poolMax: 10,
         connectTimeoutMs: 5_000,
         statementTimeoutMs: 15_000,
@@ -61,8 +62,9 @@ describe('loadConfig', () => {
       NERVE_SHUTDOWN_TIMEOUT_MS: '9000',
       NERVE_LOG_LEVEL: 'debug',
     })
-    expect(config.database).toEqual({
-      url: 'postgresql://u:p@127.0.0.1:5432/db',
+    const { url, ...database } = config.database
+    expect(url.reveal()).toBe('postgresql://u:p@127.0.0.1:5432/db')
+    expect(database).toEqual({
       poolMax: 4,
       connectTimeoutMs: 1_000,
       statementTimeoutMs: 2_000,
@@ -134,6 +136,11 @@ describe('loadConfig', () => {
     expect(issuesOf(() => loadConfig(env)).map(issue => issue.variable)).toEqual([variable])
   })
 
+  it('请求时限本身不合法时只报它自己，不连带报请求头时限', () => {
+    const issues = issuesOf(() => loadConfig({ NERVE_DATABASE_URL: DATABASE_URL, NERVE_HTTP_REQUEST_TIMEOUT_MS: '999999999' }))
+    expect(issues.map(issue => issue.variable)).toEqual(['NERVE_HTTP_REQUEST_TIMEOUT_MS'])
+  })
+
   it('接收请求头的时限不能超过接收完整请求的时限', () => {
     const issues = issuesOf(() => loadConfig({
       NERVE_DATABASE_URL: DATABASE_URL,
@@ -153,7 +160,14 @@ describe('loadConfig', () => {
   describe('机密可以用 <变量>_FILE 从文件读取', () => {
     it('读取文件内容，去掉末尾的换行', () => {
       const config = loadConfig({ NERVE_DATABASE_URL_FILE: '/run/secrets/db' }, path => (path === '/run/secrets/db' ? `${DATABASE_URL}\n` : ''))
-      expect(config.database.url).toBe(DATABASE_URL)
+      expect(config.database.url.reveal()).toBe(DATABASE_URL)
+    })
+
+    it('文件内容不合法时，问题记在 _FILE 变量上并说明原因；空文件单独说明', () => {
+      const invalid = issuesOf(() => loadConfig({ NERVE_DATABASE_URL_FILE: '/run/secrets/db' }, () => 'mysql://root:hunter2@db/app\n'))
+      expect(invalid).toEqual([{ variable: 'NERVE_DATABASE_URL_FILE', problem: '文件内容必须是 postgres:// 或 postgresql:// 开头的连接串' }])
+      expect(JSON.stringify(invalid)).not.toContain('hunter2')
+      expect(issuesOf(() => loadConfig({ NERVE_DATABASE_URL_FILE: '/run/secrets/db' }, () => '\n'))).toEqual([{ variable: 'NERVE_DATABASE_URL_FILE', problem: '指定的文件是空的' }])
     })
 
     it('变量与 _FILE 同时设置时失败', () => {
@@ -190,6 +204,10 @@ describe('loadConfig', () => {
       const issues = issuesOf(() => loadConfig({ NERVE_DATABASE_URL: DATABASE_URL, NERVE_TRUST_PROXY: value }))
       expect(issues.map(issue => issue.variable)).toEqual(['NERVE_TRUST_PROXY'])
     })
+  })
+
+  it('连接串是机密：整个配置被序列化时不带密码', () => {
+    expect(JSON.stringify(loadConfig({ NERVE_DATABASE_URL: DATABASE_URL }))).not.toContain('s3cret-password')
   })
 
   it('返回的配置被冻结，运行中不能被改写', () => {

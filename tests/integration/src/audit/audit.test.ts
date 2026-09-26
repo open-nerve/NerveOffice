@@ -1,8 +1,9 @@
 // 审计（P2 设计 §3.8）：经真实应用写入、只追加由数据库保证、CHECK 约束兜底、与业务写入同一个事务。
-import type { AuditOrigin, Database } from '@nerve-office/api'
+import type { AuditOrigin } from '@nerve-office/api'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
-import { AuditModule, AuditService, DATABASE, RequestOrigin } from '@nerve-office/api'
+import { AuditModule, AuditService, RequestOrigin, TransactionRunner } from '@nerve-office/api'
+import { AUDIT_ACTIONS } from '@nerve-office/contracts'
 import { Controller, Module, Post } from '@nestjs/common'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { startTestApp } from '../support/api-app.ts'
@@ -113,14 +114,27 @@ describe('审计事件', () => {
     })
   })
 
-  it('与业务写入放在同一个事务里：事务回滚时，审计也一起回滚', async () => {
+  it('与业务写入放在同一个事务里：事务回滚时，审计也一起回滚；提交时一起写入', async () => {
     const count = (await rows()).length
-    const db = app.runtime.get<Database>(DATABASE)
+    const transactions = app.runtime.get(TransactionRunner)
     const audit = app.runtime.get(AuditService)
-    await expect(db.transaction(async (tx) => {
-      await audit.record({ action: 'auth.logout', actor: { type: 'user', id: USER_ID }, origin: { source: 'cli' } }, { executor: tx })
+    const event = { action: 'auth.logout', actor: { type: 'user', id: USER_ID }, origin: { source: 'cli' } } as const
+    await expect(transactions.run(async (transaction) => {
+      await audit.record(event, { transaction })
       throw new Error('业务写入失败')
     })).rejects.toThrow('业务写入失败')
     expect(await rows()).toHaveLength(count)
+    await transactions.run(async (transaction) => {
+      await audit.record(event, { transaction })
+    })
+    expect(await rows()).toHaveLength(count + 1)
+  })
+
+  it('每个登记的审计动作都能写入：contracts 的枚举与数据库的 CHECK 约束一致', async () => {
+    const audit = app.runtime.get(AuditService)
+    for (const action of AUDIT_ACTIONS)
+      await audit.record({ action, actor: { type: 'system' }, origin: { source: 'cli' } })
+    const written = new Set((await rows()).map(row => row.action))
+    expect(AUDIT_ACTIONS.filter(action => !written.has(action))).toEqual([])
   })
 })

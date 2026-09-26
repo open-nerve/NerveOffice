@@ -9,7 +9,7 @@ const logger = createRootLogger({ level: 'info' })
 
 async function main(): Promise<void> {
   const config = loadConfigFromEnvironment()
-  const outcome = await runMigrations({ connectionString: config.database.url, lockTimeoutMs: config.database.migrationLockTimeoutMs })
+  const outcome = await runMigrations({ connectionString: config.database.url.reveal(), lockTimeoutMs: config.database.migrationLockTimeoutMs })
   if (outcome.status === 'current')
     logger.info({ outcome }, '库结构已是最新，不需要迁移')
   else

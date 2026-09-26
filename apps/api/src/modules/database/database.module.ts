@@ -8,6 +8,7 @@ import { AppLogger } from '../logging/index.ts'
 import { DatabaseReadiness } from './database-readiness.ts'
 import { DATABASE, PG_POOL } from './database.ts'
 import { createPool } from './pool.ts'
+import { TransactionRunner } from './transaction-runner.ts'
 
 /**
  * 退出时关闭连接池。onApplicationShutdown 在 HTTP 服务关闭之后调用，
@@ -35,8 +36,9 @@ class PoolLifecycle implements OnApplicationShutdown {
       useFactory: (pool: pg.Pool) => drizzle({ client: pool }),
     },
     DatabaseReadiness,
+    TransactionRunner,
     PoolLifecycle,
   ],
-  exports: [DATABASE, DatabaseReadiness],
+  exports: [DATABASE, DatabaseReadiness, TransactionRunner],
 })
 export class DatabaseModule {}
