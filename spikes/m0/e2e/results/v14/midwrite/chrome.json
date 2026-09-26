@@ -1,0 +1,58 @@
+{
+  "check": "V14-midwrite",
+  "browser": {
+    "project": "chrome"
+  },
+  "timestamp": "2026-09-25T09:28:54.423Z",
+  "runs": [
+    {
+      "delay": 0,
+      "first": 1,
+      "status": "restorable",
+      "seq": 1,
+      "error": null
+    },
+    {
+      "delay": 40,
+      "first": 2,
+      "status": "restorable",
+      "seq": 2,
+      "error": null
+    },
+    {
+      "delay": 80,
+      "first": 3,
+      "status": "restorable",
+      "seq": 4,
+      "error": null
+    },
+    {
+      "delay": 120,
+      "first": 5,
+      "status": "restorable",
+      "seq": 6,
+      "error": null
+    },
+    {
+      "delay": 160,
+      "first": 7,
+      "status": "restorable",
+      "seq": 8,
+      "error": null
+    },
+    {
+      "delay": 200,
+      "first": 9,
+      "status": "restorable",
+      "seq": 10,
+      "error": null
+    },
+    {
+      "delay": 260,
+      "first": 11,
+      "status": "restorable",
+      "seq": 12,
+      "error": null
+    }
+  ]
+}

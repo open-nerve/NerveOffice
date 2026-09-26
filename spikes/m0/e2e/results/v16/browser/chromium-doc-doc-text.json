@@ -1,0 +1,233 @@
+{
+  "check": "V16-browser-save",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T11:36:04.789Z",
+  "saved": {
+    "id": "m0-doc-text",
+    "locale": "zhCN",
+    "title": "空白文字文档",
+    "tableSource": {},
+    "drawings": {},
+    "drawingsOrder": [],
+    "headers": {},
+    "footers": {},
+    "notes": {},
+    "noteSettings": {},
+    "body": {
+      "dataStream": "文档标题\r副标题：M0 文字文档样本\r一级标题\r正文段落：加粗、斜体、下划线、删除线、H2O、x2、红色、高亮、大号宋体。中英文混排 English text 与标点，检查换行。\r居中段落\r右对齐段落\r二级标题\r三级标题\r四级标题\r五级标题\r\r\n",
+      "customBlocks": [],
+      "customRanges": [],
+      "paragraphs": [
+        {
+          "startIndex": 4,
+          "paragraphStyle": {
+            "namedStyleType": 2
+          },
+          "paragraphId": "para_YsQkuyS0xILV"
+        },
+        {
+          "startIndex": 18,
+          "paragraphStyle": {
+            "namedStyleType": 3
+          },
+          "paragraphId": "para_uU-mrNgNR3uU"
+        },
+        {
+          "startIndex": 23,
+          "paragraphStyle": {
+            "namedStyleType": 4
+          },
+          "paragraphId": "para_FCKW3aj34k-3"
+        },
+        {
+          "startIndex": 89,
+          "paragraphId": "para_UGidPcKol-bB"
+        },
+        {
+          "startIndex": 94,
+          "paragraphId": "para_elhO56VsB4pR",
+          "paragraphStyle": {
+            "horizontalAlign": 2
+          }
+        },
+        {
+          "startIndex": 100,
+          "paragraphId": "para_QT5ZQ0QiY9Hp",
+          "paragraphStyle": {
+            "horizontalAlign": 3
+          }
+        },
+        {
+          "startIndex": 105,
+          "paragraphStyle": {
+            "namedStyleType": 5
+          },
+          "paragraphId": "para_rOUCPfLxdDea"
+        },
+        {
+          "startIndex": 110,
+          "paragraphStyle": {
+            "namedStyleType": 6
+          },
+          "paragraphId": "para_eJxW-6KBBRpK"
+        },
+        {
+          "startIndex": 115,
+          "paragraphStyle": {
+            "namedStyleType": 7
+          },
+          "paragraphId": "para_NKdjDcDKFxjS"
+        },
+        {
+          "startIndex": 120,
+          "paragraphStyle": {
+            "namedStyleType": 8
+          },
+          "paragraphId": "para_V9gaHvoQYpWF"
+        },
+        {
+          "startIndex": 121,
+          "paragraphId": "para_wcQ-YSI9CW6q"
+        }
+      ],
+      "textRuns": [
+        {
+          "ts": {
+            "bl": 1
+          },
+          "st": 29,
+          "ed": 31
+        },
+        {
+          "ts": {
+            "it": 1
+          },
+          "st": 32,
+          "ed": 34
+        },
+        {
+          "ts": {
+            "ul": {
+              "s": 1,
+              "t": 12
+            }
+          },
+          "st": 35,
+          "ed": 38
+        },
+        {
+          "ts": {
+            "st": {
+              "s": 1
+            }
+          },
+          "st": 39,
+          "ed": 42
+        },
+        {
+          "ts": {
+            "va": 2
+          },
+          "st": 44,
+          "ed": 45
+        },
+        {
+          "ts": {
+            "va": 3
+          },
+          "st": 48,
+          "ed": 49
+        },
+        {
+          "ts": {
+            "cl": {
+              "rgb": "#dc2626"
+            }
+          },
+          "st": 50,
+          "ed": 52
+        },
+        {
+          "ts": {
+            "bg": {
+              "rgb": "#fef08a"
+            }
+          },
+          "st": 53,
+          "ed": 55
+        },
+        {
+          "ts": {
+            "ff": "SimSun",
+            "fs": 18
+          },
+          "st": 56,
+          "ed": 60
+        }
+      ],
+      "tables": [],
+      "sectionBreaks": [],
+      "customDecorations": []
+    },
+    "documentStyle": {
+      "pageSize": {
+        "width": 793.7,
+        "height": 1122.5
+      },
+      "documentFlavor": 2,
+      "marginTop": 50,
+      "marginBottom": 50,
+      "marginRight": 50,
+      "marginLeft": 50,
+      "autoHyphenation": 1,
+      "doNotHyphenateCaps": 0,
+      "consecutiveHyphenLimit": 2,
+      "defaultHeaderId": "",
+      "defaultFooterId": "",
+      "evenPageHeaderId": "",
+      "evenPageFooterId": "",
+      "firstPageHeaderId": "",
+      "firstPageFooterId": "",
+      "evenAndOddHeaders": 0,
+      "useFirstPageHeaderFooter": 0,
+      "marginHeader": 30,
+      "marginFooter": 30,
+      "renderConfig": {
+        "zeroWidthParagraphBreak": 0,
+        "vertexAngle": 0,
+        "centerAngle": 0,
+        "background": {
+          "rgb": "#ccc"
+        }
+      }
+    },
+    "settings": {},
+    "resources": [
+      {
+        "name": "DOC_OBJECT_PERMISSION_PLUGIN",
+        "data": "[]"
+      },
+      {
+        "name": "DOC_WORD_STYLES_PLUGIN",
+        "data": ""
+      },
+      {
+        "name": "DOC_NOTE_PLUGIN",
+        "data": ""
+      },
+      {
+        "name": "DOC_DRAWING_PLUGIN",
+        "data": "{\"data\":{},\"order\":[]}"
+      },
+      {
+        "name": "DOC_HYPER_LINK_PLUGIN",
+        "data": "{\"links\":[]}"
+      }
+    ]
+  }
+}

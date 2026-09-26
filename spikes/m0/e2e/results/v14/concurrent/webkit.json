@@ -1,0 +1,20 @@
+{
+  "check": "V14-concurrent",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T10:42:34.791Z",
+  "seqs": [
+    1,
+    2
+  ],
+  "errors": [
+    null,
+    null
+  ],
+  "final": 2,
+  "later": true
+}

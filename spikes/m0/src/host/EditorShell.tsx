@@ -18,6 +18,10 @@ import { countingWorkerFactory, createWorkerStats } from '../harness/worker-stat
 import { imageEvents } from '../harness/platform-image-io';
 import { docPolicyEvents } from '../harness/doc-policy';
 import { installImeRecorder } from '../harness/ime-recorder';
+import { installOutbox } from '../harness/outbox/index';
+import type { MutationLogger } from '../harness/mutation-log';
+import { clearLog, readLog, replayEntries, startMutationLogger } from '../harness/mutation-log';
+import { createStyleTracker, enrichParams, preloadStyles } from '../harness/mutation-log-enrich';
 import { IImageIoService } from '@univerjs/core';
 import { DocSelectionManagerService } from '@univerjs/docs';
 import type { ImageFunctionPolicy } from '../harness/image-function-policy';
@@ -31,10 +35,11 @@ interface EditorShellProps {
     builders?: Record<string, SampleBuilder>;
 }
 
-/** 从验证服务的文档存储读取快照。 */
+/** 从验证服务的文档存储读取快照；服务端当前的修订号（P6）记进 window.__m0.loadedRevision。 */
 async function loadStoredDocument(id: string): Promise<Record<string, unknown>> {
     const res = await fetch(`/api/docs/${encodeURIComponent(id)}`, { cache: 'no-store' });
     if (!res.ok) throw new Error(`文档不存在：${id}`);
+    if (window.__m0 != null) window.__m0.loadedRevision = Number(res.headers.get('X-Revision') ?? '0');
     return (await res.json()) as Record<string, unknown>;
 }
 
@@ -59,7 +64,7 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
         const workerStats = createWorkerStats();
         const createCountingWorker = countingWorkerFactory(() => createWorker({ imageFunction: params.imagefn }), workerStats);
 
-        const open = async (mode: 'edit' | 'read', data: Record<string, unknown>, ro: string): Promise<EditorHandle> => {
+        const open = async (mode: 'edit' | 'read', data: Record<string, unknown>, ro: string, calc: 'default' | 'forced' = params.calc): Promise<EditorHandle> => {
             if (mode === 'read' && !READ_STRATEGIES.includes(ro as never)) throw new Error(`没有这种阅读模式方案：${ro}`);
             window.__m0!.loadedText = JSON.stringify(data);
             const editor = await createEditor({
@@ -71,7 +76,7 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
                 guard: params.guard,
                 ui: profile.ui[mode],
                 largeSheetSplit: params.split,
-                calcMode: params.calc,
+                calcMode: calc,
                 formulaIntervalCount: params.interval,
                 imageService: params.img,
                 imageFunction: params.imagefn,
@@ -130,12 +135,68 @@ export function EditorShell({ profile, defaultSample, createWorker, builders }: 
             },
         };
 
+        // mutation 增量日志（P6，V15）：每个编辑器实例一个记录器，日志 id 带会话随机串
+        let logger: MutationLogger | null = null;
+        const startLogger = (editor: EditorHandle) => {
+            logger?.dispose();
+            const logId = `${params.doc ?? editor.unitId()}:${Math.random().toString(36).slice(2, 10)}`;
+            logger = startMutationLogger(editor.univer, editor.unitId(), logId, {
+                exclude: profile.changeDetectionExclude,
+                enrich: params.mutlogEnrich ? (id, p) => enrichParams(editor.univer, id, p) : undefined,
+                styles: params.mutlogEnrich ? createStyleTracker(editor.univer, editor.unitId()) as () => Record<string, unknown> | null : undefined,
+            });
+        };
+
+        // 用给定的快照重建编辑器（P6：从发件箱恢复；快照带"公式待更新"时打开后强制全量重算）
+        const reopen = async (data: Record<string, unknown>, options: { forceCalc?: boolean } = {}): Promise<EditorHandle> => {
+            window.__m0!.editor?.dispose();
+            window.__m0!.editor = undefined;
+            const editor = await open('edit', data, params.ro, options.forceCalc ? 'forced' : params.calc);
+            window.__m0!.editor = editor;
+            if (params.mutlog) startLogger(editor);
+            return editor;
+        };
+
         ready.then(
             async (editor) => {
                 window.__m0!.editor = editor;
                 if (params.imelog && profile.kind === 'doc') window.__m0!.imeRecorder = installImeRecorder(editor);
                 setStatus('ready');
                 setMessage(`steady ${Math.round(editor.timings.steady ?? -1)} ms`);
+                if (params.mutlog && params.mode === 'edit') {
+                    startLogger(editor);
+                    window.__m0!.mutlog = {
+                        logger: () => logger!,
+                        read: readLog,
+                        replay: async (logId, afterSeq = 0) => {
+                            const entries = await readLog(logId, afterSeq);
+                            const current = window.__m0!.editor!;
+                            const before = (e: { styles?: Record<string, unknown> }) => preloadStyles(current.univer, current.unitId(), e.styles as never);
+                            return { ...replayEntries(current.univerAPI, entries, before), entries: entries.length };
+                        },
+                        clear: clearLog,
+                    };
+                }
+                // 发件箱（P6）在编辑器就绪之后安装：用例用 window.__m0.outbox 是否出现来判断装好了没有
+                if (params.outbox !== 'off' && params.mode === 'edit') {
+                    try {
+                        window.__m0!.outbox = await installOutbox({
+                            editor: () => window.__m0!.editor!,
+                            reopen,
+                            user: params.user,
+                            docId: params.doc ?? editor.unitId(),
+                            revision: window.__m0!.loadedRevision ?? 0,
+                            placement: params.outbox,
+                            hashOn: params.outboxHash,
+                            keepAlive: params.outboxKeepAlive,
+                            durability: params.durability,
+                            logMark: params.mutlog ? () => (logger == null ? null : { logId: logger.logId, logSeq: logger.seq() }) : undefined,
+                        });
+                    } catch (error) {
+                        window.__m0!.outboxError = error instanceof Error ? error.message : String(error);
+                    }
+                }
+
                 if (params.selftest != null) {
                     await runSelftest(editor, params.selftest, { events: pageEvents, workerStats });
                     if (params.next != null) location.href = params.next;

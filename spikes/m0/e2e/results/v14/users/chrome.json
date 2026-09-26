@@ -1,0 +1,41 @@
+{
+  "check": "V14-users",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-25T09:31:15.809Z",
+  "other": {
+    "state": "editing",
+    "lock": "held",
+    "recovery": {
+      "status": "none",
+      "record": null,
+      "serverRevision": null,
+      "error": null
+    },
+    "autosave": "idle",
+    "saves": 0,
+    "lastError": null
+  },
+  "same": {
+    "state": "recovery-pending",
+    "lock": "held",
+    "recovery": {
+      "status": "restorable",
+      "record": {
+        "localSeq": 1,
+        "baseRevision": 1,
+        "updatedAt": 1790328668539,
+        "jsonBytes": 5406
+      },
+      "serverRevision": 1,
+      "error": null
+    },
+    "autosave": null,
+    "saves": 0,
+    "lastError": null
+  }
+}

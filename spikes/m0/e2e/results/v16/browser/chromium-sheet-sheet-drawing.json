@@ -1,0 +1,237 @@
+{
+  "check": "V16-browser-save",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T11:35:12.018Z",
+  "saved": {
+    "id": "m0-sheet-drawing",
+    "sheetOrder": [
+      "sheet-1"
+    ],
+    "name": "空白表格",
+    "appVersion": "1.0.0",
+    "locale": "zhCN",
+    "styles": {},
+    "sheets": {
+      "sheet-1": {
+        "id": "sheet-1",
+        "name": "数据",
+        "rowCount": 200,
+        "columnCount": 26,
+        "cellData": {
+          "0": {
+            "0": {
+              "v": "浮动图片与单元格图片",
+              "t": 1
+            }
+          },
+          "2": {
+            "0": {
+              "p": {
+                "id": "d",
+                "locale": "enUS",
+                "title": "",
+                "tableSource": {},
+                "drawings": {
+                  "FOw7YLIOJ_MkagfryCL9G": {
+                    "unitId": "d",
+                    "subUnitId": "d",
+                    "drawingId": "FOw7YLIOJ_MkagfryCL9G",
+                    "drawingType": 0,
+                    "imageSourceType": "URL",
+                    "source": "/fixtures-assets/orange-64x64.png",
+                    "transform": {
+                      "left": 0,
+                      "top": 0,
+                      "width": 41,
+                      "height": 41
+                    },
+                    "docTransform": {
+                      "size": {
+                        "width": 41,
+                        "height": 41
+                      },
+                      "positionH": {
+                        "relativeFrom": 0,
+                        "posOffset": 0
+                      },
+                      "positionV": {
+                        "relativeFrom": 1,
+                        "posOffset": 0
+                      },
+                      "angle": 0
+                    },
+                    "behindDoc": 0,
+                    "title": "",
+                    "description": "",
+                    "layoutType": 0,
+                    "wrapText": 0,
+                    "distB": 0,
+                    "distL": 0,
+                    "distR": 0,
+                    "distT": 0
+                  }
+                },
+                "drawingsOrder": [
+                  "FOw7YLIOJ_MkagfryCL9G"
+                ],
+                "headers": {},
+                "footers": {},
+                "notes": {},
+                "noteSettings": {},
+                "body": {
+                  "dataStream": "\r\b\r\n",
+                  "textRuns": [],
+                  "paragraphs": [
+                    {
+                      "startIndex": 0,
+                      "paragraphId": "para_J3a7Ac-sRqe-",
+                      "paragraphStyle": {
+                        "horizontalAlign": 0
+                      }
+                    },
+                    {
+                      "startIndex": 2,
+                      "paragraphId": "para_p06aVjwr0Zl3"
+                    }
+                  ],
+                  "sectionBreaks": [
+                    {
+                      "sectionId": "section_yLLd9JzwreNk",
+                      "startIndex": 3
+                    }
+                  ],
+                  "customBlocks": [
+                    {
+                      "startIndex": 1,
+                      "blockId": "FOw7YLIOJ_MkagfryCL9G"
+                    }
+                  ],
+                  "customRanges": [],
+                  "customDecorations": []
+                },
+                "documentStyle": {
+                  "pageSize": {
+                    "width": null,
+                    "height": null
+                  },
+                  "documentFlavor": 0,
+                  "marginTop": 0,
+                  "marginBottom": 2,
+                  "marginRight": 2,
+                  "marginLeft": 2,
+                  "autoHyphenation": 1,
+                  "doNotHyphenateCaps": 0,
+                  "consecutiveHyphenLimit": 2,
+                  "defaultHeaderId": "",
+                  "defaultFooterId": "",
+                  "evenPageHeaderId": "",
+                  "evenPageFooterId": "",
+                  "firstPageHeaderId": "",
+                  "firstPageFooterId": "",
+                  "evenAndOddHeaders": 0,
+                  "useFirstPageHeaderFooter": 0,
+                  "marginHeader": 30,
+                  "marginFooter": 30,
+                  "textStyle": {},
+                  "defaultParagraphStyle": {
+                    "horizontalAlign": 0
+                  },
+                  "paragraphLineGapDefault": 0,
+                  "renderConfig": {
+                    "horizontalAlign": 0,
+                    "verticalAlign": 0,
+                    "centerAngle": 0,
+                    "vertexAngle": 0,
+                    "wrapStrategy": 0
+                  }
+                },
+                "settings": {}
+              }
+            }
+          }
+        },
+        "tabColor": "",
+        "hidden": 0,
+        "zoomRatio": 1,
+        "freeze": {
+          "xSplit": 0,
+          "ySplit": 0,
+          "startRow": -1,
+          "startColumn": -1
+        },
+        "scrollTop": 0,
+        "scrollLeft": 0,
+        "defaultColumnWidth": 88,
+        "defaultRowHeight": 24,
+        "mergeData": [],
+        "rowData": {
+          "2": {
+            "ah": 43
+          }
+        },
+        "columnData": {},
+        "showGridlines": 1,
+        "rowHeader": {
+          "width": 46,
+          "hidden": 0
+        },
+        "columnHeader": {
+          "height": 20,
+          "hidden": 0
+        },
+        "rightToLeft": 0
+      }
+    },
+    "resources": [
+      {
+        "name": "SHEET_RANGE_PROTECTION_PLUGIN",
+        "data": ""
+      },
+      {
+        "name": "SHEET_AuthzIoMockService_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_DRAWING_PLUGIN",
+        "data": "{\"sheet-1\":{\"data\":{\"XkgJYJ\":{\"drawingId\":\"XkgJYJ\",\"drawingType\":0,\"imageSourceType\":\"URL\",\"source\":\"/fixtures-assets/blue-120x80.png\",\"unitId\":\"m0-sheet-drawing\",\"subUnitId\":\"sheet-1\",\"column\":2,\"columnOffset\":0,\"row\":2,\"rowOffset\":0,\"width\":120,\"height\":80,\"axisAlignSheetTransform\":{\"flipY\":false,\"flipX\":false,\"angle\":0,\"skewX\":0,\"skewY\":0,\"from\":{\"row\":2,\"rowOffset\":0,\"column\":2,\"columnOffset\":0},\"to\":{\"row\":5,\"rowOffset\":8,\"column\":3,\"columnOffset\":32}},\"sheetTransform\":{\"from\":{\"column\":2,\"columnOffset\":0,\"row\":2,\"rowOffset\":0},\"to\":{\"row\":5,\"rowOffset\":8,\"column\":3,\"columnOffset\":32},\"flipY\":false,\"flipX\":false,\"angle\":0,\"skewX\":0,\"skewY\":0},\"transform\":{\"flipY\":false,\"flipX\":false,\"angle\":0,\"skewX\":0,\"skewY\":0,\"left\":222,\"top\":68,\"width\":120,\"height\":99}}},\"order\":[\"XkgJYJ\"]}}"
+      },
+      {
+        "name": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+        "data": ""
+      },
+      {
+        "name": "SHEET_NOTE_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_DEFINED_NAME_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_RANGE_THEME_MODEL_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_FILTER_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_DATA_VALIDATION_PLUGIN",
+        "data": "{}"
+      }
+    ]
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "check": "V14-locks-steal",
+  "placement": "worker",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-25T09:32:12.269Z",
+  "seqBefore": 1,
+  "lost": {
+    "state": "lost",
+    "ms": 0
+  },
+  "bState": "recovery-pending",
+  "bRecovery": "restorable",
+  "seqAfter": 1,
+  "aAutosave": "stopped",
+  "captureError": "没有文档的锁（lost），不写发件箱",
+  "fenced": "FenceError",
+  "seqFinal": 1,
+  "generations": {
+    "a": 1,
+    "b": 2
+  }
+}

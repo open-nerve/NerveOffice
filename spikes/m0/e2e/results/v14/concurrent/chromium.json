@@ -1,0 +1,20 @@
+{
+  "check": "V14-concurrent",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T09:16:00.562Z",
+  "seqs": [
+    1,
+    2
+  ],
+  "errors": [
+    null,
+    null
+  ],
+  "final": 2,
+  "later": true
+}

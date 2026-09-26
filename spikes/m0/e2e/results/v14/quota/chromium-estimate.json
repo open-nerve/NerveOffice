@@ -1,0 +1,18 @@
+{
+  "check": "V14-quota-estimate",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-26T03:51:03.347Z",
+  "estimate": {
+    "quota": 8589934592,
+    "usage": 0,
+    "usageDetails": {}
+  },
+  "persisted": false,
+  "persist": false,
+  "persistedAfter": false
+}

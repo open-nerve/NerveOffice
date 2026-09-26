@@ -1,0 +1,53 @@
+{
+  "check": "V15-replay",
+  "scenario": "sheet-autoheight",
+  "mode": "plain",
+  "kind": "sheet",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T09:22:57.774Z",
+  "log": {
+    "stats": {
+      "logged": 6,
+      "skipped": {
+        "otherUnit": 2,
+        "onlyLocal": 6
+      },
+      "clone": {
+        "totalMs": 0,
+        "maxMs": 0
+      },
+      "cloneErrors": [],
+      "pending": 0,
+      "flushes": 1,
+      "flush": {
+        "totalMs": 0.5,
+        "maxMs": 0.5
+      },
+      "bytes": 0
+    },
+    "entries": 6,
+    "bytes": 1833,
+    "ids": {
+      "sheet.mutation.set-range-values": 4,
+      "sheet.mutation.set-worksheet-row-auto-height": 2
+    }
+  },
+  "replay": {
+    "executed": 6,
+    "failed": [],
+    "ms": 13.199999928474426,
+    "entries": 6
+  },
+  "known": null,
+  "strict": false,
+  "resolved": true,
+  "diffs": [],
+  "diffCount": 0,
+  "danglingOriginal": [],
+  "danglingReplayed": []
+}

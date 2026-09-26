@@ -1,0 +1,58 @@
+{
+  "check": "V14-midwrite",
+  "browser": {
+    "project": "webkit"
+  },
+  "timestamp": "2026-09-25T10:41:07.586Z",
+  "runs": [
+    {
+      "delay": 0,
+      "first": 1,
+      "status": "restorable",
+      "seq": 1,
+      "error": null
+    },
+    {
+      "delay": 40,
+      "first": 2,
+      "status": "restorable",
+      "seq": 3,
+      "error": null
+    },
+    {
+      "delay": 80,
+      "first": 4,
+      "status": "restorable",
+      "seq": 5,
+      "error": null
+    },
+    {
+      "delay": 120,
+      "first": 6,
+      "status": "restorable",
+      "seq": 7,
+      "error": null
+    },
+    {
+      "delay": 160,
+      "first": 8,
+      "status": "restorable",
+      "seq": 9,
+      "error": null
+    },
+    {
+      "delay": 200,
+      "first": 10,
+      "status": "restorable",
+      "seq": 11,
+      "error": null
+    },
+    {
+      "delay": 260,
+      "first": 12,
+      "status": "restorable",
+      "seq": 13,
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "check": "V14-quota-estimate",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T10:44:27.619Z",
+  "estimate": {
+    "quota": 1048576000,
+    "usage": 0
+  },
+  "persisted": false,
+  "persist": false,
+  "persistedAfter": false
+}

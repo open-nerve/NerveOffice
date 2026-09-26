@@ -1,0 +1,66 @@
+{
+  "check": "V15-replay",
+  "scenario": "sheet-core",
+  "mode": "plain",
+  "kind": "sheet",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T10:44:42.861Z",
+  "log": {
+    "stats": {
+      "logged": 48,
+      "skipped": {
+        "otherUnit": 13,
+        "onlyLocal": 31
+      },
+      "clone": {
+        "totalMs": 0,
+        "maxMs": 0
+      },
+      "cloneErrors": [],
+      "pending": 0,
+      "flushes": 1,
+      "flush": {
+        "totalMs": 27,
+        "maxMs": 27
+      },
+      "bytes": 0
+    },
+    "entries": 48,
+    "bytes": 17457,
+    "ids": {
+      "sheet.mutation.set-range-values": 28,
+      "sheet.mutation.set.numfmt": 4,
+      "formula.mutation.set-defined-name": 1,
+      "sheet.mutation.set-worksheet-row-auto-height": 2,
+      "sheet.mutation.add-worksheet-merge": 1,
+      "sheet.mutation.set-worksheet-col-width": 1,
+      "sheet.mutation.set-worksheet-row-height": 1,
+      "sheet.mutation.set-worksheet-row-is-auto-height": 1,
+      "sheet.mutation.set-row-hidden": 1,
+      "sheet.mutation.set-col-hidden": 1,
+      "sheet.mutation.set-frozen": 2,
+      "sheet.mutation.insert-sheet": 2,
+      "sheet.mutation.set-tab-color": 1,
+      "sheet.mutation.toggle-gridlines": 1,
+      "sheet.mutation.set-worksheet-hidden": 1
+    }
+  },
+  "replay": {
+    "executed": 48,
+    "failed": [],
+    "ms": 25,
+    "entries": 48
+  },
+  "known": null,
+  "strict": false,
+  "resolved": true,
+  "diffs": [],
+  "diffCount": 0,
+  "danglingOriginal": [],
+  "danglingReplayed": []
+}

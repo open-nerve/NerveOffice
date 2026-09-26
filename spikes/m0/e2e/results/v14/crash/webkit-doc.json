@@ -1,0 +1,70 @@
+{
+  "check": "V14-crash",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T10:39:02.182Z",
+  "revision": 1,
+  "opened": {
+    "state": "editing",
+    "lock": "held",
+    "recovery": {
+      "status": "none",
+      "record": null,
+      "serverRevision": null,
+      "error": null
+    },
+    "autosave": "idle",
+    "saves": 0,
+    "lastError": null
+  },
+  "saved": "saved-local",
+  "e2e": [
+    1031
+  ],
+  "killedAfterMs": 50,
+  "killed": 6,
+  "killedProcesses": [
+    "m0-p6-profile-5sRTno",
+    "m0-p6-profile-5sRTno",
+    "com.apple.WebKit.GPU.Development",
+    "com.apple.WebKit.Networking.Development",
+    "com.apple.WebKit.WebContent.Development",
+    "com.apple.WebKit.WebContent.Development"
+  ],
+  "killNote": null,
+  "reopened": {
+    "state": "recovery-pending",
+    "lock": "held",
+    "recovery": {
+      "status": "restorable",
+      "record": {
+        "localSeq": 1,
+        "baseRevision": 1,
+        "updatedAt": 1790332732847,
+        "jsonBytes": 2729
+      },
+      "serverRevision": 1,
+      "error": null
+    },
+    "autosave": null,
+    "saves": 0,
+    "lastError": null
+  },
+  "timings": {
+    "readMs": 0,
+    "decryptMs": 0,
+    "gunzipMs": 1,
+    "parseMs": 0
+  },
+  "restored": {
+    "m1": true,
+    "m2": false,
+    "state": "editing"
+  },
+  "afterRestore": "saved-local",
+  "seqAfter": 2
+}

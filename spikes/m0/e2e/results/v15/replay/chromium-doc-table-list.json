@@ -1,0 +1,49 @@
+{
+  "check": "V15-replay",
+  "scenario": "doc-table-list",
+  "mode": "plain",
+  "kind": "doc",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T09:25:08.592Z",
+  "log": {
+    "stats": {
+      "logged": 14,
+      "skipped": {},
+      "clone": {
+        "totalMs": 0.5000001192092896,
+        "maxMs": 0.10000002384185791
+      },
+      "cloneErrors": [],
+      "pending": 0,
+      "flushes": 3,
+      "flush": {
+        "totalMs": 1.0999999046325684,
+        "maxMs": 0.5
+      },
+      "bytes": 0
+    },
+    "entries": 14,
+    "bytes": 10632,
+    "ids": {
+      "doc.mutation.rich-text-editing": 14
+    }
+  },
+  "replay": {
+    "executed": 14,
+    "failed": [],
+    "ms": 10.199999928474426,
+    "entries": 14
+  },
+  "known": null,
+  "strict": true,
+  "resolved": true,
+  "diffs": [],
+  "diffCount": 0,
+  "danglingOriginal": [],
+  "danglingReplayed": []
+}

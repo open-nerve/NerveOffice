@@ -1,0 +1,19 @@
+{
+  "check": "V14-locks-readonly",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T09:18:04.409Z",
+  "typedWhileBusy": false,
+  "takeover": {
+    "state": "editing",
+    "ms": 3370.3000000715256
+  },
+  "reloads": 1,
+  "hasServer": true,
+  "typedAfter": true,
+  "saved": "saved-local"
+}

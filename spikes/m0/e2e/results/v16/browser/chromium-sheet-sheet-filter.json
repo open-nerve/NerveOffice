@@ -1,0 +1,382 @@
+{
+  "check": "V16-browser-save",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T11:35:21.722Z",
+  "saved": {
+    "id": "m0-sheet-filter",
+    "sheetOrder": [
+      "sheet-1"
+    ],
+    "name": "空白表格",
+    "appVersion": "1.0.0",
+    "locale": "zhCN",
+    "styles": {},
+    "sheets": {
+      "sheet-1": {
+        "id": "sheet-1",
+        "name": "数据",
+        "rowCount": 200,
+        "columnCount": 26,
+        "cellData": {
+          "0": {
+            "0": {
+              "v": "部门",
+              "t": 1
+            },
+            "1": {
+              "v": "姓名",
+              "t": 1
+            },
+            "2": {
+              "v": "金额",
+              "t": 1
+            }
+          },
+          "1": {
+            "0": {
+              "v": "研发",
+              "t": 1
+            },
+            "1": {
+              "v": "员工1",
+              "t": 1
+            },
+            "2": {
+              "v": 100,
+              "t": 2
+            }
+          },
+          "2": {
+            "0": {
+              "v": "市场",
+              "t": 1
+            },
+            "1": {
+              "v": "员工2",
+              "t": 1
+            },
+            "2": {
+              "v": 200,
+              "t": 2
+            }
+          },
+          "3": {
+            "0": {
+              "v": "运营",
+              "t": 1
+            },
+            "1": {
+              "v": "员工3",
+              "t": 1
+            },
+            "2": {
+              "v": 300,
+              "t": 2
+            }
+          },
+          "4": {
+            "0": {
+              "v": "研发",
+              "t": 1
+            },
+            "1": {
+              "v": "员工4",
+              "t": 1
+            },
+            "2": {
+              "v": 400,
+              "t": 2
+            }
+          },
+          "5": {
+            "0": {
+              "v": "市场",
+              "t": 1
+            },
+            "1": {
+              "v": "员工5",
+              "t": 1
+            },
+            "2": {
+              "v": 500,
+              "t": 2
+            }
+          },
+          "6": {
+            "0": {
+              "v": "运营",
+              "t": 1
+            },
+            "1": {
+              "v": "员工6",
+              "t": 1
+            },
+            "2": {
+              "v": 600,
+              "t": 2
+            }
+          },
+          "7": {
+            "0": {
+              "v": "研发",
+              "t": 1
+            },
+            "1": {
+              "v": "员工7",
+              "t": 1
+            },
+            "2": {
+              "v": 700,
+              "t": 2
+            }
+          },
+          "8": {
+            "0": {
+              "v": "市场",
+              "t": 1
+            },
+            "1": {
+              "v": "员工8",
+              "t": 1
+            },
+            "2": {
+              "v": 800,
+              "t": 2
+            }
+          },
+          "9": {
+            "0": {
+              "v": "运营",
+              "t": 1
+            },
+            "1": {
+              "v": "员工9",
+              "t": 1
+            },
+            "2": {
+              "v": 900,
+              "t": 2
+            }
+          },
+          "10": {
+            "0": {
+              "v": "研发",
+              "t": 1
+            },
+            "1": {
+              "v": "员工10",
+              "t": 1
+            },
+            "2": {
+              "v": 1000,
+              "t": 2
+            }
+          },
+          "11": {
+            "0": {
+              "v": "市场",
+              "t": 1
+            },
+            "1": {
+              "v": "员工11",
+              "t": 1
+            },
+            "2": {
+              "v": 1100,
+              "t": 2
+            }
+          },
+          "12": {
+            "0": {
+              "v": "运营",
+              "t": 1
+            },
+            "1": {
+              "v": "员工12",
+              "t": 1
+            },
+            "2": {
+              "v": 1200,
+              "t": 2
+            }
+          },
+          "13": {
+            "0": {
+              "v": "研发",
+              "t": 1
+            },
+            "1": {
+              "v": "员工13",
+              "t": 1
+            },
+            "2": {
+              "v": 1300,
+              "t": 2
+            }
+          },
+          "14": {
+            "0": {
+              "v": "市场",
+              "t": 1
+            },
+            "1": {
+              "v": "员工14",
+              "t": 1
+            },
+            "2": {
+              "v": 1400,
+              "t": 2
+            }
+          },
+          "15": {
+            "0": {
+              "v": "运营",
+              "t": 1
+            },
+            "1": {
+              "v": "员工15",
+              "t": 1
+            },
+            "2": {
+              "v": 1500,
+              "t": 2
+            }
+          },
+          "16": {
+            "0": {
+              "v": "研发",
+              "t": 1
+            },
+            "1": {
+              "v": "员工16",
+              "t": 1
+            },
+            "2": {
+              "v": 1600,
+              "t": 2
+            }
+          },
+          "17": {
+            "0": {
+              "v": "市场",
+              "t": 1
+            },
+            "1": {
+              "v": "员工17",
+              "t": 1
+            },
+            "2": {
+              "v": 1700,
+              "t": 2
+            }
+          },
+          "18": {
+            "0": {
+              "v": "运营",
+              "t": 1
+            },
+            "1": {
+              "v": "员工18",
+              "t": 1
+            },
+            "2": {
+              "v": 1800,
+              "t": 2
+            }
+          },
+          "19": {
+            "0": {
+              "v": "研发",
+              "t": 1
+            },
+            "1": {
+              "v": "员工19",
+              "t": 1
+            },
+            "2": {
+              "v": 1900,
+              "t": 2
+            }
+          }
+        },
+        "tabColor": "",
+        "hidden": 0,
+        "zoomRatio": 1,
+        "freeze": {
+          "xSplit": 0,
+          "ySplit": 0,
+          "startRow": -1,
+          "startColumn": -1
+        },
+        "scrollTop": 0,
+        "scrollLeft": 0,
+        "defaultColumnWidth": 88,
+        "defaultRowHeight": 24,
+        "mergeData": [],
+        "rowData": {},
+        "columnData": {},
+        "showGridlines": 1,
+        "rowHeader": {
+          "width": 46,
+          "hidden": 0
+        },
+        "columnHeader": {
+          "height": 20,
+          "hidden": 0
+        },
+        "rightToLeft": 0
+      }
+    },
+    "resources": [
+      {
+        "name": "SHEET_RANGE_PROTECTION_PLUGIN",
+        "data": ""
+      },
+      {
+        "name": "SHEET_AuthzIoMockService_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_DRAWING_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+        "data": ""
+      },
+      {
+        "name": "SHEET_NOTE_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_DEFINED_NAME_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_RANGE_THEME_MODEL_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_FILTER_PLUGIN",
+        "data": "{\"sheet-1\":{\"ref\":{\"startRow\":0,\"startColumn\":0,\"endRow\":19,\"endColumn\":2,\"rangeType\":0},\"filterColumns\":[{\"colId\":0,\"filters\":{\"filters\":[\"研发\",\"运营\"]}}],\"cachedFilteredOut\":[11,14,17,2,5,8]}}"
+      },
+      {
+        "name": "SHEET_DATA_VALIDATION_PLUGIN",
+        "data": "{}"
+      }
+    ]
+  }
+}

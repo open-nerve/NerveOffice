@@ -1,7 +1,7 @@
 // 内容比较（V06、V07、V09）：判断两份快照的"内容"是否相同。
 // 口径见 Phase 文档 §3.4：以 JSON 文本为准；资源按名称排序并展开、做空值等价归一化；去掉视图状态字段。
 // 不依赖 DOM，页面与 Playwright 脚本都可以用。
-import { isEmptyValue, pruneEmpty } from './resource-guard';
+import { isEmptyValue, pruneEmpty } from './resource-guard.ts';
 
 /** 工作表中的视图状态：不产生 mutation，随下一次真实修改保存（00 号计划书 §7.3）。 */
 export const VIEW_STATE_FIELDS = ['zoomRatio', 'scrollTop', 'scrollLeft'] as const;

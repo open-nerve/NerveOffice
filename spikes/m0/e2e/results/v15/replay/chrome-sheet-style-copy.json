@@ -1,0 +1,83 @@
+{
+  "check": "V15-replay",
+  "scenario": "sheet-style-copy",
+  "mode": "plain",
+  "kind": "sheet",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-25T09:36:20.812Z",
+  "log": {
+    "stats": {
+      "logged": 5,
+      "skipped": {
+        "otherUnit": 3,
+        "onlyLocal": 7
+      },
+      "clone": {
+        "totalMs": 0.20000004768371582,
+        "maxMs": 0.10000002384185791
+      },
+      "cloneErrors": [],
+      "pending": 0,
+      "flushes": 1,
+      "flush": {
+        "totalMs": 0.5,
+        "maxMs": 0.5
+      },
+      "bytes": 0
+    },
+    "entries": 5,
+    "bytes": 2441,
+    "ids": {
+      "sheet.mutation.set-range-values": 4,
+      "sheet.mutation.insert-sheet": 1
+    }
+  },
+  "replay": {
+    "executed": 5,
+    "failed": [],
+    "ms": 4.800000071525574,
+    "entries": 5
+  },
+  "known": "复制工作表的单元格按字符串引用样式 id，重放的实例里没有这些 id",
+  "strict": false,
+  "resolved": false,
+  "diffs": [
+    {
+      "path": "$.sheets.fQdFBIfmJefx7x8g7Wqkj.cellData.0.0.s",
+      "kind": "changed",
+      "before": "{\"bl\":1}",
+      "after": "\"悬空:bt_Wso\""
+    },
+    {
+      "path": "$.sheets.fQdFBIfmJefx7x8g7Wqkj.cellData.0.1.s",
+      "kind": "changed",
+      "before": "{\"bl\":1}",
+      "after": "\"悬空:bt_Wso\""
+    },
+    {
+      "path": "$.sheets.fQdFBIfmJefx7x8g7Wqkj.cellData.0.2.s",
+      "kind": "changed",
+      "before": "{\"bl\":1}",
+      "after": "\"悬空:bt_Wso\""
+    },
+    {
+      "path": "$.sheets.fQdFBIfmJefx7x8g7Wqkj.cellData.1.1.s",
+      "kind": "changed",
+      "before": "{\"bg\":{\"rgb\":\"#fde68a\"}}",
+      "after": "\"悬空:jLoQIo\""
+    }
+  ],
+  "diffCount": 4,
+  "danglingOriginal": [],
+  "danglingReplayed": [
+    "数据 （副本）!R0C0 → bt_Wso",
+    "数据 （副本）!R0C1 → bt_Wso",
+    "数据 （副本）!R0C2 → bt_Wso",
+    "数据 （副本）!R1C1 → jLoQIo"
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "check": "V14-formula-cap",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T10:42:55.428Z",
+  "pendingCapture": true,
+  "history": [
+    {
+      "trigger": "cap",
+      "formulaPending": true
+    }
+  ],
+  "reopened": "restorable",
+  "recordPending": true,
+  "restoreMs": 3949,
+  "idle": "saved-local",
+  "slowCheck": {
+    "checked": 201,
+    "mismatches": 0
+  },
+  "after": {
+    "localSeq": 2,
+    "formulaPending": false
+  }
+}

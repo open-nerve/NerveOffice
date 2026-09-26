@@ -1,0 +1,65 @@
+{
+  "check": "V14-conflict",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T09:16:43.467Z",
+  "conflict": {
+    "state": "recovery-pending",
+    "lock": "held",
+    "recovery": {
+      "status": "conflict",
+      "record": {
+        "localSeq": 1,
+        "baseRevision": 1,
+        "updatedAt": 1790327787906,
+        "jsonBytes": 5406
+      },
+      "serverRevision": 2,
+      "error": null
+    },
+    "autosave": null,
+    "saves": 0,
+    "lastError": null
+  },
+  "restoreError": "不能恢复：conflict",
+  "tampered": {
+    "state": "recovery-pending",
+    "lock": "held",
+    "recovery": {
+      "status": "undecryptable",
+      "record": {
+        "localSeq": 1,
+        "baseRevision": 2,
+        "updatedAt": 1790327787906,
+        "jsonBytes": 5406
+      },
+      "serverRevision": 2,
+      "error": "OperationError"
+    },
+    "autosave": null,
+    "saves": 0,
+    "lastError": null
+  },
+  "revoked": {
+    "state": "recovery-pending",
+    "lock": "held",
+    "recovery": {
+      "status": "revoked",
+      "record": {
+        "localSeq": 1,
+        "baseRevision": 1,
+        "updatedAt": 1790327799825,
+        "jsonBytes": 5406
+      },
+      "serverRevision": 1,
+      "error": "密钥版本 1 → 2"
+    },
+    "autosave": null,
+    "saves": 0,
+    "lastError": null
+  }
+}

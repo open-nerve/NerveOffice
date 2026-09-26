@@ -1,0 +1,288 @@
+{
+  "check": "V14-pipeline",
+  "sample": "doc-doc-1m",
+  "placement": "worker",
+  "browser": {
+    "project": "webkit",
+    "name": "webkit",
+    "version": "26.6",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-26T03:47:59.850Z",
+  "capture": {
+    "default": {
+      "saveMs": {
+        "p50": 3,
+        "p95": 4,
+        "max": 4,
+        "min": 2,
+        "n": 10
+      },
+      "stringifyMs": {
+        "p50": 1,
+        "p95": 2,
+        "max": 2,
+        "min": 1,
+        "n": 10
+      },
+      "encodeMs": {
+        "p50": 1,
+        "p95": 2,
+        "max": 2,
+        "min": 1,
+        "n": 10
+      },
+      "syncMs": {
+        "p50": 6,
+        "p95": 8,
+        "max": 8,
+        "min": 4,
+        "n": 10
+      },
+      "hashMs": {
+        "p50": 1,
+        "p95": 2,
+        "max": 2,
+        "min": 1,
+        "n": 10
+      },
+      "gzipMs": {
+        "p50": 40,
+        "p95": 43,
+        "max": 43,
+        "min": 36,
+        "n": 10
+      },
+      "encryptMs": {
+        "p50": 0,
+        "p95": 1,
+        "max": 1,
+        "min": 0,
+        "n": 10
+      },
+      "putMs": {
+        "p50": 1,
+        "p95": 1,
+        "max": 1,
+        "min": 0,
+        "n": 10
+      },
+      "workerRoundTripMs": {
+        "p50": 42,
+        "p95": 46,
+        "max": 46,
+        "min": 38,
+        "n": 10
+      },
+      "totalMs": {
+        "p50": 49,
+        "p95": 54,
+        "max": 54,
+        "min": 42,
+        "n": 10
+      },
+      "asyncMaxGapMs": {
+        "p50": 9,
+        "p95": 10,
+        "max": 10,
+        "min": 8,
+        "n": 10
+      },
+      "longestTaskMs": null,
+      "jsonBytes": 1016638,
+      "gzipBytes": 442938,
+      "cipherBytes": 442954,
+      "errors": 0
+    },
+    "strict": {
+      "saveMs": {
+        "p50": 3,
+        "p95": 4,
+        "max": 4,
+        "min": 2,
+        "n": 10
+      },
+      "stringifyMs": {
+        "p50": 1,
+        "p95": 2,
+        "max": 2,
+        "min": 1,
+        "n": 10
+      },
+      "encodeMs": {
+        "p50": 1,
+        "p95": 2,
+        "max": 2,
+        "min": 1,
+        "n": 10
+      },
+      "syncMs": {
+        "p50": 5,
+        "p95": 7,
+        "max": 7,
+        "min": 4,
+        "n": 10
+      },
+      "hashMs": {
+        "p50": 1,
+        "p95": 2,
+        "max": 2,
+        "min": 0,
+        "n": 10
+      },
+      "gzipMs": {
+        "p50": 39,
+        "p95": 42,
+        "max": 42,
+        "min": 32,
+        "n": 10
+      },
+      "encryptMs": {
+        "p50": 0,
+        "p95": 1,
+        "max": 1,
+        "min": 0,
+        "n": 10
+      },
+      "putMs": {
+        "p50": 1,
+        "p95": 1,
+        "max": 1,
+        "min": 0,
+        "n": 10
+      },
+      "workerRoundTripMs": {
+        "p50": 42,
+        "p95": 45,
+        "max": 45,
+        "min": 34,
+        "n": 10
+      },
+      "totalMs": {
+        "p50": 47,
+        "p95": 51,
+        "max": 51,
+        "min": 38,
+        "n": 10
+      },
+      "asyncMaxGapMs": {
+        "p50": 9,
+        "p95": 10,
+        "max": 10,
+        "min": 8,
+        "n": 10
+      },
+      "longestTaskMs": null,
+      "jsonBytes": 1016638,
+      "gzipBytes": 442938,
+      "cipherBytes": 442954,
+      "errors": 0
+    }
+  },
+  "recovery": {
+    "readMs": {
+      "p50": 0,
+      "p95": 1,
+      "max": 1,
+      "min": 0,
+      "n": 5
+    },
+    "decryptMs": {
+      "p50": 1,
+      "p95": 1,
+      "max": 1,
+      "min": 0,
+      "n": 5
+    },
+    "gunzipMs": {
+      "p50": 2,
+      "p95": 6,
+      "max": 6,
+      "min": 2,
+      "n": 5
+    },
+    "parseMs": {
+      "p50": 3,
+      "p95": 3,
+      "max": 3,
+      "min": 2,
+      "n": 5
+    }
+  },
+  "e2e": {
+    "runs": [
+      1047,
+      1037,
+      1047,
+      1050,
+      1056
+    ],
+    "p50": 1047,
+    "p95": 1056,
+    "max": 1056,
+    "min": 1037,
+    "n": 5,
+    "detail": [
+      {
+        "e2eMs": 1047,
+        "trigger": "quiet",
+        "formulaPending": false,
+        "skipped": false,
+        "waitMs": 1011,
+        "pipelineMs": 36,
+        "syncMs": 3,
+        "gzipMs": 31,
+        "putMs": 1,
+        "workerRoundTripMs": 33
+      },
+      {
+        "e2eMs": 1037,
+        "trigger": "quiet",
+        "formulaPending": false,
+        "skipped": false,
+        "waitMs": 1004,
+        "pipelineMs": 33,
+        "syncMs": 3,
+        "gzipMs": 28,
+        "putMs": 0,
+        "workerRoundTripMs": 30
+      },
+      {
+        "e2eMs": 1047,
+        "trigger": "quiet",
+        "formulaPending": false,
+        "skipped": false,
+        "waitMs": 1023,
+        "pipelineMs": 24,
+        "syncMs": 2,
+        "gzipMs": 21,
+        "putMs": 1,
+        "workerRoundTripMs": 22
+      },
+      {
+        "e2eMs": 1050,
+        "trigger": "quiet",
+        "formulaPending": false,
+        "skipped": false,
+        "waitMs": 1013,
+        "pipelineMs": 37,
+        "syncMs": 4,
+        "gzipMs": 31,
+        "putMs": 1,
+        "workerRoundTripMs": 33
+      },
+      {
+        "e2eMs": 1056,
+        "trigger": "quiet",
+        "formulaPending": false,
+        "skipped": false,
+        "waitMs": 1016,
+        "pipelineMs": 40,
+        "syncMs": 4,
+        "gzipMs": 33,
+        "putMs": 1,
+        "workerRoundTripMs": 36
+      }
+    ]
+  }
+}

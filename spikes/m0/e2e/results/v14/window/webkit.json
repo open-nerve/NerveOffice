@@ -1,0 +1,62 @@
+{
+  "check": "V14-window",
+  "browser": {
+    "project": "webkit"
+  },
+  "timestamp": "2026-09-25T10:39:56.162Z",
+  "intervalMs": 200,
+  "runs": [
+    {
+      "edits": 16,
+      "editingMs": 3448,
+      "recovered": 14,
+      "lost": 2,
+      "lossMs": 476,
+      "lastRecoveredToKillMs": 685,
+      "contiguous": true,
+      "killNote": null,
+      "history": [
+        {
+          "trigger": "cap",
+          "e2eMs": 49
+        }
+      ]
+    },
+    {
+      "edits": 23,
+      "editingMs": 4888,
+      "recovered": 14,
+      "lost": 9,
+      "lossMs": 2038,
+      "lastRecoveredToKillMs": 2246,
+      "contiguous": true,
+      "killNote": null,
+      "history": [
+        {
+          "trigger": "cap",
+          "e2eMs": 152
+        }
+      ]
+    },
+    {
+      "edits": 30,
+      "editingMs": 6503,
+      "recovered": 28,
+      "lost": 2,
+      "lossMs": 476,
+      "lastRecoveredToKillMs": 712,
+      "contiguous": true,
+      "killNote": null,
+      "history": [
+        {
+          "trigger": "cap",
+          "e2eMs": 176
+        },
+        {
+          "trigger": "cap",
+          "e2eMs": 84
+        }
+      ]
+    }
+  ]
+}

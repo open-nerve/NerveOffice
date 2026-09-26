@@ -1,0 +1,322 @@
+{
+  "check": "V16-browser-save",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T11:35:02.313Z",
+  "saved": {
+    "id": "m0-sheet-cf",
+    "sheetOrder": [
+      "sheet-1"
+    ],
+    "name": "空白表格",
+    "appVersion": "1.0.0",
+    "locale": "zhCN",
+    "styles": {},
+    "sheets": {
+      "sheet-1": {
+        "id": "sheet-1",
+        "name": "数据",
+        "rowCount": 200,
+        "columnCount": 26,
+        "cellData": {
+          "0": {
+            "0": {
+              "v": 1,
+              "t": 2
+            },
+            "1": {
+              "v": 3,
+              "t": 2
+            },
+            "2": {
+              "v": 10,
+              "t": 2
+            },
+            "3": {
+              "v": 0,
+              "t": 2
+            },
+            "4": {
+              "v": "项目0",
+              "t": 1
+            }
+          },
+          "1": {
+            "0": {
+              "v": 2,
+              "t": 2
+            },
+            "1": {
+              "v": 6,
+              "t": 2
+            },
+            "2": {
+              "v": 9,
+              "t": 2
+            },
+            "3": {
+              "v": 1,
+              "t": 2
+            },
+            "4": {
+              "v": "项目1",
+              "t": 1
+            }
+          },
+          "2": {
+            "0": {
+              "v": 3,
+              "t": 2
+            },
+            "1": {
+              "v": 9,
+              "t": 2
+            },
+            "2": {
+              "v": 8,
+              "t": 2
+            },
+            "3": {
+              "v": 2,
+              "t": 2
+            },
+            "4": {
+              "v": "项目2",
+              "t": 1
+            }
+          },
+          "3": {
+            "0": {
+              "v": 4,
+              "t": 2
+            },
+            "1": {
+              "v": 12,
+              "t": 2
+            },
+            "2": {
+              "v": 7,
+              "t": 2
+            },
+            "3": {
+              "v": 3,
+              "t": 2
+            },
+            "4": {
+              "v": "项目0",
+              "t": 1
+            }
+          },
+          "4": {
+            "0": {
+              "v": 5,
+              "t": 2
+            },
+            "1": {
+              "v": 15,
+              "t": 2
+            },
+            "2": {
+              "v": 6,
+              "t": 2
+            },
+            "3": {
+              "v": 0,
+              "t": 2
+            },
+            "4": {
+              "v": "项目1",
+              "t": 1
+            }
+          },
+          "5": {
+            "0": {
+              "v": 6,
+              "t": 2
+            },
+            "1": {
+              "v": 18,
+              "t": 2
+            },
+            "2": {
+              "v": 5,
+              "t": 2
+            },
+            "3": {
+              "v": 1,
+              "t": 2
+            },
+            "4": {
+              "v": "项目2",
+              "t": 1
+            }
+          },
+          "6": {
+            "0": {
+              "v": 7,
+              "t": 2
+            },
+            "1": {
+              "v": 21,
+              "t": 2
+            },
+            "2": {
+              "v": 4,
+              "t": 2
+            },
+            "3": {
+              "v": 2,
+              "t": 2
+            },
+            "4": {
+              "v": "项目0",
+              "t": 1
+            }
+          },
+          "7": {
+            "0": {
+              "v": 8,
+              "t": 2
+            },
+            "1": {
+              "v": 24,
+              "t": 2
+            },
+            "2": {
+              "v": 3,
+              "t": 2
+            },
+            "3": {
+              "v": 3,
+              "t": 2
+            },
+            "4": {
+              "v": "项目1",
+              "t": 1
+            }
+          },
+          "8": {
+            "0": {
+              "v": 9,
+              "t": 2
+            },
+            "1": {
+              "v": 27,
+              "t": 2
+            },
+            "2": {
+              "v": 2,
+              "t": 2
+            },
+            "3": {
+              "v": 0,
+              "t": 2
+            },
+            "4": {
+              "v": "项目2",
+              "t": 1
+            }
+          },
+          "9": {
+            "0": {
+              "v": 10,
+              "t": 2
+            },
+            "1": {
+              "v": 30,
+              "t": 2
+            },
+            "2": {
+              "v": 1,
+              "t": 2
+            },
+            "3": {
+              "v": 1,
+              "t": 2
+            },
+            "4": {
+              "v": "项目0",
+              "t": 1
+            }
+          }
+        },
+        "tabColor": "",
+        "hidden": 0,
+        "zoomRatio": 1,
+        "freeze": {
+          "xSplit": 0,
+          "ySplit": 0,
+          "startRow": -1,
+          "startColumn": -1
+        },
+        "scrollTop": 0,
+        "scrollLeft": 0,
+        "defaultColumnWidth": 88,
+        "defaultRowHeight": 24,
+        "mergeData": [],
+        "rowData": {},
+        "columnData": {},
+        "showGridlines": 1,
+        "rowHeader": {
+          "width": 46,
+          "hidden": 0
+        },
+        "columnHeader": {
+          "height": 20,
+          "hidden": 0
+        },
+        "rightToLeft": 0
+      }
+    },
+    "resources": [
+      {
+        "name": "SHEET_RANGE_PROTECTION_PLUGIN",
+        "data": ""
+      },
+      {
+        "name": "SHEET_AuthzIoMockService_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_WORKSHEET_PROTECTION_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_DRAWING_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_CONDITIONAL_FORMATTING_PLUGIN",
+        "data": "{\"sheet-1\":[{\"rule\":{\"type\":\"highlightCell\",\"subType\":\"duplicateValues\",\"operator\":\"containsText\",\"value\":\"abc\",\"style\":{\"bg\":{\"rgb\":\"rgb(191,219,254)\"}}},\"ranges\":[{\"startRow\":0,\"startColumn\":3,\"endRow\":9,\"endColumn\":3,\"startAbsoluteRefType\":0,\"endAbsoluteRefType\":0,\"rangeType\":0,\"unitId\":\"m0-sheet-cf\",\"sheetId\":\"sheet-1\"}],\"cfId\":\"ojyU3H_U\",\"stopIfTrue\":false},{\"rule\":{\"type\":\"highlightCell\",\"subType\":\"text\",\"operator\":\"containsText\",\"value\":\"1\",\"style\":{\"it\":1}},\"ranges\":[{\"startRow\":0,\"startColumn\":4,\"endRow\":9,\"endColumn\":4,\"startAbsoluteRefType\":0,\"endAbsoluteRefType\":0,\"rangeType\":0,\"unitId\":\"m0-sheet-cf\",\"sheetId\":\"sheet-1\"}],\"cfId\":\"U6xfWZY-\",\"stopIfTrue\":false},{\"rule\":{\"type\":\"highlightCell\",\"subType\":\"formula\",\"operator\":\"containsText\",\"value\":\"=D1>1\",\"style\":{\"cl\":{\"rgb\":\"rgb(124,58,237)\"},\"bl\":1}},\"ranges\":[{\"startRow\":0,\"startColumn\":3,\"endRow\":9,\"endColumn\":3,\"startAbsoluteRefType\":0,\"endAbsoluteRefType\":0,\"rangeType\":0,\"unitId\":\"m0-sheet-cf\",\"sheetId\":\"sheet-1\"}],\"cfId\":\"5p0q2nX3\",\"stopIfTrue\":false},{\"rule\":{\"type\":\"colorScale\",\"config\":[{\"index\":0,\"color\":\"#f87171\",\"value\":{\"type\":\"min\"}},{\"index\":1,\"color\":\"#34d399\",\"value\":{\"type\":\"max\"}}]},\"ranges\":[{\"startRow\":0,\"startColumn\":2,\"endRow\":9,\"endColumn\":2,\"startAbsoluteRefType\":0,\"endAbsoluteRefType\":0,\"rangeType\":0,\"unitId\":\"m0-sheet-cf\",\"sheetId\":\"sheet-1\"}],\"cfId\":\"vbKze3N-\",\"stopIfTrue\":false},{\"rule\":{\"type\":\"dataBar\",\"isShowValue\":false,\"config\":{\"min\":{\"type\":\"min\"},\"max\":{\"type\":\"max\"},\"positiveColor\":\"#22c55e\",\"nativeColor\":\"#ef4444\",\"isGradient\":true}},\"ranges\":[{\"startRow\":0,\"startColumn\":1,\"endRow\":9,\"endColumn\":1,\"startAbsoluteRefType\":0,\"endAbsoluteRefType\":0,\"rangeType\":0,\"unitId\":\"m0-sheet-cf\",\"sheetId\":\"sheet-1\"}],\"cfId\":\"xpEXR8Ax\",\"stopIfTrue\":false},{\"rule\":{\"type\":\"highlightCell\",\"subType\":\"number\",\"operator\":\"greaterThan\",\"value\":5,\"style\":{\"bg\":{\"rgb\":\"rgb(253,230,138)\"}}},\"ranges\":[{\"startRow\":0,\"startColumn\":0,\"endRow\":9,\"endColumn\":0,\"startAbsoluteRefType\":0,\"endAbsoluteRefType\":0,\"rangeType\":0,\"unitId\":\"m0-sheet-cf\",\"sheetId\":\"sheet-1\"}],\"cfId\":\"xLb541Ag\",\"stopIfTrue\":false}]}"
+      },
+      {
+        "name": "SHEET_NOTE_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_DEFINED_NAME_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_RANGE_THEME_MODEL_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_FILTER_PLUGIN",
+        "data": "{}"
+      },
+      {
+        "name": "SHEET_DATA_VALIDATION_PLUGIN",
+        "data": "{\"sheet-1\":[]}"
+      }
+    ]
+  }
+}

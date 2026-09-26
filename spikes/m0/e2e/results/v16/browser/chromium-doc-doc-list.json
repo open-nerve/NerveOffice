@@ -1,0 +1,154 @@
+{
+  "check": "V16-browser-save",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T11:35:55.280Z",
+  "saved": {
+    "id": "m0-doc-list",
+    "locale": "zhCN",
+    "title": "空白文字文档",
+    "tableSource": {},
+    "drawings": {},
+    "drawingsOrder": [],
+    "headers": {},
+    "footers": {},
+    "notes": {},
+    "noteSettings": {},
+    "body": {
+      "dataStream": "列表样本\r\r无序列表第一项\r无序列表嵌套项\r有序列表第一项\r有序列表第二项\r待办：未完成\r待办：已完成\r\r\n",
+      "customBlocks": [],
+      "customRanges": [],
+      "paragraphs": [
+        {
+          "startIndex": 4,
+          "paragraphId": "para_WHxfbJHLgDkn"
+        },
+        {
+          "startIndex": 5,
+          "paragraphId": "para_I7XXK6EIVKyc"
+        },
+        {
+          "startIndex": 13,
+          "paragraphId": "para_bdR3xmQm8LU-",
+          "bullet": {
+            "listId": "bullets",
+            "listType": "BULLET_LIST",
+            "nestingLevel": 0
+          }
+        },
+        {
+          "startIndex": 21,
+          "paragraphId": "para_qltFKwX0b5lb",
+          "bullet": {
+            "listId": "bullets",
+            "listType": "BULLET_LIST",
+            "nestingLevel": 1
+          }
+        },
+        {
+          "startIndex": 29,
+          "paragraphId": "para_iOwmkVQ1EMCz",
+          "bullet": {
+            "listId": "ordered",
+            "listType": "ORDER_LIST",
+            "nestingLevel": 0
+          }
+        },
+        {
+          "startIndex": 37,
+          "paragraphId": "para_99Dc_mfkbVJ8",
+          "bullet": {
+            "listId": "ordered",
+            "listType": "ORDER_LIST",
+            "nestingLevel": 0
+          }
+        },
+        {
+          "startIndex": 44,
+          "paragraphId": "para_Rg7Hmc_Os_b0",
+          "bullet": {
+            "listId": "todo",
+            "listType": "CHECK_LIST",
+            "nestingLevel": 0
+          }
+        },
+        {
+          "startIndex": 51,
+          "paragraphId": "para_J9mbyaI-F0uD",
+          "bullet": {
+            "listId": "todo",
+            "listType": "CHECK_LIST_CHECKED",
+            "nestingLevel": 0
+          }
+        },
+        {
+          "startIndex": 52,
+          "paragraphId": "para_H3KgtDX3BGjG"
+        }
+      ],
+      "textRuns": [],
+      "tables": [],
+      "sectionBreaks": [],
+      "customDecorations": []
+    },
+    "documentStyle": {
+      "pageSize": {
+        "width": 793.7,
+        "height": 1122.5
+      },
+      "documentFlavor": 2,
+      "marginTop": 50,
+      "marginBottom": 50,
+      "marginRight": 50,
+      "marginLeft": 50,
+      "autoHyphenation": 1,
+      "doNotHyphenateCaps": 0,
+      "consecutiveHyphenLimit": 2,
+      "defaultHeaderId": "",
+      "defaultFooterId": "",
+      "evenPageHeaderId": "",
+      "evenPageFooterId": "",
+      "firstPageHeaderId": "",
+      "firstPageFooterId": "",
+      "evenAndOddHeaders": 0,
+      "useFirstPageHeaderFooter": 0,
+      "marginHeader": 30,
+      "marginFooter": 30,
+      "renderConfig": {
+        "zeroWidthParagraphBreak": 0,
+        "vertexAngle": 0,
+        "centerAngle": 0,
+        "background": {
+          "rgb": "#ccc"
+        }
+      }
+    },
+    "settings": {},
+    "resources": [
+      {
+        "name": "DOC_OBJECT_PERMISSION_PLUGIN",
+        "data": "[]"
+      },
+      {
+        "name": "DOC_WORD_STYLES_PLUGIN",
+        "data": ""
+      },
+      {
+        "name": "DOC_NOTE_PLUGIN",
+        "data": ""
+      },
+      {
+        "name": "DOC_DRAWING_PLUGIN",
+        "data": "{\"data\":{},\"order\":[]}"
+      },
+      {
+        "name": "DOC_HYPER_LINK_PLUGIN",
+        "data": "{\"links\":[]}"
+      }
+    ]
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "check": "V14-window",
+  "browser": {
+    "project": "chrome"
+  },
+  "timestamp": "2026-09-25T09:27:44.289Z",
+  "intervalMs": 200,
+  "runs": [
+    {
+      "edits": 16,
+      "editingMs": 3136,
+      "recovered": 15,
+      "lost": 1,
+      "lossMs": 204,
+      "lastRecoveredToKillMs": 410,
+      "contiguous": true,
+      "killNote": null,
+      "history": [
+        {
+          "trigger": "cap",
+          "e2eMs": 124
+        }
+      ]
+    },
+    {
+      "edits": 23,
+      "editingMs": 4651,
+      "recovered": 15,
+      "lost": 8,
+      "lossMs": 1682,
+      "lastRecoveredToKillMs": 1889,
+      "contiguous": true,
+      "killNote": null,
+      "history": [
+        {
+          "trigger": "cap",
+          "e2eMs": 62
+        }
+      ]
+    },
+    {
+      "edits": 30,
+      "editingMs": 6087,
+      "recovered": 30,
+      "lost": 0,
+      "lossMs": 0,
+      "lastRecoveredToKillMs": 204,
+      "contiguous": true,
+      "killNote": null,
+      "history": [
+        {
+          "trigger": "cap",
+          "e2eMs": 107
+        },
+        {
+          "trigger": "cap",
+          "e2eMs": 112
+        }
+      ]
+    }
+  ]
+}

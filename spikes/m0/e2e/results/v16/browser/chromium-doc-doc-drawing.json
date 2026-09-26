@@ -1,0 +1,185 @@
+{
+  "check": "V16-browser-save",
+  "browser": {
+    "project": "chromium",
+    "name": "chromium",
+    "version": "153.0.8010.12",
+    "channel": "bundled"
+  },
+  "timestamp": "2026-09-25T11:35:45.796Z",
+  "saved": {
+    "id": "m0-doc-drawing",
+    "locale": "zhCN",
+    "title": "空白文字文档",
+    "tableSource": {},
+    "drawings": {
+      "P50xsz": {
+        "unitId": "m0-doc-drawing",
+        "subUnitId": "m0-doc-drawing",
+        "drawingId": "P50xsz",
+        "drawingType": 0,
+        "imageSourceType": "URL",
+        "source": "/fixtures-assets/blue-120x80.png",
+        "transform": {
+          "left": 0,
+          "top": 0,
+          "width": 120,
+          "height": 80
+        },
+        "docTransform": {
+          "size": {
+            "width": 120,
+            "height": 80
+          },
+          "positionH": {
+            "relativeFrom": 0,
+            "posOffset": 0
+          },
+          "positionV": {
+            "relativeFrom": 1,
+            "posOffset": 0
+          },
+          "angle": 0
+        },
+        "behindDoc": 0,
+        "title": "",
+        "description": "",
+        "layoutType": 0,
+        "wrapText": 0,
+        "distB": 0,
+        "distL": 0,
+        "distR": 0,
+        "distT": 0
+      },
+      "CjkBvc": {
+        "unitId": "m0-doc-drawing",
+        "subUnitId": "m0-doc-drawing",
+        "drawingId": "CjkBvc",
+        "drawingType": 0,
+        "imageSourceType": "URL",
+        "source": "/fixtures-assets/orange-64x64.png",
+        "transform": {
+          "left": 0,
+          "top": 0,
+          "width": 64,
+          "height": 64
+        },
+        "docTransform": {
+          "size": {
+            "width": 64,
+            "height": 64
+          },
+          "positionH": {
+            "relativeFrom": 0,
+            "posOffset": 0
+          },
+          "positionV": {
+            "relativeFrom": 1,
+            "posOffset": 0
+          },
+          "angle": 0
+        },
+        "behindDoc": 0,
+        "title": "",
+        "description": "",
+        "layoutType": 3,
+        "wrapText": 0,
+        "distB": 0,
+        "distL": 0,
+        "distR": 0,
+        "distT": 0
+      }
+    },
+    "drawingsOrder": [
+      "P50xsz",
+      "CjkBvc"
+    ],
+    "headers": {},
+    "footers": {},
+    "notes": {},
+    "noteSettings": {},
+    "body": {
+      "dataStream": "图片样本：一张内联图片、一张四周环绕的浮动图片。\r\b\b\r\n",
+      "customBlocks": [
+        {
+          "startIndex": 25,
+          "blockId": "P50xsz"
+        },
+        {
+          "startIndex": 26,
+          "blockId": "CjkBvc"
+        }
+      ],
+      "customRanges": [],
+      "paragraphs": [
+        {
+          "startIndex": 24,
+          "paragraphId": "para_X7uFJqlvHvA8"
+        },
+        {
+          "startIndex": 27,
+          "paragraphId": "para_Jq1wkcMBUvzH"
+        }
+      ],
+      "textRuns": [],
+      "tables": [],
+      "sectionBreaks": [],
+      "customDecorations": []
+    },
+    "documentStyle": {
+      "pageSize": {
+        "width": 793.7,
+        "height": 1122.5
+      },
+      "documentFlavor": 2,
+      "marginTop": 50,
+      "marginBottom": 50,
+      "marginRight": 50,
+      "marginLeft": 50,
+      "autoHyphenation": 1,
+      "doNotHyphenateCaps": 0,
+      "consecutiveHyphenLimit": 2,
+      "defaultHeaderId": "",
+      "defaultFooterId": "",
+      "evenPageHeaderId": "",
+      "evenPageFooterId": "",
+      "firstPageHeaderId": "",
+      "firstPageFooterId": "",
+      "evenAndOddHeaders": 0,
+      "useFirstPageHeaderFooter": 0,
+      "marginHeader": 30,
+      "marginFooter": 30,
+      "renderConfig": {
+        "zeroWidthParagraphBreak": 0,
+        "vertexAngle": 0,
+        "centerAngle": 0,
+        "background": {
+          "rgb": "#ccc"
+        }
+      }
+    },
+    "settings": {},
+    "resources": [
+      {
+        "name": "DOC_OBJECT_PERMISSION_PLUGIN",
+        "data": "[]"
+      },
+      {
+        "name": "DOC_WORD_STYLES_PLUGIN",
+        "data": ""
+      },
+      {
+        "name": "DOC_NOTE_PLUGIN",
+        "data": ""
+      },
+      {
+        "name": "DOC_DRAWING_PLUGIN",
+        "data": "{\"data\":{\"P50xsz\":{\"unitId\":\"m0-doc-drawing\",\"subUnitId\":\"m0-doc-drawing\",\"drawingId\":\"P50xsz\",\"drawingType\":0,\"imageSourceType\":\"URL\",\"source\":\"/fixtures-assets/blue-120x80.png\",\"transform\":{\"left\":0,\"top\":0,\"width\":120,\"height\":80},\"docTransform\":{\"size\":{\"width\":120,\"height\":80},\"positionH\":{\"relativeFrom\":0,\"posOffset\":0},\"positionV\":{\"relativeFrom\":1,\"posOffset\":0},\"angle\":0},\"behindDoc\":0,\"title\":\"\",\"description\":\"\",\"layoutType\":0,\"wrapText\":0,\"distB\":0,\"distL\":0,\"distR\":0,\"distT\":0},\"CjkBvc\":{\"unitId\":\"m0-doc-drawing\",\"subUnitId\":\"m0-doc-drawing\",\"drawingId\":\"CjkBvc\",\"drawingType\":0,\"imageSourceType\":\"URL\",\"source\":\"/fixtures-assets/orange-64x64.png\",\"transform\":{\"left\":0,\"top\":0,\"width\":64,\"height\":64},\"docTransform\":{\"size\":{\"width\":64,\"height\":64},\"positionH\":{\"relativeFrom\":0,\"posOffset\":0},\"positionV\":{\"relativeFrom\":1,\"posOffset\":0},\"angle\":0},\"behindDoc\":0,\"title\":\"\",\"description\":\"\",\"layoutType\":3,\"wrapText\":0,\"distB\":0,\"distL\":0,\"distR\":0,\"distT\":0}},\"order\":[\"P50xsz\",\"CjkBvc\"]}"
+      },
+      {
+        "name": "DOC_HYPER_LINK_PLUGIN",
+        "data": "{\"links\":[]}"
+      }
+    ]
+  }
+}

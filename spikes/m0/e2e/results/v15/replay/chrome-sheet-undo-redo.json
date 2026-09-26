@@ -1,0 +1,52 @@
+{
+  "check": "V15-replay",
+  "scenario": "sheet-undo-redo",
+  "mode": "plain",
+  "kind": "sheet",
+  "browser": {
+    "project": "chrome",
+    "name": "chromium",
+    "version": "153.0.8010.53",
+    "channel": "chrome"
+  },
+  "timestamp": "2026-09-25T09:37:48.223Z",
+  "log": {
+    "stats": {
+      "logged": 7,
+      "skipped": {
+        "otherUnit": 2,
+        "onlyLocal": 6
+      },
+      "clone": {
+        "totalMs": 0,
+        "maxMs": 0
+      },
+      "cloneErrors": [],
+      "pending": 0,
+      "flushes": 1,
+      "flush": {
+        "totalMs": 0.6999999284744263,
+        "maxMs": 0.6999999284744263
+      },
+      "bytes": 0
+    },
+    "entries": 7,
+    "bytes": 2109,
+    "ids": {
+      "sheet.mutation.set-range-values": 7
+    }
+  },
+  "replay": {
+    "executed": 7,
+    "failed": [],
+    "ms": 3,
+    "entries": 7
+  },
+  "known": null,
+  "strict": false,
+  "resolved": true,
+  "diffs": [],
+  "diffCount": 0,
+  "danglingOriginal": [],
+  "danglingReplayed": []
+}
