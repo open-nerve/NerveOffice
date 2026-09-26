@@ -1,6 +1,6 @@
 import type { ArtifactPolicy } from './artifacts.ts'
 import { describe, expect, it } from 'vitest'
-import { checkFileTypes, classifyArtifact, scanArtifacts } from './artifacts.ts'
+import { checkFileTypes, checkTestOnlyArtifacts, classifyArtifact, scanArtifacts } from './artifacts.ts'
 import { ARTIFACT_POLICY } from './policy.ts'
 
 const policy: ArtifactPolicy = { ...ARTIFACT_POLICY, allowedHosts: { 'www.w3.org': 'SVG 命名空间' }, globalThisProbeMax: 1 }
@@ -108,5 +108,13 @@ describe('US-M1-11 A01 产物的文件类型', () => {
     expect(classifyArtifact('THIRD-PARTY-LICENSES.md')).toBe('metadata')
     expect(classifyArtifact('.vite/manifest.json')).toBe('metadata')
     expect(classifyArtifact('config.json')).toBe('text')
+  })
+})
+
+describe('US-M1-09 生产构建里没有测试构建的文件', () => {
+  it('CSP 探针的页面与 Worker 出现在生产构建里即违规', () => {
+    expect(checkTestOnlyArtifacts(['index.html', 'assets/index-abc.js']).map(v => v.subject)).toEqual([])
+    expect(checkTestOnlyArtifacts(['csp-probe.html', 'assets/csp-probe-B7Lc.js', 'assets/probe-worker-CtLd.js', 'assets/index-abc.js']).map(v => v.subject))
+      .toEqual(['csp-probe.html', 'assets/csp-probe-B7Lc.js', 'assets/probe-worker-CtLd.js'])
   })
 })

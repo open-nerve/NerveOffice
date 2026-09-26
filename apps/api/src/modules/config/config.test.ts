@@ -44,6 +44,7 @@ describe('loadConfig', () => {
       },
       session: { idleTimeoutMinutes: 720, absoluteTimeoutMinutes: 10_080 },
       login: { maxFailures: 5, ipMaxFailures: 50, windowMinutes: 15, lockoutMinutes: 15 },
+      web: { root: undefined },
       shutdown: { timeoutMs: 8_000 },
       log: { level: 'info' },
       password: { argon2: { memoryKib: 19_456, iterations: 2, parallelism: 1 } },
@@ -78,6 +79,7 @@ describe('loadConfig', () => {
       NERVE_LOGIN_IP_MAX_FAILURES: '1000',
       NERVE_LOGIN_WINDOW_MINUTES: '10',
       NERVE_LOGIN_LOCKOUT_MINUTES: '20',
+      NERVE_WEB_ROOT: '/srv/nerve-office/web',
     })
     const { url, ...database } = config.database
     expect(url.reveal()).toBe('postgresql://u:p@127.0.0.1:5432/db')
@@ -104,6 +106,7 @@ describe('loadConfig', () => {
     expect(config.password.argon2).toEqual({ memoryKib: 47_104, iterations: 1, parallelism: 2 })
     expect(config.session).toEqual({ idleTimeoutMinutes: 30, absoluteTimeoutMinutes: 600 })
     expect(config.login).toEqual({ maxFailures: 3, ipMaxFailures: 1_000, windowMinutes: 10, lockoutMinutes: 20 })
+    expect(config.web.root).toBe('/srv/nerve-office/web')
   })
 
   it('缺少必填项时失败', () => {
@@ -156,6 +159,7 @@ describe('loadConfig', () => {
     ['NERVE_HTTP_JSON_BODY_LIMIT_BYTES', '10'],
     ['NERVE_DATABASE_URL', 'not a url'],
     ['NERVE_HTTP_HOST', '   '],
+    ['NERVE_WEB_ROOT', 'apps/web/dist'],
   ])('拒绝超出范围或格式不对的取值：%s=%s', (variable, value) => {
     const env = { ...REQUIRED, [variable]: value }
     expect(issuesOf(() => loadConfig(env)).map(issue => issue.variable)).toEqual([variable])

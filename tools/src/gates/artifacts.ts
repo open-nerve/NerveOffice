@@ -149,6 +149,18 @@ export function classifyArtifact(path: string): ArtifactKind {
   return 'unknown'
 }
 
+/**
+ * 只属于测试构建的文件（vite build --mode e2e）：CSP 阳性对照的页面与 Worker（P3 设计 §3.9）。
+ * 它们故意尝试 eval 与跨源请求，不能出现在生产构建里。
+ */
+export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^csp-probe\.html$/, /^assets\/(?:csp-probe|probe-worker)-[^/]*$/]
+
+export function checkTestOnlyArtifacts(paths: readonly string[]): Violation[] {
+  return paths
+    .filter(path => TEST_ONLY_ARTIFACTS.some(pattern => pattern.test(path)))
+    .map(path => ({ rule: 'artifacts/test-only', subject: path, detail: '生产构建里出现了只属于测试构建的文件（CSP 探针）：检查 vite.config.ts 的构建入口' }))
+}
+
 /** 出现未登记的文件类型即违规，免得绕过扫描。 */
 export function checkFileTypes(paths: readonly string[]): Violation[] {
   return paths

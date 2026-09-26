@@ -10,7 +10,7 @@ import { gzipSync } from 'node:zlib'
 import { z } from 'zod'
 import { commandJson, packageName, readJson, readText, readWorkspaceConfig, REPO_ROOT, workspacePackageDirs } from '../shared/repo.ts'
 import { checkStories, parseDesignStoryIds, parseRegistry, testsFromPlaywrightList, testsFromVitestList } from '../stories/stories.ts'
-import { checkFileTypes, classifyArtifact, scanArtifacts } from './artifacts.ts'
+import { checkFileTypes, checkTestOnlyArtifacts, classifyArtifact, scanArtifacts } from './artifacts.ts'
 import { checkAudit } from './audit.ts'
 import { checkBudgets, viteManifestSchema } from './budgets.ts'
 import { checkGraphComplete, checkSingletons, checkUniver, collectInstalled } from './dependency-graph.ts'
@@ -145,7 +145,7 @@ export function artifactsGate(distDir: string): GateOutcome {
   return {
     name: 'artifacts',
     title,
-    violations: [...checkFileTypes(files), ...violations, ...bundleViolations],
+    violations: [...checkFileTypes(files), ...checkTestOnlyArtifacts(files), ...violations, ...bundleViolations],
     notes: [`${files.length} 个文件，扫描其中 ${textFiles.length} 个；出现的主机：${hostSummary}；打进产物的第三方包 ${bundle?.length ?? 0} 个`],
   }
 }

@@ -3,6 +3,7 @@
 // api 里只有这个模块读取 process.env（lint 强制）。
 import { readFileSync } from 'node:fs'
 import { isIP } from 'node:net'
+import { isAbsolute } from 'node:path'
 import process from 'node:process'
 import { z } from 'zod'
 import { Secret } from '../../shared/secret.ts'
@@ -58,6 +59,10 @@ export interface AppConfig {
     readonly ipMaxFailures: number
     readonly windowMinutes: number
     readonly lockoutMinutes: number
+  }
+  readonly web: {
+    /** 前端构建目录的绝对路径；不设时不托管前端（开发时由 Vite 开发服务器提供，P3 设计 §3.8） */
+    readonly root: string | undefined
   }
   readonly shutdown: { readonly timeoutMs: number }
   readonly log: { readonly level: LogLevel }
@@ -159,6 +164,7 @@ const environmentSchema = z.object({
   NERVE_HTTP_HEADERS_TIMEOUT_MS: integer(1_000, 600_000).default(20_000),
   NERVE_HTTP_KEEP_ALIVE_TIMEOUT_MS: integer(1_000, 600_000).default(5_000),
   NERVE_TRUST_PROXY: trustProxy.optional(),
+  NERVE_WEB_ROOT: text().refine(isAbsolute, '必须是绝对路径').optional(),
   NERVE_SESSION_IDLE_TIMEOUT_MINUTES: integer(5, 43_200).default(720),
   NERVE_SESSION_ABSOLUTE_TIMEOUT_MINUTES: integer(5, 525_600).default(10_080),
   NERVE_LOGIN_MAX_FAILURES: integer(1, 100).default(5),
@@ -216,6 +222,7 @@ function toAppConfig(env: Environment): AppConfig {
       windowMinutes: env.NERVE_LOGIN_WINDOW_MINUTES,
       lockoutMinutes: env.NERVE_LOGIN_LOCKOUT_MINUTES,
     },
+    web: { root: env.NERVE_WEB_ROOT },
     shutdown: { timeoutMs: env.NERVE_SHUTDOWN_TIMEOUT_MS },
     log: { level: env.NERVE_LOG_LEVEL },
     password: {

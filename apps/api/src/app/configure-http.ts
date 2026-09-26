@@ -6,6 +6,7 @@ import type { InFlightRequests } from './in-flight-requests.ts'
 import { StandardSchemaValidationPipe } from '@nestjs/common'
 import { createHttpLogger } from '../modules/logging/index.ts'
 import { jsonBody, securityHeaders } from '../modules/security/index.ts'
+import { notFoundOutsideApi, webHosting } from '../modules/web-hosting/index.ts'
 import { HttpErrorFilter } from './error-filter.ts'
 import { validationError } from './validation.ts'
 
@@ -28,6 +29,11 @@ export function configureHttp(app: NestExpressApplication, config: AppConfig, pi
   app.use(createHttpLogger(pipeline.rootLogger))
   app.use(pipeline.requestContext.middleware())
   app.use(securityHeaders())
+  // 托管前端产物（配置了才托管）：在安全响应头之后，页面与 Worker 脚本同样带 CSP；只处理 GET、HEAD 与 /api 以外的地址
+  if (config.web.root !== undefined)
+    app.use(webHosting(config.web.root))
+  // 其余不属于 /api 的请求：统一的 404 错误响应（Nest 的路由只在 /api 下）
+  app.use(notFoundOutsideApi())
   app.use(jsonBody(config.http.jsonBodyLimitBytes))
   app.setGlobalPrefix('api')
   app.useGlobalInterceptors(pipeline.inFlight.interceptor())

@@ -35,7 +35,9 @@ const BUILD_AND_E2E: readonly Step[] = [
   { id: 'clean', command: ['pnpm', 'clean'] },
   { id: 'build', command: ['pnpm', 'build'] },
   { id: 'artifact-gates', command: ['node', 'tools/src/gates/cli.ts', 'deps', 'licenses', 'artifacts', 'budgets'] },
-  // 构建已经在上一步完成，这里直接跑 Playwright
+  // E2E 测的是测试构建：生产构建加上 CSP 探针（P3 设计 §3.9），输出到 dist-e2e，不影响上一步检查的生产构建
+  { id: 'build-e2e', command: ['pnpm', '--filter', '@nerve-office/web', 'run', 'build:e2e'] },
+  // 后端已经在 build 一步构建；E2E 的服务脚本自己建库、迁移、初始化管理员
   { id: 'e2e', command: ['pnpm', '--filter', '@nerve-office/e2e', 'exec', 'playwright', 'test'] },
 ]
 const AUDIT: Step = { id: 'audit', command: ['node', 'tools/src/gates/cli.ts', 'audit'] }

@@ -18,6 +18,7 @@ describe('planSteps', () => {
       'clean',
       'build',
       'artifact-gates',
+      'build-e2e',
       'e2e',
     ])
     expect(steps.find(s => s.id === 'tests')?.command).toEqual(['pnpm', 'test:coverage'])
@@ -36,6 +37,7 @@ describe('planSteps', () => {
       'clean',
       'build',
       'artifact-gates',
+      'build-e2e',
       'e2e',
       'audit',
     ])

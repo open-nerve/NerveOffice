@@ -5,5 +5,5 @@
     "types": ["node"],
     "erasableSyntaxOnly": true
   },
-  "include": ["specs", "playwright.config.ts"]
+  "include": ["specs", "support", "playwright.config.ts"]
 }
