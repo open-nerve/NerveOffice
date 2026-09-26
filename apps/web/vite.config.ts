@@ -23,7 +23,10 @@ export default defineConfig(({ mode }) => {
       // 构建清单供产物检查与体积统计使用
       manifest: true,
       sourcemap: false,
-      rollupOptions: testBuild ? { input: { index: resolve(import.meta.dirname, 'index.html'), ...TEST_ONLY_INPUTS } } : undefined,
+      // 不注入 modulepreload 的补丁：目标浏览器（桌面 Chrome、Edge 的当前与前一个主要版本，Safari 的当前主要版本）都原生支持。
+      // 补丁在生产构建里内联进入口块，在测试构建（两个入口）里拆成共用的块，E2E 测的入口块就与生产的不一样了（审查 B19）
+      modulePreload: { polyfill: false },
+      rolldownOptions: testBuild ? { input: { index: resolve(import.meta.dirname, 'index.html'), ...TEST_ONLY_INPUTS } } : undefined,
     },
     worker: { format: 'es' as const, plugins: () => [licenses.collect()] },
     // 开发时 /api 代理到 pnpm dev:api；浏览器的 Origin 是开发服务器的地址，与 .env.development 的 NERVE_PUBLIC_ORIGIN 相同

@@ -52,6 +52,16 @@ export async function createDocument(owner: TestUser, title: string): Promise<st
   })
 }
 
+/** 一次写入 count 份文档，标题为"<前缀> 1"…"<前缀> count"（需要"加载更多"的用例：超过一页） */
+export async function createDocuments(owner: TestUser, titlePrefix: string, count: number): Promise<void> {
+  await withDatabase(async (client) => {
+    await client.query(
+      'INSERT INTO documents (space_id, type, title, created_by) SELECT $1, \'sheet\', $2 || \' \' || n, $3 FROM generate_series(1, $4::int) AS n',
+      [owner.personalSpaceId, titlePrefix, owner.id, count],
+    )
+  })
+}
+
 /** 让这个人的全部会话过期（模拟空闲过期） */
 export async function expireSessions(user: TestUser): Promise<void> {
   await withDatabase(async (client) => {

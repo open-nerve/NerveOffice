@@ -7,10 +7,13 @@ import { Button } from '../../shared/ui/index.ts'
 export function ErrorPage() {
   const error = describeError(useRouteError())
   return (
-    <main className="mx-auto flex max-w-md flex-col items-start gap-3 p-6" role="alert">
-      <h1 className="text-xl font-semibold">{messages.errorPage.title}</h1>
-      <p className="text-muted-foreground">{messages.errorPage.description}</p>
-      {error.requestId !== undefined && <p className="text-xs text-muted-foreground">{messages.common.requestId(error.requestId)}</p>}
+    // role="alert" 放在内层：放在 main 上会把 main 地标的角色覆盖掉（审查 B15）
+    <main className="mx-auto flex max-w-md flex-col items-start gap-3 p-6">
+      <div role="alert" className="flex flex-col items-start gap-3">
+        <h1 className="text-xl font-semibold">{messages.errorPage.title}</h1>
+        <p className="text-muted-foreground">{messages.errorPage.description}</p>
+        {error.requestId !== undefined && <p className="text-xs text-muted-foreground">{messages.common.requestId(error.requestId)}</p>}
+      </div>
       <Button onClick={() => window.location.reload()}>{messages.errorPage.reload}</Button>
     </main>
   )

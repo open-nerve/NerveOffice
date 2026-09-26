@@ -104,6 +104,11 @@ export function isAuthenticationError(error: unknown): error is ApiError {
   return error instanceof ApiError && (error.code === 'UNAUTHENTICATED' || error.code === 'SESSION_EXPIRED')
 }
 
+/** CSRF 令牌不对：页面拿着的会话已经过时（例如别的标签页换了人登录），要重新确认会话。 */
+export function isCsrfTokenError(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.code === 'CSRF_TOKEN_INVALID'
+}
+
 /** 可以自动重试的失败：网络问题与服务端的临时错误。其他错误重试也没用。 */
 export function isTransientError(error: unknown): boolean {
   return error instanceof NetworkError || (error instanceof ApiError && error.status >= 500)
