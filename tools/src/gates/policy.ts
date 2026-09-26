@@ -1,3 +1,4 @@
+import type { ArtifactPolicy } from './artifacts.ts'
 import type { EntryBudget } from './budgets.ts'
 // 门禁的策略数据（规范 §3，00 号计划书 §3.3）。每一项的新增与放宽都要写明原因，经代码审查。
 
@@ -46,7 +47,7 @@ export const SINGLETON_PACKAGES: readonly string[] = [
 ]
 
 /** 产物扫描（00 号计划书 §3.3、§11.3）。 */
-export const ARTIFACT_POLICY = {
+export const ARTIFACT_POLICY: ArtifactPolicy = {
   /** 产物中允许出现的绝对地址的主机：它们只是字符串，不会被请求。 */
   allowedHosts: {
     'react.dev': 'React 错误信息里的文档链接',
@@ -56,23 +57,33 @@ export const ARTIFACT_POLICY = {
     'localhost': 'React Router 解析相对地址时用的基准（new URL(path, "http://localhost")），不发请求',
     'json-schema.org': 'zod 生成 JSON Schema 时写进 $schema 的标识，不发请求',
     'tailwindcss.com': 'Tailwind CSS 在样式文件开头的许可注释',
-  } as Readonly<Record<string, string>>,
+  },
   /**
    * `Function('return this')()` 这类全局对象探测的次数上限。
    * M0 在 Univer 的产物里见过 3 处（lodash），运行时会被短路（M0-P1 报告 §2）。
    */
   globalThisProbeMax: 3,
-  /** 已登记的能力探测：形如动态代码，但不执行任何代码（P3 设计 §3.7） */
-  knownProbes: [
+  /**
+   * 已登记的动态代码（P3 设计 §3.7，审查 B3）：都来自 zod 4 的 JIT。
+   * zod 在创建对象结构时读取 jitless；前端入口第一个引入的模块就设置 jitless（ADR-008），在任何结构创建之前，
+   * 所以探测与编译器都执行不到。万一执行，CSP 里没有 'unsafe-eval'，浏览器会拦下。
+   */
+  knownDynamicCode: [
     {
-      name: 'Function(\'\')',
-      reason: 'zod 检测能否执行动态代码（JIT）：函数体是空字符串，不执行任何代码。前端设置了 jitless，运行时不会调用它（ADR-008）',
-      pattern: /Function\(\s*(["'`])\1\s*\)/,
+      name: 'zod 的 JIT 探测',
+      reason: 'zod 检测能否执行动态代码：用函数体为空的 Function(\'\') 试一下，不执行任何代码；jitless 时跳过',
+      pattern: /(?<![\w$])Function\(\s*(["'`])\1\s*\)/,
+      max: 1,
+    },
+    {
+      name: 'zod 的 JIT 编译器',
+      reason: 'zod 为对象结构生成解析函数（Doc.compile：先把 Function 赋给变量，再 new 出生成的代码）。只在 JIT 打开且探测成功时调用，jitless 下执行不到',
+      pattern: /compile\(\)\{(?:let|const|var) ([\w$]+)=Function,[\w$]+=this\?\.content\?\?\[(?:""|''|``)\];return new \1\(\.\.\.Object\.keys\(this\.closed\),`return function \(/,
       max: 1,
     },
   ],
   /** 出现即违规的关键字（不区分大小写）：Pro、许可证校验、第三方统计与遥测上报。 */
-  forbiddenKeywords: ['univerjs-pro', 'univer-pro', 'licensekey', 'license-key', 'license_key', 'posthog', 'sentry', 'google-analytics', 'googletagmanager', 'gtag(', 'mixpanel', 'grpc', 'protobuf'] as readonly string[],
+  forbiddenKeywords: ['univerjs-pro', 'univer-pro', 'licensekey', 'license-key', 'license_key', 'posthog', 'sentry', 'google-analytics', 'googletagmanager', 'gtag(', 'mixpanel', 'grpc', 'protobuf'],
 }
 
 /** 漏洞扫描的例外：GHSA 编号、原因与到期日（到期后必须重新评审）。 */

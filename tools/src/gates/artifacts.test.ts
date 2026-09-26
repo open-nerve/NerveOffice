@@ -36,10 +36,34 @@ describe('US-M1-11 A01 产物扫描：动态代码', () => {
     expect(rules(code)).toContain('artifacts/dynamic-code')
   })
 
+  it.each([
+    ['先把 Function 赋给变量再 new（zod 源码里的写法）', 'let F=Function;new F(code)'],
+    ['先把 Function 赋给变量再调用', 'const F=Function;F(code)()'],
+    ['全局对象上的 Function 赋给变量', 'const F=globalThis.Function;F(code)()'],
+    ['Reflect.construct 的参数', 'Reflect.construct(Function,[code])'],
+    ['Function 的 apply', 'Function.apply(null,[code])'],
+    ['eval 赋给变量', 'const e=eval;e(code)'],
+    ['标签模板', 'Function`return 1`'],
+    ['标识符里的转义', '\\u0065val(code)'],
+  ])('违规（审查 B3）：%s', (_case, code) => {
+    expect(rules(code)).toContain('artifacts/dynamic-code')
+  })
+
+  it('没有语法树的文本文件（HTML 等）仍按写法匹配 eval 与 Function', () => {
+    expect(rules('<script>eval(x)</script>', 'index.html')).toContain('artifacts/dynamic-code')
+    expect(rules('<svg onload="new Function(x)()"></svg>', 'assets/logo.svg')).toContain('artifacts/dynamic-code')
+    expect(rules('<p>Function("return this")</p>', 'index.html')).toEqual([])
+  })
+
+  it('违规：JS 文件解析失败时不当作没有动态代码', () => {
+    expect(rules('let x = ;')).toEqual(['artifacts/unparsable'])
+  })
+
   it('合规：常见的正常写法不误报', () => {
     const code = [
-      'a.evaluate(x);b.myFunction("x");obj.eval2=1;isFunction("x");',
+      'a.evaluate(x);b.myFunction("x");obj.eval2=1;isFunction("x");node.eval(scope);',
       'typeof f==="function";x instanceof Function;Function.prototype.call.bind(f);',
+      'const tag="[object Function]";const kinds=["AsyncFunction","GeneratorFunction"];',
       'setTimeout(fn,0);self.setTimeout(()=>{},1);',
       'new Worker(new URL("./formula.worker-abc.js",import.meta.url),{type:"module"});',
       'var s="//";var t="a//b";',
@@ -52,12 +76,32 @@ describe('US-M1-11 A01 产物扫描：动态代码', () => {
     expect(rules('Function("return this")();Function(\'return this\')();')).toEqual(['artifacts/global-this-probe'])
   })
 
-  it('已登记的能力探测（空字符串的 Function）：次数以内不算动态代码，超过上限即违规；带内容的仍是动态代码', () => {
-    expect(rules('try{return Function(``),!0}catch{return!1}')).toEqual([])
-    expect(rules('try{new F(""),Function(``)}catch{}')).toEqual([])
-    expect(rules('Function(``);Function(\'\')')).toEqual(['artifacts/known-probe'])
+  it('已登记的 zod JIT 探测（空字符串的 Function）：次数以内不算动态代码，超过上限即违规；带内容的、先赋给变量的仍是动态代码', () => {
+    expect(rules('var L=jo(()=>{if(zs.jitless)return!1;try{return Function(``),!0}catch{return!1}})')).toEqual([])
+    expect(rules('Function(``);Function(\'\')')).toEqual(['artifacts/known-dynamic-code'])
     expect(rules('Function(`x`)')).toContain('artifacts/dynamic-code')
     expect(rules('new Function(``+code)')).toContain('artifacts/dynamic-code')
+    // 登记的是压缩后的原文 Function(``)；源码里先赋给变量的写法不在登记范围里（审查 B3）
+    expect(rules('const F=Function;try{new F("")}catch{}')).toContain('artifacts/dynamic-code')
+  })
+
+  // 生产产物里 zod 的 Doc.compile 原文（压缩后）；样例是产物原文，不是要插值
+  // eslint-disable-next-line no-template-curly-in-string
+  const zodCompiler = 'var pl=class{compile(){let e=Function,t=this?.content??[``];return new e(...Object.keys(this.closed),`return function (${this.args.join(`, `)}) {\\n${t.join(`\n`)}\\n};`)(...Object.values(this.closed))}};'
+
+  it('已登记的 zod JIT 编译器：原文以内不算动态代码，并计数；出现两次即违规；别处把 Function 赋给变量仍然违规', () => {
+    const scan = scanArtifacts([{ path: 'assets/index.js', content: zodCompiler }], policy)
+    expect(scan.violations).toEqual([])
+    expect(scan.knownDynamicCode).toEqual(new Map([['zod 的 JIT 探测', 0], ['zod 的 JIT 编译器', 1]]))
+    expect(rules(zodCompiler + zodCompiler.replace('pl=', 'pm='))).toEqual(['artifacts/known-dynamic-code'])
+    expect(rules('var pl=class{compile(){let e=Function;return e(this.code)}};')).toContain('artifacts/dynamic-code')
+  })
+
+  it('没有登记时，zod 的 JIT 编译器报为动态代码（审查 B3：P1 起漏检）', () => {
+    const unregistered = { ...policy, knownDynamicCode: policy.knownDynamicCode.filter(known => known.name !== 'zod 的 JIT 编译器') }
+    const { violations } = scanArtifacts([{ path: 'assets/index.js', content: zodCompiler }], unregistered)
+    expect(violations.map(v => v.rule)).toEqual(['artifacts/dynamic-code'])
+    expect(violations[0]?.detail).toContain('let e=Function')
   })
 })
 
@@ -76,7 +120,7 @@ describe('US-M1-11 A01 产物扫描：外部地址与关键字', () => {
   it('合规：模板字符串里在运行时拼出的地址（没有固定的主机），由 CSP 兜底', () => {
     // 样例就是产物里的模板字符串原文，不是要插值
     // eslint-disable-next-line no-template-curly-in-string
-    expect(rules('return Sl(`http://[${e}]`)')).toEqual([])
+    expect(rules('function Ul(e){return Sl(`http://[${e}]`)}')).toEqual([])
     // eslint-disable-next-line no-template-curly-in-string
     expect(rules('const u=`https://${host}/x`')).toEqual([])
   })

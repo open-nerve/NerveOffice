@@ -135,18 +135,22 @@ export function artifactsGate(distDir: string): GateOutcome {
     return { name: 'artifacts', title, violations: [{ rule: 'artifacts/missing-build', subject: relative(REPO_ROOT, distDir), detail: '没有构建产物，先执行 pnpm build' }], notes: [] }
   const files = filesIn(distDir)
   const textFiles = files.filter(path => classifyArtifact(path) === 'text')
-  const { violations, hosts } = scanArtifacts(textFiles.map(path => ({ path, content: readFileSync(join(distDir, path), 'utf8') })), ARTIFACT_POLICY)
+  const { violations, hosts, knownDynamicCode } = scanArtifacts(textFiles.map(path => ({ path, content: readFileSync(join(distDir, path), 'utf8') })), ARTIFACT_POLICY)
   const bundleFile = join(distDir, '.vite', 'third-party-packages.json')
   const bundle = existsSync(bundleFile) ? bundledPackagesSchema.parse(JSON.parse(readFileSync(bundleFile, 'utf8'))) : undefined
   const bundleViolations: Violation[] = bundle === undefined
     ? [{ rule: 'license-bundle/missing-file', subject: '.vite/third-party-packages.json', detail: '没有第三方许可清单，检查 web 构建是否挂上了许可收集插件' }]
     : checkLicenseBundle(bundle, PRODUCTION_LICENSES, LICENSE_EXCEPTIONS)
   const hostSummary = [...hosts].map(([host, count]) => `${host}×${count}`).join('、') || '无'
+  const knownSummary = [...knownDynamicCode].map(([name, count]) => `${name}×${count}`).join('、') || '无'
   return {
     name: 'artifacts',
     title,
     violations: [...checkFileTypes(files), ...checkTestOnlyArtifacts(files), ...violations, ...bundleViolations],
-    notes: [`${files.length} 个文件，扫描其中 ${textFiles.length} 个；出现的主机：${hostSummary}；打进产物的第三方包 ${bundle?.length ?? 0} 个`],
+    notes: [
+      `${files.length} 个文件，扫描其中 ${textFiles.length} 个；出现的主机：${hostSummary}；打进产物的第三方包 ${bundle?.length ?? 0} 个`,
+      `已登记的动态代码（出现次数为 0 的登记已经过时，核对后删除）：${knownSummary}`,
+    ],
   }
 }
 
