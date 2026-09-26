@@ -2,6 +2,19 @@ export { AUDIT_ACTIONS, AUDIT_ACTOR_TYPES, AUDIT_DETAILS_MAX_BYTES, AUDIT_SOURCE
 export type { AuditAction } from './audit/audit.ts'
 export { LOGIN_PASSWORD_MAX_LENGTH, LOGIN_USERNAME_MAX_LENGTH, loginRequestSchema, sessionResponseSchema } from './auth/auth.ts'
 export type { LoginRequest, SessionResponse } from './auth/auth.ts'
+export {
+  DOCUMENT_LIST_DEFAULT_LIMIT,
+  DOCUMENT_LIST_MAX_LIMIT,
+  DOCUMENT_STATUSES,
+  DOCUMENT_TITLE_MAX_LENGTH,
+  DOCUMENT_TYPES,
+  documentDetailSchema,
+  documentIdSchema,
+  documentListQuerySchema,
+  documentListResponseSchema,
+  documentSummarySchema,
+} from './documents/documents.ts'
+export type { DocumentDetail, DocumentListQuery, DocumentListResponse, DocumentStatus, DocumentSummary, DocumentType } from './documents/documents.ts'
 export { ERROR_CODES, errorStatus, RETIRED_ERROR_CODES } from './errors/error-codes.ts'
 export type { ErrorCode } from './errors/error-codes.ts'
 export { errorCodeSchema, errorResponseSchema } from './errors/error-response.ts'
