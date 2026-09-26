@@ -1,0 +1,87 @@
+{
+  "MIT": [
+    {
+      "name": "@img/colour",
+      "versions": [
+        "1.1.0"
+      ],
+      "paths": [
+        "/repo/node_modules/.pnpm/@img+colour@1.1.0/node_modules/@img/colour"
+      ],
+      "license": "MIT",
+      "homepage": "https://github.com/lovell/colour#readme",
+      "description": "The ESM-only 'color' package made compatible for use with CommonJS runtimes"
+    }
+  ],
+  "Apache-2.0": [
+    {
+      "name": "@img/sharp-darwin-arm64",
+      "versions": [
+        "0.34.4"
+      ],
+      "paths": [
+        "/repo/node_modules/.pnpm/@img+sharp-darwin-arm64@0.34.4/node_modules/@img/sharp-darwin-arm64"
+      ],
+      "license": "Apache-2.0",
+      "author": "Lovell Fuller",
+      "homepage": "https://sharp.pixelplumbing.com",
+      "description": "Prebuilt sharp for use with macOS 64-bit ARM"
+    },
+    {
+      "name": "detect-libc",
+      "versions": [
+        "2.1.2"
+      ],
+      "paths": [
+        "/repo/node_modules/.pnpm/detect-libc@2.1.2/node_modules/detect-libc"
+      ],
+      "license": "Apache-2.0",
+      "author": "Lovell Fuller",
+      "homepage": "https://github.com/lovell/detect-libc#readme",
+      "description": "Node.js module to detect the C standard library (libc) implementation family and version"
+    },
+    {
+      "name": "sharp",
+      "versions": [
+        "0.34.4"
+      ],
+      "paths": [
+        "/repo/node_modules/.pnpm/sharp@0.34.4/node_modules/sharp"
+      ],
+      "license": "Apache-2.0",
+      "author": "Lovell Fuller",
+      "homepage": "https://sharp.pixelplumbing.com",
+      "description": "High performance Node.js image processing, the fastest module to resize JPEG, PNG, WebP, GIF, AVIF and TIFF images"
+    }
+  ],
+  "LGPL-3.0-or-later": [
+    {
+      "name": "@img/sharp-libvips-darwin-arm64",
+      "versions": [
+        "1.2.3"
+      ],
+      "paths": [
+        "/repo/node_modules/.pnpm/@img+sharp-libvips-darwin-arm64@1.2.3/node_modules/@img/sharp-libvips-darwin-arm64"
+      ],
+      "license": "LGPL-3.0-or-later",
+      "author": "Lovell Fuller",
+      "homepage": "https://sharp.pixelplumbing.com",
+      "description": "Prebuilt libvips and dependencies for use with sharp on macOS 64-bit ARM"
+    }
+  ],
+  "ISC": [
+    {
+      "name": "semver",
+      "versions": [
+        "7.8.5"
+      ],
+      "paths": [
+        "/repo/node_modules/.pnpm/semver@7.8.5/node_modules/semver"
+      ],
+      "license": "ISC",
+      "author": "GitHub Inc.",
+      "homepage": "https://github.com/npm/node-semver#readme",
+      "description": "The semantic version parser used by npm."
+    }
+  ]
+}

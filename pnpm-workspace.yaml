@@ -1,0 +1,61 @@
+# 供应链（规范 §3，ADR-001）：新发布的版本满 3 天（4320 分钟）才允许安装；显式配置后默认严格拦截
+minimumReleaseAge: 4320
+minimumReleaseAgeExcludePrune: true
+
+# 新版本的发布可信度（如来源证明）不得低于旧版本
+trustPolicy: no-downgrade
+
+peerDependencyRules:
+  allowedVersions:
+    # 6.10.2 的 peer 只声明到 ESLint 9；在 ESLint 10 下能加载、规则能生效，由 lint 规则的自测验证
+    eslint-plugin-jsx-a11y>eslint: 10.11.0
+
+# 脚本在 pnpm 内置的 POSIX shell 里执行，各平台一致
+shellEmulator: true
+engineStrict: true
+
+packages:
+  - apps/*
+  - packages/*
+  - tools
+  - tests/*
+
+# 依赖的安装脚本逐个决定，新增一项要写原因（规范 §3）
+allowBuilds:
+  # postinstall 只是执行 `lefthook install`；根 package.json 的 prepare 已经显式执行
+  lefthook: false
+  # postinstall 只检查原生绑定；pnpm 已按平台安装了可选依赖里的绑定
+  unrs-resolver: false
+
+# 外部依赖的版本集中写在默认目录里，各包写 catalog 引用；版本一律精确（规范 §3）
+catalog:
+  '@antfu/eslint-config': 9.5.1
+  '@eslint-react/eslint-plugin': 5.20.5
+  '@playwright/test': 1.63.0
+  '@testing-library/jest-dom': 7.0.1
+  '@testing-library/react': 16.3.3
+  '@types/node': 24.13.6
+  '@types/pg': 8.23.1
+  '@types/react': 19.3.0
+  '@types/react-dom': 19.3.0
+  '@vitejs/plugin-react': 6.1.1
+  '@vitest/coverage-v8': 4.1.11
+  eslint: 10.11.0
+  eslint-import-resolver-typescript: 4.4.5
+  eslint-plugin-boundaries: 7.2.0
+  eslint-plugin-import-x: 4.17.1
+  eslint-plugin-jsx-a11y: 6.10.2
+  eslint-plugin-playwright: 2.12.0
+  eslint-plugin-react-refresh: 0.5.7
+  jiti: 2.7.0
+  jsdom: 30.1.1
+  lefthook: 2.1.14
+  lint-staged: 17.5.1
+  pg: 8.23.0
+  react: 19.3.0
+  react-dom: 19.3.0
+  typescript: 6.0.3
+  vite: 8.3.0
+  vitest: 4.1.11
+  yaml: 2.9.1
+  zod: 4.6.5

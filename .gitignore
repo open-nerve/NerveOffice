@@ -21,3 +21,12 @@ coverage/
 Thumbs.db
 .idea/
 *.log
+
+# 测试与构建的输出
+.vite/
+test-results/
+playwright-report/
+blob-report/
+
+# lint 规则自测临时创建的探针文件（tools/src/lint/lint-rules.test.ts）
+lint-probe-*

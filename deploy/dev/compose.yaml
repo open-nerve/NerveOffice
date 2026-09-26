@@ -1,0 +1,27 @@
+# 开发与本机测试用的 PostgreSQL（M1-P1）。账号只用于本机开发，端口只监听 127.0.0.1。
+# 生产部署的编排在 deploy/ 的其他目录（M1-P5），不复用这里的账号。
+name: nerve-office-dev
+
+services:
+  postgres:
+    # 18.6-alpine 的多架构索引摘要；升级时同时更新 CI 的服务容器与 tests/integration 的版本检查
+    image: postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+    environment:
+      POSTGRES_USER: nerve
+      POSTGRES_PASSWORD: nerve_dev_only
+      POSTGRES_DB: nerve_office
+      # 排序规则用内置的 C.UTF-8，与操作系统的 libc、ICU 版本无关（PostgreSQL 17 起）
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale-provider=builtin --builtin-locale=C.UTF-8
+    ports:
+      - 127.0.0.1:54318:5432
+    volumes:
+      # PostgreSQL 18 起，官方镜像的数据目录是 /var/lib/postgresql/18/docker
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U nerve -d nerve_office]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata: {}

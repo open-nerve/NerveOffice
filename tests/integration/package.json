@@ -1,0 +1,17 @@
+{
+  "name": "@nerve-office/integration-tests",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "description": "基于真实 PostgreSQL 的集成测试",
+  "license": "Apache-2.0",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/pg": "catalog:",
+    "pg": "catalog:",
+    "vitest": "catalog:"
+  }
+}

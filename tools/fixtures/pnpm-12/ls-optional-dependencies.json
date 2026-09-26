@@ -1,0 +1,64 @@
+[
+  {
+    "name": "app",
+    "version": "1.0.0",
+    "path": "/repo/app",
+    "private": true,
+    "dependencies": {
+      "zod": {
+        "from": "zod",
+        "version": "4.6.5",
+        "resolved": "https://registry.npmjs.org/zod/-/zod-4.6.5.tgz",
+        "path": "/repo/node_modules/.pnpm/zod@4.6.5/node_modules/zod"
+      }
+    },
+    "optionalDependencies": {
+      "pg-types": {
+        "from": "pg-types",
+        "version": "2.2.0",
+        "resolved": "https://registry.npmjs.org/pg-types/-/pg-types-2.2.0.tgz",
+        "path": "/repo/node_modules/.pnpm/pg-types@2.2.0/node_modules/pg-types",
+        "dependencies": {
+          "pg-int8": {
+            "from": "pg-int8",
+            "version": "1.0.1",
+            "resolved": "https://registry.npmjs.org/pg-int8/-/pg-int8-1.0.1.tgz",
+            "path": "/repo/node_modules/.pnpm/pg-int8@1.0.1/node_modules/pg-int8"
+          },
+          "postgres-array": {
+            "from": "postgres-array",
+            "version": "2.0.0",
+            "resolved": "https://registry.npmjs.org/postgres-array/-/postgres-array-2.0.0.tgz",
+            "path": "/repo/node_modules/.pnpm/postgres-array@2.0.0/node_modules/postgres-array"
+          },
+          "postgres-bytea": {
+            "from": "postgres-bytea",
+            "version": "1.0.1",
+            "resolved": "https://registry.npmjs.org/postgres-bytea/-/postgres-bytea-1.0.1.tgz",
+            "path": "/repo/node_modules/.pnpm/postgres-bytea@1.0.1/node_modules/postgres-bytea"
+          },
+          "postgres-date": {
+            "from": "postgres-date",
+            "version": "1.0.7",
+            "resolved": "https://registry.npmjs.org/postgres-date/-/postgres-date-1.0.7.tgz",
+            "path": "/repo/node_modules/.pnpm/postgres-date@1.0.7/node_modules/postgres-date"
+          },
+          "postgres-interval": {
+            "from": "postgres-interval",
+            "version": "1.2.0",
+            "resolved": "https://registry.npmjs.org/postgres-interval/-/postgres-interval-1.2.0.tgz",
+            "path": "/repo/node_modules/.pnpm/postgres-interval@1.2.0/node_modules/postgres-interval",
+            "dependencies": {
+              "xtend": {
+                "from": "xtend",
+                "version": "4.0.2",
+                "resolved": "https://registry.npmjs.org/xtend/-/xtend-4.0.2.tgz",
+                "path": "/repo/node_modules/.pnpm/xtend@4.0.2/node_modules/xtend"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+]

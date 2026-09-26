@@ -1,0 +1,32 @@
+[
+  {
+    "name": "US-M1-11 A01 精确版本 > 合规：外部依赖都经目录引用，内部包用 workspace:*",
+    "file": "/repo/tools/src/gates/pins.test.ts",
+    "projectName": "unit"
+  },
+  {
+    "name": "US-M1-11 A01 精确版本 > 违规：依赖直接写版本或范围 ^19.3.0",
+    "file": "/repo/tools/src/gates/pins.test.ts",
+    "projectName": "unit"
+  },
+  {
+    "name": "US-M1-11 A01 精确版本 > 违规：依赖直接写版本或范围 ~19.3.0",
+    "file": "/repo/tools/src/gates/pins.test.ts",
+    "projectName": "unit"
+  },
+  {
+    "name": "US-M1-11 A01 精确版本 > 违规：依赖直接写版本或范围 19.3.0",
+    "file": "/repo/tools/src/gates/pins.test.ts",
+    "projectName": "unit"
+  },
+  {
+    "name": "集成测试数据库的环境 > 是 PostgreSQL 18",
+    "file": "/repo/tests/integration/src/database-environment.test.ts",
+    "projectName": "integration"
+  },
+  {
+    "name": "US-M1-01 命令行初始化管理员 > 已有管理员时拒绝",
+    "file": "/repo/tests/integration/src/accounts/admin-init.test.ts",
+    "projectName": "integration"
+  }
+]

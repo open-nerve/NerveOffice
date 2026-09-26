@@ -1,0 +1,57 @@
+{
+  "name": "nerve-office",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@12.6.0",
+  "description": "自部署、单租户的团队在线文档平台（在线表格 + 文字文档）",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=24.21.0 <25"
+  },
+  "scripts": {
+    "prepare": "lefthook install",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix --max-warnings 0",
+    "typecheck": "tsc -p tsconfig.json && pnpm -r --workspace-concurrency=4 run typecheck",
+    "test": "vitest run --project unit --project unit-web",
+    "test:coverage": "vitest run --project unit --project unit-web --coverage",
+    "test:integration": "vitest run --project integration",
+    "test:e2e": "pnpm --filter @nerve-office/web run build && pnpm --filter @nerve-office/e2e exec playwright test",
+    "build": "pnpm -r --filter './packages/*' --filter './apps/*' run build",
+    "db:up": "docker compose -f deploy/dev/compose.yaml up -d --wait",
+    "db:down": "docker compose -f deploy/dev/compose.yaml down",
+    "gate": "node tools/src/gates/cli.ts",
+    "gate:pins": "node tools/src/gates/cli.ts pins",
+    "gate:config": "node tools/src/gates/cli.ts config",
+    "gate:stories": "node tools/src/gates/cli.ts stories",
+    "gate:deps": "node tools/src/gates/cli.ts deps",
+    "gate:licenses": "node tools/src/gates/cli.ts licenses",
+    "gate:artifacts": "node tools/src/gates/cli.ts artifacts",
+    "gate:audit": "node tools/src/gates/cli.ts audit",
+    "verify": "node tools/src/verify/cli.ts",
+    "clean": "node tools/src/verify/clean-cli.ts"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "catalog:",
+    "@eslint-react/eslint-plugin": "catalog:",
+    "@types/node": "catalog:",
+    "@vitest/coverage-v8": "catalog:",
+    "eslint": "catalog:",
+    "eslint-import-resolver-typescript": "catalog:",
+    "eslint-plugin-boundaries": "catalog:",
+    "eslint-plugin-import-x": "catalog:",
+    "eslint-plugin-jsx-a11y": "catalog:",
+    "eslint-plugin-playwright": "catalog:",
+    "eslint-plugin-react-refresh": "catalog:",
+    "jiti": "catalog:",
+    "lefthook": "catalog:",
+    "lint-staged": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,mjs,cjs,json,yaml,yml}": "eslint --fix --max-warnings 0 --no-warn-ignored"
+  }
+}

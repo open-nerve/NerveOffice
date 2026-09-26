@@ -1,0 +1,190 @@
+{
+  "suites": [
+    {
+      "title": "sheet/save.spec.ts",
+      "file": "sheet/save.spec.ts",
+      "specs": [
+        {
+          "title": "US-M1-06 重新打开",
+          "file": "sheet/save.spec.ts",
+          "tests": [
+            {
+              "projectName": "chromium",
+              "expectedStatus": "passed",
+              "annotations": []
+            }
+          ]
+        },
+        {
+          "title": "US-M1-07 被跳过的用例",
+          "file": "sheet/save.spec.ts",
+          "tests": [
+            {
+              "projectName": "chromium",
+              "expectedStatus": "skipped",
+              "annotations": [
+                {
+                  "type": "skip",
+                  "location": {
+                    "file": "/private/tmp/claude-501/-Users-xiaoruan-project-nerve-office/e2bc259a-5764-4597-917f-4a748759256f/scratchpad/pw-list/specs/sheet/save.spec.ts",
+                    "line": 7,
+                    "column": 6
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "US-M1-08 待修的用例",
+          "file": "sheet/save.spec.ts",
+          "tests": [
+            {
+              "projectName": "chromium",
+              "expectedStatus": "skipped",
+              "annotations": [
+                {
+                  "type": "fixme",
+                  "location": {
+                    "file": "/private/tmp/claude-501/-Users-xiaoruan-project-nerve-office/e2bc259a-5764-4597-917f-4a748759256f/scratchpad/pw-list/specs/sheet/save.spec.ts",
+                    "line": 8,
+                    "column": 6
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "US-M1-06 重新打开",
+          "file": "sheet/save.spec.ts",
+          "tests": [
+            {
+              "projectName": "webkit",
+              "expectedStatus": "passed",
+              "annotations": []
+            }
+          ]
+        },
+        {
+          "title": "US-M1-07 被跳过的用例",
+          "file": "sheet/save.spec.ts",
+          "tests": [
+            {
+              "projectName": "webkit",
+              "expectedStatus": "skipped",
+              "annotations": [
+                {
+                  "type": "skip",
+                  "location": {
+                    "file": "/private/tmp/claude-501/-Users-xiaoruan-project-nerve-office/e2bc259a-5764-4597-917f-4a748759256f/scratchpad/pw-list/specs/sheet/save.spec.ts",
+                    "line": 7,
+                    "column": 6
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "US-M1-08 待修的用例",
+          "file": "sheet/save.spec.ts",
+          "tests": [
+            {
+              "projectName": "webkit",
+              "expectedStatus": "skipped",
+              "annotations": [
+                {
+                  "type": "fixme",
+                  "location": {
+                    "file": "/private/tmp/claude-501/-Users-xiaoruan-project-nerve-office/e2bc259a-5764-4597-917f-4a748759256f/scratchpad/pw-list/specs/sheet/save.spec.ts",
+                    "line": 8,
+                    "column": 6
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "suites": [
+        {
+          "title": "US-M1-05 保存到云端",
+          "file": "sheet/save.spec.ts",
+          "specs": [
+            {
+              "title": "显示已保存到云端",
+              "file": "sheet/save.spec.ts",
+              "tests": [
+                {
+                  "projectName": "chromium",
+                  "expectedStatus": "passed",
+                  "annotations": []
+                }
+              ]
+            },
+            {
+              "title": "显示已保存到云端",
+              "file": "sheet/save.spec.ts",
+              "tests": [
+                {
+                  "projectName": "webkit",
+                  "expectedStatus": "passed",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "suites": []
+        },
+        {
+          "title": "US-M1-10 整组跳过",
+          "file": "sheet/save.spec.ts",
+          "specs": [
+            {
+              "title": "组内用例",
+              "file": "sheet/save.spec.ts",
+              "tests": [
+                {
+                  "projectName": "chromium",
+                  "expectedStatus": "skipped",
+                  "annotations": [
+                    {
+                      "type": "skip",
+                      "location": {
+                        "file": "/private/tmp/claude-501/-Users-xiaoruan-project-nerve-office/e2bc259a-5764-4597-917f-4a748759256f/scratchpad/pw-list/specs/sheet/save.spec.ts",
+                        "line": 10,
+                        "column": 15
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "组内用例",
+              "file": "sheet/save.spec.ts",
+              "tests": [
+                {
+                  "projectName": "webkit",
+                  "expectedStatus": "skipped",
+                  "annotations": [
+                    {
+                      "type": "skip",
+                      "location": {
+                        "file": "/private/tmp/claude-501/-Users-xiaoruan-project-nerve-office/e2bc259a-5764-4597-917f-4a748759256f/scratchpad/pw-list/specs/sheet/save.spec.ts",
+                        "line": 10,
+                        "column": 15
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "suites": []
+        }
+      ]
+    }
+  ]
+}
