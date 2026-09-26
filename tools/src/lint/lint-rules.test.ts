@@ -197,6 +197,14 @@ describe('US-M1-11 lint 规则的自测：后端', () => {
     expect(await rulesFor('import { createApplication } from \'../../app/index.ts\'\nexport const f = createApplication\n', API_SERVICE)).toContain('boundaries/dependencies')
   })
 
+  it('命令行只经模块的入口，或者 app 层的程序接口（index.ts）', async () => {
+    const CLI = 'apps/api/src/cli/migrate.ts'
+    expect(await rulesFor('import { initializeAdmin } from \'../app/index.ts\'\nexport const f = initializeAdmin\n', CLI)).not.toContain('boundaries/dependencies')
+    expect(await rulesFor('import { runMigrations } from \'../modules/database/index.ts\'\nexport const f = runMigrations\n', CLI)).not.toContain('boundaries/dependencies')
+    expect(await rulesFor('import { createApplication } from \'../app/create-application.ts\'\nexport const f = createApplication\n', CLI)).toContain('boundaries/dependencies')
+    expect(await rulesFor('import { UsersService } from \'../modules/users/users.service.ts\'\nexport const f = UsersService\n', CLI)).toContain('boundaries/dependencies')
+  })
+
   it('一个模块只能引用自己的表定义：别的模块的表读写不到', async () => {
     const code = 'import { auditEvents } from \'../../db/schema/audit/index.ts\'\nexport const table = auditEvents\n'
     expect(await rulesFor(code, API_SERVICE)).toContain('boundaries/dependencies')

@@ -24,6 +24,7 @@
     "db:down": "docker compose -f deploy/dev/compose.yaml down",
     "db:migrate": "pnpm --filter \"@nerve-office/api...\" run build && pnpm --filter @nerve-office/api exec node --env-file=.env.development dist/cli/migrate.js",
     "db:generate": "pnpm --filter @nerve-office/api run db:generate",
+    "admin:init": "pnpm --filter \"@nerve-office/api...\" run build && pnpm --filter @nerve-office/api exec node --env-file=.env.development dist/cli/init-admin.js",
     "gate": "node tools/src/gates/cli.ts",
     "gate:pins": "node tools/src/gates/cli.ts pins",
     "gate:config": "node tools/src/gates/cli.ts config",

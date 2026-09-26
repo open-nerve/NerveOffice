@@ -43,6 +43,10 @@ export interface AppConfig {
   }
   readonly shutdown: { readonly timeoutMs: number }
   readonly log: { readonly level: LogLevel }
+  readonly password: {
+    /** Argon2id 的参数（00 号计划书 §11.1）：按部署机器的基准测试调整；改了之后，下次登录成功时重新哈希 */
+    readonly argon2: { readonly memoryKib: number, readonly iterations: number, readonly parallelism: number }
+  }
 }
 
 export interface ConfigIssue {
@@ -121,6 +125,10 @@ const environmentSchema = z.object({
   NERVE_TRUST_PROXY: trustProxy.optional(),
   NERVE_SHUTDOWN_TIMEOUT_MS: integer(100, 600_000).default(8_000),
   NERVE_LOG_LEVEL: z.enum(LOG_LEVELS, { error: `必须是 ${LOG_LEVELS.join('、')} 之一` }).default('info'),
+  // 默认是 OWASP 的最低推荐（内存 19 MiB、迭代 2 次、并行度 1）
+  NERVE_PASSWORD_ARGON2_MEMORY_KIB: integer(8_192, 1_048_576).default(19_456),
+  NERVE_PASSWORD_ARGON2_ITERATIONS: integer(1, 20).default(2),
+  NERVE_PASSWORD_ARGON2_PARALLELISM: integer(1, 16).default(1),
 })
 
 type Environment = z.output<typeof environmentSchema>
@@ -154,6 +162,13 @@ function toAppConfig(env: Environment): AppConfig {
     },
     shutdown: { timeoutMs: env.NERVE_SHUTDOWN_TIMEOUT_MS },
     log: { level: env.NERVE_LOG_LEVEL },
+    password: {
+      argon2: {
+        memoryKib: env.NERVE_PASSWORD_ARGON2_MEMORY_KIB,
+        iterations: env.NERVE_PASSWORD_ARGON2_ITERATIONS,
+        parallelism: env.NERVE_PASSWORD_ARGON2_PARALLELISM,
+      },
+    },
   }
 }
 

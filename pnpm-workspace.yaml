@@ -38,6 +38,7 @@ catalog:
   '@nestjs/core': 12.1.0
   '@nestjs/platform-express': 12.1.0
   '@nestjs/testing': 12.1.0
+  '@node-rs/argon2': 2.2.1
   '@playwright/test': 1.63.0
   '@testing-library/jest-dom': 7.0.1
   '@testing-library/react': 16.3.3

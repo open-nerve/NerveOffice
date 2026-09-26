@@ -50,7 +50,9 @@ describe('migrationClientConfig', () => {
 describe('readExpectedMigrations', () => {
   it('按 journal 的顺序读出仓库里的迁移，哈希与 drizzle 的迁移器记录的相同', () => {
     const migrations = readExpectedMigrations()
-    expect(migrations.map(migration => migration.tag)).toEqual(['0000_audit_events', '0001_audit_events_append_only'])
+    // 不列出全部迁移：每加一个迁移都要改这里。序号从 0000 起连续，最早的两个是审计表
+    expect(migrations.slice(0, 2).map(migration => migration.tag)).toEqual(['0000_audit_events', '0001_audit_events_append_only'])
+    expect(migrations.map(migration => migration.tag.slice(0, 4))).toEqual(migrations.map((_, index) => String(index).padStart(4, '0')))
     const drizzle = readMigrationFiles({ migrationsFolder: MIGRATIONS_FOLDER })
     expect(migrations.map(migration => [migration.hash, migration.when])).toEqual(drizzle.map(migration => [migration.hash, migration.folderMillis]))
   })

@@ -40,6 +40,7 @@ describe('loadConfig', () => {
       },
       shutdown: { timeoutMs: 8_000 },
       log: { level: 'info' },
+      password: { argon2: { memoryKib: 19_456, iterations: 2, parallelism: 1 } },
     })
   })
 
@@ -61,6 +62,9 @@ describe('loadConfig', () => {
       NERVE_TRUST_PROXY: '1',
       NERVE_SHUTDOWN_TIMEOUT_MS: '9000',
       NERVE_LOG_LEVEL: 'debug',
+      NERVE_PASSWORD_ARGON2_MEMORY_KIB: '47104',
+      NERVE_PASSWORD_ARGON2_ITERATIONS: '1',
+      NERVE_PASSWORD_ARGON2_PARALLELISM: '2',
     })
     const { url, ...database } = config.database
     expect(url.reveal()).toBe('postgresql://u:p@127.0.0.1:5432/db')
@@ -83,6 +87,7 @@ describe('loadConfig', () => {
     })
     expect(config.shutdown.timeoutMs).toBe(9_000)
     expect(config.log.level).toBe('debug')
+    expect(config.password.argon2).toEqual({ memoryKib: 47_104, iterations: 1, parallelism: 2 })
   })
 
   it('缺少必填项时失败', () => {

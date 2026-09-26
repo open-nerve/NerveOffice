@@ -413,7 +413,8 @@ export default antfu(
               { element: { type: 'api-schema', captured: { module: '{{from.element.captured.module}}' }, fileInternalPath: PUBLIC_ENTRY } },
             ] },
           },
-          { from: { element: { type: 'api-cli' } }, allow: { to: { element: { type: 'api-module', fileInternalPath: PUBLIC_ENTRY } } } },
+          // 命令行经模块的入口，或者经 app 层的程序接口（需要组装多个模块时，例如初始化管理员）
+          { from: { element: { type: 'api-cli' } }, allow: { to: { element: { type: ['api-module', 'api-app'], fileInternalPath: PUBLIC_ENTRY } } } },
           // 集成测试经 @nerve-office/api 的程序接口建应用
           { from: { element: { type: 'integration-tests' } }, allow: { to: { element: { type: 'api-app', fileInternalPath: PUBLIC_ENTRY } } } },
           {
