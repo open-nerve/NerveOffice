@@ -6,6 +6,7 @@ describe('健康检查的响应结构', () => {
     expect(healthLiveResponseSchema.parse({ status: 'ok' })).toEqual({ status: 'ok' })
     expect(healthReadyResponseSchema.parse({ status: 'ready' })).toEqual({ status: 'ready' })
     expect(healthLiveResponseSchema.safeParse({ status: 'ready' }).success).toBe(false)
-    expect(healthReadyResponseSchema.safeParse({ status: 'ok', extra: 1 }).success).toBe(false)
+    expect(healthReadyResponseSchema.safeParse({ status: 'ok' }).success).toBe(false)
+    expect(healthReadyResponseSchema.parse({ status: 'ready', extra: 1 })).toEqual({ status: 'ready' })
   })
 })

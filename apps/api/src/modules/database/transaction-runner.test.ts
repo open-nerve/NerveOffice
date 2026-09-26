@@ -7,7 +7,8 @@ type TransactionStatus = 'I' | 'T' | 'E'
 
 /**
  * 假的连接：记下执行过的语句；failOn 里的语句（按第一个词）执行时报错。
- * 事务状态按 PostgreSQL 的规则变化：BEGIN 之后在事务中，事务中的语句失败后事务中止，COMMIT、ROLLBACK 之后空闲。
+ * 事务状态按 PostgreSQL 的规则变化：BEGIN 之后在事务中，事务中的语句失败后事务中止，COMMIT、ROLLBACK 之后空闲；
+ * 事务中止之后，除了 ROLLBACK，任何语句都报 25P02。
  */
 function fakeClient(failOn: readonly string[] = []) {
   const statements: string[] = []
@@ -22,7 +23,9 @@ function fakeClient(failOn: readonly string[] = []) {
     },
     query: vi.fn(async (config: { text: string }) => {
       statements.push(config.text)
-      const verb = prefix(config.text)
+      const verb = prefix(config.text).toLowerCase()
+      if (status === 'E' && verb !== 'rollback')
+        throw Object.assign(new Error('current transaction is aborted, commands ignored until end of transaction block'), { code: '25P02' })
       if (failOn.includes(verb)) {
         if (status === 'T')
           status = 'E'
@@ -38,7 +41,7 @@ function fakeClient(failOn: readonly string[] = []) {
 }
 
 function prefix(text: string): string {
-  return text.split(' ')[0] ?? text
+  return (text.split(' ')[0] ?? text).toLowerCase()
 }
 
 function runnerWith(client: ReturnType<typeof fakeClient>): TransactionRunner {
@@ -47,10 +50,10 @@ function runnerWith(client: ReturnType<typeof fakeClient>): TransactionRunner {
 }
 
 describe('TransactionRunner', () => {
-  it('work 正常结束：提交，连接照常放回', async () => {
+  it('work 正常结束：确认事务可用，提交，连接照常放回', async () => {
     const client = fakeClient()
     await expect(runnerWith(client).run(async () => 42)).resolves.toBe(42)
-    expect(client.statements.map(prefix)).toEqual(['begin', 'commit'])
+    expect(client.statements.map(prefix)).toEqual(['begin', 'select', 'commit'])
     expect(client.release).toHaveBeenCalledExactlyOnceWith(false)
   })
 
@@ -102,7 +105,24 @@ describe('TransactionRunner', () => {
       client.abort()
       return 1
     })).rejects.toThrow(TRANSACTION_ABORTED_MESSAGE)
-    expect(client.statements.map(prefix)).toEqual(['begin', 'rollback'])
+    expect(client.statements.map(prefix)).toEqual(['begin', 'select', 'rollback'])
+    expect(client.release).toHaveBeenCalledExactlyOnceWith(true)
+  })
+
+  it('不依赖连接上记下的事务状态：状态还没更新（驱动先收到错误、后收到 ReadyForQuery）时同样发现事务已中止', async () => {
+    const client = fakeClient()
+    await expect(runnerWith(client).run(async () => {
+      client.abort()
+      // 模拟状态还停在"事务中"：确认要靠真正执行一条语句
+      client.getTransactionStatus.mockReturnValueOnce('T')
+      return 1
+    })).rejects.toThrow(TRANSACTION_ABORTED_MESSAGE)
+    expect(client.statements.map(prefix)).toEqual(['begin', 'select', 'rollback'])
+  })
+
+  it('确认的语句因为别的原因失败（例如连接断开）：原样抛出，丢弃连接', async () => {
+    const client = fakeClient(['select'])
+    await expect(runnerWith(client).run(async () => 1)).rejects.not.toThrow(TRANSACTION_ABORTED_MESSAGE)
     expect(client.release).toHaveBeenCalledExactlyOnceWith(true)
   })
 

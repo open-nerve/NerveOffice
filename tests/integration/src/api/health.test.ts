@@ -4,6 +4,7 @@ import type { TestDatabase } from '../support/database.ts'
 import { errorResponseSchema, healthLiveResponseSchema, healthReadyResponseSchema } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it } from 'vitest'
 import { startTestApp } from '../support/api-app.ts'
+import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 
 const apps: TestApp[] = []
@@ -24,7 +25,7 @@ async function database(options?: { migrated?: boolean }): Promise<TestDatabase>
 async function notReadyReason(app: TestApp): Promise<string> {
   const response = await fetch(`${app.baseUrl}/api/health/ready`)
   expect(response.status).toBe(503)
-  const { error } = errorResponseSchema.parse(await response.json())
+  const { error } = parseExact(errorResponseSchema, await response.json())
   expect(error.code).toBe('SERVICE_UNAVAILABLE')
   return error.message
 }
@@ -40,10 +41,10 @@ describe('健康检查（进程内的真实应用）', () => {
   it('库已迁移：存活与就绪都返回 200', async () => {
     const app = await appOn((await database()).url)
     const live = await fetch(`${app.baseUrl}/api/health/live`)
-    expect(healthLiveResponseSchema.parse(await live.json())).toEqual({ status: 'ok' })
+    expect(parseExact(healthLiveResponseSchema, await live.json())).toEqual({ status: 'ok' })
     const ready = await fetch(`${app.baseUrl}/api/health/ready`)
     expect(ready.status).toBe(200)
-    expect(healthReadyResponseSchema.parse(await ready.json())).toEqual({ status: 'ready' })
+    expect(parseExact(healthReadyResponseSchema, await ready.json())).toEqual({ status: 'ready' })
   })
 
   it('空库（还没迁移）：就绪 503，说明待执行的迁移个数；启动时记一条警告，不自动迁移', async () => {

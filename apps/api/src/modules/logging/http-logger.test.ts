@@ -22,6 +22,10 @@ describe('levelFor', () => {
     ['/api/health/ready?x=1', response(200), false, 'silent'],
     ['/api/health/ready', response(503), false, 'error'],
     ['/api/health/live', response(200, { finished: false }), false, 'warn'],
+    // 前端的静态文件与页面：成功记 debug，失败照常
+    ['/assets/index-abc.js', response(200), false, 'debug'],
+    ['/login', response(304), false, 'debug'],
+    ['/assets/missing.js', response(404), false, 'warn'],
   ] as const)('%s（%#）', (url, res, failed, level) => {
     expect(levelFor(request(url), res, failed)).toBe(level)
   })

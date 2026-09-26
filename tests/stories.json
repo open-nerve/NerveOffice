@@ -2,15 +2,15 @@
   "$comment": "当前 M 的用户故事登记（规范 §8.1）。状态为 active 的故事必须有以其编号开头的测试；每个 Phase 完成时，把它负责的故事改为 active。",
   "design": "docs/v0.1/M1-工程底座与行走骨架/00-M1-总设计.md",
   "stories": {
-    "US-M1-01": { "phase": "P3", "status": "planned", "verification": ["integration", "e2e"] },
-    "US-M1-02": { "phase": "P3", "status": "planned", "verification": ["e2e"] },
-    "US-M1-03": { "phase": "P3", "status": "planned", "verification": ["e2e"] },
+    "US-M1-01": { "phase": "P3", "status": "active", "verification": ["integration", "e2e"] },
+    "US-M1-02": { "phase": "P3", "status": "active", "verification": ["e2e"] },
+    "US-M1-03": { "phase": "P3", "status": "active", "verification": ["e2e"] },
     "US-M1-04": { "phase": "P4", "status": "planned", "verification": ["e2e"] },
     "US-M1-05": { "phase": "P4", "status": "planned", "verification": ["e2e"] },
     "US-M1-06": { "phase": "P4", "status": "planned", "verification": ["e2e"] },
     "US-M1-07": { "phase": "P4", "status": "planned", "verification": ["e2e"] },
-    "US-M1-08": { "phase": "P3", "status": "planned", "verification": ["e2e"] },
-    "US-M1-09": { "phase": "P3", "status": "planned", "verification": ["e2e"] },
+    "US-M1-08": { "phase": "P3", "status": "active", "verification": ["e2e"] },
+    "US-M1-09": { "phase": "P3", "status": "active", "verification": ["e2e"] },
     "US-M1-10": { "phase": "P5", "status": "planned", "verification": ["e2e"] },
     "US-M1-11": { "phase": "P1", "status": "active", "verification": ["self-test"] }
   }

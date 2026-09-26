@@ -15,6 +15,34 @@
       "when": 1790422348894,
       "tag": "0001_audit_events_append_only",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790434117085,
+      "tag": "0002_users_and_spaces",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790435139748,
+      "tag": "0003_auth_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790435982264,
+      "tag": "0004_documents",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790441753586,
+      "tag": "0005_login_throttle_reservations",
+      "breakpoints": true
     }
   ]
 }

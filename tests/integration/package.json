@@ -12,6 +12,7 @@
     "@nerve-office/api": "workspace:*",
     "@nerve-office/contracts": "workspace:*",
     "@nestjs/common": "catalog:",
+    "@node-rs/argon2": "catalog:",
     "@types/node": "catalog:",
     "@types/pg": "catalog:",
     "drizzle-orm": "catalog:",

@@ -1,4 +1,4 @@
-// 用构建产物启动真实的 api 进程，验证只有真实进程才有的行为：启动失败的退出码、信号处理、迁移命令。
+// 用构建产物启动真实的 api 进程，验证只有真实进程才有的行为：启动失败的退出码、信号处理、迁移与初始化管理员的命令。
 // pnpm test:integration 会先构建 api。
 import type { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
@@ -7,10 +7,20 @@ import { join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
-/** 构建产物里的两个入口：应用与迁移命令。 */
+/** 构建产物里的入口：应用、迁移命令、初始化管理员的命令。 */
 const ENTRIES = {
-  main: fileURLToPath(new URL('../../../../apps/api/dist/app/main.js', import.meta.url)),
-  migrate: fileURLToPath(new URL('../../../../apps/api/dist/cli/migrate.js', import.meta.url)),
+  'main': fileURLToPath(new URL('../../../../apps/api/dist/app/main.js', import.meta.url)),
+  'migrate': fileURLToPath(new URL('../../../../apps/api/dist/cli/migrate.js', import.meta.url)),
+  'init-admin': fileURLToPath(new URL('../../../../apps/api/dist/cli/init-admin.js', import.meta.url)),
+}
+
+export type ApiEntry = keyof typeof ENTRIES
+
+export interface ApiProcessOptions {
+  /** 命令行参数 */
+  args?: readonly string[]
+  /** 写进标准输入的内容（写完即关闭）；不给时标准输入为空，也不是终端 */
+  stdin?: string
 }
 /** 构建产物的来源：api 与 contracts 的源码（包括迁移文件）。 */
 const SOURCES = ['../../../../apps/api/src', '../../../../packages/contracts/src'].map(path => fileURLToPath(new URL(path, import.meta.url)))
@@ -66,14 +76,15 @@ function findEntry(output: string, predicate: (entry: LogEntry) => boolean): Log
   return undefined
 }
 
-/** 启动 api 的进程（默认是应用，也可以是迁移命令）。环境变量只有 PATH 与给定的这些，不继承测试进程的环境。 */
-export function startApiProcess(env: Readonly<Record<string, string>>, entry: keyof typeof ENTRIES = 'main'): ApiProcess {
+/** 启动 api 的进程（默认是应用，也可以是命令）。环境变量只有 PATH 与给定的这些，不继承测试进程的环境。 */
+export function startApiProcess(env: Readonly<Record<string, string>>, entry: ApiEntry = 'main', options: ApiProcessOptions = {}): ApiProcess {
   const script = ENTRIES[entry]
   assertBuildIsFresh(script)
-  const child = spawn(process.execPath, [script], {
+  const child = spawn(process.execPath, [script, ...(options.args ?? [])], {
     env: { PATH: process.env.PATH ?? '', ...env },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['pipe', 'pipe', 'pipe'],
   })
+  child.stdin.end(options.stdin ?? '')
   let output = ''
   let hasExited = false
   /** 输出有变化或进程退出时通知正在等待的调用方 */

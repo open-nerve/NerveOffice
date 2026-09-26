@@ -9,7 +9,12 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {
+    "@nerve-office/contracts": "workspace:*",
+    "@node-rs/argon2": "catalog:",
     "@playwright/test": "catalog:",
-    "@types/node": "catalog:"
+    "@types/node": "catalog:",
+    "@types/pg": "catalog:",
+    "pg": "catalog:",
+    "zod": "catalog:"
   }
 }

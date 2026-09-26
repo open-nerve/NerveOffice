@@ -22,8 +22,7 @@ describe('errorResponseSchema', () => {
     expect(errorResponseSchema.safeParse({ error: { ...valid.error, code } }).success).toBe(false)
   })
 
-  it('拒绝多余的字段，避免把内部细节带给客户端', () => {
-    expect(errorResponseSchema.safeParse({ error: { ...valid.error, stack: 'at x' } }).success).toBe(false)
-    expect(errorResponseSchema.safeParse({ ...valid, debug: true }).success).toBe(false)
+  it('多出的字段被丢弃：将来错误响应加字段时，旧页面仍然认得错误码', () => {
+    expect(errorResponseSchema.parse({ error: { ...valid.error, details: { field: 'x' } }, debug: true })).toEqual(valid)
   })
 })

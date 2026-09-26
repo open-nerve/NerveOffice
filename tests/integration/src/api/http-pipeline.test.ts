@@ -5,17 +5,20 @@ import type { TestDatabase } from '../support/database.ts'
 import type { LogEntry } from '../support/log-capture.ts'
 import { setTimeout as delay } from 'node:timers/promises'
 import { gzipSync } from 'node:zlib'
-import { AppError, AppLogger } from '@nerve-office/api'
+import { AppError, AppLogger, Public } from '@nerve-office/api'
 import { errorResponseSchema } from '@nerve-office/contracts'
 import { Body, Controller, Get, Module, Post } from '@nestjs/common'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { startTestApp } from '../support/api-app.ts'
+import { startTestApp, TEST_PUBLIC_ORIGIN } from '../support/api-app.ts'
+import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { waitFor } from '../support/wait.ts'
 
 const echoSchema = z.strictObject({ name: z.string().min(1).max(20), password: z.string().optional() })
 
+// 只在测试里存在的接口：不经登录（认证本身由 auth 的测试覆盖）
+@Public()
 @Controller('__test')
 class PipelineProbeController {
   readonly #logger: AppLogger
@@ -67,8 +70,9 @@ afterAll(async () => {
   await database.drop()
 })
 
-async function request(path: string, init: RequestInit = {}): Promise<Response> {
-  return fetch(`${app.baseUrl}${path}`, init)
+/** 状态变更请求要带与公开地址相同的 Origin（P3 设计 §3.5），浏览器会自动带上 */
+async function request(path: string, init: RequestInit & { headers?: Record<string, string> } = {}): Promise<Response> {
+  return fetch(`${app.baseUrl}${path}`, { ...init, headers: { origin: TEST_PUBLIC_ORIGIN, ...init.headers } })
 }
 
 async function postJson(path: string, body: string, headers: Record<string, string> = JSON_HEADERS): Promise<Response> {
@@ -79,7 +83,7 @@ async function postJson(path: string, body: string, headers: Record<string, stri
 async function expectError(response: Response, status: number, code: string): Promise<{ code: string, message: string, requestId: string }> {
   expect(response.status).toBe(status)
   expect(response.headers.get('content-type')).toContain('application/json')
-  const { error } = errorResponseSchema.parse(await response.json())
+  const { error } = parseExact(errorResponseSchema, await response.json())
   expect(error.code).toBe(code)
   expect(error.requestId).toBe(response.headers.get('x-request-id'))
   return error

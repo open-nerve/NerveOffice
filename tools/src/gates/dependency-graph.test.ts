@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { checkGraphComplete, checkSingletons, checkUniver, collectInstalled } from './dependency-graph.ts'
 import { readFixture } from './fixtures.ts'
 import { lsOutputSchema } from './pnpm-outputs.ts'
+import { SINGLETON_PACKAGES } from './policy.ts'
 
 const store = '/repo/node_modules/.pnpm'
 const univerPolicy = { version: '1.0.0', independent: { '@univerjs/icons': '1.43.0' } }
@@ -114,6 +115,23 @@ describe('US-M1-11 A01 单例', () => {
       '@univerjs/ui': node('@univerjs/ui', '1.0.0', '_react@19.3.0'),
       'other': node('other', '1.0.0', '', { '@univerjs/ui': node('@univerjs/ui', '1.0.0', '_react@19.2.0') }),
     }))
-    expect(checkSingletons(installed, []).map(v => `${v.rule} ${v.subject}`)).toEqual(['deps/singleton @univerjs/ui'])
+    expect(checkSingletons(installed, ['@univerjs/*']).map(v => `${v.rule} ${v.subject}`)).toEqual(['deps/singleton @univerjs/ui'])
+  })
+
+  it('`@作用域/*` 覆盖这个作用域下的每个包，不覆盖名字相近的其他作用域（审查 B23）', () => {
+    const { installed } = collectInstalled(project({
+      '@radix-ui/react-context': node('@radix-ui/react-context', '1.1.2'),
+      '@radix-ui-extra/widget': node('@radix-ui-extra/widget', '1.0.0'),
+      'radix-ui': node('radix-ui', '1.6.7', '', { '@radix-ui/react-context': node('@radix-ui/react-context', '1.1.3') }),
+      'legacy': node('legacy', '1.0.0', '', { '@radix-ui-extra/widget': node('@radix-ui-extra/widget', '0.9.0') }),
+    }))
+    expect(checkSingletons(installed, ['@radix-ui/*']).map(v => v.subject)).toEqual(['@radix-ui/react-context'])
+    expect(checkSingletons(installed, ['radix-ui'])).toEqual([])
+  })
+
+  it('单例清单的每一项都是包名或 `@作用域/*`；Univer 与 Radix 的每个包都在其中', () => {
+    for (const entry of SINGLETON_PACKAGES)
+      expect(entry, entry).toMatch(/^(?:@[a-z0-9-~][\w.-]*\/(?:\*|[a-z0-9-~][\w.-]*)|[a-z0-9-~][\w.-]*)$/)
+    expect(SINGLETON_PACKAGES).toEqual(expect.arrayContaining(['@univerjs/*', 'radix-ui', '@radix-ui/*']))
   })
 })

@@ -1,9 +1,12 @@
 import type { HealthLiveResponse, HealthReadyResponse } from '@nerve-office/contracts'
 import { Controller, Get } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
+import { Public } from '../../shared/public.ts'
 import { DatabaseReadiness } from '../database/index.ts'
 import { ApplicationState } from './application-state.ts'
 
+/** 探针给编排工具与反向代理用，不需要登录。 */
+@Public()
 @Controller('health')
 export class HealthController {
   constructor(

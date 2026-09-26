@@ -24,6 +24,7 @@
     "@nestjs/common": "catalog:",
     "@nestjs/core": "catalog:",
     "@nestjs/platform-express": "catalog:",
+    "@node-rs/argon2": "catalog:",
     "drizzle-orm": "catalog:",
     "express": "catalog:",
     "pg": "catalog:",

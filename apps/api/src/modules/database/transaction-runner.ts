@@ -1,11 +1,38 @@
-import type { Transaction } from './database.ts'
+import type { DbTransaction, Transaction } from './database.ts'
 import { Inject, Injectable } from '@nestjs/common'
+import { sql } from 'drizzle-orm'
 import pg from 'pg'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { createDatabase, PG_POOL } from './database.ts'
 
 /** work 吞掉了失败的语句却正常返回时的说明。 */
 export const TRANSACTION_ABORTED_MESSAGE = '事务里有语句失败，事务已中止，不能当作成功提交：预期会失败的语句由仓储放进保存点（transaction()），或者改用 ON CONFLICT'
+
+/** PostgreSQL 的 SQLSTATE 25P02：事务已中止，之后的语句都被拒绝，直到结束事务。 */
+const IN_FAILED_SQL_TRANSACTION = '25P02'
+
+function isAbortedTransaction(error: unknown): boolean {
+  // drizzle 把驱动的错误包在 cause 里
+  const cause: unknown = error instanceof Error ? error.cause : undefined
+  return typeof cause === 'object' && cause !== null && 'code' in cause && cause.code === IN_FAILED_SQL_TRANSACTION
+}
+
+/**
+ * work 返回之后确认事务仍然可用：work 吞掉了失败的语句时，事务已经中止，COMMIT 会被数据库静默当作回滚，不能报告成功。
+ * 用一条语句确认，而不是读连接上记下的事务状态：驱动在收到错误时就让那条语句失败返回，
+ * 事务状态要等随后的 ReadyForQuery 才更新，两条消息分开到达时读到的还是旧状态（P3 的集成测试在负载下复现）。
+ * 事务中止时这条语句必然报 25P02。
+ */
+async function assertTransactionUsable(tx: DbTransaction): Promise<void> {
+  try {
+    await tx.execute(sql`SELECT 1`)
+  }
+  catch (error) {
+    if (isAbortedTransaction(error))
+      throw new Error(TRANSACTION_ABORTED_MESSAGE, { cause: error })
+    throw error
+  }
+}
 
 /**
  * 服务用它开启事务：需要把几次写入（可能跨模块，例如新建文档加审计）放进同一个事务时，
@@ -28,10 +55,8 @@ export class TransactionRunner {
     try {
       return await createDatabase(client).transaction(async (tx) => {
         const result = await work(tx as unknown as Transaction)
-        // 事务里有语句失败、work 却把错误吞掉正常返回时，事务已经中止，COMMIT 会被数据库静默当作回滚：
-        // 不能报告成功。抛出之后 drizzle 回滚（复验：中止的事务）
-        if (client.getTransactionStatus() === 'E')
-          throw new Error(TRANSACTION_ABORTED_MESSAGE)
+        // 抛出之后 drizzle 回滚（P2 复验 G3）
+        await assertTransactionUsable(tx)
         return result
       })
     }
@@ -40,7 +65,9 @@ export class TransactionRunner {
       throw error
     }
     finally {
-      // 只有空闲的连接放回池里：不依赖 drizzle 在各种失败下是否发出了 ROLLBACK
+      // 只有空闲的连接放回池里：不依赖 drizzle 在各种失败下是否发出了 ROLLBACK。
+      // 走到这里时，最后一条语句（COMMIT 或 ROLLBACK）成功返回的话，驱动已经收到它的 ReadyForQuery，状态是准的；
+      // 最后一条语句失败的话，错误不是 AppError，本来就要丢弃
       client.release(discard || client.getTransactionStatus() !== 'I')
     }
   }

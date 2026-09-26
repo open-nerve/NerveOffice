@@ -83,6 +83,8 @@
 | `pnpm verify` | 合并前的完整门禁：lint、类型检查、静态检查、单元与集成测试及覆盖率、构建、依赖与产物检查、E2E（本机的 Chromium、Chrome、WebKit；CI 另加 Edge） |
 | `pnpm verify --fast` | 快速门禁（pre-push 使用；不需要数据库） |
 | `pnpm dev:api` | 以监听模式启动后端（读取 `apps/api/.env.development`，先 `pnpm db:up` 与 `pnpm db:migrate`） |
+| `pnpm dev:web` | 启动前端的开发服务器（`http://127.0.0.1:5173`，`/api` 代理到 `pnpm dev:api`） |
+| `pnpm admin:init --username <用户名>` | 在开发库上初始化首个系统管理员（密码在终端里输入两次；非交互环境加 `--password-stdin`） |
 | `pnpm lint` / `pnpm lint:fix` | 检查 / 修正代码规范与格式 |
 | `pnpm typecheck` | 类型检查 |
 | `pnpm test` / `pnpm test:coverage` | 单元测试 / 单元与集成测试合计的覆盖率（需要数据库） |
@@ -90,6 +92,6 @@
 | `pnpm db:migrate` | 构建后端并对开发库执行迁移 |
 | `pnpm db:generate --name <名称>` | 按表定义生成迁移（人工审阅后入库；合并后的迁移不再修改） |
 | `pnpm test:integration` | 集成测试（需要数据库；先构建后端，进程测试用构建产物） |
-| `pnpm test:e2e` | 构建前端后跑 E2E |
+| `pnpm test:e2e` | 构建后端与前端的测试构建后跑 E2E（真实后端与数据库，需要 `pnpm db:up`；端口每次自动挑选，后端日志在 `tests/e2e/test-results/e2e-server.log`） |
 | `pnpm build` / `pnpm clean` | 构建 / 删除构建产物 |
-| `pnpm gate [名称…]` | A01 等检查：pins、config、stories、migrations、schema、deps、licenses、artifacts、audit |
+| `pnpm gate [名称…]` | A01 等检查：pins、config、stories、migrations、schema、deps、licenses、artifacts、budgets、audit |

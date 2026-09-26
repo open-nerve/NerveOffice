@@ -1,0 +1,17 @@
+// 取自 shadcn/ui 4.21.0 的 radix-nova 风格，按项目规范改写（ADR-008）。
+import type { ComponentProps } from 'react'
+import { Label as LabelPrimitive } from 'radix-ui'
+import { cn } from '../lib/cn.ts'
+
+export function Label({ className, ...props }: ComponentProps<typeof LabelPrimitive.Root>) {
+  return (
+    <LabelPrimitive.Root
+      data-slot="label"
+      className={cn(
+        'flex items-center gap-2 text-sm leading-none font-medium select-none group-data-[disabled=true]:pointer-events-none group-data-[disabled=true]:opacity-50 peer-disabled:cursor-not-allowed peer-disabled:opacity-50',
+        className,
+      )}
+      {...props}
+    />
+  )
+}

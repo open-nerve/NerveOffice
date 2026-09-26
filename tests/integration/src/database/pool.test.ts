@@ -3,7 +3,7 @@ import type { Database, Transaction } from '@nerve-office/api'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import { setTimeout as delay } from 'node:timers/promises'
-import { AppError, DATABASE, DatabaseModule, TransactionRunner } from '@nerve-office/api'
+import { AppError, DATABASE, DatabaseModule, Public, TransactionRunner } from '@nerve-office/api'
 import { Controller, Get, Inject, Module } from '@nestjs/common'
 import { sql } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -12,6 +12,8 @@ import { createTestDatabase } from '../support/database.ts'
 
 const SENSITIVE = 'SENSITIVE-PARAM-7c1f'
 
+// 只在测试里存在的接口：不经登录（认证本身由 auth 的测试覆盖）
+@Public()
 @Controller('__test/database')
 class DatabaseProbeController {
   constructor(@Inject(DATABASE) private readonly db: Database) {}

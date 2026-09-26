@@ -9,6 +9,7 @@ describe('createPool', () => {
   it('连接参数：超时取自配置，TCP keepalive 从空闲 10 秒开始探测，客户端侧的查询时限比语句超时多 5 秒（审查 A8、复验 N2）', async () => {
     const settings = loadConfig({
       NERVE_DATABASE_URL: 'postgres://nerve:pw@127.0.0.1:1/nerve',
+      NERVE_PUBLIC_ORIGIN: 'http://127.0.0.1:3000',
       NERVE_DATABASE_STATEMENT_TIMEOUT_MS: '3000',
     }).database
     // 连接池按需建立连接：这里不会真的连接数据库

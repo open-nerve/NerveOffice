@@ -18,4 +18,9 @@ describe('AppError', () => {
     expect(error.message).toBe('正在退出')
     expect(error.cause).toBe(cause)
   })
+
+  it('可以带上随错误响应下发的响应头', () => {
+    expect(new AppError('TOO_MANY_ATTEMPTS', undefined, { headers: { 'Retry-After': '60' } }).headers).toEqual({ 'Retry-After': '60' })
+    expect(new AppError('NOT_FOUND').headers).toEqual({})
+  })
 })

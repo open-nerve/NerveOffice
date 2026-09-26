@@ -6,11 +6,11 @@ import { HttpErrorFilter, mapException } from './error-filter.ts'
 
 describe('mapException', () => {
   it('AppError：它自己的错误码、状态与说明', () => {
-    expect(mapException(new AppError('SERVICE_UNAVAILABLE', '正在退出'))).toEqual({ status: 503, code: 'SERVICE_UNAVAILABLE', message: '正在退出', unexpected: false })
+    expect(mapException(new AppError('SERVICE_UNAVAILABLE', '正在退出'))).toEqual({ status: 503, code: 'SERVICE_UNAVAILABLE', message: '正在退出', unexpected: false, headers: {} })
   })
 
   it('没有匹配的路由 → NOT_FOUND，用默认说明，不用框架的说明', () => {
-    expect(mapException(new NotFoundException('Cannot GET /api/x'))).toEqual({ status: 404, code: 'NOT_FOUND', message: '请求的资源不存在或无权访问', unexpected: false })
+    expect(mapException(new NotFoundException('Cannot GET /api/x'))).toEqual({ status: 404, code: 'NOT_FOUND', message: '请求的资源不存在或无权访问', unexpected: false, headers: {} })
   })
 
   it('框架换成的 400（例如非法的路径编码）→ REQUEST_INVALID，不回显原始说明', () => {
@@ -24,7 +24,7 @@ describe('mapException', () => {
   })
 
   it('其他异常 → INTERNAL_ERROR，只回通用说明', () => {
-    expect(mapException(new Error('数据库密码是 hunter2'))).toEqual({ status: 500, code: 'INTERNAL_ERROR', message: '服务器内部错误，请稍后重试', unexpected: true })
+    expect(mapException(new Error('数据库密码是 hunter2'))).toEqual({ status: 500, code: 'INTERNAL_ERROR', message: '服务器内部错误，请稍后重试', unexpected: true, headers: {} })
     expect(mapException('抛出的是字符串')).toMatchObject({ code: 'INTERNAL_ERROR', unexpected: true })
   })
 })
@@ -36,6 +36,8 @@ interface FakeResponse {
   statusCode?: number
   body?: unknown
   err?: Error
+  headers: Record<string, string>
+  setHeader: (name: string, value: string) => void
   status: (code: number) => FakeResponse
   json: (body: unknown) => void
   destroy: () => void
@@ -46,6 +48,10 @@ function fakeResponse(headersSent = false, closed = false): FakeResponse {
     headersSent,
     writableEnded: false,
     destroyed: closed,
+    headers: {},
+    setHeader: (name, value) => {
+      response.headers[name] = value
+    },
     status: (code) => {
       response.statusCode = code
       return response
@@ -64,6 +70,13 @@ function hostFor(request: object, response: FakeResponse): ArgumentsHost {
 
 describe('HttpErrorFilter', () => {
   const filter = new HttpErrorFilter()
+
+  it('AppError 带的响应头随错误响应下发', () => {
+    const response = fakeResponse()
+    filter.catch(new AppError('TOO_MANY_ATTEMPTS', undefined, { headers: { 'Retry-After': '120' } }), hostFor({ id: 'req-0' }, response))
+    expect(response.statusCode).toBe(429)
+    expect(response.headers).toEqual({ 'Retry-After': '120' })
+  })
 
   it('写出统一的错误响应，带请求标识', () => {
     const response = fakeResponse()

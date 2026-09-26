@@ -12,14 +12,14 @@ afterEach(() => {
 })
 
 describe('cleanBuildOutputs', () => {
-  it('删除 apps/* 与 packages/* 下的 dist，保留其他文件', () => {
+  it('删除 apps/* 与 packages/* 下的 dist（含前端的测试构建），保留其他文件', () => {
     root = mkdtempSync(join(tmpdir(), 'nerve-clean-'))
-    for (const dir of ['apps/web/dist/assets', 'packages/contracts/dist', 'apps/web/src', 'tools/dist'])
+    for (const dir of ['apps/web/dist/assets', 'apps/web/dist-e2e/assets', 'packages/contracts/dist', 'apps/web/src', 'tools/dist'])
       mkdirSync(join(root, dir), { recursive: true })
     writeFileSync(join(root, 'apps/web/dist/assets/a.js'), 'x')
     writeFileSync(join(root, 'apps/web/src/main.tsx'), 'x')
 
-    expect(cleanBuildOutputs(root).sort()).toEqual(['apps/web/dist', 'packages/contracts/dist'])
+    expect(cleanBuildOutputs(root).sort()).toEqual(['apps/web/dist', 'apps/web/dist-e2e', 'packages/contracts/dist'])
     expect(existsSync(join(root, 'apps/web/dist'))).toBe(false)
     expect(existsSync(join(root, 'packages/contracts/dist'))).toBe(false)
     expect(existsSync(join(root, 'apps/web/src/main.tsx'))).toBe(true)

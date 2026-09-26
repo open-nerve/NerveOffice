@@ -2,16 +2,18 @@
 import type { AuditOrigin } from '@nerve-office/api'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
-import { AuditModule, AuditService, RequestOrigin, TransactionRunner } from '@nerve-office/api'
+import { AuditModule, AuditService, Public, RequestOrigin, TransactionRunner } from '@nerve-office/api'
 import { AUDIT_ACTIONS } from '@nerve-office/contracts'
 import { Controller, Module, Post } from '@nestjs/common'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { startTestApp } from '../support/api-app.ts'
+import { startTestApp, TEST_PUBLIC_ORIGIN } from '../support/api-app.ts'
 import { createTestDatabase } from '../support/database.ts'
 
 const USER_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 const DOCUMENT_ID = '0199a2c4-2a3b-7c4d-9e5f-6a7b8c9d0e1f'
 
+// 只在测试里存在的接口：不经登录（认证本身由 auth 的测试覆盖）
+@Public()
 @Controller('__test/audit')
 class AuditProbeController {
   constructor(private readonly audit: AuditService) {}
@@ -65,7 +67,7 @@ async function rows(where = 'true'): Promise<AuditRow[]> {
 describe('审计事件', () => {
   it('经 HTTP 写入：动作、操作者、对象、来源（请求标识与客户端地址）、数据库时间', async () => {
     const before = await database.query(async client => (await client.query<{ now: Date }>('SELECT now()')).rows[0]?.now)
-    const response = await fetch(`${app.baseUrl}/api/__test/audit`, { method: 'POST', headers: { 'x-request-id': 'audit-req-1' } })
+    const response = await fetch(`${app.baseUrl}/api/__test/audit`, { method: 'POST', headers: { 'x-request-id': 'audit-req-1', 'origin': TEST_PUBLIC_ORIGIN } })
     expect(response.status).toBe(201)
     const [row] = await rows('request_id = \'audit-req-1\'')
     expect(row).toMatchObject({

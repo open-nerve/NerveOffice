@@ -3,9 +3,11 @@ import type { LevelWithSilent, Logger } from 'pino'
 import { REQUEST_ID_HEADER } from '@nerve-office/contracts'
 import { pinoHttp, stdSerializers } from 'pino-http'
 import { resolveRequestId } from './request-id.ts'
+import { requestUserId } from './request-user.ts'
 import { LOG_SERIALIZERS } from './root-logger.ts'
 
 const HEALTH_PROBES = '/api/health/'
+const API_PREFIX = '/api/'
 
 function pathOf(request: Request): string {
   return request.originalUrl.split('?')[0] ?? ''
@@ -21,13 +23,19 @@ function aborted(response: Response): boolean {
   return !response.writableFinished
 }
 
-/** 出错（包括异常过滤器挂上的 response.err）与 5xx 记 error，4xx 与中断的请求记 warn；探针的成功请求不记，免得刷屏。 */
+/**
+ * 出错（包括异常过滤器挂上的 response.err）与 5xx 记 error，4xx 与中断的请求记 warn；
+ * 成功的请求：探针不记，免得刷屏；前端的静态文件与页面记 debug（默认级别下不输出）；接口记 info。
+ */
 export function levelFor(request: Request, response: Response, failed: boolean): LevelWithSilent {
   if (failed || response.err !== undefined || response.statusCode >= 500)
     return 'error'
   if (response.statusCode >= 400 || aborted(response))
     return 'warn'
-  return pathOf(request).startsWith(HEALTH_PROBES) ? 'silent' : 'info'
+  const path = pathOf(request)
+  if (path.startsWith(HEALTH_PROBES))
+    return 'silent'
+  return path.startsWith(API_PREFIX) ? 'info' : 'debug'
 }
 
 /** 请求结束时记录的字段（规范 §7）。不记请求头、请求体、响应体与查询串。中断的请求不记状态码，另记 aborted。 */
@@ -52,6 +60,11 @@ export function createHttpLogger(logger: Logger): ReturnType<typeof pinoHttp<Req
       const id = resolveRequestId(request.headers[REQUEST_ID_HEADER])
       response.setHeader(REQUEST_ID_HEADER, id)
       return id
+    },
+    // 请求结束时再取：认证通过的请求带上 userId（规范 §7）
+    customProps: (request) => {
+      const userId = requestUserId(request)
+      return userId === undefined ? {} : { userId }
     },
     customLogLevel: (request, response, error) => levelFor(request, response, error !== undefined),
     customSuccessObject: (request, response, value: { durationMs: number }) => requestSummary(request, response, value.durationMs),

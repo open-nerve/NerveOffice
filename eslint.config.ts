@@ -35,7 +35,27 @@ const DYNAMIC_UNIVER_PRO = {
   message: '禁止引入 @univerjs-pro/*（00 号计划书 §3.3）',
 }
 
-const BASE_RESTRICTED_SYNTAX = [...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER, DYNAMIC_UNIVER_PRO]
+// 测试与测试辅助只被测试静态引用：nerve/test-code-only-in-tests 按路径拦下的是静态导入，动态导入在这里拦（复验 R3）
+const DYNAMIC_TEST_MODULES = {
+  // 带查询或片段（?raw、#x）、大小写不同（不区分大小写的文件系统上照样找得到）也算（复验 S5）
+  selector: String.raw`ImportExpression[source.value=/\.test(?:-support)?(?:\.[cm]?[jt]sx?)?(?:[?#].*)?$/i]`,
+  message: '不要动态导入测试与测试辅助（*.test.*、*.test-support.*）：它们只被测试静态引用，不进入生产代码（审查 B17）',
+}
+const BASE_RESTRICTED_SYNTAX = [...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER, DYNAMIC_UNIVER_PRO, DYNAMIC_TEST_MODULES]
+
+// 前端应用的入口（entries/*/main.{ts,tsx}，ADR-008）：按顺序执行的几步，第一步关掉 zod 的 JIT。
+// zod 在创建结构时就读取 jitless，contracts 的结构在模块求值时创建，所以设置它的模块必须最先执行（审查 B1）。
+// 普通的导入会被导入排序规则挪到副作用导入前面，所以入口只写副作用导入，代码放进它导入的模块
+const APP_ENTRY_SYNTAX = [
+  {
+    selector: 'Program > :not(ImportDeclaration[specifiers.length=0])',
+    message: '应用的入口只写副作用导入（import \'…\'），代码放进它导入的模块：普通的导入会被排序规则挪到前面先执行（ADR-008）',
+  },
+  {
+    selector: String.raw`Program > ImportDeclaration:first-child:not([source.value=/\/shared\/lib\/zod-jitless\.ts$/])`,
+    message: '应用的入口第一个导入 shared/lib/zod-jitless.ts：zod 在创建结构时读取 jitless，必须在任何结构创建之前关掉 JIT（ADR-008）',
+  },
+]
 
 // ---- 后端（P2 设计 §3.1）----
 // 每个后端文件的限制由 apiRules() 按"这个文件允许什么"组合出来，各覆盖块不各自抄一份，免得改一处漏一处（审查 B15）
@@ -198,6 +218,18 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
 /** 元素之间只经公开入口引用；同一个元素内部不受限制（ADR-003）。 */
 const PUBLIC_ENTRY = 'index.{ts,tsx}'
 
+// ---- 测试代码只在测试里用（审查 B17）----
+const CODE_FILES = '**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}'
+/** 测试代码：测试、测试辅助、tests/ 下的包与测试的初始化文件。它们可以引用测试库与彼此 */
+const TEST_CODE = ['**/*.test.{ts,tsx,mts,cts,js,jsx,mjs,cjs}', '**/*.test-support.{ts,tsx,mts,cts,js,jsx,mjs,cjs}', 'tests/**', '**/vitest.setup.*']
+/** 构建与工具的配置、web 的构建插件：本来就用开发依赖（Vite、ESLint、drizzle-kit），不进产物 */
+const BUILD_CODE = ['**/*.config.{ts,mts,cts,js,mjs,cjs}', 'apps/*/build/**']
+const TEST_MODULES = {
+  // 不区分大小写（no-restricted-imports 的默认）；带查询或片段（?raw、#x）也算（复验 S5）
+  regex: String.raw`\.test(?:-support)?(?:\.[cm]?[jt]sx?)?(?:[?#].*)?$`,
+  message: '测试与测试辅助（*.test.*、*.test-support.*）只被测试代码引用，不进入生产代码（审查 B17）',
+}
+
 /** 规范 §2.2：lint 不设警告级别，规则要么是错误，要么关闭。 */
 function promoteRule(entry: Linter.RuleEntry): Linter.RuleEntry {
   if (entry === 'warn' || entry === 1)
@@ -258,11 +290,20 @@ export default antfu(
     },
   },
   {
+    name: 'nerve/web-app-entries',
+    files: ['apps/web/src/entries/*/main.{ts,tsx}'],
+    // CSP 阳性对照只在测试构建里，不用 zod，它的入口里就是探针本身的代码
+    ignores: ['apps/web/src/entries/csp-probe/**'],
+    rules: {
+      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...APP_ENTRY_SYNTAX],
+    },
+  },
+  {
     name: 'nerve/editor-may-import-univer',
     files: ['apps/web/src/editor/**'],
     rules: {
       'no-restricted-imports': ['error', { patterns: [NO_UNIVER_PRO] }],
-      'no-restricted-syntax': ['error', ...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER_PRO],
+      'no-restricted-syntax': ['error', ...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER_PRO, DYNAMIC_TEST_MODULES],
     },
   },
   // 后端：先是所有文件的限制，后面的块按文件类型放开各自需要的部分（后面的块覆盖前面的同名规则）
@@ -285,6 +326,18 @@ export default antfu(
       // 不允许跳过或占位的用例（规范 §8.4）；确需临时跳过时，用 eslint-disable 注释写明原因，经审查
       'test/no-disabled-tests': 'error',
       'test/warn-todo': 'error',
+    },
+  },
+  {
+    // 测试代码之外（生产代码与仓库工具）只能引用本包 dependencies 里的包：测试库都在 devDependencies 里，或者根本没有声明。
+    // 这条规则同时检查静态导入、动态导入与 import type。本地的测试与测试辅助按路径另外拦下，
+    // 用 typescript-eslint 的同名规则单独配置：no-restricted-imports 已按文件类型组合了好几份，扁平配置里同名规则后者整体覆盖前者
+    name: 'nerve/test-code-only-in-tests',
+    files: [CODE_FILES],
+    ignores: [...TEST_CODE, ...BUILD_CODE],
+    rules: {
+      'import-x/no-extraneous-dependencies': ['error', { devDependencies: false, optionalDependencies: false, peerDependencies: false, includeTypes: true }],
+      'ts/no-restricted-imports': ['error', { patterns: [TEST_MODULES] }],
     },
   },
   {
@@ -413,7 +466,8 @@ export default antfu(
               { element: { type: 'api-schema', captured: { module: '{{from.element.captured.module}}' }, fileInternalPath: PUBLIC_ENTRY } },
             ] },
           },
-          { from: { element: { type: 'api-cli' } }, allow: { to: { element: { type: 'api-module', fileInternalPath: PUBLIC_ENTRY } } } },
+          // 命令行经模块的入口，或者经 app 层的程序接口（需要组装多个模块时，例如初始化管理员）
+          { from: { element: { type: 'api-cli' } }, allow: { to: { element: { type: ['api-module', 'api-app'], fileInternalPath: PUBLIC_ENTRY } } } },
           // 集成测试经 @nerve-office/api 的程序接口建应用
           { from: { element: { type: 'integration-tests' } }, allow: { to: { element: { type: 'api-app', fileInternalPath: PUBLIC_ENTRY } } } },
           {

@@ -28,10 +28,10 @@ describe('迁移命令', () => {
   it('对空库执行全部迁移；再执行一次时说明已是最新；退出码都是 0', async () => {
     const database = await createTestDatabase({ migrated: false })
     try {
-      const first = start({ NERVE_DATABASE_URL: database.url }, 'migrate')
+      const first = start(testEnvironment(database.url), 'migrate')
       expect((await first.exited).code).toBe(0)
       await first.waitForLog(entry => entry.msg === `已执行 ${readExpectedMigrations().length} 个迁移`)
-      const second = start({ NERVE_DATABASE_URL: database.url }, 'migrate')
+      const second = start(testEnvironment(database.url), 'migrate')
       expect((await second.exited).code).toBe(0)
       await second.waitForLog(entry => entry.msg === '库结构已是最新，不需要迁移')
     }
@@ -52,7 +52,10 @@ describe('api 进程', () => {
     const api = start({})
     expect((await api.exited).code).toBe(1)
     const entry = await api.waitForLog(log => log.code === 'CONFIG_INVALID')
-    expect(entry).toMatchObject({ level: 'fatal', issues: [{ variable: 'NERVE_DATABASE_URL', problem: '缺少' }] })
+    expect(entry).toMatchObject({
+      level: 'fatal',
+      issues: [{ variable: 'NERVE_DATABASE_URL', problem: '缺少' }, { variable: 'NERVE_PUBLIC_ORIGIN', problem: '缺少' }],
+    })
   })
 
   it('启动后开始监听；收到 SIGTERM 后退出，退出码 0', async () => {
