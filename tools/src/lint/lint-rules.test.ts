@@ -16,6 +16,11 @@ const PROBE_FILES = {
   editor: `apps/web/src/editor/${PROBE}/editor-part.ts`,
   // 不属于任何元素的"无主"文件：借它中转就能绕过边界
   stray: `apps/web/src/${PROBE}.ts`,
+  // 编辑器页的入口与编辑器页（sheet-editor 功能）里的文件：作为"从这里引用"的位置（P4 设计 §3.1）
+  editorEntry: `apps/web/src/entries/editor/${PROBE}.ts`,
+  sheetEditor: `apps/web/src/features/sheet-editor/${PROBE}.ts`,
+  // 编辑器页里被引用的文件
+  sheetEditorPart: `apps/web/src/features/sheet-editor/${PROBE}-part.ts`,
 }
 
 const WEB_FILE = 'apps/web/src/app/app.tsx'
@@ -42,6 +47,11 @@ const WARM_UP_TIMEOUT = 120_000
 const LINT_TIMEOUT = 20_000
 
 let eslint: ESLint
+/**
+ * 不按忽略规则跳过的实例：探针文件在 .gitignore 里，普通的实例不检查它们。
+ * 编辑器页的入口与 sheet-editor 功能在 P4 的 S3 之前还没有真实的文件，"从这里引用"的规则只能借探针的位置检查
+ */
+let eslintOnProbes: ESLint
 /** 为探针新建的目录，由深到浅。清理时只删空目录，不递归删除，免得删掉同一时间别人写进去的文件。 */
 const createdDirs: string[] = []
 
@@ -56,7 +66,11 @@ beforeAll(async () => {
     writeFileSync(join(REPO_ROOT, path), 'export const probe = 1\n')
   }
   eslint = new ESLint({ cwd: REPO_ROOT })
-  await eslint.lintFiles(WARM_UP_FILES.map(file => join(REPO_ROOT, file)))
+  eslintOnProbes = new ESLint({ cwd: REPO_ROOT, ignore: false })
+  await Promise.all([
+    eslint.lintFiles(WARM_UP_FILES.map(file => join(REPO_ROOT, file))),
+    eslintOnProbes.lintFiles([join(REPO_ROOT, PROBE_FILES.sheetEditor)]),
+  ])
 }, WARM_UP_TIMEOUT)
 
 afterAll(() => {
@@ -85,6 +99,13 @@ async function lint(code: string, filePath: string): Promise<Report> {
 
 async function rulesFor(code: string, filePath: string): Promise<string[]> {
   return (await lint(code, filePath)).rules
+}
+
+/** 把代码放在探针文件的位置检查（探针在 .gitignore 里，用不跳过忽略规则的实例） */
+async function lintAtProbe(code: string, probePath: string): Promise<Report> {
+  const [result] = await eslintOnProbes.lintText(code, { filePath: join(REPO_ROOT, probePath) })
+  const messages = result?.messages ?? []
+  return { rules: messages.map(m => m.ruleId ?? `解析失败：${m.message}`), messages: messages.map(m => m.message) }
 }
 
 async function configFor(filePath: string): Promise<Linter.Config> {
@@ -202,6 +223,98 @@ describe('US-M1-11 lint 规则的自测：模块边界与循环依赖', () => {
     // licenses.ts 被 license-bundle.ts 引用，这里让它反过来引用 license-bundle.ts
     const code = 'import { checkLicenseBundle } from \'./license-bundle.ts\'\n\nexport const f = checkLicenseBundle\n'
     expect(await rulesFor(code, 'tools/src/gates/licenses.ts')).toContain('import-x/no-cycle')
+  })
+}, LINT_TIMEOUT)
+
+describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 设计 §3.1、§3.6.9）', () => {
+  const EDITOR_FILE = 'apps/web/src/editor/sheet-editor.ts'
+  const INTERNAL_API_FILE = 'apps/web/src/editor/internal-api/index.ts'
+  const INTERNAL_MESSAGE = '内部 API 只能经 apps/web/src/editor/internal-api/ 引用并登记'
+
+  it('受限的内部符号在 internal-api 之外引用会失败：静态导入、import type、命名空间导入与再导出都算', async () => {
+    const cases = [
+      'import { IFunctionService } from \'@univerjs/engine-formula\'\n\nexport const s = IFunctionService\n',
+      'import type { BaseFunction } from \'@univerjs/engine-formula\'\n\nexport type F = BaseFunction\n',
+      'import * as formula from \'@univerjs/engine-formula\'\n\nexport const f = formula\n',
+      'export { LifecycleService } from \'@univerjs/core\'\n',
+      'import { SetRangeValuesMutation } from \'@univerjs/sheets\'\n\nexport const m = SetRangeValuesMutation\n',
+      // 决定不用的：setCurrentUser 所在的服务与本地授权服务（ADR-009）
+      'import { UserManagerService } from \'@univerjs/core\'\n\nexport const u = UserManagerService\n',
+    ]
+    for (const code of cases) {
+      const report = await lint(code, EDITOR_FILE)
+      expect(report.rules, code).toContain('no-restricted-imports')
+      expect(report.messages.join('\n'), code).toContain(INTERNAL_MESSAGE)
+    }
+    // Facade 与公开的类型、枚举照常引用
+    expect(await rulesFor('import { CommandType, Univer } from \'@univerjs/core\'\n\nexport const used = [CommandType, Univer]\n', EDITOR_FILE)).not.toContain('no-restricted-imports')
+  })
+
+  it('internal-api 里可以引用受限的内部符号、调用 __getInjector', async () => {
+    const code = 'import type { Univer } from \'@univerjs/core\'\nimport { LifecycleService } from \'@univerjs/core\'\nimport { IFunctionService } from \'@univerjs/engine-formula\'\n\nexport function services(univer: Univer): unknown[] {\n  return [univer.__getInjector().get(IFunctionService), LifecycleService]\n}\n'
+    const rules = await rulesFor(code, INTERNAL_API_FILE)
+    expect(rules).not.toContain('no-restricted-imports')
+    expect(rules).not.toContain('no-restricted-syntax')
+  })
+
+  it('__getInjector 的调用在 internal-api 之外一律失败：编辑器、平台代码、后端；计算属性与解构也算；对象字面量里同名的属性不算', async () => {
+    const declared = 'declare const univer: { __getInjector: () => unknown }\n'
+    for (const file of [EDITOR_FILE, WEB_FILE, API_SERVICE]) {
+      const report = await lint(`${declared}export const injector = univer.__getInjector()\n`, file)
+      expect(report.rules, file).toContain('no-restricted-syntax')
+      expect(report.messages.join('\n'), file).toContain(INTERNAL_MESSAGE)
+    }
+    expect(await rulesFor(`${declared}export const injector = univer['__getInjector']()\n`, EDITOR_FILE)).toContain('no-restricted-syntax')
+    expect(await rulesFor(`${declared}const { __getInjector } = univer\nexport const get = __getInjector\n`, EDITOR_FILE)).toContain('no-restricted-syntax')
+    expect(await rulesFor('export const fake = { __getInjector: () => 1 }\n', EDITOR_FILE)).not.toContain('no-restricted-syntax')
+  })
+
+  it('Univer 包里的深层路径会失败（它绕得过按导入名的限制），internal-api 也一样；只允许包入口、/facade、/locale/<语言> 与 /lib/index.css', async () => {
+    for (const source of ['@univerjs/engine-formula/lib/es/index.js', '@univerjs/sheets/lib/facade', '@univerjs/core/lib/types/index.d.ts']) {
+      const code = `import * as deep from '${source}'\n\nexport const d = deep\n`
+      expect(await rulesFor(code, EDITOR_FILE), source).toContain('no-restricted-imports')
+      expect(await rulesFor(code, INTERNAL_API_FILE), source).toContain('no-restricted-imports')
+    }
+    const allowed = 'import zhCN from \'@univerjs/sheets/locale/zh-CN\'\nimport \'@univerjs/sheets/facade\'\nimport \'@univerjs/design/lib/index.css\'\n\nexport const locale = zhCN\n'
+    expect(await rulesFor(allowed, EDITOR_FILE)).not.toContain('no-restricted-imports')
+  })
+
+  it('编辑器里动态导入 @univerjs/* 会失败：按导入名的限制只认静态导入', async () => {
+    const report = await lint('export async function load(): Promise<unknown> {\n  return import(\'@univerjs/engine-formula\')\n}\n', EDITOR_FILE)
+    expect(report.rules).toContain('no-restricted-syntax')
+    expect(report.messages.join('\n')).toContain('用静态导入')
+  })
+
+  it('internal-api 的配置不限制内部符号，编辑器的其他位置限制', async () => {
+    const internal = restrictedImports(await configFor(INTERNAL_API_FILE))
+    expect(internal.paths ?? []).toEqual([])
+    const editor = restrictedImports(await configFor('apps/web/src/editor/change-tracking/change-tracker.ts'))
+    expect(editor.paths?.find(path => path.name === '@univerjs/engine-formula')?.importNames).toEqual(expect.arrayContaining(['IActiveDirtyManagerService', 'IFunctionService', 'BaseFunction', 'ErrorValueObject', 'ErrorType']))
+  })
+
+  it('只有编辑器页的入口与编辑器页（sheet-editor 功能）能引用编辑器，而且只经公开入口', async () => {
+    const importEditor = (path: string): string => `import { createSheetEditor } from '${path}'\n\nexport const f = createSheetEditor\n`
+    expect((await lintAtProbe(importEditor('../../editor/index.ts'), PROBE_FILES.editorEntry)).rules).not.toContain('boundaries/dependencies')
+    expect((await lintAtProbe(importEditor('../../editor/index.ts'), PROBE_FILES.sheetEditor)).rules).not.toContain('boundaries/dependencies')
+    expect((await lintAtProbe(importEditor('../../editor/sheet-editor.ts'), PROBE_FILES.editorEntry)).rules).toContain('boundaries/dependencies')
+    expect((await lintAtProbe(importEditor('../../editor/sheet-editor.ts'), PROBE_FILES.sheetEditor)).rules).toContain('boundaries/dependencies')
+    // 其他功能模块与平台的应用层都不能引用编辑器
+    expect(await rulesFor(importEditor('../../editor/index.ts'), WEB_FEATURE_FILE)).toContain('boundaries/dependencies')
+    expect(await rulesFor(importEditor('../editor/index.ts'), WEB_FILE)).toContain('boundaries/dependencies')
+  })
+
+  it('平台的应用层、其他入口与其他功能不能引用编辑器页；编辑器页自己内部的引用不受影响', async () => {
+    const importPart = (path: string): string => `import { probe } from '${path}'\n\nexport const p = probe\n`
+    const part = `${PROBE}-part.ts`
+    for (const [file, path] of [[WEB_FILE, `../features/sheet-editor/${part}`], [WEB_FEATURE_FILE, `../sheet-editor/${part}`], ['apps/web/src/entries/platform/mount.tsx', `../../features/sheet-editor/${part}`]] as const) {
+      const report = await lint(importPart(path), file)
+      expect(report.rules, file).toContain('boundaries/dependencies')
+      expect(report.messages.join('\n'), file).toContain('只由编辑器页的入口引用')
+    }
+    expect((await lintAtProbe(importPart(`./${part}`), PROBE_FILES.sheetEditor)).rules).not.toContain('boundaries/dependencies')
+    // 编辑器页的入口不受这条限制（它照常只能经公开入口引用编辑器页）
+    const fromEntry = await lintAtProbe(importPart(`../../features/sheet-editor/${part}`), PROBE_FILES.editorEntry)
+    expect(fromEntry.messages.join('\n')).not.toContain('只由编辑器页的入口引用')
   })
 }, LINT_TIMEOUT)
 
