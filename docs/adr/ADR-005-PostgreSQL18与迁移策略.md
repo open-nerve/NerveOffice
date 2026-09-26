@@ -61,10 +61,10 @@
 
 **表的归属与访问**：
 - 表定义放在 `src/db/schema/<模块>/index.ts`；一个模块只能引用自己的表定义，表定义之间经 `index.ts` 互相引用（外键）。由 eslint-plugin-boundaries 强制。
-- 只有 database 模块、各模块的仓储与表定义能引用 `drizzle-orm`、`pg`（`no-restricted-imports`）。
+- 只有 database 模块、各模块的仓储与表定义能引用 `drizzle-orm`、`pg`（`no-restricted-imports`，按包名锚定开头）。后端不用动态导入，相对引用写 `.ts`，保证按路径与包名的限制认得出每一种引用（P2 设计 §3.1）。
 - SQL 只用参数：
   - 不用 `sql.raw`；
-  - `query()`、`execute()` 的参数不能是带插值的模板字符串或字符串拼接；
+  - `query()`、`execute()` 的第一个参数（SQL 文本）不能直接写成带插值的模板字符串或拼接（`+`、`concat()`）；其余写法由审查保证；
   - 表定义里的 CHECK 常量是唯一的例外。
 
 **连接池**：
@@ -76,6 +76,7 @@
 **事务**：
 - 服务用 `TransactionRunner.run()` 开启事务，拿到不透明的 `Transaction`，显式传给仓储；服务因此拿不到查询数据库的能力（审查 B2）；
 - 仓储的方法接受可选的 `Transaction`，用 `executorOf(db, transaction)` 换回执行器，没有事务时用连接池；
+- `TransactionRunner` 自己借出、归还连接，在这个连接上执行 drizzle 的事务：drizzle 0.45.3 在连接池上自己借连接时，`BEGIN` 失败不归还连接，归还时也不说明是否出错。以 `AppError` 结束时回滚已经成功，连接照常放回；其他失败一律丢弃连接（复验 N8）；
 - 需要跨模块放进同一个事务的写入（例如 P4 的新建文档加审计），由服务开启事务并传给各个模块。
 
 **审计表只追加**：

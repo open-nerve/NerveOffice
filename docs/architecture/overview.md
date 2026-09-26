@@ -65,14 +65,14 @@ apps/api/src/
 **日志**：
 - JSON，每行一条；请求结束时一条，含方法、路由模板、路径、状态码、耗时。
 - 不记请求头、请求体与查询串；敏感的键名统一脱敏。
-- 异常用自己的序列化：数据库错误只留类型、带占位符的 SQL、SQLSTATE 与约束、表、列名，不带绑定参数与行里的值；Nest 的内部日志同样处理。
+- 异常用自己的序列化：数据库错误只留类型、带占位符的 SQL、SQLSTATE 与约束、表、列名，不带绑定参数与行里的值；只传异常不给消息时的 `msg`、Nest 的内部日志同样处理。
 - 应用代码经依赖注入使用 `AppLogger`，不用 Nest 的静态 `Logger`。
 
 **数据库与迁移**（ADR-005）：
 - 连接池的语句、等锁与事务中空闲的超时取自配置；TCP keepalive 与客户端侧的查询时限兜住静默断开的连接；连接断开只记日志，不让进程退出。
 - 迁移由单独的命令执行，带 advisory lock；执行前比较已执行的迁移，库里不一致就拒绝。
 - 应用启动时不迁移，只检查库结构版本，不一致时就绪探针失败。
-- 表只由所属模块的仓储读写；服务用 `TransactionRunner` 开启事务，把不透明的 `Transaction` 显式传给仓储。
+- 表只由所属模块的仓储读写；服务用 `TransactionRunner` 开启事务，把不透明的 `Transaction` 显式传给仓储。`TransactionRunner` 自己借出、归还连接：除业务错误外，失败的事务丢弃它的连接。
 
 **运行与退出**：
 - 就绪探针检查接收请求、数据库可达与库结构版本，整体限时 2 秒。
@@ -90,15 +90,16 @@ apps/api/src/
   - 模块之间只经对方的 `index.ts`，模块不引用应用的组装；
   - 一个模块只能引用自己的表定义，表定义之间可以互相引用（外键）；
   - 只有仓储访问数据库：
-    - `drizzle-orm`、`pg`（含子路径与动态导入）只在 database 模块、各模块的仓储与表定义里引用；
+    - `drizzle-orm`、`pg`（包本身、子路径与 `pg-*`）只在 database 模块、各模块的仓储与表定义里引用；
     - `DATABASE`、`executorOf` 与数据库类型只在仓储与 database 模块里引用（app 层的程序接口为集成测试转出）；
     - 表定义只在仓储里引用；
     - 服务开事务用 `TransactionRunner`，拿到不透明的 `Transaction`；控制器不引用仓储与 `TransactionRunner`；
   - 只有 config 模块读取环境变量（`process.env`、`import { env }`、解构、`globalThis.process.env`；引用 `process` 不改名）；
-  - 输入必须带 schema（`@Body`、`@Query`、`@Param`，对所有后端文件）；不用 `@Req`、`@Res`、`@Headers`、`@UploadedFile` 等不经校验的装饰器；`@Controller` 只写在 `*.controller.ts` 里；
-  - SQL 只用参数：不用 `.raw`（表定义的 CHECK 常量除外），`query()`、`execute()` 的参数不拼接；
-  - 不用 Nest 的静态 `Logger`。
-  - 自动检查覆盖不到的写法（先拼成变量再传入、先赋给别的变量再读、经命名空间调用装饰器）由审查保证。
+  - 输入必须带 schema（`@Body`、`@Query`、`@Param`，对所有后端文件）；不用 `@Req`、`@Res`、`@Headers`、`@UploadedFile` 等不经校验的装饰器（改名、命名空间引用、深层路径都拦得住）；`@Controller` 只写在 `*.controller.ts` 里；
+  - SQL 只用参数：不用 `.raw`（表定义的 CHECK 常量除外），`query()`、`execute()` 的第一个参数（SQL 文本）不直接拼接；
+  - 不用 Nest 的静态 `Logger`；
+  - 引用的写法唯一：不用动态导入，相对引用写 `.ts`，Nest 只从包的入口引用，按路径与包名的限制才可靠。
+  - 自动检查覆盖不到的写法由审查保证：先拼成变量再传入的 SQL、先赋给别的变量再读的环境变量、在仓储里转出数据库句柄、自己写的参数装饰器、路径里夹 `./` 等刻意绕过的引用。
 - 跨元素时，contracts、功能模块、编辑器与后端模块只经公开入口（`index.ts`）引用；元素目录里没有"无主"文件。
 - contracts 不依赖任何内部包；tools 不依赖业务包；集成测试只经 contracts 与 `@nerve-office/api` 的入口引用。
 - 没有循环依赖。
