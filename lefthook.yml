@@ -13,3 +13,8 @@ pre-push:
   jobs:
     - name: verify --fast
       run: pnpm verify --fast
+
+# 只输出汇总与失败的详情
+output:
+  - summary
+  - failure
