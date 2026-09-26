@@ -2,7 +2,7 @@
 
 自部署、单租户的团队在线文档平台，提供在线表格与文字文档。基于 [Univer](https://github.com/dream-num/univer) 开源 SDK（Apache-2.0）构建，不依赖 Univer Pro。
 
-> 当前阶段：规划完成，准备进入 M0 技术验证，尚无可运行代码。
+> 当前阶段：M0 技术验证已完成（标签 `v0.1-m0`），正在启动 M1 工程底座与行走骨架。生产代码尚未开始；`spikes/` 下是 M0 的验证工程，不进入生产。
 
 ## 核心设计
 
@@ -13,17 +13,18 @@
 
 ## 文档
 
-- [00 项目计划书](docs/v0.1/00-项目计划书.md)：范围、架构、评审决策与 M0 验证清单
+- [00 项目计划书](docs/v0.1/00-项目计划书.md)：范围、架构、评审决策与里程碑（r3 已按 M0 的结论修订）
+- [M0 结束评审](docs/v0.1/M0-技术验证/reviews/M0-结束评审.md)、[M0 交接单](docs/v0.1/M0-技术验证/handoffs/M0-交接单.md)：M0 的结论与交给后续的事项
+- [能力矩阵](docs/v0.1/M0-技术验证/reports/能力矩阵.md)、[插件档案 v1](docs/v0.1/M0-技术验证/reports/插件档案v1.md)：表格与文字文档的能力结论、固定使用的插件与配置
+- [延期事项登记](docs/v0.1/02-延期事项登记.md)
 
 ## 参考源码
 
-`refer/univer` 是只读的 Univer 参考源码，不纳入本仓库。获取方式：
+`refer/univer` 是只读的 Univer 参考源码，不纳入本仓库。SDK 版本锁定为 1.0.0，参考源码检出对应的 tag：
 
 ```bash
-git clone --depth 1 https://github.com/dream-num/univer.git refer/univer
+git clone --depth 1 --branch v1.0.0 https://github.com/dream-num/univer.git refer/univer
 ```
-
-M0 锁定 SDK 版本后，改为检出与 npm 依赖版本一致的 tag，例如 `--branch v1.0.0`。
 
 ## 许可证
 
