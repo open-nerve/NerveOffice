@@ -21,9 +21,12 @@ export interface LicenseException {
 
 export const LICENSE_EXCEPTIONS: readonly LicenseException[] = []
 
-/** Univer 的版本基线（00 号计划书 §3.2）：协调发布的包同一个版本，独立发版的包按清单核对。 */
+/**
+ * Univer 的版本基线（00 号计划书 §3.2）：协调发布的包同一个版本，独立发版的包按清单核对。
+ * 1.0.1 与 1.0.0 的产物相同（内嵌的版本号除外）；1.0.0 的一部分包没有来源证明，过不了 trustPolicy（M1-P4）。
+ */
 export const UNIVER_POLICY = {
-  version: '1.0.0',
+  version: '1.0.1',
   independent: { '@univerjs/icons': '1.43.0' } as Readonly<Record<string, string>>,
 }
 
