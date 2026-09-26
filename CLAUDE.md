@@ -80,13 +80,16 @@
 | 命令 | 作用 |
 |---|---|
 | `pnpm install` | 安装依赖，同时安装 git 钩子 |
-| `pnpm verify` | 合并前的完整门禁：lint、类型检查、单元测试与覆盖率、静态检查、集成测试、构建、依赖与产物检查、E2E（本机的 Chromium、Chrome、WebKit；CI 另加 Edge） |
-| `pnpm verify --fast` | 快速门禁（pre-push 使用） |
+| `pnpm verify` | 合并前的完整门禁：lint、类型检查、静态检查、单元与集成测试及覆盖率、构建、依赖与产物检查、E2E（本机的 Chromium、Chrome、WebKit；CI 另加 Edge） |
+| `pnpm verify --fast` | 快速门禁（pre-push 使用；不需要数据库） |
+| `pnpm dev:api` | 以监听模式启动后端（读取 `apps/api/.env.development`，先 `pnpm db:up` 与 `pnpm db:migrate`） |
 | `pnpm lint` / `pnpm lint:fix` | 检查 / 修正代码规范与格式 |
 | `pnpm typecheck` | 类型检查 |
-| `pnpm test` / `pnpm test:coverage` | 单元测试 / 带覆盖率 |
+| `pnpm test` / `pnpm test:coverage` | 单元测试 / 单元与集成测试合计的覆盖率（需要数据库） |
 | `pnpm db:up` / `pnpm db:down` | 启动 / 停止开发用的 PostgreSQL |
-| `pnpm test:integration` | 集成测试（需要数据库） |
+| `pnpm db:migrate` | 构建后端并对开发库执行迁移 |
+| `pnpm db:generate --name <名称>` | 按表定义生成迁移（人工审阅后入库；合并后的迁移不再修改） |
+| `pnpm test:integration` | 集成测试（需要数据库；先构建后端，进程测试用构建产物） |
 | `pnpm test:e2e` | 构建前端后跑 E2E |
 | `pnpm build` / `pnpm clean` | 构建 / 删除构建产物 |
-| `pnpm gate [名称…]` | A01 等检查：pins、config、stories、deps、licenses、artifacts、audit |
+| `pnpm gate [名称…]` | A01 等检查：pins、config、stories、migrations、deps、licenses、artifacts、audit |
