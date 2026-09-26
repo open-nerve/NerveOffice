@@ -46,6 +46,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # 取两层历史：迁移门禁拿合并前的 main（HEAD^1）作基准，确认已合并的迁移没有被改动（ADR-005）
+          fetch-depth: 2
 
       - name: 安装 Node.js（版本见 .node-version）
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

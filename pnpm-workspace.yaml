@@ -22,6 +22,8 @@ packages:
 
 # 依赖的安装脚本逐个决定，新增一项要写原因（规范 §3）
 allowBuilds:
+  # postinstall 只校验本平台的原生二进制；pnpm 已按平台装好可选依赖里的二进制。drizzle-kit 用它读取表定义，只在开发时使用（M1-P2）
+  esbuild: false
   # postinstall 只是执行 `lefthook install`；根 package.json 的 prepare 已经显式执行
   lefthook: false
   # postinstall 只检查原生绑定；pnpm 已按平台安装了可选依赖里的绑定
@@ -46,6 +48,8 @@ catalog:
   '@types/react-dom': 19.3.0
   '@vitejs/plugin-react': 6.1.1
   '@vitest/coverage-v8': 4.1.11
+  drizzle-kit: 0.31.11
+  drizzle-orm: 0.45.3
   eslint: 10.11.0
   eslint-import-resolver-typescript: 4.4.5
   eslint-plugin-boundaries: 7.2.0

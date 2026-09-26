@@ -13,7 +13,9 @@
   },
   "scripts": {
     "build": "nest build",
+    "db:generate": "NODE_OPTIONS=--conditions=@nerve-office/source drizzle-kit generate --config drizzle.config.ts",
     "dev": "nest start --watch --env-file .env.development",
+    "migrate": "node dist/cli/migrate.js",
     "start": "node dist/app/main.js",
     "typecheck": "tsc -p tsconfig.json"
   },
@@ -22,7 +24,9 @@
     "@nestjs/common": "catalog:",
     "@nestjs/core": "catalog:",
     "@nestjs/platform-express": "catalog:",
+    "drizzle-orm": "catalog:",
     "express": "catalog:",
+    "pg": "catalog:",
     "pino": "catalog:",
     "pino-http": "catalog:",
     "reflect-metadata": "catalog:",
@@ -34,6 +38,8 @@
     "@nestjs/testing": "catalog:",
     "@types/express": "catalog:",
     "@types/node": "catalog:",
+    "@types/pg": "catalog:",
+    "drizzle-kit": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

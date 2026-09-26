@@ -122,6 +122,8 @@ export default antfu(
       '**/playwright-report/**',
       '**/test-results/**',
       '**/blob-report/**',
+      // drizzle-kit 生成、人工审阅的迁移（SQL、journal 与快照）：合并后不再修改（ADR-005），不做 lint 与格式化
+      'apps/api/src/db/migrations/**',
     ],
   },
   {
@@ -154,6 +156,8 @@ export default antfu(
       'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...API_NO_SQL_CONCATENATION],
       // 只有 config 模块读取 process.env（规范 §7）
       'node/no-process-env': 'error',
+      // React 的规则把 Nest 的 useFactory、useValue 当作 Hook；后端没有 React
+      'react/no-unnecessary-use-prefix': 'off',
     },
   },
   {
@@ -161,6 +165,14 @@ export default antfu(
     files: ['apps/api/src/modules/database/**/*.ts', 'apps/api/src/modules/*/*.repository.ts', 'apps/api/src/db/**/*.ts'],
     rules: {
       'no-restricted-imports': ['error', { paths: [API_NO_NEST_LOGGER], patterns: [UNIVER_ONLY_IN_EDITOR, NO_UNIVER_PRO] }],
+    },
+  },
+  {
+    // 表定义里的 CHECK 约束要把代码里的常量拼成 SQL 字面量（drizzle-kit 不内联参数）；这里只有 DDL 与常量，没有运行时的输入
+    name: 'nerve/api-schema-ddl',
+    files: ['apps/api/src/db/schema/**/*.ts'],
+    rules: {
+      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...API_NO_SQL_CONCATENATION.slice(1)],
     },
   },
   {
@@ -300,7 +312,7 @@ export default antfu(
           { from: { element: { type: ['web-shared', 'api-shared', 'integration-tests', 'e2e-tests'] } }, allow: { to: { element: { type: 'contracts', fileInternalPath: PUBLIC_ENTRY } } } },
           // 后端：模块之间只经对方的 index.ts；一个模块只能引用自己的表定义；表定义之间经 index.ts 互相引用（外键）
           { from: { element: { type: 'api-module' } }, allow: { to: { element: { type: 'api-module', captured: { module: '{{from.element.captured.module}}' } } } } },
-          { from: { element: { type: 'api-schema' } }, allow: { to: { element: { type: 'api-schema', fileInternalPath: PUBLIC_ENTRY } } } },
+          { from: { element: { type: 'api-schema' } }, allow: { to: { element: { type: ['api-schema', 'contracts'], fileInternalPath: PUBLIC_ENTRY } } } },
           {
             from: { element: { type: 'api-app' } },
             allow: { to: [

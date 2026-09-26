@@ -2,7 +2,9 @@ import type { DynamicModule, ModuleMetadata } from '@nestjs/common'
 import type { AppConfig } from '../modules/config/index.ts'
 import type { AppLogger } from '../modules/logging/index.ts'
 import { Module } from '@nestjs/common'
+import { AuditModule } from '../modules/audit/index.ts'
 import { ConfigModule } from '../modules/config/index.ts'
+import { DatabaseModule } from '../modules/database/index.ts'
 import { HealthModule } from '../modules/health/index.ts'
 import { LoggingModule } from '../modules/logging/index.ts'
 
@@ -24,6 +26,8 @@ export class AppModule {
       imports: [
         ConfigModule.forRoot(options.config),
         LoggingModule.forRoot(options.logger),
+        DatabaseModule,
+        AuditModule,
         HealthModule,
         ...(options.additionalModules ?? []),
       ],

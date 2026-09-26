@@ -2,23 +2,26 @@
 // Vitest 列举全部项目，新增项目时不会漏掉。
 // 读取外部输入的方式（执行命令、产物目录、当天日期）可以注入，便于用样例测试装配逻辑。
 import type { CollectedGraph } from './dependency-graph.ts'
+import type { MigrationFiles } from './migrations.ts'
 import type { Violation } from './types.ts'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
+import process from 'node:process'
 import { z } from 'zod'
-import { commandJson, packageName, readJson, readText, readWorkspaceConfig, REPO_ROOT, workspacePackageDirs } from '../shared/repo.ts'
+import { commandJson, commandText, listFiles, packageName, readJson, readText, readWorkspaceConfig, REPO_ROOT, workspacePackageDirs } from '../shared/repo.ts'
 import { checkStories, parseDesignStoryIds, parseRegistry, testsFromPlaywrightList, testsFromVitestList } from '../stories/stories.ts'
 import { checkFileTypes, classifyArtifact, scanArtifacts } from './artifacts.ts'
 import { checkAudit } from './audit.ts'
 import { checkGraphComplete, checkSingletons, checkUniver, collectInstalled } from './dependency-graph.ts'
 import { bundledPackagesSchema, checkLicenseBundle } from './license-bundle.ts'
 import { checkDevelopmentLicenses, checkProductionLicenses, flattenLicenseReport, licensesByPath } from './licenses.ts'
+import { checkMigrations, MIGRATIONS_DIR } from './migrations.ts'
 import { checkPins } from './pins.ts'
 import { checkPnpmConfig, checkPnpmfiles, PNPMFILE_NAMES } from './pnpm-config.ts'
 import { auditReportSchema, licenseReportSchema, lsOutputSchema } from './pnpm-outputs.ts'
 import { ARTIFACT_POLICY, AUDIT_EXCEPTIONS, LICENSE_EXCEPTIONS, PNPM_POLICY, PRODUCTION_LICENSES, SINGLETON_PACKAGES, UNIVER_POLICY } from './policy.ts'
 
-export const GATE_NAMES = ['pins', 'config', 'stories', 'deps', 'licenses', 'artifacts', 'audit'] as const
+export const GATE_NAMES = ['pins', 'config', 'stories', 'migrations', 'deps', 'licenses', 'artifacts', 'audit'] as const
 export type GateName = typeof GATE_NAMES[number]
 
 export interface GateOutcome {
@@ -76,6 +79,49 @@ function stories(): GateOutcome {
   ]
   const active = Object.entries(registry.stories).filter(([, s]) => s.status === 'active').map(([id]) => id)
   return { name: 'stories', title: '故事对照', violations: checkStories(designIds, registry, tests), notes: [`${designIds.length} 个故事，active：${active.join('、') || '无'}；列举出 ${tests.length} 个会执行的测试`] }
+}
+
+/**
+ * 迁移比较的基准：可以用 NERVE_MIGRATIONS_BASE 指定；CI 上是合并前的 main（HEAD^1，检出要取两层历史）；
+ * 本机是与 main 的分叉点。
+ */
+export function migrationsBaseRef(env: NodeJS.ProcessEnv, mergeBase: () => string): string {
+  if (env.NERVE_MIGRATIONS_BASE !== undefined && env.NERVE_MIGRATIONS_BASE !== '')
+    return env.NERVE_MIGRATIONS_BASE
+  if (env.GITHUB_ACTIONS === 'true')
+    return 'HEAD^1'
+  return mergeBase()
+}
+
+function workingTreeMigrations(): MigrationFiles {
+  const prefix = `${MIGRATIONS_DIR}/`
+  return new Map(listFiles(MIGRATIONS_DIR, () => true).map(path => [path.slice(prefix.length), readText(path)]))
+}
+
+function migrationsAt(ref: string): MigrationFiles {
+  const prefix = `${MIGRATIONS_DIR}/`
+  const paths = commandText('git', ['ls-tree', '-r', '--name-only', ref, '--', MIGRATIONS_DIR]).split('\n').filter(path => path !== '')
+  return new Map(paths.map(path => [path.slice(prefix.length), commandText('git', ['show', `${ref}:${path}`])]))
+}
+
+function migrations(): GateOutcome {
+  let ref: string
+  let base: MigrationFiles
+  try {
+    ref = migrationsBaseRef(process.env, () => commandText('git', ['merge-base', 'HEAD', 'main']).trim())
+    base = migrationsAt(ref)
+  }
+  catch (error) {
+    const detail = `取不到比较的基准，不能确认已合并的迁移没有被改动：${error instanceof Error ? error.message : String(error)}（可以用 NERVE_MIGRATIONS_BASE 指定基准）`
+    return { name: 'migrations', title: '迁移只向前', violations: [{ rule: 'migrations/base', subject: MIGRATIONS_DIR, detail }], notes: [] }
+  }
+  const current = workingTreeMigrations()
+  return {
+    name: 'migrations',
+    title: '迁移只向前',
+    violations: checkMigrations(current, base),
+    notes: [`基准 ${ref}：已合并 ${[...base.keys()].filter(path => path.endsWith('.sql')).length} 个迁移，当前 ${[...current.keys()].filter(path => path.endsWith('.sql')).length} 个`],
+  }
 }
 
 function deps(): GateOutcome {
@@ -147,6 +193,7 @@ const GATES: Readonly<Record<GateName, () => GateOutcome>> = {
   pins,
   config,
   stories,
+  migrations,
   deps,
   licenses,
   artifacts: () => artifactsGate(WEB_DIST),

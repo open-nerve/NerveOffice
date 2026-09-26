@@ -1,3 +1,4 @@
+import type { Abstract, Type } from '@nestjs/common'
 import type { NestExpressApplication } from '@nestjs/platform-express'
 import type { AddressInfo } from 'node:net'
 import type { Logger } from 'pino'
@@ -23,6 +24,11 @@ export class ApplicationRuntime {
     if (address === null || typeof address === 'string')
       throw new Error('HTTP 服务没有监听在 TCP 端口上')
     return address
+  }
+
+  /** 取应用里的服务（命令行与集成测试用）。 */
+  get<T>(token: Type<T> | Abstract<T> | symbol): T {
+    return this.app.get<T>(token)
   }
 
   /** 只执行一次；重复调用得到同一个结果。 */

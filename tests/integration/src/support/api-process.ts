@@ -1,4 +1,4 @@
-// 用构建产物启动真实的 api 进程，验证只有真实进程才有的行为：启动失败的退出码、信号处理。
+// 用构建产物启动真实的 api 进程，验证只有真实进程才有的行为：启动失败的退出码、信号处理、迁移命令。
 // pnpm test:integration 会先构建 api。
 import type { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
@@ -6,7 +6,11 @@ import { existsSync } from 'node:fs'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
-const API_MAIN = fileURLToPath(new URL('../../../../apps/api/dist/app/main.js', import.meta.url))
+/** 构建产物里的两个入口：应用与迁移命令。 */
+const ENTRIES = {
+  main: fileURLToPath(new URL('../../../../apps/api/dist/app/main.js', import.meta.url)),
+  migrate: fileURLToPath(new URL('../../../../apps/api/dist/cli/migrate.js', import.meta.url)),
+}
 
 export interface ProcessExit {
   code: number | null
@@ -43,11 +47,12 @@ function findEntry(output: string, predicate: (entry: LogEntry) => boolean): Log
   return undefined
 }
 
-/** 启动 api 进程。环境变量只有 PATH 与给定的这些，不继承测试进程的环境。 */
-export function startApiProcess(env: Readonly<Record<string, string>>): ApiProcess {
-  if (!existsSync(API_MAIN))
-    throw new Error(`找不到 ${API_MAIN}：先构建 api（pnpm test:integration 会自动构建）`)
-  const child = spawn(process.execPath, [API_MAIN], {
+/** 启动 api 的进程（默认是应用，也可以是迁移命令）。环境变量只有 PATH 与给定的这些，不继承测试进程的环境。 */
+export function startApiProcess(env: Readonly<Record<string, string>>, entry: keyof typeof ENTRIES = 'main'): ApiProcess {
+  const script = ENTRIES[entry]
+  if (!existsSync(script))
+    throw new Error(`找不到 ${script}：先构建 api（pnpm test:integration 会自动构建）`)
+  const child = spawn(process.execPath, [script], {
     env: { PATH: process.env.PATH ?? '', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   })

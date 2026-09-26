@@ -53,6 +53,8 @@ export default defineConfig({
         // api 的进程入口与命令行入口只做组装，由进程测试覆盖（子进程不统计覆盖率）
         'apps/api/src/app/main.ts',
         'apps/api/src/cli/**',
+        // 迁移是 SQL 与 JSON，不是代码
+        'apps/api/src/db/migrations/**',
         // 编辑器适配层以 E2E 为主（规范 §8.3）
         'apps/web/src/editor/**',
         // 命令行入口只做参数解析与输出，规则本身在各自的模块里测试

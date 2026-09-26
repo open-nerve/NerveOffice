@@ -57,6 +57,17 @@ export function commandJson(command: string, args: readonly string[]): unknown {
   }
 }
 
+/** 执行命令并返回它的标准输出；失败时抛出的错误带上标准错误的内容。 */
+export function commandText(command: string, args: readonly string[]): string {
+  try {
+    return execFileSync(command, args, { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] })
+  }
+  catch (error) {
+    const stderr = (error as { stderr?: unknown }).stderr
+    throw new Error(`${command} ${args.join(' ')} 失败${typeof stderr === 'string' && stderr.trim() !== '' ? `：${stderr.trim()}` : ''}`, { cause: error })
+  }
+}
+
 /** 递归列出目录下的文件（相对仓库根目录）；目录不存在时返回空数组。 */
 export function listFiles(dir: string, include: (path: string) => boolean): string[] {
   const absolute = join(REPO_ROOT, dir)

@@ -5,10 +5,10 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { readFixture } from './fixtures.ts'
-import { artifactsGate, auditGate, runGate } from './run.ts'
+import { artifactsGate, auditGate, migrationsBaseRef, runGate } from './run.ts'
 
 describe('US-M1-11 门禁对仓库现状通过', () => {
-  it.each(['pins', 'config', 'stories', 'deps', 'licenses'] as const)('%s', (name) => {
+  it.each(['pins', 'config', 'stories', 'migrations', 'deps', 'licenses'] as const)('%s', (name) => {
     const outcome = runGate(name)
     expect(outcome.violations).toEqual([])
     expect(outcome.name).toBe(name)
@@ -65,5 +65,22 @@ describe('US-M1-11 漏洞门禁的装配', () => {
 
   it('pnpm 的输出结构不对时直接报错，不当作没有漏洞', () => {
     expect(() => auditGate(() => ({ advisories: {} }), '2026-09-26')).toThrow()
+  })
+})
+
+describe('迁移门禁的基准', () => {
+  const mergeBase = (): string => 'abc123'
+
+  it('可以用 NERVE_MIGRATIONS_BASE 指定', () => {
+    expect(migrationsBaseRef({ NERVE_MIGRATIONS_BASE: 'v0.1-m1', GITHUB_ACTIONS: 'true' }, mergeBase)).toBe('v0.1-m1')
+  })
+
+  it('CI 上是合并前的 main（HEAD^1）', () => {
+    expect(migrationsBaseRef({ GITHUB_ACTIONS: 'true' }, mergeBase)).toBe('HEAD^1')
+  })
+
+  it('本机是与 main 的分叉点', () => {
+    expect(migrationsBaseRef({}, mergeBase)).toBe('abc123')
+    expect(migrationsBaseRef({ NERVE_MIGRATIONS_BASE: '' }, mergeBase)).toBe('abc123')
   })
 })

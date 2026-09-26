@@ -188,6 +188,12 @@ describe('US-M1-11 lint 规则的自测：后端', () => {
     expect(await rulesFor('import { createApplication } from \'../../app/index.ts\'\nexport const f = createApplication\n', API_SERVICE)).toContain('boundaries/dependencies')
   })
 
+  it('一个模块只能引用自己的表定义：别的模块的表读写不到', async () => {
+    const code = 'import { auditEvents } from \'../../db/schema/audit/index.ts\'\nexport const table = auditEvents\n'
+    expect(await rulesFor(code, API_SERVICE)).toContain('boundaries/dependencies')
+    expect(await rulesFor(code, 'apps/api/src/modules/audit/audit.repository.ts')).not.toContain('boundaries/dependencies')
+  })
+
   it('集成测试只经 @nerve-office/api 的入口引用后端', async () => {
     const code = 'import { loadConfig } from \'../../../../apps/api/src/modules/config/index.ts\'\nexport const f = loadConfig\n'
     expect(await rulesFor(code, INTEGRATION_FILE)).toContain('boundaries/dependencies')

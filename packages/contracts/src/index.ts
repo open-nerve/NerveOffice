@@ -1,3 +1,5 @@
+export { AUDIT_ACTIONS, auditActionSchema } from './audit/audit-actions.ts'
+export type { AuditAction } from './audit/audit-actions.ts'
 export { ERROR_CODES, errorStatus, RETIRED_ERROR_CODES } from './errors/error-codes.ts'
 export type { ErrorCode } from './errors/error-codes.ts'
 export { errorCodeSchema, errorResponseSchema } from './errors/error-response.ts'
