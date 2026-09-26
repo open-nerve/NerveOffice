@@ -95,17 +95,33 @@ export function scanArtifacts(files: readonly ArtifactFile[], policy: ArtifactPo
   return { violations, hosts }
 }
 
-/** 构建产物里允许出现的文件类型：text 类扫描内容，binary 类只放行。出现其他类型即违规，免得绕过扫描。 */
+/** 构建产物里允许出现的文件类型：text 类扫描内容（含 .json），binary 类只放行。 */
 export const ARTIFACT_FILE_TYPES = {
-  text: ['.js', '.mjs', '.css', '.html', '.svg'],
+  text: ['.js', '.mjs', '.css', '.html', '.svg', '.json'],
   binary: ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.ico', '.woff', '.woff2', '.ttf', '.otf'],
-  // 第三方许可清单与构建清单：不含可执行内容
-  metadata: ['.md', '.json'],
 } as const
 
+/** 构建清单与第三方许可清单（路径相对产物目录）：只放行这几个文件，不扫描内容，许可正文里的地址不会被请求。 */
+export const ARTIFACT_METADATA_FILES: readonly string[] = ['.vite/manifest.json', '.vite/third-party-packages.json', 'THIRD-PARTY-LICENSES.md']
+
+export type ArtifactKind = 'text' | 'binary' | 'metadata' | 'unknown'
+
+/** path 是相对产物目录的路径。 */
+export function classifyArtifact(path: string): ArtifactKind {
+  if (ARTIFACT_METADATA_FILES.includes(path))
+    return 'metadata'
+  const dot = path.lastIndexOf('.')
+  const extension = dot > path.lastIndexOf('/') ? path.slice(dot).toLowerCase() : ''
+  if ((ARTIFACT_FILE_TYPES.text as readonly string[]).includes(extension))
+    return 'text'
+  if ((ARTIFACT_FILE_TYPES.binary as readonly string[]).includes(extension))
+    return 'binary'
+  return 'unknown'
+}
+
+/** 出现未登记的文件类型即违规，免得绕过扫描。 */
 export function checkFileTypes(paths: readonly string[]): Violation[] {
-  const known = new Set<string>([...ARTIFACT_FILE_TYPES.text, ...ARTIFACT_FILE_TYPES.binary, ...ARTIFACT_FILE_TYPES.metadata])
   return paths
-    .filter(path => !known.has(path.slice(path.lastIndexOf('.')).toLowerCase()) || !path.includes('.'))
+    .filter(path => classifyArtifact(path) === 'unknown')
     .map(path => ({ rule: 'artifacts/file-type', subject: path, detail: '构建产物里出现了未登记的文件类型，产物扫描会漏掉它；确认来源后登记到 ARTIFACT_FILE_TYPES' }))
 }

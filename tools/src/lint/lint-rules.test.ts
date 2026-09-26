@@ -19,18 +19,24 @@ const PROBE_FILES = {
 }
 
 let eslint: ESLint
+/** 为探针新建的最外层目录：用完连同它一起删掉，不在仓库里留下空目录。 */
+const createdDirs: string[] = []
 
 beforeAll(() => {
   for (const path of Object.values(PROBE_FILES)) {
-    mkdirSync(join(REPO_ROOT, dirname(path)), { recursive: true })
+    const created = mkdirSync(join(REPO_ROOT, dirname(path)), { recursive: true })
+    if (created !== undefined)
+      createdDirs.push(created)
     writeFileSync(join(REPO_ROOT, path), 'export const probe = 1\n')
   }
   eslint = new ESLint({ cwd: REPO_ROOT })
 })
 
 afterAll(() => {
-  rmSync(join(REPO_ROOT, dirname(PROBE_FILES.editor)), { recursive: true, force: true })
-  rmSync(join(REPO_ROOT, PROBE_FILES.stray), { force: true })
+  for (const path of Object.values(PROBE_FILES))
+    rmSync(join(REPO_ROOT, path), { force: true })
+  for (const dir of createdDirs)
+    rmSync(dir, { recursive: true, force: true })
 })
 
 interface Report { rules: string[], messages: string[] }

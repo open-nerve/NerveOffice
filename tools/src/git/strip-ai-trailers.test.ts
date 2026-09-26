@@ -66,6 +66,12 @@ describe('stripAiTrailers', () => {
     expect(stripAiTrailers('docs: 更新\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n# 注释\n')).toBe('docs: 更新\n\n# 注释\n')
   })
 
+  it('git commit -v：只处理剪刀线之前的部分，剪刀线与 diff 原样保留', () => {
+    const diff = '# ------------------------ >8 ------------------------\n# 不要修改或删除上面这一行。\ndiff --git a/x.ts b/x.ts\n+Co-Authored-By: Claude <noreply@anthropic.com>\n'
+    const message = `fix: 修正\n\n正文\n\nCo-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>\n# 请为您的变更输入提交说明。\n${diff}`
+    expect(stripAiTrailers(message)).toBe(`fix: 修正\n\n正文\n\n# 请为您的变更输入提交说明。\n${diff}`)
+  })
+
   it('正文里提到 Claude 的普通句子不受影响', () => {
     const message = 'docs: 记录 Claude 相关的约定\n\n说明 Co-Authored-By 规则\n'
     expect(stripAiTrailers(message)).toBe(message)

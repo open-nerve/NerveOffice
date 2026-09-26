@@ -51,11 +51,11 @@ A01 的检查（`pnpm gate <名称>`）：
 | 检查 | 内容 |
 |---|---|
 | `pins` | 外部依赖都经 pnpm 目录引用，目录里是精确版本；内部包 `workspace:*`；`packageManager` 精确 |
-| `config` | 只有评审过的顶层设置；发布冷却期不少于 3 天、`trustPolicy`、`engineStrict`；安装脚本、冷却期豁免、`overrides`、peer 规则、补丁逐项写明原因 |
+| `config` | 只有评审过的顶层设置，没有 pnpmfile；发布冷却期不少于 3 天、`trustPolicy`、`engineStrict`；安装脚本、冷却期豁免（只能写"包名@精确版本"）、`overrides`、peer 规则、补丁逐项写明原因 |
 | `stories` | 当前 M 的故事登记表与总设计一致；active 的故事有会执行的测试（取自 Vitest 与 Playwright 的列举） |
 | `deps` | 生产依赖图（含可选依赖，按真实包名）没有 Pro，Univer 版本一致，应为单例的包只有一份，依赖树完整 |
-| `licenses` | 生产依赖的每个安装实例的许可在白名单内；开发依赖没有 GPL、AGPL、SSPL 与未声明许可 |
-| `artifacts` | 构建产物只有登记过的文件类型；没有动态代码、没有未登记的外部主机与关键字；第三方许可清单（含 Worker 的产物）完整 |
+| `licenses` | 生产依赖的每个安装实例的许可在白名单内（本机没装的平台专属包以 CI 为准）；开发依赖没有 GPL、AGPL、SSPL 与未声明许可 |
+| `artifacts` | 构建产物只有登记过的文件类型（`.json` 也扫描，只放行三个清单文件）；没有动态代码、没有未登记的外部主机与关键字；第三方许可清单（含 Worker 的产物）完整 |
 | `audit` | 生产依赖没有高危及以上的漏洞；例外有原因与到期日；没有被配置藏起来的漏洞 |
 
 ## 5. 数据库

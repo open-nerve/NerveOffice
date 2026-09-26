@@ -24,6 +24,7 @@
     "@vitejs/plugin-react": "catalog:",
     "jsdom": "catalog:",
     "vite": "catalog:",
-    "vitest": "catalog:"
+    "vitest": "catalog:",
+    "zod": "catalog:"
   }
 }

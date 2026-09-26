@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { checkPnpmConfig } from './pnpm-config.ts'
+import { checkPnpmConfig, checkPnpmfiles } from './pnpm-config.ts'
 
 const policy = { minimumReleaseAgeMinutes: 4320, trustPolicy: 'no-downgrade' } as const
 
@@ -74,11 +74,29 @@ describe('US-M1-11 A01 包管理配置', () => {
     expect(rulesOf(text)).toEqual([rule])
   })
 
+  it.each(['*', 'foo', '@scope/*', 'foo@^1.2.3', 'foo@1.x'])('违规：冷却期豁免不是"包名@精确版本"：%s', (entry) => {
+    expect(rulesOf(valid.replace('  - foo@1.2.3', `  - '${entry}'`))).toEqual(['pnpm-config/release-age-exclude-exact'])
+  })
+
+  it('合规：带作用域的包名@精确版本', () => {
+    expect(rulesOf(valid.replace('  - foo@1.2.3', '  - \'@scope/pkg@2.0.0-rc.1\''))).toEqual([])
+  })
+
   it.each(['^1.2.8', '1.x', 'latest'])('违规：overrides 不是精确版本 %s', (version) => {
     expect(rulesOf(valid.replace('minimist: 1.2.8', `minimist: '${version}'`))).toEqual(['pnpm-config/override-version'])
   })
 
   it('违规：文件无法解析', () => {
     expect(rulesOf('allowBuilds: [\n')).toEqual(['pnpm-config/parse'])
+  })
+})
+
+describe('US-M1-11 A01 pnpmfile', () => {
+  it('合规：仓库根目录没有 pnpmfile', () => {
+    expect(checkPnpmfiles([])).toEqual([])
+  })
+
+  it('违规：出现 pnpmfile', () => {
+    expect(checkPnpmfiles(['.pnpmfile.cjs', '.pnpmfile.mjs']).map(v => v.rule)).toEqual(['pnpm-config/pnpmfile', 'pnpm-config/pnpmfile'])
   })
 })

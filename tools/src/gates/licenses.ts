@@ -120,15 +120,22 @@ export function licensesByPath(report: LicenseReport): Map<string, LicenseEntry>
   return byPath
 }
 
+/**
+ * isInstalled 判断安装实例是否真的装在本机：`pnpm ls` 也列出因操作系统或 CPU 不匹配而没有安装的平台专属包，
+ * 它们不在许可清单里，这里跳过；平台专属包的许可以 CI（Linux x64，与生产镜像同一平台）的检查为准。
+ */
 export function checkProductionLicenses(
   installed: readonly InstalledPackage[],
   byPath: ReadonlyMap<string, LicenseEntry>,
   allowed: readonly string[],
   exceptions: readonly LicenseException[],
+  isInstalled: (path: string) => boolean,
 ): Violation[] {
   const isAllowed = isAllowedIn(allowed)
   const violations: Violation[] = []
   for (const item of installed) {
+    if (!isInstalled(item.path))
+      continue
     const subject = `${item.name}@${item.version}`
     const entry = byPath.get(item.path)
     if (entry === undefined) {

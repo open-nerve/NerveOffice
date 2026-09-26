@@ -4,6 +4,7 @@
 import type { Plugin } from 'vite'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { z } from 'zod'
 
 export interface BundledPackage {
   name: string
@@ -33,22 +34,29 @@ export function packageRootOf(moduleId: string): string | undefined {
   return `${path.slice(0, index + NODE_MODULES.length)}${nameSegments.join('/')}`
 }
 
+/** 目录里全部的许可文件，按文件名排序后合并：双许可的包（LICENSE-MIT 与 LICENSE-APACHE）两份都要收。 */
 function readLicenseText(dir: string): string | null {
   if (!existsSync(dir))
     return null
-  const file = readdirSync(dir).find(name => LICENSE_FILE.test(name))
-  return file === undefined ? null : readFileSync(join(dir, file), 'utf8').trim()
+  const files = readdirSync(dir).filter(name => LICENSE_FILE.test(name)).sort()
+  return files.length === 0 ? null : files.map(file => readFileSync(join(dir, file), 'utf8').trim()).join('\n\n')
 }
+
+const manifestSchema = z.object({
+  name: z.string(),
+  version: z.string(),
+  // license 应是 SPDX 字符串；写成对象（旧格式）或没有写的，一律记为 Unknown，由门禁拦下
+  license: z.unknown().optional(),
+})
 
 /** 读取一个包的名称、版本、许可与许可正文；包里没有许可文件时，到 supplementDir/<包名>/ 下找仓库补齐的正文。 */
 export function readPackageRecord(root: string, supplementDir: string): PackageRecord {
-  const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { name?: unknown, version?: unknown, license?: unknown }
-  const name = typeof manifest.name === 'string' ? manifest.name : root
+  const manifest = manifestSchema.parse(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')))
   const own = readLicenseText(root)
-  const supplement = own === null ? readLicenseText(join(supplementDir, name)) : null
+  const supplement = own === null ? readLicenseText(join(supplementDir, manifest.name)) : null
   return {
-    name,
-    version: typeof manifest.version === 'string' ? manifest.version : 'Unknown',
+    name: manifest.name,
+    version: manifest.version,
     license: typeof manifest.license === 'string' ? manifest.license : 'Unknown',
     licenseTextSource: own !== null ? 'package' : supplement !== null ? 'supplement' : null,
     text: own ?? supplement,

@@ -47,8 +47,12 @@ describe('readPackageRecord', () => {
     mkdirSync(join(supplements, '@scope/supplemented'), { recursive: true })
     writeFileSync(join(supplements, '@scope/supplemented', 'LICENSE'), 'ISC License text')
     const missing = write(root, 'missing', 'MIT')
+    const dual = write(root, 'dual', '(MIT OR Apache-2.0)')
+    writeFileSync(join(dual, 'LICENSE-MIT'), 'MIT text')
+    writeFileSync(join(dual, 'LICENSE-APACHE'), 'Apache text')
 
     expect(readPackageRecord(withFile, supplements)).toMatchObject({ name: 'with-file', licenseTextSource: 'package', text: 'MIT License text' })
+    expect(readPackageRecord(dual, supplements)).toMatchObject({ licenseTextSource: 'package', text: 'Apache text\n\nMIT text' })
     expect(readPackageRecord(supplemented, supplements)).toMatchObject({ name: '@scope/supplemented', licenseTextSource: 'supplement', text: 'ISC License text' })
     expect(readPackageRecord(missing, supplements)).toMatchObject({ name: 'missing', licenseTextSource: null, text: null })
   })

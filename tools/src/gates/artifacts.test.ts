@@ -1,6 +1,6 @@
 import type { ArtifactPolicy } from './artifacts.ts'
 import { describe, expect, it } from 'vitest'
-import { checkFileTypes, scanArtifacts } from './artifacts.ts'
+import { checkFileTypes, classifyArtifact, scanArtifacts } from './artifacts.ts'
 import { ARTIFACT_POLICY } from './policy.ts'
 
 const policy: ArtifactPolicy = { ...ARTIFACT_POLICY, allowedHosts: { 'www.w3.org': 'SVG 命名空间' }, globalThisProbeMax: 1 }
@@ -80,11 +80,17 @@ describe('US-M1-11 A01 产物扫描：外部地址与关键字', () => {
 })
 
 describe('US-M1-11 A01 产物的文件类型', () => {
-  it('合规：已登记的类型', () => {
-    expect(checkFileTypes(['index.html', 'assets/index-a.js', 'assets/x.css', 'assets/f.woff2', 'THIRD-PARTY-LICENSES.md', 'assets/logo.svg'])).toEqual([])
+  it('合规：已登记的类型与三个清单文件', () => {
+    expect(checkFileTypes(['index.html', 'assets/index-a.js', 'assets/x.css', 'assets/f.woff2', 'assets/logo.svg', 'config.json', 'THIRD-PARTY-LICENSES.md', '.vite/manifest.json', '.vite/third-party-packages.json'])).toEqual([])
   })
 
-  it.each(['assets/x.wasm', 'assets/app.js.map', 'assets/data.bin', 'README'])('违规：未登记的类型 %s', (path) => {
+  it.each(['assets/x.wasm', 'assets/app.js.map', 'assets/data.bin', 'README', 'notes.md', 'docs/THIRD-PARTY-LICENSES.md'])('违规：未登记的类型或位置 %s', (path) => {
     expect(checkFileTypes([path]).map(v => v.rule)).toEqual(['artifacts/file-type'])
+  })
+
+  it('清单文件不扫描内容，其他 .json 按文本扫描', () => {
+    expect(classifyArtifact('THIRD-PARTY-LICENSES.md')).toBe('metadata')
+    expect(classifyArtifact('.vite/manifest.json')).toBe('metadata')
+    expect(classifyArtifact('config.json')).toBe('text')
   })
 })

@@ -24,9 +24,22 @@ function isAiAttribution(line: string): boolean {
   return isAiTrailer(line) || WATERMARK.test(line.trim())
 }
 
-/** 去掉末尾署名段里的 AI 署名，并把末尾的空行收成一个换行；git 的注释行原样保留在最后。 */
+/** `git commit -v` 在提交说明后面附上剪刀线与 diff；剪刀线的注释符由 core.commentChar 决定。 */
+const SCISSORS = /^\S -{24} >8 -{24}$/
+
+/**
+ * 去掉末尾署名段里的 AI 署名，并把末尾的空行收成一个换行；git 的注释行原样保留在最后。
+ * 有剪刀线时只处理它之前的部分，剪刀线与后面的 diff 原样保留（git 会在提交时丢掉它们）。
+ */
 export function stripAiTrailers(message: string): string {
-  const lines = message.split('\n')
+  const all = message.split('\n')
+  const scissors = all.findIndex(line => SCISSORS.test(line))
+  if (scissors >= 0)
+    return `${stripMessage(all.slice(0, scissors))}${all.slice(scissors).join('\n')}`
+  return stripMessage(all)
+}
+
+function stripMessage(lines: string[]): string {
   const trailingComments: string[] = []
   while (lines.length > 0 && (lines.at(-1)?.trim() === '' || lines.at(-1)?.startsWith('#') === true)) {
     const line = lines.pop() ?? ''

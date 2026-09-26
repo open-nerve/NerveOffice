@@ -9,6 +9,10 @@ import { isMap, isScalar, isSeq, parseDocument } from 'yaml'
 
 const FILE = 'pnpm-workspace.yaml'
 const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Z.-]+)?$/i
+/** 冷却期豁免只接受"包名@精确版本"：通配、裸包名与作用域通配会让整个冷却期失效。 */
+const EXACT_PACKAGE_VERSION = /^(?:@[a-z0-9~-][\w.~-]*\/)?[a-z0-9~-][\w.~-]*@\d+\.\d+\.\d+(?:-[0-9A-Z.-]+)?$/i
+/** pnpm 12 默认加载的 pnpmfile：里面的钩子在安装时执行任意代码，还能改写任何包的依赖。 */
+export const PNPMFILE_NAMES: readonly string[] = ['.pnpmfile.cjs', '.pnpmfile.mjs']
 
 /** 评审过的顶层设置。新增一项要写明它不会削弱供应链策略，经代码审查。 */
 export const REVIEWED_SETTINGS: ReadonlySet<string> = new Set([
@@ -104,7 +108,15 @@ export function checkPnpmConfig(text: string, policy: PnpmPolicy): Violation[] {
     }
   }
   violations.push(...reasonViolations(allowBuilds, 'pnpm-config/allow-builds-reason', 'allowBuilds'))
-  violations.push(...reasonViolations(node(doc, 'minimumReleaseAgeExclude'), 'pnpm-config/release-age-exclude-reason', 'minimumReleaseAgeExclude'))
+  const releaseAgeExclude = node(doc, 'minimumReleaseAgeExclude')
+  if (isSeq(releaseAgeExclude)) {
+    for (const item of releaseAgeExclude.items) {
+      const value = isScalar(item) ? String(item.value) : '?'
+      if (!EXACT_PACKAGE_VERSION.test(value))
+        violations.push({ rule: 'pnpm-config/release-age-exclude-exact', subject: `${FILE} minimumReleaseAgeExclude ${value}`, detail: '只能写"包名@精确版本"，通配与裸包名会让整个冷却期失效' })
+    }
+  }
+  violations.push(...reasonViolations(releaseAgeExclude, 'pnpm-config/release-age-exclude-reason', 'minimumReleaseAgeExclude'))
 
   const overrides = node(doc, 'overrides')
   if (isMap(overrides)) {
@@ -127,4 +139,13 @@ export function checkPnpmConfig(text: string, policy: PnpmPolicy): Violation[] {
     }
   }
   return violations
+}
+
+/** existing 是仓库根目录下实际存在的 pnpmfile。 */
+export function checkPnpmfiles(existing: readonly string[]): Violation[] {
+  return existing.map(name => ({
+    rule: 'pnpm-config/pnpmfile',
+    subject: name,
+    detail: 'pnpmfile 的钩子在安装时执行任意代码、改写依赖，绕过了门禁看得到的配置；确需使用时，先在门禁里登记原因与审查方式',
+  }))
 }
