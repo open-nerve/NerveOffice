@@ -1,4 +1,5 @@
 // Vitest：单元测试（unit、unit-web）与集成测试（integration）分成不同的项目（规范 §8）。
+import { defaultClientConditions, defaultServerConditions } from 'vite'
 import { defineConfig } from 'vitest/config'
 
 const SOURCE_CONDITION = '@nerve-office/source'
@@ -7,7 +8,7 @@ export default defineConfig({
   test: {
     projects: [
       {
-        resolve: { conditions: [SOURCE_CONDITION] },
+        resolve: { conditions: [SOURCE_CONDITION, ...defaultServerConditions] },
         test: {
           name: 'unit',
           environment: 'node',
@@ -16,7 +17,7 @@ export default defineConfig({
       },
       {
         extends: './apps/web/vite.config.ts',
-        resolve: { conditions: [SOURCE_CONDITION] },
+        resolve: { conditions: [SOURCE_CONDITION, ...defaultClientConditions] },
         test: {
           name: 'unit-web',
           root: './apps/web',
@@ -26,6 +27,7 @@ export default defineConfig({
         },
       },
       {
+        resolve: { conditions: [SOURCE_CONDITION, ...defaultServerConditions] },
         test: {
           name: 'integration',
           environment: 'node',

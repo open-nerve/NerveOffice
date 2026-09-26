@@ -75,4 +75,18 @@
 
 ## 常用命令
 
-（M1 建立工程底座后补充）
+环境：Node 与 pnpm 的版本见 `.node-version` 与根 `package.json` 的 `packageManager`（本机用 nvm 安装 Node，`npm i -g pnpm@<版本>` 安装 pnpm）；Docker 用于开发数据库。
+
+| 命令 | 作用 |
+|---|---|
+| `pnpm install` | 安装依赖，同时安装 git 钩子 |
+| `pnpm verify` | 合并前的完整门禁：lint、类型检查、单元测试与覆盖率、静态检查、集成测试、构建、依赖与产物检查、E2E（四个浏览器） |
+| `pnpm verify --fast` | 快速门禁（pre-push 使用） |
+| `pnpm lint` / `pnpm lint:fix` | 检查 / 修正代码规范与格式 |
+| `pnpm typecheck` | 类型检查 |
+| `pnpm test` / `pnpm test:coverage` | 单元测试 / 带覆盖率 |
+| `pnpm db:up` / `pnpm db:down` | 启动 / 停止开发用的 PostgreSQL |
+| `pnpm test:integration` | 集成测试（需要数据库） |
+| `pnpm test:e2e` | 构建前端后跑 E2E |
+| `pnpm build` / `pnpm clean` | 构建 / 删除构建产物 |
+| `pnpm gate [名称…]` | A01 等检查：pins、config、stories、deps、licenses、artifacts、audit |

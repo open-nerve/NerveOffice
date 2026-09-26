@@ -48,6 +48,7 @@
     "lefthook": "catalog:",
     "lint-staged": "catalog:",
     "typescript": "catalog:",
+    "vite": "catalog:",
     "vitest": "catalog:"
   },
   "lint-staged": {
