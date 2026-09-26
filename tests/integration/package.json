@@ -9,6 +9,8 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "devDependencies": {
+    "@nerve-office/api": "workspace:*",
+    "@nerve-office/contracts": "workspace:*",
     "@types/node": "catalog:",
     "@types/pg": "catalog:",
     "pg": "catalog:",

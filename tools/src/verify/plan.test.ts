@@ -7,28 +7,32 @@ describe('planSteps', () => {
     expect(planSteps({ fast: true, ci: false, audit: false }).map(s => s.id)).toEqual(['lint', 'typecheck', 'unit', 'static-gates'])
   })
 
-  it('本机的完整门禁：先启动开发数据库，再跑集成测试；构建之后检查依赖与产物，最后跑 E2E', () => {
-    expect(planSteps({ fast: false, ci: false, audit: false }).map(s => s.id)).toEqual([
+  it('本机的完整门禁：先启动开发数据库，再把单元与集成测试合在一起跑并统计覆盖率；构建之后检查依赖与产物，最后跑 E2E', () => {
+    const steps = planSteps({ fast: false, ci: false, audit: false })
+    expect(steps.map(s => s.id)).toEqual([
       'lint',
       'typecheck',
-      'unit',
       'static-gates',
       'database',
-      'integration',
+      'tests',
       'clean',
       'build',
       'artifact-gates',
       'e2e',
     ])
+    expect(steps.find(s => s.id === 'tests')?.command).toEqual(['pnpm', 'test:coverage'])
+  })
+
+  it('快速门禁的单元测试不统计覆盖率（覆盖率的下限按单元与集成测试合计，需要数据库）', () => {
+    expect(planSteps({ fast: true, ci: false, audit: false }).find(s => s.id === 'unit')?.command).toEqual(['pnpm', 'test'])
   })
 
   it('在 CI 中使用服务容器，不启动开发数据库；另加漏洞扫描', () => {
     expect(planSteps({ fast: false, ci: true, audit: false }).map(s => s.id)).toEqual([
       'lint',
       'typecheck',
-      'unit',
       'static-gates',
-      'integration',
+      'tests',
       'clean',
       'build',
       'artifact-gates',

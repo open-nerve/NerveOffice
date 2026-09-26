@@ -1,0 +1,38 @@
+{
+  "name": "@nerve-office/api",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "description": "后端：NestJS 模块化单体",
+  "license": "Apache-2.0",
+  "exports": {
+    ".": {
+      "@nerve-office/source": "./src/app/index.ts",
+      "default": "./dist/app/index.js"
+    }
+  },
+  "scripts": {
+    "build": "nest build",
+    "dev": "nest start --watch --env-file .env.development",
+    "start": "node dist/app/main.js",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@nerve-office/contracts": "workspace:*",
+    "@nestjs/common": "catalog:",
+    "@nestjs/core": "catalog:",
+    "@nestjs/platform-express": "catalog:",
+    "express": "catalog:",
+    "reflect-metadata": "catalog:",
+    "rxjs": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "catalog:",
+    "@nestjs/testing": "catalog:",
+    "@types/express": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

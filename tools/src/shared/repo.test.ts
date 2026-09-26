@@ -3,7 +3,7 @@ import { commandJson, listFiles, packageName, readWorkspaceConfig, workspacePack
 
 describe('repo', () => {
   it('按 pnpm-workspace.yaml 展开工作区的包，只保留有 package.json 的目录', () => {
-    expect(workspacePackageDirs(readWorkspaceConfig())).toEqual(['apps/web', 'packages/contracts', 'tests/e2e', 'tests/integration', 'tools'])
+    expect(workspacePackageDirs(readWorkspaceConfig())).toEqual(['apps/api', 'apps/web', 'packages/contracts', 'tests/e2e', 'tests/integration', 'tools'])
   })
 
   it('读取默认目录里的精确版本与包名', () => {

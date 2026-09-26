@@ -23,11 +23,15 @@ const PLATFORM_ENTRY = 'apps/web/src/entries/platform/main.tsx'
 const CONTRACTS_FILE = 'packages/contracts/src/errors/error-response.ts'
 const TOOLS_TEST_FILE = 'tools/src/git/strip-ai-trailers.test.ts'
 const E2E_FILE = 'tests/e2e/specs/foundation/framework-smoke.spec.ts'
+const API_CONTROLLER = 'apps/api/src/modules/health/health.controller.ts'
+const API_SERVICE = 'apps/api/src/modules/health/application-state.ts'
+const API_CONFIG = 'apps/api/src/modules/config/config.ts'
+const INTEGRATION_FILE = 'tests/integration/src/support/api-app.ts'
 
 // 类型感知的 lint 第一次运行时，要加载整份配置，并为每个 tsconfig 工程建立类型程序；
 // 这是整组用例共用的准备工作，放在 beforeAll 里做完，不算进某一个用例的时限。
 // 本组用到的每个工程各检查一个真实文件，之后的用例只做增量检查。
-const WARM_UP_FILES = [WEB_FILE, CONTRACTS_FILE, TOOLS_TEST_FILE, E2E_FILE]
+const WARM_UP_FILES = [WEB_FILE, CONTRACTS_FILE, TOOLS_TEST_FILE, E2E_FILE, API_CONTROLLER, INTEGRATION_FILE]
 // 冷启动在 CI 的 4 核机器上还要和并行的测试文件抢 CPU，本机约 3 秒，这里留足余量
 const WARM_UP_TIMEOUT = 120_000
 // 预热之后，一个用例最多检查五段代码，本机合计不到 0.2 秒；CI 上按慢几十倍留余量
@@ -177,6 +181,76 @@ describe('US-M1-11 lint 规则的自测：类型与写法', () => {
   })
 }, LINT_TIMEOUT)
 
+describe('US-M1-11 lint 规则的自测：后端', () => {
+  it('模块之间只经对方的 index.ts；模块不能引用应用的组装', async () => {
+    expect(await rulesFor('import { loadConfig } from \'../config/config.ts\'\nexport const f = loadConfig\n', API_SERVICE)).toContain('boundaries/dependencies')
+    expect(await rulesFor('import { loadConfig } from \'../config/index.ts\'\nexport const f = loadConfig\n', API_SERVICE)).not.toContain('boundaries/dependencies')
+    expect(await rulesFor('import { createApplication } from \'../../app/index.ts\'\nexport const f = createApplication\n', API_SERVICE)).toContain('boundaries/dependencies')
+  })
+
+  it('集成测试只经 @nerve-office/api 的入口引用后端', async () => {
+    const code = 'import { loadConfig } from \'../../../../apps/api/src/modules/config/index.ts\'\nexport const f = loadConfig\n'
+    expect(await rulesFor(code, INTEGRATION_FILE)).toContain('boundaries/dependencies')
+  })
+
+  it('只有 config 模块读取 process.env', async () => {
+    const code = 'import process from \'node:process\'\n\nexport const url = process.env.NERVE_DATABASE_URL\n'
+    expect(await rulesFor(code, API_SERVICE)).toContain('node/no-process-env')
+    expect(severity((await configFor(API_CONFIG)).rules?.['node/no-process-env'])).toBe(0)
+  })
+
+  it('只有 database 模块、仓储与表定义能引用 drizzle-orm 与 pg', async () => {
+    expect(await rulesFor('import pg from \'pg\'\n\nexport const Pool = pg.Pool\n', API_SERVICE)).toContain('no-restricted-imports')
+    expect(await rulesFor('import { sql } from \'drizzle-orm\'\n\nexport const s = sql\n', API_SERVICE)).toContain('no-restricted-imports')
+    // 按路径计算配置不需要文件存在
+    for (const allowed of ['apps/api/src/modules/audit/audit.repository.ts', 'apps/api/src/modules/database/pool.ts', 'apps/api/src/db/schema/audit/index.ts'])
+      expect(restrictedPatterns(await configFor(allowed))).not.toContain('drizzle-orm')
+    expect(restrictedPatterns(await configFor(API_SERVICE))).toContain('drizzle-orm')
+  })
+
+  it('控制器不引用仓储；输入必须带 schema；不用 @Req、@Res', async () => {
+    expect(await rulesFor('import { AuditRepository } from \'./audit.repository.ts\'\nexport const r = AuditRepository\n', API_CONTROLLER)).toContain('no-restricted-imports')
+    const controller = (parameter: string): string => [
+      'import { Body, Controller, Post, Req } from \'@nestjs/common\'',
+      'import { z } from \'zod\'',
+      '',
+      '@Controller(\'x\')',
+      'export class XController {',
+      '  @Post()',
+      `  create(${parameter}): unknown {`,
+      '    return z',
+      '  }',
+      '}',
+      '',
+    ].join('\n')
+    expect(await rulesFor(controller('@Body() body: unknown'), API_CONTROLLER)).toContain('no-restricted-syntax')
+    expect(await rulesFor(controller('@Req() request: unknown'), API_CONTROLLER)).toContain('no-restricted-syntax')
+    expect(await rulesFor(controller('@Body({ schema: z.object({}) }) body: unknown'), API_CONTROLLER)).not.toContain('no-restricted-syntax')
+  })
+
+  it('SQL 只用参数：不用 sql.raw，query()、execute() 的参数不能拼接', async () => {
+    const withQuery = (call: string): string => `export async function find(db: { query: (text: string, values?: unknown[]) => Promise<unknown> }, id: string): Promise<unknown> {\n  return ${call}\n}\n`
+    expect(await rulesFor(withQuery(`db.query(\`SELECT * FROM t WHERE id = \${id}\`)`), API_SERVICE)).toContain('no-restricted-syntax')
+    expect(await rulesFor(withQuery('db.query(\'SELECT * FROM t WHERE id = \' + id)'), API_SERVICE)).toContain('no-restricted-syntax')
+    expect(await rulesFor(withQuery('db.query(\'SELECT * FROM t WHERE id = $1\', [id])'), API_SERVICE)).not.toContain('no-restricted-syntax')
+    expect(await rulesFor('declare const sql: { raw: (text: string) => unknown }\nexport const s = sql.raw(\'x\')\n', API_SERVICE)).toContain('no-restricted-syntax')
+  })
+
+  it('依赖注入要用的类不会被要求改成 import type（开启 emitDecoratorMetadata 时 typescript-eslint 会跳过）', async () => {
+    const code = [
+      'import { Controller } from \'@nestjs/common\'',
+      'import { ApplicationState } from \'./application-state.ts\'',
+      '',
+      '@Controller(\'x\')',
+      'export class XController {',
+      '  constructor(private readonly state: ApplicationState) {}',
+      '}',
+      '',
+    ].join('\n')
+    expect(await rulesFor(code, API_CONTROLLER)).not.toContain('ts/consistent-type-imports')
+  })
+}, LINT_TIMEOUT)
+
 describe('US-M1-11 lint 规则的自测：测试的写法', () => {
   it('不允许 .only', async () => {
     expect(await rulesFor('import { it } from \'vitest\'\n\nit.only(\'x\', () => {})\n', TOOLS_TEST_FILE)).toContain('test/no-only-tests')
@@ -191,7 +265,7 @@ describe('US-M1-11 lint 规则的自测：测试的写法', () => {
   })
 
   it('没有警告级别的规则（规范 §2.2）', async () => {
-    for (const file of [WEB_FILE, CONTRACTS_FILE, 'tools/src/git/strip-ai-trailers.ts', E2E_FILE, 'pnpm-workspace.yaml', 'package.json']) {
+    for (const file of [WEB_FILE, CONTRACTS_FILE, 'tools/src/git/strip-ai-trailers.ts', E2E_FILE, API_CONTROLLER, INTEGRATION_FILE, 'pnpm-workspace.yaml', 'package.json']) {
       const warned = Object.entries((await configFor(file)).rules ?? {}).filter(([, entry]) => [1, 'warn'].includes(severity(entry) as number | string))
       expect(warned.map(([name]) => `${file} ${name}`)).toEqual([])
     }

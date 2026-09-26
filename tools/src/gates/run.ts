@@ -1,4 +1,5 @@
 // 按名称执行门禁：从仓库读取输入（执行 pnpm、vitest、playwright 的列举命令），交给各检查模块（纯函数）判断。
+// Vitest 列举全部项目，新增项目时不会漏掉。
 // 读取外部输入的方式（执行命令、产物目录、当天日期）可以注入，便于用样例测试装配逻辑。
 import type { CollectedGraph } from './dependency-graph.ts'
 import type { Violation } from './types.ts'
@@ -70,7 +71,7 @@ function stories(): GateOutcome {
   const registry = parseRegistry(readJson(STORY_REGISTRY))
   const designIds = parseDesignStoryIds(readText(registry.design))
   const tests = [
-    ...testsFromVitestList(commandJson('pnpm', ['exec', 'vitest', 'list', '--json', '--project', 'unit', '--project', 'unit-web', '--project', 'integration']), REPO_ROOT),
+    ...testsFromVitestList(commandJson('pnpm', ['exec', 'vitest', 'list', '--json']), REPO_ROOT),
     ...testsFromPlaywrightList(commandJson('pnpm', ['--filter', '@nerve-office/e2e', 'exec', 'playwright', 'test', '--list', '--reporter=json']), E2E_SPECS),
   ]
   const active = Object.entries(registry.stories).filter(([, s]) => s.status === 'active').map(([id]) => id)
