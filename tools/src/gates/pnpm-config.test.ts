@@ -14,6 +14,15 @@ allowBuilds:
 minimumReleaseAgeExclude:
   # 紧急安全修复，见 GHSA-xxxx
   - foo@1.2.3
+overrides:
+  # 去掉只在安装时用到的 gRPC 依赖（ADR）
+  '@grpc/grpc-js': '-'
+  # 修复漏洞
+  minimist: 1.2.8
+peerDependencyRules:
+  allowedVersions:
+    # peer 只声明到 ESLint 9，自测证明可用
+    eslint-plugin-jsx-a11y>eslint: 10.11.0
 `
 
 function rulesOf(text: string): string[] {
@@ -21,7 +30,7 @@ function rulesOf(text: string): string[] {
 }
 
 describe('US-M1-11 A01 包管理配置', () => {
-  it('合规：发布冷却期、可信度策略、引擎严格、安装脚本逐个决定并写明原因', () => {
+  it('合规：发布冷却期、可信度策略、引擎严格；逐项的决定与豁免都写明原因', () => {
     expect(rulesOf(valid)).toEqual([])
   })
 
@@ -41,19 +50,32 @@ describe('US-M1-11 A01 包管理配置', () => {
     expect(rulesOf(valid.replace('engineStrict: true', 'engineStrict: false'))).toEqual(['pnpm-config/engine-strict'])
   })
 
+  it.each([
+    'dangerouslyAllowAllBuilds: true',
+    'minimumReleaseAgeStrict: false',
+    'trustPolicyIgnoreAfter: 1440',
+    'trustPolicyExclude:\n  - some-package',
+    'auditConfig:\n  ignoreGhsas:\n    - GHSA-aaaa-bbbb-cccc',
+  ])('违规：没有评审过、可能削弱策略的设置 %s', (setting) => {
+    expect(rulesOf(`${valid}${setting}\n`)).toEqual(['pnpm-config/unreviewed-setting'])
+  })
+
   it('违规：安装脚本还没有明确的决定（pnpm 写入的占位）', () => {
     expect(rulesOf(valid.replace('lefthook: false', 'lefthook: set this to true or false'))).toEqual(['pnpm-config/allow-builds-decision'])
   })
 
   it.each([
-    ['第一项', valid.replace('  # 只安装 git 钩子\n', '')],
-    ['后面的一项', valid.replace('  # 原生绑定由可选依赖提供\n', '')],
-  ])('违规：安装脚本的决定缺少原因（%s）', (_case, text) => {
-    expect(rulesOf(text)).toEqual(['pnpm-config/allow-builds-reason'])
+    ['安装脚本的第一项', valid.replace('  # 只安装 git 钩子\n', ''), 'pnpm-config/allow-builds-reason'],
+    ['安装脚本的后面一项', valid.replace('  # 原生绑定由可选依赖提供\n', ''), 'pnpm-config/allow-builds-reason'],
+    ['发布冷却期的豁免', valid.replace('  # 紧急安全修复，见 GHSA-xxxx\n', ''), 'pnpm-config/release-age-exclude-reason'],
+    ['overrides', valid.replace('  # 修复漏洞\n', ''), 'pnpm-config/override-reason'],
+    ['peer 规则', valid.replace('    # peer 只声明到 ESLint 9，自测证明可用\n', ''), 'pnpm-config/peer-rule-reason'],
+  ])('违规：%s缺少原因', (_case, text, rule) => {
+    expect(rulesOf(text)).toEqual([rule])
   })
 
-  it('违规：发布冷却期的豁免缺少原因', () => {
-    expect(rulesOf(valid.replace('  # 紧急安全修复，见 GHSA-xxxx\n', ''))).toEqual(['pnpm-config/release-age-exclude-reason'])
+  it.each(['^1.2.8', '1.x', 'latest'])('违规：overrides 不是精确版本 %s', (version) => {
+    expect(rulesOf(valid.replace('minimist: 1.2.8', `minimist: '${version}'`))).toEqual(['pnpm-config/override-version'])
   })
 
   it('违规：文件无法解析', () => {

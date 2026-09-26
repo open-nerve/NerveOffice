@@ -35,7 +35,8 @@ export default defineConfig({
     ? {
         command: 'pnpm --filter @nerve-office/web run preview',
         url: baseURL,
-        reuseExistingServer: !CI,
+        // 不复用已经在运行的服务：多个 worktree 并行时，可能测到别的 worktree 的构建；端口被占用时直接失败
+        reuseExistingServer: false,
         timeout: 120_000,
       }
     : undefined,

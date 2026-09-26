@@ -40,8 +40,8 @@ export const ARTIFACT_POLICY = {
    * M0 在 Univer 的产物里见过 3 处（lodash），运行时会被短路（M0-P1 报告 §2）。
    */
   globalThisProbeMax: 3,
-  /** 出现即违规的关键字：Pro、许可证校验、遥测与第三方统计。 */
-  forbiddenKeywords: ['univerjs-pro', 'univer-pro', 'licenseKey', 'license-key', 'posthog', 'sentry', 'google-analytics', 'gtag(', 'mixpanel', 'grpc', 'protobuf'] as readonly string[],
+  /** 出现即违规的关键字（不区分大小写）：Pro、许可证校验、第三方统计与遥测上报。 */
+  forbiddenKeywords: ['univerjs-pro', 'univer-pro', 'licensekey', 'license-key', 'license_key', 'posthog', 'sentry', 'google-analytics', 'googletagmanager', 'gtag(', 'mixpanel', 'grpc', 'protobuf'] as readonly string[],
 }
 
 /** 漏洞扫描的例外：GHSA 编号、原因与到期日（到期后必须重新评审）。 */

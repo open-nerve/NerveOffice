@@ -1,0 +1,84 @@
+{
+  "GPLv3": [
+    {
+      "name": "gplv3",
+      "versions": [
+        "1.0.0"
+      ],
+      "paths": [
+        "/repo/node_modules/.pnpm/gplv3@file+pkgs+gplv3-1.0.0.tgz/node_modules/gplv3"
+      ],
+      "license": "GPLv3"
+    }
+  ],
+  "GPL-3.0": [
+    {
+      "name": "legacyarr",
+      "versions": [
+        "1.0.0"
+      ],
+      "paths": [
+        "/repo/node_modules/.pnpm/legacyarr@file+pkgs+legacyarr-1.0.0.tgz/node_modules/legacyarr"
+      ],
+      "license": "GPL-3.0"
+    }
+  ],
+  "gpl-3.0": [
+    {
+      "name": "lowergpl",
+      "versions": [
+        "1.0.0"
+      ],
+      "paths": [
+        "/repo/node_modules/.pnpm/lowergpl@file+pkgs+lowergpl-1.0.0.tgz/node_modules/lowergpl"
+      ],
+      "license": "gpl-3.0"
+    }
+  ],
+  "Unknown": [
+    {
+      "name": "nolicense",
+      "versions": [
+        "1.0.0"
+      ],
+      "paths": [
+        "/repo/node_modules/.pnpm/nolicense@file+pkgs+nolicense-1.0.0.tgz/node_modules/nolicense"
+      ],
+      "license": "Unknown"
+    },
+    {
+      "name": "withfile",
+      "versions": [
+        "1.0.0"
+      ],
+      "paths": [
+        "/repo/node_modules/.pnpm/withfile@file+pkgs+withfile-1.0.0.tgz/node_modules/withfile"
+      ],
+      "license": "Unknown"
+    }
+  ],
+  "AGPL-3.0": [
+    {
+      "name": "objlic",
+      "versions": [
+        "1.0.0"
+      ],
+      "paths": [
+        "/repo/node_modules/.pnpm/objlic@file+pkgs+objlic-1.0.0.tgz/node_modules/objlic"
+      ],
+      "license": "AGPL-3.0"
+    }
+  ],
+  "SEE LICENSE IN LICENSE.txt": [
+    {
+      "name": "seefile",
+      "versions": [
+        "1.0.0"
+      ],
+      "paths": [
+        "/repo/node_modules/.pnpm/seefile@file+pkgs+seefile-1.0.0.tgz/node_modules/seefile"
+      ],
+      "license": "SEE LICENSE IN LICENSE.txt"
+    }
+  ]
+}

@@ -27,4 +27,6 @@ Thumbs.db
 test-results/
 playwright-report/
 blob-report/
-tools/.gates/
+
+# lint 规则自测临时创建的探针文件（tools/src/lint/lint-rules.test.ts）
+lint-probe-*

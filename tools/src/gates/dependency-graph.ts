@@ -1,18 +1,10 @@
 // A01：生产依赖图的检查（00 号计划书 §3.3）：没有 Pro、Univer 版本一致、应为单例的包只有一份。
-// 输入是 `pnpm ls --prod --json --depth Infinity` 的输出；按安装路径区分实例，
-// 因为同一版本也可能因为 peer 依赖不同，被 pnpm 装成多份。
+// 输入是 `pnpm ls --prod --json --depth Infinity` 的输出（先经 lsOutputSchema 校验）：
+// - 按安装路径区分实例，因为同一版本也可能因为 peer 依赖不同，被 pnpm 装成多份；
+// - 包名取 from（依赖可以用别名，例如 "react-legacy": "npm:react@18"）；
+// - 项目这一层的可选依赖同样进入生产依赖图。
+import type { LsNode, LsProject } from './pnpm-outputs.ts'
 import type { Violation } from './types.ts'
-
-export interface LsNode {
-  version: string
-  path: string
-  dependencies?: Record<string, LsNode>
-}
-
-export interface LsProject {
-  name: string
-  dependencies?: Record<string, LsNode>
-}
 
 export interface InstalledPackage {
   name: string
@@ -25,20 +17,40 @@ export interface UniverPolicy {
   independent: Readonly<Record<string, string>>
 }
 
-/** 展开依赖树，按安装路径去重；工作区内部包（`link:`）不计入。 */
-export function collectInstalled(projects: readonly LsProject[]): InstalledPackage[] {
+export interface CollectedGraph {
+  installed: InstalledPackage[]
+  /** 只以去重占位出现、整棵子树从未展开过的安装实例：这时依赖图不完整，不能据此判断 */
+  unexpanded: string[]
+}
+
+/** 展开生产依赖树（dependencies 与项目层的 optionalDependencies），按安装路径去重；工作区内部包不计入。 */
+export function collectInstalled(projects: readonly LsProject[]): CollectedGraph {
   const byPath = new Map<string, InstalledPackage>()
+  const expanded = new Set<string>()
+  const placeholders = new Set<string>()
   const visit = (dependencies: Record<string, LsNode> | undefined): void => {
-    for (const [name, dependency] of Object.entries(dependencies ?? {})) {
-      if (dependency.version.startsWith('link:') || byPath.has(dependency.path))
+    for (const [key, node] of Object.entries(dependencies ?? {})) {
+      if (node.version.startsWith('link:'))
         continue
-      byPath.set(dependency.path, { name, version: dependency.version, path: dependency.path })
-      visit(dependency.dependencies)
+      if (!byPath.has(node.path))
+        byPath.set(node.path, { name: node.from ?? key, version: node.version, path: node.path })
+      if (node.deduped === true) {
+        if (!expanded.has(node.path))
+          placeholders.add(node.path)
+        continue
+      }
+      if (expanded.has(node.path))
+        continue
+      expanded.add(node.path)
+      placeholders.delete(node.path)
+      visit(node.dependencies)
     }
   }
-  for (const project of projects)
+  for (const project of projects) {
     visit(project.dependencies)
-  return [...byPath.values()]
+    visit(project.optionalDependencies)
+  }
+  return { installed: [...byPath.values()], unexpanded: [...placeholders].sort() }
 }
 
 function groupByName(installed: readonly InstalledPackage[]): Map<string, InstalledPackage[]> {
@@ -46,6 +58,14 @@ function groupByName(installed: readonly InstalledPackage[]): Map<string, Instal
   for (const item of installed)
     groups.set(item.name, [...(groups.get(item.name) ?? []), item])
   return groups
+}
+
+export function checkGraphComplete(graph: CollectedGraph): Violation[] {
+  return graph.unexpanded.map(path => ({
+    rule: 'deps/incomplete-tree',
+    subject: path.replace(/^.*\/node_modules\/\.pnpm\//, ''),
+    detail: 'pnpm 的输出里只有去重占位、没有展开这个依赖的子树，依赖图不完整，不能据此判断',
+  }))
 }
 
 export function checkUniver(installed: readonly InstalledPackage[], policy: UniverPolicy): Violation[] {

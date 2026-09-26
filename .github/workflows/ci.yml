@@ -66,8 +66,9 @@ jobs:
       - name: pnpm verify --ci
         run: pnpm verify --ci --keep-going
 
+      # 总是上传：重试后通过的用例也要能查到报告（规范 §8.4，出现重试即记为不稳定）
       - name: 上传测试报告
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: reports-${{ github.run_id }}

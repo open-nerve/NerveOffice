@@ -12,7 +12,7 @@ export default defineConfig({
         test: {
           name: 'unit',
           environment: 'node',
-          include: ['packages/*/src/**/*.test.ts', 'tools/src/**/*.test.ts'],
+          include: ['packages/*/src/**/*.test.ts', 'tools/src/**/*.test.ts', 'apps/*/build/**/*.test.ts'],
         },
       },
       {
@@ -32,7 +32,7 @@ export default defineConfig({
           name: 'integration',
           environment: 'node',
           include: ['tests/integration/src/**/*.test.ts'],
-          globalSetup: ['tests/integration/src/global-setup.ts'],
+          setupFiles: ['tests/integration/src/setup/database.ts'],
           testTimeout: 30_000,
           hookTimeout: 60_000,
         },
@@ -40,7 +40,7 @@ export default defineConfig({
     ],
     coverage: {
       provider: 'v8',
-      include: ['packages/*/src/**', 'apps/web/src/**', 'tools/src/**'],
+      include: ['packages/*/src/**', 'apps/web/src/**', 'apps/web/build/**', 'tools/src/**'],
       exclude: [
         '**/*.test.{ts,tsx}',
         // 入口文件只负责挂载，由 E2E 覆盖
@@ -51,12 +51,15 @@ export default defineConfig({
         'tools/src/**/cli.ts',
         'tools/src/**/*-cli.ts',
         'tools/src/git/commit-msg.ts',
+        // 构建插件的测试样例工程
+        'apps/web/build/fixtures/**',
       ],
       reporter: ['text-summary', 'html', 'json-summary'],
       reportsDirectory: 'coverage',
       thresholds: {
         'packages/contracts/src/**': { lines: 90 },
         'apps/web/src/**': { lines: 70 },
+        'apps/web/build/**': { lines: 80 },
         'tools/src/**': { lines: 80 },
       },
     },

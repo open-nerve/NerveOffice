@@ -1,20 +1,11 @@
 // A01：依赖许可（规范 §3，00 号计划书 §3.3）。
 // 生产依赖只接受白名单；开发依赖不得有 GPL、AGPL、SSPL 与没有声明许可的包。
+// 生产依赖的范围以 `pnpm ls --prod` 展开的安装实例为准（`pnpm licenses list --prod` 会漏掉可选依赖），
+// 再按安装路径到全量的许可清单里查它的许可。SPDX 许可标识不区分大小写。
+import type { InstalledPackage } from './dependency-graph.ts'
+import type { LicenseEntry, LicenseReport } from './pnpm-outputs.ts'
 import type { LicenseException } from './policy.ts'
 import type { Violation } from './types.ts'
-
-export interface LicenseEntry {
-  name: string
-  versions: string[]
-  license: string
-}
-
-/** `pnpm licenses list --json` 的输出：许可 → 包列表。 */
-export type LicenseReport = Record<string, LicenseEntry[]>
-
-export function flattenLicenseReport(report: LicenseReport): LicenseEntry[] {
-  return Object.values(report).flat()
-}
 
 type Token = '(' | ')' | 'AND' | 'OR' | 'WITH' | { id: string }
 
@@ -23,8 +14,11 @@ function tokenize(expression: string): Token[] | undefined {
   for (const raw of expression.replace(/[()]/g, ' $& ').trim().split(/\s+/)) {
     if (raw === '')
       continue
-    if (raw === '(' || raw === ')' || raw === 'AND' || raw === 'OR' || raw === 'WITH')
+    const upper = raw.toUpperCase()
+    if (raw === '(' || raw === ')')
       tokens.push(raw)
+    else if (upper === 'AND' || upper === 'OR' || upper === 'WITH')
+      tokens.push(upper)
     else if (/^[\w.+-]+$/.test(raw))
       tokens.push({ id: raw })
     else
@@ -35,7 +29,7 @@ function tokenize(expression: string): Token[] | undefined {
 
 /**
  * SPDX 许可表达式是否能只用允许的许可满足：OR 取任一分支，AND 要求全部，
- * WITH 的例外条款不改变基础许可的判断。无法解析的表达式视为不满足。
+ * WITH 的例外条款不改变基础许可的判断。无法解析的表达式（例如 "SEE LICENSE IN …"）视为不满足。
  */
 export function satisfies(expression: string, isAllowed: (id: string) => boolean): boolean {
   const parsed = tokenize(expression)
@@ -70,8 +64,7 @@ export function satisfies(expression: string, isAllowed: (id: string) => boolean
     const base = parseAtom()
     if (tokens[position] === 'WITH') {
       position++
-      const exception = tokens[position]
-      if (typeof exception !== 'object')
+      if (typeof tokens[position] !== 'object')
         return undefined
       position++
     }
@@ -98,32 +91,63 @@ export function satisfies(expression: string, isAllowed: (id: string) => boolean
   return result === true && position === tokens.length
 }
 
-function isException(entry: LicenseEntry, exceptions: readonly LicenseException[]): boolean {
-  return exceptions.some(e => e.name === entry.name && e.license === entry.license)
+/** 没有声明许可的各种写法：pnpm 12 对没有 license 字段的包输出 Unknown。 */
+const UNDECLARED = new Set(['UNKNOWN', 'UNLICENSED', 'NONE', 'NOASSERTION'])
+
+/** 强 copyleft：GPL、AGPL、SSPL 的各种写法（GPL-3.0、GPLv3、gpl-3.0、AGPL-3.0-only…）；LGPL 不在内。 */
+const STRONG_COPYLEFT = /^(?:A?GPL|SSPL)/i
+
+export function isAllowedIn(allowed: readonly string[]): (id: string) => boolean {
+  const normalized = new Set(allowed.map(id => id.toUpperCase()))
+  return id => normalized.has(id.toUpperCase())
 }
 
-function describeEntry(entry: LicenseEntry): string {
-  return `${entry.name}@${entry.versions.join('、')}`
+function isException(name: string, license: string, exceptions: readonly LicenseException[]): boolean {
+  return exceptions.some(e => e.name === name && e.license.toUpperCase() === license.toUpperCase())
 }
 
-export function checkProductionLicenses(entries: readonly LicenseEntry[], allowed: readonly string[], exceptions: readonly LicenseException[]): Violation[] {
-  return entries
-    .filter(entry => !satisfies(entry.license, id => allowed.includes(id)) && !isException(entry, exceptions))
-    .map(entry => ({
-      rule: 'licenses/production',
-      subject: describeEntry(entry),
-      detail: `许可 ${entry.license || '（未声明）'} 不在生产依赖的白名单里`,
-    }))
+export function flattenLicenseReport(report: LicenseReport): LicenseEntry[] {
+  return Object.values(report).flat()
 }
 
-const STRONG_COPYLEFT = /^(?:A?GPL|SSPL)-/
+/** 安装路径 → 许可清单里的那一项。 */
+export function licensesByPath(report: LicenseReport): Map<string, LicenseEntry> {
+  const byPath = new Map<string, LicenseEntry>()
+  for (const entry of flattenLicenseReport(report)) {
+    for (const path of entry.paths)
+      byPath.set(path, entry)
+  }
+  return byPath
+}
+
+export function checkProductionLicenses(
+  installed: readonly InstalledPackage[],
+  byPath: ReadonlyMap<string, LicenseEntry>,
+  allowed: readonly string[],
+  exceptions: readonly LicenseException[],
+): Violation[] {
+  const isAllowed = isAllowedIn(allowed)
+  const violations: Violation[] = []
+  for (const item of installed) {
+    const subject = `${item.name}@${item.version}`
+    const entry = byPath.get(item.path)
+    if (entry === undefined) {
+      violations.push({ rule: 'licenses/not-listed', subject, detail: `许可清单里找不到这个安装实例（${item.path}），无法确认它的许可` })
+      continue
+    }
+    if (!satisfies(entry.license, isAllowed) && !isException(entry.name, entry.license, exceptions))
+      violations.push({ rule: 'licenses/production', subject, detail: `许可 ${entry.license || '（未声明）'} 不在生产依赖的白名单里` })
+  }
+  return violations
+}
 
 export function checkDevelopmentLicenses(entries: readonly LicenseEntry[], exceptions: readonly LicenseException[]): Violation[] {
+  const isPermitted = (id: string): boolean => !STRONG_COPYLEFT.test(id) && !UNDECLARED.has(id.toUpperCase())
   return entries
-    .filter(entry => !satisfies(entry.license, id => !STRONG_COPYLEFT.test(id) && id !== 'UNKNOWN' && id !== 'UNLICENSED') && !isException(entry, exceptions))
+    .filter(entry => !satisfies(entry.license, isPermitted) && !isException(entry.name, entry.license, exceptions))
     .map(entry => ({
       rule: 'licenses/development',
-      subject: describeEntry(entry),
+      subject: `${entry.name}@${entry.versions.join('、')}`,
       detail: `开发依赖不得使用 GPL、AGPL、SSPL 或没有声明许可，现在是 ${entry.license || '（未声明）'}`,
     }))
 }

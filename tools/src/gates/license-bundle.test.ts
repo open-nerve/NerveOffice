@@ -1,56 +1,35 @@
+import type { BundledPackages } from './license-bundle.ts'
 import { describe, expect, it } from 'vitest'
-import { checkLicenseBundle, parseLicenseMarkdown } from './license-bundle.ts'
-
-const markdown = `# Licenses
-
-The app bundles dependencies which contain the following licenses:
-
-## react - 19.3.0 (MIT)
-
-MIT License
-
-Copyright (c) Meta Platforms, Inc. and affiliates.
-
-## @univerjs/protocol - 1.0.0 (Apache-2.0)
-
-## franc-min - 6.2.0 (MIT)
-
-## scheduler - 0.28.0 (MIT)
-
-MIT License
-`
+import { bundledPackagesSchema, checkLicenseBundle } from './license-bundle.ts'
 
 const allowed = ['MIT', 'Apache-2.0']
 
-describe('parseLicenseMarkdown', () => {
-  it('解析 Vite 的第三方许可清单：包名、版本、许可、是否带许可正文', () => {
-    expect(parseLicenseMarkdown(markdown)).toEqual([
-      { name: 'react', version: '19.3.0', license: 'MIT', hasText: true },
-      { name: '@univerjs/protocol', version: '1.0.0', license: 'Apache-2.0', hasText: false },
-      { name: 'franc-min', version: '6.2.0', license: 'MIT', hasText: false },
-      { name: 'scheduler', version: '0.28.0', license: 'MIT', hasText: true },
-    ])
-  })
-})
+function pkg(name: string, license: string, licenseTextSource: 'package' | 'supplement' | null = 'package'): BundledPackages[number] {
+  return { name, version: '1.0.0', license, licenseTextSource }
+}
 
 describe('US-M1-11 A01 第三方许可清单', () => {
-  const sections = parseLicenseMarkdown(markdown)
-
-  it('合规：缺少正文的包都由仓库补齐', () => {
-    expect(checkLicenseBundle(sections, new Set(['@univerjs/protocol', 'franc-min']), allowed)).toEqual([])
+  it('合规：每个包都有许可正文（自带或仓库补齐），许可在白名单里', () => {
+    expect(checkLicenseBundle([pkg('react', 'MIT'), pkg('@univerjs/protocol', 'Apache-2.0', 'supplement')], allowed, [])).toEqual([])
   })
 
   it('违规：打进产物的包缺少许可正文，仓库也没有补齐', () => {
-    const violations = checkLicenseBundle(sections, new Set(['@univerjs/protocol']), allowed)
-    expect(violations.map(v => `${v.rule} ${v.subject}`)).toEqual(['license-bundle/missing-text franc-min@6.2.0'])
+    expect(checkLicenseBundle([pkg('franc-min', 'MIT', null)], allowed, []).map(v => `${v.rule} ${v.subject}`)).toEqual(['license-bundle/missing-text franc-min@1.0.0'])
   })
 
-  it('违规：打进产物的包的许可不在生产依赖的白名单里', () => {
-    const violations = checkLicenseBundle([{ name: 'x', version: '1.0.0', license: 'GPL-3.0', hasText: true }], new Set(), allowed)
-    expect(violations.map(v => v.rule)).toEqual(['license-bundle/license'])
+  it.each(['GPL-3.0', 'Unknown'])('违规：打进产物的包的许可 %s 不在白名单里', (license) => {
+    expect(checkLicenseBundle([pkg('x', license)], allowed, []).map(v => v.rule)).toEqual(['license-bundle/license'])
   })
 
-  it('违规：清单是空的（构建没有开启 build.license）', () => {
-    expect(checkLicenseBundle(parseLicenseMarkdown('# Licenses\n'), new Set(), allowed).map(v => v.rule)).toEqual(['license-bundle/empty'])
+  it('合规：登记过的许可例外，与依赖许可检查同一口径', () => {
+    expect(checkLicenseBundle([pkg('special', 'MPL-2.0')], allowed, [{ name: 'special', license: 'MPL-2.0', reason: '已评审' }])).toEqual([])
+  })
+
+  it('违规：清单是空的（构建没有挂上收集插件）', () => {
+    expect(checkLicenseBundle([], allowed, []).map(v => v.rule)).toEqual(['license-bundle/empty'])
+  })
+
+  it('拒绝结构不对的清单', () => {
+    expect(() => bundledPackagesSchema.parse([{ name: 'x', version: '1', license: 'MIT', licenseTextSource: 'guess' }])).toThrow()
   })
 })

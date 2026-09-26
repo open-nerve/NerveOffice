@@ -1,0 +1,109 @@
+{
+  "ISC": [
+    {
+      "name": "pg-int8",
+      "versions": [
+        "1.0.1"
+      ],
+      "paths": [
+        "/repo/node_modules/.pnpm/pg-int8@1.0.1/node_modules/pg-int8"
+      ],
+      "license": "ISC",
+      "homepage": "https://github.com/charmander/pg-int8#readme",
+      "description": "64-bit big-endian signed integer-to-string conversion"
+    }
+  ],
+  "MIT": [
+    {
+      "name": "pg-types",
+      "versions": [
+        "2.2.0"
+      ],
+      "paths": [
+        "/repo/node_modules/.pnpm/pg-types@2.2.0/node_modules/pg-types"
+      ],
+      "license": "MIT",
+      "author": "Brian M. Carlson",
+      "homepage": "https://github.com/brianc/node-pg-types",
+      "description": "Query result type converters for node-postgres"
+    },
+    {
+      "name": "postgres-array",
+      "versions": [
+        "2.0.0"
+      ],
+      "paths": [
+        "/repo/node_modules/.pnpm/postgres-array@2.0.0/node_modules/postgres-array"
+      ],
+      "license": "MIT",
+      "author": "Ben Drucker",
+      "homepage": "https://github.com/bendrucker/postgres-array#readme",
+      "description": "Parse postgres array columns"
+    },
+    {
+      "name": "postgres-bytea",
+      "versions": [
+        "1.0.1"
+      ],
+      "paths": [
+        "/repo/node_modules/.pnpm/postgres-bytea@1.0.1/node_modules/postgres-bytea"
+      ],
+      "license": "MIT",
+      "author": "Ben Drucker",
+      "homepage": "https://github.com/bendrucker/postgres-bytea#readme",
+      "description": "Postgres bytea parser"
+    },
+    {
+      "name": "postgres-date",
+      "versions": [
+        "1.0.7"
+      ],
+      "paths": [
+        "/repo/node_modules/.pnpm/postgres-date@1.0.7/node_modules/postgres-date"
+      ],
+      "license": "MIT",
+      "author": "Ben Drucker",
+      "homepage": "https://github.com/bendrucker/postgres-date#readme",
+      "description": "Postgres date column parser"
+    },
+    {
+      "name": "postgres-interval",
+      "versions": [
+        "1.2.0"
+      ],
+      "paths": [
+        "/repo/node_modules/.pnpm/postgres-interval@1.2.0/node_modules/postgres-interval"
+      ],
+      "license": "MIT",
+      "author": "Ben Drucker",
+      "homepage": "https://github.com/bendrucker/postgres-interval#readme",
+      "description": "Parse Postgres interval columns"
+    },
+    {
+      "name": "xtend",
+      "versions": [
+        "4.0.2"
+      ],
+      "paths": [
+        "/repo/node_modules/.pnpm/xtend@4.0.2/node_modules/xtend"
+      ],
+      "license": "MIT",
+      "author": "Raynos",
+      "homepage": "https://github.com/Raynos/xtend",
+      "description": "extend like a boss"
+    },
+    {
+      "name": "zod",
+      "versions": [
+        "4.6.5"
+      ],
+      "paths": [
+        "/repo/node_modules/.pnpm/zod@4.6.5/node_modules/zod"
+      ],
+      "license": "MIT",
+      "author": "Colin McDonnell",
+      "homepage": "https://zod.dev",
+      "description": "TypeScript-first schema declaration and validation library with static type inference"
+    }
+  ]
+}
