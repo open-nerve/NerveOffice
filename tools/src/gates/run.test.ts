@@ -5,8 +5,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { z } from 'zod'
+import { readJson } from '../shared/repo.ts'
 import { readFixture } from './fixtures.ts'
-import { artifactsGate, auditGate, budgetsGate, runGate } from './run.ts'
+import { artifactsGate, auditGate, budgetsGate, GATE_NAMES, runGate } from './run.ts'
 
 describe('US-M1-11 门禁对仓库现状通过', () => {
   it.each(['pins', 'config', 'stories', 'migrations', 'schema', 'deps', 'licenses'] as const)('%s', (name) => {
@@ -15,6 +17,14 @@ describe('US-M1-11 门禁对仓库现状通过', () => {
     expect(outcome.name).toBe(name)
   })
 }, 120_000)
+
+describe('US-M1-11 门禁的快捷脚本', () => {
+  it('根 package.json 为每个门禁提供 gate:<名称>，新增门禁时不会漏（审查 B23）', () => {
+    const { scripts } = z.object({ scripts: z.record(z.string(), z.string()) }).parse(readJson('package.json'))
+    for (const name of GATE_NAMES)
+      expect(scripts[`gate:${name}`], name).toBe(`node tools/src/gates/cli.ts ${name}`)
+  })
+})
 
 let dist: string | undefined
 

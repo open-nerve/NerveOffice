@@ -85,11 +85,19 @@ export function checkUniver(installed: readonly InstalledPackage[], policy: Univ
   return violations
 }
 
-/** 名单里的包与每个 `@univerjs/*` 包，都只能有一个安装实例。 */
+/** 名单里的每一项是包名，或者 `@作用域/*`（这个作用域下的每个包）。 */
+function singletonMatcher(singletons: readonly string[]): (name: string) => boolean {
+  const names = new Set(singletons.filter(entry => !entry.endsWith('/*')))
+  const scopes = singletons.filter(entry => entry.endsWith('/*')).map(entry => entry.slice(0, -1))
+  return name => names.has(name) || scopes.some(scope => name.startsWith(scope))
+}
+
+/** 名单里的包都只能有一个安装实例；`@作用域/*` 表示这个作用域下的每个包各只能有一个。 */
 export function checkSingletons(installed: readonly InstalledPackage[], singletons: readonly string[]): Violation[] {
   const violations: Violation[] = []
+  const isSingleton = singletonMatcher(singletons)
   for (const [name, instances] of groupByName(installed)) {
-    if (!singletons.includes(name) && !name.startsWith('@univerjs/'))
+    if (!isSingleton(name))
       continue
     if (instances.length > 1) {
       const where = instances.map(i => i.path.replace(/^.*\/node_modules\/\.pnpm\//, '')).join('、')

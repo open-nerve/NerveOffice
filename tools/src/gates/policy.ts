@@ -28,7 +28,7 @@ export const UNIVER_POLICY = {
 }
 
 /**
- * 多份实例会破坏依赖注入、元数据登记或 React 上下文的包；每个 `@univerjs/*` 包同样只能有一份。
+ * 多份实例会破坏依赖注入、元数据登记或 React 上下文的包。每一项是包名，或者 `@作用域/*`（这个作用域下的每个包各只能有一份）。
  * NestJS 的依赖注入与装饰器元数据依赖 @nestjs/common、@nestjs/core 与 reflect-metadata 各只有一份；drizzle-orm 的表定义与查询要来自同一份（P2）。
  */
 export const SINGLETON_PACKAGES: readonly string[] = [
@@ -36,14 +36,18 @@ export const SINGLETON_PACKAGES: readonly string[] = [
   'react-dom',
   'rxjs',
   '@wendellhu/redi',
+  // Univer 的每个包都靠同一份依赖注入容器与服务标识协作（规范 §3）
+  '@univerjs/*',
   '@nestjs/common',
   '@nestjs/core',
   'reflect-metadata',
   'drizzle-orm',
-  // 平台前端（M1-P3）：路由与请求缓存靠 React 的上下文传递，多份实例互相看不见；Radix 的组件也共用上下文
+  // 平台前端（M1-P3）：路由与请求缓存靠 React 的上下文传递，多份实例互相看不见。
+  // Radix 的组件之间共用上下文与全局状态（弹层的层级、焦点范围）；radix-ui 只是汇总包，实际的实现在各个 @radix-ui/* 包里（审查 B23）
   'react-router',
   '@tanstack/react-query',
   'radix-ui',
+  '@radix-ui/*',
 ]
 
 /** 产物扫描（00 号计划书 §3.3、§11.3）。 */
@@ -105,10 +109,10 @@ export const AUDIT_EXCEPTIONS: readonly AuditException[] = []
 
 /**
  * 各入口首屏 JS（gzip）的预算（规范 §11）：在建立入口的 Phase 里定下，调整要在 Phase 设计里写明原因。
- * 平台页面（M1-P3）：实测约 152 KiB，其中 react-dom 65、React Router 31、contracts 与 zod 26、TanStack Query 11、
- * tailwind-merge 9、应用代码 7；留约 15% 的余量。以后需要瘦身时，可以按路由懒加载，或者让 contracts 改用 zod/mini。
- * 表格编辑器页在 M1-P4 加上。
+ * 平台页面（M1-P3）：收尾时门禁实测 146.8 KiB，预算比实测多约 23%。主要构成约为 react-dom 65、React Router 31、
+ * contracts 与 zod 26、TanStack Query 11、tailwind-merge 9、应用代码 7。
+ * 以后需要瘦身时，可以按路由懒加载，或者让 contracts 改用 zod/mini。表格编辑器页在 M1-P4 加上。
  */
 export const ENTRY_BUDGETS: readonly EntryBudget[] = [
-  { entry: 'index.html', label: '平台页面', maxGzipBytes: 180 * 1024, reason: 'M1-P3 实测约 152 KiB，留约 15% 的余量' },
+  { entry: 'index.html', label: '平台页面', maxGzipBytes: 180 * 1024, reason: 'M1-P3 收尾时门禁实测 146.8 KiB，预算比实测多约 23%' },
 ]
