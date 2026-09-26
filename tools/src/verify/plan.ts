@@ -34,7 +34,7 @@ const BUILD_AND_E2E: readonly Step[] = [
   // 先删除旧产物，构建没有真正执行时，后面的产物检查会失败
   { id: 'clean', command: ['pnpm', 'clean'] },
   { id: 'build', command: ['pnpm', 'build'] },
-  { id: 'artifact-gates', command: ['node', 'tools/src/gates/cli.ts', 'deps', 'licenses', 'artifacts'] },
+  { id: 'artifact-gates', command: ['node', 'tools/src/gates/cli.ts', 'deps', 'licenses', 'artifacts', 'budgets'] },
   // 构建已经在上一步完成，这里直接跑 Playwright
   { id: 'e2e', command: ['pnpm', '--filter', '@nerve-office/e2e', 'exec', 'playwright', 'test'] },
 ]

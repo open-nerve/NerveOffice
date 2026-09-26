@@ -1,3 +1,4 @@
+import type { EntryBudget } from './budgets.ts'
 // 门禁的策略数据（规范 §3，00 号计划书 §3.3）。每一项的新增与放宽都要写明原因，经代码审查。
 
 /** 包管理配置的底线。 */
@@ -29,7 +30,20 @@ export const UNIVER_POLICY = {
  * 多份实例会破坏依赖注入、元数据登记或 React 上下文的包；每个 `@univerjs/*` 包同样只能有一份。
  * NestJS 的依赖注入与装饰器元数据依赖 @nestjs/common、@nestjs/core 与 reflect-metadata 各只有一份；drizzle-orm 的表定义与查询要来自同一份（P2）。
  */
-export const SINGLETON_PACKAGES: readonly string[] = ['react', 'react-dom', 'rxjs', '@wendellhu/redi', '@nestjs/common', '@nestjs/core', 'reflect-metadata', 'drizzle-orm']
+export const SINGLETON_PACKAGES: readonly string[] = [
+  'react',
+  'react-dom',
+  'rxjs',
+  '@wendellhu/redi',
+  '@nestjs/common',
+  '@nestjs/core',
+  'reflect-metadata',
+  'drizzle-orm',
+  // 平台前端（M1-P3）：路由与请求缓存靠 React 的上下文传递，多份实例互相看不见；Radix 的组件也共用上下文
+  'react-router',
+  '@tanstack/react-query',
+  'radix-ui',
+]
 
 /** 产物扫描（00 号计划书 §3.3、§11.3）。 */
 export const ARTIFACT_POLICY = {
@@ -37,12 +51,26 @@ export const ARTIFACT_POLICY = {
   allowedHosts: {
     'react.dev': 'React 错误信息里的文档链接',
     'www.w3.org': 'XML、SVG 与 MathML 的命名空间标识',
+    'reactrouter.com': 'React Router 错误信息里的文档链接',
+    'github.com': 'React Router 提示加载 URLSearchParams 补丁的说明',
+    'localhost': 'React Router 解析相对地址时用的基准（new URL(path, "http://localhost")），不发请求',
+    'json-schema.org': 'zod 生成 JSON Schema 时写进 $schema 的标识，不发请求',
+    'tailwindcss.com': 'Tailwind CSS 在样式文件开头的许可注释',
   } as Readonly<Record<string, string>>,
   /**
    * `Function('return this')()` 这类全局对象探测的次数上限。
    * M0 在 Univer 的产物里见过 3 处（lodash），运行时会被短路（M0-P1 报告 §2）。
    */
   globalThisProbeMax: 3,
+  /** 已登记的能力探测：形如动态代码，但不执行任何代码（P3 设计 §3.7） */
+  knownProbes: [
+    {
+      name: 'Function(\'\')',
+      reason: 'zod 检测能否执行动态代码（JIT）：函数体是空字符串，不执行任何代码。前端设置了 jitless，运行时不会调用它（ADR-008）',
+      pattern: /Function\(\s*(["'`])\1\s*\)/,
+      max: 1,
+    },
+  ],
   /** 出现即违规的关键字（不区分大小写）：Pro、许可证校验、第三方统计与遥测上报。 */
   forbiddenKeywords: ['univerjs-pro', 'univer-pro', 'licensekey', 'license-key', 'license_key', 'posthog', 'sentry', 'google-analytics', 'googletagmanager', 'gtag(', 'mixpanel', 'grpc', 'protobuf'] as readonly string[],
 }
@@ -55,3 +83,13 @@ export interface AuditException {
 }
 
 export const AUDIT_EXCEPTIONS: readonly AuditException[] = []
+
+/**
+ * 各入口首屏 JS（gzip）的预算（规范 §11）：在建立入口的 Phase 里定下，调整要在 Phase 设计里写明原因。
+ * 平台页面（M1-P3）：实测约 152 KiB，其中 react-dom 65、React Router 31、contracts 与 zod 26、TanStack Query 11、
+ * tailwind-merge 9、应用代码 7；留约 15% 的余量。以后需要瘦身时，可以按路由懒加载，或者让 contracts 改用 zod/mini。
+ * 表格编辑器页在 M1-P4 加上。
+ */
+export const ENTRY_BUDGETS: readonly EntryBudget[] = [
+  { entry: 'index.html', label: '平台页面', maxGzipBytes: 180 * 1024, reason: 'M1-P3 实测约 152 KiB，留约 15% 的余量' },
+]

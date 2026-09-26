@@ -51,6 +51,14 @@ describe('US-M1-11 A01 产物扫描：动态代码', () => {
     expect(rules('var g=Function("return this")();')).toEqual([])
     expect(rules('Function("return this")();Function(\'return this\')();')).toEqual(['artifacts/global-this-probe'])
   })
+
+  it('已登记的能力探测（空字符串的 Function）：次数以内不算动态代码，超过上限即违规；带内容的仍是动态代码', () => {
+    expect(rules('try{return Function(``),!0}catch{return!1}')).toEqual([])
+    expect(rules('try{new F(""),Function(``)}catch{}')).toEqual([])
+    expect(rules('Function(``);Function(\'\')')).toEqual(['artifacts/known-probe'])
+    expect(rules('Function(`x`)')).toContain('artifacts/dynamic-code')
+    expect(rules('new Function(``+code)')).toContain('artifacts/dynamic-code')
+  })
 })
 
 describe('US-M1-11 A01 产物扫描：外部地址与关键字', () => {
@@ -63,6 +71,14 @@ describe('US-M1-11 A01 产物扫描：外部地址与关键字', () => {
     ['CSS 里的外部地址', 'body{background:url(https://cdn.example.net/bg.png)}'],
   ])('违规：%s', (_case, code) => {
     expect(rules(code)).toContain('artifacts/host')
+  })
+
+  it('合规：模板字符串里在运行时拼出的地址（没有固定的主机），由 CSP 兜底', () => {
+    // 样例就是产物里的模板字符串原文，不是要插值
+    // eslint-disable-next-line no-template-curly-in-string
+    expect(rules('return Sl(`http://[${e}]`)')).toEqual([])
+    // eslint-disable-next-line no-template-curly-in-string
+    expect(rules('const u=`https://${host}/x`')).toEqual([])
   })
 
   it('合规：允许清单里的主机（不区分大小写）', () => {

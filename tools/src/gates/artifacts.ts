@@ -9,9 +9,18 @@ export interface ArtifactFile {
   content: string
 }
 
+/** 已登记的能力探测：形如动态代码，但不执行任何代码。出现次数有上限，超过即违规。 */
+export interface KnownProbe {
+  name: string
+  reason: string
+  pattern: RegExp
+  max: number
+}
+
 export interface ArtifactPolicy {
   allowedHosts: Readonly<Record<string, string>>
   globalThisProbeMax: number
+  knownProbes: readonly KnownProbe[]
   forbiddenKeywords: readonly string[]
 }
 
@@ -65,14 +74,30 @@ export function scanArtifacts(files: readonly ArtifactFile[], policy: ArtifactPo
       violations.push({ rule: 'artifacts/host', subject: file.path, detail: `${host}：${context(file.content, index)}` })
   }
 
+  const knownProbeCounts = new Map<string, number>()
   for (const file of files) {
+    // 已登记的探测所在的位置：落在这里的动态代码匹配不算违规，按探测计数
+    const probeRanges: [number, number][] = []
+    for (const probe of policy.knownProbes) {
+      for (const match of file.content.matchAll(new RegExp(probe.pattern.source, 'g'))) {
+        probeRanges.push([match.index, match.index + match[0].length])
+        knownProbeCounts.set(probe.name, (knownProbeCounts.get(probe.name) ?? 0) + 1)
+      }
+    }
+    const insideProbe = (index: number): boolean => probeRanges.some(([start, end]) => index >= start && index < end)
     for (const [name, pattern] of Object.entries(DYNAMIC_CODE)) {
-      for (const match of file.content.matchAll(pattern))
-        violations.push({ rule: 'artifacts/dynamic-code', subject: file.path, detail: `${name}：${context(file.content, match.index)}` })
+      for (const match of file.content.matchAll(pattern)) {
+        if (!insideProbe(match.index))
+          violations.push({ rule: 'artifacts/dynamic-code', subject: file.path, detail: `${name}：${context(file.content, match.index)}` })
+      }
     }
     probes += [...file.content.matchAll(GLOBAL_THIS_PROBE)].length
-    for (const match of file.content.matchAll(ABSOLUTE_URL))
+    for (const match of file.content.matchAll(ABSOLUTE_URL)) {
+      // 模板字符串里在运行时拼出的地址（例如 `http://[${host}]`）：没有固定的主机，由 CSP 的 connect-src 兜底
+      if (file.content.startsWith('${', match.index + match[0].length - 1))
+        continue
       noteHost(file, hostOf(match[0]), match.index)
+    }
     for (const match of file.content.matchAll(PROTOCOL_RELATIVE_URL))
       noteHost(file, (match[1] ?? '').toLowerCase(), match.index)
     const lower = file.content.toLowerCase()
@@ -89,6 +114,11 @@ export function scanArtifacts(files: readonly ArtifactFile[], policy: ArtifactPo
       subject: '构建产物',
       detail: `Function('return this') 出现 ${probes} 次，登记的上限是 ${policy.globalThisProbeMax} 次`,
     })
+  }
+  for (const probe of policy.knownProbes) {
+    const count = knownProbeCounts.get(probe.name) ?? 0
+    if (count > probe.max)
+      violations.push({ rule: 'artifacts/known-probe', subject: probe.name, detail: `出现 ${count} 次，登记的上限是 ${probe.max} 次` })
   }
   for (const [keyword, sample] of keywordSamples)
     violations.push({ rule: 'artifacts/keyword', subject: keyword, detail: sample })

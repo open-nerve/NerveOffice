@@ -6,11 +6,13 @@ import type { Violation } from './types.ts'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import process from 'node:process'
+import { gzipSync } from 'node:zlib'
 import { z } from 'zod'
 import { commandJson, packageName, readJson, readText, readWorkspaceConfig, REPO_ROOT, workspacePackageDirs } from '../shared/repo.ts'
 import { checkStories, parseDesignStoryIds, parseRegistry, testsFromPlaywrightList, testsFromVitestList } from '../stories/stories.ts'
 import { checkFileTypes, classifyArtifact, scanArtifacts } from './artifacts.ts'
 import { checkAudit } from './audit.ts'
+import { checkBudgets, viteManifestSchema } from './budgets.ts'
 import { checkGraphComplete, checkSingletons, checkUniver, collectInstalled } from './dependency-graph.ts'
 import { bundledPackagesSchema, checkLicenseBundle } from './license-bundle.ts'
 import { checkDevelopmentLicenses, checkProductionLicenses, flattenLicenseReport, licensesByPath } from './licenses.ts'
@@ -19,10 +21,10 @@ import { MIGRATIONS_DIR } from './migrations.ts'
 import { checkPins } from './pins.ts'
 import { checkPnpmConfig, checkPnpmfiles, PNPMFILE_NAMES } from './pnpm-config.ts'
 import { auditReportSchema, licenseReportSchema, lsOutputSchema } from './pnpm-outputs.ts'
-import { ARTIFACT_POLICY, AUDIT_EXCEPTIONS, LICENSE_EXCEPTIONS, PNPM_POLICY, PRODUCTION_LICENSES, SINGLETON_PACKAGES, UNIVER_POLICY } from './policy.ts'
+import { ARTIFACT_POLICY, AUDIT_EXCEPTIONS, ENTRY_BUDGETS, LICENSE_EXCEPTIONS, PNPM_POLICY, PRODUCTION_LICENSES, SINGLETON_PACKAGES, UNIVER_POLICY } from './policy.ts'
 import { runSchemaGate } from './schema-gate.ts'
 
-export const GATE_NAMES = ['pins', 'config', 'stories', 'migrations', 'schema', 'deps', 'licenses', 'artifacts', 'audit'] as const
+export const GATE_NAMES = ['pins', 'config', 'stories', 'migrations', 'schema', 'deps', 'licenses', 'artifacts', 'budgets', 'audit'] as const
 export type GateName = typeof GATE_NAMES[number]
 
 export interface GateOutcome {
@@ -148,6 +150,16 @@ export function artifactsGate(distDir: string): GateOutcome {
   }
 }
 
+/** distDir 是 web 构建产物的目录（绝对路径）。 */
+export function budgetsGate(distDir: string): GateOutcome {
+  const title = '首屏体积预算'
+  const manifestFile = join(distDir, '.vite', 'manifest.json')
+  if (!existsSync(manifestFile))
+    return { name: 'budgets', title, violations: [{ rule: 'budgets/missing-build', subject: relative(REPO_ROOT, distDir), detail: '没有构建清单，先执行 pnpm build' }], notes: [] }
+  const manifest = viteManifestSchema.parse(JSON.parse(readFileSync(manifestFile, 'utf8')))
+  return { name: 'budgets', title, ...checkBudgets(manifest, ENTRY_BUDGETS, file => gzipSync(readFileSync(join(distDir, file))).length) }
+}
+
 /** today 是当天的日期（YYYY-MM-DD）。 */
 export function auditGate(run: CommandRunner, today: string): GateOutcome {
   const production = auditReportSchema.parse(run('pnpm', ['audit', '--prod', '--json']))
@@ -165,6 +177,7 @@ const GATES: Readonly<Record<GateName, () => GateOutcome>> = {
   deps,
   licenses,
   artifacts: () => artifactsGate(WEB_DIST),
+  budgets: () => budgetsGate(WEB_DIST),
   audit: () => auditGate(commandJson, new Date().toISOString().slice(0, 10)),
 }
 
