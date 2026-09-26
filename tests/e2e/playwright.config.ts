@@ -1,4 +1,5 @@
-// Playwright：四个浏览器，不用设备预设（它会改写 UA，而 Univer 按 UA 判断快捷键，M0 交接单）。
+// Playwright：本机跑 Chromium、Chrome、WebKit，CI（Linux）另加 Edge（规范 §8.2）。
+// 不用设备预设：它会改写 UA，而 Univer 按 UA 判断快捷键（M0 交接单）。
 import process from 'node:process'
 import { defineConfig } from '@playwright/test'
 
@@ -27,8 +28,9 @@ export default defineConfig({
   projects: [
     { name: 'chromium', use: { browserName: 'chromium' } },
     { name: 'chrome', use: { browserName: 'chromium', channel: 'chrome' } },
-    { name: 'msedge', use: { browserName: 'chromium', channel: 'msedge' } },
     { name: 'webkit', use: { browserName: 'webkit' } },
+    // Edge 与 Chrome 同一个内核，本机再跑一遍意义不大，安装还要管理员权限；CI 的 Linux 机器上由 Playwright 自动安装
+    ...(CI ? [{ name: 'msedge', use: { browserName: 'chromium' as const, channel: 'msedge' } }] : []),
   ],
   // 本 Phase 测 web 构建产物的预览服务（先执行 pnpm build）；M1-P3 起换成 api 托管的生产构建
   webServer: externalBaseUrl === undefined

@@ -22,7 +22,7 @@
 | `packages/contracts` | `@nerve-office/contracts` | 前后端共享的请求与响应结构（zod）、错误码 |
 | `tools` | `@nerve-office/tools` | 质量门禁、故事对照、提交钩子、`verify` |
 | `tests/integration` | `@nerve-office/integration-tests` | 基于真实 PostgreSQL 的集成测试 |
-| `tests/e2e` | `@nerve-office/e2e` | Playwright，四个浏览器 |
+| `tests/e2e` | `@nerve-office/e2e` | Playwright：本机 Chromium、Chrome、WebKit，CI 另加 Edge |
 | `deploy/dev` | — | 开发用的 PostgreSQL 编排 |
 
 模块系统、contracts 的导出条件与边界的强制方式见 ADR-003；版本基线见 ADR-002。
@@ -43,7 +43,7 @@
 |---|---|---|
 | 提交钩子（lefthook） | 每次提交 | 暂存文件的 `eslint --fix`；去掉提交说明里的 AI 署名 |
 | `pnpm verify --fast` | pre-push | lint、类型检查、单元测试与覆盖率、精确版本、包管理配置、故事对照 |
-| `pnpm verify` | 合并到 main 之前 | 上一行，加上：启动开发数据库、集成测试、清理并构建、依赖图与许可、产物扫描与第三方许可清单、E2E（四个浏览器） |
+| `pnpm verify` | 合并到 main 之前 | 上一行，加上：启动开发数据库、集成测试、清理并构建、依赖图与许可、产物扫描与第三方许可清单、E2E（本机三个浏览器） |
 | CI（`.github/workflows/ci.yml`） | 推送 main；每周一次；手动 | `pnpm verify --ci`（PostgreSQL 服务容器）与依赖漏洞扫描 |
 
 A01 的检查（`pnpm gate <名称>`）：

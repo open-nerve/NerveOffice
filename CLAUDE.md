@@ -80,7 +80,7 @@
 | 命令 | 作用 |
 |---|---|
 | `pnpm install` | 安装依赖，同时安装 git 钩子 |
-| `pnpm verify` | 合并前的完整门禁：lint、类型检查、单元测试与覆盖率、静态检查、集成测试、构建、依赖与产物检查、E2E（四个浏览器） |
+| `pnpm verify` | 合并前的完整门禁：lint、类型检查、单元测试与覆盖率、静态检查、集成测试、构建、依赖与产物检查、E2E（本机的 Chromium、Chrome、WebKit；CI 另加 Edge） |
 | `pnpm verify --fast` | 快速门禁（pre-push 使用） |
 | `pnpm lint` / `pnpm lint:fix` | 检查 / 修正代码规范与格式 |
 | `pnpm typecheck` | 类型检查 |
