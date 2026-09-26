@@ -1,22 +1,23 @@
 // 进程入口（P2 设计 §3.2）：读配置 → 建应用 → 监听 → 接管信号。组装都在本目录的其他文件里，这里只对接进程。
 import process from 'node:process'
-import { ConsoleLogger } from '@nestjs/common'
+import { createRootLogger } from '../modules/logging/index.ts'
 import { ConfigError, createApplication, loadConfigFromEnvironment } from './index.ts'
 
-const logger = new ConsoleLogger('main', { json: true })
+// 配置读出来之前还没有应用的日志，启动失败的原因写到这里（同步写标准输出，退出前不会丢）
+const bootstrapLogger = createRootLogger({ level: 'info' })
 
 async function main(): Promise<void> {
   const config = loadConfigFromEnvironment()
-  const runtime = await createApplication(config, { logger })
-  const address = await runtime.listen()
-  logger.log(`HTTP 服务已启动：${address.address}:${address.port}`)
+  const runtime = await createApplication(config)
+  const { address, port } = await runtime.listen()
+  runtime.logger.info({ address, port }, 'HTTP 服务已启动')
 
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     process.once(signal, () => {
       runtime.shutdown(signal).then(
         result => process.exit(result === 'graceful' ? 0 : 1),
         (error: unknown) => {
-          logger.fatal(`退出失败：${error instanceof Error ? error.message : String(error)}`)
+          runtime.logger.fatal({ err: error }, '退出失败')
           process.exit(1)
         },
       )
@@ -26,8 +27,8 @@ async function main(): Promise<void> {
 
 main().catch((error: unknown) => {
   if (error instanceof ConfigError)
-    logger.fatal(`${error.code} ${error.message}`)
+    bootstrapLogger.fatal({ code: error.code, issues: error.issues }, '配置不合法，无法启动')
   else
-    logger.fatal(`启动失败：${error instanceof Error ? error.stack ?? error.message : String(error)}`)
+    bootstrapLogger.fatal({ err: error }, '启动失败')
   process.exit(1)
 })

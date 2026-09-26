@@ -42,6 +42,12 @@ const API_DATABASE_LIBRARIES = {
   group: ['drizzle-orm', 'drizzle-orm/**', 'pg'],
   message: '只有 database 模块、各模块的 *.repository.ts 与 src/db/schema 能访问数据库（规范 §1.2）',
 }
+// Nest 的 Logger 经进程级的静态实例转发，同一个进程里后建的应用会接管先建的应用的日志；应用代码用注入的 AppLogger（P2 设计 §3.4）
+const API_NO_NEST_LOGGER = {
+  name: '@nestjs/common',
+  importNames: ['Logger', 'ConsoleLogger'],
+  message: '应用代码经依赖注入使用 AppLogger（modules/logging），不用 Nest 的 Logger（P2 设计 §3.4）',
+}
 const API_REPOSITORY_FROM_CONTROLLER = {
   regex: String.raw`\.repository(?:\.ts)?$`,
   message: '控制器不访问数据库、不写业务规则，经服务调用（规范 §1.2）',
@@ -144,7 +150,7 @@ export default antfu(
     name: 'nerve/api',
     files: ['apps/api/src/**/*.ts'],
     rules: {
-      'no-restricted-imports': ['error', { patterns: [UNIVER_ONLY_IN_EDITOR, NO_UNIVER_PRO, API_DATABASE_LIBRARIES] }],
+      'no-restricted-imports': ['error', { paths: [API_NO_NEST_LOGGER], patterns: [UNIVER_ONLY_IN_EDITOR, NO_UNIVER_PRO, API_DATABASE_LIBRARIES] }],
       'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...API_NO_SQL_CONCATENATION],
       // 只有 config 模块读取 process.env（规范 §7）
       'node/no-process-env': 'error',
@@ -154,14 +160,14 @@ export default antfu(
     name: 'nerve/api-database-access',
     files: ['apps/api/src/modules/database/**/*.ts', 'apps/api/src/modules/*/*.repository.ts', 'apps/api/src/db/**/*.ts'],
     rules: {
-      'no-restricted-imports': ['error', { patterns: [UNIVER_ONLY_IN_EDITOR, NO_UNIVER_PRO] }],
+      'no-restricted-imports': ['error', { paths: [API_NO_NEST_LOGGER], patterns: [UNIVER_ONLY_IN_EDITOR, NO_UNIVER_PRO] }],
     },
   },
   {
     name: 'nerve/api-controllers',
     files: ['apps/api/src/**/*.controller.ts'],
     rules: {
-      'no-restricted-imports': ['error', { patterns: [UNIVER_ONLY_IN_EDITOR, NO_UNIVER_PRO, API_DATABASE_LIBRARIES, API_REPOSITORY_FROM_CONTROLLER] }],
+      'no-restricted-imports': ['error', { paths: [API_NO_NEST_LOGGER], patterns: [UNIVER_ONLY_IN_EDITOR, NO_UNIVER_PRO, API_DATABASE_LIBRARIES, API_REPOSITORY_FROM_CONTROLLER] }],
       'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...API_NO_SQL_CONCATENATION, ...API_CONTROLLER_PARAMETERS],
     },
   },

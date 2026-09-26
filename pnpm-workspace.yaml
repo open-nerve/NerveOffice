@@ -59,6 +59,8 @@ catalog:
   lefthook: 2.1.14
   lint-staged: 17.5.1
   pg: 8.23.0
+  pino: 10.3.1
+  pino-http: 11.0.0
   react: 19.3.0
   react-dom: 19.3.0
   reflect-metadata: 0.2.2

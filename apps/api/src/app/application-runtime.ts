@@ -1,19 +1,20 @@
 import type { NestExpressApplication } from '@nestjs/platform-express'
 import type { AddressInfo } from 'node:net'
+import type { Logger } from 'pino'
 import type { AppConfig } from '../modules/config/index.ts'
-import { Logger } from '@nestjs/common'
 import { ApplicationState } from '../modules/health/index.ts'
 
 export type ShutdownResult = 'graceful' | 'forced'
 
 /** 运行中的应用：监听与退出（P2 设计 §3.9）。 */
 export class ApplicationRuntime {
-  readonly #logger = new Logger(ApplicationRuntime.name)
   #shutdown: Promise<ShutdownResult> | undefined
 
   constructor(
     private readonly app: NestExpressApplication,
     private readonly config: AppConfig,
+    /** 应用的根日志 */
+    readonly logger: Logger,
   ) {}
 
   async listen(): Promise<AddressInfo> {
@@ -31,10 +32,10 @@ export class ApplicationRuntime {
   }
 
   async #shutdownOnce(reason: string): Promise<ShutdownResult> {
-    this.#logger.log(`开始退出：${reason}`)
+    this.logger.info({ reason }, '开始退出')
     this.app.get(ApplicationState).beginShutdown()
     await this.app.close()
-    this.#logger.log('已退出')
+    this.logger.info('已退出')
     return 'graceful'
   }
 }

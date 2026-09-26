@@ -19,22 +19,21 @@ afterEach(() => {
 })
 
 describe('api 进程', () => {
-  it('配置缺失时启动失败：退出码 1，日志带 CONFIG_INVALID 并列出变量名', async () => {
+  it('配置缺失时启动失败：退出码 1，日志的错误码为 CONFIG_INVALID，并列出变量名', async () => {
     const api = start({})
     expect((await api.exited).code).toBe(1)
-    expect(api.output()).toContain('CONFIG_INVALID')
-    expect(api.output()).toContain('NERVE_DATABASE_URL')
+    const entry = await api.waitForLog(log => log.code === 'CONFIG_INVALID')
+    expect(entry).toMatchObject({ level: 'fatal', issues: [{ variable: 'NERVE_DATABASE_URL', problem: '缺少' }] })
   })
 
   it('启动后开始监听；收到 SIGTERM 后退出，退出码 0', async () => {
     const api = start(testEnvironment())
-    const listening = await api.waitForLog(entry => String(entry.message).startsWith('HTTP 服务已启动'))
-    const port = /:(\d+)$/.exec(String(listening.message))?.[1]
-    const response = await fetch(`http://127.0.0.1:${port}/api/health/live`)
+    const listening = await api.waitForLog(entry => entry.msg === 'HTTP 服务已启动')
+    const response = await fetch(`http://127.0.0.1:${String(listening.port)}/api/health/live`)
     expect(response.status).toBe(200)
 
     api.kill('SIGTERM')
     expect(await api.exited).toEqual({ code: 0, signal: null })
-    expect(api.output()).toContain('已退出')
+    await api.waitForLog(entry => entry.msg === '已退出')
   })
 })

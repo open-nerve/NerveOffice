@@ -23,6 +23,8 @@
     "@nestjs/core": "catalog:",
     "@nestjs/platform-express": "catalog:",
     "express": "catalog:",
+    "pino": "catalog:",
+    "pino-http": "catalog:",
     "reflect-metadata": "catalog:",
     "rxjs": "catalog:",
     "zod": "catalog:"

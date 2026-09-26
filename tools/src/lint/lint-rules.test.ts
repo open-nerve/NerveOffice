@@ -236,6 +236,11 @@ describe('US-M1-11 lint 规则的自测：后端', () => {
     expect(await rulesFor('declare const sql: { raw: (text: string) => unknown }\nexport const s = sql.raw(\'x\')\n', API_SERVICE)).toContain('no-restricted-syntax')
   })
 
+  it('应用代码不用 Nest 的 Logger（进程级的静态实例），经依赖注入使用 AppLogger', async () => {
+    expect(await rulesFor('import { Logger } from \'@nestjs/common\'\n\nexport const logger = new Logger(\'x\')\n', API_SERVICE)).toContain('no-restricted-imports')
+    expect(await rulesFor('import { Injectable } from \'@nestjs/common\'\n\nexport const decorator = Injectable\n', API_SERVICE)).not.toContain('no-restricted-imports')
+  })
+
   it('依赖注入要用的类不会被要求改成 import type（开启 emitDecoratorMetadata 时 typescript-eslint 会跳过）', async () => {
     const code = [
       'import { Controller } from \'@nestjs/common\'',

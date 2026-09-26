@@ -1,5 +1,6 @@
 import type { HealthLiveResponse, HealthReadyResponse } from '@nerve-office/contracts'
-import { Controller, Get, ServiceUnavailableException } from '@nestjs/common'
+import { Controller, Get } from '@nestjs/common'
+import { AppError } from '../../shared/errors/app-error.ts'
 import { ApplicationState } from './application-state.ts'
 
 @Controller('health')
@@ -16,7 +17,7 @@ export class HealthController {
   @Get('ready')
   ready(): HealthReadyResponse {
     if (!this.state.accepting)
-      throw new ServiceUnavailableException('正在退出')
+      throw new AppError('SERVICE_UNAVAILABLE', '正在退出')
     return { status: 'ready' }
   }
 }

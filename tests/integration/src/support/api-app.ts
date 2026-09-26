@@ -1,11 +1,15 @@
 // 在测试进程里启动真实的 api 应用（与生产相同的 createApplication 与管线），监听随机端口。
 import type { ApplicationOptions, ApplicationRuntime } from '@nerve-office/api'
+import type { LogCapture } from './log-capture.ts'
 import { createApplication, loadConfig } from '@nerve-office/api'
 import { testDatabaseUrl } from './database.ts'
+import { captureLogs } from './log-capture.ts'
 
 export interface TestApp {
   readonly baseUrl: string
   readonly runtime: ApplicationRuntime
+  /** 应用写的日志 */
+  readonly logs: LogCapture
   close: () => Promise<void>
 }
 
@@ -29,11 +33,13 @@ export function testEnvironment(overrides: Readonly<Record<string, string>> = {}
 
 export async function startTestApp(options: TestAppOptions = {}): Promise<TestApp> {
   const config = loadConfig(testEnvironment(options.env))
-  const runtime = await createApplication(config, { logger: false, additionalModules: options.additionalModules })
+  const logs = captureLogs()
+  const runtime = await createApplication(config, { logDestination: logs.destination, additionalModules: options.additionalModules })
   const { port } = await runtime.listen()
   return {
     baseUrl: `http://127.0.0.1:${port}`,
     runtime,
+    logs,
     close: async () => {
       await runtime.shutdown('测试结束')
     },
