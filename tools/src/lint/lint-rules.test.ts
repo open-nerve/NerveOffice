@@ -3,7 +3,7 @@
 // 类型感知的解析只接受 tsconfig 里真实存在的文件，所以 lintText 借用仓库里已有的文件路径；
 // 需要"被引用的目标"时，临时创建探针文件（已加入 .gitignore），用完删除。
 import type { Linter } from 'eslint'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import process from 'node:process'
 import { ESLint } from 'eslint'
@@ -19,14 +19,17 @@ const PROBE_FILES = {
 }
 
 let eslint: ESLint
-/** 为探针新建的最外层目录：用完连同它一起删掉，不在仓库里留下空目录。 */
+/** 为探针新建的目录，由深到浅。清理时只删空目录，不递归删除，免得删掉同一时间别人写进去的文件。 */
 const createdDirs: string[] = []
 
 beforeAll(() => {
   for (const path of Object.values(PROBE_FILES)) {
-    const created = mkdirSync(join(REPO_ROOT, dirname(path)), { recursive: true })
-    if (created !== undefined)
-      createdDirs.push(created)
+    const dir = join(REPO_ROOT, dirname(path))
+    const firstCreated = mkdirSync(dir, { recursive: true })
+    if (firstCreated !== undefined) {
+      for (let current = dir; current.startsWith(firstCreated); current = dirname(current))
+        createdDirs.push(current)
+    }
     writeFileSync(join(REPO_ROOT, path), 'export const probe = 1\n')
   }
   eslint = new ESLint({ cwd: REPO_ROOT })
@@ -35,8 +38,17 @@ beforeAll(() => {
 afterAll(() => {
   for (const path of Object.values(PROBE_FILES))
     rmSync(join(REPO_ROOT, path), { force: true })
-  for (const dir of createdDirs)
-    rmSync(dir, { recursive: true, force: true })
+  for (const dir of createdDirs) {
+    try {
+      rmdirSync(dir)
+    }
+    catch (error) {
+      // 目录里还有别的文件（ENOTEMPTY）或已经不在（ENOENT）时放过
+      const code = (error as NodeJS.ErrnoException).code
+      if (code !== 'ENOTEMPTY' && code !== 'ENOENT')
+        throw error
+    }
+  }
 })
 
 interface Report { rules: string[], messages: string[] }

@@ -24,26 +24,25 @@ function isAiAttribution(line: string): boolean {
   return isAiTrailer(line) || WATERMARK.test(line.trim())
 }
 
-/** `git commit -v` 在提交说明后面附上剪刀线与 diff；剪刀线的注释符由 core.commentChar 决定。 */
-const SCISSORS = /^\S -{24} >8 -{24}$/
-
 /**
  * 去掉末尾署名段里的 AI 署名，并把末尾的空行收成一个换行；git 的注释行原样保留在最后。
- * 有剪刀线时只处理它之前的部分，剪刀线与后面的 diff 原样保留（git 会在提交时丢掉它们）。
+ * `git commit -v` 在提交说明后面附上剪刀线与 diff：有剪刀线时只处理它之前的部分，剪刀线与 diff 原样保留（git 提交时会丢掉它们）。
+ * commentPrefix 是 git 的注释符（core.commentString 或 core.commentChar，默认 #）。
  */
-export function stripAiTrailers(message: string): string {
+export function stripAiTrailers(message: string, commentPrefix = '#'): string {
   const all = message.split('\n')
-  const scissors = all.findIndex(line => SCISSORS.test(line))
+  const scissorsLine = `${commentPrefix} ------------------------ >8 ------------------------`
+  const scissors = all.findIndex(line => line === scissorsLine)
   if (scissors >= 0)
-    return `${stripMessage(all.slice(0, scissors))}${all.slice(scissors).join('\n')}`
-  return stripMessage(all)
+    return `${stripMessage(all.slice(0, scissors), commentPrefix)}${all.slice(scissors).join('\n')}`
+  return stripMessage(all, commentPrefix)
 }
 
-function stripMessage(lines: string[]): string {
+function stripMessage(lines: string[], commentPrefix: string): string {
   const trailingComments: string[] = []
-  while (lines.length > 0 && (lines.at(-1)?.trim() === '' || lines.at(-1)?.startsWith('#') === true)) {
+  while (lines.length > 0 && (lines.at(-1)?.trim() === '' || lines.at(-1)?.startsWith(commentPrefix) === true)) {
     const line = lines.pop() ?? ''
-    if (line.startsWith('#'))
+    if (line.startsWith(commentPrefix))
       trailingComments.unshift(line)
   }
 

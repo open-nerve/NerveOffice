@@ -72,6 +72,12 @@ describe('stripAiTrailers', () => {
     expect(stripAiTrailers(message)).toBe(`fix: 修正\n\n正文\n\n# 请为您的变更输入提交说明。\n${diff}`)
   })
 
+  it.each([';', '//'])('非默认的注释符 %s：注释行与剪刀线都按它识别', (prefix) => {
+    const scissors = `${prefix} ------------------------ >8 ------------------------`
+    const message = `fix: 修正\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n${prefix} 请输入提交说明\n${scissors}\ndiff --git a/x b/x\n`
+    expect(stripAiTrailers(message, prefix)).toBe(`fix: 修正\n\n${prefix} 请输入提交说明\n${scissors}\ndiff --git a/x b/x\n`)
+  })
+
   it('正文里提到 Claude 的普通句子不受影响', () => {
     const message = 'docs: 记录 Claude 相关的约定\n\n说明 Co-Authored-By 规则\n'
     expect(stripAiTrailers(message)).toBe(message)
