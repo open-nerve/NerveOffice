@@ -39,11 +39,19 @@ describe('登录页的地址', () => {
     expect(redirectTarget(from)).toBe('/')
   })
 
+  // 解析会去掉 . 与 .. 这样的路径段、把反斜杠换成斜杠：解析之后的路径以 // 开头，再被当作地址用就是另一个站点（复验 R1）
+  it.each(['/.//evil.example', '/%2e//evil.example', '/x/..//evil.example', '/./\\evil.example', '/a/b/../..//evil.example/x?y=1'])('解析之后路径以 // 开头（%j）：拒绝，登录后去首页', (path) => {
+    expect(safeRedirectPath(path)).toBeUndefined()
+    expect(redirectTarget(path)).toBe('/')
+    expect(loginPath(path)).toBe('/login')
+  })
+
   it('站内的路径回去，用解析后的规范写法；编码过的字符留在路径里，仍是站内地址', () => {
     expect(redirectTarget('/documents')).toBe('/documents')
     expect(redirectTarget('/?view=list#top')).toBe('/?view=list#top')
     expect(redirectTarget('/a/../documents')).toBe('/documents')
     expect(redirectTarget(fromParameter('from=/%2509/evil'))).toBe('/%09/evil')
+    expect(redirectTarget('/%2F%2Fevil.example')).toBe('/%2F%2Fevil.example')
     expect(redirectTarget('/login-help')).toBe('/login-help')
     expect(redirectTarget(null)).toBe('/')
   })

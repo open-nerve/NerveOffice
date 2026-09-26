@@ -16,9 +16,11 @@ describe('parseInitAdminArguments', () => {
   it('用法错误的说明不回显参数的取值：密码误当作参数传进来时不能出现在终端里', () => {
     const cases: [string[], RegExp][] = [
       [['--username', 'admin', 'hunter2-secret'], /不接受位置参数/],
-      [['--username', 'admin', '--pw=hunter2-secret'], /不认识的选项 --pw$/],
-      [['--username', 'admin', '-p', 'hunter2-secret'], /不认识的选项 -p$/],
-      [['--username', 'admin', '--hunter2-secret!'], /^有不认识的选项$/],
+      [['--username', 'admin', '--pw=hunter2-secret'], /有不认识的选项/],
+      [['--username', 'admin', '-p', 'hunter2-secret'], /有不认识的选项/],
+      [['--username', 'admin', '--hunter2-secret!'], /有不认识的选项/],
+      // 以 - 开头、只有字母与连字符的口令看起来就像一个选项：同样不说出名字（复验 R9）
+      [['--username', 'admin', '--hunter-secret-horse-battery'], /^有不认识的选项：只接受/],
       [['--username', 'admin', '--password-stdin=hunter2-secret'], /--password-stdin 不带取值/],
       [['--username'], /需要取值/],
     ]
@@ -34,7 +36,7 @@ describe('parseInitAdminArguments', () => {
       })()
       expect(error, argv.join(' ')).toBeInstanceOf(UsageError)
       expect((error as UsageError).message, argv.join(' ')).toMatch(message)
-      expect((error as UsageError).message, argv.join(' ')).not.toContain('hunter2')
+      expect((error as UsageError).message, argv.join(' ')).not.toContain('hunter')
     }
   })
 

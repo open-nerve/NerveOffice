@@ -311,20 +311,35 @@ describe('多个标签页（审查 B6）', () => {
     expect(api.requests.find(request => request.key === 'POST /api/auth/logout')?.headers['x-csrf-token']).toBe('csrf-2')
   })
 
-  it('同时来了几条消息：只向服务端确认一次；确认失败（服务不可用、网络）时页面不动', async () => {
+  it('确认期间又来了几条消息：合并成一次，这次确认结束后再补确认一次；确认失败（服务不可用、网络）时页面不动', async () => {
     const { api, app, otherTab } = await openList()
     const pending = deferred()
     api.on('GET /api/auth/session', pending.handler)
     otherTab.announce()
     otherTab.announce()
-    pending.resolve(apiError(503, 'SERVICE_UNAVAILABLE'))
-    await settle()
-    expect(requestCount(api, 'GET /api/auth/session')).toBe(2)
-    api.on('GET /api/auth/session', networkFailure)
     otherTab.announce()
+    api.on('GET /api/auth/session', () => apiError(503, 'SERVICE_UNAVAILABLE'))
+    pending.resolve(apiError(503, 'SERVICE_UNAVAILABLE'))
     await waitFor(() => expect(requestCount(api, 'GET /api/auth/session')).toBe(3))
     await settle()
+    expect(requestCount(api, 'GET /api/auth/session')).toBe(3)
+    api.on('GET /api/auth/session', networkFailure)
+    otherTab.announce()
+    await waitFor(() => expect(requestCount(api, 'GET /api/auth/session')).toBe(4))
+    await settle()
     expect(app.page.visits).toEqual([])
+  })
+
+  it('确认期间别的标签页又换了人：这次确认看到的还是原来的人，结束后再确认一次，发现换了人就整页重新加载（复验 R10）', async () => {
+    const { api, app, otherTab } = await openList()
+    const pending = deferred()
+    api.on('GET /api/auth/session', pending.handler)
+    otherTab.announce()
+    api.on('GET /api/auth/session', () => json(200, OTHER_SESSION))
+    otherTab.announce()
+    pending.resolve(json(200, SESSION))
+    await waitFor(() => expect(app.page.visits).toEqual(['reload']))
+    expect(requestCount(api, 'GET /api/auth/session')).toBe(3)
   })
 
   it('退出得到 CSRF_TOKEN_INVALID（别的标签页换了人）：提示页面已失效；向服务端确认后换了人，整页重新加载', async () => {

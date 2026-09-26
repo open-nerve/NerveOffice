@@ -44,8 +44,10 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
   const channel = options.sessionChannel ?? openSessionChannel()
   /** 页面正在离开：之后的会话事件都不再处理 */
   let leaving = false
-  /** 正在向服务端确认会话：同时来的几次只确认一次 */
+  /** 正在向服务端确认会话 */
   let checking = false
+  /** 确认期间又来了消息：这次确认的结果可能早于那次变化，结束后再确认一次（几条消息合并成一次，复验 R10） */
+  let checkAgain = false
 
   const queryClient = createQueryClient({
     unauthenticated: (reason) => {
@@ -84,9 +86,25 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
   }
 
   async function recheckSession(): Promise<void> {
-    if (leaving || checking)
+    if (leaving)
       return
+    if (checking) {
+      checkAgain = true
+      return
+    }
     checking = true
+    try {
+      do {
+        checkAgain = false
+        await checkSessionOnce()
+      } while (checkAgain && !leaving)
+    }
+    finally {
+      checking = false
+    }
+  }
+
+  async function checkSessionOnce(): Promise<void> {
     try {
       const { queryKey } = sessionQueryOptions()
       const shown = queryClient.getQueryData(queryKey)
@@ -104,9 +122,6 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
     }
     catch {
       // 网络等失败：页面照常，下一个请求会显示错误
-    }
-    finally {
-      checking = false
     }
   }
 

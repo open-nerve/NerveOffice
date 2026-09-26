@@ -11,24 +11,19 @@ export class UsageError extends Error {
   override readonly name = 'UsageError'
 }
 
-const KNOWN_OPTIONS: ReadonlySet<string> = new Set(['--username', '--display-name', '--password-stdin'])
-/** 报告不认识的选项时，只在它看起来像个选项名时才说出名字 */
-const OPTION_NAME = /^--?[a-z][a-z-]*$/i
-
 /**
  * parseArgs 的报错会原样带上出错的参数：密码误当作参数传进来时，它就出现在终端与日志里。
- * 按错误类别给出自己的说明，不回显参数的取值（P3 审查 A11）。
+ * 按错误类别给出自己的说明，不回显任何参数（P3 审查 A11）。不认识的选项也不说出名字：
+ * 以 - 开头的口令（--correct-horse-battery-staple）看起来就像一个选项（复验 R9）。
  */
-function usageProblemOf(error: unknown, argv: readonly string[]): string {
+function usageProblemOf(error: unknown): string {
   const code = typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined
   if (code === 'ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL')
     return '不接受位置参数（密码不能出现在命令行参数里）'
   if (code === 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE')
     return '选项的取值不对：--username 与 --display-name 需要取值，--password-stdin 不带取值'
-  if (code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION') {
-    const unknown = argv.map(argument => argument.split('=')[0] ?? '').find(name => name.startsWith('-') && !KNOWN_OPTIONS.has(name))
-    return unknown !== undefined && OPTION_NAME.test(unknown) ? `不认识的选项 ${unknown}` : '有不认识的选项'
-  }
+  if (code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION')
+    return '有不认识的选项：只接受 --username、--display-name 与 --password-stdin'
   return '参数不合法'
 }
 
@@ -55,7 +50,7 @@ export function parseInitAdminArguments(argv: readonly string[]): InitAdminArgum
     }).values
   }
   catch (error) {
-    throw new UsageError(usageProblemOf(error, argv))
+    throw new UsageError(usageProblemOf(error))
   }
   if (values.username === undefined || values.username.trim() === '')
     throw new UsageError('缺少 --username')

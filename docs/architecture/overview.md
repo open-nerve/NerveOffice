@@ -152,7 +152,8 @@ apps/web/src/
 - 跨元素时，contracts、功能模块、编辑器与后端模块只经公开入口（`index.ts`）引用；元素目录里没有"无主"文件。
 - contracts 不依赖任何内部包；tools 不依赖业务包；集成测试只经 contracts 与 `@nerve-office/api` 的入口引用。
 - 没有循环依赖。
-- 测试代码只在测试里用：测试代码之外只引用本包 `dependencies` 里的包；测试与测试辅助（`*.test.*`、`*.test-support.*`）只被测试引用。
+- 测试代码只在测试里用：测试代码之外只引用本包 `dependencies` 里的包；测试与测试辅助（`*.test.*`、`*.test-support.*`）只被测试静态引用，任何地方都不动态导入它们。
+- 前端应用的入口（`entries/*/main.{ts,tsx}`）只写副作用导入，第一个关掉 zod 的 JIT。
 
 规则由 ESLint 执行，并有自测（`tools/src/lint/lint-rules.test.ts`）。
 
@@ -176,7 +177,7 @@ A01 等检查（`pnpm gate <名称>`）：
 | `schema` | 表定义与迁移同步：对迁移目录的副本执行一次 drizzle-kit generate，不应生成新文件，并且要给出"没有变化"的结论（改列名等要交互确认的变更同样失败） |
 | `deps` | 生产依赖图（含可选依赖，按真实包名）没有 Pro，Univer 版本一致，应为单例的包只有一份（React、rxjs、NestJS、reflect-metadata、drizzle-orm、React Router、TanStack Query、Radix 等；清单支持 `@作用域/*`，含 `@univerjs/*`、`@radix-ui/*`），依赖树完整 |
 | `licenses` | 生产依赖的每个安装实例的许可在白名单内（本机没装的平台专属包以 CI 为准）；开发依赖没有 GPL、AGPL、SSPL 与未声明许可 |
-| `artifacts` | 构建产物只有登记过的文件类型（`.json` 也扫描，只放行三个清单文件）；JS 按语法树找出 `eval` 与 `Function` 的每一处引用，除已登记的动态代码（zod 的 JIT 探测与编译器，jitless 下执行不到）外都违规，其他文本文件按写法匹配；地址按具体地址登记放行，模板插值前的固定主机照样检查；没有禁用的关键字；没有只属于测试构建的文件（CSP 探针）；第三方许可清单（含 Worker 的产物）完整 |
+| `artifacts` | 构建产物只有登记过的文件类型（`.json` 也扫描，只放行三个清单文件）；JS 按语法树找出 `eval` 与 `Function` 的每一处引用（任何对象上的同名属性、恰好是这两个名字的字符串也算），除已登记的动态代码（zod 的 JIT 探测与编译器，jitless 下执行不到）外都违规，其他文本文件按写法匹配；地址按具体地址登记放行，模板插值前的固定主机照样检查；没有禁用的关键字；没有只属于测试构建的文件（CSP 探针）；第三方许可清单（含 Worker 的产物）完整 |
 | `budgets` | 各入口首屏 JS 的体积（入口块加上静态引用的块，gzip）不超过预算 |
 | `audit` | 生产依赖没有高危及以上的漏洞；例外有原因与到期日；没有被配置藏起来的漏洞 |
 

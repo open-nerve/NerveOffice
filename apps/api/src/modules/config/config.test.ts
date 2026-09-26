@@ -74,6 +74,7 @@ describe('loadConfig', () => {
       NERVE_PASSWORD_ARGON2_ITERATIONS: '1',
       NERVE_PASSWORD_ARGON2_PARALLELISM: '2',
       NERVE_PASSWORD_HASH_CONCURRENCY: '8',
+      UV_THREADPOOL_SIZE: '16',
       NERVE_SESSION_IDLE_TIMEOUT_MINUTES: '30',
       NERVE_SESSION_ABSOLUTE_TIMEOUT_MINUTES: '600',
       NERVE_LOGIN_MAX_FAILURES: '3',
@@ -228,6 +229,17 @@ describe('loadConfig', () => {
     expect(cost('19456', '1')[0]?.problem).toContain('35840')
     for (const [memory, iterations] of [['47104', '1'], ['19456', '2'], ['12288', '3'], ['9216', '4'], ['8192', '5']])
       expect(loadConfig({ ...REQUIRED, NERVE_PASSWORD_ARGON2_MEMORY_KIB: memory, NERVE_PASSWORD_ARGON2_ITERATIONS: iterations }).password.argon2.memoryKib).toBe(Number(memory))
+  })
+
+  it('哈希的并发上限不超过 libuv 线程池（UV_THREADPOOL_SIZE，默认 4）的一半；线程池的大小不合法时报出（复验 R11）', () => {
+    const issuesWith = (extra: Record<string, string>) => issuesOf(() => loadConfig({ ...REQUIRED, ...extra }))
+    expect(issuesWith({ NERVE_PASSWORD_HASH_CONCURRENCY: '3' }).map(issue => issue.variable)).toEqual(['NERVE_PASSWORD_HASH_CONCURRENCY'])
+    expect(issuesWith({ NERVE_PASSWORD_HASH_CONCURRENCY: '3' })[0]?.problem).toContain('现在是 4')
+    expect(loadConfig({ ...REQUIRED, NERVE_PASSWORD_HASH_CONCURRENCY: '8', UV_THREADPOOL_SIZE: '16' }).password.hashConcurrency).toBe(8)
+    expect(loadConfig({ ...REQUIRED, NERVE_PASSWORD_HASH_CONCURRENCY: '1', UV_THREADPOOL_SIZE: '1' }).password.hashConcurrency).toBe(1)
+    expect(loadConfig({ ...REQUIRED, UV_THREADPOOL_SIZE: '' }).password.hashConcurrency).toBe(2)
+    for (const size of ['0', '1025', 'four', '2.5'])
+      expect(issuesWith({ UV_THREADPOOL_SIZE: size }).map(issue => issue.variable), size).toEqual(['UV_THREADPOOL_SIZE'])
   })
 
   it('不认识的 NERVE_ 变量（多半是拼写错误）让启动失败；NERVE_TEST_ 留给测试工具，其他前缀不管', () => {

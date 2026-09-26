@@ -1,9 +1,11 @@
+import type { Buffer } from 'node:buffer'
 // 登录限流在并发与各种来源下的行为（P3 设计 §3.5，P3 审查 A1、A2、A9、A10）：
 // 先占用名额再验证，并发的请求不能都在锁定之前通过；清理在事务之外，并发时不死锁；
 // 地址维度：成功登录只退回自己的名额；IPv6 按 /64；取不到合法地址时归到同一个键。
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
+import { createHash } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
@@ -47,6 +49,15 @@ async function rows<T extends Record<string, unknown>>(query: string, values: un
 async function failedAudits(prefix: string): Promise<number> {
   const [row] = await rows<{ count: string }>('SELECT count(*) AS count FROM audit_events WHERE action = \'auth.login_failed\' AND request_id LIKE $1', [`${prefix}%`])
   return Number(row?.count)
+}
+
+async function waitUntil(condition: () => Promise<boolean>, timeoutMs = 5_000): Promise<void> {
+  const deadline = performance.now() + timeoutMs
+  while (!(await condition())) {
+    if (performance.now() > deadline)
+      throw new Error('等待超时')
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
 }
 
 function tally(statuses: number[]): Record<number, number> {
@@ -143,6 +154,43 @@ describe('清理不等待别人正锁着的行', () => {
       SELECT (SELECT count(*) FROM auth_login_throttles WHERE window_started_at < now() - interval '1 hour') AS throttles,
              (SELECT count(*) FROM auth_sessions WHERE idle_expires_at < now() - interval '30 days') AS sessions`)
     expect(left).toEqual({ throttles: '1', sessions: '1' })
+  })
+})
+
+describe('退回名额时核对窗口（复验 R4）', () => {
+  // 计数的键是摘要：与 auth 的 throttle-keys 一致（用户名维度 user:<用户名>，本机的 IPv4 地址 ip:<地址>）
+  const digest = (key: string): Buffer => createHash('sha256').update(key, 'utf8').digest()
+
+  it('验证期间窗口重新开始了：成功时退回的旧窗口的名额不减新窗口的计数', async () => {
+    const app = await start({ NERVE_LOGIN_MAX_FAILURES: '100', NERVE_LOGIN_IP_MAX_FAILURES: '10', NERVE_DATABASE_LOCK_TIMEOUT_MS: '10000' })
+    // 先失败一次：两个维度的计数都有了行
+    expect((await postLogin(app.baseUrl, { username: 'alice', password: 'wrong' })).status).toBe(401)
+    const userKey = digest('user:alice')
+    const addressKey = digest('ip:127.0.0.1')
+
+    const status = await database.query(async (holder) => {
+      // 持有用户名那一行的 KEY SHARE 锁：占用名额（只改非键列）不受影响，成功时的事务删除这一行要等它，
+      // 于是登录停在"已占用、已验证、还没退回"之间
+      await holder.query('BEGIN')
+      try {
+        await holder.query('SELECT 1 FROM auth_login_throttles WHERE key_hash = $1 FOR KEY SHARE', [userKey])
+        const login = postLogin(app.baseUrl, { username: 'alice', password: alice.password })
+        await waitUntil(async () => (await rows<{ count: string }>(
+          'SELECT count(*) AS count FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = \'Lock\'',
+        ))[0]?.count !== '0')
+        // 这时地址的窗口重新开始（例如过期之后别的请求占了新窗口的名额）
+        await database.query(async client => client.query('UPDATE auth_login_throttles SET window_started_at = now(), failures = 7 WHERE key_hash = $1', [addressKey]))
+        await holder.query('COMMIT')
+        return (await login).status
+      }
+      catch (error) {
+        await holder.query('ROLLBACK')
+        throw error
+      }
+    })
+    expect(status).toBe(200)
+    const [address] = await rows<{ failures: number }>('SELECT failures FROM auth_login_throttles WHERE key_hash = $1', [addressKey])
+    expect(address?.failures).toBe(7)
   })
 })
 

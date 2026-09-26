@@ -36,8 +36,6 @@ interface Visit {
 }
 
 const NAMES: ReadonlySet<string> = new Set(['eval', 'Function'])
-/** 全局对象的各种写法：Worker 里是 self，页面里是 window，通用的是 globalThis；脚本顶层的 this 也是全局对象。 */
-const GLOBAL_OBJECTS: ReadonlySet<string> = new Set(['globalThis', 'window', 'self', 'global'])
 
 /** 这些字段里的标识符是名字（属性名、对象的键、标签、导入导出的名字），不是对全局绑定的引用；computed 为 true 时除外。 */
 const NAME_FIELDS: Readonly<Record<string, readonly string[]>> = {
@@ -83,12 +81,6 @@ function propertyName(member: SyntaxNode): string | undefined {
   return isNode(member.property) && typeof member.property.name === 'string' ? member.property.name : undefined
 }
 
-function isGlobalObject(value: unknown): boolean {
-  if (!isNode(value))
-    return false
-  return value.type === 'ThisExpression' || (value.type === 'Identifier' && typeof value.name === 'string' && GLOBAL_OBJECTS.has(value.name))
-}
-
 function isReferencePosition({ parent, grandparent, field }: Visit): boolean {
   if (parent === undefined || parent.computed === true || !(NAME_FIELDS[parent.type] ?? []).includes(field))
     return true
@@ -96,20 +88,32 @@ function isReferencePosition({ parent, grandparent, field }: Visit): boolean {
   return parent.type === 'Property' && grandparent?.type === 'ObjectPattern'
 }
 
+/** 字符串是某个成员访问的下标（a["eval"]）：成员访问本身已经算作引用，字符串不再重复计数。 */
+function isMemberKey({ parent, field }: Visit): boolean {
+  return parent?.type === 'MemberExpression' && field === 'property'
+}
+
 /**
- * 这个节点引用的是 eval 还是 Function：标识符本身；从全局对象上取这个属性；用字符串下标从任何对象上取
- * （与按写法匹配的 ['eval'] 一致）。其他对象上的同名属性（例如 node.eval()）不是全局绑定。
+ * 这个节点引用的是 eval 还是 Function：
+ * - 标识符本身；
+ * - 任何对象上名为 eval、Function 的属性：全局对象可以先赋给别的名字（const g = globalThis; new g.Function(…)），
+ *   也可以经 window.self、top、parent、frames 取到，按对象的写法认不全（复验 R5）；
+ * - 内容恰好是 'eval'、'Function' 的字符串：Reflect.get(globalThis, "Function") 这类按名字取的写法里只剩字符串。
+ * 生产产物里本来没有这几类写法；将来的依赖出现时，门禁报出来，确认后登记。
  */
 function referencedName(visit: Visit): EvalOrFunction | undefined {
   const { node } = visit
   if (node.type === 'Identifier')
     return isName(node.name) && isReferencePosition(visit) ? node.name : undefined
-  if (node.type !== 'MemberExpression')
-    return undefined
-  const name = propertyName(node)
-  if (!isName(name))
-    return undefined
-  return node.computed === true || isGlobalObject(node.object) ? name : undefined
+  if (node.type === 'MemberExpression') {
+    const name = propertyName(node)
+    return isName(name) ? name : undefined
+  }
+  if (node.type === 'Literal' || node.type === 'TemplateLiteral') {
+    const value = staticString(node)
+    return isName(value) && !isMemberKey(visit) ? value : undefined
+  }
+  return undefined
 }
 
 /** 引用的用法；拿不到代码执行能力的用法返回 undefined。 */

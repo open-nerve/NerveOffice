@@ -73,7 +73,8 @@ describe('US-M1-11 A01 产物扫描：动态代码', () => {
 
   it('合规：常见的正常写法不误报', () => {
     const code = [
-      'a.evaluate(x);b.myFunction("x");obj.eval2=1;isFunction("x");node.eval(scope);',
+      // 任何对象上名为 eval、Function 的属性都算引用（复验 R5），这里只有名字相近的
+      'a.evaluate(x);b.myFunction("x");obj.eval2=1;isFunction("x");',
       'typeof f==="function";x instanceof Function;Function.prototype.call.bind(f);',
       'const tag="[object Function]";const kinds=["AsyncFunction","GeneratorFunction"];',
       'setTimeout(fn,0);self.setTimeout(()=>{},1);',

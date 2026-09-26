@@ -79,6 +79,14 @@ test.describe('US-M1-02 登录与退出', () => {
     expect(new URL(page.url()).pathname).toBe('/')
   })
 
+  test('登录后回到的地址解析之后以 // 开头（/.//evil.example）：不回去，进入首页，不停在错误页（复验 R1）', async ({ page }) => {
+    const user = await createUser('login-from-dots')
+    await page.goto('/login?from=%2F.%2F%2Fevil.example')
+    await loginThroughUi(page, user)
+    await expect(page.getByRole('heading', { name: '我的空间' })).toBeVisible()
+    expect(new URL(page.url()).pathname).toBe('/')
+  })
+
   test('已登录时打开登录页：确认会话期间不显示登录表单，随后回到首页（审查 B14）', async ({ page }) => {
     await loginThroughApi(page, await createUser('login-page-signed-in'))
     let release: () => void = () => {}

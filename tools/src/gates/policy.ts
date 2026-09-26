@@ -109,10 +109,10 @@ export const AUDIT_EXCEPTIONS: readonly AuditException[] = []
 
 /**
  * 各入口首屏 JS（gzip）的预算（规范 §11）：在建立入口的 Phase 里定下，调整要在 Phase 设计里写明原因。
- * 平台页面（M1-P3）：收尾时门禁实测 146.8 KiB，预算比实测多约 23%。主要构成约为 react-dom 65、React Router 31、
+ * 平台页面（M1-P3）：收尾时门禁实测 147.7 KiB，预算比实测多约 22%。主要构成约为 react-dom 65、React Router 31、
  * contracts 与 zod 26、TanStack Query 11、tailwind-merge 9、应用代码 7。
  * 以后需要瘦身时，可以按路由懒加载，或者让 contracts 改用 zod/mini。表格编辑器页在 M1-P4 加上。
  */
 export const ENTRY_BUDGETS: readonly EntryBudget[] = [
-  { entry: 'index.html', label: '平台页面', maxGzipBytes: 180 * 1024, reason: 'M1-P3 收尾时门禁实测 146.8 KiB，预算比实测多约 23%' },
+  { entry: 'index.html', label: '平台页面', maxGzipBytes: 180 * 1024, reason: 'M1-P3 收尾时门禁实测 147.7 KiB，预算比实测多约 22%' },
 ]

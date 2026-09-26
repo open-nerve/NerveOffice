@@ -35,9 +35,14 @@ const DYNAMIC_UNIVER_PRO = {
   message: '禁止引入 @univerjs-pro/*（00 号计划书 §3.3）',
 }
 
-const BASE_RESTRICTED_SYNTAX = [...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER, DYNAMIC_UNIVER_PRO]
+// 测试与测试辅助只被测试静态引用：nerve/test-code-only-in-tests 按路径拦下的是静态导入，动态导入在这里拦（复验 R3）
+const DYNAMIC_TEST_MODULES = {
+  selector: String.raw`ImportExpression[source.value=/\.test(?:-support)?(?:\.[cm]?[jt]sx?)?$/]`,
+  message: '不要动态导入测试与测试辅助（*.test.*、*.test-support.*）：它们只被测试静态引用，不进入生产代码（审查 B17）',
+}
+const BASE_RESTRICTED_SYNTAX = [...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER, DYNAMIC_UNIVER_PRO, DYNAMIC_TEST_MODULES]
 
-// 前端应用的入口（entries/*/main.tsx，ADR-008）：按顺序执行的几步，第一步关掉 zod 的 JIT。
+// 前端应用的入口（entries/*/main.{ts,tsx}，ADR-008）：按顺序执行的几步，第一步关掉 zod 的 JIT。
 // zod 在创建结构时就读取 jitless，contracts 的结构在模块求值时创建，所以设置它的模块必须最先执行（审查 B1）。
 // 普通的导入会被导入排序规则挪到副作用导入前面，所以入口只写副作用导入，代码放进它导入的模块
 const APP_ENTRY_SYNTAX = [
@@ -284,7 +289,9 @@ export default antfu(
   },
   {
     name: 'nerve/web-app-entries',
-    files: ['apps/web/src/entries/*/main.tsx'],
+    files: ['apps/web/src/entries/*/main.{ts,tsx}'],
+    // CSP 阳性对照只在测试构建里，不用 zod，它的入口里就是探针本身的代码
+    ignores: ['apps/web/src/entries/csp-probe/**'],
     rules: {
       'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...APP_ENTRY_SYNTAX],
     },
@@ -294,7 +301,7 @@ export default antfu(
     files: ['apps/web/src/editor/**'],
     rules: {
       'no-restricted-imports': ['error', { patterns: [NO_UNIVER_PRO] }],
-      'no-restricted-syntax': ['error', ...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER_PRO],
+      'no-restricted-syntax': ['error', ...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER_PRO, DYNAMIC_TEST_MODULES],
     },
   },
   // 后端：先是所有文件的限制，后面的块按文件类型放开各自需要的部分（后面的块覆盖前面的同名规则）

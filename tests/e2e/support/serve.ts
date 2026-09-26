@@ -30,8 +30,17 @@ const LOG_FILE = fileURLToPath(new URL('../test-results/e2e-server.log', import.
 /** 启动失败时打出来的日志行数 */
 const LOG_TAIL_LINES = 40
 
+// Playwright 的主进程被强制结束之后，标准错误的另一端没人读了：写入会报 EPIPE。
+// 这些说明只是给人看的，丢掉就好；不能让它变成未捕获的异常，打断停止后端与删库（复验 R2）
+process.stderr.on('error', () => {})
+
 function report(message: string): void {
-  process.stderr.write(`E2E 的服务：${message}\n`)
+  try {
+    process.stderr.write(`E2E 的服务：${message}\n`)
+  }
+  catch {
+    // 同上：没人读了
+  }
 }
 
 function reportLogTail(): void {

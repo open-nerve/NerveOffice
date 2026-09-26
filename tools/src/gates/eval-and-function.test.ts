@@ -49,17 +49,31 @@ describe('US-M1-11 A01 产物里 eval 与 Function 的引用（语法树）', ()
     expect(references(code)[0]?.usage).toBe('value')
   })
 
+  // 全局对象可以先赋给别的名字，也可以经 window.self、top、parent、frames 取到；按名字取时只剩字符串（复验 R5）
+  it.each([
+    ['全局对象的别名', 'const g=globalThis;new g.Function("x")', ['Function new']],
+    ['window 的别名', 'var w=window;w.eval(code)', ['eval call']],
+    ['多级引用', 'window.self.Function("x");globalThis.window.eval(c)', ['Function call', 'eval call']],
+    ['其他窗口对象', 'top.eval(c);parent.Function("x");frames.eval(c)', ['eval call', 'Function call', 'eval call']],
+    ['任何对象上的同名属性与方法', 'node.eval(scope);obj.Function(x)', ['eval call', 'Function call']],
+    ['按名字取：Reflect.get', 'Reflect.get(globalThis,"Function")', ['Function value']],
+    ['按名字取：属性描述', 'Object.getOwnPropertyDescriptor(globalThis,\'eval\')', ['eval value']],
+    ['名字先放进变量', 'const k=`Function`;globalThis[k]("x")', ['Function value']],
+    ['字符串下标只算一次（成员访问本身已经算了）', 'a["eval"](c)', ['eval call']],
+  ])('别名与按名字取：%s', (_case, code, expected) => {
+    expect(usages(code)).toEqual(expected)
+  })
+
   it('apply、call、bind 都拿到了构造函数本身', () => {
     expect(usages('Function.apply(null,["x"]);Function.call(null,"x");Function.bind(null,"x")()')).toEqual(['Function value', 'Function value', 'Function value'])
   })
 
   it.each([
     ['名字里含 Function 或 eval 的标识符', 'isFunction(x);b.myFunction("x");obj.eval2=1;a.evaluate(x)'],
-    ['字符串与模板里的字样', 'const t="[object Function]";const u=\'AsyncFunction\';const v=`GeneratorFunction eval(x)`'],
+    ['字符串与模板里的字样（不是恰好这两个名字）', 'const t="[object Function]";const u=\'AsyncFunction\';const v=`GeneratorFunction eval(x)`;const w="function";const x="evaluate"'],
     ['typeof、instanceof 的右边与相等比较', 'typeof x==="function";x instanceof Function;typeof Function;f===Function;g!=eval'],
     ['其他一元与二元运算', 'const a=!eval,b=+Function,c="call" in Function,d=Function+""'],
     ['取 prototype', 'Function.prototype.call.bind(f);Function.prototype.toString.call(f);Function["prototype"];window.Function.prototype'],
-    ['其他对象上的同名属性与方法', 'node.eval(scope);obj.Function(x)'],
     ['对象的键、方法名与类的成员', '({Function:1,eval(){}});class A{eval(){}static Function=1}'],
     ['注释与正则字面量', '/* eval(x) Function(y) */ /Function\\(/.test(s)'],
   ])('不算引用：%s', (_case, code) => {

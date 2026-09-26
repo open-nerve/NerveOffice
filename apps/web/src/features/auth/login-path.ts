@@ -26,6 +26,8 @@ const CONTROL_OR_SPACE = /[\s\p{Cc}]/u
  * 登录后可以回去的站内地址，防开放重定向；不安全时返回 undefined。
  * 按浏览器解析的结果判断，而不是按字符串的前缀（审查 B5）：以 / 开头、没有控制字符与空白，相对本站解析之后仍在本站，
  * 而且不是登录页本身。返回解析后的规范写法（路径、查询与片段）。
+ * 解析会去掉 . 与 .. 这样的路径段、把反斜杠换成斜杠：/.//evil.example、/x/..//evil.example、/./\evil.example
+ * 解析之后的路径都是 //evil.example，它再被当作地址使用时就是另一个站点（协议相对的地址），同样拒绝（复验 R1）。
  */
 export function safeRedirectPath(path: string): string | undefined {
   if (!path.startsWith('/') || CONTROL_OR_SPACE.test(path))
@@ -38,7 +40,7 @@ export function safeRedirectPath(path: string): string | undefined {
   catch {
     return undefined
   }
-  if (url.origin !== site || isLoginPage(url.pathname))
+  if (url.origin !== site || url.pathname.startsWith('//') || isLoginPage(url.pathname))
     return undefined
   return `${url.pathname}${url.search}${url.hash}`
 }
