@@ -51,6 +51,8 @@ describe('US-M1-11 HTML 里可能是地址的值（parse5，复验 SA2、SA4、T
     expect(groups.filter(group => group.values[0] === '//x.example/a.png')).toHaveLength(1)
     expect(groups.filter(group => group.values[0] === '//x.example/b.png')).toHaveLength(1)
     expect(problems).toEqual([])
+    // 两遍都丢掉的同一个开始标签只报一次（复验 VA2）
+    expect(htmlValues('<noscript>x</noscript><select><style>a{}</style></select>').problems).toHaveLength(1)
   })
 
   // 输入很大（30 万个值，展开成参数时一定超出调用栈），给足时间

@@ -448,6 +448,29 @@ describe('编辑器页的会话（P4 设计 §3.7.3，审查 B1）', () => {
     expect(editorPage.view()).toMatchObject({ sessionProblem: undefined, save: { status: 'clean' } })
   })
 
+  it('令牌失效之前就开始的那轮确认成功了，也不算令牌已经换好：之后的确认失败时照样不发（复验 VB1）', async () => {
+    const pending = deferred<SaveContentResponse>()
+    const save = vi.fn(async (): Promise<SaveContentResponse> => pending.promise)
+    const { editorPage, api, fromOtherTab } = setup({ api: { save } })
+    await editorPage.load()
+    const saving = editorPage.save()
+    await vi.waitFor(() => expect(save).toHaveBeenCalledOnce())
+    // 别的标签页的消息先引起一轮确认；这时保存得到令牌失效，要求再确认一轮
+    const early = deferred<SessionResponse>()
+    vi.mocked(api.session).mockReturnValueOnce(early.promise).mockRejectedValueOnce(new ApiError(500, 'INTERNAL_ERROR', '出错了'))
+    fromOtherTab()
+    pending.reject(new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效'))
+    await saving
+    early.resolve(ALICE)
+    await vi.waitFor(() => expect(api.session).toHaveBeenCalledTimes(3))
+    await vi.waitFor(() => expect(editorPage.view().confirmingSession).toBe(false))
+    // 再按保存：先确认，又失败，不发
+    vi.mocked(api.session).mockRejectedValueOnce(new ApiError(500, 'INTERNAL_ERROR', '出错了'))
+    await editorPage.save()
+    expect(api.session).toHaveBeenCalledTimes(4)
+    expect(save).toHaveBeenCalledOnce()
+  })
+
   it('保存在途、别的标签页的消息触发的确认也在途，保存得到令牌失效：在途的那次结束之后再确认一轮（它可能早于令牌失效，复验 UB3）', async () => {
     const pending = deferred<SaveContentResponse>()
     const { editorPage, api, fromOtherTab } = setup({ api: { save: vi.fn(async () => pending.promise) } })

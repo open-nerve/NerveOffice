@@ -128,6 +128,38 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('csrf-wait')
   })
 
+  test('本人在别处重新登录、保存得到令牌失效、确认会话断网：说明原因，不带着失效的令牌再发；网络恢复之后换上新的令牌保存（复验 UB1、VB2）', async ({ page, context }) => {
+    const owner = await createUser('editor-csrf-offline')
+    await loginThroughApi(page, owner)
+    const documentId = await createSheetThroughApi(page)
+    await openEditor(page, documentId)
+    await typeInCell(page, 'A1', 'csrf-offline')
+    const oldToken = await csrfTokenOf(page)
+    const other = await context.newPage()
+    await loginThroughApi(other, owner)
+    const newToken = await csrfTokenOf(other)
+    const tokens: (string | undefined)[] = []
+    page.on('request', (request) => {
+      if (request.method() === 'PUT')
+        tokens.push(request.headers()['x-csrf-token'])
+    })
+
+    await page.route('**/api/auth/session', async route => route.abort('internetdisconnected'))
+    await saveButton(page).click()
+    await expect(page.getByRole('alert')).toHaveText(/保存失败：暂时无法确认登录状态：网络连接失败/)
+    // 再按保存：先确认，又断网，不带着失效的令牌再发
+    const resent = page.waitForRequest(request => request.method() === 'PUT', { timeout: 1_000 }).then(() => true, () => false)
+    await saveButton(page).click()
+    expect(await resent).toBe(false)
+    expect(tokens).toEqual([oldToken])
+
+    // 网络恢复：确认会话、换上新的令牌再保存
+    await page.unroute('**/api/auth/session')
+    await saveAndWait(page)
+    expect(tokens).toEqual([oldToken, newToken])
+    expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('csrf-offline')
+  })
+
   test('别的标签页退出并换人登录：本页不能再保存；原来的人登录回来之后恢复', async ({ page, context }) => {
     const owner = await createUser('editor-owner')
     const someoneElse = await createUser('editor-someone-else')

@@ -187,12 +187,15 @@ function addressShape(raw: string): AddressShape {
   return { kind: 'fixed', address: before(text, HOLE), host: hostOf(before(hostAndPort, HOLE)), hostComplete: !hostAndPort.includes(HOLE) }
 }
 
+/** 句末的句点：跟在普通字符后面的一个句点。跟在 .、/ 或 %2e 后面的是点段的一部分（..、/.、%2e.） */
+const SENTENCE_END = /(?<![./]|%2e)\.$/i
+
 /**
  * 比较用的写法：浏览器解析出的规范写法（hrefOf）。原来按原文比较路径：前缀后面的 ../ 与 %2e%2e 能跳出允许的前缀（复验 TA5）。
- * 句末的句点不属于地址（例如错误信息里的 "See https://….")：只去掉跟在普通字符后面的一个句点，结尾的 .. 与 /. 是点段，照样化简（复验 UA2）
+ * 句末的句点不属于地址（例如错误信息里的 "See https://….")，只去掉它；结尾的 ..、%2e. 是点段，照样化简（复验 UA2、VA1）
  */
 function comparableAddress(address: string): string {
-  return hrefOf(/[^./]\.$/.test(address) ? address.slice(0, -1) : address)
+  return hrefOf(SENTENCE_END.test(address) ? address.slice(0, -1) : address)
 }
 
 export interface ScanOptions {

@@ -115,8 +115,13 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   let checkWhenLoaded = false
   /** 保存得到未登录、确认还没有结果：确认时断网也按没有人登录显示（复验 SB4） */
   let unauthenticatedPending = false
-  /** 保存得到令牌失效、确认还没有成功：本页的令牌已知不对，不带着它再发保存（复验 UB1） */
-  let staleToken = false
+  /** 已经开始的确认的轮数（每向服务端确认一次加一） */
+  let checksStarted = 0
+  /**
+   * 保存得到令牌失效时已经开始的确认轮数：本页的令牌已知不对，不带着它再发保存（复验 UB1）。
+   * 只有在它之后开始、成功了的确认才能清掉它：更早开始的那轮回包可能早于令牌的更换（复验 VB1）
+   */
+  let staleAfter: number | undefined
   let sessionProblem: unknown
   let confirmingSession = false
   const cleanups: (() => void)[] = []
@@ -238,6 +243,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   }
 
   async function checkSessionOnce(): Promise<void> {
+    const round = ++checksStarted
     let current: SessionResponse | undefined
     try {
       current = await api.session()
@@ -257,9 +263,10 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     }
     if (disposed)
       return
-    // 确认成功：令牌按确认的结果换上或清掉，不再是已知失效的那个
+    // 确认成功：令牌按确认的结果换上或清掉，不再是已知失效的那个（这轮开始于令牌被标为失效之后）
     unauthenticatedPending = false
-    staleToken = false
+    if (staleAfter !== undefined && round > staleAfter)
+      staleAfter = undefined
     sessionProblem = undefined
     // 原因清掉之后要刷新：会话的状态可能没变（例如一直是未登录，复验 SB2）
     update()
@@ -298,7 +305,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
           void confirmForSave(true)
         },
         onSessionStale: () => {
-          staleToken = true
+          staleAfter = checksStarted
           void confirmForSave(true)
         },
         reportError: options.reportError,
@@ -378,12 +385,14 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       if (status === 'saving' || status === 'conflict')
         return
       // 确认会话进行中（别的标签页的消息、保存得到未登录或 CSRF 失效触发的）：等它结束，按确认的结果决定（复验 RB1）；
-      // 暂停或停止保存时、上一次确认失败时（令牌可能没有换成，复验 TB1）先向服务端确认一次：本页的用户可能已经在别处重新登录，广播的消息没有送到
-      if (checkInFlight !== undefined || session !== 'active' || sessionProblem !== undefined)
+      // 暂停或停止保存时、上一次确认失败时（令牌可能没有换成，复验 TB1）先向服务端确认一次：本页的用户可能已经在别处重新登录，
+      // 广播的消息没有送到。令牌已知失效时一定先确认（复验 VB1）：眼下这时确认总是在途或者失败过，这一条保证即使不是这样，
+      // 按保存也会去换令牌，而不是一直不发
+      if (checkInFlight !== undefined || session !== 'active' || sessionProblem !== undefined || staleAfter !== undefined)
         await confirmForSave(false)
       // 等确认期间页面卸载了：不再捕获与上传（复验 SB6）。令牌已知失效、确认又没有成功：不带着旧的令牌再发，
       // 必然又是令牌失效，只会白传一遍快照；失败的原因页头已经说明（复验 UB1）
-      if (session === 'active' && !disposed && !staleToken)
+      if (session === 'active' && !disposed && staleAfter === undefined)
         await coordinator.save()
     },
     hasUnsavedWork: () => coordinator?.hasUnsavedWork() ?? false,
