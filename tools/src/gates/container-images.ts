@@ -31,7 +31,11 @@ function isDockerfile(path: string): boolean {
   return /(?:^|\/)Dockerfile(?:\.[\w-]+)?$/.test(path)
 }
 
-/** 文件里引用的镜像：Dockerfile 的 FROM（不含变量与前面定义的阶段）与 ARG …IMAGE=，YAML 的 image: */
+/**
+ * 文件里引用的镜像：Dockerfile 的 FROM（不含变量与前面定义的阶段）与 ARG …IMAGE=，YAML 的 image:。
+ * 整个引用是变量的（例如测试环境的 image: ${NERVE_IMAGE}）不算：那是用本仓库的 Dockerfile 构建、运行时指定的镜像；
+ * 只有标签是变量的（postgres:${TAG}）照常检查，没有摘要就不通过。
+ */
 export function imageReferences(file: TextFile): ImageReference[] {
   const references: ImageReference[] = []
   const stages = new Set<string>()
@@ -53,7 +57,7 @@ export function imageReferences(file: TextFile): ImageReference[] {
       return
     }
     const image = YAML_IMAGE.exec(text)
-    if (image?.[1] !== undefined)
+    if (image?.[1] !== undefined && !image[1].startsWith('$'))
       references.push({ path: file.path, line, reference: image[1] })
   })
   return references

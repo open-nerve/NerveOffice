@@ -24,6 +24,12 @@ describe('US-M1-11 A01 容器镜像按摘要锁定（P5 设计 §3.2）', () => 
       .toEqual([`postgres:18.6-alpine@${DIGEST_B}`])
   })
 
+  it('整个引用是变量的（本仓库构建、运行时指定的镜像）不算；只有标签是变量的照常检查', () => {
+    const content = `  app:\n    image: \${NERVE_IMAGE:?缺少 NERVE_IMAGE}\n  db:\n    image: postgres:\${PG_TAG}\n`
+    expect(imageReferences({ path: 'deploy/test/compose.yaml', content }).map(r => r.reference)).toEqual([`postgres:\${PG_TAG}`])
+    expect(rules([{ path: 'deploy/test/compose.yaml', content }])).toEqual(['pins/image-digest'])
+  })
+
   it('合规：按摘要锁定、Node 与 pnpm 的版本一致、同一个镜像各处一样', () => {
     expect(rules([
       { path: 'deploy/Dockerfile', content: DOCKERFILE },
