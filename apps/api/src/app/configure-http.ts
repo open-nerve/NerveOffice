@@ -1,17 +1,19 @@
 import type { NestExpressApplication } from '@nestjs/platform-express'
 import type { Logger } from 'pino'
 import type { AppConfig } from '../modules/config/index.ts'
-import type { RequestContextStore } from '../modules/logging/index.ts'
+import type { AppLogger, RequestContextStore } from '../modules/logging/index.ts'
 import type { InFlightRequests } from './in-flight-requests.ts'
 import { StandardSchemaValidationPipe } from '@nestjs/common'
 import { createHttpLogger } from '../modules/logging/index.ts'
-import { jsonBody, securityHeaders } from '../modules/security/index.ts'
+import { jsonBody, proxyTrustCheck, securityHeaders } from '../modules/security/index.ts'
 import { notFoundOutsideApi, webHosting } from '../modules/web-hosting/index.ts'
 import { HttpErrorFilter } from './error-filter.ts'
 import { validationError } from './validation.ts'
 
 export interface HttpPipeline {
   rootLogger: Logger
+  /** 管线里的中间件记日志用 */
+  logger: AppLogger
   requestContext: RequestContextStore
   inFlight: InFlightRequests
 }
@@ -28,6 +30,8 @@ export function configureHttp(app: NestExpressApplication, config: AppConfig, pi
   // 请求日志与请求标识紧随其后：所有响应都有日志与请求标识
   app.use(createHttpLogger(pipeline.rootLogger))
   app.use(pipeline.requestContext.middleware())
+  // 代理未被信任时告警一次（DEF-014）：在请求上下文之后，日志带着请求标识
+  app.use(proxyTrustCheck(config.http, pipeline.logger.with({ module: 'security' })))
   app.use(securityHeaders())
   // 托管前端产物（配置了才托管）：在安全响应头之后，页面与 Worker 脚本同样带 CSP；只处理 GET、HEAD 与 /api 以外的地址
   if (config.web.root !== undefined)

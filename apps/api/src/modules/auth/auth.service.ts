@@ -1,6 +1,7 @@
 import type { LoginRequest, SessionResponse } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
-import type { User } from '../users/index.ts'
+import type { CredentialCheck, User } from '../users/index.ts'
+import type { LoginTicket } from './login-throttle.ts'
 import type { Principal } from './principal.ts'
 import { normalizeUsername } from '@nerve-office/contracts'
 import { Injectable } from '@nestjs/common'
@@ -9,7 +10,7 @@ import { AuditService } from '../audit/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { AppLogger } from '../logging/index.ts'
 import { SpacesService } from '../spaces/index.ts'
-import { UsersService } from '../users/index.ts'
+import { PasswordHashingBusyError, UsersService } from '../users/index.ts'
 import { LoginThrottle } from './login-throttle.ts'
 import { csrfTokenFor } from './session-token.ts'
 import { SessionService } from './session.service.ts'
@@ -42,7 +43,7 @@ export class AuthService {
   /**
    * 登录：
    * 1. 限流放行：先占用名额，再验证（LoginThrottle）；
-   * 2. 验证用户名与密码，在事务之外：哈希是计算密集的操作；
+   * 2. 验证用户名与密码，在事务之外：哈希是计算密集的操作；等待哈希的请求太多时返回 503（verify）；
    * 3. 失败时写审计；成功时在一个事务里清除限流计数、作废浏览器原来的会话、新建会话、写审计；
    * 4. 在事务之外顺带清理过期的记录。
    * previousToken 是浏览器原来带着的会话，登录成功后作废。
@@ -56,8 +57,7 @@ export class AuthService {
     }
 
     const { ticket } = admission
-    // 验证出错（例如库里的哈希损坏）时名额不退回，按一次失败计
-    const check = await this.users.verifyCredentials(request.username, request.password)
+    const check = await this.verify(request, ticket)
     if (!check.valid) {
       await this.audit.record({
         action: 'auth.login_failed',
@@ -86,6 +86,23 @@ export class AuthService {
     })
     await this.tidyUp()
     return { token: created.token, session: await this.describe(user, csrfTokenFor(created.token)) }
+  }
+
+  /**
+   * 验证用户名与密码。等待哈希的请求太多时（登录洪水，DEF-015）没有验证：退回名额，返回 503 与 Retry-After，
+   * 与限流拒绝一样只记日志、不写审计。其他错误（例如库里的哈希损坏）原样抛出，名额不退回，按一次失败计。
+   */
+  private async verify(request: LoginRequest, ticket: LoginTicket): Promise<CredentialCheck> {
+    try {
+      return await this.users.verifyCredentials(request.username, request.password)
+    }
+    catch (error) {
+      if (!(error instanceof PasswordHashingBusyError))
+        throw error
+      await ticket.abandoned()
+      this.#logger.warn('等待密码哈希的请求太多，拒绝这次登录', { retryAfterSeconds: error.retryAfterSeconds })
+      throw new AppError('SERVICE_UNAVAILABLE', undefined, { cause: error, headers: { 'Retry-After': String(error.retryAfterSeconds) } })
+    }
   }
 
   async logout(principal: Principal, origin: HttpOrigin): Promise<void> {

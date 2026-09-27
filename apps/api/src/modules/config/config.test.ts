@@ -47,7 +47,7 @@ describe('loadConfig', () => {
       web: { root: undefined },
       shutdown: { timeoutMs: 8_000 },
       log: { level: 'info' },
-      password: { argon2: { memoryKib: 19_456, iterations: 2, parallelism: 1 }, hashConcurrency: 2 },
+      password: { argon2: { memoryKib: 19_456, iterations: 2, parallelism: 1 }, hashConcurrency: 2, hashQueue: { maxWaiting: 64, maxWaitMs: 5_000 } },
     })
   })
 
@@ -74,6 +74,8 @@ describe('loadConfig', () => {
       NERVE_PASSWORD_ARGON2_ITERATIONS: '1',
       NERVE_PASSWORD_ARGON2_PARALLELISM: '2',
       NERVE_PASSWORD_HASH_CONCURRENCY: '8',
+      NERVE_PASSWORD_HASH_QUEUE_MAX: '0',
+      NERVE_PASSWORD_HASH_QUEUE_TIMEOUT_MS: '2500',
       UV_THREADPOOL_SIZE: '16',
       NERVE_SESSION_IDLE_TIMEOUT_MINUTES: '30',
       NERVE_SESSION_ABSOLUTE_TIMEOUT_MINUTES: '600',
@@ -105,7 +107,7 @@ describe('loadConfig', () => {
     })
     expect(config.shutdown.timeoutMs).toBe(9_000)
     expect(config.log.level).toBe('debug')
-    expect(config.password).toEqual({ argon2: { memoryKib: 47_104, iterations: 1, parallelism: 2 }, hashConcurrency: 8 })
+    expect(config.password).toEqual({ argon2: { memoryKib: 47_104, iterations: 1, parallelism: 2 }, hashConcurrency: 8, hashQueue: { maxWaiting: 0, maxWaitMs: 2_500 } })
     expect(config.session).toEqual({ idleTimeoutMinutes: 30, absoluteTimeoutMinutes: 600 })
     expect(config.login).toEqual({ maxFailures: 3, ipMaxFailures: 1_000, windowMinutes: 10, lockoutMinutes: 20 })
     expect(config.web.root).toBe('/srv/nerve-office/web')

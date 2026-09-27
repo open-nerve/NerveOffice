@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { Argon2PasswordHasher } from './password-hasher.ts'
+import { Argon2PasswordHasher, PasswordHashingBusyError } from './password-hasher.ts'
 
 /** 记下库函数同时在算的个数：并发上限要限制的正是它 */
 const inFlight = vi.hoisted(() => ({ running: 0, peak: 0 }))
@@ -72,6 +72,27 @@ describe('Argon2PasswordHasher', () => {
       const limited = new Argon2PasswordHasher(PARAMETERS, 1)
       await expect(limited.verify('not-a-hash', 'x')).rejects.toThrow()
       expect((await limited.hash('x')).startsWith('$argon2id$')).toBe(true)
+    })
+  })
+
+  describe('排队的上限（DEF-015）', () => {
+    it('排队满了：哈希与验证都立即失败，建议的重试时间是等待时限（向上取整到秒）；已经排上的照常算完', async () => {
+      const limited = new Argon2PasswordHasher(PARAMETERS, 1, { maxWaiting: 1, maxWaitMs: 2_500 })
+      const running = limited.hash('a')
+      const waiting = limited.hash('b')
+      await expect(limited.hash('c')).rejects.toMatchObject({ name: 'PasswordHashingBusyError', retryAfterSeconds: 3 })
+      await expect(limited.verify(await running, 'a')).resolves.toBe(true)
+      expect((await waiting).startsWith('$argon2id$')).toBe(true)
+    })
+
+    it('没有等待时限时建议 1 秒后再试；计算本身的错误不算繁忙', async () => {
+      const limited = new Argon2PasswordHasher(PARAMETERS, 1, { maxWaiting: 0 })
+      const running = limited.hash('a')
+      const busy = await limited.verify('not-a-hash', 'x').catch((error: unknown) => error)
+      expect(busy).toBeInstanceOf(PasswordHashingBusyError)
+      expect(busy).toMatchObject({ retryAfterSeconds: 1 })
+      await running
+      await expect(limited.verify('not-a-hash', 'x')).rejects.not.toBeInstanceOf(PasswordHashingBusyError)
     })
   })
 })

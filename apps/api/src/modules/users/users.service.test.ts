@@ -69,6 +69,15 @@ describe('UsersService.verifyCredentials', () => {
     expect(hasher.verified).toHaveLength(1)
   })
 
+  it('假哈希生成失败（例如等待哈希的请求太多）：不缓存失败，下次重新生成', async () => {
+    const { service, hasher } = setup(undefined)
+    const hash = vi.spyOn(hasher, 'hash').mockRejectedValueOnce(new Error('等待哈希的请求太多'))
+    await expect(service.verifyCredentials('nobody', 'secret')).rejects.toThrow('等待哈希的请求太多')
+    expect(await service.verifyCredentials('nobody', 'secret')).toEqual({ valid: false })
+    expect(await service.verifyCredentials('nobody', 'secret')).toEqual({ valid: false })
+    expect(hash).toHaveBeenCalledTimes(2)
+  })
+
   it('用户名的写法不合法：不查库，同样算一次哈希', async () => {
     const { service, repository, hasher } = setup({ user: ALICE, passwordHash: 'hash:secret' })
     expect(await service.verifyCredentials('a b', 'secret')).toEqual({ valid: false })

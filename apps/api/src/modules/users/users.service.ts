@@ -66,8 +66,16 @@ export class UsersService implements OnModuleInit {
     }
   }
 
+  /** 生成失败（例如等待哈希的请求太多）时不缓存失败：下次再生成，否则之后不存在的用户名都会一直出错 */
   private async dummyHash(): Promise<string> {
-    this.#dummyHash ??= this.hasher.hash(randomBytes(32).toString('base64url'))
+    if (this.#dummyHash === undefined) {
+      const pending = this.hasher.hash(randomBytes(32).toString('base64url'))
+      this.#dummyHash = pending
+      pending.catch(() => {
+        if (this.#dummyHash === pending)
+          this.#dummyHash = undefined
+      })
+    }
     return this.#dummyHash
   }
 }

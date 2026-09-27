@@ -98,6 +98,18 @@ describe('LoginTicket.succeeded', () => {
   })
 })
 
+describe('LoginTicket.abandoned', () => {
+  it('没有验证就放弃：两个维度的名额都退回，不算失败，不在事务里', async () => {
+    const { throttle, repository } = setup({ reservations: reservations({ window: 'w1', lockedForSeconds: undefined }, { window: 'w2', lockedForSeconds: 900 }) })
+    const admission = await throttle.admit(ATTEMPT)
+    if (!admission.admitted)
+      throw new Error('应该放行')
+    await admission.ticket.abandoned()
+    expect(repository.release.mock.calls).toEqual([[USER_KEY, 'w1'], [ADDRESS_KEY, 'w2']])
+    expect(repository.reset).not.toHaveBeenCalled()
+  })
+})
+
 describe('LoginThrottle.purgeExpired', () => {
   it('按配置的窗口清理', async () => {
     const { throttle, repository } = setup()

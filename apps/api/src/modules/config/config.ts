@@ -74,6 +74,11 @@ export interface AppConfig {
      * 上限不超过线程池（UV_THREADPOOL_SIZE，默认 4）的一半；调大线程池时一并调大
      */
     readonly hashConcurrency: number
+    /**
+     * 等待哈希的排队（DEF-015）：排队的请求超过 maxWaiting，或者等待超过 maxWaitMs，立即返回 503，
+     * 登录洪水下延迟与内存不再无限增长
+     */
+    readonly hashQueue: { readonly maxWaiting: number, readonly maxWaitMs: number }
   }
 }
 
@@ -183,6 +188,9 @@ const environmentSchema = z.object({
   NERVE_PASSWORD_ARGON2_ITERATIONS: integer(1, 20).default(2),
   NERVE_PASSWORD_ARGON2_PARALLELISM: integer(1, 16).default(1),
   NERVE_PASSWORD_HASH_CONCURRENCY: integer(1, 512).default(2),
+  // 哈希的排队（DEF-015）：容器里的基准测试（默认参数）一次约 8 毫秒，按慢几倍的机器算，排满 64 个也在 1 秒以内等到
+  NERVE_PASSWORD_HASH_QUEUE_MAX: integer(0, 100_000).default(64),
+  NERVE_PASSWORD_HASH_QUEUE_TIMEOUT_MS: integer(100, 60_000).default(5_000),
 })
 
 type Environment = z.output<typeof environmentSchema>
@@ -290,6 +298,7 @@ function toAppConfig(env: Environment): AppConfig {
         parallelism: env.NERVE_PASSWORD_ARGON2_PARALLELISM,
       },
       hashConcurrency: env.NERVE_PASSWORD_HASH_CONCURRENCY,
+      hashQueue: { maxWaiting: env.NERVE_PASSWORD_HASH_QUEUE_MAX, maxWaitMs: env.NERVE_PASSWORD_HASH_QUEUE_TIMEOUT_MS },
     },
   }
 }
