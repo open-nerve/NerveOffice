@@ -430,10 +430,18 @@ describe('US-M1-11 A01 产物扫描：外部地址与关键字', () => {
   it.each([
     ['../ 跳出前缀', 'a="https://support.example.com/docs/../../../evil-c3"', 'https://support.example.com/evil-c3'],
     ['%2e%2e 跳出前缀', 'a="https://support.example.com/docs/%2e%2e/evil-c4"', 'https://support.example.com/evil-c4'],
+    ['结尾的 ..（复验 UA2）', 'a="https://support.example.com/docs/.."', 'https://support.example.com/'],
   ])('违规（复验 TA5）：前缀按浏览器化简之后的路径比较：%s', (_case, code, requested) => {
     const prefixed: ArtifactPolicy = { ...policy, allowedAddresses: [{ address: 'https://support.example.com/docs/', prefix: true, source: '样例', reason: '公式帮助的链接' }] }
     const result = scanArtifacts([{ path: 'assets/editor.js', content: code }], prefixed, { prefixFiles: new Set(['assets/editor.js']) })
     expect(result.violations.map(v => v.detail.split(' ')[0])).toEqual([requested])
+  })
+
+  it.each([
+    ['结尾的 ..（跳到上一层）', 'const a="http://www.w3.org/2000/svg/.."', 'http://www.w3.org/2000/'],
+    ['结尾的两个句点（路径的一部分）', 'const a="http://www.w3.org/2000/svg.."', 'http://www.w3.org/2000/svg..'],
+  ])('违规（复验 UA2）：结尾的 .. 不当作句末的句点去掉：%s', (_case, code, requested) => {
+    expect(scan(code).violations.map(v => v.detail.split(' ')[0])).toEqual([requested])
   })
 
   it.each([

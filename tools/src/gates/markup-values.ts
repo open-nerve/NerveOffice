@@ -47,8 +47,11 @@ function refreshUrl(content: string): string {
  */
 export function attributeValues(name: string, value: string): string[] {
   const values = [value, ...value.split(/[\t\n\f\r ,;]+/).filter(part => part !== '' && part !== value)]
-  if (value.includes('(') || value.includes('"') || value.includes('\''))
-    values.push(...cssValues(value).map(item => item.value))
+  // 逐个加入：一个值里的 url() 可能有几十万个，展开成参数会超出调用栈（复验 UA6）
+  if (value.includes('(') || value.includes('"') || value.includes('\'')) {
+    for (const item of cssValues(value))
+      values.push(item.value)
+  }
   if (name === 'content')
     values.push(refreshUrl(value))
   return values

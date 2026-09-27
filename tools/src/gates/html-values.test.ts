@@ -44,6 +44,22 @@ describe('US-M1-11 HTML 里可能是地址的值（parse5，复验 SA2、SA4、T
     expect(found.some(value => /^[\\/]{2}evil\.example\/r$/.test(value))).toBe(true)
   })
 
+  it('noscript 在脚本关着时（sandbox 的 iframe、用户关掉脚本）按元素解析：两种都看，同一个标签只记一次（复验 UA3）', () => {
+    expect(valuesWith('<iframe sandbox srcdoc="&lt;noscript&gt;&lt;img src=//evil.example/n1.png&gt;&lt;/noscript&gt;"></iframe>', 'evil.example')).toContain('//evil.example/n1.png')
+    expect(valuesWith('<noscript><img src=//evil.example/n2.png><style>a{b:url(//evil.example/n3.png)}</style></noscript>', 'evil.example')).toEqual(expect.arrayContaining(['//evil.example/n2.png', '//evil.example/n3.png']))
+    const { groups, problems } = htmlValues('<noscript>x</noscript><img src=//x.example/a.png><style>a{b:url(//x.example/b.png)}</style>')
+    expect(groups.filter(group => group.values[0] === '//x.example/a.png')).toHaveLength(1)
+    expect(groups.filter(group => group.values[0] === '//x.example/b.png')).toHaveLength(1)
+    expect(problems).toEqual([])
+  })
+
+  it('一段样式或一个属性里有几十万个值：逐个加入，不会超出调用栈（复验 UA6）', () => {
+    const { groups } = htmlValues(`<style>${'a{b:url(//x.example/y)}'.repeat(300000)}</style>`)
+    expect(groups).toHaveLength(300000)
+    const [attribute] = htmlValues(`<div style="${'b:url(//x.example/y);'.repeat(300000)}"></div>`).groups
+    expect(attribute?.values.length).toBeGreaterThan(300000)
+  })
+
   it('原始文本与 RCDATA 里的文字不当作标签', () => {
     expect(valuesWith('<textarea><img src=//not-a-tag.example/x></textarea><title><img src=//not-a-tag.example/y></title>', 'not-a-tag')).toEqual([])
   })

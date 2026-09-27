@@ -4,10 +4,10 @@ import type { ExtractedValues, LocatedValues, MarkupProblem } from './addresses.
 import { cssValues } from './css-values.ts'
 import { htmlValues } from './html-values.ts'
 
-/** 不是合法的 JSON 时返回 undefined：整个文件只按写法匹配 */
+/** 不是合法的 JSON 时返回 undefined：整个文件只按写法匹配。开头的 BOM 不算（浏览器的 Response.json() 去掉它，复验 UA4） */
 export function jsonValues(content: string): ExtractedValues | undefined {
   try {
-    JSON.parse(content)
+    JSON.parse(content.startsWith('\uFEFF') ? content.slice(1) : content)
   }
   catch {
     return undefined
@@ -22,13 +22,20 @@ export function jsonValues(content: string): ExtractedValues | undefined {
     end += 1
     const text = JSON.parse(content.slice(index, end)) as string
     const values = [text]
+    // 逐个加入：一个字符串里的值可能有几十万个，展开成参数会超出调用栈（复验 UA6）
     if (text.includes('<')) {
       const embedded = htmlValues(text)
-      values.push(...embedded.groups.flatMap(group => group.values))
-      problems.push(...embedded.problems.map(problem => ({ detail: problem.detail, index })))
+      for (const group of embedded.groups) {
+        for (const value of group.values)
+          values.push(value)
+      }
+      for (const problem of embedded.problems)
+        problems.push({ detail: problem.detail, index })
     }
-    if (text.includes('(') || text.includes('"') || text.includes('\''))
-      values.push(...cssValues(text).map(item => item.value))
+    if (text.includes('(') || text.includes('"') || text.includes('\'')) {
+      for (const item of cssValues(text))
+        values.push(item.value)
+    }
     groups.push({ values, index, end })
     index = content.indexOf('"', end)
   }

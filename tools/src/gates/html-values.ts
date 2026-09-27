@@ -3,6 +3,7 @@
 // 丢掉里面的 <img>、<div>，浏览器已改用新的规则保留它们），重复的 <html>、<body> 的属性会并到第一个上。
 // 分词的状态由树构建决定：原始文本一类的元素（style、script、textarea 等）与 svg、math 的开始标签被 parse5 丢掉时，
 // 浏览器可能保留它，把之后的内容按另一种状态分词，门禁无法确定会请求什么，直接报出（fail closed）。
+// noscript 在脚本开着时是原始文本，关着时（sandbox 的 iframe、用户关掉脚本）按元素解析：有 noscript 时两种都解析一遍（复验 UA3）。
 // style 元素的样式取自树：直接的文字子节点连起来（markup-values.ts）。位置是属性或样式在原文里的位置。
 // 截取开始标签用的 Parser 在 parse5 里标着 @internal：parse5 的版本精确锁定，这里依赖的行为由单测锁住，升级时核对。
 import type { DefaultTreeAdapterMap, Token } from 'parse5'
@@ -70,6 +71,13 @@ function styleOf(element: Element): LocatedValues[] {
   return styleValues(texts.map(text => text.value), span, exact ? only.startOffset : undefined)
 }
 
+/** 按一种脚本开关解析：分词器给出的开始标签与树里的元素 */
+function parseHtml(html: string, scriptingEnabled: boolean): { startTags: readonly StartTag[], elements: readonly Element[] } {
+  const parser = new StartTagRecorder({ sourceCodeLocationInfo: true, scriptingEnabled })
+  parser.tokenizer.write(html, true)
+  return { startTags: parser.startTags, elements: elementsOf(parser.document) }
+}
+
 export function htmlValues(html: string): ExtractedValues {
   const groups: LocatedValues[] = []
   const problems: MarkupProblem[] = []
@@ -77,27 +85,40 @@ export function htmlValues(html: string): ExtractedValues {
   const documents: { readonly html: string, readonly at?: Span }[] = [{ html }]
   for (let item = documents.pop(); item !== undefined; item = documents.pop()) {
     const { at } = item
-    const parser = new StartTagRecorder({ sourceCodeLocationInfo: true })
-    parser.tokenizer.write(item.html, true)
-    const elements = elementsOf(parser.document)
-    const inserted = new Set(elements.map(element => element.sourceCodeLocation?.startTag?.startOffset))
-    for (const tag of parser.startTags) {
-      if (STATE_SWITCHING.has(tag.tagName) && !inserted.has(tag.index)) {
-        problems.push({
-          detail: `<${tag.tagName}> 的开始标签被 parse5 的树构建丢掉了（例如写在 <select> 里）：浏览器可能保留它，把之后的内容按另一种状态分词，门禁无法确定会请求什么`,
-          index: at?.index ?? tag.index,
-        })
+    // 两遍解析里同一个位置的开始标签、样式与问题只记一次
+    const seenTags = new Set<number>()
+    const seenStyles = new Set<number>()
+    const reported = new Set<number>()
+    for (const scriptingEnabled of /<noscript/i.test(item.html) ? [true, false] : [true]) {
+      const { startTags, elements } = parseHtml(item.html, scriptingEnabled)
+      const inserted = new Set(elements.map(element => element.sourceCodeLocation?.startTag?.startOffset))
+      for (const tag of startTags) {
+        if (STATE_SWITCHING.has(tag.tagName) && !inserted.has(tag.index) && !reported.has(tag.index)) {
+          reported.add(tag.index)
+          problems.push({
+            detail: `<${tag.tagName}> 的开始标签被 parse5 的树构建丢掉了（例如写在 <select> 里）：浏览器可能保留它，把之后的内容按另一种状态分词，门禁无法确定会请求什么`,
+            index: at?.index ?? tag.index,
+          })
+        }
+        if (seenTags.has(tag.index))
+          continue
+        seenTags.add(tag.index)
+        for (const attribute of tag.attributes) {
+          const span = at ?? attribute
+          groups.push({ values: attributeValues(attribute.name, attribute.value), index: span.index, end: span.end })
+          if (attribute.name === 'srcdoc')
+            documents.push({ html: attribute.value, at: span })
+        }
       }
-      for (const attribute of tag.attributes) {
-        const span = at ?? attribute
-        groups.push({ values: attributeValues(attribute.name, attribute.value), index: span.index, end: span.end })
-        if (attribute.name === 'srcdoc')
-          documents.push({ html: attribute.value, at: span })
+      for (const element of elements) {
+        const start = element.sourceCodeLocation?.startTag?.startOffset ?? -1
+        if (element.tagName !== 'style' || seenStyles.has(start))
+          continue
+        seenStyles.add(start)
+        // 逐个加入：一段样式里的值可能有几十万个，展开成参数会超出调用栈（复验 UA6）
+        for (const group of styleOf(element))
+          groups.push(at === undefined ? group : { values: group.values, index: at.index, end: at.end })
       }
-    }
-    for (const element of elements) {
-      if (element.tagName === 'style')
-        groups.push(...styleOf(element).map(group => at === undefined ? group : { values: group.values, index: at.index, end: at.end }))
     }
   }
   return { groups, problems }

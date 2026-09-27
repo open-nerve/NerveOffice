@@ -26,6 +26,18 @@ describe('US-M1-11 JSON 里可能是地址的值（复验 RA4、SA2、TA7、TA9�
     expect(problems[0]?.detail).toContain('<style>')
   })
 
+  it('开头的 BOM 不算：浏览器的 Response.json() 去掉它（复验 UA4）', () => {
+    const json = '\uFEFF{"a":"\\/\\/evil.example/j1"}'
+    const groups = jsonValues(json)?.groups ?? []
+    expect(groups.map(group => group.values[0])).toEqual(['a', '//evil.example/j1'])
+    expect(groups.map(group => json.slice(group.index, group.end))).toEqual(['"a"', '"\\/\\/evil.example/j1"'])
+  })
+
+  it('一个字符串里有几十万个值：逐个加入，不会超出调用栈（复验 UA6）', () => {
+    const [group] = jsonValues(JSON.stringify(['url(//x.example/y)'.repeat(300000)]))?.groups ?? []
+    expect(group?.values.length).toBeGreaterThan(300000)
+  })
+
   it('不是合法的 JSON：返回 undefined', () => {
     expect(jsonValues('{"a": ')).toBeUndefined()
   })

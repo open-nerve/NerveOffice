@@ -22,6 +22,26 @@ describe('US-M1-11 SVG 文件里可能是地址的值（按 XML 解析，复验 
     expect(svgValues(svg).problems).toEqual([])
   })
 
+  it('XHTML 的 iframe 的 srcdoc 按 HTML 解析，值与问题记在所在的开始标签上（复验 UA1）', () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml"><foreignObject><h:iframe srcdoc="&lt;img src=//evil.example/s1.png&gt;"/></foreignObject></svg>'
+    const { groups } = svgValues(svg)
+    const nested = groups.find(group => group.values.includes('//evil.example/s1.png'))
+    expect(svg.slice(nested?.index, nested?.end)).toBe('<h:iframe srcdoc="&lt;img src=//evil.example/s1.png&gt;"/>')
+    expect(values('<svg><h:iframe xmlns:h="http://www.w3.org/1999/xhtml" srcdoc="&lt;img src=&amp;#47;&amp;#47;evil.example/s2.png&gt;"/></svg>')).toContain('//evil.example/s2.png')
+    const { problems } = svgValues('<svg><iframe srcdoc="&lt;select&gt;&lt;style&gt;a{}&lt;/style&gt;&lt;/select&gt;"/></svg>')
+    expect(problems.map(problem => problem.detail)).toContainEqual(expect.stringContaining('<style>'))
+  })
+
+  it('XML 声明的编码不是 UTF-8：浏览器按它解码，直接报出（复验 UA5）', () => {
+    expect(svgValues('<?xml version="1.0" encoding="Shift_JIS"?><svg/>').problems[0]?.detail).toContain('Shift_JIS')
+    for (const encoding of ['UTF-8', 'utf-8', 'UTF8'])
+      expect(svgValues(`<?xml version="1.0" encoding="${encoding}"?><svg/>`).problems).toEqual([])
+  })
+
+  it('一段样式里有几十万个值：逐个加入，不会超出调用栈（复验 UA6）', () => {
+    expect(svgValues(`<svg><style>${'a{b:url(//x.example/y)}'.repeat(300000)}</style></svg>`).groups).toHaveLength(300000)
+  })
+
   it('只取样式元素直接的文字：子元素里的文字不算', () => {
     expect(values('<svg><style>a{}<g>b{fill:url(//child.example/x)}</g></style></svg>')).not.toContain('//child.example/x')
   })

@@ -12,6 +12,21 @@ async function csrfTokenOf(page: Page): Promise<string> {
   return session.csrfToken
 }
 
+/** 拖住本页确认会话的请求，直到 release；held 是已经拦住的次数 */
+async function holdSessionChecks(page: Page): Promise<{ held: () => number, release: () => void }> {
+  let release: () => void = () => {}
+  const released = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let held = 0
+  await page.route('**/api/auth/session', async (route) => {
+    held += 1
+    await released
+    await route.continue()
+  })
+  return { held: () => held, release }
+}
+
 test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
   test('登录过期之后保存：留在本页，提示在新标签页中登录；登录回来之后保存成功', async ({ page, context }) => {
     const owner = await createUser('editor-expired')
@@ -22,7 +37,13 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     await typeInCell(page, 'A1', 'kept')
 
     await expireSessions(owner)
+    // 确认会话有结果之前：页头说明正在确认，不先显示任何失败的说明（复验 TB1、UB2）
+    const checks = await holdSessionChecks(page)
     await saveButton(page).click()
+    await expect.poll(checks.held).toBe(1)
+    await expect(saveStatus(page)).toHaveText('正在确认登录状态…')
+    await expect(page.getByRole('alert')).toHaveCount(0)
+    checks.release()
     await expect(saveStatus(page)).toHaveText('保存失败')
     const alert = page.getByRole('alert').filter({ hasText: '本页的修改还在' })
     await expect(alert).toBeVisible()
@@ -54,26 +75,17 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     await expect(page.getByRole('alert').filter({ hasText: '本页的修改还在' })).toBeVisible()
 
     // 拖住本页确认会话的请求：别的标签页登录之后，本页的确认还没回来时就按保存
-    let release: () => void = () => {}
-    const released = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    let held = 0
-    await page.route('**/api/auth/session', async (route) => {
-      held += 1
-      await released
-      await route.continue()
-    })
+    const checks = await holdSessionChecks(page)
     const other = await context.newPage()
     await other.goto('/login')
     await loginThroughUi(other, owner)
     await expect(other.getByRole('heading', { name: '我的空间' })).toBeVisible()
     // 本页收到登录的消息、开始确认会话（被拦住）之后再按保存（复验 SB3）
-    await expect.poll(() => held).toBe(1)
+    await expect.poll(checks.held).toBe(1)
     const saved = page.waitForResponse(response => response.request().method() === 'PUT' && response.url().includes('/content?'))
     await page.keyboard.press('ControlOrMeta+s')
     await expect(saveStatus(page)).toHaveText('正在确认登录状态…')
-    release()
+    checks.release()
     expect((await saved).status()).toBe(200)
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('waited')
@@ -92,17 +104,7 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     const newToken = await csrfTokenOf(other)
     expect(newToken).not.toBe(oldToken)
 
-    // 拖住本页确认会话的请求
-    let release: () => void = () => {}
-    const released = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    let held = 0
-    await page.route('**/api/auth/session', async (route) => {
-      held += 1
-      await released
-      await route.continue()
-    })
+    const checks = await holdSessionChecks(page)
     const tokens: (string | undefined)[] = []
     page.on('request', (request) => {
       if (request.method() === 'PUT')
@@ -111,7 +113,7 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     const first = page.waitForResponse(response => response.request().method() === 'PUT')
     await saveButton(page).click()
     expect((await first).status()).toBe(403)
-    await expect.poll(() => held).toBe(1)
+    await expect.poll(checks.held).toBe(1)
     // 确认有结果之前：页头说明正在确认，不先提示"请求已失效，请再保存一次"（复验 TB1）
     await expect(saveStatus(page)).toHaveText('正在确认登录状态…')
     await expect(page.getByRole('alert')).toHaveCount(0)
@@ -120,7 +122,7 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     const early = page.waitForRequest(request => request.method() === 'PUT', { timeout: 500 }).then(() => true, () => false)
     await page.keyboard.press('ControlOrMeta+s')
     expect(await early).toBe(false)
-    release()
+    checks.release()
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     expect(tokens).toEqual([oldToken, newToken])
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('csrf-wait')

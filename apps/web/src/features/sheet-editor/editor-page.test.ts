@@ -396,6 +396,79 @@ describe('编辑器页的会话（P4 设计 §3.7.3，审查 B1）', () => {
     expect(editorPage.view()).toMatchObject({ session: 'active', sessionProblem: undefined, save: { status: 'failed', problem: { kind: 'request' } } })
   })
 
+  it('会话是本人、保存得到登录已过期：确认进行中说明正在确认，先不显示失败；确认得到未登录之后暂停保存（复验 TB1、UB2）', async () => {
+    const { editorPage, api } = setup({ api: { save: async () => Promise.reject(new ApiError(401, 'SESSION_EXPIRED', '已过期')) } })
+    await editorPage.load()
+    const check = deferred<SessionResponse>()
+    vi.mocked(api.session).mockReturnValueOnce(check.promise)
+    await editorPage.save()
+    expect(editorPage.view()).toMatchObject({ session: 'active', confirmingSession: true, save: { status: 'failed' } })
+    check.reject(new ApiError(401, 'SESSION_EXPIRED', '已过期'))
+    await vi.waitFor(() => expect(editorPage.view().confirmingSession).toBe(false))
+    expect(editorPage.view().session).toBe('signed-out')
+  })
+
+  it('保存得到 CSRF 失效、确认失败：再按保存先确认，又失败时不带着旧的令牌再发；确认成功之后才发（复验 UB1）', async () => {
+    const calls: string[] = []
+    const save = vi.fn(async (): Promise<SaveContentResponse> => {
+      calls.push('save')
+      if (calls.filter(call => call === 'save').length === 1)
+        throw new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
+      return { revision: 4, savedAt: '2026-09-27T03:00:00.000Z' }
+    })
+    const { editorPage, api } = setup({ api: { save } })
+    await editorPage.load()
+    const failCheck = async (): Promise<SessionResponse> => {
+      calls.push('check')
+      throw new ApiError(500, 'INTERNAL_ERROR', '出错了')
+    }
+    // 确认在途时又按了保存，确认失败：这次不发
+    const check = deferred<SessionResponse>()
+    vi.mocked(api.session).mockImplementationOnce(async () => {
+      calls.push('check')
+      return check.promise
+    })
+    await editorPage.save()
+    const waiting = editorPage.save()
+    check.reject(new ApiError(500, 'INTERNAL_ERROR', '出错了'))
+    await waiting
+    // 确认失败之后再按保存：先确认，又失败，同样不发
+    vi.mocked(api.session).mockImplementationOnce(failCheck)
+    await editorPage.save()
+    expect(calls).toEqual(['save', 'check', 'check'])
+    expect(editorPage.view()).toMatchObject({ session: 'active', confirmingSession: false, save: { status: 'failed' } })
+    expect(editorPage.view().sessionProblem).toBeInstanceOf(ApiError)
+    // 确认成功（换上新的令牌）之后才发
+    vi.mocked(api.session).mockImplementationOnce(async () => {
+      calls.push('check')
+      return { ...ALICE, csrfToken: 'csrf-new' }
+    })
+    await editorPage.save()
+    expect(calls).toEqual(['save', 'check', 'check', 'check', 'save'])
+    expect(editorPage.view()).toMatchObject({ sessionProblem: undefined, save: { status: 'clean' } })
+  })
+
+  it('保存在途、别的标签页的消息触发的确认也在途，保存得到令牌失效：在途的那次结束之后再确认一轮（它可能早于令牌失效，复验 UB3）', async () => {
+    const pending = deferred<SaveContentResponse>()
+    const { editorPage, api, fromOtherTab } = setup({ api: { save: vi.fn(async () => pending.promise) } })
+    await editorPage.load()
+    const saving = editorPage.save()
+    await vi.waitFor(() => expect(api.save).toHaveBeenCalledOnce())
+    const first = deferred<SessionResponse>()
+    const second = deferred<SessionResponse>()
+    vi.mocked(api.session).mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    fromOtherTab()
+    pending.reject(new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效'))
+    await saving
+    expect(editorPage.view().confirmingSession).toBe(true)
+    first.resolve({ ...ALICE, csrfToken: 'csrf-1' })
+    await vi.waitFor(() => expect(api.session).toHaveBeenCalledTimes(3))
+    expect(editorPage.view().confirmingSession).toBe(true)
+    second.resolve({ ...ALICE, csrfToken: 'csrf-2' })
+    await vi.waitFor(() => expect(editorPage.view().confirmingSession).toBe(false))
+    expect(editorPage.view()).toMatchObject({ session: 'active', save: { status: 'failed', problem: { kind: 'request' } } })
+  })
+
   it('保存得到 CSRF 失效、确认时断网：记下确认失败的原因（令牌没有换成）；再按保存先确认，换上新的令牌再发（复验 TB1）', async () => {
     const calls: string[] = []
     const save = vi.fn(async (): Promise<SaveContentResponse> => {

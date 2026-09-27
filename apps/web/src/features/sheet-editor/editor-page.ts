@@ -115,6 +115,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   let checkWhenLoaded = false
   /** 保存得到未登录、确认还没有结果：确认时断网也按没有人登录显示（复验 SB4） */
   let unauthenticatedPending = false
+  /** 保存得到令牌失效、确认还没有成功：本页的令牌已知不对，不带着它再发保存（复验 UB1） */
+  let staleToken = false
   let sessionProblem: unknown
   let confirmingSession = false
   const cleanups: (() => void)[] = []
@@ -255,7 +257,9 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     }
     if (disposed)
       return
+    // 确认成功：令牌按确认的结果换上或清掉，不再是已知失效的那个
     unauthenticatedPending = false
+    staleToken = false
     sessionProblem = undefined
     // 原因清掉之后要刷新：会话的状态可能没变（例如一直是未登录，复验 SB2）
     update()
@@ -293,7 +297,10 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
           unauthenticatedPending = true
           void confirmForSave(true)
         },
-        onSessionStale: () => void confirmForSave(true),
+        onSessionStale: () => {
+          staleToken = true
+          void confirmForSave(true)
+        },
         reportError: options.reportError,
       })
       // 创建编辑器期间别的标签页换了人：保存状态机一建好就停住（复验 RB3）
@@ -374,8 +381,9 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       // 暂停或停止保存时、上一次确认失败时（令牌可能没有换成，复验 TB1）先向服务端确认一次：本页的用户可能已经在别处重新登录，广播的消息没有送到
       if (checkInFlight !== undefined || session !== 'active' || sessionProblem !== undefined)
         await confirmForSave(false)
-      // 等确认期间页面卸载了：不再捕获与上传（复验 SB6）
-      if (session === 'active' && !disposed)
+      // 等确认期间页面卸载了：不再捕获与上传（复验 SB6）。令牌已知失效、确认又没有成功：不带着旧的令牌再发，
+      // 必然又是令牌失效，只会白传一遍快照；失败的原因页头已经说明（复验 UB1）
+      if (session === 'active' && !disposed && !staleToken)
         await coordinator.save()
     },
     hasUnsavedWork: () => coordinator?.hasUnsavedWork() ?? false,
