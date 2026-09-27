@@ -1,12 +1,12 @@
-import type { AddressInfo } from 'node:net'
 // 容器 E2E（P5 设计 §3.6、§3.8；pnpm test:e2e:container）：用生产镜像起一套测试环境（deploy/test），对它跑 E2E 的外部模式。
 // 用法：node tools/src/deploy/container-e2e-cli.ts [--browsers chromium,webkit] [-- <交给 Playwright 的参数>]
-// 1. 构建镜像；随机生成三个密码，挑两个空闲端口，变量文件写在临时目录；
-// 2. 清理中断的运行留下的编排项目；起 db、migrate、app、caddy（compose 按依赖的条件依次等待）；等经 Caddy 的存活探针通过；
+// 1. 清理中断的运行留下的编排项目与镜像标签；随机生成三个密码，挑两个空闲端口，变量文件写在临时目录；
+// 2. 构建镜像（标签带本进程的进程号）；起 db、migrate、app、caddy（compose 按依赖的条件依次等待）；等经 Caddy 的存活探针通过；
 // 3. 两个客户端地址的核对（DEF-014）；
 // 4. 以外部模式运行 E2E（E2E 的管理员由 Playwright 的全局准备经编排初始化，tests/e2e/support/external-setup.ts）；
 // 5. 打印镜像体积与应用容器的内存（空闲、跑完 E2E 之后，ADR-001）；
-// 6. 无论成败，把各容器的日志收集到 tests/e2e/test-results/container/，然后 down -v、删除临时目录。
+// 6. 无论成败，把各容器的日志收集到 tests/e2e/test-results/container/，然后 down -v、去掉这次的镜像标签、删除临时目录。
+import type { AddressInfo } from 'node:net'
 import type { ContainerE2eSettings } from './container-e2e.ts'
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
@@ -24,13 +24,14 @@ import {
   COMPOSE_FILE,
   composeArgs,
   createSettings,
-  E2E_IMAGE,
+  IMAGE_PREFIX,
   memoryUsage,
   parseAuditAddresses,
   playwrightEnvironment,
+  PROJECT_PREFIX,
   publicOrigin,
   renderEnvFile,
-  staleProjects,
+  staleRuns,
 } from './container-e2e.ts'
 
 const LOG_DIR = join(REPO_ROOT, 'tests/e2e/test-results/container')
@@ -130,16 +131,19 @@ async function waitUntilLive(settings: ContainerE2eSettings): Promise<boolean> {
 
 const composeProjectsSchema = z.array(z.object({ Name: z.string() }))
 
-/** 清理中断的运行留下的编排项目（连同数据卷） */
-function removeStaleProjects(): void {
-  const listed = capture('docker', ['compose', 'ls', '--all', '--format', 'json'])
-  if (listed.status !== 0)
-    return
-  const names = composeProjectsSchema.parse(JSON.parse(listed.stdout)).map(project => project.Name)
-  for (const name of staleProjects(names, isAlive)) {
-    log(`清理中断的运行留下的编排项目 ${name}`)
-    capture('docker', ['compose', '-p', name, 'down', '-v', '--remove-orphans'])
+/** 清理中断的运行留下的编排项目（连同数据卷）与镜像标签 */
+function removeStaleRuns(): void {
+  const projects = capture('docker', ['compose', 'ls', '--all', '--format', 'json'])
+  if (projects.status === 0) {
+    const names = composeProjectsSchema.parse(JSON.parse(projects.stdout)).map(project => project.Name)
+    for (const name of staleRuns(names, PROJECT_PREFIX, isAlive)) {
+      log(`清理中断的运行留下的编排项目 ${name}`)
+      capture('docker', ['compose', '-p', name, 'down', '-v', '--remove-orphans'])
+    }
   }
+  const images = capture('docker', ['image', 'ls', '--filter', `reference=${IMAGE_PREFIX}*`, '--format', '{{.Repository}}:{{.Tag}}'])
+  for (const image of staleRuns(images.stdout.split('\n').filter(line => line !== ''), IMAGE_PREFIX, isAlive))
+    capture('docker', ['image', 'rm', image])
 }
 
 /**
@@ -189,10 +193,7 @@ async function main(): Promise<number> {
   const { browsers, playwrightArgs } = parseArgs(process.argv.slice(2))
   const version = z.object({ version: z.string() }).parse(readJson('package.json')).version
   const revision = capture('git', ['rev-parse', '--short', 'HEAD']).stdout.trim()
-  log(`构建镜像 ${E2E_IMAGE}`)
-  if (run('docker', ['build', '-f', 'deploy/Dockerfile', '-t', E2E_IMAGE, '--build-arg', `VERSION=${version}`, '--build-arg', `REVISION=${revision}`, '.']) !== 0 || interrupted)
-    return 1
-  removeStaleProjects()
+  removeStaleRuns()
 
   const directory = mkdtempSync(join(tmpdir(), 'nerve-office-e2e-'))
   const httpsPort = await freePort()
@@ -202,6 +203,9 @@ async function main(): Promise<number> {
   const settings = createSettings({ pid: process.pid, composeFile: join(REPO_ROOT, COMPOSE_FILE), envFile: join(directory, 'test.env'), httpsPort, databasePort })
   writeFileSync(settings.envFile, renderEnvFile(settings), { mode: 0o600 })
   try {
+    log(`构建镜像 ${settings.image}`)
+    if (run('docker', ['build', '-f', 'deploy/Dockerfile', '-t', settings.image, '--build-arg', `VERSION=${version}`, '--build-arg', `REVISION=${revision}`, '.']) !== 0 || interrupted)
+      return 1
     log(`起测试环境（编排项目 ${settings.project}，${publicOrigin(settings)}）`)
     if (run('docker', composeArgs(settings, 'up', '-d')) !== 0 || interrupted)
       return 1
@@ -215,7 +219,7 @@ async function main(): Promise<number> {
       return 1
     }
     // docker image ls 的体积是解压之后的：inspect 的 Size 在 containerd 的镜像存储里是压缩之后的，两种存储不一致
-    log(`镜像体积（解压之后）：${capture('docker', ['image', 'ls', '--format', '{{.Size}}', E2E_IMAGE]).stdout.trim()}`)
+    log(`镜像体积（解压之后）：${capture('docker', ['image', 'ls', '--format', '{{.Size}}', settings.image]).stdout.trim()}`)
     reportMemory(settings, '空闲')
     if (interrupted)
       return 1
@@ -229,6 +233,8 @@ async function main(): Promise<number> {
     collectLogs(settings)
     log('删除测试环境')
     capture('docker', composeArgs(settings, 'down', '-v', '--remove-orphans'))
+    // 只去掉这次的标签：构建缓存还在，下次构建照样快
+    capture('docker', ['image', 'rm', settings.image])
     rmSync(directory, { recursive: true, force: true })
   }
 }

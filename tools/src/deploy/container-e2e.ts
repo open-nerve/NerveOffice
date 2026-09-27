@@ -5,10 +5,12 @@ import { randomBytes } from 'node:crypto'
 
 /** 测试环境的编排（相对仓库根目录） */
 export const COMPOSE_FILE = 'deploy/test/compose.yaml'
-/** 本次运行构建的镜像 */
-export const E2E_IMAGE = 'nerve-office:e2e'
-/** 编排项目名的前缀，后面接编排脚本的进程号：同时运行的两次互不影响，中断留下的项目可以认出来 */
+/**
+ * 编排项目名与镜像标签的前缀，后面接编排脚本的进程号：同时运行的两次互不影响（包括镜像的标签不被另一次覆盖），
+ * 中断的运行留下的项目与镜像可以认出来
+ */
 export const PROJECT_PREFIX = 'nerve-office-e2e-'
+export const IMAGE_PREFIX = 'nerve-office:e2e-'
 /** 数据库管理员（官方镜像的 POSTGRES_USER）与测试环境的库名（deploy/sql/bootstrap-roles.sql 的调用方） */
 const DATABASE_ADMIN = 'postgres'
 const DATABASE_NAME = 'nerve_office'
@@ -51,7 +53,7 @@ export function createSettings(input: SettingsInput): ContainerE2eSettings {
     project: `${PROJECT_PREFIX}${input.pid}`,
     composeFile: input.composeFile,
     envFile: input.envFile,
-    image: E2E_IMAGE,
+    image: `${IMAGE_PREFIX}${input.pid}`,
     httpsPort: input.httpsPort,
     databasePort: input.databasePort,
     passwords: { admin: password(random), owner: password(random), app: password(random) },
@@ -100,11 +102,11 @@ export function playwrightEnvironment(settings: ContainerE2eSettings, browsers: 
   }
 }
 
-/** 中断的运行留下的编排项目：名字带着编排脚本的进程号，进程已经不在了 */
-export function staleProjects(names: readonly string[], isAlive: (pid: number) => boolean): string[] {
+/** 中断的运行留下的编排项目或镜像：名字是前缀加编排脚本的进程号，进程已经不在了 */
+export function staleRuns(names: readonly string[], prefix: string, isAlive: (pid: number) => boolean): string[] {
   return names.filter((name) => {
-    const pid = new RegExp(`^${PROJECT_PREFIX}(\\d+)$`).exec(name)?.[1]
-    return pid !== undefined && !isAlive(Number(pid))
+    const pid = name.startsWith(prefix) ? name.slice(prefix.length) : ''
+    return /^\d+$/.test(pid) && !isAlive(Number(pid))
   })
 }
 

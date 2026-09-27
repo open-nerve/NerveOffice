@@ -9,7 +9,7 @@ import {
   playwrightEnvironment,
   publicOrigin,
   renderEnvFile,
-  staleProjects,
+  staleRuns,
 } from './container-e2e.ts'
 
 /** 每次给出不同的字节：0x01…、0x02…、0x03… */
@@ -24,8 +24,9 @@ function counter(): (size: number) => Uint8Array {
 const settings = createSettings({ pid: 4242, composeFile: '/repo/deploy/test/compose.yaml', envFile: '/tmp/e2e/test.env', httpsPort: 18443, databasePort: 15432, random: counter() })
 
 describe('容器 E2E 的编排参数（P5 设计 §3.6）', () => {
-  it('项目名带进程号；三个密码各自随机，只用十六进制字符', () => {
+  it('项目名与镜像标签带进程号；三个密码各自随机，只用十六进制字符', () => {
     expect(settings.project).toBe('nerve-office-e2e-4242')
+    expect(settings.image).toBe('nerve-office:e2e-4242')
     expect(settings.passwords).toEqual({ admin: '01'.repeat(16), owner: '02'.repeat(16), app: '03'.repeat(16) })
     const real = createSettings({ pid: 1, composeFile: 'c', envFile: 'e', httpsPort: 1, databasePort: 2 }).passwords
     expect(new Set([real.admin, real.owner, real.app]).size).toBe(3)
@@ -34,7 +35,7 @@ describe('容器 E2E 的编排参数（P5 设计 §3.6）', () => {
 
   it('变量文件：镜像、三个密码、两个端口；按地址的登录失败上限调高', () => {
     expect(renderEnvFile(settings)).toBe([
-      'NERVE_IMAGE=nerve-office:e2e',
+      'NERVE_IMAGE=nerve-office:e2e-4242',
       `NERVE_DB_ADMIN_PASSWORD=${'01'.repeat(16)}`,
       `NERVE_DB_OWNER_PASSWORD=${'02'.repeat(16)}`,
       `NERVE_DB_APP_PASSWORD=${'03'.repeat(16)}`,
@@ -63,10 +64,12 @@ describe('容器 E2E 的编排参数（P5 设计 §3.6）', () => {
     })
   })
 
-  it('遗留的项目：前缀相同、进程已经不在；别的项目与还在运行的不算', () => {
+  it('遗留的项目与镜像：前缀相同、进程已经不在；别的名字与还在运行的不算', () => {
     const alive = new Set([100])
-    expect(staleProjects(['nerve-office-e2e-100', 'nerve-office-e2e-200', 'nerve-office-test', 'nerve-office-e2e-x', 'other-e2e-300'], pid => alive.has(pid)))
+    expect(staleRuns(['nerve-office-e2e-100', 'nerve-office-e2e-200', 'nerve-office-test', 'nerve-office-e2e-x', 'nerve-office-e2e-', 'other-e2e-300'], 'nerve-office-e2e-', pid => alive.has(pid)))
       .toEqual(['nerve-office-e2e-200'])
+    expect(staleRuns(['nerve-office:e2e-100', 'nerve-office:e2e-300', 'nerve-office:test'], 'nerve-office:e2e-', pid => alive.has(pid)))
+      .toEqual(['nerve-office:e2e-300'])
   })
 })
 
