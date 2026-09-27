@@ -1,0 +1,60 @@
+/*
+ * 编辑器页的样式（P4 设计 §3.7.3）：不加载 Tailwind 的基础重置（preflight），免得影响 Univer 的界面；
+ * 只用主题变量与工具类。页头需要的基础样式只作用于页头（#editor-chrome），Univer 的弹层挂在 body 下，不受影响。
+ */
+@layer theme, base, components, utilities;
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities);
+@import '../../shared/ui/theme.css';
+
+@layer base {
+  html,
+  body {
+    height: 100%;
+    margin: 0;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  #editor-chrome,
+  #editor-chrome *,
+  #editor-chrome ::before,
+  #editor-chrome ::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    border: 0 solid var(--border);
+  }
+  #editor-chrome :where(button) {
+    font: inherit;
+    color: inherit;
+    background-color: transparent;
+    cursor: pointer;
+  }
+  #editor-chrome :where(a) {
+    color: inherit;
+    text-decoration: inherit;
+  }
+  #editor-chrome :where(h1) {
+    font-size: inherit;
+    font-weight: inherit;
+  }
+  #editor-chrome :where(svg) {
+    display: block;
+    vertical-align: middle;
+  }
+  #editor-chrome {
+    flex: none;
+  }
+  /* 编辑器占满页头以下的空间；Univer 按容器的大小渲染 */
+  #sheet-editor {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+}

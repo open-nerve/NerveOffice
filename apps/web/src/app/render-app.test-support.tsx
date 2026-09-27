@@ -9,14 +9,14 @@ import { onTestFinished } from 'vitest'
 import { App } from './app.tsx'
 import { createAppRuntime } from './runtime.ts'
 
-/** 整页跳转的记录：replace 记下地址，reload 记为 'reload' */
+/** 整页跳转的记录：replace 记下地址，assign 记为 'assign <地址>'，reload 记为 'reload' */
 export interface RecordedPage extends PageLocation {
   readonly visits: readonly string[]
 }
 
 export function recordingPage(): RecordedPage {
   const visits: string[] = []
-  return { visits, replace: url => visits.push(url), reload: () => visits.push('reload') }
+  return { visits, assign: url => visits.push(`assign ${url}`), replace: url => visits.push(url), reload: () => visits.push('reload') }
 }
 
 /** 同一个浏览器里各个标签页之间的会话消息。与 BroadcastChannel 相同：发出的一端自己收不到 */

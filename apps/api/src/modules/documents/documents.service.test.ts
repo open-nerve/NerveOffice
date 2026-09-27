@@ -12,7 +12,7 @@ const BOB_SPACE = '0199a2c4-0000-7000-8000-0000000000b1'
 
 function row(id: string, spaceId: string, position: string): DocumentRow {
   const time = new Date(position)
-  return { id, spaceId, type: 'sheet', title: `文档 ${id.slice(-2)}`, createdAt: time, updatedAt: time, position }
+  return { id, spaceId, type: 'sheet', title: `文档 ${id.slice(-2)}`, createdAt: time, updatedAt: time, position, revision: 3, unitId: `unit-${id.slice(-2)}`, profile: 'sheet@1', formatVersion: 1 }
 }
 
 const OWN = row('0199a2c4-0000-7000-8000-0000000000d1', ALICE_SPACE, '2026-09-26T10:00:00.000001Z')
@@ -46,6 +46,9 @@ describe('DocumentsService.get', () => {
       createdAt: OWN.createdAt.toISOString(),
       updatedAt: OWN.updatedAt.toISOString(),
       spaceId: ALICE_SPACE,
+      revision: 3,
+      profile: 'sheet@1',
+      formatVersion: 1,
       permissions: { canEdit: true },
     })
   })
@@ -57,7 +60,7 @@ describe('DocumentsService.get', () => {
     expect([forbidden.code, missing.code]).toEqual(['NOT_FOUND', 'NOT_FOUND'])
     expect(missing.message).toBe(forbidden.message)
     expect(policy.accessOf).toHaveBeenCalledTimes(2)
-    expect(policy.accessOf).toHaveBeenLastCalledWith(ALICE, { spaceId: '00000000-0000-0000-0000-000000000000' })
+    expect(policy.accessOf).toHaveBeenLastCalledWith(ALICE, { spaceId: '00000000-0000-0000-0000-000000000000' }, undefined)
   })
 
   it('查看者不能编辑', async () => {

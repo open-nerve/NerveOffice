@@ -5,6 +5,7 @@
   "private": true,
   "description": "前后端共享的请求与响应结构、错误码与常量",
   "license": "Apache-2.0",
+  "sideEffects": false,
   "exports": {
     ".": {
       "@nerve-office/source": "./src/index.ts",

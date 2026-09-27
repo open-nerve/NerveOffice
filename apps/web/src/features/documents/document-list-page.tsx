@@ -1,4 +1,5 @@
 import type { DocumentSummary } from '@nerve-office/contracts'
+import { documentPagePath } from '@nerve-office/contracts'
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { FileSpreadsheet } from 'lucide-react'
 import { useEffect, useRef } from 'react'
@@ -7,20 +8,23 @@ import { messages } from '../../shared/i18n/index.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { Alert, AlertDescription, Button, Skeleton } from '../../shared/ui/index.ts'
 import { personalDocumentsQueryOptions } from './documents-api.ts'
+import { NewSheetButton } from './new-sheet-button.tsx'
 
 function DocumentItem({ document }: { document: DocumentSummary }) {
   return (
-    // tabIndex=-1：加载更多之后，焦点移到第一个新条目（不进入 Tab 的顺序）
-    <li tabIndex={-1} className="flex items-center gap-3 px-4 py-3 outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
-      <FileSpreadsheet className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
-      <div className="flex min-w-0 flex-col">
-        <span className="truncate font-medium">{document.title}</span>
-        <span className="text-xs text-muted-foreground">
-          {messages.documents.typeName(document.type)}
-          {' · '}
-          <time dateTime={document.updatedAt}>{messages.documents.updatedAt(formatDateTime(document.updatedAt))}</time>
+    <li>
+      {/* 编辑器页是另一个入口：普通的链接，整页打开（P4 设计 §3.7.4） */}
+      <a href={documentPagePath(document.id)} className="flex items-center gap-3 px-4 py-3 outline-none hover:bg-muted/50 focus-visible:ring-3 focus-visible:ring-ring/50">
+        <FileSpreadsheet className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <span className="flex min-w-0 flex-col">
+          <span className="truncate font-medium">{document.title}</span>
+          <span className="text-xs text-muted-foreground">
+            {messages.documents.typeName(document.type)}
+            {' · '}
+            <time dateTime={document.updatedAt}>{messages.documents.updatedAt(formatDateTime(document.updatedAt))}</time>
+          </span>
         </span>
-      </div>
+      </a>
     </li>
   )
 }
@@ -46,9 +50,8 @@ export function DocumentListPage() {
     if (from === undefined || documents.length <= from)
       return
     focusFromRef.current = undefined
-    const firstNewItem = listRef.current?.children.item(from)
-    if (firstNewItem instanceof HTMLElement)
-      firstNewItem.focus()
+    const firstNewLink = listRef.current?.children.item(from)?.querySelector('a')
+    firstNewLink?.focus()
   }, [documents.length])
 
   function loadMore(): void {
@@ -105,7 +108,10 @@ export function DocumentListPage() {
 
   return (
     <section className="flex flex-col gap-4" aria-labelledby="documents-title">
-      <h1 id="documents-title" className="text-xl font-semibold">{messages.documents.title}</h1>
+      <div className="flex items-start justify-between gap-3">
+        <h1 id="documents-title" className="text-xl font-semibold">{messages.documents.title}</h1>
+        <NewSheetButton />
+      </div>
       {content}
     </section>
   )

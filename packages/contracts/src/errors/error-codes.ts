@@ -17,16 +17,24 @@ export const ERROR_CODES = {
   CSRF_TOKEN_INVALID: { status: 403, message: '请求已失效，请刷新页面后重试' },
   /** 状态变更请求的 Origin 不是本站 */
   ORIGIN_NOT_ALLOWED: { status: 403, message: '请求来源不被允许' },
+  /** 能访问这个资源，但没有这个操作的权限，例如只能查看的文档不能保存（没有任何权限时是 NOT_FOUND） */
+  PERMISSION_DENIED: { status: 403, message: '没有执行这个操作的权限' },
   /** 资源不存在；没有读取权限时同样返回它，不暴露资源是否存在（规范 §4） */
   NOT_FOUND: { status: 404, message: '请求的资源不存在或无权访问' },
   /** 已有系统管理员，拒绝再次初始化（命令行初始化管理员） */
   ADMIN_ALREADY_INITIALIZED: { status: 409, message: '系统管理员已经初始化，不能重复执行' },
   /** 用户名已被别的账户使用（用户名不区分大小写） */
   USERNAME_TAKEN: { status: 409, message: '用户名已被占用' },
+  /** 保存时的基准修订号不是当前修订号：别处保存了更新的版本。details 带当前修订号及其来源（revisionConflictDetailsSchema） */
+  DOCUMENT_REVISION_CONFLICT: { status: 409, message: '别处保存了更新的版本，本次保存没有写入' },
+  /** 同一个 requestId 已经用于另一个请求（负载不同，或者是别的操作） */
+  REQUEST_ID_CONFLICT: { status: 409, message: '请求标识已被另一个请求使用' },
   /** 请求体超过上限，或 JSON 的嵌套层数、元素数量超过上限 */
   PAYLOAD_TOO_LARGE: { status: 413, message: '请求体超过上限' },
   /** 不支持的字符集或内容编码 */
   UNSUPPORTED_MEDIA_TYPE: { status: 415, message: '不支持的内容类型或编码' },
+  /** 快照不合法：不是 UTF-8 的 JSON 对象、不是工作簿的结构、unitId 不是这份文档的、嵌套过深（M1 的基本校验） */
+  SNAPSHOT_INVALID: { status: 422, message: '表格内容的格式不正确，无法保存' },
   /** 登录失败次数过多，暂时锁定；响应带 Retry-After */
   TOO_MANY_ATTEMPTS: { status: 429, message: '尝试次数过多，请稍后再试' },
   /** 意外错误：对外只返回通用说明与请求标识，细节只写进日志 */

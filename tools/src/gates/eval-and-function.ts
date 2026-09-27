@@ -21,6 +21,22 @@ export interface Reference {
 
 export type ScanOutcome = { references: Reference[] } | { error: string }
 
+/**
+ * JS 里可能写着地址的文字（DEF-016）：字符串的值（已处理转义）、模板字符串（插值写成 ${…}）、正则的原文与注释。
+ * 按值识别地址，写法上的伪装（转义的斜杠、拼接、插值给出的协议）就藏不住。
+ */
+export interface TextValue {
+  kind: 'string' | 'template' | 'regexp' | 'comment'
+  text: string
+  /** 在文件内容里的下标 */
+  index: number
+}
+
+export type AnalysisOutcome = { references: Reference[], texts: TextValue[] } | { error: string }
+
+/** 模板字符串里插值的占位 ${…}：地址的识别把它当作运行时才有的一段 */
+export const INTERPOLATION_PLACEHOLDER = `$\{…}`
+
 interface SyntaxNode {
   type: string
   start: number
@@ -191,13 +207,38 @@ function visitChildren(visit: Visit, stack: Visit[]): void {
   }
 }
 
-/** content 是一个 JS 文件（ES 模块或脚本）。解析失败时返回错误，由调用方按违规处理，不当作没有引用。 */
-export function findEvalAndFunction(content: string): ScanOutcome {
-  const { program, errors } = parseSync('artifact.js', content, { lang: 'js', sourceType: 'unambiguous', preserveParens: false })
+function cookedText(element: unknown): string {
+  if (!isNode(element) || typeof element.value !== 'object' || element.value === null)
+    return ''
+  const { cooked, raw } = element.value as { cooked?: unknown, raw?: unknown }
+  // 带非法转义的标签模板没有 cooked，用原文
+  return typeof cooked === 'string' ? cooked : typeof raw === 'string' ? raw : ''
+}
+
+/** 这个节点写着的文字：字符串的值、模板字符串（插值写成占位）、正则的原文。 */
+function textAt(node: SyntaxNode): TextValue | undefined {
+  if (node.type === 'Literal') {
+    if (typeof node.value === 'string')
+      return { kind: 'string', text: node.value, index: node.start }
+    const regex = node.regex as { pattern?: unknown } | undefined
+    return typeof regex?.pattern === 'string' ? { kind: 'regexp', text: regex.pattern, index: node.start } : undefined
+  }
+  if (node.type === 'TemplateLiteral' && Array.isArray(node.quasis))
+    return { kind: 'template', text: node.quasis.map(cookedText).join(INTERPOLATION_PLACEHOLDER), index: node.start }
+  return undefined
+}
+
+/**
+ * content 是一个 JS 文件（ES 模块或脚本）：对 eval 与 Function 的引用，以及可能写着地址的文字。
+ * 解析失败时返回错误，由调用方按违规处理，不当作没有引用。
+ */
+export function analyzeJavaScript(content: string): AnalysisOutcome {
+  const { program, comments, errors } = parseSync('artifact.js', content, { lang: 'js', sourceType: 'unambiguous', preserveParens: false })
   if (errors.length > 0 || !isNode(program))
     return { error: errors.map(error => error.message).join('；') || '解析结果不是语法树' }
   // 解构的简写（const { Function } = globalThis）里键与值是同一个位置，按位置去重
   const references = new Map<number, Reference>()
+  const texts: TextValue[] = comments.map(comment => ({ kind: 'comment', text: comment.value, index: comment.start }))
   // 显式的栈：压缩后的代码可能有很深的表达式（例如很长的字符串拼接），递归会耗尽调用栈
   const stack: Visit[] = [{ node: program, parent: undefined, grandparent: undefined, field: '' }]
   for (let visit = stack.pop(); visit !== undefined; visit = stack.pop()) {
@@ -205,6 +246,15 @@ export function findEvalAndFunction(content: string): ScanOutcome {
     const reference = referenceAt(visit)
     if (reference !== undefined && !references.has(reference.index))
       references.set(reference.index, reference)
+    const text = textAt(visit.node)
+    if (text !== undefined)
+      texts.push(text)
   }
-  return { references: [...references.values()].sort((a, b) => a.index - b.index) }
+  return { references: [...references.values()].sort((a, b) => a.index - b.index), texts: texts.sort((a, b) => a.index - b.index) }
+}
+
+/** 只要对 eval 与 Function 的引用。 */
+export function findEvalAndFunction(content: string): ScanOutcome {
+  const outcome = analyzeJavaScript(content)
+  return 'error' in outcome ? outcome : { references: outcome.references }
 }

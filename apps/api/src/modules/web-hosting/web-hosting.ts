@@ -3,6 +3,7 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express'
 import { existsSync, statSync } from 'node:fs'
 import { isAbsolute, join, posix } from 'node:path'
+import { DOCUMENT_PAGE_PATTERN } from '@nerve-office/contracts'
 import express from 'express'
 import { AppError } from '../../shared/errors/app-error.ts'
 
@@ -10,13 +11,14 @@ import { AppError } from '../../shared/errors/app-error.ts'
 const HASHED_ASSETS = '/assets/'
 const IMMUTABLE = 'public, max-age=31536000, immutable'
 
-/** 路径到入口页的映射：没有匹配的一律是平台页面。P4 把编辑器的路径映射到编辑器页（整页加载）。 */
+/** 路径到入口页的映射：没有匹配的一律是平台页面。 */
 export interface EntryPage {
   readonly pattern: RegExp
   readonly file: string
 }
 
-export const ENTRY_PAGES: readonly EntryPage[] = []
+/** 编辑器页（/documents/<文档 id>）整页加载另一个入口（P4 设计 §3.8）；不是 UUID 的 /documents/… 由平台页面显示 404 */
+export const ENTRY_PAGES: readonly EntryPage[] = [{ pattern: DOCUMENT_PAGE_PATTERN, file: 'editor.html' }]
 const DEFAULT_ENTRY = 'index.html'
 
 function isApiPath(path: string): boolean {

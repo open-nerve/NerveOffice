@@ -73,7 +73,7 @@ describe('US-M1-11 产物门禁的装配', () => {
     expect(outcome.violations).toEqual([])
     expect(outcome.notes).toEqual(expect.arrayContaining([
       '出现的主机：www.w3.org×1；主机在运行时拼出的地址 1 处（由 CSP 兜底）',
-      '已登记的动态代码（出现次数为 0 的登记已经过时，核对后删除）：zod 的 JIT 探测×0、zod 的 JIT 编译器×0',
+      '已登记的动态代码（出现次数为 0 的登记已经过时，核对后删除）：zod 的 JIT 探测×0、zod 的 JIT 编译器×0；全局对象探测 0 处（上限 2）',
     ]))
     expect(outcome.notes.find(note => note.startsWith('允许清单里这次没出现的地址'))).toContain('http://localhost')
   })
@@ -83,22 +83,87 @@ describe('US-M1-11 产物门禁的装配', () => {
     expect(outcome.notes).toContain('出现的主机：无；主机在运行时拼出的地址 0 处（由 CSP 兜底）')
   })
 
-  it('说明：允许清单里的地址都出现时，没出现的地址写"无"', () => {
-    const every = ARTIFACT_POLICY.allowedAddresses.map(entry => JSON.stringify(entry.address)).join(',')
-    const outcome = artifactsGate(writeDist({ ...clean, 'assets/index.js': `export const addresses = [${every}]` }))
+  /** 两个入口：平台页面与编辑器页（编辑器页创建公式 Worker、有一个动态加载的块；Worker 动态加载一个块） */
+  function withEditor(files: Record<string, string>, manifest: Record<string, unknown> = {}): Record<string, string> {
+    return {
+      ...clean,
+      '.vite/manifest.json': JSON.stringify({
+        'index.html': { file: 'assets/index.js', isEntry: true },
+        'editor.html': { file: 'assets/editor.js', isEntry: true, dynamicImports: ['src/lazy.ts'], assets: ['assets/formula.worker-a1b2c3d4.js'] },
+        'src/lazy.ts': { file: 'assets/lazy.js' },
+        ...manifest,
+      }),
+      'editor.html': '<!doctype html><script type="module" src="/assets/editor.js"></script>',
+      'assets/editor.js': 'new Worker(new URL(`/assets/formula.worker-a1b2c3d4.js`,``+import.meta.url),{type:`module`})',
+      'assets/formula.worker-a1b2c3d4.js': 'self.onmessage=()=>import("./worker-lazy-b2.js")',
+      'assets/worker-lazy-b2.js': 'export const y=2',
+      'assets/lazy.js': 'export const x=1',
+      ...files,
+    }
+  }
+
+  it('说明：允许清单里的地址都出现时（前缀的登记出现在编辑器的产物里），没出现的地址写"无"', () => {
+    const exact = ARTIFACT_POLICY.allowedAddresses.filter(entry => entry.prefix !== true).map(entry => JSON.stringify(entry.address)).join(',')
+    const prefixed = ARTIFACT_POLICY.allowedAddresses.filter(entry => entry.prefix === true).map(entry => JSON.stringify(`${entry.address}sample`)).join(',')
+    const outcome = artifactsGate(writeDist(withEditor({ 'assets/index.js': `export const addresses = [${exact}]`, 'assets/lazy.js': `export const links = [${prefixed}]` })))
     expect(outcome.violations).toEqual([])
     expect(outcome.notes).toContain('允许清单里这次没出现的地址（核对后删除）：无')
+  })
+
+  it('前缀的登记只适用于编辑器页能加载到的产物与它创建的 Worker；平台页面与其他文件只按具体地址（审查 A 路建议 B1）', () => {
+    const link = JSON.stringify(`${ARTIFACT_POLICY.allowedAddresses.find(entry => entry.prefix === true)?.address ?? ''}sample`)
+    for (const file of ['assets/editor.js', 'assets/lazy.js', 'assets/formula.worker-a1b2c3d4.js', 'assets/worker-lazy-b2.js']) {
+      const outcome = artifactsGate(writeDist(withEditor({ [file]: `${withEditor({})[file] ?? ''};export const link=${link}` })))
+      expect(outcome.violations, file).toEqual([])
+    }
+    for (const file of ['assets/index.js', 'assets/other.js']) {
+      const outcome = artifactsGate(writeDist(withEditor({ [file]: `export const link=${link}` })))
+      expect(outcome.violations.map(v => v.rule), file).toEqual(['artifacts/address'])
+    }
+    // 找不到构建清单时一律只按具体地址
+    const noManifest = artifactsGate(writeDist({ ...withEditor({ 'assets/editor.js': `export const link=${link}` }), '.vite/manifest.json': '{}' }))
+    expect(noManifest.violations.map(v => v.rule)).toEqual(['artifacts/address'])
+  })
+
+  it('前缀的登记：平台页面也能加载到的块（例如两边共用的动态块）、清单里没有编辑器入口时的编辑器页，只按具体地址（复验 RA8）', () => {
+    const link = JSON.stringify(`${ARTIFACT_POLICY.allowedAddresses.find(entry => entry.prefix === true)?.address ?? ''}sample`)
+    const shared = artifactsGate(writeDist(withEditor({ 'assets/lazy.js': `export const link=${link}` }, {
+      'index.html': { file: 'assets/index.js', isEntry: true, dynamicImports: ['src/lazy.ts'] },
+    })))
+    expect(shared.violations.map(v => v.rule)).toEqual(['artifacts/address'])
+    const noEditorEntry = artifactsGate(writeDist({
+      ...withEditor({ 'editor.html': `<!doctype html><a href=${link}>帮助</a>` }),
+      '.vite/manifest.json': JSON.stringify({ 'index.html': { file: 'assets/index.js', isEntry: true } }),
+    }))
+    expect(noEditorEntry.violations.map(v => v.rule)).toEqual(['artifacts/address'])
   })
 })
 
 describe('US-M1-11 体积预算门禁的装配', () => {
+  /** 两个入口与编辑器页创建的公式 Worker */
+  function dist(indexContent: string): string {
+    return writeDist({
+      '.vite/manifest.json': JSON.stringify({ 'index.html': { file: 'assets/index.js', isEntry: true }, 'editor.html': { file: 'assets/editor.js', isEntry: true, assets: ['assets/formula.worker-a1b2c3d4.js'] } }),
+      'assets/index.js': indexContent,
+      'assets/editor.js': 'new Worker(new URL(`/assets/formula.worker-a1b2c3d4.js`,``+import.meta.url),{type:`module`})',
+      'assets/formula.worker-a1b2c3d4.js': 'self.onmessage=()=>{}',
+    })
+  }
+
   it('按构建清单与产物文件计算：小的产物通过；平台页面超出预算时违规', () => {
-    const small = writeDist({ '.vite/manifest.json': JSON.stringify({ 'index.html': { file: 'assets/index.js' } }), 'assets/index.js': 'console.log(1)' })
-    expect(budgetsGate(small).violations).toEqual([])
+    expect(budgetsGate(dist('console.log(1)')).violations).toEqual([])
     // 随机数据几乎压缩不了：200 KiB 随机字节的 base64（约 273 KiB 文本）gzip 之后仍超过 180 KiB 的预算
     const random = randomBytes(200 * 1024).toString('base64')
-    const large = writeDist({ '.vite/manifest.json': JSON.stringify({ 'index.html': { file: 'assets/index.js' } }), 'assets/index.js': random })
-    expect(budgetsGate(large).violations.map(v => v.rule)).toEqual(['budgets/exceeded'])
+    expect(budgetsGate(dist(random)).violations.map(v => v.rule)).toEqual(['budgets/exceeded'])
+  })
+
+  it('编辑器页的入口没有引用公式 Worker：违规', () => {
+    const noWorker = writeDist({
+      '.vite/manifest.json': JSON.stringify({ 'index.html': { file: 'assets/index.js', isEntry: true }, 'editor.html': { file: 'assets/editor.js', isEntry: true } }),
+      'assets/index.js': 'console.log(1)',
+      'assets/editor.js': 'console.log(2)',
+    })
+    expect(budgetsGate(noWorker).violations.map(v => v.rule)).toEqual(['budgets/missing-worker'])
   })
 
   it('违规：没有构建清单', () => {

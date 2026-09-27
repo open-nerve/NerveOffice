@@ -1,5 +1,5 @@
 // 访问控制（P3，US-M1-08）：未登录时一律要求先登录；别人的文档与不存在的文档，接口响应相同。
-// 文档页（编辑器）在 P4 建立，届时补上"两种情况的页面相同"。
+// 编辑器页上"两种情况的页面相同"与"未登录先登录"在 specs/editor/access.spec.ts（P4）。
 import { randomUUID } from 'node:crypto'
 import { errorResponseSchema } from '@nerve-office/contracts'
 import { createDocument, createUser } from '../../support/database.ts'

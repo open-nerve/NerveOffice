@@ -1,5 +1,8 @@
-// E2E 的测试数据：直接写库（本 Phase 没有创建成员与文档的接口）。每个测试建自己的账户，测试之间互不影响。
-import { randomBytes } from 'node:crypto'
+// E2E 的测试数据：直接写库（没有创建成员的接口；需要一次建很多份文档的列表用例也直接写库）。每个测试建自己的账户，测试之间互不影响。
+import { Buffer } from 'node:buffer'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import zlib from 'node:zlib'
+import { DOCUMENT_PROFILE_OF, PLATFORM_FORMAT_VERSION, sheetSnapshotFor, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { hash } from '@node-rs/argon2'
 import pg from 'pg'
 import { e2eDatabaseUrl } from './environment.ts'
@@ -42,23 +45,41 @@ export async function createUser(prefix: string, displayName = prefix): Promise<
   })
 }
 
-export async function createDocument(owner: TestUser, title: string): Promise<string> {
-  return withDatabase(async (client) => {
-    const result = await client.query<{ id: string }>(
-      'INSERT INTO documents (space_id, type, title, created_by) VALUES ($1, \'sheet\', $2, $3) RETURNING id',
-      [owner.personalSpaceId, title, owner.id],
-    )
-    return result.rows[0]?.id ?? ''
-  })
+/** 按 unitId 生成快照的 JSON 文本 */
+export type SnapshotFor = (unitId: string) => string
+
+/** 写一份文档：与经接口新建的一致（元数据、快照的内容、修订号 1 的修订记录）。快照默认是新建时的模板 */
+async function insertDocument(client: pg.Client, owner: TestUser, title: string, snapshotFor: SnapshotFor = sheetSnapshotFor): Promise<string> {
+  const unitId = randomUUID()
+  const raw = Buffer.from(snapshotFor(unitId), 'utf8')
+  const snapshot = zlib.gzipSync(raw)
+  const digest = createHash('sha256').update(`created\nsheet\n${title}`, 'utf8').digest()
+  const result = await client.query<{ id: string }>(
+    `WITH document AS (
+       INSERT INTO documents (space_id, type, title, created_by, unit_id, profile, format_version, sdk_version)
+       VALUES ($1, 'sheet', $2, $3, $4, $5, $6, $7) RETURNING id
+     ), content AS (
+       INSERT INTO document_contents (document_id, snapshot, raw_bytes, stored_bytes) SELECT id, $8, $9, $10 FROM document
+     ), revision AS (
+       INSERT INTO document_revisions (document_id, revision, kind, request_id, payload_digest, saved_by) SELECT id, 1, 'created', $11, $12, $3 FROM document
+     )
+     SELECT id FROM document`,
+    [owner.personalSpaceId, title, owner.id, unitId, DOCUMENT_PROFILE_OF.sheet, PLATFORM_FORMAT_VERSION, UNIVER_SDK_VERSION, snapshot, raw.length, snapshot.length, randomUUID(), digest],
+  )
+  return result.rows[0]?.id ?? ''
+}
+
+export async function createDocument(owner: TestUser, title: string, snapshotFor?: SnapshotFor): Promise<string> {
+  return withDatabase(async client => insertDocument(client, owner, title, snapshotFor))
 }
 
 /** 一次写入 count 份文档，标题为"<前缀> 1"…"<前缀> count"（需要"加载更多"的用例：超过一页） */
 export async function createDocuments(owner: TestUser, titlePrefix: string, count: number): Promise<void> {
   await withDatabase(async (client) => {
-    await client.query(
-      'INSERT INTO documents (space_id, type, title, created_by) SELECT $1, \'sheet\', $2 || \' \' || n, $3 FROM generate_series(1, $4::int) AS n',
-      [owner.personalSpaceId, titlePrefix, owner.id, count],
-    )
+    await client.query('BEGIN')
+    for (let n = 1; n <= count; n += 1)
+      await insertDocument(client, owner, `${titlePrefix} ${n}`)
+    await client.query('COMMIT')
   })
 }
 

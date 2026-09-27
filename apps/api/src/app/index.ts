@@ -3,7 +3,7 @@ export { AuditModule, AuditService, RequestOrigin } from '../modules/audit/index
 export type { AuditEvent, AuditOrigin } from '../modules/audit/index.ts'
 export { ConfigError, loadConfig, loadConfigFromEnvironment } from '../modules/config/index.ts'
 export type { AppConfig } from '../modules/config/index.ts'
-export { DATABASE, DatabaseModule, MigrationError, readExpectedMigrations, runMigrations, TransactionRunner } from '../modules/database/index.ts'
+export { DATABASE, DatabaseModule, MigrationError, MIGRATIONS_FOLDER, readExpectedMigrations, runMigrations, TransactionRunner } from '../modules/database/index.ts'
 export type { Database, MigrationOutcome, SchemaStatus, Transaction } from '../modules/database/index.ts'
 export { AppLogger } from '../modules/logging/index.ts'
 export type { AdminInitializationInput, InitializedAdmin } from '../modules/users/index.ts'

@@ -43,6 +43,13 @@
       "when": 1790441753586,
       "tag": "0005_login_throttle_reservations",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790461522540,
+      "tag": "0006_document_content",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,6 @@
 # 架构总览
 
-> 活文档：每个 Phase 结束时更新，M1-P5 形成 v1｜当前：M1-P3 完成时｜更新：2026-09-26
+> 活文档：每个 Phase 结束时更新，M1-P5 形成 v1｜当前：M1-P4 完成时｜更新：2026-09-27
 
 ## 1. 目标形态与当前进度
 
@@ -8,17 +8,17 @@
 
 | 部分 | 当前状态 |
 |---|---|
-| 前端 `apps/web` | 平台页面：登录页、我的空间（个人空间的文档列表）、404 与错误页（M1-P3）。编辑器页在 M1-P4 |
-| 后端 `apps/api` | 横切能力（M1-P2）；账户、个人空间、会话与登录、默认拒绝的认证与 CSRF 防护、文档元数据的列表与读取、命令行初始化管理员、托管前端产物（M1-P3）。新建、读取内容与保存文档在 M1-P4 |
-| 共享契约 `packages/contracts` | 错误响应与错误码、审计动作、健康检查、请求头；账户与空间的规则、登录与会话、文档的列表与元数据 |
-| 数据库 | PostgreSQL 18；`audit_events`、`users`、`spaces`、`auth_sessions`、`auth_login_throttles`、`documents`（元数据）；迁移由单独的命令执行 |
-| 编辑器适配层 | 未建立（M1-P4） |
+| 前端 `apps/web` | 平台页面：登录页、我的空间（个人空间的文档列表、新建表格）、404 与错误页（M1-P3、P4）；表格编辑器页（M1-P4：整页加载，显式保存） |
+| 后端 `apps/api` | 横切能力（M1-P2）；账户、个人空间、会话与登录、默认拒绝的认证与 CSRF 防护、文档元数据的列表与读取、命令行初始化管理员、托管前端产物（M1-P3）；新建文档、读取内容、按修订号保存（M1-P4） |
+| 共享契约 `packages/contracts` | 错误响应（含可选的 `details`）与错误码、审计动作、健康检查、请求头；账户与空间的规则、登录与会话、文档的列表与元数据、新建与保存、快照的常量、收敛的模板快照、编辑器页的地址 |
+| 数据库 | PostgreSQL 18；`audit_events`、`users`、`spaces`、`auth_sessions`、`auth_login_throttles`、`documents`、`document_contents`、`document_revisions`；迁移由单独的命令执行 |
+| 编辑器适配层 | `apps/web/src/editor/`（M1-P4，ADR-010）：插件档案 `sheet@1`、公式 Worker、身份替换（ADR-009）、变更检测、公式收齐、`IMAGE()` 的限制、M5 之前的入口守卫、内部 API 的登记 |
 
 ## 2. 仓库结构
 
 | 目录 | 包 | 作用 |
 |---|---|---|
-| `apps/web` | `@nerve-office/web` | 前端（React 19 + Vite 8；ADR-008）；`build/` 是构建插件（第三方许可清单）；`dist/` 是生产构建，`dist-e2e/` 是加上 CSP 探针的测试构建 |
+| `apps/web` | `@nerve-office/web` | 前端（React 19 + Vite 8；ADR-008）：两个入口页 `index.html`（平台页面）与 `editor.html`（编辑器页）；`build/` 是构建插件（第三方许可清单），`third-party-licenses/` 是发布包里缺许可文件的包的正文；`dist/` 是生产构建，`dist-e2e/` 是加上 CSP 探针的测试构建 |
 | `apps/api` | `@nerve-office/api` | 后端（NestJS 12，纯 ESM，Nest CLI 构建；ADR-004） |
 | `packages/contracts` | `@nerve-office/contracts` | 前后端共享的请求与响应结构（zod）、错误码、审计动作 |
 | `tools` | `@nerve-office/tools` | 质量门禁、故事对照、提交钩子、`verify` |
@@ -45,7 +45,7 @@ apps/api/src/
     spaces/       个人空间（M2 扩展为团队空间与成员）
     users/        账户、Argon2id 的密码哈希、验证凭据、初始化首个管理员
     auth/         登录、退出、会话、登录限流；会话守卫与 CSRF、Origin 守卫；@CurrentPrincipal()
-    documents/    文档元数据的列表与读取、访问策略（P4 加上内容与修订）
+    documents/    文档：元数据的列表与读取、新建（模板快照、requestId 幂等）、内容的读取与保存（ADR-011）、访问策略
     web-hosting/  托管前端产物；/api 以外的其他请求得到统一的 404
   db/
     schema/<模块>/  各模块的表定义；schema/common 是表定义共用的写法（枚举的 CHECK、bytea）
@@ -61,9 +61,9 @@ apps/api/src/
 | 2 | 请求日志与请求标识（`X-Request-Id` 合法就沿用，否则生成 UUID） |
 | 3 | 请求上下文：之后在这个请求里写的日志都带请求标识 |
 | 4 | 安全响应头：对所有响应生效，包括错误、404、页面、脚本与 Worker 脚本 |
-| 5 | 托管前端产物（配置了 `NERVE_WEB_ROOT` 才有）：只处理 `/api` 以外的 GET、HEAD；带哈希的资源长期缓存，其他不缓存；没有扩展名的路径回退到入口页 |
+| 5 | 托管前端产物（配置了 `NERVE_WEB_ROOT` 才有）：只处理 `/api` 以外的 GET、HEAD；带哈希的资源长期缓存，其他不缓存；编辑器页的地址（`/documents/<UUID>`）给 `editor.html`，其他没有扩展名的路径回退到平台页面 |
 | 6 | `/api` 以外的其他请求：统一的 404 错误响应 |
-| 7 | JSON 请求体：上限取自配置；解析后检查嵌套深度与元素数量 |
+| 7 | JSON 请求体：上限取自配置；解析后检查嵌套深度与元素数量。保存快照的正文（`application/gzip`）不经它，由那个路由的拦截器在守卫之后读取 |
 | 8 | Nest 路由：前缀 `/api`；全局守卫（先认证，再 CSRF 与 Origin）；全局校验管道（`@Body({ schema })`，zod）；全局异常过滤器 |
 
 **认证与会话**（ADR-007）：
@@ -77,17 +77,20 @@ apps/api/src/
 - 密码用 Argon2id（@node-rs/argon2），参数可配置，有强度下限；同时进行的哈希有上限，免得占满 libuv 的线程池。首个管理员用命令行初始化（`init-admin`，密码从终端或标准输入读取）。
 - 契约里的响应结构是宽松的（客户端丢弃不认识的字段，接口只做加法时旧页面照常工作），请求结构是严格的；服务端只发契约里的字段，集成测试按原文核对。
 
-**接口**（M1-P3）：
+**接口**（M1-P3、P4）：
 
 | 接口 | 说明 |
 |---|---|
 | `POST /api/auth/login`、`POST /api/auth/logout`、`GET /api/auth/session` | 登录、退出、当前会话（账户、个人空间、CSRF 令牌） |
 | `GET /api/documents?limit=&cursor=` | 个人空间的文档，按更新时间从新到旧，keyset 分页 |
-| `GET /api/documents/{id}` | 文档元数据与调用者的权限；别人的与不存在的文档都是 404 |
+| `POST /api/documents` | 新建（`{ type, title?, requestId }`）：内容是收敛的模板换上新的 `unitId`，修订号 1；同一个 `requestId` 的重放同样 201，返回同一份文档 |
+| `GET /api/documents/{id}` | 文档元数据（含修订号、档案、格式版本）与调用者的权限；别人的与不存在的文档都是 404 |
+| `GET /api/documents/{id}/content` | 当前快照：gzip 字节原样下发（`Content-Encoding: gzip`），修订号作 ETag |
+| `PUT /api/documents/{id}/content?baseRevision&requestId&clientInstanceId&localSeq` | 保存（正文是 gzip 压缩的快照）：压缩前后都限 5 MiB、基本校验、锁文档行、按 `requestId` 幂等、按基准修订号条件写入；冲突时 409，`details` 带当前修订号及其来源 |
 | `GET /api/health/live`、`GET /api/health/ready` | 存活与就绪探针（公开） |
 
 **错误**（ADR-006）：
-- 响应统一为 `{ "error": { "code", "message", "requestId" } }`；错误码登记在 contracts，每个错误码对应固定的 HTTP 状态。
+- 响应统一为 `{ "error": { "code", "message", "requestId", "details"? } }`；错误码登记在 contracts，每个错误码对应固定的 HTTP 状态；`details` 按错误码约定结构（例如修订号冲突）。
 - 业务代码只抛 `AppError`；意外错误对外只回通用说明，异常与堆栈写进这个请求的日志。
 
 **日志**：
@@ -102,7 +105,12 @@ apps/api/src/
 - 应用启动时不迁移，只检查库结构版本，不一致时就绪探针失败。
 - 表只由所属模块的仓储读写；服务用 `TransactionRunner` 开启事务，把不透明的 `Transaction` 显式传给仓储。`TransactionRunner` 自己借出、归还连接：除业务错误外，失败的事务丢弃它的连接；work 吞掉失败的语句时不报告成功。
 
-**文档的访问策略**：服务只经 `DocumentAccessPolicy` 判断权限；M1 只有"个人空间的所有者"一条规则，M2 在同一个接口后面扩展为有效权限。
+**文档的访问策略**：服务只经 `DocumentAccessPolicy` 判断权限（在事务里判断时，查询走事务的连接）；M1 只有"个人空间的所有者"一条规则，M2 在同一个接口后面扩展为有效权限。没有任何权限与不存在都是 `NOT_FOUND`；能访问却不能编辑时保存得到 `PERMISSION_DENIED`。
+
+**文档的内容与保存**（ADR-011）：
+- 快照用 `bytea` 存 gzip 压缩的原始 JSON 字节；修订号是整数，新建为 1，每次保存加一；`unitId` 由服务端生成，终身不变。
+- 保存：与文档无关的基本校验在事务之前；事务里锁住文档行并判断权限 → 按 `requestId` 幂等（负载摘要按基准修订号与解压后的字节算）→ 核对快照的 `id` → 按基准修订号条件写入 → 写内容、修订记录与审计（`documents.content_saved`）。
+- 完整的快照校验、内容哈希、编辑租约、`If-None-Match` 与拦截旧客户端在 M3。
 
 **运行与退出**：
 - 就绪探针检查接收请求、数据库可达与库结构版本，整体限时 2 秒。
@@ -114,11 +122,14 @@ apps/api/src/
 ```text
 apps/web/src/
   entries/platform/   平台页面的入口：只写副作用导入，按顺序关掉 zod 的 JIT（CSP）→ 样式 → 挂载（建运行时，从往返缓存恢复时重新加载）
+  entries/editor/     编辑器页的入口：同样先关掉 zod 的 JIT → 样式（不含 Tailwind 的基础重置）→ 挂载
   entries/csp-probe/  CSP 阳性对照（只在测试构建里）
   app/                运行时（路由、请求缓存、会话的全局处理：整页跳转、多标签页）、布局、404 与错误页
   features/auth/      登录页、会话、需要登录的外层路由、退出
-  features/documents/ 我的空间的文档列表
-  shared/             请求层（api）、界面组件（ui，改写后的 shadcn/ui）、界面文字（i18n）、小工具（lib）
+  features/documents/ 我的空间的文档列表、新建表格
+  features/sheet-editor/ 编辑器页：载入、保存的状态机、页头与提示、快捷键与离开提示、会话
+  editor/             编辑器适配层（Univer 的一切，ADR-010）：档案、公式 Worker、身份、变更检测、公式收齐、IMAGE()、入口守卫、internal-api/
+  shared/             请求层（api）、界面组件（ui，改写后的 shadcn/ui）与主题变量、界面文字（i18n）、小工具（lib：登录页的地址、整页跳转等）
 ```
 
 - React Router 8（数据路由的库模式）、TanStack Query 5、Tailwind CSS 4 与 shadcn/ui 的 Radix 版本（ADR-008）。
@@ -126,15 +137,22 @@ apps/web/src/
 - 会话结束（任何请求得到未登录或登录已过期、退出）：清掉 CSRF 令牌，整页回到登录页，登录后回到原来的地址；不在单页里清空缓存。
 - 多个标签页：登录与退出经 BroadcastChannel 通知；收到消息或得到 `CSRF_TOKEN_INVALID` 时重新确认会话，换了人整页重新加载。
 - 查询与变更不按浏览器的在线状态挂起，断网时照常失败并提示。
-- 首屏 JS 预算：平台页面 180 KiB（gzip），门禁 `budgets` 检查。
+- 平台页面与编辑器页之间整页跳转（两个入口）：列表的条目是普通链接，新建之后 `location.assign`，登录后要回到编辑器页时 `location.replace`。
+- **编辑器页**（P4 设计 §3.7）：
+  - 编辑器在 React 之外创建（一页一份文档）；容器是 `editor.html` 里静态的 `#sheet-editor`，页面的状态写在它的 `data-editor-state` 上（loading、ready、steady、failed）；页头挂在 `#editor-chrome`；
+  - 载入：确认会话 → 并行读取元数据与内容 → 核对档案与格式版本 → 创建编辑器；别人的与不存在的显示相同；
+  - 保存：显式保存（按钮、Ctrl/Cmd+S），状态机见 ADR-011；有未保存的修改时离开由浏览器提示；
+  - 会话：载入之后一律不整页跳转、不自动重新加载（本页可能有未保存的修改）。登录已过期或在别处退出：暂停保存，提示在新标签页中登录，本人登录回来之后恢复；别的标签页登录了另一个人：不能再保存，原来的人回来之后恢复。
+- 首屏 JS 预算（gzip，门禁 `budgets` 检查）：平台页面 180 KiB；编辑器页 2350 KiB；公式 Worker 800 KiB。
 
 ## 5. 模块边界
 
 - `@univerjs/*` 只能在 `apps/web/src/editor/` 下引用（静态导入、再导出、动态导入都算），任何位置都不能引用 `@univerjs-pro/*`。
 - **web** 分层：
   - 入口（`src/entries/*`）→ 应用（`src/app`）→ 功能（`src/features/*`）→ 共享（`src/shared`）；
-  - 编辑器（`src/editor`）只依赖共享与 contracts；
-  - 平台页面的入口不引用编辑器。
+  - 编辑器适配层（`src/editor`）只依赖共享与 contracts；只有编辑器页的入口与 `features/sheet-editor` 能引用它（经 `index.ts`）；
+  - `features/sheet-editor` 只由编辑器页的入口引用：平台的应用层、其他入口与其他功能都不引用它（Univer 不进平台页面的包）；
+  - Univer 的内部符号与 `Univer.__getInjector()` 只能在 `src/editor/internal-api/` 引用，逐项登记；`@univerjs/*` 只引用包入口、`/facade`、`/locale/<语言>` 与样式（ADR-010）。
 - **api**：
   - 模块之间只经对方的 `index.ts`，模块不引用应用的组装；
   - 一个模块只能引用自己的表定义，表定义之间可以互相引用（外键）；
@@ -152,7 +170,8 @@ apps/web/src/
 - 跨元素时，contracts、功能模块、编辑器与后端模块只经公开入口（`index.ts`）引用；元素目录里没有"无主"文件。
 - contracts 不依赖任何内部包；tools 不依赖业务包；集成测试只经 contracts 与 `@nerve-office/api` 的入口引用。
 - 没有循环依赖。
-- 测试代码只在测试里用：测试代码之外只引用本包 `dependencies` 里的包；测试与测试辅助（`*.test.*`、`*.test-support.*`）只被测试静态引用，任何地方都不动态导入它们。`import.meta.glob` 这类按模式成批引用的写法由审查保证。
+- 测试代码只在测试里用：测试代码之外只引用本包 `dependencies` 里的包；测试与测试辅助（`*.test.*`、`*.test-support.*`）只被测试静态引用，任何地方都不动态导入它们。`import.meta.glob` 这类按模式成批引用的写法一律不用（lint 报错）。
+- 包名一律小写：写成大写（`@UniverJS/…`）时按包名生效的限制都认不出，而不区分大小写的文件系统上类型检查与构建照常通过；静态导入、再导出、动态导入与类型里的 `import()` 都算。
 - 前端应用的入口（`entries/*/main.{ts,tsx}`）只写副作用导入，第一个关掉 zod 的 JIT。
 
 规则由 ESLint 执行，并有自测（`tools/src/lint/lint-rules.test.ts`）。
@@ -175,10 +194,10 @@ A01 等检查（`pnpm gate <名称>`）：
 | `stories` | 当前 M 的故事登记表与总设计一致；active 的故事有会执行的测试（取自 Vitest 全部项目与 Playwright 的列举） |
 | `migrations` | journal 与迁移文件一一对应、时间戳递增、迁移名的写法、快照的 prevId 链；与基准版本（本机：与 main 的分叉点；CI：推送之前的提交）相比，已合并的迁移没有变化，新迁移只追加在末尾 |
 | `schema` | 表定义与迁移同步：对迁移目录的副本执行一次 drizzle-kit generate，不应生成新文件，并且要给出"没有变化"的结论（改列名等要交互确认的变更同样失败） |
-| `deps` | 生产依赖图（含可选依赖，按真实包名）没有 Pro，Univer 版本一致，应为单例的包只有一份（React、rxjs、NestJS、reflect-metadata、drizzle-orm、React Router、TanStack Query、Radix 等；清单支持 `@作用域/*`，含 `@univerjs/*`、`@radix-ui/*`），依赖树完整 |
+| `deps` | 生产依赖图（含可选依赖，按真实包名）没有 Pro，Univer 版本一致（pnpm 目录与安装的实例都等于版本基线；文档记录的 SDK 版本由后端的单元测试与目录核对），应为单例的包只有一份（React、rxjs、NestJS、reflect-metadata、drizzle-orm、React Router、TanStack Query、Radix 等；清单支持 `@作用域/*`，含 `@univerjs/*`、`@radix-ui/*`），依赖树完整 |
 | `licenses` | 生产依赖的每个安装实例的许可在白名单内（本机没装的平台专属包以 CI 为准）；开发依赖没有 GPL、AGPL、SSPL 与未声明许可 |
-| `artifacts` | 构建产物只有登记过的文件类型（`.json` 也扫描，只放行三个清单文件）；JS 按语法树找出 `eval` 与 `Function` 的每一处引用（任何对象上的同名属性、恰好是这两个名字的字符串也算；对象字面量的键、类成员名、`case` 的值与私有字段只是名字，不算），除已登记的动态代码（zod 的 JIT 探测与编译器，jitless 下执行不到）外都违规，其他文本文件按写法匹配；地址按具体地址登记放行，模板插值前的固定主机照样检查；没有禁用的关键字；没有只属于测试构建的文件（CSP 探针）；第三方许可清单（含 Worker 的产物）完整 |
-| `budgets` | 各入口首屏 JS 的体积（入口块加上静态引用的块，gzip）不超过预算 |
+| `artifacts` | 构建产物只有登记过的文件类型（`.json` 也扫描，只放行三个清单文件）；JS 按语法树找出 `eval` 与 `Function` 的每一处引用（任何对象上的同名属性、恰好是这两个名字的字符串也算；对象字面量的键、类成员名、`case` 的值与私有字段只是名字，不算），除已登记的动态代码（zod 的 JIT 探测与编译器，jitless 下执行不到）与全局对象探测（lodash，上限 2 处）外都违规，其他文本文件按写法匹配；JS 的地址按语法树取出的字符串值、模板字符串、正则与注释识别（转义、拼接、插值给出的协议、协议相对的本机与 IP 地址都认得），模板插值前的固定主机照样检查；字符串与模板字符串、HTML 的属性值与样式（parse5 按规范解析；树构建丢掉的开始标签也算，丢掉的是原始文本一类的元素或 svg、math 时直接报违规）、SVG 文件（按 XML 解析；带 DTD、处理指令、格式错误或编码不是 UTF-8 时直接报违规）、样式的字符串与 url（按 CSS 的分词规则）、JSON 的字符串再按浏览器的解析规则解析（反斜杠、前导空白、夹在中间的制表符、用户信息、编码过的主机、不带斜杠的 `wss:`、协议或端口是插值、单标签的主机、IPv6），比较、去重与核对允许清单都用解析出的规范写法（点段化简，同一处里规范写法不同的地址逐个核对），整个文件另按写法匹配兜底（JS 字符串里嵌的样式与 HTML、`data:` 地址里的文档不解开，由 CSP 拦下，DEF-022），自测含一条经 Vite 真实构建、压缩之后再扫描的用例；地址按具体地址登记放行，只有编辑器页的产物（编辑器入口能到达的块与它们引用的 Worker）另可按前缀登记（公式说明的文档链接），其余产物默认只按具体地址；没有禁用的关键字；没有只属于测试构建的文件（CSP 探针）；第三方许可清单（含 Worker 的产物）完整，发布包里缺许可文件的包由仓库补齐正文 |
+| `budgets` | 各入口首屏 JS 的体积（入口块加上静态引用的块，gzip）不超过预算；入口创建的 Worker 另列一项（按构建清单里块的 `assets` 找到 Worker 的产物，连同它静态引用的块）；入口能加载到的块创建了没有预算的 Worker（含 `?worker` 的写法与动态加载的块）、一个预算匹配到多个同名的 Worker、构建清单里有没有预算的入口、产物里有没有归属的脚本（例如 Worker 里再创建的 Worker）时报违规 |
 | `audit` | 生产依赖没有高危及以上的漏洞；例外有原因与到期日；没有被配置藏起来的漏洞 |
 
 覆盖率下限（单元与集成测试合计）：contracts 90%，api 80%，web（编辑器适配层以外）70%，tools 80%。
@@ -197,7 +216,9 @@ A01 等检查（`pnpm gate <名称>`）：
 | `spaces` | spaces | 空间：M1 只有个人空间，每人一个（部分唯一索引），不能全员可见 |
 | `auth_sessions` | auth | 登录会话：令牌摘要（唯一）、空闲与绝对过期、撤销的时间与原因 |
 | `auth_login_throttles` | auth | 登录限流的计数：键的摘要、窗口内失败与正在验证的尝试次数（成功时退回，可以是 0）、锁定到期 |
-| `documents` | documents | 文档的元数据：所属空间、类型、标题、创建者、状态；按空间与更新时间的索引。P4 加上修订号、`unitId`、插件档案与内容表 |
+| `documents` | documents | 文档的元数据：所属空间、类型、标题、创建者、状态、当前修订号、`unit_id`（唯一）、插件档案、平台格式版本、写入时的 SDK 版本；按空间与更新时间的索引 |
+| `document_contents` | documents | 每份文档一份当前快照：gzip 的 `bytea`、解压前后的字节数（CHECK 核对压缩后的字节数与上限） |
+| `document_revisions` | documents | 每次新建或保存一行：修订号（与文档联合唯一）、种类（新建即修订号 1）、`request_id`（唯一，幂等的依据）、负载摘要、保存的来源（`clientInstanceId`、`localSeq`）、保存人；不存正文 |
 
 ## 8. 变更记录
 
@@ -206,3 +227,4 @@ A01 等检查（`pnpm gate <名称>`）：
 | 2026-09-26 | M1-P1 | 初版：仓库结构、工具链、模块边界、质量门禁、开发数据库 |
 | 2026-09-26 | M1-P2 | 后端骨架与横切能力；后端的模块边界；错误码；数据库与迁移、`migrations` 与 `schema` 检查；审计；覆盖率改为单元与集成测试合计 |
 | 2026-09-26 | M1-P3 | 账户、个人空间、会话与登录、默认拒绝的认证与 CSRF、文档元数据；前端骨架；托管前端产物；E2E 改测真实后端；`budgets` 检查 |
+| 2026-09-27 | M1-P4 | 文档内容与保存协议（ADR-011）、错误响应的 `details`；编辑器适配层与内部 API 登记（ADR-010）、编辑器身份（ADR-009）；编辑器页与新建表格；托管映射编辑器页；门禁：Worker 预算、地址的前缀登记与按语法树识别（DEF-016）、缺失的许可正文补齐 |

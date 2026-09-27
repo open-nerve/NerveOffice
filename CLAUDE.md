@@ -91,6 +91,7 @@
 | `pnpm db:up` / `pnpm db:down` | 启动 / 停止开发用的 PostgreSQL |
 | `pnpm db:migrate` | 构建后端并对开发库执行迁移 |
 | `pnpm db:generate --name <名称>` | 按表定义生成迁移（人工审阅后入库；合并后的迁移不再修改） |
+| `pnpm --filter @nerve-office/e2e run update:sheet-template` | 经编辑器页重新生成新建表格用的模板快照（SDK 升级或插件档案变更之后；需要 `pnpm db:up` 与构建，同 `pnpm test:e2e`） |
 | `pnpm test:integration` | 集成测试（需要数据库；先构建后端，进程测试用构建产物） |
 | `pnpm test:e2e` | 构建后端与前端的测试构建后跑 E2E（真实后端与数据库，需要 `pnpm db:up`；端口每次自动挑选，后端日志在 `tests/e2e/test-results/e2e-server.log`） |
 | `pnpm build` / `pnpm clean` | 构建 / 删除构建产物 |

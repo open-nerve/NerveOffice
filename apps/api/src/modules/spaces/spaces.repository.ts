@@ -28,8 +28,8 @@ export class SpacesRepository {
     return row
   }
 
-  async isOwner(userId: string, spaceId: string): Promise<boolean> {
-    const [row] = await this.db
+  async isOwner(userId: string, spaceId: string, transaction?: Transaction): Promise<boolean> {
+    const [row] = await executorOf(this.db, transaction)
       .select({ id: spaces.id })
       .from(spaces)
       .where(and(eq(spaces.id, spaceId), eq(spaces.ownerUserId, userId)))

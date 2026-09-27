@@ -1,4 +1,4 @@
-import type { LoginReason } from '../features/auth/index.ts'
+import type { LoginReason } from '../shared/lib/login-path.ts'
 import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query'
 import { isAuthenticationError, isCsrfTokenError, isTransientError } from '../shared/api/index.ts'
 

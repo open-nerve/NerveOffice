@@ -10,6 +10,7 @@ export const AUDIT_ACTIONS = [
   'auth.logout',
   'users.admin_initialized',
   'documents.created',
+  'documents.content_saved',
 ] as const
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS)

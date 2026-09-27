@@ -186,6 +186,184 @@ describe('US-M1-11 A01 产物扫描：外部地址与关键字', () => {
     expect(rules(code)).toEqual(['artifacts/address'])
   })
 
+  /* eslint-disable no-template-curly-in-string */
+  it.each([
+    ['协议由插值给出', 'fetch(`${location.protocol}//evil.example/collect`)', 'evil.example'],
+    ['拼接出的地址（转义的斜杠）', 'fetch("https:"+"\\/\\/evil.example/c")', 'evil.example'],
+    ['协议相对的本机地址', 'fetch("//localhost:3000/api")', 'localhost:3000'],
+    ['协议相对的 IP 地址', 'new Image().src="//10.0.0.8/p.gif"', '10.0.0.8'],
+    ['协议相对的 IPv6 地址', 'fetch("//[::1]:8080/x")', '[::1]:8080'],
+    ['Unicode 转义的斜杠', 'fetch("https:\\u002F\\u002Fevil.example")', 'evil.example'],
+    ['正则里的地址', 'const r=/https:\\/\\/evil\\.example/', 'evil.example'],
+  ])('违规（DEF-016）：按语法树取出的值识别地址：%s', (_case, code, host) => {
+    const result = scan(code)
+    expect(result.violations.map(v => v.rule)).toEqual(['artifacts/address'])
+    expect([...result.hosts.keys()]).toEqual([host])
+  })
+  /* eslint-enable no-template-curly-in-string */
+
+  it.each([
+    ['两个斜杠的注释样式的字符串', 'const c="// 说明"'],
+    ['只有两个斜杠', 'const p=a+"//"+b'],
+    ['源码映射的注释', 'const s="//# sourceMappingURL=x.js.map"'],
+    ['路径里的两个斜杠', 'const p="a//b.example"'],
+    ['注释里的协议相对写法', '/* //evil.example */ const a=1'],
+  ])('合规：不是地址的写法不误报：%s', (_case, code) => {
+    expect(rules(code)).toEqual([])
+  })
+
+  it('注释里的绝对地址照样报出', () => {
+    expect(rules('/*! see https://evil.example/license */ const a=1')).toEqual(['artifacts/address'])
+  })
+
+  it('前缀的登记只适用于指定的文件（编辑器的产物）：以它开头的地址放行；其他文件（默认）照旧违规', () => {
+    const prefixed: ArtifactPolicy = { ...policy, allowedAddresses: [{ address: 'https://support.example.com/docs/', prefix: true, source: '样例', reason: '公式帮助的链接' }] }
+    const code = 'a={url:"https://support.example.com/docs/sum-function"};b="https://support.example.com/other"'
+    const editor = scanArtifacts([{ path: 'assets/editor.js', content: code }], prefixed, { prefixFiles: new Set(['assets/editor.js']) })
+    expect(editor.violations.map(v => v.detail.split(' ')[0])).toEqual(['https://support.example.com/other'])
+    expect(editor.unusedAddresses).toEqual([])
+    const platform = scanArtifacts([{ path: 'assets/index.js', content: code }], prefixed)
+    expect(platform.violations).toHaveLength(2)
+    expect(platform.unusedAddresses).toEqual(['https://support.example.com/docs/'])
+  })
+
+  it.each([
+    ['反斜杠', 'location.href="\\\\\\\\evil.example/x"'],
+    ['斜杠加反斜杠', 'location.href="/\\\\evil.example/x"'],
+    ['协议之后是反斜杠', 'fetch("https:\\\\\\\\evil.example/x")'],
+    ['前导空格', 'fetch(" //evil.example/x")'],
+    ['斜杠中间夹制表符', 'fetch("/\t/evil.example/x")'],
+    ['用户信息', 'fetch("//u@evil.example/x")'],
+    ['主机里的百分号编码', 'fetch("//%65vil.example/x")'],
+
+    ['全角字符的主机', 'fetch("//ｅｖｉｌ.example/x")'],
+    ['协议之后不带斜杠', 'new WebSocket("wss:evil.example/x")'],
+  ])('违规（审查 A4）：浏览器会解析成跨源地址的写法：%s', (_case, code) => {
+    const result = scan(code)
+    expect(result.violations.map(v => v.rule)).toEqual(['artifacts/address'])
+    expect([...result.hosts.keys()]).toEqual(['evil.example'])
+  })
+
+  it('违规（审查 A4）：非 ASCII 的主机按浏览器的规则转成 ASCII（punycode）报出', () => {
+    const result = scan('fetch("//évil.example/x")')
+    expect(result.violations.map(v => v.rule)).toEqual(['artifacts/address'])
+    expect([...result.hosts.keys()]).toEqual(['xn--vil-9la.example'])
+  })
+
+  it.each([
+    ['样式的 url() 不带引号', 'a{background:url(//evil.example/a.png)}', 'assets/x.css'],
+    ['样式的 @import url()', '@import url(//evil.example/a.css);', 'assets/x.css'],
+    ['HTML 属性不带引号', '<img src=//evil.example/a.png>', 'index.html'],
+  ])('违规（审查 A4）：%s里的协议相对地址', (_case, content, path) => {
+    expect(rules(content, path)).toEqual(['artifacts/address'])
+  })
+
+  // 压缩器把普通字符串也写成模板字符串（复验 RA2）；以下样例是产物里的模板字符串原文，不是要插值
+  /* eslint-disable no-template-curly-in-string */
+  it.each([
+    ['前导空格', 'fetch(` //evil.example/x`)'],
+    ['前导空格与插值', 'fetch(` //evil.example/${a}`)'],
+    ['反斜杠与插值', 'fetch(`\\\\\\\\evil.example/${a}`)'],
+    ['协议之后是反斜杠', 'fetch(`https:\\\\\\\\evil.example/${a}`)'],
+    ['协议之后不带斜杠', 'new WebSocket(`wss:evil.example/${a}`)'],
+    ['用户信息', 'fetch(`//u@evil.example/${a}`)'],
+    ['主机里的百分号编码', 'fetch(`//%65vil.example/${a}`)'],
+    ['全角字符的主机', 'fetch(`//ｅｖｉｌ.example/${a}`)'],
+    ['斜杠中间夹制表符', 'fetch(`/\t/evil.example/${a}`)'],
+    ['插值给出协议、之后是反斜杠', 'fetch(`${p}\\\\\\\\evil.example/x`)'],
+    ['插值给出协议、之后是用户信息', 'fetch(`${p}//u@evil.example/x`)'],
+  ])('违规（复验 RA2）：模板字符串里浏览器会解析成跨源地址的写法：%s', (_case, code) => {
+    const result = scan(code)
+    expect(result.violations.map(v => v.rule)).toEqual(['artifacts/address'])
+    expect([...result.hosts.keys()]).toEqual(['evil.example'])
+  })
+
+  it('合规（复验 RA2）：模板字符串里主机本身是插值的写法，单独计数', () => {
+    const result = scan('fetch(` //${host}/x`);fetch(`\\\\\\\\${host}/x`)')
+    expect(result.violations).toEqual([])
+    expect(result.runtimeHosts).toBe(2)
+  })
+  /* eslint-enable no-template-curly-in-string */
+
+  it.each([
+    ['单标签的主机', 'fetch("//intranet/x")', 'intranet'],
+    ['只有单标签的主机', 'fetch("//intranet")', 'intranet'],
+    ['单标签的主机与默认端口', 'fetch("//nas:443/x")', 'nas'],
+    ['反斜杠与单标签的主机', 'fetch("\\\\\\\\intranet/x")', 'intranet'],
+    ['new URL 的协议相对写法', 'new URL("//evil",location.href)', 'evil'],
+    ['协议之后是反斜杠、单标签的主机', 'fetch("https:\\\\\\\\intranet/x")', 'intranet'],
+    ['协议之后不带斜杠、单标签的主机', 'new WebSocket("wss:intranet/x")', 'intranet'],
+    ['https 页面上跨协议、只有一个斜杠', 'fetch("http:/evil.example/x")', 'evil.example'],
+    ['十进制的 IPv4', 'fetch("//2130706433/x")', '127.0.0.1'],
+  ])('违规（复验 RA3）：不像域名的主机同样会被请求：%s', (_case, code, host) => {
+    const result = scan(code)
+    expect(result.violations.map(v => v.rule)).toEqual(['artifacts/address'])
+    expect([...result.hosts.keys()]).toEqual([host])
+  })
+
+  it.each([
+    ['同协议、不带斜杠（https 页面上是相对地址）', 'fetch("https:evil.example/x")'],
+    ['开头是 U+FEFF（浏览器不去掉，是相对地址）', 'fetch("\\uFEFF//evil.example/x")'],
+    ['正则片段解析出的名字查不到地址', 'const r=`\\\\/*$`;const s="//(.+)"'],
+  ])('合规（复验 RA3）：不是跨源地址：%s', (_case, code) => {
+    expect(rules(code)).toEqual([])
+  })
+
+  it.each([
+    ['url() 里转义的斜杠', 'a{background:url(\\/\\/evil.example/a.png)}'],
+    ['url() 里斜杠加转义的斜杠', 'a{background:url(/\\/evil.example/a.png)}'],
+    ['url() 里两个反斜杠', 'a{background:url(\\\\\\\\evil.example/a.png)}'],
+    ['十六进制的转义', 'a{background:url("\\2f\\2f evil.example/a.png")}'],
+    ['@import 的引号里有前导空格', '@import " //evil.example/a.css";'],
+    ['image-set 的引号里有前导空格', 'a{background-image:image-set(" //evil.example/a.png" 1x)}'],
+    ['https 页面上跨协议、不带斜杠', 'a{background:url(http:evil.example/a.png)}'],
+    ['url() 的引号与空白', 'a{background:url( "//evil.example/a.png" )}'],
+  ])('违规（复验 RA4）：样式里的写法：%s', (_case, css) => {
+    const result = scan(css, 'assets/x.css')
+    expect(result.violations.map(v => v.rule)).toEqual(['artifacts/address'])
+    expect([...result.hosts.keys()]).toEqual(['evil.example'])
+  })
+
+  it.each([
+    ['十六进制的字符引用', '<img src="&#x2f;&#x2f;evil.example/a.png">', 'index.html'],
+    ['命名的字符引用', '<img src="&sol;&sol;evil.example/a.png">', 'index.html'],
+    ['协议里的字符引用', '<img src="https&colon;//evil.example/a.png">', 'index.html'],
+    ['反斜杠', '<img src="\\\\evil.example/a.png">', 'index.html'],
+    ['引号里有前导空格', '<img src=" //evil.example/a.png">', 'index.html'],
+    ['大写的属性名、等号两边有空格', '<img SRC = //evil.example/a.png>', 'index.html'],
+    ['srcset 的第二个候选', '<img src="a.png" srcset="a.png 1x, //evil.example/b.png 2x">', 'index.html'],
+    ['style 属性里的 url()', '<div style="background:url(&quot;//evil.example/a.png&quot;)"></div>', 'index.html'],
+    ['style 元素', '<style>a{background:url(\\/\\/evil.example/a.png)}</style>', 'index.html'],
+    ['meta refresh', '<meta http-equiv="refresh" content="0;url= //evil.example/x">', 'index.html'],
+    ['SVG 的十进制字符引用', '<svg xmlns="http://www.w3.org/2000/svg"><image href="&#47;&#47;evil.example/a.png"/></svg>', 'assets/a.svg'],
+  ])('违规（复验 RA4）：HTML 与 SVG 里的写法：%s', (_case, content, path) => {
+    const result = scan(content, path)
+    expect(result.violations.map(v => v.rule)).toEqual(['artifacts/address'])
+    expect([...result.hosts.keys()].filter(host => host !== 'www.w3.org')).toEqual(['evil.example'])
+  })
+
+  it('合规（复验 RA4）：HTML 里本站的地址与允许清单里的命名空间；同一处不重复计数', () => {
+    const result = scan('<html xmlns="http://www.w3.org/1999/xhtml"><link rel="icon" href="/favicon.ico"><script type="module" src="/assets/index.js"></script></html>', 'index.html')
+    expect(result.violations).toEqual([])
+    expect([...result.hosts]).toEqual([['www.w3.org', 1]])
+  })
+
+  it('违规（复验 RA4）：JSON 里的字符串按值识别', () => {
+    const result = scan('{"endpoint":" //evil.example/x","ok":"/api"}', 'assets/config.json')
+    expect(result.violations.map(v => v.rule)).toEqual(['artifacts/address'])
+    expect([...result.hosts.keys()]).toEqual(['evil.example'])
+  })
+
+  it.each([
+    ['正则片段里的两个斜杠', 'const a="//g";const b="//i"'],
+    ['正则的原文字符串', 'new RegExp("\\\\d+\\\\s*")'],
+    ['相对路径', 'fetch("/api/x");const c="./a//b"'],
+    ['只有协议', 'const p="https:";const q="http:"'],
+    ['拼接用的协议与斜杠', 'const u="https://"+host'],
+  ])('合规：不是跨源地址的写法不误报：%s', (_case, code) => {
+    expect(rules(code)).toEqual([])
+  })
+
   it.each(['Sentry.init({dsn:d})', 'new PostHog()', 'o.license_key="x"', 'o.licenseKey="x"', 'import("@univerjs-pro/license")', 'https://www.googletagmanager.com/gtag/js'])('违规：关键字（不区分大小写）%s', (code) => {
     expect(rules(code)).toContain('artifacts/keyword')
   })
@@ -196,11 +374,125 @@ describe('US-M1-11 A01 产物扫描：外部地址与关键字', () => {
     expect(result.unusedAddresses).toEqual(['http://localhost'])
   })
 
-  it('真实的允许清单：每一项都是合法的绝对地址，写明来源与用途，没有重复', () => {
+  it.each([
+    ['style 属性里两个 url()', '<div style="background:url(http://www.w3.org/2000/svg),url(http://www.w3.org/evil-a1.png)"></div>', 'index.html'],
+    ['srcset 的两个候选', '<img srcset="http://www.w3.org/2000/svg 2x, http://www.w3.org/evil-a2.png 1x">', 'index.html'],
+    ['srcdoc 里的两个 img', '<iframe srcdoc="&lt;img src=http://www.w3.org/2000/svg&gt;&lt;img src=http://www.w3.org/evil-a3.png&gt;"></iframe>', 'index.html'],
+    ['JSON 的一个字符串里两个地址', '{"a":"http://www.w3.org/2000/svg http://www.w3.org/evil-a4"}', 'assets/a.json'],
+    ['两个 xlink:href（第二个用字符引用写斜杠）', '<svg><use xlink:href="http://www.w3.org/2000/svg"/><use xlink:href="http:&#47;&#47;www.w3.org/evil-a5"/></svg>', 'index.html'],
+  ])('违规（复验 TA1）：同一处里允许的地址排在前面，同一来源的其他地址照样核对：%s', (_case, content, path) => {
+    // 整个值当作一个地址时、字符引用让写法匹配多出来的（…/svg&gt）也报出：宁可多报
+    const result = scan(content, path)
+    expect(new Set(result.violations.map(v => v.rule))).toEqual(new Set(['artifacts/address']))
+    expect(result.violations.map(v => v.detail.split(' ')[0])).toContainEqual(expect.stringMatching(/^http:\/\/www\.w3\.org\/evil-a\d(?:\.png)?$/))
+  })
+
+  it.each([
+    ['select 里的 img', '<select><img src=//evil.example/d1.png></select>'],
+    ['select 里 div 的 style', '<select><div style="background:url(//evil.example/d2.png)">x</div></select>'],
+  ])('违规（复验 TA2）：树构建丢掉的开始标签里的地址：%s', (_case, content) => {
+    const result = scan(content, 'index.html')
+    expect(result.violations.map(v => v.rule)).toEqual(['artifacts/address'])
+    expect([...result.hosts.keys()]).toEqual(['evil.example'])
+  })
+
+  it('违规（复验 TA2）：原始文本元素的开始标签被丢掉，之后怎样分词无法确定：直接报出', () => {
+    expect(rules('<select><style>/* <!-- */</style><img src=//evil.example/x.png><!-- --></select>', 'index.html')).toContain('artifacts/markup')
+  })
+
+  it.each([
+    ['style 属性以反斜杠结尾', '<div style="background:url(//evil.example/h1.png\\"></div>', 'index.html'],
+    ['样式文件以反斜杠结尾', 'a{background:url(//evil.example/h2.png\\', 'assets/x.css'],
+    ['url() 里的 NUL', 'a{background:url(//evil.example/n1\0.png)}', 'assets/x.css'],
+  ])('违规（复验 TA3）：按 CSS 的预处理与转义规则认出的地址：%s', (_case, content, path) => {
+    const result = scan(content, path)
+    expect(result.violations.map(v => v.rule)).toEqual(['artifacts/address'])
+    expect([...result.hosts.keys()]).toEqual(['evil.example'])
+  })
+
+  it('违规（复验 TA4）：IPv6 的 [::]', () => {
+    const result = scan('fetch("\\\\\\\\[::]:8080/e3")')
+    expect(result.violations.map(v => v.rule)).toEqual(['artifacts/address'])
+    expect([...result.hosts.keys()]).toEqual(['[::]:8080'])
+  })
+
+  it.each([
+    ['制表符与 ../', 'const a="http://www.w3.org/2000/svg\t/../../evil-c1"', 'assets/index.js', 'http://www.w3.org/evil-c1'],
+    ['空白与别的路径', 'const a="http://www.w3.org/2000/svg (evil-c2)"', 'assets/index.js', 'http://www.w3.org/2000/svg%20(evil-c2)'],
+    ['样式里的 \\9', 'a{b:url("http://www.w3.org/2000/svg\\9/../../evil-c6")}', 'assets/x.css', 'http://www.w3.org/evil-c6'],
+    ['HTML 里的 &#9;', '<img src="http://www.w3.org/2000/svg&#9;/../../evil-c7">', 'index.html', 'http://www.w3.org/evil-c7'],
+  ])('违规（复验 TA5）：允许的地址后面接着浏览器会去掉或编码的字符与别的路径：%s', (_case, content, path, requested) => {
+    const result = scan(content, path)
+    expect(new Set(result.violations.map(v => v.rule))).toEqual(new Set(['artifacts/address']))
+    expect(result.violations.map(v => v.detail.split(' ')[0])).toContain(requested)
+  })
+
+  it.each([
+    ['../ 跳出前缀', 'a="https://support.example.com/docs/../../../evil-c3"', 'https://support.example.com/evil-c3'],
+    ['%2e%2e 跳出前缀', 'a="https://support.example.com/docs/%2e%2e/evil-c4"', 'https://support.example.com/evil-c4'],
+    ['结尾的 ..（复验 UA2）', 'a="https://support.example.com/docs/.."', 'https://support.example.com/'],
+    ['结尾的 %2e.（复验 VA1）', 'a="https://support.example.com/docs/%2e."', 'https://support.example.com/'],
+    ['结尾的 %2E.（复验 VA1）', 'a="https://support.example.com/docs/%2E."', 'https://support.example.com/'],
+  ])('违规（复验 TA5）：前缀按浏览器化简之后的路径比较：%s', (_case, code, requested) => {
+    const prefixed: ArtifactPolicy = { ...policy, allowedAddresses: [{ address: 'https://support.example.com/docs/', prefix: true, source: '样例', reason: '公式帮助的链接' }] }
+    const result = scanArtifacts([{ path: 'assets/editor.js', content: code }], prefixed, { prefixFiles: new Set(['assets/editor.js']) })
+    expect(result.violations.map(v => v.detail.split(' ')[0])).toEqual([requested])
+  })
+
+  it.each([
+    ['结尾的 ..（跳到上一层）', 'const a="http://www.w3.org/2000/svg/.."', 'http://www.w3.org/2000/'],
+    ['结尾的两个句点（路径的一部分）', 'const a="http://www.w3.org/2000/svg.."', 'http://www.w3.org/2000/svg..'],
+  ])('违规（复验 UA2）：结尾的 .. 不当作句末的句点去掉：%s', (_case, code, requested) => {
+    expect(scan(code).violations.map(v => v.detail.split(' ')[0])).toEqual([requested])
+  })
+
+  it.each([
+    ['HTML 里 SVG 的样式被注释拆开', '<svg><style>@import u<!---->rl(//evil.example/b1.css);</style></svg>', 'index.html'],
+    ['SVG 文件的样式被注释拆开', '<svg xmlns="http://www.w3.org/2000/svg"><style>@import u<!---->rl(//evil.example/b3.css);</style></svg>', 'assets/a.svg'],
+    ['SMIL 的 values 按分号分隔', '<svg xmlns="http://www.w3.org/2000/svg"><animate attributeName="href" values="/ok.png;//evil.example/e1.png"/></svg>', 'assets/a.svg'],
+  ])('违规（复验 TA6）：%s', (_case, content, path) => {
+    const result = scan(content, path)
+    expect(result.violations.map(v => v.rule)).toEqual(['artifacts/address'])
+    expect([...result.hosts.keys()].filter(host => host !== 'www.w3.org')).toEqual(['evil.example'])
+  })
+
+  it.each([
+    ['DTD 里定义的实体', '<!DOCTYPE svg [<!ENTITY e "&#47;&#47;evil.example/f1.css">]><svg><style>@import url(&e;);</style></svg>'],
+    ['xml-stylesheet', '<?xml-stylesheet href="&#47;&#47;evil.example/x.css"?><svg/>'],
+    ['格式不正确', '<svg><g></svg>'],
+  ])('违规（复验 TA6）：SVG 文件里门禁无法确定的写法直接报出：%s', (_case, content) => {
+    expect(rules(content, 'assets/a.svg')).toContain('artifacts/markup')
+  })
+
+  it.each([
+    ['HTML 属性', (n: number) => '<img src="http://www.w3.org/2000/svg">'.repeat(n), 'index.html'],
+    ['带地址的 JSON 字符串', (n: number) => JSON.stringify(Array.from({ length: n }).fill('http://www.w3.org/2000/svg')), 'assets/a.json'],
+    ['样式的 url()', (n: number) => 'a{b:url(http://www.w3.org/2000/svg)}'.repeat(n), 'assets/x.css'],
+    ['SVG 样式里的 url()', (n: number) => `<svg><style>${'a{b:url(http://www.w3.org/2000/svg)}'.repeat(n)}</style></svg>`, 'assets/a.svg'],
+  ])('不是平方级（复验 TA7）：%s', (_case, build, path) => {
+    // 取两次里快的一次：机器忙时的垃圾回收不算进去
+    const elapsed = (n: number): number => {
+      const content = build(n)
+      const times = [0, 1].map(() => {
+        const start = performance.now()
+        expect(scan(content, path).violations).toEqual([])
+        return performance.now() - start
+      })
+      return Math.min(...times)
+    }
+    elapsed(2000)
+    // 数量乘 4，耗时远小于乘 16
+    const small = Math.max(elapsed(8000), 5)
+    expect(elapsed(32000) / small).toBeLessThan(10)
+  })
+
+  it('真实的允许清单：每一项都是合法的绝对地址，写明来源与用途，没有重复；前缀至少写到路径的第一段', () => {
     const { allowedAddresses } = ARTIFACT_POLICY
     for (const entry of allowedAddresses) {
       expect(() => new URL(entry.address), entry.address).not.toThrow()
       expect(entry.source.length > 0 && entry.reason.length > 0, entry.address).toBe(true)
+      if (entry.prefix === true)
+        expect(new URL(entry.address).pathname.length, entry.address).toBeGreaterThan(1)
     }
     expect(new Set(allowedAddresses.map(entry => entry.address.toLowerCase())).size).toBe(allowedAddresses.length)
   })

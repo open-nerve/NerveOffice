@@ -18,10 +18,25 @@ const NO_UNIVER_PRO = {
   group: ['@univerjs-pro/*', '@univerjs-pro/**'],
   message: '禁止引入 @univerjs-pro/*（00 号计划书 §3.3）',
 }
+// 依赖一律按包名引用：写成 node_modules 里的路径，按包名生效的限制（Univer、Pro、内部 API、深层路径）都认不出来（审查 B4）
+const NODE_MODULES_PATH_MESSAGE = '按包名引用依赖，不要写 node_modules 里的路径：按包名生效的限制认不出这种路径（审查 B4）'
+const NO_NODE_MODULES_PATH = {
+  regex: String.raw`(?:^|[\/])node_modules(?:[\/]|$)`,
+  message: NODE_MODULES_PATH_MESSAGE,
+}
+// 包名一律小写（npm 的包名本来就不许大写）：写成 @UniverJS/engine-formula 时，按包名生效的限制（Univer 只在编辑器、内部 API、深层路径）都认不出，
+// 而不区分大小写的文件系统（macOS 本机）上类型检查与构建照常通过（复验 TB5）。只看包名这一段，包里的路径不管
+const UPPERCASE_PACKAGE_MESSAGE = '包名写成小写：写成大写时按包名生效的限制认不出，不区分大小写的文件系统上构建照常通过（复验 TB5）'
+const NO_UPPERCASE_PACKAGE = {
+  regex: String.raw`^(?:@[^/]*[A-Z]|@[^/]+/[^/]*[A-Z]|(?![@./#])[^/]*[A-Z])`,
+  caseSensitive: true,
+  message: UPPERCASE_PACKAGE_MESSAGE,
+}
 
 // 动态导入同样受限：no-restricted-imports 只管静态导入与再导出。
 // esquery 的正则字面量里不能出现斜杠，所以用前缀判断
-const antfuRestrictedSyntax = ['TSEnumDeclaration[const=true]', 'TSExportAssignment']
+// import x = require('…') 与 import x = 命名空间.成员：受限导入与模块边界都只认 ES 模块的写法（复验 RB4）
+const antfuRestrictedSyntax = ['TSEnumDeclaration[const=true]', 'TSExportAssignment', 'TSImportEqualsDeclaration']
 const DYNAMIC_IMPORT_LITERAL_ONLY = {
   selector: 'ImportExpression[source.type!=\'Literal\']',
   message: '动态导入的路径必须是字面量，否则受限导入与模块边界都检查不到',
@@ -30,9 +45,90 @@ const DYNAMIC_UNIVER = {
   selector: 'ImportExpression[source.value=/^@univerjs(?!-pro)/]',
   message: '只有 apps/web/src/editor/ 可以引用 @univerjs/*（规范 §1.2）',
 }
+// 类型里的 import('…')（typeof import('@univerjs/x')、import('@univerjs/x').Y）同样是引用：no-restricted-imports 只管导入语句（复验 RB4）
+const TYPE_IMPORT_UNIVER = {
+  selector: 'TSImportType[source.value=/^@univerjs/]',
+  message: '只有 apps/web/src/editor/ 可以引用 @univerjs/*（规范 §1.2）',
+}
 const DYNAMIC_UNIVER_PRO = {
   selector: 'ImportExpression[source.value=/^@univerjs-pro/]',
   message: '禁止引入 @univerjs-pro/*（00 号计划书 §3.3）',
+}
+const DYNAMIC_NODE_MODULES_PATH = {
+  selector: 'ImportExpression[source.value=/node_modules/]',
+  message: NODE_MODULES_PATH_MESSAGE,
+}
+// 动态导入与类型里的 import('…') 的包名同样要小写（复验 TB5）；esquery 的正则字面量里不能出现斜杠，写成 \x2F
+const UPPERCASE_PACKAGE_SOURCE = String.raw`/^(?:@[^\x2F]*[A-Z]|@[^\x2F]+\x2F[^\x2F]*[A-Z]|(?![@.#\x2F])[^\x2F]*[A-Z])/`
+const DYNAMIC_UPPERCASE_PACKAGE = [
+  { selector: `ImportExpression[source.value=${UPPERCASE_PACKAGE_SOURCE}]`, message: UPPERCASE_PACKAGE_MESSAGE },
+  { selector: `TSImportType[source.value=${UPPERCASE_PACKAGE_SOURCE}]`, message: UPPERCASE_PACKAGE_MESSAGE },
+]
+// import.meta.glob 按路径批量导入（构建时展开成导入），受限导入与模块边界都看不到它（复验 SB7）
+const NO_IMPORT_META_GLOB = {
+  selector: 'CallExpression[callee.object.type=\'MetaProperty\'][callee.property.name=/^glob/]',
+  message: '不用 import.meta.glob：它按路径批量导入，受限导入与模块边界都检查不到（复验 SB7）',
+}
+
+// ---- 编辑器适配层的内部 API（P4 设计 §3.6.9，ADR-003、ADR-010）----
+// Facade 之外的 SDK 符号只能经 apps/web/src/editor/internal-api/ 引用，那里逐项登记用途、证据与回归用例。
+// 按包与导入名列出适配层实际用到的内部符号，以及决定不用的（UserManagerService 的 setCurrentUser、本地授权服务：ADR-009）；
+// 命名空间导入、再导出与 import type 同样拦下
+const INTERNAL_API_MESSAGE = '内部 API 只能经 apps/web/src/editor/internal-api/ 引用并登记（P4 设计 §3.6.9）'
+const UNIVER_INTERNAL_SYMBOLS = [
+  { name: '@univerjs/core', importNames: ['AuthzIoLocalService', 'IAuthzIoService', 'LifecycleService', 'UserManagerService'], message: INTERNAL_API_MESSAGE },
+  {
+    name: '@univerjs/engine-formula',
+    importNames: [
+      'BaseFunction',
+      'BaseValueObject',
+      'ErrorType',
+      'ErrorValueObject',
+      'FormulaExecutedStateType',
+      'IActiveDirtyManagerService',
+      'IFunctionService',
+      'SetFormulaCalculationNotificationMutation',
+      'SetFormulaCalculationResultMutation',
+      'SetFormulaCalculationStartMutation',
+      'SetFormulaCalculationStopMutation',
+      'SetTriggerFormulaCalculationStartMutation',
+    ],
+    message: INTERNAL_API_MESSAGE,
+  },
+  { name: '@univerjs/sheets', importNames: ['SetRangeValuesMutation'], message: INTERNAL_API_MESSAGE },
+]
+// 取服务的注入器：Univer.__getInjector()，以及 Univer、Facade 与各个对象上的私有字段 _injector（复验 RB4：
+// 方括号访问私有字段能通过类型检查，拿到的是同一个注入器）。点号访问、按标识符解构都算；这两个名字的字符串
+// （方括号访问、字符串的键解构、Reflect.get 等）与不带插值的模板字符串同样拦下（审查 B4）。
+// 对象字面量里用标识符写的同名属性不算，测试的假实现要定义它。变量作键、字符串拼接之类的写法 lint 看不出来，由代码审查保证
+// eslint-disable-next-line no-restricted-syntax -- 规则本身要写出这两个名字
+const INJECTOR_NAMES = ['__getInjector', '_injector'] as const
+const NO_GET_INJECTOR = INJECTOR_NAMES.flatMap(name => [
+  { selector: `MemberExpression[property.name='${name}']`, message: INTERNAL_API_MESSAGE },
+  { selector: `ObjectPattern > Property[key.name='${name}']`, message: INTERNAL_API_MESSAGE },
+  { selector: `Literal[value='${name}']`, message: INTERNAL_API_MESSAGE },
+  { selector: `TemplateElement[value.cooked='${name}']`, message: INTERNAL_API_MESSAGE },
+])
+// 包名带查询串或片段（@univerjs/engine-formula?x）：按包名与导入名的限制都认不出，构建照常打包（复验 SB7）
+const UNIVER_QUERY_IMPORTS = {
+  regex: String.raw`^@univerjs/[^?#]*[?#]`,
+  message: '引用 @univerjs/* 不带查询串与片段：按包名与导入名的限制认不出这种写法（复验 SB7）',
+}
+// Univer 的包都用 "./*" 导出了整个目录：按导入名的限制只认包的入口，深层路径拿得到同一批符号。
+// 只允许包的入口、/facade、/locale/<语言> 与 /lib/index.css（样式）
+const UNIVER_DEEP_IMPORTS = {
+  regex: String.raw`^@univerjs/[^/]+/(?!(?:facade|locale/[\w-]+|lib/index\.css)$)`,
+  message: '只引用 @univerjs/* 的包入口、/facade、/locale/<语言> 与 /lib/index.css：包里的深层路径绕得过内部 API 的限制（P4 设计 §3.6.9）',
+}
+// 动态导入绕得过按导入名的限制：编辑器里的 @univerjs/* 一律静态导入
+const EDITOR_DYNAMIC_UNIVER = {
+  selector: 'ImportExpression[source.value=/^@univerjs/]',
+  message: '编辑器里的 @univerjs/* 用静态导入：内部 API 与深层路径的限制只认静态导入（P4 设计 §3.6.9）',
+}
+// 类型里的 import('…') 同样绕得过：编辑器里的 @univerjs/* 类型用 import type 引用（复验 RB4）
+const EDITOR_TYPE_IMPORT_UNIVER = {
+  selector: 'TSImportType[source.value=/^@univerjs/]',
+  message: '编辑器里的 @univerjs/* 类型用 import type 引用：内部 API 与深层路径的限制只认导入语句（复验 RB4）',
 }
 
 // 测试与测试辅助只被测试静态引用：nerve/test-code-only-in-tests 按路径拦下的是静态导入，动态导入在这里拦（复验 R3）
@@ -41,7 +137,9 @@ const DYNAMIC_TEST_MODULES = {
   selector: String.raw`ImportExpression[source.value=/\.test(?:-support)?(?:\.[cm]?[jt]sx?)?(?:[?#].*)?$/i]`,
   message: '不要动态导入测试与测试辅助（*.test.*、*.test-support.*）：它们只被测试静态引用，不进入生产代码（审查 B17）',
 }
-const BASE_RESTRICTED_SYNTAX = [...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER, DYNAMIC_UNIVER_PRO, DYNAMIC_TEST_MODULES]
+const BASE_RESTRICTED_SYNTAX = [...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER, TYPE_IMPORT_UNIVER, DYNAMIC_UNIVER_PRO, DYNAMIC_NODE_MODULES_PATH, ...DYNAMIC_UPPERCASE_PACKAGE, NO_IMPORT_META_GLOB, DYNAMIC_TEST_MODULES, ...NO_GET_INJECTOR]
+/** 编辑器适配层：可以静态导入 Univer 的包，但不能引用 Pro */
+const EDITOR_RESTRICTED_SYNTAX = [...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER_PRO, DYNAMIC_NODE_MODULES_PATH, ...DYNAMIC_UPPERCASE_PACKAGE, NO_IMPORT_META_GLOB, DYNAMIC_TEST_MODULES, EDITOR_DYNAMIC_UNIVER, EDITOR_TYPE_IMPORT_UNIVER]
 
 // 前端应用的入口（entries/*/main.{ts,tsx}，ADR-008）：按顺序执行的几步，第一步关掉 zod 的 JIT。
 // zod 在创建结构时就读取 jitless，contracts 的结构在模块求值时创建，所以设置它的模块必须最先执行（审查 B1）。
@@ -190,6 +288,8 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
   const patterns = [
     UNIVER_ONLY_IN_EDITOR,
     NO_UNIVER_PRO,
+    NO_NODE_MODULES_PATH,
+    NO_UPPERCASE_PACKAGE,
     API_RELATIVE_JS_EXTENSION,
     API_NEST_DEEP_IMPORTS,
     ...(kind.databaseLibraries === true ? [] : [API_DATABASE_LIBRARIES]),
@@ -285,8 +385,10 @@ export default antfu(
       'no-console': ['error', {}],
       'unicorn/filename-case': ['error', { case: 'kebabCase' }],
       'react/dom-no-dangerously-set-innerhtml': 'error',
-      'no-restricted-imports': ['error', { patterns: [UNIVER_ONLY_IN_EDITOR, NO_UNIVER_PRO] }],
+      'no-restricted-imports': ['error', { patterns: [UNIVER_ONLY_IN_EDITOR, NO_UNIVER_PRO, NO_NODE_MODULES_PATH, NO_UPPERCASE_PACKAGE] }],
       'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX],
+      // 三斜杠引用（/// <reference path|types|lib>）绕得过受限导入与模块边界：类型经 import type 或 tsconfig 的 types 引用（复验 RB4）
+      'ts/triple-slash-reference': ['error', { path: 'never', types: 'never', lib: 'never' }],
     },
   },
   {
@@ -299,11 +401,21 @@ export default antfu(
     },
   },
   {
+    // 编辑器适配层可以引用 @univerjs/*，内部 API 除外：它们只能经 internal-api/ 引用（下一块）
     name: 'nerve/editor-may-import-univer',
     files: ['apps/web/src/editor/**'],
     rules: {
-      'no-restricted-imports': ['error', { patterns: [NO_UNIVER_PRO] }],
-      'no-restricted-syntax': ['error', ...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER_PRO, DYNAMIC_TEST_MODULES],
+      'no-restricted-imports': ['error', { paths: UNIVER_INTERNAL_SYMBOLS, patterns: [NO_UNIVER_PRO, NO_NODE_MODULES_PATH, NO_UPPERCASE_PACKAGE, UNIVER_QUERY_IMPORTS, UNIVER_DEEP_IMPORTS] }],
+      'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX, ...NO_GET_INJECTOR],
+    },
+  },
+  {
+    // 内部 API 的唯一出口（P4 设计 §3.6.9）：这里可以引用受限的内部符号、调用 __getInjector，导出的每一项都要登记（registry.ts）
+    name: 'nerve/editor-internal-api',
+    files: ['apps/web/src/editor/internal-api/**'],
+    rules: {
+      'no-restricted-imports': ['error', { patterns: [NO_UNIVER_PRO, NO_NODE_MODULES_PATH, NO_UPPERCASE_PACKAGE, UNIVER_QUERY_IMPORTS, UNIVER_DEEP_IMPORTS] }],
+      'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX],
     },
   },
   // 后端：先是所有文件的限制，后面的块按文件类型放开各自需要的部分（后面的块覆盖前面的同名规则）
@@ -422,8 +534,16 @@ export default antfu(
             from: { element: { type: 'web-entry' } },
             allow: { to: [
               { element: { type: ['web-app', 'web-shared'] } },
-              { element: { type: ['web-feature', 'web-editor', 'contracts'], fileInternalPath: PUBLIC_ENTRY } },
+              { element: { type: ['web-feature', 'contracts'], fileInternalPath: PUBLIC_ENTRY } },
             ] },
+          },
+          // 编辑器适配层只由编辑器页的入口与编辑器页（sheet-editor 功能）引用，而且只经它的公开入口（P4 设计 §3.1）
+          {
+            from: [
+              { element: { type: 'web-entry', captured: { entry: 'editor' } } },
+              { element: { type: 'web-feature', captured: { feature: 'sheet-editor' } } },
+            ],
+            allow: { to: { element: { type: 'web-editor', fileInternalPath: PUBLIC_ENTRY } } },
           },
           {
             from: { element: { type: 'web-app' } },
@@ -474,6 +594,17 @@ export default antfu(
             from: { element: { type: 'web-entry', captured: { entry: 'platform' } } },
             disallow: { to: { element: { type: 'web-editor' } } },
             message: '平台页面的入口不得引用编辑器，编辑器不进入平台页面的包（规范 §1.2）',
+          },
+          // 编辑器页带着 Univer：只由编辑器页的入口组合，平台的应用层、其他入口与其他功能都不引用它（P4 设计 §3.1；门禁 budgets 另外兜底）。
+          // 放在允许的策略之后，覆盖"功能模块之间经公开入口"的允许；同一个功能内部的引用不经过这条检查
+          {
+            from: [
+              { element: { type: 'web-app' } },
+              { element: { type: 'web-entry', captured: { entry: '!editor' } } },
+              { element: { type: 'web-feature' } },
+            ],
+            disallow: { to: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' } } } },
+            message: '编辑器页（features/sheet-editor）只由编辑器页的入口引用：它带着 Univer，平台页面的包里不能有它（P4 设计 §3.1）',
           },
         ],
       }],

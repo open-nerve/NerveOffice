@@ -1,5 +1,5 @@
 import type { ArtifactPolicy } from './artifacts.ts'
-import type { EntryBudget } from './budgets.ts'
+import type { EntryBudget, WorkerBudget } from './budgets.ts'
 // 门禁的策略数据（规范 §3，00 号计划书 §3.3）。每一项的新增与放宽都要写明原因，经代码审查。
 
 /** 包管理配置的底线。 */
@@ -21,9 +21,12 @@ export interface LicenseException {
 
 export const LICENSE_EXCEPTIONS: readonly LicenseException[] = []
 
-/** Univer 的版本基线（00 号计划书 §3.2）：协调发布的包同一个版本，独立发版的包按清单核对。 */
+/**
+ * Univer 的版本基线（00 号计划书 §3.2）：协调发布的包同一个版本，独立发版的包按清单核对。
+ * 1.0.1 与 1.0.0 的产物相同（内嵌的版本号除外）；1.0.0 的一部分包没有来源证明，过不了 trustPolicy（M1-P4）。
+ */
 export const UNIVER_POLICY = {
-  version: '1.0.0',
+  version: '1.0.1',
   independent: { '@univerjs/icons': '1.43.0' } as Readonly<Record<string, string>>,
 }
 
@@ -69,12 +72,31 @@ export const ARTIFACT_POLICY: ArtifactPolicy = {
     { address: 'http://json-schema.org/draft-07/schema#', source: 'zod', reason: 'z.toJSONSchema() 写进 $schema 的标识（draft-07）' },
     { address: 'http://json-schema.org/draft-04/schema#', source: 'zod', reason: 'z.toJSONSchema() 写进 $schema 的标识（draft-04）' },
     { address: 'https://tailwindcss.com', source: 'tailwindcss', reason: '样式文件开头的许可注释' },
+    // ---- 表格编辑器（M1-P4，Univer 1.0.1 与它的依赖；只出现在编辑器页与公式 Worker 的产物里）----
+    { address: 'https://support.microsoft.com/zh-cn/excel/functions/', prefix: true, source: '@univerjs/engine-formula', reason: '公式说明（中文）里的"教学"链接，约 500 条：显示在公式帮助里，用户点击时在新窗口打开，页面不请求' },
+    { address: 'https://support.google.com/docs/answer/', prefix: true, source: '@univerjs/engine-formula', reason: '同上：没有微软文档的函数用 Google 表格的帮助页' },
+    { address: 'https://www.wps.cn/learning/course/detail/id/340.html?chan=pc_kdocs_function', source: '@univerjs/engine-formula', reason: '同上：一个函数的帮助页' },
+    { address: 'https://univer.ai/', source: '@univerjs/engine-formula', reason: '公式参数说明里的示例值（HYPERLINK 等），只是显示的文字' },
+    { address: 'https://github.com/dream-num.png', source: '@univerjs/engine-formula', reason: 'IMAGE 参数说明里的示例值，只是显示的文字；IMAGE 只接受平台地址（P4 设计 §3.6.7）' },
+    { address: 'https://example.com/api', source: '@univerjs/engine-formula', reason: 'WEBSERVICE 参数说明里的示例值，只是显示的文字' },
+    { address: 'https://redi.wzhu.dev/docs/faq#could-not-find-dependency-registered-on', source: '@wendellhu/redi', reason: '依赖注入出错时错误信息里的说明链接' },
+    { address: 'https://redi.wzhu.dev/en-US/docs/faq#import-scripts-of-redi-more-than-once', source: '@wendellhu/redi', reason: '同上：重复加载时的错误信息' },
+    { address: 'http://sharejs.org/types/text-unicode', source: 'ot-text-unicode', reason: '协同编辑的操作类型的标识（uri 字段），不请求' },
+    { address: 'http://sharejs.org/types/JSONv1', source: 'ot-json1', reason: '同上' },
+    { address: 'https://github.com/dream-num/univer#text-x', source: '@univerjs/core', reason: '同上：Univer 自己的操作类型的标识' },
+    { address: 'https://github.com/dream-num/univer#json-x', source: '@univerjs/core', reason: '同上' },
+    { address: 'https://github.com/MikeMcl/decimal.js', source: 'decimal.js', reason: '许可注释' },
+    { address: 'https://universheet.net/docs/Canvas.html', source: '@univerjs/engine-render', reason: '画布取不到数据地址时错误信息里的说明链接' },
+    { address: 'http://localhost:5173', source: '@univerjs/core', reason: 'isLegalUrl 把以它开头的字符串当作合法地址（SDK 开发时的遗留），只做字符串比较，页面不请求；键入这样的文字会像其他网址一样被自动识别为链接（DEF-019、DEF-021）' },
+    { address: 'http://www.w3.org/TR/REC-html40', source: '@univerjs/ui、@univerjs/sheets-ui、@univerjs/docs-ui', reason: '复制到剪贴板的 HTML 里 Excel 用的命名空间（xmlns）' },
+    { address: 'http://www.w3.org/1999/xhtml', source: '@univerjs/sheets-ui', reason: 'XHTML 的命名空间' },
+    { address: 'https://example.com/a-b.svg', source: '@univerjs/design 的样式', reason: '样式里一个生成出来却没有元素使用的背景图工具类（univer-bg-[url(…)]）；万一用到，CSP 的 img-src 只允许本站' },
   ],
   /**
    * `Function('return this')()` 这类全局对象探测的次数上限。
-   * M0 在 Univer 的产物里见过 3 处（lodash），运行时会被短路（M0-P1 报告 §2）。
+   * M0 在 Univer 的产物里见过 3 处（lodash），运行时会被短路（M0-P1 报告 §2）；M1-P4 的实际产物是 2 处（编辑器页与公式 Worker 各一处）。
    */
-  globalThisProbeMax: 3,
+  globalThisProbeMax: 2,
   /**
    * 已登记的动态代码（P3 设计 §3.7，审查 B3）：都来自 zod 4 的 JIT。
    * zod 在创建对象结构时读取 jitless；前端入口第一个引入的模块就设置 jitless（ADR-008），在任何结构创建之前，
@@ -115,4 +137,16 @@ export const AUDIT_EXCEPTIONS: readonly AuditException[] = []
  */
 export const ENTRY_BUDGETS: readonly EntryBudget[] = [
   { entry: 'index.html', label: '平台页面', maxGzipBytes: 180 * 1024, reason: 'M1-P3 收尾时门禁实测 147.7 KiB，预算比实测多约 22%' },
+  { entry: 'editor.html', label: '表格编辑器页', maxGzipBytes: 2350 * 1024, reason: 'M1-P4：生产档案 sheet@1 实测 1991 KiB（Univer 约占九成，与 M0 候选档案的 1.93–1.96 MiB 相当），预算比实测多约 18%' },
 ]
+
+/** 入口在启动时就创建的 Worker（P4 设计 §3.9）：Worker 脚本随页面加载下载，另列一项。 */
+export const WORKER_BUDGETS: readonly WorkerBudget[] = [
+  { entry: 'editor.html', worker: 'formula.worker', label: '公式 Worker', maxGzipBytes: 800 * 1024, reason: 'M1-P4：实测 673 KiB，预算比实测多约 19%' },
+]
+
+/** 平台页面的入口：它的产物（含与编辑器页共用的块）里的地址只按具体地址放行 */
+export const PLATFORM_ENTRIES: readonly string[] = ['index.html']
+
+/** 编辑器页的入口：它能加载到的产物与它创建的 Worker 里，地址可以按 ARTIFACT_POLICY 的前缀登记放行 */
+export const EDITOR_ENTRIES: readonly string[] = ['editor.html']

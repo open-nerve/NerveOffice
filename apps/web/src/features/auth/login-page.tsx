@@ -1,13 +1,33 @@
 import type { SyntheticEvent } from 'react'
+import { documentIdFromPagePath } from '@nerve-office/contracts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { Navigate, useNavigate, useSearchParams } from 'react-router'
 import { describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { redirectTarget } from '../../shared/lib/login-path.ts'
+import { usePageLocation } from '../../shared/lib/page-location.ts'
 import { Alert, AlertDescription, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label } from '../../shared/ui/index.ts'
-import { redirectTarget } from './login-path.ts'
 import { SessionCheck } from './session-check.tsx'
 import { login, SESSION_QUERY_KEY, sessionQueryOptions, STARTS_SESSION } from './session.ts'
+
+/** 登录后要去的是编辑器页：它是另一个入口，要整页打开，不能在平台页面的路由里切换（P4 设计 §3.8）。 */
+function opensEditorPage(target: string): boolean {
+  return documentIdFromPagePath(new URL(target, window.location.origin).pathname) !== undefined
+}
+
+/** 整页打开另一个入口的页面，只打开一次（开发模式的 StrictMode 会把副作用执行两遍）；打开之前显示骨架屏。 */
+function OpenPage({ url }: { url: string }) {
+  const page = usePageLocation()
+  const openedRef = useRef(false)
+  useEffect(() => {
+    if (!openedRef.current) {
+      openedRef.current = true
+      page.replace(url)
+    }
+  }, [page, url])
+  return <SessionCheck />
+}
 
 /** 登录页（US-M1-02）：已登录时直接回去；错误分别提示；提交中不能重复提交。 */
 export function LoginPage() {
@@ -20,18 +40,21 @@ export function LoginPage() {
   const usernameId = useId()
   const passwordId = useId()
   const target = redirectTarget(params.get('from'))
+  const toEditor = opensEditorPage(target)
   const mutation = useMutation({
     mutationFn: login,
     // 登录成功由请求缓存的全局处理通知其他标签页（app/runtime.ts）
     meta: STARTS_SESSION,
     onSuccess: (data) => {
       queryClient.setQueryData(SESSION_QUERY_KEY, data)
-      void navigate(target, { replace: true })
+      // 编辑器页由下面的 OpenPage 整页打开
+      if (!toEditor)
+        void navigate(target, { replace: true })
     },
   })
 
   if (session.data !== undefined && !mutation.isPending)
-    return <Navigate to={target} replace />
+    return toEditor ? <OpenPage url={target} /> : <Navigate to={target} replace />
   // 还在确认是否已经登录：先不显示表单，免得已登录的人看到它闪一下（审查 B14）
   if (session.isPending)
     return <SessionCheck />

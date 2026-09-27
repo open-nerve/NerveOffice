@@ -3,7 +3,7 @@ import type { LoginRequest, SessionResponse } from '@nerve-office/contracts'
 import { sessionResponseSchema } from '@nerve-office/contracts'
 import { queryOptions } from '@tanstack/react-query'
 import { z } from 'zod'
-import { apiRequest, setCsrfToken } from '../../shared/api/index.ts'
+import { apiRequest, requestSession, setCsrfToken } from '../../shared/api/index.ts'
 
 export const SESSION_QUERY_KEY = ['auth', 'session'] as const
 
@@ -17,11 +17,6 @@ export const HANDLES_AUTHENTICATION = { handlesAuthentication: true } as const
 export const STARTS_SESSION = { handlesAuthentication: true, session: 'starts' } as const
 /** 退出：成功，或者会话本来就不在了（401），都算退出了 */
 export const ENDS_SESSION = { session: 'ends' } as const
-
-/** 向服务端要现在的会话，不改动请求层的 CSRF 令牌：调用方确认是同一个人之后才用它的令牌（复验 S2）。 */
-export async function requestSession(signal?: AbortSignal): Promise<SessionResponse> {
-  return apiRequest('/api/auth/session', { schema: sessionResponseSchema, signal })
-}
 
 /** 会话查询用：拿到会话就把它的 CSRF 令牌交给请求层。 */
 export async function fetchSession(signal?: AbortSignal): Promise<SessionResponse> {

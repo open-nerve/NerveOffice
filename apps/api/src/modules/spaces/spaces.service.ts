@@ -9,6 +9,11 @@ export interface CreateOptions {
   transaction?: Transaction
 }
 
+export interface QueryOptions {
+  /** 在调用方的事务里查询：事务已经占着一个连接，不再从连接池另取一个（连接池耗尽时互相等待） */
+  transaction?: Transaction
+}
+
 /** 空间（P3 设计 §3.6）：M1 只有个人空间，每人一个，只有所有者可见。 */
 @Injectable()
 export class SpacesService {
@@ -25,7 +30,7 @@ export class SpacesService {
     return this.repository.findPersonalByOwner(userId)
   }
 
-  async isOwner(userId: string, spaceId: string): Promise<boolean> {
-    return this.repository.isOwner(userId, spaceId)
+  async isOwner(userId: string, spaceId: string, options: QueryOptions = {}): Promise<boolean> {
+    return this.repository.isOwner(userId, spaceId, options.transaction)
   }
 }
