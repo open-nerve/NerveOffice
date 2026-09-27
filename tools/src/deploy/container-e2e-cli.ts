@@ -4,11 +4,11 @@
 // 2. 构建镜像（标签带本进程的进程号）；起 db、migrate、app、caddy（compose 按依赖的条件依次等待）；等经 Caddy 的存活探针通过；
 // 3. 两个客户端地址的核对（DEF-014）；
 // 4. 以外部模式运行 E2E（E2E 的管理员由 Playwright 的全局准备经编排初始化，tests/e2e/support/external-setup.ts）；
-// 5. 打印镜像体积与应用容器的内存（空闲、跑完 E2E 之后，ADR-001）；
+// 5. 打印镜像体积与应用容器的内存（空闲、E2E 期间每 2 秒取样的峰值、跑完之后，ADR-001）；
 // 6. 无论成败，把各容器的日志收集到 tests/e2e/test-results/container/，然后 down -v、去掉这次的镜像标签、删除临时目录。
 import type { AddressInfo } from 'node:net'
 import type { ContainerE2eSettings } from './container-e2e.ts'
-import { spawnSync } from 'node:child_process'
+import { execFile, spawn, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import https from 'node:https'
@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
+import { promisify } from 'node:util'
 import { z } from 'zod'
 import { readJson, REPO_ROOT } from '../shared/repo.ts'
 import {
@@ -25,7 +26,8 @@ import {
   composeArgs,
   createSettings,
   IMAGE_PREFIX,
-  memoryUsage,
+  mebibytes,
+  memoryBytes,
   parseAuditAddresses,
   playwrightEnvironment,
   PROJECT_PREFIX,
@@ -175,10 +177,63 @@ async function checkClientAddresses(settings: ContainerE2eSettings): Promise<str
   return [...problems, ...clientAddressProblems({ host: addresses.get(ids.host), network: addresses.get(ids.network), proxy })]
 }
 
-function reportMemory(settings: ContainerE2eSettings, moment: string): void {
-  const app = capture('docker', composeArgs(settings, 'ps', '-q', 'app')).stdout.trim()
-  const stats = capture('docker', ['stats', '--no-stream', '--format', '{{.MemUsage}}', app]).stdout.trim()
-  log(`应用容器的内存（${moment}）：${memoryUsage(stats)}`)
+const execFileAsync = promisify(execFile)
+/** E2E 期间取样应用容器内存的间隔 */
+const MEMORY_SAMPLE_INTERVAL_MS = 2_000
+
+/** 应用容器的 id：重启用例用 kill 与 start，容器还是同一个 */
+function appContainer(settings: ContainerE2eSettings): string {
+  return capture('docker', composeArgs(settings, 'ps', '--all', '-q', 'app')).stdout.trim()
+}
+
+async function memoryOf(container: string): Promise<number | undefined> {
+  try {
+    return memoryBytes((await execFileAsync('docker', ['stats', '--no-stream', '--format', '{{.MemUsage}}', container])).stdout)
+  }
+  catch {
+    // 容器正被重启用例强制结束
+    return undefined
+  }
+}
+
+function formatMemory(bytes: number | undefined): string {
+  return bytes === undefined ? '（没有取到）' : mebibytes(bytes)
+}
+
+/**
+ * 以外部模式运行 E2E，期间每 2 秒取样应用容器的内存，返回退出码与峰值。
+ * 异步执行：同步执行时事件循环停住，取样的定时器不会触发
+ */
+async function runE2e(settings: ContainerE2eSettings, browsers: readonly string[], playwrightArgs: readonly string[]): Promise<{ status: number, peak: number | undefined }> {
+  const container = appContainer(settings)
+  let peak: number | undefined
+  let sampling = false
+  const timer = setInterval(() => {
+    if (sampling)
+      return
+    sampling = true
+    void memoryOf(container).then((bytes) => {
+      if (bytes !== undefined)
+        peak = Math.max(peak ?? 0, bytes)
+    }).finally(() => {
+      sampling = false
+    })
+  }, MEMORY_SAMPLE_INTERVAL_MS)
+  try {
+    const status = await new Promise<number>((resolve) => {
+      const child = spawn('pnpm', ['--filter', '@nerve-office/e2e', 'run', 'test', ...playwrightArgs], {
+        cwd: REPO_ROOT,
+        env: { ...process.env, ...playwrightEnvironment(settings, browsers) },
+        stdio: 'inherit',
+      })
+      child.once('error', () => resolve(1))
+      child.once('exit', code => resolve(code ?? 1))
+    })
+    return { status, peak }
+  }
+  finally {
+    clearInterval(timer)
+  }
 }
 
 function collectLogs(settings: ContainerE2eSettings): void {
@@ -220,13 +275,14 @@ async function main(): Promise<number> {
     }
     // docker image ls 的体积是解压之后的：inspect 的 Size 在 containerd 的镜像存储里是压缩之后的，两种存储不一致
     log(`镜像体积（解压之后）：${capture('docker', ['image', 'ls', '--format', '{{.Size}}', settings.image]).stdout.trim()}`)
-    reportMemory(settings, '空闲')
+    log(`应用容器的内存（空闲）：${formatMemory(await memoryOf(appContainer(settings)))}`)
     if (interrupted)
       return 1
 
     log(`以外部模式运行 E2E（浏览器 ${browsers.join('、')}）`)
-    const status = run('pnpm', ['--filter', '@nerve-office/e2e', 'run', 'test', ...playwrightArgs], { ...process.env, ...playwrightEnvironment(settings, browsers) })
-    reportMemory(settings, '跑完 E2E 之后')
+    const { status, peak } = await runE2e(settings, browsers, playwrightArgs)
+    // 重启用例最后执行、会重启应用：跑完之后量到的是重启过的进程，峰值才反映 E2E 期间的占用
+    log(`应用容器的内存：E2E 期间的峰值 ${formatMemory(peak)}，跑完之后 ${formatMemory(await memoryOf(appContainer(settings)))}`)
     return status
   }
   finally {

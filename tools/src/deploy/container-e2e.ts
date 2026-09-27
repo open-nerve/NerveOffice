@@ -149,7 +149,16 @@ export function clientAddressProblems(observed: ObservedAddresses): string[] {
   return problems
 }
 
-/** docker stats 的内存用量（"45.2MiB / 7.66GiB"）里容器用了多少 */
-export function memoryUsage(stats: string): string {
-  return stats.split('/')[0]?.trim() ?? ''
+const MEMORY_UNITS: Readonly<Record<string, number>> = { B: 1, KiB: 1024, MiB: 1024 ** 2, GiB: 1024 ** 3, kB: 1e3, KB: 1e3, MB: 1e6, GB: 1e9 }
+
+/** docker stats 的内存用量（"45.2MiB / 7.66GiB"）→ 容器用了多少字节；读不出来时是 undefined */
+export function memoryBytes(stats: string): number | undefined {
+  const match = /^\s*(\d+(?:\.\d+)?)\s*([A-Z]+)\s*\//i.exec(stats)
+  const unit = match?.[2] === undefined ? undefined : MEMORY_UNITS[match[2]]
+  return match?.[1] === undefined || unit === undefined ? undefined : Number(match[1]) * unit
+}
+
+/** 字节数 → MiB，保留一位小数 */
+export function mebibytes(bytes: number): string {
+  return `${(bytes / 1024 ** 2).toFixed(1)} MiB`
 }

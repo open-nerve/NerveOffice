@@ -4,7 +4,8 @@ import {
   composeArgs,
   createSettings,
   databaseUrl,
-  memoryUsage,
+  mebibytes,
+  memoryBytes,
   parseAuditAddresses,
   playwrightEnvironment,
   publicOrigin,
@@ -96,8 +97,14 @@ describe('两个客户端地址的核对（DEF-014）', () => {
 })
 
 describe('docker 输出的解析', () => {
-  it('内存用量取斜线之前的部分', () => {
-    expect(memoryUsage('45.2MiB / 7.66GiB')).toBe('45.2MiB')
-    expect(memoryUsage('')).toBe('')
+  it('内存用量取斜线之前的部分，按单位换成字节；读不出来时是 undefined', () => {
+    expect(memoryBytes('45.5MiB / 7.66GiB')).toBe(45.5 * 1024 ** 2)
+    expect(memoryBytes('1.5GiB / 7.66GiB')).toBe(1.5 * 1024 ** 3)
+    expect(memoryBytes('512kB / 1GB')).toBe(512_000)
+    expect(memoryBytes('0B / 0B')).toBe(0)
+    expect(memoryBytes('')).toBeUndefined()
+    expect(memoryBytes('--')).toBeUndefined()
+    expect(memoryBytes('12parsecs / 1GB')).toBeUndefined()
+    expect(mebibytes(200.25 * 1024 ** 2)).toBe('200.3 MiB')
   })
 })
