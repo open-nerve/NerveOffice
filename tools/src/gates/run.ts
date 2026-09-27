@@ -8,11 +8,13 @@ import { join, relative } from 'node:path'
 import process from 'node:process'
 import { gzipSync } from 'node:zlib'
 import { z } from 'zod'
-import { commandJson, packageName, readJson, readText, readWorkspaceConfig, REPO_ROOT, workspacePackageDirs } from '../shared/repo.ts'
+import { API_PACKAGE, missingTexts, SERVER_LICENSE_SUPPLEMENT, serverPackages } from '../deploy/server-licenses.ts'
+import { commandJson, listFiles, packageName, readJson, readText, readWorkspaceConfig, REPO_ROOT, workspacePackageDirs } from '../shared/repo.ts'
 import { checkStories, parseDesignStoryIds, parseRegistry, testsFromPlaywrightList, testsFromVitestList } from '../stories/stories.ts'
 import { checkFileTypes, checkTestOnlyArtifacts, classifyArtifact, scanArtifacts } from './artifacts.ts'
 import { checkAudit } from './audit.ts'
 import { checkBudgets, entryWorkers, reachableFiles, viteManifestSchema, workerClosure } from './budgets.ts'
+import { checkContainerImages } from './container-images.ts'
 import { checkGraphComplete, checkSingletons, checkUniver, checkUniverCatalog, collectInstalled } from './dependency-graph.ts'
 import { bundledPackagesSchema, checkLicenseBundle } from './license-bundle.ts'
 import { checkDevelopmentLicenses, checkProductionLicenses, flattenLicenseReport, licensesByPath } from './licenses.ts'
@@ -61,11 +63,28 @@ function productionDependencyGraph(): CollectedGraph {
   return productionGraph
 }
 
+/** 引用容器镜像的文件：deploy 下的 Dockerfile 与编排文件，CI 的工作流 */
+function containerImageFiles(): { path: string, content: string }[] {
+  const paths = [
+    ...listFiles('deploy', path => /(?:^|\/)(?:Dockerfile(?:\.[\w-]+)?|compose(?:\.[\w-]+)?\.ya?ml)$/.test(path)),
+    ...listFiles(join('.github', 'workflows'), path => /\.ya?ml$/.test(path)),
+  ]
+  return paths.map(path => ({ path, content: readText(path) }))
+}
+
 function pins(): GateOutcome {
   const config = readWorkspaceConfig()
   const paths = ['package.json', ...workspacePackageDirs(config).map(dir => join(dir, 'package.json'))]
   const manifests = paths.map(path => ({ path, json: manifestSchema.parse(readJson(path)) }))
-  return { name: 'pins', title: '精确版本', violations: checkPins(manifests, { default: config.catalog, ...config.catalogs }), notes: [`${manifests.length} 个 package.json，目录里 ${Object.keys(config.catalog).length} 个依赖`] }
+  const packageManager = manifests.find(item => item.path === 'package.json')?.json.packageManager ?? ''
+  const images = containerImageFiles()
+  const imagePolicy = { nodeVersion: readText('.node-version').trim(), pnpmVersion: /^pnpm@([^+]+)/.exec(packageManager)?.[1] ?? '' }
+  return {
+    name: 'pins',
+    title: '精确版本',
+    violations: [...checkPins(manifests, { default: config.catalog, ...config.catalogs }), ...checkContainerImages(images, imagePolicy)],
+    notes: [`${manifests.length} 个 package.json，目录里 ${Object.keys(config.catalog).length} 个依赖；${images.length} 个文件引用容器镜像`],
+  }
 }
 
 function config(): GateOutcome {
@@ -121,14 +140,25 @@ function licenses(): GateOutcome {
   const report = licenseReportSchema.parse(commandJson('pnpm', ['licenses', 'list', '--json']))
   const all = flattenLicenseReport(report)
   const notInstalled = graph.installed.filter(item => !existsSync(item.path)).length
+  // 服务端的许可清单随镜像生成（P5 设计 §3.2.1）：这里提前核对每个包都有许可正文，不必等到构建镜像
+  const server = serverPackages(collectInstalled(lsOutputSchema.parse(commandJson('pnpm', ['ls', '--prod', '--json', '--depth', 'Infinity', '--filter', API_PACKAGE]))), SERVER_LICENSE_SUPPLEMENT)
+  const serverMissing = missingTexts(server.packages).map(subject => ({
+    rule: 'licenses/server-text',
+    subject,
+    detail: '服务端依赖的发布包里没有许可文件，镜像的服务端许可清单生成不了：把正文补进 apps/api/third-party-licenses/<包名>/LICENSE，并在那里的 README 写明出处',
+  }))
   return {
     name: 'licenses',
     title: '许可',
     violations: [
       ...checkProductionLicenses(graph.installed, licensesByPath(report), PRODUCTION_LICENSES, LICENSE_EXCEPTIONS, existsSync),
       ...checkDevelopmentLicenses(all, LICENSE_EXCEPTIONS),
+      ...serverMissing,
     ],
-    notes: [`生产依赖 ${graph.installed.length} 个安装实例（本机没装的平台专属包 ${notInstalled} 个，以 CI 的检查为准），全部依赖 ${all.length} 个包`],
+    notes: [
+      `生产依赖 ${graph.installed.length} 个安装实例（本机没装的平台专属包 ${notInstalled} 个，以 CI 的检查为准），全部依赖 ${all.length} 个包`,
+      `服务端的许可清单：${server.packages.length} 个包（本机装上的）`,
+    ],
   }
 }
 

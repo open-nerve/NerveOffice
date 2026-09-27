@@ -1,0 +1,19 @@
+# 镜像的构建上下文（仓库根目录）里排除的内容（P5 设计 §3.2）。Dockerfile 只复制明确列出的路径，
+# 这里去掉体积大、与构建无关或不该进入构建的内容：依赖、构建产物、测试输出、机密、参考源码与文档。
+**/node_modules
+**/dist
+**/dist-e2e
+**/coverage
+**/test-results
+**/playwright-report
+**/*.log
+**/.DS_Store
+**/.env
+**/.env.*
+.git
+.github
+.claude
+refer
+spikes
+docs
+deploy
