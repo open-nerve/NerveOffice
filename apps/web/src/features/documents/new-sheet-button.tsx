@@ -2,15 +2,20 @@ import { documentPagePath } from '@nerve-office/contracts'
 import { useMutation } from '@tanstack/react-query'
 import { FilePlus2 } from 'lucide-react'
 import { useRef } from 'react'
-import { describeError, isTransientError } from '../../shared/api/index.ts'
+import { ApiError, describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { usePageLocation } from '../../shared/lib/page-location.ts'
 import { Alert, AlertDescription, Button } from '../../shared/ui/index.ts'
 import { createDocument } from './documents-api.ts'
 
+/** 确定没有建出来：服务端在写入之前就拒绝了（4xx）。其余（网络错误、5xx、回包读不出来）结果未知，服务端可能已经建好 */
+function definitelyRejected(error: unknown): boolean {
+  return error instanceof ApiError && error.status >= 400 && error.status < 500
+}
+
 /**
  * 新建表格（US-M1-04，P4 设计 §3.7.4）：建好之后整页打开编辑器页（另一个入口）。
- * 一次点击生成一个 requestId：网络错误或服务端的临时错误之后再点，沿用同一个，服务端只建一份；确定失败（4xx）之后再点，换一个新的。
+ * 一次点击生成一个 requestId：结果未知之后再点，沿用同一个，服务端只建一份；确定失败（4xx）之后再点，换一个新的（审查 B6）。
  */
 export function NewSheetButton() {
   const page = usePageLocation()
@@ -19,7 +24,7 @@ export function NewSheetButton() {
     mutationFn: createDocument,
     onSuccess: document => page.assign(documentPagePath(document.id)),
     onError: (error) => {
-      if (!isTransientError(error))
+      if (definitelyRejected(error))
         requestIdRef.current = undefined
     },
   })

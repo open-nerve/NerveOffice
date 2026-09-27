@@ -34,6 +34,7 @@ export function startSheetEditorPage(elements: SheetEditorPageElements): void {
     sessionChannel: openSessionChannel(),
     currentPath: () => `${window.location.pathname}${window.location.search}`,
     newId: () => crypto.randomUUID(),
+    reportError: error => reportError(error),
   })
   // navigator.platform 已不推荐使用，但各浏览器都还给出真实的平台；userAgentData 只有 Chromium 有
   const apple = isApplePlatform(navigator.platform)

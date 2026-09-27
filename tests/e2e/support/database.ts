@@ -45,10 +45,13 @@ export async function createUser(prefix: string, displayName = prefix): Promise<
   })
 }
 
-/** 写一份文档：与经接口新建的一致（元数据、模板快照的内容、修订号 1 的修订记录）。 */
-async function insertDocument(client: pg.Client, owner: TestUser, title: string): Promise<string> {
+/** 按 unitId 生成快照的 JSON 文本 */
+export type SnapshotFor = (unitId: string) => string
+
+/** 写一份文档：与经接口新建的一致（元数据、快照的内容、修订号 1 的修订记录）。快照默认是新建时的模板 */
+async function insertDocument(client: pg.Client, owner: TestUser, title: string, snapshotFor: SnapshotFor = sheetSnapshotFor): Promise<string> {
   const unitId = randomUUID()
-  const raw = Buffer.from(sheetSnapshotFor(unitId), 'utf8')
+  const raw = Buffer.from(snapshotFor(unitId), 'utf8')
   const snapshot = zlib.gzipSync(raw)
   const digest = createHash('sha256').update(`created\nsheet\n${title}`, 'utf8').digest()
   const result = await client.query<{ id: string }>(
@@ -66,8 +69,8 @@ async function insertDocument(client: pg.Client, owner: TestUser, title: string)
   return result.rows[0]?.id ?? ''
 }
 
-export async function createDocument(owner: TestUser, title: string): Promise<string> {
-  return withDatabase(async client => insertDocument(client, owner, title))
+export async function createDocument(owner: TestUser, title: string, snapshotFor?: SnapshotFor): Promise<string> {
+  return withDatabase(async client => insertDocument(client, owner, title, snapshotFor))
 }
 
 /** 一次写入 count 份文档，标题为"<前缀> 1"…"<前缀> count"（需要"加载更多"的用例：超过一页） */

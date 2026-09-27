@@ -8,6 +8,7 @@ import type { SeededDocument } from '../support/documents.ts'
 import type { AuthenticatedRequest, LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { randomBytes, randomUUID } from 'node:crypto'
+import { connect } from 'node:net'
 import zlib from 'node:zlib'
 import {
   CSRF_TOKEN_HEADER,
@@ -234,6 +235,30 @@ describe('US-M1-07 旧页面的保存不覆盖新内容', () => {
     expect(Buffer.from(await (await read(aliceSession, document.id)).arrayBuffer())).toEqual(fromA)
   })
 
+  it('同一个基准修订号的并发保存（各自的 requestId）：只有一个成功，其余都是冲突，来源指向成功的那一次', async () => {
+    const document = await aliceDocument()
+    const tabs = Array.from({ length: 6 }, () => randomUUID())
+    const responses = await Promise.all(tabs.map(async (tab, index) => put(aliceSession, document.id, snapshotOf(document.unitId, `并发 ${index}`), { baseRevision: 1, clientInstanceId: tab, localSeq: index })))
+    const statuses = responses.map(response => response.status)
+    expect(statuses.filter(status => status === 200)).toHaveLength(1)
+    expect(statuses.filter(status => status === 409)).toHaveLength(tabs.length - 1)
+    const winner = statuses.indexOf(200)
+    for (const [index, response] of responses.entries()) {
+      if (index === winner)
+        continue
+      const error = await errorOf(response)
+      expect(error.code).toBe('DOCUMENT_REVISION_CONFLICT')
+      expect(error.details).toEqual({ currentRevision: 2, source: { clientInstanceId: tabs[winner], localSeq: winner } })
+    }
+    expect(await storedRevision(document.id)).toBe(2)
+    const counts = await database.query(async client => (await client.query<{ revisions: string, audits: string }>(
+      `SELECT (SELECT count(*) FROM document_revisions WHERE document_id = $1) AS revisions,
+              (SELECT count(*) FROM audit_events WHERE action = 'documents.content_saved' AND target_id = $1) AS audits`,
+      [document.id],
+    )).rows[0])
+    expect(counts).toEqual({ revisions: '2', audits: '1' })
+  })
+
   it('当前修订是新建出来的：冲突的来源为 null', async () => {
     const document = await aliceDocument()
     const response = await put(aliceSession, document.id, snapshotOf(document.unitId, 'x'), { baseRevision: 5 })
@@ -267,6 +292,53 @@ describe('保存的请求体：上限、压缩与内容类型', () => {
     const response = await asUser(app.baseUrl, aliceSession, contentPath(document.id, {}), { method: 'PUT', binary: { contentType: 'application/gzip', bytes: randomBytes(SNAPSHOT_MAX_RAW_BYTES + 1) } })
     expect(response.status).toBe(413)
     expect((await errorOf(response)).code).toBe('PAYLOAD_TOO_LARGE')
+  })
+
+  it.each([
+    ['空成员加上合法的成员（浏览器只解第一个成员，得到空串）', (raw: Buffer) => Buffer.concat([zlib.gzipSync(Buffer.alloc(0)), zlib.gzipSync(raw)])],
+    ['两个成员拼接', (raw: Buffer) => Buffer.concat([zlib.gzipSync(raw), zlib.gzipSync(raw)])],
+    ['成员之后带着别的数据', (raw: Buffer) => {
+      const member = zlib.gzipSync(raw)
+      return Buffer.concat([member, Buffer.from([0]), randomBytes(64), member.subarray(member.length - 8)])
+    }],
+  ])('不是恰好一个完整的 gzip 成员：400，不入库（审查 A1）：%s', async (_case, build) => {
+    const document = await aliceDocument()
+    const response = await asUser(app.baseUrl, aliceSession, contentPath(document.id, {}), { method: 'PUT', binary: { contentType: 'application/gzip', bytes: build(snapshotOf(document.unitId, 'x')) } })
+    expect(response.status).toBe(400)
+    expect(await errorOf(response)).toMatchObject({ code: 'REQUEST_INVALID', message: '请求体不是完整的 gzip 数据' })
+    expect(await storedRevision(document.id)).toBe(1)
+  })
+
+  it('正文没传完客户端就断开：按请求中断处理，不记意外错误（审查 A3）', async () => {
+    const document = await aliceDocument()
+    const { port, hostname } = new URL(app.baseUrl)
+    const path = contentPath(document.id, {})
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await new Promise<void>((resolve) => {
+        const socket = connect(Number(port), hostname, () => {
+          socket.write([
+            `PUT ${path} HTTP/1.1`,
+            `Host: ${hostname}:${port}`,
+            `Cookie: ${aliceSession.cookie}`,
+            `Origin: ${TEST_PUBLIC_ORIGIN}`,
+            `${CSRF_TOKEN_HEADER}: ${aliceSession.session.csrfToken}`,
+            'Content-Type: application/gzip',
+            'Content-Length: 100000',
+            '',
+            '',
+          ].join('\r\n'))
+          // 请求头发完、正文只发一点就断开：服务端这时多半还在认证（查会话），读取正文时请求已经结束
+          socket.write(randomBytes(10), () => socket.destroy())
+        })
+        socket.on('close', () => resolve())
+        socket.on('error', () => resolve())
+      })
+    }
+    await expect.poll(() => app.logs.entries().filter(entry => entry.aborted === true && String(entry.path).includes(document.id)).length).toBeGreaterThanOrEqual(5)
+    // 中断的请求只记 warn"请求中断"：没有意外错误，也没有"中断之后处理失败"
+    expect(app.logs.text()).not.toContain('请求体没有读成字节')
+    expect(app.logs.entries().filter(entry => entry.msg === '请求中断之后处理失败')).toEqual([])
+    expect(await storedRevision(document.id)).toBe(1)
   })
 
   it('不是 gzip：400 REQUEST_INVALID', async () => {

@@ -269,6 +269,41 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
     expect(await rulesFor('export const fake = { __getInjector: () => 1 }\n', EDITOR_FILE)).not.toContain('no-restricted-syntax')
   })
 
+  it('__getInjector 的其他写法同样失败：模板字符串、字符串的键解构、Reflect.get（审查 B4）', async () => {
+    const declared = 'declare const univer: { __getInjector: () => unknown }\n'
+    const cases = [
+      `${declared}export const injector = univer[\`__getInjector\`]()\n`,
+      `${declared}const { '__getInjector': get } = univer\nexport const injector = get\n`,
+      `${declared}export const get: unknown = Reflect.get(univer, '__getInjector')\n`,
+    ]
+    for (const code of cases) {
+      for (const file of [EDITOR_FILE, WEB_FILE]) {
+        const report = await lint(code, file)
+        expect(report.rules, `${file}\n${code}`).toContain('no-restricted-syntax')
+        expect(report.messages.join('\n'), `${file}\n${code}`).toContain(INTERNAL_MESSAGE)
+      }
+    }
+  })
+
+  it('按 node_modules 里的路径引用依赖会失败：静态导入、再导出与动态导入都算，编辑器与 internal-api 也一样（审查 B4）', async () => {
+    const NODE_MODULES_MESSAGE = '按包名引用依赖，不要写 node_modules 里的路径'
+    const source = '../../../node_modules/@univerjs/engine-formula/lib/es/index.js'
+    for (const file of [EDITOR_FILE, INTERNAL_API_FILE, WEB_FILE, API_SERVICE, CONTRACTS_FILE]) {
+      for (const code of [`import * as formula from '${source}'\n\nexport const f = formula\n`, `export * from '${source}'\n`]) {
+        const report = await lint(code, file)
+        expect(report.rules, `${file}\n${code}`).toContain('no-restricted-imports')
+        expect(report.messages.join('\n'), `${file}\n${code}`).toContain(NODE_MODULES_MESSAGE)
+      }
+    }
+    for (const file of [EDITOR_FILE, WEB_FILE]) {
+      const report = await lint(`export async function load(): Promise<unknown> {\n  return import('${source}')\n}\n`, file)
+      expect(report.rules, file).toContain('no-restricted-syntax')
+      expect(report.messages.join('\n'), file).toContain(NODE_MODULES_MESSAGE)
+    }
+    // 名字里带 node_modules 字样的普通模块不算
+    expect(await rulesFor('import { probe } from \'./my-node_modules-notes.ts\'\n\nexport const p = probe\n', WEB_FILE)).not.toContain('no-restricted-imports')
+  })
+
   it('Univer 包里的深层路径会失败（它绕得过按导入名的限制），internal-api 也一样；只允许包入口、/facade、/locale/<语言> 与 /lib/index.css', async () => {
     for (const source of ['@univerjs/engine-formula/lib/es/index.js', '@univerjs/sheets/lib/facade', '@univerjs/core/lib/types/index.d.ts']) {
       const code = `import * as deep from '${source}'\n\nexport const d = deep\n`

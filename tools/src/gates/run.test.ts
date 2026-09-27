@@ -83,11 +83,44 @@ describe('US-M1-11 产物门禁的装配', () => {
     expect(outcome.notes).toContain('出现的主机：无；主机在运行时拼出的地址 0 处（由 CSP 兜底）')
   })
 
-  it('说明：允许清单里的地址都出现时，没出现的地址写"无"', () => {
-    const every = ARTIFACT_POLICY.allowedAddresses.map(entry => JSON.stringify(entry.address)).join(',')
-    const outcome = artifactsGate(writeDist({ ...clean, 'assets/index.js': `export const addresses = [${every}]` }))
+  /** 两个入口：平台页面与编辑器页（编辑器页创建公式 Worker、有一个动态加载的块） */
+  function withEditor(files: Record<string, string>): Record<string, string> {
+    return {
+      ...clean,
+      '.vite/manifest.json': JSON.stringify({
+        'index.html': { file: 'assets/index.js' },
+        'editor.html': { file: 'assets/editor.js', dynamicImports: ['src/lazy.ts'] },
+        'src/lazy.ts': { file: 'assets/lazy.js' },
+      }),
+      'editor.html': '<!doctype html><script type="module" src="/assets/editor.js"></script>',
+      'assets/editor.js': 'new Worker(new URL(`/assets/formula.worker-a1.js`,``+import.meta.url),{type:`module`})',
+      'assets/formula.worker-a1.js': 'self.onmessage=()=>{}',
+      'assets/lazy.js': 'export const x=1',
+      ...files,
+    }
+  }
+
+  it('说明：允许清单里的地址都出现时（前缀的登记出现在编辑器的产物里），没出现的地址写"无"', () => {
+    const exact = ARTIFACT_POLICY.allowedAddresses.filter(entry => entry.prefix !== true).map(entry => JSON.stringify(entry.address)).join(',')
+    const prefixed = ARTIFACT_POLICY.allowedAddresses.filter(entry => entry.prefix === true).map(entry => JSON.stringify(`${entry.address}sample`)).join(',')
+    const outcome = artifactsGate(writeDist(withEditor({ 'assets/index.js': `export const addresses = [${exact}]`, 'assets/lazy.js': `export const links = [${prefixed}]` })))
     expect(outcome.violations).toEqual([])
     expect(outcome.notes).toContain('允许清单里这次没出现的地址（核对后删除）：无')
+  })
+
+  it('前缀的登记只适用于编辑器页能加载到的产物与它创建的 Worker；平台页面与其他文件只按具体地址（审查 A 路建议 B1）', () => {
+    const link = JSON.stringify(`${ARTIFACT_POLICY.allowedAddresses.find(entry => entry.prefix === true)?.address ?? ''}sample`)
+    for (const file of ['assets/editor.js', 'assets/lazy.js', 'assets/formula.worker-a1.js']) {
+      const outcome = artifactsGate(writeDist(withEditor({ [file]: `${withEditor({})[file] ?? ''};export const link=${link}` })))
+      expect(outcome.violations, file).toEqual([])
+    }
+    for (const file of ['assets/index.js', 'assets/other.js']) {
+      const outcome = artifactsGate(writeDist(withEditor({ [file]: `export const link=${link}` })))
+      expect(outcome.violations.map(v => v.rule), file).toEqual(['artifacts/address'])
+    }
+    // 找不到构建清单时一律只按具体地址
+    const noManifest = artifactsGate(writeDist({ ...withEditor({ 'assets/editor.js': `export const link=${link}` }), '.vite/manifest.json': '{}' }))
+    expect(noManifest.violations.map(v => v.rule)).toEqual(['artifacts/address'])
   })
 })
 

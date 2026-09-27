@@ -13,7 +13,7 @@ export interface InternalApiEntry {
   readonly regression: string
 }
 
-const FORMULA_SETTLE_REGRESSION = '单元测试 change-tracking/formula-settle-tracker.test.ts（P4 探针录制的命令序列）、calculation-trigger.test.ts；E2E（S4）"改公式的依赖后立即保存，服务器上的缓存值与按定义算出的一致（含跨表、计算进行中再改一次）"'
+const FORMULA_SETTLE_REGRESSION = '单元测试 change-tracking/formula-settle-tracker.test.ts（P4 探针录制的命令序列）、calculation-trigger.test.ts；E2E tests/e2e/specs/editor/save.spec.ts"改了公式的依赖立即保存""跨表引用""计算进行中又改了一处"：服务器上的缓存值与按定义算出的一致'
 const IMAGE_POLICY_REGRESSION = '单元测试 image-function/restricted-image-function.test.ts、install-image-policy.test.ts；E2E（S4）"外链的 IMAGE() 显示 #VALUE!、没有 CSP 违规"，以及编辑器能就绪（主线程与 Worker 都装上才就绪）'
 
 export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
@@ -36,7 +36,7 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
     origin: '@univerjs/core 的授权服务标识与接口（Facade 之外）',
     purpose: '编辑器身份（ADR-009）：new Univer({ override }) 换成全部允许的实现；依赖的约定是 allowed 的结果设置工作簿的权限点、batchAllowed 的返回形状、create 只由（已隐藏的）保护入口调用',
     evidence: 'P4 研究摘要 §4.8 的源码核实（core 的 univer.ts:295、authz-io-local.service.ts:65-118，sheets 的 sheet-permission-init.controller.ts:171-191）；P4 探针 (a)：替换前后打开、编辑、增删工作表、筛选、排序、条件格式、数据验证、备注、查找替换的结果相同，40 个权限点都允许，快照没有 SHEET_AuthzIoMockService_PLUGIN',
-    regression: '单元测试 identity/allow-all-authz-io.service.test.ts；E2E（S4）上述各项操作照常、新建文档的快照与模板逐字节相同（资源里没有 SHEET_AuthzIoMockService_PLUGIN）',
+    regression: '单元测试 identity/allow-all-authz-io.service.test.ts；E2E tests/e2e/specs/editor/features.spec.ts（增删工作表、排序与筛选、条件格式与数据验证、批注与查找替换，经界面操作、按服务器上的快照核对），template.spec.ts（新建文档的快照与模板逐字节相同，资源里没有 SHEET_AuthzIoMockService_PLUGIN）',
   },
   {
     name: 'LifecycleService',

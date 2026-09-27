@@ -37,6 +37,8 @@ export type SaveProblem
     | { readonly kind: 'too-large' }
   /** 请求失败（冲突除外） */
     | { readonly kind: 'request', readonly error: unknown }
+  /** 提交编辑、等公式收齐或捕获时出了意外的错误（SDK 的缺陷等）：没有上传 */
+    | { readonly kind: 'unexpected', readonly error: unknown }
 
 export interface SaveView {
   readonly status: SaveStatus
@@ -61,6 +63,8 @@ export interface SaveCoordinatorOptions {
   readonly onUnauthenticated: (error: ApiError) => void
   /** CSRF 令牌不对：页面向服务端确认会话 */
   readonly onSessionStale: () => void
+  /** 意外的错误（保存流程本身出错）：上报，页面照常显示保存失败 */
+  readonly reportError: (error: unknown) => void
   /** 等公式收齐的上限（P4 设计 §3.6.6） */
   readonly settleTimeoutMs?: number
   /** 快照的上限（解压后，字节） */
@@ -74,16 +78,21 @@ export interface SaveCoordinator {
   readonly save: () => Promise<void>
   /** 离开页面会丢掉内容：有未保存的修改、正在编辑的单元格、保存中、冲突之后本页的内容 */
   readonly hasUnsavedWork: () => boolean
-  /** 停止保存（例如别的标签页换了人）：之后的保存都不做 */
+  /** 停止保存（例如别的标签页换了人）：之后的保存都不做，直到 resume */
   readonly stop: () => void
+  /** 恢复保存（原来的人又登录回来了） */
+  readonly resume: () => void
   readonly dispose: () => void
 }
 
 export const SETTLE_TIMEOUT_MS = 3000
 
-/** 结果未知的保存（网络错误、5xx、回包读不出来）：服务端可能已经提交了 */
+/**
+ * 结果未知的保存（网络错误、5xx、回包读不出来）：服务端可能已经提交了。
+ * 认出"自己追自己"只要它的序号与公式是否收齐；不留快照本身，断网期间多次保存时内存不随之增长（审查 B9）
+ */
 interface UnconfirmedSave {
-  readonly request: SaveRequest
+  readonly localSeq: number
   readonly settled: boolean
 }
 
@@ -131,7 +140,7 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
       status = 'conflict'
     else if (inFlight)
       status = 'saving'
-    else if (problem?.kind === 'request' || problem?.kind === 'too-large')
+    else if (problem !== undefined && problem.kind !== 'cell-editing')
       status = 'failed'
     else
       status = editor.changeSeq() > savedSeq || formulasPending ? 'dirty' : 'clean'
@@ -170,7 +179,7 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
     const source = details?.source
     if (source === undefined || source === null || source.clientInstanceId !== clientInstanceId)
       return undefined
-    return [...unconfirmed.values()].find(save => save.request.localSeq === source.localSeq)
+    return [...unconfirmed.values()].find(save => save.localSeq === source.localSeq)
   }
 
   function fail(error: unknown, request: SaveRequest): void {
@@ -210,7 +219,7 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
     // 自己追自己只自动重发一次（P4 设计 §3.5.2）
     let rebased = false
     for (;;) {
-      unconfirmed.set(request.requestId, { request, settled })
+      unconfirmed.set(request.requestId, { localSeq: request.localSeq, settled })
       try {
         const result = await send(request)
         confirm(request.localSeq, result.revision, settled)
@@ -225,7 +234,7 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
         }
         // 那次保存已经提交：它就是当前修订。换上当前修订号作基准，用新的 requestId 重发这一次的内容
         unconfirmed.delete(request.requestId)
-        confirm(own.request.localSeq, details.currentRevision, own.settled)
+        confirm(own.localSeq, details.currentRevision, own.settled)
         request = { ...request, baseRevision, requestId: newRequestId() }
         rebased = true
       }
@@ -247,6 +256,11 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
       try {
         await attempt()
       }
+      catch (error) {
+        // 发出请求之前的步骤出了意外（请求本身的失败在 attempt 里已经归类）：显示保存失败，而不是悄悄回到"有未保存的修改"（审查 B5）
+        problem = { kind: 'unexpected', error }
+        options.reportError(error)
+      }
       finally {
         inFlight = false
         update()
@@ -255,6 +269,10 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
     hasUnsavedWork: () => conflict !== undefined || inFlight || editor.isCellEditing() || editor.changeSeq() > savedSeq || formulasPending,
     stop: () => {
       stopped = true
+      update()
+    },
+    resume: () => {
+      stopped = false
       update()
     },
     dispose: () => {

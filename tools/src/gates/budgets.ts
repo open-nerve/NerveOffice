@@ -27,14 +27,15 @@ export interface WorkerBudget {
 const chunkSchema = z.object({
   file: z.string(),
   imports: z.array(z.string()).optional(),
+  dynamicImports: z.array(z.string()).optional(),
   css: z.array(z.string()).optional(),
 })
 
 export const viteManifestSchema = z.record(z.string(), chunkSchema)
 export type ViteManifest = z.infer<typeof viteManifestSchema>
 
-/** 入口块与它静态引用的块（递归）的清单项，不含 dynamicImports。入口不在清单里时返回 undefined。 */
-function initialChunks(manifest: ViteManifest, entry: string): ViteManifest[string][] | undefined {
+/** 入口块与它静态引用的块（递归）的清单项；withDynamic 为真时连同动态加载的块。入口不在清单里时返回 undefined。 */
+function chunksFrom(manifest: ViteManifest, entry: string, withDynamic: boolean): ViteManifest[string][] | undefined {
   if (manifest[entry] === undefined)
     return undefined
   const chunks: ViteManifest[string][] = []
@@ -47,9 +48,19 @@ function initialChunks(manifest: ViteManifest, entry: string): ViteManifest[stri
       continue
     visited.add(key)
     chunks.push(chunk)
-    pending.push(...(chunk.imports ?? []))
+    pending.push(...(chunk.imports ?? []), ...(withDynamic ? chunk.dynamicImports ?? [] : []))
   }
   return chunks
+}
+
+function initialChunks(manifest: ViteManifest, entry: string): ViteManifest[string][] | undefined {
+  return chunksFrom(manifest, entry, false)
+}
+
+/** 入口能加载到的全部 JS 与样式：首屏的块、动态加载的块与它们的样式。入口不在清单里时返回空的清单。 */
+export function reachableFiles(manifest: ViteManifest, entry: string): string[] {
+  const chunks = chunksFrom(manifest, entry, true) ?? []
+  return [...new Set(chunks.flatMap(chunk => [chunk.file, ...(chunk.css ?? [])]))].sort()
 }
 
 /** 入口首屏要加载的 JS：入口块与它静态引用的块（递归），不含 dynamicImports。入口不在清单里时返回 undefined。 */
@@ -70,17 +81,18 @@ function escapeRegExp(text: string): string {
 /** Worker 里静态引用的块：import … from "./x.js"、import "./x.js"（Worker 按 ES 模块构建） */
 const STATIC_IMPORT = /\b(?:from|import)\s*["'`](\.{1,2}\/[^"'`]+\.js)["'`]/g
 
-/**
- * 入口的首屏块里引用的 Worker（new Worker(new URL("/assets/<名字>-<哈希>.js", import.meta.url))）与它静态引用的块。
- * 首屏块里没有引用这个 Worker 时返回 undefined。
- */
-export function workerFiles(entryFiles: readonly string[], worker: string, readText: (file: string) => string): string[] | undefined {
-  const reference = new RegExp(String.raw`["'\x60/](assets/${escapeRegExp(worker)}-[\w-]+\.js)["'\x60]`)
-  const found = entryFiles.map(file => reference.exec(readText(file))?.[1]).find(file => file !== undefined)
-  if (found === undefined)
-    return undefined
+/** 创建 Worker 的写法：new Worker(new URL("/assets/<名字>-<哈希>.js", import.meta.url))，SharedWorker 同样 */
+const WORKER_REFERENCE = /\bnew\s+(?:Shared)?Worker\(\s*new\s+URL\(\s*["'`]\/?(assets\/[^"'`]+?\.js)["'`]/g
+
+/** 这些文件里创建的 Worker 的产物（去重，按名字排序） */
+export function referencedWorkers(files: readonly string[], readText: (file: string) => string): string[] {
+  return [...new Set(files.flatMap(file => [...readText(file).matchAll(WORKER_REFERENCE)].map(match => match[1] ?? '')))].sort()
+}
+
+/** Worker 的产物与它静态引用的块 */
+export function workerClosure(worker: string, readText: (file: string) => string): string[] {
   const files = new Set<string>()
-  const pending = [found]
+  const pending = [worker]
   for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
     if (files.has(file))
       continue
@@ -89,6 +101,19 @@ export function workerFiles(entryFiles: readonly string[], worker: string, readT
       pending.push(posix.join(posix.dirname(file), match[1] ?? ''))
   }
   return [...files].sort()
+}
+
+function isWorkerNamed(file: string, worker: string): boolean {
+  return new RegExp(String.raw`^assets/${escapeRegExp(worker)}-[\w-]+\.js$`).test(file)
+}
+
+/**
+ * 入口的首屏块里创建的、名字是 worker 的 Worker 的产物与它静态引用的块。
+ * 首屏块里没有创建这个 Worker 时返回 undefined。
+ */
+export function workerFiles(entryFiles: readonly string[], worker: string, readText: (file: string) => string): string[] | undefined {
+  const found = referencedWorkers(entryFiles, readText).find(file => isWorkerNamed(file, worker))
+  return found === undefined ? undefined : workerClosure(found, readText)
 }
 
 export interface BudgetResult {
@@ -126,6 +151,13 @@ export function checkBudgets(manifest: ViteManifest, budgets: readonly EntryBudg
     results.push(files === undefined
       ? { violations: [{ rule: 'budgets/missing-worker', subject: budget.worker, detail: `${budget.entry} 的首屏块里没有引用 ${budget.worker}：${budget.label}的预算指向的 Worker 不存在，更新预算表` }], notes: [] }
       : measure(budget.label, budget.worker, files, budget.maxGzipBytes, output))
+  }
+  // 入口在首屏创建、却没有登记预算的 Worker：它随页面下载，同样要有预算（审查 A 路建议 B2）
+  for (const budget of budgets) {
+    const created = referencedWorkers(initialFiles(manifest, budget.entry) ?? [], output.readText)
+    for (const worker of created.filter(file => !workers.some(item => item.entry === budget.entry && isWorkerNamed(file, item.worker)))) {
+      results.push({ violations: [{ rule: 'budgets/unbudgeted-worker', subject: worker, detail: `${budget.entry} 的首屏块里创建了这个 Worker，却没有登记它的预算（WORKER_BUDGETS）` }], notes: [] })
+    }
   }
   return { violations: results.flatMap(result => result.violations), notes: results.flatMap(result => result.notes) }
 }

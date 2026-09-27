@@ -72,6 +72,22 @@ export async function selectCell(page: Page, a1: string, options: { button?: 'le
   })
 }
 
+/** 选中一个区域：点击起点，按住 Shift 点击终点 */
+export async function selectRange(page: Page, from: string, to: string): Promise<void> {
+  await selectCell(page, from)
+  await page.keyboard.down('Shift')
+  await selectCell(page, to)
+  await page.keyboard.up('Shift')
+}
+
+/** 切到功能区的一个标签页，返回它的工具栏 */
+export async function ribbon(page: Page, tab: '开始' | '插入' | '公式' | '数据' | '视图'): Promise<Locator> {
+  await page.getByRole('tab', { name: tab, exact: true }).click()
+  const toolbar = page.getByRole('toolbar', { name: tab })
+  await expect(toolbar).toBeVisible()
+  return toolbar
+}
+
 /** 选中单元格，键入内容；commit 为真时按回车提交（选区随之下移） */
 export async function typeInCell(page: Page, a1: string, text: string, commit = true): Promise<void> {
   await selectCell(page, a1)
@@ -98,11 +114,18 @@ export interface SavedContent {
   readonly snapshot: Workbook
 }
 
+interface CustomRange {
+  readonly rangeType: number
+  readonly properties?: { readonly url?: string }
+}
+
 interface Cell {
   readonly v?: unknown
   readonly f?: string
   readonly s?: unknown
   readonly t?: number
+  /** 富文本（例如自动识别出的链接） */
+  readonly p?: { readonly body?: { readonly dataStream?: string, readonly customRanges?: readonly CustomRange[] } }
 }
 
 export interface Workbook {
@@ -119,6 +142,12 @@ export async function savedContent(page: Page, documentId: string): Promise<Save
   expect(response.status(), await response.text()).toBe(200)
   const text = await response.text()
   return { text, revision: revisionFromEtag(response.headers().etag) ?? 0, snapshot: JSON.parse(text) as Workbook }
+}
+
+/** 快照里一项资源的数据（JSON 解析之后；空串是 undefined） */
+export function resourceOf(snapshot: Workbook, name: string): unknown {
+  const data = snapshot.resources.find(resource => resource.name === name)?.data
+  return data === undefined || data === '' ? undefined : JSON.parse(data) as unknown
 }
 
 /** 快照里某张工作表（默认第一张）的一个单元格 */

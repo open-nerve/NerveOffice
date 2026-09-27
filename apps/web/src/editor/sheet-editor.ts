@@ -1,3 +1,4 @@
+import type { ChangeTracker } from './change-tracking/change-tracker.ts'
 // 表格编辑器（P4 设计 §3.6.1、§3.6.3）：这份快照在 Univer 里怎么编辑、怎么捕获。请求、保存状态与界面由编辑器页负责。
 // 一页一份文档、整页加载与卸载（计划书 §10.2）：同一个实例里不能创建两份 unitId 相同的文档，反复创建销毁也会泄漏内存。
 // 顺序：
@@ -6,14 +7,16 @@
 // 3. 在创建工作簿之前挂上入口守卫、变更检测与生命周期的监听，加载过程中的命令也看得到；
 // 4. createWorkbook，核对 unitId；
 // 5. 等渲染完成（Rendered）、主线程到 Ready 后装上 IMAGE() 的限制、Worker 回报它那边也装上了，才返回；
-//    任何一步失败都销毁已经创建的一切并抛出，页面显示"编辑器加载失败"。
-import type { SheetEditorLifecycle } from './lifecycle-watch.ts'
+//    任何一步失败（包括创建 Univer、注册插件）都按相反的顺序销毁已经创建的一切并抛出，页面显示"编辑器加载失败"（审查 B8）。
+import type { CleanupStack } from './cleanup-stack.ts'
+import type { LifecycleWatch, SheetEditorLifecycle } from './lifecycle-watch.ts'
 import type { WorkbookSnapshot } from './workbook-snapshot.ts'
 import { LocaleType, LogLevel, Univer } from '@univerjs/core'
 import { FUniver } from '@univerjs/core/facade'
 import { defaultTheme } from '@univerjs/themes'
 import { pollUntil, withDeadline } from './async-tools.ts'
 import { createChangeTracker } from './change-tracking/change-tracker.ts'
+import { createCleanupStack } from './cleanup-stack.ts'
 import { editorIdentityOverride } from './identity/allow-all-authz-io.service.ts'
 import { installRestrictedImageFunction } from './image-function/install-image-policy.ts'
 import { watchWorkerImagePolicy } from './image-function/worker-image-policy.ts'
@@ -87,50 +90,66 @@ function createWorkbook(univerAPI: FUniver, snapshot: WorkbookSnapshot): ReturnT
   return workbook
 }
 
-export async function createSheetEditor(options: CreateSheetEditorOptions): Promise<SheetEditor> {
-  const snapshot = parseWorkbookSnapshot(options.snapshot)
+type Workbook = ReturnType<FUniver['createWorkbook']>
 
+interface MountedEditor {
+  readonly workbook: Workbook
+  readonly changes: ChangeTracker
+  readonly lifecycle: LifecycleWatch
+}
+
+/** 按顺序创建、等到就绪；每创建一样就在 cleanup 里登记它的销毁，失败时由调用方统一销毁 */
+async function mount(container: HTMLElement, snapshot: WorkbookSnapshot, cleanup: CleanupStack): Promise<MountedEditor> {
   // 静态的 new Worker(new URL(...)) 才会被打包成同源的 Worker 脚本；传地址给插件会建出经典 Worker（rpc/src/plugin.ts:86）
   const worker = new Worker(new URL('./workers/formula.worker.ts', import.meta.url), { type: 'module', name: 'nerve-formula' })
+  // 传入的 Worker 由我们终止（插件只终止它自己创建的，rpc/src/plugin.ts:71-78）
+  cleanup.defer(() => worker.terminate())
   const workerImagePolicy = watchWorkerImagePolicy(worker)
+  cleanup.defer(workerImagePolicy.dispose)
 
   const univer = createUniver()
-  for (const entry of sheetPluginEntries({ container: options.container, formulaWorker: worker }))
+  cleanup.defer(() => univer.dispose())
+  for (const entry of sheetPluginEntries({ container, formulaWorker: worker }))
     entry.register(univer)
   const univerAPI = FUniver.newAPI(univer)
   const guards = installEntryGuards(univerAPI)
+  cleanup.defer(() => guards.dispose())
   const changes = createChangeTracker(univer, univerAPI, { unitId: snapshot.unitId, excludedMutationIds: CHANGE_DETECTION_EXCLUDED_MUTATIONS })
+  cleanup.defer(changes.dispose)
   const lifecycle = watchLifecycle({ univerAPI, installImagePolicy: async () => installRestrictedImageFunction(univer, location.origin) })
+  cleanup.defer(lifecycle.dispose)
+
+  const workbook = createWorkbook(univerAPI, snapshot)
+  await withDeadline(
+    Promise.all([lifecycle.rendered, lifecycle.imagePolicyInstalled, workerImagePolicy.installed]),
+    READY_TIMEOUT_MS,
+    () => new SheetEditorLoadError('ready-timeout', `${READY_TIMEOUT_MS / 1000} 秒内没有全部就绪（渲染、主线程与 Worker 的 IMAGE() 限制）`),
+  )
+  // 就绪之后不再需要 Worker 回报的监听：Worker 之后出错按 M4 的设计处理（M1 里公式收齐会超时，页面提示公式结果尚未保存）
+  workerImagePolicy.dispose()
+  return { workbook, changes, lifecycle }
+}
+
+export async function createSheetEditor(options: CreateSheetEditorOptions): Promise<SheetEditor> {
+  const snapshot = parseWorkbookSnapshot(options.snapshot)
+  const cleanup = createCleanupStack()
+  let mounted: MountedEditor
+  try {
+    mounted = await mount(options.container, snapshot, cleanup)
+  }
+  catch (error) {
+    cleanup.run()
+    throw error
+  }
+  const { workbook, changes, lifecycle } = mounted
 
   let disposed = false
   const dispose = (): void => {
     if (disposed)
       return
     disposed = true
-    lifecycle.dispose()
-    changes.dispose()
-    guards.dispose()
-    workerImagePolicy.dispose()
-    univer.dispose()
-    // 传入的 Worker 由我们终止（插件只终止它自己创建的，rpc/src/plugin.ts:71-78）
-    worker.terminate()
+    cleanup.run()
   }
-
-  let workbook: ReturnType<FUniver['createWorkbook']>
-  try {
-    workbook = createWorkbook(univerAPI, snapshot)
-    await withDeadline(
-      Promise.all([lifecycle.rendered, lifecycle.imagePolicyInstalled, workerImagePolicy.installed]),
-      READY_TIMEOUT_MS,
-      () => new SheetEditorLoadError('ready-timeout', `${READY_TIMEOUT_MS / 1000} 秒内没有全部就绪（渲染、主线程与 Worker 的 IMAGE() 限制）`),
-    )
-  }
-  catch (error) {
-    dispose()
-    throw error
-  }
-  // 就绪之后不再需要 Worker 回报的监听：Worker 之后出错按 M4 的设计处理（M1 里公式收齐会超时，页面提示公式结果尚未保存）
-  workerImagePolicy.dispose()
 
   const usable = (): void => {
     if (disposed)

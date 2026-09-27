@@ -1,12 +1,11 @@
 import type { Request, Response } from 'express'
 import { Buffer } from 'node:buffer'
-import zlib from 'node:zlib'
 import express from 'express'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { toBodyError } from './json-body.ts'
 
 export interface GzipBodyLimits {
-  /** 压缩后的上限（字节）：超过时不再读取 */
+  /** 压缩后的上限（字节）：超过时返回 413。声明的长度超过上限时不缓存正文，分块传输时缓存到上限为止；剩下的正文读出后丢弃，内存有上限 */
   readonly maxCompressedBytes: number
   /** 解压后的上限（字节）：解压到上限就停下，压缩炸弹在这里截住 */
   readonly maxRawBytes: number
@@ -21,49 +20,41 @@ export interface GzipBody {
 
 const NOT_GZIP = '请求体不是完整的 gzip 数据'
 
-/** gzip 成员末尾的 8 个字节：解压结果的 CRC32 与长度（对 2^32 取模），小端（RFC 1952 §2.3.1）。 */
-const TRAILER_BYTES = 8
-
-function isZlibError(error: unknown): boolean {
-  return error instanceof Error && 'code' in error && typeof error.code === 'string' && error.code.startsWith('Z_')
-}
-
-function isOutputTooLarge(error: unknown): boolean {
-  return error instanceof RangeError && 'code' in error && error.code === 'ERR_BUFFER_TOO_LARGE'
-}
-
-async function gunzip(compressed: Buffer, maxOutputLength: number): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    zlib.gunzip(compressed, { maxOutputLength }, (error, result) => {
-      if (error === null)
-        resolve(result)
-      else
-        reject(error)
-    })
-  })
+/** 解压的错误：不是 gzip、被截断、CRC 不对、成员结束之后还有数据（含第二个成员） */
+function isMalformedGzip(error: unknown): boolean {
+  if (!(error instanceof Error) || !('code' in error) || typeof error.code !== 'string')
+    return false
+  return error.code.startsWith('Z_') || error.code === 'ERR_TRAILING_JUNK_AFTER_STREAM_END'
 }
 
 /**
- * 解压 gzip 数据，解压后超过 maxRawBytes 就停下（413）。只接受恰好一个完整的 gzip 成员：
- * 末尾不能有别的数据（zlib 自己拒绝），也不能是几个成员拼起来的（末尾的 CRC32 与长度要对应全部的解压结果）。
- * 存下的字节会原样以 Content-Encoding: gzip 下发，不是所有浏览器都能解开多个成员拼接的数据。
+ * 解压 gzip 数据，解压后超过 maxRawBytes 就停下（413），压缩炸弹在上限处截住。
+ * 只接受恰好一个完整的 gzip 成员、末尾没有别的数据：用标准的 DecompressionStream，与浏览器同一个规范（成员结束之后还有数据即出错）。
+ * 存下的字节会原样以 Content-Encoding: gzip 下发，浏览器只解第一个成员：几个成员拼起来、或者末尾带着数据时，
+ * 服务端与浏览器会解出不同的内容（审查 A1：空成员加合法的成员，浏览器解出空串）。
  */
 export async function gunzipWithin(compressed: Buffer, maxRawBytes: number): Promise<Buffer> {
-  let raw: Buffer
-  try {
-    raw = await gunzip(compressed, maxRawBytes)
-  }
-  catch (error) {
-    if (isOutputTooLarge(error))
+  const reader = new Blob([compressed]).stream().pipeThrough<Uint8Array>(new DecompressionStream('gzip')).getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for (;;) {
+    const chunk = await reader.read().catch((error: unknown) => {
+      throw isMalformedGzip(error) ? new AppError('REQUEST_INVALID', NOT_GZIP) : error
+    })
+    if (chunk.done)
+      return Buffer.concat(chunks, total)
+    total += chunk.value.byteLength
+    if (total > maxRawBytes) {
+      await reader.cancel()
       throw new AppError('PAYLOAD_TOO_LARGE', `请求体解压后超过上限（${maxRawBytes} 字节）`)
-    if (isZlibError(error))
-      throw new AppError('REQUEST_INVALID', NOT_GZIP)
-    throw error
+    }
+    chunks.push(chunk.value)
   }
-  const trailer = compressed.subarray(compressed.length - TRAILER_BYTES)
-  if (trailer.readUInt32LE(0) !== zlib.crc32(raw) || trailer.readUInt32LE(4) !== raw.length % 2 ** 32)
-    throw new AppError('REQUEST_INVALID', NOT_GZIP)
-  return raw
+}
+
+/** 客户端在正文传完之前断开：body-parser 这时不报错、也不给出正文 */
+function interrupted(request: Request): boolean {
+  return request.readableAborted || request.destroyed || !request.complete
 }
 
 /**
@@ -90,7 +81,11 @@ export async function readGzipBody(request: Request, response: Response, content
     })
   })
   const compressed: unknown = request.body
-  if (!Buffer.isBuffer(compressed))
+  if (!Buffer.isBuffer(compressed)) {
+    // 客户端中途断开：与 JSON 请求体的"请求在传输中被中断"相同，不是意外错误（审查 A3）
+    if (interrupted(request))
+      throw new AppError('REQUEST_INVALID', '请求在传输中被中断')
     throw new Error('请求体没有读成字节')
+  }
   return { compressed, decompressed: await gunzipWithin(compressed, limits.maxRawBytes) }
 }

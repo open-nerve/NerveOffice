@@ -87,7 +87,7 @@ export const ARTIFACT_POLICY: ArtifactPolicy = {
     { address: 'https://github.com/dream-num/univer#json-x', source: '@univerjs/core', reason: '同上' },
     { address: 'https://github.com/MikeMcl/decimal.js', source: 'decimal.js', reason: '许可注释' },
     { address: 'https://universheet.net/docs/Canvas.html', source: '@univerjs/engine-render', reason: '画布取不到数据地址时错误信息里的说明链接' },
-    { address: 'http://localhost:5173', source: '@univerjs/core', reason: 'isLegalUrl 把以它开头的字符串当作合法地址（SDK 开发时的遗留），只做字符串比较；超链接的入口在 M5 之前隐藏' },
+    { address: 'http://localhost:5173', source: '@univerjs/core', reason: 'isLegalUrl 把以它开头的字符串当作合法地址（SDK 开发时的遗留），只做字符串比较，页面不请求；键入这样的文字会像其他网址一样被自动识别为链接（DEF-019、DEF-021）' },
     { address: 'http://www.w3.org/TR/REC-html40', source: '@univerjs/ui、@univerjs/sheets-ui、@univerjs/docs-ui', reason: '复制到剪贴板的 HTML 里 Excel 用的命名空间（xmlns）' },
     { address: 'http://www.w3.org/1999/xhtml', source: '@univerjs/sheets-ui', reason: 'XHTML 的命名空间' },
     { address: 'https://example.com/a-b.svg', source: '@univerjs/design 的样式', reason: '样式里一个生成出来却没有元素使用的背景图工具类（univer-bg-[url(…)]）；万一用到，CSP 的 img-src 只允许本站' },
@@ -145,5 +145,8 @@ export const WORKER_BUDGETS: readonly WorkerBudget[] = [
   { entry: 'editor.html', worker: 'formula.worker', label: '公式 Worker', maxGzipBytes: 800 * 1024, reason: 'M1-P4：实测 673 KiB，预算比实测多约 19%' },
 ]
 
-/** 平台页面的入口：它的产物里的地址只按具体地址放行（ARTIFACT_POLICY 的前缀登记只适用于编辑器的产物） */
+/** 平台页面的入口：它的产物（含与编辑器页共用的块）里的地址只按具体地址放行 */
 export const PLATFORM_ENTRIES: readonly string[] = ['index.html']
+
+/** 编辑器页的入口：它能加载到的产物与它创建的 Worker 里，地址可以按 ARTIFACT_POLICY 的前缀登记放行 */
+export const EDITOR_ENTRIES: readonly string[] = ['editor.html']

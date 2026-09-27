@@ -69,6 +69,7 @@ function setup(overrides: { baseRevision?: number, maxSnapshotBytes?: number } =
   const { send, calls } = fakeSend()
   const onUnauthenticated = vi.fn()
   const onSessionStale = vi.fn()
+  const reportError = vi.fn()
   const coordinator = createSaveCoordinator({
     editor,
     send,
@@ -80,9 +81,10 @@ function setup(overrides: { baseRevision?: number, maxSnapshotBytes?: number } =
     },
     onUnauthenticated,
     onSessionStale,
+    reportError,
     maxSnapshotBytes: overrides.maxSnapshotBytes,
   })
-  return { coordinator, editor, control, send, calls, onUnauthenticated, onSessionStale }
+  return { coordinator, editor, control, send, calls, onUnauthenticated, onSessionStale, reportError }
 }
 
 /** 等保存流程走到发出请求（提交编辑、等公式收齐都是异步的） */
@@ -401,15 +403,50 @@ describe('保存失败', () => {
   })
 })
 
+describe('保存流程本身出错（审查 B5）', () => {
+  it('捕获时出错：显示保存失败并上报，不发请求；save 不会被拒绝', async () => {
+    const { coordinator, editor, control, send, reportError } = setup()
+    control.edit('甲')
+    const failure = new Error('SDK 的 save() 出错')
+    vi.mocked(editor.capture).mockImplementationOnce(() => {
+      throw failure
+    })
+    await expect(coordinator.save()).resolves.toBeUndefined()
+    expect(send).not.toHaveBeenCalled()
+    expect(coordinator.view()).toMatchObject({ status: 'failed', problem: { kind: 'unexpected', error: failure }, canSave: true })
+    expect(reportError).toHaveBeenCalledWith(failure)
+    expect(coordinator.hasUnsavedWork()).toBe(true)
+  })
+
+  it('提交编辑或等公式收齐时出错：同样', async () => {
+    const { coordinator, editor, control, reportError } = setup()
+    control.startCellEditing('x')
+    vi.mocked(editor.commitCellEditing).mockRejectedValueOnce(new Error('提交出错'))
+    await coordinator.save()
+    expect(coordinator.view().problem?.kind).toBe('unexpected')
+    vi.mocked(editor.settleFormulas).mockRejectedValueOnce(new Error('收齐出错'))
+    control.commitResult = true
+    await coordinator.save()
+    expect(coordinator.view().problem?.kind).toBe('unexpected')
+    expect(reportError).toHaveBeenCalledTimes(2)
+  })
+})
+
 describe('停止保存与离开', () => {
-  it('页面停止保存（别的标签页换了人）：之后的保存不做', async () => {
-    const { coordinator, control, send } = setup()
+  it('页面停止保存（别的标签页换了人）：之后的保存不做；恢复之后照常保存', async () => {
+    const { coordinator, control, send, calls } = setup()
     control.edit('甲')
     coordinator.stop()
     expect(coordinator.view().canSave).toBe(false)
     await coordinator.save()
     expect(send).not.toHaveBeenCalled()
     expect(coordinator.hasUnsavedWork()).toBe(true)
+    coordinator.resume()
+    expect(coordinator.view().canSave).toBe(true)
+    const saving = coordinator.save()
+    ;(await sent(calls, 1)).resolve(saved(2))
+    await saving
+    expect(coordinator.view().status).toBe('clean')
   })
 
   it('没有修改、没有正在编辑、没有在途的保存：离开不提示', async () => {

@@ -1,6 +1,7 @@
 // 保存到云端，看到真实的保存状态（US-M1-05，P4 设计 §3.7.2、§3.10）。
 import type { Page } from '@playwright/test'
-import { createUser } from '../../support/database.ts'
+import { SHEET_TEMPLATE } from '@nerve-office/contracts'
+import { createDocument, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { appendSheet, cellOf, createSheetThroughApi, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
@@ -26,6 +27,30 @@ async function openNewSheet(page: Page, prefix: string): Promise<string> {
   return documentId
 }
 
+/**
+ * 计算进行中再改一次的场景（P4 探针 (f) 的公式，个数减少）：D1:D1000 是 1…1000，A1:A200 是
+ * =SUMPRODUCT($D$1:$D$1000*(ROW($D$1:$D$1000)>i))+i。本机实测一轮约 0.5 秒（300 个约 0.8 秒），键入下一格约 0.1–0.15 秒，
+ * 所以改完 D1 接着改 D2 时第一轮还在计算；两轮合计在公式收齐的 3 秒上限之内留足余量
+ */
+const SLOW_FORMULA_COUNT = 200
+const D_VALUES = Array.from({ length: 1000 }, (_, row) => row + 1)
+
+/** 按定义算出第 i 个公式（0 起）的值 */
+function slowFormulaValue(d: readonly number[], i: number): number {
+  return d.reduce((sum, value, row) => sum + (row + 1 > i ? value : 0), 0) + i
+}
+
+function sheetWithSlowFormulas(unitId: string): string {
+  const cellData: Record<number, Record<number, { f?: string, v: number, t: number }>> = {}
+  D_VALUES.forEach((value, row) => {
+    cellData[row] = { 3: { v: value, t: 2 } }
+  })
+  for (let i = 0; i < SLOW_FORMULA_COUNT; i += 1)
+    cellData[i] = { ...cellData[i], 0: { f: `=SUMPRODUCT($D$1:$D$1000*(ROW($D$1:$D$1000)>${i}))+${i}`, v: slowFormulaValue(D_VALUES, i), t: 2 } }
+  const sheet = SHEET_TEMPLATE.sheets['sheet-1']
+  return JSON.stringify({ ...SHEET_TEMPLATE, id: unitId, sheets: { 'sheet-1': { ...sheet, cellData } } })
+}
+
 test.describe('US-M1-05 保存到云端，看到真实的保存状态', () => {
   test('修改之后有未保存的修改 → 保存中 → 已保存到云端（保存按钮）', async ({ page }) => {
     const documentId = await openNewSheet(page, 'save-button')
@@ -43,13 +68,20 @@ test.describe('US-M1-05 保存到云端，看到真实的保存状态', () => {
 
   test('Ctrl/Cmd+S 保存（焦点在表格里也收得到），不弹出浏览器的另存网页', async ({ page }) => {
     const documentId = await openNewSheet(page, 'save-shortcut')
-    let downloads = 0
-    page.on('download', () => void (downloads += 1))
+    // 在页面的监听之后再挂一个捕获阶段的监听，记下按键事件的默认行为是否已被阻止（无头浏览器本来就不弹出另存网页，只能这样核对，审查 B7）
+    await page.evaluate(() => {
+      const seen: boolean[] = []
+      Object.assign(window, { saveShortcutPrevented: seen })
+      window.addEventListener('keydown', (event) => {
+        if (event.key.toLowerCase() === 's' && (event.ctrlKey || event.metaKey))
+          seen.push(event.defaultPrevented)
+      }, { capture: true })
+    })
     await typeInCell(page, 'B2', 'shortcut')
     await page.keyboard.press('ControlOrMeta+s')
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'B2')?.v).toBe('shortcut')
-    expect(downloads).toBe(0)
+    expect(await page.evaluate(() => (window as unknown as { saveShortcutPrevented: boolean[] }).saveShortcutPrevented)).toEqual([true])
   })
 
   test('保存期间继续键入：回包之后仍是有未保存的修改，服务器上是保存那一刻的内容', async ({ page }) => {
@@ -123,6 +155,24 @@ test.describe('US-M1-05 保存到云端，看到真实的保存状态', () => {
     const saved = (await savedContent(page, documentId)).snapshot
     expect(cellOf(saved, 'A2')).toMatchObject({ f: '=A1*2', v: 10 })
     expect(cellOf(saved, 'A3')).toMatchObject({ f: '=SUM(A1:A2)', v: 15 })
+  })
+
+  test('计算进行中又改了一处，立即保存：等第二轮算完才保存，服务器上的缓存值是两处修改之后的结果', async ({ page }) => {
+    const owner = await createUser('save-during-calculation')
+    const documentId = await createDocument(owner, '计算中再改', sheetWithSlowFormulas)
+    await loginThroughApi(page, owner)
+    await openEditor(page, documentId, 'steady')
+    // 两处的脏区不相交，SDK 不停下这一轮，而是算完之后再开始下一轮（录制的序列见单元测试的 EDIT_DURING_CALCULATION）
+    await typeInCell(page, 'D1', '1000')
+    await typeInCell(page, 'D2', '2000')
+    await page.keyboard.press('ControlOrMeta+s')
+    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    await expect(page.getByText('公式结果尚未保存，请稍后再保存一次')).toHaveCount(0)
+
+    const saved = (await savedContent(page, documentId)).snapshot
+    const d = [1000, 2000, ...D_VALUES.slice(2)]
+    const values = Array.from({ length: SLOW_FORMULA_COUNT }, (_, row) => saved.sheets['sheet-1']?.cellData[row]?.[0]?.v)
+    expect(values).toEqual(Array.from({ length: SLOW_FORMULA_COUNT }, (_, i) => slowFormulaValue(d, i)))
   })
 
   test('跨表引用：改了另一张表的依赖立即保存，缓存值一致', async ({ page }) => {

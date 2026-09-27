@@ -102,6 +102,7 @@ function setup(options: Setup = {}) {
     sessionChannel: channel,
     currentPath: () => `/documents/${DOCUMENT_ID}`,
     newId: () => `id-${++id}`,
+    reportError: vi.fn(),
   })
   return { editorPage, surface, fake, page, api, createEditor, fromOtherTab, listeners }
 }
@@ -119,7 +120,7 @@ describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
     expect(api.document).toHaveBeenCalledWith(DOCUMENT_ID)
     expect(api.content).toHaveBeenCalledWith(DOCUMENT_ID)
     expect(createEditor).toHaveBeenCalledWith({ container: surface, snapshot: '{"id":"unit-1"}' })
-    expect(editorPage.view()).toMatchObject({ load: { kind: 'ready', title: '周报', readOnly: false, stage: 'rendered' }, save: { status: 'clean' }, sessionChanged: false })
+    expect(editorPage.view()).toMatchObject({ load: { kind: 'ready', title: '周报', readOnly: false, stage: 'rendered' }, save: { status: 'clean' }, session: 'active' })
     expect(surface.dataset.editorState).toBe('ready')
 
     fake.enter('steady')
@@ -207,35 +208,65 @@ describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
   })
 })
 
-describe('编辑器页的会话（P4 设计 §3.7.3）', () => {
+describe('编辑器页的会话（P4 设计 §3.7.3，审查 B1）', () => {
   it('别的标签页登录的是同一个人：换上新的令牌，照常保存', async () => {
     const { editorPage, api, fromOtherTab } = setup()
     await editorPage.load()
     vi.mocked(api.session).mockResolvedValueOnce({ ...ALICE, csrfToken: 'csrf-new' })
     fromOtherTab()
     await vi.waitFor(() => expect(api.session).toHaveBeenCalledTimes(2))
-    expect(editorPage.view().sessionChanged).toBe(false)
+    expect(editorPage.view().session).toBe('active')
     expect(editorPage.view().save?.canSave).toBe(true)
   })
 
-  it('别的标签页换了人：停止保存，提示刷新，不自动重新加载', async () => {
+  it('别的标签页换了人：停止保存，不自动重新加载；原来的人登录回来之后恢复', async () => {
     const { editorPage, api, page, fromOtherTab } = setup()
     await editorPage.load()
     vi.mocked(api.session).mockResolvedValueOnce(BOB)
     fromOtherTab()
-    await vi.waitFor(() => expect(editorPage.view().sessionChanged).toBe(true))
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('other-user'))
     expect(editorPage.view().save?.canSave).toBe(false)
     expect(page.visits).toEqual([])
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
     await editorPage.save()
     expect(api.save).not.toHaveBeenCalled()
+
+    vi.mocked(api.session).mockResolvedValueOnce({ ...ALICE, csrfToken: 'csrf-back' })
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('active'))
+    expect(editorPage.view().save?.canSave).toBe(true)
+    await editorPage.save()
+    expect(api.save).toHaveBeenCalledOnce()
   })
 
-  it('别的标签页退出了：同样停止保存', async () => {
+  it('别的标签页退出了：暂停保存（修改留着）；本人在别处重新登录之后恢复', async () => {
+    const { editorPage, api, page, fromOtherTab } = setup()
+    await editorPage.load()
+    vi.mocked(api.session).mockRejectedValueOnce(new ApiError(401, 'UNAUTHENTICATED', '请先登录'))
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('signed-out'))
+    expect(page.visits).toEqual([])
+    vi.mocked(api.session).mockResolvedValueOnce(ALICE)
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('active'))
+  })
+
+  it('暂停保存时按保存：先向服务端确认；本人已经在别处登录（消息没收到）就照常保存，否则不发请求', async () => {
     const { editorPage, api, fromOtherTab } = setup()
     await editorPage.load()
     vi.mocked(api.session).mockRejectedValueOnce(new ApiError(401, 'UNAUTHENTICATED', '请先登录'))
     fromOtherTab()
-    await vi.waitFor(() => expect(editorPage.view().sessionChanged).toBe(true))
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('signed-out'))
+
+    vi.mocked(api.session).mockRejectedValueOnce(new ApiError(401, 'UNAUTHENTICATED', '请先登录'))
+    await editorPage.save()
+    expect(api.save).not.toHaveBeenCalled()
+    expect(editorPage.view().session).toBe('signed-out')
+
+    vi.mocked(api.session).mockResolvedValueOnce(ALICE)
+    await editorPage.save()
+    expect(editorPage.view().session).toBe('active')
+    expect(api.save).toHaveBeenCalledOnce()
   })
 
   it('确认会话时网络失败：页面照常', async () => {
@@ -244,7 +275,7 @@ describe('编辑器页的会话（P4 设计 §3.7.3）', () => {
     vi.mocked(api.session).mockRejectedValueOnce(new NetworkError('断网'))
     fromOtherTab()
     await vi.waitFor(() => expect(api.session).toHaveBeenCalledTimes(2))
-    expect(editorPage.view().sessionChanged).toBe(false)
+    expect(editorPage.view().session).toBe('active')
   })
 
   it('保存得到 CSRF_TOKEN_INVALID：向服务端确认会话，换了人就停止保存', async () => {
@@ -252,15 +283,23 @@ describe('编辑器页的会话（P4 设计 §3.7.3）', () => {
     await editorPage.load()
     vi.mocked(api.session).mockResolvedValueOnce(BOB)
     await editorPage.save()
-    await vi.waitFor(() => expect(editorPage.view().sessionChanged).toBe(true))
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('other-user'))
   })
 
-  it('保存得到登录已过期：整页转到登录页（带原地址与过期的提示）', async () => {
-    const { editorPage, page } = setup({ api: { save: async () => Promise.reject(new ApiError(401, 'SESSION_EXPIRED', '已过期')) } })
+  it('保存得到登录已过期：不整页跳转（修改留着），暂停保存，提示在别处登录；本人登录回来之后再保存成功', async () => {
+    let expired = true
+    const { editorPage, page, api } = setup({
+      api: { save: async () => expired ? Promise.reject(new ApiError(401, 'SESSION_EXPIRED', '已过期')) : ({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z' }) },
+    })
     await editorPage.load()
     await editorPage.save()
-    expect(page.visits).toEqual([`/login?from=%2Fdocuments%2F${DOCUMENT_ID}&reason=expired`])
-    expect(editorPage.view().save?.status).toBe('failed')
+    expect(page.visits).toEqual([])
+    expect(editorPage.view()).toMatchObject({ session: 'signed-out', save: { status: 'failed' } })
+
+    expired = false
+    vi.mocked(api.session).mockResolvedValueOnce(ALICE)
+    await editorPage.save()
+    expect(editorPage.view()).toMatchObject({ session: 'active', save: { status: 'clean' } })
   })
 
   it('卸载之后不再处理别的标签页的消息，销毁编辑器', async () => {

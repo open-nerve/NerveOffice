@@ -18,7 +18,10 @@ export const IMAGE_GUARDED_COMMANDS: readonly GuardedCommand[] = [
   { id: 'sheet.command.add-worksheet-background-image', source: 'sheets-drawing-ui/src/commands/commands/worksheet-background-image.command.ts:28（工作表背景图片：菜单已隐藏，同样写入图片数据）' },
 ]
 
-/** 超链接：地址白名单在 M5（计划书 §11.3）。取消链接（cancel-hyper-link）只删除数据，不拦 */
+/**
+ * 超链接：地址白名单在 M5（计划书 §11.3）。取消链接（cancel-hyper-link）只删除数据，不拦。
+ * 键入网址时 SDK 的自动识别不经这些命令（sheets-hyper-link 的写入拦截器），M1 保留，与粘贴带来的链接一样由 M3、M5 的链接地址判定处理（DEF-021）
+ */
 export const HYPERLINK_GUARDED_COMMANDS: readonly GuardedCommand[] = [
   { id: 'sheet.operation.insert-hyper-link-toolbar', source: 'sheets-hyper-link-ui/src/commands/operations/popup.operations.ts:94（工具栏，快捷键 Ctrl/Cmd+K 绑定它：menu/menu.ts:156-160）' },
   { id: 'sheet.operation.insert-hyper-link', source: 'sheets-hyper-link-ui/src/commands/operations/popup.operations.ts:64（右键菜单）' },

@@ -27,10 +27,16 @@ async function editAndSave(page: Page, documentId: string): Promise<Workbook> {
   return saved
 }
 
-/** 重开之后不做修改立即再保存一次：服务器上的值、公式与格式与重开之前保存的相同，说明页面打开的就是它 */
+/**
+ * 重开之后不做修改立即再保存一次：服务器上的值、公式与格式与重开之前保存的相同，说明页面打开的就是它。
+ * 修订号加一：确实存下了本页捕获的内容，而不是没有保存（审查 B7）
+ */
 async function contentAfterResave(page: Page, documentId: string): Promise<ReturnType<typeof contentOf>> {
+  const before = (await savedContent(page, documentId)).revision
   await saveAndWait(page)
-  return contentOf((await savedContent(page, documentId)).snapshot)
+  const after = await savedContent(page, documentId)
+  expect(after.revision).toBe(before + 1)
+  return contentOf(after.snapshot)
 }
 
 test.describe('US-M1-06 重开看到最后一次保存的内容', () => {

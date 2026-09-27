@@ -520,6 +520,19 @@ describe('US-M1-04 新建表格', () => {
     expect(api.requests.find(request => request.key === 'POST /api/documents')?.headers['x-csrf-token']).toBe('csrf-1')
   })
 
+  it('回包与契约不一致（服务端可能已经建好）：再点沿用同一个 requestId，不会建出两份（审查 B6）', async () => {
+    const api = installFakeApi({ ...LOGGED_IN, ...NO_DOCUMENTS, 'POST /api/documents': () => json(201, { id: 'not-a-detail' }) })
+    const app = renderApp('/')
+    fireEvent.click(await screen.findByRole('button', { name: '新建表格' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('新建表格失败')
+    api.on('POST /api/documents', () => json(201, created))
+    fireEvent.click(screen.getByRole('button', { name: '新建表格' }))
+    await waitFor(() => expect(app.page.visits).toEqual([`assign /documents/${created.id}`]))
+    const ids = api.requests.filter(request => request.key === 'POST /api/documents').map(request => (request.body as { requestId: string }).requestId)
+    expect(ids).toHaveLength(2)
+    expect(ids[1]).toBe(ids[0])
+  })
+
   it('网络错误：提示失败，再点沿用同一个 requestId（同一次新建只生成一份）；确定失败之后再点换一个', async () => {
     const api = installFakeApi({ ...LOGGED_IN, ...NO_DOCUMENTS, 'POST /api/documents': networkFailure })
     const app = renderApp('/')

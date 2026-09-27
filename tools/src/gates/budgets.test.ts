@@ -1,6 +1,6 @@
 import type { BuildOutput, EntryBudget, ViteManifest, WorkerBudget } from './budgets.ts'
 import { describe, expect, it } from 'vitest'
-import { checkBudgets, initialFiles, initialStyles, workerFiles } from './budgets.ts'
+import { checkBudgets, initialFiles, initialStyles, reachableFiles, referencedWorkers, workerFiles } from './budgets.ts'
 
 const MANIFEST: ViteManifest = {
   'index.html': { file: 'assets/index.js', imports: ['_shared.js'], css: ['assets/index.css'] },
@@ -8,7 +8,7 @@ const MANIFEST: ViteManifest = {
   '_deep.js': { file: 'assets/deep.js' },
   // 只被动态加载的块（manifest 里在 dynamicImports，不在 imports）
   'src/lazy.ts': { file: 'assets/lazy.js' },
-  'editor.html': { file: 'assets/editor.js', imports: ['_shared.js'] },
+  'editor.html': { file: 'assets/editor.js', imports: ['_shared.js'], dynamicImports: ['src/lazy.ts'] },
 }
 
 const SIZES: Record<string, number> = {
@@ -37,6 +37,11 @@ describe('US-M1-11 首屏 JS 的体积预算', () => {
   it('首屏的文件：入口块与它静态引用的块（递归），不含动态加载的块；共用的块只算一次', () => {
     expect(initialFiles(MANIFEST, 'index.html')).toEqual(['assets/deep.js', 'assets/index.js', 'assets/shared.js'])
     expect(initialFiles(MANIFEST, 'missing.html')).toBeUndefined()
+  })
+
+  it('入口能加载到的全部文件：首屏的块、动态加载的块与样式', () => {
+    expect(reachableFiles(MANIFEST, 'editor.html')).toEqual(['assets/deep.js', 'assets/editor.js', 'assets/lazy.js', 'assets/shared.css', 'assets/shared.js'])
+    expect(reachableFiles(MANIFEST, 'missing.html')).toEqual([])
   })
 
   it('首屏的样式：入口与它静态引用的块带的样式', () => {
@@ -79,5 +84,12 @@ describe('US-M1-11 入口创建的 Worker 的体积预算（P4 设计 §3.9）',
   it('入口的首屏块里没有引用这个 Worker：违规（预算表要跟着 Worker 一起改）', () => {
     const result = checkBudgets(MANIFEST, [], [workerBudget('image.worker', 1)], OUTPUT)
     expect(result.violations.map(v => v.rule)).toEqual(['budgets/missing-worker'])
+  })
+
+  it('入口的首屏块里创建了没有登记预算的 Worker：违规', () => {
+    const output: BuildOutput = { ...OUTPUT, readText: file => file === 'assets/editor.js' ? `${TEXTS['assets/editor.js'] ?? ''};new SharedWorker(new URL("/assets/sync.worker-Z9.js",import.meta.url))` : OUTPUT.readText(file) }
+    expect(referencedWorkers(['assets/editor.js'], output.readText)).toEqual(['assets/formula.worker-AbC_12.js', 'assets/sync.worker-Z9.js'])
+    const result = checkBudgets(MANIFEST, [budget('editor.html', 1_000_000)], [workerBudget('formula.worker', 1_000_000)], output)
+    expect(result.violations).toEqual([expect.objectContaining({ rule: 'budgets/unbudgeted-worker', subject: 'assets/sync.worker-Z9.js' })])
   })
 })

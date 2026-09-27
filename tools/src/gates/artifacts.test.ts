@@ -216,15 +216,56 @@ describe('US-M1-11 A01 产物扫描：外部地址与关键字', () => {
     expect(rules('/*! see https://evil.example/license */ const a=1')).toEqual(['artifacts/address'])
   })
 
-  it('前缀的登记（编辑器的产物）：以它开头的地址放行，别的前缀与平台页面的产物照旧违规', () => {
+  it('前缀的登记只适用于指定的文件（编辑器的产物）：以它开头的地址放行；其他文件（默认）照旧违规', () => {
     const prefixed: ArtifactPolicy = { ...policy, allowedAddresses: [{ address: 'https://support.example.com/docs/', prefix: true, source: '样例', reason: '公式帮助的链接' }] }
     const code = 'a={url:"https://support.example.com/docs/sum-function"};b="https://support.example.com/other"'
-    const editor = scanArtifacts([{ path: 'assets/editor.js', content: code }], prefixed)
+    const editor = scanArtifacts([{ path: 'assets/editor.js', content: code }], prefixed, { prefixFiles: new Set(['assets/editor.js']) })
     expect(editor.violations.map(v => v.detail.split(' ')[0])).toEqual(['https://support.example.com/other'])
     expect(editor.unusedAddresses).toEqual([])
-    const platform = scanArtifacts([{ path: 'assets/index.js', content: code }], prefixed, { strictFiles: new Set(['assets/index.js']) })
+    const platform = scanArtifacts([{ path: 'assets/index.js', content: code }], prefixed)
     expect(platform.violations).toHaveLength(2)
     expect(platform.unusedAddresses).toEqual(['https://support.example.com/docs/'])
+  })
+
+  it.each([
+    ['反斜杠', 'location.href="\\\\\\\\evil.example/x"'],
+    ['斜杠加反斜杠', 'location.href="/\\\\evil.example/x"'],
+    ['协议之后是反斜杠', 'fetch("https:\\\\\\\\evil.example/x")'],
+    ['前导空格', 'fetch(" //evil.example/x")'],
+    ['斜杠中间夹制表符', 'fetch("/\t/evil.example/x")'],
+    ['用户信息', 'fetch("//u@evil.example/x")'],
+    ['主机里的百分号编码', 'fetch("//%65vil.example/x")'],
+
+    ['全角字符的主机', 'fetch("//ｅｖｉｌ.example/x")'],
+    ['协议之后不带斜杠', 'new WebSocket("wss:evil.example/x")'],
+  ])('违规（审查 A4）：浏览器会解析成跨源地址的写法：%s', (_case, code) => {
+    const result = scan(code)
+    expect(result.violations.map(v => v.rule)).toEqual(['artifacts/address'])
+    expect([...result.hosts.keys()]).toEqual(['evil.example'])
+  })
+
+  it('违规（审查 A4）：非 ASCII 的主机按浏览器的规则转成 ASCII（punycode）报出', () => {
+    const result = scan('fetch("//évil.example/x")')
+    expect(result.violations.map(v => v.rule)).toEqual(['artifacts/address'])
+    expect([...result.hosts.keys()]).toEqual(['xn--vil-9la.example'])
+  })
+
+  it.each([
+    ['样式的 url() 不带引号', 'a{background:url(//evil.example/a.png)}', 'assets/x.css'],
+    ['样式的 @import url()', '@import url(//evil.example/a.css);', 'assets/x.css'],
+    ['HTML 属性不带引号', '<img src=//evil.example/a.png>', 'index.html'],
+  ])('违规（审查 A4）：%s里的协议相对地址', (_case, content, path) => {
+    expect(rules(content, path)).toEqual(['artifacts/address'])
+  })
+
+  it.each([
+    ['正则片段里的两个斜杠', 'const a="//g";const b="//i"'],
+    ['正则的原文字符串', 'new RegExp("\\\\d+\\\\s*")'],
+    ['相对路径', 'fetch("/api/x");const c="./a//b"'],
+    ['只有协议', 'const p="https:";const q="http:"'],
+    ['拼接用的协议与斜杠', 'const u="https://"+host'],
+  ])('合规：不是跨源地址的写法不误报：%s', (_case, code) => {
+    expect(rules(code)).toEqual([])
   })
 
   it.each(['Sentry.init({dsn:d})', 'new PostHog()', 'o.license_key="x"', 'o.licenseKey="x"', 'import("@univerjs-pro/license")', 'https://www.googletagmanager.com/gtag/js'])('违规：关键字（不区分大小写）%s', (code) => {

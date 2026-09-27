@@ -13,8 +13,9 @@ export const SNAPSHOT_MAX_DEPTH = 64
 export const SNAPSHOT_UPLOAD_CONTENT_TYPE = 'application/gzip'
 
 /**
-/* 版本相同，
- * 模板快照的 appVersion 由 SDK 保存时写出，单元测试核对两者一致；升级 SDK 时一起更新。
+ * 平台内置的 Univer SDK 版本：写入 documents.sdk_version，与 pnpm 目录里 Univer 各包的版本、门禁的 UNIVER_POLICY 相同。
+ * 三者由测试串起来：升级 SDK 之后，E2E 的模板用例（新建的表格打开后立即保存，与模板逐字节相同）因 SDK 写出的 appVersion 变了而失败；
+ * 重新生成模板之后，单元测试核对模板的 appVersion 与这里一致；deps 门禁核对安装的版本与 UNIVER_POLICY 一致。
  */
 export const UNIVER_SDK_VERSION = '1.0.1'
 
@@ -71,9 +72,12 @@ export function revisionEtag(revision: number): string {
   return `"${revision}"`
 }
 
-/** 从 ETag 取回修订号；不是 revisionEtag 的写法时为 undefined。 */
+/**
+ * 从 ETag 取回修订号；不是 revisionEtag 的写法时为 undefined。
+ * 反向代理改动响应的编码（例如重新压缩）时会把它标成弱校验器（W/"n"）：修订号不变，同样接受（审查 B10）。
+ */
 export function revisionFromEtag(etag: string | null | undefined): number | undefined {
-  const match = /^"([1-9]\d{0,9})"$/.exec(etag ?? '')
+  const match = /^(?:W\/)?"([1-9]\d{0,9})"$/.exec(etag ?? '')
   const revision = match === null ? Number.NaN : Number(match[1])
   return Number.isSafeInteger(revision) && revision <= REVISION_MAX ? revision : undefined
 }

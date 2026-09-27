@@ -2,7 +2,7 @@
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell, waitForEditor } from '../../support/sheet.ts'
 
 test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容', () => {
   test('A 保存之后 B 再保存：B 得到版本冲突并保留本页的内容，服务器上是 A 的版本', async ({ page, context }) => {
@@ -26,8 +26,12 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     expect(cellOf(saved.snapshot, 'A1')?.v).toBe('from A')
     expect(saved.revision).toBe(2)
 
-    // B 保留本页的内容：离开时仍提示有没保存的内容；再按保存也不会覆盖
+    // B 保留本页的内容：离开时仍提示有没保存的内容；再按保存不发请求（审查 B7）。
+    // "没有请求"只能等一段时间再下结论：正常的保存从按键到发出请求不到 100 ms（公式收齐每 20 ms 判断一次），这里等 1 秒
+    const put = other.waitForRequest(request => request.method() === 'PUT', { timeout: 1_000 }).then(() => true, () => false)
     await other.keyboard.press('ControlOrMeta+s')
+    expect(await put).toBe(false)
+    await expect(saveStatus(other)).toHaveText('版本冲突')
     expect((await savedContent(page, documentId)).revision).toBe(2)
     const dialogs: string[] = []
     other.on('dialog', (dialog) => {
@@ -76,9 +80,17 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     await saveButton(other).click()
     await expect(saveStatus(other)).toHaveText('版本冲突')
 
-    other.once('dialog', dialog => void dialog.accept())
+    // 本页有没保存的修改：重新加载时浏览器先提示，选择离开之后重新加载（不另外打开页面，审查 B7）
+    const dialogs: string[] = []
+    other.on('dialog', (dialog) => {
+      dialogs.push(dialog.type())
+      void dialog.accept()
+    })
+    const reloaded = other.waitForEvent('load')
     await other.getByRole('button', { name: '重新加载' }).click()
-    await openEditor(other, documentId, 'steady')
+    await reloaded
+    expect(dialogs).toEqual(['beforeunload'])
+    await waitForEditor(other, 'steady')
     await expect(saveStatus(other)).toHaveText('已保存到云端')
     await typeInCell(other, 'C1', 'after reload')
     await saveAndWait(other)

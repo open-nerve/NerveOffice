@@ -7,7 +7,7 @@
 // 从任意函数的 .constructor 取到的构造函数），这部分由 CSP 兜底：策略里没有 'unsafe-eval'，connect-src 只有 'self'。
 import type { Reference, TextValue } from './eval-and-function.ts'
 import type { Violation } from './types.ts'
-import { analyzeJavaScript } from './eval-and-function.ts'
+import { analyzeJavaScript, INTERPOLATION_PLACEHOLDER } from './eval-and-function.ts'
 
 export interface ArtifactFile {
   path: string
@@ -113,6 +113,10 @@ function isJavaScript(path: string): boolean {
 const ABSOLUTE_URL = /\b(?:https?|wss?):(?:\\{0,2}\/){2}(?:[^\s"'`()<>\\,;{}$]|\\{1,2}\/|\$(?!\{)|\$\{[^{}]*\})+/gi
 /** 没有语法树的文本里的协议相对地址：整个字符串就是地址（前后紧挨着引号），主机是固定的域名。 */
 const PROTOCOL_RELATIVE_URL = /(?<=["'`])\/\/(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?(?:[/?#][^"'`\s]*)?(?=["'`])/gi
+/** 样式里 url(…) 的协议相对地址：压缩器会去掉引号（审查 A4） */
+const CSS_URL_PROTOCOL_RELATIVE = /(?<=url\((?:\s*["'])?\s*)\/\/[^)"'\s]+/gi
+/** HTML 里不带引号的属性值（src=//…）的协议相对地址 */
+const HTML_ATTRIBUTE_PROTOCOL_RELATIVE = /(?<=\b(?:src|href|action|formaction|poster|data|background|srcset)\s*=\s*)\/\/[^\s>"'`]+/gi
 /**
  * 字符串的值里的协议相对地址（DEF-016）：值以 //主机 开头，或者模板字符串里紧跟在插值后面（`${location.protocol}//evil.example`）。
  * 主机可以是域名、不带域名后缀的名字（localhost）、IPv4 或方括号里的 IPv6，后面只能是端口、路径、查询、片段或结尾。
@@ -183,8 +187,11 @@ function comparableAddress(address: string): string {
 }
 
 export interface ScanOptions {
-  /** 只按具体地址放行的文件（平台页面的产物）：前缀的登记不适用（P4 设计 §3.9） */
-  strictFiles?: ReadonlySet<string>
+  /**
+   * 允许按前缀放行地址的文件（编辑器页的产物与公式 Worker，P4 设计 §3.9）。默认没有：
+   * 其他文件（平台页面、以后新增的入口、找不到构建清单时的全部文件）一律只按具体地址（审查 A 路建议 B1）
+   */
+  prefixFiles?: ReadonlySet<string>
 }
 
 /** 允许清单的查找：具体地址按全文，前缀按开头；记下用到了哪些登记。 */
@@ -199,8 +206,8 @@ function allowlist(entries: readonly AllowedAddress[]) {
   }
   const used = new Set<string>()
   return {
-    allows(address: string, strict: boolean): boolean {
-      const original = exact.get(address) ?? (strict ? undefined : prefixes.find(entry => address.startsWith(entry.prefix))?.original)
+    allows(address: string, byPrefix: boolean): boolean {
+      const original = exact.get(address) ?? (byPrefix ? prefixes.find(entry => address.startsWith(entry.prefix))?.original : undefined)
       if (original !== undefined)
         used.add(original)
       return original !== undefined
@@ -209,14 +216,56 @@ function allowlist(entries: readonly AllowedAddress[]) {
   }
 }
 
-/** JS 文件里的地址：按值识别（DEF-016）。字符串与模板字符串：绝对地址，以及值以 //主机 开头或插值后面紧跟 //主机 的协议相对地址；正则与注释：绝对地址。 */
+/** 按浏览器的规则解析地址时用的基准：解析出的主机是它，就是相对地址，指向本站 */
+const SITE = new URL('https://site.invalid/')
+const NETWORK_SCHEMES: ReadonlySet<string> = new Set(['http:', 'https:', 'ws:', 'wss:'])
+
+/**
+ * 像主机的名字：带点的域名或 IPv4、localhost、方括号里的 IPv6，或者写了端口。
+ * "//g"、"\\d+" 这类正则或路径的片段解析出来也有"主机"，不算（审查 A4 的误报）。
+ */
+function plausibleHost(url: URL): boolean {
+  return url.hostname.includes('.') || url.hostname === 'localhost' || url.hostname.startsWith('[') || url.port !== ''
+}
+
+/**
+ * 字符串的值按浏览器的规则解析出的跨源地址（DEF-016、审查 A4）：浏览器解析地址时会去掉首尾的空白与控制字符、
+ * 删掉制表符与换行、把反斜杠当作斜杠，还会解码主机里的百分号编码、把全角与非 ASCII 的主机转成 ASCII，
+ * 协议之后不带斜杠（wss:evil.example）也行。只看可能是地址的写法：以协议或两个斜杠（反斜杠）开头的值。
+ */
+function browserResolvedAddress(value: string): string | undefined {
+  // eslint-disable-next-line no-control-regex -- 浏览器去掉开头的 C0 控制字符与空格（WHATWG URL 规范），要匹配的正是它们
+  const candidate = value.replace(/[\t\n\r]/g, '').replace(/^[\u0000-\u0020]+/, '')
+  if (!/^(?:(?:https?|wss?):|[\\/]{2})/i.test(candidate))
+    return undefined
+  const url = URL.parse(candidate, SITE.href)
+  return url !== null && NETWORK_SCHEMES.has(url.protocol) && url.host !== SITE.host && plausibleHost(url) ? url.href : undefined
+}
+
+/**
+ * JS 文件里的地址：按值识别（DEF-016）。
+ * - 字符串：写法规范的绝对地址与协议相对地址按原文识别；其余可能是地址的写法按浏览器的规则解析（见 browserResolvedAddress）；
+ * - 模板字符串：绝对地址，以及插值后面紧跟 //主机 的协议相对地址（`${location.protocol}//evil.example`）；
+ * - 正则与注释：绝对地址。
+ */
 function addressesInText(value: TextValue): string[] {
   // 正则里的地址写成转义的形式（https:\/\/evil\.example）：去掉斜杠、点与连字符前的转义再识别
   const text = value.kind === 'regexp' ? value.text.replace(/\\([./-])/g, '$1') : value.text
-  const absolute = [...text.matchAll(ABSOLUTE_URL)].map(match => match[0])
+  const absolute = [...text.matchAll(ABSOLUTE_URL)]
   if (value.kind === 'regexp' || value.kind === 'comment')
-    return absolute
-  return [...absolute, ...[...text.matchAll(VALUE_PROTOCOL_RELATIVE_URL)].map(match => match[0])]
+    return absolute.map(match => match[0])
+  const relative = [...text.matchAll(VALUE_PROTOCOL_RELATIVE_URL)].filter((match) => {
+    // 协议相对的写法里，主机要像主机（"//g" 不是地址）
+    const url = URL.parse(match[0].replaceAll(INTERPOLATION_PLACEHOLDER, ''), SITE.href)
+    return url !== null && plausibleHost(url)
+  })
+  const found = [...absolute, ...relative]
+  if (value.kind === 'string' && !found.some(match => match.index === 0)) {
+    const resolved = browserResolvedAddress(text)
+    if (resolved !== undefined)
+      return [...found.map(match => match[0]), resolved]
+  }
+  return found.map(match => match[0])
 }
 
 export function scanArtifacts(files: readonly ArtifactFile[], policy: ArtifactPolicy, options: ScanOptions = {}): ArtifactScan {
@@ -236,15 +285,15 @@ export function scanArtifacts(files: readonly ArtifactFile[], policy: ArtifactPo
     hosts.set(shape.host, (hosts.get(shape.host) ?? 0) + 1)
     // 主机或端口里有插值时，实际的地址不止这段固定部分，允许清单不适用
     const address = shape.kind === 'fixed' && shape.hostComplete ? comparableAddress(shape.address) : undefined
-    if (address !== undefined && allowed.allows(address, options.strictFiles?.has(file.path) === true))
+    if (address !== undefined && allowed.allows(address, options.prefixFiles?.has(file.path) === true))
       return
     violations.push({ rule: 'artifacts/address', subject: file.path, detail: `${address ?? shape.host} 不在允许清单里（主机 ${shape.host}）：${context(file.content, index)}` })
   }
   const noteRawAddresses = (file: ArtifactFile): void => {
-    for (const match of file.content.matchAll(ABSOLUTE_URL))
-      noteAddress(file, match[0], match.index)
-    for (const match of file.content.matchAll(PROTOCOL_RELATIVE_URL))
-      noteAddress(file, match[0], match.index)
+    for (const pattern of [ABSOLUTE_URL, PROTOCOL_RELATIVE_URL, CSS_URL_PROTOCOL_RELATIVE, HTML_ATTRIBUTE_PROTOCOL_RELATIVE]) {
+      for (const match of file.content.matchAll(pattern))
+        noteAddress(file, match[0], match.index)
+    }
   }
 
   // 已登记的动态代码每出现一次记一个名字

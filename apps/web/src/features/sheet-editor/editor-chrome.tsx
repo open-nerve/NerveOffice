@@ -7,6 +7,7 @@ import { ArrowLeft } from 'lucide-react'
 import { useEffect, useSyncExternalStore } from 'react'
 import { ApiError, describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { LOGIN_PATH } from '../../shared/lib/login-path.ts'
 import { Alert, AlertDescription, Button, buttonVariants } from '../../shared/ui/index.ts'
 
 const HOME = '/'
@@ -16,6 +17,9 @@ function problemMessage(problem: SaveProblem): { text: string, requestId?: strin
     return { text: messages.editor.finishCellEditing, destructive: false }
   if (problem.kind === 'too-large' || (problem.error instanceof ApiError && problem.error.code === 'PAYLOAD_TOO_LARGE'))
     return { text: messages.editor.tooLarge, destructive: true }
+  // 令牌已按服务端确认的会话换过：再保存一次即可，不能让用户刷新（刷新会丢掉本页的修改）
+  if (problem.error instanceof ApiError && problem.error.code === 'CSRF_TOKEN_INVALID')
+    return { text: messages.editor.saveFailed(messages.editor.retrySave), requestId: problem.error.requestId, destructive: true }
   const error = describeError(problem.error)
   return { text: messages.editor.saveFailed(error.message), requestId: error.requestId, destructive: true }
 }
@@ -130,11 +134,22 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
           {save !== undefined && <SaveControls save={save} apple={apple} onSave={() => void page.save()} />}
         </div>
       </header>
-      {(view.sessionChanged || save !== undefined) && (
+      {(view.session !== 'active' || save !== undefined) && (
         <div className="flex flex-col gap-2 px-3 empty:hidden [&:not(:empty)]:py-2">
-          {view.sessionChanged && (
+          {view.session === 'signed-out' && (
             <Alert variant="destructive">
-              <AlertDescription>{messages.editor.sessionChanged}</AlertDescription>
+              <AlertDescription>
+                <p>{messages.editor.signedOut}</p>
+                {/* 在新标签页登录：本页不离开，修改留着；那边登录之后，本页收到消息恢复保存 */}
+                <a href={LOGIN_PATH} target="_blank" rel="noopener" className={buttonVariants({ variant: 'outline', size: 'sm', className: 'mt-2' })}>
+                  {messages.editor.loginInNewTab}
+                </a>
+              </AlertDescription>
+            </Alert>
+          )}
+          {view.session === 'other-user' && (
+            <Alert variant="destructive">
+              <AlertDescription>{messages.editor.otherUser}</AlertDescription>
             </Alert>
           )}
           {save !== undefined && <SaveNotices save={save} onReload={page.reload} />}

@@ -48,7 +48,7 @@ const COLUMNS = {
   formatVersion: d.formatVersion,
 }
 
-/** 只有它读写 documents（规范 §1.2）。 */
+/** documents 表的读写在这里（规范 §1.2）。一处例外：读取内容时修订号要与内容一起读，那条联表的语句在同一模块的 document-contents.repository.ts。 */
 @Injectable()
 export class DocumentsRepository {
   constructor(@Inject(DATABASE) private readonly db: Database) {}

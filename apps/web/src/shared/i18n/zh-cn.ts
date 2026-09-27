@@ -90,8 +90,10 @@ export const messages = {
     unsupported: '这份表格的格式比当前页面新，请刷新页面；刷新后仍然打不开，请联系管理员',
     loadFailed: (reason: string) => `表格加载失败：${reason}`,
     editorFailed: '编辑器加载失败，请刷新页面重试',
-    readOnly: '你只能查看这份表格',
-    sessionChanged: '登录状态在别的标签页里变了，本页不能再保存。需要的话先复制出本页的内容，再刷新页面',
+    signedOut: '登录已过期或已在别处退出。本页的修改还在：请在新的标签页中用同一个账户登录，然后回到这里保存',
+    loginInNewTab: '在新标签页中登录',
+    otherUser: '别的标签页登录了另一个账户，本页不能再保存。原来的账户重新登录之后可以继续保存；也可以先复制出本页的内容',
+    retrySave: '请求已失效，请再保存一次',
     pageTitle: (title: string) => `${title} - NerveOffice`,
   },
   notFound: {

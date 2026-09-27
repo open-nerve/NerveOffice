@@ -55,7 +55,11 @@ describe('内容的 ETag', () => {
     expect(revisionFromEtag('"2147483647"')).toBe(2_147_483_647)
   })
 
-  it.each([null, undefined, '', '7', 'W/"7"', '"0"', '"07"', '"-1"', '"1.5"', '"2147483648"', '"abc"'])('不是修订号的 ETag：%j', (etag) => {
+  it('反向代理改成的弱校验器：修订号不变', () => {
+    expect(revisionFromEtag('W/"7"')).toBe(7)
+  })
+
+  it.each([null, undefined, '', '7', 'w/"7"', 'W/7', 'W/ "7"', ' "7"', '"0"', '"07"', '"-1"', '"1.5"', '"2147483648"', 'W/"2147483648"', '"abc"'])('不是修订号的 ETag：%j', (etag) => {
     expect(revisionFromEtag(etag)).toBeUndefined()
   })
 })

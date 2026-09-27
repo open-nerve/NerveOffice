@@ -33,6 +33,13 @@ describe('gunzipWithin', () => {
     ['末尾多出数据', Buffer.concat([zlib.gzipSync(TEXT), Buffer.from('xyz')])],
     ['末尾多出一个 gzip 头', Buffer.concat([zlib.gzipSync(TEXT), Buffer.from([0x1F, 0x8B])])],
     ['两个成员拼接', Buffer.concat([zlib.gzipSync(TEXT), zlib.gzipSync(TEXT)])],
+    // 审查 A1：空成员的 CRC 与长度不影响末尾的核对，浏览器只解第一个成员，得到空串
+    ['空成员加上合法的成员', Buffer.concat([zlib.gzipSync(Buffer.alloc(0)), zlib.gzipSync(TEXT)])],
+    // 审查 A1：zlib 遇到 0 字节就停下，后面拼上成员的 8 字节尾部，末尾的核对也能通过
+    ['成员之后是 0 字节、任意数据与成员的尾部', (() => {
+      const member = zlib.gzipSync(TEXT)
+      return Buffer.concat([member, Buffer.from([0]), Buffer.from('junk'), member.subarray(member.length - 8)])
+    })()],
     ['deflate 而不是 gzip', zlib.deflateSync(TEXT)],
   ])('%s：400 REQUEST_INVALID', async (_case, compressed) => {
     expect(await rejection(gunzipWithin(compressed, 1024))).toMatchObject({ code: 'REQUEST_INVALID', message: '请求体不是完整的 gzip 数据' })

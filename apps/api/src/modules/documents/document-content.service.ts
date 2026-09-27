@@ -50,16 +50,15 @@ export class DocumentContentService {
 
   /**
    * 保存（P4 设计 §3.5.1）：先做与文档无关的基本校验，再在一个事务里依次
-   * 锁住文档行并判断权限 → 按 requestId 幂等 → 核对 unitId → 按基准修订号条件写入。
+   * 判断权限 → 锁住文档行 → 按 requestId 幂等 → 核对 unitId → 按基准修订号条件写入。
+   * 先判断权限再加锁：没有权限的请求不在别人的文档上取锁，不让它的保存排队，响应的时序也与不存在的文档相同（审查 A2）。
    * 先锁文档再查幂等：同一个请求的两次并发重试，后到的一方拿到锁时前一方已经提交，按幂等返回原结果，而不是误报冲突。
    */
   async save(userId: string, id: string, query: SaveContentQuery, upload: GzipBody, origin: AuditOrigin): Promise<SaveContentResponse> {
     const snapshot = validateSnapshot(upload.decompressed)
     const digest = savedPayloadDigest(query.baseRevision, upload.decompressed)
     return this.transactions.run(async (transaction) => {
-      const { document, access } = await requireAccess(this.policy, userId, await this.documents.lockById(id, transaction), transaction)
-      if (!canEdit(access))
-        throw new AppError('PERMISSION_DENIED', '只能查看这份文档，不能保存')
+      const document = await this.lockEditable(userId, id, transaction)
 
       const previous = await this.revisions.findByRequestId(query.requestId, transaction)
       if (previous !== undefined)
@@ -95,6 +94,21 @@ export class DocumentContentService {
       }, { transaction })
       return toSaved(revision)
     })
+  }
+
+  /**
+   * 判断能否编辑，再锁住文档行并返回锁下的最新状态（修订号等）。
+   * 加锁之前文档可能已经移到别的空间（M2）：锁下的空间与判断权限时不同，就按锁下的状态再判断一次。
+   */
+  private async lockEditable(userId: string, id: string, transaction: Transaction): Promise<DocumentRow> {
+    const checked = await requireAccess(this.policy, userId, await this.documents.findById(id, transaction), transaction)
+    const locked = await this.documents.lockById(id, transaction)
+    const { document, access } = locked?.spaceId === checked.document.spaceId
+      ? { document: locked, access: checked.access }
+      : await requireAccess(this.policy, userId, locked, transaction)
+    if (!canEdit(access))
+      throw new AppError('PERMISSION_DENIED', '只能查看这份文档，不能保存')
+    return document
   }
 
   /** 同一个 requestId 已经有修订记录：是同一个人对这份文档的同一次保存（摘要一致）才返回原来的结果。 */

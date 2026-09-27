@@ -12,7 +12,7 @@ import { commandJson, packageName, readJson, readText, readWorkspaceConfig, REPO
 import { checkStories, parseDesignStoryIds, parseRegistry, testsFromPlaywrightList, testsFromVitestList } from '../stories/stories.ts'
 import { checkFileTypes, checkTestOnlyArtifacts, classifyArtifact, scanArtifacts } from './artifacts.ts'
 import { checkAudit } from './audit.ts'
-import { checkBudgets, initialFiles, initialStyles, viteManifestSchema } from './budgets.ts'
+import { checkBudgets, initialFiles, initialStyles, reachableFiles, referencedWorkers, viteManifestSchema, workerClosure } from './budgets.ts'
 import { checkGraphComplete, checkSingletons, checkUniver, collectInstalled } from './dependency-graph.ts'
 import { bundledPackagesSchema, checkLicenseBundle } from './license-bundle.ts'
 import { checkDevelopmentLicenses, checkProductionLicenses, flattenLicenseReport, licensesByPath } from './licenses.ts'
@@ -21,7 +21,7 @@ import { MIGRATIONS_DIR } from './migrations.ts'
 import { checkPins } from './pins.ts'
 import { checkPnpmConfig, checkPnpmfiles, PNPMFILE_NAMES } from './pnpm-config.ts'
 import { auditReportSchema, licenseReportSchema, lsOutputSchema } from './pnpm-outputs.ts'
-import { ARTIFACT_POLICY, AUDIT_EXCEPTIONS, ENTRY_BUDGETS, LICENSE_EXCEPTIONS, PLATFORM_ENTRIES, PNPM_POLICY, PRODUCTION_LICENSES, SINGLETON_PACKAGES, UNIVER_POLICY, WORKER_BUDGETS } from './policy.ts'
+import { ARTIFACT_POLICY, AUDIT_EXCEPTIONS, EDITOR_ENTRIES, ENTRY_BUDGETS, LICENSE_EXCEPTIONS, PLATFORM_ENTRIES, PNPM_POLICY, PRODUCTION_LICENSES, SINGLETON_PACKAGES, UNIVER_POLICY, WORKER_BUDGETS } from './policy.ts'
 import { runSchemaGate } from './schema-gate.ts'
 
 export const GATE_NAMES = ['pins', 'config', 'stories', 'migrations', 'schema', 'deps', 'licenses', 'artifacts', 'budgets', 'audit'] as const
@@ -134,10 +134,21 @@ function readManifest(distDir: string): ReturnType<typeof viteManifestSchema.par
   return existsSync(manifestFile) ? viteManifestSchema.parse(JSON.parse(readFileSync(manifestFile, 'utf8'))) : undefined
 }
 
-/** 平台页面的产物（入口页、首屏的 JS 与样式）：地址只按具体地址放行，前缀的登记不适用（P4 设计 §3.9） */
-function platformFiles(distDir: string): Set<string> {
-  const manifest = readManifest(distDir) ?? {}
-  return new Set(PLATFORM_ENTRIES.flatMap(entry => [entry, ...(initialFiles(manifest, entry) ?? []), ...initialStyles(manifest, entry)]))
+/**
+ * 地址可以按前缀放行的文件（P4 设计 §3.9）：编辑器页能加载到的 JS 与样式（首屏与动态加载的块）与它创建的 Worker。
+ * 平台页面的产物（入口页、首屏的 JS 与样式，含两边共用的块）除外；其他文件与找不到构建清单时一律只按具体地址（审查 A 路建议 B1）
+ */
+function prefixFiles(distDir: string): Set<string> {
+  const manifest = readManifest(distDir)
+  if (manifest === undefined)
+    return new Set()
+  const readText = (file: string): string => readFileSync(join(distDir, file), 'utf8')
+  const platform = new Set(PLATFORM_ENTRIES.flatMap(entry => [entry, ...(initialFiles(manifest, entry) ?? []), ...initialStyles(manifest, entry)]))
+  const editor = EDITOR_ENTRIES.flatMap((entry) => {
+    const files = reachableFiles(manifest, entry)
+    return [entry, ...files, ...referencedWorkers(files.filter(file => file.endsWith('.js')), readText).flatMap(worker => workerClosure(worker, readText))]
+  })
+  return new Set(editor.filter(file => !platform.has(file)))
 }
 
 /** distDir 是 web 构建产物的目录（绝对路径）。 */
@@ -148,7 +159,7 @@ export function artifactsGate(distDir: string): GateOutcome {
   const files = filesIn(distDir)
   const textFiles = files.filter(path => classifyArtifact(path) === 'text')
   const scanned = textFiles.map(path => ({ path, content: readFileSync(join(distDir, path), 'utf8') }))
-  const { violations, hosts, runtimeHosts, unusedAddresses, knownDynamicCode, globalThisProbes } = scanArtifacts(scanned, ARTIFACT_POLICY, { strictFiles: platformFiles(distDir) })
+  const { violations, hosts, runtimeHosts, unusedAddresses, knownDynamicCode, globalThisProbes } = scanArtifacts(scanned, ARTIFACT_POLICY, { prefixFiles: prefixFiles(distDir) })
   const bundleFile = join(distDir, '.vite', 'third-party-packages.json')
   const bundle = existsSync(bundleFile) ? bundledPackagesSchema.parse(JSON.parse(readFileSync(bundleFile, 'utf8'))) : undefined
   const bundleViolations: Violation[] = bundle === undefined

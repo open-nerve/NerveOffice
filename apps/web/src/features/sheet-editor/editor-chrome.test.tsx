@@ -10,7 +10,7 @@ const CLEAN: SaveView = { status: 'clean', formulasPending: false, problem: unde
 
 /** 假的编辑器页：视图由测试设定 */
 function fakePage(initial: Partial<EditorPageView> = {}) {
-  let view: EditorPageView = { load: READY, save: CLEAN, sessionChanged: false, ...initial }
+  let view: EditorPageView = { load: READY, save: CLEAN, session: 'active', ...initial }
   const listeners = new Set<() => void>()
   const page: EditorPage = {
     view: () => view,
@@ -111,9 +111,28 @@ describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
     expect(screen.queryByText('公式结果尚未保存，请稍后再保存一次')).not.toBeInTheDocument()
   })
 
-  it('别的标签页换了人：提示不能再保存', () => {
-    renderChrome({ sessionChanged: true, save: { ...CLEAN, canSave: false } })
-    expect(screen.getByRole('alert')).toHaveTextContent('登录状态在别的标签页里变了，本页不能再保存')
+  it('别的标签页登录了另一个账户：提示不能再保存', () => {
+    renderChrome({ session: 'other-user', save: { ...CLEAN, canSave: false } })
+    expect(screen.getByRole('alert')).toHaveTextContent('别的标签页登录了另一个账户，本页不能再保存')
+  })
+
+  it('登录已过期或在别处退出：提示修改还在，提供在新标签页中登录的链接（本页不离开）', () => {
+    renderChrome({ session: 'signed-out', save: { ...CLEAN, status: 'failed', problem: { kind: 'request', error: new ApiError(401, 'SESSION_EXPIRED', 'x') } } })
+    expect(screen.getAllByRole('alert')[0]).toHaveTextContent('本页的修改还在')
+    const link = screen.getByRole('link', { name: '在新标签页中登录' })
+    expect(link).toHaveAttribute('href', '/login')
+    expect(link).toHaveAttribute('target', '_blank')
+  })
+
+  it('CSRF 令牌失效：提示再保存一次，不让用户刷新（刷新会丢掉修改）', () => {
+    renderChrome({ save: { ...CLEAN, status: 'failed', problem: { kind: 'request', error: new ApiError(403, 'CSRF_TOKEN_INVALID', 'x') } } })
+    expect(screen.getByRole('alert')).toHaveTextContent('保存失败：请求已失效，请再保存一次')
+    expect(screen.getByRole('alert')).not.toHaveTextContent('刷新')
+  })
+
+  it('保存流程本身出了意外：显示保存失败', () => {
+    renderChrome({ save: { ...CLEAN, status: 'failed', problem: { kind: 'unexpected', error: new Error('SDK 出错') } } })
+    expect(screen.getByRole('alert')).toHaveTextContent('保存失败：出了点问题，请稍后重试')
   })
 
   it('只能查看：没有保存按钮', () => {

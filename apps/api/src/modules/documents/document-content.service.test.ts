@@ -80,12 +80,35 @@ describe('DocumentContentService.save', () => {
     expect(store.transactions.run).not.toHaveBeenCalled()
   })
 
-  it('别人的与不存在的：NOT_FOUND；两者都锁一次、判断一次权限', async () => {
+  it('别人的与不存在的：NOT_FOUND；两者都判断一次权限', async () => {
     const { store, service, document } = setup()
     expect((await rejection(service.save(BOB, document.id, query(), upload(document.unitId), HTTP_ORIGIN))).code).toBe('NOT_FOUND')
     expect((await rejection(service.save(ALICE, '0199a2c4-0000-7000-8000-0000000000ff', query(), upload(document.unitId), HTTP_ORIGIN))).code).toBe('NOT_FOUND')
     expect(store.policy.accessOf).toHaveBeenCalledTimes(2)
     expect(store.revisions).toHaveLength(1)
+  })
+
+  it('先判断权限再加锁：没有权限的请求不在别人的文档上取锁（审查 A2）', async () => {
+    const { store, service, document } = setup()
+    expect((await rejection(service.save(BOB, document.id, query(), upload(document.unitId), HTTP_ORIGIN))).code).toBe('NOT_FOUND')
+    expect(store.repositories.documents.lockById).not.toHaveBeenCalled()
+    await service.save(ALICE, document.id, query(), upload(document.unitId), HTTP_ORIGIN)
+    const checked = store.repositories.documents.findById.mock.invocationCallOrder.at(-1) ?? Number.NaN
+    const locked = store.repositories.documents.lockById.mock.invocationCallOrder[0] ?? Number.NaN
+    expect(checked).toBeLessThan(locked)
+  })
+
+  it('判断权限之后、加锁之前文档移到了别的空间：按锁下的状态再判断一次', async () => {
+    const { store, service, document } = setup()
+    store.repositories.documents.lockById.mockImplementationOnce(async () => ({ ...document, spaceId: BOB_SPACE }))
+    expect((await rejection(service.save(ALICE, document.id, query(), upload(document.unitId), HTTP_ORIGIN))).code).toBe('NOT_FOUND')
+    expect(store.revisions).toHaveLength(1)
+  })
+
+  it('判断权限之后文档被删了：NOT_FOUND', async () => {
+    const { store, service, document } = setup()
+    store.repositories.documents.lockById.mockResolvedValueOnce(undefined)
+    expect((await rejection(service.save(ALICE, document.id, query(), upload(document.unitId), HTTP_ORIGIN))).code).toBe('NOT_FOUND')
   })
 
   it('只能查看：PERMISSION_DENIED', async () => {
