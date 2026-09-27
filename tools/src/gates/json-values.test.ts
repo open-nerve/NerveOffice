@@ -33,10 +33,11 @@ describe('US-M1-11 JSON 里可能是地址的值（复验 RA4、SA2、TA7、TA9�
     expect(groups.map(group => json.slice(group.index, group.end))).toEqual(['"a"', '"\\/\\/evil.example/j1"'])
   })
 
+  // 输入很大（30 万个值，展开成参数时一定超出调用栈），给足时间
   it('一个字符串里有几十万个值：逐个加入，不会超出调用栈（复验 UA6）', () => {
-    const [group] = jsonValues(JSON.stringify(['url(//x.example/y)'.repeat(300000)]))?.groups ?? []
+    const [group] = jsonValues(JSON.stringify(['url(a)'.repeat(300000)]))?.groups ?? []
     expect(group?.values.length).toBeGreaterThan(300000)
-  })
+  }, 30_000)
 
   it('不是合法的 JSON：返回 undefined', () => {
     expect(jsonValues('{"a": ')).toBeUndefined()

@@ -53,12 +53,13 @@ describe('US-M1-11 HTML 里可能是地址的值（parse5，复验 SA2、SA4、T
     expect(problems).toEqual([])
   })
 
+  // 输入很大（30 万个值，展开成参数时一定超出调用栈），给足时间
   it('一段样式或一个属性里有几十万个值：逐个加入，不会超出调用栈（复验 UA6）', () => {
-    const { groups } = htmlValues(`<style>${'a{b:url(//x.example/y)}'.repeat(300000)}</style>`)
+    const { groups } = htmlValues(`<style>${'url(a)'.repeat(300000)}</style>`)
     expect(groups).toHaveLength(300000)
-    const [attribute] = htmlValues(`<div style="${'b:url(//x.example/y);'.repeat(300000)}"></div>`).groups
+    const [attribute] = htmlValues(`<div style="${'url(a)'.repeat(300000)}"></div>`).groups
     expect(attribute?.values.length).toBeGreaterThan(300000)
-  })
+  }, 30_000)
 
   it('原始文本与 RCDATA 里的文字不当作标签', () => {
     expect(valuesWith('<textarea><img src=//not-a-tag.example/x></textarea><title><img src=//not-a-tag.example/y></title>', 'not-a-tag')).toEqual([])

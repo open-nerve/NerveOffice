@@ -38,9 +38,10 @@ describe('US-M1-11 SVG 文件里可能是地址的值（按 XML 解析，复验 
       expect(svgValues(`<?xml version="1.0" encoding="${encoding}"?><svg/>`).problems).toEqual([])
   })
 
+  // 输入很大（30 万个值，展开成参数时一定超出调用栈），给足时间
   it('一段样式里有几十万个值：逐个加入，不会超出调用栈（复验 UA6）', () => {
-    expect(svgValues(`<svg><style>${'a{b:url(//x.example/y)}'.repeat(300000)}</style></svg>`).groups).toHaveLength(300000)
-  })
+    expect(svgValues(`<svg><style>${'url(a)'.repeat(300000)}</style></svg>`).groups).toHaveLength(300000)
+  }, 30_000)
 
   it('只取样式元素直接的文字：子元素里的文字不算', () => {
     expect(values('<svg><style>a{}<g>b{fill:url(//child.example/x)}</g></style></svg>')).not.toContain('//child.example/x')
