@@ -9,6 +9,7 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "parse5": "catalog:",
     "vite": "catalog:",
     "yaml": "catalog:",
     "zod": "catalog:"

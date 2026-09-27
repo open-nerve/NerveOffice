@@ -19,6 +19,8 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     await expect(saveStatus(page)).toHaveText('保存失败')
     const alert = page.getByRole('alert').filter({ hasText: '本页的修改还在' })
     await expect(alert).toBeVisible()
+    // 会话的提示已经说明：不再重复"登录已过期"的失败说明（复验 RB2、SB3）
+    await expect(page.getByRole('alert')).toHaveCount(1)
     expect(page.url()).toBe(editorUrl)
 
     const [loginPage] = await Promise.all([context.waitForEvent('page'), alert.getByRole('link', { name: '在新标签页中登录' }).click()])
@@ -49,7 +51,9 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     const released = new Promise<void>((resolve) => {
       release = resolve
     })
+    let held = 0
     await page.route('**/api/auth/session', async (route) => {
+      held += 1
       await released
       await route.continue()
     })
@@ -57,8 +61,11 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     await other.goto('/login')
     await loginThroughUi(other, owner)
     await expect(other.getByRole('heading', { name: '我的空间' })).toBeVisible()
+    // 本页收到登录的消息、开始确认会话（被拦住）之后再按保存（复验 SB3）
+    await expect.poll(() => held).toBe(1)
     const saved = page.waitForResponse(response => response.request().method() === 'PUT' && response.url().includes('/content?'))
     await page.keyboard.press('ControlOrMeta+s')
+    await expect(saveStatus(page)).toHaveText('正在确认登录状态…')
     release()
     expect((await saved).status()).toBe(200)
     await expect(saveStatus(page)).toHaveText('已保存到云端')

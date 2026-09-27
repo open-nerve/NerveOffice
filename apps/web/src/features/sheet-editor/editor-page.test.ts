@@ -339,19 +339,73 @@ describe('编辑器页的会话（P4 设计 §3.7.3，审查 B1）', () => {
     expect(api.save).toHaveBeenCalledOnce()
   })
 
-  it('保存得到 CSRF_TOKEN_INVALID、确认还没结束时又按保存：等确认换上新的令牌之后再发（复验 RB1）', async () => {
-    let tokenValid = false
-    const { editorPage, api } = setup({ api: { save: async () => tokenValid ? { revision: 4, savedAt: '2026-09-27T03:00:00.000Z' } : Promise.reject(new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')) } })
+  it('保存得到 CSRF_TOKEN_INVALID、确认还没结束时又按保存：等确认换上新的令牌之后再发，等待期间说明正在确认（复验 RB1、SB3、SB5）', async () => {
+    const calls: string[] = []
+    const save = vi.fn(async (): Promise<SaveContentResponse> => {
+      calls.push('save')
+      if (calls.filter(call => call === 'save').length === 1)
+        throw new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
+      return { revision: 4, savedAt: '2026-09-27T03:00:00.000Z' }
+    })
+    const { editorPage, api } = setup({ api: { save } })
     await editorPage.load()
     const check = deferred<SessionResponse>()
-    vi.mocked(api.session).mockReturnValueOnce(check.promise)
+    vi.mocked(api.session).mockImplementationOnce(async () => {
+      calls.push('check')
+      const session = await check.promise
+      calls.push('checked')
+      return session
+    })
     await editorPage.save()
     expect(editorPage.view().save?.status).toBe('failed')
+    await vi.waitFor(() => expect(calls).toContain('check'))
     const again = editorPage.save()
-    tokenValid = true
+    await vi.waitFor(() => expect(editorPage.view().confirmingSession).toBe(true))
+    expect(save).toHaveBeenCalledOnce()
     check.resolve({ ...ALICE, csrfToken: 'csrf-new' })
     await again
-    expect(editorPage.view()).toMatchObject({ session: 'active', save: { status: 'clean', problem: undefined } })
+    expect(calls).toEqual(['save', 'check', 'checked', 'save'])
+    expect(editorPage.view()).toMatchObject({ session: 'active', confirmingSession: false, save: { status: 'clean', problem: undefined } })
+  })
+
+  it('一直是未登录、确认的原因变了：页面随之刷新，不留着过时的"网络连接失败"（复验 SB2）', async () => {
+    const { editorPage, api, fromOtherTab } = setup()
+    await editorPage.load()
+    vi.mocked(api.session).mockRejectedValueOnce(UNAUTHENTICATED)
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('signed-out'))
+    vi.mocked(api.session).mockRejectedValueOnce(new NetworkError('断网'))
+    await editorPage.save()
+    expect(editorPage.view().sessionProblem).toBeInstanceOf(NetworkError)
+    vi.mocked(api.session).mockRejectedValueOnce(UNAUTHENTICATED)
+    await editorPage.save()
+    expect(editorPage.view()).toMatchObject({ session: 'signed-out', sessionProblem: undefined })
+  })
+
+  it('保存得到未登录、向服务端确认时断网：按没有人登录显示，给出登录的入口（复验 SB4）', async () => {
+    const { editorPage, api } = setup({ api: { save: async () => Promise.reject(new ApiError(401, 'SESSION_EXPIRED', '已过期')) } })
+    await editorPage.load()
+    vi.mocked(api.session).mockRejectedValueOnce(new NetworkError('断网'))
+    await editorPage.save()
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('signed-out'))
+    expect(editorPage.view().sessionProblem).toBeInstanceOf(NetworkError)
+  })
+
+  it('等确认期间页面卸载了：不再捕获与上传（复验 SB6）', async () => {
+    const { editorPage, api, fromOtherTab, fake } = setup()
+    await editorPage.load()
+    vi.mocked(api.session).mockRejectedValueOnce(UNAUTHENTICATED)
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('signed-out'))
+    const check = deferred<SessionResponse>()
+    vi.mocked(api.session).mockReturnValueOnce(check.promise)
+    const capture = vi.spyOn(fake.editor, 'capture')
+    const saving = editorPage.save()
+    editorPage.dispose()
+    check.resolve(ALICE)
+    await saving
+    expect(capture).not.toHaveBeenCalled()
+    expect(api.save).not.toHaveBeenCalled()
   })
 
   it('创建编辑器期间别的标签页换了人：保存状态机一建好就停住（复验 RB3）', async () => {
@@ -388,7 +442,8 @@ describe('编辑器页的会话（P4 设计 §3.7.3，审查 B1）', () => {
     pending.reject(new ApiError(401, 'SESSION_EXPIRED', '已过期'))
     await saving
     await vi.waitFor(() => expect(api.session).toHaveBeenCalledTimes(2))
-    expect(editorPage.view()).toMatchObject({ session: 'active', save: { status: 'clean', problem: undefined } })
+    // 一直是本人：这次保存没有成功要让用户看到（页头提示再保存一次，令牌已经换好，复验 SB1）
+    expect(editorPage.view()).toMatchObject({ session: 'active', save: { status: 'failed', problem: { kind: 'request' } } })
   })
 
   it('暂停保存时按保存、确认会话网络失败：说明确认失败的原因，不发保存的请求；之后确认成功时清掉（复验 RB7）', async () => {

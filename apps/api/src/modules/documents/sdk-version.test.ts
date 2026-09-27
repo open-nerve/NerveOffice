@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest'
 describe('文档记录的 SDK 版本', () => {
   it('与 pnpm 目录里 @univerjs/core 的版本相同', () => {
     const workspace = readFileSync(new URL('../../../../../pnpm-workspace.yaml', import.meta.url), 'utf8')
-    expect(/^\s*'@univerjs\/core':\s*(\S+)\s*$/m.exec(workspace)?.[1]).toBe(UNIVER_SDK_VERSION)
+    // 版本可以写成带引号的 YAML 字符串（复验 SA9）
+    expect(/^\s*'@univerjs\/core':\s*['"]?([^'"\s]+)['"]?\s*$/m.exec(workspace)?.[1]).toBe(UNIVER_SDK_VERSION)
   })
 })

@@ -37,6 +37,8 @@ export interface EditorPageView {
   readonly session: EditorPageSession
   /** 最近一次向服务端确认会话失败的原因（网络错误等）；确认成功之后清掉。会话不是 active 时显示（复验 RB7） */
   readonly sessionProblem: unknown
+  /** 按了保存、正在等向服务端确认会话：页头说明正在确认，按钮不可用（复验 SB5） */
+  readonly confirmingSession: boolean
 }
 
 export interface EditorPageApi {
@@ -105,18 +107,23 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   let checkAgain = false
   /** 载入时还不知道本页的用户就收到了会话消息：知道之后再确认一次（复验 RB7） */
   let checkWhenLoaded = false
+  /** 保存得到未登录、确认还没有结果：确认时断网也按没有人登录显示（复验 SB4） */
+  let unauthenticatedPending = false
   let sessionProblem: unknown
+  let confirmingSession = false
   const cleanups: (() => void)[] = []
   let current = computeView()
 
   function computeView(): EditorPageView {
-    return { load, save: coordinator?.view(), session, sessionProblem }
+    return { load, save: coordinator?.view(), session, sessionProblem, confirmingSession }
   }
 
   function update(): void {
     const next = computeView()
-    if (next.load === current.load && next.save === current.save && next.session === current.session && next.sessionProblem === current.sessionProblem)
+    if (next.load === current.load && next.save === current.save && next.session === current.session
+      && next.sessionProblem === current.sessionProblem && next.confirmingSession === current.confirmingSession) {
       return
+    }
     current = next
     for (const listener of [...listeners])
       listener()
@@ -152,13 +159,15 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   }
 
   function enterSession(next: EditorPageSession): void {
+    const previous = session
     session = next
     if (next === 'other-user')
       coordinator?.stop()
     else
       coordinator?.resume()
-    // 本人的会话已经确认有效：之前"登录已过期""请求已失效"这类失败的说明不再成立（复验 RB2）
-    if (next === 'active')
+    // 从未登录或换了人回到本人：之前"登录已过期""请求已失效"这类失败的说明不再成立（复验 RB2）。
+    // 一直是本人时保留：用户按了保存，要看到这次没有保存成功（页头提示再保存一次，令牌已经换好，复验 SB1）
+    if (next === 'active' && previous !== 'active')
       coordinator?.dismissSessionProblem()
     update()
   }
@@ -208,10 +217,13 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       current = await api.session()
     }
     catch (error) {
-      // 网络等失败：会话的状态不变；会话不是 active 时页面说明确认失败的原因（复验 RB7）
+      // 网络等失败：会话的状态不变；会话不是 active 时页面说明确认失败的原因（复验 RB7）。
+      // 保存刚得到未登录时按没有人登录显示（不清令牌），页面给出登录的入口；下一次确认会纠正过来（复验 SB4）
       if (!isAuthenticationError(error)) {
         if (!disposed) {
           sessionProblem = error
+          if (unauthenticatedPending && session === 'active')
+            enterSession('signed-out')
           update()
         }
         return
@@ -219,7 +231,10 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     }
     if (disposed)
       return
+    unauthenticatedPending = false
     sessionProblem = undefined
+    // 原因清掉之后要刷新：会话的状态可能没变（例如一直是未登录，复验 SB2）
+    update()
     if (current === undefined) {
       signedOut()
     }
@@ -250,7 +265,10 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         clientInstanceId: options.newId(),
         newRequestId: options.newId,
         // 保存得到未登录：先向服务端确认（回包可能是本人在别处重新登录之前发出的那次保存的，不能据此清掉新的令牌，复验 RB7）
-        onUnauthenticated: () => void recheckSession(),
+        onUnauthenticated: () => {
+          unauthenticatedPending = true
+          void recheckSession()
+        },
         onSessionStale: () => void recheckSession(),
         reportError: options.reportError,
       })
@@ -324,13 +342,22 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     save: async () => {
       if (coordinator === undefined)
         return
-      // 确认会话进行中（别的标签页的消息、保存得到未登录或 CSRF 失效触发的）：等它结束，按确认的结果决定（复验 RB1）
-      if (checkInFlight !== undefined)
-        await checkInFlight
+      // 确认会话进行中（别的标签页的消息、保存得到未登录或 CSRF 失效触发的）：等它结束，按确认的结果决定（复验 RB1）；
       // 暂停或停止保存时先向服务端确认一次：本页的用户可能已经在别处重新登录，广播的消息没有送到
-      else if (session !== 'active')
-        await recheckSession()
-      if (session === 'active')
+      const confirming = checkInFlight ?? (session === 'active' ? undefined : recheckSession())
+      if (confirming !== undefined) {
+        confirmingSession = true
+        update()
+        try {
+          await confirming
+        }
+        finally {
+          confirmingSession = false
+          update()
+        }
+      }
+      // 等确认期间页面卸载了：不再捕获与上传（复验 SB6）
+      if (session === 'active' && !disposed)
         await coordinator.save()
     },
     hasUnsavedWork: () => coordinator?.hasUnsavedWork() ?? false,

@@ -94,6 +94,12 @@ function schema(): GateOutcome {
   return { name: 'schema', title: '表定义与迁移同步', ...runSchemaGate(join(REPO_ROOT, MIGRATIONS_DIR)) }
 }
 
+/** pnpm 的全部目录：默认目录（catalog:）与具名目录（catalog:<名字>） */
+function workspaceCatalogs(): Record<string, Record<string, string>> {
+  const config = readWorkspaceConfig()
+  return { default: config.catalog, ...config.catalogs }
+}
+
 function deps(): GateOutcome {
   const graph = productionDependencyGraph()
   const univer = graph.installed.filter(p => p.name.startsWith('@univerjs/')).length
@@ -102,7 +108,7 @@ function deps(): GateOutcome {
     title: '依赖图（Univer 版本、Pro、单例）',
     violations: [
       ...checkGraphComplete(graph),
-      ...checkUniverCatalog(readWorkspaceConfig().catalog, UNIVER_POLICY),
+      ...checkUniverCatalog(workspaceCatalogs(), UNIVER_POLICY),
       ...checkUniver(graph.installed, UNIVER_POLICY),
       ...checkSingletons(graph.installed, SINGLETON_PACKAGES),
     ],
@@ -141,8 +147,8 @@ function readManifest(distDir: string): ReturnType<typeof viteManifestSchema.par
 
 /**
  * 地址可以按前缀放行的文件（P4 设计 §3.9）：编辑器页能加载到的全部产物，即入口页、JS 与样式（首屏与动态加载的块）、
- * 它创建的 Worker 与 Worker 加载的块。平台页面能加载到的产物（含两边共用的块）除外；其他文件、清单里没有的入口、
- * 找不到构建清单时，一律只按具体地址（审查 A 路建议 B1，复验 RA8）
+ * 它创建的 Worker 与 Worker 加载的块。其他入口（平台页面与构建清单里别的入口）能加载到的产物（含与编辑器共用的块）除外；
+ * 其他文件、清单里没有的入口、找不到构建清单时，一律只按具体地址（审查 A 路建议 B1，复验 RA8、SA6）
  */
 function prefixFiles(distDir: string): Set<string> {
   const manifest = readManifest(distDir)
@@ -152,7 +158,9 @@ function prefixFiles(distDir: string): Set<string> {
   const loadableFrom = (entry: string): string[] => manifest[entry] === undefined
     ? []
     : [entry, ...reachableFiles(manifest, entry), ...entryWorkers(manifest, entry).flatMap(worker => workerClosure(worker, readText, true))]
-  const platform = new Set(PLATFORM_ENTRIES.flatMap(loadableFrom))
+  // 编辑器之外的入口：平台页面，以及构建清单里其他的入口（新增的、改了名的，复验 SA6）
+  const others = [...new Set([...PLATFORM_ENTRIES, ...Object.keys(manifest).filter(entry => manifest[entry]?.isEntry === true && !EDITOR_ENTRIES.includes(entry))])]
+  const platform = new Set(others.flatMap(loadableFrom))
   return new Set(EDITOR_ENTRIES.flatMap(loadableFrom).filter(file => !platform.has(file)))
 }
 
@@ -195,6 +203,7 @@ export function budgetsGate(distDir: string): GateOutcome {
     name: 'budgets',
     title,
     ...checkBudgets(manifest, ENTRY_BUDGETS, WORKER_BUDGETS, {
+      files: filesIn(distDir),
       gzipSize: file => gzipSync(readFileSync(join(distDir, file))).length,
       readText: file => readFileSync(join(distDir, file), 'utf8'),
     }),

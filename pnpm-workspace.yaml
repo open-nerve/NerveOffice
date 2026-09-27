@@ -108,6 +108,8 @@ catalog:
   lefthook: 2.1.14
   lint-staged: 17.5.1
   lucide-react: 1.47.0
+  # 产物扫描按 HTML 规范解析入口页与 SVG（字符引用、属性），仓库工具用（复验 SA2）；与 jsdom 用的是同一个版本
+  parse5: 8.0.1
   pg: 8.23.0
   pino: 10.3.1
   pino-http: 11.0.0

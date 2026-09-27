@@ -59,10 +59,14 @@ describe('US-M1-11 A01 依赖图完整', () => {
 
 describe('US-M1-11 A01 Univer 的版本与 Pro', () => {
   it('pnpm 目录里的 Univer 包与版本基线一致：协调发布的包是基线版本，独立发版的包按清单；其他包不管（复验 RA6）', () => {
-    expect(checkUniverCatalog({ '@univerjs/core': '1.0.0', '@univerjs/icons': '1.43.0', 'react': '19.3.0' }, univerPolicy)).toEqual([])
-    expect(checkUniverCatalog({ '@univerjs/core': '1.0.1', '@univerjs/sheets': '1.0.0', '@univerjs/icons': '1.44.0' }, univerPolicy)).toEqual([
-      expect.objectContaining({ rule: 'deps/univer-catalog', subject: '@univerjs/core' }),
-      expect.objectContaining({ rule: 'deps/univer-catalog', subject: '@univerjs/icons' }),
+    expect(checkUniverCatalog({ default: { '@univerjs/core': '1.0.0', '@univerjs/icons': '1.43.0', 'react': '19.3.0' } }, univerPolicy)).toEqual([])
+    expect(checkUniverCatalog({ default: { '@univerjs/core': '1.0.1', '@univerjs/sheets': '1.0.0', '@univerjs/icons': '1.44.0' } }, univerPolicy)).toEqual([
+      expect.objectContaining({ rule: 'deps/univer-catalog', subject: '目录 default @univerjs/core' }),
+      expect.objectContaining({ rule: 'deps/univer-catalog', subject: '目录 default @univerjs/icons' }),
+    ])
+    // 具名目录里的 Univer 包同样核对（复验 SA9）
+    expect(checkUniverCatalog({ default: {}, legacy: { '@univerjs/sheets': '0.9.0' } }, univerPolicy)).toEqual([
+      expect.objectContaining({ subject: '目录 legacy @univerjs/sheets' }),
     ])
   })
 

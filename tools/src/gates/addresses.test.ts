@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { blankOut, crossOriginAddress, cssValues, decodeHtmlReferences, htmlValues, isRegexFlags, unescapeCss } from './addresses.ts'
+import { crossOriginAddress, isRegexFlags, originOf } from './addresses.ts'
 import { INTERPOLATION_PLACEHOLDER } from './eval-and-function.ts'
 
 const HOLE = INTERPOLATION_PLACEHOLDER
 
-describe('US-M1-11 按浏览器的规则认出跨源地址（DEF-016，复验 RA2–RA4）', () => {
+describe('US-M1-11 按浏览器的规则认出跨源地址（DEF-016，复验 RA2–RA4、SA1、SA3）', () => {
   it.each([
     ['//evil.example/x', 'https://evil.example/x'],
     [' \u0001//evil.example/x', 'https://evil.example/x'],
@@ -24,6 +24,19 @@ describe('US-M1-11 按浏览器的规则认出跨源地址（DEF-016，复验 RA
     [`${HOLE}\\\\evil.example/x`, 'https://evil.example/x'],
     [`//evil.example/${HOLE}`, `https://evil.example/${HOLE}`],
     [`https://${HOLE}/x`, `https://${HOLE}/x`],
+    // 以连字符开头或结尾、带星号、连续的点：浏览器照样请求（复验 SA1）
+    ['//-evil.example/x', 'https://-evil.example/x'],
+    ['//x-.attacker.example/x', 'https://x-.attacker.example/x'],
+    ['//a*b.evil.example/x', 'https://a*b.evil.example/x'],
+    ['//evil.example../x', 'https://evil.example../x'],
+    // 协议里有插值、拼接的后半段以 :// 开头、端口是插值：主机是固定的（复验 SA3）
+    [`http${HOLE}://evil.example/x`, 'https://evil.example/x'],
+    [`${HOLE}://evil.example/x`, 'https://evil.example/x'],
+    ['://evil.example/x', 'https://evil.example/x'],
+    [`//evil.example:${HOLE}/x`, 'https://evil.example:1/x'],
+    // 允许的地址后面接着制表符与另一个域名：浏览器删掉制表符，请求的是另一个主机
+    ['https://tailwindcss.com\t.evil.example/x', 'https://tailwindcss.com.evil.example/x'],
+    ['http://localhost,@evil.example/x', 'http://localhost,@evil.example/x'],
   ])('地址：%j → %s', (value, expected) => {
     expect(crossOriginAddress(value)).toBe(expected)
   })
@@ -51,37 +64,11 @@ describe('US-M1-11 按浏览器的规则认出跨源地址（DEF-016，复验 RA
     expect(isRegexFlags('//intranet')).toBe(false)
   })
 
-  it('HTML 的字符引用：数字引用（分号可以省略）与会改变地址结构的命名引用；其他命名引用原样保留', () => {
-    expect(decodeHtmlReferences('&#x2f;&#47&sol;&colon;&bsol;&Tab;&NewLine;&amp;&eacute;')).toBe('///:\\\t\n&&eacute;')
-    expect(decodeHtmlReferences('&#0;&#x110000;')).toBe('\uFFFD\uFFFD')
-  })
-
-  it('样式的转义：十六进制（后面可以跟一个空白）与单个字符', () => {
-    expect(unescapeCss('\\2f\\2f evil')).toBe('//evil')
-    expect(unescapeCss('\\/\\/evil')).toBe('//evil')
-    expect(unescapeCss('\\0 x')).toBe('\uFFFDx')
-  })
-
-  it('样式里的值：url() 的内容（带不带引号）与 url() 之外引号里的字符串，不重复', () => {
-    const css = 'a{background:url( " //evil.example/a.png" )}@import "x.css";b{content:\'y\'}'
-    expect(cssValues(css).map(item => item.value)).toEqual(['//evil.example/a.png', 'x.css', 'y'])
-  })
-
-  it('HTML 里的值：属性（解码之后）、srcset 的每个候选、style 属性与元素、meta refresh', () => {
-    const html = '<img src=" &#47;/a.example/x" srcset="a.png 1x, //b.example/b.png 2x" style="background:url(//c.example/c.png)">'
-      + '<meta http-equiv="refresh" content="0; url=\'//d.example/d\'"><style>e{background:url(//e.example/e.png)}</style>'
-    expect(htmlValues(html).map(item => item.value)).toEqual([
-      ' //a.example/x',
-      'a.png',
-      '//b.example/b.png',
-      '//c.example/c.png',
-      'refresh',
-      '//d.example/d',
-      '//e.example/e.png',
-    ])
-  })
-
-  it('取出值之后剩下的文本：位置不变，重叠的范围只处理一次', () => {
-    expect(blankOut('abcdefgh', [{ index: 1, end: 3 }, { index: 2, end: 5 }, { index: 7, end: 8 }])).toBe('a    fg ')
+  it('地址的来源：协议、主机与端口；JSON 转义的斜杠与插值也认得', () => {
+    expect(originOf('https://evil.example/a')).toBe('https://evil.example')
+    expect(originOf('https:\\/\\/evil.example:8080/a')).toBe('https://evil.example:8080')
+    expect(originOf('//evil.example/a')).toBe('https://evil.example')
+    expect(originOf(`https://${HOLE}/x`)).toBe('https://x0hole0x')
+    expect(originOf('not a url')).toBe('not a url')
   })
 })

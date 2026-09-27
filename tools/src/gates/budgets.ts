@@ -108,8 +108,9 @@ export function workerClosure(worker: string, readText: (file: string) => string
   return [...files].sort()
 }
 
+/** 名字是 worker 的产物：assets/<名字>-<8 位哈希>.js（名字以 worker 开头的另一个 Worker 不算，复验 SA9） */
 function isWorkerNamed(file: string, worker: string): boolean {
-  return new RegExp(String.raw`^assets/${escapeRegExp(worker)}-[\w-]+\.js$`).test(file)
+  return new RegExp(String.raw`^assets/${escapeRegExp(worker)}-[\w-]{8}\.js$`).test(file)
 }
 
 export interface BudgetResult {
@@ -118,10 +119,23 @@ export interface BudgetResult {
 }
 
 export interface BuildOutput {
+  /** 产物里的全部文件（相对产物目录） */
+  files: readonly string[]
   /** 产物里某个文件 gzip 之后的字节数 */
   gzipSize: (file: string) => number
   /** 产物里某个文件的内容 */
   readText: (file: string) => string
+}
+
+/**
+ * 产物里的每个脚本都要有归属：构建清单里的块、块以地址引用的产物（Worker），或者这些 Worker 能加载到的块。
+ * 没有归属的脚本不计入任何预算，例如 Worker 里再创建的 Worker（构建清单不描述 Worker 的包，复验 SA5）
+ */
+function unattributedScripts(manifest: ViteManifest, output: BuildOutput): string[] {
+  const chunks = Object.values(manifest)
+  const workers = [...new Set(chunks.flatMap(chunk => (chunk.assets ?? []).filter(file => /\.m?js$/.test(file))))]
+  const attributed = new Set([...chunks.map(chunk => chunk.file), ...workers.flatMap(worker => workerClosure(worker, output.readText, true))])
+  return output.files.filter(file => /\.m?js$/.test(file) && !attributed.has(file))
 }
 
 function measure(label: string, subject: string, files: readonly string[], maxGzipBytes: number, output: BuildOutput): BudgetResult {
@@ -158,5 +172,7 @@ export function checkBudgets(manifest: ViteManifest, budgets: readonly EntryBudg
     for (const worker of entryWorkers(manifest, entry).filter(file => !workers.some(item => item.entry === entry && isWorkerNamed(file, item.worker))))
       results.push({ violations: [{ rule: 'budgets/unbudgeted-worker', subject: worker, detail: `${entry} 能加载到的块创建了这个 Worker（或以地址引用的脚本），却没有登记它的预算（WORKER_BUDGETS）` }], notes: [] })
   }
+  for (const script of unattributedScripts(manifest, output))
+    results.push({ violations: [{ rule: 'budgets/unattributed-script', subject: script, detail: '产物里的这个脚本不属于构建清单里的任何块、块创建的 Worker 或 Worker 能加载到的块（例如 Worker 里再创建的 Worker），没有计入任何预算：确认来源，在 WORKER_BUDGETS 登记' }], notes: [] })
   return { violations: results.flatMap(result => result.violations), notes: results.flatMap(result => result.notes) }
 }

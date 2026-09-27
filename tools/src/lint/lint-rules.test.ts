@@ -312,6 +312,17 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
     }
   })
 
+  it('import.meta.glob 与带查询串或片段的 @univerjs 包名会失败（复验 SB7）', async () => {
+    const glob = 'export const modules = import.meta.glob(\'../../node_modules/@univerjs/engine-formula/lib/es/index.js\', { eager: true })\n'
+    for (const file of [EDITOR_FILE, WEB_FILE])
+      expect(await rulesFor(glob, file), file).toContain('no-restricted-syntax')
+    for (const source of ['@univerjs/engine-formula?raw', '@univerjs/engine-formula#x']) {
+      const code = `import * as formula from '${source}'\n\nexport const f = formula\n`
+      expect(await rulesFor(code, EDITOR_FILE), source).toContain('no-restricted-imports')
+      expect(await rulesFor(code, INTERNAL_API_FILE), source).toContain('no-restricted-imports')
+    }
+  })
+
   it('三斜杠引用与 import x = require() 会失败：它们绕得过受限导入（复验 RB4）', async () => {
     for (const code of [
       '/// <reference types="@univerjs/engine-formula" />\nexport const a = 1\n',

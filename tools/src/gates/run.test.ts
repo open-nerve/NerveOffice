@@ -89,13 +89,13 @@ describe('US-M1-11 产物门禁的装配', () => {
       ...clean,
       '.vite/manifest.json': JSON.stringify({
         'index.html': { file: 'assets/index.js', isEntry: true },
-        'editor.html': { file: 'assets/editor.js', isEntry: true, dynamicImports: ['src/lazy.ts'], assets: ['assets/formula.worker-a1.js'] },
+        'editor.html': { file: 'assets/editor.js', isEntry: true, dynamicImports: ['src/lazy.ts'], assets: ['assets/formula.worker-a1b2c3d4.js'] },
         'src/lazy.ts': { file: 'assets/lazy.js' },
         ...manifest,
       }),
       'editor.html': '<!doctype html><script type="module" src="/assets/editor.js"></script>',
-      'assets/editor.js': 'new Worker(new URL(`/assets/formula.worker-a1.js`,``+import.meta.url),{type:`module`})',
-      'assets/formula.worker-a1.js': 'self.onmessage=()=>import("./worker-lazy-b2.js")',
+      'assets/editor.js': 'new Worker(new URL(`/assets/formula.worker-a1b2c3d4.js`,``+import.meta.url),{type:`module`})',
+      'assets/formula.worker-a1b2c3d4.js': 'self.onmessage=()=>import("./worker-lazy-b2.js")',
       'assets/worker-lazy-b2.js': 'export const y=2',
       'assets/lazy.js': 'export const x=1',
       ...files,
@@ -112,7 +112,7 @@ describe('US-M1-11 产物门禁的装配', () => {
 
   it('前缀的登记只适用于编辑器页能加载到的产物与它创建的 Worker；平台页面与其他文件只按具体地址（审查 A 路建议 B1）', () => {
     const link = JSON.stringify(`${ARTIFACT_POLICY.allowedAddresses.find(entry => entry.prefix === true)?.address ?? ''}sample`)
-    for (const file of ['assets/editor.js', 'assets/lazy.js', 'assets/formula.worker-a1.js', 'assets/worker-lazy-b2.js']) {
+    for (const file of ['assets/editor.js', 'assets/lazy.js', 'assets/formula.worker-a1b2c3d4.js', 'assets/worker-lazy-b2.js']) {
       const outcome = artifactsGate(writeDist(withEditor({ [file]: `${withEditor({})[file] ?? ''};export const link=${link}` })))
       expect(outcome.violations, file).toEqual([])
     }
@@ -143,10 +143,10 @@ describe('US-M1-11 体积预算门禁的装配', () => {
   /** 两个入口与编辑器页创建的公式 Worker */
   function dist(indexContent: string): string {
     return writeDist({
-      '.vite/manifest.json': JSON.stringify({ 'index.html': { file: 'assets/index.js', isEntry: true }, 'editor.html': { file: 'assets/editor.js', isEntry: true, assets: ['assets/formula.worker-a1.js'] } }),
+      '.vite/manifest.json': JSON.stringify({ 'index.html': { file: 'assets/index.js', isEntry: true }, 'editor.html': { file: 'assets/editor.js', isEntry: true, assets: ['assets/formula.worker-a1b2c3d4.js'] } }),
       'assets/index.js': indexContent,
-      'assets/editor.js': 'new Worker(new URL(`/assets/formula.worker-a1.js`,``+import.meta.url),{type:`module`})',
-      'assets/formula.worker-a1.js': 'self.onmessage=()=>{}',
+      'assets/editor.js': 'new Worker(new URL(`/assets/formula.worker-a1b2c3d4.js`,``+import.meta.url),{type:`module`})',
+      'assets/formula.worker-a1b2c3d4.js': 'self.onmessage=()=>{}',
     })
   }
 

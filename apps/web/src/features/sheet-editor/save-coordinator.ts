@@ -40,7 +40,7 @@ export type SaveProblem
     | { readonly kind: 'too-large' }
   /** 请求失败（冲突除外） */
     | { readonly kind: 'request', readonly error: unknown }
-  /** 提交编辑、等公式收齐或捕获时出了意外的错误（SDK 的缺陷等）：没有上传 */
+  /** 提交编辑、等公式收齐、捕获或压缩时出了意外的错误（SDK 的缺陷等）：没有上传 */
     | { readonly kind: 'unexpected', readonly error: unknown }
 
 export interface SaveView {

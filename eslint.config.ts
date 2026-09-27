@@ -50,6 +50,11 @@ const DYNAMIC_NODE_MODULES_PATH = {
   selector: 'ImportExpression[source.value=/node_modules/]',
   message: NODE_MODULES_PATH_MESSAGE,
 }
+// import.meta.glob 按路径批量导入（构建时展开成导入），受限导入与模块边界都看不到它（复验 SB7）
+const NO_IMPORT_META_GLOB = {
+  selector: 'CallExpression[callee.object.type=\'MetaProperty\'][callee.property.name=/^glob/]',
+  message: '不用 import.meta.glob：它按路径批量导入，受限导入与模块边界都检查不到（复验 SB7）',
+}
 
 // ---- 编辑器适配层的内部 API（P4 设计 §3.6.9，ADR-003、ADR-010）----
 // Facade 之外的 SDK 符号只能经 apps/web/src/editor/internal-api/ 引用，那里逐项登记用途、证据与回归用例。
@@ -90,6 +95,11 @@ const NO_GET_INJECTOR = INJECTOR_NAMES.flatMap(name => [
   { selector: `Literal[value='${name}']`, message: INTERNAL_API_MESSAGE },
   { selector: `TemplateElement[value.cooked='${name}']`, message: INTERNAL_API_MESSAGE },
 ])
+// 包名带查询串或片段（@univerjs/engine-formula?x）：按包名与导入名的限制都认不出，构建照常打包（复验 SB7）
+const UNIVER_QUERY_IMPORTS = {
+  regex: String.raw`^@univerjs/[^?#]*[?#]`,
+  message: '引用 @univerjs/* 不带查询串与片段：按包名与导入名的限制认不出这种写法（复验 SB7）',
+}
 // Univer 的包都用 "./*" 导出了整个目录：按导入名的限制只认包的入口，深层路径拿得到同一批符号。
 // 只允许包的入口、/facade、/locale/<语言> 与 /lib/index.css（样式）
 const UNIVER_DEEP_IMPORTS = {
@@ -113,9 +123,9 @@ const DYNAMIC_TEST_MODULES = {
   selector: String.raw`ImportExpression[source.value=/\.test(?:-support)?(?:\.[cm]?[jt]sx?)?(?:[?#].*)?$/i]`,
   message: '不要动态导入测试与测试辅助（*.test.*、*.test-support.*）：它们只被测试静态引用，不进入生产代码（审查 B17）',
 }
-const BASE_RESTRICTED_SYNTAX = [...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER, TYPE_IMPORT_UNIVER, DYNAMIC_UNIVER_PRO, DYNAMIC_NODE_MODULES_PATH, DYNAMIC_TEST_MODULES, ...NO_GET_INJECTOR]
+const BASE_RESTRICTED_SYNTAX = [...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER, TYPE_IMPORT_UNIVER, DYNAMIC_UNIVER_PRO, DYNAMIC_NODE_MODULES_PATH, NO_IMPORT_META_GLOB, DYNAMIC_TEST_MODULES, ...NO_GET_INJECTOR]
 /** 编辑器适配层：可以静态导入 Univer 的包，但不能引用 Pro */
-const EDITOR_RESTRICTED_SYNTAX = [...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER_PRO, DYNAMIC_NODE_MODULES_PATH, DYNAMIC_TEST_MODULES, EDITOR_DYNAMIC_UNIVER, EDITOR_TYPE_IMPORT_UNIVER]
+const EDITOR_RESTRICTED_SYNTAX = [...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER_PRO, DYNAMIC_NODE_MODULES_PATH, NO_IMPORT_META_GLOB, DYNAMIC_TEST_MODULES, EDITOR_DYNAMIC_UNIVER, EDITOR_TYPE_IMPORT_UNIVER]
 
 // 前端应用的入口（entries/*/main.{ts,tsx}，ADR-008）：按顺序执行的几步，第一步关掉 zod 的 JIT。
 // zod 在创建结构时就读取 jitless，contracts 的结构在模块求值时创建，所以设置它的模块必须最先执行（审查 B1）。
@@ -380,7 +390,7 @@ export default antfu(
     name: 'nerve/editor-may-import-univer',
     files: ['apps/web/src/editor/**'],
     rules: {
-      'no-restricted-imports': ['error', { paths: UNIVER_INTERNAL_SYMBOLS, patterns: [NO_UNIVER_PRO, NO_NODE_MODULES_PATH, UNIVER_DEEP_IMPORTS] }],
+      'no-restricted-imports': ['error', { paths: UNIVER_INTERNAL_SYMBOLS, patterns: [NO_UNIVER_PRO, NO_NODE_MODULES_PATH, UNIVER_QUERY_IMPORTS, UNIVER_DEEP_IMPORTS] }],
       'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX, ...NO_GET_INJECTOR],
     },
   },
@@ -389,7 +399,7 @@ export default antfu(
     name: 'nerve/editor-internal-api',
     files: ['apps/web/src/editor/internal-api/**'],
     rules: {
-      'no-restricted-imports': ['error', { patterns: [NO_UNIVER_PRO, NO_NODE_MODULES_PATH, UNIVER_DEEP_IMPORTS] }],
+      'no-restricted-imports': ['error', { patterns: [NO_UNIVER_PRO, NO_NODE_MODULES_PATH, UNIVER_QUERY_IMPORTS, UNIVER_DEEP_IMPORTS] }],
       'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX],
     },
   },

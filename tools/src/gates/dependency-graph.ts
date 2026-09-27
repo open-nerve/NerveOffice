@@ -86,16 +86,16 @@ export function checkUniver(installed: readonly InstalledPackage[], policy: Univ
 }
 
 /**
- * pnpm 目录里的 Univer 包与版本基线一致（复验 RA6）：目录决定安装哪个版本，checkUniver 核对安装的实例。
- * 平台记录的版本（contracts 的 UNIVER_SDK_VERSION）由 contracts 的单元测试与目录核对
+ * pnpm 的各个目录里的 Univer 包与版本基线一致（复验 RA6、SA9）：目录决定安装哪个版本，checkUniver 核对安装的实例。
+ * 文档记录的版本（contracts 的 UNIVER_SDK_VERSION）由后端的单元测试（sdk-version.test.ts）与默认目录核对
  */
-export function checkUniverCatalog(catalog: Readonly<Record<string, string>>, policy: UniverPolicy): Violation[] {
-  return Object.entries(catalog)
+export function checkUniverCatalog(catalogs: Readonly<Record<string, Readonly<Record<string, string>>>>, policy: UniverPolicy): Violation[] {
+  return Object.entries(catalogs).flatMap(([catalog, entries]) => Object.entries(entries)
     .filter(([name]) => name.startsWith('@univerjs/'))
     .flatMap(([name, version]) => {
       const expected = policy.independent[name] ?? policy.version
-      return version === expected ? [] : [{ rule: 'deps/univer-catalog', subject: name, detail: `pnpm 目录里是 ${version}，版本基线（UNIVER_POLICY）是 ${expected}` }]
-    })
+      return version === expected ? [] : [{ rule: 'deps/univer-catalog', subject: `目录 ${catalog} ${name}`, detail: `目录里是 ${version}，版本基线（UNIVER_POLICY）是 ${expected}` }]
+    }))
 }
 
 /** 名单里的每一项是包名，或者 `@作用域/*`（这个作用域下的每个包）。 */

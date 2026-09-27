@@ -12,26 +12,34 @@ import { Alert, AlertDescription, Button, buttonVariants } from '../../shared/ui
 
 const HOME = '/'
 
+/** 登录已过期、令牌失效这类失败：会话不是 active 时由会话的提示说明，不再重复（复验 RB2） */
+function isSessionProblem(problem: SaveProblem): boolean {
+  return problem.kind === 'request' && (isAuthenticationError(problem.error) || isCsrfTokenError(problem.error))
+}
+
 function problemMessage(problem: SaveProblem): { text: string, requestId?: string, destructive: boolean } {
   if (problem.kind === 'cell-editing')
     return { text: messages.editor.finishCellEditing, destructive: false }
   if (problem.kind === 'too-large' || (problem.error instanceof ApiError && problem.error.code === 'PAYLOAD_TOO_LARGE'))
     return { text: messages.editor.tooLarge, destructive: true }
-  // 令牌已按服务端确认的会话换过：再保存一次即可，不能让用户刷新（刷新会丢掉本页的修改）
-  if (problem.error instanceof ApiError && problem.error.code === 'CSRF_TOKEN_INVALID')
+  // 会话是本人时的令牌失效与未登录（例如迟到的回包）：令牌已按服务端确认的会话换过，再保存一次即可；
+  // 不能让用户刷新（刷新会丢掉本页的修改，复验 SB1）
+  if (isSessionProblem(problem) && problem.kind === 'request' && problem.error instanceof ApiError)
     return { text: messages.editor.saveFailed(messages.editor.retrySave), requestId: problem.error.requestId, destructive: true }
   const error = describeError(problem.error)
   return { text: messages.editor.saveFailed(error.message), requestId: error.requestId, destructive: true }
 }
 
-function SaveControls({ save, onSave, apple }: { save: SaveView, onSave: () => void, apple: boolean }) {
+function SaveControls({ save, confirming, onSave, apple }: { save: SaveView, confirming: boolean, onSave: () => void, apple: boolean }) {
   return (
     <>
-      <p role="status" className="text-sm whitespace-nowrap text-muted-foreground">{messages.editor.status[save.status]}</p>
+      {/* 按了保存、正在向服务端确认会话：说明正在确认，而不是看起来没有反应（复验 SB5） */}
+      <p role="status" className="text-sm whitespace-nowrap text-muted-foreground">{confirming ? messages.auth.checkingSession : messages.editor.status[save.status]}</p>
       {/* 保存中用 aria-disabled：按钮变成 disabled 时焦点会丢（审查 B13）；重复点击由保存的状态机挡住 */}
       <Button
         size="sm"
-        aria-disabled={!save.canSave}
+        aria-disabled={!save.canSave || confirming}
+        aria-busy={confirming}
         aria-keyshortcuts={apple ? 'Meta+S' : 'Control+S'}
         title={messages.editor.saveShortcut(apple ? '⌘S' : 'Ctrl+S')}
         onClick={onSave}
@@ -40,11 +48,6 @@ function SaveControls({ save, onSave, apple }: { save: SaveView, onSave: () => v
       </Button>
     </>
   )
-}
-
-/** 登录已过期、令牌失效这类失败：会话不是 active 时由会话的提示说明，不再重复（复验 RB2） */
-function isSessionProblem(problem: SaveProblem): boolean {
-  return problem.kind === 'request' && (isAuthenticationError(problem.error) || isCsrfTokenError(problem.error))
 }
 
 function SaveNotices({ save, session, onReload }: { save: SaveView, session: EditorPageSession, onReload: () => void }) {
@@ -70,7 +73,8 @@ function SaveNotices({ save, session, onReload }: { save: SaveView, session: Edi
       </Alert>,
     )
   }
-  if (save.formulasPending && save.status !== 'saving') {
+  // 会话不是本人时本页不能保存，"稍后再保存一次"不成立（复验 SB9）
+  if (save.formulasPending && save.status !== 'saving' && session === 'active') {
     notices.push(
       <Alert key="formulas">
         <AlertDescription>{messages.editor.formulasPending}</AlertDescription>
@@ -141,12 +145,13 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
         <div className="ml-auto flex items-center gap-3">
           {load.kind === 'loading' && <p role="status" className="text-sm text-muted-foreground">{messages.editor.loading}</p>}
           {load.kind === 'ready' && load.readOnly && <p className="text-sm text-muted-foreground">{messages.editor.status.readOnly}</p>}
-          {save !== undefined && <SaveControls save={save} apple={apple} onSave={() => void page.save()} />}
+          {save !== undefined && <SaveControls save={save} confirming={view.confirmingSession} apple={apple} onSave={() => void page.save()} />}
         </div>
       </header>
       {(view.session !== 'active' || save !== undefined) && (
         <div className="flex flex-col gap-2 px-3 empty:hidden [&:not(:empty)]:py-2">
-          {view.session === 'signed-out' && (
+          {/* 版本冲突之后本页不能再保存：会话的提示（"登录之后回到这里保存"）不成立，只显示冲突的说明（复验 SB9） */}
+          {view.session === 'signed-out' && save?.conflict === undefined && (
             <Alert variant="destructive">
               <AlertDescription>
                 <p>{messages.editor.signedOut}</p>
@@ -158,7 +163,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
               </AlertDescription>
             </Alert>
           )}
-          {view.session === 'other-user' && (
+          {view.session === 'other-user' && save?.conflict === undefined && (
             <Alert variant="destructive">
               <AlertDescription>
                 <p>{messages.editor.otherUser}</p>

@@ -2,15 +2,18 @@
 // 但 WebKit 的 Worker 内的违规没有任何渠道可见，所以用静态扫描兜底；范围包括 Worker 自己加载的子块。
 // JS 文件按语法树找出 eval 与 Function 的每一处引用（eval-and-function.ts，审查 B3），
 // 地址按语法树取出的字符串的值、模板字符串、正则与注释识别（DEF-016）；
-// 其他文本文件取出可能是地址的值再识别：HTML 与 SVG 的属性（解码字符引用之后）、样式的 url() 与字符串（还原转义之后）、
-// JSON 的字符串（addresses.ts，复验 RA4），剩下的文本按写法匹配。其余几类动态代码对所有文本文件按写法匹配。
+// 其他文本文件按各自的语法取出可能是地址的值再识别：HTML 与 SVG 用 parse5 解析（html-values.ts），样式按 CSS 的分词规则
+// （css-values.ts），JSON 解析出字符串（复验 RA4、SA2、SA4）；整个文件另按写法匹配一遍兜底，与值里已经报出的同一处不重复计数。
+// 其余几类动态代码对所有文本文件按写法匹配。
 // 静态扫描判断不了运行时才拼出来的代码与地址（例如 setTimeout(变量)、"https:" + "//" + host 里的变量、
 // 从任意函数的 .constructor 取到的构造函数），这部分由 CSP 兜底：策略里没有 'unsafe-eval'，connect-src 只有 'self'。
 import type { LocatedValue } from './addresses.ts'
 import type { Reference, TextValue } from './eval-and-function.ts'
 import type { Violation } from './types.ts'
-import { blankOut, crossOriginAddress, cssValues, htmlValues, isRegexFlags, unescapeCss } from './addresses.ts'
+import { crossOriginAddress, isRegexFlags, originOf } from './addresses.ts'
+import { cssValues } from './css-values.ts'
 import { analyzeJavaScript, INTERPOLATION_PLACEHOLDER } from './eval-and-function.ts'
+import { htmlValues } from './html-values.ts'
 
 export interface ArtifactFile {
   path: string
@@ -223,21 +226,23 @@ const LEADING_JUNK = /^[\u0000-\u0020]*/
  * 一个值里的地址（DEF-016）：JS 的字符串与模板字符串，以及 HTML 属性、样式与 JSON 里取出的值。
  * - 写法规范的绝对地址，与插值后面紧跟 //主机 的协议相对地址（`${location.protocol}//evil.example`），出现在值的任何位置都认；
  *   "//g" 这样的正则片段不算（只排除它，不再按"像不像主机"过滤：单标签的主机同样会被请求，复验 RA3）；
- * - 整个值就是地址、写法却不规范的（前导空白、反斜杠、制表符、用户信息、编码过的主机、不带斜杠的 wss: 等），
- *   按浏览器的规则解析（crossOriginAddress，审查 A4）。
+ * - 整个值按浏览器的规则再解析一遍（crossOriginAddress，审查 A4）：值的开头已经按写法认出了地址、而两者的来源（协议、主机、端口）
+ *   不同时另外报出，例如允许的地址后面接着制表符与另一个域名（"https://tailwindcss.com\t.evil.example"，复验 SA3）；
+ *   写法不规范的（前导空白、反斜杠、用户信息、编码过的主机、不带斜杠的 wss:、协议或端口是插值等）由它认出。
  * 压缩器把普通字符串也写成模板字符串（复验 RA2），所以两者按同一个规则。
  */
 function addressesInValue(text: string): string[] {
   const absolute = [...text.matchAll(ABSOLUTE_URL)]
   const relative = [...text.matchAll(VALUE_PROTOCOL_RELATIVE_URL)].filter(match => !isRegexFlags(match[0]))
   const found = [...absolute, ...relative]
-  // 值的开头（或者开头的插值之后）已经认出了规范的写法，就不再按浏览器的规则重复解析
-  const head = LEADING_JUNK.exec(text)?.[0].length ?? 0
-  const starts = new Set([head, text.startsWith(INTERPOLATION_PLACEHOLDER, head) ? head + INTERPOLATION_PLACEHOLDER.length : head])
   const addresses = found.map(match => match[0])
-  if (!found.some(match => starts.has(match.index))) {
-    const resolved = crossOriginAddress(text)
-    if (resolved !== undefined)
+  const resolved = crossOriginAddress(text)
+  if (resolved !== undefined) {
+    // 值的开头（或者开头的插值之后）按写法认出的地址
+    const head = LEADING_JUNK.exec(text)?.[0].length ?? 0
+    const starts = new Set([head, text.startsWith(INTERPOLATION_PLACEHOLDER, head) ? head + INTERPOLATION_PLACEHOLDER.length : head])
+    const leading = found.find(match => starts.has(match.index))
+    if (leading === undefined || originOf(leading[0]) !== originOf(resolved))
       addresses.push(resolved)
   }
   return addresses
@@ -250,7 +255,7 @@ function addressesInCode(value: TextValue): string[] {
 }
 
 /** JSON 里的全部字符串（键与值）；不是合法的 JSON 时返回 undefined */
-function jsonStrings(content: string): LocatedValue[] | undefined {
+function jsonStrings(content: string): string[] | undefined {
   let parsed: unknown
   try {
     parsed = JSON.parse(content)
@@ -268,10 +273,25 @@ function jsonStrings(content: string): LocatedValue[] | undefined {
       Object.entries(node).forEach(([key, value]) => walk([key, value]))
   }
   walk(parsed)
-  return strings.map((value) => {
-    const index = Math.max(0, content.indexOf(JSON.stringify(value)))
-    return { value, index, end: index }
-  })
+  return strings
+}
+
+/**
+ * 一个 JSON 字符串里可能是地址的值：字符串本身，以及嵌在里面的 HTML 与样式（复验 SA2）。
+ * 只给认出了地址的字符串找位置：每个字符串都在原文里找一遍是平方级的（复验 SA7）
+ */
+function jsonValues(content: string, strings: readonly string[]): LocatedValue[] {
+  const values: LocatedValue[] = []
+  for (const text of strings) {
+    const candidates = [text, ...(text.includes('<') ? htmlValues(text).map(item => item.value) : []), ...(text.includes('(') || text.includes('"') || text.includes('\'') ? cssValues(text).map(item => item.value) : [])]
+    const found = candidates.filter(candidate => addressesInValue(candidate).length > 0)
+    if (found.length === 0)
+      continue
+    const encoded = JSON.stringify(text)
+    const index = Math.max(0, content.indexOf(encoded))
+    values.push(...found.map(value => ({ value, index, end: index + encoded.length })))
+  }
+  return values
 }
 
 type TextKind = 'css' | 'markup' | 'json' | 'other'
@@ -306,46 +326,55 @@ export function scanArtifacts(files: readonly ArtifactFile[], policy: ArtifactPo
       return
     violations.push({ rule: 'artifacts/address', subject: file.path, detail: `${address ?? shape.host} 不在允许清单里（主机 ${shape.host}）：${context(file.content, index)}` })
   }
-  /** 按写法匹配：text 默认是整个文件，取出值之后是剩下的文本 */
-  const noteRawAddresses = (file: ArtifactFile, text = file.content): void => {
-    for (const pattern of [ABSOLUTE_URL, PROTOCOL_RELATIVE_URL]) {
-      for (const match of text.matchAll(pattern))
-        noteAddress(file, match[0], match.index)
-    }
+  /** 值里报出的地址按所在的范围记下来源：整个文件按写法匹配时，落在同一个范围、来源相同的不再重复计数 */
+  interface ReportedSpan {
+    readonly index: number
+    readonly end: number
+    readonly origins: ReadonlySet<string>
   }
-  const noteValues = (file: ArtifactFile, values: readonly LocatedValue[]): void => {
+  /** 同一处（例如一个属性）取出的几个值（整个值与切开的各段）里，来源相同的地址只报一次 */
+  const noteValues = (file: ArtifactFile, values: readonly LocatedValue[]): ReportedSpan[] => {
+    const spans = new Map<string, { index: number, end: number, origins: Set<string> }>()
     for (const item of values) {
-      for (const address of addressesInValue(item.value))
+      const key = `${item.index}:${item.end}`
+      const span = spans.get(key) ?? { index: item.index, end: item.end, origins: new Set<string>() }
+      for (const address of addressesInValue(item.value)) {
+        const origin = originOf(address)
+        if (span.origins.has(origin))
+          continue
+        span.origins.add(origin)
         noteAddress(file, address, item.index)
+      }
+      if (span.origins.size > 0)
+        spans.set(key, span)
+    }
+    return [...spans.values()]
+  }
+  /** 整个文件按写法匹配：取出值的时候切错或漏掉的，由它兜底（不再把取出的值从原文里抹掉，复验 SA2） */
+  const noteRawAddresses = (file: ArtifactFile, spans: readonly ReportedSpan[] = []): void => {
+    for (const pattern of [ABSOLUTE_URL, PROTOCOL_RELATIVE_URL]) {
+      for (const match of file.content.matchAll(pattern)) {
+        const origin = originOf(match[0])
+        if (!spans.some(span => match.index >= span.index && match.index < span.end && span.origins.has(origin)))
+          noteAddress(file, match[0], match.index)
+      }
     }
   }
-  /** 没有语法树的文本文件：先取出可能是地址的值按浏览器的规则识别，剩下的文本按写法匹配 */
+  /** 没有语法树的文本文件：先按各自的语法取出可能是地址的值识别，再对整个文件按写法匹配 */
   const noteTextAddresses = (file: ArtifactFile): void => {
-    switch (textKind(file.path)) {
-      case 'css': {
-        const css = unescapeCss(file.content)
-        const values = cssValues(css)
-        noteValues(file, values)
-        noteRawAddresses(file, blankOut(css, values))
-        return
-      }
-      case 'markup': {
-        const values = htmlValues(file.content)
-        noteValues(file, values)
-        noteRawAddresses(file, blankOut(file.content, values))
-        return
-      }
-      case 'json': {
-        const strings = jsonStrings(file.content)
-        if (strings === undefined)
-          noteRawAddresses(file)
-        else
-          noteValues(file, strings)
-        return
-      }
-      case 'other':
-        noteRawAddresses(file)
+    const kind = textKind(file.path)
+    let values: LocatedValue[] = []
+    if (kind === 'css') {
+      values = cssValues(file.content)
     }
+    else if (kind === 'markup') {
+      values = htmlValues(file.content)
+    }
+    else if (kind === 'json') {
+      const strings = jsonStrings(file.content)
+      values = strings === undefined ? [] : jsonValues(file.content, strings)
+    }
+    noteRawAddresses(file, noteValues(file, values))
   }
 
   // 已登记的动态代码每出现一次记一个名字

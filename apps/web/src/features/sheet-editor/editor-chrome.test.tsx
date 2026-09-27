@@ -10,7 +10,7 @@ const CLEAN: SaveView = { status: 'clean', formulasPending: false, problem: unde
 
 /** 假的编辑器页：视图由测试设定 */
 function fakePage(initial: Partial<EditorPageView> = {}) {
-  let view: EditorPageView = { load: READY, save: CLEAN, session: 'active', sessionProblem: undefined, ...initial }
+  let view: EditorPageView = { load: READY, save: CLEAN, session: 'active', sessionProblem: undefined, confirmingSession: false, ...initial }
   const listeners = new Set<() => void>()
   const page: EditorPage = {
     view: () => view,
@@ -131,6 +131,27 @@ describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
     renderChrome({ session: 'other-user', save: { ...CLEAN, status: 'failed', canSave: false, problem: { kind: 'request', error: new ApiError(403, 'CSRF_TOKEN_INVALID', 'x') } } })
     expect(screen.getAllByRole('alert')).toHaveLength(1)
     expect(screen.getByRole('alert')).not.toHaveTextContent('请再保存一次')
+  })
+
+  it('会话是本人时的令牌失效与迟到的未登录：提示再保存一次（令牌已经换好，复验 SB1）', () => {
+    renderChrome({ save: { ...CLEAN, status: 'failed', problem: { kind: 'request', error: new ApiError(401, 'SESSION_EXPIRED', 'x') } } })
+    expect(screen.getByRole('alert')).toHaveTextContent('保存失败：请求已失效，请再保存一次')
+  })
+
+  it('按了保存、正在确认会话：说明正在确认，按钮不可用（复验 SB5）', () => {
+    renderChrome({ confirmingSession: true })
+    expect(screen.getByRole('status')).toHaveTextContent('正在确认登录状态…')
+    expect(screen.getByRole('button', { name: '保存' })).toHaveAttribute('aria-disabled', 'true')
+    expect(screen.getByRole('button', { name: '保存' })).toHaveAttribute('aria-busy', 'true')
+  })
+
+  it('版本冲突之后不再显示会话的提示；会话不是本人时不显示"公式结果尚未保存"（复验 SB9）', () => {
+    renderChrome({ session: 'signed-out', save: { ...CLEAN, status: 'conflict', canSave: false, conflict: { currentRevision: 5, source: null } } })
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    expect(screen.getByRole('alert')).toHaveTextContent('别处保存了更新的版本')
+    cleanup()
+    renderChrome({ session: 'other-user', save: { ...CLEAN, status: 'dirty', canSave: false, formulasPending: true } })
+    expect(screen.queryByText('公式结果尚未保存，请稍后再保存一次')).not.toBeInTheDocument()
   })
 
   it('确认会话失败（例如断网时按了保存）：在会话的提示里说明原因（复验 RB7）', () => {
