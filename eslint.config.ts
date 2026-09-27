@@ -24,6 +24,14 @@ const NO_NODE_MODULES_PATH = {
   regex: String.raw`(?:^|[\/])node_modules(?:[\/]|$)`,
   message: NODE_MODULES_PATH_MESSAGE,
 }
+// 包名一律小写（npm 的包名本来就不许大写）：写成 @UniverJS/engine-formula 时，按包名生效的限制（Univer 只在编辑器、内部 API、深层路径）都认不出，
+// 而不区分大小写的文件系统（macOS 本机）上类型检查与构建照常通过（复验 TB5）。只看包名这一段，包里的路径不管
+const UPPERCASE_PACKAGE_MESSAGE = '包名写成小写：写成大写时按包名生效的限制认不出，不区分大小写的文件系统上构建照常通过（复验 TB5）'
+const NO_UPPERCASE_PACKAGE = {
+  regex: String.raw`^(?:@[^/]*[A-Z]|@[^/]+/[^/]*[A-Z]|(?![@./#])[^/]*[A-Z])`,
+  caseSensitive: true,
+  message: UPPERCASE_PACKAGE_MESSAGE,
+}
 
 // 动态导入同样受限：no-restricted-imports 只管静态导入与再导出。
 // esquery 的正则字面量里不能出现斜杠，所以用前缀判断
@@ -50,6 +58,12 @@ const DYNAMIC_NODE_MODULES_PATH = {
   selector: 'ImportExpression[source.value=/node_modules/]',
   message: NODE_MODULES_PATH_MESSAGE,
 }
+// 动态导入与类型里的 import('…') 的包名同样要小写（复验 TB5）；esquery 的正则字面量里不能出现斜杠，写成 \x2F
+const UPPERCASE_PACKAGE_SOURCE = String.raw`/^(?:@[^\x2F]*[A-Z]|@[^\x2F]+\x2F[^\x2F]*[A-Z]|(?![@.#\x2F])[^\x2F]*[A-Z])/`
+const DYNAMIC_UPPERCASE_PACKAGE = [
+  { selector: `ImportExpression[source.value=${UPPERCASE_PACKAGE_SOURCE}]`, message: UPPERCASE_PACKAGE_MESSAGE },
+  { selector: `TSImportType[source.value=${UPPERCASE_PACKAGE_SOURCE}]`, message: UPPERCASE_PACKAGE_MESSAGE },
+]
 // import.meta.glob 按路径批量导入（构建时展开成导入），受限导入与模块边界都看不到它（复验 SB7）
 const NO_IMPORT_META_GLOB = {
   selector: 'CallExpression[callee.object.type=\'MetaProperty\'][callee.property.name=/^glob/]',
@@ -123,9 +137,9 @@ const DYNAMIC_TEST_MODULES = {
   selector: String.raw`ImportExpression[source.value=/\.test(?:-support)?(?:\.[cm]?[jt]sx?)?(?:[?#].*)?$/i]`,
   message: '不要动态导入测试与测试辅助（*.test.*、*.test-support.*）：它们只被测试静态引用，不进入生产代码（审查 B17）',
 }
-const BASE_RESTRICTED_SYNTAX = [...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER, TYPE_IMPORT_UNIVER, DYNAMIC_UNIVER_PRO, DYNAMIC_NODE_MODULES_PATH, NO_IMPORT_META_GLOB, DYNAMIC_TEST_MODULES, ...NO_GET_INJECTOR]
+const BASE_RESTRICTED_SYNTAX = [...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER, TYPE_IMPORT_UNIVER, DYNAMIC_UNIVER_PRO, DYNAMIC_NODE_MODULES_PATH, ...DYNAMIC_UPPERCASE_PACKAGE, NO_IMPORT_META_GLOB, DYNAMIC_TEST_MODULES, ...NO_GET_INJECTOR]
 /** 编辑器适配层：可以静态导入 Univer 的包，但不能引用 Pro */
-const EDITOR_RESTRICTED_SYNTAX = [...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER_PRO, DYNAMIC_NODE_MODULES_PATH, NO_IMPORT_META_GLOB, DYNAMIC_TEST_MODULES, EDITOR_DYNAMIC_UNIVER, EDITOR_TYPE_IMPORT_UNIVER]
+const EDITOR_RESTRICTED_SYNTAX = [...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER_PRO, DYNAMIC_NODE_MODULES_PATH, ...DYNAMIC_UPPERCASE_PACKAGE, NO_IMPORT_META_GLOB, DYNAMIC_TEST_MODULES, EDITOR_DYNAMIC_UNIVER, EDITOR_TYPE_IMPORT_UNIVER]
 
 // 前端应用的入口（entries/*/main.{ts,tsx}，ADR-008）：按顺序执行的几步，第一步关掉 zod 的 JIT。
 // zod 在创建结构时就读取 jitless，contracts 的结构在模块求值时创建，所以设置它的模块必须最先执行（审查 B1）。
@@ -275,6 +289,7 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
     UNIVER_ONLY_IN_EDITOR,
     NO_UNIVER_PRO,
     NO_NODE_MODULES_PATH,
+    NO_UPPERCASE_PACKAGE,
     API_RELATIVE_JS_EXTENSION,
     API_NEST_DEEP_IMPORTS,
     ...(kind.databaseLibraries === true ? [] : [API_DATABASE_LIBRARIES]),
@@ -370,7 +385,7 @@ export default antfu(
       'no-console': ['error', {}],
       'unicorn/filename-case': ['error', { case: 'kebabCase' }],
       'react/dom-no-dangerously-set-innerhtml': 'error',
-      'no-restricted-imports': ['error', { patterns: [UNIVER_ONLY_IN_EDITOR, NO_UNIVER_PRO, NO_NODE_MODULES_PATH] }],
+      'no-restricted-imports': ['error', { patterns: [UNIVER_ONLY_IN_EDITOR, NO_UNIVER_PRO, NO_NODE_MODULES_PATH, NO_UPPERCASE_PACKAGE] }],
       'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX],
       // 三斜杠引用（/// <reference path|types|lib>）绕得过受限导入与模块边界：类型经 import type 或 tsconfig 的 types 引用（复验 RB4）
       'ts/triple-slash-reference': ['error', { path: 'never', types: 'never', lib: 'never' }],
@@ -390,7 +405,7 @@ export default antfu(
     name: 'nerve/editor-may-import-univer',
     files: ['apps/web/src/editor/**'],
     rules: {
-      'no-restricted-imports': ['error', { paths: UNIVER_INTERNAL_SYMBOLS, patterns: [NO_UNIVER_PRO, NO_NODE_MODULES_PATH, UNIVER_QUERY_IMPORTS, UNIVER_DEEP_IMPORTS] }],
+      'no-restricted-imports': ['error', { paths: UNIVER_INTERNAL_SYMBOLS, patterns: [NO_UNIVER_PRO, NO_NODE_MODULES_PATH, NO_UPPERCASE_PACKAGE, UNIVER_QUERY_IMPORTS, UNIVER_DEEP_IMPORTS] }],
       'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX, ...NO_GET_INJECTOR],
     },
   },
@@ -399,7 +414,7 @@ export default antfu(
     name: 'nerve/editor-internal-api',
     files: ['apps/web/src/editor/internal-api/**'],
     rules: {
-      'no-restricted-imports': ['error', { patterns: [NO_UNIVER_PRO, NO_NODE_MODULES_PATH, UNIVER_QUERY_IMPORTS, UNIVER_DEEP_IMPORTS] }],
+      'no-restricted-imports': ['error', { patterns: [NO_UNIVER_PRO, NO_NODE_MODULES_PATH, NO_UPPERCASE_PACKAGE, UNIVER_QUERY_IMPORTS, UNIVER_DEEP_IMPORTS] }],
       'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX],
     },
   },

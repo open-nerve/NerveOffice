@@ -41,4 +41,21 @@ describe('US-M1-11 样式里可能是地址的值（按 CSS 的分词规则，�
   it('无效的转义：代码点 0、代理对与超出范围的换成 U+FFFD', () => {
     expect(values('a{content:"\\0 \\d800 \\110000"}')).toEqual(['\uFFFD\uFFFD\uFFFD'])
   })
+
+  it('反斜杠后面是输入的结尾：合法的转义，得到 U+FFFD（复验 TA3）', () => {
+    expect(values('a{background:url(//evil.example/h2.png\\')).toEqual(['//evil.example/h2.png\uFFFD'])
+    expect(values('a{background:u\\')).toEqual([])
+  })
+
+  it('输入的预处理：NUL 与单独的代理项换成 U+FFFD，位置不变（复验 TA3）', () => {
+    const css = 'a{background:url(//evil.example/n1\0.png)}'
+    const [item] = cssValues(css)
+    expect(item?.value).toBe('//evil.example/n1\uFFFD.png')
+    expect(css.slice(item?.index, item?.end)).toBe('url(//evil.example/n1\0.png)')
+    expect(values('a{background:url(//evil.example/s\uD800.png)}')).toEqual(['//evil.example/s\uFFFD.png'])
+  })
+
+  it('坏的 url 里转义的右括号不结束它，之后的 url() 照常取出', () => {
+    expect(values('a{b:url(x y\\))} c{background:url(//evil.example/z)}')).toEqual(['//evil.example/z'])
+  })
 })

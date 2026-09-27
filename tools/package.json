@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "parse5": "catalog:",
+    "saxes": "catalog:",
     "vite": "catalog:",
     "yaml": "catalog:",
     "zod": "catalog:"

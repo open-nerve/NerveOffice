@@ -1,7 +1,7 @@
 // 编辑器页的页头与提示（P4 设计 §3.7.3）：返回我的空间、标题、保存状态（role="status"）、保存按钮；载入与保存的各种结果。
 // 编辑器本身挂在页头之外的容器里（editor.html 的 #sheet-editor），不归 React 管。
 import type { ReactNode } from 'react'
-import type { EditorPage, EditorPageLoad, EditorPageSession } from './editor-page.ts'
+import type { EditorPage, EditorPageLoad, EditorPageView } from './editor-page.ts'
 import type { SaveProblem, SaveView } from './save-coordinator.ts'
 import { ArrowLeft } from 'lucide-react'
 import { useEffect, useSyncExternalStore } from 'react'
@@ -12,20 +12,28 @@ import { Alert, AlertDescription, Button, buttonVariants } from '../../shared/ui
 
 const HOME = '/'
 
-/** 登录已过期、令牌失效这类失败：会话不是 active 时由会话的提示说明，不再重复（复验 RB2） */
+/**
+ * 登录已过期、令牌失效这类失败：会话不是 active 时由会话的提示说明，不再重复（复验 RB2）；
+ * 向服务端确认会话进行中先不显示，等确认有了结果（复验 TB1）
+ */
 function isSessionProblem(problem: SaveProblem): boolean {
   return problem.kind === 'request' && (isAuthenticationError(problem.error) || isCsrfTokenError(problem.error))
 }
 
-function problemMessage(problem: SaveProblem): { text: string, requestId?: string, destructive: boolean } {
+/** sessionProblem：最近一次确认会话失败的原因 */
+function problemMessage(problem: SaveProblem, sessionProblem: unknown): { text: string, requestId?: string, destructive: boolean } {
   if (problem.kind === 'cell-editing')
     return { text: messages.editor.finishCellEditing, destructive: false }
   if (problem.kind === 'too-large' || (problem.error instanceof ApiError && problem.error.code === 'PAYLOAD_TOO_LARGE'))
     return { text: messages.editor.tooLarge, destructive: true }
-  // 会话是本人时的令牌失效与未登录（例如迟到的回包）：令牌已按服务端确认的会话换过，再保存一次即可；
-  // 不能让用户刷新（刷新会丢掉本页的修改，复验 SB1）
-  if (isSessionProblem(problem) && problem.kind === 'request' && problem.error instanceof ApiError)
-    return { text: messages.editor.saveFailed(messages.editor.retrySave), requestId: problem.error.requestId, destructive: true }
+  // 会话是本人时的令牌失效与未登录（例如迟到的回包）：确认之后令牌已按服务端确认的会话换过，再保存一次即可；
+  // 确认失败时令牌没有换成，说明原因（再按保存会先确认，复验 TB1）。不能让用户刷新（刷新会丢掉本页的修改，复验 SB1）
+  if (isSessionProblem(problem) && problem.kind === 'request' && problem.error instanceof ApiError) {
+    if (sessionProblem === undefined)
+      return { text: messages.editor.saveFailed(messages.editor.retrySave), requestId: problem.error.requestId, destructive: true }
+    const reason = describeError(sessionProblem)
+    return { text: messages.editor.saveFailed(messages.editor.sessionCheckFailed(reason.message)), requestId: reason.requestId, destructive: true }
+  }
   const error = describeError(problem.error)
   return { text: messages.editor.saveFailed(error.message), requestId: error.requestId, destructive: true }
 }
@@ -50,20 +58,23 @@ function SaveControls({ save, confirming, onSave, apple }: { save: SaveView, con
   )
 }
 
-function SaveNotices({ save, session, onReload }: { save: SaveView, session: EditorPageSession, onReload: () => void }) {
+function SaveNotices({ view, save, onReload }: { view: EditorPageView, save: SaveView, onReload: () => void }) {
+  const { session } = view
   const notices: ReactNode[] = []
   if (save.conflict !== undefined) {
     notices.push(
       <Alert key="conflict" variant="destructive">
         <AlertDescription>
           <p>{messages.editor.conflict}</p>
+          {/* 换了人：重新加载会以另一个账户打开，可能看不到这份文档，先说明（复验 TB8） */}
+          {session === 'other-user' && <p>{messages.editor.otherUserBeforeReload}</p>}
           <Button variant="outline" size="sm" className="mt-2" onClick={onReload}>{messages.editor.reload}</Button>
         </AlertDescription>
       </Alert>,
     )
   }
-  if (save.problem !== undefined && !(session !== 'active' && isSessionProblem(save.problem))) {
-    const problem = problemMessage(save.problem)
+  if (save.problem !== undefined && !(isSessionProblem(save.problem) && (session !== 'active' || view.confirmingSession))) {
+    const problem = problemMessage(save.problem, view.sessionProblem)
     notices.push(
       <Alert key="problem" variant={problem.destructive ? 'destructive' : 'default'}>
         <AlertDescription>
@@ -150,7 +161,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
       </header>
       {(view.session !== 'active' || save !== undefined) && (
         <div className="flex flex-col gap-2 px-3 empty:hidden [&:not(:empty)]:py-2">
-          {/* 版本冲突之后本页不能再保存：会话的提示（"登录之后回到这里保存"）不成立，只显示冲突的说明（复验 SB9） */}
+          {/* 版本冲突之后本页不能再保存：会话的提示（"登录之后回到这里保存"）不成立，只显示冲突的说明（复验 SB9；换了人时冲突的说明里另有一句，复验 TB8） */}
           {view.session === 'signed-out' && save?.conflict === undefined && (
             <Alert variant="destructive">
               <AlertDescription>
@@ -171,7 +182,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
               </AlertDescription>
             </Alert>
           )}
-          {save !== undefined && <SaveNotices save={save} session={view.session} onReload={page.reload} />}
+          {save !== undefined && <SaveNotices view={view} save={save} onReload={page.reload} />}
         </div>
       )}
     </>

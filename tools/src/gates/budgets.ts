@@ -161,10 +161,18 @@ export function checkBudgets(manifest: ViteManifest, budgets: readonly EntryBudg
       results.push({ violations: [{ rule: 'budgets/unbudgeted-entry', subject: entry, detail: '构建清单里的这个入口没有首屏体积的预算：在 ENTRY_BUDGETS 登记，写明实测与原因' }], notes: [] })
   }
   for (const budget of workers) {
-    const found = entryWorkers(manifest, budget.entry).find(file => isWorkerNamed(file, budget.worker))
-    results.push(found === undefined
-      ? { violations: [{ rule: 'budgets/missing-worker', subject: budget.worker, detail: `${budget.entry} 能加载到的块没有创建 ${budget.worker}：${budget.label}的预算指向的 Worker 不存在，更新预算表` }], notes: [] }
-      : measure(budget.label, budget.worker, workerClosure(found, output.readText), budget.maxGzipBytes, output))
+    const found = entryWorkers(manifest, budget.entry).filter(file => isWorkerNamed(file, budget.worker))
+    const [only] = found
+    if (only === undefined) {
+      results.push({ violations: [{ rule: 'budgets/missing-worker', subject: budget.worker, detail: `${budget.entry} 能加载到的块没有创建 ${budget.worker}：${budget.label}的预算指向的 Worker 不存在，更新预算表` }], notes: [] })
+    }
+    else if (found.length > 1) {
+      // 同名的产物不止一个：不知道哪个是登记的那个 Worker，只量其中一个会让另一个逃过预算（复验 TA8）
+      results.push({ violations: [{ rule: 'budgets/ambiguous-worker', subject: budget.worker, detail: `${budget.entry} 能加载到的块创建了 ${found.length} 个名为 ${budget.worker} 的产物（${found.join('、')}）：一个预算只对应一个 Worker，确认来源后改名或分别登记` }], notes: [] })
+    }
+    else {
+      results.push(measure(budget.label, budget.worker, workerClosure(only, output.readText), budget.maxGzipBytes, output))
+    }
   }
   // 入口能加载到的块创建的、却没有登记预算的 Worker：它同样要下载（审查 A 路建议 B2，复验 RA5：含 ?worker 的写法与动态加载的块）
   const entries = [...new Set([...budgets.map(budget => budget.entry), ...Object.keys(manifest).filter(entry => manifest[entry]?.isEntry === true)])]

@@ -108,7 +108,7 @@ catalog:
   lefthook: 2.1.14
   lint-staged: 17.5.1
   lucide-react: 1.47.0
-  # 产物扫描按 HTML 规范解析入口页与 SVG（字符引用、属性），仓库工具用（复验 SA2）；与 jsdom 用的是同一个版本
+  # 产物扫描按 HTML 规范解析入口页（字符引用、属性），仓库工具用（复验 SA2）；与 jsdom 用的是同一个版本
   parse5: 8.0.1
   pg: 8.23.0
   pino: 10.3.1
@@ -119,6 +119,8 @@ catalog:
   react-router: 8.4.0
   reflect-metadata: 0.2.2
   rxjs: 7.8.2
+  # 产物扫描按 XML 解析 SVG（实体、处理指令、格式错误），仓库工具用（复验 TA6）；与 jsdom 用的是同一个版本
+  saxes: 6.0.0
   tailwind-merge: 3.7.0
   tailwindcss: 4.3.3
   typescript: 6.0.3

@@ -4,11 +4,15 @@
 import { readFileSync } from 'node:fs'
 import { UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
+import { parse } from 'yaml'
+import { z } from 'zod'
+
+const workspaceSchema = z.object({ catalog: z.record(z.string(), z.unknown()) })
 
 describe('文档记录的 SDK 版本', () => {
   it('与 pnpm 目录里 @univerjs/core 的版本相同', () => {
-    const workspace = readFileSync(new URL('../../../../../pnpm-workspace.yaml', import.meta.url), 'utf8')
-    // 版本可以写成带引号的 YAML 字符串（复验 SA9）
-    expect(/^\s*'@univerjs\/core':\s*['"]?([^'"\s]+)['"]?\s*$/m.exec(workspace)?.[1]).toBe(UNIVER_SDK_VERSION)
+    // 按 YAML 解析：键与版本的引号、行尾的注释都不影响（复验 SA9、TA10）
+    const workspace = workspaceSchema.parse(parse(readFileSync(new URL('../../../../../pnpm-workspace.yaml', import.meta.url), 'utf8')))
+    expect(workspace.catalog['@univerjs/core']).toBe(UNIVER_SDK_VERSION)
   })
 })

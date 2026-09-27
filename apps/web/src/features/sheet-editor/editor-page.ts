@@ -35,9 +35,15 @@ export interface EditorPageView {
   /** 就绪、而且能编辑时才有 */
   readonly save: SaveView | undefined
   readonly session: EditorPageSession
-  /** 最近一次向服务端确认会话失败的原因（网络错误等）；确认成功之后清掉。会话不是 active 时显示（复验 RB7） */
+  /**
+   * 最近一次向服务端确认会话失败的原因（网络错误等）；确认成功之后清掉。会话不是 active 时显示在会话的提示里（复验 RB7）；
+   * 是 active、而保存因为令牌失效或未登录失败时显示在保存失败的说明里：令牌没有换成，不能说"再保存一次"就好（复验 TB1）
+   */
   readonly sessionProblem: unknown
-  /** 按了保存、正在等向服务端确认会话：页头说明正在确认，按钮不可用（复验 SB5） */
+  /**
+   * 与保存有关的会话确认进行中（保存得到未登录或令牌失效、按保存时要先确认）：页头说明正在确认，按钮不可用，
+   * 会话类的保存失败等确认有了结果再显示（复验 SB5、TB1）
+   */
   readonly confirmingSession: boolean
 }
 
@@ -205,10 +211,28 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       }
       finally {
         checkInFlight = undefined
+        // 与保存有关的确认结束：会话的结果已经更新，这时才显示会话类的保存失败（复验 TB1）
+        if (confirmingSession) {
+          confirmingSession = false
+          update()
+        }
       }
     }
     checkInFlight = run()
     return checkInFlight
+  }
+
+  /**
+   * 与保存有关的会话确认：进行中页头说明正在确认（复验 SB5、TB1）。trigger 为真时是保存失败触发的新的确认
+   * （确认期间又要求的，结束后再确认一次）；否则是按了保存：有确认在途就等它，不另起一轮
+   */
+  async function confirmForSave(trigger: boolean): Promise<void> {
+    const confirming = trigger || checkInFlight === undefined ? recheckSession() : checkInFlight
+    if (checkInFlight !== undefined && !confirmingSession) {
+      confirmingSession = true
+      update()
+    }
+    return confirming
   }
 
   async function checkSessionOnce(): Promise<void> {
@@ -267,9 +291,9 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         // 保存得到未登录：先向服务端确认（回包可能是本人在别处重新登录之前发出的那次保存的，不能据此清掉新的令牌，复验 RB7）
         onUnauthenticated: () => {
           unauthenticatedPending = true
-          void recheckSession()
+          void confirmForSave(true)
         },
-        onSessionStale: () => void recheckSession(),
+        onSessionStale: () => void confirmForSave(true),
         reportError: options.reportError,
       })
       // 创建编辑器期间别的标签页换了人：保存状态机一建好就停住（复验 RB3）
@@ -342,20 +366,14 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     save: async () => {
       if (coordinator === undefined)
         return
+      // 保存中、版本冲突之后再按：不做任何事（P4 设计 §3.7.2）；不因为有确认在途就把"保存中"换成"正在确认"（复验 TB9）
+      const { status } = coordinator.view()
+      if (status === 'saving' || status === 'conflict')
+        return
       // 确认会话进行中（别的标签页的消息、保存得到未登录或 CSRF 失效触发的）：等它结束，按确认的结果决定（复验 RB1）；
-      // 暂停或停止保存时先向服务端确认一次：本页的用户可能已经在别处重新登录，广播的消息没有送到
-      const confirming = checkInFlight ?? (session === 'active' ? undefined : recheckSession())
-      if (confirming !== undefined) {
-        confirmingSession = true
-        update()
-        try {
-          await confirming
-        }
-        finally {
-          confirmingSession = false
-          update()
-        }
-      }
+      // 暂停或停止保存时、上一次确认失败时（令牌可能没有换成，复验 TB1）先向服务端确认一次：本页的用户可能已经在别处重新登录，广播的消息没有送到
+      if (checkInFlight !== undefined || session !== 'active' || sessionProblem !== undefined)
+        await confirmForSave(false)
       // 等确认期间页面卸载了：不再捕获与上传（复验 SB6）
       if (session === 'active' && !disposed)
         await coordinator.save()

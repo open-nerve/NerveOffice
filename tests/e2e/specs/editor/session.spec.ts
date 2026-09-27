@@ -1,9 +1,16 @@
 // 登录状态变化时的编辑器页（P4 设计 §3.7.3，审查 B1）：本页可能有未保存的修改，所以不整页跳转、不自动重新加载。
 // 登录已过期或在别处退出：暂停保存，提示在新标签页中登录，本人登录回来之后恢复；别的标签页登录了另一个人：本页不能再保存。
+import type { Page } from '@playwright/test'
 import { createUser, expireSessions } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
 import { cellOf, createSheetThroughApi, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
+
+/** 这个页面所在的浏览器上下文现在的会话的 CSRF 令牌 */
+async function csrfTokenOf(page: Page): Promise<string> {
+  const session = await (await page.request.get('/api/auth/session')).json() as { csrfToken: string }
+  return session.csrfToken
+}
 
 test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
   test('登录过期之后保存：留在本页，提示在新标签页中登录；登录回来之后保存成功', async ({ page, context }) => {
@@ -70,6 +77,53 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     expect((await saved).status()).toBe(200)
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('waited')
+  })
+
+  test('本人在别处重新登录（消息没有送到）、保存得到令牌失效：确认期间说明正在确认；再按保存等换上新的令牌再发（复验 TB1、TB3）', async ({ page, context }) => {
+    const owner = await createUser('editor-csrf-stale')
+    await loginThroughApi(page, owner)
+    const documentId = await createSheetThroughApi(page)
+    await openEditor(page, documentId)
+    await typeInCell(page, 'A1', 'csrf-wait')
+    // 同一个人经接口重新登录：会话与令牌都换了，没有页面广播消息，本页还拿着旧的令牌
+    const oldToken = await csrfTokenOf(page)
+    const other = await context.newPage()
+    await loginThroughApi(other, owner)
+    const newToken = await csrfTokenOf(other)
+    expect(newToken).not.toBe(oldToken)
+
+    // 拖住本页确认会话的请求
+    let release: () => void = () => {}
+    const released = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let held = 0
+    await page.route('**/api/auth/session', async (route) => {
+      held += 1
+      await released
+      await route.continue()
+    })
+    const tokens: (string | undefined)[] = []
+    page.on('request', (request) => {
+      if (request.method() === 'PUT')
+        tokens.push(request.headers()['x-csrf-token'])
+    })
+    const first = page.waitForResponse(response => response.request().method() === 'PUT')
+    await saveButton(page).click()
+    expect((await first).status()).toBe(403)
+    await expect.poll(() => held).toBe(1)
+    // 确认有结果之前：页头说明正在确认，不先提示"请求已失效，请再保存一次"（复验 TB1）
+    await expect(saveStatus(page)).toHaveText('正在确认登录状态…')
+    await expect(page.getByRole('alert')).toHaveCount(0)
+
+    // 确认期间再按保存：不发，等确认换上新的令牌（复验 RB1、TB3）
+    const early = page.waitForRequest(request => request.method() === 'PUT', { timeout: 500 }).then(() => true, () => false)
+    await page.keyboard.press('ControlOrMeta+s')
+    expect(await early).toBe(false)
+    release()
+    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    expect(tokens).toEqual([oldToken, newToken])
+    expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('csrf-wait')
   })
 
   test('别的标签页退出并换人登录：本页不能再保存；原来的人登录回来之后恢复', async ({ page, context }) => {

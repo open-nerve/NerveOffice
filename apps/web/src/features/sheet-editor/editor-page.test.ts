@@ -375,11 +375,69 @@ describe('编辑器页的会话（P4 设计 §3.7.3，审查 B1）', () => {
     fromOtherTab()
     await vi.waitFor(() => expect(editorPage.view().session).toBe('signed-out'))
     vi.mocked(api.session).mockRejectedValueOnce(new NetworkError('断网'))
-    await editorPage.save()
-    expect(editorPage.view().sessionProblem).toBeInstanceOf(NetworkError)
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().sessionProblem).toBeInstanceOf(NetworkError))
+    // 由别的标签页的消息触发，不经过保存：保存结束时的刷新不会掩盖确认本身漏掉的刷新（复验 TB2）
     vi.mocked(api.session).mockRejectedValueOnce(UNAUTHENTICATED)
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().sessionProblem).toBeUndefined())
+    expect(editorPage.view().session).toBe('signed-out')
+  })
+
+  it('会话是本人、保存得到 CSRF 失效：确认进行中说明正在确认，先不显示失败；确认是本人之后再显示（复验 TB1）', async () => {
+    const { editorPage, api } = setup({ api: { save: async () => Promise.reject(new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')) } })
+    await editorPage.load()
+    const check = deferred<SessionResponse>()
+    vi.mocked(api.session).mockReturnValueOnce(check.promise)
     await editorPage.save()
-    expect(editorPage.view()).toMatchObject({ session: 'signed-out', sessionProblem: undefined })
+    expect(editorPage.view()).toMatchObject({ session: 'active', confirmingSession: true, save: { status: 'failed' } })
+    check.resolve({ ...ALICE, csrfToken: 'csrf-new' })
+    await vi.waitFor(() => expect(editorPage.view().confirmingSession).toBe(false))
+    expect(editorPage.view()).toMatchObject({ session: 'active', sessionProblem: undefined, save: { status: 'failed', problem: { kind: 'request' } } })
+  })
+
+  it('保存得到 CSRF 失效、确认时断网：记下确认失败的原因（令牌没有换成）；再按保存先确认，换上新的令牌再发（复验 TB1）', async () => {
+    const calls: string[] = []
+    const save = vi.fn(async (): Promise<SaveContentResponse> => {
+      calls.push('save')
+      if (calls.filter(call => call === 'save').length === 1)
+        throw new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
+      return { revision: 4, savedAt: '2026-09-27T03:00:00.000Z' }
+    })
+    const { editorPage, api } = setup({ api: { save } })
+    await editorPage.load()
+    vi.mocked(api.session).mockImplementationOnce(async () => {
+      calls.push('check')
+      throw new NetworkError('断网')
+    })
+    await editorPage.save()
+    await vi.waitFor(() => expect(editorPage.view().sessionProblem).toBeInstanceOf(NetworkError))
+    expect(editorPage.view()).toMatchObject({ session: 'active', confirmingSession: false, save: { status: 'failed' } })
+
+    vi.mocked(api.session).mockImplementationOnce(async () => {
+      calls.push('check')
+      return { ...ALICE, csrfToken: 'csrf-new' }
+    })
+    await editorPage.save()
+    expect(calls).toEqual(['save', 'check', 'check', 'save'])
+    expect(editorPage.view()).toMatchObject({ session: 'active', sessionProblem: undefined, save: { status: 'clean', problem: undefined } })
+  })
+
+  it('保存中、同时有确认在途时再按保存：不做任何事，仍是"保存中"，不说明正在确认（复验 TB9）', async () => {
+    const pending = deferred<SaveContentResponse>()
+    const { editorPage, api, fromOtherTab } = setup({ api: { save: vi.fn(async () => pending.promise) } })
+    await editorPage.load()
+    const saving = editorPage.save()
+    await vi.waitFor(() => expect(api.save).toHaveBeenCalledOnce())
+    const check = deferred<SessionResponse>()
+    vi.mocked(api.session).mockReturnValueOnce(check.promise)
+    fromOtherTab()
+    const again = editorPage.save()
+    expect(editorPage.view()).toMatchObject({ confirmingSession: false, save: { status: 'saving' } })
+    check.resolve(ALICE)
+    pending.resolve({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z' })
+    await Promise.all([saving, again])
+    expect(api.save).toHaveBeenCalledOnce()
   })
 
   it('保存得到未登录、向服务端确认时断网：按没有人登录显示，给出登录的入口（复验 SB4）', async () => {
@@ -389,6 +447,23 @@ describe('编辑器页的会话（P4 设计 §3.7.3，审查 B1）', () => {
     await editorPage.save()
     await vi.waitFor(() => expect(editorPage.view().session).toBe('signed-out'))
     expect(editorPage.view().sessionProblem).toBeInstanceOf(NetworkError)
+  })
+
+  it('本人、CSRF 失效触发的确认在途时按保存，等待期间页面卸载了：不再捕获与上传（复验 SB6、TB4）', async () => {
+    const save = vi.fn(async (): Promise<SaveContentResponse> => Promise.reject(new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')))
+    const { editorPage, api, fake } = setup({ api: { save } })
+    await editorPage.load()
+    const check = deferred<SessionResponse>()
+    vi.mocked(api.session).mockReturnValueOnce(check.promise)
+    await editorPage.save()
+    expect(editorPage.view()).toMatchObject({ session: 'active', confirmingSession: true })
+    const capture = vi.spyOn(fake.editor, 'capture')
+    const again = editorPage.save()
+    editorPage.dispose()
+    check.resolve({ ...ALICE, csrfToken: 'csrf-new' })
+    await again
+    expect(capture).not.toHaveBeenCalled()
+    expect(save).toHaveBeenCalledOnce()
   })
 
   it('等确认期间页面卸载了：不再捕获与上传（复验 SB6）', async () => {

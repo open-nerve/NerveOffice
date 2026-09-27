@@ -1,5 +1,5 @@
-// 样式里可能是地址的值（复验 SA2、SA4）：按 CSS Syntax Level 3 的分词规则取出字符串与 url 的值（已还原转义），以及它们在原文里的位置。
-// 只实现与地址有关的部分：注释、字符串（含转义与续行）、名字（含转义，u\72l( 也是 url）与 url(…)；其余字符逐个跳过。
+// 样式里可能是地址的值（复验 SA2、SA4、TA3）：按 CSS Syntax Level 3 的分词规则取出字符串与 url 的值（已还原转义），以及它们在原文里的位置。
+// 只实现与地址有关的部分：输入的预处理、注释、字符串（含转义与续行）、名字（含转义，u\72l( 也是 url）与 url(…)；其余字符逐个跳过。
 // 原来按正则切：带引号的 url() 里有右括号、转义的引号或注释让引号配错对时会切错（复验 SA2）
 import type { LocatedValue } from './addresses.ts'
 
@@ -46,9 +46,9 @@ class CssReader {
     return this.css[this.position + offset]
   }
 
-  /** 两个字符是合法的转义：反斜杠后面不是换行 */
+  /** 两个字符是合法的转义：反斜杠后面不是换行。后面是输入的结尾也合法，得到 U+FFFD（规范 §4.3.8，复验 TA3） */
   validEscape(offset = 0): boolean {
-    return this.at(offset) === '\\' && !isNewline(this.at(offset + 1)) && this.at(offset + 1) !== undefined
+    return this.at(offset) === '\\' && !isNewline(this.at(offset + 1))
   }
 
   /** 从当前位置开始是一个名字（ident）：字母、下划线、非 ASCII、转义，或者以连字符开头的这些 */
@@ -182,18 +182,29 @@ class CssReader {
       this.position += 1
       if (char === ')')
         return
-      if (char === '\\' && this.at() !== undefined && !isNewline(this.at()))
+      if (char === '\\' && this.at() !== undefined && !isNewline(this.at())) {
+        this.position -= 1
         this.escaped()
+      }
     }
   }
+}
+
+/**
+ * 输入的预处理（规范 §3.3）：NUL 与单独的代理项（例如 JSON 里的 "\ud800"）换成 U+FFFD（复验 TA3：url() 里的 NUL 不是不可打印的字符，
+ * 浏览器照样请求）。都是一个 UTF-16 单元换一个，位置不变；换行的统一（CR LF、CR、FF 换成 LF）不做，分词时把三者都当作换行
+ */
+function preprocess(css: string): string {
+  return css.replace(/\0|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD')
 }
 
 /**
  * 样式里可能是地址的值：字符串与 url(…)（含 u\72l( 这样转义出来的 url）。
  * 带引号的 url("…") 按规范是 url 函数加一个字符串，取出的是字符串
  */
-export function cssValues(css: string): LocatedValue[] {
+export function cssValues(input: string): LocatedValue[] {
   const values: LocatedValue[] = []
+  const css = preprocess(input)
   const reader = new CssReader(css)
   while (reader.at() !== undefined) {
     const start = reader.position

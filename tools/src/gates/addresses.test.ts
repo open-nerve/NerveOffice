@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { crossOriginAddress, isRegexFlags, originOf } from './addresses.ts'
+import { crossOriginAddress, hrefOf, isRegexFlags } from './addresses.ts'
 import { INTERPOLATION_PLACEHOLDER } from './eval-and-function.ts'
 
 const HOLE = INTERPOLATION_PLACEHOLDER
 
-describe('US-M1-11 按浏览器的规则认出跨源地址（DEF-016，复验 RA2–RA4、SA1、SA3）', () => {
+describe('US-M1-11 按浏览器的规则认出跨源地址（DEF-016，复验 RA2–RA4、SA1、SA3、TA4、TA5）', () => {
   it.each([
     ['//evil.example/x', 'https://evil.example/x'],
     [' \u0001//evil.example/x', 'https://evil.example/x'],
@@ -20,6 +20,9 @@ describe('US-M1-11 按浏览器的规则认出跨源地址（DEF-016，复验 RA
     ['http:/evil.example/x', 'http://evil.example/x'],
     ['//2130706433/x', 'https://127.0.0.1/x'],
     ['//[::1]:8080/x', 'https://[::1]:8080/x'],
+    // IPv6 的 [::] 没有字母与数字，浏览器照样请求（复验 TA4）
+    ['\\\\[::]:8080/e3', 'https://[::]:8080/e3'],
+    ['//[::]/x', 'https://[::]/x'],
     [`${HOLE}//evil.example/x`, 'https://evil.example/x'],
     [`${HOLE}\\\\evil.example/x`, 'https://evil.example/x'],
     [`//evil.example/${HOLE}`, `https://evil.example/${HOLE}`],
@@ -64,11 +67,16 @@ describe('US-M1-11 按浏览器的规则认出跨源地址（DEF-016，复验 RA
     expect(isRegexFlags('//intranet')).toBe(false)
   })
 
-  it('地址的来源：协议、主机与端口；JSON 转义的斜杠与插值也认得', () => {
-    expect(originOf('https://evil.example/a')).toBe('https://evil.example')
-    expect(originOf('https:\\/\\/evil.example:8080/a')).toBe('https://evil.example:8080')
-    expect(originOf('//evil.example/a')).toBe('https://evil.example')
-    expect(originOf(`https://${HOLE}/x`)).toBe('https://x0hole0x')
-    expect(originOf('not a url')).toBe('not a url')
+  it.each([
+    ['协议与主机小写', 'HTTPS://Evil.Example/A', 'https://evil.example/A'],
+    ['JSON 转义的斜杠', 'https:\\/\\/evil.example:8080/a', 'https://evil.example:8080/a'],
+    ['协议相对的地址按 https 补全', '//evil.example/a', 'https://evil.example/a'],
+    ['点段化简（复验 TA5）', 'https://support.example/zh-cn/functions/../../../evil', 'https://support.example/evil'],
+    ['%2e%2e 也是点段', 'https://support.example/zh-cn/functions/%2e%2e/%2E%2e/evil', 'https://support.example/evil'],
+    ['主机里的插值写回', `https://${HOLE}/x`, `https://${HOLE}/x`],
+    ['端口是插值：按 1 解析', `https://evil.example:${HOLE}/x`, 'https://evil.example:1/x'],
+    ['解析不了：原文的小写', 'Not A URL', 'not a url'],
+  ])('规范写法：%s', (_case, address, expected) => {
+    expect(hrefOf(address)).toBe(expected)
   })
 })

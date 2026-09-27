@@ -93,6 +93,7 @@ export const messages = {
     signedOut: '登录已过期或已在别处退出。本页的修改还在：请在新的标签页中用同一个账户登录，然后回到这里保存',
     loginInNewTab: '在新标签页中登录',
     otherUser: '别的标签页登录了另一个账户，本页不能再保存。原来的账户重新登录之后可以继续保存；也可以先复制出本页的内容',
+    otherUserBeforeReload: '别的标签页登录了另一个账户，重新加载会以那个账户打开。要查看最新版本，先换回原来的账户再重新加载',
     retrySave: '请求已失效，请再保存一次',
     sessionCheckFailed: (reason: string) => `暂时无法确认登录状态：${reason}`,
     pageTitle: (title: string) => `${title} - NerveOffice`,

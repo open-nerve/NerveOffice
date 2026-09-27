@@ -2,18 +2,21 @@
 // 但 WebKit 的 Worker 内的违规没有任何渠道可见，所以用静态扫描兜底；范围包括 Worker 自己加载的子块。
 // JS 文件按语法树找出 eval 与 Function 的每一处引用（eval-and-function.ts，审查 B3），
 // 地址按语法树取出的字符串的值、模板字符串、正则与注释识别（DEF-016）；
-// 其他文本文件按各自的语法取出可能是地址的值再识别：HTML 与 SVG 用 parse5 解析（html-values.ts），样式按 CSS 的分词规则
-// （css-values.ts），JSON 解析出字符串（复验 RA4、SA2、SA4）；整个文件另按写法匹配一遍兜底，与值里已经报出的同一处不重复计数。
+// 其他文本文件按各自的语法取出可能是地址的值再识别：HTML 用 parse5 解析（html-values.ts），SVG 按 XML 解析（svg-values.ts），
+// 样式按 CSS 的分词规则（css-values.ts），JSON 按顺序取出每个字符串字面量（json-values.ts）（复验 RA4、SA2、SA4、TA2、TA6）；
+// 门禁无法确定浏览器会怎样解析的写法直接报违规。整个文件另按写法匹配一遍兜底，落在已经报出同一个地址（规范写法）的那一处里的不重复计数。
 // 其余几类动态代码对所有文本文件按写法匹配。
 // 静态扫描判断不了运行时才拼出来的代码与地址（例如 setTimeout(变量)、"https:" + "//" + host 里的变量、
 // 从任意函数的 .constructor 取到的构造函数），这部分由 CSP 兜底：策略里没有 'unsafe-eval'，connect-src 只有 'self'。
-import type { LocatedValue } from './addresses.ts'
+import type { ExtractedValues, LocatedValues } from './addresses.ts'
 import type { Reference, TextValue } from './eval-and-function.ts'
 import type { Violation } from './types.ts'
-import { crossOriginAddress, isRegexFlags, originOf } from './addresses.ts'
+import { crossOriginAddress, hrefOf, isRegexFlags } from './addresses.ts'
 import { cssValues } from './css-values.ts'
 import { analyzeJavaScript, INTERPOLATION_PLACEHOLDER } from './eval-and-function.ts'
 import { htmlValues } from './html-values.ts'
+import { jsonValues } from './json-values.ts'
+import { svgValues } from './svg-values.ts'
 
 export interface ArtifactFile {
   path: string
@@ -40,7 +43,10 @@ export interface KnownDynamicCode {
  * 前缀的登记不适用于平台页面的产物，那里照旧按具体地址。
  */
 export interface AllowedAddress {
-  /** 地址原文，或者 prefix 为 true 时的地址前缀。比较时协议与主机不区分大小写，句末的句点不算；路径要完全一致（前缀按路径的开头比较） */
+  /**
+   * 地址原文，或者 prefix 为 true 时的地址前缀。两边都按浏览器解析出的规范写法比较（hrefOf：协议与主机不区分大小写，
+   * 路径里的点段化简，复验 TA5），句末的句点不算；路径要完全一致（前缀按路径的开头比较）
+   */
   address: string
   /** 按前缀放行：前缀至少写到路径的第一段（主机之后的 /） */
   prefix?: boolean
@@ -181,11 +187,12 @@ function addressShape(raw: string): AddressShape {
   return { kind: 'fixed', address: before(text, HOLE), host: hostOf(before(hostAndPort, HOLE)), hostComplete: !hostAndPort.includes(HOLE) }
 }
 
-/** 比较用的写法：协议与主机不区分大小写；句末的句点不属于地址（例如错误信息里的 "See https://….")。 */
+/**
+ * 比较用的写法：浏览器解析出的规范写法（hrefOf）。句末的句点不属于地址（例如错误信息里的 "See https://….")。
+ * 原来按原文比较路径：前缀后面的 ../ 与 %2e%2e 能跳出允许的前缀（复验 TA5）
+ */
 function comparableAddress(address: string): string {
-  const trimmed = address.replace(/\.+$/, '')
-  const end = authorityEnd(trimmed)
-  return trimmed.slice(0, end).toLowerCase() + trimmed.slice(end)
+  return hrefOf(address.replace(/\.+$/, ''))
 }
 
 export interface ScanOptions {
@@ -223,12 +230,13 @@ function allowlist(entries: readonly AllowedAddress[]) {
 const LEADING_JUNK = /^[\u0000-\u0020]*/
 
 /**
- * 一个值里的地址（DEF-016）：JS 的字符串与模板字符串，以及 HTML 属性、样式与 JSON 里取出的值。
+ * 一个值里的地址（DEF-016）：JS 的字符串与模板字符串，以及 HTML、SVG 的属性、样式与 JSON 里取出的值。
  * - 写法规范的绝对地址，与插值后面紧跟 //主机 的协议相对地址（`${location.protocol}//evil.example`），出现在值的任何位置都认；
  *   "//g" 这样的正则片段不算（只排除它，不再按"像不像主机"过滤：单标签的主机同样会被请求，复验 RA3）；
- * - 整个值按浏览器的规则再解析一遍（crossOriginAddress，审查 A4）：值的开头已经按写法认出了地址、而两者的来源（协议、主机、端口）
- *   不同时另外报出，例如允许的地址后面接着制表符与另一个域名（"https://tailwindcss.com\t.evil.example"，复验 SA3）；
- *   写法不规范的（前导空白、反斜杠、用户信息、编码过的主机、不带斜杠的 wss:、协议或端口是插值等）由它认出。
+ * - 整个值按浏览器的规则再解析一遍（crossOriginAddress，审查 A4）：值的开头已经按写法认出了地址、而两者的规范写法不同时另外报出，
+ *   例如允许的地址后面接着制表符与另一个域名（"https://tailwindcss.com\t.evil.example"，复验 SA3）、制表符与 ../ 或空白与别的路径
+ *   （"http://www.w3.org/2000/svg\t/../../evil"，复验 TA5）；写法不规范的（前导空白、反斜杠、用户信息、编码过的主机、
+ *   不带斜杠的 wss:、协议或端口是插值等）由它认出。
  * 压缩器把普通字符串也写成模板字符串（复验 RA2），所以两者按同一个规则。
  */
 function addressesInValue(text: string): string[] {
@@ -242,7 +250,7 @@ function addressesInValue(text: string): string[] {
     const head = LEADING_JUNK.exec(text)?.[0].length ?? 0
     const starts = new Set([head, text.startsWith(INTERPOLATION_PLACEHOLDER, head) ? head + INTERPOLATION_PLACEHOLDER.length : head])
     const leading = found.find(match => starts.has(match.index))
-    if (leading === undefined || originOf(leading[0]) !== originOf(resolved))
+    if (leading === undefined || hrefOf(leading[0]) !== hrefOf(resolved))
       addresses.push(resolved)
   }
   return addresses
@@ -254,55 +262,60 @@ function addressesInCode(value: TextValue): string[] {
   return [...text.matchAll(ABSOLUTE_URL)].map(match => match[0])
 }
 
-/** JSON 里的全部字符串（键与值）；不是合法的 JSON 时返回 undefined */
-function jsonStrings(content: string): string[] | undefined {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(content)
-  }
-  catch {
-    return undefined
-  }
-  const strings: string[] = []
-  const walk = (node: unknown): void => {
-    if (typeof node === 'string')
-      strings.push(node)
-    else if (Array.isArray(node))
-      node.forEach(walk)
-    else if (typeof node === 'object' && node !== null)
-      Object.entries(node).forEach(([key, value]) => walk([key, value]))
-  }
-  walk(parsed)
-  return strings
+/** 没有语法树的文本文件按各自的语法取出可能是地址的值；其余（例如解析不了的 JS）只按写法匹配 */
+function extractValues(path: string, content: string): ExtractedValues | undefined {
+  const extension = path.slice(path.lastIndexOf('.')).toLowerCase()
+  if (extension === '.css')
+    return { groups: cssValues(content).map(item => ({ values: [item.value], index: item.index, end: item.end })), problems: [] }
+  if (extension === '.html')
+    return htmlValues(content)
+  if (extension === '.svg')
+    return svgValues(content)
+  return extension === '.json' ? jsonValues(content) : undefined
+}
+
+interface Span {
+  readonly index: number
+  readonly end: number
 }
 
 /**
- * 一个 JSON 字符串里可能是地址的值：字符串本身，以及嵌在里面的 HTML 与样式（复验 SA2）。
- * 只给认出了地址的字符串找位置：每个字符串都在原文里找一遍是平方级的（复验 SA7）
+ * 报出过的地址（规范写法）各自所在的范围，查"某个位置是否落在报出过这个地址的某一处里"：
+ * 范围按开头排序，记下前缀里最远的结尾，二分查找（每个写法匹配都遍历全部范围是平方级的，复验 TA7）
  */
-function jsonValues(content: string, strings: readonly string[]): LocatedValue[] {
-  const values: LocatedValue[] = []
-  for (const text of strings) {
-    const candidates = [text, ...(text.includes('<') ? htmlValues(text).map(item => item.value) : []), ...(text.includes('(') || text.includes('"') || text.includes('\'') ? cssValues(text).map(item => item.value) : [])]
-    const found = candidates.filter(candidate => addressesInValue(candidate).length > 0)
-    if (found.length === 0)
-      continue
-    const encoded = JSON.stringify(text)
-    const index = Math.max(0, content.indexOf(encoded))
-    values.push(...found.map(value => ({ value, index, end: index + encoded.length })))
+function spanLookup(spans: ReadonlyMap<string, readonly Span[]>): (href: string, position: number) => boolean {
+  const sorted = new Map<string, { starts: number[], reach: number[] }>()
+  for (const [href, list] of spans) {
+    const ordered = [...list].sort((a, b) => a.index - b.index)
+    let reach = -1
+    sorted.set(href, {
+      starts: ordered.map(span => span.index),
+      reach: ordered.map((span) => {
+        reach = Math.max(reach, span.end)
+        return reach
+      }),
+    })
   }
-  return values
-}
-
-type TextKind = 'css' | 'markup' | 'json' | 'other'
-
-function textKind(path: string): TextKind {
-  const extension = path.slice(path.lastIndexOf('.')).toLowerCase()
-  if (extension === '.css')
-    return 'css'
-  if (extension === '.html' || extension === '.svg')
-    return 'markup'
-  return extension === '.json' ? 'json' : 'other'
+  return (href, position) => {
+    const entry = sorted.get(href)
+    if (entry === undefined)
+      return false
+    // 最后一个开头不超过 position 的范围
+    let low = 0
+    let high = entry.starts.length - 1
+    let found = -1
+    while (low <= high) {
+      const middle = (low + high) >> 1
+      if ((entry.starts[middle] ?? 0) <= position) {
+        found = middle
+        low = middle + 1
+      }
+      else {
+        high = middle - 1
+      }
+    }
+    return found >= 0 && (entry.reach[found] ?? -1) > position
+  }
 }
 
 export function scanArtifacts(files: readonly ArtifactFile[], policy: ArtifactPolicy, options: ScanOptions = {}): ArtifactScan {
@@ -326,55 +339,48 @@ export function scanArtifacts(files: readonly ArtifactFile[], policy: ArtifactPo
       return
     violations.push({ rule: 'artifacts/address', subject: file.path, detail: `${address ?? shape.host} 不在允许清单里（主机 ${shape.host}）：${context(file.content, index)}` })
   }
-  /** 值里报出的地址按所在的范围记下来源：整个文件按写法匹配时，落在同一个范围、来源相同的不再重复计数 */
-  interface ReportedSpan {
-    readonly index: number
-    readonly end: number
-    readonly origins: ReadonlySet<string>
-  }
-  /** 同一处（例如一个属性）取出的几个值（整个值与切开的各段）里，来源相同的地址只报一次 */
-  const noteValues = (file: ArtifactFile, values: readonly LocatedValue[]): ReportedSpan[] => {
-    const spans = new Map<string, { index: number, end: number, origins: Set<string> }>()
-    for (const item of values) {
-      const key = `${item.index}:${item.end}`
-      const span = spans.get(key) ?? { index: item.index, end: item.end, origins: new Set<string>() }
-      for (const address of addressesInValue(item.value)) {
-        const origin = originOf(address)
-        if (span.origins.has(origin))
-          continue
-        span.origins.add(origin)
-        noteAddress(file, address, item.index)
+  /**
+   * 同一处（一个属性、一段样式、一个 JSON 字符串）取出的几个值（整个值、切开的各段等）里，规范写法相同的地址只报一次；
+   * 规范写法不同的都要核对允许清单（原来按来源去重，允许的地址排在前面时同一来源的其他地址被跳过，复验 TA1）。
+   * 返回报出过的地址各自所在的范围
+   */
+  const noteValues = (file: ArtifactFile, groups: readonly LocatedValues[]): Map<string, Span[]> => {
+    const reported = new Map<string, Span[]>()
+    for (const group of groups) {
+      const seen = new Set<string>()
+      for (const value of group.values) {
+        for (const address of addressesInValue(value)) {
+          const href = hrefOf(address)
+          if (seen.has(href))
+            continue
+          seen.add(href)
+          noteAddress(file, address, group.index)
+          const spans = reported.get(href)
+          if (spans === undefined)
+            reported.set(href, [group])
+          else
+            spans.push(group)
+        }
       }
-      if (span.origins.size > 0)
-        spans.set(key, span)
     }
-    return [...spans.values()]
+    return reported
   }
-  /** 整个文件按写法匹配：取出值的时候切错或漏掉的，由它兜底（不再把取出的值从原文里抹掉，复验 SA2） */
-  const noteRawAddresses = (file: ArtifactFile, spans: readonly ReportedSpan[] = []): void => {
+  /** 整个文件按写法匹配：取出值的时候切错或漏掉的，由它兜底（不再把取出的值从原文里抹掉，复验 SA2）；落在报出过同一个地址的那一处里的不重复计数 */
+  const noteRawAddresses = (file: ArtifactFile, reported: ReadonlyMap<string, readonly Span[]> = new Map()): void => {
+    const covered = spanLookup(reported)
     for (const pattern of [ABSOLUTE_URL, PROTOCOL_RELATIVE_URL]) {
       for (const match of file.content.matchAll(pattern)) {
-        const origin = originOf(match[0])
-        if (!spans.some(span => match.index >= span.index && match.index < span.end && span.origins.has(origin)))
+        if (!covered(hrefOf(match[0]), match.index))
           noteAddress(file, match[0], match.index)
       }
     }
   }
-  /** 没有语法树的文本文件：先按各自的语法取出可能是地址的值识别，再对整个文件按写法匹配 */
+  /** 没有语法树的文本文件：先按各自的语法取出可能是地址的值识别，再对整个文件按写法匹配；门禁无法确定浏览器会怎样解析的写法直接报出 */
   const noteTextAddresses = (file: ArtifactFile): void => {
-    const kind = textKind(file.path)
-    let values: LocatedValue[] = []
-    if (kind === 'css') {
-      values = cssValues(file.content)
-    }
-    else if (kind === 'markup') {
-      values = htmlValues(file.content)
-    }
-    else if (kind === 'json') {
-      const strings = jsonStrings(file.content)
-      values = strings === undefined ? [] : jsonValues(file.content, strings)
-    }
-    noteRawAddresses(file, noteValues(file, values))
+    const extracted = extractValues(file.path, file.content)
+    for (const problem of extracted?.problems ?? [])
+      violations.push({ rule: 'artifacts/markup', subject: file.path, detail: `${problem.detail}：${context(file.content, problem.index)}` })
+    noteRawAddresses(file, noteValues(file, extracted?.groups ?? []))
   }
 
   // 已登记的动态代码每出现一次记一个名字

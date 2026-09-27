@@ -145,6 +145,31 @@ describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
     expect(screen.getByRole('button', { name: '保存' })).toHaveAttribute('aria-busy', 'true')
   })
 
+  it.each([
+    ['令牌失效', new ApiError(403, 'CSRF_TOKEN_INVALID', 'x')],
+    ['登录已过期', new ApiError(401, 'SESSION_EXPIRED', 'x')],
+  ])('保存得到%s、确认会话进行中：页头说明正在确认，不先提示"再保存一次"；确认之后才提示（复验 TB1）', (_case, error) => {
+    const fake = renderChrome({ confirmingSession: true, save: { ...CLEAN, status: 'failed', problem: { kind: 'request', error } } })
+    expect(screen.getByRole('status')).toHaveTextContent('正在确认登录状态…')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    fake.set({ confirmingSession: false })
+    expect(screen.getByRole('alert')).toHaveTextContent('保存失败：请求已失效，请再保存一次')
+  })
+
+  it('会话是本人、令牌失效之后确认会话失败：说明原因，不说"再保存一次"就好（令牌没有换成，复验 TB1）', () => {
+    renderChrome({ sessionProblem: new NetworkError('断网'), save: { ...CLEAN, status: 'failed', problem: { kind: 'request', error: new ApiError(403, 'CSRF_TOKEN_INVALID', 'x') } } })
+    expect(screen.getByRole('alert')).toHaveTextContent('保存失败：暂时无法确认登录状态：网络连接失败，请检查网络后重试')
+    expect(screen.getByRole('alert')).not.toHaveTextContent('请求已失效')
+  })
+
+  it('版本冲突之后别的标签页换了人：冲突的说明里另说明重新加载会以那个账户打开，不说"之后可以继续保存"（复验 TB7、TB8）', () => {
+    renderChrome({ session: 'other-user', save: { ...CLEAN, status: 'conflict', canSave: false, conflict: { currentRevision: 5, source: null } } })
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    expect(screen.getByRole('alert')).toHaveTextContent('别处保存了更新的版本')
+    expect(screen.getByRole('alert')).toHaveTextContent('重新加载会以那个账户打开。要查看最新版本，先换回原来的账户再重新加载')
+    expect(screen.getByRole('alert')).not.toHaveTextContent('可以继续保存')
+  })
+
   it('版本冲突之后不再显示会话的提示；会话不是本人时不显示"公式结果尚未保存"（复验 SB9）', () => {
     renderChrome({ session: 'signed-out', save: { ...CLEAN, status: 'conflict', canSave: false, conflict: { currentRevision: 5, source: null } } })
     expect(screen.getAllByRole('alert')).toHaveLength(1)

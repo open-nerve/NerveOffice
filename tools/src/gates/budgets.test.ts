@@ -109,6 +109,15 @@ describe('US-M1-11 入口创建的 Worker 的体积预算（P4 设计 §3.9）',
     expect(result.violations).toEqual([expect.objectContaining({ rule: 'budgets/unattributed-script', subject: 'assets/nested.worker-N1n2N3n4.js' })])
   })
 
+  it('同一个预算匹配到两个同名的产物：违规，不只量其中一个（复验 TA8）', () => {
+    // 另一个很小的同名产物按名字排在前面；真正的公式 Worker 超出预算
+    const manifest: ViteManifest = { ...MANIFEST, 'editor.html': { ...MANIFEST['editor.html'] ?? { file: '' }, assets: ['assets/formula.worker-AAAAAAAA.js', 'assets/formula.worker-AbC_12xy.js'] } }
+    const output: BuildOutput = { ...OUTPUT, files: [...FILES, 'assets/formula.worker-AAAAAAAA.js'], gzipSize: file => file === 'assets/formula.worker-AbC_12xy.js' ? 20_000_000 : OUTPUT.gzipSize(file) }
+    const result = checkBudgets(manifest, entryBudgets, [formulaBudget], output)
+    expect(result.violations).toEqual([expect.objectContaining({ rule: 'budgets/ambiguous-worker', subject: 'formula.worker' })])
+    expect(result.violations[0]?.detail).toContain('assets/formula.worker-AAAAAAAA.js、assets/formula.worker-AbC_12xy.js')
+  })
+
   it('名字以登记的 Worker 开头的另一个 Worker 不算登记过（复验 SA9）', () => {
     const manifest: ViteManifest = { ...MANIFEST, 'editor.html': { ...MANIFEST['editor.html'] ?? { file: '' }, assets: ['assets/formula.worker-extra-Z9z8Z7z6.js'] } }
     const output: BuildOutput = { ...OUTPUT, files: [...FILES.filter(file => !file.includes('formula.worker') && !file.includes('worker-')), 'assets/formula.worker-extra-Z9z8Z7z6.js'] }

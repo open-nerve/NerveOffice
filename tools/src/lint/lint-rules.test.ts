@@ -140,6 +140,25 @@ describe('US-M1-11 lint 规则的自测：受限导入', () => {
     expect(await rulesFor('export async function load() {\n  return import(\'@univerjs-pro/license\')\n}\n', WEB_FILE)).toContain('no-restricted-syntax')
   })
 
+  it('包名写成大写会失败：静态导入、再导出、动态导入与类型里的 import() 都算，编辑器与后端里也算；包里的路径与相对路径不管（复验 TB5）', async () => {
+    const cases: [string, string][] = [
+      ['import { IFunctionService } from \'@UniverJS/engine-formula\'\n\nexport const s = IFunctionService\n', 'no-restricted-imports'],
+      ['import { IFunctionService } from \'@univerjs/Engine-formula\'\n\nexport const s = IFunctionService\n', 'no-restricted-imports'],
+      ['export * from \'React\'\n', 'no-restricted-imports'],
+      ['export async function load() {\n  return import(\'@UniverJS/engine-formula\')\n}\n', 'no-restricted-syntax'],
+      ['export type F = typeof import(\'@UniverJS/engine-formula\')\n', 'no-restricted-syntax'],
+    ]
+    for (const file of [WEB_FILE, 'apps/web/src/editor/sheet-editor.ts', 'apps/web/src/editor/internal-api/index.ts', 'apps/api/src/modules/documents/documents.service.ts']) {
+      for (const [code, rule] of cases) {
+        const report = await lint(code, file)
+        expect(report.rules, `${file}: ${code}`).toContain(rule)
+        expect(report.messages.join('\n'), `${file}: ${code}`).toContain('包名写成小写')
+      }
+    }
+    const allowed = 'import { createRoot } from \'react-dom/client\'\nimport { Univer } from \'./Sample.ts\'\n\nexport const used = [createRoot, Univer]\n'
+    expect((await lint(allowed, WEB_FILE)).messages.join('\n')).not.toContain('包名写成小写')
+  })
+
   it('动态导入的路径必须是字面量', async () => {
     expect(await rulesFor('export async function load(name: string) {\n  return import(name)\n}\n', WEB_FILE)).toContain('no-restricted-syntax')
   })
