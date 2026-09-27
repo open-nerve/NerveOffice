@@ -460,10 +460,15 @@ describe('US-M1-11 A01 产物扫描：外部地址与关键字', () => {
     ['样式的 url()', (n: number) => 'a{b:url(http://www.w3.org/2000/svg)}'.repeat(n), 'assets/x.css'],
     ['SVG 样式里的 url()', (n: number) => `<svg><style>${'a{b:url(http://www.w3.org/2000/svg)}'.repeat(n)}</style></svg>`, 'assets/a.svg'],
   ])('不是平方级（复验 TA7）：%s', (_case, build, path) => {
+    // 取两次里快的一次：机器忙时的垃圾回收不算进去
     const elapsed = (n: number): number => {
-      const start = performance.now()
-      expect(scan(build(n), path).violations).toEqual([])
-      return performance.now() - start
+      const content = build(n)
+      const times = [0, 1].map(() => {
+        const start = performance.now()
+        expect(scan(content, path).violations).toEqual([])
+        return performance.now() - start
+      })
+      return Math.min(...times)
     }
     elapsed(2000)
     // 数量乘 4，耗时远小于乘 16

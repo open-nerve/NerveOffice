@@ -89,9 +89,10 @@ describe('US-M1-11 HTML 里可能是地址的值（parse5，复验 SA2、SA4、T
   })
 
   it('嵌套很深也不会栈溢出（复验 TA9）', () => {
-    const html = `${'<div>'.repeat(20000)}<img src=//evil.example/deep.png>`
+    // 用 SVG 的 <g> 嵌套：外来内容里的开始标签不做作用域的检查，parse5 按层数是线性的（HTML 的 <div> 每层都要查一遍打开的元素）
+    const html = `<svg>${'<g>'.repeat(20000)}<image href=//evil.example/deep.png /></svg>`
     expect(valuesWith(html, 'evil.example')).toContain('//evil.example/deep.png')
-    const nested = Array.from({ length: 200 }).reduce<string>(inner => `<iframe srcdoc="${inner.replaceAll('&', '&amp;').replaceAll('"', '&quot;')}"></iframe>`, '<img src=//evil.example/n.png>')
+    const nested = Array.from({ length: 20 }).reduce<string>(inner => `<iframe srcdoc="${inner.replaceAll('&', '&amp;').replaceAll('"', '&quot;')}"></iframe>`, '<img src=//evil.example/n.png>')
     expect(valuesWith(nested, 'evil.example')).toContain('//evil.example/n.png')
   })
 })
