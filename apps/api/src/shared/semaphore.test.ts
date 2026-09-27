@@ -90,6 +90,30 @@ describe('Semaphore', () => {
     }
   })
 
+  it('名额交出之后，原来的计时点到了也不影响后来排队的任务（审查 A3）', async () => {
+    vi.useFakeTimers()
+    try {
+      const semaphore = new Semaphore(1, { maxWaitMs: 100 })
+      const gate = deferred()
+      const first = semaphore.run(async () => gate.promise)
+      const slow = deferred()
+      // 在 0 毫秒排队，计时点是 100 毫秒；50 毫秒时轮到
+      const second = semaphore.run(async () => slow.promise)
+      await vi.advanceTimersByTimeAsync(50)
+      gate.resolve()
+      await first
+      // 在 50 毫秒排队，计时点是 150 毫秒；越过第二个任务原来的计时点（100 毫秒）
+      const third = semaphore.run(async () => 'third')
+      await vi.advanceTimersByTimeAsync(60)
+      slow.resolve()
+      await second
+      expect(await third).toBe('third')
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('轮到之后不再计时：排队的任务执行得再久也不超时', async () => {
     vi.useFakeTimers()
     try {

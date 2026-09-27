@@ -77,7 +77,8 @@ describe('Argon2PasswordHasher', () => {
 
   describe('排队的上限（DEF-015）', () => {
     it('排队满了：哈希与验证都立即失败，建议的重试时间是等待时限（向上取整到秒）；已经排上的照常算完', async () => {
-      const limited = new Argon2PasswordHasher(PARAMETERS, 1, { maxWaiting: 1, maxWaitMs: 2_500 })
+      // 2.1 秒：向上取整是 3，四舍五入会是 2
+      const limited = new Argon2PasswordHasher(PARAMETERS, 1, { maxWaiting: 1, maxWaitMs: 2_100 })
       const running = limited.hash('a')
       const waiting = limited.hash('b')
       await expect(limited.hash('c')).rejects.toMatchObject({ name: 'PasswordHashingBusyError', retryAfterSeconds: 3 })

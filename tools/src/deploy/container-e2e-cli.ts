@@ -2,15 +2,17 @@
 // 用法：node tools/src/deploy/container-e2e-cli.ts [--browsers chromium,webkit] [-- <交给 Playwright 的参数>]
 // 1. 清理中断的运行留下的编排项目与镜像标签；随机生成三个密码，挑两个空闲端口，变量文件写在临时目录；
 // 2. 构建镜像（标签带本进程的进程号）；起 db、migrate、app、caddy（compose 按依赖的条件依次等待）；等经 Caddy 的存活探针通过；
-// 3. 两个客户端地址的核对（DEF-014）；
+// 3. 部署配置的核对：经 Caddy 的探针（就绪探针的各种写法都被屏蔽）、客户端地址（DEF-014：本机与编排网络里两个来源、
+//    伪造的转发头不被采信）、应用的端口没有发布到主机；
 // 4. 以外部模式运行 E2E（E2E 的管理员由 Playwright 的全局准备经编排初始化，tests/e2e/support/external-setup.ts）；
 // 5. 打印镜像体积与应用容器的内存（空闲、E2E 期间每 2 秒取样的峰值、跑完之后，ADR-001）；
 // 6. 无论成败，把各容器的日志收集到 tests/e2e/test-results/container/，然后 down -v、去掉这次的镜像标签、删除临时目录。
+import type { ChildProcess } from 'node:child_process'
 import type { AddressInfo } from 'node:net'
 import type { ContainerE2eSettings } from './container-e2e.ts'
 import { execFile, spawn, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import https from 'node:https'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -25,15 +27,20 @@ import {
   COMPOSE_FILE,
   composeArgs,
   createSettings,
+  FORGED_CLIENT_ADDRESS,
   IMAGE_PREFIX,
   mebibytes,
   memoryBytes,
   parseAuditAddresses,
   playwrightEnvironment,
   PROJECT_PREFIX,
+  PROXIED_PROBES,
+  proxiedProbeProblems,
   publicOrigin,
+  publishedPortProblems,
   renderEnvFile,
   staleRuns,
+  staleTemporaryDirectories,
 } from './container-e2e.ts'
 
 const LOG_DIR = join(REPO_ROOT, 'tests/e2e/test-results/container')
@@ -42,12 +49,14 @@ const SERVICES = ['db', 'migrate', 'app', 'caddy'] as const
 const LIVE_TIMEOUT_MS = 120_000
 
 let interrupted = false
-process.on('SIGINT', () => {
-  interrupted = true
-})
-process.on('SIGTERM', () => {
-  interrupted = true
-})
+/** 正在运行的 Playwright：只给本进程发信号时（不是整个进程组）转给它，让它先结束，再按正常的路径清理（审查 B6） */
+let playwright: ChildProcess | undefined
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(signal, () => {
+    interrupted = true
+    playwright?.kill(signal)
+  })
+}
 
 function log(message: string): void {
   console.log(`容器 E2E：${message}`)
@@ -133,7 +142,7 @@ async function waitUntilLive(settings: ContainerE2eSettings): Promise<boolean> {
 
 const composeProjectsSchema = z.array(z.object({ Name: z.string() }))
 
-/** 清理中断的运行留下的编排项目（连同数据卷）与镜像标签 */
+/** 清理中断的运行留下的编排项目（连同数据卷）、镜像标签与临时目录 */
 function removeStaleRuns(): void {
   const projects = capture('docker', ['compose', 'ls', '--all', '--format', 'json'])
   if (projects.status === 0) {
@@ -146,15 +155,26 @@ function removeStaleRuns(): void {
   const images = capture('docker', ['image', 'ls', '--filter', `reference=${IMAGE_PREFIX}*`, '--format', '{{.Repository}}:{{.Tag}}'])
   for (const image of staleRuns(images.stdout.split('\n').filter(line => line !== ''), IMAGE_PREFIX, isAlive))
     capture('docker', ['image', 'rm', image])
+  for (const directory of staleTemporaryDirectories(readdirSync(tmpdir()), isAlive))
+    rmSync(join(tmpdir(), directory), { recursive: true, force: true })
+}
+
+/** 经 Caddy 请求各个探针：存活探针转发，就绪探针的各种写法都被屏蔽（审查 A1） */
+async function checkProxiedProbes(settings: ContainerE2eSettings): Promise<string[]> {
+  const statuses = new Map<string, number>()
+  for (const { path } of PROXIED_PROBES)
+    statuses.set(path, await httpsStatus(`${publicOrigin(settings)}${path}`))
+  return proxiedProbeProblems(statuses)
 }
 
 /**
- * 两个客户端地址的核对（P5 设计 §3.5，DEF-014）：本机经发布的端口、编排网络里另一个容器经站点 caddy，各发一次登录失败，
- * 比较审计记下的两个客户端地址与 Caddy 的地址。返回发现的问题。
+ * 客户端地址的核对（P5 设计 §3.5，DEF-014）：本机经发布的端口、编排网络里另一个容器经站点 caddy、本机带着伪造的
+ * X-Forwarded-For，各发一次登录失败，比较审计记下的客户端地址与 Caddy 的地址；另外确认应用的端口没有发布到主机。
+ * 返回发现的问题。
  */
 async function checkClientAddresses(settings: ContainerE2eSettings): Promise<string[]> {
   const suffix = randomBytes(4).toString('hex')
-  const ids = { host: `address-check-host-${suffix}`, network: `address-check-network-${suffix}` }
+  const ids = { host: `address-check-host-${suffix}`, network: `address-check-network-${suffix}`, forged: `address-check-forged-${suffix}` }
   const origin = publicOrigin(settings)
   const body = JSON.stringify({ username: 'address-check', password: 'not the password' })
   const headers = { 'content-type': 'application/json', 'origin': origin }
@@ -163,18 +183,22 @@ async function checkClientAddresses(settings: ContainerE2eSettings): Promise<str
   const hostStatus = await httpsStatus(`${origin}/api/auth/login`, { method: 'POST', headers: { ...headers, 'x-request-id': ids.host }, body })
   if (hostStatus !== 401)
     problems.push(`本机那次登录失败的状态码是 ${hostStatus}，期望 401`)
+  const forgedStatus = await httpsStatus(`${origin}/api/auth/login`, { method: 'POST', headers: { ...headers, 'x-request-id': ids.forged, 'x-forwarded-for': FORGED_CLIENT_ADDRESS }, body })
+  if (forgedStatus !== 401)
+    problems.push(`带着伪造的 X-Forwarded-For 那次登录失败的状态码是 ${forgedStatus}，期望 401`)
   const script = `fetch('https://caddy/api/auth/login', { method: 'POST', headers: ${JSON.stringify({ ...headers, 'x-request-id': ids.network })}, body: ${JSON.stringify(body)} })`
     + '.then(response => process.exit(response.status === 401 ? 0 : 1), () => process.exit(2))'
   const network = capture('docker', composeArgs(settings, 'run', '--rm', '--no-deps', '-T', '-e', 'NODE_TLS_REJECT_UNAUTHORIZED=0', 'app', 'node', '-e', script))
   if (network.status !== 0)
     problems.push(`编排网络里那次登录失败没有得到 401（退出码 ${String(network.status)}）：${network.stderr.trim()}`)
 
-  const audit = capture('docker', composeArgs(settings, 'exec', '-T', 'db', 'psql', '-U', 'postgres', '-d', 'nerve_office', '-At', '-F', '|', '-c', `SELECT request_id, host(client_ip) FROM audit_events WHERE request_id IN ('${ids.host}', '${ids.network}')`))
+  const audit = capture('docker', composeArgs(settings, 'exec', '-T', 'db', 'psql', '-U', 'postgres', '-d', 'nerve_office', '-At', '-F', '|', '-c', `SELECT request_id, host(client_ip) FROM audit_events WHERE request_id IN ('${ids.host}', '${ids.network}', '${ids.forged}')`))
   const addresses = parseAuditAddresses(audit.stdout)
   const caddy = capture('docker', composeArgs(settings, 'ps', '-q', 'caddy')).stdout.trim()
   const proxy = capture('docker', ['inspect', '-f', '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}', caddy]).stdout.trim().split(/\s+/).filter(address => address !== '')
-  log(`客户端地址：本机 ${addresses.get(ids.host) ?? '（没有）'}，编排网络里 ${addresses.get(ids.network) ?? '（没有）'}，Caddy ${proxy.join('、')}`)
-  return [...problems, ...clientAddressProblems({ host: addresses.get(ids.host), network: addresses.get(ids.network), proxy })]
+  log(`客户端地址：本机 ${addresses.get(ids.host) ?? '（没有）'}，编排网络里 ${addresses.get(ids.network) ?? '（没有）'}，本机带伪造的转发头 ${addresses.get(ids.forged) ?? '（没有）'}，Caddy ${proxy.join('、')}`)
+  const published = publishedPortProblems(capture('docker', composeArgs(settings, 'port', 'app', '3000')).stdout)
+  return [...problems, ...published, ...clientAddressProblems({ host: addresses.get(ids.host), network: addresses.get(ids.network), forged: addresses.get(ids.forged), proxy })]
 }
 
 const execFileAsync = promisify(execFile)
@@ -226,6 +250,7 @@ async function runE2e(settings: ContainerE2eSettings, browsers: readonly string[
         env: { ...process.env, ...playwrightEnvironment(settings, browsers) },
         stdio: 'inherit',
       })
+      playwright = child
       child.once('error', () => resolve(1))
       child.once('exit', code => resolve(code ?? 1))
     })
@@ -233,6 +258,7 @@ async function runE2e(settings: ContainerE2eSettings, browsers: readonly string[
   }
   finally {
     clearInterval(timer)
+    playwright = undefined
   }
 }
 
@@ -250,7 +276,8 @@ async function main(): Promise<number> {
   const revision = capture('git', ['rev-parse', '--short', 'HEAD']).stdout.trim()
   removeStaleRuns()
 
-  const directory = mkdtempSync(join(tmpdir(), 'nerve-office-e2e-'))
+  // 临时目录的名字带进程号：被 SIGKILL 时留下的，下一次运行认得出来并删掉
+  const directory = mkdtempSync(join(tmpdir(), `${PROJECT_PREFIX}${process.pid}-`))
   const httpsPort = await freePort()
   let databasePort = await freePort()
   while (databasePort === httpsPort)
@@ -262,15 +289,17 @@ async function main(): Promise<number> {
     if (run('docker', ['build', '-f', 'deploy/Dockerfile', '-t', settings.image, '--build-arg', `VERSION=${version}`, '--build-arg', `REVISION=${revision}`, '.']) !== 0 || interrupted)
       return 1
     log(`起测试环境（编排项目 ${settings.project}，${publicOrigin(settings)}）`)
+    // 进程号可能被复用：同名的项目不管是谁留下的，先删掉，免得复用旧的数据卷（旧密码）
+    capture('docker', composeArgs(settings, 'down', '-v', '--remove-orphans'))
     if (run('docker', composeArgs(settings, 'up', '-d')) !== 0 || interrupted)
       return 1
     if (!await waitUntilLive(settings)) {
       log(`${LIVE_TIMEOUT_MS / 1000} 秒内经 Caddy 的存活探针没有通过`)
       return 1
     }
-    const problems = await checkClientAddresses(settings)
+    const problems = [...await checkProxiedProbes(settings), ...await checkClientAddresses(settings)]
     if (problems.length > 0) {
-      log(`两个客户端地址的核对没有通过：\n- ${problems.join('\n- ')}`)
+      log(`部署配置的核对没有通过：\n- ${problems.join('\n- ')}`)
       return 1
     }
     // docker image ls 的体积是解压之后的：inspect 的 Size 在 containerd 的镜像存储里是压缩之后的，两种存储不一致

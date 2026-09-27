@@ -27,7 +27,7 @@ beforeAll(async () => {
       // 一次只算一个、不排队：同时到的请求里只有一个能验证
       NERVE_PASSWORD_HASH_CONCURRENCY: '1',
       NERVE_PASSWORD_HASH_QUEUE_MAX: '0',
-      NERVE_PASSWORD_HASH_QUEUE_TIMEOUT_MS: '2500',
+      NERVE_PASSWORD_HASH_QUEUE_TIMEOUT_MS: '2100',
       NERVE_PASSWORD_ARGON2_ITERATIONS: String(SLOW_ARGON2.timeCost),
       NERVE_LOGIN_MAX_FAILURES: '100',
       NERVE_LOGIN_IP_MAX_FAILURES: '1000',
@@ -55,7 +55,7 @@ describe('等待密码哈希的请求有上限', () => {
     expect(verified).toBeGreaterThan(0)
     expect(busy.length).toBeGreaterThan(0)
     for (const response of busy) {
-      // 建议的重试时间是等待时限（2.5 秒）向上取整
+      // 建议的重试时间是等待时限（2.1 秒）向上取整
       expect(response.headers.get('retry-after')).toBe('3')
       expect(await response.json()).toMatchObject({ error: { code: 'SERVICE_UNAVAILABLE' } })
     }

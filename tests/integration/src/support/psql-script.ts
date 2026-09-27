@@ -1,6 +1,6 @@
 // 按 psql 的规则执行部署用的 SQL 脚本（deploy/sql/）：本机与 CI 的集成测试环境不一定装了 psql。
-// 只支持脚本里实际用到的几样：-v 传入的变量、\getenv、\connect，:"变量"（标识符）与 :'变量'（字面量）的替换，
-// 独占一行的注释，以分号结尾的语句逐条执行。遇到别的写法时报错，不静默跳过；
+// 只支持脚本里实际用到的几样：-v 传入的变量、\getenv、\connect、\set ON_ERROR_STOP on（这里本来就出错即停），
+// :"变量"（标识符）与 :'变量'（字面量）的替换，独占一行的注释，以分号结尾的语句逐条执行。遇到别的写法时报错，不静默跳过；
 // 真正的 psql 在测试环境的数据库初始化里执行（deploy/test，容器 E2E 覆盖）。
 import pg from 'pg'
 
@@ -47,7 +47,10 @@ export async function runPsqlScript(script: string, options: PsqlScriptOptions):
         continue
       if (text.startsWith('\\')) {
         const [command, ...args] = text.split(/\s+/)
-        if (command === '\\getenv' && args.length === 2) {
+        if (command === '\\set' && args.join(' ') === 'ON_ERROR_STOP on') {
+          // 出错即停：这里的每条语句出错都会抛出
+        }
+        else if (command === '\\getenv' && args.length === 2) {
           const value = options.env[args[1] ?? '']
           if (value !== undefined)
             variables.set(args[0] ?? '', value)

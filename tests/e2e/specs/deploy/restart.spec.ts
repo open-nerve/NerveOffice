@@ -17,13 +17,29 @@ import { cellOf, createSheetThroughApi, openEditor, saveAndWait, saveButton, sav
 /** 后端连接数据库时的应用名（apps/api 的连接池） */
 const API_APPLICATION_NAME = 'nerve-office-api'
 
-/** 后端在等锁的会话数（测试直连数据库锁住文档行时，后端的保存事务停在这里） */
-async function apiSessionsWaitingForLock(): Promise<number> {
+/** 后端在等锁的会话（测试直连数据库锁住内容行时，后端的保存事务停在这里）的进程号 */
+async function apiSessionsWaitingForLock(): Promise<number[]> {
   return withDatabase(async (client) => {
-    const { rows } = await client.query<{ count: string }>(
-      'SELECT count(*) AS count FROM pg_stat_activity WHERE datname = current_database() AND application_name = $1 AND wait_event_type = \'Lock\'',
+    const { rows } = await client.query<{ pid: number }>(
+      'SELECT pid FROM pg_stat_activity WHERE datname = current_database() AND application_name = $1 AND wait_event_type = \'Lock\'',
       [API_APPLICATION_NAME],
     )
+    return rows.map(row => row.pid)
+  })
+}
+
+/** 这些数据库会话还在的个数 */
+async function sessionsAlive(pids: readonly number[]): Promise<number> {
+  return withDatabase(async (client) => {
+    const { rows } = await client.query<{ count: string }>('SELECT count(*) AS count FROM pg_stat_activity WHERE pid = ANY($1)', [[...pids]])
+    return Number(rows[0]?.count)
+  })
+}
+
+/** 按 requestId 查到的修订记录数 */
+async function revisionsOf(requestId: string): Promise<number> {
+  return withDatabase(async (client) => {
+    const { rows } = await client.query<{ count: string }>('SELECT count(*) AS count FROM document_revisions WHERE request_id = $1', [requestId])
     return Number(rows[0]?.count)
   })
 }
@@ -39,10 +55,9 @@ function recordSaveRequests(page: Page): string[] {
   return requestIds
 }
 
+// 三条共用一个后端：同一个文件里的用例按顺序在一个工作进程里执行（这个项目没有开 fullyParallel）。
+// 不用 serial：一条失败不连带跳过后面的
 test.describe('US-M1-10 API 重启后已确认的数据不丢', () => {
-  // 共用一个后端：一个接一个执行
-  test.describe.configure({ mode: 'serial' })
-
   test('已确认的保存：强制结束后端再启动，重新打开时内容与修订号都在', async ({ page, request }) => {
     await loginThroughApi(page, await createUser('restart-confirmed'))
     const documentId = await createSheetThroughApi(page)
@@ -68,23 +83,32 @@ test.describe('US-M1-10 API 重启后已确认的数据不丢', () => {
     const saves = recordSaveRequests(page)
     await typeInCell(page, 'A1', '被打断的保存')
 
-    // 测试直连数据库锁住文档行：后端的保存事务停在等锁，这时强制结束后端
+    // 测试直连数据库锁住内容行：后端的保存事务已经写了修订记录、推进了修订号，停在替换内容上等锁（审查 B1），
+    // 这时强制结束后端。释放锁之后，等被结束的后端的会话消失（拿到锁、发现连接断了、回滚）
+    let waiting: number[] = []
     await withDatabase(async (client) => {
       await client.query('BEGIN')
       try {
-        await client.query('SELECT 1 FROM documents WHERE id = $1 FOR UPDATE', [documentId])
+        await client.query('SELECT 1 FROM document_contents WHERE document_id = $1 FOR UPDATE', [documentId])
         await saveButton(page).click()
-        await expect.poll(apiSessionsWaitingForLock, { timeout: 15_000 }).toBeGreaterThan(0)
+        await expect.poll(async () => {
+          waiting = await apiSessionsWaitingForLock()
+          return waiting.length
+        }, { timeout: 15_000 }).toBeGreaterThan(0)
         await restartApi(request)
       }
       finally {
         await client.query('ROLLBACK')
       }
     })
-    // 被强制结束的后端的事务：拿到锁之后发现连接已经断了，回滚，没有提交
-    await expect.poll(apiSessionsWaitingForLock).toBe(0)
+    await expect.poll(async () => sessionsAlive(waiting), { timeout: 15_000 }).toBe(0)
+
+    // 要么完整提交、要么没有提交：修订号、修订记录与内容都没有变
     await expect(saveStatus(page)).toHaveText('保存失败')
-    expect((await savedContent(page, documentId)).revision).toBe(before.revision)
+    const afterInterruption = await savedContent(page, documentId)
+    expect(afterInterruption.revision).toBe(before.revision)
+    expect(afterInterruption.text).toBe(before.text)
+    expect(await revisionsOf(saves[0] ?? '')).toBe(0)
 
     await saveAndWait(page)
     expect(saves).toHaveLength(2)

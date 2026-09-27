@@ -236,7 +236,7 @@ A01 等检查（`pnpm gate <名称>`）：
 - **迁移**：同一个镜像的一次性任务（`node dist/cli/migrate.js`），用所有者角色，成功结束之后才启动应用；应用启动时只检查库结构版本。
 - **数据库角色**：`deploy/sql/bootstrap-roles.sql` 建所有者与应用两个角色与数据库，默认权限让所有者以后建的对象自动授权给应用；应用启动时自检。
 - **反向代理**：只做 TLS 与转发：不压缩、请求体上限 6 MB、就绪探针对外 404、到应用的空闲连接早于应用的 5 秒回收、去掉 `Server` 与 `Via`；不采信客户端带来的转发头。换用别的代理时满足同样的要求（`deploy/README.md`）。
-- **测试环境**（`deploy/test/`）：compose 的 `db`、`migrate`、`app`、`caddy`；应用容器只读根文件系统、去掉全部 capabilities、`no-new-privileges`、不发布端口；数据库与 HTTPS 只发布到本机回环。
+- **测试环境**（`deploy/test/`）：compose 的 `db`、`migrate`、`app`、`caddy`；应用容器只读根文件系统、去掉全部 capabilities、`no-new-privileges`、不发布端口；Caddy 以 nobody 运行、只保留 `NET_BIND_SERVICE`；数据库与 HTTPS 只发布到本机回环。
 - **容器 E2E**（`pnpm test:e2e:container`，CI 的 `container` job）：构建镜像（标签带进程号）、随机密码与端口起一套测试环境 → 核对两个客户端地址（DEF-014）→ 以外部模式跑 E2E（只依赖测试构建的 `@test-build` 用例按标签排除）与重启用例 → 打印镜像体积与应用容器的内存 → 收集日志、清理。
 - **没有做的**（M7）：部署包与运维手册、备份与恢复、升级与回滚演练、滚动发布与多实例（DEF-024）、代理上按地址限速（DEF-023）、镜像的发布与签名。
 

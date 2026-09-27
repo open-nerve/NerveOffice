@@ -31,8 +31,9 @@ services:
       # 只发布到本机回环：E2E 写测试数据、运维排查用
       - 127.0.0.1:${NERVE_TEST_DB_PORT:-54319}:5432
     healthcheck:
-      # 经 TCP 检查：初始化期间的临时服务只监听 Unix 套接字，这时不算就绪
-      test: [CMD-SHELL, pg_isready -h 127.0.0.1 -U postgres -d nerve_office]
+      # 经 TCP 检查：初始化期间的临时服务只监听 Unix 套接字，这时不算就绪。再确认库已经建好：pg_isready 对不存在的库也返回成功，
+      # 而第一次初始化失败之后数据目录已经有了，再启动会跳过初始化脚本（审查 A9，排查见部署说明）
+      test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U postgres -d nerve_office && psql -U postgres -d nerve_office -tAc 'SELECT 1' > /dev/null"]
       interval: 2s
       timeout: 3s
       retries: 30
@@ -72,6 +73,8 @@ services:
 
   caddy:
     image: caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
+    # 以 nobody 运行（镜像默认是 root，审查 A7）
+    user: '65534:65534'
     depends_on:
       app:
         condition: service_healthy
@@ -80,15 +83,15 @@ services:
       - 127.0.0.1:${NERVE_TEST_HTTPS_PORT:-8443}:443
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
+    # 证书与自动保存的配置写在 tmpfs 里，归 nobody 所有：测试环境每次启动由自带的 CA 重新签发
+    tmpfs:
+      - /data:uid=65534,gid=65534
+      - /config:uid=65534,gid=65534
     read_only: true
     cap_drop: [ALL]
-    # 容器里监听 443 要这一项
+    # 镜像里的 caddy 带着这项文件 capability：不在容许的范围里时连执行都会被拒绝；有了它，nobody 也能监听 443
     cap_add: [NET_BIND_SERVICE]
     security_opt: [no-new-privileges:true]
 
 volumes:
   pgdata: {}
-  caddy-data: {}
-  caddy-config: {}

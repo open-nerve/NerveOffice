@@ -154,6 +154,14 @@ describe('AuthService.login', () => {
     expect(audit.record).not.toHaveBeenCalled()
   })
 
+  it('等待哈希的请求太多时退回名额失败：仍然 503 与 Retry-After，记一条告警（审查 A11）', async () => {
+    const { service, ticket, warn } = setup({ check: new PasswordHashingBusyError(5) })
+    ticket.abandoned.mockRejectedValueOnce(new Error('数据库不可用'))
+    const error = await errorOf(service.login(REQUEST, ORIGIN))
+    expect(error).toMatchObject({ code: 'SERVICE_UNAVAILABLE', headers: { 'Retry-After': '5' } })
+    expect(warn).toHaveBeenCalledWith('退回登录限流的名额失败，这次尝试按一次失败计', expect.objectContaining({ err: expect.any(Error) as unknown }))
+  })
+
   it('等待哈希的请求太多（DEF-015）：503 与 Retry-After，退回名额，不写审计、不清理，只记日志', async () => {
     const busy = new PasswordHashingBusyError(5)
     const { service, ticket, audit, throttle, transactions, warn } = setup({ check: busy })

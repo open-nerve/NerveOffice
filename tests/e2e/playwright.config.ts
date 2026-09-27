@@ -66,7 +66,9 @@ export default defineConfig({
   },
   projects: [
     ...browsers.map(name => ({ name, use: BROWSERS[name], testIgnore: RESTART_SPECS })),
-    { name: 'restart', use: { browserName: 'chromium' }, testMatch: RESTART_SPECS, dependencies: browsers },
+    // 只跑重启用例：--project restart --no-deps。命令行的 --grep 不作用于依赖的浏览器项目：它们照样全部执行
+    // 用例的时限放宽到 2 分钟：强制结束后等后端重新可用最多 1 分钟（support/api-process.ts），慢的机器上还要重新打开编辑器
+    { name: 'restart', use: { browserName: 'chromium' }, testMatch: RESTART_SPECS, dependencies: browsers, timeout: 120_000 },
   ],
   // 服务脚本：建测试库、迁移、初始化管理员、启动后端托管测试构建；退出时删库（先执行 pnpm build 与 web 的 build:e2e）。
   // 后端的日志写进 test-results/e2e-server.log，不刷在测试输出里（support/serve.ts）

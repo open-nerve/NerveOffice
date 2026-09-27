@@ -80,6 +80,14 @@ async function first<T extends Record<string, unknown>>(client: pg.Client, query
 }
 
 describe('初始化脚本', () => {
+  it('出错即停；建角色之前关掉这个会话的语句日志：明文的密码不进服务器日志（审查 A2）', () => {
+    const firstRole = SCRIPT.search(/^CREATE ROLE/m)
+    for (const line of ['\\set ON_ERROR_STOP on', 'SET log_statement = \'none\';', 'SET log_min_error_statement = \'panic\';', 'SET log_min_duration_statement = -1;'])
+      expect(SCRIPT.indexOf(line), line).toBeGreaterThanOrEqual(0)
+    for (const line of ['SET log_statement', 'SET log_min_error_statement', 'SET log_min_duration_statement'])
+      expect(SCRIPT.indexOf(line), line).toBeLessThan(firstRole)
+  })
+
   it('库属于所有者，编码与排序规则与开发库相同；只有两个角色能连接', async () => {
     const database = await withClient(async client => first(client, `
       SELECT pg_get_userbyid(datdba) AS owner, pg_encoding_to_char(encoding) AS encoding, datlocprovider AS provider, datlocale AS locale,

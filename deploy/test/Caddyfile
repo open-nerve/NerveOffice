@@ -25,8 +25,9 @@ localhost, caddy {
 		max_size 6MB
 	}
 
-	# 就绪探针只给编排与监控用：503 的说明里有迁移名，不对外；存活探针照常转发
-	respond /api/health/ready 404
+	# 就绪探针只给编排与监控用：503 的说明里有迁移名，不对外；存活探针照常转发。
+	# 按前缀屏蔽（Caddy 的路径匹配不区分大小写）：应用的路由不区分末尾斜杠与大小写，/api/health/ready/ 同样是就绪探针
+	respond /api/health/ready* 404
 
 	# 不配置 encode：内容接口的 gzip 原样经过。转发头用默认值：不采信客户端带来的 X-Forwarded-For，以实际来源替换
 	reverse_proxy app:3000 {

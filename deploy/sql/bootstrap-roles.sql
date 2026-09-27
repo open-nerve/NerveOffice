@@ -11,8 +11,17 @@
 --     -v owner_role=nerve_owner -v app_role=nerve_app -v database=nerve_office -d postgres -f bootstrap-roles.sql
 -- 缺少变量时 psql 不做替换，语句报错并停止。角色或库已经存在时同样报错：本脚本只执行一次。
 
+-- 出错就停下，不依赖调用方有没有传 -v ON_ERROR_STOP=1
+\set ON_ERROR_STOP on
+
 \getenv owner_password NERVE_DB_OWNER_PASSWORD
 \getenv app_password NERVE_DB_APP_PASSWORD
+
+-- 密码随 CREATE ROLE 以明文发给服务器：这个会话不记语句日志，出错时也不记语句原文，免得明文的密码进服务器日志
+-- （只作用于 \connect 之前的这个会话，之后的语句不含密码；需要超级用户）
+SET log_statement = 'none';
+SET log_min_error_statement = 'panic';
+SET log_min_duration_statement = -1;
 
 CREATE ROLE :"owner_role" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD :'owner_password';
 CREATE ROLE :"app_role" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD :'app_password';

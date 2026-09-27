@@ -1,9 +1,9 @@
 import type { AuditRepository, AuditTableAccess } from './audit.repository.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AppLogger, createRootLogger, RequestContextStore } from '../logging/index.ts'
-import { AUDIT_BYPASS_WARNING, AuditProtectionCheck, canBypassAppendOnly } from './audit-protection-check.ts'
+import { AUDIT_BYPASS_WARNING, AuditProtectionCheck, canBypassAppendOnly, PROTECTION_CHECK_WAIT_MS } from './audit-protection-check.ts'
 
-function setup(access: AuditTableAccess | Error) {
+function setup(access: AuditTableAccess | Error | Promise<AuditTableAccess>) {
   const repository = {
     currentAccess: vi.fn(async () => {
       if (access instanceof Error)
@@ -56,5 +56,49 @@ describe('AuditProtectionCheck', () => {
     const { check, warn } = setup(new Error('连接被拒绝'))
     await expect(check.onApplicationBootstrap()).resolves.toBeUndefined()
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('没能检查'), expect.objectContaining({ err: expect.any(Error) as unknown }))
+  })
+
+  it('查询很慢（例如数据库连接超时）：最多等 2 秒就照常启动，有了结果再记（审查 A4）', async () => {
+    vi.useFakeTimers()
+    try {
+      let answer: (access: AuditTableAccess) => void = () => {}
+      const { check, warn } = setup(new Promise<AuditTableAccess>((resolve) => {
+        answer = resolve
+      }))
+      let started = false
+      const bootstrap = check.onApplicationBootstrap().then(() => {
+        started = true
+      })
+      await vi.advanceTimersByTimeAsync(PROTECTION_CHECK_WAIT_MS - 1)
+      expect(started).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      await bootstrap
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('超过 2000 毫秒'))
+      expect(warn).not.toHaveBeenCalledWith(AUDIT_BYPASS_WARNING, expect.anything())
+
+      answer({ role: 'postgres', superuser: true, ownsTable: true })
+      await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(AUDIT_BYPASS_WARNING, { role: 'postgres', superuser: true, ownsAuditTable: true }))
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('2 秒之后才失败的查询：有了结果再记"没能检查"', async () => {
+    vi.useFakeTimers()
+    try {
+      let fail: (error: Error) => void = () => {}
+      const { check, warn } = setup(new Promise<AuditTableAccess>((_resolve, reject) => {
+        fail = reject
+      }))
+      const bootstrap = check.onApplicationBootstrap()
+      await vi.advanceTimersByTimeAsync(PROTECTION_CHECK_WAIT_MS)
+      await bootstrap
+      fail(new Error('连接超时'))
+      await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining('没能检查'), expect.objectContaining({ err: expect.any(Error) as unknown })))
+    }
+    finally {
+      vi.useRealTimers()
+    }
   })
 })

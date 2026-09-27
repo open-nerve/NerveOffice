@@ -110,6 +110,17 @@ export function staleRuns(names: readonly string[], prefix: string, isAlive: (pi
   })
 }
 
+/**
+ * 中断的运行（例如被 SIGKILL）留下的临时目录：名字是前缀、进程号、连字符与随机后缀（mkdtemp）。
+ * 里面的变量文件有三个密码，下一次运行时删掉（审查 B6）
+ */
+export function staleTemporaryDirectories(names: readonly string[], isAlive: (pid: number) => boolean): string[] {
+  return names.filter((name) => {
+    const pid = name.startsWith(PROJECT_PREFIX) ? /^(\d+)-/.exec(name.slice(PROJECT_PREFIX.length))?.[1] : undefined
+    return pid !== undefined && !isAlive(Number(pid))
+  })
+}
+
 /** psql -At -F '|' 的输出（每行"请求标识|地址"）→ 请求标识到地址 */
 export function parseAuditAddresses(output: string): Map<string, string> {
   const addresses = new Map<string, string>()
@@ -121,18 +132,24 @@ export function parseAuditAddresses(output: string): Map<string, string> {
   return addresses
 }
 
+/** 本机那次带着伪造的 X-Forwarded-For 登录失败时写的地址（文档用的保留地址段）：审计里不能出现它 */
+export const FORGED_CLIENT_ADDRESS = '203.0.113.77'
+
 export interface ObservedAddresses {
   /** 本机经发布的端口那次登录失败，审计记下的客户端地址 */
   readonly host: string | undefined
   /** 编排网络里另一个容器经站点 caddy 那次 */
   readonly network: string | undefined
+  /** 本机带着伪造的 X-Forwarded-For（FORGED_CLIENT_ADDRESS）那次 */
+  readonly forged: string | undefined
   /** Caddy 容器的地址 */
   readonly proxy: readonly string[]
 }
 
 /**
- * 两个客户端地址的核对（P5 设计 §3.5，DEF-014）：应用采信了代理转发的地址时，两次登录失败的地址不同，也都不是 Caddy 的地址；
- * 配错时（例如没设 NERVE_TRUST_PROXY）两次都是 Caddy 的地址。返回发现的问题，没有问题时为空。
+ * 客户端地址的核对（P5 设计 §3.5，DEF-014）：应用采信了代理转发的地址时，本机与编排网络里两次登录失败的地址不同，也都不是
+ * Caddy 的地址；配错时（例如没设 NERVE_TRUST_PROXY）两次都是 Caddy 的地址。代理不能采信客户端自带的 X-Forwarded-For：
+ * 带着伪造地址那次记下的仍是真实来源（审查 B5）。返回发现的问题，没有问题时为空。
  */
 export function clientAddressProblems(observed: ObservedAddresses): string[] {
   const problems: string[] = []
@@ -140,13 +157,45 @@ export function clientAddressProblems(observed: ObservedAddresses): string[] {
     problems.push('本机那次登录失败没有审计记录')
   if (observed.network === undefined)
     problems.push('编排网络里那次登录失败没有审计记录')
+  if (observed.forged === undefined)
+    problems.push('带着伪造的 X-Forwarded-For 那次登录失败没有审计记录')
   if (observed.host !== undefined && observed.host === observed.network)
     problems.push(`两次的客户端地址相同（${observed.host}）：应用没有区分出真实的来源`)
   for (const [source, address] of [['本机', observed.host], ['编排网络里', observed.network]] as const) {
     if (address !== undefined && observed.proxy.includes(address))
       problems.push(`${source}那次的客户端地址是 Caddy 的地址（${address}）：应用没有采信代理转发的地址（检查 NERVE_TRUST_PROXY）`)
   }
+  if (observed.forged === FORGED_CLIENT_ADDRESS)
+    problems.push(`审计记下了客户端自己写的 X-Forwarded-For（${FORGED_CLIENT_ADDRESS}）：代理采信了客户端带来的转发头，任何人都能冒充别的地址`)
   return problems
+}
+
+/**
+ * docker compose port app 3000 的输出：有"主机:端口"说明应用的端口发布到了主机，代理之外的客户端能直连应用、伪造转发头。
+ * 没有发布时 compose 输出 ":0"
+ */
+export function publishedPortProblems(output: string): string[] {
+  const published = output.split('\n').map(line => line.trim()).filter(line => /:[1-9]\d*$/.test(line))
+  return published.length === 0 ? [] : [`应用的端口发布到了主机（${published.join('、')}）：只能让代理连到应用`]
+}
+
+/**
+ * 经代理访问探针的期望（P5 设计 §3.4）：存活探针转发；就绪探针的说明里有迁移名，不对外。
+ * 应用的路由不区分末尾斜杠与大小写，这几种写法都是就绪探针，代理都要屏蔽（审查 A1）
+ */
+export const PROXIED_PROBES: readonly { readonly path: string, readonly status: number }[] = [
+  { path: '/api/health/live', status: 200 },
+  { path: '/api/health/ready', status: 404 },
+  { path: '/api/health/ready/', status: 404 },
+  { path: '/api/HEALTH/READY', status: 404 },
+]
+
+/** 经代理请求各个探针得到的状态码（连不上是 0）→ 与期望不符的说明 */
+export function proxiedProbeProblems(statuses: ReadonlyMap<string, number>): string[] {
+  return PROXIED_PROBES.flatMap(({ path, status }) => {
+    const actual = statuses.get(path)
+    return actual === status ? [] : [`经代理请求 ${path} 得到 ${actual === undefined || actual === 0 ? '（没有响应）' : actual}，期望 ${status}`]
+  })
 }
 
 const MEMORY_UNITS: Readonly<Record<string, number>> = { B: 1, KiB: 1024, MiB: 1024 ** 2, GiB: 1024 ** 3, kB: 1e3, KB: 1e3, MB: 1e6, GB: 1e9 }

@@ -1,7 +1,8 @@
 # NerveOffice 的镜像（P5 设计 §3.2，ADR-012）：一个应用容器同时托管前端与 API。
 # 在仓库根目录构建：docker build -f deploy/Dockerfile -t nerve-office:<版本> .
 # 不绑定平台：CI 构建 linux/amd64，本机（Apple 芯片）构建 linux/arm64；基础镜像按多架构索引的摘要锁定。
-# 阶段：base（加上 pnpm）→ build（全部依赖、构建、服务端许可清单）→ prod-deps（只装 api 的生产依赖）→ runtime（不带 pnpm、npm 与源码）。
+# 阶段：base（加上 pnpm）→ manifests（锁文件、工作区配置与各包的 package.json）→ build（全部依赖、构建、服务端许可清单）
+# 与 prod-deps（只装 api 的生产依赖）→ runtime（从基础镜像重新开始，不带 pnpm、npm 与源码）。
 
 # Node 的版本与 .node-version 一致，pnpm 的版本与根目录 package.json 的 packageManager 一致（门禁 pins 核对）
 ARG NODE_IMAGE=node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6

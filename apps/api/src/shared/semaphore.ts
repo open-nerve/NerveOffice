@@ -56,7 +56,11 @@ export class Semaphore {
         timer: maxWaitMs === undefined
           ? undefined
           : setTimeout(() => {
-              this.#waiting.splice(this.#waiting.indexOf(waiter), 1)
+              // 轮到时计时器已被清掉；万一还是触发了，不能按 -1 删掉队尾别的任务
+              const index = this.#waiting.indexOf(waiter)
+              if (index < 0)
+                return
+              this.#waiting.splice(index, 1)
               reject(new SemaphoreBusyError('wait-timeout'))
             }, maxWaitMs),
       }

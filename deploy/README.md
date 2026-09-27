@@ -52,7 +52,7 @@ docker build -f deploy/Dockerfile -t nerve-office:test \
      node dist/cli/init-admin.js --username admin --password-stdin < 保存密码的文件
    ```
 
-4. 浏览器打开 `https://localhost:8443`。证书由 Caddy 自带的 CA 签发，浏览器会提示不受信任，测试环境里确认继续即可。正式环境要换成公网证书或自有 CA。
+4. 浏览器打开 `https://localhost:8443`。证书由 Caddy 自带的 CA 签发（Caddy 以 nobody 运行，证书放在 tmpfs 里，每次启动重新签发），浏览器会提示不受信任，测试环境里确认继续即可。正式环境要换成公网证书或自有 CA。应用经 HTTPS 下发一年期的 HSTS，而浏览器按主机名记住它、不分端口：用日常的浏览器打开之后，本机其他 `http://localhost:<端口>` 的服务也会被改成 HTTPS。建议用单独的浏览器配置文件（或无痕窗口）访问测试环境；本项目的开发服务器用 `127.0.0.1`，不受影响。
 5. 停止用 `docker compose -f deploy/test/compose.yaml down`；连同数据一起删除时加 `-v`。
 
 容器 E2E（`pnpm test:e2e:container`）自己构建镜像、生成随机密码、挑选空闲端口，用单独的编排项目名起一套环境，跑完删除，不影响手工起的这一套。默认只跑 Chromium，`--browsers chromium,webkit` 可以多选；`--` 之后的参数交给 Playwright（例如 `pnpm test:e2e:container -- --project restart --no-deps` 只跑重启用例）。各容器的日志留在 `tests/e2e/test-results/container/`。
@@ -110,7 +110,7 @@ NERVE_DB_OWNER_PASSWORD=… NERVE_DB_APP_PASSWORD=… psql -v ON_ERROR_STOP=1 \
 - **不压缩、不解压**：文档内容接口直接下发 gzip 字节（`Content-Encoding: gzip`），代理不要再压缩，也不要替客户端透明解压。
 - **请求体上限不低于 6 MB**：快照的上限是 5 MiB，加上查询串与余量。
 - **到应用的空闲连接早于 5 秒回收**：应用的空闲连接超时是 5 秒（`NERVE_HTTP_KEEP_ALIVE_TIMEOUT_MS`），代理复用应用已经关掉的连接会得到 502。
-- **就绪探针不对外**：`/api/health/ready` 的 503 说明里有迁移名，只给编排与监控用；对外的存活探针是 `/api/health/live`。
+- **就绪探针不对外**：`/api/health/ready` 的 503 说明里有迁移名，只给编排与监控用；对外的存活探针是 `/api/health/live`。应用的路由不区分末尾斜杠与大小写（`/api/health/ready/`、`/api/HEALTH/READY` 同样是就绪探针），代理要按前缀、不区分大小写屏蔽，不能只屏蔽这一个精确的地址。
 - **按地址限速（建议）**：应用对等待密码哈希的请求有上限，超出时返回 503 与 `Retry-After`，不会无限排队；在反向代理上对登录接口按客户端地址限速，可以把洪水挡在更前面。Caddy 的标准构建没有限速模块，这一条随 M7 的运维手册落实（DEF-023）。
 
 ## 已知限制
@@ -120,6 +120,8 @@ NERVE_DB_OWNER_PASSWORD=… NERVE_DB_APP_PASSWORD=… psql -v ON_ERROR_STOP=1 \
 - 镜像在本机与 CI 上构建，没有发布到镜像仓库。
 
 ## 排查
+
+- `db` 一直不健康：看 `docker compose -f deploy/test/compose.yaml logs db`。第一次初始化（建角色与库）失败时，数据卷里已经有了数据目录，再启动不会重新执行初始化脚本，健康检查因为库不存在而一直失败：修好原因（例如变量）之后 `down -v` 删掉数据卷再起。
 
 - 应用的日志是每行一条的 JSON：`docker compose -f deploy/test/compose.yaml logs app`。每个请求带 `requestId`，与响应头 `X-Request-Id`、错误响应里的 `requestId` 一致。
 - 就绪探针只在编排网络里可达：`docker compose -f deploy/test/compose.yaml exec app node -e "fetch('http://127.0.0.1:3000/api/health/ready').then(async r => console.log(r.status, await r.text()))"`。

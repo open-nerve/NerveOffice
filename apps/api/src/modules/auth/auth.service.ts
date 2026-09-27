@@ -99,7 +99,10 @@ export class AuthService {
     catch (error) {
       if (!(error instanceof PasswordHashingBusyError))
         throw error
-      await ticket.abandoned()
+      // 退回名额失败（例如数据库出错）只记日志：这次按一次失败计，回应仍是"服务繁忙"（审查 A11）
+      await ticket.abandoned().catch((releaseError: unknown) => {
+        this.#logger.warn('退回登录限流的名额失败，这次尝试按一次失败计', { err: releaseError })
+      })
       this.#logger.warn('等待密码哈希的请求太多，拒绝这次登录', { retryAfterSeconds: error.retryAfterSeconds })
       throw new AppError('SERVICE_UNAVAILABLE', undefined, { cause: error, headers: { 'Retry-After': String(error.retryAfterSeconds) } })
     }
