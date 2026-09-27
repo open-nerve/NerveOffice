@@ -8,6 +8,9 @@ dist-e2e/
 coverage/
 *.tsbuildinfo
 
+# 安全类的上游报告草稿（docs/upstream/README.md）：按上游的 SECURITY.md 走私下渠道，修复发布之前不进公开仓库
+docs/upstream/private/
+
 # 环境变量
 .env
 .env.*
