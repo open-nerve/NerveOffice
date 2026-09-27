@@ -12,8 +12,8 @@ import { commandJson, packageName, readJson, readText, readWorkspaceConfig, REPO
 import { checkStories, parseDesignStoryIds, parseRegistry, testsFromPlaywrightList, testsFromVitestList } from '../stories/stories.ts'
 import { checkFileTypes, checkTestOnlyArtifacts, classifyArtifact, scanArtifacts } from './artifacts.ts'
 import { checkAudit } from './audit.ts'
-import { checkBudgets, initialFiles, initialStyles, reachableFiles, referencedWorkers, viteManifestSchema, workerClosure } from './budgets.ts'
-import { checkGraphComplete, checkSingletons, checkUniver, collectInstalled } from './dependency-graph.ts'
+import { checkBudgets, entryWorkers, reachableFiles, viteManifestSchema, workerClosure } from './budgets.ts'
+import { checkGraphComplete, checkSingletons, checkUniver, checkUniverCatalog, collectInstalled } from './dependency-graph.ts'
 import { bundledPackagesSchema, checkLicenseBundle } from './license-bundle.ts'
 import { checkDevelopmentLicenses, checkProductionLicenses, flattenLicenseReport, licensesByPath } from './licenses.ts'
 import { gitIn, runMigrationsGate } from './migrations-gate.ts'
@@ -100,7 +100,12 @@ function deps(): GateOutcome {
   return {
     name: 'deps',
     title: '依赖图（Univer 版本、Pro、单例）',
-    violations: [...checkGraphComplete(graph), ...checkUniver(graph.installed, UNIVER_POLICY), ...checkSingletons(graph.installed, SINGLETON_PACKAGES)],
+    violations: [
+      ...checkGraphComplete(graph),
+      ...checkUniverCatalog(readWorkspaceConfig().catalog, UNIVER_POLICY),
+      ...checkUniver(graph.installed, UNIVER_POLICY),
+      ...checkSingletons(graph.installed, SINGLETON_PACKAGES),
+    ],
     notes: [`生产依赖 ${graph.installed.length} 个安装实例（含可选依赖），其中 @univerjs/* ${univer} 个`],
   }
 }
@@ -135,20 +140,20 @@ function readManifest(distDir: string): ReturnType<typeof viteManifestSchema.par
 }
 
 /**
- * 地址可以按前缀放行的文件（P4 设计 §3.9）：编辑器页能加载到的 JS 与样式（首屏与动态加载的块）与它创建的 Worker。
- * 平台页面的产物（入口页、首屏的 JS 与样式，含两边共用的块）除外；其他文件与找不到构建清单时一律只按具体地址（审查 A 路建议 B1）
+ * 地址可以按前缀放行的文件（P4 设计 §3.9）：编辑器页能加载到的全部产物，即入口页、JS 与样式（首屏与动态加载的块）、
+ * 它创建的 Worker 与 Worker 加载的块。平台页面能加载到的产物（含两边共用的块）除外；其他文件、清单里没有的入口、
+ * 找不到构建清单时，一律只按具体地址（审查 A 路建议 B1，复验 RA8）
  */
 function prefixFiles(distDir: string): Set<string> {
   const manifest = readManifest(distDir)
   if (manifest === undefined)
     return new Set()
   const readText = (file: string): string => readFileSync(join(distDir, file), 'utf8')
-  const platform = new Set(PLATFORM_ENTRIES.flatMap(entry => [entry, ...(initialFiles(manifest, entry) ?? []), ...initialStyles(manifest, entry)]))
-  const editor = EDITOR_ENTRIES.flatMap((entry) => {
-    const files = reachableFiles(manifest, entry)
-    return [entry, ...files, ...referencedWorkers(files.filter(file => file.endsWith('.js')), readText).flatMap(worker => workerClosure(worker, readText))]
-  })
-  return new Set(editor.filter(file => !platform.has(file)))
+  const loadableFrom = (entry: string): string[] => manifest[entry] === undefined
+    ? []
+    : [entry, ...reachableFiles(manifest, entry), ...entryWorkers(manifest, entry).flatMap(worker => workerClosure(worker, readText, true))]
+  const platform = new Set(PLATFORM_ENTRIES.flatMap(loadableFrom))
+  return new Set(EDITOR_ENTRIES.flatMap(loadableFrom).filter(file => !platform.has(file)))
 }
 
 /** distDir 是 web 构建产物的目录（绝对路径）。 */

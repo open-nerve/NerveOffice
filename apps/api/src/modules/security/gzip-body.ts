@@ -29,9 +29,10 @@ function isMalformedGzip(error: unknown): boolean {
 
 /**
  * 解压 gzip 数据，解压后超过 maxRawBytes 就停下（413），压缩炸弹在上限处截住。
- * 只接受恰好一个完整的 gzip 成员、末尾没有别的数据：用标准的 DecompressionStream，与浏览器同一个规范（成员结束之后还有数据即出错）。
- * 存下的字节会原样以 Content-Encoding: gzip 下发，浏览器只解第一个成员：几个成员拼起来、或者末尾带着数据时，
- * 服务端与浏览器会解出不同的内容（审查 A1：空成员加合法的成员，浏览器解出空串）。
+ * 只接受恰好一个完整的 gzip 成员、末尾没有别的数据（标准的 DecompressionStream：成员结束之后还有数据即出错）。
+ * 存下的字节会原样以 Content-Encoding: gzip 下发，而浏览器按 Content-Encoding 解压时更宽松：只解第一个成员，
+ * 忽略之后的数据（Chromium 还接受 CRC 错与截断的尾部）。几个成员拼起来、或者末尾带着数据时，服务端与浏览器会解出不同的内容
+ * （审查 A1：空成员加合法的成员，浏览器解出空串）；单个完整的成员，两边解出的内容相同。
  */
 export async function gunzipWithin(compressed: Buffer, maxRawBytes: number): Promise<Buffer> {
   const reader = new Blob([compressed]).stream().pipeThrough<Uint8Array>(new DecompressionStream('gzip')).getReader()
@@ -45,7 +46,8 @@ export async function gunzipWithin(compressed: Buffer, maxRawBytes: number): Pro
       return Buffer.concat(chunks, total)
     total += chunk.value.byteLength
     if (total > maxRawBytes) {
-      await reader.cancel()
+      // 成员之后还有数据时，流在交出这一块之前已经出错，cancel 会以那个错误拒绝：已经按超限处理，忽略它（复验 RA1）
+      await reader.cancel().catch(() => undefined)
       throw new AppError('PAYLOAD_TOO_LARGE', `请求体解压后超过上限（${maxRawBytes} 字节）`)
     }
     chunks.push(chunk.value)

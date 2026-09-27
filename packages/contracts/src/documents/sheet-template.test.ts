@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { UNIVER_SDK_VERSION } from './content.ts'
 import { SHEET_TEMPLATE, SHEET_TEMPLATE_UNIT_ID, sheetSnapshotFor } from './sheet-template.ts'
 
 const TEMPLATE_JSON = JSON.stringify(SHEET_TEMPLATE)
@@ -21,9 +20,5 @@ describe('表格的模板快照', () => {
     expect(SHEET_TEMPLATE.sheetOrder).toEqual(Object.keys(SHEET_TEMPLATE.sheets))
     for (const [id, sheet] of Object.entries(SHEET_TEMPLATE.sheets))
       expect(sheet.id).toBe(id)
-  })
-
-  it('由平台内置的 SDK 版本保存得到（appVersion 由 SDK 写出）', () => {
-    expect(SHEET_TEMPLATE.appVersion).toBe(UNIVER_SDK_VERSION)
   })
 })

@@ -14,8 +14,8 @@ export const SNAPSHOT_UPLOAD_CONTENT_TYPE = 'application/gzip'
 
 /**
  * 平台内置的 Univer SDK 版本：写入 documents.sdk_version，与 pnpm 目录里 Univer 各包的版本、门禁的 UNIVER_POLICY 相同。
- * 三者由测试串起来：升级 SDK 之后，E2E 的模板用例（新建的表格打开后立即保存，与模板逐字节相同）因 SDK 写出的 appVersion 变了而失败；
- * 重新生成模板之后，单元测试核对模板的 appVersion 与这里一致；deps 门禁核对安装的版本与 UNIVER_POLICY 一致。
+ * 直接核对（复验 RA6）：后端的单元测试（sdk-version.test.ts）核对它与目录里的核心包一致，deps 门禁核对目录与安装的版本都等于 UNIVER_POLICY。
+ * 快照里的 appVersion 不能代表版本：Univer 载入快照时沿用其中的 appVersion，模板里的值会一直留在新建的文档里。
  */
 export const UNIVER_SDK_VERSION = '1.0.1'
 

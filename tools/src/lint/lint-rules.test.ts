@@ -285,6 +285,43 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
     }
   })
 
+  it('私有字段 _injector 同样只能在 internal-api 里取：点号、方括号、字符串的键与 Reflect.get 都算（复验 RB4）', async () => {
+    const declared = 'declare const univerAPI: { _injector: unknown }\n'
+    const cases = [
+      `${declared}export const injector = univerAPI._injector\n`,
+      `${declared}export const injector = univerAPI['_injector']\n`,
+      `${declared}export const injector = univerAPI[\`_injector\`]\n`,
+      `${declared}const { _injector: injector } = univerAPI\nexport const i = injector\n`,
+      `${declared}export const injector: unknown = Reflect.get(univerAPI, '_injector')\n`,
+    ]
+    for (const code of cases) {
+      for (const file of [EDITOR_FILE, WEB_FILE]) {
+        const report = await lint(code, file)
+        expect(report.rules, `${file}\n${code}`).toContain('no-restricted-syntax')
+        expect(report.messages.join('\n'), `${file}\n${code}`).toContain(INTERNAL_MESSAGE)
+      }
+    }
+    expect(await rulesFor('export const fake = { _injector: 1 }\n', EDITOR_FILE)).not.toContain('no-restricted-syntax')
+  })
+
+  it('类型里的 import(\'@univerjs/…\') 在编辑器之外失败，在编辑器里（internal-api 之外）也失败：内部 API 的限制只认导入语句（复验 RB4）', async () => {
+    const code = 'export type Service = import(\'@univerjs/engine-formula\').IFunctionService\nexport type Module = typeof import(\'@univerjs/core\')\n'
+    for (const file of [EDITOR_FILE, WEB_FILE]) {
+      const report = await lint(code, file)
+      expect(report.rules, file).toContain('no-restricted-syntax')
+    }
+  })
+
+  it('三斜杠引用与 import x = require() 会失败：它们绕得过受限导入（复验 RB4）', async () => {
+    for (const code of [
+      '/// <reference types="@univerjs/engine-formula" />\nexport const a = 1\n',
+      '/// <reference path="../../../node_modules/@univerjs/engine-formula/lib/types/index.d.ts" />\nexport const a = 1\n',
+    ]) {
+      expect(await rulesFor(code, EDITOR_FILE), code).toContain('ts/triple-slash-reference')
+    }
+    expect(await rulesFor('import formula = require(\'@univerjs/engine-formula\')\nexport const f = formula\n', EDITOR_FILE)).toContain('no-restricted-syntax')
+  })
+
   it('按 node_modules 里的路径引用依赖会失败：静态导入、再导出与动态导入都算，编辑器与 internal-api 也一样（审查 B4）', async () => {
     const NODE_MODULES_MESSAGE = '按包名引用依赖，不要写 node_modules 里的路径'
     const source = '../../../node_modules/@univerjs/engine-formula/lib/es/index.js'

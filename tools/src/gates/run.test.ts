@@ -83,18 +83,20 @@ describe('US-M1-11 产物门禁的装配', () => {
     expect(outcome.notes).toContain('出现的主机：无；主机在运行时拼出的地址 0 处（由 CSP 兜底）')
   })
 
-  /** 两个入口：平台页面与编辑器页（编辑器页创建公式 Worker、有一个动态加载的块） */
-  function withEditor(files: Record<string, string>): Record<string, string> {
+  /** 两个入口：平台页面与编辑器页（编辑器页创建公式 Worker、有一个动态加载的块；Worker 动态加载一个块） */
+  function withEditor(files: Record<string, string>, manifest: Record<string, unknown> = {}): Record<string, string> {
     return {
       ...clean,
       '.vite/manifest.json': JSON.stringify({
-        'index.html': { file: 'assets/index.js' },
-        'editor.html': { file: 'assets/editor.js', dynamicImports: ['src/lazy.ts'] },
+        'index.html': { file: 'assets/index.js', isEntry: true },
+        'editor.html': { file: 'assets/editor.js', isEntry: true, dynamicImports: ['src/lazy.ts'], assets: ['assets/formula.worker-a1.js'] },
         'src/lazy.ts': { file: 'assets/lazy.js' },
+        ...manifest,
       }),
       'editor.html': '<!doctype html><script type="module" src="/assets/editor.js"></script>',
       'assets/editor.js': 'new Worker(new URL(`/assets/formula.worker-a1.js`,``+import.meta.url),{type:`module`})',
-      'assets/formula.worker-a1.js': 'self.onmessage=()=>{}',
+      'assets/formula.worker-a1.js': 'self.onmessage=()=>import("./worker-lazy-b2.js")',
+      'assets/worker-lazy-b2.js': 'export const y=2',
       'assets/lazy.js': 'export const x=1',
       ...files,
     }
@@ -110,7 +112,7 @@ describe('US-M1-11 产物门禁的装配', () => {
 
   it('前缀的登记只适用于编辑器页能加载到的产物与它创建的 Worker；平台页面与其他文件只按具体地址（审查 A 路建议 B1）', () => {
     const link = JSON.stringify(`${ARTIFACT_POLICY.allowedAddresses.find(entry => entry.prefix === true)?.address ?? ''}sample`)
-    for (const file of ['assets/editor.js', 'assets/lazy.js', 'assets/formula.worker-a1.js']) {
+    for (const file of ['assets/editor.js', 'assets/lazy.js', 'assets/formula.worker-a1.js', 'assets/worker-lazy-b2.js']) {
       const outcome = artifactsGate(writeDist(withEditor({ [file]: `${withEditor({})[file] ?? ''};export const link=${link}` })))
       expect(outcome.violations, file).toEqual([])
     }
@@ -122,13 +124,26 @@ describe('US-M1-11 产物门禁的装配', () => {
     const noManifest = artifactsGate(writeDist({ ...withEditor({ 'assets/editor.js': `export const link=${link}` }), '.vite/manifest.json': '{}' }))
     expect(noManifest.violations.map(v => v.rule)).toEqual(['artifacts/address'])
   })
+
+  it('前缀的登记：平台页面也能加载到的块（例如两边共用的动态块）、清单里没有编辑器入口时的编辑器页，只按具体地址（复验 RA8）', () => {
+    const link = JSON.stringify(`${ARTIFACT_POLICY.allowedAddresses.find(entry => entry.prefix === true)?.address ?? ''}sample`)
+    const shared = artifactsGate(writeDist(withEditor({ 'assets/lazy.js': `export const link=${link}` }, {
+      'index.html': { file: 'assets/index.js', isEntry: true, dynamicImports: ['src/lazy.ts'] },
+    })))
+    expect(shared.violations.map(v => v.rule)).toEqual(['artifacts/address'])
+    const noEditorEntry = artifactsGate(writeDist({
+      ...withEditor({ 'editor.html': `<!doctype html><a href=${link}>帮助</a>` }),
+      '.vite/manifest.json': JSON.stringify({ 'index.html': { file: 'assets/index.js', isEntry: true } }),
+    }))
+    expect(noEditorEntry.violations.map(v => v.rule)).toEqual(['artifacts/address'])
+  })
 })
 
 describe('US-M1-11 体积预算门禁的装配', () => {
   /** 两个入口与编辑器页创建的公式 Worker */
   function dist(indexContent: string): string {
     return writeDist({
-      '.vite/manifest.json': JSON.stringify({ 'index.html': { file: 'assets/index.js' }, 'editor.html': { file: 'assets/editor.js' } }),
+      '.vite/manifest.json': JSON.stringify({ 'index.html': { file: 'assets/index.js', isEntry: true }, 'editor.html': { file: 'assets/editor.js', isEntry: true, assets: ['assets/formula.worker-a1.js'] } }),
       'assets/index.js': indexContent,
       'assets/editor.js': 'new Worker(new URL(`/assets/formula.worker-a1.js`,``+import.meta.url),{type:`module`})',
       'assets/formula.worker-a1.js': 'self.onmessage=()=>{}',
@@ -144,7 +159,7 @@ describe('US-M1-11 体积预算门禁的装配', () => {
 
   it('编辑器页的入口没有引用公式 Worker：违规', () => {
     const noWorker = writeDist({
-      '.vite/manifest.json': JSON.stringify({ 'index.html': { file: 'assets/index.js' }, 'editor.html': { file: 'assets/editor.js' } }),
+      '.vite/manifest.json': JSON.stringify({ 'index.html': { file: 'assets/index.js', isEntry: true }, 'editor.html': { file: 'assets/editor.js', isEntry: true } }),
       'assets/index.js': 'console.log(1)',
       'assets/editor.js': 'console.log(2)',
     })

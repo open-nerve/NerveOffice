@@ -1,4 +1,3 @@
-import type { ChangeTracker } from './change-tracking/change-tracker.ts'
 // 表格编辑器（P4 设计 §3.6.1、§3.6.3）：这份快照在 Univer 里怎么编辑、怎么捕获。请求、保存状态与界面由编辑器页负责。
 // 一页一份文档、整页加载与卸载（计划书 §10.2）：同一个实例里不能创建两份 unitId 相同的文档，反复创建销毁也会泄漏内存。
 // 顺序：
@@ -8,6 +7,7 @@ import type { ChangeTracker } from './change-tracking/change-tracker.ts'
 // 4. createWorkbook，核对 unitId；
 // 5. 等渲染完成（Rendered）、主线程到 Ready 后装上 IMAGE() 的限制、Worker 回报它那边也装上了，才返回；
 //    任何一步失败（包括创建 Univer、注册插件）都按相反的顺序销毁已经创建的一切并抛出，页面显示"编辑器加载失败"（审查 B8）。
+import type { ChangeTracker } from './change-tracking/change-tracker.ts'
 import type { CleanupStack } from './cleanup-stack.ts'
 import type { LifecycleWatch, SheetEditorLifecycle } from './lifecycle-watch.ts'
 import type { WorkbookSnapshot } from './workbook-snapshot.ts'

@@ -28,11 +28,12 @@ async function openNewSheet(page: Page, prefix: string): Promise<string> {
 }
 
 /**
- * 计算进行中再改一次的场景（P4 探针 (f) 的公式，个数减少）：D1:D1000 是 1…1000，A1:A200 是
- * =SUMPRODUCT($D$1:$D$1000*(ROW($D$1:$D$1000)>i))+i。本机实测一轮约 0.5 秒（300 个约 0.8 秒），键入下一格约 0.1–0.15 秒，
- * 所以改完 D1 接着改 D2 时第一轮还在计算；两轮合计在公式收齐的 3 秒上限之内留足余量
+ * 计算进行中再改一次的场景（P4 探针 (f) 的公式，个数减半）：D1:D1000 是 1…1000，A1:A300 是
+ * =SUMPRODUCT($D$1:$D$1000*(ROW($D$1:$D$1000)>i))+i。一轮的计算时间随个数增长（复验实测 200 个时 Chromium 约 0.34 秒、
+ * WebKit 约 0.2 秒），键入下一格约 0.1–0.15 秒：用 300 个，改完 D1 接着改 D2 时第一轮还在计算，WebKit 上也留出余量；
+ * 两轮合计在公式收齐的 3 秒上限之内。"排队"的判断另有确定的用例（单元格还在编辑时按保存）
  */
-const SLOW_FORMULA_COUNT = 200
+const SLOW_FORMULA_COUNT = 300
 const D_VALUES = Array.from({ length: 1000 }, (_, row) => row + 1)
 
 /** 按定义算出第 i 个公式（0 起）的值 */
@@ -112,6 +113,20 @@ test.describe('US-M1-05 保存到云端，看到真实的保存状态', () => {
     await saveAndWait(page)
     await expect(page.getByRole('alert')).toBeHidden()
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('offline')
+  })
+
+  test('单元格还在编辑时按保存：依赖它的公式的缓存值是提交之后的结果（公式收齐的"排队"判断，复验 RB5）', async ({ page }) => {
+    // 提交写入的修改让下一轮计算排队；紧接着第一次判断是否收齐时，SDK 的防抖还没过、新的一轮还没开始，只有"排队"挡得住过早的捕获
+    const documentId = await openNewSheet(page, 'save-editing-formula')
+    await typeInCell(page, 'A1', '1')
+    await typeInCell(page, 'A2', '=A1*2')
+    await saveAndWait(page)
+    await typeInCell(page, 'A1', '5', false)
+    await page.keyboard.press('ControlOrMeta+s')
+    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    const saved = (await savedContent(page, documentId)).snapshot
+    expect(cellOf(saved, 'A1')?.v).toBe(5)
+    expect(cellOf(saved, 'A2')).toMatchObject({ f: '=A1*2', v: 10 })
   })
 
   test('单元格还在编辑时按保存：内容先提交再保存', async ({ page }) => {

@@ -45,6 +45,14 @@ describe('gunzipWithin', () => {
     expect(await rejection(gunzipWithin(compressed, 1024))).toMatchObject({ code: 'REQUEST_INVALID', message: '请求体不是完整的 gzip 数据' })
   })
 
+  it('解压结果刚过上限、成员之后还有数据：照样 413，不是意外错误（复验 RA1）', async () => {
+    const overLimit = zlib.gzipSync(Buffer.alloc(1025))
+    for (const trailer of [zlib.gzipSync(Buffer.from('x')), Buffer.from('junk')]) {
+      const error = await rejection(gunzipWithin(Buffer.concat([overLimit, trailer]), 1024))
+      expect(error.code).toBe('PAYLOAD_TOO_LARGE')
+    }
+  })
+
   it('CRC 被改动：400', async () => {
     const tampered = Buffer.from(zlib.gzipSync(TEXT))
     tampered.writeUInt32LE((tampered.readUInt32LE(tampered.length - 8) + 1) % 2 ** 32, tampered.length - 8)

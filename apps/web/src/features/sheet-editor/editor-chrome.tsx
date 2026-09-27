@@ -1,11 +1,11 @@
 // 编辑器页的页头与提示（P4 设计 §3.7.3）：返回我的空间、标题、保存状态（role="status"）、保存按钮；载入与保存的各种结果。
 // 编辑器本身挂在页头之外的容器里（editor.html 的 #sheet-editor），不归 React 管。
 import type { ReactNode } from 'react'
-import type { EditorPage, EditorPageLoad } from './editor-page.ts'
+import type { EditorPage, EditorPageLoad, EditorPageSession } from './editor-page.ts'
 import type { SaveProblem, SaveView } from './save-coordinator.ts'
 import { ArrowLeft } from 'lucide-react'
 import { useEffect, useSyncExternalStore } from 'react'
-import { ApiError, describeError } from '../../shared/api/index.ts'
+import { ApiError, describeError, isAuthenticationError, isCsrfTokenError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { LOGIN_PATH } from '../../shared/lib/login-path.ts'
 import { Alert, AlertDescription, Button, buttonVariants } from '../../shared/ui/index.ts'
@@ -42,7 +42,12 @@ function SaveControls({ save, onSave, apple }: { save: SaveView, onSave: () => v
   )
 }
 
-function SaveNotices({ save, onReload }: { save: SaveView, onReload: () => void }) {
+/** 登录已过期、令牌失效这类失败：会话不是 active 时由会话的提示说明，不再重复（复验 RB2） */
+function isSessionProblem(problem: SaveProblem): boolean {
+  return problem.kind === 'request' && (isAuthenticationError(problem.error) || isCsrfTokenError(problem.error))
+}
+
+function SaveNotices({ save, session, onReload }: { save: SaveView, session: EditorPageSession, onReload: () => void }) {
   const notices: ReactNode[] = []
   if (save.conflict !== undefined) {
     notices.push(
@@ -54,7 +59,7 @@ function SaveNotices({ save, onReload }: { save: SaveView, onReload: () => void 
       </Alert>,
     )
   }
-  if (save.problem !== undefined) {
+  if (save.problem !== undefined && !(session !== 'active' && isSessionProblem(save.problem))) {
     const problem = problemMessage(save.problem)
     notices.push(
       <Alert key="problem" variant={problem.destructive ? 'destructive' : 'default'}>
@@ -73,6 +78,11 @@ function SaveNotices({ save, onReload }: { save: SaveView, onReload: () => void 
     )
   }
   return notices
+}
+
+/** 向服务端确认会话失败（例如断网时按了保存）：说明原因，页面照旧等本人重新登录（复验 RB7） */
+function SessionCheckProblem({ problem }: { problem: unknown }) {
+  return problem === undefined ? null : <p>{messages.editor.sessionCheckFailed(describeError(problem).message)}</p>
 }
 
 function LoadFailure({ load }: { load: Exclude<EditorPageLoad, { kind: 'loading' | 'ready' }> }) {
@@ -140,6 +150,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
             <Alert variant="destructive">
               <AlertDescription>
                 <p>{messages.editor.signedOut}</p>
+                <SessionCheckProblem problem={view.sessionProblem} />
                 {/* 在新标签页登录：本页不离开，修改留着；那边登录之后，本页收到消息恢复保存 */}
                 <a href={LOGIN_PATH} target="_blank" rel="noopener" className={buttonVariants({ variant: 'outline', size: 'sm', className: 'mt-2' })}>
                   {messages.editor.loginInNewTab}
@@ -149,10 +160,13 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
           )}
           {view.session === 'other-user' && (
             <Alert variant="destructive">
-              <AlertDescription>{messages.editor.otherUser}</AlertDescription>
+              <AlertDescription>
+                <p>{messages.editor.otherUser}</p>
+                <SessionCheckProblem problem={view.sessionProblem} />
+              </AlertDescription>
             </Alert>
           )}
-          {save !== undefined && <SaveNotices save={save} onReload={page.reload} />}
+          {save !== undefined && <SaveNotices save={save} session={view.session} onReload={page.reload} />}
         </div>
       )}
     </>

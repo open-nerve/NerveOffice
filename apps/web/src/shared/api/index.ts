@@ -1,4 +1,4 @@
-export { ApiError, apiFetch, apiRequest, isAuthenticationError, isCsrfTokenError, isTransientError, NetworkError, readJson, ResponseFormatError, setCsrfToken } from './client.ts'
+export { ApiError, apiFetch, apiRequest, isAuthenticationError, isCsrfTokenError, isDefiniteRejection, isTransientError, NetworkError, readJson, ResponseFormatError, setCsrfToken } from './client.ts'
 export type { HttpMethod, RawRequestOptions, RequestOptions } from './client.ts'
 export { describeError } from './describe-error.ts'
 export type { ErrorDescription } from './describe-error.ts'

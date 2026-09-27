@@ -1,6 +1,6 @@
 import type { LsProject } from './pnpm-outputs.ts'
 import { describe, expect, it } from 'vitest'
-import { checkGraphComplete, checkSingletons, checkUniver, collectInstalled } from './dependency-graph.ts'
+import { checkGraphComplete, checkSingletons, checkUniver, checkUniverCatalog, collectInstalled } from './dependency-graph.ts'
 import { readFixture } from './fixtures.ts'
 import { lsOutputSchema } from './pnpm-outputs.ts'
 import { SINGLETON_PACKAGES } from './policy.ts'
@@ -58,6 +58,14 @@ describe('US-M1-11 A01 依赖图完整', () => {
 })
 
 describe('US-M1-11 A01 Univer 的版本与 Pro', () => {
+  it('pnpm 目录里的 Univer 包与版本基线一致：协调发布的包是基线版本，独立发版的包按清单；其他包不管（复验 RA6）', () => {
+    expect(checkUniverCatalog({ '@univerjs/core': '1.0.0', '@univerjs/icons': '1.43.0', 'react': '19.3.0' }, univerPolicy)).toEqual([])
+    expect(checkUniverCatalog({ '@univerjs/core': '1.0.1', '@univerjs/sheets': '1.0.0', '@univerjs/icons': '1.44.0' }, univerPolicy)).toEqual([
+      expect.objectContaining({ rule: 'deps/univer-catalog', subject: '@univerjs/core' }),
+      expect.objectContaining({ rule: 'deps/univer-catalog', subject: '@univerjs/icons' }),
+    ])
+  })
+
   it('合规：还没有引入 Univer', () => {
     expect(checkUniver(collectInstalled(project({ react: node('react', '19.3.0') })).installed, univerPolicy)).toEqual([])
   })

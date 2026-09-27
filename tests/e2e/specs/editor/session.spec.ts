@@ -25,11 +25,44 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     await expect(loginPage.getByRole('form', { name: '登录' })).toBeVisible()
     await loginThroughUi(loginPage, owner)
     await expect(loginPage.getByRole('heading', { name: '我的空间' })).toBeVisible()
-    // 登录的标签页发出消息，本页向服务端确认是同一个人之后恢复保存
+    // 登录的标签页发出消息，本页向服务端确认是同一个人之后恢复保存；"登录已过期"的失败说明随之清掉（复验 RB2）
     await expect(alert).toBeHidden()
+    await expect(page.getByRole('alert')).toHaveCount(0)
+    await expect(saveStatus(page)).toHaveText('有未保存的修改')
 
     await saveAndWait(page)
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('kept')
+  })
+
+  test('确认会话还没结束时按保存：等确认结束，确认是本人之后照常保存（复验 RB1）', async ({ page, context }) => {
+    const owner = await createUser('editor-check-pending')
+    await loginThroughApi(page, owner)
+    const documentId = await createSheetThroughApi(page)
+    await openEditor(page, documentId)
+    await typeInCell(page, 'A1', 'waited')
+    await expireSessions(owner)
+    await saveButton(page).click()
+    await expect(page.getByRole('alert').filter({ hasText: '本页的修改还在' })).toBeVisible()
+
+    // 拖住本页确认会话的请求：别的标签页登录之后，本页的确认还没回来时就按保存
+    let release: () => void = () => {}
+    const released = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await page.route('**/api/auth/session', async (route) => {
+      await released
+      await route.continue()
+    })
+    const other = await context.newPage()
+    await other.goto('/login')
+    await loginThroughUi(other, owner)
+    await expect(other.getByRole('heading', { name: '我的空间' })).toBeVisible()
+    const saved = page.waitForResponse(response => response.request().method() === 'PUT' && response.url().includes('/content?'))
+    await page.keyboard.press('ControlOrMeta+s')
+    release()
+    expect((await saved).status()).toBe(200)
+    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('waited')
   })
 
   test('别的标签页退出并换人登录：本页不能再保存；原来的人登录回来之后恢复', async ({ page, context }) => {

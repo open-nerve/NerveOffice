@@ -2,16 +2,11 @@ import { documentPagePath } from '@nerve-office/contracts'
 import { useMutation } from '@tanstack/react-query'
 import { FilePlus2 } from 'lucide-react'
 import { useRef } from 'react'
-import { ApiError, describeError } from '../../shared/api/index.ts'
+import { describeError, isDefiniteRejection } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { usePageLocation } from '../../shared/lib/page-location.ts'
 import { Alert, AlertDescription, Button } from '../../shared/ui/index.ts'
 import { createDocument } from './documents-api.ts'
-
-/** 确定没有建出来：服务端在写入之前就拒绝了（4xx）。其余（网络错误、5xx、回包读不出来）结果未知，服务端可能已经建好 */
-function definitelyRejected(error: unknown): boolean {
-  return error instanceof ApiError && error.status >= 400 && error.status < 500
-}
 
 /**
  * 新建表格（US-M1-04，P4 设计 §3.7.4）：建好之后整页打开编辑器页（另一个入口）。
@@ -24,7 +19,7 @@ export function NewSheetButton() {
     mutationFn: createDocument,
     onSuccess: document => page.assign(documentPagePath(document.id)),
     onError: (error) => {
-      if (definitelyRejected(error))
+      if (isDefiniteRejection(error))
         requestIdRef.current = undefined
     },
   })

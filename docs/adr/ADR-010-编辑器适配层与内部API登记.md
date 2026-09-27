@@ -18,14 +18,14 @@ createSheetEditor({ container, snapshot }): Promise<SheetEditor>
 //             settleFormulas、capture、setEditable、dispose
 ```
 
-- `createSheetEditor` 在工作簿创建、渲染完成、主线程与公式 Worker 的 `IMAGE()` 限制都装好之后才返回；任何一步失败（包括创建 Univer、注册插件）都按相反的顺序销毁已经创建的一切并抛出（`SheetEditorLoadError`，带原因；每创建一样就登记它的销毁，一项销毁出错不妨碍其余各项），页面显示"编辑器加载失败"。
+- `createSheetEditor` 在工作簿创建、渲染完成、主线程与公式 Worker 的 `IMAGE()` 限制都装好之后才返回；任何一步失败（包括创建 Univer、注册插件）都按相反的顺序销毁已经创建的一切并抛出（每创建一样就登记它的销毁，一项销毁出错不妨碍其余各项；加载的各个阶段失败抛 `SheetEditorLoadError`，带原因，其余意外的错误原样抛出），页面显示"编辑器加载失败"。
 - 结构：`profile/`（插件档案 `sheet@1`：插件、顺序、影响数据的配置、声明的资源、语言包、样式、菜单配置、入口守卫）、`identity/`（ADR-009）、`change-tracking/`（变更检测与公式收齐）、`image-function/`（`IMAGE()` 的限制与 Worker 的回报）、`workers/`（公式 Worker 的入口）、`internal-api/`。
 - 公式 Worker 由适配层用静态的 `new Worker(new URL(…), { type: 'module' })` 创建（同源脚本，不内联成 blob），由适配层终止。
 - 请求、保存状态与界面属于编辑器页（`features/sheet-editor`），不在适配层里；保存的状态机不依赖 Univer，用假的编辑器做单元测试。
 
 **内部 API 的登记**：
 - Facade 之外的 SDK 符号只能经 `internal-api/` 引用；`internal-api/registry.ts` 逐项写明用途、M0 的证据与回归用例，单元测试核对"导出的每一项都已登记"。本期 10 项：注入器、公式协议（mutation id 与执行选项）、`IAuthzIoService`、`LifecycleService`、`BaseFunction`、`BaseValueObject`、`ErrorType`、`ErrorValueObject`、`IFunctionService`、`IActiveDirtyManagerService`。
-- lint：受限符号清单（按包与导入名，含命名空间导入、再导出与 `import type`）与 `__getInjector` 的调用（点号访问、解构，以及这个名字的字符串与不带插值的模板字符串：方括号访问、字符串的键、`Reflect.get`），在 `internal-api/` 之外一律报错；依赖一律按包名引用，`node_modules` 里的路径报错（它绕得过按包名的限制）；变量作键、字符串拼接之类 lint 看不出来的写法由审查保证；`@univerjs/*` 只引用包入口、`/facade`、`/locale/<语言>` 与 `/lib/index.css`（深层路径绕得过按导入名的限制）；编辑器里的 `@univerjs/*` 只用静态导入。lint 有自测。
+- lint：受限符号清单（按包与导入名，含命名空间导入、再导出与 `import type`）与取注入器的写法（`__getInjector()` 与私有字段 `_injector`：点号访问、解构，以及这两个名字的字符串与不带插值的模板字符串，即方括号访问、字符串的键、`Reflect.get`），在 `internal-api/` 之外一律报错；类型里的 `import('@univerjs/…')` 在编辑器之外与编辑器里都报错，编辑器里的类型用 `import type`；依赖一律按包名引用，`node_modules` 里的路径报错（它绕得过按包名的限制）；三斜杠引用与 `import x = require()` 一律报错；变量作键、字符串拼接之类 lint 看不出来的写法由审查保证。Worker 脚本若按地址指向依赖里的文件，由 `budgets` 门禁发现（没有预算的 Worker 报违规）；`@univerjs/*` 只引用包入口、`/facade`、`/locale/<语言>` 与 `/lib/index.css`（深层路径绕得过按导入名的限制）；编辑器里的 `@univerjs/*` 只用静态导入。lint 有自测。
 
 **模块边界**：只有编辑器页的入口与 `features/sheet-editor` 能引用适配层（只经 `index.ts`）；`features/sheet-editor` 只由编辑器页的入口引用；平台的应用层、其他入口与其他功能都不引用它。门禁 `budgets` 另外兜底（平台页面的预算没有因为编辑器变大）。
 

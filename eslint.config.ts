@@ -27,13 +27,19 @@ const NO_NODE_MODULES_PATH = {
 
 // 动态导入同样受限：no-restricted-imports 只管静态导入与再导出。
 // esquery 的正则字面量里不能出现斜杠，所以用前缀判断
-const antfuRestrictedSyntax = ['TSEnumDeclaration[const=true]', 'TSExportAssignment']
+// import x = require('…') 与 import x = 命名空间.成员：受限导入与模块边界都只认 ES 模块的写法（复验 RB4）
+const antfuRestrictedSyntax = ['TSEnumDeclaration[const=true]', 'TSExportAssignment', 'TSImportEqualsDeclaration']
 const DYNAMIC_IMPORT_LITERAL_ONLY = {
   selector: 'ImportExpression[source.type!=\'Literal\']',
   message: '动态导入的路径必须是字面量，否则受限导入与模块边界都检查不到',
 }
 const DYNAMIC_UNIVER = {
   selector: 'ImportExpression[source.value=/^@univerjs(?!-pro)/]',
+  message: '只有 apps/web/src/editor/ 可以引用 @univerjs/*（规范 §1.2）',
+}
+// 类型里的 import('…')（typeof import('@univerjs/x')、import('@univerjs/x').Y）同样是引用：no-restricted-imports 只管导入语句（复验 RB4）
+const TYPE_IMPORT_UNIVER = {
+  selector: 'TSImportType[source.value=/^@univerjs/]',
   message: '只有 apps/web/src/editor/ 可以引用 @univerjs/*（规范 §1.2）',
 }
 const DYNAMIC_UNIVER_PRO = {
@@ -72,15 +78,18 @@ const UNIVER_INTERNAL_SYMBOLS = [
   },
   { name: '@univerjs/sheets', importNames: ['SetRangeValuesMutation'], message: INTERNAL_API_MESSAGE },
 ]
-// 取服务的 Univer.__getInjector()：点号访问、按标识符解构都算；这个名字的字符串（方括号访问、字符串的键解构、Reflect.get 等）
-// 与不带插值的模板字符串同样拦下（审查 B4）。对象字面量里用标识符写的同名属性不算，测试的假实现要定义它。
-// 变量作键、字符串拼接之类的写法 lint 看不出来，由代码审查保证
-const NO_GET_INJECTOR = [
-  { selector: 'MemberExpression[property.name=\'__getInjector\']', message: INTERNAL_API_MESSAGE },
-  { selector: 'ObjectPattern > Property[key.name=\'__getInjector\']', message: INTERNAL_API_MESSAGE },
-  { selector: 'Literal[value=\'__getInjector\']', message: INTERNAL_API_MESSAGE },
-  { selector: 'TemplateElement[value.cooked=\'__getInjector\']', message: INTERNAL_API_MESSAGE },
-]
+// 取服务的注入器：Univer.__getInjector()，以及 Univer、Facade 与各个对象上的私有字段 _injector（复验 RB4：
+// 方括号访问私有字段能通过类型检查，拿到的是同一个注入器）。点号访问、按标识符解构都算；这两个名字的字符串
+// （方括号访问、字符串的键解构、Reflect.get 等）与不带插值的模板字符串同样拦下（审查 B4）。
+// 对象字面量里用标识符写的同名属性不算，测试的假实现要定义它。变量作键、字符串拼接之类的写法 lint 看不出来，由代码审查保证
+// eslint-disable-next-line no-restricted-syntax -- 规则本身要写出这两个名字
+const INJECTOR_NAMES = ['__getInjector', '_injector'] as const
+const NO_GET_INJECTOR = INJECTOR_NAMES.flatMap(name => [
+  { selector: `MemberExpression[property.name='${name}']`, message: INTERNAL_API_MESSAGE },
+  { selector: `ObjectPattern > Property[key.name='${name}']`, message: INTERNAL_API_MESSAGE },
+  { selector: `Literal[value='${name}']`, message: INTERNAL_API_MESSAGE },
+  { selector: `TemplateElement[value.cooked='${name}']`, message: INTERNAL_API_MESSAGE },
+])
 // Univer 的包都用 "./*" 导出了整个目录：按导入名的限制只认包的入口，深层路径拿得到同一批符号。
 // 只允许包的入口、/facade、/locale/<语言> 与 /lib/index.css（样式）
 const UNIVER_DEEP_IMPORTS = {
@@ -92,6 +101,11 @@ const EDITOR_DYNAMIC_UNIVER = {
   selector: 'ImportExpression[source.value=/^@univerjs/]',
   message: '编辑器里的 @univerjs/* 用静态导入：内部 API 与深层路径的限制只认静态导入（P4 设计 §3.6.9）',
 }
+// 类型里的 import('…') 同样绕得过：编辑器里的 @univerjs/* 类型用 import type 引用（复验 RB4）
+const EDITOR_TYPE_IMPORT_UNIVER = {
+  selector: 'TSImportType[source.value=/^@univerjs/]',
+  message: '编辑器里的 @univerjs/* 类型用 import type 引用：内部 API 与深层路径的限制只认导入语句（复验 RB4）',
+}
 
 // 测试与测试辅助只被测试静态引用：nerve/test-code-only-in-tests 按路径拦下的是静态导入，动态导入在这里拦（复验 R3）
 const DYNAMIC_TEST_MODULES = {
@@ -99,9 +113,9 @@ const DYNAMIC_TEST_MODULES = {
   selector: String.raw`ImportExpression[source.value=/\.test(?:-support)?(?:\.[cm]?[jt]sx?)?(?:[?#].*)?$/i]`,
   message: '不要动态导入测试与测试辅助（*.test.*、*.test-support.*）：它们只被测试静态引用，不进入生产代码（审查 B17）',
 }
-const BASE_RESTRICTED_SYNTAX = [...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER, DYNAMIC_UNIVER_PRO, DYNAMIC_NODE_MODULES_PATH, DYNAMIC_TEST_MODULES, ...NO_GET_INJECTOR]
+const BASE_RESTRICTED_SYNTAX = [...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER, TYPE_IMPORT_UNIVER, DYNAMIC_UNIVER_PRO, DYNAMIC_NODE_MODULES_PATH, DYNAMIC_TEST_MODULES, ...NO_GET_INJECTOR]
 /** 编辑器适配层：可以静态导入 Univer 的包，但不能引用 Pro */
-const EDITOR_RESTRICTED_SYNTAX = [...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER_PRO, DYNAMIC_NODE_MODULES_PATH, DYNAMIC_TEST_MODULES, EDITOR_DYNAMIC_UNIVER]
+const EDITOR_RESTRICTED_SYNTAX = [...antfuRestrictedSyntax, DYNAMIC_IMPORT_LITERAL_ONLY, DYNAMIC_UNIVER_PRO, DYNAMIC_NODE_MODULES_PATH, DYNAMIC_TEST_MODULES, EDITOR_DYNAMIC_UNIVER, EDITOR_TYPE_IMPORT_UNIVER]
 
 // 前端应用的入口（entries/*/main.{ts,tsx}，ADR-008）：按顺序执行的几步，第一步关掉 zod 的 JIT。
 // zod 在创建结构时就读取 jitless，contracts 的结构在模块求值时创建，所以设置它的模块必须最先执行（审查 B1）。
@@ -348,6 +362,8 @@ export default antfu(
       'react/dom-no-dangerously-set-innerhtml': 'error',
       'no-restricted-imports': ['error', { patterns: [UNIVER_ONLY_IN_EDITOR, NO_UNIVER_PRO, NO_NODE_MODULES_PATH] }],
       'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX],
+      // 三斜杠引用（/// <reference path|types|lib>）绕得过受限导入与模块边界：类型经 import type 或 tsconfig 的 types 引用（复验 RB4）
+      'ts/triple-slash-reference': ['error', { path: 'never', types: 'never', lib: 'never' }],
     },
   },
   {

@@ -1,6 +1,6 @@
 import type { EditorPage, EditorPageLoad, EditorPageView } from './editor-page.ts'
 import type { SaveView } from './save-coordinator.ts'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { EditorChrome } from './editor-chrome.tsx'
@@ -10,7 +10,7 @@ const CLEAN: SaveView = { status: 'clean', formulasPending: false, problem: unde
 
 /** 假的编辑器页：视图由测试设定 */
 function fakePage(initial: Partial<EditorPageView> = {}) {
-  let view: EditorPageView = { load: READY, save: CLEAN, session: 'active', ...initial }
+  let view: EditorPageView = { load: READY, save: CLEAN, session: 'active', sessionProblem: undefined, ...initial }
   const listeners = new Set<() => void>()
   const page: EditorPage = {
     view: () => view,
@@ -122,6 +122,20 @@ describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
     const link = screen.getByRole('link', { name: '在新标签页中登录' })
     expect(link).toHaveAttribute('href', '/login')
     expect(link).toHaveAttribute('target', '_blank')
+  })
+
+  it('会话不是本人时，不再重复"登录已过期""请求已失效"这类失败的说明（复验 RB2）', () => {
+    renderChrome({ session: 'signed-out', save: { ...CLEAN, status: 'failed', problem: { kind: 'request', error: new ApiError(401, 'SESSION_EXPIRED', 'x') } } })
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    cleanup()
+    renderChrome({ session: 'other-user', save: { ...CLEAN, status: 'failed', canSave: false, problem: { kind: 'request', error: new ApiError(403, 'CSRF_TOKEN_INVALID', 'x') } } })
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    expect(screen.getByRole('alert')).not.toHaveTextContent('请再保存一次')
+  })
+
+  it('确认会话失败（例如断网时按了保存）：在会话的提示里说明原因（复验 RB7）', () => {
+    renderChrome({ session: 'signed-out', sessionProblem: new NetworkError('断网') })
+    expect(screen.getByRole('alert')).toHaveTextContent('暂时无法确认登录状态：网络连接失败，请检查网络后重试')
   })
 
   it('CSRF 令牌失效：提示再保存一次，不让用户刷新（刷新会丢掉修改）', () => {

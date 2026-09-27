@@ -1,5 +1,6 @@
 // 首屏 JS 的体积预算（规范 §11，P3 设计 §3.7，P4 设计 §3.9）：按 Vite 的构建清单，入口块加上它静态引用的块（不含动态加载的块），
-// 用 gzip（默认压缩级别）统计。入口在启动时就创建的 Worker 另列一项：Worker 脚本在页面加载时就下载，事实上属于首屏的传输量。
+// 用 gzip（默认压缩级别）统计。入口创建的 Worker 另列一项：公式 Worker 在编辑器启动时就创建，脚本随页面下载，事实上属于首屏的传输量。
+// 构建清单里每个入口都要有预算；入口能加载到的块（首屏与动态加载）创建的每个 Worker 都要有预算（复验 RA5）。
 // 每一项的预算在建立它的 Phase 里定下；调整要在 Phase 设计里写明原因。
 import type { Violation } from './types.ts'
 import { posix } from 'node:path'
@@ -13,7 +14,7 @@ export interface EntryBudget {
   reason: string
 }
 
-/** 入口引用的 Worker：构建清单里没有 Worker，按入口的首屏块里写着的 Worker 地址找到产物。 */
+/** 入口创建的 Worker：Vite 把 Worker 的产物列在创建它的块的 assets 里，按名字找到它（见 entryWorkers）。 */
 export interface WorkerBudget {
   /** 引用它的入口（构建清单里的键） */
   entry: string
@@ -26,9 +27,13 @@ export interface WorkerBudget {
 
 const chunkSchema = z.object({
   file: z.string(),
+  /** 页面的入口（index.html、editor.html） */
+  isEntry: z.boolean().optional(),
   imports: z.array(z.string()).optional(),
   dynamicImports: z.array(z.string()).optional(),
   css: z.array(z.string()).optional(),
+  /** 块以地址引用的产物：Worker（new Worker(new URL(…)) 与 ?worker 两种写法）、图片等 */
+  assets: z.array(z.string()).optional(),
 })
 
 export const viteManifestSchema = z.record(z.string(), chunkSchema)
@@ -69,51 +74,42 @@ export function initialFiles(manifest: ViteManifest, entry: string): string[] | 
   return chunks === undefined ? undefined : [...new Set(chunks.map(chunk => chunk.file))].sort()
 }
 
-/** 入口首屏的样式文件。入口不在清单里时返回空的清单。 */
-export function initialStyles(manifest: ViteManifest, entry: string): string[] {
-  return [...new Set((initialChunks(manifest, entry) ?? []).flatMap(chunk => chunk.css ?? []))].sort()
-}
-
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-/** Worker 里静态引用的块：import … from "./x.js"、import "./x.js"（Worker 按 ES 模块构建） */
-const STATIC_IMPORT = /\b(?:from|import)\s*["'`](\.{1,2}\/[^"'`]+\.js)["'`]/g
-
-/** 创建 Worker 的写法：new Worker(new URL("/assets/<名字>-<哈希>.js", import.meta.url))，SharedWorker 同样 */
-const WORKER_REFERENCE = /\bnew\s+(?:Shared)?Worker\(\s*new\s+URL\(\s*["'`]\/?(assets\/[^"'`]+?\.js)["'`]/g
-
-/** 这些文件里创建的 Worker 的产物（去重，按名字排序） */
-export function referencedWorkers(files: readonly string[], readText: (file: string) => string): string[] {
-  return [...new Set(files.flatMap(file => [...readText(file).matchAll(WORKER_REFERENCE)].map(match => match[1] ?? '')))].sort()
+/**
+ * 入口能加载到的块（首屏与动态加载）创建的 Worker：块的 assets 里的脚本。
+ * 构建清单不描述 Worker 自己的块，Worker 引用的块另按它的原文找（workerClosure）
+ */
+export function entryWorkers(manifest: ViteManifest, entry: string): string[] {
+  const chunks = chunksFrom(manifest, entry, true) ?? []
+  return [...new Set(chunks.flatMap(chunk => (chunk.assets ?? []).filter(file => /\.m?js$/.test(file))))].sort()
 }
 
-/** Worker 的产物与它静态引用的块 */
-export function workerClosure(worker: string, readText: (file: string) => string): string[] {
+/** Worker 里引用的块：静态导入，与 withDynamic 为真时的动态导入（Worker 按 ES 模块构建，引用写成相对地址） */
+const STATIC_IMPORT = /\b(?:from|import)\s*["'`](\.{1,2}\/[^"'`]+\.js)["'`]/g
+const DYNAMIC_IMPORT = /\bimport\(\s*["'`](\.{1,2}\/[^"'`]+\.js)["'`]\s*\)/g
+
+/** Worker 的产物与它引用的块：首屏的体积按静态引用算；withDynamic 为真时连同动态加载的块（它能加载到的全部产物） */
+export function workerClosure(worker: string, readText: (file: string) => string, withDynamic = false): string[] {
   const files = new Set<string>()
   const pending = [worker]
   for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
     if (files.has(file))
       continue
     files.add(file)
-    for (const match of readText(file).matchAll(STATIC_IMPORT))
-      pending.push(posix.join(posix.dirname(file), match[1] ?? ''))
+    const text = readText(file)
+    for (const pattern of withDynamic ? [STATIC_IMPORT, DYNAMIC_IMPORT] : [STATIC_IMPORT]) {
+      for (const match of text.matchAll(pattern))
+        pending.push(posix.join(posix.dirname(file), match[1] ?? ''))
+    }
   }
   return [...files].sort()
 }
 
 function isWorkerNamed(file: string, worker: string): boolean {
   return new RegExp(String.raw`^assets/${escapeRegExp(worker)}-[\w-]+\.js$`).test(file)
-}
-
-/**
- * 入口的首屏块里创建的、名字是 worker 的 Worker 的产物与它静态引用的块。
- * 首屏块里没有创建这个 Worker 时返回 undefined。
- */
-export function workerFiles(entryFiles: readonly string[], worker: string, readText: (file: string) => string): string[] | undefined {
-  const found = referencedWorkers(entryFiles, readText).find(file => isWorkerNamed(file, worker))
-  return found === undefined ? undefined : workerClosure(found, readText)
 }
 
 export interface BudgetResult {
@@ -145,19 +141,22 @@ export function checkBudgets(manifest: ViteManifest, budgets: readonly EntryBudg
       ? { violations: [{ rule: 'budgets/missing-entry', subject: budget.entry, detail: `构建清单里没有这个入口：${budget.label}的预算指向的入口不存在，更新预算表` }], notes: [] }
       : measure(budget.label, budget.entry, files, budget.maxGzipBytes, output))
   }
-  for (const budget of workers) {
-    const entryFiles = initialFiles(manifest, budget.entry) ?? []
-    const files = workerFiles(entryFiles, budget.worker, output.readText)
-    results.push(files === undefined
-      ? { violations: [{ rule: 'budgets/missing-worker', subject: budget.worker, detail: `${budget.entry} 的首屏块里没有引用 ${budget.worker}：${budget.label}的预算指向的 Worker 不存在，更新预算表` }], notes: [] }
-      : measure(budget.label, budget.worker, files, budget.maxGzipBytes, output))
+  // 构建清单里没有预算的入口：新增入口时要一起定下预算（复验 RA5）
+  for (const [entry, chunk] of Object.entries(manifest)) {
+    if (chunk.isEntry === true && !budgets.some(budget => budget.entry === entry))
+      results.push({ violations: [{ rule: 'budgets/unbudgeted-entry', subject: entry, detail: '构建清单里的这个入口没有首屏体积的预算：在 ENTRY_BUDGETS 登记，写明实测与原因' }], notes: [] })
   }
-  // 入口在首屏创建、却没有登记预算的 Worker：它随页面下载，同样要有预算（审查 A 路建议 B2）
-  for (const budget of budgets) {
-    const created = referencedWorkers(initialFiles(manifest, budget.entry) ?? [], output.readText)
-    for (const worker of created.filter(file => !workers.some(item => item.entry === budget.entry && isWorkerNamed(file, item.worker)))) {
-      results.push({ violations: [{ rule: 'budgets/unbudgeted-worker', subject: worker, detail: `${budget.entry} 的首屏块里创建了这个 Worker，却没有登记它的预算（WORKER_BUDGETS）` }], notes: [] })
-    }
+  for (const budget of workers) {
+    const found = entryWorkers(manifest, budget.entry).find(file => isWorkerNamed(file, budget.worker))
+    results.push(found === undefined
+      ? { violations: [{ rule: 'budgets/missing-worker', subject: budget.worker, detail: `${budget.entry} 能加载到的块没有创建 ${budget.worker}：${budget.label}的预算指向的 Worker 不存在，更新预算表` }], notes: [] }
+      : measure(budget.label, budget.worker, workerClosure(found, output.readText), budget.maxGzipBytes, output))
+  }
+  // 入口能加载到的块创建的、却没有登记预算的 Worker：它同样要下载（审查 A 路建议 B2，复验 RA5：含 ?worker 的写法与动态加载的块）
+  const entries = [...new Set([...budgets.map(budget => budget.entry), ...Object.keys(manifest).filter(entry => manifest[entry]?.isEntry === true)])]
+  for (const entry of entries) {
+    for (const worker of entryWorkers(manifest, entry).filter(file => !workers.some(item => item.entry === entry && isWorkerNamed(file, item.worker))))
+      results.push({ violations: [{ rule: 'budgets/unbudgeted-worker', subject: worker, detail: `${entry} 能加载到的块创建了这个 Worker（或以地址引用的脚本），却没有登记它的预算（WORKER_BUDGETS）` }], notes: [] })
   }
   return { violations: results.flatMap(result => result.violations), notes: results.flatMap(result => result.notes) }
 }

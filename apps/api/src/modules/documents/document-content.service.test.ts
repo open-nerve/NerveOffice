@@ -98,6 +98,16 @@ describe('DocumentContentService.save', () => {
     expect(checked).toBeLessThan(locked)
   })
 
+  it('锁下再判断一次：加锁之前授权被收回（M2），按锁下的状态为准（复验 RA7）', async () => {
+    const { store, service, document } = setup()
+    store.repositories.documents.lockById.mockImplementationOnce(async (id: string) => {
+      store.access.delete(`${ALICE}:${document.spaceId}`)
+      return store.documents.get(id)
+    })
+    expect((await rejection(service.save(ALICE, document.id, query(), upload(document.unitId), HTTP_ORIGIN))).code).toBe('NOT_FOUND')
+    expect(store.revisions).toHaveLength(1)
+  })
+
   it('判断权限之后、加锁之前文档移到了别的空间：按锁下的状态再判断一次', async () => {
     const { store, service, document } = setup()
     store.repositories.documents.lockById.mockImplementationOnce(async () => ({ ...document, spaceId: BOB_SPACE }))
@@ -111,10 +121,11 @@ describe('DocumentContentService.save', () => {
     expect((await rejection(service.save(ALICE, document.id, query(), upload(document.unitId), HTTP_ORIGIN))).code).toBe('NOT_FOUND')
   })
 
-  it('只能查看：PERMISSION_DENIED', async () => {
+  it('只能查看：PERMISSION_DENIED，而且不取锁，不让能编辑的人的保存排队（复验 RA7）', async () => {
     const { store, service, document } = setup()
     store.access.set(`${BOB}:${document.spaceId}`, 'viewer')
     expect((await rejection(service.save(BOB, document.id, query(), upload(document.unitId), HTTP_ORIGIN))).code).toBe('PERMISSION_DENIED')
+    expect(store.repositories.documents.lockById).not.toHaveBeenCalled()
   })
 
   it('unitId 不是这份文档的：SNAPSHOT_INVALID', async () => {

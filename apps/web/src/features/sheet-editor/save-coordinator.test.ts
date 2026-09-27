@@ -50,6 +50,8 @@ function fakeEditor() {
 
 interface PendingSend {
   readonly request: SaveRequest
+  /** 压缩之后的正文（假的压缩：快照的 UTF-8 字节） */
+  readonly body: Uint8Array
   resolve: (response: SaveContentResponse) => void
   reject: (error: unknown) => void
 }
@@ -57,11 +59,14 @@ interface PendingSend {
 /** 假的上传：每次调用挂起，由测试决定结果 */
 function fakeSend() {
   const calls: PendingSend[] = []
-  const send = vi.fn(async (request: SaveRequest) => new Promise<SaveContentResponse>((resolve, reject) => {
-    calls.push({ request, resolve, reject })
+  const send = vi.fn(async (request: SaveRequest, body: Uint8Array<ArrayBuffer>) => new Promise<SaveContentResponse>((resolve, reject) => {
+    calls.push({ request, body, resolve, reject })
   }))
   return { send, calls }
 }
+
+/** 假的压缩：快照的 UTF-8 字节 */
+const fakeCompress = vi.fn(async (snapshot: string) => new TextEncoder().encode(snapshot))
 
 let idSequence = 0
 function setup(overrides: { baseRevision?: number, maxSnapshotBytes?: number } = {}) {
@@ -70,8 +75,10 @@ function setup(overrides: { baseRevision?: number, maxSnapshotBytes?: number } =
   const onUnauthenticated = vi.fn()
   const onSessionStale = vi.fn()
   const reportError = vi.fn()
+  const compress = vi.fn(fakeCompress)
   const coordinator = createSaveCoordinator({
     editor,
+    compress,
     send,
     baseRevision: overrides.baseRevision ?? 1,
     clientInstanceId: ME,
@@ -84,7 +91,7 @@ function setup(overrides: { baseRevision?: number, maxSnapshotBytes?: number } =
     reportError,
     maxSnapshotBytes: overrides.maxSnapshotBytes,
   })
-  return { coordinator, editor, control, send, calls, onUnauthenticated, onSessionStale, reportError }
+  return { coordinator, editor, control, compress, send, calls, onUnauthenticated, onSessionStale, reportError }
 }
 
 /** 等保存流程走到发出请求（提交编辑、等公式收齐都是异步的） */
@@ -372,7 +379,7 @@ describe('保存失败', () => {
     await retry
   })
 
-  it('未登录或登录已过期：交给页面转到登录页', async () => {
+  it('未登录或登录已过期：交给页面向服务端确认会话', async () => {
     const { coordinator, calls, onUnauthenticated } = setup()
     const saving = coordinator.save()
     const error = new ApiError(401, 'SESSION_EXPIRED', '登录已过期')
@@ -418,6 +425,23 @@ describe('保存流程本身出错（审查 B5）', () => {
     expect(coordinator.hasUnsavedWork()).toBe(true)
   })
 
+  it('压缩时出错：同样按意外的错误处理，不当作结果未知的请求，下一次换新的 requestId（复验 RB8）', async () => {
+    const { coordinator, control, compress, send, calls, reportError } = setup()
+    control.edit('甲')
+    const failure = new Error('压缩出错')
+    compress.mockRejectedValueOnce(failure)
+    await coordinator.save()
+    expect(send).not.toHaveBeenCalled()
+    expect(coordinator.view()).toMatchObject({ status: 'failed', problem: { kind: 'unexpected', error: failure } })
+    expect(reportError).toHaveBeenCalledWith(failure)
+    const saving = coordinator.save()
+    const call = await sent(calls, 1)
+    expect(new TextDecoder().decode(call.body)).toBe(call.request.snapshot)
+    call.resolve(saved(2))
+    await saving
+    expect(coordinator.view().status).toBe('clean')
+  })
+
   it('提交编辑或等公式收齐时出错：同样', async () => {
     const { coordinator, editor, control, reportError } = setup()
     control.startCellEditing('x')
@@ -429,6 +453,32 @@ describe('保存流程本身出错（审查 B5）', () => {
     await coordinator.save()
     expect(coordinator.view().problem?.kind).toBe('unexpected')
     expect(reportError).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('会话恢复之后清掉会话类的失败（复验 RB2）', () => {
+  it.each([
+    ['登录已过期', new ApiError(401, 'SESSION_EXPIRED', '登录已过期')],
+    ['令牌失效', new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')],
+  ])('%s：会话确认有效之后说明不再成立，回到有未保存的修改', async (_case, error) => {
+    const { coordinator, control, calls } = setup()
+    control.edit('甲')
+    const saving = coordinator.save()
+    ;(await sent(calls, 1)).reject(error)
+    await saving
+    expect(coordinator.view().status).toBe('failed')
+    coordinator.dismissSessionProblem()
+    expect(coordinator.view()).toMatchObject({ status: 'dirty', problem: undefined })
+  })
+
+  it('其他失败不清掉', async () => {
+    const { coordinator, control, calls } = setup()
+    control.edit('甲')
+    const saving = coordinator.save()
+    ;(await sent(calls, 1)).reject(new NetworkError('断网'))
+    await saving
+    coordinator.dismissSessionProblem()
+    expect(coordinator.view()).toMatchObject({ status: 'failed', problem: { kind: 'request' } })
   })
 })
 

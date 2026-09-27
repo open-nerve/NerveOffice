@@ -23,8 +23,9 @@ export type EditorPageLoad
 /**
  * 本页的会话（P4 设计 §3.7.3，审查 B1）：
  * - active：本页的用户在登录中，可以保存；
- * - signed-out：登录已过期或在别处退出了。本页的修改还在，暂停保存；本页的用户在别的标签页重新登录之后恢复；
- * - other-user：别的标签页登录了另一个人。本页不能再保存（不把新会话的令牌交给这个页面）；原来的人登录回来之后恢复。
+ * - signed-out：登录已过期或在别处退出了，现在没有人登录。本页的修改还在，暂停保存；本页的用户在别的标签页重新登录之后恢复；
+ * - other-user：别的标签页登录了另一个人。本页不能再保存（不把新会话的令牌交给这个页面）；原来的人登录回来之后恢复，
+ *   另一个人也退出之后按 signed-out 处理（复验 RB7）。
  * 两种情况都不自动跳转或重新加载：本页可能有未保存的修改。
  */
 export type EditorPageSession = 'active' | 'signed-out' | 'other-user'
@@ -34,13 +35,17 @@ export interface EditorPageView {
   /** 就绪、而且能编辑时才有 */
   readonly save: SaveView | undefined
   readonly session: EditorPageSession
+  /** 最近一次向服务端确认会话失败的原因（网络错误等）；确认成功之后清掉。会话不是 active 时显示（复验 RB7） */
+  readonly sessionProblem: unknown
 }
 
 export interface EditorPageApi {
   readonly session: () => Promise<SessionResponse>
   readonly document: (documentId: string) => Promise<DocumentDetail>
   readonly content: (documentId: string) => Promise<LoadedContent>
-  readonly save: (documentId: string, request: SaveRequest) => Promise<SaveContentResponse>
+  /** 压缩快照（gzip）：本地的一步 */
+  readonly compress: (snapshot: string) => Promise<Uint8Array<ArrayBuffer>>
+  readonly save: (documentId: string, request: SaveRequest, body: Uint8Array<ArrayBuffer>) => Promise<SaveContentResponse>
 }
 
 export interface EditorPageOptions {
@@ -95,18 +100,22 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   let disposed = false
   /** 正在整页转到别处：之后的事件都不再处理 */
   let leaving = false
-  let checking = false
+  /** 进行中的会话确认（含确认期间又要求的那一轮）：按保存时等它结束（复验 RB1） */
+  let checkInFlight: Promise<void> | undefined
   let checkAgain = false
+  /** 载入时还不知道本页的用户就收到了会话消息：知道之后再确认一次（复验 RB7） */
+  let checkWhenLoaded = false
+  let sessionProblem: unknown
   const cleanups: (() => void)[] = []
   let current = computeView()
 
   function computeView(): EditorPageView {
-    return { load, save: coordinator?.view(), session }
+    return { load, save: coordinator?.view(), session, sessionProblem }
   }
 
   function update(): void {
     const next = computeView()
-    if (next.load === current.load && next.save === current.save && next.session === current.session)
+    if (next.load === current.load && next.save === current.save && next.session === current.session && next.sessionProblem === current.sessionProblem)
       return
     current = next
     for (const listener of [...listeners])
@@ -148,39 +157,49 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       coordinator?.stop()
     else
       coordinator?.resume()
+    // 本人的会话已经确认有效：之前"登录已过期""请求已失效"这类失败的说明不再成立（复验 RB2）
+    if (next === 'active')
+      coordinator?.dismissSessionProblem()
     update()
   }
 
-  /** 保存得到未登录或登录已过期：暂停保存，本页的修改留着，等本页的用户重新登录（不整页跳转，审查 B1） */
+  /** 确认会话得到未登录或登录已过期：现在没有人登录。暂停保存，本页的修改留着，等本页的用户重新登录（不整页跳转，审查 B1） */
   function signedOut(): void {
     setCsrfToken(undefined)
-    if (session === 'active')
+    if (session !== 'signed-out')
       enterSession('signed-out')
   }
 
   /**
-   * 向服务端确认现在是谁：别的标签页登录或退出了、保存得到 CSRF_TOKEN_INVALID、暂停保存时又按了保存（ADR-008）。
-   * 几次请求合并成一次，确认期间又有请求时结束后再确认一次（与平台页面相同）
+   * 向服务端确认现在是谁：别的标签页登录或退出了、保存得到未登录或 CSRF_TOKEN_INVALID、暂停保存时又按了保存（ADR-008）。
+   * 几次请求合并成一次，确认期间又有请求时结束后再确认一次（与平台页面相同）；返回的 Promise 在这些都结束之后完成（复验 RB1）
    */
   async function recheckSession(): Promise<void> {
-    if (leaving || disposed || userId === undefined)
+    if (leaving || disposed)
       return
-    if (checking) {
-      checkAgain = true
+    if (userId === undefined) {
+      checkWhenLoaded = true
       return
     }
-    checking = true
-    try {
-      for (;;) {
-        checkAgain = false
-        await checkSessionOnce()
-        if (!checkAgain || leaving || disposed)
-          break
+    if (checkInFlight !== undefined) {
+      checkAgain = true
+      return checkInFlight
+    }
+    const run = async (): Promise<void> => {
+      try {
+        for (;;) {
+          checkAgain = false
+          await checkSessionOnce()
+          if (!checkAgain || leaving || disposed)
+            break
+        }
+      }
+      finally {
+        checkInFlight = undefined
       }
     }
-    finally {
-      checking = false
-    }
+    checkInFlight = run()
+    return checkInFlight
   }
 
   async function checkSessionOnce(): Promise<void> {
@@ -189,12 +208,18 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       current = await api.session()
     }
     catch (error) {
-      // 网络等失败：状态不变，下一次保存会显示错误
-      if (!isAuthenticationError(error))
+      // 网络等失败：会话的状态不变；会话不是 active 时页面说明确认失败的原因（复验 RB7）
+      if (!isAuthenticationError(error)) {
+        if (!disposed) {
+          sessionProblem = error
+          update()
+        }
         return
+      }
     }
     if (disposed)
       return
+    sessionProblem = undefined
     if (current === undefined) {
       signedOut()
     }
@@ -219,14 +244,19 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     else {
       coordinator = createSaveCoordinator({
         editor: created,
-        send: async request => api.save(document.id, request),
+        compress: api.compress,
+        send: async (request, body) => api.save(document.id, request, body),
         baseRevision,
         clientInstanceId: options.newId(),
         newRequestId: options.newId,
-        onUnauthenticated: signedOut,
+        // 保存得到未登录：先向服务端确认（回包可能是本人在别处重新登录之前发出的那次保存的，不能据此清掉新的令牌，复验 RB7）
+        onUnauthenticated: () => void recheckSession(),
         onSessionStale: () => void recheckSession(),
         reportError: options.reportError,
       })
+      // 创建编辑器期间别的标签页换了人：保存状态机一建好就停住（复验 RB3）
+      if (session === 'other-user')
+        coordinator.stop()
       cleanups.push(coordinator.subscribe(update))
     }
     const enter = (stage: SheetEditorLifecycle): void => {
@@ -260,6 +290,9 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         session = await api.session()
         setCsrfToken(session.csrfToken)
         userId = session.user.id
+        // 确认会话的回包之前别的标签页登录或退出了：消息当时没法处理，现在补确认一次
+        if (checkWhenLoaded)
+          void recheckSession()
         ;[document, content] = await Promise.all([api.document(documentId), api.content(documentId)])
       }
       catch (error) {
@@ -291,8 +324,11 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     save: async () => {
       if (coordinator === undefined)
         return
+      // 确认会话进行中（别的标签页的消息、保存得到未登录或 CSRF 失效触发的）：等它结束，按确认的结果决定（复验 RB1）
+      if (checkInFlight !== undefined)
+        await checkInFlight
       // 暂停或停止保存时先向服务端确认一次：本页的用户可能已经在别处重新登录，广播的消息没有送到
-      if (session !== 'active')
+      else if (session !== 'active')
         await recheckSession()
       if (session === 'active')
         await coordinator.save()

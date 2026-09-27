@@ -2,11 +2,14 @@
 // 但 WebKit 的 Worker 内的违规没有任何渠道可见，所以用静态扫描兜底；范围包括 Worker 自己加载的子块。
 // JS 文件按语法树找出 eval 与 Function 的每一处引用（eval-and-function.ts，审查 B3），
 // 地址按语法树取出的字符串的值、模板字符串、正则与注释识别（DEF-016）；
-// 其他文本文件（HTML、SVG、JSON、CSS）没有语法树，按写法匹配。其余几类动态代码对所有文本文件按写法匹配。
+// 其他文本文件取出可能是地址的值再识别：HTML 与 SVG 的属性（解码字符引用之后）、样式的 url() 与字符串（还原转义之后）、
+// JSON 的字符串（addresses.ts，复验 RA4），剩下的文本按写法匹配。其余几类动态代码对所有文本文件按写法匹配。
 // 静态扫描判断不了运行时才拼出来的代码与地址（例如 setTimeout(变量)、"https:" + "//" + host 里的变量、
 // 从任意函数的 .constructor 取到的构造函数），这部分由 CSP 兜底：策略里没有 'unsafe-eval'，connect-src 只有 'self'。
+import type { LocatedValue } from './addresses.ts'
 import type { Reference, TextValue } from './eval-and-function.ts'
 import type { Violation } from './types.ts'
+import { blankOut, crossOriginAddress, cssValues, htmlValues, isRegexFlags, unescapeCss } from './addresses.ts'
 import { analyzeJavaScript, INTERPOLATION_PLACEHOLDER } from './eval-and-function.ts'
 
 export interface ArtifactFile {
@@ -111,12 +114,8 @@ function isJavaScript(path: string): boolean {
  * 模板字符串里不带花括号的插值 ${…} 算作地址的一部分，由 addressShape 分出固定的部分与运行时拼出的部分（审查 B2）。
  */
 const ABSOLUTE_URL = /\b(?:https?|wss?):(?:\\{0,2}\/){2}(?:[^\s"'`()<>\\,;{}$]|\\{1,2}\/|\$(?!\{)|\$\{[^{}]*\})+/gi
-/** 没有语法树的文本里的协议相对地址：整个字符串就是地址（前后紧挨着引号），主机是固定的域名。 */
+/** 取出值之后剩下的文本里的协议相对地址：整个字符串就是地址（前后紧挨着引号），主机是固定的域名。 */
 const PROTOCOL_RELATIVE_URL = /(?<=["'`])\/\/(?:[a-z0-9-]+\.)+[a-z]{2,}(?::\d+)?(?:[/?#][^"'`\s]*)?(?=["'`])/gi
-/** 样式里 url(…) 的协议相对地址：压缩器会去掉引号（审查 A4） */
-const CSS_URL_PROTOCOL_RELATIVE = /(?<=url\((?:\s*["'])?\s*)\/\/[^)"'\s]+/gi
-/** HTML 里不带引号的属性值（src=//…）的协议相对地址 */
-const HTML_ATTRIBUTE_PROTOCOL_RELATIVE = /(?<=\b(?:src|href|action|formaction|poster|data|background|srcset)\s*=\s*)\/\/[^\s>"'`]+/gi
 /**
  * 字符串的值里的协议相对地址（DEF-016）：值以 //主机 开头，或者模板字符串里紧跟在插值后面（`${location.protocol}//evil.example`）。
  * 主机可以是域名、不带域名后缀的名字（localhost）、IPv4 或方括号里的 IPv6，后面只能是端口、路径、查询、片段或结尾。
@@ -216,56 +215,74 @@ function allowlist(entries: readonly AllowedAddress[]) {
   }
 }
 
-/** 按浏览器的规则解析地址时用的基准：解析出的主机是它，就是相对地址，指向本站 */
-const SITE = new URL('https://site.invalid/')
-const NETWORK_SCHEMES: ReadonlySet<string> = new Set(['http:', 'https:', 'ws:', 'wss:'])
+/** 值开头的空白与控制字符（浏览器解析地址时去掉） */
+// eslint-disable-next-line no-control-regex -- 浏览器去掉开头的 C0 控制字符与空格（WHATWG URL 规范），要匹配的正是它们
+const LEADING_JUNK = /^[\u0000-\u0020]*/
 
 /**
- * 像主机的名字：带点的域名或 IPv4、localhost、方括号里的 IPv6，或者写了端口。
- * "//g"、"\\d+" 这类正则或路径的片段解析出来也有"主机"，不算（审查 A4 的误报）。
+ * 一个值里的地址（DEF-016）：JS 的字符串与模板字符串，以及 HTML 属性、样式与 JSON 里取出的值。
+ * - 写法规范的绝对地址，与插值后面紧跟 //主机 的协议相对地址（`${location.protocol}//evil.example`），出现在值的任何位置都认；
+ *   "//g" 这样的正则片段不算（只排除它，不再按"像不像主机"过滤：单标签的主机同样会被请求，复验 RA3）；
+ * - 整个值就是地址、写法却不规范的（前导空白、反斜杠、制表符、用户信息、编码过的主机、不带斜杠的 wss: 等），
+ *   按浏览器的规则解析（crossOriginAddress，审查 A4）。
+ * 压缩器把普通字符串也写成模板字符串（复验 RA2），所以两者按同一个规则。
  */
-function plausibleHost(url: URL): boolean {
-  return url.hostname.includes('.') || url.hostname === 'localhost' || url.hostname.startsWith('[') || url.port !== ''
-}
-
-/**
- * 字符串的值按浏览器的规则解析出的跨源地址（DEF-016、审查 A4）：浏览器解析地址时会去掉首尾的空白与控制字符、
- * 删掉制表符与换行、把反斜杠当作斜杠，还会解码主机里的百分号编码、把全角与非 ASCII 的主机转成 ASCII，
- * 协议之后不带斜杠（wss:evil.example）也行。只看可能是地址的写法：以协议或两个斜杠（反斜杠）开头的值。
- */
-function browserResolvedAddress(value: string): string | undefined {
-  // eslint-disable-next-line no-control-regex -- 浏览器去掉开头的 C0 控制字符与空格（WHATWG URL 规范），要匹配的正是它们
-  const candidate = value.replace(/[\t\n\r]/g, '').replace(/^[\u0000-\u0020]+/, '')
-  if (!/^(?:(?:https?|wss?):|[\\/]{2})/i.test(candidate))
-    return undefined
-  const url = URL.parse(candidate, SITE.href)
-  return url !== null && NETWORK_SCHEMES.has(url.protocol) && url.host !== SITE.host && plausibleHost(url) ? url.href : undefined
-}
-
-/**
- * JS 文件里的地址：按值识别（DEF-016）。
- * - 字符串：写法规范的绝对地址与协议相对地址按原文识别；其余可能是地址的写法按浏览器的规则解析（见 browserResolvedAddress）；
- * - 模板字符串：绝对地址，以及插值后面紧跟 //主机 的协议相对地址（`${location.protocol}//evil.example`）；
- * - 正则与注释：绝对地址。
- */
-function addressesInText(value: TextValue): string[] {
-  // 正则里的地址写成转义的形式（https:\/\/evil\.example）：去掉斜杠、点与连字符前的转义再识别
-  const text = value.kind === 'regexp' ? value.text.replace(/\\([./-])/g, '$1') : value.text
+function addressesInValue(text: string): string[] {
   const absolute = [...text.matchAll(ABSOLUTE_URL)]
-  if (value.kind === 'regexp' || value.kind === 'comment')
-    return absolute.map(match => match[0])
-  const relative = [...text.matchAll(VALUE_PROTOCOL_RELATIVE_URL)].filter((match) => {
-    // 协议相对的写法里，主机要像主机（"//g" 不是地址）
-    const url = URL.parse(match[0].replaceAll(INTERPOLATION_PLACEHOLDER, ''), SITE.href)
-    return url !== null && plausibleHost(url)
-  })
+  const relative = [...text.matchAll(VALUE_PROTOCOL_RELATIVE_URL)].filter(match => !isRegexFlags(match[0]))
   const found = [...absolute, ...relative]
-  if (value.kind === 'string' && !found.some(match => match.index === 0)) {
-    const resolved = browserResolvedAddress(text)
+  // 值的开头（或者开头的插值之后）已经认出了规范的写法，就不再按浏览器的规则重复解析
+  const head = LEADING_JUNK.exec(text)?.[0].length ?? 0
+  const starts = new Set([head, text.startsWith(INTERPOLATION_PLACEHOLDER, head) ? head + INTERPOLATION_PLACEHOLDER.length : head])
+  const addresses = found.map(match => match[0])
+  if (!found.some(match => starts.has(match.index))) {
+    const resolved = crossOriginAddress(text)
     if (resolved !== undefined)
-      return [...found.map(match => match[0]), resolved]
+      addresses.push(resolved)
   }
-  return found.map(match => match[0])
+  return addresses
+}
+
+/** JS 的正则与注释里的地址：绝对地址。正则里写成转义的形式（https:\/\/evil\.example）：去掉斜杠、点与连字符前的转义再识别 */
+function addressesInCode(value: TextValue): string[] {
+  const text = value.kind === 'regexp' ? value.text.replace(/\\([./-])/g, '$1') : value.text
+  return [...text.matchAll(ABSOLUTE_URL)].map(match => match[0])
+}
+
+/** JSON 里的全部字符串（键与值）；不是合法的 JSON 时返回 undefined */
+function jsonStrings(content: string): LocatedValue[] | undefined {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(content)
+  }
+  catch {
+    return undefined
+  }
+  const strings: string[] = []
+  const walk = (node: unknown): void => {
+    if (typeof node === 'string')
+      strings.push(node)
+    else if (Array.isArray(node))
+      node.forEach(walk)
+    else if (typeof node === 'object' && node !== null)
+      Object.entries(node).forEach(([key, value]) => walk([key, value]))
+  }
+  walk(parsed)
+  return strings.map((value) => {
+    const index = Math.max(0, content.indexOf(JSON.stringify(value)))
+    return { value, index, end: index }
+  })
+}
+
+type TextKind = 'css' | 'markup' | 'json' | 'other'
+
+function textKind(path: string): TextKind {
+  const extension = path.slice(path.lastIndexOf('.')).toLowerCase()
+  if (extension === '.css')
+    return 'css'
+  if (extension === '.html' || extension === '.svg')
+    return 'markup'
+  return extension === '.json' ? 'json' : 'other'
 }
 
 export function scanArtifacts(files: readonly ArtifactFile[], policy: ArtifactPolicy, options: ScanOptions = {}): ArtifactScan {
@@ -289,10 +306,45 @@ export function scanArtifacts(files: readonly ArtifactFile[], policy: ArtifactPo
       return
     violations.push({ rule: 'artifacts/address', subject: file.path, detail: `${address ?? shape.host} 不在允许清单里（主机 ${shape.host}）：${context(file.content, index)}` })
   }
-  const noteRawAddresses = (file: ArtifactFile): void => {
-    for (const pattern of [ABSOLUTE_URL, PROTOCOL_RELATIVE_URL, CSS_URL_PROTOCOL_RELATIVE, HTML_ATTRIBUTE_PROTOCOL_RELATIVE]) {
-      for (const match of file.content.matchAll(pattern))
+  /** 按写法匹配：text 默认是整个文件，取出值之后是剩下的文本 */
+  const noteRawAddresses = (file: ArtifactFile, text = file.content): void => {
+    for (const pattern of [ABSOLUTE_URL, PROTOCOL_RELATIVE_URL]) {
+      for (const match of text.matchAll(pattern))
         noteAddress(file, match[0], match.index)
+    }
+  }
+  const noteValues = (file: ArtifactFile, values: readonly LocatedValue[]): void => {
+    for (const item of values) {
+      for (const address of addressesInValue(item.value))
+        noteAddress(file, address, item.index)
+    }
+  }
+  /** 没有语法树的文本文件：先取出可能是地址的值按浏览器的规则识别，剩下的文本按写法匹配 */
+  const noteTextAddresses = (file: ArtifactFile): void => {
+    switch (textKind(file.path)) {
+      case 'css': {
+        const css = unescapeCss(file.content)
+        const values = cssValues(css)
+        noteValues(file, values)
+        noteRawAddresses(file, blankOut(css, values))
+        return
+      }
+      case 'markup': {
+        const values = htmlValues(file.content)
+        noteValues(file, values)
+        noteRawAddresses(file, blankOut(file.content, values))
+        return
+      }
+      case 'json': {
+        const strings = jsonStrings(file.content)
+        if (strings === undefined)
+          noteRawAddresses(file)
+        else
+          noteValues(file, strings)
+        return
+      }
+      case 'other':
+        noteRawAddresses(file)
     }
   }
 
@@ -326,7 +378,8 @@ export function scanArtifacts(files: readonly ArtifactFile[], policy: ArtifactPo
             reportDynamicCode(USAGE_LABELS[reference.usage](reference.name), reference.index)
         }
         for (const value of outcome.texts) {
-          for (const address of addressesInText(value))
+          const addresses = value.kind === 'string' || value.kind === 'template' ? addressesInValue(value.text) : addressesInCode(value)
+          for (const address of addresses)
             noteAddress(file, address, value.index)
         }
       }
@@ -337,7 +390,7 @@ export function scanArtifacts(files: readonly ArtifactFile[], policy: ArtifactPo
           reportDynamicCode(name, match.index)
       }
       probes += [...file.content.matchAll(GLOBAL_THIS_PROBE)].length
-      noteRawAddresses(file)
+      noteTextAddresses(file)
     }
     for (const [name, pattern] of Object.entries(OTHER_DYNAMIC_CODE)) {
       for (const match of file.content.matchAll(pattern))

@@ -134,6 +134,14 @@ export function isCsrfTokenError(error: unknown): error is ApiError {
   return error instanceof ApiError && error.code === 'CSRF_TOKEN_INVALID'
 }
 
+/**
+ * 请求确定没有生效：服务端在写入之前就拒绝了（4xx）。其余的失败（网络、5xx、回包读不出来）结果未知，服务端可能已经处理，
+ * 重试要沿用同一个 requestId（新建表格、保存）
+ */
+export function isDefiniteRejection(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.status >= 400 && error.status < 500
+}
+
 /** 可以自动重试的失败：网络问题与服务端的临时错误。其他错误重试也没用。 */
 export function isTransientError(error: unknown): boolean {
   return error instanceof NetworkError || (error instanceof ApiError && error.status >= 500)

@@ -68,6 +68,27 @@ test.describe('US-M1-09 M5 之前没有图片与超链接的入口', () => {
     expect(cellOf(snapshot, 'A5')?.p).toBeUndefined()
   })
 
+  test('键入邮箱、粘贴纯文本的网址：同样被识别为链接，地址是原文（邮箱写成 mailto://，粘贴的不补协议；DEF-021）', async ({ page }) => {
+    await loginThroughApi(page, await createUser('guards-autolink-paste'))
+    const documentId = await createSheetThroughApi(page)
+    await openEditor(page, documentId, 'steady')
+    await typeInCell(page, 'A1', 'user@example.com')
+    for (const [cell, text] of [['C1', 'example.org'], ['C2', 'https://paste.example/p?q=1']] as const) {
+      await selectCell(page, cell)
+      await page.evaluate((plain) => {
+        const data = new DataTransfer()
+        data.setData('text/plain', plain)
+        const target = document.activeElement ?? document.body
+        target.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }))
+      }, text)
+    }
+    await saveAndWait(page)
+    const { snapshot } = await savedContent(page, documentId)
+    expect(linksIn(cellOf(snapshot, 'A1'))).toEqual(['mailto://user@example.com'])
+    expect(linksIn(cellOf(snapshot, 'C1'))).toEqual(['example.org'])
+    expect(linksIn(cellOf(snapshot, 'C2'))).toEqual(['https://paste.example/p?q=1'])
+  })
+
   test('粘贴图片文件：不产生图片', async ({ page }) => {
     await loginThroughApi(page, await createUser('guards-paste'))
     const documentId = await createSheetThroughApi(page)

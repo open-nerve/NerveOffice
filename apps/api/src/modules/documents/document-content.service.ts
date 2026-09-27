@@ -50,8 +50,9 @@ export class DocumentContentService {
 
   /**
    * 保存（P4 设计 §3.5.1）：先做与文档无关的基本校验，再在一个事务里依次
-   * 判断权限 → 锁住文档行 → 按 requestId 幂等 → 核对 unitId → 按基准修订号条件写入。
-   * 先判断权限再加锁：没有权限的请求不在别人的文档上取锁，不让它的保存排队，响应的时序也与不存在的文档相同（审查 A2）。
+   * 判断能否编辑 → 锁住文档行、锁下再判断一次 → 按 requestId 幂等 → 核对 unitId → 按基准修订号条件写入。
+   * 先判断能否编辑再加锁：没有权限与只能查看的请求都不在文档上取锁，不让能编辑的人的保存排队，
+   * 没有权限时响应的时序也与不存在的文档相同（审查 A2、复验 RA7）。
    * 先锁文档再查幂等：同一个请求的两次并发重试，后到的一方拿到锁时前一方已经提交，按幂等返回原结果，而不是误报冲突。
    */
   async save(userId: string, id: string, query: SaveContentQuery, upload: GzipBody, origin: AuditOrigin): Promise<SaveContentResponse> {
@@ -97,15 +98,17 @@ export class DocumentContentService {
   }
 
   /**
-   * 判断能否编辑，再锁住文档行并返回锁下的最新状态（修订号等）。
-   * 加锁之前文档可能已经移到别的空间（M2）：锁下的空间与判断权限时不同，就按锁下的状态再判断一次。
+   * 判断能否编辑，再锁住文档行，锁下再判断一次，返回锁下的最新状态（修订号等）。
+   * 锁下再判断：加锁之前文档可能已经移到别的空间，或者授权被收回了（M2），都按锁下的状态为准（复验 RA7）。
    */
   private async lockEditable(userId: string, id: string, transaction: Transaction): Promise<DocumentRow> {
-    const checked = await requireAccess(this.policy, userId, await this.documents.findById(id, transaction), transaction)
-    const locked = await this.documents.lockById(id, transaction)
-    const { document, access } = locked?.spaceId === checked.document.spaceId
-      ? { document: locked, access: checked.access }
-      : await requireAccess(this.policy, userId, locked, transaction)
+    await this.requireEditable(userId, await this.documents.findById(id, transaction), transaction)
+    return this.requireEditable(userId, await this.documents.lockById(id, transaction), transaction)
+  }
+
+  /** 能编辑就返回文档；别人的与不存在的都是 NOT_FOUND，只能查看是 PERMISSION_DENIED。 */
+  private async requireEditable(userId: string, row: DocumentRow | undefined, transaction: Transaction): Promise<DocumentRow> {
+    const { document, access } = await requireAccess(this.policy, userId, row, transaction)
     if (!canEdit(access))
       throw new AppError('PERMISSION_DENIED', '只能查看这份文档，不能保存')
     return document

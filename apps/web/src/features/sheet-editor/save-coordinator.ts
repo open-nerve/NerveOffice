@@ -1,7 +1,7 @@
 // 保存的状态机（P4 设计 §3.7.2）：输入是用户的保存、编辑器的修改与接口的结果，不依赖 Univer 与界面，用假的编辑器与假的接口做单元测试。
 import type { RevisionConflictDetails, SaveContentResponse } from '@nerve-office/contracts'
 import { revisionConflictDetailsSchema, SNAPSHOT_MAX_RAW_BYTES } from '@nerve-office/contracts'
-import { ApiError, isAuthenticationError, isCsrfTokenError } from '../../shared/api/index.ts'
+import { ApiError, isAuthenticationError, isCsrfTokenError, isDefiniteRejection } from '../../shared/api/index.ts'
 
 /** 保存用到的编辑器能力（SheetEditor 的子集）。 */
 export interface SaveEditor {
@@ -23,8 +23,11 @@ export interface SaveRequest {
   readonly snapshot: string
 }
 
-/** 压缩并上传；失败时抛出请求层的错误（ApiError、NetworkError、ResponseFormatError）。 */
-export type SendSave = (request: SaveRequest) => Promise<SaveContentResponse>
+/** 压缩快照（gzip）：本地的一步，出错是意外的错误（复验 RB8） */
+export type CompressSnapshot = (snapshot: string) => Promise<Uint8Array<ArrayBuffer>>
+
+/** 上传压缩后的快照；失败时抛出请求层的错误（ApiError、NetworkError、ResponseFormatError），结果按"确定被拒"或"未知"归类。 */
+export type SendSave = (request: SaveRequest, body: Uint8Array<ArrayBuffer>) => Promise<SaveContentResponse>
 
 /** 已保存到云端、有未保存的修改、保存中、版本冲突、保存失败。 */
 export type SaveStatus = 'clean' | 'dirty' | 'saving' | 'conflict' | 'failed'
@@ -53,13 +56,14 @@ export interface SaveView {
 
 export interface SaveCoordinatorOptions {
   readonly editor: SaveEditor
+  readonly compress: CompressSnapshot
   readonly send: SendSave
   /** 打开时内容的修订号（ETag） */
   readonly baseRevision: number
   /** 本页这次加载的标识 */
   readonly clientInstanceId: string
   readonly newRequestId: () => string
-  /** 保存得到未登录或登录已过期：页面整页转到登录页 */
+  /** 保存得到未登录或登录已过期：页面向服务端确认会话（不整页跳转，本页的修改留着） */
   readonly onUnauthenticated: (error: ApiError) => void
   /** CSRF 令牌不对：页面向服务端确认会话 */
   readonly onSessionStale: () => void
@@ -82,6 +86,8 @@ export interface SaveCoordinator {
   readonly stop: () => void
   /** 恢复保存（原来的人又登录回来了） */
   readonly resume: () => void
+  /** 会话已经确认有效：清掉登录已过期、令牌失效这类失败的说明，它们已不再成立（复验 RB2） */
+  readonly dismissSessionProblem: () => void
   readonly dispose: () => void
 }
 
@@ -107,11 +113,6 @@ function conflictDetails(error: unknown): RevisionConflictDetails | null | undef
     return undefined
   const parsed = revisionConflictDetailsSchema.safeParse(error.details)
   return parsed.success ? parsed.data : null
-}
-
-/** 请求确定没有提交：服务端在写入之前就拒绝了（4xx，冲突也是）。其余情况（网络、5xx、回包读不出来）结果未知 */
-function definitelyRejected(error: unknown): boolean {
-  return error instanceof ApiError && error.status >= 400 && error.status < 500
 }
 
 export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoordinator {
@@ -183,7 +184,8 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
   }
 
   function fail(error: unknown, request: SaveRequest): void {
-    if (definitelyRejected(error)) {
+    // 确定没有提交（4xx，冲突也是）；其余情况（网络、5xx、回包读不出来）结果未知
+    if (isDefiniteRejection(error)) {
       unconfirmed.delete(request.requestId)
       if (retryable?.requestId === request.requestId)
         retryable = undefined
@@ -215,13 +217,15 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
       problem = { kind: 'too-large' }
       return
     }
+    // 压缩是本地的一步：出错按意外的错误处理（save 里接住），不当作结果未知的请求（复验 RB8）
+    const body = await options.compress(snapshot)
     let request = prepare(snapshot, localSeq)
     // 自己追自己只自动重发一次（P4 设计 §3.5.2）
     let rebased = false
     for (;;) {
       unconfirmed.set(request.requestId, { localSeq: request.localSeq, settled })
       try {
-        const result = await send(request)
+        const result = await send(request, body)
         confirm(request.localSeq, result.revision, settled)
         return
       }
@@ -274,6 +278,12 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
     resume: () => {
       stopped = false
       update()
+    },
+    dismissSessionProblem: () => {
+      if (problem?.kind === 'request' && (isAuthenticationError(problem.error) || isCsrfTokenError(problem.error))) {
+        problem = undefined
+        update()
+      }
     },
     dispose: () => {
       unsubscribeEditor()
