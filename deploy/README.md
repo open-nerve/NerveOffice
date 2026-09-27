@@ -57,6 +57,17 @@ docker build -f deploy/Dockerfile -t nerve-office:test \
 
 容器 E2E（`pnpm test:e2e:container`）自己构建镜像、生成随机密码、挑选空闲端口，用单独的编排项目名起一套环境，跑完删除，不影响手工起的这一套。默认只跑 Chromium，`--browsers chromium,webkit` 可以多选；`--` 之后的参数交给 Playwright（例如 `pnpm test:e2e:container -- --project restart --no-deps` 只跑重启用例）。各容器的日志留在 `tests/e2e/test-results/container/`。
 
+### 升级
+
+顺序是 备份 → 迁移 → 换镜像：
+
+1. 备份数据库，例如 `docker compose -f deploy/test/compose.yaml exec -T db pg_dump -U postgres -Fc nerve_office > nerve_office.dump`（正式环境的备份与恢复在 M7）；
+2. 构建新镜像（用新的标签），改 `.env` 里的 `NERVE_IMAGE`；
+3. `docker compose -f deploy/test/compose.yaml up -d`：compose 先停掉旧的应用（SIGTERM，排空在途请求再退出）并按新镜像重建 `migrate` 与 `app`，然后执行迁移（只向前、带锁，没有新迁移时说明"已是最新"），成功结束之后才启动新的应用。迁移期间服务不可用，单实例的测试环境可以接受；
+4. 核对：经 HTTPS 的存活探针通过，应用日志里有"数据库已就绪，库结构版本一致"。
+
+迁移只向前，回滚要从备份恢复。
+
 ### 变量（`deploy/test/.env`）
 
 | 变量 | 说明 |
@@ -100,11 +111,11 @@ NERVE_DB_OWNER_PASSWORD=… NERVE_DB_APP_PASSWORD=… psql -v ON_ERROR_STOP=1 \
 - **请求体上限不低于 6 MB**：快照的上限是 5 MiB，加上查询串与余量。
 - **到应用的空闲连接早于 5 秒回收**：应用的空闲连接超时是 5 秒（`NERVE_HTTP_KEEP_ALIVE_TIMEOUT_MS`），代理复用应用已经关掉的连接会得到 502。
 - **就绪探针不对外**：`/api/health/ready` 的 503 说明里有迁移名，只给编排与监控用；对外的存活探针是 `/api/health/live`。
-- **按地址限速（建议）**：应用对等待密码哈希的请求有上限，超出时返回 503 与 `Retry-After`，不会无限排队；在反向代理上对登录接口按客户端地址限速，可以把洪水挡在更前面。Caddy 的标准构建没有限速模块，这一条随 M7 的运维手册落实。
+- **按地址限速（建议）**：应用对等待密码哈希的请求有上限，超出时返回 503 与 `Retry-After`，不会无限排队；在反向代理上对登录接口按客户端地址限速，可以把洪水挡在更前面。Caddy 的标准构建没有限速模块，这一条随 M7 的运维手册落实（DEF-023）。
 
 ## 已知限制
 
-- 单实例：滚动发布、退出前的摘流量（preStop）与多实例在 M7 随部署包决定。数据库比应用新（先迁移、后换镜像的间隙）时就绪探针失败，单实例的测试环境不受影响。
+- 单实例：升级时先停应用、再迁移、再启动，期间服务不可用。不停机的滚动发布、退出前的摘流量（preStop）与多实例在 M7 随部署包决定（DEF-024）：滚动发布时，已经迁移的库比还在运行的旧实例新，旧实例的就绪探针会失败。
 - 测试环境的证书来自 Caddy 自带的 CA，浏览器不信任。
 - 镜像在本机与 CI 上构建，没有发布到镜像仓库。
 
