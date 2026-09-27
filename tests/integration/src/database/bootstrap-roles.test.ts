@@ -11,7 +11,7 @@ import zlib from 'node:zlib'
 import { readExpectedMigrations, runMigrations } from '@nerve-office/api'
 import { documentDetailSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
 import pg from 'pg'
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
@@ -82,10 +82,20 @@ async function first<T extends Record<string, unknown>>(client: pg.Client, query
 describe('初始化脚本', () => {
   it('出错即停；建角色之前关掉这个会话的语句日志：明文的密码不进服务器日志（审查 A2）', () => {
     const firstRole = SCRIPT.search(/^CREATE ROLE/m)
-    for (const line of ['\\set ON_ERROR_STOP on', 'SET log_statement = \'none\';', 'SET log_min_error_statement = \'panic\';', 'SET log_min_duration_statement = -1;'])
+    const settings = [
+      'SET log_statement = \'none\';',
+      'SET log_min_error_statement = \'panic\';',
+      'SET log_min_duration_statement = -1;',
+      // 抽样与统计视图同样会记下语句原文（复验 RA1）
+      'SET log_min_duration_sample = -1;',
+      'SET log_transaction_sample_rate = 0;',
+      'SET pg_stat_statements.track_utility = off;',
+    ]
+    expect(SCRIPT.indexOf('\\set ON_ERROR_STOP on')).toBeGreaterThanOrEqual(0)
+    for (const line of settings) {
       expect(SCRIPT.indexOf(line), line).toBeGreaterThanOrEqual(0)
-    for (const line of ['SET log_statement', 'SET log_min_error_statement', 'SET log_min_duration_statement'])
       expect(SCRIPT.indexOf(line), line).toBeLessThan(firstRole)
+    }
   })
 
   it('库属于所有者，编码与排序规则与开发库相同；只有两个角色能连接', async () => {
@@ -157,9 +167,9 @@ describe('以不同的角色运行应用', () => {
   it('应用角色：就绪，启动自检不告警；登录、新建、保存、读取、退出都正常', async () => {
     const app = await start(appUrl)
     expect((await fetch(`${app.baseUrl}/api/health/ready`)).status).toBe(200)
-    const messages = app.logs.entries().map(entry => entry.msg)
-    expect(messages).toContain(RESTRICTED)
-    expect(messages).not.toContain(BYPASS_WARNING)
+    // 启动自检最多等 2 秒，超过时启动之后才记：等到结果再断言（复验 RA4）
+    await vi.waitFor(() => expect(app.logs.entries().map(entry => entry.msg)).toContain(RESTRICTED), { timeout: 10_000 })
+    expect(app.logs.entries().map(entry => entry.msg)).not.toContain(BYPASS_WARNING)
 
     const alice = await createAccount(asApp, { username: 'alice' })
     const session = await login(app.baseUrl, 'alice', alice.password)
@@ -182,11 +192,11 @@ describe('以不同的角色运行应用', () => {
 
   it('所有者：审计表是它的，启动自检告警', async () => {
     const app = await start(ownerUrl)
-    expect(app.logs.entries()).toContainEqual(expect.objectContaining({ level: 'warn', msg: BYPASS_WARNING, role: roles.owner, superuser: false, ownsAuditTable: true }))
+    await vi.waitFor(() => expect(app.logs.entries()).toContainEqual(expect.objectContaining({ level: 'warn', msg: BYPASS_WARNING, role: roles.owner, superuser: false, ownsAuditTable: true })), { timeout: 10_000 })
   })
 
   it('超级用户（开发库与本机测试的账号）：启动自检告警', async () => {
     const app = await start(databaseUrl(name))
-    expect(app.logs.entries()).toContainEqual(expect.objectContaining({ level: 'warn', msg: BYPASS_WARNING, superuser: true }))
+    await vi.waitFor(() => expect(app.logs.entries()).toContainEqual(expect.objectContaining({ level: 'warn', msg: BYPASS_WARNING, superuser: true })), { timeout: 10_000 })
   })
 })

@@ -24,15 +24,18 @@ export interface ImageReference {
 }
 
 const DIGEST = /@sha256:[0-9a-f]{64}$/
-const DOCKERFILE_ARG = /^\s*ARG\s+(\w+)(?:=(\S*))?/i
+const DOCKERFILE_ARG = /^\s*ARG\s(.*)$/i
 const DOCKERFILE_FROM = /^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?/i
-/** COPY、ADD 的 --from=，RUN 的 --mount=…,from= */
-const FROM_OPTION = /--from=([^\s,]+)|--mount=\S*?\bfrom=([^\s,]+)/gi
+/** COPY、ADD、RUN 的选项部分（指令之后、以 -- 开头的那几项）：--from 与 --mount 的 from 只在这里找（复验 RA2） */
+const INSTRUCTION_OPTIONS = /^\s*(?:COPY|ADD|RUN)\s+((?:--\S+\s+)*)/i
 const VARIABLE = /\$\{(\w+)\}|\$(\w+)/g
-const YAML_IMAGE = /^\s*(?:-\s*)?image:\s*['"]?([^'"\s#]+)/
+/** 值可以是 GitHub 的表达式 ${{ … }}（带空格），其余到空白、引号或 # 为止 */
+const YAML_IMAGE = /^\s*(?:-\s*)?image:\s*['"]?(\$\{\{[^}]*\}\}|[^'"\s#]+)/
 /** 工作流的 container: 简写（值直接是镜像）；写成映射时由 image: 覆盖 */
-const WORKFLOW_CONTAINER = /^\s*container:\s*['"]?([^'"\s#{]+)/
+const WORKFLOW_CONTAINER = /^\s*container:\s*['"]?(\$\{\{[^}]*\}\}|[^'"\s#{]+)/
 const WORKFLOW_DOCKER_ACTION = /^\s*(?:-\s*)?uses:\s*['"]?docker:\/\/([^'"\s#]+)/
+/** compose 的变量带默认值：${X:-镜像}、${X-镜像}，检查默认值 */
+const COMPOSE_DEFAULT = /^\$\{\w+:?-([^}]+)\}$/
 const PNPM_VERSION = /\bpnpm@(\S+)/g
 /** npm 全局安装 pnpm 却没写版本：`npm install -g pnpm`、`npm i --global pnpm`（后面不是 @） */
 const PNPM_WITHOUT_VERSION = /\bnpm\s+(?:install|i|add)\b[^;&|]*?\spnpm(?![@\w-])/
@@ -41,11 +44,16 @@ function isDockerfile(path: string): boolean {
   return /(?:^|\/)Dockerfile(?:\.[\w-]+)?$/.test(path)
 }
 
-/** Dockerfile 的指令：行尾的反斜杠续行拼成一条，行号取第一行 */
+/**
+ * Dockerfile 的指令：行尾的反斜杠续行拼成一条，行号取第一行。续行中间的注释行与空行不算（Docker 同样跳过它们，
+ * 指令照样接着下一行，复验 RA2）
+ */
 function instructions(content: string): { line: number, text: string }[] {
   const result: { line: number, text: string }[] = []
   let pending: { line: number, text: string } | undefined
   content.split('\n').forEach((text, index) => {
+    if (pending !== undefined && /^\s*(?:#.*)?$/.test(text))
+      return
     const joined = pending === undefined ? { line: index + 1, text } : { line: pending.line, text: `${pending.text} ${text}` }
     if (/\\\s*$/.test(text)) {
       pending = { line: joined.line, text: joined.text.replace(/\\\s*$/, '') }
@@ -68,51 +76,75 @@ function expand(text: string, args: ReadonlyMap<string, string>): string {
   return text.replace(VARIABLE, (whole, braced: string | undefined, bare: string | undefined) => args.get(braced ?? bare ?? '') ?? whole)
 }
 
+/** ARG 指令声明的变量（一行可以声明几个）：名字 → 默认值（没有默认值时是 undefined） */
+function declaredArgs(declaration: string): [string, string | undefined][] {
+  return declaration.trim().split(/\s+/).flatMap((item) => {
+    const match = /^(\w+)(?:=(.*))?$/.exec(item)
+    return match?.[1] === undefined ? [] : [[match[1], match[2] === undefined ? undefined : unquote(match[2])] as [string, string | undefined]]
+  })
+}
+
+/**
+ * FROM 只能用第一个 FROM 之前声明的全局 ARG；阶段里的 COPY、RUN 用这个阶段声明的 ARG
+ * （不带默认值的声明沿用全局的默认值），与 Docker 的作用域一致（复验 RA2）
+ */
 function dockerfileReferences(file: TextFile): ImageReference[] {
   const references: ImageReference[] = []
-  const args = new Map<string, string>()
+  const globalArgs = new Map<string, string>()
+  let stageArgs: Map<string, string> | undefined
   const stages = new Set<string>()
   const external = (reference: string): boolean => !stages.has(reference.toLowerCase()) && !/^\d+$/.test(reference)
   for (const { line, text } of instructions(file.content)) {
     const arg = DOCKERFILE_ARG.exec(text)
     if (arg?.[1] !== undefined) {
-      if (arg[2] !== undefined)
-        args.set(arg[1], unquote(arg[2]))
+      for (const [name, value] of declaredArgs(arg[1])) {
+        const inherited = value ?? globalArgs.get(name)
+        const scope = stageArgs ?? globalArgs
+        if (inherited !== undefined)
+          scope.set(name, inherited)
+      }
       continue
     }
     const from = DOCKERFILE_FROM.exec(text)
     if (from?.[1] !== undefined) {
-      const reference = expand(from[1], args)
+      const reference = expand(from[1], globalArgs)
       if (external(reference) && reference.toLowerCase() !== 'scratch')
         references.push({ path: file.path, line, reference })
       if (from[2] !== undefined)
         stages.add(from[2].toLowerCase())
+      stageArgs = new Map()
       continue
     }
-    if (!/^\s*(?:COPY|ADD|RUN)\b/i.test(text))
-      continue
-    for (const option of text.matchAll(FROM_OPTION)) {
-      const reference = expand(option[1] ?? option[2] ?? '', args)
-      if (external(reference))
+    const options = INSTRUCTION_OPTIONS.exec(text)?.[1] ?? ''
+    for (const option of options.split(/\s+/)) {
+      const source = /^--from=([^\s,]+)$/i.exec(option)?.[1] ?? /^--mount=\S*?\bfrom=([^\s,]+)/i.exec(option)?.[1]
+      const reference = source === undefined ? undefined : expand(source, stageArgs ?? globalArgs)
+      if (reference !== undefined && external(reference))
         references.push({ path: file.path, line, reference })
     }
   }
   return references
 }
 
+/**
+ * YAML 里的镜像引用。整个是 compose 变量的（测试环境的 image: ${NERVE_IMAGE:?…}）不算：那是用本仓库的 Dockerfile 构建、
+ * 运行时指定的镜像；带默认值的（${X:-postgres:18}）检查默认值；GitHub 的表达式（${{ matrix.image }}）展不开，
+ * 原样交给检查，按违规处理（复验 RA2）
+ */
 function yamlReferences(file: TextFile): ImageReference[] {
   const references: ImageReference[] = []
   file.content.split('\n').forEach((text, index) => {
-    const reference = YAML_IMAGE.exec(text)?.[1] ?? WORKFLOW_CONTAINER.exec(text)?.[1] ?? WORKFLOW_DOCKER_ACTION.exec(text)?.[1]
-    if (reference !== undefined && !reference.startsWith('$'))
+    const value = YAML_IMAGE.exec(text)?.[1] ?? WORKFLOW_CONTAINER.exec(text)?.[1] ?? WORKFLOW_DOCKER_ACTION.exec(text)?.[1]
+    const reference = value === undefined || value.startsWith('${{') || !value.startsWith('$') ? value : COMPOSE_DEFAULT.exec(value)?.[1]
+    if (reference !== undefined)
       references.push({ path: file.path, line: index + 1, reference })
   })
   return references
 }
 
 /**
- * 文件里引用的镜像（见文件开头）。YAML 里整个引用是变量的（例如测试环境的 image: ${NERVE_IMAGE}）不算：
- * 那是用本仓库的 Dockerfile 构建、运行时指定的镜像；其余带变量的引用（postgres:${TAG}、没有默认值的 FROM ${BASE}）锁不住，按违规处理。
+ * 文件里引用的镜像（见文件开头）。带着展不开的变量的引用（postgres:${TAG}、只有局部 ARG 的 FROM、GitHub 的表达式）
+ * 锁不住，按违规处理；YAML 里整个是 compose 变量、没有默认值的除外（见 yamlReferences）。
  */
 export function imageReferences(file: TextFile): ImageReference[] {
   return isDockerfile(file.path) ? dockerfileReferences(file) : yamlReferences(file)

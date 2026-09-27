@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { missingTexts, readLicenseText, readPackage, renderServerLicenses, serverPackages, uniquePackages } from './server-licenses.ts'
+import { missingTexts, readLicenseText, readPackage, renderServerLicenses, serverLicenseViolations, serverPackages, uniquePackages } from './server-licenses.ts'
 
 const created: string[] = []
 
@@ -62,5 +62,21 @@ describe('US-M1-10 服务端的第三方许可清单（P5 设计 §3.2.1）', ()
     const text = renderServerLicenses([{ name: 'pg', version: '8.23.0', license: 'MIT', text: 'The MIT License' }])
     expect(text).toContain('# 第三方许可（服务端）')
     expect(text).toContain('## pg 8.23.0（MIT）\n\nThe MIT License')
+  })
+})
+
+describe('licenses 门禁对服务端许可清单的核对（审查 A10、复验 RA3）', () => {
+  const withText = { name: 'a', version: '1.0.0', license: 'MIT', text: 'MIT License' }
+  const withoutText = { name: 'b', version: '2.0.0', license: 'MIT', text: null }
+
+  it('依赖图完整、每个包都有许可正文：没有违规', () => {
+    expect(serverLicenseViolations({ unexpanded: [] }, [withText])).toEqual([])
+  })
+
+  it('依赖图里有没展开的实例、有包缺许可正文：分别报出', () => {
+    expect(serverLicenseViolations({ unexpanded: ['node_modules/.pnpm/c@3.0.0'] }, [withText, withoutText]).map(violation => [violation.rule, violation.subject])).toEqual([
+      ['licenses/server-graph', 'node_modules/.pnpm/c@3.0.0'],
+      ['licenses/server-text', 'b@2.0.0'],
+    ])
   })
 })

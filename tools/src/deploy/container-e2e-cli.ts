@@ -9,7 +9,7 @@
 // 6. 无论成败，把各容器的日志收集到 tests/e2e/test-results/container/，然后 down -v、去掉这次的镜像标签、删除临时目录。
 import type { ChildProcess } from 'node:child_process'
 import type { AddressInfo } from 'node:net'
-import type { ContainerE2eSettings } from './container-e2e.ts'
+import type { ContainerE2eSettings, ProbeResponse } from './container-e2e.ts'
 import { execFile, spawn, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -48,8 +48,14 @@ const SERVICES = ['db', 'migrate', 'app', 'caddy'] as const
 /** 等经 Caddy 的存活探针通过的时限 */
 const LIVE_TIMEOUT_MS = 120_000
 
+/** Playwright 的命令行：直接用 Node 启动，不经 pnpm（pnpm 收到信号就退出，不转给它启动的脚本，复验 RB1） */
+const PLAYWRIGHT_CLI = join(REPO_ROOT, 'tests/e2e/node_modules/@playwright/test/cli.js')
+
 let interrupted = false
-/** 正在运行的 Playwright：只给本进程发信号时（不是整个进程组）转给它，让它先结束，再按正常的路径清理（审查 B6） */
+/**
+ * 正在运行的 Playwright：它在自己的进程组里，终端的 Ctrl+C 不会直接到它；本进程收到的每个信号都转给它一次：
+ * 第一次让它正常结束，第二次强制结束。等它退出之后再按正常的路径收集日志、清理（审查 B6）
+ */
 let playwright: ChildProcess | undefined
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
@@ -116,17 +122,21 @@ function isAlive(pid: number): boolean {
   }
 }
 
-/** 经 HTTPS 发一个请求，返回状态码；连不上时是 0。测试环境的证书来自 Caddy 自带的 CA，不校验 */
-async function httpsStatus(url: string, options: { method?: string, headers?: Record<string, string>, body?: string } = {}): Promise<number> {
+/** 经 HTTPS 发一个请求，返回状态码与响应头；连不上时状态码是 0。测试环境的证书来自 Caddy 自带的 CA，不校验 */
+async function httpsRequest(url: string, options: { method?: string, headers?: Record<string, string>, body?: string } = {}): Promise<ProbeResponse> {
   return new Promise((resolve) => {
     const request = https.request(url, { method: options.method ?? 'GET', headers: options.headers, rejectUnauthorized: false, timeout: 5_000 }, (response) => {
       response.resume()
-      response.on('end', () => resolve(response.statusCode ?? 0))
+      response.on('end', () => resolve({ status: response.statusCode ?? 0, headers: response.headers }))
     })
     request.on('timeout', () => request.destroy())
-    request.on('error', () => resolve(0))
+    request.on('error', () => resolve({ status: 0, headers: {} }))
     request.end(options.body)
   })
+}
+
+async function httpsStatus(url: string, options: { method?: string, headers?: Record<string, string>, body?: string } = {}): Promise<number> {
+  return (await httpsRequest(url, options)).status
 }
 
 async function waitUntilLive(settings: ContainerE2eSettings): Promise<boolean> {
@@ -159,12 +169,12 @@ function removeStaleRuns(): void {
     rmSync(join(tmpdir(), directory), { recursive: true, force: true })
 }
 
-/** 经 Caddy 请求各个探针：存活探针转发，就绪探针的各种写法都被屏蔽（审查 A1） */
+/** 经 Caddy 请求各个探针：存活探针转发，就绪探针的各种写法都被屏蔽；响应都不带 Server 与 Via（审查 A1、复验 RB3） */
 async function checkProxiedProbes(settings: ContainerE2eSettings): Promise<string[]> {
-  const statuses = new Map<string, number>()
+  const responses = new Map<string, ProbeResponse>()
   for (const { path } of PROXIED_PROBES)
-    statuses.set(path, await httpsStatus(`${publicOrigin(settings)}${path}`))
-  return proxiedProbeProblems(statuses)
+    responses.set(path, await httpsRequest(`${publicOrigin(settings)}${path}`))
+  return proxiedProbeProblems(responses)
 }
 
 /**
@@ -197,7 +207,8 @@ async function checkClientAddresses(settings: ContainerE2eSettings): Promise<str
   const caddy = capture('docker', composeArgs(settings, 'ps', '-q', 'caddy')).stdout.trim()
   const proxy = capture('docker', ['inspect', '-f', '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}', caddy]).stdout.trim().split(/\s+/).filter(address => address !== '')
   log(`客户端地址：本机 ${addresses.get(ids.host) ?? '（没有）'}，编排网络里 ${addresses.get(ids.network) ?? '（没有）'}，本机带伪造的转发头 ${addresses.get(ids.forged) ?? '（没有）'}，Caddy ${proxy.join('、')}`)
-  const published = publishedPortProblems(capture('docker', composeArgs(settings, 'port', 'app', '3000')).stdout)
+  const port = capture('docker', composeArgs(settings, 'port', 'app', '3000'))
+  const published = publishedPortProblems(port.status, port.stdout)
   return [...problems, ...published, ...clientAddressProblems({ host: addresses.get(ids.host), network: addresses.get(ids.network), forged: addresses.get(ids.forged), proxy })]
 }
 
@@ -245,10 +256,14 @@ async function runE2e(settings: ContainerE2eSettings, browsers: readonly string[
   }, MEMORY_SAMPLE_INTERVAL_MS)
   try {
     const status = await new Promise<number>((resolve) => {
-      const child = spawn('pnpm', ['--filter', '@nerve-office/e2e', 'run', 'test', ...playwrightArgs], {
-        cwd: REPO_ROOT,
-        env: { ...process.env, ...playwrightEnvironment(settings, browsers) },
-        stdio: 'inherit',
+      // 与 E2E 包的 test 脚本相同：按 @nerve-office/source 条件解析工作区的包（经环境变量，工作进程也继承）
+      const nodeOptions = `${process.env.NODE_OPTIONS ?? ''} --conditions=@nerve-office/source`.trim()
+      const child = spawn(process.execPath, [PLAYWRIGHT_CLI, 'test', ...playwrightArgs], {
+        cwd: join(REPO_ROOT, 'tests/e2e'),
+        env: { ...process.env, ...playwrightEnvironment(settings, browsers), NODE_OPTIONS: nodeOptions },
+        stdio: ['ignore', 'inherit', 'inherit'],
+        // 自己的进程组：终端的 Ctrl+C 只到本进程，由本进程转一次（见文件开头）
+        detached: true,
       })
       playwright = child
       child.once('error', () => resolve(1))

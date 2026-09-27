@@ -114,7 +114,7 @@ jobs:
       - name: 安装浏览器（Chromium）及系统依赖
         run: pnpm --filter @nerve-office/e2e exec playwright install --with-deps chromium
 
-      # 构建镜像（linux/amd64）、起测试环境、核对两个客户端地址、跑 E2E，打印镜像体积与应用容器的内存
+      # 构建镜像（linux/amd64）、起测试环境、核对部署配置（经代理的探针、客户端地址、应用的端口）、跑 E2E，打印镜像体积与应用容器的内存
       - name: pnpm test:e2e:container
         run: pnpm test:e2e:container
 

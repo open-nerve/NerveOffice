@@ -2,6 +2,7 @@
 // 写成随镜像分发的 THIRD-PARTY-LICENSES-server.md。前端的清单由 web 构建的插件生成（apps/web/build/third-party-licenses.ts），
 // 两边认许可文件的规则相同。包里没有许可文件时到补充目录（apps/api/third-party-licenses/<包名>/）里找，仍然没有就失败，不静默跳过。
 import type { CollectedGraph, InstalledPackage } from '../gates/dependency-graph.ts'
+import type { Violation } from '../gates/types.ts'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { z } from 'zod'
@@ -64,6 +65,25 @@ export function serverPackages(graph: CollectedGraph, supplementDir: string, isI
 /** 没有许可正文的包（名称@版本） */
 export function missingTexts(packages: readonly LicensedPackage[]): string[] {
   return packages.filter(item => item.text === null).map(item => `${item.name}@${item.version}`)
+}
+
+/**
+ * licenses 门禁对服务端许可清单的核对（审查 A10）：依赖图完整（有没展开的实例，清单会漏掉它下面的包），
+ * 每个包都有许可正文。与镜像构建时生成清单的检查相同，提前在门禁里报出来
+ */
+export function serverLicenseViolations(graph: Pick<CollectedGraph, 'unexpanded'>, packages: readonly LicensedPackage[]): Violation[] {
+  return [
+    ...graph.unexpanded.map(subject => ({
+      rule: 'licenses/server-graph',
+      subject,
+      detail: '服务端的生产依赖图没有展开这个实例，许可清单会漏掉它下面的包（镜像构建时同样失败）',
+    })),
+    ...missingTexts(packages).map(subject => ({
+      rule: 'licenses/server-text',
+      subject,
+      detail: '服务端依赖的发布包里没有许可文件，镜像的服务端许可清单生成不了：把正文补进 apps/api/third-party-licenses/<包名>/LICENSE，并在那里的 README 写明出处',
+    })),
+  ]
 }
 
 export function renderServerLicenses(packages: readonly LicensedPackage[]): string {

@@ -1,5 +1,6 @@
 // 容器 E2E（P5 设计 §3.6）里可以单独测试的部分：编排的参数与变量文件、交给 Playwright 的环境变量、
-// 两个客户端地址的核对（DEF-014）、遗留编排项目的识别、docker 输出的解析。执行的步骤在 container-e2e-cli.ts。
+// 部署配置的核对（经代理的探针、客户端地址 DEF-014、应用的端口不发布）、遗留编排项目的识别、docker 输出的解析。
+// 执行的步骤在 container-e2e-cli.ts。
 import { Buffer } from 'node:buffer'
 import { randomBytes } from 'node:crypto'
 
@@ -171,10 +172,12 @@ export function clientAddressProblems(observed: ObservedAddresses): string[] {
 }
 
 /**
- * docker compose port app 3000 的输出：有"主机:端口"说明应用的端口发布到了主机，代理之外的客户端能直连应用、伪造转发头。
- * 没有发布时 compose 输出 ":0"
+ * docker compose port app 3000 的结果：有"主机:端口"说明应用的端口发布到了主机，代理之外的客户端能直连应用、伪造转发头。
+ * 没有发布时 compose 输出 ":0"；命令本身失败（退出码不是 0）时查不出来，同样算问题（复验 RB4）
  */
-export function publishedPortProblems(output: string): string[] {
+export function publishedPortProblems(status: number | null, output: string): string[] {
+  if (status !== 0)
+    return [`查不到应用的端口有没有发布（docker compose port 的退出码 ${String(status)}）`]
   const published = output.split('\n').map(line => line.trim()).filter(line => /:[1-9]\d*$/.test(line))
   return published.length === 0 ? [] : [`应用的端口发布到了主机（${published.join('、')}）：只能让代理连到应用`]
 }
@@ -190,11 +193,28 @@ export const PROXIED_PROBES: readonly { readonly path: string, readonly status: 
   { path: '/api/HEALTH/READY', status: 404 },
 ]
 
-/** 经代理请求各个探针得到的状态码（连不上是 0）→ 与期望不符的说明 */
-export function proxiedProbeProblems(statuses: ReadonlyMap<string, number>): string[] {
+export interface ProbeResponse {
+  /** 连不上时是 0 */
+  readonly status: number
+  /** 响应头，名字小写 */
+  readonly headers: Readonly<Record<string, string | string[] | undefined>>
+}
+
+/**
+ * 经代理请求各个探针的响应 → 与期望不符的说明。代理转发的响应本来就不带 Server，代理自己生成的响应
+ * （屏蔽就绪探针的 404）才会带：借它核对代理去掉了 Server 与 Via（复验 RB3）
+ */
+export function proxiedProbeProblems(responses: ReadonlyMap<string, ProbeResponse>): string[] {
   return PROXIED_PROBES.flatMap(({ path, status }) => {
-    const actual = statuses.get(path)
-    return actual === status ? [] : [`经代理请求 ${path} 得到 ${actual === undefined || actual === 0 ? '（没有响应）' : actual}，期望 ${status}`]
+    const response = responses.get(path)
+    if (response === undefined || response.status === 0)
+      return [`经代理请求 ${path} 没有响应，期望 ${status}`]
+    const problems = response.status === status ? [] : [`经代理请求 ${path} 得到 ${response.status}，期望 ${status}`]
+    for (const header of ['server', 'via']) {
+      if (response.headers[header] !== undefined)
+        problems.push(`经代理请求 ${path} 的响应带着 ${header} 头：不能暴露代理的软件`)
+    }
+    return problems
   })
 }
 

@@ -66,7 +66,8 @@ export default defineConfig({
   },
   projects: [
     ...browsers.map(name => ({ name, use: BROWSERS[name], testIgnore: RESTART_SPECS })),
-    // 只跑重启用例：--project restart --no-deps。命令行的 --grep 不作用于依赖的浏览器项目：它们照样全部执行
+    // 只跑重启用例：--project restart --no-deps。命令行的 --grep 不作用于依赖的浏览器项目：它们照样全部执行。
+    // 重复运行要加 --workers 1：--repeat-each 的副本会分到几个工作进程并行，互相强制结束同一个后端（复验 RB5）
     // 用例的时限放宽到 2 分钟：强制结束后等后端重新可用最多 1 分钟（support/api-process.ts），慢的机器上还要重新打开编辑器
     { name: 'restart', use: { browserName: 'chromium' }, testMatch: RESTART_SPECS, dependencies: browsers, timeout: 120_000 },
   ],

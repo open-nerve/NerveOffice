@@ -8,7 +8,7 @@ import { join, relative } from 'node:path'
 import process from 'node:process'
 import { gzipSync } from 'node:zlib'
 import { z } from 'zod'
-import { API_PACKAGE, missingTexts, SERVER_LICENSE_SUPPLEMENT, serverPackages } from '../deploy/server-licenses.ts'
+import { API_PACKAGE, SERVER_LICENSE_SUPPLEMENT, serverLicenseViolations, serverPackages } from '../deploy/server-licenses.ts'
 import { commandJson, listFiles, packageName, readJson, readText, readWorkspaceConfig, REPO_ROOT, workspacePackageDirs } from '../shared/repo.ts'
 import { checkStories, parseDesignStoryIds, parseRegistry, testsFromPlaywrightList, testsFromVitestList } from '../stories/stories.ts'
 import { checkFileTypes, checkTestOnlyArtifacts, classifyArtifact, scanArtifacts } from './artifacts.ts'
@@ -143,18 +143,7 @@ function licenses(): GateOutcome {
   // 服务端的许可清单随镜像生成（P5 设计 §3.2.1）：这里提前核对依赖图完整、每个包都有许可正文，不必等到构建镜像才失败（审查 A10）
   const serverGraph = collectInstalled(lsOutputSchema.parse(commandJson('pnpm', ['ls', '--prod', '--json', '--depth', 'Infinity', '--filter', API_PACKAGE])))
   const server = serverPackages(serverGraph, SERVER_LICENSE_SUPPLEMENT)
-  const serverMissing = [
-    ...serverGraph.unexpanded.map(subject => ({
-      rule: 'licenses/server-graph',
-      subject,
-      detail: '服务端的生产依赖图没有展开这个实例，许可清单会漏掉它下面的包（镜像构建时同样失败）',
-    })),
-    ...missingTexts(server.packages).map(subject => ({
-      rule: 'licenses/server-text',
-      subject,
-      detail: '服务端依赖的发布包里没有许可文件，镜像的服务端许可清单生成不了：把正文补进 apps/api/third-party-licenses/<包名>/LICENSE，并在那里的 README 写明出处',
-    })),
-  ]
+  const serverMissing = serverLicenseViolations(serverGraph, server.packages)
   return {
     name: 'licenses',
     title: '许可',

@@ -17,11 +17,15 @@
 \getenv owner_password NERVE_DB_OWNER_PASSWORD
 \getenv app_password NERVE_DB_APP_PASSWORD
 
--- 密码随 CREATE ROLE 以明文发给服务器：这个会话不记语句日志，出错时也不记语句原文，免得明文的密码进服务器日志
--- （只作用于 \connect 之前的这个会话，之后的语句不含密码；需要超级用户）
+-- 密码随 CREATE ROLE 以明文发给服务器：这个会话不记语句日志（含按时长与按事务的抽样），出错时也不记语句原文，
+-- pg_stat_statements 不记这类语句，免得明文的密码进服务器日志与统计视图
+-- （只作用于 \connect 之前的这个会话，之后的语句不含密码；需要超级用户；没装 pg_stat_statements 时最后一行照常执行）
 SET log_statement = 'none';
 SET log_min_error_statement = 'panic';
 SET log_min_duration_statement = -1;
+SET log_min_duration_sample = -1;
+SET log_transaction_sample_rate = 0;
+SET pg_stat_statements.track_utility = off;
 
 CREATE ROLE :"owner_role" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD :'owner_password';
 CREATE ROLE :"app_role" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD :'app_password';

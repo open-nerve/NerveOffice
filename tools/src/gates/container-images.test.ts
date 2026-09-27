@@ -65,6 +65,25 @@ describe('US-M1-11 A01 容器镜像按摘要锁定（P5 设计 §3.2）', () => 
     expect(rules([{ path, content }])).toContain(rule)
   })
 
+  it.each([
+    // 复验 RA2：下面这几种写法第一轮修复之后仍然漏掉或者误报
+    ['续行中间夹着注释行与空行，没写版本的 pnpm 照样拦下', 'deploy/Dockerfile', `FROM node:24.21.0-bookworm-slim@${DIGEST_A}\nRUN npm i -g \\\n# 注释\n\n    pnpm\n`, 'pins/pnpm-image'],
+    ['compose 的变量带默认值：检查默认值', 'deploy/test/compose.yaml', `    image: \${X:-postgres:18}\n`, 'pins/image-digest'],
+    ['工作流的 container: 用表达式给出', '.github/workflows/ci.yml', `    container: \${{ matrix.image }}\n`, 'pins/image-variable'],
+    ['工作流的 image: 用表达式给出', '.github/workflows/ci.yml', `        image: \${{ matrix.image }}\n`, 'pins/image-variable'],
+    ['一行声明几个 ARG：第二个照样展开', 'deploy/Dockerfile', `ARG A=1 BASE=node:22-slim\nFROM \${BASE}\n`, 'pins/image-digest'],
+    ['FROM 用的是阶段里声明的 ARG（Docker 只认全局的）', 'deploy/Dockerfile', `FROM node:24.21.0-bookworm-slim@${DIGEST_A} AS base\nARG BASE=node:22-slim\nFROM \${BASE}\n`, 'pins/image-variable'],
+  ])('违规（续）：%s', (_case, path, content, rule) => {
+    expect(rules([{ path, content }])).toContain(rule)
+  })
+
+  it('不算违规：RUN 的命令本身的参数里有 --from=；阶段里不带默认值的 ARG 沿用全局的默认值（复验 RA2）', () => {
+    expect(rules([{
+      path: 'deploy/Dockerfile',
+      content: `ARG NODE_IMAGE=node:24.21.0-bookworm-slim@${DIGEST_A}\nFROM \${NODE_IMAGE} AS base\nRUN tool --from=2024-01-01 && echo --from=x\nFROM base AS copy\nARG NODE_IMAGE\nCOPY --from=\${NODE_IMAGE} /usr/local/bin/node /node\n`,
+    }])).toEqual([])
+  })
+
   it('不算违规：前面定义的阶段、按序号引用的阶段、scratch、全局安装 pnpm 写明了版本、npm 安装名字以 pnpm 开头的别的包', () => {
     expect(rules([{
       path: 'deploy/Dockerfile',

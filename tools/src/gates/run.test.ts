@@ -27,15 +27,17 @@ describe('US-M1-11 门禁的快捷脚本', () => {
   })
 })
 
-let dist: string | undefined
+/** 这个用例建的产物目录：一个用例里可以建好几个，结束时全部删掉（只记最后一个会漏删前面的，复验时发现临时目录里积了几百个） */
+const dists: string[] = []
 
 afterEach(() => {
-  if (dist !== undefined)
+  for (const dist of dists.splice(0))
     rmSync(dist, { recursive: true, force: true })
 })
 
 function writeDist(files: Record<string, string>): string {
-  dist = mkdtempSync(join(tmpdir(), 'nerve-dist-'))
+  const dist = mkdtempSync(join(tmpdir(), 'nerve-dist-'))
+  dists.push(dist)
   for (const [path, content] of Object.entries(files)) {
     mkdirSync(join(dist, dirname(path)), { recursive: true })
     writeFileSync(join(dist, path), content)

@@ -114,16 +114,16 @@ describe('客户端地址的核对（DEF-014）', () => {
       .toEqual(['本机那次登录失败没有审计记录', '编排网络里那次登录失败没有审计记录', '带着伪造的 X-Forwarded-For 那次登录失败没有审计记录'])
   })
 
-  it('应用的端口发布到了主机（审查 B5）', () => {
-    expect(publishedPortProblems('')).toEqual([])
-    expect(publishedPortProblems(':0\n')).toEqual([])
-    expect(publishedPortProblems('no port 3000/tcp for container nerve-office-e2e-1-app-1: \n')).toEqual([])
-    expect(publishedPortProblems('0.0.0.0:32768\n[::]:32768\n')).toEqual(['应用的端口发布到了主机（0.0.0.0:32768、[::]:32768）：只能让代理连到应用'])
+  it('应用的端口发布到了主机（审查 B5）；命令失败时查不出来，同样算问题（复验 RB4）', () => {
+    expect(publishedPortProblems(0, ':0\n')).toEqual([])
+    expect(publishedPortProblems(0, '0.0.0.0:32768\n[::]:32768\n')).toEqual(['应用的端口发布到了主机（0.0.0.0:32768、[::]:32768）：只能让代理连到应用'])
+    expect(publishedPortProblems(1, '')).toEqual(['查不到应用的端口有没有发布（docker compose port 的退出码 1）'])
+    expect(publishedPortProblems(null, '')).toEqual(['查不到应用的端口有没有发布（docker compose port 的退出码 null）'])
   })
 })
 
 describe('经代理访问探针（审查 A1）', () => {
-  const allAsExpected = new Map(PROXIED_PROBES.map(({ path, status }) => [path, status]))
+  const allAsExpected = new Map(PROXIED_PROBES.map(({ path, status }) => [path, { status, headers: {} }]))
 
   it('存活探针转发；就绪探针的几种写法（末尾斜杠、大小写）都被屏蔽', () => {
     expect(PROXIED_PROBES.map(probe => probe.path)).toEqual(['/api/health/live', '/api/health/ready', '/api/health/ready/', '/api/HEALTH/READY'])
@@ -131,11 +131,18 @@ describe('经代理访问探针（审查 A1）', () => {
   })
 
   it('只屏蔽了精确的地址：带末尾斜杠的就绪探针漏到应用', () => {
-    expect(proxiedProbeProblems(new Map([...allAsExpected, ['/api/health/ready/', 200]]))).toEqual(['经代理请求 /api/health/ready/ 得到 200，期望 404'])
+    expect(proxiedProbeProblems(new Map([...allAsExpected, ['/api/health/ready/', { status: 200, headers: {} }]]))).toEqual(['经代理请求 /api/health/ready/ 得到 200，期望 404'])
+  })
+
+  it('代理自己生成的响应带着 Server 或 Via（复验 RB3）', () => {
+    expect(proxiedProbeProblems(new Map([...allAsExpected, ['/api/health/ready', { status: 404, headers: { server: 'Caddy', via: '1.1 Caddy' } }]]))).toEqual([
+      '经代理请求 /api/health/ready 的响应带着 server 头：不能暴露代理的软件',
+      '经代理请求 /api/health/ready 的响应带着 via 头：不能暴露代理的软件',
+    ])
   })
 
   it('连不上与没有结果都算问题', () => {
-    expect(proxiedProbeProblems(new Map([...allAsExpected, ['/api/health/live', 0]]))).toEqual(['经代理请求 /api/health/live 得到 （没有响应），期望 200'])
+    expect(proxiedProbeProblems(new Map([...allAsExpected, ['/api/health/live', { status: 0, headers: {} }]]))).toEqual(['经代理请求 /api/health/live 没有响应，期望 200'])
     expect(proxiedProbeProblems(new Map())).toHaveLength(4)
   })
 })
