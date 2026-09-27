@@ -28,26 +28,31 @@ async function openNewSheet(page: Page, prefix: string): Promise<string> {
 }
 
 /**
- * 计算进行中再改一次的场景（P4 探针 (f) 的公式，个数减半）：D1:D1000 是 1…1000，A1:A300 是
- * =SUMPRODUCT($D$1:$D$1000*(ROW($D$1:$D$1000)>i))+i。一轮的计算时间随个数增长（复验实测 200 个时 Chromium 约 0.34 秒、
- * WebKit 约 0.2 秒），键入下一格约 0.1–0.15 秒：用 300 个，改完 D1 接着改 D2 时第一轮还在计算，WebKit 上也留出余量；
- * 两轮合计在公式收齐的 3 秒上限之内。"排队"的判断另有确定的用例（单元格还在编辑时按保存）
+ * 计算进行中再改一次的场景（P4 探针 (f) 的公式）：E1:E1000 是 1…1000，D1 是 1、D2 是 2；A1:A300 是
+ * =SUMPRODUCT($E$1:$E$1000*(ROW($E$1:$E$1000)>i))*$D$1+i，B1 是 =$D$2*2。
+ * 改 D1 引起的第一轮重：300 个公式各算 1000 格（复验实测 200 个时本机 Chromium 约 0.34 秒、WebKit 约 0.2 秒），
+ * 接着点选 D2 改（约 0.1–0.15 秒），第二处落在第一轮里；改 D2 引起的第二轮只算 B1。按保存之后要等的是第一轮剩下的部分加上很轻的第二轮，
+ * CI 上慢几倍的 WebKit 也在公式收齐的 3 秒上限之内（原来两处都让 300 个公式重算，CI 的 WebKit 上两轮合计超过了上限）。
+ * 保存不等排队的第二轮时，B1 多半是旧值（检查时第二轮已经开始的话，仍会等它算完）：这条用例看的是两处修改之后的结果，
+ * "排队"的判断由"单元格还在编辑时按保存"的用例确定地锁住
  */
 const SLOW_FORMULA_COUNT = 300
-const D_VALUES = Array.from({ length: 1000 }, (_, row) => row + 1)
+const E_VALUES = Array.from({ length: 1000 }, (_, row) => row + 1)
 
-/** 按定义算出第 i 个公式（0 起）的值 */
-function slowFormulaValue(d: readonly number[], i: number): number {
-  return d.reduce((sum, value, row) => sum + (row + 1 > i ? value : 0), 0) + i
+/** 按定义算出第 i 个重公式（0 起）的值：d1 是 D1 的值 */
+function slowFormulaValue(d1: number, i: number): number {
+  return d1 * E_VALUES.reduce((sum, value, row) => sum + (row + 1 > i ? value : 0), 0) + i
 }
 
 function sheetWithSlowFormulas(unitId: string): string {
   const cellData: Record<number, Record<number, { f?: string, v: number, t: number }>> = {}
-  D_VALUES.forEach((value, row) => {
-    cellData[row] = { 3: { v: value, t: 2 } }
+  E_VALUES.forEach((value, row) => {
+    cellData[row] = { 4: { v: value, t: 2 } }
   })
+  cellData[0] = { ...cellData[0], 3: { v: 1, t: 2 }, 1: { f: '=$D$2*2', v: 4, t: 2 } }
+  cellData[1] = { ...cellData[1], 3: { v: 2, t: 2 } }
   for (let i = 0; i < SLOW_FORMULA_COUNT; i += 1)
-    cellData[i] = { ...cellData[i], 0: { f: `=SUMPRODUCT($D$1:$D$1000*(ROW($D$1:$D$1000)>${i}))+${i}`, v: slowFormulaValue(D_VALUES, i), t: 2 } }
+    cellData[i] = { ...cellData[i], 0: { f: `=SUMPRODUCT($E$1:$E$1000*(ROW($E$1:$E$1000)>${i}))*$D$1+${i}`, v: slowFormulaValue(1, i), t: 2 } }
   const sheet = SHEET_TEMPLATE.sheets['sheet-1']
   return JSON.stringify({ ...SHEET_TEMPLATE, id: unitId, sheets: { 'sheet-1': { ...sheet, cellData } } })
 }
@@ -185,9 +190,10 @@ test.describe('US-M1-05 保存到云端，看到真实的保存状态', () => {
     await expect(page.getByText('公式结果尚未保存，请稍后再保存一次')).toHaveCount(0)
 
     const saved = (await savedContent(page, documentId)).snapshot
-    const d = [1000, 2000, ...D_VALUES.slice(2)]
     const values = Array.from({ length: SLOW_FORMULA_COUNT }, (_, row) => saved.sheets['sheet-1']?.cellData[row]?.[0]?.v)
-    expect(values).toEqual(Array.from({ length: SLOW_FORMULA_COUNT }, (_, i) => slowFormulaValue(d, i)))
+    expect(values).toEqual(Array.from({ length: SLOW_FORMULA_COUNT }, (_, i) => slowFormulaValue(1000, i)))
+    // 第二轮（排队的那一轮）的结果
+    expect(cellOf(saved, 'B1')?.v).toBe(4000)
   })
 
   test('跨表引用：改了另一张表的依赖立即保存，缓存值一致', async ({ page }) => {

@@ -470,21 +470,22 @@ describe('US-M1-11 A01 产物扫描：外部地址与关键字', () => {
     ['样式的 url()', (n: number) => 'a{b:url(http://www.w3.org/2000/svg)}'.repeat(n), 'assets/x.css'],
     ['SVG 样式里的 url()', (n: number) => `<svg><style>${'a{b:url(http://www.w3.org/2000/svg)}'.repeat(n)}</style></svg>`, 'assets/a.svg'],
   ])('不是平方级（复验 TA7）：%s', (_case, build, path) => {
-    // 取两次里快的一次：机器忙时的垃圾回收不算进去
+    // 取三次里最快的一次：机器忙时的垃圾回收与调度不算进去
     const elapsed = (n: number): number => {
       const content = build(n)
-      const times = [0, 1].map(() => {
+      const times = [0, 1, 2].map(() => {
         const start = performance.now()
         expect(scan(content, path).violations).toEqual([])
         return performance.now() - start
       })
       return Math.min(...times)
     }
-    elapsed(2000)
+    elapsed(1000)
     // 数量乘 4，耗时远小于乘 16
-    const small = Math.max(elapsed(8000), 5)
-    expect(elapsed(32000) / small).toBeLessThan(10)
-  })
+    const small = Math.max(elapsed(4000), 5)
+    expect(elapsed(16000) / small).toBeLessThan(10)
+    // 计时的用例：CI 的机器慢、又开着覆盖率，给足时间
+  }, 60_000)
 
   it('真实的允许清单：每一项都是合法的绝对地址，写明来源与用途，没有重复；前缀至少写到路径的第一段', () => {
     const { allowedAddresses } = ARTIFACT_POLICY
