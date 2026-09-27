@@ -11,7 +11,7 @@
     "US-M1-07": { "phase": "P4", "status": "active", "verification": ["e2e"] },
     "US-M1-08": { "phase": "P3", "status": "active", "verification": ["e2e"] },
     "US-M1-09": { "phase": "P3", "status": "active", "verification": ["e2e"] },
-    "US-M1-10": { "phase": "P5", "status": "planned", "verification": ["e2e"] },
+    "US-M1-10": { "phase": "P5", "status": "active", "verification": ["e2e"] },
     "US-M1-11": { "phase": "P1", "status": "active", "verification": ["self-test"] }
   }
 }

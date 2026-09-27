@@ -1,5 +1,7 @@
 // CSP 与安全头（P3，US-M1-09）：所有响应都带定稿的策略；页面与 Worker 两个作用域的阳性对照中，违规的请求被拦截。
 // 表格编辑器（含公式 Worker）在策略下正常工作的部分在 specs/editor/csp.spec.ts（P4）。
+// 这里的用例都要打开测试构建里的探针页（csp-probe.html），标签 @test-build：测生产镜像的外部模式按标签排除（P5 设计 §3.6），
+// 生产镜像下的策略与安全头由 specs/editor/csp.spec.ts 覆盖。
 import type { Page } from '@playwright/test'
 import type { LocalServer } from '../../support/servers.ts'
 import { expect, test } from '../../support/fixtures.ts'
@@ -27,7 +29,7 @@ async function probeResult(page: Page, url: string): Promise<unknown> {
   return JSON.parse(await page.locator('#result').innerText()) as unknown
 }
 
-test.describe('US-M1-09 CSP 与安全头', () => {
+test.describe('US-M1-09 CSP 与安全头', { tag: '@test-build' }, () => {
   test('HTML、脚本、Worker 脚本、接口与错误响应都带定稿的 CSP 与安全头', async ({ request }) => {
     const index = await request.get('/')
     const script = /src="(\/assets\/index-[\w-]+\.js)"/.exec(await index.text())?.[1]
