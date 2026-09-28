@@ -3,7 +3,7 @@ import type { Buffer } from 'node:buffer'
 import type { TimeCursor } from '../../shared/time-cursor.ts'
 import type { Database, Transaction } from '../database/index.ts'
 import { Inject, Injectable } from '@nestjs/common'
-import { and, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
 import { authInvitations } from '../../db/schema/auth/index.ts'
 import { DATABASE, executorOf, keysetPosition } from '../database/index.ts'
 
@@ -88,6 +88,13 @@ export class InvitationsRepository {
   async findById(id: string): Promise<InvitationRecord | undefined> {
     const [row] = await this.db.select(COLUMNS).from(i).where(eq(i.id, id))
     return row
+  }
+
+  /** 按 id 批量取登录名：审计查询补名字用 */
+  async findUsernames(ids: readonly string[]): Promise<{ readonly id: string, readonly username: string }[]> {
+    if (ids.length === 0)
+      return []
+    return this.db.select({ id: i.id, username: i.username }).from(i).where(inArray(i.id, [...ids]))
   }
 
   /** 锁住这一条再读：接受、作废、重发在事务里串行，复核之后再改 */

@@ -135,6 +135,12 @@ export class InvitationsService {
     }
   }
 
+  /** 按 id 批量取邀请的登录名（审计查询补名字） */
+  async usernamesOf(ids: readonly string[]): Promise<ReadonlyMap<string, string>> {
+    const rows = await this.repository.findUsernames([...new Set(ids)])
+    return new Map(rows.map(row => [row.id, row.username]))
+  }
+
   /** 公开：用令牌查看，只给出登录名与显示名 */
   async inspect(token: string, origin: HttpOrigin): Promise<InspectLinkResponse> {
     const ticket = await this.attempts.admit(origin)

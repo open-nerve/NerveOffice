@@ -1,6 +1,7 @@
 export { auditEventSchema, auditOriginSchema } from './audit-event.ts'
 export type { AuditEvent, AuditOrigin } from './audit-event.ts'
 export { AuditModule } from './audit.module.ts'
+export type { AuditRecord } from './audit.repository.ts'
 export { AuditService } from './audit.service.ts'
 export type { RecordOptions } from './audit.service.ts'
 export { originOf, RequestOrigin } from './request-origin.ts'

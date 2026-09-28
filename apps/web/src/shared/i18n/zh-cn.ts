@@ -1,5 +1,5 @@
 // 界面文字（规范 §2.4）：简体中文，集中在这里，组件里不散写。服务端的说明只是默认值，界面按错误码显示这里的文字。
-import type { DocumentType, ErrorCode, LinkInvalidReason, OneTimeLinkPurpose } from '@nerve-office/contracts'
+import type { AuditAction, DocumentType, ErrorCode, InvitationStatus, LinkInvalidReason, OneTimeLinkPurpose, UserStatus, UserSystemRole } from '@nerve-office/contracts'
 
 /** 按错误码显示的提示。没有登记的错误码用服务端的说明。 */
 const ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
@@ -41,6 +41,30 @@ const LINK_INVALID_MESSAGES: Record<OneTimeLinkPurpose, Record<LinkInvalidReason
   },
 }
 
+/** 审计动作的名称（M2-P1 设计 §3.7）；前端还不认识的动作显示原文 */
+const AUDIT_ACTION_NAMES: Record<AuditAction, string> = {
+  'auth.login_succeeded': '登录成功',
+  'auth.login_failed': '登录失败',
+  'auth.logout': '退出',
+  'auth.link_rejected': '一次性链接被拒',
+  'users.admin_initialized': '初始化系统管理员',
+  'users.invited': '签发邀请',
+  'users.invitation_revoked': '作废邀请',
+  'users.invitation_accepted': '接受邀请',
+  'users.password_changed': '修改密码',
+  'users.password_reset_issued': '签发重置链接',
+  'users.password_reset_completed': '重置密码',
+  'users.disabled': '停用账户',
+  'users.enabled': '启用账户',
+  'users.system_role_changed': '变更系统角色',
+  'documents.created': '新建文档',
+  'documents.content_saved': '保存文档',
+}
+
+function isAuditAction(action: string): action is AuditAction {
+  return Object.hasOwn(AUDIT_ACTION_NAMES, action)
+}
+
 const DOCUMENT_TYPE_NAMES: Record<DocumentType, string> = {
   sheet: '表格',
 }
@@ -53,6 +77,11 @@ export const messages = {
     retry: '重试',
     backHome: '回到首页',
     requestId: (id: string) => `请求标识：${id}`,
+    close: '关闭',
+    cancel: '取消',
+    loadMore: '加载更多',
+    loadingMore: '正在加载…',
+    all: '全部',
   },
   errors: {
     byCode: (code: ErrorCode, fallback: string) => ERROR_MESSAGES[code] ?? fallback,
@@ -103,6 +132,89 @@ export const messages = {
       },
       submitting: '正在设置…',
       invalid: (purpose: OneTimeLinkPurpose, reason: LinkInvalidReason) => LINK_INVALID_MESSAGES[purpose][reason],
+    },
+  },
+  admin: {
+    title: '管理',
+    navLabel: '管理界面',
+    nav: { users: '账户', invitations: '邀请', audit: '审计' },
+    noPermission: '只有系统管理员能打开管理界面。',
+    working: '正在处理…',
+    roleName: (role: UserSystemRole) => ({ admin: '系统管理员', member: '成员' })[role],
+    statusName: (status: UserStatus) => ({ active: '有效', disabled: '已停用' })[status],
+    users: {
+      search: '按名字或登录名搜索',
+      statusFilter: '状态',
+      listLabel: '账户列表',
+      loading: '正在加载账户…',
+      loadFailed: '账户列表加载失败',
+      empty: '没有符合条件的账户',
+      columns: { username: '登录名', displayName: '显示名', role: '角色', status: '状态', createdAt: '创建时间', actions: '操作' },
+      disable: '停用',
+      enable: '启用',
+      grantAdmin: '设为系统管理员',
+      revokeAdmin: '取消系统管理员',
+      resetPassword: '生成重置链接',
+      confirmDisable: (name: string) => `停用 ${name}？`,
+      disableDescription: '停用后，这个人立即不能访问任何页面与接口，也不能登录。随时可以重新启用。',
+      confirmEnable: (name: string) => `启用 ${name}？`,
+      enableDescription: '启用后这个人可以照常登录，个人空间与文档都没有变。',
+      confirmGrantAdmin: (name: string) => `把 ${name} 设为系统管理员？`,
+      grantAdminDescription: '系统管理员可以管理账户、邀请与审计，默认看不到任何人的文档内容。',
+      confirmRevokeAdmin: (name: string) => `取消 ${name} 的系统管理员？`,
+      revokeAdminDescription: '取消后这个人不能再打开管理界面。至少要保留一个有效的系统管理员。',
+      confirmReset: (name: string) => `为 ${name} 生成重置链接？`,
+      resetDescription: '生成后，这个人在各处的登录立即退出。链接 24 小时内有效，只能用一次。',
+    },
+    invitations: {
+      description: '填好登录名与显示名，生成一次性链接（7 天内有效），经受控的渠道发给本人。',
+      username: '登录名',
+      displayName: '显示名',
+      issue: '生成邀请链接',
+      issuing: '正在生成…',
+      statusFilter: '状态',
+      statusName: (status: InvitationStatus) => ({ pending: '待接受', accepted: '已接受', expired: '已过期', revoked: '已作废' })[status],
+      listLabel: '邀请列表',
+      loading: '正在加载邀请…',
+      loadFailed: '邀请列表加载失败',
+      empty: '还没有邀请',
+      columns: { username: '登录名', displayName: '显示名', status: '状态', createdBy: '签发人', createdAt: '签发时间', expiresAt: '到期时间', actions: '操作' },
+      revoke: '作废',
+      reissue: '重新生成',
+      confirmRevoke: (username: string) => `作废发给 ${username} 的邀请？`,
+      revokeDescription: '作废后这个链接不能再用；需要时可以重新生成。',
+      confirmReissue: (username: string) => `为 ${username} 重新生成邀请链接？`,
+      reissueDescription: '原来的链接随即作废。',
+    },
+    link: {
+      invitationTitle: '邀请链接',
+      resetTitle: '重置链接',
+      label: '链接',
+      once: '链接只显示这一次。请经受控的渠道（当面、公司的即时通讯等）发给本人，不要贴进公开的群聊或工单。',
+      expiresAt: (time: string) => `${time} 之前有效`,
+      copy: '复制链接',
+      copied: '已复制',
+      copyFailed: '复制失败，请选中链接后手动复制',
+    },
+    audit: {
+      from: '开始时间',
+      to: '结束时间',
+      action: '动作',
+      actor: '操作者',
+      searchActor: '按名字找操作者',
+      clear: '清除',
+      listLabel: '审计事件',
+      loading: '正在加载审计事件…',
+      loadFailed: '审计事件加载失败',
+      empty: '没有符合条件的事件',
+      columns: { occurredAt: '时间', actor: '操作者', action: '动作', target: '对象', origin: '来源', details: '详情' },
+      actorKind: (type: string) => ({ system: '系统', anonymous: '未登录的访问者' } as Record<string, string>)[type] ?? type,
+      source: (source: string) => ({ http: '网页', cli: '命令行' } as Record<string, string>)[source] ?? source,
+      targetKind: (type: string) => ({ user: '账户', space: '空间', document: '文档', invitation: '邀请' } as Record<string, string>)[type] ?? type,
+      actionName: (action: string) => (isAuditAction(action) ? AUDIT_ACTION_NAMES[action] : action),
+      onlyTarget: '只看这个对象',
+      chipActor: (name: string) => `操作者：${name}`,
+      chipTarget: (label: string) => `对象：${label}`,
     },
   },
   documents: {

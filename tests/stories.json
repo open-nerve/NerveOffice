@@ -16,9 +16,9 @@
     "US-M1-09": { "phase": "P3", "status": "active", "verification": ["e2e"] },
     "US-M1-10": { "phase": "P5", "status": "active", "verification": ["e2e"] },
     "US-M1-11": { "phase": "P1", "status": "active", "verification": ["self-test"] },
-    "US-M2-01": { "phase": "P1", "status": "planned", "verification": ["integration", "e2e"] },
-    "US-M2-02": { "phase": "P1", "status": "planned", "verification": ["integration", "e2e"] },
-    "US-M2-03": { "phase": "P1", "status": "planned", "verification": ["integration", "e2e"] },
+    "US-M2-01": { "phase": "P1", "status": "active", "verification": ["integration", "e2e"] },
+    "US-M2-02": { "phase": "P1", "status": "active", "verification": ["integration", "e2e"] },
+    "US-M2-03": { "phase": "P1", "status": "active", "verification": ["integration", "e2e"] },
     "US-M2-04": { "phase": "P2", "status": "planned", "verification": ["integration", "e2e"] },
     "US-M2-05": { "phase": "P2", "status": "planned", "verification": ["integration", "e2e"] },
     "US-M2-06": { "phase": "P2", "status": "planned", "verification": ["integration", "e2e"] },
@@ -28,7 +28,7 @@
     "US-M2-10": { "phase": "P5", "status": "planned", "verification": ["integration", "e2e"] },
     "US-M2-11": { "phase": "P3", "status": "planned", "verification": ["e2e"] },
     "US-M2-12": { "phase": "P4", "status": "planned", "verification": ["integration", "e2e"] },
-    "US-M2-13": { "phase": "P1", "status": "planned", "verification": ["integration", "e2e"] },
+    "US-M2-13": { "phase": "P1", "status": "active", "verification": ["integration", "e2e"] },
     "US-M2-14": { "phase": "P5", "status": "planned", "verification": ["integration", "e2e"] }
   }
 }
