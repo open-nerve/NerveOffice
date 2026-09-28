@@ -102,6 +102,16 @@ function log(message: string): void {
   console.log(`容器 E2E：${message}`)
 }
 
+/**
+ * 实测的数字（镜像体积、内存）：CI 上另写成 GitHub 的注解。任务的日志要仓库的管理员权限才能看，注解经公开的接口就能读到，
+ * 合并之后据此把 CI（amd64）的数字补进 ADR-001
+ */
+function measurement(message: string): void {
+  log(message)
+  if (process.env.GITHUB_ACTIONS === 'true')
+    console.log(`::notice title=容器 E2E 的实测::${message}`)
+}
+
 function usage(): never {
   console.error('用法：node tools/src/deploy/container-e2e-cli.ts [--browsers chromium,webkit] [-- <交给 Playwright 的参数>]')
   process.exit(2)
@@ -354,15 +364,15 @@ async function main(): Promise<number> {
       return 1
     }
     // docker image ls 的体积是解压之后的：inspect 的 Size 在 containerd 的镜像存储里是压缩之后的，两种存储不一致
-    log(`镜像体积（解压之后）：${capture('docker', ['image', 'ls', '--format', '{{.Size}}', settings.image]).stdout.trim()}`)
-    log(`应用容器的内存（空闲）：${formatMemory(await memoryOf(appContainer(settings)))}`)
+    measurement(`镜像体积（解压之后）：${capture('docker', ['image', 'ls', '--format', '{{.Size}}', settings.image]).stdout.trim()}`)
+    measurement(`应用容器的内存（空闲）：${formatMemory(await memoryOf(appContainer(settings)))}`)
     if (interrupted)
       return 1
 
     log(`以外部模式运行 E2E（浏览器 ${browsers.join('、')}）`)
     const { status, peak } = await runE2e(settings, browsers, playwrightArgs)
     // 重启用例最后执行、会重启应用：跑完之后量到的是重启过的进程，峰值才反映 E2E 期间的占用
-    log(`应用容器的内存：E2E 期间的峰值 ${formatMemory(peak)}，跑完之后 ${formatMemory(await memoryOf(appContainer(settings)))}`)
+    measurement(`应用容器的内存：E2E 期间的峰值 ${formatMemory(peak)}，跑完之后 ${formatMemory(await memoryOf(appContainer(settings)))}`)
     return status
   }
   finally {
