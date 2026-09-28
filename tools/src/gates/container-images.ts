@@ -30,9 +30,9 @@ const DOCKERFILE_FROM = /^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))
 const INSTRUCTION_OPTIONS = /^\s*(?:COPY|ADD|RUN)\s+((?:--\S+\s+)*)/i
 const VARIABLE = /\$\{(\w+)\}|\$(\w+)/g
 /** 值可以是 GitHub 的表达式 ${{ … }}、compose 的变量 ${…}（里面可以有空格，例如 ${X:?说明}），其余到空白、引号或 # 为止 */
-const YAML_IMAGE = /^\s*(?:-\s*)?image:\s*['"]?(\$\{\{[^}]*\}\}|\$\{[^}]*\}\S*|[^'"\s#]+)/
+const YAML_IMAGE = /^\s*(?:-\s*)?image:\s*['"]?(\$\{\{[^}]*\}\}|\$\{[^}]*\}[^'"\s#]*|[^'"\s#]+)/
 /** 工作流的 container: 简写（值直接是镜像）；写成映射时由 image: 覆盖 */
-const WORKFLOW_CONTAINER = /^\s*container:\s*['"]?(\$\{\{[^}]*\}\}|\$\{[^}]*\}\S*|[^'"\s#{]+)/
+const WORKFLOW_CONTAINER = /^\s*container:\s*['"]?(\$\{\{[^}]*\}\}|\$\{[^}]*\}[^'"\s#]*|[^'"\s#{]+)/
 const WORKFLOW_DOCKER_ACTION = /^\s*(?:-\s*)?uses:\s*['"]?docker:\/\/([^'"\s#]+)/
 /** compose 的变量带默认值：${X:-镜像}、${X-镜像}，检查默认值 */
 const COMPOSE_DEFAULT = /^\$\{\w+:?-([^}]+)\}$/
@@ -193,11 +193,12 @@ export function checkContainerImages(files: readonly TextFile[], policy: ImagePo
       violations.push({ rule: 'pins/image-consistency', subject: name, detail: `同一个镜像在各处引用得不一样：${[...variants].join('、')}` })
   }
   for (const file of files.filter(item => isDockerfile(item.path))) {
-    for (const match of file.content.matchAll(PNPM_VERSION)) {
-      if (match[1] !== policy.pnpmVersion)
-        violations.push({ rule: 'pins/pnpm-image', subject: `${file.path} pnpm@${match[1] ?? ''}`, detail: `镜像里的 pnpm 必须与 packageManager（${policy.pnpmVersion}）一致` })
-    }
     for (const { line, text } of instructions(file.content)) {
+      // 只在指令里找：注释里写着以前的版本不算（复验 TA2）
+      for (const match of text.matchAll(PNPM_VERSION)) {
+        if (match[1] !== policy.pnpmVersion)
+          violations.push({ rule: 'pins/pnpm-image', subject: `${file.path}:${line} pnpm@${match[1] ?? ''}`, detail: `镜像里的 pnpm 必须与 packageManager（${policy.pnpmVersion}）一致` })
+      }
       if (PNPM_WITHOUT_VERSION.test(text))
         violations.push({ rule: 'pins/pnpm-image', subject: `${file.path}:${line}`, detail: `全局安装 pnpm 要写明版本（pnpm@${policy.pnpmVersion}），否则装的是构建当时的最新版` })
     }

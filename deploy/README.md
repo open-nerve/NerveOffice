@@ -55,7 +55,7 @@ docker build -f deploy/Dockerfile -t nerve-office:test \
 4. 浏览器打开 `https://localhost:8443`。证书由 Caddy 自带的 CA 签发（Caddy 以 nobody 运行，证书放在 tmpfs 里，每次启动重新签发），浏览器会提示不受信任，测试环境里确认继续即可。正式环境要换成公网证书或自有 CA。应用经 HTTPS 下发一年期的 HSTS，而浏览器按主机名记住它、不分端口：用日常的浏览器打开之后，本机其他 `http://localhost:<端口>` 的服务也会被改成 HTTPS。建议用单独的浏览器配置文件（或无痕窗口）访问测试环境；本项目的开发服务器用 `127.0.0.1`，不受影响。
 5. 停止用 `docker compose -f deploy/test/compose.yaml down`；连同数据一起删除时加 `-v`。
 
-容器 E2E（`pnpm test:e2e:container`）自己构建镜像、生成随机密码、挑选空闲端口，用单独的编排项目名起一套环境，跑完删除，不影响手工起的这一套。默认只跑 Chromium，`--browsers chromium,webkit` 可以多选；`--` 之后的参数交给 Playwright（例如 `pnpm test:e2e:container -- --project restart --no-deps` 只跑重启用例）。各容器的日志留在 `tests/e2e/test-results/container/`。
+容器 E2E（`pnpm test:e2e:container`）自己构建镜像、生成随机密码、挑选空闲端口，用单独的编排项目名起一套环境，跑完删除，不影响手工起的这一套。默认只跑 Chromium，`--browsers chromium,webkit` 可以多选；`--` 之后的参数交给 Playwright（例如 `pnpm test:e2e:container -- --project restart --no-deps` 只跑重启用例）。各容器的日志留在 `tests/e2e/test-results/container/`。放到后台跑用 tmux、screen 或 `setsid`，不要用 `nohup`：编排脚本处理 SIGHUP（关掉终端时先让 Playwright 正常结束，再清理），`nohup` 设下的忽略对它不起作用。
 
 ### 升级
 

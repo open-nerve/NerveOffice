@@ -23,6 +23,7 @@ function stopWithRunner(): void {
       if ((error as NodeJS.ErrnoException).code !== 'ESRCH')
         return
       clearInterval(timer)
+      process.stderr.write(`E2E：编排脚本（进程号 ${runner}）已经不在了，停止本次运行；测试环境由下一次 pnpm test:e2e:container 清理\n`)
       process.kill(process.pid, 'SIGINT')
     }
   }, 1_000)

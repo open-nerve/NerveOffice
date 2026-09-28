@@ -16,7 +16,7 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node
 import https from 'node:https'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { promisify } from 'node:util'
@@ -56,23 +56,27 @@ let interrupted = false
  * 正在运行的 Playwright：它在自己的进程组里，终端的 Ctrl+C、关掉终端的 SIGHUP 都不会直接到它。本进程收到信号时：
  * - 第一次给它的主进程发 SIGINT：Playwright 只把 SIGINT 当作正常停止（写出汇总与报告）；SIGTERM 会让主进程当场退出，
  *   工作进程还要晚一步才退（复验 SB1）；
- * - 再收到信号时给它的整个进程组发 SIGKILL。
+ * - 1 秒之后再收到信号时给它的整个进程组发 SIGKILL。1 秒之内的算同一次：关掉终端时几毫秒内会连着收到好几个信号
+ *   （SIGHUP 与 SIGTERM，复验 TB1），Playwright 自己处理 SIGINT 也是这样去抖的。
  * 它的整个进程组都退出之后，再按正常的路径收集日志、清理（审查 B6）。本进程被强制结束时，Playwright 的全局准备
- * 发现编排脚本不在了，自己停下（tests/e2e/support/external-setup.ts，复验 SB2）
+ * 发现编排脚本不在了，自己停下（tests/e2e/support/external-setup.ts，复验 SB2）。
+ * 因为处理了 SIGHUP，nohup 的忽略对本进程不起作用：放到后台跑用 tmux、screen 或 setsid（复验 TB2）
  */
 let playwright: ChildProcess | undefined
-let signalsForwarded = 0
+let firstSignalAt: number | undefined
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
   process.on(signal, () => {
     interrupted = true
     const pid = playwright?.pid
     if (pid === undefined)
       return
-    signalsForwarded += 1
-    if (signalsForwarded === 1)
+    if (firstSignalAt === undefined) {
+      firstSignalAt = Date.now()
       playwright?.kill('SIGINT')
-    else
+    }
+    else if (Date.now() - firstSignalAt >= 1_000) {
       signalGroup(pid, 'SIGKILL')
+    }
   })
 }
 
@@ -302,9 +306,12 @@ async function runE2e(settings: ContainerE2eSettings, browsers: readonly string[
     const status = await new Promise<number>((resolve) => {
       // 与 E2E 包的 test 脚本相同：按 @nerve-office/source 条件解析工作区的包（经环境变量，工作进程也继承）
       const nodeOptions = `${process.env.NODE_OPTIONS ?? ''} --conditions=@nerve-office/source`.trim()
+      // 浏览器的临时配置目录放进本次运行的临时目录：强制结束时留下的，随它一起删掉
+      const temporary = join(dirname(settings.envFile), 'tmp')
+      mkdirSync(temporary, { recursive: true })
       const child = spawn(process.execPath, [PLAYWRIGHT_CLI, 'test', ...playwrightArgs], {
         cwd: join(REPO_ROOT, 'tests/e2e'),
-        env: { ...process.env, ...playwrightEnvironment(settings, browsers, process.pid), NODE_OPTIONS: nodeOptions },
+        env: { ...process.env, ...playwrightEnvironment(settings, browsers, process.pid), NODE_OPTIONS: nodeOptions, TMPDIR: temporary },
         stdio: ['ignore', 'inherit', 'inherit'],
         // 自己的进程组：终端的信号只到本进程，由本进程转给它（见文件开头）
         detached: true,
