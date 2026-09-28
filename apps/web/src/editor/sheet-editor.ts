@@ -3,10 +3,13 @@
 // 顺序：
 // 1. 创建公式 Worker（模块 Worker），先挂上它的回报与错误的监听；
 // 2. new Univer（身份替换），按档案注册插件；FUniver.newAPI；
-// 3. 在创建工作簿之前挂上入口守卫、变更检测与生命周期的监听，加载过程中的命令也看得到；
-// 4. createWorkbook，核对 unitId；
+// 3. 在创建工作簿之前挂上入口守卫、变更检测、单元格编辑与生命周期的监听，加载过程中的命令也看得到；
+// 4. createWorkbook，核对 unitId，立即设为不能编辑：就绪之前不允许编辑（M1 总设计 §6.6，Codex 评审 CX1）；
 // 5. 等渲染完成（Rendered）、主线程到 Ready 后装上 IMAGE() 的限制、Worker 回报它那边也装上了，才返回；
 //    任何一步失败（包括创建 Univer、注册插件）都按相反的顺序销毁已经创建的一切并抛出，页面显示"编辑器加载失败"（审查 B8）。
+// 返回时仍不能编辑：页面接好保存与离开提示之后，按权限调用 setEditable(true)。在那之前页面上的输入无处保存，
+// 加载超时销毁编辑器时也会随之丢失（Codex 评审 CX1）。
+import type { CellEditingWatch } from './cell-editing-watch.ts'
 import type { ChangeTracker } from './change-tracking/change-tracker.ts'
 import type { CleanupStack } from './cleanup-stack.ts'
 import type { LifecycleWatch, SheetEditorLifecycle } from './lifecycle-watch.ts'
@@ -15,6 +18,7 @@ import { LocaleType, LogLevel, Univer } from '@univerjs/core'
 import { FUniver } from '@univerjs/core/facade'
 import { defaultTheme } from '@univerjs/themes'
 import { pollUntil, withDeadline } from './async-tools.ts'
+import { watchCellEditing } from './cell-editing-watch.ts'
 import { createChangeTracker } from './change-tracking/change-tracker.ts'
 import { createCleanupStack } from './cleanup-stack.ts'
 import { editorIdentityOverride } from './identity/allow-all-authz-io.service.ts'
@@ -38,8 +42,12 @@ export interface SheetEditor {
   readonly onChange: (listener: () => void) => () => void
   readonly lifecycle: () => SheetEditorLifecycle
   readonly onLifecycle: (listener: (stage: SheetEditorLifecycle) => void) => () => void
-  /** 单元格编辑器或编辑栏里有正在编辑、还没提交的内容 */
+  /** 单元格编辑器开着（单元格或编辑栏里正在编辑，还没提交或放弃）：离开提示据此判断 */
   readonly isCellEditing: () => boolean
+  /** 单元格编辑器里有还没提交的输入（只是打开、还没改动时没有）：页头据此显示有未保存的修改（Codex 评审 CX6） */
+  readonly hasPendingCellInput: () => boolean
+  /** 有没有还没提交的输入变了 */
+  readonly onCellEditingChange: (listener: () => void) => () => void
   /**
    * 提交正在编辑的单元格（等同回车，选区随之下移）；提交之后仍在编辑时返回 false。
    * 数据验证拒绝输入时，SDK 先关掉编辑器、写入后回滚并弹出它自己的提示：返回 true，快照里是回滚后的内容，与界面一致
@@ -49,6 +57,7 @@ export interface SheetEditor {
   readonly settleFormulas: (timeoutMs: number) => Promise<'settled' | 'timeout'>
   /** 捕获：JSON.stringify(save())；捕获前不调用 Facade 的读取方法（它们可能改动模型） */
   readonly capture: () => string
+  /** 创建出来时不能编辑（见文件开头），页面按权限放开 */
   readonly setEditable: (editable: boolean) => void
   /** 销毁实例、终止 Worker；可以重复调用 */
   readonly dispose: () => void
@@ -95,6 +104,7 @@ type Workbook = ReturnType<FUniver['createWorkbook']>
 interface MountedEditor {
   readonly workbook: Workbook
   readonly changes: ChangeTracker
+  readonly cellEditing: CellEditingWatch
   readonly lifecycle: LifecycleWatch
 }
 
@@ -116,10 +126,14 @@ async function mount(container: HTMLElement, snapshot: WorkbookSnapshot, cleanup
   cleanup.defer(() => guards.dispose())
   const changes = createChangeTracker(univer, univerAPI, { unitId: snapshot.unitId, excludedMutationIds: CHANGE_DETECTION_EXCLUDED_MUTATIONS })
   cleanup.defer(changes.dispose)
+  const cellEditing = watchCellEditing(univerAPI, snapshot.unitId)
+  cleanup.defer(cellEditing.dispose)
   const lifecycle = watchLifecycle({ univerAPI, installImagePolicy: async () => installRestrictedImageFunction(univer, location.origin) })
   cleanup.defer(lifecycle.dispose)
 
   const workbook = createWorkbook(univerAPI, snapshot)
+  // 渲染之前就设好：用户还碰不到它（Codex 评审 CX1）
+  workbook.setEditable(false)
   await withDeadline(
     Promise.all([lifecycle.rendered, lifecycle.imagePolicyInstalled, workerImagePolicy.installed]),
     READY_TIMEOUT_MS,
@@ -127,7 +141,7 @@ async function mount(container: HTMLElement, snapshot: WorkbookSnapshot, cleanup
   )
   // 就绪之后不再需要 Worker 回报的监听：Worker 之后出错按 M4 的设计处理（M1 里公式收齐会超时，页面提示公式结果尚未保存）
   workerImagePolicy.dispose()
-  return { workbook, changes, lifecycle }
+  return { workbook, changes, cellEditing, lifecycle }
 }
 
 export async function createSheetEditor(options: CreateSheetEditorOptions): Promise<SheetEditor> {
@@ -141,7 +155,7 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
     cleanup.run()
     throw error
   }
-  const { workbook, changes, lifecycle } = mounted
+  const { workbook, changes, cellEditing, lifecycle } = mounted
 
   let disposed = false
   const dispose = (): void => {
@@ -164,6 +178,8 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
     lifecycle: () => lifecycle.current() ?? 'rendered',
     onLifecycle: lifecycle.onChange,
     isCellEditing: () => !disposed && workbook.isCellEditing(),
+    hasPendingCellInput: () => !disposed && cellEditing.hasPendingInput(),
+    onCellEditingChange: cellEditing.onChange,
     async commitCellEditing() {
       usable()
       if (!workbook.isCellEditing())

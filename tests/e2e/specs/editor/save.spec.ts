@@ -4,7 +4,7 @@ import { SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { createDocument, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { appendSheet, cellOf, createSheetThroughApi, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
+import { appendSheet, cellOf, createSheetThroughApi, openCellEditor, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
 
 /** 拦住保存的请求，直到调用返回的 release：用来观察"保存中"与保存期间的修改 */
 async function holdSaves(page: Page): Promise<() => void> {
@@ -18,6 +18,15 @@ async function holdSaves(page: Page): Promise<() => void> {
     await route.continue()
   })
   return release
+}
+
+/** 页面此刻会不会拦下离开（派发一次可以取消的 beforeunload，看页面有没有阻止它） */
+async function wouldPromptOnLeave(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const event = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(event)
+    return event.defaultPrevented
+  })
 }
 
 async function openNewSheet(page: Page, prefix: string): Promise<string> {
@@ -70,6 +79,26 @@ test.describe('US-M1-05 保存到云端，看到真实的保存状态', () => {
     release()
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe(42)
+  })
+
+  test('单元格里键入、还没回车：已经是有未保存的修改；按 Esc 放弃，回到已保存到云端（Codex 评审 CX6）', async ({ page }) => {
+    const documentId = await openNewSheet(page, 'save-cell-input')
+    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    await typeInCell(page, 'A1', 'typing', false)
+    await expect(saveStatus(page)).toHaveText('有未保存的修改')
+    await page.keyboard.press('Escape')
+    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    expect(await wouldPromptOnLeave(page)).toBe(false)
+
+    // 双击只是打开编辑器：还是已保存到云端（离开时照样提示，编辑器开着）；键入之后才是有未保存的修改
+    await openCellEditor(page, 'B2')
+    await expect.poll(async () => wouldPromptOnLeave(page)).toBe(true)
+    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    await page.keyboard.type('x')
+    await expect(saveStatus(page)).toHaveText('有未保存的修改')
+    // 保存时先提交编辑（等同回车），服务器上是键入的内容
+    await saveAndWait(page)
+    expect(cellOf((await savedContent(page, documentId)).snapshot, 'B2')?.v).toBe('x')
   })
 
   test('Ctrl/Cmd+S 保存（焦点在表格里也收得到），不弹出浏览器的另存网页', async ({ page }) => {

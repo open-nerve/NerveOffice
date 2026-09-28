@@ -2,7 +2,7 @@
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell, waitForEditor } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, openEditor, ribbon, saveAndWait, saveButton, savedContent, saveStatus, typeInCell, waitForEditor } from '../../support/sheet.ts'
 
 test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容', () => {
   test('A 保存之后 B 再保存：B 得到版本冲突并保留本页的内容，服务器上是 A 的版本', async ({ page, context }) => {
@@ -25,6 +25,16 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     const saved = await savedContent(page, documentId)
     expect(cellOf(saved.snapshot, 'A1')?.v).toBe('from A')
     expect(saved.revision).toBe(2)
+
+    // B 的表格里仍是本页的内容：画布上的字读不出来，用查找核对（Codex 评审的覆盖说明）
+    const data = await ribbon(other, '数据')
+    await data.getByRole('button', { name: '查找替换' }).click()
+    const find = other.getByRole('dialog', { name: '查找' })
+    await find.getByText('替换 / 高级查找').click()
+    await find.getByRole('textbox', { name: '输入查找内容' }).fill('from B')
+    await find.getByRole('button', { name: '查找', exact: true }).click()
+    await expect(find).toContainText('1/1')
+    await find.getByRole('button', { name: 'Close' }).click()
 
     // B 保留本页的内容：离开时仍提示有没保存的内容；再按保存不发请求（审查 B7）。
     // "没有请求"只能等一段时间再下结论：正常的保存从按键到发出请求不到 100 ms（公式收齐每 20 ms 判断一次），这里等 1 秒

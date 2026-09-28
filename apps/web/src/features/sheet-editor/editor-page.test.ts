@@ -30,20 +30,26 @@ const DETAIL: DocumentDetail = {
   permissions: { canEdit: true },
 }
 
-/** 假的编辑器：生命周期可以推进，保存用到的能力都是最简单的实现 */
+/** 假的编辑器：生命周期可以推进，保存用到的能力都是最简单的实现；记下谁在订阅修改 */
 function fakeEditor(stage: SheetEditorLifecycle = 'rendered') {
   let current = stage
   const lifecycleListeners = new Set<(stage: SheetEditorLifecycle) => void>()
+  const changeListeners = new Set<() => void>()
   const editor: SheetEditor = {
     unitId: 'unit-1',
     changeSeq: () => 0,
-    onChange: () => () => {},
+    onChange: (listener) => {
+      changeListeners.add(listener)
+      return () => changeListeners.delete(listener)
+    },
     lifecycle: () => current,
     onLifecycle: (listener) => {
       lifecycleListeners.add(listener)
       return () => lifecycleListeners.delete(listener)
     },
     isCellEditing: () => false,
+    hasPendingCellInput: () => false,
+    onCellEditingChange: () => () => {},
     commitCellEditing: async () => true,
     settleFormulas: async () => 'settled',
     capture: () => '{"id":"unit-1"}',
@@ -52,6 +58,7 @@ function fakeEditor(stage: SheetEditorLifecycle = 'rendered') {
   }
   return {
     editor,
+    changeListeners,
     enter(next: SheetEditorLifecycle): void {
       current = next
       lifecycleListeners.forEach(listener => listener(next))
@@ -122,6 +129,105 @@ function deferred<T>() {
 }
 
 const UNAUTHENTICATED = new ApiError(401, 'UNAUTHENTICATED', '请先登录')
+
+describe('就绪之前容器里的交互一律拦下（Codex 评审 CX1）', () => {
+  /** 在容器里的一个元素上派发一次用户输入：返回事件是否被拦下（默认行为取消、元素上的监听收不到） */
+  function interact(surface: HTMLElement, type: string): { prevented: boolean, reached: boolean } {
+    const inner = document.createElement('canvas')
+    surface.append(inner)
+    let reached = false
+    inner.addEventListener(type, () => {
+      reached = true
+    })
+    const event = new Event(type, { bubbles: true, cancelable: true })
+    inner.dispatchEvent(event)
+    inner.remove()
+    return { prevented: event.defaultPrevented, reached }
+  }
+
+  const BLOCKED = { prevented: true, reached: false }
+  const OPEN = { prevented: false, reached: true }
+
+  it('载入期间拦下点击、键入、输入法、粘贴与拖放；保存状态机接好（订阅了修改）之后才放开编辑，然后撤掉屏障', async () => {
+    const creating = deferred<SheetEditor>()
+    const { editorPage, surface, fake, createEditor } = setup({ createEditor: async () => creating.promise })
+    document.body.append(surface)
+    try {
+      const loading = editorPage.load()
+      // 编辑器已经在创建（表格画出来之后可以被点到的那段时间）
+      await vi.waitFor(() => expect(createEditor).toHaveBeenCalled())
+      for (const type of ['mousedown', 'dblclick', 'contextmenu', 'keydown', 'beforeinput', 'compositionstart', 'paste', 'drop'])
+        expect(interact(surface, type), type).toEqual(BLOCKED)
+
+      let listeningWhenUnlocked: boolean | undefined
+      let blockedWhenUnlocked: boolean | undefined
+      vi.mocked(fake.editor.setEditable).mockImplementation((editable) => {
+        if (editable) {
+          listeningWhenUnlocked = fake.changeListeners.size > 0
+          blockedWhenUnlocked = interact(surface, 'keydown').prevented
+        }
+      })
+      creating.resolve(fake.editor)
+      await loading
+      expect(fake.editor.setEditable).toHaveBeenCalledExactlyOnceWith(true)
+      expect(listeningWhenUnlocked).toBe(true)
+      expect(blockedWhenUnlocked).toBe(true)
+      expect(interact(surface, 'keydown')).toEqual(OPEN)
+      expect(interact(surface, 'mousedown')).toEqual(OPEN)
+    }
+    finally {
+      surface.remove()
+    }
+  })
+
+  it('只拦容器里的：页头照常可以操作', async () => {
+    const creating = deferred<SheetEditor>()
+    const { editorPage, surface, fake } = setup({ createEditor: async () => creating.promise })
+    document.body.append(surface)
+    const header = document.createElement('button')
+    document.body.append(header)
+    try {
+      const loading = editorPage.load()
+      let clicked = false
+      header.addEventListener('click', () => {
+        clicked = true
+      })
+      header.click()
+      expect(clicked).toBe(true)
+      creating.resolve(fake.editor)
+      await loading
+    }
+    finally {
+      surface.remove()
+      header.remove()
+    }
+  })
+
+  it('编辑器加载失败、页面卸载：都撤掉屏障', async () => {
+    const failed = setup({ createEditor: async () => Promise.reject(new Error('就绪超时')) })
+    document.body.append(failed.surface)
+    const creating = deferred<SheetEditor>()
+    const unloaded = setup({ createEditor: async () => creating.promise })
+    document.body.append(unloaded.surface)
+    try {
+      await failed.editorPage.load()
+      expect(failed.surface.hidden).toBe(true)
+      expect(interact(failed.surface, 'keydown')).toEqual(OPEN)
+
+      const loading = unloaded.editorPage.load()
+      await vi.waitFor(() => expect(unloaded.createEditor).toHaveBeenCalled())
+      expect(interact(unloaded.surface, 'keydown')).toEqual(BLOCKED)
+      unloaded.editorPage.dispose()
+      expect(interact(unloaded.surface, 'keydown')).toEqual(OPEN)
+      creating.resolve(unloaded.fake.editor)
+      await loading
+    }
+    finally {
+      failed.surface.remove()
+      unloaded.surface.remove()
+    }
+  })
+})
 
 describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
   it('先确认会话，再读取元数据与内容，创建编辑器；就绪之后可以保存，基准是内容的修订号', async () => {
@@ -203,6 +309,7 @@ describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
     const { editorPage, fake } = setup({ api: { document: async () => ({ ...DETAIL, permissions: { canEdit: false } }) } })
     await editorPage.load()
     expect(fake.editor.setEditable).toHaveBeenCalledWith(false)
+    expect(fake.editor.setEditable).not.toHaveBeenCalledWith(true)
     expect(editorPage.view()).toMatchObject({ load: { kind: 'ready', readOnly: true }, save: undefined })
     expect(editorPage.hasUnsavedWork()).toBe(false)
   })

@@ -8,6 +8,9 @@ export interface SaveEditor {
   readonly changeSeq: () => number
   readonly onChange: (listener: () => void) => () => void
   readonly isCellEditing: () => boolean
+  /** 单元格编辑器里有还没提交的输入：也算有未保存的修改（Codex 评审 CX6） */
+  readonly hasPendingCellInput: () => boolean
+  readonly onCellEditingChange: (listener: () => void) => () => void
   readonly commitCellEditing: () => Promise<boolean>
   readonly settleFormulas: (timeoutMs: number) => Promise<'settled' | 'timeout'>
   readonly capture: () => string
@@ -93,13 +96,21 @@ export interface SaveCoordinator {
 
 export const SETTLE_TIMEOUT_MS = 3000
 
+/** 一次捕获：当时的修改序号，公式是否收齐 */
+interface Capture {
+  readonly seq: number
+  readonly settled: boolean
+}
+
 /**
- * 结果未知的保存（网络错误、5xx、回包读不出来）：服务端可能已经提交了。
- * 认出"自己追自己"只要它的序号与公式是否收齐；不留快照本身，断网期间多次保存时内存不随之增长（审查 B9）
+ * 结果未知的保存（网络错误、5xx、回包读不出来）：服务端可能已经提交了。认出"自己追自己"只要序号与公式是否收齐，
+ * 不留快照本身，断网期间多次保存时内存不随之增长（审查 B9）：
+ * - localSeq：请求里的修改序号，冲突的来源按它认。同一个 requestId 的请求不变，一直是第一次发出时的序号；
+ * - capture：内容与这个请求相同的最近一次捕获，认出它已经提交时，按它确认（Codex 评审 CX2）
  */
 interface UnconfirmedSave {
   readonly localSeq: number
-  readonly settled: boolean
+  readonly capture: Capture
 }
 
 const UTF8 = new TextEncoder()
@@ -131,7 +142,7 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
   let conflict: RevisionConflictDetails | null | undefined
   /** 结果未知的保存，按 requestId：冲突的来源是其中之一时，说明它其实已经提交（自己追自己） */
   const unconfirmed = new Map<string, UnconfirmedSave>()
-  /** 最近一次结果未知的请求：内容与基准都没变时，重试沿用它的 requestId */
+  /** 最近一次结果未知的请求：内容与基准都没变时，重试原样再发它（requestId 与请求的各项都不变） */
   let retryable: SaveRequest | undefined
   let current = computeView()
 
@@ -144,7 +155,7 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
     else if (problem !== undefined && problem.kind !== 'cell-editing')
       status = 'failed'
     else
-      status = editor.changeSeq() > savedSeq || formulasPending ? 'dirty' : 'clean'
+      status = editor.changeSeq() > savedSeq || formulasPending || editor.hasPendingCellInput() ? 'dirty' : 'clean'
     return { status, formulasPending, problem, conflict, canSave: !inFlight && !stopped && conflict === undefined }
   }
 
@@ -159,20 +170,25 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
   }
 
   const unsubscribeEditor = editor.onChange(update)
+  const unsubscribeCellEditing = editor.onCellEditingChange(update)
 
-  /** 服务端确认了捕获时序号为 localSeq 的内容，修订号是 revision */
-  function confirm(localSeq: number, revision: number, settled: boolean): void {
+  /** 服务端确认了这次捕获的内容，修订号是 revision */
+  function confirm(capture: Capture, revision: number): void {
     baseRevision = revision
-    savedSeq = Math.max(savedSeq, localSeq)
-    formulasPending = !settled
+    savedSeq = Math.max(savedSeq, capture.seq)
+    formulasPending = !capture.settled
     unconfirmed.clear()
     retryable = undefined
   }
 
-  /** 这次的请求：内容与基准都没变的重试沿用上一次的 requestId（服务端按幂等返回原来的结果，或者照常处理） */
-  function prepare(snapshot: string, localSeq: number): SaveRequest {
-    const requestId = retryable !== undefined && retryable.snapshot === snapshot && retryable.baseRevision === baseRevision ? retryable.requestId : newRequestId()
-    return { baseRevision, requestId, clientInstanceId, localSeq, snapshot }
+  /**
+   * 这次的请求。内容与基准都没变：原样再发结果未知的那个请求（服务端按幂等返回原来的结果，或者照常处理）。
+   * 同一个 requestId 的请求不变，序号也不换成这次捕获的：服务端记下的来源是第一次的序号，换了就认不出自己追自己（Codex 评审 CX2）
+   */
+  function prepare(snapshot: string, capture: Capture): SaveRequest {
+    if (retryable !== undefined && retryable.snapshot === snapshot && retryable.baseRevision === baseRevision)
+      return retryable
+    return { baseRevision, requestId: newRequestId(), clientInstanceId, localSeq: capture.seq, snapshot }
   }
 
   /** 冲突的来源是本页一次结果未知的保存：那次保存其实已经提交，只是没收到回包 */
@@ -183,15 +199,19 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
     return [...unconfirmed.values()].find(save => save.localSeq === source.localSeq)
   }
 
-  function fail(error: unknown, request: SaveRequest): void {
-    // 确定没有提交（4xx，冲突也是）；其余情况（网络、5xx、回包读不出来）结果未知
-    if (isDefiniteRejection(error)) {
+  /**
+   * 这一次发送失败。4xx（冲突也是）说明这一次确定没有提交，其余情况（网络、5xx、回包读不出来）结果未知。
+   * earlierUnknown：同一个请求更早的一次发送结果未知，那一次仍可能已经提交，这一次被拒绝（例如 401）也不能说明它没有，
+   * 记录与请求都留着，重试照旧原样再发（Codex 评审 CX2）。requestId 被别的请求占用时例外：原样再发也一样，下次换新的
+   */
+  function fail(error: unknown, request: SaveRequest, earlierUnknown: boolean): void {
+    if (!isDefiniteRejection(error)) {
+      retryable = request
+    }
+    else if (!earlierUnknown || (error instanceof ApiError && error.code === 'REQUEST_ID_CONFLICT')) {
       unconfirmed.delete(request.requestId)
       if (retryable?.requestId === request.requestId)
         retryable = undefined
-    }
-    else {
-      retryable = request
     }
     const details = conflictDetails(error)
     if (details !== undefined) {
@@ -211,7 +231,7 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
       return
     }
     const settled = (await editor.settleFormulas(settleTimeoutMs)) === 'settled'
-    const localSeq = editor.changeSeq()
+    const capture: Capture = { seq: editor.changeSeq(), settled }
     const snapshot = editor.capture()
     if (utf8Length(snapshot) > maxSnapshotBytes) {
       problem = { kind: 'too-large' }
@@ -219,27 +239,28 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
     }
     // 压缩是本地的一步：出错按意外的错误处理（save 里接住），不当作结果未知的请求（复验 RB8）
     const body = await options.compress(snapshot)
-    let request = prepare(snapshot, localSeq)
+    let request = prepare(snapshot, capture)
     // 自己追自己只自动重发一次（P4 设计 §3.5.2）
     let rebased = false
     for (;;) {
-      unconfirmed.set(request.requestId, { localSeq: request.localSeq, settled })
+      const earlierUnknown = unconfirmed.has(request.requestId)
+      unconfirmed.set(request.requestId, { localSeq: request.localSeq, capture })
       try {
         const result = await send(request, body)
-        confirm(request.localSeq, result.revision, settled)
+        // 原样再发的请求，内容与这次捕获的相同：确认到这次捕获的序号
+        confirm(capture, result.revision)
         return
       }
       catch (error) {
         const details = conflictDetails(error)
         const own = rebased ? undefined : ownUnconfirmedSave(details)
         if (own === undefined || details === undefined || details === null) {
-          fail(error, request)
+          fail(error, request, earlierUnknown)
           return
         }
         // 那次保存已经提交：它就是当前修订。换上当前修订号作基准，用新的 requestId 重发这一次的内容
-        unconfirmed.delete(request.requestId)
-        confirm(own.localSeq, details.currentRevision, own.settled)
-        request = { ...request, baseRevision, requestId: newRequestId() }
+        confirm(own.capture, details.currentRevision)
+        request = prepare(snapshot, capture)
         rebased = true
       }
     }
@@ -287,6 +308,7 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
     },
     dispose: () => {
       unsubscribeEditor()
+      unsubscribeCellEditing()
       listeners.clear()
     },
   }
