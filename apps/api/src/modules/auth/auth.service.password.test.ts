@@ -101,13 +101,13 @@ describe('AuthService.changePassword（US-M2-02）', () => {
     expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ details: { reason: 'current_password_incorrect', lockedForSeconds: 60 } }))
   })
 
-  it('复核不通过（验证旧密码之后密码被改过、重置过，或账户停用了）：按旧密码不对处理，不撤销会话，名额不退回', async () => {
+  it('复核不通过（验证旧密码之后密码被改过、重置过，或账户停用了）：按旧密码不对回答，不撤销会话，名额不退回；审计的原因另记（复验 N6）', async () => {
     const { service, ticket, sessions, audit } = setup({ stillCurrent: false })
     expect((await errorOf(service.changePassword(PRINCIPAL, REQUEST, ORIGIN))).code).toBe('CURRENT_PASSWORD_INCORRECT')
     expect(ticket.succeeded).not.toHaveBeenCalled()
     expect(sessions.revokeAllOf).not.toHaveBeenCalled()
     expect(audit.record).toHaveBeenCalledOnce()
-    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'users.password_change_failed' }))
+    expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'users.password_change_failed', details: { reason: 'credentials_changed' } }))
   })
 
   it('限流拒绝：429，不验证旧密码、不写审计', async () => {

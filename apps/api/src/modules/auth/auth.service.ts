@@ -62,7 +62,7 @@ export class AuthService {
     const { ticket } = admission
     const check = await this.verify(request, ticket)
     if (!check.valid)
-      throw await this.loginFailed(ticket, check.user, origin)
+      throw await this.loginFailed(ticket, check.user, 'invalid_credentials', origin)
 
     const { credentials } = check
     const { user } = credentials
@@ -82,22 +82,23 @@ export class AuthService {
       return session
     })
     if (created === undefined)
-      throw await this.loginFailed(ticket, user, origin)
+      throw await this.loginFailed(ticket, user, 'credentials_changed', origin)
     await this.tidyUp()
     return { token: created.token, session: await this.describe(user, csrfTokenFor(created.token)) }
   }
 
   /**
    * 登录失败：写审计（账户存在时带上对象）、顺带清理，返回要抛出的错误：这次失败使计数达到上限时 429，
-   * 否则 INVALID_CREDENTIALS
+   * 否则 INVALID_CREDENTIALS。原因：密码不对（invalid_credentials），或者验证之后凭据变了（credentials_changed：
+   * 改了密码、签发或完成了重置、停用了，复验 N6）；对用户都是"用户名或密码错误"，审计里分开，管理员查得到
    */
-  private async loginFailed(ticket: LoginTicket, user: User | undefined, origin: HttpOrigin): Promise<AppError> {
+  private async loginFailed(ticket: LoginTicket, user: User | undefined, reason: 'invalid_credentials' | 'credentials_changed', origin: HttpOrigin): Promise<AppError> {
     await this.audit.record({
       action: 'auth.login_failed',
       actor: { type: 'anonymous' },
       ...(user === undefined ? {} : { target: { type: 'user' as const, id: user.id } }),
       origin,
-      details: { reason: 'invalid_credentials', ...(ticket.lockedForSeconds === undefined ? {} : { lockedForSeconds: ticket.lockedForSeconds }) },
+      details: { reason, ...(ticket.lockedForSeconds === undefined ? {} : { lockedForSeconds: ticket.lockedForSeconds }) },
     })
     await this.tidyUp()
     return ticket.lockedForSeconds === undefined ? new AppError('INVALID_CREDENTIALS') : tooManyAttempts(ticket.lockedForSeconds)
@@ -129,7 +130,7 @@ export class AuthService {
     const { ticket } = admission
     const credentials = await withHashing(ticket, this.#logger, async () => this.users.verifyPasswordOf(user.id, request.currentPassword))
     if (credentials === undefined)
-      throw await this.passwordChangeFailed(ticket, user, origin)
+      throw await this.passwordChangeFailed(ticket, user, 'current_password_incorrect', origin)
     const passwordHash = await withHashing(ticket, this.#logger, async () => this.users.hashPassword(request.newPassword))
     const changed = await this.transactions.run(async (transaction) => {
       if (!await this.users.replacePassword(credentials, passwordHash, transaction))
@@ -140,20 +141,21 @@ export class AuthService {
       return true
     })
     if (!changed)
-      throw await this.passwordChangeFailed(ticket, user, origin)
+      throw await this.passwordChangeFailed(ticket, user, 'credentials_changed', origin)
   }
 
   /**
-   * 修改密码时旧密码不对（或者验证之后密码已经变了）：记审计，返回要抛出的错误。与登录共用按用户名的计数，
-   * 这次失败使计数达到上限时是 429，details 带锁定秒数：管理员能从审计里查到这个人为什么登录不了（审查 A6）
+   * 修改密码失败：记审计，返回要抛出的错误。原因：旧密码不对（current_password_incorrect），或者验证之后凭据变了
+   * （credentials_changed：别处改了密码、签发了重置、停用了，复验 N6）；对用户都是"当前密码不正确"。
+   * 与登录共用按用户名的计数，这次失败使计数达到上限时是 429，details 带锁定秒数：管理员能从审计里查到这个人为什么登录不了（审查 A6）
    */
-  private async passwordChangeFailed(ticket: LoginTicket, user: User, origin: HttpOrigin): Promise<AppError> {
+  private async passwordChangeFailed(ticket: LoginTicket, user: User, reason: 'current_password_incorrect' | 'credentials_changed', origin: HttpOrigin): Promise<AppError> {
     await this.audit.record({
       action: 'users.password_change_failed',
       actor: { type: 'user', id: user.id },
       target: { type: 'user', id: user.id },
       origin,
-      details: { reason: 'current_password_incorrect', ...(ticket.lockedForSeconds === undefined ? {} : { lockedForSeconds: ticket.lockedForSeconds }) },
+      details: { reason, ...(ticket.lockedForSeconds === undefined ? {} : { lockedForSeconds: ticket.lockedForSeconds }) },
     })
     return ticket.lockedForSeconds === undefined ? new AppError('CURRENT_PASSWORD_INCORRECT') : tooManyAttempts(ticket.lockedForSeconds)
   }

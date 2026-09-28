@@ -1,14 +1,20 @@
-// 两个连接的并发测试（M2-P1 审查 A1、A2、A9、A10、A12）：一个连接开着事务、持有锁；等被测的请求在这把锁上等着了，
+// 两个连接的并发测试（M2-P1 审查 A1、A2、A9、A10、A12）：一个连接开着事务、持有锁；等被测的请求在锁上等着了，
 // 再在同一个事务里改数据、提交。被测的请求随后拿到锁，看到的是改过的数据。不靠固定时长的等待，结果是确定的。
 import type pg from 'pg'
 import type { TestDatabase } from './database.ts'
 import { setTimeout as delay } from 'node:timers/promises'
 
+/** 等到这个库里有 count 个连接在等锁（被持锁的事务挡住的、排在别的请求后面的都算） */
+export type WaitForWaiting = (count: number) => Promise<void>
+
 export interface HeldLockRace<T> {
   /** 在事务里取锁（例如 SELECT … FOR UPDATE、pg_advisory_xact_lock） */
   readonly hold: (client: pg.Client) => Promise<unknown>
-  /** 被测的请求：会在这把锁上等待 */
-  readonly request: () => Promise<T>
+  /**
+   * 被测的请求：会在这把锁上等待。分几步发出时（例如先让停用锁住账户行、再发登录），
+   * 用 waitForWaiting 等前面的请求在锁上等着了再发下一个
+   */
+  readonly request: (waitForWaiting: WaitForWaiting) => Promise<T>
   /** 请求等着的时候，在同一个事务里改数据；随后提交 */
   readonly change: (client: pg.Client) => Promise<unknown>
   /**
@@ -18,9 +24,15 @@ export interface HeldLockRace<T> {
   readonly waiting?: number
 }
 
-/** 等到这个库里有 count 个连接在等锁，其中至少一个被 holderPid 挡住 */
-async function waitUntilBlocked(database: TestDatabase, holderPid: number, count: number, timeoutMs = 10_000): Promise<void> {
-  const deadline = performance.now() + timeoutMs
+/** 最多等多久：比应用的锁等待上限（5 秒）长也没关系，请求先结束就立即失败（见 waitUntilBlocked） */
+const WAIT_TIMEOUT_MS = 10_000
+
+/**
+ * 等到这个库里有 count 个连接在等锁，其中至少一个被 holderPid 挡住。
+ * 被测的请求已经结束（没走到锁上就完成了，或者在别处等锁超时）时立即失败，报出它的结果，不空等到超时（复验 N5）
+ */
+async function waitUntilBlocked(database: TestDatabase, holderPid: number, count: number, ended: () => string | undefined): Promise<void> {
+  const deadline = performance.now() + WAIT_TIMEOUT_MS
   for (;;) {
     const blocked = await database.query(async client => (await client.query<{ total: number, byHolder: number }>(
       `SELECT count(*)::int AS total, count(*) FILTER (WHERE $1 = ANY(pg_blocking_pids(pid)))::int AS "byHolder"
@@ -29,25 +41,42 @@ async function waitUntilBlocked(database: TestDatabase, holderPid: number, count
     )).rows[0])
     if (blocked !== undefined && blocked.byHolder > 0 && blocked.total >= count)
       return
+    const outcome = ended()
+    if (outcome !== undefined)
+      throw new Error(`被测的请求在锁上等待之前就结束了（${outcome}），没有等到 ${count} 个请求等锁（现在 ${blocked?.total ?? 0} 个）`)
     if (performance.now() > deadline)
-      throw new Error(`${timeoutMs} ms 内没有等到 ${count} 个请求在锁上等待（现在 ${blocked?.total ?? 0} 个）`)
+      throw new Error(`${WAIT_TIMEOUT_MS} ms 内没有等到 ${count} 个请求在锁上等待（现在 ${blocked?.total ?? 0} 个）`)
     await delay(20)
   }
+}
+
+/** 请求结束时的简短说明：HTTP 响应给出状态码 */
+function describeOutcome(value: unknown): string {
+  const responses = (Array.isArray(value) ? value : [value]).filter((item): item is Response => item instanceof Response)
+  return responses.length > 0 ? `HTTP ${responses.map(response => response.status).join('、')}` : '已完成'
 }
 
 export async function raceAgainstHeldLock<T>(database: TestDatabase, race: HeldLockRace<T>): Promise<T> {
   return database.query(async (client) => {
     await client.query('BEGIN')
     let pending: Promise<T> | undefined
+    let outcome: string | undefined
     try {
       await race.hold(client)
       const holderPid = (await client.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid
       if (holderPid === undefined)
         throw new Error('取不到持锁连接的进程号')
-      pending = race.request()
-      // 请求在锁上等着之前就失败了：由下面的 await pending 报告，这里不让它成为未处理的拒绝
-      pending.catch(() => {})
-      await waitUntilBlocked(database, holderPid, race.waiting ?? 1)
+      const ended = (): string | undefined => outcome
+      pending = race.request(async count => waitUntilBlocked(database, holderPid, count, ended))
+      pending.then(
+        (value) => {
+          outcome = describeOutcome(value)
+        },
+        (error: unknown) => {
+          outcome = `失败：${String(error)}`
+        },
+      )
+      await waitUntilBlocked(database, holderPid, race.waiting ?? 1, ended)
       await race.change(client)
       await client.query('COMMIT')
     }

@@ -46,6 +46,7 @@ function setup(credentials?: UserCredentials) {
   const repository = {
     findCredentialsByUsername: vi.fn(async (_username: string) => credentials),
     replacePasswordHash: vi.fn(async (_id: string, _expected: string, _next: string) => true),
+    findCredentialsById: vi.fn(async (_id: string): Promise<UserCredentials | undefined> => credentials),
     findById: vi.fn(async (_id: string) => credentials?.user),
     passwordHashParameters: vi.fn(async () => STORED_PARAMETERS),
   }
@@ -117,12 +118,32 @@ describe('UsersService.verifyCredentials', () => {
     expect(repository.replacePasswordHash).toHaveBeenCalledWith(ALICE.id, 'old:secret', 'hash:secret')
   })
 
-  it('重新哈希时发现哈希已经变了（期间改过密码或重置）：不覆盖，凭据仍带验证时的哈希，事务里复核不会通过', async () => {
+  it('重新哈希时发现哈希已经变了（期间改过密码或重置）：不覆盖；库里的新哈希对这个密码不成立，凭据仍带验证时的哈希，事务里复核不会通过', async () => {
     const { service, repository, hasher } = setup({ user: ALICE, passwordHash: 'old:secret' })
-    vi.spyOn(hasher, 'verify').mockResolvedValue(true)
+    vi.spyOn(hasher, 'verify').mockImplementation(async hash => hash === 'old:secret')
     hasher.stale = true
     repository.replacePasswordHash.mockResolvedValueOnce(false)
+    repository.findCredentialsById.mockResolvedValueOnce({ user: ALICE, passwordHash: 'hash:changed-elsewhere' })
     expect(await service.verifyCredentials('alice', 'secret')).toEqual({ valid: true, credentials: { user: ALICE, passwordHash: 'old:secret' } })
+  })
+
+  it('重新哈希时另一次正确的登录先换了哈希（复验 N1）：库里的新哈希对这个密码成立，凭据带它去复核，两次登录都成功', async () => {
+    const { service, repository, hasher } = setup({ user: ALICE, passwordHash: 'old:secret' })
+    vi.spyOn(hasher, 'verify').mockImplementation(async (hash, password) => hash === 'old:secret' || hash === `hash:${password}`)
+    hasher.stale = true
+    repository.replacePasswordHash.mockResolvedValueOnce(false)
+    repository.findCredentialsById.mockResolvedValueOnce({ user: ALICE, passwordHash: 'hash:secret' })
+    expect(await service.verifyCredentials('alice', 'secret')).toEqual({ valid: true, credentials: { user: ALICE, passwordHash: 'hash:secret' } })
+  })
+
+  it('重新哈希时发现账户已经停用：不按新哈希验证，凭据仍带验证时的哈希', async () => {
+    const { service, repository, hasher } = setup({ user: ALICE, passwordHash: 'old:secret' })
+    const verify = vi.spyOn(hasher, 'verify').mockResolvedValue(true)
+    hasher.stale = true
+    repository.replacePasswordHash.mockResolvedValueOnce(false)
+    repository.findCredentialsById.mockResolvedValueOnce({ user: { ...ALICE, status: 'disabled' }, passwordHash: 'hash:secret' })
+    expect(await service.verifyCredentials('alice', 'secret')).toEqual({ valid: true, credentials: { user: ALICE, passwordHash: 'old:secret' } })
+    expect(verify).toHaveBeenCalledTimes(1)
   })
 
   it('重新哈希失败只记警告，不影响这次登录', async () => {

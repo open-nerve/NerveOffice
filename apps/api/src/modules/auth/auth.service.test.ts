@@ -135,7 +135,7 @@ describe('AuthService.login', () => {
     })
   })
 
-  it('复核不通过（验证之后改了密码、签发或完成了重置、停用了，审查 A1）：按凭据无效处理，不建会话，名额不退回，写审计', async () => {
+  it('复核不通过（验证之后改了密码、签发或完成了重置、停用了，审查 A1）：按凭据无效处理，不建会话，名额不退回，写审计（原因另记，复验 N6）', async () => {
     const { service, ticket, sessions, audit } = setup({ stillValid: false })
     expect((await errorOf(service.login(REQUEST, ORIGIN, 'previous-token'))).code).toBe('INVALID_CREDENTIALS')
     expect(ticket.succeeded).not.toHaveBeenCalled()
@@ -146,7 +146,7 @@ describe('AuthService.login', () => {
       actor: { type: 'anonymous' },
       target: { type: 'user', id: ALICE.id },
       origin: ORIGIN,
-      details: { reason: 'invalid_credentials' },
+      details: { reason: 'credentials_changed' },
     })
   })
 

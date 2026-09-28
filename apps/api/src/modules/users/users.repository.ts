@@ -177,6 +177,14 @@ export class UsersRepository {
     await executorOf(this.db, transaction).execute(sql`SELECT pg_advisory_xact_lock(hashtextextended('nerve-office:system-admins', 0))`)
   }
 
+  /**
+   * 同一把锁的共享模式（复验 N3）：其他管理操作复核操作者时取它。与取消、停用系统管理员（排他模式）互斥，
+   * 复核之后到提交之前操作者的角色不会变；共享模式之间不互斥，管理操作照常并发
+   */
+  async lockSystemAdminsShared(transaction: Transaction): Promise<void> {
+    await executorOf(this.db, transaction).execute(sql`SELECT pg_advisory_xact_lock_shared(hashtextextended('nerve-office:system-admins', 0))`)
+  }
+
   /** 除这个账户以外的有效系统管理员的数量 */
   async countActiveAdminsExcept(id: string, transaction: Transaction): Promise<number> {
     const [row] = await executorOf(this.db, transaction)

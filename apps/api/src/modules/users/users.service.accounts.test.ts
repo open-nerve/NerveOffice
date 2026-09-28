@@ -43,6 +43,9 @@ function setup(target: AccountRecord | undefined, otherActiveAdmins = 1, actor: 
     lockSystemAdmins: vi.fn(async () => {
       calls.push('lock-admins')
     }),
+    lockSystemAdminsShared: vi.fn(async () => {
+      calls.push('lock-admins-shared')
+    }),
     findById: vi.fn(async (id: string) => {
       calls.push(`read:${id}`)
       return id === ACTOR_ID ? actor ?? undefined : target
@@ -126,14 +129,23 @@ describe('UsersService：停用与启用（M2-P1 设计 §3.5）', () => {
 
   it('账户不存在：NOT_FOUND', async () => {
     expect(await errorCodeOf(setup(undefined).service.disable('id', ACTOR_ID, TX))).toBe('NOT_FOUND')
-    expect(await errorCodeOf(setup(undefined).service.enable('id', TX))).toBe('NOT_FOUND')
+    expect(await errorCodeOf(setup(undefined).service.enable('id', ACTOR_ID, TX))).toBe('NOT_FOUND')
   })
 
-  it('启用：不取管理员的锁；已经有效的原样返回', async () => {
+  it('启用：取管理员的共享锁、复核操作者，再锁行（复验 N3）；已经有效的原样返回', async () => {
     const disabled = setup(account({ status: 'disabled' }))
-    expect(await disabled.service.enable('id', TX)).toMatchObject({ changed: true, account: { status: 'active' } })
-    expect(disabled.calls).toEqual(['lock-row'])
-    expect(await setup(account({})).service.enable('id', TX)).toMatchObject({ changed: false })
+    expect(await disabled.service.enable('id', ACTOR_ID, TX)).toMatchObject({ changed: true, account: { status: 'active' } })
+    expect(disabled.calls).toEqual(['lock-admins-shared', `read:${ACTOR_ID}`, 'lock-row'])
+    expect(await setup(account({})).service.enable('id', ACTOR_ID, TX)).toMatchObject({ changed: false })
+    expect(await errorCodeOf(setup(account({ status: 'disabled' }), 1, account({ id: ACTOR_ID, systemRole: 'member' })).service.enable('id', ACTOR_ID, TX))).toBe('PERMISSION_DENIED')
+  })
+
+  it('lockActingAdmin：取共享锁再复核操作者（其他管理操作的事务第一步，复验 N3）', async () => {
+    const ok = setup(account({}))
+    await ok.service.lockActingAdmin(ACTOR_ID, TX)
+    expect(ok.calls).toEqual(['lock-admins-shared', `read:${ACTOR_ID}`])
+    for (const actor of [account({ id: ACTOR_ID, systemRole: 'member' }), account({ id: ACTOR_ID, systemRole: 'admin', status: 'disabled' }), null])
+      expect(await errorCodeOf(setup(account({}), 1, actor).service.lockActingAdmin(ACTOR_ID, TX))).toBe('PERMISSION_DENIED')
   })
 })
 

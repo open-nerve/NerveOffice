@@ -49,7 +49,7 @@ export class AdminUsersService {
   /** 启用：个人空间与文档都没有变过，只改状态 */
   async enable(actor: Principal, userId: string, origin: HttpOrigin): Promise<AdminUser> {
     return this.transactions.run(async (transaction) => {
-      const change = await this.users.enable(userId, transaction)
+      const change = await this.users.enable(userId, actor.user.id, transaction)
       if (change.changed)
         await this.audit.record({ action: 'users.enabled', actor: actorOf(actor), target: { type: 'user', id: userId }, origin }, { transaction })
       return toAdminUser(change.account)

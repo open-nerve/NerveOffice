@@ -56,6 +56,7 @@ function toInvitation(record: InvitationRecord, issuer: UserSummary): Invitation
 /**
  * 邀请注册（M2-P1 设计 §3.4，US-M2-01）：管理员填好登录名与显示名，签发一次性链接；受邀人打开链接设置密码，建成账户与个人空间，
  * 同时登录。锁的顺序固定为先按登录名的 advisory lock、再邀请的行锁（签发、重发、接受都一样），互相等待时不成环。
+ * 签发、重发、作废的事务第一步复核操作者（system-admins 的共享锁，复验 N3），排在这两把锁之前。
  */
 @Injectable()
 export class InvitationsService {
@@ -79,6 +80,7 @@ export class InvitationsService {
   async issue(actor: User, request: CreateInvitationRequest, origin: HttpOrigin): Promise<IssuedInvitation> {
     const token = generateLinkToken()
     const record = await this.transactions.run(async (transaction) => {
+      await this.users.lockActingAdmin(actor.id, transaction)
       await this.accounts.lockUsername(request.username, transaction)
       await this.requireUsernameAvailable(request.username, actor, origin, transaction)
       return this.insert(actor, request.username, request.displayName, token, origin, transaction)
@@ -93,6 +95,7 @@ export class InvitationsService {
       throw new AppError('NOT_FOUND')
     const token = generateLinkToken()
     const record = await this.transactions.run(async (transaction) => {
+      await this.users.lockActingAdmin(actor.id, transaction)
       await this.accounts.lockUsername(peek.username, transaction)
       const old = await this.repository.findByIdForUpdate(invitationId, transaction)
       if (old === undefined)
@@ -110,6 +113,7 @@ export class InvitationsService {
   /** 作废：已接受或已作废的原样返回，不记审计 */
   async revoke(actor: User, invitationId: string, origin: HttpOrigin): Promise<Invitation> {
     const record = await this.transactions.run(async (transaction) => {
+      await this.users.lockActingAdmin(actor.id, transaction)
       const current = await this.repository.findByIdForUpdate(invitationId, transaction)
       if (current === undefined)
         throw new AppError('NOT_FOUND')

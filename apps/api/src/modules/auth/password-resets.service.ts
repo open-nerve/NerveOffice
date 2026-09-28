@@ -55,9 +55,10 @@ export class PasswordResetsService {
   }
 
   /**
-   * 签发：账户不存在 NOT_FOUND，已停用 ACCOUNT_DISABLED。一个事务里：锁住账户行并复核、作废这个账户未用的旧重置、新建、
-   * 把密码换成不可用的哈希（旧密码随即失效，审查 A7）、撤销全部会话（原因 password_reset）、记审计。
-   * 并发的签发在账户行上排队，后一个作废前一个（审查 A2）。actor 是签发的系统管理员，运维命令签发时是系统
+   * 签发：账户不存在 NOT_FOUND，已停用 ACCOUNT_DISABLED。一个事务里：复核操作者（系统管理员签发时，复验 N3）、
+   * 锁住账户行并复核、作废这个账户未用的旧重置、新建、把密码换成不可用的哈希（旧密码随即失效，审查 A7）、
+   * 撤销全部会话（原因 password_reset）、记审计。并发的签发在账户行上排队，后一个作废前一个（审查 A2）。
+   * actor 是签发的系统管理员，运维命令签发时是系统
    */
   async issue(actor: AuditEvent['actor'], userId: string, origin: AuditOrigin): Promise<IssuedPasswordReset> {
     // 先查一次：账户不存在或已停用时不必算哈希。事务里在锁内再复核
@@ -68,6 +69,8 @@ export class PasswordResetsService {
       throw new Error('生成的令牌格式不对')
     const unusableHash = await this.unusablePasswordHash()
     const record = await this.transactions.run(async (transaction) => {
+      if (actor.type === 'user')
+        await this.users.lockActingAdmin(actor.id, transaction)
       requireIssuable(await this.users.lockAccount(userId, transaction))
       await this.repository.revokeOpenOfUser(userId, transaction)
       const created = await this.repository.insert({

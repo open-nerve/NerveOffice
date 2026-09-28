@@ -167,8 +167,9 @@ export class UsersService implements OnModuleInit {
     return { account: await this.repository.setStatus(account.id, 'disabled', transaction), changed: true }
   }
 
-  /** 启用：只会让有效的账户变多，不需要"至少保留一个管理员"的锁 */
-  async enable(userId: string, transaction: Transaction): Promise<AccountChange> {
+  /** 启用：只会让有效的账户变多，"至少保留一个管理员"的检查不必排他；操作者照样在锁里复核（复验 N3） */
+  async enable(userId: string, actorId: string, transaction: Transaction): Promise<AccountChange> {
+    await this.lockActingAdmin(actorId, transaction)
     const account = await this.lockedAccount(userId, transaction)
     if (account.status === 'active')
       return { account, changed: false }
@@ -223,8 +224,18 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
-   * 调用方已取 system-admins 的锁：谁是有效的系统管理员，只有持这个锁的事务能改（启用只让管理员变多，不影响这里），
-   * 所以不用再锁操作者的行
+   * 管理操作（签发重置、启用、邀请的签发、作废与重发）的事务第一步（复验 N3）：取 system-admins 的共享锁，复核操作者
+   * 仍是有效的系统管理员。会话守卫检查之后、事务开始之前（例如签发重置时等待哈希的几秒里）操作者可能刚被取消或停用；
+   * 取消与停用取的是排他锁，复核之后到提交之前不会变。锁的顺序：system-admins 的锁在最前面，与停用、系统角色相同
+   */
+  async lockActingAdmin(actorId: string, transaction: Transaction): Promise<void> {
+    await this.repository.lockSystemAdminsShared(transaction)
+    await this.requireActingAdmin(actorId, transaction)
+  }
+
+  /**
+   * 调用方已取 system-admins 的锁（排他或共享）：取消与停用系统管理员都要排他锁，复核之后操作者不会被取消或停用；
+   * 启用取共享锁，只会让操作者从无效变有效，不影响"已经通过"的复核。所以不用再锁操作者的行
    */
   private async requireActingAdmin(actorId: string, transaction: Transaction): Promise<void> {
     const actor = await this.repository.findById(actorId, transaction)
@@ -238,13 +249,18 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
-   * 按当前参数重新哈希，哈希还是验证时的那个才换（审查 A3）。换了就返回带新哈希的凭据，事务里按它复核；
-   * 没换（期间改过密码）或失败时返回原来的凭据。失败只记日志，下次登录时再试
+   * 按当前参数重新哈希，哈希还是验证时的那个才换（审查 A3）。换了就返回带新哈希的凭据，事务里按它复核。
+   * 没换，说明期间别处改了哈希：可能是同一个人的另一次登录先重新哈希了（两次正确的登录同时进行），库里的新哈希对这个密码
+   * 仍然成立，再验证一次，成立就按它复核，免得把正确的登录算成失败（复验 N1）；改了密码、签发了重置时验证不过，
+   * 照原来的凭据去复核（不通过）。失败只记日志，返回原来的凭据，下次登录时再试
    */
   private async rehash(credentials: VerifiedCredentials, password: string): Promise<VerifiedCredentials> {
     try {
       const passwordHash = await this.hasher.hash(password)
-      return await this.repository.replacePasswordHash(credentials.user.id, credentials.passwordHash, passwordHash) ? { ...credentials, passwordHash } : credentials
+      if (await this.repository.replacePasswordHash(credentials.user.id, credentials.passwordHash, passwordHash))
+        return { ...credentials, passwordHash }
+      const current = await this.repository.findCredentialsById(credentials.user.id)
+      return current?.user.status === 'active' && await this.hasher.verify(current.passwordHash, password) ? current : credentials
     }
     catch (error) {
       this.#logger.warn('用新参数重新哈希密码失败，下次登录时再试', { err: error, userId: credentials.user.id })

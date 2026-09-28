@@ -1,10 +1,12 @@
-// 改动账户的并发（M2-P1 审查 A1、A2、A9、A10、A12）：验证在事务之外，事务里先锁账户行再复核；锁的顺序统一，互相等待时不成环。
+// 改动账户的并发（M2-P1 审查 A1、A2、A9、A10、A12，复验 N1–N3）：验证在事务之外，事务里先锁账户行再复核；锁的顺序统一，
+// 互相等待时不成环；管理操作在锁里复核操作者。
 // 用两个连接构造确定的交错：一个连接持锁，等被测的请求在锁上等着了，再改数据、提交（support/held-lock.ts）。
 import type pg from 'pg'
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
+import { randomBytes } from 'node:crypto'
 import { errorResponseSchema, issuedInvitationSchema, issuedPasswordResetSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount, passwordHashOf } from '../support/accounts.ts'
@@ -73,6 +75,9 @@ async function issuedInvitation(username: string) {
   return { id: issued.invitation.id, token: tokenOf(issued.url) }
 }
 
+/** 哈希参数比应用的配置旧的账户：登录成功时按当前参数重新哈希 */
+const OLD_ARGON2 = { memoryCost: 12_288, timeCost: 3, parallelism: 1 }
+
 /** 持有账户行的锁：与改动账户的事务第一步取的锁相同（FOR NO KEY UPDATE） */
 function lockAccountRow(account: TestAccount) {
   return async (client: pg.Client) => client.query('SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE', [account.id])
@@ -104,6 +109,36 @@ describe('US-M2-02 登录与修改密码：验证之后、提交之前的变化�
     expect(await count('SELECT count(*)::int AS count FROM auth_sessions WHERE user_id = $1', [bea.id])).toBe(0)
   })
 
+  it('登录按新参数重新哈希时，别处刚改了密码：不覆盖回去（条件更新，审查 A3），这次登录按凭据无效处理', async () => {
+    const old = await createAccount(database, { username: 'oldparams', argon2: OLD_ARGON2 })
+    const changed = await passwordHashOf('changed elsewhere')
+    // 重新哈希是事务之外的一条更新，在持锁的连接上等着；放开之前把密码改掉
+    const response = await raceAgainstHeldLock(database, {
+      hold: lockAccountRow(old),
+      request: async () => postLogin(app.baseUrl, { username: 'oldparams', password: old.password }),
+      change: async client => client.query('UPDATE users SET password_hash = $1 WHERE id = $2', [changed, old.id]),
+    })
+    expect(response.status).toBe(401)
+    expect(await passwordHashOfAccount(old)).toBe(changed)
+    expect((await postLogin(app.baseUrl, { username: 'oldparams', password: 'changed elsewhere' })).status).toBe(200)
+  })
+
+  it('同一个人（哈希的参数过时）两次正确的登录同时进行：都成功，不把后一次当成密码错误（复验 N1）', async () => {
+    const twin = await createAccount(database, { username: 'twin', argon2: OLD_ARGON2 })
+    // 两次登录都对旧哈希验证通过、都要重新哈希：先换的一方成功，后一方的条件更新改不到行，再按库里的新哈希验证一次
+    const responses = await raceAgainstHeldLock(database, {
+      hold: lockAccountRow(twin),
+      request: async () => Promise.all([
+        postLogin(app.baseUrl, { username: 'twin', password: twin.password }),
+        postLogin(app.baseUrl, { username: 'twin', password: twin.password }),
+      ]),
+      waiting: 2,
+      change: async () => undefined,
+    })
+    expect(responses.map(response => response.status)).toEqual([200, 200])
+    expect(await count('SELECT count(*)::int AS count FROM audit_events WHERE action = \'auth.login_failed\' AND target_id = $1', [twin.id])).toBe(0)
+  })
+
   it('修改密码验证过旧密码之后，别处改了密码（例如签发了重置）：403，不覆盖别处设的密码，记审计', async () => {
     const cid = await createAccount(database, { username: 'cid' })
     const here = await login(app.baseUrl, 'cid', cid.password)
@@ -116,7 +151,8 @@ describe('US-M2-02 登录与修改密码：验证之后、提交之前的变化�
     expect(response.status).toBe(403)
     expect(await codeOf(response)).toBe('CURRENT_PASSWORD_INCORRECT')
     expect(await passwordHashOfAccount(cid)).toBe(changed)
-    expect(await count('SELECT count(*)::int AS count FROM audit_events WHERE action = \'users.password_change_failed\' AND target_id = $1', [cid.id])).toBe(1)
+    // 审计的原因与"旧密码不对"分开：管理员查得到是别处改了密码（复验 N6）
+    expect(await one('SELECT details FROM audit_events WHERE action = \'users.password_change_failed\' AND target_id = $1', [cid.id])).toEqual({ details: { reason: 'credentials_changed' } })
   })
 })
 
@@ -135,6 +171,22 @@ describe('US-M2-03 重置密码：锁的顺序与事务里的复核（审查 A2�
     expect(await count('SELECT count(*)::int AS count FROM auth_password_resets WHERE user_id = $1 AND used_at IS NULL AND revoked_at IS NULL', [dan.id])).toBe(1)
     const inspected = await Promise.all(tokens.map(async token => (await postPublic(app.baseUrl, '/api/auth/password-resets/inspect', { token })).status))
     expect(inspected.sort()).toEqual([200, 410])
+  })
+
+  it('别的事务持有账户行的 FOR KEY SHARE（例如插入引用它的行时的外键检查）：签发重置不等它（账户行用 FOR NO KEY UPDATE）', async () => {
+    const kim = await createAccount(database, { username: 'kim' })
+    // 用 FOR UPDATE 时会等到应用的锁等待上限（5 秒）之后 500；两个管理员同时互相签发时还会死锁
+    const status = await database.query(async (client) => {
+      await client.query('BEGIN')
+      try {
+        await client.query('SELECT 1 FROM users WHERE id = $1 FOR KEY SHARE', [kim.id])
+        return (await issueReset(kim)).status
+      }
+      finally {
+        await client.query('ROLLBACK')
+      }
+    })
+    expect(status).toBe(201)
   })
 
   it('签发时账户刚被停用：409 ACCOUNT_DISABLED，不留下未用的重置，密码不变', async () => {
@@ -198,34 +250,62 @@ describe('US-M2-04 停用与会话、操作者的复核（审查 A1、A2、A12�
     expect((await asUser(app.baseUrl, session, '/api/auth/session')).status).toBe(401)
   })
 
-  it('操作者在取到锁之前被取消了系统管理员：403，目标账户不变', async () => {
-    const boss = await createAccount(database, { username: 'boss', systemRole: 'admin' })
-    const bossSession = await login(app.baseUrl, 'boss', boss.password)
+  it('操作者在取到锁之前被取消了系统管理员：各管理操作都 403，不留下任何变化（审查 A12，复验 N3）', async () => {
     const ivy = await createAccount(database, { username: 'ivy' })
-    const response = await raceAgainstHeldLock(database, {
-      hold: async client => client.query('SELECT pg_advisory_xact_lock(hashtextextended(\'nerve-office:system-admins\', 0))'),
-      request: async () => asUser(app.baseUrl, bossSession, `/api/admin/users/${ivy.id}/disable`, { method: 'POST' }),
-      change: async client => client.query('UPDATE users SET system_role = \'member\' WHERE id = $1', [boss.id]),
-    })
-    expect(response.status).toBe(403)
-    expect(await codeOf(response)).toBe('PERMISSION_DENIED')
-    expect(await one('SELECT status FROM users WHERE id = $1', [ivy.id])).toEqual({ status: 'active' })
+    const gone = await createAccount(database, { username: 'gone' })
+    await database.query(async client => client.query('UPDATE users SET status = \'disabled\' WHERE id = $1', [gone.id]))
+    const pending = await issuedInvitation('pending-inv')
+    const operations: [string, (session: LoggedIn) => Promise<Response>][] = [
+      ['停用', async session => asUser(app.baseUrl, session, `/api/admin/users/${ivy.id}/disable`, { method: 'POST' })],
+      ['启用', async session => asUser(app.baseUrl, session, `/api/admin/users/${gone.id}/enable`, { method: 'POST' })],
+      ['设为系统管理员', async session => asUser(app.baseUrl, session, `/api/admin/users/${ivy.id}/system-role`, { method: 'PUT', body: { systemRole: 'admin' } })],
+      ['签发重置', async session => asUser(app.baseUrl, session, `/api/admin/users/${ivy.id}/password-reset`, { method: 'POST' })],
+      ['签发邀请', async session => asUser(app.baseUrl, session, '/api/admin/invitations', { method: 'POST', body: { username: 'never-invited', displayName: '不会被邀请' } })],
+      ['作废邀请', async session => asUser(app.baseUrl, session, `/api/admin/invitations/${pending.id}/revoke`, { method: 'POST' })],
+      ['重发邀请', async session => asUser(app.baseUrl, session, `/api/admin/invitations/${pending.id}/reissue`, { method: 'POST' })],
+    ]
+    for (const [index, [name, operate]] of operations.entries()) {
+      const boss = await createAccount(database, { username: `boss-${index}`, systemRole: 'admin' })
+      const bossSession = await login(app.baseUrl, `boss-${index}`, boss.password)
+      // 持有 system-admins 的排他锁（取消、停用系统管理员取的就是它）：管理操作在它上面等着；放开之前取消这位操作者
+      const response = await raceAgainstHeldLock(database, {
+        hold: async client => client.query('SELECT pg_advisory_xact_lock(hashtextextended(\'nerve-office:system-admins\', 0))'),
+        request: async () => operate(bossSession),
+        change: async client => client.query('UPDATE users SET system_role = \'member\' WHERE id = $1', [boss.id]),
+      })
+      expect(response.status, name).toBe(403)
+      expect(await codeOf(response), name).toBe('PERMISSION_DENIED')
+    }
+    expect(await one('SELECT status, system_role FROM users WHERE id = $1', [ivy.id])).toEqual({ status: 'active', system_role: 'member' })
+    expect(await one('SELECT status FROM users WHERE id = $1', [gone.id])).toEqual({ status: 'disabled' })
+    expect(await count('SELECT count(*)::int AS count FROM auth_password_resets WHERE user_id = $1', [ivy.id])).toBe(0)
+    expect(await count('SELECT count(*)::int AS count FROM auth_invitations WHERE username = $1', ['never-invited'])).toBe(0)
+    expect(await one('SELECT revoked_at FROM auth_invitations WHERE id = $1', [pending.id])).toEqual({ revoked_at: null })
   })
 
-  it('停用、启用、签发重置与带着这个账户旧 Cookie 的重新登录同时进行：不互相死锁（没有 5xx）', async () => {
+  it('停用已锁住账户行、在重置行上等着时，带这个账户旧 Cookie 的登录进来：登录排在停用后面（先要账户行），复核不通过，没有死锁', async () => {
     const jon = await createAccount(database, { username: 'jon' })
-    const knownHash = await passwordHashOf(jon.password)
-    for (let round = 0; round < 6; round += 1) {
-      await database.query(async client => client.query('UPDATE users SET status = \'active\', password_hash = $1 WHERE id = $2', [knownHash, jon.id]))
-      const previous = await login(app.baseUrl, 'jon', jon.password)
-      const statuses = (await Promise.all([
-        postLogin(app.baseUrl, { username: 'jon', password: jon.password }, { cookie: previous.cookie }),
-        asUser(app.baseUrl, adminSession, `/api/admin/users/${jon.id}/disable`, { method: 'POST' }),
-        issueReset(jon),
-        asUser(app.baseUrl, adminSession, `/api/admin/users/${jon.id}/enable`, { method: 'POST' }),
-      ])).map(response => response.status)
-      expect(statuses.every(status => status < 500), `第 ${round + 1} 轮：${statuses.join(', ')}`).toBe(true)
-    }
+    const previous = await login(app.baseUrl, 'jon', jon.password)
+    // 未用的重置直接写进库里：经接口签发会让密码失效，登录就走不到事务里了
+    await database.query(async client => client.query(
+      'INSERT INTO auth_password_resets (user_id, token_hash, expires_at) VALUES ($1, $2, now() + interval \'1 day\')',
+      [jon.id, tokenDigest(randomBytes(32).toString('base64url'))],
+    ))
+    // 锁的顺序不统一时（账户行用 FOR UPDATE、登录不先锁账户行），登录先占了旧会话的行、再等账户行，
+    // 停用拿着账户行、随后要撤销那条会话，两边互相等待，一方 500
+    const responses = await raceAgainstHeldLock(database, {
+      hold: async client => client.query('SELECT 1 FROM auth_password_resets WHERE user_id = $1 FOR UPDATE', [jon.id]),
+      request: async (waitForWaiting) => {
+        const disable = asUser(app.baseUrl, adminSession, `/api/admin/users/${jon.id}/disable`, { method: 'POST' })
+        await waitForWaiting(1)
+        const relogin = postLogin(app.baseUrl, { username: 'jon', password: jon.password }, { cookie: previous.cookie })
+        return Promise.all([disable, relogin])
+      },
+      waiting: 2,
+      change: async () => undefined,
+    })
+    expect(responses.map(response => response.status)).toEqual([200, 401])
+    expect(await count('SELECT count(*)::int AS count FROM auth_sessions WHERE user_id = $1 AND revoked_at IS NULL', [jon.id])).toBe(0)
   })
 })
 
