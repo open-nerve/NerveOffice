@@ -15,12 +15,19 @@ import { KeyCode } from '@univerjs/ui'
 
 /** 回车提交之后等写入的上限：值没变时 SDK 不写，过了这个时限就算没有还没提交的输入了 */
 export const WRITE_WAIT_MS = 500
+/** settled 的兜底时限：编辑器还开着时还没提交的输入不会自己清掉，等不到也要返回 */
+const SETTLE_SAFETY_MS = WRITE_WAIT_MS * 2
 
 export interface CellEditingWatch {
   /** 单元格编辑器里有还没提交的输入（回车之后、写入之前也算） */
   readonly hasPendingInput: () => boolean
   /** 有没有还没提交的输入变了 */
   readonly onChange: (listener: () => void) => () => void
+  /**
+   * 等到没有还没提交的输入：回车提交之后等这次的写入（最多 WRITE_WAIT_MS）。保存提交单元格之后、捕获之前等它，
+   * 捕获里才有这次的提交（跨工作表的提交先切表再写入，第二轮复验）；另有兜底的时限，不会一直等下去
+   */
+  readonly settled: () => Promise<void>
   readonly dispose: () => void
 }
 
@@ -39,6 +46,12 @@ export function watchCellEditing(univerAPI: FUniver, unitId: string, onDocumentC
   let changesSinceStart = 0
   /** 回车提交之后在等写入：撤掉等待的函数（兜底的定时器） */
   let stopWaiting: (() => void) | undefined
+  /** 在等"没有还没提交的输入"的调用（settled） */
+  const settleWaiters = new Set<() => void>()
+  const releaseWaiters = (): void => {
+    for (const release of [...settleWaiters])
+      release()
+  }
 
   const set = (next: boolean): void => {
     stopWaiting?.()
@@ -46,6 +59,8 @@ export function watchCellEditing(univerAPI: FUniver, unitId: string, onDocumentC
     if (next === pending)
       return
     pending = next
+    if (!pending)
+      releaseWaiters()
     for (const listener of [...listeners]) {
       try {
         listener()
@@ -96,7 +111,21 @@ export function watchCellEditing(univerAPI: FUniver, unitId: string, onDocumentC
       listeners.add(listener)
       return () => listeners.delete(listener)
     },
+    async settled() {
+      if (!pending)
+        return
+      let release: () => void = () => {}
+      const released = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      settleWaiters.add(release)
+      const safety = setTimeout(release, SETTLE_SAFETY_MS)
+      await released
+      clearTimeout(safety)
+      settleWaiters.delete(release)
+    },
     dispose() {
+      releaseWaiters()
       listeners.clear()
       stopWaiting?.()
       stopWaiting = undefined

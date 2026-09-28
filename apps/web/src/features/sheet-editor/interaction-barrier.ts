@@ -7,7 +7,9 @@
 //   （ADR-009），更早设的不可编辑会被改回来（sheets 的 sheet-permission-init.controller.ts）；
 // - 不用 inert：它让 Univer 初始化时把焦点放进输入框失败，就绪之后点当前的单元格也不会再放（选区没变，
 //   editor-bridge.render-controller.ts 的 isSameEditCell），键入就进不去了。这里只拦事件，焦点事件不拦；
-// - 浏览器的刷新（F5、Ctrl/Cmd+R）与 Tab 照常：它们不改内容，加载卡住时要能刷新，键盘用户要能到页头。
+// - 浏览器的刷新（F5、Ctrl+F5、Ctrl/Cmd+R）与 Tab 由浏览器照常处理（不取消默认行为），但同样不传给 SDK：加载卡住时要能刷新，
+//   键盘用户要能离开表格；SDK 的快捷键也挂在窗口上，Ctrl/Cmd+R 在它那里是"向右填充"、Tab 是"选区右移"，
+//   收到了就会改内容，还会取消浏览器的刷新（第二轮复验）。
 // 在窗口的捕获阶段监听，并在创建编辑器之前挂上：排在 SDK 自己挂在窗口上的监听（快捷键）之前，拦下的事件它们都收不到。
 
 /** 用户的输入：指针与鼠标（含悬停）、触摸、键盘、文本输入与输入法、剪贴板、拖放（滚轮与焦点不拦） */
@@ -43,25 +45,27 @@ const USER_INPUT_EVENTS = [
   'drop',
 ] as const
 
-/** 不拦的按键：刷新（F5，Ctrl/Cmd+R，可以带 Shift）与 Tab（可以带 Shift） */
+/** 由浏览器照常处理的按键：刷新（F5，可以带 Ctrl 或 Shift；Ctrl/Cmd+R，可以带 Shift）与 Tab（可以带 Shift） */
 function isBrowserNavigationKey(event: Event): boolean {
-  if (!(event instanceof KeyboardEvent))
+  if (!(event instanceof KeyboardEvent) || event.altKey)
     return false
-  if (event.key === 'F5' || event.key === 'Tab')
-    return !event.altKey && !event.ctrlKey && !event.metaKey
-  return event.key.toLowerCase() === 'r' && (event.ctrlKey || event.metaKey) && !event.altKey
+  if (event.key === 'F5')
+    return !event.metaKey
+  if (event.key === 'Tab')
+    return !event.ctrlKey && !event.metaKey
+  return event.key.toLowerCase() === 'r' && (event.ctrlKey || event.metaKey)
 }
 
 /**
- * 挂上屏障：目标不在 interactive（页头）里的用户输入一律取消、不再传递。返回撤掉它的函数（可以重复调用）
+ * 挂上屏障：目标不在 interactive（页头）里的用户输入一律取消、不再传递；刷新与 Tab 只是不再传递（浏览器照常处理）。
+ * 返回撤掉它的函数（可以重复调用）
  */
 export function blockInteractions(interactive: HTMLElement, target: Pick<Window, 'addEventListener' | 'removeEventListener'> = interactive.ownerDocument.defaultView ?? window): () => void {
   const block = (event: Event): void => {
     if (event.target instanceof Node && interactive.contains(event.target))
       return
-    if (isBrowserNavigationKey(event))
-      return
-    event.preventDefault()
+    if (!isBrowserNavigationKey(event))
+      event.preventDefault()
     event.stopImmediatePropagation()
   }
   // passive 显式为 false：挂在窗口上的触摸监听，浏览器默认按 passive 处理，取消不了默认行为

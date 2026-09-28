@@ -166,6 +166,64 @@ describe('单元格编辑器里还没提交的输入（Codex 评审 CX6）', () 
     vi.unstubAllGlobals()
   })
 
+  describe('settled：保存提交单元格之后、捕获之前等写入（第二轮复验）', () => {
+    it('没有还没提交的输入：立即返回', async () => {
+      const cellEditing = watch(fakeUniverAPI())
+      await expect(cellEditing.settled()).resolves.toBeUndefined()
+    })
+
+    it('回车提交、写入在之后才到（跨工作表）：写入到了才返回', async () => {
+      const fake = fakeUniverAPI()
+      const cellEditing = watch(fake)
+      fake.started(DeviceInputEventType.Keyboard, KeyCode.A)
+      fake.ended(true)
+      let settled = false
+      const waiting = cellEditing.settled().then(() => {
+        settled = true
+      })
+      await vi.advanceTimersByTimeAsync(4)
+      expect(settled).toBe(false)
+      fake.documentChanged()
+      await waiting
+      expect(settled).toBe(true)
+    })
+
+    it('值没变（SDK 不写）：等到时限返回', async () => {
+      const fake = fakeUniverAPI()
+      const cellEditing = watch(fake)
+      fake.started(DeviceInputEventType.Keyboard, KeyCode.A)
+      fake.ended(true)
+      let settled = false
+      const waiting = cellEditing.settled().then(() => {
+        settled = true
+      })
+      await vi.advanceTimersByTimeAsync(WRITE_WAIT_MS - 1)
+      expect(settled).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      await waiting
+      expect(settled).toBe(true)
+    })
+
+    it('编辑器还开着（还没提交）：不会一直等，兜底的时限到了也返回', async () => {
+      const fake = fakeUniverAPI()
+      const cellEditing = watch(fake)
+      fake.started(DeviceInputEventType.Keyboard, KeyCode.A)
+      const waiting = cellEditing.settled()
+      await vi.advanceTimersByTimeAsync(WRITE_WAIT_MS * 2)
+      await expect(waiting).resolves.toBeUndefined()
+      expect(cellEditing.hasPendingInput()).toBe(true)
+    })
+
+    it('销毁时正在等的调用也返回', async () => {
+      const fake = fakeUniverAPI()
+      const cellEditing = watch(fake)
+      fake.started(DeviceInputEventType.Keyboard, KeyCode.A)
+      const waiting = cellEditing.settled()
+      cellEditing.dispose()
+      await expect(waiting).resolves.toBeUndefined()
+    })
+  })
+
   it('销毁：取消订阅与等待中的清除，不再通知', () => {
     const fake = fakeUniverAPI()
     const cellEditing = watch(fake)

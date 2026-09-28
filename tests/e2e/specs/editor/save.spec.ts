@@ -4,7 +4,7 @@ import { SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { createDocument, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { appendSheet, cellOf, createSheetThroughApi, openCellEditor, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
+import { appendSheet, cellOf, createSheetThroughApi, openCellEditor, openEditor, saveAndWait, saveButton, savedContent, saveStatus, selectCell, typeInCell } from '../../support/sheet.ts'
 
 /** 拦住保存的请求，直到调用返回的 release：用来观察"保存中"与保存期间的修改 */
 async function holdSaves(page: Page): Promise<() => void> {
@@ -223,6 +223,23 @@ test.describe('US-M1-05 保存到云端，看到真实的保存状态', () => {
     expect(values).toEqual(Array.from({ length: SLOW_FORMULA_COUNT }, (_, i) => slowFormulaValue(1000, i)))
     // 第二轮（排队的那一轮）的结果
     expect(cellOf(saved, 'B1')?.v).toBe(4000)
+  })
+
+  test('编辑中的公式引用了另一张表时按保存：先提交、等写入，再保存，服务器上有这次的公式（第二轮复验）', async ({ page }) => {
+    const documentId = await openNewSheet(page, 'save-cross-edit')
+    await appendSheet(page)
+    await expect(page.getByRole('tab', { name: '工作表2' })).toHaveAttribute('aria-selected', 'true')
+    await typeInCell(page, 'B2', '5')
+    await page.getByRole('tab', { name: '工作表1' }).click()
+    // 在工作表1 的 A1 键入 =，点工作表2 的标签、再点它的 B2 选作引用：提交时 SDK 先切回工作表1（4 毫秒的定时器）再写入
+    await typeInCell(page, 'A1', '=', false)
+    await page.getByRole('tab', { name: '工作表2' }).click()
+    await selectCell(page, 'B2')
+    await page.keyboard.press('ControlOrMeta+s')
+    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    const saved = (await savedContent(page, documentId)).snapshot
+    const first = saved.sheetOrder.find(id => saved.sheets[id]?.name === '工作表1') ?? ''
+    expect(cellOf(saved, 'A1', first)).toMatchObject({ f: '=工作表2!B2', v: 5 })
   })
 
   test('跨表引用：改了另一张表的依赖立即保存，缓存值一致', async ({ page }) => {

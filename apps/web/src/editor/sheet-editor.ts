@@ -50,7 +50,8 @@ export interface SheetEditor {
   /** 有没有还没提交的输入变了 */
   readonly onCellEditingChange: (listener: () => void) => () => void
   /**
-   * 提交正在编辑的单元格（等同回车，选区随之下移）；提交之后仍在编辑时返回 false。
+   * 提交正在编辑的单元格（等同回车，选区随之下移），返回时这次的提交已经写进工作簿（跨工作表的提交也等到写入）；
+   * 提交之后仍在编辑时返回 false。
    * 数据验证拒绝输入时，SDK 先关掉编辑器、写入后回滚并弹出它自己的提示：返回 true，快照里是回滚后的内容，与界面一致
    */
   readonly commitCellEditing: () => Promise<boolean>
@@ -185,7 +186,12 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
         return true
       // 与按回车相同：SetCellEditVisibleOperation（keycode 为 ENTER）之后再等一个宏任务（sheets-ui 的 f-workbook.ts:265-281）
       await workbook.endEditingAsync(true)
-      return !workbook.isCellEditing()
+      if (workbook.isCellEditing())
+        return false
+      // 跨工作表的提交在 SDK 里先切表（4 毫秒的定时器）再写入，一个宏任务不够：等单元格编辑的跟踪认出这次的写入，
+      // 保存的捕获里才有这次的提交（第二轮复验）
+      await cellEditing.settled()
+      return true
     },
     async settleFormulas(timeoutMs) {
       usable()

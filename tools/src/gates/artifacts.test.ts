@@ -489,20 +489,22 @@ describe('US-M1-11 A01 产物扫描：外部地址与关键字', () => {
     ['样式的 url()', (n: number) => 'a{b:url(http://www.w3.org/2000/svg)}'.repeat(n), 'assets/x.css'],
     ['SVG 样式里的 url()', (n: number) => `<svg><style>${'a{b:url(http://www.w3.org/2000/svg)}'.repeat(n)}</style></svg>`, 'assets/a.svg'],
   ])('不是平方级（复验 TA7）：%s', (_case, build, path) => {
-    // 取三次里最快的一次：机器忙时的垃圾回收与调度不算进去
-    const elapsed = (n: number): number => {
-      const content = build(n)
-      const times = [0, 1, 2].map(() => {
-        const start = performance.now()
-        expect(scan(content, path).violations).toEqual([])
-        return performance.now() - start
-      })
-      return Math.min(...times)
+    const once = (content: string): number => {
+      const start = performance.now()
+      expect(scan(content, path).violations).toEqual([])
+      return performance.now() - start
     }
-    elapsed(1000)
-    // 数量乘 4，耗时远小于乘 16
-    const small = Math.max(elapsed(4000), 5)
-    expect(elapsed(16000) / small).toBeLessThan(10)
+    once(build(1000))
+    // 大小两种数量交替测，各取五次里最快的一次：两者经历同样的负载，比值不受机器忙闲的影响（原来先后分开测、
+    // 数量乘 4、上限 10，整套单元测试并行跑时线性的扫描也偶发超过 10，第二轮复验）
+    const [small, large] = [build(4_000), build(32_000)]
+    const times = { small: [] as number[], large: [] as number[] }
+    for (let round = 0; round < 5; round++) {
+      times.small.push(once(small))
+      times.large.push(once(large))
+    }
+    // 数量乘 8：线性约 8 倍，平方级约 64 倍；上限 24，两边都留足余量
+    expect(Math.min(...times.large) / Math.max(Math.min(...times.small), 1)).toBeLessThan(24)
     // 计时的用例：CI 的机器慢、又开着覆盖率，给足时间
   }, 60_000)
 

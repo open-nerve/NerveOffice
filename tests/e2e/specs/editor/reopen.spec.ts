@@ -128,4 +128,39 @@ test.describe('US-M1-06 重开看到最后一次保存的内容', () => {
     await saveAndWait(page)
     expect(await note()).toMatchObject({ 'sheet-1': { 3: { 3: { note: 'original' } } } })
   })
+
+  test('重开时就绪之前按 Tab 与 Ctrl/Cmd+R：浏览器照常处理，表格收不到，内容不变（第二轮复验）', async ({ page }) => {
+    await loginThroughApi(page, await createUser('reopen-keys'))
+    const documentId = await createSheetThroughApi(page)
+    await openEditor(page, documentId)
+    await typeInCell(page, 'A1', 'X')
+    await typeInCell(page, 'B1', 'keep')
+    await saveAndWait(page)
+
+    let release: () => void = () => {}
+    const released = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await page.route('**/assets/formula.worker-*.js', async (route) => {
+      await released
+      await route.continue()
+    })
+    await page.reload()
+    await expect(sheetCanvas(page)).toBeVisible({ timeout: 30_000 })
+    await expect(editorSurface(page)).toHaveAttribute('data-editor-state', 'loading')
+    // 在 Univer 的快捷键里，Tab 是选区右移（A1 到 B1），Ctrl/Cmd+R 是向右填充（B1 被 A1 覆盖）：都不能传给它。
+    // 浏览器可能照常刷新页面：刷新之后仍停在载入中，下面照样等就绪
+    await page.keyboard.press('Tab')
+    await page.keyboard.press('ControlOrMeta+R')
+
+    release()
+    await waitForEditor(page, 'steady')
+    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    // Tab 把焦点移出了表格的输入框：就绪之后点单元格照常能键入
+    await typeInCell(page, 'C1', 'after')
+    await expect(saveStatus(page)).toHaveText('有未保存的修改')
+    await saveAndWait(page)
+    const saved = (await savedContent(page, documentId)).snapshot
+    expect([cellOf(saved, 'A1')?.v, cellOf(saved, 'B1')?.v, cellOf(saved, 'C1')?.v]).toEqual(['X', 'keep', 'after'])
+  })
 })

@@ -95,23 +95,31 @@ describe('编辑器就绪之前的交互屏障（Codex 评审 CX1，独立复验
 
   it.each([
     ['F5', { key: 'F5' }],
+    ['Shift+F5', { key: 'F5', shiftKey: true }],
+    ['Ctrl+F5', { key: 'F5', ctrlKey: true }],
     ['Ctrl+R', { key: 'r', ctrlKey: true }],
     ['Cmd+Shift+R', { key: 'R', metaKey: true, shiftKey: true }],
     ['Tab', { key: 'Tab' }],
     ['Shift+Tab', { key: 'Tab', shiftKey: true }],
-  ])('%s 不拦：刷新与切换焦点不改内容，加载卡住时要能刷新（独立复验 S2）', (_case, init) => {
+  ])('%s 由浏览器照常处理（不取消默认行为），但不传给 SDK：它的快捷键里 Ctrl/Cmd+R 是向右填充、Tab 是选区右移（第二轮复验）', (_case, init) => {
     const { chrome, canvas } = page()
     const release = blockInteractions(chrome)
-    expect(dispatch(canvas, key(init))).toEqual(OPEN)
+    const onWindowLater = vi.fn()
+    window.addEventListener('keydown', onWindowLater, { capture: true })
+    expect(dispatch(canvas, key(init))).toEqual({ prevented: false, reached: false })
+    expect(onWindowLater).not.toHaveBeenCalled()
+    window.removeEventListener('keydown', onWindowLater, { capture: true })
     release()
   })
 
-  it('其他带修饰键的 R、带 Alt 的 Tab 照样拦', () => {
+  it('不带 Ctrl/Cmd 的 R、带 Alt 的组合、带 Ctrl 的 Tab 照样拦', () => {
     const { chrome, canvas } = page()
     const release = blockInteractions(chrome)
     expect(dispatch(canvas, key({ key: 'r' }))).toEqual(BLOCKED)
     expect(dispatch(canvas, key({ key: 'r', altKey: true, ctrlKey: true }))).toEqual(BLOCKED)
+    expect(dispatch(canvas, key({ key: 'F5', altKey: true }))).toEqual(BLOCKED)
     expect(dispatch(canvas, key({ key: 'Tab', altKey: true }))).toEqual(BLOCKED)
+    expect(dispatch(canvas, key({ key: 'Tab', ctrlKey: true }))).toEqual(BLOCKED)
     release()
   })
 
