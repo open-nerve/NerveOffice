@@ -65,13 +65,27 @@ function isAlive(pid: number): boolean {
   }
 }
 
-/** 删除中断的测试运行留下的库（名字里带着创建它的进程号，审查 A15）。 */
+/** 测试库的名字：带着进程号，中断的测试运行留下的库可以识别出来。 */
+export function testDatabaseName(): string {
+  return `${DATABASE_PREFIX}${process.pid}_${randomBytes(4).toString('hex')}`
+}
+
+/**
+ * 删除中断的测试运行留下的库（名字里带着创建它的进程号，审查 A15），
+ * 以及角色（bootstrap 脚本的测试建的，名字是库名加 _owner、_app）：角色拥有的库先删掉，角色才能删。
+ */
 async function dropAbandoned(client: pg.Client): Promise<void> {
   const databases = await client.query<{ datname: string }>('SELECT datname FROM pg_database WHERE starts_with(datname, $1)', [DATABASE_PREFIX])
   for (const { datname } of databases.rows) {
     const pid = /^nerve_it_(\d+)_[\da-f]+$/.exec(datname)?.[1]
     if (pid !== undefined && !isAlive(Number(pid)))
       await client.query(`DROP DATABASE IF EXISTS ${pg.escapeIdentifier(datname)} WITH (FORCE)`)
+  }
+  const roles = await client.query<{ rolname: string }>('SELECT rolname FROM pg_roles WHERE starts_with(rolname, $1)', [DATABASE_PREFIX])
+  for (const { rolname } of roles.rows) {
+    const pid = /^nerve_it_(\d+)_[\da-f]+_(?:owner|app)$/.exec(rolname)?.[1]
+    if (pid !== undefined && !isAlive(Number(pid)))
+      await client.query(`DROP ROLE IF EXISTS ${pg.escapeIdentifier(rolname)}`)
   }
 }
 
@@ -99,7 +113,7 @@ async function ensureTemplate(client: pg.Client): Promise<string> {
  * - 否则是空库，用于"迁移从零执行"一类的测试。
  */
 export async function createTestDatabase(options: { migrated?: boolean } = {}): Promise<TestDatabase> {
-  const name = `${DATABASE_PREFIX}${process.pid}_${randomBytes(4).toString('hex')}`
+  const name = testDatabaseName()
   await withClient(async (client) => {
     await client.query(TEMPLATE_LOCK)
     try {

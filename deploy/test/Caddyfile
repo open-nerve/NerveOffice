@@ -1,0 +1,41 @@
+# 测试环境的反向代理（P5 设计 §3.4）：只做 TLS 与转发。安全头、Cookie、缓存策略都由应用下发，这里不增加、不改写。
+{
+	# 不开管理接口，不往容器的系统信任库里装自带 CA 的根证书
+	admin off
+	skip_install_trust
+	servers {
+		# 只发布了 TCP 的 443：不宣告 HTTP/3，免得浏览器去试 UDP
+		protocols h1 h2
+	}
+}
+
+# localhost：本机经发布的端口访问；caddy：编排网络里的其他容器访问（两个客户端地址的核对，DEF-014）
+localhost, caddy {
+	# 测试环境用 Caddy 自带的 CA；正式环境换成公网证书或自有 CA（见部署说明）
+	tls internal
+
+	# 不暴露代理的软件：去掉 Caddy 加的 Server 与 Via
+	header {
+		-Server
+		-Via
+	}
+
+	# 快照上限 5 MiB，加上查询串与余量
+	request_body {
+		max_size 6MB
+	}
+
+	# 就绪探针只给编排与监控用：503 的说明里有迁移名，不对外；存活探针照常转发。
+	# 按前缀屏蔽（Caddy 的路径匹配不区分大小写）：应用的路由不区分末尾斜杠与大小写，/api/health/ready/ 同样是就绪探针
+	respond /api/health/ready* 404
+
+	# 不配置 encode：内容接口的 gzip 原样经过。转发头用默认值：不采信客户端带来的 X-Forwarded-For，以实际来源替换
+	reverse_proxy app:3000 {
+		transport http {
+			# 不替客户端协商压缩，也就不会替没带 Accept-Encoding 的客户端透明解压
+			compression off
+			# 空闲连接 4 秒回收，早于应用的 5 秒（NERVE_HTTP_KEEP_ALIVE_TIMEOUT_MS）：不复用应用已经关掉的连接
+			keepalive 4s
+		}
+	}
+}

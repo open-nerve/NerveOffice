@@ -3,6 +3,9 @@
 // 2. 执行迁移命令；3. 用初始化命令创建管理员（密码经标准输入）；
 // 4. 启动构建好的后端，托管测试构建（apps/web/dist-e2e）；5. 停止时先停后端，再删除数据库。
 //
+// 重启（US-M1-10 的重启用例，P5 设计 §3.6）：收到 SIGUSR2 时强制结束后端（SIGKILL），按原来的参数再启动；
+// 每次启动后端都把自己与后端的进程号写进控制文件（server-control.ts），测试据此发信号、确认后端已经换了。
+//
 // 什么时候停止（审查 B8，退出时的双重 SIGTERM）：
 // - 收到 SIGTERM、SIGINT：Playwright 的优雅关闭向本脚本的整个进程组发信号，单独给本脚本发信号也一样处理；
 // - 标准输入被关闭：Playwright 以管道接本脚本的标准输入，它的主进程被强制结束（kill -9）时管道随之关闭，本脚本不会收到任何信号；
@@ -21,6 +24,7 @@ import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import pg from 'pg'
 import { E2E_ADMIN, E2E_DATABASE_PREFIX, e2eDatabaseUrl, e2eOrigin, e2ePort, maintenanceDatabaseUrl } from './environment.ts'
+import { writeServerControl } from './server-control.ts'
 
 const API_DIST = fileURLToPath(new URL('../../../apps/api/dist', import.meta.url))
 const WEB_ROOT = fileURLToPath(new URL('../../../apps/web/dist-e2e', import.meta.url))
@@ -172,13 +176,31 @@ async function main(): Promise<void> {
   if (stopping)
     return
 
-  api = spawn(process.execPath, ['--import', EXIT_WITH_PARENT, `${API_DIST}/app/main.js`], { env, stdio: ['pipe', log, log], detached: true })
-  api.once('exit', (code, signal) => {
-    if (stopping)
+  const startApi = (): ChildProcess => {
+    const child = spawn(process.execPath, ['--import', EXIT_WITH_PARENT, `${API_DIST}/app/main.js`], { env, stdio: ['pipe', log, log], detached: true })
+    child.once('exit', (code, signal) => {
+      // 正在停止，或者是按 SIGUSR2 强制结束的上一个后端
+      if (stopping || child !== api)
+        return
+      reportLogTail()
+      void stop(`后端意外退出（退出码 ${String(code)}，信号 ${String(signal)}）`, code ?? 1)
+    })
+    writeServerControl({ serverPid: process.pid, apiPid: child.pid ?? 0 })
+    return child
+  }
+  process.on('SIGUSR2', () => {
+    const previous = api
+    if (stopping || previous === undefined)
       return
-    reportLogTail()
-    void stop(`后端意外退出（退出码 ${String(code)}，信号 ${String(signal)}）`, code ?? 1)
+    report('收到 SIGUSR2：强制结束后端，再按原来的参数启动')
+    api = undefined
+    previous.once('exit', () => {
+      if (!stopping)
+        api = startApi()
+    })
+    previous.kill('SIGKILL')
   })
+  api = startApi()
   report(`后端已启动：${e2eOrigin()}`)
 }
 

@@ -25,7 +25,8 @@ export const documents = pgTable('documents', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   // 当前修订号：新建为 1，每次保存加一（P4 设计 §3.5.2）
   revision: integer('revision').notNull().default(1),
-  // Univer 的 unitId：新建时由服务端生成，写进快照的顶层 id，终身不变（00 号计划书 §8.3）
+  // Univer 的 unitId：新建时由服务端生成，写进快照的顶层 id，终身不变（00 号计划书 §8.3）。
+  // 不唯一：复制文档时快照原样复制，不改写 unitId，两份文档的 unitId 相同（计划书 §8.3，Codex 评审 CX5）
   unitId: text('unit_id').notNull(),
   profile: text('profile', { enum: DOCUMENT_PROFILES }).notNull(),
   formatVersion: integer('format_version').notNull(),
@@ -39,7 +40,6 @@ export const documents = pgTable('documents', {
   check('documents_profile_check', oneOf(table.profile, DOCUMENT_PROFILES)),
   check('documents_format_version_check', sql`${table.formatVersion} IN (${sql.raw(PLATFORM_FORMAT_VERSIONS.join(', '))})`),
   check('documents_sdk_version_check', lengthBetween(table.sdkVersion, 1, SDK_VERSION_MAX_LENGTH)),
-  unique('documents_unit_id_key').on(table.unitId),
   // 列表按空间、更新时间从新到旧分页（keyset）
   index('documents_space_updated_idx').on(table.spaceId, table.updatedAt.desc(), table.id.desc()),
 ])

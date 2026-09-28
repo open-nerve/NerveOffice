@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import process from 'node:process'
+import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 
 /** 构建产物里的入口：应用、迁移命令、初始化管理员的命令。 */
@@ -19,8 +20,23 @@ export type ApiEntry = keyof typeof ENTRIES
 export interface ApiProcessOptions {
   /** 命令行参数 */
   args?: readonly string[]
-  /** 写进标准输入的内容（写完即关闭）；不给时标准输入为空，也不是终端 */
-  stdin?: string
+  /**
+   * 写进标准输入的内容（写完即关闭）；不给时标准输入为空，也不是终端。
+   * 给出几段字节时逐段写入，段与段之间停顿 STDIN_PART_PAUSE_MS：模拟管道里分块到达（Codex 评审 CX3）
+   */
+  stdin?: string | readonly Uint8Array[]
+}
+
+/** 分段写入标准输入时段与段之间的停顿：比命令启动到开始读标准输入的时间长，前一段先被读走 */
+const STDIN_PART_PAUSE_MS = 1_500
+
+async function writeInParts(stdin: NodeJS.WritableStream, parts: readonly Uint8Array[]): Promise<void> {
+  for (const [index, part] of parts.entries()) {
+    if (index > 0)
+      await delay(STDIN_PART_PAUSE_MS)
+    stdin.write(part)
+  }
+  stdin.end()
 }
 /** 构建产物的来源：api 与 contracts 的源码（包括迁移文件）。 */
 const SOURCES = ['../../../../apps/api/src', '../../../../packages/contracts/src'].map(path => fileURLToPath(new URL(path, import.meta.url)))
@@ -84,7 +100,12 @@ export function startApiProcess(env: Readonly<Record<string, string>>, entry: Ap
     env: { PATH: process.env.PATH ?? '', ...env },
     stdio: ['pipe', 'pipe', 'pipe'],
   })
-  child.stdin.end(options.stdin ?? '')
+  // 进程已经退出、不再读标准输入时写入会出错（EPIPE）：结果由退出码与日志判断
+  child.stdin.on('error', () => {})
+  if (typeof options.stdin === 'object')
+    void writeInParts(child.stdin, options.stdin)
+  else
+    child.stdin.end(options.stdin ?? '')
   let output = ''
   let hasExited = false
   /** 输出有变化或进程退出时通知正在等待的调用方 */

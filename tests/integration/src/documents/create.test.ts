@@ -110,6 +110,21 @@ describe('US-M1-04 同一个创建请求只生成一份', () => {
     expect(await countWhere('SELECT count(*) FROM documents WHERE title = $1', ['并发'])).toBe(1)
   })
 
+  it('同一个 UUID 的小写与大写写法并发：同样只建一份，每个请求都拿到它（锁与唯一约束按同一个相等定义，Codex 评审 CX7）', async () => {
+    for (let group = 0; group < 10; group++) {
+      const requestId = randomUUID()
+      const title = `大小写 ${group}`
+      const spellings = [requestId, requestId.toUpperCase(), requestId, requestId.toUpperCase()]
+      const responses = await Promise.all(spellings.map(async spelling => create(aliceSession, { type: 'sheet', title, requestId: spelling })))
+      expect(responses.map(response => response.status), `第 ${group} 组`).toEqual([201, 201, 201, 201])
+      const ids = await Promise.all(responses.map(async response => parseExact(documentDetailSchema, await response.json()).id))
+      expect(new Set(ids).size, `第 ${group} 组`).toBe(1)
+      expect(await countWhere('SELECT count(*) FROM documents WHERE title = $1', [title])).toBe(1)
+      expect(await countWhere('SELECT count(*) FROM document_revisions WHERE request_id = $1', [requestId])).toBe(1)
+      expect(await countWhere('SELECT count(*) FROM audit_events WHERE action = \'documents.created\' AND target_id = $1', [ids[0]])).toBe(1)
+    }
+  })
+
   it('同一个 requestId、不同的标题：409 REQUEST_ID_CONFLICT', async () => {
     const requestId = randomUUID()
     await created(aliceSession, { type: 'sheet', title: '甲', requestId })

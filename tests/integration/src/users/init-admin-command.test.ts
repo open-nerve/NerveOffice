@@ -1,6 +1,8 @@
 // 初始化管理员的命令（P3 设计 §3.4，US-M1-01）：用构建产物启动真实进程。密码不出现在参数、输出与日志里。
 import type { ApiProcess, ApiProcessOptions } from '../support/api-process.ts'
 import type { TestDatabase } from '../support/database.ts'
+import { Buffer } from 'node:buffer'
+import { verify } from '@node-rs/argon2'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { testEnvironment } from '../support/api-app.ts'
 import { startApiProcess } from '../support/api-process.ts'
@@ -57,6 +59,26 @@ describe('US-M1-01 初始化管理员的命令', () => {
     expect((await command.exited).code).toBe(1)
     await command.waitForLog(entry => entry.code === 'REQUEST_INVALID' && String(entry.msg).includes('密码不能包含控制字符'))
     expect(command.output()).not.toContain(PASSWORD)
+    expect(await userCount()).toBe('0')
+  })
+
+  it('标准输入分两段到达、一个汉字的字节分在两段里：按原密码初始化，能用原密码验证（Codex 评审 CX3）', async () => {
+    const password = '密码安全正确非常重要1234'
+    const bytes = Buffer.from(`${password}\n`, 'utf8')
+    // 第一段只有"密"的第一个字节
+    const command = run({ args: ['--username', 'admin', '--password-stdin'], stdin: [bytes.subarray(0, 1), bytes.subarray(1)] })
+    expect((await command.exited).code).toBe(0)
+    expect(command.output()).not.toContain(password)
+    const passwordHash = await database.query(async client => (await client.query<{ password_hash: string }>('SELECT password_hash FROM users')).rows[0]?.password_hash)
+    expect(passwordHash).toBeDefined()
+    expect(await verify(passwordHash ?? '', password)).toBe(true)
+  })
+
+  it('标准输入不是合法的 UTF-8：退出码 1，说明原因，什么都不写（不替换成 U+FFFD 设下另一个密码）', async () => {
+    const valid = Buffer.from('密码安全正确非常重要1234', 'utf8')
+    const command = run({ args: ['--username', 'admin', '--password-stdin'], stdin: [valid, Buffer.from([0xE5, 0xAF])] })
+    expect((await command.exited).code).toBe(1)
+    await command.waitForLog(entry => entry.code === 'REQUEST_INVALID' && String(entry.msg).includes('不是合法的 UTF-8'))
     expect(await userCount()).toBe('0')
   })
 

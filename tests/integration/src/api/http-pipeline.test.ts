@@ -192,6 +192,28 @@ describe('安全响应头（P2 设计 §3.6）', () => {
       await proxied.close()
     }
   })
+
+  it('公开地址是 HTTPS，代理转发来的请求却不是 HTTPS（代理没有被信任）：告警一次（DEF-014）', async () => {
+    const env = { NERVE_PUBLIC_ORIGIN: 'https://office.example.com' }
+    const untrusted = await startTestApp({ databaseUrl: database.url, env })
+    const trusted = await startTestApp({ databaseUrl: database.url, env: { ...env, NERVE_TRUST_PROXY: 'loopback' } })
+    const warnings = (app: TestApp): LogEntry[] => app.logs.entries().filter(entry => String(entry.msg).startsWith('反向代理转发来的请求不是 HTTPS'))
+    try {
+      const forwarded = { 'x-forwarded-proto': 'https', 'x-forwarded-for': '203.0.113.7' }
+      // 直接访问应用（例如容器的健康检查）不算
+      await fetch(`${untrusted.baseUrl}/api/health/live`)
+      expect(warnings(untrusted)).toEqual([])
+      for (let attempt = 0; attempt < 3; attempt++)
+        await fetch(`${untrusted.baseUrl}/api/health/live`, { headers: forwarded })
+      expect(warnings(untrusted)).toMatchObject([{ level: 'warn', module: 'security', forwardedProto: 'https', trustProxy: false }])
+      await fetch(`${trusted.baseUrl}/api/health/live`, { headers: forwarded })
+      expect(warnings(trusted)).toEqual([])
+    }
+    finally {
+      await untrusted.close()
+      await trusted.close()
+    }
+  })
 })
 
 describe('请求标识与请求日志（规范 §7）', () => {

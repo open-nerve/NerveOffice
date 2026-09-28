@@ -1,0 +1,97 @@
+# 测试环境（P5 设计 §3.4）：应用 + PostgreSQL 18 + Caddy（HTTPS），供验收与容器 E2E 使用，不是生产部署包（M7）。
+# 用法见 deploy/README.md；变量见同目录的 .env.example。
+name: nerve-office-test
+
+# 迁移与应用共用的配置（迁移命令同样读取完整的配置）
+x-nerve-environment: &nerve-environment
+  NERVE_PUBLIC_ORIGIN: https://localhost:${NERVE_TEST_HTTPS_PORT:-8443}
+  # 只信任紧挨着的一跳（Caddy）：应用的端口不发布，只有 Caddy 连得到（DEF-014）
+  NERVE_TRUST_PROXY: '1'
+  NERVE_LOG_LEVEL: ${NERVE_LOG_LEVEL:-info}
+  NERVE_LOGIN_IP_MAX_FAILURES: ${NERVE_LOGIN_IP_MAX_FAILURES:-50}
+
+services:
+  db:
+    # 与开发库、CI 的服务容器是同一个镜像
+    image: postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${NERVE_DB_ADMIN_PASSWORD:?缺少 NERVE_DB_ADMIN_PASSWORD（数据库管理员的密码）}
+      POSTGRES_DB: postgres
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale-provider=builtin --builtin-locale=C.UTF-8
+      # 第一次初始化数据目录时，db-init/10-roles.sh 用它们建所有者与应用两个角色
+      NERVE_DB_OWNER_PASSWORD: ${NERVE_DB_OWNER_PASSWORD:?缺少 NERVE_DB_OWNER_PASSWORD（所有者角色的密码）}
+      NERVE_DB_APP_PASSWORD: ${NERVE_DB_APP_PASSWORD:?缺少 NERVE_DB_APP_PASSWORD（应用角色的密码）}
+    volumes:
+      # PostgreSQL 18 起，官方镜像的数据目录是 /var/lib/postgresql/18/docker
+      - pgdata:/var/lib/postgresql
+      - ./db-init:/docker-entrypoint-initdb.d:ro
+      - ../sql:/nerve/sql:ro
+    ports:
+      # 只发布到本机回环：E2E 写测试数据、运维排查用
+      - 127.0.0.1:${NERVE_TEST_DB_PORT:-54319}:5432
+    healthcheck:
+      # 经 TCP 检查：初始化期间的临时服务只监听 Unix 套接字，这时不算就绪。再确认库已经建好：pg_isready 对不存在的库也返回成功，
+      # 而第一次初始化失败之后数据目录已经有了，再启动会跳过初始化脚本（审查 A9，排查见部署说明）
+      test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U postgres -d nerve_office && psql -U postgres -d nerve_office -tAc 'SELECT 1' > /dev/null"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    image: ${NERVE_IMAGE:?缺少 NERVE_IMAGE（用 deploy/Dockerfile 构建的镜像）}
+    command: [node, dist/cli/migrate.js]
+    environment:
+      <<: *nerve-environment
+      # 迁移用所有者：表归它所有
+      NERVE_DATABASE_URL: postgres://nerve_owner:${NERVE_DB_OWNER_PASSWORD}@db:5432/nerve_office
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: no
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  app:
+    image: ${NERVE_IMAGE:?缺少 NERVE_IMAGE（用 deploy/Dockerfile 构建的镜像）}
+    environment:
+      <<: *nerve-environment
+      # 应用用受限的应用角色：关不掉审计表的触发器，执行不了 DDL
+      NERVE_DATABASE_URL: postgres://nerve_app:${NERVE_DB_APP_PASSWORD}@db:5432/nerve_office
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # 不发布端口：只在编排的网络里对 Caddy 可见
+    read_only: true
+    tmpfs: [/tmp]
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    # 大于应用自己的退出时限（NERVE_SHUTDOWN_TIMEOUT_MS，8 秒）：排空在途请求之后再被强制结束
+    stop_grace_period: 15s
+
+  caddy:
+    image: caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
+    # 以 nobody 运行（镜像默认是 root，审查 A7）
+    user: '65534:65534'
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      # 只发布到本机回环；公开地址（NERVE_PUBLIC_ORIGIN）的端口与它一致
+      - 127.0.0.1:${NERVE_TEST_HTTPS_PORT:-8443}:443
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    # 证书与自动保存的配置写在 tmpfs 里，归 nobody 所有：测试环境每次启动由自带的 CA 重新签发
+    tmpfs:
+      - /data:uid=65534,gid=65534
+      - /config:uid=65534,gid=65534
+    read_only: true
+    cap_drop: [ALL]
+    # 镜像里的 caddy 带着这项文件 capability：不在容许的范围里时连执行都会被拒绝；有了它，nobody 也能监听 443
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+
+volumes:
+  pgdata: {}

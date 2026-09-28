@@ -1,17 +1,35 @@
 // 命令行读取密码（P3 设计 §3.4）：密码不出现在命令行参数与日志里。
 import type { Buffer } from 'node:buffer'
 import type { EventEmitter } from 'node:events'
+import { AppError } from '../app/index.ts'
 
 /** 用户在终端里按了 Ctrl+C 或 Ctrl+D，放弃输入。 */
 export class InputCancelled extends Error {
   override readonly name = 'InputCancelled'
 }
 
-/** 从标准输入读取全部内容，去掉末尾的一个换行（`echo` 与 `printf` 的输出都能用）。 */
+/**
+ * 从标准输入读取全部内容，去掉末尾的一个换行（`echo` 与 `printf` 的输出都能用）。
+ * 按 UTF-8 流式解码：管道可以在任意字节处分块，一个字符的几个字节可能分在两块里，逐块各自解码会把它变成 U+FFFD，
+ * 替换之后的密码仍然合规，初始化成功却用原密码登录不上（Codex 评审 CX3）。不合法的 UTF-8（包括结尾不完整的字符）
+ * 直接报错，不替换。开头的 BOM 去掉：它不是密码的一部分，在登录页上也输入不了。
+ */
 export async function readPasswordFromStream(input: AsyncIterable<string | Buffer>): Promise<string> {
+  const decoder = new TextDecoder('utf-8', { fatal: true })
+  // 已经解码好的字符串块之前、读完之后：收尾一次，剩下半个字符就报错
+  const decode = (chunk?: Buffer): string => {
+    try {
+      return chunk === undefined ? decoder.decode() : decoder.decode(chunk, { stream: true })
+    }
+    catch (error) {
+      // TextDecoder 的报错不带输入的内容，这里也只说明原因
+      throw new AppError('REQUEST_INVALID', '标准输入不是合法的 UTF-8 文本：密码要按 UTF-8 编码传入', { cause: error })
+    }
+  }
   let content = ''
   for await (const chunk of input)
-    content += typeof chunk === 'string' ? chunk : chunk.toString('utf8')
+    content += typeof chunk === 'string' ? decode() + chunk : decode(chunk)
+  content += decode()
   return content.replace(/\r?\n$/, '')
 }
 

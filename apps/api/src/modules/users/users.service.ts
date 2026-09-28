@@ -18,6 +18,8 @@ export class UsersService implements OnModuleInit {
   readonly #logger: AppLogger
   /** 用户名不存在时拿来算一次哈希的假哈希：响应时间与"密码错误"相近，不暴露账户是否存在 */
   #dummyHash: Promise<string> | undefined
+  /** 读出库里现存哈希的参数、交给哈希器（Codex 评审 CX4）：成功一次即可 */
+  #storedParameters: Promise<void> | undefined
 
   constructor(
     private readonly repository: UsersRepository,
@@ -27,8 +29,12 @@ export class UsersService implements OnModuleInit {
     this.#logger = logger.with({ module: 'users' })
   }
 
-  /** 启动时就生成假哈希：否则第一个不存在的用户名要多算一次哈希，响应时间暴露账户不存在（P3 审查 A13）。 */
+  /**
+   * 启动时就生成假哈希：否则第一个不存在的用户名要多算一次哈希，响应时间暴露账户不存在（P3 审查 A13）。
+   * 同时读出库里现存哈希的参数，但不等它：数据库暂时连不上时照常启动（就绪探针另有报告），验证时再读。
+   */
   async onModuleInit(): Promise<void> {
+    void this.observeStoredParameters()
     await this.dummyHash()
   }
 
@@ -39,10 +45,13 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
-   * 按用户名（不区分大小写）与密码验证。不论账户是否存在、是否可用，都做一次哈希计算。
+   * 按用户名（不区分大小写）与密码验证。不论账户是否存在、是否可用，都做一次哈希计算；验证失败的计算量由哈希器补齐，
+   * 账户的哈希参数与当前配置不同时，失败的耗时也与"用户名不存在"相同（Codex 评审 CX4）。
    * 验证通过且哈希的参数已经过时，顺带用当前的参数重新哈希（失败只记日志，不影响这次登录）。
    */
   async verifyCredentials(usernameInput: string, password: string): Promise<CredentialCheck> {
+    // 先让哈希器知道库里现存的参数（参数调低之后，旧哈希的计算量更大，失败都要补到它）；读过一次之后不再读
+    await this.observeStoredParameters()
     const username = usernameSchema.safeParse(usernameInput)
     const credentials = username.success ? await this.repository.findCredentialsByUsername(username.data) : undefined
     if (credentials === undefined) {
@@ -66,8 +75,31 @@ export class UsersService implements OnModuleInit {
     }
   }
 
+  /**
+   * 库里现存哈希的参数交给哈希器，它把没见过的各组参数算几次（Codex 评审 CX4）。不会失败：读不出来或校准不了时只记警告，
+   * 下次验证时再做；在那之前，哈希器仍从验证过的哈希里记下各组参数的耗时
+   */
+  private async observeStoredParameters(): Promise<void> {
+    // 读参数与校准（各组参数算几次）都可能失败（数据库暂时不可用、等待哈希的请求太多）：都只记警告，下次验证时再做
+    this.#storedParameters ??= this.repository.passwordHashParameters()
+      .then(async segments => this.hasher.observe(segments))
+      .catch((error: unknown) => {
+        this.#storedParameters = undefined
+        this.#logger.warn('没能读出或校准现存密码哈希的参数，下次验证时再做', { err: error })
+      })
+    return this.#storedParameters
+  }
+
+  /** 生成失败（例如等待哈希的请求太多）时不缓存失败：下次再生成，否则之后不存在的用户名都会一直出错 */
   private async dummyHash(): Promise<string> {
-    this.#dummyHash ??= this.hasher.hash(randomBytes(32).toString('base64url'))
+    if (this.#dummyHash === undefined) {
+      const pending = this.hasher.hash(randomBytes(32).toString('base64url'))
+      this.#dummyHash = pending
+      pending.catch(() => {
+        if (this.#dummyHash === pending)
+          this.#dummyHash = undefined
+      })
+    }
     return this.#dummyHash
   }
 }

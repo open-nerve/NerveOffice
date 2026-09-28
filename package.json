@@ -18,6 +18,7 @@
     "test:coverage": "pnpm --filter \"@nerve-office/api...\" run build && vitest run --coverage",
     "test:integration": "pnpm --filter \"@nerve-office/api...\" run build && vitest run --project integration",
     "test:e2e": "pnpm --filter \"@nerve-office/api...\" run build && pnpm --filter @nerve-office/web run build:e2e && pnpm --filter @nerve-office/e2e run test",
+    "test:e2e:container": "node tools/src/deploy/container-e2e-cli.ts",
     "build": "pnpm -r --filter './packages/*' --filter './apps/*' run build",
     "dev:api": "pnpm --filter @nerve-office/api run dev",
     "dev:web": "pnpm --filter @nerve-office/web run dev",

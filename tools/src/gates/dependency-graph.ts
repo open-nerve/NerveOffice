@@ -23,16 +23,19 @@ export interface CollectedGraph {
   unexpanded: string[]
 }
 
-/** 展开生产依赖树（dependencies 与项目层的 optionalDependencies），按安装路径去重；工作区内部包不计入。 */
+/**
+ * 展开生产依赖树（dependencies 与项目层的 optionalDependencies），按安装路径去重。
+ * 工作区内部包（版本是 link:）本身不计入，但它的依赖照常展开：服务端的清单只以 API 为根，
+ * API 经 contracts 用到的外部包只出现在 link 的子树里，跳过整棵子树会让它们漏出许可清单（Codex 评审 CX10）。
+ * 按路径只展开一次，工作区包互相依赖成环时也会停下。
+ */
 export function collectInstalled(projects: readonly LsProject[]): CollectedGraph {
   const byPath = new Map<string, InstalledPackage>()
   const expanded = new Set<string>()
   const placeholders = new Set<string>()
   const visit = (dependencies: Record<string, LsNode> | undefined): void => {
     for (const [key, node] of Object.entries(dependencies ?? {})) {
-      if (node.version.startsWith('link:'))
-        continue
-      if (!byPath.has(node.path))
+      if (!node.version.startsWith('link:') && !byPath.has(node.path))
         byPath.set(node.path, { name: node.from ?? key, version: node.version, path: node.path })
       if (node.deduped === true) {
         if (!expanded.has(node.path))

@@ -69,4 +69,13 @@ export class UsersRepository {
   async updatePasswordHash(id: string, passwordHash: string): Promise<void> {
     await this.db.update(users).set({ passwordHash, updatedAt: sql`now()` }).where(eq(users.id, id))
   }
+
+  /**
+   * 现存密码哈希用到的参数：PHC 字符串（$argon2id$v=19$m=…,t=…,p=…$盐$哈希）的第 4 段，去重之后返回。
+   * 只取参数段，不把哈希本身读出来（Codex 评审 CX4）
+   */
+  async passwordHashParameters(): Promise<string[]> {
+    const rows = await this.db.selectDistinct({ parameters: sql<string>`split_part(${users.passwordHash}, '$', 4)` }).from(users)
+    return rows.map(row => row.parameters)
+  }
 }

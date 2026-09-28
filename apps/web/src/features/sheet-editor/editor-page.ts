@@ -9,6 +9,7 @@ import type { SaveCoordinator, SaveRequest, SaveView } from './save-coordinator.
 import { DOCUMENT_PROFILES, PLATFORM_FORMAT_VERSIONS } from '@nerve-office/contracts'
 import { ApiError, isAuthenticationError, setCsrfToken } from '../../shared/api/index.ts'
 import { loginPath } from '../../shared/lib/login-path.ts'
+import { blockInteractions } from './interaction-barrier.ts'
 import { createSaveCoordinator } from './save-coordinator.ts'
 
 /** 载入的结果：就绪（可以编辑）、内容不存在或无权访问、格式不认识、请求失败、编辑器加载失败。 */
@@ -61,6 +62,8 @@ export interface EditorPageOptions {
   readonly documentId: string | undefined
   /** Univer 挂载的容器；页面的状态写在它的 data-editor-state 上（loading、ready、steady、failed），E2E 按它等待 */
   readonly surface: HTMLElement
+  /** 页头：载入期间只有它可以交互，其余的用户输入都被交互屏障拦下（interaction-barrier.ts） */
+  readonly chrome: HTMLElement
   readonly api: EditorPageApi
   readonly createEditor: (options: CreateSheetEditorOptions) => Promise<SheetEditor>
   readonly page: PageLocation
@@ -125,6 +128,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   let sessionProblem: unknown
   let confirmingSession = false
   const cleanups: (() => void)[] = []
+  /** 载入期间的交互屏障：撤掉它的函数 */
+  let releaseBarrier: (() => void) | undefined
   let current = computeView()
 
   function computeView(): EditorPageView {
@@ -142,9 +147,20 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       listener()
   }
 
+  /**
+   * 载入期间挂着交互屏障（interaction-barrier.ts）：编辑器已经画出来、保存与离开提示还没接上，这时页头之外的输入一律拦下，
+   * 包括 Univer 挂在 body 下的浮层（Codex 评审 CX1，独立复验 N1）；就绪（ready、steady）或失败时撤掉
+   */
   function setSurface(state: SurfaceState): void {
     surface.dataset.editorState = state
     surface.hidden = state === 'failed'
+    if (state === 'loading') {
+      releaseBarrier ??= blockInteractions(options.chrome)
+    }
+    else {
+      releaseBarrier?.()
+      releaseBarrier = undefined
+    }
   }
 
   function finish(result: Exclude<EditorPageLoad, { kind: 'loading' | 'ready' }>): void {
@@ -285,6 +301,11 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     }
   }
 
+  /**
+   * 编辑器就绪：只读时设为不能编辑；能编辑时先建保存状态机（离开提示经它判断），然后才进入 ready、撤掉交互屏障（Codex 评审 CX1）。
+   * 只读靠 setEditable(false)：SDK 在用户变化时会按授权服务重新初始化权限点，把它改回可编辑；M1 只有个人空间、不会只读，
+   * M2 的只读分享要让编辑器身份的授权服务按文档的权限回答（M1 交接单）
+   */
   function ready(document: DocumentDetail, created: SheetEditor, baseRevision: number): void {
     editor = created
     const readOnly = !document.permissions.canEdit
@@ -399,6 +420,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     reload: () => page.reload(),
     dispose: () => {
       disposed = true
+      releaseBarrier?.()
+      releaseBarrier = undefined
       for (const cleanup of cleanups.splice(0))
         cleanup()
       coordinator?.dispose()

@@ -60,16 +60,36 @@ function cellPosition(a1: string): { row: number, column: number } {
   return { row: Number(match[2]) - 1, column: (match[1] ?? 'A').charCodeAt(0) - 'A'.charCodeAt(0) }
 }
 
-/** 点击单元格（按模板的默认行高列宽算出画布上的位置） */
-export async function selectCell(page: Page, a1: string, options: { button?: 'left' | 'right' } = {}): Promise<void> {
+/** 表格的主画布 */
+export function sheetCanvas(page: Page): Locator {
+  return page.locator('canvas[id^="univer-sheet-main-canvas_"]')
+}
+
+/** 单元格的中心在画布上的位置（按模板的默认行高列宽算） */
+function cellPoint(a1: string): { x: number, y: number } {
   const { row, column } = cellPosition(a1)
-  await page.locator('canvas[id^="univer-sheet-main-canvas_"]').click({
-    button: options.button,
-    position: {
-      x: GEOMETRY.rowHeader + column * GEOMETRY.columnWidth + GEOMETRY.columnWidth / 2,
-      y: GEOMETRY.columnHeader + row * GEOMETRY.rowHeight + GEOMETRY.rowHeight / 2,
-    },
-  })
+  return {
+    x: GEOMETRY.rowHeader + column * GEOMETRY.columnWidth + GEOMETRY.columnWidth / 2,
+    y: GEOMETRY.columnHeader + row * GEOMETRY.rowHeight + GEOMETRY.rowHeight / 2,
+  }
+}
+
+/** 点击单元格 */
+export async function selectCell(page: Page, a1: string, options: { button?: 'left' | 'right' } = {}): Promise<void> {
+  await sheetCanvas(page).click({ button: options.button, position: cellPoint(a1) })
+}
+
+/** 鼠标移到单元格上（例如让批注的浮层弹出来）。force 的含义同 openCellEditor */
+export async function hoverCell(page: Page, a1: string, options: { force?: boolean } = {}): Promise<void> {
+  await sheetCanvas(page).hover({ position: cellPoint(a1), force: options.force })
+}
+
+/**
+ * 双击单元格，打开单元格编辑器（不键入）。force 为真时不做可操作性的检查，直接发出鼠标事件
+ * （就绪之前的用例：编辑器页的交互屏障会把它们拦下）
+ */
+export async function openCellEditor(page: Page, a1: string, options: { force?: boolean } = {}): Promise<void> {
+  await sheetCanvas(page).dblclick({ position: cellPoint(a1), force: options.force })
 }
 
 /** 选中一个区域：点击起点，按住 Shift 点击终点 */

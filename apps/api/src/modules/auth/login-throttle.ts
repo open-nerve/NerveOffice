@@ -19,6 +19,8 @@ export interface LoginTicket {
   readonly lockedForSeconds: LockedForSeconds
   /** 验证成功：清除用户名的计数，退回地址维度的名额。与新建会话放在同一个事务里 */
   readonly succeeded: (transaction?: Transaction) => Promise<void>
+  /** 没有验证就放弃了（等待哈希的请求太多，DEF-015）：退回两个维度的名额，不算失败 */
+  readonly abandoned: () => Promise<void>
 }
 
 export type Admission
@@ -64,8 +66,7 @@ export class LoginThrottle {
     for (const dimension of dimensions) {
       const reservation = await this.repository.reserve(dimension.keyHash, dimension.policy)
       if (reservation === undefined) {
-        for (const hold of holds)
-          await this.repository.release(hold.dimension.keyHash, hold.window)
+        await this.release(holds)
         // 预检之后刚被别的请求锁定；查到时锁定可能恰好结束，至少让客户端等 1 秒
         return { admitted: false, retryAfterSeconds: (await this.repository.lockedFor([dimension.keyHash])) ?? 1 }
       }
@@ -93,7 +94,14 @@ export class LoginThrottle {
             await this.repository.release(hold.dimension.keyHash, hold.window, transaction)
         }
       },
+      abandoned: async () => this.release(holds),
     }
+  }
+
+  /** 退回占到的名额：这次没有验证，不算失败。 */
+  private async release(holds: readonly Hold[]): Promise<void> {
+    for (const hold of holds)
+      await this.repository.release(hold.dimension.keyHash, hold.window)
   }
 
   /** 先用户名、再地址：成功时的事务按同一顺序锁这两行，互相等待时不会成环。 */

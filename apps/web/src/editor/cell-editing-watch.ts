@@ -1,0 +1,137 @@
+// 单元格编辑器里还没提交的输入（Codex 评审 CX6）：A14 要求一有修改，页头立即显示"有未保存的修改"，正在编辑、还没回车的内容也是修改。
+// 它还不在工作簿里（作用于单元格编辑器自己的文档），修改序号不计它（P4 设计 §3.7.2），这里单独跟踪。
+// 用 Facade 的 SheetEditStarted、SheetEditChanging、SheetEditEnded（公开 API，sheets-ui 的 facade/f-univer.ts）：
+// - 键入字符或退格开始编辑（键盘开始，F2 除外）：SDK 先换掉编辑中的内容（editing.render-controller.ts 的 clearAndEdit），已经是输入；
+// - 双击、F2、点编辑栏开始编辑：只是打开，编辑中的内容改动（SheetEditChanging，编辑栏里的输入也同步到单元格编辑器）之后才算；
+// - 按 Esc 放弃：立即没有。回车提交：等这次的写入（本文档的修改，由变更检测记下）再清掉，页头不会在写入之前闪一下
+//   "已保存到云端"。同一张表的提交在结束事件之前就同步写入了（编辑期间已经有修改记下，立即清掉）；跨工作表的提交在 SDK 里
+//   先切表（set-worksheet-activate.command.ts 用 setTimeout 4 毫秒）再写入，等下一次修改；值没变时 SDK 不写，最多等 WRITE_WAIT_MS
+//   （独立复验 S1：原来只等一个宏任务，setTimeout 0 先于切表到来）。
+// 离开提示仍按"单元格编辑器开着"判断（isCellEditing），宁可多提示一次。
+// 这里的回调在 SDK 的命令执行过程中同步调用，抛出的异常会打断命令，所以一律接住、交给浏览器的错误报告
+import type { FUniver } from '@univerjs/core/facade'
+import { DeviceInputEventType } from '@univerjs/engine-render'
+import { KeyCode } from '@univerjs/ui'
+
+/** 回车提交之后等写入的上限：值没变时 SDK 不写，过了这个时限就算没有还没提交的输入了 */
+export const WRITE_WAIT_MS = 500
+/** settled 的兜底时限：编辑器还开着时还没提交的输入不会自己清掉，等不到也要返回 */
+const SETTLE_SAFETY_MS = WRITE_WAIT_MS * 2
+
+export interface CellEditingWatch {
+  /** 单元格编辑器里有还没提交的输入（回车之后、写入之前也算） */
+  readonly hasPendingInput: () => boolean
+  /** 有没有还没提交的输入变了 */
+  readonly onChange: (listener: () => void) => () => void
+  /**
+   * 等到没有还没提交的输入：回车提交之后等这次的写入（最多 WRITE_WAIT_MS）。保存提交单元格之后、捕获之前等它，
+   * 捕获里才有这次的提交（跨工作表的提交先切表再写入，第二轮复验）；另有兜底的时限，不会一直等下去
+   */
+  readonly settled: () => Promise<void>
+  readonly dispose: () => void
+}
+
+interface EditEvent {
+  readonly workbook: { readonly getId: () => string }
+}
+
+/**
+ * 必须在创建工作簿之前挂上（与变更检测相同）：Facade 的编辑事件在第一次订阅时才注册。
+ * onDocumentChange 是变更检测的订阅（本文档的修改），用来认出回车提交之后的写入
+ */
+export function watchCellEditing(univerAPI: FUniver, unitId: string, onDocumentChange: (listener: () => void) => () => void): CellEditingWatch {
+  const listeners = new Set<() => void>()
+  let pending = false
+  /** 这次编辑开始之后记下的本文档的修改：同一张表的提交在结束事件之前就写入了 */
+  let changesSinceStart = 0
+  /** 回车提交之后在等写入：撤掉等待的函数（兜底的定时器） */
+  let stopWaiting: (() => void) | undefined
+  /** 在等"没有还没提交的输入"的调用（settled） */
+  const settleWaiters = new Set<() => void>()
+  const releaseWaiters = (): void => {
+    for (const release of [...settleWaiters])
+      release()
+  }
+
+  const set = (next: boolean): void => {
+    stopWaiting?.()
+    stopWaiting = undefined
+    if (next === pending)
+      return
+    pending = next
+    if (!pending)
+      releaseWaiters()
+    for (const listener of [...listeners]) {
+      try {
+        listener()
+      }
+      catch (error) {
+        reportError(error)
+      }
+    }
+  }
+
+  const ours = (event: EditEvent): boolean => event.workbook.getId() === unitId
+  const guarded = <T extends EditEvent>(handle: (event: T) => void) => (event: T): void => {
+    try {
+      if (ours(event))
+        handle(event)
+    }
+    catch (error) {
+      reportError(error)
+    }
+  }
+
+  const unsubscribeChanges = onDocumentChange(() => {
+    changesSinceStart += 1
+    if (stopWaiting !== undefined)
+      set(false)
+  })
+
+  const subscriptions = [
+    univerAPI.addEvent(univerAPI.Event.SheetEditStarted, guarded((event) => {
+      changesSinceStart = 0
+      set(event.eventType === DeviceInputEventType.Keyboard && event.keycode !== KeyCode.F2)
+    })),
+    univerAPI.addEvent(univerAPI.Event.SheetEditChanging, guarded(() => set(true))),
+    univerAPI.addEvent(univerAPI.Event.SheetEditEnded, guarded((event) => {
+      // 放弃、没有输入、写入已经在结束之前完成：立即清掉
+      if (!event.isConfirm || !pending || changesSinceStart > 0) {
+        set(false)
+        return
+      }
+      const timer = setTimeout(set, WRITE_WAIT_MS, false)
+      stopWaiting = () => clearTimeout(timer)
+    })),
+  ]
+
+  return {
+    hasPendingInput: () => pending,
+    onChange(listener) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    async settled() {
+      if (!pending)
+        return
+      let release: () => void = () => {}
+      const released = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      settleWaiters.add(release)
+      const safety = setTimeout(release, SETTLE_SAFETY_MS)
+      await released
+      clearTimeout(safety)
+      settleWaiters.delete(release)
+    },
+    dispose() {
+      releaseWaiters()
+      listeners.clear()
+      stopWaiting?.()
+      stopWaiting = undefined
+      unsubscribeChanges()
+      for (const subscription of subscriptions)
+        subscription.dispose()
+    },
+  }
+}

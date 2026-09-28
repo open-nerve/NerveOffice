@@ -27,15 +27,17 @@ describe('US-M1-11 门禁的快捷脚本', () => {
   })
 })
 
-let dist: string | undefined
+/** 这个用例建的产物目录：一个用例里可以建好几个，结束时全部删掉（只记最后一个会漏删前面的，复验时发现临时目录里积了几百个） */
+const dists: string[] = []
 
 afterEach(() => {
-  if (dist !== undefined)
+  for (const dist of dists.splice(0))
     rmSync(dist, { recursive: true, force: true })
 })
 
 function writeDist(files: Record<string, string>): string {
-  dist = mkdtempSync(join(tmpdir(), 'nerve-dist-'))
+  const dist = mkdtempSync(join(tmpdir(), 'nerve-dist-'))
+  dists.push(dist)
   for (const [path, content] of Object.entries(files)) {
     mkdirSync(join(dist, dirname(path)), { recursive: true })
     writeFileSync(join(dist, path), content)
@@ -58,6 +60,17 @@ describe('US-M1-11 产物门禁的装配', () => {
 
   it('违规：没有构建产物', () => {
     expect(artifactsGate(join(tmpdir(), 'nerve-no-such-dist')).violations.map(v => v.rule)).toEqual(['artifacts/missing-build'])
+  })
+
+  it('违规：产物里没有随部署分发的许可正文，或者正文与清单对不上（Codex 评审 CX9：原来只看清单，删掉正文门禁照样通过）', () => {
+    const { 'THIRD-PARTY-LICENSES.md': _text, ...withoutText } = clean
+    expect(artifactsGate(writeDist(withoutText)).violations.map(v => v.rule)).toEqual(['license-bundle/missing-text-file'])
+    expect(artifactsGate(writeDist({ ...clean, 'THIRD-PARTY-LICENSES.md': '' })).violations.map(v => v.rule)).toEqual(['license-bundle/missing-text-file'])
+    expect(artifactsGate(writeDist({ ...clean, 'THIRD-PARTY-LICENSES.md': '## react 18.3.1（MIT）\n\nMIT License\n' })).violations.map(v => v.rule))
+      .toEqual(['license-bundle/text-mismatch', 'license-bundle/text-mismatch'])
+    // 清单也没有时，只核对正文的文件还在
+    const { '.vite/third-party-packages.json': _bundle, ...neither } = withoutText
+    expect(artifactsGate(writeDist(neither)).violations.map(v => v.rule)).toEqual(['license-bundle/missing-file', 'license-bundle/missing-text-file'])
   })
 
   it('违规：产物里的动态代码、.json 里的外部地址、未登记的文件类型、缺少许可清单', () => {

@@ -35,7 +35,7 @@ export async function createApplication(config: AppConfig, options: ApplicationO
   server.headersTimeout = config.http.headersTimeoutMs
   server.keepAliveTimeout = config.http.keepAliveTimeoutMs
   const inFlight = new InFlightRequests()
-  configureHttp(app, config, { rootLogger, requestContext, inFlight })
+  configureHttp(app, config, { rootLogger, logger, requestContext, inFlight })
   await app.init()
   return new ApplicationRuntime(app, config, rootLogger, inFlight)
 }

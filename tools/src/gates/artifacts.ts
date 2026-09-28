@@ -5,9 +5,11 @@
 // 其他文本文件按各自的语法取出可能是地址的值再识别：HTML 用 parse5 解析（html-values.ts），SVG 按 XML 解析（svg-values.ts），
 // 样式按 CSS 的分词规则（css-values.ts），JSON 按顺序取出每个字符串字面量（json-values.ts）（复验 RA4、SA2、SA4、TA2、TA6）；
 // 门禁无法确定浏览器会怎样解析的写法直接报违规。整个文件另按写法匹配一遍兜底，落在已经报出同一个地址（规范写法）的那一处里的不重复计数。
+// 以字符串为代码的定时器：JS 文件按语法树认调用对象静态可知是定时器、代码参数是字符串的调用（Codex 评审 CX11），其他文本文件按写法匹配；
 // 其余几类动态代码对所有文本文件按写法匹配。
-// 静态扫描判断不了运行时才拼出来的代码与地址（例如 setTimeout(变量)、"https:" + "//" + host 里的变量、
-// 从任意函数的 .constructor 取到的构造函数），这部分由 CSP 兜底：策略里没有 'unsafe-eval'，connect-src 只有 'self'。
+// 静态扫描判断不了运行时才拼出来的代码与地址（例如 setTimeout(变量)、经变量别名的定时器 const t=setTimeout; t("…")、
+// 运行时才算出的属性名、"https:" + "//" + host 里的变量、从任意函数的 .constructor 取到的构造函数），
+// 这部分由 CSP 兜底：策略里没有 'unsafe-eval'，connect-src 只有 'self'。
 import type { ExtractedValues, LocatedValues } from './addresses.ts'
 import type { Reference, TextValue } from './eval-and-function.ts'
 import type { Violation } from './types.ts'
@@ -91,10 +93,16 @@ const EVAL_AND_FUNCTION_PATTERNS: Readonly<Record<string, RegExp>> = {
   'Function(': new RegExp(String.raw`(?<!\bnew\s+)(?:(?<![\w$.])|\b${GLOBAL})Function\s*\((?!\s*["'\x60]return this["'\x60]\s*\))`, 'g'),
 }
 
+/**
+ * 以字符串为代码的定时器：只用于没有语法树的文本文件（与解析不了的 JS）。JS 文件按语法树认（eval-and-function.ts 的 stringTimerAt），
+ * 认得出 globalThis["setTimeout"](…)、Reflect.get(…)(…)、(0,setTimeout)(…)、.call 与 .apply 这些按写法匹配漏掉的写法（Codex 评审 CX11）
+ */
+const STRING_TIMER_PATTERN = new RegExp(String.raw`(?:(?<![\w$.])|\b${GLOBAL})set(?:Timeout|Interval|Immediate)\s*\(\s*["'\x60]`, 'g')
+const STRING_TIMER_LABEL = 'setTimeout(\'…\')'
+
 /** 其他动态代码：所有文本文件都按写法匹配。 */
 const OTHER_DYNAMIC_CODE: Readonly<Record<string, RegExp>> = {
   '.constructor(\'…\')': /\.constructor\s*\(\s*["'`]/g,
-  'setTimeout(\'…\')': new RegExp(String.raw`(?:(?<![\w$.])|\b${GLOBAL})set(?:Timeout|Interval|Immediate)\s*\(\s*["'\x60]`, 'g'),
   'WebAssembly': /\bWebAssembly\b/g,
   '内联 Worker': /\bnew\s+(?:Shared)?Worker\s*\(\s*(?:URL\s*\.\s*createObjectURL|["'`](?:blob|data):)/g,
   'data: 脚本': /["'`]data:(?:text|application)\/(?:javascript|ecmascript)/gi,
@@ -401,6 +409,8 @@ export function scanArtifacts(files: readonly ArtifactFile[], policy: ArtifactPo
       if (!knownRanges.some(([start, end]) => index >= start && index < end))
         violations.push({ rule: 'artifacts/dynamic-code', subject: file.path, detail: `${name}：${context(file.content, index)}` })
     }
+    /** 有语法树时定时器按语法树认，没有时（不是 JS、JS 解析不了）按写法匹配 */
+    let timersFromSyntax = false
     if (isJavaScript(file.path)) {
       const outcome = analyzeJavaScript(file.content)
       if ('error' in outcome) {
@@ -409,12 +419,15 @@ export function scanArtifacts(files: readonly ArtifactFile[], policy: ArtifactPo
         noteRawAddresses(file)
       }
       else {
+        timersFromSyntax = true
         for (const reference of outcome.references) {
           if (isGlobalThisProbe(reference))
             probes += 1
           else
             reportDynamicCode(USAGE_LABELS[reference.usage](reference.name), reference.index)
         }
+        for (const timer of outcome.stringTimers)
+          reportDynamicCode(`${timer.name}('…')`, timer.index)
         for (const value of outcome.texts) {
           const addresses = value.kind === 'string' || value.kind === 'template' ? addressesInValue(value.text) : addressesInCode(value)
           for (const address of addresses)
@@ -429,6 +442,10 @@ export function scanArtifacts(files: readonly ArtifactFile[], policy: ArtifactPo
       }
       probes += [...file.content.matchAll(GLOBAL_THIS_PROBE)].length
       noteTextAddresses(file)
+    }
+    if (!timersFromSyntax) {
+      for (const match of file.content.matchAll(STRING_TIMER_PATTERN))
+        reportDynamicCode(STRING_TIMER_LABEL, match.index)
     }
     for (const [name, pattern] of Object.entries(OTHER_DYNAMIC_CODE)) {
       for (const match of file.content.matchAll(pattern))

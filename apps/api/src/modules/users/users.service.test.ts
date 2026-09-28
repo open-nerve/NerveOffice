@@ -5,11 +5,14 @@ import { AppLogger, createRootLogger, RequestContextStore } from '../logging/ind
 import { PasswordHasher } from './password-hasher.ts'
 import { UsersService } from './users.service.ts'
 
-/** 假的哈希：hash(p) = "hash:p"，记下每次验证用的哈希。 */
+/** 假的哈希：hash(p) = "hash:p"，记下每次验证用的哈希与交给它的现存参数。 */
 class FakeHasher extends PasswordHasher {
   readonly verified: string[] = []
+  readonly observed: (readonly string[])[] = []
   hashes = 0
   stale = false
+  /** observe 失败的次数（例如校准时等待哈希的请求太多） */
+  observeFailures = 0
 
   async hash(password: string): Promise<string> {
     this.hashes += 1
@@ -24,15 +27,27 @@ class FakeHasher extends PasswordHasher {
   needsRehash(): boolean {
     return this.stale
   }
+
+  async observe(parameterSegments: readonly string[]): Promise<void> {
+    if (this.observeFailures > 0) {
+      this.observeFailures -= 1
+      throw new Error('等待密码哈希的请求太多')
+    }
+    this.observed.push(parameterSegments)
+  }
 }
 
 const ALICE: User = { id: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d', username: 'alice', displayName: 'Alice', systemRole: 'member', status: 'active' }
+
+/** 库里现存哈希的参数段 */
+const STORED_PARAMETERS = ['m=19456,t=2,p=1', 'm=12288,t=3,p=1']
 
 function setup(credentials?: UserCredentials) {
   const repository = {
     findCredentialsByUsername: vi.fn(async (_username: string) => credentials),
     updatePasswordHash: vi.fn(async (_id: string, _hash: string) => {}),
     findById: vi.fn(async (_id: string) => credentials?.user),
+    passwordHashParameters: vi.fn(async () => STORED_PARAMETERS),
   }
   const hasher = new FakeHasher()
   const logger = new AppLogger(createRootLogger({ level: 'silent' }), new RequestContextStore())
@@ -69,6 +84,15 @@ describe('UsersService.verifyCredentials', () => {
     expect(hasher.verified).toHaveLength(1)
   })
 
+  it('假哈希生成失败（例如等待哈希的请求太多）：不缓存失败，下次重新生成', async () => {
+    const { service, hasher } = setup(undefined)
+    const hash = vi.spyOn(hasher, 'hash').mockRejectedValueOnce(new Error('等待哈希的请求太多'))
+    await expect(service.verifyCredentials('nobody', 'secret')).rejects.toThrow('等待哈希的请求太多')
+    expect(await service.verifyCredentials('nobody', 'secret')).toEqual({ valid: false })
+    expect(await service.verifyCredentials('nobody', 'secret')).toEqual({ valid: false })
+    expect(hash).toHaveBeenCalledTimes(2)
+  })
+
   it('用户名的写法不合法：不查库，同样算一次哈希', async () => {
     const { service, repository, hasher } = setup({ user: ALICE, passwordHash: 'hash:secret' })
     expect(await service.verifyCredentials('a b', 'secret')).toEqual({ valid: false })
@@ -96,6 +120,55 @@ describe('UsersService.verifyCredentials', () => {
     hasher.stale = true
     await service.verifyCredentials('alice', 'wrong')
     expect(repository.updatePasswordHash).not.toHaveBeenCalled()
+  })
+})
+
+describe('库里现存哈希的参数（Codex 评审 CX4）', () => {
+  it('模块初始化时读出，交给哈希器；不等它读完', async () => {
+    const { service, repository, hasher } = setup(undefined)
+    let finish: (segments: string[]) => void = () => {}
+    repository.passwordHashParameters.mockReturnValueOnce(new Promise((resolve) => {
+      finish = resolve
+    }))
+    await service.onModuleInit()
+    expect(repository.passwordHashParameters).toHaveBeenCalledTimes(1)
+    expect(hasher.observed).toEqual([])
+    finish(STORED_PARAMETERS)
+    await vi.waitFor(() => expect(hasher.observed).toEqual([STORED_PARAMETERS]))
+  })
+
+  it('验证之前先交给哈希器（第一次验证时还没读完就等它）；读过一次之后不再读', async () => {
+    const { service, repository, hasher } = setup({ user: ALICE, passwordHash: 'hash:secret' })
+    const verify = vi.spyOn(hasher, 'verify')
+    await service.verifyCredentials('alice', 'wrong')
+    expect(hasher.observed).toEqual([STORED_PARAMETERS])
+    expect(verify).toHaveBeenCalledTimes(1)
+    await service.verifyCredentials('nobody', 'wrong')
+    await service.verifyCredentials('alice', 'secret')
+    expect(repository.passwordHashParameters).toHaveBeenCalledTimes(1)
+  })
+
+  it('读不出来：只记警告，启动与这次验证照常；下次验证时再读', async () => {
+    const { service, repository, hasher, warn } = setup({ user: ALICE, passwordHash: 'hash:secret' })
+    repository.passwordHashParameters.mockRejectedValueOnce(new Error('数据库不可用')).mockRejectedValueOnce(new Error('数据库不可用'))
+    await service.onModuleInit()
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining('现存密码哈希的参数'), expect.anything()))
+    expect(await service.verifyCredentials('alice', 'secret')).toMatchObject({ valid: true })
+    expect(hasher.observed).toEqual([])
+    expect(await service.verifyCredentials('alice', 'wrong')).toMatchObject({ valid: false })
+    expect(hasher.observed).toEqual([STORED_PARAMETERS])
+    expect(repository.passwordHashParameters).toHaveBeenCalledTimes(3)
+  })
+
+  it('校准失败（等待哈希的请求太多）：同样只记警告，这次验证照常，下次验证时再做（独立复验 N2）', async () => {
+    const { service, repository, hasher, warn } = setup({ user: ALICE, passwordHash: 'hash:secret' })
+    hasher.observeFailures = 1
+    expect(await service.verifyCredentials('alice', 'wrong')).toMatchObject({ valid: false })
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('现存密码哈希的参数'), expect.anything())
+    expect(hasher.observed).toEqual([])
+    expect(await service.verifyCredentials('alice', 'secret')).toMatchObject({ valid: true })
+    expect(hasher.observed).toEqual([STORED_PARAMETERS])
+    expect(repository.passwordHashParameters).toHaveBeenCalledTimes(2)
   })
 })
 

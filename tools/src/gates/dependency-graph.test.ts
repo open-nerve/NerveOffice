@@ -48,6 +48,39 @@ describe('collectInstalled（pnpm 12 的真实输出）', () => {
     }))
     expect(graph.installed.map(p => p.name).sort()).toEqual(['react', 'react-dom'])
   })
+
+  /** 工作区内部包在 pnpm ls 里的写法：from 是包名，版本是 link: 加相对路径，路径是包的目录 */
+  function link(name: string, dir: string, dependencies?: LsProject['dependencies']) {
+    return { from: name, version: `link:../../${dir}`, path: `/repo/${dir}`, ...(dependencies ? { dependencies } : {}) }
+  }
+
+  it('工作区内部包本身不计入，它的依赖照常展开：只出现在 link 子树里的外部包也收进来（Codex 评审 CX10）', () => {
+    // 服务端的清单只以 API 为根：外部包只经 contracts 用到时，只在 contracts 的子树里
+    const graph = collectInstalled([{ name: '@nerve-office/api', path: '/repo/apps/api', dependencies: {
+      '@nestjs/core': node('@nestjs/core', '12.0.0'),
+      '@nerve-office/contracts': link('@nerve-office/contracts', 'packages/contracts', { zod: node('zod', '4.6.5') }),
+    } }])
+    expect(graph.installed.map(p => p.name).sort()).toEqual(['@nestjs/core', 'zod'])
+    expect(checkGraphComplete(graph)).toEqual([])
+  })
+
+  it('工作区内部包互相依赖成环：每个只展开一次，照样停下', () => {
+    const cycle = link('@nerve-office/a', 'packages/a', {
+      'left-pad': node('left-pad', '1.3.0'),
+      '@nerve-office/b': link('@nerve-office/b', 'packages/b', {
+        'right-pad': node('right-pad', '1.0.1'),
+        '@nerve-office/a': link('@nerve-office/a', 'packages/a', { 'left-pad': node('left-pad', '1.3.0') }),
+      }),
+    })
+    expect(names(project({ '@nerve-office/a': cycle }))).toEqual(['left-pad', 'right-pad'])
+  })
+
+  it('link 子树里只以去重占位出现、从未展开的外部包：依赖图不完整', () => {
+    const graph = collectInstalled(project({
+      '@nerve-office/contracts': link('@nerve-office/contracts', 'packages/contracts', { zod: { ...node('zod', '4.6.5'), deduped: true } }),
+    }))
+    expect(checkGraphComplete(graph).map(v => v.rule)).toEqual(['deps/incomplete-tree'])
+  })
 })
 
 describe('US-M1-11 A01 依赖图完整', () => {

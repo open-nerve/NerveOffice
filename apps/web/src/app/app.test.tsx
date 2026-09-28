@@ -119,6 +119,15 @@ describe('US-M1-02 登录与退出', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('尝试次数过多，请 10 分钟后再试')
   })
 
+  it('服务繁忙（等待密码哈希的请求太多，DEF-015）：提示稍后重试，不自动重发', async () => {
+    const api = installFakeApi({ ...LOGGED_OUT, 'POST /api/auth/login': () => apiError(503, 'SERVICE_UNAVAILABLE', 'x', { 'retry-after': '5' }) })
+    renderApp('/login')
+    await fillLogin('alice', 'correct horse')
+    expect(await screen.findByRole('alert')).toHaveTextContent('服务暂时不可用，请稍后重试')
+    expect(requestCount(api, 'POST /api/auth/login')).toBe(1)
+    expect(screen.getByRole('button', { name: '登录' })).toHaveAttribute('aria-disabled', 'false')
+  })
+
   it('浏览器认为离线时登录：请求照常发出，失败时提示网络错误（审查 B4）', async () => {
     installFakeApi({ ...LOGGED_OUT, 'POST /api/auth/login': networkFailure })
     renderApp('/login')

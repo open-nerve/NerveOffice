@@ -7,13 +7,22 @@ import { createSaveCoordinator } from './save-coordinator.ts'
 const ME = '0199a2c4-1f2e-4a3b-8c4d-00000000aaaa'
 const OTHER_TAB = '0199a2c4-1f2e-4a3b-8c4d-00000000bbbb'
 
-/** 假的编辑器：edit() 是一次修改；可以设定正在编辑、提交的结果与公式收齐的结果 */
+/**
+ * 假的编辑器：edit() 是一次修改；可以设定正在编辑、提交的结果与公式收齐的结果。
+ * startCellEditing 打开单元格编辑器，typed 为真时编辑中的内容已经改动（还没提交的输入）
+ */
 function fakeEditor() {
   let seq = 0
   let content = '初始'
   let editing = false
+  let pendingInput = false
   const listeners = new Set<() => void>()
+  const cellEditingListeners = new Set<() => void>()
   const notify = (): void => listeners.forEach(listener => listener())
+  const setPendingInput = (next: boolean): void => {
+    pendingInput = next
+    cellEditingListeners.forEach(listener => listener())
+  }
   const control = {
     commitResult: true,
     settle: 'settled' as 'settled' | 'timeout',
@@ -22,9 +31,19 @@ function fakeEditor() {
       seq += 1
       notify()
     },
-    startCellEditing(text: string): void {
+    startCellEditing(text: string, typed = true): void {
       editing = true
       content = text
+      setPendingInput(typed)
+    },
+    /** 编辑中的内容改动了（例如双击打开之后键入） */
+    typeInCellEditor(): void {
+      setPendingInput(true)
+    },
+    /** 按 Esc 放弃编辑 */
+    cancelCellEditing(): void {
+      editing = false
+      setPendingInput(false)
     },
   }
   const editor: SaveEditor = {
@@ -34,11 +53,17 @@ function fakeEditor() {
       return () => listeners.delete(listener)
     },
     isCellEditing: () => editing,
+    hasPendingCellInput: () => pendingInput,
+    onCellEditingChange: (listener) => {
+      cellEditingListeners.add(listener)
+      return () => cellEditingListeners.delete(listener)
+    },
     commitCellEditing: vi.fn(async () => {
       if (!control.commitResult)
         return false
       editing = false
       seq += 1
+      setPendingInput(false)
       notify()
       return true
     }),
@@ -178,6 +203,61 @@ describe('保存状态', () => {
     const dirty = coordinator.view()
     control.edit('丙')
     expect(coordinator.view()).toBe(dirty)
+  })
+})
+
+describe('单元格里还没提交的输入（Codex 评审 CX6）', () => {
+  it('键入之后还没回车：有未保存的修改；按 Esc 放弃，回到已保存到云端', () => {
+    const { coordinator, control } = setup()
+    const listener = vi.fn()
+    coordinator.subscribe(listener)
+    control.startCellEditing('还没回车')
+    expect(coordinator.view().status).toBe('dirty')
+    expect(listener).toHaveBeenCalledOnce()
+    control.cancelCellEditing()
+    expect(coordinator.view().status).toBe('clean')
+    expect(coordinator.hasUnsavedWork()).toBe(false)
+  })
+
+  it('只是打开单元格编辑器、还没改动：仍是已保存到云端，离开时照样提示；改动之后有未保存的修改', () => {
+    const { coordinator, control } = setup()
+    control.startCellEditing('初始', false)
+    expect(coordinator.view().status).toBe('clean')
+    expect(coordinator.hasUnsavedWork()).toBe(true)
+    control.typeInCellEditor()
+    expect(coordinator.view().status).toBe('dirty')
+  })
+
+  it('保存成功之后又在单元格里键入：立即是有未保存的修改', async () => {
+    const { coordinator, control, calls } = setup()
+    control.edit('甲')
+    const saving = coordinator.save()
+    ;(await sent(calls, 1)).resolve(saved(2))
+    await saving
+    expect(coordinator.view().status).toBe('clean')
+    control.startCellEditing('乙')
+    expect(coordinator.view().status).toBe('dirty')
+  })
+
+  it('保存期间在单元格里键入：仍显示保存中，回包之后是有未保存的修改', async () => {
+    const { coordinator, control, calls } = setup()
+    control.edit('甲')
+    const saving = coordinator.save()
+    const request = await sent(calls, 1)
+    control.startCellEditing('乙')
+    expect(coordinator.view().status).toBe('saving')
+    request.resolve(saved(2))
+    await saving
+    expect(coordinator.view().status).toBe('dirty')
+  })
+
+  it('销毁之后不再通知', () => {
+    const { coordinator, control } = setup()
+    const listener = vi.fn()
+    coordinator.subscribe(listener)
+    coordinator.dispose()
+    control.startCellEditing('甲')
+    expect(listener).not.toHaveBeenCalled()
   })
 })
 
@@ -330,6 +410,107 @@ describe('版本冲突', () => {
     await saving
     expect(coordinator.view().status).toBe('conflict')
     expect(calls).toHaveLength(1)
+  })
+})
+
+describe('重试原样再发结果未知的请求（Codex 评审 CX2）', () => {
+  /** 修改之后保存，回包丢了：服务端可能已经提交；返回那次请求 */
+  async function lostSave(context: ReturnType<typeof setup>, text: string): Promise<SaveRequest> {
+    const { coordinator, control, calls } = context
+    control.edit(text)
+    const saving = coordinator.save()
+    const request = await sent(calls, calls.length + 1)
+    request.reject(new NetworkError('回包丢了'))
+    await saving
+    return request.request
+  }
+
+  it('改了又撤销、内容回到原样：重试原样再发，序号仍是第一次的；成功后确认到这次捕获的序号', async () => {
+    const context = setup()
+    const { coordinator, control, calls } = context
+    const first = await lostSave(context, '甲')
+    control.edit('甲乙')
+    control.edit('甲')
+    const retry = coordinator.save()
+    const second = await sent(calls, 2)
+    expect(second.request).toBe(first)
+    expect(second.request.localSeq).toBe(1)
+    second.resolve(saved(2))
+    await retry
+    expect(coordinator.view()).toMatchObject({ status: 'clean', problem: undefined })
+  })
+
+  it('原样再发的回包又丢了，之后继续修改再保存：冲突的来源是第一次的序号，认得出自己追自己', async () => {
+    const context = setup()
+    const { coordinator, control, calls } = context
+    await lostSave(context, '甲')
+    control.edit('甲乙')
+    control.edit('甲')
+    const retry = coordinator.save()
+    ;(await sent(calls, 2)).reject(new NetworkError('回包又丢了'))
+    await retry
+
+    control.edit('甲丙')
+    const third = coordinator.save()
+    const stale = await sent(calls, 3)
+    expect(stale.request).toMatchObject({ baseRevision: 1, localSeq: 4 })
+    stale.reject(conflictError(2, { clientInstanceId: ME, localSeq: 1 }))
+    const resent = await sent(calls, 4)
+    expect(resent.request).toMatchObject({ baseRevision: 2, localSeq: 4, snapshot: '{"content":"甲丙"}' })
+    resent.resolve(saved(3))
+    await third
+    expect(coordinator.view()).toMatchObject({ status: 'clean', conflict: undefined })
+  })
+
+  it('原样再发被明确拒绝（登录过期）：更早那次仍可能已经提交，记录留着；重新登录后继续修改再保存，认得出自己追自己', async () => {
+    const context = setup()
+    const { coordinator, control, calls, onUnauthenticated } = context
+    const first = await lostSave(context, '甲')
+    const retry = coordinator.save()
+    const second = await sent(calls, 2)
+    expect(second.request).toBe(first)
+    second.reject(new ApiError(401, 'SESSION_EXPIRED', '登录已过期'))
+    await retry
+    expect(onUnauthenticated).toHaveBeenCalledOnce()
+
+    control.edit('甲乙')
+    const third = coordinator.save()
+    ;(await sent(calls, 3)).reject(conflictError(2, { clientInstanceId: ME, localSeq: 1 }))
+    const resent = await sent(calls, 4)
+    expect(resent.request).toMatchObject({ baseRevision: 2, localSeq: 2 })
+    resent.resolve(saved(3))
+    await third
+    expect(coordinator.view()).toMatchObject({ status: 'clean', conflict: undefined, problem: undefined })
+  })
+
+  it('原样再发被明确拒绝之后，内容没变再保存：仍原样再发那个请求', async () => {
+    const context = setup()
+    const { coordinator, calls } = context
+    const first = await lostSave(context, '甲')
+    const retry = coordinator.save()
+    ;(await sent(calls, 2)).reject(new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效'))
+    await retry
+    const again = coordinator.save()
+    const third = await sent(calls, 3)
+    expect(third.request).toBe(first)
+    third.resolve(saved(2))
+    await again
+    expect(coordinator.view().status).toBe('clean')
+  })
+
+  it('原样再发得到 requestId 被占用：原样再发也一样，下一次换新的 requestId', async () => {
+    const context = setup()
+    const { coordinator, calls } = context
+    const first = await lostSave(context, '甲')
+    const retry = coordinator.save()
+    ;(await sent(calls, 2)).reject(new ApiError(409, 'REQUEST_ID_CONFLICT', 'requestId 已被使用'))
+    await retry
+    const again = coordinator.save()
+    const third = await sent(calls, 3)
+    expect(third.request.requestId).not.toBe(first.requestId)
+    expect(third.request).toMatchObject({ baseRevision: 1, localSeq: 1, snapshot: first.snapshot })
+    third.resolve(saved(2))
+    await again
   })
 })
 

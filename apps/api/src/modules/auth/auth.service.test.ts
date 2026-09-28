@@ -7,6 +7,7 @@ import type { SessionService } from './session.service.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { AppLogger, createRootLogger, RequestContextStore } from '../logging/index.ts'
+import { PasswordHashingBusyError } from '../users/index.ts'
 import { AuthService } from './auth.service.ts'
 import { csrfTokenFor, generateSessionToken } from './session-token.ts'
 
@@ -17,7 +18,11 @@ const TRANSACTION = { opaque: true } as unknown as Transaction
 const TOKEN = generateSessionToken()
 
 function setup(options: { admission?: Admission, check?: CredentialCheck | Error, purgeFails?: boolean } = {}) {
-  const ticket = { lockedForSeconds: undefined, succeeded: vi.fn(async (_transaction?: Transaction) => {}) } satisfies LoginTicket
+  const ticket = {
+    lockedForSeconds: undefined,
+    succeeded: vi.fn(async (_transaction?: Transaction) => {}),
+    abandoned: vi.fn(async () => {}),
+  } satisfies LoginTicket
   const admission: Admission = options.admission ?? { admitted: true, ticket }
   const throttle = {
     admit: vi.fn(async () => admission),
@@ -99,7 +104,7 @@ describe('AuthService.login', () => {
   })
 
   it('这次失败触发了锁定：429 与 Retry-After，审计记下锁定的秒数；用户名不存在时审计没有对象', async () => {
-    const ticket = { lockedForSeconds: 900, succeeded: vi.fn(async () => {}) }
+    const ticket = { lockedForSeconds: 900, succeeded: vi.fn(async () => {}), abandoned: vi.fn(async () => {}) }
     const { service, audit } = setup({ admission: { admitted: true, ticket }, check: { valid: false } })
     const error = await errorOf(service.login(REQUEST, ORIGIN))
     expect(error.code).toBe('TOO_MANY_ATTEMPTS')
@@ -145,6 +150,28 @@ describe('AuthService.login', () => {
     const { service, ticket, audit } = setup({ check: new Error('哈希格式不对') })
     await expect(service.login(REQUEST, ORIGIN)).rejects.toThrow('哈希格式不对')
     expect(ticket.succeeded).not.toHaveBeenCalled()
+    expect(ticket.abandoned).not.toHaveBeenCalled()
     expect(audit.record).not.toHaveBeenCalled()
+  })
+
+  it('等待哈希的请求太多时退回名额失败：仍然 503 与 Retry-After，记一条告警（审查 A11）', async () => {
+    const { service, ticket, warn } = setup({ check: new PasswordHashingBusyError(5) })
+    ticket.abandoned.mockRejectedValueOnce(new Error('数据库不可用'))
+    const error = await errorOf(service.login(REQUEST, ORIGIN))
+    expect(error).toMatchObject({ code: 'SERVICE_UNAVAILABLE', headers: { 'Retry-After': '5' } })
+    expect(warn).toHaveBeenCalledWith('退回登录限流的名额失败，这次尝试按一次失败计', expect.objectContaining({ err: expect.any(Error) as unknown }))
+  })
+
+  it('等待哈希的请求太多（DEF-015）：503 与 Retry-After，退回名额，不写审计、不清理，只记日志', async () => {
+    const busy = new PasswordHashingBusyError(5)
+    const { service, ticket, audit, throttle, transactions, warn } = setup({ check: busy })
+    const error = await errorOf(service.login(REQUEST, ORIGIN))
+    expect(error).toMatchObject({ code: 'SERVICE_UNAVAILABLE', headers: { 'Retry-After': '5' }, cause: busy })
+    expect(ticket.abandoned).toHaveBeenCalledOnce()
+    expect(ticket.succeeded).not.toHaveBeenCalled()
+    expect(audit.record).not.toHaveBeenCalled()
+    expect(transactions.run).not.toHaveBeenCalled()
+    expect(throttle.purgeExpired).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith('等待密码哈希的请求太多，拒绝这次登录', { retryAfterSeconds: 5 })
   })
 })

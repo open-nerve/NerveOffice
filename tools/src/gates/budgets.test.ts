@@ -64,15 +64,26 @@ describe('US-M1-11 首屏 JS 的体积预算', () => {
   })
 
   it('预算指向的入口不存在：违规（预算表要跟着入口一起改）', () => {
-    const manifest: ViteManifest = { 'index.html': MANIFEST['index.html'] ?? { file: '' } }
+    const manifest: ViteManifest = { 'index.html': { file: 'assets/index.js', isEntry: true } }
     const result = checkBudgets(manifest, [budget('index.html', 1_000_000), budget('platform.html', 1)], [], { ...OUTPUT, files: ['assets/index.js'], gzipSize: () => 0 })
     expect(result.violations.map(v => v.rule)).toEqual(['budgets/missing-entry'])
   })
 
   it('构建清单里的入口没有预算：违规（新增入口时一起定下预算，复验 RA5）', () => {
-    const manifest: ViteManifest = { 'index.html': MANIFEST['index.html'] ?? { file: '' }, 'report.html': { file: 'assets/report.js', isEntry: true } }
+    const manifest: ViteManifest = { 'index.html': { file: 'assets/index.js', isEntry: true }, 'report.html': { file: 'assets/report.js', isEntry: true } }
     const result = checkBudgets(manifest, [budget('index.html', 1_000_000)], [], { ...OUTPUT, files: ['assets/index.js', 'assets/report.js'] })
     expect(result.violations).toEqual([expect.objectContaining({ rule: 'budgets/unbudgeted-entry', subject: 'report.html' })])
+  })
+
+  it('构建清单里的块引用了清单里没有的块：违规（它的体积无从计入预算，不能静默跳过）', () => {
+    const manifest: ViteManifest = {
+      'index.html': { file: 'assets/index.js', isEntry: true, imports: ['_gone.js'], dynamicImports: ['src/gone-lazy.ts'] },
+    }
+    const result = checkBudgets(manifest, [budget('index.html', 1_000_000)], [], { ...OUTPUT, files: ['assets/index.js'] })
+    expect(result.violations).toEqual([
+      expect.objectContaining({ rule: 'budgets/missing-chunk', subject: 'index.html → _gone.js' }),
+      expect.objectContaining({ rule: 'budgets/missing-chunk', subject: 'index.html → src/gone-lazy.ts' }),
+    ])
   })
 })
 

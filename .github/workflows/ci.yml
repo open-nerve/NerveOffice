@@ -1,4 +1,5 @@
-# CI（规范 §9）：推送 main 后在 Linux 上执行与本机 pnpm verify 相同的门禁，另加依赖漏洞扫描。
+# CI（规范 §9）：推送 main 后在 Linux 上执行与本机 pnpm verify 相同的门禁，另加依赖漏洞扫描；
+# 与之并行的 container job 用生产镜像跑容器 E2E（P5）。两个 job 都通过才算 CI 全绿。
 # 各个 Action 按提交的 SHA 锁定，注释里写对应的版本。
 name: CI
 
@@ -81,4 +82,48 @@ jobs:
             tests/e2e/playwright-report/
             tests/e2e/test-results/
             coverage/
+          retention-days: 14
+
+  # 容器 E2E（P5 设计 §3.7）：用生产镜像起测试环境（应用 + PostgreSQL + Caddy 的 HTTPS，应用以受限的数据库角色运行），
+  # 对它跑 E2E 的外部模式与重启用例（US-M1-10）。只跑 Chromium：四个浏览器的覆盖由 verify 的 E2E 承担
+  container:
+    name: pnpm test:e2e:container
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CI: 'true'
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: 安装 Node.js（版本见 .node-version）
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: 安装 pnpm（版本见 package.json 的 packageManager）
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          cache: true
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 安装浏览器（Chromium）及系统依赖
+        run: pnpm --filter @nerve-office/e2e exec playwright install --with-deps chromium
+
+      # 构建镜像（linux/amd64）、起测试环境、核对部署配置（经代理的探针、客户端地址、应用的端口）、跑 E2E，打印镜像体积与应用容器的内存
+      - name: pnpm test:e2e:container
+        run: pnpm test:e2e:container
+
+      - name: 上传测试报告与容器日志
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: container-reports-${{ github.run_id }}
+          path: |
+            tests/e2e/playwright-report/
+            tests/e2e/test-results/
           retention-days: 14

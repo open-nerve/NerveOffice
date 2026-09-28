@@ -1,5 +1,6 @@
 export { AdminInitializationService } from './admin-initialization.service.ts'
 export type { AdminInitializationInput, InitializedAdmin } from './admin-initialization.service.ts'
+export { PasswordHashingBusyError } from './password-hasher.ts'
 export type { User } from './user.ts'
 export { UsersModule } from './users.module.ts'
 export { UsersService } from './users.service.ts'
