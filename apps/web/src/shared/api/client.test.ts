@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { apiError, installFakeApi, json } from '../testing/fake-api.test-support.ts'
-import { ApiError, apiFetch, apiRequest, isAuthenticationError, isTransientError, NetworkError, readJson, ResponseFormatError, setCsrfToken } from './client.ts'
+import { ApiError, apiFetch, apiRequest, isAuthenticationError, isPermissionDeniedError, isTransientError, NetworkError, readJson, ResponseFormatError, setCsrfToken } from './client.ts'
 
 const itemSchema = z.strictObject({ name: z.string() })
 
@@ -102,6 +102,12 @@ describe('错误的分类', () => {
     expect(isAuthenticationError(new ApiError(401, 'SESSION_EXPIRED', 'x'))).toBe(true)
     expect(isAuthenticationError(new ApiError(401, 'INVALID_CREDENTIALS', 'x'))).toBe(false)
     expect(isAuthenticationError(new Error('x'))).toBe(false)
+  })
+
+  it('没有权限：只认 PERMISSION_DENIED', () => {
+    expect(isPermissionDeniedError(new ApiError(403, 'PERMISSION_DENIED', 'x'))).toBe(true)
+    expect(isPermissionDeniedError(new ApiError(403, 'CSRF_TOKEN_INVALID', 'x'))).toBe(false)
+    expect(isPermissionDeniedError(new Error('x'))).toBe(false)
   })
 
   it('网络失败与 5xx 可以重试，4xx 不重试', () => {

@@ -1,7 +1,7 @@
 import type { AuditEvent, AuditService } from '../audit/index.ts'
 import type { Transaction, TransactionRunner } from '../database/index.ts'
 import type { SpacesService } from '../spaces/index.ts'
-import type { CredentialCheck, User, UsersService } from '../users/index.ts'
+import type { CredentialCheck, User, UsersService, VerifiedCredentials } from '../users/index.ts'
 import type { Admission, LoginThrottle, LoginTicket } from './login-throttle.ts'
 import type { SessionService } from './session.service.ts'
 import { describe, expect, it, vi } from 'vitest'
@@ -16,8 +16,9 @@ const SPACE = { id: '0199a2c4-2a3b-7c4d-9e5f-6a7b8c9d0e1f', name: '爱丽丝' }
 const ORIGIN = { source: 'http' as const, requestId: 'req-1', clientIp: '203.0.113.7' }
 const TRANSACTION = { opaque: true } as unknown as Transaction
 const TOKEN = generateSessionToken()
+const CREDENTIALS: VerifiedCredentials = { user: ALICE, passwordVersion: 1 }
 
-function setup(options: { admission?: Admission, check?: CredentialCheck | Error, purgeFails?: boolean } = {}) {
+function setup(options: { admission?: Admission, check?: CredentialCheck | Error, purgeFails?: boolean, stillValid?: boolean } = {}) {
   const ticket = {
     lockedForSeconds: undefined,
     succeeded: vi.fn(async (_transaction?: Transaction) => {}),
@@ -33,11 +34,12 @@ function setup(options: { admission?: Admission, check?: CredentialCheck | Error
   }
   const users = {
     verifyCredentials: vi.fn(async (): Promise<CredentialCheck> => {
-      const check = options.check ?? { valid: true, user: ALICE }
+      const check = options.check ?? { valid: true, credentials: CREDENTIALS }
       if (check instanceof Error)
         throw check
       return check
     }),
+    holdCredentials: vi.fn(async (_credentials: VerifiedCredentials, _transaction: Transaction) => options.stillValid ?? true),
   }
   const sessions = {
     create: vi.fn(async (_userId: string, _transaction?: Transaction) => ({ id: 'session-1', token: TOKEN })),
@@ -113,9 +115,11 @@ describe('AuthService.login', () => {
     expect(audit.record.mock.calls[0]?.[0]).not.toHaveProperty('target')
   })
 
-  it('成功：在一个事务里交回名额、作废原来的会话、新建会话、写审计；事务之外清理；返回会话与 CSRF 令牌', async () => {
-    const { service, ticket, sessions, audit, throttle } = setup()
+  it('成功：在一个事务里先复核凭据，再交回名额、作废原来的会话、新建会话、写审计；事务之外清理；返回会话与 CSRF 令牌', async () => {
+    const { service, ticket, users, sessions, audit, throttle } = setup()
     const result = await service.login(REQUEST, ORIGIN, 'previous-token')
+    expect(users.holdCredentials).toHaveBeenCalledWith(CREDENTIALS, TRANSACTION)
+    expect(users.holdCredentials.mock.invocationCallOrder[0]).toBeLessThan(ticket.succeeded.mock.invocationCallOrder[0] ?? 0)
     expect(ticket.succeeded).toHaveBeenCalledWith(TRANSACTION)
     expect(sessions.replace).toHaveBeenCalledWith('previous-token', TRANSACTION)
     expect(sessions.create).toHaveBeenCalledWith(ALICE.id, TRANSACTION)
@@ -129,6 +133,27 @@ describe('AuthService.login', () => {
         csrfToken: csrfTokenFor(TOKEN),
       },
     })
+  })
+
+  it('复核不通过（验证之后改了密码、签发或完成了重置、停用了，审查 A1）：按凭据无效处理，不建会话，名额不退回，写审计（原因另记，复验 N6）', async () => {
+    const { service, ticket, sessions, audit } = setup({ stillValid: false })
+    expect((await errorOf(service.login(REQUEST, ORIGIN, 'previous-token'))).code).toBe('INVALID_CREDENTIALS')
+    expect(ticket.succeeded).not.toHaveBeenCalled()
+    expect(sessions.replace).not.toHaveBeenCalled()
+    expect(sessions.create).not.toHaveBeenCalled()
+    expect(audit.record).toHaveBeenCalledWith({
+      action: 'auth.login_failed',
+      actor: { type: 'anonymous' },
+      target: { type: 'user', id: ALICE.id },
+      origin: ORIGIN,
+      details: { reason: 'credentials_changed' },
+    })
+  })
+
+  it('复核不通过而这次失败触发了锁定：429', async () => {
+    const ticket = { lockedForSeconds: 900, succeeded: vi.fn(async () => {}), abandoned: vi.fn(async () => {}) }
+    const { service } = setup({ admission: { admitted: true, ticket }, stillValid: false })
+    expect(await errorOf(service.login(REQUEST, ORIGIN))).toMatchObject({ code: 'TOO_MANY_ATTEMPTS', headers: { 'Retry-After': '900' } })
   })
 
   it('没有带原来的会话：不作废任何会话', async () => {
@@ -172,6 +197,6 @@ describe('AuthService.login', () => {
     expect(audit.record).not.toHaveBeenCalled()
     expect(transactions.run).not.toHaveBeenCalled()
     expect(throttle.purgeExpired).not.toHaveBeenCalled()
-    expect(warn).toHaveBeenCalledWith('等待密码哈希的请求太多，拒绝这次登录', { retryAfterSeconds: 5 })
+    expect(warn).toHaveBeenCalledWith('等待密码哈希的请求太多，拒绝这次请求', { retryAfterSeconds: 5 })
   })
 })

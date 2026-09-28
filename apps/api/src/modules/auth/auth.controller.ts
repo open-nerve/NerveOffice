@@ -1,8 +1,8 @@
-import type { LoginRequest, SessionResponse } from '@nerve-office/contracts'
+import type { ChangePasswordRequest, LoginRequest, SessionResponse } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Principal, SessionCookie } from './principal.ts'
-import { loginRequestSchema } from '@nerve-office/contracts'
-import { Body, Controller, Get, HttpCode, Post } from '@nestjs/common'
+import { changePasswordRequestSchema, loginRequestSchema } from '@nerve-office/contracts'
+import { Body, Controller, Get, HttpCode, Post, Put } from '@nestjs/common'
 import { Public } from '../../shared/public.ts'
 import { RequestOrigin } from '../audit/index.ts'
 import { AuthService } from './auth.service.ts'
@@ -42,5 +42,16 @@ export class AuthController {
   @Get('session')
   async session(@CurrentPrincipal() principal: Principal): Promise<SessionResponse> {
     return this.auth.current(principal)
+  }
+
+  /** 修改密码（M2-P1 设计 §3.5）：本人其他地方的登录全部退出，当前会话保留，Cookie 不变。 */
+  @Put('password')
+  @HttpCode(204)
+  async changePassword(
+    @CurrentPrincipal() principal: Principal,
+    @Body({ schema: changePasswordRequestSchema }) body: ChangePasswordRequest,
+    @RequestOrigin() origin: HttpOrigin,
+  ): Promise<void> {
+    await this.auth.changePassword(principal, body, origin)
   }
 }

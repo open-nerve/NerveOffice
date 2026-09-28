@@ -1,18 +1,37 @@
-import { Link, Outlet } from 'react-router'
-import { UserMenu } from '../../features/auth/index.ts'
+import { useQuery } from '@tanstack/react-query'
+import { Link, Outlet, useNavigation } from 'react-router'
+import { CHANGE_PASSWORD_PATH } from '../../features/account/index.ts'
+import { sessionQueryOptions, UserMenu } from '../../features/auth/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { ADMIN_PATH } from '../../shared/lib/admin-paths.ts'
+import { buttonVariants } from '../../shared/ui/index.ts'
 
-/** 登录后的页面框架：页头（产品名称、当前用户与退出）与内容区。 */
+/**
+ * 登录后的页面框架：页头（产品名称、系统管理员的"管理"入口、当前用户、修改密码与退出）与内容区。
+ * 窄屏时只有当前用户的名字收窄（省略号），页头不换行、不溢出（M2-P1 审查 B11）。
+ */
 export function AppShell() {
+  const session = useQuery(sessionQueryOptions())
+  // 单页里切到按需加载的页面（例如第一次点"管理"）时，先要下载它的代码：页头显示进行中（M2-P1 审查 B5）
+  const navigating = useNavigation().state !== 'idle'
   return (
     <div className="min-h-svh">
-      <header className="border-b">
-        <div className="mx-auto flex h-14 max-w-3xl items-center justify-between px-4">
-          <Link to="/" className="font-semibold">{messages.app.name}</Link>
-          <UserMenu />
+      <header className="relative border-b">
+        <div className="mx-auto flex h-14 max-w-5xl items-center justify-between gap-3 px-4">
+          <div className="flex shrink-0 items-center gap-3">
+            <Link to="/" className="font-semibold">{messages.app.name}</Link>
+            {/* 只是入口的显示；管理接口由服务端逐请求检查系统角色 */}
+            {session.data?.user.systemRole === 'admin' && (
+              <Link to={ADMIN_PATH} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>{messages.admin.title}</Link>
+            )}
+          </div>
+          <UserMenu>
+            <Link to={CHANGE_PASSWORD_PATH} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>{messages.account.changePassword}</Link>
+          </UserMenu>
         </div>
+        {navigating && <div role="progressbar" aria-label={messages.app.navigating} className="absolute inset-x-0 bottom-0 h-0.5 animate-pulse bg-primary" />}
       </header>
-      <main className="mx-auto max-w-3xl px-4 py-6">
+      <main className="mx-auto max-w-5xl px-4 py-6" aria-busy={navigating}>
         <Outlet />
       </main>
     </div>

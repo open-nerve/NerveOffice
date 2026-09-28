@@ -1,4 +1,4 @@
-// 故事清单与测试的自动对照（规范 §8.1）：当前 M 总设计里的每个用户故事都要登记；
+// 故事清单与测试的自动对照（规范 §8.1）：登记表列出的各份 M 总设计（累计：之前各 M 的故事仍由回归测试引用）里的每个用户故事都要登记；
 // 状态为 active 的故事，必须有以其编号开头的测试（describe 或用例的标题都可以），而且分布在登记的验证方式对应的位置。
 // 测试清单取自 Vitest 与 Playwright 自己的列举（vitest list、playwright test --list），
 // 所以注释掉的、字符串里的"用例"不算；被跳过或标为 fixme 的 E2E 也不算（lint 另外禁止跳过用例）。
@@ -13,7 +13,8 @@ export type TestKind = 'e2e' | 'integration' | 'unit'
 
 const registrySchema = z.strictObject({
   $comment: z.string().optional(),
-  design: z.string().min(1),
+  // 已开始的各个 M 的总设计，按 M 的顺序（M2-P1 设计 §3.10）
+  designs: z.array(z.string().min(1)).min(1),
   stories: z.record(z.string().regex(/^US-M\d+-\d+$/), z.strictObject({
     phase: z.string().regex(/^P\d+$/),
     status: z.enum(['planned', 'active']),
@@ -95,7 +96,13 @@ function storyIdsOf(test: ListedTest): string[] {
 export function checkStories(designIds: readonly string[], registry: StoryRegistry, tests: readonly ListedTest[]): Violation[] {
   const violations: Violation[] = []
   const registered = new Set(Object.keys(registry.stories))
+  const seen = new Set<string>()
   for (const id of designIds) {
+    if (seen.has(id))
+      violations.push({ rule: 'stories/duplicate', subject: id, detail: 'M 总设计里这个故事编号出现了不止一次' })
+    seen.add(id)
+  }
+  for (const id of seen) {
     if (!registered.has(id))
       violations.push({ rule: 'stories/unregistered', subject: id, detail: 'M 总设计里有这个故事，但 tests/stories.json 没有登记' })
   }

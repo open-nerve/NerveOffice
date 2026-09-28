@@ -1,9 +1,9 @@
 import type { DocumentDetail, DocumentListQuery, DocumentListResponse } from '@nerve-office/contracts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
+import { decodeTimeCursor, encodeTimeCursor } from '../../shared/time-cursor.ts'
 import { SpacesService } from '../spaces/index.ts'
 import { DocumentAccessPolicy, requireAccess } from './document-access-policy.ts'
-import { decodeCursor, encodeCursor } from './document-cursor.ts'
 import { toDetail, toSummary } from './document-views.ts'
 import { DocumentsRepository } from './documents.repository.ts'
 
@@ -22,7 +22,7 @@ export class DocumentsService {
     // 个人空间随账户一起创建；没有说明数据不一致，按意外错误处理
     if (space === undefined)
       throw new Error(`账户没有个人空间：${userId}`)
-    const after = query.cursor === undefined ? undefined : decodeCursor(query.cursor)
+    const after = query.cursor === undefined ? undefined : decodeTimeCursor(query.cursor)
     if (query.cursor !== undefined && after === undefined)
       throw new AppError('REQUEST_INVALID', '分页的游标不合法，请从第一页重新加载')
     // 多取一条，判断还有没有下一页
@@ -31,7 +31,7 @@ export class DocumentsService {
     const last = page.at(-1)
     return {
       items: page.map(toSummary),
-      nextCursor: rows.length > query.limit && last !== undefined ? encodeCursor({ updatedAt: last.position, id: last.id }) : null,
+      nextCursor: rows.length > query.limit && last !== undefined ? encodeTimeCursor({ position: last.position, id: last.id }) : null,
     }
   }
 

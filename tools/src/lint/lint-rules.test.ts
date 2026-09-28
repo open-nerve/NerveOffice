@@ -418,6 +418,54 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
     const fromEntry = await lintAtProbe(importPart(`../../features/sheet-editor/${part}`), PROBE_FILES.editorEntry)
     expect(fromEntry.messages.join('\n')).not.toContain('只由编辑器页的入口引用')
   })
+
+  it('管理界面按需加载（M2-P1 审查 B2）：只有路由表能动态 import() 它的公开入口；静态引用、类型引用、再导出、别处的动态引用都不行', async () => {
+    const ROUTES_FILE = 'apps/web/src/app/routes.ts'
+    const dynamicImport = (path: string): string => `export async function pages() {\n  return import('${path}')\n}\n`
+    expect(await rulesFor(dynamicImport('../features/admin/index.ts'), ROUTES_FILE)).not.toContain('boundaries/dependencies')
+    const violations: [string, string][] = [
+      // 路由表：静态引用、动态引用内部文件
+      [`import { AdminLayout } from '../features/admin/index.ts'\n\nexport const layout = AdminLayout\n`, ROUTES_FILE],
+      [dynamicImport('../features/admin/users-page.tsx'), ROUTES_FILE],
+      // 应用层的其他文件、功能模块、入口
+      [dynamicImport('../features/admin/index.ts'), WEB_FILE],
+      [`import type { AdminLayout } from '../admin/index.ts'\n\nexport type Layout = typeof AdminLayout\n`, WEB_FEATURE_FILE],
+      [`export { AdminLayout } from '../../features/admin/index.ts'\n`, PLATFORM_ENTRY],
+    ]
+    for (const [code, file] of violations) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain('boundaries/dependencies')
+      expect(report.messages.join('\n'), file).toContain('管理界面（features/admin）按需加载')
+    }
+    // 弹窗不经 shared 的任何文件转出：Radix Dialog 会随桶文件进首屏（复验 N2）。按解析之后的路径判断，中转与换写法都拦得住（复验 X6）
+    const BARREL = 'apps/web/src/shared/ui/index.ts'
+    const relayed: [string, string][] = [
+      [`export { Dialog } from './dialog.tsx'\n`, BARREL],
+      [`export * from './dialog.tsx'\n`, BARREL],
+      [`export { Dialog } from '../ui/dialog.tsx'\n`, BARREL],
+      [`export { Dialog } from './dialog.js'\n`, BARREL],
+      [`export { Dialog } from './dialog'\n`, BARREL],
+      [`export type { DialogContent } from './dialog.tsx'\n`, BARREL],
+      // shared 里别的文件中转
+      [`export { Dialog } from '../ui/dialog.tsx'\n`, WEB_SHARED_FILE],
+    ]
+    for (const [code, file] of relayed) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain('import-x/no-restricted-paths')
+      expect(report.messages.join('\n'), code).toContain('弹窗（shared/ui/dialog.tsx，Radix Dialog）不经 shared 的其他文件转出')
+    }
+    expect(await rulesFor(`export { Button } from './button.tsx'\n`, BARREL)).not.toContain('import-x/no-restricted-paths')
+    // shared 的其他文件直接从 radix-ui 引入弹窗原语同样拦下；别的原语与弹窗自己的文件不受影响
+    const radixDialog = 'import { Dialog } from \'radix-ui\'\n\nexport const Root = Dialog.Root\n'
+    expect((await lint(radixDialog, WEB_SHARED_FILE)).messages.join('\n')).toContain('弹窗类的 Radix 原语（Dialog、AlertDialog）只在 shared/ui/dialog.tsx 里引入')
+    expect((await lint(`export { AlertDialog } from 'radix-ui'\n`, BARREL)).messages.join('\n')).toContain('弹窗类的 Radix 原语')
+    expect((await lint('import { Label } from \'radix-ui\'\n\nexport const Root = Label.Root\n', 'apps/web/src/shared/ui/label.tsx')).messages.join('\n')).not.toContain('弹窗类的 Radix 原语')
+    expect((await lint(radixDialog, 'apps/web/src/shared/ui/dialog.tsx')).messages.join('\n')).not.toContain('弹窗类的 Radix 原语')
+    // 用到弹窗的功能模块（按需加载的管理界面）直接引用它
+    expect(await rulesFor('import { DialogContent } from \'../../shared/ui/dialog.tsx\'\n\nexport const content = DialogContent\n', 'apps/web/src/features/admin/confirm-dialog.tsx')).not.toContain('import-x/no-restricted-paths')
+    // 管理界面自己内部的引用不受影响
+    expect(await rulesFor('import { ADMIN_QUERY_KEY } from \'./admin-api.ts\'\n\nexport const key = ADMIN_QUERY_KEY\n', 'apps/web/src/features/admin/users-page.tsx')).not.toContain('boundaries/dependencies')
+  })
 }, LINT_TIMEOUT)
 
 describe('US-M1-11 lint 规则的自测：类型与写法', () => {

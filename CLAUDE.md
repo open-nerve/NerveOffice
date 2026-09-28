@@ -85,6 +85,7 @@
 | `pnpm dev:api` | 以监听模式启动后端（读取 `apps/api/.env.development`，先 `pnpm db:up` 与 `pnpm db:migrate`） |
 | `pnpm dev:web` | 启动前端的开发服务器（`http://127.0.0.1:5173`，`/api` 代理到 `pnpm dev:api`） |
 | `pnpm admin:init --username <用户名>` | 在开发库上初始化首个系统管理员（密码在终端里输入两次；非交互环境加 `--password-stdin`） |
+| `pnpm admin:reset-link --username <用户名>` | 运维命令：为这个账户签发重置密码的一次性链接（标准输出只有链接，日志在标准错误；这个人的当前密码与全部登录随即失效；唯一的管理员忘记密码时用；容器里用 `docker compose exec`，见 `deploy/README.md`） |
 | `pnpm lint` / `pnpm lint:fix` | 检查 / 修正代码规范与格式 |
 | `pnpm typecheck` | 类型检查 |
 | `pnpm test` / `pnpm test:coverage` | 单元测试 / 单元与集成测试合计的覆盖率（需要数据库） |

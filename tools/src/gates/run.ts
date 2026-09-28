@@ -94,7 +94,7 @@ function config(): GateOutcome {
 
 function stories(): GateOutcome {
   const registry = parseRegistry(readJson(STORY_REGISTRY))
-  const designIds = parseDesignStoryIds(readText(registry.design))
+  const designIds = registry.designs.flatMap(design => parseDesignStoryIds(readText(design)))
   const tests = [
     ...testsFromVitestList(commandJson('pnpm', ['exec', 'vitest', 'list', '--json']), REPO_ROOT),
     // 经 e2e 包的 list 脚本：它按 @nerve-office/source 条件解析工作区的包，用例引用的 contracts 不必先构建（静态检查在构建之前执行）

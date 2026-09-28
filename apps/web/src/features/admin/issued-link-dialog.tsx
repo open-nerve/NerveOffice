@@ -1,0 +1,86 @@
+import { useId, useState } from 'react'
+import { messages } from '../../shared/i18n/index.ts'
+import { formatDateTime } from '../../shared/lib/format.ts'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../shared/ui/dialog.tsx'
+import { Alert, AlertDescription, Button, Input, Label } from '../../shared/ui/index.ts'
+
+export interface IssuedLink {
+  readonly title: string
+  /** 发给谁：登录名或显示名 */
+  readonly recipient: string
+  readonly url: string
+  readonly expiresAt: string
+  /** 另外的说明（例如给自己生成的重置链接：关闭之后回到登录页） */
+  readonly note?: string
+  /**
+   * 关闭之后焦点去哪里（审查 B9）：弹窗由程序打开（签发成功、确认之后），打开之前的焦点没有意义，
+   * 例如签发表单回到登录名、行里的重新生成回到新的那一行
+   */
+  readonly returnFocus: () => void
+}
+
+/**
+ * 一次性链接只显示这一次（M2-P1 设计 §3.4、§3.8）：签发之后弹出，带复制按钮与"经受控的渠道发给本人"的提示；
+ * 关闭之后再也取不到（服务端只存摘要）。
+ */
+export function IssuedLinkDialog({ link, onClose }: { readonly link: IssuedLink | undefined, readonly onClose: () => void }) {
+  const [copy, setCopy] = useState<'copied' | 'failed'>()
+  const inputId = useId()
+
+  async function copyLink(): Promise<void> {
+    if (link === undefined)
+      return
+    try {
+      await navigator.clipboard.writeText(link.url)
+      setCopy('copied')
+    }
+    catch {
+      setCopy('failed')
+    }
+  }
+
+  function changeOpen(open: boolean): void {
+    if (!open) {
+      setCopy(undefined)
+      onClose()
+    }
+  }
+
+  return (
+    <Dialog open={link !== undefined} onOpenChange={changeOpen}>
+      {link !== undefined && (
+        <DialogContent
+          onCloseAutoFocus={(event) => {
+            event.preventDefault()
+            link.returnFocus()
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>{`${link.title}：${link.recipient}`}</DialogTitle>
+            <DialogDescription>{messages.admin.link.once}</DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor={inputId}>{messages.admin.link.label}</Label>
+            {/* 只读的输入框：可以全选、手动复制；点一下就选中全部 */}
+            <Input id={inputId} readOnly value={link.url} onFocus={event => event.currentTarget.select()} />
+            <p className="text-sm text-muted-foreground">{messages.admin.link.expiresAt(formatDateTime(link.expiresAt))}</p>
+            {link.note !== undefined && <p className="text-sm font-medium">{link.note}</p>}
+          </div>
+          {copy === 'copied' && (
+            <Alert>
+              <AlertDescription>{messages.admin.link.copied}</AlertDescription>
+            </Alert>
+          )}
+          {copy === 'failed' && (
+            <Alert variant="destructive">
+              <AlertDescription>{messages.admin.link.copyFailed}</AlertDescription>
+            </Alert>
+          )}
+          <DialogFooter>
+            <Button onClick={() => void copyLink()}>{messages.admin.link.copy}</Button>
+          </DialogFooter>
+        </DialogContent>
+      )}
+    </Dialog>
+  )
+}

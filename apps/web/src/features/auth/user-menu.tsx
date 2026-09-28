@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { describeError, isAuthenticationError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
@@ -5,11 +6,11 @@ import { Button } from '../../shared/ui/index.ts'
 import { ENDS_SESSION, logout, sessionQueryOptions } from './session.ts'
 
 /**
- * 页头右侧：当前用户与退出（US-M1-02）。
+ * 页头右侧：当前用户、页头传进来的入口（children，例如修改密码）与退出（US-M1-02）。
  * 退出成功（或者会话本来就不在了）由请求缓存的全局处理通知其他标签页、整页回到登录页（app/runtime.ts）：
  * 上一个会话的数据随页面丢弃，按后退键回到之前的地址时要重新请求，得到 401 后又回到登录页，看不到内容。这里只显示进行中与失败。
  */
-export function UserMenu() {
+export function UserMenu({ children }: { readonly children?: ReactNode }) {
   const session = useQuery(sessionQueryOptions())
   const mutation = useMutation({ mutationFn: logout, meta: ENDS_SESSION })
   // 成功之后页面正在离开，按钮保持"正在退出"
@@ -21,9 +22,12 @@ export function UserMenu() {
       mutation.mutate()
   }
   return (
-    <div className="flex items-center gap-3">
-      {session.data !== undefined && <span className="text-sm text-muted-foreground">{session.data.user.displayName}</span>}
-      {failure !== undefined && <span role="alert" className="text-sm text-destructive">{messages.auth.logoutFailed(failure)}</span>}
+    // 窄屏时只有名字收窄成省略号，完整的名字在 title 里（M2-P1 审查 B11）；按钮与入口不收窄
+    <div className="flex min-w-0 items-center gap-3">
+      {session.data !== undefined && <span className="min-w-0 truncate text-sm text-muted-foreground" title={session.data.user.displayName}>{session.data.user.displayName}</span>}
+      {children}
+      {/* 退出失败的说明同样可以收窄（读屏照常读出全文），窄屏时不把页头撑破 */}
+      {failure !== undefined && <span role="alert" className="min-w-0 truncate text-sm text-destructive" title={messages.auth.logoutFailed(failure)}>{messages.auth.logoutFailed(failure)}</span>}
       {/* 进行中用 aria-disabled：按钮变成 disabled 时浏览器把焦点丢到 body（审查 B13）；重复点击由 leaving 挡住 */}
       <Button variant="outline" size="sm" aria-disabled={leaving} onClick={signOut}>
         {leaving ? messages.auth.loggingOut : messages.auth.logout}

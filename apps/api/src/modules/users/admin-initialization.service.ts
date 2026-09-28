@@ -4,7 +4,7 @@ import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { AuditService } from '../audit/index.ts'
 import { TransactionRunner } from '../database/index.ts'
-import { SpacesService } from '../spaces/index.ts'
+import { AccountCreationService } from './account-creation.service.ts'
 import { PasswordHasher } from './password-hasher.ts'
 import { UsersRepository } from './users.repository.ts'
 
@@ -39,7 +39,7 @@ export class AdminInitializationService {
   constructor(
     private readonly repository: UsersRepository,
     private readonly hasher: PasswordHasher,
-    private readonly spaces: SpacesService,
+    private readonly accounts: AccountCreationService,
     private readonly audit: AuditService,
     private readonly transactions: TransactionRunner,
   ) {}
@@ -54,10 +54,11 @@ export class AdminInitializationService {
       await this.repository.lockAdminInitialization(transaction)
       if (await this.repository.existsWithRole('admin', transaction))
         throw new AppError('ADMIN_ALREADY_INITIALIZED')
-      if (await this.repository.existsWithUsername(username, transaction))
+      // 与邀请注册同一把按登录名的锁（M2-P1）：已有待接受的邀请也不影响这里，那条邀请在接受时会发现登录名被占用
+      await this.accounts.lockUsername(username, transaction)
+      if (await this.accounts.isUsernameTaken(username, transaction))
         throw new AppError('USERNAME_TAKEN')
-      const user = await this.repository.insert({ username, displayName, passwordHash, systemRole: 'admin' }, transaction)
-      const space = await this.spaces.createPersonalSpace(user.id, user.displayName, { transaction })
+      const { user, personalSpaceId } = await this.accounts.create({ username, displayName, passwordHash, systemRole: 'admin' }, transaction)
       await this.audit.record({
         action: 'users.admin_initialized',
         actor: { type: 'system' },
@@ -65,7 +66,7 @@ export class AdminInitializationService {
         origin: { source: 'cli' },
         details: { username },
       }, { transaction })
-      return { userId: user.id, username, personalSpaceId: space.id }
+      return { userId: user.id, username, personalSpaceId }
     })
   }
 }

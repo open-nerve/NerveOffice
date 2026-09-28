@@ -155,6 +155,19 @@ const APP_ENTRY_SYNTAX = [
   },
 ]
 
+// 弹窗类的 Radix 原语（Dialog、AlertDialog）只在 shared/ui/dialog.tsx 里引入（M2-P1 复验）：shared 的其他文件直接从 radix-ui 引入，
+// 同样会随桶文件进首屏，按路径的限制（import-x/no-restricted-paths）管不到第三方包
+const RADIX_DIALOG_OUTSIDE_DIALOG_FILE = [
+  {
+    selector: String.raw`:matches(ImportDeclaration, ExportNamedDeclaration)[source.value='radix-ui'] > :matches(ImportSpecifier[imported.name=/^(?:Dialog|AlertDialog)$/], ExportSpecifier[local.name=/^(?:Dialog|AlertDialog)$/])`,
+    message: '弹窗类的 Radix 原语（Dialog、AlertDialog）只在 shared/ui/dialog.tsx 里引入：shared 的其他文件引用它，会随桶文件进平台页面的首屏（ADR-008，M2-P1 审查 B2）',
+  },
+  {
+    selector: String.raw`:matches(ImportDeclaration, ExportNamedDeclaration, ExportAllDeclaration, ImportExpression)[source.value=/^@radix-ui\/react-(?:alert-)?dialog(?:\/|$)/]`,
+    message: '弹窗类的 Radix 原语（Dialog、AlertDialog）只在 shared/ui/dialog.tsx 里引入：shared 的其他文件引用它，会随桶文件进平台页面的首屏（ADR-008，M2-P1 审查 B2）',
+  },
+]
+
 // ---- 后端（P2 设计 §3.1）----
 // 每个后端文件的限制由 apiRules() 按"这个文件允许什么"组合出来，各覆盖块不各自抄一份，免得改一处漏一处（审查 B15）
 
@@ -479,6 +492,27 @@ export default antfu(
     },
   },
   {
+    // 带第三方运行时的重组件（弹窗 dialog.tsx，Radix Dialog，约 12 KiB gzip）不经 shared 的任何文件转出（ADR-008）：
+    // web 没有声明 sideEffects，经 shared/ui 的桶文件引用会把它再导出的每个模块都带进首屏，首屏的预算还有余量、门禁 budgets 发现不了。
+    // 按解析之后的路径判断：经 shared 里别的文件中转、换写法（'../ui/dialog.tsx'、'./dialog.js'）都拦得住（M2-P1 审查 B2，复验 N2、X6）。
+    // 用到弹窗的功能模块（按需加载的管理界面）直接引用它；类型也一样直接引用
+    name: 'nerve/web-ui-heavy-components',
+    files: ['apps/web/src/shared/**/*.{ts,tsx}'],
+    // 弹窗自己的文件引入 Radix 的原语；测试与测试辅助不进产物
+    ignores: [...TEST_CODE, 'apps/web/src/shared/ui/dialog.tsx'],
+    rules: {
+      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE],
+      'import-x/no-restricted-paths': ['error', {
+        basePath: import.meta.dirname,
+        zones: [{
+          target: 'apps/web/src/shared',
+          from: 'apps/web/src/shared/ui/dialog.tsx',
+          message: '弹窗（shared/ui/dialog.tsx，Radix Dialog）不经 shared 的其他文件转出：会随桶文件进平台页面的首屏；用到的功能模块直接引用这个文件（ADR-008，M2-P1 审查 B2）',
+        }],
+      }],
+    },
+  },
+  {
     name: 'nerve/boundaries',
     // 模块边界只管各元素的目录；配置文件（vite.config.ts 等）不属于任何元素，不在这里检查
     files: [
@@ -605,6 +639,25 @@ export default antfu(
             ],
             disallow: { to: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' } } } },
             message: '编辑器页（features/sheet-editor）只由编辑器页的入口引用：它带着 Univer，平台页面的包里不能有它（P4 设计 §3.1）',
+          },
+          // 管理界面按需加载，不进平台页面的首屏（M2-P1 设计 §3.8，审查 B2）：只有路由表 app/routes.ts 经它的公开入口动态 import()，
+          // 任何静态引用（含 import type 与再导出）都会把它带回首屏。页头的入口只引用 shared/lib/admin-paths.ts。
+          // 同样放在允许的策略之后：先拦下所有引用，再放行路由表的动态导入（后面的策略覆盖前面的）；同一个功能内部的引用不经过这条检查
+          {
+            from: [
+              { element: { type: 'web-app' } },
+              { element: { type: 'web-entry' } },
+              { element: { type: 'web-feature' } },
+            ],
+            disallow: { to: { element: { type: 'web-feature', captured: { feature: 'admin' } } } },
+            message: '管理界面（features/admin）按需加载：只有 app/routes.ts 可以动态 import() 它的公开入口，静态引用会把它带进平台页面的首屏（M2-P1 审查 B2）',
+          },
+          {
+            from: { element: { type: 'web-app', fileInternalPath: 'routes.ts' } },
+            allow: {
+              to: { element: { type: 'web-feature', captured: { feature: 'admin' }, fileInternalPath: PUBLIC_ENTRY } },
+              dependency: { nodeKind: 'dynamic-import' },
+            },
           },
         ],
       }],

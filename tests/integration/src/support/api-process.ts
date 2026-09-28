@@ -8,11 +8,12 @@ import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 
-/** 构建产物里的入口：应用、迁移命令、初始化管理员的命令。 */
+/** 构建产物里的入口：应用、迁移命令、初始化管理员的命令、签发重置链接的运维命令。 */
 const ENTRIES = {
   'main': fileURLToPath(new URL('../../../../apps/api/dist/app/main.js', import.meta.url)),
   'migrate': fileURLToPath(new URL('../../../../apps/api/dist/cli/migrate.js', import.meta.url)),
   'init-admin': fileURLToPath(new URL('../../../../apps/api/dist/cli/init-admin.js', import.meta.url)),
+  'reset-link': fileURLToPath(new URL('../../../../apps/api/dist/cli/reset-link.js', import.meta.url)),
 }
 
 export type ApiEntry = keyof typeof ENTRIES
@@ -67,6 +68,8 @@ export type LogEntry = Record<string, unknown>
 export interface ApiProcess {
   /** 到目前为止的标准输出与标准错误 */
   output: () => string
+  /** 到目前为止只来自标准输出的内容 */
+  stdout: () => string
   /** 等待一行满足条件的 JSON 日志；进程先退出或超时都会失败 */
   waitForLog: (predicate: (entry: LogEntry) => boolean, timeoutMs?: number) => Promise<LogEntry>
   kill: (signal: NodeJS.Signals) => void
@@ -107,6 +110,7 @@ export function startApiProcess(env: Readonly<Record<string, string>>, entry: Ap
   else
     child.stdin.end(options.stdin ?? '')
   let output = ''
+  let stdout = ''
   let hasExited = false
   /** 输出有变化或进程退出时通知正在等待的调用方 */
   const listeners = new Set<() => void>()
@@ -118,7 +122,10 @@ export function startApiProcess(env: Readonly<Record<string, string>>, entry: Ap
     output += chunk.toString('utf8')
     notify()
   }
-  child.stdout.on('data', append)
+  child.stdout.on('data', (chunk: Buffer) => {
+    stdout += chunk.toString('utf8')
+    append(chunk)
+  })
   child.stderr.on('data', append)
   // 用 close 而不是 exit：exit 时标准输出与标准错误可能还没读完，随后找日志会漏掉最后几行（审查 B14）
   const exited = new Promise<ProcessExit>((resolve) => {
@@ -152,6 +159,7 @@ export function startApiProcess(env: Readonly<Record<string, string>>, entry: Ap
 
   return {
     output: () => output,
+    stdout: () => stdout,
     waitForLog,
     kill: signal => child.kill(signal),
     exited,

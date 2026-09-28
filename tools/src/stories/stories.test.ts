@@ -11,7 +11,7 @@ const design = `
 `
 
 const registry: StoryRegistry = {
-  design: 'docs/x.md',
+  designs: ['docs/m1.md'],
   stories: {
     'US-M1-01': { phase: 'P3', status: 'active', verification: ['integration', 'e2e'] },
     'US-M1-02': { phase: 'P3', status: 'planned', verification: ['e2e'] },
@@ -50,13 +50,31 @@ describe('测试清单的解析（真实输出）', () => {
 
 describe('parseRegistry', () => {
   it('拒绝结构不对的登记表', () => {
-    expect(() => parseRegistry({ design: 'x', stories: { 'US-M1-01': { phase: 'P3', status: 'done', verification: [] } } })).toThrow()
+    expect(() => parseRegistry({ designs: ['x'], stories: { 'US-M1-01': { phase: 'P3', status: 'done', verification: [] } } })).toThrow()
+    // 至少一份总设计；不再接受单个的 design（M2-P1 改为累计多份）
+    expect(() => parseRegistry({ designs: [], stories: {} })).toThrow()
+    expect(() => parseRegistry({ design: 'x', stories: {} })).toThrow()
+    expect(parseRegistry({ designs: ['m1.md', 'm2.md'], stories: {} }).designs).toEqual(['m1.md', 'm2.md'])
   })
 })
 
 describe('US-M1-11 故事对照', () => {
   it('合规：登记表与总设计一致，active 的故事有对应的测试（标题在 describe 或用例上都可以）', () => {
     expect(checkStories(['US-M1-01', 'US-M1-02'], registry, covered)).toEqual([])
+  })
+
+  it('合规：累计多份总设计，之前 M 的故事与测试照常核对（M2-P1）', () => {
+    const cumulative: StoryRegistry = {
+      designs: ['docs/m1.md', 'docs/m2.md'],
+      stories: { ...registry.stories, 'US-M2-01': { phase: 'P1', status: 'planned', verification: ['e2e'] } },
+    }
+    const designIds = [...parseDesignStoryIds(design), 'US-M2-01']
+    expect(checkStories(designIds, cumulative, [...covered, { file: 'tests/e2e/specs/admin/a.spec.ts', kind: 'e2e', titles: ['US-M2-01 邀请注册'] }])).toEqual([])
+  })
+
+  it('违规：同一个故事编号在总设计里出现不止一次（例如两份总设计写重了）', () => {
+    const violations = checkStories(['US-M1-01', 'US-M1-02', 'US-M1-01'], registry, covered)
+    expect(violations.map(violation => [violation.rule, violation.subject])).toEqual([['stories/duplicate', 'US-M1-01']])
   })
 
   it('违规：总设计里的故事没有登记', () => {
@@ -73,7 +91,7 @@ describe('US-M1-11 故事对照', () => {
   })
 
   it('违规：E2E 故事的用例只以跳过或 fixme 的形式存在（真实输出）', () => {
-    const skipped: StoryRegistry = { design: 'x', stories: { 'US-M1-07': { phase: 'P4', status: 'active', verification: ['e2e'] }, 'US-M1-08': { phase: 'P4', status: 'active', verification: ['e2e'] }, 'US-M1-10': { phase: 'P5', status: 'active', verification: ['e2e'] } } }
+    const skipped: StoryRegistry = { designs: ['x'], stories: { 'US-M1-07': { phase: 'P4', status: 'active', verification: ['e2e'] }, 'US-M1-08': { phase: 'P4', status: 'active', verification: ['e2e'] }, 'US-M1-10': { phase: 'P5', status: 'active', verification: ['e2e'] } } }
     const tests = testsFromPlaywrightList(readFixture('playwright/list-with-skips.json'), 'tests/e2e/specs')
     expect(checkStories(['US-M1-07', 'US-M1-08', 'US-M1-10'], skipped, tests).map(v => `${v.rule} ${v.subject}`).sort()).toEqual([
       'stories/missing-test US-M1-07',

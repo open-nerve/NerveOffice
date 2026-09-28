@@ -1,7 +1,7 @@
 // users 模块的表（P3 设计 §3.2）：账户。用户名存小写的规范写法，唯一。
 import { DISPLAY_NAME_MAX_LENGTH, USER_STATUSES, USER_SYSTEM_ROLES, USERNAME_PATTERN_SOURCE } from '@nerve-office/contracts'
 import { sql } from 'drizzle-orm'
-import { check, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
+import { check, integer, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
 import { lengthBetween, oneOf, stringLiteral } from '../common/index.ts'
 
 export const users = pgTable('users', {
@@ -9,6 +9,9 @@ export const users = pgTable('users', {
   username: text('username').notNull(),
   displayName: text('display_name').notNull(),
   passwordHash: text('password_hash').notNull(),
+  // 凭据的版本（M2-P1 复验 X1、X2）：改密码、签发与完成重置时加一；按新参数重新哈希只换编码、不变。
+  // 登录与修改密码在事务里按它复核验证之后凭据有没有变，不按哈希比较（重新哈希会换掉哈希）
+  passwordVersion: integer('password_version').notNull().default(1),
   // enum 只收窄 TypeScript 的类型，数据库里仍是 text 加 CHECK
   systemRole: text('system_role', { enum: USER_SYSTEM_ROLES }).notNull(),
   status: text('status', { enum: USER_STATUSES }).notNull().default('active'),

@@ -19,6 +19,8 @@ export const ERROR_CODES = {
   ORIGIN_NOT_ALLOWED: { status: 403, message: '请求来源不被允许' },
   /** 能访问这个资源，但没有这个操作的权限，例如只能查看的文档不能保存（没有任何权限时是 NOT_FOUND） */
   PERMISSION_DENIED: { status: 403, message: '没有执行这个操作的权限' },
+  /** 修改密码时旧密码不对 */
+  CURRENT_PASSWORD_INCORRECT: { status: 403, message: '当前密码不正确' },
   /** 资源不存在；没有读取权限时同样返回它，不暴露资源是否存在（规范 §4） */
   NOT_FOUND: { status: 404, message: '请求的资源不存在或无权访问' },
   /** 已有系统管理员，拒绝再次初始化（命令行初始化管理员） */
@@ -29,6 +31,12 @@ export const ERROR_CODES = {
   DOCUMENT_REVISION_CONFLICT: { status: 409, message: '别处保存了更新的版本，本次保存没有写入' },
   /** 同一个 requestId 已经用于另一个请求（负载不同，或者是别的操作） */
   REQUEST_ID_CONFLICT: { status: 409, message: '请求标识已被另一个请求使用' },
+  /** 这个操作会让有效的系统管理员一个都不剩（取消或停用最后一个系统管理员） */
+  LAST_ADMIN: { status: 409, message: '至少要保留一个有效的系统管理员' },
+  /** 账户已停用，不能执行这个操作（例如签发重置链接） */
+  ACCOUNT_DISABLED: { status: 409, message: '账户已停用' },
+  /** 邀请或重置链接不能用。details 带原因：没有这个令牌、已过期、已使用、已作废（linkInvalidDetailsSchema） */
+  LINK_INVALID: { status: 410, message: '链接无效或已失效' },
   /** 请求体超过上限，或 JSON 的嵌套层数、元素数量超过上限 */
   PAYLOAD_TOO_LARGE: { status: 413, message: '请求体超过上限' },
   /** 不支持的字符集或内容编码 */

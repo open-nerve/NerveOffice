@@ -3,7 +3,9 @@ import type { QueryClient } from '@tanstack/react-query'
 import type { DataRouter, RouteObject } from 'react-router'
 import type { PageLocation } from '../shared/lib/page-location.ts'
 import type { SessionChannel } from '../shared/lib/session-channel.ts'
+import type { SessionRecheck } from '../shared/lib/session-recheck.ts'
 import { createBrowserRouter } from 'react-router'
+import { isOneTimeLinkPage } from '../features/account/index.ts'
 import { sessionQueryOptions } from '../features/auth/index.ts'
 import { isAuthenticationError, requestSession, setCsrfToken } from '../shared/api/index.ts'
 import { isLoginPage, LOGIN_PATH, loginPath } from '../shared/lib/login-path.ts'
@@ -17,6 +19,8 @@ export interface AppRuntime {
   readonly queryClient: QueryClient
   /** 整页跳转：组件经 PageLocationContext 取用 */
   readonly page: PageLocation
+  /** 向服务端确认现在是谁：组件经 SessionRecheckContext 取用（例如管理员改了本人的账户之后，M2-P1 审查 B4） */
+  readonly recheckSession: SessionRecheck
   /** 不再接收其他标签页的消息。页面上随页面一起结束；测试里每个用例结束时调用 */
   readonly dispose: () => void
 }
@@ -34,8 +38,10 @@ export interface AppRuntimeOptions {
  * 平台页面的运行时：路由与请求缓存各一份，加上会话的全局处理（ADR-008）：
  * - 请求得到未登录或登录已过期：整页回到登录页，登录后回到原来的地址；
  * - 退出成功（或者会话本来就不在了）：通知其他标签页，整页回到登录页；登录成功：通知其他标签页；
- * - 别的标签页登录或退出了，或者状态变更的请求得到 CSRF_TOKEN_INVALID：向服务端确认现在是谁（审查 B6）。
+ * - 别的标签页登录或退出了，状态变更的请求得到 CSRF_TOKEN_INVALID，只给系统管理员的请求得到 PERMISSION_DENIED，
+ *   或者组件改了本人的账户：向服务端确认现在是谁（审查 B6，M2-P1 审查 B4）。
  *   还是同一个人，换上新的会话与 CSRF 令牌，页面不动；换了人或者已经退出，整页重新加载。
+ *   一次性链接的公开页面除外：它不显示任何人的数据，重新加载反而会丢掉已经从地址里去掉的令牌（M2-P1 审查 B3）。
  *
  * 会话结束与换人都整页跳转，而不是在单页里清空缓存再切换路由（审查 B7）：上一个会话的数据与 CSRF 令牌随页面丢弃，
  * 也不会有还挂着的组件在缓存被清空后立即重新请求（重新请求的 401 还可能把"已过期"改成"未登录"）。
@@ -47,10 +53,12 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
   const channel = options.sessionChannel ?? openSessionChannel()
   /** 页面正在离开：之后的会话事件都不再处理 */
   let leaving = false
-  /** 正在向服务端确认会话 */
-  let checking = false
+  /** 正在向服务端确认会话：确认期间再来的请求合并进这一次 */
+  let checking: Promise<void> | undefined
   /** 确认期间又来了消息：这次确认的结果可能早于那次变化，结束后再确认一次（几条消息合并成一次，复验 R10） */
   let checkAgain = false
+  /** 在一次性链接的公开页面上跳过的复核：离开这个页面时补上（M2-P1 复验 N6） */
+  let deferredRecheck = false
 
   const queryClient = createQueryClient({
     unauthenticated: (reason) => {
@@ -66,6 +74,14 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
     sessionStale: () => void recheckSession(),
   })
   const unsubscribe = channel.subscribe(() => void recheckSession())
+  // 公开页面接受或完成之后单页进入个人空间：跳过的复核这时补上。例如接受的响应写入了新账户的 Cookie，
+  // 随后别的标签页又登录了另一个人，页面显示的与 Cookie 不是同一个人，要整页重新加载（复验 N6）
+  const unsubscribeRouter = router.subscribe((state) => {
+    if (deferredRecheck && !isOneTimeLinkPage(state.location.pathname)) {
+      deferredRecheck = false
+      void recheckSession()
+    }
+  })
 
   /**
    * 页面开始离开（转到登录页，或者换了人要重新加载）：之后的会话事件都不再处理，CSRF 令牌马上清掉。
@@ -96,29 +112,37 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
     }
   }
 
+  /** 确认结束时兑现；确认期间再调用，合并进正在进行的这一次（它结束前会再确认一次） */
   async function recheckSession(): Promise<void> {
     if (leaving)
       return
-    if (checking) {
+    if (checking !== undefined) {
       checkAgain = true
-      return
+      return checking
     }
-    checking = true
-    try {
-      for (;;) {
-        checkAgain = false
-        await checkSessionOnce()
-        // 确认期间又来了消息，而且页面还没开始离开：再确认一次
-        if (!checkAgain || leaving)
-          break
-      }
-    }
-    finally {
-      checking = false
+    checking = confirmSession().finally(() => {
+      checking = undefined
+    })
+    return checking
+  }
+
+  async function confirmSession(): Promise<void> {
+    for (;;) {
+      checkAgain = false
+      await checkSessionOnce()
+      // 确认期间又来了消息，而且页面还没开始离开：再确认一次
+      if (!checkAgain || leaving)
+        break
     }
   }
 
   async function checkSessionOnce(): Promise<void> {
+    // 一次性链接的公开页面：没有显示任何人的数据，也不拿 CSRF 令牌，别的标签页换了人与它无关。
+    // 令牌读出之后已经从地址里去掉，重新加载只能显示"链接无效"（M2-P1 审查 B3）。离开这个页面时再补上（复验 N6）
+    if (isOneTimeLinkPage(router.state.location.pathname)) {
+      deferredRecheck = true
+      return
+    }
     try {
       const { queryKey } = sessionQueryOptions()
       const shown = queryClient.getQueryData(queryKey)
@@ -145,8 +169,10 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
     router,
     queryClient,
     page,
+    recheckSession,
     dispose: () => {
       unsubscribe()
+      unsubscribeRouter()
       channel.close()
     },
   }

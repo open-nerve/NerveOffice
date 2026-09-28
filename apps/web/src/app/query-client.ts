@@ -1,6 +1,6 @@
 import type { LoginReason } from '../shared/lib/login-path.ts'
 import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query'
-import { isAuthenticationError, isCsrfTokenError, isTransientError } from '../shared/api/index.ts'
+import { isAuthenticationError, isCsrfTokenError, isPermissionDeniedError, isTransientError } from '../shared/api/index.ts'
 
 /** 网络问题与服务端的临时错误重试一次；其他错误（4xx）重试也没用 */
 const MAX_TRANSIENT_RETRIES = 1
@@ -13,7 +13,10 @@ export interface SessionEvents {
   readonly signedIn: () => void
   /** 退出成功，或者退出时会话已经不在了 */
   readonly signedOut: () => void
-  /** 状态变更的请求得到 CSRF_TOKEN_INVALID：页面拿着的会话已经过时 */
+  /**
+   * 页面拿着的会话已经过时，要向服务端重新确认：状态变更的请求得到 CSRF_TOKEN_INVALID（别的标签页换了人），
+   * 或者只给系统管理员的请求得到 PERMISSION_DENIED（系统角色被取消了，M2-P1 审查 B4）
+   */
   readonly sessionStale: () => void
 }
 
@@ -24,6 +27,11 @@ function handlesAuthentication(meta: Meta): boolean {
   return meta?.handlesAuthentication === true
 }
 
+/** 这个请求只给系统管理员（features/auth 的 SYSTEM_ADMIN_ONLY）：被拒绝说明页面显示的系统角色已经过时 */
+function systemAdminOnly(meta: Meta): boolean {
+  return meta?.systemAdminOnly === true
+}
+
 /** 这个变更开始（登录）还是结束（退出）会话；元数据由 features/auth 的 STARTS_SESSION、ENDS_SESSION 给出 */
 function sessionTransition(meta: Meta): 'starts' | 'ends' | undefined {
   const transition = meta?.session
@@ -32,11 +40,11 @@ function sessionTransition(meta: Meta): 'starts' | 'ends' | undefined {
 
 /**
  * 请求缓存（TanStack Query）。请求的结果里与会话有关的，查询与变更都一样，统一交给 events：
- * 未登录或登录已过期、登录与退出、CSRF 令牌过时。自己处理未登录的请求（会话、登录）用 meta.handlesAuthentication 标明。
+ * 未登录或登录已过期、登录与退出、会话过时（CSRF 令牌不对、系统角色被取消）。自己处理未登录的请求（会话、登录）用 meta.handlesAuthentication 标明。
  */
 export function createQueryClient(events: SessionEvents): QueryClient {
   function onRequestError(error: unknown, meta: Meta): void {
-    if (isCsrfTokenError(error))
+    if (isCsrfTokenError(error) || (isPermissionDeniedError(error) && systemAdminOnly(meta)))
       events.sessionStale()
     else if (isAuthenticationError(error) && !handlesAuthentication(meta))
       events.unauthenticated(error.code === 'SESSION_EXPIRED' ? 'expired' : 'required')

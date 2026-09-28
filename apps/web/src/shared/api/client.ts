@@ -134,6 +134,11 @@ export function isCsrfTokenError(error: unknown): error is ApiError {
   return error instanceof ApiError && error.code === 'CSRF_TOKEN_INVALID'
 }
 
+/** 没有权限：服务端逐请求检查（例如只给系统管理员的管理接口）。 */
+export function isPermissionDeniedError(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.code === 'PERMISSION_DENIED'
+}
+
 /**
  * 请求确定没有生效：服务端在写入之前就拒绝了（4xx）。其余的失败（网络、5xx、回包读不出来）结果未知，服务端可能已经处理，
  * 重试要沿用同一个 requestId（新建表格、保存）

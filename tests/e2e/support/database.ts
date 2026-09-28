@@ -29,15 +29,18 @@ export interface TestUser {
 /** 与应用的默认参数相同：登录时不会触发重新哈希 */
 const ARGON2_DEFAULTS = { memoryCost: 19_456, timeCost: 2, parallelism: 1 }
 
-/** 新账户与它的个人空间。用户名带随机后缀：三个浏览器并行跑同一个用例时互不影响 */
-export async function createUser(prefix: string, displayName = prefix): Promise<TestUser> {
+/**
+ * 新账户与它的个人空间。用户名带随机后缀：三个浏览器并行跑同一个用例时互不影响。
+ * systemRole 为 admin 时建系统管理员（M2-P1 的管理界面用例）：并行的用例各建各的，库里总有不止一个有效的管理员
+ */
+export async function createUser(prefix: string, displayName = prefix, options: { readonly systemRole?: 'admin' | 'member' } = {}): Promise<TestUser> {
   const username = `${prefix}-${randomBytes(4).toString('hex')}`
   const password = `password-${randomBytes(8).toString('hex')}`
   const passwordHash = await hash(password, ARGON2_DEFAULTS)
   return withDatabase(async (client) => {
     const user = await client.query<{ id: string }>(
-      'INSERT INTO users (username, display_name, password_hash, system_role) VALUES ($1, $2, $3, \'member\') RETURNING id',
-      [username, displayName, passwordHash],
+      'INSERT INTO users (username, display_name, password_hash, system_role) VALUES ($1, $2, $3, $4) RETURNING id',
+      [username, displayName, passwordHash, options.systemRole ?? 'member'],
     )
     const id = user.rows[0]?.id ?? ''
     const space = await client.query<{ id: string }>('INSERT INTO spaces (type, name, owner_user_id) VALUES (\'personal\', $1, $2) RETURNING id', [displayName, id])

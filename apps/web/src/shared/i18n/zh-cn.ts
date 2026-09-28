@@ -1,5 +1,5 @@
 // 界面文字（规范 §2.4）：简体中文，集中在这里，组件里不散写。服务端的说明只是默认值，界面按错误码显示这里的文字。
-import type { DocumentType, ErrorCode } from '@nerve-office/contracts'
+import type { AuditAction, DocumentType, ErrorCode, InvitationStatus, LinkInvalidReason, OneTimeLinkPurpose, UserStatus, UserSystemRole } from '@nerve-office/contracts'
 
 /** 按错误码显示的提示。没有登记的错误码用服务端的说明。 */
 const ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
@@ -10,7 +10,12 @@ const ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
   CSRF_TOKEN_INVALID: '页面已失效，请刷新后重试',
   ORIGIN_NOT_ALLOWED: '请求来源不被允许，请从本站的地址访问',
   PERMISSION_DENIED: '你没有执行这个操作的权限',
+  CURRENT_PASSWORD_INCORRECT: '当前密码不正确',
   NOT_FOUND: '内容不存在，或者你没有访问权限',
+  LAST_ADMIN: '至少要保留一个有效的系统管理员',
+  USERNAME_TAKEN: '这个登录名已被账户占用，或者已有待接受的邀请',
+  ACCOUNT_DISABLED: '这个账户已停用',
+  LINK_INVALID: '链接无效或已失效，请联系管理员重新发送',
   DOCUMENT_REVISION_CONFLICT: '别处保存了更新的版本',
   REQUEST_ID_CONFLICT: '请求已失效，请重试',
   PAYLOAD_TOO_LARGE: '内容超过容量上限',
@@ -21,6 +26,53 @@ const ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
   SERVICE_UNAVAILABLE: '服务暂时不可用，请稍后重试',
 }
 
+/** 一次性链接不能用时，按用途与原因给出下一步（M2-P1 设计 §3.4） */
+const LINK_INVALID_MESSAGES: Record<OneTimeLinkPurpose, Record<LinkInvalidReason, string>> = {
+  invitation: {
+    invalid: '邀请链接无效：请检查链接是否完整，或者请管理员重新发送',
+    expired: '邀请链接已过期，请管理员重新发送',
+    used: '这个邀请已经接受过了，请直接登录',
+    revoked: '邀请链接已作废，请管理员重新发送',
+  },
+  password_reset: {
+    invalid: '重置链接无效：请检查链接是否完整，或者请管理员重新发送',
+    expired: '重置链接已过期，请管理员重新发送',
+    used: '这个重置链接已经用过了，请直接用新密码登录',
+    revoked: '重置链接已作废，请管理员重新发送',
+  },
+}
+
+/** 地址里没有一次性链接的令牌（例如令牌去掉之后刷新了页面）：要重新打开发来的链接（审查 B10） */
+const LINK_MISSING_MESSAGES: Record<OneTimeLinkPurpose, string> = {
+  invitation: '请重新打开发给你的邀请链接。为了安全，链接打开之后会从地址栏里去掉，所以刷新页面后要重新打开它。',
+  password_reset: '请重新打开发给你的重置链接。为了安全，链接打开之后会从地址栏里去掉，所以刷新页面后要重新打开它。',
+}
+
+/** 审计动作的名称（M2-P1 设计 §3.7）；前端还不认识的动作显示原文 */
+const AUDIT_ACTION_NAMES: Record<AuditAction, string> = {
+  'auth.login_succeeded': '登录成功',
+  'auth.login_failed': '登录失败',
+  'auth.logout': '退出',
+  'auth.link_rejected': '一次性链接被拒',
+  'users.admin_initialized': '初始化系统管理员',
+  'users.invited': '签发邀请',
+  'users.invitation_revoked': '作废邀请',
+  'users.invitation_accepted': '接受邀请',
+  'users.password_changed': '修改密码',
+  'users.password_change_failed': '修改密码失败',
+  'users.password_reset_issued': '签发重置链接',
+  'users.password_reset_completed': '重置密码',
+  'users.disabled': '停用账户',
+  'users.enabled': '启用账户',
+  'users.system_role_changed': '变更系统角色',
+  'documents.created': '新建文档',
+  'documents.content_saved': '保存文档',
+}
+
+function isAuditAction(action: string): action is AuditAction {
+  return Object.hasOwn(AUDIT_ACTION_NAMES, action)
+}
+
 const DOCUMENT_TYPE_NAMES: Record<DocumentType, string> = {
   sheet: '表格',
 }
@@ -28,11 +80,17 @@ const DOCUMENT_TYPE_NAMES: Record<DocumentType, string> = {
 export const messages = {
   app: {
     name: 'NerveOffice',
+    navigating: '正在打开页面…',
   },
   common: {
     retry: '重试',
     backHome: '回到首页',
     requestId: (id: string) => `请求标识：${id}`,
+    close: '关闭',
+    cancel: '取消',
+    loadMore: '加载更多',
+    loadingMore: '正在加载…',
+    all: '全部',
   },
   errors: {
     byCode: (code: ErrorCode, fallback: string) => ERROR_MESSAGES[code] ?? fallback,
@@ -52,6 +110,140 @@ export const messages = {
     logout: '退出',
     loggingOut: '正在退出…',
     logoutFailed: (reason: string) => `退出失败：${reason}`,
+  },
+  account: {
+    changePassword: '修改密码',
+    changePasswordDescription: '修改之后，你在其他设备上的登录都会退出，这里保持登录。',
+    currentPassword: '当前密码',
+    newPassword: '新密码',
+    confirmPassword: '再输入一次新密码',
+    passwordRule: (min: number) => `至少 ${min} 个字符，不要求字符种类`,
+    passwordMismatch: '两次输入的新密码不一致',
+    changing: '正在修改…',
+    changed: '密码已修改。你在其他设备上的登录已经退出。',
+    username: '登录名',
+    displayName: '显示名',
+    goToLogin: '去登录',
+    link: {
+      invitation: {
+        title: '接受邀请',
+        description: '设置密码后即可登录。',
+        password: '设置密码',
+        submit: '设置密码并登录',
+        checking: '正在核对邀请链接…',
+      },
+      password_reset: {
+        title: '重置密码',
+        description: '设置新密码后即可登录；你在其他地方的登录都已退出。',
+        password: '新密码',
+        submit: '设置新密码并登录',
+        checking: '正在核对重置链接…',
+      },
+      submitting: '正在设置…',
+      invalid: (purpose: OneTimeLinkPurpose, reason: LinkInvalidReason) => LINK_INVALID_MESSAGES[purpose][reason],
+      missing: (purpose: OneTimeLinkPurpose) => LINK_MISSING_MESSAGES[purpose],
+    },
+  },
+  admin: {
+    title: '管理',
+    navLabel: '管理界面',
+    nav: { users: '账户', invitations: '邀请', audit: '审计' },
+    noPermission: '只有系统管理员能打开管理界面。',
+    working: '正在处理…',
+    /** 表格里每行的操作按钮的可读名称：带上对象，例如"停用 艾米（amy）"（审查 B14） */
+    actionOn: (action: string, target: string) => `${action} ${target}`,
+    roleName: (role: UserSystemRole) => ({ admin: '系统管理员', member: '成员' })[role],
+    statusName: (status: UserStatus) => ({ active: '有效', disabled: '已停用' })[status],
+    users: {
+      search: '按名字或登录名搜索',
+      statusFilter: '状态',
+      listLabel: '账户列表',
+      loading: '正在加载账户…',
+      loadFailed: '账户列表加载失败',
+      empty: '没有符合条件的账户',
+      columns: { username: '登录名', displayName: '显示名', role: '角色', status: '状态', createdAt: '创建时间', actions: '操作' },
+      disable: '停用',
+      enable: '启用',
+      grantAdmin: '设为系统管理员',
+      revokeAdmin: '取消系统管理员',
+      resetPassword: '生成重置链接',
+      confirmDisable: (name: string) => `停用 ${name}？`,
+      disableDescription: '停用后，这个人立即不能访问任何页面与接口，也不能登录。随时可以重新启用。',
+      // 对自己的操作另给说明（审查 B4）：停用自己之后本人立即退出，只能由另一位系统管理员重新启用
+      confirmDisableOwn: '停用你自己的账户？',
+      disableOwnDescription: '停用后你立即退出，不能再登录，只能由另一位系统管理员重新启用。至少要保留一个有效的系统管理员。',
+      confirmEnable: (name: string) => `启用 ${name}？`,
+      enableDescription: '启用后这个人可以照常登录，个人空间与文档都没有变。',
+      confirmGrantAdmin: (name: string) => `把 ${name} 设为系统管理员？`,
+      grantAdminDescription: '系统管理员可以管理账户、邀请与审计，默认看不到任何人的文档内容。',
+      confirmRevokeAdmin: (name: string) => `取消 ${name} 的系统管理员？`,
+      revokeAdminDescription: '取消后这个人不能再打开管理界面。至少要保留一个有效的系统管理员。',
+      confirmRevokeOwnAdmin: '取消你自己的系统管理员？',
+      revokeOwnAdminDescription: '取消后你立即不能再打开管理界面，只能由另一位系统管理员重新授予。至少要保留一个有效的系统管理员。',
+      // 签发重置链接时，服务端把这个账户的密码换成不可用的，并撤销这个人的全部会话（审查 A7、A12）
+      confirmReset: (name: string) => `为 ${name} 生成重置链接？`,
+      resetDescription: (hours: number) => `生成后，这个人的当前密码立即失效，所有地方的登录都会退出。链接 ${hours} 小时内有效，只显示这一次，请交给本人。`,
+      confirmResetOwn: '为你自己生成重置链接？',
+      resetOwnDescription: (hours: number) => `生成后，你自己的登录会立即退出，当前密码随即失效，之后用这个链接设置新密码。链接 ${hours} 小时内有效，只显示这一次，请先复制保存。`,
+    },
+    invitations: {
+      description: '填好登录名与显示名，生成一次性链接（7 天内有效），经受控的渠道发给本人。',
+      username: '登录名',
+      displayName: '显示名',
+      issue: '生成邀请链接',
+      issuing: '正在生成…',
+      statusFilter: '状态',
+      statusName: (status: InvitationStatus) => ({ pending: '待接受', accepted: '已接受', expired: '已过期', revoked: '已作废' })[status],
+      listLabel: '邀请列表',
+      loading: '正在加载邀请…',
+      loadFailed: '邀请列表加载失败',
+      empty: '还没有邀请',
+      columns: { username: '登录名', displayName: '显示名', status: '状态', createdBy: '签发人', createdAt: '签发时间', expiresAt: '到期时间', actions: '操作' },
+      revoke: '作废',
+      reissue: '重新生成',
+      confirmRevoke: (username: string) => `作废发给 ${username} 的邀请？`,
+      revokeDescription: '作废后这个链接不能再用；需要时可以重新生成。',
+      confirmReissue: (username: string) => `为 ${username} 重新生成邀请链接？`,
+      reissueDescription: '原来的链接随即作废。',
+    },
+    link: {
+      invitationTitle: '邀请链接',
+      resetTitle: '重置链接',
+      label: '链接',
+      once: '链接只显示这一次。请经受控的渠道（当面、公司的即时通讯等）发给本人，不要贴进公开的群聊或工单。',
+      expiresAt: (time: string) => `${time} 之前有效`,
+      copy: '复制链接',
+      copied: '已复制',
+      copyFailed: '复制失败，请选中链接后手动复制',
+      ownResetNote: '你的登录已经退出：关闭之后回到登录页，打开这个链接设置新密码。',
+    },
+    audit: {
+      from: '开始时间',
+      to: '结束时间',
+      // 按换算成 UTC 之后的时刻判断：东八区的 0001-01-01 05:00 在 UTC 是 0 年（复验 X5）
+      invalidTime: '超出可查询的时间范围（按 UTC 计，公元 1–9999 年），这个时间没有作为条件',
+      action: '动作',
+      actor: '操作者',
+      searchActor: '按名字找操作者',
+      searchingActor: '正在查找…',
+      noActor: '没有找到这个人',
+      actorSearchFailed: (reason: string) => `查找失败：${reason}`,
+      clear: '清除',
+      clearActor: '清除操作者的筛选',
+      clearTarget: '清除对象的筛选',
+      listLabel: '审计事件',
+      loading: '正在加载审计事件…',
+      loadFailed: '审计事件加载失败',
+      empty: '没有符合条件的事件',
+      columns: { occurredAt: '时间', actor: '操作者', action: '动作', target: '对象', origin: '来源', details: '详情' },
+      actorKind: (type: string) => ({ system: '系统', anonymous: '未登录的访问者' } as Record<string, string>)[type] ?? type,
+      source: (source: string) => ({ http: '网页', cli: '命令行' } as Record<string, string>)[source] ?? source,
+      targetKind: (type: string) => ({ user: '账户', space: '空间', document: '文档', invitation: '邀请' } as Record<string, string>)[type] ?? type,
+      actionName: (action: string) => (isAuditAction(action) ? AUDIT_ACTION_NAMES[action] : action),
+      onlyTarget: '只看这个对象',
+      chipActor: (name: string) => `操作者：${name}`,
+      chipTarget: (label: string) => `对象：${label}`,
+    },
   },
   documents: {
     title: '我的空间',

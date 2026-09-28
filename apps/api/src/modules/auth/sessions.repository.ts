@@ -2,7 +2,7 @@ import type { Buffer } from 'node:buffer'
 import type { SessionRevokeReason } from '../../db/schema/auth/index.ts'
 import type { Database, Transaction } from '../database/index.ts'
 import { Inject, Injectable } from '@nestjs/common'
-import { and, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm'
+import { and, eq, gt, inArray, isNull, lt, ne, sql } from 'drizzle-orm'
 import { authSessions } from '../../db/schema/auth/index.ts'
 import { DATABASE, executorOf } from '../database/index.ts'
 
@@ -71,6 +71,21 @@ export class SessionsRepository {
       .update(authSessions)
       .set({ revokedAt: sql`now()`, revokedReason: reason, idleExpiresAt: sql`least(${authSessions.idleExpiresAt}, now())` })
       .where(and(target, isNull(authSessions.revokedAt)))
+  }
+
+  /**
+   * 撤销这个人全部未撤销的会话（M2-P1 设计 §3.5）；except 是要保留的一条（修改密码时的当前会话）。
+   * 已经过期的也一并标记：不影响结果，清理照常按空闲过期的时间。
+   */
+  async revokeAllOfUser(userId: string, reason: SessionRevokeReason, except: string | undefined, transaction?: Transaction): Promise<void> {
+    await executorOf(this.db, transaction)
+      .update(authSessions)
+      .set({ revokedAt: sql`now()`, revokedReason: reason, idleExpiresAt: sql`least(${authSessions.idleExpiresAt}, now())` })
+      .where(and(
+        eq(authSessions.userId, userId),
+        isNull(authSessions.revokedAt),
+        except === undefined ? undefined : ne(authSessions.id, except),
+      ))
   }
 
   /**
