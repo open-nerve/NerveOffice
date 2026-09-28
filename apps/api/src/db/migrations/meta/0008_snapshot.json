@@ -1269,6 +1269,13 @@
           "primaryKey": false,
           "notNull": true
         },
+        "password_version": {
+          "name": "password_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
         "system_role": {
           "name": "system_role",
           "type": "text",

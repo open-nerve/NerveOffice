@@ -23,9 +23,9 @@ export const DEFAULT_PASSWORD = 'correct horse battery staple'
 /** 与应用的默认参数相同（内存 19 MiB、迭代 2 次、并行度 1）：登录时不会触发重新哈希。 */
 const ARGON2_DEFAULTS = { memoryCost: 19_456, timeCost: 2, parallelism: 1 }
 
-/** 与应用相同参数的哈希：并发测试里模拟"别处改了密码" */
-export async function passwordHashOf(password: string): Promise<string> {
-  return hash(password, ARGON2_DEFAULTS)
+/** 与应用相同参数（或者给定的参数）的哈希：并发测试里模拟"别处改了密码"、把哈希换回旧参数 */
+export async function passwordHashOf(password: string, argon2: AccountOptions['argon2'] = ARGON2_DEFAULTS): Promise<string> {
+  return hash(password, argon2)
 }
 
 export async function createAccount(database: TestDatabase, options: AccountOptions): Promise<TestAccount> {

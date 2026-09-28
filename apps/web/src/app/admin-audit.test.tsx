@@ -108,7 +108,7 @@ describe('管理界面：审计', () => {
     expect(screen.getByLabelText('开始时间')).toHaveAttribute('aria-invalid', 'false')
   })
 
-  it('换算出来接口不接受的时间（UTC 的 0 年）：不发出去，输入框标成无效（审查 B8）', async () => {
+  it('换算出来接口不接受的时间（UTC 的 0 年）：不发出去，输入框标成无效，并有说明（审查 B8，复验 N8）', async () => {
     vi.stubEnv('TZ', 'Etc/GMT-8')
     onTestFinished(() => {
       vi.unstubAllEnvs()
@@ -116,8 +116,10 @@ describe('管理界面：审计', () => {
     const api = audit({ [LIST]: () => json(200, listPage([EVENT])) })
     renderApp('/admin/audit')
     await screen.findByRole('table', { name: '审计事件' })
+    expect(screen.getByLabelText('开始时间')).not.toHaveAttribute('aria-describedby')
     fireEvent.change(screen.getByLabelText('开始时间'), { target: { value: '0001-01-01T05:00' } })
     expect(screen.getByLabelText('开始时间')).toHaveAttribute('aria-invalid', 'true')
+    expect(screen.getByLabelText('开始时间')).toHaveAccessibleDescription('超出可查询的时间范围（按 UTC 计，公元 1–9999 年），这个时间没有作为条件')
     await settle()
     expect(api.requests.filter(request => request.key.startsWith(LIST)).map(request => request.key)).toEqual([LIST])
   })

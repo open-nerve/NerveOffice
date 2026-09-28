@@ -17,13 +17,17 @@ export interface NewUser {
 export interface UserCredentials {
   readonly user: User
   readonly passwordHash: string
+  /** 凭据的版本：改密码、签发与完成重置时加一；按新参数重新哈希不变 */
+  readonly passwordVersion: number
 }
 
 /** 锁住的账户行里复核用的两列 */
 export interface LockedCredentials {
   readonly status: UserStatus
-  readonly passwordHash: string
+  readonly passwordVersion: number
 }
+
+const CREDENTIAL_COLUMNS = { passwordHash: users.passwordHash, passwordVersion: users.passwordVersion }
 
 const USER_COLUMNS = {
   id: users.id,
@@ -69,11 +73,11 @@ export class UsersRepository {
   }
 
   async findCredentialsByUsername(username: string): Promise<UserCredentials | undefined> {
-    const [row] = await this.db.select({ ...USER_COLUMNS, passwordHash: users.passwordHash }).from(users).where(eq(users.username, username))
+    const [row] = await this.db.select({ ...USER_COLUMNS, ...CREDENTIAL_COLUMNS }).from(users).where(eq(users.username, username))
     if (row === undefined)
       return undefined
-    const { passwordHash, ...user } = row
-    return { user, passwordHash }
+    const { passwordHash, passwordVersion, ...user } = row
+    return { user, passwordHash, passwordVersion }
   }
 
   async existsWithUsername(username: string, transaction?: Transaction): Promise<boolean> {
@@ -99,30 +103,34 @@ export class UsersRepository {
     await executorOf(this.db, transaction).execute(sql`SELECT pg_advisory_xact_lock(hashtextextended('nerve-office:admin-initialization', 0))`)
   }
 
-  /** 调用方已在事务里锁住这个账户的行（lockRecord、lockCredentials） */
+  /**
+   * 换成新的凭据（修改密码，签发与完成重置）：版本加一，验证过旧凭据、还没提交的登录与修改密码复核时发现它变了。
+   * 调用方已在事务里锁住这个账户的行（lockRecord、lockCredentials）
+   */
   async updatePasswordHash(id: string, passwordHash: string, transaction: Transaction): Promise<void> {
-    await executorOf(this.db, transaction).update(users).set({ passwordHash, updatedAt: sql`now()` }).where(eq(users.id, id))
+    await executorOf(this.db, transaction)
+      .update(users)
+      .set({ passwordHash, passwordVersion: sql`${users.passwordVersion} + 1`, updatedAt: sql`now()` })
+      .where(eq(users.id, id))
   }
 
   /**
-   * 哈希还是 expected 时才换成 next（登录时按新参数重新哈希，审查 A3）：验证之后密码改过、重置过，
-   * 就不能用旧密码算出的新哈希覆盖回去。返回是否换了
+   * 同一个密码按新参数重新编码（登录时的重新哈希）：版本不变，只在它还是 expectedVersion 时才换（审查 A3）。
+   * 验证之后改过密码、签发或完成了重置，就不能用旧密码算出的新哈希覆盖回去
    */
-  async replacePasswordHash(id: string, expected: string, next: string): Promise<boolean> {
-    const rows = await this.db
+  async replacePasswordHash(id: string, expectedVersion: number, next: string): Promise<void> {
+    await this.db
       .update(users)
       .set({ passwordHash: next, updatedAt: sql`now()` })
-      .where(and(eq(users.id, id), eq(users.passwordHash, expected)))
-      .returning({ id: users.id })
-    return rows.length > 0
+      .where(and(eq(users.id, id), eq(users.passwordVersion, expectedVersion)))
   }
 
   async findCredentialsById(id: string): Promise<UserCredentials | undefined> {
-    const [row] = await this.db.select({ ...USER_COLUMNS, passwordHash: users.passwordHash }).from(users).where(eq(users.id, id))
+    const [row] = await this.db.select({ ...USER_COLUMNS, ...CREDENTIAL_COLUMNS }).from(users).where(eq(users.id, id))
     if (row === undefined)
       return undefined
-    const { passwordHash, ...user } = row
-    return { user, passwordHash }
+    const { passwordHash, passwordVersion, ...user } = row
+    return { user, passwordHash, passwordVersion }
   }
 
   /** 按 id 批量取账户（含停用的）：审计查询补名字用 */
@@ -143,12 +151,12 @@ export class UsersRepository {
   }
 
   /**
-   * 锁住这个账户的行，读出状态与哈希（审查 A1）：登录用 share（到提交之前，改密码、重置、停用都要等它），
+   * 锁住这个账户的行，读出状态与凭据的版本（审查 A1）：登录用 share（到提交之前，改密码、重置、停用都要等它），
    * 修改密码用 no key update（接着就改哈希）
    */
   async lockCredentials(id: string, strength: 'share' | 'no key update', transaction: Transaction): Promise<LockedCredentials | undefined> {
     const [row] = await executorOf(this.db, transaction)
-      .select({ status: users.status, passwordHash: users.passwordHash })
+      .select({ status: users.status, passwordVersion: users.passwordVersion })
       .from(users)
       .where(eq(users.id, id))
       .for(strength)

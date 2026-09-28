@@ -4,8 +4,11 @@ import type pg from 'pg'
 import type { TestDatabase } from './database.ts'
 import { setTimeout as delay } from 'node:timers/promises'
 
-/** 等到这个库里有 count 个连接在等锁（被持锁的事务挡住的、排在别的请求后面的都算） */
-export type WaitForWaiting = (count: number) => Promise<void>
+/**
+ * 等到这个库里有 count 个连接在等锁（被持锁的事务挡住的、排在别的请求后面的都算）。
+ * inFlight 是已经发出的前几步：其中任何一步先结束了（没走到锁上），立即失败并报出它的结果（复验 X3）
+ */
+export type WaitForWaiting = (count: number, ...inFlight: Promise<unknown>[]) => Promise<void>
 
 export interface HeldLockRace<T> {
   /** 在事务里取锁（例如 SELECT … FOR UPDATE、pg_advisory_xact_lock） */
@@ -56,26 +59,37 @@ function describeOutcome(value: unknown): string {
   return responses.length > 0 ? `HTTP ${responses.map(response => response.status).join('、')}` : '已完成'
 }
 
+/** 记下一个请求的结局；同时接住它的拒绝，免得在等待出错时成为未处理的拒绝 */
+function watch(promise: Promise<unknown>): () => string | undefined {
+  let outcome: string | undefined
+  promise.then(
+    (value) => {
+      outcome = describeOutcome(value)
+    },
+    (error: unknown) => {
+      outcome = `失败：${String(error)}`
+    },
+  )
+  return () => outcome
+}
+
 export async function raceAgainstHeldLock<T>(database: TestDatabase, race: HeldLockRace<T>): Promise<T> {
   return database.query(async (client) => {
     await client.query('BEGIN')
     let pending: Promise<T> | undefined
-    let outcome: string | undefined
     try {
       await race.hold(client)
       const holderPid = (await client.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid
       if (holderPid === undefined)
         throw new Error('取不到持锁连接的进程号')
-      const ended = (): string | undefined => outcome
-      pending = race.request(async count => waitUntilBlocked(database, holderPid, count, ended))
-      pending.then(
-        (value) => {
-          outcome = describeOutcome(value)
-        },
-        (error: unknown) => {
-          outcome = `失败：${String(error)}`
-        },
-      )
+      /** 整个请求的结局：请求发出之后才开始记 */
+      let requestOutcome: () => string | undefined = () => undefined
+      const ended = (): string | undefined => requestOutcome()
+      pending = race.request(async (count, ...inFlight) => {
+        const steps = inFlight.map(watch)
+        return waitUntilBlocked(database, holderPid, count, () => steps.map(step => step()).find(result => result !== undefined) ?? ended())
+      })
+      requestOutcome = watch(pending)
       await waitUntilBlocked(database, holderPid, race.waiting ?? 1, ended)
       await race.change(client)
       await client.query('COMMIT')

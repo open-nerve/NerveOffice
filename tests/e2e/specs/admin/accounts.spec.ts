@@ -90,13 +90,32 @@ test.describe('US-M2-01 邀请注册', () => {
     const firstUrl = await page.getByRole('dialog').getByLabel('链接').inputValue()
     await page.getByRole('dialog').getByRole('button', { name: '关闭' }).click()
     const rows = page.getByRole('table', { name: '邀请列表' }).getByRole('row').filter({ hasText: username })
-    await confirmAction(page, rows.filter({ hasText: '待接受' }), '重新生成')
 
-    // 任何时刻只有一个弹窗（审查 B7）。按属性数，被 aria-hidden 的弹窗也算上：按角色找只看得见最上面的一个（复验 N3）
+    // 任何时刻只有一个弹窗（审查 B7）：重新生成之后的列表刷新先扣住，刷新期间只有确认的弹窗（"正在处理…"），刷新之后才换成链接的弹窗。
+    // 按 role 属性数，被 aria-hidden 的弹窗也算上（复验 N3）；用不重试的 count()，只在刷新期间存在的第二个弹窗也数得到（复验 X4）
+    const invitationList = /\/api\/admin\/invitations(?:\?|$)/
+    let releaseRefresh: () => void = () => {}
+    const refreshReleased = new Promise<void>((resolve) => {
+      releaseRefresh = resolve
+    })
+    await page.route(invitationList, async (route) => {
+      if (route.request().method() === 'GET')
+        await refreshReleased
+      await route.continue()
+    })
+    const refresh = page.waitForRequest(request => request.method() === 'GET' && invitationList.test(request.url()))
+    await confirmAction(page, rows.filter({ hasText: '待接受' }), '重新生成')
+    await refresh
+    await expect(page.getByRole('dialog').getByRole('button', { name: '正在处理…' })).toBeVisible()
+    // eslint-disable-next-line playwright/prefer-to-have-count -- 数的是刷新期间的瞬时状态：toHaveCount 会重试到计数对上为止
+    expect(await page.locator('[role="dialog"]').count()).toBe(1)
+    releaseRefresh()
+
     const dialog = page.getByRole('dialog', { name: `邀请链接：重发的同事（${username}）` })
     await expect(dialog.getByLabel('链接')).not.toHaveValue(firstUrl)
     const secondUrl = await dialog.getByLabel('链接').inputValue()
-    await expect(page.locator('[role="dialog"]')).toHaveCount(1)
+    // eslint-disable-next-line playwright/prefer-to-have-count -- 同上：链接的弹窗出现的那一刻，确认的弹窗已经关掉
+    expect(await page.locator('[role="dialog"]').count()).toBe(1)
     await dialog.getByRole('button', { name: '关闭' }).click()
     const old = rows.filter({ hasText: '已作废' })
     await expect(old).toHaveCount(1)

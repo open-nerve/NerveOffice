@@ -16,7 +16,7 @@ const SPACE = { id: '0199a2c4-2a3b-7c4d-9e5f-6a7b8c9d0e1f', name: '爱丽丝' }
 const ORIGIN = { source: 'http' as const, requestId: 'req-1', clientIp: '203.0.113.7' }
 const TRANSACTION = { opaque: true } as unknown as Transaction
 const TOKEN = generateSessionToken()
-const CREDENTIALS: VerifiedCredentials = { user: ALICE, passwordHash: '$argon2id$alice' }
+const CREDENTIALS: VerifiedCredentials = { user: ALICE, passwordVersion: 1 }
 
 function setup(options: { admission?: Admission, check?: CredentialCheck | Error, purgeFails?: boolean, stillValid?: boolean } = {}) {
   const ticket = {

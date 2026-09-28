@@ -50,4 +50,5 @@ CREATE UNIQUE INDEX "auth_password_resets_open_user_key" ON "auth_password_reset
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_action_check" CHECK ("audit_events"."action" IN ('auth.login_succeeded', 'auth.login_failed', 'auth.logout', 'users.admin_initialized', 'documents.created', 'documents.content_saved', 'auth.link_rejected', 'users.invited', 'users.invitation_revoked', 'users.invitation_accepted', 'users.password_changed', 'users.password_change_failed', 'users.password_reset_issued', 'users.password_reset_completed', 'users.disabled', 'users.enabled', 'users.system_role_changed'));--> statement-breakpoint
 ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_target_type_check" CHECK ("audit_events"."target_type" IN ('user', 'space', 'document', 'invitation'));--> statement-breakpoint
 ALTER TABLE "auth_sessions" ADD CONSTRAINT "auth_sessions_revoked_reason_check" CHECK ("auth_sessions"."revoked_reason" IN ('logout', 'replaced', 'disabled', 'password_changed', 'password_reset'));--> statement-breakpoint
-ALTER TABLE "users" ADD CONSTRAINT "users_status_check" CHECK ("users"."status" IN ('active', 'disabled'));
+ALTER TABLE "users" ADD CONSTRAINT "users_status_check" CHECK ("users"."status" IN ('active', 'disabled'));--> statement-breakpoint
+ALTER TABLE "users" ADD COLUMN "password_version" integer DEFAULT 1 NOT NULL;

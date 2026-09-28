@@ -220,7 +220,8 @@ export const messages = {
     audit: {
       from: '开始时间',
       to: '结束时间',
-      invalidTime: '年份要在 1–9999 之间，这个时间没有作为条件',
+      // 按换算成 UTC 之后的时刻判断：东八区的 0001-01-01 05:00 在 UTC 是 0 年（复验 X5）
+      invalidTime: '超出可查询的时间范围（按 UTC 计，公元 1–9999 年），这个时间没有作为条件',
       action: '动作',
       actor: '操作者',
       searchActor: '按名字找操作者',

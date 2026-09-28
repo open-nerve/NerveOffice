@@ -2,6 +2,7 @@ import type { AdminUserListQuery, UserDirectoryQuery, UserSystemRole } from '@ne
 import type { OnModuleInit } from '@nestjs/common'
 import type { Transaction } from '../database/index.ts'
 import type { AccountChange, AccountRecord, User } from './user.ts'
+import type { UserCredentials } from './users.repository.ts'
 import { randomBytes } from 'node:crypto'
 import { ADMIN_PAGE_SIZE, USER_DIRECTORY_LIMIT, usernameSchema } from '@nerve-office/contracts'
 import { Injectable } from '@nestjs/common'
@@ -12,12 +13,12 @@ import { PasswordHasher } from './password-hasher.ts'
 import { UsersRepository } from './users.repository.ts'
 
 /**
- * 验证通过的凭据：账户，以及验证所用的哈希。验证在事务之外，事务里据此复核：验证之后改过密码、签发或完成了重置、
- * 停用了，复核就不通过（M2-P1 审查 A1）。哈希只在这次请求的内存里，不写日志、不出现在响应里
+ * 验证通过的凭据：账户，以及验证时凭据的版本。验证在事务之外，事务里据此复核：验证之后改过密码、签发或完成了重置、
+ * 停用了，复核就不通过（M2-P1 审查 A1）。按版本而不按哈希比较：按新参数重新哈希会换掉哈希，而密码没变（复验 X1、X2）
  */
 export interface VerifiedCredentials {
   readonly user: User
-  readonly passwordHash: string
+  readonly passwordVersion: number
 }
 
 /** 用户名与密码的验证结果。失败时如果用户名对应的账户存在，带上它（审计的对象）；不区分"不存在"与"密码错误"。 */
@@ -93,17 +94,19 @@ export class UsersService implements OnModuleInit {
     }
     if (!await this.hasher.verify(credentials.passwordHash, password))
       return { valid: false, user: credentials.user }
-    return { valid: true, credentials: this.hasher.needsRehash(credentials.passwordHash) ? await this.rehash(credentials, password) : credentials }
+    if (this.hasher.needsRehash(credentials.passwordHash))
+      await this.rehash(credentials, password)
+    return { valid: true, credentials: { user: credentials.user, passwordVersion: credentials.passwordVersion } }
   }
 
   /**
    * 登录的事务里复核验证过的凭据（M2-P1 审查 A1）：锁住账户行（FOR SHARE，到提交为止），要求账户仍然有效、
-   * 哈希还是验证时的那个。修改密码、签发与完成重置、停用都先锁这一行：它们先提交，这里复核就不通过；
+   * 凭据的版本还是验证时的那个。修改密码、签发与完成重置、停用都先锁这一行：它们先提交，这里复核就不通过；
    * 这里先提交，它们随后撤销的会话就包括这次新建的
    */
   async holdCredentials(credentials: VerifiedCredentials, transaction: Transaction): Promise<boolean> {
     const locked = await this.repository.lockCredentials(credentials.user.id, 'share', transaction)
-    return locked?.status === 'active' && locked.passwordHash === credentials.passwordHash
+    return locked?.status === 'active' && locked.passwordVersion === credentials.passwordVersion
   }
 
   /** 新密码的哈希（修改、重置、接受邀请）：计算密集，调用方放在事务之外。等待哈希的请求太多时抛 PasswordHashingBusyError */
@@ -130,22 +133,23 @@ export class UsersService implements OnModuleInit {
       await this.hasher.verify(await this.dummyHash(), password)
       return undefined
     }
-    return await this.hasher.verify(credentials.passwordHash, password) ? credentials : undefined
+    return await this.hasher.verify(credentials.passwordHash, password) ? { user: credentials.user, passwordVersion: credentials.passwordVersion } : undefined
   }
 
   /**
-   * 修改密码（M2-P1 审查 A1、A2）：锁住账户行，复核账户仍然有效、哈希还是验证旧密码时的那个，再换成新的哈希。
-   * 验证之后改过密码、签发或完成了重置、停用了，返回 false，什么都不改
+   * 修改密码（M2-P1 审查 A1、A2）：锁住账户行，复核账户仍然有效、凭据的版本还是验证旧密码时的那个，再换成新的哈希
+   * （版本加一）。验证之后改过密码、签发或完成了重置、停用了，返回 false，什么都不改；
+   * 期间另一处登录只是按新参数重新哈希，版本不变，照常修改（复验 X2）
    */
   async replacePassword(credentials: VerifiedCredentials, passwordHash: string, transaction: Transaction): Promise<boolean> {
     const locked = await this.repository.lockCredentials(credentials.user.id, 'no key update', transaction)
-    if (locked?.status !== 'active' || locked.passwordHash !== credentials.passwordHash)
+    if (locked?.status !== 'active' || locked.passwordVersion !== credentials.passwordVersion)
       return false
     await this.repository.updatePasswordHash(credentials.user.id, passwordHash, transaction)
     return true
   }
 
-  /** 设置密码的哈希（完成重置；签发重置时让当前密码失效）。调用方已用 lockAccount 锁住这个账户的行 */
+  /** 设置密码的哈希（完成重置；签发重置时让当前密码失效），凭据的版本加一。调用方已用 lockAccount 锁住这个账户的行 */
   async setPasswordHash(userId: string, passwordHash: string, transaction: Transaction): Promise<void> {
     await this.repository.updatePasswordHash(userId, passwordHash, transaction)
   }
@@ -249,22 +253,17 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
-   * 按当前参数重新哈希，哈希还是验证时的那个才换（审查 A3）。换了就返回带新哈希的凭据，事务里按它复核。
-   * 没换，说明期间别处改了哈希：可能是同一个人的另一次登录先重新哈希了（两次正确的登录同时进行），库里的新哈希对这个密码
-   * 仍然成立，再验证一次，成立就按它复核，免得把正确的登录算成失败（复验 N1）；改了密码、签发了重置时验证不过，
-   * 照原来的凭据去复核（不通过）。失败只记日志，返回原来的凭据，下次登录时再试
+   * 按当前参数重新编码同一个密码：凭据的版本还是验证时的那个才换，版本不变（审查 A3）。
+   * 验证之后改过密码、签发或完成了重置（版本变了），就不覆盖回去；同一个人几次正确的登录同时重新哈希，写的都是这个密码的编码，
+   * 谁最后写入都一样，它们的复核按版本比较，互不影响（复验 N1、X1）。
+   * 失败（例如等待哈希的请求太多）只记日志：这次不换，下次登录时再试，这次登录照常
    */
-  private async rehash(credentials: VerifiedCredentials, password: string): Promise<VerifiedCredentials> {
+  private async rehash(credentials: UserCredentials, password: string): Promise<void> {
     try {
-      const passwordHash = await this.hasher.hash(password)
-      if (await this.repository.replacePasswordHash(credentials.user.id, credentials.passwordHash, passwordHash))
-        return { ...credentials, passwordHash }
-      const current = await this.repository.findCredentialsById(credentials.user.id)
-      return current?.user.status === 'active' && await this.hasher.verify(current.passwordHash, password) ? current : credentials
+      await this.repository.replacePasswordHash(credentials.user.id, credentials.passwordVersion, await this.hasher.hash(password))
     }
     catch (error) {
       this.#logger.warn('用新参数重新哈希密码失败，下次登录时再试', { err: error, userId: credentials.user.id })
-      return credentials
     }
   }
 

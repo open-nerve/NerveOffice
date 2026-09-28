@@ -16,7 +16,7 @@ const PRINCIPAL: Principal = { user: ALICE, sessionId: 'session-current', csrfTo
 const ORIGIN = { source: 'http' as const, requestId: 'req-1', clientIp: '203.0.113.7' }
 const TRANSACTION = { opaque: true } as unknown as Transaction
 const REQUEST = { currentPassword: 'old-password', newPassword: 'new-password-123' }
-const CREDENTIALS: VerifiedCredentials = { user: ALICE, passwordHash: '$argon2id$old' }
+const CREDENTIALS: VerifiedCredentials = { user: ALICE, passwordVersion: 1 }
 
 function setup(options: { admission?: Admission, currentValid?: boolean, stillCurrent?: boolean, lockedForSeconds?: number, hashBusy?: boolean } = {}) {
   const ticket = {

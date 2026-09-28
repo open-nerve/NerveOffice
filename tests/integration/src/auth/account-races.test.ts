@@ -78,6 +78,9 @@ async function issuedInvitation(username: string) {
 /** 哈希参数比应用的配置旧的账户：登录成功时按当前参数重新哈希 */
 const OLD_ARGON2 = { memoryCost: 12_288, timeCost: 3, parallelism: 1 }
 
+/** 别处改了密码（修改、签发或完成重置）：与应用相同，换哈希的同时凭据的版本加一 */
+const CHANGE_PASSWORD_ELSEWHERE = 'UPDATE users SET password_hash = $1, password_version = password_version + 1 WHERE id = $2'
+
 /** 持有账户行的锁：与改动账户的事务第一步取的锁相同（FOR NO KEY UPDATE） */
 function lockAccountRow(account: TestAccount) {
   return async (client: pg.Client) => client.query('SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE', [account.id])
@@ -90,7 +93,7 @@ describe('US-M2-02 登录与修改密码：验证之后、提交之前的变化�
     const response = await raceAgainstHeldLock(database, {
       hold: lockAccountRow(amy),
       request: async () => postLogin(app.baseUrl, { username: 'amy', password: amy.password }, { 'x-request-id': 'race-login-amy' }),
-      change: async client => client.query('UPDATE users SET password_hash = $1 WHERE id = $2', [changed, amy.id]),
+      change: async client => client.query(CHANGE_PASSWORD_ELSEWHERE, [changed, amy.id]),
     })
     expect(response.status).toBe(401)
     expect(await codeOf(response)).toBe('INVALID_CREDENTIALS')
@@ -116,7 +119,7 @@ describe('US-M2-02 登录与修改密码：验证之后、提交之前的变化�
     const response = await raceAgainstHeldLock(database, {
       hold: lockAccountRow(old),
       request: async () => postLogin(app.baseUrl, { username: 'oldparams', password: old.password }),
-      change: async client => client.query('UPDATE users SET password_hash = $1 WHERE id = $2', [changed, old.id]),
+      change: async client => client.query(CHANGE_PASSWORD_ELSEWHERE, [changed, old.id]),
     })
     expect(response.status).toBe(401)
     expect(await passwordHashOfAccount(old)).toBe(changed)
@@ -139,6 +142,44 @@ describe('US-M2-02 登录与修改密码：验证之后、提交之前的变化�
     expect(await count('SELECT count(*)::int AS count FROM audit_events WHERE action = \'auth.login_failed\' AND target_id = $1', [twin.id])).toBe(0)
   })
 
+  it('凭据的版本：修改密码、签发与完成重置时经应用加一；登录时按新参数重新哈希只换编码，版本不变（复验 X1、X2）', async () => {
+    const eli = await createAccount(database, { username: 'eli', argon2: OLD_ARGON2 })
+    const versionOf = async () => one<{ password_version: number, password_hash: string }>('SELECT password_version, password_hash FROM users WHERE id = $1', [eli.id])
+    const before = await versionOf()
+    const here = await login(app.baseUrl, 'eli', eli.password)
+    const rehashed = await versionOf()
+    expect(rehashed?.password_hash).not.toBe(before?.password_hash)
+    expect(rehashed?.password_version).toBe(before?.password_version)
+    expect((await asUser(app.baseUrl, here, '/api/auth/password', { method: 'PUT', body: { currentPassword: eli.password, newPassword: 'eli second password' } })).status).toBe(204)
+    expect((await versionOf())?.password_version).toBe((before?.password_version ?? 0) + 1)
+    const token = await issuedResetToken(eli)
+    expect((await versionOf())?.password_version).toBe((before?.password_version ?? 0) + 2)
+    expect((await completeReset(token)).status).toBe(200)
+    expect((await versionOf())?.password_version).toBe((before?.password_version ?? 0) + 3)
+  })
+
+  it('修改密码验证过旧密码之后，同一个人的另一次登录按新参数重新哈希了（密码没变）：照常修改（按凭据的版本复核，复验 X2）', async () => {
+    const dot = await createAccount(database, { username: 'dot', argon2: OLD_ARGON2 })
+    // 修改密码要先登录：登录会顺带重新哈希，之后把哈希换回旧参数（同一个密码、版本不变），下一次登录又会重新哈希
+    const here = await login(app.baseUrl, 'dot', dot.password)
+    await database.query(async client => client.query('UPDATE users SET password_hash = $1 WHERE id = $2', [await passwordHashOf(dot.password, OLD_ARGON2), dot.id]))
+    const [relogin, change] = await raceAgainstHeldLock(database, {
+      hold: lockAccountRow(dot),
+      request: async (waitForWaiting) => {
+        // 先让登录的重新哈希在账户行上等着，再发修改密码（它验证旧密码时哈希还是旧的）
+        const loginAgain = postLogin(app.baseUrl, { username: 'dot', password: dot.password })
+        await waitForWaiting(1, loginAgain)
+        return Promise.all([loginAgain, asUser(app.baseUrl, here, '/api/auth/password', { method: 'PUT', body: { currentPassword: dot.password, newPassword: 'dot wants this new one' } })])
+      },
+      waiting: 2,
+      change: async () => undefined,
+    })
+    // 重新哈希只换编码、版本不变：修改密码照常成功。那次登录排在修改之后提交，这时密码已经改了，按凭据变了拒绝
+    expect(change.status).toBe(204)
+    expect(relogin.status).toBe(401)
+    expect((await postLogin(app.baseUrl, { username: 'dot', password: 'dot wants this new one' })).status).toBe(200)
+  })
+
   it('修改密码验证过旧密码之后，别处改了密码（例如签发了重置）：403，不覆盖别处设的密码，记审计', async () => {
     const cid = await createAccount(database, { username: 'cid' })
     const here = await login(app.baseUrl, 'cid', cid.password)
@@ -146,7 +187,7 @@ describe('US-M2-02 登录与修改密码：验证之后、提交之前的变化�
     const response = await raceAgainstHeldLock(database, {
       hold: lockAccountRow(cid),
       request: async () => asUser(app.baseUrl, here, '/api/auth/password', { method: 'PUT', body: { currentPassword: cid.password, newPassword: 'cid wants this one' } }),
-      change: async client => client.query('UPDATE users SET password_hash = $1 WHERE id = $2', [changed, cid.id]),
+      change: async client => client.query(CHANGE_PASSWORD_ELSEWHERE, [changed, cid.id]),
     })
     expect(response.status).toBe(403)
     expect(await codeOf(response)).toBe('CURRENT_PASSWORD_INCORRECT')
@@ -297,7 +338,7 @@ describe('US-M2-04 停用与会话、操作者的复核（审查 A1、A2、A12�
       hold: async client => client.query('SELECT 1 FROM auth_password_resets WHERE user_id = $1 FOR UPDATE', [jon.id]),
       request: async (waitForWaiting) => {
         const disable = asUser(app.baseUrl, adminSession, `/api/admin/users/${jon.id}/disable`, { method: 'POST' })
-        await waitForWaiting(1)
+        await waitForWaiting(1, disable)
         const relogin = postLogin(app.baseUrl, { username: 'jon', password: jon.password }, { cookie: previous.cookie })
         return Promise.all([disable, relogin])
       },

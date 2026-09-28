@@ -155,15 +155,6 @@ const APP_ENTRY_SYNTAX = [
   },
 ]
 
-// shared/ui 的桶文件（ADR-008）：带第三方运行时的重组件（弹窗 dialog.tsx，Radix Dialog）不经它导出。web 没有声明 sideEffects，
-// 经桶文件引用会把它再导出的每个模块都带进首屏；首屏的预算还有余量，门禁 budgets 发现不了（M2-P1 审查 B2，复验 N2）
-const UI_BARREL_SYNTAX = [
-  {
-    selector: String.raw`:matches(ExportNamedDeclaration, ExportAllDeclaration, ImportDeclaration)[source.value=/^\.\/dialog(\.tsx)?$/]`,
-    message: 'shared/ui 的桶文件不导出弹窗（dialog.tsx，Radix Dialog）：经桶文件引用会把它带进平台页面的首屏；用到的地方直接引用这个文件（ADR-008，M2-P1 审查 B2）',
-  },
-]
-
 // ---- 后端（P2 设计 §3.1）----
 // 每个后端文件的限制由 apiRules() 按"这个文件允许什么"组合出来，各覆盖块不各自抄一份，免得改一处漏一处（审查 B15）
 
@@ -410,13 +401,6 @@ export default antfu(
     },
   },
   {
-    name: 'nerve/web-ui-barrel',
-    files: ['apps/web/src/shared/ui/index.ts'],
-    rules: {
-      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...UI_BARREL_SYNTAX],
-    },
-  },
-  {
     // 编辑器适配层可以引用 @univerjs/*，内部 API 除外：它们只能经 internal-api/ 引用（下一块）
     name: 'nerve/editor-may-import-univer',
     files: ['apps/web/src/editor/**'],
@@ -492,6 +476,25 @@ export default antfu(
     rules: {
       // 只查仓库自己的代码，不遍历 node_modules
       'import-x/no-cycle': ['error', { ignoreExternal: true }],
+    },
+  },
+  {
+    // 带第三方运行时的重组件（弹窗 dialog.tsx，Radix Dialog，约 12 KiB gzip）不经 shared 的任何文件转出（ADR-008）：
+    // web 没有声明 sideEffects，经 shared/ui 的桶文件引用会把它再导出的每个模块都带进首屏，首屏的预算还有余量、门禁 budgets 发现不了。
+    // 按解析之后的路径判断：经 shared 里别的文件中转、换写法（'../ui/dialog.tsx'、'./dialog.js'）都拦得住（M2-P1 审查 B2，复验 N2、X6）。
+    // 用到弹窗的功能模块（按需加载的管理界面）直接引用它；类型也一样直接引用
+    name: 'nerve/web-ui-heavy-components',
+    files: ['apps/web/src/shared/**/*.{ts,tsx}'],
+    ignores: ['apps/web/src/shared/**/*.test.{ts,tsx}'],
+    rules: {
+      'import-x/no-restricted-paths': ['error', {
+        basePath: import.meta.dirname,
+        zones: [{
+          target: 'apps/web/src/shared',
+          from: 'apps/web/src/shared/ui/dialog.tsx',
+          message: '弹窗（shared/ui/dialog.tsx，Radix Dialog）不经 shared 的其他文件转出：会随桶文件进平台页面的首屏；用到的功能模块直接引用这个文件（ADR-008，M2-P1 审查 B2）',
+        }],
+      }],
     },
   },
   {

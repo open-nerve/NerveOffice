@@ -38,7 +38,7 @@ function account(overrides: Partial<AccountRecord>): AccountRecord {
 /** 假仓储：一个账户，另有若干个"别的有效系统管理员"；操作者默认是有效的系统管理员。按调用的顺序记下加锁与更新 */
 function setup(target: AccountRecord | undefined, otherActiveAdmins = 1, actor: AccountRecord | null = account({ id: ACTOR_ID, username: 'boss', systemRole: 'admin' })) {
   const calls: string[] = []
-  let locked = target === undefined ? undefined : { status: target.status, passwordHash: 'hash:secret' }
+  let locked = target === undefined ? undefined : { status: target.status, passwordVersion: 1 }
   const repository = {
     lockSystemAdmins: vi.fn(async () => {
       calls.push('lock-admins')
@@ -58,15 +58,15 @@ function setup(target: AccountRecord | undefined, otherActiveAdmins = 1, actor: 
       calls.push(`lock-credentials:${strength}`)
       return locked
     }),
-    updatePasswordHash: vi.fn(async (_id: string, passwordHash: string) => {
+    updatePasswordHash: vi.fn(async (_id: string, _passwordHash: string) => {
       calls.push('update-hash')
       if (locked !== undefined)
-        locked = { ...locked, passwordHash }
+        locked = { ...locked, passwordVersion: locked.passwordVersion + 1 }
     }),
     countActiveAdminsExcept: vi.fn(async () => otherActiveAdmins),
     setStatus: vi.fn(async (_id: string, status: AccountRecord['status']) => account({ ...target, status })),
     setSystemRole: vi.fn(async (_id: string, systemRole: AccountRecord['systemRole']) => account({ ...target, systemRole })),
-    findCredentialsById: vi.fn(async () => (target === undefined ? undefined : { user: target, passwordHash: 'hash:secret' })),
+    findCredentialsById: vi.fn(async () => (target === undefined ? undefined : { user: target, passwordHash: 'hash:secret', passwordVersion: 1 })),
     listRecords: vi.fn(async () => [] as AccountRecord[]),
     passwordHashParameters: vi.fn(async () => []),
   }
@@ -76,10 +76,10 @@ function setup(target: AccountRecord | undefined, otherActiveAdmins = 1, actor: 
     calls,
     repository,
     hasher,
-    /** 模拟别处改了密码（修改、重置） */
-    changeHashElsewhere: (passwordHash: string) => {
+    /** 模拟别处改了密码（修改、签发或完成重置）：凭据的版本加一 */
+    changeCredentialsElsewhere: () => {
       if (locked !== undefined)
-        locked = { ...locked, passwordHash }
+        locked = { ...locked, passwordVersion: locked.passwordVersion + 1 }
     },
     service: new UsersService(repository as unknown as UsersRepository, hasher, logger),
   }
@@ -179,9 +179,9 @@ describe('UsersService：系统管理员的授予与取消（M2-P1 设计 §3.5�
 })
 
 describe('UsersService.verifyPasswordOf 与 replacePassword（修改密码，审查 A1、A2）', () => {
-  it('旧密码对时返回验证过的凭据（带验证所用的哈希），错时不通过', async () => {
+  it('旧密码对时返回验证过的凭据（带验证时凭据的版本，不带哈希），错时不通过', async () => {
     const { service } = setup(account({}))
-    expect(await service.verifyPasswordOf('id', 'secret')).toMatchObject({ user: { username: 'alice' }, passwordHash: 'hash:secret' })
+    expect(await service.verifyPasswordOf('id', 'secret')).toEqual({ user: account({}), passwordVersion: 1 })
     expect(await service.verifyPasswordOf('id', 'wrong')).toBeUndefined()
   })
 
@@ -194,7 +194,7 @@ describe('UsersService.verifyPasswordOf 与 replacePassword（修改密码，审
     }
   })
 
-  it('replacePassword：锁住账户行（no key update），哈希还是验证时的那个才更新', async () => {
+  it('replacePassword：锁住账户行（no key update），凭据的版本还是验证时的那个才更新', async () => {
     const { service, calls, repository } = setup(account({}))
     const credentials = await service.verifyPasswordOf('id', 'secret')
     if (credentials === undefined)
@@ -205,11 +205,11 @@ describe('UsersService.verifyPasswordOf 与 replacePassword（修改密码，审
   })
 
   it('replacePassword：验证之后别处改过密码（修改、签发或完成重置），不更新', async () => {
-    const { service, repository, changeHashElsewhere } = setup(account({}))
+    const { service, repository, changeCredentialsElsewhere } = setup(account({}))
     const credentials = await service.verifyPasswordOf('id', 'secret')
     if (credentials === undefined)
       throw new Error('旧密码应当验证通过')
-    changeHashElsewhere('hash:reset-by-admin')
+    changeCredentialsElsewhere()
     expect(await service.replacePassword(credentials, 'hash:next', TX)).toBe(false)
     expect(repository.updatePasswordHash).not.toHaveBeenCalled()
   })
@@ -220,24 +220,24 @@ describe('UsersService.verifyPasswordOf 与 replacePassword（修改密码，审
     const credentials = await service.verifyPasswordOf('id', 'secret')
     if (credentials === undefined)
       throw new Error('旧密码应当验证通过')
-    repository.lockCredentials.mockResolvedValueOnce({ status: 'disabled', passwordHash: 'hash:secret' })
+    repository.lockCredentials.mockResolvedValueOnce({ status: 'disabled', passwordVersion: 1 })
     expect(await service.replacePassword(credentials, 'hash:next', TX)).toBe(false)
     expect(repository.updatePasswordHash).not.toHaveBeenCalled()
   })
 })
 
 describe('UsersService.holdCredentials（登录的事务里复核，审查 A1）', () => {
-  it('FOR SHARE 锁住账户行；有效且哈希没变时通过', async () => {
+  it('FOR SHARE 锁住账户行；有效且凭据的版本没变时通过', async () => {
     const { service, calls } = setup(account({}))
-    const credentials = { user: account({}), passwordHash: 'hash:secret' }
+    const credentials = { user: account({}), passwordVersion: 1 }
     expect(await service.holdCredentials(credentials, TX)).toBe(true)
     expect(calls).toEqual(['lock-credentials:share'])
   })
 
-  it('哈希变了、账户停用了、账户不在了：不通过', async () => {
-    const credentials = { user: account({}), passwordHash: 'hash:secret' }
+  it('凭据的版本变了、账户停用了、账户不在了：不通过', async () => {
+    const credentials = { user: account({}), passwordVersion: 1 }
     const changed = setup(account({}))
-    changed.changeHashElsewhere('hash:other')
+    changed.changeCredentialsElsewhere()
     expect(await changed.service.holdCredentials(credentials, TX)).toBe(false)
     expect(await setup(account({ status: 'disabled' })).service.holdCredentials(credentials, TX)).toBe(false)
     expect(await setup(undefined).service.holdCredentials(credentials, TX)).toBe(false)

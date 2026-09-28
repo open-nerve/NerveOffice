@@ -437,11 +437,25 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
       expect(report.rules, `${file}：${code}`).toContain('boundaries/dependencies')
       expect(report.messages.join('\n'), file).toContain('管理界面（features/admin）按需加载')
     }
-    // shared/ui 的桶文件不导出弹窗：Radix Dialog 会随桶文件进首屏（复验 N2）
+    // 弹窗不经 shared 的任何文件转出：Radix Dialog 会随桶文件进首屏（复验 N2）。按解析之后的路径判断，中转与换写法都拦得住（复验 X6）
     const BARREL = 'apps/web/src/shared/ui/index.ts'
-    for (const code of [`export { Dialog } from './dialog.tsx'\n`, `export * from './dialog.tsx'\n`, `export { Dialog } from './dialog'\n`])
-      expect((await lint(code, BARREL)).messages.join('\n'), code).toContain('shared/ui 的桶文件不导出弹窗')
-    expect(await rulesFor(`export { Button } from './button.tsx'\n`, BARREL)).not.toContain('no-restricted-syntax')
+    const relayed: [string, string][] = [
+      [`export { Dialog } from './dialog.tsx'\n`, BARREL],
+      [`export * from './dialog.tsx'\n`, BARREL],
+      [`export { Dialog } from '../ui/dialog.tsx'\n`, BARREL],
+      [`export { Dialog } from './dialog.js'\n`, BARREL],
+      [`export type { DialogContent } from './dialog.tsx'\n`, BARREL],
+      // shared 里别的文件中转
+      [`export { Dialog } from '../ui/dialog.tsx'\n`, WEB_SHARED_FILE],
+    ]
+    for (const [code, file] of relayed) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain('import-x/no-restricted-paths')
+      expect(report.messages.join('\n'), code).toContain('弹窗（shared/ui/dialog.tsx，Radix Dialog）不经 shared 的其他文件转出')
+    }
+    expect(await rulesFor(`export { Button } from './button.tsx'\n`, BARREL)).not.toContain('import-x/no-restricted-paths')
+    // 用到弹窗的功能模块（按需加载的管理界面）直接引用它
+    expect(await rulesFor('import { DialogContent } from \'../../shared/ui/dialog.tsx\'\n\nexport const content = DialogContent\n', 'apps/web/src/features/admin/confirm-dialog.tsx')).not.toContain('import-x/no-restricted-paths')
     // 管理界面自己内部的引用不受影响
     expect(await rulesFor('import { ADMIN_QUERY_KEY } from \'./admin-api.ts\'\n\nexport const key = ADMIN_QUERY_KEY\n', 'apps/web/src/features/admin/users-page.tsx')).not.toContain('boundaries/dependencies')
   })
