@@ -91,8 +91,11 @@ export function databaseUrl(settings: ContainerE2eSettings): string {
   return `postgres://${DATABASE_ADMIN}:${settings.passwords.admin}@127.0.0.1:${settings.databasePort}/${DATABASE_NAME}`
 }
 
-/** 以外部模式运行 E2E 的环境变量（tests/e2e 的 playwright.config.ts 与 support/api-process.ts 读取） */
-export function playwrightEnvironment(settings: ContainerE2eSettings, browsers: readonly string[]): Record<string, string> {
+/**
+ * 以外部模式运行 E2E 的环境变量（tests/e2e 的 playwright.config.ts、support/api-process.ts 与 support/external-setup.ts 读取）。
+ * E2E_RUNNER_PID 是编排脚本的进程号：它被强制结束时，Playwright 据此自己停下（复验 SB2）
+ */
+export function playwrightEnvironment(settings: ContainerE2eSettings, browsers: readonly string[], runnerPid: number): Record<string, string> {
   return {
     E2E_BASE_URL: publicOrigin(settings),
     E2E_DATABASE_URL: databaseUrl(settings),
@@ -100,6 +103,7 @@ export function playwrightEnvironment(settings: ContainerE2eSettings, browsers: 
     E2E_COMPOSE_PROJECT: settings.project,
     E2E_COMPOSE_FILE: settings.composeFile,
     E2E_COMPOSE_ENV_FILE: settings.envFile,
+    E2E_RUNNER_PID: String(runnerPid),
   }
 }
 
@@ -201,8 +205,8 @@ export interface ProbeResponse {
 }
 
 /**
- * 经代理请求各个探针的响应 → 与期望不符的说明。代理转发的响应本来就不带 Server，代理自己生成的响应
- * （屏蔽就绪探针的 404）才会带：借它核对代理去掉了 Server 与 Via（复验 RB3）
+ * 经代理请求各个探针的响应 → 与期望不符的说明。Caddy 只在自己生成的响应（屏蔽就绪探针的 404）上加 Server，
+ * 只在转发的响应（存活探针）上加 Via：核对这四个响应都不带这两个头，两种都覆盖到（复验 RB3、SB3）
  */
 export function proxiedProbeProblems(responses: ReadonlyMap<string, ProbeResponse>): string[] {
   return PROXIED_PROBES.flatMap(({ path, status }) => {

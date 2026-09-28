@@ -77,6 +77,19 @@ describe('US-M1-11 A01 容器镜像按摘要锁定（P5 设计 §3.2）', () => 
     expect(rules([{ path, content }])).toContain(rule)
   })
 
+  it.each([
+    // 复验 SA1、SA2
+    ['以反斜杠结尾的注释不续行：下一行的 FROM 照样检查', 'deploy/Dockerfile', `# 说明 \\\nFROM node:22-slim\n`, 'pins/image-digest'],
+    ['以变量开头、只有一部分是变量的引用', 'deploy/test/compose.yaml', `    image: \${REGISTRY}/postgres:18\n`, 'pins/image-variable'],
+  ])('违规（再续）：%s', (_case, path, content, rule) => {
+    expect(rules([{ path, content }])).toContain(rule)
+  })
+
+  it('不算违规：注释里写着 npm i -g pnpm；整个值是带说明的必填变量（复验 SA1、SA2）', () => {
+    expect(rules([{ path: 'deploy/Dockerfile', content: `FROM node:24.21.0-bookworm-slim@${DIGEST_A}\n# 以前是 npm i -g pnpm\n` }])).toEqual([])
+    expect(imageReferences({ path: 'deploy/test/compose.yaml', content: `    image: \${NERVE_IMAGE:?缺少 NERVE_IMAGE（用 deploy/Dockerfile 构建的镜像）}\n` })).toEqual([])
+  })
+
   it('不算违规：RUN 的命令本身的参数里有 --from=；阶段里不带默认值的 ARG 沿用全局的默认值（复验 RA2）', () => {
     expect(rules([{
       path: 'deploy/Dockerfile',

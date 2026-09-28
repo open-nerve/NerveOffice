@@ -57,16 +57,17 @@ describe('容器 E2E 的编排参数（P5 设计 §3.6）', () => {
     expect(composeArgs(settings, 'kill', '-s', 'KILL', 'app')).toEqual(['compose', '-p', 'nerve-office-e2e-4242', '-f', '/repo/deploy/test/compose.yaml', '--env-file', '/tmp/e2e/test.env', 'kill', '-s', 'KILL', 'app'])
   })
 
-  it('交给 Playwright 的环境变量：外部模式的地址、管理员连接的库、浏览器与编排', () => {
+  it('交给 Playwright 的环境变量：外部模式的地址、管理员连接的库、浏览器、编排与编排脚本的进程号', () => {
     expect(publicOrigin(settings)).toBe('https://localhost:18443')
     expect(databaseUrl(settings)).toBe(`postgres://postgres:${'01'.repeat(16)}@127.0.0.1:15432/nerve_office`)
-    expect(playwrightEnvironment(settings, ['chromium', 'webkit'])).toEqual({
+    expect(playwrightEnvironment(settings, ['chromium', 'webkit'], 4242)).toEqual({
       E2E_BASE_URL: 'https://localhost:18443',
       E2E_DATABASE_URL: databaseUrl(settings),
       E2E_BROWSERS: 'chromium,webkit',
       E2E_COMPOSE_PROJECT: 'nerve-office-e2e-4242',
       E2E_COMPOSE_FILE: '/repo/deploy/test/compose.yaml',
       E2E_COMPOSE_ENV_FILE: '/tmp/e2e/test.env',
+      E2E_RUNNER_PID: '4242',
     })
   })
 

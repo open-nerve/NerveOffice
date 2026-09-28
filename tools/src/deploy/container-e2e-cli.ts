@@ -53,15 +53,49 @@ const PLAYWRIGHT_CLI = join(REPO_ROOT, 'tests/e2e/node_modules/@playwright/test/
 
 let interrupted = false
 /**
- * 正在运行的 Playwright：它在自己的进程组里，终端的 Ctrl+C 不会直接到它；本进程收到的每个信号都转给它一次：
- * 第一次让它正常结束，第二次强制结束。等它退出之后再按正常的路径收集日志、清理（审查 B6）
+ * 正在运行的 Playwright：它在自己的进程组里，终端的 Ctrl+C、关掉终端的 SIGHUP 都不会直接到它。本进程收到信号时：
+ * - 第一次给它的主进程发 SIGINT：Playwright 只把 SIGINT 当作正常停止（写出汇总与报告）；SIGTERM 会让主进程当场退出，
+ *   工作进程还要晚一步才退（复验 SB1）；
+ * - 再收到信号时给它的整个进程组发 SIGKILL。
+ * 它的整个进程组都退出之后，再按正常的路径收集日志、清理（审查 B6）。本进程被强制结束时，Playwright 的全局准备
+ * 发现编排脚本不在了，自己停下（tests/e2e/support/external-setup.ts，复验 SB2）
  */
 let playwright: ChildProcess | undefined
-for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+let signalsForwarded = 0
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
   process.on(signal, () => {
     interrupted = true
-    playwright?.kill(signal)
+    const pid = playwright?.pid
+    if (pid === undefined)
+      return
+    signalsForwarded += 1
+    if (signalsForwarded === 1)
+      playwright?.kill('SIGINT')
+    else
+      signalGroup(pid, 'SIGKILL')
   })
+}
+
+function signalGroup(pid: number, signal: NodeJS.Signals | 0): boolean {
+  try {
+    process.kill(-pid, signal)
+    return true
+  }
+  catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/** Playwright 的主进程退出之后，等它的工作进程与浏览器也都退出：最多 10 秒，之后强制结束，免得和清理重叠 */
+async function waitForProcessGroup(pid: number): Promise<void> {
+  const deadline = Date.now() + 10_000
+  while (signalGroup(pid, 0)) {
+    if (Date.now() >= deadline) {
+      signalGroup(pid, 'SIGKILL')
+      return
+    }
+    await delay(200)
+  }
 }
 
 function log(message: string): void {
@@ -260,15 +294,17 @@ async function runE2e(settings: ContainerE2eSettings, browsers: readonly string[
       const nodeOptions = `${process.env.NODE_OPTIONS ?? ''} --conditions=@nerve-office/source`.trim()
       const child = spawn(process.execPath, [PLAYWRIGHT_CLI, 'test', ...playwrightArgs], {
         cwd: join(REPO_ROOT, 'tests/e2e'),
-        env: { ...process.env, ...playwrightEnvironment(settings, browsers), NODE_OPTIONS: nodeOptions },
+        env: { ...process.env, ...playwrightEnvironment(settings, browsers, process.pid), NODE_OPTIONS: nodeOptions },
         stdio: ['ignore', 'inherit', 'inherit'],
-        // 自己的进程组：终端的 Ctrl+C 只到本进程，由本进程转一次（见文件开头）
+        // 自己的进程组：终端的信号只到本进程，由本进程转给它（见文件开头）
         detached: true,
       })
       playwright = child
       child.once('error', () => resolve(1))
       child.once('exit', code => resolve(code ?? 1))
     })
+    if (playwright?.pid !== undefined)
+      await waitForProcessGroup(playwright.pid)
     return { status, peak }
   }
   finally {

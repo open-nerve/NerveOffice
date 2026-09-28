@@ -29,13 +29,15 @@ const DOCKERFILE_FROM = /^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))
 /** COPY、ADD、RUN 的选项部分（指令之后、以 -- 开头的那几项）：--from 与 --mount 的 from 只在这里找（复验 RA2） */
 const INSTRUCTION_OPTIONS = /^\s*(?:COPY|ADD|RUN)\s+((?:--\S+\s+)*)/i
 const VARIABLE = /\$\{(\w+)\}|\$(\w+)/g
-/** 值可以是 GitHub 的表达式 ${{ … }}（带空格），其余到空白、引号或 # 为止 */
-const YAML_IMAGE = /^\s*(?:-\s*)?image:\s*['"]?(\$\{\{[^}]*\}\}|[^'"\s#]+)/
+/** 值可以是 GitHub 的表达式 ${{ … }}、compose 的变量 ${…}（里面可以有空格，例如 ${X:?说明}），其余到空白、引号或 # 为止 */
+const YAML_IMAGE = /^\s*(?:-\s*)?image:\s*['"]?(\$\{\{[^}]*\}\}|\$\{[^}]*\}\S*|[^'"\s#]+)/
 /** 工作流的 container: 简写（值直接是镜像）；写成映射时由 image: 覆盖 */
-const WORKFLOW_CONTAINER = /^\s*container:\s*['"]?(\$\{\{[^}]*\}\}|[^'"\s#{]+)/
+const WORKFLOW_CONTAINER = /^\s*container:\s*['"]?(\$\{\{[^}]*\}\}|\$\{[^}]*\}\S*|[^'"\s#{]+)/
 const WORKFLOW_DOCKER_ACTION = /^\s*(?:-\s*)?uses:\s*['"]?docker:\/\/([^'"\s#]+)/
 /** compose 的变量带默认值：${X:-镜像}、${X-镜像}，检查默认值 */
 const COMPOSE_DEFAULT = /^\$\{\w+:?-([^}]+)\}$/
+/** 整个值就是一个没有默认值的 compose 变量：${X}、${X:?说明}、$X */
+const WHOLE_VARIABLE = /^\$(?:\{\w+(?::?\?[^}]*)?\}|\w+)$/
 const PNPM_VERSION = /\bpnpm@(\S+)/g
 /** npm 全局安装 pnpm 却没写版本：`npm install -g pnpm`、`npm i --global pnpm`（后面不是 @） */
 const PNPM_WITHOUT_VERSION = /\bnpm\s+(?:install|i|add)\b[^;&|]*?\spnpm(?![@\w-])/
@@ -45,14 +47,14 @@ function isDockerfile(path: string): boolean {
 }
 
 /**
- * Dockerfile 的指令：行尾的反斜杠续行拼成一条，行号取第一行。续行中间的注释行与空行不算（Docker 同样跳过它们，
- * 指令照样接着下一行，复验 RA2）
+ * Dockerfile 的指令：行尾的反斜杠续行拼成一条，行号取第一行。注释行不是指令：以反斜杠结尾也不续行（复验 SA1）；
+ * 续行中间的注释行与空行不算（Docker 同样跳过它们，指令照样接着下一行，复验 RA2）
  */
 function instructions(content: string): { line: number, text: string }[] {
   const result: { line: number, text: string }[] = []
   let pending: { line: number, text: string } | undefined
   content.split('\n').forEach((text, index) => {
-    if (pending !== undefined && /^\s*(?:#.*)?$/.test(text))
+    if (/^\s*#/.test(text) || (pending !== undefined && /^\s*$/.test(text)))
       return
     const joined = pending === undefined ? { line: index + 1, text } : { line: pending.line, text: `${pending.text} ${text}` }
     if (/\\\s*$/.test(text)) {
@@ -135,7 +137,8 @@ function yamlReferences(file: TextFile): ImageReference[] {
   const references: ImageReference[] = []
   file.content.split('\n').forEach((text, index) => {
     const value = YAML_IMAGE.exec(text)?.[1] ?? WORKFLOW_CONTAINER.exec(text)?.[1] ?? WORKFLOW_DOCKER_ACTION.exec(text)?.[1]
-    const reference = value === undefined || value.startsWith('${{') || !value.startsWith('$') ? value : COMPOSE_DEFAULT.exec(value)?.[1]
+    // 只有整个值就是一个没有默认值的变量才跳过；以变量开头的（${REGISTRY}/postgres:18）照常检查（复验 SA2）
+    const reference = value === undefined || WHOLE_VARIABLE.test(value) ? undefined : COMPOSE_DEFAULT.exec(value)?.[1] ?? value
     if (reference !== undefined)
       references.push({ path: file.path, line: index + 1, reference })
   })
