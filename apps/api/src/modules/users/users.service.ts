@@ -42,6 +42,17 @@ export class UsersService implements OnModuleInit {
     await this.dummyHash()
   }
 
+  /** 按 id 取账户（含停用的） */
+  async findById(id: string): Promise<User | undefined> {
+    return this.repository.findById(id)
+  }
+
+  /** 按登录名（不区分大小写）取账户（含停用的）：运维命令用 */
+  async findByUsername(usernameInput: string): Promise<User | undefined> {
+    const username = usernameSchema.safeParse(usernameInput)
+    return username.success ? (await this.repository.findCredentialsByUsername(username.data))?.user : undefined
+  }
+
   /** 状态为 active 的账户；停用（M2）或不存在时返回 undefined */
   async findActiveById(id: string): Promise<User | undefined> {
     const user = await this.repository.findById(id)

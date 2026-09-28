@@ -1,11 +1,11 @@
-import type { AdminUser, AdminUserListQuery, AdminUserListResponse, ChangeSystemRoleRequest } from '@nerve-office/contracts'
+import type { AdminUser, AdminUserListQuery, AdminUserListResponse, ChangeSystemRoleRequest, IssuedPasswordReset } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Principal } from '../auth/index.ts'
 import { adminUserListQuerySchema, changeSystemRoleRequestSchema, userIdSchema } from '@nerve-office/contracts'
 import { Body, Controller, Get, HttpCode, Param, Post, Put, Query } from '@nestjs/common'
 import { SystemAdminOnly } from '../../shared/system-admin-only.ts'
 import { RequestOrigin } from '../audit/index.ts'
-import { CurrentPrincipal } from '../auth/index.ts'
+import { CurrentPrincipal, PasswordResetsService } from '../auth/index.ts'
 import { AdminUsersService } from './admin-users.service.ts'
 
 type HttpOrigin = Extract<AuditOrigin, { source: 'http' }>
@@ -14,7 +14,10 @@ type HttpOrigin = Extract<AuditOrigin, { source: 'http' }>
 @Controller('admin/users')
 @SystemAdminOnly()
 export class AdminUsersController {
-  constructor(private readonly accounts: AdminUsersService) {}
+  constructor(
+    private readonly accounts: AdminUsersService,
+    private readonly resets: PasswordResetsService,
+  ) {}
 
   @Get()
   async list(@Query({ schema: adminUserListQuerySchema }) query: AdminUserListQuery): Promise<AdminUserListResponse> {
@@ -39,6 +42,16 @@ export class AdminUsersController {
     @RequestOrigin() origin: HttpOrigin,
   ): Promise<AdminUser> {
     return this.accounts.enable(principal, id, origin)
+  }
+
+  /** 签发重置链接（US-M2-03）：同时撤销这个人的全部会话；链接只在这里出现一次 */
+  @Post(':id/password-reset')
+  async issuePasswordReset(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id', { schema: userIdSchema }) id: string,
+    @RequestOrigin() origin: HttpOrigin,
+  ): Promise<IssuedPasswordReset> {
+    return this.resets.issue({ type: 'user', id: principal.user.id }, id, origin)
   }
 
   @Put(':id/system-role')

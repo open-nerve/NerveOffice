@@ -10,7 +10,8 @@ import { AuditService } from '../audit/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { AppLogger } from '../logging/index.ts'
 import { SpacesService } from '../spaces/index.ts'
-import { PasswordHashingBusyError, UsersService } from '../users/index.ts'
+import { UsersService } from '../users/index.ts'
+import { tooManyAttempts, withHashing } from './attempt-errors.ts'
 import { LoginThrottle } from './login-throttle.ts'
 import { csrfTokenFor } from './session-token.ts'
 import { SessionService } from './session.service.ts'
@@ -53,7 +54,7 @@ export class AuthService {
     if (!admission.admitted) {
       // 锁定期间的请求只记日志，不写审计：攻击时不能把审计表写爆
       this.#logger.warn('登录被限流拒绝', { lockedForSeconds: admission.retryAfterSeconds })
-      throw this.tooManyAttempts(admission.retryAfterSeconds)
+      throw tooManyAttempts(admission.retryAfterSeconds)
     }
 
     const { ticket } = admission
@@ -67,7 +68,7 @@ export class AuthService {
         details: { reason: 'invalid_credentials', ...(ticket.lockedForSeconds === undefined ? {} : { lockedForSeconds: ticket.lockedForSeconds }) },
       })
       await this.tidyUp()
-      throw ticket.lockedForSeconds === undefined ? new AppError('INVALID_CREDENTIALS') : this.tooManyAttempts(ticket.lockedForSeconds)
+      throw ticket.lockedForSeconds === undefined ? new AppError('INVALID_CREDENTIALS') : tooManyAttempts(ticket.lockedForSeconds)
     }
 
     const { user } = check
@@ -93,27 +94,7 @@ export class AuthService {
    * 与限流拒绝一样只记日志、不写审计。其他错误（例如库里的哈希损坏）原样抛出，名额不退回，按一次失败计。
    */
   private async verify(request: LoginRequest, ticket: LoginTicket): Promise<CredentialCheck> {
-    return this.withHashing(ticket, async () => this.users.verifyCredentials(request.username, request.password))
-  }
-
-  /**
-   * 执行要用密码哈希的一步（验证或计算新哈希）。等待哈希的请求太多时（DEF-015）：退回名额，返回 503 与 Retry-After，
-   * 只记日志、不写审计。其他错误原样抛出，名额不退回，按一次失败计。
-   */
-  private async withHashing<T>(ticket: LoginTicket, work: () => Promise<T>): Promise<T> {
-    try {
-      return await work()
-    }
-    catch (error) {
-      if (!(error instanceof PasswordHashingBusyError))
-        throw error
-      // 退回名额失败（例如数据库出错）只记日志：这次按一次失败计，回应仍是"服务繁忙"（审查 A11）
-      await ticket.abandoned().catch((releaseError: unknown) => {
-        this.#logger.warn('退回登录限流的名额失败，这次尝试按一次失败计', { err: releaseError })
-      })
-      this.#logger.warn('等待密码哈希的请求太多，拒绝这次请求', { retryAfterSeconds: error.retryAfterSeconds })
-      throw new AppError('SERVICE_UNAVAILABLE', undefined, { cause: error, headers: { 'Retry-After': String(error.retryAfterSeconds) } })
-    }
+    return withHashing(ticket, this.#logger, async () => this.users.verifyCredentials(request.username, request.password))
   }
 
   /**
@@ -127,13 +108,13 @@ export class AuthService {
     const admission = await this.throttle.admit({ username: user.username, clientIp: origin.clientIp })
     if (!admission.admitted) {
       this.#logger.warn('修改密码被限流拒绝', { lockedForSeconds: admission.retryAfterSeconds })
-      throw this.tooManyAttempts(admission.retryAfterSeconds)
+      throw tooManyAttempts(admission.retryAfterSeconds)
     }
     const { ticket } = admission
-    const valid = await this.withHashing(ticket, async () => this.users.verifyPasswordOf(user.id, request.currentPassword))
+    const valid = await withHashing(ticket, this.#logger, async () => this.users.verifyPasswordOf(user.id, request.currentPassword))
     if (!valid)
-      throw ticket.lockedForSeconds === undefined ? new AppError('CURRENT_PASSWORD_INCORRECT') : this.tooManyAttempts(ticket.lockedForSeconds)
-    const passwordHash = await this.withHashing(ticket, async () => this.users.hashPassword(request.newPassword))
+      throw ticket.lockedForSeconds === undefined ? new AppError('CURRENT_PASSWORD_INCORRECT') : tooManyAttempts(ticket.lockedForSeconds)
+    const passwordHash = await withHashing(ticket, this.#logger, async () => this.users.hashPassword(request.newPassword))
     await this.transactions.run(async (transaction) => {
       await ticket.succeeded(transaction)
       await this.users.setPasswordHash(user.id, passwordHash, transaction)
@@ -151,6 +132,11 @@ export class AuthService {
 
   async current(principal: Principal): Promise<SessionResponse> {
     return this.describe(principal.user, principal.csrfToken)
+  }
+
+  /** 新建的会话的响应（接受邀请、完成重置之后，M2-P1）：与登录的响应相同 */
+  async sessionResponseFor(user: User, sessionToken: string): Promise<SessionResponse> {
+    return this.describe(user, csrfTokenFor(sessionToken))
   }
 
   private async describe(user: User, csrfToken: string): Promise<SessionResponse> {
@@ -177,9 +163,5 @@ export class AuthService {
     catch (error) {
       this.#logger.warn('清理过期的登录限流计数与会话失败，下次登录时再试', { err: error })
     }
-  }
-
-  private tooManyAttempts(seconds: number): AppError {
-    return new AppError('TOO_MANY_ATTEMPTS', undefined, { headers: { 'Retry-After': String(Math.max(1, seconds)) } })
   }
 }

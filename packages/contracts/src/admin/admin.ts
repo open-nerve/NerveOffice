@@ -50,6 +50,9 @@ export const issuedPasswordResetSchema = z.object({
 
 export type IssuedPasswordReset = z.infer<typeof issuedPasswordResetSchema>
 
+/** 路径里的邀请 id */
+export const invitationIdSchema = z.uuid()
+
 /** 邀请的状态：待接受、已接受、已过期（到期而没有接受或作废）、已作废 */
 export const INVITATION_STATUSES = ['pending', 'accepted', 'expired', 'revoked'] as const
 export type InvitationStatus = (typeof INVITATION_STATUSES)[number]

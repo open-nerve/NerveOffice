@@ -1,5 +1,5 @@
 // 界面文字（规范 §2.4）：简体中文，集中在这里，组件里不散写。服务端的说明只是默认值，界面按错误码显示这里的文字。
-import type { DocumentType, ErrorCode } from '@nerve-office/contracts'
+import type { DocumentType, ErrorCode, LinkInvalidReason, OneTimeLinkPurpose } from '@nerve-office/contracts'
 
 /** 按错误码显示的提示。没有登记的错误码用服务端的说明。 */
 const ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
@@ -23,6 +23,22 @@ const ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
   TOO_MANY_ATTEMPTS: '尝试次数过多，请稍后再试',
   INTERNAL_ERROR: '服务器出了点问题，请稍后重试',
   SERVICE_UNAVAILABLE: '服务暂时不可用，请稍后重试',
+}
+
+/** 一次性链接不能用时，按用途与原因给出下一步（M2-P1 设计 §3.4） */
+const LINK_INVALID_MESSAGES: Record<OneTimeLinkPurpose, Record<LinkInvalidReason, string>> = {
+  invitation: {
+    invalid: '邀请链接无效：请检查链接是否完整，或者请管理员重新发送',
+    expired: '邀请链接已过期，请管理员重新发送',
+    used: '这个邀请已经接受过了，请直接登录',
+    revoked: '邀请链接已作废，请管理员重新发送',
+  },
+  password_reset: {
+    invalid: '重置链接无效：请检查链接是否完整，或者请管理员重新发送',
+    expired: '重置链接已过期，请管理员重新发送',
+    used: '这个重置链接已经用过了，请直接用新密码登录',
+    revoked: '重置链接已作废，请管理员重新发送',
+  },
 }
 
 const DOCUMENT_TYPE_NAMES: Record<DocumentType, string> = {
@@ -67,6 +83,27 @@ export const messages = {
     passwordMismatch: '两次输入的新密码不一致',
     changing: '正在修改…',
     changed: '密码已修改。你在其他设备上的登录已经退出。',
+    username: '登录名',
+    displayName: '显示名',
+    goToLogin: '去登录',
+    link: {
+      invitation: {
+        title: '接受邀请',
+        description: '设置密码后即可登录。',
+        password: '设置密码',
+        submit: '设置密码并登录',
+        checking: '正在核对邀请链接…',
+      },
+      password_reset: {
+        title: '重置密码',
+        description: '设置新密码后即可登录；你在其他地方的登录都已退出。',
+        password: '新密码',
+        submit: '设置新密码并登录',
+        checking: '正在核对重置链接…',
+      },
+      submitting: '正在设置…',
+      invalid: (purpose: OneTimeLinkPurpose, reason: LinkInvalidReason) => LINK_INVALID_MESSAGES[purpose][reason],
+    },
   },
   documents: {
     title: '我的空间',

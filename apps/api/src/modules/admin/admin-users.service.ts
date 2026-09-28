@@ -3,7 +3,7 @@ import type { AuditOrigin } from '../audit/index.ts'
 import type { Principal } from '../auth/index.ts'
 import { Injectable } from '@nestjs/common'
 import { AuditService } from '../audit/index.ts'
-import { SessionService } from '../auth/index.ts'
+import { PasswordResetsService, SessionService } from '../auth/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { UsersService } from '../users/index.ts'
 import { actorOf, toAdminUser } from './admin-views.ts'
@@ -19,6 +19,7 @@ export class AdminUsersService {
   constructor(
     private readonly users: UsersService,
     private readonly sessions: SessionService,
+    private readonly resets: PasswordResetsService,
     private readonly audit: AuditService,
     private readonly transactions: TransactionRunner,
   ) {}
@@ -29,7 +30,7 @@ export class AdminUsersService {
   }
 
   /**
-   * 停用：状态改为停用、撤销全部会话（原因 disabled）、记审计，一个事务。会话守卫对每个请求检查账户状态，
+   * 停用：状态改为停用、撤销全部会话（原因 disabled）、作废未用的重置、记审计，一个事务。会话守卫对每个请求检查账户状态，
    * 事务提交之后这个人的请求一律被拒绝
    */
   async disable(actor: Principal, userId: string, origin: HttpOrigin): Promise<AdminUser> {
@@ -37,6 +38,8 @@ export class AdminUsersService {
       const change = await this.users.disable(userId, transaction)
       if (change.changed) {
         await this.sessions.revokeAllOf(userId, 'disabled', { transaction })
+        // 未用的重置链接一并作废：启用之后要重置密码得重新签发
+        await this.resets.revokeOpenOf(userId, transaction)
         await this.audit.record({ action: 'users.disabled', actor: actorOf(actor), target: { type: 'user', id: userId }, origin }, { transaction })
       }
       return toAdminUser(change.account)

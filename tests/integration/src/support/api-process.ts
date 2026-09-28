@@ -8,11 +8,12 @@ import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 
-/** 构建产物里的入口：应用、迁移命令、初始化管理员的命令。 */
+/** 构建产物里的入口：应用、迁移命令、初始化管理员的命令、签发重置链接的运维命令。 */
 const ENTRIES = {
   'main': fileURLToPath(new URL('../../../../apps/api/dist/app/main.js', import.meta.url)),
   'migrate': fileURLToPath(new URL('../../../../apps/api/dist/cli/migrate.js', import.meta.url)),
   'init-admin': fileURLToPath(new URL('../../../../apps/api/dist/cli/init-admin.js', import.meta.url)),
+  'reset-link': fileURLToPath(new URL('../../../../apps/api/dist/cli/reset-link.js', import.meta.url)),
 }
 
 export type ApiEntry = keyof typeof ENTRIES

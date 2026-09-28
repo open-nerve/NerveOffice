@@ -3,6 +3,7 @@ import { AuditModule } from '../audit/index.ts'
 import { AuthModule } from '../auth/index.ts'
 import { DatabaseModule } from '../database/index.ts'
 import { UsersModule } from '../users/index.ts'
+import { AdminInvitationsController } from './admin-invitations.controller.ts'
 import { AdminUsersController } from './admin-users.controller.ts'
 import { AdminUsersService } from './admin-users.service.ts'
 
@@ -12,7 +13,7 @@ import { AdminUsersService } from './admin-users.service.ts'
  */
 @Module({
   imports: [DatabaseModule, AuditModule, AuthModule, UsersModule],
-  controllers: [AdminUsersController],
+  controllers: [AdminUsersController, AdminInvitationsController],
   providers: [AdminUsersService],
 })
 export class AdminModule {}

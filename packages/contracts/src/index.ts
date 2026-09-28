@@ -6,6 +6,7 @@ export {
   changeSystemRoleRequestSchema,
   createInvitationRequestSchema,
   INVITATION_STATUSES,
+  invitationIdSchema,
   invitationListQuerySchema,
   invitationListResponseSchema,
   invitationSchema,

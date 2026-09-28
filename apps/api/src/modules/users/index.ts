@@ -1,3 +1,5 @@
+export { AccountCreationService } from './account-creation.service.ts'
+export type { CreatedAccount, NewAccount } from './account-creation.service.ts'
 export { AdminInitializationService } from './admin-initialization.service.ts'
 export type { AdminInitializationInput, InitializedAdmin } from './admin-initialization.service.ts'
 export { PasswordHashingBusyError } from './password-hasher.ts'

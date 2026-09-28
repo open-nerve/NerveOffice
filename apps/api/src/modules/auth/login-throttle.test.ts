@@ -3,7 +3,7 @@ import type { AppConfig } from '../config/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { LockedForSeconds, LoginThrottleRepository, Reservation, ThrottlePolicy } from './login-throttle.repository.ts'
 import { describe, expect, it, vi } from 'vitest'
-import { LoginThrottle } from './login-throttle.ts'
+import { LinkThrottle, LoginThrottle } from './login-throttle.ts'
 import { keyDigest } from './throttle-keys.ts'
 
 const LOGIN = { maxFailures: 5, ipMaxFailures: 50, windowMinutes: 15, lockoutMinutes: 20 }
@@ -115,5 +115,44 @@ describe('LoginThrottle.purgeExpired', () => {
     const { throttle, repository } = setup()
     await throttle.purgeExpired()
     expect(repository.purgeExpired).toHaveBeenCalledWith(15)
+  })
+})
+
+describe('LinkThrottle（M2-P1 设计 §3.4）', () => {
+  const LINK_KEY = keyDigest('link:ip:203.0.113.7')
+
+  function linkSetup(reservation: Reservation | undefined, locked?: LockedForSeconds) {
+    const repository = {
+      lockedFor: vi.fn(async (): Promise<LockedForSeconds> => locked),
+      reserve: vi.fn(async (_key: Buffer, _policy: ThrottlePolicy) => reservation),
+      release: vi.fn(async (_key: Buffer, _window: string, _transaction?: Transaction) => {}),
+      reset: vi.fn(async (_key: Buffer, _transaction?: Transaction) => {}),
+      purgeExpired: vi.fn(async () => {}),
+    }
+    return { repository, throttle: new LinkThrottle(repository as unknown as LoginThrottleRepository, { login: LOGIN } as unknown as AppConfig) }
+  }
+
+  it('只按客户端地址计数，键另起前缀（不与登录的地址维度混在一起），阈值沿用登录的地址维度', async () => {
+    const { throttle, repository } = linkSetup({ window: 'w1', lockedForSeconds: undefined })
+    const admission = await throttle.admit('203.0.113.7')
+    expect(admission).toMatchObject({ admitted: true })
+    expect(repository.lockedFor).toHaveBeenCalledWith([LINK_KEY])
+    expect(repository.reserve).toHaveBeenCalledWith(LINK_KEY, { maxFailures: 50, windowMinutes: 15, lockoutMinutes: 20 })
+    expect(LINK_KEY.equals(ADDRESS_KEY)).toBe(false)
+  })
+
+  it('令牌可用（成功）：只退回这次的名额，不清除之前的失败', async () => {
+    const { throttle, repository } = linkSetup({ window: 'w1', lockedForSeconds: undefined })
+    const admission = await throttle.admit('203.0.113.7')
+    if (!admission.admitted)
+      throw new Error('应该放行')
+    await admission.ticket.succeeded(TRANSACTION)
+    expect(repository.release).toHaveBeenCalledWith(LINK_KEY, 'w1', TRANSACTION)
+    expect(repository.reset).not.toHaveBeenCalled()
+  })
+
+  it('锁定中：拒绝，给出剩余的秒数', async () => {
+    const { throttle } = linkSetup(undefined, 120)
+    expect(await throttle.admit('203.0.113.7')).toEqual({ admitted: false, retryAfterSeconds: 120 })
   })
 })

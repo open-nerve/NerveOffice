@@ -80,6 +80,14 @@ export class UsersRepository {
     return row !== undefined
   }
 
+  /**
+   * 按登录名的事务级 advisory lock（M2-P1 设计 §3.4）：签发邀请、接受邀请时先取它再检查登录名是否可用，
+   * 同一个登录名的这些操作串行执行，不靠唯一约束报错来发现冲突
+   */
+  async lockUsername(username: string, transaction: Transaction): Promise<void> {
+    await executorOf(this.db, transaction).execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`nerve-office:username:${username}`}, 0))`)
+  }
+
   /** 事务级的 advisory lock：两个并发的初始化排队执行，后一个能看到前一个创建的管理员 */
   async lockAdminInitialization(transaction: Transaction): Promise<void> {
     await executorOf(this.db, transaction).execute(sql`SELECT pg_advisory_xact_lock(hashtextextended('nerve-office:admin-initialization', 0))`)

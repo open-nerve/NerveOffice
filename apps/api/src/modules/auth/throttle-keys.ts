@@ -1,4 +1,4 @@
-// 登录限流的计数键（P3 设计 §3.5）：按用户名与按客户端地址两个维度。库里只存键的摘要。
+// 限流的计数键（P3 设计 §3.5）：登录按用户名与按客户端地址两个维度；一次性链接按地址（M2-P1）。库里只存键的摘要。
 import type { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 import { isIPv4, isIPv6 } from 'node:net'
@@ -23,6 +23,11 @@ export function addressKey(clientIp: string | undefined): string {
   if (groups.slice(0, 5).every(group => group === 0) && groups[5] === 0xFFFF)
     return `ip:${groups.slice(6).flatMap(group => [group >> 8, group & 0xFF]).join('.')}`
   return `ip:${groups.slice(0, 4).map(group => group.toString(16)).join(':')}::/64`
+}
+
+/** 一次性链接的尝试（M2-P1 设计 §3.4）：同样按地址，另起前缀，与登录的地址维度分开计数 */
+export function linkAddressKey(clientIp: string | undefined): string {
+  return `link:${addressKey(clientIp)}`
 }
 
 export function keyDigest(key: string): Buffer {
