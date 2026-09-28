@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { displayNameSchema, newPasswordSchema, normalizeUsername, usernameSchema } from './users.ts'
+import { displayNameSchema, newPasswordSchema, normalizeUsername, userDirectoryQuerySchema, usernameSchema } from './users.ts'
 
 describe('用户名', () => {
   it('规范化：去掉首尾空白，转成小写', () => {
@@ -48,5 +48,14 @@ describe('设置密码的规则', () => {
       expect(result.success, JSON.stringify(control)).toBe(false)
       expect(result.error?.issues[0]?.message).toContain('控制字符')
     }
+  })
+})
+
+describe('同事目录的查询', () => {
+  it('关键词可选，去掉首尾空白，最多 64 个字符', () => {
+    expect(userDirectoryQuerySchema.parse({})).toEqual({})
+    expect(userDirectoryQuerySchema.parse({ query: '  张 ' })).toEqual({ query: '张' })
+    expect(userDirectoryQuerySchema.safeParse({ query: 'x'.repeat(65) }).success).toBe(false)
+    expect(userDirectoryQuerySchema.safeParse({ query: '张', limit: 5 }).success).toBe(false)
   })
 })

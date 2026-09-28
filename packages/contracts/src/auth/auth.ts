@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { USER_SYSTEM_ROLES } from '../users/users.ts'
+import { newPasswordSchema, USER_SYSTEM_ROLES } from '../users/users.ts'
 
 /** 登录时只限制长度，不向外透露用户名与密码的规则（P3 设计 §3.4）。 */
 export const LOGIN_USERNAME_MAX_LENGTH = 64
@@ -31,3 +31,14 @@ export const sessionResponseSchema = z.object({
 })
 
 export type SessionResponse = z.infer<typeof sessionResponseSchema>
+
+/**
+ * 修改密码（PUT /api/auth/password，M2-P1 设计 §3.5）：旧密码只限制长度，与登录相同；新密码按设置密码的规则。
+ * 成功后本人其他地方的登录全部退出，当前会话保留。
+ */
+export const changePasswordRequestSchema = z.strictObject({
+  currentPassword: z.string().min(1).max(LOGIN_PASSWORD_MAX_LENGTH),
+  newPassword: newPasswordSchema,
+})
+
+export type ChangePasswordRequest = z.infer<typeof changePasswordRequestSchema>

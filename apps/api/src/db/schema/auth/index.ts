@@ -1,11 +1,16 @@
-// auth 模块的表（P3 设计 §3.2、§3.5）：登录会话与登录限流的计数。令牌与计数的键都只存 SHA-256 摘要。
+// auth 模块的表（P3 设计 §3.2、§3.5；M2-P1 设计 §3.2）：登录会话、登录限流的计数、邀请与重置密码的一次性令牌。
+// 令牌与计数的键都只存 SHA-256 摘要。
+import { DISPLAY_NAME_MAX_LENGTH, USERNAME_PATTERN_SOURCE } from '@nerve-office/contracts'
 import { sql } from 'drizzle-orm'
 import { check, index, integer, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
-import { bytea, oneOf } from '../common/index.ts'
+import { bytea, lengthBetween, oneOf, stringLiteral } from '../common/index.ts'
 import { users } from '../users/index.ts'
 
-/** 会话被撤销的原因：退出；同一个浏览器重新登录时换掉原来的会话。M2 加上改密、停用等。新增取值时同时用迁移更新 CHECK 约束 */
-export const SESSION_REVOKE_REASONS = ['logout', 'replaced'] as const
+/**
+ * 会话被撤销的原因：退出；同一个浏览器重新登录时换掉原来的会话；账户停用；修改密码（本人的其他会话）；
+ * 重置密码（签发与完成时）。新增取值时同时用迁移更新 CHECK 约束
+ */
+export const SESSION_REVOKE_REASONS = ['logout', 'replaced', 'disabled', 'password_changed', 'password_reset'] as const
 export type SessionRevokeReason = (typeof SESSION_REVOKE_REASONS)[number]
 
 export const authSessions = pgTable('auth_sessions', {
@@ -42,4 +47,59 @@ export const authLoginThrottles = pgTable('auth_login_throttles', {
   index('auth_login_throttles_window_started_at_idx').on(table.windowStartedAt),
   check('auth_login_throttles_key_hash_check', sql`octet_length(${table.keyHash}) = 32`),
   check('auth_login_throttles_failures_check', sql`${table.failures} >= 0`),
+])
+
+/**
+ * 邀请（M2-P1 设计 §3.4）：管理员填好登录名与显示名，签发一次性链接。
+ * "已过期"按 expires_at 在查询时判断，不靠定时任务改状态；接受与作废最多有一个。
+ */
+export const authInvitations = pgTable('auth_invitations', {
+  id: uuid('id').primaryKey().default(sql`uuidv7()`),
+  // 规范写法（小写），与账户表同一条规则
+  username: text('username').notNull(),
+  displayName: text('display_name').notNull(),
+  tokenHash: bytea('token_hash').notNull(),
+  createdBy: uuid('created_by').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+  acceptedUserId: uuid('accepted_user_id').references(() => users.id, { onDelete: 'restrict' }),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  revokedBy: uuid('revoked_by').references(() => users.id, { onDelete: 'restrict' }),
+}, table => [
+  uniqueIndex('auth_invitations_token_hash_key').on(table.tokenHash),
+  // 同一个登录名最多一条未接受、未作废的邀请；已过期而未处理的，由签发新邀请的事务先作废
+  uniqueIndex('auth_invitations_open_username_key').on(table.username).where(sql`${table.acceptedAt} IS NULL AND ${table.revokedAt} IS NULL`),
+  // 列表按签发时间从新到旧分页
+  index('auth_invitations_created_at_idx').on(table.createdAt, table.id),
+  check('auth_invitations_token_hash_check', sql`octet_length(${table.tokenHash}) = 32`),
+  check('auth_invitations_username_check', sql`${table.username} ~ ${stringLiteral(USERNAME_PATTERN_SOURCE)}`),
+  check('auth_invitations_display_name_check', lengthBetween(table.displayName, 1, DISPLAY_NAME_MAX_LENGTH)),
+  check('auth_invitations_expiry_check', sql`${table.expiresAt} > ${table.createdAt}`),
+  check('auth_invitations_accepted_check', sql`(${table.acceptedAt} IS NULL) = (${table.acceptedUserId} IS NULL)`),
+  check('auth_invitations_revoked_check', sql`(${table.revokedAt} IS NULL) = (${table.revokedBy} IS NULL)`),
+  check('auth_invitations_outcome_check', sql`${table.acceptedAt} IS NULL OR ${table.revokedAt} IS NULL`),
+])
+
+/**
+ * 重置密码（M2-P1 设计 §3.4）：管理员（或运维命令）为某个账户签发一次性链接。
+ * 同一个账户最多一条未使用、未作废的重置；使用与作废最多有一个。
+ */
+export const authPasswordResets = pgTable('auth_password_resets', {
+  id: uuid('id').primaryKey().default(sql`uuidv7()`),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  tokenHash: bytea('token_hash').notNull(),
+  // 签发人；运维命令签发的为空
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  usedAt: timestamp('used_at', { withTimezone: true }),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+}, table => [
+  uniqueIndex('auth_password_resets_token_hash_key').on(table.tokenHash),
+  // 同一个账户最多一条未使用、未作废的重置：签发新的时先作废旧的
+  uniqueIndex('auth_password_resets_open_user_key').on(table.userId).where(sql`${table.usedAt} IS NULL AND ${table.revokedAt} IS NULL`),
+  check('auth_password_resets_token_hash_check', sql`octet_length(${table.tokenHash}) = 32`),
+  check('auth_password_resets_expiry_check', sql`${table.expiresAt} > ${table.createdAt}`),
+  check('auth_password_resets_outcome_check', sql`${table.usedAt} IS NULL OR ${table.revokedAt} IS NULL`),
 ])

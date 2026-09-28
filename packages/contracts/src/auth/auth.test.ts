@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { loginRequestSchema, sessionResponseSchema } from './auth.ts'
+import { changePasswordRequestSchema, loginRequestSchema, sessionResponseSchema } from './auth.ts'
 
 describe('登录请求', () => {
   it('只限制长度：不向外透露用户名与密码的规则', () => {
@@ -38,5 +38,14 @@ describe('会话信息', () => {
       personalSpace: { id: session.personalSpace.id, name: '管理员' },
       csrfToken: 'token',
     })
+  })
+})
+
+describe('修改密码的请求', () => {
+  it('旧密码只限制长度，新密码按设置时的规则', () => {
+    expect(changePasswordRequestSchema.safeParse({ currentPassword: 'x', newPassword: 'n'.repeat(12) }).success).toBe(true)
+    expect(changePasswordRequestSchema.safeParse({ currentPassword: '', newPassword: 'n'.repeat(12) }).success).toBe(false)
+    expect(changePasswordRequestSchema.safeParse({ currentPassword: 'x', newPassword: 'short' }).success).toBe(false)
+    expect(changePasswordRequestSchema.safeParse({ currentPassword: 'x', newPassword: 'n'.repeat(12), extra: true }).success).toBe(false)
   })
 })

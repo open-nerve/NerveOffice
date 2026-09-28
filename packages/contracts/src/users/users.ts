@@ -5,8 +5,8 @@ import { codePointLength, hasControlCharacters } from '../text/text.ts'
 export const USER_SYSTEM_ROLES = ['admin', 'member'] as const
 export type UserSystemRole = (typeof USER_SYSTEM_ROLES)[number]
 
-/** 账户状态：M2 加上停用（disabled）。新增取值时，同时用迁移更新 users.status 的 CHECK 约束。 */
-export const USER_STATUSES = ['active'] as const
+/** 账户状态：有效；停用（M2-P1）。新增取值时，同时用迁移更新 users.status 的 CHECK 约束。 */
+export const USER_STATUSES = ['active', 'disabled'] as const
 export type UserStatus = (typeof USER_STATUSES)[number]
 
 /**
@@ -46,3 +46,33 @@ export const newPasswordSchema = z.string()
   .refine(value => codePointLength(value) >= NEW_PASSWORD_MIN_LENGTH, `密码至少 ${NEW_PASSWORD_MIN_LENGTH} 个字符`)
   .refine(value => codePointLength(value) <= NEW_PASSWORD_MAX_LENGTH, `密码最多 ${NEW_PASSWORD_MAX_LENGTH} 个字符`)
   .refine(value => !hasControlCharacters(value), '密码不能包含控制字符（例如换行、制表符）')
+
+/** 按名字搜索时关键词的上限（字符） */
+export const USER_SEARCH_QUERY_MAX_LENGTH = 64
+/** 同事目录每次最多返回的条数 */
+export const USER_DIRECTORY_LIMIT = 20
+
+/** 账户的摘要：同事目录的条目，也是别处显示"谁"的最小信息。 */
+export const userSummarySchema = z.object({
+  id: z.uuid(),
+  username: z.string(),
+  displayName: z.string(),
+})
+
+export type UserSummary = z.infer<typeof userSummarySchema>
+
+/**
+ * 同事目录（GET /api/users，M2-P1 设计 §3.6）：显示名或登录名里包含关键词的有效账户，不区分大小写。
+ * 不带关键词时按显示名给出前 USER_DIRECTORY_LIMIT 条。
+ */
+export const userDirectoryQuerySchema = z.strictObject({
+  query: z.string().trim().max(USER_SEARCH_QUERY_MAX_LENGTH).optional(),
+})
+
+export type UserDirectoryQuery = z.infer<typeof userDirectoryQuerySchema>
+
+export const userDirectoryResponseSchema = z.object({
+  items: z.array(userSummarySchema),
+})
+
+export type UserDirectoryResponse = z.infer<typeof userDirectoryResponseSchema>

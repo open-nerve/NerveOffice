@@ -1,7 +1,61 @@
+export {
+  ADMIN_PAGE_SIZE,
+  adminUserListQuerySchema,
+  adminUserListResponseSchema,
+  adminUserSchema,
+  changeSystemRoleRequestSchema,
+  createInvitationRequestSchema,
+  INVITATION_STATUSES,
+  invitationListQuerySchema,
+  invitationListResponseSchema,
+  invitationSchema,
+  issuedInvitationSchema,
+  issuedPasswordResetSchema,
+} from './admin/admin.ts'
+export type {
+  AdminUser,
+  AdminUserListQuery,
+  AdminUserListResponse,
+  ChangeSystemRoleRequest,
+  CreateInvitationRequest,
+  Invitation,
+  InvitationListQuery,
+  InvitationListResponse,
+  InvitationStatus,
+  IssuedInvitation,
+  IssuedPasswordReset,
+} from './admin/admin.ts'
+export { auditEventItemSchema, auditEventListResponseSchema, auditEventQuerySchema } from './audit/audit-query.ts'
+export type { AuditEventItem, AuditEventListResponse, AuditEventQuery } from './audit/audit-query.ts'
 export { AUDIT_ACTIONS, AUDIT_ACTOR_TYPES, AUDIT_DETAILS_MAX_BYTES, AUDIT_SOURCES, AUDIT_TARGET_TYPES, auditActionSchema } from './audit/audit.ts'
 export type { AuditAction } from './audit/audit.ts'
-export { LOGIN_PASSWORD_MAX_LENGTH, LOGIN_USERNAME_MAX_LENGTH, loginRequestSchema, sessionResponseSchema } from './auth/auth.ts'
-export type { LoginRequest, SessionResponse } from './auth/auth.ts'
+export { changePasswordRequestSchema, LOGIN_PASSWORD_MAX_LENGTH, LOGIN_USERNAME_MAX_LENGTH, loginRequestSchema, sessionResponseSchema } from './auth/auth.ts'
+export type { ChangePasswordRequest, LoginRequest, SessionResponse } from './auth/auth.ts'
+export {
+  acceptInvitationRequestSchema,
+  completePasswordResetRequestSchema,
+  inspectLinkRequestSchema,
+  inspectLinkResponseSchema,
+  INVITATION_LIFETIME_HOURS,
+  isWellFormedLinkToken,
+  LINK_INVALID_REASONS,
+  linkInvalidDetailsSchema,
+  linkTokenFromHash,
+  ONE_TIME_LINK_PAGE_PATHS,
+  ONE_TIME_LINK_PURPOSES,
+  ONE_TIME_TOKEN_LENGTH,
+  oneTimeLinkUrl,
+  PASSWORD_RESET_LIFETIME_HOURS,
+} from './auth/links.ts'
+export type {
+  AcceptInvitationRequest,
+  CompletePasswordResetRequest,
+  InspectLinkRequest,
+  InspectLinkResponse,
+  LinkInvalidDetails,
+  LinkInvalidReason,
+  OneTimeLinkPurpose,
+} from './auth/links.ts'
 export {
   revisionConflictDetailsSchema,
   revisionEtag,
@@ -63,9 +117,14 @@ export {
   NEW_PASSWORD_MIN_LENGTH,
   newPasswordSchema,
   normalizeUsername,
+  USER_DIRECTORY_LIMIT,
+  USER_SEARCH_QUERY_MAX_LENGTH,
   USER_STATUSES,
   USER_SYSTEM_ROLES,
+  userDirectoryQuerySchema,
+  userDirectoryResponseSchema,
   USERNAME_PATTERN_SOURCE,
   usernameSchema,
+  userSummarySchema,
 } from './users/users.ts'
-export type { UserStatus, UserSystemRole } from './users/users.ts'
+export type { UserDirectoryQuery, UserDirectoryResponse, UserStatus, UserSummary, UserSystemRole } from './users/users.ts'
