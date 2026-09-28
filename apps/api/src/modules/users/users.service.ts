@@ -145,13 +145,16 @@ export class UsersService implements OnModuleInit {
     const locked = await this.repository.lockCredentials(credentials.user.id, 'no key update', transaction)
     if (locked?.status !== 'active' || locked.passwordVersion !== credentials.passwordVersion)
       return false
-    await this.repository.updatePasswordHash(credentials.user.id, passwordHash, transaction)
+    await this.repository.changeCredentials(credentials.user.id, passwordHash, transaction)
     return true
   }
 
-  /** 设置密码的哈希（完成重置；签发重置时让当前密码失效），凭据的版本加一。调用方已用 lockAccount 锁住这个账户的行 */
-  async setPasswordHash(userId: string, passwordHash: string, transaction: Transaction): Promise<void> {
-    await this.repository.updatePasswordHash(userId, passwordHash, transaction)
+  /**
+   * 重置密码：换成新的凭据，版本加一（完成重置时是新密码的哈希；签发重置时是不可用的哈希，让当前密码失效）。
+   * 调用方已用 lockAccount 锁住这个账户的行，并在锁里复核了账户
+   */
+  async resetPassword(userId: string, passwordHash: string, transaction: Transaction): Promise<void> {
+    await this.repository.changeCredentials(userId, passwordHash, transaction)
   }
 
   /**
@@ -260,7 +263,7 @@ export class UsersService implements OnModuleInit {
    */
   private async rehash(credentials: UserCredentials, password: string): Promise<void> {
     try {
-      await this.repository.replacePasswordHash(credentials.user.id, credentials.passwordVersion, await this.hasher.hash(password))
+      await this.repository.reencodePassword(credentials.user.id, credentials.passwordVersion, await this.hasher.hash(password))
     }
     catch (error) {
       this.#logger.warn('用新参数重新哈希密码失败，下次登录时再试', { err: error, userId: credentials.user.id })

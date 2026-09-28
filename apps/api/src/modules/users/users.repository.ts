@@ -107,7 +107,7 @@ export class UsersRepository {
    * 换成新的凭据（修改密码，签发与完成重置）：版本加一，验证过旧凭据、还没提交的登录与修改密码复核时发现它变了。
    * 调用方已在事务里锁住这个账户的行（lockRecord、lockCredentials）
    */
-  async updatePasswordHash(id: string, passwordHash: string, transaction: Transaction): Promise<void> {
+  async changeCredentials(id: string, passwordHash: string, transaction: Transaction): Promise<void> {
     await executorOf(this.db, transaction)
       .update(users)
       .set({ passwordHash, passwordVersion: sql`${users.passwordVersion} + 1`, updatedAt: sql`now()` })
@@ -118,7 +118,7 @@ export class UsersRepository {
    * 同一个密码按新参数重新编码（登录时的重新哈希）：版本不变，只在它还是 expectedVersion 时才换（审查 A3）。
    * 验证之后改过密码、签发或完成了重置，就不能用旧密码算出的新哈希覆盖回去
    */
-  async replacePasswordHash(id: string, expectedVersion: number, next: string): Promise<void> {
+  async reencodePassword(id: string, expectedVersion: number, next: string): Promise<void> {
     await this.db
       .update(users)
       .set({ passwordHash: next, updatedAt: sql`now()` })

@@ -444,6 +444,7 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
       [`export * from './dialog.tsx'\n`, BARREL],
       [`export { Dialog } from '../ui/dialog.tsx'\n`, BARREL],
       [`export { Dialog } from './dialog.js'\n`, BARREL],
+      [`export { Dialog } from './dialog'\n`, BARREL],
       [`export type { DialogContent } from './dialog.tsx'\n`, BARREL],
       // shared 里别的文件中转
       [`export { Dialog } from '../ui/dialog.tsx'\n`, WEB_SHARED_FILE],
@@ -454,6 +455,12 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
       expect(report.messages.join('\n'), code).toContain('弹窗（shared/ui/dialog.tsx，Radix Dialog）不经 shared 的其他文件转出')
     }
     expect(await rulesFor(`export { Button } from './button.tsx'\n`, BARREL)).not.toContain('import-x/no-restricted-paths')
+    // shared 的其他文件直接从 radix-ui 引入弹窗原语同样拦下；别的原语与弹窗自己的文件不受影响
+    const radixDialog = 'import { Dialog } from \'radix-ui\'\n\nexport const Root = Dialog.Root\n'
+    expect((await lint(radixDialog, WEB_SHARED_FILE)).messages.join('\n')).toContain('弹窗类的 Radix 原语（Dialog、AlertDialog）只在 shared/ui/dialog.tsx 里引入')
+    expect((await lint(`export { AlertDialog } from 'radix-ui'\n`, BARREL)).messages.join('\n')).toContain('弹窗类的 Radix 原语')
+    expect((await lint('import { Label } from \'radix-ui\'\n\nexport const Root = Label.Root\n', 'apps/web/src/shared/ui/label.tsx')).messages.join('\n')).not.toContain('弹窗类的 Radix 原语')
+    expect((await lint(radixDialog, 'apps/web/src/shared/ui/dialog.tsx')).messages.join('\n')).not.toContain('弹窗类的 Radix 原语')
     // 用到弹窗的功能模块（按需加载的管理界面）直接引用它
     expect(await rulesFor('import { DialogContent } from \'../../shared/ui/dialog.tsx\'\n\nexport const content = DialogContent\n', 'apps/web/src/features/admin/confirm-dialog.tsx')).not.toContain('import-x/no-restricted-paths')
     // 管理界面自己内部的引用不受影响

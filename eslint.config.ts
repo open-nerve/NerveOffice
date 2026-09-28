@@ -155,6 +155,19 @@ const APP_ENTRY_SYNTAX = [
   },
 ]
 
+// 弹窗类的 Radix 原语（Dialog、AlertDialog）只在 shared/ui/dialog.tsx 里引入（M2-P1 复验）：shared 的其他文件直接从 radix-ui 引入，
+// 同样会随桶文件进首屏，按路径的限制（import-x/no-restricted-paths）管不到第三方包
+const RADIX_DIALOG_OUTSIDE_DIALOG_FILE = [
+  {
+    selector: String.raw`:matches(ImportDeclaration, ExportNamedDeclaration)[source.value='radix-ui'] > :matches(ImportSpecifier[imported.name=/^(?:Dialog|AlertDialog)$/], ExportSpecifier[local.name=/^(?:Dialog|AlertDialog)$/])`,
+    message: '弹窗类的 Radix 原语（Dialog、AlertDialog）只在 shared/ui/dialog.tsx 里引入：shared 的其他文件引用它，会随桶文件进平台页面的首屏（ADR-008，M2-P1 审查 B2）',
+  },
+  {
+    selector: String.raw`:matches(ImportDeclaration, ExportNamedDeclaration, ExportAllDeclaration, ImportExpression)[source.value=/^@radix-ui\/react-(?:alert-)?dialog(?:\/|$)/]`,
+    message: '弹窗类的 Radix 原语（Dialog、AlertDialog）只在 shared/ui/dialog.tsx 里引入：shared 的其他文件引用它，会随桶文件进平台页面的首屏（ADR-008，M2-P1 审查 B2）',
+  },
+]
+
 // ---- 后端（P2 设计 §3.1）----
 // 每个后端文件的限制由 apiRules() 按"这个文件允许什么"组合出来，各覆盖块不各自抄一份，免得改一处漏一处（审查 B15）
 
@@ -485,8 +498,10 @@ export default antfu(
     // 用到弹窗的功能模块（按需加载的管理界面）直接引用它；类型也一样直接引用
     name: 'nerve/web-ui-heavy-components',
     files: ['apps/web/src/shared/**/*.{ts,tsx}'],
-    ignores: ['apps/web/src/shared/**/*.test.{ts,tsx}'],
+    // 弹窗自己的文件引入 Radix 的原语；测试与测试辅助不进产物
+    ignores: [...TEST_CODE, 'apps/web/src/shared/ui/dialog.tsx'],
     rules: {
+      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE],
       'import-x/no-restricted-paths': ['error', {
         basePath: import.meta.dirname,
         zones: [{

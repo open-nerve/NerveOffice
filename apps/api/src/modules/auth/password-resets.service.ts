@@ -79,7 +79,7 @@ export class PasswordResetsService {
         createdBy: actor.type === 'user' ? actor.id : undefined,
         lifetimeHours: PASSWORD_RESET_LIFETIME_HOURS,
       }, transaction)
-      await this.users.setPasswordHash(userId, unusableHash, transaction)
+      await this.users.resetPassword(userId, unusableHash, transaction)
       await this.sessions.revokeAllOf(userId, 'password_reset', { transaction })
       await this.audit.record({ action: 'users.password_reset_issued', actor, target: { type: 'user', id: userId }, origin }, { transaction })
       return created
@@ -132,7 +132,7 @@ export class PasswordResetsService {
       if (now !== 'usable')
         return { done: false, reason: now }
       await ticket.succeeded(transaction)
-      await this.users.setPasswordHash(account.id, passwordHash, transaction)
+      await this.users.resetPassword(account.id, passwordHash, transaction)
       await this.repository.markUsed(record.id, transaction)
       await this.sessions.revokeAllOf(account.id, 'password_reset', { transaction })
       if (previousSessionToken !== undefined)

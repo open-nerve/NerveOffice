@@ -45,7 +45,7 @@ const STORED_PARAMETERS = ['m=19456,t=2,p=1', 'm=12288,t=3,p=1']
 function setup(credentials?: UserCredentials) {
   const repository = {
     findCredentialsByUsername: vi.fn(async (_username: string) => credentials),
-    replacePasswordHash: vi.fn(async (_id: string, _expectedVersion: number, _next: string) => {}),
+    reencodePassword: vi.fn(async (_id: string, _expectedVersion: number, _next: string) => {}),
     findById: vi.fn(async (_id: string) => credentials?.user),
     passwordHashParameters: vi.fn(async () => STORED_PARAMETERS),
   }
@@ -114,7 +114,7 @@ describe('UsersService.verifyCredentials', () => {
     vi.spyOn(hasher, 'verify').mockResolvedValue(true)
     hasher.stale = true
     expect(await service.verifyCredentials('alice', 'secret')).toEqual({ valid: true, credentials: { user: ALICE, passwordVersion: 3 } })
-    expect(repository.replacePasswordHash).toHaveBeenCalledWith(ALICE.id, 3, 'hash:secret')
+    expect(repository.reencodePassword).toHaveBeenCalledWith(ALICE.id, 3, 'hash:secret')
   })
 
   it('重新哈希算不了（例如等待哈希的请求太多）：这次不换，只记警告，这次登录照常（复验 X1）', async () => {
@@ -122,14 +122,14 @@ describe('UsersService.verifyCredentials', () => {
     hasher.stale = true
     vi.spyOn(hasher, 'hash').mockRejectedValueOnce(new PasswordHashingBusyError(3))
     expect(await service.verifyCredentials('alice', 'secret')).toEqual({ valid: true, credentials: { user: ALICE, passwordVersion: 1 } })
-    expect(repository.replacePasswordHash).not.toHaveBeenCalled()
+    expect(repository.reencodePassword).not.toHaveBeenCalled()
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('重新哈希'), expect.objectContaining({ userId: ALICE.id }))
   })
 
   it('重新哈希的更新失败只记警告，不影响这次登录', async () => {
     const { service, repository, hasher, warn } = setup({ user: ALICE, passwordHash: 'hash:secret', passwordVersion: 1 })
     hasher.stale = true
-    repository.replacePasswordHash.mockRejectedValueOnce(new Error('数据库不可用'))
+    repository.reencodePassword.mockRejectedValueOnce(new Error('数据库不可用'))
     expect(await service.verifyCredentials('alice', 'secret')).toEqual({ valid: true, credentials: { user: ALICE, passwordVersion: 1 } })
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('重新哈希'), expect.objectContaining({ userId: ALICE.id }))
   })
@@ -138,7 +138,7 @@ describe('UsersService.verifyCredentials', () => {
     const { service, repository, hasher } = setup({ user: ALICE, passwordHash: 'hash:secret', passwordVersion: 1 })
     hasher.stale = true
     await service.verifyCredentials('alice', 'wrong')
-    expect(repository.replacePasswordHash).not.toHaveBeenCalled()
+    expect(repository.reencodePassword).not.toHaveBeenCalled()
   })
 })
 

@@ -128,7 +128,7 @@ describe('US-M2-02 登录与修改密码：验证之后、提交之前的变化�
 
   it('同一个人（哈希的参数过时）两次正确的登录同时进行：都成功，不把后一次当成密码错误（复验 N1）', async () => {
     const twin = await createAccount(database, { username: 'twin', argon2: OLD_ARGON2 })
-    // 两次登录都对旧哈希验证通过、都要重新哈希：先换的一方成功，后一方的条件更新改不到行，再按库里的新哈希验证一次
+    // 两次登录都对旧哈希验证通过、都要重新哈希：两次条件更新都成立（版本没变，写的都是同一个密码的编码），两次复核按版本都通过
     const responses = await raceAgainstHeldLock(database, {
       hold: lockAccountRow(twin),
       request: async () => Promise.all([
@@ -165,11 +165,12 @@ describe('US-M2-02 登录与修改密码：验证之后、提交之前的变化�
     await database.query(async client => client.query('UPDATE users SET password_hash = $1 WHERE id = $2', [await passwordHashOf(dot.password, OLD_ARGON2), dot.id]))
     const [relogin, change] = await raceAgainstHeldLock(database, {
       hold: lockAccountRow(dot),
-      request: async (waitForWaiting) => {
+      request: async ({ step, waitForWaiting }) => {
         // 先让登录的重新哈希在账户行上等着，再发修改密码（它验证旧密码时哈希还是旧的）
-        const loginAgain = postLogin(app.baseUrl, { username: 'dot', password: dot.password })
-        await waitForWaiting(1, loginAgain)
-        return Promise.all([loginAgain, asUser(app.baseUrl, here, '/api/auth/password', { method: 'PUT', body: { currentPassword: dot.password, newPassword: 'dot wants this new one' } })])
+        const loginAgain = step(postLogin(app.baseUrl, { username: 'dot', password: dot.password }))
+        await waitForWaiting(1)
+        const change = step(asUser(app.baseUrl, here, '/api/auth/password', { method: 'PUT', body: { currentPassword: dot.password, newPassword: 'dot wants this new one' } }))
+        return Promise.all([loginAgain, change])
       },
       waiting: 2,
       change: async () => undefined,
@@ -336,10 +337,10 @@ describe('US-M2-04 停用与会话、操作者的复核（审查 A1、A2、A12�
     // 停用拿着账户行、随后要撤销那条会话，两边互相等待，一方 500
     const responses = await raceAgainstHeldLock(database, {
       hold: async client => client.query('SELECT 1 FROM auth_password_resets WHERE user_id = $1 FOR UPDATE', [jon.id]),
-      request: async (waitForWaiting) => {
-        const disable = asUser(app.baseUrl, adminSession, `/api/admin/users/${jon.id}/disable`, { method: 'POST' })
-        await waitForWaiting(1, disable)
-        const relogin = postLogin(app.baseUrl, { username: 'jon', password: jon.password }, { cookie: previous.cookie })
+      request: async ({ step, waitForWaiting }) => {
+        const disable = step(asUser(app.baseUrl, adminSession, `/api/admin/users/${jon.id}/disable`, { method: 'POST' }))
+        await waitForWaiting(1)
+        const relogin = step(postLogin(app.baseUrl, { username: 'jon', password: jon.password }, { cookie: previous.cookie }))
         return Promise.all([disable, relogin])
       },
       waiting: 2,

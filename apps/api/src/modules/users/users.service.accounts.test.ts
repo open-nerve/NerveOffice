@@ -58,7 +58,7 @@ function setup(target: AccountRecord | undefined, otherActiveAdmins = 1, actor: 
       calls.push(`lock-credentials:${strength}`)
       return locked
     }),
-    updatePasswordHash: vi.fn(async (_id: string, _passwordHash: string) => {
+    changeCredentials: vi.fn(async (_id: string, _passwordHash: string) => {
       calls.push('update-hash')
       if (locked !== undefined)
         locked = { ...locked, passwordVersion: locked.passwordVersion + 1 }
@@ -201,7 +201,7 @@ describe('UsersService.verifyPasswordOf 与 replacePassword（修改密码，审
       throw new Error('旧密码应当验证通过')
     expect(await service.replacePassword(credentials, 'hash:next', TX)).toBe(true)
     expect(calls).toEqual(['lock-credentials:no key update', 'update-hash'])
-    expect(repository.updatePasswordHash).toHaveBeenCalledWith(credentials.user.id, 'hash:next', TX)
+    expect(repository.changeCredentials).toHaveBeenCalledWith(credentials.user.id, 'hash:next', TX)
   })
 
   it('replacePassword：验证之后别处改过密码（修改、签发或完成重置），不更新', async () => {
@@ -211,7 +211,7 @@ describe('UsersService.verifyPasswordOf 与 replacePassword（修改密码，审
       throw new Error('旧密码应当验证通过')
     changeCredentialsElsewhere()
     expect(await service.replacePassword(credentials, 'hash:next', TX)).toBe(false)
-    expect(repository.updatePasswordHash).not.toHaveBeenCalled()
+    expect(repository.changeCredentials).not.toHaveBeenCalled()
   })
 
   it('replacePassword：验证之后账户被停用，不更新', async () => {
@@ -222,7 +222,7 @@ describe('UsersService.verifyPasswordOf 与 replacePassword（修改密码，审
       throw new Error('旧密码应当验证通过')
     repository.lockCredentials.mockResolvedValueOnce({ status: 'disabled', passwordVersion: 1 })
     expect(await service.replacePassword(credentials, 'hash:next', TX)).toBe(false)
-    expect(repository.updatePasswordHash).not.toHaveBeenCalled()
+    expect(repository.changeCredentials).not.toHaveBeenCalled()
   })
 })
 
