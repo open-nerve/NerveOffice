@@ -50,7 +50,8 @@ LABEL org.opencontainers.image.title="NerveOffice" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${REVISION}"
-# 运行时用不到 npm、npx、corepack 与 yarn：去掉，减少体积与攻击面
+# 运行时用不到 npm、npx、corepack 与 yarn：去掉，减少攻击面。镜像的体积不变：它们在基础镜像的层里（约 20 MB），
+# 这一层只是把它们遮住（M1 收尾时实测，ADR-001）
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
            /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
            /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg

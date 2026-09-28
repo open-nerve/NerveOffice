@@ -265,3 +265,25 @@ export function memoryBytes(stats: string): number | undefined {
 export function mebibytes(bytes: number): string {
   return `${(bytes / 1024 ** 2).toFixed(1)} MiB`
 }
+
+/**
+ * 量镜像体积：在一次性的容器里合计镜像里文件的表观大小（`du -sxb /`，解压之后），与镜像存储无关。
+ * docker 自己的数字随镜像存储而变（M1 收尾时实测）：overlay2（CI）的 `docker image ls` 是各层的合计，含后面的层删掉、
+ * 仍存在下面层里的文件；containerd 的镜像存储（Docker Desktop）里 `docker image ls` 把压缩的内容与解压之后的一起算，
+ * 非本机平台的镜像没解压时只有压缩的部分，inspect 的 Size 是压缩之后的
+ */
+export function imageSizeArgs(image: string): string[] {
+  return ['run', '--rm', '--network', 'none', '--user', '0', '--entrypoint', 'du', image, '-sxb', '/']
+}
+
+/** `du -sxb /` 的输出（"285717915\t/"）→ 字节数；读不出来时是 undefined */
+export function duBytes(output: string): number | undefined {
+  const match = /^(\d+)\s+\/$/.exec(output.trim())
+  const bytes = match?.[1] === undefined ? undefined : Number(match[1])
+  return bytes !== undefined && Number.isSafeInteger(bytes) ? bytes : undefined
+}
+
+/** 字节数 → MB（与 docker 的写法一致，1 MB = 10^6 字节），保留一位小数 */
+export function megabytes(bytes: number): string {
+  return `${(bytes / 1e6).toFixed(1)} MB`
+}
