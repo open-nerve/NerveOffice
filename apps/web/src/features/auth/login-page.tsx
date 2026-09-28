@@ -53,7 +53,9 @@ export function LoginPage() {
     },
   })
 
-  if (session.data !== undefined && !mutation.isPending)
+  // 只认没有失败的会话查询：重新请求得到未登录时，缓存里仍留着上一次的会话（TanStack Query 失败时保留旧数据），
+  // 按它跳回去的话，需要登录的外层路由又按失败转回来，两边来回跳转（M2-P1 审查时发现，会话复核时容易触发）
+  if (session.data !== undefined && !session.isError && !mutation.isPending)
     return toEditor ? <OpenPage url={target} /> : <Navigate to={target} replace />
   // 还在确认是否已经登录：先不显示表单，免得已登录的人看到它闪一下（审查 B14）
   if (session.isPending)

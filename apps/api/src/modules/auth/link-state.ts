@@ -26,6 +26,14 @@ export type LinkLookup<T>
   = | { readonly usable: true, readonly record: T }
     | { readonly usable: false, readonly reason: LinkInvalidReason, readonly target?: AuditEvent['target'] }
 
+/**
+ * 接受或完成时，事务里锁住记录复核之后的结果：完成了；或者不能用的原因（查令牌之后被用过、作废、账户停用）。
+ * 不能用时事务之外再按一次失败处理（记审计、锁定时 429），与查令牌时就不能用的一样（M2-P1 审查 A10）
+ */
+export type LinkOutcome<T>
+  = | { readonly done: true, readonly value: T }
+    | { readonly done: false, readonly reason: LinkInvalidReason }
+
 /** 管理界面里邀请的状态 */
 export function invitationStatusOf(state: LinkRecordState): InvitationStatus {
   const usability = usabilityOf(state)

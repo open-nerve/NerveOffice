@@ -606,6 +606,25 @@ export default antfu(
             disallow: { to: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' } } } },
             message: '编辑器页（features/sheet-editor）只由编辑器页的入口引用：它带着 Univer，平台页面的包里不能有它（P4 设计 §3.1）',
           },
+          // 管理界面按需加载，不进平台页面的首屏（M2-P1 设计 §3.8，审查 B2）：只有路由表 app/routes.ts 经它的公开入口动态 import()，
+          // 任何静态引用（含 import type 与再导出）都会把它带回首屏。页头的入口只引用 shared/lib/admin-paths.ts。
+          // 同样放在允许的策略之后：先拦下所有引用，再放行路由表的动态导入（后面的策略覆盖前面的）；同一个功能内部的引用不经过这条检查
+          {
+            from: [
+              { element: { type: 'web-app' } },
+              { element: { type: 'web-entry' } },
+              { element: { type: 'web-feature' } },
+            ],
+            disallow: { to: { element: { type: 'web-feature', captured: { feature: 'admin' } } } },
+            message: '管理界面（features/admin）按需加载：只有 app/routes.ts 可以动态 import() 它的公开入口，静态引用会把它带进平台页面的首屏（M2-P1 审查 B2）',
+          },
+          {
+            from: { element: { type: 'web-app', fileInternalPath: 'routes.ts' } },
+            allow: {
+              to: { element: { type: 'web-feature', captured: { feature: 'admin' }, fileInternalPath: PUBLIC_ENTRY } },
+              dependency: { nodeKind: 'dynamic-import' },
+            },
+          },
         ],
       }],
     },

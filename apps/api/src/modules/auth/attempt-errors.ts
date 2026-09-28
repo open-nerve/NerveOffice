@@ -8,6 +8,11 @@ export function tooManyAttempts(seconds: number): AppError {
   return new AppError('TOO_MANY_ATTEMPTS', undefined, { headers: { 'Retry-After': String(Math.max(1, seconds)) } })
 }
 
+/** 等待密码哈希的请求太多（DEF-015）：503 与 Retry-After */
+export function hashingBusy(error: PasswordHashingBusyError): AppError {
+  return new AppError('SERVICE_UNAVAILABLE', undefined, { cause: error, headers: { 'Retry-After': String(error.retryAfterSeconds) } })
+}
+
 /**
  * 执行要用密码哈希的一步（验证或计算新哈希）。等待哈希的请求太多时（DEF-015）：退回名额，返回 503 与 Retry-After，
  * 只记日志、不写审计。其他错误原样抛出，名额不退回，按一次失败计。
@@ -24,6 +29,6 @@ export async function withHashing<T>(ticket: AttemptTicket, logger: AppLogger, w
       logger.warn('退回登录限流的名额失败，这次尝试按一次失败计', { err: releaseError })
     })
     logger.warn('等待密码哈希的请求太多，拒绝这次请求', { retryAfterSeconds: error.retryAfterSeconds })
-    throw new AppError('SERVICE_UNAVAILABLE', undefined, { cause: error, headers: { 'Retry-After': String(error.retryAfterSeconds) } })
+    throw hashingBusy(error)
   }
 }

@@ -1,7 +1,9 @@
-import { useState } from 'react'
+import { useMutation } from '@tanstack/react-query'
 import { describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
-import { Alert, AlertDescription, Button, Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../shared/ui/index.ts'
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../shared/ui/dialog.tsx'
+import { Alert, AlertDescription, Button } from '../../shared/ui/index.ts'
+import { SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
 
 export interface PendingConfirmation {
   readonly title: string
@@ -11,59 +13,54 @@ export interface PendingConfirmation {
   readonly destructive?: boolean
   /** 确认之后执行；失败时弹窗留着，显示原因 */
   readonly run: () => Promise<void>
+  /** 打开弹窗的按钮随操作消失了（例如作废之后这一行没有"作废"）时，关闭之后焦点去哪里（审查 B9） */
+  readonly returnFocus?: () => void
 }
 
 /**
  * 危险操作的确认（M2-P1 设计 §3.8）：先说清楚后果，再执行。进行中不能重复提交，也不能关闭；
  * 失败时按错误码说明原因（例如"至少要保留一个有效的系统管理员"），弹窗留着可以取消。
+ * 执行经请求缓存，标明只给系统管理员：被拒绝时由全局处理重新确认会话，系统角色已被取消就切到无权限（审查 B4）。
+ * 关闭之后焦点回到打开它的按钮；按钮已经不在了，交给 returnFocus，焦点不落到 body（审查 B9）。
  */
 export function ConfirmDialog({ pending, onClose }: { readonly pending: PendingConfirmation | undefined, readonly onClose: () => void }) {
-  const [running, setRunning] = useState(false)
-  const [error, setError] = useState<string>()
+  const mutation = useMutation({ mutationFn: async (run: () => Promise<void>) => run(), meta: SYSTEM_ADMIN_ONLY })
 
-  async function confirm(): Promise<void> {
-    if (pending === undefined || running)
+  function close(): void {
+    mutation.reset()
+    onClose()
+  }
+
+  function confirm(): void {
+    if (pending === undefined || mutation.isPending)
       return
-    setRunning(true)
-    setError(undefined)
-    try {
-      await pending.run()
-      onClose()
-    }
-    catch (caught) {
-      setError(describeError(caught).message)
-    }
-    finally {
-      setRunning(false)
-    }
+    mutation.mutate(pending.run, { onSuccess: close })
   }
 
   function changeOpen(open: boolean): void {
-    if (!open && !running) {
-      setError(undefined)
-      onClose()
-    }
+    if (!open && !mutation.isPending)
+      close()
   }
 
   return (
     <Dialog open={pending !== undefined} onOpenChange={changeOpen}>
       {pending !== undefined && (
-        <DialogContent>
+        <DialogContent fallbackFocus={pending.returnFocus}>
           <DialogHeader>
             <DialogTitle>{pending.title}</DialogTitle>
             <DialogDescription>{pending.description}</DialogDescription>
           </DialogHeader>
-          {error !== undefined && (
+          {mutation.isError && (
             <Alert variant="destructive">
-              <AlertDescription>{error}</AlertDescription>
+              <AlertDescription>{describeError(mutation.error).message}</AlertDescription>
             </Alert>
           )}
           <DialogFooter>
             <DialogClose asChild>
-              <Button variant="outline" aria-disabled={running}>{messages.common.cancel}</Button>
+              <Button variant="outline" aria-disabled={mutation.isPending}>{messages.common.cancel}</Button>
             </DialogClose>
-            <Button variant={pending.destructive === true ? 'destructive' : 'default'} aria-disabled={running} onClick={() => void confirm()}>
-              {running ? messages.admin.working : pending.confirmLabel}
+            <Button variant={pending.destructive === true ? 'destructive' : 'default'} aria-disabled={mutation.isPending} onClick={confirm}>
+              {mutation.isPending ? messages.admin.working : pending.confirmLabel}
             </Button>
           </DialogFooter>
         </DialogContent>

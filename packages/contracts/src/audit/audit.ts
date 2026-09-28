@@ -19,6 +19,8 @@ export const AUDIT_ACTIONS = [
   'users.invitation_revoked',
   'users.invitation_accepted',
   'users.password_changed',
+  // 修改密码时当前密码不对：与登录共用按用户名的计数，锁定时 details 带锁定秒数（审查 A6）
+  'users.password_change_failed',
   'users.password_reset_issued',
   'users.password_reset_completed',
   'users.disabled',

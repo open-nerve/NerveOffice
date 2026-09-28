@@ -2,7 +2,7 @@
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
-import { userDirectoryResponseSchema } from '@nerve-office/contracts'
+import { errorResponseSchema, USER_SEARCH_QUERY_MAX_LENGTH, userDirectoryResponseSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -60,6 +60,14 @@ describe('同事目录', () => {
     for (let index = 0; index < 20; index += 1)
       await createAccount(database, { username: `bulk-${String(index).padStart(2, '0')}` })
     expect(await search()).toHaveLength(20)
+  })
+
+  it('关键词超长、多余的参数：400 REQUEST_INVALID', async () => {
+    for (const path of [`/api/users?query=${'张'.repeat(USER_SEARCH_QUERY_MAX_LENGTH + 1)}`, '/api/users?query=a&limit=100']) {
+      const response = await asUser(app.baseUrl, viewer, encodeURI(path))
+      expect(response.status, path).toBe(400)
+      expect(parseExact(errorResponseSchema, await response.json()).error.code).toBe('REQUEST_INVALID')
+    }
   })
 
   it('没有登录：401', async () => {

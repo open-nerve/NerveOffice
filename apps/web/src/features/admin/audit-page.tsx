@@ -1,34 +1,41 @@
-import type { AuditAction, AuditEventItem, AuditEventQuery } from '@nerve-office/contracts'
-import { AUDIT_ACTIONS } from '@nerve-office/contracts'
+import type { AdminUser, AuditAction, AuditEventItem, AuditEventQuery } from '@nerve-office/contracts'
+import type { UseQueryResult } from '@tanstack/react-query'
+import type { Ref } from 'react'
+import { AUDIT_ACTIONS, AUDIT_TARGET_TYPES } from '@nerve-office/contracts'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
-import { useId, useState } from 'react'
+import { useId, useRef, useState } from 'react'
+import { describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { useDebouncedValue } from '../../shared/lib/use-debounced-value.ts'
+import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
 import { Badge, Button, Input, Label, NativeSelect, TableCell } from '../../shared/ui/index.ts'
-import { ADMIN_QUERY_KEY, auditEventsQueryOptions, fetchAdminUsers } from './admin-api.ts'
+import { actorCandidatesQueryOptions, auditEventsQueryOptions } from './admin-api.ts'
+import { auditTimeFrom, auditTimeTo } from './audit-time.ts'
 import { PagedTable } from './paged-table.tsx'
 
 const text = messages.admin.audit
 
-/** 筛选里选中的操作者或对象：id 与显示的名字 */
+type AuditTargetType = NonNullable<AuditEventQuery['targetType']>
+
+/** 筛选里选中的操作者或对象：id 与显示的名字；对象另有类型（前端不认识的类型只按 id 筛选） */
 interface Picked {
   readonly id: string
   readonly label: string
-  readonly type?: string
+  readonly type?: AuditTargetType
 }
 
-/** datetime-local 的值（本地时间）→ ISO 8601 的 UTC；没填时 undefined */
-function isoOf(local: string): string | undefined {
-  if (local === '')
-    return undefined
-  const instant = new Date(local)
-  return Number.isNaN(instant.getTime()) ? undefined : instant.toISOString()
+function isTargetType(type: string): type is AuditTargetType {
+  return (AUDIT_TARGET_TYPES as readonly string[]).includes(type)
+}
+
+function nameOf(user: { readonly displayName: string, readonly username: string }): string {
+  return `${user.displayName}（${user.username}）`
 }
 
 function actorOf(event: AuditEventItem): string {
   if (event.actor.type === 'user')
-    return event.actor.displayName === null ? (event.actor.id ?? '') : `${event.actor.displayName}（${event.actor.username ?? ''}）`
+    return event.actor.displayName === null ? (event.actor.id ?? '') : nameOf({ displayName: event.actor.displayName, username: event.actor.username ?? '' })
   return text.actorKind(event.actor.type)
 }
 
@@ -38,19 +45,46 @@ function targetOf(event: AuditEventItem): string {
   return `${text.targetKind(event.target.type)}：${event.target.label ?? event.target.id}`
 }
 
-/** 选中的筛选：显示成一个可以清除的标签 */
-function Chip({ label, onClear }: { readonly label: string, readonly onClear: () => void }) {
+/** 选中的筛选：显示成一个可以清除的标签；清除按钮的可读名称说明清除的是哪一个（审查 B14） */
+function Chip({ label, clearLabel, onClear, ref }: { readonly label: string, readonly clearLabel: string, readonly onClear: () => void, readonly ref: Ref<HTMLButtonElement> }) {
   return (
     <span className="inline-flex items-center gap-1">
       <Badge variant="secondary">{label}</Badge>
-      <Button variant="ghost" size="sm" onClick={onClear}>{text.clear}</Button>
+      <Button ref={ref} variant="ghost" size="sm" aria-label={clearLabel} onClick={onClear}>{text.clear}</Button>
     </span>
+  )
+}
+
+/** 找操作者的候选：查找中、失败（可以重试）、没有找到与找到的几个人，都有提示（审查 B8） */
+function ActorCandidates({ candidates, onPick }: { readonly candidates: UseQueryResult<AdminUser[]>, readonly onPick: (user: AdminUser) => void }) {
+  if (candidates.isPending)
+    return <p role="status" className="text-sm text-muted-foreground">{text.searchingActor}</p>
+  if (candidates.isError) {
+    return (
+      <div role="alert" className="flex items-center gap-2 text-sm text-destructive">
+        <span>{text.actorSearchFailed(describeError(candidates.error).message)}</span>
+        <Button variant="outline" size="sm" onClick={() => void candidates.refetch()}>{messages.common.retry}</Button>
+      </div>
+    )
+  }
+  if (candidates.data.length === 0)
+    return <p role="status" className="text-sm text-muted-foreground">{text.noActor}</p>
+  return (
+    <ul aria-label={text.actor} className="flex flex-wrap gap-1">
+      {candidates.data.map(user => (
+        <li key={user.id}>
+          <Button variant="outline" size="sm" onClick={() => onPick(user)}>{nameOf(user)}</Button>
+        </li>
+      ))}
+    </ul>
   )
 }
 
 /**
  * 管理界面：审计查询（M2-P1 设计 §3.7、§3.8，US-M2-13）。按动作、时间范围、操作者筛选，点表格里的对象可以只看这个对象；
- * 按时间倒序，"加载更多"翻页。审计里没有文档正文与标题。
+ * 按时间倒序，"加载更多"翻页。审计里没有文档正文与标题。来源一格里有客户端地址与请求标识。
+ * 选中或清除筛选时被点的元素随之消失，焦点移到稳定的元素上（审查 B9）：选中之后到它的清除按钮，清除操作者之后回到找操作者的输入框，
+ * 清除对象之后回到动作的筛选。
  */
 export function AdminAuditPage() {
   const [action, setAction] = useState<AuditAction | ''>('')
@@ -60,75 +94,82 @@ export function AdminAuditPage() {
   const [target, setTarget] = useState<Picked>()
   const [actorKeyword, setActorKeyword] = useState('')
   const keyword = useDebouncedValue(actorKeyword.trim())
+  const actionRef = useRef<HTMLSelectElement>(null)
+  const actorInputRef = useRef<HTMLInputElement>(null)
+  const actorClearRef = useRef<HTMLButtonElement>(null)
+  const targetClearRef = useRef<HTMLButtonElement>(null)
+  const focusAfterRender = useFocusAfterRender()
   const actionId = useId()
   const fromId = useId()
   const toId = useId()
   const actorId = useId()
 
+  // 时间按本地时间输入，换算成 UTC；结束时间含所选的这一分钟。换算不出接口接受的时刻（例如 0 年）时不作为条件，输入框标成无效
+  const fromInstant = auditTimeFrom(from)
+  const toInstant = auditTimeTo(to)
   const filter: Omit<AuditEventQuery, 'cursor'> = {
     ...(action === '' ? {} : { action }),
-    ...(isoOf(from) === undefined ? {} : { from: isoOf(from) }),
-    ...(isoOf(to) === undefined ? {} : { to: isoOf(to) }),
+    ...(fromInstant === undefined ? {} : { from: fromInstant }),
+    ...(toInstant === undefined ? {} : { to: toInstant }),
     ...(actor === undefined ? {} : { actorId: actor.id }),
-    ...(target === undefined ? {} : { targetId: target.id, ...(target.type === undefined ? {} : { targetType: target.type as AuditEventQuery['targetType'] }) }),
+    ...(target === undefined ? {} : { targetId: target.id, ...(target.type === undefined ? {} : { targetType: target.type }) }),
   }
   const events = useInfiniteQuery(auditEventsQueryOptions(filter))
-  // 找操作者：按名字搜索账户（含停用的），只取第一页的前几条
-  const candidates = useQuery({
-    queryKey: [...ADMIN_QUERY_KEY, 'actor-candidates', keyword],
-    queryFn: async ({ signal }) => fetchAdminUsers({ query: keyword }, signal),
-    enabled: keyword !== '' && actor === undefined,
-    select: page => page.items.slice(0, 5),
-  })
+  const candidates = useQuery({ ...actorCandidatesQueryOptions(keyword), enabled: keyword !== '' && actor === undefined })
+
+  function pickActor(user: AdminUser): void {
+    setActor({ id: user.id, label: nameOf(user) })
+    focusAfterRender(actorClearRef)
+  }
+
+  function clearActor(): void {
+    setActor(undefined)
+    setActorKeyword('')
+    focusAfterRender(actorInputRef)
+  }
+
+  function pickTarget(event: AuditEventItem): void {
+    if (event.target === null)
+      return
+    setTarget({ id: event.target.id, label: targetOf(event), ...(isTargetType(event.target.type) ? { type: event.target.type } : {}) })
+    focusAfterRender(targetClearRef)
+  }
+
+  function clearTarget(): void {
+    setTarget(undefined)
+    focusAfterRender(actionRef)
+  }
 
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex w-44 flex-col gap-2">
           <Label htmlFor={actionId}>{text.action}</Label>
-          <NativeSelect id={actionId} value={action} onChange={event => setAction(event.target.value as AuditAction | '')}>
+          <NativeSelect ref={actionRef} id={actionId} value={action} onChange={event => setAction(event.target.value as AuditAction | '')}>
             <option value="">{messages.common.all}</option>
             {AUDIT_ACTIONS.map(value => <option key={value} value={value}>{text.actionName(value)}</option>)}
           </NativeSelect>
         </div>
         <div className="flex flex-col gap-2">
           <Label htmlFor={fromId}>{text.from}</Label>
-          <Input id={fromId} type="datetime-local" value={from} onChange={event => setFrom(event.target.value)} />
+          <Input id={fromId} type="datetime-local" value={from} aria-invalid={from !== '' && fromInstant === undefined} onChange={event => setFrom(event.target.value)} />
         </div>
         <div className="flex flex-col gap-2">
           <Label htmlFor={toId}>{text.to}</Label>
-          <Input id={toId} type="datetime-local" value={to} onChange={event => setTo(event.target.value)} />
+          <Input id={toId} type="datetime-local" value={to} aria-invalid={to !== '' && toInstant === undefined} onChange={event => setTo(event.target.value)} />
         </div>
         {actor === undefined && (
           <div className="flex min-w-48 flex-1 flex-col gap-2">
             <Label htmlFor={actorId}>{text.searchActor}</Label>
-            <Input id={actorId} type="search" value={actorKeyword} onChange={event => setActorKeyword(event.target.value)} />
+            <Input ref={actorInputRef} id={actorId} type="search" value={actorKeyword} onChange={event => setActorKeyword(event.target.value)} />
           </div>
         )}
       </div>
-      {actor === undefined && candidates.data !== undefined && candidates.data.length > 0 && (
-        <ul aria-label={text.actor} className="flex flex-wrap gap-1">
-          {candidates.data.map(user => (
-            <li key={user.id}>
-              <Button variant="outline" size="sm" onClick={() => setActor({ id: user.id, label: `${user.displayName}（${user.username}）` })}>
-                {`${user.displayName}（${user.username}）`}
-              </Button>
-            </li>
-          ))}
-        </ul>
-      )}
+      {actor === undefined && keyword !== '' && <ActorCandidates candidates={candidates} onPick={pickActor} />}
       {(actor !== undefined || target !== undefined) && (
         <div className="flex flex-wrap gap-3">
-          {actor !== undefined && (
-            <Chip
-              label={text.chipActor(actor.label)}
-              onClear={() => {
-                setActor(undefined)
-                setActorKeyword('')
-              }}
-            />
-          )}
-          {target !== undefined && <Chip label={text.chipTarget(target.label)} onClear={() => setTarget(undefined)} />}
+          {actor !== undefined && <Chip ref={actorClearRef} label={text.chipActor(actor.label)} clearLabel={text.clearActor} onClear={clearActor} />}
+          {target !== undefined && <Chip ref={targetClearRef} label={text.chipTarget(target.label)} clearLabel={text.clearTarget} onClear={clearTarget} />}
         </div>
       )}
       <PagedTable
@@ -146,12 +187,15 @@ export function AdminAuditPage() {
               {event.target === null
                 ? '—'
                 : (
-                    <Button variant="link" size="sm" className="h-auto p-0" title={text.onlyTarget} onClick={() => setTarget({ id: event.target?.id ?? '', type: event.target?.type, label: targetOf(event) })}>
+                    <Button variant="link" size="sm" className="h-auto p-0" title={text.onlyTarget} onClick={() => pickTarget(event)}>
                       {targetOf(event)}
                     </Button>
                   )}
             </TableCell>
-            <TableCell className="text-xs whitespace-nowrap text-muted-foreground">{[text.source(event.source), event.clientIp].filter(Boolean).join(' · ')}</TableCell>
+            <TableCell className="text-xs text-muted-foreground">
+              <span className="block whitespace-nowrap">{[text.source(event.source), event.clientIp].filter(Boolean).join(' · ')}</span>
+              {event.requestId !== null && <span className="block font-mono" title={messages.common.requestId(event.requestId)}>{event.requestId}</span>}
+            </TableCell>
             <TableCell className="max-w-64 truncate font-mono text-xs" title={JSON.stringify(event.details)}>{Object.keys(event.details).length === 0 ? '—' : JSON.stringify(event.details)}</TableCell>
           </>
         )}

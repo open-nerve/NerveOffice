@@ -3,7 +3,7 @@ import type { AuditEvent, AuditOrigin } from '../audit/index.ts'
 import type { AppConfig } from '../config/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { User } from '../users/index.ts'
-import type { LinkLookup } from './link-state.ts'
+import type { LinkLookup, LinkOutcome } from './link-state.ts'
 import type { PasswordResetRecord } from './password-resets.repository.ts'
 import { oneTimeLinkUrl, PASSWORD_RESET_LIFETIME_HOURS } from '@nerve-office/contracts'
 import { Inject, Injectable } from '@nestjs/common'
@@ -12,8 +12,8 @@ import { AuditService } from '../audit/index.ts'
 import { APP_CONFIG } from '../config/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { AppLogger } from '../logging/index.ts'
-import { UsersService } from '../users/index.ts'
-import { withHashing } from './attempt-errors.ts'
+import { PasswordHashingBusyError, UsersService } from '../users/index.ts'
+import { hashingBusy, withHashing } from './attempt-errors.ts'
 import { LinkAttempts } from './link-attempts.ts'
 import { usabilityOf } from './link-state.ts'
 import { generateLinkToken, linkTokenDigest } from './link-token.ts'
@@ -33,8 +33,9 @@ function stateOf(record: PasswordResetRecord) {
 }
 
 /**
- * 重置密码（M2-P1 设计 §3.4，US-M2-03）：系统管理员（或运维命令）为某个账户签发一次性链接，签发时撤销这个人的全部会话；
- * 本人打开链接设置新密码，完成时再撤销一次全部会话，并以新密码登录。
+ * 重置密码（M2-P1 设计 §3.4，US-M2-03）：系统管理员（或运维命令）为某个账户签发一次性链接，签发时当前密码随即失效、
+ * 撤销这个人的全部会话（审查 A7）；本人打开链接设置新密码，完成时再撤销一次全部会话，并以新密码登录。
+ * 签发与完成的事务都先锁账户行、在锁里复核账户有效，再动重置与会话的行（统一的锁顺序，审查 A2）。
  */
 @Injectable()
 export class PasswordResetsService {
@@ -54,20 +55,20 @@ export class PasswordResetsService {
   }
 
   /**
-   * 签发：账户不存在 NOT_FOUND，已停用 ACCOUNT_DISABLED。一个事务里：作废这个账户未用的旧重置、新建、撤销全部会话
-   * （原因 password_reset）、记审计。actor 是签发的系统管理员，运维命令签发时是系统
+   * 签发：账户不存在 NOT_FOUND，已停用 ACCOUNT_DISABLED。一个事务里：锁住账户行并复核、作废这个账户未用的旧重置、新建、
+   * 把密码换成不可用的哈希（旧密码随即失效，审查 A7）、撤销全部会话（原因 password_reset）、记审计。
+   * 并发的签发在账户行上排队，后一个作废前一个（审查 A2）。actor 是签发的系统管理员，运维命令签发时是系统
    */
   async issue(actor: AuditEvent['actor'], userId: string, origin: AuditOrigin): Promise<IssuedPasswordReset> {
-    const account = await this.users.findById(userId)
-    if (account === undefined)
-      throw new AppError('NOT_FOUND')
-    if (account.status !== 'active')
-      throw new AppError('ACCOUNT_DISABLED')
+    // 先查一次：账户不存在或已停用时不必算哈希。事务里在锁内再复核
+    requireIssuable(await this.users.findById(userId))
     const token = generateLinkToken()
     const digest = linkTokenDigest(token)
     if (digest === undefined)
       throw new Error('生成的令牌格式不对')
+    const unusableHash = await this.unusablePasswordHash()
     const record = await this.transactions.run(async (transaction) => {
+      requireIssuable(await this.users.lockAccount(userId, transaction))
       await this.repository.revokeOpenOfUser(userId, transaction)
       const created = await this.repository.insert({
         userId,
@@ -75,6 +76,7 @@ export class PasswordResetsService {
         createdBy: actor.type === 'user' ? actor.id : undefined,
         lifetimeHours: PASSWORD_RESET_LIFETIME_HOURS,
       }, transaction)
+      await this.users.setPasswordHash(userId, unusableHash, transaction)
       await this.sessions.revokeAllOf(userId, 'password_reset', { transaction })
       await this.audit.record({ action: 'users.password_reset_issued', actor, target: { type: 'user', id: userId }, origin }, { transaction })
       return created
@@ -90,7 +92,7 @@ export class PasswordResetsService {
     return { ...await this.issue({ type: 'system' }, account.id, { source: 'cli' }), userId: account.id }
   }
 
-  /** 停用账户时（admin 模块在同一个事务里调用）：作废这个人未用的重置 */
+  /** 停用账户时（admin 模块在同一个事务里调用，已锁住账户行）：作废这个人未用的重置 */
   async revokeOpenOf(userId: string, transaction: Transaction): Promise<void> {
     await this.repository.revokeOpenOfUser(userId, transaction)
   }
@@ -107,33 +109,50 @@ export class PasswordResetsService {
   }
 
   /**
-   * 公开：设置新密码。先查令牌再算哈希，都在事务之外；然后在一个事务里：锁住重置复核、更新密码、标记已使用、
-   * 撤销这个人的全部会话、退回限流的名额、新建本次的会话、记审计
+   * 公开：设置新密码。先查令牌再算哈希，都在事务之外；然后在一个事务里：先锁账户行、再锁重置行，复核账户仍然有效、
+   * 重置仍然可用（审查 A2），退回限流的名额、更新密码、标记已使用、撤销这个人的全部会话、新建本次的会话、记审计。
+   * 复核不通过（查令牌之后被用过、作废、账户停用）：事务之外按一次失败处理，记审计，锁定时 429（审查 A10）
    */
   async complete(token: string, request: CompletePasswordResetRequest, origin: HttpOrigin, previousSessionToken: string | undefined): Promise<CompletedReset> {
     const ticket = await this.attempts.admit(origin)
     const found = await this.lookup(token)
     if (!found.usable)
       throw await this.attempts.rejected(ticket, 'password_reset', found.reason, found.target, origin)
-    const { record, user } = found.record
+    const { record } = found.record
     const passwordHash = await withHashing(ticket, this.#logger, async () => this.users.hashPassword(request.password))
-    const sessionToken = await this.transactions.run(async (transaction) => {
+    const outcome = await this.transactions.run(async (transaction): Promise<LinkOutcome<CompletedReset>> => {
+      const account = await this.users.lockAccount(record.userId, transaction)
+      if (account?.status !== 'active')
+        return { done: false, reason: 'revoked' }
       const locked = await this.repository.findByIdForUpdate(record.id, transaction)
       const now = locked === undefined ? 'invalid' : usabilityOf(stateOf(locked))
-      // 查令牌与这里之间被用过或作废了（并发、停用账户）：按原因回答，这次按一次失败计
       if (now !== 'usable')
-        throw new AppError('LINK_INVALID', undefined, { details: { reason: now } })
-      await this.users.setPasswordHash(user.id, passwordHash, transaction)
-      await this.repository.markUsed(record.id, transaction)
-      await this.sessions.revokeAllOf(user.id, 'password_reset', { transaction })
+        return { done: false, reason: now }
       await ticket.succeeded(transaction)
+      await this.users.setPasswordHash(account.id, passwordHash, transaction)
+      await this.repository.markUsed(record.id, transaction)
+      await this.sessions.revokeAllOf(account.id, 'password_reset', { transaction })
       if (previousSessionToken !== undefined)
         await this.sessions.replace(previousSessionToken, transaction)
-      const session = await this.sessions.create(user.id, transaction)
-      await this.audit.record({ action: 'users.password_reset_completed', actor: { type: 'user', id: user.id }, target: { type: 'user', id: user.id }, origin }, { transaction })
-      return session.token
+      const session = await this.sessions.create(account.id, transaction)
+      await this.audit.record({ action: 'users.password_reset_completed', actor: { type: 'user', id: account.id }, target: { type: 'user', id: account.id }, origin }, { transaction })
+      return { done: true, value: { user: account, sessionToken: session.token } }
     })
-    return { user, sessionToken }
+    if (!outcome.done)
+      throw await this.attempts.rejected(ticket, 'password_reset', outcome.reason, { type: 'user', id: record.userId }, origin)
+    return outcome.value
+  }
+
+  /** 让当前密码失效用的哈希（审查 A7）。等待哈希的请求太多时 503，与登录相同 */
+  private async unusablePasswordHash(): Promise<string> {
+    try {
+      return await this.users.unusablePasswordHash()
+    }
+    catch (error) {
+      if (error instanceof PasswordHashingBusyError)
+        throw hashingBusy(error)
+      throw error
+    }
   }
 
   /** 令牌对应的重置与账户；账户不存在或已停用时按作废处理。审计的对象是这个账户 */
@@ -149,4 +168,12 @@ export class PasswordResetsService {
     const usability = usabilityOf(stateOf(record))
     return usability === 'usable' ? { usable: true, record: { record, user } } : { usable: false, reason: usability, target }
   }
+}
+
+/** 能签发重置的账户：不存在 NOT_FOUND，已停用 ACCOUNT_DISABLED */
+function requireIssuable(account: User | undefined): void {
+  if (account === undefined)
+    throw new AppError('NOT_FOUND')
+  if (account.status !== 'active')
+    throw new AppError('ACCOUNT_DISABLED')
 }

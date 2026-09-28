@@ -45,9 +45,11 @@ export class AuthService {
    * 登录：
    * 1. 限流放行：先占用名额，再验证（LoginThrottle）；
    * 2. 验证用户名与密码，在事务之外：哈希是计算密集的操作；等待哈希的请求太多时返回 503（verify）；
-   * 3. 失败时写审计；成功时在一个事务里清除限流计数、作废浏览器原来的会话、新建会话、写审计；
+   * 3. 失败时写审计；成功时在一个事务里：先锁住账户行复核凭据（M2-P1 审查 A1），再清除限流计数、作废浏览器原来的会话、
+   *    新建会话、写审计。复核不通过（验证之后改了密码、签发或完成了重置、停用了）按凭据无效处理；
    * 4. 在事务之外顺带清理过期的记录。
    * previousToken 是浏览器原来带着的会话，登录成功后作废。
+   * 事务里锁的顺序与其他改动账户的事务相同：账户行、限流计数、会话（ADR-007，审查 A2）。
    */
   async login(request: LoginRequest, origin: HttpOrigin, previousToken?: string): Promise<LoginResult> {
     const admission = await this.throttle.admit({ username: normalizeUsername(request.username), clientIp: origin.clientIp })
@@ -59,20 +61,14 @@ export class AuthService {
 
     const { ticket } = admission
     const check = await this.verify(request, ticket)
-    if (!check.valid) {
-      await this.audit.record({
-        action: 'auth.login_failed',
-        actor: { type: 'anonymous' },
-        ...(check.user === undefined ? {} : { target: { type: 'user' as const, id: check.user.id } }),
-        origin,
-        details: { reason: 'invalid_credentials', ...(ticket.lockedForSeconds === undefined ? {} : { lockedForSeconds: ticket.lockedForSeconds }) },
-      })
-      await this.tidyUp()
-      throw ticket.lockedForSeconds === undefined ? new AppError('INVALID_CREDENTIALS') : tooManyAttempts(ticket.lockedForSeconds)
-    }
+    if (!check.valid)
+      throw await this.loginFailed(ticket, check.user, origin)
 
-    const { user } = check
+    const { credentials } = check
+    const { user } = credentials
     const created = await this.transactions.run(async (transaction) => {
+      if (!await this.users.holdCredentials(credentials, transaction))
+        return undefined
       await ticket.succeeded(transaction)
       if (previousToken !== undefined)
         await this.sessions.replace(previousToken, transaction)
@@ -85,8 +81,26 @@ export class AuthService {
       }, { transaction })
       return session
     })
+    if (created === undefined)
+      throw await this.loginFailed(ticket, user, origin)
     await this.tidyUp()
     return { token: created.token, session: await this.describe(user, csrfTokenFor(created.token)) }
+  }
+
+  /**
+   * 登录失败：写审计（账户存在时带上对象）、顺带清理，返回要抛出的错误：这次失败使计数达到上限时 429，
+   * 否则 INVALID_CREDENTIALS
+   */
+  private async loginFailed(ticket: LoginTicket, user: User | undefined, origin: HttpOrigin): Promise<AppError> {
+    await this.audit.record({
+      action: 'auth.login_failed',
+      actor: { type: 'anonymous' },
+      ...(user === undefined ? {} : { target: { type: 'user' as const, id: user.id } }),
+      origin,
+      details: { reason: 'invalid_credentials', ...(ticket.lockedForSeconds === undefined ? {} : { lockedForSeconds: ticket.lockedForSeconds }) },
+    })
+    await this.tidyUp()
+    return ticket.lockedForSeconds === undefined ? new AppError('INVALID_CREDENTIALS') : tooManyAttempts(ticket.lockedForSeconds)
   }
 
   /**
@@ -101,7 +115,9 @@ export class AuthService {
    * 修改密码（M2-P1 设计 §3.5，US-M2-02）：
    * 1. 按登录限流占名额（用户名与地址两个维度）：猜旧密码与猜登录密码按同一个计数，达到上限同样锁定登录；
    * 2. 按 id 验证旧密码，在事务之外（耗时补齐同登录）；新密码的哈希同样在事务之外；
-   * 3. 在一个事务里：清除限流计数、更新哈希、撤销本人除当前会话以外的全部会话（原因 password_changed）、记审计。
+   * 3. 在一个事务里：锁住账户行，复核旧密码验证之后没有被改过（审查 A1、A2），更新哈希、清除限流计数、
+   *    撤销本人除当前会话以外的全部会话（原因 password_changed）、记审计。
+   * 旧密码不对、复核不通过，都记审计 users.password_change_failed（审查 A6）。
    */
   async changePassword(principal: Principal, request: ChangePasswordRequest, origin: HttpOrigin): Promise<void> {
     const { user } = principal
@@ -111,16 +127,35 @@ export class AuthService {
       throw tooManyAttempts(admission.retryAfterSeconds)
     }
     const { ticket } = admission
-    const valid = await withHashing(ticket, this.#logger, async () => this.users.verifyPasswordOf(user.id, request.currentPassword))
-    if (!valid)
-      throw ticket.lockedForSeconds === undefined ? new AppError('CURRENT_PASSWORD_INCORRECT') : tooManyAttempts(ticket.lockedForSeconds)
+    const credentials = await withHashing(ticket, this.#logger, async () => this.users.verifyPasswordOf(user.id, request.currentPassword))
+    if (credentials === undefined)
+      throw await this.passwordChangeFailed(ticket, user, origin)
     const passwordHash = await withHashing(ticket, this.#logger, async () => this.users.hashPassword(request.newPassword))
-    await this.transactions.run(async (transaction) => {
+    const changed = await this.transactions.run(async (transaction) => {
+      if (!await this.users.replacePassword(credentials, passwordHash, transaction))
+        return false
       await ticket.succeeded(transaction)
-      await this.users.setPasswordHash(user.id, passwordHash, transaction)
       await this.sessions.revokeAllOf(user.id, 'password_changed', { except: principal.sessionId, transaction })
       await this.audit.record({ action: 'users.password_changed', actor: { type: 'user', id: user.id }, target: { type: 'user', id: user.id }, origin }, { transaction })
+      return true
     })
+    if (!changed)
+      throw await this.passwordChangeFailed(ticket, user, origin)
+  }
+
+  /**
+   * 修改密码时旧密码不对（或者验证之后密码已经变了）：记审计，返回要抛出的错误。与登录共用按用户名的计数，
+   * 这次失败使计数达到上限时是 429，details 带锁定秒数：管理员能从审计里查到这个人为什么登录不了（审查 A6）
+   */
+  private async passwordChangeFailed(ticket: LoginTicket, user: User, origin: HttpOrigin): Promise<AppError> {
+    await this.audit.record({
+      action: 'users.password_change_failed',
+      actor: { type: 'user', id: user.id },
+      target: { type: 'user', id: user.id },
+      origin,
+      details: { reason: 'current_password_incorrect', ...(ticket.lockedForSeconds === undefined ? {} : { lockedForSeconds: ticket.lockedForSeconds }) },
+    })
+    return ticket.lockedForSeconds === undefined ? new AppError('CURRENT_PASSWORD_INCORRECT') : tooManyAttempts(ticket.lockedForSeconds)
   }
 
   async logout(principal: Principal, origin: HttpOrigin): Promise<void> {

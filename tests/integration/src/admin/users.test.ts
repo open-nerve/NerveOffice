@@ -62,6 +62,12 @@ describe('US-M2-04 管理界面的账户：访问控制', () => {
     expect(await codeOf(await asAdmin('/api/admin/users/0192f0c8-0000-7000-8000-00000000dead/disable', 'POST'))).toBe('NOT_FOUND')
     expect(await codeOf(await asAdmin('/api/admin/users/not-a-uuid/disable', 'POST'))).toBe('REQUEST_INVALID')
   })
+
+  it('系统角色的请求不合法（未知的角色、缺字段、多余的字段）：400', async () => {
+    const target = await createAccount(database, { username: 'role-target' })
+    for (const body of [{ systemRole: 'owner' }, {}, { systemRole: 'admin', reason: 'x' }])
+      expect(await codeOf(await asAdmin(`/api/admin/users/${target.id}/system-role`, 'PUT', body))).toBe('REQUEST_INVALID')
+  })
 })
 
 describe('US-M2-04 停用与启用', () => {
@@ -143,18 +149,31 @@ describe('US-M2-04 至少保留一个有效的系统管理员', () => {
       asAdmin(`/api/admin/users/${leo.id}/system-role`, 'PUT', { systemRole: 'member' }),
       asAdmin(`/api/admin/users/${root.id}/system-role`, 'PUT', { systemRole: 'member' }, leoSession),
     ])
-    // 输的一方：还没提交时在"至少保留一个"的检查处等锁、得到 LAST_ADMIN（409）；
-    // 或者对方已经提交，它在会话守卫里就发现自己不再是管理员（403）。两种都只有一个成功
+    // 输的一方已不再是管理员：对方先提交时，它在会话守卫里被拒绝；还没提交时，它等到锁之后在锁里复核操作者（审查 A12），
+    // 同样是 403。两种都只有一个成功
     const [winner, loser] = a.status === 200 ? [a, b] : [b, a]
     expect(winner.status).toBe(200)
-    expect([403, 409]).toContain(loser.status)
-    expect(['LAST_ADMIN', 'PERMISSION_DENIED']).toContain(await codeOf(loser))
+    expect(loser.status).toBe(403)
+    expect(await codeOf(loser)).toBe('PERMISSION_DENIED')
     const [admins] = await database.query(async client => (await client.query<{ count: number }>('SELECT count(*)::int AS count FROM users WHERE system_role = \'admin\' AND status = \'active\'')).rows)
     expect(admins).toEqual({ count: 1 })
     // 恢复：保证 root 仍是管理员，后面的用例照常
-    if (a.status === 409)
+    if (a.status !== 200)
       await asAdmin(`/api/admin/users/${root.id}/system-role`, 'PUT', { systemRole: 'admin' }, leoSession)
     rootSession = await login(app.baseUrl, 'root', root.password)
+  })
+})
+
+describe('US-M2-04 停用自己（M2-P1 设计 §3.5）', () => {
+  it('有别的有效管理员时可以停用自己：自己的会话随即失效，登录提示与密码错误相同', async () => {
+    const mia = await createAccount(database, { username: 'mia', systemRole: 'admin' })
+    const miaSession = await login(app.baseUrl, 'mia', mia.password)
+    const response = await asAdmin(`/api/admin/users/${mia.id}/disable`, 'POST', undefined, miaSession)
+    expect(parseExact(adminUserSchema, await response.json())).toMatchObject({ status: 'disabled' })
+    const next = await asUser(app.baseUrl, miaSession, '/api/admin/users')
+    expect(next.status).toBe(401)
+    expect(await codeOf(next)).toBe('SESSION_EXPIRED')
+    expect(await codeOf(await postLogin(app.baseUrl, { username: 'mia', password: mia.password }))).toBe('INVALID_CREDENTIALS')
   })
 })
 

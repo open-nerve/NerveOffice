@@ -418,6 +418,28 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
     const fromEntry = await lintAtProbe(importPart(`../../features/sheet-editor/${part}`), PROBE_FILES.editorEntry)
     expect(fromEntry.messages.join('\n')).not.toContain('只由编辑器页的入口引用')
   })
+
+  it('管理界面按需加载（M2-P1 审查 B2）：只有路由表能动态 import() 它的公开入口；静态引用、类型引用、再导出、别处的动态引用都不行', async () => {
+    const ROUTES_FILE = 'apps/web/src/app/routes.ts'
+    const dynamicImport = (path: string): string => `export async function pages() {\n  return import('${path}')\n}\n`
+    expect(await rulesFor(dynamicImport('../features/admin/index.ts'), ROUTES_FILE)).not.toContain('boundaries/dependencies')
+    const violations: [string, string][] = [
+      // 路由表：静态引用、动态引用内部文件
+      [`import { AdminLayout } from '../features/admin/index.ts'\n\nexport const layout = AdminLayout\n`, ROUTES_FILE],
+      [dynamicImport('../features/admin/users-page.tsx'), ROUTES_FILE],
+      // 应用层的其他文件、功能模块、入口
+      [dynamicImport('../features/admin/index.ts'), WEB_FILE],
+      [`import type { AdminLayout } from '../admin/index.ts'\n\nexport type Layout = typeof AdminLayout\n`, WEB_FEATURE_FILE],
+      [`export { AdminLayout } from '../../features/admin/index.ts'\n`, PLATFORM_ENTRY],
+    ]
+    for (const [code, file] of violations) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain('boundaries/dependencies')
+      expect(report.messages.join('\n'), file).toContain('管理界面（features/admin）按需加载')
+    }
+    // 管理界面自己内部的引用不受影响
+    expect(await rulesFor('import { ADMIN_QUERY_KEY } from \'./admin-api.ts\'\n\nexport const key = ADMIN_QUERY_KEY\n', 'apps/web/src/features/admin/users-page.tsx')).not.toContain('boundaries/dependencies')
+  })
 }, LINT_TIMEOUT)
 
 describe('US-M1-11 lint 规则的自测：类型与写法', () => {

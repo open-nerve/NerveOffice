@@ -1,6 +1,6 @@
 import type { InfiniteData, UseInfiniteQueryResult } from '@tanstack/react-query'
-import type { ReactNode } from 'react'
-import { useEffect, useRef } from 'react'
+import type { ReactNode, Ref } from 'react'
+import { useEffect, useImperativeHandle, useRef } from 'react'
 import { describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { Alert, AlertDescription, Button, Skeleton, Table, TableBody, TableHead, TableHeader, TableRow } from '../../shared/ui/index.ts'
@@ -8,6 +8,12 @@ import { Alert, AlertDescription, Button, Skeleton, Table, TableBody, TableHead,
 export interface Page<T> {
   readonly items: readonly T[]
   readonly nextCursor: string | null
+}
+
+/** 由页面调用：操作完成、弹窗关闭之后把焦点放回这一行（审查 B9） */
+export interface PagedTableHandle {
+  /** 焦点移到 rowKey 为 key 的行；这一行不在表里（被过滤掉了、表是空的、还在加载）时返回 false，由页面另找去处 */
+  readonly focusRow: (key: string) => boolean
 }
 
 interface PagedTableProps<T> {
@@ -19,13 +25,14 @@ interface PagedTableProps<T> {
   readonly rowKey: (item: T) => string
   /** 一行的各个单元格（TableCell） */
   readonly renderCells: (item: T) => ReactNode
+  readonly ref?: Ref<PagedTableHandle>
 }
 
 /**
  * 管理界面的分页表格（M2-P1 设计 §3.8）：加载中、第一页失败（可以重试）、空、有数据四种状态；"加载更多"按游标取下一页，
  * 失败时保留已有的行并提示。新的一页到了之后，焦点移到第一条新行：按钮可能随之消失，焦点不能留在它身上（M1 审查 B13）。
  */
-export function PagedTable<T>({ query, label, texts, columns, rowKey, renderCells }: PagedTableProps<T>) {
+export function PagedTable<T>({ query, label, texts, columns, rowKey, renderCells, ref }: PagedTableProps<T>) {
   const items = query.data?.pages.flatMap(page => page.items) ?? []
   const bodyRef = useRef<HTMLTableSectionElement>(null)
   const focusFromRef = useRef<number>(undefined)
@@ -37,6 +44,13 @@ export function PagedTable<T>({ query, label, texts, columns, rowKey, renderCell
     const firstNewRow = bodyRef.current?.rows.item(from)
     firstNewRow?.focus()
   }, [items.length])
+  useImperativeHandle(ref, () => ({
+    focusRow: (key) => {
+      const row = Array.from(bodyRef.current?.rows ?? []).find(candidate => candidate.dataset.rowKey === key)
+      row?.focus()
+      return row !== undefined
+    },
+  }), [])
 
   function loadMore(): void {
     if (query.isFetchingNextPage)
@@ -79,12 +93,15 @@ export function PagedTable<T>({ query, label, texts, columns, rowKey, renderCell
           </TableRow>
         </TableHeader>
         <TableBody ref={bodyRef}>
-          {items.map(item => (
-            // tabIndex -1：只能由程序聚焦（加载更多之后），Tab 键不经过整行
-            <TableRow key={rowKey(item)} tabIndex={-1} className="outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
-              {renderCells(item)}
-            </TableRow>
-          ))}
+          {items.map((item) => {
+            const key = rowKey(item)
+            return (
+              // tabIndex -1：只能由程序聚焦（加载更多之后、操作完成之后），Tab 键不经过整行
+              <TableRow key={key} data-row-key={key} tabIndex={-1} className="outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+                {renderCells(item)}
+              </TableRow>
+            )
+          })}
         </TableBody>
       </Table>
       {query.isError && (

@@ -9,7 +9,8 @@ export const SESSION_QUERY_KEY = ['auth', 'session'] as const
 
 // 请求的元数据，交给请求缓存的全局处理（app/query-client.ts）：
 // - handlesAuthentication：这个请求自己处理"未登录"（会话、登录），全局的"回到登录页"不管它；
-// - session：这个变更开始（登录）或者结束（退出）会话。全局处理通知其他标签页；结束时整页回到登录页。
+// - session：这个变更开始（登录）或者结束（退出）会话。全局处理通知其他标签页；结束时整页回到登录页；
+// - systemAdminOnly：这个请求只给系统管理员（服务端的 @SystemAdminOnly()）。
 
 /** 查询会话：得到未登录是正常的结果，由需要登录的外层路由与登录页自己处理 */
 export const HANDLES_AUTHENTICATION = { handlesAuthentication: true } as const
@@ -17,6 +18,11 @@ export const HANDLES_AUTHENTICATION = { handlesAuthentication: true } as const
 export const STARTS_SESSION = { handlesAuthentication: true, session: 'starts' } as const
 /** 退出：成功，或者会话本来就不在了（401），都算退出了 */
 export const ENDS_SESSION = { session: 'ends' } as const
+/**
+ * 管理接口：得到 PERMISSION_DENIED，说明页面显示的系统角色已经过时（例如被别的管理员取消了），
+ * 全局处理向服务端重新确认会话，管理界面随之切到无权限（M2-P1 审查 B4）
+ */
+export const SYSTEM_ADMIN_ONLY = { systemAdminOnly: true } as const
 
 /** 会话查询用：拿到会话就把它的 CSRF 令牌交给请求层。 */
 export async function fetchSession(signal?: AbortSignal): Promise<SessionResponse> {

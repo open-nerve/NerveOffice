@@ -29,21 +29,36 @@ class FakeHasher extends PasswordHasher {
 
 const TX = {} as Transaction
 const CREATED = new Date('2026-09-28T00:00:00Z')
+const ACTOR_ID = '0199a2c4-0000-7000-8000-0000000000ad'
 
 function account(overrides: Partial<AccountRecord>): AccountRecord {
   return { id: '0199a2c4-0000-7000-8000-000000000001', username: 'alice', displayName: 'Alice', systemRole: 'member', status: 'active', createdAt: CREATED, ...overrides }
 }
 
-/** 假仓储：一个账户，另有若干个"别的有效系统管理员"。按调用的顺序记下加锁与更新 */
-function setup(target: AccountRecord | undefined, otherActiveAdmins = 1) {
+/** 假仓储：一个账户，另有若干个"别的有效系统管理员"；操作者默认是有效的系统管理员。按调用的顺序记下加锁与更新 */
+function setup(target: AccountRecord | undefined, otherActiveAdmins = 1, actor: AccountRecord | null = account({ id: ACTOR_ID, username: 'boss', systemRole: 'admin' })) {
   const calls: string[] = []
+  let locked = target === undefined ? undefined : { status: target.status, passwordHash: 'hash:secret' }
   const repository = {
     lockSystemAdmins: vi.fn(async () => {
       calls.push('lock-admins')
     }),
-    findRecordForUpdate: vi.fn(async () => {
+    findById: vi.fn(async (id: string) => {
+      calls.push(`read:${id}`)
+      return id === ACTOR_ID ? actor ?? undefined : target
+    }),
+    lockRecord: vi.fn(async () => {
       calls.push('lock-row')
       return target
+    }),
+    lockCredentials: vi.fn(async (_id: string, strength: string) => {
+      calls.push(`lock-credentials:${strength}`)
+      return locked
+    }),
+    updatePasswordHash: vi.fn(async (_id: string, passwordHash: string) => {
+      calls.push('update-hash')
+      if (locked !== undefined)
+        locked = { ...locked, passwordHash }
     }),
     countActiveAdminsExcept: vi.fn(async () => otherActiveAdmins),
     setStatus: vi.fn(async (_id: string, status: AccountRecord['status']) => account({ ...target, status })),
@@ -54,7 +69,17 @@ function setup(target: AccountRecord | undefined, otherActiveAdmins = 1) {
   }
   const hasher = new FakeHasher()
   const logger = new AppLogger(createRootLogger({ level: 'silent' }), new RequestContextStore())
-  return { calls, repository, hasher, service: new UsersService(repository as unknown as UsersRepository, hasher, logger) }
+  return {
+    calls,
+    repository,
+    hasher,
+    /** 模拟别处改了密码（修改、重置） */
+    changeHashElsewhere: (passwordHash: string) => {
+      if (locked !== undefined)
+        locked = { ...locked, passwordHash }
+    },
+    service: new UsersService(repository as unknown as UsersRepository, hasher, logger),
+  }
 }
 
 async function errorCodeOf(promise: Promise<unknown>): Promise<string> {
@@ -65,32 +90,42 @@ async function errorCodeOf(promise: Promise<unknown>): Promise<string> {
 }
 
 describe('UsersService：停用与启用（M2-P1 设计 §3.5）', () => {
-  it('停用：先取管理员的锁，再锁账户的行，然后改状态', async () => {
+  it('停用：先取管理员的锁，在锁里复核操作者，再锁账户的行，然后改状态', async () => {
     const { service, calls, repository } = setup(account({}))
-    expect(await service.disable('id', TX)).toMatchObject({ changed: true, account: { status: 'disabled' } })
-    expect(calls).toEqual(['lock-admins', 'lock-row'])
+    expect(await service.disable('id', ACTOR_ID, TX)).toMatchObject({ changed: true, account: { status: 'disabled' } })
+    expect(calls).toEqual(['lock-admins', `read:${ACTOR_ID}`, 'lock-row'])
+    expect(repository.findById).toHaveBeenCalledWith(ACTOR_ID, TX)
     expect(repository.setStatus).toHaveBeenCalledWith(expect.any(String), 'disabled', TX)
+  })
+
+  it('操作者在取到锁之前已被取消或停用（审查 A12）：PERMISSION_DENIED，不锁账户的行', async () => {
+    for (const actor of [account({ id: ACTOR_ID, systemRole: 'member' }), account({ id: ACTOR_ID, systemRole: 'admin', status: 'disabled' }), null]) {
+      const { service, calls } = setup(account({}), 1, actor)
+      expect(await errorCodeOf(service.disable('id', ACTOR_ID, TX))).toBe('PERMISSION_DENIED')
+      expect(await errorCodeOf(service.changeSystemRole('id', 'admin', ACTOR_ID, TX))).toBe('PERMISSION_DENIED')
+      expect(calls).not.toContain('lock-row')
+    }
   })
 
   it('已经停用的：原样返回，changed 为假，不更新', async () => {
     const { service, repository } = setup(account({ status: 'disabled' }))
-    expect(await service.disable('id', TX)).toMatchObject({ changed: false })
+    expect(await service.disable('id', ACTOR_ID, TX)).toMatchObject({ changed: false })
     expect(repository.setStatus).not.toHaveBeenCalled()
   })
 
   it('停用有效的系统管理员：还有别的有效系统管理员时可以；没有了就是 LAST_ADMIN', async () => {
-    expect(await setup(account({ systemRole: 'admin' }), 1).service.disable('id', TX)).toMatchObject({ changed: true })
-    expect(await errorCodeOf(setup(account({ systemRole: 'admin' }), 0).service.disable('id', TX))).toBe('LAST_ADMIN')
+    expect(await setup(account({ systemRole: 'admin' }), 1).service.disable('id', ACTOR_ID, TX)).toMatchObject({ changed: true })
+    expect(await errorCodeOf(setup(account({ systemRole: 'admin' }), 0).service.disable('id', ACTOR_ID, TX))).toBe('LAST_ADMIN')
   })
 
   it('停用成员不数管理员', async () => {
     const { service, repository } = setup(account({}), 0)
-    await service.disable('id', TX)
+    await service.disable('id', ACTOR_ID, TX)
     expect(repository.countActiveAdminsExcept).not.toHaveBeenCalled()
   })
 
   it('账户不存在：NOT_FOUND', async () => {
-    expect(await errorCodeOf(setup(undefined).service.disable('id', TX))).toBe('NOT_FOUND')
+    expect(await errorCodeOf(setup(undefined).service.disable('id', ACTOR_ID, TX))).toBe('NOT_FOUND')
     expect(await errorCodeOf(setup(undefined).service.enable('id', TX))).toBe('NOT_FOUND')
   })
 
@@ -103,48 +138,113 @@ describe('UsersService：停用与启用（M2-P1 设计 §3.5）', () => {
 })
 
 describe('UsersService：系统管理员的授予与取消（M2-P1 设计 §3.5）', () => {
-  it('授予有效的成员：先取管理员的锁，再锁行', async () => {
+  it('授予有效的成员：先取管理员的锁，复核操作者，再锁行', async () => {
     const { service, calls } = setup(account({}))
-    expect(await service.changeSystemRole('id', 'admin', TX)).toMatchObject({ changed: true, account: { systemRole: 'admin' } })
-    expect(calls).toEqual(['lock-admins', 'lock-row'])
+    expect(await service.changeSystemRole('id', 'admin', ACTOR_ID, TX)).toMatchObject({ changed: true, account: { systemRole: 'admin' } })
+    expect(calls).toEqual(['lock-admins', `read:${ACTOR_ID}`, 'lock-row'])
   })
 
   it('停用的账户不能被授予：ACCOUNT_DISABLED', async () => {
-    expect(await errorCodeOf(setup(account({ status: 'disabled' })).service.changeSystemRole('id', 'admin', TX))).toBe('ACCOUNT_DISABLED')
+    expect(await errorCodeOf(setup(account({ status: 'disabled' })).service.changeSystemRole('id', 'admin', ACTOR_ID, TX))).toBe('ACCOUNT_DISABLED')
   })
 
   it('取消有效的系统管理员：没有别的有效系统管理员时 LAST_ADMIN', async () => {
-    expect(await errorCodeOf(setup(account({ systemRole: 'admin' }), 0).service.changeSystemRole('id', 'member', TX))).toBe('LAST_ADMIN')
-    expect(await setup(account({ systemRole: 'admin' }), 2).service.changeSystemRole('id', 'member', TX)).toMatchObject({ changed: true })
+    expect(await errorCodeOf(setup(account({ systemRole: 'admin' }), 0).service.changeSystemRole('id', 'member', ACTOR_ID, TX))).toBe('LAST_ADMIN')
+    expect(await setup(account({ systemRole: 'admin' }), 2).service.changeSystemRole('id', 'member', ACTOR_ID, TX)).toMatchObject({ changed: true })
   })
 
   it('取消停用的系统管理员不数管理员：它本来就不算有效的管理员', async () => {
     const { service, repository } = setup(account({ systemRole: 'admin', status: 'disabled' }), 0)
-    expect(await service.changeSystemRole('id', 'member', TX)).toMatchObject({ changed: true })
+    expect(await service.changeSystemRole('id', 'member', ACTOR_ID, TX)).toMatchObject({ changed: true })
     expect(repository.countActiveAdminsExcept).not.toHaveBeenCalled()
   })
 
   it('角色没变：原样返回，changed 为假', async () => {
     const { service, repository } = setup(account({ systemRole: 'admin' }), 0)
-    expect(await service.changeSystemRole('id', 'admin', TX)).toMatchObject({ changed: false })
+    expect(await service.changeSystemRole('id', 'admin', ACTOR_ID, TX)).toMatchObject({ changed: false })
     expect(repository.setSystemRole).not.toHaveBeenCalled()
   })
 })
 
-describe('UsersService.verifyPasswordOf（修改密码时的旧密码）', () => {
-  it('密码对时通过，错时不通过', async () => {
+describe('UsersService.verifyPasswordOf 与 replacePassword（修改密码，审查 A1、A2）', () => {
+  it('旧密码对时返回验证过的凭据（带验证所用的哈希），错时不通过', async () => {
     const { service } = setup(account({}))
-    expect(await service.verifyPasswordOf('id', 'secret')).toBe(true)
-    expect(await service.verifyPasswordOf('id', 'wrong')).toBe(false)
+    expect(await service.verifyPasswordOf('id', 'secret')).toMatchObject({ user: { username: 'alice' }, passwordHash: 'hash:secret' })
+    expect(await service.verifyPasswordOf('id', 'wrong')).toBeUndefined()
   })
 
   it('账户不存在或已停用：不通过，照样算一次哈希（耗时与密码错误相近）', async () => {
     for (const target of [undefined, account({ status: 'disabled' })]) {
       const { service, hasher } = setup(target)
-      expect(await service.verifyPasswordOf('id', 'secret')).toBe(false)
+      expect(await service.verifyPasswordOf('id', 'secret')).toBeUndefined()
       expect(hasher.verified).toHaveLength(1)
       expect(hasher.verified[0]).not.toBe('hash:secret')
     }
+  })
+
+  it('replacePassword：锁住账户行（no key update），哈希还是验证时的那个才更新', async () => {
+    const { service, calls, repository } = setup(account({}))
+    const credentials = await service.verifyPasswordOf('id', 'secret')
+    if (credentials === undefined)
+      throw new Error('旧密码应当验证通过')
+    expect(await service.replacePassword(credentials, 'hash:next', TX)).toBe(true)
+    expect(calls).toEqual(['lock-credentials:no key update', 'update-hash'])
+    expect(repository.updatePasswordHash).toHaveBeenCalledWith(credentials.user.id, 'hash:next', TX)
+  })
+
+  it('replacePassword：验证之后别处改过密码（修改、签发或完成重置），不更新', async () => {
+    const { service, repository, changeHashElsewhere } = setup(account({}))
+    const credentials = await service.verifyPasswordOf('id', 'secret')
+    if (credentials === undefined)
+      throw new Error('旧密码应当验证通过')
+    changeHashElsewhere('hash:reset-by-admin')
+    expect(await service.replacePassword(credentials, 'hash:next', TX)).toBe(false)
+    expect(repository.updatePasswordHash).not.toHaveBeenCalled()
+  })
+
+  it('replacePassword：验证之后账户被停用，不更新', async () => {
+    const target = account({})
+    const { service, repository } = setup(target)
+    const credentials = await service.verifyPasswordOf('id', 'secret')
+    if (credentials === undefined)
+      throw new Error('旧密码应当验证通过')
+    repository.lockCredentials.mockResolvedValueOnce({ status: 'disabled', passwordHash: 'hash:secret' })
+    expect(await service.replacePassword(credentials, 'hash:next', TX)).toBe(false)
+    expect(repository.updatePasswordHash).not.toHaveBeenCalled()
+  })
+})
+
+describe('UsersService.holdCredentials（登录的事务里复核，审查 A1）', () => {
+  it('FOR SHARE 锁住账户行；有效且哈希没变时通过', async () => {
+    const { service, calls } = setup(account({}))
+    const credentials = { user: account({}), passwordHash: 'hash:secret' }
+    expect(await service.holdCredentials(credentials, TX)).toBe(true)
+    expect(calls).toEqual(['lock-credentials:share'])
+  })
+
+  it('哈希变了、账户停用了、账户不在了：不通过', async () => {
+    const credentials = { user: account({}), passwordHash: 'hash:secret' }
+    const changed = setup(account({}))
+    changed.changeHashElsewhere('hash:other')
+    expect(await changed.service.holdCredentials(credentials, TX)).toBe(false)
+    expect(await setup(account({ status: 'disabled' })).service.holdCredentials(credentials, TX)).toBe(false)
+    expect(await setup(undefined).service.holdCredentials(credentials, TX)).toBe(false)
+  })
+})
+
+describe('UsersService：签发重置用到的账户操作（审查 A2、A7）', () => {
+  it('lockAccount 锁住账户的行再读', async () => {
+    const target = account({})
+    const { service, repository } = setup(target)
+    expect(await service.lockAccount(target.id, TX)).toBe(target)
+    expect(repository.lockRecord).toHaveBeenCalledWith(target.id, TX)
+  })
+
+  it('unusablePasswordHash：每次对新的随机秘密算哈希，谁也不知道对应的密码', async () => {
+    const { service } = setup(account({}))
+    const [first, second] = [await service.unusablePasswordHash(), await service.unusablePasswordHash()]
+    expect(first).toMatch(/^hash:[\w-]{43}$/)
+    expect(second).not.toBe(first)
   })
 })
 

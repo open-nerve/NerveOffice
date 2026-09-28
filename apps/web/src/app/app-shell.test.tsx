@@ -1,0 +1,66 @@
+// 登录后的页面框架：页头在单页切到按需加载的页面时显示进行中（审查 B5）；窄屏时只有名字收窄（审查 B11）。
+// 管理界面的代码由测试决定何时"下载完"：它的模块在测试放行之前一直加载不完（这个文件里只加载一次）。
+import type { SessionResponse } from '@nerve-office/contracts'
+import { fireEvent, screen } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+import { installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
+import { renderApp } from './render-app.test-support.tsx'
+
+const adminCode = vi.hoisted(() => {
+  let release: () => void = () => {}
+  const loaded = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  return { loaded, release: () => release() }
+})
+
+vi.mock('../features/admin/index.ts', async (importOriginal) => {
+  await adminCode.loaded
+  return importOriginal()
+})
+
+const LONG_NAME = '一个名字很长很长的系统管理员'
+const SESSION: SessionResponse = {
+  user: { id: '0199a2c4-0000-7000-8000-000000000001', username: 'root', displayName: LONG_NAME, systemRole: 'admin' },
+  personalSpace: { id: '0199a2c4-0000-7000-8000-0000000000aa', name: LONG_NAME },
+  csrfToken: 'csrf-1',
+}
+
+describe('页头', () => {
+  it('当前用户的名字：窄屏时收窄成一行省略号，完整的名字在 title 里；入口与按钮不收窄（审查 B11）', async () => {
+    installFakeApi({
+      'GET /api/auth/session': () => json(200, SESSION),
+      'GET /api/documents': () => json(200, { items: [], nextCursor: null }),
+    })
+    renderApp('/')
+    const name = await screen.findByText(LONG_NAME, { selector: 'header span' })
+    expect(name).toHaveAttribute('title', LONG_NAME)
+    expect(name).toHaveClass('min-w-0', 'truncate')
+    // 名字所在的一组可以收窄，产品名称与"管理"一组不收窄
+    expect(name.parentElement).toHaveClass('min-w-0')
+    expect(screen.getByRole('link', { name: 'NerveOffice' }).parentElement).toHaveClass('shrink-0')
+  })
+
+  it('单页里第一次点"管理"：下载管理界面的代码期间页头显示进行中、内容区标为忙碌，下载完之后恢复（审查 B5）', async () => {
+    installFakeApi({
+      'GET /api/auth/session': () => json(200, SESSION),
+      'GET /api/documents': () => json(200, { items: [], nextCursor: null }),
+      'GET /api/admin/users': () => json(200, { items: [], nextCursor: null }),
+    })
+    renderApp('/')
+    await screen.findByRole('heading', { name: '我的空间' })
+    expect(screen.queryByRole('progressbar')).toBeNull()
+    expect(screen.getByRole('main')).toHaveAttribute('aria-busy', 'false')
+
+    fireEvent.click(screen.getByRole('link', { name: '管理' }))
+    expect(await screen.findByRole('progressbar', { name: '正在打开页面…' })).toBeInTheDocument()
+    expect(screen.getByRole('main')).toHaveAttribute('aria-busy', 'true')
+    // 下载期间原来的页面还在
+    expect(screen.getByRole('heading', { name: '我的空间' })).toBeInTheDocument()
+
+    adminCode.release()
+    expect(await screen.findByText('没有符合条件的账户')).toBeInTheDocument()
+    expect(screen.queryByRole('progressbar')).toBeNull()
+    expect(screen.getByRole('main')).toHaveAttribute('aria-busy', 'false')
+  })
+})

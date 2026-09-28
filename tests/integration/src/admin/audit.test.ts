@@ -3,12 +3,13 @@ import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
-import { auditEventListResponseSchema, errorResponseSchema, issuedInvitationSchema } from '@nerve-office/contracts'
+import { auditEventListResponseSchema, errorResponseSchema, issuedInvitationSchema, issuedPasswordResetSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
+import { postPublic, tokenOf } from '../support/links.ts'
 import { asUser, login } from '../support/session-client.ts'
 
 let database: TestDatabase
@@ -90,14 +91,49 @@ describe('US-M2-13 审计查询', () => {
     expect(page.items[0]?.actor).toEqual({ type: 'system', id: null, username: null, displayName: null })
   })
 
-  it('成员查询：403；条件不合法（未知的动作、不是 UUID）：400', async () => {
+  it('成员查询：403；条件不合法（未知的动作、不是 UUID、PostgreSQL 没有的 0 年）：400，不是 500', async () => {
     const member = await createAccount(database, { username: 'cai' })
     const session = await login(app.baseUrl, 'cai', member.password)
     const denied = await asUser(app.baseUrl, session, '/api/admin/audit-events')
     expect(parseExact(errorResponseSchema, await denied.json()).error.code).toBe('PERMISSION_DENIED')
-    for (const query of ['?action=users.deleted', '?actorId=root', '?from=yesterday']) {
+    for (const query of ['?action=users.deleted', '?actorId=root', '?from=yesterday', '?from=0000-01-01T00:00:00Z', '?to=0000-12-31T23:59:59Z']) {
       const response = await asUser(app.baseUrl, adminSession, `/api/admin/audit-events${query}`)
       expect(response.status, query).toBe(400)
+    }
+  })
+})
+
+describe('US-M2-13 审计里没有令牌与密码（审查 A5）', () => {
+  it('邀请、接受、修改密码（含一次失败）、签发与完成重置、登录走一遍之后，整张审计表的 details 里没有令牌与密码', async () => {
+    const secrets: string[] = []
+    const invited = parseExact(issuedInvitationSchema, await (await asUser(app.baseUrl, adminSession, '/api/admin/invitations', { method: 'POST', body: { username: 'dora', displayName: '朵拉' } })).json())
+    const invitationToken = tokenOf(invited.url)
+    const firstPassword = 'dora first password'
+    secrets.push(invitationToken, firstPassword)
+    expect((await postPublic(app.baseUrl, '/api/auth/invitations/inspect', { token: invitationToken })).status).toBe(200)
+    expect((await postPublic(app.baseUrl, '/api/auth/invitations/accept', { token: invitationToken, displayName: '朵拉', password: firstPassword })).status).toBe(200)
+
+    const dora = await login(app.baseUrl, 'dora', firstPassword)
+    const secondPassword = 'dora second password'
+    const wrongGuess = 'dora wrong guess'
+    secrets.push(secondPassword, wrongGuess)
+    expect((await asUser(app.baseUrl, dora, '/api/auth/password', { method: 'PUT', body: { currentPassword: wrongGuess, newPassword: secondPassword } })).status).toBe(403)
+    expect((await asUser(app.baseUrl, dora, '/api/auth/password', { method: 'PUT', body: { currentPassword: firstPassword, newPassword: secondPassword } })).status).toBe(204)
+
+    const reset = parseExact(issuedPasswordResetSchema, await (await asUser(app.baseUrl, adminSession, `/api/admin/users/${dora.session.user.id}/password-reset`, { method: 'POST' })).json())
+    const resetToken = tokenOf(reset.url)
+    const thirdPassword = 'dora third password'
+    secrets.push(resetToken, thirdPassword)
+    expect((await postPublic(app.baseUrl, '/api/auth/password-resets/inspect', { token: resetToken })).status).toBe(200)
+    expect((await postPublic(app.baseUrl, '/api/auth/password-resets/complete', { token: resetToken, password: thirdPassword })).status).toBe(200)
+    expect((await postPublic(app.baseUrl, '/api/auth/password-resets/complete', { token: resetToken, password: thirdPassword })).status).toBe(410)
+    await login(app.baseUrl, 'dora', thirdPassword)
+
+    const rows = await database.query(async client => (await client.query<{ action: string, details: string }>('SELECT action, details::text AS details FROM audit_events')).rows)
+    expect(rows.map(row => row.action)).toEqual(expect.arrayContaining(['users.invited', 'users.invitation_accepted', 'users.password_change_failed', 'users.password_changed', 'users.password_reset_issued', 'users.password_reset_completed', 'auth.link_rejected']))
+    for (const row of rows) {
+      for (const secret of secrets)
+        expect(row.details, row.action).not.toContain(secret)
     }
   })
 })

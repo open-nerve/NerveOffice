@@ -1,9 +1,11 @@
 import type { InvitationStatus } from '@nerve-office/contracts'
+import type { Name, SQL } from 'drizzle-orm'
+import type { AnyPgColumn } from 'drizzle-orm/pg-core'
 import type { Buffer } from 'node:buffer'
 import type { TimeCursor } from '../../shared/time-cursor.ts'
 import type { Database, Transaction } from '../database/index.ts'
 import { Inject, Injectable } from '@nestjs/common'
-import { and, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
+import { and, desc, eq, getTableName, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
 import { authInvitations } from '../../db/schema/auth/index.ts'
 import { DATABASE, executorOf, keysetPosition } from '../database/index.ts'
 
@@ -21,6 +23,8 @@ export interface InvitationRecord {
   readonly expired: boolean
   /** 游标用的签发时间：数据库算出的 UTC 文本，保留微秒 */
   readonly position: string
+  /** 同一个登录名后来又签发过邀请（审查 B6） */
+  readonly superseded: boolean
 }
 
 export interface NewInvitation {
@@ -32,6 +36,20 @@ export interface NewInvitation {
 }
 
 const i = authInvitations
+
+const invitationsTable = sql.identifier(getTableName(i))
+const newerTable = sql.identifier('newer')
+
+function qualified(table: Name, column: AnyPgColumn): SQL {
+  return sql`${table}.${sql.identifier(column.name)}`
+}
+
+/**
+ * 同一个登录名有更晚签发的邀请。子查询里的列都写上表名：drizzle 在单表的查询与 RETURNING 里不给列加表名，
+ * 直接写 ${i.username} 会被子查询里的同名列截走
+ */
+const superseded = sql<boolean>`EXISTS (SELECT 1 FROM ${invitationsTable} AS ${newerTable} WHERE ${qualified(newerTable, i.username)} = ${qualified(invitationsTable, i.username)} AND (${qualified(newerTable, i.createdAt)}, ${qualified(newerTable, i.id)}) > (${qualified(invitationsTable, i.createdAt)}, ${qualified(invitationsTable, i.id)}))`
+
 const COLUMNS = {
   id: i.id,
   username: i.username,
@@ -44,6 +62,7 @@ const COLUMNS = {
   revokedAt: i.revokedAt,
   expired: sql<boolean>`${i.expiresAt} <= now()`,
   position: keysetPosition(i.createdAt),
+  superseded,
 }
 
 /** 未接受、未作废（可能已过期） */
@@ -109,9 +128,10 @@ export class InvitationsRepository {
     return row
   }
 
-  async revoke(id: string, revokedBy: string, transaction: Transaction): Promise<InvitationRecord> {
-    const [row] = await executorOf(this.db, transaction).update(i).set({ revokedAt: sql`now()`, revokedBy }).where(eq(i.id, id)).returning(COLUMNS)
-    return updated(row, id)
+  /** 作废：只改未接受、未作废的（条件与更新在同一条语句里）；已经不是这个状态时返回 undefined */
+  async revokeOpen(id: string, revokedBy: string, transaction: Transaction): Promise<InvitationRecord | undefined> {
+    const [row] = await executorOf(this.db, transaction).update(i).set({ revokedAt: sql`now()`, revokedBy }).where(and(eq(i.id, id), open)).returning(COLUMNS)
+    return row
   }
 
   async markAccepted(id: string, userId: string, transaction: Transaction): Promise<InvitationRecord> {

@@ -1,4 +1,5 @@
-// 修改密码（M2-P1 设计 §3.5，US-M2-02）：旧密码、其他会话全部撤销而当前会话保留、审计、与登录共用的限流。
+// 修改密码（M2-P1 设计 §3.5，US-M2-02）：旧密码、其他会话全部撤销而当前会话保留、审计（含失败）、与登录共用的限流。
+// 验证旧密码之后别处改了密码的并发，见 account-races.test.ts。
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
@@ -63,15 +64,19 @@ describe('US-M2-02 修改密码', () => {
     expect(events).toEqual([{ action: 'users.password_changed', actor_id: alice.id, target_id: alice.id, details: {} }])
   })
 
-  it('旧密码不对：403 CURRENT_PASSWORD_INCORRECT，密码与会话都不变', async () => {
+  it('旧密码不对：403 CURRENT_PASSWORD_INCORRECT，密码与会话都不变；记审计（审查 A6），不含密码', async () => {
     const bob = await createAccount(database, { username: 'bob' })
     const here = await login(app.baseUrl, 'bob', bob.password)
     const elsewhere = await login(app.baseUrl, 'bob', bob.password)
-    const response = await changePassword(here, 'not my password', 'another new password')
+    const response = await changePassword(here, 'not my password', 'another new password', 'change-wrong')
     expect(response.status).toBe(403)
     expect(await codeOf(response)).toBe('CURRENT_PASSWORD_INCORRECT')
     expect((await asUser(app.baseUrl, elsewhere, '/api/auth/session')).status).toBe(200)
     expect((await postLogin(app.baseUrl, { username: 'bob', password: bob.password })).status).toBe(200)
+    const events = await database.query(async client => (await client.query<{ action: string, actor_id: string, target_id: string, details: unknown }>(
+      'SELECT action, actor_id, target_id, details FROM audit_events WHERE request_id = \'change-wrong\'',
+    )).rows)
+    expect(events).toEqual([{ action: 'users.password_change_failed', actor_id: bob.id, target_id: bob.id, details: { reason: 'current_password_incorrect' } }])
   })
 
   it('新密码不符合规则：400 REQUEST_INVALID', async () => {
@@ -87,9 +92,14 @@ describe('US-M2-02 修改密码', () => {
     const here = await login(app.baseUrl, 'dave', dave.password)
     expect(await codeOf(await changePassword(here, 'guess-1', 'another new password'))).toBe('CURRENT_PASSWORD_INCORRECT')
     expect(await codeOf(await changePassword(here, 'guess-2', 'another new password'))).toBe('CURRENT_PASSWORD_INCORRECT')
-    const third = await changePassword(here, 'guess-3', 'another new password')
+    const third = await changePassword(here, 'guess-3', 'another new password', 'change-locking')
     expect(third.status).toBe(429)
     expect(third.headers.get('retry-after')).not.toBeNull()
+    // 管理员能从审计里查到这个人为什么登录不了：触发锁定的那次失败带着锁定秒数
+    const [locking] = await database.query(async client => (await client.query<{ details: { lockedForSeconds?: number } }>(
+      'SELECT details FROM audit_events WHERE request_id = \'change-locking\'',
+    )).rows)
+    expect(locking?.details.lockedForSeconds).toBeGreaterThan(0)
     expect(await codeOf(await changePassword(here, dave.password, 'another new password'))).toBe('TOO_MANY_ATTEMPTS')
     expect(await codeOf(await postLogin(app.baseUrl, { username: 'dave', password: dave.password }))).toBe('TOO_MANY_ATTEMPTS')
   })

@@ -8,6 +8,7 @@ import { onlineManager } from '@tanstack/react-query'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { z } from 'zod'
+import { SESSION_QUERY_KEY } from '../features/auth/index.ts'
 import { apiRequest } from '../shared/api/index.ts'
 import { apiError, installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
 import { currentPath, renderApp, sessionBus } from './render-app.test-support.tsx'
@@ -285,6 +286,19 @@ describe('会话的全局处理', () => {
     await screen.findByRole('form', { name: '登录' })
     await expect(app.queryClient.fetchQuery({ queryKey: ['other'], queryFn: async () => apiRequest('/api/other', { schema: z.object({}) }) })).rejects.toThrow()
     expect(app.page.visits).toEqual([])
+  })
+
+  it('会话查询重新请求时得到未登录（缓存里还留着上一次的会话）：转到登录页并停在那里，不在两页之间来回跳转', async () => {
+    let signedIn = true
+    installFakeApi({ ...NO_DOCUMENTS, 'GET /api/auth/session': () => (signedIn ? json(200, SESSION) : apiError(401, 'SESSION_EXPIRED')) })
+    const app = renderApp('/')
+    await screen.findByRole('heading', { name: '我的空间' })
+    signedIn = false
+    await app.queryClient.refetchQueries({ queryKey: SESSION_QUERY_KEY })
+    await screen.findByRole('form', { name: '登录' })
+    await settle()
+    expect(currentPath(app)).toBe('/login?reason=expired')
+    expect(screen.getByRole('form', { name: '登录' })).toBeInTheDocument()
   })
 
   it('同时有几个请求得到未登录：只跳转一次', async () => {

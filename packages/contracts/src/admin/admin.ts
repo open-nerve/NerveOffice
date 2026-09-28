@@ -69,6 +69,8 @@ export const invitationSchema = z.object({
   createdBy: userSummarySchema,
   acceptedAt: z.iso.datetime().nullable(),
   revokedAt: z.iso.datetime().nullable(),
+  /** 同一个登录名后来又签发过邀请（重发或重新签发）：界面只对最新的一条给出重新生成（审查 B6） */
+  superseded: z.boolean(),
 })
 
 export type Invitation = z.infer<typeof invitationSchema>

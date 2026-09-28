@@ -43,6 +43,7 @@ describe('管理界面的契约', () => {
       createdBy: { id: '0192f0c8-0000-7000-8000-000000000002', username: 'admin', displayName: '管理员' },
       acceptedAt: null,
       revokedAt: null,
+      superseded: false,
       token: 'secret',
     })
     expect(invitation).not.toHaveProperty('token')

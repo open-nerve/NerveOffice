@@ -2,13 +2,15 @@ import type { Invitation, InvitationStatus, IssuedInvitation } from '@nerve-offi
 import type { SyntheticEvent } from 'react'
 import type { PendingConfirmation } from './confirm-dialog.tsx'
 import type { IssuedLink } from './issued-link-dialog.tsx'
+import type { PagedTableHandle } from './paged-table.tsx'
 import { createInvitationRequestSchema, INVITATION_STATUSES } from '@nerve-office/contracts'
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useId, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { Alert, AlertDescription, Badge, Button, Input, Label, NativeSelect, TableCell } from '../../shared/ui/index.ts'
+import { SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
 import { ADMIN_QUERY_KEY, createInvitation, invitationsQueryOptions, reissueInvitation, revokeInvitation } from './admin-api.ts'
 import { ConfirmDialog } from './confirm-dialog.tsx'
 import { IssuedLinkDialog } from './issued-link-dialog.tsx'
@@ -23,13 +25,14 @@ const STATUS_VARIANTS: Record<InvitationStatus, 'default' | 'secondary' | 'destr
   revoked: 'destructive',
 }
 
-function linkOf(issued: IssuedInvitation): IssuedLink {
-  return { title: messages.admin.link.invitationTitle, recipient: `${issued.invitation.displayName}（${issued.invitation.username}）`, url: issued.url, expiresAt: issued.invitation.expiresAt }
+function linkOf(issued: IssuedInvitation, returnFocus: () => void): IssuedLink {
+  return { title: messages.admin.link.invitationTitle, recipient: `${issued.invitation.displayName}（${issued.invitation.username}）`, url: issued.url, expiresAt: issued.invitation.expiresAt, returnFocus }
 }
 
 /**
  * 管理界面：邀请（M2-P1 设计 §3.8，US-M2-01）。管理员填好登录名与显示名，生成一次性链接（只显示这一次）；
- * 列表按签发时间从新到旧，可按状态过滤；待接受或已过期的可以作废，未接受的可以重新生成（原来的随即作废）。
+ * 列表按签发时间从新到旧，可按状态过滤；待接受或已过期的可以作废。同一个登录名只对最新的一条（没有接受、后来也没有再签发过）
+ * 给出重新生成，原来的随即作废（审查 B6）。
  */
 export function AdminInvitationsPage() {
   const queryClient = useQueryClient()
@@ -40,6 +43,9 @@ export function AdminInvitationsPage() {
   const [problem, setProblem] = useState<string>()
   const [pending, setPending] = useState<PendingConfirmation>()
   const [issued, setIssued] = useState<IssuedLink>()
+  const usernameRef = useRef<HTMLInputElement>(null)
+  const statusRef = useRef<HTMLSelectElement>(null)
+  const tableRef = useRef<PagedTableHandle>(null)
   const usernameId = useId()
   const displayNameId = useId()
   const statusId = useId()
@@ -48,12 +54,20 @@ export function AdminInvitationsPage() {
     await queryClient.invalidateQueries({ queryKey: [...ADMIN_QUERY_KEY, 'invitations'] })
   }
 
+  /** 焦点回到这条邀请的那一行；这一行不在表里（例如按状态过滤掉了）时回到状态的筛选（审查 B9） */
+  function focusRow(id: string): void {
+    if (!(tableRef.current?.focusRow(id) ?? false))
+      statusRef.current?.focus()
+  }
+
   const creation = useMutation({
     mutationFn: createInvitation,
+    meta: SYSTEM_ADMIN_ONLY,
     onSuccess: async (result) => {
       setUsername('')
       setDisplayName('')
-      setIssued(linkOf(result))
+      // 清空之后提交按钮变成 disabled：焦点先进链接的弹窗，关闭之后回到登录名，接着签发下一个（审查 B9）
+      setIssued(linkOf(result, () => usernameRef.current?.focus()))
       await refresh()
     },
   })
@@ -71,12 +85,14 @@ export function AdminInvitationsPage() {
 
   function actionsOf(invitation: Invitation) {
     const open = invitation.status === 'pending' || invitation.status === 'expired'
+    const reissuable = invitation.status !== 'accepted' && !invitation.superseded
     return (
       <div className="flex flex-wrap gap-1">
         {open && (
           <Button
             variant="ghost"
             size="sm"
+            aria-label={messages.admin.actionOn(text.revoke, invitation.username)}
             onClick={() => setPending({
               title: text.confirmRevoke(invitation.username),
               description: text.revokeDescription,
@@ -86,23 +102,30 @@ export function AdminInvitationsPage() {
                 await revokeInvitation(invitation.id)
                 await refresh()
               },
+              // 作废之后这一行没有"作废"了
+              returnFocus: () => focusRow(invitation.id),
             })}
           >
             {text.revoke}
           </Button>
         )}
-        {invitation.status !== 'accepted' && (
+        {reissuable && (
           <Button
             variant="ghost"
             size="sm"
+            aria-label={messages.admin.actionOn(text.reissue, invitation.username)}
             onClick={() => setPending({
               title: text.confirmReissue(invitation.username),
               description: text.reissueDescription,
               confirmLabel: text.reissue,
               run: async () => {
-                setIssued(linkOf(await reissueInvitation(invitation.id)))
+                const result = await reissueInvitation(invitation.id)
                 await refresh()
+                // 列表刷新之后，确认的弹窗关掉的同时弹出链接：任何时刻只有一个弹窗（审查 B7）；关闭链接之后焦点到新的那一行
+                setPending(undefined)
+                setIssued(linkOf(result, () => focusRow(result.invitation.id)))
               },
+              returnFocus: () => focusRow(invitation.id),
             })}
           >
             {text.reissue}
@@ -125,7 +148,7 @@ export function AdminInvitationsPage() {
         <div className="flex flex-wrap items-end gap-3">
           <div className="flex min-w-40 flex-1 flex-col gap-2">
             <Label htmlFor={usernameId}>{text.username}</Label>
-            <Input id={usernameId} name="username" autoComplete="off" value={username} onChange={event => setUsername(event.target.value)} />
+            <Input ref={usernameRef} id={usernameId} name="username" autoComplete="off" value={username} onChange={event => setUsername(event.target.value)} />
           </div>
           <div className="flex min-w-40 flex-1 flex-col gap-2">
             <Label htmlFor={displayNameId}>{text.displayName}</Label>
@@ -139,12 +162,13 @@ export function AdminInvitationsPage() {
       </form>
       <div className="flex w-36 flex-col gap-2">
         <Label htmlFor={statusId}>{text.statusFilter}</Label>
-        <NativeSelect id={statusId} value={status} onChange={event => setStatus(event.target.value as InvitationStatus | '')}>
+        <NativeSelect ref={statusRef} id={statusId} value={status} onChange={event => setStatus(event.target.value as InvitationStatus | '')}>
           <option value="">{messages.common.all}</option>
           {INVITATION_STATUSES.map(value => <option key={value} value={value}>{text.statusName(value)}</option>)}
         </NativeSelect>
       </div>
       <PagedTable
+        ref={tableRef}
         query={invitations}
         label={text.listLabel}
         texts={text}

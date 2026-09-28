@@ -11,9 +11,18 @@ import { decodeAccountCursor, encodeAccountCursor } from './account-cursor.ts'
 import { PasswordHasher } from './password-hasher.ts'
 import { UsersRepository } from './users.repository.ts'
 
+/**
+ * 验证通过的凭据：账户，以及验证所用的哈希。验证在事务之外，事务里据此复核：验证之后改过密码、签发或完成了重置、
+ * 停用了，复核就不通过（M2-P1 审查 A1）。哈希只在这次请求的内存里，不写日志、不出现在响应里
+ */
+export interface VerifiedCredentials {
+  readonly user: User
+  readonly passwordHash: string
+}
+
 /** 用户名与密码的验证结果。失败时如果用户名对应的账户存在，带上它（审计的对象）；不区分"不存在"与"密码错误"。 */
 export type CredentialCheck
-  = | { readonly valid: true, readonly user: User }
+  = | { readonly valid: true, readonly credentials: VerifiedCredentials }
     | { readonly valid: false, readonly user?: User }
 
 /** 账户（P3 设计 §3.4）。 */
@@ -47,6 +56,14 @@ export class UsersService implements OnModuleInit {
     return this.repository.findById(id)
   }
 
+  /**
+   * 锁住账户的行再读（M2-P1 审查 A2）：改动这个账户的凭据、状态、重置与会话的事务，第一步都调它（停用与系统角色的变更
+   * 之前另有 advisory lock），在锁里复核状态，再动重置与会话的行。账户不存在时返回 undefined
+   */
+  async lockAccount(userId: string, transaction: Transaction): Promise<AccountRecord | undefined> {
+    return this.repository.lockRecord(userId, transaction)
+  }
+
   /** 按登录名（不区分大小写）取账户（含停用的）：运维命令用 */
   async findByUsername(usernameInput: string): Promise<User | undefined> {
     const username = usernameSchema.safeParse(usernameInput)
@@ -62,6 +79,7 @@ export class UsersService implements OnModuleInit {
   /**
    * 按用户名（不区分大小写）与密码验证。不论账户是否存在、是否可用，都做一次哈希计算；验证失败的计算量由哈希器补齐，
    * 账户的哈希参数与当前配置不同时，失败的耗时也与"用户名不存在"相同（Codex 评审 CX4）。
+   * 停用的账户对假哈希验证：密码对不对，耗时都一样，不暴露账户已停用（M2-P1 审查 A8）。
    * 验证通过且哈希的参数已经过时，顺带用当前的参数重新哈希（失败只记日志，不影响这次登录）。
    */
   async verifyCredentials(usernameInput: string, password: string): Promise<CredentialCheck> {
@@ -69,16 +87,23 @@ export class UsersService implements OnModuleInit {
     await this.observeStoredParameters()
     const username = usernameSchema.safeParse(usernameInput)
     const credentials = username.success ? await this.repository.findCredentialsByUsername(username.data) : undefined
-    if (credentials === undefined) {
+    if (credentials === undefined || credentials.user.status !== 'active') {
       await this.hasher.verify(await this.dummyHash(), password)
-      return { valid: false }
+      return credentials === undefined ? { valid: false } : { valid: false, user: credentials.user }
     }
-    const matches = await this.hasher.verify(credentials.passwordHash, password)
-    if (!matches || credentials.user.status !== 'active')
+    if (!await this.hasher.verify(credentials.passwordHash, password))
       return { valid: false, user: credentials.user }
-    if (this.hasher.needsRehash(credentials.passwordHash))
-      await this.rehash(credentials.user, password)
-    return { valid: true, user: credentials.user }
+    return { valid: true, credentials: this.hasher.needsRehash(credentials.passwordHash) ? await this.rehash(credentials, password) : credentials }
+  }
+
+  /**
+   * 登录的事务里复核验证过的凭据（M2-P1 审查 A1）：锁住账户行（FOR SHARE，到提交为止），要求账户仍然有效、
+   * 哈希还是验证时的那个。修改密码、签发与完成重置、停用都先锁这一行：它们先提交，这里复核就不通过；
+   * 这里先提交，它们随后撤销的会话就包括这次新建的
+   */
+  async holdCredentials(credentials: VerifiedCredentials, transaction: Transaction): Promise<boolean> {
+    const locked = await this.repository.lockCredentials(credentials.user.id, 'share', transaction)
+    return locked?.status === 'active' && locked.passwordHash === credentials.passwordHash
   }
 
   /** 新密码的哈希（修改、重置、接受邀请）：计算密集，调用方放在事务之外。等待哈希的请求太多时抛 PasswordHashingBusyError */
@@ -87,19 +112,40 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
-   * 按 id 验证密码（修改密码时的旧密码，M2-P1 设计 §3.5）。账户不存在或不可用时同样算一次哈希，
-   * 失败的耗时由哈希器补齐，与登录相同（ADR-007）
+   * 让当前密码失效用的哈希（签发重置时，M2-P1 审查 A7）：随机的秘密算出的 Argon2id 哈希，秘密随即丢弃，
+   * 谁也不知道对应的密码；格式仍满足表上的 CHECK。计算密集，调用方放在事务之外
    */
-  async verifyPasswordOf(userId: string, password: string): Promise<boolean> {
+  async unusablePasswordHash(): Promise<string> {
+    return this.hasher.hash(randomBytes(32).toString('base64url'))
+  }
+
+  /**
+   * 按 id 验证密码（修改密码时的旧密码，M2-P1 设计 §3.5）。账户不存在或不可用时同样算一次哈希，
+   * 失败的耗时由哈希器补齐，与登录相同（ADR-007）。通过时返回验证过的凭据，事务里交给 replacePassword 复核
+   */
+  async verifyPasswordOf(userId: string, password: string): Promise<VerifiedCredentials | undefined> {
     await this.observeStoredParameters()
     const credentials = await this.repository.findCredentialsById(userId)
     if (credentials === undefined || credentials.user.status !== 'active') {
       await this.hasher.verify(await this.dummyHash(), password)
-      return false
+      return undefined
     }
-    return this.hasher.verify(credentials.passwordHash, password)
+    return await this.hasher.verify(credentials.passwordHash, password) ? credentials : undefined
   }
 
+  /**
+   * 修改密码（M2-P1 审查 A1、A2）：锁住账户行，复核账户仍然有效、哈希还是验证旧密码时的那个，再换成新的哈希。
+   * 验证之后改过密码、签发或完成了重置、停用了，返回 false，什么都不改
+   */
+  async replacePassword(credentials: VerifiedCredentials, passwordHash: string, transaction: Transaction): Promise<boolean> {
+    const locked = await this.repository.lockCredentials(credentials.user.id, 'no key update', transaction)
+    if (locked?.status !== 'active' || locked.passwordHash !== credentials.passwordHash)
+      return false
+    await this.repository.updatePasswordHash(credentials.user.id, passwordHash, transaction)
+    return true
+  }
+
+  /** 设置密码的哈希（完成重置；签发重置时让当前密码失效）。调用方已用 lockAccount 锁住这个账户的行 */
   async setPasswordHash(userId: string, passwordHash: string, transaction: Transaction): Promise<void> {
     await this.repository.updatePasswordHash(userId, passwordHash, transaction)
   }
@@ -107,10 +153,12 @@ export class UsersService implements OnModuleInit {
   /**
    * 停用（M2-P1 设计 §3.5）。已经停用的原样返回（changed 为假）。
    * 停用有效的系统管理员时，要求还有别的有效系统管理员（LAST_ADMIN）。
-   * 锁的顺序固定为先 advisory lock、再账户的行锁，与系统角色的变更相同，互相等待时不成环
+   * 锁的顺序固定为先 advisory lock、再账户的行锁，与系统角色的变更相同，互相等待时不成环。
+   * 操作者在锁里复核仍是有效的系统管理员（审查 A12）：会话守卫检查之后、取到锁之前，他可能刚被取消或停用
    */
-  async disable(userId: string, transaction: Transaction): Promise<AccountChange> {
+  async disable(userId: string, actorId: string, transaction: Transaction): Promise<AccountChange> {
     await this.repository.lockSystemAdmins(transaction)
+    await this.requireActingAdmin(actorId, transaction)
     const account = await this.lockedAccount(userId, transaction)
     if (account.status === 'disabled')
       return { account, changed: false }
@@ -129,10 +177,11 @@ export class UsersService implements OnModuleInit {
 
   /**
    * 授予或取消系统管理员（M2-P1 设计 §3.5）：只有有效的账户能被授予（ACCOUNT_DISABLED）；
-   * 取消有效的系统管理员时，要求还有别的有效系统管理员（LAST_ADMIN）
+   * 取消有效的系统管理员时，要求还有别的有效系统管理员（LAST_ADMIN）。操作者在锁里复核，同停用
    */
-  async changeSystemRole(userId: string, systemRole: UserSystemRole, transaction: Transaction): Promise<AccountChange> {
+  async changeSystemRole(userId: string, systemRole: UserSystemRole, actorId: string, transaction: Transaction): Promise<AccountChange> {
     await this.repository.lockSystemAdmins(transaction)
+    await this.requireActingAdmin(actorId, transaction)
     const account = await this.lockedAccount(userId, transaction)
     if (account.systemRole === systemRole)
       return { account, changed: false }
@@ -167,10 +216,20 @@ export class UsersService implements OnModuleInit {
   }
 
   private async lockedAccount(userId: string, transaction: Transaction): Promise<AccountRecord> {
-    const account = await this.repository.findRecordForUpdate(userId, transaction)
+    const account = await this.repository.lockRecord(userId, transaction)
     if (account === undefined)
       throw new AppError('NOT_FOUND')
     return account
+  }
+
+  /**
+   * 调用方已取 system-admins 的锁：谁是有效的系统管理员，只有持这个锁的事务能改（启用只让管理员变多，不影响这里），
+   * 所以不用再锁操作者的行
+   */
+  private async requireActingAdmin(actorId: string, transaction: Transaction): Promise<void> {
+    const actor = await this.repository.findById(actorId, transaction)
+    if (actor?.status !== 'active' || actor.systemRole !== 'admin')
+      throw new AppError('PERMISSION_DENIED')
   }
 
   private async requireAnotherActiveAdmin(userId: string, transaction: Transaction): Promise<void> {
@@ -178,12 +237,18 @@ export class UsersService implements OnModuleInit {
       throw new AppError('LAST_ADMIN')
   }
 
-  private async rehash(user: User, password: string): Promise<void> {
+  /**
+   * 按当前参数重新哈希，哈希还是验证时的那个才换（审查 A3）。换了就返回带新哈希的凭据，事务里按它复核；
+   * 没换（期间改过密码）或失败时返回原来的凭据。失败只记日志，下次登录时再试
+   */
+  private async rehash(credentials: VerifiedCredentials, password: string): Promise<VerifiedCredentials> {
     try {
-      await this.repository.updatePasswordHash(user.id, await this.hasher.hash(password))
+      const passwordHash = await this.hasher.hash(password)
+      return await this.repository.replacePasswordHash(credentials.user.id, credentials.passwordHash, passwordHash) ? { ...credentials, passwordHash } : credentials
     }
     catch (error) {
-      this.#logger.warn('用新参数重新哈希密码失败，下次登录时再试', { err: error, userId: user.id })
+      this.#logger.warn('用新参数重新哈希密码失败，下次登录时再试', { err: error, userId: credentials.user.id })
+      return credentials
     }
   }
 

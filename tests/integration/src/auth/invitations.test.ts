@@ -4,7 +4,7 @@ import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
-import { errorResponseSchema, inspectLinkResponseSchema, invitationListResponseSchema, invitationSchema, issuedInvitationSchema, sessionResponseSchema } from '@nerve-office/contracts'
+import { errorResponseSchema, inspectLinkResponseSchema, invitationListResponseSchema, invitationSchema, issuedInvitationSchema, issuedPasswordResetSchema, sessionResponseSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -160,11 +160,72 @@ describe('US-M2-01 邀请注册：登录名冲突、过期、作废、重发', (
     const response = await asUser(app.baseUrl, adminSession, `/api/admin/invitations/${first.invitation.id}/reissue`, { method: 'POST' })
     expect(response.status).toBe(201)
     const second = parseExact(issuedInvitationSchema, await response.json())
-    expect(second.invitation).toMatchObject({ username: 'jon', displayName: '乔恩', status: 'pending' })
+    expect(second.invitation).toMatchObject({ username: 'jon', displayName: '乔恩', status: 'pending', superseded: false })
     expect(await linkInvalidReasonOf(await inspect(first.token))).toBe('revoked')
+    expect(await auditRows('action = \'users.invited\' AND target_id = $1', [second.invitation.id])).toMatchObject([{ details: { username: 'jon', reissuedFrom: first.invitation.id } }])
+    // 列表里旧的一条已被替代（审查 B6）：界面只对最新的一条给出重新生成
+    const listed = parseExact(invitationListResponseSchema, await (await asUser(app.baseUrl, adminSession, '/api/admin/invitations')).json())
+    expect(listed.items.find(item => item.id === first.invitation.id)).toMatchObject({ status: 'revoked', superseded: true })
+    expect(listed.items.find(item => item.id === second.invitation.id)).toMatchObject({ status: 'pending', superseded: false })
     expect((await accept(tokenOf(second.url))).status).toBe(200)
     const again = await asUser(app.baseUrl, adminSession, `/api/admin/invitations/${second.invitation.id}/reissue`, { method: 'POST' })
     expect(await codeOf(again)).toBe('USERNAME_TAKEN')
+  })
+
+  it('重发已作废或已过期的邀请：签发新的；作废的不再记一次作废，过期的随重发作废', async () => {
+    const revoked = await invite('ned')
+    expect((await asUser(app.baseUrl, adminSession, `/api/admin/invitations/${revoked.invitation.id}/revoke`, { method: 'POST' })).status).toBe(200)
+    const fromRevoked = await asUser(app.baseUrl, adminSession, `/api/admin/invitations/${revoked.invitation.id}/reissue`, { method: 'POST' })
+    expect(fromRevoked.status).toBe(201)
+    expect((await inspect(tokenOf(parseExact(issuedInvitationSchema, await fromRevoked.json()).url))).status).toBe(200)
+    expect(await auditRows('action = \'users.invitation_revoked\' AND target_id = $1', [revoked.invitation.id])).toHaveLength(1)
+
+    const expired = await invite('ola')
+    await database.query(async client => client.query('UPDATE auth_invitations SET created_at = now() - interval \'8 days\', expires_at = now() - interval \'1 day\' WHERE id = $1', [expired.invitation.id]))
+    const fromExpired = await asUser(app.baseUrl, adminSession, `/api/admin/invitations/${expired.invitation.id}/reissue`, { method: 'POST' })
+    expect(fromExpired.status).toBe(201)
+    expect(await auditRows('action = \'users.invitation_revoked\' AND target_id = $1', [expired.invitation.id])).toMatchObject([{ details: { reissued: true } }])
+  })
+
+  it('作废已接受的邀请：原样返回（已接受），不记审计', async () => {
+    const issued = await invite('pam')
+    expect((await accept(issued.token)).status).toBe(200)
+    const response = await asUser(app.baseUrl, adminSession, `/api/admin/invitations/${issued.invitation.id}/revoke`, { method: 'POST' })
+    expect(response.status).toBe(200)
+    expect(parseExact(invitationSchema, await response.json())).toMatchObject({ status: 'accepted', revokedAt: null })
+    expect(await auditRows('action = \'users.invitation_revoked\' AND target_id = $1', [issued.invitation.id])).toEqual([])
+  })
+
+  it('请求不合法：签发时登录名或显示名不符合规则 400；作废与重发的 id 不是 UUID 400、不存在 404', async () => {
+    const post = async (path: string, body?: unknown) => asUser(app.baseUrl, adminSession, path, { method: 'POST', body })
+    expect(await codeOf(await post('/api/admin/invitations', { username: 'a b', displayName: '名字' }))).toBe('REQUEST_INVALID')
+    expect(await codeOf(await post('/api/admin/invitations', { username: 'valid-name', displayName: '' }))).toBe('REQUEST_INVALID')
+    expect(await codeOf(await post('/api/admin/invitations', { username: 'valid-name', displayName: '名字', systemRole: 'admin' }))).toBe('REQUEST_INVALID')
+    expect(await codeOf(await post('/api/admin/invitations/not-a-uuid/revoke'))).toBe('REQUEST_INVALID')
+    expect(await codeOf(await post('/api/admin/invitations/not-a-uuid/reissue'))).toBe('REQUEST_INVALID')
+    expect(await codeOf(await post('/api/admin/invitations/0192f0c8-0000-7000-8000-00000000dead/revoke'))).toBe('NOT_FOUND')
+    expect(await codeOf(await post('/api/admin/invitations/0192f0c8-0000-7000-8000-00000000dead/reissue'))).toBe('NOT_FOUND')
+    expect(await codeOf(await postPublic(app.baseUrl, '/api/auth/invitations/inspect', { token: 'A'.repeat(1_000) }))).toBe('REQUEST_INVALID')
+  })
+
+  it('列表按四种状态过滤：待接受、已接受、已过期（到期而没有处理）、已作废，各自只给这一种', async () => {
+    const pending = await invite('st-pending')
+    const accepted = await invite('st-accepted')
+    expect((await accept(accepted.token)).status).toBe(200)
+    const expired = await invite('st-expired')
+    await database.query(async client => client.query('UPDATE auth_invitations SET created_at = now() - interval \'8 days\', expires_at = now() - interval \'1 day\' WHERE id = $1', [expired.invitation.id]))
+    const revoked = await invite('st-revoked')
+    await asUser(app.baseUrl, adminSession, `/api/admin/invitations/${revoked.invitation.id}/revoke`, { method: 'POST' })
+    const expectations = [['pending', pending], ['accepted', accepted], ['expired', expired], ['revoked', revoked]] as const
+    for (const [status, issued] of expectations) {
+      const list = parseExact(invitationListResponseSchema, await (await asUser(app.baseUrl, adminSession, `/api/admin/invitations?status=${status}`)).json())
+      expect(list.items.every(item => item.status === status), status).toBe(true)
+      expect(list.items.map(item => item.id), status).toContain(issued.invitation.id)
+      for (const [other, otherIssued] of expectations) {
+        if (other !== status)
+          expect(list.items.map(item => item.id), `${status} 里不应有 ${other}`).not.toContain(otherIssued.invitation.id)
+      }
+    }
   })
 
   it('列表：按签发时间从新到旧，状态按到期与处理结果算出，可按状态过滤；响应里没有令牌', async () => {
@@ -216,18 +277,33 @@ describe('US-M2-01 邀请注册：并发、无效的令牌、访问控制', () =
 })
 
 describe('US-M2-01 一次性链接的尝试限流', () => {
-  it('同一个地址连续用错令牌达到上限后被锁定（429）；登录不受影响（计数分开）', async () => {
+  it('令牌可用就退回名额：同一个地址先查看、接受、完成若干次，再连续用错令牌，仍到第 3 次才锁定（429）；锁定期间不写审计；登录不受影响（计数分开）', async () => {
     const limited = await createTestDatabase()
     const limitedApp = await startTestApp({ databaseUrl: limited.url, env: { NERVE_LOGIN_IP_MAX_FAILURES: '3' } })
     try {
+      const boss = await createAccount(limited, { username: 'boss', systemRole: 'admin' })
       const person = await createAccount(limited, { username: 'someone' })
+      const bossSession = await login(limitedApp.baseUrl, 'boss', boss.password)
+      const invited = parseExact(issuedInvitationSchema, await (await asUser(limitedApp.baseUrl, bossSession, '/api/admin/invitations', { method: 'POST', body: { username: 'newbie', displayName: '新人' } })).json())
+      const reset = parseExact(issuedPasswordResetSchema, await (await asUser(limitedApp.baseUrl, bossSession, `/api/admin/users/${person.id}/password-reset`, { method: 'POST' })).json())
+      // 可用的尝试：比上限还多，名额都退回了（审查 A5）
+      for (let attempt = 0; attempt < 4; attempt += 1)
+        expect((await postPublic(limitedApp.baseUrl, '/api/auth/invitations/inspect', { token: tokenOf(invited.url) })).status).toBe(200)
+      expect((await postPublic(limitedApp.baseUrl, '/api/auth/invitations/accept', { token: tokenOf(invited.url), displayName: '新人', password: 'a good long password' })).status).toBe(200)
+      expect((await postPublic(limitedApp.baseUrl, '/api/auth/password-resets/complete', { token: tokenOf(reset.url), password: 'someone new password' })).status).toBe(200)
+
       for (let attempt = 0; attempt < 2; attempt += 1)
         expect((await postPublic(limitedApp.baseUrl, '/api/auth/invitations/inspect', { token: 'B'.repeat(43) })).status).toBe(410)
       const third = await postPublic(limitedApp.baseUrl, '/api/auth/invitations/inspect', { token: 'B'.repeat(43) })
       expect(third.status).toBe(429)
       expect(third.headers.get('retry-after')).not.toBeNull()
+      const rejectedCount = async () => limited.query(async client => (await client.query<{ count: number }>('SELECT count(*)::int AS count FROM audit_events WHERE action = \'auth.link_rejected\'')).rows[0]?.count)
+      expect(await rejectedCount()).toBe(3)
       expect((await postPublic(limitedApp.baseUrl, '/api/auth/invitations/inspect', { token: 'B'.repeat(43) })).status).toBe(429)
-      expect((await postPublic(limitedApp.baseUrl, '/api/auth/login', { username: 'someone', password: person.password })).status).toBe(200)
+      expect((await postPublic(limitedApp.baseUrl, '/api/auth/password-resets/complete', { token: 'B'.repeat(43), password: 'whatever long password' })).status).toBe(429)
+      // 锁定期间只记日志，不写审计（审查 A5）
+      expect(await rejectedCount()).toBe(3)
+      expect((await postPublic(limitedApp.baseUrl, '/api/auth/login', { username: 'someone', password: 'someone new password' })).status).toBe(200)
     }
     finally {
       await limitedApp.close()

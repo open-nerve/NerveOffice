@@ -19,6 +19,12 @@ export interface UserCredentials {
   readonly passwordHash: string
 }
 
+/** 锁住的账户行里复核用的两列 */
+export interface LockedCredentials {
+  readonly status: UserStatus
+  readonly passwordHash: string
+}
+
 const USER_COLUMNS = {
   id: users.id,
   username: users.username,
@@ -57,8 +63,8 @@ export class UsersRepository {
     return row
   }
 
-  async findById(id: string): Promise<User | undefined> {
-    const [row] = await this.db.select(USER_COLUMNS).from(users).where(eq(users.id, id))
+  async findById(id: string, transaction?: Transaction): Promise<User | undefined> {
+    const [row] = await executorOf(this.db, transaction).select(USER_COLUMNS).from(users).where(eq(users.id, id))
     return row
   }
 
@@ -93,8 +99,22 @@ export class UsersRepository {
     await executorOf(this.db, transaction).execute(sql`SELECT pg_advisory_xact_lock(hashtextextended('nerve-office:admin-initialization', 0))`)
   }
 
-  async updatePasswordHash(id: string, passwordHash: string, transaction?: Transaction): Promise<void> {
+  /** 调用方已在事务里锁住这个账户的行（lockRecord、lockCredentials） */
+  async updatePasswordHash(id: string, passwordHash: string, transaction: Transaction): Promise<void> {
     await executorOf(this.db, transaction).update(users).set({ passwordHash, updatedAt: sql`now()` }).where(eq(users.id, id))
+  }
+
+  /**
+   * 哈希还是 expected 时才换成 next（登录时按新参数重新哈希，审查 A3）：验证之后密码改过、重置过，
+   * 就不能用旧密码算出的新哈希覆盖回去。返回是否换了
+   */
+  async replacePasswordHash(id: string, expected: string, next: string): Promise<boolean> {
+    const rows = await this.db
+      .update(users)
+      .set({ passwordHash: next, updatedAt: sql`now()` })
+      .where(and(eq(users.id, id), eq(users.passwordHash, expected)))
+      .returning({ id: users.id })
+    return rows.length > 0
   }
 
   async findCredentialsById(id: string): Promise<UserCredentials | undefined> {
@@ -112,9 +132,26 @@ export class UsersRepository {
     return this.db.select(USER_COLUMNS).from(users).where(inArray(users.id, [...ids]))
   }
 
-  /** 锁住这个账户的行再读：状态与系统角色的变更在事务里串行 */
-  async findRecordForUpdate(id: string, transaction: Transaction): Promise<AccountRecord | undefined> {
-    const [row] = await executorOf(this.db, transaction).select(RECORD_COLUMNS).from(users).where(eq(users.id, id)).for('update')
+  /**
+   * 锁住这个账户的行再读（FOR NO KEY UPDATE）：改动凭据、状态、系统角色、重置与会话的事务第一步都锁它，
+   * 顺序统一，互相等待时不成环（ADR-007，审查 A2）。不用 FOR UPDATE：它与外键检查取的 FOR KEY SHARE 冲突，
+   * 新建会话、重置、邀请时都要等它
+   */
+  async lockRecord(id: string, transaction: Transaction): Promise<AccountRecord | undefined> {
+    const [row] = await executorOf(this.db, transaction).select(RECORD_COLUMNS).from(users).where(eq(users.id, id)).for('no key update')
+    return row
+  }
+
+  /**
+   * 锁住这个账户的行，读出状态与哈希（审查 A1）：登录用 share（到提交之前，改密码、重置、停用都要等它），
+   * 修改密码用 no key update（接着就改哈希）
+   */
+  async lockCredentials(id: string, strength: 'share' | 'no key update', transaction: Transaction): Promise<LockedCredentials | undefined> {
+    const [row] = await executorOf(this.db, transaction)
+      .select({ status: users.status, passwordHash: users.passwordHash })
+      .from(users)
+      .where(eq(users.id, id))
+      .for(strength)
     return row
   }
 

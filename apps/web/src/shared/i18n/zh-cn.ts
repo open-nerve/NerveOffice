@@ -13,6 +13,7 @@ const ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
   CURRENT_PASSWORD_INCORRECT: '当前密码不正确',
   NOT_FOUND: '内容不存在，或者你没有访问权限',
   LAST_ADMIN: '至少要保留一个有效的系统管理员',
+  USERNAME_TAKEN: '这个登录名已被账户占用，或者已有待接受的邀请',
   ACCOUNT_DISABLED: '这个账户已停用',
   LINK_INVALID: '链接无效或已失效，请联系管理员重新发送',
   DOCUMENT_REVISION_CONFLICT: '别处保存了更新的版本',
@@ -41,6 +42,12 @@ const LINK_INVALID_MESSAGES: Record<OneTimeLinkPurpose, Record<LinkInvalidReason
   },
 }
 
+/** 地址里没有一次性链接的令牌（例如令牌去掉之后刷新了页面）：要重新打开发来的链接（审查 B10） */
+const LINK_MISSING_MESSAGES: Record<OneTimeLinkPurpose, string> = {
+  invitation: '请重新打开发给你的邀请链接。为了安全，链接打开之后会从地址栏里去掉，所以刷新页面后要重新打开它。',
+  password_reset: '请重新打开发给你的重置链接。为了安全，链接打开之后会从地址栏里去掉，所以刷新页面后要重新打开它。',
+}
+
 /** 审计动作的名称（M2-P1 设计 §3.7）；前端还不认识的动作显示原文 */
 const AUDIT_ACTION_NAMES: Record<AuditAction, string> = {
   'auth.login_succeeded': '登录成功',
@@ -52,6 +59,7 @@ const AUDIT_ACTION_NAMES: Record<AuditAction, string> = {
   'users.invitation_revoked': '作废邀请',
   'users.invitation_accepted': '接受邀请',
   'users.password_changed': '修改密码',
+  'users.password_change_failed': '修改密码失败',
   'users.password_reset_issued': '签发重置链接',
   'users.password_reset_completed': '重置密码',
   'users.disabled': '停用账户',
@@ -72,6 +80,7 @@ const DOCUMENT_TYPE_NAMES: Record<DocumentType, string> = {
 export const messages = {
   app: {
     name: 'NerveOffice',
+    navigating: '正在打开页面…',
   },
   common: {
     retry: '重试',
@@ -132,6 +141,7 @@ export const messages = {
       },
       submitting: '正在设置…',
       invalid: (purpose: OneTimeLinkPurpose, reason: LinkInvalidReason) => LINK_INVALID_MESSAGES[purpose][reason],
+      missing: (purpose: OneTimeLinkPurpose) => LINK_MISSING_MESSAGES[purpose],
     },
   },
   admin: {
@@ -140,6 +150,8 @@ export const messages = {
     nav: { users: '账户', invitations: '邀请', audit: '审计' },
     noPermission: '只有系统管理员能打开管理界面。',
     working: '正在处理…',
+    /** 表格里每行的操作按钮的可读名称：带上对象，例如"停用 艾米（amy）"（审查 B14） */
+    actionOn: (action: string, target: string) => `${action} ${target}`,
     roleName: (role: UserSystemRole) => ({ admin: '系统管理员', member: '成员' })[role],
     statusName: (status: UserStatus) => ({ active: '有效', disabled: '已停用' })[status],
     users: {
@@ -157,14 +169,22 @@ export const messages = {
       resetPassword: '生成重置链接',
       confirmDisable: (name: string) => `停用 ${name}？`,
       disableDescription: '停用后，这个人立即不能访问任何页面与接口，也不能登录。随时可以重新启用。',
+      // 对自己的操作另给说明（审查 B4）：停用自己之后本人立即退出，只能由另一位系统管理员重新启用
+      confirmDisableOwn: '停用你自己的账户？',
+      disableOwnDescription: '停用后你立即退出，不能再登录，只能由另一位系统管理员重新启用。至少要保留一个有效的系统管理员。',
       confirmEnable: (name: string) => `启用 ${name}？`,
       enableDescription: '启用后这个人可以照常登录，个人空间与文档都没有变。',
       confirmGrantAdmin: (name: string) => `把 ${name} 设为系统管理员？`,
       grantAdminDescription: '系统管理员可以管理账户、邀请与审计，默认看不到任何人的文档内容。',
       confirmRevokeAdmin: (name: string) => `取消 ${name} 的系统管理员？`,
       revokeAdminDescription: '取消后这个人不能再打开管理界面。至少要保留一个有效的系统管理员。',
+      confirmRevokeOwnAdmin: '取消你自己的系统管理员？',
+      revokeOwnAdminDescription: '取消后你立即不能再打开管理界面，只能由另一位系统管理员重新授予。至少要保留一个有效的系统管理员。',
+      // 签发重置链接时，服务端把这个账户的密码换成不可用的，并撤销这个人的全部会话（审查 A7、A12）
       confirmReset: (name: string) => `为 ${name} 生成重置链接？`,
-      resetDescription: '生成后，这个人在各处的登录立即退出。链接 24 小时内有效，只能用一次。',
+      resetDescription: (hours: number) => `生成后，这个人的当前密码立即失效，所有地方的登录都会退出。链接 ${hours} 小时内有效，只显示这一次，请交给本人。`,
+      confirmResetOwn: '为你自己生成重置链接？',
+      resetOwnDescription: (hours: number) => `生成后，你自己的登录会立即退出，当前密码随即失效，之后用这个链接设置新密码。链接 ${hours} 小时内有效，只显示这一次，请先复制保存。`,
     },
     invitations: {
       description: '填好登录名与显示名，生成一次性链接（7 天内有效），经受控的渠道发给本人。',
@@ -195,6 +215,7 @@ export const messages = {
       copy: '复制链接',
       copied: '已复制',
       copyFailed: '复制失败，请选中链接后手动复制',
+      ownResetNote: '你的登录已经退出：关闭之后回到登录页，打开这个链接设置新密码。',
     },
     audit: {
       from: '开始时间',
@@ -202,7 +223,12 @@ export const messages = {
       action: '动作',
       actor: '操作者',
       searchActor: '按名字找操作者',
+      searchingActor: '正在查找…',
+      noActor: '没有找到这个人',
+      actorSearchFailed: (reason: string) => `查找失败：${reason}`,
       clear: '清除',
+      clearActor: '清除操作者的筛选',
+      clearTarget: '清除对象的筛选',
       listLabel: '审计事件',
       loading: '正在加载审计事件…',
       loadFailed: '审计事件加载失败',

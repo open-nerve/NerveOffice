@@ -22,10 +22,12 @@ export function UserMenu({ children }: { readonly children?: ReactNode }) {
       mutation.mutate()
   }
   return (
-    <div className="flex items-center gap-3">
-      {session.data !== undefined && <span className="text-sm text-muted-foreground">{session.data.user.displayName}</span>}
+    // 窄屏时只有名字收窄成省略号，完整的名字在 title 里（M2-P1 审查 B11）；按钮与入口不收窄
+    <div className="flex min-w-0 items-center gap-3">
+      {session.data !== undefined && <span className="min-w-0 truncate text-sm text-muted-foreground" title={session.data.user.displayName}>{session.data.user.displayName}</span>}
       {children}
-      {failure !== undefined && <span role="alert" className="text-sm text-destructive">{messages.auth.logoutFailed(failure)}</span>}
+      {/* 退出失败的说明同样可以收窄（读屏照常读出全文），窄屏时不把页头撑破 */}
+      {failure !== undefined && <span role="alert" className="min-w-0 truncate text-sm text-destructive" title={messages.auth.logoutFailed(failure)}>{messages.auth.logoutFailed(failure)}</span>}
       {/* 进行中用 aria-disabled：按钮变成 disabled 时浏览器把焦点丢到 body（审查 B13）；重复点击由 leaving 挡住 */}
       <Button variant="outline" size="sm" aria-disabled={leaving} onClick={signOut}>
         {leaving ? messages.auth.loggingOut : messages.auth.logout}

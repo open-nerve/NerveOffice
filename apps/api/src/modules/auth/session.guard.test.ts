@@ -14,11 +14,15 @@ import { csrfTokenFor, generateSessionToken } from './session-token.ts'
 import { SessionGuard } from './session.guard.ts'
 
 const ALICE: User = { id: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d', username: 'alice', displayName: '爱丽丝', systemRole: 'member', status: 'active' }
-const SESSION: AuthenticatedSession = { id: '0199a2c4-2a3b-7c4d-9e5f-6a7b8c9d0e1f', userId: ALICE.id }
+const SESSION: AuthenticatedSession = { id: '0199a2c4-2a3b-7c4d-9e5f-6a7b8c9d0e1f', userId: ALICE.id, stale: true }
 
 function setup(options: { isPublic?: boolean, adminOnly?: boolean, session?: AuthenticatedSession, user?: User } = {}) {
   const reflector = { getAllAndOverride: vi.fn((key: string) => (key === PUBLIC_ROUTE ? options.isPublic : key === SYSTEM_ADMIN_ROUTE ? options.adminOnly : undefined)) }
-  const sessions = { authenticate: vi.fn(async (_token: string) => options.session) }
+  const sessions = {
+    authenticate: vi.fn(async (_token: string) => options.session),
+    keepAlive: vi.fn(async (_session: AuthenticatedSession) => {}),
+    revoke: vi.fn(async (_id: string, _reason: string) => {}),
+  }
   const users = { findActiveById: vi.fn(async (_id: string) => options.user) }
   const cookie = new SessionCookieSettings('http://127.0.0.1:4100', 60_000)
   const guard = new SessionGuard(reflector as unknown as Reflector, sessions as unknown as SessionService, users as unknown as UsersService, cookie)
@@ -85,12 +89,14 @@ describe('SessionGuard', () => {
     expect(users.findActiveById).not.toHaveBeenCalled()
   })
 
-  it('会话有效但账户已不可用（停用或删除）：SESSION_EXPIRED 并清除', async () => {
-    const { guard, users } = setup({ session: SESSION, user: undefined })
+  it('会话有效但账户已不可用（停用或删除）：SESSION_EXPIRED 并清除；会话一并撤销、不顺延（审查 A1）', async () => {
+    const { guard, users, sessions } = setup({ session: SESSION, user: undefined })
     const { context, response } = exchange(`nerve_session=${generateSessionToken()}`)
     expect(await codeOf(guard.canActivate(context))).toBe('SESSION_EXPIRED')
     expect(users.findActiveById).toHaveBeenCalledWith(ALICE.id)
     expect(response.clearCookie).toHaveBeenCalled()
+    expect(sessions.revoke).toHaveBeenCalledWith(SESSION.id, 'disabled')
+    expect(sessions.keepAlive).not.toHaveBeenCalled()
   })
 
   it('有效：挂上当前用户、会话与派生的 CSRF 令牌，请求日志带上 userId', async () => {
@@ -100,6 +106,8 @@ describe('SessionGuard', () => {
     const requestLog = request.log
     expect(await guard.canActivate(context)).toBe(true)
     expect(sessions.authenticate).toHaveBeenCalledWith(token)
+    expect(sessions.keepAlive).toHaveBeenCalledWith(SESSION)
+    expect(sessions.revoke).not.toHaveBeenCalled()
     expect(principalOf(request)).toEqual({ user: ALICE, sessionId: SESSION.id, csrfToken: csrfTokenFor(token) })
     expect(requestUserId(request)).toBe(ALICE.id)
     expect(logChild).toHaveBeenCalledWith({ userId: ALICE.id })

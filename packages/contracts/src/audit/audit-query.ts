@@ -2,14 +2,20 @@ import { z } from 'zod'
 import { AUDIT_ACTIONS, AUDIT_TARGET_TYPES } from './audit.ts'
 
 /**
+ * 查询条件里的时刻：ISO 8601（UTC），年份至少是 1。z.iso.datetime 与 JavaScript 的 Date 都接受 0 年，
+ * PostgreSQL 没有 0 年，查询会报错变成 500（M2-P1 审查 A4，与 P3 审查 A3 同类）
+ */
+const instantSchema = z.iso.datetime().refine(value => !value.startsWith('0000'), '年份至少是 1')
+
+/**
  * 审计查询（GET /api/admin/audit-events，M2-P1 设计 §3.7）：只给系统管理员。
  * 条件之间是"并且"；按时间与 id 倒序，游标是服务端给出的不透明字符串。
  */
 export const auditEventQuerySchema = z.strictObject({
   /** 含 */
-  from: z.iso.datetime().optional(),
+  from: instantSchema.optional(),
   /** 不含 */
-  to: z.iso.datetime().optional(),
+  to: instantSchema.optional(),
   actorId: z.uuid().optional(),
   action: z.enum(AUDIT_ACTIONS).optional(),
   targetType: z.enum(AUDIT_TARGET_TYPES).optional(),

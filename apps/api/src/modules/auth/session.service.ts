@@ -14,6 +14,8 @@ export interface CreatedSession {
 export interface AuthenticatedSession {
   readonly id: string
   readonly userId: string
+  /** 距上次记录活动已超过 1 分钟：keepAlive 时要顺延 */
+  readonly stale: boolean
 }
 
 /** 服务端会话（P3 设计 §3.5）：令牌在 Cookie 里，库里只有摘要；空闲与绝对过期都用数据库时间判断。 */
@@ -37,25 +39,31 @@ export class SessionService {
     return { id, token }
   }
 
-  /** 每个请求：令牌对应的会话仍然有效时返回它；距上次记录超过 1 分钟时顺延空闲过期。 */
+  /**
+   * 每个请求：令牌对应的会话仍然有效时返回它。不在这里顺延：会话守卫确认账户有效之后再 keepAlive，
+   * 停用的账户的会话不会一直续着（M2-P1 审查 A1）
+   */
   async authenticate(token: string): Promise<AuthenticatedSession | undefined> {
     if (!isWellFormedSessionToken(token))
       return undefined
-    const session = await this.repository.findActive(sessionTokenDigest(token))
-    if (session === undefined)
-      return undefined
-    if (session.stale)
-      await this.repository.touch(session.id, this.config.session.idleTimeoutMinutes)
-    return { id: session.id, userId: session.userId }
+    return this.repository.findActive(sessionTokenDigest(token))
   }
 
-  async revoke(sessionId: string, reason: 'logout', transaction?: Transaction): Promise<void> {
+  /** 距上次记录超过 1 分钟时顺延空闲过期（不超过绝对过期） */
+  async keepAlive(session: AuthenticatedSession): Promise<void> {
+    if (session.stale)
+      await this.repository.touch(session.id, this.config.session.idleTimeoutMinutes)
+  }
+
+  /** 撤销一条会话：退出；或者会话守卫发现账户已不可用（disabled） */
+  async revoke(sessionId: string, reason: 'logout' | 'disabled', transaction?: Transaction): Promise<void> {
     await this.repository.revoke({ id: sessionId }, reason, transaction)
   }
 
   /**
    * 撤销这个人的全部会话（M2-P1 设计 §3.5）：账户停用、签发与完成重置时全部撤销；修改密码时保留当前会话（except）。
-   * 会话守卫对每个请求另查账户状态，撤销与状态变化之间不会漏过请求。
+   * 调用方的事务先锁住账户的行（UsersService.lockAccount 等）：登录的事务复核时也锁这一行，
+   * 两边一先一后，这里撤销的包括先提交的登录新建的会话（审查 A1）。会话守卫对每个请求另查账户状态。
    */
   async revokeAllOf(
     userId: string,

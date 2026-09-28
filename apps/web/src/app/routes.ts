@@ -1,7 +1,7 @@
 import type { RouteObject } from 'react-router'
 import { ONE_TIME_LINK_PAGE_PATHS } from '@nerve-office/contracts'
 import { CHANGE_PASSWORD_PATH, ChangePasswordPage, InvitationPage, PasswordResetPage } from '../features/account/index.ts'
-import { LoginPage, RequireSession } from '../features/auth/index.ts'
+import { LoginPage, RequireSession, SessionCheck } from '../features/auth/index.ts'
 import { DocumentListPage } from '../features/documents/index.ts'
 import { ADMIN_PATH, ADMIN_PATHS } from '../shared/lib/admin-paths.ts'
 import { LOGIN_PATH } from '../shared/lib/login-path.ts'
@@ -9,7 +9,7 @@ import { AppShell } from './layout/app-shell.tsx'
 import { ErrorPage } from './pages/error-page.tsx'
 import { NotFoundPage } from './pages/not-found-page.tsx'
 
-/** 管理界面按需加载（M2-P1 设计 §3.8）：它只给系统管理员，不进平台页面的首屏包。这里是它唯一的引用处，而且只能是动态 import */
+/** 管理界面按需加载（M2-P1 设计 §3.8）：它只给系统管理员，不进平台页面的首屏包。这里是它唯一的引用处，而且只能是动态 import（lint 的模块边界保证） */
 async function adminPages() {
   return import('../features/admin/index.ts')
 }
@@ -24,6 +24,8 @@ export const appRoutes: RouteObject[] = [
     // 除登录页以外都要先登录（默认拒绝，US-M1-08）：包括不存在的地址，未登录的人看不出哪些地址存在（审查 B23）。P4 的文档路由也放在这一层
     Component: RequireSession,
     ErrorBoundary: ErrorPage,
+    // 直接打开按需加载的页面（例如 /admin/users）时，路由要先下载它的代码才开始渲染：这期间显示确认登录的骨架屏，不是整页空白（M2-P1 审查 B5）
+    HydrateFallback: SessionCheck,
     children: [
       {
         Component: AppShell,

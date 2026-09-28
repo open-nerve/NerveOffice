@@ -4,7 +4,7 @@ import type { AppConfig } from '../config/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { User } from '../users/index.ts'
 import type { InvitationRecord } from './invitations.repository.ts'
-import type { LinkLookup } from './link-state.ts'
+import type { LinkLookup, LinkOutcome } from './link-state.ts'
 import { ADMIN_PAGE_SIZE, INVITATION_LIFETIME_HOURS, oneTimeLinkUrl } from '@nerve-office/contracts'
 import { Inject, Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
@@ -49,6 +49,7 @@ function toInvitation(record: InvitationRecord, issuer: UserSummary): Invitation
     createdBy: issuer,
     acceptedAt: record.acceptedAt?.toISOString() ?? null,
     revokedAt: record.revokedAt?.toISOString() ?? null,
+    superseded: record.superseded,
   }
 }
 
@@ -99,7 +100,7 @@ export class InvitationsService {
       if (old.acceptedAt !== null)
         throw new AppError('USERNAME_TAKEN')
       if (old.revokedAt === null)
-        await this.revokeLocked(actor, old, { reissued: true }, origin, transaction)
+        await this.revokeOpen(actor, old, { reissued: true }, origin, transaction)
       await this.requireUsernameAvailable(old.username, actor, origin, transaction)
       return this.insert(actor, old.username, old.displayName, token, origin, transaction, old.id)
     })
@@ -114,7 +115,7 @@ export class InvitationsService {
         throw new AppError('NOT_FOUND')
       if (current.acceptedAt !== null || current.revokedAt !== null)
         return current
-      return this.revokeLocked(actor, current, {}, origin, transaction)
+      return await this.revokeOpen(actor, current, {}, origin, transaction) ?? current
     })
     const issuers = await this.users.findByIds([record.createdBy])
     return toInvitation(record, summaryOf(issuers.get(record.createdBy), record.createdBy))
@@ -154,7 +155,8 @@ export class InvitationsService {
 
   /**
    * 公开：接受邀请。先查令牌再算新密码的哈希（无效的令牌不触发哈希计算），都在事务之外；然后在一个事务里：
-   * 锁住邀请复核、建账户与个人空间、标记已接受、退回限流的名额、新建会话（浏览器原来带着的会话作废）、记审计
+   * 锁住邀请复核、建账户与个人空间、退回限流的名额、标记已接受、新建会话（浏览器原来带着的会话作废）、记审计。
+   * 复核不通过（查令牌之后被接受或作废）：事务之外按一次失败处理，记审计，锁定时 429（审查 A10）
    */
   async accept(token: string, request: AcceptInvitationRequest, origin: HttpOrigin, previousSessionToken: string | undefined): Promise<AcceptedInvitation> {
     const ticket = await this.attempts.admit(origin)
@@ -163,18 +165,17 @@ export class InvitationsService {
       throw await this.attempts.rejected(ticket, 'invitation', found.reason, found.target, origin)
     const { record } = found
     const passwordHash = await withHashing(ticket, this.#logger, async () => this.users.hashPassword(request.password))
-    return this.transactions.run(async (transaction) => {
+    const outcome = await this.transactions.run(async (transaction): Promise<LinkOutcome<AcceptedInvitation>> => {
       await this.accounts.lockUsername(record.username, transaction)
       const locked = await this.repository.findByIdForUpdate(record.id, transaction)
       const now = locked === undefined ? 'invalid' : usabilityOf(stateOf(locked))
-      // 查令牌与这里之间被接受或作废了（并发）：按原因回答，这次按一次失败计
       if (now !== 'usable')
-        throw new AppError('LINK_INVALID', undefined, { details: { reason: now } })
+        return { done: false, reason: now }
       if (await this.accounts.isUsernameTaken(record.username, transaction))
         throw new AppError('USERNAME_TAKEN')
       const { user } = await this.accounts.create({ username: record.username, displayName: request.displayName, passwordHash, systemRole: 'member' }, transaction)
-      await this.repository.markAccepted(record.id, user.id, transaction)
       await ticket.succeeded(transaction)
+      await this.repository.markAccepted(record.id, user.id, transaction)
       if (previousSessionToken !== undefined)
         await this.sessions.replace(previousSessionToken, transaction)
       const session = await this.sessions.create(user.id, transaction)
@@ -185,8 +186,11 @@ export class InvitationsService {
         origin,
         details: { invitationId: record.id },
       }, { transaction })
-      return { user, sessionToken: session.token }
+      return { done: true, value: { user, sessionToken: session.token } }
     })
+    if (!outcome.done)
+      throw await this.attempts.rejected(ticket, 'invitation', outcome.reason, { type: 'invitation', id: record.id }, origin)
+    return outcome.value
   }
 
   /** 令牌对应的邀请：可用；或者不能用的原因，以及审计的对象（找到了记录时） */
@@ -208,11 +212,17 @@ export class InvitationsService {
       return
     if (!open.expired)
       throw new AppError('USERNAME_TAKEN')
-    await this.revokeLocked(actor, open, { expired: true }, origin, transaction)
+    await this.revokeOpen(actor, open, { expired: true }, origin, transaction)
   }
 
-  private async revokeLocked(actor: User, record: InvitationRecord, details: Record<string, boolean>, origin: HttpOrigin, transaction: Transaction): Promise<InvitationRecord> {
-    const revoked = await this.repository.revoke(record.id, actor.id, transaction)
+  /**
+   * 作废一条未接受、未作废的邀请并记审计。更新带着状态条件（审查 A9）：签发时自动作废的旧邀请没有锁行，
+   * 同时被管理员手动作废时，后到的一方更新不到行，返回 undefined，也不再记一次审计
+   */
+  private async revokeOpen(actor: User, record: InvitationRecord, details: Record<string, boolean>, origin: HttpOrigin, transaction: Transaction): Promise<InvitationRecord | undefined> {
+    const revoked = await this.repository.revokeOpen(record.id, actor.id, transaction)
+    if (revoked === undefined)
+      return undefined
     await this.audit.record({
       action: 'users.invitation_revoked',
       actor: { type: 'user', id: actor.id },

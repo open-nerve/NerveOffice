@@ -1,7 +1,8 @@
 import { useId, useState } from 'react'
 import { messages } from '../../shared/i18n/index.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
-import { Alert, AlertDescription, Button, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, Input, Label } from '../../shared/ui/index.ts'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../shared/ui/dialog.tsx'
+import { Alert, AlertDescription, Button, Input, Label } from '../../shared/ui/index.ts'
 
 export interface IssuedLink {
   readonly title: string
@@ -9,6 +10,13 @@ export interface IssuedLink {
   readonly recipient: string
   readonly url: string
   readonly expiresAt: string
+  /** 另外的说明（例如给自己生成的重置链接：关闭之后回到登录页） */
+  readonly note?: string
+  /**
+   * 关闭之后焦点去哪里（审查 B9）：弹窗由程序打开（签发成功、确认之后），打开之前的焦点没有意义，
+   * 例如签发表单回到登录名、行里的重新生成回到新的那一行
+   */
+  readonly returnFocus: () => void
 }
 
 /**
@@ -41,7 +49,12 @@ export function IssuedLinkDialog({ link, onClose }: { readonly link: IssuedLink 
   return (
     <Dialog open={link !== undefined} onOpenChange={changeOpen}>
       {link !== undefined && (
-        <DialogContent>
+        <DialogContent
+          onCloseAutoFocus={(event) => {
+            event.preventDefault()
+            link.returnFocus()
+          }}
+        >
           <DialogHeader>
             <DialogTitle>{`${link.title}：${link.recipient}`}</DialogTitle>
             <DialogDescription>{messages.admin.link.once}</DialogDescription>
@@ -51,6 +64,7 @@ export function IssuedLinkDialog({ link, onClose }: { readonly link: IssuedLink 
             {/* 只读的输入框：可以全选、手动复制；点一下就选中全部 */}
             <Input id={inputId} readOnly value={link.url} onFocus={event => event.currentTarget.select()} />
             <p className="text-sm text-muted-foreground">{messages.admin.link.expiresAt(formatDateTime(link.expiresAt))}</p>
+            {link.note !== undefined && <p className="text-sm font-medium">{link.note}</p>}
           </div>
           {copy === 'copied' && (
             <Alert>

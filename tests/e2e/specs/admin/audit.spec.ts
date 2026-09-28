@@ -12,11 +12,12 @@ test.describe('US-M2-13 审计查询', () => {
     await page.goto('/admin/users')
     await page.getByLabel('按名字或登录名搜索').fill(user.username)
     const row = page.getByRole('table', { name: '账户列表' }).getByRole('row').filter({ hasText: user.username })
-    await row.getByRole('button', { name: '停用' }).click()
-    await page.getByRole('dialog').getByRole('button', { name: '停用' }).click()
+    // 行里按钮的可读名称是"操作 对象"（审查 B14）
+    await row.getByRole('button', { name: /^停用 / }).click()
+    await page.getByRole('dialog').getByRole('button', { name: '停用', exact: true }).click()
     await expect(row.getByText('已停用')).toBeVisible()
-    await row.getByRole('button', { name: '启用' }).click()
-    await page.getByRole('dialog').getByRole('button', { name: '启用' }).click()
+    await row.getByRole('button', { name: /^启用 / }).click()
+    await page.getByRole('dialog').getByRole('button', { name: '启用', exact: true }).click()
     await expect(row.getByText('有效')).toBeVisible()
 
     await page.getByRole('navigation', { name: '管理界面' }).getByRole('link', { name: '审计' }).click()
