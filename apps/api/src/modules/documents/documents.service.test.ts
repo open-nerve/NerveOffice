@@ -3,7 +3,7 @@ import type { AccessTarget, DocumentAccess } from './document-access-policy.ts'
 import type { DocumentRow, DocumentsRepository } from './documents.repository.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
-import { decodeCursor, encodeCursor } from './document-cursor.ts'
+import { decodeTimeCursor, encodeTimeCursor } from '../../shared/time-cursor.ts'
 import { DocumentsService } from './documents.service.ts'
 
 const ALICE = '0199a2c4-0000-7000-8000-00000000000a'
@@ -77,16 +77,16 @@ describe('DocumentsService.listPersonal', () => {
     const page = await service.listPersonal(ALICE, { limit: 1 })
     expect(repository.listInSpace).toHaveBeenCalledWith(ALICE_SPACE, 2, undefined)
     expect(page.items.map(item => item.id)).toEqual([newer.id])
-    expect(decodeCursor(page.nextCursor ?? '')).toEqual({ updatedAt: newer.position, id: newer.id })
+    expect(decodeTimeCursor(page.nextCursor ?? '')).toEqual({ position: newer.position, id: newer.id })
 
     const last = await service.listPersonal(ALICE, { limit: 5, cursor: page.nextCursor ?? '' })
-    expect(repository.listInSpace).toHaveBeenLastCalledWith(ALICE_SPACE, 6, { updatedAt: newer.position, id: newer.id })
+    expect(repository.listInSpace).toHaveBeenLastCalledWith(ALICE_SPACE, 6, { position: newer.position, id: newer.id })
     expect(last.nextCursor).toBeNull()
   })
 
   it('游标不合法（改过、时间不存在）：REQUEST_INVALID，不查询', async () => {
     const { service, repository } = setup([OWN])
-    for (const cursor of ['broken', encodeCursor({ updatedAt: '2026-02-30T00:00:00.000000Z', id: OWN.id })]) {
+    for (const cursor of ['broken', encodeTimeCursor({ position: '2026-02-30T00:00:00.000000Z', id: OWN.id })]) {
       const error = await errorOf(service.listPersonal(ALICE, { limit: 10, cursor }))
       expect(error.code, cursor).toBe('REQUEST_INVALID')
     }

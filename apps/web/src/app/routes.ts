@@ -1,4 +1,5 @@
 import type { RouteObject } from 'react-router'
+import { CHANGE_PASSWORD_PATH, ChangePasswordPage } from '../features/account/index.ts'
 import { LoginPage, RequireSession } from '../features/auth/index.ts'
 import { DocumentListPage } from '../features/documents/index.ts'
 import { LOGIN_PATH } from '../shared/lib/login-path.ts'
@@ -18,6 +19,7 @@ export const appRoutes: RouteObject[] = [
         Component: AppShell,
         children: [
           { index: true, Component: DocumentListPage },
+          { path: CHANGE_PASSWORD_PATH, Component: ChangePasswordPage },
           { path: '*', Component: NotFoundPage },
         ],
       },

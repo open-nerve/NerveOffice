@@ -1,9 +1,13 @@
+import type { AdminUserListQuery, UserDirectoryQuery, UserSystemRole } from '@nerve-office/contracts'
 import type { OnModuleInit } from '@nestjs/common'
-import type { User } from './user.ts'
+import type { Transaction } from '../database/index.ts'
+import type { AccountChange, AccountRecord, User } from './user.ts'
 import { randomBytes } from 'node:crypto'
-import { usernameSchema } from '@nerve-office/contracts'
+import { ADMIN_PAGE_SIZE, USER_DIRECTORY_LIMIT, usernameSchema } from '@nerve-office/contracts'
 import { Injectable } from '@nestjs/common'
+import { AppError } from '../../shared/errors/app-error.ts'
 import { AppLogger } from '../logging/index.ts'
+import { decodeAccountCursor, encodeAccountCursor } from './account-cursor.ts'
 import { PasswordHasher } from './password-hasher.ts'
 import { UsersRepository } from './users.repository.ts'
 
@@ -64,6 +68,103 @@ export class UsersService implements OnModuleInit {
     if (this.hasher.needsRehash(credentials.passwordHash))
       await this.rehash(credentials.user, password)
     return { valid: true, user: credentials.user }
+  }
+
+  /** 新密码的哈希（修改、重置、接受邀请）：计算密集，调用方放在事务之外。等待哈希的请求太多时抛 PasswordHashingBusyError */
+  async hashPassword(password: string): Promise<string> {
+    return this.hasher.hash(password)
+  }
+
+  /**
+   * 按 id 验证密码（修改密码时的旧密码，M2-P1 设计 §3.5）。账户不存在或不可用时同样算一次哈希，
+   * 失败的耗时由哈希器补齐，与登录相同（ADR-007）
+   */
+  async verifyPasswordOf(userId: string, password: string): Promise<boolean> {
+    await this.observeStoredParameters()
+    const credentials = await this.repository.findCredentialsById(userId)
+    if (credentials === undefined || credentials.user.status !== 'active') {
+      await this.hasher.verify(await this.dummyHash(), password)
+      return false
+    }
+    return this.hasher.verify(credentials.passwordHash, password)
+  }
+
+  async setPasswordHash(userId: string, passwordHash: string, transaction: Transaction): Promise<void> {
+    await this.repository.updatePasswordHash(userId, passwordHash, transaction)
+  }
+
+  /**
+   * 停用（M2-P1 设计 §3.5）。已经停用的原样返回（changed 为假）。
+   * 停用有效的系统管理员时，要求还有别的有效系统管理员（LAST_ADMIN）。
+   * 锁的顺序固定为先 advisory lock、再账户的行锁，与系统角色的变更相同，互相等待时不成环
+   */
+  async disable(userId: string, transaction: Transaction): Promise<AccountChange> {
+    await this.repository.lockSystemAdmins(transaction)
+    const account = await this.lockedAccount(userId, transaction)
+    if (account.status === 'disabled')
+      return { account, changed: false }
+    if (account.systemRole === 'admin')
+      await this.requireAnotherActiveAdmin(account.id, transaction)
+    return { account: await this.repository.setStatus(account.id, 'disabled', transaction), changed: true }
+  }
+
+  /** 启用：只会让有效的账户变多，不需要"至少保留一个管理员"的锁 */
+  async enable(userId: string, transaction: Transaction): Promise<AccountChange> {
+    const account = await this.lockedAccount(userId, transaction)
+    if (account.status === 'active')
+      return { account, changed: false }
+    return { account: await this.repository.setStatus(account.id, 'active', transaction), changed: true }
+  }
+
+  /**
+   * 授予或取消系统管理员（M2-P1 设计 §3.5）：只有有效的账户能被授予（ACCOUNT_DISABLED）；
+   * 取消有效的系统管理员时，要求还有别的有效系统管理员（LAST_ADMIN）
+   */
+  async changeSystemRole(userId: string, systemRole: UserSystemRole, transaction: Transaction): Promise<AccountChange> {
+    await this.repository.lockSystemAdmins(transaction)
+    const account = await this.lockedAccount(userId, transaction)
+    if (account.systemRole === systemRole)
+      return { account, changed: false }
+    if (systemRole === 'admin' && account.status !== 'active')
+      throw new AppError('ACCOUNT_DISABLED')
+    if (systemRole === 'member' && account.status === 'active')
+      await this.requireAnotherActiveAdmin(account.id, transaction)
+    return { account: await this.repository.setSystemRole(account.id, systemRole, transaction), changed: true }
+  }
+
+  /** 管理界面的账户列表（含停用的）：按登录名排序分页 */
+  async listAccounts(query: AdminUserListQuery): Promise<{ readonly items: AccountRecord[], readonly nextCursor: string | null }> {
+    const afterUsername = query.cursor === undefined ? undefined : decodeAccountCursor(query.cursor)
+    if (query.cursor !== undefined && afterUsername === undefined)
+      throw new AppError('REQUEST_INVALID', '分页的游标不合法，请从第一页重新加载')
+    // 多取一条，判断还有没有下一页
+    const rows = await this.repository.listRecords({ query: query.query, status: query.status, afterUsername, limit: ADMIN_PAGE_SIZE + 1 })
+    const items = rows.slice(0, ADMIN_PAGE_SIZE)
+    const last = items.at(-1)
+    return { items, nextCursor: rows.length > ADMIN_PAGE_SIZE && last !== undefined ? encodeAccountCursor(last.username) : null }
+  }
+
+  /** 同事目录（M2-P1 设计 §3.6）：有效账户，显示名或登录名包含关键词 */
+  async directory(query: UserDirectoryQuery): Promise<User[]> {
+    return this.repository.searchActive(query.query, USER_DIRECTORY_LIMIT)
+  }
+
+  /** 按 id 批量取账户（含停用的）：审计查询补名字 */
+  async findByIds(ids: readonly string[]): Promise<ReadonlyMap<string, User>> {
+    const found = await this.repository.findByIds([...new Set(ids)])
+    return new Map(found.map(user => [user.id, user]))
+  }
+
+  private async lockedAccount(userId: string, transaction: Transaction): Promise<AccountRecord> {
+    const account = await this.repository.findRecordForUpdate(userId, transaction)
+    if (account === undefined)
+      throw new AppError('NOT_FOUND')
+    return account
+  }
+
+  private async requireAnotherActiveAdmin(userId: string, transaction: Transaction): Promise<void> {
+    if (await this.repository.countActiveAdminsExcept(userId, transaction) === 0)
+      throw new AppError('LAST_ADMIN')
   }
 
   private async rehash(user: User, password: string): Promise<void> {

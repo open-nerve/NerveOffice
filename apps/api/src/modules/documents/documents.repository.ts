@@ -1,10 +1,10 @@
 import type { DocumentProfile, DocumentType, PlatformFormatVersion } from '@nerve-office/contracts'
+import type { TimeCursor } from '../../shared/time-cursor.ts'
 import type { Database, Transaction } from '../database/index.ts'
-import type { DocumentCursor } from './document-cursor.ts'
 import { Inject, Injectable } from '@nestjs/common'
 import { and, desc, eq, sql } from 'drizzle-orm'
 import { documents } from '../../db/schema/documents/index.ts'
-import { DATABASE, executorOf } from '../database/index.ts'
+import { DATABASE, executorOf, keysetPosition } from '../database/index.ts'
 
 export interface DocumentRow {
   readonly id: string
@@ -41,7 +41,7 @@ const COLUMNS = {
   title: d.title,
   createdAt: d.createdAt,
   updatedAt: d.updatedAt,
-  position: sql<string>`to_char(${d.updatedAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`,
+  position: keysetPosition(d.updatedAt),
   revision: d.revision,
   unitId: d.unitId,
   profile: d.profile,
@@ -54,14 +54,14 @@ export class DocumentsRepository {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
 
   /** 一个空间里正常状态的文档，按更新时间从新到旧；after 是上一页最后一条的位置（keyset）。 */
-  async listInSpace(spaceId: string, limit: number, after?: DocumentCursor): Promise<DocumentRow[]> {
+  async listInSpace(spaceId: string, limit: number, after?: TimeCursor): Promise<DocumentRow[]> {
     return this.db
       .select(COLUMNS)
       .from(d)
       .where(and(
         eq(d.spaceId, spaceId),
         eq(d.status, 'active'),
-        after === undefined ? undefined : sql`(${d.updatedAt}, ${d.id}) < (${after.updatedAt}::timestamptz, ${after.id}::uuid)`,
+        after === undefined ? undefined : sql`(${d.updatedAt}, ${d.id}) < (${after.position}::timestamptz, ${after.id}::uuid)`,
       ))
       .orderBy(desc(d.updatedAt), desc(d.id))
       .limit(limit)

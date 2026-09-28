@@ -4,6 +4,7 @@
 // 只看控制台会漏掉。每个文档加载之前挂上 securitypolicyviolation 的监听，经绑定函数报给测试进程（跨整页跳转、多个标签页都不丢），
 // 每个用例结束时断言一条违规都没有。
 // 限制：Worker 里的违规在 Worker 自己的作用域触发，这里收不到（WebKit 也不上报，00 号计划书 §11.3），由阳性对照与产物扫描覆盖。
+import type { Page } from '@playwright/test'
 import { test as base, expect } from '@playwright/test'
 
 export interface CspViolation {
@@ -41,7 +42,17 @@ function listenForViolations(binding: string): void {
   })
 }
 
-export const test = base.extend<{ cspViolations: CspViolations }>({
+export const test = base.extend<{ cspViolations: CspViolations, anotherDevice: Page }>({
+  /**
+   * 另一台设备（M2-P1）：新的浏览器上下文，Cookie 与本用例的页面不共用；沿用配置里的基础地址、证书与语言设置。
+   * 用来验证"其他地方的登录被退出"等跨会话的行为；用例结束时关闭
+   */
+  anotherDevice: async ({ browser }, provide, testInfo) => {
+    const { baseURL, ignoreHTTPSErrors, locale, timezoneId } = testInfo.project.use
+    const context = await browser.newContext({ baseURL, ignoreHTTPSErrors, locale, timezoneId })
+    await provide(await context.newPage())
+    await context.close()
+  },
   cspViolations: [async ({ context }, use) => {
     const violations: CspViolation[] = []
     let expected = false

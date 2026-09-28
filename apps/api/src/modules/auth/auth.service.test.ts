@@ -172,6 +172,6 @@ describe('AuthService.login', () => {
     expect(audit.record).not.toHaveBeenCalled()
     expect(transactions.run).not.toHaveBeenCalled()
     expect(throttle.purgeExpired).not.toHaveBeenCalled()
-    expect(warn).toHaveBeenCalledWith('等待密码哈希的请求太多，拒绝这次登录', { retryAfterSeconds: 5 })
+    expect(warn).toHaveBeenCalledWith('等待密码哈希的请求太多，拒绝这次请求', { retryAfterSeconds: 5 })
   })
 })

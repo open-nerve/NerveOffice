@@ -1,4 +1,4 @@
-import type { LoginRequest, SessionResponse } from '@nerve-office/contracts'
+import type { ChangePasswordRequest, LoginRequest, SessionResponse } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { CredentialCheck, User } from '../users/index.ts'
 import type { LoginTicket } from './login-throttle.ts'
@@ -93,8 +93,16 @@ export class AuthService {
    * 与限流拒绝一样只记日志、不写审计。其他错误（例如库里的哈希损坏）原样抛出，名额不退回，按一次失败计。
    */
   private async verify(request: LoginRequest, ticket: LoginTicket): Promise<CredentialCheck> {
+    return this.withHashing(ticket, async () => this.users.verifyCredentials(request.username, request.password))
+  }
+
+  /**
+   * 执行要用密码哈希的一步（验证或计算新哈希）。等待哈希的请求太多时（DEF-015）：退回名额，返回 503 与 Retry-After，
+   * 只记日志、不写审计。其他错误原样抛出，名额不退回，按一次失败计。
+   */
+  private async withHashing<T>(ticket: LoginTicket, work: () => Promise<T>): Promise<T> {
     try {
-      return await this.users.verifyCredentials(request.username, request.password)
+      return await work()
     }
     catch (error) {
       if (!(error instanceof PasswordHashingBusyError))
@@ -103,9 +111,35 @@ export class AuthService {
       await ticket.abandoned().catch((releaseError: unknown) => {
         this.#logger.warn('退回登录限流的名额失败，这次尝试按一次失败计', { err: releaseError })
       })
-      this.#logger.warn('等待密码哈希的请求太多，拒绝这次登录', { retryAfterSeconds: error.retryAfterSeconds })
+      this.#logger.warn('等待密码哈希的请求太多，拒绝这次请求', { retryAfterSeconds: error.retryAfterSeconds })
       throw new AppError('SERVICE_UNAVAILABLE', undefined, { cause: error, headers: { 'Retry-After': String(error.retryAfterSeconds) } })
     }
+  }
+
+  /**
+   * 修改密码（M2-P1 设计 §3.5，US-M2-02）：
+   * 1. 按登录限流占名额（用户名与地址两个维度）：猜旧密码与猜登录密码按同一个计数，达到上限同样锁定登录；
+   * 2. 按 id 验证旧密码，在事务之外（耗时补齐同登录）；新密码的哈希同样在事务之外；
+   * 3. 在一个事务里：清除限流计数、更新哈希、撤销本人除当前会话以外的全部会话（原因 password_changed）、记审计。
+   */
+  async changePassword(principal: Principal, request: ChangePasswordRequest, origin: HttpOrigin): Promise<void> {
+    const { user } = principal
+    const admission = await this.throttle.admit({ username: user.username, clientIp: origin.clientIp })
+    if (!admission.admitted) {
+      this.#logger.warn('修改密码被限流拒绝', { lockedForSeconds: admission.retryAfterSeconds })
+      throw this.tooManyAttempts(admission.retryAfterSeconds)
+    }
+    const { ticket } = admission
+    const valid = await this.withHashing(ticket, async () => this.users.verifyPasswordOf(user.id, request.currentPassword))
+    if (!valid)
+      throw ticket.lockedForSeconds === undefined ? new AppError('CURRENT_PASSWORD_INCORRECT') : this.tooManyAttempts(ticket.lockedForSeconds)
+    const passwordHash = await this.withHashing(ticket, async () => this.users.hashPassword(request.newPassword))
+    await this.transactions.run(async (transaction) => {
+      await ticket.succeeded(transaction)
+      await this.users.setPasswordHash(user.id, passwordHash, transaction)
+      await this.sessions.revokeAllOf(user.id, 'password_changed', { except: principal.sessionId, transaction })
+      await this.audit.record({ action: 'users.password_changed', actor: { type: 'user', id: user.id }, target: { type: 'user', id: user.id }, origin }, { transaction })
+    })
   }
 
   async logout(principal: Principal, origin: HttpOrigin): Promise<void> {

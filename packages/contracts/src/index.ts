@@ -123,6 +123,7 @@ export {
   USER_SYSTEM_ROLES,
   userDirectoryQuerySchema,
   userDirectoryResponseSchema,
+  userIdSchema,
   USERNAME_PATTERN_SOURCE,
   usernameSchema,
   userSummarySchema,

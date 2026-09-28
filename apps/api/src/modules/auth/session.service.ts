@@ -53,6 +53,18 @@ export class SessionService {
     await this.repository.revoke({ id: sessionId }, reason, transaction)
   }
 
+  /**
+   * 撤销这个人的全部会话（M2-P1 设计 §3.5）：账户停用、签发与完成重置时全部撤销；修改密码时保留当前会话（except）。
+   * 会话守卫对每个请求另查账户状态，撤销与状态变化之间不会漏过请求。
+   */
+  async revokeAllOf(
+    userId: string,
+    reason: 'disabled' | 'password_changed' | 'password_reset',
+    options: { readonly except?: string, readonly transaction?: Transaction } = {},
+  ): Promise<void> {
+    await this.repository.revokeAllOfUser(userId, reason, options.except, options.transaction)
+  }
+
   /** 删除一小批过期或撤销已超过 30 天的会话，表不会无限增长。在事务之外调用。 */
   async purgeExpired(): Promise<void> {
     await this.repository.purgeExpired()

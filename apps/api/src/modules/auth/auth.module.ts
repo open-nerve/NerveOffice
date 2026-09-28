@@ -33,6 +33,7 @@ import { SessionsRepository } from './sessions.repository.ts'
       useFactory: (config: AppConfig) => new SessionCookieSettings(config.http.publicOrigin, config.session.absoluteTimeoutMinutes * 60_000),
     },
   ],
-  exports: [SessionGuard, CsrfGuard],
+  // SessionService 给 admin 模块：停用账户、签发重置时撤销这个人的会话（M2-P1 设计 §3.1）
+  exports: [SessionGuard, CsrfGuard, SessionService],
 })
 export class AuthModule {}

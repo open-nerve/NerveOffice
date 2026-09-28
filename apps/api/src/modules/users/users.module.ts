@@ -6,11 +6,13 @@ import { DatabaseModule } from '../database/index.ts'
 import { SpacesModule } from '../spaces/index.ts'
 import { AdminInitializationService } from './admin-initialization.service.ts'
 import { Argon2PasswordHasher, PasswordHasher } from './password-hasher.ts'
+import { UsersController } from './users.controller.ts'
 import { UsersRepository } from './users.repository.ts'
 import { UsersService } from './users.service.ts'
 
 @Module({
   imports: [DatabaseModule, SpacesModule, AuditModule],
+  controllers: [UsersController],
   providers: [
     UsersRepository,
     UsersService,

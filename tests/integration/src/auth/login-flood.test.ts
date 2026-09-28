@@ -70,7 +70,7 @@ describe('等待密码哈希的请求有上限', () => {
     // 验证过的用户名各一行，加上地址那一行
     expect(Number(counted?.count)).toBe(verified + 1)
 
-    expect(app.logs.entries().filter(entry => entry.msg === '等待密码哈希的请求太多，拒绝这次登录')).toHaveLength(busy.length)
+    expect(app.logs.entries().filter(entry => entry.msg === '等待密码哈希的请求太多，拒绝这次请求')).toHaveLength(busy.length)
     expect((await postLogin(app.baseUrl, { username: 'alice', password: alice.password })).status).toBe(200)
   })
 })

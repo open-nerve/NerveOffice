@@ -47,6 +47,9 @@ export const newPasswordSchema = z.string()
   .refine(value => codePointLength(value) <= NEW_PASSWORD_MAX_LENGTH, `密码最多 ${NEW_PASSWORD_MAX_LENGTH} 个字符`)
   .refine(value => !hasControlCharacters(value), '密码不能包含控制字符（例如换行、制表符）')
 
+/** 路径里的账户 id */
+export const userIdSchema = z.uuid()
+
 /** 按名字搜索时关键词的上限（字符） */
 export const USER_SEARCH_QUERY_MAX_LENGTH = 64
 /** 同事目录每次最多返回的条数 */
