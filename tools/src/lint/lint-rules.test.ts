@@ -437,6 +437,11 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
       expect(report.rules, `${file}：${code}`).toContain('boundaries/dependencies')
       expect(report.messages.join('\n'), file).toContain('管理界面（features/admin）按需加载')
     }
+    // shared/ui 的桶文件不导出弹窗：Radix Dialog 会随桶文件进首屏（复验 N2）
+    const BARREL = 'apps/web/src/shared/ui/index.ts'
+    for (const code of [`export { Dialog } from './dialog.tsx'\n`, `export * from './dialog.tsx'\n`, `export { Dialog } from './dialog'\n`])
+      expect((await lint(code, BARREL)).messages.join('\n'), code).toContain('shared/ui 的桶文件不导出弹窗')
+    expect(await rulesFor(`export { Button } from './button.tsx'\n`, BARREL)).not.toContain('no-restricted-syntax')
     // 管理界面自己内部的引用不受影响
     expect(await rulesFor('import { ADMIN_QUERY_KEY } from \'./admin-api.ts\'\n\nexport const key = ADMIN_QUERY_KEY\n', 'apps/web/src/features/admin/users-page.tsx')).not.toContain('boundaries/dependencies')
   })

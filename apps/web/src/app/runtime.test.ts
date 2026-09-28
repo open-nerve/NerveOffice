@@ -83,12 +83,22 @@ describe('会话复核（M2-P1 审查 B3、B4）', () => {
     const checking = runtime.recheckSession().then(() => {
       settled = true
     })
-    const merged = runtime.recheckSession()
+    let mergedSettled = false
+    const merged = runtime.recheckSession().then(() => {
+      mergedSettled = true
+    })
     await Promise.resolve()
     expect(settled).toBe(false)
-    api.on('GET /api/auth/session', () => json(200, { ...SESSION, csrfToken: 'csrf-3' }))
+    const second = deferredResponse()
+    api.on('GET /api/auth/session', second.handler)
     first.resolve(json(200, { ...SESSION, csrfToken: 'csrf-2' }))
+    // 第一次确认的结果已经回来，补上的那次还没有：合并进来的调用仍在等（复验 N4）
+    await vi.waitFor(() => expect(api.requests).toHaveLength(2))
+    expect(mergedSettled).toBe(false)
+    expect(settled).toBe(false)
+    second.resolve(json(200, { ...SESSION, csrfToken: 'csrf-3' }))
     await Promise.all([checking, merged])
+    expect(mergedSettled).toBe(true)
     expect(api.requests.map(request => request.key)).toEqual(['GET /api/auth/session', 'GET /api/auth/session'])
     expect(runtime.queryClient.getQueryData<SessionResponse>(['auth', 'session'])?.csrfToken).toBe('csrf-3')
   })
@@ -101,5 +111,26 @@ describe('会话复核（M2-P1 审查 B3、B4）', () => {
       expect(page.visits).toEqual([])
     }
     expect(api.requests).toEqual([])
+  })
+
+  it('公开页面上跳过的复核，离开这个页面时补上：接受邀请之后进入个人空间时发现 Cookie 已经属于别人，整页重新加载（复验 N6）', async () => {
+    const api = installFakeApi({ 'GET /api/auth/session': () => json(200, { ...SESSION, user: { ...SESSION.user, id: '0199a2c4-1f2e-7a3b-8c4d-000000000002' } }) })
+    const { runtime, page } = runtimeAt('/invite')
+    // 接受成功：页面写入新账户的会话；这时别的标签页登录了另一个人，消息在公开页上被跳过
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    await runtime.recheckSession()
+    expect(api.requests).toEqual([])
+    await runtime.router.navigate('/')
+    await vi.waitFor(() => expect(page.visits).toEqual(['reload']))
+    expect(api.requests.map(request => request.key)).toEqual(['GET /api/auth/session'])
+  })
+
+  it('公开页面上没有跳过复核时，离开这个页面不多确认一次', async () => {
+    const api = installFakeApi({ 'GET /api/auth/session': () => json(200, SESSION) })
+    const { runtime, page } = runtimeAt('/reset-password')
+    await runtime.router.navigate('/')
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(api.requests).toEqual([])
+    expect(page.visits).toEqual([])
   })
 })

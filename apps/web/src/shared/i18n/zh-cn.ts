@@ -220,6 +220,7 @@ export const messages = {
     audit: {
       from: '开始时间',
       to: '结束时间',
+      invalidTime: '年份要在 1–9999 之间，这个时间没有作为条件',
       action: '动作',
       actor: '操作者',
       searchActor: '按名字找操作者',

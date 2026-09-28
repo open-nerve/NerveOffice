@@ -192,7 +192,8 @@ describe('管理界面：账户', () => {
     expect(dialog).toHaveAccessibleDescription('生成后，这个人的当前密码立即失效，所有地方的登录都会退出。链接 24 小时内有效，只显示这一次，请交给本人。')
     fireEvent.click(within(dialog).getByRole('button', { name: '生成重置链接' }))
     const linkDialog = await screen.findByRole('dialog', { name: '重置链接：艾米（amy）' })
-    expect(screen.getAllByRole('dialog')).toHaveLength(1)
+    // 被 aria-hidden 的弹窗也算上：同时打开两个时，按角色查找默认只看得见最上面的一个（复验 N3）
+    expect(screen.getAllByRole('dialog', { hidden: true })).toHaveLength(1)
     expect(within(linkDialog).getByLabelText('链接')).toHaveValue('https://docs.example.com/reset-password#token')
     expect(within(linkDialog).getByText(/链接只显示这一次/)).toBeInTheDocument()
     fireEvent.click(within(linkDialog).getByRole('button', { name: '复制链接' }))
@@ -240,6 +241,8 @@ describe('管理界面：对自己的账户操作（审查 B4、A12）', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: '取消系统管理员' }))
     expect(await screen.findByText('只有系统管理员能打开管理界面。')).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: '管理' })).toBeNull()
+    // 管理页连同确认的弹窗一起卸载：焦点交给无权限的说明，不落到 body（复验 N5）
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('alert')))
     const keys = api.requests.map(request => request.key)
     const changed = keys.indexOf(`PUT /api/admin/users/${ROOT.id}/system-role`)
     expect(api.requests[changed]?.body).toEqual({ systemRole: 'member' })
@@ -403,11 +406,11 @@ describe('管理界面：邀请', () => {
     expect(await within(dialog).findByRole('button', { name: '正在处理…' })).toHaveAttribute('aria-disabled', 'true')
     reissue.resolve(json(201, { invitation: reissued, url: 'https://docs.example.com/invite#new' }))
     await waitFor(() => expect(requestCount(api, 'GET /api/admin/invitations')).toBe(2))
-    // 列表还在刷新：仍然只有确认的弹窗
-    expect(screen.getAllByRole('dialog')).toEqual([dialog])
+    // 列表还在刷新：仍然只有确认的弹窗（被 aria-hidden 的也算上，复验 N3）
+    expect(screen.getAllByRole('dialog', { hidden: true })).toEqual([dialog])
     refreshed.resolve(json(200, listPage([reissued, { ...INVITATION, status: 'revoked', superseded: true, revokedAt: '2026-09-28T06:00:00.000Z' }])))
     const linkDialog = await screen.findByRole('dialog', { name: '邀请链接：贝亚（bea）' })
-    expect(screen.getAllByRole('dialog')).toEqual([linkDialog])
+    expect(screen.getAllByRole('dialog', { hidden: true })).toEqual([linkDialog])
     expect(within(linkDialog).getByLabelText('链接')).toHaveValue('https://docs.example.com/invite#new')
 
     fireEvent.click(within(linkDialog).getByRole('button', { name: '关闭' }))

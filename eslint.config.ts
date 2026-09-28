@@ -155,6 +155,15 @@ const APP_ENTRY_SYNTAX = [
   },
 ]
 
+// shared/ui 的桶文件（ADR-008）：带第三方运行时的重组件（弹窗 dialog.tsx，Radix Dialog）不经它导出。web 没有声明 sideEffects，
+// 经桶文件引用会把它再导出的每个模块都带进首屏；首屏的预算还有余量，门禁 budgets 发现不了（M2-P1 审查 B2，复验 N2）
+const UI_BARREL_SYNTAX = [
+  {
+    selector: String.raw`:matches(ExportNamedDeclaration, ExportAllDeclaration, ImportDeclaration)[source.value=/^\.\/dialog(\.tsx)?$/]`,
+    message: 'shared/ui 的桶文件不导出弹窗（dialog.tsx，Radix Dialog）：经桶文件引用会把它带进平台页面的首屏；用到的地方直接引用这个文件（ADR-008，M2-P1 审查 B2）',
+  },
+]
+
 // ---- 后端（P2 设计 §3.1）----
 // 每个后端文件的限制由 apiRules() 按"这个文件允许什么"组合出来，各覆盖块不各自抄一份，免得改一处漏一处（审查 B15）
 
@@ -398,6 +407,13 @@ export default antfu(
     ignores: ['apps/web/src/entries/csp-probe/**'],
     rules: {
       'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...APP_ENTRY_SYNTAX],
+    },
+  },
+  {
+    name: 'nerve/web-ui-barrel',
+    files: ['apps/web/src/shared/ui/index.ts'],
+    rules: {
+      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...UI_BARREL_SYNTAX],
     },
   },
   {

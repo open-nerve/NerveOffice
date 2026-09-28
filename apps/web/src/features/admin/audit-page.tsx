@@ -81,6 +81,21 @@ function ActorCandidates({ candidates, onPick }: { readonly candidates: UseQuery
 }
 
 /**
+ * 时间条件的输入框。换算不出接口接受的时刻（例如年份超出 1–9999）时，这个条件不发出去：
+ * 标 aria-invalid，并用说明文字告诉用户它没有生效（复验 N8）
+ */
+function TimeFilter({ id, label, value, invalid, onChange }: { readonly id: string, readonly label: string, readonly value: string, readonly invalid: boolean, readonly onChange: (value: string) => void }) {
+  const hintId = `${id}-hint`
+  return (
+    <div className="flex flex-col gap-2">
+      <Label htmlFor={id}>{label}</Label>
+      <Input id={id} type="datetime-local" value={value} aria-invalid={invalid} aria-describedby={invalid ? hintId : undefined} onChange={event => onChange(event.target.value)} />
+      {invalid && <p id={hintId} className="text-xs text-destructive">{messages.admin.audit.invalidTime}</p>}
+    </div>
+  )
+}
+
+/**
  * 管理界面：审计查询（M2-P1 设计 §3.7、§3.8，US-M2-13）。按动作、时间范围、操作者筛选，点表格里的对象可以只看这个对象；
  * 按时间倒序，"加载更多"翻页。审计里没有文档正文与标题。来源一格里有客户端地址与请求标识。
  * 选中或清除筛选时被点的元素随之消失，焦点移到稳定的元素上（审查 B9）：选中之后到它的清除按钮，清除操作者之后回到找操作者的输入框，
@@ -150,14 +165,8 @@ export function AdminAuditPage() {
             {AUDIT_ACTIONS.map(value => <option key={value} value={value}>{text.actionName(value)}</option>)}
           </NativeSelect>
         </div>
-        <div className="flex flex-col gap-2">
-          <Label htmlFor={fromId}>{text.from}</Label>
-          <Input id={fromId} type="datetime-local" value={from} aria-invalid={from !== '' && fromInstant === undefined} onChange={event => setFrom(event.target.value)} />
-        </div>
-        <div className="flex flex-col gap-2">
-          <Label htmlFor={toId}>{text.to}</Label>
-          <Input id={toId} type="datetime-local" value={to} aria-invalid={to !== '' && toInstant === undefined} onChange={event => setTo(event.target.value)} />
-        </div>
+        <TimeFilter id={fromId} label={text.from} value={from} invalid={from !== '' && fromInstant === undefined} onChange={setFrom} />
+        <TimeFilter id={toId} label={text.to} value={to} invalid={to !== '' && toInstant === undefined} onChange={setTo} />
         {actor === undefined && (
           <div className="flex min-w-48 flex-1 flex-col gap-2">
             <Label htmlFor={actorId}>{text.searchActor}</Label>

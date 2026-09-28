@@ -92,11 +92,11 @@ test.describe('US-M2-01 邀请注册', () => {
     const rows = page.getByRole('table', { name: '邀请列表' }).getByRole('row').filter({ hasText: username })
     await confirmAction(page, rows.filter({ hasText: '待接受' }), '重新生成')
 
-    // 任何时刻只有一个弹窗（审查 B7）
+    // 任何时刻只有一个弹窗（审查 B7）。按属性数，被 aria-hidden 的弹窗也算上：按角色找只看得见最上面的一个（复验 N3）
     const dialog = page.getByRole('dialog', { name: `邀请链接：重发的同事（${username}）` })
     await expect(dialog.getByLabel('链接')).not.toHaveValue(firstUrl)
     const secondUrl = await dialog.getByLabel('链接').inputValue()
-    await expect(page.getByRole('dialog')).toHaveCount(1)
+    await expect(page.locator('[role="dialog"]')).toHaveCount(1)
     await dialog.getByRole('button', { name: '关闭' }).click()
     const old = rows.filter({ hasText: '已作废' })
     await expect(old).toHaveCount(1)

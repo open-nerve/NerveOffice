@@ -57,6 +57,8 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
   let checking: Promise<void> | undefined
   /** 确认期间又来了消息：这次确认的结果可能早于那次变化，结束后再确认一次（几条消息合并成一次，复验 R10） */
   let checkAgain = false
+  /** 在一次性链接的公开页面上跳过的复核：离开这个页面时补上（M2-P1 复验 N6） */
+  let deferredRecheck = false
 
   const queryClient = createQueryClient({
     unauthenticated: (reason) => {
@@ -72,6 +74,14 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
     sessionStale: () => void recheckSession(),
   })
   const unsubscribe = channel.subscribe(() => void recheckSession())
+  // 公开页面接受或完成之后单页进入个人空间：跳过的复核这时补上。例如接受的响应写入了新账户的 Cookie，
+  // 随后别的标签页又登录了另一个人，页面显示的与 Cookie 不是同一个人，要整页重新加载（复验 N6）
+  const unsubscribeRouter = router.subscribe((state) => {
+    if (deferredRecheck && !isOneTimeLinkPage(state.location.pathname)) {
+      deferredRecheck = false
+      void recheckSession()
+    }
+  })
 
   /**
    * 页面开始离开（转到登录页，或者换了人要重新加载）：之后的会话事件都不再处理，CSRF 令牌马上清掉。
@@ -128,9 +138,11 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
 
   async function checkSessionOnce(): Promise<void> {
     // 一次性链接的公开页面：没有显示任何人的数据，也不拿 CSRF 令牌，别的标签页换了人与它无关。
-    // 令牌读出之后已经从地址里去掉，重新加载只能显示"链接无效"（M2-P1 审查 B3）
-    if (isOneTimeLinkPage(router.state.location.pathname))
+    // 令牌读出之后已经从地址里去掉，重新加载只能显示"链接无效"（M2-P1 审查 B3）。离开这个页面时再补上（复验 N6）
+    if (isOneTimeLinkPage(router.state.location.pathname)) {
+      deferredRecheck = true
       return
+    }
     try {
       const { queryKey } = sessionQueryOptions()
       const shown = queryClient.getQueryData(queryKey)
@@ -160,6 +172,7 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
     recheckSession,
     dispose: () => {
       unsubscribe()
+      unsubscribeRouter()
       channel.close()
     },
   }
