@@ -68,9 +68,11 @@ export class DocumentRevisionsRepository {
   /**
    * 事务级的 advisory lock：同一个 requestId 的新建排队执行，后到的一方在查修订记录时就能看到前一方的结果（P4 设计 §3.4）。
    * 不同的 requestId 哈希相同时只是多排一次队。
+   * 锁键用数据库规范化之后的 UUID：同一个 UUID 的大写与小写写法，唯一约束（uuid 类型）认作同一个 requestId，
+   * 锁也必须认作同一个，否则两者各拿一把锁、同时越过"是否已经新建"的检查（Codex 评审 CX7）
    */
   async lockCreateRequest(requestId: string, transaction: Transaction): Promise<void> {
-    await executorOf(this.db, transaction).execute(sql`SELECT pg_advisory_xact_lock(${CREATE_REQUEST_LOCK_SPACE}, hashtext(${requestId}))`)
+    await executorOf(this.db, transaction).execute(sql`SELECT pg_advisory_xact_lock(${CREATE_REQUEST_LOCK_SPACE}, hashtext((${requestId})::uuid::text))`)
   }
 
   async findByRequestId(requestId: string, transaction: Transaction): Promise<RevisionRow | undefined> {

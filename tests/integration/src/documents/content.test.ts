@@ -382,6 +382,25 @@ describe('保存的基本校验：422 SNAPSHOT_INVALID', () => {
   })
 })
 
+describe('复制文档时快照原样复制，unitId 相同（00 号计划书 §8.3，Codex 评审 CX5）', () => {
+  it('两份 unitId 相同的文档可以并存；各自保存、读取互不影响；保存按各自的 unit_id 核对', async () => {
+    const original = await aliceDocument('原件')
+    const copy = await seedDocument(database, { spaceId: alice.personalSpaceId, createdBy: alice.id, title: '副本', unitId: original.unitId })
+    expect(copy.unitId).toBe(original.unitId)
+
+    expect((await saved(await put(aliceSession, original.id, snapshotOf(original.unitId, '原件的内容'), { baseRevision: 1 }))).revision).toBe(2)
+    expect((await saved(await put(aliceSession, copy.id, snapshotOf(copy.unitId, '副本的内容'), { baseRevision: 1 }))).revision).toBe(2)
+    expect(await (await read(aliceSession, original.id)).text()).toBe(snapshotOf(original.unitId, '原件的内容').toString('utf8'))
+    expect(await (await read(aliceSession, copy.id)).text()).toBe(snapshotOf(copy.unitId, '副本的内容').toString('utf8'))
+
+    // 别的 unitId 的快照仍然存不进副本
+    const foreign = await put(aliceSession, copy.id, snapshotOf(randomUUID(), '别处的'), { baseRevision: 2 })
+    expect(foreign.status).toBe(422)
+    expect((await errorOf(foreign)).code).toBe('SNAPSHOT_INVALID')
+    expect(await storedRevision(copy.id)).toBe(2)
+  })
+})
+
 describe('US-M1-08 保存：别人的与不存在的相同；登录与防护', () => {
   it('别人的文档与不存在的文档：同样的 404，内容不变', async () => {
     const document = await aliceDocument()

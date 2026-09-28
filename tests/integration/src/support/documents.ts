@@ -12,6 +12,8 @@ export interface DocumentOptions {
   readonly title: string
   /** SQL 表达式，例如 now() - interval '1 hour'；默认 now() */
   readonly updatedAt?: string
+  /** 快照的 unitId：默认新生成；复制文档时与原件相同（00 号计划书 §8.3） */
+  readonly unitId?: string
 }
 
 export interface SeededDocument {
@@ -25,7 +27,7 @@ export async function createDocument(database: TestDatabase, options: DocumentOp
 
 /** 建一份文档并返回它的 unitId：保存的用例要用 unitId 构造快照。 */
 export async function seedDocument(database: TestDatabase, options: DocumentOptions): Promise<SeededDocument> {
-  const unitId = randomUUID()
+  const unitId = options.unitId ?? randomUUID()
   const raw = Buffer.from(sheetSnapshotFor(unitId), 'utf8')
   const snapshot = zlib.gzipSync(raw)
   const digest = createHash('sha256').update(`created\nsheet\n${options.title}`, 'utf8').digest()
