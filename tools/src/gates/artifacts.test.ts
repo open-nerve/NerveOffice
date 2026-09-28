@@ -497,14 +497,16 @@ describe('US-M1-11 A01 产物扫描：外部地址与关键字', () => {
     once(build(1000))
     // 大小两种数量交替测，各取五次里最快的一次：两者经历同样的负载，比值不受机器忙闲的影响（原来先后分开测、
     // 数量乘 4、上限 10，整套单元测试并行跑时线性的扫描也偶发超过 10，第二轮复验）
-    const [small, large] = [build(4_000), build(32_000)]
+    const [small, large] = [build(4_000), build(64_000)]
     const times = { small: [] as number[], large: [] as number[] }
     for (let round = 0; round < 5; round++) {
       times.small.push(once(small))
       times.large.push(once(large))
     }
-    // 数量乘 8：线性约 8 倍，平方级约 64 倍；上限 24，两边都留足余量
-    expect(Math.min(...times.large) / Math.max(Math.min(...times.small), 1)).toBeLessThan(24)
+    // 数量乘 16：线性约 16 倍，平方级约 256 倍，上限取两者的几何平均 64，两边各留 4 倍的余量。
+    // 原来乘 8、上限 24，只有约 2.8 倍的余量：整套测试开着覆盖率并行跑时，线性的扫描实测到 26 倍（单独跑 7.7–8.5 倍，
+    // 负载放大约 3.1 倍），M2-P1 收尾时偶发失败。乘 16 也让"平方项刚开始起作用"的情形更容易被发现
+    expect(Math.min(...times.large) / Math.max(Math.min(...times.small), 1)).toBeLessThan(64)
     // 计时的用例：CI 的机器慢、又开着覆盖率，给足时间
   }, 60_000)
 
