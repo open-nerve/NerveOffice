@@ -33,10 +33,13 @@ import {
   createSettings,
   DISTRIBUTED_LICENSE_FILES,
   distributedFileProblems,
+  duBytes,
   FILE_SIZES_SCRIPT,
   FORGED_CLIENT_ADDRESS,
   IMAGE_PREFIX,
+  imageSizeArgs,
   mebibytes,
+  megabytes,
   memoryBytes,
   parseAuditAddresses,
   playwrightEnvironment,
@@ -263,6 +266,13 @@ function formatMemory(bytes: number | undefined): string {
   return bytes === undefined ? '（没有取到）' : mebibytes(bytes)
 }
 
+/** 镜像里文件的合计（与镜像存储无关，见 imageSizeArgs）；量不出来时说明原因 */
+function imageSize(image: string): string {
+  const result = capture('docker', imageSizeArgs(image))
+  const bytes = result.status === 0 ? duBytes(result.stdout) : undefined
+  return bytes === undefined ? `（没有量到：${result.stderr.trim() || `退出码 ${String(result.status)}`}）` : megabytes(bytes)
+}
+
 /**
  * 以外部模式运行 E2E，期间每 2 秒取样应用容器的内存，返回退出码与峰值。
  * 异步执行：同步执行时事件循环停住，取样的定时器不会触发。收到信号时只给 Playwright 的主进程发 SIGINT：
@@ -374,8 +384,7 @@ async function exercise(settings: ContainerE2eSettings, options: { version: stri
     log(`部署配置的核对没有通过：\n- ${problems.join('\n- ')}`)
     return 1
   }
-  // docker image ls 的体积是解压之后的：inspect 的 Size 在 containerd 的镜像存储里是压缩之后的，两种存储不一致
-  measurement(`镜像体积（解压之后）：${capture('docker', ['image', 'ls', '--format', '{{.Size}}', settings.image]).stdout.trim()}`)
+  measurement(`镜像体积（镜像里文件的合计，解压之后）：${imageSize(settings.image)}`)
   measurement(`应用容器的内存（空闲）：${formatMemory(await memoryOf(appContainer(settings)))}`)
   if (interruption.interrupted())
     return 1

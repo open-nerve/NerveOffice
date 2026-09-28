@@ -547,7 +547,7 @@ Action 原始文件核对：[checkout](https://raw.githubusercontent.com/actions
 | 门禁矩阵里 budgets 的候选：清单里缺失的 import 会被跳过 | 已补 `budgets/missing-chunk`：构建清单里的块引用了清单里没有的块时报违规（现实里的这种情形原本也会被 `budgets/unattributed-script` 报出，这条让清单自身不一致时直接失败） |
 | 覆盖说明第 5 条：没有对最终镜像逐文件取证 | 分叉在修 CX9 时指出镜像里的许可文件同样没人核对：容器 E2E 的部署核对另量镜像里的 `/app/licenses/LICENSE`、`THIRD-PARTY-LICENSES-server.md` 与 `/app/web/THIRD-PARTY-LICENSES.md`，缺了或是空的都失败（CI 的 `container` job 同样执行）；其余逐文件的取证不在本轮范围 |
 | 异议：M1 收尾汇报的"全部退出条件已满足"不能作为最终事实 | 已改：收尾汇报的结论写明合并之后的 CI 与标签仍待完成 |
-| CI 首跑专项：amd64 的实际结果仍待合并后确认 | 同意，不另立问题：合并、推送之后看 CI 的两个 job，把 amd64 的镜像体积与内存补进 ADR-001 与收尾汇报 §3 |
+| CI 首跑专项：amd64 的实际结果仍待合并后确认 | 同意，不另立问题：合并、推送之后看 CI 的两个 job，把 amd64 的镜像体积与内存补进 ADR-001 与收尾汇报 §3。结果：合并 `f7d6105` 的 run 36402178139 两个 job 都通过（收尾汇报 §3） |
 
 **独立复验**（与主会话同一模型的新审查者，不带主会话的上下文，逐项核实修复并找修复带来的问题；主会话逐条核实之后处理）：
 
@@ -571,5 +571,5 @@ Action 原始文件核对：[checkout](https://raw.githubusercontent.com/actions
 
 **修复之后的验证**（两轮复验的修复都提交之后，HEAD `d3704f5`）：
 - 从干净状态（`pnpm clean`）跑 `pnpm verify` 全部通过：lint、类型检查、静态门禁；单元与集成测试 146 个文件 2000 项（行覆盖率 97.07%、分支 93.5%）；构建与产物门禁；E2E 219 项（72 条用例 × 本机 Chromium、Chrome、WebKit，加 3 条重启用例）。
-- `pnpm test:e2e:container`：73 项通过；部署配置的核对（含新加的镜像许可文件）通过；镜像 441 MB（arm64，解压之后），应用容器空闲 204.3 MiB、E2E 期间峰值 250.3 MiB；跑完没有残留。
+- `pnpm test:e2e:container`：73 项通过；部署配置的核对（含新加的镜像许可文件）通过；镜像 441 MB（arm64；这是 Docker Desktop 上 `docker image ls` 的口径，镜像里文件的合计为 285.7 MB，见 ADR-001），应用容器空闲 204.3 MiB、E2E 期间峰值 250.3 MiB；跑完没有残留。
 - 构建期间给编排脚本发 SIGINT：1 秒内停下，buildx 报 `CANCELED`，不再起测试环境，没有残留，退出码 1。

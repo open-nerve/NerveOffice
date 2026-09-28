@@ -6,9 +6,12 @@ import {
   databaseUrl,
   DISTRIBUTED_LICENSE_FILES,
   distributedFileProblems,
+  duBytes,
   FILE_SIZES_SCRIPT,
   FORGED_CLIENT_ADDRESS,
+  imageSizeArgs,
   mebibytes,
+  megabytes,
   memoryBytes,
   parseAuditAddresses,
   playwrightEnvironment,
@@ -190,5 +193,20 @@ describe('docker 输出的解析', () => {
     expect(memoryBytes('--')).toBeUndefined()
     expect(memoryBytes('12parsecs / 1GB')).toBeUndefined()
     expect(mebibytes(200.25 * 1024 ** 2)).toBe('200.3 MiB')
+  })
+
+  it('镜像体积在一次性的容器里合计镜像里的文件：不联网、以 root 读全部目录、不跨文件系统（不算 /proc 等）', () => {
+    expect(imageSizeArgs('nerve-office:e2e-42')).toEqual(['run', '--rm', '--network', 'none', '--user', '0', '--entrypoint', 'du', 'nerve-office:e2e-42', '-sxb', '/'])
+  })
+
+  it('du 的输出只认根目录的一行字节数；读不出来时是 undefined', () => {
+    expect(duBytes('285717915\t/\n')).toBe(285_717_915)
+    expect(duBytes('  267140309 /  ')).toBe(267_140_309)
+    expect(duBytes('')).toBeUndefined()
+    expect(duBytes('du: cannot access \'/\': Permission denied')).toBeUndefined()
+    expect(duBytes('4096\t/app\n')).toBeUndefined()
+    expect(duBytes('12\t/\n34\t/\n')).toBeUndefined()
+    expect(duBytes('99999999999999999999\t/')).toBeUndefined()
+    expect(megabytes(285_717_915)).toBe('285.7 MB')
   })
 })
