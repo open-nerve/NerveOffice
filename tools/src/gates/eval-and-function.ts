@@ -1,7 +1,9 @@
-// A01 产物扫描：JS 产物里对 eval 与 Function 的每一处引用（审查 B3）。
-// 这两个全局绑定是把字符串变成代码的入口。按写法匹配只认得出直接调用：先赋给变量（let e=Function; new e(code)）、
+// A01 产物扫描：JS 产物里对 eval 与 Function 的每一处引用（审查 B3），以及以字符串为代码的定时器调用（Codex 评审 CX11）。
+// eval 与 Function 这两个全局绑定是把字符串变成代码的入口。按写法匹配只认得出直接调用：先赋给变量（let e=Function; new e(code)）、
 // 当作参数传出（Reflect.construct(Function, …)）、用下标从全局对象上取（globalThis["Function"]）都会漏掉，
 // 字符串里的 "[object Function]" 反而会误报。所以按语法树找引用，只放过几种拿不到代码执行能力的用法。
+// 定时器（setTimeout 等）平常都传函数，不能像 eval 那样把每一处引用都报出来：按语法树认"调用对象静态可知是定时器、
+// 代码参数是字符串"的调用（见 stringTimerAt）；按写法匹配认不出 globalThis["setTimeout"](…)、Reflect.get(…)(…) 这类写法。
 // 解析用 Vite 自带的解析器：与产出产物的打包器是同一套，不另加依赖。
 import { parseSync } from 'vite'
 
@@ -32,7 +34,16 @@ export interface TextValue {
   index: number
 }
 
-export type AnalysisOutcome = { references: Reference[], texts: TextValue[] } | { error: string }
+export type TimerName = 'setTimeout' | 'setInterval' | 'setImmediate'
+
+/** 以字符串为代码的定时器调用（Codex 评审 CX11） */
+export interface StringTimerCall {
+  name: TimerName
+  /** 调用在文件内容里的下标 */
+  index: number
+}
+
+export type AnalysisOutcome = { references: Reference[], texts: TextValue[], stringTimers: StringTimerCall[] } | { error: string }
 
 /** 模板字符串里插值的占位 ${…}：地址的识别把它当作运行时才有的一段 */
 export const INTERPOLATION_PLACEHOLDER = `$\{…}`
@@ -198,6 +209,104 @@ function referenceAt(visit: Visit): Reference | undefined {
   return { name, usage, index: visit.node.start, ...(invoked === undefined ? {} : { literalArguments: invoked }) }
 }
 
+const TIMERS: ReadonlySet<string> = new Set(['setTimeout', 'setInterval', 'setImmediate'])
+
+function isTimer(value: unknown): value is TimerName {
+  return typeof value === 'string' && TIMERS.has(value)
+}
+
+/** 可选链的外壳去掉之后的表达式：(a?.b)(…) 的调用对象是包着 a?.b 的 ChainExpression */
+function withoutChain(node: unknown): unknown {
+  return isNode(node) && node.type === 'ChainExpression' ? node.expression : node
+}
+
+/** Reflect 上名为 method 的方法：Reflect.get、globalThis.Reflect.get、Reflect["apply"] 这类写法 */
+function isReflectMethod(callee: unknown, method: string): boolean {
+  const member = withoutChain(callee)
+  if (!isNode(member) || member.type !== 'MemberExpression' || propertyName(member) !== method)
+    return false
+  const object = withoutChain(member.object)
+  return isNode(object) && ((object.type === 'Identifier' && object.name === 'Reflect') || (object.type === 'MemberExpression' && propertyName(object) === 'Reflect'))
+}
+
+/**
+ * 这个表达式静态地就是一个定时器：标识符；属性名静态可知的成员访问（任何对象上的同名属性都算，与 eval、Function 的口径一致，
+ * 包括计算的字符串下标 globalThis["setTimeout"]）；逗号表达式的最后一项；Reflect.get(任何对象, "定时器名") 的结果
+ */
+function timerOf(node: unknown): TimerName | undefined {
+  let expression = withoutChain(node)
+  // 逗号表达式的值是最后一项；嵌套的逗号表达式逐层取（不递归）
+  while (isNode(expression) && expression.type === 'SequenceExpression' && Array.isArray(expression.expressions))
+    expression = withoutChain(expression.expressions.at(-1))
+  if (!isNode(expression))
+    return undefined
+  switch (expression.type) {
+    case 'Identifier':
+      return isTimer(expression.name) ? expression.name : undefined
+    case 'MemberExpression': {
+      const name = propertyName(expression)
+      return isTimer(name) ? name : undefined
+    }
+    case 'CallExpression': {
+      if (!isReflectMethod(expression.callee, 'get') || !Array.isArray(expression.arguments))
+        return undefined
+      const name = staticString(expression.arguments[1])
+      return isTimer(name) ? name : undefined
+    }
+    default:
+      return undefined
+  }
+}
+
+/**
+ * 值一定是字符串的表达式：字符串字面量、模板字符串（带插值的也是字符串）、有一侧是字符串的 + 拼接。
+ * 拼接里任何一处是字符串，整个拼接的结果就是字符串；很长的拼接在语法树里很深，用显式的栈，不递归
+ */
+function isStringExpression(node: unknown): boolean {
+  const pending: unknown[] = [node]
+  for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
+    if (!isNode(current))
+      continue
+    if ((current.type === 'Literal' && typeof current.value === 'string') || current.type === 'TemplateLiteral')
+      return true
+    if (current.type === 'BinaryExpression' && current.operator === '+')
+      pending.push(current.left, current.right)
+  }
+  return false
+}
+
+/** 数组字面量的第一项是字符串：.apply 与 Reflect.apply 的参数列表 */
+function firstElementIsString(node: unknown): boolean {
+  return isNode(node) && node.type === 'ArrayExpression' && Array.isArray(node.elements) && isStringExpression(node.elements[0])
+}
+
+/**
+ * 以字符串为代码的定时器调用（Codex 评审 CX11）：
+ * - 调用对象是定时器（见 timerOf），代码是第一个参数：setTimeout("…")、globalThis["setTimeout"]("…")、(0,setTimeout)("…")、
+ *   Reflect.get(globalThis,"setTimeout")("…")；
+ * - 定时器的 .call(thisArg, 代码) 与 .apply(thisArg, [代码])；Reflect.apply(定时器, thisArg, [代码])。
+ * 静态判断不了的由没有 'unsafe-eval' 的 CSP 兜底：经变量的别名（const t=setTimeout; t("…")）、运行时才算出的名字
+ * （globalThis["set"+name]）、代码参数是变量（setTimeout(code)）。
+ */
+function stringTimerAt(node: SyntaxNode): StringTimerCall | undefined {
+  if (node.type !== 'CallExpression' || !Array.isArray(node.arguments))
+    return undefined
+  const args: unknown[] = node.arguments
+  const found = (name: TimerName | undefined, isCode: boolean): StringTimerCall | undefined => (name !== undefined && isCode ? { name, index: node.start } : undefined)
+  const direct = timerOf(node.callee)
+  if (direct !== undefined)
+    return found(direct, isStringExpression(args[0]))
+  const callee = withoutChain(node.callee)
+  if (!isNode(callee) || callee.type !== 'MemberExpression')
+    return undefined
+  const method = propertyName(callee)
+  if (method === 'call')
+    return found(timerOf(callee.object), isStringExpression(args[1]))
+  if (method !== 'apply')
+    return undefined
+  return isReflectMethod(callee, 'apply') ? found(timerOf(args[0]), firstElementIsString(args[2])) : found(timerOf(callee.object), firstElementIsString(args[1]))
+}
+
 function visitChildren(visit: Visit, stack: Visit[]): void {
   for (const [field, value] of Object.entries(visit.node)) {
     for (const child of Array.isArray(value) ? value : [value]) {
@@ -229,7 +338,7 @@ function textAt(node: SyntaxNode): TextValue | undefined {
 }
 
 /**
- * content 是一个 JS 文件（ES 模块或脚本）：对 eval 与 Function 的引用，以及可能写着地址的文字。
+ * content 是一个 JS 文件（ES 模块或脚本）：对 eval 与 Function 的引用、以字符串为代码的定时器调用，以及可能写着地址的文字。
  * 解析失败时返回错误，由调用方按违规处理，不当作没有引用。
  */
 export function analyzeJavaScript(content: string): AnalysisOutcome {
@@ -238,6 +347,7 @@ export function analyzeJavaScript(content: string): AnalysisOutcome {
     return { error: errors.map(error => error.message).join('；') || '解析结果不是语法树' }
   // 解构的简写（const { Function } = globalThis）里键与值是同一个位置，按位置去重
   const references = new Map<number, Reference>()
+  const stringTimers: StringTimerCall[] = []
   const texts: TextValue[] = comments.map(comment => ({ kind: 'comment', text: comment.value, index: comment.start }))
   // 显式的栈：压缩后的代码可能有很深的表达式（例如很长的字符串拼接），递归会耗尽调用栈
   const stack: Visit[] = [{ node: program, parent: undefined, grandparent: undefined, field: '' }]
@@ -246,11 +356,18 @@ export function analyzeJavaScript(content: string): AnalysisOutcome {
     const reference = referenceAt(visit)
     if (reference !== undefined && !references.has(reference.index))
       references.set(reference.index, reference)
+    const timer = stringTimerAt(visit.node)
+    if (timer !== undefined)
+      stringTimers.push(timer)
     const text = textAt(visit.node)
     if (text !== undefined)
       texts.push(text)
   }
-  return { references: [...references.values()].sort((a, b) => a.index - b.index), texts: texts.sort((a, b) => a.index - b.index) }
+  return {
+    references: [...references.values()].sort((a, b) => a.index - b.index),
+    texts: texts.sort((a, b) => a.index - b.index),
+    stringTimers: stringTimers.sort((a, b) => a.index - b.index),
+  }
 }
 
 /** 只要对 eval 与 Function 的引用。 */

@@ -187,6 +187,36 @@ export function publishedPortProblems(status: number | null, output: string): st
 }
 
 /**
+ * 随镜像分发的许可文件（00 号计划书 §3.3，ADR-012）：项目本身的许可、服务端与前端的第三方许可正文。
+ * 许可门禁与产物门禁核对的是构建镜像之前的产物；镜像里是不是真有这几个文件、是不是空的，只有对镜像核对才知道
+ * （清单说收集过正文不等于分发的文件还在，与 Codex 评审 CX9 同一个道理）
+ */
+export const DISTRIBUTED_LICENSE_FILES: readonly string[] = [
+  '/app/licenses/LICENSE',
+  '/app/licenses/THIRD-PARTY-LICENSES-server.md',
+  '/app/web/THIRD-PARTY-LICENSES.md',
+]
+
+/** 在应用容器里量文件大小的脚本（node -e，文件作参数）：每行"路径<TAB>字节数"，不存在或读不到时字节数是 -1 */
+export const FILE_SIZES_SCRIPT = 'for (const file of process.argv.slice(1)) { let size = -1; try { size = require("node:fs").statSync(file).size } catch {} console.log(file + "\\t" + size) }'
+
+/** 量到的大小 → 问题：命令失败、缺了哪个文件、哪个是空的 */
+export function distributedFileProblems(files: readonly string[], status: number | null, output: string): string[] {
+  if (status !== 0)
+    return [`量不了镜像里的许可文件（退出码 ${String(status)}）`]
+  const sizes = new Map(output.split('\n').filter(line => line.includes('\t')).map((line) => {
+    const [file = '', size = ''] = line.split('\t')
+    return [file, Number(size)] as const
+  }))
+  return files.flatMap((file) => {
+    const size = sizes.get(file)
+    if (size === undefined || size < 0)
+      return [`镜像里没有 ${file}`]
+    return size === 0 ? [`镜像里的 ${file} 是空的`] : []
+  })
+}
+
+/**
  * 经代理访问探针的期望（P5 设计 §3.4）：存活探针转发；就绪探针的说明里有迁移名，不对外。
  * 应用的路由不区分末尾斜杠与大小写，这几种写法都是就绪探针，代理都要屏蔽（审查 A1）
  */

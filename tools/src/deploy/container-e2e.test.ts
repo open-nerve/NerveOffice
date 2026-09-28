@@ -4,6 +4,9 @@ import {
   composeArgs,
   createSettings,
   databaseUrl,
+  DISTRIBUTED_LICENSE_FILES,
+  distributedFileProblems,
+  FILE_SIZES_SCRIPT,
   FORGED_CLIENT_ADDRESS,
   mebibytes,
   memoryBytes,
@@ -120,6 +123,35 @@ describe('客户端地址的核对（DEF-014）', () => {
     expect(publishedPortProblems(0, '0.0.0.0:32768\n[::]:32768\n')).toEqual(['应用的端口发布到了主机（0.0.0.0:32768、[::]:32768）：只能让代理连到应用'])
     expect(publishedPortProblems(1, '')).toEqual(['查不到应用的端口有没有发布（docker compose port 的退出码 1）'])
     expect(publishedPortProblems(null, '')).toEqual(['查不到应用的端口有没有发布（docker compose port 的退出码 null）'])
+  })
+})
+
+describe('随镜像分发的许可文件', () => {
+  it('都在、都不是空的：没有问题', () => {
+    const output = DISTRIBUTED_LICENSE_FILES.map(file => `${file}\t1024`).join('\n')
+    expect(distributedFileProblems(DISTRIBUTED_LICENSE_FILES, 0, `${output}\n`)).toEqual([])
+  })
+
+  it('缺了、是空的、没有量到、命令失败：都算问题', () => {
+    const [license = '', server = '', web = ''] = DISTRIBUTED_LICENSE_FILES
+    expect(distributedFileProblems(DISTRIBUTED_LICENSE_FILES, 0, `${license}\t-1\n${server}\t0\n`)).toEqual([
+      `镜像里没有 ${license}`,
+      `镜像里的 ${server} 是空的`,
+      `镜像里没有 ${web}`,
+    ])
+    expect(distributedFileProblems(DISTRIBUTED_LICENSE_FILES, 1, '')).toEqual(['量不了镜像里的许可文件（退出码 1）'])
+    expect(distributedFileProblems(DISTRIBUTED_LICENSE_FILES, null, '')).toEqual(['量不了镜像里的许可文件（退出码 null）'])
+  })
+
+  it('量大小的脚本：每个参数一行，缺的文件是 -1', async () => {
+    const { spawnSync } = await import('node:child_process')
+    const result = spawnSync(process.execPath, ['-e', FILE_SIZES_SCRIPT, import.meta.filename, '/nerve-office-no-such-file'], { encoding: 'utf8' })
+    expect(result.status).toBe(0)
+    const [present = '', missing = ''] = result.stdout.trim().split('\n')
+    const [file, size] = present.split('\t')
+    expect(file).toBe(import.meta.filename)
+    expect(Number(size)).toBeGreaterThan(0)
+    expect(missing).toBe('/nerve-office-no-such-file\t-1')
   })
 })
 

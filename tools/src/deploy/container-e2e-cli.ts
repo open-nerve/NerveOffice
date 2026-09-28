@@ -6,11 +6,14 @@
 //    伪造的转发头不被采信）、应用的端口没有发布到主机；
 // 4. 以外部模式运行 E2E（E2E 的管理员由 Playwright 的全局准备经编排初始化，tests/e2e/support/external-setup.ts）；
 // 5. 打印镜像体积与应用容器的内存（空闲、E2E 期间每 2 秒取样的峰值、跑完之后，ADR-001）；
-// 6. 无论成败，把各容器的日志收集到 tests/e2e/test-results/container/，然后 down -v、去掉这次的镜像标签、删除临时目录。
-import type { ChildProcess } from 'node:child_process'
+// 6. 无论成败，把各容器的日志收集到 tests/e2e/test-results/container/，然后 down -v、去掉这次的镜像标签、删除临时目录：
+//    每一步都执行，前一步失败不跳过后面的，有一步失败就以非零退出（Codex 评审 CX13）。
+// 长命令（构建、起环境、编排网络里的核对、E2E）异步执行，收到信号时转给它们，之后不再开始新的步骤（Codex 评审 CX12，
+// container-e2e-process.ts）；短命令同步执行，带超时：docker 的守护进程卡住时不会一直停在那里。
 import type { AddressInfo } from 'node:net'
+import type { CleanupStep } from './container-e2e-process.ts'
 import type { ContainerE2eSettings, ProbeResponse } from './container-e2e.ts'
-import { execFile, spawn, spawnSync } from 'node:child_process'
+import { execFile, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import https from 'node:https'
@@ -22,11 +25,15 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { promisify } from 'node:util'
 import { z } from 'zod'
 import { readJson, REPO_ROOT } from '../shared/repo.ts'
+import { createInterruption, runCleanup, runTracked } from './container-e2e-process.ts'
 import {
   clientAddressProblems,
   COMPOSE_FILE,
   composeArgs,
   createSettings,
+  DISTRIBUTED_LICENSE_FILES,
+  distributedFileProblems,
+  FILE_SIZES_SCRIPT,
   FORGED_CLIENT_ADDRESS,
   IMAGE_PREFIX,
   mebibytes,
@@ -47,60 +54,22 @@ const LOG_DIR = join(REPO_ROOT, 'tests/e2e/test-results/container')
 const SERVICES = ['db', 'migrate', 'app', 'caddy'] as const
 /** 等经 Caddy 的存活探针通过的时限 */
 const LIVE_TIMEOUT_MS = 120_000
+/** 同步执行的短命令（查询、日志、down、去掉标签）的时限：到时强制结束，守护进程卡住时不会一直停住（Codex 评审 CX12） */
+const SHORT_COMMAND_TIMEOUT_MS = 120_000
 
 /** Playwright 的命令行：直接用 Node 启动，不经 pnpm（pnpm 收到信号就退出，不转给它启动的脚本，复验 RB1） */
 const PLAYWRIGHT_CLI = join(REPO_ROOT, 'tests/e2e/node_modules/@playwright/test/cli.js')
 
-let interrupted = false
 /**
- * 正在运行的 Playwright：它在自己的进程组里，终端的 Ctrl+C、关掉终端的 SIGHUP 都不会直接到它。本进程收到信号时：
- * - 第一次给它的主进程发 SIGINT：Playwright 只把 SIGINT 当作正常停止（写出汇总与报告）；SIGTERM 会让主进程当场退出，
- *   工作进程还要晚一步才退（复验 SB1）；
- * - 1 秒之后再收到信号时给它的整个进程组发 SIGKILL。1 秒之内的算同一次：关掉终端时几毫秒内会连着收到好几个信号
- *   （SIGHUP 与 SIGTERM，复验 TB1），Playwright 自己处理 SIGINT 也是这样去抖的。
- * 它的整个进程组都退出之后，再按正常的路径收集日志、清理（审查 B6）。本进程被强制结束时，Playwright 的全局准备
- * 发现编排脚本不在了，自己停下（tests/e2e/support/external-setup.ts，复验 SB2）。
+ * 收到终止信号时：记下"已中断"，之后不再开始新的步骤；正在运行的长命令由 interruption 转给它（第一次 SIGINT，
+ * 相隔 1 秒以上再收到时 SIGKILL 它的整个进程组，container-e2e-process.ts）。它的整个进程组都退出之后，再按正常的路径
+ * 收集日志、清理（审查 B6）。本进程被强制结束时，Playwright 的全局准备发现编排脚本不在了，自己停下
+ * （tests/e2e/support/external-setup.ts，复验 SB2）。
  * 因为处理了 SIGHUP，nohup 的忽略对本进程不起作用：放到后台跑用 tmux、screen 或 setsid（复验 TB2）
  */
-let playwright: ChildProcess | undefined
-let firstSignalAt: number | undefined
-for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
-  process.on(signal, () => {
-    interrupted = true
-    const pid = playwright?.pid
-    if (pid === undefined)
-      return
-    if (firstSignalAt === undefined) {
-      firstSignalAt = Date.now()
-      playwright?.kill('SIGINT')
-    }
-    else if (Date.now() - firstSignalAt >= 1_000) {
-      signalGroup(pid, 'SIGKILL')
-    }
-  })
-}
-
-function signalGroup(pid: number, signal: NodeJS.Signals | 0): boolean {
-  try {
-    process.kill(-pid, signal)
-    return true
-  }
-  catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
-
-/** Playwright 的主进程退出之后，等它的工作进程与浏览器也都退出：最多 10 秒，之后强制结束，免得和清理重叠 */
-async function waitForProcessGroup(pid: number): Promise<void> {
-  const deadline = Date.now() + 10_000
-  while (signalGroup(pid, 0)) {
-    if (Date.now() >= deadline) {
-      signalGroup(pid, 'SIGKILL')
-      return
-    }
-    await delay(200)
-  }
-}
+const interruption = createInterruption()
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const)
+  process.on(signal, () => interruption.receive())
 
 function log(message: string): void {
   console.log(`容器 E2E：${message}`)
@@ -132,21 +101,23 @@ function parseArgs(argv: readonly string[]): { browsers: string[], playwrightArg
   return { browsers: own[1].split(','), playwrightArgs }
 }
 
-interface Result {
+interface Captured {
+  /** 退出码；超过时限被强制结束、或者启动不了时是 null */
   readonly status: number | null
   readonly stdout: string
   readonly stderr: string
 }
 
-/** 执行命令，输出收集起来 */
-function capture(command: string, args: readonly string[], input?: string): Result {
-  const result = spawnSync(command, args, { cwd: REPO_ROOT, encoding: 'utf8', input, maxBuffer: 256 * 1024 * 1024 })
-  return { status: result.status, stdout: result.stdout, stderr: result.stderr }
+/** 同步执行短命令，输出收集起来；超过时限强制结束 */
+function capture(command: string, args: readonly string[]): Captured {
+  const result = spawnSync(command, args, { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, timeout: SHORT_COMMAND_TIMEOUT_MS, killSignal: 'SIGKILL' })
+  const failure = result.error === undefined ? '' : `\n${result.error.message}`
+  return { status: result.status, stdout: result.stdout ?? '', stderr: `${result.stderr ?? ''}${failure}` }
 }
 
-/** 执行命令，输出直接显示；返回退出码 */
-function run(command: string, args: readonly string[], env: NodeJS.ProcessEnv = process.env): number {
-  return spawnSync(command, args, { cwd: REPO_ROOT, env, stdio: 'inherit' }).status ?? 1
+/** 异步执行长命令，输出直接显示；收到信号时由 interruption 转给它 */
+async function run(command: string, args: readonly string[]): Promise<number> {
+  return (await runTracked(interruption, command, args, { cwd: REPO_ROOT })).status
 }
 
 async function freePort(): Promise<number> {
@@ -192,7 +163,7 @@ async function waitUntilLive(settings: ContainerE2eSettings): Promise<boolean> {
   for (;;) {
     if (await httpsStatus(`${publicOrigin(settings)}/api/health/live`) === 200)
       return true
-    if (interrupted || Date.now() >= deadline)
+    if (interruption.interrupted() || Date.now() >= deadline)
       return false
     await delay(500)
   }
@@ -246,7 +217,10 @@ async function checkClientAddresses(settings: ContainerE2eSettings): Promise<str
     problems.push(`带着伪造的 X-Forwarded-For 那次登录失败的状态码是 ${forgedStatus}，期望 401`)
   const script = `fetch('https://caddy/api/auth/login', { method: 'POST', headers: ${JSON.stringify({ ...headers, 'x-request-id': ids.network })}, body: ${JSON.stringify(body)} })`
     + '.then(response => process.exit(response.status === 401 ? 0 : 1), () => process.exit(2))'
-  const network = capture('docker', composeArgs(settings, 'run', '--rm', '--no-deps', '-T', '-e', 'NODE_TLS_REJECT_UNAUTHORIZED=0', 'app', 'node', '-e', script))
+  // 要起一个容器，是长命令：异步执行，收到信号时转给它（Codex 评审 CX12）
+  const network = await runTracked(interruption, 'docker', composeArgs(settings, 'run', '--rm', '--no-deps', '-T', '-e', 'NODE_TLS_REJECT_UNAUTHORIZED=0', 'app', 'node', '-e', script), { cwd: REPO_ROOT, capture: true })
+  if (interruption.interrupted())
+    return ['收到终止信号，核对没有做完']
   if (network.status !== 0)
     problems.push(`编排网络里那次登录失败没有得到 401（退出码 ${String(network.status)}）：${network.stderr.trim()}`)
 
@@ -260,6 +234,12 @@ async function checkClientAddresses(settings: ContainerE2eSettings): Promise<str
   return [...problems, ...published, ...clientAddressProblems({ host: addresses.get(ids.host), network: addresses.get(ids.network), forged: addresses.get(ids.forged), proxy })]
 }
 
+/** 随镜像分发的许可文件都在、都不是空的：在运行着的应用容器里量（DISTRIBUTED_LICENSE_FILES） */
+function checkDistributedFiles(settings: ContainerE2eSettings): string[] {
+  const sizes = capture('docker', composeArgs(settings, 'exec', '-T', 'app', 'node', '-e', FILE_SIZES_SCRIPT, ...DISTRIBUTED_LICENSE_FILES))
+  return distributedFileProblems(DISTRIBUTED_LICENSE_FILES, sizes.status, sizes.stdout)
+}
+
 const execFileAsync = promisify(execFile)
 /** E2E 期间取样应用容器内存的间隔 */
 const MEMORY_SAMPLE_INTERVAL_MS = 2_000
@@ -271,7 +251,7 @@ function appContainer(settings: ContainerE2eSettings): string {
 
 async function memoryOf(container: string): Promise<number | undefined> {
   try {
-    return memoryBytes((await execFileAsync('docker', ['stats', '--no-stream', '--format', '{{.MemUsage}}', container])).stdout)
+    return memoryBytes((await execFileAsync('docker', ['stats', '--no-stream', '--format', '{{.MemUsage}}', container], { timeout: 30_000, killSignal: 'SIGKILL' })).stdout)
   }
   catch {
     // 容器正被重启用例强制结束
@@ -285,7 +265,8 @@ function formatMemory(bytes: number | undefined): string {
 
 /**
  * 以外部模式运行 E2E，期间每 2 秒取样应用容器的内存，返回退出码与峰值。
- * 异步执行：同步执行时事件循环停住，取样的定时器不会触发
+ * 异步执行：同步执行时事件循环停住，取样的定时器不会触发。收到信号时只给 Playwright 的主进程发 SIGINT：
+ * 它把 SIGINT 当作正常停止，写出汇总与报告；SIGTERM 会让主进程当场退出，工作进程还要晚一步才退（复验 SB1）
  */
 async function runE2e(settings: ContainerE2eSettings, browsers: readonly string[], playwrightArgs: readonly string[]): Promise<{ status: number, peak: number | undefined }> {
   const container = appContainer(settings)
@@ -303,39 +284,107 @@ async function runE2e(settings: ContainerE2eSettings, browsers: readonly string[
     })
   }, MEMORY_SAMPLE_INTERVAL_MS)
   try {
-    const status = await new Promise<number>((resolve) => {
-      // 与 E2E 包的 test 脚本相同：按 @nerve-office/source 条件解析工作区的包（经环境变量，工作进程也继承）
-      const nodeOptions = `${process.env.NODE_OPTIONS ?? ''} --conditions=@nerve-office/source`.trim()
-      // 浏览器的临时配置目录放进本次运行的临时目录：强制结束时留下的，随它一起删掉
-      const temporary = join(dirname(settings.envFile), 'tmp')
-      mkdirSync(temporary, { recursive: true })
-      const child = spawn(process.execPath, [PLAYWRIGHT_CLI, 'test', ...playwrightArgs], {
-        cwd: join(REPO_ROOT, 'tests/e2e'),
-        env: { ...process.env, ...playwrightEnvironment(settings, browsers, process.pid), NODE_OPTIONS: nodeOptions, TMPDIR: temporary },
-        stdio: ['ignore', 'inherit', 'inherit'],
-        // 自己的进程组：终端的信号只到本进程，由本进程转给它（见文件开头）
-        detached: true,
-      })
-      playwright = child
-      child.once('error', () => resolve(1))
-      child.once('exit', code => resolve(code ?? 1))
+    // 与 E2E 包的 test 脚本相同：按 @nerve-office/source 条件解析工作区的包（经环境变量，工作进程也继承）
+    const nodeOptions = `${process.env.NODE_OPTIONS ?? ''} --conditions=@nerve-office/source`.trim()
+    // 浏览器的临时配置目录放进本次运行的临时目录：强制结束时留下的，随它一起删掉
+    const temporary = join(dirname(settings.envFile), 'tmp')
+    mkdirSync(temporary, { recursive: true })
+    const { status } = await runTracked(interruption, process.execPath, [PLAYWRIGHT_CLI, 'test', ...playwrightArgs], {
+      cwd: join(REPO_ROOT, 'tests/e2e'),
+      env: { ...process.env, ...playwrightEnvironment(settings, browsers, process.pid), NODE_OPTIONS: nodeOptions, TMPDIR: temporary },
+      signalTarget: 'leader',
     })
-    if (playwright?.pid !== undefined)
-      await waitForProcessGroup(playwright.pid)
     return { status, peak }
   }
   finally {
     clearInterval(timer)
-    playwright = undefined
   }
 }
 
-function collectLogs(settings: ContainerE2eSettings): void {
+/** 这一步的命令成功了；没有成功时把它的错误输出记下来 */
+function succeeded(label: string, result: Captured): boolean {
+  if (result.status !== 0)
+    log(`${label}：退出码 ${String(result.status)}，${result.stderr.trim()}`)
+  return result.status === 0
+}
+
+/** 收集各容器的日志：写不进去（例如磁盘满了、目录被占用）时抛出，由清理记下，不影响后面的步骤 */
+function collectLogs(settings: ContainerE2eSettings): boolean {
   mkdirSync(LOG_DIR, { recursive: true })
-  for (const service of SERVICES)
-    writeFileSync(join(LOG_DIR, `${service}.log`), capture('docker', composeArgs(settings, 'logs', '--no-color', '--timestamps', service)).stdout)
+  let collected = true
+  for (const service of SERVICES) {
+    const logs = capture('docker', composeArgs(settings, 'logs', '--no-color', '--timestamps', service))
+    collected = succeeded(`收集 ${service} 的日志`, logs) && collected
+    writeFileSync(join(LOG_DIR, `${service}.log`), logs.stdout)
+  }
   writeFileSync(join(LOG_DIR, 'ps.txt'), capture('docker', composeArgs(settings, 'ps', '--all')).stdout)
   log(`各容器的日志在 ${LOG_DIR}`)
+  return collected
+}
+
+/**
+ * 清理（Codex 评审 CX13）：收集日志、删除测试环境（连同数据卷）、去掉这次的镜像标签、删除临时目录（变量文件里有密码），
+ * 每一步都执行。删除失败的编排项目与镜像标签带着本进程的进程号，下一次运行的遗留清理会认出来再删
+ */
+function cleanUp(settings: ContainerE2eSettings, directory: string): boolean {
+  const steps: CleanupStep[] = [
+    { label: '收集日志', run: () => collectLogs(settings) },
+    { label: '删除测试环境', run: () => succeeded('删除测试环境', capture('docker', composeArgs(settings, 'down', '-v', '--remove-orphans'))) },
+    {
+      label: '去掉这次的镜像标签',
+      run: () => {
+        // 只去掉这次的标签：构建缓存还在，下次构建照样快。构建没有完成时没有这个标签，不算失败
+        const tagged = capture('docker', ['image', 'ls', '--quiet', settings.image])
+        if (!succeeded('查询这次的镜像标签', tagged))
+          return false
+        return tagged.stdout.trim() === '' || succeeded('去掉这次的镜像标签', capture('docker', ['image', 'rm', settings.image]))
+      },
+    },
+    {
+      label: '删除临时目录',
+      run: () => {
+        rmSync(directory, { recursive: true, force: true })
+        return true
+      },
+    },
+  ]
+  log('收集日志，删除测试环境')
+  return runCleanup(steps, log)
+}
+
+/** 构建、起环境、核对、跑 E2E；返回退出码。每一步之后先看有没有收到终止信号，再做下一步（Codex 评审 CX12） */
+async function exercise(settings: ContainerE2eSettings, options: { version: string, revision: string, browsers: readonly string[], playwrightArgs: readonly string[] }): Promise<number> {
+  log(`构建镜像 ${settings.image}`)
+  if (await run('docker', ['build', '-f', 'deploy/Dockerfile', '-t', settings.image, '--build-arg', `VERSION=${options.version}`, '--build-arg', `REVISION=${options.revision}`, '.']) !== 0 || interruption.interrupted())
+    return 1
+  log(`起测试环境（编排项目 ${settings.project}，${publicOrigin(settings)}）`)
+  // 进程号可能被复用：同名的项目不管是谁留下的，先删掉，免得复用旧的数据卷（旧密码）
+  capture('docker', composeArgs(settings, 'down', '-v', '--remove-orphans'))
+  if (interruption.interrupted() || await run('docker', composeArgs(settings, 'up', '-d')) !== 0 || interruption.interrupted())
+    return 1
+  if (!await waitUntilLive(settings)) {
+    if (!interruption.interrupted())
+      log(`${LIVE_TIMEOUT_MS / 1000} 秒内经 Caddy 的存活探针没有通过`)
+    return 1
+  }
+  const problems = [...await checkProxiedProbes(settings), ...await checkClientAddresses(settings), ...checkDistributedFiles(settings)]
+  if (interruption.interrupted())
+    return 1
+  if (problems.length > 0) {
+    log(`部署配置的核对没有通过：\n- ${problems.join('\n- ')}`)
+    return 1
+  }
+  // docker image ls 的体积是解压之后的：inspect 的 Size 在 containerd 的镜像存储里是压缩之后的，两种存储不一致
+  measurement(`镜像体积（解压之后）：${capture('docker', ['image', 'ls', '--format', '{{.Size}}', settings.image]).stdout.trim()}`)
+  measurement(`应用容器的内存（空闲）：${formatMemory(await memoryOf(appContainer(settings)))}`)
+  if (interruption.interrupted())
+    return 1
+
+  log(`以外部模式运行 E2E（浏览器 ${options.browsers.join('、')}）`)
+  const { status, peak } = await runE2e(settings, options.browsers, options.playwrightArgs)
+  // 重启用例最后执行、会重启应用：跑完之后量到的是重启过的进程，峰值才反映 E2E 期间的占用
+  measurement(`应用容器的内存：E2E 期间的峰值 ${formatMemory(peak)}，跑完之后 ${formatMemory(await memoryOf(appContainer(settings)))}`)
+  return status
 }
 
 async function main(): Promise<number> {
@@ -343,6 +392,8 @@ async function main(): Promise<number> {
   const version = z.object({ version: z.string() }).parse(readJson('package.json')).version
   const revision = capture('git', ['rev-parse', '--short', 'HEAD']).stdout.trim()
   removeStaleRuns()
+  if (interruption.interrupted())
+    return 1
 
   // 临时目录的名字带进程号：被 SIGKILL 时留下的，下一次运行认得出来并删掉
   const directory = mkdtempSync(join(tmpdir(), `${PROJECT_PREFIX}${process.pid}-`))
@@ -352,44 +403,16 @@ async function main(): Promise<number> {
     databasePort = await freePort()
   const settings = createSettings({ pid: process.pid, composeFile: join(REPO_ROOT, COMPOSE_FILE), envFile: join(directory, 'test.env'), httpsPort, databasePort })
   writeFileSync(settings.envFile, renderEnvFile(settings), { mode: 0o600 })
+  let status = 1
   try {
-    log(`构建镜像 ${settings.image}`)
-    if (run('docker', ['build', '-f', 'deploy/Dockerfile', '-t', settings.image, '--build-arg', `VERSION=${version}`, '--build-arg', `REVISION=${revision}`, '.']) !== 0 || interrupted)
-      return 1
-    log(`起测试环境（编排项目 ${settings.project}，${publicOrigin(settings)}）`)
-    // 进程号可能被复用：同名的项目不管是谁留下的，先删掉，免得复用旧的数据卷（旧密码）
-    capture('docker', composeArgs(settings, 'down', '-v', '--remove-orphans'))
-    if (run('docker', composeArgs(settings, 'up', '-d')) !== 0 || interrupted)
-      return 1
-    if (!await waitUntilLive(settings)) {
-      log(`${LIVE_TIMEOUT_MS / 1000} 秒内经 Caddy 的存活探针没有通过`)
-      return 1
-    }
-    const problems = [...await checkProxiedProbes(settings), ...await checkClientAddresses(settings)]
-    if (problems.length > 0) {
-      log(`部署配置的核对没有通过：\n- ${problems.join('\n- ')}`)
-      return 1
-    }
-    // docker image ls 的体积是解压之后的：inspect 的 Size 在 containerd 的镜像存储里是压缩之后的，两种存储不一致
-    measurement(`镜像体积（解压之后）：${capture('docker', ['image', 'ls', '--format', '{{.Size}}', settings.image]).stdout.trim()}`)
-    measurement(`应用容器的内存（空闲）：${formatMemory(await memoryOf(appContainer(settings)))}`)
-    if (interrupted)
-      return 1
-
-    log(`以外部模式运行 E2E（浏览器 ${browsers.join('、')}）`)
-    const { status, peak } = await runE2e(settings, browsers, playwrightArgs)
-    // 重启用例最后执行、会重启应用：跑完之后量到的是重启过的进程，峰值才反映 E2E 期间的占用
-    measurement(`应用容器的内存：E2E 期间的峰值 ${formatMemory(peak)}，跑完之后 ${formatMemory(await memoryOf(appContainer(settings)))}`)
-    return status
+    status = await exercise(settings, { version, revision, browsers, playwrightArgs })
   }
-  finally {
-    collectLogs(settings)
-    log('删除测试环境')
-    capture('docker', composeArgs(settings, 'down', '-v', '--remove-orphans'))
-    // 只去掉这次的标签：构建缓存还在，下次构建照样快
-    capture('docker', ['image', 'rm', settings.image])
-    rmSync(directory, { recursive: true, force: true })
+  catch (error) {
+    console.error(error)
   }
+  // 清理有一步没成功（例如测试环境没删掉）：即使 E2E 通过，也以非零退出，免得留下的东西没人发现
+  const cleaned = cleanUp(settings, directory)
+  return cleaned ? status : Math.max(status, 1)
 }
 
 main().then(

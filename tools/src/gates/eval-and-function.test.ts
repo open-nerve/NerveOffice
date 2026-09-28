@@ -1,6 +1,6 @@
 import type { Reference } from './eval-and-function.ts'
 import { describe, expect, it } from 'vitest'
-import { findEvalAndFunction } from './eval-and-function.ts'
+import { analyzeJavaScript, findEvalAndFunction } from './eval-and-function.ts'
 
 function references(code: string): Reference[] {
   const outcome = findEvalAndFunction(code)
@@ -108,5 +108,56 @@ describe('US-M1-11 A01 产物里 eval 与 Function 的引用（语法树）', ()
 
   it('解析失败时返回错误，不当作没有引用', () => {
     expect(findEvalAndFunction('let x = ;')).toHaveProperty('error')
+  })
+})
+
+describe('US-M1-11 A01 以字符串为代码的定时器调用（语法树，Codex 评审 CX11）', () => {
+  function timers(code: string): string[] {
+    const outcome = analyzeJavaScript(code)
+    if ('error' in outcome)
+      throw new Error(`样例解析失败：${outcome.error}`)
+    return outcome.stringTimers.map(timer => timer.name)
+  }
+
+  it.each([
+    // Vite 压缩之后的原文：按写法匹配认不出（门禁原来放过）
+    ['压缩之后的 Reflect.get（Codex 的样例）', 'Reflect.get(globalThis,`setTimeout`)(`globalThis.codexGateProof = 1`,0)', ['setTimeout']],
+    ['直接调用', 'setTimeout("alert(1)",10);setInterval(\'tick()\',10);setImmediate(`x`)', ['setTimeout', 'setInterval', 'setImmediate']],
+    ['全局对象上的属性与可选调用', 'window.setTimeout("x",1);globalThis?.setTimeout?.("x")', ['setTimeout', 'setTimeout']],
+    ['计算的字符串下标', 'globalThis["setTimeout"]("alert(1)",0);self[`setInterval`](`x`)', ['setTimeout', 'setInterval']],
+    ['逗号表达式的最后一项', '(0,setTimeout)("x");(0,(1,window.setInterval))("x")', ['setTimeout', 'setInterval']],
+    ['可选链的外壳', '(globalThis?.setTimeout)("x")', ['setTimeout']],
+    ['Reflect.get 的各种写法', 'globalThis.Reflect.get(self,"setInterval")("x");Reflect["get"](window,"setTimeout")("x")', ['setInterval', 'setTimeout']],
+    ['.call 与 .apply', 'setTimeout.call(null,"x");window.setTimeout.apply(window,["x",1])', ['setTimeout', 'setTimeout']],
+    ['Reflect.apply', 'Reflect.apply(setTimeout,null,["x"])', ['setTimeout']],
+    // 样例是带插值的模板字符串原文，不是要插值
+    // eslint-disable-next-line no-template-curly-in-string
+    ['代码是拼接的字符串或带插值的模板', 'setTimeout("a"+b);setTimeout(b+(c+"a"));setTimeout(`a${b}`)', ['setTimeout', 'setTimeout', 'setTimeout']],
+  ])('认得出：%s', (_case, code, expected) => {
+    expect(timers(code)).toEqual(expected)
+  })
+
+  it.each([
+    ['参数是函数', 'setTimeout(()=>{},0);setTimeout(function(){},1);window.setTimeout(fn,2);setInterval(tick,10)'],
+    ['不是定时器的调用带着字符串参数', 'log("setTimeout");obj.set("x");timer.start("x");Reflect.get(o,"fetch")("x")'],
+    ['.call 的第一个参数是 this，不是代码', 'setTimeout.call("x",fn)'],
+    ['.apply 的参数列表里第一项不是字符串', 'setTimeout.apply(null,[fn,"x"])'],
+    ['数值相加不是字符串', 'setTimeout(a+1)'],
+    // 静态判断不了的边界：由没有 unsafe-eval 的 CSP 兜底（文件开头与 artifacts.ts 的说明）
+    ['代码是变量', 'setTimeout(code,0)'],
+    ['经变量的别名', 'const t=setTimeout;t("x")'],
+    ['运行时才算出的名字', 'globalThis["set"+name]("x")'],
+  ])('不算：%s', (_case, code) => {
+    expect(timers(code)).toEqual([])
+  })
+
+  it('位置是调用开头的字符下标', () => {
+    const code = 'const s="请求失败😀";Reflect.get(globalThis,"setTimeout")("x")'
+    const outcome = analyzeJavaScript(code)
+    expect('error' in outcome ? [] : outcome.stringTimers.map(timer => code.slice(timer.index, timer.index + 11))).toEqual(['Reflect.get'])
+  })
+
+  it('代码是很长的拼接时不会耗尽调用栈', () => {
+    expect(timers(`setTimeout(${Array.from({ length: 20_000 }).fill('a').join('+')}+"x")`)).toEqual(['setTimeout'])
   })
 })

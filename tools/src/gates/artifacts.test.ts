@@ -61,6 +61,25 @@ describe('US-M1-11 A01 产物扫描：动态代码', () => {
     expect(rules(code)).toContain('artifacts/dynamic-code')
   })
 
+  it.each([
+    // Vite 压缩之后的原文（Codex 评审 CX11）：原来的写法匹配放过
+    ['Reflect.get 取定时器', 'Reflect.get(globalThis,`setTimeout`)(`globalThis.codexGateProof = 1`,0);'],
+    ['计算的字符串下标', 'globalThis["setTimeout"]("alert(1)", 0)'],
+    ['逗号表达式', '(0,setTimeout)("alert(1)")'],
+    ['.call', 'setTimeout.call(null,"alert(1)")'],
+  ])('违规：JS 文件里以字符串为代码的定时器按语法树认（%s）', (_case, code) => {
+    expect(rules(code)).toEqual(['artifacts/dynamic-code'])
+  })
+
+  it('JS 文件里直接调用的字符串定时器只报一次；没有语法树的文本文件仍按写法匹配定时器', () => {
+    const { violations } = scan('setInterval(\'tick()\', 10)')
+    expect(violations).toHaveLength(1)
+    expect(violations[0]?.detail).toMatch(/^setInterval\('…'\)：/)
+    expect(rules('<script>setTimeout("alert(1)",1)</script>', 'index.html')).toEqual(['artifacts/dynamic-code'])
+    // JS 解析不了时同样按写法匹配
+    expect(rules('setTimeout("x"); let y = ;')).toEqual(['artifacts/unparsable', 'artifacts/dynamic-code'])
+  })
+
   it('没有语法树的文本文件（HTML 等）仍按写法匹配 eval 与 Function', () => {
     expect(rules('<script>eval(x)</script>', 'index.html')).toContain('artifacts/dynamic-code')
     expect(rules('<svg onload="new Function(x)()"></svg>', 'assets/logo.svg')).toContain('artifacts/dynamic-code')

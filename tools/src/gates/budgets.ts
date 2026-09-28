@@ -182,5 +182,10 @@ export function checkBudgets(manifest: ViteManifest, budgets: readonly EntryBudg
   }
   for (const script of unattributedScripts(manifest, output))
     results.push({ violations: [{ rule: 'budgets/unattributed-script', subject: script, detail: '产物里的这个脚本不属于构建清单里的任何块、块创建的 Worker 或 Worker 能加载到的块（例如 Worker 里再创建的 Worker），没有计入任何预算：确认来源，在 WORKER_BUDGETS 登记' }], notes: [] })
+  // 清单里引用了清单里没有的块：展开时只能跳过它，它的体积就不计入预算，不能静默放过（Codex 评审的候选项）
+  for (const [key, chunk] of Object.entries(manifest)) {
+    for (const missing of [...(chunk.imports ?? []), ...(chunk.dynamicImports ?? [])].filter(imported => manifest[imported] === undefined))
+      results.push({ violations: [{ rule: 'budgets/missing-chunk', subject: `${key} → ${missing}`, detail: '构建清单里的块引用了清单里没有的块：它的体积无从计入预算，构建清单不完整，检查构建' }], notes: [] })
+  }
   return { violations: results.flatMap(result => result.violations), notes: results.flatMap(result => result.notes) }
 }

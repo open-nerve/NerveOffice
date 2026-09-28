@@ -16,7 +16,7 @@ import { checkAudit } from './audit.ts'
 import { checkBudgets, entryWorkers, reachableFiles, viteManifestSchema, workerClosure } from './budgets.ts'
 import { checkContainerImages } from './container-images.ts'
 import { checkGraphComplete, checkSingletons, checkUniver, checkUniverCatalog, collectInstalled } from './dependency-graph.ts'
-import { bundledPackagesSchema, checkLicenseBundle } from './license-bundle.ts'
+import { bundledPackagesSchema, checkLicenseBundle, checkLicenseText, checkLicenseTextFile, LICENSE_TEXT_FILE } from './license-bundle.ts'
 import { checkDevelopmentLicenses, checkProductionLicenses, flattenLicenseReport, licensesByPath } from './licenses.ts'
 import { gitIn, runMigrationsGate } from './migrations-gate.ts'
 import { MIGRATIONS_DIR } from './migrations.ts'
@@ -202,9 +202,16 @@ export function artifactsGate(distDir: string): GateOutcome {
   const { violations, hosts, runtimeHosts, unusedAddresses, knownDynamicCode, globalThisProbes } = scanArtifacts(scanned, ARTIFACT_POLICY, { prefixFiles: prefixFiles(distDir) })
   const bundleFile = join(distDir, '.vite', 'third-party-packages.json')
   const bundle = existsSync(bundleFile) ? bundledPackagesSchema.parse(JSON.parse(readFileSync(bundleFile, 'utf8'))) : undefined
+  // 随部署分发的是许可正文：清单说收集过正文不等于正文还在产物里，两者都要核对（Codex 评审 CX9）
+  const textFile = join(distDir, LICENSE_TEXT_FILE)
+  const licenseText = existsSync(textFile) ? readFileSync(textFile, 'utf8') : undefined
   const bundleViolations: Violation[] = bundle === undefined
-    ? [{ rule: 'license-bundle/missing-file', subject: '.vite/third-party-packages.json', detail: '没有第三方许可清单，检查 web 构建是否挂上了许可收集插件' }]
-    : checkLicenseBundle(bundle, PRODUCTION_LICENSES, LICENSE_EXCEPTIONS)
+    ? [
+        { rule: 'license-bundle/missing-file', subject: '.vite/third-party-packages.json', detail: '没有第三方许可清单，检查 web 构建是否挂上了许可收集插件' },
+        // 没有清单就无从逐个核对正文，只核对正文的文件还在
+        ...checkLicenseTextFile(licenseText),
+      ]
+    : [...checkLicenseBundle(bundle, PRODUCTION_LICENSES, LICENSE_EXCEPTIONS), ...checkLicenseText(bundle, licenseText)]
   const hostSummary = [...hosts].map(([host, count]) => `${host}×${count}`).join('、') || '无'
   const knownSummary = [...knownDynamicCode].map(([name, count]) => `${name}×${count}`).join('、') || '无'
   return {
