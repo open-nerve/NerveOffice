@@ -1,5 +1,7 @@
 import type { SemaphoreLimits } from '../../shared/semaphore.ts'
 import { randomBytes } from 'node:crypto'
+import { performance } from 'node:perf_hooks'
+import { setTimeout as delay } from 'node:timers/promises'
 import { hash, parseOptions, verify } from '@node-rs/argon2'
 import { Semaphore, SemaphoreBusyError } from '../../shared/semaphore.ts'
 
@@ -16,14 +18,14 @@ export class PasswordHashingBusyError extends Error {
 export abstract class PasswordHasher {
   abstract hash(password: string): Promise<string>
   /**
-   * 验证密码。验证失败时，这次的计算量补到"失败的计算量"（当前参数与见过的哈希里最大的那个）：调整参数之后，
+   * 验证密码。验证失败时，耗时补到"失败的时限"（当前参数与见过的各组参数里最慢的那组）：调整参数之后，
    * 没再登录过的账户还是旧参数的哈希，失败的耗时也要与"用户名不存在"相同，不暴露账户是否存在（Codex 评审 CX4）
    */
   abstract verify(passwordHash: string, password: string): Promise<boolean>
   /** 哈希用的参数与当前配置不同（例如调高了内存）：下次登录成功时应该重新哈希 */
   abstract needsRehash(passwordHash: string): boolean
-  /** 库里现存哈希的参数（PHC 字符串的参数段，例如 m=19456,t=2,p=1）：失败的计算量至少补到其中最大的；认不出的忽略 */
-  abstract observe(parameterSegments: readonly string[]): void
+  /** 库里现存哈希的参数（PHC 字符串的参数段，例如 m=19456,t=2,p=1）：没见过的各算几次，失败的时限至少补到其中最慢的；认不出的忽略 */
+  abstract observe(parameterSegments: readonly string[]): Promise<void>
 }
 
 export interface Argon2Parameters {
@@ -35,32 +37,46 @@ export interface Argon2Parameters {
 /** @node-rs/argon2 的 Algorithm.Argon2id。它是 ambient const enum，isolatedModules 下不能直接引用；库的默认算法就是它 */
 const ARGON2ID = 2
 
-/** Argon2 的内存下限（KiB，并行度为 1 时） */
-const MIN_MEMORY_KIB = 8
-
-/** 计算用到的 @node-rs/argon2 的函数：单元测试注入假的，核对补的计算量 */
-export interface Argon2Functions {
+/** 计算用到的 @node-rs/argon2 的函数与时钟：单元测试注入假的，核对补齐的时长 */
+export interface Argon2Runtime {
   readonly hash: typeof hash
   readonly verify: typeof verify
+  /** 单调的毫秒时钟 */
+  readonly now: () => number
+  readonly sleep: (ms: number) => Promise<void>
 }
 
+const DEFAULT_RUNTIME: Argon2Runtime = { hash, verify, now: () => performance.now(), sleep: async ms => delay(ms) }
+
+/** 每组参数记下最近几次计算的耗时，按中位数估计：一次偶然的慢（垃圾回收、别的负载）不会抬高时限 */
+const DURATION_SAMPLES = 7
+/** 库里现存、还没见过的参数组，各算几次作为校准 */
+const CALIBRATION_RUNS = 3
 /**
- * Argon2 的计算量：内存（KiB）× 迭代次数，即处理的内存块数（Codex 评审 CX4）。
- * 并行度按 1 估算（默认就是 1）；每次计算的固定开销（初始化、分配内存）不计，补齐之后有小的残差。
+ * 失败的时限是最慢那组参数的耗时中位数的这么多倍：留出余量，绝大多数失败的耗时由补齐决定，
+ * 而不是各自计算的快慢，耗时的分布与账户的哈希参数无关
  */
-function work(memoryKib: number, iterations: number): number {
-  return memoryKib * iterations
+const FAILURE_TIME_MARGIN = 1.2
+
+/** 一组参数的键 */
+function parametersKey(memoryKib: number, iterations: number, parallelism: number): string {
+  return `m=${memoryKib},t=${iterations},p=${parallelism}`
 }
 
-/** PHC 参数段（m=19456,t=2,p=1）的计算量；认不出时是 undefined */
-function segmentWork(segment: string): number | undefined {
+/** PHC 参数段（m=19456,t=2,p=1）→ 参数；认不出时是 undefined */
+function segmentParameters(segment: string): Argon2Parameters | undefined {
   const fields = new Map(segment.split(',').map((field) => {
     const [key = '', value = ''] = field.split('=', 2)
     return [key, value] as const
   }))
-  const memoryKib = Number(fields.get('m'))
-  const iterations = Number(fields.get('t'))
-  return Number.isSafeInteger(memoryKib) && Number.isSafeInteger(iterations) && memoryKib > 0 && iterations > 0 ? work(memoryKib, iterations) : undefined
+  const [memoryKib, iterations, parallelism] = ['m', 't', 'p'].map(key => Number(fields.get(key)))
+  const valid = (value: number | undefined): value is number => value !== undefined && Number.isSafeInteger(value) && value > 0
+  return valid(memoryKib) && valid(iterations) && valid(parallelism) ? { memoryKib, iterations, parallelism } : undefined
+}
+
+function median(values: readonly number[]): number {
+  const sorted = [...values].sort((a, b) => a - b)
+  return sorted[Math.floor(sorted.length / 2)] ?? 0
 }
 
 /**
@@ -72,61 +88,77 @@ function segmentWork(segment: string): number | undefined {
 export class Argon2PasswordHasher extends PasswordHasher {
   readonly #slots: Semaphore
   readonly #retryAfterSeconds: number
-  readonly #argon2: Argon2Functions
-  /** 失败的验证至少要做的计算量：当前参数与见过的哈希（验证过的、库里现存的）里最大的（Codex 评审 CX4） */
-  #failureWork: number
+  readonly #runtime: Argon2Runtime
+  /**
+   * 各组参数最近几次计算的耗时（毫秒）：验证、哈希与校准都记（Codex 评审 CX4）。
+   * 按实测的耗时补齐，不按"内存 × 迭代次数"换算：内存大小不同时每块内存的耗时也不同（缓存、内存带宽、分配），
+   * 换算的残差足以分辨账户是否存在（独立复验 N2：内存 256 MiB 调到 19 MiB 时耗时之比 1.54）
+   */
+  readonly #durations = new Map<string, number[]>()
 
-  constructor(private readonly parameters: Argon2Parameters, concurrency: number, queue: SemaphoreLimits = {}, argon2: Argon2Functions = { hash, verify }) {
+  constructor(private readonly parameters: Argon2Parameters, concurrency: number, queue: SemaphoreLimits = {}, runtime: Partial<Argon2Runtime> = {}) {
     super()
     this.#slots = new Semaphore(concurrency, queue)
     this.#retryAfterSeconds = Math.max(1, Math.ceil((queue.maxWaitMs ?? 0) / 1000))
-    this.#argon2 = argon2
-    this.#failureWork = work(parameters.memoryKib, parameters.iterations)
+    this.#runtime = { ...DEFAULT_RUNTIME, ...runtime }
   }
 
   async hash(password: string): Promise<string> {
-    return this.#limited(async () => this.#argon2.hash(password, {
-      memoryCost: this.parameters.memoryKib,
-      timeCost: this.parameters.iterations,
-      parallelism: this.parameters.parallelism,
-    }))
+    const { memoryKib, iterations, parallelism } = this.parameters
+    return this.#limited(async () => this.#timed(parametersKey(memoryKib, iterations, parallelism), async () => this.#runtime.hash(password, {
+      memoryCost: memoryKib,
+      timeCost: iterations,
+      parallelism,
+    })))
   }
 
   /**
    * 存的哈希格式不对说明数据损坏，直接抛出，不当作"密码错误"。
-   * 验证与失败时补的计算在同一个名额里：补的那部分不再排一次队，排队的时间不因账户的哈希参数而不同
+   * 失败时在同一个名额里等到失败的时限：补的那部分不再排一次队，排队的时间与名额的占用都不因账户的哈希参数而不同
    */
   async verify(passwordHash: string, password: string): Promise<boolean> {
     return this.#limited(async () => {
       const options = parseOptions(passwordHash)
-      const hashWork = work(options.memoryCost, options.timeCost)
-      // 参数调低之后，旧参数的哈希计算量更大：之后的失败（包括用户名不存在）都补到它
-      this.#failureWork = Math.max(this.#failureWork, hashWork)
-      const matches = await this.#argon2.verify(passwordHash, password)
-      if (!matches)
-        await this.#pad(this.#failureWork - hashWork)
+      const key = parametersKey(options.memoryCost, options.timeCost, options.parallelism)
+      const started = this.#runtime.now()
+      const matches = await this.#timed(key, async () => this.#runtime.verify(passwordHash, password))
+      if (!matches) {
+        const remaining = this.#failureTimeMs() - (this.#runtime.now() - started)
+        if (remaining > 0)
+          await this.#runtime.sleep(remaining)
+      }
       return matches
     })
   }
 
-  observe(parameterSegments: readonly string[]): void {
-    for (const segment of parameterSegments)
-      this.#failureWork = Math.max(this.#failureWork, segmentWork(segment) ?? 0)
+  /** 参数调低之后，旧参数的哈希更慢：没见过的参数组各算几次，之后的失败（包括用户名不存在）都补到它 */
+  async observe(parameterSegments: readonly string[]): Promise<void> {
+    for (const parameters of new Map(parameterSegments.map(segmentParameters).filter(item => item !== undefined).map(item => [parametersKey(item.memoryKib, item.iterations, item.parallelism), item])).values()) {
+      const key = parametersKey(parameters.memoryKib, parameters.iterations, parameters.parallelism)
+      if (this.#durations.has(key))
+        continue
+      for (let run = 0; run < CALIBRATION_RUNS; run++) {
+        await this.#limited(async () => this.#timed(key, async () => this.#runtime.hash(randomBytes(32), {
+          memoryCost: parameters.memoryKib,
+          timeCost: parameters.iterations,
+          parallelism: parameters.parallelism,
+        })))
+      }
+    }
   }
 
-  /**
-   * 补上 amount 的计算量：对随机输入做 Argon2 哈希，结果丢掉。内存不超过当前参数的内存（参数调高很多时，
-   * 按"内存 × 迭代次数"一次补齐要分配几倍的内存）：先按当前的内存做 floor(amount / 内存) 次迭代，余数不少于内存下限时
-   * 再做一次余数大小的内存、一次迭代
-   */
-  async #pad(amount: number): Promise<void> {
-    const memoryKib = this.parameters.memoryKib
-    const iterations = Math.floor(amount / memoryKib)
-    if (iterations >= 1)
-      await this.#argon2.hash(randomBytes(32), { memoryCost: memoryKib, timeCost: iterations, parallelism: 1 })
-    const rest = amount - iterations * memoryKib
-    if (rest >= MIN_MEMORY_KIB)
-      await this.#argon2.hash(randomBytes(32), { memoryCost: rest, timeCost: 1, parallelism: 1 })
+  /** 执行一次计算，记下它的耗时 */
+  async #timed<T>(key: string, compute: () => Promise<T>): Promise<T> {
+    const started = this.#runtime.now()
+    const result = await compute()
+    const samples = [...(this.#durations.get(key) ?? []), this.#runtime.now() - started].slice(-DURATION_SAMPLES)
+    this.#durations.set(key, samples)
+    return result
+  }
+
+  /** 失败的时限：各组参数耗时中位数里最慢的，乘以余量 */
+  #failureTimeMs(): number {
+    return Math.max(0, ...[...this.#durations.values()].map(median)) * FAILURE_TIME_MARGIN
   }
 
   async #limited<T>(task: () => Promise<T>): Promise<T> {

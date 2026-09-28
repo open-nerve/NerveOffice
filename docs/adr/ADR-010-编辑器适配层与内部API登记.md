@@ -1,6 +1,6 @@
 # ADR-010：编辑器适配层与内部 API 登记
 
-> 状态：已接受｜日期：2026-09-27｜来源：M1-P4｜修订：2026-09-28，M1 对抗评审（Codex CX1、CX6）之后，编辑器创建出来时不能编辑，另外跟踪单元格里还没提交的输入
+> 状态：已接受｜日期：2026-09-27｜来源：M1-P4｜修订：2026-09-28，M1 对抗评审（Codex CX1、CX6）与独立复验（N1、S1）之后，就绪之前的输入由编辑器页的交互屏障拦下，另外跟踪单元格里还没提交的输入
 
 ## 背景
 
@@ -19,8 +19,10 @@ createSheetEditor({ container, snapshot }): Promise<SheetEditor>
 ```
 
 - `createSheetEditor` 在工作簿创建、渲染完成、主线程与公式 Worker 的 `IMAGE()` 限制都装好之后才返回；任何一步失败（包括创建 Univer、注册插件）都按相反的顺序销毁已经创建的一切并抛出（每创建一样就登记它的销毁，一项销毁出错不妨碍其余各项；加载的各个阶段失败抛 `SheetEditorLoadError`，带原因，其余意外的错误原样抛出），页面显示"编辑器加载失败"。
-- 创建工作簿之后立即设为不能编辑，返回时仍不能编辑：页面接好保存状态机与离开提示之后，按权限放开（`setEditable(true)`）。就绪之前的输入无处保存，加载超时销毁编辑器时还会随之丢失；页面在载入期间另挂交互屏障，用户碰不到编辑器（Codex 评审 CX1）。
-- 单元格编辑器里还没提交的输入（`hasPendingCellInput`）用 Facade 的 `SheetEditStarted`、`SheetEditChanging`、`SheetEditEnded` 跟踪（`cell-editing-watch.ts`）：键入字符或退格开始编辑、编辑中的内容改动之后算有输入，只是打开（双击、F2、点编辑栏）不算；页头据此显示"有未保存的修改"（Codex 评审 CX6）。离开提示仍按"单元格编辑器开着"（`isCellEditing`）判断。
+- 就绪之前（`createSheetEditor` 返回之前）不允许编辑，由编辑器页的交互屏障保证：载入期间，页头之外的用户输入（点击、悬停、键入、输入法、粘贴与拖放）在窗口的捕获阶段一律拦下，包括 Univer 挂在 `document.body` 下的浮层（批注、链接等）；浏览器的刷新与 Tab 照常（Codex 评审 CX1，独立复验 N1、S2）。
+  - 不能用 `setEditable(false)` 兜底：SDK 在 Ready 时、用户变化时按授权服务初始化权限点，编辑器身份一律允许（ADR-009），更早设的不可编辑会被改回来。只读的文档在就绪之后才 `setEditable(false)`；它同样会在用户变化时被改回来，M2 做只读分享时要让编辑器身份的授权服务按文档的权限回答。
+  - 不用 `inert`：它让 Univer 初始化时的聚焦失败，就绪之后键入进不去。
+- 单元格编辑器里还没提交的输入（`hasPendingCellInput`）用 Facade 的 `SheetEditStarted`、`SheetEditChanging`、`SheetEditEnded` 跟踪（`cell-editing-watch.ts`）：键入字符或退格开始编辑、编辑中的内容改动之后算有输入，只是打开（双击、F2、点编辑栏）不算；回车提交之后等这次的写入（变更检测记下的修改）再清掉，值没变时最多等 500 毫秒；页头据此显示"有未保存的修改"（Codex 评审 CX6，独立复验 S1）。离开提示仍按"单元格编辑器开着"（`isCellEditing`）判断。
 - 结构：`profile/`（插件档案 `sheet@1`：插件、顺序、影响数据的配置、声明的资源、语言包、样式、菜单配置、入口守卫）、`identity/`（ADR-009）、`change-tracking/`（变更检测与公式收齐）、`cell-editing-watch.ts`（单元格里还没提交的输入）、`image-function/`（`IMAGE()` 的限制与 Worker 的回报）、`workers/`（公式 Worker 的入口）、`internal-api/`。
 - 公式 Worker 由适配层用静态的 `new Worker(new URL(…), { type: 'module' })` 创建（同源脚本，不内联成 blob），由适配层终止。
 - 请求、保存状态与界面属于编辑器页（`features/sheet-editor`），不在适配层里；保存的状态机不依赖 Univer，用假的编辑器做单元测试。

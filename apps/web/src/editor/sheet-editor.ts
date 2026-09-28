@@ -4,11 +4,12 @@
 // 1. 创建公式 Worker（模块 Worker），先挂上它的回报与错误的监听；
 // 2. new Univer（身份替换），按档案注册插件；FUniver.newAPI；
 // 3. 在创建工作簿之前挂上入口守卫、变更检测、单元格编辑与生命周期的监听，加载过程中的命令也看得到；
-// 4. createWorkbook，核对 unitId，立即设为不能编辑：就绪之前不允许编辑（M1 总设计 §6.6，Codex 评审 CX1）；
+// 4. createWorkbook，核对 unitId；
 // 5. 等渲染完成（Rendered）、主线程到 Ready 后装上 IMAGE() 的限制、Worker 回报它那边也装上了，才返回；
 //    任何一步失败（包括创建 Univer、注册插件）都按相反的顺序销毁已经创建的一切并抛出，页面显示"编辑器加载失败"（审查 B8）。
-// 返回时仍不能编辑：页面接好保存与离开提示之后，按权限调用 setEditable(true)。在那之前页面上的输入无处保存，
-// 加载超时销毁编辑器时也会随之丢失（Codex 评审 CX1）。
+// 返回之前（就绪之前）不允许编辑（M1 总设计 §6.6）由编辑器页的交互屏障保证（interaction-barrier.ts，Codex 评审 CX1）：
+// 这里不能用 setEditable(false) 兜底，SDK 在 Ready 时、用户变化时按授权服务初始化权限点，编辑器身份一律允许（ADR-009），
+// 更早设的不可编辑会被改回来（独立复验 N1）。
 import type { CellEditingWatch } from './cell-editing-watch.ts'
 import type { ChangeTracker } from './change-tracking/change-tracker.ts'
 import type { CleanupStack } from './cleanup-stack.ts'
@@ -57,7 +58,7 @@ export interface SheetEditor {
   readonly settleFormulas: (timeoutMs: number) => Promise<'settled' | 'timeout'>
   /** 捕获：JSON.stringify(save())；捕获前不调用 Facade 的读取方法（它们可能改动模型） */
   readonly capture: () => string
-  /** 创建出来时不能编辑（见文件开头），页面按权限放开 */
+  /** 只读时设为不能编辑：要在就绪之后调用（SDK 的权限点在 Ready 时才初始化，见文件开头） */
   readonly setEditable: (editable: boolean) => void
   /** 销毁实例、终止 Worker；可以重复调用 */
   readonly dispose: () => void
@@ -126,14 +127,12 @@ async function mount(container: HTMLElement, snapshot: WorkbookSnapshot, cleanup
   cleanup.defer(() => guards.dispose())
   const changes = createChangeTracker(univer, univerAPI, { unitId: snapshot.unitId, excludedMutationIds: CHANGE_DETECTION_EXCLUDED_MUTATIONS })
   cleanup.defer(changes.dispose)
-  const cellEditing = watchCellEditing(univerAPI, snapshot.unitId)
+  const cellEditing = watchCellEditing(univerAPI, snapshot.unitId, changes.onChange)
   cleanup.defer(cellEditing.dispose)
   const lifecycle = watchLifecycle({ univerAPI, installImagePolicy: async () => installRestrictedImageFunction(univer, location.origin) })
   cleanup.defer(lifecycle.dispose)
 
   const workbook = createWorkbook(univerAPI, snapshot)
-  // 渲染之前就设好：用户还碰不到它（Codex 评审 CX1）
-  workbook.setEditable(false)
   await withDeadline(
     Promise.all([lifecycle.rendered, lifecycle.imagePolicyInstalled, workerImagePolicy.installed]),
     READY_TIMEOUT_MS,

@@ -23,6 +23,7 @@ export function startSheetEditorPage(elements: SheetEditorPageElements): void {
     // 托管只把编辑器页的地址交给这个页面；万一不是，页面显示内容不存在
     documentId: documentIdFromPagePath(window.location.pathname),
     surface: elements.surface,
+    chrome: elements.chrome,
     api: {
       session: async () => requestSession(),
       document: async documentId => fetchDocument(documentId),

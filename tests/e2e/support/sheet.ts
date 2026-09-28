@@ -79,9 +79,14 @@ export async function selectCell(page: Page, a1: string, options: { button?: 'le
   await sheetCanvas(page).click({ button: options.button, position: cellPoint(a1) })
 }
 
+/** 鼠标移到单元格上（例如让批注的浮层弹出来）。force 的含义同 openCellEditor */
+export async function hoverCell(page: Page, a1: string, options: { force?: boolean } = {}): Promise<void> {
+  await sheetCanvas(page).hover({ position: cellPoint(a1), force: options.force })
+}
+
 /**
- * 双击单元格，打开单元格编辑器（不键入）。force 为真时不等画布可以交互（就绪之前的用例：
- * 编辑器页此时让容器不可交互，鼠标事件落不到画布上）
+ * 双击单元格，打开单元格编辑器（不键入）。force 为真时不做可操作性的检查，直接发出鼠标事件
+ * （就绪之前的用例：编辑器页的交互屏障会把它们拦下）
  */
 export async function openCellEditor(page: Page, a1: string, options: { force?: boolean } = {}): Promise<void> {
   await sheetCanvas(page).dblclick({ position: cellPoint(a1), force: options.force })

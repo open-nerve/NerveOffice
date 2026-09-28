@@ -11,6 +11,8 @@ class FakeHasher extends PasswordHasher {
   readonly observed: (readonly string[])[] = []
   hashes = 0
   stale = false
+  /** observe 失败的次数（例如校准时等待哈希的请求太多） */
+  observeFailures = 0
 
   async hash(password: string): Promise<string> {
     this.hashes += 1
@@ -26,7 +28,11 @@ class FakeHasher extends PasswordHasher {
     return this.stale
   }
 
-  observe(parameterSegments: readonly string[]): void {
+  async observe(parameterSegments: readonly string[]): Promise<void> {
+    if (this.observeFailures > 0) {
+      this.observeFailures -= 1
+      throw new Error('等待密码哈希的请求太多')
+    }
     this.observed.push(parameterSegments)
   }
 }
@@ -152,6 +158,17 @@ describe('库里现存哈希的参数（Codex 评审 CX4）', () => {
     expect(await service.verifyCredentials('alice', 'wrong')).toMatchObject({ valid: false })
     expect(hasher.observed).toEqual([STORED_PARAMETERS])
     expect(repository.passwordHashParameters).toHaveBeenCalledTimes(3)
+  })
+
+  it('校准失败（等待哈希的请求太多）：同样只记警告，这次验证照常，下次验证时再做（独立复验 N2）', async () => {
+    const { service, repository, hasher, warn } = setup({ user: ALICE, passwordHash: 'hash:secret' })
+    hasher.observeFailures = 1
+    expect(await service.verifyCredentials('alice', 'wrong')).toMatchObject({ valid: false })
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('现存密码哈希的参数'), expect.anything())
+    expect(hasher.observed).toEqual([])
+    expect(await service.verifyCredentials('alice', 'secret')).toMatchObject({ valid: true })
+    expect(hasher.observed).toEqual([STORED_PARAMETERS])
+    expect(repository.passwordHashParameters).toHaveBeenCalledTimes(2)
   })
 })
 

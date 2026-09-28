@@ -76,19 +76,17 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
-   * 库里现存哈希的参数交给哈希器（Codex 评审 CX4）。不会失败：读不出来（例如数据库暂时不可用）时只记警告，
-   * 下次验证时再读；在那之前，哈希器仍从验证过的哈希里学到更大的计算量
+   * 库里现存哈希的参数交给哈希器，它把没见过的各组参数算几次（Codex 评审 CX4）。不会失败：读不出来或校准不了时只记警告，
+   * 下次验证时再做；在那之前，哈希器仍从验证过的哈希里记下各组参数的耗时
    */
   private async observeStoredParameters(): Promise<void> {
-    this.#storedParameters ??= this.repository.passwordHashParameters().then(
-      (segments) => {
-        this.hasher.observe(segments)
-      },
-      (error: unknown) => {
+    // 读参数与校准（各组参数算几次）都可能失败（数据库暂时不可用、等待哈希的请求太多）：都只记警告，下次验证时再做
+    this.#storedParameters ??= this.repository.passwordHashParameters()
+      .then(async segments => this.hasher.observe(segments))
+      .catch((error: unknown) => {
         this.#storedParameters = undefined
-        this.#logger.warn('没能读出现存密码哈希的参数，下次验证时再读', { err: error })
-      },
-    )
+        this.#logger.warn('没能读出或校准现存密码哈希的参数，下次验证时再做', { err: error })
+      })
     return this.#storedParameters
   }
 

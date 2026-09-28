@@ -5,7 +5,7 @@ import type { Workbook } from '../../support/sheet.ts'
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, openEditor, saveAndWait, savedContent, saveStatus, selectCell, typeInCell, waitForEditor } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, editorSurface, hoverCell, openEditor, resourceOf, saveAndWait, savedContent, saveStatus, selectCell, sheetCanvas, typeInCell, waitForEditor } from '../../support/sheet.ts'
 
 /** 值、公式与格式：单元格与样式表 */
 function contentOf(snapshot: Workbook) {
@@ -80,5 +80,52 @@ test.describe('US-M1-06 重开看到最后一次保存的内容', () => {
     await waitForEditor(page, 'steady')
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     expect(await contentAfterResave(page, documentId)).toEqual(contentOf(saved))
+  })
+
+  test('重开时就绪之前改不了批注：悬停不弹出浮层、键入无效；就绪之后悬停照常弹出（Codex 评审 CX1，独立复验 N1）', async ({ page }) => {
+    await loginThroughApi(page, await createUser('reopen-note'))
+    const documentId = await createSheetThroughApi(page)
+    await openEditor(page, documentId)
+    // 先加一条批注并保存：Univer 的批注浮层挂在 body 下，不在编辑器的容器里
+    await selectCell(page, 'D4', { button: 'right' })
+    await page.getByRole('button', { name: '添加批注' }).click()
+    await page.getByRole('textbox', { name: '在此输入' }).click()
+    await page.keyboard.type('original')
+    // 点别处，批注写入（之后才算修改）
+    await selectCell(page, 'F8')
+    await expect(saveStatus(page)).toHaveText('有未保存的修改')
+    await saveAndWait(page)
+    const note = async (): Promise<unknown> => resourceOf((await savedContent(page, documentId)).snapshot, 'SHEET_NOTE_PLUGIN')
+    expect(await note()).toMatchObject({ 'sheet-1': { 3: { 3: { note: 'original' } } } })
+
+    // 拦住公式 Worker 的脚本再重开：表格画出来了，编辑器停在载入中
+    let release: () => void = () => {}
+    const released = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await page.route('**/assets/formula.worker-*.js', async (route) => {
+      await released
+      await route.continue()
+    })
+    await page.reload()
+    await expect(sheetCanvas(page)).toBeVisible({ timeout: 30_000 })
+    await expect(editorSurface(page)).toHaveAttribute('data-editor-state', 'loading')
+    const noteEditor = page.getByRole('textbox', { name: '在此输入' })
+    await hoverCell(page, 'D4', { force: true })
+    // 悬停之后浮层几百毫秒内就会弹出：等 1 秒没有弹出才算拦住了
+    const popped = await noteEditor.waitFor({ state: 'visible', timeout: 1_000 }).then(() => true, () => false)
+    expect(popped).toBe(false)
+    await page.keyboard.type('EDITED-DURING-LOADING')
+    await expect(editorSurface(page)).toHaveAttribute('data-editor-state', 'loading')
+
+    release()
+    await waitForEditor(page, 'steady')
+    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    // 就绪之后悬停照常弹出，内容没变；保存之后服务器上也没变
+    await hoverCell(page, 'D4')
+    await expect(noteEditor).toBeVisible()
+    await expect(noteEditor).toHaveValue('original')
+    await saveAndWait(page)
+    expect(await note()).toMatchObject({ 'sheet-1': { 3: { 3: { note: 'original' } } } })
   })
 })
