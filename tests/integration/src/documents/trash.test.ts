@@ -428,7 +428,7 @@ describe('US-M2-09 恢复（spec §3）', () => {
     expect((await trash(amySession, spaceId)).items.map(item => [item.id, item.origin.available])).toEqual([[first, true]])
   })
 
-  it('恢复的权限：删除者与空间管理员可以，同空间的另一个编辑者不行；被移出空间的删除者、归档之后都不行', async () => {
+  it('恢复的权限：删除者与空间管理员可以，同空间的另一个编辑者不行；被移出空间、被降为查看者的删除者与归档之后都不行', async () => {
     const spaceId = await teamSpace({ amy: 'admin' })
     const document = await createDocument(database, { spaceId, createdBy: ben.id, title: '本的' })
     const entryId = await trashedEntry(benSession, spaceId, async () => deleteDocument(benSession, document))
@@ -443,6 +443,13 @@ describe('US-M2-09 恢复（spec §3）', () => {
     // 删完之后被移出空间的人：连回收站都看不到了
     await setMember(database, spaceId, ben.id, undefined)
     expect((await restore(benSession, entryId)).status).toBe(404)
+
+    // 删完之后被降为查看者：本人也不能再恢复（恢复是把内容放回空间里，按当前权限算）
+    await setMember(database, spaceId, ben.id, 'viewer')
+    const demoted = await restore(benSession, entryId)
+    expect(demoted.status).toBe(403)
+    expect(await errorOf(demoted)).toEqual({ code: 'PERMISSION_DENIED', message: '只有删除的人或空间管理员能恢复' })
+    expect((await trash(benSession, spaceId)).items.map(item => item.permissions)).toEqual([{ canRestore: false, canPurge: false }])
     await setMember(database, spaceId, ben.id, 'editor')
 
     // 归档之后：空间管理员与删除者本人都不能恢复；列表里的权限位也一起变

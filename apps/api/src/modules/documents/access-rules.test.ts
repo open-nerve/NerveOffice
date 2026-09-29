@@ -135,24 +135,27 @@ describe('文件夹上能做的操作（M2-P4 设计 §3.7）', () => {
 })
 
 describe('回收站里的删除单元上能做的操作（P4-S3 spec §3、§4）', () => {
-  it('恢复：删除者本人或空间管理员；永久删除：空间管理员', () => {
-    const team = facts({ memberRole: 'editor' })
-    expect(trashPermissionsOf(team, 'editor', ALICE, ALICE)).toEqual({ canRestore: true, canPurge: false })
-    expect(trashPermissionsOf(team, 'editor', BOB, ALICE)).toEqual({ canRestore: false, canPurge: false })
-    expect(trashPermissionsOf(team, 'viewer', BOB, ALICE)).toEqual({ canRestore: false, canPurge: false })
-    expect(trashPermissionsOf(team, 'admin', BOB, ALICE)).toEqual({ canRestore: true, canPurge: true })
+  it('恢复：编辑者及以上，并且是删除者本人或空间管理员；永久删除：空间管理员', () => {
+    expect(trashPermissionsOf('editor', ALICE, ALICE)).toEqual({ canRestore: true, canPurge: false })
+    expect(trashPermissionsOf('editor', BOB, ALICE)).toEqual({ canRestore: false, canPurge: false })
+    expect(trashPermissionsOf('viewer', BOB, ALICE)).toEqual({ canRestore: false, canPurge: false })
+    expect(trashPermissionsOf('admin', BOB, ALICE)).toEqual({ canRestore: true, canPurge: true })
+  })
+
+  it('删完之后被降为查看者：本人也不能再恢复（恢复是把内容放回空间里，按当前权限算）', () => {
+    expect(trashPermissionsOf('viewer', ALICE, ALICE)).toEqual({ canRestore: false, canPurge: false })
   })
 
   it('永久删除与空间权限里的 canPurgeTrash 是同一条规则', () => {
     for (const role of SPACE_ROLES) {
       const team = facts({ memberRole: role })
-      expect(trashPermissionsOf(team, role, BOB, ALICE).canPurge, role).toBe(spacePermissionsOf(team, role, false).canPurgeTrash)
+      expect(trashPermissionsOf(role, BOB, ALICE).canPurge, role).toBe(spacePermissionsOf(team, role, false).canPurgeTrash)
     }
   })
 
   it('归档的空间：删除者本人也不能恢复，谁都不能永久删除', () => {
     const archived = facts({ status: 'archived', memberRole: 'admin' })
     const role = effectiveSpaceRole(archived) ?? 'viewer'
-    expect(trashPermissionsOf(archived, role, ALICE, ALICE)).toEqual({ canRestore: false, canPurge: false })
+    expect(trashPermissionsOf(role, ALICE, ALICE)).toEqual({ canRestore: false, canPurge: false })
   })
 })

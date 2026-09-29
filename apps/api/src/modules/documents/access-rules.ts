@@ -90,12 +90,11 @@ export function folderPermissionsOf(role: SpaceRole | undefined): FolderPermissi
  * 在回收站里的一个删除单元上能做的操作（P4-S3 spec §3、§4）。role 是调用者在这个空间里的有效角色（已按归档降级）。
  * 看得到空间内容的人都看得到回收站的列表（标题在删除之前他本来就看得到），能不能动它由这里决定。
  */
-export function trashPermissionsOf(space: SpaceFacts, role: SpaceRole, deletedBy: string, userId: string): TrashPermissions {
-  // 归档的空间只能查看：有效角色已降为查看者，所以"空间管理员"这一支自然不成立；
-  // "删除者本人"与角色无关，所以这里要显式排除归档（spec §3）
-  const archived = space.status === 'archived'
+export function trashPermissionsOf(role: SpaceRole, deletedBy: string, userId: string): TrashPermissions {
+  // 恢复是把内容放回空间里，属于改动，所以先要有编辑者及以上的有效角色，再看是不是删除者本人或空间管理员（spec §3）。
+  // 归档的空间里有效角色至多是查看者，这一条因此自然不成立；删完之后被降为查看者的人同样不能再恢复
   return {
-    canRestore: !archived && (deletedBy === userId || role === 'admin'),
+    canRestore: atLeast(role, 'editor') && (deletedBy === userId || role === 'admin'),
     // 与 spacePermissionsOf 的 canPurgeTrash 同一条规则：空间管理员 / 个人空间的所有者
     canPurge: role === 'admin',
   }

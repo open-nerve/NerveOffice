@@ -384,7 +384,7 @@ export class TrashService {
       // 原位置：父文件夹为空说明原来就在空间的根目录下（available），父文件夹不在了说明原位置已不存在
       origin: { parentId: row.originParentId, parentName, available: row.originParentId === null || parentName !== null },
       documentCount,
-      permissions: trashPermissionsOf(access.space, access.role, row.deletedBy, userId),
+      permissions: trashPermissionsOf(access.role, row.deletedBy, userId),
     }
   }
 

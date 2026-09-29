@@ -305,7 +305,7 @@ export async function requireTrashEntry<T extends TrashTarget>(
   const access = await policy.spaceAccessOf(actor, entry?.spaceId ?? MISSING_ID, transaction)
   if (entry === undefined || access?.role === undefined)
     throw new AppError('NOT_FOUND')
-  const permissions = trashPermissionsOf(access.space, access.role, entry.deletedBy, actor.userId)
+  const permissions = trashPermissionsOf(access.role, entry.deletedBy, actor.userId)
   for (const operation of operations) {
     const { permission, message } = TRASH[operation]
     if (!permissions[permission])
