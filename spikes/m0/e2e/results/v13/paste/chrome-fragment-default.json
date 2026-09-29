@@ -18,13 +18,13 @@
     "tables": [],
     "links": [
       "恶意链接→javascript:window.__p5_pwned=1",
-      "引号链接→https://x.test/\"><b id=p5inj>注入</b>"
+      "引号链接→https://x.test/<带引号与标签的地址已移出仓库>"
     ],
     "images": [],
     "runs": []
   },
   "sectionBreaksOutsideTables": 2,
-  "quoteLink": "https://x.test/\"><b id=p5inj>注入</b>",
+  "quoteLink": "https://x.test/<带引号与标签的地址已移出仓库>",
   "policyEvents": [],
   "health": {
     "errors": [],

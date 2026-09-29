@@ -15,7 +15,7 @@
       "step": "在链接框里输入危险地址（记录）",
       "ok": true,
       "detail": {
-        "javascript://x@example.com/%0Aalert(1)": "javascript://x@example.com/%0Aalert(1)",
+        "javascript://<能通过校验的写法已移出仓库>": "javascript://<能通过校验的写法已移出仓库>",
         "data://text/html,<b>x</b>": null,
         "vbscript://x": null,
         "javascript:alert(1)": null
@@ -109,7 +109,7 @@
       "links": [
         {
           "text": "段落己",
-          "url": "javascript://x@example.com/%0Aalert(1)data://text/html,<b>x</b>vbscript://xjavascript:alert(1)"
+          "url": "javascript://<能通过校验的写法已移出仓库>data://text/html,<b>x</b>vbscript://xjavascript:alert(1)"
         }
       ],
       "runs": [],
