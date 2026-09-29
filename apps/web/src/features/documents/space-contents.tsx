@@ -108,7 +108,7 @@ function NewFolderForm({ spaceId, parentId, onDone, onCancel, onDenied }: {
   )
 }
 
-/** 做完一件事之后的说明（那一行常常随之消失）：出现时接住焦点，不落到 body */
+/** 做完一件事之后的说明（那一行常常随之消失）：出现时接住焦点，不落到 body；关掉时焦点还给那一行的"操作"按钮 */
 function Notice({ notice, onClose }: { readonly notice: OrganizeNotice, readonly onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -145,16 +145,31 @@ export function SpaceContents({ space, folderIds, targetSpaces, onDenied }: Spac
   const [open, setOpen] = useState<OpenItem>()
   const [notice, setNotice] = useState<OrganizeNotice>()
   const newFolderRef = useRef<HTMLButtonElement>(null)
+  // 最后一次被点开的那一行的"操作"按钮：面板收起、说明关掉之后焦点回到它身上，不落到 body（M2-P4 审查建议 1）。
+  // 由行在点击时记下这个元素，不用 React 的 ref：面板一收起，绑在"展开的那一行"上的 ref 就被置空了，那时已经晚了
+  const openTriggerRef = useRef<HTMLButtonElement>(null)
   const focusAfterRender = useFocusAfterRender()
   const parentId = folderIds.at(-1)
 
   function toggle(kind: OpenItem['kind'], id: string): void {
-    setOpen(open?.kind === kind && open.id === id ? undefined : { kind, id })
+    const same = open?.kind === kind && open.id === id
+    setOpen(same ? undefined : { kind, id })
+    // 收起面板（再点一次"操作"，或者面板里点"取消"）：面板里的按钮随之消失，焦点还给这一行的"操作"
+    if (same)
+      focusAfterRender(openTriggerRef)
   }
 
   function finish(done: OrganizeNotice | undefined): void {
     setOpen(undefined)
     setNotice(done)
+    // 没有说明条时（例如改名成功）焦点还给这一行的"操作"；有说明条时由它接住（那一行常常随之消失）
+    if (done === undefined)
+      focusAfterRender(openTriggerRef)
+  }
+
+  function closeNotice(): void {
+    setNotice(undefined)
+    focusAfterRender(openTriggerRef)
   }
 
   function doneCreating(): void {
@@ -184,7 +199,7 @@ export function SpaceContents({ space, folderIds, targetSpaces, onDenied }: Spac
         <Link to={spaceTrashPath(space.id)} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>{text.trash}</Link>
       </div>
       {creating && <NewFolderForm spaceId={space.id} parentId={parentId} onDone={doneCreating} onCancel={doneCreating} onDenied={onDenied} />}
-      {notice !== undefined && <Notice notice={notice} onClose={() => setNotice(undefined)} />}
+      {notice !== undefined && <Notice notice={notice} onClose={closeNotice} />}
       {trail.children.isPending && <Skeleton className="h-12 w-full" role="status" aria-label={text.folderLoading} />}
       {!trail.children.isPending && trail.children.data === undefined && (
         <Alert variant="destructive">
@@ -205,6 +220,7 @@ export function SpaceContents({ space, folderIds, targetSpaces, onDenied }: Spac
         folderIds={folderIds}
         targetSpaces={targetSpaces}
         openId={open?.kind === 'folder' ? open.id : undefined}
+        openTriggerRef={openTriggerRef}
         onToggle={id => toggle('folder', id)}
         onDone={finish}
         onDenied={onDenied}
@@ -214,6 +230,7 @@ export function SpaceContents({ space, folderIds, targetSpaces, onDenied }: Spac
         folderId={parentId ?? null}
         targetSpaces={targetSpaces}
         openId={open?.kind === 'document' ? open.id : undefined}
+        openTriggerRef={openTriggerRef}
         onToggle={id => toggle('document', id)}
         onDone={finish}
         onDenied={onDenied}

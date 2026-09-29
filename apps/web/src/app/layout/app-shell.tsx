@@ -19,7 +19,8 @@ export function AppShell() {
   return (
     <div className="min-h-svh">
       <header className="relative border-b">
-        <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-4">
+        {/* justify-between：搜索框落在页头中间的空当里，当前用户那一组贴着右边（M2-P4 审查 B3） */}
+        <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-3 px-4">
           <div className="flex shrink-0 items-center gap-3">
             <Link to="/" className="font-semibold">{messages.app.name}</Link>
             {/* 只是入口的显示；管理接口由服务端逐请求检查系统角色 */}

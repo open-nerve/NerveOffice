@@ -1,5 +1,5 @@
-// 回收站（M2-P4，US-M2-09）：删一个文件夹连同里面的文档进同一个删除单元；原位置不在时恢复回空间的根目录并说明；
-// 看得到空间内容的人都看得到这个列表，但只有删除者与空间管理员能动它。
+// 回收站（M2-P4，US-M2-09）：删一个文件夹连同里面的文档进同一个删除单元；回收站里的文档打不开；
+// 原位置不在时恢复回空间的根目录并说明；看得到空间内容的人都看得到这个列表，但只有删除者与空间管理员能动它。
 import type { Page } from '@playwright/test'
 import { createDocumentIn, createFolderIn, createTeamSpace, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
@@ -21,15 +21,20 @@ function trashRow(page: Page, title: string) {
 }
 
 test.describe('US-M2-09 回收站', () => {
-  test('删文件夹连同里面的文档进同一个删除单元；原位置已经不在的对象恢复到空间的根目录并说明', async ({ page }) => {
+  test('删文件夹连同里面的文档进同一个删除单元；回收站里的文档打不开；原位置已经不在的对象恢复到空间的根目录并说明', async ({ page }) => {
     const owner = await createUser('trash-owner')
     const folderId = await createFolderIn(owner.personalSpaceId, owner, '归档')
-    await createDocumentIn(owner.personalSpaceId, owner, '明细', { folderId })
+    const documentId = await createDocumentIn(owner.personalSpaceId, owner, '明细', { folderId })
     await loginThroughApi(page, owner)
 
     // 先单独删掉文件夹里的文档：它自己是一个删除单元，不会被随后的文件夹删除重组
     await page.goto(`/spaces/${owner.personalSpaceId}/folders/${folderId}`)
     await deleteItem(page, '明细')
+
+    // 在回收站里的文档打不开（设计 §4：删掉的内容不再是"能访问的内容"），连删它的人也不行：与看不到同一句说明
+    await page.goto(`/documents/${documentId}`)
+    await expect(page.getByText('内容不存在，或者你没有访问权限')).toBeVisible()
+
     // 再删掉文件夹本身：它的原位置是空间的根目录，里面（正常状态的）文档已经没有了
     await page.goto(`/spaces/${owner.personalSpaceId}`)
     await deleteItem(page, '归档')

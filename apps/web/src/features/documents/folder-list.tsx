@@ -1,10 +1,10 @@
 import type { Folder, SpaceView } from '@nerve-office/contracts'
+import type { RefObject } from 'react'
 import type { OrganizeNotice } from './item-actions.tsx'
 import { folderNameSchema } from '@nerve-office/contracts'
 import { Folder as FolderIcon } from 'lucide-react'
 import { useId } from 'react'
 import { Link } from 'react-router'
-import { describeError, isPermissionDeniedError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { spaceFolderPath } from '../../shared/lib/space-paths.ts'
 import { Button } from '../../shared/ui/index.ts'
@@ -24,6 +24,8 @@ interface FolderRowProps {
   readonly folderIds: readonly string[]
   readonly targetSpaces: readonly SpaceView[]
   readonly open: boolean
+  /** 记下被点的那个"操作"按钮：面板收起之后空间页把焦点还给它 */
+  readonly openTriggerRef: RefObject<HTMLButtonElement | null>
   readonly onToggle: () => void
   readonly onDone: (notice: OrganizeNotice | undefined) => void
   readonly onDenied: () => void
@@ -33,7 +35,7 @@ interface FolderRowProps {
  * 一个子文件夹：名称是进入它的链接，右边是"操作 <名称>"（改名、移动、删除；文件夹不能复制）。
  * 权限直接用列表里服务端给的 permissions，一个都不能做时连"操作"都不显示。
  */
-function FolderRow({ folder, folderIds, targetSpaces, open, onToggle, onDone, onDenied }: FolderRowProps) {
+function FolderRow({ folder, folderIds, targetSpaces, open, openTriggerRef, onToggle, onDone, onDenied }: FolderRowProps) {
   const refresh = useOrganizeRefresh()
   const panelId = useId()
   const { canRename, canMoveWithinSpace, canMoveAcrossSpaces, canDelete } = folder.permissions
@@ -47,7 +49,20 @@ function FolderRow({ folder, folderIds, targetSpaces, open, onToggle, onDone, on
           {folder.name}
         </Link>
         {actionable && (
-          <Button type="button" variant="ghost" size="sm" aria-expanded={open} aria-controls={panelId} aria-label={text.actionsOn(folder.name)} onClick={onToggle}>{text.actions}</Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            aria-expanded={open}
+            aria-controls={panelId}
+            aria-label={text.actionsOn(folder.name)}
+            onClick={(event) => {
+              openTriggerRef.current = event.currentTarget
+              onToggle()
+            }}
+          >
+            {text.actions}
+          </Button>
         )}
       </div>
       {open && (
@@ -61,6 +76,8 @@ function FolderRow({ folder, folderIds, targetSpaces, open, onToggle, onDone, on
           error={null}
           onRetry={onToggle}
           current={{ spaceId: folder.spaceId, folderId: folder.parentId ?? undefined }}
+          // 目标位置里不列出它自己（挪到它所在的那一层时就在眼前）：更深的子孙仍由服务端的 409 拦下（审查建议 6）
+          excludeFolderId={folder.id}
           targetSpaces={targetSpaces}
           operations={{
             rename: async (name) => {
@@ -76,8 +93,6 @@ function FolderRow({ folder, folderIds, targetSpaces, open, onToggle, onDone, on
               await refresh([folder.spaceId])
             },
           }}
-          // 编辑者删文件夹时服务端还要按子树重新判断一次（P4-S3 spec §2）：403 在这里说清楚为什么，不是笼统的"你没有执行这个操作的权限"
-          describeDeleteError={error => (isPermissionDeniedError(error) ? text.folderDeleteDenied : describeError(error).message)}
           onDone={onDone}
           onDenied={onDenied}
           onClose={onToggle}
@@ -93,13 +108,15 @@ interface FolderListProps {
   readonly targetSpaces: readonly SpaceView[]
   /** 当前展开操作面板的那一个（整页只有一个），undefined 表示都没展开 */
   readonly openId: string | undefined
+  /** 记下被点的那个"操作"按钮：面板收起之后空间页把焦点还给它 */
+  readonly openTriggerRef: RefObject<HTMLButtonElement | null>
   readonly onToggle: (id: string) => void
   readonly onDone: (notice: OrganizeNotice | undefined) => void
   readonly onDenied: () => void
 }
 
 /** 当前位置下的子文件夹（M2-P4 设计 §3.7）：排在文档前面，空列表时整块不显示（由文档列表说明"这里还没有文档"）。 */
-export function FolderList({ folders, folderIds, targetSpaces, openId, onToggle, onDone, onDenied }: FolderListProps) {
+export function FolderList({ folders, folderIds, targetSpaces, openId, openTriggerRef, onToggle, onDone, onDenied }: FolderListProps) {
   if (folders.length === 0)
     return null
   return (
@@ -111,6 +128,7 @@ export function FolderList({ folders, folderIds, targetSpaces, openId, onToggle,
           folderIds={folderIds}
           targetSpaces={targetSpaces}
           open={openId === folder.id}
+          openTriggerRef={openTriggerRef}
           onToggle={() => onToggle(folder.id)}
           onDone={onDone}
           onDenied={onDenied}

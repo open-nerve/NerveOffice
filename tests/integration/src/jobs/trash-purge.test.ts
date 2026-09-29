@@ -1,7 +1,8 @@
 // 回收站里到期的删除单元的自动清理（M2-P4 设计 §3.4 第 6 条，S4）：真实的数据库与真实的应用，
 // 时刻由假时钟给出（把"现在"推到 30 天之后，不必真的等）。覆盖：到期的才清、内容与修订记录一起没了、
 // 未到期的不动、审计的操作者是系统、一轮的批量上限与"最早到期的先清"、
-// 两个实例同时跑只有一个干活（另一个连接持有同一把 advisory lock）、归档的空间照样清、定时器真的会跑。
+// 两个实例同时跑只有一个干活（另一个连接持有同一把 advisory lock）、归档的空间照样清、
+// 等树锁期间这一单被跨空间搬走时这一轮跳过（留给下一轮）、定时器真的会跑。
 import type { TrashListResponse } from '@nerve-office/contracts'
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
@@ -16,6 +17,7 @@ import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { createDocument } from '../support/documents.ts'
+import { raceAgainstHeldLock } from '../support/held-lock.ts'
 import { asUser, login } from '../support/session-client.ts'
 import { createTeamSpace, setSpaceState } from '../support/spaces.ts'
 
@@ -130,7 +132,7 @@ describe('US-M2-09 到期的自动清理', () => {
       actor_id: null,
       source: 'job',
       request_id: null,
-      details: { spaceId, title: '旧周报', trashEntryId: entry.id, folders: 0, documents: 1, cascadedEntries: [] },
+      details: { spaceId, title: '旧周报', trashEntryId: entry.id, folders: 0, documents: 1, cascadedEntries: 0 },
     }])
   })
 
@@ -200,6 +202,41 @@ describe('US-M2-09 到期的自动清理', () => {
 
     await expect(runPurge(expired(entry))).resolves.toEqual({ ran: true, purged: 1, skipped: 0, failed: 0 })
     expect(await count('SELECT count(*) FROM documents WHERE id = $1', [document])).toBe(0)
+  })
+
+  /**
+   * 跳过的另一条路（`reason: 'moved'`）：这一单的空间是批次取出时读到的，清理事务的树锁按它取；
+   * 等锁期间它随子树被搬到别的空间，手里的锁就保护不到它了——不在错的锁下删东西，留给下一轮。
+   */
+  it('批次取出之后、清理事务拿到树锁之前，子树被跨空间搬走：这一轮跳过，留给下一轮', async () => {
+    const from = await teamSpace()
+    const to = await teamSpace()
+    const folder = await newFolder(from, '会被搬走的')
+    const document = await createDocument(database, { spaceId: from, createdBy: amy.id, title: '里面的', folderId: folder })
+    const entry = await trashed(from, `/api/folders/${folder}`)
+
+    const round = await raceAgainstHeldLock(database, {
+      // 持住来源空间的树锁：清理这一单的事务第一步就要它
+      hold: async client => client.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended(\'nerve-office:space-tree:\' || $1::uuid::text, 0))',
+        [from],
+      ),
+      request: async () => runPurge(expired(entry)),
+      // 清理正等在锁上：这棵子树连同里面的文档与这一单被搬到另一个空间（跨空间移动的效果）
+      change: async (client) => {
+        await client.query('UPDATE folders SET space_id = $2 WHERE id = $1', [folder, to])
+        await client.query('UPDATE documents SET space_id = $2 WHERE folder_id = $1', [folder, to])
+        await client.query('UPDATE trash_entries SET space_id = $2, origin_space_id = $2 WHERE id = $1', [entry.id, to])
+      },
+    })
+    expect(round).toEqual({ ran: true, purged: 0, skipped: 1, failed: 0 })
+    expect(await count('SELECT count(*) FROM trash_entries WHERE id = $1', [entry.id])).toBe(1)
+    expect(await count('SELECT count(*) FROM documents WHERE id = $1', [document])).toBe(1)
+
+    // 下一轮按它现在所在的空间取锁，照常清掉
+    await expect(runPurge(expired(entry))).resolves.toEqual({ ran: true, purged: 1, skipped: 0, failed: 0 })
+    expect(await count('SELECT count(*) FROM documents WHERE id = $1', [document])).toBe(0)
+    expect(await count('SELECT count(*) FROM folders WHERE id = $1', [folder])).toBe(0)
   })
 
   it('定时器：应用自己按间隔跑，已经过期的东西不必等谁来触发', async () => {

@@ -1,5 +1,6 @@
 // 权限矩阵的固定世界（M2-P2 设计 §3.11，US-M2-14）：一套角色与一套目标，矩阵的每一格是"某个角色对某个目标做某个操作"。
 // 各 Phase 往矩阵里加行（操作）与列（角色、目标）；预期写在各个矩阵的表格里，不调用生产代码的规则来算。
+import type { ErrorCode } from '@nerve-office/contracts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
@@ -308,16 +309,31 @@ async function errorOf(response: Response): Promise<{ code: string, message: str
   return { code, message }
 }
 
+/** 核对一格时可以放宽的地方。 */
+export interface CellOptions {
+  /**
+   * 这一行的 403 允许哪些错误码；不给时只允许 PERMISSION_DENIED。
+   * 只有"看得到却不能做"另有专门说法的操作才给（例如删除文件夹时"里面有别人创建的文档"，
+   * 它与"空间已归档"要分得开，审查 B2）：仍然是一个封闭的名单，不是不检查
+   */
+  readonly deniedCodes?: readonly ErrorCode[] | undefined
+}
+
 /**
- * 核对一格：状态码；403 的错误码是 PERMISSION_DENIED；409 的错误码是 SPACE_ARCHIVED；404 的错误码是 NOT_FOUND，
- * 而且与同一个人对不存在的目标做同一个操作的响应相同（去掉请求标识）：看不到与不存在一致
+ * 核对一格：状态码；403 的错误码在 deniedCodes 里（默认只有 PERMISSION_DENIED）；409 的错误码是 SPACE_ARCHIVED；
+ * 404 的错误码是 NOT_FOUND，而且与同一个人对不存在的目标做同一个操作的响应相同（去掉请求标识）：看不到与不存在一致
  */
-export async function expectCell<Operation extends string>(world: MatrixWorld, run: MatrixOperation, cell: MatrixCell<Operation>): Promise<void> {
+export async function expectCell<Operation extends string>(
+  world: MatrixWorld,
+  run: MatrixOperation,
+  cell: MatrixCell<Operation>,
+  options: CellOptions = {},
+): Promise<void> {
   const actor = world.actors[cell.actor]
   const response = await run(actor, cell.target)
   expect(response.status, await response.clone().text()).toBe(cell.expected)
   if (cell.expected === 403)
-    expect((await errorOf(response)).code).toBe('PERMISSION_DENIED')
+    expect(options.deniedCodes ?? ['PERMISSION_DENIED']).toContain((await errorOf(response)).code)
   if (cell.expected === 409)
     expect((await errorOf(response)).code).toBe('SPACE_ARCHIVED')
   if (cell.expected === 404) {

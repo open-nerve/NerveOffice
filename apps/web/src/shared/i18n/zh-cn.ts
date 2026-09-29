@@ -10,6 +10,7 @@ const ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
   CSRF_TOKEN_INVALID: '页面已失效，请刷新后重试',
   ORIGIN_NOT_ALLOWED: '请求来源不被允许，请从本站的地址访问',
   PERMISSION_DENIED: '你没有执行这个操作的权限',
+  FOLDER_HAS_OTHERS_DOCUMENTS: '这个文件夹里有别人创建的文档，只有空间管理员能删除',
   CURRENT_PASSWORD_INCORRECT: '当前密码不正确',
   NOT_FOUND: '内容不存在，或者你没有访问权限',
   LAST_ADMIN: '至少要保留一个有效的系统管理员',
@@ -468,7 +469,6 @@ export const messages = {
     // 行内操作：可读名称一律是"操作 对象"
     actions: '操作',
     actionsOn: (name: string) => `操作 ${name}`,
-    actionsOf: (name: string) => `${name} 的操作`,
     loadingActions: '正在确认可以做哪些操作…',
     actionsFailed: (reason: string) => `没能确认可以做哪些操作：${reason}`,
     rename: '改名',
@@ -496,12 +496,8 @@ export const messages = {
     moved: (name: string, location: string) => `已把「${name}」移动到${location}`,
     copied: (title: string) => `已复制出「${title}」`,
     openCopy: '打开副本',
-    spaceRoot: '空间的根目录',
     deleted: (name: string) => `已把「${name}」移到回收站`,
     deleting: '正在删除…',
-    deleteFailed: (reason: string) => `删除失败：${reason}`,
-    /** 编辑者删文件夹时服务端按子树重新判断（P4-S3 spec §2）：403 在这里说清楚为什么 */
-    folderDeleteDenied: '这个文件夹里有别人创建的文档，只有空间管理员能删除它',
     goToTrash: '打开回收站',
     trash: '回收站',
   },
@@ -510,7 +506,8 @@ export const messages = {
     heading: (space: string) => `${space} 的回收站`,
     backToSpace: '返回空间',
     retention: (days: number) => `删除的内容在回收站里保留 ${days} 天，到期后自动永久删除。`,
-    readOnly: '只有删除的人或空间管理员能恢复；永久删除只有空间管理员能做。',
+    /** 恢复的规则（access-rules.ts 的 trashPermissionsOf）：空间管理员，或者仍有编辑者及以上角色的删除者（审查建议 4） */
+    readOnly: '能恢复的是空间管理员，以及删除它的人（要仍有编辑者及以上的角色）；永久删除只有空间管理员能做。',
     listLabel: '回收站列表',
     loading: '正在加载回收站…',
     loadFailed: '回收站加载失败',

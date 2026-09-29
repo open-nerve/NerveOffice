@@ -413,6 +413,32 @@ describe('US-M2-08 复制', () => {
     expect(await database.query(async client => (await client.query('SELECT id FROM documents WHERE space_id = $1', [spaceId])).rowCount)).toBe(1)
   })
 
+  it('目标文件夹：落进指定的文件夹；在别的空间里、已经在回收站里都是 NOT_FOUND，什么也不写', async () => {
+    const spaceId = await teamSpace()
+    const other = await teamSpace()
+    const source = await sourceDocument(spaceId, '季度预算')
+    const target = await newFolder(amySession, spaceId, '目标')
+    const copied = await detail(await copy(amySession, source.id, { spaceId, folderId: target }), 201)
+    expect(copied.folderId).toBe(target)
+    expect(await stored(copied.id)).toMatchObject({ folder_id: target, space_id: spaceId })
+    expect(await idsIn(amySession, spaceId, target)).toEqual([copied.id])
+
+    const elsewhere = await newFolder(amySession, other, '别处的资料')
+    const trashed = await newFolder(amySession, spaceId, '删掉的')
+    await trashFolder(trashed)
+    const responses = [
+      await copy(amySession, source.id, { spaceId, folderId: elsewhere }),
+      await copy(amySession, source.id, { spaceId, folderId: trashed }),
+      await copy(amySession, source.id, { spaceId, folderId: MISSING_ID }),
+    ]
+    expect(responses.map(response => response.status)).toEqual([404, 404, 404])
+    const errors = await Promise.all(responses.map(async response => errorOf(response)))
+    expect(errors[1]).toEqual(errors[0])
+    expect(errors[2]).toEqual(errors[0])
+    // 三次都没有写出副本：这个空间里还是源文档与第一份副本
+    expect(await database.query(async client => (await client.query('SELECT id FROM documents WHERE space_id = $1', [spaceId])).rowCount)).toBe(2)
+  })
+
   it('同一个 requestId 重发：只复制一份，返回同一份；换了目标是另一个请求，拒绝', async () => {
     const spaceId = await teamSpace()
     const source = await seedDocument(database, { spaceId, createdBy: amy.id, title: '季报' })

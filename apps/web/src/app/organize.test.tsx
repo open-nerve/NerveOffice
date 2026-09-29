@@ -89,6 +89,30 @@ async function openActions(name: string): Promise<void> {
   fireEvent.click(await screen.findByRole('button', { name: `操作 ${name}` }))
 }
 
+/** 展开一行的操作面板，并返回那一行的"操作"按钮（收起面板之后焦点要回到它身上） */
+async function openActionsFrom(name: string): Promise<HTMLElement> {
+  const trigger = await screen.findByRole('button', { name: `操作 ${name}` })
+  fireEvent.click(trigger)
+  return trigger
+}
+
+/** 每一次"复制"请求带的 requestId，按发出的顺序 */
+function copyRequestIds(api: ReturnType<typeof installFakeApi>): string[] {
+  return api.requests
+    .filter(request => request.key === `POST /api/documents/${WEEKLY_ID}/copy`)
+    .map(request => (request.body as { requestId: string }).requestId)
+}
+
+/** 点一次"复制到这里"，等到这次请求发出去、而且已经有了结果（按钮不再显示"正在复制…"） */
+async function copyHere(api: ReturnType<typeof installFakeApi>, form: HTMLElement): Promise<void> {
+  const sent = copyRequestIds(api).length
+  fireEvent.click(within(form).getByRole('button', { name: /复制到这里|正在复制…/ }))
+  await waitFor(() => {
+    expect(copyRequestIds(api)).toHaveLength(sent + 1)
+    expect(within(form).getByRole('button', { name: '复制到这里' })).toBeInTheDocument()
+  })
+}
+
 describe('US-M2-07 文件夹导航', () => {
   it('文件夹排在文档前面；点进去地址与内容都跟着变，面包屑能回到空间的根目录', async () => {
     loggedIn({
@@ -265,15 +289,134 @@ describe('US-M2-07 行内的整理操作', () => {
     expect(api.requests.some(request => request.key === `DELETE /api/documents/${WEEKLY_ID}`)).toBe(true)
   })
 
-  it('编辑者删文件夹被服务端按子树拒绝（403）：说清楚是因为里面有别人创建的文档', async () => {
-    loggedIn({
+  it('复制的 requestId 按"这一次复制"持有：结果未知（5xx）之后重试沿用同一个，确定被拒绝（4xx）之后重试换一个（审查 B1）', async () => {
+    const api = loggedIn({
+      [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()),
+      [`POST /api/documents/${WEEKLY_ID}/copy`]: () => apiError(500, 'INTERNAL_ERROR'),
+    })
+    renderApp('/')
+    await openActions('周报')
+    fireEvent.click(await screen.findByRole('button', { name: '复制' }))
+    const form = screen.getByRole('form', { name: '复制' })
+
+    // 5xx：结果未知，服务端可能已经复制出来了。再点一次沿用同一个 requestId，不会建出第二份副本
+    await copyHere(api, form)
+    await copyHere(api, form)
+    const [first, second] = copyRequestIds(api)
+    expect(second).toBe(first)
+
+    // 4xx：服务端在写入之前就拒绝了，这个 requestId 已经没用了（服务端把它记成了另一次请求）。再点换一个新的
+    api.on(`POST /api/documents/${WEEKLY_ID}/copy`, () => apiError(409, 'REQUEST_ID_CONFLICT'))
+    await copyHere(api, form)
+    await copyHere(api, form)
+    const [, , third, fourth] = copyRequestIds(api)
+    expect(third).toBe(first)
+    expect(fourth).not.toBe(third)
+  })
+
+  it('换了目标位置就换一个新的 requestId：重试不会落回旧目标（审查 B1）', async () => {
+    const teamFolders = new URLSearchParams({ spaceId: TEAM_ID })
+    const api = loggedIn({
+      'GET /api/spaces': () => json(200, { items: [personalSpaceOf(SESSION), TEAM] }),
+      [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()),
+      [`GET /api/folders?${teamFolders.toString()}`]: noFolders(),
+      [`POST /api/documents/${WEEKLY_ID}/copy`]: () => apiError(500, 'INTERNAL_ERROR'),
+    })
+    renderApp('/')
+    await openActions('周报')
+    fireEvent.click(await screen.findByRole('button', { name: '复制' }))
+    const form = screen.getByRole('form', { name: '复制' })
+    await copyHere(api, form)
+
+    fireEvent.change(within(form).getByLabelText('目标空间'), { target: { value: TEAM_ID } })
+    await copyHere(api, form)
+    const [toPersonal, toTeam] = copyRequestIds(api)
+    expect(toTeam).not.toBe(toPersonal)
+  })
+
+  it('编辑者删文件夹被服务端按子树拒绝：说清楚是因为里面有别人创建的文档；空间刚被归档的 403 走通用的说法（审查 B2）', async () => {
+    const api = loggedIn({
       [foldersKey(SPACE_ID)]: folderPage([folder(PLAN_ID, '方案')]),
-      [`DELETE /api/folders/${PLAN_ID}`]: () => apiError(403, 'PERMISSION_DENIED'),
+      [`DELETE /api/folders/${PLAN_ID}`]: () => apiError(403, 'FOLDER_HAS_OTHERS_DOCUMENTS'),
     })
     renderApp('/')
     await openActions('方案')
     fireEvent.click(await screen.findByRole('button', { name: '删除' }))
-    expect(await screen.findByText('这个文件夹里有别人创建的文档，只有空间管理员能删除它')).toBeInTheDocument()
+    expect(await screen.findByText('这个文件夹里有别人创建的文档，只有空间管理员能删除')).toBeInTheDocument()
+
+    // 同一个 403 状态的另一种原因（空间刚被归档，自己刚被降为查看者也走它）：不能说成"里面有别人创建的文档"
+    api.on(`DELETE /api/folders/${PLAN_ID}`, () => apiError(403, 'PERMISSION_DENIED'))
+    fireEvent.click(screen.getByRole('button', { name: '删除' }))
+    expect(await screen.findByText('你没有执行这个操作的权限')).toBeInTheDocument()
+    expect(screen.queryByText('这个文件夹里有别人创建的文档，只有空间管理员能删除')).not.toBeInTheDocument()
+  })
+
+  it('移动文件夹时目标位置里不列出它自己（进去了也只能被服务端的 409 拦下，审查建议 6）', async () => {
+    loggedIn({
+      [foldersKey(SPACE_ID)]: folderPage([folder(PLAN_ID, '方案'), folder(QUARTER_ID, '归档')]),
+    })
+    renderApp('/')
+    await openActions('方案')
+    fireEvent.click(await screen.findByRole('button', { name: '移动' }))
+    const form = screen.getByRole('form', { name: '移动' })
+    expect(await within(form).findByRole('button', { name: '进入 归档' })).toBeInTheDocument()
+    expect(within(form).queryByRole('button', { name: '进入 方案' })).not.toBeInTheDocument()
+  })
+
+  it('操作被 403 拒绝：连这个空间里的文件夹与文档一起重新请求，过期的权限不会一直留在界面上（审查建议 2）', async () => {
+    let permissions = ALL_FOLDER_PERMISSIONS
+    loggedIn({
+      [foldersKey(SPACE_ID)]: () => json(200, { items: [folder(PLAN_ID, '方案', { permissions })], truncated: false }),
+      [`DELETE /api/folders/${PLAN_ID}`]: () => {
+        // 空间刚被归档（或者自己刚被降为查看者）：这个人现在一个操作都做不了了
+        permissions = { canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false }
+        return apiError(403, 'PERMISSION_DENIED')
+      },
+    })
+    renderApp('/')
+    await openActions('方案')
+    fireEvent.click(await screen.findByRole('button', { name: '删除' }))
+    // 文件夹列表跟着重新请求：那一行还在（只是不能动了），"操作"随新的权限消失
+    await waitFor(() => expect(screen.queryByRole('button', { name: '操作 方案' })).not.toBeInTheDocument())
+    expect(screen.getByRole('link', { name: '方案' })).toBeInTheDocument()
+  })
+
+  it('面板收起、说明条关掉之后焦点回到那一行的"操作"，不落到 body（审查建议 1）', async () => {
+    loggedIn({
+      [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()),
+      [`PATCH /api/documents/${WEEKLY_ID}`]: () => json(200, detail({ title: '周报（终稿）' })),
+    })
+    renderApp('/')
+
+    // 展开之后点"取消"
+    const trigger = await openActionsFrom('周报')
+    fireEvent.click(await screen.findByRole('button', { name: '取消' }))
+    expect(document.activeElement).toBe(trigger)
+
+    // 改名成功：面板收起，没有说明条
+    fireEvent.click(trigger)
+    fireEvent.click(await screen.findByRole('button', { name: '改名' }))
+    fireEvent.change(screen.getByLabelText('周报 的新名称'), { target: { value: '周报（终稿）' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(document.activeElement).toBe(trigger))
+  })
+
+  it('说明条先接住焦点；关掉它时那一行还在，焦点还给它的"操作"（审查建议 1）', async () => {
+    loggedIn({
+      [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()),
+      [`POST /api/documents/${WEEKLY_ID}/copy`]: () => json(201, detail({ id: QUARTER_ID, title: '周报 的副本' })),
+    })
+    renderApp('/')
+    const trigger = await openActionsFrom('周报')
+    fireEvent.click(await screen.findByRole('button', { name: '复制' }))
+    fireEvent.click(within(screen.getByRole('form', { name: '复制' })).getByRole('button', { name: '复制到这里' }))
+
+    // 复制出来的那一份在别处（说明里给出"打开副本"）：焦点先交给说明条
+    const notice = await screen.findByText('已复制出「周报 的副本」')
+    const alert = notice.closest('[tabindex="-1"]')
+    await waitFor(() => expect(document.activeElement).toBe(alert))
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }))
+    expect(document.activeElement).toBe(trigger)
   })
 
   it('查看者：没有新建文件夹，文件夹那一行也没有"操作"', async () => {

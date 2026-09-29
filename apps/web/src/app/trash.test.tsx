@@ -60,6 +60,16 @@ describe('US-M2-09 回收站', () => {
     expect(within(row).getByText('空间的根目录')).toBeInTheDocument()
   })
 
+  it('整页只有一个"回收站"的标题（读屏按标题导航不会读到两遍）；说明与恢复的规则一致（审查建议 8、4）', async () => {
+    loggedIn({ [TRASH_KEY]: () => json(200, { items: [entry()], nextCursor: null }) })
+    renderApp(TRASH_PATH)
+    // 等列表出来：过去列表里另有一个同名的 sr-only 标题，两个标题的文本一模一样
+    expect(await screen.findByText('方案')).toBeInTheDocument()
+    expect(screen.getAllByRole('heading', { name: '我的空间 的回收站' })).toHaveLength(1)
+    // 恢复还要求"编辑者及以上"：被降为查看者的删除者看不到"恢复"，说明不能只说"删除的人能恢复"
+    expect(screen.getByText('能恢复的是空间管理员，以及删除它的人（要仍有编辑者及以上的角色）；永久删除只有空间管理员能做。')).toBeInTheDocument()
+  })
+
   it('原位置已经不在：列表里说明；恢复之后明确告诉用户它回到了空间的根目录', async () => {
     let items = [entry({ origin: { parentId: '0199a2c4-0000-7000-8000-0000000000f9', parentName: null, available: false } })]
     loggedIn({
@@ -107,6 +117,8 @@ describe('US-M2-09 回收站', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: '永久删除' }))
     expect(await screen.findByText('已永久删除「方案」')).toBeInTheDocument()
     expect(api.requests.some(request => request.key === `DELETE /api/trash/${ENTRY_ID}`)).toBe(true)
+    // 打开弹窗的那一行已经不在：焦点交给页面的标题，不落到 body
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('heading', { name: '我的空间 的回收站' })))
   })
 
   it('别人已经动过它（404）：列表刷新，并说明这一条已经不在回收站里了', async () => {

@@ -1,7 +1,9 @@
 import type { Transaction } from '../database/index.ts'
+import type { SpaceFacts } from '../spaces/index.ts'
+import type { DocumentAccessPolicy, SpaceAccess } from './document-access-policy.ts'
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
-import { canEdit, requireAccess, requireSpaceContent, requireSpaceManagement } from './document-access-policy.ts'
+import { canEdit, requireAccess, requireCreateTarget, requireSpaceContent, requireSpaceManagement } from './document-access-policy.ts'
 import { ALICE, ALICE_SPACE, BOB, BOB_SPACE, FakeStore, member, TEAM_SPACE } from './documents.test-support.ts'
 
 const MISSING = '0199a2c4-0000-7000-8000-0000000000ff'
@@ -91,6 +93,33 @@ describe('requireSpaceContent', () => {
     expect(await requireSpaceContent(store.policy, member(BOB), TEAM_SPACE, 'createDocuments')).toMatchObject({ role: 'editor' })
     store.space(TEAM_SPACE).status = 'archived'
     expect(await errorOf(requireSpaceContent(store.policy, member(BOB), TEAM_SPACE, 'createDocuments'))).toMatchObject({ code: 'PERMISSION_DENIED', message: '空间已归档，只能查看' })
+  })
+})
+
+/**
+ * 只回答一个空间访问的假策略：两个"新建"权限位可以分别设置。
+ * 真实规则里它们今天始终相同（access-rules.ts），所以只有把它们分开，才看得出判的是哪一个（审查 A 建议 5）。
+ */
+function policyWithCreate(permissions: { readonly canCreateDocuments: boolean, readonly canCreateFolders: boolean }): DocumentAccessPolicy {
+  const space: SpaceFacts = { id: TEAM_SPACE, type: 'team', name: '市场部', status: 'active', visibleToAll: false, owned: false, memberRole: 'editor' }
+  const access: SpaceAccess = {
+    space,
+    role: 'editor',
+    permissions: { ...permissions, canViewMembers: true, canManageMembers: false, canRename: false, canPurgeTrash: false },
+  }
+  return { accessOf: async () => undefined, spaceAccessOf: async () => access, visibleSpaces: async () => [] }
+}
+
+describe('requireCreateTarget', () => {
+  it('判的是这次要新建的那一种权限：搬（复制）文档看 canCreateDocuments，搬文件夹看 canCreateFolders', async () => {
+    const onlyDocuments = policyWithCreate({ canCreateDocuments: true, canCreateFolders: false })
+    expect(await requireCreateTarget(onlyDocuments, member(ALICE), TEAM_SPACE, 'createDocuments')).toMatchObject({ role: 'editor' })
+    expect(await errorOf(requireCreateTarget(onlyDocuments, member(ALICE), TEAM_SPACE, 'createFolders')))
+      .toMatchObject({ code: 'PERMISSION_DENIED', message: '没有在目标空间里新建的权限' })
+
+    const onlyFolders = policyWithCreate({ canCreateDocuments: false, canCreateFolders: true })
+    expect(await requireCreateTarget(onlyFolders, member(ALICE), TEAM_SPACE, 'createFolders')).toMatchObject({ role: 'editor' })
+    expect((await errorOf(requireCreateTarget(onlyFolders, member(ALICE), TEAM_SPACE, 'createDocuments'))).code).toBe('PERMISSION_DENIED')
   })
 })
 

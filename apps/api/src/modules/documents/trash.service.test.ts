@@ -1,6 +1,8 @@
 // TrashService 的规则（M2-P4 S3 的 spec）：谁能删、删除单元的粒度与"不重组"、恢复的回落、永久删除的连带、
 // 取锁的顺序与审计。真实的 SQL（递归展开、整棵更新、外键的连带）由集成测试用真实数据库覆盖。
 import type { FolderRow } from './folders.repository.ts'
+import { Buffer } from 'node:buffer'
+import { AUDIT_DETAILS_MAX_BYTES } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { ALICE, ALICE_SPACE, BOB, FakeStore, HTTP_ORIGIN, member, TEAM_SPACE } from './documents.test-support.ts'
@@ -131,8 +133,9 @@ describe('TrashService.deleteFolder', () => {
     store.setMember(TEAM_SPACE, ALICE, 'editor')
     const withOthers = store.addFolder({ spaceId: TEAM_SPACE, name: '公共' })
     store.addDocument({ spaceId: TEAM_SPACE, folderId: withOthers.id, createdBy: BOB })
+    // 单独的错误码（不是 PERMISSION_DENIED）：界面要说"换个人来删"，与"空间已归档"分得开（审查 B2）
     const denied = await errorOf(service.deleteFolder(member(ALICE), withOthers.id, HTTP_ORIGIN))
-    expect([denied.code, denied.message]).toEqual(['PERMISSION_DENIED', '文件夹里有别人创建的文档，只有空间管理员能删除'])
+    expect([denied.code, denied.message]).toEqual(['FOLDER_HAS_OTHERS_DOCUMENTS', '文件夹里有别人创建的文档，只有空间管理员能删除'])
     expect(store.trashEntries.size).toBe(0)
 
     const empty = store.addFolder({ spaceId: TEAM_SPACE, name: '空的' })
@@ -195,6 +198,23 @@ describe('TrashService.restore', () => {
     expect(store.folders.get(leaf?.id ?? '')?.depth).toBe(3)
   })
 
+  it('留在回收站里、属于别的删除单元的子孙也跟着降层（审查 A2）', async () => {
+    const { store, service } = setup()
+    const [top, middle, leaf] = chain(store, ALICE_SPACE, 3)
+    // 由深到浅逐个单独删：三棵各自成一个删除单元，leaf 与 middle 的父子关系与层数都没有变
+    for (const folder of [leaf, middle, top])
+      await service.deleteFolder(member(ALICE), folder?.id ?? '', HTTP_ORIGIN)
+    const middleEntry = store.entryOfFolder(middle?.id ?? '') ?? ''
+    const leafEntry = store.entryOfFolder(leaf?.id ?? '')
+
+    // top 还在回收站里，所以 middle 回到空间的根目录：整棵子树一起降一层，leaf 也从第 3 层降到第 2 层
+    expect(await service.restore(member(ALICE), middleEntry, HTTP_ORIGIN)).toMatchObject({ folderId: null, movedToRoot: true })
+    expect(store.folders.get(middle?.id ?? '')).toMatchObject({ parentId: null, depth: 1 })
+    expect(store.folders.get(leaf?.id ?? '')).toMatchObject({ parentId: middle?.id, depth: 2 })
+    // leaf 仍然留在它自己的删除单元里（spec §3 的"顺序"）：只有层数跟着变
+    expect(store.entryOfFolder(leaf?.id ?? '')).toBe(leafEntry)
+  })
+
   it('恢复的权限：删除者本人与空间管理员可以，同空间的另一个编辑者不行；归档的空间谁都不行', async () => {
     const { store, service } = setup()
     store.setMember(TEAM_SPACE, ALICE, 'editor')
@@ -245,7 +265,7 @@ describe('TrashService.purge', () => {
     expect(store.audits.at(-1)).toMatchObject({
       action: 'folders.purged',
       target: { type: 'folder', id: folder.id },
-      details: { spaceId: TEAM_SPACE, title: '资料', trashEntryId: entryId, folders: 1, documents: 1, cascadedEntries: [] },
+      details: { spaceId: TEAM_SPACE, title: '资料', trashEntryId: entryId, folders: 1, documents: 1, cascadedEntries: 0 },
     })
   })
 
@@ -268,9 +288,27 @@ describe('TrashService.purge', () => {
     expect([store.documents.has(earlier.id), store.documents.has(inside.id)]).toEqual([false, false])
     expect(store.folders.size).toBe(0)
     expect(store.trashEntries.size).toBe(0)
-    const purged = store.audits.at(-1)
-    expect(purged).toMatchObject({ action: 'folders.purged', details: { folders: 4, documents: 2 } })
-    expect((purged?.details?.cascadedEntries as string[]).toSorted()).toEqual([earlierEntry, earlierFolderEntry].toSorted())
+    // 连带的两个单元（那份文档的、那棵子文件夹的）都清掉了；明细只记份数，不记 id 列表（审查 A1）
+    expect([earlierEntry, earlierFolderEntry].every(id => !store.trashEntries.has(id))).toBe(true)
+    expect(store.audits.at(-1)).toMatchObject({ action: 'folders.purged', details: { folders: 4, documents: 2, cascadedEntries: 2 } })
+  })
+
+  it('连带上百个单元时，审计明细仍在字节上限内：只记份数（审查 A1）', async () => {
+    const { store, service } = setup()
+    const folder = store.addFolder({ spaceId: ALICE_SPACE, name: '资料' })
+    for (let index = 0; index < 120; index += 1) {
+      const document = store.addDocument({ folderId: folder.id, title: `第 ${index} 份` })
+      await service.deleteDocument(member(ALICE), document.id, HTTP_ORIGIN)
+    }
+    await service.deleteFolder(member(ALICE), folder.id, HTTP_ORIGIN)
+    const entryId = store.entryOfFolder(folder.id) ?? ''
+
+    await service.purge(member(ALICE), entryId, HTTP_ORIGIN)
+    expect(store.trashEntries.size).toBe(0)
+    const details = store.audits.at(-1)?.details
+    expect(details).toMatchObject({ folders: 1, documents: 120, cascadedEntries: 120 })
+    // 明细是有界的：换成 id 列表的话，120 个 uuid 就已经超过上限，整条写入失败、那一单永远删不掉
+    expect(Buffer.byteLength(JSON.stringify(details))).toBeLessThanOrEqual(AUDIT_DETAILS_MAX_BYTES)
   })
 
   it('恢复与永久删除之后，另一个请求看到删除单元已经不在：NOT_FOUND', async () => {

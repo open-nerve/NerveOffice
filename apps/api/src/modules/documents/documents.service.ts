@@ -33,7 +33,7 @@ export class DocumentsService {
     await requireSpaceContent(this.policy, actor, spaceId, 'view')
     const folderId = await this.folderFilterOf(spaceId, query.folderId)
     // 多取一条，判断还有没有下一页
-    const rows = await this.repository.listAccessible({ spaceIds: [spaceId], state: 'active' }, { limit: query.limit + 1, after, folderId })
+    const rows = await this.repository.listAccessible({ spaceIds: [spaceId] }, { limit: query.limit + 1, after, folderId })
     const page = rows.slice(0, query.limit)
     const last = page.at(-1)
     return {

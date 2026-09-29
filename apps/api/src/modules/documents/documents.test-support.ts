@@ -151,16 +151,17 @@ export class FakeStore {
     documents: {
       findById: vi.fn(async (id: string) => this.activeDocument(id)),
       lockById: vi.fn(async (id: string) => this.activeDocument(id)),
+      /** 可访问文档：在这些空间里、正常状态（与真实仓储的 accessible 一样，状态不是参数） */
       listAccessible: vi.fn(async (scope: AccessibleScope, options: ListOptions) =>
         [...this.documents.values()]
-          .filter(row => scope.spaceIds.includes(row.spaceId) && (this.entryOfDocument(row.id) === null) === (scope.state === 'active'))
+          .filter(row => scope.spaceIds.includes(row.spaceId) && this.entryOfDocument(row.id) === null)
           .slice(0, options.limit)),
       /** 按标题搜索：范围与状态同上，再按关键词过滤，按位置从新到旧排序并从游标之后开始 */
       searchByTitle: vi.fn(async (scope: AccessibleScope, options: SearchOptions) => {
         const keyword = keywordOf(options.titlePattern)
         const { after } = options
         return [...this.documents.values()]
-          .filter(row => scope.spaceIds.includes(row.spaceId) && (this.entryOfDocument(row.id) === null) === (scope.state === 'active'))
+          .filter(row => scope.spaceIds.includes(row.spaceId) && this.entryOfDocument(row.id) === null)
           .filter(row => row.title.toLowerCase().includes(keyword))
           .toSorted((a, b) => b.position.localeCompare(a.position) || b.id.localeCompare(a.id))
           .filter(row => after === undefined || row.position < after.position || (row.position === after.position && row.id < after.id))
@@ -343,15 +344,19 @@ export class FakeStore {
           this.folderEntries.set(id, trashEntryId)
         return ids.length
       }),
-      /** 整单恢复：只有根换父文件夹，整棵子树的层数一起加差值 */
+      /**
+       * 整单恢复（与真实仓储同形）：范围是根的整棵递归子树（不看状态），层数一起加差值——
+       * 留在回收站里、属于别的删除单元的子孙也跟着降层（审查 A2）；回到正常状态只对这一单的行生效；只有根换父文件夹
+       */
       restoreInEntry: vi.fn(async (trashEntryId: string, rootId: string, parentId: string | null, depthDelta: number) => {
-        const ids = [...this.folderEntries.entries()].flatMap(([id, entry]) => entry === trashEntryId ? [id] : [])
-        for (const id of ids) {
-          const row = this.folders.get(id)
-          this.folderEntries.delete(id)
-          this.updateFolder(id, { depth: (row?.depth ?? 1) + depthDelta, ...(id === rootId ? { parentId } : {}) })
+        const root = this.folders.get(rootId)
+        const subtree = root === undefined ? [] : [root, ...this.descendants(rootId)]
+        for (const row of subtree) {
+          if (this.entryOfFolder(row.id) === trashEntryId)
+            this.folderEntries.delete(row.id)
+          this.updateFolder(row.id, { depth: row.depth + depthDelta, ...(row.id === rootId ? { parentId } : {}) })
         }
-        return ids.length
+        return subtree.length
       }),
       deleteMany: vi.fn(async (ids: readonly string[]) => {
         for (const id of ids) {

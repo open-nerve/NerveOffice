@@ -19,6 +19,12 @@ export const ERROR_CODES = {
   ORIGIN_NOT_ALLOWED: { status: 403, message: '请求来源不被允许' },
   /** 能访问这个资源，但没有这个操作的权限，例如只能查看的文档不能保存（没有任何权限时是 NOT_FOUND） */
   PERMISSION_DENIED: { status: 403, message: '没有执行这个操作的权限' },
+  /**
+   * 编辑者删不了这个文件夹：里面有别人创建的文档（M2-P4，P4-S3 spec §2）。
+   * 与 PERMISSION_DENIED 分开是因为它有专门的说法："换个人来删"，而不是"你没有权限"；
+   * 空间已归档同样是 403，但那是另一回事，界面不能把两者说成同一句话（审查 B2）
+   */
+  FOLDER_HAS_OTHERS_DOCUMENTS: { status: 403, message: '文件夹里有别人创建的文档，只有空间管理员能删除' },
   /** 修改密码时旧密码不对 */
   CURRENT_PASSWORD_INCORRECT: { status: 403, message: '当前密码不正确' },
   /** 资源不存在；没有读取权限时同样返回它，不暴露资源是否存在（规范 §4） */

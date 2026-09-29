@@ -66,20 +66,25 @@ export class DocumentCopyService {
       // 先判断（不加锁）：看不到源文档、不能在目标空间新建的请求不取任何锁
       const source = await requireDocumentContent(this.policy, userId, await this.documents.findById(id, transaction), ['copy'], transaction)
       const title = command.title ?? copiedDocumentTitle(source.document.title)
-      await requireCreateTarget(this.policy, actor, command.spaceId, transaction)
+      await requireCreateTarget(this.policy, actor, command.spaceId, 'createDocuments', transaction)
       // 空间树的结构性改动串行：只取目标空间的锁，源文档不改动
       await this.tree.lock([command.spaceId], transaction)
       await this.spaces.holdSpace(command.spaceId, transaction)
       // 锁下再判断：与归档、移出成员互斥，它们提交之后的复制一定被拒绝
-      const target = await requireCreateTarget(this.policy, actor, command.spaceId, transaction)
+      const target = await requireCreateTarget(this.policy, actor, command.spaceId, 'createDocuments', transaction)
       const folderId = await folderIdIn(this.folders, command.spaceId, command.folderId ?? null, transaction)
 
       const copy = await this.documents.copyFrom(id, { spaceId: command.spaceId, folderId, title, createdBy: userId }, transaction)
       // 判断过之后源文档被删了（它不在这把锁的保护下）：按"没找到"回答，与一开始就看不到一致
       if (copy === undefined)
         throw new AppError('NOT_FOUND')
-      if (!await this.contents.copyFrom(id, copy.id, transaction))
-        throw new Error(`文档有记录却没有内容：${id}`)
+      // 元数据复制到了、内容却复制不到：源文档在这两条语句之间被永久删除了（记录与内容一起没了，
+      // 源不在这把锁的保护下），同样按"没找到"回答；源还在却没有内容才是真正的数据不一致（审查 A 建议 7）
+      if (!await this.contents.copyFrom(id, copy.id, transaction)) {
+        if (await this.documents.findById(id, transaction) !== undefined)
+          throw new Error(`文档有记录却没有内容：${id}`)
+        throw new AppError('NOT_FOUND')
+      }
       const revision = await this.revisions.insert({
         documentId: copy.id,
         revision: 1,

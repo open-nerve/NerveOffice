@@ -1,10 +1,11 @@
 import type { DocumentSummary, SpaceView } from '@nerve-office/contracts'
+import type { RefObject } from 'react'
 import type { OrganizeNotice } from './item-actions.tsx'
 import { documentPagePath, documentTitleSchema } from '@nerve-office/contracts'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { FileSpreadsheet } from 'lucide-react'
 import { useEffect, useId, useRef } from 'react'
-import { describeError } from '../../shared/api/index.ts'
+import { describeError, isDefiniteRejection } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { Alert, AlertDescription, Button, buttonVariants, Skeleton } from '../../shared/ui/index.ts'
@@ -22,6 +23,8 @@ interface DocumentItemProps {
   readonly document: DocumentSummary
   readonly targetSpaces: readonly SpaceView[]
   readonly open: boolean
+  /** 记下被点的那个"操作"按钮：面板收起之后空间页把焦点还给它 */
+  readonly openTriggerRef: RefObject<HTMLButtonElement | null>
   readonly onToggle: () => void
   readonly onDone: (notice: OrganizeNotice | undefined) => void
   readonly onDenied: () => void
@@ -32,10 +35,14 @@ interface DocumentItemProps {
  * 列表的条目只有摘要（契约里没有权限位），所以展开操作时才按 id 取一次元数据：能做哪些操作一律以服务端给的 permissions 为准，
  * 顺带也拿到它现在所在的文件夹（移动与复制要用）。
  */
-function DocumentItem({ document, targetSpaces, open, onToggle, onDone, onDenied }: DocumentItemProps) {
+function DocumentItem({ document, targetSpaces, open, openTriggerRef, onToggle, onDone, onDenied }: DocumentItemProps) {
   const refresh = useOrganizeRefresh()
   const panelId = useId()
   const detail = useQuery({ ...documentQueryOptions(document.id), enabled: open })
+  // 正在进行的这一次复制的 requestId 与它的目标位置（契约承诺同一个 requestId 只复制一份，新建表格也是同一个范式）：
+  // 结果未知（网络错误、5xx）之后再点，沿用同一个，服务端不会建出第二份副本；确定失败（4xx）与做完之后换新的。
+  // 换了目标位置也换新的：沿用旧的会让重试落回旧目标（M2-P4 审查 B1）
+  const copyRequestRef = useRef<{ readonly target: string, readonly requestId: string }>(undefined)
 
   return (
     <li>
@@ -52,7 +59,20 @@ function DocumentItem({ document, targetSpaces, open, onToggle, onDone, onDenied
             </span>
           </span>
         </a>
-        <Button type="button" variant="ghost" size="sm" aria-expanded={open} aria-controls={panelId} aria-label={organize.actionsOn(document.title)} onClick={onToggle}>{organize.actions}</Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-expanded={open}
+          aria-controls={panelId}
+          aria-label={organize.actionsOn(document.title)}
+          onClick={(event) => {
+            openTriggerRef.current = event.currentTarget
+            onToggle()
+          }}
+        >
+          {organize.actions}
+        </Button>
       </div>
       {open && (
         <ItemActions
@@ -75,11 +95,24 @@ function DocumentItem({ document, targetSpaces, open, onToggle, onDone, onDenied
               await refresh([detail.data?.spaceId ?? destination.spaceId, moved.spaceId])
             },
             copy: async (destination) => {
-              const copy = await copyDocument(document.id, { spaceId: destination.spaceId, requestId: crypto.randomUUID(), ...(destination.folderId === undefined ? {} : { folderId: destination.folderId }) })
-              await refresh([copy.spaceId])
-              return {
-                message: organize.copied(copy.title),
-                action: <a href={documentPagePath(copy.id)} className={buttonVariants({ variant: 'outline', size: 'sm' })}>{organize.openCopy}</a>,
+              const target = `${destination.spaceId}/${destination.folderId ?? ''}`
+              if (copyRequestRef.current?.target !== target)
+                copyRequestRef.current = { target, requestId: crypto.randomUUID() }
+              try {
+                const copy = await copyDocument(document.id, { spaceId: destination.spaceId, requestId: copyRequestRef.current.requestId, ...(destination.folderId === undefined ? {} : { folderId: destination.folderId }) })
+                // 这一次复制做完了：再复制一次是另一件事，要换一个新的 requestId，否则服务端会把那一次当成重试
+                copyRequestRef.current = undefined
+                await refresh([copy.spaceId])
+                return {
+                  message: organize.copied(copy.title),
+                  action: <a href={documentPagePath(copy.id)} className={buttonVariants({ variant: 'outline', size: 'sm' })}>{organize.openCopy}</a>,
+                }
+              }
+              catch (error) {
+                // 确定被拒绝（4xx）才换 requestId：结果未知时沿用同一个，再点不会复制出第二份
+                if (isDefiniteRejection(error))
+                  copyRequestRef.current = undefined
+                throw error
               }
             },
             remove: async () => {
@@ -87,7 +120,6 @@ function DocumentItem({ document, targetSpaces, open, onToggle, onDone, onDenied
               await refresh([detail.data?.spaceId ?? ''])
             },
           }}
-          describeDeleteError={error => describeError(error).message}
           onDone={onDone}
           onDenied={onDenied}
           onClose={onToggle}
@@ -114,6 +146,8 @@ interface DocumentListProps {
   readonly targetSpaces: readonly SpaceView[]
   /** 当前展开操作面板的那一个（整页只有一个） */
   readonly openId: string | undefined
+  /** 记下被点的那个"操作"按钮：面板收起之后空间页把焦点还给它 */
+  readonly openTriggerRef: RefObject<HTMLButtonElement | null>
   readonly onToggle: (id: string) => void
   readonly onDone: (notice: OrganizeNotice | undefined) => void
   readonly onDenied: () => void
@@ -125,7 +159,7 @@ interface DocumentListProps {
  * 一个空间里某个文件夹下的文档列表（US-M1-03，M2-P2 设计 §3.10，M2-P4 按目录过滤）。
  * 加载中、空列表、加载失败都有明确的显示；分页用"加载更多"。标题与新建在空间页的页头，子文件夹排在这个列表前面。
  */
-export function DocumentList({ spaceId, folderId, targetSpaces, openId, onToggle, onDone, onDenied, hasFolders }: DocumentListProps) {
+export function DocumentList({ spaceId, folderId, targetSpaces, openId, openTriggerRef, onToggle, onDone, onDenied, hasFolders }: DocumentListProps) {
   const query = useInfiniteQuery(folderDocumentsQueryOptions(spaceId, folderId))
   const documents = query.data?.pages.flatMap(page => page.items) ?? []
   // 加载更多时已有的条数：新的一页到了之后，焦点移到第一个新条目。按钮可能随之消失（没有下一页了），焦点不能留在它身上（审查 B13）
@@ -179,6 +213,7 @@ export function DocumentList({ spaceId, folderId, targetSpaces, openId, onToggle
             document={document}
             targetSpaces={targetSpaces}
             open={openId === document.id}
+            openTriggerRef={openTriggerRef}
             onToggle={() => onToggle(document.id)}
             onDone={onDone}
             onDenied={onDenied}

@@ -6,6 +6,7 @@
 // v0.1 的权限只到空间与文档两级，文件夹没有自己的权限，所以除了"删除"以外都只看空间角色。
 // 删除分两行：空文件夹（只看角色）与"里面有别人创建的文档"（编辑者不能删，锁下用一条计数语句判断）。
 // 跨空间同样拆成两行各固定一端，理由见 document-matrix.test.ts。
+import type { ErrorCode } from '@nerve-office/contracts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { MatrixOperation, MatrixTable, MatrixWorld, Row, TargetName } from './matrix-world.ts'
@@ -132,10 +133,20 @@ const OPERATIONS: Readonly<Record<Operation, MatrixOperation>> = {
   },
 }
 
+/**
+ * 403 允许的错误码：默认只有 PERMISSION_DENIED。
+ * 删"里面有别人创建的文档"的文件夹这一行有两种 403：编辑者是 FOLDER_HAS_OTHERS_DOCUMENTS（"换个人来删"），
+ * 查看者与归档的空间仍然是 PERMISSION_DENIED——这两种说法不同，界面按错误码取文案（审查 B2）。
+ * 两个码具体落在哪一格，由 documents/trash.test.ts 逐条断言。
+ */
+const DENIED_CODES: Partial<Record<Operation, readonly ErrorCode[]>> = {
+  deleteFolderHoldingOthers: ['PERMISSION_DENIED', 'FOLDER_HAS_OTHERS_DOCUMENTS'],
+}
+
 const CELLS = cellsOf(MATRIX)
 
 describe('US-M2-14 权限矩阵：文件夹', () => {
   it.each(CELLS)('US-M2-14 $operation：$actor 对 $target → $expected', async (cell) => {
-    await expectCell(world, OPERATIONS[cell.operation], cell)
+    await expectCell(world, OPERATIONS[cell.operation], cell, { deniedCodes: DENIED_CODES[cell.operation] })
   })
 })

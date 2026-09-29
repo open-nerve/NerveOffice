@@ -5,7 +5,7 @@ import type { Actor, SpaceContentAccess, TrashOperation } from './document-acces
 import type { TrashedDocumentRow } from './documents.repository.ts'
 import type { FolderRow } from './folders.repository.ts'
 import type { TrashEntryRow } from './trash-entries.repository.ts'
-import { FOLDER_MAX_DEPTH, TRASH_LIST_PAGE_SIZE } from '@nerve-office/contracts'
+import { TRASH_LIST_PAGE_SIZE } from '@nerve-office/contracts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { decodeTimeCursor, encodeTimeCursor } from '../../shared/time-cursor.ts'
@@ -124,7 +124,8 @@ export class TrashService {
       await this.spaces.holdSpace(checked.document.spaceId, transaction)
       // 锁下重新读、重新判断：这期间它可能被移走、被别人删，空间可能被归档，自己可能被移出空间
       const { document } = await requireDocumentContent(this.policy, actor.userId, await this.documents.lockById(id, transaction), ['delete'], transaction)
-      // 树锁是按取锁之前读到的空间取的：万一刚好有一次跨空间移动提交了，这把锁就保护不到它（与移动、改名相同）
+      // 树锁是按取锁之前读到的空间取的：万一刚好有一次跨空间移动提交了，这把锁就保护不到它（与移动、改名相同）。
+      // 这条范式由恢复那一处的集成用例代表（见 lockedEntry 的注释）
       if (document.spaceId !== checked.document.spaceId)
         throw new AppError('NOT_FOUND')
 
@@ -158,6 +159,7 @@ export class TrashService {
       await this.tree.lock([checked.folder.spaceId], transaction)
       await this.spaces.holdSpace(checked.folder.spaceId, transaction)
       const { folder, space } = await requireFolderContent(this.policy, actor, await this.folders.findById(id, transaction), ['delete'], transaction)
+      // 同上：树锁按取锁之前读到的空间取，刚好被跨空间移走时这把锁保护不到它（范式见 lockedEntry 的注释）
       if (folder.spaceId !== checked.folder.spaceId)
         throw new AppError('NOT_FOUND')
 
@@ -165,8 +167,10 @@ export class TrashService {
       // 文档行在文件夹之后锁（锁顺序：文件夹行 → 文档行）：保存内容不取树锁，所以要真的锁住它们
       const documents = await this.documents.lockInFolders(folderIds, folder.spaceId, transaction, 'active')
       // 编辑者只能删"里面只有本人创建的文档"的文件夹：锁下用一条计数语句判断（spec §2）
+      // 单独一个错误码（不是 PERMISSION_DENIED）：这一条的说法是"换个人来删"，与"空间已归档，只能查看"
+      // 是两回事，界面按错误码取文案时不能把两者说成同一句话（审查 B2）
       if (space.role !== 'admin' && await this.documents.countCreatedByOthers(folderIds, folder.spaceId, actor.userId, transaction) > 0)
-        throw new AppError('PERMISSION_DENIED', '文件夹里有别人创建的文档，只有空间管理员能删除')
+        throw new AppError('FOLDER_HAS_OTHERS_DOCUMENTS')
 
       const entry = await this.entries.insert({
         spaceId: folder.spaceId,
@@ -260,8 +264,9 @@ export class TrashService {
         trashEntryId: entry.id,
         folders: outcome.folders,
         documents: outcome.documents,
-        // 连带删掉的份数与被连带的单元 id（spec §4）
-        cascadedEntries: emptied.filter(id => id !== entry.id),
+        // 连带删掉几个删除单元（spec §4）：只记份数，不记 id 列表——审计明细有 AUDIT_DETAILS_MAX_BYTES 的上限，
+        // 无界的 id 数组在连带上百个单元时会让整条写入失败，那一单因此永远删不掉（审查 A1）
+        cascadedEntries: emptied.filter(id => id !== entry.id).length,
       },
       transaction,
     )
@@ -322,17 +327,17 @@ export class TrashService {
 
   /**
    * 一个文件夹的恢复：整棵子树一起回到正常状态，层数按恢复后的位置重算；
-   * 原位置不在、或者算出来超过层数上限时回到空间的根目录（spec §3）。里面的文档位置不变，仍在各自的文件夹下。
+   * 原位置不在时回到空间的根目录（spec §3）。里面的文档位置不变，仍在各自的文件夹下。
+   *
+   * 这里不再判断层数上限：删除不动父子关系与层数，移动整棵子树时已经判断过"整棵放得下"（FOLDER_MAX_DEPTH），
+   * 而且回收站里的子孙跟着父辈一起移动、一起算层数（FoldersRepository.restoreInEntry 与 moveSubtree 同形），
+   * 所以"原位置还在"时根的层数必然正好是 parent.depth + 1，层差为 0，永远超不了上限（审查 A2 的死分支）。
    */
   private async restoreFolder(entry: TrashEntryRow, transaction: Transaction): Promise<RestoredTrashEntry> {
-    const unit = await this.folders.listInEntry(entry.id, transaction)
-    const root = rootFolderOf(entry.id, unit)
+    const root = rootFolderOf(entry.id, await this.folders.listInEntry(entry.id, transaction))
     const parent = await this.originParentOf(entry, transaction)
-    const maxDepth = Math.max(...unit.map(row => row.depth))
-    // 原位置还在就回到它下面；层数装不下时回到空间的根目录（再超就说明子树本身超过上限，删除时它就装不下）
-    const fits = parent !== undefined && maxDepth + (parent.depth + 1 - root.depth) <= FOLDER_MAX_DEPTH
-    const parentId = fits ? parent.id : null
-    const depth = fits ? parent.depth + 1 : 1
+    const parentId = parent?.id ?? null
+    const depth = parent === undefined ? 1 : parent.depth + 1
     await this.folders.restoreInEntry(entry.id, root.id, parentId, depth - root.depth, transaction)
     // 位置不变（undefined）：它们仍在子树里各自的文件夹下，跟着文件夹一起回到正常状态
     await this.documents.restoreInEntry(entry.id, undefined, transaction)
@@ -342,6 +347,8 @@ export class TrashService {
   /**
    * 锁住回收站行并重新判断：这期间它可能被恢复或永久删除（都看到它已经不在，NOT_FOUND，spec §7），
    * 空间可能被归档、自己可能被移出空间；取锁之前刚好有一次跨空间移动提交时，这把树锁保护不到它，同样按"没找到"回答。
+   * 最后这一条由 tests/integration 的"等树锁期间删除单元被搬到别的空间：恢复 404，文档仍在回收站里"覆盖（审查 A 建议 8），
+   * 别处的同一条范式（删除文档、删除文件夹、文件夹与文档的改名和移动）写法相同，由这一条用例代表。
    */
   private async lockedEntry(
     actor: Actor,
@@ -393,7 +400,8 @@ export class TrashService {
     actor: TrashActor,
     target: { readonly type: 'document' | 'folder', readonly id: string },
     origin: AuditOrigin,
-    details: Readonly<Record<string, string | number | boolean | null | string[]>>,
+    // 只放定长的标量（id、标题、份数、标志）：审计明细有字节上限，无界的数组会让整条写入失败（审查 A1）
+    details: Readonly<Record<string, string | number | boolean | null>>,
     transaction: Transaction,
   ): Promise<void> {
     await this.audit.record({ action, actor, target, origin, details }, { transaction })

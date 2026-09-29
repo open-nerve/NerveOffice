@@ -54,11 +54,11 @@ interface ItemActionsProps {
   readonly onRetry: () => void
   /** 它现在在哪里 */
   readonly current: Destination
+  /** 选目标位置时不列出这个文件夹：移动文件夹时就是它自己（审查建议 6） */
+  readonly excludeFolderId?: string
   /** 我能新建内容的空间（服务端给的 canCreateDocuments）：复制与跨空间移动的候选 */
   readonly targetSpaces: readonly SpaceView[]
   readonly operations: ItemOperations
-  /** 删除的失败按对象的种类说明（文件夹的 403 另有原因） */
-  readonly describeDeleteError: (error: Error) => string
   readonly onDone: (notice: OrganizeNotice | undefined) => void
   /** 操作按访问权限被拒绝（403、404）：页面显示的权限已经过时，重新请求 */
   readonly onDenied: () => void
@@ -111,7 +111,7 @@ function RenameForm({ panelId, name, validate, pending, error, onSubmit, onCance
  * 一行的操作面板（M2-P4 设计 §3.7）：按服务端给的权限只列出能做的，选中之后在同一处展开行内的表单。
  * 删除直接做（进回收站，30 天内可以恢复，所以不另外确认）；永久删除在回收站页里才有，那里要确认。
  */
-export function ItemActions({ panelId, name, validateName, permissions, loading, error, onRetry, current, targetSpaces, operations, describeDeleteError, onDone, onDenied, onClose }: ItemActionsProps) {
+export function ItemActions({ panelId, name, validateName, permissions, loading, error, onRetry, current, excludeFolderId, targetSpaces, operations, onDone, onDenied, onClose }: ItemActionsProps) {
   const [chosen, setChosen] = useState<Chosen>()
   // 移动/复制提交时目标位置的可读名称，例如"市场部 / 方案"：做完之后在说明里回述
   const targetLabelRef = useRef('')
@@ -174,6 +174,7 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
         action={chosen}
         spaces={chosen === 'copy' ? targetSpaces : spaces}
         current={current}
+        excludeFolderId={excludeFolderId}
         pending={mutation.isPending}
         error={mutation.error}
         onSubmit={(destination, label) => {
@@ -210,9 +211,11 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
         </Button>
       )}
       <Button type="button" variant="ghost" size="sm" onClick={onClose}>{text.cancel}</Button>
+      {/* 删除失败的说明一律按错误码给（shared/i18n）：例如"文件夹里有别人创建的文档"与"空间已归档"是两个不同的 403，
+          界面不在这里按错误码分支，免得把其中一种的说法安到另一种头上（M2-P4 审查 B2） */}
       {mutation.isError && (
         <Alert variant="destructive" className="basis-full">
-          <AlertDescription>{describeDeleteError(mutation.error)}</AlertDescription>
+          <AlertDescription>{describeError(mutation.error).message}</AlertDescription>
         </Alert>
       )}
     </div>

@@ -172,15 +172,30 @@ export async function requireDocumentContent<T extends AccessTarget>(
   return { ...accessible, permissions }
 }
 
+/** 空间里的内容操作与各自的权限；'view' 只要有空间角色，没有额外的权限位。 */
+export type SpaceContentOperation = 'view' | 'createDocuments' | 'createFolders'
+
+/** 要在空间里新建什么：搬进来或复制进来的是文档还是文件夹（见 requireCreateTarget）。 */
+export type CreateOperation = Exclude<SpaceContentOperation, 'view'>
+
+const SPACE_CONTENT: Readonly<Record<CreateOperation, { readonly permission: keyof SpacePermissions, readonly message: string }>> = {
+  createDocuments: { permission: 'canCreateDocuments', message: '没有在这个空间里新建的权限' },
+  createFolders: { permission: 'canCreateFolders', message: '没有在这个空间里新建文件夹的权限' },
+}
+
 /**
  * 跨空间移动与复制的目标空间（M2-P4 设计 §3.2）：要看得到（否则 NOT_FOUND，不暴露空间是否存在）、
  * 没有归档（409 SPACE_ARCHIVED，与转移到已归档的团队空间一致）、有新建的权限（否则 PERMISSION_DENIED）。
  * 已归档排在没有权限之前：归档时所有人至多是查看者，说"没有权限"看不出真正的原因。
+ *
+ * create 说明这次要在目标空间里新建什么：搬文档、复制文档要 canCreateDocuments，搬文件夹要 canCreateFolders。
+ * 今天两者是同一条规则（access-rules.ts），但它们是两个权限位，将来分开时这里不会悄悄按错的那一个判断（审查 A 建议 5）。
  */
 export async function requireCreateTarget(
   policy: DocumentAccessPolicy,
   actor: Actor,
   spaceId: string,
+  create: CreateOperation,
   transaction?: Transaction,
 ): Promise<SpaceContentAccess> {
   const access = await policy.spaceAccessOf(actor, spaceId, transaction)
@@ -188,17 +203,9 @@ export async function requireCreateTarget(
     throw new AppError('NOT_FOUND')
   if (access.space.status === 'archived')
     throw new AppError('SPACE_ARCHIVED')
-  if (!access.permissions.canCreateDocuments)
+  if (!access.permissions[SPACE_CONTENT[create].permission])
     throw denied(access.space, '没有在目标空间里新建的权限')
   return { ...access, role: access.role }
-}
-
-/** 空间里的内容操作与各自的权限；'view' 只要有空间角色，没有额外的权限位。 */
-export type SpaceContentOperation = 'view' | 'createDocuments' | 'createFolders'
-
-const SPACE_CONTENT: Readonly<Record<Exclude<SpaceContentOperation, 'view'>, { readonly permission: keyof SpacePermissions, readonly message: string }>> = {
-  createDocuments: { permission: 'canCreateDocuments', message: '没有在这个空间里新建的权限' },
-  createFolders: { permission: 'canCreateFolders', message: '没有在这个空间里新建文件夹的权限' },
 }
 
 /**

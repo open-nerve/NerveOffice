@@ -131,7 +131,8 @@ export class FoldersService {
       // 锁下重新读、重新判断：这期间它可能被移动、被删，空间可能被归档，自己可能被移出空间
       const { folder, permissions } = await this.checkUpdate(actor, await this.folders.findById(id, transaction), command, transaction)
       // 树锁是按取锁之前读到的空间取的。跨空间移动会同时取来源与目标两把树锁，拿到锁之后它换不了空间；
-      // 万一取锁之前刚好有一次跨空间移动提交了，这把锁就保护不到它——不在错的锁下改东西，按"没找到"回答，刷新后重试
+      // 万一取锁之前刚好有一次跨空间移动提交了，这把锁就保护不到它——不在错的锁下改东西，按"没找到"回答，刷新后重试。
+      // 这条范式由回收站恢复那一处的集成用例代表（TrashService.lockedEntry 的注释，审查 A 建议 8）
       if (folder.spaceId !== checked.folder.spaceId)
         throw new AppError('NOT_FOUND')
 
@@ -166,7 +167,8 @@ export class FoldersService {
         await this.spaces.holdSpace(spaceId, transaction)
       // 锁下重新读、重新判断：这期间它可能被删、被别人移走，空间可能被归档，自己可能被移出空间
       const { folder, target } = await this.checkMove(actor, await this.folders.findById(id, transaction), command, transaction)
-      // 树锁是按取锁之前读到的空间取的：万一刚好有一次跨空间移动提交了，这把锁就保护不到它（与改名、空间内移动相同）
+      // 树锁是按取锁之前读到的空间取的：万一刚好有一次跨空间移动提交了，这把锁就保护不到它（与改名、空间内移动相同，
+      // 同一条范式由回收站恢复那一处的集成用例代表）
       if (folder.spaceId !== checked.folder.spaceId)
         throw new AppError('NOT_FOUND')
 
@@ -212,7 +214,8 @@ export class FoldersService {
     const accessible = await requireFolderContent(this.policy, actor, folder, [sameSpace ? 'moveWithinSpace' : 'moveAcrossSpaces'], transaction)
     if (sameSpace)
       return { ...accessible, target: accessible.space }
-    return { ...accessible, target: await requireCreateTarget(this.policy, actor, command.spaceId, transaction) }
+    // 搬进去的是文件夹：判断目标空间的"新建文件夹"权限，不是"新建文档"（两者今天同规则，将来分开时不会判错，审查 A 建议 5）
+    return { ...accessible, target: await requireCreateTarget(this.policy, actor, command.spaceId, 'createFolders', transaction) }
   }
 
   /** 在同一个空间里换父文件夹（调用方已判断权限、已解析目标位置）：整棵子树的层数一起变，记审计。 */

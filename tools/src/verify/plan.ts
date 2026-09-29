@@ -11,6 +11,9 @@ export interface Step {
  * 所以把 E2E 拆到按浏览器并行的 job 里。两个分片合起来与 `all` 完全相同，由 plan.test.ts 的用例守住。
  * - `no-e2e`：不构建、不跑 E2E 的部分；
  * - `e2e`：构建与 E2E（产物门禁、漏洞扫描留给 no-e2e，不重复执行）。
+ *
+ * 分片只在 `--ci` 下成立：本机的完整门禁要先启动开发数据库（DATABASE 一步），而分片都不含它，
+ * 本机直接 `--scope=…` 会连不上库、莫名其妙地失败，所以 parseArgs 要求两个参数一起给（M2-P4 审查建议 7）。
  */
 export const PLAN_SCOPES = ['all', 'no-e2e', 'e2e'] as const
 
@@ -30,6 +33,35 @@ export interface PlanOptions {
   audit: boolean
   /** CI 的分片；省略为 `all` */
   scope?: PlanScope
+}
+
+export const VERIFY_USAGE = '用法：pnpm verify [--fast] [--audit] [--keep-going]；CI 的分片：pnpm verify --ci [--scope=all|no-e2e|e2e]'
+
+/** 命令行参数的解析结果：要么是一套可以执行的选项，要么是一句给用户的说明 */
+export type ParsedArgs
+  = { readonly ok: true, readonly options: PlanOptions, readonly keepGoing: boolean }
+    | { readonly ok: false, readonly error: string }
+
+const KNOWN_FLAGS: readonly string[] = ['--fast', '--ci', '--audit', '--keep-going']
+const SCOPE_PREFIX = '--scope='
+
+/** 解析 pnpm verify 的命令行参数（纯函数，由 cli.ts 调用；不认识的参数与用错的组合都在这里拦下）。 */
+export function parseArgs(argv: readonly string[]): ParsedArgs {
+  const args = new Set(argv)
+  const unknown = [...args].filter(arg => !KNOWN_FLAGS.includes(arg) && !arg.startsWith(SCOPE_PREFIX))
+  if (unknown.length > 0)
+    return { ok: false, error: `未知的参数：${unknown.join(' ')}。${VERIFY_USAGE}` }
+
+  const ci = args.has('--ci')
+  const scopeArgs = [...args].filter(arg => arg.startsWith(SCOPE_PREFIX))
+  const scope = scopeArgs.at(-1)?.slice(SCOPE_PREFIX.length) ?? 'all'
+  if (!isPlanScope(scope))
+    return { ok: false, error: `不认识的分片：${scope}（可选 ${PLAN_SCOPES.join('、')}）。${VERIFY_USAGE}` }
+  // 分片不含"启动开发数据库"一步：本机这样跑会连不上库，失败的原因还看不出来（M2-P4 审查建议 7）
+  if (scopeArgs.length > 0 && !ci)
+    return { ok: false, error: `--scope 只给 CI 的分片用，必须与 --ci 一起给；本机跑完整的一套即可。${VERIFY_USAGE}` }
+
+  return { ok: true, options: { fast: args.has('--fast'), ci, audit: args.has('--audit'), scope }, keepGoing: args.has('--keep-going') }
 }
 
 export type StepStatus = 'passed' | 'failed' | 'skipped'

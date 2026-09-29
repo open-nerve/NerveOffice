@@ -16,7 +16,7 @@ import { titleSearchPattern } from './title-search.ts'
 /**
  * 按标题搜索我能访问的文档（M2-P4 设计 §3.4 第 5 条、§3.5，US-M2-12）。
  *
- * 范围与状态只由仓储的 `accessible` 给出：`{ spaceIds: 我能看到的空间, state: 'active' }`。
+ * 范围只由仓储的 `accessible` 给出：`{ spaceIds: 我能看到的空间 }`，它自己只取正常状态的行。
  * 因此回收站里的不会出现，看不到的空间里的也不会出现——不另写一份过滤条件，P5 的单独授权并进同一处。
  * 排序与分页与文档列表完全一致（`updated_at DESC, id DESC` 的 keyset），不做相关度排序。
  * 结果里带它在哪里：所在空间的 id、类型与名称（都来自"我能看到的空间"这一份事实，看不到的空间的任何信息都不会出现），
@@ -40,7 +40,7 @@ export class DocumentSearchService {
     const spaceIds = [...spaces.keys()]
     // 多取一条，判断还有没有下一页
     const rows = await this.documents.searchByTitle(
-      { spaceIds, state: 'active' },
+      { spaceIds },
       { limit: SEARCH_PAGE_SIZE + 1, after, titlePattern: titleSearchPattern(query.query) },
     )
     const page = rows.slice(0, SEARCH_PAGE_SIZE)

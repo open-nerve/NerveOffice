@@ -1,7 +1,25 @@
 // 按标题搜索（M2-P4，US-M2-12）：页头的搜索框找到我能访问的文档，结果里带着它在哪里；回收站里的搜不到。
+// 顺带核对页头的排布（审查 B3）：搜索框加进页头之后，当前用户那一组仍然贴着右边。
+import type { Locator, Page } from '@playwright/test'
 import { createDocumentIn, createFolderIn, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
+
+/** 量一个元素在页面上的位置；量不到（没渲染出来）就让用例失败 */
+async function boxOf(locator: Locator): Promise<{ readonly x: number, readonly width: number }> {
+  const box = await locator.boundingBox()
+  if (box === null)
+    throw new Error('元素没有出现在页面上，量不到它的位置')
+  return box
+}
+
+/** 视口的宽度 */
+function viewportWidth(page: Page): number {
+  const viewport = page.viewportSize()
+  if (viewport === null)
+    throw new Error('这个用例要在有视口的浏览器里跑')
+  return viewport.width
+}
 
 test.describe('US-M2-12 按标题搜索', () => {
   test('搜到并打开：结果给出空间与文件夹路径；删掉的文档在回收站里，搜不到', async ({ page }) => {
@@ -12,6 +30,15 @@ test.describe('US-M2-12 按标题搜索', () => {
 
     await loginThroughApi(page, owner)
     await page.goto('/')
+
+    // 页头的排布（M2-P4 审查 B3）：当前用户那一组贴着页头内容的右边，搜索框落在中间的空当里，右边不空出一大片。
+    // 页头是居中的定宽容器，左右内边距相同，所以"内容的右边"就是视口宽度减去产品名称的左边
+    const brand = await boxOf(page.getByRole('link', { name: 'NerveOffice', exact: true }))
+    const searchBox = await boxOf(page.getByRole('search'))
+    const signOut = await boxOf(page.getByRole('button', { name: '退出', exact: true }))
+    expect(Math.abs(signOut.x + signOut.width - (viewportWidth(page) - brand.x))).toBeLessThanOrEqual(2)
+    expect(searchBox.x - (brand.x + brand.width)).toBeGreaterThan(100)
+
     // 先把根目录下那一份删掉：回收站里的不该被搜到
     await page.getByRole('button', { name: '操作 年度预算表', exact: true }).click()
     await page.getByRole('button', { name: '删除', exact: true }).click()

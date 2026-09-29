@@ -1,4 +1,5 @@
 import type { SpaceView, TrashEntry } from '@nerve-office/contracts'
+import type { RefObject } from 'react'
 import type { PendingConfirmation } from '../confirmation/index.ts'
 import { TRASH_RETENTION_DAYS } from '@nerve-office/contracts'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -83,13 +84,17 @@ function Notice({ message }: { readonly message: string }) {
   )
 }
 
-function TrashList({ space }: { readonly space: SpaceView }) {
+/**
+ * 回收站的列表本体：加载中、加载失败、空列表，以及每一条的恢复与永久删除。
+ * headingRef 是页面标题（h1）：确认的弹窗关掉之后，打开它的那一行已经不在，焦点交给标题。
+ * 这里不再另起一个同名的 sr-only 标题——读屏按标题导航会把同一句读两遍（M2-P4 审查建议 8）
+ */
+function TrashList({ space, headingRef }: { readonly space: SpaceView, readonly headingRef: RefObject<HTMLHeadingElement | null> }) {
   const queryClient = useQueryClient()
   const query = useInfiniteQuery(spaceTrashQueryOptions(space.id))
   const entries = query.data?.pages.flatMap(page => page.items) ?? []
   const [notice, setNotice] = useState<string>()
   const [confirming, setConfirming] = useState<PendingConfirmation>()
-  const headingRef = useRef<HTMLHeadingElement>(null)
 
   /** 恢复与永久删除都会改变空间里的内容：回收站、各层的文件夹与文档一起重新请求 */
   async function refresh(): Promise<void> {
@@ -157,8 +162,6 @@ function TrashList({ space }: { readonly space: SpaceView }) {
 
   return (
     <>
-      {/* tabIndex -1：只能由程序聚焦（弹窗关闭之后打开它的按钮已经不在），Tab 键不经过它 */}
-      <h2 ref={headingRef} tabIndex={-1} className="sr-only outline-none">{text.heading(spaceName(space))}</h2>
       {notice !== undefined && <Notice message={notice} />}
       {restore.isError && !isMissingResource(restore.error) && (
         <Alert variant="destructive">
@@ -204,6 +207,7 @@ function TrashList({ space }: { readonly space: SpaceView }) {
 function TrashContent({ spaceId }: { readonly spaceId: string }) {
   const space = useQuery(spaceQueryOptions(spaceId))
   const missing = isMissingResource(space.error)
+  const titleRef = useRef<HTMLHeadingElement>(null)
   useForgetMissingSpace(spaceId, missing)
   if (space.isPending)
     return <Skeleton className="h-24 w-full" role="status" aria-label={text.loading} />
@@ -223,7 +227,8 @@ function TrashContent({ spaceId }: { readonly spaceId: string }) {
   return (
     <section className="flex flex-col gap-4" aria-labelledby="trash-title">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <h1 id="trash-title" className="truncate text-xl font-semibold">{text.heading(spaceName(space.data))}</h1>
+        {/* tabIndex -1：只能由程序聚焦（确认的弹窗关掉之后，打开它的那一行已经不在），Tab 键不经过它 */}
+        <h1 ref={titleRef} id="trash-title" tabIndex={-1} className="truncate text-xl font-semibold outline-none focus-visible:ring-3 focus-visible:ring-ring/50">{text.heading(spaceName(space.data))}</h1>
         <Link to={spacePath(spaceId)} className={buttonVariants({ variant: 'outline' })}>{text.backToSpace}</Link>
       </div>
       <Alert>
@@ -232,7 +237,7 @@ function TrashContent({ spaceId }: { readonly spaceId: string }) {
           <p>{text.readOnly}</p>
         </AlertDescription>
       </Alert>
-      <TrashList space={space.data} />
+      <TrashList space={space.data} headingRef={titleRef} />
     </section>
   )
 }

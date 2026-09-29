@@ -1,5 +1,6 @@
 // FoldersService 的规则（M2-P4 设计 §3.4）：权限、层数上限、成环、requestId 的幂等、取锁的顺序。
 // 递归的 SQL（展开子树、整棵加差值）由集成测试用真实数据库覆盖，这里的假仓储只保持同样的父子与层数语义。
+import type { DocumentAccessPolicy } from './document-access-policy.ts'
 import type { FolderRow } from './folders.repository.ts'
 import { FOLDER_LIST_MAX_ITEMS, FOLDER_MAX_DEPTH } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
@@ -26,6 +27,23 @@ let requests = 0
 function nextRequestId(): string {
   requests += 1
   return `0199a2c4-0000-7000-8000-${String(requests).padStart(12, '0')}`
+}
+
+/**
+ * 真实的策略，只收紧"在这个空间里新建文件夹"这一位（其余照常）。
+ * 真实规则里两个新建权限位始终相同（access-rules.ts），只有把它们分开，才看得出跨空间移动判的是哪一个。
+ * 文件夹自己的权限（改名、移动、删除）不看这一位，所以收紧它只影响"目标空间"这一处判断
+ */
+function withoutFolderCreation(store: FakeStore): DocumentAccessPolicy {
+  const { policy } = store
+  return {
+    accessOf: async (userId, document, transaction) => policy.accessOf(userId, document, transaction),
+    visibleSpaces: async actor => policy.visibleSpaces(actor),
+    spaceAccessOf: async (actor, spaceId, transaction) => {
+      const access = await policy.spaceAccessOf(actor, spaceId, transaction)
+      return access === undefined ? undefined : { ...access, permissions: { ...access.permissions, canCreateFolders: false } }
+    },
+  }
 }
 
 /** 在某个空间里建一条 depth 层的链，返回每一层的文件夹（第 0 项是第 1 层） */
@@ -333,6 +351,18 @@ describe('FoldersService.move', () => {
     const denied = await errorOf(service.move(member(ALICE), folder.id, { spaceId: TEAM_SPACE }, HTTP_ORIGIN))
     expect([denied.code, denied.message]).toEqual(['PERMISSION_DENIED', '没有在目标空间里新建的权限'])
     expect(store.folders.get(folder.id)?.spaceId).toBe(ALICE_SPACE)
+  })
+
+  it('判的是目标空间的"新建文件夹"权限，不是"新建文档"（审查 A 建议 5）', async () => {
+    const store = new FakeStore()
+    const { transactions, folders, documents, entries, tree, spaces, audit, writeAccess } = store.deps
+    const service = new FoldersService(transactions, folders, documents, entries, tree, spaces, withoutFolderCreation(store), audit, writeAccess)
+    store.setMember(TEAM_SPACE, ALICE, 'admin')
+    const folder = store.addFolder({ spaceId: TEAM_SPACE, name: '资料' })
+    // 目标空间里能新建文档、不能新建文件夹：搬文件夹进去要被拒绝
+    const denied = await errorOf(service.move(member(ALICE), folder.id, { spaceId: ALICE_SPACE }, HTTP_ORIGIN))
+    expect([denied.code, denied.message]).toEqual(['PERMISSION_DENIED', '没有在目标空间里新建的权限'])
+    expect(store.folders.get(folder.id)?.spaceId).toBe(TEAM_SPACE)
   })
 
   it('源空间已归档：所有人至多是查看者，移不走', async () => {

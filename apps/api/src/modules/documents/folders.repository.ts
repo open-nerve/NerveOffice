@@ -246,19 +246,25 @@ export class FoldersRepository {
   }
 
   /**
-   * 把一个删除单元里的文件夹整单恢复：全部回到正常状态、清空所属的删除单元，整棵子树的层数一起加上 depthDelta；
-   * 只有这一单的根换父文件夹（parentId 为 null 表示回到空间的根目录）。与 moveSubtree 同一个形状，一条 UPDATE
+   * 把一个删除单元里的文件夹整单恢复，与 moveSubtree 同一个形状，一条 UPDATE：
+   * - 范围是**根的整棵递归子树**（不看状态），层数一起加上 depthDelta——里面还留在回收站、属于别的删除单元的
+   *   子孙也要跟着降层，否则它们带着旧层数留下来，之后这个文件夹的合法移动会被 409 误判成超限（审查 A2）；
+   * - 回到正常状态、清空所属的删除单元只对**这一单的行**生效（CASE WHEN：状态与删除单元一起写，CHECK 要求二者一致）；
+   * - 只有这一单的根换父文件夹（parentId 为 null 表示回到空间的根目录）。
+   *
+   * 返回改动的行数（整棵子树，含仍在回收站里的子孙）。
    */
   async restoreInEntry(trashEntryId: string, rootId: string, parentId: string | null, depthDelta: number, transaction: Transaction): Promise<number> {
+    const inEntry = sql`${f.trashEntryId} = ${trashEntryId}::uuid`
     const rows = await executorOf(this.db, transaction)
       .update(f)
       .set({
-        status: 'active',
-        trashEntryId: null,
+        status: sql`CASE WHEN ${inEntry} THEN 'active' ELSE ${f.status} END`,
+        trashEntryId: sql`CASE WHEN ${inEntry} THEN NULL ELSE ${f.trashEntryId} END`,
         parentId: sql`CASE WHEN ${f.id} = ${rootId} THEN ${parentId}::uuid ELSE ${f.parentId} END`,
         depth: sql`${f.depth} + ${depthDelta}`,
       })
-      .where(eq(f.trashEntryId, trashEntryId))
+      .where(sql`${f.id} IN (${subtreeQuery(rootId, sql`SELECT id FROM subtree`)})`)
       .returning({ id: f.id })
     return rows.length
   }

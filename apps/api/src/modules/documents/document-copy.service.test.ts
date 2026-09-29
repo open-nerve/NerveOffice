@@ -118,6 +118,25 @@ describe('DocumentCopyService.copy', () => {
     expect(store.documents.size).toBe(1)
   })
 
+  it('两条语句之间源文档被永久删除：按 NOT_FOUND 回答，不是 500（审查 A 建议 7）', async () => {
+    const { store, service } = setup()
+    const { document } = seed(store)
+    // 元数据复制到了、内容还没复制时，源被永久删除（记录与内容一起没了）：源不在这把锁的保护下
+    store.repositories.contents.copyFrom.mockImplementationOnce(async () => {
+      store.documents.delete(document.id)
+      store.contents.delete(document.id)
+      return false
+    })
+    expect((await errorOf(service.copy(member(ALICE), document.id, { spaceId: ALICE_SPACE, requestId: nextRequestId() }, HTTP_ORIGIN))).code).toBe('NOT_FOUND')
+  })
+
+  it('源还在却没有内容：这是真正的数据不一致，抛 Error（500）而不是 NOT_FOUND', async () => {
+    const { store, service } = setup()
+    const document = store.addDocument({ title: '没有内容的' })
+    const copying = service.copy(member(ALICE), document.id, { spaceId: ALICE_SPACE, requestId: nextRequestId() }, HTTP_ORIGIN)
+    await expect(copying).rejects.toThrow(`文档有记录却没有内容：${document.id}`)
+  })
+
   it('目标文件夹在别的空间里、不存在：都是 NOT_FOUND，什么也不写', async () => {
     const { store, service } = setup()
     store.setMember(TEAM_SPACE, ALICE, 'editor')

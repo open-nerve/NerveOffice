@@ -22,6 +22,11 @@ interface DestinationFormProps {
   readonly spaces: readonly SpaceView[]
   /** 对象现在所在的位置：移动时用来说明"它已经在这里了" */
   readonly current: Destination
+  /**
+   * 不列出这个文件夹：移动文件夹时就是它自己（目录会成环，服务端以 409 拒绝）。
+   * 只挡住"看得见的那一层"，更深的子孙仍由服务端拦下：界面为此把整棵子树查一遍不值当（审查建议 6）
+   */
+  readonly excludeFolderId?: string
   readonly pending: boolean
   readonly error: Error | null
   /** label 是目标位置的可读名称，例如"市场部 / 方案"：做完之后在说明里回述 */
@@ -41,12 +46,13 @@ interface TargetCrumb {
  * 为什么不是弹窗：移动与复制的入口在空间页上，而空间页是平台的首屏页面，首屏不引入 Radix Dialog（ADR-008）。
  * 一次只有一个对象在选目标，所以这个表单由列表渲染在那一行下面，与行内改名同一个形态。
  */
-export function DestinationForm({ panelId, action, spaces, current, pending, error, onSubmit, onCancel }: DestinationFormProps) {
+export function DestinationForm({ panelId, action, spaces, current, excludeFolderId, pending, error, onSubmit, onCancel }: DestinationFormProps) {
   const spaceSelectId = useId()
   const [spaceId, setSpaceId] = useState(spaces.some(space => space.id === current.spaceId) ? current.spaceId : (spaces[0]?.id ?? current.spaceId))
   const [crumbs, setCrumbs] = useState<readonly TargetCrumb[]>([])
   const parentId = crumbs.at(-1)?.id ?? null
   const children = useQuery(folderChildrenQueryOptions(spaceId, parentId))
+  const choices = (children.data?.items ?? []).filter(folder => folder.id !== excludeFolderId)
   const target = spaces.find(space => space.id === spaceId)
   const spaceName = target === undefined ? '' : (target.type === 'personal' ? messages.spaces.personal : target.name)
   const label = [spaceName, ...crumbs.map(crumb => crumb.name)].filter(part => part !== '').join(' / ')
@@ -98,11 +104,11 @@ export function DestinationForm({ panelId, action, spaces, current, pending, err
         {!children.isPending && children.data === undefined && (
           <span role="alert" className="text-sm text-destructive">{text.targetLoadFailed(describeError(children.error).message)}</span>
         )}
-        {children.data !== undefined && (children.data.items.length === 0
+        {children.data !== undefined && (choices.length === 0
           ? <span className="text-sm text-muted-foreground">{text.targetEmpty}</span>
           : (
               <ul aria-label={text.targetLocation} className="flex flex-wrap gap-1">
-                {children.data.items.map(folder => (
+                {choices.map(folder => (
                   <li key={folder.id}>
                     <Button type="button" variant="outline" size="sm" aria-label={text.enterFolder(folder.name)} onClick={() => enter({ id: folder.id, name: folder.name })}>
                       {folder.name}

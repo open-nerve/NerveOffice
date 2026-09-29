@@ -26,13 +26,13 @@ async function errorOf(promise: Promise<unknown>): Promise<AppError> {
 }
 
 describe('DocumentSearchService.search 的范围', () => {
-  it('只在我能看到的空间里查正常状态的文档：条件只由 accessible 的两维给出', async () => {
+  it('只在我能看到的空间里查正常状态的文档：范围只由 accessible 的 spaceIds 给出，状态由它自己定死', async () => {
     const { store, service } = setup()
     store.setMember(TEAM_SPACE, ALICE, 'viewer')
     at(store, ALICE_SPACE, '季度预算', '2026-09-26T10:00:00.000001Z')
     await service.search(member(ALICE), { query: '预算' })
     expect(store.repositories.documents.searchByTitle).toHaveBeenCalledWith(
-      { spaceIds: [ALICE_SPACE, TEAM_SPACE], state: 'active' },
+      { spaceIds: [ALICE_SPACE, TEAM_SPACE] },
       { limit: 51, after: undefined, titlePattern: '%预算%' },
     )
   })
@@ -44,7 +44,7 @@ describe('DocumentSearchService.search 的范围', () => {
     const page = await service.search(member(ALICE), { query: '预算' })
     expect(page.items).toEqual([])
     expect(store.repositories.documents.searchByTitle).toHaveBeenCalledWith(
-      { spaceIds: [ALICE_SPACE], state: 'active' },
+      { spaceIds: [ALICE_SPACE] },
       expect.anything(),
     )
   })

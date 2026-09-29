@@ -66,7 +66,7 @@ describe('TrashPurgeService.purgeExpired', () => {
       actor: { type: 'system' },
       target: { type: 'document', id: document.id },
       origin: { source: 'job' },
-      details: { spaceId: ALICE_SPACE, title: '周报', trashEntryId: entry.id, folders: 0, documents: 1, cascadedEntries: [] },
+      details: { spaceId: ALICE_SPACE, title: '周报', trashEntryId: entry.id, folders: 0, documents: 1, cascadedEntries: 0 },
     })
   })
 

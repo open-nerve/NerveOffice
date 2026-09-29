@@ -72,7 +72,9 @@ export const folders = pgTable('folders', {
   // 在回收站里（trashed）与属于某个删除单元是同一件事（M2-P4 设计 §3.4 第 3 条）
   check('folders_trash_entry_check', sql`(${table.trashEntryId} IS NULL) = (${table.status} = 'active')`),
   unique('folders_request_id_key').on(table.requestId),
-  // 列出一层：某个空间里某个父文件夹的直接子文件夹，按名称排序
+  // 列出一层：索引定位"某个空间里某个父文件夹的直接子文件夹"这一段行。
+  // 排序用不上它：列表按 lower(name) 排（不区分大小写），要走索引得另建一个 lower(name) 的表达式索引；
+  // 一层的行数由界面上的 DEF-030（500 条的上限）兜着，排序在内存里做就够，本版不建（审查 A 的注释订正）
   index('folders_space_parent_name_idx').on(table.spaceId, table.parentId, table.name),
   // 恢复与永久删除时按删除单元取出整棵子树
   index('folders_trash_entry_idx').on(table.trashEntryId).where(sql`${table.trashEntryId} IS NOT NULL`),

@@ -10,7 +10,7 @@ import { folderIdsFromPath, spaceMembersPath } from '../../shared/lib/space-path
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
 import { Alert, AlertDescription, Badge, Button, buttonVariants, Input, Label, Skeleton } from '../../shared/ui/index.ts'
 import { sessionQueryOptions } from '../auth/index.ts'
-import { NewSheetButton, SpaceContents } from '../documents/index.ts'
+import { NewSheetButton, SpaceContents, useOrganizeRefresh } from '../documents/index.ts'
 import { useForgetMissingSpace } from './missing-space.ts'
 import { SpaceNotFound } from './space-not-found.tsx'
 import { renameSpace, spaceQueryOptions, SPACES_QUERY_KEY, spacesQueryOptions } from './spaces-api.ts'
@@ -84,22 +84,13 @@ function useFocusTitleAfterPermissionChange(permissions: SpacePermissions, title
 }
 
 /** 页头：名称（个人空间显示"我的空间"）、类型与状态、我的角色；只显示能做的操作（新建表格、成员、改名） */
-function SpaceHeader({ space, folderId }: { readonly space: SpaceView, readonly folderId: string | null }) {
-  const queryClient = useQueryClient()
+function SpaceHeader({ space, folderId, onDenied }: { readonly space: SpaceView, readonly folderId: string | null, readonly onDenied: () => void }) {
   const [renaming, setRenaming] = useState(false)
   const titleRef = useRef<HTMLHeadingElement>(null)
   const renameRef = useRef<HTMLButtonElement>(null)
   const focusAfterRender = useFocusAfterRender()
   const personal = space.type === 'personal'
   useFocusTitleAfterPermissionChange(space.permissions, titleRef)
-
-  /**
-   * 页内的操作（新建表格、改名）按访问权限被拒绝：页头显示的权限已经过时，重新请求（M2-P2 复验），连同导航（归档的标记）。
-   * 空间看不到了（404）时由空间页说明"空间不存在"（useForgetMissingSpace 另外刷新导航、去掉这个空间的缓存）
-   */
-  function refreshAfterDenied(): void {
-    void queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY })
-  }
 
   function doneRenaming(): void {
     setRenaming(false)
@@ -130,10 +121,10 @@ function SpaceHeader({ space, folderId }: { readonly space: SpaceView, readonly 
             <Button ref={renameRef} variant="outline" onClick={() => setRenaming(true)}>{text.rename}</Button>
           )}
           {/* 新建到当前位置：在文件夹里时建进那个文件夹（M2-P4） */}
-          {space.permissions.canCreateDocuments && <NewSheetButton spaceId={space.id} folderId={folderId} onDenied={refreshAfterDenied} />}
+          {space.permissions.canCreateDocuments && <NewSheetButton spaceId={space.id} folderId={folderId} onDenied={onDenied} />}
         </div>
       </div>
-      {renaming && <RenameForm space={space} onDone={doneRenaming} onDenied={refreshAfterDenied} />}
+      {renaming && <RenameForm space={space} onDone={doneRenaming} onDenied={onDenied} />}
       {space.status === 'archived' && (
         <Alert>
           <AlertDescription>{text.archivedNotice}</AlertDescription>
@@ -159,7 +150,19 @@ function SpaceContent({ spaceId, folderIds = [] }: { readonly spaceId: string, r
   const spaces = useQuery({ ...spacesQueryOptions(), refetchOnMount: false })
   const targetSpaces = (spaces.data?.items ?? []).filter(item => item.permissions.canCreateDocuments)
   const missing = isMissingResource(space.error)
+  const refreshOrganize = useOrganizeRefresh()
   useForgetMissingSpace(spaceId, missing)
+
+  /**
+   * 页内的操作按访问权限被拒绝（403、404）：页面显示的权限已经过时，重新请求（M2-P2 复验）——
+   * 页头与导航（归档的标记），以及这个空间里各层的文件夹与文档（被拒绝的那一行可能已经不在了，它们的 permissions 也过时了，
+   * M2-P4 审查建议 2）。空间看不到了（404）时另由 useForgetMissingSpace 去掉这个空间的缓存、页面说明"空间不存在"
+   */
+  function refreshAfterDenied(): void {
+    void queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY })
+    void refreshOrganize([spaceId])
+  }
+
   if (space.isPending) {
     return (
       <div role="status" aria-label={text.loading} className="flex flex-col gap-3">
@@ -183,12 +186,12 @@ function SpaceContent({ spaceId, folderIds = [] }: { readonly spaceId: string, r
   }
   return (
     <section className="flex flex-col gap-4" aria-labelledby="space-title">
-      <SpaceHeader space={space.data} folderId={folderIds.at(-1) ?? null} />
+      <SpaceHeader space={space.data} folderId={folderIds.at(-1) ?? null} onDenied={refreshAfterDenied} />
       <SpaceContents
         space={space.data}
         folderIds={folderIds}
         targetSpaces={targetSpaces}
-        onDenied={() => void queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY })}
+        onDenied={refreshAfterDenied}
       />
     </section>
   )

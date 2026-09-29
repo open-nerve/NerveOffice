@@ -42,14 +42,11 @@ export interface NewDocument {
 }
 
 /**
- * "可访问文档"的范围与状态（M2-P2 设计 §3.5，M2-P4 设计 §3.4 第 1 条）：两维。
- * - 范围：调用者看得到的空间，由访问策略给出（P5 在这里并上单独授权）；
- * - 状态：列表、搜索与停用者文档的转移用 active；回收站用 trashed。
- * 目录与关键词不进这里，是各自查询自己的条件（设计 §7 的取舍）。
+ * "可访问文档"的范围（M2-P2 设计 §3.5，M2-P4 设计 §3.4 第 1 条）：调用者看得到的空间，由访问策略给出。
+ * 只有这一维：状态不是参数，见下面的 accessible()。目录与关键词也不进这里，是各自查询自己的条件（设计 §7 的取舍）。
  */
 export interface AccessibleScope {
   readonly spaceIds: readonly string[]
-  readonly state: DocumentStatus
 }
 
 /** 列出可访问文档的条件与分页。 */
@@ -102,11 +99,12 @@ const COLUMNS = {
 }
 
 /**
- * "可访问文档"的条件：列表、搜索、计数、回收站、"与我共享"都经这一处，不各写各的过滤条件（M2 总设计 §6.1）。
- * P5 并上单独授权也只改这里。
+ * "可访问文档"的条件：列表、搜索、计数、停用者文档的转移都经这一处，不各写各的过滤条件（M2 总设计 §6.1）。
+ * **只取正常状态的行**：回收站的列表从 trash_entries 出（TrashService.list），不走这里，所以没有"状态"这一维。
+ * P5 在这里并上单独授权（范围那一维）。
  */
 function accessible(scope: AccessibleScope): SQL | undefined {
-  return and(eq(d.status, scope.state), inArray(d.spaceId, [...scope.spaceIds]))
+  return and(eq(d.status, 'active'), inArray(d.spaceId, [...scope.spaceIds]))
 }
 
 /** 目录的过滤（见 ListOptions.folderId）：不进 accessible，是列表自己的条件。 */
@@ -171,14 +169,14 @@ export class DocumentsRepository {
    * 按 id 顺序锁住要转移的文档（FOR UPDATE，与保存相同）：两次转移、转移与保存都按同一个顺序取锁，互相等待时不成环。
    * 只锁来源空间里的可访问文档（与标题列表同一个条件）：请求里夹带的别处的文档不被锁住（M2-P2 审查 A4）；
    * 等锁期间被别人转走的行，拿到锁之后按新的内容重新判断，不再返回。返回锁住的 id（按 id 排序）。
-   * 状态显式只取 active（M2-P4 设计 §3.4 第 1 条）：停用者回收站里的文档留在原处，30 天后自动清除——
-   * 系统管理员没有内容权限，也不该替别人恢复；不按目录过滤：整个空间里的文档都要转走
+   * 只转正常状态的文档，这一条由 accessible 保证（M2-P4 设计 §3.4 第 1 条）：停用者回收站里的文档留在原处，
+   * 30 天后自动清除——系统管理员没有内容权限，也不该替别人恢复；不按目录过滤：整个空间里的文档都要转走
    */
   async lockForTransfer(ids: readonly string[], fromSpaceId: string, transaction: Transaction): Promise<string[]> {
     const rows = await executorOf(this.db, transaction)
       .select({ id: d.id })
       .from(d)
-      .where(and(inArray(d.id, [...ids]), accessible({ spaceIds: [fromSpaceId], state: 'active' })))
+      .where(and(inArray(d.id, [...ids]), accessible({ spaceIds: [fromSpaceId] })))
       .orderBy(asc(d.id))
       .for('update')
     return rows.map(row => row.id)
@@ -190,7 +188,9 @@ export class DocumentsRepository {
    * state 省略时**不按状态过滤**（与展开文件夹子树一致，M2-P4 设计 §3.4）：回收站里的文档也跟着所在的文件夹走，
    * 否则它的 folder_id 会指到别的空间里的文件夹，删除单元也会被拆散在两个空间里；
    * state 为 'active' 时只取正常状态的——删除文件夹只把它们并进这次的删除单元，早先删过的留在原来的单元里（P4-S3 spec §1）。
-   * 限定在来源空间里：文件夹的所属空间已经在这次事务里改过时，不会把别处的行也卷进来
+   * 另加的 `space_id = spaceId` 是**纯冗余的防御**，不是正确性的必要条件：文档一定与它所在的文件夹在同一个空间里
+   * （跨空间移动时两者在同一个事务里一起改），所以按子树的文件夹 id 找出来的行本来就都在这个空间。
+   * 万一哪一行不是这样（数据不一致），它挡住那一行，不把别处的行卷进这次的删除单元（审查 A 的注释订正）
    */
   async lockInFolders(folderIds: readonly string[], spaceId: string, transaction: Transaction, state?: DocumentStatus): Promise<TrashedDocumentRow[]> {
     if (folderIds.length === 0)

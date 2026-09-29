@@ -77,12 +77,12 @@ describe('DocumentsService.list', () => {
     store.repositories.documents.listAccessible.mockImplementation(async (_scope, options) => [newer, older].slice(0, options.limit))
     const page = await service.list(member(ALICE), { limit: 1 })
     // 没有指定目录：空间的根目录（folderId 为 null）；状态是正常（M2-P4 设计 §3.4 第 1 条）
-    expect(store.repositories.documents.listAccessible).toHaveBeenCalledWith({ spaceIds: [ALICE_SPACE], state: 'active' }, { limit: 2, after: undefined, folderId: null })
+    expect(store.repositories.documents.listAccessible).toHaveBeenCalledWith({ spaceIds: [ALICE_SPACE] }, { limit: 2, after: undefined, folderId: null })
     expect(page.items.map(item => item.id)).toEqual([newer.id])
     expect(decodeTimeCursor(page.nextCursor ?? '')).toEqual({ position: newer.position, id: newer.id })
 
     const last = await service.list(member(ALICE), { limit: 5, cursor: page.nextCursor ?? '' })
-    expect(store.repositories.documents.listAccessible).toHaveBeenLastCalledWith({ spaceIds: [ALICE_SPACE], state: 'active' }, { limit: 6, after: { position: newer.position, id: newer.id }, folderId: null })
+    expect(store.repositories.documents.listAccessible).toHaveBeenLastCalledWith({ spaceIds: [ALICE_SPACE] }, { limit: 6, after: { position: newer.position, id: newer.id }, folderId: null })
     expect(last.nextCursor).toBeNull()
   })
 
