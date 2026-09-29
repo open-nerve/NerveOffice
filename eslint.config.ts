@@ -76,7 +76,35 @@ const NO_IMPORT_META_GLOB = {
 // 命名空间导入、再导出与 import type 同样拦下
 const INTERNAL_API_MESSAGE = '内部 API 只能经 apps/web/src/editor/internal-api/ 引用并登记（P4 设计 §3.6.9）'
 const UNIVER_INTERNAL_SYMBOLS = [
-  { name: '@univerjs/core', importNames: ['AuthzIoLocalService', 'IAuthzIoService', 'LifecycleService', 'UserManagerService'], message: INTERNAL_API_MESSAGE },
+  {
+    name: '@univerjs/core',
+    // IPermissionService、IUndoRedoService：只读守卫的本地权限点与撤销栈（M2-P3 设计 §3.6）；
+    // IContextService、FOCUSING_FX_BAR_EDITOR、DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY：只读守卫放开编辑栏的编辑器（P3 审查 A1）
+    importNames: [
+      'AuthzIoLocalService',
+      'DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY',
+      'FOCUSING_FX_BAR_EDITOR',
+      'IAuthzIoService',
+      'IContextService',
+      'IPermissionService',
+      'IUndoRedoService',
+      'LifecycleService',
+      'UserManagerService',
+    ],
+    message: INTERNAL_API_MESSAGE,
+  },
+  {
+    // 只读守卫放开编辑栏的编辑器：编辑器管理服务的 focus$ 与 blur（P3 审查 A1）
+    name: '@univerjs/docs-ui',
+    importNames: ['IEditorService'],
+    message: INTERNAL_API_MESSAGE,
+  },
+  {
+    // 只读守卫取这份文档的渲染单元，拦下冻结线的拖动（P3 审查 B2）
+    name: '@univerjs/engine-render',
+    importNames: ['IRenderManagerService'],
+    message: INTERNAL_API_MESSAGE,
+  },
   {
     name: '@univerjs/engine-formula',
     importNames: [
@@ -95,7 +123,47 @@ const UNIVER_INTERNAL_SYMBOLS = [
     ],
     message: INTERNAL_API_MESSAGE,
   },
-  { name: '@univerjs/sheets', importNames: ['SetRangeValuesMutation'], message: INTERNAL_API_MESSAGE },
+  {
+    name: '@univerjs/sheets',
+    importNames: [
+      'SetRangeValuesMutation',
+      // 只读守卫关掉与保留的工作表权限点、授权服务在只读时允许的动作（M2-P3 设计 §3.6）
+      'getAllWorksheetPermissionPoint',
+      'getAllWorksheetPermissionPointByPointPanel',
+      'WorkbookCopyPermission',
+      'WorkbookViewPermission',
+      'WorksheetCopyPermission',
+      'WorksheetViewPermission',
+    ],
+    message: INTERNAL_API_MESSAGE,
+  },
+  {
+    // 只读守卫把浮动图片设为不可编辑：渲染读的是这个服务的标志（M2-P3 S3 的 E2E 发现之后）
+    name: '@univerjs/drawing',
+    importNames: ['IDrawingManagerService'],
+    message: INTERNAL_API_MESSAGE,
+  },
+  {
+    // 表格的图片服务：它的可编辑标志渲染不读（SDK 的权限控制器设的是它），决定不用；受限，免得绕过登记直接用
+    name: '@univerjs/sheets-drawing',
+    importNames: ['ISheetDrawingService'],
+    message: INTERNAL_API_MESSAGE,
+  },
+  {
+    // 冻结线的渲染控制器：只读守卫在它的拦截点上拦下拖动（P3 审查 B2）
+    name: '@univerjs/sheets-ui',
+    importNames: ['HeaderFreezeRenderController'],
+    message: INTERNAL_API_MESSAGE,
+  },
+]
+// SDK 界面里的 DOM 标记（data-u-comp，P3 审查 A8）：不是公开 API，版本之间可能改名，只在 internal-api 里写（dom-markers.ts，逐项登记）。
+// apps/web/src 里测试代码之外的字符串、模板、JSX 属性，以及 dataset.uComp 都算；测试要按 SDK 的结构造元素，不受限
+const DOM_MARKER_MESSAGE = 'SDK 的 DOM 标记（data-u-comp）只在 apps/web/src/editor/internal-api/ 里写并登记（P3 审查 A8）：它不是公开 API，版本之间可能改名'
+const SDK_DOM_MARKERS = [
+  { selector: String.raw`Literal[value=/data-u-comp\b|\buComp\b/]`, message: DOM_MARKER_MESSAGE },
+  { selector: String.raw`TemplateElement[value.raw=/data-u-comp\b|\buComp\b/]`, message: DOM_MARKER_MESSAGE },
+  { selector: 'JSXAttribute[name.name=\'data-u-comp\']', message: DOM_MARKER_MESSAGE },
+  { selector: 'MemberExpression[property.name=\'uComp\']', message: DOM_MARKER_MESSAGE },
 ]
 // 取服务的注入器：Univer.__getInjector()，以及 Univer、Facade 与各个对象上的私有字段 _injector（复验 RB4：
 // 方括号访问私有字段能通过类型检查，拿到的是同一个注入器）。点号访问、按标识符解构都算；这两个名字的字符串
@@ -436,13 +504,21 @@ export default antfu(
     },
   },
   {
-    // 弹窗类的 Radix 原语只在 shared/ui/dialog.tsx 里引入：对 web 的全部文件生效（M2-P2 复验）。
-    // 同名规则后者整体覆盖前者：入口与编辑器的块另有自己的 no-restricted-syntax，在那里同样带上这组限制
+    // 弹窗类的 Radix 原语只在 shared/ui/dialog.tsx 里引入：对 web 的全部文件生效（M2-P2 复验）；SDK 的 DOM 标记同样（P3 审查 A8）。
+    // 同名规则后者整体覆盖前者：入口、弹窗的文件与编辑器的块另有自己的 no-restricted-syntax，在那里同样带上这两组限制
     name: 'nerve/web-radix-dialog',
     files: ['apps/web/src/**/*.{ts,tsx}'],
     ignores: [...TEST_CODE, 'apps/web/src/shared/ui/dialog.tsx'],
     rules: {
-      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE],
+      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS],
+    },
+  },
+  {
+    // 弹窗的文件自己可以引入 Radix 的弹窗原语（上一块不管它），SDK 的 DOM 标记的限制照样生效（P3 审查 A8）
+    name: 'nerve/web-dialog-file',
+    files: ['apps/web/src/shared/ui/dialog.tsx'],
+    rules: {
+      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...SDK_DOM_MARKERS],
     },
   },
   {
@@ -451,7 +527,7 @@ export default antfu(
     // CSP 阳性对照只在测试构建里，不用 zod，它的入口里就是探针本身的代码
     ignores: ['apps/web/src/entries/csp-probe/**'],
     rules: {
-      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...APP_ENTRY_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE],
+      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...APP_ENTRY_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS],
     },
   },
   {
@@ -464,7 +540,18 @@ export default antfu(
     },
   },
   {
-    // 内部 API 的唯一出口（P4 设计 §3.6.9）：这里可以引用受限的内部符号、调用 __getInjector，导出的每一项都要登记（registry.ts）
+    // SDK 的 DOM 标记只在 internal-api 里写（P3 审查 A8）：编辑器里 internal-api 与测试代码之外的文件，在上一块的基础上加这组限制。
+    // 测试要按 SDK 的界面结构造元素（批注浮层、编辑栏），不受限
+    name: 'nerve/editor-sdk-dom-markers',
+    files: ['apps/web/src/editor/**'],
+    ignores: [...TEST_CODE, 'apps/web/src/editor/internal-api/**'],
+    rules: {
+      'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX, ...NO_GET_INJECTOR, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS],
+    },
+  },
+  {
+    // 内部 API 的出口（P4 设计 §3.6.9；M2-P3 起有两个：数据的包 index.ts、界面的包 ui.ts）：
+    // 这里可以引用受限的内部符号、调用 __getInjector，导出的每一项都要登记（registry.ts）
     name: 'nerve/editor-internal-api',
     files: ['apps/web/src/editor/internal-api/**'],
     rules: {

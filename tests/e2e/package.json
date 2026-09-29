@@ -9,7 +9,8 @@
     "test": "NODE_OPTIONS=\"${NODE_OPTIONS:-} --conditions=@nerve-office/source\" playwright test",
     "list": "NODE_OPTIONS=\"${NODE_OPTIONS:-} --conditions=@nerve-office/source\" playwright test --list --reporter=json",
     "typecheck": "tsc -p tsconfig.json",
-    "update:sheet-template": "NODE_OPTIONS=\"${NODE_OPTIONS:-} --conditions=@nerve-office/source\" playwright test -c playwright.template.config.ts"
+    "update:sheet-template": "NODE_OPTIONS=\"${NODE_OPTIONS:-} --conditions=@nerve-office/source\" playwright test -c playwright.template.config.ts update-sheet-template",
+    "update:read-only-sample": "NODE_OPTIONS=\"${NODE_OPTIONS:-} --conditions=@nerve-office/source\" playwright test -c playwright.template.config.ts update-read-only-sample"
   },
   "devDependencies": {
     "@nerve-office/contracts": "workspace:*",

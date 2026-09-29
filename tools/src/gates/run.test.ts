@@ -73,6 +73,15 @@ describe('US-M1-11 产物门禁的装配', () => {
     expect(artifactsGate(writeDist(neither)).violations.map(v => v.rule)).toEqual(['license-bundle/missing-file', 'license-bundle/missing-text-file'])
   })
 
+  it('违规：编辑器的 E2E 探针进了生产构建：探针的分块与它挂在 window 上的名字都报出；并进别的分块时名字照样报出（M2-P3 设计 §3.7）', () => {
+    // 测试构建（dist-e2e）里探针分块的原样
+    const probe = 'function e(e,t){let n={univerAPI:e,snapshot:()=>JSON.stringify(t.save())};return window.__nerveEditorProbe=n,()=>{window.__nerveEditorProbe===n&&delete window.__nerveEditorProbe}}export{e as installEditorProbe};'
+    const chunk = artifactsGate(writeDist({ ...clean, 'assets/e2e-probe-CC7cG7BE.js': probe }))
+    expect(chunk.violations.map(v => [v.rule, v.subject]).sort()).toEqual([['artifacts/keyword', '__nerveEditorProbe'], ['artifacts/test-only', 'assets/e2e-probe-CC7cG7BE.js']])
+    const inlined = artifactsGate(writeDist({ ...clean, 'assets/index.js': `${clean['assets/index.js']}${probe}` }))
+    expect(inlined.violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/keyword', '__nerveEditorProbe']])
+  })
+
   it('违规：产物里的动态代码、.json 里的外部地址、未登记的文件类型、缺少许可清单', () => {
     const { '.vite/third-party-packages.json': _omitted, ...withoutBundle } = clean
     const outcome = artifactsGate(writeDist({ ...withoutBundle, 'assets/w.js': 'self.eval(x)', 'config.json': '{"endpoint":"https://evil.example.com"}', 'notes.md': '说明' }))

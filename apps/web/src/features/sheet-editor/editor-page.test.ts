@@ -54,7 +54,6 @@ function fakeEditor(stage: SheetEditorLifecycle = 'rendered') {
     commitCellEditing: async () => true,
     settleFormulas: async () => 'settled',
     capture: () => '{"id":"unit-1"}',
-    setEditable: vi.fn(),
     dispose: vi.fn(),
   }
   return {
@@ -219,15 +218,24 @@ describe('就绪之前页头之外的交互一律拦下（Codex 评审 CX1，独
     await loading
   })
 
-  it('能编辑的文档不调用 setEditable：SDK 的权限点在 Ready 时按授权服务初始化，就是可编辑', async () => {
-    const { editorPage, fake } = setup()
-    await editorPage.load()
-    expect(fake.editor.setEditable).not.toHaveBeenCalled()
+  it('只能查看的文档同样：载入期间拦下输入，就绪之后放开（M2-P3 设计 §3.5）', async () => {
+    const creating = deferred<SheetEditor>()
+    const { editorPage, surface, chrome, fake, createEditor } = setup({
+      api: { document: async () => ({ ...DETAIL, permissions: { canEdit: false } }) },
+      createEditor: async () => creating.promise,
+    })
+    attach(chrome, surface)
+    const loading = editorPage.load()
+    await vi.waitFor(() => expect(createEditor).toHaveBeenCalled())
+    expect(interact(surface, 'keydown')).toEqual(BLOCKED)
+    creating.resolve(fake.editor)
+    await loading
+    expect(interact(surface, 'keydown')).toEqual(OPEN)
   })
 })
 
 describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
-  it('先确认会话，再读取元数据与内容，创建编辑器；就绪之后可以保存，基准是内容的修订号', async () => {
+  it('先确认会话，再读取元数据与内容，以可编辑创建编辑器；就绪之后可以保存，基准是内容的修订号', async () => {
     const { editorPage, surface, api, createEditor, fake } = setup()
     expect(surface.dataset.editorState).toBeUndefined()
     const loading = editorPage.load()
@@ -236,7 +244,7 @@ describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
     expect(api.session).toHaveBeenCalledOnce()
     expect(api.document).toHaveBeenCalledWith(DOCUMENT_ID)
     expect(api.content).toHaveBeenCalledWith(DOCUMENT_ID)
-    expect(createEditor).toHaveBeenCalledWith({ container: surface, snapshot: '{"id":"unit-1"}' })
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, snapshot: '{"id":"unit-1"}', access: 'edit' })
     expect(editorPage.view()).toMatchObject({ load: { kind: 'ready', title: '周报', readOnly: false, stage: 'rendered' }, save: { status: 'clean' }, session: 'active' })
     expect(surface.dataset.editorState).toBe('ready')
 
@@ -302,12 +310,15 @@ describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
     expect(surface.dataset.editorState).toBe('failed')
   })
 
-  it('只能查看：编辑器设为只读，不能保存', async () => {
-    const { editorPage, fake } = setup({ api: { document: async () => ({ ...DETAIL, permissions: { canEdit: false } }) } })
+  it('只能查看：以只读创建编辑器（M2-P3 设计 §3.5），不建保存状态机，不能保存', async () => {
+    const { editorPage, surface, api, createEditor } = setup({ api: { document: async () => ({ ...DETAIL, permissions: { canEdit: false } }) } })
     await editorPage.load()
-    expect(fake.editor.setEditable).toHaveBeenCalledExactlyOnceWith(false)
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, snapshot: '{"id":"unit-1"}', access: 'read' })
     expect(editorPage.view()).toMatchObject({ load: { kind: 'ready', readOnly: true }, save: undefined })
     expect(editorPage.hasUnsavedWork()).toBe(false)
+    await editorPage.save()
+    expect(api.compress).not.toHaveBeenCalled()
+    expect(api.save).not.toHaveBeenCalled()
   })
 
   it('载入期间页面已经卸载：创建出的编辑器立即销毁', async () => {

@@ -86,9 +86,9 @@ export async function createDocuments(owner: TestUser, titlePrefix: string, coun
   })
 }
 
-/** 在指定的空间里写一份文档（团队空间的用例，M2-P2） */
-export async function createDocumentIn(spaceId: string, author: TestUser, title: string): Promise<string> {
-  return withDatabase(async client => insertDocument(client, author, title, sheetSnapshotFor, spaceId))
+/** 在指定的空间里写一份文档（团队空间的用例，M2-P2）。快照默认是新建时的模板（只读的用例写样本，M2-P3） */
+export async function createDocumentIn(spaceId: string, author: TestUser, title: string, snapshotFor: SnapshotFor = sheetSnapshotFor): Promise<string> {
+  return withDatabase(async client => insertDocument(client, author, title, snapshotFor, spaceId))
 }
 
 export type SpaceRole = 'admin' | 'editor' | 'viewer'
@@ -108,6 +108,13 @@ export async function createTeamSpace(prefix: string, createdBy: TestUser, membe
     for (const [user, role] of members)
       await client.query('INSERT INTO space_members (space_id, user_id, role) VALUES ($1, $2, $3)', [id, user.id, role])
     return { id, name }
+  })
+}
+
+/** 归档团队空间（只改状态：经管理界面归档与它的审计由 US-M2-05 的用例覆盖；这里是只读用例的前置步骤，M2-P3） */
+export async function archiveSpace(spaceId: string): Promise<void> {
+  await withDatabase(async (client) => {
+    await client.query('UPDATE spaces SET status = \'archived\', updated_at = now() WHERE id = $1 AND type = \'team\'', [spaceId])
   })
 }
 

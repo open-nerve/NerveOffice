@@ -3,25 +3,12 @@
 // 必须在创建工作簿之前挂上，才能看到加载过程中执行的命令（M0 的 create-editor.ts:135-139）。
 // 这里的回调在 SDK 的命令执行过程中同步调用，抛出的异常会打断命令，所以一律接住、交给浏览器的错误报告
 import type { Univer } from '@univerjs/core'
-import type { FUniver, IEventParamConfig } from '@univerjs/core/facade'
+import type { FUniver } from '@univerjs/core/facade'
 import type { ChangeClassifierConfig } from './change-classifier.ts'
-import type { CommandKind, CommandRecord } from './command-record.ts'
-import { CommandType } from '@univerjs/core'
 import { createCalculationTriggerCheck } from './calculation-trigger.ts'
 import { isDocumentChange } from './change-classifier.ts'
+import { toCommandRecord } from './command-event.ts'
 import { createFormulaSettleTracker } from './formula-settle-tracker.ts'
-
-type CommandEvent = IEventParamConfig['CommandExecuted']
-
-const COMMAND_KIND: Readonly<Record<number, CommandKind>> = {
-  [CommandType.COMMAND]: 'command',
-  [CommandType.OPERATION]: 'operation',
-  [CommandType.MUTATION]: 'mutation',
-}
-
-function toCommandRecord(event: CommandEvent): CommandRecord {
-  return { id: event.id, kind: COMMAND_KIND[event.type] ?? 'command', params: event.params, options: event.options }
-}
 
 export interface ChangeTracker {
   /** 本地修改序号：检测到本文档的修改时加一，单调递增 */

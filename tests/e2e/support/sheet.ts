@@ -116,6 +116,11 @@ export async function typeInCell(page: Page, a1: string, text: string, commit = 
     await page.keyboard.press('Enter')
 }
 
+/** 工作表标签栏里的一个标签（功能区的标签页也是 role="tab"，例如"数据"，按标签栏限定） */
+export function sheetTab(page: Page, name: string): Locator {
+  return page.getByRole('tablist', { name: '工作表标签页' }).getByRole('tab', { name, exact: true })
+}
+
 /** 在工作表标签栏新加一张表（成为当前的表）。这个按钮没有可访问的名称，按 Univer 的组件标记定位 */
 export async function appendSheet(page: Page): Promise<void> {
   await page.locator('button[data-u-comp="sheet-bar-append-button"]').first().click()

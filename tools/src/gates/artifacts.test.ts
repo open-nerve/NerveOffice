@@ -387,6 +387,15 @@ describe('US-M1-11 A01 产物扫描：外部地址与关键字', () => {
     expect(rules(code)).toContain('artifacts/keyword')
   })
 
+  it.each([
+    ['测试构建里的写法', 'let n={univerAPI:e,snapshot:()=>JSON.stringify(t.save())};window.__nerveEditorProbe=n'],
+    ['方括号访问', 'window["__nerveEditorProbe"]=n'],
+    ['大小写不同', 'self.__NERVEEDITORPROBE=n'],
+  ])('违规：编辑器的 E2E 探针的名字出现在生产产物里（M2-P3 设计 §3.7）：%s', (_case, code) => {
+    const result = scan(code)
+    expect(result.violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/keyword', '__nerveEditorProbe']])
+  })
+
   it('汇总出现过的主机与允许清单里这次没出现的地址，便于审查允许清单', () => {
     const result = scan('a="http://www.w3.org/1999/xhtml";b="http://www.w3.org/2000/svg"')
     expect(result.hosts).toEqual(new Map([['www.w3.org', 2]]))
@@ -543,5 +552,11 @@ describe('US-M1-09 生产构建里没有测试构建的文件', () => {
     expect(checkTestOnlyArtifacts(['index.html', 'assets/index-abc.js']).map(v => v.subject)).toEqual([])
     expect(checkTestOnlyArtifacts(['csp-probe.html', 'assets/csp-probe-B7Lc.js', 'assets/probe-worker-CtLd.js', 'assets/index-abc.js']).map(v => v.subject))
       .toEqual(['csp-probe.html', 'assets/csp-probe-B7Lc.js', 'assets/probe-worker-CtLd.js'])
+  })
+
+  it('编辑器的 E2E 探针的分块出现在生产构建里即违规（M2-P3 设计 §3.7）；名字相近的其他文件不算', () => {
+    const violations = checkTestOnlyArtifacts(['editor.html', 'assets/editor-BcxC.js', 'assets/e2e-probe-CC7cG7BE.js', 'assets/my-e2e-probe-x.js', 'assets/e2e-probes.js'])
+    expect(violations.map(v => v.subject)).toEqual(['assets/e2e-probe-CC7cG7BE.js'])
+    expect(violations[0]?.detail).toContain('E2E 探针')
   })
 })

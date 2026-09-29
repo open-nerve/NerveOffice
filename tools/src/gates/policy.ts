@@ -116,8 +116,11 @@ export const ARTIFACT_POLICY: ArtifactPolicy = {
       max: 1,
     },
   ],
-  /** 出现即违规的关键字（不区分大小写）：Pro、许可证校验、第三方统计与遥测上报。 */
-  forbiddenKeywords: ['univerjs-pro', 'univer-pro', 'licensekey', 'license-key', 'license_key', 'posthog', 'sentry', 'google-analytics', 'googletagmanager', 'gtag(', 'mixpanel', 'grpc', 'protobuf'],
+  /**
+   * 出现即违规的关键字（不区分大小写；只扫描生产构建 apps/web/dist）：Pro、许可证校验、第三方统计与遥测上报；
+   * 以及编辑器的 E2E 探针挂在 window 上的名字（M2-P3 设计 §3.7）：探针只在测试构建里（dist-e2e），生产构建里连名字都不能有
+   */
+  forbiddenKeywords: ['univerjs-pro', 'univer-pro', 'licensekey', 'license-key', 'license_key', 'posthog', 'sentry', 'google-analytics', 'googletagmanager', 'gtag(', 'mixpanel', 'grpc', 'protobuf', '__nerveEditorProbe'],
 }
 
 /** 漏洞扫描的例外：GHSA 编号、原因与到期日（到期后必须重新评审）。 */
