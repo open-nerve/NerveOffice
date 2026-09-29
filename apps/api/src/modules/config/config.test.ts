@@ -48,6 +48,8 @@ describe('loadConfig', () => {
       shutdown: { timeoutMs: 8_000 },
       log: { level: 'info' },
       password: { argon2: { memoryKib: 19_456, iterations: 2, parallelism: 1 }, hashConcurrency: 2, hashQueue: { maxWaiting: 64, maxWaitMs: 5_000 } },
+      // 回收站的自动清理默认开着：每小时一轮，一轮最多 50 个删除单元
+      jobs: { trashPurge: { enabled: true, intervalMs: 3_600_000, batchSize: 50 } },
     })
   })
 
@@ -84,6 +86,9 @@ describe('loadConfig', () => {
       NERVE_LOGIN_WINDOW_MINUTES: '10',
       NERVE_LOGIN_LOCKOUT_MINUTES: '20',
       NERVE_WEB_ROOT: '/srv/nerve-office/web',
+      NERVE_TRASH_PURGE_ENABLED: 'false',
+      NERVE_TRASH_PURGE_INTERVAL_MS: '900000',
+      NERVE_TRASH_PURGE_BATCH: '10',
     })
     const { url, ...database } = config.database
     expect(url.reveal()).toBe('postgresql://u:p@127.0.0.1:5432/db')
@@ -111,6 +116,13 @@ describe('loadConfig', () => {
     expect(config.session).toEqual({ idleTimeoutMinutes: 30, absoluteTimeoutMinutes: 600 })
     expect(config.login).toEqual({ maxFailures: 3, ipMaxFailures: 1_000, windowMinutes: 10, lockoutMinutes: 20 })
     expect(config.web.root).toBe('/srv/nerve-office/web')
+    expect(config.jobs).toEqual({ trashPurge: { enabled: false, intervalMs: 900_000, batchSize: 10 } })
+  })
+
+  it('开关只认 true 与 false：写错时拒绝启动，不静默当成关掉', () => {
+    expect(loadConfig({ ...REQUIRED, NERVE_TRASH_PURGE_ENABLED: 'true' }).jobs.trashPurge.enabled).toBe(true)
+    for (const value of ['1', 'yes', 'on', 'True'])
+      expect(issuesOf(() => loadConfig({ ...REQUIRED, NERVE_TRASH_PURGE_ENABLED: value }))).toEqual([{ variable: 'NERVE_TRASH_PURGE_ENABLED', problem: '必须是 true 或 false' }])
   })
 
   it('缺少必填项时失败', () => {

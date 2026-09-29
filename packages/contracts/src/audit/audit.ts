@@ -67,8 +67,11 @@ export const AUDIT_ACTOR_TYPES = ['user', 'system', 'anonymous'] as const
 /** 操作的对象。新增取值时，同时用迁移更新 CHECK 约束（audit_events.target_type）。 */
 export const AUDIT_TARGET_TYPES = ['user', 'space', 'document', 'invitation', 'folder', 'trash_entry'] as const
 
-/** 来源：HTTP 请求或命令行。 */
-export const AUDIT_SOURCES = ['http', 'cli'] as const
+/**
+ * 来源：HTTP 请求、命令行，或应用自己的定时任务（M2-P4 S4 的回收站清理）。
+ * 新增取值时，同时用迁移更新 CHECK 约束（audit_events.source）。
+ */
+export const AUDIT_SOURCES = ['http', 'cli', 'job'] as const
 
 /** 补充信息（details）按 JSON 文本计的上限（字节）。 */
 export const AUDIT_DETAILS_MAX_BYTES = 4096

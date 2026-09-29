@@ -359,6 +359,11 @@ export class FakeStore {
     }),
     findById: vi.fn(async (id: string) => this.trashEntries.get(id)),
     lockById: vi.fn(async (id: string) => this.trashEntries.get(id)),
+    /** 到这个时刻为止已经到期的，最早到期的在前（M2-P4 S4） */
+    listExpired: vi.fn(async (now: Date, limit: number) => [...this.trashEntries.values()]
+      .filter(row => row.expiresAt <= now)
+      .toSorted((a, b) => a.expiresAt.getTime() - b.expiresAt.getTime() || a.id.localeCompare(b.id))
+      .slice(0, limit)),
     listBySpace: vi.fn(async (spaceId: string, options: { limit: number }) => [...this.trashEntries.values()]
       .filter(row => row.spaceId === spaceId)
       .toSorted((a, b) => b.id.localeCompare(a.id))

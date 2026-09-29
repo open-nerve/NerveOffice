@@ -24,7 +24,10 @@ export interface TestAppOptions {
 /** 测试里的公开地址：状态变更请求要带与它相同的 Origin（P3 设计 §3.5）。本机 HTTP，Cookie 不带 Secure */
 export const TEST_PUBLIC_ORIGIN = 'http://127.0.0.1:4100'
 
-/** 测试里应用的配置：只监听本机的随机端口；连接池上限 4，免得并行的测试文件用完数据库的连接。 */
+/**
+ * 测试里应用的配置：只监听本机的随机端口；连接池上限 4，免得并行的测试文件用完数据库的连接。
+ * 回收站的自动清理默认关掉：测试里不要有后台的定时器自己改数据（要它的用例自己打开，见 jobs 的集成测试）。
+ */
 export function testEnvironment(databaseUrl: string, overrides: Readonly<Record<string, string>> = {}): Record<string, string> {
   return {
     NERVE_DATABASE_URL: databaseUrl,
@@ -32,6 +35,7 @@ export function testEnvironment(databaseUrl: string, overrides: Readonly<Record<
     NERVE_HTTP_HOST: '127.0.0.1',
     NERVE_HTTP_PORT: '0',
     NERVE_DATABASE_POOL_MAX: '4',
+    NERVE_TRASH_PURGE_ENABLED: 'false',
     ...overrides,
   }
 }

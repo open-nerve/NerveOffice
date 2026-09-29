@@ -5,10 +5,14 @@ import { z } from 'zod'
 /** 客户端地址：数据库的 inet 能存的 IPv4 或 IPv6（不带作用域）。 */
 export const clientIpSchema = z.union([z.ipv4(), z.ipv6()])
 
-/** 审计事件的来源：HTTP 请求带请求标识与客户端地址；命令行（例如初始化管理员）没有。 */
+/**
+ * 审计事件的来源：HTTP 请求带请求标识与客户端地址；命令行（例如初始化管理员）与
+ * 应用自己的定时任务（modules/jobs，例如到期的回收站清理）没有。
+ */
 export const auditOriginSchema = z.discriminatedUnion('source', [
   z.strictObject({ source: z.literal('http'), requestId: z.string().min(1).max(128), clientIp: clientIpSchema.optional() }),
   z.strictObject({ source: z.literal('cli') }),
+  z.strictObject({ source: z.literal('job') }),
 ])
 
 /**

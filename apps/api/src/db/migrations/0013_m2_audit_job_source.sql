@@ -1,0 +1,2 @@
+ALTER TABLE "audit_events" DROP CONSTRAINT "audit_events_source_check";--> statement-breakpoint
+ALTER TABLE "audit_events" ADD CONSTRAINT "audit_events_source_check" CHECK ("audit_events"."source" IN ('http', 'cli', 'job'));

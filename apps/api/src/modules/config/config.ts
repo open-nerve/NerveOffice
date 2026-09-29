@@ -66,6 +66,17 @@ export interface AppConfig {
   }
   readonly shutdown: { readonly timeoutMs: number }
   readonly log: { readonly level: LogLevel }
+  readonly jobs: {
+    /** 回收站里到期的删除单元的自动清理（M2-P4 设计 §3.4 第 6 条）：应用自己的定时器 */
+    readonly trashPurge: {
+      /** 关掉之后不再起定时器（应用照常提供回收站的人工操作），默认开启 */
+      readonly enabled: boolean
+      /** 两轮之间的间隔；实际触发时间带随机抖动 */
+      readonly intervalMs: number
+      /** 一轮最多清理多少个删除单元 */
+      readonly batchSize: number
+    }
+  }
   readonly password: {
     /** Argon2id 的参数（00 号计划书 §11.1）：按部署机器的基准测试调整；改了之后，下次登录成功时重新哈希 */
     readonly argon2: { readonly memoryKib: number, readonly iterations: number, readonly parallelism: number }
@@ -107,6 +118,11 @@ function integer(min: number, max: number) {
     .regex(/^\d+$/, problem)
     .transform(Number)
     .pipe(z.number().int().min(min, problem).max(max, problem))
+}
+
+/** 开关：只认 true 与 false，不认 1/0、yes/on 之类的写法（写错时宁可拒绝启动，也不要静默当成关掉）。 */
+function flag() {
+  return text().pipe(z.enum(['true', 'false'], { error: '必须是 true 或 false' })).transform(value => value === 'true')
 }
 
 /** 只有本机调试时，公开地址可以是 HTTP（Cookie 这时不带 Secure）。URL 的 hostname 里 IPv6 带方括号 */
@@ -191,6 +207,11 @@ const environmentSchema = z.object({
   // 哈希的排队（DEF-015）：容器里的基准测试（默认参数）一次约 8 毫秒，按慢几倍的机器算，排满 64 个也在 1 秒以内等到
   NERVE_PASSWORD_HASH_QUEUE_MAX: integer(0, 100_000).default(64),
   NERVE_PASSWORD_HASH_QUEUE_TIMEOUT_MS: integer(100, 60_000).default(5_000),
+  // 回收站的自动清理（M2-P4 设计 §3.4 第 6 条）：默认每小时一轮，一轮最多 50 个删除单元。
+  // 间隔的下限是 1 秒（集成测试用小间隔跑真实的定时器），上限是一天
+  NERVE_TRASH_PURGE_ENABLED: flag().default(true),
+  NERVE_TRASH_PURGE_INTERVAL_MS: integer(1_000, 86_400_000).default(3_600_000),
+  NERVE_TRASH_PURGE_BATCH: integer(1, 1_000).default(50),
 })
 
 type Environment = z.output<typeof environmentSchema>
@@ -291,6 +312,13 @@ function toAppConfig(env: Environment): AppConfig {
     web: { root: env.NERVE_WEB_ROOT },
     shutdown: { timeoutMs: env.NERVE_SHUTDOWN_TIMEOUT_MS },
     log: { level: env.NERVE_LOG_LEVEL },
+    jobs: {
+      trashPurge: {
+        enabled: env.NERVE_TRASH_PURGE_ENABLED,
+        intervalMs: env.NERVE_TRASH_PURGE_INTERVAL_MS,
+        batchSize: env.NERVE_TRASH_PURGE_BATCH,
+      },
+    },
     password: {
       argon2: {
         memoryKib: env.NERVE_PASSWORD_ARGON2_MEMORY_KIB,

@@ -352,7 +352,7 @@ export const messages = {
       empty: '没有符合条件的事件',
       columns: { occurredAt: '时间', actor: '操作者', action: '动作', target: '对象', origin: '来源', details: '详情' },
       actorKind: (type: string) => ({ system: '系统', anonymous: '未登录的访问者' } as Record<string, string>)[type] ?? type,
-      source: (source: string) => ({ http: '网页', cli: '命令行' } as Record<string, string>)[source] ?? source,
+      source: (source: string) => ({ http: '网页', cli: '命令行', job: '定时任务' } as Record<string, string>)[source] ?? source,
       targetKind: (type: string) => ({ user: '账户', space: '空间', document: '文档', invitation: '邀请', folder: '文件夹', trash_entry: '回收站条目' } as Record<string, string>)[type] ?? type,
       actionName: (action: string) => (isAuditAction(action) ? AUDIT_ACTION_NAMES[action] : action),
       onlyTarget: '只看这个对象',

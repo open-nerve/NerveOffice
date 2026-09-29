@@ -375,6 +375,14 @@ const API_DOCUMENT_TRANSFER = {
   importNames: ['DocumentTransferService'],
   message: '停用者文档的转移（DocumentTransferService）不经内容权限，只由管理界面的模块（modules/admin）调用（M2-P2 审查 A9）',
 }
+// 到期的回收站清理（TrashPurgeService）不判断人的权限（操作者是系统，归档的空间照样清，M2-P4 设计 §3.1）：
+// 只由定时任务的模块（modules/jobs）调用，人工的永久删除走 TrashService.purge。写法同上：静态导入、import type、
+// 再导出与命名空间导入都拦下
+const API_TRASH_PURGE = {
+  regex: String.raw`(?:^|/)documents/index\.ts$`,
+  importNames: ['TrashPurgeService'],
+  message: '到期的回收站清理（TrashPurgeService）不判断人的权限，只由定时任务的模块（modules/jobs）调用（M2-P4 设计 §3.1）',
+}
 
 /** 后端文件允许的例外。 */
 interface ApiFileKind {
@@ -392,6 +400,8 @@ interface ApiFileKind {
   processEnv?: boolean
   /** 引用停用者文档的转移 DocumentTransferService（管理界面的模块与 documents 模块） */
   documentTransfer?: boolean
+  /** 引用到期的回收站清理 TrashPurgeService（定时任务的模块与 documents 模块） */
+  trashPurge?: boolean
 }
 
 function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
@@ -408,6 +418,7 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
     ...(kind.tables === true ? [] : [API_TABLES]),
     ...(kind.controller === true ? [API_REPOSITORY_FROM_CONTROLLER, API_TRANSACTIONS_FROM_CONTROLLER] : []),
     ...(kind.documentTransfer === true ? [] : [API_DOCUMENT_TRANSFER]),
+    ...(kind.trashPurge === true ? [] : [API_TRASH_PURGE]),
   ]
   const syntax = [
     ...BASE_RESTRICTED_SYNTAX,
@@ -571,9 +582,11 @@ export default antfu(
   },
   // 后端：先是所有文件的限制，后面的块按文件类型放开各自需要的部分（后面的块覆盖前面的同名规则）
   { name: 'nerve/api', files: ['apps/api/src/**/*.ts'], rules: apiRules() },
-  // 管理界面的模块（与 documents 模块自己）可以引用停用者文档的转移（M2-P2 审查 A9）。紧跟在上一块之后：
-  // 后面按文件类型的块（控制器、仓储等）照常拦下，它们不需要它
-  { name: 'nerve/api-document-transfer', files: ['apps/api/src/modules/admin/**/*.ts', 'apps/api/src/modules/documents/**/*.ts'], rules: apiRules({ documentTransfer: true }) },
+  // 管理界面的模块可以引用停用者文档的转移（M2-P2 审查 A9），定时任务的模块可以引用到期的回收站清理（M2-P4 设计 §3.1）；
+  // documents 模块自己两样都可以。紧跟在上一块之后：后面按文件类型的块（控制器、仓储等）照常拦下，它们不需要
+  { name: 'nerve/api-document-transfer', files: ['apps/api/src/modules/admin/**/*.ts'], rules: apiRules({ documentTransfer: true }) },
+  { name: 'nerve/api-trash-purge', files: ['apps/api/src/modules/jobs/**/*.ts'], rules: apiRules({ trashPurge: true }) },
+  { name: 'nerve/api-documents', files: ['apps/api/src/modules/documents/**/*.ts'], rules: apiRules({ documentTransfer: true, trashPurge: true }) },
   // app 层的程序接口（index.ts）为集成测试转出数据库句柄；app 层的其他文件同样拿不到（复验 N6）
   { name: 'nerve/api-app-entry', files: ['apps/api/src/app/index.ts'], rules: apiRules({ databaseHandles: true }) },
   { name: 'nerve/api-database', files: ['apps/api/src/modules/database/**/*.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true }) },
