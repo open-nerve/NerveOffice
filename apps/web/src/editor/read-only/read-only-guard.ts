@@ -8,7 +8,7 @@
 //    - 比 M0 的条件（只看 onlyLocal）多放过 fromCollab、fromChangeset、fromFormula 与排除名单：前两个在本平台不出现（没有协同），
 //      fromFormula 与排除名单都不改文档。
 //    被取消的命令不执行、不进撤销栈：Facade 抛出 CanceledError，命令服务接住它，调用方拿到 false（core 的 f-univer.ts:217-272、
-//    command.service.ts:466-473），不是页面错误。
+//    command.service.ts:467-474），不是页面错误。
 //    另外取消只读时没有意义的界面操作（READ_ONLY_GUARDED_COMMANDS，M2-P3 S3 的 E2E 发现之后）；
 // 2. 撤销与重做：BeforeUndo、BeforeRedo 取消（重做直接重放 mutation，绕过权限检查；取消的方式同上）；clearUndoStack 清空这份文档的撤销栈；
 // 3. 工作表的本地权限点：每张工作表"查看""复制"之外的权限点设为不允许，不存在的先加上。
@@ -93,6 +93,7 @@ export function installReadOnlyGuard(univer: Univer, univerAPI: FUniver, config:
   ]
   /** 界面上的处理：撤掉它们的函数（装上时的两项，渲染完成之后再加两项） */
   const uiGuards: (() => void)[] = [lockNotePopups(), blockFormulaBarInput()]
+  let disposed = false
 
   return {
     applyWorksheetPoints() {
@@ -117,6 +118,9 @@ export function installReadOnlyGuard(univer: Univer, univerAPI: FUniver, config:
       injector.get(IDrawingManagerService).setDrawingEditable(false)
     },
     applyRenderedGuards() {
+      // 销毁之后再装，撤不掉了（dispose 已经清空过清单）：M3 的原地切换复用这几个入口，所以这里直接报错，不静默装上（复验 S1）
+      if (disposed)
+        throw new Error('只读守卫已经销毁：渲染完成之后的处理不能再装')
       const injector = injectorOf(univer)
       uiGuards.push(
         lockFreezeHandles(injector.get(IRenderManagerService), unitId),
@@ -127,6 +131,7 @@ export function installReadOnlyGuard(univer: Univer, univerAPI: FUniver, config:
       injectorOf(univer).get(IUndoRedoService).clearUndoRedo(unitId)
     },
     dispose() {
+      disposed = true
       for (const subscription of subscriptions.splice(0))
         subscription.dispose()
       for (const undo of uiGuards.splice(0))

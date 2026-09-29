@@ -130,9 +130,12 @@ function fakeEditors(focused: string | null = null) {
   return { editors: editors as unknown as FormulaBarServices['editors'], focus, blur, subscribers: () => listeners.size, setFocusId: (id: string | null) => focusId = id }
 }
 
-function fakeContext() {
-  const setContextValue = vi.fn<(key: string, value: boolean) => void>()
-  return { context: { setContextValue } as FormulaBarServices['context'], setContextValue }
+/** focused：SDK 点编辑栏时会把 FOCUSING_FX_BAR_EDITOR 置真，默认按这个情形 */
+function fakeContext(focused = true) {
+  const values = new Map<string, boolean>([[FOCUSING_FX_BAR_EDITOR, focused]])
+  const setContextValue = vi.fn<(key: string, value: boolean) => void>((key, value) => void values.set(key, value))
+  const getContextValue = vi.fn<(key: string) => boolean>(key => values.get(key) ?? false)
+  return { context: { getContextValue, setContextValue } as FormulaBarServices['context'], setContextValue }
 }
 
 /** 等排队的微任务执行完 */
@@ -183,6 +186,18 @@ describe('只读时编辑栏的编辑器一被聚焦就放开（P3 审查 A1：�
     const stop = releaseFormulaBarEditor({ editors: editors.editors, context })
     expect(editors.blur).toHaveBeenCalledExactlyOnceWith(true)
     expect(setContextValue).toHaveBeenCalledExactlyOnceWith(FOCUSING_FX_BAR_EDITOR, false)
+    stop()
+  })
+
+  it('上下文本来就是假（从别的路径聚焦，FormulaBar 没有置真）：只 blur，不重复写上下文', async () => {
+    const editors = fakeEditors()
+    const { context, setContextValue } = fakeContext(false)
+    const stop = releaseFormulaBarEditor({ editors: editors.editors, context })
+    editors.focus(DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY)
+    await microtasks()
+    expect(editors.blur).toHaveBeenCalledExactlyOnceWith(true)
+    // SDK 的上下文服务不去重，写一次就广播一次；值没变就不写
+    expect(setContextValue).not.toHaveBeenCalled()
     stop()
   })
 

@@ -101,7 +101,7 @@ async function documentChanges(page: Page, mark: number, unitId: string): Promis
 }
 
 /**
- * mark 之后尝试过的、变更检测会认作修改的 mutation（执行前的记录，被取消的也算）：打开的过程中一条都不应该有，
+ * mark 之后尝试过的、变更检测会认作修改的 mutation（执行前的记录，被取消的也算）：就绪到 steady 之间一条都不应该有，
  * 否则就是进入只读时 SDK 试图改文档、被防火墙取消了（P3 审查 B9）
  */
 async function documentChangeAttempts(page: Page, mark: number, unitId: string): Promise<ProbeCommand[]> {

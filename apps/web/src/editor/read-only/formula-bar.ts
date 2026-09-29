@@ -27,7 +27,11 @@ import { DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY, FOCUSING_FX_BAR_EDITOR, FORMULA_BA
 /** 拦下的事件：按下（SDK 的处理与编辑框的聚焦）、点击与双击（按钮） */
 const BLOCKED_EVENTS = ['pointerdown', 'mousedown', 'click', 'dblclick'] as const
 
-/** 在 target（默认整页）上拦下编辑栏的输入；返回撤掉拦截的函数，可以重复调用 */
+/**
+ * 在 target（默认整页）上拦下编辑栏的输入；返回撤掉拦截的函数，可以重复调用。
+ * 代价：这几个事件在捕获阶段就停下，document 以下的监听都收不到，包括 SDK"点别处就关掉浮层"的处理——
+ * 只读时菜单与浮层本来关掉了大半，剩下的（批注浮层、查找面板）由 E2E 覆盖（复验 S2）
+ */
 export function blockFormulaBarInput(target: Document = document): () => void {
   const block = (event: Event): void => {
     if (event.target instanceof Element && event.target.closest(FORMULA_BAR_INPUT_SELECTOR) !== null) {
@@ -46,7 +50,7 @@ export function blockFormulaBarInput(target: Document = document): () => void {
 /** 放开编辑栏要用的 SDK 服务（经 internal-api 取得） */
 export interface FormulaBarServices {
   readonly editors: Pick<IEditorService, 'focus$' | 'getFocusId' | 'blur'>
-  readonly context: Pick<IContextService, 'setContextValue'>
+  readonly context: Pick<IContextService, 'getContextValue' | 'setContextValue'>
 }
 
 /**
@@ -62,7 +66,9 @@ export function releaseFormulaBarEditor({ editors, context }: FormulaBarServices
     // 排队期间焦点已经离开编辑栏（别的路径已经放开）时不再 blur：那会把之后聚焦的编辑器一并放开
     if (focusedOnBar())
       editors.blur(true)
-    context.setContextValue(FOCUSING_FX_BAR_EDITOR, false)
+    // 值没变就不写：SDK 的上下文服务不去重，每次写都广播一次，订阅的界面都要重算一轮（复验 S3）
+    if (context.getContextValue(FOCUSING_FX_BAR_EDITOR))
+      context.setContextValue(FOCUSING_FX_BAR_EDITOR, false)
   }
   const subscription = editors.focus$.subscribe(() => {
     if (focusedOnBar())

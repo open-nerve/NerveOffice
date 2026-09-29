@@ -550,7 +550,8 @@ export default antfu(
     },
   },
   {
-    // 内部 API 的唯一出口（P4 设计 §3.6.9）：这里可以引用受限的内部符号、调用 __getInjector，导出的每一项都要登记（registry.ts）
+    // 内部 API 的出口（P4 设计 §3.6.9；M2-P3 起有两个：数据的包 index.ts、界面的包 ui.ts）：
+    // 这里可以引用受限的内部符号、调用 __getInjector，导出的每一项都要登记（registry.ts）
     name: 'nerve/editor-internal-api',
     files: ['apps/web/src/editor/internal-api/**'],
     rules: {

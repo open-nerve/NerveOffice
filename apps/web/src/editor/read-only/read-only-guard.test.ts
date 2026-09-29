@@ -97,7 +97,12 @@ function fakeServices(existing: readonly string[] = []) {
       focusId = null
     }),
   }
-  const context = { setContextValue: vi.fn<(key: string, value: boolean) => void>() }
+  // SDK 点编辑栏时把 FOCUSING_FX_BAR_EDITOR 置真；放开时值没变就不写（复验 S3）
+  const contextValues = new Map<string, boolean>([[FOCUSING_FX_BAR_EDITOR, true]])
+  const context = {
+    getContextValue: vi.fn<(key: string) => boolean>(key => contextValues.get(key) ?? false),
+    setContextValue: vi.fn<(key: string, value: boolean) => void>((key, value) => void contextValues.set(key, value)),
+  }
   const focus = (id: string): void => {
     focusId = id
     for (const listener of [...focusListeners])
@@ -295,6 +300,15 @@ describe('只读守卫：渲染完成之后的界面处理（P3 审查 A1、B2�
     services.focus(DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY)
     await Promise.resolve()
     expect(services.editors.blur).not.toHaveBeenCalled()
+  })
+
+  it('销毁之后再装：报错，不静默装上撤不掉的处理（复验 S1）', () => {
+    const services = fakeServices()
+    const guard = installReadOnlyGuard(services.univer, fakeFacade().api, config)
+    guard.dispose()
+    expect(() => guard.applyRenderedGuards()).toThrow('只读守卫已经销毁')
+    expect(services.canDragFreeze()).toBe(true)
+    expect(services.focusListeners.size).toBe(0)
   })
 })
 
