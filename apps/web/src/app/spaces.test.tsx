@@ -175,7 +175,7 @@ describe('US-M2-05 空间页', () => {
   })
 
   it('新建表格：建在这个空间里', async () => {
-    const created = { id: '0199a2c4-0000-7000-8000-0000000000d9', title: '未命名表格', type: 'sheet', createdAt: '2026-09-29T01:00:00.000Z', updatedAt: '2026-09-29T01:00:00.000Z', spaceId: TEAM_ID, space: { id: TEAM_ID, type: 'team', name: '市场部' }, revision: 1, profile: 'sheet@1', formatVersion: 1, permissions: { canEdit: true } }
+    const created = { id: '0199a2c4-0000-7000-8000-0000000000d9', title: '未命名表格', type: 'sheet', createdAt: '2026-09-29T01:00:00.000Z', updatedAt: '2026-09-29T01:00:00.000Z', spaceId: TEAM_ID, space: { id: TEAM_ID, type: 'team', name: '市场部' }, folderId: null, revision: 1, profile: 'sheet@1', formatVersion: 1, permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true } }
     const api = loggedIn(team(), { 'POST /api/documents': () => json(201, created) })
     const app = renderApp(`/spaces/${TEAM_ID}`)
     fireEvent.click(await screen.findByRole('button', { name: '新建表格' }))

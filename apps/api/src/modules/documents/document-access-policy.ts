@@ -1,11 +1,11 @@
-import type { FolderPermissions, SpacePermissions, SpaceRole } from '@nerve-office/contracts'
+import type { DocumentPermissions, FolderPermissions, SpacePermissions, SpaceRole } from '@nerve-office/contracts'
 import type { Principal } from '../auth/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { SpaceFacts } from '../spaces/index.ts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { SpacesService } from '../spaces/index.ts'
-import { atLeast, effectiveSpaceRole, folderPermissionsOf, spacePermissionsOf } from './access-rules.ts'
+import { atLeast, documentPermissionsOf, effectiveSpaceRole, folderPermissionsOf, spacePermissionsOf } from './access-rules.ts'
 
 /** 调用者（M2-P2 设计 §3.4）：系统角色只影响团队空间的管理操作，不带来任何内容权限（00 号计划书 §5.2）。 */
 export interface Actor {
@@ -128,8 +128,65 @@ export function canEdit(access: DocumentAccess): boolean {
 }
 
 /** 看得到却不能做时的说明：归档的空间另外说明原因。 */
-function denied(access: SpaceAccess, message: string): AppError {
-  return new AppError('PERMISSION_DENIED', access.space.status === 'archived' ? '空间已归档，只能查看' : message)
+function denied(space: SpaceFacts, message: string): AppError {
+  return new AppError('PERMISSION_DENIED', space.status === 'archived' ? '空间已归档，只能查看' : message)
+}
+
+/** 能访问的文档、调用者在它上面的权限与所在空间的访问。 */
+export interface AccessibleDocument<T extends AccessTarget> extends Accessible<T> {
+  readonly permissions: DocumentPermissions
+}
+
+/** 文档上要权限的操作（只看能不能读时用 requireAccess）。 */
+export type DocumentOperation = 'rename' | 'moveWithinSpace' | 'moveAcrossSpaces' | 'copy'
+
+const DOCUMENT_CONTENT: Readonly<Record<DocumentOperation, { readonly permission: keyof DocumentPermissions, readonly message: string }>> = {
+  rename: { permission: 'canRename', message: '没有给这份文档改名的权限' },
+  moveWithinSpace: { permission: 'canMoveWithinSpace', message: '没有移动这份文档的权限' },
+  moveAcrossSpaces: { permission: 'canMoveAcrossSpaces', message: '只有空间管理员能把文档移出这个空间' },
+  copy: { permission: 'canCopy', message: '没有复制这份文档的权限' },
+}
+
+/**
+ * 整理一份文档（改名、移动、复制）之前的判断（M2-P4 设计 §3.7）：没有任何权限与不存在都是同一个 NOT_FOUND，
+ * 看得到却不能做是 PERMISSION_DENIED。operations 是这次要做的操作，一次判断可以要求多项（例如既改名又移动）。
+ */
+export async function requireDocumentContent<T extends AccessTarget>(
+  policy: DocumentAccessPolicy,
+  userId: string,
+  document: T | undefined,
+  operations: readonly DocumentOperation[],
+  transaction?: Transaction,
+): Promise<AccessibleDocument<T>> {
+  const accessible = await requireAccess(policy, userId, document, transaction)
+  const permissions = documentPermissionsOf(accessible.access.role)
+  for (const operation of operations) {
+    const { permission, message } = DOCUMENT_CONTENT[operation]
+    if (!permissions[permission])
+      throw denied(accessible.access.space, message)
+  }
+  return { ...accessible, permissions }
+}
+
+/**
+ * 跨空间移动与复制的目标空间（M2-P4 设计 §3.2）：要看得到（否则 NOT_FOUND，不暴露空间是否存在）、
+ * 没有归档（409 SPACE_ARCHIVED，与转移到已归档的团队空间一致）、有新建的权限（否则 PERMISSION_DENIED）。
+ * 已归档排在没有权限之前：归档时所有人至多是查看者，说"没有权限"看不出真正的原因。
+ */
+export async function requireCreateTarget(
+  policy: DocumentAccessPolicy,
+  actor: Actor,
+  spaceId: string,
+  transaction?: Transaction,
+): Promise<SpaceContentAccess> {
+  const access = await policy.spaceAccessOf(actor, spaceId, transaction)
+  if (access?.role === undefined)
+    throw new AppError('NOT_FOUND')
+  if (access.space.status === 'archived')
+    throw new AppError('SPACE_ARCHIVED')
+  if (!access.permissions.canCreateDocuments)
+    throw denied(access.space, '没有在目标空间里新建的权限')
+  return { ...access, role: access.role }
 }
 
 /** 空间里的内容操作与各自的权限；'view' 只要有空间角色，没有额外的权限位。 */
@@ -156,7 +213,7 @@ export async function requireSpaceContent(
     throw new AppError('NOT_FOUND')
   const required = operation === 'view' ? undefined : SPACE_CONTENT[operation]
   if (required !== undefined && !access.permissions[required.permission])
-    throw denied(access, required.message)
+    throw denied(access.space, required.message)
   return { ...access, role: access.role }
 }
 
@@ -200,7 +257,7 @@ export async function requireFolderContent<T extends FolderTarget>(
   for (const operation of operations) {
     const { permission, message } = FOLDER_CONTENT[operation]
     if (!permissions[permission])
-      throw denied(access, message)
+      throw denied(access.space, message)
   }
   return { folder, space: { ...access, role: access.role }, permissions }
 }
@@ -228,6 +285,6 @@ export async function requireSpaceManagement(
     throw new AppError('NOT_FOUND')
   const { permission, message } = MANAGEMENT[operation]
   if (!access.permissions[permission])
-    throw denied(access, message)
+    throw denied(access.space, message)
   return access
 }

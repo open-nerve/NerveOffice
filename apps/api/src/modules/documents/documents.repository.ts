@@ -10,6 +10,8 @@ import { DATABASE, executorOf, keysetPosition } from '../database/index.ts'
 export interface DocumentRow {
   readonly id: string
   readonly spaceId: string
+  /** 所在的文件夹；在空间的根目录下时为空（M2-P4） */
+  readonly folderId: string | null
   readonly type: DocumentType
   readonly title: string
   readonly createdAt: Date
@@ -54,10 +56,19 @@ export interface ListOptions {
   readonly folderId?: string | null | undefined
 }
 
+/** 复制出来的文档要写的列：其余的列（类型、unitId、档案、格式版本、写入时的 SDK 版本）由数据库从源文档原样复制。 */
+export interface CopiedDocument {
+  readonly spaceId: string
+  readonly folderId: string | null
+  readonly title: string
+  readonly createdBy: string
+}
+
 const d = documents
 const COLUMNS = {
   id: d.id,
   spaceId: d.spaceId,
+  folderId: d.folderId,
   type: d.type,
   title: d.title,
   createdAt: d.createdAt,
@@ -132,12 +143,34 @@ export class DocumentsRepository {
     return rows.map(row => row.id)
   }
 
-  /** 移到另一个空间（调用方已锁住这些行）：写入代次加一（00 号计划书 §6.4）；更新时间不变，内容没有改 */
-  async moveToSpace(ids: readonly string[], spaceId: string, transaction: Transaction): Promise<void> {
-    await executorOf(this.db, transaction)
+  /**
+   * 移到另一个空间的某个位置（调用方已锁住这些行）：写入代次加一（00 号计划书 §6.4）。
+   * 目标位置也一起写：文件夹属于某一个空间，换了空间就不能再留在原来的文件夹里（整批转移时是目标空间的根目录）。
+   * 更新时间不变：内容没有改，列表的排序与游标不因为挪位置而变（与改名、空间内移动一致）
+   */
+  async moveToSpace(ids: readonly string[], spaceId: string, folderId: string | null, transaction: Transaction): Promise<DocumentRow[]> {
+    return executorOf(this.db, transaction)
       .update(d)
-      .set({ spaceId, writeEpoch: sql`${d.writeEpoch} + 1` })
+      .set({ spaceId, folderId, writeEpoch: sql`${d.writeEpoch} + 1` })
       .where(inArray(d.id, [...ids]))
+      .returning(COLUMNS)
+  }
+
+  /** 改标题（调用方已锁住这一行）：更新时间不变，内容没有改 */
+  async rename(id: string, title: string, transaction: Transaction): Promise<DocumentRow> {
+    return this.updated(id, { title }, transaction)
+  }
+
+  /** 在同一个空间里换文件夹（null 表示空间的根目录，调用方已锁住这一行）：写入代次不变（00 号计划书 §6.4：空间内移动不递增） */
+  async moveToFolder(id: string, folderId: string | null, transaction: Transaction): Promise<DocumentRow> {
+    return this.updated(id, { folderId }, transaction)
+  }
+
+  private async updated(id: string, changes: { title?: string, folderId?: string | null }, transaction: Transaction): Promise<DocumentRow> {
+    const [row] = await executorOf(this.db, transaction).update(d).set(changes).where(eq(d.id, id)).returning(COLUMNS)
+    if (row === undefined)
+      throw new Error(`改动时文档不在了：${id}`)
+    return row
   }
 
   async insert(document: NewDocument, transaction: Transaction): Promise<DocumentRow> {
@@ -145,6 +178,24 @@ export class DocumentsRepository {
     if (row === undefined)
       throw new Error('新建文档没有返回记录')
     return row
+  }
+
+  /**
+   * 按源文档建一份副本（M2-P4 设计 §3.4 第 4 条）：类型、unitId、档案、格式版本与写入时的 SDK 版本由
+   * INSERT … SELECT 从源文档原样复制（unitId 相同是有意的，00 号计划书 §8.3）；
+   * 修订号、写入代次、状态与时间用列的默认值（修订号 1、代次 0、正常状态）。
+   * 源文档已经不在（被删或进了回收站）时什么也不写，返回 undefined。内容的复制见 DocumentContentsRepository.copyFrom
+   */
+  async copyFrom(sourceId: string, copy: CopiedDocument, transaction: Transaction): Promise<DocumentRow | undefined> {
+    const executor = executorOf(this.db, transaction)
+    const inserted = await executor.execute<{ id: string }>(sql`
+      INSERT INTO ${d} (space_id, folder_id, title, created_by, type, unit_id, profile, format_version, sdk_version)
+      SELECT ${copy.spaceId}::uuid, ${copy.folderId}::uuid, ${copy.title}, ${copy.createdBy}::uuid, ${d.type}, ${d.unitId}, ${d.profile}, ${d.formatVersion}, ${d.sdkVersion}
+      FROM ${d} WHERE ${d.id} = ${sourceId}::uuid AND ${d.status} = 'active'
+      RETURNING ${d.id}`)
+    const id = inserted.rows[0]?.id
+    // 按主键再读一次：RETURNING 里算不出游标用的更新时间（keysetPosition）
+    return id === undefined ? undefined : this.findById(id, transaction)
   }
 
   /**

@@ -16,6 +16,14 @@ export function createdPayloadDigest(type: DocumentType, title: string, spaceId?
   return createHash('sha256').update(payload, 'utf8').digest()
 }
 
+/**
+ * 复制（M2-P4）：源文档、目标位置与请求里给出的标题（没给时留空，副本的标题按源标题算出来）。
+ * 只按请求里的东西算：源文档随后被改名，同一个 requestId 的重试照样按重放处理。
+ */
+export function copiedPayloadDigest(sourceId: string, spaceId: string, folderId: string | undefined, title: string | undefined): Buffer {
+  return createHash('sha256').update(`copied\n${sourceId}\n${spaceId}\n${folderId ?? ''}\n${title ?? ''}`, 'utf8').digest()
+}
+
 /** 保存：基准修订号与解压后的快照字节。按解压后的字节算，同一份内容重试时，客户端不必保证压缩结果逐字节相同。 */
 export function savedPayloadDigest(baseRevision: number, raw: Buffer): Buffer {
   return createHash('sha256').update(`saved\n${baseRevision}\n`, 'utf8').update(raw).digest()

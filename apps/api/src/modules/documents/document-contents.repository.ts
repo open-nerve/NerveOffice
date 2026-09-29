@@ -28,6 +28,18 @@ export class DocumentContentsRepository {
     await executorOf(this.db, transaction).insert(c).values({ documentId, ...content, storedBytes: content.snapshot.length })
   }
 
+  /**
+   * 把源文档的当前快照复制给另一份文档（M2-P4 设计 §3.4 第 4 条）：INSERT … SELECT，压缩后的字节原样搬过去，
+   * 不经解压与 JSON.parse（DEF-018 说的解析开销不放大），副本与源因此逐字节一致（A10）。
+   * 源文档没有内容行（数据不一致）时什么也不写，返回 false
+   */
+  async copyFrom(sourceId: string, targetId: string, transaction: Transaction): Promise<boolean> {
+    const inserted = await executorOf(this.db, transaction).execute(sql`
+      INSERT INTO ${c} (document_id, snapshot, raw_bytes, stored_bytes)
+      SELECT ${targetId}::uuid, ${c.snapshot}, ${c.rawBytes}, ${c.storedBytes} FROM ${c} WHERE ${c.documentId} = ${sourceId}::uuid`)
+    return inserted.rowCount === 1
+  }
+
   /** 换成新的快照；没有内容行（数据不一致）时返回 false。 */
   async replace(documentId: string, content: StoredSnapshot, transaction: Transaction): Promise<boolean> {
     const updated = await executorOf(this.db, transaction)

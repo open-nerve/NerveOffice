@@ -6,7 +6,9 @@ import { DocumentAccessPolicy, EffectiveAccessPolicy } from './document-access-p
 import { DocumentContentController } from './document-content.controller.ts'
 import { DocumentContentService } from './document-content.service.ts'
 import { DocumentContentsRepository } from './document-contents.repository.ts'
+import { DocumentCopyService } from './document-copy.service.ts'
 import { DocumentCreationService } from './document-creation.service.ts'
+import { DocumentOrganizingService } from './document-organizing.service.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
 import { DocumentTransferService } from './document-transfer.service.ts'
 import { DocumentsController } from './documents.controller.ts'
@@ -29,6 +31,8 @@ import { LeaselessWriteAccessRevocation, WriteAccessRevocation } from './write-a
     DocumentsService,
     DocumentCreationService,
     DocumentContentService,
+    DocumentOrganizingService,
+    DocumentCopyService,
     DocumentTransferService,
     FoldersService,
     // 有效权限的唯一入口（M2-P2 设计 §3.4）；P5 在同一个实现里并上单独授权

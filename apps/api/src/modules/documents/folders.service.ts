@@ -11,6 +11,7 @@ import { TransactionRunner } from '../database/index.ts'
 import { SpacesService } from '../spaces/index.ts'
 import { folderPermissionsOf } from './access-rules.ts'
 import { DocumentAccessPolicy, requireFolderContent, requireSpaceContent } from './document-access-policy.ts'
+import { requireFolderIn } from './folder-location.ts'
 import { toFolder } from './folder-views.ts'
 import { FoldersRepository } from './folders.repository.ts'
 import { SpaceTreeRepository } from './space-tree.repository.ts'
@@ -167,15 +168,9 @@ export class FoldersService {
     return this.folders.moveSubtree(folder.id, parent?.id ?? null, delta, transaction)
   }
 
-  /**
-   * 这个空间里正常状态的一个文件夹（父文件夹、要列出的那一层）。
-   * 不存在、已经在回收站里、在别的空间里都是 NOT_FOUND：三种情况执行同样的查询，不暴露别处的文件夹是否存在
-   */
+  /** 这个空间里正常状态的一个文件夹（父文件夹、要列出的那一层）：规则见 folder-location.ts。 */
   private async requireFolderIn(spaceId: string, folderId: string, transaction?: Transaction): Promise<FolderRow> {
-    const folder = await this.folders.findById(folderId, transaction)
-    if (folder === undefined || folder.spaceId !== spaceId)
-      throw new AppError('NOT_FOUND')
-    return folder
+    return requireFolderIn(this.folders, spaceId, folderId, transaction)
   }
 
   /**

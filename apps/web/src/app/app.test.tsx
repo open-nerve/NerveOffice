@@ -531,7 +531,7 @@ describe('US-M1-03 个人空间的文档列表', () => {
 })
 
 describe('US-M1-04 新建表格', () => {
-  const created = { ...document(9), title: '未命名表格', spaceId: SESSION.personalSpace.id, space: { id: SESSION.personalSpace.id, type: 'personal', name: SESSION.personalSpace.name }, revision: 1, profile: 'sheet@1', formatVersion: 1, permissions: { canEdit: true } }
+  const created = { ...document(9), title: '未命名表格', spaceId: SESSION.personalSpace.id, space: { id: SESSION.personalSpace.id, type: 'personal', name: SESSION.personalSpace.name }, folderId: null, revision: 1, profile: 'sheet@1', formatVersion: 1, permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true } }
 
   it('新建：带 requestId 发出请求，建好之后整页打开编辑器页；进行中与离开之前按钮都标为不可用，重复点击不再请求', async () => {
     const pending = deferred()

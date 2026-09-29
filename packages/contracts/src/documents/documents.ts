@@ -40,6 +40,20 @@ export const DOCUMENT_TITLE_MAX_LENGTH = 200
 /** 新建时没有给标题，用这个。 */
 export const DEFAULT_DOCUMENT_TITLES: Readonly<Record<DocumentType, string>> = { sheet: '未命名表格' }
 
+/** 复制出来的文档，标题在源标题后面加这一段（M2-P4 设计 §3.4 第 4 条）。 */
+export const COPIED_TITLE_SUFFIX = ' 的副本'
+
+/**
+ * 复制时没有指定标题，用这个：源标题加上"的副本"。
+ * 加完超过上限时按码点截断源标题（不截成半个字符），再去掉截断处留下的空白；界面与服务端共用这一条规则。
+ */
+export function copiedDocumentTitle(sourceTitle: string): string {
+  const room = DOCUMENT_TITLE_MAX_LENGTH - codePointLength(COPIED_TITLE_SUFFIX)
+  const points = [...sourceTitle]
+  const base = points.length > room ? points.slice(0, room).join('').trimEnd() : sourceTitle
+  return `${base}${COPIED_TITLE_SUFFIX}`
+}
+
 /** 标题：去掉首尾空白之后 1–200 个字符，不含控制字符。 */
 export const documentTitleSchema = z.string()
   .trim()
@@ -95,17 +109,37 @@ export const documentSpaceSchema = z.object({
 export type DocumentSpace = z.infer<typeof documentSpaceSchema>
 
 /**
- * 文档的元数据与调用者的权限（GET /api/documents/{id}，新建的响应）。
+ * 调用者在这份文档上能做的操作：界面据此只显示能做的，服务端按同一套规则检查（M2-P4 设计 §3.7）。
+ * 只列已经提供的操作；删除随 M2-P4 的 S3 加上自己的位与接口。
+ */
+export const documentPermissionsSchema = z.object({
+  /** 改动内容（保存）：编辑者及以上 */
+  canEdit: z.boolean(),
+  canRename: z.boolean(),
+  /** 在同一个空间里换文件夹：编辑者及以上 */
+  canMoveWithinSpace: z.boolean(),
+  /** 移到别的空间：源空间的空间管理员（目标空间的新建权限另判） */
+  canMoveAcrossSpaces: z.boolean(),
+  /** 复制：能读就能复制（目标空间的新建权限另判） */
+  canCopy: z.boolean(),
+})
+
+export type DocumentPermissions = z.infer<typeof documentPermissionsSchema>
+
+/**
+ * 文档的元数据与调用者的权限（GET /api/documents/{id}，新建、改动与复制的响应）。
  * 档案与格式版本不按已知的取值校验：客户端自己核对，不认识的显示"格式不受支持"，而不是当作响应不合法（P4 设计 §3.7.1）。
  */
 export const documentDetailSchema = documentSummarySchema.extend({
   spaceId: z.uuid(),
   space: documentSpaceSchema,
+  /** 所在的文件夹；在空间的根目录下时为 null（M2-P4） */
+  folderId: z.uuid().nullable(),
   /** 当前修订号：新建为 1，每次保存加一 */
   revision: z.number().int().min(1),
   profile: z.string().min(1),
   formatVersion: z.number().int().min(1),
-  permissions: z.object({ canEdit: z.boolean() }),
+  permissions: documentPermissionsSchema,
 })
 
 export type DocumentDetail = z.infer<typeof documentDetailSchema>
@@ -125,3 +159,39 @@ export const createDocumentRequestSchema = z.strictObject({
 })
 
 export type CreateDocumentRequest = z.input<typeof createDocumentRequestSchema>
+
+/**
+ * 改名或在同一个空间里移动（PATCH /api/documents/{id}，M2-P4 设计 §3.2）：
+ * folderId 为 null 表示移到空间的根目录，省略表示不移动；两项都省略时什么也不改。跨空间移动另有接口。
+ */
+export const updateDocumentRequestSchema = z.strictObject({
+  title: documentTitleSchema.optional(),
+  folderId: uuidSchema.nullable().optional(),
+})
+
+export type UpdateDocumentRequest = z.input<typeof updateDocumentRequestSchema>
+
+/**
+ * 移动到某个空间的某个位置（POST /api/documents/{id}/move，M2-P4 设计 §3.2）：folderId 省略表示那个空间的根目录。
+ * 跨空间移动要源空间的空间管理员角色，并且在目标空间有新建权限（00 号计划书 §5.3）；
+ * 目标就是文档现在所在的空间时，与空间内移动同一条规则（编辑者及以上），失败重试因此是幂等的。
+ */
+export const moveDocumentRequestSchema = z.strictObject({
+  spaceId: uuidSchema,
+  folderId: uuidSchema.optional(),
+})
+
+export type MoveDocumentRequest = z.input<typeof moveDocumentRequestSchema>
+
+/**
+ * 复制（POST /api/documents/{id}/copy，M2-P4 设计 §3.4 第 4 条）：复制到目标空间的某个位置（folderId 省略表示根目录）。
+ * 标题省略时是 copiedDocumentTitle(源标题)。requestId 与新建文档一样做幂等：网络错误后用同一个 requestId 重试只复制一份。
+ */
+export const copyDocumentRequestSchema = z.strictObject({
+  spaceId: uuidSchema,
+  folderId: uuidSchema.optional(),
+  title: documentTitleSchema.optional(),
+  requestId: uuidSchema,
+})
+
+export type CopyDocumentRequest = z.input<typeof copyDocumentRequestSchema>

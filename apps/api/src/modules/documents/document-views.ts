@@ -1,22 +1,23 @@
 import type { DocumentDetail, DocumentSummary } from '@nerve-office/contracts'
 import type { DocumentAccess } from './document-access-policy.ts'
 import type { DocumentRow } from './documents.repository.ts'
-import { canEdit } from './document-access-policy.ts'
+import { documentPermissionsOf } from './access-rules.ts'
 
 /** 列表的条目。 */
 export function toSummary(row: DocumentRow): DocumentSummary {
   return { id: row.id, title: row.title, type: row.type, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString() }
 }
 
-/** 元数据与调用者的权限。 */
+/** 元数据与调用者的权限（权限的规则是 access-rules 里的纯函数，界面与服务端共用同一份）。 */
 export function toDetail(row: DocumentRow, access: DocumentAccess): DocumentDetail {
   return {
     ...toSummary(row),
     spaceId: row.spaceId,
     space: { id: access.space.id, type: access.space.type, name: access.space.name },
+    folderId: row.folderId,
     revision: row.revision,
     profile: row.profile,
     formatVersion: row.formatVersion,
-    permissions: { canEdit: canEdit(access) },
+    permissions: documentPermissionsOf(access.role),
   }
 }

@@ -43,6 +43,10 @@ export const AUDIT_ACTIONS = [
   'folders.created',
   'folders.renamed',
   'folders.moved',
+  // M2-P4：文档的整理。改名记改动前后的标题；移动记原位置与目标位置（空间与文件夹）；复制记源文档
+  'documents.renamed',
+  'documents.moved',
+  'documents.copied',
 ] as const
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS)

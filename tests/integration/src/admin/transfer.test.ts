@@ -206,6 +206,26 @@ describe('US-M2-04 转移停用者的文档', () => {
     expect(audits).toEqual([...moving].sort().map(id => ({ target_id: id, actor_id: root.id, details: { fromSpaceId: gone.spaceId, toSpaceId: spaceId } })))
   })
 
+  it('原来在文件夹里的文档：转到目标空间的根目录（文件夹属于原来的空间，M2-P4）', async () => {
+    const gone = await leaver([])
+    const folder = await database.query(async client => (await client.query<{ id: string }>(
+      'INSERT INTO folders (space_id, name, created_by, depth, request_id) VALUES ($1, \'交接\', $2, 1, $3) RETURNING id',
+      [gone.spaceId, gone.id, randomUUID()],
+    )).rows[0]?.id)
+    const documentId = await createDocument(database, { spaceId: gone.spaceId, createdBy: gone.id, title: '文件夹里的', folderId: folder })
+    const spaceId = await teamSpace()
+    expect((await transfer(gone.id, { documentIds: [documentId], target: { type: 'team', spaceId } })).status).toBe(200)
+
+    const row = await database.query(async client => (await client.query<{ space_id: string, folder_id: string | null }>(
+      'SELECT space_id, folder_id FROM documents WHERE id = $1',
+      [documentId],
+    )).rows[0])
+    expect(row).toEqual({ space_id: spaceId, folder_id: null })
+    // 目标空间的列表（根目录）里看得到它：留着原来的文件夹的话，哪一层都列不出来
+    const listed = await (await asUser(app.baseUrl, amySession, `/api/documents?spaceId=${spaceId}`)).json() as { items: { id: string }[] }
+    expect(listed.items.map(item => item.id)).toEqual([documentId])
+  })
+
   it('转移到另一个有效账户的个人空间：他在自己的列表里看到', async () => {
     const gone = await leaver(['交接清单'])
     const response = await transfer(gone.id, { documentIds: gone.documents, target: { type: 'personal', userId: amy.id } })

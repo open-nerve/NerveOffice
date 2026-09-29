@@ -1,6 +1,6 @@
 // 有效权限的规则（00 号计划书 §5.2、§5.3，M2-P2 设计 §3.4）：只按事实计算，不查询。
 // 访问策略（document-access-policy.ts）取事实、调用这里；服务不自己拼权限条件（M2 总设计 §6.1）。
-import type { FolderPermissions, SpacePermissions, SpaceRole } from '@nerve-office/contracts'
+import type { DocumentPermissions, FolderPermissions, SpacePermissions, SpaceRole } from '@nerve-office/contracts'
 import type { SpaceFacts } from '../spaces/index.ts'
 import { SPACE_ROLES } from '@nerve-office/contracts'
 
@@ -42,6 +42,24 @@ export function spacePermissionsOf(space: SpaceFacts, role: SpaceRole | undefine
     canRename: team && (spaceAdmin || systemAdmin),
     // 永久删除回收站里的删除单元：空间管理员，个人空间的所有者有效角色也是空间管理员（M2-P4 设计 §3.7）
     canPurgeTrash: spaceAdmin,
+  }
+}
+
+/**
+ * 在一份文档上能做的操作（00 号计划书 §5.3，M2-P4 设计 §3.7）。role 是调用者对这份文档的有效角色（已按归档降级），
+ * 由访问策略给出；能拿到角色就说明看得到这份文档（P5 的单独授权也在策略里并进这个角色）。
+ * 只给已经提供的操作：删除随 S3 加上自己的位（那时才需要"本人创建的"，要另外传文档与调用者）。
+ */
+export function documentPermissionsOf(role: SpaceRole): DocumentPermissions {
+  const editor = atLeast(role, 'editor')
+  return {
+    canEdit: editor,
+    canRename: editor,
+    canMoveWithinSpace: editor,
+    // 跨空间移动要源空间的空间管理员（目标空间的新建权限另判）；归档的空间里有效角色至多是查看者
+    canMoveAcrossSpaces: role === 'admin',
+    // 能读就能复制（目标空间的新建权限另判）：查看者、归档空间里的成员也可以
+    canCopy: true,
   }
 }
 

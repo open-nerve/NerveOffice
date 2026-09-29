@@ -94,6 +94,9 @@ export {
 export type { RevisionConflictDetails, SaveContentQuery, SaveContentResponse } from './documents/content.ts'
 export { DOCUMENT_PAGE_PATTERN, documentIdFromPagePath, documentPagePath } from './documents/document-page.ts'
 export {
+  COPIED_TITLE_SUFFIX,
+  copiedDocumentTitle,
+  copyDocumentRequestSchema,
   createDocumentRequestSchema,
   DEFAULT_DOCUMENT_TITLES,
   DOCUMENT_LIST_ALL_FOLDERS,
@@ -108,23 +111,30 @@ export {
   documentIdSchema,
   documentListQuerySchema,
   documentListResponseSchema,
+  documentPermissionsSchema,
   documentSpaceSchema,
   documentSummarySchema,
   documentTitleSchema,
+  moveDocumentRequestSchema,
   PLATFORM_FORMAT_VERSION,
   PLATFORM_FORMAT_VERSIONS,
+  updateDocumentRequestSchema,
 } from './documents/documents.ts'
 export type {
+  CopyDocumentRequest,
   CreateDocumentRequest,
   DocumentDetail,
   DocumentListQuery,
   DocumentListResponse,
+  DocumentPermissions,
   DocumentProfile,
   DocumentSpace,
   DocumentStatus,
   DocumentSummary,
   DocumentType,
+  MoveDocumentRequest,
   PlatformFormatVersion,
+  UpdateDocumentRequest,
 } from './documents/documents.ts'
 export { SHEET_TEMPLATE, SHEET_TEMPLATE_UNIT_ID, sheetSnapshotFor } from './documents/sheet-template.ts'
 export { ERROR_CODES, errorStatus, RETIRED_ERROR_CODES } from './errors/error-codes.ts'

@@ -8,6 +8,7 @@ import { SpacesService } from '../spaces/index.ts'
 import { DocumentAccessPolicy, requireAccess, requireSpaceContent } from './document-access-policy.ts'
 import { toDetail, toSummary } from './document-views.ts'
 import { DocumentsRepository } from './documents.repository.ts'
+import { folderIdIn } from './folder-location.ts'
 import { FoldersRepository } from './folders.repository.ts'
 
 /** 文档的元数据（M1-P3 设计 §3.6，M2-P2 设计 §3.5）：按空间列出与读取。新建见 DocumentCreationService，内容与保存见 DocumentContentService。 */
@@ -49,17 +50,12 @@ export class DocumentsService {
 
   /**
    * 把查询里的 folderId 换成仓储的目录条件：省略是空间的根目录（null），all 是不按目录过滤（undefined）。
-   * 指定的文件夹不在这个空间里（不存在、在别的空间里、已经在回收站里）时 NOT_FOUND：与"不存在"执行同样的查询。
+   * 指定的文件夹不在这个空间里（不存在、在别的空间里、已经在回收站里）时 NOT_FOUND（folder-location.ts）。
    */
   private async folderFilterOf(spaceId: string, folderId: string | undefined): Promise<string | null | undefined> {
-    if (folderId === undefined)
-      return null
     if (folderId === DOCUMENT_LIST_ALL_FOLDERS)
       return undefined
-    const folder = await this.folders.findById(folderId)
-    if (folder === undefined || folder.spaceId !== spaceId)
-      throw new AppError('NOT_FOUND')
-    return folder.id
+    return folderIdIn(this.folders, spaceId, folderId ?? null)
   }
 
   private async personalSpaceIdOf(userId: string): Promise<string> {

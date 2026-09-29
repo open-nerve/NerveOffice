@@ -8,9 +8,10 @@ import type { SpaceFacts, SpacesService } from '../spaces/index.ts'
 import type { Actor } from './document-access-policy.ts'
 import type { CurrentContent, DocumentContentsRepository, StoredSnapshot } from './document-contents.repository.ts'
 import type { DocumentRevisionsRepository, NewRevision, RevisionRow } from './document-revisions.repository.ts'
-import type { AccessibleScope, DocumentRow, DocumentsRepository, ListOptions, NewDocument } from './documents.repository.ts'
+import type { AccessibleScope, CopiedDocument, DocumentRow, DocumentsRepository, ListOptions, NewDocument } from './documents.repository.ts'
 import type { FolderRow, FoldersRepository, NewFolder, SubtreeSummary } from './folders.repository.ts'
 import type { SpaceTreeRepository } from './space-tree.repository.ts'
+import type { WriteAccessRevocation, WriteAccessScope } from './write-access.ts'
 import { FOLDER_LIST_MAX_ITEMS } from '@nerve-office/contracts'
 import { vi } from 'vitest'
 import { EffectiveAccessPolicy } from './document-access-policy.ts'
@@ -47,6 +48,10 @@ export class FakeStore {
   readonly audits: AuditEvent[] = []
   /** 取过的空间树锁：按取锁的先后记下，用例据此核对锁的顺序 */
   readonly treeLocks: string[][] = []
+  /** 每份文档的写入代次（不在 DocumentRow 里）：跨空间移动加一，用例据此核对空间内移动不加 */
+  readonly writeEpochs = new Map<string, number>()
+  /** 收回写入权的调用：跨空间移动要在同一个事务里调一次（M2-P2 设计 §3.7） */
+  readonly revocations: WriteAccessScope[] = []
   /** 空间与成员：访问策略据此算出有效权限 */
   readonly spaceRecords = new Map<string, FakeSpace>([
     [ALICE_SPACE, { type: 'personal', name: '爱丽丝', status: 'active', visibleToAll: false, owner: ALICE, members: new Map() }],
@@ -59,7 +64,7 @@ export class FakeStore {
   addDocument(overrides: Partial<DocumentRow> = {}): DocumentRow {
     this.sequence += 1
     const id = `0199a2c4-0000-7000-8000-${String(this.sequence).padStart(12, '0')}`
-    const row: DocumentRow = { id, spaceId: ALICE_SPACE, type: 'sheet', title: '周报', createdAt: NOW, updatedAt: NOW, position: NOW.toISOString(), revision: 1, unitId: `unit-${id}`, profile: 'sheet@1', formatVersion: 1, ...overrides }
+    const row: DocumentRow = { id, spaceId: ALICE_SPACE, type: 'sheet', title: '周报', createdAt: NOW, updatedAt: NOW, position: NOW.toISOString(), revision: 1, unitId: `unit-${id}`, profile: 'sheet@1', formatVersion: 1, ...overrides, folderId: overrides.folderId ?? null }
     this.documents.set(id, row)
     return row
   }
@@ -124,6 +129,21 @@ export class FakeStore {
       listAccessible: vi.fn(async (scope: AccessibleScope, options: ListOptions) =>
         [...this.documents.values()].filter(row => scope.spaceIds.includes(row.spaceId)).slice(0, options.limit)),
       insert: vi.fn(async (document: NewDocument) => this.addDocument({ ...document, revision: 1 })),
+      rename: vi.fn(async (id: string, title: string) => this.updateDocument(id, { title })),
+      moveToFolder: vi.fn(async (id: string, folderId: string | null) => this.updateDocument(id, { folderId })),
+      /** 跨空间移动：改所属空间与位置，写入代次加一（代次不在 DocumentRow 里，记在 writeEpochs 上，用例据此核对） */
+      moveToSpace: vi.fn(async (ids: readonly string[], spaceId: string, folderId: string | null) => ids.map((id) => {
+        this.writeEpochs.set(id, (this.writeEpochs.get(id) ?? 0) + 1)
+        return this.updateDocument(id, { spaceId, folderId })
+      })),
+      /** 按源文档建一份副本：类型、unitId、档案与格式版本原样复制，修订号 1，新的 id */
+      copyFrom: vi.fn(async (sourceId: string, copy: CopiedDocument): Promise<DocumentRow | undefined> => {
+        const source = this.documents.get(sourceId)
+        if (source === undefined)
+          return undefined
+        const { id: _id, ...columns } = source
+        return this.addDocument({ ...columns, ...copy, revision: 1 })
+      }),
       advanceRevision: vi.fn(async (id: string, revision: number) => {
         const row = this.documents.get(id)
         if (row?.revision !== revision - 1)
@@ -134,6 +154,14 @@ export class FakeStore {
     contents: {
       insert: vi.fn(async (documentId: string, content: StoredSnapshot) => {
         this.contents.set(documentId, content)
+      }),
+      copyFrom: vi.fn(async (sourceId: string, targetId: string) => {
+        const content = this.contents.get(sourceId)
+        if (content === undefined)
+          return false
+        // 原样搬过去：同一个 Buffer，用例据此核对副本与源逐字节一致
+        this.contents.set(targetId, content)
+        return true
       }),
       replace: vi.fn(async (documentId: string, content: StoredSnapshot) => {
         if (!this.contents.has(documentId))
@@ -193,6 +221,13 @@ export class FakeStore {
     }),
   }
 
+  /** 收回写入权的入口：只记下调用（M2 的真实实现也什么都不做，M3 接租约） */
+  readonly writeAccess = {
+    revoke: vi.fn(async (scope: WriteAccessScope) => {
+      this.revocations.push(scope)
+    }),
+  }
+
   readonly transactions = { run: vi.fn(async <T>(work: (transaction: Transaction) => Promise<T>) => work(TRANSACTION)) }
   readonly spaces = {
     personalSpaceOf: vi.fn(async (userId: string) => {
@@ -202,7 +237,8 @@ export class FakeStore {
     // 访问策略每判断一次，就是这里的一次查询：测试据此核对"不存在"与"看不到"的查询序列相同
     accessFactsOf: vi.fn(async (userId: string, spaceId: string) => this.factsOf(userId, spaceId)),
     visibleSpacesOf: vi.fn(async (userId: string) => [...this.spaceRecords.keys()].flatMap(id => this.factsOf(userId, id) ?? [])),
-    holdSpace: vi.fn(async (): Promise<unknown> => undefined),
+    // 取哪个空间的行：用例据此核对多个空间时的取锁顺序
+    holdSpace: vi.fn(async (_spaceId: string): Promise<unknown> => undefined),
   }
 
   /** 真实的访问策略 */
@@ -224,7 +260,18 @@ export class FakeStore {
       policy: this.policy,
       spaces: this.spaces as unknown as SpacesService,
       audit: this.audit as unknown as AuditService,
+      writeAccess: this.writeAccess as unknown as WriteAccessRevocation,
     }
+  }
+
+  /** 改一份文档的几列并返回新的行 */
+  private updateDocument(id: string, changes: Partial<DocumentRow>): DocumentRow {
+    const row = this.documents.get(id)
+    if (row === undefined)
+      throw new Error(`没有文档 ${id}`)
+    const next = { ...row, ...changes }
+    this.documents.set(id, next)
+    return next
   }
 
   /** 改一个文件夹的几列并返回新的行 */

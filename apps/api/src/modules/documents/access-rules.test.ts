@@ -1,7 +1,7 @@
 import type { SpaceRole } from '@nerve-office/contracts'
 import type { SpaceFacts } from '../spaces/index.ts'
 import { describe, expect, it } from 'vitest'
-import { atLeast, effectiveSpaceRole, folderPermissionsOf, spacePermissionsOf } from './access-rules.ts'
+import { atLeast, documentPermissionsOf, effectiveSpaceRole, folderPermissionsOf, spacePermissionsOf } from './access-rules.ts'
 
 function facts(overrides: Partial<SpaceFacts>): SpaceFacts {
   return { id: 'space', type: 'team', name: '市场部', status: 'active', visibleToAll: false, owned: false, memberRole: null, ...overrides }
@@ -88,6 +88,21 @@ describe('空间上能做的操作（M2-P2 设计 §3.4）', () => {
     // 归档之后有效角色至多是查看者：原来的空间管理员也不能新建文件夹、不能永久删除
     const archived = facts({ status: 'archived', memberRole: 'admin' })
     expect(spacePermissionsOf(archived, effectiveSpaceRole(archived), false)).toMatchObject({ canCreateFolders: false, canPurgeTrash: false })
+  })
+})
+
+describe('文档上能做的操作（00 号计划书 §5.3，M2-P4 设计 §3.7）', () => {
+  it('改名、保存与空间内移动：编辑者及以上；跨空间移动只给空间管理员；能读就能复制', () => {
+    expect(documentPermissionsOf('admin')).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true })
+    expect(documentPermissionsOf('editor')).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true })
+    expect(documentPermissionsOf('viewer')).toEqual({ canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true })
+  })
+
+  it('归档的空间：有效角色已经是查看者，只剩下复制', () => {
+    const archived = facts({ status: 'archived', memberRole: 'admin' })
+    const role = effectiveSpaceRole(archived)
+    expect(role).toBe('viewer')
+    expect(documentPermissionsOf(role ?? 'viewer')).toEqual({ canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true })
   })
 })
 
