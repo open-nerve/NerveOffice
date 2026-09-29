@@ -10,6 +10,8 @@ import { AdminAuditService } from './admin-audit.service.ts'
 import { AdminInvitationsController } from './admin-invitations.controller.ts'
 import { AdminSpacesController } from './admin-spaces.controller.ts'
 import { AdminSpacesService } from './admin-spaces.service.ts'
+import { AdminTransferService } from './admin-transfer.service.ts'
+import { AdminUserDocumentsController } from './admin-user-documents.controller.ts'
 import { AdminUsersController } from './admin-users.controller.ts'
 import { AdminUsersService } from './admin-users.service.ts'
 
@@ -19,7 +21,7 @@ import { AdminUsersService } from './admin-users.service.ts'
  */
 @Module({
   imports: [DatabaseModule, AuditModule, AuthModule, UsersModule, SpacesModule, DocumentsModule],
-  controllers: [AdminUsersController, AdminInvitationsController, AdminSpacesController, AdminAuditController],
-  providers: [AdminUsersService, AdminSpacesService, AdminAuditService],
+  controllers: [AdminUsersController, AdminUserDocumentsController, AdminInvitationsController, AdminSpacesController, AdminAuditController],
+  providers: [AdminUsersService, AdminTransferService, AdminSpacesService, AdminAuditService],
 })
 export class AdminModule {}

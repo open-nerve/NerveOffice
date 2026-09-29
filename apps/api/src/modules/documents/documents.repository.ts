@@ -1,9 +1,9 @@
-import type { DocumentProfile, DocumentType, PlatformFormatVersion } from '@nerve-office/contracts'
+import type { DocumentProfile, DocumentStatus, DocumentType, PlatformFormatVersion } from '@nerve-office/contracts'
 import type { SQL } from 'drizzle-orm'
 import type { TimeCursor } from '../../shared/time-cursor.ts'
 import type { Database, Transaction } from '../database/index.ts'
 import { Inject, Injectable } from '@nestjs/common'
-import { and, desc, eq, inArray, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm'
 import { documents } from '../../db/schema/documents/index.ts'
 import { DATABASE, executorOf, keysetPosition } from '../database/index.ts'
 
@@ -37,6 +37,13 @@ export interface NewDocument {
 /** "可访问文档"的范围（M2-P2 设计 §3.5）：调用者看得到的空间，由访问策略给出（P5 加上单独授权）。 */
 export interface AccessibleScope {
   readonly spaceIds: readonly string[]
+}
+
+/** 转移时锁住的文档：所在的空间与状态（M2-P2 设计 §3.8） */
+export interface TransferCandidate {
+  readonly id: string
+  readonly spaceId: string
+  readonly status: DocumentStatus
 }
 
 const d = documents
@@ -89,6 +96,24 @@ export class DocumentsRepository {
   async lockById(id: string, transaction: Transaction): Promise<DocumentRow | undefined> {
     const [row] = await executorOf(this.db, transaction).select(COLUMNS).from(d).where(and(eq(d.id, id), eq(d.status, 'active'))).for('update')
     return row
+  }
+
+  /** 按 id 顺序锁住要转移的文档（FOR UPDATE，与保存相同）：两次转移、转移与保存都按同一个顺序取锁，互相等待时不成环 */
+  async lockForTransfer(ids: readonly string[], transaction: Transaction): Promise<TransferCandidate[]> {
+    return executorOf(this.db, transaction)
+      .select({ id: d.id, spaceId: d.spaceId, status: d.status })
+      .from(d)
+      .where(inArray(d.id, [...ids]))
+      .orderBy(asc(d.id))
+      .for('update')
+  }
+
+  /** 移到另一个空间（调用方已锁住这些行）：写入代次加一（00 号计划书 §6.4）；更新时间不变，内容没有改 */
+  async moveToSpace(ids: readonly string[], spaceId: string, transaction: Transaction): Promise<void> {
+    await executorOf(this.db, transaction)
+      .update(d)
+      .set({ spaceId, writeEpoch: sql`${d.writeEpoch} + 1` })
+      .where(inArray(d.id, [...ids]))
   }
 
   async insert(document: NewDocument, transaction: Transaction): Promise<DocumentRow> {

@@ -133,7 +133,7 @@ describe('DocumentCreationService.create', () => {
     const missing = await rejection(service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID, spaceId: '0199a2c4-0000-7000-8000-0000000000ff' }, HTTP_ORIGIN))
     expect([forbidden.code, missing.code]).toEqual(['NOT_FOUND', 'NOT_FOUND'])
     expect(store.spaces.accessFactsOf).toHaveBeenCalledTimes(2)
-    expect(store.spaces.lockShared).not.toHaveBeenCalled()
+    expect(store.spaces.holdSpace).not.toHaveBeenCalled()
     expect(store.documents.size).toBe(0)
   })
 
@@ -146,15 +146,15 @@ describe('DocumentCreationService.create', () => {
   it('先判断、再对空间行取共享锁、锁下再判断：锁下发现已被移出，NOT_FOUND，不新建', async () => {
     const { store, service } = setup()
     store.setMember(TEAM_SPACE, BOB, 'editor')
-    store.spaces.lockShared.mockImplementationOnce(async () => {
+    store.spaces.holdSpace.mockImplementationOnce(async () => {
       store.setMember(TEAM_SPACE, BOB, undefined)
     })
     expect((await rejection(service.create(member(BOB), { type: 'sheet', requestId: REQUEST_ID, spaceId: TEAM_SPACE }, HTTP_ORIGIN))).code).toBe('NOT_FOUND')
     const [checked, rechecked] = store.spaces.accessFactsOf.mock.invocationCallOrder
-    const locked = store.spaces.lockShared.mock.invocationCallOrder[0] ?? Number.NaN
+    const locked = store.spaces.holdSpace.mock.invocationCallOrder[0] ?? Number.NaN
     expect(checked).toBeLessThan(locked)
     expect(locked).toBeLessThan(rechecked ?? Number.NaN)
-    expect(store.spaces.lockShared).toHaveBeenCalledWith(TEAM_SPACE, expect.anything())
+    expect(store.spaces.holdSpace).toHaveBeenCalledWith(TEAM_SPACE, expect.anything())
     expect(store.documents.size).toBe(0)
   })
 

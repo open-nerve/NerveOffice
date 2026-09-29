@@ -255,8 +255,16 @@ export class UsersService implements OnModuleInit {
    * 不存在或已停用时为 undefined；到提交之前，这个账户不会被停用（停用要锁同一行）
    */
   async holdActiveAccount(userId: string, transaction: Transaction): Promise<User | undefined> {
-    const account = await this.repository.lockShared(userId, transaction)
+    const account = await this.holdAccount(userId, transaction)
     return account?.status === 'active' ? account : undefined
+  }
+
+  /**
+   * 以共享锁持住一个账户，不论状态：转移的来源（要在锁里复核它仍是停用的，M2-P2 设计 §3.8）。
+   * 到提交之前不会被启用或停用（它们要锁同一行）；不存在时为 undefined
+   */
+  async holdAccount(userId: string, transaction: Transaction): Promise<User | undefined> {
+    return this.repository.lockShared(userId, transaction)
   }
 
   /**

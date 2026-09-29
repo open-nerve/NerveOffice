@@ -120,11 +120,12 @@ export class SpacesRepository {
   }
 
   /**
-   * 对空间行取 FOR SHARE：在空间里新建文档、作为转移的目标时用。
-   * 与改动空间与成员（FOR NO KEY UPDATE）互斥：归档、移出成员提交之后，锁下再判断就能看到（M2-P2 设计 §3.6）。
+   * 以共享锁读空间行（FOR SHARE）：在空间里新建文档、转移的来源与目标用。
+   * 与改动空间与成员（FOR NO KEY UPDATE）互斥：归档、移出成员提交之后，锁下再判断就能看到（M2-P2 设计 §3.6、§3.8）。
    */
-  async lockShared(spaceId: string, transaction: Transaction): Promise<void> {
-    await executorOf(this.db, transaction).select({ id: spaces.id }).from(spaces).where(eq(spaces.id, spaceId)).for('share')
+  async lockShared(spaceId: string, transaction: Transaction): Promise<SpaceRecord | undefined> {
+    const [row] = await executorOf(this.db, transaction).select(RECORD_COLUMNS).from(spaces).where(eq(spaces.id, spaceId)).for('share')
+    return row
   }
 
   /**

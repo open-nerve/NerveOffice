@@ -131,7 +131,7 @@ export class FakeStore {
     // 访问策略每判断一次，就是这里的一次查询：测试据此核对"不存在"与"看不到"的查询序列相同
     accessFactsOf: vi.fn(async (userId: string, spaceId: string) => this.factsOf(userId, spaceId)),
     visibleSpacesOf: vi.fn(async (userId: string) => [...this.spaceRecords.keys()].flatMap(id => this.factsOf(userId, id) ?? [])),
-    lockShared: vi.fn(async () => {}),
+    holdSpace: vi.fn(async (): Promise<unknown> => undefined),
   }
 
   /** 真实的访问策略 */

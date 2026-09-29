@@ -70,9 +70,9 @@ export class SpacesService {
     return this.repository.visibleCandidatesFor(userId)
   }
 
-  /** 对空间行取共享锁：在空间里新建文档、作为转移的目标（M2-P2 设计 §3.6、§3.8） */
-  async lockShared(spaceId: string, transaction: Transaction): Promise<void> {
-    await this.repository.lockShared(spaceId, transaction)
+  /** 以共享锁持住空间行再读：在空间里新建文档、转移的来源与目标（M2-P2 设计 §3.6、§3.8）；不存在时为 undefined */
+  async holdSpace(spaceId: string, transaction: Transaction): Promise<SpaceRecord | undefined> {
+    return this.repository.lockShared(spaceId, transaction)
   }
 
   /** 锁住空间行（FOR NO KEY UPDATE）再读：改动空间与成员的事务先锁它（锁的顺序见 M2-P2 设计 §3.9） */

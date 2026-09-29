@@ -63,7 +63,7 @@ export class DocumentCreationService {
       // 先判断（不加锁）：看不到与不能新建的请求不在空间行上取锁。再取共享锁、锁下再判断：
       // 与归档、移出成员（空间行的 FOR NO KEY UPDATE）互斥，它们提交之后的新建一定被拒绝
       await requireSpaceContent(this.policy, actor, spaceId, 'createDocuments', transaction)
-      await this.spaces.lockShared(spaceId, transaction)
+      await this.spaces.holdSpace(spaceId, transaction)
       const access = await requireSpaceContent(this.policy, actor, spaceId, 'createDocuments', transaction)
 
       const unitId = randomUUID()
