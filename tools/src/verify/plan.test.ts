@@ -46,6 +46,29 @@ describe('planSteps', () => {
   it('本机可以显式加上漏洞扫描', () => {
     expect(planSteps({ fast: true, ci: false, audit: true }).map(s => s.id).at(-1)).toBe('audit')
   })
+
+  it('CI 的分片：no-e2e 不跑 E2E，e2e 只构建与跑 E2E（产物门禁与漏洞扫描不重复执行）', () => {
+    expect(planSteps({ fast: false, ci: true, audit: false, scope: 'no-e2e' }).map(s => s.id)).toEqual([
+      'lint',
+      'typecheck',
+      'static-gates',
+      'tests',
+      'clean',
+      'build',
+      'artifact-gates',
+      'audit',
+    ])
+    expect(planSteps({ fast: false, ci: true, audit: false, scope: 'e2e' }).map(s => s.id)).toEqual(['clean', 'build', 'build-e2e', 'e2e'])
+  })
+
+  it('两个分片合起来与完整的一套一样：CI 分片之后不会有步骤漏掉（规范 §9：本机与 CI 执行同一套步骤）', () => {
+    const options = { fast: false, ci: true, audit: false } as const
+    const complete = planSteps({ ...options }).map(s => s.id)
+    const sharded = [...planSteps({ ...options, scope: 'no-e2e' }), ...planSteps({ ...options, scope: 'e2e' })].map(s => s.id)
+    expect(new Set(sharded)).toEqual(new Set(complete))
+    // 两片都构建（E2E 要用构建产物），除此之外没有重复执行的步骤
+    expect(sharded.filter((id, index) => sharded.indexOf(id) !== index)).toEqual(['clean', 'build'])
+  })
 })
 
 describe('runSteps', () => {
