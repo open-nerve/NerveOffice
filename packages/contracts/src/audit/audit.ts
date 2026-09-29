@@ -26,6 +26,19 @@ export const AUDIT_ACTIONS = [
   'users.disabled',
   'users.enabled',
   'users.system_role_changed',
+  // M2-P2：团队空间与成员。成员的变更以空间为对象，details 带成员的 id
+  'spaces.created',
+  'spaces.renamed',
+  'spaces.visibility_changed',
+  'spaces.archived',
+  'spaces.restored',
+  'spaces.member_added',
+  'spaces.member_role_changed',
+  'spaces.member_removed',
+  // 系统管理员把自己加入团队空间：要看内容先加入，这个操作单独记（00 号计划书 §5.2）
+  'spaces.admin_joined',
+  // M2-P2：停用者个人空间的文档转移到别处；只改所属空间，不读内容，不记标题
+  'documents.transferred',
 ] as const
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS)

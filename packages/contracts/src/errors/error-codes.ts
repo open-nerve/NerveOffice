@@ -35,6 +35,20 @@ export const ERROR_CODES = {
   LAST_ADMIN: { status: 409, message: '至少要保留一个有效的系统管理员' },
   /** 账户已停用，不能执行这个操作（例如签发重置链接） */
   ACCOUNT_DISABLED: { status: 409, message: '账户已停用' },
+  /** 指定的账户不存在或已停用：添加成员、首个空间管理员、转移的目标（M2-P2）。同事目录里只有有效账户，两种情况不区分 */
+  ACCOUNT_UNAVAILABLE: { status: 409, message: '这个账户不存在或已停用' },
+  /** 只有停用的账户，才能转移它个人空间里的文档（M2-P2） */
+  ACCOUNT_NOT_DISABLED: { status: 409, message: '账户仍然有效，只有停用的账户才能转移文档' },
+  /** 团队空间的名称已被使用：不区分大小写，已归档的也算（M2-P2） */
+  SPACE_NAME_TAKEN: { status: 409, message: '已有同名的团队空间' },
+  /** 要添加的人已经是这个空间的成员；改角色用调整的接口（M2-P2） */
+  ALREADY_MEMBER: { status: 409, message: '这个人已经是空间的成员' },
+  /** 这个操作会让团队空间一个空间管理员都不剩（M2-P2） */
+  LAST_SPACE_ADMIN: { status: 409, message: '团队空间至少要保留一个空间管理员' },
+  /** 目标空间已归档：不能把文档转移进去（M2-P2） */
+  SPACE_ARCHIVED: { status: 409, message: '空间已归档' },
+  /** 要转移的文档里，有的已经不在这个人的个人空间里（例如被别人转走了）：整批没有转移（M2-P2） */
+  TRANSFER_CONFLICT: { status: 409, message: '有文档已经不在这个人的个人空间里，请刷新后重试' },
   /** 邀请或重置链接不能用。details 带原因：没有这个令牌、已过期、已使用、已作废（linkInvalidDetailsSchema） */
   LINK_INVALID: { status: 410, message: '链接无效或已失效' },
   /** 请求体超过上限，或 JSON 的嵌套层数、元素数量超过上限 */

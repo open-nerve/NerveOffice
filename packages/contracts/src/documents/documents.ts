@@ -44,8 +44,12 @@ export const documentTitleSchema = z.string()
 export const DOCUMENT_LIST_DEFAULT_LIMIT = 50
 export const DOCUMENT_LIST_MAX_LIMIT = 100
 
-/** 列表的查询参数：每页条数与上一页给出的游标（不透明的字符串）。 */
+/**
+ * 列表的查询参数：按哪个空间列出、每页条数与上一页给出的游标（不透明的字符串）。
+ * 没有 spaceId 时是本人的个人空间（M1 兼容，M2 总设计 §6.4）。
+ */
 export const documentListQuerySchema = z.strictObject({
+  spaceId: z.uuid().optional(),
   limit: z.coerce.number().int().min(1).max(DOCUMENT_LIST_MAX_LIMIT).default(DOCUMENT_LIST_DEFAULT_LIMIT),
   cursor: z.string().min(1).max(512).optional(),
 })
@@ -91,12 +95,13 @@ export const documentIdSchema = z.uuid()
 
 /**
  * 新建文档（POST /api/documents）。requestId 由客户端为每一次新建生成：网络错误后用同一个 requestId 重试，
- * 服务端只建一份（P4 设计 §3.4）。
+ * 服务端只建一份（P4 设计 §3.4）。spaceId 是建在哪个空间（M2-P2），没有时建在本人的个人空间（M1 兼容）。
  */
 export const createDocumentRequestSchema = z.strictObject({
   type: z.enum(DOCUMENT_TYPES),
   title: documentTitleSchema.optional(),
   requestId: z.uuid(),
+  spaceId: z.uuid().optional(),
 })
 
 export type CreateDocumentRequest = z.input<typeof createDocumentRequestSchema>

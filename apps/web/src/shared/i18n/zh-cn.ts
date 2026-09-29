@@ -65,8 +65,18 @@ const AUDIT_ACTION_NAMES: Record<AuditAction, string> = {
   'users.disabled': '停用账户',
   'users.enabled': '启用账户',
   'users.system_role_changed': '变更系统角色',
+  'spaces.created': '创建团队空间',
+  'spaces.renamed': '空间改名',
+  'spaces.visibility_changed': '设置全员可见',
+  'spaces.archived': '归档空间',
+  'spaces.restored': '恢复空间',
+  'spaces.member_added': '添加成员',
+  'spaces.member_role_changed': '调整成员角色',
+  'spaces.member_removed': '移出成员',
+  'spaces.admin_joined': '系统管理员加入空间',
   'documents.created': '新建文档',
   'documents.content_saved': '保存文档',
+  'documents.transferred': '转移文档',
 }
 
 function isAuditAction(action: string): action is AuditAction {

@@ -64,6 +64,13 @@
       "when": 1790594886619,
       "tag": "0008_m2_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790645118417,
+      "tag": "0009_m2_team_spaces",
+      "breakpoints": true
     }
   ]
 }
