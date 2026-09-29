@@ -25,7 +25,7 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
   {
     name: 'injectorOf',
     origin: '@univerjs/core 的 Univer.__getInjector()（平台的封装）',
-    purpose: '取 Facade 没有暴露的服务：IFunctionService、IActiveDirtyManagerService，Worker 里的 LifecycleService，以及只读守卫的 IPermissionService、IUndoRedoService',
+    purpose: '取 Facade 没有暴露的服务：IFunctionService、IActiveDirtyManagerService，Worker 里的 LifecycleService，以及只读守卫的 IPermissionService、IUndoRedoService、IDrawingManagerService',
     evidence: 'M0-P3 报告 §7"取服务"；M0 的 create-editor.ts 经它取各项内部服务；P4 探针 (a)–(f) 全程使用',
     regression: 'E2E（S4）编辑器能打开并就绪：任何一处取服务失败都会按加载失败处理；单元测试 install-image-policy.test.ts、calculation-trigger.test.ts 核对取的是哪项服务',
   },
@@ -98,6 +98,37 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
     purpose: '编辑器身份：只读时授权服务允许的动作取它的 subType（UnitAction.Copy）：复制要求工作簿与工作表的复制权限点都为真',
     evidence: 'sheets 的 services/permission/permission-point/workbook/copy.ts（subType 为 UnitAction.Copy）；M0-P3 审查 R6（sheets-ui 的 commands/commands/clipboard.command.ts:155-161）',
     regression: `单元测试 identity/editor-authz-io.service.test.ts；${READ_ONLY_E2E}（复制可用）`,
+  },
+  {
+    name: 'IDrawingManagerService',
+    origin: '@univerjs/drawing 的图片管理服务（Facade 之外；与 @univerjs/sheets-drawing 的 ISheetDrawingService 是两个实例）',
+    purpose: '只读守卫（M2-P3 S3 的 E2E 发现之后）：applyWorksheetPoints 同一步里 setDrawingEditable(false)，之后画出来的浮动图片不挂变换框，点不中、拖不动',
+    evidence: [
+      'M2-P3 S3 的 E2E：只读时浮动图片照样能选中，拖动被权限检查拦下之后图片停在拖到的位置（模型没变，换表后复原）。',
+      '根因：drawing-ui 画图片时按这个服务的 getDrawingEditable() 决定是否挂变换框（services/drawing-render.service.ts:193-196，1.0.1 的 lib/es/index.js:857、915），它的初值是 true、没有别处改它；',
+      'sheets-drawing-ui 的 sheet-drawing-permission.controller.ts 按工作簿与工作表的"编辑"权限点只设 ISheetDrawingService 的同名标志（:150-193、312-433，渲染不读它），另外只对当时已经画出的对象摘掉变换框，',
+      '切到有图片的表时图片是之后才画的，照样挂上变换框。修复时实测：只设 ISheetDrawingService 的标志，三个浏览器上图片照样能选中、拖动；设这个服务的标志之后点不中、拖不动，能编辑时不受影响',
+    ].join(''),
+    regression: `单元测试 read-only/read-only-guard.test.ts（applyWorksheetPoints 之后图片不可编辑）；${READ_ONLY_E2E}（拖动与删除浮动图片：图片没有被选中，位置不变，快照不变；能编辑时的对照照常改动）`,
+  },
+  {
+    name: 'NOTE_TEXTAREA_SELECTOR',
+    origin: 'sheets-note-ui 的批注浮层给文本框的 DOM 标记 data-u-comp="note-textarea"（views/Note.tsx:156-158；design 的 Textarea 把它放在 <textarea> 上，1.0.1 的 lib/es/index.js:691）；平台对这个约定的封装',
+    purpose: '只读守卫（read-only/note-popup.ts）：在页面上观察批注浮层出现，把文本框设为只读',
+    evidence: 'M2-P3 S3 的 E2E：批注浮层总是可以输入的文本框（Note.tsx 没有只读的开关，打开时还会被程序聚焦，:98-106），只读时键入之后写回批注的 mutation 被防火墙取消、界面复原；修复时实测：设为只读之后键入不改内容，文字照常显示',
+    regression: `单元测试 read-only/note-popup.test.ts；${READ_ONLY_E2E}（悬停看到批注，文本框只读，键入之后内容不变）`,
+  },
+  {
+    name: 'FORMULA_BAR_INPUT_SELECTOR',
+    origin: 'sheets-ui 编辑栏的 DOM 标记：根元素 data-u-comp="formula-bar"、编辑框 formula-editor、左边的按钮 formula-bar-actions（views/formula-bar/FormulaBar.tsx:298-402）；平台对这个约定的封装',
+    purpose: '只读守卫（read-only/formula-bar.ts）：在页面上拦下落在编辑框与按钮上的指针事件，编辑栏点不进去',
+    evidence: [
+      'M2-P3 S3 的 E2E：只读时点过编辑栏，查找的快捷键失效、格式的快捷键转给文字编辑器。',
+      '根因：工作簿不可编辑、又没有保护规则时，FormulaBar.tsx:252-262 只聚焦编辑栏的内部编辑器，FOCUSING_FX_BAR_EDITOR 与 EDITOR_ACTIVATED（docs-ui 的 editor-manager.service.ts:197-225）置为真，',
+      '复位它们的 _exitInput（editing.render-controller.ts:870-874）只在单元格编辑器关闭时执行，只读时走不到。',
+      '修复时实测：sheets-ui 的 disableEdit 不行（单元格编辑器不渲染，复制与方向键失效；编辑框外层写着 pointer-events: auto，FormulaBar.tsx:374，照样点得进去）；拦下指针事件之后点编辑栏不再聚焦，查找、复制照常',
+    ].join(''),
+    regression: `单元测试 read-only/formula-bar.test.ts；${READ_ONLY_E2E}（编辑栏点不进去；点过编辑栏、在单元格上键入之后查找与复制照常）`,
   },
   {
     name: 'LifecycleService',

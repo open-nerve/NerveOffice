@@ -296,6 +296,26 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
     expect(await rulesFor('import { UniverSheetsPlugin } from \'@univerjs/sheets\'\n\nexport const p = UniverSheetsPlugin\n', EDITOR_FILE)).not.toContain('no-restricted-imports')
   })
 
+  it('只读守卫设图片不可编辑的服务（M2-P3 S3 之后的修复）在 internal-api 之外引用会失败；决定不用的表格图片服务同样受限；插件照常引用', async () => {
+    const cases = [
+      'import { IDrawingManagerService } from \'@univerjs/drawing\'\n\nexport const s = IDrawingManagerService\n',
+      'import type { IDrawingManagerService } from \'@univerjs/drawing\'\n\nexport type S = IDrawingManagerService\n',
+      'export { IDrawingManagerService as Drawings } from \'@univerjs/drawing\'\n',
+      'import * as drawing from \'@univerjs/drawing\'\n\nexport const d = drawing\n',
+      'import { ISheetDrawingService } from \'@univerjs/sheets-drawing\'\n\nexport const s = ISheetDrawingService\n',
+    ]
+    for (const file of [EDITOR_FILE, 'apps/web/src/editor/read-only/read-only-guard.ts']) {
+      for (const code of cases) {
+        const report = await lint(code, file)
+        expect(report.rules, `${file}\n${code}`).toContain('no-restricted-imports')
+        expect(report.messages.join('\n'), `${file}\n${code}`).toContain(INTERNAL_MESSAGE)
+      }
+    }
+    const plugins = 'import { UniverDrawingPlugin } from \'@univerjs/drawing\'\nimport { UniverSheetsDrawingPlugin } from \'@univerjs/sheets-drawing\'\n\nexport const p = [UniverDrawingPlugin, UniverSheetsDrawingPlugin]\n'
+    expect(await rulesFor(plugins, 'apps/web/src/editor/profile/sheet-profile.ts')).not.toContain('no-restricted-imports')
+    expect(await rulesFor('import { IDrawingManagerService } from \'@univerjs/drawing\'\n\nexport const s = IDrawingManagerService\n', INTERNAL_API_FILE)).not.toContain('no-restricted-imports')
+  })
+
   it('internal-api 里可以引用只读加固用到的内部符号（M2-P3 设计 §3.6）', async () => {
     const code = [
       'import { IPermissionService, IUndoRedoService } from \'@univerjs/core\'',
@@ -440,6 +460,9 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
       'WorksheetCopyPermission',
       'WorksheetViewPermission',
     ]))
+    // 浮动图片的可编辑（M2-P3 S3 之后的修复）
+    expect(editor.paths?.find(path => path.name === '@univerjs/drawing')?.importNames).toEqual(['IDrawingManagerService'])
+    expect(editor.paths?.find(path => path.name === '@univerjs/sheets-drawing')?.importNames).toEqual(['ISheetDrawingService'])
   })
 
   it('只有编辑器页的入口与编辑器页（sheet-editor 功能）能引用编辑器，而且只经公开入口', async () => {

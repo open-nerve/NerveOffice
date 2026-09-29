@@ -1,15 +1,31 @@
 import type { Univer } from '@univerjs/core'
 import type { FUniver } from '@univerjs/core/facade'
 import type { CommandEvent } from '../change-tracking/command-event.ts'
+import type { ReadOnlyGuard } from './read-only-guard.ts'
 import { CommandType } from '@univerjs/core'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { classifyCommand, EXCLUDED_EXECUTION_OPTIONS } from '../change-tracking/change-classifier.ts'
 import { toCommandRecord } from '../change-tracking/command-event.ts'
-import { getAllWorksheetPermissionPoint, getAllWorksheetPermissionPointByPointPanel, IPermissionService, IUndoRedoService, WorksheetCopyPermission, WorksheetViewPermission } from '../internal-api/index.ts'
-import { closedWorksheetPoints, installReadOnlyGuard } from './read-only-guard.ts'
+import { FORMULA_BAR_INPUT_SELECTOR, getAllWorksheetPermissionPoint, getAllWorksheetPermissionPointByPointPanel, IDrawingManagerService, IPermissionService, IUndoRedoService, NOTE_TEXTAREA_SELECTOR, WorksheetCopyPermission, WorksheetViewPermission } from '../internal-api/index.ts'
+import { closedWorksheetPoints, installReadOnlyGuard as install, READ_ONLY_GUARDED_COMMANDS } from './read-only-guard.ts'
 
 /** Facade 在执行前送出的事件：BeforeCommandExecute、BeforeUndo、BeforeRedo 都是这一种 */
 type FakeEvent = CommandEvent
+
+/** 装上的守卫在每个用例之后销毁：批注与编辑栏的处理挂在页面上，不能留给下一个用例 */
+const installed: ReadOnlyGuard[] = []
+
+function installReadOnlyGuard(...args: Parameters<typeof install>): ReadOnlyGuard {
+  const guard = install(...args)
+  installed.push(guard)
+  return guard
+}
+
+afterEach(() => {
+  for (const guard of installed.splice(0))
+    guard.dispose()
+  document.body.replaceChildren()
+})
 
 const UNIT = 'unit-1'
 const config = { unitId: UNIT, excludedMutationIds: ['sheet.operation.clear-drawing-transformer'] }
@@ -61,6 +77,7 @@ function fakeServices(existing: readonly string[] = []) {
     },
   }
   const undoRedo = { clearUndoRedo: vi.fn<(unitId: string) => void>() }
+  const drawings = { setDrawingEditable: vi.fn<(editable: boolean) => void>() }
   const univer = {
     __getInjector: () => ({
       get: (id: unknown) => {
@@ -68,11 +85,13 @@ function fakeServices(existing: readonly string[] = []) {
           return permissions
         if (id === IUndoRedoService)
           return undoRedo
-        throw new Error('只读守卫只取权限服务与撤销栈')
+        if (id === IDrawingManagerService)
+          return drawings
+        throw new Error('只读守卫只取权限服务、撤销栈与图片管理服务')
       },
     }),
   } as unknown as Univer
-  return { univer, points, added, undoRedo }
+  return { univer, points, added, undoRedo, drawings }
 }
 
 const edit: FakeEvent = { id: 'sheet.mutation.set-range-values', type: CommandType.MUTATION, params: { unitId: UNIT, subUnitId: 'sheet-1' } }
@@ -146,6 +165,74 @@ describe('只读守卫：mutation 防火墙（与变更检测同一个判定）'
   })
 })
 
+describe('只读守卫：只读时没有意义的界面操作（M2-P3 S3 之后的修复）', () => {
+  it('打开替换（查找面板里的"替换 / 高级查找"与 Ctrl/Cmd+H 都走它）在执行前取消；打开查找照常', () => {
+    const facade = fakeFacade()
+    installReadOnlyGuard(fakeServices().univer, facade.api, config)
+    expect(facade.fire('BeforeCommandExecute', { id: 'ui.operation.open-replace-dialog', type: CommandType.OPERATION, params: undefined }).cancel).toBe(true)
+    expect(facade.fire('BeforeCommandExecute', { id: 'ui.operation.open-find-dialog', type: CommandType.OPERATION, params: undefined }).cancel).toBeUndefined()
+  })
+
+  it('清单的每一项写明来源与原因，id 不重复', () => {
+    const ids = READ_ONLY_GUARDED_COMMANDS.map(command => command.id)
+    expect(ids).toEqual(['ui.operation.open-replace-dialog'])
+    expect(READ_ONLY_GUARDED_COMMANDS.every(command => command.source.trim() !== '')).toBe(true)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+})
+
+describe('只读守卫：批注浮层与编辑栏（M2-P3 S3 之后的修复）', () => {
+  /** MutationObserver 的回调在微任务里送达：等一个宏任务 */
+  async function mutationsDelivered(): Promise<void> {
+    await new Promise(resolve => setTimeout(resolve, 0))
+  }
+
+  function notePopup(): HTMLTextAreaElement {
+    const popup = document.createElement('div')
+    popup.innerHTML = '<textarea data-u-comp="note-textarea"></textarea>'
+    document.body.append(popup)
+    const textarea = popup.querySelector<HTMLTextAreaElement>(NOTE_TEXTAREA_SELECTOR)
+    if (textarea === null)
+      throw new Error('没有造出批注的文本框')
+    return textarea
+  }
+
+  function formulaBarEditor(): HTMLElement {
+    const bar = document.createElement('div')
+    bar.innerHTML = '<div data-u-comp="formula-bar"><div><div data-u-comp="formula-editor"><div class="input"></div></div></div></div>'
+    document.body.append(bar)
+    const input = bar.querySelector<HTMLElement>('.input')
+    if (input === null || input.closest(FORMULA_BAR_INPUT_SELECTOR) === null)
+      throw new Error('没有造出编辑栏的编辑框')
+    return input
+  }
+
+  it('装上守卫：之后出现的批注文本框设为只读；销毁之后不再处理', async () => {
+    const guard = installReadOnlyGuard(fakeServices().univer, fakeFacade().api, config)
+    const first = notePopup()
+    await mutationsDelivered()
+    expect(first.readOnly).toBe(true)
+    guard.dispose()
+    const later = notePopup()
+    await mutationsDelivered()
+    expect(later.readOnly).toBe(false)
+  })
+
+  it('装上守卫：落在编辑栏编辑框上的按下被拦下；销毁之后照常', () => {
+    const guard = installReadOnlyGuard(fakeServices().univer, fakeFacade().api, config)
+    const input = formulaBarEditor()
+    const received = vi.fn()
+    input.addEventListener('pointerdown', received)
+    const blocked = new Event('pointerdown', { bubbles: true, cancelable: true })
+    input.dispatchEvent(blocked)
+    expect(received).not.toHaveBeenCalled()
+    expect(blocked.defaultPrevented).toBe(true)
+    guard.dispose()
+    input.dispatchEvent(new Event('pointerdown', { bubbles: true, cancelable: true }))
+    expect(received).toHaveBeenCalledOnce()
+  })
+})
+
 describe('只读守卫：撤销与重做', () => {
   it('撤销与重做都被取消', () => {
     const facade = fakeFacade()
@@ -186,6 +273,15 @@ describe('只读守卫：工作表的本地权限点', () => {
     expect(keptIds('sheet-1').map(id => services.points.has(id))).toEqual([false, false])
   })
 
+  it('同一步里浮动图片设为不可编辑：渲染按图片管理服务的标志决定是否挂变换框（M2-P3 S3 之后的修复）', () => {
+    const facade = fakeFacade(['sheet-1'])
+    const services = fakeServices()
+    const guard = installReadOnlyGuard(services.univer, facade.api, config)
+    expect(services.drawings.setDrawingEditable).not.toHaveBeenCalled()
+    guard.applyWorksheetPoints()
+    expect(services.drawings.setDrawingEditable).toHaveBeenCalledExactlyOnceWith(false)
+  })
+
   it('工作簿还没有创建：报错，不改任何权限点', () => {
     const facade = fakeFacade(null)
     const services = fakeServices()
@@ -208,12 +304,13 @@ describe('只读守卫的销毁', () => {
     expect(facade.fire('BeforeRedo', { ...redo }).cancel).toBeUndefined()
   })
 
-  it('权限点不恢复：M3 的原地切换另外恢复', () => {
+  it('权限点与图片的可编辑不恢复：M3 的原地切换另外恢复', () => {
     const facade = fakeFacade(['sheet-1'])
     const services = fakeServices()
     const guard = installReadOnlyGuard(services.univer, facade.api, config)
     guard.applyWorksheetPoints()
     guard.dispose()
     expect(closedIds('sheet-1').every(id => services.points.get(id)?.value === false)).toBe(true)
+    expect(services.drawings.setDrawingEditable.mock.calls).toEqual([[false]])
   })
 })

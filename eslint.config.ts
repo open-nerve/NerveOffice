@@ -114,6 +114,18 @@ const UNIVER_INTERNAL_SYMBOLS = [
     ],
     message: INTERNAL_API_MESSAGE,
   },
+  {
+    // 只读守卫把浮动图片设为不可编辑：渲染读的是这个服务的标志（M2-P3 S3 的 E2E 发现之后）
+    name: '@univerjs/drawing',
+    importNames: ['IDrawingManagerService'],
+    message: INTERNAL_API_MESSAGE,
+  },
+  {
+    // 表格的图片服务：它的可编辑标志渲染不读（SDK 的权限控制器设的是它），决定不用；受限，免得绕过登记直接用
+    name: '@univerjs/sheets-drawing',
+    importNames: ['ISheetDrawingService'],
+    message: INTERNAL_API_MESSAGE,
+  },
 ]
 // 取服务的注入器：Univer.__getInjector()，以及 Univer、Facade 与各个对象上的私有字段 _injector（复验 RB4：
 // 方括号访问私有字段能通过类型检查，拿到的是同一个注入器）。点号访问、按标识符解构都算；这两个名字的字符串

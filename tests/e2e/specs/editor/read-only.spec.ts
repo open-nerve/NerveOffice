@@ -6,6 +6,8 @@
 //   只读时根本没有控制点的手势（填充柄、行高的分隔线）不产生命令，之后再点一个单元格，等名称框显示它（界面的输入按顺序处理）；
 // - 对照：作者（能编辑）逐项做同样的事，每项确实改动了内存快照（每项用新写的文档），只读时的"没变"才不是空断言；
 // - 另有界面的隐藏（同样以作者的界面作对照）、还能读、打开不产生改动、服务端拒绝保存、归档空间。
+// S3 的 E2E 发现的 5 个问题修复之后（只读守卫 editor/read-only/、语言包 editor/profile/locale.ts）：编辑栏点不进去（点过之后查找、
+// 复制照常）；拦下操作的提示是只读的说法；浮动图片点不中、拖不动；只读时打不开替换；批注浮层的文本框只读。
 // 用到探针（只在测试构建里）：标签 @test-build，外部模式测生产镜像时按标签排除（playwright.config.ts）。
 import type { BrowserContext, Locator, Page } from '@playwright/test'
 import type { TestUser } from '../../support/database.ts'
@@ -91,23 +93,35 @@ async function expectUnchanged(page: Page, baseline: string, mark: number): Prom
 
 /**
  * SDK 的权限检查拦下命令时弹出的提示（sheets-ui 的 sheet-permission-check-ui.controller.ts）。标题是"提示"，
- * 正文是 SDK 给保护区域写的"该范围已被保护，目前无……权限"
+ * 正文由平台的语言包改成只读的说法（editor/profile/locale.ts；SDK 的原文是给保护区域写的）
  */
 function permissionAlert(page: Page): Locator {
   return page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '提示', exact: true }) })
 }
 
-/** 关掉权限检查的提示（text 是提示里的一段话） */
+/** 关掉权限检查的提示：先核对它的说法（text），不再提保护、不让人联系创建者 */
 async function closePermissionAlert(page: Page, text: string): Promise<void> {
   const alert = permissionAlert(page)
   await expect(alert).toContainText(text)
+  await expect(alert).not.toContainText(/保护|创建者/)
   await alert.getByRole('button', { name: '确定', exact: true }).click()
   await expect(alert).toBeHidden()
 }
 
-const NO_EDIT = '无编辑权限'
-const NO_STYLE = '无设置样式权限'
-const NO_SHEET_OPERATION = '无操作工作表权限'
+/** 各种操作被拦下时的提示（与 editor/profile/locale.ts 的 READ_ONLY_PERMISSION_TEXTS 相同；E2E 引用不到 web 的代码） */
+const ALERT = {
+  edit: '这份文档只能查看，不能修改。',
+  paste: '这份文档只能查看，不能粘贴。',
+  cut: '这份文档只能查看，不能剪切。',
+  style: '这份文档只能查看，不能修改格式。',
+  sheet: '这份文档只能查看，不能调整工作表。',
+  rowCol: '这份文档只能查看，不能调整行列。',
+  insertRowCol: '这份文档只能查看，不能插入行列。',
+  removeRowCol: '这份文档只能查看，不能删除行列。',
+  image: '这份文档只能查看，不能修改图片。',
+  conditionalFormat: '这份文档只能查看，不能修改条件格式。',
+  dataValidation: '这份文档只能查看，不能修改数据验证。',
+} as const
 
 /** 一步操作之后等到的信号 */
 type Outcome
@@ -115,11 +129,8 @@ type Outcome
   = | { readonly executed: string }
   /** 被只读守卫（超链接是入口守卫）取消：执行前的记录里 canceled 为真 */
     | { readonly canceled: string }
-  /**
-   * 被 SDK 的权限检查拦下：只有执行前的记录。拦下时 SDK 弹出提示（alert 是提示里的一段话），关掉它；
-   * 查找替换的面板开着时提示要等面板关掉才显示，改为等外层的命令（until）执行完，关掉面板之后再关提示
-   */
-    | { readonly blocked: string, readonly alert: string } | { readonly blocked: string, readonly until: string }
+  /** 被 SDK 的权限检查拦下：只有执行前的记录。拦下时 SDK 弹出提示（alert 是提示的说法），关掉它 */
+    | { readonly blocked: string, readonly alert: string }
   /** 不产生这条命令（只读时这个手势没有控制点）：之后点 thenClick 这一格，等名称框显示它，确认手势已经处理完 */
     | { readonly absent: string, readonly thenClick: string }
 
@@ -132,10 +143,7 @@ async function settle(page: Page, mark: number, outcome: Outcome): Promise<void>
   }
   else if ('blocked' in outcome) {
     await waitForCommand(page, mark, { phase: 'before', id: outcome.blocked, canceled: false })
-    if ('alert' in outcome)
-      await closePermissionAlert(page, outcome.alert)
-    else
-      await waitForCommand(page, mark, { phase: 'executed', id: outcome.until })
+    await closePermissionAlert(page, outcome.alert)
     expect(await probeCommands(page, mark)).not.toContainEqual(expect.objectContaining({ phase: 'executed', id: outcome.blocked }))
   }
   else {
@@ -176,26 +184,58 @@ async function showSheet(page: Page, name: string): Promise<void> {
   await expect(sheetTab(page, name)).toHaveAttribute('aria-selected', 'true')
 }
 
+interface Point {
+  readonly x: number
+  readonly y: number
+}
+
+/** 鼠标移到页面上的这一点，读画布的光标。每次挪一个像素：同一个位置再移动一次，浏览器不一定再送出移动的事件 */
+async function cursorAt(page: Page, point: Point, nudge: number): Promise<string> {
+  await page.mouse.move(point.x + nudge, point.y)
+  return sheetCanvas(page).evaluate(canvas => getComputedStyle(canvas).cursor)
+}
+
 /**
- * 点"功能"表 J2 上的浮动图片（120×80，锚在 J2 的左上角），等到它被选中，返回它的中心在页面上的位置。
- * 刚切到这张表时图片可能还没画好（点到的是下面的单元格）：先把鼠标移到图片上，等光标变成 grab（SDK 给图片挂的变换框，
- * 两种打开方式都一样，选中前后也一样）；再点一次（不重复点：SDK 把间隔很短的两次按下当作双击，只读时双击图片会打开图片库）；
- * 然后等探针报告选中了一张
+ * 等到页面上这一点有画出来的图片：鼠标移上去光标是 grab（drawing-ui 给画出来的每张图片挂的，与能不能编辑无关，
+ * lib/es/index.js 的 _addHoverForImage）。刚切到有图片的表时图片可能还没画好，点到的是下面的单元格
  */
-async function selectImage(page: Page): Promise<{ x: number, y: number }> {
-  const origin = await canvasOrigin(page)
-  const j2 = await cellRect(page, 'J2')
-  const center = { x: origin.x + j2.startX + 60, y: origin.y + j2.startY + 40 }
-  // 每次挪一个像素：同一个位置再移动一次，浏览器不一定再送出移动的事件
+async function expectImageAt(page: Page, point: Point): Promise<void> {
   let nudge = 0
   await expect.poll(async () => {
     nudge = 1 - nudge
-    await page.mouse.move(center.x + nudge, center.y)
-    return sheetCanvas(page).evaluate(canvas => getComputedStyle(canvas).cursor)
-  }, { message: '等"功能"表的浮动图片画出来（鼠标移上去是 grab）' }).toBe('grab')
-  await page.mouse.click(center.x, center.y)
-  await expect.poll(async () => activeImageCount(page), { message: '等图片被选中' }).toBe(1)
+    return cursorAt(page, point, nudge)
+  }, { message: '等这里的浮动图片画出来（鼠标移上去是 grab）' }).toBe('grab')
+}
+
+/** "功能"表 J2 上的浮动图片（120×80，锚在 J2 的左上角）画出来之后，它的中心在页面上的位置 */
+async function imageCenter(page: Page): Promise<Point> {
+  const origin = await canvasOrigin(page)
+  const j2 = await cellRect(page, 'J2')
+  const center = { x: origin.x + j2.startX + 60, y: origin.y + j2.startY + 40 }
+  await expectImageAt(page, center)
   return center
+}
+
+/**
+ * 点图片：能编辑时等探针报告选中了一张；只读时图片没有变换框（只读守卫把图片设为不可编辑），点了也不选中。
+ * 只点一次：SDK 把间隔很短的两次按下当作双击，双击图片会打开图片库
+ */
+async function clickImage(page: Page, mode: Mode, center: Point): Promise<void> {
+  await page.mouse.click(center.x, center.y)
+  if (mode === 'edit')
+    await expect.poll(async () => activeImageCount(page), { message: '等图片被选中' }).toBe(1)
+}
+
+/**
+ * 只读时（手势处理完之后）：mark 之后没有移动、删除图片的命令，图片没有被选中，还在原处（原来的中心仍是 grab），不在 moved 这一点
+ */
+async function expectImageUnmoved(page: Page, mark: number, center: Point, moved?: Point): Promise<void> {
+  const imageCommands = (await probeCommands(page, mark)).filter(command => ['sheet.command.set-sheet-image', 'sheet.command.remove-sheet-image'].includes(command.id))
+  expect(imageCommands, '没有移动、删除图片的命令').toEqual([])
+  expect(await activeImageCount(page), '图片没有被选中').toBe(0)
+  await expectImageAt(page, center)
+  if (moved !== undefined)
+    expect(await cursorAt(page, moved, 0), '拖到的位置没有图片').not.toBe('grab')
 }
 
 /** 等两个动画帧：SDK 在动画帧里结算的状态（标签的拖动位置、右键菜单的弹出）这时已经处理完 */
@@ -215,7 +255,7 @@ const TYPING: Entry = {
     await clickCell(page, 'K3')
     // 只读时第一个字要打开单元格编辑器，被权限检查拦下（弹出提示，后面的字进不了单元格）；关掉提示后回车照常把选区下移
     await step(page, mode, async () => page.keyboard.type('123'), {
-      read: { blocked: 'sheet.operation.set-cell-edit-visible', alert: NO_EDIT },
+      read: { blocked: 'sheet.operation.set-cell-edit-visible', alert: ALERT.edit },
       edit: { executed: 'sheet.operation.set-cell-edit-visible' },
     })
     await step(page, mode, async () => page.keyboard.press('Enter'), {
@@ -225,6 +265,18 @@ const TYPING: Entry = {
   },
 }
 
+/** 编辑栏的编辑框（点它）与接收输入的元素（SDK 聚焦的是它：docs-ui 给编辑器的 id） */
+function formulaBarEditor(page: Page): Locator {
+  return page.locator('[data-u-comp="formula-bar"] [data-u-comp="formula-editor"]')
+}
+
+function formulaBarInput(page: Page): Locator {
+  return page.locator('[id="__editor___INTERNAL_EDITOR__DOCS_FORMULA_BAR"]')
+}
+
+/** 编辑栏内部文档的单元：只读时这个单元上不应该有任何命令（编辑栏没有收到输入） */
+const FORMULA_BAR_UNIT = '__INTERNAL_EDITOR__DOCS_FORMULA_BAR'
+
 // M0 的界面入口（U 类 7 项，spikes/m0/e2e/v09-read-mode.spec.ts 的 37–102、115–132 行）
 const UI_ENTRIES: readonly Entry[] = [
   TYPING,
@@ -233,7 +285,7 @@ const UI_ENTRIES: readonly Entry[] = [
     run: async (page, mode) => {
       await clickCell(page, 'A2')
       await step(page, mode, async () => page.keyboard.press('Delete'), {
-        read: { blocked: 'sheet.command.clear-selection-content', alert: NO_EDIT },
+        read: { blocked: 'sheet.command.clear-selection-content', alert: ALERT.edit },
         edit: { executed: 'sheet.command.clear-selection-content' },
       })
     },
@@ -245,7 +297,7 @@ const UI_ENTRIES: readonly Entry[] = [
       await step(page, mode, async () => page.keyboard.press('ControlOrMeta+C'), { read: { executed: 'univer.command.copy' }, edit: { executed: 'univer.command.copy' } })
       await clickCell(page, 'K6')
       await step(page, mode, async () => page.keyboard.press('ControlOrMeta+V'), {
-        read: { blocked: 'sheet.command.paste-by-short-key', alert: '无粘贴权限' },
+        read: { blocked: 'sheet.command.paste-by-short-key', alert: ALERT.paste },
         edit: { executed: 'sheet.command.paste-by-short-key' },
       })
     },
@@ -255,12 +307,12 @@ const UI_ENTRIES: readonly Entry[] = [
     run: async (page, mode) => {
       await clickCell(page, 'A3')
       await step(page, mode, async () => page.keyboard.press('ControlOrMeta+X'), {
-        read: { blocked: 'univer.command.cut', alert: '无剪切权限' },
+        read: { blocked: 'univer.command.cut', alert: ALERT.cut },
         edit: { executed: 'univer.command.cut' },
       })
       await clickCell(page, 'K7')
       await step(page, mode, async () => page.keyboard.press('ControlOrMeta+V'), {
-        read: { blocked: 'sheet.command.paste-by-short-key', alert: '无粘贴权限' },
+        read: { blocked: 'sheet.command.paste-by-short-key', alert: ALERT.paste },
         edit: { executed: 'sheet.command.paste-by-short-key' },
       })
     },
@@ -288,13 +340,15 @@ const UI_ENTRIES: readonly Entry[] = [
     name: '编辑栏：选中 K5，点编辑栏，键入后回车',
     run: async (page, mode) => {
       await clickCell(page, 'K5')
-      await page.locator('[data-u-comp="formula-bar"] [data-u-comp="formula-editor"]').click()
+      // 只读时编辑栏点不进去（只读守卫在页面上拦下落在编辑框上的指针事件）：焦点还在表格上，键入的字交给单元格，照常被权限检查拦下
+      await formulaBarEditor(page).click()
+      await (mode === 'edit' ? expect(formulaBarInput(page)).toBeFocused() : expect(formulaBarInput(page)).not.toBeFocused())
       await step(page, mode, async () => page.keyboard.type('编辑栏输入'), {
-        read: { blocked: 'doc.command.insert-text', alert: NO_EDIT },
+        read: { blocked: 'sheet.operation.set-cell-edit-visible', alert: ALERT.edit },
         edit: { executed: 'doc.command.insert-text' },
       })
       await step(page, mode, async () => page.keyboard.press('Enter'), {
-        read: { executed: 'sheet.operation.set-cell-edit-visible' },
+        read: { executed: 'sheet.command.move-selection-enter-tab' },
         edit: { executed: 'sheet.command.set-range-values' },
       })
     },
@@ -323,8 +377,9 @@ const UI_ENTRIES: readonly Entry[] = [
 ]
 
 /**
- * 查找替换：把"苹果"全部替换为"苹果X"。写成函数声明：lint 的 playwright/no-standalone-expect 把跟在内联箭头函数参数之后的
- * expect 误判为不在用例里（它在箭头函数退出时弹出了外层的记录）
+ * 查找替换：把"苹果"全部替换为"苹果X"。只读时打不开替换（只读守卫在执行前取消打开替换的操作）：查找面板里的"替换 / 高级查找"
+ * 与替换的快捷键都进不了替换，查找照常。
+ * 写成函数声明：lint 的 playwright/no-standalone-expect 把跟在内联箭头函数参数之后的 expect 误判为不在用例里
  */
 async function findAndReplaceAll(page: Page, mode: Mode): Promise<void> {
   await clickCell(page, 'C8')
@@ -335,33 +390,40 @@ async function findAndReplaceAll(page: Page, mode: Mode): Promise<void> {
   await findText.press('Enter')
   // "数据"表里 A2 与 G2（公式的结果）两处
   await expect(find).toContainText(/[12]\/2/)
-  // 只读时替换照样能打开（SDK 没有按权限隐藏它），全部替换被拦下
-  await find.getByText('替换 / 高级查找').click()
-  await find.getByRole('textbox', { name: '输入替换内容' }).fill('苹果X')
+  await step(page, mode, async () => find.getByText('替换 / 高级查找').click(), {
+    read: { canceled: 'ui.operation.open-replace-dialog' },
+    edit: { executed: 'ui.operation.open-replace-dialog' },
+  })
+  const replaceText = find.getByRole('textbox', { name: '输入替换内容' })
+  if (mode === 'read') {
+    await expect(replaceText).toHaveCount(0)
+    await expect(find).toContainText(/[12]\/2/)
+    await find.getByRole('button', { name: 'Close' }).click()
+    await expect(find).toBeHidden()
+    // 替换的快捷键：苹果的平台上也是 Control+H（find-replace 的 find-replace.shortcut.ts:78-88，mac 绑定的是 MAC_CTRL）
+    await step(page, mode, async () => page.keyboard.press('Control+H'), { read: { canceled: 'ui.operation.open-replace-dialog' } })
+    await expect(find).toHaveCount(0)
+    return
+  }
+  await replaceText.fill('苹果X')
   await find.getByRole('button', { name: '替换全部', exact: true }).click()
   await step(page, mode, async () => page.getByRole('dialog', { name: '确定要替换所有的匹配项吗？' }).getByRole('button', { name: '确定', exact: true }).click(), {
-    read: { blocked: 'sheet.command.set-range-values', until: 'ui.command.replace-all-matches' },
     edit: { executed: 'ui.command.replace-all-matches' },
   })
-  if (mode === 'read')
-    await expect(page.getByText('替换失败', { exact: true })).toBeVisible()
   await find.getByRole('button', { name: 'Close' }).click()
   await expect(find).toBeHidden()
-  // 只读时权限检查的提示在面板开着时不显示，关掉面板之后才出来（三个浏览器相同）
-  if (mode === 'read')
-    await closePermissionAlert(page, NO_EDIT)
 }
 
 // 界面上还能碰到的其他入口（只读时的界面没有工具栏与右键菜单，但快捷键、工作表标签、全部工作表的菜单、图片、批注的浮层与查找替换还在）
 const OTHER_UI_ENTRIES: readonly Entry[] = [
-  { name: '查找替换：把"苹果"全部替换为"苹果X"', run: findAndReplaceAll },
+  { name: '查找替换：把"苹果"全部替换为"苹果X"（只读时打不开替换）', run: findAndReplaceAll },
   {
     name: '格式的快捷键：A2 按 Ctrl/Cmd+B、I、U',
     run: async (page, mode) => {
       await clickCell(page, 'A2')
       for (const key of ['B', 'I', 'U']) {
         await step(page, mode, async () => page.keyboard.press(`ControlOrMeta+${key}`), {
-          read: { blocked: 'sheet.command.set-style', alert: NO_STYLE },
+          read: { blocked: 'sheet.command.set-style', alert: ALERT.style },
           edit: { executed: 'sheet.command.set-style' },
         })
       }
@@ -406,7 +468,7 @@ const OTHER_UI_ENTRIES: readonly Entry[] = [
         await nextFrames(page)
         await page.mouse.up()
       }, {
-        read: { blocked: 'sheet.command.set-worksheet-order', alert: NO_SHEET_OPERATION },
+        read: { blocked: 'sheet.command.set-worksheet-order', alert: ALERT.sheet },
         edit: { executed: 'sheet.command.set-worksheet-order' },
       })
     },
@@ -416,37 +478,48 @@ const OTHER_UI_ENTRIES: readonly Entry[] = [
     run: async (page, mode) => {
       await allSheetsMenuButton(page).click()
       await step(page, mode, async () => page.getByRole('menuitem', { name: SAMPLE_SHEETS.hidden.name, exact: true }).click(), {
-        read: { blocked: 'sheet.command.set-worksheet-show', alert: NO_SHEET_OPERATION },
+        read: { blocked: 'sheet.command.set-worksheet-show', alert: ALERT.sheet },
         edit: { executed: 'sheet.command.set-worksheet-show' },
       })
     },
   },
   {
-    name: '删除浮动图片：选中后按删除键',
+    name: '删除浮动图片：点图片后按删除键',
     run: async (page, mode) => {
       await showSheet(page, SAMPLE_SHEETS.features.name)
-      await selectImage(page)
+      const image = await imageCenter(page)
+      const mark = await commandMark(page)
+      await clickImage(page, mode, image)
+      // 只读时图片没有被选中，删除键删的是选中的单元格（被权限检查拦下），不是图片
       await step(page, mode, async () => page.keyboard.press(DELETE_DRAWING_KEY), {
-        read: { blocked: 'sheet.command.remove-sheet-image', alert: NO_EDIT },
+        read: { blocked: 'sheet.command.clear-selection-content', alert: ALERT.edit },
         edit: { executed: 'sheet.command.remove-sheet-image' },
       })
+      if (mode === 'read')
+        await expectImageUnmoved(page, mark, image)
     },
   },
   {
     name: '拖动浮动图片："功能"表 J2 的图片',
-    // 只读时拖动被拦下之后，图片在界面上停在拖到的位置（模型没变，切换工作表后复原）：排在其他图片的入口之后
+    // 修复之前，只读时拖动被拦下之后图片在界面上停在拖到的位置（模型没变，切换工作表后复原）
     run: async (page, mode) => {
       await showSheet(page, SAMPLE_SHEETS.features.name)
-      const image = await selectImage(page)
+      const image = await imageCenter(page)
+      const mark = await commandMark(page)
+      await clickImage(page, mode, image)
+      const target = { x: image.x + 100, y: image.y + 60 }
+      // 只读时图片没有变换框，这一拖什么命令都不产生：之后点一个单元格，等名称框显示它
       await step(page, mode, async () => {
         await page.mouse.move(image.x, image.y)
         await page.mouse.down()
-        await page.mouse.move(image.x + 100, image.y + 60, { steps: 10 })
+        await page.mouse.move(target.x, target.y, { steps: 10 })
         await page.mouse.up()
       }, {
-        read: { blocked: 'sheet.command.set-sheet-image', alert: NO_EDIT },
+        read: { absent: 'sheet.command.set-sheet-image', thenClick: 'A12' },
         edit: { executed: 'sheet.command.set-sheet-image' },
       })
+      if (mode === 'read')
+        await expectImageUnmoved(page, mark, image, target)
     },
   },
   {
@@ -454,14 +527,16 @@ const OTHER_UI_ENTRIES: readonly Entry[] = [
     run: async (page, mode) => {
       await showSheet(page, SAMPLE_SHEETS.features.name)
       await sheetCanvas(page).hover({ position: await cellCenter(page, 'H1') })
-      // 只读时批注的浮层照样可以输入（SDK 没有按权限设成只读），离开时写回批注的 mutation 被防火墙取消
+      // 只读时批注浮层的文本框是只读的（只读守卫给它设 readOnly）：键入之后内容不变，离开时也就没有写回批注的命令
       const note = page.getByRole('textbox', { name: '在此输入' })
       await expect(note).toHaveValue(SAMPLE_CELLS.note)
+      await expect(note).toHaveJSProperty('readOnly', mode === 'read')
       await note.click()
       await page.keyboard.press('End')
       await page.keyboard.type('（改）')
+      await expect(note).toHaveValue(mode === 'read' ? SAMPLE_CELLS.note : `${SAMPLE_CELLS.note}（改）`)
       await step(page, mode, async () => clickCell(page, 'B8'), {
-        read: { canceled: 'sheet.mutation.update-note' },
+        read: { absent: 'sheet.command.update-note', thenClick: 'C9' },
         edit: { executed: 'sheet.mutation.update-note' },
       })
     },
@@ -500,29 +575,29 @@ const FACADE_ENTRIES: readonly FacadeEntry[] = [
   { name: '排序', call: ({ sheet }) => sheet.getRange('A2:F6').sort({ column: 1, ascending: false }), read: { canceled: 'sheet.mutation.reorder-range' }, edit: { executed: 'sheet.command.sort-range' } },
   { name: '新增工作表', call: ({ workbook }) => workbook.insertSheet('新表'), read: { canceled: 'sheet.mutation.insert-sheet' }, edit: { executed: 'sheet.command.insert-sheet' } },
   { name: '删除工作表', call: ({ workbook }) => workbook.deleteSheet(workbook.getSheetByName('汇总')), read: { canceled: 'sheet.mutation.remove-sheet' }, edit: { executed: 'sheet.command.remove-sheet' } },
-  { name: '工作表改名', call: ({ workbook }) => workbook.getSheetByName('汇总').setName('汇总二'), read: { blocked: 'sheet.command.set-worksheet-name', alert: NO_SHEET_OPERATION }, edit: { executed: 'sheet.command.set-worksheet-name' } },
+  { name: '工作表改名', call: ({ workbook }) => workbook.getSheetByName('汇总').setName('汇总二'), read: { blocked: 'sheet.command.set-worksheet-name', alert: ALERT.sheet }, edit: { executed: 'sheet.command.set-worksheet-name' } },
   { name: '复制工作表', call: ({ workbook }) => workbook.duplicateSheet(workbook.getSheetByName('汇总')), read: { canceled: 'sheet.mutation.insert-sheet' }, edit: { executed: 'sheet.command.copy-sheet' } },
   { name: '隐藏工作表', call: ({ workbook }) => workbook.getSheetByName('汇总').hideSheet(), read: { canceled: 'sheet.mutation.set-worksheet-hidden' }, edit: { executed: 'sheet.command.set-worksheet-hidden' } },
-  { name: '移动工作表', call: ({ workbook }) => workbook.moveSheet(workbook.getSheetByName('汇总'), 0), read: { blocked: 'sheet.command.set-worksheet-order', alert: NO_SHEET_OPERATION }, edit: { executed: 'sheet.command.set-worksheet-order' } },
-  { name: '移动图片', call: async ({ workbook }) => workbook.getSheetByName('功能').getImages()[0]?.setPositionAsync(12, 12), read: { blocked: 'sheet.command.set-sheet-image', alert: NO_EDIT }, edit: { executed: 'sheet.command.set-sheet-image' } },
-  { name: '删除图片', call: ({ workbook }) => workbook.getSheetByName('功能').getImages()[0]?.remove(), read: { blocked: 'sheet.command.remove-sheet-image', alert: NO_EDIT }, edit: { executed: 'sheet.command.remove-sheet-image' } },
-  { name: '缩放图片', call: async ({ workbook }) => workbook.getSheetByName('功能').getImages()[0]?.setSizeAsync(200, 150), read: { blocked: 'sheet.command.set-sheet-image', alert: NO_EDIT }, edit: { executed: 'sheet.command.set-sheet-image' } },
-  { name: '设行高', call: ({ sheet }) => sheet.setRowHeight(5, 40), read: { blocked: 'sheet.command.set-row-height', alert: '无设置行列样式权限' }, edit: { executed: 'sheet.command.set-row-height' } },
-  { name: '插入行', call: ({ sheet }) => sheet.insertRowAfter(3), read: { blocked: 'sheet.command.insert-row-by-range', alert: '无插入行列权限' }, edit: { executed: 'sheet.command.insert-row-by-range' } },
-  { name: '删除行', call: ({ sheet }) => sheet.deleteRows(16, 1), read: { blocked: 'sheet.command.remove-row-by-range', alert: '无删除行列权限' }, edit: { executed: 'sheet.command.remove-row-by-range' } },
+  { name: '移动工作表', call: ({ workbook }) => workbook.moveSheet(workbook.getSheetByName('汇总'), 0), read: { blocked: 'sheet.command.set-worksheet-order', alert: ALERT.sheet }, edit: { executed: 'sheet.command.set-worksheet-order' } },
+  { name: '移动图片', call: async ({ workbook }) => workbook.getSheetByName('功能').getImages()[0]?.setPositionAsync(12, 12), read: { blocked: 'sheet.command.set-sheet-image', alert: ALERT.image }, edit: { executed: 'sheet.command.set-sheet-image' } },
+  { name: '删除图片', call: ({ workbook }) => workbook.getSheetByName('功能').getImages()[0]?.remove(), read: { blocked: 'sheet.command.remove-sheet-image', alert: ALERT.image }, edit: { executed: 'sheet.command.remove-sheet-image' } },
+  { name: '缩放图片', call: async ({ workbook }) => workbook.getSheetByName('功能').getImages()[0]?.setSizeAsync(200, 150), read: { blocked: 'sheet.command.set-sheet-image', alert: ALERT.image }, edit: { executed: 'sheet.command.set-sheet-image' } },
+  { name: '设行高', call: ({ sheet }) => sheet.setRowHeight(5, 40), read: { blocked: 'sheet.command.set-row-height', alert: ALERT.rowCol }, edit: { executed: 'sheet.command.set-row-height' } },
+  { name: '插入行', call: ({ sheet }) => sheet.insertRowAfter(3), read: { blocked: 'sheet.command.insert-row-by-range', alert: ALERT.insertRowCol }, edit: { executed: 'sheet.command.insert-row-by-range' } },
+  { name: '删除行', call: ({ sheet }) => sheet.deleteRows(16, 1), read: { blocked: 'sheet.command.remove-row-by-range', alert: ALERT.removeRowCol }, edit: { executed: 'sheet.command.remove-row-by-range' } },
   { name: '合并单元格', call: ({ sheet }) => sheet.getRange('K10:L11').merge(), read: { canceled: 'sheet.mutation.add-worksheet-merge' }, edit: { executed: 'sheet.command.add-worksheet-merge' } },
-  { name: '加粗', call: ({ sheet }) => sheet.getRange('A2:B3').setFontWeight('bold'), read: { blocked: 'sheet.command.set-style', alert: NO_STYLE }, edit: { executed: 'sheet.command.set-style' } },
+  { name: '加粗', call: ({ sheet }) => sheet.getRange('A2:B3').setFontWeight('bold'), read: { blocked: 'sheet.command.set-style', alert: ALERT.style }, edit: { executed: 'sheet.command.set-style' } },
   {
     name: '条件格式',
     call: ({ sheet }) => sheet.addConditionalFormattingRule(sheet.newConditionalFormattingRule().whenCellNotEmpty().setRanges([sheet.getRange('K1:K20').getRange()]).setBackground('#fecaca').build()),
-    read: { blocked: 'sheet.command.add-conditional-rule', alert: NO_STYLE },
+    read: { blocked: 'sheet.command.add-conditional-rule', alert: ALERT.conditionalFormat },
     edit: { executed: 'sheet.command.add-conditional-rule' },
   },
-  { name: '数据验证', call: ({ api, sheet }) => sheet.getRange('K20:K25').setDataValidation(api.newDataValidation().requireNumberBetween(1, 10).build()), read: { blocked: 'sheet.command.addDataValidation', alert: NO_STYLE }, edit: { executed: 'sheet.command.addDataValidation' } },
+  { name: '数据验证', call: ({ api, sheet }) => sheet.getRange('K20:K25').setDataValidation(api.newDataValidation().requireNumberBetween(1, 10).build()), read: { blocked: 'sheet.command.addDataValidation', alert: ALERT.dataValidation }, edit: { executed: 'sheet.command.addDataValidation' } },
   // M5 之前两种方式都被入口守卫取消（P4 设计 §3.6.8）：能编辑时同样不改动，对照组另有"取消已有的超链接"
   { name: '超链接', call: async ({ sheet }) => sheet.getRange('K31').setHyperLink('https://example.com/new', '新链接'), read: { canceled: 'sheets.command.add-hyper-link' }, edit: { canceled: 'sheets.command.add-hyper-link' }, unchangedWhenEditable: true },
   { name: '批注', call: ({ sheet }) => sheet.getRange('K30').createOrUpdateNote({ note: '新备注', width: 160, height: 60 }), read: { canceled: 'sheet.mutation.update-note' }, edit: { executed: 'sheet.mutation.update-note' } },
-  { name: '全部替换', call: async ({ api }) => (await api.createTextFinderAsync('苹果')).replaceAllWithAsync('苹果X'), read: { blocked: 'sheet.command.set-range-values', alert: NO_EDIT }, edit: { executed: 'sheet.command.replace' } },
+  { name: '全部替换', call: async ({ api }) => (await api.createTextFinderAsync('苹果')).replaceAllWithAsync('苹果X'), read: { blocked: 'sheet.command.set-range-values', alert: ALERT.edit }, edit: { executed: 'sheet.command.replace' } },
   { name: '取消已有的超链接（"功能"表 H3）', call: ({ workbook }) => workbook.getSheetByName('功能').getRange('H3').cancelHyperLink(), read: { canceled: 'sheet.mutation.set-range-values' }, edit: { executed: 'sheets.command.cancel-hyper-link' } },
 ]
 
@@ -714,8 +789,48 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
 
     await showSheet(page, SAMPLE_SHEETS.features.name)
     await sheetCanvas(page).hover({ position: await cellCenter(page, 'H1') })
-    await expect(page.getByRole('textbox', { name: '在此输入' })).toHaveValue(SAMPLE_CELLS.note)
+    const note = page.getByRole('textbox', { name: '在此输入' })
+    await expect(note).toHaveValue(SAMPLE_CELLS.note)
+    // 批注的文本框是只读的：文字照常显示（M2-P3 S3 之后的修复）
+    await expect(note).toHaveJSProperty('readOnly', true)
 
+    await expectUnchanged(page, opened, mark)
+    expect(watched.saves).toEqual([])
+    expect(watched.pageErrors).toEqual([])
+  })
+
+  test('编辑栏点不进去：点过编辑栏、在单元格上键入之后，查找、复制与格式的快捷键照常（M2-P3 S3 之后的修复）', async ({ page, context, browserName }) => {
+    const s = await scene('ro-bar')
+    const watched = watch(page, s.documentId)
+    await grantClipboard(context, browserName)
+    await openReadOnly(page, s.viewer, s.documentId)
+    const opened = await probeSnapshot(page)
+    const mark = await commandMark(page)
+
+    await clickCell(page, 'K5')
+    await formulaBarEditor(page).click()
+    await expect(formulaBarInput(page)).not.toBeFocused()
+    // 键入的字交给单元格：被权限检查拦下；回车照常把选区下移
+    await step(page, 'read', async () => page.keyboard.type('abc'), { read: { blocked: 'sheet.operation.set-cell-edit-visible', alert: ALERT.edit } })
+    await step(page, 'read', async () => page.keyboard.press('Enter'), { read: { executed: 'sheet.command.move-selection-enter-tab' } })
+
+    // 修复之前，这时查找的快捷键失效（编辑栏的编辑器一直处于激活），格式的快捷键转给了编辑栏的文字编辑器
+    await clickCell(page, 'C8')
+    await step(page, 'read', async () => page.keyboard.press('ControlOrMeta+F'), { read: { executed: 'ui.operation.open-find-dialog' } })
+    const find = page.getByRole('dialog', { name: '查找' })
+    await find.getByRole('textbox', { name: '输入查找内容' }).fill('苹果')
+    await find.getByRole('textbox', { name: '输入查找内容' }).press('Enter')
+    await expect(find).toContainText(/[12]\/2/)
+    await find.getByRole('button', { name: 'Close' }).click()
+    await expect(find).toBeHidden()
+
+    await clickCell(page, 'A2')
+    await step(page, 'read', async () => page.keyboard.press('ControlOrMeta+C'), { read: { executed: 'univer.command.copy' } })
+    await expectClipboardText(page, browserName, SAMPLE_CELLS.a2)
+    await step(page, 'read', async () => page.keyboard.press('ControlOrMeta+B'), { read: { blocked: 'sheet.command.set-style', alert: ALERT.style } })
+
+    // 编辑栏自始至终没有收到输入
+    expect((await probeCommands(page, mark)).filter(command => command.unitId === FORMULA_BAR_UNIT)).toEqual([])
     await expectUnchanged(page, opened, mark)
     expect(watched.saves).toEqual([])
     expect(watched.pageErrors).toEqual([])
