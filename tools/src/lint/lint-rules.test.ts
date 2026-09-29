@@ -23,6 +23,9 @@ const PROBE_FILES = {
   sheetEditorPart: `apps/web/src/features/sheet-editor/${PROBE}-part.ts`,
 }
 
+/** 弹窗类的 Radix 原语的限制的说明（开头一段，M2-P2 复验） */
+const RADIX_DIALOG_MESSAGE = '弹窗类的 Radix 原语（Dialog、AlertDialog）只在 shared/ui/dialog.tsx 里引入'
+
 const WEB_FILE = 'apps/web/src/app/app.tsx'
 const WEB_TEST_FILE = 'apps/web/src/app/app.test.tsx'
 const WEB_TEST_SUPPORT = 'apps/web/src/app/render-app.test-support.tsx'
@@ -43,8 +46,10 @@ const INTEGRATION_FILE = 'tests/integration/src/support/api-app.ts'
 const WARM_UP_FILES = [WEB_FILE, CONTRACTS_FILE, TOOLS_TEST_FILE, E2E_FILE, API_CONTROLLER, INTEGRATION_FILE]
 // 冷启动在 CI 的 4 核机器上还要和并行的测试文件抢 CPU，本机约 3 秒，这里留足余量
 const WARM_UP_TIMEOUT = 120_000
-// 预热之后，一个用例最多检查五段代码，本机合计不到 0.2 秒；CI 上按慢几十倍留余量
-const LINT_TIMEOUT = 20_000
+// 预热之后，一个用例检查几段到十几段代码：本机大多不到 1 秒，最慢的约 3 秒（按 node_modules 里的路径引用时要解析 Univer 的包、
+// 按边界逐个功能检查时要多次解析路径）。CI 的 4 核机器慢十倍左右，还要与并行的测试文件抢 CPU：M2-P2 合并之后，
+// 本机 2.1 秒的用例在 CI 上超过了原来的 20 秒。时限只用来发现卡住的用例，按本机最慢的二十倍留余量
+const LINT_TIMEOUT = 60_000
 
 let eslint: ESLint
 /**
@@ -553,8 +558,7 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
     expect((await lintAtProbe(imports[0] ?? '', PROBE_FILES.editorEntry)).rules).not.toContain('boundaries/dependencies')
   })
 
-  it('弹窗类的 Radix 原语只在 shared/ui/dialog.tsx 里引入：对 web 的全部文件生效；命名空间导入、export * 与动态导入 radix-ui 同样拦下（M2-P2 复验）', async () => {
-    const RADIX_MESSAGE = '弹窗类的 Radix 原语（Dialog、AlertDialog）只在 shared/ui/dialog.tsx 里引入'
+  it('弹窗类的 Radix 原语只在 shared/ui/dialog.tsx 里引入：命名导入、改名、命名空间导入、export *、动态导入与 @radix-ui/react-dialog 都拦下（M2-P2 复验）', async () => {
     expect(await rulesFor('import { Dialog as DialogPrimitive } from \'radix-ui\'\n\nexport const root = DialogPrimitive.Root\n', 'apps/web/src/shared/ui/dialog.tsx')).not.toContain('no-restricted-syntax')
     // 其他原语照常按名字引入
     expect(await rulesFor('import { Slot } from \'radix-ui\'\n\nexport const slot = Slot\n', 'apps/web/src/features/spaces/space-page.tsx')).not.toContain('no-restricted-syntax')
@@ -566,21 +570,19 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
       'export async function load() {\n  return import(\'radix-ui\')\n}\n',
       'import { Root } from \'@radix-ui/react-dialog\'\n\nexport const root = Root\n',
     ]
-    // 首屏的功能、应用层、平台页面的入口、共享层、编辑器适配层与内部 API：各有自己的 no-restricted-syntax，每一类都要带上这组限制
-    const files = [
-      'apps/web/src/features/spaces/space-page.tsx',
-      WEB_FILE,
-      PLATFORM_ENTRY,
-      WEB_SHARED_FILE,
-      'apps/web/src/editor/index.ts',
-      'apps/web/src/editor/internal-api/registry.ts',
-    ]
-    for (const file of files) {
-      for (const code of codes) {
-        const report = await lint(code, file)
-        expect(report.rules, `${file}：${code}`).toContain('no-restricted-syntax')
-        expect(report.messages.join('\n'), `${file}：${code}`).toContain(RADIX_MESSAGE)
-      }
+    for (const code of codes) {
+      const report = await lint(code, 'apps/web/src/features/spaces/space-page.tsx')
+      expect(report.rules, code).toContain('no-restricted-syntax')
+      expect(report.messages.join('\n'), code).toContain(RADIX_DIALOG_MESSAGE)
+    }
+  })
+
+  it('弹窗类的 Radix 原语的限制对 web 的每类文件都生效：功能、应用层、平台页面的入口、共享层、编辑器适配层与内部 API 各有自己的配置块，都带上这组限制（M2-P2 复验）', async () => {
+    const code = 'import { Dialog } from \'radix-ui\'\n\nexport const root = Dialog.Root\n'
+    for (const file of ['apps/web/src/features/spaces/space-page.tsx', WEB_FILE, PLATFORM_ENTRY, WEB_SHARED_FILE, 'apps/web/src/editor/index.ts', 'apps/web/src/editor/internal-api/registry.ts']) {
+      const report = await lint(code, file)
+      expect(report.rules, file).toContain('no-restricted-syntax')
+      expect(report.messages.join('\n'), file).toContain(RADIX_DIALOG_MESSAGE)
     }
   })
 }, LINT_TIMEOUT)
