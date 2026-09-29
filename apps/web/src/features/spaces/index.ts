@@ -1,4 +1,5 @@
 export { forgetSpace, useForgetMissingSpace } from './missing-space.ts'
 export { SpaceNav } from './space-nav.tsx'
+export { SpaceNotFound } from './space-not-found.tsx'
 export { HomePage, SpacePage } from './space-page.tsx'
 export { addMember, changeMemberRole, membersQueryOptions, removeMember, renameSpace, SPACES_QUERY_KEY, spacesQueryOptions } from './spaces-api.ts'

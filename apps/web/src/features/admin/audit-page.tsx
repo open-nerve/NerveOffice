@@ -55,28 +55,47 @@ function Chip({ label, clearLabel, onClear, ref }: { readonly label: string, rea
   )
 }
 
-/** 找操作者的候选：查找中、失败（可以重试）、没有找到与找到的几个人，都有提示（审查 B8） */
-function ActorCandidates({ candidates, onPick }: { readonly candidates: UseQueryResult<AdminUser[]>, readonly onPick: (user: AdminUser) => void }) {
-  if (candidates.isPending)
-    return <p role="status" className="text-sm text-muted-foreground">{text.searchingActor}</p>
-  if (candidates.isError) {
-    return (
-      <div role="alert" className="flex items-center gap-2 text-sm text-destructive">
-        <span>{text.actorSearchFailed(describeError(candidates.error).message)}</span>
-        <Button variant="outline" size="sm" onClick={() => void candidates.refetch()}>{messages.common.retry}</Button>
-      </div>
-    )
-  }
-  if (candidates.data.length === 0)
-    return <p role="status" className="text-sm text-muted-foreground">{text.noActor}</p>
+interface ActorCandidatesProps {
+  readonly candidates: UseQueryResult<AdminUser[]>
+  /** 输入框里的关键词（去掉首尾空白） */
+  readonly typed: string
+  /** 防抖之后的关键词与输入框一致：查找针对的就是现在输入的 */
+  readonly settled: boolean
+  readonly onPick: (user: AdminUser) => void
+}
+
+/**
+ * 找操作者的候选：查找中、失败（可以重试）、没有找到与找到的几个人，都有提示（审查 B8）。
+ * 状态容器一直在，内容变化时往里填文字：与内容一起插入的 role="status" 部分读屏不播报（M2-P2 复验，与同事选择相同）。
+ * 只显示与输入框里的关键词一致的候选：输入还没停下、或者刚清空时，防抖之后的查询还是上一个关键词的（M2-P2 审查 B11 的同类问题）
+ */
+function ActorCandidates({ candidates, typed, settled, onPick }: ActorCandidatesProps) {
+  const searching = typed !== '' && (!settled || candidates.isPending || (candidates.isError && candidates.isFetching))
+  const current = typed !== '' && settled && !searching
+  let status = ''
+  if (searching)
+    status = text.searchingActor
+  else if (current && candidates.isSuccess && candidates.data.length === 0)
+    status = text.noActor
   return (
-    <ul aria-label={text.actor} className="flex flex-wrap gap-1">
-      {candidates.data.map(user => (
-        <li key={user.id}>
-          <Button variant="outline" size="sm" onClick={() => onPick(user)}>{nameOf(user)}</Button>
-        </li>
-      ))}
-    </ul>
+    <>
+      <p role="status" className="text-sm text-muted-foreground empty:hidden">{status}</p>
+      {current && candidates.isError && (
+        <div role="alert" className="flex items-center gap-2 text-sm text-destructive">
+          <span>{text.actorSearchFailed(describeError(candidates.error).message)}</span>
+          <Button variant="outline" size="sm" onClick={() => void candidates.refetch()}>{messages.common.retry}</Button>
+        </div>
+      )}
+      {current && candidates.isSuccess && candidates.data.length > 0 && (
+        <ul aria-label={text.actor} className="flex flex-wrap gap-1">
+          {candidates.data.map(user => (
+            <li key={user.id}>
+              <Button variant="outline" size="sm" onClick={() => onPick(user)}>{nameOf(user)}</Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
   )
 }
 
@@ -108,7 +127,9 @@ export function AdminAuditPage() {
   const [actor, setActor] = useState<Picked>()
   const [target, setTarget] = useState<Picked>()
   const [actorKeyword, setActorKeyword] = useState('')
-  const keyword = useDebouncedValue(actorKeyword.trim())
+  const typedKeyword = actorKeyword.trim()
+  const keyword = useDebouncedValue(typedKeyword)
+  const keywordSettled = keyword === typedKeyword
   const actionRef = useRef<HTMLSelectElement>(null)
   const actorInputRef = useRef<HTMLInputElement>(null)
   const actorClearRef = useRef<HTMLButtonElement>(null)
@@ -130,7 +151,7 @@ export function AdminAuditPage() {
     ...(target === undefined ? {} : { targetId: target.id, ...(target.type === undefined ? {} : { targetType: target.type }) }),
   }
   const events = useInfiniteQuery(auditEventsQueryOptions(filter))
-  const candidates = useQuery({ ...actorCandidatesQueryOptions(keyword), enabled: keyword !== '' && actor === undefined })
+  const candidates = useQuery({ ...actorCandidatesQueryOptions(keyword), enabled: keyword !== '' && keywordSettled && actor === undefined })
 
   function pickActor(user: AdminUser): void {
     setActor({ id: user.id, label: nameOf(user) })
@@ -174,7 +195,7 @@ export function AdminAuditPage() {
           </div>
         )}
       </div>
-      {actor === undefined && keyword !== '' && <ActorCandidates candidates={candidates} onPick={pickActor} />}
+      {actor === undefined && <ActorCandidates candidates={candidates} typed={typedKeyword} settled={keywordSettled} onPick={pickActor} />}
       {(actor !== undefined || target !== undefined) && (
         <div className="flex flex-wrap gap-3">
           {actor !== undefined && <Chip ref={actorClearRef} label={text.chipActor(actor.label)} clearLabel={text.clearActor} onClear={clearActor} />}

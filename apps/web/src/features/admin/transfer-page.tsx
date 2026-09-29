@@ -5,7 +5,7 @@ import { TRANSFER_MAX_DOCUMENTS } from '@nerve-office/contracts'
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
-import { describeError, isMissingResource } from '../../shared/api/index.ts'
+import { ApiError, describeError, isMissingResource } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { ADMIN_PATHS } from '../../shared/lib/admin-paths.ts'
 import { cn } from '../../shared/lib/cn.ts'
@@ -30,6 +30,11 @@ function spaceName(space: AdminSpace): string {
   return space.name
 }
 
+/** 有文档已经不在这个人的个人空间里了（可能被别人转走了）：整批没有转移 */
+function isTransferConflict(error: unknown): boolean {
+  return error instanceof ApiError && error.code === 'TRANSFER_CONFLICT'
+}
+
 /** 转移的表单：选文档（最多 100 份）、选目标、确认之后整批转移 */
 function TransferForm({ account }: { readonly account: AdminUser }) {
   const queryClient = useQueryClient()
@@ -42,6 +47,8 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
   const [team, setTeam] = useState<AdminSpace>()
   const [pending, setPending] = useState<PendingConfirmation>()
   const [done, setDone] = useState<string>()
+  /** 上一次转移时有文档已经不在了：在转移按钮旁说明，下一次打开确认的弹窗时清掉（转移成功之前一定先打开它） */
+  const [conflict, setConflict] = useState(false)
   const submitRef = useRef<HTMLButtonElement>(null)
   const groupId = useId()
   const hintId = useId()
@@ -62,13 +69,19 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
 
   /**
    * 转移失败（例如有文档已经被别人转走了）之后，刷新标题列表，清掉已经不在列表里的选中项，列表与选择都是服务端的实际状态（审查 B12）。
-   * 刷新本身失败时列表不变，选择也不动
+   * 返回刷新是否成功：刷新本身失败时列表不变，选择也不动
    */
-  async function refreshAfterFailure(): Promise<void> {
-    await queryClient.invalidateQueries({ queryKey: documentsQuery.queryKey })
+  async function refreshAfterFailure(): Promise<boolean> {
+    try {
+      await queryClient.invalidateQueries({ queryKey: documentsQuery.queryKey }, { throwOnError: true })
+    }
+    catch {
+      return false
+    }
     const pages = queryClient.getQueryData(documentsQuery.queryKey)?.pages ?? []
     const present = new Set(pages.flatMap(page => page.items.map(document => document.id)))
     setSelected(previous => new Set([...previous].filter(id => present.has(id))))
+    return true
   }
 
   const target: { readonly request: TransferTarget, readonly label: string } | undefined = targetType === 'personal'
@@ -87,6 +100,7 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
     if (blocked !== undefined || target === undefined)
       return
     const documentIds = [...selected]
+    setConflict(false)
     setPending({
       title: text.confirm(documentIds.length, target.label),
       description: text.confirmDescription,
@@ -99,8 +113,13 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
           await queryClient.invalidateQueries({ queryKey: documentsQuery.queryKey })
         }
         catch (error) {
-          // 失败的原因由确认的弹窗显示
-          await refreshAfterFailure()
+          const refreshed = await refreshAfterFailure()
+          // 有文档已经不在了：列表刷新之后关闭弹窗，在转移按钮旁说明，按新的列表重新选择。弹窗留着的话，再点确认只会拿着
+          // 同样的文档原样重发（复验）。其他失败（目标已归档、网络等）与刷新本身失败时，弹窗留着说明原因
+          if (refreshed && isTransferConflict(error)) {
+            setConflict(true)
+            return
+          }
           throw error
         }
       },
@@ -157,6 +176,11 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
           ? <KeywordPicker label={text.pickTeam} selected={team} onSelect={setTeam} search={transferTargetsQueryOptions} itemKey={spaceId} itemName={spaceName} texts={TEAM_TEXTS} />
           : <ColleaguePicker label={text.pickPerson} selected={person} onSelect={setPerson} exclude={excludedPeople} />}
       </fieldset>
+      {conflict && (
+        <Alert variant="destructive">
+          <AlertDescription>{text.conflict}</AlertDescription>
+        </Alert>
+      )}
       {/* 还不能转移时说明原因，按钮经 aria-describedby 指向它（审查 B5） */}
       {blocked !== undefined && <p id={hintId} className="text-sm text-muted-foreground">{blocked}</p>}
       <Button ref={submitRef} className="self-start" aria-disabled={blocked !== undefined} aria-describedby={blocked === undefined ? undefined : hintId} onClick={submit}>{text.submit}</Button>

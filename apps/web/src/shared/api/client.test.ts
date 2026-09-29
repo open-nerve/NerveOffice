@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { apiError, installFakeApi, json } from '../testing/fake-api.test-support.ts'
-import { ApiError, apiFetch, apiRequest, isAuthenticationError, isMissingResource, isPermissionDeniedError, isTransientError, NetworkError, readJson, ResponseFormatError, setCsrfToken } from './client.ts'
+import { ApiError, apiFetch, apiRequest, isAccessDenied, isAuthenticationError, isMissingResource, isPermissionDeniedError, isTransientError, NetworkError, readJson, ResponseFormatError, setCsrfToken } from './client.ts'
 
 const itemSchema = z.strictObject({ name: z.string() })
 
@@ -116,6 +116,14 @@ describe('错误的分类', () => {
     expect(isMissingResource(new ApiError(403, 'PERMISSION_DENIED', 'x'))).toBe(false)
     expect(isMissingResource(new ApiError(500, 'INTERNAL_ERROR', 'x'))).toBe(false)
     expect(isMissingResource(new NetworkError('x'))).toBe(false)
+  })
+
+  it('按访问权限被拒绝：看不到（NOT_FOUND）与不能做（PERMISSION_DENIED）；请求内容不合法与其他错误不算（M2-P2 复验）', () => {
+    expect(isAccessDenied(new ApiError(404, 'NOT_FOUND', 'x'))).toBe(true)
+    expect(isAccessDenied(new ApiError(403, 'PERMISSION_DENIED', 'x'))).toBe(true)
+    expect(isAccessDenied(new ApiError(400, 'REQUEST_INVALID', 'x'))).toBe(false)
+    expect(isAccessDenied(new ApiError(409, 'SPACE_NAME_TAKEN', 'x'))).toBe(false)
+    expect(isAccessDenied(new NetworkError('x'))).toBe(false)
   })
 
   it('网络失败与 5xx 可以重试，4xx 不重试', () => {

@@ -292,7 +292,7 @@ describe('US-M2-04 转移停用者的文档', () => {
     await waitFor(() => expect(document.activeElement).toBe(submit))
   })
 
-  it('转移到某人的个人空间：按名字选同事，不列出这个停用的人与操作者本人（审查 A7）；有文档已被别人转走时刷新列表、清掉不在了的选择，弹窗里说明原因（审查 B12）', async () => {
+  it('转移到某人的个人空间：按名字选同事，不列出这个停用的人与操作者本人（审查 A7）；有文档已被别人转走时刷新列表、清掉不在了的选择，关闭弹窗，在转移按钮旁说明，焦点回到"转移"，不会原样重发（审查 B12，复验）', async () => {
     let items = titles(2)
     const api = admin({
       [`GET /api/admin/users/${AMY.id}`]: () => json(200, LEAVER),
@@ -312,18 +312,69 @@ describe('US-M2-04 转移停用者的文档', () => {
     const candidates = await screen.findByRole('list', { name: '找到的同事' })
     expect(within(candidates).getAllByRole('button').map(button => button.textContent)).toEqual(['本（ben）'])
     fireEvent.click(within(candidates).getByRole('button', { name: '本（ben）' }))
-    fireEvent.click(screen.getByRole('button', { name: '转移' }))
+    const submit = screen.getByRole('button', { name: '转移' })
+    submit.focus()
+    fireEvent.click(submit)
     const dialog = await screen.findByRole('dialog', { name: '把 2 份文档转移到 本（ben） 的个人空间？' })
     fireEvent.click(within(dialog).getByRole('button', { name: '转移' }))
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent('有文档已经不在这个人的个人空间里')
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    // 说明在页面上（弹窗之外），不在弹窗里
+    expect(screen.getByRole('alert')).toHaveTextContent('有文档已经不在这个人的个人空间里了（可能被别人转走了）：列表已刷新，请重新选择后再转移')
     expect(lastBody(api, TRANSFER_KEY)).toEqual({ documentIds: titles(2).map(document => document.id), target: { type: 'personal', userId: BEN.id } })
-    // 列表刷新了，已经不在的文档不再算作选中（弹窗之外的内容被标为 aria-hidden，按文字查找）
-    await waitFor(() => expect(screen.queryByText('文档 0')).toBeNull())
+    // 列表刷新了，已经不在的文档不再算作选中
+    expect(screen.queryByText('文档 0')).toBeNull()
     expect(screen.getByText('已选择 1 份，一次最多 100 份')).toBeInTheDocument()
-    fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
-    const again = await screen.findByRole('button', { name: '转移' })
-    fireEvent.click(again)
+    await waitFor(() => expect(document.activeElement).toBe(submit))
+    expect(requestCount(api, TRANSFER_KEY)).toBe(1)
+
+    // 再次打开确认的弹窗：按新的选择；上一次的说明清掉
+    fireEvent.click(submit)
     expect(await screen.findByRole('dialog', { name: '把 1 份文档转移到 本（ben） 的个人空间？' })).toBeInTheDocument()
+    expect(screen.queryByText(/列表已刷新，请重新选择后再转移/)).toBeNull()
+  })
+
+  it('目标已归档等其他失败：弹窗留着说明原因，页面上不另外说明（复验）', async () => {
+    const api = admin({
+      [`GET /api/admin/users/${AMY.id}`]: () => json(200, LEAVER),
+      [DOCUMENTS_KEY]: () => json(200, listPage(titles(1))),
+      [`GET /api/admin/spaces${search({ query: '市场', status: 'active' })}`]: () => json(200, listPage([SPACE])),
+      [TRANSFER_KEY]: () => apiError(409, 'SPACE_ARCHIVED'),
+    })
+    renderApp(`/admin/users/${AMY.id}/documents`)
+    fireEvent.click(await screen.findByLabelText('选择 文档 0'))
+    fireEvent.change(screen.getByLabelText('目标团队空间'), { target: { value: '市场' } })
+    fireEvent.click(await screen.findByRole('button', { name: '市场部' }))
+    fireEvent.click(screen.getByRole('button', { name: '转移' }))
+    const dialog = await screen.findByRole('dialog', { name: '把 1 份文档转移到 市场部？' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '转移' }))
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('目标空间已归档')
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.queryByText(/列表已刷新，请重新选择后再转移/)).toBeNull()
+    expect(requestCount(api, TRANSFER_KEY)).toBe(1)
+  })
+
+  it('有文档已被别人转走，而刷新标题列表失败：列表还是旧的，弹窗留着说明原因（复验）', async () => {
+    let refreshFails = false
+    admin({
+      [`GET /api/admin/users/${AMY.id}`]: () => json(200, LEAVER),
+      [DOCUMENTS_KEY]: () => (refreshFails ? apiError(500, 'INTERNAL_ERROR') : json(200, listPage(titles(2)))),
+      [`GET /api/admin/spaces${search({ query: '市场', status: 'active' })}`]: () => json(200, listPage([SPACE])),
+      [TRANSFER_KEY]: () => {
+        refreshFails = true
+        return apiError(409, 'TRANSFER_CONFLICT')
+      },
+    })
+    renderApp(`/admin/users/${AMY.id}/documents`)
+    fireEvent.click(await screen.findByLabelText('全选已加载的文档'))
+    fireEvent.change(screen.getByLabelText('目标团队空间'), { target: { value: '市场' } })
+    fireEvent.click(await screen.findByRole('button', { name: '市场部' }))
+    fireEvent.click(screen.getByRole('button', { name: '转移' }))
+    const dialog = await screen.findByRole('dialog', { name: '把 2 份文档转移到 市场部？' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '转移' }))
+    expect(await within(dialog).findByRole('alert', {}, { timeout: 3000 })).toHaveTextContent('有文档已经不在这个人的个人空间里（可能被别人转走了），请刷新后重试')
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.queryByText(/列表已刷新，请重新选择后再转移/)).toBeNull()
+    expect(screen.getByText('已选择 2 份，一次最多 100 份')).toBeInTheDocument()
   })
 
   it('一次最多转移 100 份：超过时说明原因，不能提交（审查 B14）', async () => {

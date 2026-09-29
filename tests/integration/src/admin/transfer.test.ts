@@ -258,6 +258,25 @@ describe('US-M2-04 转移的并发', () => {
     expect(audits).toBe(2)
   })
 
+  it('目标写成团队空间的个人空间：不在它的行上取锁（M2-P2 复验 N1），那一行被别人锁着也立即 404，与不存在一样', async () => {
+    const gone = await leaver(['甲'])
+    const response = await database.query(async (client) => {
+      await client.query('BEGIN')
+      try {
+        // 持着那一行的锁（与转移的共享锁冲突）：转移要是去锁它，就会等到锁等待的上限（5 秒）之后以 500 结束
+        await client.query('SELECT id FROM spaces WHERE id = $1 FOR NO KEY UPDATE', [amy.personalSpaceId])
+        return await transfer(gone.id, { documentIds: gone.documents, target: { type: 'team', spaceId: amy.personalSpaceId } })
+      }
+      finally {
+        await client.query('ROLLBACK')
+      }
+    })
+    expect(response.status).toBe(404)
+    const missing = await transfer(gone.id, { documentIds: gone.documents, target: { type: 'team', spaceId: randomUUID() } })
+    expect(await errorOf(response)).toEqual(await errorOf(missing))
+    expect((await rowsOf(gone.documents))[0]?.space_id).toBe(gone.spaceId)
+  })
+
   it('夹带别处的文档：不在它的行上取锁（M2-P2 审查 A4），那一行被别人锁着也立即整批拒绝', async () => {
     const gone = await leaver(['甲'])
     const spaceId = await teamSpace()

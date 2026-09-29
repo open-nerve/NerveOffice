@@ -15,6 +15,9 @@ import { actorOf } from './admin-views.ts'
 
 type HttpOrigin = Extract<AuditOrigin, { source: 'http' }>
 
+/** 目标空间看不到（不存在、写成团队空间的个人空间）时的说明：锁前与锁下两处判断用同一句 */
+const TARGET_MISSING = '目标空间不存在'
+
 /** 按 id 的顺序（id 已由契约统一成小写，小写的 UUID 文本与数据库里 uuid 的顺序一致）：多行加锁都按这个顺序，互相等待时不成环 */
 function inIdOrder(ids: readonly string[]): string[] {
   return [...new Set(ids)].sort()
@@ -44,6 +47,7 @@ export class AdminTransferService {
   /**
    * 整批转移到某个有效账户的个人空间，或某个没有归档的团队空间。一个事务，锁的顺序（M2-P2 设计 §3.8、§3.9）：
    * system-admins 的共享锁（复核操作者）→ 账户行（来源与目标，按 id）→ 空间行（来源与目标，FOR SHARE，按 id）→ 文档行（按 id）→ 审计。
+   * 团队空间的目标在锁空间行之前先判断（不加锁），看不到的不取锁；锁下再判断。
    * 每份文档一条审计（来源与目标空间的 id，不记标题）。目标不能是操作者自己的个人空间：转移不能拿来打开内容
    * （00 号计划书 §5.4 "转移到其他人的个人空间"，M2-P2 审查 A7），PERMISSION_DENIED
    */
@@ -64,19 +68,22 @@ export class AdminTransferService {
 
       const fromSpaceId = await this.personalSpaceIdOf(source, transaction)
       const toSpaceId = target.type === 'personal' ? await this.personalSpaceIdOf({ id: target.userId }, transaction) : target.spaceId
+      // 团队空间的目标先判断（不加锁）：写成团队空间的个人空间与不存在的一样是 NOT_FOUND，执行同样的查询，不在它的行上取锁（M2-P2 复验 N1）
+      if (target.type === 'team' && (await this.spaces.accessFactsOf(actor.user.id, toSpaceId, { transaction }))?.type !== 'team')
+        throw new AppError('NOT_FOUND', TARGET_MISSING)
       const spaces = new Map<string, SpaceRecord | undefined>()
       for (const id of inIdOrder([fromSpaceId, toSpaceId]))
         spaces.set(id, await this.spaces.holdSpace(id, transaction))
-      this.requireTarget(spaces.get(toSpaceId), target.type)
+      const destination = this.requireTarget(spaces.get(toSpaceId), target.type)
 
-      const moved = await this.transfers.transfer(request.documentIds, fromSpaceId, toSpaceId, transaction)
+      const moved = await this.transfers.transfer(request.documentIds, fromSpaceId, destination.id, transaction)
       for (const documentId of moved) {
         await this.audit.record({
           action: 'documents.transferred',
           actor: actorOf(actor),
           target: { type: 'document', id: documentId },
           origin,
-          details: { fromSpaceId, toSpaceId },
+          details: { fromSpaceId, toSpaceId: destination.id },
         }, { transaction })
       }
       return { transferred: moved.length }
@@ -92,11 +99,12 @@ export class AdminTransferService {
   }
 
   /** 目标空间：团队空间要存在、没有归档；目标是个人空间时就是那个人的个人空间 */
-  private requireTarget(space: SpaceRecord | undefined, type: 'personal' | 'team'): void {
+  private requireTarget(space: SpaceRecord | undefined, type: 'personal' | 'team'): SpaceRecord {
     if (space === undefined || space.type !== type)
-      throw new AppError('NOT_FOUND', '目标空间不存在')
+      throw new AppError('NOT_FOUND', TARGET_MISSING)
     if (space.status === 'archived')
       throw new AppError('SPACE_ARCHIVED')
+    return space
   }
 
   private async personalSpaceIdOf(account: Pick<User, 'id'>, transaction: Transaction | undefined): Promise<string> {

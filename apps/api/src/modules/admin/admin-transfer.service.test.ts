@@ -39,6 +39,11 @@ function setup() {
   }
   const spaceService = {
     personalSpaceOf: vi.fn(async (userId: string) => ({ id: userId === SOURCE ? SOURCE_SPACE : TARGET_SPACE, name: '个人空间' })),
+    accessFactsOf: vi.fn(async (_userId: string, id: string) => {
+      calls.push(`facts ${id.slice(-2)}`)
+      const found = spaces.get(id)
+      return found === undefined ? undefined : { type: found.type, status: found.status }
+    }),
     holdSpace: vi.fn(async (id: string) => {
       calls.push(`space ${id.slice(-2)}`)
       return spaces.get(id)
@@ -101,14 +106,19 @@ describe('AdminTransferService.transfer', () => {
     }
   })
 
-  it('团队空间的目标：已归档 SPACE_ARCHIVED，不是团队空间或不存在 NOT_FOUND；都不动文档', async () => {
-    for (const [target, code] of [[space(TARGET_SPACE, { type: 'team', status: 'archived' }), 'SPACE_ARCHIVED'], [space(TARGET_SPACE), 'NOT_FOUND'], [undefined, 'NOT_FOUND']] as const) {
-      const { service, spaces, transfers } = setup()
+  it('团队空间的目标：已归档 SPACE_ARCHIVED（锁下判断）；不是团队空间或不存在 NOT_FOUND（先判断，不锁空间行，两条路径的步骤相同）；都不动文档', async () => {
+    for (const [target, code, spaceCalls] of [
+      [space(TARGET_SPACE, { type: 'team', status: 'archived' }), 'SPACE_ARCHIVED', ['facts e1', 'space e1', 'space e2']],
+      [space(TARGET_SPACE), 'NOT_FOUND', ['facts e1']],
+      [undefined, 'NOT_FOUND', ['facts e1']],
+    ] as const) {
+      const { service, calls, spaces, transfers } = setup()
       if (target === undefined)
         spaces.delete(TARGET_SPACE)
       else
         spaces.set(TARGET_SPACE, target)
       expect((await rejection(service.transfer(ACTOR, SOURCE, { documentIds: DOCUMENTS, target: { type: 'team', spaceId: TARGET_SPACE } }, ORIGIN))).code).toBe(code)
+      expect(calls.filter(call => call.startsWith('facts') || call.startsWith('space'))).toEqual(spaceCalls)
       expect(transfers.transfer).not.toHaveBeenCalled()
     }
   })

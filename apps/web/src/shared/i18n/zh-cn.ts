@@ -306,6 +306,8 @@ export const messages = {
       confirm: (count: number, target: string) => `把 ${count} 份文档转移到 ${target}？`,
       confirmDescription: '转移之后，目标空间的成员按各自的角色访问这些文档；这个账户重新启用之后，个人空间里不再有它们。',
       done: (count: number, target: string) => `已把 ${count} 份文档转移到 ${target}`,
+      /** 转移时有文档已经不在了（TRANSFER_CONFLICT）：列表已刷新、失效的选择已清掉，确认的弹窗随之关闭，在转移按钮旁说明（M2-P2 复验） */
+      conflict: '有文档已经不在这个人的个人空间里了（可能被别人转走了）：列表已刷新，请重新选择后再转移',
     },
     link: {
       invitationTitle: '邀请链接',
@@ -383,8 +385,6 @@ export const messages = {
     archivedReadOnly: '这个空间已归档：只有系统管理员能调整成员。',
     // 系统管理员在归档的空间里仍能管理成员：同样说明已归档，调整成员不改变只读（审查 B5）
     archivedManaged: '这个空间已归档，所有人只能查看。系统管理员仍然可以调整成员，调整之后空间照样只读。',
-    /** 个人空间的所有者打开自己个人空间的成员页（服务端 403）：个人空间没有成员，重试也一样（审查 B5） */
-    personalSpace: '个人空间没有成员：只有团队空间能添加成员。',
     columns: { name: '成员', role: '角色', status: '状态', actions: '操作' },
     /** 同事选择的标签：与提交按钮"添加成员"区分开（审查 B10） */
     colleague: '要添加的同事',
@@ -398,6 +398,9 @@ export const messages = {
     removeDescription: '移出之后，这个人立即失去这个空间带来的权限；单独分享给他的文档不受影响。',
     confirmRemoveSelf: '把你自己移出这个空间？',
     removeSelfDescription: '移出之后，你立即失去这个空间带来的权限；只能由空间管理员或系统管理员重新添加。',
+    /** 要移出的人已经不是成员了（404）：成员列表已刷新，确认的弹窗随之关闭，在成员表上方说明（M2-P2 复验） */
+    alreadyRemoved: (name: string) => `${name} 已经不在成员里了（可能已被别人移出），列表已刷新`,
+    alreadyRemovedSelf: '你已经不在成员里了（可能已被别人移出），列表已刷新',
     confirmDemoteSelf: (role: SpaceRole) => `把你自己的角色改为${SPACE_ROLE_NAMES[role]}？`,
     demoteSelfDescription: '改完之后你立即失去空间管理员的权限，只能由另一位空间管理员或系统管理员改回来。',
     change: '修改',

@@ -1,5 +1,6 @@
 // 按名字选同事（按关键词选一项，M2-P2 设计 §3.10）：输入停下之后才查找；候选排除给定的人；选中之后显示成标签，
-// "重新选择"带上选的是什么；选中与重新选择之后焦点移到新出现的元素上；只显示与输入框一致的候选；查找失败可以重试。接口用假的 fetch。
+// "重新选择"带上选的是什么；选中与重新选择之后焦点移到新出现的元素上；只显示与输入框一致的候选；查找失败可以重试；
+// 查找的进展放在一直在的状态容器里。接口用假的 fetch。
 import type { UserSummary } from '@nerve-office/contracts'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -42,6 +43,8 @@ describe('ColleaguePicker', () => {
     const candidates = await screen.findByRole('list', { name: '找到的同事' })
     expect(within(candidates).getAllByRole('button').map(button => button.textContent)).toEqual(['本（ben）'])
     expect(api.requests.map(request => request.key)).toEqual([usersKey('本')])
+    // 找到了：状态容器里没有文字
+    expect(screen.getByRole('status')).toBeEmptyDOMElement()
   })
 
   it('选中之后显示成标签，标签仍在原处，焦点移到"重新选择 <标签>"；重新选择之后输入框是空的、焦点回到它，上一次的候选不再出现（审查 B10、B11、B14）', async () => {
@@ -60,7 +63,7 @@ describe('ColleaguePicker', () => {
     expect(input()).toHaveValue('')
     // 防抖之后的查询还是"本"：它的候选不挂在空的输入框下面，也不为它再请求
     expect(screen.queryByRole('list', { name: '找到的同事' })).toBeNull()
-    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.getByRole('status')).toBeEmptyDOMElement()
     await new Promise(resolve => setTimeout(resolve, 400))
     expect(screen.queryByRole('list', { name: '找到的同事' })).toBeNull()
     expect(api.requests).toHaveLength(1)
@@ -78,6 +81,21 @@ describe('ColleaguePicker', () => {
     expect(screen.queryByRole('list', { name: '找到的同事' })).toBeNull()
     expect(screen.getByRole('status')).toHaveTextContent('正在查找…')
     expect(await screen.findByText('没有找到这个人')).toBeInTheDocument()
+  })
+
+  it('查找的进展（查找中、没有找到）：状态容器先在（空的），输入之后往里填文字，容器本身不换（复验：与内容一起插入的 role="status" 部分读屏软件不播报）', async () => {
+    installFakeApi({ [usersKey('本x')]: () => json(200, { items: [] }) })
+    renderPicker()
+    const status = screen.getByRole('status')
+    expect(status).toBeEmptyDOMElement()
+    fireEvent.change(input(), { target: { value: '本x' } })
+    expect(status).toHaveTextContent('正在查找…')
+    await waitFor(() => expect(status).toHaveTextContent('没有找到这个人'))
+    expect(screen.getByRole('status')).toBe(status)
+    // 清空关键词：文字随之清掉，容器仍在
+    fireEvent.change(input(), { target: { value: '' } })
+    expect(screen.getByRole('status')).toBe(status)
+    expect(status).toBeEmptyDOMElement()
   })
 
   it('查找失败：说明原因，可以重试（审查 B14）', async () => {

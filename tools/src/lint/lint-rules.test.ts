@@ -541,6 +541,48 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
       expect(report.messages.join('\n'), file).toContain('按关键词选一项（features/colleagues）只由按需加载的功能')
     }
   })
+
+  it('首屏的限制只管平台页面：编辑器页（它的入口与 sheet-editor）是另一个包，可以引用弹窗、确认的弹窗与同事选择（M2-P2 复验）', async () => {
+    const imports = [
+      'import { DialogContent } from \'../../shared/ui/dialog.tsx\'\n\nexport const content = DialogContent\n',
+      'import { ConfirmDialog } from \'../confirmation/index.ts\'\n\nexport const dialog = ConfirmDialog\n',
+      'import { ColleaguePicker } from \'../colleagues/index.ts\'\n\nexport const picker = ColleaguePicker\n',
+    ]
+    for (const code of imports)
+      expect(await rulesFor(code, 'apps/web/src/features/sheet-editor/editor-page.ts'), code).not.toContain('boundaries/dependencies')
+    expect((await lintAtProbe(imports[0] ?? '', PROBE_FILES.editorEntry)).rules).not.toContain('boundaries/dependencies')
+  })
+
+  it('弹窗类的 Radix 原语只在 shared/ui/dialog.tsx 里引入：对 web 的全部文件生效；命名空间导入、export * 与动态导入 radix-ui 同样拦下（M2-P2 复验）', async () => {
+    const RADIX_MESSAGE = '弹窗类的 Radix 原语（Dialog、AlertDialog）只在 shared/ui/dialog.tsx 里引入'
+    expect(await rulesFor('import { Dialog as DialogPrimitive } from \'radix-ui\'\n\nexport const root = DialogPrimitive.Root\n', 'apps/web/src/shared/ui/dialog.tsx')).not.toContain('no-restricted-syntax')
+    // 其他原语照常按名字引入
+    expect(await rulesFor('import { Slot } from \'radix-ui\'\n\nexport const slot = Slot\n', 'apps/web/src/features/spaces/space-page.tsx')).not.toContain('no-restricted-syntax')
+    const codes = [
+      'import { Dialog } from \'radix-ui\'\n\nexport const root = Dialog.Root\n',
+      'import { AlertDialog as Alert } from \'radix-ui\'\n\nexport const root = Alert.Root\n',
+      'import * as Radix from \'radix-ui\'\n\nexport const root = Radix.Slot\n',
+      'export * from \'radix-ui\'\n',
+      'export async function load() {\n  return import(\'radix-ui\')\n}\n',
+      'import { Root } from \'@radix-ui/react-dialog\'\n\nexport const root = Root\n',
+    ]
+    // 首屏的功能、应用层、平台页面的入口、共享层、编辑器适配层与内部 API：各有自己的 no-restricted-syntax，每一类都要带上这组限制
+    const files = [
+      'apps/web/src/features/spaces/space-page.tsx',
+      WEB_FILE,
+      PLATFORM_ENTRY,
+      WEB_SHARED_FILE,
+      'apps/web/src/editor/index.ts',
+      'apps/web/src/editor/internal-api/registry.ts',
+    ]
+    for (const file of files) {
+      for (const code of codes) {
+        const report = await lint(code, file)
+        expect(report.rules, `${file}：${code}`).toContain('no-restricted-syntax')
+        expect(report.messages.join('\n'), `${file}：${code}`).toContain(RADIX_MESSAGE)
+      }
+    }
+  })
 }, LINT_TIMEOUT)
 
 describe('US-M1-11 lint 规则的自测：类型与写法', () => {
@@ -715,6 +757,47 @@ describe('US-M1-11 lint 规则的自测：后端', () => {
       const report = await lint(code, file)
       expect(report.rules, `${file}：${code}`).toContain('no-restricted-imports')
       expect(report.messages.join('\n'), `${file}：${code}`).toContain(TRANSFER_MESSAGE)
+    }
+  })
+
+  it('admin 与 workspace 是最上层的编排：只由 app 层组装，别的模块都不引用它们，经 admin 转手的转移同样拦下（M2-P2 复验 N2）', async () => {
+    const TOP_LEVEL = '是最上层的编排（ADR-014）'
+    expect(await rulesFor('import { AdminModule } from \'../modules/admin/index.ts\'\nimport { WorkspaceModule } from \'../modules/workspace/index.ts\'\n\nexport const modules = [AdminModule, WorkspaceModule]\n', 'apps/api/src/app/app.module.ts')).not.toContain('boundaries/dependencies')
+    // 模块自己内部的引用照常
+    expect(await rulesFor('import { AdminTransferService } from \'./admin-transfer.service.ts\'\n\nexport const service = AdminTransferService\n', 'apps/api/src/modules/admin/admin.module.ts')).not.toContain('boundaries/dependencies')
+    const violations: [string, string][] = [
+      ['import { AdminModule } from \'../admin/index.ts\'\n\nexport const module = AdminModule\n', 'apps/api/src/modules/workspace/workspace.module.ts'],
+      ['import { WorkspaceModule } from \'../workspace/index.ts\'\n\nexport const module = WorkspaceModule\n', 'apps/api/src/modules/admin/admin.module.ts'],
+      ['import type { AdminModule } from \'../admin/index.ts\'\n\nexport type Module = AdminModule\n', 'apps/api/src/modules/documents/documents.service.ts'],
+      // admin 转出绕过内容权限的转移，别的模块再从 admin 引用：在这一步拦下
+      ['export { DocumentTransferService } from \'../admin/index.ts\'\n', 'apps/api/src/modules/spaces/index.ts'],
+      ['import { WorkspaceModule } from \'../workspace/index.ts\'\n\nexport const module = WorkspaceModule\n', 'apps/api/src/modules/users/users.module.ts'],
+    ]
+    for (const [code, file] of violations) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain('boundaries/dependencies')
+      expect(report.messages.join('\n'), `${file}：${code}`).toContain(TOP_LEVEL)
+    }
+  })
+
+  it('契约的请求结构（z.strictObject）与路径里的 id（*IdSchema）用 uuidSchema，不直接用 z.uuid()；响应结构照常（M2-P2 审查 A1、复验 N3）', async () => {
+    const UUID_MESSAGE = '请求里的 UUID 用 uuidSchema'
+    const fine = [
+      'import { z } from \'zod\'\n\nexport const response = z.object({ id: z.uuid(), items: z.array(z.object({ id: z.uuid() })) })\n',
+      'import { z } from \'zod\'\nimport { uuidSchema } from \'../ids/ids.ts\'\n\nexport const request = z.strictObject({ userId: uuidSchema, ids: z.array(uuidSchema) })\nexport const thingIdSchema = uuidSchema\n',
+    ]
+    for (const code of fine)
+      expect(await rulesFor(code, CONTRACTS_FILE), code).not.toContain('no-restricted-syntax')
+    const violations = [
+      'import { z } from \'zod\'\n\nexport const request = z.strictObject({ userId: z.uuid() })\n',
+      'import { z } from \'zod\'\n\nexport const request = z.strictObject({ ids: z.array(z.uuid()).min(1) })\n',
+      'import { z } from \'zod\'\n\nexport const request = z.strictObject({ target: z.discriminatedUnion(\'type\', [z.strictObject({ type: z.literal(\'a\'), id: z.uuid().optional() })]) })\n',
+      'import { z } from \'zod\'\n\nexport const thingIdSchema = z.uuid()\n',
+    ]
+    for (const code of violations) {
+      const report = await lint(code, CONTRACTS_FILE)
+      expect(report.rules, code).toContain('no-restricted-syntax')
+      expect(report.messages.join('\n'), code).toContain(UUID_MESSAGE)
     }
   })
 

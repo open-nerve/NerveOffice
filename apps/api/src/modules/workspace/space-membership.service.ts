@@ -45,7 +45,8 @@ export class SpaceMembershipService {
   /**
    * 添加成员：要添加的人必须是有效账户（以共享锁持住，到提交之前不会被停用），否则 ACCOUNT_UNAVAILABLE；
    * 已经是成员时 ALREADY_MEMBER。操作者把自己加入（只有没有加入的系统管理员会这样）时，审计记为系统管理员加入空间。
-   * 锁的顺序：system-admins 的锁（系统管理员）→ 账户行 → 空间行 → 成员行
+   * 锁的顺序：system-admins 的锁（系统管理员）→ 账户行 → 空间行 → 成员行。
+   * 是不是本人、审计的明细都用数据库返回的 id：不依赖请求里 id 的写法（契约已统一成小写，M2-P2 审查 A1、复验 N3）
    */
   async add(principal: Principal, spaceId: string, request: AddSpaceMemberRequest, origin: AuditOrigin): Promise<SpaceMember> {
     return this.transactions.run(async (transaction) => {
@@ -55,14 +56,14 @@ export class SpaceMembershipService {
       if (account === undefined)
         throw new AppError('ACCOUNT_UNAVAILABLE')
       const { space } = await this.managed.lock(actor, spaceId, 'manageMembers', transaction)
-      const member = await this.spaces.addMember(space, request.userId, request.role, transaction)
-      const joined = request.userId === actor.userId
+      const member = await this.spaces.addMember(space, account.id, request.role, transaction)
+      const joined = account.id === actor.userId
       await this.audit.record({
         action: joined ? 'spaces.admin_joined' : 'spaces.member_added',
         actor: { type: 'user', id: actor.userId },
-        target: { type: 'space', id: spaceId },
+        target: { type: 'space', id: space.id },
         origin,
-        details: joined ? { role: request.role } : { userId: request.userId, role: request.role },
+        details: joined ? { role: member.role } : { userId: member.userId, role: member.role },
       }, { transaction })
       return toSpaceMember(member, account)
     })
@@ -79,13 +80,13 @@ export class SpaceMembershipService {
       const { space } = await this.managed.lock(actor, spaceId, 'manageMembers', transaction)
       const change = await this.spaces.changeMemberRole(space, userId, role, transaction)
       if (change.changed) {
-        await this.writeAccess.revoke({ kind: 'membership', userId, spaceId }, transaction)
+        await this.writeAccess.revoke({ kind: 'membership', userId: change.member.userId, spaceId: space.id }, transaction)
         await this.audit.record({
           action: 'spaces.member_role_changed',
           actor: { type: 'user', id: actor.userId },
-          target: { type: 'space', id: spaceId },
+          target: { type: 'space', id: space.id },
           origin,
-          details: { userId, from: change.previousRole, to: role },
+          details: { userId: change.member.userId, from: change.previousRole, to: change.member.role },
         }, { transaction })
       }
       return change.member
@@ -100,13 +101,13 @@ export class SpaceMembershipService {
       await this.managed.check(actor, spaceId, 'manageMembers', transaction)
       const { space } = await this.managed.lock(actor, spaceId, 'manageMembers', transaction)
       const removed = await this.spaces.removeMember(space, userId, transaction)
-      await this.writeAccess.revoke({ kind: 'membership', userId, spaceId }, transaction)
+      await this.writeAccess.revoke({ kind: 'membership', userId: removed.userId, spaceId: space.id }, transaction)
       await this.audit.record({
         action: 'spaces.member_removed',
         actor: { type: 'user', id: actor.userId },
-        target: { type: 'space', id: spaceId },
+        target: { type: 'space', id: space.id },
         origin,
-        details: { userId, role: removed.role },
+        details: { userId: removed.userId, role: removed.role },
       }, { transaction })
     })
   }

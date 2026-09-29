@@ -52,7 +52,7 @@ export class AdminUsersService {
         // 未用的重置链接一并作废：启用之后要重置密码得重新签发
         await this.resets.revokeOpenOf(userId, transaction)
         await this.sessions.revokeAllOf(userId, 'disabled', { transaction })
-        await this.writeAccess.revoke({ kind: 'user', userId }, transaction)
+        await this.writeAccess.revoke({ kind: 'user', userId: change.account.id }, transaction)
         await this.audit.record({ action: 'users.disabled', actor: actorOf(actor), target: { type: 'user', id: userId }, origin }, { transaction })
       }
       return toAdminUser(change.account)

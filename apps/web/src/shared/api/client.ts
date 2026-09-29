@@ -148,6 +148,14 @@ export function isMissingResource(error: unknown): error is ApiError {
 }
 
 /**
+ * 操作按访问权限被拒绝：看不到了（404，与不存在一致），或者看得到却不能做（403）。页面上显示的权限可能已经过时
+ * （例如空间刚被归档、刚被移出），页面据此重新请求（M2-P2 复验）。请求内容不合法（400）不算：那是请求本身的问题
+ */
+export function isAccessDenied(error: unknown): error is ApiError {
+  return error instanceof ApiError && (error.code === 'NOT_FOUND' || error.code === 'PERMISSION_DENIED')
+}
+
+/**
  * 请求确定没有生效：服务端在写入之前就拒绝了（4xx）。其余的失败（网络、5xx、回包读不出来）结果未知，服务端可能已经处理，
  * 重试要沿用同一个 requestId（新建表格、保存）
  */

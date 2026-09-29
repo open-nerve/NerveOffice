@@ -186,11 +186,12 @@ apps/web/src/
   - 入口（`src/entries/*`）→ 应用（`src/app`）→ 功能（`src/features/*`）→ 共享（`src/shared`）；
   - 编辑器适配层（`src/editor`）只依赖共享与 contracts；只有编辑器页的入口与 `features/sheet-editor` 能引用它（经 `index.ts`）；
   - `features/sheet-editor` 只由编辑器页的入口引用：平台的应用层、其他入口与其他功能都不引用它（Univer 不进平台页面的包）；
-  - `features/admin` 与 `features/members` 只由 `app/routes.ts` 动态引用它们的公开入口；`features/confirmation`、`features/colleagues` 只由这两个功能引用，弹窗文件 `shared/ui/dialog.tsx` 只由这两个功能与 `features/confirmation` 引用（M2-P1、M2-P2）；
+  - `features/admin` 与 `features/members` 只由 `app/routes.ts` 动态引用它们的公开入口；在平台页面里，`features/confirmation`、`features/colleagues` 只由这两个功能引用，弹窗文件 `shared/ui/dialog.tsx` 只由这两个功能与 `features/confirmation` 引用（编辑器页是另一个包，不受这几条限制）；弹窗类的 Radix 原语只在 `shared/ui/dialog.tsx` 里引入，对 web 的全部文件生效（M2-P1、M2-P2）；
   - Univer 的内部符号与 `Univer.__getInjector()` 只能在 `src/editor/internal-api/` 引用，逐项登记；`@univerjs/*` 只引用包入口、`/facade`、`/locale/<语言>` 与样式（ADR-010）。
 - **api**：
   - 模块之间只经对方的 `index.ts`，模块不引用应用的组装；
-  - 停用者文档的转移（`DocumentTransferService`，不经内容权限）只由 admin 模块引用（M2-P2）；
+  - admin 与 workspace 是最上层的编排，只由 app 层组装，别的模块都不引用它们；停用者文档的转移（`DocumentTransferService`，不经内容权限）只由 admin 模块引用（M2-P2）；
+  - 契约的请求结构与路径里的 id 用 `uuidSchema`（统一成小写），不直接用 `z.uuid()`（M2-P2）；
   - 一个模块只能引用自己的表定义，表定义之间可以互相引用（外键）；
   - 只有仓储访问数据库：
     - `drizzle-orm`、`pg`（包本身、子路径与 `pg-*`）只在 database 模块、各模块的仓储与表定义里引用；

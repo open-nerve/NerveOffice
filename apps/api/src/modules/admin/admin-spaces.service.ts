@@ -41,15 +41,16 @@ export class AdminSpacesService {
   async create(actor: Principal, request: CreateTeamSpaceRequest, origin: HttpOrigin): Promise<AdminSpace> {
     return this.transactions.run(async (transaction) => {
       await this.users.lockActingAdmin(actor.user.id, transaction)
-      if (await this.users.holdActiveAccount(request.adminUserId, transaction) === undefined)
+      const admin = await this.users.holdActiveAccount(request.adminUserId, transaction)
+      if (admin === undefined)
         throw new AppError('ACCOUNT_UNAVAILABLE')
-      const space = await this.spaces.createTeamSpace({ ...request, createdBy: actor.user.id }, transaction)
+      const space = await this.spaces.createTeamSpace({ name: request.name, adminUserId: admin.id, visibleToAll: request.visibleToAll, createdBy: actor.user.id }, transaction)
       await this.audit.record({
         action: 'spaces.created',
         actor: actorOf(actor),
         target: { type: 'space', id: space.id },
         origin,
-        details: { adminUserId: request.adminUserId, visibleToAll: request.visibleToAll },
+        details: { adminUserId: admin.id, visibleToAll: space.visibleToAll },
       }, { transaction })
       return this.overview(actor, space.id, transaction)
     })
@@ -69,7 +70,7 @@ export class AdminSpacesService {
     return this.change(actor, spaceId, origin, async (space, transaction) => {
       const change = await this.spaces.setStatus(space, status, transaction)
       if (change.changed && status === 'archived')
-        await this.writeAccess.revoke({ kind: 'space', spaceId }, transaction)
+        await this.writeAccess.revoke({ kind: 'space', spaceId: space.id }, transaction)
       return { change, action: status === 'archived' ? 'spaces.archived' : 'spaces.restored' }
     })
   }
@@ -93,8 +94,8 @@ export class AdminSpacesService {
         throw new AppError('NOT_FOUND')
       const { change, action, details } = await apply(space, transaction)
       if (change.changed)
-        await this.audit.record({ action, actor: actorOf(actor), target: { type: 'space', id: spaceId }, origin, ...(details === undefined ? {} : { details }) }, { transaction })
-      return this.overview(actor, spaceId, transaction)
+        await this.audit.record({ action, actor: actorOf(actor), target: { type: 'space', id: space.id }, origin, ...(details === undefined ? {} : { details }) }, { transaction })
+      return this.overview(actor, space.id, transaction)
     })
   }
 

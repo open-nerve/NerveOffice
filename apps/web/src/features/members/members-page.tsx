@@ -7,12 +7,13 @@ import { Link, useNavigate, useParams } from 'react-router'
 import { describeError, isMissingResource, isPermissionDeniedError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { ADMIN_PATHS } from '../../shared/lib/admin-paths.ts'
+import { cn } from '../../shared/lib/cn.ts'
 import { HOME_PATH, spacePath } from '../../shared/lib/space-paths.ts'
 import { Alert, AlertDescription, Badge, Button, buttonVariants, Label, NativeSelect, Skeleton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../shared/ui/index.ts'
 import { sessionQueryOptions } from '../auth/index.ts'
 import { ColleaguePicker } from '../colleagues/index.ts'
 import { ConfirmDialog } from '../confirmation/index.ts'
-import { addMember, changeMemberRole, forgetSpace, membersQueryOptions, removeMember, SPACES_QUERY_KEY, spacesQueryOptions, useForgetMissingSpace } from '../spaces/index.ts'
+import { addMember, changeMemberRole, forgetSpace, membersQueryOptions, removeMember, SpaceNotFound, SPACES_QUERY_KEY, spacesQueryOptions, useForgetMissingSpace } from '../spaces/index.ts'
 
 const text = messages.members
 
@@ -84,6 +85,8 @@ interface MemberRowProps {
  * 成员表的一行（审查 B3）。能管理时，角色由这一行各自提交，不同的行可以同时调整：
  * - 选择之后立即显示目标角色（记在这一行的状态里，与选择同一次渲染，不等请求的状态）；进行中这一行标为忙碌、说明"正在保存…"，
  *   这期间再改这一行不提交，选择框仍显示正在保存的角色；
+ * - 保存成功时先用响应替换缓存里的这一行，再刷新成员列表：刷新失败时 TanStack Query 保留上一次的数据，
+ *   这一行也已经是保存之后的角色，不显示旧的（复验）；
  * - 成员列表刷新完成之后才结束，选择框不先弹回旧的角色；
  * - 失败时恢复原来的角色（失败之后也刷新，显示服务端的实际状态），原因就在这一行说明。
  */
@@ -94,6 +97,11 @@ function MemberRow({ spaceId, member, self, canManage, onDemoteSelf, onRemove }:
   const [saving, setSaving] = useState<SpaceRole>()
   const change = useMutation({
     mutationFn: async (role: SpaceRole) => changeMemberRole(spaceId, member.user.id, role),
+    onSuccess: (saved) => {
+      queryClient.setQueryData(membersQueryOptions(spaceId).queryKey, list => list === undefined
+        ? undefined
+        : { ...list, items: list.items.map(item => (item.user.id === member.user.id ? saved : item)) })
+    },
     onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY })
       setSaving(undefined)
@@ -158,13 +166,20 @@ function MembersTable({ spaceId, list, selfId, focusTitle }: MembersTableProps) 
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [pending, setPending] = useState<PendingConfirmation>()
+  /** 表格上方的说明（要移出的人已经不在成员里了）；下一次打开确认的弹窗时清掉 */
+  const [notice, setNotice] = useState<string>()
 
   async function refresh(): Promise<void> {
     await queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY })
   }
 
+  function confirm(confirmation: PendingConfirmation): void {
+    setNotice(undefined)
+    setPending(confirmation)
+  }
+
   function confirmDemoteSelf(member: SpaceMember, role: SpaceRole): void {
-    setPending({
+    confirm({
       title: text.confirmDemoteSelf(role),
       description: text.demoteSelfDescription,
       confirmLabel: text.change,
@@ -179,8 +194,9 @@ function MembersTable({ spaceId, list, selfId, focusTitle }: MembersTableProps) 
 
   function confirmRemove(member: SpaceMember): void {
     const self = member.user.id === selfId
-    setPending({
-      title: self ? text.confirmRemoveSelf : text.confirmRemove(messages.colleagues.name(member.user)),
+    const name = messages.colleagues.name(member.user)
+    confirm({
+      title: self ? text.confirmRemoveSelf : text.confirmRemove(name),
       description: self ? text.removeSelfDescription : text.removeDescription,
       confirmLabel: text.remove,
       destructive: true,
@@ -189,10 +205,16 @@ function MembersTable({ spaceId, list, selfId, focusTitle }: MembersTableProps) 
           await removeMember(spaceId, member.user.id)
         }
         catch (error) {
-          // 已经被别人移出（404）：先刷新成员列表（这一行随之消失），再在弹窗里说明原因（审查 B12）
-          if (isMissingResource(error))
-            await refresh()
-          throw error
+          if (!isMissingResource(error))
+            throw error
+          // 已经不是成员了（可能被别人移出，404）：先刷新成员列表，这一行随之消失（审查 B12）。列表取到了就关闭弹窗，在表格上方说明：
+          // 弹窗留着的话，再点确认只会原样重发（复验）。列表取不到时照旧在弹窗里说明原因：空间本身看不到了，成员页随之显示
+          // "空间不存在"（B1），不另外说明；刷新失败时列表还是旧的，这一行也还在
+          await refresh()
+          if (queryClient.getQueryState(membersQueryOptions(spaceId).queryKey)?.status !== 'success')
+            throw error
+          setNotice(self ? text.alreadyRemovedSelf : text.alreadyRemoved(name))
+          return
         }
         if (!self) {
           await refresh()
@@ -208,35 +230,39 @@ function MembersTable({ spaceId, list, selfId, focusTitle }: MembersTableProps) 
     })
   }
 
-  if (list.items.length === 0)
-    return <p className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">{text.empty}</p>
   return (
-    <>
-      <Table aria-label={text.listLabel}>
-        <TableHeader>
-          <TableRow>
-            <TableHead>{text.columns.name}</TableHead>
-            <TableHead>{text.columns.role}</TableHead>
-            <TableHead>{text.columns.status}</TableHead>
-            {list.canManage && <TableHead>{text.columns.actions}</TableHead>}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {list.items.map(member => (
-            <MemberRow
-              key={member.user.id}
-              spaceId={spaceId}
-              member={member}
-              self={member.user.id === selfId}
-              canManage={list.canManage}
-              onDemoteSelf={role => confirmDemoteSelf(member, role)}
-              onRemove={() => confirmRemove(member)}
-            />
-          ))}
-        </TableBody>
-      </Table>
+    <div>
+      {/* 表格上方的说明：容器一直在（空的时候不占位置），内容变化时往里填文字，读屏软件才会播报（与转移结果的做法相同） */}
+      <p role="status" className={cn('text-sm', notice !== undefined && 'mb-4 rounded-lg border p-3')}>{notice}</p>
+      {list.items.length === 0
+        ? <p className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">{text.empty}</p>
+        : (
+            <Table aria-label={text.listLabel}>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{text.columns.name}</TableHead>
+                  <TableHead>{text.columns.role}</TableHead>
+                  <TableHead>{text.columns.status}</TableHead>
+                  {list.canManage && <TableHead>{text.columns.actions}</TableHead>}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {list.items.map(member => (
+                  <MemberRow
+                    key={member.user.id}
+                    spaceId={spaceId}
+                    member={member}
+                    self={member.user.id === selfId}
+                    canManage={list.canManage}
+                    onDemoteSelf={role => confirmDemoteSelf(member, role)}
+                    onRemove={() => confirmRemove(member)}
+                  />
+                ))}
+              </TableBody>
+            </Table>
+          )}
       <ConfirmDialog pending={pending} onClose={() => setPending(undefined)} />
-    </>
+    </div>
   )
 }
 
@@ -274,7 +300,7 @@ function ManageNotice({ list }: { readonly list: SpaceMemberListResponse }) {
 }
 
 /**
- * 成员页的内容：加载中；看不到（与不存在一致）；个人空间（没有成员）；加载失败（可以重试）；成员表。
+ * 成员页的内容：加载中；看不到（与不存在一致）；看得到却不能查看成员（服务端说明原因）；加载失败（可以重试）；成员表。
  * 先看错误、再看数据：重新请求失败时 TanStack Query 保留上一次的数据。已打开的页面里被移出了空间，缓存里还是能管理的成员表，
  * 重新请求得到 404 就按看不到显示，管理的控件不再出现（审查 B1）；导航与这个空间的缓存随之更新。
  */
@@ -291,18 +317,14 @@ function MembersContent({ spaceId }: { readonly spaceId: string }) {
       </div>
     )
   }
-  if (missing) {
-    return (
-      <Alert variant="destructive">
-        <AlertDescription>{messages.spaces.notFound}</AlertDescription>
-      </Alert>
-    )
-  }
-  // 看得到这个空间却不能查看成员：只有个人空间的所有者会这样，重试也一样，不给重试
+  if (missing)
+    return <SpaceNotFound />
+  // 看得到这个空间却不能查看成员（现在只有个人空间的所有者会这样）：显示服务端在这次拒绝里给出的说明（例如"个人空间没有成员"），
+  // 原因由服务端判断，前端不按错误码猜（复验；ADR-006：说明面向用户）。重试也一样，不给重试
   if (isPermissionDeniedError(list.error)) {
     return (
       <Alert>
-        <AlertDescription>{text.personalSpace}</AlertDescription>
+        <AlertDescription>{list.error.message}</AlertDescription>
       </Alert>
     )
   }
