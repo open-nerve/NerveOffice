@@ -5,7 +5,7 @@ import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
-import { errorResponseSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
+import { errorResponseSchema, SHEET_TEMPLATE, TRASH_RETENTION_DAYS } from '@nerve-office/contracts'
 import { expect } from 'vitest'
 import { createAccount, createPassiveAccount } from '../support/accounts.ts'
 import { parseExact } from '../support/contracts.ts'
@@ -27,6 +27,12 @@ export type ActorName = (typeof ACTORS)[number]
 export const TARGETS = ['personal', 'team', 'visible', 'archived', 'missing'] as const
 export type TargetName = (typeof TARGETS)[number]
 
+/**
+ * 固定文档的标题前缀：只有 documents 与 trashedDocuments 这两批固定的文档带它，
+ * 每一格另建的文档都不带。搜索的矩阵拿它当关键词，结果因此是确定的几份，不受别的格子建出来的文档影响。
+ */
+export const MATRIX_TITLE_PREFIX = '矩阵：'
+
 const USERNAMES: Readonly<Record<ActorName, string>> = {
   owner: 'matrix-owner',
   spaceAdmin: 'matrix-space-admin',
@@ -46,13 +52,43 @@ export interface MatrixDocument {
   readonly unitId: string
 }
 
+export interface MatrixFolder {
+  readonly id: string
+}
+
+/** 回收站里的一个删除单元。 */
+export interface MatrixTrashEntry {
+  readonly id: string
+}
+
 export interface MatrixWorld {
   readonly actors: Readonly<Record<ActorName, MatrixActor>>
   readonly spaces: Readonly<Record<TargetName, string>>
   /** 每个目标空间里的一份文档；不存在的空间对应一个不存在的文档 */
   readonly documents: Readonly<Record<TargetName, MatrixDocument>>
-  /** 在目标空间里另建一份文档：会改文档的格子（例如保存）各用各的，互不影响 */
-  readonly freshDocument: (target: TargetName) => Promise<MatrixDocument>
+  /**
+   * 跨空间操作（移动、复制）牵涉两个空间，矩阵的一行只放得下一个目标，所以另建一个
+   * **六个人都是空间管理员**的团队空间当固定的那一端（M2-P4 S7）：
+   * - 它当目标时，"目标空间有新建权限"对谁都成立，那一行只考核源空间的规则；
+   * - 它当来源时，"源空间是空间管理员"对谁都成立，那一行只考核目标空间的规则。
+   */
+  readonly crossSpace: string
+  /** 每个目标空间里一份在回收站里的文档；不存在的空间对应一个不存在的文档 */
+  readonly trashedDocuments: Readonly<Record<TargetName, MatrixDocument>>
+  /** 每个目标空间里一个在回收站里的文件夹；不存在的空间对应一个不存在的文件夹 */
+  readonly trashedFolders: Readonly<Record<TargetName, MatrixFolder>>
+  /** 在目标空间里另建一份文档：会改文档的格子（例如保存）各用各的，互不影响；createdBy 默认是这个空间的空间管理员 */
+  readonly freshDocument: (target: TargetName, createdBy?: string) => Promise<MatrixDocument>
+  /** 在某个空间里另建一份文档（跨空间的行用它在 crossSpace 里建） */
+  readonly documentIn: (spaceId: string, createdBy: string) => Promise<MatrixDocument>
+  /** 在目标空间里另建一个空文件夹：会改文件夹的格子（改名、移动、删除）各用各的 */
+  readonly freshFolder: (target: TargetName) => Promise<MatrixFolder>
+  /** 在某个空间里另建一个空文件夹（跨空间的行用它在 crossSpace 里建） */
+  readonly folderIn: (spaceId: string, createdBy: string) => Promise<MatrixFolder>
+  /** 在目标空间里另建一个文件夹，里面放一份 createdBy 创建的文档（"里面有别人创建的文档"那一行用） */
+  readonly freshFolderHolding: (target: TargetName, createdBy: string) => Promise<MatrixFolder>
+  /** 在目标空间的回收站里另放一个删除单元（一份文档）：恢复与永久删除的格子各用各的 */
+  readonly freshTrashEntry: (target: TargetName, deletedBy: string) => Promise<MatrixTrashEntry>
   /** 另建一个不登录的账户：成员的格子（添加、调整、移出）各用各的人；member 为真时先把他加为目标空间的查看者 */
   readonly freshSubject: (target: TargetName, member: boolean) => Promise<string>
   /** 另建一个与目标同样状态、同样成员的空间：会改空间的格子（归档、全员可见）各用各的；个人空间与不存在的空间照原样 */
@@ -64,6 +100,49 @@ export function snapshotOf(unitId: string, value: string): Buffer {
   const sheet = SHEET_TEMPLATE.sheets['sheet-1']
   const snapshot = { ...SHEET_TEMPLATE, id: unitId, sheets: { 'sheet-1': { ...sheet, cellData: { 0: { 0: { v: value } } } } } }
   return Buffer.from(JSON.stringify(snapshot), 'utf8')
+}
+
+/**
+ * 直接写库建一个空间根目录下的文件夹（与经接口新建的一致：第 1 层、没有父文件夹、状态正常）。
+ * 矩阵每一格都要一个新的文件夹，归档的空间里又建不出来（接口 403），所以统一走写库，与 seedDocument 同一个理由。
+ */
+async function seedFolder(database: TestDatabase, options: { spaceId: string, createdBy: string, name: string }): Promise<string> {
+  return database.query(async (client) => {
+    const result = await client.query<{ id: string }>(
+      'INSERT INTO folders (space_id, parent_id, name, created_by, depth, request_id) VALUES ($1, NULL, $2, $3, 1, $4) RETURNING id',
+      [options.spaceId, options.name, options.createdBy, randomUUID()],
+    )
+    const id = result.rows[0]?.id
+    if (id === undefined)
+      throw new Error('建文件夹没有返回 id')
+    return id
+  })
+}
+
+/**
+ * 直接写库把一份文档或一个文件夹放进回收站：建一条删除单元，再把那一行改成 trashed 并指向它
+ * （与 TrashService 删除之后的行一致：到期时间是删除时间加 TRASH_RETENTION_DAYS 天，两列必须一起写，CHECK 要求二者一致）。
+ * 删除的完整语义（代次、级联、审计）由 documents/trash.test.ts 覆盖，这里只摆出权限判断读到的事实。
+ */
+async function seedTrashEntry(
+  database: TestDatabase,
+  options: { spaceId: string, kind: 'document' | 'folder', deletedBy: string, title: string, objectId: string },
+): Promise<string> {
+  return database.query(async (client) => {
+    const entry = await client.query<{ id: string }>(
+      `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_space_id, origin_parent_id, title)
+       VALUES ($1, $2, $3, now() + make_interval(days => $4::int), $1, NULL, $5) RETURNING id`,
+      [options.spaceId, options.kind, options.deletedBy, TRASH_RETENTION_DAYS, options.title],
+    )
+    const id = entry.rows[0]?.id
+    if (id === undefined)
+      throw new Error('建删除单元没有返回 id')
+    const table = options.kind === 'document' ? 'documents' : 'folders'
+    // 文档删除时写入代次加一（P2 交接单第 55 行）；文件夹没有代次
+    const epoch = options.kind === 'document' ? ', write_epoch = write_epoch + 1' : ''
+    await client.query(`UPDATE ${table} SET status = 'trashed', trash_entry_id = $2${epoch} WHERE id = $1`, [options.objectId, id])
+    return id
+  })
 }
 
 export async function buildMatrixWorld(database: TestDatabase, app: TestApp): Promise<MatrixWorld> {
@@ -93,6 +172,14 @@ export async function buildMatrixWorld(database: TestDatabase, app: TestApp): Pr
   }
   const spaces = Object.fromEntries(await Promise.all(TARGETS.map(async target => [target, await freshSpace(target)] as const))) as Record<TargetName, string>
 
+  // 跨空间的行固定的那一端：六个人都是这个团队空间的空间管理员，所以"源空间是空间管理员"与
+  // "目标空间有新建权限"在它这一端对谁都成立，那一行只考核另一端（见 MatrixWorld.crossSpace）
+  const crossSpace = await createTeamSpace(database, {
+    name: '矩阵：跨空间',
+    createdBy,
+    members: Object.fromEntries(ACTORS.map(name => [accounts[name].id, 'admin' as const])),
+  })
+
   const freshSubject = async (target: TargetName, member: boolean): Promise<string> => {
     sequence += 1
     const subject = await createPassiveAccount(database, { username: `matrix-subject-${sequence}` })
@@ -101,20 +188,90 @@ export async function buildMatrixWorld(database: TestDatabase, app: TestApp): Pr
     return subject.id
   }
 
-  const freshDocument = async (target: TargetName): Promise<MatrixDocument> => {
+  /** 这个目标空间里的空间管理员：个人空间是所有者，团队空间是 spaceAdmin（新建的东西默认由他创建、由他删除） */
+  const adminOf = (target: TargetName): string => (target === 'personal' ? accounts.owner.id : accounts.spaceAdmin.id)
+
+  const documentIn = async (spaceId: string, author: string): Promise<MatrixDocument> => {
+    sequence += 1
+    return seedDocument(database, { spaceId, createdBy: author, title: `矩阵文档 ${sequence}` })
+  }
+  const freshDocument = async (target: TargetName, createdBy?: string): Promise<MatrixDocument> => {
     if (target === 'missing')
       return { id: randomUUID(), unitId: randomUUID() }
-    const createdBy = target === 'personal' ? accounts.owner.id : accounts.spaceAdmin.id
-    return seedDocument(database, { spaceId: spaces[target], createdBy, title: `矩阵：${target}` })
+    return documentIn(spaces[target], createdBy ?? adminOf(target))
   }
-  const documents = Object.fromEntries(await Promise.all(TARGETS.map(async target => [target, await freshDocument(target)] as const))) as Record<TargetName, MatrixDocument>
+  const documents = Object.fromEntries(await Promise.all(TARGETS.map(async (target) => {
+    if (target === 'missing')
+      return [target, { id: randomUUID(), unitId: randomUUID() }] as const
+    return [target, await seedDocument(database, { spaceId: spaces[target], createdBy: adminOf(target), title: `${MATRIX_TITLE_PREFIX}${target}` })] as const
+  }))) as Record<TargetName, MatrixDocument>
+
+  const folderIn = async (spaceId: string, author: string): Promise<MatrixFolder> => {
+    sequence += 1
+    return { id: await seedFolder(database, { spaceId, createdBy: author, name: `矩阵目录 ${sequence}` }) }
+  }
+  const freshFolder = async (target: TargetName): Promise<MatrixFolder> => {
+    if (target === 'missing')
+      return { id: randomUUID() }
+    return folderIn(spaces[target], adminOf(target))
+  }
+  const freshFolderHolding = async (target: TargetName, author: string): Promise<MatrixFolder> => {
+    const folder = await freshFolder(target)
+    if (target !== 'missing') {
+      sequence += 1
+      await seedDocument(database, { spaceId: spaces[target], createdBy: author, title: `矩阵目录里的文档 ${sequence}`, folderId: folder.id })
+    }
+    return folder
+  }
+
+  const freshTrashEntry = async (target: TargetName, deletedBy: string): Promise<MatrixTrashEntry> => {
+    if (target === 'missing')
+      return { id: randomUUID() }
+    // 删除单元的标题就是被删文档删除时的标题（与 TrashService 一致）
+    sequence += 1
+    const title = `矩阵回收站 ${sequence}`
+    const document = await seedDocument(database, { spaceId: spaces[target], createdBy: deletedBy, title })
+    return { id: await seedTrashEntry(database, { spaceId: spaces[target], kind: 'document', deletedBy, title, objectId: document.id }) }
+  }
+
+  // 固定的、已经在回收站里的文档与文件夹：对普通接口一律"不存在"的那张表只读不改，所以整张表共用这一批。
+  // 文档的标题同样带 MATRIX_TITLE_PREFIX：搜索的矩阵据此核对"回收站里的搜不到"
+  const trashedDocuments = Object.fromEntries(await Promise.all(TARGETS.map(async (target) => {
+    if (target === 'missing')
+      return [target, { id: randomUUID(), unitId: randomUUID() }] as const
+    const title = `${MATRIX_TITLE_PREFIX}${target} 已删`
+    const document = await seedDocument(database, { spaceId: spaces[target], createdBy: adminOf(target), title })
+    await seedTrashEntry(database, { spaceId: spaces[target], kind: 'document', deletedBy: adminOf(target), title, objectId: document.id })
+    return [target, document] as const
+  }))) as Record<TargetName, MatrixDocument>
+  const trashedFolders = Object.fromEntries(await Promise.all(TARGETS.map(async (target) => {
+    const folder = await freshFolder(target)
+    if (target !== 'missing')
+      await seedTrashEntry(database, { spaceId: spaces[target], kind: 'folder', deletedBy: adminOf(target), title: `矩阵已删目录：${target}`, objectId: folder.id })
+    return [target, folder] as const
+  }))) as Record<TargetName, MatrixFolder>
 
   const actors = Object.fromEntries(await Promise.all(ACTORS.map(async name => [name, {
     id: accounts[name].id,
     session: await login(app.baseUrl, USERNAMES[name], accounts[name].password),
   }] as const))) as Record<ActorName, MatrixActor>
 
-  return { actors, spaces, documents, freshDocument, freshSubject, freshSpace }
+  return {
+    actors,
+    spaces,
+    documents,
+    crossSpace,
+    trashedDocuments,
+    trashedFolders,
+    freshDocument,
+    documentIn,
+    freshFolder,
+    folderIn,
+    freshFolderHolding,
+    freshTrashEntry,
+    freshSubject,
+    freshSpace,
+  }
 }
 
 /**
