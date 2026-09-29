@@ -1,18 +1,20 @@
 import type { AdminUser, UserStatus } from '@nerve-office/contracts'
-import type { PendingConfirmation } from './confirm-dialog.tsx'
+import type { PendingConfirmation } from '../confirmation/index.ts'
 import type { IssuedLink } from './issued-link-dialog.tsx'
 import type { PagedTableHandle } from './paged-table.tsx'
 import { PASSWORD_RESET_LIFETIME_HOURS, USER_STATUSES } from '@nerve-office/contracts'
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
+import { Link } from 'react-router'
 import { messages } from '../../shared/i18n/index.ts'
+import { adminUserDocumentsPath } from '../../shared/lib/admin-paths.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { useSessionRecheck } from '../../shared/lib/session-recheck.ts'
 import { useDebouncedValue } from '../../shared/lib/use-debounced-value.ts'
-import { Badge, Button, Input, Label, NativeSelect, TableCell } from '../../shared/ui/index.ts'
-import { sessionQueryOptions } from '../auth/index.ts'
+import { Badge, Button, buttonVariants, Input, Label, NativeSelect, TableCell } from '../../shared/ui/index.ts'
+import { sessionQueryOptions, SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
+import { ConfirmDialog } from '../confirmation/index.ts'
 import { ADMIN_QUERY_KEY, adminUsersQueryOptions, changeSystemRole, disableUser, enableUser, issuePasswordReset } from './admin-api.ts'
-import { ConfirmDialog } from './confirm-dialog.tsx'
 import { IssuedLinkDialog } from './issued-link-dialog.tsx'
 import { PagedTable } from './paged-table.tsx'
 
@@ -154,6 +156,12 @@ export function AdminUsersPage() {
             {text.resetPassword}
           </Button>
         )}
+        {/* 停用的账户：把个人空间里的文档转移给别人（M2-P2 设计 §3.8） */}
+        {user.status === 'disabled' && (
+          <Link to={adminUserDocumentsPath(user.id)} aria-label={messages.admin.actionOn(text.transfer, name)} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>
+            {text.transfer}
+          </Link>
+        )}
       </div>
     )
   }
@@ -191,7 +199,7 @@ export function AdminUsersPage() {
           </>
         )}
       />
-      <ConfirmDialog pending={pending} onClose={() => setPending(undefined)} />
+      <ConfirmDialog pending={pending} onClose={() => setPending(undefined)} meta={SYSTEM_ADMIN_ONLY} />
       <IssuedLinkDialog link={issued?.link} onClose={closeLink} />
     </div>
   )

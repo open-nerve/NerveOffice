@@ -2,6 +2,7 @@ import type { AdminUser, AdminUserListQuery, AdminUserListResponse, UserSystemRo
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Principal } from '../auth/index.ts'
 import { Injectable } from '@nestjs/common'
+import { AppError } from '../../shared/errors/app-error.ts'
 import { AuditService } from '../audit/index.ts'
 import { PasswordResetsService, SessionService } from '../auth/index.ts'
 import { TransactionRunner } from '../database/index.ts'
@@ -25,6 +26,14 @@ export class AdminUsersService {
     private readonly audit: AuditService,
     private readonly transactions: TransactionRunner,
   ) {}
+
+  /** 一个账户（含停用的）；不存在时 NOT_FOUND */
+  async get(userId: string): Promise<AdminUser> {
+    const account = await this.users.findAccount(userId)
+    if (account === undefined)
+      throw new AppError('NOT_FOUND')
+    return toAdminUser(account)
+  }
 
   async list(query: AdminUserListQuery): Promise<AdminUserListResponse> {
     const page = await this.users.listAccounts(query)

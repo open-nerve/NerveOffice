@@ -461,10 +461,40 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
     expect((await lint(`export { AlertDialog } from 'radix-ui'\n`, BARREL)).messages.join('\n')).toContain('弹窗类的 Radix 原语')
     expect((await lint('import { Label } from \'radix-ui\'\n\nexport const Root = Label.Root\n', 'apps/web/src/shared/ui/label.tsx')).messages.join('\n')).not.toContain('弹窗类的 Radix 原语')
     expect((await lint(radixDialog, 'apps/web/src/shared/ui/dialog.tsx')).messages.join('\n')).not.toContain('弹窗类的 Radix 原语')
-    // 用到弹窗的功能模块（按需加载的管理界面）直接引用它
-    expect(await rulesFor('import { DialogContent } from \'../../shared/ui/dialog.tsx\'\n\nexport const content = DialogContent\n', 'apps/web/src/features/admin/confirm-dialog.tsx')).not.toContain('import-x/no-restricted-paths')
+    // 用到弹窗的功能模块（确认的弹窗、按需加载的管理界面）直接引用它
+    expect(await rulesFor('import { DialogContent } from \'../../shared/ui/dialog.tsx\'\n\nexport const content = DialogContent\n', 'apps/web/src/features/confirmation/confirm-dialog.tsx')).not.toContain('import-x/no-restricted-paths')
     // 管理界面自己内部的引用不受影响
     expect(await rulesFor('import { ADMIN_QUERY_KEY } from \'./admin-api.ts\'\n\nexport const key = ADMIN_QUERY_KEY\n', 'apps/web/src/features/admin/users-page.tsx')).not.toContain('boundaries/dependencies')
+  })
+
+  it('成员页按需加载；确认的弹窗只由按需加载的功能引用（M2-P2 设计 §3.10）', async () => {
+    const ROUTES_FILE = 'apps/web/src/app/routes.ts'
+    const dynamicImport = (path: string): string => `export async function pages() {\n  return import('${path}')\n}\n`
+    expect(await rulesFor(dynamicImport('../features/members/index.ts'), ROUTES_FILE)).not.toContain('boundaries/dependencies')
+    const members: [string, string][] = [
+      [`import { MembersPage } from '../features/members/index.ts'\n\nexport const page = MembersPage\n`, ROUTES_FILE],
+      [dynamicImport('../features/members/index.ts'), WEB_FILE],
+      [`import type { MembersPage } from '../members/index.ts'\n\nexport type Page = typeof MembersPage\n`, WEB_FEATURE_FILE],
+    ]
+    for (const [code, file] of members) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain('boundaries/dependencies')
+      expect(report.messages.join('\n'), file).toContain('成员页（features/members）按需加载')
+    }
+    const importConfirm = (path: string): string => `import { ConfirmDialog } from '${path}'\n\nexport const dialog = ConfirmDialog\n`
+    for (const file of ['apps/web/src/features/admin/users-page.tsx', 'apps/web/src/features/members/members-page.tsx'])
+      expect(await rulesFor(importConfirm('../confirmation/index.ts'), file), file).not.toContain('boundaries/dependencies')
+    const confirmation: [string, string][] = [
+      [importConfirm('../confirmation/index.ts'), WEB_FEATURE_FILE],
+      [importConfirm('../confirmation/index.ts'), 'apps/web/src/features/spaces/space-page.tsx'],
+      [importConfirm('../features/confirmation/index.ts'), WEB_FILE],
+      [importConfirm('../../features/confirmation/index.ts'), PLATFORM_ENTRY],
+    ]
+    for (const [code, file] of confirmation) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain('boundaries/dependencies')
+      expect(report.messages.join('\n'), file).toContain('确认的弹窗（features/confirmation，带 Radix Dialog）只由按需加载的功能')
+    }
   })
 }, LINT_TIMEOUT)
 

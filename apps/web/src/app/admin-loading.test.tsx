@@ -3,7 +3,7 @@
 import { screen } from '@testing-library/react'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
-import { listPage, ROOT, session, settle } from './admin.test-support.ts'
+import { listPage, ROOT, session, settle, SPACES } from './admin.test-support.ts'
 import { renderApp } from './render-app.test-support.tsx'
 
 const adminCode = vi.hoisted(() => {
@@ -27,6 +27,7 @@ beforeAll(async () => {
 describe('直接打开管理界面', () => {
   it('下载代码期间显示确认登录的骨架屏；下载完之后照常确认登录、打开账户页', async () => {
     const api = installFakeApi({
+      ...SPACES,
       'GET /api/auth/session': () => json(200, session('admin')),
       'GET /api/admin/users': () => json(200, listPage([ROOT])),
     })

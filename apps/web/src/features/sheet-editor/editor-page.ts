@@ -1,6 +1,6 @@
 // 编辑器页（P4 设计 §3.7）：载入、保存、会话。界面（editor-chrome.tsx）只订阅这里的状态；
 // 编辑器在 React 之外创建：一页一份文档，整页加载与卸载，不随组件的挂载与卸载反复创建（计划书 §10.2）。
-import type { DocumentDetail, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
+import type { DocumentDetail, DocumentSpace, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
 import type { CreateSheetEditorOptions, SheetEditor, SheetEditorLifecycle } from '../../editor/index.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
@@ -15,7 +15,7 @@ import { createSaveCoordinator } from './save-coordinator.ts'
 /** 载入的结果：就绪（可以编辑）、内容不存在或无权访问、格式不认识、请求失败、编辑器加载失败。 */
 export type EditorPageLoad
   = | { readonly kind: 'loading' }
-    | { readonly kind: 'ready', readonly title: string, readonly readOnly: boolean, readonly stage: SheetEditorLifecycle }
+    | { readonly kind: 'ready', readonly title: string, readonly space: DocumentSpace, readonly readOnly: boolean, readonly stage: SheetEditorLifecycle }
     | { readonly kind: 'not-found' }
     | { readonly kind: 'unsupported' }
     | { readonly kind: 'failed', readonly error: unknown }
@@ -337,7 +337,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       cleanups.push(coordinator.subscribe(update))
     }
     const enter = (stage: SheetEditorLifecycle): void => {
-      load = { kind: 'ready', title: document.title, readOnly, stage }
+      load = { kind: 'ready', title: document.title, space: document.space, readOnly, stage }
       // 渲染完成之后可以输入（ready）；steady 之后才判断"打开是否被判定为有修改"
       setSurface(stage === 'steady' ? 'steady' : 'ready')
       update()

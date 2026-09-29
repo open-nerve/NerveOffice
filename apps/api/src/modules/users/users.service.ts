@@ -57,6 +57,11 @@ export class UsersService implements OnModuleInit {
     return this.repository.findById(id)
   }
 
+  /** 按 id 取管理界面用的账户（带创建时间，含停用的）：转移页的页头（M2-P2 设计 §3.10） */
+  async findAccount(id: string): Promise<AccountRecord | undefined> {
+    return this.repository.findRecord(id)
+  }
+
   /**
    * 锁住账户的行再读（M2-P1 审查 A2）：改动这个账户的凭据、状态、重置与会话的事务，第一步都调它（停用与系统角色的变更
    * 之前另有 advisory lock），在锁里复核状态，再动重置与会话的行。账户不存在时返回 undefined

@@ -659,6 +659,34 @@ export default antfu(
               dependency: { nodeKind: 'dynamic-import' },
             },
           },
+          // 成员页同样按需加载（M2-P2 设计 §3.10）：它带着确认的弹窗与同事选择，只给查看与管理成员时用
+          {
+            from: [
+              { element: { type: 'web-app' } },
+              { element: { type: 'web-entry' } },
+              { element: { type: 'web-feature' } },
+            ],
+            disallow: { to: { element: { type: 'web-feature', captured: { feature: 'members' } } } },
+            message: '成员页（features/members）按需加载：只有 app/routes.ts 可以动态 import() 它的公开入口，静态引用会把它带进平台页面的首屏（M2-P2 设计 §3.10）',
+          },
+          {
+            from: { element: { type: 'web-app', fileInternalPath: 'routes.ts' } },
+            allow: {
+              to: { element: { type: 'web-feature', captured: { feature: 'members' }, fileInternalPath: PUBLIC_ENTRY } },
+              dependency: { nodeKind: 'dynamic-import' },
+            },
+          },
+          // 确认的弹窗带着 Radix Dialog（约 12 KiB gzip）：只由按需加载的功能（管理界面、成员页）引用，
+          // 首屏的页面、应用层与入口引用它会把弹窗带进平台页面的首屏（ADR-008，M2-P2 设计 §3.10）
+          {
+            from: [
+              { element: { type: 'web-app' } },
+              { element: { type: 'web-entry' } },
+              { element: { type: 'web-feature', captured: { feature: '!{admin,members}' } } },
+            ],
+            disallow: { to: { element: { type: 'web-feature', captured: { feature: 'confirmation' } } } },
+            message: '确认的弹窗（features/confirmation，带 Radix Dialog）只由按需加载的功能（features/admin、features/members）引用，不进平台页面的首屏（ADR-008）',
+          },
         ],
       }],
     },

@@ -11,6 +11,7 @@ import { z } from 'zod'
 import { SESSION_QUERY_KEY } from '../features/auth/index.ts'
 import { apiRequest } from '../shared/api/index.ts'
 import { apiError, installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
+import { documentsKey, spaceRoutes } from '../shared/testing/spaces.test-support.ts'
 import { currentPath, renderApp, sessionBus } from './render-app.test-support.tsx'
 
 const SESSION: SessionResponse = {
@@ -60,9 +61,16 @@ async function settle(): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, 50))
 }
 
-const LOGGED_OUT = { 'GET /api/auth/session': () => apiError(401, 'UNAUTHENTICATED') }
-const LOGGED_IN = { 'GET /api/auth/session': () => json(200, SESSION) }
-const NO_DOCUMENTS = { 'GET /api/documents': () => json(200, { items: [], nextCursor: null }) }
+/** 个人空间的文档列表：第一页与带游标的下一页（M2-P2 起按空间取） */
+const DOCS = documentsKey(SESSION)
+const DOCS_C1 = documentsKey(SESSION, 'c1')
+const DOCS_C2 = documentsKey(SESSION, 'c2')
+/** 页框的导航与首页的页头（M2-P2）：登录之后的每一页都要 */
+const SPACES = spaceRoutes(SESSION)
+
+const LOGGED_OUT = { 'GET /api/auth/session': () => apiError(401, 'UNAUTHENTICATED'), ...SPACES }
+const LOGGED_IN = { 'GET /api/auth/session': () => json(200, SESSION), ...SPACES }
+const NO_DOCUMENTS = { [DOCS]: () => json(200, { items: [], nextCursor: null }) }
 
 async function fillLogin(username: string, password: string): Promise<void> {
   fireEvent.change(await screen.findByLabelText('用户名'), { target: { value: username } })
@@ -88,7 +96,7 @@ describe('US-M1-02 登录与退出', () => {
     const bus = sessionBus()
     const otherTab = vi.fn()
     bus.open().subscribe(otherTab)
-    const api = installFakeApi({ ...LOGGED_OUT, 'POST /api/auth/login': () => json(200, SESSION), 'GET /api/documents': () => json(200, { items: [document(1)], nextCursor: null }) })
+    const api = installFakeApi({ ...LOGGED_OUT, 'POST /api/auth/login': () => json(200, SESSION), [DOCS]: () => json(200, { items: [document(1)], nextCursor: null }) })
     const app = renderApp('/login', { sessionChannel: bus.open() })
     await fillLogin('alice', 'correct horse')
     expect(await screen.findByRole('heading', { name: '我的空间' })).toBeInTheDocument()
@@ -169,7 +177,7 @@ describe('US-M1-02 登录与退出', () => {
 
   it('已登录时打开登录页：确认会话之前显示骨架屏、不显示表单，随后直接回到首页（审查 B14）', async () => {
     const pending = deferred()
-    installFakeApi({ 'GET /api/auth/session': pending.handler, ...NO_DOCUMENTS })
+    installFakeApi({ 'GET /api/auth/session': pending.handler, ...SPACES, ...NO_DOCUMENTS })
     const app = renderApp('/login')
     expect(await screen.findByRole('status', { name: '正在确认登录状态…' })).toBeInTheDocument()
     expect(screen.queryByRole('form', { name: '登录' })).not.toBeInTheDocument()
@@ -182,7 +190,7 @@ describe('US-M1-02 登录与退出', () => {
     const bus = sessionBus()
     const otherTab = vi.fn()
     bus.open().subscribe(otherTab)
-    const api = installFakeApi({ ...LOGGED_IN, 'GET /api/documents': () => json(200, { items: [document(1)], nextCursor: null }), 'POST /api/auth/logout': () => new Response(null, { status: 204 }), 'POST /api/probe': () => new Response(null, { status: 204 }) })
+    const api = installFakeApi({ ...LOGGED_IN, [DOCS]: () => json(200, { items: [document(1)], nextCursor: null }), 'POST /api/auth/logout': () => new Response(null, { status: 204 }), 'POST /api/probe': () => new Response(null, { status: 204 }) })
     const app = renderApp('/', { sessionChannel: bus.open() })
     await screen.findByText('文档 1')
     fireEvent.click(screen.getByRole('button', { name: '退出' }))
@@ -234,20 +242,21 @@ describe('US-M1-02 登录与退出', () => {
   it('页面打开期间会话过期（加载更多得到 SESSION_EXPIRED）：整页回到登录页并提示过期，不再多发请求（审查 B7）', async () => {
     const api = installFakeApi({
       ...LOGGED_IN,
-      'GET /api/documents': () => json(200, { items: [document(1)], nextCursor: 'c1' }),
-      'GET /api/documents?cursor=c1': () => apiError(401, 'SESSION_EXPIRED'),
+      [DOCS]: () => json(200, { items: [document(1)], nextCursor: 'c1' }),
+      [DOCS_C1]: () => apiError(401, 'SESSION_EXPIRED'),
     })
     const app = renderApp('/')
     fireEvent.click(await screen.findByRole('button', { name: '加载更多' }))
     await waitFor(() => expect(app.page.visits).toEqual(['/login?reason=expired']))
     await settle()
-    // 不在单页里清空缓存：还挂着的列表不会立即重新请求（原来多出一次 GET /api/documents，它的 401 还可能把"已过期"改成"未登录"）
-    expect(api.requests.map(request => request.key)).toEqual(['GET /api/auth/session', 'GET /api/documents', 'GET /api/documents?cursor=c1'])
+    // 不在单页里清空缓存：还挂着的列表不会立即重新请求（原来多出一次 GET /api/documents，它的 401 还可能把"已过期"改成"未登录"）。
+    // 导航与首页的页头各请求一次（顺序取决于渲染，按排序比较）
+    expect(api.requests.map(request => request.key).sort()).toEqual(['GET /api/auth/session', ...Object.keys(SPACES), DOCS, DOCS_C1].sort())
     expect(app.page.visits).toEqual(['/login?reason=expired'])
   })
 
   it('其他请求得到 UNAUTHENTICATED（不是过期）：整页回到登录页，保留原来的地址；页面离开之前就不再带 CSRF 令牌', async () => {
-    const api = installFakeApi({ ...LOGGED_IN, 'GET /api/documents': () => apiError(401, 'UNAUTHENTICATED'), 'POST /api/probe': () => new Response(null, { status: 204 }) })
+    const api = installFakeApi({ ...LOGGED_IN, [DOCS]: () => apiError(401, 'UNAUTHENTICATED'), 'POST /api/probe': () => new Response(null, { status: 204 }) })
     const app = renderApp('/?view=list')
     await waitFor(() => expect(app.page.visits).toEqual(['/login?from=%2F%3Fview%3Dlist']))
     await apiRequest('/api/probe', { method: 'POST', schema: z.undefined() })
@@ -268,12 +277,12 @@ describe('US-M1-02 登录与退出', () => {
   })
 
   it('查询会话时网络失败：自动重试一次，仍失败时提示并可以重试', async () => {
-    const api = installFakeApi({ 'GET /api/auth/session': networkFailure })
+    const api = installFakeApi({ 'GET /api/auth/session': networkFailure, ...SPACES })
     renderApp('/')
     expect(await screen.findByRole('alert', {}, { timeout: 3000 })).toHaveTextContent('网络连接失败')
     expect(requestCount(api, 'GET /api/auth/session')).toBe(2)
     api.on('GET /api/auth/session', () => json(200, SESSION))
-    api.on('GET /api/documents', () => json(200, { items: [], nextCursor: null }))
+    api.on(DOCS, () => json(200, { items: [], nextCursor: null }))
     fireEvent.click(screen.getByRole('button', { name: '重试' }))
     expect(await screen.findByRole('heading', { name: '我的空间' })).toBeInTheDocument()
   })
@@ -290,7 +299,7 @@ describe('会话的全局处理', () => {
 
   it('会话查询重新请求时得到未登录（缓存里还留着上一次的会话）：转到登录页并停在那里，不在两页之间来回跳转', async () => {
     let signedIn = true
-    installFakeApi({ ...NO_DOCUMENTS, 'GET /api/auth/session': () => (signedIn ? json(200, SESSION) : apiError(401, 'SESSION_EXPIRED')) })
+    installFakeApi({ ...SPACES, ...NO_DOCUMENTS, 'GET /api/auth/session': () => (signedIn ? json(200, SESSION) : apiError(401, 'SESSION_EXPIRED')) })
     const app = renderApp('/')
     await screen.findByRole('heading', { name: '我的空间' })
     signedIn = false
@@ -315,7 +324,7 @@ describe('多个标签页（审查 B6）', () => {
   /** 本页显示着爱丽丝的列表；otherTab 是同一个浏览器里的另一个标签页 */
   async function openList(): Promise<{ api: FakeApi, app: RenderedApp, otherTab: SessionChannel }> {
     const bus = sessionBus()
-    const api = installFakeApi({ ...LOGGED_IN, 'GET /api/documents': () => json(200, { items: [document(1)], nextCursor: 'c1' }), 'POST /api/auth/logout': () => new Response(null, { status: 204 }) })
+    const api = installFakeApi({ ...LOGGED_IN, [DOCS]: () => json(200, { items: [document(1)], nextCursor: 'c1' }), 'POST /api/auth/logout': () => new Response(null, { status: 204 }) })
     const app = renderApp('/', { sessionChannel: bus.open() })
     await screen.findByText('文档 1')
     return { api, app, otherTab: bus.open() }
@@ -429,7 +438,7 @@ describe('多个标签页（审查 B6）', () => {
     const { api, app, otherTab } = await openList()
     const pending = deferred()
     api.on('GET /api/auth/session', pending.handler)
-    api.on('GET /api/documents?cursor=c1', () => apiError(401, 'SESSION_EXPIRED'))
+    api.on(DOCS_C1, () => apiError(401, 'SESSION_EXPIRED'))
     otherTab.announce()
     fireEvent.click(screen.getByRole('button', { name: '加载更多' }))
     await waitFor(() => expect(app.page.visits).toEqual(['/login?reason=expired']))
@@ -443,7 +452,7 @@ describe('US-M1-03 个人空间的文档列表', () => {
   it('确认会话时与加载列表时各有自己的骨架屏，随后显示文档：标题、类型与更新时间（审查 B10）', async () => {
     const session = deferred()
     const list = deferred()
-    installFakeApi({ 'GET /api/auth/session': session.handler, 'GET /api/documents': list.handler })
+    installFakeApi({ 'GET /api/auth/session': session.handler, ...SPACES, [DOCS]: list.handler })
     renderApp('/')
     expect(await screen.findByRole('status', { name: '正在确认登录状态…' })).toBeInTheDocument()
     expect(screen.queryByRole('status', { name: '正在加载文档列表…' })).not.toBeInTheDocument()
@@ -458,7 +467,7 @@ describe('US-M1-03 个人空间的文档列表', () => {
   })
 
   it('条目是整页打开编辑器页的链接（编辑器页是另一个入口）', async () => {
-    installFakeApi({ ...LOGGED_IN, 'GET /api/documents': () => json(200, { items: [document(1)], nextCursor: null }) })
+    installFakeApi({ ...LOGGED_IN, [DOCS]: () => json(200, { items: [document(1)], nextCursor: null }) })
     renderApp('/')
     expect(await screen.findByRole('link', { name: /文档 1/ })).toHaveAttribute('href', `/documents/${document(1).id}`)
   })
@@ -470,12 +479,12 @@ describe('US-M1-03 个人空间的文档列表', () => {
   })
 
   it('加载失败：提示原因，可以重试', async () => {
-    const api = installFakeApi({ ...LOGGED_IN, 'GET /api/documents': () => apiError(500, 'INTERNAL_ERROR') })
+    const api = installFakeApi({ ...LOGGED_IN, [DOCS]: () => apiError(500, 'INTERNAL_ERROR') })
     renderApp('/')
     // 5xx 自动重试一次，之后才显示失败
     expect(await screen.findByText('文档列表加载失败', {}, { timeout: 3000 })).toBeInTheDocument()
     expect(screen.getByText('服务器出了点问题，请稍后重试')).toBeInTheDocument()
-    api.on('GET /api/documents', () => json(200, { items: [document(1)], nextCursor: null }))
+    api.on(DOCS, () => json(200, { items: [document(1)], nextCursor: null }))
     fireEvent.click(screen.getByRole('button', { name: '重试' }))
     expect(await screen.findByText('文档 1')).toBeInTheDocument()
   })
@@ -484,9 +493,9 @@ describe('US-M1-03 个人空间的文档列表', () => {
     const next = deferred()
     const api = installFakeApi({
       ...LOGGED_IN,
-      'GET /api/documents': () => json(200, { items: [document(1)], nextCursor: 'c1' }),
-      'GET /api/documents?cursor=c1': next.handler,
-      'GET /api/documents?cursor=c2': () => apiError(404, 'NOT_FOUND'),
+      [DOCS]: () => json(200, { items: [document(1)], nextCursor: 'c1' }),
+      [DOCS_C1]: next.handler,
+      [DOCS_C2]: () => apiError(404, 'NOT_FOUND'),
     })
     renderApp('/')
     const button = await screen.findByRole('button', { name: '加载更多' })
@@ -498,7 +507,7 @@ describe('US-M1-03 个人空间的文档列表', () => {
     next.resolve(json(200, { items: [document(2)], nextCursor: 'c2' }))
     expect(await screen.findByText('文档 2')).toBeInTheDocument()
     await waitFor(() => expect(window.document.activeElement).toHaveTextContent('文档 2'))
-    expect(requestCount(api, 'GET /api/documents?cursor=c1')).toBe(1)
+    expect(requestCount(api, DOCS_C1)).toBe(1)
 
     const again = screen.getByRole('button', { name: '加载更多' })
     again.focus()
@@ -509,7 +518,7 @@ describe('US-M1-03 个人空间的文档列表', () => {
   })
 
   it('浏览器认为离线时加载更多：请求照常发出，失败时提示网络错误，保留已加载的列表（审查 B4）', async () => {
-    const api = installFakeApi({ ...LOGGED_IN, 'GET /api/documents': () => json(200, { items: [document(1)], nextCursor: 'c1' }), 'GET /api/documents?cursor=c1': networkFailure })
+    const api = installFakeApi({ ...LOGGED_IN, [DOCS]: () => json(200, { items: [document(1)], nextCursor: 'c1' }), [DOCS_C1]: networkFailure })
     renderApp('/')
     const button = await screen.findByRole('button', { name: '加载更多' })
     goOffline()
@@ -517,7 +526,7 @@ describe('US-M1-03 个人空间的文档列表', () => {
     // 网络失败自动重试一次，之后才显示
     expect(await screen.findByRole('alert', {}, { timeout: 3000 })).toHaveTextContent('网络连接失败，请检查网络后重试')
     expect(screen.getByText('文档 1')).toBeInTheDocument()
-    expect(requestCount(api, 'GET /api/documents?cursor=c1')).toBe(2)
+    expect(requestCount(api, DOCS_C1)).toBe(2)
   })
 })
 
@@ -539,7 +548,8 @@ describe('US-M1-04 新建表格', () => {
     await settle()
     expect(requestCount(api, 'POST /api/documents')).toBe(1)
     const body = api.requests.find(request => request.key === 'POST /api/documents')?.body
-    expect(body).toEqual({ type: 'sheet', requestId: expect.stringMatching(/^[\da-f-]{36}$/) as unknown })
+    // 建在当前空间（首页是个人空间，M2-P2）
+    expect(body).toEqual({ type: 'sheet', requestId: expect.stringMatching(/^[\da-f-]{36}$/) as unknown, spaceId: SESSION.personalSpace.id })
     expect(api.requests.find(request => request.key === 'POST /api/documents')?.headers['x-csrf-token']).toBe('csrf-1')
   })
 

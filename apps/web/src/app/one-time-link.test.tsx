@@ -4,6 +4,7 @@ import type { SessionResponse } from '@nerve-office/contracts'
 import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { apiError, installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
+import { documentsKey, spaceRoutes } from '../shared/testing/spaces.test-support.ts'
 import { currentPath, renderApp, sessionBus } from './render-app.test-support.tsx'
 
 const TOKEN = `${'t'.repeat(40)}-_x`
@@ -20,7 +21,7 @@ const OTHER_SESSION: SessionResponse = {
   csrfToken: 'csrf-admin',
 }
 const INSPECTED = { username: 'zhang.san', displayName: '张三', expiresAt: '2026-10-05T00:00:00.000Z' }
-const NO_DOCUMENTS = { 'GET /api/documents': () => json(200, { items: [], nextCursor: null }) }
+const NO_DOCUMENTS = { [documentsKey(SESSION)]: () => json(200, { items: [], nextCursor: null }) }
 
 function linkInvalid(reason: string): Response {
   return json(410, { error: { code: 'LINK_INVALID', message: '说明', requestId: 'req-1', details: { reason } } })
@@ -39,6 +40,7 @@ async function settle(): Promise<void> {
 describe('接受邀请页', () => {
   it('令牌从 # 部分读出、从地址里去掉、放进请求体；显示登录名，可以改显示名；设置密码后进入个人空间', async () => {
     const api = installFakeApi({
+      ...spaceRoutes(SESSION),
       'POST /api/auth/invitations/inspect': () => json(200, INSPECTED),
       'POST /api/auth/invitations/accept': () => json(200, SESSION),
       ...NO_DOCUMENTS,
@@ -68,7 +70,7 @@ describe('接受邀请页', () => {
   })
 
   it('已经接受过的邀请：说明原因并给出登录的入口', async () => {
-    installFakeApi({ 'POST /api/auth/invitations/inspect': () => linkInvalid('used') })
+    installFakeApi({ ...spaceRoutes(SESSION), 'POST /api/auth/invitations/inspect': () => linkInvalid('used') })
     renderApp(`/invite#${TOKEN}`)
     expect(await screen.findByRole('alert')).toHaveTextContent('这个邀请已经接受过了，请直接登录')
     expect(screen.getByRole('link', { name: '去登录' })).toHaveAttribute('href', '/login')
@@ -79,14 +81,14 @@ describe('接受邀请页', () => {
     ['revoked', '邀请链接已作废，请管理员重新发送'],
     ['invalid', '邀请链接无效：请检查链接是否完整，或者请管理员重新发送'],
   ])('邀请链接不能用（%s）：请管理员重新发送，不给"去登录"（受邀人还没有账户，审查 B10）', async (reason, message) => {
-    installFakeApi({ 'POST /api/auth/invitations/inspect': () => linkInvalid(reason) })
+    installFakeApi({ ...spaceRoutes(SESSION), 'POST /api/auth/invitations/inspect': () => linkInvalid(reason) })
     renderApp(`/invite#${TOKEN}`)
     expect(await screen.findByRole('alert')).toHaveTextContent(message)
     expect(screen.queryByRole('link', { name: '去登录' })).toBeNull()
   })
 
   it('显示名清空：按显示名的规则说明（不是"请求的内容不合法"），不发接受的请求（审查 B10）', async () => {
-    const api = installFakeApi({ 'POST /api/auth/invitations/inspect': () => json(200, INSPECTED) })
+    const api = installFakeApi({ ...spaceRoutes(SESSION), 'POST /api/auth/invitations/inspect': () => json(200, INSPECTED) })
     renderApp(`/invite#${TOKEN}`)
     await screen.findByText('zhang.san')
     fireEvent.change(screen.getByLabelText('显示名'), { target: { value: '   ' } })
@@ -97,7 +99,7 @@ describe('接受邀请页', () => {
   })
 
   it('新密码不符合规则：前端就提示，不发接受的请求', async () => {
-    const api = installFakeApi({ 'POST /api/auth/invitations/inspect': () => json(200, INSPECTED) })
+    const api = installFakeApi({ ...spaceRoutes(SESSION), 'POST /api/auth/invitations/inspect': () => json(200, INSPECTED) })
     renderApp(`/invite#${TOKEN}`)
     await screen.findByText('zhang.san')
     fillPasswords('设置密码', 'short')
@@ -107,7 +109,7 @@ describe('接受邀请页', () => {
   })
 
   it('尝试次数过多：按 Retry-After 提示，可以重试', async () => {
-    installFakeApi({ 'POST /api/auth/invitations/inspect': () => apiError(429, 'TOO_MANY_ATTEMPTS', '说明', { 'retry-after': '120' }) })
+    installFakeApi({ ...spaceRoutes(SESSION), 'POST /api/auth/invitations/inspect': () => apiError(429, 'TOO_MANY_ATTEMPTS', '说明', { 'retry-after': '120' }) })
     renderApp(`/invite#${TOKEN}`)
     expect(await screen.findByRole('alert')).toHaveTextContent('请 2 分钟后再试')
     expect(screen.getByRole('button', { name: '重试' })).toBeInTheDocument()
@@ -115,6 +117,7 @@ describe('接受邀请页', () => {
 
   it('同一个标签页里只改 # 部分（粘贴重新发来的链接）：换上新的令牌，重新查看；上一个令牌的结果与填了一半的表单都不留下（审查 B3）', async () => {
     const api = installFakeApi({
+      ...spaceRoutes(SESSION),
       'POST /api/auth/invitations/inspect': (init) => {
         const { token } = JSON.parse(String(init?.body)) as { token: string }
         return token === TOKEN ? linkInvalid('revoked') : json(200, { ...INSPECTED, username: 'li.si', displayName: '李四' })
@@ -143,6 +146,7 @@ describe('接受邀请页', () => {
   it('别的标签页登录了（会话复核看到"换了人"）：公开页面不重新加载，令牌与表单都还在，照常接受（审查 B3）', async () => {
     const bus = sessionBus()
     const api = installFakeApi({
+      ...spaceRoutes(SESSION),
       'POST /api/auth/invitations/inspect': () => json(200, INSPECTED),
       'POST /api/auth/invitations/accept': () => json(200, SESSION),
       'GET /api/auth/session': () => json(200, OTHER_SESSION),
@@ -165,6 +169,7 @@ describe('接受邀请页', () => {
 describe('重置密码页', () => {
   it('显示登录名；设置新密码后进入个人空间', async () => {
     const api = installFakeApi({
+      ...spaceRoutes(SESSION),
       'POST /api/auth/password-resets/inspect': () => json(200, INSPECTED),
       'POST /api/auth/password-resets/complete': () => json(200, SESSION),
       ...NO_DOCUMENTS,
@@ -180,6 +185,7 @@ describe('重置密码页', () => {
 
   it('提交时链接已被作废（别处又签发了新的）：说明原因，不再显示表单，不给"去登录"', async () => {
     installFakeApi({
+      ...spaceRoutes(SESSION),
       'POST /api/auth/password-resets/inspect': () => json(200, INSPECTED),
       'POST /api/auth/password-resets/complete': () => json(410, { error: { code: 'LINK_INVALID', message: '说明', requestId: 'req-2', details: { reason: 'revoked' } } }),
     })
@@ -193,7 +199,7 @@ describe('重置密码页', () => {
   })
 
   it('已经用过的重置链接：说明原因并给出登录的入口', async () => {
-    installFakeApi({ 'POST /api/auth/password-resets/inspect': () => linkInvalid('used') })
+    installFakeApi({ ...spaceRoutes(SESSION), 'POST /api/auth/password-resets/inspect': () => linkInvalid('used') })
     renderApp(`/reset-password#${TOKEN}`)
     expect(await screen.findByRole('alert')).toHaveTextContent('这个重置链接已经用过了，请直接用新密码登录')
     expect(screen.getByRole('link', { name: '去登录' })).toHaveAttribute('href', '/login')

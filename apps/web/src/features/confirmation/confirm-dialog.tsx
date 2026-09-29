@@ -1,9 +1,9 @@
+import type { MutationMeta } from '@tanstack/react-query'
 import { useMutation } from '@tanstack/react-query'
 import { describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../shared/ui/dialog.tsx'
 import { Alert, AlertDescription, Button } from '../../shared/ui/index.ts'
-import { SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
 
 export interface PendingConfirmation {
   readonly title: string
@@ -17,14 +17,22 @@ export interface PendingConfirmation {
   readonly returnFocus?: () => void
 }
 
+interface ConfirmDialogProps {
+  readonly pending: PendingConfirmation | undefined
+  readonly onClose: () => void
+  /** 执行时请求缓存的元数据：管理界面标明只给系统管理员（SYSTEM_ADMIN_ONLY） */
+  readonly meta?: MutationMeta
+}
+
 /**
- * 危险操作的确认（M2-P1 设计 §3.8）：先说清楚后果，再执行。进行中不能重复提交，也不能关闭；
+ * 危险操作的确认（M2-P1 设计 §3.8；M2-P2 起管理界面与成员页共用）：先说清楚后果，再执行。进行中不能重复提交，也不能关闭；
  * 失败时按错误码说明原因（例如"至少要保留一个有效的系统管理员"），弹窗留着可以取消。
- * 执行经请求缓存，标明只给系统管理员：被拒绝时由全局处理重新确认会话，系统角色已被取消就切到无权限（审查 B4）。
+ * 执行经请求缓存：管理界面标明只给系统管理员，被拒绝时由全局处理重新确认会话，系统角色已被取消就切到无权限（审查 B4）。
  * 关闭之后焦点回到打开它的按钮；按钮已经不在了，交给 returnFocus，焦点不落到 body（审查 B9）。
+ * 带着 Radix Dialog：只由按需加载的页面引用，不进首屏（ADR-008）。
  */
-export function ConfirmDialog({ pending, onClose }: { readonly pending: PendingConfirmation | undefined, readonly onClose: () => void }) {
-  const mutation = useMutation({ mutationFn: async (run: () => Promise<void>) => run(), meta: SYSTEM_ADMIN_ONLY })
+export function ConfirmDialog({ pending, onClose, meta }: ConfirmDialogProps) {
+  const mutation = useMutation({ mutationFn: async (run: () => Promise<void>) => run(), ...(meta === undefined ? {} : { meta }) })
 
   function close(): void {
     mutation.reset()
@@ -60,7 +68,7 @@ export function ConfirmDialog({ pending, onClose }: { readonly pending: PendingC
               <Button variant="outline" aria-disabled={mutation.isPending}>{messages.common.cancel}</Button>
             </DialogClose>
             <Button variant={pending.destructive === true ? 'destructive' : 'default'} aria-disabled={mutation.isPending} onClick={confirm}>
-              {mutation.isPending ? messages.admin.working : pending.confirmLabel}
+              {mutation.isPending ? messages.common.working : pending.confirmLabel}
             </Button>
           </DialogFooter>
         </DialogContent>

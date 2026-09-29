@@ -4,6 +4,7 @@ import type { SessionResponse } from '@nerve-office/contracts'
 import { fireEvent, screen } from '@testing-library/react'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
+import { documentsKey, spaceRoutes } from '../shared/testing/spaces.test-support.ts'
 import { renderApp } from './render-app.test-support.tsx'
 
 const adminCode = vi.hoisted(() => {
@@ -34,8 +35,9 @@ const SESSION: SessionResponse = {
 describe('页头', () => {
   it('当前用户的名字：窄屏时收窄成一行省略号，完整的名字在 title 里；入口与按钮不收窄（审查 B11）', async () => {
     installFakeApi({
+      ...spaceRoutes(SESSION),
       'GET /api/auth/session': () => json(200, SESSION),
-      'GET /api/documents': () => json(200, { items: [], nextCursor: null }),
+      [documentsKey(SESSION)]: () => json(200, { items: [], nextCursor: null }),
     })
     renderApp('/')
     const name = await screen.findByText(LONG_NAME, { selector: 'header span' })
@@ -48,8 +50,9 @@ describe('页头', () => {
 
   it('单页里第一次点"管理"：下载管理界面的代码期间页头显示进行中、内容区标为忙碌，下载完之后恢复（审查 B5）', async () => {
     installFakeApi({
+      ...spaceRoutes(SESSION),
       'GET /api/auth/session': () => json(200, SESSION),
-      'GET /api/documents': () => json(200, { items: [], nextCursor: null }),
+      [documentsKey(SESSION)]: () => json(200, { items: [], nextCursor: null }),
       'GET /api/admin/users': () => json(200, { items: [], nextCursor: null }),
     })
     renderApp('/')

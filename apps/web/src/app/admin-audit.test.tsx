@@ -3,7 +3,7 @@ import type { AuditEventItem } from '@nerve-office/contracts'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { apiError, installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
-import { AMY, deferred, EVENT, listPage, ROOT, session, settle } from './admin.test-support.ts'
+import { AMY, deferred, EVENT, listPage, ROOT, session, settle, SPACES } from './admin.test-support.ts'
 import { renderApp } from './render-app.test-support.tsx'
 
 const LIST = 'GET /api/admin/audit-events'
@@ -13,7 +13,7 @@ function event(index: number, changes: Partial<AuditEventItem> = {}): AuditEvent
 }
 
 function audit(handlers: Parameters<typeof installFakeApi>[0] = {}) {
-  return installFakeApi({ 'GET /api/auth/session': () => json(200, session('admin')), ...handlers })
+  return installFakeApi({ ...SPACES, 'GET /api/auth/session': () => json(200, session('admin')), ...handlers })
 }
 
 function requested(api: ReturnType<typeof installFakeApi>, key: string): boolean {

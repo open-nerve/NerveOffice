@@ -7,8 +7,7 @@ import { describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { Alert, AlertDescription, Button, Skeleton } from '../../shared/ui/index.ts'
-import { personalDocumentsQueryOptions } from './documents-api.ts'
-import { NewSheetButton } from './new-sheet-button.tsx'
+import { spaceDocumentsQueryOptions } from './documents-api.ts'
 
 function DocumentItem({ document }: { document: DocumentSummary }) {
   return (
@@ -38,9 +37,12 @@ function LoadingRows() {
   )
 }
 
-/** 我的空间：个人空间的文档列表（US-M1-03）。加载中、空列表、加载失败都有明确的显示；分页用"加载更多"。 */
-export function DocumentListPage() {
-  const query = useInfiniteQuery(personalDocumentsQueryOptions())
+/**
+ * 一个空间里的文档列表（US-M1-03，M2-P2 设计 §3.10）。加载中、空列表、加载失败都有明确的显示；分页用"加载更多"。
+ * 标题与操作（新建表格等）在空间页的页头。
+ */
+export function DocumentList({ spaceId }: { readonly spaceId: string }) {
+  const query = useInfiniteQuery(spaceDocumentsQueryOptions(spaceId))
   const documents = query.data?.pages.flatMap(page => page.items) ?? []
   // 加载更多时已有的条数：新的一页到了之后，焦点移到第一个新条目。按钮可能随之消失（没有下一页了），焦点不能留在它身上（审查 B13）
   const listRef = useRef<HTMLUListElement>(null)
@@ -65,14 +67,12 @@ export function DocumentListPage() {
     })
   }
 
-  let content
-  if (query.isPending) {
-    content = <LoadingRows />
-  }
-  else if (query.data === undefined) {
+  if (query.isPending)
+    return <LoadingRows />
+  if (query.data === undefined) {
     // 第一页就失败了；加载下一页失败时 status 同样是 error，但已经有数据，列表要保留
     const error = describeError(query.error)
-    content = (
+    return (
       <Alert variant="destructive">
         <AlertDescription>
           <p>{messages.documents.loadFailed}</p>
@@ -82,37 +82,24 @@ export function DocumentListPage() {
       </Alert>
     )
   }
-  else if (documents.length === 0) {
-    content = <p className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">{messages.documents.empty}</p>
-  }
-  else {
-    content = (
-      <>
-        <ul ref={listRef} aria-label={messages.documents.listLabel} className="divide-y rounded-lg border">
-          {documents.map(document => <DocumentItem key={document.id} document={document} />)}
-        </ul>
-        {query.isError && (
-          <Alert variant="destructive">
-            <AlertDescription>{describeError(query.error).message}</AlertDescription>
-          </Alert>
-        )}
-        {query.hasNextPage && (
-          // 加载中用 aria-disabled：按钮变成 disabled 时浏览器把焦点丢到 body（审查 B13）；重复点击由 loadMore 挡住
-          <Button variant="outline" className="self-center" aria-disabled={query.isFetchingNextPage} onClick={loadMore}>
-            {query.isFetchingNextPage ? messages.documents.loadingMore : messages.documents.loadMore}
-          </Button>
-        )}
-      </>
-    )
-  }
-
+  if (documents.length === 0)
+    return <p className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">{messages.documents.empty}</p>
   return (
-    <section className="flex flex-col gap-4" aria-labelledby="documents-title">
-      <div className="flex items-start justify-between gap-3">
-        <h1 id="documents-title" className="text-xl font-semibold">{messages.documents.title}</h1>
-        <NewSheetButton />
-      </div>
-      {content}
-    </section>
+    <>
+      <ul ref={listRef} aria-label={messages.documents.listLabel} className="divide-y rounded-lg border">
+        {documents.map(document => <DocumentItem key={document.id} document={document} />)}
+      </ul>
+      {query.isError && (
+        <Alert variant="destructive">
+          <AlertDescription>{describeError(query.error).message}</AlertDescription>
+        </Alert>
+      )}
+      {query.hasNextPage && (
+        // 加载中用 aria-disabled：按钮变成 disabled 时浏览器把焦点丢到 body（审查 B13）；重复点击由 loadMore 挡住
+        <Button variant="outline" className="self-center" aria-disabled={query.isFetchingNextPage} onClick={loadMore}>
+          {query.isFetchingNextPage ? messages.documents.loadingMore : messages.documents.loadMore}
+        </Button>
+      )}
+    </>
   )
 }

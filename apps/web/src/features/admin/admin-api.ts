@@ -1,7 +1,11 @@
-// 管理界面的接口（M2-P1 设计 §3.3）：账户、邀请、审计。只给系统管理员，服务端逐请求检查；
+// 管理界面的接口（M2-P1 设计 §3.3，M2-P2 设计 §3.3）：账户、邀请、团队空间、停用者文档的转移、审计。只给系统管理员，服务端逐请求检查；
 // 查询与变更都标明 SYSTEM_ADMIN_ONLY：被拒绝时由请求缓存的全局处理重新确认会话（审查 B4）。
 import type {
+  AdminSpace,
+  AdminSpaceListQuery,
+  AdminSpaceListResponse,
   AdminUser,
+  AdminUserDocumentListResponse,
   AdminUserListQuery,
   AdminUserListResponse,
   AuditEventListResponse,
@@ -12,9 +16,16 @@ import type {
   InvitationListResponse,
   IssuedInvitation,
   IssuedPasswordReset,
+  SpaceRole,
+  TeamSpace,
+  TransferDocumentsRequest,
+  TransferDocumentsResponse,
   UserSystemRole,
 } from '@nerve-office/contracts'
 import {
+  adminSpaceListResponseSchema,
+  adminSpaceSchema,
+  adminUserDocumentListResponseSchema,
   adminUserListResponseSchema,
   adminUserSchema,
   auditEventListResponseSchema,
@@ -22,6 +33,9 @@ import {
   invitationSchema,
   issuedInvitationSchema,
   issuedPasswordResetSchema,
+  spaceMemberSchema,
+  teamSpaceSchema,
+  transferDocumentsResponseSchema,
 } from '@nerve-office/contracts'
 import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query'
 import { apiRequest } from '../../shared/api/index.ts'
@@ -114,4 +128,80 @@ export function auditEventsQueryOptions(filter: Omit<AuditEventQuery, 'cursor'>)
     getNextPageParam: page => page.nextCursor,
     meta: SYSTEM_ADMIN_ONLY,
   })
+}
+
+/** 一个账户（含停用的）：转移页的页头 */
+export function adminUserQueryOptions(id: string) {
+  return queryOptions({
+    queryKey: [...ADMIN_QUERY_KEY, 'user', id],
+    queryFn: async ({ signal }): Promise<AdminUser> => apiRequest(`/api/admin/users/${id}`, { schema: adminUserSchema, signal }),
+    meta: SYSTEM_ADMIN_ONLY,
+  })
+}
+
+export function adminSpacesQueryOptions(filter: Omit<AdminSpaceListQuery, 'cursor'>) {
+  return infiniteQueryOptions({
+    queryKey: [...ADMIN_QUERY_KEY, 'spaces', filter],
+    queryFn: async ({ pageParam, signal }): Promise<AdminSpaceListResponse> => apiRequest(
+      `/api/admin/spaces${search({ query: filter.query, status: filter.status, cursor: pageParam ?? undefined })}`,
+      { schema: adminSpaceListResponseSchema, signal },
+    ),
+    initialPageParam: null as string | null,
+    getNextPageParam: page => page.nextCursor,
+    meta: SYSTEM_ADMIN_ONLY,
+  })
+}
+
+/** 转移的目标：按名称找没有归档的团队空间，只取第一页 */
+export function transferTargetsQueryOptions(keyword: string) {
+  return queryOptions({
+    queryKey: [...ADMIN_QUERY_KEY, 'transfer-targets', keyword],
+    queryFn: async ({ signal }): Promise<AdminSpaceListResponse> => apiRequest(`/api/admin/spaces${search({ query: keyword, status: 'active' })}`, { schema: adminSpaceListResponseSchema, signal }),
+    select: page => page.items,
+    meta: SYSTEM_ADMIN_ONLY,
+  })
+}
+
+export async function createTeamSpace(request: { readonly name: string, readonly adminUserId: string, readonly visibleToAll: boolean }): Promise<AdminSpace> {
+  return apiRequest('/api/admin/spaces', { method: 'POST', body: request, schema: adminSpaceSchema })
+}
+
+export async function setSpaceVisibility(id: string, visibleToAll: boolean): Promise<AdminSpace> {
+  return apiRequest(`/api/admin/spaces/${id}/visibility`, { method: 'PUT', body: { visibleToAll }, schema: adminSpaceSchema })
+}
+
+export async function archiveSpace(id: string): Promise<AdminSpace> {
+  return apiRequest(`/api/admin/spaces/${id}/archive`, { method: 'POST', schema: adminSpaceSchema })
+}
+
+export async function restoreSpace(id: string): Promise<AdminSpace> {
+  return apiRequest(`/api/admin/spaces/${id}/restore`, { method: 'POST', schema: adminSpaceSchema })
+}
+
+/** 改名与加入空间用空间的接口：那里的授权规则包含系统管理员（M2-P2 设计 §3.3） */
+export async function renameTeamSpace(id: string, name: string): Promise<TeamSpace> {
+  return apiRequest(`/api/spaces/${id}/name`, { method: 'PUT', body: { name }, schema: teamSpaceSchema })
+}
+
+/** 系统管理员把自己加入团队空间：审计记为系统管理员加入空间 */
+export async function joinSpace(id: string, userId: string, role: SpaceRole): Promise<void> {
+  await apiRequest(`/api/spaces/${id}/members`, { method: 'POST', body: { userId, role }, schema: spaceMemberSchema })
+}
+
+/** 停用者个人空间里的文档：只有标题 */
+export function userDocumentsQueryOptions(userId: string) {
+  return infiniteQueryOptions({
+    queryKey: [...ADMIN_QUERY_KEY, 'user-documents', userId],
+    queryFn: async ({ pageParam, signal }): Promise<AdminUserDocumentListResponse> => apiRequest(
+      `/api/admin/users/${userId}/documents${search({ cursor: pageParam ?? undefined })}`,
+      { schema: adminUserDocumentListResponseSchema, signal },
+    ),
+    initialPageParam: null as string | null,
+    getNextPageParam: page => page.nextCursor,
+    meta: SYSTEM_ADMIN_ONLY,
+  })
+}
+
+export async function transferDocuments(userId: string, request: TransferDocumentsRequest): Promise<TransferDocumentsResponse> {
+  return apiRequest(`/api/admin/users/${userId}/documents/transfer`, { method: 'POST', body: request, schema: transferDocumentsResponseSchema })
 }

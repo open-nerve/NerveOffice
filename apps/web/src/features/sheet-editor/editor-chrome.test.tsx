@@ -5,7 +5,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { EditorChrome } from './editor-chrome.tsx'
 
-const READY: EditorPageLoad = { kind: 'ready', title: '周报', readOnly: false, stage: 'steady' }
+const PERSONAL = { id: '0199a2c4-0000-7000-8000-0000000000a1', type: 'personal', name: '爱丽丝' } as const
+const READY: EditorPageLoad = { kind: 'ready', title: '周报', space: PERSONAL, readOnly: false, stage: 'steady' }
 const CLEAN: SaveView = { status: 'clean', formulasPending: false, problem: undefined, conflict: undefined, canSave: true }
 
 /** 假的编辑器页：视图由测试设定 */
@@ -40,6 +41,13 @@ function renderChrome(initial: Partial<EditorPageView> = {}, apple = false) {
 }
 
 describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
+  it('就绪：返回文档所在的空间——个人空间回到首页（我的空间），团队空间回到它的空间页并显示名称', () => {
+    const fake = renderChrome()
+    expect(screen.getByRole('link', { name: '我的空间' })).toHaveAttribute('href', '/')
+    fake.set({ load: { ...READY, space: { id: '0199a2c4-0000-7000-8000-0000000000c1', type: 'team', name: '市场部' } } })
+    expect(screen.getByRole('link', { name: '市场部' })).toHaveAttribute('href', '/spaces/0199a2c4-0000-7000-8000-0000000000c1')
+  })
+
   it('载入中：说明正在打开，页头有回到我的空间的链接（整页跳转）', () => {
     renderChrome({ load: { kind: 'loading' }, save: undefined })
     expect(screen.getByRole('status')).toHaveTextContent('正在打开表格…')

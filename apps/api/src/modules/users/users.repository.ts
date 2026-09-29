@@ -72,6 +72,12 @@ export class UsersRepository {
     return row
   }
 
+  /** 按 id 取管理界面用的账户（带创建时间，含停用的） */
+  async findRecord(id: string): Promise<AccountRecord | undefined> {
+    const [row] = await this.db.select(RECORD_COLUMNS).from(users).where(eq(users.id, id))
+    return row
+  }
+
   async findCredentialsByUsername(username: string): Promise<UserCredentials | undefined> {
     const [row] = await this.db.select({ ...USER_COLUMNS, ...CREDENTIAL_COLUMNS }).from(users).where(eq(users.username, username))
     if (row === undefined)

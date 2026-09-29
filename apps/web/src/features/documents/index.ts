@@ -1,1 +1,2 @@
-export { DocumentListPage } from './document-list-page.tsx'
+export { DocumentList } from './document-list.tsx'
+export { NewSheetButton } from './new-sheet-button.tsx'

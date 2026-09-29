@@ -4,6 +4,11 @@ import { createDocument, createDocuments, createUser } from '../../support/datab
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
 
+/** 文档列表的请求（任何空间、任何一页） */
+function isDocumentList(url: URL): boolean {
+  return url.pathname === '/api/documents'
+}
+
 test.describe('US-M1-03 个人空间的文档列表', () => {
   test('只列出本人个人空间里的文档', async ({ page }) => {
     const owner = await createUser('list-owner')
@@ -35,7 +40,8 @@ test.describe('US-M1-03 个人空间的文档列表', () => {
     const released = new Promise<void>((resolve) => {
       release = resolve
     })
-    await page.route('**/api/documents', async (route) => {
+    // 列表按空间取（M2-P2）：地址带查询串，按路径拦
+    await page.route(isDocumentList, async (route) => {
       await released
       await route.continue()
     })
@@ -53,7 +59,7 @@ test.describe('US-M1-03 个人空间的文档列表', () => {
     const owner = await createUser('list-failure')
     await createDocument(owner, '重试之后才看到的文档')
     await loginThroughApi(page, owner)
-    await page.route('**/api/documents', async route => route.fulfill({
+    await page.route(isDocumentList, async route => route.fulfill({
       status: 503,
       contentType: 'application/json',
       body: JSON.stringify({ error: { code: 'SERVICE_UNAVAILABLE', message: '服务暂时不可用', requestId: 'e2e' } }),
@@ -63,7 +69,7 @@ test.describe('US-M1-03 个人空间的文档列表', () => {
     await expect(page.getByText('文档列表加载失败')).toBeVisible()
     await expect(page.getByText('服务暂时不可用，请稍后重试')).toBeVisible()
 
-    await page.unroute('**/api/documents')
+    await page.unroute(isDocumentList)
     await page.getByRole('button', { name: '重试' }).click()
     await expect(page.getByText('重试之后才看到的文档')).toBeVisible()
   })

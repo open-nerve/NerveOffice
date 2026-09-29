@@ -3,7 +3,8 @@ import type { Invitation } from '@nerve-office/contracts'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { apiError, installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
-import { AMY, deferred, INVITATION, listPage, ROOT, rowOf, session, settle } from './admin.test-support.ts'
+import { documentsKey } from '../shared/testing/spaces.test-support.ts'
+import { AMY, deferred, INVITATION, listPage, ROOT, rowOf, session, settle, SPACES } from './admin.test-support.ts'
 import { currentPath, renderApp } from './render-app.test-support.tsx'
 
 function requestCount(api: ReturnType<typeof installFakeApi>, key: string): number {
@@ -21,6 +22,7 @@ async function openConfirm(row: HTMLElement, name: string): Promise<HTMLElement>
 describe('管理界面：访问', () => {
   it('成员：页头没有"管理"入口；直接打开看到无权限的说明，不请求管理接口', async () => {
     const api = installFakeApi({
+      ...SPACES,
       'GET /api/auth/session': () => json(200, session('member')),
     })
     renderApp('/admin/users')
@@ -31,6 +33,7 @@ describe('管理界面：访问', () => {
 
   it('系统管理员：页头有"管理"入口，/admin 打开账户页', async () => {
     installFakeApi({
+      ...SPACES,
       'GET /api/auth/session': () => json(200, session('admin')),
       'GET /api/admin/users': () => json(200, listPage([ROOT, AMY])),
     })
@@ -43,6 +46,7 @@ describe('管理界面：访问', () => {
   it('已被别的管理员取消了系统管理员：管理接口得到 PERMISSION_DENIED 时重新确认会话，切到无权限，页头不再有入口（审查 B4）', async () => {
     let role: 'admin' | 'member' = 'admin'
     const api = installFakeApi({
+      ...SPACES,
       'GET /api/auth/session': () => json(200, session(role, 'csrf-2')),
       'GET /api/admin/users': () => {
         role = 'member'
@@ -59,8 +63,9 @@ describe('管理界面：访问', () => {
 
   it('其他请求得到 PERMISSION_DENIED（不是管理接口）：不重新确认会话', async () => {
     const api = installFakeApi({
+      ...SPACES,
       'GET /api/auth/session': () => json(200, session('admin')),
-      'GET /api/documents': () => apiError(403, 'PERMISSION_DENIED'),
+      [documentsKey(session('admin'))]: () => apiError(403, 'PERMISSION_DENIED'),
     })
     renderApp('/')
     expect(await screen.findByText('文档列表加载失败')).toBeInTheDocument()
@@ -73,6 +78,7 @@ describe('管理界面：账户', () => {
   it('停用先确认后果；确认之后请求、刷新列表；焦点回到这一行的按钮', async () => {
     let disabled = false
     const api = installFakeApi({
+      ...SPACES,
       'GET /api/auth/session': () => json(200, session('admin')),
       'GET /api/admin/users': () => json(200, listPage([ROOT, { ...AMY, status: disabled ? 'disabled' : 'active' }])),
       [`POST /api/admin/users/${AMY.id}/disable`]: () => {
@@ -96,6 +102,7 @@ describe('管理界面：账户', () => {
 
   it('取消弹窗：焦点回到打开它的按钮，不发请求', async () => {
     const api = installFakeApi({
+      ...SPACES,
       'GET /api/auth/session': () => json(200, session('admin')),
       'GET /api/admin/users': () => json(200, listPage([AMY])),
     })
@@ -111,6 +118,7 @@ describe('管理界面：账户', () => {
   it('操作之后这一行不在列表里了（按状态过滤）：焦点回到搜索框，不落到 body（审查 B9）', async () => {
     let disabled = false
     installFakeApi({
+      ...SPACES,
       'GET /api/auth/session': () => json(200, session('admin')),
       'GET /api/admin/users': () => json(200, listPage([ROOT, AMY])),
       'GET /api/admin/users?status=active': () => json(200, listPage(disabled ? [ROOT] : [ROOT, AMY])),
@@ -131,6 +139,7 @@ describe('管理界面：账户', () => {
 
   it('每行的操作按钮带上对象作为可读名称（审查 B14）', async () => {
     installFakeApi({
+      ...SPACES,
       'GET /api/auth/session': () => json(200, session('admin')),
       'GET /api/admin/users': () => json(200, listPage([ROOT, AMY, { ...AMY, id: '0199a2c4-0000-7000-8000-000000000003', username: 'cat', displayName: '凯特', status: 'disabled' }])),
     })
@@ -144,6 +153,7 @@ describe('管理界面：账户', () => {
 
   it('取消最后一个系统管理员：弹窗里说明原因，弹窗留着', async () => {
     installFakeApi({
+      ...SPACES,
       'GET /api/auth/session': () => json(200, session('admin')),
       'GET /api/admin/users': () => json(200, listPage([ROOT])),
       [`PUT /api/admin/users/${ROOT.id}/system-role`]: () => apiError(409, 'LAST_ADMIN'),
@@ -158,6 +168,7 @@ describe('管理界面：账户', () => {
   it('进行中：按钮标为不可用，不能重复提交，也不能关闭', async () => {
     const pending = deferred()
     const api = installFakeApi({
+      ...SPACES,
       'GET /api/auth/session': () => json(200, session('admin')),
       'GET /api/admin/users': () => json(200, listPage([AMY])),
       [`POST /api/admin/users/${AMY.id}/disable`]: pending.handler,
@@ -181,6 +192,7 @@ describe('管理界面：账户', () => {
     const writeText = vi.fn(async () => {})
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
     const api = installFakeApi({
+      ...SPACES,
       'GET /api/auth/session': () => json(200, session('admin')),
       'GET /api/admin/users': () => json(200, listPage([AMY])),
       [`POST /api/admin/users/${AMY.id}/password-reset`]: () => json(201, { url: 'https://docs.example.com/reset-password#token', expiresAt: '2026-09-29T03:00:00.000Z' }),
@@ -209,6 +221,7 @@ describe('管理界面：账户', () => {
 
   it('搜索与状态过滤：带着条件请求', async () => {
     const api = installFakeApi({
+      ...SPACES,
       'GET /api/auth/session': () => json(200, session('admin')),
       'GET /api/admin/users': () => json(200, listPage([ROOT, AMY])),
       'GET /api/admin/users?status=disabled': () => json(200, listPage([])),
@@ -227,6 +240,7 @@ describe('管理界面：对自己的账户操作（审查 B4、A12）', () => {
   it('取消自己的系统管理员：专门的确认文案；成功后重新确认会话，切到无权限，页头不再有"管理"', async () => {
     let role: 'admin' | 'member' = 'admin'
     const api = installFakeApi({
+      ...SPACES,
       'GET /api/auth/session': () => json(200, session(role)),
       'GET /api/admin/users': () => (role === 'admin' ? json(200, listPage([ROOT, { ...AMY, systemRole: 'admin' }])) : apiError(403, 'PERMISSION_DENIED')),
       [`PUT /api/admin/users/${ROOT.id}/system-role`]: () => {
@@ -254,6 +268,7 @@ describe('管理界面：对自己的账户操作（审查 B4、A12）', () => {
   it('停用自己：确认文案说明本人会退出（不写"随时可以重新启用"）；成功后重新确认会话，已经退出，整页重新加载', async () => {
     let disabled = false
     installFakeApi({
+      ...SPACES,
       'GET /api/auth/session': () => (disabled ? apiError(401, 'UNAUTHENTICATED') : json(200, session('admin'))),
       'GET /api/admin/users': () => (disabled ? apiError(401, 'UNAUTHENTICATED') : json(200, listPage([ROOT, { ...AMY, systemRole: 'admin' }]))),
       [`POST /api/admin/users/${ROOT.id}/disable`]: () => {
@@ -275,6 +290,7 @@ describe('管理界面：对自己的账户操作（审查 B4、A12）', () => {
   it('给自己生成重置链接：专门的确认文案；链接先交到本人手里，关闭弹窗之后才重新确认会话（已经退出，整页重新加载）', async () => {
     let reset = false
     const api = installFakeApi({
+      ...SPACES,
       'GET /api/auth/session': () => (reset ? apiError(401, 'UNAUTHENTICATED') : json(200, session('admin'))),
       'GET /api/admin/users': () => json(200, listPage([ROOT])),
       [`POST /api/admin/users/${ROOT.id}/password-reset`]: () => {
@@ -302,6 +318,7 @@ describe('管理界面：对自己的账户操作（审查 B4、A12）', () => {
 describe('管理界面：邀请', () => {
   it('签发：登录名不合规时在前端说明；合规时请求，弹出只显示一次的链接；关闭之后焦点回到登录名（审查 B9）', async () => {
     const api = installFakeApi({
+      ...SPACES,
       'GET /api/auth/session': () => json(200, session('admin')),
       'GET /api/admin/invitations': () => json(200, listPage([])),
       'POST /api/admin/invitations': () => json(201, { invitation: { ...INVITATION, username: 'zhang.san', displayName: '张三' }, url: 'https://docs.example.com/invite#token' }),
@@ -329,6 +346,7 @@ describe('管理界面：邀请', () => {
 
   it('登录名已被占用或已有待接受的邀请：按错误码说明，用"登录名"的说法（审查 B6）', async () => {
     installFakeApi({
+      ...SPACES,
       'GET /api/auth/session': () => json(200, session('admin')),
       'GET /api/admin/invitations': () => json(200, listPage([])),
       'POST /api/admin/invitations': () => apiError(409, 'USERNAME_TAKEN', '用户名已被占用'),
@@ -344,6 +362,7 @@ describe('管理界面：邀请', () => {
   it('列表显示状态与签发人；待接受的可以作废（先确认）；作废之后焦点回到这一行', async () => {
     let revoked = false
     const api = installFakeApi({
+      ...SPACES,
       'GET /api/auth/session': () => json(200, session('admin')),
       'GET /api/admin/invitations': () => json(200, listPage([{ ...INVITATION, status: revoked ? 'revoked' : 'pending' }])),
       [`POST /api/admin/invitations/${INVITATION.id}/revoke`]: () => {
@@ -366,6 +385,7 @@ describe('管理界面：邀请', () => {
   it('只对没有接受、后来也没有再签发过的邀请给出"重新生成"（审查 B6）', async () => {
     const invitation = (index: number, changes: Partial<Invitation>): Invitation => ({ ...INVITATION, id: `0199a2c4-0000-7000-8000-00000000010${index}`, username: `user${index}`, ...changes })
     installFakeApi({
+      ...SPACES,
       'GET /api/auth/session': () => json(200, session('admin')),
       'GET /api/admin/invitations': () => json(200, listPage([
         invitation(1, { status: 'pending' }),
@@ -392,6 +412,7 @@ describe('管理界面：邀请', () => {
     const refreshed = deferred()
     let listCalls = 0
     const api = installFakeApi({
+      ...SPACES,
       'GET /api/auth/session': () => json(200, session('admin')),
       'GET /api/admin/invitations': async (init) => {
         listCalls += 1

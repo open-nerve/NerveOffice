@@ -6,7 +6,7 @@ import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import { randomUUID } from 'node:crypto'
-import { adminUserDocumentListResponseSchema, errorResponseSchema, transferDocumentsResponseSchema } from '@nerve-office/contracts'
+import { adminUserDocumentListResponseSchema, adminUserSchema, errorResponseSchema, transferDocumentsResponseSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount, createPassiveAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -88,6 +88,15 @@ describe('US-M2-04 停用者的文档：只看得到标题', () => {
     const gone = await leaver(['机密'])
     for (const path of [`/api/documents/${gone.documents[0]}`, `/api/documents/${gone.documents[0]}/content`])
       expect((await asUser(app.baseUrl, rootSession, path)).status, path).toBe(404)
+  })
+
+  it('转移页的页头：按 id 取一个账户（含停用的）；不存在 404；成员 403', async () => {
+    const gone = await leaver([])
+    const response = await asUser(app.baseUrl, rootSession, `/api/admin/users/${gone.id}`)
+    expect(response.status).toBe(200)
+    expect(parseExact(adminUserSchema, await response.json())).toMatchObject({ id: gone.id, status: 'disabled', systemRole: 'member' })
+    expect((await asUser(app.baseUrl, rootSession, `/api/admin/users/${randomUUID()}`)).status).toBe(404)
+    expect((await asUser(app.baseUrl, amySession, `/api/admin/users/${gone.id}`)).status).toBe(403)
   })
 
   it('账户仍然有效：409 ACCOUNT_NOT_DISABLED（个人空间对系统管理员不可见）；账户不存在：404', async () => {

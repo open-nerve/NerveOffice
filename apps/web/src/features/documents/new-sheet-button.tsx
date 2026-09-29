@@ -9,10 +9,10 @@ import { Alert, AlertDescription, Button } from '../../shared/ui/index.ts'
 import { createDocument } from './documents-api.ts'
 
 /**
- * 新建表格（US-M1-04，P4 设计 §3.7.4）：建好之后整页打开编辑器页（另一个入口）。
+ * 新建表格（US-M1-04，P4 设计 §3.7.4，M2-P2 设计 §3.10）：建在这个空间里，建好之后整页打开编辑器页（另一个入口）。
  * 一次点击生成一个 requestId：结果未知之后再点，沿用同一个，服务端只建一份；确定失败（4xx）之后再点，换一个新的（审查 B6）。
  */
-export function NewSheetButton() {
+export function NewSheetButton({ spaceId }: { readonly spaceId: string }) {
   const page = usePageLocation()
   const requestIdRef = useRef<string>(undefined)
   const mutation = useMutation({
@@ -30,7 +30,7 @@ export function NewSheetButton() {
     if (busy)
       return
     requestIdRef.current ??= crypto.randomUUID()
-    mutation.mutate({ type: 'sheet', requestId: requestIdRef.current })
+    mutation.mutate({ type: 'sheet', requestId: requestIdRef.current, spaceId })
   }
 
   const error = mutation.isError ? describeError(mutation.error) : undefined

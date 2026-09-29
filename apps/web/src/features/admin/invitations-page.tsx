@@ -1,6 +1,6 @@
 import type { Invitation, InvitationStatus, IssuedInvitation } from '@nerve-office/contracts'
 import type { SyntheticEvent } from 'react'
-import type { PendingConfirmation } from './confirm-dialog.tsx'
+import type { PendingConfirmation } from '../confirmation/index.ts'
 import type { IssuedLink } from './issued-link-dialog.tsx'
 import type { PagedTableHandle } from './paged-table.tsx'
 import { createInvitationRequestSchema, INVITATION_STATUSES } from '@nerve-office/contracts'
@@ -11,8 +11,8 @@ import { messages } from '../../shared/i18n/index.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { Alert, AlertDescription, Badge, Button, Input, Label, NativeSelect, TableCell } from '../../shared/ui/index.ts'
 import { SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
+import { ConfirmDialog } from '../confirmation/index.ts'
 import { ADMIN_QUERY_KEY, createInvitation, invitationsQueryOptions, reissueInvitation, revokeInvitation } from './admin-api.ts'
-import { ConfirmDialog } from './confirm-dialog.tsx'
 import { IssuedLinkDialog } from './issued-link-dialog.tsx'
 import { PagedTable } from './paged-table.tsx'
 
@@ -186,7 +186,7 @@ export function AdminInvitationsPage() {
           </>
         )}
       />
-      <ConfirmDialog pending={pending} onClose={() => setPending(undefined)} />
+      <ConfirmDialog pending={pending} onClose={() => setPending(undefined)} meta={SYSTEM_ADMIN_ONLY} />
       <IssuedLinkDialog link={issued} onClose={() => setIssued(undefined)} />
     </div>
   )
