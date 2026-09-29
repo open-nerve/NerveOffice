@@ -12,11 +12,21 @@ import { ARTIFACT_POLICY } from './policy.ts'
 import { artifactsGate, auditGate, budgetsGate, GATE_NAMES, runGate } from './run.ts'
 
 describe('US-M1-11 门禁对仓库现状通过', () => {
-  it.each(['pins', 'config', 'stories', 'migrations', 'schema', 'deps', 'licenses'] as const)('%s', (name) => {
+  it.each(['pins', 'config', 'migrations', 'schema', 'deps', 'licenses'] as const)('%s', (name) => {
     const outcome = runGate(name)
     expect(outcome.violations).toEqual([])
     expect(outcome.name).toBe(name)
   })
+
+  // stories 单列，时限另给：它要列举仓库里的全部用例（vitest list 与 playwright list 各起一次工具链，后者还要加载每个 spec），
+  // 本机 12.3 秒，是其余六个门禁合计之和的二十倍；覆盖率那一轮里这个用例与全部单元测试抢 CPU，CI 上超过 120 秒失败
+  // （M2-P3 合并之后的 run 36584794669：静态门禁那一步单独跑 pins+config+stories+migrations+schema 只用 81.6 秒）。
+  // 时限按本机的二十倍给到 300 秒（与 lint 自测同样的定法，M2-P2 审查）；本机超过 20 秒就说明列举明显变慢，值得回头看
+  it('stories', () => {
+    const outcome = runGate('stories')
+    expect(outcome.violations).toEqual([])
+    expect(outcome.name).toBe('stories')
+  }, 300_000)
 }, 120_000)
 
 describe('US-M1-11 门禁的快捷脚本', () => {
