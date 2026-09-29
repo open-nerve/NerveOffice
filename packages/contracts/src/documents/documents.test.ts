@@ -66,13 +66,20 @@ describe('新建文档的请求', () => {
   })
 
   it('不接受多余的字段', () => {
-    expect(createDocumentRequestSchema.safeParse({ type: 'sheet', requestId, folderId: requestId }).success).toBe(false)
+    expect(createDocumentRequestSchema.safeParse({ type: 'sheet', requestId, parentId: requestId }).success).toBe(false)
   })
 
   it('建在哪个空间：spaceId 可选，必须是 UUID；没有时建在个人空间（M1 兼容）', () => {
     const spaceId = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0e'
     expect(createDocumentRequestSchema.parse({ type: 'sheet', requestId, spaceId })).toEqual({ type: 'sheet', requestId, spaceId })
     expect(createDocumentRequestSchema.safeParse({ type: 'sheet', requestId, spaceId: 'team' }).success).toBe(false)
+  })
+
+  it('建在哪个文件夹：folderId 可选，必须是 UUID；省略表示空间的根目录，不接受 null（M2-P4）', () => {
+    const folderId = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0f'
+    expect(createDocumentRequestSchema.parse({ type: 'sheet', requestId, folderId })).toEqual({ type: 'sheet', requestId, folderId })
+    expect(createDocumentRequestSchema.safeParse({ type: 'sheet', requestId, folderId: 'root' }).success).toBe(false)
+    expect(createDocumentRequestSchema.safeParse({ type: 'sheet', requestId, folderId: null }).success).toBe(false)
   })
 
   it('标题 1–200 个字符（按码点计），不含控制字符', () => {

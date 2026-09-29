@@ -151,12 +151,15 @@ export const documentIdSchema = uuidSchema
 /**
  * 新建文档（POST /api/documents）。requestId 由客户端为每一次新建生成：网络错误后用同一个 requestId 重试，
  * 服务端只建一份（P4 设计 §3.4）。spaceId 是建在哪个空间（M2-P2），没有时建在本人的个人空间（M1 兼容）。
+ * folderId 是建在那个空间里的哪个文件夹，省略表示空间的根目录（M2-P4）：
+ * 在文件夹里新建因此是一步，不必"先建到根目录、再移进来"——两步之间失败会把文档留在别处。
  */
 export const createDocumentRequestSchema = z.strictObject({
   type: z.enum(DOCUMENT_TYPES),
   title: documentTitleSchema.optional(),
   requestId: uuidSchema,
   spaceId: uuidSchema.optional(),
+  folderId: uuidSchema.optional(),
 })
 
 export type CreateDocumentRequest = z.input<typeof createDocumentRequestSchema>

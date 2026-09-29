@@ -6,7 +6,7 @@ import { describeError, isAccessDenied, isDefiniteRejection } from '../../shared
 import { messages } from '../../shared/i18n/index.ts'
 import { usePageLocation } from '../../shared/lib/page-location.ts'
 import { Alert, AlertDescription, Button } from '../../shared/ui/index.ts'
-import { createDocument, moveDocument } from './documents-api.ts'
+import { createDocument } from './documents-api.ts'
 
 interface NewSheetButtonProps {
   readonly spaceId: string
@@ -23,26 +23,19 @@ interface NewSheetButtonProps {
  * 新建表格（US-M1-04，P4 设计 §3.7.4，M2-P2 设计 §3.10）：建在当前位置，建好之后整页打开编辑器页（另一个入口）。
  * 一次点击生成一个 requestId：结果未知之后再点，沿用同一个，服务端只建一份；确定失败（4xx）之后再点，换一个新的（审查 B6）。
  *
- * 在文件夹里新建时分两步：新建接口没有"建在哪个文件夹"（契约 createDocumentRequestSchema），所以建完再移进来。
- * 第二步失败时不换 requestId：再点一次不会又建一份，只是重试移动（新建重放返回的是同一份文档）。
+ * 在文件夹里新建也是一次请求：目标文件夹随请求给出（契约 createDocumentRequestSchema 的 folderId），
+ * 服务端在同一个事务里判断它并写进去，不存在"建好了却没能移进来"的中间状态。
  */
 export function NewSheetButton({ spaceId, folderId = null, onDenied }: NewSheetButtonProps) {
   const page = usePageLocation()
   const requestIdRef = useRef<string>(undefined)
-  /** 这一次的 requestId 是否已经建出了文档：建出来之后失败的只可能是移动那一步 */
-  const createdRef = useRef(false)
   const mutation = useMutation({
-    mutationFn: async (requestId: string) => {
-      const created = await createDocument({ type: 'sheet', requestId, spaceId })
-      createdRef.current = true
-      if (folderId === null || created.folderId === folderId)
-        return created
-      return moveDocument(created.id, { spaceId, folderId })
-    },
+    // 建在空间根目录时不带 folderId：契约里省略就是根目录，请求与 M2-P4 之前一样
+    mutationFn: async (requestId: string) => createDocument({ type: 'sheet', requestId, spaceId, ...(folderId === null ? {} : { folderId }) }),
     onSuccess: document => page.assign(documentPagePath(document.id)),
     onError: (error) => {
-      // 只有新建这一步确定被拒绝时才换 requestId：移动那一步失败时文档已经建出来了，换了会多出一份没人要的表格
-      if (isDefiniteRejection(error) && !createdRef.current)
+      // 确定被拒绝（4xx）才换 requestId：结果未知时沿用同一个，再点不会建出第二份
+      if (isDefiniteRejection(error))
         requestIdRef.current = undefined
       if (isAccessDenied(error))
         onDenied?.()

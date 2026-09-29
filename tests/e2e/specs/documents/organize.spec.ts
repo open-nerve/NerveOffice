@@ -1,6 +1,6 @@
 // 文件夹与文档的整理（M2-P4，US-M2-07）：新建文件夹、进入与面包屑、在里面新建表格、改名、移动、删除；
 // 跨空间移动之后权限随之改变；查看者看不到这些入口。行内按钮的可读名称是"操作 对象"。
-import type { Page } from '@playwright/test'
+import type { Page, Request } from '@playwright/test'
 import { createDocumentIn, createFolderIn, createTeamSpace, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
@@ -10,6 +10,21 @@ const FOLDER_URL = /\/spaces\/[\da-f-]{36}\/folders\/[\da-f-]{36}$/
 /** 展开某一行的操作面板（可读名称是"操作 对象"，P1 交接单的约定） */
 async function openActions(page: Page, name: string): Promise<void> {
   await page.getByRole('button', { name: `操作 ${name}`, exact: true }).click()
+}
+
+/**
+ * 记下这个页面发出的"新建文档"与"移动文档"请求（路径）：
+ * 在文件夹里新建是一次请求（带 folderId），用例据此核对没有跟着一次移动。
+ */
+function watchDocumentWrites(page: Page): { readonly paths: string[], readonly stop: () => void } {
+  const paths: string[] = []
+  const listener = (request: Request): void => {
+    const path = new URL(request.url()).pathname
+    if (request.method() === 'POST' && (path === '/api/documents' || path.endsWith('/move')))
+      paths.push(path)
+  }
+  page.on('request', listener)
+  return { paths, stop: () => page.off('request', listener) }
 }
 
 /** 在当前位置新建一个文件夹 */
@@ -36,9 +51,13 @@ test.describe('US-M2-07 文件夹与文档的整理', () => {
     await expect(breadcrumb.getByRole('link', { name: '我的空间', exact: true })).toBeVisible()
     await expect(breadcrumb.getByText('方案', { exact: true })).toHaveAttribute('aria-current', 'page')
 
-    // 在这个文件夹里新建表格：建好之后整页打开编辑器页，回到文件夹时它就在这一层
+    // 在这个文件夹里新建表格：一次请求就建在这一层（契约的 folderId），不再"先建到根目录、再移进来"；
+    // 建好之后整页打开编辑器页，回到文件夹时它就在这一层
+    const writes = watchDocumentWrites(page)
     await page.getByRole('button', { name: '新建表格', exact: true }).click()
     await expect(page).toHaveURL(/\/documents\/[\da-f-]{36}$/)
+    expect(writes.paths).toEqual(['/api/documents'])
+    writes.stop()
     await page.goto(folderUrl)
     await expect(page.getByRole('list', { name: '文档列表' })).toContainText('未命名表格')
 

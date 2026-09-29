@@ -17,7 +17,10 @@ import { DocumentContentsRepository } from './document-contents.repository.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
 import { toDetail } from './document-views.ts'
 import { DocumentsRepository } from './documents.repository.ts'
+import { folderIdIn } from './folder-location.ts'
+import { FoldersRepository } from './folders.repository.ts'
 import { createdPayloadDigest } from './payload-digest.ts'
+import { SpaceTreeRepository } from './space-tree.repository.ts'
 
 /** 新建请求（已经过 contracts 的校验）。 */
 export interface CreateDocumentCommand {
@@ -26,14 +29,17 @@ export interface CreateDocumentCommand {
   readonly requestId: string
   /** 建在哪个空间；没有时是本人的个人空间（M1 兼容） */
   readonly spaceId?: string | undefined
+  /** 建在那个空间里的哪个文件夹；没有时建在空间的根目录（M2-P4） */
+  readonly folderId?: string | undefined
 }
 
 /** 各类型的模板快照：换上文档的 unitId 之后的 JSON 文本（P4 设计 §3.4）。 */
 const TEMPLATES: Readonly<Record<DocumentType, (unitId: string) => string>> = { sheet: sheetSnapshotFor }
 
 /**
- * 新建文档（M1-P4 设计 §3.4，M2-P2 设计 §3.6）：在指定的空间（没有指定时是个人空间）里建文档，内容取收敛的模板快照，修订号 1。
- * 要有新建权限：空间角色是编辑者及以上，空间没有归档。
+ * 新建文档（M1-P4 设计 §3.4，M2-P2 设计 §3.6，M2-P4 加上目标文件夹）：
+ * 在指定的空间（没有指定时是个人空间）的指定文件夹（没有指定时是空间的根目录）里建文档，
+ * 内容取收敛的模板快照，修订号 1。要有新建权限：空间角色是编辑者及以上，空间没有归档。
  * requestId 幂等：同一个请求重试只建一份，重放返回那份文档的当前元数据；同一个 requestId 用于不同的请求时拒绝。
  */
 @Injectable()
@@ -43,6 +49,8 @@ export class DocumentCreationService {
     private readonly documents: DocumentsRepository,
     private readonly contents: DocumentContentsRepository,
     private readonly revisions: DocumentRevisionsRepository,
+    private readonly folders: FoldersRepository,
+    private readonly tree: SpaceTreeRepository,
     private readonly spaces: SpacesService,
     private readonly policy: DocumentAccessPolicy,
     private readonly audit: AuditService,
@@ -51,7 +59,7 @@ export class DocumentCreationService {
   async create(actor: Actor, command: CreateDocumentCommand, origin: AuditOrigin): Promise<DocumentDetail> {
     const userId = actor.userId
     const title = command.title ?? DEFAULT_DOCUMENT_TITLES[command.type]
-    const digest = createdPayloadDigest(command.type, title, command.spaceId)
+    const digest = createdPayloadDigest(command.type, title, command.spaceId, command.folderId)
     return this.transactions.run(async (transaction) => {
       // 同一个 requestId 的两个请求排队执行：后到的一方在下面就能看到前一方的修订记录，按重放处理
       await this.revisions.lockCreateRequest(command.requestId, transaction)
@@ -63,12 +71,20 @@ export class DocumentCreationService {
       // 先判断（不加锁）：看不到与不能新建的请求不在空间行上取锁。再取共享锁、锁下再判断：
       // 与归档、移出成员（空间行的 FOR NO KEY UPDATE）互斥，它们提交之后的新建一定被拒绝
       await requireSpaceContent(this.policy, actor, spaceId, 'createDocuments', transaction)
+      // 指定了文件夹才取空间树的锁（设计 §3.4 第 2 条）：这一份要落进目录树里，与删除、移动那个文件夹的操作串行，
+      // 否则它可能落进一个正在进回收站的文件夹，成为"活文档挂在回收站的文件夹下"。
+      // 建到空间根目录时不牵涉任何文件夹，不取这把锁：新建不因此与整理相互阻塞（保持 M2-P4 之前的开销）
+      if (command.folderId !== undefined)
+        await this.tree.lock([spaceId], transaction)
       await this.spaces.holdSpace(spaceId, transaction)
       const access = await requireSpaceContent(this.policy, actor, spaceId, 'createDocuments', transaction)
+      // 锁下判断目标文件夹：不存在、已经在回收站里、在别的空间里都是同一个 NOT_FOUND（folder-location.ts）
+      const folderId = await folderIdIn(this.folders, spaceId, command.folderId ?? null, transaction)
 
       const unitId = randomUUID()
       const document = await this.documents.insert({
         spaceId,
+        folderId,
         type: command.type,
         title,
         createdBy: userId,
@@ -96,7 +112,7 @@ export class DocumentCreationService {
         actor: { type: 'user', id: userId },
         target: { type: 'document', id: document.id },
         origin,
-        details: { revision: 1 },
+        details: { revision: 1, folderId: document.folderId },
       }, { transaction })
       return toDetail(document, access, userId)
     })

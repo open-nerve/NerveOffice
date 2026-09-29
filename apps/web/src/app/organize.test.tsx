@@ -160,6 +160,22 @@ describe('US-M2-07 文件夹导航', () => {
     await waitFor(() => expect(screen.queryByRole('form', { name: '新建文件夹' })).not.toBeInTheDocument())
     expect((lastBody(api, 'POST /api/folders') as { requestId: string }).requestId).toBe(first.requestId)
   })
+
+  it('在文件夹里新建表格：一次请求就带上 folderId，不再"建到根目录再移进来"；空间根目录下不带 folderId', async () => {
+    const created = detail({ id: QUARTER_ID, title: '未命名表格', folderId: PLAN_ID })
+    const api = loggedIn({
+      [foldersKey(SPACE_ID)]: folderPage([folder(PLAN_ID, '方案')]),
+      [foldersKey(SPACE_ID, PLAN_ID)]: noFolders(),
+      ...documentsIn(PLAN_ID, []),
+      'POST /api/documents': () => json(201, created),
+    })
+    const app = renderApp(`/spaces/${SPACE_ID}/folders/${PLAN_ID}`)
+    fireEvent.click(await screen.findByRole('button', { name: '新建表格' }))
+    await waitFor(() => expect(app.page.visits).toEqual([`assign /documents/${QUARTER_ID}`]))
+    expect(lastBody(api, 'POST /api/documents')).toEqual({ type: 'sheet', spaceId: SPACE_ID, folderId: PLAN_ID, requestId: expect.stringMatching(/^[\da-f-]{36}$/) as unknown })
+    // 只有新建这一次请求：没有跟着一次移动
+    expect(api.requests.filter(request => request.key.endsWith('/move'))).toEqual([])
+  })
 })
 
 describe('US-M2-07 行内的整理操作', () => {

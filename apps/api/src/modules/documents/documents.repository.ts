@@ -30,6 +30,8 @@ export interface DocumentRow {
 /** 新建文档要写的列：修订号从 1 开始，状态为正常，时间取数据库的当前时间。 */
 export interface NewDocument {
   readonly spaceId: string
+  /** 建在哪个文件夹里；null 表示空间的根目录（M2-P4） */
+  readonly folderId: string | null
   readonly type: DocumentType
   readonly title: string
   readonly createdBy: string
