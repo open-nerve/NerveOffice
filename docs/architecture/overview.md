@@ -1,6 +1,6 @@
 # 架构总览
 
-> 活文档：每个 Phase 结束时更新｜当前：v1（M1-P5 完成时）｜更新：2026-09-28
+> 活文档：每个 Phase 结束时更新｜当前：v1（M2-P2 完成时）｜更新：2026-09-29
 
 ## 1. 目标形态与当前进度
 
@@ -8,10 +8,10 @@
 
 | 部分 | 当前状态 |
 |---|---|
-| 前端 `apps/web` | 平台页面：登录页、我的空间（个人空间的文档列表、新建表格）、404 与错误页（M1-P3、P4）；修改密码、接受邀请与重置密码的公开页面、管理界面（账户、邀请、审计，按需加载）（M2-P1）；表格编辑器页（M1-P4：整页加载，显式保存） |
-| 后端 `apps/api` | 横切能力（M1-P2）；账户、个人空间、会话与登录、默认拒绝的认证与 CSRF 防护、文档元数据的列表与读取、命令行初始化管理员、托管前端产物（M1-P3）；新建文档、读取内容、按修订号保存（M1-P4）；修改密码、邀请注册与重置密码的一次性令牌、停用与启用、系统管理员的授予与取消、同事目录、系统管理的接口与审计查询、运维的重置链接命令（M2-P1） |
+| 前端 `apps/web` | 平台页面：登录页、我的空间（个人空间的文档列表、新建表格）、404 与错误页（M1-P3、P4）；修改密码、接受邀请与重置密码的公开页面、管理界面（账户、邀请、审计，按需加载）（M2-P1）；左侧导航与空间页、成员页（按需加载）、管理界面的团队空间与停用者文档的转移（M2-P2）；表格编辑器页（M1-P4：整页加载，显式保存；M2-P2 起返回文档所在的空间） |
+| 后端 `apps/api` | 横切能力（M1-P2）；账户、个人空间、会话与登录、默认拒绝的认证与 CSRF 防护、文档元数据的列表与读取、命令行初始化管理员、托管前端产物（M1-P3）；新建文档、读取内容、按修订号保存（M1-P4）；修改密码、邀请注册与重置密码的一次性令牌、停用与启用、系统管理员的授予与取消、同事目录、系统管理的接口与审计查询、运维的重置链接命令（M2-P1）；团队空间与成员、有效权限与"可访问文档"、按空间列出与新建、收回写入权的入口、停用者文档的转移（M2-P2，ADR-014） |
 | 共享契约 `packages/contracts` | 错误响应（含可选的 `details`）与错误码、审计动作、健康检查、请求头；账户与空间的规则、登录与会话、文档的列表与元数据、新建与保存、快照的常量、收敛的模板快照、编辑器页的地址 |
-| 数据库 | PostgreSQL 18；`audit_events`、`users`、`spaces`、`auth_sessions`、`auth_login_throttles`、`auth_invitations`、`auth_password_resets`、`documents`、`document_contents`、`document_revisions`；迁移由单独的命令执行 |
+| 数据库 | PostgreSQL 18；`audit_events`、`users`、`spaces`、`auth_sessions`、`auth_login_throttles`、`auth_invitations`、`auth_password_resets`、`space_members`、`documents`、`document_contents`、`document_revisions`；迁移由单独的命令执行 |
 | 编辑器适配层 | `apps/web/src/editor/`（M1-P4，ADR-010）：插件档案 `sheet@1`、公式 Worker、身份替换（ADR-009）、变更检测、公式收齐、`IMAGE()` 的限制、M5 之前的入口守卫、内部 API 的登记 |
 | 部署 | 生产镜像（多阶段构建、非 root、健康检查）；测试环境：应用 + PostgreSQL 18 + Caddy（HTTPS）；迁移是一次性任务；数据库两个角色；容器 E2E（M1-P5，ADR-012，§8） |
 
@@ -43,13 +43,17 @@ apps/api/src/
     database/     连接池与超时、Drizzle、TransactionRunner、迁移执行、就绪检查
     audit/        审计事件（只追加）；启动时检查数据库角色能否关掉审计表的触发器
     health/       存活与就绪探针（公开）、应用的运行状态
-    spaces/       个人空间（M2 扩展为团队空间与成员）
+    spaces/       空间与成员的数据与不变量：个人空间、团队空间（创建、改名、全员可见、归档与恢复）、成员与空间角色（至少保留一个空间管理员）、
+                  权限用的空间事实（M2-P2）；没有控制器，不判断谁能做什么（users、auth、documents 都依赖它）
     users/        账户、Argon2id 的密码哈希（并发与排队都有上限）、验证凭据、初始化首个管理员；停用与启用、系统角色（至少保留一个有效的管理员）、
                   建账户与个人空间（初始化与接受邀请共用）、同事目录与账户列表（M2-P1）
     auth/         登录、退出、会话、登录限流；会话守卫（含系统管理员接口的检查）与 CSRF、Origin 守卫；@CurrentPrincipal()；
                   修改密码、按人撤销会话、邀请注册与重置密码的一次性令牌与尝试限流（M2-P1，ADR-013）
-    admin/        系统管理的接口与跨模块的编排：账户、邀请、重置链接、审计查询；只给系统管理员（M2-P1）
-    documents/    文档：元数据的列表与读取、新建（模板快照、requestId 幂等）、内容的读取与保存（ADR-011）、访问策略
+    admin/        系统管理的接口与跨模块的编排：账户、邀请、重置链接、审计查询（M2-P1）；团队空间的创建、全员可见、归档与恢复，
+                  停用接上收回写入权，停用者文档的转移（M2-P2）；只给系统管理员
+    workspace/    面向成员的空间接口与编排（M2-P2）：我能看到的空间、空间页头、成员的查看与管理、改名；授权经 documents 的访问策略
+    documents/    文档：按空间列出与读取、新建到指定空间（模板快照、requestId 幂等）、内容的读取与保存（ADR-011）；有效权限的唯一入口与
+                  "可访问文档"的条件、writeEpoch 与收回写入权的入口、转移（M2-P2，ADR-014）
     web-hosting/  托管前端产物；/api 以外的其他请求得到统一的 404
   db/
     schema/<模块>/  各模块的表定义；schema/common 是表定义共用的写法（枚举的 CHECK、bytea）
@@ -80,7 +84,7 @@ apps/api/src/
   - 过期的计数与会话在验证之后、事务之外顺带清理，跳过别人锁着的行；
   - 登录成功、失败与退出都写审计。
 - 修改密码（M2-P1）：要输入旧密码，经登录限流（与猜登录密码同一个计数），改完撤销本人的其他会话；停用账户、签发与完成重置时撤销这个人的全部会话。
-- 验证在事务之外，事务里先锁账户行复核（M2-P1 审查，ADR-007 的补充）：登录用 `FOR SHARE` 复核账户有效、凭据的版本（`password_version`：换凭据时加一，按新参数重新哈希不变）还是验证时的那个；修改密码、签发与完成重置、停用、启用、系统角色用 `FOR NO KEY UPDATE`。锁的顺序统一为 system-admins 的 advisory lock（停用与系统角色排他，其他管理操作共享，都在锁里复核操作者）→ 按登录名的 advisory lock（邀请）→ 账户行 → 重置行或邀请行 → 限流计数 → 会话行。会话守卫发现账户不可用时撤销这条会话、不顺延。
+- 验证在事务之外，事务里先锁账户行复核（M2-P1 审查，ADR-007 的补充）：登录用 `FOR SHARE` 复核账户有效、凭据的版本（`password_version`：换凭据时加一，按新参数重新哈希不变）还是验证时的那个；修改密码、签发与完成重置、停用、启用、系统角色用 `FOR NO KEY UPDATE`。锁的顺序统一为 system-admins 的 advisory lock（停用与系统角色排他，其他管理操作共享，都在锁里复核操作者）→ 按登录名的 advisory lock（邀请）→ 账户行 → 重置行或邀请行 → 限流计数 → 会话行 → 空间行 → 成员行 → 文档行（M2-P2，ADR-014）。会话守卫发现账户不可用时撤销这条会话、不顺延。
 - 系统管理员的接口（M2-P1）：`@SystemAdminOnly()`，会话守卫在认证之后检查系统角色（每个请求重新读取）；取消与停用系统管理员时至少保留一个有效的管理员（advisory lock 串行）。
 - 一次性令牌（M2-P1，ADR-013）：邀请与重置的令牌只存摘要，链接的令牌在 `#` 之后；邀请的签发与接受按登录名取 advisory lock；签发重置时旧密码随即失效（换成不可用的哈希）；尝试限流只按地址、与登录的计数分开；事务里复核不通过同样按一次失败处理、记审计。
 - 密码用 Argon2id（@node-rs/argon2），参数可配置，有强度下限；同时进行的哈希有上限，免得占满 libuv 的线程池；排队的长度与等待时长也有上限，超出时这次不验证，返回 503 与 `Retry-After`，退回限流的名额（DEF-015）。首个管理员用命令行初始化（`init-admin`，密码从终端或标准输入读取）。
@@ -91,9 +95,9 @@ apps/api/src/
 | 接口 | 说明 |
 |---|---|
 | `POST /api/auth/login`、`POST /api/auth/logout`、`GET /api/auth/session` | 登录、退出、当前会话（账户、个人空间、CSRF 令牌） |
-| `GET /api/documents?limit=&cursor=` | 个人空间的文档，按更新时间从新到旧，keyset 分页 |
-| `POST /api/documents` | 新建（`{ type, title?, requestId }`）：内容是收敛的模板换上新的 `unitId`，修订号 1；同一个 `requestId` 的重放同样 201，返回同一份文档 |
-| `GET /api/documents/{id}` | 文档元数据（含修订号、档案、格式版本）与调用者的权限；别人的与不存在的文档都是 404 |
+| `GET /api/documents?spaceId=&limit=&cursor=` | 一个空间的文档（看不到与不存在的空间都是 404），按更新时间从新到旧，keyset 分页；没有 `spaceId` 时是个人空间（M2-P2） |
+| `POST /api/documents` | 新建（`{ type, title?, requestId, spaceId? }`）：建在指定空间（要有新建权限；没有指定时是个人空间），内容是收敛的模板换上新的 `unitId`，修订号 1；同一个 `requestId` 的重放同样 201，返回同一份文档 |
+| `GET /api/documents/{id}` | 文档元数据（含修订号、档案、格式版本、所在的空间）与调用者的权限；看不到的与不存在的文档都是 404 |
 | `GET /api/documents/{id}/content` | 当前快照：gzip 字节原样下发（`Content-Encoding: gzip`），修订号作 ETag |
 | `PUT /api/documents/{id}/content?baseRevision&requestId&clientInstanceId&localSeq` | 保存（正文是 gzip 压缩的快照）：压缩前后都限 5 MiB、基本校验、锁文档行、按 `requestId` 幂等、按基准修订号条件写入；冲突时 409，`details` 带当前修订号及其来源 |
 | `GET /api/health/live`、`GET /api/health/ready` | 存活与就绪探针（公开） |
@@ -101,6 +105,10 @@ apps/api/src/
 | `POST /api/auth/invitations/inspect`、`…/accept`、`POST /api/auth/password-resets/inspect`、`…/complete` | 一次性链接（公开，M2-P1）：令牌在请求体里；接受或完成之后已登录，响应同登录；不能用时 410 `LINK_INVALID` 与原因 |
 | `GET /api/users?query=` | 同事目录（M2-P1）：有效账户，显示名或登录名包含关键词，最多 20 条 |
 | `/api/admin/users`、`/api/admin/invitations`、`/api/admin/audit-events` | 系统管理（M2-P1，只给系统管理员）：账户列表、停用与启用、系统角色、签发重置链接；邀请的列表、签发、作废、重发；审计查询 |
+| `GET /api/spaces`、`GET /api/spaces/{id}`、`PUT /api/spaces/{id}/name` | 空间（M2-P2）：我能看到的空间（导航）、空间页头（有效角色与能做的操作）、改名（空间管理员、系统管理员） |
+| `/api/spaces/{id}/members`（GET、POST）、`/api/spaces/{id}/members/{userId}`（PUT、DELETE） | 成员（M2-P2）：查看（有空间角色的人、系统管理员）、添加、调整角色、移出（空间管理员、系统管理员）；至少保留一个空间管理员 |
+| `/api/admin/spaces`、`/api/admin/spaces/{id}/{visibility,archive,restore}` | 系统管理（M2-P2）：团队空间的列表、创建（连同首个空间管理员）、全员可见、归档与恢复 |
+| `GET /api/admin/users/{id}`、`GET /api/admin/users/{id}/documents`、`POST …/documents/transfer` | 系统管理（M2-P2）：一个账户；停用者个人空间里的文档（只有标题）与整批转移 |
 
 **错误**（ADR-006）：
 - 响应统一为 `{ "error": { "code", "message", "requestId", "details"? } }`；错误码登记在 contracts，每个错误码对应固定的 HTTP 状态；`details` 按错误码约定结构（例如修订号冲突）。
@@ -118,7 +126,12 @@ apps/api/src/
 - 应用启动时不迁移，只检查库结构版本，不一致时就绪探针失败。
 - 表只由所属模块的仓储读写；服务用 `TransactionRunner` 开启事务，把不透明的 `Transaction` 显式传给仓储。`TransactionRunner` 自己借出、归还连接：除业务错误外，失败的事务丢弃它的连接；work 吞掉失败的语句时不报告成功。
 
-**文档的访问策略**：服务只经 `DocumentAccessPolicy` 判断权限（在事务里判断时，查询走事务的连接）；M1 只有"个人空间的所有者"一条规则，M2 在同一个接口后面扩展为有效权限。没有任何权限与不存在都是 `NOT_FOUND`；能访问却不能编辑时保存得到 `PERMISSION_DENIED`。
+**有效权限**（M2-P2，ADR-014）：服务只经 `DocumentAccessPolicy` 判断权限，目标是文档或空间（在事务里判断时，查询走事务的连接）。
+- 空间的部分按 spaces 的空间事实（一条语句）与纯函数的规则计算：个人空间只看所有者；团队空间取成员的角色，全员可见至少是查看者，归档至多是查看者；系统角色只带来团队空间的管理面，不带来内容权限；P5 并上单独授权。
+- 同一套操作规则既给界面（`SpaceView.permissions`），也给服务端的检查（`requireSpaceContent`、`requireSpaceManagement`）。
+- 看不到与不存在都是 `NOT_FOUND`，执行同样的查询；看得到却不能做是 `PERMISSION_DENIED`。需要锁的操作先判断、再加锁、锁下再判断。
+- "可访问文档"的条件只在 documents 的仓储里拼一处，范围（空间 id 的集合）由访问策略给出。
+- 收回写入权的入口：停用、移出、调整角色、归档在同一个事务里调用；M2 没有租约，实现为空，M3 接入租约。转移与（P4 起的）删除、跨空间移动递增 `documents.write_epoch`。
 
 **文档的内容与保存**（ADR-011）：
 - 快照用 `bytea` 存 gzip 压缩的原始 JSON 字节；修订号是整数，新建为 1，每次保存加一；`unitId` 由服务端生成，终身不变。
@@ -140,8 +153,12 @@ apps/web/src/
   app/                运行时（路由、请求缓存、会话的全局处理：整页跳转、多标签页）、布局、404 与错误页
   features/auth/      登录页、会话、需要登录的外层路由、退出
   features/account/   修改密码；接受邀请与重置密码的公开页面（令牌从 # 读出后从地址里去掉）（M2-P1）
-  features/admin/     管理界面：账户、邀请、审计（M2-P1）；按需加载，只被 app/routes.ts 动态引用
-  features/documents/ 我的空间的文档列表、新建表格
+  features/admin/     管理界面：账户、邀请、审计（M2-P1）；团队空间、停用者文档的转移（M2-P2）；按需加载，只被 app/routes.ts 动态引用
+  features/spaces/    左侧导航（窄屏时收起）、空间页（首页是个人空间，/spaces/{id} 是任意空间；按权限显示操作、行内改名）（M2-P2）
+  features/members/   成员页（M2-P2）：查看、添加、调整角色、移出；按需加载，只被 app/routes.ts 动态引用
+  features/colleagues/ 按名字选同事（M2-P2）：成员页与管理界面用
+  features/confirmation/ 危险操作的确认弹窗（带 Radix Dialog，M2-P2 从管理界面挪出）：只由按需加载的功能引用
+  features/documents/ 一个空间的文档列表、新建表格（建在这个空间）
   features/sheet-editor/ 编辑器页：载入、保存的状态机、页头与提示、快捷键与离开提示、会话
   editor/             编辑器适配层（Univer 的一切，ADR-010）：档案、公式 Worker、身份、变更检测、公式收齐、IMAGE()、入口守卫、internal-api/
   shared/             请求层（api）、界面组件（ui，改写后的 shadcn/ui：M2-P1 加弹窗、表格、标签、原生选择框）与主题变量、界面文字（i18n）、
@@ -159,7 +176,7 @@ apps/web/src/
   - 载入：确认会话 → 并行读取元数据与内容 → 核对档案与格式版本 → 创建编辑器；别人的与不存在的显示相同；
   - 保存：显式保存（按钮、Ctrl/Cmd+S），状态机见 ADR-011；有未保存的修改时离开由浏览器提示；
   - 会话：载入之后一律不整页跳转、不自动重新加载（本页可能有未保存的修改）。登录已过期或在别处退出：暂停保存，提示在新标签页中登录，本人登录回来之后恢复；别的标签页登录了另一个人：不能再保存，原来的人回来之后恢复。
-- 首屏 JS 预算（gzip，门禁 `budgets` 检查）：平台页面 180 KiB；编辑器页 2350 KiB；公式 Worker 800 KiB。管理界面是单独的动态分块，不计入平台页面的首屏；只有管理界面用的弹窗不经 shared/ui 的桶文件导出（M2-P1：首屏 156.4 KiB）。
+- 首屏 JS 预算（gzip，门禁 `budgets` 检查）：平台页面 180 KiB；编辑器页 2350 KiB；公式 Worker 800 KiB。管理界面与成员页是单独的动态分块，不计入平台页面的首屏；弹窗不经 shared/ui 的桶文件导出，确认弹窗只由按需加载的功能引用（M2-P1：首屏 156.4 KiB；M2-P2：161.0 KiB）。
 
 ## 5. 模块边界
 
@@ -168,6 +185,7 @@ apps/web/src/
   - 入口（`src/entries/*`）→ 应用（`src/app`）→ 功能（`src/features/*`）→ 共享（`src/shared`）；
   - 编辑器适配层（`src/editor`）只依赖共享与 contracts；只有编辑器页的入口与 `features/sheet-editor` 能引用它（经 `index.ts`）；
   - `features/sheet-editor` 只由编辑器页的入口引用：平台的应用层、其他入口与其他功能都不引用它（Univer 不进平台页面的包）；
+  - `features/admin` 与 `features/members` 只由 `app/routes.ts` 动态引用它们的公开入口；`features/confirmation` 只由这两个功能引用（M2-P1、M2-P2）；
   - Univer 的内部符号与 `Univer.__getInjector()` 只能在 `src/editor/internal-api/` 引用，逐项登记；`@univerjs/*` 只引用包入口、`/facade`、`/locale/<语言>` 与样式（ADR-010）。
 - **api**：
   - 模块之间只经对方的 `index.ts`，模块不引用应用的组装；
@@ -231,12 +249,13 @@ A01 等检查（`pnpm gate <名称>`）：
 |---|---|---|
 | `audit_events` | audit | 审计事件：动作、操作者、对象、来源（请求标识、客户端地址）、补充信息；CHECK 约束兜底；触发器拒绝更新、删除与清空（前提：应用的数据库角色不是表的所有者或超级用户，P5 用两个角色落实，应用启动时自检） |
 | `users` | users | 账户：用户名（小写的规范写法，唯一）、显示名、Argon2id 哈希（CHECK 只接受 `$argon2id$`）、凭据的版本（M2-P1）、系统角色、状态（有效、停用，M2-P1） |
-| `spaces` | spaces | 空间：M1 只有个人空间，每人一个（部分唯一索引），不能全员可见 |
+| `spaces` | spaces | 空间：个人空间（每人一个，部分唯一索引；有所有者，不能全员可见、不能归档）与团队空间（M2-P2：有创建人、没有所有者，名称不区分大小写唯一，可以全员可见、归档） |
+| `space_members` | spaces | 团队空间的成员（M2-P2）：空间、账户、空间角色（管理员、编辑者、查看者）；主键（空间，账户）；按账户的索引 |
 | `auth_sessions` | auth | 登录会话：令牌摘要（唯一）、空闲与绝对过期、撤销的时间与原因 |
 | `auth_login_throttles` | auth | 限流的计数（登录，M2-P1 起另有一次性链接的键）：键的摘要、窗口内失败与正在验证的尝试次数（成功时退回，可以是 0）、锁定到期 |
 | `auth_invitations` | auth | 邀请（M2-P1）：登录名、显示名、令牌摘要（唯一）、签发人、到期时间、接受或作废；同一个登录名最多一条未接受、未作废的（部分唯一索引） |
 | `auth_password_resets` | auth | 重置密码（M2-P1）：账户、令牌摘要（唯一）、签发人（运维命令签发的为空）、到期时间、使用或作废；同一个账户最多一条未使用、未作废的 |
-| `documents` | documents | 文档的元数据：所属空间、类型、标题、创建者、状态、当前修订号、`unit_id`（不唯一：复制文档时不改写 unitId，迁移 0007）、插件档案、平台格式版本、写入时的 SDK 版本；按空间与更新时间的索引 |
+| `documents` | documents | 文档的元数据：所属空间、类型、标题、创建者、状态、当前修订号、`unit_id`（不唯一：复制文档时不改写 unitId，迁移 0007）、插件档案、平台格式版本、写入时的 SDK 版本、写入代次 `write_epoch`（M2-P2）；按空间与更新时间的索引 |
 | `document_contents` | documents | 每份文档一份当前快照：gzip 的 `bytea`、解压前后的字节数（CHECK 核对压缩后的字节数与上限） |
 | `document_revisions` | documents | 每次新建或保存一行：修订号（与文档联合唯一）、种类（新建即修订号 1）、`request_id`（唯一，幂等的依据）、负载摘要、保存的来源（`clientInstanceId`、`localSeq`）、保存人；不存正文 |
 
@@ -266,4 +285,5 @@ A01 等检查（`pnpm gate <名称>`）：
 | 2026-09-27 | M1-P4 | 文档内容与保存协议（ADR-011）、错误响应的 `details`；编辑器适配层与内部 API 登记（ADR-010）、编辑器身份（ADR-009）；编辑器页与新建表格；托管映射编辑器页；门禁：Worker 预算、地址的前缀登记与按语法树识别（DEF-016）、缺失的许可正文补齐 |
 | 2026-09-28 | M1 对抗评审（Codex）与独立复验 | 编辑器就绪之前页头之外的输入一律拦下（交互屏障，含 body 下的浮层）；单元格里还没提交的输入算有未保存的修改；保存重试原样再发；命令行按 UTF-8 流式读密码；调整 Argon2 参数期间失败的验证按实测的耗时补到最慢的一组；`unit_id` 不唯一（迁移 0007）；新建的锁键按规范化的 UUID；门禁：YAML 按语法解析、exec 形式的 RUN、分发的许可正文、服务端依赖图展开工作区包、字符串定时器按语法树认、构建清单的一致性；容器 E2E 的取消、清理与镜像里的许可文件 |
 | 2026-09-28 | M2-P1 | 账户与系统管理：admin 模块与 `@SystemAdminOnly()`；修改密码、按人撤销会话；邀请注册与重置密码的一次性令牌（ADR-013，迁移 0008）；停用与启用、系统管理员的授予与取消；同事目录；审计查询；运维的重置链接命令；前端的公开页面与管理界面（按需加载）；`stories` 门禁累计各 M 的故事 |
+| 2026-09-29 | M2-P2 | 团队空间与有效权限（ADR-014，迁移 0009）：spaces 只管数据与不变量，新增 workspace 模块（空间的接口与成员），有效权限的唯一入口与"可访问文档"的条件在 documents，writeEpoch 与收回写入权的入口，停用者文档的转移；锁的顺序延伸到空间、成员与文档；前端的左侧导航、空间页、成员页与管理界面的团队空间、转移页 |
 | 2026-09-28 | M1-P5 | v1：部署形态（ADR-012，§8）：生产镜像、测试环境（应用 + PostgreSQL 18 + Caddy）、迁移是一次性任务、数据库两个角色与启动自检、代理未被信任的告警、哈希排队的上限；E2E 的外部模式与重启项目、容器 E2E 与 CI 的 `container` job；门禁：镜像按摘要锁定、服务端的许可正文 |
