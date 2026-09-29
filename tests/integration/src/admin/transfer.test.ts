@@ -64,6 +64,21 @@ async function errorOf(response: Response): Promise<{ code: string, message: str
   return { code, message }
 }
 
+/**
+ * 直接把一份文档放进回收站（删除的接口在 M2-P4 的 S3）：建一条删除单元，文档指向它并改为 trashed。
+ * 用来核对"停用者文档的转移只取正常状态的文档"（M2-P4 设计 §3.4 第 1 条）
+ */
+async function putInTrash(documentId: string, spaceId: string): Promise<void> {
+  await database.query(async client => client.query(
+    `WITH entry AS (
+       INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_space_id, title)
+       VALUES ($2, 'document', $3, now() + interval '30 days', $2, '回收站里的') RETURNING id
+     )
+     UPDATE documents SET status = 'trashed', trash_entry_id = (SELECT id FROM entry) WHERE id = $1`,
+    [documentId, spaceId, root.id],
+  ))
+}
+
 async function rowsOf(ids: readonly string[]) {
   return database.query(async client => (await client.query<{ id: string, space_id: string, write_epoch: number, updated_at: Date }>(
     'SELECT id, space_id, write_epoch, updated_at FROM documents WHERE id = ANY($1::uuid[]) ORDER BY id',
@@ -82,6 +97,20 @@ describe('US-M2-04 停用者的文档：只看得到标题', () => {
     expect(page.items[0]).toEqual({ id: gone.documents[0], title: '文档 00', type: 'sheet', updatedAt: expect.stringMatching(/Z$/) as unknown })
     const next = parseExact(adminUserDocumentListResponseSchema, await (await asUser(app.baseUrl, rootSession, `/api/admin/users/${gone.id}/documents?cursor=${page.nextCursor ?? ''}`)).json())
     expect(next).toEqual({ items: [expect.objectContaining({ title: '文档 50' })], nextCursor: null })
+  })
+
+  it('回收站里的文档：不在标题列表里，也不随转移搬走，留在原处等 30 天后自动清除（M2-P4 设计 §3.4 第 1 条）', async () => {
+    const gone = await leaver(['留下的', '在回收站里'])
+    await putInTrash(gone.documents[1]!, gone.spaceId)
+    const titles = await asUser(app.baseUrl, rootSession, `/api/admin/users/${gone.id}/documents`)
+    expect(parseExact(adminUserDocumentListResponseSchema, await titles.json()).items.map(item => item.id)).toEqual([gone.documents[0]])
+
+    // 整批请求里夹带回收站里的那份：它不在"可访问文档"里，锁不住，整批拒绝
+    const spaceId = await teamSpace()
+    const response = await transfer(gone.id, { documentIds: gone.documents, target: { type: 'team', spaceId } })
+    expect(response.status).toBe(409)
+    expect((await errorOf(response)).code).toBe('TRANSFER_CONFLICT')
+    expect((await rowsOf(gone.documents)).map(row => row.space_id)).toEqual([gone.spaceId, gone.spaceId])
   })
 
   it('系统管理员打不开停用者的文档：内容与元数据都是 404', async () => {

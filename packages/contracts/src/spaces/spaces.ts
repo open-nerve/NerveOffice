@@ -33,9 +33,13 @@ export const spaceIdSchema = uuidSchema
 /** 调用者在这个空间里能做的操作：界面据此只显示能做的，服务端按同一套规则检查（M2-P2 设计 §3.4）。 */
 export const spacePermissionsSchema = z.object({
   canCreateDocuments: z.boolean(),
+  /** 在这个空间里新建文件夹（M2-P4）：与新建文档同一条规则 */
+  canCreateFolders: z.boolean(),
   canViewMembers: z.boolean(),
   canManageMembers: z.boolean(),
   canRename: z.boolean(),
+  /** 永久删除这个空间回收站里的删除单元（M2-P4）：空间管理员或个人空间的所有者 */
+  canPurgeTrash: z.boolean(),
 })
 
 export type SpacePermissions = z.infer<typeof spacePermissionsSchema>

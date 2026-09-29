@@ -84,6 +84,9 @@ const AUDIT_ACTION_NAMES: Record<AuditAction, string> = {
   'documents.created': '新建文档',
   'documents.content_saved': '保存文档',
   'documents.transferred': '转移文档',
+  'folders.created': '新建文件夹',
+  'folders.renamed': '文件夹改名',
+  'folders.moved': '移动文件夹',
 }
 
 function isAuditAction(action: string): action is AuditAction {
@@ -341,7 +344,7 @@ export const messages = {
       columns: { occurredAt: '时间', actor: '操作者', action: '动作', target: '对象', origin: '来源', details: '详情' },
       actorKind: (type: string) => ({ system: '系统', anonymous: '未登录的访问者' } as Record<string, string>)[type] ?? type,
       source: (source: string) => ({ http: '网页', cli: '命令行' } as Record<string, string>)[source] ?? source,
-      targetKind: (type: string) => ({ user: '账户', space: '空间', document: '文档', invitation: '邀请' } as Record<string, string>)[type] ?? type,
+      targetKind: (type: string) => ({ user: '账户', space: '空间', document: '文档', invitation: '邀请', folder: '文件夹', trash_entry: '回收站条目' } as Record<string, string>)[type] ?? type,
       actionName: (action: string) => (isAuditAction(action) ? AUDIT_ACTION_NAMES[action] : action),
       onlyTarget: '只看这个对象',
       chipActor: (name: string) => `操作者：${name}`,

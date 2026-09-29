@@ -19,8 +19,9 @@ export class DocumentTransferService {
     const after = cursor === undefined ? undefined : decodeTimeCursor(cursor)
     if (cursor !== undefined && after === undefined)
       throw new AppError('REQUEST_INVALID', '分页的游标不合法，请从第一页重新加载')
-    // 与列表用同一个"可访问文档"的条件（正常状态、在这个空间里）；多取一条，判断还有没有下一页
-    const rows = await this.documents.listAccessible({ spaceIds: [spaceId] }, ADMIN_PAGE_SIZE + 1, after)
+    // 与列表用同一个"可访问文档"的条件（在这个空间里、正常状态：回收站里的文档不转移，M2-P4 设计 §3.4 第 1 条）；
+    // 不按目录过滤：整个空间里的文档都要列出来。多取一条，判断还有没有下一页
+    const rows = await this.documents.listAccessible({ spaceIds: [spaceId], state: 'active' }, { limit: ADMIN_PAGE_SIZE + 1, after })
     const page = rows.slice(0, ADMIN_PAGE_SIZE)
     const last = page.at(-1)
     return {

@@ -96,6 +96,7 @@ export { DOCUMENT_PAGE_PATTERN, documentIdFromPagePath, documentPagePath } from 
 export {
   createDocumentRequestSchema,
   DEFAULT_DOCUMENT_TITLES,
+  DOCUMENT_LIST_ALL_FOLDERS,
   DOCUMENT_LIST_DEFAULT_LIMIT,
   DOCUMENT_LIST_MAX_LIMIT,
   DOCUMENT_PROFILE_OF,
@@ -130,6 +131,27 @@ export { ERROR_CODES, errorStatus, RETIRED_ERROR_CODES } from './errors/error-co
 export type { ErrorCode } from './errors/error-codes.ts'
 export { errorCodeSchema, errorResponseSchema } from './errors/error-response.ts'
 export type { ErrorResponse } from './errors/error-response.ts'
+export {
+  createFolderRequestSchema,
+  FOLDER_LIST_MAX_ITEMS,
+  FOLDER_MAX_DEPTH,
+  FOLDER_NAME_MAX_LENGTH,
+  folderIdSchema,
+  folderListQuerySchema,
+  folderListResponseSchema,
+  folderNameSchema,
+  folderPermissionsSchema,
+  folderSchema,
+  updateFolderRequestSchema,
+} from './folders/folders.ts'
+export type {
+  CreateFolderRequest,
+  Folder,
+  FolderListQuery,
+  FolderListResponse,
+  FolderPermissions,
+  UpdateFolderRequest,
+} from './folders/folders.ts'
 export { healthLiveResponseSchema, healthReadyResponseSchema } from './health/health.ts'
 export type { HealthLiveResponse, HealthReadyResponse } from './health/health.ts'
 export { CSRF_TOKEN_HEADER, REQUEST_ID_HEADER } from './http/headers.ts'

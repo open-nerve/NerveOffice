@@ -9,8 +9,8 @@ const MISSING_SPACE = '0199a2c4-0000-7000-8000-0000000000ff'
 
 function setup() {
   const store = new FakeStore()
-  const { documents, spaces, policy } = store.deps
-  const service = new DocumentsService(documents, spaces, policy)
+  const { documents, folders, spaces, policy } = store.deps
+  const service = new DocumentsService(documents, folders, spaces, policy)
   return { store, service }
 }
 
@@ -72,14 +72,15 @@ describe('DocumentsService.list', () => {
     const { store, service } = setup()
     const older = at(store, ALICE_SPACE, '2026-09-26T10:00:00.000001Z')
     const newer = at(store, ALICE_SPACE, '2026-09-26T11:00:00.000003Z')
-    store.repositories.documents.listAccessible.mockImplementation(async (_scope, limit) => [newer, older].slice(0, limit))
+    store.repositories.documents.listAccessible.mockImplementation(async (_scope, options) => [newer, older].slice(0, options.limit))
     const page = await service.list(member(ALICE), { limit: 1 })
-    expect(store.repositories.documents.listAccessible).toHaveBeenCalledWith({ spaceIds: [ALICE_SPACE] }, 2, undefined)
+    // 没有指定目录：空间的根目录（folderId 为 null）；状态是正常（M2-P4 设计 §3.4 第 1 条）
+    expect(store.repositories.documents.listAccessible).toHaveBeenCalledWith({ spaceIds: [ALICE_SPACE], state: 'active' }, { limit: 2, after: undefined, folderId: null })
     expect(page.items.map(item => item.id)).toEqual([newer.id])
     expect(decodeTimeCursor(page.nextCursor ?? '')).toEqual({ position: newer.position, id: newer.id })
 
     const last = await service.list(member(ALICE), { limit: 5, cursor: page.nextCursor ?? '' })
-    expect(store.repositories.documents.listAccessible).toHaveBeenLastCalledWith({ spaceIds: [ALICE_SPACE] }, 6, { position: newer.position, id: newer.id })
+    expect(store.repositories.documents.listAccessible).toHaveBeenLastCalledWith({ spaceIds: [ALICE_SPACE], state: 'active' }, { limit: 6, after: { position: newer.position, id: newer.id }, folderId: null })
     expect(last.nextCursor).toBeNull()
   })
 

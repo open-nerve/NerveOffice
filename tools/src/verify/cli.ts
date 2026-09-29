@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process'
 import process from 'node:process'
 import { REPO_ROOT } from '../shared/repo.ts'
 import { githubAnnotations } from './github-annotations.ts'
-import { PLAN_SCOPES, planSteps, runSteps, summarize } from './plan.ts'
+import { isPlanScope, PLAN_SCOPES, planSteps, runSteps, summarize } from './plan.ts'
 
 const USAGE = '用法：pnpm verify [--fast] [--ci] [--audit] [--keep-going] [--scope=all|no-e2e|e2e]'
 const args = new Set(process.argv.slice(2))
@@ -16,7 +16,7 @@ if (unknown.length > 0) {
   process.exit(2)
 }
 const scope = scopeArgs.at(-1)?.slice('--scope='.length) ?? 'all'
-if (!PLAN_SCOPES.includes(scope)) {
+if (!isPlanScope(scope)) {
   console.error(`不认识的分片：${scope}（可选 ${PLAN_SCOPES.join('、')}）。${USAGE}`)
   process.exit(2)
 }

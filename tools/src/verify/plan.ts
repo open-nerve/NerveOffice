@@ -16,6 +16,11 @@ export const PLAN_SCOPES = ['all', 'no-e2e', 'e2e'] as const
 
 export type PlanScope = typeof PLAN_SCOPES[number]
 
+/** 命令行给的字符串是不是分片的名字 */
+export function isPlanScope(value: string): value is PlanScope {
+  return (PLAN_SCOPES as readonly string[]).includes(value)
+}
+
 export interface PlanOptions {
   /** 只执行 lint、类型检查、单元测试与静态检查（供 pre-push 使用） */
   fast: boolean

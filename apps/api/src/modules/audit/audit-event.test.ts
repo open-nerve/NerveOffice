@@ -15,7 +15,7 @@ describe('审计事件的校验', () => {
     ['用户操作者没有 id', { ...base, actor: { type: 'user' } }],
     ['系统操作者带 id', { ...base, actor: { type: 'system', id: USER_ID } }],
     ['id 不是 UUID', { ...base, actor: { type: 'user', id: '42' } }],
-    ['未登记的对象类型', { ...base, target: { type: 'folder', id: USER_ID } }],
+    ['未登记的对象类型', { ...base, target: { type: 'comment', id: USER_ID } }],
     ['HTTP 来源没有请求标识', { ...base, origin: { source: 'http' } }],
     ['命令行来源带客户端地址', { ...base, origin: { source: 'cli', clientIp: '127.0.0.1' } }],
     ['客户端地址不合法', { ...base, origin: { source: 'http', requestId: 'r', clientIp: 'localhost' } }],

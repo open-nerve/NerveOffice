@@ -12,6 +12,9 @@ import { DocumentTransferService } from './document-transfer.service.ts'
 import { DocumentsController } from './documents.controller.ts'
 import { DocumentsRepository } from './documents.repository.ts'
 import { DocumentsService } from './documents.service.ts'
+import { FoldersRepository } from './folders.repository.ts'
+import { FoldersService } from './folders.service.ts'
+import { SpaceTreeRepository } from './space-tree.repository.ts'
 import { LeaselessWriteAccessRevocation, WriteAccessRevocation } from './write-access.ts'
 
 @Module({
@@ -21,16 +24,20 @@ import { LeaselessWriteAccessRevocation, WriteAccessRevocation } from './write-a
     DocumentsRepository,
     DocumentContentsRepository,
     DocumentRevisionsRepository,
+    FoldersRepository,
+    SpaceTreeRepository,
     DocumentsService,
     DocumentCreationService,
     DocumentContentService,
     DocumentTransferService,
+    FoldersService,
     // 有效权限的唯一入口（M2-P2 设计 §3.4）；P5 在同一个实现里并上单独授权
     { provide: DocumentAccessPolicy, useClass: EffectiveAccessPolicy },
     // 收回写入权的入口（M2-P2 设计 §3.7）；M3 换成接入租约的实现，调用方不改
     { provide: WriteAccessRevocation, useClass: LeaselessWriteAccessRevocation },
   ],
-  // 空间的接口（workspace）与系统管理（admin）经访问策略授权、经这个入口收回写入权；admin 转移停用者的文档
-  exports: [DocumentAccessPolicy, WriteAccessRevocation, DocumentTransferService],
+  // 空间的接口（workspace）与系统管理（admin）经访问策略授权、经这个入口收回写入权；admin 转移停用者的文档；
+  // 文件夹的接口在 workspace（M2-P4 设计 §3.1），数据与规则在这里
+  exports: [DocumentAccessPolicy, WriteAccessRevocation, DocumentTransferService, FoldersService],
 })
 export class DocumentsModule {}

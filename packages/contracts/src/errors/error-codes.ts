@@ -47,6 +47,10 @@ export const ERROR_CODES = {
   LAST_SPACE_ADMIN: { status: 409, message: '团队空间至少要保留一个空间管理员' },
   /** 目标空间已归档：不能把文档转移进去（M2-P2） */
   SPACE_ARCHIVED: { status: 409, message: '空间已归档' },
+  /** 新建或移动会让文件夹超过层数上限（M2-P4，FOLDER_MAX_DEPTH）：移动时整棵子树都要放得下 */
+  FOLDER_DEPTH_EXCEEDED: { status: 409, message: '文件夹的层级超过上限' },
+  /** 把文件夹移进它自己或它的子文件夹里（M2-P4）：目录会成环 */
+  FOLDER_CYCLE: { status: 409, message: '不能把文件夹移动到它自己或它的子文件夹里' },
   /** 要转移的文档里，有的已经不在这个人的个人空间里（例如被别人转走了）：整批没有转移（M2-P2） */
   TRANSFER_CONFLICT: { status: 409, message: '有文档已经不在这个人的个人空间里，请刷新后重试' },
   /** 邀请或重置链接不能用。details 带原因：没有这个令牌、已过期、已使用、已作废（linkInvalidDetailsSchema） */

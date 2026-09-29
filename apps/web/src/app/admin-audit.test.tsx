@@ -76,13 +76,13 @@ describe('管理界面：审计', () => {
   })
 
   it('前端不认识的对象类型：只按 id 筛选', async () => {
-    const future = event(3, { target: { type: 'folder', id: '0199a2c4-0000-7000-8000-0000000003aa', label: null } })
+    const future = event(3, { target: { type: 'comment', id: '0199a2c4-0000-7000-8000-0000000003aa', label: null } })
     const api = audit({
       [LIST]: () => json(200, listPage([future])),
       [`${LIST}?targetId=0199a2c4-0000-7000-8000-0000000003aa`]: () => json(200, listPage([future])),
     })
     renderApp('/admin/audit')
-    fireEvent.click(await screen.findByRole('button', { name: 'folder：0199a2c4-0000-7000-8000-0000000003aa' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'comment：0199a2c4-0000-7000-8000-0000000003aa' }))
     await waitFor(() => expect(requested(api, `${LIST}?targetId=0199a2c4-0000-7000-8000-0000000003aa`)).toBe(true))
   })
 

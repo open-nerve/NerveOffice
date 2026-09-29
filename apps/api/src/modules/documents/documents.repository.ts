@@ -1,9 +1,9 @@
-import type { DocumentProfile, DocumentType, PlatformFormatVersion } from '@nerve-office/contracts'
+import type { DocumentProfile, DocumentStatus, DocumentType, PlatformFormatVersion } from '@nerve-office/contracts'
 import type { SQL } from 'drizzle-orm'
 import type { TimeCursor } from '../../shared/time-cursor.ts'
 import type { Database, Transaction } from '../database/index.ts'
 import { Inject, Injectable } from '@nestjs/common'
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import { documents } from '../../db/schema/documents/index.ts'
 import { DATABASE, executorOf, keysetPosition } from '../database/index.ts'
 
@@ -34,9 +34,24 @@ export interface NewDocument {
   readonly sdkVersion: string
 }
 
-/** "可访问文档"的范围（M2-P2 设计 §3.5）：调用者看得到的空间，由访问策略给出（P5 加上单独授权）。 */
+/**
+ * "可访问文档"的范围与状态（M2-P2 设计 §3.5，M2-P4 设计 §3.4 第 1 条）：两维。
+ * - 范围：调用者看得到的空间，由访问策略给出（P5 在这里并上单独授权）；
+ * - 状态：列表、搜索与停用者文档的转移用 active；回收站用 trashed。
+ * 目录与关键词不进这里，是各自查询自己的条件（设计 §7 的取舍）。
+ */
 export interface AccessibleScope {
   readonly spaceIds: readonly string[]
+  readonly state: DocumentStatus
+}
+
+/** 列出可访问文档的条件与分页。 */
+export interface ListOptions {
+  readonly limit: number
+  /** 上一页最后一条的位置（keyset） */
+  readonly after?: TimeCursor | undefined
+  /** 按目录过滤：省略（undefined）表示不按目录过滤，null 表示空间的根目录，字符串表示某个文件夹 */
+  readonly folderId?: string | null | undefined
 }
 
 const d = documents
@@ -55,11 +70,18 @@ const COLUMNS = {
 }
 
 /**
- * "可访问文档"的条件：列表、搜索、计数、"与我共享"都经这一处，不各写各的过滤条件（M2 总设计 §6.1）。
- * P4 排除回收站、P5 并上单独授权，也只改这里。
+ * "可访问文档"的条件：列表、搜索、计数、回收站、"与我共享"都经这一处，不各写各的过滤条件（M2 总设计 §6.1）。
+ * P5 并上单独授权也只改这里。
  */
 function accessible(scope: AccessibleScope): SQL | undefined {
-  return and(eq(d.status, 'active'), inArray(d.spaceId, [...scope.spaceIds]))
+  return and(eq(d.status, scope.state), inArray(d.spaceId, [...scope.spaceIds]))
+}
+
+/** 目录的过滤（见 ListOptions.folderId）：不进 accessible，是列表自己的条件。 */
+function inFolder(folderId: string | null | undefined): SQL | undefined {
+  if (folderId === undefined)
+    return undefined
+  return folderId === null ? isNull(d.folderId) : eq(d.folderId, folderId)
 }
 
 /** documents 表的读写在这里（规范 §1.2）。一处例外：读取内容时修订号要与内容一起读，那条联表的语句在同一模块的 document-contents.repository.ts。 */
@@ -68,16 +90,18 @@ export class DocumentsRepository {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
 
   /** 可访问的文档，按更新时间从新到旧；after 是上一页最后一条的位置（keyset）。 */
-  async listAccessible(scope: AccessibleScope, limit: number, after?: TimeCursor): Promise<DocumentRow[]> {
+  async listAccessible(scope: AccessibleScope, options: ListOptions): Promise<DocumentRow[]> {
+    const { after } = options
     return this.db
       .select(COLUMNS)
       .from(d)
       .where(and(
         accessible(scope),
+        inFolder(options.folderId),
         after === undefined ? undefined : sql`(${d.updatedAt}, ${d.id}) < (${after.position}::timestamptz, ${after.id}::uuid)`,
       ))
       .orderBy(desc(d.updatedAt), desc(d.id))
-      .limit(limit)
+      .limit(options.limit)
   }
 
   async findById(id: string, transaction?: Transaction): Promise<DocumentRow | undefined> {
@@ -94,13 +118,15 @@ export class DocumentsRepository {
   /**
    * 按 id 顺序锁住要转移的文档（FOR UPDATE，与保存相同）：两次转移、转移与保存都按同一个顺序取锁，互相等待时不成环。
    * 只锁来源空间里的可访问文档（与标题列表同一个条件）：请求里夹带的别处的文档不被锁住（M2-P2 审查 A4）；
-   * 等锁期间被别人转走的行，拿到锁之后按新的内容重新判断，不再返回。返回锁住的 id（按 id 排序）
+   * 等锁期间被别人转走的行，拿到锁之后按新的内容重新判断，不再返回。返回锁住的 id（按 id 排序）。
+   * 状态显式只取 active（M2-P4 设计 §3.4 第 1 条）：停用者回收站里的文档留在原处，30 天后自动清除——
+   * 系统管理员没有内容权限，也不该替别人恢复；不按目录过滤：整个空间里的文档都要转走
    */
   async lockForTransfer(ids: readonly string[], fromSpaceId: string, transaction: Transaction): Promise<string[]> {
     const rows = await executorOf(this.db, transaction)
       .select({ id: d.id })
       .from(d)
-      .where(and(inArray(d.id, [...ids]), accessible({ spaceIds: [fromSpaceId] })))
+      .where(and(inArray(d.id, [...ids]), accessible({ spaceIds: [fromSpaceId], state: 'active' })))
       .orderBy(asc(d.id))
       .for('update')
     return rows.map(row => row.id)

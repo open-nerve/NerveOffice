@@ -25,12 +25,12 @@ function team(changes: Partial<SpaceView> = {}): SpaceView {
     status: 'active',
     visibleToAll: false,
     role: 'editor',
-    permissions: { canCreateDocuments: true, canViewMembers: true, canManageMembers: false, canRename: false },
+    permissions: { canCreateDocuments: true, canCreateFolders: true, canViewMembers: true, canManageMembers: false, canRename: false, canPurgeTrash: false },
     ...changes,
   }
 }
 
-const MANAGER = team({ role: 'admin', permissions: { canCreateDocuments: true, canViewMembers: true, canManageMembers: true, canRename: true } })
+const MANAGER = team({ role: 'admin', permissions: { canCreateDocuments: true, canCreateFolders: true, canViewMembers: true, canManageMembers: true, canRename: true, canPurgeTrash: true } })
 
 const WEEKLY = { id: '0199a2c4-0000-7000-8000-0000000000d1', title: '周报', type: 'sheet', createdAt: '2026-09-29T01:00:00.000Z', updatedAt: '2026-09-29T02:00:00.000Z' }
 
@@ -127,7 +127,7 @@ describe('US-M2-05 空间页', () => {
   })
 
   it('查看者与归档的空间：没有新建表格；归档的另有说明', async () => {
-    loggedIn(team({ status: 'archived', role: 'viewer', permissions: { canCreateDocuments: false, canViewMembers: true, canManageMembers: false, canRename: false } }))
+    loggedIn(team({ status: 'archived', role: 'viewer', permissions: { canCreateDocuments: false, canCreateFolders: false, canViewMembers: true, canManageMembers: false, canRename: false, canPurgeTrash: false } }))
     renderApp(`/spaces/${TEAM_ID}`)
     expect(await screen.findByText('这个空间已归档，只能查看。')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '新建表格' })).not.toBeInTheDocument()
@@ -214,7 +214,7 @@ describe('US-M2-05 空间页', () => {
 })
 
 /** 空间刚被归档之后的页头：所有人只能查看 */
-const ARCHIVED = team({ status: 'archived', role: 'viewer', permissions: { canCreateDocuments: false, canViewMembers: true, canManageMembers: false, canRename: false } })
+const ARCHIVED = team({ status: 'archived', role: 'viewer', permissions: { canCreateDocuments: false, canCreateFolders: false, canViewMembers: true, canManageMembers: false, canRename: false, canPurgeTrash: false } })
 
 /**
  * 空间管理员打开空间页。新建表格与改名被拒绝时，空间已经变成 after：归档之后的页头（服务端 403），或者看不到了（undefined，404）；

@@ -13,7 +13,7 @@ export function personalSpaceOf(session: SessionResponse): SpaceView {
     status: 'active',
     visibleToAll: false,
     role: 'admin',
-    permissions: { canCreateDocuments: true, canViewMembers: false, canManageMembers: false, canRename: false },
+    permissions: { canCreateDocuments: true, canCreateFolders: true, canViewMembers: false, canManageMembers: false, canRename: false, canPurgeTrash: true },
   }
 }
 

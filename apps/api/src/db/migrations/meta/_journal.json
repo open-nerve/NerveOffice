@@ -71,6 +71,13 @@
       "when": 1790645118417,
       "tag": "0009_m2_team_spaces",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1790698651216,
+      "tag": "0010_m2_folders_trash",
+      "breakpoints": true
     }
   ]
 }

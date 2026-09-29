@@ -14,8 +14,8 @@ const ORIGIN = { source: 'http', requestId: 'req-1' } as const
 
 const RECORD: SpaceRecord = { id: SPACE, type: 'team', name: '市场部', status: 'active', visibleToAll: false, createdAt: NOW }
 const FACTS: SpaceFacts = { id: SPACE, type: 'team', name: '市场部', status: 'active', visibleToAll: false, owned: false, memberRole: 'admin' }
-const MANAGER: SpaceAccess = { space: FACTS, role: 'admin', permissions: { canCreateDocuments: true, canViewMembers: true, canManageMembers: true, canRename: true } }
-const VIEWER: SpaceAccess = { space: FACTS, role: 'viewer', permissions: { canCreateDocuments: false, canViewMembers: true, canManageMembers: false, canRename: false } }
+const MANAGER: SpaceAccess = { space: FACTS, role: 'admin', permissions: { canCreateDocuments: true, canCreateFolders: true, canViewMembers: true, canManageMembers: true, canRename: true, canPurgeTrash: true } }
+const VIEWER: SpaceAccess = { space: FACTS, role: 'viewer', permissions: { canCreateDocuments: false, canCreateFolders: false, canViewMembers: true, canManageMembers: false, canRename: false, canPurgeTrash: false } }
 
 function user(id: string, overrides: Partial<User> = {}): User {
   return { id, username: id === AMY ? 'amy' : 'ben', displayName: id === AMY ? '艾米' : '本', systemRole: 'member', status: 'active', ...overrides }

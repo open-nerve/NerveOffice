@@ -1,7 +1,7 @@
 import type { SpaceRole } from '@nerve-office/contracts'
 import type { SpaceFacts } from '../spaces/index.ts'
 import { describe, expect, it } from 'vitest'
-import { atLeast, effectiveSpaceRole, spacePermissionsOf } from './access-rules.ts'
+import { atLeast, effectiveSpaceRole, folderPermissionsOf, spacePermissionsOf } from './access-rules.ts'
 
 function facts(overrides: Partial<SpaceFacts>): SpaceFacts {
   return { id: 'space', type: 'team', name: '市场部', status: 'active', visibleToAll: false, owned: false, memberRole: null, ...overrides }
@@ -57,22 +57,50 @@ describe('空间上能做的操作（M2-P2 设计 §3.4）', () => {
 
   it('团队空间的成员与改名：空间管理员或系统管理员能管理；有角色的人都能看成员', () => {
     const team = facts({})
-    expect(spacePermissionsOf(team, 'admin', false)).toEqual({ canCreateDocuments: true, canViewMembers: true, canManageMembers: true, canRename: true })
-    expect(spacePermissionsOf(team, 'editor', false)).toEqual({ canCreateDocuments: true, canViewMembers: true, canManageMembers: false, canRename: false })
-    expect(spacePermissionsOf(team, 'viewer', false)).toEqual({ canCreateDocuments: false, canViewMembers: true, canManageMembers: false, canRename: false })
-    expect(spacePermissionsOf(team, undefined, true)).toEqual({ canCreateDocuments: false, canViewMembers: true, canManageMembers: true, canRename: true })
+    expect(spacePermissionsOf(team, 'admin', false)).toEqual({ canCreateDocuments: true, canCreateFolders: true, canViewMembers: true, canManageMembers: true, canRename: true, canPurgeTrash: true })
+    expect(spacePermissionsOf(team, 'editor', false)).toEqual({ canCreateDocuments: true, canCreateFolders: true, canViewMembers: true, canManageMembers: false, canRename: false, canPurgeTrash: false })
+    expect(spacePermissionsOf(team, 'viewer', false)).toEqual({ canCreateDocuments: false, canCreateFolders: false, canViewMembers: true, canManageMembers: false, canRename: false, canPurgeTrash: false })
+    expect(spacePermissionsOf(team, undefined, true)).toEqual({ canCreateDocuments: false, canCreateFolders: false, canViewMembers: true, canManageMembers: true, canRename: true, canPurgeTrash: false })
   })
 
   it('归档的团队空间：原来的空间管理员（有效角色已是查看者）不能管理；系统管理员照样能', () => {
     const archived = facts({ status: 'archived', memberRole: 'admin' })
     const role = effectiveSpaceRole(archived)
-    expect(spacePermissionsOf(archived, role, false)).toEqual({ canCreateDocuments: false, canViewMembers: true, canManageMembers: false, canRename: false })
+    expect(spacePermissionsOf(archived, role, false)).toEqual({ canCreateDocuments: false, canCreateFolders: false, canViewMembers: true, canManageMembers: false, canRename: false, canPurgeTrash: false })
     expect(spacePermissionsOf(archived, role, true)).toMatchObject({ canManageMembers: true, canRename: true })
   })
 
   it('个人空间：所有者能新建，没有成员、不能改名；系统管理员也一样不能', () => {
     const personal = facts({ type: 'personal', owned: true })
-    expect(spacePermissionsOf(personal, 'admin', false)).toEqual({ canCreateDocuments: true, canViewMembers: false, canManageMembers: false, canRename: false })
-    expect(spacePermissionsOf(personal, 'admin', true)).toEqual({ canCreateDocuments: true, canViewMembers: false, canManageMembers: false, canRename: false })
+    expect(spacePermissionsOf(personal, 'admin', false)).toEqual({ canCreateDocuments: true, canCreateFolders: true, canViewMembers: false, canManageMembers: false, canRename: false, canPurgeTrash: true })
+    expect(spacePermissionsOf(personal, 'admin', true)).toEqual({ canCreateDocuments: true, canCreateFolders: true, canViewMembers: false, canManageMembers: false, canRename: false, canPurgeTrash: true })
+  })
+
+  it('新建文件夹与新建文档同一条规则；永久删除回收站只给空间管理员（系统角色不带来内容权限）', () => {
+    const team = facts({})
+    for (const role of ROLES) {
+      const effective = role ?? undefined
+      const permissions = spacePermissionsOf(team, effective, false)
+      expect(permissions.canCreateFolders, String(role)).toBe(permissions.canCreateDocuments)
+      expect(permissions.canPurgeTrash, String(role)).toBe(role === 'admin')
+    }
+    expect(spacePermissionsOf(team, undefined, true)).toMatchObject({ canCreateFolders: false, canPurgeTrash: false })
+    // 归档之后有效角色至多是查看者：原来的空间管理员也不能新建文件夹、不能永久删除
+    const archived = facts({ status: 'archived', memberRole: 'admin' })
+    expect(spacePermissionsOf(archived, effectiveSpaceRole(archived), false)).toMatchObject({ canCreateFolders: false, canPurgeTrash: false })
+  })
+})
+
+describe('文件夹上能做的操作（M2-P4 设计 §3.7）', () => {
+  it('改名与空间内移动：编辑者及以上', () => {
+    expect(folderPermissionsOf('admin')).toEqual({ canRename: true, canMoveWithinSpace: true })
+    expect(folderPermissionsOf('editor')).toEqual({ canRename: true, canMoveWithinSpace: true })
+    expect(folderPermissionsOf('viewer')).toEqual({ canRename: false, canMoveWithinSpace: false })
+    expect(folderPermissionsOf(undefined)).toEqual({ canRename: false, canMoveWithinSpace: false })
+  })
+
+  it('归档的空间：有效角色已经是查看者，什么也改不了', () => {
+    const archived = facts({ status: 'archived', memberRole: 'admin' })
+    expect(folderPermissionsOf(effectiveSpaceRole(archived))).toEqual({ canRename: false, canMoveWithinSpace: false })
   })
 })

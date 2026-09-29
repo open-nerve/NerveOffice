@@ -80,7 +80,7 @@ describe('US-M2-05 创建团队空间并指定空间管理员', () => {
     expect(space).toMatchObject({ name: '市场部', status: 'active', visibleToAll: false, memberCount: 1, myRole: null })
     const nav = await navOf(amySession)
     expect(nav.map(item => [item.type, item.name, item.role])).toEqual([['personal', '艾米', 'admin'], ['team', '市场部', 'admin']])
-    expect(nav[1]?.permissions).toEqual({ canCreateDocuments: true, canViewMembers: true, canManageMembers: true, canRename: true })
+    expect(nav[1]?.permissions).toEqual({ canCreateDocuments: true, canCreateFolders: true, canViewMembers: true, canManageMembers: true, canRename: true, canPurgeTrash: true })
     // 系统管理员没有内容权限：导航里没有它，空间页是 404
     expect((await navOf(rootSession)).map(item => item.id)).not.toContain(space.id)
     expect((await asUser(app.baseUrl, rootSession, `/api/spaces/${space.id}`)).status).toBe(404)

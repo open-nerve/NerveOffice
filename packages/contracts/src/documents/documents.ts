@@ -7,8 +7,11 @@ import { codePointLength, hasControlCharacters } from '../text/text.ts'
 export const DOCUMENT_TYPES = ['sheet'] as const
 export type DocumentType = (typeof DOCUMENT_TYPES)[number]
 
-/** 文档状态：M2 加上回收站。新增取值时，同时用迁移更新 documents.status 的 CHECK 约束。 */
-export const DOCUMENT_STATUSES = ['active'] as const
+/**
+ * 文档状态：正常；在回收站里（M2-P4：随删除单元一起进回收站，30 天后永久删除）。
+ * 文件夹用同一组状态（folders.status）。新增取值时，同时用迁移更新两张表 status 的 CHECK 约束。
+ */
+export const DOCUMENT_STATUSES = ['active', 'trashed'] as const
 export type DocumentStatus = (typeof DOCUMENT_STATUSES)[number]
 
 /**
@@ -46,12 +49,17 @@ export const documentTitleSchema = z.string()
 export const DOCUMENT_LIST_DEFAULT_LIMIT = 50
 export const DOCUMENT_LIST_MAX_LIMIT = 100
 
+/** folderId 的这个取值表示"整个空间，不按目录过滤"（P4 设计 §3.2）；不是 UUID，与文件夹 id 不会混淆。 */
+export const DOCUMENT_LIST_ALL_FOLDERS = 'all'
+
 /**
- * 列表的查询参数：按哪个空间列出、每页条数与上一页给出的游标（不透明的字符串）。
+ * 列表的查询参数：按哪个空间、哪个文件夹列出，每页条数与上一页给出的游标（不透明的字符串）。
  * 没有 spaceId 时是本人的个人空间（M1 兼容，M2 总设计 §6.4）。
+ * folderId 省略表示空间的根目录（M2-P4 之前的行为：那时全部文档都在根目录），all 表示整个空间不按目录过滤。
  */
 export const documentListQuerySchema = z.strictObject({
   spaceId: uuidSchema.optional(),
+  folderId: z.union([z.literal(DOCUMENT_LIST_ALL_FOLDERS), uuidSchema]).optional(),
   limit: z.coerce.number().int().min(1).max(DOCUMENT_LIST_MAX_LIMIT).default(DOCUMENT_LIST_DEFAULT_LIMIT),
   cursor: z.string().min(1).max(512).optional(),
 })

@@ -1,11 +1,11 @@
-import type { SpacePermissions, SpaceRole } from '@nerve-office/contracts'
+import type { FolderPermissions, SpacePermissions, SpaceRole } from '@nerve-office/contracts'
 import type { Principal } from '../auth/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { SpaceFacts } from '../spaces/index.ts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { SpacesService } from '../spaces/index.ts'
-import { atLeast, effectiveSpaceRole, spacePermissionsOf } from './access-rules.ts'
+import { atLeast, effectiveSpaceRole, folderPermissionsOf, spacePermissionsOf } from './access-rules.ts'
 
 /** 调用者（M2-P2 设计 §3.4）：系统角色只影响团队空间的管理操作，不带来任何内容权限（00 号计划书 §5.2）。 */
 export interface Actor {
@@ -132,6 +132,14 @@ function denied(access: SpaceAccess, message: string): AppError {
   return new AppError('PERMISSION_DENIED', access.space.status === 'archived' ? '空间已归档，只能查看' : message)
 }
 
+/** 空间里的内容操作与各自的权限；'view' 只要有空间角色，没有额外的权限位。 */
+export type SpaceContentOperation = 'view' | 'createDocuments' | 'createFolders'
+
+const SPACE_CONTENT: Readonly<Record<Exclude<SpaceContentOperation, 'view'>, { readonly permission: keyof SpacePermissions, readonly message: string }>> = {
+  createDocuments: { permission: 'canCreateDocuments', message: '没有在这个空间里新建的权限' },
+  createFolders: { permission: 'canCreateFolders', message: '没有在这个空间里新建文件夹的权限' },
+}
+
 /**
  * 看空间的内容（按空间列出、空间页）或在里面新建之前的判断：要有空间角色，否则是 NOT_FOUND
  * （没有加入的系统管理员也一样：系统角色不带来内容权限）；能看却不能新建是 PERMISSION_DENIED（ADR-006）。
@@ -140,15 +148,61 @@ export async function requireSpaceContent(
   policy: DocumentAccessPolicy,
   actor: Actor,
   spaceId: string,
-  operation: 'view' | 'createDocuments',
+  operation: SpaceContentOperation,
   transaction?: Transaction,
 ): Promise<SpaceContentAccess> {
   const access = await policy.spaceAccessOf(actor, spaceId, transaction)
   if (access?.role === undefined)
     throw new AppError('NOT_FOUND')
-  if (operation === 'createDocuments' && !access.permissions.canCreateDocuments)
-    throw denied(access, '没有在这个空间里新建的权限')
+  const required = operation === 'view' ? undefined : SPACE_CONTENT[operation]
+  if (required !== undefined && !access.permissions[required.permission])
+    throw denied(access, required.message)
   return { ...access, role: access.role }
+}
+
+/** 判断文件夹权限要用到的属性：所在的空间。v0.1 的权限只到空间与文档两级，文件夹没有自己的权限。 */
+export interface FolderTarget {
+  readonly id: string
+  readonly spaceId: string
+}
+
+/** 能访问的文件夹与调用者在它上面的权限。 */
+export interface AccessibleFolder<T extends FolderTarget> {
+  readonly folder: T
+  readonly space: SpaceContentAccess
+  readonly permissions: FolderPermissions
+}
+
+/** 文件夹上要权限的操作（只看能不能看时传空数组）。 */
+export type FolderOperation = 'rename' | 'moveWithinSpace'
+
+const FOLDER_CONTENT: Readonly<Record<FolderOperation, { readonly permission: keyof FolderPermissions, readonly message: string }>> = {
+  rename: { permission: 'canRename', message: '没有给这个文件夹改名的权限' },
+  moveWithinSpace: { permission: 'canMoveWithinSpace', message: '没有移动这个文件夹的权限' },
+}
+
+/**
+ * 读取或改动一个文件夹之前的判断（M2-P4 设计 §3.5）：没有任何权限与不存在都是同一个 NOT_FOUND。
+ * 文件夹不存在时也判断一次权限（用一个不存在的空间，见 MISSING_ID）：两条路径做同样的查询，不暴露文件夹是否存在。
+ * operations 是这次要做的操作（一次改动可以既改名又移动，一条查询判断全部）；空数组表示只要能看这个空间的内容。
+ */
+export async function requireFolderContent<T extends FolderTarget>(
+  policy: DocumentAccessPolicy,
+  actor: Actor,
+  folder: T | undefined,
+  operations: readonly FolderOperation[],
+  transaction?: Transaction,
+): Promise<AccessibleFolder<T>> {
+  const access = await policy.spaceAccessOf(actor, folder?.spaceId ?? MISSING_ID, transaction)
+  if (folder === undefined || access?.role === undefined)
+    throw new AppError('NOT_FOUND')
+  const permissions = folderPermissionsOf(access.role)
+  for (const operation of operations) {
+    const { permission, message } = FOLDER_CONTENT[operation]
+    if (!permissions[permission])
+      throw denied(access, message)
+  }
+  return { folder, space: { ...access, role: access.role }, permissions }
 }
 
 /** 空间的管理操作与各自的权限。 */
