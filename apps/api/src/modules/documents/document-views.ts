@@ -13,6 +13,7 @@ export function toDetail(row: DocumentRow, access: DocumentAccess): DocumentDeta
   return {
     ...toSummary(row),
     spaceId: row.spaceId,
+    space: { id: access.space.id, type: access.space.type, name: access.space.name },
     revision: row.revision,
     profile: row.profile,
     formatVersion: row.formatVersion,

@@ -1,6 +1,7 @@
 import type { DocumentDetail, DocumentType } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Transaction } from '../database/index.ts'
+import type { Actor } from './document-access-policy.ts'
 import type { RevisionRow } from './document-revisions.repository.ts'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
@@ -11,7 +12,7 @@ import { AppError } from '../../shared/errors/app-error.ts'
 import { AuditService } from '../audit/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { SpacesService } from '../spaces/index.ts'
-import { DocumentAccessPolicy } from './document-access-policy.ts'
+import { DocumentAccessPolicy, requireSpaceContent } from './document-access-policy.ts'
 import { DocumentContentsRepository } from './document-contents.repository.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
 import { toDetail } from './document-views.ts'
@@ -23,13 +24,16 @@ export interface CreateDocumentCommand {
   readonly type: DocumentType
   readonly title?: string | undefined
   readonly requestId: string
+  /** 建在哪个空间；没有时是本人的个人空间（M1 兼容） */
+  readonly spaceId?: string | undefined
 }
 
 /** 各类型的模板快照：换上文档的 unitId 之后的 JSON 文本（P4 设计 §3.4）。 */
 const TEMPLATES: Readonly<Record<DocumentType, (unitId: string) => string>> = { sheet: sheetSnapshotFor }
 
 /**
- * 新建文档（P4 设计 §3.4）：在调用者的个人空间里建文档，内容取收敛的模板快照，修订号 1。
+ * 新建文档（M1-P4 设计 §3.4，M2-P2 设计 §3.6）：在指定的空间（没有指定时是个人空间）里建文档，内容取收敛的模板快照，修订号 1。
+ * 要有新建权限：空间角色是编辑者及以上，空间没有归档。
  * requestId 幂等：同一个请求重试只建一份，重放返回那份文档的当前元数据；同一个 requestId 用于不同的请求时拒绝。
  */
 @Injectable()
@@ -44,13 +48,10 @@ export class DocumentCreationService {
     private readonly audit: AuditService,
   ) {}
 
-  async create(userId: string, command: CreateDocumentCommand, origin: AuditOrigin): Promise<DocumentDetail> {
+  async create(actor: Actor, command: CreateDocumentCommand, origin: AuditOrigin): Promise<DocumentDetail> {
+    const userId = actor.userId
     const title = command.title ?? DEFAULT_DOCUMENT_TITLES[command.type]
-    const digest = createdPayloadDigest(command.type, title)
-    // 个人空间随账户一起创建、不会改变，在事务之外读取
-    const space = await this.spaces.personalSpaceOf(userId)
-    if (space === undefined)
-      throw new Error(`账户没有个人空间：${userId}`)
+    const digest = createdPayloadDigest(command.type, title, command.spaceId)
     return this.transactions.run(async (transaction) => {
       // 同一个 requestId 的两个请求排队执行：后到的一方在下面就能看到前一方的修订记录，按重放处理
       await this.revisions.lockCreateRequest(command.requestId, transaction)
@@ -58,9 +59,16 @@ export class DocumentCreationService {
       if (previous !== undefined)
         return this.replay(userId, previous, digest, transaction)
 
+      const spaceId = command.spaceId ?? await this.personalSpaceIdOf(userId, transaction)
+      // 先判断（不加锁）：看不到与不能新建的请求不在空间行上取锁。再取共享锁、锁下再判断：
+      // 与归档、移出成员（空间行的 FOR NO KEY UPDATE）互斥，它们提交之后的新建一定被拒绝
+      await requireSpaceContent(this.policy, actor, spaceId, 'createDocuments', transaction)
+      await this.spaces.lockShared(spaceId, transaction)
+      const access = await requireSpaceContent(this.policy, actor, spaceId, 'createDocuments', transaction)
+
       const unitId = randomUUID()
       const document = await this.documents.insert({
-        spaceId: space.id,
+        spaceId,
         type: command.type,
         title,
         createdBy: userId,
@@ -90,7 +98,7 @@ export class DocumentCreationService {
         origin,
         details: { revision: 1 },
       }, { transaction })
-      return toDetail(document, 'owner')
+      return toDetail(document, access)
     })
   }
 
@@ -105,5 +113,13 @@ export class DocumentCreationService {
     if (document === undefined || access === undefined)
       throw new AppError('REQUEST_ID_CONFLICT')
     return toDetail(document, access)
+  }
+
+  private async personalSpaceIdOf(userId: string, transaction: Transaction): Promise<string> {
+    const space = await this.spaces.personalSpaceOf(userId, { transaction })
+    // 个人空间随账户一起创建；没有说明数据不一致，按意外错误处理
+    if (space === undefined)
+      throw new Error(`账户没有个人空间：${userId}`)
+    return space.id
   }
 }

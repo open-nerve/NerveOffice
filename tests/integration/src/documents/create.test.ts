@@ -153,7 +153,8 @@ describe('新建的校验与防护', () => {
     ['标题为空', { type: 'sheet', title: '   ', requestId: randomUUID() }],
     ['标题过长', { type: 'sheet', title: '长'.repeat(201), requestId: randomUUID() }],
     ['标题含控制字符', { type: 'sheet', title: '周\n报', requestId: randomUUID() }],
-    ['多余的字段', { type: 'sheet', requestId: randomUUID(), spaceId: randomUUID() }],
+    ['多余的字段', { type: 'sheet', requestId: randomUUID(), folderId: randomUUID() }],
+    ['空间不是 UUID', { type: 'sheet', requestId: randomUUID(), spaceId: 'personal' }],
   ])('%s：400 REQUEST_INVALID', async (_case, body) => {
     const response = await create(aliceSession, body)
     expect(response.status).toBe(400)

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { SPACE_TYPES } from '../spaces/spaces.ts'
 import { codePointLength, hasControlCharacters } from '../text/text.ts'
 
 /** 文档类型：M1 只有表格，M6 加上文字文档（doc）。新增取值时，同时用迁移更新 documents.type 的 CHECK 约束。 */
@@ -75,12 +76,22 @@ export const documentListResponseSchema = z.object({
 
 export type DocumentListResponse = z.infer<typeof documentListResponseSchema>
 
+/** 文档所在的空间：编辑器页的返回链接回到这里（M2-P2 设计 §3.10）。 */
+export const documentSpaceSchema = z.object({
+  id: z.uuid(),
+  type: z.enum(SPACE_TYPES),
+  name: z.string(),
+})
+
+export type DocumentSpace = z.infer<typeof documentSpaceSchema>
+
 /**
  * 文档的元数据与调用者的权限（GET /api/documents/{id}，新建的响应）。
  * 档案与格式版本不按已知的取值校验：客户端自己核对，不认识的显示"格式不受支持"，而不是当作响应不合法（P4 设计 §3.7.1）。
  */
 export const documentDetailSchema = documentSummarySchema.extend({
   spaceId: z.uuid(),
+  space: documentSpaceSchema,
   /** 当前修订号：新建为 1，每次保存加一 */
   revision: z.number().int().min(1),
   profile: z.string().min(1),

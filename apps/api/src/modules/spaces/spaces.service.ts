@@ -1,5 +1,5 @@
 import type { Transaction } from '../database/index.ts'
-import type { SpaceSummary } from './space.ts'
+import type { SpaceFacts, SpaceSummary } from './space.ts'
 import { SPACE_NAME_MAX_LENGTH } from '@nerve-office/contracts'
 import { Injectable } from '@nestjs/common'
 import { SpacesRepository } from './spaces.repository.ts'
@@ -14,7 +14,10 @@ export interface QueryOptions {
   transaction?: Transaction
 }
 
-/** 空间（P3 设计 §3.6）：M1 只有个人空间，每人一个，只有所有者可见。 */
+/**
+ * 空间（M1-P3 设计 §3.6；M2-P2 设计 §3.1）：个人空间与团队空间、成员与空间角色的数据与不变量。
+ * 只提供事实与变更，不判断谁能做什么：授权由调用方经 documents 的访问策略决定。
+ */
 @Injectable()
 export class SpacesService {
   constructor(private readonly repository: SpacesRepository) {}
@@ -26,11 +29,22 @@ export class SpacesService {
   }
 
   /** 这个人的个人空间；账户创建时一并创建，正常情况下一定存在。 */
-  async personalSpaceOf(userId: string): Promise<SpaceSummary | undefined> {
-    return this.repository.findPersonalByOwner(userId)
+  async personalSpaceOf(userId: string, options: QueryOptions = {}): Promise<SpaceSummary | undefined> {
+    return this.repository.findPersonalByOwner(userId, options.transaction)
   }
 
-  async isOwner(userId: string, spaceId: string, options: QueryOptions = {}): Promise<boolean> {
-    return this.repository.isOwner(userId, spaceId, options.transaction)
+  /** 这个人看某个空间的事实；空间不存在时为 undefined（查询与存在时相同）。 */
+  async accessFactsOf(userId: string, spaceId: string, options: QueryOptions = {}): Promise<SpaceFacts | undefined> {
+    return this.repository.factsFor(userId, spaceId, options.transaction)
+  }
+
+  /** 这个人可能看得到的空间（候选）：个人空间在前，团队空间按名称排序。 */
+  async visibleSpacesOf(userId: string): Promise<SpaceFacts[]> {
+    return this.repository.visibleCandidatesFor(userId)
+  }
+
+  /** 对空间行取共享锁：在空间里新建文档、作为转移的目标（M2-P2 设计 §3.6、§3.8） */
+  async lockShared(spaceId: string, transaction: Transaction): Promise<void> {
+    await this.repository.lockShared(spaceId, transaction)
   }
 }
