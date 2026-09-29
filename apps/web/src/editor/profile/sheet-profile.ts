@@ -1,7 +1,9 @@
 // 表格插件档案 sheet@1（插件档案 v1 §1，P4 设计 §3.6.2）。
 // 档案是数据：插件清单、注册顺序、影响数据的配置、声明的资源名都集中在这里；
 // 增删插件、改影响数据的配置、升级 SDK 都按数据格式变更处理（00 号计划书 §8.7），先做保存重开回归。
-// 插件按组注册，组内与组间的顺序按官方 preset；不注册 @univerjs/network、评论、水印、table、十字高亮等，不注册任何遥测实现
+// 插件按组注册，组内与组间的顺序按官方 preset；不注册 @univerjs/network、评论、水印、table、十字高亮等，不注册任何遥测实现。
+// 界面的配置按这次的打开方式（EditorAccess）组合：只读时一开始就以只读的界面创建（插件档案 v1 §5.2 的"销毁重建"一栏，M2-P3 设计 §3.4）
+import type { EditorAccess } from '../editor-access.ts'
 import type { PluginEntry } from './plugin-entry.ts'
 import { UniverDataValidationPlugin } from '@univerjs/data-validation'
 import { UniverDocsPlugin } from '@univerjs/docs'
@@ -35,7 +37,7 @@ import { UniverSheetsSortPlugin } from '@univerjs/sheets-sort'
 import { UniverSheetsSortUIPlugin } from '@univerjs/sheets-sort-ui'
 import { UniverSheetsUIPlugin } from '@univerjs/sheets-ui'
 import { UniverUIPlugin } from '@univerjs/ui'
-import { sheetEditMenuConfig } from './menu-config.ts'
+import { sheetMenuConfig } from './menu-config.ts'
 import { pluginEntry } from './plugin-entry.ts'
 
 /** 插件档案的标识与版本，写进平台的元数据（00 号计划书 §8.1） */
@@ -46,6 +48,8 @@ export interface SheetProfileContext {
   readonly container: HTMLElement
   /** 公式 Worker：由适配层以模块 Worker 创建后传入；插件不负责终止传入的实例（rpc/src/plugin.ts:74-87） */
   readonly formulaWorker: Worker
+  /** 这次以什么方式打开：只影响界面的配置，不影响数据（插件、顺序、影响数据的配置与资源两种方式相同） */
+  readonly access: EditorAccess
 }
 
 export interface PluginGroup {
@@ -57,6 +61,28 @@ export interface PluginGroup {
 
 /** 公式在 Worker 里计算（插件档案 v1 §1，M0-P3 报告 §6.3）：主线程的引擎、表格与表格公式都不执行公式 */
 const NOT_EXECUTE_FORMULA = true
+
+type UIConfig = ConstructorParameters<typeof UniverUIPlugin>[0]
+type SheetsUIConfig = ConstructorParameters<typeof UniverSheetsUIPlugin>[0]
+
+/**
+ * 界面插件的配置：挂到给定的容器，菜单按打开方式隐藏（menu-config.ts）。
+ * 只读时关掉工具栏与右键菜单（整体关掉，不逐项隐藏）。编辑栏（header）保留：它显示当前单元格的内容，
+ * 在编辑栏里的改动被权限点与只读守卫的防火墙拦住
+ */
+function uiConfig(container: HTMLElement, access: EditorAccess): UIConfig {
+  const menu = sheetMenuConfig(access)
+  return access === 'read' ? { container, menu, toolbar: false, contextMenu: false } : { container, menu }
+}
+
+/**
+ * 表格界面插件的配置：能编辑时用默认配置。只读时关掉底栏的菜单（网格线开关会写进快照）、隐藏新增工作表按钮；
+ * 底栏的其余部分（工作表标签、统计栏、缩放）照常显示：SDK 对 footer 的每一项分别取默认值，只传这两项不影响其他项
+ * （sheets-ui 的 views/sheet-container/SheetContainer.tsx:55-60、views/sheet-bar/SheetBar.tsx:54-58）
+ */
+function sheetsUIConfig(access: EditorAccess): SheetsUIConfig | undefined {
+  return access === 'read' ? { footer: { menus: false, addSheetButtonConfig: { show: false } } } : undefined
+}
 
 export const SHEET_PLUGIN_GROUPS: readonly PluginGroup[] = [
   {
@@ -70,10 +96,10 @@ export const SHEET_PLUGIN_GROUPS: readonly PluginGroup[] = [
       'SHEET_WORKSHEET_PROTECTION_PLUGIN',
       'SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN',
     ],
-    plugins: ({ container, formulaWorker }) => [
+    plugins: ({ container, formulaWorker, access }) => [
       pluginEntry(UniverDocsPlugin),
       pluginEntry(UniverRenderEnginePlugin),
-      pluginEntry(UniverUIPlugin, { container, menu: sheetEditMenuConfig() }),
+      pluginEntry(UniverUIPlugin, uiConfig(container, access)),
       pluginEntry(UniverDocsUIPlugin),
       // 传 Worker 实例：传地址时插件会建一个不带 type: 'module' 的经典 Worker（rpc/src/plugin.ts:86）
       pluginEntry(UniverRPCMainThreadPlugin, { workerURL: formulaWorker }),
@@ -84,7 +110,7 @@ export const SHEET_PLUGIN_GROUPS: readonly PluginGroup[] = [
         notExecuteFormula: NOT_EXECUTE_FORMULA,
         largeSheetOperation: { largeSheetCellCountThreshold: Number.MAX_SAFE_INTEGER },
       }),
-      pluginEntry(UniverSheetsUIPlugin),
+      pluginEntry(UniverSheetsUIPlugin, sheetsUIConfig(access)),
     ],
   },
   {

@@ -299,17 +299,14 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   }
 
   /**
-   * 编辑器就绪：只读时设为不能编辑；能编辑时先建保存状态机（离开提示经它判断），然后才进入 ready、撤掉交互屏障（Codex 评审 CX1）。
-   * 只读靠 setEditable(false)：SDK 在用户变化时会按授权服务重新初始化权限点，把它改回可编辑；M1 只有个人空间、不会只读，
-   * M2 的只读分享要让编辑器身份的授权服务按文档的权限回答（M1 交接单）
+   * 编辑器就绪：能编辑时先建保存状态机（离开提示经它判断），然后才进入 ready、撤掉交互屏障（Codex 评审 CX1）。
+   * 只读的文档已经以只读创建（createEditor 的 access，M2-P3 设计 §3.5），这里不建保存状态机：没有保存按钮，
+   * Ctrl/Cmd+S 不做事，离开不提示
    */
   function ready(document: DocumentDetail, created: SheetEditor, baseRevision: number): void {
     editor = created
     const readOnly = !document.permissions.canEdit
-    if (readOnly) {
-      created.setEditable(false)
-    }
-    else {
+    if (!readOnly) {
       coordinator = createSaveCoordinator({
         editor: created,
         compress: api.compress,
@@ -382,7 +379,9 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       }
       let created: SheetEditor
       try {
-        created = await options.createEditor({ container: surface, snapshot: content.snapshot })
+        // 能不能编辑由服务端按有效角色给出（ADR-014）：只读时编辑器一开始就以只读创建，没有工具栏等编辑入口（M2-P3 设计 §3.5）
+        const access = document.permissions.canEdit ? 'edit' : 'read'
+        created = await options.createEditor({ container: surface, snapshot: content.snapshot, access })
       }
       catch (error) {
         if (!disposed)

@@ -76,7 +76,12 @@ const NO_IMPORT_META_GLOB = {
 // 命名空间导入、再导出与 import type 同样拦下
 const INTERNAL_API_MESSAGE = '内部 API 只能经 apps/web/src/editor/internal-api/ 引用并登记（P4 设计 §3.6.9）'
 const UNIVER_INTERNAL_SYMBOLS = [
-  { name: '@univerjs/core', importNames: ['AuthzIoLocalService', 'IAuthzIoService', 'LifecycleService', 'UserManagerService'], message: INTERNAL_API_MESSAGE },
+  {
+    name: '@univerjs/core',
+    // IPermissionService、IUndoRedoService：只读守卫的本地权限点与撤销栈（M2-P3 设计 §3.6）
+    importNames: ['AuthzIoLocalService', 'IAuthzIoService', 'IPermissionService', 'IUndoRedoService', 'LifecycleService', 'UserManagerService'],
+    message: INTERNAL_API_MESSAGE,
+  },
   {
     name: '@univerjs/engine-formula',
     importNames: [
@@ -95,7 +100,20 @@ const UNIVER_INTERNAL_SYMBOLS = [
     ],
     message: INTERNAL_API_MESSAGE,
   },
-  { name: '@univerjs/sheets', importNames: ['SetRangeValuesMutation'], message: INTERNAL_API_MESSAGE },
+  {
+    name: '@univerjs/sheets',
+    importNames: [
+      'SetRangeValuesMutation',
+      // 只读守卫关掉与保留的工作表权限点、授权服务在只读时允许的动作（M2-P3 设计 §3.6）
+      'getAllWorksheetPermissionPoint',
+      'getAllWorksheetPermissionPointByPointPanel',
+      'WorkbookCopyPermission',
+      'WorkbookViewPermission',
+      'WorksheetCopyPermission',
+      'WorksheetViewPermission',
+    ],
+    message: INTERNAL_API_MESSAGE,
+  },
 ]
 // 取服务的注入器：Univer.__getInjector()，以及 Univer、Facade 与各个对象上的私有字段 _injector（复验 RB4：
 // 方括号访问私有字段能通过类型检查，拿到的是同一个注入器）。点号访问、按标识符解构都算；这两个名字的字符串

@@ -2,7 +2,7 @@ import type { Univer } from '@univerjs/core'
 import type { PluginEntry } from './plugin-entry.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { formulaWorkerPluginEntries } from './formula-worker-profile.ts'
-import { sheetEditMenuConfig } from './menu-config.ts'
+import { sheetMenuConfig } from './menu-config.ts'
 import { CHANGE_DETECTION_EXCLUDED_MUTATIONS, declaredSheetResources, SHEET_PLUGIN_GROUPS, SHEET_PROFILE_ID, sheetPluginEntries } from './sheet-profile.ts'
 
 vi.hoisted(() => {
@@ -25,7 +25,7 @@ function configOf(entries: readonly PluginEntry[], pluginName: string): unknown 
 }
 
 describe('插件档案 sheet@1：注册顺序（插件档案 v1 §1，公式在 Worker 里计算）', () => {
-  const entries = sheetPluginEntries({ container, formulaWorker })
+  const entries = sheetPluginEntries({ container, formulaWorker, access: 'edit' })
 
   it('按组注册，组内与组间的顺序按官方 preset', () => {
     expect(SHEET_PROFILE_ID).toBe('sheet@1')
@@ -72,10 +72,14 @@ describe('插件档案 sheet@1：注册顺序（插件档案 v1 §1，公式在 
     expect(names(entries).filter(name => /NETWORK|TELEMETRY|COMMENT|WATERMARK|TABLE|CROSSHAIR|ACTION_RECORDER|SLIDE/i.test(name))).toEqual([])
     expect(new Set(names(entries)).size).toBe(entries.length)
   })
+
+  it('只读时注册的插件与顺序相同：打开方式只影响界面的配置', () => {
+    expect(names(sheetPluginEntries({ container, formulaWorker, access: 'read' }))).toEqual(names(entries))
+  })
 })
 
-describe('插件档案 sheet@1：影响数据的配置', () => {
-  const entries = sheetPluginEntries({ container, formulaWorker })
+describe.each(['edit', 'read'] as const)('插件档案 sheet@1：影响数据的配置（access = %s，两种方式相同）', (access) => {
+  const entries = sheetPluginEntries({ container, formulaWorker, access })
 
   it('公式在 Worker 里计算：主线程的引擎、表格与表格公式都不执行公式，RPC 插件拿到传入的 Worker 实例', () => {
     expect(configOf(entries, 'UNIVER_ENGINE_FORMULA_PLUGIN')).toEqual({ notExecuteFormula: true })
@@ -90,23 +94,39 @@ describe('插件档案 sheet@1：影响数据的配置', () => {
     })
   })
 
-  it('界面插件挂到给定的容器，菜单用编辑模式的隐藏配置', () => {
-    const config = configOf(entries, 'UNIVER_UI_PLUGIN') as { container: unknown, menu: unknown }
-    expect(config.container).toBe(container)
-    expect(config.menu).toEqual(sheetEditMenuConfig())
-  })
-
-  it('其余插件使用默认配置', () => {
-    const configured = new Set(['UNIVER_UI_PLUGIN', 'UNIVER_RPC_MAIN_THREAD_PLUGIN', 'UNIVER_ENGINE_FORMULA_PLUGIN', 'SHEET_PLUGIN', 'SHEETS_FORMULA_PLUGIN'])
-    expect(entries.filter(entry => !configured.has(entry.plugin.pluginName) && entry.config !== undefined).map(entry => entry.plugin.pluginName)).toEqual([])
-  })
-
   it('注册时把配置原样交给 Univer', () => {
     const registerPlugin = vi.fn<(plugin: PluginEntry['plugin'], config?: unknown) => void>()
     const univer = { registerPlugin } as unknown as Univer
     for (const entry of entries)
       entry.register(univer)
     expect(registerPlugin.mock.calls.map(([plugin, config]) => [plugin.pluginName, config])).toEqual(entries.map(entry => [entry.plugin.pluginName, entry.config]))
+  })
+})
+
+describe('插件档案 sheet@1：界面的配置按打开方式（插件档案 v1 §5.2，M2-P3 设计 §3.4）', () => {
+  /** 数据相关的配置之外，只有界面插件与表格界面插件按打开方式配置 */
+  const DATA_CONFIGURED = ['UNIVER_RPC_MAIN_THREAD_PLUGIN', 'UNIVER_ENGINE_FORMULA_PLUGIN', 'SHEET_PLUGIN', 'SHEETS_FORMULA_PLUGIN']
+
+  function otherConfigured(entries: readonly PluginEntry[], configured: readonly string[]): string[] {
+    return entries.filter(entry => !configured.includes(entry.plugin.pluginName) && entry.config !== undefined).map(entry => entry.plugin.pluginName)
+  }
+
+  it('能编辑：界面插件挂到给定的容器，菜单只隐藏两种方式都隐藏的；工具栏、右键菜单与底栏都用默认配置', () => {
+    const entries = sheetPluginEntries({ container, formulaWorker, access: 'edit' })
+    expect(configOf(entries, 'UNIVER_UI_PLUGIN')).toStrictEqual({ container, menu: sheetMenuConfig('edit') })
+    expect(configOf(entries, 'SHEET_UI_PLUGIN')).toBeUndefined()
+    expect(otherConfigured(entries, [...DATA_CONFIGURED, 'UNIVER_UI_PLUGIN'])).toEqual([])
+  })
+
+  it('只读：关掉工具栏与右键菜单，保留编辑栏（header 不写，用默认的显示）；菜单另外隐藏工作表标签的 5 项', () => {
+    const entries = sheetPluginEntries({ container, formulaWorker, access: 'read' })
+    expect(configOf(entries, 'UNIVER_UI_PLUGIN')).toStrictEqual({ container, menu: sheetMenuConfig('read'), toolbar: false, contextMenu: false })
+  })
+
+  it('只读：底栏只关掉菜单（网格线开关会写进快照）与新增工作表按钮，工作表标签、统计栏与缩放保持默认', () => {
+    const entries = sheetPluginEntries({ container, formulaWorker, access: 'read' })
+    expect(configOf(entries, 'SHEET_UI_PLUGIN')).toStrictEqual({ footer: { menus: false, addSheetButtonConfig: { show: false } } })
+    expect(otherConfigured(entries, [...DATA_CONFIGURED, 'UNIVER_UI_PLUGIN', 'SHEET_UI_PLUGIN'])).toEqual([])
   })
 })
 

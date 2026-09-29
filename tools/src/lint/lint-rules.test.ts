@@ -274,6 +274,39 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
     expect(await rulesFor('import { CommandType, Univer } from \'@univerjs/core\'\n\nexport const used = [CommandType, Univer]\n', EDITOR_FILE)).not.toContain('no-restricted-imports')
   })
 
+  it('只读加固用到的内部符号（M2-P3 设计 §3.6）在 internal-api 之外引用会失败：只读守卫所在的位置也一样，命名空间导入与再导出同样拦下', async () => {
+    const cases = [
+      'import { IPermissionService } from \'@univerjs/core\'\n\nexport const s = IPermissionService\n',
+      'import type { IUndoRedoService } from \'@univerjs/core\'\n\nexport type U = IUndoRedoService\n',
+      'import { getAllWorksheetPermissionPoint, getAllWorksheetPermissionPointByPointPanel } from \'@univerjs/sheets\'\n\nexport const lists = [getAllWorksheetPermissionPoint, getAllWorksheetPermissionPointByPointPanel]\n',
+      'import { WorksheetCopyPermission, WorksheetViewPermission } from \'@univerjs/sheets\'\n\nexport const kept = [WorksheetViewPermission, WorksheetCopyPermission]\n',
+      'import { WorkbookCopyPermission, WorkbookViewPermission } from \'@univerjs/sheets\'\n\nexport const allowed = [WorkbookViewPermission, WorkbookCopyPermission]\n',
+      'import * as sheets from \'@univerjs/sheets\'\n\nexport const s = sheets\n',
+      'export { IUndoRedoService } from \'@univerjs/core\'\n',
+      'export { WorksheetViewPermission as View } from \'@univerjs/sheets\'\n',
+    ]
+    for (const file of [EDITOR_FILE, 'apps/web/src/editor/read-only/read-only-guard.ts']) {
+      for (const code of cases) {
+        const report = await lint(code, file)
+        expect(report.rules, `${file}\n${code}`).toContain('no-restricted-imports')
+        expect(report.messages.join('\n'), `${file}\n${code}`).toContain(INTERNAL_MESSAGE)
+      }
+    }
+    // 包里的其他导出照常引用（插件与公开的类型）
+    expect(await rulesFor('import { UniverSheetsPlugin } from \'@univerjs/sheets\'\n\nexport const p = UniverSheetsPlugin\n', EDITOR_FILE)).not.toContain('no-restricted-imports')
+  })
+
+  it('internal-api 里可以引用只读加固用到的内部符号（M2-P3 设计 §3.6）', async () => {
+    const code = [
+      'import { IPermissionService, IUndoRedoService } from \'@univerjs/core\'',
+      'import { getAllWorksheetPermissionPoint, getAllWorksheetPermissionPointByPointPanel, WorkbookCopyPermission, WorkbookViewPermission, WorksheetCopyPermission, WorksheetViewPermission } from \'@univerjs/sheets\'',
+      '',
+      'export const used = [IPermissionService, IUndoRedoService, getAllWorksheetPermissionPoint, getAllWorksheetPermissionPointByPointPanel, WorkbookCopyPermission, WorkbookViewPermission, WorksheetCopyPermission, WorksheetViewPermission]',
+      '',
+    ].join('\n')
+    expect(await rulesFor(code, INTERNAL_API_FILE)).not.toContain('no-restricted-imports')
+  })
+
   it('internal-api 里可以引用受限的内部符号、调用 __getInjector', async () => {
     const code = 'import type { Univer } from \'@univerjs/core\'\nimport { LifecycleService } from \'@univerjs/core\'\nimport { IFunctionService } from \'@univerjs/engine-formula\'\n\nexport function services(univer: Univer): unknown[] {\n  return [univer.__getInjector().get(IFunctionService), LifecycleService]\n}\n'
     const rules = await rulesFor(code, INTERNAL_API_FILE)
@@ -397,6 +430,16 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
     expect(internal.paths ?? []).toEqual([])
     const editor = restrictedImports(await configFor('apps/web/src/editor/change-tracking/change-tracker.ts'))
     expect(editor.paths?.find(path => path.name === '@univerjs/engine-formula')?.importNames).toEqual(expect.arrayContaining(['IActiveDirtyManagerService', 'IFunctionService', 'BaseFunction', 'ErrorValueObject', 'ErrorType']))
+    // 只读加固（M2-P3 设计 §3.6）
+    expect(editor.paths?.find(path => path.name === '@univerjs/core')?.importNames).toEqual(expect.arrayContaining(['IAuthzIoService', 'IPermissionService', 'IUndoRedoService']))
+    expect(editor.paths?.find(path => path.name === '@univerjs/sheets')?.importNames).toEqual(expect.arrayContaining([
+      'getAllWorksheetPermissionPoint',
+      'getAllWorksheetPermissionPointByPointPanel',
+      'WorkbookCopyPermission',
+      'WorkbookViewPermission',
+      'WorksheetCopyPermission',
+      'WorksheetViewPermission',
+    ]))
   })
 
   it('只有编辑器页的入口与编辑器页（sheet-editor 功能）能引用编辑器，而且只经公开入口', async () => {

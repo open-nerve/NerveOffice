@@ -4,6 +4,7 @@
 // 这个文件只写再导出：登记表的核对按这里的写法取出导出的名字
 export { FORMULA_PROTOCOL } from './formula-protocol.ts'
 export { injectorOf } from './injector.ts'
-export { IAuthzIoService, LifecycleService } from '@univerjs/core'
+export { IAuthzIoService, IPermissionService, IUndoRedoService, LifecycleService } from '@univerjs/core'
 export { BaseFunction, ErrorType, ErrorValueObject, IActiveDirtyManagerService, IFunctionService } from '@univerjs/engine-formula'
 export type { BaseValueObject } from '@univerjs/engine-formula'
+export { getAllWorksheetPermissionPoint, getAllWorksheetPermissionPointByPointPanel, WorkbookCopyPermission, WorkbookViewPermission, WorksheetCopyPermission, WorksheetViewPermission } from '@univerjs/sheets'

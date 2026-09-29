@@ -501,15 +501,21 @@ export function classifyArtifact(path: string): ArtifactKind {
 }
 
 /**
- * 只属于测试构建的文件（vite build --mode e2e）：CSP 阳性对照的页面与 Worker（P3 设计 §3.9）。
- * 它们故意尝试 eval 与跨源请求，不能出现在生产构建里。
+ * 只属于测试构建的文件（vite build --mode e2e），不能出现在生产构建里：
+ * - CSP 阳性对照的页面与 Worker（P3 设计 §3.9）：它们故意尝试 eval 与跨源请求；
+ * - 编辑器的 E2E 探针（M2-P3 设计 §3.7，editor/testing/e2e-probe.ts）：把 Facade 挂在 window 上，只在测试构建里由编辑器动态引入。
+ *   它的名字另由禁用关键字（policy.ts 的 __nerveEditorProbe）核对：分块改了名、或者被并进别的分块时同样发现
  */
-export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^csp-probe\.html$/, /^assets\/(?:csp-probe|probe-worker)-[^/]*$/]
+export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^csp-probe\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe)-[^/]*$/]
 
 export function checkTestOnlyArtifacts(paths: readonly string[]): Violation[] {
   return paths
     .filter(path => TEST_ONLY_ARTIFACTS.some(pattern => pattern.test(path)))
-    .map(path => ({ rule: 'artifacts/test-only', subject: path, detail: '生产构建里出现了只属于测试构建的文件（CSP 探针）：检查 vite.config.ts 的构建入口' }))
+    .map(path => ({
+      rule: 'artifacts/test-only',
+      subject: path,
+      detail: '生产构建里出现了只属于测试构建的文件（CSP 探针、编辑器的 E2E 探针）：检查 vite.config.ts 的构建入口与 createSheetEditor 里只在测试构建（e2e 模式）执行的分支',
+    }))
 }
 
 /** 出现未登记的文件类型即违规，免得绕过扫描。 */
