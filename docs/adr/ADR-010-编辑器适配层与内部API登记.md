@@ -1,6 +1,6 @@
 # ADR-010：编辑器适配层与内部 API 登记
 
-> 状态：已接受｜日期：2026-09-27｜来源：M1-P4｜修订：2026-09-28，M1 对抗评审（Codex CX1、CX6）与独立复验（N1、S1）之后，就绪之前的输入由编辑器页的交互屏障拦下，另外跟踪单元格里还没提交的输入；2026-09-29，M2-P3 能不能编辑在创建时决定（`access`），只读守卫与只读的界面，内部 API 加 11 项，测试构建的探针（ADR-015）
+> 状态：已接受｜日期：2026-09-27｜来源：M1-P4｜修订：2026-09-28，M1 对抗评审（Codex CX1、CX6）与独立复验（N1、S1）之后，就绪之前的输入由编辑器页的交互屏障拦下，另外跟踪单元格里还没提交的输入；2026-09-29，M2-P3 能不能编辑在创建时决定（`access`），只读守卫与只读的界面，内部 API 加 17 项、拆出界面包的第二个出口 `ui.ts`，测试构建的探针（ADR-015）
 
 ## 背景
 
@@ -28,7 +28,7 @@ createSheetEditor({ container, snapshot, access }): Promise<SheetEditor>   // ac
 - 请求、保存状态与界面属于编辑器页（`features/sheet-editor`），不在适配层里；保存的状态机不依赖 Univer，用假的编辑器做单元测试。
 
 **内部 API 的登记**：
-- Facade 之外的 SDK 符号只能经 `internal-api/` 引用；`internal-api/registry.ts` 逐项写明用途、M0 的证据与回归用例，单元测试核对"导出的每一项都已登记"。M1 登记 10 项：注入器、公式协议（mutation id 与执行选项）、`IAuthzIoService`、`LifecycleService`、`BaseFunction`、`BaseValueObject`、`ErrorType`、`ErrorValueObject`、`IFunctionService`、`IActiveDirtyManagerService`。M2-P3 加 11 项（只读，ADR-015）：`IPermissionService`、`IUndoRedoService`、`getAllWorksheetPermissionPoint`、`getAllWorksheetPermissionPointByPointPanel`、`WorksheetViewPermission`、`WorksheetCopyPermission`、`WorkbookViewPermission`、`WorkbookCopyPermission`、`IDrawingManagerService`，以及 SDK 的两个 DOM 标记（`NOTE_TEXTAREA_SELECTOR`、`FORMULA_BAR_INPUT_SELECTOR`，`internal-api/dom-markers.ts`：不是公开 API，由 E2E 回归）。
+- Facade 之外的 SDK 符号只能经 `internal-api/` 引用；`internal-api/registry.ts` 逐项写明用途、M0 的证据与回归用例，单元测试核对"导出的每一项都已登记"。M1 登记 10 项：注入器、公式协议（mutation id 与执行选项）、`IAuthzIoService`、`LifecycleService`、`BaseFunction`、`BaseValueObject`、`ErrorType`、`ErrorValueObject`、`IFunctionService`、`IActiveDirtyManagerService`。M2-P3 加 17 项（只读，ADR-015）：`IPermissionService`、`IUndoRedoService`、`getAllWorksheetPermissionPoint`、`getAllWorksheetPermissionPointByPointPanel`、`WorksheetViewPermission`、`WorksheetCopyPermission`、`WorkbookViewPermission`、`WorkbookCopyPermission`、`IDrawingManagerService`、`IEditorService`、`IContextService`、`FOCUSING_FX_BAR_EDITOR`、`DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY`、`IRenderManagerService`、`HeaderFreezeRenderController`，以及 SDK 的两个 DOM 标记（`NOTE_TEXTAREA_SELECTOR`、`FORMULA_BAR_INPUT_SELECTOR`，`internal-api/dom-markers.ts`：不是公开 API，由 E2E 回归）。
 - lint：受限符号清单（按包与导入名，含命名空间导入、再导出与 `import type`）与取注入器的写法（`__getInjector()` 与私有字段 `_injector`：点号访问、解构，以及这两个名字的字符串与不带插值的模板字符串，即方括号访问、字符串的键、`Reflect.get`），在 `internal-api/` 之外一律报错；类型里的 `import('@univerjs/…')` 在编辑器之外与编辑器里都报错，编辑器里的类型用 `import type`；依赖一律按包名引用，`node_modules` 里的路径报错（它绕得过按包名的限制）；三斜杠引用、`import x = require()` 与 `import.meta.glob` 一律报错，`@univerjs/*` 的包名不能带查询串与片段，任何包名都不能写成大写（`@UniverJS/…` 在不区分大小写的文件系统上照常构建，按包名的限制却认不出）。lint 看不出来、由审查保证的写法：变量作键、字符串拼接、带插值的模板字符串；方括号访问其他私有字段（`_commandService`、`_workbook` 等）；按值找注入器（`Object.values(…).find(v => v instanceof Injector)`）、按键名的前后缀查找；`import.meta.resolve`。Worker 脚本若按地址指向依赖里的文件，由 `budgets` 门禁发现（没有预算的 Worker 报违规）；`@univerjs/*` 只引用包入口、`/facade`、`/locale/<语言>` 与 `/lib/index.css`（深层路径绕得过按导入名的限制）；编辑器里的 `@univerjs/*` 只用静态导入。lint 有自测。
 
 **模块边界**：只有编辑器页的入口与 `features/sheet-editor` 能引用适配层（只经 `index.ts`）；`features/sheet-editor` 只由编辑器页的入口引用；平台的应用层、其他入口与其他功能都不引用它。门禁 `budgets` 另外兜底（平台页面的预算没有因为编辑器变大）。
