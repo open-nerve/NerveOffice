@@ -24,7 +24,7 @@
         "/docs/abc?x=1#h": "/docs/abc?x=1#h",
         "#heading-1": "#heading-1",
         "mailto:a@example.com": "mailto:a@example.com",
-        "https://x.test/\"><b id=p5inj>注入</b>": "https://x.test/%22%3E%3Cb%20id=p5inj%3E%E6%B3%A8%E5%85%A5%3C/b%3E"
+        "https://x.test/<带引号与标签的地址已移出仓库>": "https://x.test/<带引号与标签的地址已移出仓库>"
       }
     },
     {
@@ -42,7 +42,7 @@
     {
       "step": "平台配置：https 地址里的引号与尖括号被编码",
       "ok": true,
-      "detail": "https://x.test/%22%3E%3Cb%20id=p5inj%3E%E6%B3%A8%E5%85%A5%3C/b%3E"
+      "detail": "https://x.test/<带引号与标签的地址已移出仓库>"
     },
     {
       "step": "平台配置：修改链接的命令被取消，地址不变",
@@ -92,7 +92,7 @@
     },
     {
       "kind": "guard-normalize",
-      "detail": "docs.command.add-hyper-link：链接地址规范为 https://x.test/%22%3E%3Cb%20id=p5inj%3E%E6%B3%A8%E5%85%A5%3C/b%3E"
+      "detail": "docs.command.add-hyper-link：链接地址规范为 https://x.test/<带引号与标签的地址已移出仓库>"
     },
     {
       "kind": "guard-cancel",
