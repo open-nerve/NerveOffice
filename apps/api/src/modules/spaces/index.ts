@@ -1,5 +1,5 @@
-export type { SpaceSummary } from './space.ts'
+export type { MemberRoleChange, SpaceChange, SpaceFacts, SpaceMemberRecord, SpaceRecord, SpaceSummary, TeamSpaceOverview } from './space.ts'
 export { SpacesModule } from './spaces.module.ts'
 export { SpacesService } from './spaces.service.ts'
-export type { CreateOptions as CreateSpaceOptions } from './spaces.service.ts'
+export type { CreateOptions as CreateSpaceOptions, NewTeamSpace } from './spaces.service.ts'
 export type { QueryOptions as SpaceQueryOptions } from './spaces.service.ts'

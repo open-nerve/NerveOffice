@@ -4,7 +4,7 @@ import { sheetSnapshotFor, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { DocumentCreationService } from './document-creation.service.ts'
-import { ALICE, ALICE_SPACE, BOB, FakeStore, HTTP_ORIGIN } from './documents.test-support.ts'
+import { ALICE, ALICE_SPACE, BOB, BOB_SPACE, FakeStore, HTTP_ORIGIN, member, TEAM_SPACE } from './documents.test-support.ts'
 import { createdPayloadDigest } from './payload-digest.ts'
 
 const REQUEST_ID = '0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0d'
@@ -26,9 +26,9 @@ async function rejection(promise: Promise<unknown>): Promise<AppError> {
 describe('DocumentCreationService.create', () => {
   it('在个人空间里新建：模板快照换上新的 unitId，修订号 1，档案、格式与 SDK 版本，写修订记录与审计', async () => {
     const { store, service } = setup()
-    const detail = await service.create(ALICE, { type: 'sheet', title: '周报', requestId: REQUEST_ID }, HTTP_ORIGIN)
+    const detail = await service.create(member(ALICE), { type: 'sheet', title: '周报', requestId: REQUEST_ID }, HTTP_ORIGIN)
 
-    expect(detail).toMatchObject({ title: '周报', type: 'sheet', spaceId: ALICE_SPACE, revision: 1, profile: 'sheet@1', formatVersion: 1, permissions: { canEdit: true } })
+    expect(detail).toMatchObject({ title: '周报', type: 'sheet', spaceId: ALICE_SPACE, space: { id: ALICE_SPACE, type: 'personal' }, revision: 1, profile: 'sheet@1', formatVersion: 1, permissions: { canEdit: true } })
     expect(store.repositories.documents.insert).toHaveBeenCalledWith(expect.objectContaining({ createdBy: ALICE, profile: 'sheet@1', formatVersion: 1, sdkVersion: UNIVER_SDK_VERSION }), expect.anything())
     const row = store.documents.get(detail.id)
     expect(row?.unitId).toMatch(/^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/)
@@ -44,15 +44,15 @@ describe('DocumentCreationService.create', () => {
 
   it('没有标题用默认标题；每份文档的 unitId 各不相同', async () => {
     const { store, service } = setup()
-    const first = await service.create(ALICE, { type: 'sheet', requestId: REQUEST_ID }, HTTP_ORIGIN)
-    const second = await service.create(ALICE, { type: 'sheet', requestId: '0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0e' }, HTTP_ORIGIN)
+    const first = await service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID }, HTTP_ORIGIN)
+    const second = await service.create(member(ALICE), { type: 'sheet', requestId: '0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0e' }, HTTP_ORIGIN)
     expect(first.title).toBe('未命名表格')
     expect(store.documents.get(first.id)?.unitId).not.toBe(store.documents.get(second.id)?.unitId)
   })
 
   it('先按 requestId 排队，再查修订记录', async () => {
     const { store, service } = setup()
-    await service.create(ALICE, { type: 'sheet', requestId: REQUEST_ID }, HTTP_ORIGIN)
+    await service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID }, HTTP_ORIGIN)
     const lock = store.repositories.revisions.lockCreateRequest.mock.invocationCallOrder[0] ?? Number.NaN
     const lookup = store.repositories.revisions.findByRequestId.mock.invocationCallOrder[0] ?? Number.NaN
     expect(store.repositories.revisions.lockCreateRequest).toHaveBeenCalledWith(REQUEST_ID, expect.anything())
@@ -61,11 +61,11 @@ describe('DocumentCreationService.create', () => {
 
   it('同一个请求重放：返回同一份文档的当前元数据，不再新建', async () => {
     const { store, service } = setup()
-    const first = await service.create(ALICE, { type: 'sheet', title: '周报', requestId: REQUEST_ID }, HTTP_ORIGIN)
+    const first = await service.create(member(ALICE), { type: 'sheet', title: '周报', requestId: REQUEST_ID }, HTTP_ORIGIN)
     const current = store.documents.get(first.id)
     if (current !== undefined)
       store.documents.set(first.id, { ...current, revision: 4 })
-    const again = await service.create(ALICE, { type: 'sheet', title: '周报', requestId: REQUEST_ID }, HTTP_ORIGIN)
+    const again = await service.create(member(ALICE), { type: 'sheet', title: '周报', requestId: REQUEST_ID }, HTTP_ORIGIN)
     expect(again).toEqual({ ...first, revision: 4 })
     expect(store.documents.size).toBe(1)
     expect(store.audits).toHaveLength(1)
@@ -73,14 +73,14 @@ describe('DocumentCreationService.create', () => {
 
   it('同一个 requestId、不同的负载：REQUEST_ID_CONFLICT', async () => {
     const { service } = setup()
-    await service.create(ALICE, { type: 'sheet', title: '周报', requestId: REQUEST_ID }, HTTP_ORIGIN)
-    expect((await rejection(service.create(ALICE, { type: 'sheet', title: '月报', requestId: REQUEST_ID }, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+    await service.create(member(ALICE), { type: 'sheet', title: '周报', requestId: REQUEST_ID }, HTTP_ORIGIN)
+    expect((await rejection(service.create(member(ALICE), { type: 'sheet', title: '月报', requestId: REQUEST_ID }, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
   })
 
   it('别人用过的 requestId：REQUEST_ID_CONFLICT，不透露那份文档', async () => {
     const { service } = setup()
-    await service.create(ALICE, { type: 'sheet', title: '周报', requestId: REQUEST_ID }, HTTP_ORIGIN)
-    const error = await rejection(service.create(BOB, { type: 'sheet', title: '周报', requestId: REQUEST_ID }, HTTP_ORIGIN))
+    await service.create(member(ALICE), { type: 'sheet', title: '周报', requestId: REQUEST_ID }, HTTP_ORIGIN)
+    const error = await rejection(service.create(member(BOB), { type: 'sheet', title: '周报', requestId: REQUEST_ID }, HTTP_ORIGIN))
     expect(error.code).toBe('REQUEST_ID_CONFLICT')
     expect(error.details).toBeUndefined()
   })
@@ -89,26 +89,78 @@ describe('DocumentCreationService.create', () => {
     const { store, service } = setup()
     const document = store.addDocument()
     store.addRevision({ documentId: document.id, revision: 2, kind: 'saved', requestId: REQUEST_ID, payloadDigest: createdPayloadDigest('sheet', '未命名表格'), source: { clientInstanceId: REQUEST_ID, localSeq: 1 }, savedBy: ALICE })
-    expect((await rejection(service.create(ALICE, { type: 'sheet', requestId: REQUEST_ID }, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+    expect((await rejection(service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID }, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
   })
 
   it('重放时已经不能访问那份文档：REQUEST_ID_CONFLICT', async () => {
     const { store, service } = setup()
-    await service.create(ALICE, { type: 'sheet', requestId: REQUEST_ID }, HTTP_ORIGIN)
-    store.access.clear()
-    expect((await rejection(service.create(ALICE, { type: 'sheet', requestId: REQUEST_ID }, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+    const created = await service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID }, HTTP_ORIGIN)
+    const row = store.documents.get(created.id)
+    if (row !== undefined)
+      store.documents.set(created.id, { ...row, spaceId: BOB_SPACE })
+    expect((await rejection(service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID }, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
   })
 
   it('写修订记录时 requestId 刚被一次保存用掉：REQUEST_ID_CONFLICT（事务回滚）', async () => {
     const { store, service } = setup()
     store.repositories.revisions.insert.mockResolvedValueOnce(undefined)
-    expect((await rejection(service.create(ALICE, { type: 'sheet', requestId: REQUEST_ID }, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+    expect((await rejection(service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID }, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
     expect(store.audits).toHaveLength(0)
+  })
+
+  it('在团队空间里新建：编辑者及以上可以；返回的权限按有效角色；负载摘要带上空间', async () => {
+    const { store, service } = setup()
+    store.setMember(TEAM_SPACE, BOB, 'editor')
+    const detail = await service.create(member(BOB), { type: 'sheet', title: '周报', requestId: REQUEST_ID, spaceId: TEAM_SPACE }, HTTP_ORIGIN)
+    expect(detail).toMatchObject({ spaceId: TEAM_SPACE, space: { id: TEAM_SPACE, type: 'team', name: '市场部' }, permissions: { canEdit: true } })
+    expect(store.revisions[0]?.payloadDigest).toEqual(createdPayloadDigest('sheet', '周报', TEAM_SPACE))
+    // 同一个请求重放：同样带着空间，摘要相同
+    expect(await service.create(member(BOB), { type: 'sheet', title: '周报', requestId: REQUEST_ID, spaceId: TEAM_SPACE }, HTTP_ORIGIN)).toEqual(detail)
+    // 同一个 requestId 换一个空间：不是同一个请求
+    expect((await rejection(service.create(member(BOB), { type: 'sheet', title: '周报', requestId: REQUEST_ID }, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+  })
+
+  it('查看者与归档的空间：PERMISSION_DENIED；看不到与不存在的空间：同一个 NOT_FOUND；都不取空间的锁、不新建', async () => {
+    const { store, service } = setup()
+    store.setMember(TEAM_SPACE, BOB, 'viewer')
+    expect(await rejection(service.create(member(BOB), { type: 'sheet', requestId: REQUEST_ID, spaceId: TEAM_SPACE }, HTTP_ORIGIN))).toMatchObject({ code: 'PERMISSION_DENIED' })
+    store.setMember(TEAM_SPACE, BOB, 'admin')
+    store.space(TEAM_SPACE).status = 'archived'
+    expect(await rejection(service.create(member(BOB), { type: 'sheet', requestId: REQUEST_ID, spaceId: TEAM_SPACE }, HTTP_ORIGIN))).toMatchObject({ code: 'PERMISSION_DENIED', message: '空间已归档，只能查看' })
+
+    store.spaces.accessFactsOf.mockClear()
+    const forbidden = await rejection(service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID, spaceId: BOB_SPACE }, HTTP_ORIGIN))
+    const missing = await rejection(service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID, spaceId: '0199a2c4-0000-7000-8000-0000000000ff' }, HTTP_ORIGIN))
+    expect([forbidden.code, missing.code]).toEqual(['NOT_FOUND', 'NOT_FOUND'])
+    expect(store.spaces.accessFactsOf).toHaveBeenCalledTimes(2)
+    expect(store.spaces.holdSpace).not.toHaveBeenCalled()
+    expect(store.documents.size).toBe(0)
+  })
+
+  it('没有加入的系统管理员不能在团队空间里新建：系统角色不带来内容权限', async () => {
+    const { service } = setup()
+    const error = await rejection(service.create({ userId: ALICE, systemAdmin: true }, { type: 'sheet', requestId: REQUEST_ID, spaceId: TEAM_SPACE }, HTTP_ORIGIN))
+    expect(error.code).toBe('NOT_FOUND')
+  })
+
+  it('先判断、再对空间行取共享锁、锁下再判断：锁下发现已被移出，NOT_FOUND，不新建', async () => {
+    const { store, service } = setup()
+    store.setMember(TEAM_SPACE, BOB, 'editor')
+    store.spaces.holdSpace.mockImplementationOnce(async () => {
+      store.setMember(TEAM_SPACE, BOB, undefined)
+    })
+    expect((await rejection(service.create(member(BOB), { type: 'sheet', requestId: REQUEST_ID, spaceId: TEAM_SPACE }, HTTP_ORIGIN))).code).toBe('NOT_FOUND')
+    const [checked, rechecked] = store.spaces.accessFactsOf.mock.invocationCallOrder
+    const locked = store.spaces.holdSpace.mock.invocationCallOrder[0] ?? Number.NaN
+    expect(checked).toBeLessThan(locked)
+    expect(locked).toBeLessThan(rechecked ?? Number.NaN)
+    expect(store.spaces.holdSpace).toHaveBeenCalledWith(TEAM_SPACE, expect.anything())
+    expect(store.documents.size).toBe(0)
   })
 
   it('没有个人空间是数据不一致：意外错误', async () => {
     const { store, service } = setup()
-    store.spaces.personalSpaceOf.mockResolvedValueOnce(undefined as never)
-    await expect(service.create(ALICE, { type: 'sheet', requestId: REQUEST_ID }, HTTP_ORIGIN)).rejects.toThrow('账户没有个人空间')
+    store.spaces.personalSpaceOf.mockResolvedValueOnce(undefined)
+    await expect(service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID }, HTTP_ORIGIN)).rejects.toThrow('账户没有个人空间')
   })
 })

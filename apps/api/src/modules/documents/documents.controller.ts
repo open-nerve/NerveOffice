@@ -5,12 +5,13 @@ import { createDocumentRequestSchema, documentIdSchema, documentListQuerySchema 
 import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common'
 import { RequestOrigin } from '../audit/index.ts'
 import { CurrentPrincipal } from '../auth/index.ts'
+import { accessActorOf } from './document-access-policy.ts'
 import { DocumentCreationService } from './document-creation.service.ts'
 import { DocumentsService } from './documents.service.ts'
 
 type HttpOrigin = Extract<AuditOrigin, { source: 'http' }>
 
-/** 文档（P3 设计 §3.3、P4 设计 §3.3）：个人空间的列表、元数据与新建。 */
+/** 文档（M1-P3 设计 §3.3、P4 设计 §3.3，M2-P2 设计 §3.3）：按空间列出、元数据与新建。 */
 @Controller('documents')
 export class DocumentsController {
   constructor(
@@ -25,7 +26,7 @@ export class DocumentsController {
     @Body({ schema: createDocumentRequestSchema }) body: CreateDocumentRequest,
     @RequestOrigin() origin: HttpOrigin,
   ): Promise<DocumentDetail> {
-    return this.creation.create(principal.user.id, body, origin)
+    return this.creation.create(accessActorOf(principal), body, origin)
   }
 
   @Get()
@@ -33,7 +34,7 @@ export class DocumentsController {
     @CurrentPrincipal() principal: Principal,
     @Query({ schema: documentListQuerySchema }) query: DocumentListQuery,
   ): Promise<DocumentListResponse> {
-    return this.documents.listPersonal(principal.user.id, query)
+    return this.documents.list(accessActorOf(principal), query)
   }
 
   @Get(':id')

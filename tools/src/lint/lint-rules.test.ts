@@ -461,10 +461,127 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
     expect((await lint(`export { AlertDialog } from 'radix-ui'\n`, BARREL)).messages.join('\n')).toContain('弹窗类的 Radix 原语')
     expect((await lint('import { Label } from \'radix-ui\'\n\nexport const Root = Label.Root\n', 'apps/web/src/shared/ui/label.tsx')).messages.join('\n')).not.toContain('弹窗类的 Radix 原语')
     expect((await lint(radixDialog, 'apps/web/src/shared/ui/dialog.tsx')).messages.join('\n')).not.toContain('弹窗类的 Radix 原语')
-    // 用到弹窗的功能模块（按需加载的管理界面）直接引用它
-    expect(await rulesFor('import { DialogContent } from \'../../shared/ui/dialog.tsx\'\n\nexport const content = DialogContent\n', 'apps/web/src/features/admin/confirm-dialog.tsx')).not.toContain('import-x/no-restricted-paths')
+    // 用到弹窗的功能模块（确认的弹窗、按需加载的管理界面）直接引用它
+    expect(await rulesFor('import { DialogContent } from \'../../shared/ui/dialog.tsx\'\n\nexport const content = DialogContent\n', 'apps/web/src/features/confirmation/confirm-dialog.tsx')).not.toContain('import-x/no-restricted-paths')
     // 管理界面自己内部的引用不受影响
     expect(await rulesFor('import { ADMIN_QUERY_KEY } from \'./admin-api.ts\'\n\nexport const key = ADMIN_QUERY_KEY\n', 'apps/web/src/features/admin/users-page.tsx')).not.toContain('boundaries/dependencies')
+  })
+
+  it('成员页按需加载；确认的弹窗只由按需加载的功能引用（M2-P2 设计 §3.10）', async () => {
+    const ROUTES_FILE = 'apps/web/src/app/routes.ts'
+    const dynamicImport = (path: string): string => `export async function pages() {\n  return import('${path}')\n}\n`
+    expect(await rulesFor(dynamicImport('../features/members/index.ts'), ROUTES_FILE)).not.toContain('boundaries/dependencies')
+    const members: [string, string][] = [
+      // 路由表：静态引用、动态引用内部文件
+      [`import { MembersPage } from '../features/members/index.ts'\n\nexport const page = MembersPage\n`, ROUTES_FILE],
+      [dynamicImport('../features/members/members-page.tsx'), ROUTES_FILE],
+      // 应用层的其他文件、功能模块、入口的再导出
+      [dynamicImport('../features/members/index.ts'), WEB_FILE],
+      [`import type { MembersPage } from '../members/index.ts'\n\nexport type Page = typeof MembersPage\n`, WEB_FEATURE_FILE],
+      [`export { MembersPage } from '../../features/members/index.ts'\n`, PLATFORM_ENTRY],
+    ]
+    for (const [code, file] of members) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain('boundaries/dependencies')
+      expect(report.messages.join('\n'), file).toContain('成员页（features/members）按需加载')
+    }
+    const importConfirm = (path: string): string => `import { ConfirmDialog } from '${path}'\n\nexport const dialog = ConfirmDialog\n`
+    for (const file of ['apps/web/src/features/admin/users-page.tsx', 'apps/web/src/features/members/members-page.tsx'])
+      expect(await rulesFor(importConfirm('../confirmation/index.ts'), file), file).not.toContain('boundaries/dependencies')
+    const confirmation: [string, string][] = [
+      [importConfirm('../confirmation/index.ts'), WEB_FEATURE_FILE],
+      [importConfirm('../confirmation/index.ts'), 'apps/web/src/features/spaces/space-page.tsx'],
+      [importConfirm('../features/confirmation/index.ts'), WEB_FILE],
+      [importConfirm('../../features/confirmation/index.ts'), PLATFORM_ENTRY],
+    ]
+    for (const [code, file] of confirmation) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain('boundaries/dependencies')
+      expect(report.messages.join('\n'), file).toContain('确认的弹窗（features/confirmation，带 Radix Dialog）只由按需加载的功能')
+    }
+    // 确认的弹窗自己内部的引用不受限（M2-P2 审查 B8）
+    expect(await rulesFor('export { ConfirmDialog } from \'./confirm-dialog.tsx\'\n', 'apps/web/src/features/confirmation/index.ts')).not.toContain('boundaries/dependencies')
+  })
+
+  it('弹窗的文件（shared/ui/dialog.tsx）与按关键词选一项（features/colleagues）只由按需加载的功能引用（M2-P2 审查 B8）', async () => {
+    const importDialog = (path: string): string => `import { DialogContent } from '${path}'\n\nexport const content = DialogContent\n`
+    for (const file of ['apps/web/src/features/admin/users-page.tsx', 'apps/web/src/features/members/members-page.tsx', 'apps/web/src/features/confirmation/confirm-dialog.tsx'])
+      expect(await rulesFor(importDialog('../../shared/ui/dialog.tsx'), file), file).not.toContain('boundaries/dependencies')
+    const dialog: [string, string][] = [
+      // 首屏的功能（包括同样按需加载、却不带弹窗的同事选择）、应用层、入口
+      [importDialog('../../shared/ui/dialog.tsx'), WEB_FEATURE_FILE],
+      [importDialog('../../shared/ui/dialog.tsx'), 'apps/web/src/features/spaces/space-page.tsx'],
+      [importDialog('../../shared/ui/dialog.tsx'), 'apps/web/src/features/colleagues/keyword-picker.tsx'],
+      [importDialog('../shared/ui/dialog.tsx'), WEB_FILE],
+      [`export type { DialogContent } from '../../shared/ui/dialog.tsx'\n`, PLATFORM_ENTRY],
+    ]
+    for (const [code, file] of dialog) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain('boundaries/dependencies')
+      expect(report.messages.join('\n'), file).toContain('弹窗（shared/ui/dialog.tsx，带 Radix Dialog）只由按需加载的功能')
+    }
+    // 共享层的其他组件照常引用
+    expect(await rulesFor('import { Button } from \'../../shared/ui/index.ts\'\n\nexport const button = Button\n', 'apps/web/src/features/spaces/space-page.tsx')).not.toContain('boundaries/dependencies')
+
+    const importPicker = (path: string): string => `import { ColleaguePicker } from '${path}'\n\nexport const picker = ColleaguePicker\n`
+    for (const file of ['apps/web/src/features/admin/transfer-page.tsx', 'apps/web/src/features/members/members-page.tsx'])
+      expect(await rulesFor(importPicker('../colleagues/index.ts'), file), file).not.toContain('boundaries/dependencies')
+    // 同事选择自己内部的引用不受限
+    expect(await rulesFor(importPicker('./colleague-picker.tsx'), 'apps/web/src/features/colleagues/index.ts')).not.toContain('boundaries/dependencies')
+    const colleagues: [string, string][] = [
+      [importPicker('../colleagues/index.ts'), WEB_FEATURE_FILE],
+      [importPicker('../colleagues/index.ts'), 'apps/web/src/features/spaces/space-page.tsx'],
+      [importPicker('../colleagues/index.ts'), 'apps/web/src/features/confirmation/confirm-dialog.tsx'],
+      [`import type { KeywordPickerTexts } from '../features/colleagues/index.ts'\n\nexport type Texts = KeywordPickerTexts\n`, WEB_FILE],
+      [`export { ColleaguePicker } from '../../features/colleagues/index.ts'\n`, PLATFORM_ENTRY],
+    ]
+    for (const [code, file] of colleagues) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain('boundaries/dependencies')
+      expect(report.messages.join('\n'), file).toContain('按关键词选一项（features/colleagues）只由按需加载的功能')
+    }
+  })
+
+  it('首屏的限制只管平台页面：编辑器页（它的入口与 sheet-editor）是另一个包，可以引用弹窗、确认的弹窗与同事选择（M2-P2 复验）', async () => {
+    const imports = [
+      'import { DialogContent } from \'../../shared/ui/dialog.tsx\'\n\nexport const content = DialogContent\n',
+      'import { ConfirmDialog } from \'../confirmation/index.ts\'\n\nexport const dialog = ConfirmDialog\n',
+      'import { ColleaguePicker } from \'../colleagues/index.ts\'\n\nexport const picker = ColleaguePicker\n',
+    ]
+    for (const code of imports)
+      expect(await rulesFor(code, 'apps/web/src/features/sheet-editor/editor-page.ts'), code).not.toContain('boundaries/dependencies')
+    expect((await lintAtProbe(imports[0] ?? '', PROBE_FILES.editorEntry)).rules).not.toContain('boundaries/dependencies')
+  })
+
+  it('弹窗类的 Radix 原语只在 shared/ui/dialog.tsx 里引入：对 web 的全部文件生效；命名空间导入、export * 与动态导入 radix-ui 同样拦下（M2-P2 复验）', async () => {
+    const RADIX_MESSAGE = '弹窗类的 Radix 原语（Dialog、AlertDialog）只在 shared/ui/dialog.tsx 里引入'
+    expect(await rulesFor('import { Dialog as DialogPrimitive } from \'radix-ui\'\n\nexport const root = DialogPrimitive.Root\n', 'apps/web/src/shared/ui/dialog.tsx')).not.toContain('no-restricted-syntax')
+    // 其他原语照常按名字引入
+    expect(await rulesFor('import { Slot } from \'radix-ui\'\n\nexport const slot = Slot\n', 'apps/web/src/features/spaces/space-page.tsx')).not.toContain('no-restricted-syntax')
+    const codes = [
+      'import { Dialog } from \'radix-ui\'\n\nexport const root = Dialog.Root\n',
+      'import { AlertDialog as Alert } from \'radix-ui\'\n\nexport const root = Alert.Root\n',
+      'import * as Radix from \'radix-ui\'\n\nexport const root = Radix.Slot\n',
+      'export * from \'radix-ui\'\n',
+      'export async function load() {\n  return import(\'radix-ui\')\n}\n',
+      'import { Root } from \'@radix-ui/react-dialog\'\n\nexport const root = Root\n',
+    ]
+    // 首屏的功能、应用层、平台页面的入口、共享层、编辑器适配层与内部 API：各有自己的 no-restricted-syntax，每一类都要带上这组限制
+    const files = [
+      'apps/web/src/features/spaces/space-page.tsx',
+      WEB_FILE,
+      PLATFORM_ENTRY,
+      WEB_SHARED_FILE,
+      'apps/web/src/editor/index.ts',
+      'apps/web/src/editor/internal-api/registry.ts',
+    ]
+    for (const file of files) {
+      for (const code of codes) {
+        const report = await lint(code, file)
+        expect(report.rules, `${file}：${code}`).toContain('no-restricted-syntax')
+        expect(report.messages.join('\n'), `${file}：${code}`).toContain(RADIX_MESSAGE)
+      }
+    }
   })
 }, LINT_TIMEOUT)
 
@@ -619,6 +736,69 @@ describe('US-M1-11 lint 规则的自测：后端', () => {
 
   it('控制器不自己开事务', async () => {
     expect(await rulesFor('import { TransactionRunner } from \'../database/index.ts\'\nexport const runner = TransactionRunner\n', API_CONTROLLER)).toContain('no-restricted-imports')
+  })
+
+  it('停用者文档的转移（DocumentTransferService）只由管理界面的模块引用：别的模块、应用层引用都失败，documents 模块自己不受影响（M2-P2 审查 A9）', async () => {
+    const TRANSFER_MESSAGE = '停用者文档的转移（DocumentTransferService）不经内容权限，只由管理界面的模块（modules/admin）调用'
+    const importTransfer = 'import { DocumentTransferService } from \'../documents/index.ts\'\n\nexport const service = DocumentTransferService\n'
+    expect(await rulesFor(importTransfer, 'apps/api/src/modules/admin/admin-transfer.service.ts')).not.toContain('no-restricted-imports')
+    expect(await rulesFor('import { DocumentTransferService } from \'./document-transfer.service.ts\'\n\nexport const service = DocumentTransferService\n', 'apps/api/src/modules/documents/documents.module.ts')).not.toContain('no-restricted-imports')
+    // 同一个公开入口里的其他符号照常引用
+    expect(await rulesFor('import { DocumentAccessPolicy } from \'../documents/index.ts\'\n\nexport const policy = DocumentAccessPolicy\n', 'apps/api/src/modules/workspace/space-membership.service.ts')).not.toContain('no-restricted-imports')
+    const violations: [string, string][] = [
+      [importTransfer, 'apps/api/src/modules/workspace/space-membership.service.ts'],
+      [importTransfer, 'apps/api/src/modules/workspace/spaces.controller.ts'],
+      ['import type { DocumentTransferService } from \'../documents/index.ts\'\n\nexport type Service = DocumentTransferService\n', 'apps/api/src/modules/workspace/space-membership.service.ts'],
+      ['import * as documents from \'../documents/index.ts\'\n\nexport const service = documents.DocumentTransferService\n', 'apps/api/src/modules/workspace/space-membership.service.ts'],
+      ['export { DocumentTransferService } from \'../documents/index.ts\'\n', 'apps/api/src/modules/spaces/index.ts'],
+      ['import { DocumentTransferService } from \'../modules/documents/index.ts\'\n\nexport const service = DocumentTransferService\n', 'apps/api/src/app/app.module.ts'],
+    ]
+    for (const [code, file] of violations) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain('no-restricted-imports')
+      expect(report.messages.join('\n'), `${file}：${code}`).toContain(TRANSFER_MESSAGE)
+    }
+  })
+
+  it('admin 与 workspace 是最上层的编排：只由 app 层组装，别的模块都不引用它们，经 admin 转手的转移同样拦下（M2-P2 复验 N2）', async () => {
+    const TOP_LEVEL = '是最上层的编排（ADR-014）'
+    expect(await rulesFor('import { AdminModule } from \'../modules/admin/index.ts\'\nimport { WorkspaceModule } from \'../modules/workspace/index.ts\'\n\nexport const modules = [AdminModule, WorkspaceModule]\n', 'apps/api/src/app/app.module.ts')).not.toContain('boundaries/dependencies')
+    // 模块自己内部的引用照常
+    expect(await rulesFor('import { AdminTransferService } from \'./admin-transfer.service.ts\'\n\nexport const service = AdminTransferService\n', 'apps/api/src/modules/admin/admin.module.ts')).not.toContain('boundaries/dependencies')
+    const violations: [string, string][] = [
+      ['import { AdminModule } from \'../admin/index.ts\'\n\nexport const module = AdminModule\n', 'apps/api/src/modules/workspace/workspace.module.ts'],
+      ['import { WorkspaceModule } from \'../workspace/index.ts\'\n\nexport const module = WorkspaceModule\n', 'apps/api/src/modules/admin/admin.module.ts'],
+      ['import type { AdminModule } from \'../admin/index.ts\'\n\nexport type Module = AdminModule\n', 'apps/api/src/modules/documents/documents.service.ts'],
+      // admin 转出绕过内容权限的转移，别的模块再从 admin 引用：在这一步拦下
+      ['export { DocumentTransferService } from \'../admin/index.ts\'\n', 'apps/api/src/modules/spaces/index.ts'],
+      ['import { WorkspaceModule } from \'../workspace/index.ts\'\n\nexport const module = WorkspaceModule\n', 'apps/api/src/modules/users/users.module.ts'],
+    ]
+    for (const [code, file] of violations) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain('boundaries/dependencies')
+      expect(report.messages.join('\n'), `${file}：${code}`).toContain(TOP_LEVEL)
+    }
+  })
+
+  it('契约的请求结构（z.strictObject）与路径里的 id（*IdSchema）用 uuidSchema，不直接用 z.uuid()；响应结构照常（M2-P2 审查 A1、复验 N3）', async () => {
+    const UUID_MESSAGE = '请求里的 UUID 用 uuidSchema'
+    const fine = [
+      'import { z } from \'zod\'\n\nexport const response = z.object({ id: z.uuid(), items: z.array(z.object({ id: z.uuid() })) })\n',
+      'import { z } from \'zod\'\nimport { uuidSchema } from \'../ids/ids.ts\'\n\nexport const request = z.strictObject({ userId: uuidSchema, ids: z.array(uuidSchema) })\nexport const thingIdSchema = uuidSchema\n',
+    ]
+    for (const code of fine)
+      expect(await rulesFor(code, CONTRACTS_FILE), code).not.toContain('no-restricted-syntax')
+    const violations = [
+      'import { z } from \'zod\'\n\nexport const request = z.strictObject({ userId: z.uuid() })\n',
+      'import { z } from \'zod\'\n\nexport const request = z.strictObject({ ids: z.array(z.uuid()).min(1) })\n',
+      'import { z } from \'zod\'\n\nexport const request = z.strictObject({ target: z.discriminatedUnion(\'type\', [z.strictObject({ type: z.literal(\'a\'), id: z.uuid().optional() })]) })\n',
+      'import { z } from \'zod\'\n\nexport const thingIdSchema = z.uuid()\n',
+    ]
+    for (const code of violations) {
+      const report = await lint(code, CONTRACTS_FILE)
+      expect(report.rules, code).toContain('no-restricted-syntax')
+      expect(report.messages.join('\n'), code).toContain(UUID_MESSAGE)
+    }
   })
 
   it('环境变量的其他读法同样只能在 config 模块里：import { env }、解构、globalThis.process.env', async () => {

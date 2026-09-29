@@ -32,6 +32,8 @@ export const documents = pgTable('documents', {
   formatVersion: integer('format_version').notNull(),
   // 最近一次写入时的 Univer 版本
   sdkVersion: text('sdk_version').notNull(),
+  // 写入代次（00 号计划书 §6.4，M2-P2 设计 §3.7）：删除与跨空间移动在同一个事务里加一；M3 的租约与保存按它与修订号条件写入
+  writeEpoch: integer('write_epoch').notNull().default(0),
 }, table => [
   check('documents_type_check', oneOf(table.type, DOCUMENT_TYPES)),
   check('documents_status_check', oneOf(table.status, DOCUMENT_STATUSES)),
@@ -40,6 +42,7 @@ export const documents = pgTable('documents', {
   check('documents_profile_check', oneOf(table.profile, DOCUMENT_PROFILES)),
   check('documents_format_version_check', sql`${table.formatVersion} IN (${sql.raw(PLATFORM_FORMAT_VERSIONS.join(', '))})`),
   check('documents_sdk_version_check', lengthBetween(table.sdkVersion, 1, SDK_VERSION_MAX_LENGTH)),
+  check('documents_write_epoch_check', sql`${table.writeEpoch} >= 0`),
   // 列表按空间、更新时间从新到旧分页（keyset）
   index('documents_space_updated_idx').on(table.spaceId, table.updatedAt.desc(), table.id.desc()),
 ])

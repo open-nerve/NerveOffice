@@ -53,7 +53,7 @@ test.describe('US-M2-01 邀请注册', () => {
     const username = `inv-${randomBytes(4).toString('hex')}`
     await loginThroughApi(page, admin)
     await page.goto('/')
-    await page.getByRole('link', { name: '管理' }).click()
+    await page.getByRole('link', { name: '管理', exact: true }).click()
     await page.getByRole('navigation', { name: '管理界面' }).getByRole('link', { name: '邀请' }).click()
     await issueInvitation(page, username, '新来的同事')
     const dialog = page.getByRole('dialog', { name: `邀请链接：新来的同事（${username}）` })
@@ -195,7 +195,7 @@ test.describe('US-M2-03 重置密码', () => {
     await anotherDevice.getByLabel('再输入一次新密码').fill(NEW_PASSWORD)
     await anotherDevice.getByRole('button', { name: '设置新密码并登录' }).click()
     await expect(anotherDevice.getByRole('heading', { name: '我的空间' })).toBeVisible()
-    await anotherDevice.getByRole('link', { name: '管理' }).click()
+    await anotherDevice.getByRole('link', { name: '管理', exact: true }).click()
     await expect(anotherDevice.getByRole('table', { name: '账户列表' })).toBeVisible()
   })
 })
@@ -238,7 +238,7 @@ test.describe('US-M2-04 停用、启用与系统管理员', () => {
     await expect(row.getByText('系统管理员', { exact: true })).toBeVisible()
     await anotherDevice.reload()
     await expect(anotherDevice.getByRole('table', { name: '账户列表' })).toBeVisible()
-    await expect(anotherDevice.getByRole('link', { name: '管理' })).toBeVisible()
+    await expect(anotherDevice.getByRole('link', { name: '管理', exact: true })).toBeVisible()
 
     await confirmAction(page, row, '取消系统管理员')
     await expect(row.getByText('成员', { exact: true })).toBeVisible()

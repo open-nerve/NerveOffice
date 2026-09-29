@@ -2,9 +2,10 @@ import type { RouteObject } from 'react-router'
 import { ONE_TIME_LINK_PAGE_PATHS } from '@nerve-office/contracts'
 import { CHANGE_PASSWORD_PATH, ChangePasswordPage, InvitationPage, PasswordResetPage } from '../features/account/index.ts'
 import { LoginPage, RequireSession, SessionCheck } from '../features/auth/index.ts'
-import { DocumentListPage } from '../features/documents/index.ts'
-import { ADMIN_PATH, ADMIN_PATHS } from '../shared/lib/admin-paths.ts'
+import { HomePage, SpacePage } from '../features/spaces/index.ts'
+import { ADMIN_PATH, ADMIN_PATHS, ADMIN_USER_DOCUMENTS_ROUTE } from '../shared/lib/admin-paths.ts'
 import { LOGIN_PATH } from '../shared/lib/login-path.ts'
+import { SPACE_MEMBERS_ROUTE, SPACE_ROUTE } from '../shared/lib/space-paths.ts'
 import { AppShell } from './layout/app-shell.tsx'
 import { ErrorPage } from './pages/error-page.tsx'
 import { NotFoundPage } from './pages/not-found-page.tsx'
@@ -12,6 +13,11 @@ import { NotFoundPage } from './pages/not-found-page.tsx'
 /** 管理界面按需加载（M2-P1 设计 §3.8）：它只给系统管理员，不进平台页面的首屏包。这里是它唯一的引用处，而且只能是动态 import（lint 的模块边界保证） */
 async function adminPages() {
   return import('../features/admin/index.ts')
+}
+
+/** 成员页按需加载（M2-P2 设计 §3.10）：只有管理与查看成员时才用，带着弹窗，不进首屏包。同样只能在这里动态 import */
+async function membersPages() {
+  return import('../features/members/index.ts')
 }
 
 /** 平台页面的路由（P3 设计 §3.7）。编辑器页在 P4 另起入口，整页加载。 */
@@ -30,7 +36,9 @@ export const appRoutes: RouteObject[] = [
       {
         Component: AppShell,
         children: [
-          { index: true, Component: DocumentListPage },
+          { index: true, Component: HomePage },
+          { path: SPACE_ROUTE, Component: SpacePage },
+          { path: SPACE_MEMBERS_ROUTE, lazy: async () => ({ Component: (await membersPages()).MembersPage }) },
           { path: CHANGE_PASSWORD_PATH, Component: ChangePasswordPage },
           {
             path: ADMIN_PATH,
@@ -39,6 +47,8 @@ export const appRoutes: RouteObject[] = [
               { index: true, lazy: async () => ({ Component: (await adminPages()).AdminIndex }) },
               { path: ADMIN_PATHS.users, lazy: async () => ({ Component: (await adminPages()).AdminUsersPage }) },
               { path: ADMIN_PATHS.invitations, lazy: async () => ({ Component: (await adminPages()).AdminInvitationsPage }) },
+              { path: ADMIN_PATHS.spaces, lazy: async () => ({ Component: (await adminPages()).AdminSpacesPage }) },
+              { path: ADMIN_USER_DOCUMENTS_ROUTE, lazy: async () => ({ Component: (await adminPages()).AdminTransferPage }) },
               { path: ADMIN_PATHS.audit, lazy: async () => ({ Component: (await adminPages()).AdminAuditPage }) },
             ],
           },

@@ -57,6 +57,11 @@ export class UsersService implements OnModuleInit {
     return this.repository.findById(id)
   }
 
+  /** 按 id 取管理界面用的账户（带创建时间，含停用的）：转移页的页头（M2-P2 设计 §3.10） */
+  async findAccount(id: string): Promise<AccountRecord | undefined> {
+    return this.repository.findRecord(id)
+  }
+
   /**
    * 锁住账户的行再读（M2-P1 审查 A2）：改动这个账户的凭据、状态、重置与会话的事务，第一步都调它（停用与系统角色的变更
    * 之前另有 advisory lock），在锁里复核状态，再动重置与会话的行。账户不存在时返回 undefined
@@ -238,6 +243,33 @@ export class UsersService implements OnModuleInit {
   async lockActingAdmin(actorId: string, transaction: Transaction): Promise<void> {
     await this.repository.lockSystemAdminsShared(transaction)
     await this.requireActingAdmin(actorId, transaction)
+  }
+
+  /**
+   * 空间的管理操作里复核系统角色（M2-P2 设计 §3.4）：取 system-admins 的共享锁，看操作者是否仍是有效的系统管理员。
+   * 与 lockActingAdmin 不同，不是时不拒绝：调用方按普通成员判断（他可能同时是这个空间的空间管理员）
+   */
+  async holdSystemAdmin(actorId: string, transaction: Transaction): Promise<boolean> {
+    await this.repository.lockSystemAdminsShared(transaction)
+    const actor = await this.repository.findById(actorId, transaction)
+    return actor?.status === 'active' && actor.systemRole === 'admin'
+  }
+
+  /**
+   * 以共享锁持住一个有效的账户：添加成员、首个空间管理员、转移的目标（M2-P2 设计 §3.9）。
+   * 不存在或已停用时为 undefined；到提交之前，这个账户不会被停用（停用要锁同一行）
+   */
+  async holdActiveAccount(userId: string, transaction: Transaction): Promise<User | undefined> {
+    const account = await this.holdAccount(userId, transaction)
+    return account?.status === 'active' ? account : undefined
+  }
+
+  /**
+   * 以共享锁持住一个账户，不论状态：转移的来源（要在锁里复核它仍是停用的，M2-P2 设计 §3.8）。
+   * 到提交之前不会被启用或停用（它们要锁同一行）；不存在时为 undefined
+   */
+  async holdAccount(userId: string, transaction: Transaction): Promise<User | undefined> {
+    return this.repository.lockShared(userId, transaction)
   }
 
   /**

@@ -26,6 +26,13 @@ describe('文档列表的查询参数', () => {
     expect(documentListQuerySchema.safeParse({ sort: 'title' }).success).toBe(false)
     expect(documentListQuerySchema.safeParse({ cursor: '' }).success).toBe(false)
   })
+
+  it('按空间列出：spaceId 可选，必须是 UUID；没有时是个人空间（M1 兼容）', () => {
+    const spaceId = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0e'
+    expect(documentListQuerySchema.parse({ spaceId })).toEqual({ spaceId, limit: 50 })
+    expect(documentListQuerySchema.parse({})).not.toHaveProperty('spaceId')
+    expect(documentListQuerySchema.safeParse({ spaceId: 'personal' }).success).toBe(false)
+  })
 })
 
 describe('文档列表的响应', () => {
@@ -53,7 +60,13 @@ describe('新建文档的请求', () => {
   })
 
   it('不接受多余的字段', () => {
-    expect(createDocumentRequestSchema.safeParse({ type: 'sheet', requestId, spaceId: requestId }).success).toBe(false)
+    expect(createDocumentRequestSchema.safeParse({ type: 'sheet', requestId, folderId: requestId }).success).toBe(false)
+  })
+
+  it('建在哪个空间：spaceId 可选，必须是 UUID；没有时建在个人空间（M1 兼容）', () => {
+    const spaceId = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0e'
+    expect(createDocumentRequestSchema.parse({ type: 'sheet', requestId, spaceId })).toEqual({ type: 'sheet', requestId, spaceId })
+    expect(createDocumentRequestSchema.safeParse({ type: 'sheet', requestId, spaceId: 'team' }).success).toBe(false)
   })
 
   it('标题 1–200 个字符（按码点计），不含控制字符', () => {
@@ -80,6 +93,7 @@ describe('文档的元数据', () => {
     createdAt: '2026-09-26T08:00:00.000Z',
     updatedAt: '2026-09-26T09:00:00.000Z',
     spaceId: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0e',
+    space: { id: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0e', type: 'team', name: '市场部' },
     revision: 1,
     profile: 'sheet@1',
     formatVersion: 1,
@@ -93,5 +107,10 @@ describe('文档的元数据', () => {
 
   it('修订号从 1 开始', () => {
     expect(documentDetailSchema.safeParse({ ...detail, revision: 0 }).success).toBe(false)
+  })
+
+  it('带着所在的空间：编辑器页的返回链接回到那里', () => {
+    expect(documentDetailSchema.safeParse({ ...detail, space: undefined }).success).toBe(false)
+    expect(documentDetailSchema.safeParse({ ...detail, space: { ...detail.space, type: 'shared' } }).success).toBe(false)
   })
 })

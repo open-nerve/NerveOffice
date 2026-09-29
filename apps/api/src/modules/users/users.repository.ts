@@ -72,6 +72,12 @@ export class UsersRepository {
     return row
   }
 
+  /** 按 id 取管理界面用的账户（带创建时间，含停用的） */
+  async findRecord(id: string): Promise<AccountRecord | undefined> {
+    const [row] = await this.db.select(RECORD_COLUMNS).from(users).where(eq(users.id, id))
+    return row
+  }
+
   async findCredentialsByUsername(username: string): Promise<UserCredentials | undefined> {
     const [row] = await this.db.select({ ...USER_COLUMNS, ...CREDENTIAL_COLUMNS }).from(users).where(eq(users.username, username))
     if (row === undefined)
@@ -147,6 +153,15 @@ export class UsersRepository {
    */
   async lockRecord(id: string, transaction: Transaction): Promise<AccountRecord | undefined> {
     const [row] = await executorOf(this.db, transaction).select(RECORD_COLUMNS).from(users).where(eq(users.id, id)).for('no key update')
+    return row
+  }
+
+  /**
+   * 以共享锁读这个账户（FOR SHARE）：把它加为成员、设为首个空间管理员、作为转移的目标时用（M2-P2 设计 §3.9）。
+   * 与停用、启用（FOR NO KEY UPDATE）互斥：到提交之前账户的状态不会变；与外键检查的 FOR KEY SHARE 不冲突
+   */
+  async lockShared(id: string, transaction: Transaction): Promise<AccountRecord | undefined> {
+    const [row] = await executorOf(this.db, transaction).select(RECORD_COLUMNS).from(users).where(eq(users.id, id)).for('share')
     return row
   }
 

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { uuidSchema } from '../ids/ids.ts'
 
 /**
  * 快照解压后的上限（00 号计划书 §12.1）：平台格式的一部分，调整按格式变更处理（P4 设计 §3.11）。
@@ -38,8 +39,8 @@ function integerParam(min: number) {
  */
 export const saveContentQuerySchema = z.strictObject({
   baseRevision: integerParam(1),
-  requestId: z.uuid(),
-  clientInstanceId: z.uuid(),
+  requestId: uuidSchema,
+  clientInstanceId: uuidSchema,
   localSeq: integerParam(0),
 })
 

@@ -51,8 +51,8 @@ export async function createUser(prefix: string, displayName = prefix, options: 
 /** 按 unitId 生成快照的 JSON 文本 */
 export type SnapshotFor = (unitId: string) => string
 
-/** 写一份文档：与经接口新建的一致（元数据、快照的内容、修订号 1 的修订记录）。快照默认是新建时的模板 */
-async function insertDocument(client: pg.Client, owner: TestUser, title: string, snapshotFor: SnapshotFor = sheetSnapshotFor): Promise<string> {
+/** 写一份文档：与经接口新建的一致（元数据、快照的内容、修订号 1 的修订记录）。快照默认是新建时的模板；spaceId 默认是作者的个人空间 */
+async function insertDocument(client: pg.Client, owner: TestUser, title: string, snapshotFor: SnapshotFor = sheetSnapshotFor, spaceId = owner.personalSpaceId): Promise<string> {
   const unitId = randomUUID()
   const raw = Buffer.from(snapshotFor(unitId), 'utf8')
   const snapshot = zlib.gzipSync(raw)
@@ -67,7 +67,7 @@ async function insertDocument(client: pg.Client, owner: TestUser, title: string,
        INSERT INTO document_revisions (document_id, revision, kind, request_id, payload_digest, saved_by) SELECT id, 1, 'created', $11, $12, $3 FROM document
      )
      SELECT id FROM document`,
-    [owner.personalSpaceId, title, owner.id, unitId, DOCUMENT_PROFILE_OF.sheet, PLATFORM_FORMAT_VERSION, UNIVER_SDK_VERSION, snapshot, raw.length, snapshot.length, randomUUID(), digest],
+    [spaceId, title, owner.id, unitId, DOCUMENT_PROFILE_OF.sheet, PLATFORM_FORMAT_VERSION, UNIVER_SDK_VERSION, snapshot, raw.length, snapshot.length, randomUUID(), digest],
   )
   return result.rows[0]?.id ?? ''
 }
@@ -83,6 +83,31 @@ export async function createDocuments(owner: TestUser, titlePrefix: string, coun
     for (let n = 1; n <= count; n += 1)
       await insertDocument(client, owner, `${titlePrefix} ${n}`)
     await client.query('COMMIT')
+  })
+}
+
+/** 在指定的空间里写一份文档（团队空间的用例，M2-P2） */
+export async function createDocumentIn(spaceId: string, author: TestUser, title: string): Promise<string> {
+  return withDatabase(async client => insertDocument(client, author, title, sheetSnapshotFor, spaceId))
+}
+
+export type SpaceRole = 'admin' | 'editor' | 'viewer'
+
+/**
+ * 团队空间与成员（M2-P2）：直接写库。名称带随机后缀：团队空间的名称全库唯一，三个浏览器并行跑同一个用例时互不影响。
+ * 返回空间的 id 与实际的名称
+ */
+export async function createTeamSpace(prefix: string, createdBy: TestUser, members: readonly (readonly [TestUser, SpaceRole])[] = [], options: { readonly visibleToAll?: boolean } = {}): Promise<{ readonly id: string, readonly name: string }> {
+  const name = `${prefix} ${randomBytes(3).toString('hex')}`
+  return withDatabase(async (client) => {
+    const space = await client.query<{ id: string }>(
+      'INSERT INTO spaces (type, name, created_by, visible_to_all) VALUES (\'team\', $1, $2, $3) RETURNING id',
+      [name, createdBy.id, options.visibleToAll ?? false],
+    )
+    const id = space.rows[0]?.id ?? ''
+    for (const [user, role] of members)
+      await client.query('INSERT INTO space_members (space_id, user_id, role) VALUES ($1, $2, $3)', [id, user.id, role])
+    return { id, name }
   })
 }
 

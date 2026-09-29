@@ -155,16 +155,36 @@ const APP_ENTRY_SYNTAX = [
   },
 ]
 
-// 弹窗类的 Radix 原语（Dialog、AlertDialog）只在 shared/ui/dialog.tsx 里引入（M2-P1 复验）：shared 的其他文件直接从 radix-ui 引入，
-// 同样会随桶文件进首屏，按路径的限制（import-x/no-restricted-paths）管不到第三方包
+// 弹窗类的 Radix 原语（Dialog、AlertDialog）只在 shared/ui/dialog.tsx 里引入（M2-P1 复验）：别处直接从 radix-ui 引入，
+// 会绕过对 dialog.tsx 的引用限制，把弹窗带进平台页面的首屏；按路径的限制（import-x/no-restricted-paths）与模块边界管不到第三方包。
+// 对 web 的全部文件生效（M2-P2 复验：原来只管 shared，首屏的功能与应用层直接引入不报）。
+// 按导入名检查：命名空间导入、export * 与动态导入 radix-ui 认不出引入的是什么，一并拦下，其他原语按名字引入
+const RADIX_DIALOG_MESSAGE = '弹窗类的 Radix 原语（Dialog、AlertDialog）只在 shared/ui/dialog.tsx 里引入：别处引用它，会绕过对弹窗文件的引用限制，把弹窗带进平台页面的首屏（ADR-008，M2-P1 审查 B2、M2-P2 复验）'
 const RADIX_DIALOG_OUTSIDE_DIALOG_FILE = [
   {
     selector: String.raw`:matches(ImportDeclaration, ExportNamedDeclaration)[source.value='radix-ui'] > :matches(ImportSpecifier[imported.name=/^(?:Dialog|AlertDialog)$/], ExportSpecifier[local.name=/^(?:Dialog|AlertDialog)$/])`,
-    message: '弹窗类的 Radix 原语（Dialog、AlertDialog）只在 shared/ui/dialog.tsx 里引入：shared 的其他文件引用它，会随桶文件进平台页面的首屏（ADR-008，M2-P1 审查 B2）',
+    message: RADIX_DIALOG_MESSAGE,
   },
   {
     selector: String.raw`:matches(ImportDeclaration, ExportNamedDeclaration, ExportAllDeclaration, ImportExpression)[source.value=/^@radix-ui\/react-(?:alert-)?dialog(?:\/|$)/]`,
-    message: '弹窗类的 Radix 原语（Dialog、AlertDialog）只在 shared/ui/dialog.tsx 里引入：shared 的其他文件引用它，会随桶文件进平台页面的首屏（ADR-008，M2-P1 审查 B2）',
+    message: RADIX_DIALOG_MESSAGE,
+  },
+  {
+    selector: String.raw`:matches(ImportDeclaration[source.value='radix-ui'] > ImportNamespaceSpecifier, ExportAllDeclaration[source.value='radix-ui'], ImportExpression[source.value='radix-ui'])`,
+    message: `${RADIX_DIALOG_MESSAGE}。radix-ui 的原语按名字引入（import { Slot } from 'radix-ui'）：命名空间导入、export * 与动态导入认不出引入的是什么`,
+  },
+]
+
+// 契约的请求结构里直接用 z.uuid()：大写的 id 原样交给服务端（M2-P2 审查 A1、复验 N3）
+const CONTRACTS_REQUEST_UUID_MESSAGE = '请求里的 UUID 用 uuidSchema（ids/ids.ts，统一转成小写）：服务端按字符串比较 id 的地方（是不是本人、审计的明细）只认小写（M2-P2 审查 A1）'
+const CONTRACTS_REQUEST_UUID = [
+  {
+    selector: 'CallExpression[callee.property.name=\'strictObject\'] CallExpression[callee.object.name=\'z\'][callee.property.name=\'uuid\']',
+    message: CONTRACTS_REQUEST_UUID_MESSAGE,
+  },
+  {
+    selector: String.raw`VariableDeclarator[id.name=/IdSchema$/] CallExpression[callee.object.name='z'][callee.property.name='uuid']`,
+    message: CONTRACTS_REQUEST_UUID_MESSAGE,
   },
 ]
 
@@ -279,6 +299,14 @@ const API_CONTROLLER_OUTSIDE_CONTROLLER_FILE = {
   selector: 'Decorator > CallExpression[callee.name=\'Controller\']',
   message: '控制器只写在 *.controller.ts 里：控制器的限制按文件名生效（P2 设计 §3.1）',
 }
+// 停用者文档的转移（DocumentTransferService）按 id 整批改写文档所在的空间，不经内容权限（M2-P2 设计 §3.8）：只由管理界面的模块调用，
+// 它在调用之前检查系统管理员与停用的账户（M2-P2 审查 A9）。documents 模块自己经相对路径引用，不经公开入口，不受影响。
+// 静态导入、import type 与再导出都拦下；命名空间导入（import * as）同样拦下
+const API_DOCUMENT_TRANSFER = {
+  regex: String.raw`(?:^|/)documents/index\.ts$`,
+  importNames: ['DocumentTransferService'],
+  message: '停用者文档的转移（DocumentTransferService）不经内容权限，只由管理界面的模块（modules/admin）调用（M2-P2 审查 A9）',
+}
 
 /** 后端文件允许的例外。 */
 interface ApiFileKind {
@@ -294,6 +322,8 @@ interface ApiFileKind {
   controller?: boolean
   /** 读取环境变量（config 模块） */
   processEnv?: boolean
+  /** 引用停用者文档的转移 DocumentTransferService（管理界面的模块与 documents 模块） */
+  documentTransfer?: boolean
 }
 
 function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
@@ -309,6 +339,7 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
     ...(kind.databaseHandles === true ? [] : [API_DATABASE_HANDLES]),
     ...(kind.tables === true ? [] : [API_TABLES]),
     ...(kind.controller === true ? [API_REPOSITORY_FROM_CONTROLLER, API_TRANSACTIONS_FROM_CONTROLLER] : []),
+    ...(kind.documentTransfer === true ? [] : [API_DOCUMENT_TRANSFER]),
   ]
   const syntax = [
     ...BASE_RESTRICTED_SYNTAX,
@@ -405,12 +436,22 @@ export default antfu(
     },
   },
   {
+    // 弹窗类的 Radix 原语只在 shared/ui/dialog.tsx 里引入：对 web 的全部文件生效（M2-P2 复验）。
+    // 同名规则后者整体覆盖前者：入口与编辑器的块另有自己的 no-restricted-syntax，在那里同样带上这组限制
+    name: 'nerve/web-radix-dialog',
+    files: ['apps/web/src/**/*.{ts,tsx}'],
+    ignores: [...TEST_CODE, 'apps/web/src/shared/ui/dialog.tsx'],
+    rules: {
+      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE],
+    },
+  },
+  {
     name: 'nerve/web-app-entries',
     files: ['apps/web/src/entries/*/main.{ts,tsx}'],
     // CSP 阳性对照只在测试构建里，不用 zod，它的入口里就是探针本身的代码
     ignores: ['apps/web/src/entries/csp-probe/**'],
     rules: {
-      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...APP_ENTRY_SYNTAX],
+      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...APP_ENTRY_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE],
     },
   },
   {
@@ -419,7 +460,7 @@ export default antfu(
     files: ['apps/web/src/editor/**'],
     rules: {
       'no-restricted-imports': ['error', { paths: UNIVER_INTERNAL_SYMBOLS, patterns: [NO_UNIVER_PRO, NO_NODE_MODULES_PATH, NO_UPPERCASE_PACKAGE, UNIVER_QUERY_IMPORTS, UNIVER_DEEP_IMPORTS] }],
-      'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX, ...NO_GET_INJECTOR],
+      'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX, ...NO_GET_INJECTOR, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE],
     },
   },
   {
@@ -428,11 +469,24 @@ export default antfu(
     files: ['apps/web/src/editor/internal-api/**'],
     rules: {
       'no-restricted-imports': ['error', { patterns: [NO_UNIVER_PRO, NO_NODE_MODULES_PATH, NO_UPPERCASE_PACKAGE, UNIVER_QUERY_IMPORTS, UNIVER_DEEP_IMPORTS] }],
-      'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX],
+      'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE],
+    },
+  },
+  {
+    // 请求里的 UUID 统一成小写（M2-P2 审查 A1）：请求结构（z.strictObject，响应结构都是宽松的 z.object）与路径里的 id（*IdSchema）
+    // 用 uuidSchema，不直接用 z.uuid()，免得新写的请求结构又把大写的 id 原样交给服务端（复验 N3）
+    name: 'nerve/contracts-request-ids',
+    files: ['packages/contracts/src/**/*.ts'],
+    ignores: [...TEST_CODE],
+    rules: {
+      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...CONTRACTS_REQUEST_UUID],
     },
   },
   // 后端：先是所有文件的限制，后面的块按文件类型放开各自需要的部分（后面的块覆盖前面的同名规则）
   { name: 'nerve/api', files: ['apps/api/src/**/*.ts'], rules: apiRules() },
+  // 管理界面的模块（与 documents 模块自己）可以引用停用者文档的转移（M2-P2 审查 A9）。紧跟在上一块之后：
+  // 后面按文件类型的块（控制器、仓储等）照常拦下，它们不需要它
+  { name: 'nerve/api-document-transfer', files: ['apps/api/src/modules/admin/**/*.ts', 'apps/api/src/modules/documents/**/*.ts'], rules: apiRules({ documentTransfer: true }) },
   // app 层的程序接口（index.ts）为集成测试转出数据库句柄；app 层的其他文件同样拿不到（复验 N6）
   { name: 'nerve/api-app-entry', files: ['apps/api/src/app/index.ts'], rules: apiRules({ databaseHandles: true }) },
   { name: 'nerve/api-database', files: ['apps/api/src/modules/database/**/*.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true }) },
@@ -495,13 +549,12 @@ export default antfu(
     // 带第三方运行时的重组件（弹窗 dialog.tsx，Radix Dialog，约 12 KiB gzip）不经 shared 的任何文件转出（ADR-008）：
     // web 没有声明 sideEffects，经 shared/ui 的桶文件引用会把它再导出的每个模块都带进首屏，首屏的预算还有余量、门禁 budgets 发现不了。
     // 按解析之后的路径判断：经 shared 里别的文件中转、换写法（'../ui/dialog.tsx'、'./dialog.js'）都拦得住（M2-P1 审查 B2，复验 N2、X6）。
-    // 用到弹窗的功能模块（按需加载的管理界面）直接引用它；类型也一样直接引用
+    // 用到弹窗的功能模块（按需加载的管理界面）直接引用它；类型也一样直接引用。Radix 原语本身的限制见 nerve/web-radix-dialog
     name: 'nerve/web-ui-heavy-components',
     files: ['apps/web/src/shared/**/*.{ts,tsx}'],
     // 弹窗自己的文件引入 Radix 的原语；测试与测试辅助不进产物
     ignores: [...TEST_CODE, 'apps/web/src/shared/ui/dialog.tsx'],
     rules: {
-      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE],
       'import-x/no-restricted-paths': ['error', {
         basePath: import.meta.dirname,
         zones: [{
@@ -620,6 +673,19 @@ export default antfu(
               { element: { type: 'api-schema', captured: { module: '{{from.element.captured.module}}' }, fileInternalPath: PUBLIC_ENTRY } },
             ] },
           },
+          // admin 与 workspace 是最上层的编排（ADR-014 的分层）：只由 app 层组装，别的模块都不引用它们。
+          // 放在允许的策略之后覆盖"模块之间经公开入口"；同一个模块内部的引用不经过这条检查。
+          // 这样 admin 转出的东西（例如绕过内容权限的转移）流不到别的模块（M2-P2 复验 N2）
+          {
+            from: { element: { type: 'api-module', captured: { module: '!admin' } } },
+            disallow: { to: { element: { type: 'api-module', captured: { module: 'admin' } } } },
+            message: 'admin 是最上层的编排（ADR-014）：只由 app 层组装，别的模块不引用它（M2-P2 复验 N2）',
+          },
+          {
+            from: { element: { type: 'api-module', captured: { module: '!workspace' } } },
+            disallow: { to: { element: { type: 'api-module', captured: { module: 'workspace' } } } },
+            message: 'workspace 是最上层的编排（ADR-014）：只由 app 层组装，别的模块不引用它（M2-P2 复验 N2）',
+          },
           // 命令行经模块的入口，或者经 app 层的程序接口（需要组装多个模块时，例如初始化管理员）
           { from: { element: { type: 'api-cli' } }, allow: { to: { element: { type: ['api-module', 'api-app'], fileInternalPath: PUBLIC_ENTRY } } } },
           // 集成测试经 @nerve-office/api 的程序接口建应用
@@ -658,6 +724,56 @@ export default antfu(
               to: { element: { type: 'web-feature', captured: { feature: 'admin' }, fileInternalPath: PUBLIC_ENTRY } },
               dependency: { nodeKind: 'dynamic-import' },
             },
+          },
+          // 成员页同样按需加载（M2-P2 设计 §3.10）：它带着确认的弹窗与同事选择，只给查看与管理成员时用
+          {
+            from: [
+              { element: { type: 'web-app' } },
+              { element: { type: 'web-entry' } },
+              { element: { type: 'web-feature' } },
+            ],
+            disallow: { to: { element: { type: 'web-feature', captured: { feature: 'members' } } } },
+            message: '成员页（features/members）按需加载：只有 app/routes.ts 可以动态 import() 它的公开入口，静态引用会把它带进平台页面的首屏（M2-P2 设计 §3.10）',
+          },
+          {
+            from: { element: { type: 'web-app', fileInternalPath: 'routes.ts' } },
+            allow: {
+              to: { element: { type: 'web-feature', captured: { feature: 'members' }, fileInternalPath: PUBLIC_ENTRY } },
+              dependency: { nodeKind: 'dynamic-import' },
+            },
+          },
+          // 确认的弹窗带着 Radix Dialog（约 12 KiB gzip）：只由按需加载的功能（管理界面、成员页）引用，
+          // 首屏的页面、应用层与入口引用它会把弹窗带进平台页面的首屏（ADR-008，M2-P2 设计 §3.10）。
+          // 下面三条都只管平台页面：编辑器页（它的入口与 sheet-editor）是另一个包，有自己的预算（M2-P2 复验）
+          {
+            from: [
+              { element: { type: 'web-app' } },
+              { element: { type: 'web-entry', captured: { entry: '!editor' } } },
+              { element: { type: 'web-feature', captured: { feature: '!{admin,members,sheet-editor}' } } },
+            ],
+            disallow: { to: { element: { type: 'web-feature', captured: { feature: 'confirmation' } } } },
+            message: '确认的弹窗（features/confirmation，带 Radix Dialog）只由按需加载的功能（features/admin、features/members）引用，不进平台页面的首屏（ADR-008）',
+          },
+          // 弹窗的文件本身（shared/ui/dialog.tsx，Radix Dialog）同样只由按需加载的功能直接引用（M2-P2 审查 B8）：功能、应用层与入口引用共享层本来是允许的，
+          // 这里在允许的策略之后覆盖。shared 内部的中转另由 nerve/web-ui-heavy-components 拦下
+          {
+            from: [
+              { element: { type: 'web-app' } },
+              { element: { type: 'web-entry', captured: { entry: '!editor' } } },
+              { element: { type: 'web-feature', captured: { feature: '!{admin,members,confirmation,sheet-editor}' } } },
+            ],
+            disallow: { to: { element: { type: 'web-shared', fileInternalPath: 'ui/dialog.tsx' } } },
+            message: '弹窗（shared/ui/dialog.tsx，带 Radix Dialog）只由按需加载的功能（features/admin、features/members、features/confirmation）引用：首屏的功能、应用层与入口引用它会把弹窗带进平台页面的首屏（ADR-008，M2-P2 审查 B8）',
+          },
+          // 按关键词选一项（features/colleagues：按名字选同事、选团队空间）只给按需加载的管理界面与成员页用（M2-P2 设计 §3.10，审查 B8）
+          {
+            from: [
+              { element: { type: 'web-app' } },
+              { element: { type: 'web-entry', captured: { entry: '!editor' } } },
+              { element: { type: 'web-feature', captured: { feature: '!{admin,members,sheet-editor}' } } },
+            ],
+            disallow: { to: { element: { type: 'web-feature', captured: { feature: 'colleagues' } } } },
+            message: '按关键词选一项（features/colleagues）只由按需加载的功能（features/admin、features/members）引用，不进平台页面的首屏（M2-P2 设计 §3.10，审查 B8）',
           },
         ],
       }],

@@ -24,6 +24,11 @@ export class AdminUsersController {
     return this.accounts.list(query)
   }
 
+  @Get(':id')
+  async get(@Param('id', { schema: userIdSchema }) id: string): Promise<AdminUser> {
+    return this.accounts.get(id)
+  }
+
   @Post(':id/disable')
   @HttpCode(200)
   async disable(

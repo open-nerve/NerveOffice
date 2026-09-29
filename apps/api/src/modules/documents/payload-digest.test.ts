@@ -9,6 +9,12 @@ describe('负载摘要', () => {
     expect(createdPayloadDigest('sheet', '周报')).toHaveLength(32)
   })
 
+  it('新建到指定的空间：末尾加上空间 id；没有指定时与 M1 相同', () => {
+    const spaceId = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0e'
+    expect(createdPayloadDigest('sheet', '周报', spaceId)).toEqual(createHash('sha256').update(`created\nsheet\n周报\n${spaceId}`).digest())
+    expect(createdPayloadDigest('sheet', '周报', undefined)).toEqual(createdPayloadDigest('sheet', '周报'))
+  })
+
   it('保存：sha256("saved\\n" + 基准修订号 + "\\n" + 解压后的字节)', () => {
     const raw = Buffer.from('{"id":"u"}', 'utf8')
     expect(savedPayloadDigest(3, raw)).toEqual(createHash('sha256').update('saved\n3\n{"id":"u"}').digest())

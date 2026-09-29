@@ -7,7 +7,7 @@ import { UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { DocumentContentService } from './document-content.service.ts'
-import { ALICE, BOB, BOB_SPACE, FakeStore, HTTP_ORIGIN } from './documents.test-support.ts'
+import { ALICE, BOB, BOB_SPACE, FakeStore, HTTP_ORIGIN, TEAM_SPACE } from './documents.test-support.ts'
 import { savedPayloadDigest } from './payload-digest.ts'
 
 const CLIENT = '0199a2c4-1f2e-4a3b-8c4d-00000000c11e'
@@ -21,6 +21,13 @@ function setup() {
   store.contents.set(document.id, { snapshot: zlib.gzipSync('{}'), rawBytes: 2 })
   store.addRevision({ documentId: document.id, revision: 1, kind: 'created', requestId: '0199a2c4-1f2e-4a3b-8c4d-000000000001', payloadDigest: Buffer.alloc(32), source: null, savedBy: ALICE })
   return { store, service, document }
+}
+
+/** 团队空间里的一份文档（成员按用例另加） */
+function teamDocument(store: FakeStore) {
+  const document = store.addDocument({ spaceId: TEAM_SPACE, revision: 1 })
+  store.contents.set(document.id, { snapshot: zlib.gzipSync('{}'), rawBytes: 2 })
+  return document
 }
 
 function upload(unitId: string, extra = ''): GzipBody {
@@ -84,7 +91,9 @@ describe('DocumentContentService.save', () => {
     const { store, service, document } = setup()
     expect((await rejection(service.save(BOB, document.id, query(), upload(document.unitId), HTTP_ORIGIN))).code).toBe('NOT_FOUND')
     expect((await rejection(service.save(ALICE, '0199a2c4-0000-7000-8000-0000000000ff', query(), upload(document.unitId), HTTP_ORIGIN))).code).toBe('NOT_FOUND')
-    expect(store.policy.accessOf).toHaveBeenCalledTimes(2)
+    // 两条路径各判断一次权限：同样的一条空间事实的查询，不存在的文档用全零的空间
+    expect(store.spaces.accessFactsOf).toHaveBeenCalledTimes(2)
+    expect(store.spaces.accessFactsOf).toHaveBeenLastCalledWith(ALICE, '00000000-0000-0000-0000-000000000000', expect.anything())
     expect(store.revisions).toHaveLength(1)
   })
 
@@ -98,10 +107,12 @@ describe('DocumentContentService.save', () => {
     expect(checked).toBeLessThan(locked)
   })
 
-  it('锁下再判断一次：加锁之前授权被收回（M2），按锁下的状态为准（复验 RA7）', async () => {
-    const { store, service, document } = setup()
+  it('锁下再判断一次：加锁之前被移出了空间，按锁下的状态为准（复验 RA7）', async () => {
+    const { store, service } = setup()
+    const document = teamDocument(store)
+    store.setMember(TEAM_SPACE, ALICE, 'editor')
     store.repositories.documents.lockById.mockImplementationOnce(async (id: string) => {
-      store.access.delete(`${ALICE}:${document.spaceId}`)
+      store.setMember(TEAM_SPACE, ALICE, undefined)
       return store.documents.get(id)
     })
     expect((await rejection(service.save(ALICE, document.id, query(), upload(document.unitId), HTTP_ORIGIN))).code).toBe('NOT_FOUND')
@@ -122,10 +133,26 @@ describe('DocumentContentService.save', () => {
   })
 
   it('只能查看：PERMISSION_DENIED，而且不取锁，不让能编辑的人的保存排队（复验 RA7）', async () => {
-    const { store, service, document } = setup()
-    store.access.set(`${BOB}:${document.spaceId}`, 'viewer')
+    const { store, service } = setup()
+    const document = teamDocument(store)
+    store.setMember(TEAM_SPACE, BOB, 'viewer')
     expect((await rejection(service.save(BOB, document.id, query(), upload(document.unitId), HTTP_ORIGIN))).code).toBe('PERMISSION_DENIED')
     expect(store.repositories.documents.lockById).not.toHaveBeenCalled()
+  })
+
+  it('归档的空间里所有人至多是查看者：空间管理员同样不能保存', async () => {
+    const { store, service } = setup()
+    const document = teamDocument(store)
+    store.setMember(TEAM_SPACE, BOB, 'admin')
+    store.space(TEAM_SPACE).status = 'archived'
+    expect(await rejection(service.save(BOB, document.id, query(), upload(document.unitId), HTTP_ORIGIN))).toMatchObject({ code: 'PERMISSION_DENIED' })
+  })
+
+  it('团队空间的编辑者可以保存', async () => {
+    const { store, service } = setup()
+    const document = teamDocument(store)
+    store.setMember(TEAM_SPACE, BOB, 'editor')
+    expect(await service.save(BOB, document.id, query(), upload(document.unitId), HTTP_ORIGIN)).toMatchObject({ revision: 2 })
   })
 
   it('unitId 不是这份文档的：SNAPSHOT_INVALID', async () => {
@@ -174,7 +201,6 @@ describe('DocumentContentService.save', () => {
     expect((await rejection(service.save(ALICE, another.id, request, upload(another.unitId), HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
 
     const bobs = store.addDocument({ spaceId: BOB_SPACE, unitId: document.unitId })
-    store.access.set(`${BOB}:${BOB_SPACE}`, 'owner')
     expect((await rejection(service.save(BOB, bobs.id, request, upload(document.unitId), HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
   })
 

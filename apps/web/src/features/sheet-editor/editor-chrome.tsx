@@ -1,4 +1,5 @@
-// 编辑器页的页头与提示（P4 设计 §3.7.3）：返回我的空间、标题、保存状态（role="status"）、保存按钮；载入与保存的各种结果。
+import type { DocumentSpace } from '@nerve-office/contracts'
+// 编辑器页的页头与提示（P4 设计 §3.7.3）：返回文档所在的空间（M2-P2 设计 §3.10）、标题、保存状态（role="status"）、保存按钮；载入与保存的各种结果。
 // 编辑器本身挂在页头之外的容器里（editor.html 的 #sheet-editor），不归 React 管。
 import type { ReactNode } from 'react'
 import type { EditorPage, EditorPageLoad, EditorPageView } from './editor-page.ts'
@@ -8,9 +9,18 @@ import { useEffect, useSyncExternalStore } from 'react'
 import { ApiError, describeError, isAuthenticationError, isCsrfTokenError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { LOGIN_PATH } from '../../shared/lib/login-path.ts'
+import { HOME_PATH, spacePath } from '../../shared/lib/space-paths.ts'
 import { Alert, AlertDescription, Button, buttonVariants } from '../../shared/ui/index.ts'
 
-const HOME = '/'
+/**
+ * 返回的去处：文档所在的空间。个人空间回到首页（"我的空间"，只有所有者打得开）；团队空间回到它的空间页，显示它的名称。
+ * 还没加载好（或者加载失败）时回到首页
+ */
+function backLinkOf(space: DocumentSpace | undefined): { readonly href: string, readonly label: string } {
+  if (space === undefined || space.type === 'personal')
+    return { href: HOME_PATH, label: messages.editor.back }
+  return { href: spacePath(space.id), label: space.name }
+}
 
 /**
  * 登录已过期、令牌失效这类失败：会话不是 active 时由会话的提示说明，不再重复（复验 RB2）；
@@ -125,7 +135,7 @@ function LoadFailure({ load }: { load: Exclude<EditorPageLoad, { kind: 'loading'
           {requestId !== undefined && <p>{messages.common.requestId(requestId)}</p>}
         </AlertDescription>
       </Alert>
-      <a href={HOME} className={buttonVariants({ variant: 'outline' })}>{messages.editor.back}</a>
+      <a href={HOME_PATH} className={buttonVariants({ variant: 'outline' })}>{messages.editor.back}</a>
     </main>
   )
 }
@@ -135,6 +145,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
   const view = useSyncExternalStore(page.subscribe, page.view)
   const { load, save } = view
   const title = load.kind === 'ready' ? load.title : undefined
+  const back = backLinkOf(load.kind === 'ready' ? load.space : undefined)
 
   useEffect(() => {
     if (title !== undefined)
@@ -148,9 +159,9 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
     <>
       <header className="flex h-12 items-center gap-3 border-b border-border px-3">
         {/* 回到平台页面是整页跳转（两个入口，P4 设计 §3.8） */}
-        <a href={HOME} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>
+        <a href={back.href} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>
           <ArrowLeft aria-hidden="true" />
-          {messages.editor.back}
+          {back.label}
         </a>
         {title !== undefined && <h1 className="min-w-0 truncate text-base font-medium">{title}</h1>}
         <div className="ml-auto flex items-center gap-3">

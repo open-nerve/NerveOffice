@@ -24,6 +24,7 @@ const DETAIL: DocumentDetail = {
   createdAt: '2026-09-27T01:00:00.000Z',
   updatedAt: '2026-09-27T02:00:00.000Z',
   spaceId: ALICE.personalSpace.id,
+  space: { id: ALICE.personalSpace.id, type: 'personal', name: '爱丽丝' },
   revision: 3,
   profile: 'sheet@1',
   formatVersion: 1,

@@ -1,10 +1,18 @@
 export {
   ADMIN_PAGE_SIZE,
+  adminSpaceListQuerySchema,
+  adminSpaceListResponseSchema,
+  adminSpaceSchema,
+  adminUserDocumentListQuerySchema,
+  adminUserDocumentListResponseSchema,
+  adminUserDocumentSchema,
   adminUserListQuerySchema,
   adminUserListResponseSchema,
   adminUserSchema,
+  changeSpaceVisibilityRequestSchema,
   changeSystemRoleRequestSchema,
   createInvitationRequestSchema,
+  createTeamSpaceRequestSchema,
   INVITATION_STATUSES,
   invitationIdSchema,
   invitationListQuerySchema,
@@ -12,19 +20,34 @@ export {
   invitationSchema,
   issuedInvitationSchema,
   issuedPasswordResetSchema,
+  TRANSFER_MAX_DOCUMENTS,
+  transferDocumentsRequestSchema,
+  transferDocumentsResponseSchema,
+  transferTargetSchema,
 } from './admin/admin.ts'
 export type {
+  AdminSpace,
+  AdminSpaceListQuery,
+  AdminSpaceListResponse,
   AdminUser,
+  AdminUserDocument,
+  AdminUserDocumentListQuery,
+  AdminUserDocumentListResponse,
   AdminUserListQuery,
   AdminUserListResponse,
+  ChangeSpaceVisibilityRequest,
   ChangeSystemRoleRequest,
   CreateInvitationRequest,
+  CreateTeamSpaceRequest,
   Invitation,
   InvitationListQuery,
   InvitationListResponse,
   InvitationStatus,
   IssuedInvitation,
   IssuedPasswordReset,
+  TransferDocumentsRequest,
+  TransferDocumentsResponse,
+  TransferTarget,
 } from './admin/admin.ts'
 export { auditEventItemSchema, auditEventListResponseSchema, auditEventQuerySchema } from './audit/audit-query.ts'
 export type { AuditEventItem, AuditEventListResponse, AuditEventQuery } from './audit/audit-query.ts'
@@ -84,6 +107,7 @@ export {
   documentIdSchema,
   documentListQuerySchema,
   documentListResponseSchema,
+  documentSpaceSchema,
   documentSummarySchema,
   documentTitleSchema,
   PLATFORM_FORMAT_VERSION,
@@ -95,6 +119,7 @@ export type {
   DocumentListQuery,
   DocumentListResponse,
   DocumentProfile,
+  DocumentSpace,
   DocumentStatus,
   DocumentSummary,
   DocumentType,
@@ -108,8 +133,38 @@ export type { ErrorResponse } from './errors/error-response.ts'
 export { healthLiveResponseSchema, healthReadyResponseSchema } from './health/health.ts'
 export type { HealthLiveResponse, HealthReadyResponse } from './health/health.ts'
 export { CSRF_TOKEN_HEADER, REQUEST_ID_HEADER } from './http/headers.ts'
-export { SPACE_NAME_MAX_LENGTH, SPACE_STATUSES, SPACE_TYPES } from './spaces/spaces.ts'
-export type { SpaceStatus, SpaceType } from './spaces/spaces.ts'
+export { uuidSchema } from './ids/ids.ts'
+export {
+  addSpaceMemberRequestSchema,
+  changeSpaceMemberRoleRequestSchema,
+  renameSpaceRequestSchema,
+  SPACE_NAME_MAX_LENGTH,
+  SPACE_ROLES,
+  SPACE_STATUSES,
+  SPACE_TYPES,
+  spaceIdSchema,
+  spaceListResponseSchema,
+  spaceMemberListResponseSchema,
+  spaceMemberSchema,
+  spaceNameSchema,
+  spacePermissionsSchema,
+  spaceViewSchema,
+  teamSpaceSchema,
+} from './spaces/spaces.ts'
+export type {
+  AddSpaceMemberRequest,
+  ChangeSpaceMemberRoleRequest,
+  RenameSpaceRequest,
+  SpaceListResponse,
+  SpaceMember,
+  SpaceMemberListResponse,
+  SpacePermissions,
+  SpaceRole,
+  SpaceStatus,
+  SpaceType,
+  SpaceView,
+  TeamSpace,
+} from './spaces/spaces.ts'
 export { codePointLength, hasControlCharacters } from './text/text.ts'
 export {
   DISPLAY_NAME_MAX_LENGTH,

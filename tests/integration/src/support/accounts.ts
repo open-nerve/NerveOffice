@@ -50,3 +50,32 @@ export async function createAccount(database: TestDatabase, options: AccountOpti
     return { id, username: options.username, password, personalSpaceId }
   })
 }
+
+/** 不登录的账户（带个人空间） */
+export interface PassiveAccount {
+  readonly id: string
+  readonly username: string
+  readonly personalSpaceId: string
+}
+
+/**
+ * 不登录的账户：被加为成员、作为转移的目标。直接写库，密码哈希是登录不上的占位（满足 CHECK），不算 Argon2，
+ * 权限矩阵每一格要一个新的人时也快。
+ */
+export async function createPassiveAccount(database: TestDatabase, options: { readonly username: string, readonly displayName?: string, readonly status?: 'active' | 'disabled' }): Promise<PassiveAccount> {
+  return database.query(async (client) => {
+    const displayName = options.displayName ?? options.username
+    const user = await client.query<{ id: string }>(
+      'INSERT INTO users (username, display_name, password_hash, system_role, status) VALUES ($1, $2, \'$argon2id$passive\', \'member\', $3) RETURNING id',
+      [options.username, displayName, options.status ?? 'active'],
+    )
+    const id = user.rows[0]?.id
+    if (id === undefined)
+      throw new Error('建账户没有返回 id')
+    const space = await client.query<{ id: string }>('INSERT INTO spaces (type, name, owner_user_id) VALUES (\'personal\', $1, $2) RETURNING id', [displayName, id])
+    const personalSpaceId = space.rows[0]?.id
+    if (personalSpaceId === undefined)
+      throw new Error('建个人空间没有返回 id')
+    return { id, username: options.username, personalSpaceId }
+  })
+}

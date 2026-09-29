@@ -1,11 +1,12 @@
 // 危险操作的确认：先说清楚后果再执行；进行中不能重复提交、不能关闭；失败时弹窗留着说明原因；
-// 经请求缓存执行并标明只给系统管理员（审查 B4）；关闭之后焦点回到打开它的按钮，按钮不在了交给页面（审查 B9）。
+// 经请求缓存执行，管理界面标明只给系统管理员（审查 B4）；关闭之后焦点回到打开它的按钮，按钮不在了交给页面（审查 B9）。
 import type { PendingConfirmation } from './confirm-dialog.tsx'
 import { MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../shared/api/index.ts'
+import { SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
 import { ConfirmDialog } from './confirm-dialog.tsx'
 
 function confirmation(changes: Partial<PendingConfirmation> = {}): PendingConfirmation {
@@ -25,7 +26,7 @@ function Page({ pending: initial }: { readonly pending: PendingConfirmation }) {
       {opener && <button type="button" onClick={() => setPending({ ...initial, run: runThenRemoveOpener })}>打开</button>}
       <button type="button" onClick={() => setPending(initial)}>只打开</button>
       <input aria-label="别处" />
-      <ConfirmDialog pending={pending} onClose={() => setPending(undefined)} />
+      <ConfirmDialog pending={pending} onClose={() => setPending(undefined)} meta={SYSTEM_ADMIN_ONLY} />
     </>
   )
 }

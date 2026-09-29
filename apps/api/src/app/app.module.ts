@@ -13,6 +13,7 @@ import { HealthModule } from '../modules/health/index.ts'
 import { LoggingModule } from '../modules/logging/index.ts'
 import { SpacesModule } from '../modules/spaces/index.ts'
 import { UsersModule } from '../modules/users/index.ts'
+import { WorkspaceModule } from '../modules/workspace/index.ts'
 
 export type AdditionalModules = NonNullable<ModuleMetadata['imports']>
 
@@ -39,6 +40,7 @@ export class AppModule {
         UsersModule,
         AuthModule,
         DocumentsModule,
+        WorkspaceModule,
         AdminModule,
         ...(options.additionalModules ?? []),
       ],

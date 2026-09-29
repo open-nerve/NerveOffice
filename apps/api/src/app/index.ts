@@ -6,6 +6,8 @@ export type { AppConfig } from '../modules/config/index.ts'
 export { DATABASE, DatabaseModule, MigrationError, MIGRATIONS_FOLDER, readExpectedMigrations, runMigrations, TransactionRunner } from '../modules/database/index.ts'
 export type { Database, MigrationOutcome, SchemaStatus, Transaction } from '../modules/database/index.ts'
 export { AppLogger } from '../modules/logging/index.ts'
+// 集成测试的探针用：在一个事务里直接调用空间的服务（名称撞上唯一约束之后事务仍可继续，M2-P2 审查 A6）
+export { SpacesModule, SpacesService } from '../modules/spaces/index.ts'
 export type { AdminInitializationInput, InitializedAdmin } from '../modules/users/index.ts'
 export { AppError } from '../shared/errors/app-error.ts'
 export { Public } from '../shared/public.ts'

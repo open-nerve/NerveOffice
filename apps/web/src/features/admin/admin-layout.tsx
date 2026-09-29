@@ -10,6 +10,7 @@ import { sessionQueryOptions } from '../auth/index.ts'
 const TABS = [
   { to: ADMIN_PATHS.users, label: messages.admin.nav.users },
   { to: ADMIN_PATHS.invitations, label: messages.admin.nav.invitations },
+  { to: ADMIN_PATHS.spaces, label: messages.admin.nav.spaces },
   { to: ADMIN_PATHS.audit, label: messages.admin.nav.audit },
 ] as const
 

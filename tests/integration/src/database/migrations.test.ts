@@ -128,3 +128,46 @@ describe('0006_document_content', () => {
     expect(missingUnitId).toMatchObject({ code: '23502' })
   })
 })
+
+describe('0009_m2_team_spaces', () => {
+  it('P1 的库执行之后：个人空间照样满足约束、没有创建人，已有文档的写入代次为 0；团队空间与成员的约束生效', async () => {
+    const database = await emptyDatabase()
+    await runMigrations({ connectionString: database.url, lockTimeoutMs: 10_000, migrationsFolder: migrationsUpTo('0008_m2_accounts') })
+    const owner = await database.query(async (client) => {
+      const user = await client.query<{ id: string }>('INSERT INTO users (username, display_name, password_hash, system_role) VALUES (\'old\', \'old\', \'$argon2id$x\', \'admin\') RETURNING id')
+      const userId = user.rows[0]?.id ?? ''
+      const space = await client.query<{ id: string }>('INSERT INTO spaces (type, name, owner_user_id) VALUES (\'personal\', \'old\', $1) RETURNING id', [userId])
+      await client.query(
+        'INSERT INTO documents (space_id, type, title, created_by, unit_id, profile, format_version, sdk_version) VALUES ($1, \'sheet\', \'旧文档\', $2, \'unit\', \'sheet@1\', 1, \'1.0.1\')',
+        [space.rows[0]?.id, userId],
+      )
+      return { userId, spaceId: space.rows[0]?.id ?? '' }
+    })
+
+    expect(await migrateDatabase(database)).toMatchObject({ status: 'applied' })
+    const state = await database.query(async client => ({
+      spaces: (await client.query('SELECT type, status, created_by, visible_to_all FROM spaces')).rows,
+      epochs: (await client.query('SELECT write_epoch FROM documents')).rows,
+    }))
+    expect(state).toEqual({ spaces: [{ type: 'personal', status: 'active', created_by: null, visible_to_all: false }], epochs: [{ write_epoch: 0 }] })
+
+    const violation = async (text: string, values: unknown[] = []): Promise<unknown> => database.query(async client => client.query(text, values).then(() => undefined, (error: unknown) => error))
+    // 团队空间要有创建人、不能有所有者
+    expect(await violation('INSERT INTO spaces (type, name) VALUES (\'team\', \'市场部\')')).toMatchObject({ code: '23514', constraint: 'spaces_team_check' })
+    expect(await violation('INSERT INTO spaces (type, name, created_by, owner_user_id) VALUES (\'team\', \'市场部\', $1, $1)', [owner.userId])).toMatchObject({ code: '23514', constraint: 'spaces_team_check' })
+    // 个人空间不能归档，也没有创建人
+    expect(await violation('UPDATE spaces SET status = \'archived\' WHERE id = $1', [owner.spaceId])).toMatchObject({ code: '23514', constraint: 'spaces_personal_check' })
+    expect(await violation('UPDATE spaces SET created_by = owner_user_id WHERE id = $1', [owner.spaceId])).toMatchObject({ code: '23514', constraint: 'spaces_personal_check' })
+    // 团队空间的名称不区分大小写唯一，已归档的也算
+    const teamId = await database.query(async client => (await client.query<{ id: string }>(
+      'INSERT INTO spaces (type, name, created_by, status) VALUES (\'team\', \'Market\', $1, \'archived\') RETURNING id',
+      [owner.userId],
+    )).rows[0]?.id)
+    expect(await violation('INSERT INTO spaces (type, name, created_by) VALUES (\'team\', \'MARKET\', $1)', [owner.userId])).toMatchObject({ code: '23505', constraint: 'spaces_team_name_key' })
+    // 成员：角色只有三种，同一个人在一个空间里只有一行；写入代次不能为负
+    expect(await violation('INSERT INTO space_members (space_id, user_id, role) VALUES ($1, $2, \'owner\')', [teamId, owner.userId])).toMatchObject({ code: '23514', constraint: 'space_members_role_check' })
+    await database.query(async client => client.query('INSERT INTO space_members (space_id, user_id, role) VALUES ($1, $2, \'admin\')', [teamId, owner.userId]))
+    expect(await violation('INSERT INTO space_members (space_id, user_id, role) VALUES ($1, $2, \'viewer\')', [teamId, owner.userId])).toMatchObject({ code: '23505', constraint: 'space_members_pkey' })
+    expect(await violation('UPDATE documents SET write_epoch = -1')).toMatchObject({ code: '23514', constraint: 'documents_write_epoch_check' })
+  })
+})

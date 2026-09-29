@@ -3,7 +3,7 @@ import type { AuditEventItem } from '@nerve-office/contracts'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { apiError, installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
-import { AMY, deferred, EVENT, listPage, ROOT, session, settle } from './admin.test-support.ts'
+import { AMY, deferred, EVENT, listPage, ROOT, session, settle, SPACES } from './admin.test-support.ts'
 import { renderApp } from './render-app.test-support.tsx'
 
 const LIST = 'GET /api/admin/audit-events'
@@ -13,7 +13,7 @@ function event(index: number, changes: Partial<AuditEventItem> = {}): AuditEvent
 }
 
 function audit(handlers: Parameters<typeof installFakeApi>[0] = {}) {
-  return installFakeApi({ 'GET /api/auth/session': () => json(200, session('admin')), ...handlers })
+  return installFakeApi({ ...SPACES, 'GET /api/auth/session': () => json(200, session('admin')), ...handlers })
 }
 
 function requested(api: ReturnType<typeof installFakeApi>, key: string): boolean {
@@ -133,9 +133,12 @@ describe('管理界面：审计', () => {
     })
     renderApp('/admin/audit')
     await screen.findByRole('table', { name: '审计事件' })
+    // 状态容器一直在，内容变化时往里填文字：读屏才会播报（M2-P2 复验）
+    const status = screen.getByRole('status', { name: '' })
+    expect(status).toBeEmptyDOMElement()
     fireEvent.change(screen.getByLabelText('按名字找操作者'), { target: { value: '管' } })
     // 输入停下 300 毫秒之后才查找
-    expect(await screen.findByText('正在查找…', {}, { timeout: 2000 })).toHaveAttribute('role', 'status')
+    expect(await screen.findByText('正在查找…', {}, { timeout: 2000 })).toBe(status)
     candidates.resolve(json(200, listPage([ROOT])))
     const candidate = await within(await screen.findByRole('list', { name: '操作者' })).findByRole('button', { name: '管理员（root）' })
     candidate.focus()
@@ -163,6 +166,9 @@ describe('管理界面：审计', () => {
     await screen.findByRole('table', { name: '审计事件' })
     fireEvent.change(screen.getByLabelText('按名字找操作者'), { target: { value: 'zzz' } })
     expect(await screen.findByText('没有找到这个人')).toBeInTheDocument()
+    // 清空之后，防抖期间上一个关键词的结果不挂在空的输入框下面（M2-P2 审查 B11 的同类问题）
+    fireEvent.change(screen.getByLabelText('按名字找操作者'), { target: { value: '' } })
+    expect(screen.queryByText('没有找到这个人')).toBeNull()
 
     fireEvent.change(screen.getByLabelText('按名字找操作者'), { target: { value: 'amy' } })
     const alert = await screen.findByRole('alert')

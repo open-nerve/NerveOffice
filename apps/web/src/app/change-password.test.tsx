@@ -3,6 +3,7 @@ import type { SessionResponse } from '@nerve-office/contracts'
 import { fireEvent, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { apiError, installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
+import { spaceRoutes } from '../shared/testing/spaces.test-support.ts'
 import { renderApp } from './render-app.test-support.tsx'
 
 const SESSION: SessionResponse = {
@@ -24,6 +25,7 @@ function submit(): void {
 describe('修改密码页', () => {
   it('页头有入口；成功后清空表单，提示其他设备上的登录已经退出；请求带 CSRF 令牌', async () => {
     const api = installFakeApi({
+      ...spaceRoutes(SESSION),
       'GET /api/auth/session': () => json(200, SESSION),
       'PUT /api/auth/password': () => new Response(null, { status: 204 }),
     })
@@ -33,8 +35,9 @@ describe('修改密码页', () => {
     const button = screen.getByRole('button', { name: '修改密码' })
     button.focus()
     submit()
-    const changed = await screen.findByRole('status')
-    expect(changed).toHaveTextContent('密码已修改。你在其他设备上的登录已经退出。')
+    // 按文字找（页框的导航加载时也有 role="status" 的占位，M2-P2），提示条是它外层 role="status" 的元素
+    const changed = (await screen.findByText('密码已修改。你在其他设备上的登录已经退出。')).closest('[role="status"]')
+    expect(changed).not.toBeNull()
     expect(screen.getByLabelText('当前密码')).toHaveValue('')
     // 清空之后提交按钮变成 disabled：焦点移到成功的提示，不落到 body（审查 B9）
     expect(button).toBeDisabled()
@@ -45,7 +48,7 @@ describe('修改密码页', () => {
   })
 
   it('新密码太短、两次不一致：在前端就提示，不发请求', async () => {
-    const api = installFakeApi({ 'GET /api/auth/session': () => json(200, SESSION) })
+    const api = installFakeApi({ ...spaceRoutes(SESSION), 'GET /api/auth/session': () => json(200, SESSION) })
     renderApp('/settings/password')
     await screen.findByLabelText('当前密码')
     fill('old password', 'short', 'short')
@@ -59,6 +62,7 @@ describe('修改密码页', () => {
 
   it('当前密码不对：按错误码提示', async () => {
     installFakeApi({
+      ...spaceRoutes(SESSION),
       'GET /api/auth/session': () => json(200, SESSION),
       'PUT /api/auth/password': () => apiError(403, 'CURRENT_PASSWORD_INCORRECT'),
     })
@@ -71,6 +75,7 @@ describe('修改密码页', () => {
 
   it('尝试次数过多：按 Retry-After 提示几分钟后再试', async () => {
     installFakeApi({
+      ...spaceRoutes(SESSION),
       'GET /api/auth/session': () => json(200, SESSION),
       'PUT /api/auth/password': () => apiError(429, 'TOO_MANY_ATTEMPTS', '说明', { 'retry-after': '600' }),
     })

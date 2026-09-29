@@ -1,13 +1,14 @@
 // 编辑器页（P4 设计 §3.7）：载入、保存、会话。界面（editor-chrome.tsx）只订阅这里的状态；
 // 编辑器在 React 之外创建：一页一份文档，整页加载与卸载，不随组件的挂载与卸载反复创建（计划书 §10.2）。
-import type { DocumentDetail, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
+import type { DocumentDetail, DocumentSpace, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
 import type { CreateSheetEditorOptions, SheetEditor, SheetEditorLifecycle } from '../../editor/index.ts'
+import type { ApiError } from '../../shared/api/index.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
 import type { LoadedContent } from './editor-api.ts'
 import type { SaveCoordinator, SaveRequest, SaveView } from './save-coordinator.ts'
 import { DOCUMENT_PROFILES, PLATFORM_FORMAT_VERSIONS } from '@nerve-office/contracts'
-import { ApiError, isAuthenticationError, setCsrfToken } from '../../shared/api/index.ts'
+import { isAuthenticationError, isMissingResource, setCsrfToken } from '../../shared/api/index.ts'
 import { loginPath } from '../../shared/lib/login-path.ts'
 import { blockInteractions } from './interaction-barrier.ts'
 import { createSaveCoordinator } from './save-coordinator.ts'
@@ -15,7 +16,7 @@ import { createSaveCoordinator } from './save-coordinator.ts'
 /** 载入的结果：就绪（可以编辑）、内容不存在或无权访问、格式不认识、请求失败、编辑器加载失败。 */
 export type EditorPageLoad
   = | { readonly kind: 'loading' }
-    | { readonly kind: 'ready', readonly title: string, readonly readOnly: boolean, readonly stage: SheetEditorLifecycle }
+    | { readonly kind: 'ready', readonly title: string, readonly space: DocumentSpace, readonly readOnly: boolean, readonly stage: SheetEditorLifecycle }
     | { readonly kind: 'not-found' }
     | { readonly kind: 'unsupported' }
     | { readonly kind: 'failed', readonly error: unknown }
@@ -93,11 +94,6 @@ type SurfaceState = 'loading' | 'ready' | 'steady' | 'failed'
 function isKnownFormat(document: DocumentDetail): boolean {
   return (DOCUMENT_PROFILES as readonly string[]).includes(document.profile)
     && (PLATFORM_FORMAT_VERSIONS as readonly number[]).includes(document.formatVersion)
-}
-
-/** 读取时得到这些错误码：内容不存在或无权访问（两者相同，US-M1-08）；地址里的 id 不合法也按不存在处理 */
-function isMissing(error: unknown): boolean {
-  return error instanceof ApiError && (error.code === 'NOT_FOUND' || error.code === 'REQUEST_INVALID')
 }
 
 export function createEditorPage(options: EditorPageOptions): EditorPage {
@@ -181,7 +177,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   function loadFailed(error: unknown): void {
     if (isAuthenticationError(error))
       leaveToLogin(error)
-    else if (isMissing(error))
+    // 内容不存在或无权访问（两者相同，US-M1-08）；地址里的 id 不合法也按不存在处理
+    else if (isMissingResource(error))
       finish({ kind: 'not-found' })
     else
       finish({ kind: 'failed', error })
@@ -337,7 +334,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       cleanups.push(coordinator.subscribe(update))
     }
     const enter = (stage: SheetEditorLifecycle): void => {
-      load = { kind: 'ready', title: document.title, readOnly, stage }
+      load = { kind: 'ready', title: document.title, space: document.space, readOnly, stage }
       // 渲染完成之后可以输入（ready）；steady 之后才判断"打开是否被判定为有修改"
       setSurface(stage === 'steady' ? 'steady' : 'ready')
       update()
