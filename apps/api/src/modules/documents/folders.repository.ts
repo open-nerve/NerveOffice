@@ -39,6 +39,13 @@ export interface SubtreeSummary {
   readonly ids: string[]
 }
 
+/** 拼路径要用的一个文件夹（M2-P4 设计 §3.4 第 5 条）：它自己的名称与父文件夹。 */
+export interface FolderAncestorRow {
+  readonly id: string
+  readonly parentId: string | null
+  readonly name: string
+}
+
 /** 把一棵子树整个挪走：换父文件夹、整棵加上层差，跨空间时连所属空间一起改。 */
 export interface SubtreeMove {
   readonly rootId: string
@@ -73,6 +80,11 @@ function subtreeQuery(rootId: string, projection: SQL): SQL {
     UNION ALL
     SELECT child.id, child.depth FROM ${f} AS child JOIN subtree ON child.parent_id = subtree.id
   ) ${projection}`
+}
+
+/** 一串 id 拼成 SQL 的值列表（`$1::uuid, $2::uuid, …`）：给别名过的表写条件时用，`inArray` 只会写出主表的列名。 */
+function idList(ids: readonly string[]): SQL {
+  return sql.join(ids.map(id => sql`${id}::uuid`), sql`, `)
 }
 
 /** 只有它读写 folders（规范 §1.2）。空间树的串行化见 space-tree.repository.ts。 */
@@ -184,6 +196,27 @@ export class FoldersRepository {
   /** 属于这个删除单元的全部文件夹（恢复与永久删除按它取出整棵子树），按层数从浅到深。 */
   async listInEntry(trashEntryId: string, transaction: Transaction): Promise<FolderRow[]> {
     return executorOf(this.db, transaction).select(COLUMNS).from(f).where(eq(f.trashEntryId, trashEntryId)).orderBy(asc(f.depth), asc(f.id))
+  }
+
+  /**
+   * 这些文件夹连同它们的全部祖先（M2-P4 设计 §3.4 第 5 条）：搜索结果的路径由它一次取齐。
+   * 一条语句、一次往返：按 id 批量给出起点，父链在数据库里一次走完（层数至多 FOLDER_MAX_DEPTH，
+   * 有 CHECK 兜住），既不按结果条数一条条查，也不按层数来回查；拼成名称数组在内存里做（folder-path.ts）。
+   * 起点与每一级祖先都限定在调用者看得到的空间里（设计 §3.5）：万一有哪一行的父文件夹在别的空间里，
+   * 那个空间的名称也不会顺着父链漏出来。UNION 去重：多条路径共用祖先时不会重复展开
+   */
+  async ancestorsOf(ids: readonly string[], spaceIds: readonly string[]): Promise<FolderAncestorRow[]> {
+    if (ids.length === 0 || spaceIds.length === 0)
+      return []
+    const visible = idList(spaceIds)
+    const query = sql`WITH RECURSIVE ancestors(id, parent_id, name) AS (
+      SELECT ${f.id}, ${f.parentId}, ${f.name} FROM ${f}
+        WHERE ${f.id} IN (${idList(ids)}) AND ${f.spaceId} IN (${visible})
+      UNION
+      SELECT parent.id, parent.parent_id, parent.name FROM ${f} AS parent
+        JOIN ancestors ON parent.id = ancestors.parent_id AND parent.space_id IN (${visible})
+    ) SELECT id, parent_id AS "parentId", name FROM ancestors`
+    return (await this.db.execute<{ id: string, parentId: string | null, name: string }>(query)).rows
   }
 
   /** 按 id 取这些文件夹里正常状态的那些的名称（回收站列表里"原位置"的显示名）。 */

@@ -6,6 +6,7 @@ import { Inject, Injectable } from '@nestjs/common'
 import { and, asc, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm'
 import { documents } from '../../db/schema/documents/index.ts'
 import { DATABASE, executorOf, keysetPosition } from '../database/index.ts'
+import { TITLE_SEARCH_ESCAPE } from './title-search.ts'
 
 export interface DocumentRow {
   readonly id: string
@@ -56,6 +57,15 @@ export interface ListOptions {
   readonly after?: TimeCursor | undefined
   /** 按目录过滤：省略（undefined）表示不按目录过滤，null 表示空间的根目录，字符串表示某个文件夹 */
   readonly folderId?: string | null | undefined
+}
+
+/** 按标题搜索的条件与分页（M2-P4 设计 §3.4 第 5 条）：排序与分页与列表一样，多一个标题的条件。 */
+export interface SearchOptions {
+  readonly limit: number
+  /** 上一页最后一条的位置（keyset） */
+  readonly after?: TimeCursor | undefined
+  /** 已经转义好、前后带通配符的 LIKE 模式（title-search.ts） */
+  readonly titlePattern: string
 }
 
 /** 一份文档与它所属的删除单元（正常状态时为空）：跨空间移动、删除与永久删除都要顺着它找到删除单元。 */
@@ -118,6 +128,26 @@ export class DocumentsRepository {
       .where(and(
         accessible(scope),
         inFolder(options.folderId),
+        after === undefined ? undefined : sql`(${d.updatedAt}, ${d.id}) < (${after.position}::timestamptz, ${after.id}::uuid)`,
+      ))
+      .orderBy(desc(d.updatedAt), desc(d.id))
+      .limit(options.limit)
+  }
+
+  /**
+   * 标题里包含关键词的可访问文档，排序与分页与列表完全一致（M2-P4 设计 §3.4 第 5 条）。
+   * 范围与状态仍然只由 accessible 给出（回收站里的因此不会出现，P5 的单独授权也只改那一处）；
+   * 大小写不敏感由两边一起 lower() 做；关键词里的 `\`、`%`、`_` 由调用方转义好，这里显式写出配套的 ESCAPE。
+   * 本版不建 pg_trgm 索引（设计 §3.4 第 5 条已登记延期项，M7 压测时复核）
+   */
+  async searchByTitle(scope: AccessibleScope, options: SearchOptions): Promise<DocumentRow[]> {
+    const { after } = options
+    return this.db
+      .select(COLUMNS)
+      .from(d)
+      .where(and(
+        accessible(scope),
+        sql`lower(${d.title}) LIKE lower(${options.titlePattern}) ESCAPE ${TITLE_SEARCH_ESCAPE}`,
         after === undefined ? undefined : sql`(${d.updatedAt}, ${d.id}) < (${after.position}::timestamptz, ${after.id}::uuid)`,
       ))
       .orderBy(desc(d.updatedAt), desc(d.id))

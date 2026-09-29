@@ -8,8 +8,8 @@ import type { SpaceFacts, SpacesService } from '../spaces/index.ts'
 import type { Actor } from './document-access-policy.ts'
 import type { CurrentContent, DocumentContentsRepository, StoredSnapshot } from './document-contents.repository.ts'
 import type { DocumentRevisionsRepository, NewRevision, RevisionRow } from './document-revisions.repository.ts'
-import type { AccessibleScope, CopiedDocument, DocumentRow, DocumentsRepository, ListOptions, NewDocument } from './documents.repository.ts'
-import type { FolderRow, FoldersRepository, NewFolder, SubtreeMove, SubtreeSummary } from './folders.repository.ts'
+import type { AccessibleScope, CopiedDocument, DocumentRow, DocumentsRepository, ListOptions, NewDocument, SearchOptions } from './documents.repository.ts'
+import type { FolderAncestorRow, FolderRow, FoldersRepository, NewFolder, SubtreeMove, SubtreeSummary } from './folders.repository.ts'
 import type { SpaceTreeRepository } from './space-tree.repository.ts'
 import type { NewTrashEntry, TrashEntriesRepository, TrashEntryRow } from './trash-entries.repository.ts'
 import type { WriteAccessRevocation, WriteAccessScope } from './write-access.ts'
@@ -30,6 +30,15 @@ const NOW = new Date('2026-09-27T08:00:00.000Z')
 /** 普通成员作为调用者 */
 export function member(userId: string): Actor {
   return { userId, systemAdmin: false }
+}
+
+/**
+ * 假仓储把 LIKE 的模式还原成关键词：去掉前后的通配符与转义符。
+ * 内存里按"标题包含关键词、不区分大小写"匹配，正是这条模式要表达的语义；
+ * PostgreSQL 的 LIKE 与 ESCAPE 本身由集成测试对着数据库覆盖
+ */
+function keywordOf(pattern: string): string {
+  return pattern.slice(1, -1).replace(/\\(.)/gu, '$1').toLowerCase()
 }
 
 interface FakeSpace {
@@ -146,6 +155,17 @@ export class FakeStore {
         [...this.documents.values()]
           .filter(row => scope.spaceIds.includes(row.spaceId) && (this.entryOfDocument(row.id) === null) === (scope.state === 'active'))
           .slice(0, options.limit)),
+      /** 按标题搜索：范围与状态同上，再按关键词过滤，按位置从新到旧排序并从游标之后开始 */
+      searchByTitle: vi.fn(async (scope: AccessibleScope, options: SearchOptions) => {
+        const keyword = keywordOf(options.titlePattern)
+        const { after } = options
+        return [...this.documents.values()]
+          .filter(row => scope.spaceIds.includes(row.spaceId) && (this.entryOfDocument(row.id) === null) === (scope.state === 'active'))
+          .filter(row => row.title.toLowerCase().includes(keyword))
+          .toSorted((a, b) => b.position.localeCompare(a.position) || b.id.localeCompare(a.id))
+          .filter(row => after === undefined || row.position < after.position || (row.position === after.position && row.id < after.id))
+          .slice(0, options.limit)
+      }),
       insert: vi.fn(async (document: NewDocument) => this.addDocument({ ...document, revision: 1 })),
       rename: vi.fn(async (id: string, title: string) => this.updateDocument(id, { title })),
       moveToFolder: vi.fn(async (id: string, folderId: string | null) => this.updateDocument(id, { folderId })),
@@ -293,6 +313,18 @@ export class FakeStore {
       listInEntry: vi.fn(async (trashEntryId: string) => [...this.folders.values()]
         .filter(row => this.entryOfFolder(row.id) === trashEntryId)
         .toSorted((a, b) => a.depth - b.depth || a.id.localeCompare(b.id))),
+      /** 这些文件夹连同它们的全部祖先，只取看得到的空间里的（与真实仓储一样，父链在别的空间里就断在那里） */
+      ancestorsOf: vi.fn(async (ids: readonly string[], spaceIds: readonly string[]): Promise<FolderAncestorRow[]> => {
+        const found = new Map<string, FolderAncestorRow>()
+        for (const id of ids) {
+          let current = this.folders.get(id)
+          while (current !== undefined && spaceIds.includes(current.spaceId) && !found.has(current.id)) {
+            found.set(current.id, { id: current.id, parentId: current.parentId, name: current.name })
+            current = current.parentId === null ? undefined : this.folders.get(current.parentId)
+          }
+        }
+        return [...found.values()]
+      }),
       /** 这些文件夹里正常状态的那些的名称 */
       activeNamesOf: vi.fn(async (ids: readonly string[], spaceId: string) => new Map([...this.folders.values()]
         .filter(row => ids.includes(row.id) && row.spaceId === spaceId && this.entryOfFolder(row.id) === null)

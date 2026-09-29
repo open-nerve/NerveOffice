@@ -5,6 +5,7 @@ export {
   requireSpaceManagement,
 } from './document-access-policy.ts'
 export type { Actor, SpaceAccess, SpaceContentAccess } from './document-access-policy.ts'
+export { DocumentSearchService } from './document-search.service.ts'
 export { DocumentTransferService } from './document-transfer.service.ts'
 export { DocumentsModule } from './documents.module.ts'
 export { FoldersService } from './folders.service.ts'

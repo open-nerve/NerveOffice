@@ -10,6 +10,7 @@ import { DocumentCopyService } from './document-copy.service.ts'
 import { DocumentCreationService } from './document-creation.service.ts'
 import { DocumentOrganizingService } from './document-organizing.service.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
+import { DocumentSearchService } from './document-search.service.ts'
 import { DocumentTransferService } from './document-transfer.service.ts'
 import { DocumentsController } from './documents.controller.ts'
 import { DocumentsRepository } from './documents.repository.ts'
@@ -37,6 +38,7 @@ import { LeaselessWriteAccessRevocation, WriteAccessRevocation } from './write-a
     DocumentContentService,
     DocumentOrganizingService,
     DocumentCopyService,
+    DocumentSearchService,
     DocumentTransferService,
     FoldersService,
     TrashService,
@@ -47,7 +49,8 @@ import { LeaselessWriteAccessRevocation, WriteAccessRevocation } from './write-a
     { provide: WriteAccessRevocation, useClass: LeaselessWriteAccessRevocation },
   ],
   // 空间的接口（workspace）与系统管理（admin）经访问策略授权、经这个入口收回写入权；admin 转移停用者的文档；
-  // 文件夹的接口在 workspace（M2-P4 设计 §3.1），数据与规则在这里；到期的自动清理只给 jobs（M2-P4 设计 §3.1）
-  exports: [DocumentAccessPolicy, WriteAccessRevocation, DocumentTransferService, FoldersService, TrashService, TrashPurgeService],
+  // 文件夹、回收站与搜索的接口在 workspace（M2-P4 设计 §3.1），数据与规则在这里；
+  // 到期的自动清理只给 jobs（M2-P4 设计 §3.1）
+  exports: [DocumentAccessPolicy, WriteAccessRevocation, DocumentSearchService, DocumentTransferService, FoldersService, TrashService, TrashPurgeService],
 })
 export class DocumentsModule {}

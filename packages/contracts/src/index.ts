@@ -169,6 +169,14 @@ export type { HealthLiveResponse, HealthReadyResponse } from './health/health.ts
 export { CSRF_TOKEN_HEADER, REQUEST_ID_HEADER } from './http/headers.ts'
 export { uuidSchema } from './ids/ids.ts'
 export {
+  SEARCH_PAGE_SIZE,
+  searchKeywordSchema,
+  searchQuerySchema,
+  searchResponseSchema,
+  searchResultSchema,
+} from './search/search.ts'
+export type { SearchQuery, SearchResponse, SearchResult } from './search/search.ts'
+export {
   addSpaceMemberRequestSchema,
   changeSpaceMemberRoleRequestSchema,
   renameSpaceRequestSchema,
