@@ -1,8 +1,8 @@
 // 内部 API 登记表（P4 设计 §3.6.9，ADR-010，规范 §2.5"内部 API 集中封装并登记，每一项都有回归用例"）。
-// internal-api/index.ts 导出的每一项在这里登记一次：来自哪里、做什么用、M0 的证据、升级 SDK 时先跑的回归用例。
+// internal-api 的两个出口（index.ts 与界面的 ui.ts）导出的每一项在这里登记一次：来自哪里、做什么用、M0 的证据、升级 SDK 时先跑的回归用例。
 // 单元测试核对导出与登记一一对应（registry.test.ts）；新增一项时，先写回归用例，再登记
 export interface InternalApiEntry {
-  /** internal-api/index.ts 导出的名字 */
+  /** internal-api/index.ts 或 ui.ts 导出的名字 */
   readonly name: string
   /** 来自哪个包、是什么（SDK 的符号，或平台对 SDK 内部约定的封装） */
   readonly origin: string
@@ -18,6 +18,10 @@ const IMAGE_POLICY_REGRESSION = '单元测试 image-function/restricted-image-fu
 /** 查看者的只读加固（M2-P3）：只读守卫与授权服务共用的回归 */
 const READ_ONLY_E2E = 'E2E tests/e2e/specs/editor/read-only.spec.ts（M2-P3 S3，US-M2-11）：查看者打开样本，M0 的 28 个表格编辑入口逐项无效（本机三个浏览器，公式在 Worker 里），同一批入口在能编辑时确实改动；还能切换工作表、选中、复制、查找；进入只读不产生 mutation、不写保护类资源'
 const READ_ONLY_GUARD_REGRESSION = `单元测试 read-only/read-only-guard.test.ts；${READ_ONLY_E2E}`
+/** 编辑栏的编辑器被聚焦就放开（P3 审查 A1）：单元测试与 E2E */
+const FORMULA_BAR_RELEASE_REGRESSION = '单元测试 read-only/formula-bar.test.ts（焦点落到编辑栏的编辑器时放开、别的编辑器不管）、read-only-guard.test.ts；E2E tests/e2e/specs/editor/read-only.spec.ts"编辑栏点不进去"（点编辑框、从名称框按下在编辑框上松开之后，查找与方向键照常，编辑栏没有收到输入；本机三个浏览器）'
+/** 冻结线拖不动（P3 审查 B2）：单元测试与 E2E */
+const FREEZE_LOCK_REGRESSION = '单元测试 read-only/freeze-handles.test.ts、read-only-guard.test.ts；E2E tests/e2e/specs/editor/read-only.spec.ts"拖动冻结线"（只读时光标不是可拖动的 grab、没有 set-frozen、冻结不变；能编辑时的对照冻结确实改变）'
 /** M0 的只读（阅读模式）验证：本地权限点加 mutation 防火墙 */
 const M0_READ_MODE_EVIDENCE = 'M0-P3 报告 §5（V09：本地权限点加 mutation 防火墙，表格 28 个入口在三个浏览器、含公式 Worker 模式全部拦住；只靠权限点漏掉 9 个）、§7（内部 API 登记）；M0 的 harness/read-mode.ts'
 
@@ -25,7 +29,7 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
   {
     name: 'injectorOf',
     origin: '@univerjs/core 的 Univer.__getInjector()（平台的封装）',
-    purpose: '取 Facade 没有暴露的服务：IFunctionService、IActiveDirtyManagerService，Worker 里的 LifecycleService，以及只读守卫的 IPermissionService、IUndoRedoService、IDrawingManagerService',
+    purpose: '取 Facade 没有暴露的服务：IFunctionService、IActiveDirtyManagerService，Worker 里的 LifecycleService，以及只读守卫的 IPermissionService、IUndoRedoService、IDrawingManagerService、IRenderManagerService、IEditorService、IContextService',
     evidence: 'M0-P3 报告 §7"取服务"；M0 的 create-editor.ts 经它取各项内部服务；P4 探针 (a)–(f) 全程使用',
     regression: 'E2E（S4）编辑器能打开并就绪：任何一处取服务失败都会按加载失败处理；单元测试 install-image-policy.test.ts、calculation-trigger.test.ts 核对取的是哪项服务',
   },
@@ -129,6 +133,58 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
       '修复时实测：sheets-ui 的 disableEdit 不行（单元格编辑器不渲染，复制与方向键失效；编辑框外层写着 pointer-events: auto，FormulaBar.tsx:374，照样点得进去）；拦下指针事件之后点编辑栏不再聚焦，查找、复制照常',
     ].join(''),
     regression: `单元测试 read-only/formula-bar.test.ts；${READ_ONLY_E2E}（编辑栏点不进去；点过编辑栏、在单元格上键入之后查找与复制照常）`,
+  },
+  {
+    name: 'IEditorService',
+    origin: '@univerjs/docs-ui 的编辑器管理服务（Facade 之外）',
+    purpose: '只读守卫（read-only/formula-bar.ts 的 releaseFormulaBarEditor）：订阅 focus$，焦点落到编辑栏的编辑器（getFocusId）时 blur(true) 放开；依赖的约定是 focus 先记下焦点再送出 focus$，blur 复位 EDITOR_ACTIVATED 等上下文、移走 DOM 焦点、把当前文档换回聚焦之前的',
+    evidence: [
+      'P3 审查 A1：在别处按下、在编辑框上松开，sheets-formula-ui 的编辑框自己的 onMouseUp（views/formula-editor/index.tsx:535-549、hooks/use-focus.ts:60）经这个服务聚焦编辑栏，',
+      'EDITOR_ACTIVATED 置为真，查找与方向键失效（三个浏览器复现）；docs-ui 的 services/editor/editor-manager.service.ts（1.0.1 的 lib/es/index.js:4501-4534：',
+      'focus 先 _setFocusId 再 _focus$.next，blur 复位 EDITOR_ACTIVATED、FOCUSING_EDITOR_STANDALONE、FOCUSING_COMMENT_EDITOR，编辑器的 blur 让输入元素失去焦点，',
+      'preserveHostFocus 的编辑栏换回原来的当前文档）；编辑框的 useRefactorEffect 在 React 提交之后再置一次 EDITOR_ACTIVATED（sheets-formula-ui 的 lib/es/index.js:2872-2889），所以在微任务里放开',
+    ].join(''),
+    regression: FORMULA_BAR_RELEASE_REGRESSION,
+  },
+  {
+    name: 'IContextService',
+    origin: '@univerjs/core 的上下文服务（Facade 之外）',
+    purpose: '只读守卫放开编辑栏时把 FOCUSING_FX_BAR_EDITOR 复位为假',
+    evidence: 'core 的 services/context/context.service.ts；sheets-ui 结束编辑时复位的正是 FOCUSING_EDITOR_INPUT_FORMULA、EDITOR_ACTIVATED、FOCUSING_FX_BAR_EDITOR（editing.render-controller.ts:870-874，1.0.1 的 lib/es/index.js:11846-11848）',
+    regression: FORMULA_BAR_RELEASE_REGRESSION,
+  },
+  {
+    name: 'FOCUSING_FX_BAR_EDITOR',
+    origin: '@univerjs/core 的上下文键：编辑栏正被聚焦（SDK 的常量）',
+    purpose: '只读守卫放开编辑栏时复位它：FormulaBar 在编辑框上按下时置为真；它为真时表格的方向键、查找等快捷键不生效，编辑栏的编辑框会反复重新聚焦',
+    evidence: 'sheets-ui 的 views/formula-bar/FormulaBar.tsx:252-262（1.0.1 的 lib/es/index.js:22123-22145），whenSheetEditorFocused 要求它为假（:55），结束编辑时复位（:11848）；sheets-formula-ui 的编辑框按它（isFocus）重新聚焦（lib/es/index.js:6774-6809）',
+    regression: FORMULA_BAR_RELEASE_REGRESSION,
+  },
+  {
+    name: 'DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY',
+    origin: '@univerjs/core 的常量：编辑栏内部编辑器的单元 id（"__INTERNAL_EDITOR__DOCS_FORMULA_BAR"）',
+    purpose: '只读守卫认出焦点落在编辑栏的编辑器上（IEditorService.getFocusId）',
+    evidence: 'sheets-ui 的 FormulaBar.tsx 把它作为编辑框的 editorId（1.0.1 的 lib/es/index.js:22203），sheets-formula-ui 的编辑框按它注册编辑器（lib/es/index.js:6697-6700）；P3 审查 A1 的探查：聚焦之后的活动元素是 #__editor___INTERNAL_EDITOR__DOCS_FORMULA_BAR',
+    regression: FORMULA_BAR_RELEASE_REGRESSION,
+  },
+  {
+    name: 'IRenderManagerService',
+    origin: '@univerjs/engine-render 的渲染管理服务（Facade 之外）',
+    purpose: '只读守卫（read-only/freeze-handles.ts）：按 unitId 取这份文档的渲染单元（getRenderUnitById），再取它的冻结线控制器',
+    evidence: 'engine-render 的 render-manager/render-manager.service.ts、render-unit.ts（1.0.1 的 lib/es/index.js:38583-38585 with 取渲染单元里的实例，38736-38743 渲染模块注册时加进已有的渲染单元）；P3 审查 B2',
+    regression: FREEZE_LOCK_REGRESSION,
+  },
+  {
+    name: 'HeaderFreezeRenderController',
+    origin: '@univerjs/sheets-ui 的冻结线渲染控制器（渲染模块，Facade 之外）',
+    purpose: '只读守卫：在它的拦截点 FREEZE_PERMISSION_CHECK 上注册总是不允许的拦截器，冻结线移上不显示可拖动的光标、按下不开始拖动',
+    evidence: [
+      'P3 审查 B2：只读时冻结线照样拖得动，set-frozen 被防火墙取消，界面上的冻结线停在拖到的位置。',
+      '根因：sheets-ui 的 controllers/render-controllers/freeze.render-controller.ts 在移上、按下与拖动时问 FREEZE_PERMISSION_CHECK（1.0.1 的 lib/es/index.js:14182、14306、14325、14399、14415），',
+      '按权限拦它的 SheetPermissionInterceptorCanvasRenderController._initFreezePermissionInterceptor（:32070-32077）没有被调用（构造函数只调用了另外四个，:31973-31976）；',
+      '冻结线控制器在插件的 onRendered 才注册为渲染模块（:36024-36088），所以就绪时装上',
+    ].join(''),
+    regression: FREEZE_LOCK_REGRESSION,
   },
   {
     name: 'LifecycleService',

@@ -33,8 +33,9 @@ const READ_ONLY = '这份文档只能查看，'
  * （"该范围已被保护，目前无……权限。如需……，请联系创建者。"），而平台不用 SDK 的保护：保护的入口都隐藏（menu-config.ts），
  * 保护类资源必须为空、写入被拒绝（插件档案 v1 §3），所以这些提示只会在只读时出现（授权服务与只读守卫把权限点设为不允许）。
  * 键名按 1.0.1 的安装包核对（各包 locale/zh-CN 的 permission.dialog）；复制在两种打开方式都允许，
- * copyErr、workbookCopyErr 在平台里走不到，改成中性的说法。筛选与超链接的提示（"你没有权限……"）没有提保护，不改。
- * 只合并这些键，保护面板等其他文字不动
+ * copyErr、workbookCopyErr 在平台里走不到，改成中性的说法。筛选按钮的提示（sheets-filter-ui 的 permission.filterErr，
+ * 原文"你没有权限使用筛选。"）同样改成只读的说法（P3 审查 B8）；超链接的提示（hyperLinkErr）走不到（插入链接在 M5 之前被入口守卫取消，
+ * 早于权限检查），不改。只合并这些键，保护面板等其他文字不动
  */
 export const READ_ONLY_PERMISSION_TEXTS: ILanguagePack = {
   'sheets': {
@@ -72,6 +73,7 @@ export const READ_ONLY_PERMISSION_TEXTS: ILanguagePack = {
   'sheets-drawing-ui': { permission: { dialog: { editErr: `${READ_ONLY}不能修改图片。` } } },
   'sheets-conditional-formatting-ui': { permission: { dialog: { setStyleErr: `${READ_ONLY}不能修改条件格式。` } } },
   'sheets-data-validation-ui': { permission: { dialog: { setStyleErr: `${READ_ONLY}不能修改数据验证。` } } },
+  'sheets-filter-ui': { permission: { filterErr: `${READ_ONLY}不能使用筛选。` } },
 }
 
 function isPack(value: LanguageValue | undefined): value is ILanguagePack {

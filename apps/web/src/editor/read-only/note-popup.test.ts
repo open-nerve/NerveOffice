@@ -35,6 +35,32 @@ describe('只读时批注浮层的文本框设为只读（SDK 的 DOM 标记 dat
     stop()
   })
 
+  it('插进已有容器深处的也设为只读（SDK 的弹出层挂在已有的节点下）', async () => {
+    const layer = document.createElement('div')
+    layer.innerHTML = '<div class="popup-layer"><section><div class="slot"></div></section></div>'
+    document.body.append(layer)
+    const stop = lockNotePopups()
+    const slot = layer.querySelector('.slot')
+    if (slot === null)
+      throw new Error('没有造出弹出层')
+    const deep = textarea('note-textarea')
+    slot.append(deep)
+    await mutationsDelivered()
+    expect(deep.readOnly).toBe(true)
+    stop()
+  })
+
+  it('去掉调整大小的拖柄（P3 审查 A6：只读时拖得动，批注的尺寸却不会保存）', async () => {
+    const existing = textarea('note-textarea')
+    document.body.append(existing)
+    const stop = lockNotePopups()
+    const later = textarea('note-textarea')
+    document.body.append(later)
+    await mutationsDelivered()
+    expect([existing.style.resize, later.style.resize]).toEqual(['none', 'none'])
+    stop()
+  })
+
   it('别的文本框不动（SDK 自己的 textarea、平台的输入框）', async () => {
     const stop = lockNotePopups()
     const other = textarea('textarea')
@@ -42,6 +68,7 @@ describe('只读时批注浮层的文本框设为只读（SDK 的 DOM 标记 dat
     document.body.append(other, plain)
     await mutationsDelivered()
     expect([other.readOnly, plain.readOnly]).toEqual([false, false])
+    expect([other.style.resize, plain.style.resize]).toEqual(['', ''])
     stop()
   })
 

@@ -3,28 +3,33 @@
 // 逐项试 M0 的 28 个表格编辑入口（M0-P3 报告 §5）与界面上还能碰到的入口：
 // - 画布上的内容读不出来：比较测试构建的探针给出的内存快照（support/editor-probe.ts，比较的口径见 contentOf）；
 // - 每项都等到确定的信号再比较，不用固定时长的等待：命令被只读守卫取消、被 SDK 的权限检查拦下（它弹出提示，关掉），或者执行完；
-//   只读时根本没有控制点的手势（填充柄、行高的分隔线）不产生命令，之后再点一个单元格，等名称框显示它（界面的输入按顺序处理）；
-// - 对照：作者（能编辑）逐项做同样的事，每项确实改动了内存快照（每项用新写的文档），只读时的"没变"才不是空断言；
-// - 另有界面的隐藏（同样以作者的界面作对照）、还能读、打开不产生改动、服务端拒绝保存、归档空间。
-// S3 的 E2E 发现的 5 个问题修复之后（只读守卫 editor/read-only/、语言包 editor/profile/locale.ts）：编辑栏点不进去（点过之后查找、
-// 复制照常）；拦下操作的提示是只读的说法；浮动图片点不中、拖不动；只读时打不开替换；批注浮层的文本框只读。
-// 用到探针（只在测试构建里）：标签 @test-build，外部模式测生产镜像时按标签排除（playwright.config.ts）。
+//   只读时没有控制点的手势（填充柄、非冻结区域的行高分隔线、冻结线、浮动图片）不产生命令：先确认没有意外弹出的提示，再点一个单元格，
+//   等名称框显示它（界面的输入按顺序处理）。冻结区域的行高分隔线不同：SDK 在那里仍显示调整的光标，拖动之后被权限检查拦下、
+//   弹出只读的提示（与非冻结区域不一致，已写入上游报告），同样核对数据不变；
+// - 对照：作者（能编辑）逐项做同样的事，每项确实改动了内存快照（每项用新写的文档，并行执行），只读时的"没变"才不是空断言；
+// - 另有界面的隐藏（同样以作者的界面作对照）、还能读、打开不产生改动、服务端拒绝保存、公式在 Worker 里算出结果、归档空间。
+// S3 的 E2E 发现的 5 个问题与 P3 审查之后的修复（只读守卫 editor/read-only/、语言包 editor/profile/locale.ts）：编辑栏点不进去
+// （点编辑框、从别处按下在编辑框上松开之后，查找、复制、方向键照常）；拦下操作的提示是只读的说法（含筛选按钮）；浮动图片点不中、
+// 拖不动；冻结线拖不动；只读时打不开替换；批注浮层的文本框只读。
+// Univer 自己的快捷键按页面的平台判断取修饰键（support/keyboard.ts：Linux 上的 WebKit 也报 Mac 的 UA）。
+// 用到探针（只在测试构建里）：标签 @test-build，外部模式测生产镜像时按标签排除（playwright.config.ts）；
+// 文件末尾的冒烟用例不用探针，生产镜像上也跑（容器 E2E）。
 import type { BrowserContext, Locator, Page } from '@playwright/test'
 import type { TestUser } from '../../support/database.ts'
 import type { FacadeScope, ProbeCommand } from '../../support/editor-probe.ts'
 import type { Workbook } from '../../support/sheet.ts'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
-import process from 'node:process'
 import zlib from 'node:zlib'
 import { SNAPSHOT_UPLOAD_CONTENT_TYPE } from '@nerve-office/contracts'
 import { archiveSpace, createDocumentIn, createTeamSpace, createUser } from '../../support/database.ts'
 import { activeImageCount, cellCenter, cellRect, clickCell, commandMark, contentOf, nameBox, probeCommands, probeSnapshot, runFacade, waitForCommand } from '../../support/editor-probe.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
-import { readOnlySampleFor, SAMPLE_CELLS, SAMPLE_SHEETS } from '../../support/read-only-sample.ts'
+import { deleteDrawingKey, pressUniverShortcut } from '../../support/keyboard.ts'
+import { readOnlySampleFor, SAMPLE_CELLS, SAMPLE_FORMULAS, SAMPLE_SHEETS, sampleWithoutFormulaValuesFor } from '../../support/read-only-sample.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { openEditor, resourceOf, saveButton, savedContent, sheetCanvas, sheetTab, waitForEditor } from '../../support/sheet.ts'
+import { openEditor, resourceOf, saveButton, savedContent, selectCell, sheetCanvas, sheetTab, waitForEditor } from '../../support/sheet.ts'
 
 interface Scene {
   readonly author: TestUser
@@ -34,13 +39,13 @@ interface Scene {
   readonly documentId: string
 }
 
-/** 系统管理员建团队空间，作者是空间管理员，查看者是查看者；作者在空间里有一份写好样本的文档 */
-async function scene(prefix: string): Promise<Scene> {
+/** 系统管理员建团队空间，作者是空间管理员，查看者是查看者；作者在空间里有一份写好样本（默认是只读样本）的文档 */
+async function scene(prefix: string, snapshotFor: (unitId: string) => string = readOnlySampleFor): Promise<Scene> {
   const admin = await createUser(`${prefix}-admin`, '系统管理员', { systemRole: 'admin' })
   const author = await createUser(`${prefix}-author`, '作者')
   const viewer = await createUser(`${prefix}-viewer`, '查看者')
   const space = await createTeamSpace('只读样本', admin, [[author, 'admin'], [viewer, 'viewer']])
-  return { author, viewer, spaceId: space.id, documentId: await createDocumentIn(space.id, author, '只读样本', readOnlySampleFor) }
+  return { author, viewer, spaceId: space.id, documentId: await createDocumentIn(space.id, author, '只读样本', snapshotFor) }
 }
 
 /** 只读的全过程都应该没有的：页面错误（被取消的命令不产生页面错误，M2-P3 设计 §3.8）与保存请求 */
@@ -72,6 +77,16 @@ function unitIdOf(snapshotText: string): string {
   return (JSON.parse(snapshotText) as Workbook).id
 }
 
+/** 快照里 sheetId 这张工作表 A1 写法的一格的值（v）；没有时为 undefined */
+function cellValueIn(snapshotText: string, sheetId: string, a1: string): unknown {
+  const match = /^([A-Z])(\d+)$/.exec(a1)
+  if (match === null)
+    throw new Error(`不支持的单元格写法：${a1}`)
+  const row = Number(match[2]) - 1
+  const column = (match[1] ?? 'A').charCodeAt(0) - 'A'.charCodeAt(0)
+  return (JSON.parse(snapshotText) as Workbook).sheets[sheetId]?.cellData[row]?.[column]?.v
+}
+
 /** 执行选项里带这些标记的 mutation 不是用户的修改（apps/web 的 change-classifier.ts） */
 const NOT_USER_CHANGE_FLAGS = ['onlyLocal', 'fromCollab', 'fromChangeset', 'fromFormula']
 /** 类型是 MUTATION、实际只清除界面上的图片变换框（插件档案 v1 §5.3 的排除名单） */
@@ -80,6 +95,17 @@ const NOT_CHANGE_MUTATIONS = ['sheet.operation.clear-drawing-transformer']
 /** mark 之后执行了的、变更检测会认作修改的 mutation：只读时一条都不应该有（防火墙的不变量，M2-P3 设计 §3.3） */
 async function documentChanges(page: Page, mark: number, unitId: string): Promise<ProbeCommand[]> {
   return (await probeCommands(page, mark)).filter(command => command.phase === 'executed' && command.kind === 'mutation'
+    && (command.unitId === undefined || command.unitId === unitId)
+    && !command.flags.some(flag => NOT_USER_CHANGE_FLAGS.includes(flag))
+    && !NOT_CHANGE_MUTATIONS.includes(command.id))
+}
+
+/**
+ * mark 之后尝试过的、变更检测会认作修改的 mutation（执行前的记录，被取消的也算）：打开的过程中一条都不应该有，
+ * 否则就是进入只读时 SDK 试图改文档、被防火墙取消了（P3 审查 B9）
+ */
+async function documentChangeAttempts(page: Page, mark: number, unitId: string): Promise<ProbeCommand[]> {
+  return (await probeCommands(page, mark)).filter(command => command.phase === 'before' && command.kind === 'mutation'
     && (command.unitId === undefined || command.unitId === unitId)
     && !command.flags.some(flag => NOT_USER_CHANGE_FLAGS.includes(flag))
     && !NOT_CHANGE_MUTATIONS.includes(command.id))
@@ -121,7 +147,14 @@ const ALERT = {
   image: '这份文档只能查看，不能修改图片。',
   conditionalFormat: '这份文档只能查看，不能修改条件格式。',
   dataValidation: '这份文档只能查看，不能修改数据验证。',
+  filter: '这份文档只能查看，不能使用筛选。',
 } as const
+
+/**
+ * 只看一次、不重试：web 优先的断言给最短的时限，第一次检查不满足就失败（Playwright 的 timeout: 0 是不限时，不能用）。
+ * 用在"等到确定的时刻之后，这时应该已经如此"的地方：能编辑时的对照同样只看一次，只读时的否定才有校准
+ */
+const LOOK_ONCE = { timeout: 1 } as const
 
 /** 一步操作之后等到的信号 */
 type Outcome
@@ -131,7 +164,10 @@ type Outcome
     | { readonly canceled: string }
   /** 被 SDK 的权限检查拦下：只有执行前的记录。拦下时 SDK 弹出提示（alert 是提示的说法），关掉它 */
     | { readonly blocked: string, readonly alert: string }
-  /** 不产生这条命令（只读时这个手势没有控制点）：之后点 thenClick 这一格，等名称框显示它，确认手势已经处理完 */
+  /**
+   * 不产生这条命令（只读时这个手势没有控制点）：之后点 thenClick 这一格，等名称框显示它，确认手势已经处理完。
+   * 点之前先确认没有意外弹出的提示：弹出时点击被它挡住，会一直等到超时
+   */
     | { readonly absent: string, readonly thenClick: string }
 
 async function settle(page: Page, mark: number, outcome: Outcome): Promise<void> {
@@ -147,6 +183,8 @@ async function settle(page: Page, mark: number, outcome: Outcome): Promise<void>
     expect(await probeCommands(page, mark)).not.toContainEqual(expect.objectContaining({ phase: 'executed', id: outcome.blocked }))
   }
   else {
+    await nextFrames(page)
+    await expect(permissionAlert(page), `不应该弹出提示（${outcome.absent}）`).toHaveCount(0, LOOK_ONCE)
     await clickCell(page, outcome.thenClick)
     expect((await probeCommands(page, mark)).map(command => command.id)).not.toContain(outcome.absent)
   }
@@ -245,9 +283,6 @@ async function nextFrames(page: Page): Promise<void> {
   }))
 }
 
-/** 删除选中图片的键：SDK 在苹果的平台上绑定 Backspace，其他平台是 Delete（sheets-drawing-ui 的 drawing.shortcut.ts） */
-const DELETE_DRAWING_KEY = process.platform === 'darwin' ? 'Backspace' : 'Delete'
-
 /** 键入（M0 的第一个界面入口）：归档空间的用例也用它 */
 const TYPING: Entry = {
   name: '键入：K3 键入 123 回车',
@@ -274,8 +309,34 @@ function formulaBarInput(page: Page): Locator {
   return page.locator('[id="__editor___INTERNAL_EDITOR__DOCS_FORMULA_BAR"]')
 }
 
-/** 编辑栏内部文档的单元：只读时这个单元上不应该有任何命令（编辑栏没有收到输入） */
+/** 编辑栏内部文档的单元：只读时这个单元上不应该有插入文字等命令（编辑栏没有收到输入） */
 const FORMULA_BAR_UNIT = '__INTERNAL_EDITOR__DOCS_FORMULA_BAR'
+
+/**
+ * 在名称框上按下、拖到编辑栏的编辑框上松开（P3 审查 A1 的复现）：按下不在编辑框上，只读守卫拦不到；
+ * 松开时编辑框自己的 mouseup 会聚焦编辑栏的编辑器
+ */
+async function slipOntoFormulaBar(page: Page): Promise<void> {
+  const from = await nameBox(page).boundingBox()
+  const to = await formulaBarEditor(page).boundingBox()
+  if (from === null || to === null)
+    throw new Error('名称框或编辑栏的编辑框不可见')
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 6 })
+  await page.mouse.up()
+}
+
+/** 按查找的快捷键打开查找面板，查"苹果"（"数据"表里 A2 与 G2 两处），关掉 */
+async function findApple(page: Page): Promise<void> {
+  await step(page, 'read', async () => pressUniverShortcut(page, 'F'), { read: { executed: 'ui.operation.open-find-dialog' } })
+  const find = page.getByRole('dialog', { name: '查找' })
+  await find.getByRole('textbox', { name: '输入查找内容' }).fill('苹果')
+  await find.getByRole('textbox', { name: '输入查找内容' }).press('Enter')
+  await expect(find).toContainText(/[12]\/2/)
+  await find.getByRole('button', { name: 'Close' }).click()
+  await expect(find).toBeHidden()
+}
 
 // M0 的界面入口（U 类 7 项，spikes/m0/e2e/v09-read-mode.spec.ts 的 37–102、115–132 行）
 const UI_ENTRIES: readonly Entry[] = [
@@ -294,8 +355,9 @@ const UI_ENTRIES: readonly Entry[] = [
     name: '粘贴：复制 A2，粘贴到 K6',
     run: async (page, mode) => {
       await clickCell(page, 'A2')
-      await step(page, mode, async () => page.keyboard.press('ControlOrMeta+C'), { read: { executed: 'univer.command.copy' }, edit: { executed: 'univer.command.copy' } })
+      await step(page, mode, async () => pressUniverShortcut(page, 'C'), { read: { executed: 'univer.command.copy' }, edit: { executed: 'univer.command.copy' } })
       await clickCell(page, 'K6')
+      // 粘贴由浏览器的 paste 事件触发：按系统的修饰键
       await step(page, mode, async () => page.keyboard.press('ControlOrMeta+V'), {
         read: { blocked: 'sheet.command.paste-by-short-key', alert: ALERT.paste },
         edit: { executed: 'sheet.command.paste-by-short-key' },
@@ -306,7 +368,7 @@ const UI_ENTRIES: readonly Entry[] = [
     name: '剪切后粘贴：剪切 A3，粘贴到 K7',
     run: async (page, mode) => {
       await clickCell(page, 'A3')
-      await step(page, mode, async () => page.keyboard.press('ControlOrMeta+X'), {
+      await step(page, mode, async () => pressUniverShortcut(page, 'X'), {
         read: { blocked: 'univer.command.cut', alert: ALERT.cut },
         edit: { executed: 'univer.command.cut' },
       })
@@ -383,7 +445,7 @@ const UI_ENTRIES: readonly Entry[] = [
  */
 async function findAndReplaceAll(page: Page, mode: Mode): Promise<void> {
   await clickCell(page, 'C8')
-  await page.keyboard.press('ControlOrMeta+F')
+  await pressUniverShortcut(page, 'F')
   const find = page.getByRole('dialog', { name: '查找' })
   const findText = find.getByRole('textbox', { name: '输入查找内容' })
   await findText.fill('苹果')
@@ -422,7 +484,7 @@ const OTHER_UI_ENTRIES: readonly Entry[] = [
     run: async (page, mode) => {
       await clickCell(page, 'A2')
       for (const key of ['B', 'I', 'U']) {
-        await step(page, mode, async () => page.keyboard.press(`ControlOrMeta+${key}`), {
+        await step(page, mode, async () => pressUniverShortcut(page, key), {
           read: { blocked: 'sheet.command.set-style', alert: ALERT.style },
           edit: { executed: 'sheet.command.set-style' },
         })
@@ -443,6 +505,7 @@ const OTHER_UI_ENTRIES: readonly Entry[] = [
       }
       await expect(editableName).toHaveCount(1)
       await step(page, mode, async () => {
+        // 改名的输入框里全选由浏览器处理：按系统的修饰键
         await page.keyboard.press('ControlOrMeta+A')
         await page.keyboard.type('汇总二')
         await page.keyboard.press('Enter')
@@ -491,7 +554,8 @@ const OTHER_UI_ENTRIES: readonly Entry[] = [
       const mark = await commandMark(page)
       await clickImage(page, mode, image)
       // 只读时图片没有被选中，删除键删的是选中的单元格（被权限检查拦下），不是图片
-      await step(page, mode, async () => page.keyboard.press(DELETE_DRAWING_KEY), {
+      const deleteKey = await deleteDrawingKey(page)
+      await step(page, mode, async () => page.keyboard.press(deleteKey), {
         read: { blocked: 'sheet.command.clear-selection-content', alert: ALERT.edit },
         edit: { executed: 'sheet.command.remove-sheet-image' },
       })
@@ -541,13 +605,86 @@ const OTHER_UI_ENTRIES: readonly Entry[] = [
       })
     },
   },
+  { name: '拖动冻结线："数据"表第 1 行下面的冻结线（D 列处）拖到第 4 行下面', run: dragFreezeLine },
+  { name: '拖动冻结区域的行高："数据"表第 1 行（冻结）下面的分隔线往下拖 30 像素', run: dragFrozenRowHeight },
+  { name: '筛选按钮："筛选"表 A1 的筛选按钮', run: openFilterPanel },
 ]
+
+/**
+ * 拖动冻结线（P3 审查 B2）。SDK 没有注册冻结线的权限拦截：修复之前只读时冻结线照样显示可以拖动的光标、拖得动，松开时的
+ * set-frozen 被防火墙取消，界面上的冻结线却停在拖到的位置。只读守卫补上拦截之后，移上不是 grab，按下不开始拖动：
+ * 没有 set-frozen 的尝试（它只在拖动之后松开时执行），界面上的冻结线也就没有动过；模型里的冻结由 expectUnchanged 核对
+ */
+async function dragFreezeLine(page: Page, mode: Mode): Promise<void> {
+  await showSheet(page, SAMPLE_SHEETS.data.name)
+  const origin = await canvasOrigin(page)
+  const d1 = await cellRect(page, 'D1')
+  const d4 = await cellRect(page, 'D4')
+  const line = { x: origin.x + (d1.startX + d1.endX) / 2, y: origin.y + d1.endY - 1 }
+  await page.mouse.move(line.x, line.y + 6)
+  await page.mouse.move(line.x, line.y, { steps: 3 })
+  // 移上之后等两帧再读一次光标（不重试）：能编辑时这样读到的是可以拖动的 grab，这是只读时"不是 grab"的校准
+  await nextFrames(page)
+  const cursor = await sheetCanvas(page).evaluate(canvas => getComputedStyle(canvas).cursor)
+  expect(cursor === 'grab', `冻结线上的光标是 ${cursor}`).toBe(mode === 'edit')
+  await step(page, mode, async () => {
+    await page.mouse.down()
+    await page.mouse.move(line.x, origin.y + d4.endY - 2, { steps: 8 })
+    await page.mouse.up()
+  }, {
+    read: { absent: 'sheet.command.set-frozen', thenClick: 'F12' },
+    edit: { executed: 'sheet.command.set-frozen' },
+  })
+}
+
+/**
+ * 拖动冻结区域（第 1 行冻结）的行高：SDK 在冻结区域仍显示调整行高的光标，只读时拖动之后被权限检查拦下、弹出只读的提示
+ * （非冻结区域只读时没有这个控制点，见"拖动行高"；不一致已写入上游报告）。数据不变由 expectUnchanged 核对（P3 审查 B7）
+ */
+async function dragFrozenRowHeight(page: Page, mode: Mode): Promise<void> {
+  await showSheet(page, SAMPLE_SHEETS.data.name)
+  const origin = await canvasOrigin(page)
+  const a1 = await cellRect(page, 'A1')
+  // 行标题的中间（A1 的左边就是行标题的宽度），第 1 行的下边
+  const x = origin.x + a1.startX / 2
+  const y = origin.y + a1.endY - 1
+  await step(page, mode, async () => {
+    await page.mouse.move(x, y - 8)
+    await page.mouse.move(x, y, { steps: 4 })
+    await page.mouse.down()
+    await page.mouse.move(x, y + 30, { steps: 6 })
+    await page.mouse.up()
+  }, {
+    read: { blocked: 'sheet.command.delta-row-height', alert: ALERT.rowCol },
+    edit: { executed: 'sheet.command.delta-row-height' },
+  })
+}
+
+/**
+ * 点筛选按钮：只读时打开筛选面板被权限检查拦下，提示是只读的说法（P3 审查 B8：原文是"你没有权限使用筛选。"）；
+ * 能编辑时打开面板，清除这一列的筛选条件（样本里 A 列只显示"研发""运营"）
+ */
+async function openFilterPanel(page: Page, mode: Mode): Promise<void> {
+  await showSheet(page, SAMPLE_SHEETS.filter.name)
+  const origin = await canvasOrigin(page)
+  const a1 = await cellRect(page, 'A1')
+  // 筛选按钮画在表头单元格的右侧
+  await step(page, mode, async () => page.mouse.click(origin.x + a1.endX - 10, origin.y + (a1.startY + a1.endY) / 2), {
+    read: { blocked: 'sheet.operation.open-filter-panel', alert: ALERT.filter },
+    edit: { executed: 'sheet.operation.open-filter-panel' },
+  })
+  if (mode === 'read')
+    return
+  await step(page, mode, async () => page.getByRole('button', { name: '清除筛选', exact: true }).click(), {
+    edit: { executed: 'sheet.command.set-filter-criteria' },
+  })
+}
 
 /** 撤销与重做的快捷键（只读时撤销栈本来就是空的：断言它们被只读守卫取消；能编辑时的对照见单独的用例） */
 async function undoAndRedo(page: Page, mode: Mode): Promise<void> {
-  await step(page, mode, async () => page.keyboard.press('ControlOrMeta+Z'), { read: { canceled: 'univer.command.undo' }, edit: { executed: 'univer.command.undo' } })
+  await step(page, mode, async () => pressUniverShortcut(page, 'Z'), { read: { canceled: 'univer.command.undo' }, edit: { executed: 'univer.command.undo' } })
   // 重做的快捷键：各平台都是 Ctrl/Cmd+Y（苹果的平台另有 Cmd+Shift+Z，ui 的 shared-shortcut.controller.ts）
-  await step(page, mode, async () => page.keyboard.press('ControlOrMeta+Y'), { read: { canceled: 'univer.command.redo' }, edit: { executed: 'univer.command.redo' } })
+  await step(page, mode, async () => pressUniverShortcut(page, 'Y'), { read: { canceled: 'univer.command.redo' }, edit: { executed: 'univer.command.redo' } })
 }
 
 /** 工作表标签栏左边"全部工作表"的菜单按钮（图标按钮，没有可访问的名称：按下拉菜单的触发器与 SDK 的组件标记定位） */
@@ -626,8 +763,8 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
     // 样本已经收敛（打开之后保存的字节就是它自己），所以不用规范化，逐字节比较
     const snapshot = await probeSnapshot(page)
     expect(snapshot).toBe(stored.text)
-    // 探针在就绪时装上：从就绪到 steady 没有改动文档的 mutation 执行
-    expect(await documentChanges(page, 0, unitIdOf(snapshot))).toEqual([])
+    // 探针在就绪时装上：从就绪到 steady，没有改动文档的 mutation 的尝试（被防火墙取消的也没有，P3 审查 B9）
+    expect(await documentChangeAttempts(page, 0, unitIdOf(snapshot))).toEqual([])
     // 不写保护类资源（不用 setReadOnly()，不创建保护规则），也没有本地授权服务的资源（ADR-009）
     const workbook = JSON.parse(snapshot) as Workbook
     for (const name of ['SHEET_RANGE_PROTECTION_PLUGIN', 'SHEET_WORKSHEET_PROTECTION_PLUGIN', 'SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN'])
@@ -651,6 +788,8 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
   })
 
   test('界面没有编辑入口：没有工具栏、右键不弹出菜单、没有底栏菜单与新增工作表按钮，页头只能查看、没有保存按钮（对照：作者打开同一份文档时都有）', async ({ page, anotherDevice }) => {
+    // 打开两次编辑器（作者与查看者），各到 steady
+    test.slow()
     const s = await scene('ro-chrome')
     // 对照：能编辑时这些入口都在，下面只读时的"没有"才不是空断言
     const authorWatched = watch(anotherDevice, s.documentId)
@@ -665,8 +804,10 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
     expect(watched.pageErrors).toEqual([])
   })
 
-  test('界面入口（M0 的 7 项）都无效：键入、删除、粘贴、剪切后粘贴、拖动填充柄、编辑栏、拖动行高', async ({ page }) => {
+  test('界面入口（M0 的 7 项）都无效：键入、删除、粘贴、剪切后粘贴、拖动填充柄、编辑栏、拖动行高', async ({ page, context, browserName }) => {
     test.slow()
+    // 与对照组的条件一致（P3 审查 B10）
+    await grantClipboard(context, browserName)
     const s = await scene('ro-ui')
     const watched = watch(page, s.documentId)
     await openReadOnly(page, s.viewer, s.documentId)
@@ -682,8 +823,10 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
     expect(watched.pageErrors).toEqual([])
   })
 
-  test('界面上还能碰到的其他入口都无效：查找替换、格式的快捷键、撤销与重做、双击与拖动工作表标签、全部工作表的菜单、拖动与删除图片、改批注', async ({ page }) => {
+  test('界面上还能碰到的其他入口都无效：查找替换、格式的快捷键、撤销与重做、双击与拖动工作表标签、全部工作表的菜单、拖动与删除图片、改批注、冻结线、冻结区域的行高、筛选按钮', async ({ page, context, browserName }) => {
     test.slow()
+    // 与对照组的条件一致（P3 审查 B10）
+    await grantClipboard(context, browserName)
     const s = await scene('ro-other')
     const watched = watch(page, s.documentId)
     await openReadOnly(page, s.viewer, s.documentId)
@@ -732,6 +875,8 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
   // 对照：能编辑时，同一批入口确实改动了内存快照。每项一个用例、用新写的文档（互不影响，失败时直接看到是哪一项）；
   // 作者有未保存的修改，用例结束时关页面不会提示
   test.describe('对照：能编辑时，同一批入口确实改动了内存快照', () => {
+    // 每项用自己的文档、互不影响：并行执行（P3 审查 B6）
+    test.describe.configure({ mode: 'parallel' })
     for (const entry of [...UI_ENTRIES, ...OTHER_UI_ENTRIES, ...FACADE_ENTRIES.map(facadeEntry)]) {
       test(entry.name, async ({ page, context, browserName }) => {
         await grantClipboard(context, browserName)
@@ -751,14 +896,14 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
     await openEditor(page, s.documentId, OPENED)
     const opened = contentOf(await probeSnapshot(page))
     await clickCell(page, 'A2')
-    await step(page, 'edit', async () => page.keyboard.press('ControlOrMeta+B'), { edit: { executed: 'sheet.command.set-style' } })
+    await step(page, 'edit', async () => pressUniverShortcut(page, 'B'), { edit: { executed: 'sheet.command.set-style' } })
     const bold = contentOf(await probeSnapshot(page))
     expect(bold).not.toEqual(opened)
     const mark = await commandMark(page)
-    await page.keyboard.press('ControlOrMeta+Z')
+    await pressUniverShortcut(page, 'Z')
     await waitForCommand(page, mark, { phase: 'executed', id: 'univer.command.undo' })
     expect(contentOf(await probeSnapshot(page))).toEqual(opened)
-    await page.keyboard.press('ControlOrMeta+Y')
+    await pressUniverShortcut(page, 'Y')
     await waitForCommand(page, mark, { phase: 'executed', id: 'univer.command.redo' })
     expect(contentOf(await probeSnapshot(page))).toEqual(bold)
   })
@@ -776,10 +921,10 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
     await clickCell(page, 'C3')
 
     await clickCell(page, 'A2')
-    await step(page, 'read', async () => page.keyboard.press('ControlOrMeta+C'), { read: { executed: 'univer.command.copy' } })
+    await step(page, 'read', async () => pressUniverShortcut(page, 'C'), { read: { executed: 'univer.command.copy' } })
     await expectClipboardText(page, browserName, SAMPLE_CELLS.a2)
 
-    await page.keyboard.press('ControlOrMeta+F')
+    await pressUniverShortcut(page, 'F')
     const find = page.getByRole('dialog', { name: '查找' })
     await find.getByRole('textbox', { name: '输入查找内容' }).fill('苹果')
     await find.getByRole('textbox', { name: '输入查找内容' }).press('Enter')
@@ -799,7 +944,7 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
     expect(watched.pageErrors).toEqual([])
   })
 
-  test('编辑栏点不进去：点过编辑栏、在单元格上键入之后，查找、复制与格式的快捷键照常（M2-P3 S3 之后的修复）', async ({ page, context, browserName }) => {
+  test('编辑栏点不进去：点编辑框、从名称框按下在编辑框上松开之后，查找、复制、方向键与格式的快捷键照常（M2-P3 S3 之后与 P3 审查 A1 之后的修复）', async ({ page, context, browserName }) => {
     const s = await scene('ro-bar')
     const watched = watch(page, s.documentId)
     await grantClipboard(context, browserName)
@@ -816,27 +961,59 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
 
     // 修复之前，这时查找的快捷键失效（编辑栏的编辑器一直处于激活），格式的快捷键转给了编辑栏的文字编辑器
     await clickCell(page, 'C8')
-    await step(page, 'read', async () => page.keyboard.press('ControlOrMeta+F'), { read: { executed: 'ui.operation.open-find-dialog' } })
-    const find = page.getByRole('dialog', { name: '查找' })
-    await find.getByRole('textbox', { name: '输入查找内容' }).fill('苹果')
-    await find.getByRole('textbox', { name: '输入查找内容' }).press('Enter')
-    await expect(find).toContainText(/[12]\/2/)
-    await find.getByRole('button', { name: 'Close' }).click()
-    await expect(find).toBeHidden()
+    await findApple(page)
 
     await clickCell(page, 'A2')
-    await step(page, 'read', async () => page.keyboard.press('ControlOrMeta+C'), { read: { executed: 'univer.command.copy' } })
+    await step(page, 'read', async () => pressUniverShortcut(page, 'C'), { read: { executed: 'univer.command.copy' } })
     await expectClipboardText(page, browserName, SAMPLE_CELLS.a2)
-    await step(page, 'read', async () => page.keyboard.press('ControlOrMeta+B'), { read: { blocked: 'sheet.command.set-style', alert: ALERT.style } })
+    await step(page, 'read', async () => pressUniverShortcut(page, 'B'), { read: { blocked: 'sheet.command.set-style', alert: ALERT.style } })
 
-    // 编辑栏自始至终没有收到输入
-    expect((await probeCommands(page, mark)).filter(command => command.unitId === FORMULA_BAR_UNIT)).toEqual([])
+    // 在名称框上按下、拖到编辑框上松开（P3 审查 A1）：编辑框自己的 mouseup 照样聚焦编辑栏的编辑器（SDK 随之在编辑栏的内部文档里
+    // 设光标，这是复现了那条路径的证据），只读守卫马上放开
+    const slipped = await commandMark(page)
+    await slipOntoFormulaBar(page)
+    await waitForCommand(page, slipped, { phase: 'executed', id: 'doc.operation.set-selections', unitId: FORMULA_BAR_UNIT })
+    await expect(formulaBarInput(page)).not.toBeFocused()
+    // 焦点已经离开编辑栏：键入的字不进编辑栏的内部文档（修复之前会进去）
+    await page.keyboard.type('xyz')
+    // 点回表格之后，查找与方向键照常（修复之前都失效）
+    await clickCell(page, 'C8')
+    await findApple(page)
+    await clickCell(page, 'A2')
+    await step(page, 'read', async () => page.keyboard.press('ArrowDown'), { read: { executed: 'sheet.command.move-selection' } })
+    await expect(nameBox(page)).toHaveValue('A3')
+
+    // 编辑栏自始至终没有收到输入：它的内部文档上只有设光标的操作（松开时 SDK 设的与放开时清掉的），没有插入文字，也没有 mutation
+    expect((await probeCommands(page, mark)).filter(command => command.unitId === FORMULA_BAR_UNIT && command.id !== 'doc.operation.set-selections')).toEqual([])
     await expectUnchanged(page, opened, mark)
     expect(watched.saves).toEqual([])
     expect(watched.pageErrors).toEqual([])
   })
 
+  test('公式在 Worker 里算出结果：缓存值缺失的文档，查看者打开之后结果照常出现，结果的写回没有被防火墙取消（P3 审查 B5）', async ({ page }) => {
+    const s = await scene('ro-formula', sampleWithoutFormulaValuesFor)
+    const watched = watch(page, s.documentId)
+    await openReadOnly(page, s.viewer, s.documentId)
+    const stored = await savedContent(page, s.documentId)
+    // 服务器上的文档里这几格没有结果；打开时 SDK 只算没有结果的公式（缓存值在的不重算），所以出现的结果一定是 Worker 算出来的
+    for (const formula of SAMPLE_FORMULAS)
+      expect(cellValueIn(stored.text, formula.sheetId, formula.cell), `${formula.cell}：服务器上没有结果`).toBeUndefined()
+    await expect.poll(async () => {
+      const snapshot = await probeSnapshot(page)
+      return SAMPLE_FORMULAS.map(formula => cellValueIn(snapshot, formula.sheetId, formula.cell))
+    }, { message: '等公式的结果出现在内存里' }).toEqual(SAMPLE_FORMULAS.map(formula => formula.value))
+    const snapshot = await probeSnapshot(page)
+    expect(await documentChangeAttempts(page, 0, unitIdOf(snapshot)), '没有被取消的修改').toEqual([])
+    // 只读不保存：服务器上的内容不变
+    const after = await savedContent(page, s.documentId)
+    expect([after.revision, after.text]).toEqual([stored.revision, stored.text])
+    expect(watched.saves).toEqual([])
+    expect(watched.pageErrors).toEqual([])
+  })
+
   test('归档空间里的文档：空间管理员打开同样只读（只能查看、没有工具栏、键入无效）', async ({ page }) => {
+    // 打开两次编辑器（归档前后），各到 steady
+    test.slow()
     const s = await scene('ro-archive')
     await loginThroughApi(page, s.author)
     await openEditor(page, s.documentId, OPENED)
@@ -888,11 +1065,15 @@ async function expectClipboardText(page: Page, browserName: string, expected: st
 
 /**
  * 编辑入口在不在：能编辑时都在，只读时都没有。
- * 右键菜单在动画帧里弹出（ui 的 ContextMenu.tsx 的 handleContextMenu）：右键之后先等选区移过去（右键已经处理），再等两帧
+ * 右键菜单在动画帧里弹出（ui 的 ContextMenu.tsx 的 handleContextMenu）：右键之后先等选区移过去（右键已经处理），再等两帧，
+ * 然后只看一次（不重试）：能编辑时这样看得到菜单，这是只读时"没有菜单"的校准（P3 审查 B14）
  */
 async function expectEditingChrome(page: Page, mode: Mode): Promise<void> {
   const present = mode === 'edit'
   const count = async (locator: Locator): Promise<void> => present ? expect(locator.first()).toBeVisible() : expect(locator).toHaveCount(0)
+  const countNow = async (locator: Locator): Promise<void> => present
+    ? expect(locator.first(), '等两帧之后菜单已经弹出').toBeVisible(LOOK_ONCE)
+    : expect(locator).toHaveCount(0, LOOK_ONCE)
   // 页头：能编辑时有保存按钮；只读时显示"只能查看"
   await count(saveButton(page))
   await expect(page.locator('#editor-chrome').getByText('只能查看', { exact: true })).toHaveCount(present ? 0 : 1)
@@ -909,11 +1090,39 @@ async function expectEditingChrome(page: Page, mode: Mode): Promise<void> {
   await sheetCanvas(page).click({ button: 'right', position: await cellCenter(page, 'C3') })
   await expect(nameBox(page)).toHaveValue('C3')
   await nextFrames(page)
-  await count(page.getByText('选择性复制', { exact: true }))
+  await countNow(page.getByText('选择性复制', { exact: true }))
   await page.keyboard.press('Escape')
   await sheetTab(page, SAMPLE_SHEETS.summary.name).click({ button: 'right' })
   await expect(sheetTab(page, SAMPLE_SHEETS.summary.name)).toHaveAttribute('aria-selected', 'true')
   await nextFrames(page)
-  await count(page.getByRole('button', { name: '重命名', exact: true }))
+  await countNow(page.getByRole('button', { name: '重命名', exact: true }))
   await page.keyboard.press('Escape')
 }
+
+// 生产镜像上也跑的冒烟（P3 审查 B4）：不用探针、不打 @test-build，外部模式（容器 E2E）照常执行。
+// 只核对界面与服务器看得到的结果：只读的页头、没有工具栏、键入被只读的提示拦下、保存的快捷键不发请求、服务器上的内容不变
+test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不能改（冒烟：生产构建）', () => {
+  test('查看者打开：页头只能查看、没有工具栏与保存按钮；键入被只读的提示拦下；Ctrl/Cmd+S 不发保存请求；服务器上的内容不变', async ({ page }) => {
+    const s = await scene('ro-smoke')
+    const watched = watch(page, s.documentId)
+    await openReadOnly(page, s.viewer, s.documentId)
+    const stored = await savedContent(page, s.documentId)
+    await expect(page.getByRole('toolbar')).toHaveCount(0)
+    await expect(saveButton(page)).toHaveCount(0)
+
+    // 键入：打开单元格编辑器被权限检查拦下，弹出只读的提示；关掉之后照常
+    await selectCell(page, 'K3')
+    await page.keyboard.type('1')
+    await closePermissionAlert(page, ALERT.edit)
+    // 保存的快捷键（编辑器页自己的，按系统的修饰键）：只读时不保存，也不交给浏览器（不弹出另存网页）
+    await page.keyboard.press('ControlOrMeta+s')
+    // 之后的一次操作处理完，说明快捷键已经处理过：再键入一次，同样被拦下
+    await page.keyboard.type('2')
+    await closePermissionAlert(page, ALERT.edit)
+
+    const after = await savedContent(page, s.documentId)
+    expect([after.revision, after.text]).toEqual([stored.revision, stored.text])
+    expect(watched.saves).toEqual([])
+    expect(watched.pageErrors).toEqual([])
+  })
+})

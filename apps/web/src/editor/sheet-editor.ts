@@ -7,7 +7,8 @@
 // 3. 在创建工作簿之前挂上入口守卫、只读守卫（只读时：防火墙与撤销拦截）、变更检测、单元格编辑与生命周期的监听，
 //    加载过程中的命令也看得到、拦得住；
 // 4. createWorkbook，核对 unitId；只读时把每张工作表的权限点设为只读（read-only/read-only-guard.ts）；
-// 5. 等渲染完成（Rendered）、主线程到 Ready 后装上 IMAGE() 的限制、Worker 回报它那边也装上了；只读时清空撤销栈，才返回；
+// 5. 等渲染完成（Rendered）、主线程到 Ready 后装上 IMAGE() 的限制、Worker 回报它那边也装上了；只读时装上渲染之后才有的界面处理
+//    （冻结线、编辑栏的焦点）、清空撤销栈，才返回；
 //    任何一步失败（包括创建 Univer、注册插件）都按相反的顺序销毁已经创建的一切并抛出，页面显示"编辑器加载失败"（审查 B8）。
 // 返回之前（就绪之前）不允许输入（M1 总设计 §6.6）由编辑器页的交互屏障保证（interaction-barrier.ts，Codex 评审 CX1）：
 // 能编辑的文档从创建起就是可编辑的（授权服务一律允许），就绪之前的输入只能靠屏障拦住。
@@ -158,6 +159,7 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   )
   // 就绪之后不再需要 Worker 回报的监听：Worker 之后出错按 M4 的设计处理（M1 里公式收齐会超时，页面提示公式结果尚未保存）
   workerImagePolicy.dispose()
+  readOnly?.applyRenderedGuards()
   readOnly?.clearUndoStack()
   return { univerAPI, workbook, changes, cellEditing, lifecycle }
 }

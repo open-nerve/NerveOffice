@@ -316,6 +316,38 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
     expect(await rulesFor('import { IDrawingManagerService } from \'@univerjs/drawing\'\n\nexport const s = IDrawingManagerService\n', INTERNAL_API_FILE)).not.toContain('no-restricted-imports')
   })
 
+  it('只读守卫放开编辑栏、拦下冻结线用到的内部符号（P3 审查 A1、B2）在 internal-api 之外引用会失败；这几个包的插件照常引用', async () => {
+    const cases = [
+      'import { IEditorService } from \'@univerjs/docs-ui\'\n\nexport const s = IEditorService\n',
+      'import type { IEditorService } from \'@univerjs/docs-ui\'\n\nexport type S = IEditorService\n',
+      'import { IContextService } from \'@univerjs/core\'\n\nexport const s = IContextService\n',
+      'import { DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY, FOCUSING_FX_BAR_EDITOR } from \'@univerjs/core\'\n\nexport const keys = [DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY, FOCUSING_FX_BAR_EDITOR]\n',
+      'import { IRenderManagerService } from \'@univerjs/engine-render\'\n\nexport const s = IRenderManagerService\n',
+      'import { HeaderFreezeRenderController } from \'@univerjs/sheets-ui\'\n\nexport const c = HeaderFreezeRenderController\n',
+      'export { HeaderFreezeRenderController as Freeze } from \'@univerjs/sheets-ui\'\n',
+      'import * as docsUi from \'@univerjs/docs-ui\'\n\nexport const d = docsUi\n',
+    ]
+    for (const file of [EDITOR_FILE, 'apps/web/src/editor/read-only/formula-bar.ts']) {
+      for (const code of cases) {
+        const report = await lint(code, file)
+        expect(report.rules, `${file}\n${code}`).toContain('no-restricted-imports')
+        expect(report.messages.join('\n'), `${file}\n${code}`).toContain(INTERNAL_MESSAGE)
+      }
+    }
+    const plugins = 'import { UniverDocsUIPlugin } from \'@univerjs/docs-ui\'\nimport { UniverRenderEnginePlugin } from \'@univerjs/engine-render\'\nimport { UniverSheetsUIPlugin } from \'@univerjs/sheets-ui\'\n\nexport const p = [UniverDocsUIPlugin, UniverRenderEnginePlugin, UniverSheetsUIPlugin]\n'
+    expect(await rulesFor(plugins, 'apps/web/src/editor/profile/sheet-profile.ts')).not.toContain('no-restricted-imports')
+    const internal = [
+      'import { DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY, FOCUSING_FX_BAR_EDITOR, IContextService } from \'@univerjs/core\'',
+      'import { IEditorService } from \'@univerjs/docs-ui\'',
+      'import { IRenderManagerService } from \'@univerjs/engine-render\'',
+      'import { HeaderFreezeRenderController } from \'@univerjs/sheets-ui\'',
+      '',
+      'export const used = [DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY, FOCUSING_FX_BAR_EDITOR, IContextService, IEditorService, IRenderManagerService, HeaderFreezeRenderController]',
+      '',
+    ].join('\n')
+    expect(await rulesFor(internal, INTERNAL_API_FILE)).not.toContain('no-restricted-imports')
+  })
+
   it('internal-api 里可以引用只读加固用到的内部符号（M2-P3 设计 §3.6）', async () => {
     const code = [
       'import { IPermissionService, IUndoRedoService } from \'@univerjs/core\'',
@@ -463,6 +495,11 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
     // 浮动图片的可编辑（M2-P3 S3 之后的修复）
     expect(editor.paths?.find(path => path.name === '@univerjs/drawing')?.importNames).toEqual(['IDrawingManagerService'])
     expect(editor.paths?.find(path => path.name === '@univerjs/sheets-drawing')?.importNames).toEqual(['ISheetDrawingService'])
+    // 放开编辑栏、拦下冻结线（P3 审查 A1、B2）
+    expect(editor.paths?.find(path => path.name === '@univerjs/core')?.importNames).toEqual(expect.arrayContaining(['IContextService', 'FOCUSING_FX_BAR_EDITOR', 'DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY']))
+    expect(editor.paths?.find(path => path.name === '@univerjs/docs-ui')?.importNames).toEqual(['IEditorService'])
+    expect(editor.paths?.find(path => path.name === '@univerjs/engine-render')?.importNames).toEqual(['IRenderManagerService'])
+    expect(editor.paths?.find(path => path.name === '@univerjs/sheets-ui')?.importNames).toEqual(['HeaderFreezeRenderController'])
   })
 
   it('只有编辑器页的入口与编辑器页（sheet-editor 功能）能引用编辑器，而且只经公开入口', async () => {
@@ -650,6 +687,33 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
       expect(report.rules, file).toContain('no-restricted-syntax')
       expect(report.messages.join('\n'), file).toContain(RADIX_DIALOG_MESSAGE)
     }
+  })
+
+  it('SDK 的 DOM 标记（data-u-comp）只在 internal-api 里写：编辑器、平台代码、入口与弹窗的文件里的字符串、模板、JSX 属性与 dataset.uComp 都失败；internal-api 与测试代码不受限（P3 审查 A8）', async () => {
+    const DOM_MARKER_MESSAGE = 'SDK 的 DOM 标记（data-u-comp）只在 apps/web/src/editor/internal-api/ 里写并登记'
+    const codes = [
+      'export const selector = \'[data-u-comp="formula-bar"]\'\n',
+      'export const selector = `[data-u-comp="formula-bar"]`\n',
+      `export const selector = \`[data-u-comp="\${String(1)}"]\`\n`,
+      'export function comp(element: HTMLElement): string | undefined {\n  return element.dataset.uComp\n}\n',
+      'export function comp(element: HTMLElement): string | null {\n  return element.getAttribute(\'data-u-comp\')\n}\n',
+    ]
+    const jsx = 'export function Fake() {\n  return <div data-u-comp="formula-bar" />\n}\n'
+    const files = ['apps/web/src/editor/sheet-editor.ts', 'apps/web/src/editor/read-only/formula-bar.ts', WEB_FEATURE_FILE, WEB_SHARED_FILE, WEB_FILE, PLATFORM_ENTRY, 'apps/web/src/shared/ui/dialog.tsx']
+    for (const file of files) {
+      for (const code of file.endsWith('.tsx') ? [...codes, jsx] : codes) {
+        const report = await lint(code, file)
+        expect(report.rules, `${file}\n${code}`).toContain('no-restricted-syntax')
+        expect(report.messages.join('\n'), `${file}\n${code}`).toContain(DOM_MARKER_MESSAGE)
+      }
+    }
+    // internal-api（逐项登记的出口）与测试代码（按 SDK 的结构造元素）不受限
+    for (const file of ['apps/web/src/editor/internal-api/dom-markers.ts', 'apps/web/src/editor/read-only/formula-bar.test.ts', WEB_TEST_FILE]) {
+      for (const code of codes)
+        expect((await lint(code, file)).messages.join('\n'), `${file}\n${code}`).not.toContain(DOM_MARKER_MESSAGE)
+    }
+    // 只是含有相近字样的普通字符串不算
+    expect((await lint('export const word = \'uComposer data-u-component-x\'\n', WEB_FEATURE_FILE)).messages.join('\n')).not.toContain(DOM_MARKER_MESSAGE)
   })
 }, LINT_TIMEOUT)
 

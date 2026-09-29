@@ -38,6 +38,10 @@ M0 各 Phase 与 M1 发现、需要报告给 Univer 上游的问题，每条一�
 | [UR-019](UR-019-feature-search-hidden-submenu.md) | 隐藏父菜单之后，子项仍能被功能搜索找到 | M0-P5 §2.3、§5.1 | 按菜单隐藏的功能从搜索露出；平台把子项一并隐藏并守卫命令 | 公开 issue | 草稿 | — |
 | [UR-020](UR-020-layout-worker-table-tab.md) | 排版 Worker 下，单元格里键入后立即按 Tab，Tab 被吞掉 | M0-P5 §5.3；DEF-007 | 快速录入时内容写错格；v0.1 不启用排版 Worker | 公开 issue | 草稿 | — |
 | [UR-021](UR-021-ime-candidate-anchor.md) | 输入法候选框的锚点偏离组合文字 | M0-P5 §3.2、§3.3；DEF-013、DEF-005 | 候选框偏右、随换行下移；M6 缓解 | 公开 issue | 草稿 | — |
+| [UR-022](UR-022-freeze-permission-interceptor.md) | 冻结线的权限拦截没有注册；冻结区域的行列分隔线与非冻结区域不一致 | M2-P3 审查 B2、B7 | 不可编辑时冻结线照样拖得动、界面停在拖到的位置；平台在冻结线的拦截点上注册不允许的拦截器，分隔线由 E2E 核对数据不变 | 公开 issue | 草稿 | — |
+| [UR-023](UR-023-formula-bar-focus-readonly.md) | 工作簿不可编辑又没有保护规则时，编辑栏的编辑器能被聚焦、上下文不复位（按下与松开两条路径） | M2-P3 S3 的 E2E；M2-P3 审查 A1 | 查找与方向键失效、格式的快捷键转给文字编辑器；平台拦下按下，并在编辑栏被聚焦时马上放开、复位上下文 | 公开 issue | 草稿 | — |
+| [UR-024](UR-024-sheet-drawing-editable-flag.md) | 表格图片的权限控制器设的是 `ISheetDrawingService` 的标志，渲染读的是 `IDrawingManagerService` 的 | M2-P3 S3 的 E2E | 不可编辑时浮动图片照样能选中、拖动；平台只读时设后者的标志 | 公开 issue | 草稿 | — |
+| [UR-025](UR-025-note-popup-readonly.md) | 批注浮层不看权限，更新批注的命令也没有权限检查 | M2-P3 S3 的 E2E；M2-P3 审查 A6 | 不可编辑时批注照样能改（平台的防火墙兜底）；平台把浮层的文本框设为只读、去掉拖柄 | 公开 issue（浮层的只读也可以按功能请求提） | 草稿 | — |
 
 ## 提交之前要确认的事
 

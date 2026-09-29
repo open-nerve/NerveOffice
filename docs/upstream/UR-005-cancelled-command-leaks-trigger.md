@@ -1,11 +1,11 @@
 # UR-005 被 `BeforeCommandExecute` 取消的命令留在执行栈里，之后在命令之外执行的 mutation 带上它的 `trigger`
 
 > 状态：草稿（提交之前需求方确认）｜上游仓库：dream-num/univer｜提交方式：公开 issue（引用未合并的 PR #7455；也可以改为在 #7455 下补充影响与复现，见"已有的上游讨论"）
-> 出处：延期登记 DEF-020（`docs/v0.1/02-延期事项登记.md`）；M1-P4 设计 §7"S2 探针的结论"第 5 条（`docs/v0.1/M1-工程底座与行走骨架/04-P4-编辑器接入与在线保存.md`）；P4 交接单与 P4 审查报告的延期项；入口守卫 `apps/web/src/editor/profile/entry-guards.ts`｜发现版本：1.0.1｜1.0.1 核对：仍然存在。依据：发布包 `@univerjs/core@1.0.1` `lib/es/index.js` 第 2175–2254 行（压栈在前、只在成功路径上出栈，没有 `finally`）、第 2282–2291 行（`_attachMutationTrigger`），`lib/es/facade.js` 第 1242–1275 行（取消时抛 `CanceledError`）；2026-09-28 用 1.0.1 发布包在 Node.js 上复现（下文的脚本与输出）；1.0.0 源码相同；GitHub 上 `dev` 分支（2026-09-28）也没有改
+> 出处：延期登记 DEF-020（`docs/v0.1/02-延期事项登记.md`）；M1-P4 设计 §7"S2 探针的结论"第 5 条（`docs/v0.1/M1-工程底座与行走骨架/04-P4-编辑器接入与在线保存.md`）；P4 交接单与 P4 审查报告的延期项；入口守卫 `apps/web/src/editor/profile/entry-guards.ts`；M2-P3 审查 A5（被权限检查拦下的命令同样留在栈里，发布包 `@univerjs/sheets@1.0.1` `lib/es/index.js` 第 18114–18117、18129–18132 行）｜发现版本：1.0.1｜1.0.1 核对：仍然存在。依据：发布包 `@univerjs/core@1.0.1` `lib/es/index.js` 第 2175–2254 行（压栈在前、只在成功路径上出栈，没有 `finally`）、第 2282–2291 行（`_attachMutationTrigger`），`lib/es/facade.js` 第 1242–1275 行（取消时抛 `CanceledError`）；2026-09-28 用 1.0.1 发布包在 Node.js 上复现（下文的脚本与输出）；1.0.0 源码相同；GitHub 上 `dev` 分支（2026-09-28）也没有改
 
 ## 摘要（中文）
 
-命令服务在调用 `beforeCommandExecuted` 监听之前就把命令压进执行栈，只在成功路径上释放。Facade 的 `BeforeCommandExecute`、`BeforeUndo`、`BeforeRedo` 取消命令的方式是在监听里抛出 `CanceledError`，命令服务捕获后返回 `false`，但栈项没有释放，会在实例的整个生命周期里一直留着。之后在任何命令之外执行的 mutation（公式计算的开始、进度与完成通知、结果与结果写回等）都会在 `trigger` 里带上这个早已取消的命令 id；留下的是 COMMAND（例如被取消的撤销）时，连 mutation 已有的 `trigger` 也会被覆盖。M1-P4 的探针（1.0.1）在 Ctrl/Cmd+K 被入口守卫取消之后，看到公式的开始与完成通知带 `sheet.operation.insert-hyper-link-toolbar`；2026-09-28 用 1.0.1 在 Node.js 上复现了"取消一次操作"与"取消一次撤销"两种情形，并确认留下的 COMMAND 会覆盖已有的 `trigger`。SDK 自己有按 `trigger` 做判断的地方（例如公式是否因一次写入而重算、自动填充界面是否退出），但我们没有观察到功能上的影响。平台目前不受影响：变更检测与公式收齐都不看 `trigger`；M3 若要按 `trigger` 区分来源，需要先规避（DEF-020）。上游有一个未合并的 PR #7455 顺带修了这一点，并带有针对这一情形的测试。
+命令服务在调用 `beforeCommandExecuted` 监听之前就把命令压进执行栈，只在成功路径上释放。Facade 的 `BeforeCommandExecute`、`BeforeUndo`、`BeforeRedo` 取消命令的方式是在监听里抛出 `CanceledError`，命令服务捕获后返回 `false`，但栈项没有释放，会在实例的整个生命周期里一直留着。被 SDK 自己的权限检查拦下的命令同样如此：sheets 的 `SheetPermissionCheckController` 也是在 `beforeCommandExecuted` 监听里抛出 `CustomCommandExecutionError`（`blockExecuteWithoutPermission`），所以只读的工作簿里每一次被拦下的键入、粘贴、改格式都会在栈里留下一项（M2-P3 审查 A5）。之后在任何命令之外执行的 mutation（公式计算的开始、进度与完成通知、结果与结果写回等）都会在 `trigger` 里带上这个早已取消的命令 id；留下的是 COMMAND（例如被取消的撤销）时，连 mutation 已有的 `trigger` 也会被覆盖。M1-P4 的探针（1.0.1）在 Ctrl/Cmd+K 被入口守卫取消之后，看到公式的开始与完成通知带 `sheet.operation.insert-hyper-link-toolbar`；2026-09-28 用 1.0.1 在 Node.js 上复现了"取消一次操作"与"取消一次撤销"两种情形，并确认留下的 COMMAND 会覆盖已有的 `trigger`。SDK 自己有按 `trigger` 做判断的地方（例如公式是否因一次写入而重算、自动填充界面是否退出），但我们没有观察到功能上的影响。平台目前不受影响：变更检测与公式收齐都不看 `trigger`；M3 若要按 `trigger` 区分来源，需要先规避（DEF-020）。上游有一个未合并的 PR #7455 顺带修了这一点，并带有针对这一情形的测试。
 
 ## 已有的上游讨论
 
@@ -23,6 +23,8 @@
 ### Describe the bug
 
 `CommandService.executeCommand()` and `syncExecuteCommand()` push the command onto `_commandExecutionStack` **before** calling the `beforeCommandExecuted` listeners, and remove it only on the success path. The Facade cancels a command by throwing `CanceledError` from those listeners (`BeforeCommandExecute`, `BeforeUndo`, `BeforeRedo`); the command service catches it and returns `false`, but the stack item is never disposed. It stays on the stack for the lifetime of the Univer instance, one entry per cancellation.
+
+The same happens to commands rejected by Univer's own permission check: `SheetPermissionCheckController` (`@univerjs/sheets`) also throws a `CustomCommandExecutionError` from a `beforeCommandExecuted` listener (`blockExecuteWithoutPermission()`), so in a non-editable workbook every blocked keystroke, paste or formatting shortcut leaves an item on the stack.
 
 `_attachMutationTrigger()` looks the trigger up on that stack. From then on, every mutation executed outside a command — formula calculation start/progress/completion notifications, the calculation result and its write-backs, and so on — gets the id of the long-cancelled command as its `trigger`. If the stale item is a COMMAND (e.g. a cancelled undo), it even overwrites a `trigger` the mutation already had.
 
@@ -139,6 +141,7 @@ Paths are relative to the repository root; line numbers refer to tag v1.0.0 (the
   - `executeCommand()` L416-475: L438 pushes the stack item, L441 calls the `beforeCommandExecuted` listeners, L461 disposes the item only after a successful execution; the `catch` at L467-474 returns `false` for a `CustomCommandExecutionError` without disposing it. `syncExecuteCommand()` L477-535 has the same structure (L499, L502, L522, L528-534). By code reading, a handler that throws leaks its stack item the same way.
   - `_attachMutationTrigger()` L576-601: for every mutation, `findLast` on the stack picks the stale item; a stale COMMAND overwrites `params.trigger` unconditionally (L581-588), a stale OPERATION fills it in when it is missing (L590-600).
 - `packages/core/src/facade/f-univer.ts` L217-273: `BeforeRedo`, `BeforeUndo` and `BeforeCommandExecute` cancel by throwing `CanceledError` (L231, L249, L267), which extends `CustomCommandExecutionError` (`packages/core/src/common/error.ts` L17-29).
+- `packages/sheets/src/controllers/permission/sheet-permission-check.controller.ts` L178-183 and L207-210: the permission check runs in a `beforeCommandExecuted` listener and rejects a command by throwing `CustomCommandExecutionError('have no permission')`, taking the same path.
 - Mutations executed outside commands, e.g. the calculation start in `packages/engine-formula/src/services/formula-calculation-trigger.service.ts` L147-158 and the completion notification in `packages/engine-formula/src/controllers/calculate.controller.ts` L247-255, therefore pick up the stale trigger.
 - Code that reads `trigger` includes `packages/sheets-formula/src/controllers/active-dirty.controller.ts` L79-85 (whether a `SetRangeValuesMutation` triggers recalculation) and `packages/sheets-ui/src/controllers/auto-fill-ui.controller.ts` L158-171.
 

@@ -16,10 +16,13 @@
 //    （sheets 的 sheet-permission-init.controller.ts:263-331、333-385）。不创建保护规则，不写保护类资源；
 //    不用 FWorksheetPermission.setReadOnly()：它要求先 protect()，会写保护类资源，还会关掉复制（M0-P3 报告 §5.3）。
 //    同一步里把浮动图片设为不可编辑（见 applyWorksheetPoints）。
-// SDK 界面上还有两处只读时照样能输入，守卫装上时一并处理、销毁时撤掉（M2-P3 S3 的 E2E 发现之后）：
-// 批注浮层的文本框设为只读（note-popup.ts）；编辑栏点不进去（formula-bar.ts）。
+// SDK 界面上还有几处只读时照样能碰，守卫一并处理、销毁时撤掉（M2-P3 S3 的 E2E 与 P3 审查发现之后）：
+// 装上时：批注浮层的文本框设为只读（note-popup.ts）；编辑栏的编辑框按不下去（formula-bar.ts 的 blockFormulaBarInput）；
+// 渲染完成之后（applyRenderedGuards）：冻结线拖不动（freeze-handles.ts）；编辑栏的编辑器不管从哪条路径被聚焦都马上放开
+// （formula-bar.ts 的 releaseFormulaBarEditor）。
 // 创建编辑器时按顺序调用（sheet-editor.ts）：创建工作簿之前装上（防火墙与撤销拦截在打开的过程中也生效）→ 工作簿创建之后
-// applyWorksheetPoints → 就绪时 clearUndoStack。只读时新表建不出来（防火墙取消 insert-sheet），所以权限点只在创建时设一次。
+// applyWorksheetPoints → 就绪时（渲染已经完成）applyRenderedGuards、clearUndoStack。只读时新表建不出来（防火墙取消 insert-sheet），
+// 所以权限点只在创建时设一次。
 // M3 的原地切换复用这几个入口：进入只读时按同样的顺序，退出时销毁（权限点与图片的可编辑由它另外恢复，这里不管）
 import type { IDisposable, Univer } from '@univerjs/core'
 import type { FUniver } from '@univerjs/core/facade'
@@ -27,8 +30,10 @@ import type { ChangeClassifierConfig } from '../change-tracking/change-classifie
 import type { GuardedCommand } from '../profile/entry-guards.ts'
 import { isDocumentChange } from '../change-tracking/change-classifier.ts'
 import { toCommandRecord } from '../change-tracking/command-event.ts'
-import { getAllWorksheetPermissionPoint, getAllWorksheetPermissionPointByPointPanel, IDrawingManagerService, injectorOf, IPermissionService, IUndoRedoService, WorksheetCopyPermission, WorksheetViewPermission } from '../internal-api/index.ts'
-import { blockFormulaBarInput } from './formula-bar.ts'
+import { getAllWorksheetPermissionPoint, getAllWorksheetPermissionPointByPointPanel, IContextService, IDrawingManagerService, injectorOf, IPermissionService, IUndoRedoService, WorksheetCopyPermission, WorksheetViewPermission } from '../internal-api/index.ts'
+import { IEditorService, IRenderManagerService } from '../internal-api/ui.ts'
+import { blockFormulaBarInput, releaseFormulaBarEditor } from './formula-bar.ts'
+import { lockFreezeHandles } from './freeze-handles.ts'
 import { lockNotePopups } from './note-popup.ts'
 
 type WorksheetPoint = ReturnType<typeof getAllWorksheetPermissionPoint>[number] | ReturnType<typeof getAllWorksheetPermissionPointByPointPanel>[number]
@@ -60,9 +65,14 @@ const READ_ONLY_GUARDED_IDS: ReadonlySet<string> = new Set(READ_ONLY_GUARDED_COM
 export interface ReadOnlyGuard {
   /** 工作簿创建之后调用：每张工作表"查看""复制"之外的权限点设为不允许（不存在的先加上），浮动图片设为不可编辑 */
   readonly applyWorksheetPoints: () => void
+  /**
+   * 渲染完成之后调用一次：冻结线拖不动（冻结线的控制器是渲染模块，SDK 到 Rendered 才注册）；编辑栏的编辑器一被聚焦就放开。
+   * 编辑器页在就绪时调用（就绪之前的输入由页面的交互屏障拦住）
+   */
+  readonly applyRenderedGuards: () => void
   /** 清空这份文档的撤销栈：以只读创建时本来就空，这是给 M3 的原地切换用的同一个入口 */
   readonly clearUndoStack: () => void
-  /** 移除防火墙与撤销、重做的拦截，撤掉批注与编辑栏的处理；权限点与图片的可编辑不恢复。可以重复调用 */
+  /** 移除防火墙与撤销、重做的拦截，撤掉批注、编辑栏与冻结线的处理；权限点与图片的可编辑不恢复。可以重复调用 */
   readonly dispose: () => void
 }
 
@@ -81,7 +91,8 @@ export function installReadOnlyGuard(univer: Univer, univerAPI: FUniver, config:
       event.cancel = true
     }),
   ]
-  const domGuards: (() => void)[] = [lockNotePopups(), blockFormulaBarInput()]
+  /** 界面上的处理：撤掉它们的函数（装上时的两项，渲染完成之后再加两项） */
+  const uiGuards: (() => void)[] = [lockNotePopups(), blockFormulaBarInput()]
 
   return {
     applyWorksheetPoints() {
@@ -105,13 +116,20 @@ export function installReadOnlyGuard(univer: Univer, univerAPI: FUniver, config:
       // internal-api 的登记）。sheets-drawing-ui 到 Rendered 才注册画图片的渲染模块，在这里设，之后画出来的图片都点不中、拖不动
       injector.get(IDrawingManagerService).setDrawingEditable(false)
     },
+    applyRenderedGuards() {
+      const injector = injectorOf(univer)
+      uiGuards.push(
+        lockFreezeHandles(injector.get(IRenderManagerService), unitId),
+        releaseFormulaBarEditor({ editors: injector.get(IEditorService), context: injector.get(IContextService) }),
+      )
+    },
     clearUndoStack() {
       injectorOf(univer).get(IUndoRedoService).clearUndoRedo(unitId)
     },
     dispose() {
       for (const subscription of subscriptions.splice(0))
         subscription.dispose()
-      for (const undo of domGuards.splice(0))
+      for (const undo of uiGuards.splice(0))
         undo()
     },
   }

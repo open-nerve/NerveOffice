@@ -6,17 +6,19 @@
 // 单元格图片（"功能"表 H5）的尺寸 41×41 改为 60×60（SDK 画这一格时按单元格的大小改写模型里的尺寸，sheets-drawing-ui 的
 // sheet-cell-image.controller.ts 的 resizeImageByCell，不经 mutation）。
 // 写库时换上文档自己的 unitId（与新建的模板相同，database.ts 的 SnapshotFor）。
+// 重新收敛（SDK 升级或插件档案变更之后，"打开不产生改动"等用例失败时）：pnpm --filter @nerve-office/e2e run update:read-only-sample
+// （tools/update-read-only-sample.spec.ts：打开、把每张表画一遍、保存，直到连续两次保存的字节相同，写回 read-only-sample.json）。
 import { readFileSync } from 'node:fs'
 
 /** 样本里的占位 unitId */
-const UNIT_PLACEHOLDER = '__UNIT_ID__'
+export const SAMPLE_UNIT_PLACEHOLDER = '__UNIT_ID__'
 
 /** 样本的原文（紧凑的 JSON：与编辑器保存的写法相同） */
 const SAMPLE = JSON.stringify(JSON.parse(readFileSync(new URL('read-only-sample.json', import.meta.url), 'utf8')) as unknown)
 
 /** 按文档的 unitId 生成样本的快照文本 */
 export function readOnlySampleFor(unitId: string): string {
-  return SAMPLE.replaceAll(UNIT_PLACEHOLDER, unitId)
+  return SAMPLE.replaceAll(SAMPLE_UNIT_PLACEHOLDER, unitId)
 }
 
 /** 样本的 5 张工作表：名称与 id（sheetOrder 的顺序） */
@@ -40,3 +42,35 @@ export const SAMPLE_CELLS = {
   /** "功能"表 H1 的批注 */
   note: '综合样本中的备注',
 } as const
+
+/** 样本里的公式与它们的结果（缓存值）：同一张表的、跨表的、引用定义名称的 */
+export const SAMPLE_FORMULAS = [
+  { sheetId: SAMPLE_SHEETS.data.id, cell: 'G2', formula: '=A2&"-"&B2', value: '苹果-12' },
+  { sheetId: SAMPLE_SHEETS.data.id, cell: 'B7', formula: '=SUM(B2:B6)', value: 70 },
+  { sheetId: SAMPLE_SHEETS.data.id, cell: 'B8', formula: '=AVERAGE(B2:B6)', value: 14 },
+  { sheetId: SAMPLE_SHEETS.data.id, cell: 'B9', formula: '=SUM(数量合计区)', value: 70 },
+  { sheetId: SAMPLE_SHEETS.summary.id, cell: 'A1', formula: '=SUM(\'数据\'!B2:B6)', value: 70 },
+  { sheetId: SAMPLE_SHEETS.summary.id, cell: 'A2', formula: '=\'数据\'!A2', value: '苹果' },
+] as const
+
+interface SampleCell { f?: string, v?: unknown, t?: number }
+interface SampleWorkbook { sheets: Record<string, { cellData: Record<string, Record<string, SampleCell>> }> }
+
+/**
+ * 去掉公式缓存值的样本（P3 审查 B5）：样本本身逐字节比较，不动它，按它派生。打开时 SDK 只计算没有结果的公式
+ * （sheets-formula 的 initialFormulaComputing 默认是 WHEN_EMPTY），所以打开之后出现的结果一定是公式 Worker 算出来的
+ */
+export function sampleWithoutFormulaValuesFor(unitId: string): string {
+  const workbook = JSON.parse(readOnlySampleFor(unitId)) as SampleWorkbook
+  for (const sheet of Object.values(workbook.sheets)) {
+    for (const row of Object.values(sheet.cellData)) {
+      for (const cell of Object.values(row)) {
+        if (cell.f !== undefined) {
+          delete cell.v
+          delete cell.t
+        }
+      }
+    }
+  }
+  return JSON.stringify(workbook)
+}

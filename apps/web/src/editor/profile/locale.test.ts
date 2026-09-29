@@ -26,22 +26,29 @@ function leaves(pack: ILanguagePack, prefix = ''): [string, LanguageValue][] {
 /** 权限检查拦下操作时的提示所在的几组（各包 locale/zh-CN 的 permission.dialog） */
 const DIALOG_GROUPS = ['sheets', 'sheets-ui', 'sheets-drawing-ui', 'sheets-conditional-formatting-ui', 'sheets-data-validation-ui']
 
+/** 拦下操作的提示：几组 permission.dialog 里的 …Err 与 alertContent，加上筛选按钮的 filterErr（sheets-filter-ui 的 permission 下） */
+function isBlockedText(path: string): boolean {
+  return DIALOG_GROUPS.some(group => path.startsWith(`${group}.permission.dialog.`)) ? /Err$|alertContent$/.test(path) : path === 'sheets-filter-ui.permission.filterErr'
+}
+
 describe('只读时权限检查的提示（M2-P3 S3 之后的修复）：平台不用 SDK 的保护，这些提示只在只读时出现', () => {
   const overridden = leaves(READ_ONLY_PERMISSION_TEXTS)
 
   it('合并之后这些路径是新的说法', () => {
-    expect(overridden.length).toBe(23)
+    expect(overridden.length).toBe(24)
     for (const [path, text] of overridden)
       expect(valueAt(SHEET_ZH_CN, path), path).toBe(text)
     expect(valueAt(SHEET_ZH_CN, 'sheets-ui.permission.dialog.editErr')).toBe('这份文档只能查看，不能修改。')
     expect(valueAt(SHEET_ZH_CN, 'sheets.permission.dialog.operatorSheetErr')).toBe('这份文档只能查看，不能调整工作表。')
     expect(valueAt(SHEET_ZH_CN, 'sheets-ui.permission.dialog.copyErr')).toBe('不能复制这里的内容。')
+    // 筛选按钮的提示（P3 审查 B8）：原文是"你没有权限使用筛选。"
+    expect(valueAt(SHEET_ZH_CN, 'sheets-filter-ui.permission.filterErr')).toBe('这份文档只能查看，不能使用筛选。')
   })
 
-  it('拦下操作的提示（…Err 与 alertContent）里不再提保护，也不让人联系创建者；覆盖的都是 SDK 里有的键', () => {
-    const errors = DIALOG_GROUPS.flatMap(group => leaves(SHEET_ZH_CN, '').filter(([path]) => path.startsWith(`${group}.permission.dialog.`) && /Err$|alertContent$/.test(path)))
-    expect(errors.length).toBe(overridden.length)
-    expect(errors.filter(([, text]) => /保护|创建者/.test(String(text)))).toEqual([])
+  it('拦下操作的提示（…Err 与 alertContent、筛选按钮的提示）都换成了只读的说法：不再提保护、不让人联系创建者、不说"没有权限"', () => {
+    const errors = leaves(SHEET_ZH_CN).filter(([path]) => isBlockedText(path))
+    expect(errors.map(([path]) => path).sort()).toEqual(overridden.map(([path]) => path).sort())
+    expect(errors.filter(([, text]) => /保护|创建者|没有权限/.test(String(text)))).toEqual([])
   })
 
   it('其他文字不动：只改覆盖的路径，别的叶子与原来的语言包相同', () => {

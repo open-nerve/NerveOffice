@@ -2,11 +2,12 @@ import type { Univer } from '@univerjs/core'
 import type { FUniver } from '@univerjs/core/facade'
 import type { CommandEvent } from '../change-tracking/command-event.ts'
 import type { ReadOnlyGuard } from './read-only-guard.ts'
-import { CommandType } from '@univerjs/core'
+import { CommandType, createInterceptorKey, InterceptorManager } from '@univerjs/core'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { classifyCommand, EXCLUDED_EXECUTION_OPTIONS } from '../change-tracking/change-classifier.ts'
 import { toCommandRecord } from '../change-tracking/command-event.ts'
-import { FORMULA_BAR_INPUT_SELECTOR, getAllWorksheetPermissionPoint, getAllWorksheetPermissionPointByPointPanel, IDrawingManagerService, IPermissionService, IUndoRedoService, NOTE_TEXTAREA_SELECTOR, WorksheetCopyPermission, WorksheetViewPermission } from '../internal-api/index.ts'
+import { DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY, FOCUSING_FX_BAR_EDITOR, FORMULA_BAR_INPUT_SELECTOR, getAllWorksheetPermissionPoint, getAllWorksheetPermissionPointByPointPanel, IContextService, IDrawingManagerService, IPermissionService, IUndoRedoService, NOTE_TEXTAREA_SELECTOR, WorksheetCopyPermission, WorksheetViewPermission } from '../internal-api/index.ts'
+import { HeaderFreezeRenderController, IEditorService, IRenderManagerService } from '../internal-api/ui.ts'
 import { closedWorksheetPoints, installReadOnlyGuard as install, READ_ONLY_GUARDED_COMMANDS } from './read-only-guard.ts'
 
 /** Facade 在执行前送出的事件：BeforeCommandExecute、BeforeUndo、BeforeRedo 都是这一种 */
@@ -29,6 +30,9 @@ afterEach(() => {
 
 const UNIT = 'unit-1'
 const config = { unitId: UNIT, excludedMutationIds: ['sheet.operation.clear-drawing-transformer'] }
+
+/** 与 sheets-ui 的冻结线控制器同样的拦截点（freeze.render-controller.ts 的 FREEZE_PERMISSION_CHECK） */
+const FREEZE_PERMISSION_CHECK = createInterceptorKey<boolean, null>('freezePermissionCheck')
 
 /**
  * 假的 Facade：记下 BeforeCommandExecute、BeforeUndo、BeforeRedo 的订阅者，由测试模拟 SDK 在执行前同步派发；
@@ -78,6 +82,27 @@ function fakeServices(existing: readonly string[] = []) {
   }
   const undoRedo = { clearUndoRedo: vi.fn<(unitId: string) => void>() }
   const drawings = { setDrawingEditable: vi.fn<(editable: boolean) => void>() }
+  // 渲染之后的两项：本文档渲染单元里的冻结线控制器（它的拦截点），编辑器管理（focus$ 的订阅者）与上下文
+  const freeze = new InterceptorManager({ FREEZE_PERMISSION_CHECK })
+  const renders = { getRenderUnitById: (id: string) => id === UNIT ? { with: (dependency: unknown) => dependency === HeaderFreezeRenderController ? { interceptor: freeze } : undefined } : null }
+  const focusListeners = new Set<() => void>()
+  let focusId: string | null = null
+  const editors = {
+    focus$: { subscribe: (listener: () => void) => {
+      focusListeners.add(listener)
+      return { unsubscribe: () => focusListeners.delete(listener) }
+    } },
+    getFocusId: () => focusId,
+    blur: vi.fn((_force?: boolean) => {
+      focusId = null
+    }),
+  }
+  const context = { setContextValue: vi.fn<(key: string, value: boolean) => void>() }
+  const focus = (id: string): void => {
+    focusId = id
+    for (const listener of [...focusListeners])
+      listener()
+  }
   const univer = {
     __getInjector: () => ({
       get: (id: unknown) => {
@@ -87,11 +112,18 @@ function fakeServices(existing: readonly string[] = []) {
           return undoRedo
         if (id === IDrawingManagerService)
           return drawings
-        throw new Error('只读守卫只取权限服务、撤销栈与图片管理服务')
+        if (id === IRenderManagerService)
+          return renders
+        if (id === IEditorService)
+          return editors
+        if (id === IContextService)
+          return context
+        throw new Error('只读守卫只取权限服务、撤销栈、图片管理、渲染管理、编辑器管理与上下文服务')
       },
     }),
   } as unknown as Univer
-  return { univer, points, added, undoRedo, drawings }
+  const canDragFreeze = (): unknown => freeze.fetchThroughInterceptors(FREEZE_PERMISSION_CHECK)(true, null)
+  return { univer, points, added, undoRedo, drawings, editors, context, focus, focusListeners, canDragFreeze }
 }
 
 const edit: FakeEvent = { id: 'sheet.mutation.set-range-values', type: CommandType.MUTATION, params: { unitId: UNIT, subUnitId: 'sheet-1' } }
@@ -230,6 +262,39 @@ describe('只读守卫：批注浮层与编辑栏（M2-P3 S3 之后的修复）'
     guard.dispose()
     input.dispatchEvent(new Event('pointerdown', { bubbles: true, cancelable: true }))
     expect(received).toHaveBeenCalledOnce()
+  })
+})
+
+describe('只读守卫：渲染完成之后的界面处理（P3 审查 A1、B2）', () => {
+  it('装上与设权限点时不取渲染与编辑器的服务：它们在渲染完成之后才装', () => {
+    const services = fakeServices()
+    const guard = installReadOnlyGuard(services.univer, fakeFacade().api, config)
+    guard.applyWorksheetPoints()
+    expect(services.canDragFreeze()).toBe(true)
+    expect(services.focusListeners.size).toBe(0)
+  })
+
+  it('applyRenderedGuards：本文档的冻结线拖不动；编辑栏的编辑器一被聚焦就放开', async () => {
+    const services = fakeServices()
+    const guard = installReadOnlyGuard(services.univer, fakeFacade().api, config)
+    guard.applyRenderedGuards()
+    expect(services.canDragFreeze()).toBe(false)
+    services.focus(DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY)
+    await Promise.resolve()
+    expect(services.editors.blur).toHaveBeenCalledExactlyOnceWith(true)
+    expect(services.context.setContextValue).toHaveBeenCalledExactlyOnceWith(FOCUSING_FX_BAR_EDITOR, false)
+  })
+
+  it('销毁时撤掉：冻结线照常可以拖，编辑栏的聚焦不再放开', async () => {
+    const services = fakeServices()
+    const guard = installReadOnlyGuard(services.univer, fakeFacade().api, config)
+    guard.applyRenderedGuards()
+    guard.dispose()
+    expect(services.canDragFreeze()).toBe(true)
+    expect(services.focusListeners.size).toBe(0)
+    services.focus(DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY)
+    await Promise.resolve()
+    expect(services.editors.blur).not.toHaveBeenCalled()
   })
 })
 
