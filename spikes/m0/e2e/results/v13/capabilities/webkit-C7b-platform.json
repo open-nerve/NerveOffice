@@ -15,7 +15,7 @@
       "step": "在链接框里输入危险地址（记录）",
       "ok": true,
       "detail": {
-        "javascript://x@example.com/%0Aalert(1)": null,
+        "javascript://<能通过校验的写法已移出仓库>": null,
         "data://text/html,<b>x</b>": null,
         "vbscript://x": null,
         "javascript:alert(1)": null
@@ -25,7 +25,7 @@
       "step": "平台配置：危险地址都不保存",
       "ok": true,
       "detail": {
-        "javascript://x@example.com/%0Aalert(1)": null,
+        "javascript://<能通过校验的写法已移出仓库>": null,
         "data://text/html,<b>x</b>": null,
         "vbscript://x": null,
         "javascript:alert(1)": null
@@ -45,7 +45,7 @@
   "policyEvents": [
     {
       "kind": "guard-cancel",
-      "detail": "docs.command.add-hyper-link：链接地址 javascript://x@example.com/%0Aalert(1)"
+      "detail": "docs.command.add-hyper-link：链接地址 javascript://<能通过校验的写法已移出仓库>"
     }
   ],
   "summary": {

@@ -4,6 +4,8 @@
 // 2. 内部片段（<!--univer-doc-fragment:…-->）：SDK 直接采用，不经过 HTML 转换，对照 SDK 默认与平台配置；
 // 3. "仅保留文本"粘贴（⌘⇧V）；
 // 4. 本平台的复制：同一文档、另一个标签页、表格到文字文档、文字文档到表格（后三项用真实剪贴板，只在 Chromium 内核上）。
+// 安全相关的细节已按上游的政策撤下（2026-09-29，需求方决定）：用来验证链接校验与转义的两个地址写成占位串，
+// 原文留在本机不入库的 docs/upstream/private/，上游发布修复之后移回。这两个用例因此不能原样重跑（spikes 不再执行，见 CLAUDE.md）。
 import type { Page, TestInfo } from '@playwright/test';
 import type { DocSummary } from './p5-helpers';
 
@@ -259,7 +261,7 @@ for (const config of ['default', 'platform'] as const) {
                 dataStream: '恶意链接与标题\r引号链接\r分节\n之后\r',
                 customRanges: [
                     { rangeId: 'p5evil', rangeType: 0, startIndex: 0, endIndex: 3, properties: { url: 'javascript:window.__p5_pwned=1' } },
-                    { rangeId: 'p5quote', rangeType: 0, startIndex: 8, endIndex: 11, properties: { url: 'https://x.test/"><b id=p5inj>注入</b>' } },
+                    { rangeId: 'p5quote', rangeType: 0, startIndex: 8, endIndex: 11, properties: { url: 'https://x.test/<带引号与标签的地址已移出仓库>' } },
                 ],
                 paragraphs: [{ startIndex: 7, paragraphStyle: { namedStyleType: 4 } }, { startIndex: 12 }, { startIndex: 18 }],
                 sectionBreaks: [{ startIndex: 15 }],

@@ -1,6 +1,8 @@
 // V13 能力矩阵（P5，00 号计划书 §4.3）：每项能力走用户的入口（工具栏、快捷键、菜单、`/` 菜单），然后检查：
 // 快照里的结构；撤销回到原状、重做恢复；保存 → 重开 → 再保存两次快照一致；没有页面错误与 CSP 强制违规。
 // 平台配置（img=platform&docpolicy=platform）、严格 CSP、三个浏览器。个别能力另跑 SDK 默认作对照（C5 单元格图片、C7 链接地址、C8 `/` 键）。
+// 安全相关的细节已按上游的政策撤下（2026-09-29，需求方决定）：用来验证链接校验与转义的两个地址写成占位串，
+// 原文留在本机不入库的 docs/upstream/private/，上游发布修复之后移回。这两个用例因此不能原样重跑（spikes 不再执行，见 CLAUDE.md）。
 import type { Page, TestInfo } from '@playwright/test';
 import type { DocSummary } from './p5-helpers';
 
@@ -626,7 +628,7 @@ test('C7 超链接', async ({ page }, testInfo) => {
 
 for (const config of ['default', 'platform'] as const) {
     test(`C7b 链接地址的校验：${config}`, async ({ page }, testInfo) => {
-        const urls = ['javascript://x@example.com/%0Aalert(1)', 'data://text/html,<b>x</b>', 'vbscript://x', 'javascript:alert(1)'];
+        const urls = ['javascript://<能通过校验的写法已移出仓库>', 'data://text/html,<b>x</b>', 'vbscript://x', 'javascript:alert(1)'];
         const r = await capability(page, testInfo, { id: 'C7b', name: '链接地址的校验', config, roundtrip: false }, async (steps) => {
             const stored: Record<string, string | null> = {};
             for (const url of urls) {
@@ -670,7 +672,7 @@ for (const config of ['default', 'platform'] as const) {
             ['#heading-1', '#heading-1'],
             ['mailto:a@example.com', 'mailto:a@example.com'],
         ];
-        const quote = 'https://x.test/"><b id=p5inj>注入</b>';
+        const quote = 'https://x.test/<带引号与标签的地址已移出仓库>';
         const r = await capability(page, testInfo, { id: 'C7c', name: '链接地址的规范化（命令路径）', config, roundtrip: false }, async (steps) => {
             const stored: Record<string, string | null> = {};
             const add = async (url: string) => {
