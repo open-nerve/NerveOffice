@@ -125,7 +125,7 @@ describe('DocumentOrganizingService.move', () => {
     const moved = await service.move(member(ALICE), document.id, { spaceId: TEAM_SPACE, folderId: folder.id }, HTTP_ORIGIN)
     expect(moved).toMatchObject({ spaceId: TEAM_SPACE, folderId: folder.id, space: { id: TEAM_SPACE, name: '市场部' } })
     // 到了新空间只是编辑者：不能再把它移走
-    expect(moved.permissions).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true })
+    expect(moved.permissions).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true })
     expect(store.writeEpochs.get(document.id)).toBe(1)
     expect(store.revocations).toEqual([{ kind: 'documents', documentIds: [document.id] }])
     expect(store.audits).toEqual([{

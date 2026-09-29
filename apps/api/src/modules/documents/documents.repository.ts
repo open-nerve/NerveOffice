@@ -3,7 +3,7 @@ import type { SQL } from 'drizzle-orm'
 import type { TimeCursor } from '../../shared/time-cursor.ts'
 import type { Database, Transaction } from '../database/index.ts'
 import { Inject, Injectable } from '@nestjs/common'
-import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm'
 import { documents } from '../../db/schema/documents/index.ts'
 import { DATABASE, executorOf, keysetPosition } from '../database/index.ts'
 
@@ -14,6 +14,8 @@ export interface DocumentRow {
   readonly folderId: string | null
   readonly type: DocumentType
   readonly title: string
+  /** 创建人：删除的权限按它判断（编辑者只能删自己创建的，P4-S3 spec §2） */
+  readonly createdBy: string
   readonly createdAt: Date
   readonly updatedAt: Date
   /** 游标用的更新时间：数据库算出的 UTC 文本，保留微秒 */
@@ -56,6 +58,12 @@ export interface ListOptions {
   readonly folderId?: string | null | undefined
 }
 
+/** 一份文档与它所属的删除单元（正常状态时为空）：跨空间移动、删除与永久删除都要顺着它找到删除单元。 */
+export interface TrashedDocumentRow {
+  readonly id: string
+  readonly trashEntryId: string | null
+}
+
 /** 复制出来的文档要写的列：其余的列（类型、unitId、档案、格式版本、写入时的 SDK 版本）由数据库从源文档原样复制。 */
 export interface CopiedDocument {
   readonly spaceId: string
@@ -71,6 +79,7 @@ const COLUMNS = {
   folderId: d.folderId,
   type: d.type,
   title: d.title,
+  createdBy: d.createdBy,
   createdAt: d.createdAt,
   updatedAt: d.updatedAt,
   position: keysetPosition(d.updatedAt),
@@ -144,19 +153,109 @@ export class DocumentsRepository {
   }
 
   /**
-   * 按 id 顺序锁住这些文件夹里的文档（FOR UPDATE，与保存、转移相同的顺序）：文件夹跨空间移动时连它们一起搬。
-   * **不按状态过滤**（与展开文件夹子树一致，M2-P4 设计 §3.4）：回收站里的文档也跟着所在的文件夹走，
-   * 否则它的 folder_id 会指到别的空间里的文件夹，删除单元也会被拆散在两个空间里。
+   * 按 id 顺序锁住这些文件夹里的文档（FOR UPDATE，与保存、转移相同的顺序）：
+   * 文件夹跨空间移动时连它们一起搬，删除文件夹时整棵子树一起进回收站，永久删除时一起清掉。
+   * state 省略时**不按状态过滤**（与展开文件夹子树一致，M2-P4 设计 §3.4）：回收站里的文档也跟着所在的文件夹走，
+   * 否则它的 folder_id 会指到别的空间里的文件夹，删除单元也会被拆散在两个空间里；
+   * state 为 'active' 时只取正常状态的——删除文件夹只把它们并进这次的删除单元，早先删过的留在原来的单元里（P4-S3 spec §1）。
    * 限定在来源空间里：文件夹的所属空间已经在这次事务里改过时，不会把别处的行也卷进来
    */
-  async lockInFolders(folderIds: readonly string[], spaceId: string, transaction: Transaction): Promise<string[]> {
-    const rows = await executorOf(this.db, transaction)
-      .select({ id: d.id })
+  async lockInFolders(folderIds: readonly string[], spaceId: string, transaction: Transaction, state?: DocumentStatus): Promise<TrashedDocumentRow[]> {
+    if (folderIds.length === 0)
+      return []
+    return executorOf(this.db, transaction)
+      .select({ id: d.id, trashEntryId: d.trashEntryId })
       .from(d)
-      .where(and(inArray(d.folderId, [...folderIds]), eq(d.spaceId, spaceId)))
+      .where(and(
+        inArray(d.folderId, [...folderIds]),
+        eq(d.spaceId, spaceId),
+        state === undefined ? undefined : eq(d.status, state),
+      ))
       .orderBy(asc(d.id))
       .for('update')
-    return rows.map(row => row.id)
+  }
+
+  /**
+   * 按 id 顺序锁住属于这些删除单元的文档（FOR UPDATE）：恢复与永久删除按删除单元取出它的全部文档。
+   * 一份文档的删除单元只有一行，一个文件夹的删除单元里是整棵子树里的文档
+   */
+  async lockInEntries(entryIds: readonly string[], transaction: Transaction): Promise<TrashedDocumentRow[]> {
+    if (entryIds.length === 0)
+      return []
+    return executorOf(this.db, transaction)
+      .select({ id: d.id, trashEntryId: d.trashEntryId })
+      .from(d)
+      .where(inArray(d.trashEntryId, [...entryIds]))
+      .orderBy(asc(d.id))
+      .for('update')
+  }
+
+  /**
+   * 这些文件夹里正常状态的、不是这个人创建的文档有多少份（P4-S3 spec §2）：
+   * 编辑者只能删除"子树里正常状态的文档全部是本人创建的"文件夹，这一条在空间树的锁下用这一条语句判断，
+   * 不在纯函数里——展开子树之后可能有人往里移进别人的文档
+   */
+  async countCreatedByOthers(folderIds: readonly string[], spaceId: string, userId: string, transaction: Transaction): Promise<number> {
+    if (folderIds.length === 0)
+      return 0
+    const [row] = await executorOf(this.db, transaction)
+      .select({ count: sql<number>`count(*)::int` })
+      .from(d)
+      .where(and(inArray(d.folderId, [...folderIds]), eq(d.spaceId, spaceId), eq(d.status, 'active'), ne(d.createdBy, userId)))
+    return row?.count ?? 0
+  }
+
+  /**
+   * 放进回收站（调用方已锁住这些行）：状态与所属的删除单元在同一条语句里一起写（CHECK 要求二者一致），
+   * 写入代次加一——删除改变了谁能写（00 号计划书 §6.4）。更新时间不变：内容没有改
+   */
+  async trash(ids: readonly string[], trashEntryId: string, transaction: Transaction): Promise<number> {
+    if (ids.length === 0)
+      return 0
+    const rows = await executorOf(this.db, transaction)
+      .update(d)
+      .set({ status: 'trashed', trashEntryId, writeEpoch: sql`${d.writeEpoch} + 1` })
+      .where(inArray(d.id, [...ids]))
+      .returning({ id: d.id })
+    return rows.length
+  }
+
+  /**
+   * 从回收站恢复（调用方已锁住这些行）：整单一起回到正常状态，清空所属的删除单元。
+   * 写入代次**不再加一**（删除时已经加过，恢复不改变"谁能写"的判断依据，P4-S3 spec §3）。
+   * folderId 给出时一起写（一份文档的单元回到它的原位置）；undefined 表示位置不变（文件夹的单元里，文档仍在各自的文件夹下）
+   */
+  async restoreInEntry(trashEntryId: string, folderId: string | null | undefined, transaction: Transaction): Promise<number> {
+    const changes = { status: 'active' as const, trashEntryId: null }
+    const rows = await executorOf(this.db, transaction)
+      .update(d)
+      .set(folderId === undefined ? changes : { ...changes, folderId })
+      .where(eq(d.trashEntryId, trashEntryId))
+      .returning({ id: d.id })
+    return rows.length
+  }
+
+  /**
+   * 每个删除单元里有多少份文档：一条按删除单元 id 的计数，不展开子树（P4-S3 spec §6）。
+   * 回收站列表的份数用它；永久删除之后判断哪些单元空了也用它（没有出现在结果里的就是空的）
+   */
+  async countByTrashEntries(entryIds: readonly string[], transaction?: Transaction): Promise<ReadonlyMap<string, number>> {
+    if (entryIds.length === 0)
+      return new Map()
+    const rows = await executorOf(this.db, transaction)
+      .select({ trashEntryId: d.trashEntryId, count: sql<number>`count(*)::int` })
+      .from(d)
+      .where(inArray(d.trashEntryId, [...entryIds]))
+      .groupBy(d.trashEntryId)
+    return new Map(rows.flatMap(row => row.trashEntryId === null ? [] : [[row.trashEntryId, row.count] as const]))
+  }
+
+  /** 永久删除（调用方已锁住这些行）：内容与修订记录随外键 cascade 一起没了。 */
+  async deleteMany(ids: readonly string[], transaction: Transaction): Promise<number> {
+    if (ids.length === 0)
+      return 0
+    const rows = await executorOf(this.db, transaction).delete(d).where(inArray(d.id, [...ids])).returning({ id: d.id })
+    return rows.length
   }
 
   /**

@@ -110,7 +110,6 @@ export type DocumentSpace = z.infer<typeof documentSpaceSchema>
 
 /**
  * 调用者在这份文档上能做的操作：界面据此只显示能做的，服务端按同一套规则检查（M2-P4 设计 §3.7）。
- * 只列已经提供的操作；删除随 M2-P4 的 S3 加上自己的位与接口。
  */
 export const documentPermissionsSchema = z.object({
   /** 改动内容（保存）：编辑者及以上 */
@@ -122,6 +121,8 @@ export const documentPermissionsSchema = z.object({
   canMoveAcrossSpaces: z.boolean(),
   /** 复制：能读就能复制（目标空间的新建权限另判） */
   canCopy: z.boolean(),
+  /** 删除（进回收站）：空间管理员任意，编辑者只能删自己创建的（P4-S3 spec §2） */
+  canDelete: z.boolean(),
 })
 
 export type DocumentPermissions = z.infer<typeof documentPermissionsSchema>

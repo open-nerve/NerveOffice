@@ -87,9 +87,15 @@ const AUDIT_ACTION_NAMES: Record<AuditAction, string> = {
   'documents.renamed': '文档改名',
   'documents.moved': '移动文档',
   'documents.copied': '复制文档',
+  'documents.deleted': '删除文档',
+  'documents.restored': '恢复文档',
+  'documents.purged': '永久删除文档',
   'folders.created': '新建文件夹',
   'folders.renamed': '文件夹改名',
   'folders.moved': '移动文件夹',
+  'folders.deleted': '删除文件夹',
+  'folders.restored': '恢复文件夹',
+  'folders.purged': '永久删除文件夹',
 }
 
 function isAuditAction(action: string): action is AuditAction {

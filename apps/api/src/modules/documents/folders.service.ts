@@ -17,6 +17,7 @@ import { requireFolderIn } from './folder-location.ts'
 import { toFolder } from './folder-views.ts'
 import { FoldersRepository } from './folders.repository.ts'
 import { SpaceTreeRepository } from './space-tree.repository.ts'
+import { TrashEntriesRepository } from './trash-entries.repository.ts'
 import { WriteAccessRevocation } from './write-access.ts'
 
 /** 新建文件夹（已经过 contracts 的校验）。 */
@@ -54,6 +55,7 @@ export class FoldersService {
     private readonly transactions: TransactionRunner,
     private readonly folders: FoldersRepository,
     private readonly documents: DocumentsRepository,
+    private readonly trashEntries: TrashEntriesRepository,
     private readonly tree: SpaceTreeRepository,
     private readonly spaces: SpacesService,
     private readonly policy: DocumentAccessPolicy,
@@ -242,12 +244,20 @@ export class FoldersService {
     transaction: Transaction,
   ): Promise<FolderRow> {
     const { root, subtree } = await this.movedSubtree(folder, parent, spaceId, transaction)
-    const documentIds = await this.documents.lockInFolders(subtree.ids, folder.spaceId, transaction)
+    const inFolders = await this.documents.lockInFolders(subtree.ids, folder.spaceId, transaction)
+    const documentIds = inFolders.map(row => row.id)
     if (documentIds.length > 0) {
       // 位置不变（undefined）：它们仍在子树里各自的文件夹下，跟着文件夹一起到了新空间
       await this.documents.moveToSpace(documentIds, spaceId, undefined, transaction)
       await this.writeAccess.revoke({ kind: 'documents', documentIds }, transaction)
     }
+    // 完全落在这棵子树里的删除单元跟着换空间（P4-S3 spec §6b）：子树里已经在回收站的东西一起搬走了，
+    // 一个删除单元要么整体在子树里、要么整体不在，所以顺着子树里的行找到的单元就是要迁的那些
+    const entryIds = [...new Set([
+      ...inFolders.flatMap(row => row.trashEntryId ?? []),
+      ...await this.folders.trashEntryIdsIn(subtree.ids, transaction),
+    ])]
+    await this.trashEntries.moveToSpace(entryIds, spaceId, transaction)
     await this.recordMove(actor, folder, root, origin, { folders: subtree.ids.length, documents: documentIds.length }, transaction)
     return root
   }

@@ -11,8 +11,9 @@ import type { DocumentRevisionsRepository, NewRevision, RevisionRow } from './do
 import type { AccessibleScope, CopiedDocument, DocumentRow, DocumentsRepository, ListOptions, NewDocument } from './documents.repository.ts'
 import type { FolderRow, FoldersRepository, NewFolder, SubtreeMove, SubtreeSummary } from './folders.repository.ts'
 import type { SpaceTreeRepository } from './space-tree.repository.ts'
+import type { NewTrashEntry, TrashEntriesRepository, TrashEntryRow } from './trash-entries.repository.ts'
 import type { WriteAccessRevocation, WriteAccessScope } from './write-access.ts'
-import { FOLDER_LIST_MAX_ITEMS } from '@nerve-office/contracts'
+import { FOLDER_LIST_MAX_ITEMS, TRASH_RETENTION_DAYS } from '@nerve-office/contracts'
 import { vi } from 'vitest'
 import { EffectiveAccessPolicy } from './document-access-policy.ts'
 
@@ -43,6 +44,11 @@ interface FakeSpace {
 export class FakeStore {
   readonly documents = new Map<string, DocumentRow>()
   readonly folders = new Map<string, FolderRow & { requestId: string }>()
+  /** 回收站里的删除单元（M2-P4 S3）：id → 行 */
+  readonly trashEntries = new Map<string, TrashEntryRow>()
+  /** 文档与文件夹所属的删除单元（状态不在行类型里）：不在这里就是正常状态 */
+  readonly documentEntries = new Map<string, string>()
+  readonly folderEntries = new Map<string, string>()
   readonly contents = new Map<string, StoredSnapshot>()
   readonly revisions: (RevisionRow & { requestId: string })[] = []
   readonly audits: AuditEvent[] = []
@@ -64,7 +70,7 @@ export class FakeStore {
   addDocument(overrides: Partial<DocumentRow> = {}): DocumentRow {
     this.sequence += 1
     const id = `0199a2c4-0000-7000-8000-${String(this.sequence).padStart(12, '0')}`
-    const row: DocumentRow = { id, spaceId: ALICE_SPACE, type: 'sheet', title: '周报', createdAt: NOW, updatedAt: NOW, position: NOW.toISOString(), revision: 1, unitId: `unit-${id}`, profile: 'sheet@1', formatVersion: 1, ...overrides, folderId: overrides.folderId ?? null }
+    const row: DocumentRow = { id, spaceId: ALICE_SPACE, type: 'sheet', title: '周报', createdBy: ALICE, createdAt: NOW, updatedAt: NOW, position: NOW.toISOString(), revision: 1, unitId: `unit-${id}`, profile: 'sheet@1', formatVersion: 1, ...overrides, folderId: overrides.folderId ?? null }
     this.documents.set(id, row)
     return row
   }
@@ -91,10 +97,20 @@ export class FakeStore {
     return row
   }
 
-  /** 一棵子树（含根）里的全部文件夹 */
+  /** 一棵子树（不含根）里的全部文件夹 */
   private descendants(rootId: string): FolderRow[] {
     const found = [...this.folders.values()].filter(row => row.parentId === rootId)
     return found.flatMap(row => [row, ...this.descendants(row.id)])
+  }
+
+  /** 一份文档现在属于哪个删除单元；正常状态时为空 */
+  entryOfDocument(id: string): string | null {
+    return this.documentEntries.get(id) ?? null
+  }
+
+  /** 一个文件夹现在属于哪个删除单元；正常状态时为空 */
+  entryOfFolder(id: string): string | null {
+    return this.folderEntries.get(id) ?? null
   }
 
   /** 团队空间的成员与角色；role 为 undefined 时移出 */
@@ -124,10 +140,12 @@ export class FakeStore {
 
   readonly repositories = {
     documents: {
-      findById: vi.fn(async (id: string) => this.documents.get(id)),
-      lockById: vi.fn(async (id: string) => this.documents.get(id)),
+      findById: vi.fn(async (id: string) => this.activeDocument(id)),
+      lockById: vi.fn(async (id: string) => this.activeDocument(id)),
       listAccessible: vi.fn(async (scope: AccessibleScope, options: ListOptions) =>
-        [...this.documents.values()].filter(row => scope.spaceIds.includes(row.spaceId)).slice(0, options.limit)),
+        [...this.documents.values()]
+          .filter(row => scope.spaceIds.includes(row.spaceId) && (this.entryOfDocument(row.id) === null) === (scope.state === 'active'))
+          .slice(0, options.limit)),
       insert: vi.fn(async (document: NewDocument) => this.addDocument({ ...document, revision: 1 })),
       rename: vi.fn(async (id: string, title: string) => this.updateDocument(id, { title })),
       moveToFolder: vi.fn(async (id: string, folderId: string | null) => this.updateDocument(id, { folderId })),
@@ -139,11 +157,58 @@ export class FakeStore {
         this.writeEpochs.set(id, (this.writeEpochs.get(id) ?? 0) + 1)
         return this.updateDocument(id, folderId === undefined ? { spaceId } : { spaceId, folderId })
       })),
-      /** 这些文件夹里的文档（不按状态过滤，与真实仓储一致），按 id 排序 */
-      lockInFolders: vi.fn(async (folderIds: readonly string[], spaceId: string) => [...this.documents.values()]
+      /** 这些文件夹里的文档（state 省略时不按状态过滤，与真实仓储一致），按 id 排序 */
+      lockInFolders: vi.fn(async (folderIds: readonly string[], spaceId: string, _transaction: Transaction, state?: 'active' | 'trashed') => [...this.documents.values()]
         .filter(row => row.folderId !== null && folderIds.includes(row.folderId) && row.spaceId === spaceId)
-        .map(row => row.id)
-        .toSorted()),
+        .filter(row => state === undefined || (this.entryOfDocument(row.id) === null) === (state === 'active'))
+        .map(row => ({ id: row.id, trashEntryId: this.entryOfDocument(row.id) }))
+        .toSorted((a, b) => a.id.localeCompare(b.id))),
+      /** 属于这些删除单元的文档，按 id 排序 */
+      lockInEntries: vi.fn(async (entryIds: readonly string[]) => [...this.documents.values()]
+        .flatMap((row) => {
+          const entry = this.entryOfDocument(row.id)
+          return entry !== null && entryIds.includes(entry) ? [{ id: row.id, trashEntryId: entry }] : []
+        })
+        .toSorted((a, b) => a.id.localeCompare(b.id))),
+      /** 这些文件夹里正常状态的、不是这个人创建的文档有多少份 */
+      countCreatedByOthers: vi.fn(async (folderIds: readonly string[], spaceId: string, userId: string) => [...this.documents.values()]
+        .filter(row => row.folderId !== null && folderIds.includes(row.folderId) && row.spaceId === spaceId)
+        .filter(row => this.entryOfDocument(row.id) === null && row.createdBy !== userId)
+        .length),
+      /** 放进回收站：写入代次加一 */
+      trash: vi.fn(async (ids: readonly string[], trashEntryId: string) => {
+        for (const id of ids) {
+          this.documentEntries.set(id, trashEntryId)
+          this.writeEpochs.set(id, (this.writeEpochs.get(id) ?? 0) + 1)
+        }
+        return ids.length
+      }),
+      /** 整单恢复：代次不变；folderId 为 undefined 表示位置不变 */
+      restoreInEntry: vi.fn(async (trashEntryId: string, folderId: string | null | undefined) => {
+        const ids = [...this.documentEntries.entries()].flatMap(([id, entry]) => entry === trashEntryId ? [id] : [])
+        for (const id of ids) {
+          this.documentEntries.delete(id)
+          if (folderId !== undefined)
+            this.updateDocument(id, { folderId })
+        }
+        return ids.length
+      }),
+      countByTrashEntries: vi.fn(async (entryIds: readonly string[]) => {
+        const counts = new Map<string, number>()
+        for (const entry of this.documentEntries.values()) {
+          if (entryIds.includes(entry))
+            counts.set(entry, (counts.get(entry) ?? 0) + 1)
+        }
+        return counts
+      }),
+      deleteMany: vi.fn(async (ids: readonly string[]) => {
+        for (const id of ids) {
+          this.documents.delete(id)
+          this.documentEntries.delete(id)
+          this.contents.delete(id)
+        }
+        return ids.length
+      }),
       /** 按源文档建一份副本：类型、unitId、档案与格式版本原样复制，修订号 1，新的 id */
       copyFrom: vi.fn(async (sourceId: string, copy: CopiedDocument): Promise<DocumentRow | undefined> => {
         const source = this.documents.get(sourceId)
@@ -192,7 +257,7 @@ export class FakeStore {
     },
     /** 内存里的目录树：层数与父子关系与真实仓储一致，SQL 本身由集成测试覆盖 */
     folders: {
-      findById: vi.fn(async (id: string) => this.folders.get(id)),
+      findById: vi.fn(async (id: string) => this.entryOfFolder(id) === null ? this.folders.get(id) : undefined),
       findByRequestId: vi.fn(async (requestId: string) => [...this.folders.values()].find(row => row.requestId === requestId)),
       listChildren: vi.fn(async (spaceId: string, parentId: string | null) => [...this.folders.values()]
         .filter(row => row.spaceId === spaceId && row.parentId === parentId)
@@ -212,6 +277,57 @@ export class FakeStore {
           ids: rows.map(row => row.id),
         }
       }),
+      /** 这棵子树（含根）里正常状态的文件夹：递归只走正常状态的行 */
+      activeSubtreeIds: vi.fn(async (rootId: string) => {
+        if (this.entryOfFolder(rootId) !== null)
+          return []
+        const walk = (id: string): string[] => [id, ...[...this.folders.values()]
+          .filter(row => row.parentId === id && this.entryOfFolder(row.id) === null)
+          .flatMap(row => walk(row.id))]
+        return walk(rootId)
+      }),
+      /** 这些文件夹分属哪些删除单元（去重，正常状态的不算） */
+      trashEntryIdsIn: vi.fn(async (folderIds: readonly string[]) =>
+        [...new Set(folderIds.flatMap(id => this.entryOfFolder(id) ?? []))]),
+      /** 属于这个删除单元的全部文件夹，按层数从浅到深 */
+      listInEntry: vi.fn(async (trashEntryId: string) => [...this.folders.values()]
+        .filter(row => this.entryOfFolder(row.id) === trashEntryId)
+        .toSorted((a, b) => a.depth - b.depth || a.id.localeCompare(b.id))),
+      /** 这些文件夹里正常状态的那些的名称 */
+      activeNamesOf: vi.fn(async (ids: readonly string[], spaceId: string) => new Map([...this.folders.values()]
+        .filter(row => ids.includes(row.id) && row.spaceId === spaceId && this.entryOfFolder(row.id) === null)
+        .map(row => [row.id, row.name] as const)) as ReadonlyMap<string, string>),
+      countByTrashEntries: vi.fn(async (entryIds: readonly string[]) => {
+        const counts = new Map<string, number>()
+        for (const entry of this.folderEntries.values()) {
+          if (entryIds.includes(entry))
+            counts.set(entry, (counts.get(entry) ?? 0) + 1)
+        }
+        return counts
+      }),
+      /** 整棵子树进回收站：层数不变 */
+      trashMany: vi.fn(async (ids: readonly string[], trashEntryId: string) => {
+        for (const id of ids)
+          this.folderEntries.set(id, trashEntryId)
+        return ids.length
+      }),
+      /** 整单恢复：只有根换父文件夹，整棵子树的层数一起加差值 */
+      restoreInEntry: vi.fn(async (trashEntryId: string, rootId: string, parentId: string | null, depthDelta: number) => {
+        const ids = [...this.folderEntries.entries()].flatMap(([id, entry]) => entry === trashEntryId ? [id] : [])
+        for (const id of ids) {
+          const row = this.folders.get(id)
+          this.folderEntries.delete(id)
+          this.updateFolder(id, { depth: (row?.depth ?? 1) + depthDelta, ...(id === rootId ? { parentId } : {}) })
+        }
+        return ids.length
+      }),
+      deleteMany: vi.fn(async (ids: readonly string[]) => {
+        for (const id of ids) {
+          this.folders.delete(id)
+          this.folderEntries.delete(id)
+        }
+        return ids.length
+      }),
       /** 整棵子树换位置：层数一起加差值，给了 spaceId 时所属空间也一起换（只有根换父文件夹） */
       moveSubtree: vi.fn(async (move: SubtreeMove) => {
         const { rootId, parentId, depthDelta, spaceId } = move
@@ -223,6 +339,43 @@ export class FakeStore {
         return this.updateFolder(rootId, { parentId, depth: root.depth + depthDelta, ...(spaceId === undefined ? {} : { spaceId }) })
       }),
     },
+  }
+
+  /** 回收站的删除单元：只有 TrashEntriesRepository 读写 trash_entries */
+  readonly entries = {
+    insert: vi.fn(async (entry: NewTrashEntry): Promise<TrashEntryRow> => {
+      this.sequence += 1
+      const id = `0199a2c4-0000-7000-8000-${String(this.sequence).padStart(12, '0')}`
+      const row: TrashEntryRow = {
+        id,
+        ...entry,
+        deletedAt: NOW,
+        // 游标用的位置：与数据库算出来的一样保留微秒（time-cursor 的格式校验要求六位）
+        position: `${NOW.toISOString().slice(0, -1)}000Z`,
+        expiresAt: new Date(NOW.getTime() + TRASH_RETENTION_DAYS * 24 * 3600 * 1000),
+      }
+      this.trashEntries.set(id, row)
+      return row
+    }),
+    findById: vi.fn(async (id: string) => this.trashEntries.get(id)),
+    lockById: vi.fn(async (id: string) => this.trashEntries.get(id)),
+    listBySpace: vi.fn(async (spaceId: string, options: { limit: number }) => [...this.trashEntries.values()]
+      .filter(row => row.spaceId === spaceId)
+      .toSorted((a, b) => b.id.localeCompare(a.id))
+      .slice(0, options.limit)),
+    moveToSpace: vi.fn(async (ids: readonly string[], spaceId: string) => {
+      for (const id of ids) {
+        const row = this.trashEntries.get(id)
+        if (row !== undefined)
+          this.trashEntries.set(id, { ...row, spaceId, originSpaceId: spaceId })
+      }
+      return ids.length
+    }),
+    deleteMany: vi.fn(async (ids: readonly string[]) => {
+      for (const id of ids)
+        this.trashEntries.delete(id)
+      return ids.length
+    }),
   }
 
   /** 空间树的 advisory lock：只记下取过哪些空间的锁 */
@@ -267,12 +420,18 @@ export class FakeStore {
       contents: this.repositories.contents as unknown as DocumentContentsRepository,
       revisions: this.repositories.revisions as unknown as DocumentRevisionsRepository,
       folders: this.repositories.folders as unknown as FoldersRepository,
+      entries: this.entries as unknown as TrashEntriesRepository,
       tree: this.tree as unknown as SpaceTreeRepository,
       policy: this.policy,
       spaces: this.spaces as unknown as SpacesService,
       audit: this.audit as unknown as AuditService,
       writeAccess: this.writeAccess as unknown as WriteAccessRevocation,
     }
+  }
+
+  /** 正常状态的一份文档（回收站里的对普通接口不存在） */
+  private activeDocument(id: string): DocumentRow | undefined {
+    return this.entryOfDocument(id) === null ? this.documents.get(id) : undefined
   }
 
   /** 改一份文档的几列并返回新的行 */

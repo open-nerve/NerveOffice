@@ -28,7 +28,6 @@ export const folderIdSchema = uuidSchema
 
 /**
  * 调用者在这个文件夹上能做的操作：界面据此只显示能做的，服务端按同一套规则检查（P4 设计 §3.7）。
- * 只列本 Step 已经提供的操作；删除随 P4 的 S3 加上自己的位与接口。
  */
 export const folderPermissionsSchema = z.object({
   canRename: z.boolean(),
@@ -36,6 +35,12 @@ export const folderPermissionsSchema = z.object({
   canMoveWithinSpace: z.boolean(),
   /** 连同子树移到别的空间：源空间的空间管理员（目标空间的新建权限另判） */
   canMoveAcrossSpaces: z.boolean(),
+  /**
+   * 连同整棵子树删除（进回收站）：编辑者及以上。
+   * 编辑者还要"子树里正常状态的文档全部是本人创建的"，那一条在锁下用一条计数语句判断（P4-S3 spec §2），
+   * 不进这个权限位：界面显示得出入口，服务端按真实的子树再判断一次
+   */
+  canDelete: z.boolean(),
 })
 
 export type FolderPermissions = z.infer<typeof folderPermissionsSchema>

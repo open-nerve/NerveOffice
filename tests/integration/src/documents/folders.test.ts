@@ -10,7 +10,7 @@ import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import { randomUUID } from 'node:crypto'
-import { documentListResponseSchema, errorResponseSchema, FOLDER_MAX_DEPTH, folderListResponseSchema, folderSchema } from '@nerve-office/contracts'
+import { documentListResponseSchema, errorResponseSchema, FOLDER_MAX_DEPTH, folderListResponseSchema, folderSchema, trashListResponseSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -86,21 +86,16 @@ async function move(user: LoggedIn, id: string, body: Record<string, unknown>): 
   return asUser(app.baseUrl, user, `/api/folders/${id}/move`, { method: 'POST', body })
 }
 
-/** 直接写库把一个文件夹或一份文档放进回收站（S3 才有删除接口）：状态与删除单元一起改，CHECK 要求两者一致 */
+/** 经删除接口把一个文件夹或一份文档放进回收站，返回它的删除单元 id（S3 的接口） */
 async function trash(kind: 'folder' | 'document', spaceId: string, id: string): Promise<string> {
-  return database.query(async (client) => {
-    const entry = await client.query<{ id: string }>(
-      `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_space_id, title)
-       VALUES ($1, $3, $2, now() + interval '30 days', $1, '资料') RETURNING id`,
-      [spaceId, amy.id, kind],
-    )
-    const entryId = entry.rows[0]?.id
-    const table = kind === 'folder' ? 'folders' : 'documents'
-    await client.query(`UPDATE ${table} SET status = 'trashed', trash_entry_id = $2 WHERE id = $1`, [id, entryId])
-    if (entryId === undefined)
-      throw new Error('没有建出删除单元')
-    return entryId
-  })
+  const removed = await asUser(app.baseUrl, amySession, `/api/${kind === 'folder' ? 'folders' : 'documents'}/${id}`, { method: 'DELETE' })
+  expect(removed.status).toBe(204)
+  const listed = await asUser(app.baseUrl, amySession, `/api/trash?spaceId=${spaceId}`)
+  expect(listed.status).toBe(200)
+  const entryId = parseExact(trashListResponseSchema, await listed.json()).items[0]?.id
+  if (entryId === undefined)
+    throw new Error('删除之后回收站里没有东西')
+  return entryId
 }
 
 /** 一份文档当前的状态与它所属的删除单元 */
@@ -188,7 +183,7 @@ describe('US-M2-07 文件夹的新建与列出', () => {
   it('建在空间的根目录：层数 1，出现在根目录这一层，记审计', async () => {
     const spaceId = await teamSpace()
     const folder = await newFolder(amySession, { spaceId, name: ' 资料 ' })
-    expect(folder).toMatchObject({ spaceId, parentId: null, name: '资料', depth: 1, permissions: { canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false } })
+    expect(folder).toMatchObject({ spaceId, parentId: null, name: '资料', depth: 1, permissions: { canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canDelete: true } })
     expect((await list(amySession, spaceId)).items.map(item => item.id)).toEqual([folder.id])
     const audit = await database.query(async client => (await client.query<{ action: string, actor_id: string, details: Record<string, unknown> }>(
       'SELECT action, actor_id, details FROM audit_events WHERE target_type = \'folder\' AND target_id = $1',
@@ -245,7 +240,7 @@ describe('US-M2-07 文件夹的新建与列出', () => {
     const folder = await newFolder(amySession, { spaceId, name: '资料' })
     const page = await list(benSession, spaceId)
     expect(page.items.map(item => item.id)).toEqual([folder.id])
-    expect(page.items[0]?.permissions).toEqual({ canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false })
+    expect(page.items[0]?.permissions).toEqual({ canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false })
     const response = await post(benSession, { spaceId, name: '本的资料' })
     expect(response.status).toBe(403)
     expect(await errorOf(response)).toEqual({ code: 'PERMISSION_DENIED', message: '没有在这个空间里新建文件夹的权限' })
@@ -407,7 +402,7 @@ describe('US-M2-07 文件夹的跨空间移动', () => {
     const response = await moved(await move(amySession, top.id, { spaceId: to, folderId: target.id }))
     expect(response).toMatchObject({ spaceId: to, parentId: target.id, depth: 2 })
     // 到了新空间只是编辑者：不能再把它移走
-    expect(response.permissions).toEqual({ canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false })
+    expect(response.permissions).toEqual({ canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canDelete: true })
     expect(await placesOf([top.id, leaf.id])).toEqual({
       [top.id]: { space: to, parent: target.id, depth: 2 },
       [leaf.id]: { space: to, parent: top.id, depth: 3 },
@@ -533,8 +528,9 @@ describe('US-M2-07 文件夹的跨空间移动', () => {
     const document = await createDocument(database, { spaceId: from, createdBy: amy.id, title: '删过的', folderId: folder.id })
     const entry = await trash('document', from, document)
     expect((await moved(await move(amySession, folder.id, { spaceId: to }))).spaceId).toBe(to)
-    // 跟着所在的文件夹到了新空间，位置不变；仍然在回收站里、仍然属于原来的那个删除单元（删除单元登记在哪个空间由 S3 处理）
-    expect(await documentsOf([document])).toEqual({ [document]: { space: to, folder: folder.id, epoch: 1 } })
+    // 跟着所在的文件夹到了新空间，位置不变；代次删除时加过一次、这次跨空间移动又加一次
+    // 仍然在回收站里、仍然属于原来的那个删除单元（删除单元跟着换登记空间，见 trash.test.ts 的 spec §6b）
+    expect(await documentsOf([document])).toEqual({ [document]: { space: to, folder: folder.id, epoch: 2 } })
     expect(await trashStateOf(document)).toEqual({ status: 'trashed', entry })
   })
 

@@ -104,7 +104,7 @@ describe('文档的元数据', () => {
     revision: 1,
     profile: 'sheet@1',
     formatVersion: 1,
-    permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true },
+    permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true },
   }
 
   it('档案与格式版本不按已知的取值校验：客户端自己核对，不认识的显示格式不受支持', () => {

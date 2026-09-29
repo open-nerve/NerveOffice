@@ -47,6 +47,14 @@ export const AUDIT_ACTIONS = [
   'documents.renamed',
   'documents.moved',
   'documents.copied',
+  // M2-P4 S3：回收站。删除记原位置与删除单元；恢复记恢复到的位置与是否回落到根目录；
+  // 永久删除记这一单里的份数与连带删除的单元（到期自动清理时操作者是系统，actor_type = 'system'）
+  'documents.deleted',
+  'documents.restored',
+  'documents.purged',
+  'folders.deleted',
+  'folders.restored',
+  'folders.purged',
 ] as const
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS)

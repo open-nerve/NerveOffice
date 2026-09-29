@@ -2,7 +2,7 @@ import type { SQL } from 'drizzle-orm'
 import type { Database, Transaction } from '../database/index.ts'
 import { FOLDER_LIST_MAX_ITEMS } from '@nerve-office/contracts'
 import { Inject, Injectable } from '@nestjs/common'
-import { and, asc, eq, isNull, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
 import { folders } from '../../db/schema/documents/index.ts'
 import { DATABASE, executorOf } from '../database/index.ts'
 
@@ -141,6 +141,110 @@ export class FoldersRepository {
     if (row === undefined || row.maxDepth === null || row.ids === null)
       throw new Error(`展开子树时文件夹不在了：${rootId}`)
     return { maxDepth: row.maxDepth, containsCandidate: row.containsCandidate, ids: row.ids }
+  }
+
+  /**
+   * 这棵子树（含根）里正常状态的文件夹（删除一个文件夹时要放进删除单元的那些）：
+   * 已经在回收站里的子孙留在原来的删除单元里，不并进这次的（P4-S3 spec §1），所以递归只走正常状态的行。
+   * 根不是正常状态时结果为空，调用方在锁下重新读过根，不会走到这一步
+   */
+  async activeSubtreeIds(rootId: string, transaction: Transaction): Promise<string[]> {
+    const query = sql`WITH RECURSIVE subtree(id) AS (
+      SELECT ${f.id} FROM ${f} WHERE ${f.id} = ${rootId} AND ${f.status} = 'active'
+      UNION ALL
+      SELECT child.id FROM ${f} AS child JOIN subtree ON child.parent_id = subtree.id AND child.status = 'active'
+    ) SELECT array_agg(id) AS ids FROM subtree`
+    const result = await executorOf(this.db, transaction).execute<{ ids: string[] | null }>(query)
+    return result.rows[0]?.ids ?? []
+  }
+
+  /** 这些文件夹分属哪些删除单元（去重，正常状态的行不算）：跨空间移动与永久删除据此找到牵连到的删除单元。 */
+  async trashEntryIdsIn(folderIds: readonly string[], transaction: Transaction): Promise<string[]> {
+    if (folderIds.length === 0)
+      return []
+    const rows = await executorOf(this.db, transaction)
+      .selectDistinct({ trashEntryId: f.trashEntryId })
+      .from(f)
+      .where(and(inArray(f.id, [...folderIds]), isNotNull(f.trashEntryId)))
+    return rows.flatMap(row => row.trashEntryId === null ? [] : [row.trashEntryId])
+  }
+
+  /** 每个删除单元里还剩多少个文件夹：永久删除之后判断哪些单元空了（没有出现在结果里的就是空的）。 */
+  async countByTrashEntries(entryIds: readonly string[], transaction?: Transaction): Promise<ReadonlyMap<string, number>> {
+    if (entryIds.length === 0)
+      return new Map()
+    const rows = await executorOf(this.db, transaction)
+      .select({ trashEntryId: f.trashEntryId, count: sql<number>`count(*)::int` })
+      .from(f)
+      .where(inArray(f.trashEntryId, [...entryIds]))
+      .groupBy(f.trashEntryId)
+    return new Map(rows.flatMap(row => row.trashEntryId === null ? [] : [[row.trashEntryId, row.count] as const]))
+  }
+
+  /** 属于这个删除单元的全部文件夹（恢复与永久删除按它取出整棵子树），按层数从浅到深。 */
+  async listInEntry(trashEntryId: string, transaction: Transaction): Promise<FolderRow[]> {
+    return executorOf(this.db, transaction).select(COLUMNS).from(f).where(eq(f.trashEntryId, trashEntryId)).orderBy(asc(f.depth), asc(f.id))
+  }
+
+  /** 按 id 取这些文件夹里正常状态的那些的名称（回收站列表里"原位置"的显示名）。 */
+  async activeNamesOf(ids: readonly string[], spaceId: string): Promise<ReadonlyMap<string, string>> {
+    if (ids.length === 0)
+      return new Map()
+    const rows = await this.db
+      .select({ id: f.id, name: f.name })
+      .from(f)
+      .where(and(inArray(f.id, [...new Set(ids)]), eq(f.spaceId, spaceId), eq(f.status, 'active')))
+    return new Map(rows.map(row => [row.id, row.name]))
+  }
+
+  /**
+   * 整棵子树放进回收站（调用方已在空间树的锁下展开过子树）：状态与所属的删除单元在同一条语句里一起写
+   * （CHECK 要求二者一致）。层数不变（P4-S3 spec §1）：恢复回原位时正好放得回去
+   */
+  async trashMany(ids: readonly string[], trashEntryId: string, transaction: Transaction): Promise<number> {
+    if (ids.length === 0)
+      return 0
+    const rows = await executorOf(this.db, transaction)
+      .update(f)
+      .set({ status: 'trashed', trashEntryId })
+      .where(inArray(f.id, [...ids]))
+      .returning({ id: f.id })
+    return rows.length
+  }
+
+  /**
+   * 把一个删除单元里的文件夹整单恢复：全部回到正常状态、清空所属的删除单元，整棵子树的层数一起加上 depthDelta；
+   * 只有这一单的根换父文件夹（parentId 为 null 表示回到空间的根目录）。与 moveSubtree 同一个形状，一条 UPDATE
+   */
+  async restoreInEntry(trashEntryId: string, rootId: string, parentId: string | null, depthDelta: number, transaction: Transaction): Promise<number> {
+    const rows = await executorOf(this.db, transaction)
+      .update(f)
+      .set({
+        status: 'active',
+        trashEntryId: null,
+        parentId: sql`CASE WHEN ${f.id} = ${rootId} THEN ${parentId}::uuid ELSE ${f.parentId} END`,
+        depth: sql`${f.depth} + ${depthDelta}`,
+      })
+      .where(eq(f.trashEntryId, trashEntryId))
+      .returning({ id: f.id })
+    return rows.length
+  }
+
+  /**
+   * 永久删除这些文件夹（调用方已删掉里面的文档）：父子的外键是 restrict，同一条语句里删父与子会被立刻拒绝，
+   * 所以按层数从深到浅逐层删。层数最多 FOLDER_MAX_DEPTH，所以至多这么多条语句
+   */
+  async deleteMany(ids: readonly string[], transaction: Transaction): Promise<number> {
+    if (ids.length === 0)
+      return 0
+    const executor = executorOf(this.db, transaction)
+    const levels = await executor.selectDistinct({ depth: f.depth }).from(f).where(inArray(f.id, [...ids])).orderBy(desc(f.depth))
+    let deleted = 0
+    for (const { depth } of levels) {
+      const rows = await executor.delete(f).where(and(inArray(f.id, [...ids]), eq(f.depth, depth))).returning({ id: f.id })
+      deleted += rows.length
+    }
+    return deleted
   }
 
   /**

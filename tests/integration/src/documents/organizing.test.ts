@@ -66,16 +66,9 @@ async function newFolder(user: LoggedIn, spaceId: string, name: string): Promise
   return parseExact(folderSchema, await response.json()).id
 }
 
-/** 直接写库把一个文件夹放进回收站（S3 才有删除接口）：状态与删除单元一起改，CHECK 要求两者一致 */
-async function trashFolder(spaceId: string, folderId: string): Promise<void> {
-  await database.query(async (client) => {
-    const entry = await client.query<{ id: string }>(
-      `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_space_id, title)
-       VALUES ($1, 'folder', $2, now() + interval '30 days', $1, '资料') RETURNING id`,
-      [spaceId, amy.id],
-    )
-    await client.query('UPDATE folders SET status = \'trashed\', trash_entry_id = $2 WHERE id = $1', [folderId, entry.rows[0]?.id])
-  })
+/** 经删除接口把一个文件夹放进回收站（S3 的接口） */
+async function trashFolder(folderId: string): Promise<void> {
+  expect((await asUser(app.baseUrl, amySession, `/api/folders/${folderId}`, { method: 'DELETE' })).status).toBe(204)
 }
 
 async function patch(user: LoggedIn, id: string, body: Record<string, unknown>): Promise<Response> {
@@ -191,7 +184,7 @@ describe('US-M2-07 改名与空间内移动', () => {
     const document = await seedDocument(database, { spaceId, createdBy: amy.id, title: '周报' })
     const elsewhere = await newFolder(amySession, other, '别处的资料')
     const trashed = await newFolder(amySession, spaceId, '资料')
-    await trashFolder(spaceId, trashed)
+    await trashFolder(trashed)
     const responses = [
       await patch(amySession, document.id, { folderId: elsewhere }),
       await patch(amySession, document.id, { folderId: trashed }),

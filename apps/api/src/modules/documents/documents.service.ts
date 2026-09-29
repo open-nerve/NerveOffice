@@ -45,7 +45,7 @@ export class DocumentsService {
   /** 没有读取权限与不存在返回同一个 NOT_FOUND（规范 §4，US-M1-08）。 */
   async get(userId: string, id: string): Promise<DocumentDetail> {
     const { document, access } = await requireAccess(this.policy, userId, await this.repository.findById(id))
-    return toDetail(document, access)
+    return toDetail(document, access, userId)
   }
 
   /**

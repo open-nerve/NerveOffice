@@ -99,7 +99,7 @@ export class DocumentCopyService {
         origin,
         details: { sourceId: id, sourceSpaceId: source.document.spaceId, spaceId: copy.spaceId, folderId: copy.folderId },
       }, { transaction })
-      return toDetail(copy, { role: target.role, space: target.space })
+      return toDetail(copy, { role: target.role, space: target.space }, userId)
     })
   }
 
@@ -113,6 +113,6 @@ export class DocumentCopyService {
     const access: DocumentAccess | undefined = document === undefined ? undefined : await this.policy.accessOf(userId, document, transaction)
     if (document === undefined || access === undefined)
       throw new AppError('REQUEST_ID_CONFLICT')
-    return toDetail(document, access)
+    return toDetail(document, access, userId)
   }
 }

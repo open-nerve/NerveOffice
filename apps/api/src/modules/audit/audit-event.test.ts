@@ -11,7 +11,7 @@ describe('审计事件的校验', () => {
   })
 
   it.each([
-    ['未登记的动作', { ...base, action: 'documents.deleted' }],
+    ['未登记的动作', { ...base, action: 'documents.archived' }],
     ['用户操作者没有 id', { ...base, actor: { type: 'user' } }],
     ['系统操作者带 id', { ...base, actor: { type: 'system', id: USER_ID } }],
     ['id 不是 UUID', { ...base, actor: { type: 'user', id: '42' } }],

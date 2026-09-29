@@ -65,7 +65,9 @@ async function errorOf(response: Response): Promise<{ code: string, message: str
 }
 
 /**
- * 直接把一份文档放进回收站（删除的接口在 M2-P4 的 S3）：建一条删除单元，文档指向它并改为 trashed。
+ * 直接把一份文档放进回收站：建一条删除单元，文档指向它并改为 trashed。
+ * 这里不走删除的接口（M2-P4 S3）：文档在一个**停用账户**的个人空间里，本人登录不了，
+ * 系统管理员对个人空间也没有内容权限（00 号计划书 §5.2），谁都调不到那个接口。
  * 用来核对"停用者文档的转移只取正常状态的文档"（M2-P4 设计 §3.4 第 1 条）
  */
 async function putInTrash(documentId: string, spaceId: string): Promise<void> {

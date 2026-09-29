@@ -98,7 +98,7 @@ export class DocumentCreationService {
         origin,
         details: { revision: 1 },
       }, { transaction })
-      return toDetail(document, access)
+      return toDetail(document, access, userId)
     })
   }
 
@@ -112,7 +112,7 @@ export class DocumentCreationService {
     const access = document === undefined ? undefined : await this.policy.accessOf(userId, document, transaction)
     if (document === undefined || access === undefined)
       throw new AppError('REQUEST_ID_CONFLICT')
-    return toDetail(document, access)
+    return toDetail(document, access, userId)
   }
 
   private async personalSpaceIdOf(userId: string, transaction: Transaction): Promise<string> {

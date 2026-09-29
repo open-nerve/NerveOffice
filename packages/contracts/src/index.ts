@@ -201,6 +201,27 @@ export type {
 } from './spaces/spaces.ts'
 export { codePointLength, hasControlCharacters } from './text/text.ts'
 export {
+  restoredTrashEntrySchema,
+  TRASH_ENTRY_KINDS,
+  TRASH_LIST_PAGE_SIZE,
+  TRASH_RETENTION_DAYS,
+  trashEntryIdSchema,
+  trashEntrySchema,
+  trashListQuerySchema,
+  trashListResponseSchema,
+  trashOriginSchema,
+  trashPermissionsSchema,
+} from './trash/trash.ts'
+export type {
+  RestoredTrashEntry,
+  TrashEntry,
+  TrashEntryKind,
+  TrashListQuery,
+  TrashListResponse,
+  TrashOrigin,
+  TrashPermissions,
+} from './trash/trash.ts'
+export {
   DISPLAY_NAME_MAX_LENGTH,
   displayNameSchema,
   NEW_PASSWORD_MAX_LENGTH,

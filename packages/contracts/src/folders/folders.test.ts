@@ -23,7 +23,7 @@ const folder = {
   depth: 1,
   createdAt: '2026-09-30T01:00:00.000Z',
   updatedAt: '2026-09-30T02:00:00.000Z',
-  permissions: { canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false },
+  permissions: { canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canDelete: true },
 }
 
 describe('文件夹的名称', () => {

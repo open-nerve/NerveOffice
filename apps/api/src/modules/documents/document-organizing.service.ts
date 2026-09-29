@@ -77,7 +77,7 @@ export class DocumentOrganizingService {
         if (folderId !== current.folderId)
           current = await this.moved(actor, current, folderId, origin, transaction)
       }
-      return toDetail(current, access)
+      return toDetail(current, access, actor.userId)
     })
   }
 
@@ -106,10 +106,10 @@ export class DocumentOrganizingService {
       const folderId = await folderIdIn(this.folders, command.spaceId, command.folderId ?? null, transaction)
       if (document.spaceId === command.spaceId) {
         const current = folderId === document.folderId ? document : await this.moved(actor, document, folderId, origin, transaction)
-        return toDetail(current, access)
+        return toDetail(current, access, actor.userId)
       }
       const moved = await this.toSpace(actor, document, command.spaceId, folderId, origin, transaction)
-      return toDetail(moved, target)
+      return toDetail(moved, target, actor.userId)
     })
   }
 

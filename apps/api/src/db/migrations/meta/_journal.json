@@ -85,6 +85,13 @@
       "when": 1790701467959,
       "tag": "0011_m2_document_organizing",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1790707121751,
+      "tag": "0012_m2_trash",
+      "breakpoints": true
     }
   ]
 }

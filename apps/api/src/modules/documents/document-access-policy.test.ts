@@ -19,12 +19,12 @@ describe('EffectiveAccessPolicy', () => {
   it('文档：按所在空间的有效角色；每次判断只查一次空间事实，在事务里判断时走同一个事务', async () => {
     const store = new FakeStore()
     const transaction = {} as Transaction
-    const access = await store.policy.accessOf(ALICE, { id: 'd1', spaceId: ALICE_SPACE }, transaction)
+    const access = await store.policy.accessOf(ALICE, { id: 'd1', spaceId: ALICE_SPACE, createdBy: ALICE }, transaction)
     expect(access?.role).toBe('admin')
     expect(access?.space).toMatchObject({ id: ALICE_SPACE, type: 'personal' })
     expect(store.spaces.accessFactsOf).toHaveBeenCalledTimes(1)
     expect(store.spaces.accessFactsOf).toHaveBeenCalledWith(ALICE, ALICE_SPACE, { transaction })
-    expect(await store.policy.accessOf(BOB, { id: 'd1', spaceId: ALICE_SPACE })).toBeUndefined()
+    expect(await store.policy.accessOf(BOB, { id: 'd1', spaceId: ALICE_SPACE, createdBy: ALICE })).toBeUndefined()
   })
 
   it('空间：没有角色的看不到；没有加入的系统管理员看得到团队空间的管理面，看不到个人空间', async () => {
@@ -48,13 +48,13 @@ describe('EffectiveAccessPolicy', () => {
 describe('requireAccess', () => {
   it('能访问：文档与有效角色', async () => {
     const store = new FakeStore()
-    const document = { id: 'd1', spaceId: ALICE_SPACE }
+    const document = { id: 'd1', spaceId: ALICE_SPACE, createdBy: ALICE }
     expect(await requireAccess(store.policy, ALICE, document)).toMatchObject({ document, access: { role: 'admin' } })
   })
 
   it('别人的与不存在的：同一个 NOT_FOUND；不存在时也用全零的空间查一次', async () => {
     const store = new FakeStore()
-    const others = await errorOf(requireAccess(store.policy, ALICE, { id: 'd2', spaceId: BOB_SPACE }))
+    const others = await errorOf(requireAccess(store.policy, ALICE, { id: 'd2', spaceId: BOB_SPACE, createdBy: BOB }))
     const missing = await errorOf(requireAccess(store.policy, ALICE, undefined))
     expect([others.code, missing.code]).toEqual(['NOT_FOUND', 'NOT_FOUND'])
     expect(store.spaces.accessFactsOf.mock.calls.map(call => call[1])).toEqual([BOB_SPACE, ZERO])

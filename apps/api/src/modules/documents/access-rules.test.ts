@@ -1,7 +1,11 @@
 import type { SpaceRole } from '@nerve-office/contracts'
 import type { SpaceFacts } from '../spaces/index.ts'
+import { SPACE_ROLES } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
-import { atLeast, documentPermissionsOf, effectiveSpaceRole, folderPermissionsOf, spacePermissionsOf } from './access-rules.ts'
+import { atLeast, documentPermissionsOf, effectiveSpaceRole, folderPermissionsOf, spacePermissionsOf, trashPermissionsOf } from './access-rules.ts'
+
+const ALICE = '0199a2c4-0000-7000-8000-00000000000a'
+const BOB = '0199a2c4-0000-7000-8000-00000000000b'
 
 function facts(overrides: Partial<SpaceFacts>): SpaceFacts {
   return { id: 'space', type: 'team', name: '市场部', status: 'active', visibleToAll: false, owned: false, memberRole: null, ...overrides }
@@ -92,30 +96,63 @@ describe('空间上能做的操作（M2-P2 设计 §3.4）', () => {
 })
 
 describe('文档上能做的操作（00 号计划书 §5.3，M2-P4 设计 §3.7）', () => {
+  const mine = { createdBy: ALICE }
+  const others = { createdBy: BOB }
+
   it('改名、保存与空间内移动：编辑者及以上；跨空间移动只给空间管理员；能读就能复制', () => {
-    expect(documentPermissionsOf('admin')).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true })
-    expect(documentPermissionsOf('editor')).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true })
-    expect(documentPermissionsOf('viewer')).toEqual({ canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true })
+    expect(documentPermissionsOf('admin', mine, ALICE)).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true })
+    expect(documentPermissionsOf('editor', mine, ALICE)).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true })
+    expect(documentPermissionsOf('viewer', mine, ALICE)).toEqual({ canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false })
+  })
+
+  it('删除（P4-S3 spec §2）：空间管理员任意，编辑者只能删自己创建的，查看者一概不能', () => {
+    expect(documentPermissionsOf('admin', others, ALICE).canDelete).toBe(true)
+    expect(documentPermissionsOf('editor', others, ALICE).canDelete).toBe(false)
+    expect(documentPermissionsOf('editor', mine, ALICE).canDelete).toBe(true)
+    expect(documentPermissionsOf('viewer', mine, ALICE).canDelete).toBe(false)
   })
 
   it('归档的空间：有效角色已经是查看者，只剩下复制', () => {
     const archived = facts({ status: 'archived', memberRole: 'admin' })
     const role = effectiveSpaceRole(archived)
     expect(role).toBe('viewer')
-    expect(documentPermissionsOf(role ?? 'viewer')).toEqual({ canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true })
+    expect(documentPermissionsOf(role ?? 'viewer', mine, ALICE)).toEqual({ canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false })
   })
 })
 
 describe('文件夹上能做的操作（M2-P4 设计 §3.7）', () => {
-  it('改名与空间内移动：编辑者及以上；连同子树移出本空间只给空间管理员', () => {
-    expect(folderPermissionsOf('admin')).toEqual({ canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true })
-    expect(folderPermissionsOf('editor')).toEqual({ canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false })
-    expect(folderPermissionsOf('viewer')).toEqual({ canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false })
-    expect(folderPermissionsOf(undefined)).toEqual({ canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false })
+  it('改名、空间内移动与删除：编辑者及以上；连同子树移出本空间只给空间管理员', () => {
+    expect(folderPermissionsOf('admin')).toEqual({ canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canDelete: true })
+    expect(folderPermissionsOf('editor')).toEqual({ canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canDelete: true })
+    expect(folderPermissionsOf('viewer')).toEqual({ canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false })
+    expect(folderPermissionsOf(undefined)).toEqual({ canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false })
   })
 
   it('归档的空间：有效角色已经是查看者，什么也改不了', () => {
     const archived = facts({ status: 'archived', memberRole: 'admin' })
-    expect(folderPermissionsOf(effectiveSpaceRole(archived))).toEqual({ canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false })
+    expect(folderPermissionsOf(effectiveSpaceRole(archived))).toEqual({ canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false })
+  })
+})
+
+describe('回收站里的删除单元上能做的操作（P4-S3 spec §3、§4）', () => {
+  it('恢复：删除者本人或空间管理员；永久删除：空间管理员', () => {
+    const team = facts({ memberRole: 'editor' })
+    expect(trashPermissionsOf(team, 'editor', ALICE, ALICE)).toEqual({ canRestore: true, canPurge: false })
+    expect(trashPermissionsOf(team, 'editor', BOB, ALICE)).toEqual({ canRestore: false, canPurge: false })
+    expect(trashPermissionsOf(team, 'viewer', BOB, ALICE)).toEqual({ canRestore: false, canPurge: false })
+    expect(trashPermissionsOf(team, 'admin', BOB, ALICE)).toEqual({ canRestore: true, canPurge: true })
+  })
+
+  it('永久删除与空间权限里的 canPurgeTrash 是同一条规则', () => {
+    for (const role of SPACE_ROLES) {
+      const team = facts({ memberRole: role })
+      expect(trashPermissionsOf(team, role, BOB, ALICE).canPurge, role).toBe(spacePermissionsOf(team, role, false).canPurgeTrash)
+    }
+  })
+
+  it('归档的空间：删除者本人也不能恢复，谁都不能永久删除', () => {
+    const archived = facts({ status: 'archived', memberRole: 'admin' })
+    const role = effectiveSpaceRole(archived) ?? 'viewer'
+    expect(trashPermissionsOf(archived, role, ALICE, ALICE)).toEqual({ canRestore: false, canPurge: false })
   })
 })

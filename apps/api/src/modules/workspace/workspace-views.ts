@@ -1,5 +1,5 @@
-import type { SpaceMember, SpaceView, TeamSpace } from '@nerve-office/contracts'
-import type { SpaceContentAccess } from '../documents/index.ts'
+import type { SpaceMember, SpaceView, TeamSpace, TrashEntry } from '@nerve-office/contracts'
+import type { SpaceContentAccess, TrashEntrySummary } from '../documents/index.ts'
 import type { SpaceFacts, SpaceMemberRecord, SpaceRecord } from '../spaces/index.ts'
 import type { User } from '../users/index.ts'
 import { SPACE_ROLES } from '@nerve-office/contracts'
@@ -30,6 +30,22 @@ export function toSpaceMember(member: SpaceMemberRecord, user: User): SpaceMembe
     status: user.status,
     role: member.role,
     createdAt: member.createdAt.toISOString(),
+  }
+}
+
+/** 回收站里的一个删除单元（contracts 的 trashEntrySchema）：删除者的名字由 users 补上，账户已经不在时为 null */
+export function toTrashEntry(entry: TrashEntrySummary, user: User | undefined): TrashEntry {
+  return {
+    id: entry.id,
+    spaceId: entry.spaceId,
+    kind: entry.kind,
+    title: entry.title,
+    deletedBy: user === undefined ? null : { id: user.id, username: user.username, displayName: user.displayName },
+    deletedAt: entry.deletedAt.toISOString(),
+    expiresAt: entry.expiresAt.toISOString(),
+    origin: entry.origin,
+    documentCount: entry.documentCount,
+    permissions: entry.permissions,
   }
 }
 

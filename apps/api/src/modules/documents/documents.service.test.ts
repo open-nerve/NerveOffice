@@ -42,7 +42,7 @@ describe('DocumentsService.get', () => {
       revision: 3,
       profile: 'sheet@1',
       formatVersion: 1,
-      permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true },
+      permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true },
     })
   })
 
@@ -64,8 +64,8 @@ describe('DocumentsService.get', () => {
     expect(await service.get(BOB, document.id)).toMatchObject({ space: { id: TEAM_SPACE, type: 'team', name: '市场部' }, permissions: { canEdit: false } })
     expect((await errorOf(service.get(ALICE, document.id))).code).toBe('NOT_FOUND')
     store.space(TEAM_SPACE).visibleToAll = true
-    // 看得到就能复制（目标空间的新建权限另判）；查看者不能改名、不能移动
-    expect((await service.get(ALICE, document.id)).permissions).toEqual({ canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true })
+    // 看得到就能复制（目标空间的新建权限另判）；查看者不能改名、不能移动、不能删除
+    expect((await service.get(ALICE, document.id)).permissions).toEqual({ canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false })
   })
 })
 

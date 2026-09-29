@@ -65,7 +65,7 @@ describe('DocumentCopyService.copy', () => {
     const folder = store.addFolder({ spaceId: TEAM_SPACE, name: '资料' })
     const copy = await service.copy(member(ALICE), document.id, { spaceId: TEAM_SPACE, folderId: folder.id, title: '周报（存档）', requestId: nextRequestId() }, HTTP_ORIGIN)
     expect(copy).toMatchObject({ title: '周报（存档）', spaceId: TEAM_SPACE, folderId: folder.id, space: { id: TEAM_SPACE, name: '市场部' } })
-    expect(copy.permissions).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true })
+    expect(copy.permissions).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true })
   })
 
   it('取锁的顺序：requestId 的锁最前，然后目标空间的树锁与空间行；不锁源文档', async () => {

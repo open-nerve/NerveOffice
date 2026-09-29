@@ -1,11 +1,12 @@
-import type { DocumentPermissions, FolderPermissions, SpacePermissions, SpaceRole } from '@nerve-office/contracts'
+import type { DocumentPermissions, FolderPermissions, SpacePermissions, SpaceRole, TrashPermissions } from '@nerve-office/contracts'
 import type { Principal } from '../auth/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { SpaceFacts } from '../spaces/index.ts'
+import type { DocumentOwnership } from './access-rules.ts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { SpacesService } from '../spaces/index.ts'
-import { atLeast, documentPermissionsOf, effectiveSpaceRole, folderPermissionsOf, spacePermissionsOf } from './access-rules.ts'
+import { atLeast, documentPermissionsOf, effectiveSpaceRole, folderPermissionsOf, spacePermissionsOf, trashPermissionsOf } from './access-rules.ts'
 
 /** 调用者（M2-P2 设计 §3.4）：系统角色只影响团队空间的管理操作，不带来任何内容权限（00 号计划书 §5.2）。 */
 export interface Actor {
@@ -18,8 +19,10 @@ export function accessActorOf(principal: Principal): Actor {
   return { userId: principal.user.id, systemAdmin: principal.user.systemRole === 'admin' }
 }
 
-/** 判断文档权限要用到的文档属性：所在的空间（P5 的单独授权另按文档 id）。 */
-export interface AccessTarget {
+/**
+ * 判断文档权限要用到的文档属性：所在的空间（P5 的单独授权另按文档 id）、创建人（删除的权限按它判断）。
+ */
+export interface AccessTarget extends DocumentOwnership {
   readonly id: string
   readonly spaceId: string
 }
@@ -98,7 +101,7 @@ export class EffectiveAccessPolicy extends DocumentAccessPolicy {
 
 /** 不存在的对象也照样判断一次权限：用一个不存在的空间。两条路径做同样的查询，响应时间不暴露对象是否存在（M1-P3 审查 A4）。 */
 const MISSING_ID = '00000000-0000-0000-0000-000000000000'
-const MISSING_DOCUMENT: AccessTarget = { id: MISSING_ID, spaceId: MISSING_ID }
+const MISSING_DOCUMENT: AccessTarget = { id: MISSING_ID, spaceId: MISSING_ID, createdBy: MISSING_ID }
 
 /** 能访问的文档与调用者的权限。 */
 export interface Accessible<T extends AccessTarget> {
@@ -138,13 +141,14 @@ export interface AccessibleDocument<T extends AccessTarget> extends Accessible<T
 }
 
 /** 文档上要权限的操作（只看能不能读时用 requireAccess）。 */
-export type DocumentOperation = 'rename' | 'moveWithinSpace' | 'moveAcrossSpaces' | 'copy'
+export type DocumentOperation = 'rename' | 'moveWithinSpace' | 'moveAcrossSpaces' | 'copy' | 'delete'
 
 const DOCUMENT_CONTENT: Readonly<Record<DocumentOperation, { readonly permission: keyof DocumentPermissions, readonly message: string }>> = {
   rename: { permission: 'canRename', message: '没有给这份文档改名的权限' },
   moveWithinSpace: { permission: 'canMoveWithinSpace', message: '没有移动这份文档的权限' },
   moveAcrossSpaces: { permission: 'canMoveAcrossSpaces', message: '只有空间管理员能把文档移出这个空间' },
   copy: { permission: 'canCopy', message: '没有复制这份文档的权限' },
+  delete: { permission: 'canDelete', message: '编辑者只能删除自己创建的文档' },
 }
 
 /**
@@ -159,7 +163,7 @@ export async function requireDocumentContent<T extends AccessTarget>(
   transaction?: Transaction,
 ): Promise<AccessibleDocument<T>> {
   const accessible = await requireAccess(policy, userId, document, transaction)
-  const permissions = documentPermissionsOf(accessible.access.role)
+  const permissions = documentPermissionsOf(accessible.access.role, accessible.document, userId)
   for (const operation of operations) {
     const { permission, message } = DOCUMENT_CONTENT[operation]
     if (!permissions[permission])
@@ -231,12 +235,14 @@ export interface AccessibleFolder<T extends FolderTarget> {
 }
 
 /** 文件夹上要权限的操作（只看能不能看时传空数组）。 */
-export type FolderOperation = 'rename' | 'moveWithinSpace' | 'moveAcrossSpaces'
+export type FolderOperation = 'rename' | 'moveWithinSpace' | 'moveAcrossSpaces' | 'delete'
 
 const FOLDER_CONTENT: Readonly<Record<FolderOperation, { readonly permission: keyof FolderPermissions, readonly message: string }>> = {
   rename: { permission: 'canRename', message: '没有给这个文件夹改名的权限' },
   moveWithinSpace: { permission: 'canMoveWithinSpace', message: '没有移动这个文件夹的权限' },
   moveAcrossSpaces: { permission: 'canMoveAcrossSpaces', message: '只有空间管理员能把文件夹移出这个空间' },
+  // "子树里正常状态的文档全部是本人创建的"另在锁下用计数语句判断（P4-S3 spec §2），不在这里
+  delete: { permission: 'canDelete', message: '没有删除这个文件夹的权限' },
 }
 
 /**
@@ -261,6 +267,51 @@ export async function requireFolderContent<T extends FolderTarget>(
       throw denied(access.space, message)
   }
   return { folder, space: { ...access, role: access.role }, permissions }
+}
+
+/** 判断删除单元的权限要用到的属性：在哪个空间的回收站里、谁删的。 */
+export interface TrashTarget {
+  readonly spaceId: string
+  readonly deletedBy: string
+}
+
+/** 能访问的删除单元、所在空间的访问与调用者在它上面的权限。 */
+export interface AccessibleTrashEntry<T extends TrashTarget> {
+  readonly entry: T
+  readonly space: SpaceContentAccess
+  readonly permissions: TrashPermissions
+}
+
+/** 删除单元上要权限的操作（只看能不能看时传空数组：看得到空间内容的人都看得到回收站的列表）。 */
+export type TrashOperation = 'restore' | 'purge'
+
+const TRASH: Readonly<Record<TrashOperation, { readonly permission: keyof TrashPermissions, readonly message: string }>> = {
+  restore: { permission: 'canRestore', message: '只有删除的人或空间管理员能恢复' },
+  purge: { permission: 'canPurge', message: '只有空间管理员能永久删除' },
+}
+
+/**
+ * 读取或改动回收站里的一个删除单元之前的判断（P4-S3 spec §3、§4、§5）：
+ * 看不到这个空间的内容与删除单元不存在都是同一个 NOT_FOUND（删除单元不存在时也判断一次权限，用一个不存在的空间）；
+ * 看得到却不能做是 PERMISSION_DENIED，归档的空间另外说明原因。
+ */
+export async function requireTrashEntry<T extends TrashTarget>(
+  policy: DocumentAccessPolicy,
+  actor: Actor,
+  entry: T | undefined,
+  operations: readonly TrashOperation[],
+  transaction?: Transaction,
+): Promise<AccessibleTrashEntry<T>> {
+  const access = await policy.spaceAccessOf(actor, entry?.spaceId ?? MISSING_ID, transaction)
+  if (entry === undefined || access?.role === undefined)
+    throw new AppError('NOT_FOUND')
+  const permissions = trashPermissionsOf(access.space, access.role, entry.deletedBy, actor.userId)
+  for (const operation of operations) {
+    const { permission, message } = TRASH[operation]
+    if (!permissions[permission])
+      throw denied(access.space, message)
+  }
+  return { entry, space: { ...access, role: access.role }, permissions }
 }
 
 /** 空间的管理操作与各自的权限。 */

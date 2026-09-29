@@ -11,8 +11,8 @@ const MISSING_FOLDER = '0199a2c4-0000-7000-8000-0000000000fd'
 
 function setup() {
   const store = new FakeStore()
-  const { transactions, folders, documents, tree, spaces, policy, audit, writeAccess } = store.deps
-  return { store, service: new FoldersService(transactions, folders, documents, tree, spaces, policy, audit, writeAccess) }
+  const { transactions, folders, documents, entries, tree, spaces, policy, audit, writeAccess } = store.deps
+  return { store, service: new FoldersService(transactions, folders, documents, entries, tree, spaces, policy, audit, writeAccess) }
 }
 
 async function errorOf(promise: Promise<unknown>): Promise<AppError> {
@@ -40,7 +40,7 @@ describe('FoldersService.create', () => {
   it('在个人空间的根目录下新建：层数是 1，记审计；锁的顺序是先空间树、再空间行', async () => {
     const { store, service } = setup()
     const folder = await service.create(member(ALICE), { spaceId: ALICE_SPACE, name: '资料', requestId: nextRequestId() }, HTTP_ORIGIN)
-    expect(folder).toMatchObject({ spaceId: ALICE_SPACE, parentId: null, name: '资料', depth: 1, permissions: { canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true } })
+    expect(folder).toMatchObject({ spaceId: ALICE_SPACE, parentId: null, name: '资料', depth: 1, permissions: { canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canDelete: true } })
     expect(store.treeLocks).toEqual([[ALICE_SPACE]])
     expect(store.tree.lock.mock.invocationCallOrder[0]).toBeLessThan(store.spaces.holdSpace.mock.invocationCallOrder[0] ?? 0)
     expect(store.audits).toEqual([{
@@ -150,7 +150,7 @@ describe('FoldersService.list', () => {
     store.setMember(TEAM_SPACE, BOB, 'viewer')
     store.addFolder({ spaceId: TEAM_SPACE, name: '资料' })
     const page = await service.list(member(BOB), { spaceId: TEAM_SPACE })
-    expect(page.items[0]?.permissions).toEqual({ canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false })
+    expect(page.items[0]?.permissions).toEqual({ canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false })
     expect((await errorOf(service.list(member(ALICE), { spaceId: TEAM_SPACE }))).code).toBe('NOT_FOUND')
     expect((await errorOf(service.list(member(BOB), { spaceId: TEAM_SPACE, parentId: MISSING_FOLDER }))).code).toBe('NOT_FOUND')
   })
@@ -263,7 +263,7 @@ describe('FoldersService.move', () => {
     const moved = await service.move(member(ALICE), top.id, { spaceId: TEAM_SPACE, folderId: target.id }, HTTP_ORIGIN)
     expect(moved).toMatchObject({ spaceId: TEAM_SPACE, parentId: target.id, depth: 2 })
     // 到了新空间只是编辑者：不能再把它移走
-    expect(moved.permissions).toEqual({ canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false })
+    expect(moved.permissions).toEqual({ canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canDelete: true })
     // 子树里的文件夹：空间与层数都变了，父子关系不变
     expect(store.folders.get(leaf.id)).toMatchObject({ spaceId: TEAM_SPACE, parentId: top.id, depth: 3 })
     // 子树里的文档：换了空间、代次加一，仍在各自的文件夹里

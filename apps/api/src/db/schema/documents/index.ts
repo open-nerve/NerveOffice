@@ -1,7 +1,7 @@
 // documents 模块的表：文档的元数据（P3 设计 §3.2），当前内容与修订记录（P4 设计 §3.2，只做加法），
 // 文件夹与删除单元（M2-P4 设计 §3.3：与文档共用有效权限、空间事实与审计，所以放在同一个模块里）。
 import type { AnyPgColumn } from 'drizzle-orm/pg-core'
-import { DOCUMENT_PROFILES, DOCUMENT_STATUSES, DOCUMENT_TITLE_MAX_LENGTH, DOCUMENT_TYPES, FOLDER_MAX_DEPTH, FOLDER_NAME_MAX_LENGTH, PLATFORM_FORMAT_VERSIONS, SNAPSHOT_MAX_RAW_BYTES } from '@nerve-office/contracts'
+import { DOCUMENT_PROFILES, DOCUMENT_STATUSES, DOCUMENT_TITLE_MAX_LENGTH, DOCUMENT_TYPES, FOLDER_MAX_DEPTH, FOLDER_NAME_MAX_LENGTH, PLATFORM_FORMAT_VERSIONS, SNAPSHOT_MAX_RAW_BYTES, TRASH_ENTRY_KINDS } from '@nerve-office/contracts'
 import { sql } from 'drizzle-orm'
 import { check, index, integer, pgTable, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core'
 import { bytea, lengthBetween, oneOf } from '../common/index.ts'
@@ -14,10 +14,6 @@ export type DocumentRevisionKind = (typeof DOCUMENT_REVISION_KINDS)[number]
 
 /** SDK 版本号的长度上限：只是兜底，版本号由平台写入。 */
 const SDK_VERSION_MAX_LENGTH = 64
-
-/** 删除单元的种类：一份文档，或者一个文件夹连同它的整棵子树。新增取值时同时用迁移更新 CHECK 约束。 */
-export const TRASH_ENTRY_KINDS = ['document', 'folder'] as const
-export type TrashEntryKind = (typeof TRASH_ENTRY_KINDS)[number]
 
 /**
  * 回收站里的一个删除单元（M2-P4 设计 §3.3）：一次删除操作生成一条，子树里的每一行都指向它。
