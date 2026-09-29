@@ -1,3 +1,4 @@
-export { DocumentList } from './document-list.tsx'
 export { spaceDocumentsQueryKey } from './documents-api.ts'
+export { spaceFoldersQueryKey } from './folders-api.ts'
 export { NewSheetButton } from './new-sheet-button.tsx'
+export { SpaceContents } from './space-contents.tsx'

@@ -611,6 +611,43 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
     expect(await rulesFor('export { ConfirmDialog } from \'./confirm-dialog.tsx\'\n', 'apps/web/src/features/confirmation/index.ts')).not.toContain('boundaries/dependencies')
   })
 
+  it('回收站页与搜索结果页按需加载（M2-P4 设计 §3.7）：只有路由表能动态 import() 它们的公开入口；回收站页可以用确认的弹窗', async () => {
+    const ROUTES_FILE = 'apps/web/src/app/routes.ts'
+    const dynamicImport = (path: string): string => `export async function pages() {\n  return import('${path}')\n}\n`
+    for (const feature of ['trash', 'search'])
+      expect(await rulesFor(dynamicImport(`../features/${feature}/index.ts`), ROUTES_FILE), feature).not.toContain('boundaries/dependencies')
+
+    const lazyPages: [string, string, string][] = [
+      // 路由表：静态引用、动态引用内部文件
+      ['trash', `import { TrashPage } from '../features/trash/index.ts'\n\nexport const page = TrashPage\n`, ROUTES_FILE],
+      ['trash', dynamicImport('../features/trash/trash-page.tsx'), ROUTES_FILE],
+      // 应用层的其他文件、功能模块、入口的再导出
+      ['trash', dynamicImport('../features/trash/index.ts'), WEB_FILE],
+      ['trash', `import type { TrashPage } from '../trash/index.ts'\n\nexport type Page = typeof TrashPage\n`, WEB_FEATURE_FILE],
+      ['trash', `export { TrashPage } from '../../features/trash/index.ts'\n`, PLATFORM_ENTRY],
+      ['search', `import { SearchPage } from '../features/search/index.ts'\n\nexport const page = SearchPage\n`, ROUTES_FILE],
+      ['search', dynamicImport('../features/search/search-page.tsx'), ROUTES_FILE],
+      ['search', dynamicImport('../features/search/index.ts'), WEB_FILE],
+      ['search', `import type { SearchPage } from '../search/index.ts'\n\nexport type Page = typeof SearchPage\n`, WEB_FEATURE_FILE],
+      ['search', `export { SearchPage } from '../../features/search/index.ts'\n`, PLATFORM_ENTRY],
+    ]
+    const names: Readonly<Record<string, string>> = { trash: '回收站页（features/trash）按需加载', search: '搜索结果页（features/search）按需加载' }
+    for (const [feature, code, file] of lazyPages) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain('boundaries/dependencies')
+      expect(report.messages.join('\n'), file).toContain(names[feature] ?? '')
+    }
+
+    // 回收站页按需加载，所以它可以带确认的弹窗（永久删除要确认）；搜索结果页不带弹窗，引用了照样拦下
+    const importConfirm = (path: string): string => `import { ConfirmDialog } from '${path}'\n\nexport const dialog = ConfirmDialog\n`
+    const importDialog = (path: string): string => `import { DialogContent } from '${path}'\n\nexport const content = DialogContent\n`
+    expect(await rulesFor(importConfirm('../confirmation/index.ts'), 'apps/web/src/features/trash/trash-page.tsx')).not.toContain('boundaries/dependencies')
+    expect(await rulesFor(importDialog('../../shared/ui/dialog.tsx'), 'apps/web/src/features/trash/trash-page.tsx')).not.toContain('boundaries/dependencies')
+    const denied = await lint(importConfirm('../confirmation/index.ts'), 'apps/web/src/features/search/search-page.tsx')
+    expect(denied.rules).toContain('boundaries/dependencies')
+    expect(denied.messages.join('\n')).toContain('确认的弹窗（features/confirmation，带 Radix Dialog）只由按需加载的功能')
+  })
+
   it('弹窗的文件（shared/ui/dialog.tsx）与按关键词选一项（features/colleagues）只由按需加载的功能引用（M2-P2 审查 B8）', async () => {
     const importDialog = (path: string): string => `import { DialogContent } from '${path}'\n\nexport const content = DialogContent\n`
     for (const file of ['apps/web/src/features/admin/users-page.tsx', 'apps/web/src/features/members/members-page.tsx', 'apps/web/src/features/confirmation/confirm-dialog.tsx'])

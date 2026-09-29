@@ -17,12 +17,26 @@ export function personalSpaceOf(session: SessionResponse): SpaceView {
   }
 }
 
-/** 导航（只有个人空间，另可以带上团队空间）与个人空间的页头 */
+/** 某个空间里某一层的子文件夹的请求（M2-P4；parentId 省略表示空间的根目录） */
+export function foldersKey(spaceId: string, parentId?: string): string {
+  const query = new URLSearchParams({ spaceId })
+  if (parentId !== undefined)
+    query.set('parentId', parentId)
+  return `GET /api/folders?${query.toString()}`
+}
+
+/** 一层里没有子文件夹 */
+export function noFolders(): Handler {
+  return () => json(200, { items: [], truncated: false })
+}
+
+/** 导航（只有个人空间，另可以带上团队空间）、个人空间的页头与它根目录下的文件夹 */
 export function spaceRoutes(session: SessionResponse, teams: readonly SpaceView[] = []): Record<string, Handler> {
   const personal = personalSpaceOf(session)
   return {
     'GET /api/spaces': () => json(200, { items: [personal, ...teams] }),
     [`GET /api/spaces/${personal.id}`]: () => json(200, personal),
+    [foldersKey(personal.id)]: noFolders(),
   }
 }
 

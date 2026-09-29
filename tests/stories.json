@@ -22,12 +22,12 @@
     "US-M2-04": { "phase": "P2", "status": "active", "verification": ["integration", "e2e"] },
     "US-M2-05": { "phase": "P2", "status": "active", "verification": ["integration", "e2e"] },
     "US-M2-06": { "phase": "P2", "status": "active", "verification": ["integration", "e2e"] },
-    "US-M2-07": { "phase": "P4", "status": "planned", "verification": ["integration", "e2e"] },
-    "US-M2-08": { "phase": "P4", "status": "planned", "verification": ["integration", "e2e"] },
-    "US-M2-09": { "phase": "P4", "status": "planned", "verification": ["integration", "e2e"] },
+    "US-M2-07": { "phase": "P4", "status": "active", "verification": ["integration", "e2e"] },
+    "US-M2-08": { "phase": "P4", "status": "active", "verification": ["integration", "e2e"] },
+    "US-M2-09": { "phase": "P4", "status": "active", "verification": ["integration", "e2e"] },
     "US-M2-10": { "phase": "P5", "status": "planned", "verification": ["integration", "e2e"] },
     "US-M2-11": { "phase": "P3", "status": "active", "verification": ["e2e"] },
-    "US-M2-12": { "phase": "P4", "status": "planned", "verification": ["integration", "e2e"] },
+    "US-M2-12": { "phase": "P4", "status": "active", "verification": ["integration", "e2e"] },
     "US-M2-13": { "phase": "P1", "status": "active", "verification": ["integration", "e2e"] },
     "US-M2-14": { "phase": "P5", "status": "planned", "verification": ["integration", "e2e"] }
   }

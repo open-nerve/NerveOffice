@@ -842,6 +842,40 @@ export default antfu(
               dependency: { nodeKind: 'dynamic-import' },
             },
           },
+          // 回收站页同样按需加载（M2-P4 设计 §3.7）：它带着确认的弹窗，只有要找回删掉的东西时才用
+          {
+            from: [
+              { element: { type: 'web-app' } },
+              { element: { type: 'web-entry' } },
+              { element: { type: 'web-feature' } },
+            ],
+            disallow: { to: { element: { type: 'web-feature', captured: { feature: 'trash' } } } },
+            message: '回收站页（features/trash）按需加载：只有 app/routes.ts 可以动态 import() 它的公开入口，静态引用会把它带进平台页面的首屏（M2-P4 设计 §3.7）',
+          },
+          {
+            from: { element: { type: 'web-app', fileInternalPath: 'routes.ts' } },
+            allow: {
+              to: { element: { type: 'web-feature', captured: { feature: 'trash' }, fileInternalPath: PUBLIC_ENTRY } },
+              dependency: { nodeKind: 'dynamic-import' },
+            },
+          },
+          // 搜索结果页同样按需加载（M2-P4 设计 §3.7）：页头的搜索框只带着关键词跳过去，结果的渲染不进首屏
+          {
+            from: [
+              { element: { type: 'web-app' } },
+              { element: { type: 'web-entry' } },
+              { element: { type: 'web-feature' } },
+            ],
+            disallow: { to: { element: { type: 'web-feature', captured: { feature: 'search' } } } },
+            message: '搜索结果页（features/search）按需加载：只有 app/routes.ts 可以动态 import() 它的公开入口，静态引用会把它带进平台页面的首屏（M2-P4 设计 §3.7）',
+          },
+          {
+            from: { element: { type: 'web-app', fileInternalPath: 'routes.ts' } },
+            allow: {
+              to: { element: { type: 'web-feature', captured: { feature: 'search' }, fileInternalPath: PUBLIC_ENTRY } },
+              dependency: { nodeKind: 'dynamic-import' },
+            },
+          },
           // 确认的弹窗带着 Radix Dialog（约 12 KiB gzip）：只由按需加载的功能（管理界面、成员页）引用，
           // 首屏的页面、应用层与入口引用它会把弹窗带进平台页面的首屏（ADR-008，M2-P2 设计 §3.10）。
           // 下面三条都只管平台页面：编辑器页（它的入口与 sheet-editor）是另一个包，有自己的预算（M2-P2 复验）
@@ -849,10 +883,10 @@ export default antfu(
             from: [
               { element: { type: 'web-app' } },
               { element: { type: 'web-entry', captured: { entry: '!editor' } } },
-              { element: { type: 'web-feature', captured: { feature: '!{admin,members,sheet-editor}' } } },
+              { element: { type: 'web-feature', captured: { feature: '!{admin,members,trash,sheet-editor}' } } },
             ],
             disallow: { to: { element: { type: 'web-feature', captured: { feature: 'confirmation' } } } },
-            message: '确认的弹窗（features/confirmation，带 Radix Dialog）只由按需加载的功能（features/admin、features/members）引用，不进平台页面的首屏（ADR-008）',
+            message: '确认的弹窗（features/confirmation，带 Radix Dialog）只由按需加载的功能（features/admin、features/members、features/trash）引用，不进平台页面的首屏（ADR-008）',
           },
           // 弹窗的文件本身（shared/ui/dialog.tsx，Radix Dialog）同样只由按需加载的功能直接引用（M2-P2 审查 B8）：功能、应用层与入口引用共享层本来是允许的，
           // 这里在允许的策略之后覆盖。shared 内部的中转另由 nerve/web-ui-heavy-components 拦下
@@ -860,10 +894,10 @@ export default antfu(
             from: [
               { element: { type: 'web-app' } },
               { element: { type: 'web-entry', captured: { entry: '!editor' } } },
-              { element: { type: 'web-feature', captured: { feature: '!{admin,members,confirmation,sheet-editor}' } } },
+              { element: { type: 'web-feature', captured: { feature: '!{admin,members,trash,confirmation,sheet-editor}' } } },
             ],
             disallow: { to: { element: { type: 'web-shared', fileInternalPath: 'ui/dialog.tsx' } } },
-            message: '弹窗（shared/ui/dialog.tsx，带 Radix Dialog）只由按需加载的功能（features/admin、features/members、features/confirmation）引用：首屏的功能、应用层与入口引用它会把弹窗带进平台页面的首屏（ADR-008，M2-P2 审查 B8）',
+            message: '弹窗（shared/ui/dialog.tsx，带 Radix Dialog）只由按需加载的功能（features/admin、features/members、features/trash、features/confirmation）引用：首屏的功能、应用层与入口引用它会把弹窗带进平台页面的首屏（ADR-008，M2-P2 审查 B8）',
           },
           // 按关键词选一项（features/colleagues：按名字选同事、选团队空间）只给按需加载的管理界面与成员页用（M2-P2 设计 §3.10，审查 B8）
           {

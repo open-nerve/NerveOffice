@@ -45,7 +45,7 @@ async function scene(prefix: string, snapshotFor: (unitId: string) => string = r
   const author = await createUser(`${prefix}-author`, '作者')
   const viewer = await createUser(`${prefix}-viewer`, '查看者')
   const space = await createTeamSpace('只读样本', admin, [[author, 'admin'], [viewer, 'viewer']])
-  return { author, viewer, spaceId: space.id, documentId: await createDocumentIn(space.id, author, '只读样本', snapshotFor) }
+  return { author, viewer, spaceId: space.id, documentId: await createDocumentIn(space.id, author, '只读样本', { snapshotFor }) }
 }
 
 /** 只读的全过程都应该没有的：页面错误（被取消的命令不产生页面错误，M2-P3 设计 §3.8）与保存请求 */

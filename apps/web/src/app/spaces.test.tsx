@@ -5,7 +5,7 @@ import type { SessionResponse, SpaceMember, SpaceMemberListResponse, SpaceRole, 
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { apiError, installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
-import { documentsKey, personalSpaceOf, spaceRoutes } from '../shared/testing/spaces.test-support.ts'
+import { documentsKey, foldersKey, noFolders, personalSpaceOf, spaceRoutes } from '../shared/testing/spaces.test-support.ts'
 import { deferred, settle } from './admin.test-support.ts'
 import { currentPath, renderApp } from './render-app.test-support.tsx'
 
@@ -49,6 +49,7 @@ function loggedIn(view: SpaceView = team(), extra: Parameters<typeof installFake
     [documentsKey(SESSION)]: () => json(200, { items: [], nextCursor: null }),
     [`GET /api/spaces/${TEAM_ID}`]: () => json(200, view),
     [teamDocumentsKey()]: () => json(200, { items: [], nextCursor: null }),
+    [foldersKey(TEAM_ID)]: noFolders(),
     ...extra,
   })
 }

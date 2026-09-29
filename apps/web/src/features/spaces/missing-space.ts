@@ -1,17 +1,21 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
-import { spaceDocumentsQueryKey } from '../documents/index.ts'
+import { spaceDocumentsQueryKey, spaceFoldersQueryKey } from '../documents/index.ts'
 import { membersQueryOptions, spaceQueryOptions, spacesQueryOptions } from './spaces-api.ts'
 
 /**
- * 去掉一个空间在请求缓存里的内容（页头、成员、文档列表）：下次打开从加载开始，不先显示旧的内容。
+ * 去掉一个空间在请求缓存里的内容（页头、成员、各层的文件夹与文档）：下次打开从加载开始，不先显示旧的内容。
  * 默认只去掉没有页面在用的：正在显示的查询被去掉，它的页面一重新渲染就会再请求（留给离开时再去掉）。
  * 马上要离开正在显示它的页面时（leaving，例如移出了自己之后回到首页），连同正在显示的一起去掉：不等页面卸载，免得与路由切换抢先后。
+ * 文件夹与文档按前缀去掉：M2-P4 起一个空间里每一层各有一份列表（缓存键带着位置）。
  */
 export function forgetSpace(queryClient: QueryClient, spaceId: string, options: { readonly leaving?: boolean } = {}): void {
-  for (const queryKey of [spaceQueryOptions(spaceId).queryKey, membersQueryOptions(spaceId).queryKey, spaceDocumentsQueryKey(spaceId)])
-    queryClient.removeQueries({ queryKey, exact: true, type: options.leaving === true ? 'all' : 'inactive' })
+  const type = options.leaving === true ? 'all' : 'inactive'
+  for (const queryKey of [spaceQueryOptions(spaceId).queryKey, membersQueryOptions(spaceId).queryKey])
+    queryClient.removeQueries({ queryKey, exact: true, type })
+  for (const queryKey of [spaceDocumentsQueryKey(spaceId), spaceFoldersQueryKey(spaceId)])
+    queryClient.removeQueries({ queryKey, type })
 }
 
 /**

@@ -58,7 +58,7 @@ test.describe('US-M1-06 重开看到最后一次保存的内容', () => {
     await openEditor(page, documentId)
     const saved = await editAndSave(page, documentId)
     await page.getByRole('link', { name: '我的空间' }).click()
-    await page.getByRole('button', { name: '退出' }).click()
+    await page.getByRole('button', { name: '退出', exact: true }).click()
     await expect(page.getByRole('form', { name: '登录' })).toBeVisible()
     await loginThroughUi(page, owner)
     await page.getByRole('list', { name: '文档列表' }).getByRole('link').first().click()

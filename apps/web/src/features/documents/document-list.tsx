@@ -1,29 +1,98 @@
-import type { DocumentSummary } from '@nerve-office/contracts'
-import { documentPagePath } from '@nerve-office/contracts'
-import { useInfiniteQuery } from '@tanstack/react-query'
+import type { DocumentSummary, SpaceView } from '@nerve-office/contracts'
+import type { OrganizeNotice } from './item-actions.tsx'
+import { documentPagePath, documentTitleSchema } from '@nerve-office/contracts'
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { FileSpreadsheet } from 'lucide-react'
-import { useEffect, useRef } from 'react'
+import { useEffect, useId, useRef } from 'react'
 import { describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
-import { Alert, AlertDescription, Button, Skeleton } from '../../shared/ui/index.ts'
-import { spaceDocumentsQueryOptions } from './documents-api.ts'
+import { Alert, AlertDescription, Button, buttonVariants, Skeleton } from '../../shared/ui/index.ts'
+import { copyDocument, deleteDocument, documentQueryOptions, folderDocumentsQueryOptions, moveDocument, updateDocument } from './documents-api.ts'
+import { ItemActions } from './item-actions.tsx'
+import { useOrganizeRefresh } from './organize-refresh.ts'
 
-function DocumentItem({ document }: { document: DocumentSummary }) {
+const organize = messages.organize
+
+function validTitle(value: string): boolean {
+  return documentTitleSchema.safeParse(value).success
+}
+
+interface DocumentItemProps {
+  readonly document: DocumentSummary
+  readonly targetSpaces: readonly SpaceView[]
+  readonly open: boolean
+  readonly onToggle: () => void
+  readonly onDone: (notice: OrganizeNotice | undefined) => void
+  readonly onDenied: () => void
+}
+
+/**
+ * 列表里的一份文档：标题是打开编辑器页的链接，右边是"操作 <标题>"。
+ * 列表的条目只有摘要（契约里没有权限位），所以展开操作时才按 id 取一次元数据：能做哪些操作一律以服务端给的 permissions 为准，
+ * 顺带也拿到它现在所在的文件夹（移动与复制要用）。
+ */
+function DocumentItem({ document, targetSpaces, open, onToggle, onDone, onDenied }: DocumentItemProps) {
+  const refresh = useOrganizeRefresh()
+  const panelId = useId()
+  const detail = useQuery({ ...documentQueryOptions(document.id), enabled: open })
+
   return (
     <li>
-      {/* 编辑器页是另一个入口：普通的链接，整页打开（P4 设计 §3.7.4） */}
-      <a href={documentPagePath(document.id)} className="flex items-center gap-3 px-4 py-3 outline-none hover:bg-muted/50 focus-visible:ring-3 focus-visible:ring-ring/50">
-        <FileSpreadsheet className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
-        <span className="flex min-w-0 flex-col">
-          <span className="truncate font-medium">{document.title}</span>
-          <span className="text-xs text-muted-foreground">
-            {messages.documents.typeName(document.type)}
-            {' · '}
-            <time dateTime={document.updatedAt}>{messages.documents.updatedAt(formatDateTime(document.updatedAt))}</time>
+      <div className="flex items-center gap-3 px-4 py-3">
+        {/* 编辑器页是另一个入口：普通的链接，整页打开（P4 设计 §3.7.4） */}
+        <a href={documentPagePath(document.id)} className="flex min-w-0 flex-1 items-center gap-3 outline-none hover:bg-muted/50 focus-visible:ring-3 focus-visible:ring-ring/50">
+          <FileSpreadsheet className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <span className="flex min-w-0 flex-col">
+            <span className="truncate font-medium">{document.title}</span>
+            <span className="text-xs text-muted-foreground">
+              {messages.documents.typeName(document.type)}
+              {' · '}
+              <time dateTime={document.updatedAt}>{messages.documents.updatedAt(formatDateTime(document.updatedAt))}</time>
+            </span>
           </span>
-        </span>
-      </a>
+        </a>
+        <Button type="button" variant="ghost" size="sm" aria-expanded={open} aria-controls={panelId} aria-label={organize.actionsOn(document.title)} onClick={onToggle}>{organize.actions}</Button>
+      </div>
+      {open && (
+        <ItemActions
+          panelId={panelId}
+          name={document.title}
+          validateName={validTitle}
+          permissions={detail.data?.permissions}
+          loading={detail.isPending}
+          error={detail.error}
+          onRetry={() => void detail.refetch()}
+          current={{ spaceId: detail.data?.spaceId ?? '', folderId: detail.data?.folderId ?? undefined }}
+          targetSpaces={targetSpaces}
+          operations={{
+            rename: async (title) => {
+              const renamed = await updateDocument(document.id, { title })
+              await refresh([renamed.spaceId])
+            },
+            move: async (destination) => {
+              const moved = await moveDocument(document.id, { spaceId: destination.spaceId, ...(destination.folderId === undefined ? {} : { folderId: destination.folderId }) })
+              await refresh([detail.data?.spaceId ?? destination.spaceId, moved.spaceId])
+            },
+            copy: async (destination) => {
+              const copy = await copyDocument(document.id, { spaceId: destination.spaceId, requestId: crypto.randomUUID(), ...(destination.folderId === undefined ? {} : { folderId: destination.folderId }) })
+              await refresh([copy.spaceId])
+              return {
+                message: organize.copied(copy.title),
+                action: <a href={documentPagePath(copy.id)} className={buttonVariants({ variant: 'outline', size: 'sm' })}>{organize.openCopy}</a>,
+              }
+            },
+            remove: async () => {
+              await deleteDocument(document.id)
+              await refresh([detail.data?.spaceId ?? ''])
+            },
+          }}
+          describeDeleteError={error => describeError(error).message}
+          onDone={onDone}
+          onDenied={onDenied}
+          onClose={onToggle}
+        />
+      )}
     </li>
   )
 }
@@ -37,12 +106,27 @@ function LoadingRows() {
   )
 }
 
+interface DocumentListProps {
+  readonly spaceId: string
+  /** 当前所在的文件夹；null 表示空间的根目录（M2-P4） */
+  readonly folderId: string | null
+  /** 我能新建内容的空间：移动与复制的目标候选 */
+  readonly targetSpaces: readonly SpaceView[]
+  /** 当前展开操作面板的那一个（整页只有一个） */
+  readonly openId: string | undefined
+  readonly onToggle: (id: string) => void
+  readonly onDone: (notice: OrganizeNotice | undefined) => void
+  readonly onDenied: () => void
+  /** 这一层还有没有子文件夹：都没有时"这里还没有文档"才是整块空的说明 */
+  readonly hasFolders: boolean
+}
+
 /**
- * 一个空间里的文档列表（US-M1-03，M2-P2 设计 §3.10）。加载中、空列表、加载失败都有明确的显示；分页用"加载更多"。
- * 标题与操作（新建表格等）在空间页的页头。
+ * 一个空间里某个文件夹下的文档列表（US-M1-03，M2-P2 设计 §3.10，M2-P4 按目录过滤）。
+ * 加载中、空列表、加载失败都有明确的显示；分页用"加载更多"。标题与新建在空间页的页头，子文件夹排在这个列表前面。
  */
-export function DocumentList({ spaceId }: { readonly spaceId: string }) {
-  const query = useInfiniteQuery(spaceDocumentsQueryOptions(spaceId))
+export function DocumentList({ spaceId, folderId, targetSpaces, openId, onToggle, onDone, onDenied, hasFolders }: DocumentListProps) {
+  const query = useInfiniteQuery(folderDocumentsQueryOptions(spaceId, folderId))
   const documents = query.data?.pages.flatMap(page => page.items) ?? []
   // 加载更多时已有的条数：新的一页到了之后，焦点移到第一个新条目。按钮可能随之消失（没有下一页了），焦点不能留在它身上（审查 B13）
   const listRef = useRef<HTMLUListElement>(null)
@@ -82,12 +166,24 @@ export function DocumentList({ spaceId }: { readonly spaceId: string }) {
       </Alert>
     )
   }
-  if (documents.length === 0)
-    return <p className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">{messages.documents.empty}</p>
+  if (documents.length === 0) {
+    // 这一层有子文件夹时不说"这里还没有文档"：那会读成整个位置是空的
+    return hasFolders ? null : <p className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">{messages.documents.empty}</p>
+  }
   return (
     <>
       <ul ref={listRef} aria-label={messages.documents.listLabel} className="divide-y rounded-lg border">
-        {documents.map(document => <DocumentItem key={document.id} document={document} />)}
+        {documents.map(document => (
+          <DocumentItem
+            key={document.id}
+            document={document}
+            targetSpaces={targetSpaces}
+            open={openId === document.id}
+            onToggle={() => onToggle(document.id)}
+            onDone={onDone}
+            onDenied={onDenied}
+          />
+        ))}
       </ul>
       {query.isError && (
         <Alert variant="destructive">
