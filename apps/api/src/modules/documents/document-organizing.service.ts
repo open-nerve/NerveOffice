@@ -169,7 +169,7 @@ export class DocumentOrganizingService {
     const [moved] = await this.documents.moveToSpace([document.id], spaceId, folderId, transaction)
     if (moved === undefined)
       throw new Error(`移动时文档不在了：${document.id}`)
-    await this.writeAccess.revoke({ kind: 'document', documentId: document.id }, transaction)
+    await this.writeAccess.revoke({ kind: 'documents', documentIds: [document.id] }, transaction)
     await this.recordMove(actor, moved, origin, { fromSpaceId: document.spaceId, fromFolderId: document.folderId }, transaction)
     return moved
   }

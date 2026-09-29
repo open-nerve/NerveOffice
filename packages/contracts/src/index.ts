@@ -152,6 +152,7 @@ export {
   folderNameSchema,
   folderPermissionsSchema,
   folderSchema,
+  moveFolderRequestSchema,
   updateFolderRequestSchema,
 } from './folders/folders.ts'
 export type {
@@ -160,6 +161,7 @@ export type {
   FolderListQuery,
   FolderListResponse,
   FolderPermissions,
+  MoveFolderRequest,
   UpdateFolderRequest,
 } from './folders/folders.ts'
 export { healthLiveResponseSchema, healthReadyResponseSchema } from './health/health.ts'

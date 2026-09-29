@@ -127,7 +127,7 @@ describe('DocumentOrganizingService.move', () => {
     // 到了新空间只是编辑者：不能再把它移走
     expect(moved.permissions).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true })
     expect(store.writeEpochs.get(document.id)).toBe(1)
-    expect(store.revocations).toEqual([{ kind: 'document', documentId: document.id }])
+    expect(store.revocations).toEqual([{ kind: 'documents', documentIds: [document.id] }])
     expect(store.audits).toEqual([{
       action: 'documents.moved',
       actor: { type: 'user', id: ALICE },

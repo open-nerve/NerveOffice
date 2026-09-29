@@ -29,12 +29,25 @@ export interface NewFolder {
   readonly requestId: string
 }
 
-/** 一棵子树（含根）的摘要：移动之前判断层数与成环用。 */
+/** 一棵子树（含根）的摘要：移动之前判断层数与成环，跨空间移动还要按它找出里面的文档。 */
 export interface SubtreeSummary {
   /** 子树里最深的一层；子树只有根时就是根的层数 */
   readonly maxDepth: number
   /** 目标的父文件夹是不是就在这棵子树里（含根）：是就会成环 */
   readonly containsCandidate: boolean
+  /** 子树里全部文件夹的 id（含根）：跨空间移动据此锁住并搬走里面的文档，条数也是审计里的文件夹数 */
+  readonly ids: string[]
+}
+
+/** 把一棵子树整个挪走：换父文件夹、整棵加上层差，跨空间时连所属空间一起改。 */
+export interface SubtreeMove {
+  readonly rootId: string
+  /** 根的新父文件夹；null 表示空间的根目录 */
+  readonly parentId: string | null
+  /** 整棵子树（含根）的层数一起加上它 */
+  readonly depthDelta: number
+  /** 跨空间移动时的目标空间：整棵子树一起换；在同一个空间里移动时省略 */
+  readonly spaceId?: string | undefined
 }
 
 const f = folders
@@ -117,32 +130,36 @@ export class FoldersRepository {
   }
 
   /**
-   * 这棵子树最深的一层，以及 candidateParentId 是不是就在这棵子树里（含根）。
-   * candidateParentId 为空（移到空间的根目录）时不可能成环，containsCandidate 为假
+   * 这棵子树最深的一层、里面全部文件夹的 id，以及 candidateParentId 是不是就在这棵子树里（含根）。
+   * candidateParentId 为空（移到空间的根目录）时不可能成环，containsCandidate 为假。
+   * 一次展开把三样一起取出来：移动前的判断、跨空间时找文档、审计里的文件夹数都用它，不重复展开子树
    */
   async summarizeSubtree(rootId: string, candidateParentId: string | null, transaction: Transaction): Promise<SubtreeSummary> {
-    const projection = sql`SELECT max(depth) AS "maxDepth", coalesce(bool_or(id = ${candidateParentId}::uuid), false) AS "containsCandidate" FROM subtree`
-    const result = await executorOf(this.db, transaction).execute<{ maxDepth: number | null, containsCandidate: boolean }>(subtreeQuery(rootId, projection))
+    const projection = sql`SELECT max(depth) AS "maxDepth", coalesce(bool_or(id = ${candidateParentId}::uuid), false) AS "containsCandidate", array_agg(id) AS ids FROM subtree`
+    const result = await executorOf(this.db, transaction).execute<{ maxDepth: number | null, containsCandidate: boolean, ids: string[] | null }>(subtreeQuery(rootId, projection))
     const row = result.rows[0]
-    if (row === undefined || row.maxDepth === null)
+    if (row === undefined || row.maxDepth === null || row.ids === null)
       throw new Error(`展开子树时文件夹不在了：${rootId}`)
-    return { maxDepth: row.maxDepth, containsCandidate: row.containsCandidate }
+    return { maxDepth: row.maxDepth, containsCandidate: row.containsCandidate, ids: row.ids }
   }
 
   /**
-   * 把一棵子树整个挪到新的父文件夹下：根换父文件夹，整棵子树（含根）的层数一起加上 depthDelta。
+   * 把一棵子树整个挪到新的父文件夹下：根换父文件夹，整棵子树（含根）的层数一起加上 depthDelta；
+   * 跨空间移动时（给了 spaceId）整棵子树的所属空间也一起改——子孙的父子关系不变，只有根换了父。
    * 一条 UPDATE，不逐行：子树由 WHERE 里的递归子查询给出（读的是语句开始时的快照，不受这条 UPDATE 自己的改动影响）。
    * 层数越界时数据库的 CHECK 兜底；调用方已在空间树的锁下用 summarizeSubtree 先判断过。返回更新后的根
    */
-  async moveSubtree(rootId: string, parentId: string | null, depthDelta: number, transaction: Transaction): Promise<FolderRow> {
+  async moveSubtree(move: SubtreeMove, transaction: Transaction): Promise<FolderRow> {
+    const { rootId, parentId, depthDelta, spaceId } = move
     const executor = executorOf(this.db, transaction)
+    const changes = {
+      parentId: sql`CASE WHEN ${f.id} = ${rootId} THEN ${parentId}::uuid ELSE ${f.parentId} END`,
+      depth: sql`${f.depth} + ${depthDelta}`,
+      updatedAt: sql`now()`,
+    }
     await executor
       .update(f)
-      .set({
-        parentId: sql`CASE WHEN ${f.id} = ${rootId} THEN ${parentId}::uuid ELSE ${f.parentId} END`,
-        depth: sql`${f.depth} + ${depthDelta}`,
-        updatedAt: sql`now()`,
-      })
+      .set(spaceId === undefined ? changes : { ...changes, spaceId })
       .where(sql`${f.id} IN (${subtreeQuery(rootId, sql`SELECT id FROM subtree`)})`)
     // 再按主键读一次根：更新的是整棵子树，RETURNING 会把整棵都带回来
     const [row] = await executor.select(COLUMNS).from(f).where(eq(f.id, rootId))

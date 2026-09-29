@@ -9,7 +9,7 @@ import type { Actor } from './document-access-policy.ts'
 import type { CurrentContent, DocumentContentsRepository, StoredSnapshot } from './document-contents.repository.ts'
 import type { DocumentRevisionsRepository, NewRevision, RevisionRow } from './document-revisions.repository.ts'
 import type { AccessibleScope, CopiedDocument, DocumentRow, DocumentsRepository, ListOptions, NewDocument } from './documents.repository.ts'
-import type { FolderRow, FoldersRepository, NewFolder, SubtreeSummary } from './folders.repository.ts'
+import type { FolderRow, FoldersRepository, NewFolder, SubtreeMove, SubtreeSummary } from './folders.repository.ts'
 import type { SpaceTreeRepository } from './space-tree.repository.ts'
 import type { WriteAccessRevocation, WriteAccessScope } from './write-access.ts'
 import { FOLDER_LIST_MAX_ITEMS } from '@nerve-office/contracts'
@@ -131,11 +131,19 @@ export class FakeStore {
       insert: vi.fn(async (document: NewDocument) => this.addDocument({ ...document, revision: 1 })),
       rename: vi.fn(async (id: string, title: string) => this.updateDocument(id, { title })),
       moveToFolder: vi.fn(async (id: string, folderId: string | null) => this.updateDocument(id, { folderId })),
-      /** 跨空间移动：改所属空间与位置，写入代次加一（代次不在 DocumentRow 里，记在 writeEpochs 上，用例据此核对） */
-      moveToSpace: vi.fn(async (ids: readonly string[], spaceId: string, folderId: string | null) => ids.map((id) => {
+      /**
+       * 跨空间移动：改所属空间，写入代次加一（代次不在 DocumentRow 里，记在 writeEpochs 上，用例据此核对）。
+       * folderId 为 undefined 表示位置不变（跟着所在的文件夹换空间）
+       */
+      moveToSpace: vi.fn(async (ids: readonly string[], spaceId: string, folderId: string | null | undefined) => ids.map((id) => {
         this.writeEpochs.set(id, (this.writeEpochs.get(id) ?? 0) + 1)
-        return this.updateDocument(id, { spaceId, folderId })
+        return this.updateDocument(id, folderId === undefined ? { spaceId } : { spaceId, folderId })
       })),
+      /** 这些文件夹里的文档（不按状态过滤，与真实仓储一致），按 id 排序 */
+      lockInFolders: vi.fn(async (folderIds: readonly string[], spaceId: string) => [...this.documents.values()]
+        .filter(row => row.folderId !== null && folderIds.includes(row.folderId) && row.spaceId === spaceId)
+        .map(row => row.id)
+        .toSorted()),
       /** 按源文档建一份副本：类型、unitId、档案与格式版本原样复制，修订号 1，新的 id */
       copyFrom: vi.fn(async (sourceId: string, copy: CopiedDocument): Promise<DocumentRow | undefined> => {
         const source = this.documents.get(sourceId)
@@ -201,15 +209,18 @@ export class FakeStore {
         return {
           maxDepth: Math.max(...rows.map(row => row.depth)),
           containsCandidate: candidateParentId !== null && rows.some(row => row.id === candidateParentId),
+          ids: rows.map(row => row.id),
         }
       }),
-      moveSubtree: vi.fn(async (rootId: string, parentId: string | null, depthDelta: number) => {
+      /** 整棵子树换位置：层数一起加差值，给了 spaceId 时所属空间也一起换（只有根换父文件夹） */
+      moveSubtree: vi.fn(async (move: SubtreeMove) => {
+        const { rootId, parentId, depthDelta, spaceId } = move
         for (const row of this.descendants(rootId))
-          this.updateFolder(row.id, { depth: row.depth + depthDelta })
+          this.updateFolder(row.id, { depth: row.depth + depthDelta, ...(spaceId === undefined ? {} : { spaceId }) })
         const root = this.folders.get(rootId)
         if (root === undefined)
           throw new Error(`移动时文件夹不在了：${rootId}`)
-        return this.updateFolder(rootId, { parentId, depth: root.depth + depthDelta })
+        return this.updateFolder(rootId, { parentId, depth: root.depth + depthDelta, ...(spaceId === undefined ? {} : { spaceId }) })
       }),
     },
   }

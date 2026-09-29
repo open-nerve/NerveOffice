@@ -1,20 +1,23 @@
 import type { Folder, FolderListQuery, FolderListResponse } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Transaction } from '../database/index.ts'
-import type { AccessibleFolder, Actor, FolderOperation } from './document-access-policy.ts'
-import type { FolderRow } from './folders.repository.ts'
+import type { AccessibleFolder, Actor, FolderOperation, SpaceContentAccess } from './document-access-policy.ts'
+import type { FolderRow, SubtreeSummary } from './folders.repository.ts'
 import { FOLDER_LIST_MAX_ITEMS, FOLDER_MAX_DEPTH } from '@nerve-office/contracts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
+import { inIdOrder } from '../../shared/id-order.ts'
 import { AuditService } from '../audit/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { SpacesService } from '../spaces/index.ts'
 import { folderPermissionsOf } from './access-rules.ts'
-import { DocumentAccessPolicy, requireFolderContent, requireSpaceContent } from './document-access-policy.ts'
+import { DocumentAccessPolicy, requireCreateTarget, requireFolderContent, requireSpaceContent } from './document-access-policy.ts'
+import { DocumentsRepository } from './documents.repository.ts'
 import { requireFolderIn } from './folder-location.ts'
 import { toFolder } from './folder-views.ts'
 import { FoldersRepository } from './folders.repository.ts'
 import { SpaceTreeRepository } from './space-tree.repository.ts'
+import { WriteAccessRevocation } from './write-access.ts'
 
 /** 新建文件夹（已经过 contracts 的校验）。 */
 export interface CreateFolderCommand {
@@ -32,20 +35,30 @@ export interface UpdateFolderCommand {
   readonly parentId?: string | null | undefined
 }
 
+/** 连同子树移动到某个空间的某个位置（已经过 contracts 的校验）。 */
+export interface MoveFolderCommand {
+  readonly spaceId: string
+  /** 目标空间里的父文件夹；没有时是那个空间的根目录 */
+  readonly folderId?: string | undefined
+}
+
 /**
- * 空间里的文件夹（M2-P4 设计 §3.4）：列出一层、新建、改名、同一个空间里移动。
+ * 空间里的文件夹（M2-P4 设计 §3.4）：列出一层、新建、改名、移动（同一个空间里，或者连同子树移到别的空间）。
  * 层数存在列里，新建与移动时在事务里算好并校验（最多 FOLDER_MAX_DEPTH 层），移动子树时整棵加上差值。
- * 结构性的改动都在事务的第一步取空间树的 advisory lock（SpaceTreeRepository），同一个空间里逐个执行。
+ * 结构性的改动都在事务的第一步取空间树的 advisory lock（SpaceTreeRepository），同一个空间里逐个执行；
+ * 跨空间时按空间 id 排序取两把，再按同样的顺序取空间行，并在锁下重新判断一次（ADR-007 的锁顺序）。
  */
 @Injectable()
 export class FoldersService {
   constructor(
     private readonly transactions: TransactionRunner,
     private readonly folders: FoldersRepository,
+    private readonly documents: DocumentsRepository,
     private readonly tree: SpaceTreeRepository,
     private readonly spaces: SpacesService,
     private readonly policy: DocumentAccessPolicy,
     private readonly audit: AuditService,
+    private readonly writeAccess: WriteAccessRevocation,
   ) {}
 
   /** 列出一层：parentId 省略表示空间的根目录。看不到这个空间与它不存在都是 NOT_FOUND。 */
@@ -115,7 +128,7 @@ export class FoldersService {
       await this.spaces.holdSpace(checked.folder.spaceId, transaction)
       // 锁下重新读、重新判断：这期间它可能被移动、被删，空间可能被归档，自己可能被移出空间
       const { folder, permissions } = await this.checkUpdate(actor, await this.folders.findById(id, transaction), command, transaction)
-      // 树锁是按取锁之前读到的空间取的。跨空间移动（S2）会同时取来源与目标两把树锁，拿到锁之后它换不了空间；
+      // 树锁是按取锁之前读到的空间取的。跨空间移动会同时取来源与目标两把树锁，拿到锁之后它换不了空间；
       // 万一取锁之前刚好有一次跨空间移动提交了，这把锁就保护不到它——不在错的锁下改东西，按"没找到"回答，刷新后重试
       if (folder.spaceId !== checked.folder.spaceId)
         throw new AppError('NOT_FOUND')
@@ -124,14 +137,46 @@ export class FoldersService {
       if (command.name !== undefined && command.name !== current.name) {
         const from = current.name
         current = await this.folders.rename(current.id, command.name, transaction)
-        await this.record('folders.renamed', actor, current, origin, { from, to: current.name }, transaction)
+        await this.record('folders.renamed', actor, current.id, origin, { spaceId: current.spaceId, from, to: current.name }, transaction)
       }
-      if (command.parentId !== undefined && command.parentId !== current.parentId) {
-        const from = current.parentId
-        current = await this.moveWithinSpace(current, command.parentId, transaction)
-        await this.record('folders.moved', actor, current, origin, { from, to: current.parentId }, transaction)
-      }
+      if (command.parentId !== undefined && command.parentId !== current.parentId)
+        current = await this.movedWithinSpace(actor, current, await this.parentIn(current.spaceId, command.parentId, transaction), origin, transaction)
       return toFolder(current, permissions)
+    })
+  }
+
+  /**
+   * 连同子树移动到某个空间的某个位置（M2-P4 设计 §3.2）：
+   * - 目标是别的空间：要源空间的空间管理员角色 + 目标空间的新建权限（00 号计划书 §5.3）；整棵子树一起搬，
+   *   里面的文档跟着换空间、写入代次加一，并在同一个事务里收回它们的写入权（§5.4：权限随之改变）；
+   * - 目标就是现在所在的空间：与空间内移动同一条规则（编辑者及以上），代次不变——
+   *   移动成功之后重试同一个请求因此是幂等的，不会白白递增代次（与移动文档一致）。
+   */
+  async move(actor: Actor, id: string, command: MoveFolderCommand, origin: AuditOrigin): Promise<Folder> {
+    return this.transactions.run(async (transaction) => {
+      // 先判断（不加锁）：看不到与不能做的请求不取任何锁；看不到与不存在都是 NOT_FOUND
+      const checked = await this.checkMove(actor, await this.folders.findById(id, transaction), command, transaction)
+      // 两个空间的树锁一起取（目标就是本空间时只有一把）：防成环的取锁顺序由 SpaceTreeRepository 一处负责，
+      // 服务只把牵涉到的空间一起交给它；空间行在这里按同一个顺序（id）取，两个方向的跨空间移动同时发生时不成环
+      const involved = [...new Set([checked.folder.spaceId, command.spaceId])]
+      await this.tree.lock(involved, transaction)
+      for (const spaceId of inIdOrder(involved))
+        await this.spaces.holdSpace(spaceId, transaction)
+      // 锁下重新读、重新判断：这期间它可能被删、被别人移走，空间可能被归档，自己可能被移出空间
+      const { folder, target } = await this.checkMove(actor, await this.folders.findById(id, transaction), command, transaction)
+      // 树锁是按取锁之前读到的空间取的：万一刚好有一次跨空间移动提交了，这把锁就保护不到它（与改名、空间内移动相同）
+      if (folder.spaceId !== checked.folder.spaceId)
+        throw new AppError('NOT_FOUND')
+
+      const parent = await this.parentIn(command.spaceId, command.folderId ?? null, transaction)
+      const permissions = folderPermissionsOf(target.role)
+      // 目标就是现在所在的空间：与 PATCH 同一条路径，位置没有变化时什么也不改
+      if (folder.spaceId === command.spaceId) {
+        const parentId = parent?.id ?? null
+        const current = parentId === folder.parentId ? folder : await this.movedWithinSpace(actor, folder, parent, origin, transaction)
+        return toFolder(current, permissions)
+      }
+      return toFolder(await this.toSpace(actor, folder, command.spaceId, parent, origin, transaction), permissions)
     })
   }
 
@@ -152,11 +197,72 @@ export class FoldersService {
   }
 
   /**
-   * 移到同一个空间里的另一个位置（parentId 为 null 表示空间的根目录）：
-   * 目标的父文件夹要在同一个空间里、不能在这棵子树里（否则成环），整棵子树移过去之后不能超过层数上限。
+   * 判断移动要的权限：目标是别的空间时要源空间的空间管理员，还要目标空间的新建权限（目标已归档是 409）；
+   * 目标就是现在所在的空间时只要编辑者及以上，不再判断一次目标空间（归档时上一步就拒绝了，403 说明空间已归档）。
    */
-  private async moveWithinSpace(folder: FolderRow, parentId: string | null, transaction: Transaction): Promise<FolderRow> {
-    const parent = parentId === null ? undefined : await this.requireFolderIn(folder.spaceId, parentId, transaction)
+  private async checkMove(
+    actor: Actor,
+    folder: FolderRow | undefined,
+    command: MoveFolderCommand,
+    transaction: Transaction,
+  ): Promise<AccessibleFolder<FolderRow> & { readonly target: SpaceContentAccess }> {
+    const sameSpace = folder?.spaceId === command.spaceId
+    const accessible = await requireFolderContent(this.policy, actor, folder, [sameSpace ? 'moveWithinSpace' : 'moveAcrossSpaces'], transaction)
+    if (sameSpace)
+      return { ...accessible, target: accessible.space }
+    return { ...accessible, target: await requireCreateTarget(this.policy, actor, command.spaceId, transaction) }
+  }
+
+  /** 在同一个空间里换父文件夹（调用方已判断权限、已解析目标位置）：整棵子树的层数一起变，记审计。 */
+  private async movedWithinSpace(
+    actor: Actor,
+    folder: FolderRow,
+    parent: FolderRow | undefined,
+    origin: AuditOrigin,
+    transaction: Transaction,
+  ): Promise<FolderRow> {
+    const { root } = await this.movedSubtree(folder, parent, undefined, transaction)
+    await this.recordMove(actor, folder, root, origin, undefined, transaction)
+    return root
+  }
+
+  /**
+   * 连同子树移到别的空间（调用方已锁住两个空间的树、已判断两边的权限与目标位置）：
+   * 子树里的文件夹换空间与层数（一条 UPDATE），里面的文档换空间、写入代次加一、位置不变——
+   * 它们仍在各自的父文件夹里，只有被移动的那个文件夹自己换父。
+   * 同一个事务里收回这些文档上的写入权（M3 在这个入口里终止租约）。
+   * 文档行在文件夹之后锁（锁顺序：文件夹行 → 文档行）：保存内容不取树锁，所以要真的锁住它们
+   */
+  private async toSpace(
+    actor: Actor,
+    folder: FolderRow,
+    spaceId: string,
+    parent: FolderRow | undefined,
+    origin: AuditOrigin,
+    transaction: Transaction,
+  ): Promise<FolderRow> {
+    const { root, subtree } = await this.movedSubtree(folder, parent, spaceId, transaction)
+    const documentIds = await this.documents.lockInFolders(subtree.ids, folder.spaceId, transaction)
+    if (documentIds.length > 0) {
+      // 位置不变（undefined）：它们仍在子树里各自的文件夹下，跟着文件夹一起到了新空间
+      await this.documents.moveToSpace(documentIds, spaceId, undefined, transaction)
+      await this.writeAccess.revoke({ kind: 'documents', documentIds }, transaction)
+    }
+    await this.recordMove(actor, folder, root, origin, { folders: subtree.ids.length, documents: documentIds.length }, transaction)
+    return root
+  }
+
+  /**
+   * 整棵子树挪到 parent 下面（parent 为空表示空间的根目录），spaceId 给出时连所属空间一起换：
+   * 目标的父文件夹不能在这棵子树里（否则成环），整棵子树移过去之后不能超过层数上限。
+   * 跨空间时目标在别的空间里，不可能在这棵子树里，成环这一条自然不成立，照样判断一次，不分两条路
+   */
+  private async movedSubtree(
+    folder: FolderRow,
+    parent: FolderRow | undefined,
+    spaceId: string | undefined,
+    transaction: Transaction,
+  ): Promise<{ readonly root: FolderRow, readonly subtree: SubtreeSummary }> {
     const depth = parent === undefined ? 1 : parent.depth + 1
     const delta = depth - folder.depth
     // 子树包含它自己：目标的父文件夹是它自己或它的子孙时都会成环
@@ -165,7 +271,13 @@ export class FoldersService {
       throw new AppError('FOLDER_CYCLE')
     if (subtree.maxDepth + delta > FOLDER_MAX_DEPTH)
       throw new AppError('FOLDER_DEPTH_EXCEEDED')
-    return this.folders.moveSubtree(folder.id, parent?.id ?? null, delta, transaction)
+    const root = await this.folders.moveSubtree({ rootId: folder.id, parentId: parent?.id ?? null, depthDelta: delta, spaceId }, transaction)
+    return { root, subtree }
+  }
+
+  /** 移动的目标位置：null 表示空间的根目录，不必查询；给出文件夹时它要在这个空间里、状态正常。 */
+  private async parentIn(spaceId: string, parentId: string | null, transaction?: Transaction): Promise<FolderRow | undefined> {
+    return parentId === null ? undefined : this.requireFolderIn(spaceId, parentId, transaction)
   }
 
   /** 这个空间里正常状态的一个文件夹（父文件夹、要列出的那一层）：规则见 folder-location.ts。 */
@@ -188,20 +300,36 @@ export class FoldersService {
     return previous
   }
 
+  /**
+   * 移动的审计：原位置与目标位置都记下（空间与父文件夹各一对，与移动文档同一个形状），空间内移动时两个空间相同；
+   * 跨空间时另记这次搬动的文件夹数与文档数（子树有多大，事后看得出来）。
+   */
+  private async recordMove(
+    actor: Actor,
+    before: FolderRow,
+    moved: FolderRow,
+    origin: AuditOrigin,
+    counts: { readonly folders: number, readonly documents: number } | undefined,
+    transaction: Transaction,
+  ): Promise<void> {
+    const location = { fromSpaceId: before.spaceId, fromParentId: before.parentId, toSpaceId: moved.spaceId, toParentId: moved.parentId }
+    await this.record('folders.moved', actor, moved.id, origin, counts === undefined ? location : { ...location, ...counts }, transaction)
+  }
+
   private async record(
     action: 'folders.renamed' | 'folders.moved',
     actor: Actor,
-    folder: FolderRow,
+    folderId: string,
     origin: AuditOrigin,
-    details: Readonly<Record<string, unknown>>,
+    details: Readonly<Record<string, string | number | null>>,
     transaction: Transaction,
   ): Promise<void> {
     await this.audit.record({
       action,
       actor: { type: 'user', id: actor.userId },
-      target: { type: 'folder', id: folder.id },
+      target: { type: 'folder', id: folderId },
       origin,
-      details: { spaceId: folder.spaceId, ...details },
+      details,
     }, { transaction })
   }
 }

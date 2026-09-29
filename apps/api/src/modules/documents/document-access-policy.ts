@@ -231,11 +231,12 @@ export interface AccessibleFolder<T extends FolderTarget> {
 }
 
 /** 文件夹上要权限的操作（只看能不能看时传空数组）。 */
-export type FolderOperation = 'rename' | 'moveWithinSpace'
+export type FolderOperation = 'rename' | 'moveWithinSpace' | 'moveAcrossSpaces'
 
 const FOLDER_CONTENT: Readonly<Record<FolderOperation, { readonly permission: keyof FolderPermissions, readonly message: string }>> = {
   rename: { permission: 'canRename', message: '没有给这个文件夹改名的权限' },
   moveWithinSpace: { permission: 'canMoveWithinSpace', message: '没有移动这个文件夹的权限' },
+  moveAcrossSpaces: { permission: 'canMoveAcrossSpaces', message: '只有空间管理员能把文件夹移出这个空间' },
 }
 
 /**

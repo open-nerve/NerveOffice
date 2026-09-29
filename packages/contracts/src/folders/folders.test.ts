@@ -7,6 +7,7 @@ import {
   folderListQuerySchema,
   folderListResponseSchema,
   folderNameSchema,
+  moveFolderRequestSchema,
   updateFolderRequestSchema,
 } from './folders.ts'
 
@@ -22,7 +23,7 @@ const folder = {
   depth: 1,
   createdAt: '2026-09-30T01:00:00.000Z',
   updatedAt: '2026-09-30T02:00:00.000Z',
-  permissions: { canRename: true, canMoveWithinSpace: true },
+  permissions: { canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false },
 }
 
 describe('文件夹的名称', () => {
@@ -65,6 +66,15 @@ describe('新建与改动', () => {
     expect(Object.hasOwn(updateFolderRequestSchema.parse({ name: '归档' }), 'parentId')).toBe(false)
     expect(updateFolderRequestSchema.parse({})).toEqual({})
     expect(updateFolderRequestSchema.safeParse({ spaceId: SPACE_ID }).success).toBe(false)
+  })
+
+  it('移动：目标空间必填，folderId 省略表示目标空间的根目录（与移动文档同一个形状）', () => {
+    expect(moveFolderRequestSchema.parse({ spaceId: SPACE_ID.toUpperCase() })).toEqual({ spaceId: SPACE_ID })
+    expect(moveFolderRequestSchema.parse({ spaceId: SPACE_ID, folderId: FOLDER_ID.toUpperCase() })).toEqual({ spaceId: SPACE_ID, folderId: FOLDER_ID })
+    expect(moveFolderRequestSchema.safeParse({ folderId: FOLDER_ID }).success).toBe(false)
+    // 根目录用"省略"表示，不收 null；多出的字段（例如 PATCH 用的 parentId）被拒绝
+    expect(moveFolderRequestSchema.safeParse({ spaceId: SPACE_ID, folderId: null }).success).toBe(false)
+    expect(moveFolderRequestSchema.safeParse({ spaceId: SPACE_ID, parentId: FOLDER_ID }).success).toBe(false)
   })
 })
 

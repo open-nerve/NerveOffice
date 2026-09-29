@@ -144,14 +144,32 @@ export class DocumentsRepository {
   }
 
   /**
-   * 移到另一个空间的某个位置（调用方已锁住这些行）：写入代次加一（00 号计划书 §6.4）。
-   * 目标位置也一起写：文件夹属于某一个空间，换了空间就不能再留在原来的文件夹里（整批转移时是目标空间的根目录）。
+   * 按 id 顺序锁住这些文件夹里的文档（FOR UPDATE，与保存、转移相同的顺序）：文件夹跨空间移动时连它们一起搬。
+   * **不按状态过滤**（与展开文件夹子树一致，M2-P4 设计 §3.4）：回收站里的文档也跟着所在的文件夹走，
+   * 否则它的 folder_id 会指到别的空间里的文件夹，删除单元也会被拆散在两个空间里。
+   * 限定在来源空间里：文件夹的所属空间已经在这次事务里改过时，不会把别处的行也卷进来
+   */
+  async lockInFolders(folderIds: readonly string[], spaceId: string, transaction: Transaction): Promise<string[]> {
+    const rows = await executorOf(this.db, transaction)
+      .select({ id: d.id })
+      .from(d)
+      .where(and(inArray(d.folderId, [...folderIds]), eq(d.spaceId, spaceId)))
+      .orderBy(asc(d.id))
+      .for('update')
+    return rows.map(row => row.id)
+  }
+
+  /**
+   * 移到另一个空间（调用方已锁住这些行）：写入代次加一（00 号计划书 §6.4）。
+   * folderId 给出目标位置时一起写：文件夹属于某一个空间，换了空间就不能再留在原来的文件夹里（整批转移时是目标空间的根目录）；
+   * folderId 为 undefined 表示位置不变——跟着所在的文件夹换空间时，它们仍然在各自的父文件夹里（M2-P4 设计 §3.4）。
    * 更新时间不变：内容没有改，列表的排序与游标不因为挪位置而变（与改名、空间内移动一致）
    */
-  async moveToSpace(ids: readonly string[], spaceId: string, folderId: string | null, transaction: Transaction): Promise<DocumentRow[]> {
+  async moveToSpace(ids: readonly string[], spaceId: string, folderId: string | null | undefined, transaction: Transaction): Promise<DocumentRow[]> {
+    const changes = { spaceId, writeEpoch: sql`${d.writeEpoch} + 1` }
     return executorOf(this.db, transaction)
       .update(d)
-      .set({ spaceId, folderId, writeEpoch: sql`${d.writeEpoch} + 1` })
+      .set(folderId === undefined ? changes : { ...changes, folderId })
       .where(inArray(d.id, [...ids]))
       .returning(COLUMNS)
   }

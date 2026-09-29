@@ -11,8 +11,8 @@ const MISSING_FOLDER = '0199a2c4-0000-7000-8000-0000000000fd'
 
 function setup() {
   const store = new FakeStore()
-  const { transactions, folders, tree, spaces, policy, audit } = store.deps
-  return { store, service: new FoldersService(transactions, folders, tree, spaces, policy, audit) }
+  const { transactions, folders, documents, tree, spaces, policy, audit, writeAccess } = store.deps
+  return { store, service: new FoldersService(transactions, folders, documents, tree, spaces, policy, audit, writeAccess) }
 }
 
 async function errorOf(promise: Promise<unknown>): Promise<AppError> {
@@ -40,7 +40,7 @@ describe('FoldersService.create', () => {
   it('在个人空间的根目录下新建：层数是 1，记审计；锁的顺序是先空间树、再空间行', async () => {
     const { store, service } = setup()
     const folder = await service.create(member(ALICE), { spaceId: ALICE_SPACE, name: '资料', requestId: nextRequestId() }, HTTP_ORIGIN)
-    expect(folder).toMatchObject({ spaceId: ALICE_SPACE, parentId: null, name: '资料', depth: 1, permissions: { canRename: true, canMoveWithinSpace: true } })
+    expect(folder).toMatchObject({ spaceId: ALICE_SPACE, parentId: null, name: '资料', depth: 1, permissions: { canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true } })
     expect(store.treeLocks).toEqual([[ALICE_SPACE]])
     expect(store.tree.lock.mock.invocationCallOrder[0]).toBeLessThan(store.spaces.holdSpace.mock.invocationCallOrder[0] ?? 0)
     expect(store.audits).toEqual([{
@@ -150,7 +150,7 @@ describe('FoldersService.list', () => {
     store.setMember(TEAM_SPACE, BOB, 'viewer')
     store.addFolder({ spaceId: TEAM_SPACE, name: '资料' })
     const page = await service.list(member(BOB), { spaceId: TEAM_SPACE })
-    expect(page.items[0]?.permissions).toEqual({ canRename: false, canMoveWithinSpace: false })
+    expect(page.items[0]?.permissions).toEqual({ canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false })
     expect((await errorOf(service.list(member(ALICE), { spaceId: TEAM_SPACE }))).code).toBe('NOT_FOUND')
     expect((await errorOf(service.list(member(BOB), { spaceId: TEAM_SPACE, parentId: MISSING_FOLDER }))).code).toBe('NOT_FOUND')
   })
@@ -180,7 +180,10 @@ describe('FoldersService.update', () => {
     const moved = await service.update(member(ALICE), middle?.id ?? '', { parentId: target.id }, HTTP_ORIGIN)
     expect(moved).toMatchObject({ parentId: target.id, depth: 2 })
     expect(store.folders.get(leaf?.id ?? '')?.depth).toBe(3)
-    expect(store.audits.at(-1)).toMatchObject({ action: 'folders.moved', details: { spaceId: ALICE_SPACE, from: top?.id, to: target.id } })
+    expect(store.audits.at(-1)).toMatchObject({
+      action: 'folders.moved',
+      details: { fromSpaceId: ALICE_SPACE, fromParentId: top?.id, toSpaceId: ALICE_SPACE, toParentId: target.id },
+    })
 
     const back = await service.update(member(ALICE), middle?.id ?? '', { parentId: null }, HTTP_ORIGIN)
     expect(back).toMatchObject({ parentId: null, depth: 1 })
@@ -239,5 +242,169 @@ describe('FoldersService.update', () => {
     const updated = await service.update(member(ALICE), folder.id, { name: '归档', parentId: target.id }, HTTP_ORIGIN)
     expect(updated).toMatchObject({ name: '归档', parentId: target.id, depth: 2 })
     expect(store.audits.map(event => event.action)).toEqual(['folders.renamed', 'folders.moved'])
+  })
+})
+
+describe('FoldersService.move', () => {
+  /** 爱丽丝个人空间里的一棵两层子树，每一层放一份文档 */
+  function subtree(store: FakeStore) {
+    const [top, leaf] = chain(store, ALICE_SPACE, 2)
+    const atTop = store.addDocument({ spaceId: ALICE_SPACE, folderId: top?.id ?? null, title: '上层的' })
+    const deep = store.addDocument({ spaceId: ALICE_SPACE, folderId: leaf?.id ?? null, title: '深处的' })
+    return { top: top ?? store.addFolder({}), leaf: leaf ?? store.addFolder({}), atTop, deep }
+  }
+
+  it('跨空间移动：整棵子树（含深层的文档）都换了空间，文档的写入代次都加一、写入权一次收回，审计带两边的位置与份数', async () => {
+    const { store, service } = setup()
+    store.setMember(TEAM_SPACE, ALICE, 'editor')
+    const { top, leaf, atTop, deep } = subtree(store)
+    const target = store.addFolder({ spaceId: TEAM_SPACE, name: '目标' })
+
+    const moved = await service.move(member(ALICE), top.id, { spaceId: TEAM_SPACE, folderId: target.id }, HTTP_ORIGIN)
+    expect(moved).toMatchObject({ spaceId: TEAM_SPACE, parentId: target.id, depth: 2 })
+    // 到了新空间只是编辑者：不能再把它移走
+    expect(moved.permissions).toEqual({ canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false })
+    // 子树里的文件夹：空间与层数都变了，父子关系不变
+    expect(store.folders.get(leaf.id)).toMatchObject({ spaceId: TEAM_SPACE, parentId: top.id, depth: 3 })
+    // 子树里的文档：换了空间、代次加一，仍在各自的文件夹里
+    expect(store.documents.get(atTop.id)).toMatchObject({ spaceId: TEAM_SPACE, folderId: top.id })
+    expect(store.documents.get(deep.id)).toMatchObject({ spaceId: TEAM_SPACE, folderId: leaf.id })
+    expect([store.writeEpochs.get(atTop.id), store.writeEpochs.get(deep.id)]).toEqual([1, 1])
+    // 一次收回整批文档的写入权，不逐份调用
+    expect(store.revocations).toEqual([{ kind: 'documents', documentIds: [atTop.id, deep.id].toSorted() }])
+    expect(store.audits).toEqual([{
+      action: 'folders.moved',
+      actor: { type: 'user', id: ALICE },
+      target: { type: 'folder', id: top.id },
+      origin: HTTP_ORIGIN,
+      details: { fromSpaceId: ALICE_SPACE, fromParentId: null, toSpaceId: TEAM_SPACE, toParentId: target.id, folders: 2, documents: 2 },
+    }])
+  })
+
+  it('移到目标空间的根目录：层数从头算，子树跟着变', async () => {
+    const { store, service } = setup()
+    store.setMember(TEAM_SPACE, ALICE, 'editor')
+    const [top, middle, leaf] = chain(store, ALICE_SPACE, 3)
+    const moved = await service.move(member(ALICE), middle?.id ?? '', { spaceId: TEAM_SPACE }, HTTP_ORIGIN)
+    expect(moved).toMatchObject({ spaceId: TEAM_SPACE, parentId: null, depth: 1 })
+    expect(store.folders.get(leaf?.id ?? '')).toMatchObject({ spaceId: TEAM_SPACE, depth: 2 })
+    // 留在原空间的那一层不动
+    expect(store.folders.get(top?.id ?? '')).toMatchObject({ spaceId: ALICE_SPACE, depth: 1 })
+  })
+
+  it('两个空间的树锁一次取（顺序由 SpaceTreeRepository 定），空间行按 id 排序取', async () => {
+    const { store, service } = setup()
+    store.setMember(TEAM_SPACE, ALICE, 'editor')
+    const folder = store.addFolder({ spaceId: ALICE_SPACE, name: '资料' })
+    await service.move(member(ALICE), folder.id, { spaceId: TEAM_SPACE }, HTTP_ORIGIN)
+    expect(store.treeLocks).toEqual([[ALICE_SPACE, TEAM_SPACE]])
+    expect(store.spaces.holdSpace.mock.calls.map(call => call[0])).toEqual([ALICE_SPACE, TEAM_SPACE].toSorted())
+  })
+
+  it('要源空间的空间管理员：编辑者不行；不能做的请求不取锁、不动任何行', async () => {
+    const { store, service } = setup()
+    store.setMember(TEAM_SPACE, ALICE, 'editor')
+    const folder = store.addFolder({ spaceId: TEAM_SPACE, name: '资料' })
+    const document = store.addDocument({ spaceId: TEAM_SPACE, folderId: folder.id })
+    const error = await errorOf(service.move(member(ALICE), folder.id, { spaceId: ALICE_SPACE }, HTTP_ORIGIN))
+    expect([error.code, error.message]).toEqual(['PERMISSION_DENIED', '只有空间管理员能把文件夹移出这个空间'])
+    expect(store.treeLocks).toEqual([])
+    expect(store.writeEpochs.size).toBe(0)
+    expect(store.documents.get(document.id)?.spaceId).toBe(TEAM_SPACE)
+
+    store.setMember(TEAM_SPACE, ALICE, 'admin')
+    expect((await service.move(member(ALICE), folder.id, { spaceId: ALICE_SPACE }, HTTP_ORIGIN)).spaceId).toBe(ALICE_SPACE)
+  })
+
+  it('目标空间看不到、不存在：NOT_FOUND；已归档：SPACE_ARCHIVED；只能查看：PERMISSION_DENIED', async () => {
+    const { store, service } = setup()
+    const folder = store.addFolder({ spaceId: ALICE_SPACE, name: '资料' })
+    const unseen = await errorOf(service.move(member(ALICE), folder.id, { spaceId: TEAM_SPACE }, HTTP_ORIGIN))
+    const missing = await errorOf(service.move(member(ALICE), folder.id, { spaceId: MISSING_FOLDER }, HTTP_ORIGIN))
+    expect([unseen.code, missing.code]).toEqual(['NOT_FOUND', 'NOT_FOUND'])
+    expect(unseen.message).toBe(missing.message)
+
+    store.setMember(TEAM_SPACE, ALICE, 'editor')
+    store.space(TEAM_SPACE).status = 'archived'
+    expect((await errorOf(service.move(member(ALICE), folder.id, { spaceId: TEAM_SPACE }, HTTP_ORIGIN))).code).toBe('SPACE_ARCHIVED')
+
+    store.space(TEAM_SPACE).status = 'active'
+    store.setMember(TEAM_SPACE, ALICE, 'viewer')
+    const denied = await errorOf(service.move(member(ALICE), folder.id, { spaceId: TEAM_SPACE }, HTTP_ORIGIN))
+    expect([denied.code, denied.message]).toEqual(['PERMISSION_DENIED', '没有在目标空间里新建的权限'])
+    expect(store.folders.get(folder.id)?.spaceId).toBe(ALICE_SPACE)
+  })
+
+  it('源空间已归档：所有人至多是查看者，移不走', async () => {
+    const { store, service } = setup()
+    store.setMember(TEAM_SPACE, ALICE, 'admin')
+    store.space(TEAM_SPACE).status = 'archived'
+    const folder = store.addFolder({ spaceId: TEAM_SPACE, name: '资料' })
+    const error = await errorOf(service.move(member(ALICE), folder.id, { spaceId: ALICE_SPACE }, HTTP_ORIGIN))
+    expect([error.code, error.message]).toEqual(['PERMISSION_DENIED', '空间已归档，只能查看'])
+  })
+
+  it('目标就是现在所在的空间：按空间内移动处理（编辑者就行，代次不变，不收回写入权）；重试是幂等的', async () => {
+    const { store, service } = setup()
+    store.setMember(TEAM_SPACE, ALICE, 'editor')
+    const folder = store.addFolder({ spaceId: TEAM_SPACE, name: '资料' })
+    const document = store.addDocument({ spaceId: TEAM_SPACE, folderId: folder.id })
+    const target = store.addFolder({ spaceId: TEAM_SPACE, name: '目标' })
+    const moved = await service.move(member(ALICE), folder.id, { spaceId: TEAM_SPACE, folderId: target.id }, HTTP_ORIGIN)
+    expect(moved).toMatchObject({ parentId: target.id, depth: 2 })
+    expect(store.writeEpochs.size).toBe(0)
+    expect(store.revocations).toEqual([])
+    expect(store.treeLocks).toEqual([[TEAM_SPACE]])
+    // 文档跟着文件夹留在原处：位置与代次都不变
+    expect(store.documents.get(document.id)).toMatchObject({ spaceId: TEAM_SPACE, folderId: folder.id })
+    // 移动成功之后重试同一个请求：没有变化，不再记审计、不再递增代次
+    await service.move(member(ALICE), folder.id, { spaceId: TEAM_SPACE, folderId: target.id }, HTTP_ORIGIN)
+    expect(store.audits).toHaveLength(1)
+    expect(store.writeEpochs.size).toBe(0)
+  })
+
+  it('同一个空间里移进自己的子文件夹：FOLDER_CYCLE，位置不变', async () => {
+    const { store, service } = setup()
+    const [top, , leaf] = chain(store, ALICE_SPACE, 3)
+    const error = await errorOf(service.move(member(ALICE), top?.id ?? '', { spaceId: ALICE_SPACE, folderId: leaf?.id }, HTTP_ORIGIN))
+    expect(error.code).toBe('FOLDER_CYCLE')
+    expect(store.folders.get(top?.id ?? '')).toMatchObject({ parentId: null, depth: 1 })
+  })
+
+  it('整棵子树在目标空间里装不下：FOLDER_DEPTH_EXCEEDED，什么也不改', async () => {
+    const { store, service } = setup()
+    store.setMember(TEAM_SPACE, ALICE, 'editor')
+    // 9 层的一棵子树：挂到目标空间的第 2 层下面就超了
+    const deep = chain(store, ALICE_SPACE, FOLDER_MAX_DEPTH - 1)
+    const document = store.addDocument({ spaceId: ALICE_SPACE, folderId: deep.at(-1)?.id ?? null })
+    const [, second] = chain(store, TEAM_SPACE, 2)
+    const error = await errorOf(service.move(member(ALICE), deep[0]?.id ?? '', { spaceId: TEAM_SPACE, folderId: second?.id }, HTTP_ORIGIN))
+    expect(error.code).toBe('FOLDER_DEPTH_EXCEEDED')
+    expect(store.folders.get(deep[0]?.id ?? '')).toMatchObject({ spaceId: ALICE_SPACE, parentId: null, depth: 1 })
+    expect(store.documents.get(document.id)?.spaceId).toBe(ALICE_SPACE)
+    expect(store.writeEpochs.size).toBe(0)
+  })
+
+  it('目标文件夹在别的空间里、不存在：都是 NOT_FOUND，什么也不改', async () => {
+    const { store, service } = setup()
+    store.setMember(TEAM_SPACE, ALICE, 'editor')
+    const folder = store.addFolder({ spaceId: ALICE_SPACE, name: '资料' })
+    const elsewhere = store.addFolder({ spaceId: ALICE_SPACE, name: '还在原空间' })
+    const foreign = await errorOf(service.move(member(ALICE), folder.id, { spaceId: TEAM_SPACE, folderId: elsewhere.id }, HTTP_ORIGIN))
+    const missing = await errorOf(service.move(member(ALICE), folder.id, { spaceId: TEAM_SPACE, folderId: MISSING_FOLDER }, HTTP_ORIGIN))
+    expect([foreign.code, missing.code]).toEqual(['NOT_FOUND', 'NOT_FOUND'])
+    expect(foreign.message).toBe(missing.message)
+    expect(store.folders.get(folder.id)?.spaceId).toBe(ALICE_SPACE)
+    expect(store.audits).toEqual([])
+  })
+
+  it('看不到的文件夹与不存在的文件夹：同一个 NOT_FOUND，不取锁', async () => {
+    const { store, service } = setup()
+    const folder = store.addFolder({ spaceId: BOB_SPACE, name: '鲍勃的资料' })
+    const unseen = await errorOf(service.move(member(ALICE), folder.id, { spaceId: ALICE_SPACE }, HTTP_ORIGIN))
+    const missing = await errorOf(service.move(member(ALICE), MISSING_FOLDER, { spaceId: ALICE_SPACE }, HTTP_ORIGIN))
+    expect([unseen.code, missing.code]).toEqual(['NOT_FOUND', 'NOT_FOUND'])
+    expect(unseen.message).toBe(missing.message)
+    expect(store.treeLocks).toEqual([])
   })
 })

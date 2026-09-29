@@ -66,9 +66,14 @@ export function documentPermissionsOf(role: SpaceRole): DocumentPermissions {
 /**
  * 在一个文件夹上能做的操作（M2-P4 设计 §3.7）。v0.1 的权限只到空间与文档两级，文件夹没有自己的权限，
  * 所以只看调用者在这个空间里的有效角色（已按归档降级）。
- * 只给本 Step 提供的操作：跨空间移动与删除随 S2、S3 加上各自的位（删除另有"里面只有本人创建的文档"，在锁下用计数语句判断）。
+ * 只给本 Step 提供的操作：删除随 S3 加上自己的位（另有"里面只有本人创建的文档"，在锁下用计数语句判断）。
  */
 export function folderPermissionsOf(role: SpaceRole | undefined): FolderPermissions {
   const editor = role !== undefined && atLeast(role, 'editor')
-  return { canRename: editor, canMoveWithinSpace: editor }
+  return {
+    canRename: editor,
+    canMoveWithinSpace: editor,
+    // 连同子树移出本空间要空间管理员（目标空间的新建权限另判），与文档一致；归档的空间里有效角色至多是查看者
+    canMoveAcrossSpaces: role === 'admin',
+  }
 }

@@ -1,8 +1,8 @@
-import type { CreateFolderRequest, Folder, FolderListQuery, FolderListResponse, UpdateFolderRequest } from '@nerve-office/contracts'
+import type { CreateFolderRequest, Folder, FolderListQuery, FolderListResponse, MoveFolderRequest, UpdateFolderRequest } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Principal } from '../auth/index.ts'
-import { createFolderRequestSchema, folderIdSchema, folderListQuerySchema, updateFolderRequestSchema } from '@nerve-office/contracts'
-import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common'
+import { createFolderRequestSchema, folderIdSchema, folderListQuerySchema, moveFolderRequestSchema, updateFolderRequestSchema } from '@nerve-office/contracts'
+import { Body, Controller, Get, HttpCode, Param, Patch, Post, Query } from '@nestjs/common'
 import { RequestOrigin } from '../audit/index.ts'
 import { CurrentPrincipal } from '../auth/index.ts'
 import { accessActorOf, FoldersService } from '../documents/index.ts'
@@ -40,5 +40,17 @@ export class FoldersController {
     @RequestOrigin() origin: HttpOrigin,
   ): Promise<Folder> {
     return this.folders.update(accessActorOf(principal), id, body, origin)
+  }
+
+  /** 连同子树移动到某个空间的某个位置：改动已有的文件夹，不是新建，所以是 200（与移动文档一致）。 */
+  @Post(':id/move')
+  @HttpCode(200)
+  async move(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id', { schema: folderIdSchema }) id: string,
+    @Body({ schema: moveFolderRequestSchema }) body: MoveFolderRequest,
+    @RequestOrigin() origin: HttpOrigin,
+  ): Promise<Folder> {
+    return this.folders.move(accessActorOf(principal), id, body, origin)
   }
 }

@@ -28,11 +28,14 @@ export const folderIdSchema = uuidSchema
 
 /**
  * 调用者在这个文件夹上能做的操作：界面据此只显示能做的，服务端按同一套规则检查（P4 设计 §3.7）。
- * 只列本 Step 已经提供的操作；跨空间移动与删除随 P4 的 S2、S3 加上各自的位与接口。
+ * 只列本 Step 已经提供的操作；删除随 P4 的 S3 加上自己的位与接口。
  */
 export const folderPermissionsSchema = z.object({
   canRename: z.boolean(),
+  /** 在同一个空间里换父文件夹：编辑者及以上 */
   canMoveWithinSpace: z.boolean(),
+  /** 连同子树移到别的空间：源空间的空间管理员（目标空间的新建权限另判） */
+  canMoveAcrossSpaces: z.boolean(),
 })
 
 export type FolderPermissions = z.infer<typeof folderPermissionsSchema>
@@ -93,3 +96,16 @@ export const updateFolderRequestSchema = z.strictObject({
 })
 
 export type UpdateFolderRequest = z.input<typeof updateFolderRequestSchema>
+
+/**
+ * 连同子树移到某个空间的某个位置（POST /api/folders/{id}/move，P4 设计 §3.2）：
+ * folderId 是目标空间里的父文件夹，省略表示那个空间的根目录（字段名与移动文档的接口一致，都是"目标位置"）。
+ * 跨空间移动要源空间的空间管理员角色，并且在目标空间有新建权限（00 号计划书 §5.3）；
+ * 目标就是文件夹现在所在的空间时，与空间内移动同一条规则（编辑者及以上），失败重试因此是幂等的。
+ */
+export const moveFolderRequestSchema = z.strictObject({
+  spaceId: uuidSchema,
+  folderId: uuidSchema.optional(),
+})
+
+export type MoveFolderRequest = z.input<typeof moveFolderRequestSchema>

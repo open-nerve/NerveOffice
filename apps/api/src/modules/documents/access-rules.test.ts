@@ -107,15 +107,15 @@ describe('文档上能做的操作（00 号计划书 §5.3，M2-P4 设计 §3.7�
 })
 
 describe('文件夹上能做的操作（M2-P4 设计 §3.7）', () => {
-  it('改名与空间内移动：编辑者及以上', () => {
-    expect(folderPermissionsOf('admin')).toEqual({ canRename: true, canMoveWithinSpace: true })
-    expect(folderPermissionsOf('editor')).toEqual({ canRename: true, canMoveWithinSpace: true })
-    expect(folderPermissionsOf('viewer')).toEqual({ canRename: false, canMoveWithinSpace: false })
-    expect(folderPermissionsOf(undefined)).toEqual({ canRename: false, canMoveWithinSpace: false })
+  it('改名与空间内移动：编辑者及以上；连同子树移出本空间只给空间管理员', () => {
+    expect(folderPermissionsOf('admin')).toEqual({ canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true })
+    expect(folderPermissionsOf('editor')).toEqual({ canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false })
+    expect(folderPermissionsOf('viewer')).toEqual({ canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false })
+    expect(folderPermissionsOf(undefined)).toEqual({ canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false })
   })
 
   it('归档的空间：有效角色已经是查看者，什么也改不了', () => {
     const archived = facts({ status: 'archived', memberRole: 'admin' })
-    expect(folderPermissionsOf(effectiveSpaceRole(archived))).toEqual({ canRename: false, canMoveWithinSpace: false })
+    expect(folderPermissionsOf(effectiveSpaceRole(archived))).toEqual({ canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false })
   })
 })
