@@ -241,6 +241,25 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
+   * 空间的管理操作里复核系统角色（M2-P2 设计 §3.4）：取 system-admins 的共享锁，看操作者是否仍是有效的系统管理员。
+   * 与 lockActingAdmin 不同，不是时不拒绝：调用方按普通成员判断（他可能同时是这个空间的空间管理员）
+   */
+  async holdSystemAdmin(actorId: string, transaction: Transaction): Promise<boolean> {
+    await this.repository.lockSystemAdminsShared(transaction)
+    const actor = await this.repository.findById(actorId, transaction)
+    return actor?.status === 'active' && actor.systemRole === 'admin'
+  }
+
+  /**
+   * 以共享锁持住一个有效的账户：添加成员、首个空间管理员、转移的目标（M2-P2 设计 §3.9）。
+   * 不存在或已停用时为 undefined；到提交之前，这个账户不会被停用（停用要锁同一行）
+   */
+  async holdActiveAccount(userId: string, transaction: Transaction): Promise<User | undefined> {
+    const account = await this.repository.lockShared(userId, transaction)
+    return account?.status === 'active' ? account : undefined
+  }
+
+  /**
    * 调用方已取 system-admins 的锁（排他或共享）：取消与停用系统管理员都要排他锁，复核之后操作者不会被取消或停用；
    * 启用取共享锁，只会让操作者从无效变有效，不影响"已经通过"的复核。所以不用再锁操作者的行
    */

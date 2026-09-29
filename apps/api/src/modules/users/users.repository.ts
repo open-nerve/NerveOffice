@@ -151,6 +151,15 @@ export class UsersRepository {
   }
 
   /**
+   * 以共享锁读这个账户（FOR SHARE）：把它加为成员、设为首个空间管理员、作为转移的目标时用（M2-P2 设计 §3.9）。
+   * 与停用、启用（FOR NO KEY UPDATE）互斥：到提交之前账户的状态不会变；与外键检查的 FOR KEY SHARE 不冲突
+   */
+  async lockShared(id: string, transaction: Transaction): Promise<AccountRecord | undefined> {
+    const [row] = await executorOf(this.db, transaction).select(RECORD_COLUMNS).from(users).where(eq(users.id, id)).for('share')
+    return row
+  }
+
+  /**
    * 锁住这个账户的行，读出状态与凭据的版本（审查 A1）：登录用 share（到提交之前，改密码、重置、停用都要等它），
    * 修改密码用 no key update（接着就改哈希）
    */

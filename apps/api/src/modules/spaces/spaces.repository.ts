@@ -1,9 +1,17 @@
+import type { SpaceRole, SpaceStatus } from '@nerve-office/contracts'
+import type { SQL } from 'drizzle-orm'
+import type { TimeCursor } from '../../shared/time-cursor.ts'
 import type { Database, Transaction } from '../database/index.ts'
-import type { SpaceFacts, SpaceSummary } from './space.ts'
+import type { SpaceFacts, SpaceMemberRecord, SpaceRecord, SpaceSummary, TeamSpaceOverview } from './space.ts'
 import { Inject, Injectable } from '@nestjs/common'
-import { and, asc, eq, isNotNull, or, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, ilike, inArray, isNotNull, or, sql } from 'drizzle-orm'
+import { alias } from 'drizzle-orm/pg-core'
 import { spaceMembers, spaces } from '../../db/schema/spaces/index.ts'
-import { DATABASE, executorOf } from '../database/index.ts'
+import { containsPattern } from '../../shared/like-pattern.ts'
+import { DATABASE, executorOf, inSavepoint, isUniqueViolation, keysetPosition } from '../database/index.ts'
+
+/** 团队空间名称的唯一索引：撞上它就是名称已被使用 */
+const TEAM_NAME_KEY = 'spaces_team_name_key'
 
 /** 一个人看空间时的事实：空间行左连接这个人的成员行（所有者只看个人空间，成员只看团队空间，由访问策略区分） */
 function factColumns(userId: string) {
@@ -16,6 +24,30 @@ function factColumns(userId: string) {
     owned: sql<boolean>`coalesce(${spaces.ownerUserId} = ${userId}, false)`,
     memberRole: spaceMembers.role,
   }
+}
+
+const RECORD_COLUMNS = {
+  id: spaces.id,
+  type: spaces.type,
+  name: spaces.name,
+  status: spaces.status,
+  visibleToAll: spaces.visibleToAll,
+  createdAt: spaces.createdAt,
+}
+
+const MEMBER_COLUMNS = {
+  userId: spaceMembers.userId,
+  role: spaceMembers.role,
+  createdAt: spaceMembers.createdAt,
+}
+
+/** 管理界面的团队空间列表的筛选与分页 */
+export interface TeamSpaceFilter {
+  readonly query?: string | undefined
+  readonly status?: SpaceStatus | undefined
+  readonly spaceId?: string
+  readonly after?: TimeCursor | undefined
+  readonly limit: number
 }
 
 /** 只有它读写 spaces 与 space_members（规范 §1.2）。 */
@@ -31,6 +63,23 @@ export class SpacesRepository {
     if (row === undefined)
       throw new Error('新建个人空间没有返回记录')
     return row
+  }
+
+  /** 建团队空间；名称（不区分大小写）已被使用时返回 name_taken（由唯一索引兜住并发的创建与改名） */
+  async insertTeam(team: { readonly name: string, readonly createdBy: string, readonly visibleToAll: boolean }, transaction: Transaction): Promise<SpaceRecord | 'name_taken'> {
+    try {
+      return await inSavepoint(transaction, async (executor) => {
+        const [row] = await executor.insert(spaces).values({ type: 'team', ...team }).returning(RECORD_COLUMNS)
+        if (row === undefined)
+          throw new Error('新建团队空间没有返回记录')
+        return row
+      })
+    }
+    catch (error) {
+      if (isUniqueViolation(error, TEAM_NAME_KEY))
+        return 'name_taken'
+      throw error
+    }
   }
 
   async findPersonalByOwner(ownerUserId: string, transaction?: Transaction): Promise<SpaceSummary | undefined> {
@@ -76,5 +125,110 @@ export class SpacesRepository {
    */
   async lockShared(spaceId: string, transaction: Transaction): Promise<void> {
     await executorOf(this.db, transaction).select({ id: spaces.id }).from(spaces).where(eq(spaces.id, spaceId)).for('share')
+  }
+
+  /**
+   * 锁住空间行再读（FOR NO KEY UPDATE）：改名、全员可见、归档与恢复、成员的变更都先锁它，
+   * 成员的变更因此在同一个空间里逐个执行（"至少保留一个空间管理员"），也与在空间里新建（FOR SHARE）互斥。
+   * 不用 FOR UPDATE：它与外键检查取的 FOR KEY SHARE 冲突，在空间里新建文档、添加成员都要等它
+   */
+  async lockRecord(spaceId: string, transaction: Transaction): Promise<SpaceRecord | undefined> {
+    const [row] = await executorOf(this.db, transaction).select(RECORD_COLUMNS).from(spaces).where(eq(spaces.id, spaceId)).for('no key update')
+    return row
+  }
+
+  /** 改名；名称已被使用时返回 name_taken（见 insertTeam） */
+  async rename(spaceId: string, name: string, transaction: Transaction): Promise<SpaceRecord | 'name_taken'> {
+    try {
+      return await inSavepoint(transaction, async (executor) => {
+        const [row] = await executor.update(spaces).set({ name, updatedAt: sql`now()` }).where(eq(spaces.id, spaceId)).returning(RECORD_COLUMNS)
+        if (row === undefined)
+          throw new Error(`改名时空间不在了：${spaceId}`)
+        return row
+      })
+    }
+    catch (error) {
+      if (isUniqueViolation(error, TEAM_NAME_KEY))
+        return 'name_taken'
+      throw error
+    }
+  }
+
+  async update(spaceId: string, changes: { readonly status?: SpaceStatus, readonly visibleToAll?: boolean }, transaction: Transaction): Promise<SpaceRecord> {
+    const [row] = await executorOf(this.db, transaction).update(spaces).set({ ...changes, updatedAt: sql`now()` }).where(eq(spaces.id, spaceId)).returning(RECORD_COLUMNS)
+    if (row === undefined)
+      throw new Error(`更新空间时空间不在了：${spaceId}`)
+    return row
+  }
+
+  /** 管理界面的团队空间：成员数与查看者自己的角色；按创建时间从新到旧（keyset） */
+  async listTeamOverviews(viewerId: string, filter: TeamSpaceFilter, transaction?: Transaction): Promise<TeamSpaceOverview[]> {
+    const mine = alias(spaceMembers, 'mine')
+    const conditions: (SQL | undefined)[] = [
+      eq(spaces.type, 'team'),
+      filter.spaceId === undefined ? undefined : eq(spaces.id, filter.spaceId),
+      filter.query === undefined || filter.query === '' ? undefined : ilike(spaces.name, containsPattern(filter.query)),
+      filter.status === undefined ? undefined : eq(spaces.status, filter.status),
+      filter.after === undefined ? undefined : sql`(${spaces.createdAt}, ${spaces.id}) < (${filter.after.position}::timestamptz, ${filter.after.id}::uuid)`,
+    ]
+    return executorOf(this.db, transaction)
+      .select({ ...RECORD_COLUMNS, position: keysetPosition(spaces.createdAt), memberCount: count(spaceMembers.userId), myRole: mine.role })
+      .from(spaces)
+      .leftJoin(spaceMembers, eq(spaceMembers.spaceId, spaces.id))
+      .leftJoin(mine, and(eq(mine.spaceId, spaces.id), eq(mine.userId, viewerId)))
+      .where(and(...conditions))
+      .groupBy(spaces.id, mine.role)
+      .orderBy(desc(spaces.createdAt), desc(spaces.id))
+      .limit(filter.limit)
+  }
+
+  /** 按 id 批量取空间的名称（含个人空间）：审计查询补名字用 */
+  async findNames(ids: readonly string[]): Promise<SpaceSummary[]> {
+    if (ids.length === 0)
+      return []
+    return this.db.select({ id: spaces.id, name: spaces.name }).from(spaces).where(inArray(spaces.id, [...ids]))
+  }
+
+  async listMembers(spaceId: string): Promise<SpaceMemberRecord[]> {
+    return this.db.select(MEMBER_COLUMNS).from(spaceMembers).where(eq(spaceMembers.spaceId, spaceId))
+  }
+
+  async findMember(spaceId: string, userId: string, transaction: Transaction): Promise<SpaceMemberRecord | undefined> {
+    const [row] = await executorOf(this.db, transaction).select(MEMBER_COLUMNS).from(spaceMembers).where(and(eq(spaceMembers.spaceId, spaceId), eq(spaceMembers.userId, userId)))
+    return row
+  }
+
+  /** 加成员；已经是成员时返回 undefined（主键冲突时什么也不做） */
+  async insertMember(spaceId: string, userId: string, role: SpaceRole, transaction: Transaction): Promise<SpaceMemberRecord | undefined> {
+    const [row] = await executorOf(this.db, transaction)
+      .insert(spaceMembers)
+      .values({ spaceId, userId, role })
+      .onConflictDoNothing({ target: [spaceMembers.spaceId, spaceMembers.userId] })
+      .returning(MEMBER_COLUMNS)
+    return row
+  }
+
+  async updateMemberRole(spaceId: string, userId: string, role: SpaceRole, transaction: Transaction): Promise<SpaceMemberRecord> {
+    const [row] = await executorOf(this.db, transaction)
+      .update(spaceMembers)
+      .set({ role, updatedAt: sql`now()` })
+      .where(and(eq(spaceMembers.spaceId, spaceId), eq(spaceMembers.userId, userId)))
+      .returning(MEMBER_COLUMNS)
+    if (row === undefined)
+      throw new Error(`调整角色时成员不在了：${spaceId} ${userId}`)
+    return row
+  }
+
+  async deleteMember(spaceId: string, userId: string, transaction: Transaction): Promise<void> {
+    await executorOf(this.db, transaction).delete(spaceMembers).where(and(eq(spaceMembers.spaceId, spaceId), eq(spaceMembers.userId, userId)))
+  }
+
+  /** 这个空间的空间管理员数（成员行，不看账户状态） */
+  async countAdmins(spaceId: string, transaction: Transaction): Promise<number> {
+    const [row] = await executorOf(this.db, transaction)
+      .select({ admins: count() })
+      .from(spaceMembers)
+      .where(and(eq(spaceMembers.spaceId, spaceId), eq(spaceMembers.role, 'admin')))
+    return row?.admins ?? 0
   }
 }

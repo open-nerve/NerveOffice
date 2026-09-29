@@ -1,3 +1,4 @@
+export { inSavepoint, isUniqueViolation } from './constraint-errors.ts'
 export { DatabaseReadiness, READINESS_CACHE_MS, READINESS_TIMEOUT_MS } from './database-readiness.ts'
 export type { DatabaseReadinessResult } from './database-readiness.ts'
 export { DatabaseModule } from './database.module.ts'

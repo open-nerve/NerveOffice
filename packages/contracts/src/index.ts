@@ -148,6 +148,7 @@ export {
   spaceNameSchema,
   spacePermissionsSchema,
   spaceViewSchema,
+  teamSpaceSchema,
 } from './spaces/spaces.ts'
 export type {
   AddSpaceMemberRequest,
@@ -161,6 +162,7 @@ export type {
   SpaceStatus,
   SpaceType,
   SpaceView,
+  TeamSpace,
 } from './spaces/spaces.ts'
 export { codePointLength, hasControlCharacters } from './text/text.ts'
 export {

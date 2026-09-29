@@ -60,7 +60,20 @@ export const spaceListResponseSchema = z.object({
 
 export type SpaceListResponse = z.infer<typeof spaceListResponseSchema>
 
-/** 改名（PUT /api/spaces/{id}/name）：只有团队空间能改名。 */
+/**
+ * 团队空间的基本信息：成员页的页头、改名的响应。不带调用者的角色：没有加入的系统管理员也在这些地方管理团队空间，
+ * 而空间的内容对他是看不到的。
+ */
+export const teamSpaceSchema = z.object({
+  id: z.uuid(),
+  name: z.string(),
+  status: z.enum(SPACE_STATUSES),
+  visibleToAll: z.boolean(),
+})
+
+export type TeamSpace = z.infer<typeof teamSpaceSchema>
+
+/** 改名（PUT /api/spaces/{id}/name）：只有团队空间能改名；响应是改名之后的 TeamSpace。 */
 export const renameSpaceRequestSchema = z.strictObject({
   name: spaceNameSchema,
 })
@@ -83,12 +96,7 @@ export type SpaceMember = z.infer<typeof spaceMemberSchema>
  * 带上空间的名称与状态：没有加入的系统管理员也在这一页管理成员，而空间页对他是看不到的。
  */
 export const spaceMemberListResponseSchema = z.object({
-  space: z.object({
-    id: z.uuid(),
-    name: z.string(),
-    status: z.enum(SPACE_STATUSES),
-    visibleToAll: z.boolean(),
-  }),
+  space: teamSpaceSchema,
   /** 调用者能不能添加、调整、移出成员 */
   canManage: z.boolean(),
   items: z.array(spaceMemberSchema),

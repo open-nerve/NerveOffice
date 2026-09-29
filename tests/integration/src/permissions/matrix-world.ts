@@ -5,11 +5,13 @@ import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
-import { SHEET_TEMPLATE } from '@nerve-office/contracts'
-import { createAccount } from '../support/accounts.ts'
+import { errorResponseSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
+import { expect } from 'vitest'
+import { createAccount, createPassiveAccount } from '../support/accounts.ts'
+import { parseExact } from '../support/contracts.ts'
 import { seedDocument } from '../support/documents.ts'
 import { login } from '../support/session-client.ts'
-import { createTeamSpace } from '../support/spaces.ts'
+import { createTeamSpace, setMember } from '../support/spaces.ts'
 
 /**
  * 角色：
@@ -51,6 +53,10 @@ export interface MatrixWorld {
   readonly documents: Readonly<Record<TargetName, MatrixDocument>>
   /** 在目标空间里另建一份文档：会改文档的格子（例如保存）各用各的，互不影响 */
   readonly freshDocument: (target: TargetName) => Promise<MatrixDocument>
+  /** 另建一个不登录的账户：成员的格子（添加、调整、移出）各用各的人；member 为真时先把他加为目标空间的查看者 */
+  readonly freshSubject: (target: TargetName, member: boolean) => Promise<string>
+  /** 另建一个与目标同样状态、同样成员的空间：会改空间的格子（归档、全员可见）各用各的；个人空间与不存在的空间照原样 */
+  readonly freshSpace: (target: TargetName) => Promise<string>
 }
 
 /** 模板换上 unitId、A1 写入 value 的快照（保存用） */
@@ -68,12 +74,31 @@ export async function buildMatrixWorld(database: TestDatabase, app: TestApp): Pr
 
   const members = { [accounts.spaceAdmin.id]: 'admin', [accounts.editor.id]: 'editor', [accounts.viewer.id]: 'viewer' } as const
   const createdBy = accounts.systemAdmin.id
-  const spaces: Record<TargetName, string> = {
-    personal: accounts.owner.personalSpaceId,
-    team: await createTeamSpace(database, { name: '矩阵：团队空间', createdBy, members }),
-    visible: await createTeamSpace(database, { name: '矩阵：全员可见', createdBy, members, visibleToAll: true }),
-    archived: await createTeamSpace(database, { name: '矩阵：已归档', createdBy, members, status: 'archived' }),
-    missing: randomUUID(),
+  let sequence = 0
+  const freshSpace = async (target: TargetName): Promise<string> => {
+    sequence += 1
+    const name = `矩阵：${target} ${sequence}`
+    switch (target) {
+      case 'personal':
+        return accounts.owner.personalSpaceId
+      case 'missing':
+        return randomUUID()
+      case 'team':
+        return createTeamSpace(database, { name, createdBy, members })
+      case 'visible':
+        return createTeamSpace(database, { name, createdBy, members, visibleToAll: true })
+      case 'archived':
+        return createTeamSpace(database, { name, createdBy, members, status: 'archived' })
+    }
+  }
+  const spaces = Object.fromEntries(await Promise.all(TARGETS.map(async target => [target, await freshSpace(target)] as const))) as Record<TargetName, string>
+
+  const freshSubject = async (target: TargetName, member: boolean): Promise<string> => {
+    sequence += 1
+    const subject = await createPassiveAccount(database, { username: `matrix-subject-${sequence}` })
+    if (member && target !== 'personal' && target !== 'missing')
+      await setMember(database, spaces[target], subject.id, 'viewer')
+    return subject.id
   }
 
   const freshDocument = async (target: TargetName): Promise<MatrixDocument> => {
@@ -89,5 +114,55 @@ export async function buildMatrixWorld(database: TestDatabase, app: TestApp): Pr
     session: await login(app.baseUrl, USERNAMES[name], accounts[name].password),
   }] as const))) as Record<ActorName, MatrixActor>
 
-  return { actors, spaces, documents, freshDocument }
+  return { actors, spaces, documents, freshDocument, freshSubject, freshSpace }
+}
+
+/** 一格的预期：成功的状态码、看得到却不能做（403）、看不到（404） */
+export type Expected = 200 | 201 | 204 | 403 | 404
+/** 一行：各角色的预期，顺序同 ACTORS（owner、spaceAdmin、editor、viewer、outsider、systemAdmin） */
+export type Row = readonly [Expected, Expected, Expected, Expected, Expected, Expected]
+/** 一张矩阵：每个操作、每个目标一行 */
+export type MatrixTable<Operation extends string> = Readonly<Record<Operation, Readonly<Record<TargetName, Row>>>>
+/** 一个操作：某个角色对某个目标发请求 */
+export type MatrixOperation = (actor: MatrixActor, target: TargetName) => Promise<Response>
+
+export interface MatrixCell<Operation extends string> {
+  readonly operation: Operation
+  readonly target: TargetName
+  readonly actor: ActorName
+  readonly expected: Expected
+}
+
+/** 矩阵展开成格子：按格子生成用例 */
+export function cellsOf<Operation extends string>(table: MatrixTable<Operation>): MatrixCell<Operation>[] {
+  return (Object.keys(table) as Operation[]).flatMap(operation => TARGETS.flatMap(target => ACTORS.map((actor, column) => {
+    const expected = table[operation][target][column]
+    if (expected === undefined)
+      throw new Error(`矩阵 ${operation} 的 ${target} 一行少了第 ${column + 1} 列`)
+    return { operation, target, actor, expected }
+  })))
+}
+
+async function errorOf(response: Response): Promise<{ code: string, message: string }> {
+  const { code, message } = parseExact(errorResponseSchema, await response.json()).error
+  return { code, message }
+}
+
+/**
+ * 核对一格：状态码；403 的错误码是 PERMISSION_DENIED；404 的错误码是 NOT_FOUND，
+ * 而且与同一个人对不存在的目标做同一个操作的响应相同（去掉请求标识）：看不到与不存在一致
+ */
+export async function expectCell<Operation extends string>(world: MatrixWorld, run: MatrixOperation, cell: MatrixCell<Operation>): Promise<void> {
+  const actor = world.actors[cell.actor]
+  const response = await run(actor, cell.target)
+  expect(response.status, await response.clone().text()).toBe(cell.expected)
+  if (cell.expected === 403)
+    expect((await errorOf(response)).code).toBe('PERMISSION_DENIED')
+  if (cell.expected === 404) {
+    const error = await errorOf(response)
+    expect(error.code).toBe('NOT_FOUND')
+    const missing = await run(actor, 'missing')
+    expect(missing.status).toBe(404)
+    expect(await errorOf(missing)).toEqual(error)
+  }
 }
