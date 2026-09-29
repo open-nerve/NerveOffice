@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { uuidSchema } from '../ids/ids.ts'
 import { codePointLength, hasControlCharacters } from '../text/text.ts'
 
 /** 系统角色（00 号计划书 §5.2）。新增取值时，同时用迁移更新 users.system_role 的 CHECK 约束。 */
@@ -48,7 +49,7 @@ export const newPasswordSchema = z.string()
   .refine(value => !hasControlCharacters(value), '密码不能包含控制字符（例如换行、制表符）')
 
 /** 路径里的账户 id */
-export const userIdSchema = z.uuid()
+export const userIdSchema = uuidSchema
 
 /** 按名字搜索时关键词的上限（字符） */
 export const USER_SEARCH_QUERY_MAX_LENGTH = 64

@@ -140,6 +140,14 @@ export function isPermissionDeniedError(error: unknown): error is ApiError {
 }
 
 /**
+ * 要的内容不存在，或者看不到（两者同一个错误码，US-M1-08）；地址里的 id 不合法（400）也按不存在处理。
+ * 空间、成员页、文档与管理界面的账户都用同一句说明（M2-P2 审查 B13）
+ */
+export function isMissingResource(error: unknown): error is ApiError {
+  return error instanceof ApiError && (error.code === 'NOT_FOUND' || error.code === 'REQUEST_INVALID')
+}
+
+/**
  * 请求确定没有生效：服务端在写入之前就拒绝了（4xx）。其余的失败（网络、5xx、回包读不出来）结果未知，服务端可能已经处理，
  * 重试要沿用同一个 requestId（新建表格、保存）
  */

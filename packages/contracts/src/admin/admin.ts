@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { DOCUMENT_TYPES } from '../documents/documents.ts'
+import { uuidSchema } from '../ids/ids.ts'
 import { SPACE_NAME_MAX_LENGTH, SPACE_ROLES, SPACE_STATUSES, spaceNameSchema } from '../spaces/spaces.ts'
 import { displayNameSchema, USER_SEARCH_QUERY_MAX_LENGTH, USER_STATUSES, USER_SYSTEM_ROLES, usernameSchema, userSummarySchema } from '../users/users.ts'
 
@@ -53,7 +54,7 @@ export const issuedPasswordResetSchema = z.object({
 export type IssuedPasswordReset = z.infer<typeof issuedPasswordResetSchema>
 
 /** 路径里的邀请 id */
-export const invitationIdSchema = z.uuid()
+export const invitationIdSchema = uuidSchema
 
 /** 邀请的状态：待接受、已接受、已过期（到期而没有接受或作废）、已作废 */
 export const INVITATION_STATUSES = ['pending', 'accepted', 'expired', 'revoked'] as const
@@ -142,7 +143,7 @@ export type AdminSpaceListResponse = z.infer<typeof adminSpaceListResponseSchema
 /** 创建团队空间（POST /api/admin/spaces）：同时指定首个空间管理员（US-M2-05） */
 export const createTeamSpaceRequestSchema = z.strictObject({
   name: spaceNameSchema,
-  adminUserId: z.uuid(),
+  adminUserId: uuidSchema,
   visibleToAll: z.boolean(),
 })
 
@@ -184,19 +185,19 @@ export const TRANSFER_MAX_DOCUMENTS = 100
 
 /** 转移的目标：某个有效账户的个人空间，或某个没有归档的团队空间 */
 export const transferTargetSchema = z.discriminatedUnion('type', [
-  z.strictObject({ type: z.literal('personal'), userId: z.uuid() }),
-  z.strictObject({ type: z.literal('team'), spaceId: z.uuid() }),
+  z.strictObject({ type: z.literal('personal'), userId: uuidSchema }),
+  z.strictObject({ type: z.literal('team'), spaceId: uuidSchema }),
 ])
 
 export type TransferTarget = z.infer<typeof transferTargetSchema>
 
 /** 转移停用者的文档（POST /api/admin/users/{id}/documents/transfer）：整批转移，有一份不在他的个人空间里就整批拒绝 */
 export const transferDocumentsRequestSchema = z.strictObject({
-  documentIds: z.array(z.uuid())
+  documentIds: z.array(uuidSchema)
     .min(1)
     .max(TRANSFER_MAX_DOCUMENTS)
-    // UUID 不区分大小写：大小写不同的同一个 id 也算重复
-    .refine(ids => new Set(ids.map(id => id.toLowerCase())).size === ids.length, '文档不能重复'),
+    // id 已统一成小写：大小写不同的同一个 id 也算重复
+    .refine(ids => new Set(ids).size === ids.length, '文档不能重复'),
   target: transferTargetSchema,
 })
 

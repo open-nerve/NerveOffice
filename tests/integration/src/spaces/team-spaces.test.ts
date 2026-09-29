@@ -87,6 +87,11 @@ describe('US-M2-05 创建团队空间并指定空间管理员', () => {
     expect(await auditOf(space.id)).toEqual([{ action: 'spaces.created', actor_id: root.id, details: { adminUserId: amy.id, visibleToAll: false } }])
   })
 
+  it('首个空间管理员的 id 大写也行：审计的明细是小写（M2-P2 审查 A1）', async () => {
+    const space = await created(await createSpace({ name: '大写的管理员', adminUserId: amy.id.toUpperCase() }))
+    expect(await auditOf(space.id)).toEqual([{ action: 'spaces.created', actor_id: root.id, details: { adminUserId: amy.id, visibleToAll: false } }])
+  })
+
   it('把自己设为首个空间管理员：我的角色是空间管理员', async () => {
     expect(await created(await createSpace({ name: '管理组', adminUserId: root.id }))).toMatchObject({ memberCount: 1, myRole: 'admin' })
   })
@@ -191,6 +196,28 @@ describe('US-M2-05 系统管理员要看内容，先把自己加入空间', () =
       const response = await asUser(app.baseUrl, rootSession, path, { method })
       expect(response.status, path).toBe(404)
     }
+  })
+
+  it('个人空间的 id 传给管理接口：不在它的行上取锁（M2-P2 审查 A4），那一行被别人锁着也立即 404', async () => {
+    const statuses = await database.query(async (client) => {
+      await client.query('BEGIN')
+      try {
+        // 持着共享锁（例如本人正在个人空间里新建）：管理接口要是去锁这一行，就会等到锁等待的上限（5 秒）之后以 500 结束
+        await client.query('SELECT id FROM spaces WHERE id = $1 FOR SHARE', [amy.personalSpaceId])
+        const results: number[] = []
+        for (const [path, method, body] of [
+          [`/api/admin/spaces/${amy.personalSpaceId}/visibility`, 'PUT', { visibleToAll: true }],
+          [`/api/admin/spaces/${amy.personalSpaceId}/archive`, 'POST', undefined],
+          [`/api/admin/spaces/${amy.personalSpaceId}/restore`, 'POST', undefined],
+        ] as const)
+          results.push((await asUser(app.baseUrl, rootSession, path, { method, body })).status)
+        return results
+      }
+      finally {
+        await client.query('ROLLBACK')
+      }
+    })
+    expect(statuses).toEqual([404, 404, 404])
   })
 
   it('审计查询：空间的对象带着它当前的名称', async () => {

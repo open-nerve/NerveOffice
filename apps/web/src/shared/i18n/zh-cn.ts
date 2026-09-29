@@ -176,7 +176,6 @@ export const messages = {
     navLabel: '管理界面',
     nav: { users: '账户', invitations: '邀请', spaces: '团队空间', audit: '审计' },
     noPermission: '只有系统管理员能打开管理界面。',
-    working: '正在处理…',
     /** 表格里每行的操作按钮的可读名称：带上对象，例如"停用 艾米（amy）"（审查 B14） */
     actionOn: (action: string, target: string) => `${action} ${target}`,
     roleName: (role: UserSystemRole) => ({ admin: '系统管理员', member: '成员' })[role],
@@ -279,6 +278,7 @@ export const messages = {
       description: '这个账户已停用。把他个人空间里的文档转移到别人的个人空间或某个团队空间；这里只看得到标题，打不开内容。',
       back: '返回账户',
       loadingAccount: '正在加载账户…',
+      loadAccountFailed: '账户加载失败',
       listLabel: '个人空间里的文档',
       columns: { select: '选择', title: '标题', type: '类型', updatedAt: '更新时间' },
       loading: '正在加载文档…',
@@ -291,7 +291,10 @@ export const messages = {
       targetLegend: '转移到',
       toPersonal: '某人的个人空间',
       toTeam: '团队空间',
-      pickPerson: '按名字找同事',
+      // 选择的标签是选的对象（选中之后仍显示在原处，"重新选择"的可读名称也带上它），怎么找写在输入框的提示里（审查 B10）
+      pickPerson: '接收文档的同事',
+      pickTeam: '目标团队空间',
+      teamCandidates: '找到的团队空间',
       searchTeam: '按名称搜索团队空间',
       searchingTeam: '正在查找…',
       noTeam: '没有找到没有归档的团队空间',
@@ -348,6 +351,8 @@ export const messages = {
     toggleNav: '空间',
     personal: '我的空间',
     teamHeading: '团队空间',
+    /** 导航与空间页的骨架屏名称不同：分得清是哪一处在加载（审查 B10） */
+    navLoading: '正在加载空间列表…',
     loading: '正在加载空间…',
     loadFailed: '空间列表加载失败',
     noTeamSpaces: '还没有加入团队空间',
@@ -376,7 +381,13 @@ export const messages = {
     loadFailed: '成员列表加载失败',
     readOnly: '只有空间管理员能添加、调整与移出成员。',
     archivedReadOnly: '这个空间已归档：只有系统管理员能调整成员。',
+    // 系统管理员在归档的空间里仍能管理成员：同样说明已归档，调整成员不改变只读（审查 B5）
+    archivedManaged: '这个空间已归档，所有人只能查看。系统管理员仍然可以调整成员，调整之后空间照样只读。',
+    /** 个人空间的所有者打开自己个人空间的成员页（服务端 403）：个人空间没有成员，重试也一样（审查 B5） */
+    personalSpace: '个人空间没有成员：只有团队空间能添加成员。',
     columns: { name: '成员', role: '角色', status: '状态', actions: '操作' },
+    /** 同事选择的标签：与提交按钮"添加成员"区分开（审查 B10） */
+    colleague: '要添加的同事',
     add: '添加成员',
     adding: '正在添加…',
     role: '角色',
@@ -390,7 +401,8 @@ export const messages = {
     confirmDemoteSelf: (role: SpaceRole) => `把你自己的角色改为${SPACE_ROLE_NAMES[role]}？`,
     demoteSelfDescription: '改完之后你立即失去空间管理员的权限，只能由另一位空间管理员或系统管理员改回来。',
     change: '修改',
-    working: '正在处理…',
+    /** 调整一行的角色进行中（审查 B3） */
+    saving: '正在保存…',
     disabled: '已停用',
     empty: '这个空间还没有成员',
     you: '（我）',
@@ -403,6 +415,8 @@ export const messages = {
     candidates: '找到的同事',
     selected: (name: string) => `已选择：${name}`,
     change: '重新选择',
+    /** "重新选择"的可读名称带上选的是什么，例如"重新选择 首个空间管理员"（审查 B10） */
+    changeOf: (label: string) => `重新选择 ${label}`,
     name: personName,
   },
   documents: {

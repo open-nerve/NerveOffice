@@ -279,6 +279,14 @@ const API_CONTROLLER_OUTSIDE_CONTROLLER_FILE = {
   selector: 'Decorator > CallExpression[callee.name=\'Controller\']',
   message: '控制器只写在 *.controller.ts 里：控制器的限制按文件名生效（P2 设计 §3.1）',
 }
+// 停用者文档的转移（DocumentTransferService）按 id 整批改写文档所在的空间，不经内容权限（M2-P2 设计 §3.8）：只由管理界面的模块调用，
+// 它在调用之前检查系统管理员与停用的账户（M2-P2 审查 A9）。documents 模块自己经相对路径引用，不经公开入口，不受影响。
+// 静态导入、import type 与再导出都拦下；命名空间导入（import * as）同样拦下
+const API_DOCUMENT_TRANSFER = {
+  regex: String.raw`(?:^|/)documents/index\.ts$`,
+  importNames: ['DocumentTransferService'],
+  message: '停用者文档的转移（DocumentTransferService）不经内容权限，只由管理界面的模块（modules/admin）调用（M2-P2 审查 A9）',
+}
 
 /** 后端文件允许的例外。 */
 interface ApiFileKind {
@@ -294,6 +302,8 @@ interface ApiFileKind {
   controller?: boolean
   /** 读取环境变量（config 模块） */
   processEnv?: boolean
+  /** 引用停用者文档的转移 DocumentTransferService（管理界面的模块与 documents 模块） */
+  documentTransfer?: boolean
 }
 
 function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
@@ -309,6 +319,7 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
     ...(kind.databaseHandles === true ? [] : [API_DATABASE_HANDLES]),
     ...(kind.tables === true ? [] : [API_TABLES]),
     ...(kind.controller === true ? [API_REPOSITORY_FROM_CONTROLLER, API_TRANSACTIONS_FROM_CONTROLLER] : []),
+    ...(kind.documentTransfer === true ? [] : [API_DOCUMENT_TRANSFER]),
   ]
   const syntax = [
     ...BASE_RESTRICTED_SYNTAX,
@@ -433,6 +444,9 @@ export default antfu(
   },
   // 后端：先是所有文件的限制，后面的块按文件类型放开各自需要的部分（后面的块覆盖前面的同名规则）
   { name: 'nerve/api', files: ['apps/api/src/**/*.ts'], rules: apiRules() },
+  // 管理界面的模块（与 documents 模块自己）可以引用停用者文档的转移（M2-P2 审查 A9）。紧跟在上一块之后：
+  // 后面按文件类型的块（控制器、仓储等）照常拦下，它们不需要它
+  { name: 'nerve/api-document-transfer', files: ['apps/api/src/modules/admin/**/*.ts', 'apps/api/src/modules/documents/**/*.ts'], rules: apiRules({ documentTransfer: true }) },
   // app 层的程序接口（index.ts）为集成测试转出数据库句柄；app 层的其他文件同样拿不到（复验 N6）
   { name: 'nerve/api-app-entry', files: ['apps/api/src/app/index.ts'], rules: apiRules({ databaseHandles: true }) },
   { name: 'nerve/api-database', files: ['apps/api/src/modules/database/**/*.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true }) },
@@ -686,6 +700,27 @@ export default antfu(
             ],
             disallow: { to: { element: { type: 'web-feature', captured: { feature: 'confirmation' } } } },
             message: '确认的弹窗（features/confirmation，带 Radix Dialog）只由按需加载的功能（features/admin、features/members）引用，不进平台页面的首屏（ADR-008）',
+          },
+          // 弹窗的文件本身（shared/ui/dialog.tsx，Radix Dialog）同样只由按需加载的功能直接引用（M2-P2 审查 B8）：功能、应用层与入口引用共享层本来是允许的，
+          // 这里在允许的策略之后覆盖。shared 内部的中转另由 nerve/web-ui-heavy-components 拦下
+          {
+            from: [
+              { element: { type: 'web-app' } },
+              { element: { type: 'web-entry' } },
+              { element: { type: 'web-feature', captured: { feature: '!{admin,members,confirmation}' } } },
+            ],
+            disallow: { to: { element: { type: 'web-shared', fileInternalPath: 'ui/dialog.tsx' } } },
+            message: '弹窗（shared/ui/dialog.tsx，带 Radix Dialog）只由按需加载的功能（features/admin、features/members、features/confirmation）引用：首屏的功能、应用层与入口引用它会把弹窗带进平台页面的首屏（ADR-008，M2-P2 审查 B8）',
+          },
+          // 按关键词选一项（features/colleagues：按名字选同事、选团队空间）只给按需加载的管理界面与成员页用（M2-P2 设计 §3.10，审查 B8）
+          {
+            from: [
+              { element: { type: 'web-app' } },
+              { element: { type: 'web-entry' } },
+              { element: { type: 'web-feature', captured: { feature: '!{admin,members}' } } },
+            ],
+            disallow: { to: { element: { type: 'web-feature', captured: { feature: 'colleagues' } } } },
+            message: '按关键词选一项（features/colleagues）只由按需加载的功能（features/admin、features/members）引用，不进平台页面的首屏（M2-P2 设计 §3.10，审查 B8）',
           },
         ],
       }],

@@ -31,8 +31,8 @@ test.describe('US-M2-04 停用者文档的转移', () => {
     await expect(list.getByText('客户名单')).toBeVisible()
 
     await page.getByLabel('选择 交接清单').check()
-    await page.getByLabel('按名称搜索团队空间').fill(space.name)
-    await page.getByRole('list', { name: '团队空间' }).getByRole('button', { name: space.name }).click()
+    await page.getByLabel('目标团队空间', { exact: true }).fill(space.name)
+    await page.getByRole('list', { name: '找到的团队空间', exact: true }).getByRole('button', { name: space.name, exact: true }).click()
     await page.getByRole('button', { name: '转移', exact: true }).click()
     await page.getByRole('dialog', { name: `把 1 份文档转移到 ${space.name}？` }).getByRole('button', { name: '转移', exact: true }).click()
     await expect(page.getByText(`已把 1 份文档转移到 ${space.name}`)).toBeVisible()

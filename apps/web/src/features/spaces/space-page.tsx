@@ -3,21 +3,17 @@ import { spaceNameSchema } from '@nerve-office/contracts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
-import { ApiError, describeError } from '../../shared/api/index.ts'
+import { describeError, isMissingResource } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { spaceMembersPath } from '../../shared/lib/space-paths.ts'
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
 import { Alert, AlertDescription, Badge, Button, buttonVariants, Input, Label, Skeleton } from '../../shared/ui/index.ts'
 import { sessionQueryOptions } from '../auth/index.ts'
 import { DocumentList, NewSheetButton } from '../documents/index.ts'
+import { useForgetMissingSpace } from './missing-space.ts'
 import { renameSpace, spaceQueryOptions, SPACES_QUERY_KEY } from './spaces-api.ts'
 
 const text = messages.spaces
-
-/** 看不到与不存在的空间（接口都是 404；地址里的 id 不合法时 400）：同一句说明 */
-function isMissing(error: unknown): boolean {
-  return error instanceof ApiError && (error.code === 'NOT_FOUND' || error.code === 'REQUEST_INVALID')
-}
 
 /** 行内改名（不用弹窗，不进首屏的 Radix Dialog）：保存之后导航与页头随即是新名称 */
 function RenameForm({ space, onDone }: { readonly space: SpaceView, readonly onDone: () => void }) {
@@ -104,9 +100,15 @@ function SpaceHeader({ space }: { readonly space: SpaceView }) {
   )
 }
 
-/** 空间页的内容（M2-P2 设计 §3.10）：页头与文档列表；加载中、看不到（与不存在一致）、加载失败（可以重试） */
+/**
+ * 空间页的内容（M2-P2 设计 §3.10）：页头与文档列表；加载中、看不到（与不存在一致）、加载失败（可以重试）。
+ * 先看错误、再看数据：重新请求失败时 TanStack Query 保留上一次的数据。已打开的页面里被移出了空间，再进来时缓存里还有旧的页头，
+ * 重新请求得到 404 就按看不到显示，不再显示旧的页头与文档（审查 B1）；导航与这个空间的缓存随之更新。
+ */
 function SpaceContent({ spaceId }: { readonly spaceId: string }) {
   const space = useQuery(spaceQueryOptions(spaceId))
+  const missing = isMissingResource(space.error)
+  useForgetMissingSpace(spaceId, missing)
   if (space.isPending) {
     return (
       <div role="status" aria-label={text.loading} className="flex flex-col gap-3">
@@ -115,14 +117,14 @@ function SpaceContent({ spaceId }: { readonly spaceId: string }) {
       </div>
     )
   }
+  if (missing) {
+    return (
+      <Alert variant="destructive">
+        <AlertDescription>{text.notFound}</AlertDescription>
+      </Alert>
+    )
+  }
   if (space.data === undefined) {
-    if (isMissing(space.error)) {
-      return (
-        <Alert variant="destructive">
-          <AlertDescription>{text.notFound}</AlertDescription>
-        </Alert>
-      )
-    }
     return (
       <Alert variant="destructive">
         <AlertDescription>

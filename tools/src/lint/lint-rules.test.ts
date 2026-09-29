@@ -472,9 +472,13 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
     const dynamicImport = (path: string): string => `export async function pages() {\n  return import('${path}')\n}\n`
     expect(await rulesFor(dynamicImport('../features/members/index.ts'), ROUTES_FILE)).not.toContain('boundaries/dependencies')
     const members: [string, string][] = [
+      // 路由表：静态引用、动态引用内部文件
       [`import { MembersPage } from '../features/members/index.ts'\n\nexport const page = MembersPage\n`, ROUTES_FILE],
+      [dynamicImport('../features/members/members-page.tsx'), ROUTES_FILE],
+      // 应用层的其他文件、功能模块、入口的再导出
       [dynamicImport('../features/members/index.ts'), WEB_FILE],
       [`import type { MembersPage } from '../members/index.ts'\n\nexport type Page = typeof MembersPage\n`, WEB_FEATURE_FILE],
+      [`export { MembersPage } from '../../features/members/index.ts'\n`, PLATFORM_ENTRY],
     ]
     for (const [code, file] of members) {
       const report = await lint(code, file)
@@ -494,6 +498,47 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
       const report = await lint(code, file)
       expect(report.rules, `${file}：${code}`).toContain('boundaries/dependencies')
       expect(report.messages.join('\n'), file).toContain('确认的弹窗（features/confirmation，带 Radix Dialog）只由按需加载的功能')
+    }
+    // 确认的弹窗自己内部的引用不受限（M2-P2 审查 B8）
+    expect(await rulesFor('export { ConfirmDialog } from \'./confirm-dialog.tsx\'\n', 'apps/web/src/features/confirmation/index.ts')).not.toContain('boundaries/dependencies')
+  })
+
+  it('弹窗的文件（shared/ui/dialog.tsx）与按关键词选一项（features/colleagues）只由按需加载的功能引用（M2-P2 审查 B8）', async () => {
+    const importDialog = (path: string): string => `import { DialogContent } from '${path}'\n\nexport const content = DialogContent\n`
+    for (const file of ['apps/web/src/features/admin/users-page.tsx', 'apps/web/src/features/members/members-page.tsx', 'apps/web/src/features/confirmation/confirm-dialog.tsx'])
+      expect(await rulesFor(importDialog('../../shared/ui/dialog.tsx'), file), file).not.toContain('boundaries/dependencies')
+    const dialog: [string, string][] = [
+      // 首屏的功能（包括同样按需加载、却不带弹窗的同事选择）、应用层、入口
+      [importDialog('../../shared/ui/dialog.tsx'), WEB_FEATURE_FILE],
+      [importDialog('../../shared/ui/dialog.tsx'), 'apps/web/src/features/spaces/space-page.tsx'],
+      [importDialog('../../shared/ui/dialog.tsx'), 'apps/web/src/features/colleagues/keyword-picker.tsx'],
+      [importDialog('../shared/ui/dialog.tsx'), WEB_FILE],
+      [`export type { DialogContent } from '../../shared/ui/dialog.tsx'\n`, PLATFORM_ENTRY],
+    ]
+    for (const [code, file] of dialog) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain('boundaries/dependencies')
+      expect(report.messages.join('\n'), file).toContain('弹窗（shared/ui/dialog.tsx，带 Radix Dialog）只由按需加载的功能')
+    }
+    // 共享层的其他组件照常引用
+    expect(await rulesFor('import { Button } from \'../../shared/ui/index.ts\'\n\nexport const button = Button\n', 'apps/web/src/features/spaces/space-page.tsx')).not.toContain('boundaries/dependencies')
+
+    const importPicker = (path: string): string => `import { ColleaguePicker } from '${path}'\n\nexport const picker = ColleaguePicker\n`
+    for (const file of ['apps/web/src/features/admin/transfer-page.tsx', 'apps/web/src/features/members/members-page.tsx'])
+      expect(await rulesFor(importPicker('../colleagues/index.ts'), file), file).not.toContain('boundaries/dependencies')
+    // 同事选择自己内部的引用不受限
+    expect(await rulesFor(importPicker('./colleague-picker.tsx'), 'apps/web/src/features/colleagues/index.ts')).not.toContain('boundaries/dependencies')
+    const colleagues: [string, string][] = [
+      [importPicker('../colleagues/index.ts'), WEB_FEATURE_FILE],
+      [importPicker('../colleagues/index.ts'), 'apps/web/src/features/spaces/space-page.tsx'],
+      [importPicker('../colleagues/index.ts'), 'apps/web/src/features/confirmation/confirm-dialog.tsx'],
+      [`import type { KeywordPickerTexts } from '../features/colleagues/index.ts'\n\nexport type Texts = KeywordPickerTexts\n`, WEB_FILE],
+      [`export { ColleaguePicker } from '../../features/colleagues/index.ts'\n`, PLATFORM_ENTRY],
+    ]
+    for (const [code, file] of colleagues) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain('boundaries/dependencies')
+      expect(report.messages.join('\n'), file).toContain('按关键词选一项（features/colleagues）只由按需加载的功能')
     }
   })
 }, LINT_TIMEOUT)
@@ -649,6 +694,28 @@ describe('US-M1-11 lint 规则的自测：后端', () => {
 
   it('控制器不自己开事务', async () => {
     expect(await rulesFor('import { TransactionRunner } from \'../database/index.ts\'\nexport const runner = TransactionRunner\n', API_CONTROLLER)).toContain('no-restricted-imports')
+  })
+
+  it('停用者文档的转移（DocumentTransferService）只由管理界面的模块引用：别的模块、应用层引用都失败，documents 模块自己不受影响（M2-P2 审查 A9）', async () => {
+    const TRANSFER_MESSAGE = '停用者文档的转移（DocumentTransferService）不经内容权限，只由管理界面的模块（modules/admin）调用'
+    const importTransfer = 'import { DocumentTransferService } from \'../documents/index.ts\'\n\nexport const service = DocumentTransferService\n'
+    expect(await rulesFor(importTransfer, 'apps/api/src/modules/admin/admin-transfer.service.ts')).not.toContain('no-restricted-imports')
+    expect(await rulesFor('import { DocumentTransferService } from \'./document-transfer.service.ts\'\n\nexport const service = DocumentTransferService\n', 'apps/api/src/modules/documents/documents.module.ts')).not.toContain('no-restricted-imports')
+    // 同一个公开入口里的其他符号照常引用
+    expect(await rulesFor('import { DocumentAccessPolicy } from \'../documents/index.ts\'\n\nexport const policy = DocumentAccessPolicy\n', 'apps/api/src/modules/workspace/space-membership.service.ts')).not.toContain('no-restricted-imports')
+    const violations: [string, string][] = [
+      [importTransfer, 'apps/api/src/modules/workspace/space-membership.service.ts'],
+      [importTransfer, 'apps/api/src/modules/workspace/spaces.controller.ts'],
+      ['import type { DocumentTransferService } from \'../documents/index.ts\'\n\nexport type Service = DocumentTransferService\n', 'apps/api/src/modules/workspace/space-membership.service.ts'],
+      ['import * as documents from \'../documents/index.ts\'\n\nexport const service = documents.DocumentTransferService\n', 'apps/api/src/modules/workspace/space-membership.service.ts'],
+      ['export { DocumentTransferService } from \'../documents/index.ts\'\n', 'apps/api/src/modules/spaces/index.ts'],
+      ['import { DocumentTransferService } from \'../modules/documents/index.ts\'\n\nexport const service = DocumentTransferService\n', 'apps/api/src/app/app.module.ts'],
+    ]
+    for (const [code, file] of violations) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain('no-restricted-imports')
+      expect(report.messages.join('\n'), `${file}：${code}`).toContain(TRANSFER_MESSAGE)
+    }
   })
 
   it('环境变量的其他读法同样只能在 config 模块里：import { env }、解构、globalThis.process.env', async () => {

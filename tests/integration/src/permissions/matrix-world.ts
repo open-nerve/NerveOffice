@@ -117,8 +117,11 @@ export async function buildMatrixWorld(database: TestDatabase, app: TestApp): Pr
   return { actors, spaces, documents, freshDocument, freshSubject, freshSpace }
 }
 
-/** 一格的预期：成功的状态码、看得到却不能做（403）、看不到（404） */
-export type Expected = 200 | 201 | 204 | 403 | 404
+/**
+ * 一格的预期：成功的状态码、看得到却不能做（403）、看不到（404）、
+ * 有权限但目标的状态不允许（409：M2-P2 只有"目标空间已归档"，SPACE_ARCHIVED）
+ */
+export type Expected = 200 | 201 | 204 | 403 | 404 | 409
 /** 一行：各角色的预期，顺序同 ACTORS（owner、spaceAdmin、editor、viewer、outsider、systemAdmin） */
 export type Row = readonly [Expected, Expected, Expected, Expected, Expected, Expected]
 /** 一张矩阵：每个操作、每个目标一行 */
@@ -149,7 +152,7 @@ async function errorOf(response: Response): Promise<{ code: string, message: str
 }
 
 /**
- * 核对一格：状态码；403 的错误码是 PERMISSION_DENIED；404 的错误码是 NOT_FOUND，
+ * 核对一格：状态码；403 的错误码是 PERMISSION_DENIED；409 的错误码是 SPACE_ARCHIVED；404 的错误码是 NOT_FOUND，
  * 而且与同一个人对不存在的目标做同一个操作的响应相同（去掉请求标识）：看不到与不存在一致
  */
 export async function expectCell<Operation extends string>(world: MatrixWorld, run: MatrixOperation, cell: MatrixCell<Operation>): Promise<void> {
@@ -158,6 +161,8 @@ export async function expectCell<Operation extends string>(world: MatrixWorld, r
   expect(response.status, await response.clone().text()).toBe(cell.expected)
   if (cell.expected === 403)
     expect((await errorOf(response)).code).toBe('PERMISSION_DENIED')
+  if (cell.expected === 409)
+    expect((await errorOf(response)).code).toBe('SPACE_ARCHIVED')
   if (cell.expected === 404) {
     const error = await errorOf(response)
     expect(error.code).toBe('NOT_FOUND')

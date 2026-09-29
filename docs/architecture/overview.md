@@ -88,7 +88,7 @@ apps/api/src/
 - 系统管理员的接口（M2-P1）：`@SystemAdminOnly()`，会话守卫在认证之后检查系统角色（每个请求重新读取）；取消与停用系统管理员时至少保留一个有效的管理员（advisory lock 串行）。
 - 一次性令牌（M2-P1，ADR-013）：邀请与重置的令牌只存摘要，链接的令牌在 `#` 之后；邀请的签发与接受按登录名取 advisory lock；签发重置时旧密码随即失效（换成不可用的哈希）；尝试限流只按地址、与登录的计数分开；事务里复核不通过同样按一次失败处理、记审计。
 - 密码用 Argon2id（@node-rs/argon2），参数可配置，有强度下限；同时进行的哈希有上限，免得占满 libuv 的线程池；排队的长度与等待时长也有上限，超出时这次不验证，返回 503 与 `Retry-After`，退回限流的名额（DEF-015）。首个管理员用命令行初始化（`init-admin`，密码从终端或标准输入读取）。
-- 契约里的响应结构是宽松的（客户端丢弃不认识的字段，接口只做加法时旧页面照常工作），请求结构是严格的；服务端只发契约里的字段，集成测试按原文核对。
+- 契约里的响应结构是宽松的（客户端丢弃不认识的字段，接口只做加法时旧页面照常工作），请求结构是严格的；服务端只发契约里的字段，集成测试按原文核对。请求里的 UUID 大小写都接受，契约统一转成小写（`uuidSchema`，M2-P2）：服务端按字符串比较 id 的地方只见到小写。
 
 **接口**（M1-P3、P4）：
 
@@ -154,9 +154,10 @@ apps/web/src/
   features/auth/      登录页、会话、需要登录的外层路由、退出
   features/account/   修改密码；接受邀请与重置密码的公开页面（令牌从 # 读出后从地址里去掉）（M2-P1）
   features/admin/     管理界面：账户、邀请、审计（M2-P1）；团队空间、停用者文档的转移（M2-P2）；按需加载，只被 app/routes.ts 动态引用
-  features/spaces/    左侧导航（窄屏时收起）、空间页（首页是个人空间，/spaces/{id} 是任意空间；按权限显示操作、行内改名）（M2-P2）
-  features/members/   成员页（M2-P2）：查看、添加、调整角色、移出；按需加载，只被 app/routes.ts 动态引用
-  features/colleagues/ 按名字选同事（M2-P2）：成员页与管理界面用
+  features/spaces/    左侧导航（窄屏时收起）、空间页（首页是个人空间，/spaces/{id} 是任意空间；按权限显示操作、行内改名）；空间与成员的接口函数，
+                      空间看不到了（404）时刷新导航、去掉它的缓存（M2-P2）
+  features/members/   成员页（M2-P2）：查看、添加、调整角色（每一行各自保存）、移出；按需加载，只被 app/routes.ts 动态引用
+  features/colleagues/ 按关键词选一项（M2-P2）：按名字选同事、按名称选团队空间；只由管理界面与成员页引用
   features/confirmation/ 危险操作的确认弹窗（带 Radix Dialog，M2-P2 从管理界面挪出）：只由按需加载的功能引用
   features/documents/ 一个空间的文档列表、新建表格（建在这个空间）
   features/sheet-editor/ 编辑器页：载入、保存的状态机、页头与提示、快捷键与离开提示、会话
@@ -176,7 +177,7 @@ apps/web/src/
   - 载入：确认会话 → 并行读取元数据与内容 → 核对档案与格式版本 → 创建编辑器；别人的与不存在的显示相同；
   - 保存：显式保存（按钮、Ctrl/Cmd+S），状态机见 ADR-011；有未保存的修改时离开由浏览器提示；
   - 会话：载入之后一律不整页跳转、不自动重新加载（本页可能有未保存的修改）。登录已过期或在别处退出：暂停保存，提示在新标签页中登录，本人登录回来之后恢复；别的标签页登录了另一个人：不能再保存，原来的人回来之后恢复。
-- 首屏 JS 预算（gzip，门禁 `budgets` 检查）：平台页面 180 KiB；编辑器页 2350 KiB；公式 Worker 800 KiB。管理界面与成员页是单独的动态分块，不计入平台页面的首屏；弹窗不经 shared/ui 的桶文件导出，确认弹窗只由按需加载的功能引用（M2-P1：首屏 156.4 KiB；M2-P2：161.0 KiB）。
+- 首屏 JS 预算（gzip，门禁 `budgets` 检查）：平台页面 180 KiB；编辑器页 2350 KiB；公式 Worker 800 KiB。管理界面与成员页是单独的动态分块，不计入平台页面的首屏；弹窗不经 shared/ui 的桶文件导出，确认弹窗与弹窗文件本身（`shared/ui/dialog.tsx`）只由按需加载的功能引用（M2-P1：首屏 156.4 KiB；M2-P2：161.4 KiB）。
 
 ## 5. 模块边界
 
@@ -185,10 +186,11 @@ apps/web/src/
   - 入口（`src/entries/*`）→ 应用（`src/app`）→ 功能（`src/features/*`）→ 共享（`src/shared`）；
   - 编辑器适配层（`src/editor`）只依赖共享与 contracts；只有编辑器页的入口与 `features/sheet-editor` 能引用它（经 `index.ts`）；
   - `features/sheet-editor` 只由编辑器页的入口引用：平台的应用层、其他入口与其他功能都不引用它（Univer 不进平台页面的包）；
-  - `features/admin` 与 `features/members` 只由 `app/routes.ts` 动态引用它们的公开入口；`features/confirmation` 只由这两个功能引用（M2-P1、M2-P2）；
+  - `features/admin` 与 `features/members` 只由 `app/routes.ts` 动态引用它们的公开入口；`features/confirmation`、`features/colleagues` 只由这两个功能引用，弹窗文件 `shared/ui/dialog.tsx` 只由这两个功能与 `features/confirmation` 引用（M2-P1、M2-P2）；
   - Univer 的内部符号与 `Univer.__getInjector()` 只能在 `src/editor/internal-api/` 引用，逐项登记；`@univerjs/*` 只引用包入口、`/facade`、`/locale/<语言>` 与样式（ADR-010）。
 - **api**：
   - 模块之间只经对方的 `index.ts`，模块不引用应用的组装；
+  - 停用者文档的转移（`DocumentTransferService`，不经内容权限）只由 admin 模块引用（M2-P2）；
   - 一个模块只能引用自己的表定义，表定义之间可以互相引用（外键）；
   - 只有仓储访问数据库：
     - `drizzle-orm`、`pg`（包本身、子路径与 `pg-*`）只在 database 模块、各模块的仓储与表定义里引用；

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { uuidSchema } from '../ids/ids.ts'
 import { AUDIT_ACTIONS, AUDIT_TARGET_TYPES } from './audit.ts'
 
 /**
@@ -16,10 +17,10 @@ export const auditEventQuerySchema = z.strictObject({
   from: instantSchema.optional(),
   /** 不含 */
   to: instantSchema.optional(),
-  actorId: z.uuid().optional(),
+  actorId: uuidSchema.optional(),
   action: z.enum(AUDIT_ACTIONS).optional(),
   targetType: z.enum(AUDIT_TARGET_TYPES).optional(),
-  targetId: z.uuid().optional(),
+  targetId: uuidSchema.optional(),
   cursor: z.string().min(1).max(512).optional(),
 })
 

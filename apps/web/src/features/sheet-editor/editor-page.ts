@@ -2,12 +2,13 @@
 // 编辑器在 React 之外创建：一页一份文档，整页加载与卸载，不随组件的挂载与卸载反复创建（计划书 §10.2）。
 import type { DocumentDetail, DocumentSpace, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
 import type { CreateSheetEditorOptions, SheetEditor, SheetEditorLifecycle } from '../../editor/index.ts'
+import type { ApiError } from '../../shared/api/index.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
 import type { LoadedContent } from './editor-api.ts'
 import type { SaveCoordinator, SaveRequest, SaveView } from './save-coordinator.ts'
 import { DOCUMENT_PROFILES, PLATFORM_FORMAT_VERSIONS } from '@nerve-office/contracts'
-import { ApiError, isAuthenticationError, setCsrfToken } from '../../shared/api/index.ts'
+import { isAuthenticationError, isMissingResource, setCsrfToken } from '../../shared/api/index.ts'
 import { loginPath } from '../../shared/lib/login-path.ts'
 import { blockInteractions } from './interaction-barrier.ts'
 import { createSaveCoordinator } from './save-coordinator.ts'
@@ -95,11 +96,6 @@ function isKnownFormat(document: DocumentDetail): boolean {
     && (PLATFORM_FORMAT_VERSIONS as readonly number[]).includes(document.formatVersion)
 }
 
-/** 读取时得到这些错误码：内容不存在或无权访问（两者相同，US-M1-08）；地址里的 id 不合法也按不存在处理 */
-function isMissing(error: unknown): boolean {
-  return error instanceof ApiError && (error.code === 'NOT_FOUND' || error.code === 'REQUEST_INVALID')
-}
-
 export function createEditorPage(options: EditorPageOptions): EditorPage {
   const { documentId, surface, api, page, sessionChannel } = options
   const listeners = new Set<() => void>()
@@ -181,7 +177,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   function loadFailed(error: unknown): void {
     if (isAuthenticationError(error))
       leaveToLogin(error)
-    else if (isMissing(error))
+    // 内容不存在或无权访问（两者相同，US-M1-08）；地址里的 id 不合法也按不存在处理
+    else if (isMissingResource(error))
       finish({ kind: 'not-found' })
     else
       finish({ kind: 'failed', error })

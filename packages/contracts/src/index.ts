@@ -133,6 +133,7 @@ export type { ErrorResponse } from './errors/error-response.ts'
 export { healthLiveResponseSchema, healthReadyResponseSchema } from './health/health.ts'
 export type { HealthLiveResponse, HealthReadyResponse } from './health/health.ts'
 export { CSRF_TOKEN_HEADER, REQUEST_ID_HEADER } from './http/headers.ts'
+export { uuidSchema } from './ids/ids.ts'
 export {
   addSpaceMemberRequestSchema,
   changeSpaceMemberRoleRequestSchema,

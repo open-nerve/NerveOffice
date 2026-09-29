@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { uuidSchema } from '../ids/ids.ts'
 import { codePointLength, hasControlCharacters } from '../text/text.ts'
 import { USER_STATUSES, userSummarySchema } from '../users/users.ts'
 
@@ -27,7 +28,7 @@ export const spaceNameSchema = z.string()
   .refine(value => !hasControlCharacters(value), '名称不能包含控制字符')
 
 /** 路径里的空间 id */
-export const spaceIdSchema = z.uuid()
+export const spaceIdSchema = uuidSchema
 
 /** 调用者在这个空间里能做的操作：界面据此只显示能做的，服务端按同一套规则检查（M2-P2 设计 §3.4）。 */
 export const spacePermissionsSchema = z.object({
@@ -106,7 +107,7 @@ export type SpaceMemberListResponse = z.infer<typeof spaceMemberListResponseSche
 
 /** 添加成员（POST /api/spaces/{id}/members）：按名字搜索同事之后选中的账户与角色。 */
 export const addSpaceMemberRequestSchema = z.strictObject({
-  userId: z.uuid(),
+  userId: uuidSchema,
   role: z.enum(SPACE_ROLES),
 })
 

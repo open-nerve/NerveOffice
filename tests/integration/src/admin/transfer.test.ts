@@ -6,10 +6,10 @@ import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import { randomUUID } from 'node:crypto'
-import { adminUserDocumentListResponseSchema, adminUserSchema, errorResponseSchema, transferDocumentsResponseSchema } from '@nerve-office/contracts'
+import { adminUserDocumentListResponseSchema, adminUserSchema, CSRF_TOKEN_HEADER, errorResponseSchema, transferDocumentsResponseSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount, createPassiveAccount } from '../support/accounts.ts'
-import { startTestApp } from '../support/api-app.ts'
+import { startTestApp, TEST_PUBLIC_ORIGIN } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { createDocument } from '../support/documents.ts'
@@ -106,16 +106,49 @@ describe('US-M2-04 停用者的文档：只看得到标题', () => {
     expect((await asUser(app.baseUrl, rootSession, `/api/admin/users/${randomUUID()}/documents`)).status).toBe(404)
   })
 
-  it('成员访问：403；没有登录：401', async () => {
+  it('成员访问：403；没有登录：401；转移没有 CSRF 令牌：403', async () => {
     const gone = await leaver([])
+    const body = { documentIds: [randomUUID()], target: { type: 'personal', userId: amy.id } }
     for (const response of [
       await asUser(app.baseUrl, amySession, `/api/admin/users/${gone.id}/documents`),
-      await transfer(gone.id, { documentIds: [randomUUID()], target: { type: 'personal', userId: amy.id } }, amySession),
+      await transfer(gone.id, body, amySession),
     ]) {
       expect(response.status).toBe(403)
       expect((await errorOf(response)).code).toBe('PERMISSION_DENIED')
     }
-    expect((await fetch(`${app.baseUrl}/api/admin/users/${gone.id}/documents`)).status).toBe(401)
+    for (const [path, method] of [
+      [`/api/admin/users/${gone.id}`, 'GET'],
+      [`/api/admin/users/${gone.id}/documents`, 'GET'],
+      [`/api/admin/users/${gone.id}/documents/transfer`, 'POST'],
+    ] as const) {
+      const response = await fetch(`${app.baseUrl}${path}`, {
+        method,
+        headers: { 'origin': TEST_PUBLIC_ORIGIN, 'content-type': 'application/json' },
+        body: method === 'GET' ? undefined : JSON.stringify(body),
+      })
+      expect(response.status, `${method} ${path}`).toBe(401)
+    }
+    const withoutCsrf = await asUser(app.baseUrl, rootSession, `/api/admin/users/${gone.id}/documents/transfer`, { method: 'POST', body, headers: { [CSRF_TOKEN_HEADER]: undefined } })
+    expect(withoutCsrf.status).toBe(403)
+    expect((await errorOf(withoutCsrf)).code).toBe('CSRF_TOKEN_INVALID')
+  })
+
+  it('请求里的 id 大写也行（M2-P2 审查 A1、A2）：标题列表与转移照常，审计的明细是小写', async () => {
+    const gone = await leaver(['大写'])
+    const spaceId = await teamSpace()
+    const titles = await asUser(app.baseUrl, rootSession, `/api/admin/users/${gone.id.toUpperCase()}/documents`)
+    expect(titles.status).toBe(200)
+    expect(parseExact(adminUserDocumentListResponseSchema, await titles.json()).items.map(item => item.id)).toEqual(gone.documents)
+    const response = await transfer(gone.id.toUpperCase(), {
+      documentIds: gone.documents.map(id => id.toUpperCase()),
+      target: { type: 'team', spaceId: spaceId.toUpperCase() },
+    })
+    expect(response.status).toBe(200)
+    const audits = await database.query(async client => (await client.query<{ details: unknown }>(
+      'SELECT details FROM audit_events WHERE action = \'documents.transferred\' AND target_id = $1',
+      [gone.documents[0]],
+    )).rows)
+    expect(audits).toEqual([{ details: { fromSpaceId: gone.spaceId, toSpaceId: spaceId } }])
   })
 })
 
@@ -176,7 +209,7 @@ describe('US-M2-04 转移停用者的文档', () => {
       [gone.id, { type: 'team', spaceId: amy.personalSpaceId }, 404, 'NOT_FOUND'],
       [gone.id, { type: 'personal', userId: other.id }, 409, 'ACCOUNT_UNAVAILABLE'],
       [gone.id, { type: 'personal', userId: randomUUID() }, 409, 'ACCOUNT_UNAVAILABLE'],
-      [amy.id, { type: 'personal', userId: root.id }, 409, 'ACCOUNT_NOT_DISABLED'],
+      [amy.id, { type: 'team', spaceId: await teamSpace() }, 409, 'ACCOUNT_NOT_DISABLED'],
     ]
     for (const [userId, target, status, code] of cases) {
       const response = await transfer(userId, { documentIds: gone.documents, target })
@@ -187,7 +220,64 @@ describe('US-M2-04 转移停用者的文档', () => {
   })
 })
 
+describe('US-M2-04 转移不能拿来打开内容', () => {
+  it('目标不能是操作者自己的个人空间（M2-P2 审查 A7）：403 PERMISSION_DENIED，不转移', async () => {
+    const gone = await leaver(['机密'])
+    for (const userId of [root.id, root.id.toUpperCase()]) {
+      const response = await transfer(gone.id, { documentIds: gone.documents, target: { type: 'personal', userId } })
+      expect(response.status).toBe(403)
+      expect(await errorOf(response)).toEqual({ code: 'PERMISSION_DENIED', message: '不能转移到自己的个人空间' })
+    }
+    expect((await rowsOf(gone.documents))[0]?.space_id).toBe(gone.spaceId)
+  })
+})
+
 describe('US-M2-04 转移的并发', () => {
+  it('两次转移同时转同一批：一次成功，另一次等它提交之后整批拒绝（409 TRANSFER_CONFLICT）；文档只动一次', async () => {
+    const gone = await leaver(['甲', '乙'])
+    const spaceId = await teamSpace()
+    const responses = await raceAgainstHeldLock(database, {
+      // 两次转移都在目标空间的行上等着（它们取共享锁，这里持着与之冲突的锁）；放开之后两次同时去锁文档：
+      // 文档行的锁是排他的，后到的一方等先到的一方提交，再按提交之后的内容判断（共享锁的话两边互相等待、死锁）
+      hold: async client => client.query('SELECT id FROM spaces WHERE id = $1 FOR NO KEY UPDATE', [spaceId]),
+      request: async ({ step }) => Promise.all([
+        step(transfer(gone.id, { documentIds: gone.documents, target: { type: 'team', spaceId } })),
+        step(transfer(gone.id, { documentIds: [...gone.documents].reverse(), target: { type: 'team', spaceId } })),
+      ]),
+      change: async () => {},
+      waiting: 2,
+    })
+    expect(responses.map(response => response.status).sort()).toEqual([200, 409])
+    const conflict = responses.find(response => response.status === 409)
+    expect(conflict === undefined ? undefined : (await errorOf(conflict)).code).toBe('TRANSFER_CONFLICT')
+    expect((await rowsOf(gone.documents)).map(row => [row.space_id, row.write_epoch])).toEqual([[spaceId, 1], [spaceId, 1]])
+    const audits = await database.query(async client => Number((await client.query<{ count: string }>(
+      'SELECT count(*) FROM audit_events WHERE action = \'documents.transferred\' AND target_id = ANY($1::uuid[])',
+      [gone.documents],
+    )).rows[0]?.count))
+    expect(audits).toBe(2)
+  })
+
+  it('夹带别处的文档：不在它的行上取锁（M2-P2 审查 A4），那一行被别人锁着也立即整批拒绝', async () => {
+    const gone = await leaver(['甲'])
+    const spaceId = await teamSpace()
+    const others = await createDocument(database, { spaceId: amy.personalSpaceId, createdBy: amy.id, title: '正在保存' })
+    const response = await database.query(async (client) => {
+      await client.query('BEGIN')
+      try {
+        // 持着那份文档的行锁（例如艾米正在保存）：转移要是去锁它，就会等到锁等待的上限（5 秒）之后以 500 结束
+        await client.query('SELECT id FROM documents WHERE id = $1 FOR UPDATE', [others])
+        return await transfer(gone.id, { documentIds: [...gone.documents, others], target: { type: 'team', spaceId } })
+      }
+      finally {
+        await client.query('ROLLBACK')
+      }
+    })
+    expect(response.status).toBe(409)
+    expect((await errorOf(response)).code).toBe('TRANSFER_CONFLICT')
+    expect((await rowsOf([...gone.documents, others])).map(row => row.space_id).sort()).toEqual([gone.spaceId, amy.personalSpaceId].sort())
+  })
+
   it('转移时账户正被启用：等启用提交，按启用之后的状态拒绝（409 ACCOUNT_NOT_DISABLED），不转移', async () => {
     const gone = await leaver(['文档'])
     const spaceId = await teamSpace()

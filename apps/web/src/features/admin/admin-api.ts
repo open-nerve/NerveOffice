@@ -1,5 +1,6 @@
 // 管理界面的接口（M2-P1 设计 §3.3，M2-P2 设计 §3.3）：账户、邀请、团队空间、停用者文档的转移、审计。只给系统管理员，服务端逐请求检查；
 // 查询与变更都标明 SYSTEM_ADMIN_ONLY：被拒绝时由请求缓存的全局处理重新确认会话（审查 B4）。
+// 团队空间的改名与加入空间用空间的接口（那里的授权规则包含系统管理员），经 features/spaces 的公开入口引用，不另写一份（M2-P2 审查 B13）。
 import type {
   AdminSpace,
   AdminSpaceListQuery,
@@ -16,8 +17,6 @@ import type {
   InvitationListResponse,
   IssuedInvitation,
   IssuedPasswordReset,
-  SpaceRole,
-  TeamSpace,
   TransferDocumentsRequest,
   TransferDocumentsResponse,
   UserSystemRole,
@@ -33,8 +32,6 @@ import {
   invitationSchema,
   issuedInvitationSchema,
   issuedPasswordResetSchema,
-  spaceMemberSchema,
-  teamSpaceSchema,
   transferDocumentsResponseSchema,
 } from '@nerve-office/contracts'
 import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query'
@@ -176,16 +173,6 @@ export async function archiveSpace(id: string): Promise<AdminSpace> {
 
 export async function restoreSpace(id: string): Promise<AdminSpace> {
   return apiRequest(`/api/admin/spaces/${id}/restore`, { method: 'POST', schema: adminSpaceSchema })
-}
-
-/** 改名与加入空间用空间的接口：那里的授权规则包含系统管理员（M2-P2 设计 §3.3） */
-export async function renameTeamSpace(id: string, name: string): Promise<TeamSpace> {
-  return apiRequest(`/api/spaces/${id}/name`, { method: 'PUT', body: { name }, schema: teamSpaceSchema })
-}
-
-/** 系统管理员把自己加入团队空间：审计记为系统管理员加入空间 */
-export async function joinSpace(id: string, userId: string, role: SpaceRole): Promise<void> {
-  await apiRequest(`/api/spaces/${id}/members`, { method: 'POST', body: { userId, role }, schema: spaceMemberSchema })
 }
 
 /** 停用者个人空间里的文档：只有标题 */

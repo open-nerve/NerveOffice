@@ -7,7 +7,7 @@ import { messages } from '../../shared/i18n/index.ts'
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../shared/ui/dialog.tsx'
 import { Alert, AlertDescription, Button, Input, Label, NativeSelect } from '../../shared/ui/index.ts'
 import { sessionQueryOptions, SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
-import { joinSpace, renameTeamSpace } from './admin-api.ts'
+import { addMember, renameSpace } from '../spaces/index.ts'
 
 const text = messages.admin.spaces
 
@@ -21,57 +21,93 @@ interface SpaceDialogProps {
   readonly returnFocus?: () => void
 }
 
+/**
+ * 弹窗里的提交（改名、加入空间）。与确认的弹窗一样（审查 B4）：
+ * - 进行中拦下关闭（Esc、×、取消都不关），结果不会落到已经关掉的弹窗上，也不会让人以为没有提交；
+ * - 成功之后先刷新（onDone），再关闭；失败时弹窗留着，说明原因；
+ * - 关闭时清掉上一次的失败，下次打开不带着旧的说明。
+ * 服务端逐请求检查；标明只给系统管理员，被拒绝时由全局处理重新确认会话（M2-P1 审查 B4）。
+ */
+function useDialogSubmission<T>(action: (value: T) => Promise<unknown>, { onDone, onClose }: Pick<SpaceDialogProps, 'onDone' | 'onClose'>) {
+  const mutation = useMutation({ mutationFn: action, meta: SYSTEM_ADMIN_ONLY, onSuccess: async () => onDone() })
+
+  function close(): void {
+    mutation.reset()
+    onClose()
+  }
+
+  return {
+    pending: mutation.isPending,
+    error: mutation.error,
+    submit: (value: T): void => {
+      if (!mutation.isPending)
+        mutation.mutate(value, { onSuccess: close })
+    },
+    changeOpen: (open: boolean): void => {
+      if (!open && !mutation.isPending)
+        close()
+    },
+  }
+}
+
+interface FormState {
+  readonly pending: boolean
+  readonly error: Error | null
+}
+
+/** 弹窗的底部：失败的原因、取消（进行中不可用）、提交 */
+function FormFooter({ state, submitLabel, ready }: { readonly state: FormState, readonly submitLabel: string, readonly ready: boolean }) {
+  return (
+    <>
+      {state.error !== null && (
+        <Alert variant="destructive">
+          <AlertDescription>{describeError(state.error).message}</AlertDescription>
+        </Alert>
+      )}
+      <DialogFooter>
+        <DialogClose asChild>
+          <Button type="button" variant="outline" aria-disabled={state.pending}>{messages.common.cancel}</Button>
+        </DialogClose>
+        <Button type="submit" aria-disabled={state.pending || !ready}>{state.pending ? messages.common.working : submitLabel}</Button>
+      </DialogFooter>
+    </>
+  )
+}
+
 /** 给团队空间改名（M2-P2 设计 §3.10）：名称已被使用时说明原因，弹窗留着 */
-function RenameForm({ space, onDone, onClose }: { readonly space: AdminSpace, readonly onDone: () => Promise<void>, readonly onClose: () => void }) {
+function RenameForm({ space, state, onSubmit }: { readonly space: AdminSpace, readonly state: FormState, readonly onSubmit: (name: string) => void }) {
   const [name, setName] = useState(space.name)
   const inputId = useId()
-  const mutation = useMutation({
-    mutationFn: async (value: string) => renameTeamSpace(space.id, value),
-    meta: SYSTEM_ADMIN_ONLY,
-    onSuccess: async () => {
-      await onDone()
-      onClose()
-    },
-  })
   const parsed = spaceNameSchema.safeParse(name)
   return (
     <form
       className="flex flex-col gap-4"
       onSubmit={(event) => {
         event.preventDefault()
-        if (parsed.success && !mutation.isPending)
-          mutation.mutate(parsed.data)
+        if (parsed.success)
+          onSubmit(parsed.data)
       }}
     >
       <div className="flex flex-col gap-2">
         <Label htmlFor={inputId}>{text.name}</Label>
         <Input id={inputId} value={name} aria-invalid={!parsed.success} onChange={event => setName(event.target.value)} />
       </div>
-      {mutation.isError && (
-        <Alert variant="destructive">
-          <AlertDescription>{describeError(mutation.error).message}</AlertDescription>
-        </Alert>
-      )}
-      <DialogFooter>
-        <DialogClose asChild>
-          <Button type="button" variant="outline" aria-disabled={mutation.isPending}>{messages.common.cancel}</Button>
-        </DialogClose>
-        <Button type="submit" aria-disabled={mutation.isPending || !parsed.success}>{mutation.isPending ? messages.common.working : text.renameSave}</Button>
-      </DialogFooter>
+      <FormFooter state={state} submitLabel={text.renameSave} ready={parsed.success} />
     </form>
   )
 }
 
 export function RenameSpaceDialog({ space, onDone, onClose, returnFocus }: SpaceDialogProps) {
+  const submission = useDialogSubmission(async ({ id, name }: { readonly id: string, readonly name: string }) => renameSpace(id, name), { onDone, onClose })
   return (
-    <Dialog open={space !== undefined} onOpenChange={open => !open && onClose()}>
+    <Dialog open={space !== undefined} onOpenChange={submission.changeOpen}>
       {space !== undefined && (
         <DialogContent fallbackFocus={returnFocus}>
           <DialogHeader>
             <DialogTitle>{text.renameTitle(space.name)}</DialogTitle>
             <DialogDescription>{text.renameDescription}</DialogDescription>
           </DialogHeader>
-          <RenameForm space={space} onDone={onDone} onClose={onClose} />
+          <RenameForm space={space} state={submission} onSubmit={name => submission.submit({ id: space.id, name })} />
         </DialogContent>
       )}
     </Dialog>
@@ -79,26 +115,18 @@ export function RenameSpaceDialog({ space, onDone, onClose, returnFocus }: Space
 }
 
 /** 系统管理员把自己加入团队空间（00 号计划书 §5.2）：选角色；加入记入审计 */
-function JoinForm({ space, onDone, onClose }: { readonly space: AdminSpace, readonly onDone: () => Promise<void>, readonly onClose: () => void }) {
+function JoinForm({ state, onSubmit }: { readonly state: FormState, readonly onSubmit: (userId: string, role: SpaceRole) => void }) {
   const session = useQuery(sessionQueryOptions())
   const [role, setRole] = useState<SpaceRole>('viewer')
   const roleId = useId()
-  const mutation = useMutation({
-    mutationFn: async (userId: string) => joinSpace(space.id, userId, role),
-    meta: SYSTEM_ADMIN_ONLY,
-    onSuccess: async () => {
-      await onDone()
-      onClose()
-    },
-  })
   const self = session.data?.user.id
   return (
     <form
       className="flex flex-col gap-4"
       onSubmit={(event) => {
         event.preventDefault()
-        if (self !== undefined && !mutation.isPending)
-          mutation.mutate(self)
+        if (self !== undefined)
+          onSubmit(self, role)
       }}
     >
       <div className="flex flex-col gap-2">
@@ -107,31 +135,23 @@ function JoinForm({ space, onDone, onClose }: { readonly space: AdminSpace, read
           {[...SPACE_ROLES].reverse().map(value => <option key={value} value={value}>{messages.spaces.roleName(value)}</option>)}
         </NativeSelect>
       </div>
-      {mutation.isError && (
-        <Alert variant="destructive">
-          <AlertDescription>{describeError(mutation.error).message}</AlertDescription>
-        </Alert>
-      )}
-      <DialogFooter>
-        <DialogClose asChild>
-          <Button type="button" variant="outline" aria-disabled={mutation.isPending}>{messages.common.cancel}</Button>
-        </DialogClose>
-        <Button type="submit" aria-disabled={mutation.isPending || self === undefined}>{mutation.isPending ? messages.common.working : text.join}</Button>
-      </DialogFooter>
+      <FormFooter state={state} submitLabel={text.join} ready={self !== undefined} />
     </form>
   )
 }
 
 export function JoinSpaceDialog({ space, onDone, onClose, returnFocus }: SpaceDialogProps) {
+  // 与成员页的"添加成员"是同一个接口：把自己加入时，审计记为系统管理员加入空间
+  const submission = useDialogSubmission(async ({ id, userId, role }: { readonly id: string, readonly userId: string, readonly role: SpaceRole }) => addMember(id, { userId, role }), { onDone, onClose })
   return (
-    <Dialog open={space !== undefined} onOpenChange={open => !open && onClose()}>
+    <Dialog open={space !== undefined} onOpenChange={submission.changeOpen}>
       {space !== undefined && (
         <DialogContent fallbackFocus={returnFocus}>
           <DialogHeader>
             <DialogTitle>{text.joinTitle(space.name)}</DialogTitle>
             <DialogDescription>{text.joinDescription}</DialogDescription>
           </DialogHeader>
-          <JoinForm space={space} onDone={onDone} onClose={onClose} />
+          <JoinForm state={submission} onSubmit={(userId, role) => submission.submit({ id: space.id, userId, role })} />
         </DialogContent>
       )}
     </Dialog>

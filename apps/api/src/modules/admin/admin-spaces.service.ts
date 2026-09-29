@@ -74,7 +74,10 @@ export class AdminSpacesService {
     })
   }
 
-  /** 改动团队空间的共同步骤：复核操作者 → 锁住空间行（不是团队空间时 NOT_FOUND）→ 改 → 有变化时记审计 */
+  /**
+   * 改动团队空间的共同步骤：复核操作者 → 判断是团队空间（不加锁）→ 锁住空间行、锁下再判断 → 改 → 有变化时记审计。
+   * 个人空间对系统管理员始终看不到（00 号计划书 §5.2），与不存在一样是 NOT_FOUND，而且不在它的行上取锁（M2-P2 审查 A4）
+   */
   private async change(
     actor: Principal,
     spaceId: string,
@@ -83,8 +86,9 @@ export class AdminSpacesService {
   ): Promise<AdminSpace> {
     return this.transactions.run(async (transaction) => {
       await this.users.lockActingAdmin(actor.user.id, transaction)
+      if ((await this.spaces.accessFactsOf(actor.user.id, spaceId, { transaction }))?.type !== 'team')
+        throw new AppError('NOT_FOUND')
       const space = await this.spaces.lockSpace(spaceId, transaction)
-      // 个人空间对系统管理员始终看不到（00 号计划书 §5.2）：与不存在一样
       if (space?.type !== 'team')
         throw new AppError('NOT_FOUND')
       const { change, action, details } = await apply(space, transaction)

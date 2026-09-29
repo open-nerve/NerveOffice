@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { uuidSchema } from '../ids/ids.ts'
 import { SPACE_TYPES } from '../spaces/spaces.ts'
 import { codePointLength, hasControlCharacters } from '../text/text.ts'
 
@@ -50,7 +51,7 @@ export const DOCUMENT_LIST_MAX_LIMIT = 100
  * 没有 spaceId 时是本人的个人空间（M1 兼容，M2 总设计 §6.4）。
  */
 export const documentListQuerySchema = z.strictObject({
-  spaceId: z.uuid().optional(),
+  spaceId: uuidSchema.optional(),
   limit: z.coerce.number().int().min(1).max(DOCUMENT_LIST_MAX_LIMIT).default(DOCUMENT_LIST_DEFAULT_LIMIT),
   cursor: z.string().min(1).max(512).optional(),
 })
@@ -102,7 +103,7 @@ export const documentDetailSchema = documentSummarySchema.extend({
 export type DocumentDetail = z.infer<typeof documentDetailSchema>
 
 /** 路径里的文档 id。 */
-export const documentIdSchema = z.uuid()
+export const documentIdSchema = uuidSchema
 
 /**
  * 新建文档（POST /api/documents）。requestId 由客户端为每一次新建生成：网络错误后用同一个 requestId 重试，
@@ -111,8 +112,8 @@ export const documentIdSchema = z.uuid()
 export const createDocumentRequestSchema = z.strictObject({
   type: z.enum(DOCUMENT_TYPES),
   title: documentTitleSchema.optional(),
-  requestId: z.uuid(),
-  spaceId: z.uuid().optional(),
+  requestId: uuidSchema,
+  spaceId: uuidSchema.optional(),
 })
 
 export type CreateDocumentRequest = z.input<typeof createDocumentRequestSchema>

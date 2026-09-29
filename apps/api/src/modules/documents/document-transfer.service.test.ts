@@ -1,4 +1,3 @@
-import type { TransferCandidate } from './documents.repository.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { DocumentTransferService } from './document-transfer.service.ts'
@@ -9,9 +8,9 @@ const A = '0199a2c4-0000-7000-8000-0000000000d1'
 const B = '0199a2c4-0000-7000-8000-0000000000d2'
 const TRANSACTION = { transaction: true } as never
 
-function setup(rows: TransferCandidate[]) {
+function setup(locked: string[]) {
   const repository = {
-    lockForTransfer: vi.fn(async () => rows),
+    lockForTransfer: vi.fn(async () => locked),
     moveToSpace: vi.fn(async () => {}),
     listAccessible: vi.fn(async () => []),
   }
@@ -26,16 +25,16 @@ async function rejection(promise: Promise<unknown>): Promise<AppError> {
 }
 
 describe('DocumentTransferService.transfer', () => {
-  it('都在来源空间里、状态正常：锁住之后移到目标空间；id 去重、按小写', async () => {
-    const { service, repository } = setup([{ id: A, spaceId: FROM, status: 'active' }, { id: B, spaceId: FROM, status: 'active' }])
-    expect(await service.transfer([A, B.toUpperCase(), A], FROM, TO, TRANSACTION)).toEqual([A, B])
-    expect(repository.lockForTransfer).toHaveBeenCalledWith([A, B], TRANSACTION)
+  it('都还在来源空间里：只在来源空间里锁住，移到目标空间；id 去重', async () => {
+    const { service, repository } = setup([A, B])
+    expect(await service.transfer([B, A, B], FROM, TO, TRANSACTION)).toEqual([A, B])
+    expect(repository.lockForTransfer).toHaveBeenCalledWith([B, A], FROM, TRANSACTION)
     expect(repository.moveToSpace).toHaveBeenCalledWith([A, B], TO, TRANSACTION)
   })
 
-  it('有一份不在来源空间里、不存在：整批拒绝，TRANSFER_CONFLICT，不移动', async () => {
-    for (const rows of [[{ id: A, spaceId: FROM, status: 'active' as const }], [{ id: A, spaceId: FROM, status: 'active' as const }, { id: B, spaceId: TO, status: 'active' as const }]]) {
-      const { service, repository } = setup(rows)
+  it('锁住的少了一份（不在来源空间里、不存在或不是正常状态）：整批拒绝，TRANSFER_CONFLICT，不移动', async () => {
+    for (const locked of [[A], []]) {
+      const { service, repository } = setup(locked)
       expect((await rejection(service.transfer([A, B], FROM, TO, TRANSACTION))).code).toBe('TRANSFER_CONFLICT')
       expect(repository.moveToSpace).not.toHaveBeenCalled()
     }

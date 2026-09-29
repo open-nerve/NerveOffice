@@ -1,12 +1,15 @@
-// 权限矩阵：空间页头、成员的查看与管理、改名，以及系统管理的团队空间操作（M2-P2 设计 §3.11，US-M2-14 的空间部分）。
+// 权限矩阵：空间页头、成员的查看与管理、改名，以及系统管理的团队空间操作与停用者文档的转移（M2-P2 设计 §3.11，US-M2-14 的空间部分）。
 // 预期逐格写在表里（00 号计划书 §5.2、§5.3，M2-P2 设计 §3.4），不调用生产代码的规则来算。
-// 会改数据的格子各用各的：添加、调整、移出各用一个新的人，归档与全员可见各用一个新的空间，改名各用一个新的名称。
+// 会改数据的格子各用各的：添加、调整、移出各用一个新的人，归档与全员可见各用一个新的空间，改名与创建各用一个新的名称，
+// 转移各用一个新的停用者与他的一份文档。
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { MatrixOperation, MatrixTable, MatrixWorld, Row, TargetName } from './matrix-world.ts'
 import { afterAll, beforeAll, describe, it } from 'vitest'
+import { createPassiveAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { createTestDatabase } from '../support/database.ts'
+import { createDocument } from '../support/documents.ts'
 import { asUser } from '../support/session-client.ts'
 import { buildMatrixWorld, cellsOf, expectCell } from './matrix-world.ts'
 
@@ -26,7 +29,7 @@ afterAll(async () => {
 })
 
 type Operation = 'getSpace' | 'listMembers' | 'addMember' | 'changeRole' | 'removeMember' | 'rename'
-  | 'adminSetVisibility' | 'adminArchive' | 'adminRestore'
+  | 'adminCreate' | 'adminSetVisibility' | 'adminArchive' | 'adminRestore' | 'adminTransfer'
 
 /**
  * 管理成员与改名：团队空间的空间管理员（归档之后至多是查看者，不能管理）与系统管理员（归档的也可以）；
@@ -53,6 +56,9 @@ function administer(success: 200): Readonly<Record<TargetName, Row>> {
   }
 }
 
+/** 系统管理员才能做、与目标空间无关的操作（创建团队空间）：每个目标都一样 */
+const ONLY_SYSTEM_ADMIN_CREATES: Row = [403, 403, 403, 403, 403, 201]
+
 const MATRIX: MatrixTable<Operation> = {
   // 空间页头是内容：有空间角色才看得到；没有加入的系统管理员看不到团队空间的内容
   getSpace: {
@@ -74,12 +80,38 @@ const MATRIX: MatrixTable<Operation> = {
   changeRole: manage(200),
   removeMember: manage(204),
   rename: manage(200),
+  // 创建不针对已有的空间：只有系统管理员（会话守卫拦下其他人）
+  adminCreate: {
+    personal: ONLY_SYSTEM_ADMIN_CREATES,
+    team: ONLY_SYSTEM_ADMIN_CREATES,
+    visible: ONLY_SYSTEM_ADMIN_CREATES,
+    archived: ONLY_SYSTEM_ADMIN_CREATES,
+    missing: ONLY_SYSTEM_ADMIN_CREATES,
+  },
   adminSetVisibility: administer(200),
   adminArchive: administer(200),
   adminRestore: administer(200),
+  // 停用者的文档转移到目标空间：只有系统管理员；个人空间是转给它的所有者（有效账户）；
+  // 团队空间要没有归档（409 SPACE_ARCHIVED），不存在的 404。转移不看系统管理员在目标空间里的角色（他没有加入）
+  adminTransfer: {
+    personal: [403, 403, 403, 403, 403, 200],
+    team: [403, 403, 403, 403, 403, 200],
+    visible: [403, 403, 403, 403, 403, 200],
+    archived: [403, 403, 403, 403, 403, 409],
+    missing: [403, 403, 403, 403, 403, 404],
+  },
 }
 
 let renames = 0
+let creations = 0
+let leavers = 0
+
+/** 一个新的停用者，个人空间里有一份文档 */
+async function freshLeaver(): Promise<{ id: string, document: string }> {
+  leavers += 1
+  const account = await createPassiveAccount(database, { username: `matrix-leaver-${leavers}`, status: 'disabled' })
+  return { id: account.id, document: await createDocument(database, { spaceId: account.personalSpaceId, createdBy: account.id, title: `矩阵：转移 ${leavers}` }) }
+}
 
 const OPERATIONS: Readonly<Record<Operation, MatrixOperation>> = {
   getSpace: async (actor, target) => asUser(app.baseUrl, actor.session, `/api/spaces/${world.spaces[target]}`),
@@ -99,12 +131,27 @@ const OPERATIONS: Readonly<Record<Operation, MatrixOperation>> = {
     renames += 1
     return asUser(app.baseUrl, actor.session, `/api/spaces/${world.spaces[target]}/name`, { method: 'PUT', body: { name: `矩阵改名 ${renames}` } })
   },
+  adminCreate: async (actor) => {
+    creations += 1
+    return asUser(app.baseUrl, actor.session, '/api/admin/spaces', {
+      method: 'POST',
+      body: { name: `矩阵创建 ${creations}`, adminUserId: await world.freshSubject('team', false), visibleToAll: false },
+    })
+  },
   adminSetVisibility: async (actor, target) => asUser(app.baseUrl, actor.session, `/api/admin/spaces/${await world.freshSpace(target)}/visibility`, {
     method: 'PUT',
     body: { visibleToAll: target !== 'visible' },
   }),
   adminArchive: async (actor, target) => asUser(app.baseUrl, actor.session, `/api/admin/spaces/${await world.freshSpace(target)}/archive`, { method: 'POST' }),
   adminRestore: async (actor, target) => asUser(app.baseUrl, actor.session, `/api/admin/spaces/${await world.freshSpace(target)}/restore`, { method: 'POST' }),
+  adminTransfer: async (actor, target) => {
+    const leaver = await freshLeaver()
+    const destination = target === 'personal' ? { type: 'personal', userId: world.actors.owner.id } : { type: 'team', spaceId: world.spaces[target] }
+    return asUser(app.baseUrl, actor.session, `/api/admin/users/${leaver.id}/documents/transfer`, {
+      method: 'POST',
+      body: { documentIds: [leaver.document], target: destination },
+    })
+  },
 }
 
 const CELLS = cellsOf(MATRIX)

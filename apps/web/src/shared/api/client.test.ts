@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { apiError, installFakeApi, json } from '../testing/fake-api.test-support.ts'
-import { ApiError, apiFetch, apiRequest, isAuthenticationError, isPermissionDeniedError, isTransientError, NetworkError, readJson, ResponseFormatError, setCsrfToken } from './client.ts'
+import { ApiError, apiFetch, apiRequest, isAuthenticationError, isMissingResource, isPermissionDeniedError, isTransientError, NetworkError, readJson, ResponseFormatError, setCsrfToken } from './client.ts'
 
 const itemSchema = z.strictObject({ name: z.string() })
 
@@ -108,6 +108,14 @@ describe('错误的分类', () => {
     expect(isPermissionDeniedError(new ApiError(403, 'PERMISSION_DENIED', 'x'))).toBe(true)
     expect(isPermissionDeniedError(new ApiError(403, 'CSRF_TOKEN_INVALID', 'x'))).toBe(false)
     expect(isPermissionDeniedError(new Error('x'))).toBe(false)
+  })
+
+  it('不存在或看不到：NOT_FOUND，以及地址里的 id 不合法（REQUEST_INVALID）；其他错误不算（审查 B13）', () => {
+    expect(isMissingResource(new ApiError(404, 'NOT_FOUND', 'x'))).toBe(true)
+    expect(isMissingResource(new ApiError(400, 'REQUEST_INVALID', 'x'))).toBe(true)
+    expect(isMissingResource(new ApiError(403, 'PERMISSION_DENIED', 'x'))).toBe(false)
+    expect(isMissingResource(new ApiError(500, 'INTERNAL_ERROR', 'x'))).toBe(false)
+    expect(isMissingResource(new NetworkError('x'))).toBe(false)
   })
 
   it('网络失败与 5xx 可以重试，4xx 不重试', () => {

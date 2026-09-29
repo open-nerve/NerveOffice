@@ -15,9 +15,9 @@ import { actorOf } from './admin-views.ts'
 
 type HttpOrigin = Extract<AuditOrigin, { source: 'http' }>
 
-/** 按 id 的顺序（小写的 UUID 文本与数据库里 uuid 的顺序一致）：多行加锁都按这个顺序，互相等待时不成环 */
+/** 按 id 的顺序（id 已由契约统一成小写，小写的 UUID 文本与数据库里 uuid 的顺序一致）：多行加锁都按这个顺序，互相等待时不成环 */
 function inIdOrder(ids: readonly string[]): string[] {
-  return [...new Set(ids.map(id => id.toLowerCase()))].sort()
+  return [...new Set(ids)].sort()
 }
 
 /**
@@ -44,27 +44,30 @@ export class AdminTransferService {
   /**
    * 整批转移到某个有效账户的个人空间，或某个没有归档的团队空间。一个事务，锁的顺序（M2-P2 设计 §3.8、§3.9）：
    * system-admins 的共享锁（复核操作者）→ 账户行（来源与目标，按 id）→ 空间行（来源与目标，FOR SHARE，按 id）→ 文档行（按 id）→ 审计。
-   * 每份文档一条审计（来源与目标空间的 id，不记标题）
+   * 每份文档一条审计（来源与目标空间的 id，不记标题）。目标不能是操作者自己的个人空间：转移不能拿来打开内容
+   * （00 号计划书 §5.4 "转移到其他人的个人空间"，M2-P2 审查 A7），PERMISSION_DENIED
    */
   async transfer(actor: Principal, userId: string, request: TransferDocumentsRequest, origin: HttpOrigin): Promise<TransferDocumentsResponse> {
+    const { target } = request
+    if (target.type === 'personal' && target.userId === actor.user.id)
+      throw new AppError('PERMISSION_DENIED', '不能转移到自己的个人空间')
     return this.transactions.run(async (transaction) => {
       await this.users.lockActingAdmin(actor.user.id, transaction)
 
-      const { target } = request
       const accounts = new Map<string, User | undefined>()
       for (const id of inIdOrder(target.type === 'personal' ? [userId, target.userId] : [userId]))
         accounts.set(id, await this.users.holdAccount(id, transaction))
-      const source = this.requireDisabled(accounts.get(userId.toLowerCase()))
+      const source = this.requireDisabled(accounts.get(userId))
       // 目标账户要有效：来源是停用的，所以目标不会是来源本人
-      if (target.type === 'personal' && accounts.get(target.userId.toLowerCase())?.status !== 'active')
+      if (target.type === 'personal' && accounts.get(target.userId)?.status !== 'active')
         throw new AppError('ACCOUNT_UNAVAILABLE')
 
       const fromSpaceId = await this.personalSpaceIdOf(source, transaction)
-      const toSpaceId = target.type === 'personal' ? await this.personalSpaceIdOf({ id: target.userId }, transaction) : target.spaceId.toLowerCase()
+      const toSpaceId = target.type === 'personal' ? await this.personalSpaceIdOf({ id: target.userId }, transaction) : target.spaceId
       const spaces = new Map<string, SpaceRecord | undefined>()
       for (const id of inIdOrder([fromSpaceId, toSpaceId]))
         spaces.set(id, await this.spaces.holdSpace(id, transaction))
-      this.requireTarget(spaces.get(toSpaceId), request.target.type)
+      this.requireTarget(spaces.get(toSpaceId), target.type)
 
       const moved = await this.transfers.transfer(request.documentIds, fromSpaceId, toSpaceId, transaction)
       for (const documentId of moved) {

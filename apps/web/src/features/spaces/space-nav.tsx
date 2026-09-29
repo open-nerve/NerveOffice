@@ -13,12 +13,16 @@ function linkClass({ isActive }: { readonly isActive: boolean }): string {
   return cn(buttonVariants({ variant: isActive ? 'secondary' : 'ghost', size: 'sm' }), 'w-full justify-start gap-2')
 }
 
-/** 团队空间的条目：加载中、失败（可以重试）、还没有团队空间、有团队空间。onNavigate：点了链接（窄屏时收起导航） */
-function TeamSpaces({ onNavigate }: { readonly onNavigate: () => void }) {
+/**
+ * 团队空间的条目：加载中、失败（可以重试）、还没有团队空间、有团队空间。onNavigate：点了链接（窄屏时收起导航）。
+ * 列表以"团队空间"这个标题为名：加载完之后才有它（或者"还没有加入团队空间"），E2E 据此确认导航已经加载完（审查 B6）
+ */
+function TeamSpaces({ headingId, onNavigate }: { readonly headingId: string, readonly onNavigate: () => void }) {
   const spaces = useQuery(spacesQueryOptions())
   if (spaces.isPending) {
+    // 名称与空间页的骨架屏不同：读屏软件与测试都能分清是哪一处在加载（审查 B10）
     return (
-      <div role="status" aria-label={text.loading} className="flex flex-col gap-2 px-2">
+      <div role="status" aria-label={text.navLoading} className="flex flex-col gap-2 px-2">
         {['first', 'second'].map(row => <Skeleton key={row} className="h-6 w-full" />)}
       </div>
     )
@@ -35,7 +39,7 @@ function TeamSpaces({ onNavigate }: { readonly onNavigate: () => void }) {
   if (teams.length === 0)
     return <p className="px-2 text-sm text-muted-foreground">{text.noTeamSpaces}</p>
   return (
-    <ul className="flex flex-col gap-1">
+    <ul aria-labelledby={headingId} className="flex flex-col gap-1">
       {teams.map(space => (
         <li key={space.id}>
           {/* 已归档的给出明确的可读名称：名称与标记之间要不要空格，各浏览器算法不同 */}
@@ -56,6 +60,7 @@ function TeamSpaces({ onNavigate }: { readonly onNavigate: () => void }) {
 export function SpaceNav() {
   const [open, setOpen] = useState(false)
   const navId = useId()
+  const teamHeadingId = useId()
   const close = (): void => setOpen(false)
 
   return (
@@ -65,8 +70,8 @@ export function SpaceNav() {
       </Button>
       <nav id={navId} aria-label={text.navLabel} className={cn(open ? 'flex' : 'hidden', 'mt-2 flex-col gap-1 md:mt-0 md:flex')}>
         <NavLink to={HOME_PATH} end className={linkClass} onClick={close}>{text.personal}</NavLink>
-        <h2 className="px-2 pt-3 text-xs font-medium text-muted-foreground">{text.teamHeading}</h2>
-        <TeamSpaces onNavigate={close} />
+        <h2 id={teamHeadingId} className="px-2 pt-3 text-xs font-medium text-muted-foreground">{text.teamHeading}</h2>
+        <TeamSpaces headingId={teamHeadingId} onNavigate={close} />
       </nav>
     </div>
   )

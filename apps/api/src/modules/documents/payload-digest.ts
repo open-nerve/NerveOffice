@@ -9,10 +9,10 @@ import { createHash } from 'node:crypto'
 
 /**
  * 新建：类型、实际使用的标题（没给标题时是默认标题），以及请求里指定的空间（M2-P2 设计 §3.6）。
- * 没有指定空间时与 M1 的摘要相同：升级前后的重试照样按重放处理。UUID 不区分大小写，按小写计。
+ * 没有指定空间时与 M1 的摘要相同：升级前后的重试照样按重放处理。空间 id 已由契约统一成小写（M2-P2 审查 A1）。
  */
 export function createdPayloadDigest(type: DocumentType, title: string, spaceId?: string): Buffer {
-  const payload = spaceId === undefined ? `created\n${type}\n${title}` : `created\n${type}\n${title}\n${spaceId.toLowerCase()}`
+  const payload = spaceId === undefined ? `created\n${type}\n${title}` : `created\n${type}\n${title}\n${spaceId}`
   return createHash('sha256').update(payload, 'utf8').digest()
 }
 

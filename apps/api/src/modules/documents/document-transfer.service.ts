@@ -30,15 +30,16 @@ export class DocumentTransferService {
   }
 
   /**
-   * 整批转移：按 id 顺序锁住文档行，每一份都要还在来源空间里、状态正常，否则整批拒绝（TRANSFER_CONFLICT，
+   * 整批转移：按 id 顺序锁住还在来源空间里、状态正常的文档（与标题列表同一个条件），少了一份就整批拒绝（TRANSFER_CONFLICT，
    * 例如另一位管理员刚转走了其中一份）；改所属空间，写入代次加一。返回转移了的文档 id（按 id 排序）
    */
   async transfer(documentIds: readonly string[], fromSpaceId: string, toSpaceId: string, transaction: Transaction): Promise<string[]> {
-    const ids = [...new Set(documentIds.map(id => id.toLowerCase()))]
-    const rows = await this.documents.lockForTransfer(ids, transaction)
-    if (rows.length !== ids.length || rows.some(row => row.spaceId !== fromSpaceId || row.status !== 'active'))
+    // id 已由契约统一成小写（M2-P2 审查 A1），契约也已拒绝重复；这里再去重，"锁住的份数对得上"的判断才不依赖调用方
+    const ids = [...new Set(documentIds)]
+    const locked = await this.documents.lockForTransfer(ids, fromSpaceId, transaction)
+    if (locked.length !== ids.length)
       throw new AppError('TRANSFER_CONFLICT')
-    await this.documents.moveToSpace(ids, toSpaceId, transaction)
-    return rows.map(row => row.id)
+    await this.documents.moveToSpace(locked, toSpaceId, transaction)
+    return locked
   }
 }

@@ -41,6 +41,10 @@ function setup(locked: SpaceRecord | null = record()) {
     }),
   }
   const spaces = {
+    accessFactsOf: vi.fn(async () => {
+      calls.push('facts')
+      return current === undefined ? undefined : { type: current.type, status: current.status }
+    }),
     lockSpace: vi.fn(async () => {
       calls.push('lock')
       return current
@@ -92,10 +96,10 @@ describe('AdminSpacesService', () => {
     expect(spaces.createTeamSpace).not.toHaveBeenCalled()
   })
 
-  it('归档：复核操作者 → 锁住空间行 → 改状态 → 同一个事务里收回写入权（整个空间）→ 审计', async () => {
+  it('归档：复核操作者 → 判断是团队空间（不加锁）→ 锁住空间行 → 改状态 → 同一个事务里收回写入权（整个空间）→ 审计', async () => {
     const { service, calls, writeAccess, transaction } = setup()
     expect(await service.setStatus(ACTOR, SPACE, 'archived', ORIGIN)).toMatchObject({ status: 'archived' })
-    expect(calls).toEqual(['acting-admin', 'lock', 'status', 'revoke', 'audit'])
+    expect(calls).toEqual(['acting-admin', 'facts', 'lock', 'status', 'revoke', 'audit'])
     expect(writeAccess.revoke).toHaveBeenCalledWith({ kind: 'space', spaceId: SPACE }, transaction)
   })
 
@@ -111,12 +115,20 @@ describe('AdminSpacesService', () => {
     ])
   })
 
-  it('个人空间与不存在的空间：NOT_FOUND（个人空间对系统管理员始终看不到）', async () => {
+  it('个人空间与不存在的空间：NOT_FOUND（个人空间对系统管理员始终看不到），执行同样的步骤，都不在空间行上取锁', async () => {
     for (const locked of [record({ type: 'personal' }), null]) {
-      const { service, spaces } = setup(locked)
+      const { service, calls, spaces } = setup(locked)
       expect((await rejection(service.setStatus(ACTOR, SPACE, 'archived', ORIGIN))).code).toBe('NOT_FOUND')
+      expect(calls).toEqual(['acting-admin', 'facts'])
       expect(spaces.setStatus).not.toHaveBeenCalled()
     }
+  })
+
+  it('判断之后、加锁之前空间行变了（锁下再判断）：NOT_FOUND，不改', async () => {
+    const { service, spaces } = setup()
+    spaces.lockSpace.mockImplementationOnce(async () => undefined)
+    expect((await rejection(service.setVisibility(ACTOR, SPACE, true, ORIGIN))).code).toBe('NOT_FOUND')
+    expect(spaces.setVisibility).not.toHaveBeenCalled()
   })
 })
 

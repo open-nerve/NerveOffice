@@ -26,20 +26,29 @@ function CreateSpaceForm({ onCreated }: { readonly onCreated: () => Promise<void
   const [name, setName] = useState('')
   const [admin, setAdmin] = useState<UserSummary>()
   const [visibleToAll, setVisibleToAll] = useState(false)
+  // 创建成功之后换一个 key，同事选择整个重新开始：关键词与上一次的候选都清掉（与成员页的添加一样，审查 B11）
+  const [pickerKey, setPickerKey] = useState(0)
   const nameId = useId()
   const visibleId = useId()
+  const hintId = useId()
   const mutation = useMutation({
     mutationFn: createTeamSpace,
     meta: SYSTEM_ADMIN_ONLY,
     onSuccess: async () => {
       setName('')
       setAdmin(undefined)
+      setPickerKey(key => key + 1)
       setVisibleToAll(false)
       await onCreated()
     },
   })
   const parsed = spaceNameSchema.safeParse(name)
-  const ready = parsed.success && admin !== undefined
+  // 还不能创建的原因：没有选首个空间管理员，或者名称不合规（审查 B5）
+  let blocked: string | undefined
+  if (admin === undefined)
+    blocked = text.pickAdmin
+  else if (!parsed.success)
+    blocked = parsed.error.issues.map(issue => issue.message).join('；')
 
   return (
     <form
@@ -47,7 +56,7 @@ function CreateSpaceForm({ onCreated }: { readonly onCreated: () => Promise<void
       aria-label={text.create}
       onSubmit={(event) => {
         event.preventDefault()
-        if (ready && !mutation.isPending)
+        if (parsed.success && admin !== undefined && !mutation.isPending)
           mutation.mutate({ name: parsed.data, adminUserId: admin.id, visibleToAll })
       }}
     >
@@ -57,7 +66,7 @@ function CreateSpaceForm({ onCreated }: { readonly onCreated: () => Promise<void
           <Input id={nameId} value={name} onChange={event => setName(event.target.value)} />
         </div>
         <div className="min-w-56 flex-1">
-          <ColleaguePicker label={text.admin} selected={admin} onSelect={setAdmin} />
+          <ColleaguePicker key={pickerKey} label={text.admin} selected={admin} onSelect={setAdmin} />
         </div>
       </div>
       <div className="flex items-center gap-2">
@@ -69,7 +78,11 @@ function CreateSpaceForm({ onCreated }: { readonly onCreated: () => Promise<void
           <AlertDescription>{describeError(mutation.error).message}</AlertDescription>
         </Alert>
       )}
-      <Button type="submit" className="self-start" aria-disabled={!ready || mutation.isPending}>{mutation.isPending ? text.creating : text.create}</Button>
+      {/* aria-disabled 的按钮读屏软件读出"不可用"，却不知道为什么：原因写在按钮下方，按钮经 aria-describedby 指向它 */}
+      <Button type="submit" className="self-start" aria-disabled={blocked !== undefined || mutation.isPending} aria-describedby={blocked === undefined ? undefined : hintId}>
+        {mutation.isPending ? text.creating : text.create}
+      </Button>
+      {blocked !== undefined && <p id={hintId} className="text-sm text-muted-foreground">{blocked}</p>}
     </form>
   )
 }

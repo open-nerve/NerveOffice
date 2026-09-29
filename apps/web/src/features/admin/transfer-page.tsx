@@ -1,109 +1,55 @@
 import type { AdminSpace, AdminUser, TransferTarget, UserSummary } from '@nerve-office/contracts'
-import type { UseQueryResult } from '@tanstack/react-query'
+import type { KeywordPickerTexts } from '../colleagues/index.ts'
 import type { PendingConfirmation } from '../confirmation/index.ts'
 import { TRANSFER_MAX_DOCUMENTS } from '@nerve-office/contracts'
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
-import { ApiError, describeError } from '../../shared/api/index.ts'
+import { describeError, isMissingResource } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { ADMIN_PATHS } from '../../shared/lib/admin-paths.ts'
+import { cn } from '../../shared/lib/cn.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
-import { useDebouncedValue } from '../../shared/lib/use-debounced-value.ts'
-import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
-import { Alert, AlertDescription, Badge, Button, buttonVariants, Input, Label, Skeleton, TableCell } from '../../shared/ui/index.ts'
-import { SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
-import { ColleaguePicker } from '../colleagues/index.ts'
+import { Alert, AlertDescription, Button, buttonVariants, Label, Skeleton, TableCell } from '../../shared/ui/index.ts'
+import { sessionQueryOptions, SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
+import { ColleaguePicker, KeywordPicker } from '../colleagues/index.ts'
 import { ConfirmDialog } from '../confirmation/index.ts'
-import { ADMIN_QUERY_KEY, adminUserQueryOptions, transferDocuments, transferTargetsQueryOptions, userDocumentsQueryOptions } from './admin-api.ts'
+import { adminUserQueryOptions, transferDocuments, transferTargetsQueryOptions, userDocumentsQueryOptions } from './admin-api.ts'
 import { PagedTable } from './paged-table.tsx'
 
 const text = messages.admin.transfer
 
-/** 找团队空间的候选：查找中、失败（可以重试）、没有找到、找到的几个 */
-function TeamCandidates({ candidates, onPick }: { readonly candidates: UseQueryResult<AdminSpace[]>, readonly onPick: (space: AdminSpace) => void }) {
-  if (candidates.isPending)
-    return <p role="status" className="text-sm text-muted-foreground">{text.searchingTeam}</p>
-  if (candidates.isError) {
-    return (
-      <div role="alert" className="flex items-center gap-2 text-sm text-destructive">
-        <span>{text.teamSearchFailed(describeError(candidates.error).message)}</span>
-        <Button variant="outline" size="sm" onClick={() => void candidates.refetch()}>{messages.common.retry}</Button>
-      </div>
-    )
-  }
-  if (candidates.data.length === 0)
-    return <p role="status" className="text-sm text-muted-foreground">{text.noTeam}</p>
-  return (
-    <ul aria-label={text.toTeam} className="flex flex-wrap gap-1">
-      {candidates.data.map(space => (
-        <li key={space.id}>
-          <Button type="button" variant="outline" size="sm" onClick={() => onPick(space)}>{space.name}</Button>
-        </li>
-      ))}
-    </ul>
-  )
+/** 找目标团队空间：按名称找没有归档的团队空间（与按名字选同事同一个组件，审查 B13） */
+const TEAM_TEXTS: KeywordPickerTexts = { placeholder: text.searchTeam, candidates: text.teamCandidates, searching: text.searchingTeam, none: text.noTeam, failed: text.teamSearchFailed }
+
+function spaceId(space: AdminSpace): string {
+  return space.id
 }
 
-/** 选一个没有归档的团队空间（按名称找）；选中之后显示成标签，可以重新选择 */
-function TeamSpacePicker({ selected, onSelect }: { readonly selected: AdminSpace | undefined, readonly onSelect: (space: AdminSpace | undefined) => void }) {
-  const [keyword, setKeyword] = useState('')
-  const query = useDebouncedValue(keyword.trim())
-  const candidates = useQuery({ ...transferTargetsQueryOptions(query), enabled: query !== '' && selected === undefined })
-  const inputRef = useRef<HTMLInputElement>(null)
-  const changeRef = useRef<HTMLButtonElement>(null)
-  const focusAfterRender = useFocusAfterRender()
-  const inputId = useId()
-  if (selected !== undefined) {
-    return (
-      <span className="inline-flex flex-wrap items-center gap-2">
-        <Badge variant="secondary">{messages.colleagues.selected(selected.name)}</Badge>
-        <Button
-          ref={changeRef}
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={() => {
-            onSelect(undefined)
-            setKeyword('')
-            focusAfterRender(inputRef)
-          }}
-        >
-          {messages.colleagues.change}
-        </Button>
-      </span>
-    )
-  }
-  return (
-    <div className="flex flex-col gap-2">
-      <Label htmlFor={inputId}>{text.searchTeam}</Label>
-      <Input ref={inputRef} id={inputId} type="search" value={keyword} onChange={event => setKeyword(event.target.value)} />
-      {query !== '' && (
-        <TeamCandidates
-          candidates={candidates}
-          onPick={(space) => {
-            onSelect(space)
-            focusAfterRender(changeRef)
-          }}
-        />
-      )}
-    </div>
-  )
+function spaceName(space: AdminSpace): string {
+  return space.name
 }
 
 /** 转移的表单：选文档（最多 100 份）、选目标、确认之后整批转移 */
 function TransferForm({ account }: { readonly account: AdminUser }) {
   const queryClient = useQueryClient()
-  const documents = useInfiniteQuery(userDocumentsQueryOptions(account.id))
+  const session = useQuery(sessionQueryOptions())
+  const documentsQuery = userDocumentsQueryOptions(account.id)
+  const documents = useInfiniteQuery(documentsQuery)
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set())
   const [targetType, setTargetType] = useState<TransferTarget['type']>('team')
   const [person, setPerson] = useState<UserSummary>()
   const [team, setTeam] = useState<AdminSpace>()
   const [pending, setPending] = useState<PendingConfirmation>()
   const [done, setDone] = useState<string>()
+  const submitRef = useRef<HTMLButtonElement>(null)
   const groupId = useId()
+  const hintId = useId()
   const loaded = documents.data?.pages.flatMap(page => page.items) ?? []
   const allSelected = loaded.length > 0 && loaded.every(document => selected.has(document.id))
+  // 目标不能是这个停用的人自己，也不能是操作者本人的个人空间（服务端同样拒绝，M2-P2 审查 A7）
+  const selfId = session.data?.user.id
+  const excludedPeople = new Set(selfId === undefined ? [account.id] : [account.id, selfId])
 
   function toggle(id: string, checked: boolean): void {
     const next = new Set(selected)
@@ -112,6 +58,17 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
     else
       next.delete(id)
     setSelected(next)
+  }
+
+  /**
+   * 转移失败（例如有文档已经被别人转走了）之后，刷新标题列表，清掉已经不在列表里的选中项，列表与选择都是服务端的实际状态（审查 B12）。
+   * 刷新本身失败时列表不变，选择也不动
+   */
+  async function refreshAfterFailure(): Promise<void> {
+    await queryClient.invalidateQueries({ queryKey: documentsQuery.queryKey })
+    const pages = queryClient.getQueryData(documentsQuery.queryKey)?.pages ?? []
+    const present = new Set(pages.flatMap(page => page.items.map(document => document.id)))
+    setSelected(previous => new Set([...previous].filter(id => present.has(id))))
   }
 
   const target: { readonly request: TransferTarget, readonly label: string } | undefined = targetType === 'personal'
@@ -135,17 +92,27 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
       description: text.confirmDescription,
       confirmLabel: text.submit,
       run: async () => {
-        const result = await transferDocuments(account.id, { documentIds, target: target.request })
-        setSelected(new Set())
-        setDone(text.done(result.transferred, target.label))
-        await queryClient.invalidateQueries({ queryKey: [...ADMIN_QUERY_KEY, 'user-documents', account.id] })
+        try {
+          const result = await transferDocuments(account.id, { documentIds, target: target.request })
+          setSelected(new Set())
+          setDone(text.done(result.transferred, target.label))
+          await queryClient.invalidateQueries({ queryKey: documentsQuery.queryKey })
+        }
+        catch (error) {
+          // 失败的原因由确认的弹窗显示
+          await refreshAfterFailure()
+          throw error
+        }
       },
+      // WebKit 点按钮时不聚焦按钮，打开之前的焦点记不下来：关闭之后焦点回到"转移"（它一直在，审查 B2）
+      returnFocus: () => submitRef.current?.focus(),
     })
   }
 
   return (
     <div className="flex flex-col gap-4">
-      {done !== undefined && <p role="status" className="rounded-lg border p-3 text-sm">{done}</p>}
+      {/* 结果的说明：容器一直在（空的时候没有内容），结果出来时往里填文字，读屏软件才会播报（审查 B10） */}
+      <p role="status" className={cn('text-sm', done !== undefined && 'rounded-lg border p-3')}>{done}</p>
       {loaded.length > 0 && (
         <div className="flex items-center gap-2">
           <input
@@ -187,11 +154,12 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
           ))}
         </div>
         {targetType === 'team'
-          ? <TeamSpacePicker selected={team} onSelect={setTeam} />
-          : <ColleaguePicker label={text.pickPerson} selected={person} onSelect={setPerson} exclude={new Set([account.id])} />}
+          ? <KeywordPicker label={text.pickTeam} selected={team} onSelect={setTeam} search={transferTargetsQueryOptions} itemKey={spaceId} itemName={spaceName} texts={TEAM_TEXTS} />
+          : <ColleaguePicker label={text.pickPerson} selected={person} onSelect={setPerson} exclude={excludedPeople} />}
       </fieldset>
-      {blocked !== undefined && selected.size > 0 && <p className="text-sm text-muted-foreground">{blocked}</p>}
-      <Button className="self-start" aria-disabled={blocked !== undefined} onClick={submit}>{text.submit}</Button>
+      {/* 还不能转移时说明原因，按钮经 aria-describedby 指向它（审查 B5） */}
+      {blocked !== undefined && <p id={hintId} className="text-sm text-muted-foreground">{blocked}</p>}
+      <Button ref={submitRef} className="self-start" aria-disabled={blocked !== undefined} aria-describedby={blocked === undefined ? undefined : hintId} onClick={submit}>{text.submit}</Button>
       <ConfirmDialog pending={pending} onClose={() => setPending(undefined)} meta={SYSTEM_ADMIN_ONLY} />
     </div>
   )
@@ -213,12 +181,26 @@ export function AdminTransferPage() {
       </div>
     )
   }
-  if (account.data === undefined) {
-    const missing = account.error instanceof ApiError && (account.error.code === 'NOT_FOUND' || account.error.code === 'REQUEST_INVALID')
+  if (isMissingResource(account.error)) {
     return (
       <div className="flex flex-col items-start gap-3">
         <Alert variant="destructive">
-          <AlertDescription>{missing ? messages.errors.byCode('NOT_FOUND', '') : describeError(account.error).message}</AlertDescription>
+          <AlertDescription>{messages.errors.byCode('NOT_FOUND', '')}</AlertDescription>
+        </Alert>
+        {back}
+      </div>
+    )
+  }
+  if (account.data === undefined) {
+    // 网络与服务端的临时错误：可以重试（审查 B5）
+    return (
+      <div className="flex flex-col items-start gap-3">
+        <Alert variant="destructive">
+          <AlertDescription>
+            <p>{text.loadAccountFailed}</p>
+            <p>{describeError(account.error).message}</p>
+            <Button variant="outline" size="sm" className="mt-2" onClick={() => void account.refetch()}>{messages.common.retry}</Button>
+          </AlertDescription>
         </Alert>
         {back}
       </div>

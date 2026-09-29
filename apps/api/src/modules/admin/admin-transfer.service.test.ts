@@ -81,10 +81,11 @@ describe('AdminTransferService.transfer', () => {
     }), expect.anything())
   })
 
-  it('大写的 id 按小写的顺序与键处理', async () => {
+  it('目标是操作者自己的个人空间：PERMISSION_DENIED，不开事务', async () => {
     const { service, calls } = setup()
-    await service.transfer(ACTOR, SOURCE.toUpperCase(), { documentIds: DOCUMENTS, target: { type: 'personal', userId: TARGET_USER.toUpperCase() } }, ORIGIN)
-    expect(calls.slice(1, 3)).toEqual(['account f1', 'account f2'])
+    const error = await rejection(service.transfer(ACTOR, SOURCE, { documentIds: DOCUMENTS, target: { type: 'personal', userId: ROOT } }, ORIGIN))
+    expect(error.code).toBe('PERMISSION_DENIED')
+    expect(calls).toEqual([])
   })
 
   it('来源不是停用的：ACCOUNT_NOT_DISABLED；目标账户不是有效的：ACCOUNT_UNAVAILABLE；都不锁空间、不动文档', async () => {

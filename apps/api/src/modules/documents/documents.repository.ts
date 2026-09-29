@@ -1,4 +1,4 @@
-import type { DocumentProfile, DocumentStatus, DocumentType, PlatformFormatVersion } from '@nerve-office/contracts'
+import type { DocumentProfile, DocumentType, PlatformFormatVersion } from '@nerve-office/contracts'
 import type { SQL } from 'drizzle-orm'
 import type { TimeCursor } from '../../shared/time-cursor.ts'
 import type { Database, Transaction } from '../database/index.ts'
@@ -37,13 +37,6 @@ export interface NewDocument {
 /** "可访问文档"的范围（M2-P2 设计 §3.5）：调用者看得到的空间，由访问策略给出（P5 加上单独授权）。 */
 export interface AccessibleScope {
   readonly spaceIds: readonly string[]
-}
-
-/** 转移时锁住的文档：所在的空间与状态（M2-P2 设计 §3.8） */
-export interface TransferCandidate {
-  readonly id: string
-  readonly spaceId: string
-  readonly status: DocumentStatus
 }
 
 const d = documents
@@ -98,14 +91,19 @@ export class DocumentsRepository {
     return row
   }
 
-  /** 按 id 顺序锁住要转移的文档（FOR UPDATE，与保存相同）：两次转移、转移与保存都按同一个顺序取锁，互相等待时不成环 */
-  async lockForTransfer(ids: readonly string[], transaction: Transaction): Promise<TransferCandidate[]> {
-    return executorOf(this.db, transaction)
-      .select({ id: d.id, spaceId: d.spaceId, status: d.status })
+  /**
+   * 按 id 顺序锁住要转移的文档（FOR UPDATE，与保存相同）：两次转移、转移与保存都按同一个顺序取锁，互相等待时不成环。
+   * 只锁来源空间里的可访问文档（与标题列表同一个条件）：请求里夹带的别处的文档不被锁住（M2-P2 审查 A4）；
+   * 等锁期间被别人转走的行，拿到锁之后按新的内容重新判断，不再返回。返回锁住的 id（按 id 排序）
+   */
+  async lockForTransfer(ids: readonly string[], fromSpaceId: string, transaction: Transaction): Promise<string[]> {
+    const rows = await executorOf(this.db, transaction)
+      .select({ id: d.id })
       .from(d)
-      .where(inArray(d.id, [...ids]))
+      .where(and(inArray(d.id, [...ids]), accessible({ spaceIds: [fromSpaceId] })))
       .orderBy(asc(d.id))
       .for('update')
+    return rows.map(row => row.id)
   }
 
   /** 移到另一个空间（调用方已锁住这些行）：写入代次加一（00 号计划书 §6.4）；更新时间不变，内容没有改 */

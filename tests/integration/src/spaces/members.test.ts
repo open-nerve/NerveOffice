@@ -123,6 +123,19 @@ describe('US-M2-06 添加成员', () => {
     expect((await auditOf(spaceId)).at(-1)).toEqual({ action: 'spaces.member_added', actor_id: amy.id, details: { userId: ben.id, role: 'editor' } })
   })
 
+  it('请求里的 id 大写也行，一律按小写处理（M2-P2 审查 A1）：系统管理员用大写的自己加入，照样记为加入空间；调整与移出的审计明细是小写', async () => {
+    const spaceId = await teamSpace()
+    const upper = spaceId.toUpperCase()
+    expect(await member(await add(rootSession, upper, root.id.toUpperCase(), 'viewer'), 201)).toMatchObject({ user: { id: root.id }, role: 'viewer' })
+    expect((await auditOf(spaceId)).at(-1)).toEqual({ action: 'spaces.admin_joined', actor_id: root.id, details: { role: 'viewer' } })
+    expect(await member(await changeRole(amySession, upper, root.id.toUpperCase(), 'editor'))).toMatchObject({ user: { id: root.id }, role: 'editor' })
+    expect((await remove(amySession, upper, root.id.toUpperCase())).status).toBe(204)
+    expect((await auditOf(spaceId)).slice(-2).map(event => [event.action, event.details])).toEqual([
+      ['spaces.member_role_changed', { userId: root.id, from: 'viewer', to: 'editor' }],
+      ['spaces.member_removed', { userId: root.id, role: 'editor' }],
+    ])
+  })
+
   it('已经是成员：409 ALREADY_MEMBER；不存在或已停用的账户：409 ACCOUNT_UNAVAILABLE', async () => {
     const spaceId = await teamSpace({ [ben.id]: 'viewer' })
     const again = await add(amySession, spaceId, ben.id, 'editor')
