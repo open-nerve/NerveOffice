@@ -58,24 +58,72 @@ function expiredReason(meta: Meta): ExpiredReason {
 }
 
 /**
+ * 本页的登录、修改密码从开始算起最多等多久（M2-P6 复验 一般-2）：略大于修改密码在服务端最长的耗时（默认配置）。
+ * 超过了就当它不会结束了（例如响应在网络上丢了），照常向服务端确认会话，不一直等下去。修改密码在服务端可能等待的几处，各有上限：
+ * - 验证旧密码、计算新密码的哈希，各在哈希的队列里排队不超过 5 秒（NERVE_PASSWORD_HASH_QUEUE_TIMEOUT_MS），超过即 503；
+ * - 数据库的一条语句不超过 15 秒（NERVE_DATABASE_STATEMENT_TIMEOUT_MS，其中等锁不超过 5 秒：NERVE_DATABASE_LOCK_TIMEOUT_MS），
+ *   数据库没有回应时客户端另外多等 5 秒（apps/api 的 QUERY_TIMEOUT_MARGIN_MS），超过即以错误结束；
+ * - 从连接池取连接不超过 5 秒（NERVE_DATABASE_CONNECT_TIMEOUT_MS）。
+ * 两次排队、一条语句到上限、一次取连接合计 35 秒，加上哈希的计算与网络的往返，取 40 秒。
+ * 接收请求的时限（NERVE_HTTP_REQUEST_TIMEOUT_MS，默认 60 秒，即 Node 的 requestTimeout）只管收完请求，不限制处理的时间，这里不按它算。
+ * 部署时调大了上面几项的，这里的等待可能短于修改密码的实际耗时：到了上限照常确认，最坏是这个页面按"已过期"回到登录页
+ */
+export const SESSION_CHANGE_TIME_LIMIT_MS = 40_000
+
+/** 这个变更成功时写入新的会话 Cookie：开始（登录）或者换掉（修改密码）会话 */
+function writesSessionCookie(meta: Meta): boolean {
+  const transition = sessionTransition(meta)
+  return transition === 'starts' || transition === 'renews'
+}
+
+/**
+ * 本页还在进行、开始之后还没超过 SESSION_CHANGE_TIME_LIMIT_MS 的登录与修改密码里，最晚的那个时限（毫秒时间戳）；
+ * 没有这样的变更时为 undefined
+ */
+function sessionChangeDeadline(queryClient: QueryClient): number | undefined {
+  const now = Date.now()
+  let deadline: number | undefined
+  for (const mutation of queryClient.getMutationCache().getAll()) {
+    if (mutation.state.status !== 'pending' || !writesSessionCookie(mutation.meta))
+      continue
+    const end = mutation.state.submittedAt + SESSION_CHANGE_TIME_LIMIT_MS
+    if (end > now && (deadline === undefined || end > deadline))
+      deadline = end
+  }
+  return deadline
+}
+
+/** 本页有还在进行的登录或修改密码（开始之后还没超过 SESSION_CHANGE_TIME_LIMIT_MS）：它的响应会带来新的会话 Cookie */
+export function sessionChangesPending(queryClient: QueryClient): boolean {
+  return sessionChangeDeadline(queryClient) !== undefined
+}
+
+/**
  * 本页还在进行的、成功时写入新的会话 Cookie 的变更（登录、修改密码）都结束之后兑现（复验 N3）：
- * 它们的响应带着新的 Cookie，结束之前向服务端确认会话，带的可能还是旧的。没有这样的变更时立即兑现
+ * 它们的响应带着新的 Cookie，结束之前向服务端确认会话，带的可能还是旧的。没有这样的变更时立即兑现。
+ * 等待有上限（M2-P6 复验 一般-2）：每个变更从它开始算起最多等 SESSION_CHANGE_TIME_LIMIT_MS，按开始的时间算，
+ * 同一个一直不结束的变更不会让之后的每一次确认都再等一整轮
  */
 export async function sessionChangesSettled(queryClient: QueryClient): Promise<void> {
-  const cache = queryClient.getMutationCache()
-  const pending = (): boolean => cache.getAll().some((mutation) => {
-    const transition = sessionTransition(mutation.meta)
-    return mutation.state.status === 'pending' && (transition === 'starts' || transition === 'renews')
-  })
-  if (!pending())
+  if (!sessionChangesPending(queryClient))
     return
+  const cache = queryClient.getMutationCache()
   await new Promise<void>((resolve) => {
-    const unsubscribe = cache.subscribe(() => {
-      if (!pending()) {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let unsubscribe = (): void => {}
+    // 变更有变化时、或者到了最晚的时限时再看一次：等的期间又开始的登录、修改密码也一起等
+    const check = (): void => {
+      clearTimeout(timer)
+      const deadline = sessionChangeDeadline(queryClient)
+      if (deadline === undefined) {
         unsubscribe()
         resolve()
+        return
       }
-    })
+      timer = setTimeout(check, deadline - Date.now())
+    }
+    unsubscribe = cache.subscribe(check)
+    check()
   })
 }
 

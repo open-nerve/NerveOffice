@@ -78,8 +78,9 @@ describe('US-M2-02 修改密码', () => {
       expect(kicked.status).toBe(401)
       expect(await codeOf(kicked)).toBe('SESSION_EXPIRED')
     }
-    // 三条会话：原来的两条随改密码撤销，新建的那条（当前页面）随后退出
-    expect(await sessionsOf(alice)).toEqual([{ revoked_reason: 'password_changed' }, { revoked_reason: 'password_changed' }, { revoked_reason: 'logout' }])
+    // 三条会话：原来的两条随改密码撤销——当前页面的这条换成了新的（replaced），别处的按 password_changed（M2-P6 复验 一般-3）；
+    // 新建的那条（当前页面）随后退出
+    expect(await sessionsOf(alice)).toEqual([{ revoked_reason: 'replaced' }, { revoked_reason: 'password_changed' }, { revoked_reason: 'logout' }])
     // 库里存的是新令牌的摘要
     const digest = createHash('sha256').update(renewed.cookie.slice(`${SESSION_COOKIE}=`.length)).digest()
     expect(await database.query(async client => (await client.query('SELECT 1 FROM auth_sessions WHERE token_hash = $1 AND user_id = $2', [digest, alice.id])).rowCount)).toBe(1)

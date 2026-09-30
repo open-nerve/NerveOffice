@@ -6,10 +6,12 @@ import { generateSessionToken, isWellFormedSessionToken, sessionTokenDigest } fr
 import { SessionsRepository } from './sessions.repository.ts'
 
 /**
- * 换令牌时撤销的原因（复验 N3）：修改密码（本人的全部会话撤销，当前页面随即换上新的会话）、同一个浏览器重新登录
- * （原来的会话换成新的）。这时发出请求的浏览器多半已经拿到了新的 Cookie，还带着旧 Cookie 的是换令牌之前就发出的请求
+ * 换令牌时撤销的原因（复验 N3）：只有 replaced——同一个浏览器重新登录、修改密码时，这个浏览器原来的会话换成了新的，
+ * 它随即拿到新的 Cookie，还带着旧 Cookie 的是换令牌之前就发出的请求。
+ * 修改密码时本人的其余会话（别的设备上的）按 password_changed 撤销：那些设备不会有新的 Cookie，照常清除，
+ * 免得它们在 Cookie 到期之前每次打开都提示"登录已过期"、每个请求多查一次库（M2-P6 复验 一般-3）
  */
-const ROTATION_REASONS = ['password_changed', 'replaced'] as const
+const ROTATION_REASONS = ['replaced'] as const
 
 export interface CreatedSession {
   readonly id: string
@@ -58,7 +60,7 @@ export class SessionService {
   /**
    * 这条令牌是不是因为换令牌（ROTATION_REASONS）而失效的（复验 N3）。会话守卫在会话无效时问它：是的话仍回"登录已过期"，
    * 但不清除 Cookie——换令牌之前发出、之后才处理的请求，响应晚于新 Cookie 到达时，清除会把新的删掉，本人随即掉线。
-   * 退出、过期、停用、重置密码等其他原因照旧清除。令牌格式不对时不查库
+   * 退出、过期、停用、重置密码、修改密码时别的设备上的会话等其他原因照旧清除。令牌格式不对时不查库
    */
   async invalidatedByRotation(token: string): Promise<boolean> {
     if (!isWellFormedSessionToken(token))
@@ -78,17 +80,29 @@ export class SessionService {
   }
 
   /**
-   * 撤销这个人的全部会话（M2-P1 设计 §3.5）：账户停用、签发与完成重置、修改密码时全部撤销。修改密码不保留当前的会话，
-   * 而是随后为当前页面新建一个（M2-P6 复核 B1：换掉令牌，偷到的 Cookie 随之失效）。
+   * 撤销这个人的全部会话（M2-P1 设计 §3.5）：账户停用、签发与完成重置时全部撤销（修改密码见 revokeForPasswordChange）。
    * 调用方的事务先锁住账户的行（UsersService.lockAccount 等）：登录的事务复核时也锁这一行，
    * 两边一先一后，这里撤销的包括先提交的登录新建的会话（审查 A1）。会话守卫对每个请求另查账户状态。
    */
   async revokeAllOf(
     userId: string,
-    reason: 'disabled' | 'password_changed' | 'password_reset',
+    reason: 'disabled' | 'password_reset',
     options: { readonly transaction?: Transaction } = {},
   ): Promise<void> {
     await this.repository.revokeAllOfUser(userId, reason, options.transaction)
+  }
+
+  /**
+   * 修改密码时撤销本人的全部会话（M2-P1 设计 §3.5），调用方随后为当前页面新建一个（M2-P6 复核 B1：换掉令牌，偷到的 Cookie 随之失效）：
+   * - 当前这条按 replaced 撤销：它换成了新的，发出修改密码的浏览器随即拿到新的 Cookie。同一个浏览器里（包括别的标签页，
+   *   它们用的是同一条会话）换令牌之前发出、之后才处理的请求不清除 Cookie（invalidatedByRotation）；
+   * - 其余的按 password_changed 撤销：别的设备上的 Cookie 照常清除（M2-P6 复验 一般-3）。
+   * 先当前、后其余：反过来的话，当前这条会被后者一并记成 password_changed。与重新登录"先作废原来的、再新建"同一个顺序，
+   * 都在调用方的事务里，账户的行已经锁住（UsersService.replacePassword）；锁的顺序见 ADR-007
+   */
+  async revokeForPasswordChange(userId: string, currentSessionId: string, transaction: Transaction): Promise<void> {
+    await this.repository.revoke({ id: currentSessionId }, 'replaced', transaction)
+    await this.repository.revokeAllOfUser(userId, 'password_changed', transaction)
   }
 
   /** 删除一小批过期或撤销已超过 30 天的会话，表不会无限增长。在事务之外调用。 */

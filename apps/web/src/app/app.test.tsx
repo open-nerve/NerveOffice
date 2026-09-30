@@ -10,7 +10,7 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { z } from 'zod'
 import { SESSION_QUERY_KEY } from '../features/auth/index.ts'
 import { apiRequest } from '../shared/api/index.ts'
-import { apiError, installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
+import { apiError, installFakeApi, inTurn, json } from '../shared/testing/fake-api.test-support.ts'
 import { documentsKey, spaceRoutes } from '../shared/testing/spaces.test-support.ts'
 import { currentPath, renderApp, sessionBus } from './render-app.test-support.tsx'
 
@@ -213,6 +213,108 @@ describe('US-M1-02 登录与退出', () => {
     fireEvent.click(screen.getByRole('button', { name: '退出' }))
     await waitFor(() => expect(app.page.visits).toEqual(['/login']))
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  describe('退出得到"登录已过期"：先确认一次会话（M2-P6 复验 一般-4）', () => {
+    /** 同一个浏览器刚修改了密码：退出带着换令牌之前的旧 Cookie，服务端回"登录已过期"、不清除 Cookie，浏览器里是同一个人的新会话 */
+    const RENEWED = { ...SESSION, csrfToken: 'csrf-renewed' }
+
+    function logoutTokens(api: FakeApi): (string | undefined)[] {
+      return api.requests.filter(request => request.key === 'POST /api/auth/logout').map(request => request.headers['x-csrf-token'])
+    }
+
+    it('浏览器里还是同一个人：带着新的 CSRF 令牌再退出一次，然后通知其他标签页、回到登录页', async () => {
+      const bus = sessionBus()
+      const otherTab = vi.fn()
+      bus.open().subscribe(otherTab)
+      const api = installFakeApi({ ...LOGGED_IN, ...NO_DOCUMENTS, 'POST /api/auth/logout': inTurn(() => apiError(401, 'SESSION_EXPIRED'), () => new Response(null, { status: 204 })) })
+      const app = renderApp('/', { sessionChannel: bus.open() })
+      await screen.findByRole('heading', { name: '我的空间' })
+      api.on('GET /api/auth/session', () => json(200, RENEWED))
+      fireEvent.click(screen.getByRole('button', { name: '退出' }))
+      await waitFor(() => expect(app.page.visits).toEqual(['/login']))
+      expect(logoutTokens(api)).toEqual(['csrf-1', 'csrf-renewed'])
+      expect(requestCount(api, 'GET /api/auth/session')).toBe(2)
+      expect(otherTab).toHaveBeenCalledTimes(1)
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    })
+
+    it('确认和再退出期间按钮一直是"正在退出"，再点也不重复请求', async () => {
+      const confirming = deferred()
+      const api = installFakeApi({ ...LOGGED_IN, ...NO_DOCUMENTS, 'POST /api/auth/logout': inTurn(() => apiError(401, 'SESSION_EXPIRED'), () => new Response(null, { status: 204 })) })
+      const app = renderApp('/')
+      await screen.findByRole('heading', { name: '我的空间' })
+      api.on('GET /api/auth/session', confirming.handler)
+      fireEvent.click(screen.getByRole('button', { name: '退出' }))
+      await waitFor(() => expect(requestCount(api, 'GET /api/auth/session')).toBe(2))
+      const leaving = screen.getByRole('button', { name: '正在退出…' })
+      expect(leaving).toHaveAttribute('aria-disabled', 'true')
+      fireEvent.click(leaving)
+      confirming.resolve(json(200, RENEWED))
+      await waitFor(() => expect(app.page.visits).toEqual(['/login']))
+      expect(logoutTokens(api)).toEqual(['csrf-1', 'csrf-renewed'])
+    })
+
+    it.each([
+      ['已经没有会话', () => apiError(401, 'UNAUTHENTICATED')],
+      ['换了人（不替别人退出）', () => json(200, OTHER_SESSION)],
+    ])('%s：不再退出，照常回到登录页', async (_name, confirmation) => {
+      const api = installFakeApi({ ...LOGGED_IN, ...NO_DOCUMENTS, 'POST /api/auth/logout': () => apiError(401, 'SESSION_EXPIRED') })
+      const app = renderApp('/')
+      await screen.findByRole('heading', { name: '我的空间' })
+      api.on('GET /api/auth/session', confirmation)
+      fireEvent.click(screen.getByRole('button', { name: '退出' }))
+      await waitFor(() => expect(app.page.visits).toEqual(['/login']))
+      expect(logoutTokens(api)).toEqual(['csrf-1'])
+      expect(requestCount(api, 'GET /api/auth/session')).toBe(2)
+    })
+
+    it('再退出一次仍得到"登录已过期"：不再确认（只确认一次），回到登录页', async () => {
+      const api = installFakeApi({ ...LOGGED_IN, ...NO_DOCUMENTS, 'POST /api/auth/logout': () => apiError(401, 'SESSION_EXPIRED') })
+      const app = renderApp('/')
+      await screen.findByRole('heading', { name: '我的空间' })
+      api.on('GET /api/auth/session', () => json(200, RENEWED))
+      fireEvent.click(screen.getByRole('button', { name: '退出' }))
+      await waitFor(() => expect(app.page.visits).toEqual(['/login']))
+      await settle()
+      expect(logoutTokens(api)).toEqual(['csrf-1', 'csrf-renewed'])
+      expect(requestCount(api, 'GET /api/auth/session')).toBe(2)
+    })
+
+    it('确认的请求断网：说明退出失败，留在原页面（浏览器里可能还有有效的会话），可以重试', async () => {
+      const api = installFakeApi({ ...LOGGED_IN, ...NO_DOCUMENTS, 'POST /api/auth/logout': () => apiError(401, 'SESSION_EXPIRED') })
+      const app = renderApp('/')
+      await screen.findByRole('heading', { name: '我的空间' })
+      api.on('GET /api/auth/session', networkFailure)
+      fireEvent.click(screen.getByRole('button', { name: '退出' }))
+      expect(await screen.findByRole('alert')).toHaveTextContent('退出失败：网络连接失败，请检查网络后重试')
+      expect(app.page.visits).toEqual([])
+      api.on('POST /api/auth/logout', () => new Response(null, { status: 204 }))
+      fireEvent.click(screen.getByRole('button', { name: '退出' }))
+      await waitFor(() => expect(app.page.visits).toEqual(['/login']))
+    })
+
+    it('再退出的请求断网：说明退出失败，留在原页面；已经换上的新令牌留给重试用', async () => {
+      const api = installFakeApi({ ...LOGGED_IN, ...NO_DOCUMENTS, 'POST /api/auth/logout': inTurn(() => apiError(401, 'SESSION_EXPIRED'), networkFailure, () => new Response(null, { status: 204 })) })
+      const app = renderApp('/')
+      await screen.findByRole('heading', { name: '我的空间' })
+      api.on('GET /api/auth/session', () => json(200, RENEWED))
+      fireEvent.click(screen.getByRole('button', { name: '退出' }))
+      expect(await screen.findByRole('alert')).toHaveTextContent('退出失败：网络连接失败，请检查网络后重试')
+      expect(app.page.visits).toEqual([])
+      fireEvent.click(screen.getByRole('button', { name: '退出' }))
+      await waitFor(() => expect(app.page.visits).toEqual(['/login']))
+      expect(logoutTokens(api)).toEqual(['csrf-1', 'csrf-renewed', 'csrf-renewed'])
+    })
+
+    it('退出得到"未登录"（没有带 Cookie）：不确认，照常回到登录页', async () => {
+      const api = installFakeApi({ ...LOGGED_IN, ...NO_DOCUMENTS, 'POST /api/auth/logout': () => apiError(401, 'UNAUTHENTICATED') })
+      const app = renderApp('/')
+      await screen.findByRole('heading', { name: '我的空间' })
+      fireEvent.click(screen.getByRole('button', { name: '退出' }))
+      await waitFor(() => expect(app.page.visits).toEqual(['/login']))
+      expect(requestCount(api, 'GET /api/auth/session')).toBe(1)
+    })
   })
 
   it('退出失败（网络）：留在原页面，说明原因，可以重试', async () => {

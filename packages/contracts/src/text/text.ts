@@ -38,7 +38,7 @@ export function hasLineSeparators(value: string): boolean {
 /**
  * 看不见的字符：空白（White_Space）、默认可忽略的字符（Default_Ignorable_Code_Point：零宽空格与零宽连接符、
  * 词连接符、BOM、变体选择符、韩文填充符 U+3164 等、蒙古文元音分隔符），以及盲文空白 U+2800（显示成空白的常见替身）。
- * 这里只用来判断"去掉之后还剩不剩"；名字里夹着的默认可忽略字符另由 hasHiddenCharacters 判断（复验 N6），标题里不拒绝。
+ * 这里只用来判断"去掉之后还剩不剩"；名字里夹着的格式字符与默认可忽略字符另由 hasHiddenCharacters 判断（复验 N6），标题里不拒绝。
  */
 const INVISIBLE = /[\p{White_Space}\p{Default_Ignorable_Code_Point}\u2800]/gu
 
@@ -48,15 +48,19 @@ export function hasVisibleCharacters(value: string): boolean {
 }
 
 /**
- * 名字里放行的默认可忽略字符（复验 N6）：Default_Ignorable_Code_Point 里名字确有用途的几类，按码点的闭区间列出——
+ * 名字里放行的格式字符与默认可忽略字符（复验 N6）：名字确有用途的几类，按码点的闭区间列出（字符类里写这些字符，
+ * lint 的 no-misleading-character-class 不允许）——
  * - 零宽不连字 U+200C、零宽连接符 U+200D：波斯文、天城文等的连写与断开，表情组合（一家人、职业）；
  * - 组合用字形连接符 U+034F；蒙古文自由变体选择符 U+180B–U+180D、U+180F；
  * - 变体选择符 U+FE00–U+FE0F、U+E0100–U+E01EF：表情与文字的呈现（带 VS16 的心）、汉字的异体字；
  * - 标签字符 U+E0020–U+E007F：英格兰、苏格兰等地区旗帜的表情序列。
- * 其余的（零宽空格 U+200B、词连接符 U+2060、BOM U+FEFF、软连字符 U+00AD、韩文填充符 U+3164 与 U+115F、U+1160、U+FFA0、
- * 蒙古文元音分隔符 U+180E、不可见的运算符 U+2061–U+2064 等）夹在名字里看不出来。双向控制字符也在其中，由 hasBidiControls 先给出更具体的说明
+ * 其余的格式字符（\p{Cf}）与默认可忽略字符（Default_Ignorable_Code_Point）一律拒绝：零宽空格 U+200B、词连接符 U+2060、
+ * BOM U+FEFF、软连字符 U+00AD、韩文填充符 U+3164 与 U+115F、U+1160、U+FFA0、不可见的运算符 U+2061–U+2064 等夹在名字里看不出来；
+ * 格式字符里另有几段不算默认可忽略，同样看不出来或者改变旁边的字的显示：行间注释字符 U+FFF9–U+FFFB（WebKit 里宽度为 0，
+ * M2-P6 复验 建议-2）、阿拉伯文的数字符号 U+0600–U+0605 等、埃及圣书体的格式控制符 U+13430–U+1343F。
+ * 双向控制字符也在其中，由 hasBidiControls 先给出更具体的说明。蒙古文元音分隔符 U+180E 只在正字法要求的位置放行（见下）
  */
-const IGNORABLES_ALLOWED_IN_NAMES: readonly (readonly [number, number])[] = [
+const FORMAT_CHARACTERS_ALLOWED_IN_NAMES: readonly (readonly [number, number])[] = [
   [0x200C, 0x200D],
   [0x034F, 0x034F],
   [0x180B, 0x180D],
@@ -66,19 +70,43 @@ const IGNORABLES_ALLOWED_IN_NAMES: readonly (readonly [number, number])[] = [
   [0xE0100, 0xE01EF],
 ]
 
-const DEFAULT_IGNORABLE = /^\p{Default_Ignorable_Code_Point}$/u
+/** 格式字符或默认可忽略字符：名字里除了放行的几类都拒绝 */
+const FORMAT_OR_IGNORABLE = /^[\p{Cf}\p{Default_Ignorable_Code_Point}]$/u
 
 /**
- * 名字里夹着看不见的字符：放行的几类（IGNORABLES_ALLOWED_IN_NAMES）以外的默认可忽略字符。视觉上相同的两个名字因此能并存，
- * 审计与成员列表按名字认人时就会认错。放行的几类仍然不能单独构成整个名字（hasVisibleCharacters）
+ * 蒙古文元音分隔符（MVS，U+180E）：传统蒙古文里把词尾的元音 a、e 与前面的辅音分写，是正字法的一部分，
+ * 例如名字"娜拉"的蒙古文写法 nar-a（U+1828 U+1820 U+1837 U+180E U+1820，M2-P6 复验 一般-5）
+ */
+const MONGOLIAN_VOWEL_SEPARATOR = 0x180E
+/** MVS 后面的词尾元音：蒙古文字母 a（U+1820）、e（U+1821） */
+const MONGOLIAN_FINAL_VOWELS: readonly number[] = [0x1820, 0x1821]
+/** 蒙古文字母（蒙古文里的字母，不含数字、标点与变体选择符等） */
+const MONGOLIAN_LETTER = /^(?=\p{L})\p{Script=Mongolian}$/u
+
+/** 第 index 个字符是用在正字法位置上的 MVS：前面是蒙古文字母，紧跟着词尾的元音 a 或 e；别处的 MVS 夹在名字里看不出来 */
+function isMongolianVowelSeparatorInPlace(characters: readonly string[], index: number): boolean {
+  const previous = characters[index - 1]
+  const next = characters[index + 1]?.codePointAt(0)
+  return characters[index]?.codePointAt(0) === MONGOLIAN_VOWEL_SEPARATOR
+    && previous !== undefined && MONGOLIAN_LETTER.test(previous)
+    && next !== undefined && MONGOLIAN_FINAL_VOWELS.includes(next)
+}
+
+/**
+ * 名字里夹着看不见的字符：放行的几类（FORMAT_CHARACTERS_ALLOWED_IN_NAMES）以外的格式字符与默认可忽略字符，
+ * 正字法位置以外的蒙古文元音分隔符。视觉上相同的两个名字因此能并存，审计与成员列表按名字认人时就会认错。
+ * 放行的几类仍然不能单独构成整个名字（hasVisibleCharacters）
  */
 export function hasHiddenCharacters(value: string): boolean {
-  for (const character of value) {
+  const characters = [...value]
+  return characters.some((character, index) => {
+    if (!FORMAT_OR_IGNORABLE.test(character))
+      return false
     const codePoint = character.codePointAt(0) ?? 0
-    if (DEFAULT_IGNORABLE.test(character) && !IGNORABLES_ALLOWED_IN_NAMES.some(([first, last]) => codePoint >= first && codePoint <= last))
-      return true
-  }
-  return false
+    if (FORMAT_CHARACTERS_ALLOWED_IN_NAMES.some(([first, last]) => codePoint >= first && codePoint <= last))
+      return false
+    return !isMongolianVowelSeparatorInPlace(characters, index)
+  })
 }
 
 export interface TextRuleOptions {
@@ -90,7 +118,8 @@ export interface TextRuleOptions {
 /**
  * 名称（显示名、团队空间名称、文件夹名称）：先 NFC 归一（同一个字的组合写法与预组写法存成一样），去掉首尾空白之后
  * 1–maxLength 个字符（按码点）；不含控制字符、双向控制字符、行与段分隔符；去掉看不见的字符之后仍然有字；
- * 不夹着看不见的字符（复验 N6：零宽连接符、变体选择符等名字里确有用途的几类除外，见 IGNORABLES_ALLOWED_IN_NAMES）。
+ * 不夹着看不见的字符（复验 N6：零宽连接符、变体选择符等名字里确有用途的几类除外，见 FORMAT_CHARACTERS_ALLOWED_IN_NAMES；
+ * 蒙古文元音分隔符只在正字法位置上放行）。
  * 说明按这个顺序给出第一条：整个名字都看不见时说"只有看不见的字符"，夹在字中间时才说"不能包含"
  */
 export function nameTextSchema({ label, maxLength }: TextRuleOptions) {

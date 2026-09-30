@@ -39,7 +39,7 @@ function setup(options: { admission?: Admission, currentValid?: boolean, stillCu
     replacePassword: vi.fn(async (_credentials: VerifiedCredentials, _hash: string, _transaction: Transaction) => options.stillCurrent ?? true),
   }
   const sessions = {
-    revokeAllOf: vi.fn(async (_userId: string, _reason: string, _options?: { transaction?: Transaction }) => {}),
+    revokeForPasswordChange: vi.fn(async (_userId: string, _currentSessionId: string, _transaction: Transaction) => {}),
     create: vi.fn(async (_userId: string, _transaction?: Transaction) => ({ id: 'session-new', token: NEW_TOKEN })),
     purgeExpired: vi.fn(async () => {}),
   }
@@ -66,7 +66,7 @@ async function errorOf(promise: Promise<unknown>): Promise<AppError> {
 }
 
 describe('AuthService.changePassword（US-M2-02）', () => {
-  it('成功：在一个事务里先锁账户行复核并更新哈希，再清除限流计数、撤销本人的全部会话（包括当前这个）、为当前页面新建会话、记审计', async () => {
+  it('成功：在一个事务里先锁账户行复核并更新哈希，再清除限流计数、撤销本人的全部会话（当前这个按换成新的撤销，M2-P6 复验 一般-3）、为当前页面新建会话、记审计', async () => {
     const { service, ticket, throttle, users, sessions, audit } = setup()
     const result = await service.changePassword(PRINCIPAL, REQUEST, ORIGIN)
     expect(throttle.admit).toHaveBeenCalledWith({ username: 'alice', clientIp: '203.0.113.7' })
@@ -74,10 +74,11 @@ describe('AuthService.changePassword（US-M2-02）', () => {
     expect(users.replacePassword).toHaveBeenCalledWith(CREDENTIALS, 'hash:new-password-123', TRANSACTION)
     expect(users.replacePassword.mock.invocationCallOrder[0]).toBeLessThan(ticket.succeeded.mock.invocationCallOrder[0] ?? 0)
     expect(ticket.succeeded).toHaveBeenCalledWith(TRANSACTION)
-    // 不保留当前的会话（M2-P6 复核 B1）：全部撤销之后再新建，都在同一个事务里
-    expect(sessions.revokeAllOf).toHaveBeenCalledWith(ALICE.id, 'password_changed', { transaction: TRANSACTION })
+    // 不保留当前的会话（M2-P6 复核 B1）：全部撤销之后再新建，都在同一个事务里。撤销时交出当前这条会话，
+    // 由会话服务按"换成了新的"记下它，别的设备上的另记（M2-P6 复验 一般-3）
+    expect(sessions.revokeForPasswordChange).toHaveBeenCalledWith(ALICE.id, PRINCIPAL.sessionId, TRANSACTION)
     expect(sessions.create).toHaveBeenCalledWith(ALICE.id, TRANSACTION)
-    expect(sessions.revokeAllOf.mock.invocationCallOrder[0]).toBeLessThan(sessions.create.mock.invocationCallOrder[0] ?? 0)
+    expect(sessions.revokeForPasswordChange.mock.invocationCallOrder[0]).toBeLessThan(sessions.create.mock.invocationCallOrder[0] ?? 0)
     expect(audit.record).toHaveBeenCalledWith(
       { action: 'users.password_changed', actor: { type: 'user', id: ALICE.id }, target: { type: 'user', id: ALICE.id }, origin: ORIGIN },
       { transaction: TRANSACTION },
@@ -99,7 +100,7 @@ describe('AuthService.changePassword（US-M2-02）', () => {
     expect((await errorOf(service.changePassword(PRINCIPAL, REQUEST, ORIGIN))).code).toBe('CURRENT_PASSWORD_INCORRECT')
     expect(users.hashPassword).not.toHaveBeenCalled()
     expect(users.replacePassword).not.toHaveBeenCalled()
-    expect(sessions.revokeAllOf).not.toHaveBeenCalled()
+    expect(sessions.revokeForPasswordChange).not.toHaveBeenCalled()
     expect(ticket.succeeded).not.toHaveBeenCalled()
     expect(ticket.abandoned).not.toHaveBeenCalled()
     expect(audit.record).toHaveBeenCalledWith({
@@ -124,7 +125,7 @@ describe('AuthService.changePassword（US-M2-02）', () => {
     const { service, ticket, sessions, audit } = setup({ stillCurrent: false })
     expect((await errorOf(service.changePassword(PRINCIPAL, REQUEST, ORIGIN))).code).toBe('CURRENT_PASSWORD_INCORRECT')
     expect(ticket.succeeded).not.toHaveBeenCalled()
-    expect(sessions.revokeAllOf).not.toHaveBeenCalled()
+    expect(sessions.revokeForPasswordChange).not.toHaveBeenCalled()
     expect(sessions.create).not.toHaveBeenCalled()
     expect(audit.record).toHaveBeenCalledOnce()
     expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'users.password_change_failed', details: { reason: 'credentials_changed' } }))

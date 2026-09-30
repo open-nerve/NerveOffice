@@ -1,5 +1,8 @@
-// 文本规则（M2-P6 复核 B2；名称里夹着看不见的字符，复验 N6）。看不见的字符一律写成 \u 转义：源码里直接出现它们，审阅时看不出来。
+// 文本规则（M2-P6 复核 B2；名称里夹着看不见的字符，复验 N6；格式字符与蒙古文元音分隔符，M2-P6 复验 建议-2、一般-5）。
+// 看不见的字符与蒙古文一律写成 \u 转义：源码里直接出现它们，审阅时看不出来。
 import { describe, expect, it } from 'vitest'
+import { folderNameSchema } from '../folders/folders.ts'
+import { spaceNameSchema } from '../spaces/spaces.ts'
 import { displayNameSchema } from '../users/users.ts'
 import { codePointLength, hasBidiControls, hasControlCharacters, hasHiddenCharacters, hasLineSeparators, hasVisibleCharacters, nameTextSchema, titleTextSchema } from './text.ts'
 
@@ -141,10 +144,39 @@ const ALLOWED_IN_NAMES: readonly (readonly [string, string])[] = [
 ]
 
 /**
- * 名字里不放行的默认可忽略字符（复验 N6）：零宽空格、韩文填充符（三种）、词连接符、BOM、软连字符、蒙古文元音分隔符、
- * 高棉文的两个固有元音、不可见的运算符（四个）、语言标签、速记格式控制符、乐谱的连梁控制符
+ * 名字里不放行的默认可忽略字符（复验 N6）：零宽空格、韩文填充符（三种）、词连接符、BOM、软连字符、蒙古文元音分隔符
+ * （不在正字法位置上时，见下）、高棉文的两个固有元音、不可见的运算符（四个）、语言标签、速记格式控制符、乐谱的连梁控制符；
+ * 以及不属于默认可忽略、同样不放行的格式字符（M2-P6 复验 建议-2）：行间注释字符（三个）、阿拉伯文的数字符号与经文结束符、
+ * 叙利亚文的缩写符、埃及圣书体的格式控制符（范围的两头）
  */
-const HIDDEN_IN_NAMES = ['\u200B', '\u3164', '\u115F', '\u1160', '\uFFA0', '\u2060', '\uFEFF', '\u00AD', '\u180E', '\u17B4', '\u17B5', '\u2061', '\u2062', '\u2063', '\u2064', '\u{E0001}', '\u{1BCA0}', '\u{1D173}']
+const HIDDEN_IN_NAMES = [
+  '\u200B',
+  '\u3164',
+  '\u115F',
+  '\u1160',
+  '\uFFA0',
+  '\u2060',
+  '\uFEFF',
+  '\u00AD',
+  '\u180E',
+  '\u17B4',
+  '\u17B5',
+  '\u2061',
+  '\u2062',
+  '\u2063',
+  '\u2064',
+  '\u{E0001}',
+  '\u{1BCA0}',
+  '\u{1D173}',
+  '\uFFF9',
+  '\uFFFA',
+  '\uFFFB',
+  '\u0600',
+  '\u06DD',
+  '\u070F',
+  '\u{13430}',
+  '\u{1343F}',
+]
 
 describe('名称里夹着看不见的字符（复验 N6）', () => {
   it.each(ALLOWED_IN_NAMES)('放行名字里确有用途的几类：%s', (_label, name) => {
@@ -171,6 +203,88 @@ describe('名称里夹着看不见的字符（复验 N6）', () => {
   it('双向控制字符也是默认可忽略的字符：说明仍是更具体的"改变文字方向"', () => {
     expect(problemOf(nameSchema, '张\u200F三')).toBe('名称不能包含改变文字方向的控制字符')
     expect(problemOf(nameSchema, '张\u2066三')).toBe('名称不能包含改变文字方向的控制字符')
+  })
+})
+
+describe('名称里的格式字符：不属于默认可忽略的同样拒绝（M2-P6 复验 建议-2）', () => {
+  /** 行间注释字符：锚点 U+FFF9、分隔 U+FFFA、结束 U+FFFB。是格式字符（Cf），但不属于默认可忽略字符；WebKit 里宽度为 0 */
+  const ANNOTATION = ['\uFFF9', '\uFFFA', '\uFFFB']
+
+  it.each(ANNOTATION.map(character => [JSON.stringify(character), character]))('单独构成整个名字：拒绝 %s', (_label, character) => {
+    expect(hasVisibleCharacters(character)).toBe(true)
+    expect(hasHiddenCharacters(character)).toBe(true)
+    expect(problemOf(nameSchema, character)).toBe('名称不能包含看不见的字符（例如零宽空格）')
+    expect(problemOf(nameSchema, character.repeat(3))).toBe('名称不能包含看不见的字符（例如零宽空格）')
+  })
+
+  it('三个连在一起、夹在字中间、放在名字末尾：都拒绝', () => {
+    for (const name of ['\uFFF9\uFFFA\uFFFB', '张\uFFF9三\uFFFA\uFFFB', '研发部\uFFFB', '\uFFF9张三'])
+      expect(problemOf(nameSchema, name), JSON.stringify(name)).toBe('名称不能包含看不见的字符（例如零宽空格）')
+  })
+
+  it('显示名、团队空间名称、文件夹名称都按这条规则', () => {
+    expect(displayNameSchema.safeParse('\uFFF9').success).toBe(false)
+    expect(displayNameSchema.safeParse('张\uFFF9三\uFFFA\uFFFB').success).toBe(false)
+    expect(spaceNameSchema.safeParse('\uFFFB').success).toBe(false)
+    expect(folderNameSchema.safeParse('\uFFFA').success).toBe(false)
+  })
+
+  it('放行的几类照旧：零宽连接符、零宽不连字、标签字符也是格式字符', () => {
+    for (const [label, name] of ALLOWED_IN_NAMES)
+      expect(hasHiddenCharacters(name), label).toBe(false)
+  })
+})
+
+/** 蒙古文字母：a U+1820、e U+1821、na U+1828、ra U+1837、ha U+182C、ta U+1832；元音分隔符 MVS U+180E、自由变体选择符 FVS1 U+180B */
+const MONGOLIAN = { a: '\u1820', e: '\u1821', na: '\u1828', ra: '\u1837', ha: '\u182C', ta: '\u1832', mvs: '\u180E', fvs1: '\u180B' }
+
+describe('名称里的蒙古文元音分隔符：只在正字法要求的位置放行（M2-P6 复验 一般-5）', () => {
+  const { a, e, na, ra, ha, ta, mvs, fvs1 } = MONGOLIAN
+
+  it.each([
+    ['nar-a（"太阳"，名字"娜拉"的蒙古文写法）', `${na}${a}${ra}${mvs}${a}`],
+    ['qar-a（"黑"）', `${ha}${a}${ra}${mvs}${a}`],
+    ['词尾的 e：ter-e', `${ta}${e}${ra}${mvs}${e}`],
+    ['词尾的元音后面跟着自由变体选择符', `${na}${a}${ra}${mvs}${a}${fvs1}`],
+    ['与汉字、空格混排', `娜拉 ${na}${a}${ra}${mvs}${a}`],
+  ])('前面是蒙古文字母、紧跟着词尾的 a 或 e：放行，%s', (_label, name) => {
+    expect(hasHiddenCharacters(name)).toBe(false)
+    expect(nameSchema.parse(name)).toBe(name)
+    expect(displayNameSchema.parse(name)).toBe(name)
+  })
+
+  it.each([
+    ['夹在汉字之间', `张${mvs}三`],
+    ['夹在拉丁字母之间', `Ali${mvs}ce`],
+    ['在名字开头、后面是 a', `${mvs}${a}`],
+    ['在蒙古文字母之后、名字末尾', `${na}${a}${ra}${mvs}`],
+    ['后面不是 a、e', `${na}${a}${ra}${mvs}${na}`],
+    ['后面是拉丁字母 a', `${na}${a}${ra}${mvs}a`],
+    ['前面是汉字、后面是 a', `张${mvs}${a}`],
+    ['前面是自由变体选择符（不是字母）', `${na}${a}${ra}${fvs1}${mvs}${a}`],
+    ['前面是蒙古文数字', `\u1810${mvs}${a}`],
+    ['连着两个', `${na}${a}${ra}${mvs}${mvs}${a}`],
+  ])('其他位置照旧拒绝：%s', (_label, name) => {
+    expect(hasHiddenCharacters(name)).toBe(true)
+    expect(problemOf(nameSchema, name)).toBe('名称不能包含看不见的字符（例如零宽空格）')
+  })
+
+  it('同一个位置上换成别的看不见的字符（零宽空格、词连接符、行间注释字符、软连字符）：照旧拒绝，放行的只有元音分隔符', () => {
+    for (const hidden of ['\u200B', '\u2060', '\uFFF9', '\u00AD'])
+      expect(problemOf(nameSchema, `${na}${a}${ra}${hidden}${a}`), JSON.stringify(hidden)).toBe('名称不能包含看不见的字符（例如零宽空格）')
+  })
+
+  it('单独一个，或者只有它与空白：说明是"只有看不见的字符"', () => {
+    expect(problemOf(nameSchema, mvs)).toBe('名称不能只有空白或看不见的字符')
+    expect(problemOf(nameSchema, `${mvs} ${mvs}`)).toBe('名称不能只有空白或看不见的字符')
+  })
+
+  it('团队空间名称、文件夹名称同样放行正字法位置上的，拒绝别处的', () => {
+    const nara = `${na}${a}${ra}${mvs}${a}`
+    expect(spaceNameSchema.parse(nara)).toBe(nara)
+    expect(folderNameSchema.parse(nara)).toBe(nara)
+    expect(spaceNameSchema.safeParse(`研${mvs}发部`).success).toBe(false)
+    expect(folderNameSchema.safeParse(`资料${mvs}`).success).toBe(false)
   })
 })
 

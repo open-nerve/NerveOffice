@@ -7,8 +7,10 @@ import { bytea, lengthBetween, oneOf, stringLiteral } from '../common/index.ts'
 import { users } from '../users/index.ts'
 
 /**
- * 会话被撤销的原因：退出；同一个浏览器重新登录时换掉原来的会话；账户停用；修改密码（本人的其他会话）；
- * 重置密码（签发与完成时）。新增取值时同时用迁移更新 CHECK 约束
+ * 会话被撤销的原因：退出（logout）；换成了新的会话（replaced：同一个浏览器重新登录时原来的会话，修改密码时当前这条，
+ * 这个浏览器随即拿到新的 Cookie）；账户停用（disabled）；修改密码时本人在别的设备上的会话（password_changed）；
+ * 重置密码（password_reset，签发与完成时）。只有 replaced 的旧 Cookie 再来请求时不清除 Cookie（auth 的 SessionService）。
+ * 新增取值时同时用迁移更新 CHECK 约束
  */
 export const SESSION_REVOKE_REASONS = ['logout', 'replaced', 'disabled', 'password_changed', 'password_reset'] as const
 export type SessionRevokeReason = (typeof SESSION_REVOKE_REASONS)[number]

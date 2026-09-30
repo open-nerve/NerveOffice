@@ -17,8 +17,9 @@ import { SessionService } from './session.service.ts'
  * 认证（全局守卫，默认拒绝，P3 设计 §3.5）：除了标了 @Public() 的接口，都要求有效的会话。
  * - 没有会话 Cookie：UNAUTHENTICATED；
  * - 带着会话 Cookie，但会话无效（过期、撤销、账户不可用）：SESSION_EXPIRED，并清除 Cookie；账户不可用时会话一并撤销。
- *   例外（复验 N3）：会话是因为换令牌（修改密码、同一个浏览器重新登录）而撤销的，仍回 SESSION_EXPIRED，但不清除 Cookie：
- *   换令牌之前发出、之后才处理的请求，响应晚于新的 Cookie 到达时，清除会把新的删掉，本人随即掉线；
+ *   例外（复验 N3）：会话是因为换令牌（同一个浏览器重新登录、在这个浏览器里修改密码：原因 replaced）而撤销的，
+ *   仍回 SESSION_EXPIRED，但不清除 Cookie：换令牌之前发出、之后才处理的请求，响应晚于新的 Cookie 到达时，清除会把新的删掉，
+ *   本人随即掉线。修改密码时别的设备上的会话（password_changed）照常清除（M2-P6 复验 一般-3）；
  * - 标了 @SystemAdminOnly() 的接口，登录的不是系统管理员：PERMISSION_DENIED（M2-P1）。
  * 守卫排在处理器的在途计数之前：这里的数据库访问要短（按摘要与主键各查一次，间隔超过 1 分钟时顺延一次，P2 交接单；
  * 会话无效时另按摘要查一次撤销的原因，这条路径本来就少见）。
