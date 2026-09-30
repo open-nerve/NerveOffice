@@ -1,5 +1,5 @@
 // 审计（P2 设计 §3.8）：经真实应用写入、只追加由数据库保证、CHECK 约束兜底、与业务写入同一个事务。
-import type { AuditOrigin } from '@nerve-office/api'
+import type { AuditEvent, AuditOrigin } from '@nerve-office/api'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import { AuditModule, AuditService, Public, RequestOrigin, TransactionRunner } from '@nerve-office/api'
@@ -25,7 +25,7 @@ class AuditProbeController {
       actor: { type: 'user', id: USER_ID },
       target: { type: 'document', id: DOCUMENT_ID },
       origin,
-      details: { title: '周报' },
+      details: { revision: 1, folderId: null },
     })
   }
 }
@@ -67,9 +67,9 @@ async function rows(where = 'true'): Promise<AuditRow[]> {
 describe('审计事件', () => {
   it('经 HTTP 写入：动作、操作者、对象、来源（请求标识与客户端地址）、数据库时间', async () => {
     const before = await database.query(async client => (await client.query<{ now: Date }>('SELECT now()')).rows[0]?.now)
-    const response = await fetch(`${app.baseUrl}/api/__test/audit`, { method: 'POST', headers: { 'x-request-id': 'audit-req-1', 'origin': TEST_PUBLIC_ORIGIN } })
+    const response = await fetch(`${app.baseUrl}/api/__test/audit`, { method: 'POST', headers: { origin: TEST_PUBLIC_ORIGIN } })
     expect(response.status).toBe(201)
-    const [row] = await rows('request_id = \'audit-req-1\'')
+    const [row] = await rows(`request_id = '${response.headers.get('x-request-id') ?? ''}'`)
     expect(row).toMatchObject({
       action: 'documents.created',
       actor_type: 'user',
@@ -78,21 +78,31 @@ describe('审计事件', () => {
       target_id: DOCUMENT_ID,
       source: 'http',
       client_ip: '127.0.0.1',
-      details: { title: '周报' },
+      details: { revision: 1, folderId: null },
     })
     // 主键是 PostgreSQL 18 的 uuidv7()（第 13 位是版本号 7），时间取自数据库
     expect(row?.id).toMatch(/^[\da-f]{8}-[\da-f]{4}-7[\da-f]{3}-/)
     expect(row?.occurred_at.getTime()).toBeGreaterThanOrEqual(before?.getTime() ?? Number.POSITIVE_INFINITY)
   })
 
+  it('请求标识是服务端自己生成的：客户端带来的 X-Request-Id 不进审计（M2-P6 复核 C2），只在日志里另记 clientRequestId', async () => {
+    const response = await fetch(`${app.baseUrl}/api/__test/audit`, { method: 'POST', headers: { 'x-request-id': 'forged-trace-1', 'origin': TEST_PUBLIC_ORIGIN } })
+    expect(response.status).toBe(201)
+    const requestId = response.headers.get('x-request-id') ?? ''
+    expect(requestId).toMatch(/^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/)
+    expect(await rows('request_id = \'forged-trace-1\'')).toEqual([])
+    expect(await rows(`request_id = '${requestId}'`)).toHaveLength(1)
+    expect(app.logs.entries().find(entry => entry.requestId === requestId && entry.msg === '请求完成')).toMatchObject({ clientRequestId: 'forged-trace-1' })
+  })
+
   it('命令行来源：没有请求标识与客户端地址', async () => {
-    await app.runtime.get(AuditService).record({ action: 'users.admin_initialized', actor: { type: 'system' }, origin: { source: 'cli' } })
-    expect(await rows('action = \'users.admin_initialized\'')).toMatchObject([{ actor_type: 'system', actor_id: null, source: 'cli', request_id: null, client_ip: null, details: {} }])
+    await app.runtime.get(AuditService).record({ action: 'users.admin_initialized', actor: { type: 'system' }, origin: { source: 'cli' }, details: { username: 'root' } })
+    expect(await rows('action = \'users.admin_initialized\'')).toMatchObject([{ actor_type: 'system', actor_id: null, source: 'cli', request_id: null, client_ip: null, details: { username: 'root' } }])
   })
 
   it('事件不合法时直接抛出，不写入', async () => {
     const count = (await rows()).length
-    await expect(app.runtime.get(AuditService).record({ action: 'documents.created', actor: { type: 'user', id: '42' }, origin: { source: 'cli' } })).rejects.toThrow()
+    await expect(app.runtime.get(AuditService).record({ action: 'documents.created', actor: { type: 'user', id: '42' }, origin: { source: 'cli' }, details: { revision: 1, folderId: null } })).rejects.toThrow()
     expect(await rows()).toHaveLength(count)
   })
 
@@ -133,10 +143,19 @@ describe('审计事件', () => {
   })
 
   it('每个登记的审计动作都能写入：contracts 的枚举与数据库的 CHECK 约束一致', async () => {
-    const audit = app.runtime.get(AuditService)
-    for (const action of AUDIT_ACTIONS)
-      await audit.record({ action, actor: { type: 'system' }, origin: { source: 'cli' } })
+    // 直接写库核对 CHECK 约束：明细的结构由 contracts 的单元测试核对（每个动作的明细各不相同）
+    await database.query(async (client) => {
+      for (const action of AUDIT_ACTIONS)
+        await client.query('INSERT INTO audit_events (action, actor_type, source) VALUES ($1, \'system\', \'cli\')', [action])
+    })
     const written = new Set((await rows()).map(row => row.action))
     expect(AUDIT_ACTIONS.filter(action => !written.has(action))).toEqual([])
+  })
+
+  it('明细不符合这个动作的结构（例如文档改名带着标题）：直接抛出，不写入（M2-P6 复核 M-1）', async () => {
+    const count = (await rows()).length
+    const renamed = { action: 'documents.renamed', actor: { type: 'system' }, origin: { source: 'cli' }, details: { spaceId: DOCUMENT_ID, folderId: null, from: '周报', to: '月报' } }
+    await expect(app.runtime.get(AuditService).record(renamed as unknown as AuditEvent)).rejects.toThrow()
+    expect(await rows()).toHaveLength(count)
   })
 })

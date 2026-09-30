@@ -14,7 +14,6 @@ function entry(index: number, overrides: Partial<ExpiredTrashEntry> = {}): Expir
     id: `0199a2c4-0000-7000-8000-00000000000${index}`,
     spaceId: '0199a2c4-0000-7000-8000-0000000000a1',
     kind: 'document',
-    title: `周报 ${index}`,
     expiresAt: new Date('2026-09-28T03:00:00.000Z'),
     ...overrides,
   }
@@ -36,7 +35,7 @@ function setup(options: SetupOptions = {}) {
     listExpired: vi.fn(async (_now: Date, limit: number) => expired.slice(0, limit)),
     purgeExpired: vi.fn(async (target: ExpiredTrashEntry) => ({
       purged: true as const,
-      outcome: { objectId: target.id, kind: target.kind, title: target.title, spaceId: target.spaceId, folders: 0, documents: 1, cascadedEntryIds: [] },
+      outcome: { objectId: target.id, kind: target.kind, spaceId: target.spaceId, folders: 0, documents: 1, cascadedEntryIds: [] },
     })),
   }
   const config = { jobs: { trashPurge: { enabled: true, intervalMs: 3_600_000, batchSize } } } as AppConfig
@@ -83,7 +82,7 @@ describe('TrashPurgeJob.runOnce', () => {
     const expired = [entry(1), entry(2), entry(3)]
     const { job, trash, error } = setup({ expired })
     const failure = new Error('永久删除时数据库报错')
-    trash.purgeExpired.mockImplementationOnce(async target => ({ purged: true as const, outcome: { objectId: target.id, kind: target.kind, title: target.title, spaceId: target.spaceId, folders: 0, documents: 1, cascadedEntryIds: [] } }))
+    trash.purgeExpired.mockImplementationOnce(async target => ({ purged: true as const, outcome: { objectId: target.id, kind: target.kind, spaceId: target.spaceId, folders: 0, documents: 1, cascadedEntryIds: [] } }))
     trash.purgeExpired.mockImplementationOnce(async () => {
       throw failure
     })

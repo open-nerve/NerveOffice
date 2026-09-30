@@ -5,12 +5,14 @@ import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import { errorResponseSchema, inspectLinkResponseSchema, invitationListResponseSchema, invitationSchema, issuedInvitationSchema, issuedPasswordResetSchema, sessionResponseSchema } from '@nerve-office/contracts'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
+import { raceAgainstHeldLock } from '../support/held-lock.ts'
 import { linkInvalidReasonOf, postPublic, tokenDigest, tokenOf } from '../support/links.ts'
+import { requestIdOf } from '../support/request-id.ts'
 import { asUser, cookieValue, login, SESSION_COOKIE, sessionSetCookie } from '../support/session-client.ts'
 
 let database: TestDatabase
@@ -34,15 +36,11 @@ async function codeOf(response: Response): Promise<string> {
   return parseExact(errorResponseSchema, await response.json()).error.code
 }
 
-async function invite(username: string, displayName = username, requestId?: string) {
-  const response = await asUser(app.baseUrl, adminSession, '/api/admin/invitations', {
-    method: 'POST',
-    body: { username, displayName },
-    headers: requestId === undefined ? {} : { 'x-request-id': requestId },
-  })
+async function invite(username: string, displayName = username) {
+  const response = await asUser(app.baseUrl, adminSession, '/api/admin/invitations', { method: 'POST', body: { username, displayName } })
   expect(response.status, await response.clone().text()).toBe(201)
   const issued = parseExact(issuedInvitationSchema, await response.json())
-  return { ...issued, token: tokenOf(issued.url) }
+  return { ...issued, token: tokenOf(issued.url), requestId: requestIdOf(response) }
 }
 
 async function inspect(token: string): Promise<Response> {
@@ -62,15 +60,27 @@ async function auditRows(where: string, values: unknown[]) {
 
 describe('US-M2-01 邀请注册：签发与接受', () => {
   it('签发：链接是 <公开地址>/invite#<令牌>，库里只有令牌的摘要；记审计（对象是邀请，details 只有登录名）', async () => {
-    const issued = await invite('amy', '艾米', 'invite-amy')
+    const issued = await invite('amy', '艾米')
     expect(issued.url).toBe(`http://127.0.0.1:4100/invite#${issued.token}`)
     expect(issued.token).toMatch(/^[\w-]{43}$/)
     expect(issued.invitation).toMatchObject({ username: 'amy', displayName: '艾米', status: 'pending', createdBy: { id: admin.id, username: 'root' } })
     const [row] = await database.query(async client => (await client.query<{ token_hash: Buffer }>('SELECT token_hash FROM auth_invitations WHERE id = $1', [issued.invitation.id])).rows)
     expect(row?.token_hash.equals(tokenDigest(issued.token))).toBe(true)
-    expect(await auditRows('request_id = $1', ['invite-amy'])).toEqual([
+    expect(await auditRows('request_id = $1', [issued.requestId])).toEqual([
       { action: 'users.invited', actor_type: 'user', actor_id: admin.id, target_type: 'invitation', target_id: issued.invitation.id, details: { username: 'amy' } },
     ])
+  })
+
+  it('7 天内有效（M2 总设计 §2.1 第 2 条，M2-P6 复核 S-2）：签发时到期时间离现在约 168 小时，库里按数据库时间算', async () => {
+    const issued = await invite('seven-days')
+    const hours = (Date.parse(issued.invitation.expiresAt) - Date.now()) / 3_600_000
+    expect(hours).toBeGreaterThan(167.9)
+    expect(hours).toBeLessThanOrEqual(168)
+    const [row] = await database.query(async client => (await client.query<{ lifetime: number }>(
+      'SELECT extract(epoch from expires_at - created_at)::int AS lifetime FROM auth_invitations WHERE id = $1',
+      [issued.invitation.id],
+    )).rows)
+    expect(row?.lifetime).toBe(7 * 24 * 3600)
   })
 
   it('查看：只给出登录名、显示名与到期时间；接受：建成员账户与个人空间，改过的显示名生效，已经登录，记审计', async () => {
@@ -118,6 +128,9 @@ describe('US-M2-01 邀请注册：签发与接受', () => {
     const issued = await invite('eve')
     expect(await codeOf(await accept(issued.token, '伊芙', 'short'))).toBe('REQUEST_INVALID')
     expect(await codeOf(await accept(issued.token, '  ', 'a good long password'))).toBe('REQUEST_INVALID')
+    // 受邀人改的显示名同样按名称的共用规则（M2-P6 复核 B2）：只有零宽字符、带行分隔符都拒绝
+    expect(await codeOf(await accept(issued.token, String.fromCharCode(0x200B, 0x200D), 'a good long password'))).toBe('REQUEST_INVALID')
+    expect(await codeOf(await accept(issued.token, `伊${String.fromCharCode(0x2028)}芙`, 'a good long password'))).toBe('REQUEST_INVALID')
     expect((await inspect(issued.token)).status).toBe(200)
   })
 })
@@ -200,6 +213,11 @@ describe('US-M2-01 邀请注册：登录名冲突、过期、作废、重发', (
     const post = async (path: string, body?: unknown) => asUser(app.baseUrl, adminSession, path, { method: 'POST', body })
     expect(await codeOf(await post('/api/admin/invitations', { username: 'a b', displayName: '名字' }))).toBe('REQUEST_INVALID')
     expect(await codeOf(await post('/api/admin/invitations', { username: 'valid-name', displayName: '' }))).toBe('REQUEST_INVALID')
+    // 显示名按名称的共用规则（M2-P6 复核 B2）：改变文字方向的字符、只有看不见的字符都拒绝
+    const rightToLeftOverride = String.fromCharCode(0x202E)
+    const hangulFiller = String.fromCharCode(0x3164)
+    expect(await codeOf(await post('/api/admin/invitations', { username: 'valid-name', displayName: `张${rightToLeftOverride}三` }))).toBe('REQUEST_INVALID')
+    expect(await codeOf(await post('/api/admin/invitations', { username: 'valid-name', displayName: hangulFiller }))).toBe('REQUEST_INVALID')
     expect(await codeOf(await post('/api/admin/invitations', { username: 'valid-name', displayName: '名字', systemRole: 'admin' }))).toBe('REQUEST_INVALID')
     expect(await codeOf(await post('/api/admin/invitations/not-a-uuid/revoke'))).toBe('REQUEST_INVALID')
     expect(await codeOf(await post('/api/admin/invitations/not-a-uuid/reissue'))).toBe('REQUEST_INVALID')
@@ -242,12 +260,42 @@ describe('US-M2-01 邀请注册：登录名冲突、过期、作废、重发', (
 })
 
 describe('US-M2-01 邀请注册：并发、无效的令牌、访问控制', () => {
-  it('同一个令牌并发接受两次：只有一次成功，只建了一个账户', async () => {
+  it('同一个令牌并发接受两次（确定的交错，M2-P6 复核 S-5）：两次都查过令牌、都进了事务，只有一次成功，另一次 410（used），只建了一个账户', async () => {
     const issued = await invite('kim')
-    const [a, b] = await Promise.all([accept(issued.token, '金'), accept(issued.token, '金')])
-    expect([a.status, b.status].sort()).toEqual([200, 410])
+    // 持有这条邀请的行锁：先到的一次拿着登录名的锁在行锁上等，后到的一次在登录名的锁上等它。两次都在事务之外查过令牌（都还可用），
+    // 放开之后先到的建成账户、提交；后到的在事务里复核，才发现已经用过
+    const responses = await raceAgainstHeldLock(database, {
+      hold: async client => client.query('SELECT 1 FROM auth_invitations WHERE id = $1 FOR UPDATE', [issued.invitation.id]),
+      request: async () => Promise.all([accept(issued.token, '金'), accept(issued.token, '金')]),
+      waiting: 2,
+      change: async () => undefined,
+    })
+    expect(responses.map(response => response.status).sort()).toEqual([200, 410])
+    const loser = responses.find(response => response.status === 410)
+    expect(loser === undefined ? undefined : await linkInvalidReasonOf(loser)).toBe('used')
     const [count] = await database.query(async client => (await client.query<{ count: number }>('SELECT count(*)::int AS count FROM users WHERE username = \'kim\'')).rows)
     expect(count).toEqual({ count: 1 })
+  })
+
+  it('同一个登录名并发签发两次（确定的交错，M2-P6 复核 S-4）：按登录名的锁排队，一次 201、另一次 409 USERNAME_TAKEN，不是 500', async () => {
+    // 持有签发人账户行的 FOR UPDATE：先到的签发拿着登录名的锁、写邀请时在外键检查上等；后到的在登录名的锁上等它。
+    // 没有登录名的锁时，两次都查过"没有待接受的邀请"才写入，后写的一次撞上部分唯一索引，变成 500
+    const responses = await raceAgainstHeldLock(database, {
+      hold: async client => client.query('SELECT 1 FROM users WHERE id = $1 FOR UPDATE', [admin.id]),
+      request: async () => Promise.all([
+        asUser(app.baseUrl, adminSession, '/api/admin/invitations', { method: 'POST', body: { username: 'twin-issue', displayName: '同时签发' } }),
+        asUser(app.baseUrl, adminSession, '/api/admin/invitations', { method: 'POST', body: { username: 'twin-issue', displayName: '同时签发' } }),
+      ]),
+      waiting: 2,
+      change: async () => undefined,
+    })
+    expect(responses.map(response => response.status).sort()).toEqual([201, 409])
+    const taken = responses.find(response => response.status === 409)
+    expect(taken === undefined ? undefined : await codeOf(taken)).toBe('USERNAME_TAKEN')
+    const [open] = await database.query(async client => (await client.query<{ count: number }>(
+      'SELECT count(*)::int AS count FROM auth_invitations WHERE username = \'twin-issue\' AND accepted_at IS NULL AND revoked_at IS NULL',
+    )).rows)
+    expect(open).toEqual({ count: 1 })
   })
 
   it('没有这个令牌、格式不对：410 LINK_INVALID（invalid），记审计（未登录的访问者，没有对象）', async () => {
@@ -276,38 +324,118 @@ describe('US-M2-01 邀请注册：并发、无效的令牌、访问控制', () =
   })
 })
 
-describe('US-M2-01 一次性链接的尝试限流', () => {
-  it('令牌可用就退回名额：同一个地址先查看、接受、完成若干次，再连续用错令牌，仍到第 3 次才锁定（429）；锁定期间不写审计；登录不受影响（计数分开）', async () => {
-    const limited = await createTestDatabase()
-    const limitedApp = await startTestApp({ databaseUrl: limited.url, env: { NERVE_LOGIN_IP_MAX_FAILURES: '3' } })
-    try {
-      const boss = await createAccount(limited, { username: 'boss', systemRole: 'admin' })
-      const person = await createAccount(limited, { username: 'someone' })
-      const bossSession = await login(limitedApp.baseUrl, 'boss', boss.password)
-      const invited = parseExact(issuedInvitationSchema, await (await asUser(limitedApp.baseUrl, bossSession, '/api/admin/invitations', { method: 'POST', body: { username: 'newbie', displayName: '新人' } })).json())
-      const reset = parseExact(issuedPasswordResetSchema, await (await asUser(limitedApp.baseUrl, bossSession, `/api/admin/users/${person.id}/password-reset`, { method: 'POST' })).json())
-      // 可用的尝试：比上限还多，名额都退回了（审查 A5）
-      for (let attempt = 0; attempt < 4; attempt += 1)
-        expect((await postPublic(limitedApp.baseUrl, '/api/auth/invitations/inspect', { token: tokenOf(invited.url) })).status).toBe(200)
-      expect((await postPublic(limitedApp.baseUrl, '/api/auth/invitations/accept', { token: tokenOf(invited.url), displayName: '新人', password: 'a good long password' })).status).toBe(200)
-      expect((await postPublic(limitedApp.baseUrl, '/api/auth/password-resets/complete', { token: tokenOf(reset.url), password: 'someone new password' })).status).toBe(200)
+describe('US-M2-01、US-M2-03 一次性链接的尝试限流', () => {
+  // 按地址 3 次失败就锁定：这个库只给限流的用例用，每个用例开始时清空计数
+  let limited: TestDatabase
+  let limitedApp: TestApp
+  let boss: LoggedIn
 
-      for (let attempt = 0; attempt < 2; attempt += 1)
-        expect((await postPublic(limitedApp.baseUrl, '/api/auth/invitations/inspect', { token: 'B'.repeat(43) })).status).toBe(410)
-      const third = await postPublic(limitedApp.baseUrl, '/api/auth/invitations/inspect', { token: 'B'.repeat(43) })
-      expect(third.status).toBe(429)
-      expect(third.headers.get('retry-after')).not.toBeNull()
-      const rejectedCount = async () => limited.query(async client => (await client.query<{ count: number }>('SELECT count(*)::int AS count FROM audit_events WHERE action = \'auth.link_rejected\'')).rows[0]?.count)
-      expect(await rejectedCount()).toBe(3)
-      expect((await postPublic(limitedApp.baseUrl, '/api/auth/invitations/inspect', { token: 'B'.repeat(43) })).status).toBe(429)
-      expect((await postPublic(limitedApp.baseUrl, '/api/auth/password-resets/complete', { token: 'B'.repeat(43), password: 'whatever long password' })).status).toBe(429)
-      // 锁定期间只记日志，不写审计（审查 A5）
-      expect(await rejectedCount()).toBe(3)
-      expect((await postPublic(limitedApp.baseUrl, '/api/auth/login', { username: 'someone', password: 'someone new password' })).status).toBe(200)
+  beforeAll(async () => {
+    limited = await createTestDatabase()
+    limitedApp = await startTestApp({ databaseUrl: limited.url, env: { NERVE_LOGIN_IP_MAX_FAILURES: '3' } })
+    const account = await createAccount(limited, { username: 'boss', systemRole: 'admin' })
+    boss = await login(limitedApp.baseUrl, 'boss', account.password)
+  })
+
+  beforeEach(async () => {
+    await limited.query(async client => client.query('DELETE FROM auth_login_throttles'))
+  })
+
+  afterAll(async () => {
+    await limitedApp.close()
+    await limited.drop()
+  })
+
+  async function rejectedCount(purpose: string): Promise<number> {
+    return limited.query(async client => (await client.query<{ count: number }>(
+      'SELECT count(*)::int AS count FROM audit_events WHERE action = \'auth.link_rejected\' AND details->>\'purpose\' = $1',
+      [purpose],
+    )).rows[0]?.count ?? 0)
+  }
+
+  async function issueInvitation(username: string): Promise<string> {
+    const response = await asUser(limitedApp.baseUrl, boss, '/api/admin/invitations', { method: 'POST', body: { username, displayName: username } })
+    expect(response.status, await response.clone().text()).toBe(201)
+    return tokenOf(parseExact(issuedInvitationSchema, await response.json()).url)
+  }
+
+  async function issueReset(username: string): Promise<string> {
+    const person = await createAccount(limited, { username })
+    const response = await asUser(limitedApp.baseUrl, boss, `/api/admin/users/${person.id}/password-reset`, { method: 'POST' })
+    expect(response.status, await response.clone().text()).toBe(201)
+    return tokenOf(parseExact(issuedPasswordResetSchema, await response.json()).url)
+  }
+
+  it('令牌可用就退回名额：同一个地址先查看、接受、完成若干次，再连续用错令牌，仍到第 3 次才锁定（429）；锁定期间不写审计；登录不受影响（计数分开）', async () => {
+    const invitation = await issueInvitation('newbie')
+    const reset = await issueReset('someone')
+    // 可用的尝试：比上限还多，名额都退回了（审查 A5）
+    for (let attempt = 0; attempt < 4; attempt += 1)
+      expect((await postPublic(limitedApp.baseUrl, '/api/auth/invitations/inspect', { token: invitation })).status).toBe(200)
+    expect((await postPublic(limitedApp.baseUrl, '/api/auth/invitations/accept', { token: invitation, displayName: '新人', password: 'a good long password' })).status).toBe(200)
+    expect((await postPublic(limitedApp.baseUrl, '/api/auth/password-resets/complete', { token: reset, password: 'someone new password' })).status).toBe(200)
+
+    const before = await rejectedCount('invitation')
+    for (let attempt = 0; attempt < 2; attempt += 1)
+      expect((await postPublic(limitedApp.baseUrl, '/api/auth/invitations/inspect', { token: 'B'.repeat(43) })).status).toBe(410)
+    const third = await postPublic(limitedApp.baseUrl, '/api/auth/invitations/inspect', { token: 'B'.repeat(43) })
+    expect(third.status).toBe(429)
+    expect(third.headers.get('retry-after')).not.toBeNull()
+    expect(await rejectedCount('invitation')).toBe(before + 3)
+    expect((await postPublic(limitedApp.baseUrl, '/api/auth/invitations/inspect', { token: 'B'.repeat(43) })).status).toBe(429)
+    expect((await postPublic(limitedApp.baseUrl, '/api/auth/password-resets/complete', { token: 'B'.repeat(43), password: 'whatever long password' })).status).toBe(429)
+    // 锁定期间只记日志，不写审计（审查 A5）
+    expect(await rejectedCount('invitation')).toBe(before + 3)
+    expect((await postPublic(limitedApp.baseUrl, '/api/auth/login', { username: 'someone', password: 'someone new password' })).status).toBe(200)
+  })
+
+  // 四个公开接口各自都经限流（M2-P6 复核 S-1）：没有这个令牌算一次失败，到上限的那一次 429，锁定期间直接 429、不写审计
+  it.each([
+    ['查看邀请', '/api/auth/invitations/inspect', 'invitation', {}],
+    ['接受邀请', '/api/auth/invitations/accept', 'invitation', { displayName: '新人', password: 'a good long password' }],
+    ['查看重置链接', '/api/auth/password-resets/inspect', 'password_reset', {}],
+    ['完成重置', '/api/auth/password-resets/complete', 'password_reset', { password: 'a good long password' }],
+  ] as const)('%s：没有这个令牌的尝试计入失败，第 3 次 429；锁定期间 429 且不写审计', async (_name, path, purpose, body) => {
+    const before = await rejectedCount(purpose)
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await postPublic(limitedApp.baseUrl, path, { token: 'C'.repeat(43), ...body })
+      expect(await linkInvalidReasonOf(response)).toBe('invalid')
     }
-    finally {
-      await limitedApp.close()
-      await limited.drop()
+    const third = await postPublic(limitedApp.baseUrl, path, { token: 'C'.repeat(43), ...body })
+    expect(third.status).toBe(429)
+    expect(Number(third.headers.get('retry-after'))).toBeGreaterThan(0)
+    expect(await rejectedCount(purpose)).toBe(before + 3)
+
+    const locked = await postPublic(limitedApp.baseUrl, path, { token: 'C'.repeat(43), ...body })
+    expect(locked.status).toBe(429)
+    expect(await rejectedCount(purpose)).toBe(before + 3)
+  })
+
+  it('同一个来源反复打开过期的真实邀请链接：一直是 410（expired），不计入失败，不影响它打开有效的链接（M2-P6 复核 B3）', async () => {
+    const stale = await issueInvitation('stale-invite')
+    await limited.query(async client => client.query('UPDATE auth_invitations SET created_at = now() - interval \'8 days\', expires_at = now() - interval \'1 day\' WHERE token_hash = $1', [tokenDigest(stale)]))
+    const fresh = await issueInvitation('fresh-invite')
+    const before = await rejectedCount('invitation')
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      expect(await linkInvalidReasonOf(await postPublic(limitedApp.baseUrl, '/api/auth/invitations/inspect', { token: stale }))).toBe('expired')
+      expect(await linkInvalidReasonOf(await postPublic(limitedApp.baseUrl, '/api/auth/invitations/accept', { token: stale, displayName: '旧链接', password: 'a good long password' }))).toBe('expired')
     }
+    // 每一次仍然记审计（找到了记录）
+    expect(await rejectedCount('invitation')).toBe(before + 10)
+    expect((await postPublic(limitedApp.baseUrl, '/api/auth/invitations/inspect', { token: fresh })).status).toBe(200)
+    expect((await postPublic(limitedApp.baseUrl, '/api/auth/invitations/accept', { token: fresh, displayName: '新链接', password: 'a good long password' })).status).toBe(200)
+  })
+
+  it('同一个来源反复打开已经用过的真实重置链接：一直是 410（used），不计入失败；没有这个令牌的尝试照样计数（M2-P6 复核 B3）', async () => {
+    const used = await issueReset('used-reset')
+    expect((await postPublic(limitedApp.baseUrl, '/api/auth/password-resets/complete', { token: used, password: 'used reset new password' })).status).toBe(200)
+    for (let attempt = 0; attempt < 5; attempt += 1)
+      expect(await linkInvalidReasonOf(await postPublic(limitedApp.baseUrl, '/api/auth/password-resets/inspect', { token: used }))).toBe('used')
+    const valid = await issueReset('valid-reset')
+    expect((await postPublic(limitedApp.baseUrl, '/api/auth/password-resets/inspect', { token: valid })).status).toBe(200)
+    // 猜令牌仍然计数：两次失败之后第 3 次锁定
+    for (let attempt = 0; attempt < 2; attempt += 1)
+      expect(await linkInvalidReasonOf(await postPublic(limitedApp.baseUrl, '/api/auth/password-resets/inspect', { token: 'D'.repeat(43) }))).toBe('invalid')
+    expect((await postPublic(limitedApp.baseUrl, '/api/auth/password-resets/inspect', { token: 'D'.repeat(43) })).status).toBe(429)
   })
 })

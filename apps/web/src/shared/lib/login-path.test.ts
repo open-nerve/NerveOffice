@@ -13,6 +13,9 @@ describe('登录页的地址', () => {
     expect(loginPath('/documents?x=1')).toBe('/login?from=%2Fdocuments%3Fx%3D1')
     expect(loginPath('/', 'expired')).toBe('/login?reason=expired')
     expect(loginPath('//evil.example', 'expired')).toBe('/login?reason=expired')
+    // 修改密码的结果未知、随后登录失效了（M2-P6 复核 G-1）
+    expect(loginPath('/settings/password', 'password_changed')).toBe('/login?from=%2Fsettings%2Fpassword&reason=password_changed')
+    expect(loginPath('/', 'required')).toBe('/login')
   })
 
   it.each(['//evil.example', '/\\evil.example', '//[', 'https://evil.example', 'evil', '', '/login', '/login?from=/', '/LOGIN', '/login/'])('不安全的地址 %j 不带上，登录后去首页', (path) => {

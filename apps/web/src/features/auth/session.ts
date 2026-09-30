@@ -9,7 +9,8 @@ export const SESSION_QUERY_KEY = ['auth', 'session'] as const
 
 // 请求的元数据，交给请求缓存的全局处理（app/query-client.ts）：
 // - handlesAuthentication：这个请求自己处理"未登录"（会话、登录），全局的"回到登录页"不管它；
-// - session：这个变更开始（登录）或者结束（退出）会话。全局处理通知其他标签页；结束时整页回到登录页；
+// - session：这个变更开始（登录）、换掉（修改密码）或者结束（退出）会话。全局处理通知其他标签页；结束时整页回到登录页；
+// - expiredReason：这个请求得到"登录已过期"时，登录页给出的说明换成这个原因（修改密码的结果未知之后，M2-P6 复核 G-1）；
 // - systemAdminOnly：这个请求只给系统管理员（服务端的 @SystemAdminOnly()）。
 
 /** 查询会话：得到未登录是正常的结果，由需要登录的外层路由与登录页自己处理 */
@@ -18,6 +19,16 @@ export const HANDLES_AUTHENTICATION = { handlesAuthentication: true } as const
 export const STARTS_SESSION = { handlesAuthentication: true, session: 'starts' } as const
 /** 退出：成功，或者会话本来就不在了（401），都算退出了 */
 export const ENDS_SESSION = { session: 'ends' } as const
+/**
+ * 修改密码：成功时当前页面换成了新的会话（M2-P6 复核 B1），通知其他标签页——同一个浏览器共用 Cookie，
+ * 它们拿着的 CSRF 令牌随旧会话一起过时了。得到"未登录"时照常回到登录页（不像 STARTS_SESSION 那样自己处理）
+ */
+export const RENEWS_SESSION = { session: 'renews' } as const
+/**
+ * 同上，用在上一次提交的结果未知之后（M2-P6 复核 G-1）：这时再提交得到"登录已过期"，多半是上一次已经改好、
+ * 当前的会话随之撤销了，登录页据此提示"新密码可能已经生效"
+ */
+export const RENEWS_SESSION_AFTER_UNKNOWN = { session: 'renews', expiredReason: 'password_changed' } as const
 /**
  * 管理接口：得到 PERMISSION_DENIED，说明页面显示的系统角色已经过时（例如被别的管理员取消了），
  * 全局处理向服务端重新确认会话，管理界面随之切到无权限（M2-P1 审查 B4）

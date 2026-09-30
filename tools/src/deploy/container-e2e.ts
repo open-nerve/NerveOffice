@@ -126,6 +126,18 @@ export function staleTemporaryDirectories(names: readonly string[], isAlive: (pi
   })
 }
 
+const SERVER_REQUEST_ID = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/
+
+/**
+ * 应用给一个请求生成的请求标识（UUID）：取自响应头 X-Request-Id，或者编排网络里那次请求打印出来的一行。
+ * 审计的 request_id 就是它，客户端带来的 X-Request-Id 不进审计（M2-P6 复核 C2），所以核对地址时按它找审计记录。
+ * 不是 UUID 时不认：它要拼进查审计的 SQL
+ */
+export function serverRequestId(value: string | readonly string[] | undefined): string | undefined {
+  const text = typeof value === 'string' ? value.trim() : undefined
+  return text !== undefined && SERVER_REQUEST_ID.test(text) ? text : undefined
+}
+
 /** psql -At -F '|' 的输出（每行"请求标识|地址"）→ 请求标识到地址 */
 export function parseAuditAddresses(output: string): Map<string, string> {
   const addresses = new Map<string, string>()

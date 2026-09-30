@@ -262,11 +262,9 @@ describe('TrashService.purge', () => {
     expect(store.folders.has(folder.id)).toBe(false)
     expect(store.documents.has(document.id)).toBe(false)
     expect(store.trashEntries.size).toBe(0)
-    expect(store.audits.at(-1)).toMatchObject({
-      action: 'folders.purged',
-      target: { type: 'folder', id: folder.id },
-      details: { spaceId: TEAM_SPACE, title: '资料', trashEntryId: entryId, folders: 1, documents: 1, cascadedEntries: 0 },
-    })
+    expect(store.audits.at(-1)).toMatchObject({ action: 'folders.purged', target: { type: 'folder', id: folder.id } })
+    // 明细逐字段相等（不是 toMatchObject）：只有份数与删除单元，多出一个标题或名称都会失败（M2-P6 复核 M-1）
+    expect(store.audits.at(-1)?.details).toEqual({ spaceId: TEAM_SPACE, trashEntryId: entryId, folders: 1, documents: 1, cascadedEntries: 0 })
   })
 
   it('连带：子树里属于别的删除单元的行（文档与整棵子文件夹）一起删掉，那些单元也一起清掉（spec §4）', async () => {

@@ -20,7 +20,10 @@ export interface AttemptTicket {
   readonly lockedForSeconds: LockedForSeconds
   /** 成功：按各维度的 onSuccess 处理。与成功的写入放在同一个事务里 */
   readonly succeeded: (transaction?: Transaction) => Promise<void>
-  /** 没有真正尝试就放弃了（例如等待哈希的请求太多，DEF-015）：退回全部名额，不算失败 */
+  /**
+   * 退回全部名额，不算失败：没有真正尝试就放弃了（例如等待哈希的请求太多，DEF-015），
+   * 或者这次失败不是在猜（一次性链接找到了记录、只是过期或用过了，M2-P6 复核 B3）
+   */
   readonly abandoned: () => Promise<void>
 }
 

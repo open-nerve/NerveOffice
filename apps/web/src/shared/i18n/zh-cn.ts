@@ -70,6 +70,7 @@ const AUDIT_ACTION_NAMES: Record<AuditAction, string> = {
   'users.password_change_failed': '修改密码失败',
   'users.password_reset_issued': '签发重置链接',
   'users.password_reset_completed': '重置密码',
+  'users.password_reset_revoked': '作废重置链接',
   'users.disabled': '停用账户',
   'users.enabled': '启用账户',
   'users.system_role_changed': '变更系统角色',
@@ -149,6 +150,8 @@ export const messages = {
     submit: '登录',
     submitting: '正在登录…',
     sessionExpired: '登录已过期，请重新登录',
+    // 修改密码的结果未知、再提交时登录已经失效：多半是上一次已经改好，当前的会话随之撤销了（M2-P6 复核 G-1）
+    passwordMaybeChanged: '刚才修改密码时没能确认结果，随后登录失效了：新密码可能已经生效，请试试用新密码登录。',
     checkingSession: '正在确认登录状态…',
     logout: '退出',
     loggingOut: '正在退出…',
@@ -164,6 +167,10 @@ export const messages = {
     passwordMismatch: '两次输入的新密码不一致',
     changing: '正在修改…',
     changed: '密码已修改。你在其他设备上的登录已经退出。',
+    // 结果未知（网络中断、服务端出错、回包读不出来）：请求可能已经生效（M2-P6 复核 G-1）
+    outcomeUnknown: (reason: string) => `没能确认密码是否已经改好（${reason}）。新密码可能已经生效：可以再提交一次；如果随后被要求重新登录，请试试用新密码登录。`,
+    // 结果未知之后再提交，当前密码不对：多半是上一次已经改好了
+    maybeChangedAlready: '当前密码不正确。上一次提交可能已经把密码改好了：请试试把新密码当作当前密码；如果随后被要求重新登录，请用新密码登录。',
     username: '登录名',
     displayName: '显示名',
     goToLogin: '去登录',
@@ -230,7 +237,12 @@ export const messages = {
       resetOwnDescription: (hours: number) => `生成后，你自己的登录会立即退出，当前密码随即失效，之后用这个链接设置新密码。链接 ${hours} 小时内有效，只显示这一次，请先复制保存。`,
     },
     invitations: {
-      description: '填好登录名与显示名，生成一次性链接（7 天内有效），经受控的渠道发给本人。',
+      // 有效期来自 contracts 的常量（INVITATION_LIFETIME_DAYS），界面不写死天数（M2-P6 复核 S-2）
+      description: (days: number) => `填好登录名与显示名，生成一次性链接（${days} 天内有效），经受控的渠道发给本人。`,
+      // 签发的结果未知：邀请可能已经建好，链接却丢了，只能重新生成（M2-P6 复核 G-2）
+      issueOutcomeUnknown: (reason: string) => `没能确认邀请是否已经生成（${reason}）。如果已经生成，链接不能再次显示：请在下面的列表里找到这个登录名，点"重新生成"得到新的链接（原来的随即作废）；列表里没有时，可以再生成一次。`,
+      // 结果未知之后，同一个登录名再签发得到"已被占用"：多半就是刚才那一次
+      issueRetryTaken: '这个登录名已有待接受的邀请，可能就是刚才没能确认的那一次。链接不能再次显示：请在下面的列表里找到它，点"重新生成"。',
       username: '登录名',
       displayName: '显示名',
       issue: '生成邀请链接',

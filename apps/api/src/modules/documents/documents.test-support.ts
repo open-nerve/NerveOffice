@@ -15,6 +15,7 @@ import type { NewTrashEntry, TrashEntriesRepository, TrashEntryRow } from './tra
 import type { WriteAccessRevocation, WriteAccessScope } from './write-access.ts'
 import { FOLDER_LIST_MAX_ITEMS, TRASH_RETENTION_DAYS } from '@nerve-office/contracts'
 import { vi } from 'vitest'
+import { parseAuditEvent } from '../audit/index.ts'
 import { EffectiveAccessPolicy } from './document-access-policy.ts'
 
 export const ALICE = '0199a2c4-0000-7000-8000-00000000000a'
@@ -449,8 +450,10 @@ export class FakeStore {
 
   /** 真实的访问策略 */
   readonly policy = new EffectiveAccessPolicy(this.spaces as unknown as SpacesService)
+  /** 与真实的 AuditService 一样按严格的结构校验（明细多一个键，例如标题，就抛出，M2-P6 复核 M-1），记下原样的事件 */
   readonly audit = {
     record: vi.fn(async (event: AuditEvent) => {
+      parseAuditEvent(event)
       this.audits.push(event)
     }),
   }

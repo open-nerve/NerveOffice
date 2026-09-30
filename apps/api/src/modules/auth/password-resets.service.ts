@@ -1,4 +1,4 @@
-import type { CompletePasswordResetRequest, InspectLinkResponse, IssuedPasswordReset } from '@nerve-office/contracts'
+import type { AuditDetailsOf, CompletePasswordResetRequest, InspectLinkResponse, IssuedPasswordReset } from '@nerve-office/contracts'
 import type { AuditEvent, AuditOrigin } from '../audit/index.ts'
 import type { AppConfig } from '../config/index.ts'
 import type { Transaction } from '../database/index.ts'
@@ -56,7 +56,7 @@ export class PasswordResetsService {
 
   /**
    * 签发：账户不存在 NOT_FOUND，已停用 ACCOUNT_DISABLED。一个事务里：复核操作者（系统管理员签发时，复验 N3）、
-   * 锁住账户行并复核、作废这个账户未用的旧重置、新建、把密码换成不可用的哈希（旧密码随即失效，审查 A7）、
+   * 锁住账户行并复核、作废这个账户未用的旧重置（记审计，M2-P6 复核 C3）、新建、把密码换成不可用的哈希（旧密码随即失效，审查 A7）、
    * 撤销全部会话（原因 password_reset）、记审计。并发的签发在账户行上排队，后一个作废前一个（审查 A2）。
    * actor 是签发的系统管理员，运维命令签发时是系统
    */
@@ -72,7 +72,7 @@ export class PasswordResetsService {
       if (actor.type === 'user')
         await this.users.lockActingAdmin(actor.id, transaction)
       requireIssuable(await this.users.lockAccount(userId, transaction))
-      await this.repository.revokeOpenOfUser(userId, transaction)
+      await this.revokeOpen(actor, userId, 'reissued', origin, transaction)
       const created = await this.repository.insert({
         userId,
         tokenHash: digest,
@@ -81,7 +81,13 @@ export class PasswordResetsService {
       }, transaction)
       await this.users.resetPassword(userId, unusableHash, transaction)
       await this.sessions.revokeAllOf(userId, 'password_reset', { transaction })
-      await this.audit.record({ action: 'users.password_reset_issued', actor, target: { type: 'user', id: userId }, origin }, { transaction })
+      await this.audit.record({
+        action: 'users.password_reset_issued',
+        actor,
+        target: { type: 'user', id: userId },
+        origin,
+        details: { passwordResetId: created.id },
+      }, { transaction })
       return created
     })
     return { url: oneTimeLinkUrl(this.config.http.publicOrigin, 'password_reset', token), expiresAt: record.expiresAt.toISOString() }
@@ -95,9 +101,25 @@ export class PasswordResetsService {
     return { ...await this.issue({ type: 'system' }, account.id, { source: 'cli' }), userId: account.id }
   }
 
-  /** 停用账户时（admin 模块在同一个事务里调用，已锁住账户行）：作废这个人未用的重置 */
-  async revokeOpenOf(userId: string, transaction: Transaction): Promise<void> {
-    await this.repository.revokeOpenOfUser(userId, transaction)
+  /** 停用账户时（admin 模块在同一个事务里调用，已锁住账户行）：作废这个人未用的重置，记审计（M2-P6 复核 C3） */
+  async revokeOpenOf(actor: AuditEvent['actor'], userId: string, origin: AuditOrigin, transaction: Transaction): Promise<void> {
+    await this.revokeOpen(actor, userId, 'account_disabled', origin, transaction)
+  }
+
+  /**
+   * 作废这个账户未用的重置，每作废一条记一条 users.password_reset_revoked（对象是这个账户，明细是重置的 id 与原因），
+   * 与邀请的作废同一个做法：签发与完成都记了，作废也要记，追溯链上才看得出旧链接是什么时候、因为什么失效的
+   */
+  private async revokeOpen(actor: AuditEvent['actor'], userId: string, reason: AuditDetailsOf<'users.password_reset_revoked'>['reason'], origin: AuditOrigin, transaction: Transaction): Promise<void> {
+    for (const passwordResetId of await this.repository.revokeOpenOfUser(userId, transaction)) {
+      await this.audit.record({
+        action: 'users.password_reset_revoked',
+        actor,
+        target: { type: 'user', id: userId },
+        origin,
+        details: { passwordResetId, reason },
+      }, { transaction })
+    }
   }
 
   /** 公开：用令牌查看，只给出登录名与显示名；账户已停用的按作废处理 */
@@ -114,7 +136,8 @@ export class PasswordResetsService {
   /**
    * 公开：设置新密码。先查令牌再算哈希，都在事务之外；然后在一个事务里：先锁账户行、再锁重置行，复核账户仍然有效、
    * 重置仍然可用（审查 A2），退回限流的名额、更新密码、标记已使用、撤销这个人的全部会话、新建本次的会话、记审计。
-   * 复核不通过（查令牌之后被用过、作废、账户停用）：事务之外按一次失败处理，记审计，锁定时 429（审查 A10）
+   * 复核不通过（查令牌之后被用过、作废、账户停用）：事务之外交给 LinkAttempts.rejected，记审计（审查 A10）；
+   * 找到了记录、只是不能用，不计入尝试的失败（M2-P6 复核 B3）
    */
   async complete(token: string, request: CompletePasswordResetRequest, origin: HttpOrigin, previousSessionToken: string | undefined): Promise<CompletedReset> {
     const ticket = await this.attempts.admit(origin)
@@ -138,7 +161,13 @@ export class PasswordResetsService {
       if (previousSessionToken !== undefined)
         await this.sessions.replace(previousSessionToken, transaction)
       const session = await this.sessions.create(account.id, transaction)
-      await this.audit.record({ action: 'users.password_reset_completed', actor: { type: 'user', id: account.id }, target: { type: 'user', id: account.id }, origin }, { transaction })
+      await this.audit.record({
+        action: 'users.password_reset_completed',
+        actor: { type: 'user', id: account.id },
+        target: { type: 'user', id: account.id },
+        origin,
+        details: { passwordResetId: record.id },
+      }, { transaction })
       return { done: true, value: { user: account, sessionToken: session.token } }
     })
     if (!outcome.done)

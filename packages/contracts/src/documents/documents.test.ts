@@ -89,6 +89,14 @@ describe('新建文档的请求', () => {
     expect(documentTitleSchema.safeParse('周\n报').success).toBe(false)
   })
 
+  it('按标题的共用规则（M2-P6 复核 B2）：原样保存（不做 NFC 归一）；拒绝改变文字方向的字符与换行符；不能只有看不见的字符', () => {
+    expect(documentTitleSchema.parse('Jose\u0301')).toBe('Jose\u0301')
+    expect(documentTitleSchema.safeParse('报告\u202Efdp.exe').success).toBe(false)
+    expect(documentTitleSchema.safeParse('周\u2028报').success).toBe(false)
+    expect(documentTitleSchema.safeParse('\u200B\uFEFF\u2060').success).toBe(false)
+    expect(documentTitleSchema.parse('\u0645\u062D\u0645\u062F \u{1F44D}\u{1F3FD}')).toBe('\u0645\u062D\u0645\u062F \u{1F44D}\u{1F3FD}')
+  })
+
   it('每种类型都有默认标题与档案', () => {
     for (const type of DOCUMENT_TYPES) {
       expect(documentTitleSchema.parse(DEFAULT_DOCUMENT_TITLES[type])).toBe(DEFAULT_DOCUMENT_TITLES[type])

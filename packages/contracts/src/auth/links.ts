@@ -9,8 +9,9 @@ import { displayNameSchema, newPasswordSchema } from '../users/users.ts'
 export const ONE_TIME_LINK_PURPOSES = ['invitation', 'password_reset'] as const
 export type OneTimeLinkPurpose = (typeof ONE_TIME_LINK_PURPOSES)[number]
 
-/** 邀请的有效期：7 天（M2 总设计 §2.1） */
-export const INVITATION_LIFETIME_HOURS = 7 * 24
+/** 邀请的有效期：7 天（M2 总设计 §2.1）。界面上的说明用天数，服务端按小时算到期时间 */
+export const INVITATION_LIFETIME_DAYS = 7
+export const INVITATION_LIFETIME_HOURS = INVITATION_LIFETIME_DAYS * 24
 /** 重置链接的有效期：24 小时 */
 export const PASSWORD_RESET_LIFETIME_HOURS = 24
 

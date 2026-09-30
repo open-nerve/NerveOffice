@@ -36,8 +36,9 @@ describe('TrashPurgeService.listExpired', () => {
     const { entry } = await deletedDocument(store, trash)
 
     expect(await service.listExpired(BEFORE, 50)).toEqual([])
+    // 不带标题：jobs 的日志与审计不经手标题（M2-P6 复核 M-1）
     expect(await service.listExpired(AFTER, 50)).toEqual([
-      { id: entry.id, spaceId: ALICE_SPACE, kind: 'document', title: '周报', expiresAt: EXPIRES_AT },
+      { id: entry.id, spaceId: ALICE_SPACE, kind: 'document', expiresAt: EXPIRES_AT },
     ])
   })
 
@@ -57,16 +58,17 @@ describe('TrashPurgeService.purgeExpired', () => {
 
     await expect(service.purgeExpired(entry)).resolves.toEqual({
       purged: true,
-      outcome: { objectId: document.id, kind: 'document', title: '周报', spaceId: ALICE_SPACE, folders: 0, documents: 1, cascadedEntryIds: [] },
+      outcome: { objectId: document.id, kind: 'document', spaceId: ALICE_SPACE, folders: 0, documents: 1, cascadedEntryIds: [] },
     })
     expect(store.documents.has(document.id)).toBe(false)
     expect(store.trashEntries.size).toBe(0)
+    // 审计只记份数与删除单元，不记标题（M2-P6 复核 M-1）
     expect(store.audits.at(-1)).toEqual({
       action: 'documents.purged',
       actor: { type: 'system' },
       target: { type: 'document', id: document.id },
       origin: { source: 'job' },
-      details: { spaceId: ALICE_SPACE, title: '周报', trashEntryId: entry.id, folders: 0, documents: 1, cascadedEntries: 0 },
+      details: { spaceId: ALICE_SPACE, trashEntryId: entry.id, folders: 0, documents: 1, cascadedEntries: 0 },
     })
   })
 

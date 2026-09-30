@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { uuidSchema } from '../ids/ids.ts'
 import { SPACE_TYPES } from '../spaces/spaces.ts'
-import { codePointLength, hasControlCharacters } from '../text/text.ts'
+import { codePointLength, titleTextSchema } from '../text/text.ts'
 
 /** 文档类型：M1 只有表格，M6 加上文字文档（doc）。新增取值时，同时用迁移更新 documents.type 的 CHECK 约束。 */
 export const DOCUMENT_TYPES = ['sheet'] as const
@@ -54,11 +54,11 @@ export function copiedDocumentTitle(sourceTitle: string): string {
   return `${base}${COPIED_TITLE_SUFFIX}`
 }
 
-/** 标题：去掉首尾空白之后 1–200 个字符，不含控制字符。 */
-export const documentTitleSchema = z.string()
-  .trim()
-  .refine(value => codePointLength(value) >= 1 && codePointLength(value) <= DOCUMENT_TITLE_MAX_LENGTH, `标题为 1–${DOCUMENT_TITLE_MAX_LENGTH} 个字符`)
-  .refine(value => !hasControlCharacters(value), '标题不能包含控制字符')
+/**
+ * 标题：标题的共用规则（text.ts 的 titleTextSchema），去掉首尾空白之后 1–200 个字符。标题是用户的内容，比名称宽：
+ * 原样保存（不做 NFC 归一），只拒绝控制字符、改变文字方向的字符与换行符，并要求不能只有看不见的字符（M2-P6 复核 B2）
+ */
+export const documentTitleSchema = titleTextSchema({ label: '标题', maxLength: DOCUMENT_TITLE_MAX_LENGTH })
 
 export const DOCUMENT_LIST_DEFAULT_LIMIT = 50
 export const DOCUMENT_LIST_MAX_LIMIT = 100

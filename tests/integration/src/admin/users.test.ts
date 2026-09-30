@@ -10,6 +10,7 @@ import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
+import { raceAgainstHeldLock } from '../support/held-lock.ts'
 import { asUser, login, postLogin } from '../support/session-client.ts'
 
 let database: TestDatabase
@@ -141,16 +142,21 @@ describe('US-M2-04 至少保留一个有效的系统管理员', () => {
     expect(await codeOf(await asAdmin(`/api/admin/users/${root.id}/system-role`, 'PUT', { systemRole: 'member' }))).toBe('LAST_ADMIN')
   })
 
-  it('两个管理员同时互相取消：只有一个成功，始终剩下一个有效的系统管理员', async () => {
+  it('两个管理员同时互相取消（确定的交错，M2-P6 复核 S-5）：只有一个成功，始终剩下一个有效的系统管理员', async () => {
     const leo = await createAccount(database, { username: 'leo', systemRole: 'admin' })
     const leoSession = await login(app.baseUrl, 'leo', leo.password)
-    // 此刻有效的管理员是 root 与 leo：同时取消对方
-    const [a, b] = await Promise.all([
-      asAdmin(`/api/admin/users/${leo.id}/system-role`, 'PUT', { systemRole: 'member' }),
-      asAdmin(`/api/admin/users/${root.id}/system-role`, 'PUT', { systemRole: 'member' }, leoSession),
-    ])
-    // 输的一方已不再是管理员：对方先提交时，它在会话守卫里被拒绝；还没提交时，它等到锁之后在锁里复核操作者（审查 A12），
-    // 同样是 403。两种都只有一个成功
+    // 此刻有效的管理员是 root 与 leo：同时取消对方。持有 system-admins 的排他锁，等两个请求都过了会话守卫、都在这把锁上等着了再放开：
+    // 这把锁要是弱成共享的（或者不取），两边会同时数到"除对方以外还有一个管理员"，一起提交，一个有效的系统管理员都不剩
+    const [a, b] = await raceAgainstHeldLock(database, {
+      hold: async client => client.query('SELECT pg_advisory_xact_lock(hashtextextended(\'nerve-office:system-admins\', 0))'),
+      request: async () => Promise.all([
+        asAdmin(`/api/admin/users/${leo.id}/system-role`, 'PUT', { systemRole: 'member' }),
+        asAdmin(`/api/admin/users/${root.id}/system-role`, 'PUT', { systemRole: 'member' }, leoSession),
+      ]),
+      waiting: 2,
+      change: async () => undefined,
+    })
+    // 两个请求都过了会话守卫：先拿到锁的一方取消了对方；输的一方拿到锁之后在锁里复核操作者（审查 A12），发现自己已不再是管理员，403
     const [winner, loser] = a.status === 200 ? [a, b] : [b, a]
     expect(winner.status).toBe(200)
     expect(loser.status).toBe(403)

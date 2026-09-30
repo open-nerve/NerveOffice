@@ -34,7 +34,8 @@ export type SessionResponse = z.infer<typeof sessionResponseSchema>
 
 /**
  * 修改密码（PUT /api/auth/password，M2-P1 设计 §3.5）：旧密码只限制长度，与登录相同；新密码按设置密码的规则。
- * 成功后本人其他地方的登录全部退出，当前会话保留。
+ * 成功后本人的全部会话撤销（包括当前这个），当前页面换成新的会话（M2-P6 复核 B1）：响应写回新的会话 Cookie，
+ * 响应体与登录相同（changePasswordResponseSchema），带着新的 CSRF 令牌。
  */
 export const changePasswordRequestSchema = z.strictObject({
   currentPassword: z.string().min(1).max(LOGIN_PASSWORD_MAX_LENGTH),
@@ -42,3 +43,8 @@ export const changePasswordRequestSchema = z.strictObject({
 })
 
 export type ChangePasswordRequest = z.infer<typeof changePasswordRequestSchema>
+
+/** 修改密码的响应：当前页面的新会话，与登录的响应相同 */
+export const changePasswordResponseSchema = sessionResponseSchema
+
+export type ChangePasswordResponse = SessionResponse

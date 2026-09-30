@@ -11,6 +11,7 @@ import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
+import { requestIdOf } from '../support/request-id.ts'
 import { asUser, login, SESSION_COOKIE, sessionSetCookie } from '../support/session-client.ts'
 
 let database: TestDatabase
@@ -95,9 +96,9 @@ describe('US-M1-02 当前会话', () => {
 
   it('认证通过的请求，请求日志带上 userId；日志里没有会话令牌与 CSRF 令牌', async () => {
     const user = await login(app.baseUrl, 'alice', alice.password)
-    const response = await asUser(app.baseUrl, user, '/api/auth/session', { headers: { 'x-request-id': 'session-log-1' } })
+    const response = await asUser(app.baseUrl, user, '/api/auth/session')
     expect(response.status).toBe(200)
-    const entry = app.logs.entries().find(log => log.requestId === 'session-log-1' && log.msg === '请求完成')
+    const entry = app.logs.entries().find(log => log.requestId === requestIdOf(response) && log.msg === '请求完成')
     expect(entry).toMatchObject({ userId: alice.id, route: '/api/auth/session', statusCode: 200 })
     const text = app.logs.text()
     expect(text).not.toContain(user.cookie.slice(`${SESSION_COOKIE}=`.length))

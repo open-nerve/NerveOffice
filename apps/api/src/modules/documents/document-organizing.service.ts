@@ -1,4 +1,4 @@
-import type { DocumentDetail } from '@nerve-office/contracts'
+import type { AuditActionDetailsInput, DocumentDetail } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { AccessibleDocument, Actor, DocumentAccess, DocumentOperation } from './document-access-policy.ts'
@@ -69,9 +69,9 @@ export class DocumentOrganizingService {
 
       let current = document
       if (command.title !== undefined && command.title !== current.title) {
-        const from = current.title
         current = await this.documents.rename(current.id, command.title, transaction)
-        await this.record('documents.renamed', actor, current, origin, { spaceId: current.spaceId, from, to: current.title }, transaction)
+        // 只记位置，不记改动前后的标题（M2 总设计 §2.1 第 5 条，M2-P6 复核 M-1）：系统管理员能查审计，却看不到别人空间里的标题
+        await this.record({ action: 'documents.renamed', details: { spaceId: current.spaceId, folderId: current.folderId } }, actor, current, origin, transaction)
       }
       if (command.folderId !== undefined) {
         const folderId = await folderIdIn(this.folders, current.spaceId, command.folderId, transaction)
@@ -183,23 +183,22 @@ export class DocumentOrganizingService {
     from: { readonly fromSpaceId: string, readonly fromFolderId: string | null },
     transaction: Transaction,
   ): Promise<void> {
-    await this.record('documents.moved', actor, moved, origin, { ...from, toSpaceId: moved.spaceId, toFolderId: moved.folderId }, transaction)
+    await this.record({ action: 'documents.moved', details: { ...from, toSpaceId: moved.spaceId, toFolderId: moved.folderId } }, actor, moved, origin, transaction)
   }
 
+  /** 动作与明细一起给出：明细按动作的严格结构（contracts 的 auditDetailsSchema） */
   private async record(
-    action: 'documents.renamed' | 'documents.moved',
+    audit: Extract<AuditActionDetailsInput, { action: 'documents.renamed' | 'documents.moved' }>,
     actor: Actor,
     document: DocumentRow,
     origin: AuditOrigin,
-    details: Readonly<Record<string, string | null>>,
     transaction: Transaction,
   ): Promise<void> {
     await this.audit.record({
-      action,
+      ...audit,
       actor: { type: 'user', id: actor.userId },
       target: { type: 'document', id: document.id },
       origin,
-      details,
     }, { transaction })
   }
 }

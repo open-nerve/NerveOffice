@@ -20,6 +20,7 @@ import {
   publicOrigin,
   publishedPortProblems,
   renderEnvFile,
+  serverRequestId,
   staleRuns,
   staleTemporaryDirectories,
 } from './container-e2e.ts'
@@ -95,6 +96,13 @@ describe('中断的运行留下的临时目录（审查 B6）', () => {
 })
 
 describe('客户端地址的核对（DEF-014）', () => {
+  it('应用给请求生成的请求标识：只认 UUID（它要拼进查审计的 SQL），取不到或不是 UUID 时为空（M2-P6 复核 C2）', () => {
+    expect(serverRequestId('0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0d')).toBe('0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0d')
+    expect(serverRequestId(' 0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0d\n')).toBe('0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0d')
+    for (const value of [undefined, '', 'client-trace-1', '\'); DROP TABLE audit_events; --', ['0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0d']])
+      expect(serverRequestId(value), JSON.stringify(value)).toBeUndefined()
+  })
+
   it('psql 的输出解析成请求标识到地址，忽略空行与没有地址的记录', () => {
     expect(parseAuditAddresses('check-host|192.168.0.1\ncheck-network|192.168.0.5\n\nno-address|\n')).toEqual(new Map([['check-host', '192.168.0.1'], ['check-network', '192.168.0.5']]))
   })

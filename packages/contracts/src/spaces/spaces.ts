@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { uuidSchema } from '../ids/ids.ts'
-import { codePointLength, hasControlCharacters } from '../text/text.ts'
+import { nameTextSchema } from '../text/text.ts'
 import { USER_STATUSES, userSummarySchema } from '../users/users.ts'
 
 /** 空间类型（00 号计划书 §5.1）：个人空间；团队空间（M2-P2）。新增取值时，同时用迁移更新 spaces.type 的 CHECK 约束。 */
@@ -21,11 +21,8 @@ export type SpaceRole = (typeof SPACE_ROLES)[number]
 /** 空间名称的上限（字符数，按码点计）。 */
 export const SPACE_NAME_MAX_LENGTH = 100
 
-/** 团队空间的名称：去掉首尾空白之后 1–100 个字符，不含控制字符。 */
-export const spaceNameSchema = z.string()
-  .trim()
-  .refine(value => codePointLength(value) >= 1 && codePointLength(value) <= SPACE_NAME_MAX_LENGTH, `名称为 1–${SPACE_NAME_MAX_LENGTH} 个字符`)
-  .refine(value => !hasControlCharacters(value), '名称不能包含控制字符')
+/** 团队空间的名称：名称的共用规则（text.ts 的 nameTextSchema），去掉首尾空白之后 1–100 个字符。 */
+export const spaceNameSchema = nameTextSchema({ label: '名称', maxLength: SPACE_NAME_MAX_LENGTH })
 
 /** 路径里的空间 id */
 export const spaceIdSchema = uuidSchema

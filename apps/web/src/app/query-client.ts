@@ -9,7 +9,7 @@ const MAX_TRANSIENT_RETRIES = 1
 export interface SessionEvents {
   /** 请求得到未登录或登录已过期（自己处理未登录的请求除外） */
   readonly unauthenticated: (reason: LoginReason) => void
-  /** 登录成功 */
+  /** 登录成功，或者当前页面换成了新的会话（修改密码，M2-P6 复核 B1）：别的标签页拿着的 CSRF 令牌随之过时 */
   readonly signedIn: () => void
   /** 退出成功，或者退出时会话已经不在了 */
   readonly signedOut: () => void
@@ -32,10 +32,21 @@ function systemAdminOnly(meta: Meta): boolean {
   return meta?.systemAdminOnly === true
 }
 
-/** 这个变更开始（登录）还是结束（退出）会话；元数据由 features/auth 的 STARTS_SESSION、ENDS_SESSION 给出 */
-function sessionTransition(meta: Meta): 'starts' | 'ends' | undefined {
+/**
+ * 这个变更开始（登录）、换掉（修改密码）还是结束（退出）会话；元数据由 features/auth 的 STARTS_SESSION、RENEWS_SESSION、
+ * ENDS_SESSION 给出
+ */
+function sessionTransition(meta: Meta): 'starts' | 'renews' | 'ends' | undefined {
   const transition = meta?.session
-  return transition === 'starts' || transition === 'ends' ? transition : undefined
+  return transition === 'starts' || transition === 'renews' || transition === 'ends' ? transition : undefined
+}
+
+/**
+ * 得到"登录已过期"时带到登录页的原因：默认 expired；修改密码的结果未知之后再提交时是 password_changed
+ * （features/auth 的 RENEWS_SESSION_AFTER_UNKNOWN，M2-P6 复核 G-1）
+ */
+function expiredReason(meta: Meta): LoginReason {
+  return meta?.expiredReason === 'password_changed' ? 'password_changed' : 'expired'
 }
 
 /**
@@ -47,14 +58,14 @@ export function createQueryClient(events: SessionEvents): QueryClient {
     if (isCsrfTokenError(error) || (isPermissionDeniedError(error) && systemAdminOnly(meta)))
       events.sessionStale()
     else if (isAuthenticationError(error) && !handlesAuthentication(meta))
-      events.unauthenticated(error.code === 'SESSION_EXPIRED' ? 'expired' : 'required')
+      events.unauthenticated(error.code === 'SESSION_EXPIRED' ? expiredReason(meta) : 'required')
   }
   return new QueryClient({
     queryCache: new QueryCache({ onError: (error, query) => onRequestError(error, query.meta) }),
     mutationCache: new MutationCache({
       onSuccess: (_data, _variables, _context, mutation) => {
         const transition = sessionTransition(mutation.meta)
-        if (transition === 'starts')
+        if (transition === 'starts' || transition === 'renews')
           events.signedIn()
         else if (transition === 'ends')
           events.signedOut()

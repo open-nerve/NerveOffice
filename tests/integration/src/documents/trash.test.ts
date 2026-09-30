@@ -537,10 +537,10 @@ describe('US-M2-09 永久删除（spec §4）', () => {
     expect(await count('SELECT count(*) FROM document_contents WHERE document_id = $1', [document.id])).toBe(0)
     expect(await count('SELECT count(*) FROM document_revisions WHERE document_id = $1', [document.id])).toBe(0)
     expect(await count('SELECT count(*) FROM trash_entries WHERE id = $1', [entryId])).toBe(0)
-    expect(await auditsOf(document.id)).toMatchObject([
-      { action: 'documents.deleted' },
-      { action: 'documents.purged', actorType: 'user', details: { spaceId, title: '周报', trashEntryId: entryId, folders: 0, documents: 1, cascadedEntries: 0 } },
-    ])
+    const audits = await auditsOf(document.id)
+    expect(audits).toMatchObject([{ action: 'documents.deleted' }, { action: 'documents.purged', actorType: 'user' }])
+    // 明细逐字段相等：只记份数与删除单元，不记标题（M2 总设计 §2.1 第 5 条，M2-P6 复核 M-1）
+    expect(audits[1]?.details).toEqual({ spaceId, trashEntryId: entryId, folders: 0, documents: 1, cascadedEntries: 0 })
   })
 
   it('连带：子树里属于别的删除单元的行一起删掉，那些单元也一起清掉，审计记下份数', async () => {

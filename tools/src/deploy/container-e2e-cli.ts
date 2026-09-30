@@ -14,7 +14,6 @@ import type { AddressInfo } from 'node:net'
 import type { CleanupStep } from './container-e2e-process.ts'
 import type { ContainerE2eSettings, ProbeResponse } from './container-e2e.ts'
 import { execFile, spawnSync } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import https from 'node:https'
 import { createServer } from 'node:net'
@@ -49,6 +48,7 @@ import {
   publicOrigin,
   publishedPortProblems,
   renderEnvFile,
+  serverRequestId,
   staleRuns,
   staleTemporaryDirectories,
 } from './container-e2e.ts'
@@ -205,21 +205,21 @@ async function checkProxiedProbes(settings: ContainerE2eSettings): Promise<strin
  * 返回发现的问题。
  */
 async function checkClientAddresses(settings: ContainerE2eSettings): Promise<string[]> {
-  const suffix = randomBytes(4).toString('hex')
-  const ids = { host: `address-check-host-${suffix}`, network: `address-check-network-${suffix}`, forged: `address-check-forged-${suffix}` }
   const origin = publicOrigin(settings)
   const body = JSON.stringify({ username: 'address-check', password: 'not the password' })
   const headers = { 'content-type': 'application/json', 'origin': origin }
   const problems: string[] = []
 
-  const hostStatus = await httpsStatus(`${origin}/api/auth/login`, { method: 'POST', headers: { ...headers, 'x-request-id': ids.host }, body })
-  if (hostStatus !== 401)
-    problems.push(`本机那次登录失败的状态码是 ${hostStatus}，期望 401`)
-  const forgedStatus = await httpsStatus(`${origin}/api/auth/login`, { method: 'POST', headers: { ...headers, 'x-request-id': ids.forged, 'x-forwarded-for': FORGED_CLIENT_ADDRESS }, body })
-  if (forgedStatus !== 401)
-    problems.push(`带着伪造的 X-Forwarded-For 那次登录失败的状态码是 ${forgedStatus}，期望 401`)
-  const script = `fetch('https://caddy/api/auth/login', { method: 'POST', headers: ${JSON.stringify({ ...headers, 'x-request-id': ids.network })}, body: ${JSON.stringify(body)} })`
-    + '.then(response => process.exit(response.status === 401 ? 0 : 1), () => process.exit(2))'
+  // 审计记的是应用自己生成的请求标识（M2-P6 复核 C2）：从每次响应的 X-Request-Id 取，再按它找审计记录
+  const host = await httpsRequest(`${origin}/api/auth/login`, { method: 'POST', headers, body })
+  if (host.status !== 401)
+    problems.push(`本机那次登录失败的状态码是 ${host.status}，期望 401`)
+  const forged = await httpsRequest(`${origin}/api/auth/login`, { method: 'POST', headers: { ...headers, 'x-forwarded-for': FORGED_CLIENT_ADDRESS }, body })
+  if (forged.status !== 401)
+    problems.push(`带着伪造的 X-Forwarded-For 那次登录失败的状态码是 ${forged.status}，期望 401`)
+  // 编排网络里那一次：把响应头里的请求标识打印在标准输出上
+  const script = `fetch('https://caddy/api/auth/login', { method: 'POST', headers: ${JSON.stringify(headers)}, body: ${JSON.stringify(body)} })`
+    + '.then(response => { console.log(response.headers.get(\'x-request-id\') ?? \'\'); process.exit(response.status === 401 ? 0 : 1) }, () => process.exit(2))'
   // 要起一个容器，是长命令：异步执行，收到信号时转给它（Codex 评审 CX12）
   const network = await runTracked(interruption, 'docker', composeArgs(settings, 'run', '--rm', '--no-deps', '-T', '-e', 'NODE_TLS_REJECT_UNAUTHORIZED=0', 'app', 'node', '-e', script), { cwd: REPO_ROOT, capture: true })
   if (interruption.interrupted())
@@ -227,14 +227,20 @@ async function checkClientAddresses(settings: ContainerE2eSettings): Promise<str
   if (network.status !== 0)
     problems.push(`编排网络里那次登录失败没有得到 401（退出码 ${String(network.status)}）：${network.stderr.trim()}`)
 
-  const audit = capture('docker', composeArgs(settings, 'exec', '-T', 'db', 'psql', '-U', 'postgres', '-d', 'nerve_office', '-At', '-F', '|', '-c', `SELECT request_id, host(client_ip) FROM audit_events WHERE request_id IN ('${ids.host}', '${ids.network}', '${ids.forged}')`))
-  const addresses = parseAuditAddresses(audit.stdout)
+  const ids = { host: serverRequestId(host.headers['x-request-id']), network: serverRequestId(network.stdout.split('\n').find(line => line.trim() !== '')), forged: serverRequestId(forged.headers['x-request-id']) }
+  const known = [ids.host, ids.network, ids.forged].filter(id => id !== undefined)
+  const audit = known.length === 0
+    ? undefined
+    : capture('docker', composeArgs(settings, 'exec', '-T', 'db', 'psql', '-U', 'postgres', '-d', 'nerve_office', '-At', '-F', '|', '-c', `SELECT request_id, host(client_ip) FROM audit_events WHERE request_id IN (${known.map(id => `'${id}'`).join(', ')})`))
+  const addresses = parseAuditAddresses(audit?.stdout ?? '')
   const caddy = capture('docker', composeArgs(settings, 'ps', '-q', 'caddy')).stdout.trim()
   const proxy = capture('docker', ['inspect', '-f', '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}', caddy]).stdout.trim().split(/\s+/).filter(address => address !== '')
-  log(`客户端地址：本机 ${addresses.get(ids.host) ?? '（没有）'}，编排网络里 ${addresses.get(ids.network) ?? '（没有）'}，本机带伪造的转发头 ${addresses.get(ids.forged) ?? '（没有）'}，Caddy ${proxy.join('、')}`)
+  const addressOf = (id: string | undefined): string | undefined => (id === undefined ? undefined : addresses.get(id))
+  const observed = { host: addressOf(ids.host), network: addressOf(ids.network), forged: addressOf(ids.forged), proxy }
+  log(`客户端地址：本机 ${observed.host ?? '（没有）'}，编排网络里 ${observed.network ?? '（没有）'}，本机带伪造的转发头 ${observed.forged ?? '（没有）'}，Caddy ${proxy.join('、')}`)
   const port = capture('docker', composeArgs(settings, 'port', 'app', '3000'))
   const published = publishedPortProblems(port.status, port.stdout)
-  return [...problems, ...published, ...clientAddressProblems({ host: addresses.get(ids.host), network: addresses.get(ids.network), forged: addresses.get(ids.forged), proxy })]
+  return [...problems, ...published, ...clientAddressProblems(observed)]
 }
 
 /** 随镜像分发的许可文件都在、都不是空的：在运行着的应用容器里量（DISTRIBUTED_LICENSE_FILES） */

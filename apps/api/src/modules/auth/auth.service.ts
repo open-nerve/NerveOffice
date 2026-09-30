@@ -117,10 +117,12 @@ export class AuthService {
    * 1. 按登录限流占名额（用户名与地址两个维度）：猜旧密码与猜登录密码按同一个计数，达到上限同样锁定登录；
    * 2. 按 id 验证旧密码，在事务之外（耗时补齐同登录）；新密码的哈希同样在事务之外；
    * 3. 在一个事务里：锁住账户行，复核旧密码验证之后没有被改过（审查 A1、A2），更新哈希、清除限流计数、
-   *    撤销本人除当前会话以外的全部会话（原因 password_changed）、记审计。
+   *    撤销本人的全部会话（原因 password_changed，**包括当前这个**）、为当前页面新建一个会话、记审计。
+   * 当前的会话令牌也换掉（M2-P6 复核 B1）：偷到 Cookie 的人不能在本人改完密码之后接着用；当前页面拿到新令牌
+   * （控制器写回 Cookie，响应里有新的 CSRF 令牌），仍然保持登录，与接受邀请、完成重置同一个做法。
    * 旧密码不对、复核不通过，都记审计 users.password_change_failed（审查 A6）。
    */
-  async changePassword(principal: Principal, request: ChangePasswordRequest, origin: HttpOrigin): Promise<void> {
+  async changePassword(principal: Principal, request: ChangePasswordRequest, origin: HttpOrigin): Promise<LoginResult> {
     const { user } = principal
     const admission = await this.throttle.admit({ username: user.username, clientIp: origin.clientIp })
     if (!admission.admitted) {
@@ -132,16 +134,18 @@ export class AuthService {
     if (credentials === undefined)
       throw await this.passwordChangeFailed(ticket, user, 'current_password_incorrect', origin)
     const passwordHash = await withHashing(ticket, this.#logger, async () => this.users.hashPassword(request.newPassword))
-    const changed = await this.transactions.run(async (transaction) => {
+    const created = await this.transactions.run(async (transaction) => {
       if (!await this.users.replacePassword(credentials, passwordHash, transaction))
-        return false
+        return undefined
       await ticket.succeeded(transaction)
-      await this.sessions.revokeAllOf(user.id, 'password_changed', { except: principal.sessionId, transaction })
+      await this.sessions.revokeAllOf(user.id, 'password_changed', { transaction })
+      const session = await this.sessions.create(user.id, transaction)
       await this.audit.record({ action: 'users.password_changed', actor: { type: 'user', id: user.id }, target: { type: 'user', id: user.id }, origin }, { transaction })
-      return true
+      return session
     })
-    if (!changed)
+    if (created === undefined)
       throw await this.passwordChangeFailed(ticket, user, 'credentials_changed', origin)
+    return { token: created.token, session: await this.describe(user, csrfTokenFor(created.token)) }
   }
 
   /**

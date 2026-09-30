@@ -155,7 +155,8 @@ describe('US-M2-07 改名与空间内移动', () => {
     const after = await stored(document.id)
     expect(after).toMatchObject({ title: '月报', write_epoch: 0, revision: 1 })
     expect(after.updated_at).toEqual(before.updated_at)
-    expect(await auditOf('documents.renamed', document.id)).toEqual([{ actor_id: amy.id, details: { spaceId, from: '周报', to: '月报' } }])
+    // 只记位置，不记改动前后的标题（M2 总设计 §2.1 第 5 条，M2-P6 复核 M-1）
+    expect(await auditOf('documents.renamed', document.id)).toEqual([{ actor_id: amy.id, details: { spaceId, folderId: null } }])
 
     await patch(amySession, document.id, { title: '月报' })
     expect(await auditOf('documents.renamed', document.id)).toHaveLength(1)

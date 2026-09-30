@@ -9,12 +9,14 @@ import { SpaceTreeRepository } from './space-tree.repository.ts'
 import { TrashEntriesRepository } from './trash-entries.repository.ts'
 import { TrashService } from './trash.service.ts'
 
-/** 到期的一个删除单元：jobs 只按 id 与所在空间逐个清理，内容与规则都在 documents 里。 */
+/**
+ * 到期的一个删除单元：jobs 只按 id 与所在空间逐个清理，内容与规则都在 documents 里。
+ * 不带标题：jobs 的日志与审计不经手标题与名称（M2-P6 复核 M-1）
+ */
 export interface ExpiredTrashEntry {
   readonly id: string
   readonly spaceId: string
   readonly kind: TrashEntryKind
-  readonly title: string
   readonly expiresAt: Date
 }
 
@@ -54,7 +56,7 @@ export class TrashPurgeService {
    */
   async listExpired(now: Date, limit: number): Promise<ExpiredTrashEntry[]> {
     const rows = await this.entries.listExpired(now, limit)
-    return rows.map(row => ({ id: row.id, spaceId: row.spaceId, kind: row.kind, title: row.title, expiresAt: row.expiresAt }))
+    return rows.map(row => ({ id: row.id, spaceId: row.spaceId, kind: row.kind, expiresAt: row.expiresAt }))
   }
 
   /**

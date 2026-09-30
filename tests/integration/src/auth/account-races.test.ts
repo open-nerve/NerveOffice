@@ -15,6 +15,7 @@ import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { raceAgainstHeldLock } from '../support/held-lock.ts'
 import { linkInvalidReasonOf, postPublic, tokenDigest, tokenOf } from '../support/links.ts'
+import { requestIdOf } from '../support/request-id.ts'
 import { asUser, login, postLogin } from '../support/session-client.ts'
 
 let database: TestDatabase
@@ -92,13 +93,13 @@ describe('US-M2-02 登录与修改密码：验证之后、提交之前的变化�
     const changed = await passwordHashOf('changed elsewhere')
     const response = await raceAgainstHeldLock(database, {
       hold: lockAccountRow(amy),
-      request: async () => postLogin(app.baseUrl, { username: 'amy', password: amy.password }, { 'x-request-id': 'race-login-amy' }),
+      request: async () => postLogin(app.baseUrl, { username: 'amy', password: amy.password }),
       change: async client => client.query(CHANGE_PASSWORD_ELSEWHERE, [changed, amy.id]),
     })
     expect(response.status).toBe(401)
     expect(await codeOf(response)).toBe('INVALID_CREDENTIALS')
     expect(await count('SELECT count(*)::int AS count FROM auth_sessions WHERE user_id = $1', [amy.id])).toBe(0)
-    expect(await one('SELECT action, target_id FROM audit_events WHERE request_id = \'race-login-amy\'', [])).toEqual({ action: 'auth.login_failed', target_id: amy.id })
+    expect(await one('SELECT action, target_id FROM audit_events WHERE request_id = $1', [requestIdOf(response)])).toEqual({ action: 'auth.login_failed', target_id: amy.id })
   })
 
   it('登录验证过密码之后，账户被停用：同样不建会话', async () => {
@@ -150,7 +151,7 @@ describe('US-M2-02 登录与修改密码：验证之后、提交之前的变化�
     const rehashed = await versionOf()
     expect(rehashed?.password_hash).not.toBe(before?.password_hash)
     expect(rehashed?.password_version).toBe(before?.password_version)
-    expect((await asUser(app.baseUrl, here, '/api/auth/password', { method: 'PUT', body: { currentPassword: eli.password, newPassword: 'eli second password' } })).status).toBe(204)
+    expect((await asUser(app.baseUrl, here, '/api/auth/password', { method: 'PUT', body: { currentPassword: eli.password, newPassword: 'eli second password' } })).status).toBe(200)
     expect((await versionOf())?.password_version).toBe((before?.password_version ?? 0) + 1)
     const token = await issuedResetToken(eli)
     expect((await versionOf())?.password_version).toBe((before?.password_version ?? 0) + 2)
@@ -176,7 +177,7 @@ describe('US-M2-02 登录与修改密码：验证之后、提交之前的变化�
       change: async () => undefined,
     })
     // 重新哈希只换编码、版本不变：修改密码照常成功。那次登录排在修改之后提交，这时密码已经改了，按凭据变了拒绝
-    expect(change.status).toBe(204)
+    expect(change.status).toBe(200)
     expect(relogin.status).toBe(401)
     expect((await postLogin(app.baseUrl, { username: 'dot', password: 'dot wants this new one' })).status).toBe(200)
   })
@@ -250,12 +251,12 @@ describe('US-M2-03 重置密码：锁的顺序与事务里的复核（审查 A2�
     const before = await passwordHashOfAccount(fay)
     const response = await raceAgainstHeldLock(database, {
       hold: lockAccountRow(fay),
-      request: async () => completeReset(token, { 'x-request-id': 'race-complete-fay' }),
+      request: async () => completeReset(token),
       change: async client => client.query('UPDATE users SET status = \'disabled\' WHERE id = $1', [fay.id]),
     })
     expect(await linkInvalidReasonOf(response)).toBe('revoked')
     expect(await passwordHashOfAccount(fay)).toBe(before)
-    expect(await one('SELECT action, actor_type, target_type, target_id, details FROM audit_events WHERE request_id = \'race-complete-fay\'', [])).toEqual({
+    expect(await one('SELECT action, actor_type, target_type, target_id, details FROM audit_events WHERE request_id = $1', [requestIdOf(response)])).toEqual({
       action: 'auth.link_rejected',
       actor_type: 'anonymous',
       target_type: 'user',
@@ -269,11 +270,11 @@ describe('US-M2-03 重置密码：锁的顺序与事务里的复核（审查 A2�
     const token = await issuedResetToken(gil)
     const response = await raceAgainstHeldLock(database, {
       hold: lockAccountRow(gil),
-      request: async () => completeReset(token, { 'x-request-id': 'race-complete-gil' }),
+      request: async () => completeReset(token),
       change: async client => client.query('UPDATE auth_password_resets SET used_at = now() WHERE token_hash = $1', [tokenDigest(token)]),
     })
     expect(await linkInvalidReasonOf(response)).toBe('used')
-    expect(await one('SELECT details FROM audit_events WHERE request_id = \'race-complete-gil\'', [])).toEqual({ details: { purpose: 'password_reset', reason: 'used' } })
+    expect(await one('SELECT details FROM audit_events WHERE request_id = $1', [requestIdOf(response)])).toEqual({ details: { purpose: 'password_reset', reason: 'used' } })
     expect(await count('SELECT count(*)::int AS count FROM auth_sessions WHERE user_id = $1', [gil.id])).toBe(0)
   })
 })
@@ -369,12 +370,12 @@ describe('US-M2-01 邀请：作废与接受的并发（审查 A9、A10）', () =
     const issued = await issuedInvitation('lea')
     const response = await raceAgainstHeldLock(database, {
       hold: async client => client.query('SELECT 1 FROM auth_invitations WHERE id = $1 FOR UPDATE', [issued.id]),
-      request: async () => postPublic(app.baseUrl, '/api/auth/invitations/accept', { token: issued.token, displayName: '莉亚', password: 'a good long password' }, { 'x-request-id': 'race-accept-lea' }),
+      request: async () => postPublic(app.baseUrl, '/api/auth/invitations/accept', { token: issued.token, displayName: '莉亚', password: 'a good long password' }),
       change: async client => client.query('UPDATE auth_invitations SET revoked_at = now(), revoked_by = $1 WHERE id = $2', [admin.id, issued.id]),
     })
     expect(await linkInvalidReasonOf(response)).toBe('revoked')
     expect(await count('SELECT count(*)::int AS count FROM users WHERE username = \'lea\'', [])).toBe(0)
-    expect(await one('SELECT action, target_type, target_id, details FROM audit_events WHERE request_id = \'race-accept-lea\'', [])).toEqual({
+    expect(await one('SELECT action, target_type, target_id, details FROM audit_events WHERE request_id = $1', [requestIdOf(response)])).toEqual({
       action: 'auth.link_rejected',
       target_type: 'invitation',
       target_id: issued.id,

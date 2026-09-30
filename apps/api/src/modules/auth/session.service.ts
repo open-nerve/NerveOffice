@@ -61,16 +61,17 @@ export class SessionService {
   }
 
   /**
-   * 撤销这个人的全部会话（M2-P1 设计 §3.5）：账户停用、签发与完成重置时全部撤销；修改密码时保留当前会话（except）。
+   * 撤销这个人的全部会话（M2-P1 设计 §3.5）：账户停用、签发与完成重置、修改密码时全部撤销。修改密码不保留当前的会话，
+   * 而是随后为当前页面新建一个（M2-P6 复核 B1：换掉令牌，偷到的 Cookie 随之失效）。
    * 调用方的事务先锁住账户的行（UsersService.lockAccount 等）：登录的事务复核时也锁这一行，
    * 两边一先一后，这里撤销的包括先提交的登录新建的会话（审查 A1）。会话守卫对每个请求另查账户状态。
    */
   async revokeAllOf(
     userId: string,
     reason: 'disabled' | 'password_changed' | 'password_reset',
-    options: { readonly except?: string, readonly transaction?: Transaction } = {},
+    options: { readonly transaction?: Transaction } = {},
   ): Promise<void> {
-    await this.repository.revokeAllOfUser(userId, reason, options.except, options.transaction)
+    await this.repository.revokeAllOfUser(userId, reason, options.transaction)
   }
 
   /** 删除一小批过期或撤销已超过 30 天的会话，表不会无限增长。在事务之外调用。 */

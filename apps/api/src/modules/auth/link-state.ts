@@ -28,7 +28,8 @@ export type LinkLookup<T>
 
 /**
  * 接受或完成时，事务里锁住记录复核之后的结果：完成了；或者不能用的原因（查令牌之后被用过、作废、账户停用）。
- * 不能用时事务之外再按一次失败处理（记审计、锁定时 429），与查令牌时就不能用的一样（M2-P1 审查 A10）
+ * 不能用时事务之外再交给 LinkAttempts.rejected（记审计），与查令牌时就不能用的一样（M2-P1 审查 A10）；
+ * 这些原因都是"找到了记录、只是不能用"，不计入尝试的失败（M2-P6 复核 B3）
  */
 export type LinkOutcome<T>
   = | { readonly done: true, readonly value: T }

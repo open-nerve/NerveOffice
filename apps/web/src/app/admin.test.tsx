@@ -2,7 +2,7 @@
 import type { Invitation } from '@nerve-office/contracts'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { apiError, installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
+import { apiError, installFakeApi, inTurn, json, networkFailure } from '../shared/testing/fake-api.test-support.ts'
 import { documentsKey } from '../shared/testing/spaces.test-support.ts'
 import { AMY, deferred, INVITATION, listPage, ROOT, rowOf, session, settle, SPACES } from './admin.test-support.ts'
 import { currentPath, renderApp } from './render-app.test-support.tsx'
@@ -342,6 +342,97 @@ describe('管理界面：邀请', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('登录名')))
     expect(screen.getByLabelText('登录名')).toHaveValue('')
+  })
+
+  it('说明里的有效期是 7 天（M2-P6 复核 S-2：来自 contracts 的常量，常量换了界面跟着变，见 admin-invitation-lifetime.test.tsx）', async () => {
+    installFakeApi({
+      ...SPACES,
+      'GET /api/auth/session': () => json(200, session('admin')),
+      'GET /api/admin/invitations': () => json(200, listPage([])),
+    })
+    renderApp('/admin/invitations')
+    expect(await screen.findByText(/生成一次性链接（7 天内有效）/)).toBeInTheDocument()
+  })
+
+  it('签发的结果未知（断网、服务端出错）：说明邀请可能已经生成、去列表里重新生成；刷新列表；输入留着（M2-P6 复核 G-2）', async () => {
+    let listCalls = 0
+    const api = installFakeApi({
+      ...SPACES,
+      'GET /api/auth/session': () => json(200, session('admin')),
+      'GET /api/admin/invitations': () => {
+        listCalls += 1
+        return json(200, listPage(listCalls === 1 ? [] : [{ ...INVITATION, username: 'amy', displayName: '艾米' }]))
+      },
+      'POST /api/admin/invitations': inTurn(networkFailure, () => apiError(500, 'INTERNAL_ERROR')),
+    })
+    renderApp('/admin/invitations')
+    await screen.findByText('还没有邀请')
+    fireEvent.change(screen.getByLabelText('登录名'), { target: { value: 'amy' } })
+    fireEvent.change(screen.getByLabelText('显示名'), { target: { value: '艾米' } })
+    fireEvent.click(screen.getByRole('button', { name: '生成邀请链接' }))
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('没能确认邀请是否已经生成（网络连接失败')
+    expect(alert).toHaveTextContent('请在下面的列表里找到这个登录名，点"重新生成"')
+    // 列表刷新了：可能已经建好的那一条出现在列表里
+    await waitFor(() => expect(requestCount(api, 'GET /api/admin/invitations')).toBe(2))
+    expect(await rowOf('amy')).toBeInTheDocument()
+    expect(screen.getByLabelText('登录名')).toHaveValue('amy')
+    expect(screen.getByLabelText('显示名')).toHaveValue('艾米')
+
+    fireEvent.click(screen.getByRole('button', { name: '生成邀请链接' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('没能确认邀请是否已经生成（服务器出了点问题'))
+  })
+
+  it('结果未知之后，同一个登录名再签发得到"已被占用"：说明多半就是刚才那一次，引导去重新生成；换一个登录名的"已被占用"照常说明（M2-P6 复核 G-2）', async () => {
+    installFakeApi({
+      ...SPACES,
+      'GET /api/auth/session': () => json(200, session('admin')),
+      'GET /api/admin/invitations': () => json(200, listPage([])),
+      'POST /api/admin/invitations': inTurn(networkFailure, () => apiError(409, 'USERNAME_TAKEN'), () => apiError(409, 'USERNAME_TAKEN')),
+    })
+    renderApp('/admin/invitations')
+    await screen.findByText('还没有邀请')
+    // 登录名按规范写法比较：大写与首尾空白都算同一个
+    fireEvent.change(screen.getByLabelText('登录名'), { target: { value: 'amy' } })
+    fireEvent.change(screen.getByLabelText('显示名'), { target: { value: '艾米' } })
+    fireEvent.click(screen.getByRole('button', { name: '生成邀请链接' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('没能确认邀请是否已经生成')
+
+    fireEvent.change(screen.getByLabelText('登录名'), { target: { value: ' AMY ' } })
+    fireEvent.click(screen.getByRole('button', { name: '生成邀请链接' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('这个登录名已有待接受的邀请，可能就是刚才没能确认的那一次'))
+
+    fireEvent.change(screen.getByLabelText('登录名'), { target: { value: 'bob' } })
+    fireEvent.click(screen.getByRole('button', { name: '生成邀请链接' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/^这个登录名已被账户占用，或者已有待接受的邀请$/))
+  })
+
+  it('结果未知之后又签发成功：之后同一个登录名的"已被占用"照常说明', async () => {
+    installFakeApi({
+      ...SPACES,
+      'GET /api/auth/session': () => json(200, session('admin')),
+      'GET /api/admin/invitations': () => json(200, listPage([])),
+      'POST /api/admin/invitations': inTurn(
+        networkFailure,
+        () => json(201, { invitation: { ...INVITATION, username: 'amy', displayName: '艾米' }, url: 'https://docs.example.com/invite#token' }),
+        () => apiError(409, 'USERNAME_TAKEN'),
+      ),
+    })
+    renderApp('/admin/invitations')
+    await screen.findByText('还没有邀请')
+    fireEvent.change(screen.getByLabelText('登录名'), { target: { value: 'amy' } })
+    fireEvent.change(screen.getByLabelText('显示名'), { target: { value: '艾米' } })
+    fireEvent.click(screen.getByRole('button', { name: '生成邀请链接' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('没能确认邀请是否已经生成')
+    fireEvent.click(screen.getByRole('button', { name: '生成邀请链接' }))
+    const dialog = await screen.findByRole('dialog', { name: '邀请链接：艾米（amy）' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+
+    fireEvent.change(screen.getByLabelText('登录名'), { target: { value: 'amy' } })
+    fireEvent.change(screen.getByLabelText('显示名'), { target: { value: '艾米' } })
+    fireEvent.click(screen.getByRole('button', { name: '生成邀请链接' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/^这个登录名已被账户占用，或者已有待接受的邀请$/))
   })
 
   it('登录名已被占用或已有待接受的邀请：按错误码说明，用"登录名"的说法（审查 B6）', async () => {

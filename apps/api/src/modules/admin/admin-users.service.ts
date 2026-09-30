@@ -41,8 +41,8 @@ export class AdminUsersService {
   }
 
   /**
-   * 停用：状态改为停用、作废未用的重置、撤销全部会话（原因 disabled）、收回写入权（M2-P2 设计 §3.7）、记审计，一个事务。
-   * 会话守卫对每个请求检查账户状态，事务提交之后这个人的请求一律被拒绝。
+   * 停用：状态改为停用、作废未用的重置（记审计，M2-P6 复核 C3）、撤销全部会话（原因 disabled）、收回写入权（M2-P2 设计 §3.7）、
+   * 记审计，一个事务。会话守卫对每个请求检查账户状态，事务提交之后这个人的请求一律被拒绝。
    * 锁的顺序：system-admins 的锁、账户行、重置、会话、文档（收回写入权，M3 起锁租约与文档行）（ADR-007，审查 A2）
    */
   async disable(actor: Principal, userId: string, origin: HttpOrigin): Promise<AdminUser> {
@@ -50,7 +50,7 @@ export class AdminUsersService {
       const change = await this.users.disable(userId, actor.user.id, transaction)
       if (change.changed) {
         // 未用的重置链接一并作废：启用之后要重置密码得重新签发
-        await this.resets.revokeOpenOf(userId, transaction)
+        await this.resets.revokeOpenOf(actorOf(actor), userId, origin, transaction)
         await this.sessions.revokeAllOf(userId, 'disabled', { transaction })
         await this.writeAccess.revoke({ kind: 'user', userId: change.account.id }, transaction)
         await this.audit.record({ action: 'users.disabled', actor: actorOf(actor), target: { type: 'user', id: userId }, origin }, { transaction })

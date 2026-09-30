@@ -129,6 +129,91 @@ describe('0006_document_content', () => {
   })
 })
 
+describe('0008_m2_accounts（M2-P6 复核 G-3）', () => {
+  it('M1 的库执行之后：账户、会话、审计原样保留，凭据的版本从 1 开始；M2-P1 的新取值与新表的约束生效', async () => {
+    const database = await emptyDatabase()
+    // M1 的最后一个迁移（v0.1-m1）
+    await runMigrations({ connectionString: database.url, lockTimeoutMs: 10_000, migrationsFolder: migrationsUpTo('0007_document_unit_id_not_unique') })
+    const owner = await database.query(async (client) => {
+      const user = await client.query<{ id: string }>('INSERT INTO users (username, display_name, password_hash, system_role) VALUES (\'old\', \'老账户\', \'$argon2id$x\', \'admin\') RETURNING id')
+      const userId = user.rows[0]?.id ?? ''
+      await client.query('INSERT INTO spaces (type, name, owner_user_id) VALUES (\'personal\', \'老账户\', $1)', [userId])
+      // 一条有效的会话、一条退出的会话
+      await client.query(
+        `INSERT INTO auth_sessions (user_id, token_hash, idle_expires_at, absolute_expires_at, revoked_at, revoked_reason)
+         VALUES ($1, sha256('live'), now() + interval '1 hour', now() + interval '1 day', NULL, NULL),
+                ($1, sha256('gone'), now(), now() + interval '1 day', now(), 'logout')`,
+        [userId],
+      )
+      await client.query('INSERT INTO audit_events (action, actor_type, actor_id, target_type, target_id, source, request_id) VALUES (\'auth.login_succeeded\', \'user\', $1, \'user\', $1, \'http\', \'m1-request\')', [userId])
+      return { userId }
+    })
+
+    expect(await migrateDatabase(database)).toMatchObject({ status: 'applied' })
+    const state = await database.query(async client => ({
+      users: (await client.query('SELECT username, status, password_version FROM users')).rows,
+      sessions: (await client.query('SELECT revoked_reason FROM auth_sessions ORDER BY revoked_reason NULLS FIRST')).rows,
+      audits: (await client.query('SELECT action, request_id FROM audit_events')).rows,
+    }))
+    expect(state).toEqual({
+      users: [{ username: 'old', status: 'active', password_version: 1 }],
+      sessions: [{ revoked_reason: null }, { revoked_reason: 'logout' }],
+      audits: [{ action: 'auth.login_succeeded', request_id: 'm1-request' }],
+    })
+
+    const violation = async (text: string, values: unknown[] = []): Promise<unknown> => database.query(async client => client.query(text, values).then(() => undefined, (error: unknown) => error))
+    // M2-P1 的新取值：账户停用、会话按人撤销的原因、审计的新动作与对象类型
+    expect(await violation('UPDATE users SET status = \'disabled\' WHERE id = $1', [owner.userId])).toBeUndefined()
+    expect(await violation('UPDATE auth_sessions SET revoked_at = now(), revoked_reason = \'password_reset\' WHERE revoked_at IS NULL')).toBeUndefined()
+    expect(await violation('INSERT INTO audit_events (action, actor_type, source, target_type, target_id) VALUES (\'users.invited\', \'system\', \'cli\', \'invitation\', $1)', [owner.userId])).toBeUndefined()
+    expect(await violation('UPDATE users SET status = \'deleted\' WHERE id = $1', [owner.userId])).toMatchObject({ code: '23514', constraint: 'users_status_check' })
+    // 邀请：同一个登录名最多一条待接受的；接受与作废最多有一个
+    const invite = 'INSERT INTO auth_invitations (username, display_name, token_hash, created_by, expires_at) VALUES ($1, $1, sha256($2::bytea), $3, now() + interval \'7 days\') RETURNING id'
+    const pending = await database.query(async client => (await client.query<{ id: string }>(invite, ['newbie', 'first', owner.userId])).rows[0]?.id)
+    expect(await violation(invite, ['newbie', 'second', owner.userId])).toMatchObject({ code: '23505', constraint: 'auth_invitations_open_username_key' })
+    expect(await violation('UPDATE auth_invitations SET accepted_at = now(), accepted_user_id = $1, revoked_at = now(), revoked_by = $1 WHERE id = $2', [owner.userId, pending])).toMatchObject({ code: '23514', constraint: 'auth_invitations_outcome_check' })
+    // 重置：同一个账户最多一条未用的
+    const reset = 'INSERT INTO auth_password_resets (user_id, token_hash, expires_at) VALUES ($1, sha256($2::bytea), now() + interval \'1 day\')'
+    expect(await violation(reset, [owner.userId, 'reset-1'])).toBeUndefined()
+    expect(await violation(reset, [owner.userId, 'reset-2'])).toMatchObject({ code: '23505', constraint: 'auth_password_resets_open_user_key' })
+  })
+})
+
+describe('0014_m2_p6_accounts_hardening（M2-P6 复核 G-4、C3）', () => {
+  it('P4 的库执行之后：已有的数据照常；凭据的版本不能小于 1，一个账户至多由一条邀请建成，审计的新动作能写', async () => {
+    const database = await emptyDatabase()
+    await runMigrations({ connectionString: database.url, lockTimeoutMs: 10_000, migrationsFolder: migrationsUpTo('0013_m2_audit_job_source') })
+    const ids = await database.query(async (client) => {
+      const admin = (await client.query<{ id: string }>('INSERT INTO users (username, display_name, password_hash, system_role, password_version) VALUES (\'root\', \'root\', \'$argon2id$x\', \'admin\', 3) RETURNING id')).rows[0]?.id ?? ''
+      const member = (await client.query<{ id: string }>('INSERT INTO users (username, display_name, password_hash, system_role) VALUES (\'amy\', \'amy\', \'$argon2id$x\', \'member\') RETURNING id')).rows[0]?.id ?? ''
+      // 一条已接受的邀请（建成了 amy）、两条待接受的（accepted_user_id 都是空的）
+      await client.query(
+        `INSERT INTO auth_invitations (username, display_name, token_hash, created_by, expires_at, accepted_at, accepted_user_id)
+         VALUES ('amy', 'amy', sha256('a'), $1, now() + interval '7 days', now(), $2),
+                ('bea', 'bea', sha256('b'), $1, now() + interval '7 days', NULL, NULL),
+                ('cai', 'cai', sha256('c'), $1, now() + interval '7 days', NULL, NULL)`,
+        [admin, member],
+      )
+      return { admin, member }
+    })
+
+    expect(await migrateDatabase(database)).toMatchObject({ status: 'applied' })
+    expect(await database.query(async client => (await client.query<{ username: string, password_version: number }>('SELECT username, password_version FROM users ORDER BY username')).rows)).toEqual([
+      { username: 'amy', password_version: 1 },
+      { username: 'root', password_version: 3 },
+    ])
+
+    const violation = async (text: string, values: unknown[] = []): Promise<unknown> => database.query(async client => client.query(text, values).then(() => undefined, (error: unknown) => error))
+    expect(await violation('UPDATE users SET password_version = 0 WHERE id = $1', [ids.member])).toMatchObject({ code: '23514', constraint: 'users_password_version_check' })
+    // 已经建成 amy 的邀请之外，另一条邀请不能也记成建成了 amy
+    expect(await violation('UPDATE auth_invitations SET accepted_at = now(), accepted_user_id = $1 WHERE username = \'bea\'', [ids.member])).toMatchObject({ code: '23505', constraint: 'auth_invitations_accepted_user_key' })
+    expect(await violation(
+      'INSERT INTO audit_events (action, actor_type, actor_id, source, target_type, target_id, details) VALUES (\'users.password_reset_revoked\', \'user\', $1, \'cli\', \'user\', $2, $3)',
+      [ids.admin, ids.member, { passwordResetId: ids.member, reason: 'reissued' }],
+    )).toBeUndefined()
+  })
+})
+
 describe('0009_m2_team_spaces', () => {
   it('P1 的库执行之后：个人空间照样满足约束、没有创建人，已有文档的写入代次为 0；团队空间与成员的约束生效', async () => {
     const database = await emptyDatabase()

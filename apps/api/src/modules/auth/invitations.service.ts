@@ -1,4 +1,4 @@
-import type { AcceptInvitationRequest, CreateInvitationRequest, InspectLinkResponse, Invitation, InvitationListQuery, InvitationListResponse, IssuedInvitation, UserSummary } from '@nerve-office/contracts'
+import type { AcceptInvitationRequest, AuditDetailsOf, CreateInvitationRequest, InspectLinkResponse, Invitation, InvitationListQuery, InvitationListResponse, IssuedInvitation, UserSummary } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { AppConfig } from '../config/index.ts'
 import type { Transaction } from '../database/index.ts'
@@ -160,7 +160,8 @@ export class InvitationsService {
   /**
    * 公开：接受邀请。先查令牌再算新密码的哈希（无效的令牌不触发哈希计算），都在事务之外；然后在一个事务里：
    * 锁住邀请复核、建账户与个人空间、退回限流的名额、标记已接受、新建会话（浏览器原来带着的会话作废）、记审计。
-   * 复核不通过（查令牌之后被接受或作废）：事务之外按一次失败处理，记审计，锁定时 429（审查 A10）
+   * 复核不通过（查令牌之后被接受或作废）：事务之外交给 LinkAttempts.rejected，记审计（审查 A10）；
+   * 找到了记录、只是不能用，不计入尝试的失败（M2-P6 复核 B3）
    */
   async accept(token: string, request: AcceptInvitationRequest, origin: HttpOrigin, previousSessionToken: string | undefined): Promise<AcceptedInvitation> {
     const ticket = await this.attempts.admit(origin)
@@ -223,7 +224,7 @@ export class InvitationsService {
    * 作废一条未接受、未作废的邀请并记审计。更新带着状态条件（审查 A9）：签发时自动作废的旧邀请没有锁行，
    * 同时被管理员手动作废时，后到的一方更新不到行，返回 undefined，也不再记一次审计
    */
-  private async revokeOpen(actor: User, record: InvitationRecord, details: Record<string, boolean>, origin: HttpOrigin, transaction: Transaction): Promise<InvitationRecord | undefined> {
+  private async revokeOpen(actor: User, record: InvitationRecord, details: AuditDetailsOf<'users.invitation_revoked'>, origin: HttpOrigin, transaction: Transaction): Promise<InvitationRecord | undefined> {
     const revoked = await this.repository.revokeOpen(record.id, actor.id, transaction)
     if (revoked === undefined)
       return undefined

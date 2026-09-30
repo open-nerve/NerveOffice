@@ -72,6 +72,8 @@ export const authInvitations = pgTable('auth_invitations', {
   uniqueIndex('auth_invitations_open_username_key').on(table.username).where(sql`${table.acceptedAt} IS NULL AND ${table.revokedAt} IS NULL`),
   // 列表按签发时间从新到旧分页
   index('auth_invitations_created_at_idx').on(table.createdAt, table.id),
+  // 一个账户至多由一条邀请建成（M2-P6 复核 G-4）：接受时建账户与标记已接受在同一个事务里，这里是库里的兜底
+  uniqueIndex('auth_invitations_accepted_user_key').on(table.acceptedUserId),
   check('auth_invitations_token_hash_check', sql`octet_length(${table.tokenHash}) = 32`),
   check('auth_invitations_username_check', sql`${table.username} ~ ${stringLiteral(USERNAME_PATTERN_SOURCE)}`),
   check('auth_invitations_display_name_check', lengthBetween(table.displayName, 1, DISPLAY_NAME_MAX_LENGTH)),

@@ -39,6 +39,14 @@ describe('空间的名称', () => {
     expect(spaceNameSchema.safeParse('市场\t部').success).toBe(false)
   })
 
+  it('按名称的共用规则（M2-P6 复核 B2）：NFC 归一；拒绝改变文字方向的字符与换行符；不能只有看不见的字符', () => {
+    expect(spaceNameSchema.parse('Jose\u0301')).toBe('Jos\u00E9')
+    expect(spaceNameSchema.safeParse('市场\u2066部').success).toBe(false)
+    expect(spaceNameSchema.safeParse('市场\u2029部').success).toBe(false)
+    expect(spaceNameSchema.safeParse('\u115F\u1160').success).toBe(false)
+    expect(spaceNameSchema.parse('\u05D3\u05D5\u05D3')).toBe('\u05D3\u05D5\u05D3')
+  })
+
   it('改名的请求只有名称', () => {
     expect(renameSpaceRequestSchema.parse({ name: ' 产品部 ' })).toEqual({ name: '产品部' })
     expect(renameSpaceRequestSchema.safeParse({ name: '产品部', visibleToAll: true }).success).toBe(false)

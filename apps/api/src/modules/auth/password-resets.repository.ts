@@ -66,12 +66,14 @@ export class PasswordResetsRepository {
     return row
   }
 
-  /** 作废这个账户未使用、未作废的重置（签发新的、停用账户时） */
-  async revokeOpenOfUser(userId: string, transaction: Transaction): Promise<void> {
-    await executorOf(this.db, transaction)
+  /** 作废这个账户未使用、未作废的重置（签发新的、停用账户时），返回作废了的那些的 id（部分唯一索引保证至多一条）：调用方逐条记审计 */
+  async revokeOpenOfUser(userId: string, transaction: Transaction): Promise<string[]> {
+    const rows = await executorOf(this.db, transaction)
       .update(r)
       .set({ revokedAt: sql`now()` })
       .where(and(eq(r.userId, userId), isNull(r.usedAt), isNull(r.revokedAt)))
+      .returning({ id: r.id })
+    return rows.map(row => row.id)
   }
 
   async markUsed(id: string, transaction: Transaction): Promise<void> {

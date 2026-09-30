@@ -31,7 +31,8 @@ describe('DocumentOrganizingService.update', () => {
       actor: { type: 'user', id: ALICE },
       target: { type: 'document', id: document.id },
       origin: HTTP_ORIGIN,
-      details: { spaceId: ALICE_SPACE, from: '周报', to: '月报' },
+      // 只记位置，不记改动前后的标题（M2-P6 复核 M-1）
+      details: { spaceId: ALICE_SPACE, folderId: null },
     }])
     expect(store.writeEpochs.get(document.id)).toBeUndefined()
 

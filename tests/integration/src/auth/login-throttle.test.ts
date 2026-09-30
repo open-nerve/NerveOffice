@@ -11,6 +11,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { createTestDatabase } from '../support/database.ts'
+import { requestIdOf } from '../support/request-id.ts'
 import { postLogin } from '../support/session-client.ts'
 
 let database: TestDatabase
@@ -45,9 +46,9 @@ async function rows<T extends Record<string, unknown>>(query: string, values: un
   return database.query(async client => (await client.query<T>(query, values)).rows)
 }
 
-/** 这批请求里真正验证过密码的次数：只有验证过的失败才写审计 */
-async function failedAudits(prefix: string): Promise<number> {
-  const [row] = await rows<{ count: string }>('SELECT count(*) AS count FROM audit_events WHERE action = \'auth.login_failed\' AND request_id LIKE $1', [`${prefix}%`])
+/** 这批请求里真正验证过密码的次数：只有验证过的失败才写审计（按服务端给每个请求的请求标识找，M2-P6 复核 C2） */
+async function failedAudits(responses: readonly Response[]): Promise<number> {
+  const [row] = await rows<{ count: string }>('SELECT count(*) AS count FROM audit_events WHERE action = \'auth.login_failed\' AND request_id = ANY($1)', [responses.map(requestIdOf)])
   return Number(row?.count)
 }
 
@@ -70,11 +71,10 @@ function tally(statuses: number[]): Record<number, number> {
 describe('并发：先占用名额，再验证', () => {
   it('同一个用户名的一波并发错误密码：只验证上限那么多次，其余直接 429', async () => {
     const app = await start({ NERVE_LOGIN_MAX_FAILURES: '3', NERVE_LOGIN_IP_MAX_FAILURES: '1000' })
-    const statuses = await Promise.all(Array.from({ length: 30 }, async (_unused, index) =>
-      (await postLogin(app.baseUrl, { username: 'alice', password: 'wrong' }, { 'x-request-id': `burst-user-${index}` })).status))
+    const responses = await Promise.all(Array.from({ length: 30 }, async () => postLogin(app.baseUrl, { username: 'alice', password: 'wrong' })))
     // 第 3 次失败触发锁定，那一次也是 429
-    expect(tally(statuses)).toEqual({ 401: 2, 429: 28 })
-    expect(await failedAudits('burst-user-')).toBe(3)
+    expect(tally(responses.map(response => response.status))).toEqual({ 401: 2, 429: 28 })
+    expect(await failedAudits(responses)).toBe(3)
     expect((await postLogin(app.baseUrl, { username: 'alice', password: alice.password })).status).toBe(429)
   })
 
@@ -82,18 +82,18 @@ describe('并发：先占用名额，再验证', () => {
     const app = await start({ NERVE_LOGIN_MAX_FAILURES: '3', NERVE_LOGIN_IP_MAX_FAILURES: '1000' })
     for (let attempt = 0; attempt < 3; attempt++)
       await postLogin(app.baseUrl, { username: 'alice', password: 'wrong' })
-    const statuses = await Promise.all(Array.from({ length: 10 }, async (_unused, index) =>
-      (await postLogin(app.baseUrl, { username: 'alice', password: index % 2 === 0 ? alice.password : 'wrong' }, { 'x-request-id': `locked-${index}` })).status))
-    expect(statuses).toEqual(Array.from({ length: 10 }).fill(429))
-    expect(await failedAudits('locked-')).toBe(0)
+    const responses = await Promise.all(Array.from({ length: 10 }, async (_unused, index) =>
+      postLogin(app.baseUrl, { username: 'alice', password: index % 2 === 0 ? alice.password : 'wrong' })))
+    expect(responses.map(response => response.status)).toEqual(Array.from({ length: 10 }).fill(429))
+    expect(await failedAudits(responses)).toBe(0)
   })
 
   it('同一个地址换着用户名并发尝试：只验证地址的上限那么多次；被地址拒绝的请求退回用户名的名额', async () => {
     const app = await start({ NERVE_LOGIN_MAX_FAILURES: '100', NERVE_LOGIN_IP_MAX_FAILURES: '3' })
-    const statuses = await Promise.all(Array.from({ length: 20 }, async (_unused, index) =>
-      (await postLogin(app.baseUrl, { username: `user${index}`, password: 'wrong' }, { 'x-request-id': `burst-ip-${index}` })).status))
-    expect(tally(statuses)).toEqual({ 401: 2, 429: 18 })
-    expect(await failedAudits('burst-ip-')).toBe(3)
+    const responses = await Promise.all(Array.from({ length: 20 }, async (_unused, index) =>
+      postLogin(app.baseUrl, { username: `user${index}`, password: 'wrong' })))
+    expect(tally(responses.map(response => response.status))).toEqual({ 401: 2, 429: 18 })
+    expect(await failedAudits(responses)).toBe(3)
     // 只有验证过的 3 个用户名留下计数：其余的要么在预检时就被拒绝，要么占到的名额已经退回
     const counted = await rows('SELECT failures FROM auth_login_throttles WHERE failures > 0')
     expect(counted).toHaveLength(3 + 1)
