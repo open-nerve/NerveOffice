@@ -3,9 +3,9 @@ import type { SQL } from 'drizzle-orm'
 import type { TimeCursor } from '../../shared/time-cursor.ts'
 import type { Database, Transaction } from '../database/index.ts'
 import { Inject, Injectable } from '@nestjs/common'
-import { and, asc, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, isNull, ne, sql } from 'drizzle-orm'
 import { documents } from '../../db/schema/documents/index.ts'
-import { DATABASE, executorOf, keysetPosition } from '../database/index.ts'
+import { DATABASE, executorOf, inIdArray, keysetPosition } from '../database/index.ts'
 import { TITLE_SEARCH_ESCAPE } from './title-search.ts'
 
 export interface DocumentRow {
@@ -104,7 +104,7 @@ const COLUMNS = {
  * P5 在这里并上单独授权（范围那一维）。
  */
 function accessible(scope: AccessibleScope): SQL | undefined {
-  return and(eq(d.status, 'active'), inArray(d.spaceId, [...scope.spaceIds]))
+  return and(eq(d.status, 'active'), inIdArray(d.spaceId, scope.spaceIds))
 }
 
 /** 目录的过滤（见 ListOptions.folderId）：不进 accessible，是列表自己的条件。 */
@@ -186,7 +186,7 @@ export class DocumentsRepository {
     const rows = await executorOf(this.db, transaction)
       .select({ id: d.id })
       .from(d)
-      .where(and(inArray(d.id, [...ids]), accessible({ spaceIds: [fromSpaceId] })))
+      .where(and(inIdArray(d.id, ids), accessible({ spaceIds: [fromSpaceId] })))
       .orderBy(asc(d.id))
       .for('update')
     return rows.map(row => row.id)
@@ -209,7 +209,7 @@ export class DocumentsRepository {
       .select({ id: d.id, trashEntryId: d.trashEntryId })
       .from(d)
       .where(and(
-        inArray(d.folderId, [...folderIds]),
+        inIdArray(d.folderId, folderIds),
         eq(d.spaceId, spaceId),
         state === undefined ? undefined : eq(d.status, state),
       ))
@@ -227,7 +227,7 @@ export class DocumentsRepository {
     return executorOf(this.db, transaction)
       .select({ id: d.id, trashEntryId: d.trashEntryId })
       .from(d)
-      .where(inArray(d.trashEntryId, [...entryIds]))
+      .where(inIdArray(d.trashEntryId, entryIds))
       .orderBy(asc(d.id))
       .for('update')
   }
@@ -243,7 +243,21 @@ export class DocumentsRepository {
     const [row] = await executorOf(this.db, transaction)
       .select({ count: sql<number>`count(*)::int` })
       .from(d)
-      .where(and(inArray(d.folderId, [...folderIds]), eq(d.spaceId, spaceId), eq(d.status, 'active'), ne(d.createdBy, userId)))
+      .where(and(inIdArray(d.folderId, folderIds), eq(d.spaceId, spaceId), eq(d.status, 'active'), ne(d.createdBy, userId)))
+    return row?.count ?? 0
+  }
+
+  /**
+   * 这些文件夹里正常状态的文档有几份，不论在哪个空间：永久删除之前核对"要删的都在回收站里"
+   * （TrashEntryPurger，M2-P6 复核 A 的 S-3、B 的 B2）。不按空间过滤：别的空间里的行挂在这些文件夹下同样是数据不一致
+   */
+  async countActiveInFolders(folderIds: readonly string[], transaction: Transaction): Promise<number> {
+    if (folderIds.length === 0)
+      return 0
+    const [row] = await executorOf(this.db, transaction)
+      .select({ count: sql<number>`count(*)::int` })
+      .from(d)
+      .where(and(inIdArray(d.folderId, folderIds), eq(d.status, 'active')))
     return row?.count ?? 0
   }
 
@@ -257,7 +271,7 @@ export class DocumentsRepository {
     const rows = await executorOf(this.db, transaction)
       .update(d)
       .set({ status: 'trashed', trashEntryId, writeEpoch: sql`${d.writeEpoch} + 1` })
-      .where(inArray(d.id, [...ids]))
+      .where(inIdArray(d.id, ids))
       .returning({ id: d.id })
     return rows.length
   }
@@ -287,7 +301,7 @@ export class DocumentsRepository {
     const rows = await executorOf(this.db, transaction)
       .select({ trashEntryId: d.trashEntryId, count: sql<number>`count(*)::int` })
       .from(d)
-      .where(inArray(d.trashEntryId, [...entryIds]))
+      .where(inIdArray(d.trashEntryId, entryIds))
       .groupBy(d.trashEntryId)
     return new Map(rows.flatMap(row => row.trashEntryId === null ? [] : [[row.trashEntryId, row.count] as const]))
   }
@@ -296,7 +310,7 @@ export class DocumentsRepository {
   async deleteMany(ids: readonly string[], transaction: Transaction): Promise<number> {
     if (ids.length === 0)
       return 0
-    const rows = await executorOf(this.db, transaction).delete(d).where(inArray(d.id, [...ids])).returning({ id: d.id })
+    const rows = await executorOf(this.db, transaction).delete(d).where(inIdArray(d.id, ids)).returning({ id: d.id })
     return rows.length
   }
 
@@ -311,7 +325,7 @@ export class DocumentsRepository {
     return executorOf(this.db, transaction)
       .update(d)
       .set(folderId === undefined ? changes : { ...changes, folderId })
-      .where(inArray(d.id, [...ids]))
+      .where(inIdArray(d.id, ids))
       .returning(COLUMNS)
   }
 

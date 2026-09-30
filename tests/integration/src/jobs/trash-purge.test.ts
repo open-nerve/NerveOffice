@@ -2,7 +2,7 @@
 // 时刻由假时钟给出（把"现在"推到 30 天之后，不必真的等）。覆盖：到期的才清、内容与修订记录一起没了、
 // 未到期的不动、审计的操作者是系统、一轮的批量上限与"最早到期的先清"、
 // 两个实例同时跑只有一个干活（另一个连接持有同一把 advisory lock）、归档的空间照样清、
-// 等树锁期间这一单被跨空间搬走时这一轮跳过（留给下一轮）、定时器真的会跑。
+// 等树锁期间这一单被跨空间搬走时这一轮跳过（留给下一轮）、一直失败的条目暂缓重试而不挡住后面到期的、定时器真的会跑。
 import type { TrashListResponse } from '@nerve-office/contracts'
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
@@ -239,6 +239,65 @@ describe('US-M2-09 到期的自动清理', () => {
     await expect(runPurge(expired(entry))).resolves.toEqual({ ran: true, purged: 1, skipped: 0, failed: 0 })
     expect(await count('SELECT count(*) FROM documents WHERE id = $1', [document])).toBe(0)
     expect(await count('SELECT count(*) FROM folders WHERE id = $1', [folder])).toBe(0)
+  })
+
+  /**
+   * 一直失败的条目不挡住后面到期的（M2-P6 复核 A 的 S-1、B 的 G2）：它们到期最早，每一批都从它们取起，
+   * 攒够一批之后后面到期的就再也轮不到。现在本进程记下失败过的条目，之后的几轮取批时让开它们。
+   */
+  it('最早到期的两单一直失败（批量 2）：之后的一轮让开它们，后面到期的那一单照常清掉；失败日志带着连续失败的次数', async () => {
+    const spaceId = await teamSpace()
+    const failing = await Promise.all(['坏的一', '坏的二'].map(async title => createDocument(database, { spaceId, createdBy: amy.id, title })))
+    const good = await createDocument(database, { spaceId, createdBy: amy.id, title: '好的' })
+    const failingEntries: string[] = []
+    for (const document of failing)
+      failingEntries.push((await trashed(spaceId, `/api/documents/${document}`)).id)
+    const goodEntry = (await trashed(spaceId, `/api/documents/${good}`)).id
+    // 别的用例留下的删除单元都挪到还没到期：这几轮只碰这个用例的三单
+    await database.query(async client => client.query('UPDATE trash_entries SET deleted_at = now(), expires_at = now() + interval \'30 days\' WHERE space_id <> $1', [spaceId]))
+    // 两单"坏的"最早到期；"好的"也已经到期，只是晚一点
+    await setExpiry(failingEntries[0] ?? '', '42 days', '-12 days')
+    await setExpiry(failingEntries[1] ?? '', '41 days', '-11 days')
+    await setExpiry(goodEntry, '35 days', '-5 days')
+    // 让"坏的"两份每次永久删除都失败（例如数据不一致、语句超时）：触发器只挡这两份
+    await database.query(async client => client.query(`
+      CREATE FUNCTION refuse_purge() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        IF OLD.id = ANY('{${failing.join(',')}}'::uuid[]) THEN
+          RAISE EXCEPTION '这份文档删不掉';
+        END IF;
+        RETURN OLD;
+      END
+      $$;
+      CREATE TRIGGER refuse_purge BEFORE DELETE ON documents FOR EACH ROW EXECUTE FUNCTION refuse_purge();`))
+    // 单独起一个应用（批量 2）：失败过的条目记在它的内存里，不带进别的用例
+    const isolated = await startTestApp({ databaseUrl: database.url, env: { NERVE_TRASH_PURGE_BATCH: '2' } })
+    try {
+      const job = isolated.runtime.get(TrashPurgeJob)
+      await expect(job.runOnce(new Date())).resolves.toEqual({ ran: true, purged: 0, skipped: 0, failed: 2 })
+      // 下一轮让开那两单："好的"那一单照常清掉
+      await expect(job.runOnce(new Date())).resolves.toEqual({ ran: true, purged: 1, skipped: 0, failed: 0 })
+      expect(await count('SELECT count(*) FROM documents WHERE id = $1', [good])).toBe(0)
+      // 让开的一轮过了：再试一次，仍然失败，连续失败的次数是 2（之后让开两轮）
+      await expect(job.runOnce(new Date())).resolves.toEqual({ ran: true, purged: 0, skipped: 0, failed: 2 })
+      const failures = isolated.logs.entries()
+        .filter(line => line.job === 'trash-purge' && line.level === 'error')
+        .map(line => [line.trashEntryId, line.consecutiveFailures, line.deferredRounds])
+      expect(failures).toEqual([
+        [failingEntries[0], 1, 1],
+        [failingEntries[1], 1, 1],
+        [failingEntries[0], 2, 2],
+        [failingEntries[1], 2, 2],
+      ])
+      expect(await count('SELECT count(*) FROM documents WHERE id = ANY($1::uuid[])', [failing])).toBe(2)
+    }
+    finally {
+      await isolated.close()
+      await database.query(async client => client.query('DROP TRIGGER refuse_purge ON documents; DROP FUNCTION refuse_purge();'))
+    }
+    // 收拾好：两单"坏的"人工永久删除（触发器已经拿掉），不留给后面的用例
+    for (const entry of failingEntries)
+      expect((await asUser(app.baseUrl, amySession, `/api/trash/${entry}`, { method: 'DELETE' })).status).toBe(204)
   })
 
   it('定时器：应用自己按间隔跑，已经过期的东西不必等谁来触发', async () => {

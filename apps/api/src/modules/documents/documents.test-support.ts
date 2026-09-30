@@ -194,6 +194,10 @@ export class FakeStore {
           return entry !== null && entryIds.includes(entry) ? [{ id: row.id, trashEntryId: entry }] : []
         })
         .toSorted((a, b) => a.id.localeCompare(b.id))),
+      /** 这些文件夹里正常状态的文档有多少份（不论在哪个空间，与真实仓储一致） */
+      countActiveInFolders: vi.fn(async (folderIds: readonly string[]) => [...this.documents.values()]
+        .filter(row => row.folderId !== null && folderIds.includes(row.folderId) && this.entryOfDocument(row.id) === null)
+        .length),
       /** 这些文件夹里正常状态的、不是这个人创建的文档有多少份 */
       countCreatedByOthers: vi.fn(async (folderIds: readonly string[], spaceId: string, userId: string) => [...this.documents.values()]
         .filter(row => row.folderId !== null && folderIds.includes(row.folderId) && row.spaceId === spaceId)
@@ -310,6 +314,8 @@ export class FakeStore {
           .flatMap(row => walk(row.id))]
         return walk(rootId)
       }),
+      /** 这些文件夹里正常状态的有几个 */
+      countActive: vi.fn(async (ids: readonly string[]) => ids.filter(id => this.folders.has(id) && this.entryOfFolder(id) === null).length),
       /** 这些文件夹分属哪些删除单元（去重，正常状态的不算） */
       trashEntryIdsIn: vi.fn(async (folderIds: readonly string[]) =>
         [...new Set(folderIds.flatMap(id => this.entryOfFolder(id) ?? []))]),
@@ -399,9 +405,9 @@ export class FakeStore {
     }),
     findById: vi.fn(async (id: string) => this.trashEntries.get(id)),
     lockById: vi.fn(async (id: string) => this.trashEntries.get(id)),
-    /** 到这个时刻为止已经到期的，最早到期的在前（M2-P4 S4） */
-    listExpired: vi.fn(async (now: Date, limit: number) => [...this.trashEntries.values()]
-      .filter(row => row.expiresAt <= now)
+    /** 到这个时刻为止已经到期的，最早到期的在前（M2-P4 S4）；except 里的不取（定时清理暂缓重试的那些） */
+    listExpired: vi.fn(async (now: Date, limit: number, except: readonly string[] = []) => [...this.trashEntries.values()]
+      .filter(row => row.expiresAt <= now && !except.includes(row.id))
       .toSorted((a, b) => a.expiresAt.getTime() - b.expiresAt.getTime() || a.id.localeCompare(b.id))
       .slice(0, limit)),
     listBySpace: vi.fn(async (spaceId: string, options: { limit: number }) => [...this.trashEntries.values()]

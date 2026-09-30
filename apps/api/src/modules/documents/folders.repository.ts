@@ -2,9 +2,9 @@ import type { SQL } from 'drizzle-orm'
 import type { Database, Transaction } from '../database/index.ts'
 import { FOLDER_LIST_MAX_ITEMS } from '@nerve-office/contracts'
 import { Inject, Injectable } from '@nestjs/common'
-import { and, asc, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, isNotNull, isNull, sql } from 'drizzle-orm'
 import { folders } from '../../db/schema/documents/index.ts'
-import { DATABASE, executorOf } from '../database/index.ts'
+import { DATABASE, executorOf, inIdArray } from '../database/index.ts'
 
 export interface FolderRow {
   readonly id: string
@@ -80,11 +80,6 @@ function subtreeQuery(rootId: string, projection: SQL): SQL {
     UNION ALL
     SELECT child.id, child.depth FROM ${f} AS child JOIN subtree ON child.parent_id = subtree.id
   ) ${projection}`
-}
-
-/** 一串 id 拼成 SQL 的值列表（`$1::uuid, $2::uuid, …`）：给别名过的表写条件时用，`inArray` 只会写出主表的列名。 */
-function idList(ids: readonly string[]): SQL {
-  return sql.join(ids.map(id => sql`${id}::uuid`), sql`, `)
 }
 
 /** 只有它读写 folders（规范 §1.2）。空间树的串行化见 space-tree.repository.ts。 */
@@ -170,6 +165,17 @@ export class FoldersRepository {
     return result.rows[0]?.ids ?? []
   }
 
+  /** 这些文件夹里正常状态的有几个：永久删除之前核对"要删的都在回收站里"（TrashEntryPurger，M2-P6 复核 A 的 S-3、B 的 B2）。 */
+  async countActive(ids: readonly string[], transaction: Transaction): Promise<number> {
+    if (ids.length === 0)
+      return 0
+    const [row] = await executorOf(this.db, transaction)
+      .select({ count: sql<number>`count(*)::int` })
+      .from(f)
+      .where(and(inIdArray(f.id, ids), eq(f.status, 'active')))
+    return row?.count ?? 0
+  }
+
   /** 这些文件夹分属哪些删除单元（去重，正常状态的行不算）：跨空间移动与永久删除据此找到牵连到的删除单元。 */
   async trashEntryIdsIn(folderIds: readonly string[], transaction: Transaction): Promise<string[]> {
     if (folderIds.length === 0)
@@ -177,7 +183,7 @@ export class FoldersRepository {
     const rows = await executorOf(this.db, transaction)
       .selectDistinct({ trashEntryId: f.trashEntryId })
       .from(f)
-      .where(and(inArray(f.id, [...folderIds]), isNotNull(f.trashEntryId)))
+      .where(and(inIdArray(f.id, folderIds), isNotNull(f.trashEntryId)))
     return rows.flatMap(row => row.trashEntryId === null ? [] : [row.trashEntryId])
   }
 
@@ -188,7 +194,7 @@ export class FoldersRepository {
     const rows = await executorOf(this.db, transaction)
       .select({ trashEntryId: f.trashEntryId, count: sql<number>`count(*)::int` })
       .from(f)
-      .where(inArray(f.trashEntryId, [...entryIds]))
+      .where(inIdArray(f.trashEntryId, entryIds))
       .groupBy(f.trashEntryId)
     return new Map(rows.flatMap(row => row.trashEntryId === null ? [] : [[row.trashEntryId, row.count] as const]))
   }
@@ -208,13 +214,12 @@ export class FoldersRepository {
   async ancestorsOf(ids: readonly string[], spaceIds: readonly string[]): Promise<FolderAncestorRow[]> {
     if (ids.length === 0 || spaceIds.length === 0)
       return []
-    const visible = idList(spaceIds)
     const query = sql`WITH RECURSIVE ancestors(id, parent_id, name) AS (
       SELECT ${f.id}, ${f.parentId}, ${f.name} FROM ${f}
-        WHERE ${f.id} IN (${idList(ids)}) AND ${f.spaceId} IN (${visible})
+        WHERE ${inIdArray(f.id, ids)} AND ${inIdArray(f.spaceId, spaceIds)}
       UNION
       SELECT parent.id, parent.parent_id, parent.name FROM ${f} AS parent
-        JOIN ancestors ON parent.id = ancestors.parent_id AND parent.space_id IN (${visible})
+        JOIN ancestors ON parent.id = ancestors.parent_id AND ${inIdArray(sql`parent.space_id`, spaceIds)}
     ) SELECT id, parent_id AS "parentId", name FROM ancestors`
     return (await this.db.execute<{ id: string, parentId: string | null, name: string }>(query)).rows
   }
@@ -226,7 +231,7 @@ export class FoldersRepository {
     const rows = await this.db
       .select({ id: f.id, name: f.name })
       .from(f)
-      .where(and(inArray(f.id, [...new Set(ids)]), eq(f.spaceId, spaceId), eq(f.status, 'active')))
+      .where(and(inIdArray(f.id, [...new Set(ids)]), eq(f.spaceId, spaceId), eq(f.status, 'active')))
     return new Map(rows.map(row => [row.id, row.name]))
   }
 
@@ -240,7 +245,7 @@ export class FoldersRepository {
     const rows = await executorOf(this.db, transaction)
       .update(f)
       .set({ status: 'trashed', trashEntryId })
-      .where(inArray(f.id, [...ids]))
+      .where(inIdArray(f.id, ids))
       .returning({ id: f.id })
     return rows.length
   }
@@ -277,10 +282,10 @@ export class FoldersRepository {
     if (ids.length === 0)
       return 0
     const executor = executorOf(this.db, transaction)
-    const levels = await executor.selectDistinct({ depth: f.depth }).from(f).where(inArray(f.id, [...ids])).orderBy(desc(f.depth))
+    const levels = await executor.selectDistinct({ depth: f.depth }).from(f).where(inIdArray(f.id, ids)).orderBy(desc(f.depth))
     let deleted = 0
     for (const { depth } of levels) {
-      const rows = await executor.delete(f).where(and(inArray(f.id, [...ids]), eq(f.depth, depth))).returning({ id: f.id })
+      const rows = await executor.delete(f).where(and(inIdArray(f.id, ids), eq(f.depth, depth))).returning({ id: f.id })
       deleted += rows.length
     }
     return deleted

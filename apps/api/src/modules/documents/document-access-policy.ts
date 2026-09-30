@@ -160,13 +160,21 @@ export async function requireDocumentContent<T extends AccessTarget>(
   transaction?: Transaction,
 ): Promise<AccessibleDocument<T>> {
   const accessible = await requireAccess(policy, userId, document, transaction)
-  const permissions = documentPermissionsOf(accessible.access.role, accessible.document, userId)
+  const checked = { ...accessible, permissions: documentPermissionsOf(accessible.access.role, accessible.document, userId) }
+  requireDocumentOperations(checked, operations)
+  return checked
+}
+
+/**
+ * 已经判断过能访问（requireDocumentContent 的结果）之后，再要求这几项操作：不再查询，不能做是 PERMISSION_DENIED。
+ * 保存先按"能访问"查重放、不是重放才要求能编辑时用它（00 号计划书 §7.4 第 2 步，M2-P6 复核 A 的 S-4）
+ */
+export function requireDocumentOperations(accessible: AccessibleDocument<AccessTarget>, operations: readonly DocumentOperation[]): void {
   for (const operation of operations) {
     const { permission, message } = DOCUMENT_CONTENT[operation]
-    if (!permissions[permission])
+    if (!accessible.permissions[permission])
       throw denied(accessible.access.space, message)
   }
-  return { ...accessible, permissions }
 }
 
 /** 空间里的内容操作与各自的权限；'view' 只要有空间角色，没有额外的权限位。 */
@@ -219,10 +227,19 @@ export async function requireSpaceContent(
   const access = await policy.spaceAccessOf(actor, spaceId, transaction)
   if (access?.role === undefined)
     throw new AppError('NOT_FOUND')
+  const content = { ...access, role: access.role }
+  requireSpaceOperation(content, operation)
+  return content
+}
+
+/**
+ * 已经判断过能看空间的内容（requireSpaceContent 的结果）之后，再要求在里面新建：不再查询，不能做是 PERMISSION_DENIED。
+ * 新建文件夹先按"能看到"查重放、不是重放才要求能新建时用它（M2-P6 复核 A 的 S-4）
+ */
+export function requireSpaceOperation(access: SpaceContentAccess, operation: SpaceContentOperation): void {
   const required = operation === 'view' ? undefined : SPACE_CONTENT[operation]
   if (required !== undefined && !access.permissions[required.permission])
     throw denied(access.space, required.message)
-  return { ...access, role: access.role }
 }
 
 /** 判断文件夹权限要用到的属性：所在的空间。v0.1 的权限只到空间与文档两级，文件夹没有自己的权限。 */

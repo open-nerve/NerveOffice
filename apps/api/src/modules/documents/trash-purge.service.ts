@@ -51,11 +51,12 @@ export class TrashPurgeService {
   ) {}
 
   /**
-   * 到这个时刻为止已经到期的删除单元，最早到期的在前，最多 limit 条。
+   * 到这个时刻为止已经到期的删除单元，最早到期的在前，最多 limit 条；except 里的不取（jobs 暂缓重试的那些，
+   * 一直失败的条目不挡住后面到期的，M2-P6 复核 A 的 S-1）。
    * 到期与否按调用方给的时刻判断（时钟由 jobs 提供），不用数据库的 now()
    */
-  async listExpired(now: Date, limit: number): Promise<ExpiredTrashEntry[]> {
-    const rows = await this.entries.listExpired(now, limit)
+  async listExpired(now: Date, limit: number, except: readonly string[] = []): Promise<ExpiredTrashEntry[]> {
+    const rows = await this.entries.listExpired(now, limit, except)
     return rows.map(row => ({ id: row.id, spaceId: row.spaceId, kind: row.kind, expiresAt: row.expiresAt }))
   }
 

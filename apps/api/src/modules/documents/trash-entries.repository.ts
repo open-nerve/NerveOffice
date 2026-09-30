@@ -3,9 +3,9 @@ import type { TimeCursor } from '../../shared/time-cursor.ts'
 import type { Database, Transaction } from '../database/index.ts'
 import { TRASH_RETENTION_DAYS } from '@nerve-office/contracts'
 import { Inject, Injectable } from '@nestjs/common'
-import { and, asc, desc, eq, inArray, lte, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, lte, not, sql } from 'drizzle-orm'
 import { trashEntries } from '../../db/schema/documents/index.ts'
-import { DATABASE, executorOf, keysetPosition } from '../database/index.ts'
+import { DATABASE, executorOf, inIdArray, keysetPosition } from '../database/index.ts'
 
 /** 回收站里的一个删除单元。 */
 export interface TrashEntryRow {
@@ -91,13 +91,15 @@ export class TrashEntriesRepository {
 
   /**
    * 到期的删除单元，最早到期的在前（M2-P4 设计 §3.4 第 6 条）：到期与否按调用方给的时刻判断，
-   * 不用数据库的 now()——时刻由 jobs 的时钟给出，集成测试因此不必等 30 天。走索引 trash_entries_expires_idx
+   * 不用数据库的 now()——时刻由 jobs 的时钟给出，集成测试因此不必等 30 天。走索引 trash_entries_expires_idx。
+   * except 里的不取（定时清理暂缓重试的那些，M2-P6 复核 A 的 S-1）：一直失败的条目到期最早、总排在最前面，
+   * 不把它们让开，攒够一批之后后面到期的就再也轮不到
    */
-  async listExpired(now: Date, limit: number): Promise<TrashEntryRow[]> {
+  async listExpired(now: Date, limit: number, except: readonly string[] = []): Promise<TrashEntryRow[]> {
     return this.db
       .select(COLUMNS)
       .from(t)
-      .where(lte(t.expiresAt, now))
+      .where(and(lte(t.expiresAt, now), except.length === 0 ? undefined : not(inIdArray(t.id, except))))
       .orderBy(asc(t.expiresAt), asc(t.id))
       .limit(limit)
   }
@@ -127,7 +129,7 @@ export class TrashEntriesRepository {
     const rows = await executorOf(this.db, transaction)
       .update(t)
       .set({ spaceId, originSpaceId: spaceId })
-      .where(inArray(t.id, [...ids]))
+      .where(inIdArray(t.id, ids))
       .returning({ id: t.id })
     return rows.length
   }
@@ -139,7 +141,7 @@ export class TrashEntriesRepository {
   async deleteMany(ids: readonly string[], transaction: Transaction): Promise<number> {
     if (ids.length === 0)
       return 0
-    const rows = await executorOf(this.db, transaction).delete(t).where(inArray(t.id, [...ids])).returning({ id: t.id })
+    const rows = await executorOf(this.db, transaction).delete(t).where(inIdArray(t.id, ids)).returning({ id: t.id })
     return rows.length
   }
 }

@@ -105,7 +105,7 @@ export class TrashService {
       // 锁下重新读、重新判断：这期间它可能被移走、被别人删，空间可能被归档，自己可能被移出空间
       const { document } = await requireDocumentContent(this.policy, actor.userId, await this.documents.lockById(id, transaction), ['delete'], transaction)
       // 树锁是按取锁之前读到的空间取的：万一刚好有一次跨空间移动提交了，这把锁就保护不到它（与移动、改名相同）。
-      // 这条范式由恢复那一处的集成用例代表（见 lockedEntry 的注释）
+      // 八处写操作每处一条集成用例：tests/integration 的 documents/structure-locks.test.ts（M2-P6 复核 A 的 M-1、B 的 B1）
       if (document.spaceId !== checked.document.spaceId)
         throw new AppError('NOT_FOUND')
 
@@ -138,7 +138,8 @@ export class TrashService {
       await this.tree.lock([checked.folder.spaceId], transaction)
       await this.spaces.holdSpace(checked.folder.spaceId, transaction)
       const { folder, space } = await requireFolderContent(this.policy, actor, await this.folders.findById(id, transaction), ['delete'], transaction)
-      // 同上：树锁按取锁之前读到的空间取，刚好被跨空间移走时这把锁保护不到它（范式见 lockedEntry 的注释）
+      // 同上：树锁按取锁之前读到的空间取，刚好被跨空间移走时这把锁保护不到它。这一条是承重的：没有它，删除只拿着原空间的树锁
+      // 改新空间里的子树，那边并发的移动可以把正常的文档放进正在进回收站的子文件夹，随这一单被永久删除（structure-locks.test.ts）
       if (folder.spaceId !== checked.folder.spaceId)
         throw new AppError('NOT_FOUND')
 
@@ -250,8 +251,8 @@ export class TrashService {
   /**
    * 锁住回收站行并重新判断：这期间它可能被恢复或永久删除（都看到它已经不在，NOT_FOUND，spec §7），
    * 空间可能被归档、自己可能被移出空间；取锁之前刚好有一次跨空间移动提交时，这把树锁保护不到它，同样按"没找到"回答。
-   * 最后这一条由 tests/integration 的"等树锁期间删除单元被搬到别的空间：恢复 404，文档仍在回收站里"覆盖（审查 A 建议 8），
-   * 别处的同一条范式（删除文档、删除文件夹、文件夹与文档的改名和移动）写法相同，由这一条用例代表。
+   * 最后这一条由 tests/integration 的"等树锁期间这一单被搬到别的空间：恢复 404"（trash.test.ts）与永久删除的同一条用例
+   * （structure-locks.test.ts）覆盖；别处的同一条核对（删除文档、删除文件夹、文件夹与文档的改名和移动）各有各的用例。
    */
   private async lockedEntry(
     actor: Actor,

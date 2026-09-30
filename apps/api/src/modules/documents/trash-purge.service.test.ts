@@ -49,7 +49,15 @@ describe('TrashPurgeService.listExpired', () => {
     await deletedDocument(store, trash, '第一份')
     await deletedDocument(store, trash, '第二份')
     expect(await service.listExpired(AFTER, 1)).toHaveLength(1)
-    expect(store.entries.listExpired).toHaveBeenLastCalledWith(AFTER, 1)
+    expect(store.entries.listExpired).toHaveBeenLastCalledWith(AFTER, 1, [])
+  })
+
+  it('暂缓重试的条目原样传给仓储，取出来的里面没有它们（一直失败的不挡住后面到期的，M2-P6 复核 A 的 S-1）', async () => {
+    const { store, trash, service } = setup()
+    const { entry: first } = await deletedDocument(store, trash, '第一份')
+    const { entry: second } = await deletedDocument(store, trash, '第二份')
+    expect((await service.listExpired(AFTER, 50, [first.id])).map(row => row.id)).toEqual([second.id])
+    expect(store.entries.listExpired).toHaveBeenLastCalledWith(AFTER, 50, [first.id])
   })
 })
 

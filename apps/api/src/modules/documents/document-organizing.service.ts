@@ -63,7 +63,7 @@ export class DocumentOrganizingService {
       // 锁下重新读、重新判断：这期间它可能被移走、被删，空间可能被归档，自己可能被移出空间
       const { document, access } = await this.checkUpdate(actor, await this.documents.lockById(id, transaction), command, transaction)
       // 树锁是按取锁之前读到的空间取的：万一刚好有一次跨空间移动提交了，这把锁就保护不到它（与文件夹的改动相同）。
-      // 这条范式由回收站恢复那一处的集成用例代表（TrashService.lockedEntry 的注释，审查 A 建议 8）
+      // 八处写操作每处一条集成用例：tests/integration 的 documents/structure-locks.test.ts（M2-P6 复核 A 的 M-1、B 的 B1）
       if (document.spaceId !== checked.document.spaceId)
         throw new AppError('NOT_FOUND')
 
@@ -101,6 +101,7 @@ export class DocumentOrganizingService {
         await this.spaces.holdSpace(spaceId, transaction)
       // 锁下重新读、重新判断：来源与目标的权限、归档状态都以锁下的为准
       const { document, access, target } = await this.checkMove(actor, await this.documents.lockById(id, transaction), command, transaction)
+      // 同上：树锁按取锁之前读到的空间取，刚好被跨空间移走时这把锁保护不到它
       if (document.spaceId !== checked.document.spaceId)
         throw new AppError('NOT_FOUND')
 

@@ -325,6 +325,28 @@ describe('TrashService.purge', () => {
     expect(Buffer.byteLength(JSON.stringify(details))).toBeLessThanOrEqual(AUDIT_DETAILS_MAX_BYTES)
   })
 
+  it('要删的都在回收站里（M2-P6 复核 A 的 S-3、B 的 B2）：回收站的文件夹下有正常状态的文档或文件夹，按数据不一致处理，什么也不删', async () => {
+    const { store, service } = setup()
+    const [top, middle] = chain(store, ALICE_SPACE, 2)
+    await service.deleteFolder(member(ALICE), top?.id ?? '', HTTP_ORIGIN)
+    const entryId = store.entryOfFolder(top?.id ?? '') ?? ''
+    const audits = store.audits.length
+    // 数据不一致：一份正常状态的文档挂在回收站里的子文件夹下（各条路径都不会这样写，这里直接摆出来）
+    const stray = store.addDocument({ folderId: middle?.id ?? null, title: '正常的' })
+    await expect(service.purge(member(ALICE), entryId, HTTP_ORIGIN)).rejects.toThrow(`永久删除的子树里有正常状态的行（文件夹 0 个、文档 1 份），什么也不删：${entryId}`)
+    // 正常状态的子文件夹同样
+    store.documents.delete(stray.id)
+    const strayFolder = store.addFolder({ spaceId: ALICE_SPACE, parentId: middle?.id ?? null, name: '正常的' })
+    await expect(service.purge(member(ALICE), entryId, HTTP_ORIGIN)).rejects.toThrow('（文件夹 1 个、文档 0 份）')
+
+    // 核对在删任何一行之前：什么也没删，删除单元还在，没有记审计
+    expect(store.repositories.documents.deleteMany).not.toHaveBeenCalled()
+    expect(store.repositories.folders.deleteMany).not.toHaveBeenCalled()
+    expect([top, middle, strayFolder].every(row => store.folders.has(row?.id ?? ''))).toBe(true)
+    expect(store.trashEntries.has(entryId)).toBe(true)
+    expect(store.audits).toHaveLength(audits)
+  })
+
   it('恢复与永久删除之后，另一个请求看到删除单元已经不在：NOT_FOUND', async () => {
     const { store, service } = setup()
     const document = store.addDocument()
