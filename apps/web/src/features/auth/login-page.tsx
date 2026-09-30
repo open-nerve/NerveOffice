@@ -68,6 +68,9 @@ export function LoginPage() {
   }
 
   const error = mutation.isError ? describeError(mutation.error) : undefined
+  // 为什么来到登录页（shared/lib/login-path.ts）：登录已过期；或者修改密码的结果未知、随后登录失效了（M2-P6 复核 G-1）
+  const reason = params.get('reason')
+  const notice = reason === 'expired' ? messages.auth.sessionExpired : reason === 'password_changed' ? messages.auth.passwordMaybeChanged : undefined
   return (
     <main className="flex min-h-svh items-center justify-center bg-muted/40 p-4">
       <Card className="w-full max-w-sm">
@@ -79,9 +82,9 @@ export function LoginPage() {
         </CardHeader>
         <CardContent>
           <form className="flex flex-col gap-4" onSubmit={submit} noValidate aria-label={messages.auth.loginTitle}>
-            {params.get('reason') === 'expired' && error === undefined && (
+            {notice !== undefined && error === undefined && (
               <Alert>
-                <AlertDescription>{messages.auth.sessionExpired}</AlertDescription>
+                <AlertDescription>{notice}</AlertDescription>
               </Alert>
             )}
             {error !== undefined && (

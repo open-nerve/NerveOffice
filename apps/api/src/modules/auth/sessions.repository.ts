@@ -2,7 +2,7 @@ import type { Buffer } from 'node:buffer'
 import type { SessionRevokeReason } from '../../db/schema/auth/index.ts'
 import type { Database, Transaction } from '../database/index.ts'
 import { Inject, Injectable } from '@nestjs/common'
-import { and, eq, gt, inArray, isNull, lt, ne, sql } from 'drizzle-orm'
+import { and, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm'
 import { authSessions } from '../../db/schema/auth/index.ts'
 import { DATABASE, executorOf } from '../database/index.ts'
 
@@ -56,6 +56,18 @@ export class SessionsRepository {
     return row
   }
 
+  /**
+   * 这个摘要的会话是不是因为 reasons 之一被撤销的；没有这条会话（从没有过、已被清理）、还没撤销（只是过期了）时为假。
+   * 会话守卫只在"会话无效"时经 SessionService 问（复验 N3），按摘要的唯一索引查一次
+   */
+  async revokedFor(tokenHash: Buffer, reasons: readonly SessionRevokeReason[]): Promise<boolean> {
+    const [row] = await this.db
+      .select({ id: authSessions.id })
+      .from(authSessions)
+      .where(and(eq(authSessions.tokenHash, tokenHash), inArray(authSessions.revokedReason, [...reasons])))
+    return row !== undefined
+  }
+
   /** 记录活动，空闲过期顺延，但不超过绝对过期。 */
   async touch(id: string, idleMinutes: number): Promise<void> {
     await this.db
@@ -64,28 +76,26 @@ export class SessionsRepository {
       .where(and(eq(authSessions.id, id), isNull(authSessions.revokedAt)))
   }
 
-  /** 撤销；空闲过期一并提前到现在，清理只看这一列。 */
-  async revoke(where: { id: string } | { tokenHash: Buffer }, reason: SessionRevokeReason, transaction?: Transaction): Promise<void> {
+  /** 撤销；空闲过期一并提前到现在，清理只看这一列。返回这次撤销了没有：已经撤销过的不再改（原因保留最初的那个），返回假 */
+  async revoke(where: { id: string } | { tokenHash: Buffer }, reason: SessionRevokeReason, transaction?: Transaction): Promise<boolean> {
     const target = 'id' in where ? eq(authSessions.id, where.id) : eq(authSessions.tokenHash, where.tokenHash)
-    await executorOf(this.db, transaction)
+    const rows = await executorOf(this.db, transaction)
       .update(authSessions)
       .set({ revokedAt: sql`now()`, revokedReason: reason, idleExpiresAt: sql`least(${authSessions.idleExpiresAt}, now())` })
       .where(and(target, isNull(authSessions.revokedAt)))
+      .returning({ id: authSessions.id })
+    return rows.length > 0
   }
 
   /**
-   * 撤销这个人全部未撤销的会话（M2-P1 设计 §3.5）；except 是要保留的一条（修改密码时的当前会话）。
+   * 撤销这个人全部未撤销的会话（M2-P1 设计 §3.5）。
    * 已经过期的也一并标记：不影响结果，清理照常按空闲过期的时间。
    */
-  async revokeAllOfUser(userId: string, reason: SessionRevokeReason, except: string | undefined, transaction?: Transaction): Promise<void> {
+  async revokeAllOfUser(userId: string, reason: SessionRevokeReason, transaction?: Transaction): Promise<void> {
     await executorOf(this.db, transaction)
       .update(authSessions)
       .set({ revokedAt: sql`now()`, revokedReason: reason, idleExpiresAt: sql`least(${authSessions.idleExpiresAt}, now())` })
-      .where(and(
-        eq(authSessions.userId, userId),
-        isNull(authSessions.revokedAt),
-        except === undefined ? undefined : ne(authSessions.id, except),
-      ))
+      .where(and(eq(authSessions.userId, userId), isNull(authSessions.revokedAt)))
   }
 
   /**

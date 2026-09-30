@@ -1,13 +1,26 @@
+import type { AuditEvent } from './audit-event.ts'
 import { describe, expect, it } from 'vitest'
-import { auditEventSchema } from './audit-event.ts'
+import { parseAuditEvent } from './audit-event.ts'
 
 const USER_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
-const base = { action: 'documents.created', actor: { type: 'user', id: USER_ID }, origin: { source: 'http', requestId: 'req-1', clientIp: '127.0.0.1' } } as const
+const SPACE_ID = '0199a2c4-2a3b-7c4d-9e5f-6a7b8c9d0e1f'
+const base = { action: 'documents.created', actor: { type: 'user', id: USER_ID }, origin: { source: 'http', requestId: 'req-1', clientIp: '127.0.0.1' }, details: { revision: 1, folderId: null } } as const
+
+/** 不合法的事件：绕过类型检查，模拟调用方写错了 */
+function parses(event: unknown): boolean {
+  try {
+    parseAuditEvent(event as AuditEvent)
+    return true
+  }
+  catch {
+    return false
+  }
+}
 
 describe('审计事件的校验', () => {
-  it('接受合法的事件', () => {
-    expect(auditEventSchema.parse({ ...base, target: { type: 'document', id: USER_ID }, details: { title: '周报' } })).toMatchObject(base)
-    expect(auditEventSchema.parse({ action: 'users.admin_initialized', actor: { type: 'system' }, origin: { source: 'cli' } })).toBeDefined()
+  it('接受合法的事件；明细里没有必填字段的动作可以不给 details（按空对象写入）', () => {
+    expect(parseAuditEvent({ ...base, target: { type: 'document', id: USER_ID } })).toMatchObject(base)
+    expect(parseAuditEvent({ action: 'users.disabled', actor: { type: 'system' }, origin: { source: 'cli' } })).toMatchObject({ details: {} })
   })
 
   it.each([
@@ -20,26 +33,23 @@ describe('审计事件的校验', () => {
     ['命令行来源带客户端地址', { ...base, origin: { source: 'cli', clientIp: '127.0.0.1' } }],
     ['客户端地址不合法', { ...base, origin: { source: 'http', requestId: 'r', clientIp: 'localhost' } }],
     ['多余的字段', { ...base, extra: 1 }],
+    ['明细少了必填的字段', { ...base, details: { revision: 1 } }],
+    ['明细的类型不对', { ...base, details: { revision: 1, folderId: 'x' } }],
   ])('拒绝%s', (_case, event) => {
-    expect(auditEventSchema.safeParse(event).success).toBe(false)
+    expect(parses(event)).toBe(false)
   })
 
-  it('details 按 JSON 文本计不超过 4 KiB', () => {
-    expect(auditEventSchema.safeParse({ ...base, details: { text: 'x'.repeat(4_000) } }).success).toBe(true)
-    expect(auditEventSchema.safeParse({ ...base, details: { text: 'x'.repeat(4_100) } }).success).toBe(false)
-  })
-
-  // 数组与嵌套对象的长度没有上界，很容易越过字节上限，而审计与业务写在同一个事务里：
-  // 那会把整条业务事务一起回滚成 500（M2-P4 审查 A1）。在写入口就挡住，不靠每个调用点自觉
-  it('details 的值只收标量：字符串、数字、布尔、null', () => {
-    expect(auditEventSchema.safeParse({ ...base, details: { title: '周报', folders: 2, movedToRoot: false, parentId: null } }).success).toBe(true)
-  })
-
+  // 明细按动作的严格结构（M2-P6 复核 M-1）：多出来的键写不进去，标题与名称因此进不了审计
   it.each([
-    ['数组', { ids: ['a', 'b'] }],
-    ['空数组', { ids: [] }],
-    ['嵌套对象', { from: { name: '周报' } }],
-  ])('details 的值不收%s', (_case, details) => {
-    expect(auditEventSchema.safeParse({ ...base, details }).success).toBe(false)
+    ['文档改名带着标题', { action: 'documents.renamed', details: { spaceId: SPACE_ID, folderId: null, from: '周报', to: '月报' } }],
+    ['新建文件夹带着名称', { action: 'folders.created', details: { spaceId: SPACE_ID, parentId: null, name: '资料' } }],
+    ['永久删除带着标题', { action: 'documents.purged', details: { spaceId: SPACE_ID, trashEntryId: USER_ID, folders: 0, documents: 1, cascadedEntries: 0, title: '周报' } }],
+    ['没有明细的动作带着明细', { action: 'users.disabled', details: { title: '周报' } }],
+  ])('拒绝%s', (_case, event) => {
+    expect(parses({ actor: { type: 'user', id: USER_ID }, origin: { source: 'cli' }, ...event })).toBe(false)
+  })
+
+  it('同一个动作换一个结构正确的明细就接受', () => {
+    expect(parses({ action: 'documents.renamed', actor: { type: 'user', id: USER_ID }, origin: { source: 'cli' }, details: { spaceId: SPACE_ID, folderId: null } })).toBe(true)
   })
 })

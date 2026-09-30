@@ -66,7 +66,8 @@ describe('FoldersService.create', () => {
       actor: { type: 'user', id: ALICE },
       target: { type: 'folder', id: folder.id },
       origin: HTTP_ORIGIN,
-      details: { spaceId: ALICE_SPACE, parentId: null, name: '资料' },
+      // 只记位置，不记名称（M2-P6 复核 M-1）
+      details: { spaceId: ALICE_SPACE, parentId: null },
     }])
   })
 
@@ -185,7 +186,8 @@ describe('FoldersService.update', () => {
       actor: { type: 'user', id: ALICE },
       target: { type: 'folder', id: folder.id },
       origin: HTTP_ORIGIN,
-      details: { spaceId: ALICE_SPACE, from: '资料', to: '归档' },
+      // 只记位置，不记改动前后的名称（M2-P6 复核 M-1）
+      details: { spaceId: ALICE_SPACE, parentId: null },
     }])
     await service.update(member(ALICE), folder.id, { name: '归档' }, HTTP_ORIGIN)
     expect(store.audits).toHaveLength(1)

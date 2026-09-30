@@ -51,6 +51,17 @@ describe('管理界面：审计', () => {
     await waitFor(() => expect(requested(api, `${LIST}?action=users.disabled`)).toBe(true))
   })
 
+  it('重置链接被作废（M2-P6 复核 C3 的新动作）：显示动作的名称，筛选里也有它；明细按原样给出', async () => {
+    audit({
+      [LIST]: () => json(200, listPage([event(3, { action: 'users.password_reset_revoked', details: { passwordResetId: AMY.id, reason: 'reissued' } })])),
+    })
+    renderApp('/admin/audit')
+    const row = rowAt(await screen.findByRole('table', { name: '审计事件' }), 1)
+    expect(within(row).getByText('作废重置链接')).toBeInTheDocument()
+    expect(within(row).getByText(`{"passwordResetId":"${AMY.id}","reason":"reissued"}`)).toBeInTheDocument()
+    expect(within(screen.getByLabelText('动作')).getByRole('option', { name: '作废重置链接' })).toHaveValue('users.password_reset_revoked')
+  })
+
   it('点对象只看这个对象：焦点移到"清除对象的筛选"；清除之后焦点回到动作的筛选，请求不再带对象（审查 B9、B14）', async () => {
     const api = audit({
       [LIST]: () => json(200, listPage([EVENT])),

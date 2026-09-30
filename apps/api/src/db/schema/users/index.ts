@@ -23,6 +23,8 @@ export const users = pgTable('users', {
   check('users_display_name_check', lengthBetween(table.displayName, 1, DISPLAY_NAME_MAX_LENGTH)),
   // 只存 Argon2id 的哈希：代码写错时也存不进明文
   check('users_password_hash_check', sql`${table.passwordHash} LIKE '$argon2id$%'`),
+  // 凭据的版本从 1 开始只增不减（M2-P6 复核 G-4）：复核按版本比较，写成 0 或负数说明代码写错了
+  check('users_password_version_check', sql`${table.passwordVersion} >= 1`),
   check('users_system_role_check', oneOf(table.systemRole, USER_SYSTEM_ROLES)),
   check('users_status_check', oneOf(table.status, USER_STATUSES)),
 ])

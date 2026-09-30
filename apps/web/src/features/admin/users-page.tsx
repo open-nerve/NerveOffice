@@ -14,7 +14,7 @@ import { useDebouncedValue } from '../../shared/lib/use-debounced-value.ts'
 import { Badge, Button, buttonVariants, Input, Label, NativeSelect, TableCell } from '../../shared/ui/index.ts'
 import { sessionQueryOptions, SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
 import { ConfirmDialog } from '../confirmation/index.ts'
-import { ADMIN_QUERY_KEY, adminUsersQueryOptions, changeSystemRole, disableUser, enableUser, issuePasswordReset } from './admin-api.ts'
+import { ADMIN_QUERY_KEY, adminUsersQueryOptions, changeSystemRole, disableUser, enableUser, issuePasswordReset, unlockLogin } from './admin-api.ts'
 import { IssuedLinkDialog } from './issued-link-dialog.tsx'
 import { PagedTable } from './paged-table.tsx'
 
@@ -22,6 +22,12 @@ const text = messages.admin.users
 
 function nameOf(user: AdminUser): string {
   return `${user.displayName}（${user.username}）`
+}
+
+/** 登录锁定的说明（M2-P6 复核 A1）：全部来源都锁了，还是只锁了某些来源（本人从别处照常登录） */
+function loginLockText(lock: NonNullable<AdminUser['loginLock']>): string {
+  const until = formatDateTime(lock.until)
+  return lock.allSources ? text.loginLocked(until) : text.loginLockedSomeSources(until)
 }
 
 /** 弹出的重置链接；给自己生成的，关闭之后重新确认会话（本人的登录已经退出） */
@@ -32,6 +38,7 @@ interface IssuedReset {
 
 /**
  * 管理界面：账户（M2-P1 设计 §3.8，US-M2-03、04）。搜索与状态过滤；停用与启用、设为或取消系统管理员、生成重置链接，
+ * 登录被锁定的账户显示锁到什么时候、可以解除（M2-P6 复核 A1）；
  * 每个操作先确认后果；失败按错误码说明（例如至少要保留一个有效的系统管理员）。
  * 操作的是自己的账户时另给说明，成功之后重新确认会话（审查 B4）：取消了自己的系统管理员就切到无权限，停用了自己就整页离开；
  * 给自己生成的重置链接要先交到本人手里，关闭链接的弹窗之后再确认。
@@ -156,6 +163,12 @@ export function AdminUsersPage() {
             {text.resetPassword}
           </Button>
         )}
+        {/* 登录被锁定（M2-P6 复核 A1）：解除之后这一行不再有这个按钮，焦点回到这一行 */}
+        {user.loginLock !== null && (
+          <Button variant="ghost" size="sm" aria-label={messages.admin.actionOn(text.unlockLogin, name)} onClick={() => confirmThen(user, { title: text.confirmUnlockLogin(name), description: text.unlockLoginDescription, confirmLabel: text.unlockLogin }, async () => unlockLogin(user.id))}>
+            {text.unlockLogin}
+          </Button>
+        )}
         {/* 停用的账户：把个人空间里的文档转移给别人（M2-P2 设计 §3.8） */}
         {user.status === 'disabled' && (
           <Link to={adminUserDocumentsPath(user.id)} aria-label={messages.admin.actionOn(text.transfer, name)} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>
@@ -193,7 +206,12 @@ export function AdminUsersPage() {
             <TableCell className="font-medium">{user.username}</TableCell>
             <TableCell>{user.displayName}</TableCell>
             <TableCell><Badge variant={user.systemRole === 'admin' ? 'default' : 'outline'}>{messages.admin.roleName(user.systemRole)}</Badge></TableCell>
-            <TableCell><Badge variant={user.status === 'active' ? 'secondary' : 'destructive'}>{messages.admin.statusName(user.status)}</Badge></TableCell>
+            <TableCell>
+              <div className="flex flex-col items-start gap-1">
+                <Badge variant={user.status === 'active' ? 'secondary' : 'destructive'}>{messages.admin.statusName(user.status)}</Badge>
+                {user.loginLock !== null && <span className="text-xs text-destructive">{loginLockText(user.loginLock)}</span>}
+              </div>
+            </TableCell>
             <TableCell className="whitespace-nowrap"><time dateTime={user.createdAt}>{formatDateTime(user.createdAt)}</time></TableCell>
             <TableCell>{actionsOf(user)}</TableCell>
           </>

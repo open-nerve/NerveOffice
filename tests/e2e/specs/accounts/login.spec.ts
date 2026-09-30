@@ -153,8 +153,9 @@ test.describe('US-M1-02 登录与退出', () => {
     await page.getByRole('button', { name: '加载更多' }).click()
     await expect(page).toHaveURL(/\/login\?from=%2F%3Fview%3Dlist&reason=expired$/)
     await expect(page.getByText('登录已过期，请重新登录')).toBeVisible()
-    // 只有下一页（401）与登录页确认会话各一次：没有在旧页面上重新请求列表
-    expect(requests).toEqual([expect.stringMatching(/^GET \/api\/documents\?spaceId=[\da-f-]{36}&cursor=/), 'GET /api/auth/session'])
+    // 只有下一页（401）、旧页面确认一次会话（登录已过期时先确认是不是换了令牌，复验 N3）、登录页确认一次会话：
+    // 没有在旧页面上重新请求列表
+    expect(requests).toEqual([expect.stringMatching(/^GET \/api\/documents\?spaceId=[\da-f-]{36}&cursor=/), 'GET /api/auth/session', 'GET /api/auth/session'])
 
     await loginThroughUi(page, user)
     await expect(page).toHaveURL(/\/\?view=list$/)

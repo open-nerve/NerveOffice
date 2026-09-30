@@ -1,12 +1,12 @@
-import type { Invitation, InvitationStatus, IssuedInvitation } from '@nerve-office/contracts'
+import type { CreateInvitationRequest, Invitation, InvitationStatus, IssuedInvitation } from '@nerve-office/contracts'
 import type { SyntheticEvent } from 'react'
 import type { PendingConfirmation } from '../confirmation/index.ts'
 import type { IssuedLink } from './issued-link-dialog.tsx'
 import type { PagedTableHandle } from './paged-table.tsx'
-import { createInvitationRequestSchema, INVITATION_STATUSES } from '@nerve-office/contracts'
+import { createInvitationRequestSchema, INVITATION_LIFETIME_DAYS, INVITATION_STATUSES } from '@nerve-office/contracts'
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
-import { describeError } from '../../shared/api/index.ts'
+import { ApiError, describeError, isUnknownOutcome } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { Alert, AlertDescription, Badge, Button, Input, Label, NativeSelect, TableCell } from '../../shared/ui/index.ts'
@@ -30,9 +30,24 @@ function linkOf(issued: IssuedInvitation, returnFocus: () => void): IssuedLink {
 }
 
 /**
+ * 签发失败时的说明（M2-P6 复核 G-2）：结果未知时邀请可能已经建好，链接却丢了（只在签发的响应里出现一次），引导去列表里重新生成；
+ * 结果未知之后对同一个登录名再签发得到"已被占用"，多半就是刚才那一次，同样引导去重新生成；其余按错误码。
+ * 比较的两边都是经契约解析过的请求（createInvitationRequestSchema，登录名已是规范写法，复验 N10）：
+ * 两次输入只差大小写或首尾空白，也认作同一个登录名
+ */
+function issueFailureText(error: unknown, request: CreateInvitationRequest | undefined, unsureFor: string | undefined): string {
+  if (isUnknownOutcome(error))
+    return text.issueOutcomeUnknown(describeError(error).message)
+  if (error instanceof ApiError && error.code === 'USERNAME_TAKEN' && unsureFor !== undefined && request?.username === unsureFor)
+    return text.issueRetryTaken
+  return describeError(error).message
+}
+
+/**
  * 管理界面：邀请（M2-P1 设计 §3.8，US-M2-01）。管理员填好登录名与显示名，生成一次性链接（只显示这一次）；
  * 列表按签发时间从新到旧，可按状态过滤；待接受或已过期的可以作废。同一个登录名只对最新的一条（没有接受、后来也没有再签发过）
  * 给出重新生成，原来的随即作废（审查 B6）。
+ * 签发的结果未知时（网络中断、服务端出错）刷新列表、保留输入，引导去列表里重新生成（M2-P6 复核 G-2）。
  */
 export function AdminInvitationsPage() {
   const queryClient = useQueryClient()
@@ -43,6 +58,8 @@ export function AdminInvitationsPage() {
   const [problem, setProblem] = useState<string>()
   const [pending, setPending] = useState<PendingConfirmation>()
   const [issued, setIssued] = useState<IssuedLink>()
+  /** 结果未知的那一次签发的登录名：邀请可能已经建好了。成功签发之后清掉 */
+  const [unsureFor, setUnsureFor] = useState<string>()
   const usernameRef = useRef<HTMLInputElement>(null)
   const statusRef = useRef<HTMLSelectElement>(null)
   const tableRef = useRef<PagedTableHandle>(null)
@@ -66,8 +83,17 @@ export function AdminInvitationsPage() {
     onSuccess: async (result) => {
       setUsername('')
       setDisplayName('')
+      setUnsureFor(undefined)
       // 清空之后提交按钮变成 disabled：焦点先进链接的弹窗，关闭之后回到登录名，接着签发下一个（审查 B9）
       setIssued(linkOf(result, () => usernameRef.current?.focus()))
+      await refresh()
+    },
+    // 结果未知：邀请可能已经建好，刷新列表让它出现；输入留着，列表里没有时可以再生成一次。
+    // 记下的是请求里的登录名（规范写法），不是输入框里的原文（复验 N10）
+    onError: async (error, request) => {
+      if (!isUnknownOutcome(error))
+        return
+      setUnsureFor(request.username)
       await refresh()
     },
   })
@@ -135,11 +161,11 @@ export function AdminInvitationsPage() {
     )
   }
 
-  const error = problem ?? (creation.isError ? describeError(creation.error).message : undefined)
+  const error = problem ?? (creation.isError ? issueFailureText(creation.error, creation.variables, unsureFor) : undefined)
   return (
     <div className="flex flex-col gap-6">
       <form className="flex flex-col gap-3 rounded-lg border p-4" onSubmit={submit} noValidate aria-label={text.issue}>
-        <p className="text-sm text-muted-foreground">{text.description}</p>
+        <p className="text-sm text-muted-foreground">{text.description(INVITATION_LIFETIME_DAYS)}</p>
         {error !== undefined && (
           <Alert variant="destructive">
             <AlertDescription>{error}</AlertDescription>

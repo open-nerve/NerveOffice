@@ -1,11 +1,16 @@
-// 运行时的组装：默认用浏览器的实现；与会话无关的请求不触发会话的全局处理；会话复核给组件用。流程见 app.test.tsx。
+// 运行时的组装：默认用浏览器的实现；与会话无关的请求不触发会话的全局处理；会话复核给组件用；
+// 请求得到"登录已过期"时先确认会话（复验 N3），本页的登录、修改密码先等它结束（有上限，M2-P6 复验 一般-1、一般-2）；
+// 退出用的"换上同一个人的新会话"（M2-P6 复验 一般-4）。流程见 app.test.tsx。
 import type { SessionResponse } from '@nerve-office/contracts'
+import type { AppRuntime } from './runtime.ts'
 import { MutationObserver } from '@tanstack/react-query'
 import { createMemoryRouter } from 'react-router'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
-import { SYSTEM_ADMIN_ONLY } from '../features/auth/index.ts'
-import { ApiError } from '../shared/api/index.ts'
-import { installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
+import { z } from 'zod'
+import { RENEWS_SESSION, RENEWS_SESSION_AFTER_UNKNOWN, STARTS_SESSION, SYSTEM_ADMIN_ONLY } from '../features/auth/index.ts'
+import { ApiError, apiRequest, NetworkError, setCsrfToken } from '../shared/api/index.ts'
+import { apiError, installFakeApi, json, networkFailure } from '../shared/testing/fake-api.test-support.ts'
+import { SESSION_CHANGE_TIME_LIMIT_MS } from './query-client.ts'
 import { recordingPage, sessionBus } from './render-app.test-support.tsx'
 import { createAppRuntime } from './runtime.ts'
 
@@ -15,9 +20,13 @@ const SESSION: SessionResponse = {
   csrfToken: 'csrf-1',
 }
 
-function runtimeAt(path: string) {
+/** 另一个人的会话：别的标签页换人登录之后，会话 Cookie 属于他 */
+const OTHER_SESSION: SessionResponse = { ...SESSION, user: { ...SESSION.user, id: '0199a2c4-1f2e-7a3b-8c4d-000000000002' }, csrfToken: 'csrf-other' }
+
+/** bus：同一个浏览器里各个标签页之间的会话消息，要模拟别的标签页时传入同一条 */
+function runtimeAt(path: string, bus = sessionBus()) {
   const page = recordingPage()
-  const runtime = createAppRuntime({ createRouter: routes => createMemoryRouter(routes, { initialEntries: [path] }), page, sessionChannel: sessionBus().open() })
+  const runtime = createAppRuntime({ createRouter: routes => createMemoryRouter(routes, { initialEntries: [path] }), page, sessionChannel: bus.open() })
   onTestFinished(() => runtime.dispose())
   return { runtime, page }
 }
@@ -29,6 +38,41 @@ function deferredResponse(): { handler: () => Promise<Response>, resolve: (respo
     resolve = settle
   })
   return { handler: async () => promise, resolve }
+}
+
+/** 得到 401 的变更（"登录已过期"或"未登录"）：得到"登录已过期"的，发出时带的可能是换令牌之前的旧 Cookie */
+async function failWith(runtime: AppRuntime, code: 'SESSION_EXPIRED' | 'UNAUTHENTICATED', meta?: Record<string, unknown>) {
+  const mutationFn = vi.fn(async (): Promise<never> => {
+    throw new ApiError(401, code, 'x')
+  })
+  await expect(new MutationObserver(runtime.queryClient, { mutationFn, meta }).mutate()).rejects.toMatchObject({ code })
+  return mutationFn
+}
+
+/**
+ * 本页还在进行的登录或修改密码（meta 是 STARTS_SESSION 或 RENEWS_SESSION）：由测试结束它。
+ * done 在它结束时兑现（失败的也兑现，免得成为未处理的拒绝）
+ */
+function sessionChangeInProgress(runtime: AppRuntime, meta: Record<string, unknown>) {
+  let succeed: (session: SessionResponse) => void = () => {}
+  let fail: (error: unknown) => void = () => {}
+  const done = new MutationObserver(runtime.queryClient, {
+    mutationFn: async () => new Promise<SessionResponse>((resolve, reject) => {
+      succeed = resolve
+      fail = reject
+    }),
+    meta,
+  }).mutate().catch(() => undefined)
+  return { succeed: (session: SessionResponse) => succeed(session), fail: (error: unknown) => fail(error), done }
+}
+
+function sessionOf(runtime: AppRuntime): SessionResponse | undefined {
+  return runtime.queryClient.getQueryData<SessionResponse>(['auth', 'session'])
+}
+
+/** 让已经发出的请求与随后的处理都走完：用来断言"没有再发请求""没有跳转" */
+async function settle(ms = 20): Promise<void> {
+  await new Promise(resolve => setTimeout(resolve, ms))
 }
 
 describe('createAppRuntime', () => {
@@ -132,5 +176,465 @@ describe('会话复核（M2-P1 审查 B3、B4）', () => {
     await new Promise(resolve => setTimeout(resolve, 20))
     expect(api.requests).toEqual([])
     expect(page.visits).toEqual([])
+  })
+})
+
+describe('请求得到"登录已过期"：先向服务端确认会话（复验 N3）', () => {
+  it('还是同一个人（本页或别的标签页刚换了令牌）：换上新的会话与 CSRF 令牌，页面不动；这个请求照常失败，不自动重试', async () => {
+    const api = installFakeApi({ 'GET /api/auth/session': () => json(200, { ...SESSION, csrfToken: 'csrf-2' }), 'POST /api/probe': () => new Response(null, { status: 204 }) })
+    const { runtime, page } = runtimeAt('/')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    const request = await failWith(runtime, 'SESSION_EXPIRED')
+    await vi.waitFor(() => expect(sessionOf(runtime)?.csrfToken).toBe('csrf-2'))
+    expect(page.visits).toEqual([])
+    expect(request).toHaveBeenCalledTimes(1)
+    // 之后的状态变更带着新的令牌
+    await apiRequest('/api/probe', { method: 'POST', schema: z.undefined() })
+    expect(api.requests.find(entry => entry.key === 'POST /api/probe')?.headers['x-csrf-token']).toBe('csrf-2')
+  })
+
+  it('已经没有会话（过期那次的响应清除了 Cookie，确认得到"未登录"）：按"已过期"回到登录页，保留原来的地址，不是"请先登录"', async () => {
+    installFakeApi({ 'GET /api/auth/session': () => apiError(401, 'UNAUTHENTICATED') })
+    const { runtime, page } = runtimeAt('/?view=list')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    await failWith(runtime, 'SESSION_EXPIRED')
+    await vi.waitFor(() => expect(page.visits).toEqual(['/login?from=%2F%3Fview%3Dlist&reason=expired']))
+  })
+
+  it('修改密码的结果未知之后再提交得到"登录已过期"：确认没有会话，回到登录页的原因是 password_changed（M2-P6 复核 G-1）', async () => {
+    installFakeApi({ 'GET /api/auth/session': () => apiError(401, 'SESSION_EXPIRED') })
+    const { runtime, page } = runtimeAt('/settings/password')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    await failWith(runtime, 'SESSION_EXPIRED', RENEWS_SESSION_AFTER_UNKNOWN)
+    await vi.waitFor(() => expect(page.visits).toEqual(['/login?from=%2Fsettings%2Fpassword&reason=password_changed']))
+  })
+
+  it('几个请求一起得到"登录已过期"，其中一个是修改密码结果未知之后的再提交：只跳转一次，原因是更具体的 password_changed', async () => {
+    installFakeApi({ 'GET /api/auth/session': () => apiError(401, 'SESSION_EXPIRED') })
+    const { runtime, page } = runtimeAt('/settings/password')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    await Promise.all([failWith(runtime, 'SESSION_EXPIRED', RENEWS_SESSION_AFTER_UNKNOWN), failWith(runtime, 'SESSION_EXPIRED')])
+    await vi.waitFor(() => expect(page.visits).toEqual(['/login?from=%2Fsettings%2Fpassword&reason=password_changed']))
+    await settle()
+    expect(page.visits).toHaveLength(1)
+  })
+
+  it('确认时换了人（别的标签页登录了另一个人）：整页重新加载，新会话的令牌不交给这个页面', async () => {
+    installFakeApi({ 'GET /api/auth/session': () => json(200, OTHER_SESSION) })
+    const { runtime, page } = runtimeAt('/')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    await failWith(runtime, 'SESSION_EXPIRED')
+    await vi.waitFor(() => expect(page.visits).toEqual(['reload']))
+    expect(sessionOf(runtime)?.csrfToken).toBe('csrf-1')
+  })
+
+  it('同一轮确认里先后三个请求得到"登录已过期"，确认看到另一个人：只重新加载一次，另一个人的令牌不交给页面', async () => {
+    const pending = deferredResponse()
+    const api = installFakeApi({ 'GET /api/auth/session': pending.handler })
+    const { runtime, page } = runtimeAt('/')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    await failWith(runtime, 'SESSION_EXPIRED')
+    await vi.waitFor(() => expect(api.requests).toHaveLength(1))
+    await failWith(runtime, 'SESSION_EXPIRED')
+    await failWith(runtime, 'SESSION_EXPIRED')
+    api.on('GET /api/auth/session', () => json(200, OTHER_SESSION))
+    pending.resolve(json(200, OTHER_SESSION))
+    await vi.waitFor(() => expect(page.visits).toEqual(['reload']))
+    await settle()
+    expect(page.visits).toEqual(['reload'])
+    expect(sessionOf(runtime)?.csrfToken).toBe('csrf-1')
+  })
+
+  it('得到"登录已过期"之前就开始的一轮确认回"没有会话"：不作数（带的可能还是旧 Cookie），补上一轮，以它为准', async () => {
+    const first = deferredResponse()
+    const api = installFakeApi({ 'GET /api/auth/session': first.handler })
+    const { runtime, page } = runtimeAt('/')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    const checking = runtime.recheckSession()
+    await vi.waitFor(() => expect(api.requests).toHaveLength(1))
+    await failWith(runtime, 'SESSION_EXPIRED')
+    api.on('GET /api/auth/session', () => json(200, { ...SESSION, csrfToken: 'csrf-3' }))
+    first.resolve(apiError(401, 'SESSION_EXPIRED'))
+    await checking
+    await vi.waitFor(() => expect(sessionOf(runtime)?.csrfToken).toBe('csrf-3'))
+    expect(api.requests.map(entry => entry.key)).toEqual(['GET /api/auth/session', 'GET /api/auth/session'])
+    expect(page.visits).toEqual([])
+  })
+
+  it('确认进行中别的标签页发来消息：这一轮看到同一个人（换上新令牌），补上的一轮看到换了人，整页重新加载一次', async () => {
+    const bus = sessionBus()
+    const otherTab = bus.open()
+    const pending = deferredResponse()
+    const api = installFakeApi({ 'GET /api/auth/session': pending.handler })
+    const { runtime, page } = runtimeAt('/', bus)
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    await failWith(runtime, 'SESSION_EXPIRED')
+    await vi.waitFor(() => expect(api.requests).toHaveLength(1))
+    api.on('GET /api/auth/session', () => json(200, OTHER_SESSION))
+    otherTab.announce()
+    pending.resolve(json(200, { ...SESSION, csrfToken: 'csrf-2' }))
+    await vi.waitFor(() => expect(page.visits).toEqual(['reload']))
+    await settle()
+    expect(page.visits).toEqual(['reload'])
+    expect(api.requests).toHaveLength(2)
+  })
+
+  it('确认进行中别的标签页发来消息，这一轮确认没有会话：按"已过期"离开，不再多确认一次', async () => {
+    const bus = sessionBus()
+    const otherTab = bus.open()
+    const pending = deferredResponse()
+    const api = installFakeApi({ 'GET /api/auth/session': pending.handler })
+    const { runtime, page } = runtimeAt('/', bus)
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    await failWith(runtime, 'SESSION_EXPIRED')
+    await vi.waitFor(() => expect(api.requests).toHaveLength(1))
+    otherTab.announce()
+    pending.resolve(apiError(401, 'UNAUTHENTICATED'))
+    await vi.waitFor(() => expect(page.visits).toEqual(['/login?reason=expired']))
+    await settle()
+    expect(api.requests).toHaveLength(1)
+  })
+
+  it('确认的请求断网：不下结论，页面不动；之后别的标签页的消息补上一轮，没有会话时按"已过期"离开', async () => {
+    const bus = sessionBus()
+    const otherTab = bus.open()
+    const api = installFakeApi({ 'GET /api/auth/session': networkFailure })
+    const { runtime, page } = runtimeAt('/', bus)
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    await failWith(runtime, 'SESSION_EXPIRED')
+    await settle()
+    expect(page.visits).toEqual([])
+    api.on('GET /api/auth/session', () => apiError(401, 'UNAUTHENTICATED'))
+    otherTab.announce()
+    await vi.waitFor(() => expect(page.visits).toEqual(['/login?reason=expired']))
+  })
+
+  it('一次性链接的公开页面上得到"登录已过期"：不确认；离开这个页面时补上确认，没有会话时按"已过期"离开', async () => {
+    const api = installFakeApi({ 'GET /api/auth/session': () => apiError(401, 'UNAUTHENTICATED') })
+    const { runtime, page } = runtimeAt('/invite')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    await failWith(runtime, 'SESSION_EXPIRED')
+    await settle()
+    expect(api.requests).toEqual([])
+    await runtime.router.navigate('/')
+    await vi.waitFor(() => expect(page.visits).toEqual(['/login?reason=expired']))
+    expect(api.requests.map(entry => entry.key)).toEqual(['GET /api/auth/session'])
+  })
+
+  it('页面已经在离开（请求得到未登录）：之后得到的"登录已过期"不再确认、不再跳转', async () => {
+    const api = installFakeApi({ 'GET /api/auth/session': () => json(200, SESSION) })
+    const { runtime, page } = runtimeAt('/')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    await failWith(runtime, 'UNAUTHENTICATED')
+    await failWith(runtime, 'SESSION_EXPIRED')
+    await settle()
+    expect(api.requests).toEqual([])
+    expect(page.visits).toEqual(['/login'])
+  })
+
+  it('请求得到"未登录"（没有带会话 Cookie）：不确认，直接回到登录页', async () => {
+    const api = installFakeApi({})
+    const { runtime, page } = runtimeAt('/?view=list')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    await failWith(runtime, 'UNAUTHENTICATED')
+    expect(page.visits).toEqual(['/login?from=%2F%3Fview%3Dlist'])
+    expect(api.requests).toEqual([])
+  })
+
+  it('确认还没有结果时另一个请求得到"未登录"（过期那次的响应已经清除了 Cookie）：不等确认，直接按"已过期"回到登录页（M2-P6 复验 建议-1）', async () => {
+    const pending = deferredResponse()
+    const api = installFakeApi({ 'GET /api/auth/session': pending.handler })
+    const { runtime, page } = runtimeAt('/?view=list')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    await failWith(runtime, 'SESSION_EXPIRED')
+    await vi.waitFor(() => expect(api.requests).toHaveLength(1))
+    await failWith(runtime, 'UNAUTHENTICATED')
+    expect(page.visits).toEqual(['/login?from=%2F%3Fview%3Dlist&reason=expired'])
+    // 确认的结果随后回来，页面已经在离开：不再跳转
+    pending.resolve(apiError(401, 'UNAUTHENTICATED'))
+    await settle()
+    expect(page.visits).toEqual(['/login?from=%2F%3Fview%3Dlist&reason=expired'])
+  })
+
+  it.each([
+    ['请求得到"登录已过期"', undefined, 'expired'],
+    ['修改密码的结果未知之后再提交得到"登录已过期"', RENEWS_SESSION_AFTER_UNKNOWN, 'password_changed'],
+  ] as const)('%s、确认还在等本页的修改密码时另一个请求得到"未登录"：按它的原因回到登录页，原因不等确认就记下（M2-P6 复验 建议-1）', async (_name, meta, reason) => {
+    const api = installFakeApi({})
+    const { runtime, page } = runtimeAt('/settings/password')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    sessionChangeInProgress(runtime, RENEWS_SESSION)
+    await failWith(runtime, 'SESSION_EXPIRED', meta)
+    await failWith(runtime, 'UNAUTHENTICATED')
+    expect(page.visits).toEqual([`/login?from=%2Fsettings%2Fpassword&reason=${reason}`])
+    expect(api.requests).toEqual([])
+  })
+})
+
+describe('本页的登录、修改密码还在进行：向服务端确认之前先等它结束（复验 N3，M2-P6 复验 一般-1、一般-2）', () => {
+  /**
+   * 浏览器里的会话 Cookie：修改密码的响应到达之前还是旧的（服务端已经撤销了它，确认得到"登录已过期"），
+   * renew 之后是修改密码换上的新的
+   */
+  function cookieJar() {
+    let renewed = false
+    const api = installFakeApi({ 'GET /api/auth/session': () => renewed ? json(200, { ...SESSION, csrfToken: 'csrf-renewed' }) : apiError(401, 'SESSION_EXPIRED') })
+    return { api, renew: () => {
+      renewed = true
+    } }
+  }
+
+  it.each([
+    ['修改密码', RENEWS_SESSION],
+    ['登录', STARTS_SESSION],
+  ])('本页的%s还在进行时请求得到"登录已过期"：等它结束再确认（它的响应带着新的 Cookie），同一个人，页面不动', async (_name, meta) => {
+    const jar = cookieJar()
+    const { runtime, page } = runtimeAt('/settings/password')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    const change = sessionChangeInProgress(runtime, meta)
+    await failWith(runtime, 'SESSION_EXPIRED')
+    await settle()
+    expect(jar.api.requests).toEqual([])
+    jar.renew()
+    change.succeed({ ...SESSION, csrfToken: 'csrf-renewed' })
+    await change.done
+    await vi.waitFor(() => expect(sessionOf(runtime)?.csrfToken).toBe('csrf-renewed'))
+    expect(jar.api.requests.map(entry => entry.key)).toEqual(['GET /api/auth/session'])
+    expect(page.visits).toEqual([])
+  })
+
+  it('本页的登录失败了：随后确认，没有会话，按"已过期"回到登录页', async () => {
+    const api = installFakeApi({ 'GET /api/auth/session': () => apiError(401, 'UNAUTHENTICATED') })
+    const { runtime, page } = runtimeAt('/')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    const login = sessionChangeInProgress(runtime, STARTS_SESSION)
+    await failWith(runtime, 'SESSION_EXPIRED')
+    await settle()
+    expect(api.requests).toEqual([])
+    login.fail(new ApiError(401, 'INVALID_CREDENTIALS', 'x'))
+    await login.done
+    await vi.waitFor(() => expect(page.visits).toEqual(['/login?reason=expired']))
+  })
+
+  it('本页的修改密码还在进行（服务端已换令牌、响应还没到），别的标签页的消息开始一轮确认：同样等它结束，不带着旧 Cookie 下结论、不重新加载（M2-P6 复验 一般-1）', async () => {
+    const bus = sessionBus()
+    const otherTab = bus.open()
+    const jar = cookieJar()
+    const { runtime, page } = runtimeAt('/settings/password', bus)
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    const renewal = sessionChangeInProgress(runtime, RENEWS_SESSION)
+    otherTab.announce()
+    await settle()
+    expect(jar.api.requests).toEqual([])
+    expect(page.visits).toEqual([])
+    jar.renew()
+    renewal.succeed({ ...SESSION, csrfToken: 'csrf-renewed' })
+    await renewal.done
+    await vi.waitFor(() => expect(sessionOf(runtime)?.csrfToken).toBe('csrf-renewed'))
+    expect(page.visits).toEqual([])
+  })
+
+  it('同上，而且之前有请求得到"登录已过期"、它的确认正在等：别的标签页的消息合并进这一轮，修改密码结束之后看到同一个人，页面不动（M2-P6 复验 一般-1）', async () => {
+    const bus = sessionBus()
+    const otherTab = bus.open()
+    const jar = cookieJar()
+    const { runtime, page } = runtimeAt('/settings/password', bus)
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    const renewal = sessionChangeInProgress(runtime, RENEWS_SESSION)
+    await failWith(runtime, 'SESSION_EXPIRED')
+    otherTab.announce()
+    await settle()
+    expect(jar.api.requests).toEqual([])
+    expect(page.visits).toEqual([])
+    jar.renew()
+    renewal.succeed({ ...SESSION, csrfToken: 'csrf-renewed' })
+    await renewal.done
+    await vi.waitFor(() => expect(sessionOf(runtime)?.csrfToken).toBe('csrf-renewed'))
+    await settle()
+    expect(page.visits).toEqual([])
+    expect(jar.api.requests.length).toBeGreaterThan(0)
+  })
+
+  it('等的期间页面开始离开（别的请求得到未登录）：修改密码结束之后这一轮不再向服务端确认', async () => {
+    const bus = sessionBus()
+    const otherTab = bus.open()
+    const api = installFakeApi({ 'GET /api/auth/session': () => json(200, SESSION) })
+    const { runtime, page } = runtimeAt('/settings/password', bus)
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    const renewal = sessionChangeInProgress(runtime, RENEWS_SESSION)
+    otherTab.announce()
+    await failWith(runtime, 'UNAUTHENTICATED')
+    expect(page.visits).toEqual(['/login?from=%2Fsettings%2Fpassword'])
+    renewal.fail(new ApiError(403, 'CURRENT_PASSWORD_INCORRECT', 'x'))
+    await renewal.done
+    await settle()
+    expect(api.requests).toEqual([])
+    expect(page.visits).toEqual(['/login?from=%2Fsettings%2Fpassword'])
+  })
+
+  it('一轮确认正在等本页的修改密码时请求得到"登录已过期"，修改密码随后失败、确实没有会话：这一轮就下结论，按"已过期"离开，只确认一次（轮数在等完之后才加一，第三轮复验 一般-B）', async () => {
+    const bus = sessionBus()
+    const otherTab = bus.open()
+    const api = installFakeApi({ 'GET /api/auth/session': () => apiError(401, 'UNAUTHENTICATED') })
+    const { runtime, page } = runtimeAt('/settings/password', bus)
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    const renewal = sessionChangeInProgress(runtime, RENEWS_SESSION)
+    otherTab.announce()
+    await settle()
+    await failWith(runtime, 'SESSION_EXPIRED')
+    renewal.fail(new ApiError(403, 'CURRENT_PASSWORD_INCORRECT', 'x'))
+    await renewal.done
+    await vi.waitFor(() => expect(page.visits).toEqual(['/login?from=%2Fsettings%2Fpassword&reason=expired']))
+    await settle()
+    expect(api.requests).toHaveLength(1)
+  })
+
+  it('组件调用的复核同样等本页的修改密码结束（M2-P6 复验 一般-1）', async () => {
+    const jar = cookieJar()
+    const { runtime, page } = runtimeAt('/settings/password')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    const renewal = sessionChangeInProgress(runtime, RENEWS_SESSION)
+    const checking = runtime.recheckSession()
+    await settle()
+    expect(jar.api.requests).toEqual([])
+    jar.renew()
+    renewal.succeed({ ...SESSION, csrfToken: 'csrf-renewed' })
+    await checking
+    expect(sessionOf(runtime)?.csrfToken).toBe('csrf-renewed')
+    expect(page.visits).toEqual([])
+  })
+
+  describe('等待的上限（M2-P6 复验 一般-2）', () => {
+    function useFakeClock(): void {
+      vi.useFakeTimers()
+      onTestFinished(() => {
+        vi.useRealTimers()
+      })
+    }
+
+    it('本页的修改密码一直不结束：从它开始算起到了上限就照常确认，没有会话时按"已过期"回到登录页', async () => {
+      useFakeClock()
+      const api = installFakeApi({ 'GET /api/auth/session': () => apiError(401, 'UNAUTHENTICATED') })
+      const { runtime, page } = runtimeAt('/settings/password')
+      runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+      sessionChangeInProgress(runtime, RENEWS_SESSION)
+      // 修改密码开始之后 30 秒请求才得到"登录已过期"：只再等剩下的 10 秒
+      await vi.advanceTimersByTimeAsync(30_000)
+      await failWith(runtime, 'SESSION_EXPIRED')
+      await vi.advanceTimersByTimeAsync(SESSION_CHANGE_TIME_LIMIT_MS - 30_000 - 1)
+      expect(api.requests).toEqual([])
+      expect(page.visits).toEqual([])
+      await vi.advanceTimersByTimeAsync(1)
+      await vi.waitFor(() => expect(page.visits).toEqual(['/login?from=%2Fsettings%2Fpassword&reason=expired']))
+      expect(api.requests.map(entry => entry.key)).toEqual(['GET /api/auth/session'])
+    })
+
+    it('超过上限还没结束的修改密码不再等：之后别的标签页的消息开始的一轮立即确认', async () => {
+      useFakeClock()
+      const bus = sessionBus()
+      const otherTab = bus.open()
+      const api = installFakeApi({ 'GET /api/auth/session': () => json(200, { ...SESSION, csrfToken: 'csrf-2' }) })
+      const { runtime, page } = runtimeAt('/settings/password', bus)
+      runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+      sessionChangeInProgress(runtime, RENEWS_SESSION)
+      otherTab.announce()
+      await vi.advanceTimersByTimeAsync(SESSION_CHANGE_TIME_LIMIT_MS - 1)
+      expect(api.requests).toEqual([])
+      await vi.advanceTimersByTimeAsync(1)
+      await vi.waitFor(() => expect(sessionOf(runtime)?.csrfToken).toBe('csrf-2'))
+      expect(api.requests).toHaveLength(1)
+      // 修改密码还挂着，但已经超过上限：这一轮不再等，确认的请求随消息立即发出
+      otherTab.announce()
+      expect(api.requests).toHaveLength(2)
+      expect(page.visits).toEqual([])
+    })
+
+    it('等的期间又开始了一次登录：一起等，到它自己的上限为止', async () => {
+      useFakeClock()
+      const api = installFakeApi({ 'GET /api/auth/session': () => apiError(401, 'UNAUTHENTICATED') })
+      const { runtime, page } = runtimeAt('/settings/password')
+      runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+      sessionChangeInProgress(runtime, RENEWS_SESSION)
+      await failWith(runtime, 'SESSION_EXPIRED')
+      await vi.advanceTimersByTimeAsync(10_000)
+      sessionChangeInProgress(runtime, STARTS_SESSION)
+      // 第一个到了上限，第二个还没有
+      await vi.advanceTimersByTimeAsync(SESSION_CHANGE_TIME_LIMIT_MS - 10_000)
+      expect(api.requests).toEqual([])
+      await vi.advanceTimersByTimeAsync(10_000)
+      await vi.waitFor(() => expect(page.visits).toEqual(['/login?from=%2Fsettings%2Fpassword&reason=expired']))
+    })
+  })
+})
+
+describe('换上浏览器里同一个人的新会话（退出用，M2-P6 复验 一般-4）', () => {
+  it('还是页面上的这个人：换上新的会话与 CSRF 令牌，兑现为 true；页面不动', async () => {
+    const api = installFakeApi({ 'GET /api/auth/session': () => json(200, { ...SESSION, csrfToken: 'csrf-2' }), 'POST /api/probe': () => new Response(null, { status: 204 }) })
+    const { runtime, page } = runtimeAt('/')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    await expect(runtime.adoptRenewedSession()).resolves.toBe(true)
+    expect(sessionOf(runtime)?.csrfToken).toBe('csrf-2')
+    await apiRequest('/api/probe', { method: 'POST', schema: z.undefined() })
+    expect(api.requests.find(entry => entry.key === 'POST /api/probe')?.headers['x-csrf-token']).toBe('csrf-2')
+    expect(page.visits).toEqual([])
+  })
+
+  it.each([
+    ['已经没有会话', () => apiError(401, 'UNAUTHENTICATED')],
+    ['会话也失效了', () => apiError(401, 'SESSION_EXPIRED')],
+    ['换了人', () => json(200, OTHER_SESSION)],
+  ])('%s：兑现为 false，不换令牌、不跳转、不重新加载（由调用方按原来的结果处理）', async (_name, response) => {
+    const api = installFakeApi({ 'GET /api/auth/session': response, 'POST /api/probe': () => new Response(null, { status: 204 }) })
+    const { runtime, page } = runtimeAt('/')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    setCsrfToken('csrf-1')
+    await expect(runtime.adoptRenewedSession()).resolves.toBe(false)
+    expect(sessionOf(runtime)?.csrfToken).toBe('csrf-1')
+    await apiRequest('/api/probe', { method: 'POST', schema: z.undefined() })
+    expect(api.requests.find(entry => entry.key === 'POST /api/probe')?.headers['x-csrf-token']).toBe('csrf-1')
+    expect(page.visits).toEqual([])
+  })
+
+  it('网络失败：原样抛出，页面不动', async () => {
+    installFakeApi({ 'GET /api/auth/session': networkFailure })
+    const { runtime, page } = runtimeAt('/')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    await expect(runtime.adoptRenewedSession()).rejects.toBeInstanceOf(NetworkError)
+    expect(page.visits).toEqual([])
+  })
+
+  it('本页的修改密码还在进行：等它结束再向服务端要会话', async () => {
+    const api = installFakeApi({ 'GET /api/auth/session': () => json(200, { ...SESSION, csrfToken: 'csrf-renewed' }) })
+    const { runtime } = runtimeAt('/settings/password')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    const renewal = sessionChangeInProgress(runtime, RENEWS_SESSION)
+    const adopted = runtime.adoptRenewedSession()
+    await settle()
+    expect(api.requests).toEqual([])
+    renewal.succeed({ ...SESSION, csrfToken: 'csrf-renewed' })
+    await expect(adopted).resolves.toBe(true)
+    expect(api.requests.map(entry => entry.key)).toEqual(['GET /api/auth/session'])
+  })
+
+  it('页面已经在离开：兑现为 false，不再向服务端要会话', async () => {
+    const api = installFakeApi({ 'GET /api/auth/session': () => json(200, SESSION) })
+    const { runtime, page } = runtimeAt('/')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    await failWith(runtime, 'UNAUTHENTICATED')
+    await expect(runtime.adoptRenewedSession()).resolves.toBe(false)
+    expect(api.requests).toEqual([])
+    expect(page.visits).toEqual(['/login'])
+  })
+
+  it('确认期间页面开始离开（别的请求得到未登录）：兑现为 false，不换上新的令牌', async () => {
+    const pending = deferredResponse()
+    installFakeApi({ 'GET /api/auth/session': pending.handler })
+    const { runtime } = runtimeAt('/')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    const adopted = runtime.adoptRenewedSession()
+    await failWith(runtime, 'UNAUTHENTICATED')
+    pending.resolve(json(200, { ...SESSION, csrfToken: 'csrf-2' }))
+    await expect(adopted).resolves.toBe(false)
+    expect(sessionOf(runtime)?.csrfToken).toBe('csrf-1')
   })
 })

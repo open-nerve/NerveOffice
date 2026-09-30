@@ -5,7 +5,9 @@ import type { AuditAction, DocumentType, ErrorCode, InvitationStatus, LinkInvali
 const ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
   REQUEST_INVALID: '请求的内容不合法，请检查后重试',
   UNAUTHENTICATED: '请先登录',
-  SESSION_EXPIRED: '登录已过期，请重新登录',
+  // 组件里显示这条时，运行时已在向服务端确认会话（复验 N3）：真的没有会话会整页转到登录页（那里另有"登录已过期"的说明），
+  // 留在页面上的只有"还是同一个人、这个请求带的是换令牌之前的旧 Cookie"这一种，所以说成这次没有完成、可以重试
+  SESSION_EXPIRED: '登录状态刚刚变化，这次操作没有完成，请重试',
   INVALID_CREDENTIALS: '用户名或密码错误',
   CSRF_TOKEN_INVALID: '页面已失效，请刷新后重试',
   ORIGIN_NOT_ALLOWED: '请求来源不被允许，请从本站的地址访问',
@@ -70,6 +72,8 @@ const AUDIT_ACTION_NAMES: Record<AuditAction, string> = {
   'users.password_change_failed': '修改密码失败',
   'users.password_reset_issued': '签发重置链接',
   'users.password_reset_completed': '重置密码',
+  'users.password_reset_revoked': '作废重置链接',
+  'users.login_unlocked': '解除登录锁定',
   'users.disabled': '停用账户',
   'users.enabled': '启用账户',
   'users.system_role_changed': '变更系统角色',
@@ -149,6 +153,8 @@ export const messages = {
     submit: '登录',
     submitting: '正在登录…',
     sessionExpired: '登录已过期，请重新登录',
+    // 修改密码的结果未知、再提交时登录已经失效：多半是上一次已经改好，当前的会话随之撤销了（M2-P6 复核 G-1）
+    passwordMaybeChanged: '刚才修改密码时没能确认结果，随后登录失效了：新密码可能已经生效，请试试用新密码登录。',
     checkingSession: '正在确认登录状态…',
     logout: '退出',
     loggingOut: '正在退出…',
@@ -164,6 +170,10 @@ export const messages = {
     passwordMismatch: '两次输入的新密码不一致',
     changing: '正在修改…',
     changed: '密码已修改。你在其他设备上的登录已经退出。',
+    // 结果未知（网络中断、服务端出错、回包读不出来）：请求可能已经生效（M2-P6 复核 G-1）
+    outcomeUnknown: (reason: string) => `没能确认密码是否已经改好（${reason}）。新密码可能已经生效：可以再提交一次；如果随后被要求重新登录，请试试用新密码登录。`,
+    // 结果未知之后再提交，当前密码不对：多半是上一次已经改好了
+    maybeChangedAlready: '当前密码不正确。上一次提交可能已经把密码改好了：请试试把新密码当作当前密码；如果随后被要求重新登录，请用新密码登录。',
     username: '登录名',
     displayName: '显示名',
     goToLogin: '去登录',
@@ -228,9 +238,22 @@ export const messages = {
       resetDescription: (hours: number) => `生成后，这个人的当前密码立即失效，所有地方的登录都会退出。链接 ${hours} 小时内有效，只显示这一次，请交给本人。`,
       confirmResetOwn: '为你自己生成重置链接？',
       resetOwnDescription: (hours: number) => `生成后，你自己的登录会立即退出，当前密码随即失效，之后用这个链接设置新密码。链接 ${hours} 小时内有效，只显示这一次，请先复制保存。`,
+      // 登录锁定（M2-P6 复核 A1），到时自动解除：只按用户名的上限到了，这个账户在所有来源上都登录不了；
+      // 只锁了某些来源（按用户名与来源的组合）时，本人从别的来源照常登录
+      loginLocked: (until: string) => `登录已锁定，到 ${until} 解除`,
+      loginLockedSomeSources: (until: string) => `部分来源的登录已锁定，到 ${until} 解除`,
+      unlockLogin: '解除锁定',
+      confirmUnlockLogin: (name: string) => `解除 ${name} 的登录锁定？`,
+      // 只按来源的计数（例如同一个办公网络失败太多次）不属于任何账户，解除清不掉，账户页也不显示（复验 N5）：不能说"可以立即登录"
+      unlockLoginDescription: '解除后，清掉这个人在所有来源上的登录失败次数。他所在的网络如果整体被锁（同一来源失败次数太多），仍要等锁定到期。多次输错密码的来源不一定是本人：如果不是本人所为，请提醒他修改密码。',
     },
     invitations: {
-      description: '填好登录名与显示名，生成一次性链接（7 天内有效），经受控的渠道发给本人。',
+      // 有效期来自 contracts 的常量（INVITATION_LIFETIME_DAYS），界面不写死天数（M2-P6 复核 S-2）
+      description: (days: number) => `填好登录名与显示名，生成一次性链接（${days} 天内有效），经受控的渠道发给本人。`,
+      // 签发的结果未知：邀请可能已经建好，链接却丢了，只能重新生成（M2-P6 复核 G-2）
+      issueOutcomeUnknown: (reason: string) => `没能确认邀请是否已经生成（${reason}）。如果已经生成，链接不能再次显示：请在下面的列表里找到这个登录名，点"重新生成"得到新的链接（原来的随即作废）；列表里没有时，可以再生成一次。`,
+      // 结果未知之后，同一个登录名再签发得到"已被占用"：多半就是刚才那一次
+      issueRetryTaken: '这个登录名已有待接受的邀请，可能就是刚才没能确认的那一次。链接不能再次显示：请在下面的列表里找到它，点"重新生成"。',
       username: '登录名',
       displayName: '显示名',
       issue: '生成邀请链接',

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { uuidSchema } from '../ids/ids.ts'
-import { codePointLength, hasControlCharacters } from '../text/text.ts'
+import { nameTextSchema } from '../text/text.ts'
 
 /** 文件夹名称的上限（字符数，按码点计）。 */
 export const FOLDER_NAME_MAX_LENGTH = 100
@@ -15,13 +15,10 @@ export const FOLDER_MAX_DEPTH = 10
 export const FOLDER_LIST_MAX_ITEMS = 500
 
 /**
- * 文件夹的名称：去掉首尾空白之后 1–100 个字符，不含控制字符。
+ * 文件夹的名称：名称的共用规则（text.ts 的 nameTextSchema），去掉首尾空白之后 1–100 个字符。
  * 同一个文件夹里允许同名（M2 总设计 §6.8）：与团队空间的名称不同，这里没有唯一约束。
  */
-export const folderNameSchema = z.string()
-  .trim()
-  .refine(value => codePointLength(value) >= 1 && codePointLength(value) <= FOLDER_NAME_MAX_LENGTH, `名称为 1–${FOLDER_NAME_MAX_LENGTH} 个字符`)
-  .refine(value => !hasControlCharacters(value), '名称不能包含控制字符')
+export const folderNameSchema = nameTextSchema({ label: '名称', maxLength: FOLDER_NAME_MAX_LENGTH })
 
 /** 路径里的文件夹 id。 */
 export const folderIdSchema = uuidSchema

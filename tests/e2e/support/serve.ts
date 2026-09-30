@@ -150,7 +150,7 @@ async function main(): Promise<void> {
     NERVE_WEB_ROOT: WEB_ROOT,
     // 写进日志文件：照常记录每个请求（info），失败排查时看得到 4xx 的原因
     NERVE_LOG_LEVEL: 'info',
-    // 所有测试都来自本机：按地址的限流调高，免得互相影响；按用户名的限流照常测（集成测试覆盖按地址的限流）
+    // 所有测试都来自本机：按地址的限流调高，免得互相影响；按用户名（与来源）的限流照常测（集成测试覆盖按地址的限流与换来源的情形）
     NERVE_LOGIN_IP_MAX_FAILURES: '100000',
   }
   const runCommand = (script: string, args: readonly string[], stdin = ''): void => {

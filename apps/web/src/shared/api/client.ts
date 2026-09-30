@@ -163,6 +163,17 @@ export function isDefiniteRejection(error: unknown): error is ApiError {
   return error instanceof ApiError && error.status >= 400 && error.status < 500
 }
 
+/**
+ * 写操作的结果未知：请求可能已经生效，只是没有收到确定的回答（网络中断、服务端或代理出错、回包读不出来）。
+ * 与 isDefiniteRejection 的区别只在一处：服务端自己回答的 503 SERVICE_UNAVAILABLE（等待密码哈希的请求太多，DEF-015）
+ * 发生在写入之前，结果是确定的"没有生效"。界面据此提示"可能已经生效"（M2-P6 复核 G-1、G-2）
+ */
+export function isUnknownOutcome(error: unknown): boolean {
+  if (error instanceof ApiError)
+    return error.status >= 500 && error.code !== 'SERVICE_UNAVAILABLE'
+  return true
+}
+
 /** 可以自动重试的失败：网络问题与服务端的临时错误。其他错误重试也没用。 */
 export function isTransientError(error: unknown): boolean {
   return error instanceof NetworkError || (error instanceof ApiError && error.status >= 500)

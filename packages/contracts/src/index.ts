@@ -49,17 +49,20 @@ export type {
   TransferDocumentsResponse,
   TransferTarget,
 } from './admin/admin.ts'
+export { auditDetailsSchema, LINK_ISSUER_REVOCATION_REASONS } from './audit/audit-details.ts'
+export type { AuditActionDetails, AuditActionDetailsInput, AuditDetailsOf, EveryAuditActionHasDetails, LinkIssuerRevocationReason } from './audit/audit-details.ts'
 export { auditEventItemSchema, auditEventListResponseSchema, auditEventQuerySchema } from './audit/audit-query.ts'
 export type { AuditEventItem, AuditEventListResponse, AuditEventQuery } from './audit/audit-query.ts'
 export { AUDIT_ACTIONS, AUDIT_ACTOR_TYPES, AUDIT_DETAILS_MAX_BYTES, AUDIT_SOURCES, AUDIT_TARGET_TYPES, auditActionSchema } from './audit/audit.ts'
 export type { AuditAction } from './audit/audit.ts'
-export { changePasswordRequestSchema, LOGIN_PASSWORD_MAX_LENGTH, LOGIN_USERNAME_MAX_LENGTH, loginRequestSchema, sessionResponseSchema } from './auth/auth.ts'
-export type { ChangePasswordRequest, LoginRequest, SessionResponse } from './auth/auth.ts'
+export { changePasswordRequestSchema, changePasswordResponseSchema, LOGIN_PASSWORD_MAX_LENGTH, LOGIN_USERNAME_MAX_LENGTH, loginRequestSchema, sessionResponseSchema } from './auth/auth.ts'
+export type { ChangePasswordRequest, ChangePasswordResponse, LoginRequest, SessionResponse } from './auth/auth.ts'
 export {
   acceptInvitationRequestSchema,
   completePasswordResetRequestSchema,
   inspectLinkRequestSchema,
   inspectLinkResponseSchema,
+  INVITATION_LIFETIME_DAYS,
   INVITATION_LIFETIME_HOURS,
   isWellFormedLinkToken,
   LINK_INVALID_REASONS,
@@ -207,7 +210,8 @@ export type {
   SpaceView,
   TeamSpace,
 } from './spaces/spaces.ts'
-export { codePointLength, hasControlCharacters } from './text/text.ts'
+export { codePointLength, hasBidiControls, hasControlCharacters, hasHiddenCharacters, hasLineSeparators, hasVisibleCharacters, nameTextSchema, titleTextSchema } from './text/text.ts'
+export type { TextRuleOptions } from './text/text.ts'
 export {
   restoredTrashEntrySchema,
   TRASH_ENTRY_KINDS,

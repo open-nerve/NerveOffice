@@ -34,6 +34,20 @@ describe('文件夹的名称', () => {
     expect(folderNameSchema.safeParse('   ').success).toBe(false)
     expect(folderNameSchema.safeParse('资\t料').success).toBe(false)
   })
+
+  it('按名称的共用规则（M2-P6 复核 B2）：NFC 归一；拒绝改变文字方向的字符与换行符；不能只有看不见的字符', () => {
+    expect(folderNameSchema.parse('Jose\u0301')).toBe('Jos\u00E9')
+    expect(folderNameSchema.safeParse('资\u202E料').success).toBe(false)
+    expect(folderNameSchema.safeParse('资\u2028料').success).toBe(false)
+    expect(folderNameSchema.safeParse('\u3164\u200B').success).toBe(false)
+    expect(folderNameSchema.parse('\u{1F468}\u200D\u{1F469}\u200D\u{1F467}')).toBe('\u{1F468}\u200D\u{1F469}\u200D\u{1F467}')
+  })
+
+  it('名称里夹着看不见的字符（复验 N6）：零宽空格、BOM、软连字符拒绝；带异体字选择符的汉字放行', () => {
+    for (const hidden of ['资\u200B料', '资\uFEFF料', '资\u00AD料'])
+      expect(folderNameSchema.safeParse(hidden).success, JSON.stringify(hidden)).toBe(false)
+    expect(folderNameSchema.parse('\u845B\u{E0100}\u98FE')).toBe('\u845B\u{E0100}\u98FE')
+  })
 })
 
 describe('列出一层', () => {

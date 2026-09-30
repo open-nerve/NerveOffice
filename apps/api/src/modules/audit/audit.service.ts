@@ -6,7 +6,7 @@ import { ADMIN_PAGE_SIZE } from '@nerve-office/contracts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { decodeTimeCursor, encodeTimeCursor } from '../../shared/time-cursor.ts'
-import { auditEventSchema } from './audit-event.ts'
+import { parseAuditEvent } from './audit-event.ts'
 import { AuditRepository } from './audit.repository.ts'
 
 export interface RecordOptions {
@@ -19,8 +19,9 @@ export interface RecordOptions {
 export class AuditService {
   constructor(private readonly repository: AuditRepository) {}
 
+  /** 明细按动作的严格结构校验（contracts 的 auditDetailsSchema，M2-P6 复核 M-1）：多出来的键（例如标题）写不进去 */
   async record(event: AuditEvent, options: RecordOptions = {}): Promise<void> {
-    await this.repository.insert(auditEventSchema.parse(event), options.transaction)
+    await this.repository.insert(parseAuditEvent(event), options.transaction)
   }
 
   /**

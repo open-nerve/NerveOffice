@@ -2,7 +2,8 @@ import { z } from 'zod'
 
 /**
  * 审计动作（规范 §7）。
- * 各 M 新增动作时，同时用迁移更新数据库的 CHECK 约束（audit_events.action）；已发布的动作不改名、不复用。
+ * 各 M 新增动作时，同时用迁移更新数据库的 CHECK 约束（audit_events.action），并在 audit-details.ts 里给出它的明细结构；
+ * 已发布的动作不改名、不复用。每个动作的明细记什么见 audit-details.ts（不记文档标题与文件夹名称，M2-P6 复核 M-1）。
  */
 export const AUDIT_ACTIONS = [
   // M1
@@ -39,22 +40,26 @@ export const AUDIT_ACTIONS = [
   'spaces.admin_joined',
   // M2-P2：停用者个人空间的文档转移到别处；只改所属空间，不读内容，不记标题
   'documents.transferred',
-  // M2-P4：文件夹。details 带名称与原位置、目标位置（不记名称以外的内容）
+  // M2-P4：文件夹。details 只有位置（空间与父文件夹），不记名称（M2-P6 复核 M-1）
   'folders.created',
   'folders.renamed',
   'folders.moved',
-  // M2-P4：文档的整理。改名记改动前后的标题；移动记原位置与目标位置（空间与文件夹）；复制记源文档
+  // M2-P4：文档的整理。改名只记位置、不记标题；移动记原位置与目标位置（空间与文件夹）；复制记源文档
   'documents.renamed',
   'documents.moved',
   'documents.copied',
   // M2-P4 S3：回收站。删除记原位置与删除单元；恢复记恢复到的位置与是否回落到根目录；
-  // 永久删除记这一单里的份数与连带删除的单元（到期自动清理时操作者是系统，actor_type = 'system'）
+  // 永久删除记这一单里的份数与连带删除的单元，不记标题与名称（到期自动清理时操作者是系统，actor_type = 'system'）
   'documents.deleted',
   'documents.restored',
   'documents.purged',
   'folders.deleted',
   'folders.restored',
   'folders.purged',
+  // M2-P6：重置链接被作废（签发新的时作废旧的、停用账户时作废未用的、签发人被停用或不再是系统管理员），与邀请的作废对应（复核 C3、A2）
+  'users.password_reset_revoked',
+  // M2-P6：系统管理员解除某个账户的登录锁定，清掉这个账户在所有来源上的失败计数（复核 A1）
+  'users.login_unlocked',
 ] as const
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS)
@@ -73,5 +78,8 @@ export const AUDIT_TARGET_TYPES = ['user', 'space', 'document', 'invitation', 'f
  */
 export const AUDIT_SOURCES = ['http', 'cli', 'job'] as const
 
-/** 补充信息（details）按 JSON 文本计的上限（字节）。 */
+/**
+ * 补充信息（details）按 JSON 文本计的上限（字节）。按动作的结构（audit-details.ts）里每个字段都有上界，
+ * 最长的也在它之内（audit-details.test.ts 核对）；数据库的 CHECK 按它留出余量兜底。
+ */
 export const AUDIT_DETAILS_MAX_BYTES = 4096

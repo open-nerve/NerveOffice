@@ -6,6 +6,11 @@ import type { LockedForSeconds, LoginThrottleRepository, Reservation, ThrottlePo
 export interface ThrottleDimension {
   readonly name: string
   readonly keyHash: Buffer
+  /**
+   * 所属账户的摘要（M2-P6 复核 A1）：登录的两个账户相关的维度（只按用户名、按用户名与来源）才有，记在计数行上，
+   * 完成重置、管理员解除锁定时按它一次清掉这个账户在所有来源上的计数
+   */
+  readonly account?: Buffer
   readonly policy: ThrottlePolicy
   /**
    * 成功时：reset 清除这个键的计数（之前的失败一笔勾销，例如登录的用户名）；
@@ -20,7 +25,10 @@ export interface AttemptTicket {
   readonly lockedForSeconds: LockedForSeconds
   /** 成功：按各维度的 onSuccess 处理。与成功的写入放在同一个事务里 */
   readonly succeeded: (transaction?: Transaction) => Promise<void>
-  /** 没有真正尝试就放弃了（例如等待哈希的请求太多，DEF-015）：退回全部名额，不算失败 */
+  /**
+   * 退回全部名额，不算失败：没有真正尝试就放弃了（例如等待哈希的请求太多，DEF-015），
+   * 或者这次失败不是在猜（一次性链接找到了记录、只是过期或用过了，M2-P6 复核 B3）
+   */
   readonly abandoned: () => Promise<void>
 }
 
@@ -53,7 +61,7 @@ export class AttemptThrottle {
 
     const holds: Hold[] = []
     for (const dimension of dimensions) {
-      const reservation = await this.repository.reserve(dimension.keyHash, dimension.policy)
+      const reservation = await this.repository.reserve(dimension.keyHash, dimension.policy, dimension.account)
       if (reservation === undefined) {
         await this.release(holds)
         // 预检之后刚被别的请求锁定；查到时锁定可能恰好结束，至少让客户端等 1 秒

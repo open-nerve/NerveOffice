@@ -10,6 +10,7 @@ import { AppError } from '../../shared/errors/app-error.ts'
 import { AppLogger, createRootLogger, RequestContextStore } from '../logging/index.ts'
 import { PasswordHashingBusyError } from '../users/index.ts'
 import { AuthService } from './auth.service.ts'
+import { csrfTokenFor } from './session-token.ts'
 
 const ALICE: User = { id: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d', username: 'alice', displayName: '爱丽丝', systemRole: 'member', status: 'active' }
 const PRINCIPAL: Principal = { user: ALICE, sessionId: 'session-current', csrfToken: 'csrf' }
@@ -17,8 +18,11 @@ const ORIGIN = { source: 'http' as const, requestId: 'req-1', clientIp: '203.0.1
 const TRANSACTION = { opaque: true } as unknown as Transaction
 const REQUEST = { currentPassword: 'old-password', newPassword: 'new-password-123' }
 const CREDENTIALS: VerifiedCredentials = { user: ALICE, passwordVersion: 1 }
+const PERSONAL_SPACE = '0199a2c4-2a3b-7c4d-9e5f-6a7b8c9d0e1f'
+/** 改完密码之后给当前页面的新会话令牌 */
+const NEW_TOKEN = 'n'.repeat(43)
 
-function setup(options: { admission?: Admission, currentValid?: boolean, stillCurrent?: boolean, lockedForSeconds?: number, hashBusy?: boolean } = {}) {
+function setup(options: { admission?: Admission, currentValid?: boolean, stillCurrent?: boolean, sessionActive?: boolean, lockedForSeconds?: number, hashBusy?: boolean } = {}) {
   const ticket = {
     lockedForSeconds: options.lockedForSeconds,
     succeeded: vi.fn(async (_transaction?: Transaction) => {}),
@@ -34,13 +38,17 @@ function setup(options: { admission?: Admission, currentValid?: boolean, stillCu
     }),
     replacePassword: vi.fn(async (_credentials: VerifiedCredentials, _hash: string, _transaction: Transaction) => options.stillCurrent ?? true),
   }
-  const sessions = { revokeAllOf: vi.fn(async () => {}), purgeExpired: vi.fn(async () => {}) }
+  const sessions = {
+    revokeForPasswordChange: vi.fn(async (_userId: string, _currentSessionId: string, _transaction: Transaction) => options.sessionActive ?? true),
+    create: vi.fn(async (_userId: string, _transaction?: Transaction) => ({ id: 'session-new', token: NEW_TOKEN })),
+    purgeExpired: vi.fn(async () => {}),
+  }
   const audit = { record: vi.fn(async (_event: AuditEvent, _options?: { transaction?: Transaction }) => {}) }
   const transactions = { run: vi.fn(async <T>(work: (transaction: Transaction) => Promise<T>) => work(TRANSACTION)) }
   const logger = new AppLogger(createRootLogger({ level: 'silent' }), new RequestContextStore())
   const service = new AuthService(
     users as unknown as UsersService,
-    { personalSpaceOf: vi.fn() } as unknown as SpacesService,
+    { personalSpaceOf: vi.fn(async () => ({ id: PERSONAL_SPACE, name: '爱丽丝' })) } as unknown as SpacesService,
     sessions as unknown as SessionService,
     throttle as unknown as LoginThrottle,
     audit as unknown as AuditService,
@@ -58,19 +66,31 @@ async function errorOf(promise: Promise<unknown>): Promise<AppError> {
 }
 
 describe('AuthService.changePassword（US-M2-02）', () => {
-  it('成功：在一个事务里先锁账户行复核并更新哈希，再清除限流计数、撤销其他会话（保留当前会话）、记审计', async () => {
+  it('成功：在一个事务里先锁账户行复核并更新哈希，再清除限流计数、撤销本人的全部会话（当前这个按换成新的撤销，M2-P6 复验 一般-3）、为当前页面新建会话、记审计', async () => {
     const { service, ticket, throttle, users, sessions, audit } = setup()
-    await service.changePassword(PRINCIPAL, REQUEST, ORIGIN)
+    const result = await service.changePassword(PRINCIPAL, REQUEST, ORIGIN)
     expect(throttle.admit).toHaveBeenCalledWith({ username: 'alice', clientIp: '203.0.113.7' })
     expect(users.verifyPasswordOf).toHaveBeenCalledWith(ALICE.id, 'old-password')
     expect(users.replacePassword).toHaveBeenCalledWith(CREDENTIALS, 'hash:new-password-123', TRANSACTION)
     expect(users.replacePassword.mock.invocationCallOrder[0]).toBeLessThan(ticket.succeeded.mock.invocationCallOrder[0] ?? 0)
     expect(ticket.succeeded).toHaveBeenCalledWith(TRANSACTION)
-    expect(sessions.revokeAllOf).toHaveBeenCalledWith(ALICE.id, 'password_changed', { except: 'session-current', transaction: TRANSACTION })
+    // 不保留当前的会话（M2-P6 复核 B1）：全部撤销之后再新建，都在同一个事务里。撤销时交出当前这条会话，
+    // 由会话服务按"换成了新的"记下它，别的设备上的另记（M2-P6 复验 一般-3）
+    expect(sessions.revokeForPasswordChange).toHaveBeenCalledWith(ALICE.id, PRINCIPAL.sessionId, TRANSACTION)
+    expect(sessions.create).toHaveBeenCalledWith(ALICE.id, TRANSACTION)
+    expect(sessions.revokeForPasswordChange.mock.invocationCallOrder[0]).toBeLessThan(sessions.create.mock.invocationCallOrder[0] ?? 0)
     expect(audit.record).toHaveBeenCalledWith(
       { action: 'users.password_changed', actor: { type: 'user', id: ALICE.id }, target: { type: 'user', id: ALICE.id }, origin: ORIGIN },
       { transaction: TRANSACTION },
     )
+    // 当前页面换上新的会话：新令牌交给 Cookie，响应与登录相同，CSRF 令牌由新令牌派生
+    expect(result.token).toBe(NEW_TOKEN)
+    expect(result.session).toEqual({
+      user: { id: ALICE.id, username: 'alice', displayName: '爱丽丝', systemRole: 'member' },
+      personalSpace: { id: PERSONAL_SPACE, name: '爱丽丝' },
+      csrfToken: csrfTokenFor(NEW_TOKEN),
+    })
+    expect(result.session.csrfToken).not.toBe(PRINCIPAL.csrfToken)
     // 审计里没有密码
     expect(JSON.stringify(audit.record.mock.calls)).not.toContain('password-123')
   })
@@ -80,7 +100,7 @@ describe('AuthService.changePassword（US-M2-02）', () => {
     expect((await errorOf(service.changePassword(PRINCIPAL, REQUEST, ORIGIN))).code).toBe('CURRENT_PASSWORD_INCORRECT')
     expect(users.hashPassword).not.toHaveBeenCalled()
     expect(users.replacePassword).not.toHaveBeenCalled()
-    expect(sessions.revokeAllOf).not.toHaveBeenCalled()
+    expect(sessions.revokeForPasswordChange).not.toHaveBeenCalled()
     expect(ticket.succeeded).not.toHaveBeenCalled()
     expect(ticket.abandoned).not.toHaveBeenCalled()
     expect(audit.record).toHaveBeenCalledWith({
@@ -105,9 +125,20 @@ describe('AuthService.changePassword（US-M2-02）', () => {
     const { service, ticket, sessions, audit } = setup({ stillCurrent: false })
     expect((await errorOf(service.changePassword(PRINCIPAL, REQUEST, ORIGIN))).code).toBe('CURRENT_PASSWORD_INCORRECT')
     expect(ticket.succeeded).not.toHaveBeenCalled()
-    expect(sessions.revokeAllOf).not.toHaveBeenCalled()
+    expect(sessions.revokeForPasswordChange).not.toHaveBeenCalled()
+    expect(sessions.create).not.toHaveBeenCalled()
     expect(audit.record).toHaveBeenCalledOnce()
     expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'users.password_change_failed', details: { reason: 'credentials_changed' } }))
+  })
+
+  it('当前的会话在认证之后已经结束（同一个浏览器刚退出，或刚重新登录换成了新的会话，M2-P6）：回滚，按登录已过期回答，不新建会话、不记审计，名额退回', async () => {
+    const { service, ticket, sessions, audit } = setup({ sessionActive: false })
+    expect((await errorOf(service.changePassword(PRINCIPAL, REQUEST, ORIGIN))).code).toBe('SESSION_EXPIRED')
+    // 限流计数的清除先于会话行（锁的顺序），随事务一起回滚；事务之外把占的名额退回——密码是对的，不算猜错
+    expect(ticket.succeeded.mock.invocationCallOrder[0]).toBeLessThan(sessions.revokeForPasswordChange.mock.invocationCallOrder[0] ?? 0)
+    expect(ticket.abandoned).toHaveBeenCalledOnce()
+    expect(sessions.create).not.toHaveBeenCalled()
+    expect(audit.record).not.toHaveBeenCalled()
   })
 
   it('限流拒绝：429，不验证旧密码、不写审计', async () => {

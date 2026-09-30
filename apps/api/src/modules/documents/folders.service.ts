@@ -1,4 +1,4 @@
-import type { Folder, FolderListQuery, FolderListResponse } from '@nerve-office/contracts'
+import type { AuditActionDetailsInput, Folder, FolderListQuery, FolderListResponse } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { AccessibleFolder, Actor, FolderOperation, SpaceContentAccess } from './document-access-policy.ts'
@@ -110,13 +110,8 @@ export class FoldersService {
       // 同一个 requestId 同时被别的空间里的新建用掉了（空间树的锁只让同一个空间里的排队）
       if (folder === undefined)
         throw new AppError('REQUEST_ID_CONFLICT')
-      await this.audit.record({
-        action: 'folders.created',
-        actor: { type: 'user', id: actor.userId },
-        target: { type: 'folder', id: folder.id },
-        origin,
-        details: { spaceId: folder.spaceId, parentId: folder.parentId, name: folder.name },
-      }, { transaction })
+      // 只记位置，不记名称（M2 总设计 §2.1 第 5 条，M2-P6 复核 M-1）
+      await this.record({ action: 'folders.created', details: { spaceId: folder.spaceId, parentId: folder.parentId } }, actor, folder.id, origin, transaction)
       return toFolder(folder, permissions)
     })
   }
@@ -138,9 +133,9 @@ export class FoldersService {
 
       let current = folder
       if (command.name !== undefined && command.name !== current.name) {
-        const from = current.name
         current = await this.folders.rename(current.id, command.name, transaction)
-        await this.record('folders.renamed', actor, current.id, origin, { spaceId: current.spaceId, from, to: current.name }, transaction)
+        // 只记位置，不记改动前后的名称（M2-P6 复核 M-1）
+        await this.record({ action: 'folders.renamed', details: { spaceId: current.spaceId, parentId: current.parentId } }, actor, current.id, origin, transaction)
       }
       if (command.parentId !== undefined && command.parentId !== current.parentId)
         current = await this.movedWithinSpace(actor, current, await this.parentIn(current.spaceId, command.parentId, transaction), origin, transaction)
@@ -326,23 +321,22 @@ export class FoldersService {
     transaction: Transaction,
   ): Promise<void> {
     const location = { fromSpaceId: before.spaceId, fromParentId: before.parentId, toSpaceId: moved.spaceId, toParentId: moved.parentId }
-    await this.record('folders.moved', actor, moved.id, origin, counts === undefined ? location : { ...location, ...counts }, transaction)
+    await this.record({ action: 'folders.moved', details: counts === undefined ? location : { ...location, ...counts } }, actor, moved.id, origin, transaction)
   }
 
+  /** 动作与明细一起给出：明细按动作的严格结构（contracts 的 auditDetailsSchema） */
   private async record(
-    action: 'folders.renamed' | 'folders.moved',
+    audit: Extract<AuditActionDetailsInput, { action: 'folders.created' | 'folders.renamed' | 'folders.moved' }>,
     actor: Actor,
     folderId: string,
     origin: AuditOrigin,
-    details: Readonly<Record<string, string | number | null>>,
     transaction: Transaction,
   ): Promise<void> {
     await this.audit.record({
-      action,
+      ...audit,
       actor: { type: 'user', id: actor.userId },
       target: { type: 'folder', id: folderId },
       origin,
-      details,
     }, { transaction })
   }
 }

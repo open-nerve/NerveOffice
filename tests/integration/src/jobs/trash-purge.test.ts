@@ -132,7 +132,8 @@ describe('US-M2-09 到期的自动清理', () => {
       actor_id: null,
       source: 'job',
       request_id: null,
-      details: { spaceId, title: '旧周报', trashEntryId: entry.id, folders: 0, documents: 1, cascadedEntries: 0 },
+      // 只记份数与删除单元，不记标题（M2-P6 复核 M-1）
+      details: { spaceId, trashEntryId: entry.id, folders: 0, documents: 1, cascadedEntries: 0 },
     }])
   })
 
@@ -149,7 +150,8 @@ describe('US-M2-09 到期的自动清理', () => {
     expect(await count('SELECT count(*) FROM document_contents WHERE document_id = $1', [document])).toBe(0)
     const [audit] = await auditOf('folders.purged', folder)
     expect(audit).toMatchObject({ actor_type: 'system', actor_id: null, source: 'job' })
-    expect(audit?.details).toMatchObject({ folders: 2, documents: 1, title: '归档' })
+    // 明细逐字段相等：不记文件夹的名称（M2-P6 复核 M-1）
+    expect(audit?.details).toEqual({ spaceId, trashEntryId: entry.id, folders: 2, documents: 1, cascadedEntries: 0 })
   })
 
   it('一轮最多清一批，最早到期的先清；剩下的留给下一轮', async () => {

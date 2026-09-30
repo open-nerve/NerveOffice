@@ -83,4 +83,14 @@ describe('createRootLogger', () => {
     const line = JSON.stringify(logs.entries()[0])
     expect(line).not.toContain('"v"')
   })
+
+  // 一次性链接的地址带着令牌（# 之后），签发的响应与运维命令里都叫 url（M2-P6 复核 S-6）：清单里要有这几个键名，
+  // 不能只靠上面按清单逐个核对的用例（从清单里删掉一个，那个用例也跟着少了一条）
+  it('一次性链接的地址（url、link）脱敏', () => {
+    const logs = captureLogs()
+    const link = 'https://docs.example/invite#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+    createRootLogger({ level: 'info', destination: logs.destination }).info({ url: link, issued: { link }, nested: { invitation: { url: link } } }, '签发了邀请')
+    expect(logs.entries()[0]).toMatchObject({ url: REDACTION_CENSOR, issued: { link: REDACTION_CENSOR }, nested: { invitation: { url: REDACTION_CENSOR } } })
+    expect(logs.lines().join('')).not.toContain('AAAAAAAA')
+  })
 })

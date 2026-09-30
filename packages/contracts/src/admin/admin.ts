@@ -18,6 +18,13 @@ export const adminUserSchema = z.object({
   systemRole: z.enum(USER_SYSTEM_ROLES),
   status: z.enum(USER_STATUSES),
   createdAt: z.iso.datetime(),
+  /**
+   * 登录锁定（M2-P6 复核 A1）：这个账户的失败计数里还在锁定的，最晚锁到什么时候（until）；没有锁定时为空。
+   * allSources 为真：只按用户名的上限到了，这个账户在所有来源上都登录不了；为假：只锁了某些来源（按用户名与来源的组合），
+   * 本人从别的来源照常登录——多半是有人在某台机器上连续输错了。
+   * 系统管理员可以解除（POST /api/admin/users/{id}/unlock-login），清掉这个账户在所有来源上的计数
+   */
+  loginLock: z.object({ until: z.iso.datetime(), allSources: z.boolean() }).nullable(),
 })
 
 export type AdminUser = z.infer<typeof adminUserSchema>

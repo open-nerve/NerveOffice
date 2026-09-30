@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { createTestDatabase } from '../support/database.ts'
+import { requestIdOf } from '../support/request-id.ts'
 import { postLogin } from '../support/session-client.ts'
 
 /** 一次哈希足够慢（迭代 20 次，约百毫秒）：一波并发的请求一定撞上正在算的那一个 */
@@ -30,6 +31,7 @@ beforeAll(async () => {
       NERVE_PASSWORD_HASH_QUEUE_TIMEOUT_MS: '2100',
       NERVE_PASSWORD_ARGON2_ITERATIONS: String(SLOW_ARGON2.timeCost),
       NERVE_LOGIN_MAX_FAILURES: '100',
+      NERVE_LOGIN_ACCOUNT_MAX_FAILURES: '1000',
       NERVE_LOGIN_IP_MAX_FAILURES: '1000',
     },
   })
@@ -47,7 +49,7 @@ async function rows<T extends Record<string, unknown>>(query: string, values: un
 describe('等待密码哈希的请求有上限', () => {
   it('超出的立即 503 与 Retry-After：不验证、不写审计，限流的名额退回；洪水过后照常登录', async () => {
     const responses = await Promise.all(Array.from({ length: 8 }, async (_unused, index) =>
-      postLogin(app.baseUrl, { username: `flood${index}`, password: 'wrong' }, { 'x-request-id': `flood-${index}` })))
+      postLogin(app.baseUrl, { username: `flood${index}`, password: 'wrong' })))
     const statuses = responses.map(response => response.status)
     const verified = statuses.filter(status => status === 401).length
     const busy = responses.filter(response => response.status === 503)
@@ -61,14 +63,14 @@ describe('等待密码哈希的请求有上限', () => {
     }
 
     // 只有验证过的请求写审计、留下计数：地址维度的计数就是验证过的次数
-    const [audits] = await rows<{ count: string }>('SELECT count(*) AS count FROM audit_events WHERE action = \'auth.login_failed\' AND request_id LIKE \'flood-%\'')
+    const [audits] = await rows<{ count: string }>('SELECT count(*) AS count FROM audit_events WHERE action = \'auth.login_failed\' AND request_id = ANY($1)', [responses.map(requestIdOf)])
     expect(Number(audits?.count)).toBe(verified)
     const addressKey = createHash('sha256').update('ip:127.0.0.1', 'utf8').digest()
     const [address] = await rows<{ failures: number }>('SELECT failures FROM auth_login_throttles WHERE key_hash = $1', [addressKey])
     expect(address?.failures).toBe(verified)
     const [counted] = await rows<{ count: string }>('SELECT count(*) AS count FROM auth_login_throttles WHERE failures > 0')
-    // 验证过的用户名各一行，加上地址那一行
-    expect(Number(counted?.count)).toBe(verified + 1)
+    // 验证过的用户名各两行（账户、账户与地址），加上地址那一行
+    expect(Number(counted?.count)).toBe(verified * 2 + 1)
 
     expect(app.logs.entries().filter(entry => entry.msg === '等待密码哈希的请求太多，拒绝这次请求')).toHaveLength(busy.length)
     expect((await postLogin(app.baseUrl, { username: 'alice', password: alice.password })).status).toBe(200)

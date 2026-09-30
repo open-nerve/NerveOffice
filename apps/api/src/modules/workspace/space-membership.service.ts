@@ -59,11 +59,12 @@ export class SpaceMembershipService {
       const member = await this.spaces.addMember(space, account.id, request.role, transaction)
       const joined = account.id === actor.userId
       await this.audit.record({
-        action: joined ? 'spaces.admin_joined' : 'spaces.member_added',
+        ...(joined
+          ? { action: 'spaces.admin_joined', details: { role: member.role } } as const
+          : { action: 'spaces.member_added', details: { userId: member.userId, role: member.role } } as const),
         actor: { type: 'user', id: actor.userId },
         target: { type: 'space', id: space.id },
         origin,
-        details: joined ? { role: member.role } : { userId: member.userId, role: member.role },
       }, { transaction })
       return toSpaceMember(member, account)
     })

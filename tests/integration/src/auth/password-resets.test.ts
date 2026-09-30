@@ -12,8 +12,10 @@ import { startTestApp, testEnvironment } from '../support/api-app.ts'
 import { startApiProcess } from '../support/api-process.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
-import { linkInvalidReasonOf, postPublic, tokenOf } from '../support/links.ts'
+import { raceAgainstHeldLock } from '../support/held-lock.ts'
+import { linkInvalidReasonOf, postPublic, tokenDigest, tokenOf } from '../support/links.ts'
 import { captureLogs } from '../support/log-capture.ts'
+import { requestIdOf } from '../support/request-id.ts'
 import { asUser, login, postLogin, SESSION_COOKIE } from '../support/session-client.ts'
 
 let database: TestDatabase
@@ -37,14 +39,23 @@ async function codeOf(response: Response): Promise<string> {
   return parseExact(errorResponseSchema, await response.json()).error.code
 }
 
-async function issueFor(account: TestAccount, requestId?: string) {
-  const response = await asUser(app.baseUrl, adminSession, `/api/admin/users/${account.id}/password-reset`, {
-    method: 'POST',
-    headers: requestId === undefined ? {} : { 'x-request-id': requestId },
-  })
+async function issueFor(account: TestAccount) {
+  const response = await asUser(app.baseUrl, adminSession, `/api/admin/users/${account.id}/password-reset`, { method: 'POST' })
   expect(response.status, await response.clone().text()).toBe(201)
   const issued = parseExact(issuedPasswordResetSchema, await response.json())
-  return { ...issued, token: tokenOf(issued.url) }
+  const token = tokenOf(issued.url)
+  const [row] = await database.query(async client => (await client.query<{ id: string }>('SELECT id FROM auth_password_resets WHERE token_hash = $1', [tokenDigest(token)])).rows)
+  if (row === undefined)
+    throw new Error('签发之后库里没有这条重置')
+  return { ...issued, token, id: row.id, requestId: requestIdOf(response) }
+}
+
+/** 这个账户的重置相关的审计：动作、操作者与明细，按时间顺序 */
+async function resetAuditsOf(account: TestAccount) {
+  return database.query(async client => (await client.query<{ action: string, actor_id: string | null, details: Record<string, unknown> }>(
+    'SELECT action, actor_id, details FROM audit_events WHERE target_type = \'user\' AND target_id = $1 AND action LIKE \'users.password_reset%\' ORDER BY occurred_at, id',
+    [account.id],
+  )).rows)
 }
 
 async function complete(token: string, password = 'the new long password', headers: Record<string, string> = {}): Promise<Response> {
@@ -59,7 +70,7 @@ describe('US-M2-03 重置密码', () => {
   it('签发：链接是 <公开地址>/reset-password#<令牌>，24 小时内有效；旧密码立即失效，这个人的全部会话立即撤销；记审计', async () => {
     const amy = await createAccount(database, { username: 'amy' })
     const open = await login(app.baseUrl, 'amy', amy.password)
-    const issued = await issueFor(amy, 'reset-amy')
+    const issued = await issueFor(amy)
     expect(issued.url).toBe(`http://127.0.0.1:4100/reset-password#${issued.token}`)
     const hours = (Date.parse(issued.expiresAt) - Date.now()) / 3_600_000
     expect(hours).toBeGreaterThan(23.9)
@@ -68,8 +79,46 @@ describe('US-M2-03 重置密码', () => {
     expect(await reasonsOf(amy)).toEqual(['password_reset'])
     // 旧密码随签发失效（审查 A7）：账户被盗时，签发即切断旧密码，不用等本人完成重置
     expect((await postLogin(app.baseUrl, { username: 'amy', password: amy.password })).status).toBe(401)
-    const [event] = await database.query(async client => (await client.query<{ action: string, actor_id: string, target_id: string }>('SELECT action, actor_id, target_id FROM audit_events WHERE request_id = \'reset-amy\'')).rows)
-    expect(event).toEqual({ action: 'users.password_reset_issued', actor_id: admin.id, target_id: amy.id })
+    const [event] = await database.query(async client => (await client.query<{ action: string, actor_id: string, target_id: string, details: unknown }>(
+      'SELECT action, actor_id, target_id, details FROM audit_events WHERE request_id = $1',
+      [issued.requestId],
+    )).rows)
+    // 明细是这条重置的 id：签发、作废、完成三种审计按它串起来（M2-P6 复核 C3）
+    expect(event).toEqual({ action: 'users.password_reset_issued', actor_id: admin.id, target_id: amy.id, details: { passwordResetId: issued.id } })
+  })
+
+  it('作废记审计（M2-P6 复核 C3）：签发新的时作废旧的（reissued），停用账户时作废未用的（account_disabled）；完成的审计带着用掉的那一条', async () => {
+    const ivy = await createAccount(database, { username: 'ivy' })
+    const first = await issueFor(ivy)
+    const second = await issueFor(ivy)
+    expect((await complete(second.token)).status).toBe(200)
+    const third = await issueFor(ivy)
+    expect((await asUser(app.baseUrl, adminSession, `/api/admin/users/${ivy.id}/disable`, { method: 'POST' })).status).toBe(200)
+    expect(await resetAuditsOf(ivy)).toEqual([
+      { action: 'users.password_reset_issued', actor_id: admin.id, details: { passwordResetId: first.id } },
+      { action: 'users.password_reset_revoked', actor_id: admin.id, details: { passwordResetId: first.id, reason: 'reissued' } },
+      { action: 'users.password_reset_issued', actor_id: admin.id, details: { passwordResetId: second.id } },
+      { action: 'users.password_reset_completed', actor_id: ivy.id, details: { passwordResetId: second.id } },
+      // 用过的那一条不再作废，也不再记作废
+      { action: 'users.password_reset_issued', actor_id: admin.id, details: { passwordResetId: third.id } },
+      { action: 'users.password_reset_revoked', actor_id: admin.id, details: { passwordResetId: third.id, reason: 'account_disabled' } },
+    ])
+    // 作废与停用在同一个事务里：作废的审计排在停用之前，同一个请求标识
+    const [revoked, disabled] = await database.query(async client => (await client.query<{ action: string, request_id: string }>(
+      'SELECT action, request_id FROM audit_events WHERE target_id = $1 AND action IN (\'users.password_reset_revoked\', \'users.disabled\') ORDER BY occurred_at DESC, id DESC LIMIT 2',
+      [ivy.id],
+    )).rows.reverse())
+    expect([revoked?.action, disabled?.action]).toEqual(['users.password_reset_revoked', 'users.disabled'])
+    expect(revoked?.request_id).toBe(disabled?.request_id)
+  })
+
+  it('停用没有未用重置的账户、签发时没有旧重置：不记作废', async () => {
+    const jay = await createAccount(database, { username: 'jay' })
+    await issueFor(jay)
+    const kit = await createAccount(database, { username: 'kit' })
+    expect((await asUser(app.baseUrl, adminSession, `/api/admin/users/${kit.id}/disable`, { method: 'POST' })).status).toBe(200)
+    expect((await resetAuditsOf(jay)).map(event => event.action)).toEqual(['users.password_reset_issued'])
+    expect(await resetAuditsOf(kit)).toEqual([])
   })
 
   it('查看只给出登录名与显示名；设置新密码之后已登录，新密码能登录、旧密码不能；记审计', async () => {
@@ -101,10 +150,17 @@ describe('US-M2-03 重置密码', () => {
     expect(await reasonsOf(bystander)).toEqual(['replaced'])
   })
 
-  it('同一个令牌并发完成两次：只有一次成功，另一次 410（used），并记审计', async () => {
+  it('同一个令牌并发完成两次（确定的交错，M2-P6 复核 S-5）：两次都查过令牌、都进了事务，只有一次成功，另一次 410（used），并记审计', async () => {
     const hub = await createAccount(database, { username: 'hub' })
     const issued = await issueFor(hub)
-    const responses = await Promise.all([complete(issued.token, 'first new password'), complete(issued.token, 'second new password')])
+    // 持有这条重置的行锁：先到的一次拿着账户行的锁在重置行上等，后到的一次在账户行上等它。两次都在事务之外查过令牌（都还可用），
+    // 放开之后先到的改好密码、提交；后到的在事务里复核，才发现已经用过
+    const responses = await raceAgainstHeldLock(database, {
+      hold: async client => client.query('SELECT 1 FROM auth_password_resets WHERE id = $1 FOR UPDATE', [issued.id]),
+      request: async () => Promise.all([complete(issued.token, 'first new password'), complete(issued.token, 'second new password')]),
+      waiting: 2,
+      change: async () => undefined,
+    })
     expect(responses.map(response => response.status).sort()).toEqual([200, 410])
     const loser = responses.find(response => response.status === 410)
     expect(loser === undefined ? undefined : await linkInvalidReasonOf(loser)).toBe('used')

@@ -18,6 +18,23 @@ export function apiError(status: number, code: string, message = '说明', heade
   return json(status, { error: { code, message, requestId: `req-${code.toLowerCase()}` } }, headers)
 }
 
+/** 请求没能到达服务端（断网）：假的 fetch 直接失败，请求层把它归为 NetworkError */
+export function networkFailure(): Response {
+  throw new TypeError('Failed to fetch')
+}
+
+/** 按顺序一次一个的响应：第 n 次请求用第 n 个；多出来的请求让测试失败 */
+export function inTurn(...responses: Handler[]): Handler {
+  let calls = 0
+  return async (init) => {
+    const next = responses[calls]
+    calls += 1
+    if (next === undefined)
+      throw new Error(`没有准备第 ${calls} 次的响应`)
+    return next(init)
+  }
+}
+
 export function installFakeApi(handlers: Record<string, Handler> = {}): FakeApi {
   const table = new Map(Object.entries(handlers))
   const requests: FakeApi['requests'] = []

@@ -43,7 +43,8 @@ describe('loadConfig', () => {
         trustProxy: false,
       },
       session: { idleTimeoutMinutes: 720, absoluteTimeoutMinutes: 10_080 },
-      login: { maxFailures: 5, ipMaxFailures: 50, windowMinutes: 15, lockoutMinutes: 15 },
+      login: { maxFailures: 5, accountMaxFailures: 50, ipMaxFailures: 50, windowMinutes: 15, lockoutMinutes: 15 },
+      oneTimeLinks: { recordMaxFailures: 10 },
       web: { root: undefined },
       shutdown: { timeoutMs: 8_000 },
       log: { level: 'info' },
@@ -82,9 +83,11 @@ describe('loadConfig', () => {
       NERVE_SESSION_IDLE_TIMEOUT_MINUTES: '30',
       NERVE_SESSION_ABSOLUTE_TIMEOUT_MINUTES: '600',
       NERVE_LOGIN_MAX_FAILURES: '3',
+      NERVE_LOGIN_ACCOUNT_MAX_FAILURES: '40',
       NERVE_LOGIN_IP_MAX_FAILURES: '1000',
       NERVE_LOGIN_WINDOW_MINUTES: '10',
       NERVE_LOGIN_LOCKOUT_MINUTES: '20',
+      NERVE_LINK_RECORD_MAX_FAILURES: '7',
       NERVE_WEB_ROOT: '/srv/nerve-office/web',
       NERVE_TRASH_PURGE_ENABLED: 'false',
       NERVE_TRASH_PURGE_INTERVAL_MS: '900000',
@@ -114,7 +117,8 @@ describe('loadConfig', () => {
     expect(config.log.level).toBe('debug')
     expect(config.password).toEqual({ argon2: { memoryKib: 47_104, iterations: 1, parallelism: 2 }, hashConcurrency: 8, hashQueue: { maxWaiting: 0, maxWaitMs: 2_500 } })
     expect(config.session).toEqual({ idleTimeoutMinutes: 30, absoluteTimeoutMinutes: 600 })
-    expect(config.login).toEqual({ maxFailures: 3, ipMaxFailures: 1_000, windowMinutes: 10, lockoutMinutes: 20 })
+    expect(config.login).toEqual({ maxFailures: 3, accountMaxFailures: 40, ipMaxFailures: 1_000, windowMinutes: 10, lockoutMinutes: 20 })
+    expect(config.oneTimeLinks).toEqual({ recordMaxFailures: 7 })
     expect(config.web.root).toBe('/srv/nerve-office/web')
     expect(config.jobs).toEqual({ trashPurge: { enabled: false, intervalMs: 900_000, batchSize: 10 } })
   })
@@ -222,6 +226,28 @@ describe('loadConfig', () => {
       expect(issues.map(issue => issue.variable)).toEqual(['NERVE_PUBLIC_ORIGIN'])
       expect(issues[0]?.problem).toContain('只有本机调试')
     })
+  })
+
+  it('只按用户名的登录失败上限必须大于按用户名与来源的上限（M2-P6 复核 A1）：否则一个来源的失败就能把账户在所有来源上锁住', () => {
+    const issuesWith = (extra: Record<string, string>) => issuesOf(() => loadConfig({ ...REQUIRED, ...extra }))
+    for (const [perSource, account] of [['5', '5'], ['10', '6']] as const) {
+      const issues = issuesWith({ NERVE_LOGIN_MAX_FAILURES: perSource, NERVE_LOGIN_ACCOUNT_MAX_FAILURES: account })
+      expect(issues.map(issue => issue.variable), `${perSource}/${account}`).toEqual(['NERVE_LOGIN_ACCOUNT_MAX_FAILURES'])
+      expect(issues[0]?.problem).toContain(`现在是 ${account}，必须大于 NERVE_LOGIN_MAX_FAILURES（现在是 ${perSource}）`)
+    }
+    // 只调了一边：说明里写出另一边用的是默认值
+    expect(issuesWith({ NERVE_LOGIN_MAX_FAILURES: '60' })[0]?.problem).toContain('现在是 50（默认值），必须大于 NERVE_LOGIN_MAX_FAILURES（现在是 60）')
+    expect(issuesWith({ NERVE_LOGIN_ACCOUNT_MAX_FAILURES: '5' })[0]?.problem).toContain('（现在是 5（默认值））')
+    expect(loadConfig({ ...REQUIRED, NERVE_LOGIN_MAX_FAILURES: '5', NERVE_LOGIN_ACCOUNT_MAX_FAILURES: '6' }).login.accountMaxFailures).toBe(6)
+  })
+
+  it('登录与一次性链接的新上限按整数范围校验', () => {
+    const variablesOf = (extra: Record<string, string>) => issuesOf(() => loadConfig({ ...REQUIRED, ...extra })).map(issue => issue.variable)
+    expect(variablesOf({ NERVE_LOGIN_ACCOUNT_MAX_FAILURES: '1' })).toEqual(['NERVE_LOGIN_ACCOUNT_MAX_FAILURES'])
+    expect(variablesOf({ NERVE_LOGIN_ACCOUNT_MAX_FAILURES: '100001' })).toEqual(['NERVE_LOGIN_ACCOUNT_MAX_FAILURES'])
+    expect(variablesOf({ NERVE_LINK_RECORD_MAX_FAILURES: '0' })).toEqual(['NERVE_LINK_RECORD_MAX_FAILURES'])
+    expect(variablesOf({ NERVE_LINK_RECORD_MAX_FAILURES: '1001' })).toEqual(['NERVE_LINK_RECORD_MAX_FAILURES'])
+    expect(loadConfig({ ...REQUIRED, NERVE_LINK_RECORD_MAX_FAILURES: '1' }).oneTimeLinks.recordMaxFailures).toBe(1)
   })
 
   it('会话的空闲过期不能大于绝对过期', () => {

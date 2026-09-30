@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { uuidSchema } from '../ids/ids.ts'
-import { codePointLength, hasControlCharacters } from '../text/text.ts'
+import { codePointLength, hasControlCharacters, nameTextSchema } from '../text/text.ts'
 
 /** 系统角色（00 号计划书 §5.2）。新增取值时，同时用迁移更新 users.system_role 的 CHECK 约束。 */
 export const USER_SYSTEM_ROLES = ['admin', 'member'] as const
@@ -29,11 +29,11 @@ export const usernameSchema = z.string()
 
 export const DISPLAY_NAME_MAX_LENGTH = 64
 
-/** 显示名：去掉首尾空白之后 1–64 个字符，不含控制字符。 */
-export const displayNameSchema = z.string()
-  .trim()
-  .refine(value => codePointLength(value) >= 1 && codePointLength(value) <= DISPLAY_NAME_MAX_LENGTH, `显示名为 1–${DISPLAY_NAME_MAX_LENGTH} 个字符`)
-  .refine(value => !hasControlCharacters(value), '显示名不能包含控制字符')
+/**
+ * 显示名（本人接受邀请时填的、管理员签发邀请时填的、初始化管理员时给的）：名称的共用规则（text.ts 的 nameTextSchema），
+ * 去掉首尾空白之后 1–64 个字符。审计与成员列表按显示名认人，所以不能含改变文字方向的字符、不能只有看不见的字符（M2-P6 复核 B2）
+ */
+export const displayNameSchema = nameTextSchema({ label: '显示名', maxLength: DISPLAY_NAME_MAX_LENGTH })
 
 export const NEW_PASSWORD_MIN_LENGTH = 12
 export const NEW_PASSWORD_MAX_LENGTH = 256

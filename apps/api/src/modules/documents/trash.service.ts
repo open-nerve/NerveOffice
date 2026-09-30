@@ -1,4 +1,4 @@
-import type { RestoredTrashEntry, TrashEntryKind, TrashListQuery, TrashOrigin, TrashPermissions } from '@nerve-office/contracts'
+import type { AuditActionDetailsInput, RestoredTrashEntry, TrashEntryKind, TrashListQuery, TrashOrigin, TrashPermissions } from '@nerve-office/contracts'
 import type { AuditEvent, AuditOrigin } from '../audit/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { Actor, SpaceContentAccess, TrashOperation } from './document-access-policy.ts'
@@ -43,12 +43,14 @@ export interface TrashPage {
   readonly nextCursor: string | null
 }
 
-/** 永久删除一个删除单元的结果（审计与调用方用）。 */
+/**
+ * 永久删除一个删除单元的结果（审计与调用方用）。不带标题与名称：到期自动清理的 jobs 模块拿到的只有 id 与份数，
+ * 它的日志与审计因此不会经手标题（M2-P6 复核 M-1）
+ */
 export interface PurgeOutcome {
   /** 被永久删除的那一个对象：文档 id 或文件夹 id */
   readonly objectId: string
   readonly kind: TrashEntryKind
-  readonly title: string
   readonly spaceId: string
   readonly folders: number
   readonly documents: number
@@ -58,6 +60,9 @@ export interface PurgeOutcome {
 
 /** 审计里的操作者：人工操作是本人，到期自动清理（S4）是系统。 */
 type TrashActor = AuditEvent['actor']
+
+/** 回收站记的六种审计 */
+type TrashAuditAction = 'documents.deleted' | 'documents.restored' | 'documents.purged' | 'folders.deleted' | 'folders.restored' | 'folders.purged'
 
 /** 这一单的根文件夹：它的父文件夹不在这一单里（一个删除单元就是一棵子树，所以只有一个）。 */
 function rootFolderOf(entryId: string, unit: readonly FolderRow[]): FolderRow {
@@ -139,11 +144,10 @@ export class TrashService {
       }, transaction)
       await this.documents.trash([document.id], entry.id, transaction)
       await this.writeAccess.revoke({ kind: 'documents', documentIds: [document.id] }, transaction)
-      await this.record('documents.deleted', { type: 'user', id: actor.userId }, { type: 'document', id: document.id }, origin, {
-        spaceId: document.spaceId,
-        folderId: document.folderId,
-        trashEntryId: entry.id,
-      }, transaction)
+      await this.record({
+        action: 'documents.deleted',
+        details: { spaceId: document.spaceId, folderId: document.folderId, trashEntryId: entry.id },
+      }, { type: 'user', id: actor.userId }, { type: 'document', id: document.id }, origin, transaction)
     })
   }
 
@@ -186,13 +190,10 @@ export class TrashService {
         await this.documents.trash(documentIds, entry.id, transaction)
         await this.writeAccess.revoke({ kind: 'documents', documentIds }, transaction)
       }
-      await this.record('folders.deleted', { type: 'user', id: actor.userId }, { type: 'folder', id: folder.id }, origin, {
-        spaceId: folder.spaceId,
-        parentId: folder.parentId,
-        trashEntryId: entry.id,
-        folders: folderIds.length,
-        documents: documentIds.length,
-      }, transaction)
+      await this.record({
+        action: 'folders.deleted',
+        details: { spaceId: folder.spaceId, parentId: folder.parentId, trashEntryId: entry.id, folders: folderIds.length, documents: documentIds.length },
+      }, { type: 'user', id: actor.userId }, { type: 'folder', id: folder.id }, origin, transaction)
     })
   }
 
@@ -214,14 +215,10 @@ export class TrashService {
         ? await this.restoreDocument(entry, documents, transaction)
         : await this.restoreFolder(entry, transaction)
       await this.entries.deleteMany([entryId], transaction)
-      await this.record(
-        entry.kind === 'document' ? 'documents.restored' : 'folders.restored',
-        { type: 'user', id: actor.userId },
-        { type: entry.kind, id: restored.id },
-        origin,
-        { spaceId: entry.spaceId, folderId: restored.folderId, movedToRoot: restored.movedToRoot, trashEntryId: entryId },
-        transaction,
-      )
+      await this.record({
+        action: entry.kind === 'document' ? 'documents.restored' : 'folders.restored',
+        details: { spaceId: entry.spaceId, folderId: restored.folderId, movedToRoot: restored.movedToRoot, trashEntryId: entryId },
+      }, { type: 'user', id: actor.userId }, { type: entry.kind, id: restored.id }, origin, transaction)
       return restored
     })
   }
@@ -253,23 +250,19 @@ export class TrashService {
     const emptied = await this.deleteEmptied([entry.id, ...outcome.cascadedEntryIds], transaction)
     if (!emptied.includes(entry.id))
       throw new Error(`永久删除之后删除单元里还有东西：${entry.id}`)
-    await this.record(
-      entry.kind === 'document' ? 'documents.purged' : 'folders.purged',
-      actor,
-      { type: entry.kind, id: outcome.objectId },
-      origin,
-      {
+    await this.record({
+      action: entry.kind === 'document' ? 'documents.purged' : 'folders.purged',
+      // 只记份数与删除单元，不记标题与名称（M2 总设计 §2.1 第 5 条，M2-P6 复核 M-1）。
+      // 连带删掉几个删除单元（spec §4）：只记份数，不记 id 列表——审计明细有 AUDIT_DETAILS_MAX_BYTES 的上限，
+      // 无界的 id 数组在连带上百个单元时会让整条写入失败，那一单因此永远删不掉（审查 A1）
+      details: {
         spaceId: entry.spaceId,
-        title: entry.title,
         trashEntryId: entry.id,
         folders: outcome.folders,
         documents: outcome.documents,
-        // 连带删掉几个删除单元（spec §4）：只记份数，不记 id 列表——审计明细有 AUDIT_DETAILS_MAX_BYTES 的上限，
-        // 无界的 id 数组在连带上百个单元时会让整条写入失败，那一单因此永远删不掉（审查 A1）
         cascadedEntries: emptied.filter(id => id !== entry.id).length,
       },
-      transaction,
-    )
+    }, actor, { type: entry.kind, id: outcome.objectId }, origin, transaction)
     return outcome
   }
 
@@ -280,7 +273,7 @@ export class TrashService {
     if (documentId === undefined || documents.length !== 1)
       throw new Error(`一份文档的删除单元里有 ${documents.length} 份文档：${entry.id}`)
     await this.documents.deleteMany([documentId], transaction)
-    return { objectId: documentId, kind: 'document', title: entry.title, spaceId: entry.spaceId, folders: 0, documents: 1, cascadedEntryIds: [] }
+    return { objectId: documentId, kind: 'document', spaceId: entry.spaceId, folders: 0, documents: 1, cascadedEntryIds: [] }
   }
 
   /**
@@ -300,7 +293,7 @@ export class TrashService {
 
     await this.documents.deleteMany(documentIds, transaction)
     await this.folders.deleteMany(folderIds, transaction)
-    return { objectId: root.id, kind: 'folder', title: entry.title, spaceId: entry.spaceId, folders: folderIds.length, documents: documentIds.length, cascadedEntryIds }
+    return { objectId: root.id, kind: 'folder', spaceId: entry.spaceId, folders: folderIds.length, documents: documentIds.length, cascadedEntryIds }
   }
 
   /** 这些删除单元里已经没有任何行的那些（永久删除之后），一起删掉并返回真正删掉的 id。 */
@@ -395,15 +388,17 @@ export class TrashService {
     }
   }
 
+  /**
+   * 动作与明细一起给出：明细按动作的严格结构（contracts 的 auditDetailsSchema），只有 id、份数与标志，
+   * 没有标题与名称（M2-P6 复核 M-1）；审计明细有字节上限，无界的数组会让整条写入失败（审查 A1）
+   */
   private async record(
-    action: 'documents.deleted' | 'documents.restored' | 'documents.purged' | 'folders.deleted' | 'folders.restored' | 'folders.purged',
+    audit: Extract<AuditActionDetailsInput, { action: TrashAuditAction }>,
     actor: TrashActor,
     target: { readonly type: 'document' | 'folder', readonly id: string },
     origin: AuditOrigin,
-    // 只放定长的标量（id、标题、份数、标志）：审计明细有字节上限，无界的数组会让整条写入失败（审查 A1）
-    details: Readonly<Record<string, string | number | boolean | null>>,
     transaction: Transaction,
   ): Promise<void> {
-    await this.audit.record({ action, actor, target, origin, details }, { transaction })
+    await this.audit.record({ ...audit, actor, target, origin }, { transaction })
   }
 }

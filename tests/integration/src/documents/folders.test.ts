@@ -189,7 +189,8 @@ describe('US-M2-07 文件夹的新建与列出', () => {
       'SELECT action, actor_id, details FROM audit_events WHERE target_type = \'folder\' AND target_id = $1',
       [folder.id],
     )).rows)
-    expect(audit).toEqual([{ action: 'folders.created', actor_id: amy.id, details: { spaceId, parentId: null, name: '资料' } }])
+    // 只记位置，不记名称（M2-P6 复核 M-1）
+    expect(audit).toEqual([{ action: 'folders.created', actor_id: amy.id, details: { spaceId, parentId: null } }])
   })
 
   it('建在父文件夹下：层数是父的加一，只出现在那一层；同一个文件夹里允许同名', async () => {

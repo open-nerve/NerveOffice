@@ -55,6 +55,41 @@ async function waitUntilBlocked(database: TestDatabase, holderPid: number, count
   }
 }
 
+/** 这个库里在等锁的连接数（被谁挡住的都算） */
+async function waitingConnections(database: TestDatabase): Promise<number> {
+  const row = await database.query(async client => (await client.query<{ total: number }>(
+    'SELECT count(*)::int AS total FROM pg_stat_activity WHERE datname = current_database() AND cardinality(pg_blocking_pids(pid)) > 0',
+  )).rows[0])
+  return row?.total ?? 0
+}
+
+/**
+ * 持锁期间发出的请求是不是不等锁就走完了：等到它结束（true），或者这个库里等锁的连接到了 waiting 个、它也在等锁了（false）。
+ * 用在 raceAgainstHeldLock 的 change 里：被测的请求已经在锁上等着，这时发出的另一个请求应当不受它影响（M2-P6 复验 N1）。
+ * 返回 false 时请求仍在进行，调用方放锁之后再取它的结果
+ */
+export async function completesWithoutWaiting(database: TestDatabase, request: Promise<unknown>, waiting: number): Promise<boolean> {
+  let ended = false
+  const settled = (): void => {
+    ended = true
+  }
+  request.then(settled, settled)
+  const deadline = performance.now() + WAIT_TIMEOUT_MS
+  for (;;) {
+    if (ended)
+      return true
+    const total = await waitingConnections(database)
+    // 查询期间它可能刚结束：结束了就不算在等锁
+    if (ended)
+      return true
+    if (total >= waiting)
+      return false
+    if (performance.now() > deadline)
+      throw new Error(`${WAIT_TIMEOUT_MS} ms 内请求既没有结束，也没有等到 ${waiting} 个连接在等锁（现在 ${total} 个）`)
+    await delay(20)
+  }
+}
+
 /** 请求结束时的简短说明：HTTP 响应给出状态码 */
 function describeOutcome(value: unknown): string {
   const responses = (Array.isArray(value) ? value : [value]).filter((item): item is Response => item instanceof Response)
