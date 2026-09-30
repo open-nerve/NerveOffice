@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto'
 import { errorResponseSchema, SHEET_TEMPLATE, TRASH_RETENTION_DAYS } from '@nerve-office/contracts'
 import { expect } from 'vitest'
 import { createAccount, createPassiveAccount } from '../support/accounts.ts'
+import { comparableOf } from '../support/comparable-response.ts'
 import { parseExact } from '../support/contracts.ts'
 import { seedDocument } from '../support/documents.ts'
 import { login } from '../support/session-client.ts'
@@ -17,15 +18,19 @@ import { createTeamSpace, setMember } from '../support/spaces.ts'
 /**
  * 角色：
  * - owner：个人空间的所有者（不是任何团队空间的成员）；
- * - spaceAdmin、editor、viewer：三个团队空间（普通、全员可见、归档）里的空间管理员、编辑者、查看者；
+ * - spaceAdmin、editor、viewer：四个团队空间（普通、全员可见、归档、归档且全员可见）里的空间管理员、编辑者、查看者；
  * - outsider：与这些空间都没有关系的成员；
  * - systemAdmin：没有加入任何团队空间的系统管理员。
  */
 export const ACTORS = ['owner', 'spaceAdmin', 'editor', 'viewer', 'outsider', 'systemAdmin'] as const
 export type ActorName = (typeof ACTORS)[number]
 
-/** 目标空间：个人空间（owner 的）、团队空间、全员可见的团队空间、归档的团队空间、不存在的空间 */
-export const TARGETS = ['personal', 'team', 'visible', 'archived', 'missing'] as const
+/**
+ * 目标空间：个人空间（owner 的）、团队空间、全员可见的团队空间、归档的团队空间、归档且全员可见的团队空间、不存在的空间。
+ * 归档且全员可见（M2-P6 复核 B 的 S-3）：两条规则叠在一起——不是成员的人经"全员可见"是查看者，归档又让所有人至多是查看者；
+ * 这一列守着"归档不收回全员可见给的查看"（读、列出、搜索照常）与"全员可见不越过归档"（谁都不能改）
+ */
+export const TARGETS = ['personal', 'team', 'visible', 'archived', 'archivedVisible', 'missing'] as const
 export type TargetName = (typeof TARGETS)[number]
 
 /**
@@ -68,6 +73,11 @@ export interface MatrixWorld {
   /** 每个目标空间里的一份文档；不存在的空间对应一个不存在的文档 */
   readonly documents: Readonly<Record<TargetName, MatrixDocument>>
   /**
+   * 每个目标空间根目录下的一个正常状态的文件夹（不存在的空间对应一个不存在的文件夹）：列出一层的格子据此核对
+   * "恰好是这个空间里的那几个"，列表不会因为一个文件夹也没有而怎么查都对
+   */
+  readonly folders: Readonly<Record<TargetName, MatrixFolder>>
+  /**
    * 跨空间操作（移动、复制）牵涉两个空间，矩阵的一行只放得下一个目标，所以另建一个
    * **六个人都是空间管理员**的团队空间当固定的那一端（M2-P4 S7）：
    * - 它当目标时，"目标空间有新建权限"对谁都成立，那一行只考核源空间的规则；
@@ -94,6 +104,15 @@ export interface MatrixWorld {
   readonly freshSubject: (target: TargetName, member: boolean) => Promise<string>
   /** 另建一个与目标同样状态、同样成员的空间：会改空间的格子（归档、全员可见）各用各的；个人空间与不存在的空间照原样 */
   readonly freshSpace: (target: TargetName) => Promise<string>
+  /**
+   * 目标空间此刻的事实，直接查库（不经生产代码）：列表类的格子拿它核对响应"恰好是这个目标里的那几条，别处的一条也没有"
+   * （M2-P6 复核 B 的 S-1）。根目录下正常状态的文档、根目录下正常状态的文件夹、回收站里的删除单元
+   */
+  readonly rootDocumentIds: (target: TargetName) => Promise<string[]>
+  /** 整个空间里（不分目录）正常状态的文档 */
+  readonly activeDocumentIds: (target: TargetName) => Promise<string[]>
+  readonly rootFolderIds: (target: TargetName) => Promise<string[]>
+  readonly trashEntryIds: (target: TargetName) => Promise<string[]>
 }
 
 /** 模板换上 unitId、A1 写入 value 的快照（保存用） */
@@ -169,6 +188,8 @@ export async function buildMatrixWorld(database: TestDatabase, app: TestApp): Pr
         return createTeamSpace(database, { name, createdBy, members, visibleToAll: true })
       case 'archived':
         return createTeamSpace(database, { name, createdBy, members, status: 'archived' })
+      case 'archivedVisible':
+        return createTeamSpace(database, { name, createdBy, members, visibleToAll: true, status: 'archived' })
     }
   }
   const spaces = Object.fromEntries(await Promise.all(TARGETS.map(async target => [target, await freshSpace(target)] as const))) as Record<TargetName, string>
@@ -216,6 +237,19 @@ export async function buildMatrixWorld(database: TestDatabase, app: TestApp): Pr
       return { id: randomUUID() }
     return folderIn(spaces[target], adminOf(target))
   }
+  const folders = Object.fromEntries(await Promise.all(TARGETS.map(async target => [target, await freshFolder(target)] as const))) as Record<TargetName, MatrixFolder>
+
+  /** 查库取一列 id（按 id 排序）：目标是不存在的空间时查的也是那个不存在的 id，结果是空的 */
+  const idsOf = async (text: string, target: TargetName): Promise<string[]> => database.query(async client =>
+    (await client.query<{ id: string }>(text, [spaces[target]])).rows.map(row => row.id))
+  const rootDocumentIds = async (target: TargetName): Promise<string[]> =>
+    idsOf('SELECT id FROM documents WHERE space_id = $1 AND folder_id IS NULL AND status = \'active\' ORDER BY id', target)
+  const activeDocumentIds = async (target: TargetName): Promise<string[]> =>
+    idsOf('SELECT id FROM documents WHERE space_id = $1 AND status = \'active\' ORDER BY id', target)
+  const rootFolderIds = async (target: TargetName): Promise<string[]> =>
+    idsOf('SELECT id FROM folders WHERE space_id = $1 AND parent_id IS NULL AND status = \'active\' ORDER BY id', target)
+  const trashEntryIds = async (target: TargetName): Promise<string[]> =>
+    idsOf('SELECT id FROM trash_entries WHERE space_id = $1 ORDER BY id', target)
   const freshFolderHolding = async (target: TargetName, author: string): Promise<MatrixFolder> => {
     const folder = await freshFolder(target)
     if (target !== 'missing') {
@@ -261,6 +295,7 @@ export async function buildMatrixWorld(database: TestDatabase, app: TestApp): Pr
     actors,
     spaces,
     documents,
+    folders,
     crossSpace,
     trashedDocuments,
     trashedFolders,
@@ -272,6 +307,10 @@ export async function buildMatrixWorld(database: TestDatabase, app: TestApp): Pr
     freshTrashEntry,
     freshSubject,
     freshSpace,
+    rootDocumentIds,
+    activeDocumentIds,
+    rootFolderIds,
+    trashEntryIds,
   }
 }
 
@@ -309,19 +348,28 @@ async function errorOf(response: Response): Promise<{ code: string, message: str
   return { code, message }
 }
 
-/** 核对一格时可以放宽的地方。 */
+/** 核对一格时另外要看的地方。 */
 export interface CellOptions {
   /**
-   * 这一行的 403 允许哪些错误码；不给时只允许 PERMISSION_DENIED。
-   * 只有"看得到却不能做"另有专门说法的操作才给（例如删除文件夹时"里面有别人创建的文档"，
-   * 它与"空间已归档"要分得开，审查 B2）：仍然是一个封闭的名单，不是不检查
+   * 这一格的 403 是哪个错误码；不给时是 PERMISSION_DENIED。
+   * 只有"看得到却不能做"另有专门说法的格子才给（例如编辑者删除"里面有别人创建的文档"的文件夹，
+   * 它与"空间已归档"要分得开，审查 B2）：逐格钉住，不是一个"几种都行"的名单（M2-P6 复核 B 的 G-2）
    */
-  readonly deniedCodes?: readonly ErrorCode[] | undefined
+  readonly deniedCode?: ErrorCode | undefined
+  /** 这一格的 403 的说明（给出时逐字核对，例如归档的空间里说"空间已归档，只能查看"，M2-P6 复核 A 的 G3） */
+  readonly deniedMessage?: string | undefined
+  /**
+   * 成功的格子另外核对响应的内容（列表类的操作：恰好是这个目标里的那几条，别处的一条也没有，M2-P6 复核 B 的 S-1）。
+   * 状态码表达不了"列出来的是谁的东西"：列表的范围条件坏了，状态码照样是 200
+   */
+  readonly verify?: ((response: Response, target: TargetName) => Promise<void>) | undefined
 }
 
 /**
- * 核对一格：状态码；403 的错误码在 deniedCodes 里（默认只有 PERMISSION_DENIED）；409 的错误码是 SPACE_ARCHIVED；
- * 404 的错误码是 NOT_FOUND，而且与同一个人对不存在的目标做同一个操作的响应相同（去掉请求标识）：看不到与不存在一致
+ * 核对一格：状态码；403 的错误码（默认 PERMISSION_DENIED，见 deniedCode）；409 的错误码是 SPACE_ARCHIVED；
+ * 成功时按 verify 核对内容。404 的错误码是 NOT_FOUND，而且与同一个人对不存在的目标做同一个操作的响应完全相同：
+ * 状态码、错误体（去掉请求标识，其余逐字段）与非易变的响应头（M2-P6 复核 B 的 G-1）——看不到与不存在一致。
+ * 不存在的目标自己就是比较的基准，那一行不与自己比较；语句序列一致由 hidden-missing-parity.test.ts 逐条比较
  */
 export async function expectCell<Operation extends string>(
   world: MatrixWorld,
@@ -332,15 +380,20 @@ export async function expectCell<Operation extends string>(
   const actor = world.actors[cell.actor]
   const response = await run(actor, cell.target)
   expect(response.status, await response.clone().text()).toBe(cell.expected)
-  if (cell.expected === 403)
-    expect(options.deniedCodes ?? ['PERMISSION_DENIED']).toContain((await errorOf(response)).code)
+  if (cell.expected === 403) {
+    const error = await errorOf(response)
+    expect(error.code).toBe(options.deniedCode ?? 'PERMISSION_DENIED')
+    if (options.deniedMessage !== undefined)
+      expect(error.message).toBe(options.deniedMessage)
+  }
   if (cell.expected === 409)
     expect((await errorOf(response)).code).toBe('SPACE_ARCHIVED')
+  if (cell.expected !== 403 && cell.expected !== 404 && cell.expected !== 409 && options.verify !== undefined)
+    await options.verify(response, cell.target)
   if (cell.expected === 404) {
-    const error = await errorOf(response)
-    expect(error.code).toBe('NOT_FOUND')
-    const missing = await run(actor, 'missing')
-    expect(missing.status).toBe(404)
-    expect(await errorOf(missing)).toEqual(error)
+    const hidden = await comparableOf(response)
+    expect(hidden.body).toMatchObject({ error: { code: 'NOT_FOUND' } })
+    if (cell.target !== 'missing')
+      expect(await comparableOf(await run(actor, 'missing'))).toEqual(hidden)
   }
 }

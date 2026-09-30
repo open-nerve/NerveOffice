@@ -142,7 +142,8 @@ apps/api/src/
 - 同一套操作规则既给界面（`SpaceView.permissions`），也给服务端的检查（`requireSpaceContent`、`requireSpaceManagement`）。
 - 看不到与不存在都是 `NOT_FOUND`，执行同样的查询；看得到却不能做是 `PERMISSION_DENIED`。需要锁的操作先判断、再加锁、锁下再判断。
 - "可访问文档"的条件只在 documents 的仓储里拼一处，范围（空间 id 的集合）由访问策略给出。
-- 收回写入权的入口：停用、移出、调整角色、归档在同一个事务里调用；M2 没有租约，实现为空，M3 接入租约。转移与（P4 起的）删除、跨空间移动递增 `documents.write_epoch`。
+- 收回写入权的入口：停用、移出、调整角色、归档、转移（M2-P6 起）、删除与跨空间移动在同一个事务里调用；M2 没有租约，实现为空，M3 接入租约。转移与（P4 起的）删除、跨空间移动递增 `documents.write_epoch`。
+- 团队空间的名称按判重键唯一（数据库的生成列 `name_key`，M2-P6，ADR-014）；复制在锁下对源文档重新判断；搜索的范围检查是不变量；不判断权限的永久删除本体（`TrashEntryPurger`）只在 documents 内部。`DocumentsRepository` 只为集成测试从应用的入口转出（仓储级的范围核对），lint 限定只有 `app/index.ts` 能引用。
 
 **文档的内容与保存**（ADR-011）：
 - 快照用 `bytea` 存 gzip 压缩的原始 JSON 字节；修订号是整数，新建为 1，每次保存加一；`unitId` 由服务端生成，终身不变。

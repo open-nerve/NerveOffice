@@ -10,7 +10,7 @@ import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { AuditService } from '../audit/index.ts'
 import { TransactionRunner } from '../database/index.ts'
-import { canEdit, DocumentAccessPolicy, requireAccess } from './document-access-policy.ts'
+import { DocumentAccessPolicy, requireAccess, requireDocumentContent } from './document-access-policy.ts'
 import { DocumentContentsRepository } from './document-contents.repository.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
 import { DocumentsRepository } from './documents.repository.ts'
@@ -106,12 +106,12 @@ export class DocumentContentService {
     return this.requireEditable(userId, await this.documents.lockById(id, transaction), transaction)
   }
 
-  /** 能编辑就返回文档；别人的与不存在的都是 NOT_FOUND，只能查看是 PERMISSION_DENIED。 */
+  /**
+   * 能编辑就返回文档；别人的与不存在的都是 NOT_FOUND，只能查看是 PERMISSION_DENIED。
+   * 与改名、移动、删除走同一个判断（requireDocumentContent）：归档的空间里说明"空间已归档"，而不是"只能查看"
+   */
   private async requireEditable(userId: string, row: DocumentRow | undefined, transaction: Transaction): Promise<DocumentRow> {
-    const { document, access } = await requireAccess(this.policy, userId, row, transaction)
-    if (!canEdit(access))
-      throw new AppError('PERMISSION_DENIED', '只能查看这份文档，不能保存')
-    return document
+    return (await requireDocumentContent(this.policy, userId, row, ['edit'], transaction)).document
   }
 
   /** 同一个 requestId 已经有修订记录：是同一个人对这份文档的同一次保存（摘要一致）才返回原来的结果。 */

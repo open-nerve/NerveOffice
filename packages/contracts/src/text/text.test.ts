@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { folderNameSchema } from '../folders/folders.ts'
 import { spaceNameSchema } from '../spaces/spaces.ts'
 import { displayNameSchema } from '../users/users.ts'
-import { codePointLength, hasBidiControls, hasControlCharacters, hasHiddenCharacters, hasLineSeparators, hasVisibleCharacters, nameTextSchema, titleTextSchema } from './text.ts'
+import { codePointLength, collapseSpaces, hasBidiControls, hasControlCharacters, hasHiddenCharacters, hasLineSeparators, hasVisibleCharacters, NAME_KEY_IGNORED_CHARACTERS, nameTextSchema, titleTextSchema } from './text.ts'
 
 const nameSchema = nameTextSchema({ label: '名称', maxLength: 20 })
 const titleSchema = titleTextSchema({ label: '标题', maxLength: 20 })
@@ -116,11 +116,71 @@ describe('名称的规则（显示名、团队空间名称、文件夹名称共�
     expect(problemOf(nameSchema, 'a'.repeat(21))).toBe('名称为 1–20 个字符')
   })
 
+  it('名字中间的每一段空白合成一个普通空格：连续的空格、不换行空格、全角空格、各种宽度的空格（M2-P6 复核 B 的 M-1）', () => {
+    expect(nameSchema.parse('Finance  Team')).toBe('Finance Team')
+    expect(nameSchema.parse('Finance\u00A0Team')).toBe('Finance Team')
+    expect(nameSchema.parse('Finance\u2002\u202F Team')).toBe('Finance Team')
+    expect(nameSchema.parse('张\u3000三')).toBe('张 三')
+    expect(nameSchema.parse('\u3000 财务\u205F\u1680部 \u00A0')).toBe('财务 部')
+    // 普通的一个空格照旧；合并之后按码点计长度：20 个字符加一段长空白仍然合法
+    expect(nameSchema.parse('Zhang San')).toBe('Zhang San')
+    expect(nameSchema.safeParse(`${'a'.repeat(10)}${' '.repeat(30)}${'b'.repeat(9)}`).success).toBe(true)
+  })
+
+  it('空白的合并不碰控制字符与行、段分隔符：它们照旧按各自的说明拒绝', () => {
+    expect(problemOf(nameSchema, '张\t三')).toBe('名称不能包含控制字符')
+    expect(problemOf(nameSchema, '张 \n 三')).toBe('名称不能包含控制字符')
+    expect(problemOf(nameSchema, '张 \u2028 三')).toBe('名称不能包含换行符')
+    expect(collapseSpaces('a\t\tb\u2029c')).toBe('a\t\tb\u2029c')
+  })
+
+  it('空白合并之后仍然不能只有看不见的字符；夹在放行的字符之间的空白同样合并', () => {
+    expect(problemOf(nameSchema, '\u200D \u3000\u200D')).toBe('名称不能只有空白或看不见的字符')
+    expect(nameSchema.parse('\u2764\uFE0F\u3000\u3000Team')).toBe('\u2764\uFE0F Team')
+  })
+
   it('显示名用的就是这套规则', () => {
     expect(displayNameSchema.safeParse('\u202E文张').success).toBe(false)
     expect(displayNameSchema.safeParse('\u3164').success).toBe(false)
     expect(displayNameSchema.safeParse('张\u200B三').success).toBe(false)
     expect(displayNameSchema.parse('\u{1F468}\u200D\u{1F469}\u200D\u{1F467} 张三')).toBe('\u{1F468}\u200D\u{1F469}\u200D\u{1F467} 张三')
+  })
+
+  it('显示名、团队空间名称、文件夹名称都合并中间的空白', () => {
+    for (const schema of [displayNameSchema, spaceNameSchema, folderNameSchema])
+      expect(schema.parse(' 研发\u3000\u3000二部 ')).toBe('研发 二部')
+  })
+})
+
+/** 一个码点在不在这些闭区间里 */
+function within(ranges: readonly (readonly [number, number])[], codePoint: number): boolean {
+  return ranges.some(([first, last]) => codePoint >= first && codePoint <= last)
+}
+
+describe('判重时不算区别的字符（NAME_KEY_IGNORED_CHARACTERS，M2-P6 复核 B 的 M-1）', () => {
+  it('恰好是名字里放行的格式字符与默认可忽略字符，加上蒙古文元音分隔符：名字的规则放行什么，判重就忽略什么', () => {
+    const formatOrIgnorable = /^[\p{Cf}\p{Default_Ignorable_Code_Point}]$/u
+    const mismatches: string[] = []
+    for (let codePoint = 0; codePoint <= 0x10FFFF; codePoint += 1) {
+      // 代理项不是字符
+      if (codePoint >= 0xD800 && codePoint <= 0xDFFF)
+        continue
+      const character = String.fromCodePoint(codePoint)
+      if (!formatOrIgnorable.test(character))
+        continue
+      // 夹在两个普通字母之间还能留在名字里的（蒙古文元音分隔符只在正字法位置上放行，这里单独算进去）
+      const allowed = (!hasHiddenCharacters(`a${character}a`) && !hasBidiControls(character)) || codePoint === 0x180E
+      if (allowed !== within(NAME_KEY_IGNORED_CHARACTERS, codePoint))
+        mismatches.push(codePoint.toString(16))
+    }
+    expect(mismatches).toEqual([])
+  })
+
+  it('清单里只有看不见的字符：没有字母、数字与空白', () => {
+    for (const [first, last] of NAME_KEY_IGNORED_CHARACTERS) {
+      for (let codePoint = first; codePoint <= last; codePoint += 1)
+        expect(/^[\p{Cf}\p{Default_Ignorable_Code_Point}]$/u.test(String.fromCodePoint(codePoint)), codePoint.toString(16)).toBe(true)
+    }
   })
 })
 

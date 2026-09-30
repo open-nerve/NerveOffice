@@ -41,6 +41,9 @@ afterAll(async () => {
 type Operation = 'renameDocument' | 'moveWithinSpace' | 'deleteOwnDocument' | 'deleteDocument'
   | 'moveAcrossSpaces' | 'copyDocument' | 'moveIntoSpace' | 'copyIntoSpace'
 
+/** 归档且全员可见的空间：所有人看得到（查看者），谁都不能改 */
+const NOBODY_CHANGES: Row = [403, 403, 403, 403, 403, 403]
+
 /**
  * 编辑者及以上能做；查看者看得到却不能做（403）；归档的空间里所有人至多是查看者，也 403；
  * 个人空间只有所有者，别人一概看不到（404）。
@@ -51,6 +54,7 @@ function editorOrAbove(success: 200 | 204): Readonly<Record<TargetName, Row>> {
     team: [404, success, success, 403, 404, 404],
     visible: [403, success, success, 403, 403, 403],
     archived: [404, 403, 403, 403, 404, 404],
+    archivedVisible: NOBODY_CHANGES,
     missing: [404, 404, 404, 404, 404, 404],
   }
 }
@@ -62,6 +66,7 @@ function spaceAdminOnly(success: 200 | 204): Readonly<Record<TargetName, Row>> {
     team: [404, success, 403, 403, 404, 404],
     visible: [403, success, 403, 403, 403, 403],
     archived: [404, 403, 403, 403, 404, 404],
+    archivedVisible: NOBODY_CHANGES,
     missing: [404, 404, 404, 404, 404, 404],
   }
 }
@@ -77,6 +82,8 @@ function intoSpace(success: 200 | 201): Readonly<Record<TargetName, Row>> {
     team: [404, success, success, 403, 404, 404],
     visible: [403, success, success, 403, 403, 403],
     archived: [404, 409, 409, 409, 404, 404],
+    // 归档且全员可见：谁都看得到，所以谁都是 409（不是 404）
+    archivedVisible: [409, 409, 409, 409, 409, 409],
     missing: [404, 404, 404, 404, 404, 404],
   }
 }
@@ -98,6 +105,7 @@ const MATRIX: MatrixTable<Operation> = {
     visible: [201, 201, 201, 201, 201, 201],
     // 归档的空间只能查看，但复制改的是目标空间，从归档的空间里复制出去照样可以
     archived: [404, 201, 201, 201, 404, 404],
+    archivedVisible: [201, 201, 201, 201, 201, 201],
     missing: [404, 404, 404, 404, 404, 404],
   },
   moveIntoSpace: intoSpace(200),

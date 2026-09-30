@@ -65,7 +65,7 @@ describe('US-M2-05 管理界面：团队空间', () => {
     fireEvent.change(within(form).getByLabelText('名称'), { target: { value: ' 市场部 ' } })
     expect(submit).toHaveAttribute('aria-disabled', 'false')
     expect(submit).not.toHaveAccessibleDescription()
-    fireEvent.click(within(form).getByLabelText('全员可见：所有有效账户都能以查看者的身份看到它'))
+    fireEvent.click(within(form).getByLabelText('全员可见：所有有效账户（包括你自己）都能以查看者的身份看到它的内容'))
     fireEvent.click(submit)
     expect(await rowOf('市场部')).toBeInTheDocument()
     expect(lastBody(api, 'POST /api/admin/spaces')).toEqual({ name: '市场部', adminUserId: BEN.id, visibleToAll: true })
@@ -139,7 +139,8 @@ describe('US-M2-05 管理界面：团队空间', () => {
     renderApp('/admin/spaces')
     fireEvent.click(within(await rowOf('市场部')).getByRole('button', { name: '设为全员可见 市场部' }))
     const show = await screen.findByRole('dialog', { name: '把 市场部 设为全员可见？' })
-    expect(show).toHaveTextContent('所有有效账户都能以查看者的身份看到这个空间与里面的文档。')
+    // 写明后果，包括系统管理员自己：打开之后他不必加入也能看到内容（需求方 2026-10-01 确认的规则）
+    expect(show).toHaveTextContent('打开之后所有有效账户都能以查看者的身份看到这个空间里的内容，包括你自己。')
     fireEvent.click(within(show).getByRole('button', { name: '设为全员可见' }))
     const hideButton = await within(await rowOf('市场部')).findByRole('button', { name: '取消全员可见 市场部' })
     expect(within(await rowOf('市场部')).getByText('是')).toBeInTheDocument()

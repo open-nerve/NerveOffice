@@ -1,13 +1,13 @@
 import type { TrashEntryKind } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
-import type { PurgeOutcome } from './trash.service.ts'
+import type { PurgeOutcome } from './trash-entry-purger.ts'
 import { Injectable } from '@nestjs/common'
 import { TransactionRunner } from '../database/index.ts'
 import { SpacesService } from '../spaces/index.ts'
 import { DocumentsRepository } from './documents.repository.ts'
 import { SpaceTreeRepository } from './space-tree.repository.ts'
 import { TrashEntriesRepository } from './trash-entries.repository.ts'
-import { TrashService } from './trash.service.ts'
+import { TrashEntryPurger } from './trash-entry-purger.ts'
 
 /**
  * 到期的一个删除单元：jobs 只按 id 与所在空间逐个清理，内容与规则都在 documents 里。
@@ -37,7 +37,7 @@ const JOB_ORIGIN: AuditOrigin = { source: 'job' }
  * 删除的语义仍然在这里。
  *
  * 与人工的永久删除（TrashService.purge）的差别只有两点：不判断人的权限（操作者是系统，归档的空间照样清），
- * 以及按到期时间成批取。锁的顺序、连带删除、审计与人工的那条路径完全相同——同一个 purgeUnderLock。
+ * 以及按到期时间成批取。锁的顺序、连带删除、审计与人工的那条路径完全相同——同一个 TrashEntryPurger。
  */
 @Injectable()
 export class TrashPurgeService {
@@ -47,7 +47,7 @@ export class TrashPurgeService {
     private readonly entries: TrashEntriesRepository,
     private readonly tree: SpaceTreeRepository,
     private readonly spaces: SpacesService,
-    private readonly trash: TrashService,
+    private readonly purger: TrashEntryPurger,
   ) {}
 
   /**
@@ -75,7 +75,7 @@ export class TrashPurgeService {
         return { purged: false, reason: 'gone' }
       if (locked.spaceId !== entry.spaceId)
         return { purged: false, reason: 'moved' }
-      return { purged: true, outcome: await this.trash.purgeUnderLock(locked, { type: 'system' }, JOB_ORIGIN, transaction) }
+      return { purged: true, outcome: await this.purger.purge(locked, { type: 'system' }, JOB_ORIGIN, transaction) }
     })
   }
 }

@@ -383,6 +383,21 @@ const API_TRASH_PURGE = {
   importNames: ['TrashPurgeService'],
   message: '到期的回收站清理（TrashPurgeService）不判断人的权限，只由定时任务的模块（modules/jobs）调用（M2-P4 设计 §3.1）',
 }
+// 永久删除一个删除单元的本体（TrashEntryPurger）不判断任何人的权限：只在 documents 模块内部由 TrashService.purge（锁下判断过权限之后）
+// 与 TrashPurgeService（到期的清理）调用，不从公开入口导出。别的模块直接引用它的文件由模块边界拦下；这里再拦下经公开入口的引用，
+// 将来有人把它加进入口也拦得住。jobs 也不例外：它只经 TrashPurgeService（M2-P6 复核 A 的 G1）
+const API_TRASH_ENTRY_PURGER = {
+  regex: String.raw`(?:^|/)documents/index\.ts$`,
+  importNames: ['TrashEntryPurger'],
+  message: '永久删除一个删除单元的本体（TrashEntryPurger）不判断权限，只在 documents 模块内部使用：人工的永久删除经 TrashService.purge，到期的清理经 TrashPurgeService（M2-P6 复核 A 的 G1）',
+}
+// documents 的仓储（DocumentsRepository）只在本模块里用：服务经访问策略判断权限之后才查询，别的模块拿到它就能绕开"可访问文档"的范围。
+// 公开入口转出它只为 app 层的程序接口（集成测试直接核对仓储的查询范围，M2-P6 复核 A 的 S3）；别的文件一律拦下
+const API_DOCUMENTS_REPOSITORY = {
+  regex: String.raw`(?:^|/)documents/index\.ts$`,
+  importNames: ['DocumentsRepository'],
+  message: 'documents 的仓储（DocumentsRepository）只在 documents 模块里使用，公开入口转出它只为 app 层的程序接口（集成测试）：别的模块经服务与访问策略（M2-P6 复核 A 的 S3）',
+}
 
 /** 后端文件允许的例外。 */
 interface ApiFileKind {
@@ -402,6 +417,8 @@ interface ApiFileKind {
   documentTransfer?: boolean
   /** 引用到期的回收站清理 TrashPurgeService（定时任务的模块与 documents 模块） */
   trashPurge?: boolean
+  /** 经 documents 的公开入口引用它的仓储 DocumentsRepository（只有 app 层的程序接口，为集成测试转出） */
+  documentsRepository?: boolean
 }
 
 function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
@@ -419,6 +436,8 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
     ...(kind.controller === true ? [API_REPOSITORY_FROM_CONTROLLER, API_TRANSACTIONS_FROM_CONTROLLER] : []),
     ...(kind.documentTransfer === true ? [] : [API_DOCUMENT_TRANSFER]),
     ...(kind.trashPurge === true ? [] : [API_TRASH_PURGE]),
+    API_TRASH_ENTRY_PURGER,
+    ...(kind.documentsRepository === true ? [] : [API_DOCUMENTS_REPOSITORY]),
   ]
   const syntax = [
     ...BASE_RESTRICTED_SYNTAX,
@@ -587,8 +606,8 @@ export default antfu(
   { name: 'nerve/api-document-transfer', files: ['apps/api/src/modules/admin/**/*.ts'], rules: apiRules({ documentTransfer: true }) },
   { name: 'nerve/api-trash-purge', files: ['apps/api/src/modules/jobs/**/*.ts'], rules: apiRules({ trashPurge: true }) },
   { name: 'nerve/api-documents', files: ['apps/api/src/modules/documents/**/*.ts'], rules: apiRules({ documentTransfer: true, trashPurge: true }) },
-  // app 层的程序接口（index.ts）为集成测试转出数据库句柄；app 层的其他文件同样拿不到（复验 N6）
-  { name: 'nerve/api-app-entry', files: ['apps/api/src/app/index.ts'], rules: apiRules({ databaseHandles: true }) },
+  // app 层的程序接口（index.ts）为集成测试转出数据库句柄与 documents 的仓储；app 层的其他文件同样拿不到（复验 N6，M2-P6 复核 A 的 S3）
+  { name: 'nerve/api-app-entry', files: ['apps/api/src/app/index.ts'], rules: apiRules({ databaseHandles: true, documentsRepository: true }) },
   { name: 'nerve/api-database', files: ['apps/api/src/modules/database/**/*.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true }) },
   { name: 'nerve/api-repositories', files: ['apps/api/src/modules/*/*.repository.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true, tables: true }) },
   // 表定义里的 CHECK 约束要把代码里的常量拼成 SQL 字面量（drizzle-kit 不内联参数）；这里只有 DDL 与常量，没有运行时的输入

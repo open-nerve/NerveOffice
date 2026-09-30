@@ -79,6 +79,18 @@ const FORMAT_OR_IGNORABLE = /^[\p{Cf}\p{Default_Ignorable_Code_Point}]$/u
  * 例如名字"娜拉"的蒙古文写法 nar-a（U+1828 U+1820 U+1837 U+180E U+1820，M2-P6 复验 一般-5）
  */
 const MONGOLIAN_VOWEL_SEPARATOR = 0x180E
+
+/**
+ * 判断两个名字是不是"同一个名字"时不算区别的字符：名字里放行的几类格式字符与默认可忽略字符（上面的
+ * FORMAT_CHARACTERS_ALLOWED_IN_NAMES），加上蒙古文元音分隔符。它们都看不见，只差在它们上面的两个名字看起来一样，
+ * 团队空间的名称按它们判重就挡不住看起来一样的名字（M2-P6 复核 B 的 M-1）。
+ * 按码点的闭区间列出；判重的键由数据库按这份清单算（apps/api 的 spaces 表定义），名字的规则放行什么，判重就忽略什么
+ */
+export const NAME_KEY_IGNORED_CHARACTERS: readonly (readonly [number, number])[] = [
+  ...FORMAT_CHARACTERS_ALLOWED_IN_NAMES,
+  [MONGOLIAN_VOWEL_SEPARATOR, MONGOLIAN_VOWEL_SEPARATOR],
+]
+
 /** MVS 后面的词尾元音：蒙古文字母 a（U+1820）、e（U+1821） */
 const MONGOLIAN_FINAL_VOWELS: readonly number[] = [0x1820, 0x1821]
 /** 蒙古文字母（蒙古文里的字母，不含数字、标点与变体选择符等） */
@@ -117,16 +129,27 @@ export interface TextRuleOptions {
 }
 
 /**
- * 名称（显示名、团队空间名称、文件夹名称）：先 NFC 归一（同一个字的组合写法与预组写法存成一样），去掉首尾空白之后
- * 1–maxLength 个字符（按码点）；不含控制字符、双向控制字符、行与段分隔符；去掉看不见的字符之后仍然有字；
- * 不夹着看不见的字符（复验 N6：零宽连接符、变体选择符等名字里确有用途的几类除外，见 FORMAT_CHARACTERS_ALLOWED_IN_NAMES；
- * 蒙古文元音分隔符只在正字法位置上放行）。
+ * 名字中间的一段空白：空格类的分隔符（\p{Zs}：普通空格、不换行空格、全角空格、各种宽度的空格）连在一起的一段。
+ * 换行、制表符等控制字符与行、段分隔符不在其中：它们由下面的规则拒绝，并给出更具体的说明
+ */
+const SPACE_RUNS = /\p{Zs}+/gu
+
+/** 名字中间的每一段空白合成一个普通空格：连续的空格、不换行空格、全角空格看起来与一个空格差不多，存成一样（M2-P6 复核 B 的 M-1） */
+export function collapseSpaces(value: string): string {
+  return value.replace(SPACE_RUNS, ' ')
+}
+
+/**
+ * 名称（显示名、团队空间名称、文件夹名称）：去掉首尾空白，中间的每一段空白合成一个普通空格，再 NFC 归一
+ * （同一个字的组合写法与预组写法存成一样）；之后 1–maxLength 个字符（按码点）；不含控制字符、双向控制字符、行与段分隔符；
+ * 去掉看不见的字符之后仍然有字；不夹着看不见的字符（复验 N6：零宽连接符、变体选择符等名字里确有用途的几类除外，
+ * 见 FORMAT_CHARACTERS_ALLOWED_IN_NAMES；蒙古文元音分隔符只在正字法位置上放行）。
  * 说明按这个顺序给出第一条：整个名字都看不见时说"只有看不见的字符"，夹在字中间时才说"不能包含"
  */
 export function nameTextSchema({ label, maxLength }: TextRuleOptions) {
   return z.string()
     .trim()
-    .transform(value => value.normalize('NFC'))
+    .transform(value => collapseSpaces(value).normalize('NFC'))
     .refine(value => codePointLength(value) >= 1 && codePointLength(value) <= maxLength, `${label}为 1–${maxLength} 个字符`)
     .refine(value => !hasControlCharacters(value), `${label}不能包含控制字符`)
     .refine(value => !hasBidiControls(value), `${label}不能包含改变文字方向的控制字符`)

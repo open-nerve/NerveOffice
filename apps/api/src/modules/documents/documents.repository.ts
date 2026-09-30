@@ -166,6 +166,16 @@ export class DocumentsRepository {
   }
 
   /**
+   * 以共享锁持住文档行（FOR SHARE）再读：复制的源文档用（M2-P6 复核 A 的 S1）。与保存、改名、移动、删除、转移
+   * （都取 FOR UPDATE）互斥：锁下读到的就是复制出去的那一版，复制提交之前它不会被改写、移走或删掉；
+   * 几次复制之间不互斥。等锁期间它进了回收站或被永久删除时返回 undefined
+   */
+  async holdById(id: string, transaction: Transaction): Promise<DocumentRow | undefined> {
+    const [row] = await executorOf(this.db, transaction).select(COLUMNS).from(d).where(and(eq(d.id, id), eq(d.status, 'active'))).for('share')
+    return row
+  }
+
+  /**
    * 按 id 顺序锁住要转移的文档（FOR UPDATE，与保存相同）：两次转移、转移与保存都按同一个顺序取锁，互相等待时不成环。
    * 只锁来源空间里的可访问文档（与标题列表同一个条件）：请求里夹带的别处的文档不被锁住（M2-P2 审查 A4）；
    * 等锁期间被别人转走的行，拿到锁之后按新的内容重新判断，不再返回。返回锁住的 id（按 id 排序）。
@@ -333,7 +343,8 @@ export class DocumentsRepository {
    * 按源文档建一份副本（M2-P4 设计 §3.4 第 4 条）：类型、unitId、档案、格式版本与写入时的 SDK 版本由
    * INSERT … SELECT 从源文档原样复制（unitId 相同是有意的，00 号计划书 §8.3）；
    * 修订号、写入代次、状态与时间用列的默认值（修订号 1、代次 0、正常状态）。
-   * 源文档已经不在（被删或进了回收站）时什么也不写，返回 undefined。内容的复制见 DocumentContentsRepository.copyFrom
+   * 源文档已经不在（被删或进了回收站）时什么也不写，返回 undefined（调用方持着源文档行的共享锁时不会发生）。
+   * 内容的复制见 DocumentContentsRepository.copyFrom
    */
   async copyFrom(sourceId: string, copy: CopiedDocument, transaction: Transaction): Promise<DocumentRow | undefined> {
     const executor = executorOf(this.db, transaction)

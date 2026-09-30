@@ -1,8 +1,9 @@
 // spaces 模块的表：空间（M1-P3 设计 §3.2；M2-P2 设计 §3.2 加上团队空间、归档、创建人）与团队空间的成员（M2-P2）。
-import { SPACE_NAME_MAX_LENGTH, SPACE_ROLES, SPACE_STATUSES, SPACE_TYPES } from '@nerve-office/contracts'
+import type { SQL } from 'drizzle-orm'
+import { NAME_KEY_IGNORED_CHARACTERS, SPACE_NAME_MAX_LENGTH, SPACE_ROLES, SPACE_STATUSES, SPACE_TYPES } from '@nerve-office/contracts'
 import { sql } from 'drizzle-orm'
 import { boolean, check, index, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
-import { lengthBetween, oneOf } from '../common/index.ts'
+import { lengthBetween, nameKeyOf, oneOf } from '../common/index.ts'
 import { users } from '../users/index.ts'
 
 export const spaces = pgTable('spaces', {
@@ -10,6 +11,9 @@ export const spaces = pgTable('spaces', {
   // enum 只收窄 TypeScript 的类型，数据库里仍是 text 加 CHECK
   type: text('type', { enum: SPACE_TYPES }).notNull(),
   name: text('name').notNull(),
+  // 名称的判重键（M2-P6 复核 B 的 M-1）：由数据库从名称算出（生成列），看起来一样的名称算出同一个键，算法只有 nameKeyOf 这一处。
+  // 服务不自己判断重名：创建与改名撞上下面的唯一索引就是"名称已被使用"
+  nameKey: text('name_key').notNull().generatedAlwaysAs((): SQL => nameKeyOf(spaces.name, NAME_KEY_IGNORED_CHARACTERS)),
   status: text('status', { enum: SPACE_STATUSES }).notNull().default('active'),
   ownerUserId: uuid('owner_user_id').references(() => users.id, { onDelete: 'restrict' }),
   visibleToAll: boolean('visible_to_all').notNull().default(false),
@@ -26,8 +30,8 @@ export const spaces = pgTable('spaces', {
   // 团队空间归空间所有，没有所有者；由系统管理员创建（00 号计划书 §5.1）
   check('spaces_team_check', sql`${table.type} <> 'team' OR (${table.ownerUserId} IS NULL AND ${table.createdBy} IS NOT NULL)`),
   uniqueIndex('spaces_personal_owner_key').on(table.ownerUserId).where(sql`${table.type} = 'personal'`),
-  // 团队空间的名称不区分大小写唯一，已归档的也算：导航里同名的空间无法区分（M2-P2 设计 §3.2）
-  uniqueIndex('spaces_team_name_key').on(sql`lower(${table.name})`).where(sql`${table.type} = 'team'`),
+  // 团队空间的名称按判重键唯一，已归档的也算：导航里同名的空间无法区分（M2-P2 设计 §3.2）；看起来一样的名称同样算重名（M2-P6 复核 B 的 M-1）
+  uniqueIndex('spaces_team_name_key').on(table.nameKey).where(sql`${table.type} = 'team'`),
 ])
 
 /**

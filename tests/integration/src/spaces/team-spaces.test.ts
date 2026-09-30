@@ -7,12 +7,13 @@ import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import { randomUUID } from 'node:crypto'
-import { adminSpaceListResponseSchema, adminSpaceSchema, auditEventListResponseSchema, CSRF_TOKEN_HEADER, errorResponseSchema, spaceListResponseSchema, spaceViewSchema } from '@nerve-office/contracts'
+import { adminSpaceListResponseSchema, adminSpaceSchema, auditEventListResponseSchema, CSRF_TOKEN_HEADER, documentDetailSchema, errorResponseSchema, searchResponseSchema, spaceListResponseSchema, spaceViewSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount, createPassiveAccount } from '../support/accounts.ts'
 import { startTestApp, TEST_PUBLIC_ORIGIN } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
+import { seedDocument } from '../support/documents.ts'
 import { raceAgainstHeldLock } from '../support/held-lock.ts'
 import { asUser, login } from '../support/session-client.ts'
 import { createTeamSpace } from '../support/spaces.ts'
@@ -148,6 +149,25 @@ describe('US-M2-05 全员可见', () => {
       ['spaces.visibility_changed', { visibleToAll: true }],
       ['spaces.visibility_changed', { visibleToAll: false }],
     ])
+  })
+
+  it('系统管理员不加入空间，经全员可见同样以查看者读到内容（需求方 2026-10-01 接受的规则）：开关记审计，关上之后又是 404', async () => {
+    const space = await created(await createSpace({ name: '人事部', adminUserId: amy.id }))
+    const secret = await seedDocument(database, { spaceId: space.id, createdBy: amy.id, title: '薪酬表' })
+    expect((await asUser(app.baseUrl, rootSession, `/api/documents/${secret.id}/content`)).status).toBe(404)
+
+    await adminSpace(await asUser(app.baseUrl, rootSession, `/api/admin/spaces/${space.id}/visibility`, { method: 'PUT', body: { visibleToAll: true } }))
+    const detail = await asUser(app.baseUrl, rootSession, `/api/documents/${secret.id}`)
+    expect(detail.status).toBe(200)
+    expect(parseExact(documentDetailSchema, await detail.json())).toMatchObject({ title: '薪酬表', permissions: { canEdit: false } })
+    expect((await asUser(app.baseUrl, rootSession, `/api/documents/${secret.id}/content`)).status).toBe(200)
+    const found = parseExact(searchResponseSchema, await (await asUser(app.baseUrl, rootSession, `/api/search?query=${encodeURIComponent('薪酬')}`)).json())
+    expect(found.items.map(item => item.id)).toEqual([secret.id])
+
+    await adminSpace(await asUser(app.baseUrl, rootSession, `/api/admin/spaces/${space.id}/visibility`, { method: 'PUT', body: { visibleToAll: false } }))
+    expect((await asUser(app.baseUrl, rootSession, `/api/documents/${secret.id}/content`)).status).toBe(404)
+    // 能看到内容的依据是开关本身（记审计、对全员可见），不是悄悄加入：没有 admin_joined
+    expect((await auditOf(space.id)).map(event => event.action)).toEqual(['spaces.created', 'spaces.visibility_changed', 'spaces.visibility_changed'])
   })
 })
 

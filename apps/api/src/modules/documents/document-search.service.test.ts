@@ -49,6 +49,29 @@ describe('DocumentSearchService.search 的范围', () => {
     )
   })
 
+  it('仓储返回了范围之外的行：不变量失败，整个请求按意外错误处理，不静默丢掉、不给游标（M2-P6 复核 A 的 S3、B 的 G-3）', async () => {
+    const { store, service } = setup()
+    const mine = at(store, ALICE_SPACE, '我的预算', '2026-09-26T10:00:00.000001Z')
+    const others = at(store, BOB_SPACE, '鲍勃的预算', '2026-09-26T10:00:00.000002Z')
+    // "可访问文档"的条件坏了（例如不再按空间过滤）：仓储把别处的行也返回了
+    store.repositories.documents.searchByTitle.mockResolvedValueOnce([others, mine])
+    const failure: unknown = await service.search(member(ALICE), { query: '预算' }).then(() => undefined, (error: unknown) => error)
+    expect(failure).toBeInstanceOf(Error)
+    expect(failure).not.toBeInstanceOf(AppError)
+    // 说明里只有 id，没有标题与空间名：它会进请求日志
+    expect((failure as Error).message).toBe(`搜索结果里有可见范围之外的文档：文档 ${others.id}，空间 ${BOB_SPACE}`)
+  })
+
+  it('范围之外的行落在"多取的那一条"上也一样失败：不能只核对本页、按丢掉之前的行数给出下一页的游标', async () => {
+    const { store, service } = setup()
+    const rows = Array.from({ length: SEARCH_PAGE_SIZE }, (_, index) => at(store, ALICE_SPACE, `预算 ${index}`, `2026-09-26T10:00:00.${String(900_000 - index).padStart(6, '0')}Z`))
+    const others = at(store, BOB_SPACE, '鲍勃的预算', '2026-09-26T09:00:00.000001Z')
+    store.repositories.documents.searchByTitle.mockResolvedValueOnce([...rows, others])
+    // 本页的 50 条都在范围里，只有多取的那一条（用来判断还有没有下一页）不在：同样是不变量失败——
+    // 只核对本页的话会照常给出下一页的游标，透露范围之外还有匹配
+    await expect(service.search(member(ALICE), { query: '预算' })).rejects.toThrow(`搜索结果里有可见范围之外的文档：文档 ${others.id}，空间 ${BOB_SPACE}`)
+  })
+
   it('归档的空间还能搜到（归档只是只读）', async () => {
     const { store, service } = setup()
     store.setMember(TEAM_SPACE, ALICE, 'editor')

@@ -929,6 +929,53 @@ describe('US-M1-11 lint 规则的自测：后端', () => {
     }
   })
 
+  it('不判断权限的回收站清理只在 documents 与 jobs 里：TrashPurgeService 只给 jobs，删除单元的本体 TrashEntryPurger 谁都拿不到（M2-P6 复核 A 的 G1）', async () => {
+    const PURGE_MESSAGE = '到期的回收站清理（TrashPurgeService）不判断人的权限'
+    const PURGER_MESSAGE = '永久删除一个删除单元的本体（TrashEntryPurger）不判断权限'
+    const importPurge = 'import { TrashPurgeService } from \'../documents/index.ts\'\n\nexport const service = TrashPurgeService\n'
+    const importPurger = 'import { TrashEntryPurger } from \'../documents/index.ts\'\n\nexport const purger = TrashEntryPurger\n'
+    // jobs 经公开入口引用到期的清理；documents 模块自己经相对路径引用本体
+    expect(await rulesFor(importPurge, 'apps/api/src/modules/jobs/trash-purge.job.ts')).not.toContain('no-restricted-imports')
+    expect(await rulesFor('import { TrashEntryPurger } from \'./trash-entry-purger.ts\'\n\nexport const purger = TrashEntryPurger\n', 'apps/api/src/modules/documents/trash.service.ts')).not.toContain('no-restricted-imports')
+    // 同一个公开入口里的 TrashService（它上面没有不判断权限就能永久删除的方法）照常引用
+    expect(await rulesFor('import { TrashService } from \'../documents/index.ts\'\n\nexport const service = TrashService\n', 'apps/api/src/modules/workspace/trash.controller.ts')).not.toContain('no-restricted-imports')
+    const violations: [string, string, string, string][] = [
+      [importPurge, 'apps/api/src/modules/workspace/trash-directory.service.ts', 'no-restricted-imports', PURGE_MESSAGE],
+      [importPurger, 'apps/api/src/modules/workspace/trash-directory.service.ts', 'no-restricted-imports', PURGER_MESSAGE],
+      // jobs 也只经 TrashPurgeService，拿不到本体
+      [importPurger, 'apps/api/src/modules/jobs/trash-purge.job.ts', 'no-restricted-imports', PURGER_MESSAGE],
+      ['import type { TrashEntryPurger } from \'../documents/index.ts\'\n\nexport type Purger = TrashEntryPurger\n', 'apps/api/src/modules/admin/admin-spaces.service.ts', 'no-restricted-imports', PURGER_MESSAGE],
+      ['export { TrashEntryPurger } from \'../modules/documents/index.ts\'\n', 'apps/api/src/app/index.ts', 'no-restricted-imports', PURGER_MESSAGE],
+      // 不经公开入口、直接引用它的文件：模块边界拦下
+      ['import { TrashEntryPurger } from \'../documents/trash-entry-purger.ts\'\n\nexport const purger = TrashEntryPurger\n', 'apps/api/src/modules/workspace/trash-directory.service.ts', 'boundaries/dependencies', ''],
+      ['import { TrashEntryPurger } from \'../documents/trash-entry-purger.ts\'\n\nexport const purger = TrashEntryPurger\n', 'apps/api/src/modules/jobs/trash-purge.job.ts', 'boundaries/dependencies', ''],
+    ]
+    for (const [code, file, rule, message] of violations) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain(rule)
+      expect(report.messages.join('\n'), `${file}：${code}`).toContain(message)
+    }
+  })
+
+  it('documents 的仓储只在 documents 模块里用：公开入口转出它只为 app 层的程序接口，别的模块、app 层的其他文件引用都失败（M2-P6 复核 A 的 S3）', async () => {
+    const REPOSITORY_MESSAGE = 'documents 的仓储（DocumentsRepository）只在 documents 模块里使用'
+    expect(await rulesFor('export { DocumentsRepository } from \'../modules/documents/index.ts\'\n', 'apps/api/src/app/index.ts')).not.toContain('no-restricted-imports')
+    expect(await rulesFor('import { DocumentsRepository } from \'./documents.repository.ts\'\n\nexport const repository = DocumentsRepository\n', 'apps/api/src/modules/documents/document-search.service.ts')).not.toContain('no-restricted-imports')
+    const importRepository = 'import { DocumentsRepository } from \'../documents/index.ts\'\n\nexport const repository = DocumentsRepository\n'
+    const violations: [string, string][] = [
+      [importRepository, 'apps/api/src/modules/workspace/space-directory.service.ts'],
+      [importRepository, 'apps/api/src/modules/admin/admin-transfer.service.ts'],
+      [importRepository, 'apps/api/src/modules/jobs/trash-purge.job.ts'],
+      ['import { DocumentsRepository } from \'../modules/documents/index.ts\'\n\nexport const repository = DocumentsRepository\n', 'apps/api/src/app/app.module.ts'],
+      ['export { DocumentsRepository } from \'../documents/index.ts\'\n', 'apps/api/src/modules/spaces/index.ts'],
+    ]
+    for (const [code, file] of violations) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain('no-restricted-imports')
+      expect(report.messages.join('\n'), `${file}：${code}`).toContain(REPOSITORY_MESSAGE)
+    }
+  })
+
   it('admin 与 workspace 是最上层的编排：只由 app 层组装，别的模块都不引用它们，经 admin 转手的转移同样拦下（M2-P2 复验 N2）', async () => {
     const TOP_LEVEL = '是最上层的编排（ADR-014）'
     expect(await rulesFor('import { AdminModule } from \'../modules/admin/index.ts\'\nimport { WorkspaceModule } from \'../modules/workspace/index.ts\'\n\nexport const modules = [AdminModule, WorkspaceModule]\n', 'apps/api/src/app/app.module.ts')).not.toContain('boundaries/dependencies')

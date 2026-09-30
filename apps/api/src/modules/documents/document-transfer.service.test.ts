@@ -14,7 +14,8 @@ function setup(locked: string[]) {
     moveToSpace: vi.fn(async () => []),
     listAccessible: vi.fn(async () => []),
   }
-  return { service: new DocumentTransferService(repository as never), repository }
+  const writeAccess = { revoke: vi.fn(async () => {}) }
+  return { service: new DocumentTransferService(repository as never, writeAccess), repository, writeAccess }
 }
 
 async function rejection(promise: Promise<unknown>): Promise<AppError> {
@@ -33,11 +34,21 @@ describe('DocumentTransferService.transfer', () => {
     expect(repository.moveToSpace).toHaveBeenCalledWith([A, B], TO, null, TRANSACTION)
   })
 
-  it('锁住的少了一份（不在来源空间里、不存在或不是正常状态）：整批拒绝，TRANSFER_CONFLICT，不移动', async () => {
+  it('跨空间搬文档：在同一个事务里经入口收回这些文档上的写入权，与跨空间移动一样（M2-P6 复核 A 的 G2、B 的 S-5）', async () => {
+    const { service, repository, writeAccess } = setup([A, B])
+    await service.transfer([B, A], FROM, TO, TRANSACTION)
+    expect(writeAccess.revoke).toHaveBeenCalledTimes(1)
+    expect(writeAccess.revoke).toHaveBeenCalledWith({ kind: 'documents', documentIds: [A, B] }, TRANSACTION)
+    // 收回的是搬过去的那一批：在改所属空间之后（同一个事务里，M3 的实现按变化之后的权限判断）
+    expect(repository.moveToSpace.mock.invocationCallOrder[0]).toBeLessThan(writeAccess.revoke.mock.invocationCallOrder[0] ?? 0)
+  })
+
+  it('锁住的少了一份（不在来源空间里、不存在或不是正常状态）：整批拒绝，TRANSFER_CONFLICT，不移动，也不收回写入权', async () => {
     for (const locked of [[A], []]) {
-      const { service, repository } = setup(locked)
+      const { service, repository, writeAccess } = setup(locked)
       expect((await rejection(service.transfer([A, B], FROM, TO, TRANSACTION))).code).toBe('TRANSFER_CONFLICT')
       expect(repository.moveToSpace).not.toHaveBeenCalled()
+      expect(writeAccess.revoke).not.toHaveBeenCalled()
     }
   })
 })

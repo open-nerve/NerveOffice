@@ -6,7 +6,7 @@ import type { DocumentOwnership } from './access-rules.ts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { SpacesService } from '../spaces/index.ts'
-import { atLeast, documentPermissionsOf, effectiveSpaceRole, folderPermissionsOf, spacePermissionsOf, trashPermissionsOf } from './access-rules.ts'
+import { documentPermissionsOf, effectiveSpaceRole, folderPermissionsOf, spacePermissionsOf, trashPermissionsOf } from './access-rules.ts'
 
 /** 调用者（M2-P2 设计 §3.4）：系统角色只影响团队空间的管理操作，不带来任何内容权限（00 号计划书 §5.2）。 */
 export interface Actor {
@@ -125,11 +125,6 @@ export async function requireAccess<T extends AccessTarget>(
   return { document, access }
 }
 
-/** 能不能改动文档的内容与元数据：编辑者及以上（归档的空间里所有人至多是查看者）。 */
-export function canEdit(access: DocumentAccess): boolean {
-  return atLeast(access.role, 'editor')
-}
-
 /** 看得到却不能做时的说明：归档的空间另外说明原因。 */
 function denied(space: SpaceFacts, message: string): AppError {
   return new AppError('PERMISSION_DENIED', space.status === 'archived' ? '空间已归档，只能查看' : message)
@@ -140,10 +135,12 @@ export interface AccessibleDocument<T extends AccessTarget> extends Accessible<T
   readonly permissions: DocumentPermissions
 }
 
-/** 文档上要权限的操作（只看能不能读时用 requireAccess）。 */
-export type DocumentOperation = 'rename' | 'moveWithinSpace' | 'moveAcrossSpaces' | 'copy' | 'delete'
+/** 文档上要权限的操作（只看能不能读时用 requireAccess）；edit 是保存内容。 */
+export type DocumentOperation = 'edit' | 'rename' | 'moveWithinSpace' | 'moveAcrossSpaces' | 'copy' | 'delete'
 
 const DOCUMENT_CONTENT: Readonly<Record<DocumentOperation, { readonly permission: keyof DocumentPermissions, readonly message: string }>> = {
+  // 保存与其他操作同一套说明：归档的空间里说"空间已归档"，而不是"只能查看"（M2-P6 复核 A 的 G3）
+  edit: { permission: 'canEdit', message: '只能查看这份文档，不能保存' },
   rename: { permission: 'canRename', message: '没有给这份文档改名的权限' },
   moveWithinSpace: { permission: 'canMoveWithinSpace', message: '没有移动这份文档的权限' },
   moveAcrossSpaces: { permission: 'canMoveAcrossSpaces', message: '只有空间管理员能把文档移出这个空间' },

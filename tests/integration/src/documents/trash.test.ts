@@ -240,6 +240,22 @@ describe('US-M2-09 谁能删（spec §2）', () => {
     expect(await foldersOf([mine.id, empty.id])).toMatchObject({ [mine.id]: { status: 'trashed' }, [empty.id]: { status: 'trashed' } })
   })
 
+  it('编辑者删文件夹只数正常状态的文档：里面别人创建的文档已经单独删进回收站时，照样能删（M2-P6 复核 B 的 S-2）', async () => {
+    const spaceId = await teamSpace()
+    const folder = await newFolder(amySession, { spaceId, name: '艾米的资料' })
+    await createDocument(database, { spaceId, createdBy: amy.id, title: '我的', folderId: folder.id })
+    const bens = await createDocument(database, { spaceId, createdBy: ben.id, title: '本放进来的', folderId: folder.id })
+    // 别人的那一份还在：编辑者不能删
+    const denied = await deleteFolder(amySession, folder.id)
+    expect(denied.status).toBe(403)
+    expect((await errorOf(denied)).code).toBe('FOLDER_HAS_OTHERS_DOCUMENTS')
+    // 本把自己的那一份删进回收站之后：子树里正常状态的文档全是艾米的，她能删
+    expect((await deleteDocument(benSession, bens)).status).toBe(204)
+    const response = await deleteFolder(amySession, folder.id)
+    expect(response.status, await response.clone().text()).toBe(204)
+    expect(await foldersOf([folder.id])).toMatchObject({ [folder.id]: { status: 'trashed' } })
+  })
+
   it('空间管理员删任意；查看者一概不能；归档的空间一概不能', async () => {
     const managed = await teamSpace({ amy: 'admin' })
     const folder = await newFolder(amySession, { spaceId: managed, name: '公共资料' })

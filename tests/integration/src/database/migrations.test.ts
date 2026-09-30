@@ -265,6 +265,83 @@ describe('0015_m2_p6_login_throttle_accounts（M2-P6 复核 A1）', () => {
   })
 })
 
+describe('0016_m2_p6_space_name_key（M2-P6 复核 B 的 M-1）', () => {
+  /** 0015 的库：一个系统管理员，返回他的 id（建团队空间要有创建人） */
+  async function databaseAt0015(): Promise<{ database: TestDatabase, adminId: string }> {
+    const database = await emptyDatabase()
+    await runMigrations({ connectionString: database.url, lockTimeoutMs: 10_000, migrationsFolder: migrationsUpTo('0015_m2_p6_login_throttle_accounts') })
+    const adminId = await database.query(async client => (await client.query<{ id: string }>(
+      'INSERT INTO users (username, display_name, password_hash, system_role) VALUES (\'root\', \'root\', \'$argon2id$x\', \'admin\') RETURNING id',
+    )).rows[0]?.id ?? '')
+    return { database, adminId }
+  }
+
+  async function insertTeam(database: TestDatabase, name: string, createdBy: string, status = 'active'): Promise<string> {
+    return database.query(async client => (await client.query<{ id: string }>(
+      'INSERT INTO spaces (type, name, created_by, status) VALUES (\'team\', $1, $2, $3) RETURNING id',
+      [name, createdBy, status],
+    )).rows[0]?.id ?? '')
+  }
+
+  it('0015 的库上已有的空间：加列时补上判重键；之后看起来一样的团队空间名称撞上唯一索引，个人空间不受约束', async () => {
+    const { database, adminId } = await databaseAt0015()
+    // 0015 之前允许的写法：中间两个空格、全角空格、希腊字母词尾的 ς、带零宽连接符（都与别的不重名）；一个归档的；个人空间与团队空间同名
+    const ids = {
+      spaced: await insertTeam(database, 'Finance  Team', adminId),
+      wide: await insertTeam(database, '研发\u3000二部', adminId),
+      greek: await insertTeam(database, '\u039F\u0394\u039F\u03C2', adminId, 'archived'),
+      joined: await insertTeam(database, '财\u200D务部', adminId),
+    }
+    await database.query(async client => client.query('INSERT INTO spaces (type, name, owner_user_id) VALUES (\'personal\', \'Finance Team\', $1)', [adminId]))
+
+    expect(await migrateDatabase(database)).toMatchObject({ status: 'applied' })
+    const keys = await database.query(async client => Object.fromEntries((await client.query<{ id: string, name: string, name_key: string }>(
+      'SELECT id, name, name_key FROM spaces WHERE type = \'team\'',
+    )).rows.map(row => [row.id, { name: row.name, key: row.name_key }])))
+    // 名称原样保留，判重键按规则算好
+    expect(keys).toEqual({
+      [ids.spaced]: { name: 'Finance  Team', key: 'finance team' },
+      [ids.wide]: { name: '研发\u3000二部', key: '研发 二部' },
+      [ids.greek]: { name: '\u039F\u0394\u039F\u03C2', key: '\u03BF\u03B4\u03BF\u03C3' },
+      [ids.joined]: { name: '财\u200D务部', key: '财务部' },
+    })
+    const violation = async (text: string, values: unknown[] = []): Promise<unknown> => database.query(async client => client.query(text, values).then(() => undefined, (error: unknown) => error))
+    const team = 'INSERT INTO spaces (type, name, created_by) VALUES (\'team\', $1, $2)'
+    for (const lookalike of ['FINANCE TEAM', 'Finance\u00A0Team', '财务部', '研发 二部', '\u039F\u0394\u039F\u03A3'])
+      expect(await violation(team, [lookalike, adminId]), JSON.stringify(lookalike)).toMatchObject({ code: '23505', constraint: 'spaces_team_name_key' })
+    expect(await violation(team, ['Finance Team 2', adminId])).toBeUndefined()
+    // 判重键是生成列：写不进去
+    expect(await violation('UPDATE spaces SET name_key = \'x\' WHERE id = $1', [ids.spaced])).toMatchObject({ code: '428C9' })
+  })
+
+  it('0015 的库上已有看起来一样的团队空间：迁移中止并列出冲突的空间，整个回滚，库还是 0015 的样子', async () => {
+    const { database, adminId } = await databaseAt0015()
+    const first = await insertTeam(database, '财务部', adminId)
+    const second = await insertTeam(database, '财\u200D务部', adminId, 'archived')
+    await insertTeam(database, '人事部', adminId)
+
+    const failure: unknown = await migrateDatabase(database).then(() => undefined, (error: unknown) => error)
+    // drizzle 的迁移器把数据库的错误包一层（Failed query），RAISE 的说明在 cause 里
+    const raised = failure instanceof Error ? failure.cause : undefined
+    expect(raised).toMatchObject({ code: 'P0001' })
+    const message = (raised as Error).message
+    expect(message).toMatch(/^团队空间的名称按新的判重规则有重名（看起来一样的名称算同一个名字），先改名再执行迁移：/)
+    // 列出冲突的那一组（id 与名称），不相干的空间不在里面
+    expect(message).toContain(first)
+    expect(message).toContain(second)
+    expect(message).toContain('\'财务部\'')
+    expect(message).not.toContain('人事部')
+    // 回滚：没有记下 0016，没有新列，原来的唯一索引还在
+    expect(await appliedCount(database)).toBe(MIGRATIONS.length - 1)
+    const state = await database.query(async client => (await client.query<{ column: string | null, index: string | null }>(
+      `SELECT (SELECT column_name FROM information_schema.columns WHERE table_name = 'spaces' AND column_name = 'name_key') AS column,
+              (SELECT indexdef FROM pg_indexes WHERE indexname = 'spaces_team_name_key') AS index`,
+    )).rows[0])
+    expect(state?.column).toBeNull()
+    expect(state?.index).toContain('lower(name)')
+  })
+})
+
 describe('0009_m2_team_spaces', () => {
   it('P1 的库执行之后：个人空间照样满足约束、没有创建人，已有文档的写入代次为 0；团队空间与成员的约束生效', async () => {
     const database = await emptyDatabase()
