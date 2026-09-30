@@ -27,6 +27,7 @@ import { activeImageCount, cellCenter, cellRect, clickCell, commandMark, content
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { deleteDrawingKey, pressUniverShortcut } from '../../support/keyboard.ts'
+import { collectPageErrors } from '../../support/page-errors.ts'
 import { readOnlySampleFor, SAMPLE_CELLS, SAMPLE_FORMULAS, SAMPLE_SHEETS, sampleWithoutFormulaValuesFor } from '../../support/read-only-sample.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { EDITOR_TEST_TIMEOUT, openEditor, resourceOf, saveButton, savedContent, selectCell, sheetCanvas, sheetTab, waitForEditor } from '../../support/sheet.ts'
@@ -51,10 +52,13 @@ async function scene(prefix: string, snapshotFor: (unitId: string) => string = r
   return { author, viewer, spaceId: space.id, documentId: await createDocumentIn(space.id, author, '只读样本', { snapshotFor }) }
 }
 
-/** 只读的全过程都应该没有的：页面错误（被取消的命令不产生页面错误，M2-P3 设计 §3.8）与保存请求 */
+/**
+ * 只读的全过程都应该没有的：页面错误（被取消的命令不产生页面错误，M2-P3 设计 §3.8）与保存请求。
+ * 浏览器的 ResizeObserver 通知不算页面错误（support/page-errors.ts）
+ */
 function watch(page: Page, documentId: string): { readonly pageErrors: string[], readonly saves: string[] } {
   const watched = { pageErrors: [] as string[], saves: [] as string[] }
-  page.on('pageerror', error => watched.pageErrors.push(`${error.name}: ${error.message}`))
+  collectPageErrors(page, watched.pageErrors)
   page.on('request', (request) => {
     if (request.method() === 'PUT' && new URL(request.url()).pathname === `/api/documents/${documentId}/content`)
       watched.saves.push(request.url())
