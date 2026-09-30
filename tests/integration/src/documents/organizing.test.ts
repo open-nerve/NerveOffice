@@ -1,7 +1,10 @@
 // 文档的整理（M2-P4 设计 §3.2、§3.4，US-M2-07、08）：改名、空间内移动、跨空间移动与复制。
 // 权限（编辑者、空间管理员、查看者、归档的空间）、目标位置的判断（别的空间、回收站里、不存在都是同一个 NOT_FOUND）、
 // 写入代次（跨空间加一、空间内不加）、复制的逐字节一致与两份互不影响、requestId 的幂等；
-// 并发：移动与保存同时发生、判断过之后目标空间被归档、两个方向的跨空间移动（按空间 id 排序取树锁）。
+// 并发：移动与保存同时发生、判断过之后目标空间被归档、两个方向的跨空间移动（按空间 id 排序取树锁）；
+// 复制的源文档在锁下判断（M2-P6 复核 A 的 S1）：判断之后被移出空间、源被移走时复制被拒绝，
+// 复制进行中的移出、删除、移动与保存都等复制提交之后才生效（不成环）；目标空间同样在锁下再判断（复验 R-S1）。
+// 复制与其他各类操作两个方向的交错见 copy-locks.test.ts。
 import type { DocumentDetail } from '@nerve-office/contracts'
 import type pg from 'pg'
 import type { TestAccount } from '../support/accounts.ts'
@@ -516,5 +519,160 @@ describe('US-M2-14 移动的并发与锁', () => {
     })
     expect(response.status).toBe(200)
     expect(await stored(document.id)).toMatchObject({ space_id: first, write_epoch: 1 })
+  })
+})
+
+describe('US-M2-14 复制的并发与锁：源文档在锁下判断（M2-P6 复核 A 的 S1）', () => {
+  /** 在持锁的事务里取这个空间的空间树 advisory lock（与结构性改动的第一步相同） */
+  function holdSpaceTree(spaceId: string) {
+    return async (client: pg.Client) => client.query('SELECT pg_advisory_xact_lock(hashtextextended(\'nerve-office:space-tree:\' || $1::uuid::text, 0))', [spaceId])
+  }
+
+  /**
+   * 让复制停在"锁都已经取到"之后：另一个事务先写一条同一个 requestId 的修订记录、不提交，
+   * 复制最后写修订记录时就在这个唯一键上等着（这时它已经持有空间行与源文档行的共享锁）。
+   * 那一行挂在一份无关的文档上：外键检查对源文档行取的锁不能混进来
+   */
+  function holdRequestId(requestId: string, unrelatedDocumentId: string) {
+    return async (client: pg.Client) => client.query(
+      `INSERT INTO document_revisions (document_id, revision, kind, request_id, payload_digest, client_instance_id, local_seq, saved_by)
+       VALUES ($1, 1000, 'saved', $2, sha256('held'::bytea), gen_random_uuid(), 1, $3)`,
+      [unrelatedDocumentId, requestId, cat.id],
+    )
+  }
+
+  /** 放开那一行：同一个事务里删掉它再提交，复制的修订记录照常写进去 */
+  function releaseRequestId(requestId: string) {
+    return async (client: pg.Client) => client.query('DELETE FROM document_revisions WHERE request_id = $1', [requestId])
+  }
+
+  async function copiesOf(sourceId: string): Promise<string[]> {
+    return database.query(async client => (await client.query<{ target_id: string }>(
+      'SELECT target_id FROM audit_events WHERE action = \'documents.copied\' AND details->>\'sourceId\' = $1',
+      [sourceId],
+    )).rows.map(row => row.target_id))
+  }
+
+  async function contentOf(documentId: string): Promise<string> {
+    return zlib.gunzipSync((await stored(documentId)).snapshot).toString('utf8')
+  }
+
+  it('判断过能读源文档之后被移出空间、源文档随后写进了新内容：锁下重新判断，404，不复制（A 的交错）', async () => {
+    const space = await teamSpace()
+    const document = await seedDocument(database, { spaceId: space, createdBy: amy.id, title: '机密' })
+    const response = await raceAgainstHeldLock(database, {
+      // 挡住复制在目标空间（本的个人空间）的树锁上：源文档的判断已经做完
+      hold: holdSpaceTree(ben.personalSpaceId),
+      request: async () => copy(benSession, document.id, { spaceId: ben.personalSpaceId }),
+      change: async () => {
+        // 空间管理员移出本，然后写进本不该再看到的内容；这时本直接读源文档已经是 404
+        expect((await asUser(app.baseUrl, amySession, `/api/spaces/${space}/members/${ben.id}`, { method: 'DELETE' })).status).toBe(204)
+        expect((await save(amySession, document, '移出之后才写的内容', 1)).status).toBe(200)
+        expect((await asUser(app.baseUrl, benSession, `/api/documents/${document.id}/content`)).status).toBe(404)
+      },
+    })
+    expect(response.status).toBe(404)
+    expect((await errorOf(response)).code).toBe('NOT_FOUND')
+    expect(await copiesOf(document.id)).toEqual([])
+    expect(await idsIn(benSession, ben.personalSpaceId)).toEqual([])
+  })
+
+  /**
+   * 锁下再判断目标空间（M2-P6 复验 R-S1）：不加锁的判断之后、取到目标空间的树锁之前，目标空间被归档、本被移出或降为查看者。
+   * 复制挡在目标空间的树锁上时这些改动提交，锁下的判断必须看到它们——用取锁之前的判断结果就会照样复制进去
+   */
+  const TARGET_CHANGES: readonly (readonly [string, (client: pg.Client, target: string) => Promise<unknown>, number, string])[] = [
+    ['目标空间被归档', async (client, target) => client.query('UPDATE spaces SET status = \'archived\' WHERE id = $1', [target]), 409, 'SPACE_ARCHIVED'],
+    ['本被移出目标空间', async (client, target) => client.query('DELETE FROM space_members WHERE space_id = $1 AND user_id = $2', [target, ben.id]), 404, 'NOT_FOUND'],
+    ['本在目标空间被降为查看者', async (client, target) => client.query('UPDATE space_members SET role = \'viewer\' WHERE space_id = $1 AND user_id = $2', [target, ben.id]), 403, 'PERMISSION_DENIED'],
+  ]
+
+  it.each(TARGET_CHANGES)('判断之后、取目标空间的树锁之前%s：锁下再判断目标，拒绝，不产生副本（M2-P6 复验 R-S1）', async (_name, change, status, code) => {
+    const source = await teamSpace()
+    const target = await teamSpace()
+    const document = await seedDocument(database, { spaceId: source, createdBy: amy.id, title: '周报' })
+    const response = await raceAgainstHeldLock(database, {
+      hold: holdSpaceTree(target),
+      request: async () => copy(benSession, document.id, { spaceId: target }),
+      change: async client => change(client, target),
+    })
+    expect(response.status, await response.clone().text()).toBe(status)
+    expect((await errorOf(response)).code).toBe(code)
+    expect(await copiesOf(document.id)).toEqual([])
+    expect(await database.query(async client => (await client.query<{ count: number }>(
+      'SELECT count(*)::int AS count FROM documents WHERE space_id = $1',
+      [target],
+    )).rows[0]?.count)).toBe(0)
+  })
+
+  it('判断之后、取锁之前源文档被移到了别的空间（本在那里仍然看得到）：锁保护不到它，404，不复制', async () => {
+    const space = await teamSpace()
+    const elsewhere = await teamSpace()
+    const document = await seedDocument(database, { spaceId: space, createdBy: amy.id, title: '周报' })
+    const response = await raceAgainstHeldLock(database, {
+      hold: holdSpaceTree(ben.personalSpaceId),
+      request: async () => copy(benSession, document.id, { spaceId: ben.personalSpaceId }),
+      change: async () => {
+        expect((await move(amySession, document.id, { spaceId: elsewhere })).status).toBe(200)
+      },
+    })
+    expect(response.status).toBe(404)
+    expect(await copiesOf(document.id)).toEqual([])
+  })
+
+  it('复制持着源空间的行锁时移出这个人：移出等复制提交之后才生效，复制照常成功，之后本再也读不到源文档', async () => {
+    const space = await teamSpace()
+    const document = await seedDocument(database, { spaceId: space, createdBy: amy.id, title: '周报' })
+    const unrelated = await seedDocument(database, { spaceId: cat.personalSpaceId, createdBy: cat.id, title: '无关' })
+    const requestId = randomUUID()
+    const [copied, removed] = await raceAgainstHeldLock(database, {
+      hold: holdRequestId(requestId, unrelated.id),
+      request: async (steps) => {
+        const copying = steps.step(copy(benSession, document.id, { spaceId: ben.personalSpaceId, requestId }))
+        await steps.waitForWaiting(1)
+        // 移出要锁空间行（FOR NO KEY UPDATE）：等在复制持有的共享锁上
+        const removing = steps.step(asUser(app.baseUrl, amySession, `/api/spaces/${space}/members/${ben.id}`, { method: 'DELETE' }))
+        return Promise.all([copying, removing])
+      },
+      // 两个请求都在锁上等着（复制等这一行，移出等复制）才放开
+      change: releaseRequestId(requestId),
+      waiting: 2,
+    })
+    expect(copied.status).toBe(201)
+    expect(removed.status).toBe(204)
+    expect(await copiesOf(document.id)).toHaveLength(1)
+    expect((await asUser(app.baseUrl, benSession, `/api/documents/${document.id}`)).status).toBe(404)
+  })
+
+  /** 复制进行中对源文档的改动：都要锁源文档行（FOR UPDATE） */
+  const CHANGES: readonly (readonly [string, (document: SeededDocument, elsewhere: string) => Promise<Response>, number])[] = [
+    ['删除', async document => asUser(app.baseUrl, amySession, `/api/documents/${document.id}`, { method: 'DELETE' }), 204],
+    ['跨空间移动', async (document, elsewhere) => move(amySession, document.id, { spaceId: elsewhere }), 200],
+    ['保存', async document => save(amySession, document, '复制之后才写的内容', 1), 200],
+  ]
+
+  it.each(CHANGES)('复制持着源文档行的共享锁时%s等它提交之后才生效：复制照常成功，副本是复制那一刻的内容，不成环', async (_name, change, status) => {
+    const space = await teamSpace()
+    const elsewhere = await teamSpace()
+    const document = await seedDocument(database, { spaceId: space, createdBy: amy.id, title: '源文档' })
+    const unrelated = await seedDocument(database, { spaceId: cat.personalSpaceId, createdBy: cat.id, title: '无关' })
+    const requestId = randomUUID()
+    const [copied, changed] = await raceAgainstHeldLock(database, {
+      hold: holdRequestId(requestId, unrelated.id),
+      request: async (steps) => {
+        const copying = steps.step(copy(benSession, document.id, { spaceId: ben.personalSpaceId, requestId }))
+        await steps.waitForWaiting(1)
+        // 改动要锁源文档行（FOR UPDATE）：等在复制持有的共享锁上
+        const changing = steps.step(change(document, elsewhere))
+        return Promise.all([copying, changing])
+      },
+      // 两个请求都在锁上等着（复制等这一行，改动等复制）才放开
+      change: releaseRequestId(requestId),
+      waiting: 2,
+    })
+    expect(copied.status, await copied.clone().text()).toBe(201)
+    expect(changed.status, await changed.clone().text()).toBe(status)
+    // 副本是复制那一刻的内容：之后的保存没有进副本
+    expect(await contentOf((await detail(copied, 201)).id)).not.toContain('复制之后才写的内容')
   })
 })

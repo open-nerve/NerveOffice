@@ -4,6 +4,7 @@
 import { TRASH_RETENTION_DAYS } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { ALICE, ALICE_SPACE, FakeStore, HTTP_ORIGIN, member } from './documents.test-support.ts'
+import { TrashEntryPurger } from './trash-entry-purger.ts'
 import { TrashPurgeService } from './trash-purge.service.ts'
 import { TrashService } from './trash.service.ts'
 
@@ -16,8 +17,9 @@ const BEFORE = new Date(EXPIRES_AT.getTime() - 1)
 function setup() {
   const store = new FakeStore()
   const { transactions, documents, folders, entries, tree, spaces, policy, audit, writeAccess } = store.deps
-  const trash = new TrashService(transactions, documents, folders, entries, tree, spaces, policy, audit, writeAccess)
-  return { store, trash, service: new TrashPurgeService(transactions, documents, entries, tree, spaces, trash) }
+  const purger = new TrashEntryPurger(documents, folders, entries, audit)
+  const trash = new TrashService(transactions, documents, folders, entries, tree, spaces, policy, audit, writeAccess, purger)
+  return { store, trash, service: new TrashPurgeService(transactions, documents, entries, tree, spaces, purger) }
 }
 
 /** 删掉一份文档，返回它与它的删除单元 */

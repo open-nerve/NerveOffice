@@ -9,6 +9,9 @@
     ".": {
       "@nerve-office/source": "./src/app/index.ts",
       "default": "./dist/app/index.js"
+    },
+    "./testing": {
+      "@nerve-office/source": "./src/app/integration.test-support.ts"
     }
   },
   "scripts": {

@@ -39,6 +39,8 @@ const API_CONTROLLER = 'apps/api/src/modules/health/health.controller.ts'
 const API_SERVICE = 'apps/api/src/modules/health/application-state.ts'
 const API_CONFIG = 'apps/api/src/modules/config/config.ts'
 const INTEGRATION_FILE = 'tests/integration/src/support/api-app.ts'
+/** 集成测试专用的入口（包的出口 @nerve-office/api/testing，M2-P6 复验 R-S4） */
+const API_INTEGRATION_ENTRY = 'apps/api/src/app/integration.test-support.ts'
 
 // 类型感知的 lint 第一次运行时，要加载整份配置，并为每个 tsconfig 工程建立类型程序；
 // 这是整组用例共用的准备工作，放在 beforeAll 里做完，不算进某一个用例的时限。
@@ -897,10 +899,12 @@ describe('US-M1-11 lint 规则的自测：后端', () => {
     expect(await rulesFor('import { loadConfig } from \'../config/index.ts\'\n\nexport const f = loadConfig\n', API_SERVICE)).not.toContain('no-restricted-imports')
   })
 
-  it('app 层只有程序接口（index.ts）能转出数据库句柄，app 层的其他文件同样拿不到（复验 N6）', async () => {
+  it('只有集成测试专用的入口能转出数据库句柄：app 层的程序接口（index.ts）与 app 层的其他文件同样拿不到（复验 N6、M2-P6 复验 R-S4）', async () => {
     const code = 'import { DATABASE } from \'../modules/database/index.ts\'\n\nexport const token = DATABASE\n'
     expect(await rulesFor(code, 'apps/api/src/app/app.module.ts')).toContain('no-restricted-imports')
-    expect(await rulesFor('export { DATABASE } from \'../modules/database/index.ts\'\n', 'apps/api/src/app/index.ts')).not.toContain('no-restricted-imports')
+    expect(await rulesFor('export { DATABASE } from \'../modules/database/index.ts\'\n', 'apps/api/src/app/index.ts')).toContain('no-restricted-imports')
+    expect(await rulesFor('export type { Database } from \'../modules/database/index.ts\'\n', 'apps/api/src/app/index.ts')).toContain('no-restricted-imports')
+    expect(await rulesFor('export { DATABASE } from \'../modules/database/index.ts\'\nexport type { Database } from \'../modules/database/index.ts\'\n', API_INTEGRATION_ENTRY)).not.toContain('no-restricted-imports')
   })
 
   it('控制器不自己开事务', async () => {
@@ -926,6 +930,83 @@ describe('US-M1-11 lint 规则的自测：后端', () => {
       const report = await lint(code, file)
       expect(report.rules, `${file}：${code}`).toContain('no-restricted-imports')
       expect(report.messages.join('\n'), `${file}：${code}`).toContain(TRANSFER_MESSAGE)
+    }
+  })
+
+  it('不判断权限的回收站清理只在 documents 与 jobs 里：TrashPurgeService 只给 jobs，删除单元的本体 TrashEntryPurger 谁都拿不到（M2-P6 复核 A 的 G1）', async () => {
+    const PURGE_MESSAGE = '到期的回收站清理（TrashPurgeService）不判断人的权限'
+    const PURGER_MESSAGE = '永久删除一个删除单元的本体（TrashEntryPurger）不判断权限'
+    const importPurge = 'import { TrashPurgeService } from \'../documents/index.ts\'\n\nexport const service = TrashPurgeService\n'
+    const importPurger = 'import { TrashEntryPurger } from \'../documents/index.ts\'\n\nexport const purger = TrashEntryPurger\n'
+    // jobs 经公开入口引用到期的清理；documents 模块自己经相对路径引用本体
+    expect(await rulesFor(importPurge, 'apps/api/src/modules/jobs/trash-purge.job.ts')).not.toContain('no-restricted-imports')
+    expect(await rulesFor('import { TrashEntryPurger } from \'./trash-entry-purger.ts\'\n\nexport const purger = TrashEntryPurger\n', 'apps/api/src/modules/documents/trash.service.ts')).not.toContain('no-restricted-imports')
+    // 同一个公开入口里的 TrashService（它上面没有不判断权限就能永久删除的方法）照常引用
+    expect(await rulesFor('import { TrashService } from \'../documents/index.ts\'\n\nexport const service = TrashService\n', 'apps/api/src/modules/workspace/trash.controller.ts')).not.toContain('no-restricted-imports')
+    const violations: [string, string, string, string][] = [
+      [importPurge, 'apps/api/src/modules/workspace/trash-directory.service.ts', 'no-restricted-imports', PURGE_MESSAGE],
+      [importPurger, 'apps/api/src/modules/workspace/trash-directory.service.ts', 'no-restricted-imports', PURGER_MESSAGE],
+      // jobs 也只经 TrashPurgeService，拿不到本体
+      [importPurger, 'apps/api/src/modules/jobs/trash-purge.job.ts', 'no-restricted-imports', PURGER_MESSAGE],
+      ['import type { TrashEntryPurger } from \'../documents/index.ts\'\n\nexport type Purger = TrashEntryPurger\n', 'apps/api/src/modules/admin/admin-spaces.service.ts', 'no-restricted-imports', PURGER_MESSAGE],
+      ['export { TrashEntryPurger } from \'../modules/documents/index.ts\'\n', 'apps/api/src/app/index.ts', 'no-restricted-imports', PURGER_MESSAGE],
+      ['export { TrashEntryPurger } from \'../modules/documents/index.ts\'\n', API_INTEGRATION_ENTRY, 'no-restricted-imports', PURGER_MESSAGE],
+      // 不经公开入口、直接引用它的文件：模块边界拦下
+      ['import { TrashEntryPurger } from \'../documents/trash-entry-purger.ts\'\n\nexport const purger = TrashEntryPurger\n', 'apps/api/src/modules/workspace/trash-directory.service.ts', 'boundaries/dependencies', ''],
+      ['import { TrashEntryPurger } from \'../documents/trash-entry-purger.ts\'\n\nexport const purger = TrashEntryPurger\n', 'apps/api/src/modules/jobs/trash-purge.job.ts', 'boundaries/dependencies', ''],
+    ]
+    for (const [code, file, rule, message] of violations) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain(rule)
+      expect(report.messages.join('\n'), `${file}：${code}`).toContain(message)
+    }
+  })
+
+  it('documents 的仓储只在 documents 模块里用：公开入口转出它只为集成测试专用的入口，别的模块、app 层的程序接口与其他文件引用都失败（M2-P6 复核 A 的 S3、复验 R-S4）', async () => {
+    const REPOSITORY_MESSAGE = 'documents 的仓储（DocumentsRepository）只在 documents 模块里使用'
+    expect(await rulesFor('export { DocumentsRepository } from \'../modules/documents/index.ts\'\n', API_INTEGRATION_ENTRY)).not.toContain('no-restricted-imports')
+    expect(await rulesFor('import { DocumentsRepository } from \'./documents.repository.ts\'\n\nexport const repository = DocumentsRepository\n', 'apps/api/src/modules/documents/document-search.service.ts')).not.toContain('no-restricted-imports')
+    const importRepository = 'import { DocumentsRepository } from \'../documents/index.ts\'\n\nexport const repository = DocumentsRepository\n'
+    const violations: [string, string][] = [
+      [importRepository, 'apps/api/src/modules/workspace/space-directory.service.ts'],
+      [importRepository, 'apps/api/src/modules/admin/admin-transfer.service.ts'],
+      [importRepository, 'apps/api/src/modules/jobs/trash-purge.job.ts'],
+      ['import { DocumentsRepository } from \'../modules/documents/index.ts\'\n\nexport const repository = DocumentsRepository\n', 'apps/api/src/app/app.module.ts'],
+      ['export { DocumentsRepository } from \'../documents/index.ts\'\n', 'apps/api/src/modules/spaces/index.ts'],
+      // app 层的程序接口（index.ts）不再转出它：命令行与 app 层的其他文件经它转手时，按路径的限制认不出来（复验 R-S4）
+      ['export { DocumentsRepository } from \'../modules/documents/index.ts\'\n', 'apps/api/src/app/index.ts'],
+    ]
+    for (const [code, file] of violations) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain('no-restricted-imports')
+      expect(report.messages.join('\n'), `${file}：${code}`).toContain(REPOSITORY_MESSAGE)
+    }
+  })
+
+  it('集成测试专用的入口（@nerve-office/api/testing）只给 tests/integration：命令行、app 层的程序接口与其他文件、各模块、单元测试引用都失败（M2-P6 复验 R-S4）', async () => {
+    const ENTRY_MESSAGE = '集成测试专用的入口（app/integration.test-support.ts）只给 tests/integration'
+    const fromTests = await lint('import { DATABASE, DocumentsRepository } from \'@nerve-office/api/testing\'\n\nexport const used = [DATABASE, DocumentsRepository]\n', INTEGRATION_FILE)
+    expect(fromTests.rules).toEqual([])
+    const importEntry = (source: string): string => `import { DATABASE, DocumentsRepository } from '${source}'\n\nexport const used = [DATABASE, DocumentsRepository]\n`
+    const violations: [string, string, readonly string[]][] = [
+      // 命令行：相对路径与包名的出口都拦下；模块边界同样不许命令行引用 app 层的其他文件
+      [importEntry('../app/integration.test-support.ts'), 'apps/api/src/cli/migrate.ts', ['import-x/no-restricted-paths', 'boundaries/dependencies']],
+      [importEntry('@nerve-office/api/testing'), 'apps/api/src/cli/reset-link.ts', ['import-x/no-restricted-paths', 'boundaries/dependencies']],
+      // app 层的其他文件与进程入口：同一个元素里模块边界不管，按解析之后的路径拦下
+      [importEntry('./integration.test-support.ts'), 'apps/api/src/app/app.module.ts', ['import-x/no-restricted-paths']],
+      [importEntry('@nerve-office/api/testing'), 'apps/api/src/app/main.ts', ['import-x/no-restricted-paths']],
+      // app 层的程序接口转手它（再导出）
+      ['export { DATABASE, DocumentsRepository } from \'./integration.test-support.ts\'\n', 'apps/api/src/app/index.ts', ['import-x/no-restricted-paths']],
+      // 单元测试：测试辅助的限制只管生产代码，这条规则照样拦下
+      [importEntry('./integration.test-support.ts'), 'apps/api/src/app/validation.test.ts', ['import-x/no-restricted-paths']],
+      // 各模块
+      [importEntry('../../app/integration.test-support.ts'), API_SERVICE, ['import-x/no-restricted-paths', 'boundaries/dependencies']],
+      [importEntry('../../app/integration.test-support.ts'), 'apps/api/src/modules/documents/trash.service.ts', ['import-x/no-restricted-paths', 'boundaries/dependencies']],
+    ]
+    for (const [code, file, rules] of violations) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toEqual(expect.arrayContaining([...rules]))
+      expect(report.messages.join('\n'), `${file}：${code}`).toContain(ENTRY_MESSAGE)
     }
   })
 
@@ -1049,6 +1130,7 @@ describe('US-M1-11 lint 规则的自测：后端', () => {
       'apps/api/src/modules/database/pool.ts',
       'apps/api/src/db/schema/audit/index.ts',
       'apps/api/src/app/index.ts',
+      API_INTEGRATION_ENTRY,
       'apps/api/src/cli/migrate.ts',
     ]
     for (const file of files) {

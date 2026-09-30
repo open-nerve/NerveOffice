@@ -1,10 +1,11 @@
 import type { AuditActionDetailsInput, RestoredTrashEntry, TrashEntryKind, TrashListQuery, TrashOrigin, TrashPermissions } from '@nerve-office/contracts'
-import type { AuditEvent, AuditOrigin } from '../audit/index.ts'
+import type { AuditOrigin } from '../audit/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { Actor, SpaceContentAccess, TrashOperation } from './document-access-policy.ts'
 import type { TrashedDocumentRow } from './documents.repository.ts'
 import type { FolderRow } from './folders.repository.ts'
 import type { TrashEntryRow } from './trash-entries.repository.ts'
+import type { TrashActor } from './trash-entry-purger.ts'
 import { TRASH_LIST_PAGE_SIZE } from '@nerve-office/contracts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
@@ -18,6 +19,7 @@ import { DocumentsRepository } from './documents.repository.ts'
 import { FoldersRepository } from './folders.repository.ts'
 import { SpaceTreeRepository } from './space-tree.repository.ts'
 import { TrashEntriesRepository } from './trash-entries.repository.ts'
+import { rootFolderOf, TrashEntryPurger } from './trash-entry-purger.ts'
 import { WriteAccessRevocation } from './write-access.ts'
 
 /**
@@ -43,36 +45,8 @@ export interface TrashPage {
   readonly nextCursor: string | null
 }
 
-/**
- * 永久删除一个删除单元的结果（审计与调用方用）。不带标题与名称：到期自动清理的 jobs 模块拿到的只有 id 与份数，
- * 它的日志与审计因此不会经手标题（M2-P6 复核 M-1）
- */
-export interface PurgeOutcome {
-  /** 被永久删除的那一个对象：文档 id 或文件夹 id */
-  readonly objectId: string
-  readonly kind: TrashEntryKind
-  readonly spaceId: string
-  readonly folders: number
-  readonly documents: number
-  /** 连带删掉的别的删除单元（子树里早先单独删过的东西，spec §4） */
-  readonly cascadedEntryIds: string[]
-}
-
-/** 审计里的操作者：人工操作是本人，到期自动清理（S4）是系统。 */
-type TrashActor = AuditEvent['actor']
-
-/** 回收站记的六种审计 */
-type TrashAuditAction = 'documents.deleted' | 'documents.restored' | 'documents.purged' | 'folders.deleted' | 'folders.restored' | 'folders.purged'
-
-/** 这一单的根文件夹：它的父文件夹不在这一单里（一个删除单元就是一棵子树，所以只有一个）。 */
-function rootFolderOf(entryId: string, unit: readonly FolderRow[]): FolderRow {
-  const inUnit = new Set(unit.map(row => row.id))
-  const roots = unit.filter(row => row.parentId === null || !inUnit.has(row.parentId))
-  const root = roots[0]
-  if (root === undefined || roots.length !== 1)
-    throw new Error(`一个文件夹的删除单元里有 ${roots.length} 个根：${entryId}`)
-  return root
-}
+/** 回收站这里记的四种审计（永久删除的两种由 TrashEntryPurger 记） */
+type TrashAuditAction = 'documents.deleted' | 'documents.restored' | 'folders.deleted' | 'folders.restored'
 
 /**
  * 回收站（M2-P4 设计 §3.4 第 3 条，规则细则见 specs/P4-S3-回收站的规则.md，US-M2-09）：
@@ -94,6 +68,7 @@ export class TrashService {
     private readonly policy: DocumentAccessPolicy,
     private readonly audit: AuditService,
     private readonly writeAccess: WriteAccessRevocation,
+    private readonly purger: TrashEntryPurger,
   ) {}
 
   /**
@@ -200,7 +175,8 @@ export class TrashService {
   /**
    * 整单恢复（spec §3）：删除者本人或当前的空间管理员；归档的空间里谁都不能。
    * 属于这个删除单元的全部行一起回到正常状态；被删的那一个对象回到原位置，原来的父文件夹已经不在
-   * （被永久删除、自己也在回收站里、跨空间移动过）时回到空间的根目录，响应里带标志。写入代次不再加一。
+   * （被永久删除、自己也在回收站里）时回到空间的根目录，响应里带标志。写入代次不再加一。
+   * 父文件夹跨空间移动时这个删除单元跟着一起搬走，所以父文件夹还在却在别的空间里是数据不一致，按意外错误处理（见 originParentOf）
    */
   async restore(actor: Actor, entryId: string, origin: AuditOrigin): Promise<RestoredTrashEntry> {
     return this.transactions.run(async (transaction) => {
@@ -226,6 +202,8 @@ export class TrashService {
   /**
    * 永久删除一个删除单元（spec §4）：空间管理员 / 个人空间的所有者；归档的空间里不能。
    * 子树里属于别的删除单元的行一并永久删除（它们的原位置随这次删除消失），那些单元变空之后一起删掉。
+   * 删除的本体在 TrashEntryPurger：它不判断权限，只在这里（锁下判断过之后）与到期的自动清理里调用，
+   * 这个类上不留不判断权限就能永久删除的公开方法（M2-P6 复核 A 的 G1）
    */
   async purge(actor: Actor, entryId: string, origin: AuditOrigin): Promise<void> {
     await this.transactions.run(async (transaction) => {
@@ -235,76 +213,8 @@ export class TrashService {
       // 先锁属于这一单的文档行，再锁回收站行（ADR-007 的锁顺序）
       await this.documents.lockInEntries([entryId], transaction)
       const entry = await this.lockedEntry(actor, entryId, checked.entry.spaceId, ['purge'], transaction)
-      await this.purgeUnderLock(entry, { type: 'user', id: actor.userId }, origin, transaction)
+      await this.purger.purge(entry, { type: 'user', id: actor.userId }, origin, transaction)
     })
-  }
-
-  /**
-   * 永久删除一个删除单元的本体：调用方必须已经取得这个空间的树锁、空间行与回收站行，并判断过权限。
-   * 到期的自动清理（S4 的 jobs）复用它，操作者记为系统（actor 传 { type: 'system' }）。
-   */
-  async purgeUnderLock(entry: TrashEntryRow, actor: TrashActor, origin: AuditOrigin, transaction: Transaction): Promise<PurgeOutcome> {
-    const outcome = entry.kind === 'document'
-      ? await this.purgeDocument(entry, transaction)
-      : await this.purgeFolder(entry, transaction)
-    const emptied = await this.deleteEmptied([entry.id, ...outcome.cascadedEntryIds], transaction)
-    if (!emptied.includes(entry.id))
-      throw new Error(`永久删除之后删除单元里还有东西：${entry.id}`)
-    await this.record({
-      action: entry.kind === 'document' ? 'documents.purged' : 'folders.purged',
-      // 只记份数与删除单元，不记标题与名称（M2 总设计 §2.1 第 5 条，M2-P6 复核 M-1）。
-      // 连带删掉几个删除单元（spec §4）：只记份数，不记 id 列表——审计明细有 AUDIT_DETAILS_MAX_BYTES 的上限，
-      // 无界的 id 数组在连带上百个单元时会让整条写入失败，那一单因此永远删不掉（审查 A1）
-      details: {
-        spaceId: entry.spaceId,
-        trashEntryId: entry.id,
-        folders: outcome.folders,
-        documents: outcome.documents,
-        cascadedEntries: emptied.filter(id => id !== entry.id).length,
-      },
-    }, actor, { type: entry.kind, id: outcome.objectId }, origin, transaction)
-    return outcome
-  }
-
-  /** 一份文档的删除单元：只有这一行，没有可以连带的子孙。 */
-  private async purgeDocument(entry: TrashEntryRow, transaction: Transaction): Promise<PurgeOutcome> {
-    const documents = await this.documents.lockInEntries([entry.id], transaction)
-    const documentId = documents[0]?.id
-    if (documentId === undefined || documents.length !== 1)
-      throw new Error(`一份文档的删除单元里有 ${documents.length} 份文档：${entry.id}`)
-    await this.documents.deleteMany([documentId], transaction)
-    return { objectId: documentId, kind: 'document', spaceId: entry.spaceId, folders: 0, documents: 1, cascadedEntryIds: [] }
-  }
-
-  /**
-   * 一个文件夹的删除单元：这一单里的全部行，以及子树里属于别的删除单元的行（spec §4 的"连带"）。
-   * 先删文档再删文件夹（外键是 restrict，文档指着文件夹）；文档的内容与修订记录随外键 cascade
-   */
-  private async purgeFolder(entry: TrashEntryRow, transaction: Transaction): Promise<PurgeOutcome> {
-    const root = rootFolderOf(entry.id, await this.folders.listInEntry(entry.id, transaction))
-    // 不按状态过滤地展开整棵子树：里面可能还有早先单独删过、属于别的删除单元的东西
-    const folderIds = (await this.folders.summarizeSubtree(root.id, null, transaction)).ids
-    const documents = await this.documents.lockInFolders(folderIds, entry.spaceId, transaction)
-    const documentIds = documents.map(row => row.id)
-    const cascadedEntryIds = [...new Set([
-      ...documents.flatMap(row => row.trashEntryId ?? []),
-      ...await this.folders.trashEntryIdsIn(folderIds, transaction),
-    ])].filter(id => id !== entry.id)
-
-    await this.documents.deleteMany(documentIds, transaction)
-    await this.folders.deleteMany(folderIds, transaction)
-    return { objectId: root.id, kind: 'folder', spaceId: entry.spaceId, folders: folderIds.length, documents: documentIds.length, cascadedEntryIds }
-  }
-
-  /** 这些删除单元里已经没有任何行的那些（永久删除之后），一起删掉并返回真正删掉的 id。 */
-  private async deleteEmptied(candidates: readonly string[], transaction: Transaction): Promise<string[]> {
-    const [documents, folders] = await Promise.all([
-      this.documents.countByTrashEntries(candidates, transaction),
-      this.folders.countByTrashEntries(candidates, transaction),
-    ])
-    const emptied = candidates.filter(id => (documents.get(id) ?? 0) === 0 && (folders.get(id) ?? 0) === 0)
-    await this.entries.deleteMany(emptied, transaction)
-    return emptied
   }
 
   /** 一份文档的恢复：整单只有这一行，回到原位置或空间的根目录。 */
@@ -356,12 +266,23 @@ export class TrashService {
     return entry
   }
 
-  /** 原来的父文件夹：还在、状态正常、还在同一个空间里才算（否则恢复回到空间的根目录，spec §3）。 */
+  /**
+   * 原来的父文件夹：还在、状态正常才算（否则恢复回到空间的根目录，spec §3）。
+   *
+   * 它还在、状态正常时一定与删除单元在同一个空间里；不在是数据不一致，按意外错误处理（不变量失败，M2-P6 复核 B 的 G-5）。
+   * 为什么一定在同一个空间：被删的对象删除之后仍指着原来的父文件夹（文档的 folder_id、文件夹的 parent_id 都不变，
+   * 删除单元的 origin_parent_id 就是它），回收站里的对象自己不能移动，也不在停用者文档的转移之列；
+   * 只有父文件夹跨空间移动时它才会换空间，而那时它在父文件夹的子树里，连同它的删除单元一起搬走
+   * （FoldersService.toSpace：子树里的文档不按状态过滤，删除单元按子树里的行找）。
+   * 父文件夹自己进了回收站或被永久删除时 findById 找不到它，走的是回到根目录那一支
+   */
   private async originParentOf(entry: TrashEntryRow, transaction: Transaction): Promise<FolderRow | undefined> {
     if (entry.originParentId === null)
       return undefined
     const parent = await this.folders.findById(entry.originParentId, transaction)
-    return parent?.spaceId === entry.spaceId ? parent : undefined
+    if (parent !== undefined && parent.spaceId !== entry.spaceId)
+      throw new Error(`删除单元与它原来的父文件夹不在同一个空间里：${entry.id}`)
+    return parent
   }
 
   /** 列表里的一条：原位置的名称由一次批量查询给出，份数由一条按删除单元 id 的计数给出。 */

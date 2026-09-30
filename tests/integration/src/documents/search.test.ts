@@ -3,19 +3,21 @@
 // 看不到的空间（团队空间的非成员、别人的个人空间）里的一律不出现，响应里也没有那些空间的任何信息；
 // 归档的空间里的能搜到（归档只是只读）；结果带空间与文件夹路径（根目录是空数组，深层按顺序）；
 // 分页的游标；关键词为空或全是空白 400。
+// 范围的回归（M2-P6 复核 A 的 S3）：仓储直接核对"只查给定的空间"；看不到的匹配超过一页时，分页不透露它们的存在与数量。
 import type { Folder, SearchResponse } from '@nerve-office/contracts'
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import { randomUUID } from 'node:crypto'
+import { DocumentsRepository } from '@nerve-office/api/testing'
 import { errorResponseSchema, folderSchema, SEARCH_PAGE_SIZE, searchResponseSchema, trashListResponseSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
-import { createDocument } from '../support/documents.ts'
+import { createDocument, seedDocument } from '../support/documents.ts'
 import { asUser, login } from '../support/session-client.ts'
 import { createTeamSpace } from '../support/spaces.ts'
 
@@ -170,8 +172,59 @@ describe('US-M2-12 关键词的匹配', () => {
     expect(await titlesOf(amySession, 'C:临时')).toEqual(['C:临时'])
   })
 
+  it('不区分大小写对非 ASCII 的字母同样成立：带变音符的拉丁字母、希腊字母、西里尔字母（M2-P6 复核 B 的 G-7）', async () => {
+    for (const title of ['\u00C4rzte \u00DCbersicht', '\u03A3\u039F\u03A6\u0399\u0391 \u03C3\u03C7\u03AD\u03B4\u03B9\u03BF', '\u041C\u041E\u0421\u041A\u0412\u0410 \u043E\u0442\u0447\u0451\u0442'])
+      await seed(amy.personalSpaceId, amy.id, title)
+    expect(await titlesOf(amySession, '\u00E4rzte')).toEqual(['\u00C4rzte \u00DCbersicht'])
+    expect(await titlesOf(amySession, '\u00DCBERSICHT')).toEqual(['\u00C4rzte \u00DCbersicht'])
+    expect(await titlesOf(amySession, '\u03C3\u03BF\u03C6\u03B9\u03B1')).toEqual(['\u03A3\u039F\u03A6\u0399\u0391 \u03C3\u03C7\u03AD\u03B4\u03B9\u03BF'])
+    expect(await titlesOf(amySession, '\u03A3\u03A7\u0388\u0394\u0399\u039F')).toEqual(['\u03A3\u039F\u03A6\u0399\u0391 \u03C3\u03C7\u03AD\u03B4\u03B9\u03BF'])
+    expect(await titlesOf(amySession, '\u043C\u043E\u0441\u043A\u0432\u0430')).toEqual(['\u041C\u041E\u0421\u041A\u0412\u0410 \u043E\u0442\u0447\u0451\u0442'])
+    expect(await titlesOf(amySession, '\u041E\u0422\u0427\u0401\u0422')).toEqual(['\u041C\u041E\u0421\u041A\u0412\u0410 \u043E\u0442\u0447\u0451\u0442'])
+  })
+
   it('搜不到东西就是空列表，不是错误', async () => {
     expect(await search(amySession, '这个标题不存在')).toEqual({ items: [], nextCursor: null })
+  })
+})
+
+describe('US-M2-12 搜索的范围只由仓储给出（M2-P6 复核 A 的 S3）', () => {
+  it('仓储直接核对：只返回给定空间里正常状态的行，范围之外的空间、回收站里的一行也没有；多个空间时同样', async () => {
+    const repository = app.runtime.get(DocumentsRepository)
+    const keyword = '仓储范围'
+    const inOpen = await seed(openSpace, amy.id, `${keyword} 市场部`)
+    const inPersonal = await seed(amy.personalSpaceId, amy.id, `${keyword} 艾米`)
+    await seed(closedSpace, ben.id, `${keyword} 机要处`)
+    await seed(ben.personalSpaceId, ben.id, `${keyword} 本`)
+    const trashed = await seed(openSpace, amy.id, `${keyword} 删掉的`)
+    expect((await asUser(app.baseUrl, amySession, `/api/documents/${trashed}`, { method: 'DELETE' })).status).toBe(204)
+
+    const pattern = `%${keyword}%`
+    const found = await repository.searchByTitle({ spaceIds: [openSpace, amy.personalSpaceId] }, { limit: 100, titlePattern: pattern })
+    expect(found.map(row => row.id).toSorted()).toEqual([inOpen, inPersonal].toSorted())
+    expect(new Set(found.map(row => row.spaceId))).toEqual(new Set([openSpace, amy.personalSpaceId]))
+    expect((await repository.searchByTitle({ spaceIds: [openSpace] }, { limit: 100, titlePattern: pattern })).map(row => row.id)).toEqual([inOpen])
+    expect(await repository.searchByTitle({ spaceIds: [] }, { limit: 100, titlePattern: pattern })).toEqual([])
+    // 列表用的是同一个"可访问文档"的条件
+    const listed = await repository.listAccessible({ spaceIds: [openSpace, amy.personalSpaceId] }, { limit: 100 })
+    expect(listed.every(row => row.spaceId === openSpace || row.spaceId === amy.personalSpaceId)).toBe(true)
+    expect(listed.map(row => row.id)).toEqual(expect.arrayContaining([inOpen, inPersonal]))
+    expect(listed.map(row => row.id)).not.toContain(trashed)
+  })
+
+  it('看不到的匹配超过一页：结果只有自己的那一份，没有下一页的游标（分页不透露看不到的文档）', async () => {
+    // 外人另外是一个团队空间的查看者：他看得到的空间不止一个（搜索的范围是多个空间的集合）
+    const owner = await createAccount(database, { username: 'leak-owner' })
+    const outsider = await createAccount(database, { username: 'leak-outsider' })
+    const outsiderSession = await login(app.baseUrl, outsider.username, outsider.password)
+    await createTeamSpace(database, { name: '外人所在的团队', createdBy: root.id, members: { [outsider.id]: 'viewer' } })
+    for (let index = 0; index <= SEARCH_PAGE_SIZE; index += 1)
+      await seedDocument(database, { spaceId: owner.personalSpaceId, createdBy: owner.id, title: `并购机密 ${index}` })
+    await seedDocument(database, { spaceId: outsider.personalSpaceId, createdBy: outsider.id, title: '我的并购机密笔记', updatedAt: 'now() - interval \'1 day\'' })
+
+    const page = await search(outsiderSession, '并购机密')
+    expect(page.items.map(item => item.title)).toEqual(['我的并购机密笔记'])
+    expect(page.nextCursor).toBeNull()
   })
 })
 

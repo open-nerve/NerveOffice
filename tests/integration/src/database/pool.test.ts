@@ -1,9 +1,11 @@
 // 连接池（P2 设计 §3.3、§3.7）：超时设置取自配置；连接出错不让进程退出（审查 A1）；数据库报错的日志不带参数（审查 A2）。
-import type { Database, Transaction } from '@nerve-office/api'
+import type { Transaction } from '@nerve-office/api'
+import type { Database } from '@nerve-office/api/testing'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import { setTimeout as delay } from 'node:timers/promises'
-import { AppError, DATABASE, DatabaseModule, Public, TransactionRunner } from '@nerve-office/api'
+import { AppError, DatabaseModule, Public, TransactionRunner } from '@nerve-office/api'
+import { DATABASE } from '@nerve-office/api/testing'
 import { Controller, Get, Inject, Module } from '@nestjs/common'
 import { sql } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'

@@ -68,17 +68,77 @@ describe('DocumentCopyService.copy', () => {
     expect(copy.permissions).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true })
   })
 
-  it('取锁的顺序：requestId 的锁最前，然后目标空间的树锁与空间行；不锁源文档', async () => {
+  it('取锁的顺序：requestId 的锁 → 目标空间的树锁 → 两个空间行（按 id）→ 源文档行（共享锁，M2-P6 复核 A 的 S1）', async () => {
     const { store, service } = setup()
     const { document } = seed(store)
     store.setMember(TEAM_SPACE, ALICE, 'editor')
     await service.copy(member(ALICE), document.id, { spaceId: TEAM_SPACE, requestId: nextRequestId() }, HTTP_ORIGIN)
+    // 只有目标空间的结构在变：源空间不取树锁
     expect(store.treeLocks).toEqual([[TEAM_SPACE]])
+    // 源空间（个人空间）与目标空间的行都取共享锁，按 id 的顺序
+    expect(store.spaces.holdSpace.mock.calls.map(call => call[0])).toEqual([ALICE_SPACE, TEAM_SPACE].toSorted())
     const request = store.repositories.revisions.lockCreateRequest.mock.invocationCallOrder[0] ?? 0
     const tree = store.tree.lock.mock.invocationCallOrder[0] ?? 0
+    const spaceRows = store.spaces.holdSpace.mock.invocationCallOrder
+    const sourceRow = store.repositories.documents.holdById.mock.invocationCallOrder
     expect(request).toBeLessThan(tree)
-    expect(tree).toBeLessThan(store.spaces.holdSpace.mock.invocationCallOrder[0] ?? 0)
+    expect(tree).toBeLessThan(spaceRows[0] ?? 0)
+    expect(sourceRow).toHaveLength(1)
+    expect(spaceRows.at(-1) ?? 0).toBeLessThan(sourceRow[0] ?? 0)
+    expect(store.repositories.documents.holdById).toHaveBeenCalledWith(document.id, expect.anything())
+    // 源文档不改写：取的是共享锁，不是保存用的 FOR UPDATE（几次复制之间不互相等待）
     expect(store.repositories.documents.lockById).not.toHaveBeenCalled()
+    // 复制在源文档行的锁之后
+    expect(sourceRow[0] ?? 0).toBeLessThan(store.repositories.documents.copyFrom.mock.invocationCallOrder[0] ?? 0)
+  })
+
+  it('源与目标是同一个空间：空间行只取一次', async () => {
+    const { store, service } = setup()
+    const { document } = seed(store)
+    await service.copy(member(ALICE), document.id, { spaceId: ALICE_SPACE, requestId: nextRequestId() }, HTTP_ORIGIN)
+    expect(store.spaces.holdSpace.mock.calls.map(call => call[0])).toEqual([ALICE_SPACE])
+  })
+
+  it('判断过能读源文档之后、取锁之前被移出源空间：锁下重新判断，NOT_FOUND，什么也不写（M2-P6 复核 A 的 S1）', async () => {
+    const { store, service } = setup()
+    store.setMember(TEAM_SPACE, ALICE, 'editor')
+    const { document } = seed(store, { spaceId: TEAM_SPACE, createdBy: BOB })
+    // 取源空间的行锁之前，移出提交了：锁下的判断看得到
+    store.spaces.holdSpace.mockImplementation(async (spaceId: string) => {
+      if (spaceId === TEAM_SPACE)
+        store.setMember(TEAM_SPACE, ALICE, undefined)
+      return undefined
+    })
+    const error = await errorOf(service.copy(member(ALICE), document.id, { spaceId: ALICE_SPACE, requestId: nextRequestId() }, HTTP_ORIGIN))
+    expect([error.code, error.message]).toEqual(['NOT_FOUND', '请求的资源不存在或无权访问'])
+    expect(store.repositories.documents.copyFrom).not.toHaveBeenCalled()
+    expect(store.documents.size).toBe(1)
+    expect(store.audits).toEqual([])
+  })
+
+  it('判断之后、取锁之前源文档被移到了别的空间（仍然看得到）：锁保护不到它，按"没找到"回答', async () => {
+    const { store, service } = setup()
+    store.setMember(TEAM_SPACE, ALICE, 'editor')
+    const { document } = seed(store)
+    store.repositories.documents.holdById.mockImplementationOnce(async () => ({ ...document, spaceId: TEAM_SPACE }))
+    expect((await errorOf(service.copy(member(ALICE), document.id, { spaceId: ALICE_SPACE, requestId: nextRequestId() }, HTTP_ORIGIN))).code).toBe('NOT_FOUND')
+    expect(store.repositories.documents.copyFrom).not.toHaveBeenCalled()
+  })
+
+  it('等锁期间源文档进了回收站或被永久删除：NOT_FOUND，与一开始就看不到一致', async () => {
+    const { store, service } = setup()
+    const { document } = seed(store)
+    store.repositories.documents.holdById.mockResolvedValueOnce(undefined)
+    expect((await errorOf(service.copy(member(ALICE), document.id, { spaceId: ALICE_SPACE, requestId: nextRequestId() }, HTTP_ORIGIN))).code).toBe('NOT_FOUND')
+    expect(store.repositories.documents.copyFrom).not.toHaveBeenCalled()
+  })
+
+  it('副本的标题按锁下读到的源文档（等锁期间被改了名）', async () => {
+    const { store, service } = setup()
+    const { document } = seed(store)
+    store.repositories.documents.holdById.mockImplementationOnce(async () => ({ ...document, title: '月报' }))
+    const copy = await service.copy(member(ALICE), document.id, { spaceId: ALICE_SPACE, requestId: nextRequestId() }, HTTP_ORIGIN)
+    expect(copy.title).toBe('月报 的副本')
   })
 
   it('查看者也能复制（能读就能复制），归档空间里的文档同样', async () => {
@@ -118,16 +178,11 @@ describe('DocumentCopyService.copy', () => {
     expect(store.documents.size).toBe(1)
   })
 
-  it('两条语句之间源文档被永久删除：按 NOT_FOUND 回答，不是 500（审查 A 建议 7）', async () => {
+  it('锁住的源文档复制不到：源文档行在共享锁下，这是数据不一致，抛 Error（500）而不是 NOT_FOUND', async () => {
     const { store, service } = setup()
     const { document } = seed(store)
-    // 元数据复制到了、内容还没复制时，源被永久删除（记录与内容一起没了）：源不在这把锁的保护下
-    store.repositories.contents.copyFrom.mockImplementationOnce(async () => {
-      store.documents.delete(document.id)
-      store.contents.delete(document.id)
-      return false
-    })
-    expect((await errorOf(service.copy(member(ALICE), document.id, { spaceId: ALICE_SPACE, requestId: nextRequestId() }, HTTP_ORIGIN))).code).toBe('NOT_FOUND')
+    store.repositories.documents.copyFrom.mockResolvedValueOnce(undefined)
+    await expect(service.copy(member(ALICE), document.id, { spaceId: ALICE_SPACE, requestId: nextRequestId() }, HTTP_ORIGIN)).rejects.toThrow(`锁住的源文档复制不到：${document.id}`)
   })
 
   it('源还在却没有内容：这是真正的数据不一致，抛 Error（500）而不是 NOT_FOUND', async () => {

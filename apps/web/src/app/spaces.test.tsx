@@ -198,7 +198,7 @@ describe('US-M2-05 空间页', () => {
     expect(document.activeElement).toBe(input)
     fireEvent.change(input, { target: { value: '产品部' } })
     fireEvent.click(screen.getByRole('button', { name: '保存' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('已有同名的团队空间')
+    expect(await screen.findByRole('alert')).toHaveTextContent('已有同名的团队空间（大小写、全角与半角、空格的种类与个数、看不见的字符都不算区别，已归档的也算）')
 
     api.on(`PUT /api/spaces/${TEAM_ID}/name`, () => {
       name = '市场与品牌部'

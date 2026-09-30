@@ -6,6 +6,7 @@ import { AUDIT_DETAILS_MAX_BYTES } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { ALICE, ALICE_SPACE, BOB, FakeStore, HTTP_ORIGIN, member, TEAM_SPACE } from './documents.test-support.ts'
+import { TrashEntryPurger } from './trash-entry-purger.ts'
 import { TrashService } from './trash.service.ts'
 
 const MISSING = '0199a2c4-0000-7000-8000-0000000000fd'
@@ -13,7 +14,8 @@ const MISSING = '0199a2c4-0000-7000-8000-0000000000fd'
 function setup() {
   const store = new FakeStore()
   const { transactions, documents, folders, entries, tree, spaces, policy, audit, writeAccess } = store.deps
-  return { store, service: new TrashService(transactions, documents, folders, entries, tree, spaces, policy, audit, writeAccess) }
+  const purger = new TrashEntryPurger(documents, folders, entries, audit)
+  return { store, service: new TrashService(transactions, documents, folders, entries, tree, spaces, policy, audit, writeAccess, purger) }
 }
 
 async function errorOf(promise: Promise<unknown>): Promise<AppError> {
@@ -180,6 +182,20 @@ describe('TrashService.restore', () => {
     const restored = await service.restore(member(ALICE), entryId, HTTP_ORIGIN)
     expect(restored).toMatchObject({ folderId: null, movedToRoot: true })
     expect(store.documents.get(document.id)?.folderId).toBeNull()
+  })
+
+  it('原来的父文件夹还在、却在别的空间里：数据不一致，按意外错误处理，什么也不恢复（不变量，M2-P6 复核 B 的 G-5）', async () => {
+    const { store, service } = setup()
+    const folder = store.addFolder({ spaceId: ALICE_SPACE, name: '资料' })
+    const document = store.addDocument({ folderId: folder.id })
+    await service.deleteDocument(member(ALICE), document.id, HTTP_ORIGIN)
+    const entryId = [...store.trashEntries.keys()][0] ?? ''
+    // 正常的流程造不出这种状态（父文件夹跨空间移动时，子树里回收站的行与删除单元一起搬走）：直接改内存里的行
+    store.folders.set(folder.id, { ...folder, spaceId: TEAM_SPACE, requestId: 'moved' })
+
+    await expect(service.restore(member(ALICE), entryId, HTTP_ORIGIN)).rejects.toThrow(`删除单元与它原来的父文件夹不在同一个空间里：${entryId}`)
+    expect(store.entryOfDocument(document.id)).toBe(entryId)
+    expect(store.documents.get(document.id)?.folderId).toBe(folder.id)
   })
 
   it('文件夹整单恢复：层数按新位置重算；原来就在根目录下时不算"位置变了"', async () => {

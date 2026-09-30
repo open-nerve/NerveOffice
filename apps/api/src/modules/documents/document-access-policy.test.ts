@@ -3,7 +3,7 @@ import type { SpaceFacts } from '../spaces/index.ts'
 import type { DocumentAccessPolicy, SpaceAccess } from './document-access-policy.ts'
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
-import { canEdit, requireAccess, requireCreateTarget, requireSpaceContent, requireSpaceManagement } from './document-access-policy.ts'
+import { requireAccess, requireCreateTarget, requireDocumentContent, requireSpaceContent, requireSpaceManagement } from './document-access-policy.ts'
 import { ALICE, ALICE_SPACE, BOB, BOB_SPACE, FakeStore, member, TEAM_SPACE } from './documents.test-support.ts'
 
 const MISSING = '0199a2c4-0000-7000-8000-0000000000ff'
@@ -61,13 +61,21 @@ describe('requireAccess', () => {
     expect([others.code, missing.code]).toEqual(['NOT_FOUND', 'NOT_FOUND'])
     expect(store.spaces.accessFactsOf.mock.calls.map(call => call[1])).toEqual([BOB_SPACE, ZERO])
   })
+})
 
-  it('查看者不能编辑，编辑者与空间管理员可以', async () => {
+describe('requireDocumentContent：保存（edit）', () => {
+  it('查看者不能保存，编辑者与空间管理员可以；归档的空间里说明"空间已归档"，与其他操作一致（M2-P6 复核 A 的 G3）', async () => {
     const store = new FakeStore()
-    const space = (await store.policy.spaceAccessOf(member(ALICE), ALICE_SPACE))?.space
-    if (space === undefined)
-      throw new Error('没有空间')
-    expect([canEdit({ role: 'admin', space }), canEdit({ role: 'editor', space }), canEdit({ role: 'viewer', space })]).toEqual([true, true, false])
+    const document = { id: 'd1', spaceId: TEAM_SPACE, createdBy: ALICE }
+    store.setMember(TEAM_SPACE, ALICE, 'admin')
+    store.setMember(TEAM_SPACE, BOB, 'editor')
+    expect((await requireDocumentContent(store.policy, ALICE, document, ['edit'])).permissions.canEdit).toBe(true)
+    expect((await requireDocumentContent(store.policy, BOB, document, ['edit'])).permissions.canEdit).toBe(true)
+    store.setMember(TEAM_SPACE, BOB, 'viewer')
+    expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['edit']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能保存' })
+    store.space(TEAM_SPACE).status = 'archived'
+    for (const userId of [ALICE, BOB])
+      expect(await errorOf(requireDocumentContent(store.policy, userId, document, ['edit']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '空间已归档，只能查看' })
   })
 })
 

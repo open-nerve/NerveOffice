@@ -46,7 +46,10 @@ export class SpacesService {
     return this.repository.insertPersonal(ownerUserId, name, options.transaction)
   }
 
-  /** 建团队空间，连同首个空间管理员（M2-P2 设计 §3.9）。名称（不区分大小写，已归档的也算）已被使用时 SPACE_NAME_TAKEN */
+  /**
+   * 建团队空间，连同首个空间管理员（M2-P2 设计 §3.9）。名称按判重键（看起来一样的名称算同一个名字，M2-P6 复核 B 的 M-1；
+   * 已归档的也算）已被使用时 SPACE_NAME_TAKEN
+   */
   async createTeamSpace(team: NewTeamSpace, transaction: Transaction): Promise<SpaceRecord> {
     const space = await this.repository.insertTeam({ name: team.name, createdBy: team.createdBy, visibleToAll: team.visibleToAll }, transaction)
     if (space === 'name_taken')

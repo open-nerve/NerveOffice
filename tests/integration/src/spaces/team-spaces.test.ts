@@ -7,12 +7,13 @@ import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import { randomUUID } from 'node:crypto'
-import { adminSpaceListResponseSchema, adminSpaceSchema, auditEventListResponseSchema, CSRF_TOKEN_HEADER, errorResponseSchema, spaceListResponseSchema, spaceViewSchema } from '@nerve-office/contracts'
+import { adminSpaceListResponseSchema, adminSpaceSchema, auditEventListResponseSchema, CSRF_TOKEN_HEADER, documentDetailSchema, errorResponseSchema, searchResponseSchema, spaceListResponseSchema, spaceViewSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount, createPassiveAccount } from '../support/accounts.ts'
 import { startTestApp, TEST_PUBLIC_ORIGIN } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
+import { seedDocument } from '../support/documents.ts'
 import { raceAgainstHeldLock } from '../support/held-lock.ts'
 import { asUser, login } from '../support/session-client.ts'
 import { createTeamSpace } from '../support/spaces.ts'
@@ -128,6 +129,20 @@ describe('US-M2-05 创建团队空间并指定空间管理员', () => {
     expect(archived.items.map(item => item.name)).toEqual(['分页 00'])
     expect((await asUser(app.baseUrl, rootSession, '/api/admin/spaces?cursor=broken')).status).toBe(400)
   })
+
+  it('列表按名称搜索：空白的种类与个数不算区别，半角空格搜得到全角空格与不换行空格，全角空格搜得到半角空格；% 与 _ 仍然按字面匹配（M2-P6 复验 G1）', async () => {
+    await createTeamSpace(database, { name: '山田\u3000工作室', createdBy: root.id })
+    await createTeamSpace(database, { name: 'Équipe\u00A0Paris', createdBy: root.id })
+    await createTeamSpace(database, { name: 'Night Ops Center', createdBy: root.id })
+    await createTeamSpace(database, { name: '满分 100%', createdBy: root.id })
+    const namesFor = async (query: string): Promise<string[]> => parseExact(adminSpaceListResponseSchema, await (await asUser(app.baseUrl, rootSession, `/api/admin/spaces?query=${encodeURIComponent(query)}`)).json()).items.map(item => item.name)
+    expect(await namesFor('山田 工作室')).toEqual(['山田\u3000工作室'])
+    expect(await namesFor('Équipe Paris')).toEqual(['Équipe\u00A0Paris'])
+    expect(await namesFor('night\u3000ops  center')).toEqual(['Night Ops Center'])
+    expect(await namesFor('山田工作室')).toEqual([])
+    expect(await namesFor('满分\u3000100%')).toEqual(['满分 100%'])
+    expect(await namesFor('满分 100_')).toEqual([])
+  })
 })
 
 describe('US-M2-05 全员可见', () => {
@@ -148,6 +163,25 @@ describe('US-M2-05 全员可见', () => {
       ['spaces.visibility_changed', { visibleToAll: true }],
       ['spaces.visibility_changed', { visibleToAll: false }],
     ])
+  })
+
+  it('系统管理员不加入空间，经全员可见同样以查看者读到内容（需求方 2026-10-01 接受的规则）：开关记审计，关上之后又是 404', async () => {
+    const space = await created(await createSpace({ name: '人事部', adminUserId: amy.id }))
+    const secret = await seedDocument(database, { spaceId: space.id, createdBy: amy.id, title: '薪酬表' })
+    expect((await asUser(app.baseUrl, rootSession, `/api/documents/${secret.id}/content`)).status).toBe(404)
+
+    await adminSpace(await asUser(app.baseUrl, rootSession, `/api/admin/spaces/${space.id}/visibility`, { method: 'PUT', body: { visibleToAll: true } }))
+    const detail = await asUser(app.baseUrl, rootSession, `/api/documents/${secret.id}`)
+    expect(detail.status).toBe(200)
+    expect(parseExact(documentDetailSchema, await detail.json())).toMatchObject({ title: '薪酬表', permissions: { canEdit: false } })
+    expect((await asUser(app.baseUrl, rootSession, `/api/documents/${secret.id}/content`)).status).toBe(200)
+    const found = parseExact(searchResponseSchema, await (await asUser(app.baseUrl, rootSession, `/api/search?query=${encodeURIComponent('薪酬')}`)).json())
+    expect(found.items.map(item => item.id)).toEqual([secret.id])
+
+    await adminSpace(await asUser(app.baseUrl, rootSession, `/api/admin/spaces/${space.id}/visibility`, { method: 'PUT', body: { visibleToAll: false } }))
+    expect((await asUser(app.baseUrl, rootSession, `/api/documents/${secret.id}/content`)).status).toBe(404)
+    // 能看到内容的依据是开关本身（记审计、对全员可见），不是悄悄加入：没有 admin_joined
+    expect((await auditOf(space.id)).map(event => event.action)).toEqual(['spaces.created', 'spaces.visibility_changed', 'spaces.visibility_changed'])
   })
 })
 

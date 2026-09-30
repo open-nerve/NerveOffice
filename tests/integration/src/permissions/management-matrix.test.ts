@@ -41,6 +41,8 @@ function manage(success: 200 | 201 | 204): Readonly<Record<TargetName, Row>> {
     team: [404, success, 403, 403, 404, success],
     visible: [403, success, 403, 403, 403, success],
     archived: [404, 403, 403, 403, 404, success],
+    // 归档且全员可见：所有人看得到（403 而不是 404），只有系统管理员能管理
+    archivedVisible: [403, 403, 403, 403, 403, success],
     missing: [404, 404, 404, 404, 404, 404],
   }
 }
@@ -52,6 +54,7 @@ function administer(success: 200): Readonly<Record<TargetName, Row>> {
     team: [403, 403, 403, 403, 403, success],
     visible: [403, 403, 403, 403, 403, success],
     archived: [403, 403, 403, 403, 403, success],
+    archivedVisible: [403, 403, 403, 403, 403, success],
     missing: [403, 403, 403, 403, 403, 404],
   }
 }
@@ -66,6 +69,7 @@ const MATRIX: MatrixTable<Operation> = {
     team: [404, 200, 200, 200, 404, 404],
     visible: [200, 200, 200, 200, 200, 200],
     archived: [404, 200, 200, 200, 404, 404],
+    archivedVisible: [200, 200, 200, 200, 200, 200],
     missing: [404, 404, 404, 404, 404, 404],
   },
   // 成员列表：团队空间里有空间角色的人与系统管理员；个人空间的所有者 403（个人空间没有成员）
@@ -74,6 +78,7 @@ const MATRIX: MatrixTable<Operation> = {
     team: [404, 200, 200, 200, 404, 200],
     visible: [200, 200, 200, 200, 200, 200],
     archived: [404, 200, 200, 200, 404, 200],
+    archivedVisible: [200, 200, 200, 200, 200, 200],
     missing: [404, 404, 404, 404, 404, 404],
   },
   addMember: manage(201),
@@ -86,6 +91,7 @@ const MATRIX: MatrixTable<Operation> = {
     team: ONLY_SYSTEM_ADMIN_CREATES,
     visible: ONLY_SYSTEM_ADMIN_CREATES,
     archived: ONLY_SYSTEM_ADMIN_CREATES,
+    archivedVisible: ONLY_SYSTEM_ADMIN_CREATES,
     missing: ONLY_SYSTEM_ADMIN_CREATES,
   },
   adminSetVisibility: administer(200),
@@ -98,6 +104,7 @@ const MATRIX: MatrixTable<Operation> = {
     team: [403, 403, 403, 403, 403, 200],
     visible: [403, 403, 403, 403, 403, 200],
     archived: [403, 403, 403, 403, 403, 409],
+    archivedVisible: [403, 403, 403, 403, 403, 409],
     missing: [403, 403, 403, 403, 403, 404],
   },
 }
@@ -138,9 +145,10 @@ const OPERATIONS: Readonly<Record<Operation, MatrixOperation>> = {
       body: { name: `矩阵创建 ${creations}`, adminUserId: await world.freshSubject('team', false), visibleToAll: false },
     })
   },
+  // 每一格都真的改一次：全员可见的改成不可见，其余的改成全员可见
   adminSetVisibility: async (actor, target) => asUser(app.baseUrl, actor.session, `/api/admin/spaces/${await world.freshSpace(target)}/visibility`, {
     method: 'PUT',
-    body: { visibleToAll: target !== 'visible' },
+    body: { visibleToAll: target !== 'visible' && target !== 'archivedVisible' },
   }),
   adminArchive: async (actor, target) => asUser(app.baseUrl, actor.session, `/api/admin/spaces/${await world.freshSpace(target)}/archive`, { method: 'POST' }),
   adminRestore: async (actor, target) => asUser(app.baseUrl, actor.session, `/api/admin/spaces/${await world.freshSpace(target)}/restore`, { method: 'POST' }),

@@ -1,9 +1,10 @@
 // 优雅退出（P2 设计 §3.9，M1 总设计 §5 的 P2 验收）：在途请求（含数据库查询）正常完成，新连接被拒绝，连接池关闭；超过时限强制退出。
-import type { Database } from '@nerve-office/api'
+import type { Database } from '@nerve-office/api/testing'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import { setTimeout as delay } from 'node:timers/promises'
-import { DATABASE, DatabaseModule, Public } from '@nerve-office/api'
+import { DatabaseModule, Public } from '@nerve-office/api'
+import { DATABASE } from '@nerve-office/api/testing'
 import { Controller, Get, Inject, Module } from '@nestjs/common'
 import { sql } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'

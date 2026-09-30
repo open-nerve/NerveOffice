@@ -1,4 +1,4 @@
-import type { SearchQuery, SearchResponse, SearchResult } from '@nerve-office/contracts'
+import type { SearchQuery, SearchResponse } from '@nerve-office/contracts'
 import type { SpaceFacts } from '../spaces/index.ts'
 import type { Actor } from './document-access-policy.ts'
 import type { DocumentRow } from './documents.repository.ts'
@@ -43,25 +43,30 @@ export class DocumentSearchService {
       { spaceIds },
       { limit: SEARCH_PAGE_SIZE + 1, after, titlePattern: titleSearchPattern(query.query) },
     )
-    const page = rows.slice(0, SEARCH_PAGE_SIZE)
+    // 查出来的每一行（含多取的那一条）先核对不变量，再分页、输出：范围之外的行一条也不输出，
+    // "还有没有下一页"也不会因为它们而成立
+    const located = rows.map(row => ({ row, space: visibleSpaceOf(row, spaces) }))
+    const page = located.slice(0, SEARCH_PAGE_SIZE)
     // 本页用到的文件夹（去重）：一次批量取齐它们连同祖先的名称，拼路径在内存里做
-    const folderIds = [...new Set(page.flatMap(row => row.folderId ?? []))]
+    const folderIds = [...new Set(page.flatMap(({ row }) => row.folderId ?? []))]
     const paths = folderPathsOf(await this.folders.ancestorsOf(folderIds, spaceIds))
-    const last = page.at(-1)
+    const last = page.at(-1)?.row
     return {
-      items: page.flatMap(row => this.toResult(row, spaces, paths)),
-      nextCursor: rows.length > page.length && last !== undefined ? encodeTimeCursor({ position: last.position, id: last.id }) : null,
+      items: page.map(({ row, space }) => toSearchResult(row, space, row.folderId === null ? [] : paths.get(row.folderId) ?? [])),
+      nextCursor: located.length > page.length && last !== undefined ? encodeTimeCursor({ position: last.position, id: last.id }) : null,
     }
   }
+}
 
-  /**
-   * 一条结果。所在的空间必须在"我能看到的空间"里才输出：查出这一批与取空间事实之间它可能刚好被移出，
-   * 那一条就整条丢掉，而不是补一个空的空间名——响应里不出现看不到的空间的任何信息（设计 §3.5）。
-   */
-  private toResult(row: DocumentRow, spaces: ReadonlyMap<string, SpaceFacts>, paths: ReadonlyMap<string, string[]>): SearchResult[] {
-    const space = spaces.get(row.spaceId)
-    if (space === undefined)
-      return []
-    return [toSearchResult(row, space, row.folderId === null ? [] : paths.get(row.folderId) ?? [])]
-  }
+/**
+ * 一行所在的空间：一定在"我能看到的空间"里——查询的范围就是这同一份空间集合（accessible 按它过滤），查出来的行不可能在别处。
+ * 在别处就是"可访问文档"的条件坏了：不静默丢掉（丢掉会掩盖仓储一层的回归，下一页的游标也会按丢掉之前的行算出来，
+ * 透露范围之外的匹配存在与数量），按意外错误处理——整个请求失败（500），错误连同文档与空间的 id 记进请求日志，
+ * 响应里没有看不到的空间的任何信息（设计 §3.5；M2-P6 复核 A 的 S3、B 的 G-3）
+ */
+function visibleSpaceOf(row: DocumentRow, spaces: ReadonlyMap<string, SpaceFacts>): SpaceFacts {
+  const space = spaces.get(row.spaceId)
+  if (space === undefined)
+    throw new Error(`搜索结果里有可见范围之外的文档：文档 ${row.id}，空间 ${row.spaceId}`)
+  return space
 }

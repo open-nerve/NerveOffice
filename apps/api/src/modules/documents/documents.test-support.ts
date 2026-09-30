@@ -152,6 +152,8 @@ export class FakeStore {
     documents: {
       findById: vi.fn(async (id: string) => this.activeDocument(id)),
       lockById: vi.fn(async (id: string) => this.activeDocument(id)),
+      /** 共享锁持住（复制的源文档）：假仓储里与 findById 相同，用例据此核对取锁的顺序 */
+      holdById: vi.fn(async (id: string) => this.activeDocument(id)),
       /** 可访问文档：在这些空间里、正常状态（与真实仓储的 accessible 一样，状态不是参数） */
       listAccessible: vi.fn(async (scope: AccessibleScope, options: ListOptions) =>
         [...this.documents.values()]

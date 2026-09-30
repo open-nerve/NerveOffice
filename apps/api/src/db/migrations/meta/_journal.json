@@ -113,6 +113,20 @@
       "when": 1790761914969,
       "tag": "0015_m2_p6_login_throttle_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1790786962154,
+      "tag": "0016_m2_p6_space_name_key",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1790794634597,
+      "tag": "0017_m2_p6_space_name_key_blanks",
+      "breakpoints": true
     }
   ]
 }

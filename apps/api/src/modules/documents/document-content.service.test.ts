@@ -136,16 +136,17 @@ describe('DocumentContentService.save', () => {
     const { store, service } = setup()
     const document = teamDocument(store)
     store.setMember(TEAM_SPACE, BOB, 'viewer')
-    expect((await rejection(service.save(BOB, document.id, query(), upload(document.unitId), HTTP_ORIGIN))).code).toBe('PERMISSION_DENIED')
+    expect(await rejection(service.save(BOB, document.id, query(), upload(document.unitId), HTTP_ORIGIN))).toMatchObject({ code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能保存' })
     expect(store.repositories.documents.lockById).not.toHaveBeenCalled()
   })
 
-  it('归档的空间里所有人至多是查看者：空间管理员同样不能保存', async () => {
+  it('归档的空间里所有人至多是查看者：空间管理员同样不能保存，说明是"空间已归档"（与改名、移动、删除一致，M2-P6 复核 A 的 G3）', async () => {
     const { store, service } = setup()
     const document = teamDocument(store)
     store.setMember(TEAM_SPACE, BOB, 'admin')
     store.space(TEAM_SPACE).status = 'archived'
-    expect(await rejection(service.save(BOB, document.id, query(), upload(document.unitId), HTTP_ORIGIN))).toMatchObject({ code: 'PERMISSION_DENIED' })
+    expect(await rejection(service.save(BOB, document.id, query(), upload(document.unitId), HTTP_ORIGIN))).toMatchObject({ code: 'PERMISSION_DENIED', message: '空间已归档，只能查看' })
+    expect(store.repositories.documents.lockById).not.toHaveBeenCalled()
   })
 
   it('团队空间的编辑者可以保存', async () => {
