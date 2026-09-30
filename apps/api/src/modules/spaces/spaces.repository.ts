@@ -3,10 +3,11 @@ import type { SQL } from 'drizzle-orm'
 import type { TimeCursor } from '../../shared/time-cursor.ts'
 import type { Database, Transaction } from '../database/index.ts'
 import type { SpaceFacts, SpaceMemberRecord, SpaceRecord, SpaceSummary, TeamSpaceOverview } from './space.ts'
+import { collapseNameBlanks } from '@nerve-office/contracts'
 import { Inject, Injectable } from '@nestjs/common'
 import { and, asc, count, desc, eq, ilike, inArray, isNotNull, or, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
-import { spaceMembers, spaces } from '../../db/schema/spaces/index.ts'
+import { spaceMembers, spaceNameForSearch, spaces } from '../../db/schema/spaces/index.ts'
 import { containsPattern } from '../../shared/like-pattern.ts'
 import { DATABASE, executorOf, inSavepoint, isUniqueViolation, keysetPosition } from '../database/index.ts'
 
@@ -171,7 +172,8 @@ export class SpacesRepository {
     const conditions: (SQL | undefined)[] = [
       eq(spaces.type, 'team'),
       filter.spaceId === undefined ? undefined : eq(spaces.id, filter.spaceId),
-      filter.query === undefined || filter.query === '' ? undefined : ilike(spaces.name, containsPattern(filter.query)),
+      // 空白的种类与个数不算区别（M2-P6 复验 G1）：名称与关键词两边的每一段空白都合成一个普通空格再比较
+      filter.query === undefined || filter.query === '' ? undefined : ilike(spaceNameForSearch, containsPattern(collapseNameBlanks(filter.query))),
       filter.status === undefined ? undefined : eq(spaces.status, filter.status),
       filter.after === undefined ? undefined : sql`(${spaces.createdAt}, ${spaces.id}) < (${filter.after.position}::timestamptz, ${filter.after.id}::uuid)`,
     ]

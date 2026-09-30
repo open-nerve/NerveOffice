@@ -1,7 +1,7 @@
 // 团队空间的名称（M2-P2 设计 §3.2、§3.9）：按判重键唯一（看起来一样的名称算同一个名字，M2-P6 复核 B 的 M-1），
 // 由唯一索引兜住并发；创建与改名撞上唯一约束时只回滚到保存点，事务仍可继续（M2-P2 审查 A6）：经测试探针在一个事务里撞名之后再改一次。
 // 显示成空白的非格式字符（盲文空白等）：入口拒绝，判重键把入口拒绝之前写进去的当空白（M2-P6 复验 R-M1）；
-// 判得偏严的写法（蒙古文的元音分隔符，复验 R-G1）有用例钉住。
+// 判得偏严的写法（蒙古文的元音分隔符，复验 R-G1）有用例钉住。窄的空白（发丝空格等）存成普通空格（复验第二轮 N1）。
 // 看不见的字符一律写成 \u 转义：源码里直接出现它们，审阅时看不出来。
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
@@ -360,6 +360,75 @@ describe('团队空间的名称：显示成空白的非格式字符（M2-P6 复�
   })
 })
 
+describe('团队空间的名称：已知的边界（M2-P6 复验第二轮 S2，见迁移 0017 的注释）', () => {
+  it('入口收紧之前写进去的、夹着零宽空格、词连接符、软连字符、韩文填充符、双向控制字符的名称：判重键不认它们，与不带它们的名称可以并存', async () => {
+    const hidden = ['\u200B', '\u2060', '\u00AD', '\u3164', '\u200E']
+    for (const [index, character] of hidden.entries()) {
+      const legacy = await legacyTeamSpace(`旧名称 ${index}${character}`)
+      expect(await keyOf(legacy), JSON.stringify(character)).not.toBe(`旧名称 ${index}`)
+      expect((await create(`旧名称 ${index}`)).status, JSON.stringify(character)).toBe(201)
+    }
+  })
+})
+
+/** 五种窄的空白：夹在字中间与不夹只差 0.84–2.97 像素（M2-P6 复验第二轮实测） */
+const NARROW_SPACES: readonly (readonly [string, string])[] = [
+  ['发丝空格', '\u200A'],
+  ['细空格', '\u2009'],
+  ['六分之一空格', '\u2006'],
+  ['窄不换行空格', '\u202F'],
+  ['中数学空格', '\u205F'],
+]
+
+describe('团队空间的名称：窄的空白（M2-P6 复验第二轮 N1）', () => {
+  it('新建"采X购部"（X 是窄的空白）：存成"采 购部"（普通空格，看得出中间有一个空格），与"采购部"不是同一个名字；之后中间是普通空格或别的窄空白的，409', async () => {
+    for (const [label, space] of NARROW_SPACES) {
+      const suffix = ` ${label}`
+      expect((await create(`采购部${suffix}`)).status, label).toBe(201)
+      const response = await create(`采${space}购部${suffix}`)
+      expect(response.status, label).toBe(201)
+      const created = parseExact(adminSpaceSchema, await response.json())
+      expect(created.name, label).toBe(`采 购部${suffix}`)
+      expect(await keyOf(created.id)).toBe(`采 购部${suffix}`)
+      for (const other of ['采 购部', ...NARROW_SPACES.map(([, narrow]) => `采${narrow}购部`), '采\u3000购部', '采\u00A0购部']) {
+        const again = await create(`${other}${suffix}`)
+        expect(again.status, JSON.stringify([label, other])).toBe(409)
+        expect(await codeOf(again)).toBe('SPACE_NAME_TAKEN')
+      }
+    }
+  })
+
+  it('空间管理员改名："财 务部"被别人占用时改成"财X务部"，409；"财务部"被别人占用时改成"财X务部"，照常，存成"财 务部"（普通空格）', async () => {
+    for (const [label, space] of NARROW_SPACES) {
+      await teamSpace(`财 务部 ${label}`)
+      const mine = await teamSpace()
+      const taken = await rename(mine, `财${space}务部 ${label}`)
+      expect(taken.status, label).toBe(409)
+      expect(await codeOf(taken)).toBe('SPACE_NAME_TAKEN')
+      expect(await namesOf([mine]), label).toEqual([expect.stringMatching(/^名称测试/) as unknown])
+
+      await teamSpace(`财务部 ${label} 二`)
+      const other = await teamSpace()
+      expect((await rename(other, `财${space}务部 ${label} 二`)).status, label).toBe(200)
+      expect(await namesOf([other]), label).toEqual([`财 务部 ${label} 二`])
+    }
+  })
+
+  it('蒙古文：两个蒙古文字母之间的窄不换行空格原样保留（连接词干与后缀）；与中间是普通空格的写法判重键相同，409', async () => {
+    // mongγol-un（"蒙古的"）：词干 mongγol 与属格后缀 un
+    const stem = '\u182E\u1823\u1829\u182D\u1823\u182F'
+    const suffix = '\u1824\u1828'
+    const response = await create(`${stem}\u202F${suffix}`)
+    expect(response.status).toBe(201)
+    const created = parseExact(adminSpaceSchema, await response.json())
+    expect(created.name).toBe(`${stem}\u202F${suffix}`)
+    expect(await keyOf(created.id)).toBe(`${stem} ${suffix}`)
+    const spaced = await create(`${stem} ${suffix}`)
+    expect(spaced.status).toBe(409)
+    expect(await codeOf(spaced)).toBe('SPACE_NAME_TAKEN')
+  })
+})
+
 /** 蒙古文字母：na U+1828、a U+1820、ra U+1837、ha U+182C；元音分隔符 MVS U+180E（名称里只在正字法位置上放行） */
 const MONGOLIAN = { na: '\u1828', a: '\u1820', ra: '\u1837', ha: '\u182C', mvs: '\u180E' }
 
@@ -405,6 +474,8 @@ describe('团队空间的名称：逐对核对看起来一样的与看起来不�
     ['乐谱的空符头', '财务部', '财务部\u{1D159}', 400],
     ['韩文填充符', '财务部', '财务部\u3164', 400],
     ['半角韩文填充符', '财务部', '财务部\uFFA0', 400],
+    // 窄的空白存成普通空格（M2-P6 复验第二轮 N1）：与中间是普通空格的名称是同一个名字
+    ...NARROW_SPACES.map(([label, space]) => [`${label}代替普通空格`, '采 购部', `采${space}购部`, 409] as const),
     ['西里尔字母 а 代替拉丁字母 a（DEF-032）', 'Finance', 'Fin\u0430nce', 201],
     ['希腊字母 Ο 代替拉丁字母 O（DEF-032）', 'Ops', '\u039Fps', 201],
     ['分数 ½ 与 1/2（NFKC 展开成分数斜线，不是斜线，DEF-032）', '1/2 组', '\u00BD 组', 201],

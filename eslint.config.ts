@@ -611,9 +611,9 @@ export default antfu(
   { name: 'nerve/api-document-transfer', files: ['apps/api/src/modules/admin/**/*.ts'], rules: apiRules({ documentTransfer: true }) },
   { name: 'nerve/api-trash-purge', files: ['apps/api/src/modules/jobs/**/*.ts'], rules: apiRules({ trashPurge: true }) },
   { name: 'nerve/api-documents', files: ['apps/api/src/modules/documents/**/*.ts'], rules: apiRules({ documentTransfer: true, trashPurge: true }) },
-  // 集成测试专用的入口为集成测试转出数据库句柄与 documents 的仓储；app 层的程序接口（index.ts）与 app 层的其他文件同样拿不到
-  // （复验 N6，M2-P6 复核 A 的 S3、复验 R-S4）
-  { name: 'nerve/api-integration-entry-exports', files: [API_INTEGRATION_ENTRY], rules: apiRules({ databaseHandles: true, documentsRepository: true }) },
+  // 集成测试专用的入口为集成测试转出数据库句柄、documents 的仓储与 spaces 的表定义；app 层的程序接口（index.ts）与 app 层的其他文件同样拿不到
+  // （复验 N6，M2-P6 复核 A 的 S3、复验 R-S4、S1）
+  { name: 'nerve/api-integration-entry-exports', files: [API_INTEGRATION_ENTRY], rules: apiRules({ databaseHandles: true, documentsRepository: true, tables: true }) },
   { name: 'nerve/api-database', files: ['apps/api/src/modules/database/**/*.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true }) },
   { name: 'nerve/api-repositories', files: ['apps/api/src/modules/*/*.repository.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true, tables: true }) },
   // 表定义里的 CHECK 约束要把代码里的常量拼成 SQL 字面量（drizzle-kit 不内联参数）；这里只有 DDL 与常量，没有运行时的输入
@@ -735,7 +735,7 @@ export default antfu(
         { type: 'web-build', pattern: 'apps/web/build', partialMatch: false },
         // 后端（P2 设计 §3.1）：模块按目录名区分；表定义按所属模块分目录（src/db/schema/<模块>/index.ts）
         // app 是应用的组装与进程入口（main.ts）；index.ts 是命令行与集成测试共用的程序接口，
-        // integration.test-support.ts 是只给集成测试的入口（数据库句柄与 documents 的仓储，M2-P6 复验 R-S4）
+        // integration.test-support.ts 是只给集成测试的入口（数据库句柄、documents 的仓储与 spaces 的表定义，M2-P6 复验 R-S4、S1）
         { type: 'api-app', pattern: 'apps/api/src/app', partialMatch: false },
         { type: 'api-shared', pattern: 'apps/api/src/shared', partialMatch: false },
         { type: 'api-module', pattern: 'apps/api/src/modules/*', capture: ['module'], partialMatch: false },
@@ -832,6 +832,8 @@ export default antfu(
           },
           // 命令行经模块的入口，或者经 app 层的程序接口（需要组装多个模块时，例如初始化管理员）
           { from: { element: { type: 'api-cli' } }, allow: { to: { element: { type: ['api-module', 'api-app'], fileInternalPath: PUBLIC_ENTRY } } } },
+          // 集成测试专用的入口转出 spaces 的表定义：集成测试核对迁移之后库里的生成列与表定义一致（手写的 SET EXPRESSION 迁移，M2-P6 复验 S1）
+          { from: { element: { type: 'api-app', fileInternalPath: 'integration.test-support.ts' } }, allow: { to: { element: { type: 'api-schema', captured: { module: 'spaces' }, fileInternalPath: PUBLIC_ENTRY } } } },
           // 集成测试经 @nerve-office/api 的程序接口建应用，经集成测试专用的入口（@nerve-office/api/testing）拿数据库句柄与仓储（M2-P6 复验 R-S4）
           { from: { element: { type: 'integration-tests' } }, allow: { to: { element: { type: 'api-app', fileInternalPath: [PUBLIC_ENTRY, 'integration.test-support.ts'] } } } },
           {

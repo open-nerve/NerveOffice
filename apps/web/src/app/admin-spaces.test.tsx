@@ -199,7 +199,9 @@ describe('US-M2-05 管理界面：团队空间', () => {
     expect(requestCount(api, `PUT /api/spaces/${SPACE.id}/name`)).toBe(1)
 
     rename.resolve(apiError(409, 'SPACE_NAME_TAKEN'))
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent('已有同名的团队空间')
+    // 说明写成"空格的种类与个数"不算区别：有没有空格仍然算区别（M2-P6 复验第二轮 G2）
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('已有同名的团队空间（大小写、全角与半角、空格的种类与个数、看不见的字符都不算区别，已归档的也算）')
+    expect(dialog).toHaveAccessibleDescription('团队空间的名称不能与别的团队空间相同（大小写、全角与半角、空格的种类与个数、看不见的字符都不算区别，已归档的也算）。')
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(within(dialog).getByLabelText('名称')).toHaveValue('产品部')
 

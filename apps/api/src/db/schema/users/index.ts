@@ -1,8 +1,8 @@
 // users 模块的表（P3 设计 §3.2）：账户。用户名存小写的规范写法，唯一。
-import { DISPLAY_NAME_MAX_LENGTH, USER_STATUSES, USER_SYSTEM_ROLES, USERNAME_PATTERN_SOURCE } from '@nerve-office/contracts'
+import { DISPLAY_NAME_MAX_LENGTH, NAME_BLANK_CHARACTERS, USER_STATUSES, USER_SYSTEM_ROLES, USERNAME_PATTERN_SOURCE } from '@nerve-office/contracts'
 import { sql } from 'drizzle-orm'
 import { check, integer, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
-import { lengthBetween, oneOf, stringLiteral } from '../common/index.ts'
+import { blanksCollapsedOf, lengthBetween, oneOf, stringLiteral } from '../common/index.ts'
 
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().default(sql`uuidv7()`),
@@ -28,3 +28,10 @@ export const users = pgTable('users', {
   check('users_system_role_check', oneOf(table.systemRole, USER_SYSTEM_ROLES)),
   check('users_status_check', oneOf(table.status, USER_STATUSES)),
 ])
+
+/**
+ * 按名称搜索时比较的显示名（M2-P6 复验 G1）：每一段空白合成一个普通空格，空白的清单与团队空间名称的判重键相同
+ * （contracts 的 NAME_BLANK_CHARACTERS）。显示名保留单个的全角空格与不换行空格，关键词在应用里按同一份清单归一
+ * （collapseNameBlanks），用半角空格也搜得到它们
+ */
+export const displayNameForSearch = blanksCollapsedOf(users.displayName, NAME_BLANK_CHARACTERS)

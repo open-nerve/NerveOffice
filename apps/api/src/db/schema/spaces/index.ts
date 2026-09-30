@@ -1,9 +1,9 @@
 // spaces 模块的表：空间（M1-P3 设计 §3.2；M2-P2 设计 §3.2 加上团队空间、归档、创建人）与团队空间的成员（M2-P2）。
 import type { SQL } from 'drizzle-orm'
-import { BLANK_LOOKING_CHARACTERS, NAME_KEY_IGNORED_CHARACTERS, SPACE_NAME_MAX_LENGTH, SPACE_ROLES, SPACE_STATUSES, SPACE_TYPES } from '@nerve-office/contracts'
+import { NAME_BLANK_CHARACTERS, NAME_KEY_IGNORED_CHARACTERS, SPACE_NAME_MAX_LENGTH, SPACE_ROLES, SPACE_STATUSES, SPACE_TYPES } from '@nerve-office/contracts'
 import { sql } from 'drizzle-orm'
 import { boolean, check, index, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
-import { lengthBetween, nameKeyOf, oneOf } from '../common/index.ts'
+import { blanksCollapsedOf, lengthBetween, nameKeyOf, oneOf } from '../common/index.ts'
 import { users } from '../users/index.ts'
 
 export const spaces = pgTable('spaces', {
@@ -13,7 +13,7 @@ export const spaces = pgTable('spaces', {
   name: text('name').notNull(),
   // 名称的判重键（M2-P6 复核 B 的 M-1）：由数据库从名称算出（生成列），看起来一样的名称算出同一个键，算法只有 nameKeyOf 这一处。
   // 服务不自己判断重名：创建与改名撞上下面的唯一索引就是"名称已被使用"
-  nameKey: text('name_key').notNull().generatedAlwaysAs((): SQL => nameKeyOf(spaces.name, { ignored: NAME_KEY_IGNORED_CHARACTERS, blankLooking: BLANK_LOOKING_CHARACTERS })),
+  nameKey: text('name_key').notNull().generatedAlwaysAs((): SQL => nameKeyOf(spaces.name, { ignored: NAME_KEY_IGNORED_CHARACTERS, blanks: NAME_BLANK_CHARACTERS })),
   status: text('status', { enum: SPACE_STATUSES }).notNull().default('active'),
   ownerUserId: uuid('owner_user_id').references(() => users.id, { onDelete: 'restrict' }),
   visibleToAll: boolean('visible_to_all').notNull().default(false),
@@ -33,6 +33,12 @@ export const spaces = pgTable('spaces', {
   // 团队空间的名称按判重键唯一，已归档的也算：导航里同名的空间无法区分（M2-P2 设计 §3.2）；看起来一样的名称同样算重名（M2-P6 复核 B 的 M-1）
   uniqueIndex('spaces_team_name_key').on(table.nameKey).where(sql`${table.type} = 'team'`),
 ])
+
+/**
+ * 按名称搜索时比较的名称（M2-P6 复验 G1）：每一段空白合成一个普通空格，空白的清单与判重键相同（contracts 的 NAME_BLANK_CHARACTERS）。
+ * 名称保留单个的全角空格与不换行空格，关键词在应用里按同一份清单归一（collapseNameBlanks），用半角空格也搜得到它们
+ */
+export const spaceNameForSearch = blanksCollapsedOf(spaces.name, NAME_BLANK_CHARACTERS)
 
 /**
  * 团队空间的成员与空间角色（M2-P2 设计 §3.2）。只有团队空间有成员，由 spaces 的服务保证；

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { folderNameSchema } from '../folders/folders.ts'
 import { spaceNameSchema } from '../spaces/spaces.ts'
 import { displayNameSchema } from '../users/users.ts'
-import { BLANK_LOOKING_CHARACTERS, codePointLength, collapseSpaces, hasBidiControls, hasControlCharacters, hasHiddenCharacters, hasLineSeparators, hasVisibleCharacters, NAME_KEY_IGNORED_CHARACTERS, nameTextSchema, titleTextSchema } from './text.ts'
+import { BLANK_LOOKING_CHARACTERS, codePointLength, collapseNameBlanks, collapseSpaces, hasBidiControls, hasControlCharacters, hasHiddenCharacters, hasLineSeparators, hasVisibleCharacters, NAME_BLANK_CHARACTERS, NAME_KEY_IGNORED_CHARACTERS, nameTextSchema, titleTextSchema } from './text.ts'
 
 const nameSchema = nameTextSchema({ label: '名称', maxLength: 20 })
 const titleSchema = titleTextSchema({ label: '标题', maxLength: 20 })
@@ -20,6 +20,16 @@ const BIDI_CONTROLS = ['\u061C', '\u200E', '\u200F', '\u202A', '\u202B', '\u202C
 
 /** 单独构成整个名称时看不见的字符：零宽空格、词连接符、BOM、韩文填充符（三种）、蒙古文元音分隔符、零宽连接符与不连字、变体选择符、盲文空白、软连字符、契丹小字填充符、乐谱的空符头 */
 const INVISIBLE = ['\u200B', '\u2060', '\uFEFF', '\u3164', '\u115F', '\u1160', '\uFFA0', '\u180E', '\u200D', '\u200C', '\uFE0E', '\uFE0F', '\u2800', '\u00AD', '\u{16FE4}', '\u{1D159}']
+
+/** 一段空白存成它自己的三种：普通空格、不换行空格、全角空格 */
+const KEPT_SPACES = [' ', '\u00A0', '\u3000']
+/**
+ * 换成普通空格的空格类分隔符：欧甘文空格、en quad 到发丝空格（U+2000–U+200A）、窄不换行空格、中数学空格。
+ * 其中五种窄的空白（NARROW_SPACES）夹在字中间与不夹只差 0.84–2.97 像素（M2-P6 复验第二轮实测）
+ */
+const REPLACED_SPACES = ['\u1680', '\u2000', '\u2001', '\u2002', '\u2003', '\u2004', '\u2005', '\u2006', '\u2007', '\u2008', '\u2009', '\u200A', '\u202F', '\u205F']
+/** 发丝空格、细空格、六分之一空格、窄不换行空格、中数学空格 */
+const NARROW_SPACES = ['\u200A', '\u2009', '\u2006', '\u202F', '\u205F']
 
 /**
  * 正常的名字：表情组合（零宽连接符连起来的一家人、带变体选择符的心、国旗、肤色）、阿拉伯文、希伯来文、
@@ -116,24 +126,69 @@ describe('名称的规则（显示名、团队空间名称、文件夹名称共�
     expect(problemOf(nameSchema, 'a'.repeat(21))).toBe('名称为 1–20 个字符')
   })
 
-  it('名字中间连续的空白合成一个，保留这一段里的第一个：连续的空格、不换行空格、全角空格、各种宽度的空格（M2-P6 复核 B 的 M-1、复验 R-G4）', () => {
+  it('空格类的分隔符（\\p{Zs}）恰好是保留的三种加上换成普通空格的那些：下面几个用例逐个核对的就是全部', () => {
+    const mismatches: string[] = []
+    for (let codePoint = 0; codePoint <= 0x10FFFF; codePoint += 1) {
+      if (codePoint >= 0xD800 && codePoint <= 0xDFFF)
+        continue
+      const character = String.fromCodePoint(codePoint)
+      if (/^\p{Zs}$/u.test(character) !== [...KEPT_SPACES, ...REPLACED_SPACES].includes(character))
+        mismatches.push(codePoint.toString(16))
+    }
+    expect(mismatches).toEqual([])
+  })
+
+  it('名字里的每一段空白只存成一个字符：这一段的第一个是普通空格、不换行空格、全角空格时保留它，单个的与连续的一样（M2-P6 复核 B 的 M-1、复验 R-G4、第二轮 N1）', () => {
+    for (const space of KEPT_SPACES) {
+      expect(collapseSpaces(`a${space}b`), JSON.stringify(space)).toBe(`a${space}b`)
+      for (const next of [...KEPT_SPACES, ...REPLACED_SPACES])
+        expect(collapseSpaces(`a${space}${next}b`), JSON.stringify([space, next])).toBe(`a${space}b`)
+    }
+    expect(nameSchema.parse('Zhang San')).toBe('Zhang San')
     expect(nameSchema.parse('Finance  Team')).toBe('Finance Team')
-    expect(nameSchema.parse('Finance\u2002\u202F Team')).toBe('Finance\u2002Team')
+    expect(nameSchema.parse('山田\u3000太郎')).toBe('山田\u3000太郎')
     expect(nameSchema.parse('山田\u3000\u3000太郎')).toBe('山田\u3000太郎')
+    expect(nameSchema.parse('Finance\u00A0Team')).toBe('Finance\u00A0Team')
     expect(nameSchema.parse('Finance\u00A0\u00A0Team')).toBe('Finance\u00A0Team')
-    expect(nameSchema.parse('\u3000 财务\u205F\u1680部 \u00A0')).toBe('财务\u205F部')
     // 合并之后按码点计长度：20 个字符加一段长空白仍然合法
     expect(nameSchema.safeParse(`${'a'.repeat(10)}${' '.repeat(30)}${'b'.repeat(9)}`).success).toBe(true)
   })
 
-  it('单个的空白原样保留：姓名里的全角空格、不换行空格、各种宽度的空格不改成普通空格（M2-P6 复验 R-G4）', () => {
-    expect(nameSchema.parse('Zhang San')).toBe('Zhang San')
-    expect(nameSchema.parse('山田\u3000太郎')).toBe('山田\u3000太郎')
-    expect(nameSchema.parse('Finance\u00A0Team')).toBe('Finance\u00A0Team')
-    for (const space of ['\u00A0', '\u1680', '\u2000', '\u200A', '\u202F', '\u205F', '\u3000'])
-      expect(collapseSpaces(`a${space}b`), JSON.stringify(space)).toBe(`a${space}b`)
-    // 几段分开的单个空白各自保留，连续的那一段合成一个
-    expect(nameSchema.parse('a\u3000b c\u00A0d\u3000 e')).toBe('a\u3000b c\u00A0d\u3000e')
+  it('别的空白（窄的空白、各种宽度的空格、欧甘文空格）单个的与连续的都存成一个普通空格：夹在字中间的窄空白存下来看得出是一个空格（M2-P6 复验第二轮 N1）', () => {
+    for (const space of REPLACED_SPACES) {
+      expect(collapseSpaces(`a${space}b`), JSON.stringify(space)).toBe('a b')
+      // 这一段的第一个决定存成什么："窄空白 + 普通空格"存成普通空格，不再存成窄空白
+      for (const next of [...KEPT_SPACES, ...REPLACED_SPACES])
+        expect(collapseSpaces(`a${space}${next}b`), JSON.stringify([space, next])).toBe('a b')
+    }
+    for (const space of NARROW_SPACES)
+      expect(nameSchema.parse(`采${space}购部`), JSON.stringify(space)).toBe('采 购部')
+    expect(nameSchema.parse('Finance\u2002\u202F Team')).toBe('Finance Team')
+    expect(nameSchema.parse('\u3000 财务\u205F\u1680部 \u00A0')).toBe('财务 部')
+    // 几段分开的空白各自按这一段的第一个
+    expect(nameSchema.parse('a\u3000b c\u00A0d\u2009 e\u200Af')).toBe('a\u3000b c\u00A0d e f')
+  })
+
+  it('蒙古文：两个蒙古文字母之间单独的一个窄不换行空格原样保留（连接词干与后缀）；别处的、连着别的空白的照样换成普通空格', () => {
+    // mongγol-un（"蒙古的"）：词干 mongγol（ma、o、ang、ga、o、la）与属格后缀 un（u、na）之间是窄不换行空格
+    const stem = '\u182E\u1823\u1829\u182D\u1823\u182F'
+    const suffix = '\u1824\u1828'
+    expect(nameSchema.parse(`${stem}\u202F${suffix}`)).toBe(`${stem}\u202F${suffix}`)
+    expect(nameSchema.parse(`${stem}\u202F${suffix}  ${stem}\u202F${suffix}`)).toBe(`${stem}\u202F${suffix} ${stem}\u202F${suffix}`)
+    // 一边不是蒙古文字母：拉丁字母、数字、蒙古文数字一
+    expect(collapseSpaces('a\u202Fb')).toBe('a b')
+    expect(collapseSpaces(`${stem}\u202F1`)).toBe(`${stem} 1`)
+    expect(collapseSpaces(`a\u202F${suffix}`)).toBe(`a ${suffix}`)
+    expect(collapseSpaces(`${stem}\u202F\u1811`)).toBe(`${stem} \u1811`)
+    // 不是单独的一个：连着别的空白
+    expect(collapseSpaces(`${stem}\u202F\u202F${suffix}`)).toBe(`${stem} ${suffix}`)
+    expect(collapseSpaces(`${stem}\u202F ${suffix}`)).toBe(`${stem} ${suffix}`)
+    expect(collapseSpaces(`${stem} \u202F${suffix}`)).toBe(`${stem} ${suffix}`)
+    // 蒙古文里别的窄空白照样换掉
+    for (const space of NARROW_SPACES.filter(space => space !== '\u202F'))
+      expect(collapseSpaces(`${stem}${space}${suffix}`), JSON.stringify(space)).toBe(`${stem} ${suffix}`)
+    // 开头与末尾的由 trim 去掉
+    expect(nameSchema.parse(`\u202F${stem}\u202F`)).toBe(stem)
   })
 
   it('空白的合并不碰控制字符与行、段分隔符：它们照旧按各自的说明拒绝', () => {
@@ -155,11 +210,36 @@ describe('名称的规则（显示名、团队空间名称、文件夹名称共�
     expect(displayNameSchema.parse('\u{1F468}\u200D\u{1F469}\u200D\u{1F467} 张三')).toBe('\u{1F468}\u200D\u{1F469}\u200D\u{1F467} 张三')
   })
 
-  it('显示名、团队空间名称、文件夹名称都合并中间连续的空白，单个的原样保留', () => {
+  it('显示名、团队空间名称、文件夹名称都把每一段空白存成一个字符：全角空格保留，窄的空白换成普通空格', () => {
     for (const schema of [displayNameSchema, spaceNameSchema, folderNameSchema]) {
       expect(schema.parse(' 研发\u3000\u3000二部 ')).toBe('研发\u3000二部')
       expect(schema.parse('研发\u3000二部')).toBe('研发\u3000二部')
+      expect(schema.parse('研发\u200A二部')).toBe('研发 二部')
     }
+  })
+})
+
+describe('比较名称时算作空白的字符（NAME_BLANK_CHARACTERS，M2-P6 复验 G1）', () => {
+  it('恰好是 Unicode 的 White_Space 加上显示成空白的非格式字符；collapseNameBlanks 把这些、且只把这些换成空格（逐个码点）', () => {
+    const mismatches: string[] = []
+    for (let codePoint = 0; codePoint <= 0x10FFFF; codePoint += 1) {
+      if (codePoint >= 0xD800 && codePoint <= 0xDFFF)
+        continue
+      const character = String.fromCodePoint(codePoint)
+      const blank = /^\p{White_Space}$/u.test(character) || within(BLANK_LOOKING_CHARACTERS, codePoint)
+      if (within(NAME_BLANK_CHARACTERS, codePoint) !== blank || (collapseNameBlanks(character) === ' ') !== blank)
+        mismatches.push(codePoint.toString(16))
+    }
+    expect(mismatches).toEqual([])
+  })
+
+  it('collapseNameBlanks：每一段合成一个普通空格，不去首尾；看不见的格式字符不算空白，LIKE 的通配符原样', () => {
+    expect(collapseNameBlanks('山田\u3000太郎')).toBe('山田 太郎')
+    expect(collapseNameBlanks('Jean\u00A0Dupont')).toBe('Jean Dupont')
+    expect(collapseNameBlanks('a \u3000\t\u2800b')).toBe('a b')
+    expect(collapseNameBlanks('\u2028a\u{1D159}\u{16FE4}b ')).toBe(' a b ')
+    expect(collapseNameBlanks('a\u200Bb\u200Dc\u3164d')).toBe('a\u200Bb\u200Dc\u3164d')
+    expect(collapseNameBlanks('50%\u3000a_b')).toBe('50% a_b')
   })
 })
 

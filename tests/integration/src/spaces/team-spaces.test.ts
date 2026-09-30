@@ -129,6 +129,20 @@ describe('US-M2-05 创建团队空间并指定空间管理员', () => {
     expect(archived.items.map(item => item.name)).toEqual(['分页 00'])
     expect((await asUser(app.baseUrl, rootSession, '/api/admin/spaces?cursor=broken')).status).toBe(400)
   })
+
+  it('列表按名称搜索：空白的种类与个数不算区别，半角空格搜得到全角空格与不换行空格，全角空格搜得到半角空格；% 与 _ 仍然按字面匹配（M2-P6 复验 G1）', async () => {
+    await createTeamSpace(database, { name: '山田\u3000工作室', createdBy: root.id })
+    await createTeamSpace(database, { name: 'Équipe\u00A0Paris', createdBy: root.id })
+    await createTeamSpace(database, { name: 'Night Ops Center', createdBy: root.id })
+    await createTeamSpace(database, { name: '满分 100%', createdBy: root.id })
+    const namesFor = async (query: string): Promise<string[]> => parseExact(adminSpaceListResponseSchema, await (await asUser(app.baseUrl, rootSession, `/api/admin/spaces?query=${encodeURIComponent(query)}`)).json()).items.map(item => item.name)
+    expect(await namesFor('山田 工作室')).toEqual(['山田\u3000工作室'])
+    expect(await namesFor('Équipe Paris')).toEqual(['Équipe\u00A0Paris'])
+    expect(await namesFor('night\u3000ops  center')).toEqual(['Night Ops Center'])
+    expect(await namesFor('山田工作室')).toEqual([])
+    expect(await namesFor('满分\u3000100%')).toEqual(['满分 100%'])
+    expect(await namesFor('满分 100_')).toEqual([])
+  })
 })
 
 describe('US-M2-05 全员可见', () => {

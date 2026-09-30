@@ -32,23 +32,6 @@ export function lengthBetween(column: AnyPgColumn, min: number, max: number): SQ
 /** 码点的闭区间：[第一个, 最后一个] */
 export type CodePointRange = readonly [number, number]
 
-/**
- * Unicode 的 White_Space（25 个码点）：制表符到回车、空格、NEL、不换行空格、欧甘文空格、各种宽度的空格、
- * 行与段分隔符、窄不换行空格、数学中空格、全角空格。单元测试核对它与 \p{White_Space} 完全一致
- */
-export const WHITE_SPACE: readonly CodePointRange[] = [
-  [0x0009, 0x000D],
-  [0x0020, 0x0020],
-  [0x0085, 0x0085],
-  [0x00A0, 0x00A0],
-  [0x1680, 0x1680],
-  [0x2000, 0x200A],
-  [0x2028, 0x2029],
-  [0x202F, 0x202F],
-  [0x205F, 0x205F],
-  [0x3000, 0x3000],
-]
-
 /** 正则（PostgreSQL 的 ARE）里的一个码点：\uXXXX 或 \UXXXXXXXX 转义，看不见的字符不直接出现在 SQL 里 */
 function escapedCodePoint(codePoint: number): string {
   const hex = codePoint.toString(16).toUpperCase()
@@ -61,12 +44,24 @@ export function bracketExpressionOf(ranges: readonly CodePointRange[]): string {
   return `[${items.join('')}]`
 }
 
+/**
+ * 每一段空白（blanks 里的字符，一个或连续几个）合成一个普通空格，不去首尾。blanks 是 contracts 的 NAME_BLANK_CHARACTERS：
+ * 判重键（nameKeyOf 的第 3 步）与按名称搜索时库里的名称（各表定义转出的"空白合一的名称"，M2-P6 复验 G1）用这一份清单，
+ * 搜索的关键词在应用里按同一份清单归一（contracts 的 collapseNameBlanks）
+ */
+export function blanksCollapsedOf(value: AnyPgColumn | SQL, blanks: readonly CodePointRange[]): SQL {
+  return sql`regexp_replace(${value}, ${stringLiteral(`${bracketExpressionOf(blanks)}+`)}, ' ', 'g')`
+}
+
 /** 判重键里另外要处理的两类字符（都来自 contracts，与名称的规则用同一份清单） */
 export interface NameKeyCharacters {
   /** 判重时不算区别、直接去掉的字符：名称里放行的格式字符（contracts 的 NAME_KEY_IGNORED_CHARACTERS） */
   readonly ignored: readonly CodePointRange[]
-  /** 判重时与空白同样看待的字符：显示成空白的非格式字符（contracts 的 BLANK_LOOKING_CHARACTERS） */
-  readonly blankLooking: readonly CodePointRange[]
+  /**
+   * 判重时算作空白、每一段合成一个空格的字符：White_Space 与显示成空白的非格式字符（contracts 的 NAME_BLANK_CHARACTERS；
+   * 后者入口已经拒绝，入口拒绝之前写进去的名称里可能有它们，M2-P6 复验 R-M1）
+   */
+  readonly blanks: readonly CodePointRange[]
 }
 
 /**
@@ -76,8 +71,8 @@ export interface NameKeyCharacters {
  *    带空格的声调符号（´、¨ 等）展开成"空格 + 组合符号"——在合并空白之前做，展开出来的空格才会一起合并；
  * 2. 去掉名称里放行的格式字符（ignored：零宽连接符与不连字、组合用字形连接符、蒙古文的变体选择符与元音分隔符、
  *    变体选择符、标签字符），它们看不见；
- * 3. 每一段空白（White_Space）与显示成空白的非格式字符（blankLooking：盲文空白、契丹小字填充符、乐谱的空符头，M2-P6 复验 R-M1）
- *    合成一个普通空格，再去掉首尾的空格（名称开头夹一个零宽连接符再跟空格时，去掉前者之后会露出后者）。
+ * 3. 每一段空白（blanks：White_Space 与显示成空白的非格式字符——盲文空白、契丹小字填充符、乐谱的空符头，M2-P6 复验 R-M1）
+ *    合成一个普通空格（blanksCollapsedOf），再去掉首尾的空格（名称开头夹一个零宽连接符再跟空格时，去掉前者之后会露出后者）。
  *    名称的入口已经拒绝后者，这里照样当空白：入口拒绝之前写进去的名称里可能有它们；
  * 4. 大小写：先 lower（简单的小写映射，与原来按 lower 判重的结果一致，例如 İ 与 i），再 casefold（大小写折叠，
  *    统一 lower 统一不了的，例如希腊字母词尾的 ς 与 σ；PostgreSQL 18 起）；
@@ -87,7 +82,6 @@ export interface NameKeyCharacters {
  */
 export function nameKeyOf(column: AnyPgColumn, characters: NameKeyCharacters): SQL {
   const stripped = sql`regexp_replace(normalize(${column}, NFKC), ${stringLiteral(bracketExpressionOf(characters.ignored))}, '', 'g')`
-  const blanks = bracketExpressionOf([...WHITE_SPACE, ...characters.blankLooking])
-  const spaced = sql`btrim(regexp_replace(${stripped}, ${stringLiteral(`${blanks}+`)}, ' ', 'g'), ' ')`
+  const spaced = sql`btrim(${blanksCollapsedOf(stripped, characters.blanks)}, ' ')`
   return sql`normalize(casefold(lower(${spaced})), NFKC)`
 }

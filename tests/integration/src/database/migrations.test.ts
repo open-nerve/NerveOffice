@@ -1,10 +1,14 @@
 // 迁移（P2 设计 §3.7，ADR-005）：从零执行、重复执行、并发执行、等锁超时、库里不一致时拒绝。
 import type { Buffer } from 'node:buffer'
+import type pg from 'pg'
 import type { TestDatabase } from '../support/database.ts'
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { MigrationError, MIGRATIONS_FOLDER, readExpectedMigrations, runMigrations } from '@nerve-office/api'
+import { spaces } from '@nerve-office/api/testing'
+import { is, SQL } from 'drizzle-orm'
+import { getTableConfig, PgDialect } from 'drizzle-orm/pg-core'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -418,6 +422,49 @@ describe('0017_m2_p6_space_name_key_blanks（M2-P6 复验 R-M1）', () => {
       'SELECT indexdef FROM pg_indexes WHERE indexname = \'spaces_team_name_key\'',
     )).rows[0]?.indexdef)
     expect(index).toContain('(name_key)')
+  })
+})
+
+/** 这张表这一列（生成列）的表达式，经 PostgreSQL 反解析（pg_get_expr）；没有这一列或它不是生成列时为 undefined */
+async function generatedExpressionOf(client: pg.Client, table: string, column: string): Promise<string | undefined> {
+  const result = await client.query<{ expression: string }>(
+    `SELECT pg_get_expr(d.adbin, d.adrelid) AS expression
+       FROM pg_attrdef d
+       JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+      WHERE d.adrelid = $1::regclass AND a.attname = $2 AND a.attgenerated = 's'`,
+    [table, column],
+  )
+  return result.rows[0]?.expression
+}
+
+describe('迁移与表定义一致：判重键的表达式（M2-P6 复验 S1）', () => {
+  // 改生成列的表达式要手写 SET EXPRESSION 迁移（0017），门禁 schema 只比较表定义与快照、不看迁移的 SQL：
+  // 迁移里少写、多写一个字符都发现不了。这里迁移到最新之后，拿库里的表达式与按表定义新建的列比较，两边都经 PostgreSQL 反解析
+  it('迁移到最新之后，库里 spaces.name_key 的表达式与按表定义（nameKeyOf）新建的生成列逐字相同', async () => {
+    const database = await createTestDatabase()
+    databases.push(database)
+    const generated = getTableConfig(spaces).columns.find(column => column.name === 'name_key')?.generated
+    // 表定义里写成返回 SQL 的函数（引用表自己的列），也可以直接是 SQL
+    const as = generated?.as
+    const expression: unknown = typeof as === 'function' ? (as as () => unknown)() : as
+    if (!is(expression, SQL))
+      throw new Error('spaces.name_key 在表定义里不是用 SQL 写的生成列')
+    const query = new PgDialect().sqlToQuery(expression)
+    // 生成列里只能是常量
+    expect(query.params).toEqual([])
+    const [migrated, fromSchema] = await database.query(async (client) => {
+      await client.query('BEGIN')
+      try {
+        // 临时表与它同名（在 pg_temp 里）：表达式里带表名的列引用 "spaces"."name" 照样指向临时表自己的列
+        await client.query(`CREATE TEMP TABLE spaces (name text NOT NULL, name_key text GENERATED ALWAYS AS (${query.sql}) STORED)`)
+        return [await generatedExpressionOf(client, 'public.spaces', 'name_key'), await generatedExpressionOf(client, 'pg_temp.spaces', 'name_key')]
+      }
+      finally {
+        await client.query('ROLLBACK')
+      }
+    })
+    expect(migrated).toBeDefined()
+    expect(migrated).toBe(fromSchema)
   })
 })
 
