@@ -28,4 +28,18 @@ describe('审计事件的校验', () => {
     expect(auditEventSchema.safeParse({ ...base, details: { text: 'x'.repeat(4_000) } }).success).toBe(true)
     expect(auditEventSchema.safeParse({ ...base, details: { text: 'x'.repeat(4_100) } }).success).toBe(false)
   })
+
+  // 数组与嵌套对象的长度没有上界，很容易越过字节上限，而审计与业务写在同一个事务里：
+  // 那会把整条业务事务一起回滚成 500（M2-P4 审查 A1）。在写入口就挡住，不靠每个调用点自觉
+  it('details 的值只收标量：字符串、数字、布尔、null', () => {
+    expect(auditEventSchema.safeParse({ ...base, details: { title: '周报', folders: 2, movedToRoot: false, parentId: null } }).success).toBe(true)
+  })
+
+  it.each([
+    ['数组', { ids: ['a', 'b'] }],
+    ['空数组', { ids: [] }],
+    ['嵌套对象', { from: { name: '周报' } }],
+  ])('details 的值不收%s', (_case, details) => {
+    expect(auditEventSchema.safeParse({ ...base, details }).success).toBe(false)
+  })
 })

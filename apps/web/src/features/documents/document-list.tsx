@@ -39,10 +39,12 @@ function DocumentItem({ document, targetSpaces, open, openTriggerRef, onToggle, 
   const refresh = useOrganizeRefresh()
   const panelId = useId()
   const detail = useQuery({ ...documentQueryOptions(document.id), enabled: open })
-  // 正在进行的这一次复制的 requestId 与它的目标位置（契约承诺同一个 requestId 只复制一份，新建表格也是同一个范式）：
-  // 结果未知（网络错误、5xx）之后再点，沿用同一个，服务端不会建出第二份副本；确定失败（4xx）与做完之后换新的。
-  // 换了目标位置也换新的：沿用旧的会让重试落回旧目标（M2-P4 审查 B1）
-  const copyRequestRef = useRef<{ readonly target: string, readonly requestId: string }>(undefined)
+  // 每个目标位置上"还没有确定结果的那一次复制"的 requestId（契约承诺同一个 requestId 只复制一份，新建表格也是同一个范式）：
+  // 结果未知（网络错误、5xx）之后再点，沿用同一个，服务端不会建出第二份副本；确定失败（4xx）与做完之后删掉这一项，下一次换新的。
+  // 按目标位置记账，而不是只记最后一次：换了目标位置不沿用旧的（沿用会让重试落回旧目标，M2-P4 审查 B1）；
+  // 某个位置的结果未知之后切去别处、再切回来，仍然沿用它原来那一个，不会在那里多出一份副本（M2-P4 复验 S1）。
+  // 只有"结果未知"的目标会留在表里，最多与这一行上点过的目标位置一样多，不会无界增长
+  const copyRequestsRef = useRef(new Map<string, string>())
 
   return (
     <li>
@@ -95,13 +97,16 @@ function DocumentItem({ document, targetSpaces, open, openTriggerRef, onToggle, 
               await refresh([detail.data?.spaceId ?? destination.spaceId, moved.spaceId])
             },
             copy: async (destination) => {
+              // 目标位置是"空间加文件夹"：只按空间记账的话，同一个空间里换个文件夹会沿用旧的 requestId，重试落回旧目标
               const target = `${destination.spaceId}/${destination.folderId ?? ''}`
-              if (copyRequestRef.current?.target !== target)
-                copyRequestRef.current = { target, requestId: crypto.randomUUID() }
+              const pending = copyRequestsRef.current
+              const requestId = pending.get(target) ?? crypto.randomUUID()
+              pending.set(target, requestId)
               try {
-                const copy = await copyDocument(document.id, { spaceId: destination.spaceId, requestId: copyRequestRef.current.requestId, ...(destination.folderId === undefined ? {} : { folderId: destination.folderId }) })
-                // 这一次复制做完了：再复制一次是另一件事，要换一个新的 requestId，否则服务端会把那一次当成重试
-                copyRequestRef.current = undefined
+                const copy = await copyDocument(document.id, { spaceId: destination.spaceId, requestId, ...(destination.folderId === undefined ? {} : { folderId: destination.folderId }) })
+                // 这一次复制做完了：再往同一个位置复制是另一件事，要换一个新的 requestId。
+                // 沿用旧的会被服务端按幂等重放，原样返回第一份副本，界面照样说"已复制"，第二份根本没建出来
+                pending.delete(target)
                 await refresh([copy.spaceId])
                 return {
                   message: organize.copied(copy.title),
@@ -109,9 +114,9 @@ function DocumentItem({ document, targetSpaces, open, openTriggerRef, onToggle, 
                 }
               }
               catch (error) {
-                // 确定被拒绝（4xx）才换 requestId：结果未知时沿用同一个，再点不会复制出第二份
+                // 确定被拒绝（4xx）才丢掉它、下一次换新的：结果未知时留着，再点沿用同一个，不会复制出第二份
                 if (isDefiniteRejection(error))
-                  copyRequestRef.current = undefined
+                  pending.delete(target)
                 throw error
               }
             },

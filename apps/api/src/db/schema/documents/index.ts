@@ -73,8 +73,11 @@ export const folders = pgTable('folders', {
   check('folders_trash_entry_check', sql`(${table.trashEntryId} IS NULL) = (${table.status} = 'active')`),
   unique('folders_request_id_key').on(table.requestId),
   // 列出一层：索引定位"某个空间里某个父文件夹的直接子文件夹"这一段行。
-  // 排序用不上它：列表按 lower(name) 排（不区分大小写），要走索引得另建一个 lower(name) 的表达式索引；
-  // 一层的行数由界面上的 DEF-030（500 条的上限）兜着，排序在内存里做就够，本版不建（审查 A 的注释订正）
+  // 排序用不上它：列表按 lower(name) 排（不区分大小写），要走索引得另建一个 lower(name) 的表达式索引。
+  // 本版不建这个表达式索引。理由不是"一层的行数有上限"：DEF-030 的 500 条只是一次响应最多给多少条，
+  // 服务端并不限制一层能存多少个文件夹。理由是本版的规模——单租户、一个团队自己用，一层不会有多到让内存排序成为瓶颈的文件夹。
+  // 真要支持很大的一层，得同时加 lower(name) 的表达式索引与按这个顺序的分页（只加索引不分页仍然要把整层读出来），
+  // 两件事一起做，记在 DEF-030 下（M2-P4 复验 G1 的注释订正）
   index('folders_space_parent_name_idx').on(table.spaceId, table.parentId, table.name),
   // 恢复与永久删除时按删除单元取出整棵子树
   index('folders_trash_entry_idx').on(table.trashEntryId).where(sql`${table.trashEntryId} IS NOT NULL`),

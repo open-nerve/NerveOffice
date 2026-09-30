@@ -103,13 +103,40 @@ function copyRequestIds(api: ReturnType<typeof installFakeApi>): string[] {
     .map(request => (request.body as { requestId: string }).requestId)
 }
 
-/** 点一次"复制到这里"，等到这次请求发出去、而且已经有了结果（按钮不再显示"正在复制…"） */
+/** 点一次"复制到这里"，等到这次请求失败（表单还在，按钮不再显示"正在复制…"） */
 async function copyHere(api: ReturnType<typeof installFakeApi>, form: HTMLElement): Promise<void> {
   const sent = copyRequestIds(api).length
   fireEvent.click(within(form).getByRole('button', { name: /复制到这里|正在复制…/ }))
   await waitFor(() => {
     expect(copyRequestIds(api)).toHaveLength(sent + 1)
     expect(within(form).getByRole('button', { name: '复制到这里' })).toBeInTheDocument()
+  })
+}
+
+/** 点一次"复制到这里"，等到这次成功（面板随之收起，表单从页面上消失） */
+async function copySucceeds(api: ReturnType<typeof installFakeApi>, form: HTMLElement): Promise<void> {
+  const sent = copyRequestIds(api).length
+  fireEvent.click(within(form).getByRole('button', { name: '复制到这里' }))
+  await waitFor(() => {
+    expect(copyRequestIds(api)).toHaveLength(sent + 1)
+    expect(form).not.toBeInTheDocument()
+  })
+}
+
+/** 展开"周报"那一行的操作面板，进入复制的表单 */
+async function openCopyForm(): Promise<HTMLElement> {
+  await openActions('周报')
+  fireEvent.click(await screen.findByRole('button', { name: '复制' }))
+  return screen.getByRole('form', { name: '复制' })
+}
+
+/** 根目录下有"方案"一个文件夹，复制一律 5xx（结果未知）：用来观察 requestId 按什么记账 */
+function copyAlwaysUnknown(): ReturnType<typeof installFakeApi> {
+  return loggedIn({
+    [foldersKey(SPACE_ID)]: folderPage([folder(PLAN_ID, '方案')]),
+    [foldersKey(SPACE_ID, PLAN_ID)]: noFolders(),
+    [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()),
+    [`POST /api/documents/${WEEKLY_ID}/copy`]: () => apiError(500, 'INTERNAL_ERROR'),
   })
 }
 
@@ -332,6 +359,53 @@ describe('US-M2-07 行内的整理操作', () => {
     await copyHere(api, form)
     const [toPersonal, toTeam] = copyRequestIds(api)
     expect(toTeam).not.toBe(toPersonal)
+  })
+
+  it('同一个空间里只换了文件夹：requestId 同样换新的（目标位置是"空间加文件夹"，复验 S3）', async () => {
+    const api = copyAlwaysUnknown()
+    renderApp('/')
+    const form = await openCopyForm()
+    await copyHere(api, form)
+
+    // 空间没变，只是点进了"方案"：目标位置变了，沿用旧的 requestId 会让重试落回空间的根目录
+    fireEvent.click(await within(form).findByRole('button', { name: '进入 方案' }))
+    await copyHere(api, form)
+    const [toRoot, toPlan] = copyRequestIds(api)
+    expect(toPlan).not.toBe(toRoot)
+  })
+
+  it('一个位置的结果未知，切去别处再切回来：沿用它原来那一个 requestId，不会在那里多出一份副本（复验 S1）', async () => {
+    const api = copyAlwaysUnknown()
+    renderApp('/')
+    const form = await openCopyForm()
+    // 根目录：结果未知（5xx），服务端可能已经复制出来了
+    await copyHere(api, form)
+    // 切到"方案"再点：那是另一个位置，另一个 requestId
+    fireEvent.click(await within(form).findByRole('button', { name: '进入 方案' }))
+    await copyHere(api, form)
+    // 切回根目录再点：要沿用根目录那一次的 requestId，不能又换一个（换了就可能在根目录下多出一份副本）
+    fireEvent.click(within(form).getByRole('button', { name: '上一级' }))
+    await copyHere(api, form)
+
+    const [toRoot, toPlan, backToRoot] = copyRequestIds(api)
+    expect(toPlan).not.toBe(toRoot)
+    expect(backToRoot).toBe(toRoot)
+  })
+
+  it('同一个位置连着复制两次：第二次换一个新的 requestId，第二份副本才真的建得出来（复验 S1）', async () => {
+    const api = loggedIn({
+      [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()),
+      [`POST /api/documents/${WEEKLY_ID}/copy`]: () => json(201, detail({ id: QUARTER_ID, title: '周报 的副本' })),
+    })
+    renderApp('/')
+    for (const round of [1, 2]) {
+      await copySucceeds(api, await openCopyForm())
+      expect(copyRequestIds(api)).toHaveLength(round)
+    }
+
+    // 沿用旧的会被服务端按幂等重放，原样返回第一份副本：界面照样说"已复制"，第二份根本没建出来
+    const [first, second] = copyRequestIds(api)
+    expect(second).not.toBe(first)
   })
 
   it('编辑者删文件夹被服务端按子树拒绝：说清楚是因为里面有别人创建的文档；空间刚被归档的 403 走通用的说法（审查 B2）', async () => {

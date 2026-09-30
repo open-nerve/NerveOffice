@@ -2,7 +2,10 @@
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, openEditor, ribbon, saveAndWait, saveButton, savedContent, saveStatus, typeInCell, waitForEditor } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openEditor, ribbon, saveAndWait, saveButton, savedContent, saveStatus, typeInCell, waitForEditor } from '../../support/sheet.ts'
+
+// 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
+test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
 test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容', () => {
   test('A 保存之后 B 再保存：B 得到版本冲突并保留本页的内容，服务器上是 A 的版本', async ({ page, context }) => {
