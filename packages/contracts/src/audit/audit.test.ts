@@ -10,6 +10,6 @@ describe('审计动作', () => {
 
   it('只接受登记过的动作', () => {
     expect(auditActionSchema.parse('documents.created')).toBe('documents.created')
-    expect(auditActionSchema.safeParse('documents.deleted').success).toBe(false)
+    expect(auditActionSchema.safeParse('documents.archived').success).toBe(false)
   })
 })

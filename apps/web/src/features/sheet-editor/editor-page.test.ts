@@ -25,10 +25,11 @@ const DETAIL: DocumentDetail = {
   updatedAt: '2026-09-27T02:00:00.000Z',
   spaceId: ALICE.personalSpace.id,
   space: { id: ALICE.personalSpace.id, type: 'personal', name: '爱丽丝' },
+  folderId: null,
   revision: 3,
   profile: 'sheet@1',
   formatVersion: 1,
-  permissions: { canEdit: true },
+  permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true },
 }
 
 /** 假的编辑器：生命周期可以推进，保存用到的能力都是最简单的实现；记下谁在订阅修改 */
@@ -221,7 +222,7 @@ describe('就绪之前页头之外的交互一律拦下（Codex 评审 CX1，独
   it('只能查看的文档同样：载入期间拦下输入，就绪之后放开（M2-P3 设计 §3.5）', async () => {
     const creating = deferred<SheetEditor>()
     const { editorPage, surface, chrome, fake, createEditor } = setup({
-      api: { document: async () => ({ ...DETAIL, permissions: { canEdit: false } }) },
+      api: { document: async () => ({ ...DETAIL, permissions: { ...DETAIL.permissions, canEdit: false } }) },
       createEditor: async () => creating.promise,
     })
     attach(chrome, surface)
@@ -311,7 +312,7 @@ describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
   })
 
   it('只能查看：以只读创建编辑器（M2-P3 设计 §3.5），不建保存状态机，不能保存', async () => {
-    const { editorPage, surface, api, createEditor } = setup({ api: { document: async () => ({ ...DETAIL, permissions: { canEdit: false } }) } })
+    const { editorPage, surface, api, createEditor } = setup({ api: { document: async () => ({ ...DETAIL, permissions: { ...DETAIL.permissions, canEdit: false } }) } })
     await editorPage.load()
     expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, snapshot: '{"id":"unit-1"}', access: 'read' })
     expect(editorPage.view()).toMatchObject({ load: { kind: 'ready', readOnly: true }, save: undefined })

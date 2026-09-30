@@ -1,6 +1,41 @@
 import type { StepResult } from './plan.ts'
 import { describe, expect, it } from 'vitest'
-import { planSteps, runSteps, summarize } from './plan.ts'
+import { parseArgs, planSteps, runSteps, summarize } from './plan.ts'
+
+describe('parseArgs', () => {
+  it('没有参数就是本机的完整门禁', () => {
+    expect(parseArgs([])).toEqual({ ok: true, keepGoing: false, options: { fast: false, ci: false, audit: false, scope: 'all' } })
+  })
+
+  it('认得 --fast、--ci、--audit 与 --keep-going', () => {
+    expect(parseArgs(['--fast', '--ci', '--audit', '--keep-going'])).toEqual({
+      ok: true,
+      keepGoing: true,
+      options: { fast: true, ci: true, audit: true, scope: 'all' },
+    })
+  })
+
+  it('CI 的分片要与 --ci 一起给', () => {
+    expect(parseArgs(['--ci', '--scope=e2e'])).toEqual({ ok: true, keepGoing: false, options: { fast: false, ci: true, audit: false, scope: 'e2e' } })
+  })
+
+  /**
+   * 分片都不含"启动开发数据库"一步（planSteps 里的 DATABASE 只在非 CI 的完整门禁里）：
+   * 本机 `pnpm verify --scope=e2e` 会连不上库、失败得莫名其妙，所以直接拦下（M2-P4 审查建议 7）
+   */
+  it('本机不带 --ci 用 --scope：直接拦下，并说明它只给 CI 的分片用', () => {
+    const parsed = parseArgs(['--scope=e2e'])
+    expect(parsed.ok).toBe(false)
+    expect(parsed.ok ? '' : parsed.error).toContain('--scope 只给 CI 的分片用，必须与 --ci 一起给')
+  })
+
+  it('不认识的分片与未知的参数都拦下，并列出可选项', () => {
+    const scope = parseArgs(['--ci', '--scope=unit'])
+    expect(scope.ok ? '' : scope.error).toContain('不认识的分片：unit')
+    const unknown = parseArgs(['--quick'])
+    expect(unknown.ok ? '' : unknown.error).toContain('未知的参数：--quick')
+  })
+})
 
 describe('planSteps', () => {
   it('--fast 只执行 lint、类型检查、单元测试与静态检查（供 pre-push 使用）', () => {
@@ -45,6 +80,29 @@ describe('planSteps', () => {
 
   it('本机可以显式加上漏洞扫描', () => {
     expect(planSteps({ fast: true, ci: false, audit: true }).map(s => s.id).at(-1)).toBe('audit')
+  })
+
+  it('CI 的分片：no-e2e 不跑 E2E，e2e 只构建与跑 E2E（产物门禁与漏洞扫描不重复执行）', () => {
+    expect(planSteps({ fast: false, ci: true, audit: false, scope: 'no-e2e' }).map(s => s.id)).toEqual([
+      'lint',
+      'typecheck',
+      'static-gates',
+      'tests',
+      'clean',
+      'build',
+      'artifact-gates',
+      'audit',
+    ])
+    expect(planSteps({ fast: false, ci: true, audit: false, scope: 'e2e' }).map(s => s.id)).toEqual(['clean', 'build', 'build-e2e', 'e2e'])
+  })
+
+  it('两个分片合起来与完整的一套一样：CI 分片之后不会有步骤漏掉（规范 §9：本机与 CI 执行同一套步骤）', () => {
+    const options = { fast: false, ci: true, audit: false } as const
+    const complete = planSteps({ ...options }).map(s => s.id)
+    const sharded = [...planSteps({ ...options, scope: 'no-e2e' }), ...planSteps({ ...options, scope: 'e2e' })].map(s => s.id)
+    expect(new Set(sharded)).toEqual(new Set(complete))
+    // 两片都构建（E2E 要用构建产物），除此之外没有重复执行的步骤
+    expect(sharded.filter((id, index) => sharded.indexOf(id) !== index)).toEqual(['clean', 'build'])
   })
 })
 

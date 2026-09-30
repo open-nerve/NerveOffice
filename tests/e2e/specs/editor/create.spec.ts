@@ -4,7 +4,10 @@ import { createUser } from '../../support/database.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, createSheetThroughUi, editorSurface, openCellEditor, saveAndWait, savedContent, saveStatus, sheetCanvas, typeInCell, waitForEditor } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, createSheetThroughUi, EDITOR_TEST_TIMEOUT, editorSurface, openCellEditor, saveAndWait, savedContent, saveStatus, sheetCanvas, typeInCell, waitForEditor } from '../../support/sheet.ts'
+
+// 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
+test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
 test.describe('US-M1-04 新建表格并进入编辑', () => {
   test('列表里新建：整页打开编辑器页，空白表格立即可以输入，保存后在服务器上', async ({ page }) => {

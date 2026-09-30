@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { codePointLength } from '../text/text.ts'
 import {
+  COPIED_TITLE_SUFFIX,
+  copiedDocumentTitle,
+  copyDocumentRequestSchema,
   createDocumentRequestSchema,
   DEFAULT_DOCUMENT_TITLES,
   DOCUMENT_PROFILE_OF,
@@ -10,8 +14,10 @@ import {
   documentListQuerySchema,
   documentListResponseSchema,
   documentTitleSchema,
+  moveDocumentRequestSchema,
   PLATFORM_FORMAT_VERSION,
   PLATFORM_FORMAT_VERSIONS,
+  updateDocumentRequestSchema,
 } from './documents.ts'
 
 describe('文档列表的查询参数', () => {
@@ -60,13 +66,20 @@ describe('新建文档的请求', () => {
   })
 
   it('不接受多余的字段', () => {
-    expect(createDocumentRequestSchema.safeParse({ type: 'sheet', requestId, folderId: requestId }).success).toBe(false)
+    expect(createDocumentRequestSchema.safeParse({ type: 'sheet', requestId, parentId: requestId }).success).toBe(false)
   })
 
   it('建在哪个空间：spaceId 可选，必须是 UUID；没有时建在个人空间（M1 兼容）', () => {
     const spaceId = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0e'
     expect(createDocumentRequestSchema.parse({ type: 'sheet', requestId, spaceId })).toEqual({ type: 'sheet', requestId, spaceId })
     expect(createDocumentRequestSchema.safeParse({ type: 'sheet', requestId, spaceId: 'team' }).success).toBe(false)
+  })
+
+  it('建在哪个文件夹：folderId 可选，必须是 UUID；省略表示空间的根目录，不接受 null（M2-P4）', () => {
+    const folderId = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0f'
+    expect(createDocumentRequestSchema.parse({ type: 'sheet', requestId, folderId })).toEqual({ type: 'sheet', requestId, folderId })
+    expect(createDocumentRequestSchema.safeParse({ type: 'sheet', requestId, folderId: 'root' }).success).toBe(false)
+    expect(createDocumentRequestSchema.safeParse({ type: 'sheet', requestId, folderId: null }).success).toBe(false)
   })
 
   it('标题 1–200 个字符（按码点计），不含控制字符', () => {
@@ -94,10 +107,11 @@ describe('文档的元数据', () => {
     updatedAt: '2026-09-26T09:00:00.000Z',
     spaceId: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0e',
     space: { id: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0e', type: 'team', name: '市场部' },
+    folderId: null,
     revision: 1,
     profile: 'sheet@1',
     formatVersion: 1,
-    permissions: { canEdit: true },
+    permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true },
   }
 
   it('档案与格式版本不按已知的取值校验：客户端自己核对，不认识的显示格式不受支持', () => {
@@ -112,5 +126,72 @@ describe('文档的元数据', () => {
   it('带着所在的空间：编辑器页的返回链接回到那里', () => {
     expect(documentDetailSchema.safeParse({ ...detail, space: undefined }).success).toBe(false)
     expect(documentDetailSchema.safeParse({ ...detail, space: { ...detail.space, type: 'shared' } }).success).toBe(false)
+  })
+
+  it('带着所在的文件夹：在空间的根目录下时是 null，不能省略', () => {
+    expect(documentDetailSchema.parse({ ...detail, folderId: detail.spaceId }).folderId).toBe(detail.spaceId)
+    expect(documentDetailSchema.safeParse({ ...detail, folderId: undefined }).success).toBe(false)
+  })
+
+  it('权限的每一位都要给全：界面据此显示能做的操作', () => {
+    for (const permission of Object.keys(detail.permissions))
+      expect(documentDetailSchema.safeParse({ ...detail, permissions: { ...detail.permissions, [permission]: undefined } }).success, permission).toBe(false)
+  })
+})
+
+describe('改名或空间内移动的请求', () => {
+  const folderId = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0e'
+
+  it('两项都可选；folderId 为 null 表示空间的根目录，省略表示不移动', () => {
+    expect(updateDocumentRequestSchema.parse({})).toEqual({})
+    expect(updateDocumentRequestSchema.parse({ title: ' 周报 ' })).toEqual({ title: '周报' })
+    expect(updateDocumentRequestSchema.parse({ folderId: null })).toEqual({ folderId: null })
+    expect(updateDocumentRequestSchema.parse({ folderId: folderId.toUpperCase() })).toEqual({ folderId })
+  })
+
+  it('标题与文件夹要合法，不接受多余的字段', () => {
+    expect(updateDocumentRequestSchema.safeParse({ title: '' }).success).toBe(false)
+    expect(updateDocumentRequestSchema.safeParse({ folderId: 'root' }).success).toBe(false)
+    expect(updateDocumentRequestSchema.safeParse({ spaceId: folderId }).success).toBe(false)
+  })
+})
+
+describe('移动到某个空间的请求', () => {
+  const spaceId = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0e'
+
+  it('spaceId 必填，folderId 可选（省略表示目标空间的根目录）', () => {
+    expect(moveDocumentRequestSchema.parse({ spaceId })).toEqual({ spaceId })
+    expect(moveDocumentRequestSchema.parse({ spaceId, folderId: spaceId })).toEqual({ spaceId, folderId: spaceId })
+    expect(moveDocumentRequestSchema.safeParse({}).success).toBe(false)
+    // 根目录用"省略"表示，没有第二种写法
+    expect(moveDocumentRequestSchema.safeParse({ spaceId, folderId: null }).success).toBe(false)
+  })
+})
+
+describe('复制的请求', () => {
+  const spaceId = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0e'
+  const requestId = '0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0d'
+
+  it('目标空间与 requestId 必填，位置与标题可选', () => {
+    expect(copyDocumentRequestSchema.parse({ spaceId, requestId })).toEqual({ spaceId, requestId })
+    expect(copyDocumentRequestSchema.parse({ spaceId, requestId, title: ' 周报 的副本 ' })).toMatchObject({ title: '周报 的副本' })
+    expect(copyDocumentRequestSchema.safeParse({ spaceId }).success).toBe(false)
+    expect(copyDocumentRequestSchema.safeParse({ requestId }).success).toBe(false)
+    expect(copyDocumentRequestSchema.safeParse({ spaceId, requestId, sourceId: spaceId }).success).toBe(false)
+  })
+
+  it('默认标题是"源标题 的副本"，仍然合法', () => {
+    expect(copiedDocumentTitle('周报')).toBe('周报 的副本')
+    expect(documentTitleSchema.parse(copiedDocumentTitle('周报 的副本'))).toBe('周报 的副本 的副本')
+  })
+
+  it('加上"的副本"超过上限时按码点截断，不截成半个字符', () => {
+    const long = '😀'.repeat(DOCUMENT_TITLE_MAX_LENGTH)
+    const title = copiedDocumentTitle(long)
+    expect(codePointLength(title)).toBe(DOCUMENT_TITLE_MAX_LENGTH)
+    expect(title).toBe('😀'.repeat(DOCUMENT_TITLE_MAX_LENGTH - codePointLength(COPIED_TITLE_SUFFIX)) + COPIED_TITLE_SUFFIX)
+    expect(documentTitleSchema.parse(title)).toBe(title)
+    // 截断处留下的空白去掉，不出现两个空格
+    expect(copiedDocumentTitle(`${'甲'.repeat(DOCUMENT_TITLE_MAX_LENGTH - 5)} 乙`)).toBe(`${'甲'.repeat(DOCUMENT_TITLE_MAX_LENGTH - 5)}${COPIED_TITLE_SUFFIX}`)
   })
 })

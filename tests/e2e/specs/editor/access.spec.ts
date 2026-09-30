@@ -3,7 +3,10 @@ import { randomUUID } from 'node:crypto'
 import { createDocument, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { editorSurface, waitForEditor } from '../../support/sheet.ts'
+import { EDITOR_TEST_TIMEOUT, editorSurface, waitForEditor } from '../../support/sheet.ts'
+
+// 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
+test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
 test.describe('US-M1-08 编辑器页：别人的与不存在的相同，未登录先登录', () => {
   test('别人的文档与不存在的文档：编辑器页显示相同的说明，不进入编辑', async ({ page }) => {

@@ -4,7 +4,10 @@ import { SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { createDocument, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { appendSheet, cellOf, createSheetThroughApi, openCellEditor, openEditor, saveAndWait, saveButton, savedContent, saveStatus, selectCell, typeInCell } from '../../support/sheet.ts'
+import { appendSheet, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openCellEditor, openEditor, saveAndWait, saveButton, savedContent, saveStatus, selectCell, typeInCell } from '../../support/sheet.ts'
+
+// 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
+test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
 /** 拦住保存的请求，直到调用返回的 release：用来观察"保存中"与保存期间的修改 */
 async function holdSaves(page: Page): Promise<() => void> {

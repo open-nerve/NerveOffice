@@ -6,6 +6,21 @@ import { revisionFromEtag, SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { e2eOrigin } from './environment.ts'
 import { expect } from './fixtures.ts'
 
+/**
+ * 要打开编辑器的用例，整份 spec 用这个时限（M2-P4 复验 G3）：
+ * 在 spec 的开头写 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })。
+ *
+ * Playwright 默认的 30 秒对这些用例不够用：一份用例要开一到两次编辑器（下载 SDK、起公式 Worker、画完表格），
+ * 再键入、保存、逐项核对，而里面单独一步的时限就已经是 30 秒（下面的 waitForEditor）——用例的总时限反倒成了最紧的那一道。
+ * 本机实测（2026-09-30 两次全跑，chromium、chrome、webkit，取每份 spec 最慢的那一个用例的较大值）：
+ * editor/read-only 12.7 秒、editor/features 10.5 秒、editor/conflict 8.3 秒、editor/reopen 7.1 秒，
+ * 其余（csp、documents/copy、template、save、create、session、access）都在 6.2 秒以内；
+ * 满载的本机上 conflict 出现过一次"点保存 30 秒超时"（重跑通过）。CI 的机器比本机慢好几倍，30 秒的余量不到 4 倍。
+ * 时限只用来发现卡住的用例，所以按本机最慢的那一份留二十倍上下的余量，取 4 分钟
+ * （与 lint 自测同一个做法，见 tools/src/lint/lint-rules.test.ts 的 LINT_TIMEOUT）。不用重试掩盖：出现重试即记为不稳定（规范 §8.4）。
+ */
+export const EDITOR_TEST_TIMEOUT = 240_000
+
 const SHEET = SHEET_TEMPLATE.sheets['sheet-1']
 const GEOMETRY = {
   rowHeader: SHEET.rowHeader.width,

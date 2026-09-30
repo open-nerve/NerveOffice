@@ -6,14 +6,14 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { describeError, isAccessDenied, isMissingResource } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
-import { spaceMembersPath } from '../../shared/lib/space-paths.ts'
+import { folderIdsFromPath, spaceMembersPath } from '../../shared/lib/space-paths.ts'
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
 import { Alert, AlertDescription, Badge, Button, buttonVariants, Input, Label, Skeleton } from '../../shared/ui/index.ts'
 import { sessionQueryOptions } from '../auth/index.ts'
-import { DocumentList, NewSheetButton } from '../documents/index.ts'
+import { NewSheetButton, SpaceContents, useOrganizeRefresh } from '../documents/index.ts'
 import { useForgetMissingSpace } from './missing-space.ts'
 import { SpaceNotFound } from './space-not-found.tsx'
-import { renameSpace, spaceQueryOptions, SPACES_QUERY_KEY } from './spaces-api.ts'
+import { renameSpace, spaceQueryOptions, SPACES_QUERY_KEY, spacesQueryOptions } from './spaces-api.ts'
 
 const text = messages.spaces
 
@@ -84,22 +84,13 @@ function useFocusTitleAfterPermissionChange(permissions: SpacePermissions, title
 }
 
 /** 页头：名称（个人空间显示"我的空间"）、类型与状态、我的角色；只显示能做的操作（新建表格、成员、改名） */
-function SpaceHeader({ space }: { readonly space: SpaceView }) {
-  const queryClient = useQueryClient()
+function SpaceHeader({ space, folderId, onDenied }: { readonly space: SpaceView, readonly folderId: string | null, readonly onDenied: () => void }) {
   const [renaming, setRenaming] = useState(false)
   const titleRef = useRef<HTMLHeadingElement>(null)
   const renameRef = useRef<HTMLButtonElement>(null)
   const focusAfterRender = useFocusAfterRender()
   const personal = space.type === 'personal'
   useFocusTitleAfterPermissionChange(space.permissions, titleRef)
-
-  /**
-   * 页内的操作（新建表格、改名）按访问权限被拒绝：页头显示的权限已经过时，重新请求（M2-P2 复验），连同导航（归档的标记）。
-   * 空间看不到了（404）时由空间页说明"空间不存在"（useForgetMissingSpace 另外刷新导航、去掉这个空间的缓存）
-   */
-  function refreshAfterDenied(): void {
-    void queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY })
-  }
 
   function doneRenaming(): void {
     setRenaming(false)
@@ -129,10 +120,11 @@ function SpaceHeader({ space }: { readonly space: SpaceView }) {
           {space.permissions.canRename && !renaming && (
             <Button ref={renameRef} variant="outline" onClick={() => setRenaming(true)}>{text.rename}</Button>
           )}
-          {space.permissions.canCreateDocuments && <NewSheetButton spaceId={space.id} onDenied={refreshAfterDenied} />}
+          {/* 新建到当前位置：在文件夹里时建进那个文件夹（M2-P4） */}
+          {space.permissions.canCreateDocuments && <NewSheetButton spaceId={space.id} folderId={folderId} onDenied={onDenied} />}
         </div>
       </div>
-      {renaming && <RenameForm space={space} onDone={doneRenaming} onDenied={refreshAfterDenied} />}
+      {renaming && <RenameForm space={space} onDone={doneRenaming} onDenied={onDenied} />}
       {space.status === 'archived' && (
         <Alert>
           <AlertDescription>{text.archivedNotice}</AlertDescription>
@@ -148,10 +140,29 @@ function SpaceHeader({ space }: { readonly space: SpaceView }) {
  * 重新请求得到 404 就按看不到显示，不再显示旧的页头与文档（审查 B1）；导航与这个空间的缓存随之更新。
  * 页内的新建与改名被拒绝之后页头重新请求，同样按这里的状态显示（复验）。
  */
-function SpaceContent({ spaceId }: { readonly spaceId: string }) {
+function SpaceContent({ spaceId, folderIds = [] }: { readonly spaceId: string, readonly folderIds?: readonly string[] }) {
+  const queryClient = useQueryClient()
   const space = useQuery(spaceQueryOptions(spaceId))
+  // 导航已经请求过"我能看到的空间"：移动与复制的目标候选直接用它（服务端给的 canCreateDocuments），共用同一份缓存。
+  // 由这里取、往下传，而不是在 features/documents 里取：那会让 documents 反向引用 spaces，两个功能成环。
+  // refetchOnMount 关掉：这里只是读导航已经加载的那一份，什么时候重新请求由导航决定；
+  // 否则每打开一个空间页都会顺带刷新导航，"已打开的页面里再进来才发现看不到"（M2-P2 审查 B1）就走不到了
+  const spaces = useQuery({ ...spacesQueryOptions(), refetchOnMount: false })
+  const targetSpaces = (spaces.data?.items ?? []).filter(item => item.permissions.canCreateDocuments)
   const missing = isMissingResource(space.error)
+  const refreshOrganize = useOrganizeRefresh()
   useForgetMissingSpace(spaceId, missing)
+
+  /**
+   * 页内的操作按访问权限被拒绝（403、404）：页面显示的权限已经过时，重新请求（M2-P2 复验）——
+   * 页头与导航（归档的标记），以及这个空间里各层的文件夹与文档（被拒绝的那一行可能已经不在了，它们的 permissions 也过时了，
+   * M2-P4 审查建议 2）。空间看不到了（404）时另由 useForgetMissingSpace 去掉这个空间的缓存、页面说明"空间不存在"
+   */
+  function refreshAfterDenied(): void {
+    void queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY })
+    void refreshOrganize([spaceId])
+  }
+
   if (space.isPending) {
     return (
       <div role="status" aria-label={text.loading} className="flex flex-col gap-3">
@@ -175,8 +186,13 @@ function SpaceContent({ spaceId }: { readonly spaceId: string }) {
   }
   return (
     <section className="flex flex-col gap-4" aria-labelledby="space-title">
-      <SpaceHeader space={space.data} />
-      <DocumentList spaceId={space.data.id} />
+      <SpaceHeader space={space.data} folderId={folderIds.at(-1) ?? null} onDenied={refreshAfterDenied} />
+      <SpaceContents
+        space={space.data}
+        folderIds={folderIds}
+        targetSpaces={targetSpaces}
+        onDenied={refreshAfterDenied}
+      />
     </section>
   )
 }
@@ -188,8 +204,11 @@ export function HomePage() {
   return personal === undefined ? null : <SpaceContent key={personal.id} spaceId={personal.id} />
 }
 
-/** 任意空间：/spaces/{id}（M2-P2 设计 §3.10）。换了空间就重新开始（输入框、改名的状态不带到别的空间） */
+/**
+ * 任意空间：/spaces/{id}，以及它里面的某个文件夹 /spaces/{id}/folders/{id 路径}（M2-P2 设计 §3.10，M2-P4 设计 §3.7）。
+ * 换了空间就重新开始（输入框、改名的状态不带到别的空间）；在同一个空间里换文件夹只换内容区，页头不重来
+ */
 export function SpacePage() {
-  const { spaceId = '' } = useParams()
-  return <SpaceContent key={spaceId} spaceId={spaceId} />
+  const { spaceId = '', '*': splat } = useParams()
+  return <SpaceContent key={spaceId} spaceId={spaceId} folderIds={folderIdsFromPath(splat)} />
 }

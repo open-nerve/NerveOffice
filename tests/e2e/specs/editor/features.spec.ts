@@ -5,7 +5,10 @@ import type { Page } from '@playwright/test'
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { appendSheet, cellOf, createSheetThroughApi, openEditor, resourceOf, ribbon, saveAndWait, savedContent, saveStatus, selectCell, selectRange, typeInCell, waitForEditor } from '../../support/sheet.ts'
+import { appendSheet, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openEditor, resourceOf, ribbon, saveAndWait, savedContent, saveStatus, selectCell, selectRange, typeInCell, waitForEditor } from '../../support/sheet.ts'
+
+// 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
+test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
 const FIRST_SHEET = 'sheet-1'
 

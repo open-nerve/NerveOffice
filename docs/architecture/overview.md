@@ -51,9 +51,14 @@ apps/api/src/
                   修改密码、按人撤销会话、邀请注册与重置密码的一次性令牌与尝试限流（M2-P1，ADR-013）
     admin/        系统管理的接口与跨模块的编排：账户、邀请、重置链接、审计查询（M2-P1）；团队空间的创建、全员可见、归档与恢复，
                   停用接上收回写入权，停用者文档的转移（M2-P2）；只给系统管理员
-    workspace/    面向成员的空间接口与编排（M2-P2）：我能看到的空间、空间页头、成员的查看与管理、改名；授权经 documents 的访问策略
+    workspace/    面向成员的空间接口与编排（M2-P2）：我能看到的空间、空间页头、成员的查看与管理、改名；
+                  文件夹、文档的整理与复制、回收站、按标题搜索（M2-P4）；授权经 documents 的访问策略
     documents/    文档：按空间列出与读取、新建到指定空间（模板快照、requestId 幂等）、内容的读取与保存（ADR-011）；有效权限的唯一入口与
-                  "可访问文档"的条件、writeEpoch 与收回写入权的入口、转移（M2-P2，ADR-014）
+                  "可访问文档"的条件（范围与状态两维）、writeEpoch 与收回写入权的入口、转移（M2-P2，ADR-014）；
+                  文件夹（层数存列、最多 10 层）、改名与移动与复制、回收站的删除单元与恢复、永久删除、按标题搜索（M2-P4，ADR-016）；
+                  同一个空间里的结构性改动由空间树的 advisory lock 串行，保存内容不取这把锁
+    jobs/         应用内的定时任务（M2-P4，ADR-016）：回收站到期的自动清理。只做"按时触发 + 防重复执行"（会话级 advisory lock），
+                  删除的语义在 documents；时钟可注入，测试不必等 30 天
     web-hosting/  托管前端产物；/api 以外的其他请求得到统一的 404
   db/
     schema/<模块>/  各模块的表定义；schema/common 是表定义共用的写法（枚举的 CHECK、bytea）
@@ -109,6 +114,11 @@ apps/api/src/
 | `/api/spaces/{id}/members`（GET、POST）、`/api/spaces/{id}/members/{userId}`（PUT、DELETE） | 成员（M2-P2）：查看（有空间角色的人、系统管理员）、添加、调整角色、移出（空间管理员、系统管理员）；至少保留一个空间管理员 |
 | `/api/admin/spaces`、`/api/admin/spaces/{id}/{visibility,archive,restore}` | 系统管理（M2-P2）：团队空间的列表、创建（连同首个空间管理员）、全员可见、归档与恢复 |
 | `GET /api/admin/users/{id}`、`GET /api/admin/users/{id}/documents`、`POST …/documents/transfer` | 系统管理（M2-P2）：一个账户；停用者个人空间里的文档（只有标题）与整批转移 |
+| `GET /api/folders?spaceId=&parentId=`、`POST /api/folders`、`PATCH /api/folders/{id}`、`POST /api/folders/{id}/move` | 文件夹（M2-P4）：列出一层（上限 500，超出给 `truncated`）、新建（`requestId` 幂等）、改名与同空间移动、跨空间移动（源空间的空间管理员 + 目标空间的新建权限）。最多 10 层，层数存在列里；同一个文件夹里允许同名 |
+| `PATCH /api/documents/{id}`、`POST /api/documents/{id}/move`、`POST /api/documents/{id}/copy` | 文档的整理（M2-P4）：改名与同空间移动（不动写入代次与更新时间）、跨空间移动（代次加一、收回写入权）、复制（直接复制压缩字节，`unitId` 不变，副本是一份新文档） |
+| `DELETE /api/documents/{id}`、`DELETE /api/folders/{id}` | 删除（M2-P4）：进所在空间的回收站，生成一个删除单元；编辑者只能删本人创建的文档，以及里面只有本人创建的文档的文件夹 |
+| `GET /api/trash?spaceId=&cursor=`、`POST /api/trash/{id}/restore`、`DELETE /api/trash/{id}` | 回收站（M2-P4，ADR-016）：按空间列出删除单元、整单恢复（原位置不在时回到空间根目录并带标志）、永久删除（连带处理子树里别的单元） |
+| `GET /api/search?query=&cursor=` | 按标题搜索我能访问的文档（M2-P4）：不区分大小写，通配符按字面量匹配；不含回收站里的；结果带所在空间与文件夹路径 |
 
 **错误**（ADR-006）：
 - 响应统一为 `{ "error": { "code", "message", "requestId", "details"? } }`；错误码登记在 contracts，每个错误码对应固定的 HTTP 状态；`details` 按错误码约定结构（例如修订号冲突）。

@@ -4,7 +4,10 @@ import { createUser } from '../../support/database.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, openEditor, saveAndWait, savedContent, selectCell, typeInCell } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openEditor, saveAndWait, savedContent, selectCell, typeInCell } from '../../support/sheet.ts'
+
+// 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
+test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
 /** M0 定稿的策略（00 号计划书 §11.3），与 security/csp.spec.ts 相同 */
 const CONTENT_SECURITY_POLICY = 'default-src \'self\'; img-src \'self\' data: blob:; connect-src \'self\'; font-src \'self\'; style-src \'self\' \'unsafe-inline\'; script-src \'self\'; worker-src \'self\'; frame-ancestors \'none\'; base-uri \'self\'; form-action \'self\''

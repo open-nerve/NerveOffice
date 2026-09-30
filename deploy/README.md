@@ -89,8 +89,19 @@ docker compose -f deploy/test/compose.yaml exec -T app \
 | `NERVE_TEST_DB_PORT` | 发布到本机回环的数据库端口，默认 54319，供测试数据与排查使用 |
 | `NERVE_LOG_LEVEL` | 日志级别，默认 `info` |
 | `NERVE_LOGIN_IP_MAX_FAILURES` | 按客户端地址的登录失败上限（15 分钟窗口），默认 50 |
+| `NERVE_TRASH_PURGE_ENABLED` | 回收站的自动清理开关，默认 `true`（只认 `true` 与 `false`） |
+| `NERVE_TRASH_PURGE_INTERVAL_MS` | 两轮清理之间的间隔，默认 3600000（1 小时），实际触发时间带 ±10% 的随机抖动 |
+| `NERVE_TRASH_PURGE_BATCH` | 一轮最多清理多少个删除单元，默认 50 |
 
 三个密码只在第一次初始化数据卷时生效；之后要改，先 `down -v` 删除数据卷。应用的其余配置（`NERVE_*`）见 `apps/api/src/modules/config/config.ts`，未知的 `NERVE_*` 变量会让应用拒绝启动。
+
+### 回收站的自动清理
+
+删掉的东西在回收站里留 30 天，到期后由**应用自己**永久删除（不是数据库的任务，也不用 cron）：每个实例启动后按间隔跑一轮，一轮先取一把数据库的 advisory lock（`nerve-office:trash-purge`），拿不到就跳过这一轮，将来多实例时也只有一个在清理；取一批到期的，逐个在各自的短事务里删掉，单个失败只记日志、不影响这一轮的其他条目，下一轮再试。审计里这些记录的操作者是系统、来源是定时任务（`source = job`）。
+
+- 日志：`{"job":"trash-purge"}`，启动时一条"回收站的自动清理已启动"，清掉东西时一条"清理了回收站里到期的东西"（带 `purged`、`skipped`、`failed`）。
+- 排查数据、做数据迁移时可以临时关掉：`NERVE_TRASH_PURGE_ENABLED=false` 后重启应用（日志里会写明已关闭）。关掉期间到期的东西留在回收站里，重新打开之后下一轮会一起清掉；人工的永久删除不受影响。
+- 清理只用增删改查，受限的 `nerve_app` 角色够用，不需要额外授权。
 
 ## 数据库角色
 

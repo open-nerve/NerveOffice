@@ -5,13 +5,17 @@ import { Injectable } from '@nestjs/common'
  * 收回写入权的范围（M2-P2 设计 §3.7）：
  * - user：某人（停用账户）；
  * - membership：某人在某个空间（移出空间、调整空间角色）；
- * - space：整个空间（归档）。
+ * - space：整个空间（归档）；
+ * - documents：这些文档上的所有人（跨空间移动：权限随之改变，00 号计划书 §5.4；M2-P4 的删除同样用它）。
+ *   一次给一批而不是逐份调用：文件夹连同子树跨空间移动时一次就是整棵子树里的文档，
+ *   M3 接租约之后可以一条语句终止它们的租约，调用方不必循环（M2-P4 S2b）。
  * P5 加上某人在某份文档（取消或降低单独授权）。
  */
 export type WriteAccessScope
   = | { readonly kind: 'user', readonly userId: string }
     | { readonly kind: 'membership', readonly userId: string, readonly spaceId: string }
     | { readonly kind: 'space', readonly spaceId: string }
+    | { readonly kind: 'documents', readonly documentIds: readonly string[] }
 
 /**
  * 收回写入权的入口（M2 总设计 §2.1 第 8 条，00 号计划书 §6.4）：撤权、移出空间、停用账户、归档都经这里，

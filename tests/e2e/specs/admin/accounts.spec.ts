@@ -177,7 +177,7 @@ test.describe('US-M2-03 重置密码', () => {
     await anotherDevice.getByRole('button', { name: '设置新密码并登录' }).click()
     await expect(anotherDevice.getByRole('heading', { name: '我的空间' })).toBeVisible()
 
-    await anotherDevice.getByRole('button', { name: '退出' }).click()
+    await anotherDevice.getByRole('button', { name: '退出', exact: true }).click()
     await loginThroughUi(anotherDevice, user)
     await expect(anotherDevice.getByRole('alert')).toHaveText('用户名或密码错误')
     await loginThroughUi(anotherDevice, { username: user.username, password: NEW_PASSWORD })

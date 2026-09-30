@@ -15,6 +15,21 @@ describe('负载摘要', () => {
     expect(createdPayloadDigest('sheet', '周报', undefined)).toEqual(createdPayloadDigest('sheet', '周报'))
   })
 
+  it('新建到指定的文件夹：末尾再加上文件夹 id；没有指定空间时空间那一段留空，与只指定空间分得开', () => {
+    const spaceId = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0e'
+    const folderId = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0f'
+    expect(createdPayloadDigest('sheet', '周报', spaceId, folderId)).toEqual(createHash('sha256').update(`created\nsheet\n周报\n${spaceId}\n${folderId}`).digest())
+    expect(createdPayloadDigest('sheet', '周报', undefined, folderId)).toEqual(createHash('sha256').update(`created\nsheet\n周报\n\n${folderId}`).digest())
+    // 位置的四种组合两两不同：同一个 requestId 换了位置就不是同一个请求
+    const digests = [
+      createdPayloadDigest('sheet', '周报'),
+      createdPayloadDigest('sheet', '周报', spaceId),
+      createdPayloadDigest('sheet', '周报', undefined, folderId),
+      createdPayloadDigest('sheet', '周报', spaceId, folderId),
+    ]
+    expect(new Set(digests.map(digest => digest.toString('hex'))).size).toBe(4)
+  })
+
   it('保存：sha256("saved\\n" + 基准修订号 + "\\n" + 解压后的字节)', () => {
     const raw = Buffer.from('{"id":"u"}', 'utf8')
     expect(savedPayloadDigest(3, raw)).toEqual(createHash('sha256').update('saved\n3\n{"id":"u"}').digest())

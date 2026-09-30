@@ -375,6 +375,14 @@ const API_DOCUMENT_TRANSFER = {
   importNames: ['DocumentTransferService'],
   message: '停用者文档的转移（DocumentTransferService）不经内容权限，只由管理界面的模块（modules/admin）调用（M2-P2 审查 A9）',
 }
+// 到期的回收站清理（TrashPurgeService）不判断人的权限（操作者是系统，归档的空间照样清，M2-P4 设计 §3.1）：
+// 只由定时任务的模块（modules/jobs）调用，人工的永久删除走 TrashService.purge。写法同上：静态导入、import type、
+// 再导出与命名空间导入都拦下
+const API_TRASH_PURGE = {
+  regex: String.raw`(?:^|/)documents/index\.ts$`,
+  importNames: ['TrashPurgeService'],
+  message: '到期的回收站清理（TrashPurgeService）不判断人的权限，只由定时任务的模块（modules/jobs）调用（M2-P4 设计 §3.1）',
+}
 
 /** 后端文件允许的例外。 */
 interface ApiFileKind {
@@ -392,6 +400,8 @@ interface ApiFileKind {
   processEnv?: boolean
   /** 引用停用者文档的转移 DocumentTransferService（管理界面的模块与 documents 模块） */
   documentTransfer?: boolean
+  /** 引用到期的回收站清理 TrashPurgeService（定时任务的模块与 documents 模块） */
+  trashPurge?: boolean
 }
 
 function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
@@ -408,6 +418,7 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
     ...(kind.tables === true ? [] : [API_TABLES]),
     ...(kind.controller === true ? [API_REPOSITORY_FROM_CONTROLLER, API_TRANSACTIONS_FROM_CONTROLLER] : []),
     ...(kind.documentTransfer === true ? [] : [API_DOCUMENT_TRANSFER]),
+    ...(kind.trashPurge === true ? [] : [API_TRASH_PURGE]),
   ]
   const syntax = [
     ...BASE_RESTRICTED_SYNTAX,
@@ -571,9 +582,11 @@ export default antfu(
   },
   // 后端：先是所有文件的限制，后面的块按文件类型放开各自需要的部分（后面的块覆盖前面的同名规则）
   { name: 'nerve/api', files: ['apps/api/src/**/*.ts'], rules: apiRules() },
-  // 管理界面的模块（与 documents 模块自己）可以引用停用者文档的转移（M2-P2 审查 A9）。紧跟在上一块之后：
-  // 后面按文件类型的块（控制器、仓储等）照常拦下，它们不需要它
-  { name: 'nerve/api-document-transfer', files: ['apps/api/src/modules/admin/**/*.ts', 'apps/api/src/modules/documents/**/*.ts'], rules: apiRules({ documentTransfer: true }) },
+  // 管理界面的模块可以引用停用者文档的转移（M2-P2 审查 A9），定时任务的模块可以引用到期的回收站清理（M2-P4 设计 §3.1）；
+  // documents 模块自己两样都可以。紧跟在上一块之后：后面按文件类型的块（控制器、仓储等）照常拦下，它们不需要
+  { name: 'nerve/api-document-transfer', files: ['apps/api/src/modules/admin/**/*.ts'], rules: apiRules({ documentTransfer: true }) },
+  { name: 'nerve/api-trash-purge', files: ['apps/api/src/modules/jobs/**/*.ts'], rules: apiRules({ trashPurge: true }) },
+  { name: 'nerve/api-documents', files: ['apps/api/src/modules/documents/**/*.ts'], rules: apiRules({ documentTransfer: true, trashPurge: true }) },
   // app 层的程序接口（index.ts）为集成测试转出数据库句柄；app 层的其他文件同样拿不到（复验 N6）
   { name: 'nerve/api-app-entry', files: ['apps/api/src/app/index.ts'], rules: apiRules({ databaseHandles: true }) },
   { name: 'nerve/api-database', files: ['apps/api/src/modules/database/**/*.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true }) },
@@ -829,6 +842,40 @@ export default antfu(
               dependency: { nodeKind: 'dynamic-import' },
             },
           },
+          // 回收站页同样按需加载（M2-P4 设计 §3.7）：它带着确认的弹窗，只有要找回删掉的东西时才用
+          {
+            from: [
+              { element: { type: 'web-app' } },
+              { element: { type: 'web-entry' } },
+              { element: { type: 'web-feature' } },
+            ],
+            disallow: { to: { element: { type: 'web-feature', captured: { feature: 'trash' } } } },
+            message: '回收站页（features/trash）按需加载：只有 app/routes.ts 可以动态 import() 它的公开入口，静态引用会把它带进平台页面的首屏（M2-P4 设计 §3.7）',
+          },
+          {
+            from: { element: { type: 'web-app', fileInternalPath: 'routes.ts' } },
+            allow: {
+              to: { element: { type: 'web-feature', captured: { feature: 'trash' }, fileInternalPath: PUBLIC_ENTRY } },
+              dependency: { nodeKind: 'dynamic-import' },
+            },
+          },
+          // 搜索结果页同样按需加载（M2-P4 设计 §3.7）：页头的搜索框只带着关键词跳过去，结果的渲染不进首屏
+          {
+            from: [
+              { element: { type: 'web-app' } },
+              { element: { type: 'web-entry' } },
+              { element: { type: 'web-feature' } },
+            ],
+            disallow: { to: { element: { type: 'web-feature', captured: { feature: 'search' } } } },
+            message: '搜索结果页（features/search）按需加载：只有 app/routes.ts 可以动态 import() 它的公开入口，静态引用会把它带进平台页面的首屏（M2-P4 设计 §3.7）',
+          },
+          {
+            from: { element: { type: 'web-app', fileInternalPath: 'routes.ts' } },
+            allow: {
+              to: { element: { type: 'web-feature', captured: { feature: 'search' }, fileInternalPath: PUBLIC_ENTRY } },
+              dependency: { nodeKind: 'dynamic-import' },
+            },
+          },
           // 确认的弹窗带着 Radix Dialog（约 12 KiB gzip）：只由按需加载的功能（管理界面、成员页）引用，
           // 首屏的页面、应用层与入口引用它会把弹窗带进平台页面的首屏（ADR-008，M2-P2 设计 §3.10）。
           // 下面三条都只管平台页面：编辑器页（它的入口与 sheet-editor）是另一个包，有自己的预算（M2-P2 复验）
@@ -836,10 +883,10 @@ export default antfu(
             from: [
               { element: { type: 'web-app' } },
               { element: { type: 'web-entry', captured: { entry: '!editor' } } },
-              { element: { type: 'web-feature', captured: { feature: '!{admin,members,sheet-editor}' } } },
+              { element: { type: 'web-feature', captured: { feature: '!{admin,members,trash,sheet-editor}' } } },
             ],
             disallow: { to: { element: { type: 'web-feature', captured: { feature: 'confirmation' } } } },
-            message: '确认的弹窗（features/confirmation，带 Radix Dialog）只由按需加载的功能（features/admin、features/members）引用，不进平台页面的首屏（ADR-008）',
+            message: '确认的弹窗（features/confirmation，带 Radix Dialog）只由按需加载的功能（features/admin、features/members、features/trash）引用，不进平台页面的首屏（ADR-008）',
           },
           // 弹窗的文件本身（shared/ui/dialog.tsx，Radix Dialog）同样只由按需加载的功能直接引用（M2-P2 审查 B8）：功能、应用层与入口引用共享层本来是允许的，
           // 这里在允许的策略之后覆盖。shared 内部的中转另由 nerve/web-ui-heavy-components 拦下
@@ -847,10 +894,10 @@ export default antfu(
             from: [
               { element: { type: 'web-app' } },
               { element: { type: 'web-entry', captured: { entry: '!editor' } } },
-              { element: { type: 'web-feature', captured: { feature: '!{admin,members,confirmation,sheet-editor}' } } },
+              { element: { type: 'web-feature', captured: { feature: '!{admin,members,trash,confirmation,sheet-editor}' } } },
             ],
             disallow: { to: { element: { type: 'web-shared', fileInternalPath: 'ui/dialog.tsx' } } },
-            message: '弹窗（shared/ui/dialog.tsx，带 Radix Dialog）只由按需加载的功能（features/admin、features/members、features/confirmation）引用：首屏的功能、应用层与入口引用它会把弹窗带进平台页面的首屏（ADR-008，M2-P2 审查 B8）',
+            message: '弹窗（shared/ui/dialog.tsx，带 Radix Dialog）只由按需加载的功能（features/admin、features/members、features/trash、features/confirmation）引用：首屏的功能、应用层与入口引用它会把弹窗带进平台页面的首屏（ADR-008，M2-P2 审查 B8）',
           },
           // 按关键词选一项（features/colleagues：按名字选同事、选团队空间）只给按需加载的管理界面与成员页用（M2-P2 设计 §3.10，审查 B8）
           {

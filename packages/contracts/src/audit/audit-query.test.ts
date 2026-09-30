@@ -6,7 +6,8 @@ describe('审计查询', () => {
     expect(auditEventQuerySchema.parse({})).toEqual({})
     expect(auditEventQuerySchema.safeParse({ action: 'users.disabled', targetType: 'user' }).success).toBe(true)
     expect(auditEventQuerySchema.safeParse({ action: 'users.deleted' }).success).toBe(false)
-    expect(auditEventQuerySchema.safeParse({ targetType: 'folder' }).success).toBe(false)
+    expect(auditEventQuerySchema.safeParse({ targetType: 'folder' }).success).toBe(true)
+    expect(auditEventQuerySchema.safeParse({ targetType: 'comment' }).success).toBe(false)
   })
 
   it('时间是 ISO 8601，id 是 UUID；多出来的参数不合法', () => {

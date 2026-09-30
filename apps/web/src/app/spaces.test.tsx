@@ -5,7 +5,7 @@ import type { SessionResponse, SpaceMember, SpaceMemberListResponse, SpaceRole, 
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { apiError, installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
-import { documentsKey, personalSpaceOf, spaceRoutes } from '../shared/testing/spaces.test-support.ts'
+import { documentsKey, foldersKey, noFolders, personalSpaceOf, spaceRoutes } from '../shared/testing/spaces.test-support.ts'
 import { deferred, settle } from './admin.test-support.ts'
 import { currentPath, renderApp } from './render-app.test-support.tsx'
 
@@ -25,12 +25,12 @@ function team(changes: Partial<SpaceView> = {}): SpaceView {
     status: 'active',
     visibleToAll: false,
     role: 'editor',
-    permissions: { canCreateDocuments: true, canViewMembers: true, canManageMembers: false, canRename: false },
+    permissions: { canCreateDocuments: true, canCreateFolders: true, canViewMembers: true, canManageMembers: false, canRename: false, canPurgeTrash: false },
     ...changes,
   }
 }
 
-const MANAGER = team({ role: 'admin', permissions: { canCreateDocuments: true, canViewMembers: true, canManageMembers: true, canRename: true } })
+const MANAGER = team({ role: 'admin', permissions: { canCreateDocuments: true, canCreateFolders: true, canViewMembers: true, canManageMembers: true, canRename: true, canPurgeTrash: true } })
 
 const WEEKLY = { id: '0199a2c4-0000-7000-8000-0000000000d1', title: '周报', type: 'sheet', createdAt: '2026-09-29T01:00:00.000Z', updatedAt: '2026-09-29T02:00:00.000Z' }
 
@@ -49,6 +49,7 @@ function loggedIn(view: SpaceView = team(), extra: Parameters<typeof installFake
     [documentsKey(SESSION)]: () => json(200, { items: [], nextCursor: null }),
     [`GET /api/spaces/${TEAM_ID}`]: () => json(200, view),
     [teamDocumentsKey()]: () => json(200, { items: [], nextCursor: null }),
+    [foldersKey(TEAM_ID)]: noFolders(),
     ...extra,
   })
 }
@@ -127,7 +128,7 @@ describe('US-M2-05 空间页', () => {
   })
 
   it('查看者与归档的空间：没有新建表格；归档的另有说明', async () => {
-    loggedIn(team({ status: 'archived', role: 'viewer', permissions: { canCreateDocuments: false, canViewMembers: true, canManageMembers: false, canRename: false } }))
+    loggedIn(team({ status: 'archived', role: 'viewer', permissions: { canCreateDocuments: false, canCreateFolders: false, canViewMembers: true, canManageMembers: false, canRename: false, canPurgeTrash: false } }))
     renderApp(`/spaces/${TEAM_ID}`)
     expect(await screen.findByText('这个空间已归档，只能查看。')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '新建表格' })).not.toBeInTheDocument()
@@ -175,7 +176,7 @@ describe('US-M2-05 空间页', () => {
   })
 
   it('新建表格：建在这个空间里', async () => {
-    const created = { id: '0199a2c4-0000-7000-8000-0000000000d9', title: '未命名表格', type: 'sheet', createdAt: '2026-09-29T01:00:00.000Z', updatedAt: '2026-09-29T01:00:00.000Z', spaceId: TEAM_ID, space: { id: TEAM_ID, type: 'team', name: '市场部' }, revision: 1, profile: 'sheet@1', formatVersion: 1, permissions: { canEdit: true } }
+    const created = { id: '0199a2c4-0000-7000-8000-0000000000d9', title: '未命名表格', type: 'sheet', createdAt: '2026-09-29T01:00:00.000Z', updatedAt: '2026-09-29T01:00:00.000Z', spaceId: TEAM_ID, space: { id: TEAM_ID, type: 'team', name: '市场部' }, folderId: null, revision: 1, profile: 'sheet@1', formatVersion: 1, permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true } }
     const api = loggedIn(team(), { 'POST /api/documents': () => json(201, created) })
     const app = renderApp(`/spaces/${TEAM_ID}`)
     fireEvent.click(await screen.findByRole('button', { name: '新建表格' }))
@@ -214,7 +215,7 @@ describe('US-M2-05 空间页', () => {
 })
 
 /** 空间刚被归档之后的页头：所有人只能查看 */
-const ARCHIVED = team({ status: 'archived', role: 'viewer', permissions: { canCreateDocuments: false, canViewMembers: true, canManageMembers: false, canRename: false } })
+const ARCHIVED = team({ status: 'archived', role: 'viewer', permissions: { canCreateDocuments: false, canCreateFolders: false, canViewMembers: true, canManageMembers: false, canRename: false, canPurgeTrash: false } })
 
 /**
  * 空间管理员打开空间页。新建表格与改名被拒绝时，空间已经变成 after：归档之后的页头（服务端 403），或者看不到了（undefined，404）；

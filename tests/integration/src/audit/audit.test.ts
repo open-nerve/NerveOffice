@@ -106,7 +106,7 @@ describe('审计事件', () => {
   })
 
   it.each([
-    ['未登记的动作', '(\'documents.deleted\', \'system\', NULL, \'cli\', NULL, NULL)'],
+    ['未登记的动作', '(\'documents.archived\', \'system\', NULL, \'cli\', NULL, NULL)'],
     ['用户操作者没有 id', '(\'auth.logout\', \'user\', NULL, \'cli\', NULL, NULL)'],
     ['HTTP 来源没有请求标识', '(\'auth.logout\', \'system\', NULL, \'http\', NULL, NULL)'],
     ['命令行来源带客户端地址', '(\'auth.logout\', \'system\', NULL, \'cli\', NULL, \'127.0.0.1\')'],

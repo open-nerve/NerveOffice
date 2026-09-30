@@ -5,7 +5,10 @@ import type { Workbook } from '../../support/sheet.ts'
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, editorSurface, hoverCell, openEditor, resourceOf, saveAndWait, savedContent, saveStatus, selectCell, sheetCanvas, typeInCell, waitForEditor } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, editorSurface, hoverCell, openEditor, resourceOf, saveAndWait, savedContent, saveStatus, selectCell, sheetCanvas, typeInCell, waitForEditor } from '../../support/sheet.ts'
+
+// 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
+test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
 /** 值、公式与格式：单元格与样式表 */
 function contentOf(snapshot: Workbook) {
@@ -58,7 +61,7 @@ test.describe('US-M1-06 重开看到最后一次保存的内容', () => {
     await openEditor(page, documentId)
     const saved = await editAndSave(page, documentId)
     await page.getByRole('link', { name: '我的空间' }).click()
-    await page.getByRole('button', { name: '退出' }).click()
+    await page.getByRole('button', { name: '退出', exact: true }).click()
     await expect(page.getByRole('form', { name: '登录' })).toBeVisible()
     await loginThroughUi(page, owner)
     await page.getByRole('list', { name: '文档列表' }).getByRole('link').first().click()

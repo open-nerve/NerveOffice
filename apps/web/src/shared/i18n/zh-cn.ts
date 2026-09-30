@@ -1,5 +1,5 @@
 // 界面文字（规范 §2.4）：简体中文，集中在这里，组件里不散写。服务端的说明只是默认值，界面按错误码显示这里的文字。
-import type { AuditAction, DocumentType, ErrorCode, InvitationStatus, LinkInvalidReason, OneTimeLinkPurpose, SpaceRole, SpaceStatus, SpaceType, UserStatus, UserSystemRole } from '@nerve-office/contracts'
+import type { AuditAction, DocumentType, ErrorCode, InvitationStatus, LinkInvalidReason, OneTimeLinkPurpose, SpaceRole, SpaceStatus, SpaceType, TrashEntryKind, UserStatus, UserSystemRole } from '@nerve-office/contracts'
 
 /** 按错误码显示的提示。没有登记的错误码用服务端的说明。 */
 const ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
@@ -10,6 +10,7 @@ const ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
   CSRF_TOKEN_INVALID: '页面已失效，请刷新后重试',
   ORIGIN_NOT_ALLOWED: '请求来源不被允许，请从本站的地址访问',
   PERMISSION_DENIED: '你没有执行这个操作的权限',
+  FOLDER_HAS_OTHERS_DOCUMENTS: '这个文件夹里有别人创建的文档，只有空间管理员能删除',
   CURRENT_PASSWORD_INCORRECT: '当前密码不正确',
   NOT_FOUND: '内容不存在，或者你没有访问权限',
   LAST_ADMIN: '至少要保留一个有效的系统管理员',
@@ -84,6 +85,18 @@ const AUDIT_ACTION_NAMES: Record<AuditAction, string> = {
   'documents.created': '新建文档',
   'documents.content_saved': '保存文档',
   'documents.transferred': '转移文档',
+  'documents.renamed': '文档改名',
+  'documents.moved': '移动文档',
+  'documents.copied': '复制文档',
+  'documents.deleted': '删除文档',
+  'documents.restored': '恢复文档',
+  'documents.purged': '永久删除文档',
+  'folders.created': '新建文件夹',
+  'folders.renamed': '文件夹改名',
+  'folders.moved': '移动文件夹',
+  'folders.deleted': '删除文件夹',
+  'folders.restored': '恢复文件夹',
+  'folders.purged': '永久删除文件夹',
 }
 
 function isAuditAction(action: string): action is AuditAction {
@@ -93,6 +106,9 @@ function isAuditAction(action: string): action is AuditAction {
 const DOCUMENT_TYPE_NAMES: Record<DocumentType, string> = {
   sheet: '表格',
 }
+
+/** 回收站里一个删除单元的种类（M2-P4）：一份文档，或者一个文件夹连同它的整棵子树 */
+const TRASH_ENTRY_KIND_NAMES: Record<TrashEntryKind, string> = { document: '文档', folder: '文件夹' }
 
 const SPACE_TYPE_NAMES: Record<SpaceType, string> = { personal: '个人空间', team: '团队空间' }
 const SPACE_ROLE_NAMES: Record<SpaceRole, string> = { admin: '空间管理员', editor: '编辑者', viewer: '查看者' }
@@ -340,8 +356,8 @@ export const messages = {
       empty: '没有符合条件的事件',
       columns: { occurredAt: '时间', actor: '操作者', action: '动作', target: '对象', origin: '来源', details: '详情' },
       actorKind: (type: string) => ({ system: '系统', anonymous: '未登录的访问者' } as Record<string, string>)[type] ?? type,
-      source: (source: string) => ({ http: '网页', cli: '命令行' } as Record<string, string>)[source] ?? source,
-      targetKind: (type: string) => ({ user: '账户', space: '空间', document: '文档', invitation: '邀请' } as Record<string, string>)[type] ?? type,
+      source: (source: string) => ({ http: '网页', cli: '命令行', job: '定时任务' } as Record<string, string>)[source] ?? source,
+      targetKind: (type: string) => ({ user: '账户', space: '空间', document: '文档', invitation: '邀请', folder: '文件夹', trash_entry: '回收站条目' } as Record<string, string>)[type] ?? type,
       actionName: (action: string) => (isAuditAction(action) ? AUDIT_ACTION_NAMES[action] : action),
       onlyTarget: '只看这个对象',
       chipActor: (name: string) => `操作者：${name}`,
@@ -435,6 +451,99 @@ export const messages = {
     create: '新建表格',
     creating: '正在新建…',
     createFailed: (reason: string) => `新建表格失败：${reason}`,
+  },
+  /** 文件夹、行内的整理操作与回收站的入口（M2-P4） */
+  organize: {
+    // 面包屑与文件夹
+    breadcrumbLabel: '位置',
+    folderListLabel: '文件夹列表',
+    folderLoading: '正在加载文件夹…',
+    folderLoadFailed: '文件夹列表加载失败',
+    folderTruncated: (max: number) => `这一层的文件夹超过 ${max} 个，只显示前 ${max} 个`,
+    locationNotFound: '这个文件夹不存在，或者你没有访问权限',
+    backToSpaceRoot: '回到空间的根目录',
+    newFolder: '新建文件夹',
+    newFolderName: '文件夹名称',
+    creatingFolder: '正在新建…',
+    createFolderFailed: (reason: string) => `新建文件夹失败：${reason}`,
+    // 行内操作：可读名称一律是"操作 对象"
+    actions: '操作',
+    actionsOn: (name: string) => `操作 ${name}`,
+    loadingActions: '正在确认可以做哪些操作…',
+    actionsFailed: (reason: string) => `没能确认可以做哪些操作：${reason}`,
+    rename: '改名',
+    renameLabel: (name: string) => `${name} 的新名称`,
+    move: '移动',
+    copy: '复制',
+    delete: '删除',
+    save: '保存',
+    saving: '正在保存…',
+    cancel: '取消',
+    // 选目标位置（行内的两级选择：先选空间，再一层层点进文件夹）
+    targetSpace: '目标空间',
+    targetLocation: '目标位置',
+    targetLoading: '正在加载目标位置…',
+    targetLoadFailed: (reason: string) => `目标位置加载失败：${reason}`,
+    targetEmpty: '这里没有子文件夹',
+    enterFolder: (name: string) => `进入 ${name}`,
+    upOneLevel: '上一级',
+    moveHere: '移动到这里',
+    copyHere: '复制到这里',
+    moving: '正在移动…',
+    copying: '正在复制…',
+    sameLocation: '它已经在这里了',
+    // 结果与说明
+    moved: (name: string, location: string) => `已把「${name}」移动到${location}`,
+    copied: (title: string) => `已复制出「${title}」`,
+    openCopy: '打开副本',
+    deleted: (name: string) => `已把「${name}」移到回收站`,
+    deleting: '正在删除…',
+    goToTrash: '打开回收站',
+    trash: '回收站',
+  },
+  trash: {
+    title: '回收站',
+    heading: (space: string) => `${space} 的回收站`,
+    backToSpace: '返回空间',
+    retention: (days: number) => `删除的内容在回收站里保留 ${days} 天，到期后自动永久删除。`,
+    /** 恢复的规则（access-rules.ts 的 trashPermissionsOf）：空间管理员，或者仍有编辑者及以上角色的删除者（审查建议 4） */
+    readOnly: '能恢复的是空间管理员，以及删除它的人（要仍有编辑者及以上的角色）；永久删除只有空间管理员能做。',
+    listLabel: '回收站列表',
+    loading: '正在加载回收站…',
+    loadFailed: '回收站加载失败',
+    empty: '回收站里没有内容',
+    columns: { name: '名称', deletedBy: '删除', origin: '原位置', expiresAt: '到期', actions: '操作' },
+    kindName: (kind: TrashEntryKind) => TRASH_ENTRY_KIND_NAMES[kind],
+    documentCount: (count: number) => `${count} 份文档`,
+    deletedBy: (who: string, time: string) => `${who}，${time}`,
+    unknownUser: '（账户已注销）',
+    originRoot: '空间的根目录',
+    originGone: '原位置已不存在',
+    originIn: (folder: string) => `文件夹「${folder}」`,
+    restore: '恢复',
+    restoring: '正在恢复…',
+    restored: (name: string) => `已恢复「${name}」`,
+    restoredToRoot: (name: string) => `「${name}」原来的位置已经不在了，已恢复到空间的根目录`,
+    purge: '永久删除',
+    confirmPurge: (name: string) => `永久删除「${name}」？`,
+    purgeDescription: '永久删除之后内容就找不回来了，里面的文档与它们的历史一并清除。',
+    purged: (name: string) => `已永久删除「${name}」`,
+    /** 别人已经动过它（恢复或永久删除）：列表刷新之后在上方说明 */
+    gone: '这一条已经不在回收站里了（可能已被别人恢复或永久删除），列表已刷新',
+  },
+  search: {
+    title: '搜索文档',
+    boxLabel: '按标题搜索文档',
+    submit: '搜索',
+    heading: (keyword: string) => `“${keyword}”的搜索结果`,
+    noKeyword: '输入关键词后按“搜索”，按标题查找你能访问的文档。',
+    sortNote: '按标题匹配，最近更新在前。',
+    listLabel: '搜索结果',
+    loading: '正在搜索…',
+    loadFailed: '搜索失败',
+    empty: (keyword: string) => `没有找到标题包含“${keyword}”的文档（回收站里的不算）`,
+    /** 结果里的位置：空间名，以及从空间根目录到它所在文件夹的路径 */
+    location: (space: string, folderPath: readonly string[]) => [space, ...folderPath].join(' / '),
   },
   editor: {
     back: '我的空间',

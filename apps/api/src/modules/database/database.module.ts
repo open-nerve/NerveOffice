@@ -6,6 +6,7 @@ import { APP_CONFIG } from '../config/index.ts'
 import { AppLogger } from '../logging/index.ts'
 import { DatabaseReadiness } from './database-readiness.ts'
 import { createDatabase, DATABASE, PG_POOL } from './database.ts'
+import { ExclusiveRunner } from './exclusive-runner.ts'
 import { createPool } from './pool.ts'
 import { TransactionRunner } from './transaction-runner.ts'
 
@@ -36,8 +37,9 @@ class PoolLifecycle implements OnApplicationShutdown {
     },
     DatabaseReadiness,
     TransactionRunner,
+    ExclusiveRunner,
     PoolLifecycle,
   ],
-  exports: [DATABASE, DatabaseReadiness, TransactionRunner],
+  exports: [DATABASE, DatabaseReadiness, TransactionRunner, ExclusiveRunner],
 })
 export class DatabaseModule {}

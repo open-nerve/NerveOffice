@@ -10,6 +10,7 @@ import { ConfigModule } from '../modules/config/index.ts'
 import { DatabaseModule } from '../modules/database/index.ts'
 import { DocumentsModule } from '../modules/documents/index.ts'
 import { HealthModule } from '../modules/health/index.ts'
+import { JobsModule } from '../modules/jobs/index.ts'
 import { LoggingModule } from '../modules/logging/index.ts'
 import { SpacesModule } from '../modules/spaces/index.ts'
 import { UsersModule } from '../modules/users/index.ts'
@@ -42,6 +43,7 @@ export class AppModule {
         DocumentsModule,
         WorkspaceModule,
         AdminModule,
+        JobsModule,
         ...(options.additionalModules ?? []),
       ],
       // 全局守卫，按注册的顺序执行（P3 设计 §3.5）：先认证（默认拒绝，@Public() 除外），再 CSRF 与 Origin 检查

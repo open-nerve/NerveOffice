@@ -39,6 +39,22 @@ export const AUDIT_ACTIONS = [
   'spaces.admin_joined',
   // M2-P2：停用者个人空间的文档转移到别处；只改所属空间，不读内容，不记标题
   'documents.transferred',
+  // M2-P4：文件夹。details 带名称与原位置、目标位置（不记名称以外的内容）
+  'folders.created',
+  'folders.renamed',
+  'folders.moved',
+  // M2-P4：文档的整理。改名记改动前后的标题；移动记原位置与目标位置（空间与文件夹）；复制记源文档
+  'documents.renamed',
+  'documents.moved',
+  'documents.copied',
+  // M2-P4 S3：回收站。删除记原位置与删除单元；恢复记恢复到的位置与是否回落到根目录；
+  // 永久删除记这一单里的份数与连带删除的单元（到期自动清理时操作者是系统，actor_type = 'system'）
+  'documents.deleted',
+  'documents.restored',
+  'documents.purged',
+  'folders.deleted',
+  'folders.restored',
+  'folders.purged',
 ] as const
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS)
@@ -49,10 +65,13 @@ export type AuditAction = z.infer<typeof auditActionSchema>
 export const AUDIT_ACTOR_TYPES = ['user', 'system', 'anonymous'] as const
 
 /** 操作的对象。新增取值时，同时用迁移更新 CHECK 约束（audit_events.target_type）。 */
-export const AUDIT_TARGET_TYPES = ['user', 'space', 'document', 'invitation'] as const
+export const AUDIT_TARGET_TYPES = ['user', 'space', 'document', 'invitation', 'folder', 'trash_entry'] as const
 
-/** 来源：HTTP 请求或命令行。 */
-export const AUDIT_SOURCES = ['http', 'cli'] as const
+/**
+ * 来源：HTTP 请求、命令行，或应用自己的定时任务（M2-P4 S4 的回收站清理）。
+ * 新增取值时，同时用迁移更新 CHECK 约束（audit_events.source）。
+ */
+export const AUDIT_SOURCES = ['http', 'cli', 'job'] as const
 
 /** 补充信息（details）按 JSON 文本计的上限（字节）。 */
 export const AUDIT_DETAILS_MAX_BYTES = 4096

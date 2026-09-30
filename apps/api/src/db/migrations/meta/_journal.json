@@ -71,6 +71,34 @@
       "when": 1790645118417,
       "tag": "0009_m2_team_spaces",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1790698651216,
+      "tag": "0010_m2_folders_trash",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1790701467959,
+      "tag": "0011_m2_document_organizing",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1790707121751,
+      "tag": "0012_m2_trash",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1790709457716,
+      "tag": "0013_m2_audit_job_source",
+      "breakpoints": true
     }
   ]
 }

@@ -29,7 +29,10 @@ import { expect, test } from '../../support/fixtures.ts'
 import { deleteDrawingKey, pressUniverShortcut } from '../../support/keyboard.ts'
 import { readOnlySampleFor, SAMPLE_CELLS, SAMPLE_FORMULAS, SAMPLE_SHEETS, sampleWithoutFormulaValuesFor } from '../../support/read-only-sample.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { openEditor, resourceOf, saveButton, savedContent, selectCell, sheetCanvas, sheetTab, waitForEditor } from '../../support/sheet.ts'
+import { EDITOR_TEST_TIMEOUT, openEditor, resourceOf, saveButton, savedContent, selectCell, sheetCanvas, sheetTab, waitForEditor } from '../../support/sheet.ts'
+
+// 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
+test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
 interface Scene {
   readonly author: TestUser
@@ -45,7 +48,7 @@ async function scene(prefix: string, snapshotFor: (unitId: string) => string = r
   const author = await createUser(`${prefix}-author`, '作者')
   const viewer = await createUser(`${prefix}-viewer`, '查看者')
   const space = await createTeamSpace('只读样本', admin, [[author, 'admin'], [viewer, 'viewer']])
-  return { author, viewer, spaceId: space.id, documentId: await createDocumentIn(space.id, author, '只读样本', snapshotFor) }
+  return { author, viewer, spaceId: space.id, documentId: await createDocumentIn(space.id, author, '只读样本', { snapshotFor }) }
 }
 
 /** 只读的全过程都应该没有的：页面错误（被取消的命令不产生页面错误，M2-P3 设计 §3.8）与保存请求 */
@@ -788,8 +791,6 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
   })
 
   test('界面没有编辑入口：没有工具栏、右键不弹出菜单、没有底栏菜单与新增工作表按钮，页头只能查看、没有保存按钮（对照：作者打开同一份文档时都有）', async ({ page, anotherDevice }) => {
-    // 打开两次编辑器（作者与查看者），各到 steady
-    test.slow()
     const s = await scene('ro-chrome')
     // 对照：能编辑时这些入口都在，下面只读时的"没有"才不是空断言
     const authorWatched = watch(anotherDevice, s.documentId)
@@ -805,7 +806,6 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
   })
 
   test('界面入口（M0 的 7 项）都无效：键入、删除、粘贴、剪切后粘贴、拖动填充柄、编辑栏、拖动行高', async ({ page, context, browserName }) => {
-    test.slow()
     // 与对照组的条件一致（P3 审查 B10）
     await grantClipboard(context, browserName)
     const s = await scene('ro-ui')
@@ -824,7 +824,6 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
   })
 
   test('界面上还能碰到的其他入口都无效：查找替换、格式的快捷键、撤销与重做、双击与拖动工作表标签、全部工作表的菜单、拖动与删除图片、改批注、冻结线、冻结区域的行高、筛选按钮', async ({ page, context, browserName }) => {
-    test.slow()
     // 与对照组的条件一致（P3 审查 B10）
     await grantClipboard(context, browserName)
     const s = await scene('ro-other')
@@ -856,7 +855,6 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
   })
 
   test('Facade 入口（M0 的 21 项，另加取消已有的超链接）经探针逐项都无效：被只读守卫取消，或被权限检查拦下', async ({ page }) => {
-    test.slow()
     const s = await scene('ro-facade')
     const watched = watch(page, s.documentId)
     await openReadOnly(page, s.viewer, s.documentId)
@@ -1012,8 +1010,6 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
   })
 
   test('归档空间里的文档：空间管理员打开同样只读（只能查看、没有工具栏、键入无效）', async ({ page }) => {
-    // 打开两次编辑器（归档前后），各到 steady
-    test.slow()
     const s = await scene('ro-archive')
     await loginThroughApi(page, s.author)
     await openEditor(page, s.documentId, OPENED)

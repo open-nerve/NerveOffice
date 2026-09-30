@@ -19,8 +19,9 @@ export class DocumentTransferService {
     const after = cursor === undefined ? undefined : decodeTimeCursor(cursor)
     if (cursor !== undefined && after === undefined)
       throw new AppError('REQUEST_INVALID', '分页的游标不合法，请从第一页重新加载')
-    // 与列表用同一个"可访问文档"的条件（正常状态、在这个空间里）；多取一条，判断还有没有下一页
-    const rows = await this.documents.listAccessible({ spaceIds: [spaceId] }, ADMIN_PAGE_SIZE + 1, after)
+    // 与列表用同一个"可访问文档"的条件（在这个空间里；accessible 只取正常状态的行，所以回收站里的文档不列出、
+    // 也不转移，M2-P4 设计 §3.4 第 1 条）；不按目录过滤：整个空间里的文档都要列出来。多取一条，判断还有没有下一页
+    const rows = await this.documents.listAccessible({ spaceIds: [spaceId] }, { limit: ADMIN_PAGE_SIZE + 1, after })
     const page = rows.slice(0, ADMIN_PAGE_SIZE)
     const last = page.at(-1)
     return {
@@ -31,7 +32,8 @@ export class DocumentTransferService {
 
   /**
    * 整批转移：按 id 顺序锁住还在来源空间里、状态正常的文档（与标题列表同一个条件），少了一份就整批拒绝（TRANSFER_CONFLICT，
-   * 例如另一位管理员刚转走了其中一份）；改所属空间，写入代次加一。返回转移了的文档 id（按 id 排序）
+   * 例如另一位管理员刚转走了其中一份）；改所属空间，写入代次加一。返回转移了的文档 id（按 id 排序）。
+   * 目标位置是目标空间的根目录（null）：文件夹属于某一个空间，转过去之后不能再留在来源空间的文件夹里（M2-P4）
    */
   async transfer(documentIds: readonly string[], fromSpaceId: string, toSpaceId: string, transaction: Transaction): Promise<string[]> {
     // id 已由契约统一成小写（M2-P2 审查 A1），契约也已拒绝重复；这里再去重，"锁住的份数对得上"的判断才不依赖调用方
@@ -39,7 +41,7 @@ export class DocumentTransferService {
     const locked = await this.documents.lockForTransfer(ids, fromSpaceId, transaction)
     if (locked.length !== ids.length)
       throw new AppError('TRANSFER_CONFLICT')
-    await this.documents.moveToSpace(locked, toSpaceId, transaction)
+    await this.documents.moveToSpace(locked, toSpaceId, null, transaction)
     return locked
   }
 }

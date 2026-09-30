@@ -51,23 +51,40 @@ export async function createUser(prefix: string, displayName = prefix, options: 
 /** 按 unitId 生成快照的 JSON 文本 */
 export type SnapshotFor = (unitId: string) => string
 
-/** 写一份文档：与经接口新建的一致（元数据、快照的内容、修订号 1 的修订记录）。快照默认是新建时的模板；spaceId 默认是作者的个人空间 */
-async function insertDocument(client: pg.Client, owner: TestUser, title: string, snapshotFor: SnapshotFor = sheetSnapshotFor, spaceId = owner.personalSpaceId): Promise<string> {
+/** 写一个文件夹（M2-P4）：直接写库，作为用例的前置数据；parentId 为空时建在空间的根目录下 */
+export async function createFolderIn(spaceId: string, createdBy: TestUser, name: string, parentId?: string): Promise<string> {
+  return withDatabase(async (client) => {
+    const depth = parentId === undefined
+      ? 1
+      : Number((await client.query<{ depth: number }>('SELECT depth FROM folders WHERE id = $1', [parentId])).rows[0]?.depth ?? 0) + 1
+    const result = await client.query<{ id: string }>(
+      'INSERT INTO folders (space_id, parent_id, name, created_by, depth, request_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
+      [spaceId, parentId ?? null, name, createdBy.id, depth, randomUUID()],
+    )
+    return result.rows[0]?.id ?? ''
+  })
+}
+
+/**
+ * 写一份文档：与经接口新建的一致（元数据、快照的内容、修订号 1 的修订记录）。
+ * 快照默认是新建时的模板；spaceId 默认是作者的个人空间；folderId 为空时放在空间的根目录（M2-P4）
+ */
+async function insertDocument(client: pg.Client, owner: TestUser, title: string, snapshotFor: SnapshotFor = sheetSnapshotFor, spaceId = owner.personalSpaceId, folderId?: string): Promise<string> {
   const unitId = randomUUID()
   const raw = Buffer.from(snapshotFor(unitId), 'utf8')
   const snapshot = zlib.gzipSync(raw)
   const digest = createHash('sha256').update(`created\nsheet\n${title}`, 'utf8').digest()
   const result = await client.query<{ id: string }>(
     `WITH document AS (
-       INSERT INTO documents (space_id, type, title, created_by, unit_id, profile, format_version, sdk_version)
-       VALUES ($1, 'sheet', $2, $3, $4, $5, $6, $7) RETURNING id
+       INSERT INTO documents (space_id, type, title, created_by, unit_id, profile, format_version, sdk_version, folder_id)
+       VALUES ($1, 'sheet', $2, $3, $4, $5, $6, $7, $13) RETURNING id
      ), content AS (
        INSERT INTO document_contents (document_id, snapshot, raw_bytes, stored_bytes) SELECT id, $8, $9, $10 FROM document
      ), revision AS (
        INSERT INTO document_revisions (document_id, revision, kind, request_id, payload_digest, saved_by) SELECT id, 1, 'created', $11, $12, $3 FROM document
      )
      SELECT id FROM document`,
-    [spaceId, title, owner.id, unitId, DOCUMENT_PROFILE_OF.sheet, PLATFORM_FORMAT_VERSION, UNIVER_SDK_VERSION, snapshot, raw.length, snapshot.length, randomUUID(), digest],
+    [spaceId, title, owner.id, unitId, DOCUMENT_PROFILE_OF.sheet, PLATFORM_FORMAT_VERSION, UNIVER_SDK_VERSION, snapshot, raw.length, snapshot.length, randomUUID(), digest, folderId ?? null],
   )
   return result.rows[0]?.id ?? ''
 }
@@ -86,9 +103,12 @@ export async function createDocuments(owner: TestUser, titlePrefix: string, coun
   })
 }
 
-/** 在指定的空间里写一份文档（团队空间的用例，M2-P2）。快照默认是新建时的模板（只读的用例写样本，M2-P3） */
-export async function createDocumentIn(spaceId: string, author: TestUser, title: string, snapshotFor: SnapshotFor = sheetSnapshotFor): Promise<string> {
-  return withDatabase(async client => insertDocument(client, author, title, snapshotFor, spaceId))
+/**
+ * 在指定的空间里写一份文档（团队空间的用例，M2-P2）。快照默认是新建时的模板（只读的用例写样本，M2-P3）；
+ * folderId 为空时放在空间的根目录（M2-P4）
+ */
+export async function createDocumentIn(spaceId: string, author: TestUser, title: string, options: { readonly snapshotFor?: SnapshotFor, readonly folderId?: string } = {}): Promise<string> {
+  return withDatabase(async client => insertDocument(client, author, title, options.snapshotFor ?? sheetSnapshotFor, spaceId, options.folderId))
 }
 
 export type SpaceRole = 'admin' | 'editor' | 'viewer'

@@ -8,11 +8,12 @@ import { ALICE, ALICE_SPACE, BOB, BOB_SPACE, FakeStore, HTTP_ORIGIN, member, TEA
 import { createdPayloadDigest } from './payload-digest.ts'
 
 const REQUEST_ID = '0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0d'
+const MISSING_ID = '0199a2c4-0000-7000-8000-0000000000fe'
 
 function setup() {
   const store = new FakeStore()
-  const { transactions, documents, contents, revisions, spaces, policy, audit } = store.deps
-  const service = new DocumentCreationService(transactions, documents, contents, revisions, spaces, policy, audit)
+  const { transactions, documents, contents, revisions, folders, tree, spaces, policy, audit } = store.deps
+  const service = new DocumentCreationService(transactions, documents, contents, revisions, folders, tree, spaces, policy, audit)
   return { store, service }
 }
 
@@ -39,7 +40,7 @@ describe('DocumentCreationService.create', () => {
 
     expect(store.revisions).toEqual([expect.objectContaining({ documentId: detail.id, revision: 1, kind: 'created', requestId: REQUEST_ID, source: null, savedBy: ALICE })])
     expect(store.revisions[0]?.payloadDigest).toEqual(createdPayloadDigest('sheet', '周报'))
-    expect(store.audits).toEqual([{ action: 'documents.created', actor: { type: 'user', id: ALICE }, target: { type: 'document', id: detail.id }, origin: HTTP_ORIGIN, details: { revision: 1 } }])
+    expect(store.audits).toEqual([{ action: 'documents.created', actor: { type: 'user', id: ALICE }, target: { type: 'document', id: detail.id }, origin: HTTP_ORIGIN, details: { revision: 1, folderId: null } }])
   })
 
   it('没有标题用默认标题；每份文档的 unitId 各不相同', async () => {
@@ -162,5 +163,89 @@ describe('DocumentCreationService.create', () => {
     const { store, service } = setup()
     store.spaces.personalSpaceOf.mockResolvedValueOnce(undefined)
     await expect(service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID }, HTTP_ORIGIN)).rejects.toThrow('账户没有个人空间')
+  })
+})
+
+describe('DocumentCreationService.create 的目标文件夹（M2-P4）', () => {
+  it('建在指定的文件夹里：文档落在那一层，审计与负载摘要都带上它', async () => {
+    const { store, service } = setup()
+    const folder = store.addFolder({ spaceId: ALICE_SPACE, name: '资料' })
+    const detail = await service.create(member(ALICE), { type: 'sheet', title: '周报', requestId: REQUEST_ID, folderId: folder.id }, HTTP_ORIGIN)
+
+    expect(detail).toMatchObject({ spaceId: ALICE_SPACE, folderId: folder.id })
+    expect(store.documents.get(detail.id)?.folderId).toBe(folder.id)
+    expect(store.revisions[0]?.payloadDigest).toEqual(createdPayloadDigest('sheet', '周报', undefined, folder.id))
+    expect(store.audits[0]?.details).toEqual({ revision: 1, folderId: folder.id })
+  })
+
+  it('指定了文件夹才取空间树的锁：排在 requestId 的锁之后、空间行之前，目标文件夹在锁下判断', async () => {
+    const { store, service } = setup()
+    const folder = store.addFolder({ spaceId: ALICE_SPACE })
+    await service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID, folderId: folder.id }, HTTP_ORIGIN)
+
+    expect(store.treeLocks).toEqual([[ALICE_SPACE]])
+    const request = store.repositories.revisions.lockCreateRequest.mock.invocationCallOrder[0] ?? Number.NaN
+    const tree = store.tree.lock.mock.invocationCallOrder[0] ?? Number.NaN
+    const held = store.spaces.holdSpace.mock.invocationCallOrder[0] ?? Number.NaN
+    const checked = store.repositories.folders.findById.mock.invocationCallOrder[0] ?? Number.NaN
+    expect(request).toBeLessThan(tree)
+    expect(tree).toBeLessThan(held)
+    expect(held).toBeLessThan(checked)
+  })
+
+  it('没有指定文件夹：建在空间的根目录，不取树锁、不查文件夹（保持 M2-P4 之前的开销）', async () => {
+    const { store, service } = setup()
+    const detail = await service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID }, HTTP_ORIGIN)
+    expect(detail.folderId).toBeNull()
+    expect(store.treeLocks).toEqual([])
+    expect(store.repositories.folders.findById).not.toHaveBeenCalled()
+  })
+
+  it('目标文件夹不存在、在别的空间里、在回收站里：同一个 NOT_FOUND，什么也不建', async () => {
+    const { store, service } = setup()
+    const elsewhere = store.addFolder({ spaceId: BOB_SPACE })
+    const trashed = store.addFolder({ spaceId: ALICE_SPACE })
+    store.folderEntries.set(trashed.id, 'trash-entry')
+
+    const missing = await rejection(service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID, folderId: MISSING_ID }, HTTP_ORIGIN))
+    const foreign = await rejection(service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID, folderId: elsewhere.id }, HTTP_ORIGIN))
+    const removed = await rejection(service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID, folderId: trashed.id }, HTTP_ORIGIN))
+    expect([missing.code, foreign.code, removed.code]).toEqual(['NOT_FOUND', 'NOT_FOUND', 'NOT_FOUND'])
+    expect([foreign.message, removed.message]).toEqual([missing.message, missing.message])
+    expect(store.documents.size).toBe(0)
+    expect(store.audits).toEqual([])
+  })
+
+  it('取锁之前文件夹还在、锁下已经进了回收站：NOT_FOUND，不会把活文档挂在回收站的文件夹下', async () => {
+    const { store, service } = setup()
+    const folder = store.addFolder({ spaceId: ALICE_SPACE })
+    // 树锁排在判断之前：拿到锁时删除已经提交，锁下读到的就是回收站里的它
+    store.tree.lock.mockImplementationOnce(async () => {
+      store.folderEntries.set(folder.id, 'trash-entry')
+    })
+    expect((await rejection(service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID, folderId: folder.id }, HTTP_ORIGIN))).code).toBe('NOT_FOUND')
+    expect(store.documents.size).toBe(0)
+  })
+
+  it('重放的比较把文件夹算进去：同一个文件夹返回同一份，换一个文件夹或改成根目录都是 REQUEST_ID_CONFLICT', async () => {
+    const { store, service } = setup()
+    const folder = store.addFolder({ spaceId: ALICE_SPACE })
+    const another = store.addFolder({ spaceId: ALICE_SPACE, name: '存档' })
+    const first = await service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID, folderId: folder.id }, HTTP_ORIGIN)
+
+    expect(await service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID, folderId: folder.id }, HTTP_ORIGIN)).toEqual(first)
+    expect((await rejection(service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID, folderId: another.id }, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+    expect((await rejection(service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID }, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+    expect(store.documents.size).toBe(1)
+  })
+
+  it('指定了空间与文件夹：两段都进摘要，只换空间或只换文件夹都不是同一个请求', async () => {
+    const { store, service } = setup()
+    store.setMember(TEAM_SPACE, BOB, 'editor')
+    const folder = store.addFolder({ spaceId: TEAM_SPACE })
+    const detail = await service.create(member(BOB), { type: 'sheet', title: '周报', requestId: REQUEST_ID, spaceId: TEAM_SPACE, folderId: folder.id }, HTTP_ORIGIN)
+    expect(detail).toMatchObject({ spaceId: TEAM_SPACE, folderId: folder.id })
+    expect(store.revisions[0]?.payloadDigest).toEqual(createdPayloadDigest('sheet', '周报', TEAM_SPACE, folder.id))
+    expect((await rejection(service.create(member(BOB), { type: 'sheet', title: '周报', requestId: REQUEST_ID, spaceId: TEAM_SPACE }, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
   })
 })

@@ -6,9 +6,10 @@ import { SpaceNav } from '../../features/spaces/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { ADMIN_PATH } from '../../shared/lib/admin-paths.ts'
 import { buttonVariants } from '../../shared/ui/index.ts'
+import { SearchBox } from './search-box.tsx'
 
 /**
- * 登录后的页面框架：页头（产品名称、系统管理员的"管理"入口、当前用户、修改密码与退出）、左侧导航（空间，M2-P2）与内容区。
+ * 登录后的页面框架：页头（产品名称、系统管理员的"管理"入口、搜索框、当前用户、修改密码与退出）、左侧导航（空间，M2-P2）与内容区。
  * 窄屏时只有当前用户的名字收窄（省略号），页头不换行、不溢出（M2-P1 审查 B11）；导航收到内容上方，由按钮展开。
  */
 export function AppShell() {
@@ -18,6 +19,7 @@ export function AppShell() {
   return (
     <div className="min-h-svh">
       <header className="relative border-b">
+        {/* justify-between：搜索框落在页头中间的空当里，当前用户那一组贴着右边（M2-P4 审查 B3） */}
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between gap-3 px-4">
           <div className="flex shrink-0 items-center gap-3">
             <Link to="/" className="font-semibold">{messages.app.name}</Link>
@@ -26,6 +28,8 @@ export function AppShell() {
               <Link to={ADMIN_PATH} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>{messages.admin.title}</Link>
             )}
           </div>
+          {/* 搜索框（M2-P4）：只带着关键词跳到按需加载的结果页，首屏里只有这个框 */}
+          <SearchBox />
           <UserMenu>
             <Link to={CHANGE_PASSWORD_PATH} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>{messages.account.changePassword}</Link>
           </UserMenu>

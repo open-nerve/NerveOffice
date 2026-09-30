@@ -21,7 +21,7 @@ const view = {
   status: 'active',
   visibleToAll: false,
   role: 'editor',
-  permissions: { canCreateDocuments: true, canViewMembers: true, canManageMembers: false, canRename: false },
+  permissions: { canCreateDocuments: true, canCreateFolders: true, canViewMembers: true, canManageMembers: false, canRename: false, canPurgeTrash: false },
 }
 
 describe('空间角色', () => {

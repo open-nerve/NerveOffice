@@ -6,6 +6,7 @@ import type { SpaceRecord } from '../spaces/index.ts'
 import type { User } from '../users/index.ts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
+import { inIdOrder } from '../../shared/id-order.ts'
 import { AuditService } from '../audit/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { DocumentTransferService } from '../documents/index.ts'
@@ -17,11 +18,6 @@ type HttpOrigin = Extract<AuditOrigin, { source: 'http' }>
 
 /** 目标空间看不到（不存在、写成团队空间的个人空间）时的说明：锁前与锁下两处判断用同一句 */
 const TARGET_MISSING = '目标空间不存在'
-
-/** 按 id 的顺序（id 已由契约统一成小写，小写的 UUID 文本与数据库里 uuid 的顺序一致）：多行加锁都按这个顺序，互相等待时不成环 */
-function inIdOrder(ids: readonly string[]): string[] {
-  return [...new Set(ids)].sort()
-}
 
 /**
  * 停用者文档的转移（M2-P2 设计 §3.8，US-M2-04）：标题列表与整批转移。转移时系统管理员只看得到标题，不能打开内容；

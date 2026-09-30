@@ -94,8 +94,12 @@ export {
 export type { RevisionConflictDetails, SaveContentQuery, SaveContentResponse } from './documents/content.ts'
 export { DOCUMENT_PAGE_PATTERN, documentIdFromPagePath, documentPagePath } from './documents/document-page.ts'
 export {
+  COPIED_TITLE_SUFFIX,
+  copiedDocumentTitle,
+  copyDocumentRequestSchema,
   createDocumentRequestSchema,
   DEFAULT_DOCUMENT_TITLES,
+  DOCUMENT_LIST_ALL_FOLDERS,
   DOCUMENT_LIST_DEFAULT_LIMIT,
   DOCUMENT_LIST_MAX_LIMIT,
   DOCUMENT_PROFILE_OF,
@@ -107,33 +111,71 @@ export {
   documentIdSchema,
   documentListQuerySchema,
   documentListResponseSchema,
+  documentPermissionsSchema,
   documentSpaceSchema,
   documentSummarySchema,
   documentTitleSchema,
+  moveDocumentRequestSchema,
   PLATFORM_FORMAT_VERSION,
   PLATFORM_FORMAT_VERSIONS,
+  updateDocumentRequestSchema,
 } from './documents/documents.ts'
 export type {
+  CopyDocumentRequest,
   CreateDocumentRequest,
   DocumentDetail,
   DocumentListQuery,
   DocumentListResponse,
+  DocumentPermissions,
   DocumentProfile,
   DocumentSpace,
   DocumentStatus,
   DocumentSummary,
   DocumentType,
+  MoveDocumentRequest,
   PlatformFormatVersion,
+  UpdateDocumentRequest,
 } from './documents/documents.ts'
 export { SHEET_TEMPLATE, SHEET_TEMPLATE_UNIT_ID, sheetSnapshotFor } from './documents/sheet-template.ts'
 export { ERROR_CODES, errorStatus, RETIRED_ERROR_CODES } from './errors/error-codes.ts'
 export type { ErrorCode } from './errors/error-codes.ts'
 export { errorCodeSchema, errorResponseSchema } from './errors/error-response.ts'
 export type { ErrorResponse } from './errors/error-response.ts'
+export {
+  createFolderRequestSchema,
+  FOLDER_LIST_MAX_ITEMS,
+  FOLDER_MAX_DEPTH,
+  FOLDER_NAME_MAX_LENGTH,
+  folderIdSchema,
+  folderListQuerySchema,
+  folderListResponseSchema,
+  folderNameSchema,
+  folderPermissionsSchema,
+  folderSchema,
+  moveFolderRequestSchema,
+  updateFolderRequestSchema,
+} from './folders/folders.ts'
+export type {
+  CreateFolderRequest,
+  Folder,
+  FolderListQuery,
+  FolderListResponse,
+  FolderPermissions,
+  MoveFolderRequest,
+  UpdateFolderRequest,
+} from './folders/folders.ts'
 export { healthLiveResponseSchema, healthReadyResponseSchema } from './health/health.ts'
 export type { HealthLiveResponse, HealthReadyResponse } from './health/health.ts'
 export { CSRF_TOKEN_HEADER, REQUEST_ID_HEADER } from './http/headers.ts'
 export { uuidSchema } from './ids/ids.ts'
+export {
+  SEARCH_PAGE_SIZE,
+  searchKeywordSchema,
+  searchQuerySchema,
+  searchResponseSchema,
+  searchResultSchema,
+} from './search/search.ts'
+export type { SearchQuery, SearchResponse, SearchResult } from './search/search.ts'
 export {
   addSpaceMemberRequestSchema,
   changeSpaceMemberRoleRequestSchema,
@@ -166,6 +208,27 @@ export type {
   TeamSpace,
 } from './spaces/spaces.ts'
 export { codePointLength, hasControlCharacters } from './text/text.ts'
+export {
+  restoredTrashEntrySchema,
+  TRASH_ENTRY_KINDS,
+  TRASH_LIST_PAGE_SIZE,
+  TRASH_RETENTION_DAYS,
+  trashEntryIdSchema,
+  trashEntrySchema,
+  trashListQuerySchema,
+  trashListResponseSchema,
+  trashOriginSchema,
+  trashPermissionsSchema,
+} from './trash/trash.ts'
+export type {
+  RestoredTrashEntry,
+  TrashEntry,
+  TrashEntryKind,
+  TrashListQuery,
+  TrashListResponse,
+  TrashOrigin,
+  TrashPermissions,
+} from './trash/trash.ts'
 export {
   DISPLAY_NAME_MAX_LENGTH,
   displayNameSchema,

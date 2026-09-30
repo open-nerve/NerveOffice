@@ -4,7 +4,10 @@ import type { Page } from '@playwright/test'
 import { createUser, expireSessions } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
+
+// 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
+test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
 /** 这个页面所在的浏览器上下文现在的会话的 CSRF 令牌 */
 async function csrfTokenOf(page: Page): Promise<string> {
@@ -170,7 +173,7 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
 
     const other = await context.newPage()
     await other.goto('/')
-    await other.getByRole('button', { name: '退出' }).click()
+    await other.getByRole('button', { name: '退出', exact: true }).click()
     await expect(other.getByRole('form', { name: '登录' })).toBeVisible()
     await expect(page.getByRole('alert').filter({ hasText: '本页的修改还在' })).toBeVisible()
 
@@ -180,7 +183,7 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     await expect(saveButton(page)).toHaveAttribute('aria-disabled', 'true')
     await expect(saveStatus(page)).toHaveText('有未保存的修改')
 
-    await other.getByRole('button', { name: '退出' }).click()
+    await other.getByRole('button', { name: '退出', exact: true }).click()
     await loginThroughUi(other, owner)
     await expect(other.getByRole('heading', { name: '我的空间' })).toBeVisible()
     await expect(page.getByRole('alert')).toHaveCount(0)

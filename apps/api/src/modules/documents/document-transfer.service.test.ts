@@ -11,7 +11,7 @@ const TRANSACTION = { transaction: true } as never
 function setup(locked: string[]) {
   const repository = {
     lockForTransfer: vi.fn(async () => locked),
-    moveToSpace: vi.fn(async () => {}),
+    moveToSpace: vi.fn(async () => []),
     listAccessible: vi.fn(async () => []),
   }
   return { service: new DocumentTransferService(repository as never), repository }
@@ -29,7 +29,8 @@ describe('DocumentTransferService.transfer', () => {
     const { service, repository } = setup([A, B])
     expect(await service.transfer([B, A, B], FROM, TO, TRANSACTION)).toEqual([A, B])
     expect(repository.lockForTransfer).toHaveBeenCalledWith([B, A], FROM, TRANSACTION)
-    expect(repository.moveToSpace).toHaveBeenCalledWith([A, B], TO, TRANSACTION)
+    // 目标位置是目标空间的根目录：文件夹属于某一个空间，转过去之后不能留在来源空间的文件夹里（M2-P4）
+    expect(repository.moveToSpace).toHaveBeenCalledWith([A, B], TO, null, TRANSACTION)
   })
 
   it('锁住的少了一份（不在来源空间里、不存在或不是正常状态）：整批拒绝，TRANSFER_CONFLICT，不移动', async () => {
