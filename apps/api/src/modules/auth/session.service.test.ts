@@ -11,11 +11,11 @@ import { SessionService } from './session.service.ts'
 const CONFIG = { session: { idleTimeoutMinutes: 720, absoluteTimeoutMinutes: 10_080 } } as unknown as AppConfig
 const TRANSACTION = { opaque: true } as unknown as Transaction
 
-/** revoked：仓储回答"这条会话是不是因为给出的原因之一被撤销的" */
-function setup(revoked: boolean) {
+/** revoked：仓储回答"这条会话是不是因为给出的原因之一被撤销的"；currentActive：撤销当前这条时它还没被撤销过（这次撤销了它） */
+function setup(revoked: boolean, currentActive = true) {
   const repository = {
     revokedFor: vi.fn(async (_tokenHash: Buffer, _reasons: readonly string[]) => revoked),
-    revoke: vi.fn(async (_where: { id: string } | { tokenHash: Buffer }, _reason: string, _transaction?: Transaction) => {}),
+    revoke: vi.fn(async (_where: { id: string } | { tokenHash: Buffer }, _reason: string, _transaction?: Transaction) => currentActive),
     revokeAllOfUser: vi.fn(async (_userId: string, _reason: string, _transaction?: Transaction) => {}),
   }
   const service = new SessionService(repository as unknown as SessionsRepository, CONFIG)
@@ -50,10 +50,17 @@ describe('SessionService.invalidatedByRotation（复验 N3）', () => {
 describe('SessionService.revokeForPasswordChange（M2-P6 复验 一般-3）', () => {
   it('先把当前这条按 replaced 撤销（它换成了新的），再把本人其余的按 password_changed 撤销，都在调用方的事务里', async () => {
     const { service, repository } = setup(false)
-    await service.revokeForPasswordChange('user-1', 'session-current', TRANSACTION)
+    expect(await service.revokeForPasswordChange('user-1', 'session-current', TRANSACTION)).toBe(true)
     expect(repository.revoke).toHaveBeenCalledExactlyOnceWith({ id: 'session-current' }, 'replaced', TRANSACTION)
     expect(repository.revokeAllOfUser).toHaveBeenCalledExactlyOnceWith('user-1', 'password_changed', TRANSACTION)
     // 反过来的话，当前这条会被"其余的"一并记成 password_changed
     expect(repository.revoke.mock.invocationCallOrder[0]).toBeLessThan(repository.revokeAllOfUser.mock.invocationCallOrder[0] ?? 0)
+  })
+
+  it('当前这条在认证之后已经结束（同一个浏览器刚退出、刚重新登录，撤销时它已经撤销过）：返回假，其余的不动，由调用方回滚（M2-P6）', async () => {
+    const { service, repository } = setup(false, false)
+    expect(await service.revokeForPasswordChange('user-1', 'session-current', TRANSACTION)).toBe(false)
+    expect(repository.revoke).toHaveBeenCalledExactlyOnceWith({ id: 'session-current' }, 'replaced', TRANSACTION)
+    expect(repository.revokeAllOfUser).not.toHaveBeenCalled()
   })
 })

@@ -3,6 +3,7 @@ import type { AuditOrigin } from '../audit/index.ts'
 import type { CredentialCheck, User } from '../users/index.ts'
 import type { LoginTicket } from './login-throttle.ts'
 import type { Principal } from './principal.ts'
+import type { CreatedSession } from './session.service.ts'
 import { normalizeUsername } from '@nerve-office/contracts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
@@ -17,6 +18,15 @@ import { csrfTokenFor } from './session-token.ts'
 import { SessionService } from './session.service.ts'
 
 type HttpOrigin = Extract<AuditOrigin, { source: 'http' }>
+
+/**
+ * 退出的结果（M2-P6）：ended——这次结束了会话；认证通过之后、撤销之前会话已经结束时，rotated——同一个浏览器刚修改了密码
+ * 或重新登录，换成了新的会话（控制器不清除 Cookie，前端确认之后带新令牌再退出一次）；gone——别的原因（另一个标签页先退出了等）
+ */
+export type LogoutOutcome = 'ended' | 'rotated' | 'gone'
+
+/** 修改密码的事务里发现当前的会话已经结束（M2-P6）：回滚用，事务之外换成"登录已过期" */
+class SessionEndedDuringRequest extends Error {}
 
 export interface LoginResult {
   /** 只交给 Cookie */
@@ -123,7 +133,9 @@ export class AuthService {
    * 当前的会话令牌也换掉（M2-P6 复核 B1）：偷到 Cookie 的人不能在本人改完密码之后接着用；当前页面拿到新令牌
    * （控制器写回 Cookie，响应里有新的 CSRF 令牌），仍然保持登录，与接受邀请、完成重置同一个做法。
    * 旧密码不对、复核不通过，都记审计 users.password_change_failed（审查 A6）。审计 users.password_changed 不带明细：
-   * 会话怎么撤销的记在 auth_sessions.revoked_reason 上
+   * 会话怎么撤销的记在 auth_sessions.revoked_reason 上。
+   * 当前的会话在认证之后、事务之前已经结束（同一个浏览器里刚退出，或者刚重新登录换成了新的会话，M2-P6）：不改密码、不新建会话，
+   * 回滚之后按"登录已过期"回答，占的名额退回（不是猜错）——不能替已经退出的人重新登录，也不能在另一条会话之下改密码
    */
   async changePassword(principal: Principal, request: ChangePasswordRequest, origin: HttpOrigin): Promise<LoginResult> {
     const { user } = principal
@@ -137,15 +149,26 @@ export class AuthService {
     if (credentials === undefined)
       throw await this.passwordChangeFailed(ticket, user, 'current_password_incorrect', origin)
     const passwordHash = await withHashing(ticket, this.#logger, async () => this.users.hashPassword(request.newPassword))
-    const created = await this.transactions.run(async (transaction) => {
-      if (!await this.users.replacePassword(credentials, passwordHash, transaction))
-        return undefined
-      await ticket.succeeded(transaction)
-      await this.sessions.revokeForPasswordChange(user.id, principal.sessionId, transaction)
-      const session = await this.sessions.create(user.id, transaction)
-      await this.audit.record({ action: 'users.password_changed', actor: { type: 'user', id: user.id }, target: { type: 'user', id: user.id }, origin }, { transaction })
-      return session
-    })
+    let created: CreatedSession | undefined
+    try {
+      created = await this.transactions.run(async (transaction) => {
+        if (!await this.users.replacePassword(credentials, passwordHash, transaction))
+          return undefined
+        // 限流计数在会话行之前（ADR-007 的锁顺序）；下面回滚时这一步一并撤回
+        await ticket.succeeded(transaction)
+        if (!await this.sessions.revokeForPasswordChange(user.id, principal.sessionId, transaction))
+          throw new SessionEndedDuringRequest()
+        const session = await this.sessions.create(user.id, transaction)
+        await this.audit.record({ action: 'users.password_changed', actor: { type: 'user', id: user.id }, target: { type: 'user', id: user.id }, origin }, { transaction })
+        return session
+      })
+    }
+    catch (error) {
+      if (!(error instanceof SessionEndedDuringRequest))
+        throw error
+      await ticket.abandoned()
+      throw new AppError('SESSION_EXPIRED')
+    }
     if (created === undefined)
       throw await this.passwordChangeFailed(ticket, user, 'credentials_changed', origin)
     return { token: created.token, session: await this.describe(user, csrfTokenFor(created.token)) }
@@ -167,11 +190,20 @@ export class AuthService {
     return ticket.lockedForSeconds === undefined ? new AppError('CURRENT_PASSWORD_INCORRECT') : tooManyAttempts(ticket.lockedForSeconds)
   }
 
-  async logout(principal: Principal, origin: HttpOrigin): Promise<void> {
-    await this.transactions.run(async (transaction) => {
-      await this.sessions.revoke(principal.sessionId, 'logout', transaction)
+  /**
+   * 退出：撤销这条会话、记审计。认证通过之后、撤销之前这条会话已经结束时不记审计，按原因回答（LogoutOutcome，M2-P6）：
+   * 同一个浏览器刚修改了密码或重新登录时，退出的请求带的是换令牌之前的旧令牌，新会话还在——由前端确认之后带新令牌再退出一次
+   */
+  async logout(principal: Principal, sessionToken: string | undefined, origin: HttpOrigin): Promise<LogoutOutcome> {
+    const ended = await this.transactions.run(async (transaction) => {
+      if (!await this.sessions.revoke(principal.sessionId, 'logout', transaction))
+        return false
       await this.audit.record({ action: 'auth.logout', actor: { type: 'user', id: principal.user.id }, origin }, { transaction })
+      return true
     })
+    if (ended)
+      return 'ended'
+    return sessionToken !== undefined && await this.sessions.invalidatedByRotation(sessionToken) ? 'rotated' : 'gone'
   }
 
   async current(principal: Principal): Promise<SessionResponse> {

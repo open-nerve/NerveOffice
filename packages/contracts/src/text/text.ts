@@ -37,10 +37,11 @@ export function hasLineSeparators(value: string): boolean {
 
 /**
  * 看不见的字符：空白（White_Space）、默认可忽略的字符（Default_Ignorable_Code_Point：零宽空格与零宽连接符、
- * 词连接符、BOM、变体选择符、韩文填充符 U+3164 等、蒙古文元音分隔符），以及盲文空白 U+2800（显示成空白的常见替身）。
+ * 词连接符、BOM、变体选择符、韩文填充符 U+3164 等、蒙古文元音分隔符），盲文空白 U+2800（显示成空白的常见替身），
+ * 以及行间注释字符 U+FFF9–U+FFFB（格式字符但不属于默认可忽略，WebKit 里宽度为 0：只由它们组成的名字、标题同样拒绝，M2-P6）。
  * 这里只用来判断"去掉之后还剩不剩"；名字里夹着的格式字符与默认可忽略字符另由 hasHiddenCharacters 判断（复验 N6），标题里不拒绝。
  */
-const INVISIBLE = /[\p{White_Space}\p{Default_Ignorable_Code_Point}\u2800]/gu
+const INVISIBLE = /[\p{White_Space}\p{Default_Ignorable_Code_Point}\u2800\uFFF9-\uFFFB]/gu
 
 /** 去掉看不见的字符（INVISIBLE）之后还有字：整个名字不能只由空白、零宽字符、填充符组成。 */
 export function hasVisibleCharacters(value: string): boolean {

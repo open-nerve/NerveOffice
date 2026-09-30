@@ -74,9 +74,9 @@ export class SessionService {
       await this.repository.touch(session.id, this.config.session.idleTimeoutMinutes)
   }
 
-  /** 撤销一条会话：退出；或者会话守卫发现账户已不可用（disabled） */
-  async revoke(sessionId: string, reason: 'logout' | 'disabled', transaction?: Transaction): Promise<void> {
-    await this.repository.revoke({ id: sessionId }, reason, transaction)
+  /** 撤销一条会话：退出；或者会话守卫发现账户已不可用（disabled）。返回这次撤销了没有（它已经被撤销过时为假） */
+  async revoke(sessionId: string, reason: 'logout' | 'disabled', transaction?: Transaction): Promise<boolean> {
+    return this.repository.revoke({ id: sessionId }, reason, transaction)
   }
 
   /**
@@ -98,11 +98,15 @@ export class SessionService {
    *   它们用的是同一条会话）换令牌之前发出、之后才处理的请求不清除 Cookie（invalidatedByRotation）；
    * - 其余的按 password_changed 撤销：别的设备上的 Cookie 照常清除（M2-P6 复验 一般-3）。
    * 先当前、后其余：反过来的话，当前这条会被后者一并记成 password_changed。与重新登录"先作废原来的、再新建"同一个顺序，
-   * 都在调用方的事务里，账户的行已经锁住（UsersService.replacePassword）；锁的顺序见 ADR-007
+   * 都在调用方的事务里，账户的行已经锁住（UsersService.replacePassword）；锁的顺序见 ADR-007。
+   * 返回当前这条是不是由这次撤销的：为假时它在认证之后、这个事务之前已经结束了（同一个浏览器里刚退出，或者刚重新登录、
+   * 换成了新的会话），其余的也不再动，调用方回滚、按"登录已过期"回答（M2-P6）
    */
-  async revokeForPasswordChange(userId: string, currentSessionId: string, transaction: Transaction): Promise<void> {
-    await this.repository.revoke({ id: currentSessionId }, 'replaced', transaction)
+  async revokeForPasswordChange(userId: string, currentSessionId: string, transaction: Transaction): Promise<boolean> {
+    if (!await this.repository.revoke({ id: currentSessionId }, 'replaced', transaction))
+      return false
     await this.repository.revokeAllOfUser(userId, 'password_changed', transaction)
+    return true
   }
 
   /** 删除一小批过期或撤销已超过 30 天的会话，表不会无限增长。在事务之外调用。 */

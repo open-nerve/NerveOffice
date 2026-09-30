@@ -76,13 +76,15 @@ export class SessionsRepository {
       .where(and(eq(authSessions.id, id), isNull(authSessions.revokedAt)))
   }
 
-  /** 撤销；空闲过期一并提前到现在，清理只看这一列。 */
-  async revoke(where: { id: string } | { tokenHash: Buffer }, reason: SessionRevokeReason, transaction?: Transaction): Promise<void> {
+  /** 撤销；空闲过期一并提前到现在，清理只看这一列。返回这次撤销了没有：已经撤销过的不再改（原因保留最初的那个），返回假 */
+  async revoke(where: { id: string } | { tokenHash: Buffer }, reason: SessionRevokeReason, transaction?: Transaction): Promise<boolean> {
     const target = 'id' in where ? eq(authSessions.id, where.id) : eq(authSessions.tokenHash, where.tokenHash)
-    await executorOf(this.db, transaction)
+    const rows = await executorOf(this.db, transaction)
       .update(authSessions)
       .set({ revokedAt: sql`now()`, revokedReason: reason, idleExpiresAt: sql`least(${authSessions.idleExpiresAt}, now())` })
       .where(and(target, isNull(authSessions.revokedAt)))
+      .returning({ id: authSessions.id })
+    return rows.length > 0
   }
 
   /**

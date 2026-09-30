@@ -3,6 +3,7 @@ import type { AuditOrigin } from '../audit/index.ts'
 import type { Principal, SessionCookie } from './principal.ts'
 import { changePasswordRequestSchema, loginRequestSchema } from '@nerve-office/contracts'
 import { Body, Controller, Get, HttpCode, Post, Put } from '@nestjs/common'
+import { AppError } from '../../shared/errors/app-error.ts'
 import { Public } from '../../shared/public.ts'
 import { RequestOrigin } from '../audit/index.ts'
 import { AuthService } from './auth.service.ts'
@@ -35,8 +36,12 @@ export class AuthController {
     @RequestOrigin() origin: HttpOrigin,
     @SessionCookieJar() cookie: SessionCookie,
   ): Promise<void> {
-    await this.auth.logout(principal, origin)
-    cookie.clear()
+    const outcome = await this.auth.logout(principal, cookie.token, origin)
+    // 会话在认证之后已经结束（M2-P6）：换了令牌时不清除 Cookie——这个浏览器已经拿到了新的，清除会把它删掉（与会话守卫的例外相同）
+    if (outcome !== 'rotated')
+      cookie.clear()
+    if (outcome !== 'ended')
+      throw new AppError('SESSION_EXPIRED')
   }
 
   @Get('session')

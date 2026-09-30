@@ -22,7 +22,7 @@ const PERSONAL_SPACE = '0199a2c4-2a3b-7c4d-9e5f-6a7b8c9d0e1f'
 /** 改完密码之后给当前页面的新会话令牌 */
 const NEW_TOKEN = 'n'.repeat(43)
 
-function setup(options: { admission?: Admission, currentValid?: boolean, stillCurrent?: boolean, lockedForSeconds?: number, hashBusy?: boolean } = {}) {
+function setup(options: { admission?: Admission, currentValid?: boolean, stillCurrent?: boolean, sessionActive?: boolean, lockedForSeconds?: number, hashBusy?: boolean } = {}) {
   const ticket = {
     lockedForSeconds: options.lockedForSeconds,
     succeeded: vi.fn(async (_transaction?: Transaction) => {}),
@@ -39,7 +39,7 @@ function setup(options: { admission?: Admission, currentValid?: boolean, stillCu
     replacePassword: vi.fn(async (_credentials: VerifiedCredentials, _hash: string, _transaction: Transaction) => options.stillCurrent ?? true),
   }
   const sessions = {
-    revokeForPasswordChange: vi.fn(async (_userId: string, _currentSessionId: string, _transaction: Transaction) => {}),
+    revokeForPasswordChange: vi.fn(async (_userId: string, _currentSessionId: string, _transaction: Transaction) => options.sessionActive ?? true),
     create: vi.fn(async (_userId: string, _transaction?: Transaction) => ({ id: 'session-new', token: NEW_TOKEN })),
     purgeExpired: vi.fn(async () => {}),
   }
@@ -129,6 +129,16 @@ describe('AuthService.changePassword（US-M2-02）', () => {
     expect(sessions.create).not.toHaveBeenCalled()
     expect(audit.record).toHaveBeenCalledOnce()
     expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'users.password_change_failed', details: { reason: 'credentials_changed' } }))
+  })
+
+  it('当前的会话在认证之后已经结束（同一个浏览器刚退出，或刚重新登录换成了新的会话，M2-P6）：回滚，按登录已过期回答，不新建会话、不记审计，名额退回', async () => {
+    const { service, ticket, sessions, audit } = setup({ sessionActive: false })
+    expect((await errorOf(service.changePassword(PRINCIPAL, REQUEST, ORIGIN))).code).toBe('SESSION_EXPIRED')
+    // 限流计数的清除先于会话行（锁的顺序），随事务一起回滚；事务之外把占的名额退回——密码是对的，不算猜错
+    expect(ticket.succeeded.mock.invocationCallOrder[0]).toBeLessThan(sessions.revokeForPasswordChange.mock.invocationCallOrder[0] ?? 0)
+    expect(ticket.abandoned).toHaveBeenCalledOnce()
+    expect(sessions.create).not.toHaveBeenCalled()
+    expect(audit.record).not.toHaveBeenCalled()
   })
 
   it('限流拒绝：429，不验证旧密码、不写审计', async () => {

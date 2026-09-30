@@ -210,15 +210,16 @@ describe('名称里的格式字符：不属于默认可忽略的同样拒绝（M
   /** 行间注释字符：锚点 U+FFF9、分隔 U+FFFA、结束 U+FFFB。是格式字符（Cf），但不属于默认可忽略字符；WebKit 里宽度为 0 */
   const ANNOTATION = ['\uFFF9', '\uFFFA', '\uFFFB']
 
-  it.each(ANNOTATION.map(character => [JSON.stringify(character), character]))('单独构成整个名字：拒绝 %s', (_label, character) => {
-    expect(hasVisibleCharacters(character)).toBe(true)
+  it.each(ANNOTATION.map(character => [JSON.stringify(character), character]))('单独构成整个名字：按"只有看不见的字符"拒绝 %s', (_label, character) => {
+    expect(hasVisibleCharacters(character)).toBe(false)
     expect(hasHiddenCharacters(character)).toBe(true)
-    expect(problemOf(nameSchema, character)).toBe('名称不能包含看不见的字符（例如零宽空格）')
-    expect(problemOf(nameSchema, character.repeat(3))).toBe('名称不能包含看不见的字符（例如零宽空格）')
+    expect(problemOf(nameSchema, character)).toBe('名称不能只有空白或看不见的字符')
+    expect(problemOf(nameSchema, character.repeat(3))).toBe('名称不能只有空白或看不见的字符')
   })
 
-  it('三个连在一起、夹在字中间、放在名字末尾：都拒绝', () => {
-    for (const name of ['\uFFF9\uFFFA\uFFFB', '张\uFFF9三\uFFFA\uFFFB', '研发部\uFFFB', '\uFFF9张三'])
+  it('三个连在一起算"只有看不见的字符"；夹在字中间、放在名字末尾或开头：按"不能包含"拒绝', () => {
+    expect(problemOf(nameSchema, '\uFFF9\uFFFA\uFFFB')).toBe('名称不能只有空白或看不见的字符')
+    for (const name of ['张\uFFF9三\uFFFA\uFFFB', '研发部\uFFFB', '\uFFF9张三'])
       expect(problemOf(nameSchema, name), JSON.stringify(name)).toBe('名称不能包含看不见的字符（例如零宽空格）')
   })
 
@@ -310,5 +311,11 @@ describe('标题的规则', () => {
     expect(titleSchema.parse('周\u200B报')).toBe('周\u200B报')
     for (const hidden of HIDDEN_IN_NAMES)
       expect(titleSchema.parse(`周${hidden}报`), JSON.stringify(hidden)).toBe(`周${hidden}报`)
+  })
+
+  it('只由行间注释字符组成的标题：拒绝（WebKit 里宽度为 0，看起来是空标题，M2-P6）；夹在字中间照常保存', () => {
+    for (const annotation of ['\uFFF9', '\uFFFA', '\uFFFB', '\uFFF9\uFFFA\uFFFB', ' \uFFFB '])
+      expect(problemOf(titleSchema, annotation), JSON.stringify(annotation)).toBe('标题不能只有空白或看不见的字符')
+    expect(titleSchema.parse('周\uFFF9报\uFFFA\uFFFB')).toBe('周\uFFF9报\uFFFA\uFFFB')
   })
 })

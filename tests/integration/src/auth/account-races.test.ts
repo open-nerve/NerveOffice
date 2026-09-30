@@ -1,12 +1,13 @@
 // 改动账户的并发（M2-P1 审查 A1、A2、A9、A10、A12，复验 N1–N3）：验证在事务之外，事务里先锁账户行再复核；锁的顺序统一，
 // 互相等待时不成环；管理操作在锁里复核操作者。签发人离任与他签发的链接同时被使用、同时在签发（M2-P6 复核 A2，复验 N2）。
 // 用两个连接构造确定的交错：一个连接持锁，等被测的请求在锁上等着了，再改数据、提交（support/held-lock.ts）。
+import type { Buffer } from 'node:buffer'
 import type pg from 'pg'
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { errorResponseSchema, issuedInvitationSchema, issuedPasswordResetSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount, passwordHashOf } from '../support/accounts.ts'
@@ -16,7 +17,7 @@ import { createTestDatabase } from '../support/database.ts'
 import { raceAgainstHeldLock } from '../support/held-lock.ts'
 import { linkInvalidReasonOf, postPublic, tokenDigest, tokenOf } from '../support/links.ts'
 import { requestIdOf } from '../support/request-id.ts'
-import { asUser, login, postLogin } from '../support/session-client.ts'
+import { asUser, cookieValue, login, postLogin, sessionSetCookie } from '../support/session-client.ts'
 
 let database: TestDatabase
 let app: TestApp
@@ -647,5 +648,80 @@ describe('US-M2-01 邀请：作废与接受的并发（审查 A9、A10）', () =
       target_id: issued.id,
       details: { purpose: 'invitation', reason: 'revoked' },
     })
+  })
+})
+
+describe('US-M2-02 退出、修改密码进行中，这条会话先结束了（M2-P6：同一个浏览器里换令牌与退出同时发生）', () => {
+  /** 这个浏览器的会话在库里的摘要 */
+  function sessionDigest(user: LoggedIn): Buffer {
+    return createHash('sha256').update(cookieValue(user.cookie), 'utf8').digest()
+  }
+
+  /** 持有这条会话行的锁：退出撤销它时在这一行上等着 */
+  function lockSessionRow(user: LoggedIn) {
+    return async (client: pg.Client) => client.query('SELECT 1 FROM auth_sessions WHERE token_hash = $1 FOR UPDATE', [sessionDigest(user)])
+  }
+
+  /** 在持锁的事务里撤销这条会话：模拟同一个浏览器里别的标签页先换了令牌（replaced）或先退出了（logout） */
+  function revokeSession(user: LoggedIn, reason: 'replaced' | 'logout') {
+    return async (client: pg.Client) => client.query(
+      'UPDATE auth_sessions SET revoked_at = now(), revoked_reason = $2, idle_expires_at = least(idle_expires_at, now()) WHERE token_hash = $1',
+      [sessionDigest(user), reason],
+    )
+  }
+
+  async function logoutAudits(response: Response): Promise<number> {
+    return count('SELECT count(*)::int AS count FROM audit_events WHERE action = \'auth.logout\' AND request_id = $1', [requestIdOf(response)])
+  }
+
+  it('退出在会话行上等着时，这条会话因为换令牌（replaced）先结束了：401 登录已过期，不清除 Cookie（这个浏览器已经拿到了新的），不记退出的审计', async () => {
+    const kaz = await createAccount(database, { username: 'kaz' })
+    const here = await login(app.baseUrl, 'kaz', kaz.password)
+    const response = await raceAgainstHeldLock(database, {
+      hold: lockSessionRow(here),
+      request: async () => asUser(app.baseUrl, here, '/api/auth/logout', { method: 'POST' }),
+      change: revokeSession(here, 'replaced'),
+    })
+    expect(response.status).toBe(401)
+    expect(await codeOf(response)).toBe('SESSION_EXPIRED')
+    expect(sessionSetCookie(response)).toBeUndefined()
+    expect(await logoutAudits(response)).toBe(0)
+    expect(await one('SELECT revoked_reason FROM auth_sessions WHERE token_hash = $1', [sessionDigest(here)])).toEqual({ revoked_reason: 'replaced' })
+  })
+
+  it('退出在会话行上等着时，这条会话因为别的原因（另一个标签页先退出）结束了：401 登录已过期，照常清除 Cookie，不再记一次退出的审计', async () => {
+    const lee = await createAccount(database, { username: 'lee' })
+    const here = await login(app.baseUrl, 'lee', lee.password)
+    const response = await raceAgainstHeldLock(database, {
+      hold: lockSessionRow(here),
+      request: async () => asUser(app.baseUrl, here, '/api/auth/logout', { method: 'POST' }),
+      change: revokeSession(here, 'logout'),
+    })
+    expect(response.status).toBe(401)
+    expect(await codeOf(response)).toBe('SESSION_EXPIRED')
+    expect(sessionSetCookie(response)).toMatch(/Expires=Thu, 01 Jan 1970/)
+    expect(await logoutAudits(response)).toBe(0)
+  })
+
+  it('修改密码在账户行上等着时，当前的会话先结束了（另一个标签页退出）：401 登录已过期，不改密码、不新建会话、不写回 Cookie、不记审计，占的名额退回', async () => {
+    const max = await createAccount(database, { username: 'max' })
+    const here = await login(app.baseUrl, 'max', max.password)
+    const before = await passwordHashOfAccount(max)
+    const response = await raceAgainstHeldLock(database, {
+      hold: lockAccountRow(max),
+      request: async () => asUser(app.baseUrl, here, '/api/auth/password', { method: 'PUT', body: { currentPassword: max.password, newPassword: 'max wants this new one' } }),
+      change: revokeSession(here, 'logout'),
+    })
+    expect(response.status).toBe(401)
+    expect(await codeOf(response)).toBe('SESSION_EXPIRED')
+    expect(sessionSetCookie(response)).toBeUndefined()
+    // 整个事务回滚：密码没变、没有新的会话、没有审计；旧密码照常能登录
+    expect(await passwordHashOfAccount(max)).toBe(before)
+    expect(await count('SELECT count(*)::int AS count FROM auth_sessions WHERE user_id = $1 AND revoked_at IS NULL', [max.id])).toBe(0)
+    expect(await count('SELECT count(*)::int AS count FROM audit_events WHERE action = \'users.password_changed\' AND target_id = $1', [max.id])).toBe(0)
+    // 密码是对的，不算猜错：三个维度占的名额都退回
+    const account = createHash('sha256').update('account:max', 'utf8').digest()
+    expect(await count('SELECT coalesce(sum(failures), 0)::int AS count FROM auth_login_throttles WHERE account_hash = $1', [account])).toBe(0)
+    expect((await postLogin(app.baseUrl, { username: 'max', password: max.password })).status).toBe(200)
   })
 })
