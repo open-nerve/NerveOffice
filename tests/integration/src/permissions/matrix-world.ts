@@ -78,6 +78,11 @@ export interface MatrixWorld {
    */
   readonly folders: Readonly<Record<TargetName, MatrixFolder>>
   /**
+   * folders 里各放的一份文档（不存在的空间对应一个不存在的文档，M2-P6 复验 R-G5）：按空间列出根目录的格子据此核对
+   * "子文件夹里的文档不混进根目录"，整个空间的列表据此核对"子文件夹里的也列出来"。标题不带 MATRIX_TITLE_PREFIX，搜索的矩阵不受影响
+   */
+  readonly folderDocuments: Readonly<Record<TargetName, MatrixDocument>>
+  /**
    * 跨空间操作（移动、复制）牵涉两个空间，矩阵的一行只放得下一个目标，所以另建一个
    * **六个人都是空间管理员**的团队空间当固定的那一端（M2-P4 S7）：
    * - 它当目标时，"目标空间有新建权限"对谁都成立，那一行只考核源空间的规则；
@@ -238,6 +243,11 @@ export async function buildMatrixWorld(database: TestDatabase, app: TestApp): Pr
     return folderIn(spaces[target], adminOf(target))
   }
   const folders = Object.fromEntries(await Promise.all(TARGETS.map(async target => [target, await freshFolder(target)] as const))) as Record<TargetName, MatrixFolder>
+  const folderDocuments = Object.fromEntries(await Promise.all(TARGETS.map(async (target) => {
+    if (target === 'missing')
+      return [target, { id: randomUUID(), unitId: randomUUID() }] as const
+    return [target, await seedDocument(database, { spaceId: spaces[target], createdBy: adminOf(target), title: `矩阵目录里的文档：${target}`, folderId: folders[target].id })] as const
+  }))) as Record<TargetName, MatrixDocument>
 
   /** 查库取一列 id（按 id 排序）：目标是不存在的空间时查的也是那个不存在的 id，结果是空的 */
   const idsOf = async (text: string, target: TargetName): Promise<string[]> => database.query(async client =>
@@ -296,6 +306,7 @@ export async function buildMatrixWorld(database: TestDatabase, app: TestApp): Pr
     spaces,
     documents,
     folders,
+    folderDocuments,
     crossSpace,
     trashedDocuments,
     trashedFolders,

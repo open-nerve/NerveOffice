@@ -175,7 +175,8 @@ export class TrashService {
   /**
    * 整单恢复（spec §3）：删除者本人或当前的空间管理员；归档的空间里谁都不能。
    * 属于这个删除单元的全部行一起回到正常状态；被删的那一个对象回到原位置，原来的父文件夹已经不在
-   * （被永久删除、自己也在回收站里、跨空间移动过）时回到空间的根目录，响应里带标志。写入代次不再加一。
+   * （被永久删除、自己也在回收站里）时回到空间的根目录，响应里带标志。写入代次不再加一。
+   * 父文件夹跨空间移动时这个删除单元跟着一起搬走，所以父文件夹还在却在别的空间里是数据不一致，按意外错误处理（见 originParentOf）
    */
   async restore(actor: Actor, entryId: string, origin: AuditOrigin): Promise<RestoredTrashEntry> {
     return this.transactions.run(async (transaction) => {

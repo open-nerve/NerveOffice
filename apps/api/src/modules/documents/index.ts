@@ -8,7 +8,8 @@ export type { Actor, SpaceAccess, SpaceContentAccess } from './document-access-p
 export { DocumentSearchService } from './document-search.service.ts'
 export { DocumentTransferService } from './document-transfer.service.ts'
 export { DocumentsModule } from './documents.module.ts'
-// 只为 app 层的程序接口转出（集成测试直接核对仓储的查询范围）：别的模块引用它由 eslint 拦下（M2-P6 复核 A 的 S3）
+// 只为集成测试专用的入口（app/integration.test-support.ts）转出，集成测试直接核对仓储的查询范围：
+// 别的文件经这里引用它由 eslint 拦下（M2-P6 复核 A 的 S3、复验 R-S4）
 export { DocumentsRepository } from './documents.repository.ts'
 export { FoldersService } from './folders.service.ts'
 export type { CreateFolderCommand, MoveFolderCommand, UpdateFolderCommand } from './folders.service.ts'

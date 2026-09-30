@@ -1,13 +1,13 @@
 // api 对外的程序接口（P2 设计 §3.2）：命令行与集成测试经这里建应用，走的是与进程入口相同的管线。
+// 只放各模块经公开入口本来就能拿到的东西：数据库句柄与 documents 的仓储只给集成测试，在 integration.test-support.ts
+// （包的出口 @nerve-office/api/testing）。放在这里的话，命令行与 app 层的其他文件经这里转手引用它们，lint 按路径的限制认不出来（M2-P6 复验 R-S4）
 export { AuditModule, AuditService, RequestOrigin } from '../modules/audit/index.ts'
 export type { AuditEvent, AuditOrigin } from '../modules/audit/index.ts'
 export { ConfigError, loadConfig, loadConfigFromEnvironment } from '../modules/config/index.ts'
 export type { AppConfig } from '../modules/config/index.ts'
-export { DATABASE, DatabaseModule, MigrationError, MIGRATIONS_FOLDER, readExpectedMigrations, runMigrations, TransactionRunner } from '../modules/database/index.ts'
-export type { Database, MigrationOutcome, SchemaStatus, Transaction } from '../modules/database/index.ts'
+export { DatabaseModule, MigrationError, MIGRATIONS_FOLDER, readExpectedMigrations, runMigrations, TransactionRunner } from '../modules/database/index.ts'
+export type { MigrationOutcome, SchemaStatus, Transaction } from '../modules/database/index.ts'
 // 集成测试用：按给定的时刻跑一轮回收站的清理（假时钟推进 30 天，不必真的等）
-// 集成测试用：直接核对 documents 的仓储只查给定范围里的文档（搜索的范围回归，M2-P6 复核 A 的 S3）
-export { DocumentsRepository } from '../modules/documents/index.ts'
 export { JobsModule, TRASH_PURGE_LOCK, TrashPurgeJob } from '../modules/jobs/index.ts'
 export type { TrashPurgeRound } from '../modules/jobs/index.ts'
 export { AppLogger } from '../modules/logging/index.ts'

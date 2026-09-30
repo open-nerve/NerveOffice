@@ -1,6 +1,6 @@
 // 表定义共用的写法：名称判重键的表达式（M2-P6 复核 B 的 M-1）。表达式在数据库里的效果由集成测试对着真实数据库核对
 // （tests/integration 的 spaces/space-names.test.ts 与迁移的用例），这里核对拼出来的 SQL 与空白的清单。
-import { NAME_KEY_IGNORED_CHARACTERS } from '@nerve-office/contracts'
+import { BLANK_LOOKING_CHARACTERS, NAME_KEY_IGNORED_CHARACTERS } from '@nerve-office/contracts'
 import { PgDialect } from 'drizzle-orm/pg-core'
 import { describe, expect, it } from 'vitest'
 import { spaces } from '../spaces/index.ts'
@@ -28,12 +28,20 @@ describe('名称的判重键', () => {
     expect(/^[\x20-\x7E]*$/.test(bracketExpressionOf(NAME_KEY_IGNORED_CHARACTERS))).toBe(true)
   })
 
-  it('表达式：NFKC → 去掉放行的格式字符 → 空白合成一个空格并去掉首尾 → lower 与 casefold → 再 NFKC；没有绑定参数（生成列里只能是常量）', () => {
-    const query = new PgDialect().sqlToQuery(nameKeyOf(spaces.name, NAME_KEY_IGNORED_CHARACTERS))
+  it('表达式：NFKC → 去掉放行的格式字符 → 空白与显示成空白的字符合成一个空格并去掉首尾 → lower 与 casefold → 再 NFKC；没有绑定参数（生成列里只能是常量）', () => {
+    const query = new PgDialect().sqlToQuery(nameKeyOf(spaces.name, { ignored: NAME_KEY_IGNORED_CHARACTERS, blankLooking: BLANK_LOOKING_CHARACTERS }))
     expect(query.params).toEqual([])
     expect(query.sql).toBe(
       'normalize(casefold(lower(btrim(regexp_replace(regexp_replace(normalize("spaces"."name", NFKC), '
-      + `'${bracketExpressionOf(NAME_KEY_IGNORED_CHARACTERS)}', '', 'g'), '${bracketExpressionOf(WHITE_SPACE)}+', ' ', 'g'), ' '))), NFKC)`,
+      + `'${bracketExpressionOf(NAME_KEY_IGNORED_CHARACTERS)}', '', 'g'), '${bracketExpressionOf([...WHITE_SPACE, ...BLANK_LOOKING_CHARACTERS])}+', ' ', 'g'), ' '))), NFKC)`,
     )
+  })
+
+  it('显示成空白的非格式字符并进空白的方括号（M2-P6 复验 R-M1）：盲文空白、契丹小字填充符、乐谱的空符头，写成转义；它们不在去掉的那一组里', () => {
+    const query = new PgDialect().sqlToQuery(nameKeyOf(spaces.name, { ignored: NAME_KEY_IGNORED_CHARACTERS, blankLooking: BLANK_LOOKING_CHARACTERS }))
+    expect(query.sql).toContain('\\u205F\\u3000\\u2800\\U00016FE4\\U0001D159]+')
+    // 去掉的只有放行的格式字符：显示成空白的字符要变成空格，两边的字才不会连在一起
+    for (const hex of ['2800', '16FE4', '1D159'])
+      expect(bracketExpressionOf(NAME_KEY_IGNORED_CHARACTERS)).not.toContain(hex)
   })
 })

@@ -35,17 +35,51 @@ export function hasLineSeparators(value: string): boolean {
   return LINE_SEPARATORS.test(value)
 }
 
+/** 码点的闭区间：[第一个, 最后一个] */
+type CodePointRanges = readonly (readonly [number, number])[]
+
+/** 这个码点在不在这些闭区间里 */
+function within(ranges: CodePointRanges, codePoint: number): boolean {
+  return ranges.some(([first, last]) => codePoint >= first && codePoint <= last)
+}
+
+/**
+ * 显示成空白的非格式字符（M2-P6 复验 R-M1）：它们既不是空白（White_Space），也不是格式字符（Cf）或默认可忽略的字符——
+ * 按 Unicode 它们是有字形的普通字符，只是字形本身是空的，所以排版照常给它们留出位置，不能像默认可忽略的字符那样"不显示"：
+ * - U+2800 盲文空白：一个点也没有的盲文方格，是盲文文本里的空格，在盲文里有它自己的意思；属于符号（So）；
+ * - U+16FE4 契丹小字填充符：契丹小字拼字时占住一个空位，没有笔画；属于非间距记号（Mn）；
+ * - U+1D159 乐谱的空符头：没有形状的符头，乐谱里占位用；属于符号（So）。
+ * 盲文空白在浏览器里就是一个空白（Chromium 与 WebKit 实测：没有笔画，占一个字宽）；后两个的标准字形是空的，装了覆盖它们的字体
+ * （契丹小字、乐谱符号的字体）时显示成空白，没装时浏览器画一个缺字的方框——看起来是什么取决于看的人装了什么字体。
+ * 名字里夹着它们，就可能看起来多了一个空格或者什么也没多，与不带它们的名字看不出区别（复验者实测：已有"财务部"时，
+ * 末尾带一个盲文空白的"财务部"能建出来），所以名字里一律拒绝，说明与夹着零宽空格相同，是"不能包含看不见的字符"
+ * （hasHiddenCharacters）；整个名字、整个标题只有它们时按"只有看不见的字符"拒绝（hasVisibleCharacters）。
+ * 团队空间名称的判重键把它们当空白（apps/api 的 spaces 表定义）：名字的规则拒绝它们之前写进去的数据里可能有它们，
+ * 与名字的规则用同一份清单
+ */
+export const BLANK_LOOKING_CHARACTERS: CodePointRanges = [
+  [0x2800, 0x2800],
+  [0x16FE4, 0x16FE4],
+  [0x1D159, 0x1D159],
+]
+
 /**
  * 看不见的字符：空白（White_Space）、默认可忽略的字符（Default_Ignorable_Code_Point：零宽空格与零宽连接符、
- * 词连接符、BOM、变体选择符、韩文填充符 U+3164 等、蒙古文元音分隔符），盲文空白 U+2800（显示成空白的常见替身），
- * 以及行间注释字符 U+FFF9–U+FFFB（格式字符但不属于默认可忽略，WebKit 里宽度为 0：只由它们组成的名字、标题同样拒绝，M2-P6）。
+ * 词连接符、BOM、变体选择符、韩文填充符 U+3164 等、蒙古文元音分隔符），
+ * 行间注释字符 U+FFF9–U+FFFB（格式字符但不属于默认可忽略，WebKit 里宽度为 0：只由它们组成的名字、标题同样拒绝，M2-P6），
+ * 以及显示成空白的非格式字符（BLANK_LOOKING_CHARACTERS，见 isInvisible）。
  * 这里只用来判断"去掉之后还剩不剩"；名字里夹着的格式字符与默认可忽略字符另由 hasHiddenCharacters 判断（复验 N6），标题里不拒绝。
  */
-const INVISIBLE = /[\p{White_Space}\p{Default_Ignorable_Code_Point}\u2800\uFFF9-\uFFFB]/gu
+const INVISIBLE = /^[\p{White_Space}\p{Default_Ignorable_Code_Point}\uFFF9-\uFFFB]$/u
 
-/** 去掉看不见的字符（INVISIBLE）之后还有字：整个名字不能只由空白、零宽字符、填充符组成。 */
+/** 一个字符看不见：INVISIBLE 里的，或者显示成空白的非格式字符 */
+function isInvisible(character: string): boolean {
+  return INVISIBLE.test(character) || within(BLANK_LOOKING_CHARACTERS, character.codePointAt(0) ?? 0)
+}
+
+/** 去掉看不见的字符（isInvisible）之后还有字：整个名字不能只由空白、零宽字符、填充符组成。 */
 export function hasVisibleCharacters(value: string): boolean {
-  return value.replace(INVISIBLE, '') !== ''
+  return [...value].some(character => !isInvisible(character))
 }
 
 /**
@@ -61,7 +95,7 @@ export function hasVisibleCharacters(value: string): boolean {
  * M2-P6 复验 建议-2）、阿拉伯文的数字符号 U+0600–U+0605 等、埃及圣书体的格式控制符 U+13430–U+1343F。
  * 双向控制字符也在其中，由 hasBidiControls 先给出更具体的说明。蒙古文元音分隔符 U+180E 只在正字法要求的位置放行（见下）
  */
-const FORMAT_CHARACTERS_ALLOWED_IN_NAMES: readonly (readonly [number, number])[] = [
+const FORMAT_CHARACTERS_ALLOWED_IN_NAMES: CodePointRanges = [
   [0x200C, 0x200D],
   [0x034F, 0x034F],
   [0x180B, 0x180D],
@@ -86,7 +120,7 @@ const MONGOLIAN_VOWEL_SEPARATOR = 0x180E
  * 团队空间的名称按它们判重就挡不住看起来一样的名字（M2-P6 复核 B 的 M-1）。
  * 按码点的闭区间列出；判重的键由数据库按这份清单算（apps/api 的 spaces 表定义），名字的规则放行什么，判重就忽略什么
  */
-export const NAME_KEY_IGNORED_CHARACTERS: readonly (readonly [number, number])[] = [
+export const NAME_KEY_IGNORED_CHARACTERS: CodePointRanges = [
   ...FORMAT_CHARACTERS_ALLOWED_IN_NAMES,
   [MONGOLIAN_VOWEL_SEPARATOR, MONGOLIAN_VOWEL_SEPARATOR],
 ]
@@ -107,16 +141,19 @@ function isMongolianVowelSeparatorInPlace(characters: readonly string[], index: 
 
 /**
  * 名字里夹着看不见的字符：放行的几类（FORMAT_CHARACTERS_ALLOWED_IN_NAMES）以外的格式字符与默认可忽略字符，
- * 正字法位置以外的蒙古文元音分隔符。视觉上相同的两个名字因此能并存，审计与成员列表按名字认人时就会认错。
+ * 正字法位置以外的蒙古文元音分隔符，以及显示成空白的非格式字符（BLANK_LOOKING_CHARACTERS，在哪里都拒绝，M2-P6 复验 R-M1）。
+ * 视觉上相同的两个名字因此能并存，审计与成员列表按名字认人时就会认错。
  * 放行的几类仍然不能单独构成整个名字（hasVisibleCharacters）
  */
 export function hasHiddenCharacters(value: string): boolean {
   const characters = [...value]
   return characters.some((character, index) => {
+    const codePoint = character.codePointAt(0) ?? 0
+    if (within(BLANK_LOOKING_CHARACTERS, codePoint))
+      return true
     if (!FORMAT_OR_IGNORABLE.test(character))
       return false
-    const codePoint = character.codePointAt(0) ?? 0
-    if (FORMAT_CHARACTERS_ALLOWED_IN_NAMES.some(([first, last]) => codePoint >= first && codePoint <= last))
+    if (within(FORMAT_CHARACTERS_ALLOWED_IN_NAMES, codePoint))
       return false
     return !isMongolianVowelSeparatorInPlace(characters, index)
   })
@@ -129,21 +166,27 @@ export interface TextRuleOptions {
 }
 
 /**
- * 名字中间的一段空白：空格类的分隔符（\p{Zs}：普通空格、不换行空格、全角空格、各种宽度的空格）连在一起的一段。
+ * 名字中间连续的空白：两个以上空格类的分隔符（\p{Zs}：普通空格、不换行空格、全角空格、各种宽度的空格）连在一起的一段。
  * 换行、制表符等控制字符与行、段分隔符不在其中：它们由下面的规则拒绝，并给出更具体的说明
  */
-const SPACE_RUNS = /\p{Zs}+/gu
+const SPACE_RUNS = /\p{Zs}{2,}/gu
 
-/** 名字中间的每一段空白合成一个普通空格：连续的空格、不换行空格、全角空格看起来与一个空格差不多，存成一样（M2-P6 复核 B 的 M-1） */
+/**
+ * 名字中间连续的空白合成一个，保留这一段里的第一个字符（M2-P6 复核 B 的 M-1；复验 R-G4）：连续的几个空格看起来与一个差不多，存成一个。
+ * 单个的空白原样保留：日文姓名里姓与名之间的全角空格、法文里的不换行空格是有意写的，换成普通空格就改了名字的样子。
+ * 团队空间的判重键另把所有空白看作同一个（apps/api 的 spaces 表定义）：中间是全角空格与普通空格的两个名字仍然算同一个名字。
+ * 空格类的分隔符都在基本平面，取第一个 UTF-16 单元就是第一个字符
+ */
 export function collapseSpaces(value: string): string {
-  return value.replace(SPACE_RUNS, ' ')
+  return value.replace(SPACE_RUNS, run => run.charAt(0))
 }
 
 /**
- * 名称（显示名、团队空间名称、文件夹名称）：去掉首尾空白，中间的每一段空白合成一个普通空格，再 NFC 归一
+ * 名称（显示名、团队空间名称、文件夹名称）：去掉首尾空白，中间连续的空白合成一个（保留第一个，单个的原样保留），再 NFC 归一
  * （同一个字的组合写法与预组写法存成一样）；之后 1–maxLength 个字符（按码点）；不含控制字符、双向控制字符、行与段分隔符；
  * 去掉看不见的字符之后仍然有字；不夹着看不见的字符（复验 N6：零宽连接符、变体选择符等名字里确有用途的几类除外，
- * 见 FORMAT_CHARACTERS_ALLOWED_IN_NAMES；蒙古文元音分隔符只在正字法位置上放行）。
+ * 见 FORMAT_CHARACTERS_ALLOWED_IN_NAMES；蒙古文元音分隔符只在正字法位置上放行；显示成空白的非格式字符一律拒绝，
+ * 见 BLANK_LOOKING_CHARACTERS）。
  * 说明按这个顺序给出第一条：整个名字都看不见时说"只有看不见的字符"，夹在字中间时才说"不能包含"
  */
 export function nameTextSchema({ label, maxLength }: TextRuleOptions) {

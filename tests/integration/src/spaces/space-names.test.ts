@@ -1,5 +1,7 @@
 // 团队空间的名称（M2-P2 设计 §3.2、§3.9）：按判重键唯一（看起来一样的名称算同一个名字，M2-P6 复核 B 的 M-1），
 // 由唯一索引兜住并发；创建与改名撞上唯一约束时只回滚到保存点，事务仍可继续（M2-P2 审查 A6）：经测试探针在一个事务里撞名之后再改一次。
+// 显示成空白的非格式字符（盲文空白等）：入口拒绝，判重键把入口拒绝之前写进去的当空白（M2-P6 复验 R-M1）；
+// 判得偏严的写法（蒙古文的元音分隔符，复验 R-G1）有用例钉住。
 // 看不见的字符一律写成 \u 转义：源码里直接出现它们，审阅时看不出来。
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
@@ -241,8 +243,9 @@ describe('团队空间的名称：看起来一样的名称算同一个名字（M
     const response = await create('  Ops\u3000\u00A0 Center\u200D  ')
     expect(response.status).toBe(201)
     const space = parseExact(adminSpaceSchema, await response.json())
-    // 入口把中间的空白合成一个普通空格（名称照原样保留放行的零宽连接符）
-    expect(space.name).toBe('Ops Center\u200D')
+    // 入口把中间连续的空白合成一个、保留这一段里的第一个（全角空格，M2-P6 复验 R-G4）；名称照原样保留放行的零宽连接符。
+    // 判重键里所有空白都是同一个空格
+    expect(space.name).toBe('Ops\u3000Center\u200D')
     expect(await keyOf(space.id)).toBe('ops center')
     const greek = parseExact(adminSpaceSchema, await (await create('\u03A3\u039F\u03A6\u0399\u0391\u03A3')).json())
     expect(await keyOf(greek.id)).toBe('\u03C3\u03BF\u03C6\u03B9\u03B1\u03C3')
@@ -266,7 +269,8 @@ describe('团队空间的名称：看起来一样的名称算同一个名字（M
     expect((await rename(mine, 'HR Two')).status).toBe(200)
     // 自己现在的名称的另一种写法：判重键相同，但撞的是自己这一行，不算重名
     expect((await rename(mine, 'hr\u00A0TWO')).status).toBe(200)
-    expect(await namesOf([mine])).toEqual(['hr TWO'])
+    // 单个的不换行空格原样保留（M2-P6 复验 R-G4）
+    expect(await namesOf([mine])).toEqual(['hr\u00A0TWO'])
   })
 
   it('个人空间不参与判重：与团队空间的名称看起来一样也照常', async () => {
@@ -274,5 +278,163 @@ describe('团队空间的名称：看起来一样的名称算同一个名字（M
     // 直接写库建账户与个人空间：唯一索引只管团队空间，个人空间的名称（取显示名）撞上判重键也照常写入
     const twin = await createAccount(database, { username: 'twin', displayName: '市\u200D场部' })
     expect(await keyOf(twin.personalSpaceId)).toBe(await keyOf(team))
+  })
+})
+
+/** 直接写库建一个团队空间（艾米是空间管理员）：模拟名称的入口拒绝某些字符之前写进去的数据 */
+async function legacyTeamSpace(name: string): Promise<string> {
+  return createTeamSpace(database, { name, createdBy: root.id, members: { [amy.id]: 'admin' } })
+}
+
+let freshNames = 0
+/** 每次一个新的名称：探针在撞名之后，同一个事务里接着建、接着改的那一个 */
+function freshName(prefix: string): string {
+  freshNames += 1
+  return `${prefix} ${freshNames}`
+}
+
+/** 显示成空白的非格式字符（contracts 的 BLANK_LOOKING_CHARACTERS）：盲文空白、契丹小字填充符、乐谱的空符头 */
+const BLANK_LOOKING = ['\u2800', '\u{16FE4}', '\u{1D159}']
+
+describe('团队空间的名称：显示成空白的非格式字符（M2-P6 复验 R-M1）', () => {
+  it('入口拒绝：已有"财务组"时新建末尾带它的、用它代替空格的，一律 400，一个也没有建出来', async () => {
+    expect((await create('财务组')).status).toBe(201)
+    expect((await create('财 务处')).status).toBe(201)
+    for (const character of BLANK_LOOKING) {
+      for (const name of [`财务组${character}`, `财${character}务处`]) {
+        const response = await create(name)
+        expect(response.status, JSON.stringify(name)).toBe(400)
+        expect(await codeOf(response)).toBe('REQUEST_INVALID')
+      }
+    }
+    expect(await database.query(async client => (await client.query<{ count: number }>(
+      'SELECT count(*)::int AS count FROM spaces WHERE type = \'team\' AND name_key = ANY($1::text[])',
+      [['财务组', '财 务处']],
+    )).rows[0]?.count)).toBe(2)
+  })
+
+  it('入口拒绝：空间管理员把自己的空间改名成已有的"人事组"加一个它，400，名称不变', async () => {
+    await teamSpace('人事组')
+    const mine = await teamSpace()
+    expect((await rename(mine, '人事组')).status).toBe(409)
+    for (const character of BLANK_LOOKING) {
+      const response = await rename(mine, `人事组${character}`)
+      expect(response.status, JSON.stringify(character)).toBe(400)
+      expect(await codeOf(response)).toBe('REQUEST_INVALID')
+    }
+    expect(await namesOf([mine])).toEqual([expect.stringMatching(/^名称测试/) as unknown])
+  })
+
+  it('判重键把它们当空白：不经入口、直接交给服务（新建与改名），撞上唯一索引，SPACE_NAME_TAKEN（接口上是 409）', async () => {
+    await teamSpace('采购组')
+    await teamSpace('采 购处')
+    for (const character of BLANK_LOOKING) {
+      for (const taken of [`采购组${character}`, `采${character}购处`, `${character}采购组`]) {
+        const created = await probe('create', { taken, fresh: freshName('采购新组'), createdBy: root.id, adminUserId: amy.id })
+        expect(created.first, JSON.stringify(taken)).toBe('SPACE_NAME_TAKEN')
+        const renamed = await probe('rename', { spaceId: await teamSpace(), taken, fresh: freshName('采购改名') })
+        expect(renamed.first, JSON.stringify(taken)).toBe('SPACE_NAME_TAKEN')
+      }
+    }
+  })
+
+  it('入口拒绝它们之前写进去的名称（带着它们）：再建、改成看起来一样的名称，409；判重键里它们与空白一起合成一个空格', async () => {
+    const legacy = [
+      await legacyTeamSpace('财务科\u2800'),
+      await legacyTeamSpace('人\u2800事科'),
+      await legacyTeamSpace('\u{16FE4}总务科'),
+      await legacyTeamSpace('行政\u{1D159}\u2800 科'),
+    ]
+    expect(await Promise.all(legacy.map(keyOf))).toEqual(['财务科', '人 事科', '总务科', '行政 科'])
+    for (const name of ['财务科', '人 事科', '人\u3000事科', '总务科', '行政 科']) {
+      const response = await create(name)
+      expect(response.status, JSON.stringify(name)).toBe(409)
+      expect(await codeOf(response)).toBe('SPACE_NAME_TAKEN')
+    }
+    const mine = await teamSpace()
+    for (const name of ['财务科', '人 事科']) {
+      const response = await rename(mine, name)
+      expect(response.status, JSON.stringify(name)).toBe(409)
+      expect(await codeOf(response)).toBe('SPACE_NAME_TAKEN')
+    }
+  })
+})
+
+/** 蒙古文字母：na U+1828、a U+1820、ra U+1837、ha U+182C；元音分隔符 MVS U+180E（名称里只在正字法位置上放行） */
+const MONGOLIAN = { na: '\u1828', a: '\u1820', ra: '\u1837', ha: '\u182C', mvs: '\u180E' }
+
+describe('团队空间的名称：判得偏严的写法（M2-P6 复验 R-G1）', () => {
+  const { na, a, ra, ha, mvs } = MONGOLIAN
+
+  it('蒙古文：正字法位置上的元音分隔符在判重时不算区别，带与不带的两个名称算同一个名字（两个方向）', async () => {
+    // nar-a（名字"娜拉"的写法）：分隔符改变词尾 a 的字形，但与不带它的写法判成重名——
+    // 接受判得偏严（换个名字即可；偏宽会让人认错空间）
+    const withSeparator = parseExact(adminSpaceSchema, await (await create(`${na}${a}${ra}${mvs}${a}`)).json())
+    expect(withSeparator.name).toBe(`${na}${a}${ra}${mvs}${a}`)
+    expect(await keyOf(withSeparator.id)).toBe(`${na}${a}${ra}${a}`)
+    const without = await create(`${na}${a}${ra}${a}`)
+    expect(without.status).toBe(409)
+    expect(await codeOf(without)).toBe('SPACE_NAME_TAKEN')
+    // 反过来：先有不带的 qara，再建带分隔符的 qar-a
+    expect((await create(`${ha}${a}${ra}${a}`)).status).toBe(201)
+    const withAfter = await create(`${ha}${a}${ra}${mvs}${a}`)
+    expect(withAfter.status).toBe(409)
+    expect(await codeOf(withAfter)).toBe('SPACE_NAME_TAKEN')
+  })
+})
+
+let pairs = 0
+/** 逐对核对：先建 first（要 201），再建 other，返回后者的状态码。每一对加一个不同的后缀，免得与别的对撞名 */
+async function secondOf(first: string, other: string): Promise<number> {
+  pairs += 1
+  const suffix = ` #${pairs}`
+  expect((await create(`${first}${suffix}`)).status, JSON.stringify(first)).toBe(201)
+  return (await create(`${other}${suffix}`)).status
+}
+
+describe('团队空间的名称：逐对核对看起来一样的与看起来不同的（M2-P6 复验）', () => {
+  /**
+   * 看起来一样的两个名称，第二个的结果：400 是名称的入口先拒绝了（看不见的字符、显示成空白的字符）；
+   * 201 是已知不处理的跨文字同形字（拉丁字母与西里尔、希腊字母长得一样的几个，兼容写法里样子相近的分数）：
+   * 判重键不做"同形字的骨架"，这一类登记为 DEF-032，由 M7 的安全审查处理
+   */
+  const LOOKALIKES: readonly (readonly [string, string, string, number])[] = [
+    ['盲文空白在末尾', '财务部', '财务部\u2800', 400],
+    ['盲文空白代替空格', '财 务部', '财\u2800务部', 400],
+    ['契丹小字填充符', '财务部', '财务部\u{16FE4}', 400],
+    ['乐谱的空符头', '财务部', '财务部\u{1D159}', 400],
+    ['韩文填充符', '财务部', '财务部\u3164', 400],
+    ['半角韩文填充符', '财务部', '财务部\uFFA0', 400],
+    ['西里尔字母 а 代替拉丁字母 a（DEF-032）', 'Finance', 'Fin\u0430nce', 201],
+    ['希腊字母 Ο 代替拉丁字母 O（DEF-032）', 'Ops', '\u039Fps', 201],
+    ['分数 ½ 与 1/2（NFKC 展开成分数斜线，不是斜线，DEF-032）', '1/2 组', '\u00BD 组', 201],
+  ]
+  it.each(LOOKALIKES)('看起来一样：%s', async (_name, first, other, expected) => {
+    expect(first).not.toBe(other)
+    expect(await secondOf(first, other)).toBe(expected)
+  })
+
+  /**
+   * 看起来不同（或者不完全一样）的两个名称，第二个的结果：409 是判得偏严——国旗的标签字符、零宽连接符组合的表情、
+   * 波斯文的零宽不连字与天城文的零宽连接符在判重时不算区别，兼容写法按 NFKC 归成一样。需求方接受判得偏严（M2-P6 复验 R-G1）：
+   * 名称唯一是为了在导航里区分，偏严只是要换个名字，偏宽会让人认错空间。蒙古文的元音分隔符另见上面的用例
+   */
+  const DISTINCT: readonly (readonly [string, string, string, number])[] = [
+    ['英格兰旗与苏格兰旗', '\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F} 球迷会', '\u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F} 球迷会', 409],
+    ['英格兰旗与黑旗', '\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F} 球迷会', '\u{1F3F4} 球迷会', 409],
+    ['一家人（零宽连接符组合）与三个人', '\u{1F468}\u200D\u{1F469}\u200D\u{1F467} 家庭组', '\u{1F468}\u{1F469}\u{1F467} 家庭组', 409],
+    ['波斯文带零宽不连字与不带', '\u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645', '\u0645\u06CC\u062E\u0648\u0627\u0647\u0645', 409],
+    ['天城文半字形（零宽连接符）与连字', '\u0915\u094D\u200D\u0937', '\u0915\u094D\u0937', 409],
+    ['㍿ 与 株式会社', '\u337F', '株式会社', 409],
+    ['带圈数字与数字', '第\u2460组', '第1组', 409],
+    ['下标数字与数字', 'H\u2082O', 'H2O', 409],
+    ['™ 与 TM', '\u2122 Club', 'TM Club', 409],
+    ['连字 ﬁ 与 fi（看起来一样，判重正确）', '\uFB01nance', 'finance', 409],
+    ['带空格的声调符号与"空格加带空格的声调符号"', 'a\u00B4b', 'a \u00B4b', 409],
+    ['ß 与 ss（内置 C.UTF-8 的大小写折叠是简单折叠，不误伤）', 'Stra\u00DFe', 'Strasse', 201],
+  ]
+  it.each(DISTINCT)('看起来不同：%s', async (_name, first, other, expected) => {
+    expect(first).not.toBe(other)
+    expect(await secondOf(first, other)).toBe(expected)
   })
 })

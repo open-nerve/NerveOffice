@@ -3,7 +3,8 @@
 // 写入代次（跨空间加一、空间内不加）、复制的逐字节一致与两份互不影响、requestId 的幂等；
 // 并发：移动与保存同时发生、判断过之后目标空间被归档、两个方向的跨空间移动（按空间 id 排序取树锁）；
 // 复制的源文档在锁下判断（M2-P6 复核 A 的 S1）：判断之后被移出空间、源被移走时复制被拒绝，
-// 复制进行中的移出、删除、移动与保存都等复制提交之后才生效（不成环）。
+// 复制进行中的移出、删除、移动与保存都等复制提交之后才生效（不成环）；目标空间同样在锁下再判断（复验 R-S1）。
+// 复制与其他各类操作两个方向的交错见 copy-locks.test.ts。
 import type { DocumentDetail } from '@nerve-office/contracts'
 import type pg from 'pg'
 import type { TestAccount } from '../support/accounts.ts'
@@ -574,6 +575,34 @@ describe('US-M2-14 复制的并发与锁：源文档在锁下判断（M2-P6 复�
     expect((await errorOf(response)).code).toBe('NOT_FOUND')
     expect(await copiesOf(document.id)).toEqual([])
     expect(await idsIn(benSession, ben.personalSpaceId)).toEqual([])
+  })
+
+  /**
+   * 锁下再判断目标空间（M2-P6 复验 R-S1）：不加锁的判断之后、取到目标空间的树锁之前，目标空间被归档、本被移出或降为查看者。
+   * 复制挡在目标空间的树锁上时这些改动提交，锁下的判断必须看到它们——用取锁之前的判断结果就会照样复制进去
+   */
+  const TARGET_CHANGES: readonly (readonly [string, (client: pg.Client, target: string) => Promise<unknown>, number, string])[] = [
+    ['目标空间被归档', async (client, target) => client.query('UPDATE spaces SET status = \'archived\' WHERE id = $1', [target]), 409, 'SPACE_ARCHIVED'],
+    ['本被移出目标空间', async (client, target) => client.query('DELETE FROM space_members WHERE space_id = $1 AND user_id = $2', [target, ben.id]), 404, 'NOT_FOUND'],
+    ['本在目标空间被降为查看者', async (client, target) => client.query('UPDATE space_members SET role = \'viewer\' WHERE space_id = $1 AND user_id = $2', [target, ben.id]), 403, 'PERMISSION_DENIED'],
+  ]
+
+  it.each(TARGET_CHANGES)('判断之后、取目标空间的树锁之前%s：锁下再判断目标，拒绝，不产生副本（M2-P6 复验 R-S1）', async (_name, change, status, code) => {
+    const source = await teamSpace()
+    const target = await teamSpace()
+    const document = await seedDocument(database, { spaceId: source, createdBy: amy.id, title: '周报' })
+    const response = await raceAgainstHeldLock(database, {
+      hold: holdSpaceTree(target),
+      request: async () => copy(benSession, document.id, { spaceId: target }),
+      change: async client => change(client, target),
+    })
+    expect(response.status, await response.clone().text()).toBe(status)
+    expect((await errorOf(response)).code).toBe(code)
+    expect(await copiesOf(document.id)).toEqual([])
+    expect(await database.query(async client => (await client.query<{ count: number }>(
+      'SELECT count(*)::int AS count FROM documents WHERE space_id = $1',
+      [target],
+    )).rows[0]?.count)).toBe(0)
   })
 
   it('判断之后、取锁之前源文档被移到了别的空间（本在那里仍然看得到）：锁保护不到它，404，不复制', async () => {

@@ -4,7 +4,8 @@
 //
 // 恢复与永久删除会改数据，所以各用各的删除单元。删除单元统一由**这个空间里的编辑者**删除
 // （个人空间由所有者删除，那里没有别人），一行里同时考出三条规则：空间管理员可以、删除者本人可以、
-// 同一个空间里的其他人不行。"删完之后被降级或被移出空间"因此也在里面：查看者那一列与外人那一列就是这种人。
+// 同一个空间里的其他人不行。"删完之后被降级或被移出空间的删除者"不在这张表里（查看者与外人都不是删除者）：
+// 这种情形由 documents/trash.test.ts 的恢复权限用例覆盖，判断之后、取锁之前才变的由那里的并发用例覆盖（M2-P6 复验 R-S2）。
 //
 // 搜索是范围类的操作：谁调用都是 200，真正的判定是"能不能在结果里看到那份文档"，状态码表达不了，
 // 所以单列一张真假表（矩阵之外），见本文件末尾的 describe。
@@ -161,6 +162,8 @@ describe('US-M2-12 搜索与按空间列出的范围：能读到才看得到，�
     expect(listed.nextCursor).toBeNull()
     const ids = listed.items.map(item => item.id)
     expect(ids).toContain(world.documents[cell.target].id)
+    // 整个空间：子文件夹里的也列出来（M2-P6 复验 R-G5）
+    expect(ids).toContain(world.folderDocuments[cell.target].id)
     expect(ids).not.toContain(world.trashedDocuments[cell.target].id)
     expect(ids.toSorted()).toEqual(await world.activeDocumentIds(cell.target))
   })

@@ -93,13 +93,15 @@ const OPERATIONS: Readonly<Record<Operation, MatrixOperation>> = {
 
 /** 成功的格子另外核对内容的操作 */
 const VERIFY: Partial<Record<Operation, CellOptions['verify']>> = {
-  // 按空间列出（根目录）：恰好是这个空间根目录下正常状态的文档（查库得到），别的空间里的一份也没有
+  // 按空间列出（根目录）：恰好是这个空间根目录下正常状态的文档（查库得到），别的空间里的一份也没有；
+  // 固定的文件夹里那一份不混进根目录（M2-P6 复验 R-G5：世界里的文件夹原来是空的，根目录不按目录过滤也查不出来）
   listSpace: async (response, target) => {
     const listed = parseExact(documentListResponseSchema, await response.json())
     expect(listed.nextCursor).toBeNull()
     const ids = listed.items.map(item => item.id)
     expect(ids.toSorted()).toEqual(await world.rootDocumentIds(target))
     expect(ids).toContain(world.documents[target].id)
+    expect(ids).not.toContain(world.folderDocuments[target].id)
   },
 }
 

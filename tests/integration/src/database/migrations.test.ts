@@ -332,13 +332,92 @@ describe('0016_m2_p6_space_name_key（M2-P6 复核 B 的 M-1）', () => {
     expect(message).toContain('\'财务部\'')
     expect(message).not.toContain('人事部')
     // 回滚：没有记下 0016，没有新列，原来的唯一索引还在
-    expect(await appliedCount(database)).toBe(MIGRATIONS.length - 1)
+    expect(await appliedCount(database)).toBe(MIGRATIONS.findIndex(migration => migration.tag === '0016_m2_p6_space_name_key'))
     const state = await database.query(async client => (await client.query<{ column: string | null, index: string | null }>(
       `SELECT (SELECT column_name FROM information_schema.columns WHERE table_name = 'spaces' AND column_name = 'name_key') AS column,
               (SELECT indexdef FROM pg_indexes WHERE indexname = 'spaces_team_name_key') AS index`,
     )).rows[0])
     expect(state?.column).toBeNull()
     expect(state?.index).toContain('lower(name)')
+  })
+})
+
+describe('0017_m2_p6_space_name_key_blanks（M2-P6 复验 R-M1）', () => {
+  /** 0016 的库：一个系统管理员，返回他的 id */
+  async function databaseAt0016(): Promise<{ database: TestDatabase, adminId: string }> {
+    const database = await emptyDatabase()
+    await runMigrations({ connectionString: database.url, lockTimeoutMs: 10_000, migrationsFolder: migrationsUpTo('0016_m2_p6_space_name_key') })
+    const adminId = await database.query(async client => (await client.query<{ id: string }>(
+      'INSERT INTO users (username, display_name, password_hash, system_role) VALUES (\'root\', \'root\', \'$argon2id$x\', \'admin\') RETURNING id',
+    )).rows[0]?.id ?? '')
+    return { database, adminId }
+  }
+
+  async function insertTeam(database: TestDatabase, name: string, createdBy: string): Promise<string> {
+    return database.query(async client => (await client.query<{ id: string }>(
+      'INSERT INTO spaces (type, name, created_by) VALUES (\'team\', $1, $2) RETURNING id',
+      [name, createdBy],
+    )).rows[0]?.id ?? '')
+  }
+
+  async function keysOf(database: TestDatabase, ids: readonly string[]): Promise<string[]> {
+    return database.query(async client => (await client.query<{ name_key: string }>(
+      'SELECT name_key FROM spaces WHERE id = ANY($1::uuid[]) ORDER BY array_position($1::uuid[], id)',
+      [ids],
+    )).rows.map(row => row.name_key))
+  }
+
+  it('0016 的库上已有夹着盲文空白、契丹小字填充符、乐谱的空符头的名称（入口拒绝之前写进去的）：判重键按新的表达式重算，把它们当空白；之后看起来一样的名称撞上唯一索引', async () => {
+    const { database, adminId } = await databaseAt0016()
+    const ids = [
+      await insertTeam(database, '研发\u2800二部', adminId),
+      await insertTeam(database, '市场部\u{1D159}', adminId),
+      await insertTeam(database, '\u{16FE4}Ops\u2800\u2800 Center', adminId),
+    ]
+    // 0016 的判重键不认它们：原样留在键里
+    expect(await keysOf(database, ids)).toEqual(['研发\u2800二部', '市场部\u{1D159}', '\u{16FE4}ops\u2800\u2800 center'])
+
+    expect(await migrateDatabase(database)).toMatchObject({ status: 'applied' })
+    // 名称原样保留；判重键里它们与空白一起合成一个空格，首尾的去掉
+    expect(await keysOf(database, ids)).toEqual(['研发 二部', '市场部', 'ops center'])
+    const violation = async (text: string, values: unknown[] = []): Promise<unknown> => database.query(async client => client.query(text, values).then(() => undefined, (error: unknown) => error))
+    const team = 'INSERT INTO spaces (type, name, created_by) VALUES (\'team\', $1, $2)'
+    for (const lookalike of ['研发 二部', '市场部', 'Ops Center', '研发\u{16FE4}二部', '市场部\u2800'])
+      expect(await violation(team, [lookalike, adminId]), JSON.stringify(lookalike)).toMatchObject({ code: '23505', constraint: 'spaces_team_name_key' })
+    expect(await violation(team, ['研发三部', adminId])).toBeUndefined()
+    // 仍是生成列，唯一索引照旧只管团队空间
+    expect(await violation('UPDATE spaces SET name_key = \'x\' WHERE id = $1', [ids[0]])).toMatchObject({ code: '428C9' })
+    const index = await database.query(async client => (await client.query<{ indexdef: string }>(
+      'SELECT indexdef FROM pg_indexes WHERE indexname = \'spaces_team_name_key\'',
+    )).rows[0]?.indexdef)
+    expect(index).toMatch(/UNIQUE INDEX spaces_team_name_key ON public\.spaces USING btree \(name_key\) WHERE \(type = 'team'::text\)/)
+  })
+
+  it('0016 的库上已有只差一个盲文空白（或者用它代替空格）的团队空间：迁移中止并列出冲突的空间，整个回滚，库还是 0016 的样子', async () => {
+    const { database, adminId } = await databaseAt0016()
+    const first = await insertTeam(database, '财务部', adminId)
+    const second = await insertTeam(database, '财务部\u2800', adminId)
+    const spaced = await insertTeam(database, '财 务', adminId)
+    const braille = await insertTeam(database, '财\u2800务', adminId)
+    await insertTeam(database, '人事部', adminId)
+
+    const failure: unknown = await migrateDatabase(database).then(() => undefined, (error: unknown) => error)
+    // drizzle 的迁移器把数据库的错误包一层（Failed query），RAISE 的说明在 cause 里
+    const raised = failure instanceof Error ? failure.cause : undefined
+    expect(raised).toMatchObject({ code: 'P0001' })
+    const message = (raised as Error).message
+    expect(message).toMatch(/^团队空间的名称按新的判重规则有重名（看起来一样的名称算同一个名字），先改名再执行迁移：/)
+    // 两组冲突都列出来（id 与名称），不相干的空间不在里面
+    for (const id of [first, second, spaced, braille])
+      expect(message).toContain(id)
+    expect(message).not.toContain('人事部')
+    // 回滚：没有记下 0017；判重键还是 0016 的表达式（不认盲文空白），唯一索引还在
+    expect(await appliedCount(database)).toBe(MIGRATIONS.findIndex(migration => migration.tag === '0017_m2_p6_space_name_key_blanks'))
+    expect(await keysOf(database, [second, braille])).toEqual(['财务部\u2800', '财\u2800务'])
+    const index = await database.query(async client => (await client.query<{ indexdef: string }>(
+      'SELECT indexdef FROM pg_indexes WHERE indexname = \'spaces_team_name_key\'',
+    )).rows[0]?.indexdef)
+    expect(index).toContain('(name_key)')
   })
 })
 

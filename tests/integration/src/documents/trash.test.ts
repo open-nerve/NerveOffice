@@ -1,6 +1,7 @@
 // 回收站（M2-P4 S3 的规则细则，US-M2-09）：删除单元的粒度与"不重组"、谁能删、按空间列出、
 // 整单恢复与原位置的回落、永久删除与连带、回收站里的东西对普通接口一律"不存在"、写入代次、跨空间移动与删除单元；
-// 并发：删文件夹与往里移文档、恢复与永久删除、删除与保存、判断过之后被移出空间（两个连接构造的交错）。
+// 并发：删文件夹与往里移文档、恢复与永久删除、删除与保存、判断过之后被移出空间；永久删除与恢复在判断过之后
+// 被降级、被移出、空间被归档时锁下再判断（M2-P6 复验 R-S2）（两个连接构造的交错）。
 import type { Folder, RestoredTrashEntry, SpaceRole, TrashListResponse } from '@nerve-office/contracts'
 import type pg from 'pg'
 import type { TestAccount } from '../support/accounts.ts'
@@ -792,5 +793,69 @@ describe('US-M2-14 回收站的并发（spec §7）', () => {
     expect(response.status).toBe(404)
     expect(await foldersOf([folder.id])).toMatchObject({ [folder.id]: { status: 'active', entry: null } })
     expect(await count('SELECT count(*) FROM trash_entries WHERE space_id = $1', [spaceId])).toBe(0)
+  })
+
+  /**
+   * 人工的永久删除与恢复在锁下再判断权限（M2-P6 复验 R-S2）：不加锁的判断之后、取到空间树的锁之前，操作者的角色或空间的状态变了。
+   * 锁下只核对"删除单元还在、还在原来的空间"而不再判断权限的话，这几条都会照样做成
+   */
+  it('永久删除：判断过之后、取空间树的锁之前空间管理员被降为编辑者，锁下再判断，403，删除单元还在', async () => {
+    const spaceId = await teamSpace({ amy: 'admin' })
+    const document = await createDocument(database, { spaceId, createdBy: amy.id, title: '周报' })
+    const entryId = await trashedEntry(amySession, spaceId, async () => deleteDocument(amySession, document))
+    const response = await raceAgainstHeldLock(database, {
+      hold: holdSpaceTree(spaceId),
+      request: async () => purge(amySession, entryId),
+      change: async client => client.query('UPDATE space_members SET role = \'editor\' WHERE space_id = $1 AND user_id = $2', [spaceId, amy.id]),
+    })
+    expect(response.status).toBe(403)
+    expect((await errorOf(response)).code).toBe('PERMISSION_DENIED')
+    expect(await count('SELECT count(*) FROM trash_entries WHERE id = $1', [entryId])).toBe(1)
+    expect(await documentsOf([document])).toMatchObject({ [document]: { status: 'trashed', entry: entryId } })
+  })
+
+  it('永久删除：判断过之后、取空间树的锁之前空间被归档，锁下再判断，403，删除单元还在', async () => {
+    const spaceId = await teamSpace({ amy: 'admin' })
+    const document = await createDocument(database, { spaceId, createdBy: amy.id, title: '周报' })
+    const entryId = await trashedEntry(amySession, spaceId, async () => deleteDocument(amySession, document))
+    const response = await raceAgainstHeldLock(database, {
+      hold: holdSpaceTree(spaceId),
+      request: async () => purge(amySession, entryId),
+      change: async client => client.query('UPDATE spaces SET status = \'archived\' WHERE id = $1', [spaceId]),
+    })
+    expect(response.status).toBe(403)
+    expect(await errorOf(response)).toEqual({ code: 'PERMISSION_DENIED', message: '空间已归档，只能查看' })
+    expect(await count('SELECT count(*) FROM trash_entries WHERE id = $1', [entryId])).toBe(1)
+    expect(await documentsOf([document])).toMatchObject({ [document]: { status: 'trashed', entry: entryId } })
+  })
+
+  it('恢复：判断过之后、取空间树的锁之前删除者（空间管理员）被移出空间，锁下再判断，404，删除单元还在', async () => {
+    const spaceId = await teamSpace({ amy: 'admin' })
+    const document = await createDocument(database, { spaceId, createdBy: amy.id, title: '周报' })
+    const entryId = await trashedEntry(amySession, spaceId, async () => deleteDocument(amySession, document))
+    const response = await raceAgainstHeldLock(database, {
+      hold: holdSpaceTree(spaceId),
+      request: async () => restore(amySession, entryId),
+      change: async client => client.query('DELETE FROM space_members WHERE space_id = $1 AND user_id = $2', [spaceId, amy.id]),
+    })
+    expect(response.status).toBe(404)
+    expect((await errorOf(response)).code).toBe('NOT_FOUND')
+    expect(await count('SELECT count(*) FROM trash_entries WHERE id = $1', [entryId])).toBe(1)
+    expect(await documentsOf([document])).toMatchObject({ [document]: { status: 'trashed', entry: entryId } })
+  })
+
+  it('恢复：判断过之后、取空间树的锁之前空间被归档，锁下再判断，403，删除单元还在', async () => {
+    const spaceId = await teamSpace({ amy: 'admin' })
+    const document = await createDocument(database, { spaceId, createdBy: ben.id, title: '本的' })
+    const entryId = await trashedEntry(benSession, spaceId, async () => deleteDocument(benSession, document))
+    const response = await raceAgainstHeldLock(database, {
+      hold: holdSpaceTree(spaceId),
+      request: async () => restore(benSession, entryId),
+      change: async client => client.query('UPDATE spaces SET status = \'archived\' WHERE id = $1', [spaceId]),
+    })
+    expect(response.status).toBe(403)
+    expect(await errorOf(response)).toEqual({ code: 'PERMISSION_DENIED', message: '空间已归档，只能查看' })
+    expect(await count('SELECT count(*) FROM trash_entries WHERE id = $1', [entryId])).toBe(1)
+    expect(await documentsOf([document])).toMatchObject({ [document]: { status: 'trashed', entry: entryId } })
   })
 })

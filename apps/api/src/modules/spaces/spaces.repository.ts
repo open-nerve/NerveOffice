@@ -65,7 +65,10 @@ export class SpacesRepository {
     return row
   }
 
-  /** 建团队空间；名称（不区分大小写）已被使用时返回 name_taken（由唯一索引兜住并发的创建与改名） */
+  /**
+   * 建团队空间；名称按判重键（name_key：看起来一样的名称算同一个名字，M2-P6 复核 B 的 M-1）已被使用时返回 name_taken
+   * （由判重键上的唯一索引兜住并发的创建与改名）
+   */
   async insertTeam(team: { readonly name: string, readonly createdBy: string, readonly visibleToAll: boolean }, transaction: Transaction): Promise<SpaceRecord | 'name_taken'> {
     try {
       return await inSavepoint(transaction, async (executor) => {

@@ -1,6 +1,6 @@
 // spaces 模块的表：空间（M1-P3 设计 §3.2；M2-P2 设计 §3.2 加上团队空间、归档、创建人）与团队空间的成员（M2-P2）。
 import type { SQL } from 'drizzle-orm'
-import { NAME_KEY_IGNORED_CHARACTERS, SPACE_NAME_MAX_LENGTH, SPACE_ROLES, SPACE_STATUSES, SPACE_TYPES } from '@nerve-office/contracts'
+import { BLANK_LOOKING_CHARACTERS, NAME_KEY_IGNORED_CHARACTERS, SPACE_NAME_MAX_LENGTH, SPACE_ROLES, SPACE_STATUSES, SPACE_TYPES } from '@nerve-office/contracts'
 import { sql } from 'drizzle-orm'
 import { boolean, check, index, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
 import { lengthBetween, nameKeyOf, oneOf } from '../common/index.ts'
@@ -13,7 +13,7 @@ export const spaces = pgTable('spaces', {
   name: text('name').notNull(),
   // 名称的判重键（M2-P6 复核 B 的 M-1）：由数据库从名称算出（生成列），看起来一样的名称算出同一个键，算法只有 nameKeyOf 这一处。
   // 服务不自己判断重名：创建与改名撞上下面的唯一索引就是"名称已被使用"
-  nameKey: text('name_key').notNull().generatedAlwaysAs((): SQL => nameKeyOf(spaces.name, NAME_KEY_IGNORED_CHARACTERS)),
+  nameKey: text('name_key').notNull().generatedAlwaysAs((): SQL => nameKeyOf(spaces.name, { ignored: NAME_KEY_IGNORED_CHARACTERS, blankLooking: BLANK_LOOKING_CHARACTERS })),
   status: text('status', { enum: SPACE_STATUSES }).notNull().default('active'),
   ownerUserId: uuid('owner_user_id').references(() => users.id, { onDelete: 'restrict' }),
   visibleToAll: boolean('visible_to_all').notNull().default(false),

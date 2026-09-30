@@ -45,7 +45,10 @@ export const ERROR_CODES = {
   ACCOUNT_UNAVAILABLE: { status: 409, message: '这个账户不存在或已停用' },
   /** 只有停用的账户，才能转移它个人空间里的文档（M2-P2） */
   ACCOUNT_NOT_DISABLED: { status: 409, message: '账户仍然有效，只有停用的账户才能转移文档' },
-  /** 团队空间的名称已被使用：不区分大小写，已归档的也算（M2-P2） */
+  /**
+   * 团队空间的名称已被使用（M2-P2）：按判重键比较，看起来一样的名称算同一个名字——大小写、全角与半角、空白与看不见的字符
+   * 都不算区别（M2-P6 复核 B 的 M-1，算法见 apps/api 的 spaces 表定义）；已归档的也算
+   */
   SPACE_NAME_TAKEN: { status: 409, message: '已有同名的团队空间' },
   /** 要添加的人已经是这个空间的成员；改角色用调整的接口（M2-P2） */
   ALREADY_MEMBER: { status: 409, message: '这个人已经是空间的成员' },

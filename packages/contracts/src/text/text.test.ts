@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { folderNameSchema } from '../folders/folders.ts'
 import { spaceNameSchema } from '../spaces/spaces.ts'
 import { displayNameSchema } from '../users/users.ts'
-import { codePointLength, collapseSpaces, hasBidiControls, hasControlCharacters, hasHiddenCharacters, hasLineSeparators, hasVisibleCharacters, NAME_KEY_IGNORED_CHARACTERS, nameTextSchema, titleTextSchema } from './text.ts'
+import { BLANK_LOOKING_CHARACTERS, codePointLength, collapseSpaces, hasBidiControls, hasControlCharacters, hasHiddenCharacters, hasLineSeparators, hasVisibleCharacters, NAME_KEY_IGNORED_CHARACTERS, nameTextSchema, titleTextSchema } from './text.ts'
 
 const nameSchema = nameTextSchema({ label: '名称', maxLength: 20 })
 const titleSchema = titleTextSchema({ label: '标题', maxLength: 20 })
@@ -18,8 +18,8 @@ function problemOf(schema: typeof nameSchema | typeof titleSchema, value: string
 /** 双向控制字符：阿拉伯字母标记、LRM、RLM、LRE、RLE、PDF、LRO、RLO、LRI、RLI、FSI、PDI */
 const BIDI_CONTROLS = ['\u061C', '\u200E', '\u200F', '\u202A', '\u202B', '\u202C', '\u202D', '\u202E', '\u2066', '\u2067', '\u2068', '\u2069']
 
-/** 单独构成整个名称时看不见的字符：零宽空格、词连接符、BOM、韩文填充符（三种）、蒙古文元音分隔符、零宽连接符与不连字、变体选择符、盲文空白、软连字符 */
-const INVISIBLE = ['\u200B', '\u2060', '\uFEFF', '\u3164', '\u115F', '\u1160', '\uFFA0', '\u180E', '\u200D', '\u200C', '\uFE0E', '\uFE0F', '\u2800', '\u00AD']
+/** 单独构成整个名称时看不见的字符：零宽空格、词连接符、BOM、韩文填充符（三种）、蒙古文元音分隔符、零宽连接符与不连字、变体选择符、盲文空白、软连字符、契丹小字填充符、乐谱的空符头 */
+const INVISIBLE = ['\u200B', '\u2060', '\uFEFF', '\u3164', '\u115F', '\u1160', '\uFFA0', '\u180E', '\u200D', '\u200C', '\uFE0E', '\uFE0F', '\u2800', '\u00AD', '\u{16FE4}', '\u{1D159}']
 
 /**
  * 正常的名字：表情组合（零宽连接符连起来的一家人、带变体选择符的心、国旗、肤色）、阿拉伯文、希伯来文、
@@ -116,15 +116,24 @@ describe('名称的规则（显示名、团队空间名称、文件夹名称共�
     expect(problemOf(nameSchema, 'a'.repeat(21))).toBe('名称为 1–20 个字符')
   })
 
-  it('名字中间的每一段空白合成一个普通空格：连续的空格、不换行空格、全角空格、各种宽度的空格（M2-P6 复核 B 的 M-1）', () => {
+  it('名字中间连续的空白合成一个，保留这一段里的第一个：连续的空格、不换行空格、全角空格、各种宽度的空格（M2-P6 复核 B 的 M-1、复验 R-G4）', () => {
     expect(nameSchema.parse('Finance  Team')).toBe('Finance Team')
-    expect(nameSchema.parse('Finance\u00A0Team')).toBe('Finance Team')
-    expect(nameSchema.parse('Finance\u2002\u202F Team')).toBe('Finance Team')
-    expect(nameSchema.parse('张\u3000三')).toBe('张 三')
-    expect(nameSchema.parse('\u3000 财务\u205F\u1680部 \u00A0')).toBe('财务 部')
-    // 普通的一个空格照旧；合并之后按码点计长度：20 个字符加一段长空白仍然合法
-    expect(nameSchema.parse('Zhang San')).toBe('Zhang San')
+    expect(nameSchema.parse('Finance\u2002\u202F Team')).toBe('Finance\u2002Team')
+    expect(nameSchema.parse('山田\u3000\u3000太郎')).toBe('山田\u3000太郎')
+    expect(nameSchema.parse('Finance\u00A0\u00A0Team')).toBe('Finance\u00A0Team')
+    expect(nameSchema.parse('\u3000 财务\u205F\u1680部 \u00A0')).toBe('财务\u205F部')
+    // 合并之后按码点计长度：20 个字符加一段长空白仍然合法
     expect(nameSchema.safeParse(`${'a'.repeat(10)}${' '.repeat(30)}${'b'.repeat(9)}`).success).toBe(true)
+  })
+
+  it('单个的空白原样保留：姓名里的全角空格、不换行空格、各种宽度的空格不改成普通空格（M2-P6 复验 R-G4）', () => {
+    expect(nameSchema.parse('Zhang San')).toBe('Zhang San')
+    expect(nameSchema.parse('山田\u3000太郎')).toBe('山田\u3000太郎')
+    expect(nameSchema.parse('Finance\u00A0Team')).toBe('Finance\u00A0Team')
+    for (const space of ['\u00A0', '\u1680', '\u2000', '\u200A', '\u202F', '\u205F', '\u3000'])
+      expect(collapseSpaces(`a${space}b`), JSON.stringify(space)).toBe(`a${space}b`)
+    // 几段分开的单个空白各自保留，连续的那一段合成一个
+    expect(nameSchema.parse('a\u3000b c\u00A0d\u3000 e')).toBe('a\u3000b c\u00A0d\u3000e')
   })
 
   it('空白的合并不碰控制字符与行、段分隔符：它们照旧按各自的说明拒绝', () => {
@@ -134,9 +143,9 @@ describe('名称的规则（显示名、团队空间名称、文件夹名称共�
     expect(collapseSpaces('a\t\tb\u2029c')).toBe('a\t\tb\u2029c')
   })
 
-  it('空白合并之后仍然不能只有看不见的字符；夹在放行的字符之间的空白同样合并', () => {
+  it('空白合并之后仍然不能只有看不见的字符；夹在放行的字符之间的连续空白同样合并', () => {
     expect(problemOf(nameSchema, '\u200D \u3000\u200D')).toBe('名称不能只有空白或看不见的字符')
-    expect(nameSchema.parse('\u2764\uFE0F\u3000\u3000Team')).toBe('\u2764\uFE0F Team')
+    expect(nameSchema.parse('\u2764\uFE0F\u3000\u3000Team')).toBe('\u2764\uFE0F\u3000Team')
   })
 
   it('显示名用的就是这套规则', () => {
@@ -146,9 +155,11 @@ describe('名称的规则（显示名、团队空间名称、文件夹名称共�
     expect(displayNameSchema.parse('\u{1F468}\u200D\u{1F469}\u200D\u{1F467} 张三')).toBe('\u{1F468}\u200D\u{1F469}\u200D\u{1F467} 张三')
   })
 
-  it('显示名、团队空间名称、文件夹名称都合并中间的空白', () => {
-    for (const schema of [displayNameSchema, spaceNameSchema, folderNameSchema])
-      expect(schema.parse(' 研发\u3000\u3000二部 ')).toBe('研发 二部')
+  it('显示名、团队空间名称、文件夹名称都合并中间连续的空白，单个的原样保留', () => {
+    for (const schema of [displayNameSchema, spaceNameSchema, folderNameSchema]) {
+      expect(schema.parse(' 研发\u3000\u3000二部 ')).toBe('研发\u3000二部')
+      expect(schema.parse('研发\u3000二部')).toBe('研发\u3000二部')
+    }
   })
 })
 
@@ -293,6 +304,64 @@ describe('名称里的格式字符：不属于默认可忽略的同样拒绝（M
   it('放行的几类照旧：零宽连接符、零宽不连字、标签字符也是格式字符', () => {
     for (const [label, name] of ALLOWED_IN_NAMES)
       expect(hasHiddenCharacters(name), label).toBe(false)
+  })
+})
+
+/** 显示成空白的非格式字符（M2-P6 复验 R-M1）：盲文空白、契丹小字填充符、乐谱的空符头 */
+const BLANK_LOOKING = ['\u2800', '\u{16FE4}', '\u{1D159}']
+
+/** 用例标题里写码点（U+2800），不直接带着看不见的字符 */
+function codePointLabel(character: string): string {
+  return `U+${(character.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, '0')}`
+}
+
+describe('名称里显示成空白的非格式字符：与看不见的字符一样拒绝（M2-P6 复验 R-M1）', () => {
+  it('清单里的字符既不是空白，也不是格式字符或默认可忽略的字符：已有的规则管不到它们，所以另列一份', () => {
+    const listed = BLANK_LOOKING_CHARACTERS.flatMap(([first, last]) => Array.from({ length: last - first + 1 }, (_, offset) => String.fromCodePoint(first + offset)))
+    expect(listed).toEqual(BLANK_LOOKING)
+    for (const character of listed)
+      expect(/^[\p{White_Space}\p{Cf}\p{Default_Ignorable_Code_Point}]$/u.test(character), JSON.stringify(character)).toBe(false)
+  })
+
+  it('名称规则里"不是格式字符、也不是默认可忽略的字符，却也拒绝"的，恰好是这份清单（判重键把同一份清单当空白）', () => {
+    const formatOrIgnorable = /^[\p{Cf}\p{Default_Ignorable_Code_Point}]$/u
+    const mismatches: string[] = []
+    for (let codePoint = 0; codePoint <= 0x10FFFF; codePoint += 1) {
+      // 代理项不是字符
+      if (codePoint >= 0xD800 && codePoint <= 0xDFFF)
+        continue
+      const character = String.fromCodePoint(codePoint)
+      if (formatOrIgnorable.test(character))
+        continue
+      if (hasHiddenCharacters(`a${character}a`) !== within(BLANK_LOOKING_CHARACTERS, codePoint))
+        mismatches.push(codePoint.toString(16))
+    }
+    expect(mismatches).toEqual([])
+  })
+
+  it.each(BLANK_LOOKING.map(character => [codePointLabel(character), character]))('%s 在末尾、开头、字中间、代替空格：说明与零宽空格相同，是"不能包含看不见的字符"', (_label, character) => {
+    for (const name of [`财务部${character}`, `${character}财务部`, `财${character}务部`, `财 务${character}部`, `Finance${character}Team`])
+      expect(problemOf(nameSchema, name), JSON.stringify(name)).toBe('名称不能包含看不见的字符（例如零宽空格）')
+  })
+
+  it.each(BLANK_LOOKING.map(character => [codePointLabel(character), character]))('整个名称只有 %s（或者它与空白）：说明是"只有看不见的字符"', (_label, character) => {
+    expect(hasVisibleCharacters(character)).toBe(false)
+    expect(problemOf(nameSchema, character)).toBe('名称不能只有空白或看不见的字符')
+    expect(problemOf(nameSchema, `${character} ${character}`)).toBe('名称不能只有空白或看不见的字符')
+  })
+
+  it('显示名、团队空间名称、文件夹名称都按这条规则', () => {
+    for (const character of BLANK_LOOKING) {
+      for (const schema of [displayNameSchema, spaceNameSchema, folderNameSchema])
+        expect(schema.safeParse(`研发部${character}`).success, JSON.stringify(character)).toBe(false)
+    }
+  })
+
+  it('标题：只有它们时拒绝（列表里就是一行空白）；夹在字中间照常保存（标题的规则比名称宽）', () => {
+    for (const character of BLANK_LOOKING) {
+      expect(problemOf(titleSchema, character), JSON.stringify(character)).toBe('标题不能只有空白或看不见的字符')
+      expect(titleSchema.parse(`周${character}报`)).toBe(`周${character}报`)
+    }
   })
 })
 
