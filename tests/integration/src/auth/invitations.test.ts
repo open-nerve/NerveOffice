@@ -325,14 +325,14 @@ describe('US-M2-01 邀请注册：并发、无效的令牌、访问控制', () =
 })
 
 describe('US-M2-01、US-M2-03 一次性链接的尝试限流', () => {
-  // 按地址 3 次失败就锁定：这个库只给限流的用例用，每个用例开始时清空计数
+  // 按地址 3 次失败就锁定；同一条"找到了但不能用"的链接 6 次锁定（M2-P6）：这个库只给限流的用例用，每个用例开始时清空计数
   let limited: TestDatabase
   let limitedApp: TestApp
   let boss: LoggedIn
 
   beforeAll(async () => {
     limited = await createTestDatabase()
-    limitedApp = await startTestApp({ databaseUrl: limited.url, env: { NERVE_LOGIN_IP_MAX_FAILURES: '3' } })
+    limitedApp = await startTestApp({ databaseUrl: limited.url, env: { NERVE_LOGIN_IP_MAX_FAILURES: '3', NERVE_LINK_RECORD_MAX_FAILURES: '6' } })
     const account = await createAccount(limited, { username: 'boss', systemRole: 'admin' })
     boss = await login(limitedApp.baseUrl, 'boss', account.password)
   })
@@ -357,6 +357,11 @@ describe('US-M2-01、US-M2-03 一次性链接的尝试限流', () => {
     const response = await asUser(limitedApp.baseUrl, boss, '/api/admin/invitations', { method: 'POST', body: { username, displayName: username } })
     expect(response.status, await response.clone().text()).toBe(201)
     return tokenOf(parseExact(issuedInvitationSchema, await response.json()).url)
+  }
+
+  /** 让这条邀请过期（到期时间改到昨天） */
+  async function expire(token: string): Promise<void> {
+    await limited.query(async client => client.query('UPDATE auth_invitations SET created_at = now() - interval \'8 days\', expires_at = now() - interval \'1 day\' WHERE token_hash = $1', [tokenDigest(token)]))
   }
 
   async function issueReset(username: string): Promise<string> {
@@ -411,22 +416,25 @@ describe('US-M2-01、US-M2-03 一次性链接的尝试限流', () => {
     expect(await rejectedCount(purpose)).toBe(before + 3)
   })
 
-  it('同一个来源反复打开过期的真实邀请链接：一直是 410（expired），不计入失败，不影响它打开有效的链接（M2-P6 复核 B3）', async () => {
+  it('同一个来源反复打开过期的真实邀请链接：一直是 410（expired），不计入按地址的失败，不影响它打开有效的链接（M2-P6 复核 B3）', async () => {
     const stale = await issueInvitation('stale-invite')
-    await limited.query(async client => client.query('UPDATE auth_invitations SET created_at = now() - interval \'8 days\', expires_at = now() - interval \'1 day\' WHERE token_hash = $1', [tokenDigest(stale)]))
+    await expire(stale)
     const fresh = await issueInvitation('fresh-invite')
     const before = await rejectedCount('invitation')
+    // 比按地址的上限（3）多、比按记录的上限（6）少：查看与接受交替着来
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      expect(await linkInvalidReasonOf(await postPublic(limitedApp.baseUrl, '/api/auth/invitations/inspect', { token: stale }))).toBe('expired')
-      expect(await linkInvalidReasonOf(await postPublic(limitedApp.baseUrl, '/api/auth/invitations/accept', { token: stale, displayName: '旧链接', password: 'a good long password' }))).toBe('expired')
+      const response = attempt % 2 === 0
+        ? await postPublic(limitedApp.baseUrl, '/api/auth/invitations/inspect', { token: stale })
+        : await postPublic(limitedApp.baseUrl, '/api/auth/invitations/accept', { token: stale, displayName: '旧链接', password: 'a good long password' })
+      expect(await linkInvalidReasonOf(response)).toBe('expired')
     }
-    // 每一次仍然记审计（找到了记录）
-    expect(await rejectedCount('invitation')).toBe(before + 10)
+    // 每一次仍然记审计（找到了记录，没到按记录的上限）
+    expect(await rejectedCount('invitation')).toBe(before + 5)
     expect((await postPublic(limitedApp.baseUrl, '/api/auth/invitations/inspect', { token: fresh })).status).toBe(200)
     expect((await postPublic(limitedApp.baseUrl, '/api/auth/invitations/accept', { token: fresh, displayName: '新链接', password: 'a good long password' })).status).toBe(200)
   })
 
-  it('同一个来源反复打开已经用过的真实重置链接：一直是 410（used），不计入失败；没有这个令牌的尝试照样计数（M2-P6 复核 B3）', async () => {
+  it('同一个来源反复打开已经用过的真实重置链接：一直是 410（used），不计入按地址的失败；没有这个令牌的尝试照样计数（M2-P6 复核 B3）', async () => {
     const used = await issueReset('used-reset')
     expect((await postPublic(limitedApp.baseUrl, '/api/auth/password-resets/complete', { token: used, password: 'used reset new password' })).status).toBe(200)
     for (let attempt = 0; attempt < 5; attempt += 1)
@@ -437,5 +445,47 @@ describe('US-M2-01、US-M2-03 一次性链接的尝试限流', () => {
     for (let attempt = 0; attempt < 2; attempt += 1)
       expect(await linkInvalidReasonOf(await postPublic(limitedApp.baseUrl, '/api/auth/password-resets/inspect', { token: 'D'.repeat(43) }))).toBe('invalid')
     expect((await postPublic(limitedApp.baseUrl, '/api/auth/password-resets/inspect', { token: 'D'.repeat(43) })).status).toBe(429)
+  })
+
+  // 同一条"找到了但不能用"的链接按记录计数（M2-P6）：拿着真实的旧链接反复打开，到上限之后这条链接 429、只记日志，审计表写不爆
+  it('同一条过期的邀请链接反复打开：第 6 次 429（照样记审计），之后 429、只记日志、不再增加审计行；同一个来源打开别的链接不受影响', async () => {
+    const stale = await issueInvitation('stale-many')
+    await expire(stale)
+    const otherStale = await issueInvitation('stale-other')
+    await expire(otherStale)
+    const fresh = await issueInvitation('fresh-many')
+    const before = await rejectedCount('invitation')
+    for (let attempt = 1; attempt <= 5; attempt += 1)
+      expect(await linkInvalidReasonOf(await postPublic(limitedApp.baseUrl, '/api/auth/invitations/inspect', { token: stale })), `第 ${attempt} 次`).toBe('expired')
+    const sixth = await postPublic(limitedApp.baseUrl, '/api/auth/invitations/inspect', { token: stale })
+    expect(sixth.status).toBe(429)
+    expect(Number(sixth.headers.get('retry-after'))).toBeGreaterThan(0)
+    expect(await rejectedCount('invitation')).toBe(before + 6)
+    const logged = () => limitedApp.logs.entries().filter(entry => entry.msg === '同一条一次性链接反复被打开，这条链接暂时一律拒绝').length
+    const loggedBefore = logged()
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      expect((await postPublic(limitedApp.baseUrl, '/api/auth/invitations/inspect', { token: stale })).status).toBe(429)
+      expect((await postPublic(limitedApp.baseUrl, '/api/auth/invitations/accept', { token: stale, displayName: '旧链接', password: 'a good long password' })).status).toBe(429)
+    }
+    expect(await rejectedCount('invitation')).toBe(before + 6)
+    expect(logged()).toBe(loggedBefore + 6)
+    // 别的链接各算各的：另一条过期的仍是 410 与原因，有效的照常可用；这个来源用错令牌仍按地址计数，没有被连累
+    expect(await linkInvalidReasonOf(await postPublic(limitedApp.baseUrl, '/api/auth/invitations/inspect', { token: otherStale }))).toBe('expired')
+    expect((await postPublic(limitedApp.baseUrl, '/api/auth/invitations/inspect', { token: fresh })).status).toBe(200)
+    expect(await linkInvalidReasonOf(await postPublic(limitedApp.baseUrl, '/api/auth/invitations/inspect', { token: 'E'.repeat(43) }))).toBe('invalid')
+    expect((await postPublic(limitedApp.baseUrl, '/api/auth/invitations/accept', { token: fresh, displayName: '新链接', password: 'a good long password' })).status).toBe(200)
+  })
+
+  it('同一条用过的重置链接反复完成：到上限之后 429、不再写审计；别的重置链接不受影响', async () => {
+    const used = await issueReset('used-many')
+    expect((await postPublic(limitedApp.baseUrl, '/api/auth/password-resets/complete', { token: used, password: 'used many new password' })).status).toBe(200)
+    const before = await rejectedCount('password_reset')
+    for (let attempt = 1; attempt <= 5; attempt += 1)
+      expect(await linkInvalidReasonOf(await postPublic(limitedApp.baseUrl, '/api/auth/password-resets/complete', { token: used, password: 'whatever long password' }))).toBe('used')
+    expect((await postPublic(limitedApp.baseUrl, '/api/auth/password-resets/complete', { token: used, password: 'whatever long password' })).status).toBe(429)
+    expect((await postPublic(limitedApp.baseUrl, '/api/auth/password-resets/inspect', { token: used })).status).toBe(429)
+    expect(await rejectedCount('password_reset')).toBe(before + 6)
+    const again = await issueReset('used-many-2')
+    expect((await postPublic(limitedApp.baseUrl, '/api/auth/password-resets/inspect', { token: again })).status).toBe(200)
   })
 })

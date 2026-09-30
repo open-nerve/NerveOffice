@@ -134,6 +134,19 @@ export class InvitationsRepository {
     return row
   }
 
+  /**
+   * 签发人离任时（M2-P6 复核 A2）：作废这个人签发的、还没接受也没作废、还没到期的邀请，返回作废了的那些的 id（调用方逐条记审计）。
+   * 已经到期的本来就不能用，不再改状态（列表里仍是"已过期"）
+   */
+  async revokeOpenIssuedBy(issuerId: string, revokedBy: string, transaction: Transaction): Promise<string[]> {
+    const rows = await executorOf(this.db, transaction)
+      .update(i)
+      .set({ revokedAt: sql`now()`, revokedBy })
+      .where(and(eq(i.createdBy, issuerId), open, sql`${i.expiresAt} > now()`))
+      .returning({ id: i.id })
+    return rows.map(row => row.id)
+  }
+
   async markAccepted(id: string, userId: string, transaction: Transaction): Promise<InvitationRecord> {
     const [row] = await executorOf(this.db, transaction).update(i).set({ acceptedAt: sql`now()`, acceptedUserId: userId }).where(eq(i.id, id)).returning(COLUMNS)
     return updated(row, id)

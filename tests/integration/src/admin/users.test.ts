@@ -1,16 +1,19 @@
 // 管理界面的账户（M2-P1 设计 §3.5、§3.6，US-M2-04 的停用、启用与系统管理员）：
-// 只给系统管理员；停用撤销会话、登录被拒；"至少保留一个有效的系统管理员"（含并发互相取消）；审计。
+// 只给系统管理员；停用撤销会话、登录被拒；"至少保留一个有效的系统管理员"（含并发互相取消）；审计；
+// 停用与取消系统管理员时作废这个人签发的、还没用的链接（M2-P6 复核 A2）。
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
-import { adminUserListResponseSchema, adminUserSchema, errorResponseSchema } from '@nerve-office/contracts'
+import { adminUserListResponseSchema, adminUserSchema, errorResponseSchema, issuedInvitationSchema, issuedPasswordResetSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { raceAgainstHeldLock } from '../support/held-lock.ts'
+import { linkInvalidReasonOf, postPublic, tokenDigest, tokenOf } from '../support/links.ts'
+import { requestIdOf } from '../support/request-id.ts'
 import { asUser, login, postLogin } from '../support/session-client.ts'
 
 let database: TestDatabase
@@ -202,5 +205,108 @@ describe('US-M2-04 账户列表', () => {
     expect(disabled.items.map(item => item.username)).toEqual(expect.arrayContaining(['frank', 'ivan', 'kate']))
 
     expect(await codeOf(await asAdmin('/api/admin/users?cursor=broken'))).toBe('REQUEST_INVALID')
+  })
+})
+
+describe('US-M2-04 签发人离任：他签发的、还没用的链接随即作废（M2-P6 复核 A2）', () => {
+  const PASSWORD = 'a good long password'
+
+  async function invite(session: LoggedIn, username: string) {
+    const response = await asUser(app.baseUrl, session, '/api/admin/invitations', { method: 'POST', body: { username, displayName: username } })
+    expect(response.status, await response.clone().text()).toBe(201)
+    const issued = parseExact(issuedInvitationSchema, await response.json())
+    return { id: issued.invitation.id, token: tokenOf(issued.url) }
+  }
+
+  async function issueReset(session: LoggedIn, account: TestAccount) {
+    const response = await asUser(app.baseUrl, session, `/api/admin/users/${account.id}/password-reset`, { method: 'POST' })
+    expect(response.status, await response.clone().text()).toBe(201)
+    const token = tokenOf(parseExact(issuedPasswordResetSchema, await response.json()).url)
+    const [row] = await database.query(async client => (await client.query<{ id: string }>('SELECT id FROM auth_password_resets WHERE token_hash = $1', [tokenDigest(token)])).rows)
+    if (row === undefined)
+      throw new Error('签发之后库里没有这条重置')
+    return { id: row.id, token }
+  }
+
+  /** 查看与接受（邀请）或查看与完成（重置）的结果：可用时 200，不能用时是原因 */
+  async function invitationOutcome(token: string): Promise<[string, string]> {
+    const inspect = await postPublic(app.baseUrl, '/api/auth/invitations/inspect', { token })
+    const accept = await postPublic(app.baseUrl, '/api/auth/invitations/accept', { token, displayName: '受邀的人', password: PASSWORD })
+    return [await linkInvalidReasonOf(inspect), await linkInvalidReasonOf(accept)]
+  }
+
+  async function resetOutcome(token: string): Promise<[string, string]> {
+    const inspect = await postPublic(app.baseUrl, '/api/auth/password-resets/inspect', { token })
+    const complete = await postPublic(app.baseUrl, '/api/auth/password-resets/complete', { token, password: PASSWORD })
+    return [await linkInvalidReasonOf(inspect), await linkInvalidReasonOf(complete)]
+  }
+
+  /** 这个请求记下的审计：动作、操作者、对象与明细，按写入的顺序 */
+  async function auditsOf(response: Response) {
+    return database.query(async client => (await client.query<{ action: string, actor_id: string | null, target_type: string | null, target_id: string | null, details: unknown }>(
+      'SELECT action, actor_id, target_type, target_id, details FROM audit_events WHERE request_id = $1 ORDER BY occurred_at, id',
+      [requestIdOf(response)],
+    )).rows)
+  }
+
+  it('停用签发人：他签发的邀请与重置都不能再用（查看与接受、完成都是 410 revoked），逐条记审计（issuer_disabled）；别人签发的、已经过期的不受影响', async () => {
+    const issuer = await createAccount(database, { username: 'issuer-a', systemRole: 'admin' })
+    const issuerSession = await login(app.baseUrl, 'issuer-a', issuer.password)
+    const target = await createAccount(database, { username: 'reset-target-a' })
+    const bystander = await createAccount(database, { username: 'reset-bystander-a' })
+    const invitation = await invite(issuerSession, 'invitee-a')
+    const expired = await invite(issuerSession, 'invitee-a-expired')
+    await database.query(async client => client.query('UPDATE auth_invitations SET created_at = now() - interval \'8 days\', expires_at = now() - interval \'1 day\' WHERE id = $1', [expired.id]))
+    const reset = await issueReset(issuerSession, target)
+    const othersInvitation = await invite(rootSession, 'invitee-root-a')
+    const othersReset = await issueReset(rootSession, bystander)
+
+    const response = await asAdmin(`/api/admin/users/${issuer.id}/disable`, 'POST')
+    expect(response.status).toBe(200)
+
+    expect(await invitationOutcome(invitation.token)).toEqual(['revoked', 'revoked'])
+    expect(await resetOutcome(reset.token)).toEqual(['revoked', 'revoked'])
+    expect(await linkInvalidReasonOf(await postPublic(app.baseUrl, '/api/auth/invitations/inspect', { token: expired.token }))).toBe('expired')
+    expect((await postPublic(app.baseUrl, '/api/auth/invitations/inspect', { token: othersInvitation.token })).status).toBe(200)
+    expect((await postPublic(app.baseUrl, '/api/auth/password-resets/inspect', { token: othersReset.token })).status).toBe(200)
+    // 与停用在同一个事务里：同一个请求标识，每作废一条记一条，操作者是执行停用的管理员
+    expect(await auditsOf(response)).toEqual([
+      { action: 'users.password_reset_revoked', actor_id: root.id, target_type: 'user', target_id: target.id, details: { passwordResetId: reset.id, reason: 'issuer_disabled' } },
+      { action: 'users.invitation_revoked', actor_id: root.id, target_type: 'invitation', target_id: invitation.id, details: { reason: 'issuer_disabled' } },
+      { action: 'users.disabled', actor_id: root.id, target_type: 'user', target_id: issuer.id, details: {} },
+    ])
+    const [revokedBy] = await database.query(async client => (await client.query<{ revoked_by: string }>('SELECT revoked_by FROM auth_invitations WHERE id = $1', [invitation.id])).rows)
+    expect(revokedBy).toEqual({ revoked_by: root.id })
+  })
+
+  it('取消系统管理员：他签发给别人的邀请与重置同样作废（issuer_no_longer_admin）；他给自己签发的重置是他自己账户的，照常可用', async () => {
+    const issuer = await createAccount(database, { username: 'issuer-b', systemRole: 'admin' })
+    const issuerSession = await login(app.baseUrl, 'issuer-b', issuer.password)
+    const target = await createAccount(database, { username: 'reset-target-b' })
+    const invitation = await invite(issuerSession, 'invitee-b')
+    const reset = await issueReset(issuerSession, target)
+    // 给自己签发放在最后：签发时自己的会话随即撤销
+    const own = await issueReset(issuerSession, issuer)
+
+    const response = await asAdmin(`/api/admin/users/${issuer.id}/system-role`, 'PUT', { systemRole: 'member' })
+    expect(parseExact(adminUserSchema, await response.json())).toMatchObject({ systemRole: 'member', status: 'active' })
+
+    expect(await invitationOutcome(invitation.token)).toEqual(['revoked', 'revoked'])
+    expect(await resetOutcome(reset.token)).toEqual(['revoked', 'revoked'])
+    expect(await auditsOf(response)).toEqual([
+      { action: 'users.password_reset_revoked', actor_id: root.id, target_type: 'user', target_id: target.id, details: { passwordResetId: reset.id, reason: 'issuer_no_longer_admin' } },
+      { action: 'users.invitation_revoked', actor_id: root.id, target_type: 'invitation', target_id: invitation.id, details: { reason: 'issuer_no_longer_admin' } },
+      { action: 'users.system_role_changed', actor_id: root.id, target_type: 'user', target_id: issuer.id, details: { from: 'admin', to: 'member' } },
+    ])
+    expect((await postPublic(app.baseUrl, '/api/auth/password-resets/complete', { token: own.token, password: PASSWORD })).status).toBe(200)
+    expect((await postLogin(app.baseUrl, { username: 'issuer-b', password: PASSWORD })).status).toBe(200)
+  })
+
+  it('授予系统管理员、签发人没有未用的链接：不作废任何东西，不多记审计', async () => {
+    const quiet = await createAccount(database, { username: 'issuer-c' })
+    const granted = await asAdmin(`/api/admin/users/${quiet.id}/system-role`, 'PUT', { systemRole: 'admin' })
+    expect((await auditsOf(granted)).map(event => event.action)).toEqual(['users.system_role_changed'])
+    const revoked = await asAdmin(`/api/admin/users/${quiet.id}/system-role`, 'PUT', { systemRole: 'member' })
+    expect((await auditsOf(revoked)).map(event => event.action)).toEqual(['users.system_role_changed'])
   })
 })

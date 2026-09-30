@@ -1,5 +1,5 @@
 // 管理界面的账户（M2-P1，US-M2-01、03、04）：经界面签发、重新生成邀请与重置链接，同事在另一台设备上打开链接；运维命令签发重置链接；
-// 停用与启用；系统管理员的授予与取消。
+// 停用与启用；系统管理员的授予与取消；解除登录锁定（M2-P6 复核 A1）。
 // 并行的用例各建各的管理员与账户，互不影响；"至少保留一个有效的系统管理员"依赖全库的管理员数量，由集成测试覆盖。
 // 同事"已打开的页面"在下一次请求时被要求重新登录：在页面里新建表格，由全局的处理回到登录页（不是刷新，审查 B12）。
 import type { Locator, Page } from '@playwright/test'
@@ -220,6 +220,30 @@ test.describe('US-M2-04 停用、启用与系统管理员', () => {
 
     await confirmAction(page, row, '启用')
     await expect(row.getByText('有效')).toBeVisible()
+    await loginThroughUi(anotherDevice, user)
+    await expect(anotherDevice.getByRole('heading', { name: '我的空间' })).toBeVisible()
+  })
+
+  test('同事连续输错密码被锁定：账户页说明锁到什么时候；管理员确认解除之后，同事立即能登录（M2-P6 复核 A1）', async ({ page, anotherDevice }) => {
+    const admin = await createUser('unlock-admin', '解除锁定的管理员', { systemRole: 'admin' })
+    const user = await createUser('unlock-user', '被锁定的人')
+    await anotherDevice.goto('/login')
+    for (let attempt = 1; attempt < 5; attempt++) {
+      await loginThroughUi(anotherDevice, { username: user.username, password: `wrong ${attempt}` })
+      await expect(anotherDevice.getByRole('alert')).toHaveText('用户名或密码错误')
+    }
+    await loginThroughUi(anotherDevice, { username: user.username, password: 'wrong 5' })
+    await expect(anotherDevice.getByRole('alert')).toHaveText(/尝试次数过多/)
+
+    await loginThroughApi(page, admin)
+    await page.goto('/admin/users')
+    const row = await userRow(page, user.username)
+    // 只有这一个来源被锁（本人从别处照常登录）：说明写"部分来源"
+    await expect(row.getByText(/^部分来源的登录已锁定，到 .+ 解除$/)).toBeVisible()
+    await confirmAction(page, row, '解除锁定')
+    await expect(row.getByText(/登录已锁定/)).toHaveCount(0)
+    await expect(row.getByRole('button', { name: /^解除锁定 / })).toHaveCount(0)
+
     await loginThroughUi(anotherDevice, user)
     await expect(anotherDevice.getByRole('heading', { name: '我的空间' })).toBeVisible()
   })

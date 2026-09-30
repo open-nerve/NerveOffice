@@ -56,19 +56,29 @@ describe('审计明细的结构', () => {
     expect(accepts('users.disabled', { reason: 'x' })).toBe(false)
   })
 
-  it('邀请的作废：手动（空）、过期、重发三种写法，别的不收', () => {
+  it('邀请的作废：手动（空）、过期、重发、签发人离任（M2-P6 复核 A2）四种写法，别的不收', () => {
     expect(accepts('users.invitation_revoked', {})).toBe(true)
     expect(accepts('users.invitation_revoked', { expired: true })).toBe(true)
     expect(accepts('users.invitation_revoked', { reissued: true })).toBe(true)
+    expect(accepts('users.invitation_revoked', { reason: 'issuer_disabled' })).toBe(true)
+    expect(accepts('users.invitation_revoked', { reason: 'issuer_no_longer_admin' })).toBe(true)
     expect(accepts('users.invitation_revoked', { expired: false })).toBe(false)
     expect(accepts('users.invitation_revoked', { username: 'amy' })).toBe(false)
+    expect(accepts('users.invitation_revoked', { reason: 'account_disabled' })).toBe(false)
+    expect(accepts('users.invitation_revoked', { reason: 'issuer_disabled', username: 'amy' })).toBe(false)
   })
 
-  it('重置链接的作废：重置的 id 与原因（签发新的、停用账户）', () => {
-    expect(accepts('users.password_reset_revoked', { passwordResetId: ID, reason: 'reissued' })).toBe(true)
-    expect(accepts('users.password_reset_revoked', { passwordResetId: ID, reason: 'account_disabled' })).toBe(true)
+  it('重置链接的作废：重置的 id 与原因（签发新的、停用账户、签发人被停用或不再是系统管理员）', () => {
+    for (const reason of ['reissued', 'account_disabled', 'issuer_disabled', 'issuer_no_longer_admin'])
+      expect(accepts('users.password_reset_revoked', { passwordResetId: ID, reason }), reason).toBe(true)
     expect(accepts('users.password_reset_revoked', { passwordResetId: ID, reason: 'expired' })).toBe(false)
     expect(accepts('users.password_reset_revoked', { reason: 'reissued' })).toBe(false)
+  })
+
+  it('解除登录锁定（M2-P6 复核 A1）：没有补充信息，清掉了哪些来源不记', () => {
+    expect(accepts('users.login_unlocked', {})).toBe(true)
+    expect(accepts('users.login_unlocked', { username: 'amy' })).toBe(false)
+    expect(accepts('users.login_unlocked', { clientIp: '203.0.113.7' })).toBe(false)
   })
 
   it('类型不对拒绝：id 不是 UUID、份数是负数或小数、原因不在列表里', () => {

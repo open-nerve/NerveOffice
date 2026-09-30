@@ -89,6 +89,9 @@ docker compose -f deploy/test/compose.yaml exec -T app \
 | `NERVE_TEST_DB_PORT` | 发布到本机回环的数据库端口，默认 54319，供测试数据与排查使用 |
 | `NERVE_LOG_LEVEL` | 日志级别，默认 `info` |
 | `NERVE_LOGIN_IP_MAX_FAILURES` | 按客户端地址的登录失败上限（15 分钟窗口），默认 50 |
+| `NERVE_LOGIN_MAX_FAILURES` | 按"用户名 + 客户端地址"的登录失败上限（15 分钟窗口），默认 5：只锁这个来源，本人从别处照常登录 |
+| `NERVE_LOGIN_ACCOUNT_MAX_FAILURES` | 只按用户名的登录失败上限（15 分钟窗口），默认 50，必须大于上一项：到了之后这个账户在所有来源上都被锁定，到时自动解除；系统管理员可以在账户页提前解除（记审计），本人完成重置密码时也一并清掉 |
+| `NERVE_LINK_RECORD_MAX_FAILURES` | 同一条邀请或重置链接"找到了但不能用"（过期、已用、已作废）的次数上限（15 分钟窗口），默认 10：到了之后这条链接暂时一律拒绝，只记日志、不再写审计 |
 | `NERVE_TRASH_PURGE_ENABLED` | 回收站的自动清理开关，默认 `true`（只认 `true` 与 `false`） |
 | `NERVE_TRASH_PURGE_INTERVAL_MS` | 两轮清理之间的间隔，默认 3600000（1 小时），实际触发时间带 ±10% 的随机抖动 |
 | `NERVE_TRASH_PURGE_BATCH` | 一轮最多清理多少个删除单元，默认 50 |

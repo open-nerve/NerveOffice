@@ -2,6 +2,7 @@
 import type { Invitation } from '@nerve-office/contracts'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
+import { formatDateTime } from '../shared/lib/format.ts'
 import { apiError, installFakeApi, inTurn, json, networkFailure } from '../shared/testing/fake-api.test-support.ts'
 import { documentsKey } from '../shared/testing/spaces.test-support.ts'
 import { AMY, deferred, INVITATION, listPage, ROOT, rowOf, session, settle, SPACES } from './admin.test-support.ts'
@@ -217,6 +218,82 @@ describe('管理界面：账户', () => {
     await waitFor(() => expect(document.activeElement).toBe(row))
     // 给别人生成的：本人的会话不受影响，不重新确认
     expect(requestCount(api, 'GET /api/auth/session')).toBe(1)
+  })
+
+  // 登录锁定（M2-P6 复核 A1）：账户行说明锁到什么时候、是全部来源还是部分来源；系统管理员先确认、再解除，解除之后这一行不再有锁定与这个按钮
+  const LOCKED_UNTIL = '2026-09-30T08:15:00.000Z'
+  const LOCKED = { until: LOCKED_UNTIL, allSources: true }
+
+  it('登录被锁定的账户：状态一栏说明锁到什么时候，操作里多一个"解除锁定"；没有锁定的账户没有', async () => {
+    installFakeApi({
+      ...SPACES,
+      'GET /api/auth/session': () => json(200, session('admin')),
+      'GET /api/admin/users': () => json(200, listPage([ROOT, { ...AMY, loginLock: LOCKED }])),
+    })
+    renderApp('/admin/users')
+    const amy = await rowOf('amy')
+    expect(within(amy).getByText(`登录已锁定，到 ${formatDateTime(LOCKED_UNTIL)} 解除`)).toBeInTheDocument()
+    expect(within(amy).getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual(['停用 艾米（amy）', '设为系统管理员 艾米（amy）', '生成重置链接 艾米（amy）', '解除锁定 艾米（amy）'])
+    const root = await rowOf('root')
+    expect(within(root).queryByText(/登录已锁定/)).toBeNull()
+    expect(within(root).queryByRole('button', { name: /^解除锁定/ })).toBeNull()
+  })
+
+  it('只锁了某些来源（本人从别处照常登录）：说明写"部分来源"，同样可以解除', async () => {
+    installFakeApi({
+      ...SPACES,
+      'GET /api/auth/session': () => json(200, session('admin')),
+      'GET /api/admin/users': () => json(200, listPage([ROOT, { ...AMY, loginLock: { until: LOCKED_UNTIL, allSources: false } }])),
+    })
+    renderApp('/admin/users')
+    const amy = await rowOf('amy')
+    expect(within(amy).getByText(`部分来源的登录已锁定，到 ${formatDateTime(LOCKED_UNTIL)} 解除`)).toBeInTheDocument()
+    expect(within(amy).queryByText(/^登录已锁定/)).toBeNull()
+    expect(within(amy).getByRole('button', { name: '解除锁定 艾米（amy）' })).toBeInTheDocument()
+  })
+
+  it('解除锁定：先确认后果；确认之后请求、刷新列表；锁定的说明与按钮随之消失，焦点回到这一行', async () => {
+    let unlocked = false
+    const api = installFakeApi({
+      ...SPACES,
+      'GET /api/auth/session': () => json(200, session('admin')),
+      'GET /api/admin/users': () => json(200, listPage([ROOT, { ...AMY, loginLock: unlocked ? null : LOCKED }])),
+      [`POST /api/admin/users/${AMY.id}/unlock-login`]: () => {
+        unlocked = true
+        return json(200, AMY)
+      },
+    })
+    renderApp('/admin/users')
+    const dialog = await openConfirm(await rowOf('amy'), '解除锁定 艾米（amy）')
+    expect(dialog).toHaveAccessibleName('解除 艾米（amy） 的登录锁定？')
+    expect(dialog).toHaveAccessibleDescription(/在所有地方的登录失败次数清零，可以立即用密码登录/)
+    fireEvent.click(within(dialog).getByRole('button', { name: '解除锁定' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(requestCount(api, `POST /api/admin/users/${AMY.id}/unlock-login`)).toBe(1)
+    const row = await rowOf('amy')
+    await waitFor(() => expect(within(row).queryByText(/登录已锁定/)).toBeNull())
+    expect(within(row).queryByRole('button', { name: /^解除锁定/ })).toBeNull()
+    // 打开弹窗的按钮已经不在了：焦点回到这一行，不落到 body（审查 B9）
+    await waitFor(() => expect(document.activeElement).toBe(row))
+    // 解除的是别人的锁定：本人的会话不受影响，不重新确认
+    expect(requestCount(api, 'GET /api/auth/session')).toBe(1)
+  })
+
+  it('解除锁定失败：弹窗里说明原因，弹窗留着，可以再试', async () => {
+    const api = installFakeApi({
+      ...SPACES,
+      'GET /api/auth/session': () => json(200, session('admin')),
+      'GET /api/admin/users': () => json(200, listPage([{ ...AMY, loginLock: LOCKED }])),
+      [`POST /api/admin/users/${AMY.id}/unlock-login`]: inTurn(networkFailure, () => json(200, AMY)),
+    })
+    renderApp('/admin/users')
+    const dialog = await openConfirm(await rowOf('amy'), '解除锁定 艾米（amy）')
+    fireEvent.click(within(dialog).getByRole('button', { name: '解除锁定' }))
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(/网络/)
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: '解除锁定' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(requestCount(api, `POST /api/admin/users/${AMY.id}/unlock-login`)).toBe(2)
   })
 
   it('搜索与状态过滤：带着条件请求', async () => {

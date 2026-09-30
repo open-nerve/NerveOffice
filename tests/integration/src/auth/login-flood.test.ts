@@ -31,6 +31,7 @@ beforeAll(async () => {
       NERVE_PASSWORD_HASH_QUEUE_TIMEOUT_MS: '2100',
       NERVE_PASSWORD_ARGON2_ITERATIONS: String(SLOW_ARGON2.timeCost),
       NERVE_LOGIN_MAX_FAILURES: '100',
+      NERVE_LOGIN_ACCOUNT_MAX_FAILURES: '1000',
       NERVE_LOGIN_IP_MAX_FAILURES: '1000',
     },
   })
@@ -68,8 +69,8 @@ describe('等待密码哈希的请求有上限', () => {
     const [address] = await rows<{ failures: number }>('SELECT failures FROM auth_login_throttles WHERE key_hash = $1', [addressKey])
     expect(address?.failures).toBe(verified)
     const [counted] = await rows<{ count: string }>('SELECT count(*) AS count FROM auth_login_throttles WHERE failures > 0')
-    // 验证过的用户名各一行，加上地址那一行
-    expect(Number(counted?.count)).toBe(verified + 1)
+    // 验证过的用户名各两行（账户、账户与地址），加上地址那一行
+    expect(Number(counted?.count)).toBe(verified * 2 + 1)
 
     expect(app.logs.entries().filter(entry => entry.msg === '等待密码哈希的请求太多，拒绝这次请求')).toHaveLength(busy.length)
     expect((await postLogin(app.baseUrl, { username: 'alice', password: alice.password })).status).toBe(200)

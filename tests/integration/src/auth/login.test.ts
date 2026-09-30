@@ -19,7 +19,7 @@ let alice: TestAccount
 
 beforeAll(async () => {
   database = await createTestDatabase()
-  // 按用户名 3 次锁定，按地址 20 次锁定：用例里好触发
+  // 按用户名与来源 3 次锁定（用例都来自本机，同一个来源），按地址 20 次锁定：用例里好触发
   app = await startTestApp({ databaseUrl: database.url, env: { NERVE_LOGIN_MAX_FAILURES: '3', NERVE_LOGIN_IP_MAX_FAILURES: '20' } })
   alice = await createAccount(database, { username: 'alice', displayName: '爱丽丝' })
 })
@@ -132,7 +132,7 @@ describe('US-M1-02 登录', () => {
 })
 
 describe('US-M1-02 登录限流', () => {
-  it('按用户名：窗口内失败达到上限时锁定（429，带 Retry-After）；锁定期间正确的密码也被拒绝；锁定结束后恢复', async () => {
+  it('按用户名与来源：窗口内失败达到上限时锁定（429，带 Retry-After）；锁定期间这个来源用正确的密码也被拒绝；锁定结束后恢复', async () => {
     const failures: Response[] = []
     for (let attempt = 1; attempt <= 2; attempt++) {
       const failure = await postLogin(app.baseUrl, { username: 'alice', password: 'wrong' })
@@ -172,7 +172,7 @@ describe('US-M1-02 登录限流', () => {
     expect(statuses).toEqual([401, 401, 429, 429])
   })
 
-  it('成功登录清除这个用户名的计数', async () => {
+  it('成功登录清除这个用户名（这个来源与只按用户名）的计数', async () => {
     await postLogin(app.baseUrl, { username: 'alice', password: 'wrong' })
     await postLogin(app.baseUrl, { username: 'alice', password: 'wrong' })
     expect((await postLogin(app.baseUrl, { username: 'alice', password: alice.password })).status).toBe(200)
@@ -189,11 +189,17 @@ describe('US-M1-02 登录限流', () => {
     expect((await postLogin(app.baseUrl, { username: 'alice', password: 'wrong' })).status).toBe(401)
   })
 
-  it('计数的键只存摘要，不存用户名与地址的原文', async () => {
+  it('计数的键与所属账户都只存摘要，不存用户名与地址的原文', async () => {
     await postLogin(app.baseUrl, { username: 'alice', password: 'wrong' })
-    const stored = JSON.stringify(await rows('SELECT encode(key_hash, \'escape\') AS key FROM auth_login_throttles'))
+    const stored = JSON.stringify(await rows('SELECT encode(key_hash, \'escape\') AS key, encode(account_hash, \'escape\') AS account FROM auth_login_throttles'))
     expect(stored).not.toContain('alice')
     expect(stored).not.toContain('127.0.0.1')
+    // 三个维度各一行：两个账户相关的维度记着所属账户（同一个摘要），地址维度没有
+    const accounts = await rows<{ account: Buffer | null }>('SELECT account_hash AS account FROM auth_login_throttles ORDER BY account_hash NULLS LAST')
+    expect(accounts).toHaveLength(3)
+    expect(accounts[0]?.account).toHaveLength(32)
+    expect(accounts[1]?.account).toEqual(accounts[0]?.account)
+    expect(accounts[2]?.account).toBeNull()
   })
 })
 
@@ -201,7 +207,7 @@ describe('US-M1-02 按客户端地址限流', () => {
   let ipApp: TestApp
 
   beforeAll(async () => {
-    ipApp = await startTestApp({ databaseUrl: database.url, env: { NERVE_LOGIN_MAX_FAILURES: '100', NERVE_LOGIN_IP_MAX_FAILURES: '3' } })
+    ipApp = await startTestApp({ databaseUrl: database.url, env: { NERVE_LOGIN_MAX_FAILURES: '100', NERVE_LOGIN_ACCOUNT_MAX_FAILURES: '1000', NERVE_LOGIN_IP_MAX_FAILURES: '3' } })
   })
 
   afterAll(async () => {

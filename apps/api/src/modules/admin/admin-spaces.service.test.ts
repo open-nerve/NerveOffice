@@ -150,7 +150,16 @@ describe('AdminUsersService.disable', () => {
       revokeOpenOf: vi.fn(async () => {
         calls.push('resets')
       }),
+      revokeIssuedBy: vi.fn(async () => {
+        calls.push('issued-resets')
+      }),
     }
+    const invitations = {
+      revokeIssuedBy: vi.fn(async () => {
+        calls.push('issued-invitations')
+      }),
+    }
+    const lockouts = { locksOf: vi.fn(async () => new Map()) }
     const writeAccess = {
       revoke: vi.fn(async () => {
         calls.push('revoke')
@@ -163,15 +172,17 @@ describe('AdminUsersService.disable', () => {
     }
     const transaction = { transaction: true }
     const transactions = { run: vi.fn(async <T>(work: (transaction: never) => Promise<T>) => work(transaction as never)) }
-    const service = new AdminUsersService(users as never, sessions as never, resets as never, writeAccess, audit as never, transactions as never)
-    return { service, calls, writeAccess, transaction }
+    const service = new AdminUsersService(users as never, sessions as never, resets as never, invitations as never, lockouts as never, writeAccess, audit as never, transactions as never)
+    return { service, calls, writeAccess, resets, invitations, transaction }
   }
 
-  it('停用：在同一个事务里作废重置、撤销会话之后经收回写入权的入口（这个人），再记审计', async () => {
-    const { service, calls, writeAccess, transaction } = disableSetup(true)
+  it('停用：在同一个事务里作废这个人的重置、他签发给别人的重置与邀请（M2-P6 复核 A2），撤销会话之后经收回写入权的入口（这个人），再记审计', async () => {
+    const { service, calls, writeAccess, resets, invitations, transaction } = disableSetup(true)
     await service.disable(ACTOR, AMY, ORIGIN)
-    expect(calls).toEqual(['disable', 'resets', 'sessions', 'revoke', 'audit'])
+    expect(calls).toEqual(['disable', 'resets', 'issued-resets', 'issued-invitations', 'sessions', 'revoke', 'audit'])
     expect(writeAccess.revoke).toHaveBeenCalledWith({ kind: 'user', userId: AMY }, transaction)
+    expect(resets.revokeIssuedBy).toHaveBeenCalledWith({ type: 'user', id: ACTOR.user.id }, AMY, 'issuer_disabled', ORIGIN, transaction)
+    expect(invitations.revokeIssuedBy).toHaveBeenCalledWith(ACTOR.user, AMY, 'issuer_disabled', ORIGIN, transaction)
   })
 
   it('已经停用（没有变化）：不收回、不记审计', async () => {

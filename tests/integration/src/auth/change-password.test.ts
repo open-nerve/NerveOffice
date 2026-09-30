@@ -19,7 +19,7 @@ let app: TestApp
 
 beforeAll(async () => {
   database = await createTestDatabase()
-  // 用户名维度 3 次失败就锁定：猜旧密码与猜登录密码按同一个计数
+  // 按用户名与来源 3 次失败就锁定（用例都来自本机）：猜旧密码与猜登录密码按同一套计数；换来源的情形见 login-lockout.test.ts
   app = await startTestApp({ databaseUrl: database.url, env: { NERVE_LOGIN_MAX_FAILURES: '3' } })
 })
 
@@ -111,7 +111,7 @@ describe('US-M2-02 修改密码', () => {
     expect(await codeOf(response)).toBe('REQUEST_INVALID')
   })
 
-  it('猜旧密码与猜登录密码按同一个计数：连续猜错达到上限后，修改密码与登录都被锁定', async () => {
+  it('猜旧密码与猜登录密码按同一套计数：同一个来源连续猜错达到上限后，这个来源的修改密码与登录都被锁定', async () => {
     const dave = await createAccount(database, { username: 'dave' })
     const here = await login(app.baseUrl, 'dave', dave.password)
     expect(await codeOf(await changePassword(here, 'guess-1', 'another new password'))).toBe('CURRENT_PASSWORD_INCORRECT')

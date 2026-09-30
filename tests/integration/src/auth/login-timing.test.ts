@@ -17,7 +17,7 @@ const DEFAULT = { memoryKib: 19_456, iterations: 2 }
 const SAMPLES = 9
 const WARMUP = 2
 /** 取样不能触发限流：按用户名、按地址的上限都调高 */
-const THROTTLE = { NERVE_LOGIN_MAX_FAILURES: '100', NERVE_LOGIN_IP_MAX_FAILURES: '1000' }
+const THROTTLE = { NERVE_LOGIN_MAX_FAILURES: '100', NERVE_LOGIN_ACCOUNT_MAX_FAILURES: '1000', NERVE_LOGIN_IP_MAX_FAILURES: '1000' }
 
 async function failedLoginMs(baseUrl: string, username: string): Promise<number> {
   const started = performance.now()

@@ -29,6 +29,14 @@ const systemRole = z.enum(USER_SYSTEM_ROLES)
 /** 没有补充信息的动作 */
 const none = z.strictObject({})
 
+/**
+ * 链接因为签发人离任而作废（M2-P6 复核 A2）：签发人被停用、签发人不再是系统管理员。
+ * 停用账户、取消系统管理员时，在同一个事务里作废这个人签发给别人的、还没用的邀请与重置链接
+ */
+export const LINK_ISSUER_REVOCATION_REASONS = ['issuer_disabled', 'issuer_no_longer_admin'] as const
+export type LinkIssuerRevocationReason = (typeof LINK_ISSUER_REVOCATION_REASONS)[number]
+const issuerRevocation = z.enum(LINK_ISSUER_REVOCATION_REASONS)
+
 /** 永久删除（人工与到期自动清理同一个形状）：这一单里的份数、删除单元，以及连带删掉的别的删除单元的个数 */
 const purged = z.strictObject({
   spaceId: id,
@@ -65,8 +73,13 @@ export const auditDetailsSchema = z.discriminatedUnion('action', [
   // M2-P1
   entry('auth.link_rejected', z.strictObject({ purpose: z.enum(ONE_TIME_LINK_PURPOSES), reason: z.enum(LINK_INVALID_REASONS) })),
   entry('users.invited', z.strictObject({ username, reissuedFrom: id.optional() })),
-  // 手动作废没有明细；签发时自动作废过期的记 expired，重发时作废旧的记 reissued
-  entry('users.invitation_revoked', z.union([none, z.strictObject({ expired: z.literal(true) }), z.strictObject({ reissued: z.literal(true) })])),
+  // 手动作废没有明细；签发时自动作废过期的记 expired，重发时作废旧的记 reissued；签发人离任时作废的记原因（M2-P6 复核 A2）
+  entry('users.invitation_revoked', z.union([
+    none,
+    z.strictObject({ expired: z.literal(true) }),
+    z.strictObject({ reissued: z.literal(true) }),
+    z.strictObject({ reason: issuerRevocation }),
+  ])),
   entry('users.invitation_accepted', z.strictObject({ invitationId: id })),
   entry('users.password_changed', none),
   entry('users.password_change_failed', z.strictObject({ reason: z.enum(['current_password_incorrect', 'credentials_changed']), lockedForSeconds: lockedForSeconds.optional() })),
@@ -109,8 +122,10 @@ export const auditDetailsSchema = z.discriminatedUnion('action', [
   entry('folders.deleted', z.strictObject({ spaceId: id, parentId: folderPosition, trashEntryId: id, folders: count, documents: count })),
   entry('folders.restored', restored),
   entry('folders.purged', purged),
-  // M2-P6：重置链接被作废（签发新的时作废旧的、停用账户时作废未用的），对象是这个账户（M2-P6 复核 C3）
-  entry('users.password_reset_revoked', z.strictObject({ passwordResetId: id, reason: z.enum(['reissued', 'account_disabled']) })),
+  // M2-P6：重置链接被作废（签发新的时作废旧的、停用账户时作废未用的、签发人离任时作废他签发的），对象是被重置的账户（复核 C3、A2）
+  entry('users.password_reset_revoked', z.strictObject({ passwordResetId: id, reason: z.enum(['reissued', 'account_disabled', ...LINK_ISSUER_REVOCATION_REASONS]) })),
+  // M2-P6：系统管理员解除登录锁定，对象是这个账户（复核 A1）。清掉了哪些来源的计数不记：计数的键只存摘要，记下来也认不出来源
+  entry('users.login_unlocked', none),
 ])
 
 /** 一个动作与它的明细（解析之后） */

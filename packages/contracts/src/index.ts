@@ -49,8 +49,8 @@ export type {
   TransferDocumentsResponse,
   TransferTarget,
 } from './admin/admin.ts'
-export { auditDetailsSchema } from './audit/audit-details.ts'
-export type { AuditActionDetails, AuditActionDetailsInput, AuditDetailsOf, EveryAuditActionHasDetails } from './audit/audit-details.ts'
+export { auditDetailsSchema, LINK_ISSUER_REVOCATION_REASONS } from './audit/audit-details.ts'
+export type { AuditActionDetails, AuditActionDetailsInput, AuditDetailsOf, EveryAuditActionHasDetails, LinkIssuerRevocationReason } from './audit/audit-details.ts'
 export { auditEventItemSchema, auditEventListResponseSchema, auditEventQuerySchema } from './audit/audit-query.ts'
 export type { AuditEventItem, AuditEventListResponse, AuditEventQuery } from './audit/audit-query.ts'
 export { AUDIT_ACTIONS, AUDIT_ACTOR_TYPES, AUDIT_DETAILS_MAX_BYTES, AUDIT_SOURCES, AUDIT_TARGET_TYPES, auditActionSchema } from './audit/audit.ts'

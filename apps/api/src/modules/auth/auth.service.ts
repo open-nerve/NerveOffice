@@ -49,7 +49,7 @@ export class AuthService {
    *    新建会话、写审计。复核不通过（验证之后改了密码、签发或完成了重置、停用了）按凭据无效处理；
    * 4. 在事务之外顺带清理过期的记录。
    * previousToken 是浏览器原来带着的会话，登录成功后作废。
-   * 事务里锁的顺序与其他改动账户的事务相同：账户行、限流计数、会话（ADR-007，审查 A2）。
+   * 事务里锁的顺序与其他改动账户的事务相同：账户行、限流计数（账户 → 账户与地址 → 地址，M2-P6 复核 A1）、会话（ADR-007，审查 A2）。
    */
   async login(request: LoginRequest, origin: HttpOrigin, previousToken?: string): Promise<LoginResult> {
     const admission = await this.throttle.admit({ username: normalizeUsername(request.username), clientIp: origin.clientIp })
@@ -114,7 +114,8 @@ export class AuthService {
 
   /**
    * 修改密码（M2-P1 设计 §3.5，US-M2-02）：
-   * 1. 按登录限流占名额（用户名与地址两个维度）：猜旧密码与猜登录密码按同一个计数，达到上限同样锁定登录；
+   * 1. 按登录限流占名额（账户、账户与这次请求的来源、来源三个维度，M2-P6 复核 A1）：猜旧密码与猜登录密码按同一套计数，
+   *    达到上限同样锁定登录；
    * 2. 按 id 验证旧密码，在事务之外（耗时补齐同登录）；新密码的哈希同样在事务之外；
    * 3. 在一个事务里：锁住账户行，复核旧密码验证之后没有被改过（审查 A1、A2），更新哈希、清除限流计数、
    *    撤销本人的全部会话（原因 password_changed，**包括当前这个**）、为当前页面新建一个会话、记审计。
@@ -151,7 +152,7 @@ export class AuthService {
   /**
    * 修改密码失败：记审计，返回要抛出的错误。原因：旧密码不对（current_password_incorrect），或者验证之后凭据变了
    * （credentials_changed：别处改了密码、签发了重置、停用了，复验 N6）；对用户都是"当前密码不正确"。
-   * 与登录共用按用户名的计数，这次失败使计数达到上限时是 429，details 带锁定秒数：管理员能从审计里查到这个人为什么登录不了（审查 A6）
+   * 与登录共用同一套计数，这次失败使计数达到上限时是 429，details 带锁定秒数：管理员能从审计里查到这个人为什么登录不了（审查 A6）
    */
   private async passwordChangeFailed(ticket: LoginTicket, user: User, reason: 'current_password_incorrect' | 'credentials_changed', origin: HttpOrigin): Promise<AppError> {
     await this.audit.record({

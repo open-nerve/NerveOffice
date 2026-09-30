@@ -71,6 +71,7 @@ const AUDIT_ACTION_NAMES: Record<AuditAction, string> = {
   'users.password_reset_issued': '签发重置链接',
   'users.password_reset_completed': '重置密码',
   'users.password_reset_revoked': '作废重置链接',
+  'users.login_unlocked': '解除登录锁定',
   'users.disabled': '停用账户',
   'users.enabled': '启用账户',
   'users.system_role_changed': '变更系统角色',
@@ -235,6 +236,13 @@ export const messages = {
       resetDescription: (hours: number) => `生成后，这个人的当前密码立即失效，所有地方的登录都会退出。链接 ${hours} 小时内有效，只显示这一次，请交给本人。`,
       confirmResetOwn: '为你自己生成重置链接？',
       resetOwnDescription: (hours: number) => `生成后，你自己的登录会立即退出，当前密码随即失效，之后用这个链接设置新密码。链接 ${hours} 小时内有效，只显示这一次，请先复制保存。`,
+      // 登录锁定（M2-P6 复核 A1），到时自动解除：只按用户名的上限到了，这个账户在所有来源上都登录不了；
+      // 只锁了某些来源（按用户名与来源的组合）时，本人从别的来源照常登录
+      loginLocked: (until: string) => `登录已锁定，到 ${until} 解除`,
+      loginLockedSomeSources: (until: string) => `部分来源的登录已锁定，到 ${until} 解除`,
+      unlockLogin: '解除锁定',
+      confirmUnlockLogin: (name: string) => `解除 ${name} 的登录锁定？`,
+      unlockLoginDescription: '解除后，这个人在所有地方的登录失败次数清零，可以立即用密码登录。多次输错密码的来源不一定是本人：如果不是本人所为，请提醒他修改密码。',
     },
     invitations: {
       // 有效期来自 contracts 的常量（INVITATION_LIFETIME_DAYS），界面不写死天数（M2-P6 复核 S-2）

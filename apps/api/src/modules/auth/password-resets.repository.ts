@@ -1,7 +1,7 @@
 import type { Buffer } from 'node:buffer'
 import type { Database, Transaction } from '../database/index.ts'
 import { Inject, Injectable } from '@nestjs/common'
-import { and, eq, isNull, sql } from 'drizzle-orm'
+import { and, eq, gt, isNull, ne, sql } from 'drizzle-orm'
 import { authPasswordResets } from '../../db/schema/auth/index.ts'
 import { DATABASE, executorOf } from '../database/index.ts'
 
@@ -74,6 +74,19 @@ export class PasswordResetsRepository {
       .where(and(eq(r.userId, userId), isNull(r.usedAt), isNull(r.revokedAt)))
       .returning({ id: r.id })
     return rows.map(row => row.id)
+  }
+
+  /**
+   * 签发人离任时（M2-P6 复核 A2）：作废这个人签发给别人的、还没用也没作废、还没到期的重置，返回作废了的那些（id 与被重置的账户），
+   * 调用方逐条记审计。给自己签发的不在这里：停用时随"这个账户未用的重置"一起作废（revokeOpenOfUser）；
+   * 只是不再是系统管理员时，那是他自己账户的链接，照常可用。已经到期的本来就不能用，不再改状态
+   */
+  async revokeOpenIssuedBy(issuerId: string, transaction: Transaction): Promise<{ readonly id: string, readonly userId: string }[]> {
+    return executorOf(this.db, transaction)
+      .update(r)
+      .set({ revokedAt: sql`now()` })
+      .where(and(eq(r.createdBy, issuerId), ne(r.userId, issuerId), isNull(r.usedAt), isNull(r.revokedAt), gt(r.expiresAt, sql`now()`)))
+      .returning({ id: r.id, userId: r.userId })
   }
 
   async markUsed(id: string, transaction: Transaction): Promise<void> {

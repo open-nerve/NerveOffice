@@ -53,12 +53,24 @@ export interface AppConfig {
     readonly absoluteTimeoutMinutes: number
   }
   readonly login: {
-    /** 按用户名：窗口内允许失败的次数，达到后锁定 */
+    /** 按用户名与客户端地址的组合：窗口内允许失败的次数，达到后锁定这个组合（M2-P6 复核 A1：别人从他那里锁不住你） */
     readonly maxFailures: number
+    /**
+     * 只按用户名：窗口内允许失败的次数，比上面的宽得多，挡住从很多来源同时猜同一个账户；达到后这个账户在所有来源上都被锁定，
+     * 系统管理员可以解除（M2-P6 复核 A1）
+     */
+    readonly accountMaxFailures: number
     /** 按客户端地址：窗口内允许失败的次数，达到后锁定 */
     readonly ipMaxFailures: number
     readonly windowMinutes: number
     readonly lockoutMinutes: number
+  }
+  readonly oneTimeLinks: {
+    /**
+     * 同一条链接"找到了但不能用"（过期、已用、已作废）的次数上限（M2-P6）：窗口与锁定时长沿用登录的。
+     * 达到后这条链接一律 429、只记日志，不再写审计：拿着真实的旧链接反复打开，写不爆审计表
+     */
+    readonly recordMaxFailures: number
   }
   readonly web: {
     /** 前端构建目录的绝对路径；不设时不托管前端（开发时由 Vite 开发服务器提供，P3 设计 §3.8） */
@@ -193,10 +205,14 @@ const environmentSchema = z.object({
   NERVE_WEB_ROOT: text().refine(isAbsolute, '必须是绝对路径').optional(),
   NERVE_SESSION_IDLE_TIMEOUT_MINUTES: integer(5, 43_200).default(720),
   NERVE_SESSION_ABSOLUTE_TIMEOUT_MINUTES: integer(5, 525_600).default(10_080),
+  // 登录限流（ADR-007）：按用户名与来源、只按用户名（宽得多，M2-P6 复核 A1）、按来源三个维度，共用窗口与锁定时长
   NERVE_LOGIN_MAX_FAILURES: integer(1, 100).default(5),
+  NERVE_LOGIN_ACCOUNT_MAX_FAILURES: integer(2, 100_000).default(50),
   NERVE_LOGIN_IP_MAX_FAILURES: integer(1, 100_000).default(50),
   NERVE_LOGIN_WINDOW_MINUTES: integer(1, 1_440).default(15),
   NERVE_LOGIN_LOCKOUT_MINUTES: integer(1, 1_440).default(15),
+  // 同一条一次性链接"找到了但不能用"的次数上限（M2-P6）：窗口与锁定时长沿用登录的
+  NERVE_LINK_RECORD_MAX_FAILURES: integer(1, 1_000).default(10),
   NERVE_SHUTDOWN_TIMEOUT_MS: integer(100, 600_000).default(8_000),
   NERVE_LOG_LEVEL: z.enum(LOG_LEVELS, { error: `必须是 ${LOG_LEVELS.join('、')} 之一` }).default('info'),
   // 默认是 OWASP 的最低推荐（内存 19 MiB、迭代 2 次、并行度 1）；内存与迭代次数的乘积另有下限，见交叉检查
@@ -254,6 +270,15 @@ function threadpoolOf(value: string | undefined): Threadpool | undefined {
  */
 function crossChecks(env: Environment, threadpool: Threadpool | undefined, defaults: ReadonlySet<string>): ConfigIssue[] {
   const issues: ConfigIssue[] = []
+  const current = (variable: keyof Environment, value: number): string => `${value}${defaults.has(variable) ? '（默认值）' : ''}`
+  // 只按用户名的上限要比按用户名与来源的上限大（M2-P6 复核 A1）：否则一个来源的失败就能把这个账户在所有来源上锁住
+  if (env.NERVE_LOGIN_ACCOUNT_MAX_FAILURES <= env.NERVE_LOGIN_MAX_FAILURES) {
+    issues.push({
+      variable: 'NERVE_LOGIN_ACCOUNT_MAX_FAILURES',
+      problem: `现在是 ${current('NERVE_LOGIN_ACCOUNT_MAX_FAILURES', env.NERVE_LOGIN_ACCOUNT_MAX_FAILURES)}，必须大于 NERVE_LOGIN_MAX_FAILURES`
+        + `（现在是 ${current('NERVE_LOGIN_MAX_FAILURES', env.NERVE_LOGIN_MAX_FAILURES)}）：否则一个来源的失败就能把这个账户在所有来源上锁住`,
+    })
+  }
   if (env.NERVE_HTTP_HEADERS_TIMEOUT_MS > env.NERVE_HTTP_REQUEST_TIMEOUT_MS)
     issues.push({ variable: 'NERVE_HTTP_HEADERS_TIMEOUT_MS', problem: '不能大于 NERVE_HTTP_REQUEST_TIMEOUT_MS' })
   if (env.NERVE_SESSION_IDLE_TIMEOUT_MINUTES > env.NERVE_SESSION_ABSOLUTE_TIMEOUT_MINUTES)
@@ -267,11 +292,10 @@ function crossChecks(env: Environment, threadpool: Threadpool | undefined, defau
   // 哈希在 libuv 的线程池里计算，线程池也负责读文件与解析域名：哈希最多占一半（复验 R11）
   const concurrency = env.NERVE_PASSWORD_HASH_CONCURRENCY
   if (threadpool !== undefined && concurrency > Math.floor(threadpool.size / 2)) {
-    const current = (value: number, isDefault: boolean): string => `${value}${isDefault ? '（默认值）' : ''}`
     issues.push({
       variable: 'NERVE_PASSWORD_HASH_CONCURRENCY',
-      problem: `现在是 ${current(concurrency, defaults.has('NERVE_PASSWORD_HASH_CONCURRENCY'))}，不能超过 libuv 线程池的一半：`
-        + `${THREADPOOL_VARIABLE} 现在是 ${current(threadpool.size, threadpool.isDefault)}，哈希最多 ${Math.floor(threadpool.size / 2)} 个（线程池也负责读文件与解析域名）。`
+      problem: `现在是 ${current('NERVE_PASSWORD_HASH_CONCURRENCY', concurrency)}，不能超过 libuv 线程池的一半：`
+        + `${THREADPOOL_VARIABLE} 现在是 ${threadpool.size}${threadpool.isDefault ? '（默认值）' : ''}，哈希最多 ${Math.floor(threadpool.size / 2)} 个（线程池也负责读文件与解析域名）。`
         + `把它调小，或者把 ${THREADPOOL_VARIABLE} 调到至少 ${concurrency * 2}`,
     })
   }
@@ -305,10 +329,12 @@ function toAppConfig(env: Environment): AppConfig {
     },
     login: {
       maxFailures: env.NERVE_LOGIN_MAX_FAILURES,
+      accountMaxFailures: env.NERVE_LOGIN_ACCOUNT_MAX_FAILURES,
       ipMaxFailures: env.NERVE_LOGIN_IP_MAX_FAILURES,
       windowMinutes: env.NERVE_LOGIN_WINDOW_MINUTES,
       lockoutMinutes: env.NERVE_LOGIN_LOCKOUT_MINUTES,
     },
+    oneTimeLinks: { recordMaxFailures: env.NERVE_LINK_RECORD_MAX_FAILURES },
     web: { root: env.NERVE_WEB_ROOT },
     shutdown: { timeoutMs: env.NERVE_SHUTDOWN_TIMEOUT_MS },
     log: { level: env.NERVE_LOG_LEVEL },

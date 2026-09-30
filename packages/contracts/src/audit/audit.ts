@@ -56,8 +56,10 @@ export const AUDIT_ACTIONS = [
   'folders.deleted',
   'folders.restored',
   'folders.purged',
-  // M2-P6：重置链接被作废（签发新的时作废旧的、停用账户时作废未用的），与邀请的作废对应（复核 C3）
+  // M2-P6：重置链接被作废（签发新的时作废旧的、停用账户时作废未用的、签发人被停用或不再是系统管理员），与邀请的作废对应（复核 C3、A2）
   'users.password_reset_revoked',
+  // M2-P6：系统管理员解除某个账户的登录锁定，清掉这个账户在所有来源上的失败计数（复核 A1）
+  'users.login_unlocked',
 ] as const
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS)

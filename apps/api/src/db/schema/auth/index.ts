@@ -36,16 +36,21 @@ export const authSessions = pgTable('auth_sessions', {
 ])
 
 export const authLoginThrottles = pgTable('auth_login_throttles', {
-  // "用户名：xxx""地址：xxx"的摘要：不存用户输入的原文
+  // 计数键（"账户：xxx""账户与地址：xxx""地址：xxx"等，见 auth 的 throttle-keys）的摘要：不存用户输入的原文
   keyHash: bytea('key_hash').primaryKey(),
   // 窗口内失败与正在验证的尝试次数：验证之前先占用名额，成功时退回，所以可以回到 0
   failures: integer('failures').notNull(),
   windowStartedAt: timestamp('window_started_at', { withTimezone: true }).notNull(),
   lockedUntil: timestamp('locked_until', { withTimezone: true }),
+  // 所属账户（M2-P6 复核 A1）：登录的两个账户相关的维度才有，是账户维度的键的摘要。按它一次清掉这个账户在所有来源上的计数
+  // （完成重置密码、管理员解除锁定），也按它查这个账户锁定到什么时候（管理界面）
+  accountHash: bytea('account_hash'),
 }, table => [
   // 清理窗口与锁定都已过期的计数
   index('auth_login_throttles_window_started_at_idx').on(table.windowStartedAt),
+  index('auth_login_throttles_account_hash_idx').on(table.accountHash).where(sql`${table.accountHash} IS NOT NULL`),
   check('auth_login_throttles_key_hash_check', sql`octet_length(${table.keyHash}) = 32`),
+  check('auth_login_throttles_account_hash_check', sql`${table.accountHash} IS NULL OR octet_length(${table.accountHash}) = 32`),
   check('auth_login_throttles_failures_check', sql`${table.failures} >= 0`),
 ])
 

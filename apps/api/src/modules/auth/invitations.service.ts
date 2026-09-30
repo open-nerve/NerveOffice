@@ -1,4 +1,4 @@
-import type { AcceptInvitationRequest, AuditDetailsOf, CreateInvitationRequest, InspectLinkResponse, Invitation, InvitationListQuery, InvitationListResponse, IssuedInvitation, UserSummary } from '@nerve-office/contracts'
+import type { AcceptInvitationRequest, AuditDetailsOf, CreateInvitationRequest, InspectLinkResponse, Invitation, InvitationListQuery, InvitationListResponse, IssuedInvitation, LinkIssuerRevocationReason, UserSummary } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { AppConfig } from '../config/index.ts'
 import type { Transaction } from '../database/index.ts'
@@ -17,8 +17,9 @@ import { AccountCreationService, UsersService } from '../users/index.ts'
 import { withHashing } from './attempt-errors.ts'
 import { InvitationsRepository } from './invitations.repository.ts'
 import { LinkAttempts } from './link-attempts.ts'
-import { invitationStatusOf, usabilityOf } from './link-state.ts'
+import { invitationStatusOf, rejectionOf, usabilityOf } from './link-state.ts'
 import { generateLinkToken, linkTokenDigest } from './link-token.ts'
+import { LoginLockouts } from './login-lockouts.ts'
 import { SessionService } from './session.service.ts'
 
 type HttpOrigin = Extract<AuditOrigin, { source: 'http' }>
@@ -68,6 +69,7 @@ export class InvitationsService {
     private readonly users: UsersService,
     private readonly sessions: SessionService,
     private readonly attempts: LinkAttempts,
+    private readonly lockouts: LoginLockouts,
     private readonly audit: AuditService,
     private readonly transactions: TransactionRunner,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
@@ -125,6 +127,24 @@ export class InvitationsService {
     return toInvitation(record, summaryOf(issuers.get(record.createdBy), record.createdBy))
   }
 
+  /**
+   * 签发人离任时（M2-P6 复核 A2；admin 模块在停用、取消系统管理员的同一个事务里调用，已锁住签发人的账户行）：
+   * 作废这个人签发的、还没接受的邀请，每作废一条记一条 users.invitation_revoked（明细带原因）。
+   * 否则离任之后，他发出去的链接在 7 天内仍能用来建账户。代价：对方还没接受的邀请要由另一位管理员重发。
+   * 锁的顺序：签发人的账户行 → 邀请行。接受邀请是按登录名的 advisory lock → 邀请行，不锁签发人的账户行：两边只在邀请行上相遇，不成环
+   */
+  async revokeIssuedBy(actor: User, issuerId: string, reason: LinkIssuerRevocationReason, origin: HttpOrigin, transaction: Transaction): Promise<void> {
+    for (const invitationId of await this.repository.revokeOpenIssuedBy(issuerId, actor.id, transaction)) {
+      await this.audit.record({
+        action: 'users.invitation_revoked',
+        actor: { type: 'user', id: actor.id },
+        target: { type: 'invitation', id: invitationId },
+        origin,
+        details: { reason },
+      }, { transaction })
+    }
+  }
+
   /** 管理界面的列表：按签发时间从新到旧分页，可按状态过滤；不含令牌 */
   async list(query: InvitationListQuery): Promise<InvitationListResponse> {
     const after = query.cursor === undefined ? undefined : decodeTimeCursor(query.cursor)
@@ -151,7 +171,7 @@ export class InvitationsService {
     const ticket = await this.attempts.admit(origin)
     const found = await this.lookup(token)
     if (!found.usable)
-      throw await this.attempts.rejected(ticket, 'invitation', found.reason, found.target, origin)
+      throw await this.attempts.rejected(ticket, 'invitation', found.rejection, origin)
     const { record } = found
     await ticket.succeeded()
     return { username: record.username, displayName: record.displayName, expiresAt: record.expiresAt.toISOString() }
@@ -159,15 +179,17 @@ export class InvitationsService {
 
   /**
    * 公开：接受邀请。先查令牌再算新密码的哈希（无效的令牌不触发哈希计算），都在事务之外；然后在一个事务里：
-   * 锁住邀请复核、建账户与个人空间、退回限流的名额、标记已接受、新建会话（浏览器原来带着的会话作废）、记审计。
+   * 锁住邀请复核、建账户与个人空间、退回限流的名额、标记已接受、清掉这个登录名的登录失败计数（M2-P6 复核 A1：
+   * 账户建成之前别人用这个登录名试过的失败不能挡住本人；与完成重置同理，本人用链接证明了控制着这个账户）、
+   * 新建会话（浏览器原来带着的会话作废）、记审计。
    * 复核不通过（查令牌之后被接受或作废）：事务之外交给 LinkAttempts.rejected，记审计（审查 A10）；
-   * 找到了记录、只是不能用，不计入尝试的失败（M2-P6 复核 B3）
+   * 找到了记录、只是不能用，不计入按地址的失败（M2-P6 复核 B3），另按这条记录计数
    */
   async accept(token: string, request: AcceptInvitationRequest, origin: HttpOrigin, previousSessionToken: string | undefined): Promise<AcceptedInvitation> {
     const ticket = await this.attempts.admit(origin)
     const found = await this.lookup(token)
     if (!found.usable)
-      throw await this.attempts.rejected(ticket, 'invitation', found.reason, found.target, origin)
+      throw await this.attempts.rejected(ticket, 'invitation', found.rejection, origin)
     const { record } = found
     const passwordHash = await withHashing(ticket, this.#logger, async () => this.users.hashPassword(request.password))
     const outcome = await this.transactions.run(async (transaction): Promise<LinkOutcome<AcceptedInvitation>> => {
@@ -181,6 +203,7 @@ export class InvitationsService {
       const { user } = await this.accounts.create({ username: record.username, displayName: request.displayName, passwordHash, systemRole: 'member' }, transaction)
       await ticket.succeeded(transaction)
       await this.repository.markAccepted(record.id, user.id, transaction)
+      await this.lockouts.clear(user.username, transaction)
       if (previousSessionToken !== undefined)
         await this.sessions.replace(previousSessionToken, transaction)
       const session = await this.sessions.create(user.id, transaction)
@@ -194,7 +217,7 @@ export class InvitationsService {
       return { done: true, value: { user, sessionToken: session.token } }
     })
     if (!outcome.done)
-      throw await this.attempts.rejected(ticket, 'invitation', outcome.reason, { type: 'invitation', id: record.id }, origin)
+      throw await this.attempts.rejected(ticket, 'invitation', rejectionOf(outcome.reason, record.id, { type: 'invitation', id: record.id }), origin)
     return outcome.value
   }
 
@@ -203,9 +226,9 @@ export class InvitationsService {
     const digest = linkTokenDigest(token)
     const record = digest === undefined ? undefined : await this.repository.findByTokenHash(digest)
     if (record === undefined)
-      return { usable: false, reason: 'invalid' }
+      return { usable: false, rejection: { reason: 'invalid' } }
     const usability = usabilityOf(stateOf(record))
-    return usability === 'usable' ? { usable: true, record } : { usable: false, reason: usability, target: { type: 'invitation', id: record.id } }
+    return usability === 'usable' ? { usable: true, record } : { usable: false, rejection: { reason: usability, recordId: record.id, target: { type: 'invitation', id: record.id } } }
   }
 
   /** 调用方已取这个登录名的锁：账户占用了，或者有未过期、待接受的邀请时 USERNAME_TAKEN；过期未处理的先作废 */

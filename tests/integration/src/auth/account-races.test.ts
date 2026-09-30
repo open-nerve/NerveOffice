@@ -298,6 +298,10 @@ describe('US-M2-04 停用与会话、操作者的复核（审查 A1、A2、A12�
     const gone = await createAccount(database, { username: 'gone' })
     await database.query(async client => client.query('UPDATE users SET status = \'disabled\' WHERE id = $1', [gone.id]))
     const pending = await issuedInvitation('pending-inv')
+    // ivy 留下登录失败的计数：解除登录锁定（M2-P6 复核 A1）被拒之后，计数应当还在
+    expect((await postLogin(app.baseUrl, { username: 'ivy', password: 'wrong password' })).status).toBe(401)
+    const ivyCounters = async () => count('SELECT count(*)::int AS count FROM auth_login_throttles WHERE account_hash = sha256(convert_to(\'account:ivy\', \'UTF8\'))', [])
+    expect(await ivyCounters()).toBe(2)
     const operations: [string, (session: LoggedIn) => Promise<Response>][] = [
       ['停用', async session => asUser(app.baseUrl, session, `/api/admin/users/${ivy.id}/disable`, { method: 'POST' })],
       ['启用', async session => asUser(app.baseUrl, session, `/api/admin/users/${gone.id}/enable`, { method: 'POST' })],
@@ -306,6 +310,7 @@ describe('US-M2-04 停用与会话、操作者的复核（审查 A1、A2、A12�
       ['签发邀请', async session => asUser(app.baseUrl, session, '/api/admin/invitations', { method: 'POST', body: { username: 'never-invited', displayName: '不会被邀请' } })],
       ['作废邀请', async session => asUser(app.baseUrl, session, `/api/admin/invitations/${pending.id}/revoke`, { method: 'POST' })],
       ['重发邀请', async session => asUser(app.baseUrl, session, `/api/admin/invitations/${pending.id}/reissue`, { method: 'POST' })],
+      ['解除登录锁定', async session => asUser(app.baseUrl, session, `/api/admin/users/${ivy.id}/unlock-login`, { method: 'POST' })],
     ]
     for (const [index, [name, operate]] of operations.entries()) {
       const boss = await createAccount(database, { username: `boss-${index}`, systemRole: 'admin' })
@@ -324,6 +329,7 @@ describe('US-M2-04 停用与会话、操作者的复核（审查 A1、A2、A12�
     expect(await count('SELECT count(*)::int AS count FROM auth_password_resets WHERE user_id = $1', [ivy.id])).toBe(0)
     expect(await count('SELECT count(*)::int AS count FROM auth_invitations WHERE username = $1', ['never-invited'])).toBe(0)
     expect(await one('SELECT revoked_at FROM auth_invitations WHERE id = $1', [pending.id])).toEqual({ revoked_at: null })
+    expect(await ivyCounters()).toBe(2)
   })
 
   it('停用已锁住账户行、在重置行上等着时，带这个账户旧 Cookie 的登录进来：登录排在停用后面（先要账户行），复核不通过，没有死锁', async () => {
@@ -349,6 +355,71 @@ describe('US-M2-04 停用与会话、操作者的复核（审查 A1、A2、A12�
     })
     expect(responses.map(response => response.status)).toEqual([200, 401])
     expect(await count('SELECT count(*)::int AS count FROM auth_sessions WHERE user_id = $1 AND revoked_at IS NULL', [jon.id])).toBe(0)
+  })
+})
+
+describe('US-M2-04 管理员给自己签发了重置，同时有人停用他（M2-P6 复核 A2：锁的顺序是账户行在前、链接行在后）', () => {
+  /** 一位管理员给自己签发重置：自己的会话随即撤销，旧密码失效；返回令牌与这条重置的 id */
+  async function selfIssuedReset(username: string) {
+    const self = await createAccount(database, { username, systemRole: 'admin' })
+    const session = await login(app.baseUrl, username, self.password)
+    const response = await asUser(app.baseUrl, session, `/api/admin/users/${self.id}/password-reset`, { method: 'POST' })
+    expect(response.status, await response.clone().text()).toBe(201)
+    const token = tokenOf(parseExact(issuedPasswordResetSchema, await response.json()).url)
+    const row = await one<{ id: string }>('SELECT id FROM auth_password_resets WHERE token_hash = $1', [tokenDigest(token)])
+    if (row === undefined)
+      throw new Error('签发之后库里没有这条重置')
+    return { self, token, resetId: row.id }
+  }
+
+  function lockResetRow(resetId: string) {
+    return async (client: pg.Client) => client.query('SELECT 1 FROM auth_password_resets WHERE id = $1 FOR UPDATE', [resetId])
+  }
+
+  async function disable(account: TestAccount): Promise<Response> {
+    return asUser(app.baseUrl, adminSession, `/api/admin/users/${account.id}/disable`, { method: 'POST' })
+  }
+
+  it('完成重置先锁住账户行、在重置行上等着，停用在账户行上等它：放开之后两边都成功，没有互相等待；刚得到的会话随停用撤销', async () => {
+    const { self, token, resetId } = await selfIssuedReset('self-race-1')
+    // 完成重置要是先锁重置行、再锁账户行，这里就成环：它拿着重置行等账户行，停用拿着账户行等重置行，一方 500
+    const [completed, disabled] = await raceAgainstHeldLock(database, {
+      hold: lockResetRow(resetId),
+      request: async ({ step, waitForWaiting }) => {
+        const complete = step(completeReset(token))
+        await waitForWaiting(1)
+        const disabling = step(disable(self))
+        return Promise.all([complete, disabling])
+      },
+      waiting: 2,
+      change: async () => undefined,
+    })
+    expect([completed.status, disabled.status]).toEqual([200, 200])
+    expect(await one('SELECT status FROM users WHERE id = $1', [self.id])).toEqual({ status: 'disabled' })
+    expect(await one('SELECT used_at IS NOT NULL AS used, revoked_at IS NOT NULL AS revoked FROM auth_password_resets WHERE id = $1', [resetId])).toEqual({ used: true, revoked: false })
+    expect(await count('SELECT count(*)::int AS count FROM auth_sessions WHERE user_id = $1 AND revoked_at IS NULL', [self.id])).toBe(0)
+  })
+
+  it('停用先锁住账户行、作废他的重置时在重置行上等着，完成重置在账户行上等它：放开之后重置已作废，完成是 410（revoked），密码不变', async () => {
+    const { self, token, resetId } = await selfIssuedReset('self-race-2')
+    const before = await passwordHashOfAccount(self)
+    const [disabled, completed] = await raceAgainstHeldLock(database, {
+      hold: lockResetRow(resetId),
+      request: async ({ step, waitForWaiting }) => {
+        const disabling = step(disable(self))
+        await waitForWaiting(1)
+        const complete = step(completeReset(token))
+        return Promise.all([disabling, complete])
+      },
+      waiting: 2,
+      change: async () => undefined,
+    })
+    expect(disabled.status).toBe(200)
+    expect(await linkInvalidReasonOf(completed)).toBe('revoked')
+    expect(await passwordHashOfAccount(self)).toBe(before)
+    expect(await one('SELECT used_at IS NOT NULL AS used, revoked_at IS NOT NULL AS revoked FROM auth_password_resets WHERE id = $1', [resetId])).toEqual({ used: false, revoked: true })
+    // 给自己签发的是这个账户的重置：随停用按 account_disabled 作废，只记一次
+    expect(await one('SELECT details FROM audit_events WHERE action = \'users.password_reset_revoked\' AND request_id = $1', [requestIdOf(disabled)])).toEqual({ details: { passwordResetId: resetId, reason: 'account_disabled' } })
   })
 })
 

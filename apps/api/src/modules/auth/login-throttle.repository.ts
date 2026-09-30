@@ -50,8 +50,9 @@ export class LoginThrottleRepository {
    * 占用一个名额，一条 INSERT … ON CONFLICT 原子地完成：
    * 计数加一，窗口已过或者上一次的锁定已经结束时从 1 重新计数，加到上限时锁定。
    * 锁定中不占用（不更新，也就不返回行），返回 undefined。
+   * accountHash 是所属账户（登录的账户相关的维度才有，M2-P6 复核 A1）：同一个键总是同一个账户，冲突时不用更新它。
    */
-  async reserve(keyHash: Buffer, policy: ThrottlePolicy): Promise<Reservation | undefined> {
+  async reserve(keyHash: Buffer, policy: ThrottlePolicy, accountHash?: Buffer): Promise<Reservation | undefined> {
     const t = authLoginThrottles
     const window = sql`make_interval(mins => ${policy.windowMinutes})`
     const lockout = sql`make_interval(mins => ${policy.lockoutMinutes})`
@@ -64,6 +65,7 @@ export class LoginThrottleRepository {
         failures: 1,
         windowStartedAt: sql`now()`,
         lockedUntil: sql`CASE WHEN 1 >= ${policy.maxFailures} THEN now() + ${lockout} END`,
+        accountHash: accountHash ?? null,
       })
       .onConflictDoUpdate({
         target: t.keyHash,
@@ -99,6 +101,37 @@ export class LoginThrottleRepository {
 
   async reset(keyHash: Buffer, transaction?: Transaction): Promise<void> {
     await executorOf(this.db, transaction).delete(authLoginThrottles).where(eq(authLoginThrottles.keyHash, keyHash))
+  }
+
+  /**
+   * 删除这个账户在所有来源上的计数（M2-P6 复核 A1）：所属账户是它的那些行（只按用户名的一行，按用户名与各个来源的若干行）。
+   * 在调用方的事务里：调用方先锁了账户行，与这个账户的登录、修改密码的成功（同样先锁账户行）排队，删多行时互相等待也不会成环。
+   * 返回删掉的行数
+   */
+  async resetAccount(accountHash: Buffer, transaction: Transaction): Promise<number> {
+    const t = authLoginThrottles
+    const rows = await executorOf(this.db, transaction).delete(t).where(eq(t.accountHash, accountHash)).returning({ keyHash: t.keyHash })
+    return rows.length
+  }
+
+  /**
+   * 这些账户里仍在锁定中的（M2-P6 复核 A1，管理界面的账户行）：各自最晚解锁的时间，以及只按用户名的那一行是否也在锁定
+   * （那一行的键就是所属账户；它锁定时这个账户在所有来源上都登录不了）。没有锁定的账户不在结果里
+   */
+  async locksOfAccounts(accountHashes: readonly Buffer[]): Promise<{ readonly accountHash: Buffer, readonly lockedUntil: Date, readonly allSources: boolean }[]> {
+    if (accountHashes.length === 0)
+      return []
+    const t = authLoginThrottles
+    const rows = await this.db
+      .select({
+        accountHash: t.accountHash,
+        lockedUntil: sql<Date>`max(${t.lockedUntil})`.mapWith(t.lockedUntil),
+        allSources: sql<boolean>`bool_or(${t.keyHash} = ${t.accountHash})`,
+      })
+      .from(t)
+      .where(and(inArray(t.accountHash, [...accountHashes]), gt(t.lockedUntil, sql`now()`)))
+      .groupBy(t.accountHash)
+    return rows.flatMap(row => (row.accountHash === null ? [] : [{ accountHash: row.accountHash, lockedUntil: row.lockedUntil, allSources: row.allSources }]))
   }
 
   /**
