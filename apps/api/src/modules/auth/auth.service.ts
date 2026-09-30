@@ -25,8 +25,15 @@ type HttpOrigin = Extract<AuditOrigin, { source: 'http' }>
  */
 export type LogoutOutcome = 'ended' | 'rotated' | 'gone'
 
-/** 修改密码的事务里发现当前的会话已经结束（M2-P6）：回滚用，事务之外换成"登录已过期" */
-class SessionEndedDuringRequest extends Error {}
+/**
+ * 修改密码的事务里发现当前的会话已经结束（M2-P6）：回滚用，事务之外退回名额之后照原样抛出（"登录已过期"）。
+ * 是 AppError：事务运行器只把以 AppError 结束的事务的连接放回池里，别的错误会丢弃连接（第三轮复验 一般-A）
+ */
+class SessionEndedDuringRequest extends AppError {
+  constructor() {
+    super('SESSION_EXPIRED')
+  }
+}
 
 export interface LoginResult {
   /** 只交给 Cookie */
@@ -164,10 +171,9 @@ export class AuthService {
       })
     }
     catch (error) {
-      if (!(error instanceof SessionEndedDuringRequest))
-        throw error
-      await ticket.abandoned()
-      throw new AppError('SESSION_EXPIRED')
+      if (error instanceof SessionEndedDuringRequest)
+        await ticket.abandoned()
+      throw error
     }
     if (created === undefined)
       throw await this.passwordChangeFailed(ticket, user, 'credentials_changed', origin)

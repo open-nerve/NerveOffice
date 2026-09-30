@@ -8,6 +8,7 @@ import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import { createHash, randomBytes } from 'node:crypto'
+import { setTimeout as delay } from 'node:timers/promises'
 import { errorResponseSchema, issuedInvitationSchema, issuedPasswordResetSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount, passwordHashOf } from '../support/accounts.ts'
@@ -670,6 +671,22 @@ describe('US-M2-02 退出、修改密码进行中，这条会话先结束了（M
     )
   }
 
+  /** 被持锁的连接挡住的那个连接（这里就是被测的请求用的连接） */
+  async function pidBlockedBy(client: pg.Client): Promise<number | undefined> {
+    const holder = (await client.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid
+    return (await one<{ pid: number }>('SELECT pid FROM pg_stat_activity WHERE datname = current_database() AND $1 = ANY(pg_blocking_pids(pid))', [holder]))?.pid
+  }
+
+  /** 这个连接还在：连接被丢弃之后服务端的进程要过一会儿才退出，最多看 2 秒 */
+  async function connectionAlive(pid: number): Promise<boolean> {
+    for (let attempt = 0; attempt < 40; attempt++) {
+      if (await count('SELECT count(*)::int AS count FROM pg_stat_activity WHERE pid = $1', [pid]) === 0)
+        return false
+      await delay(50)
+    }
+    return true
+  }
+
   async function logoutAudits(response: Response): Promise<number> {
     return count('SELECT count(*)::int AS count FROM audit_events WHERE action = \'auth.logout\' AND request_id = $1', [requestIdOf(response)])
   }
@@ -707,10 +724,14 @@ describe('US-M2-02 退出、修改密码进行中，这条会话先结束了（M
     const max = await createAccount(database, { username: 'max' })
     const here = await login(app.baseUrl, 'max', max.password)
     const before = await passwordHashOfAccount(max)
+    let changePid: number | undefined
     const response = await raceAgainstHeldLock(database, {
       hold: lockAccountRow(max),
       request: async () => asUser(app.baseUrl, here, '/api/auth/password', { method: 'PUT', body: { currentPassword: max.password, newPassword: 'max wants this new one' } }),
-      change: revokeSession(here, 'logout'),
+      change: async (client) => {
+        changePid = await pidBlockedBy(client)
+        await revokeSession(here, 'logout')(client)
+      },
     })
     expect(response.status).toBe(401)
     expect(await codeOf(response)).toBe('SESSION_EXPIRED')
@@ -723,5 +744,8 @@ describe('US-M2-02 退出、修改密码进行中，这条会话先结束了（M
     const account = createHash('sha256').update('account:max', 'utf8').digest()
     expect(await count('SELECT coalesce(sum(failures), 0)::int AS count FROM auth_login_throttles WHERE account_hash = $1', [account])).toBe(0)
     expect((await postLogin(app.baseUrl, { username: 'max', password: max.password })).status).toBe(200)
+    // 这是业务上的回滚，不是出错：连接照常放回连接池（事务运行器只保留以 AppError 结束的事务的连接，第三轮复验 一般-A）
+    expect(changePid).toBeDefined()
+    expect(await connectionAlive(changePid ?? 0)).toBe(true)
   })
 })

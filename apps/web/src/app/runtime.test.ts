@@ -472,6 +472,23 @@ describe('本页的登录、修改密码还在进行：向服务端确认之前�
     expect(page.visits).toEqual(['/login?from=%2Fsettings%2Fpassword'])
   })
 
+  it('一轮确认正在等本页的修改密码时请求得到"登录已过期"，修改密码随后失败、确实没有会话：这一轮就下结论，按"已过期"离开，只确认一次（轮数在等完之后才加一，第三轮复验 一般-B）', async () => {
+    const bus = sessionBus()
+    const otherTab = bus.open()
+    const api = installFakeApi({ 'GET /api/auth/session': () => apiError(401, 'UNAUTHENTICATED') })
+    const { runtime, page } = runtimeAt('/settings/password', bus)
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    const renewal = sessionChangeInProgress(runtime, RENEWS_SESSION)
+    otherTab.announce()
+    await settle()
+    await failWith(runtime, 'SESSION_EXPIRED')
+    renewal.fail(new ApiError(403, 'CURRENT_PASSWORD_INCORRECT', 'x'))
+    await renewal.done
+    await vi.waitFor(() => expect(page.visits).toEqual(['/login?from=%2Fsettings%2Fpassword&reason=expired']))
+    await settle()
+    expect(api.requests).toHaveLength(1)
+  })
+
   it('组件调用的复核同样等本页的修改密码结束（M2-P6 复验 一般-1）', async () => {
     const jar = cookieJar()
     const { runtime, page } = runtimeAt('/settings/password')

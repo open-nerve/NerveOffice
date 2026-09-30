@@ -238,6 +238,8 @@ describe('名称里的格式字符：不属于默认可忽略的同样拒绝（M
 
 /** 蒙古文字母：a U+1820、e U+1821、na U+1828、ra U+1837、ha U+182C、ta U+1832；元音分隔符 MVS U+180E、自由变体选择符 FVS1 U+180B */
 const MONGOLIAN = { a: '\u1820', e: '\u1821', na: '\u1828', ra: '\u1837', ha: '\u182C', ta: '\u1832', mvs: '\u180E', fvs1: '\u180B' }
+/** 蒙古文里 a、e 之外的元音：i、o、u、ö、ü、ee（U+1822–U+1827） */
+const OTHER_MONGOLIAN_VOWELS = ['\u1822', '\u1823', '\u1824', '\u1825', '\u1826', '\u1827']
 
 describe('名称里的蒙古文元音分隔符：只在正字法要求的位置放行（M2-P6 复验 一般-5）', () => {
   const { a, e, na, ra, ha, ta, mvs, fvs1 } = MONGOLIAN
@@ -268,6 +270,11 @@ describe('名称里的蒙古文元音分隔符：只在正字法要求的位置�
   ])('其他位置照旧拒绝：%s', (_label, name) => {
     expect(hasHiddenCharacters(name)).toBe(true)
     expect(problemOf(nameSchema, name)).toBe('名称不能包含看不见的字符（例如零宽空格）')
+  })
+
+  it.each(OTHER_MONGOLIAN_VOWELS.map(vowel => [JSON.stringify(vowel), vowel]))('后面是 a、e 之外的蒙古文元音 %s：拒绝（正字法只在词尾的 a、e 之前用它，第三轮复验 一般-C）', (_label, vowel) => {
+    expect(hasHiddenCharacters(`${na}${a}${ra}${mvs}${vowel}`)).toBe(true)
+    expect(problemOf(nameSchema, `${na}${a}${ra}${mvs}${vowel}`)).toBe('名称不能包含看不见的字符（例如零宽空格）')
   })
 
   it('同一个位置上换成别的看不见的字符（零宽空格、词连接符、行间注释字符、软连字符）：照旧拒绝，放行的只有元音分隔符', () => {
