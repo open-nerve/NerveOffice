@@ -12,7 +12,7 @@ import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { requestIdOf } from '../support/request-id.ts'
-import { asUser, login, SESSION_COOKIE, sessionSetCookie } from '../support/session-client.ts'
+import { asUser, cookieValue, login, postLogin, SESSION_COOKIE, sessionSetCookie } from '../support/session-client.ts'
 
 let database: TestDatabase
 let app: TestApp
@@ -103,6 +103,70 @@ describe('US-M1-02 当前会话', () => {
     const text = app.logs.text()
     expect(text).not.toContain(user.cookie.slice(`${SESSION_COOKIE}=`.length))
     expect(text).not.toContain(user.session.csrfToken)
+  })
+})
+
+describe('US-M2-02 换令牌之后还带着旧 Cookie 的请求（复验 N3）：仍是 SESSION_EXPIRED，但不清除 Cookie；其他原因照旧清除', () => {
+  /** 401 SESSION_EXPIRED，响应里没有会话 Cookie 的 Set-Cookie：浏览器里已经换上的新 Cookie 不会被它删掉 */
+  async function expectSessionExpiredKeepingCookie(response: Response): Promise<void> {
+    expect(response.status).toBe(401)
+    expect(parseExact(errorResponseSchema, await response.json()).error.code).toBe('SESSION_EXPIRED')
+    expect(sessionSetCookie(response)).toBeUndefined()
+  }
+
+  it('修改密码之后：本页原来的 Cookie、别处的 Cookie 发来的请求都不清除 Cookie；带着新 Cookie 的请求照常', async () => {
+    const amy = await createAccount(database, { username: 'amy-rotate' })
+    const here = await login(app.baseUrl, 'amy-rotate', amy.password)
+    const elsewhere = await login(app.baseUrl, 'amy-rotate', amy.password)
+    const changed = await asUser(app.baseUrl, here, '/api/auth/password', { method: 'PUT', body: { currentPassword: amy.password, newPassword: 'a brand new long password' } })
+    expect(changed.status).toBe(200)
+    const renewed = sessionSetCookie(changed)
+    expect(renewed).toBeDefined()
+    // 修改密码之前发出、之后才处理的请求（本页或同一个浏览器的其他标签页）
+    await expectSessionExpiredKeepingCookie(await asUser(app.baseUrl, here, '/api/auth/session'))
+    await expectSessionExpiredKeepingCookie(await asUser(app.baseUrl, elsewhere, '/api/auth/session'))
+    const current = { cookie: `${SESSION_COOKIE}=${cookieValue(renewed ?? '')}`, session: here.session }
+    expect((await asUser(app.baseUrl, current, '/api/auth/session')).status).toBe(200)
+  })
+
+  it('同一个浏览器重新登录（原来的会话换掉，replaced）之后：带着原来 Cookie 的请求不清除 Cookie', async () => {
+    const bob = await createAccount(database, { username: 'bob-rotate' })
+    const first = await login(app.baseUrl, 'bob-rotate', bob.password)
+    const again = await postLogin(app.baseUrl, { username: 'bob-rotate', password: bob.password }, { cookie: first.cookie })
+    expect(again.status).toBe(200)
+    await expectSessionExpiredKeepingCookie(await asUser(app.baseUrl, first, '/api/auth/session'))
+  })
+
+  it('退出、停用、签发重置之后：带着旧 Cookie 的请求照旧清除 Cookie（不会有新的 Cookie）', async () => {
+    const admin = await createAccount(database, { username: 'root-rotate', systemRole: 'admin' })
+    const adminSession = await login(app.baseUrl, 'root-rotate', admin.password)
+    const cid = await createAccount(database, { username: 'cid-rotate' })
+
+    const loggedOut = await login(app.baseUrl, 'cid-rotate', cid.password)
+    expect((await asUser(app.baseUrl, loggedOut, '/api/auth/logout', { method: 'POST' })).status).toBe(204)
+    await expectSessionExpired(await asUser(app.baseUrl, loggedOut, '/api/auth/session'))
+
+    const beforeReset = await login(app.baseUrl, 'cid-rotate', cid.password)
+    expect((await asUser(app.baseUrl, adminSession, `/api/admin/users/${cid.id}/password-reset`, { method: 'POST' })).status).toBe(201)
+    await expectSessionExpired(await asUser(app.baseUrl, beforeReset, '/api/auth/session'))
+
+    const dan = await createAccount(database, { username: 'dan-rotate' })
+    const beforeDisable = await login(app.baseUrl, 'dan-rotate', dan.password)
+    expect((await asUser(app.baseUrl, adminSession, `/api/admin/users/${dan.id}/disable`, { method: 'POST' })).status).toBe(200)
+    await expectSessionExpired(await asUser(app.baseUrl, beforeDisable, '/api/auth/session'))
+  })
+
+  it('按撤销的原因：只有 password_changed 与 replaced 不清除；logout、disabled、password_reset 清除', async () => {
+    const reasons = { logout: true, disabled: true, password_reset: true, password_changed: false, replaced: false } as const
+    for (const [reason, clears] of Object.entries(reasons)) {
+      const user = await login(app.baseUrl, 'alice', alice.password)
+      await updateSession(user, `revoked_at = now(), revoked_reason = '${reason}', idle_expires_at = now()`)
+      const response = await asUser(app.baseUrl, user, '/api/auth/session')
+      if (clears)
+        await expectSessionExpired(response)
+      else
+        await expectSessionExpiredKeepingCookie(response)
+    }
   })
 })
 

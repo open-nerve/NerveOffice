@@ -32,6 +32,8 @@ function linkOf(issued: IssuedInvitation, returnFocus: () => void): IssuedLink {
 /**
  * 签发失败时的说明（M2-P6 复核 G-2）：结果未知时邀请可能已经建好，链接却丢了（只在签发的响应里出现一次），引导去列表里重新生成；
  * 结果未知之后对同一个登录名再签发得到"已被占用"，多半就是刚才那一次，同样引导去重新生成；其余按错误码。
+ * 比较的两边都是经契约解析过的请求（createInvitationRequestSchema，登录名已是规范写法，复验 N10）：
+ * 两次输入只差大小写或首尾空白，也认作同一个登录名
  */
 function issueFailureText(error: unknown, request: CreateInvitationRequest | undefined, unsureFor: string | undefined): string {
   if (isUnknownOutcome(error))
@@ -86,7 +88,8 @@ export function AdminInvitationsPage() {
       setIssued(linkOf(result, () => usernameRef.current?.focus()))
       await refresh()
     },
-    // 结果未知：邀请可能已经建好，刷新列表让它出现；输入留着，列表里没有时可以再生成一次
+    // 结果未知：邀请可能已经建好，刷新列表让它出现；输入留着，列表里没有时可以再生成一次。
+    // 记下的是请求里的登录名（规范写法），不是输入框里的原文（复验 N10）
     onError: async (error, request) => {
       if (!isUnknownOutcome(error))
         return

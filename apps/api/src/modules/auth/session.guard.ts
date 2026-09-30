@@ -1,5 +1,6 @@
 import type { CanActivate, ExecutionContext } from '@nestjs/common'
 import type { Request, Response } from 'express'
+import type { AuthenticatedSession } from './session.service.ts'
 import { Injectable } from '@nestjs/common'
 import { Reflector } from '@nestjs/core'
 import { AppError } from '../../shared/errors/app-error.ts'
@@ -15,9 +16,12 @@ import { SessionService } from './session.service.ts'
 /**
  * 认证（全局守卫，默认拒绝，P3 设计 §3.5）：除了标了 @Public() 的接口，都要求有效的会话。
  * - 没有会话 Cookie：UNAUTHENTICATED；
- * - 带着会话 Cookie，但会话无效（过期、撤销、账户不可用）：SESSION_EXPIRED，并清除 Cookie；账户不可用时会话一并撤销；
+ * - 带着会话 Cookie，但会话无效（过期、撤销、账户不可用）：SESSION_EXPIRED，并清除 Cookie；账户不可用时会话一并撤销。
+ *   例外（复验 N3）：会话是因为换令牌（修改密码、同一个浏览器重新登录）而撤销的，仍回 SESSION_EXPIRED，但不清除 Cookie：
+ *   换令牌之前发出、之后才处理的请求，响应晚于新的 Cookie 到达时，清除会把新的删掉，本人随即掉线；
  * - 标了 @SystemAdminOnly() 的接口，登录的不是系统管理员：PERMISSION_DENIED（M2-P1）。
- * 守卫排在处理器的在途计数之前：这里的数据库访问要短（按摘要与主键各查一次，间隔超过 1 分钟时顺延一次，P2 交接单）。
+ * 守卫排在处理器的在途计数之前：这里的数据库访问要短（按摘要与主键各查一次，间隔超过 1 分钟时顺延一次，P2 交接单；
+ * 会话无效时另按摘要查一次撤销的原因，这条路径本来就少见）。
  */
 @Injectable()
 export class SessionGuard implements CanActivate {
@@ -45,7 +49,8 @@ export class SessionGuard implements CanActivate {
       // 会话还在、账户却不可用（停用）：撤销它，不顺延，启用之后它也不能再用（M2-P1 审查 A1 的纵深防御）
       if (session !== undefined)
         await this.sessions.revoke(session.id, 'disabled')
-      this.cookie.clear(response)
+      if (!await this.rotatedAway(token, session))
+        this.cookie.clear(response)
       throw new AppError('SESSION_EXPIRED')
     }
     await this.sessions.keepAlive(session)
@@ -55,5 +60,13 @@ export class SessionGuard implements CanActivate {
     if (this.reflector.getAllAndOverride<boolean | undefined>(SYSTEM_ADMIN_ROUTE, [context.getHandler(), context.getClass()]) === true && user.systemRole !== 'admin')
       throw new AppError('PERMISSION_DENIED')
     return true
+  }
+
+  /**
+   * 带来的令牌是不是因为换令牌而失效的（复验 N3）：只在找不到有效的会话时问（令牌格式不对、账户不可用时都不问）。
+   * 是的话这个浏览器多半已经拿到了新的 Cookie，不清除
+   */
+  private async rotatedAway(token: string | undefined, session: AuthenticatedSession | undefined): Promise<boolean> {
+    return token !== undefined && session === undefined && await this.sessions.invalidatedByRotation(token)
   }
 }

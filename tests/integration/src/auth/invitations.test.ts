@@ -213,11 +213,13 @@ describe('US-M2-01 邀请注册：登录名冲突、过期、作废、重发', (
     const post = async (path: string, body?: unknown) => asUser(app.baseUrl, adminSession, path, { method: 'POST', body })
     expect(await codeOf(await post('/api/admin/invitations', { username: 'a b', displayName: '名字' }))).toBe('REQUEST_INVALID')
     expect(await codeOf(await post('/api/admin/invitations', { username: 'valid-name', displayName: '' }))).toBe('REQUEST_INVALID')
-    // 显示名按名称的共用规则（M2-P6 复核 B2）：改变文字方向的字符、只有看不见的字符都拒绝
+    // 显示名按名称的共用规则（M2-P6 复核 B2）：改变文字方向的字符、只有看不见的字符都拒绝；夹在字中间的零宽空格也拒绝（复验 N6）
     const rightToLeftOverride = String.fromCharCode(0x202E)
     const hangulFiller = String.fromCharCode(0x3164)
+    const zeroWidthSpace = String.fromCharCode(0x200B)
     expect(await codeOf(await post('/api/admin/invitations', { username: 'valid-name', displayName: `张${rightToLeftOverride}三` }))).toBe('REQUEST_INVALID')
     expect(await codeOf(await post('/api/admin/invitations', { username: 'valid-name', displayName: hangulFiller }))).toBe('REQUEST_INVALID')
+    expect(await codeOf(await post('/api/admin/invitations', { username: 'valid-name', displayName: `张${zeroWidthSpace}三` }))).toBe('REQUEST_INVALID')
     expect(await codeOf(await post('/api/admin/invitations', { username: 'valid-name', displayName: '名字', systemRole: 'admin' }))).toBe('REQUEST_INVALID')
     expect(await codeOf(await post('/api/admin/invitations/not-a-uuid/revoke'))).toBe('REQUEST_INVALID')
     expect(await codeOf(await post('/api/admin/invitations/not-a-uuid/reissue'))).toBe('REQUEST_INVALID')

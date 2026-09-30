@@ -5,6 +5,12 @@ import { APP_CONFIG } from '../config/index.ts'
 import { generateSessionToken, isWellFormedSessionToken, sessionTokenDigest } from './session-token.ts'
 import { SessionsRepository } from './sessions.repository.ts'
 
+/**
+ * 换令牌时撤销的原因（复验 N3）：修改密码（本人的全部会话撤销，当前页面随即换上新的会话）、同一个浏览器重新登录
+ * （原来的会话换成新的）。这时发出请求的浏览器多半已经拿到了新的 Cookie，还带着旧 Cookie 的是换令牌之前就发出的请求
+ */
+const ROTATION_REASONS = ['password_changed', 'replaced'] as const
+
 export interface CreatedSession {
   readonly id: string
   /** 只交给 Cookie，不写日志、不写库 */
@@ -47,6 +53,17 @@ export class SessionService {
     if (!isWellFormedSessionToken(token))
       return undefined
     return this.repository.findActive(sessionTokenDigest(token))
+  }
+
+  /**
+   * 这条令牌是不是因为换令牌（ROTATION_REASONS）而失效的（复验 N3）。会话守卫在会话无效时问它：是的话仍回"登录已过期"，
+   * 但不清除 Cookie——换令牌之前发出、之后才处理的请求，响应晚于新 Cookie 到达时，清除会把新的删掉，本人随即掉线。
+   * 退出、过期、停用、重置密码等其他原因照旧清除。令牌格式不对时不查库
+   */
+  async invalidatedByRotation(token: string): Promise<boolean> {
+    if (!isWellFormedSessionToken(token))
+      return false
+    return this.repository.revokedFor(sessionTokenDigest(token), ROTATION_REASONS)
   }
 
   /** 距上次记录超过 1 分钟时顺延空闲过期（不超过绝对过期） */

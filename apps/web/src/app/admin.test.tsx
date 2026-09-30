@@ -266,7 +266,9 @@ describe('管理界面：账户', () => {
     renderApp('/admin/users')
     const dialog = await openConfirm(await rowOf('amy'), '解除锁定 艾米（amy）')
     expect(dialog).toHaveAccessibleName('解除 艾米（amy） 的登录锁定？')
-    expect(dialog).toHaveAccessibleDescription(/在所有地方的登录失败次数清零，可以立即用密码登录/)
+    // 说明准确（复验 N5）：清掉的是这个人在各个来源上的失败次数；他所在的网络整体被锁时仍要等到期，不说"可以立即登录"
+    expect(dialog).toHaveAccessibleDescription(/^解除后，清掉这个人在所有来源上的登录失败次数。他所在的网络如果整体被锁（同一来源失败次数太多），仍要等锁定到期。/)
+    expect(dialog).not.toHaveAccessibleDescription(/立即/)
     fireEvent.click(within(dialog).getByRole('button', { name: '解除锁定' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(requestCount(api, `POST /api/admin/users/${AMY.id}/unlock-login`)).toBe(1)
@@ -482,6 +484,30 @@ describe('管理界面：邀请', () => {
     fireEvent.change(screen.getByLabelText('登录名'), { target: { value: 'bob' } })
     fireEvent.click(screen.getByRole('button', { name: '生成邀请链接' }))
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/^这个登录名已被账户占用，或者已有待接受的邀请$/))
+  })
+
+  it('结果未知的那一次输入带着大写与首尾空白，再按规范写法签发得到"已被占用"：同样认作同一个登录名，给出专门的引导（复验 N10）', async () => {
+    const api = installFakeApi({
+      ...SPACES,
+      'GET /api/auth/session': () => json(200, session('admin')),
+      'GET /api/admin/invitations': () => json(200, listPage([])),
+      'POST /api/admin/invitations': inTurn(() => apiError(500, 'INTERNAL_ERROR'), () => apiError(409, 'USERNAME_TAKEN')),
+    })
+    renderApp('/admin/invitations')
+    await screen.findByText('还没有邀请')
+    fireEvent.change(screen.getByLabelText('登录名'), { target: { value: ' Amy.Lee ' } })
+    fireEvent.change(screen.getByLabelText('显示名'), { target: { value: '艾米' } })
+    fireEvent.click(screen.getByRole('button', { name: '生成邀请链接' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('没能确认邀请是否已经生成')
+
+    fireEvent.change(screen.getByLabelText('登录名'), { target: { value: 'amy.lee' } })
+    fireEvent.click(screen.getByRole('button', { name: '生成邀请链接' }))
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('这个登录名已有待接受的邀请，可能就是刚才没能确认的那一次'))
+    // 两次请求里都是规范写法
+    expect(api.requests.filter(request => request.key === 'POST /api/admin/invitations').map(request => request.body)).toEqual([
+      { username: 'amy.lee', displayName: '艾米' },
+      { username: 'amy.lee', displayName: '艾米' },
+    ])
   })
 
   it('结果未知之后又签发成功：之后同一个登录名的"已被占用"照常说明', async () => {

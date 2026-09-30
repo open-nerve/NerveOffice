@@ -42,6 +42,12 @@ describe('文件夹的名称', () => {
     expect(folderNameSchema.safeParse('\u3164\u200B').success).toBe(false)
     expect(folderNameSchema.parse('\u{1F468}\u200D\u{1F469}\u200D\u{1F467}')).toBe('\u{1F468}\u200D\u{1F469}\u200D\u{1F467}')
   })
+
+  it('名称里夹着看不见的字符（复验 N6）：零宽空格、BOM、软连字符拒绝；带异体字选择符的汉字放行', () => {
+    for (const hidden of ['资\u200B料', '资\uFEFF料', '资\u00AD料'])
+      expect(folderNameSchema.safeParse(hidden).success, JSON.stringify(hidden)).toBe(false)
+    expect(folderNameSchema.parse('\u845B\u{E0100}\u98FE')).toBe('\u845B\u{E0100}\u98FE')
+  })
 })
 
 describe('列出一层', () => {

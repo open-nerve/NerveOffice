@@ -239,7 +239,7 @@ describe('US-M1-02 登录与退出', () => {
     expect(requestCount(api, 'POST /api/auth/logout')).toBe(1)
   })
 
-  it('页面打开期间会话过期（加载更多得到 SESSION_EXPIRED）：整页回到登录页并提示过期，不再多发请求（审查 B7）', async () => {
+  it('页面打开期间会话过期（加载更多得到 SESSION_EXPIRED）：向服务端确认一次，已经没有会话，整页回到登录页并提示过期，不再多发请求（审查 B7，复验 N3）', async () => {
     const api = installFakeApi({
       ...LOGGED_IN,
       [DOCS]: () => json(200, { items: [document(1)], nextCursor: 'c1' }),
@@ -247,11 +247,13 @@ describe('US-M1-02 登录与退出', () => {
     })
     const app = renderApp('/')
     fireEvent.click(await screen.findByRole('button', { name: '加载更多' }))
+    // 过期的那一次响应清除了 Cookie（不是换令牌）：确认时是"未登录"，登录页的说明仍是"已过期"
+    api.on('GET /api/auth/session', () => apiError(401, 'UNAUTHENTICATED'))
     await waitFor(() => expect(app.page.visits).toEqual(['/login?reason=expired']))
     await settle()
     // 不在单页里清空缓存：还挂着的列表不会立即重新请求（原来多出一次 GET /api/documents，它的 401 还可能把"已过期"改成"未登录"）。
-    // 导航与首页的页头各请求一次（顺序取决于渲染，按排序比较）
-    expect(api.requests.map(request => request.key).sort()).toEqual(['GET /api/auth/session', ...Object.keys(SPACES), DOCS, DOCS_C1].sort())
+    // 导航与首页的页头各请求一次（顺序取决于渲染，按排序比较）；会话查询两次：打开时一次，过期之后确认一次
+    expect(api.requests.map(request => request.key).sort()).toEqual(['GET /api/auth/session', 'GET /api/auth/session', ...Object.keys(SPACES), DOCS, DOCS_C1].sort())
     expect(app.page.visits).toEqual(['/login?reason=expired'])
   })
 
@@ -310,13 +312,26 @@ describe('会话的全局处理', () => {
     expect(screen.getByRole('form', { name: '登录' })).toBeInTheDocument()
   })
 
-  it('同时有几个请求得到未登录：只跳转一次', async () => {
-    installFakeApi({ ...LOGGED_IN, ...NO_DOCUMENTS, 'GET /api/a': () => apiError(401, 'SESSION_EXPIRED'), 'GET /api/b': () => apiError(401, 'SESSION_EXPIRED') })
+  it('同时有几个请求得到登录已过期：合并成确认，只跳转一次', async () => {
+    const api = installFakeApi({ ...LOGGED_IN, ...NO_DOCUMENTS, 'GET /api/a': () => apiError(401, 'SESSION_EXPIRED'), 'GET /api/b': () => apiError(401, 'SESSION_EXPIRED') })
+    const app = renderApp('/')
+    await screen.findByRole('heading', { name: '我的空间' })
+    api.on('GET /api/auth/session', () => apiError(401, 'UNAUTHENTICATED'))
+    const fetchOther = async (path: string) => app.queryClient.fetchQuery({ queryKey: [path], queryFn: async () => apiRequest(path, { schema: z.object({}) }) }).catch(() => undefined)
+    await Promise.all([fetchOther('/api/a'), fetchOther('/api/b')])
+    await waitFor(() => expect(app.page.visits).toEqual(['/login?reason=expired']))
+    await settle()
+    expect(app.page.visits).toEqual(['/login?reason=expired'])
+  })
+
+  it('同时有几个请求得到未登录（没有带 Cookie）：不确认，只跳转一次', async () => {
+    const api = installFakeApi({ ...LOGGED_IN, ...NO_DOCUMENTS, 'GET /api/a': () => apiError(401, 'UNAUTHENTICATED'), 'GET /api/b': () => apiError(401, 'UNAUTHENTICATED') })
     const app = renderApp('/')
     await screen.findByRole('heading', { name: '我的空间' })
     const fetchOther = async (path: string) => app.queryClient.fetchQuery({ queryKey: [path], queryFn: async () => apiRequest(path, { schema: z.object({}) }) }).catch(() => undefined)
     await Promise.all([fetchOther('/api/a'), fetchOther('/api/b')])
-    expect(app.page.visits).toEqual(['/login?reason=expired'])
+    expect(app.page.visits).toEqual(['/login'])
+    expect(requestCount(api, 'GET /api/auth/session')).toBe(1)
   })
 })
 
@@ -434,17 +449,32 @@ describe('多个标签页（审查 B6）', () => {
     expect(screen.getByRole('form', { name: '登录' })).toBeInTheDocument()
   })
 
-  it('确认会话的过程中页面已经在离开（会话过期）：不再重新加载', async () => {
+  it('确认会话的过程中页面已经在离开（请求得到未登录）：不再重新加载', async () => {
+    const { api, app, otherTab } = await openList()
+    const pending = deferred()
+    api.on('GET /api/auth/session', pending.handler)
+    api.on(DOCS_C1, () => apiError(401, 'UNAUTHENTICATED'))
+    otherTab.announce()
+    fireEvent.click(screen.getByRole('button', { name: '加载更多' }))
+    await waitFor(() => expect(app.page.visits).toEqual(['/login']))
+    pending.resolve(json(200, OTHER_SESSION))
+    await settle()
+    expect(app.page.visits).toEqual(['/login'])
+  })
+
+  it('确认会话的过程中请求得到登录已过期：那一轮开始得更早，不作数；补上的一轮看到换了人，整页重新加载，不转到登录页（复验 N3）', async () => {
     const { api, app, otherTab } = await openList()
     const pending = deferred()
     api.on('GET /api/auth/session', pending.handler)
     api.on(DOCS_C1, () => apiError(401, 'SESSION_EXPIRED'))
     otherTab.announce()
     fireEvent.click(screen.getByRole('button', { name: '加载更多' }))
-    await waitFor(() => expect(app.page.visits).toEqual(['/login?reason=expired']))
-    pending.resolve(json(200, OTHER_SESSION))
-    await settle()
-    expect(app.page.visits).toEqual(['/login?reason=expired'])
+    await waitFor(() => expect(requestCount(api, DOCS_C1)).toBe(1))
+    api.on('GET /api/auth/session', () => json(200, OTHER_SESSION))
+    // 更早开始的那一轮带的还是旧 Cookie："没有会话"不作数
+    pending.resolve(apiError(401, 'SESSION_EXPIRED'))
+    await waitFor(() => expect(app.page.visits).toEqual(['reload']))
+    expect(requestCount(api, 'GET /api/auth/session')).toBe(3)
   })
 })
 

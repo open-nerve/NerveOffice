@@ -5,7 +5,9 @@ import type { AuditAction, DocumentType, ErrorCode, InvitationStatus, LinkInvali
 const ERROR_MESSAGES: Partial<Record<ErrorCode, string>> = {
   REQUEST_INVALID: '请求的内容不合法，请检查后重试',
   UNAUTHENTICATED: '请先登录',
-  SESSION_EXPIRED: '登录已过期，请重新登录',
+  // 组件里显示这条时，运行时已在向服务端确认会话（复验 N3）：真的没有会话会整页转到登录页（那里另有"登录已过期"的说明），
+  // 留在页面上的只有"还是同一个人、这个请求带的是换令牌之前的旧 Cookie"这一种，所以说成这次没有完成、可以重试
+  SESSION_EXPIRED: '登录状态刚刚变化，这次操作没有完成，请重试',
   INVALID_CREDENTIALS: '用户名或密码错误',
   CSRF_TOKEN_INVALID: '页面已失效，请刷新后重试',
   ORIGIN_NOT_ALLOWED: '请求来源不被允许，请从本站的地址访问',
@@ -242,7 +244,8 @@ export const messages = {
       loginLockedSomeSources: (until: string) => `部分来源的登录已锁定，到 ${until} 解除`,
       unlockLogin: '解除锁定',
       confirmUnlockLogin: (name: string) => `解除 ${name} 的登录锁定？`,
-      unlockLoginDescription: '解除后，这个人在所有地方的登录失败次数清零，可以立即用密码登录。多次输错密码的来源不一定是本人：如果不是本人所为，请提醒他修改密码。',
+      // 只按来源的计数（例如同一个办公网络失败太多次）不属于任何账户，解除清不掉，账户页也不显示（复验 N5）：不能说"可以立即登录"
+      unlockLoginDescription: '解除后，清掉这个人在所有来源上的登录失败次数。他所在的网络如果整体被锁（同一来源失败次数太多），仍要等锁定到期。多次输错密码的来源不一定是本人：如果不是本人所为，请提醒他修改密码。',
     },
     invitations: {
       // 有效期来自 contracts 的常量（INVITATION_LIFETIME_DAYS），界面不写死天数（M2-P6 复核 S-2）

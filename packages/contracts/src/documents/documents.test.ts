@@ -94,6 +94,8 @@ describe('新建文档的请求', () => {
     expect(documentTitleSchema.safeParse('报告\u202Efdp.exe').success).toBe(false)
     expect(documentTitleSchema.safeParse('周\u2028报').success).toBe(false)
     expect(documentTitleSchema.safeParse('\u200B\uFEFF\u2060').success).toBe(false)
+    // 名称拒绝夹着的看不见的字符（复验 N6），标题不变：原样保存
+    expect(documentTitleSchema.parse('周\u200B报\u2060')).toBe('周\u200B报\u2060')
     expect(documentTitleSchema.parse('\u0645\u062D\u0645\u062F \u{1F44D}\u{1F3FD}')).toBe('\u0645\u062D\u0645\u062F \u{1F44D}\u{1F3FD}')
   })
 

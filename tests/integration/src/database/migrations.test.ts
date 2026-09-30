@@ -1,11 +1,15 @@
 // 迁移（P2 设计 §3.7，ADR-005）：从零执行、重复执行、并发执行、等锁超时、库里不一致时拒绝。
+import type { Buffer } from 'node:buffer'
 import type { TestDatabase } from '../support/database.ts'
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { MigrationError, MIGRATIONS_FOLDER, readExpectedMigrations, runMigrations } from '@nerve-office/api'
 import { afterEach, describe, expect, it } from 'vitest'
+import { createAccount } from '../support/accounts.ts'
+import { startTestApp } from '../support/api-app.ts'
 import { createTestDatabase } from '../support/database.ts'
+import { postLogin } from '../support/session-client.ts'
 
 /** 与迁移命令用的是同一把锁（apps/api/src/modules/database/migrations.ts）。 */
 const MIGRATION_LOCK = 'SELECT pg_advisory_lock(hashtextextended(\'nerve-office:migrations\', 0))'
@@ -211,6 +215,53 @@ describe('0014_m2_p6_accounts_hardening（M2-P6 复核 G-4、C3）', () => {
       'INSERT INTO audit_events (action, actor_type, actor_id, source, target_type, target_id, details) VALUES (\'users.password_reset_revoked\', \'user\', $1, \'cli\', \'user\', $2, $3)',
       [ids.admin, ids.member, { passwordResetId: ids.member, reason: 'reissued' }],
     )).toBeUndefined()
+  })
+})
+
+describe('0015_m2_p6_login_throttle_accounts（M2-P6 复核 A1）', () => {
+  it('0014 的库上已有旧键的计数行（其中一行正在锁定）与审计：执行之后原样保留、所属账户为空，旧键不再生效；新列的约束、部分索引与新动作生效', async () => {
+    const database = await emptyDatabase()
+    await runMigrations({ connectionString: database.url, lockTimeoutMs: 10_000, migrationsFolder: migrationsUpTo('0014_m2_p6_accounts_hardening') })
+    await database.query(async (client) => {
+      // M2-P6 之前的键：只按用户名（user:）锁着 amy、按地址、一次性链接按地址
+      await client.query(
+        `INSERT INTO auth_login_throttles (key_hash, failures, window_started_at, locked_until) VALUES
+           (sha256(convert_to('user:amy', 'UTF8')), 5, now(), now() + interval '15 minutes'),
+           (sha256(convert_to('ip:203.0.113.9', 'UTF8')), 3, now(), NULL),
+           (sha256(convert_to('link:ip:203.0.113.9', 'UTF8')), 1, now() - interval '1 hour', NULL)`,
+      )
+      await client.query('INSERT INTO audit_events (action, actor_type, source) VALUES (\'auth.login_failed\', \'anonymous\', \'cli\')')
+    })
+
+    expect(await migrateDatabase(database)).toMatchObject({ status: 'applied' })
+    const state = await database.query(async client => ({
+      rows: (await client.query<{ failures: number, locked: boolean, account_hash: Buffer | null }>('SELECT failures, locked_until IS NOT NULL AS locked, account_hash FROM auth_login_throttles ORDER BY failures DESC')).rows,
+      index: (await client.query<{ indexdef: string }>('SELECT indexdef FROM pg_indexes WHERE indexname = \'auth_login_throttles_account_hash_idx\'')).rows,
+      audits: (await client.query<{ action: string }>('SELECT action FROM audit_events')).rows,
+    }))
+    expect(state.rows).toEqual([
+      { failures: 5, locked: true, account_hash: null },
+      { failures: 3, locked: false, account_hash: null },
+      { failures: 1, locked: false, account_hash: null },
+    ])
+    expect(state.index[0]?.indexdef).toContain('WHERE (account_hash IS NOT NULL)')
+    expect(state.audits).toEqual([{ action: 'auth.login_failed' }])
+
+    const violation = async (text: string, values: unknown[] = []): Promise<unknown> => database.query(async client => client.query(text, values).then(() => undefined, (error: unknown) => error))
+    expect(await violation('INSERT INTO auth_login_throttles (key_hash, failures, window_started_at, account_hash) VALUES (sha256(\'x\'::bytea), 1, now(), \'\\x00\'::bytea)'))
+      .toMatchObject({ code: '23514', constraint: 'auth_login_throttles_account_hash_check' })
+    expect(await violation('INSERT INTO audit_events (action, actor_type, source) VALUES (\'users.login_unlocked\', \'system\', \'cli\')')).toBeUndefined()
+
+    // 旧键不再被认作任何维度（ADR-007）：升级之前锁着 amy 的那一行不再挡住她；它原样留着，过期后照常清理
+    const amy = await createAccount(database, { username: 'amy' })
+    const app = await startTestApp({ databaseUrl: database.url })
+    try {
+      expect((await postLogin(app.baseUrl, { username: 'amy', password: amy.password })).status).toBe(200)
+    }
+    finally {
+      await app.close()
+    }
+    expect(await database.query(async client => (await client.query<{ failures: number }>('SELECT failures FROM auth_login_throttles WHERE key_hash = sha256(convert_to(\'user:amy\', \'UTF8\'))')).rows)).toEqual([{ failures: 5 }])
   })
 })
 

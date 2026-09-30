@@ -240,7 +240,11 @@ test.describe('US-M2-04 停用、启用与系统管理员', () => {
     const row = await userRow(page, user.username)
     // 只有这一个来源被锁（本人从别处照常登录）：说明写"部分来源"
     await expect(row.getByText(/^部分来源的登录已锁定，到 .+ 解除$/)).toBeVisible()
-    await confirmAction(page, row, '解除锁定')
+    // 确认的说明准确（复验 N5）：清掉的是这个人在各个来源上的失败次数，他所在的网络整体被锁时仍要等到期
+    await row.getByRole('button', { name: /^解除锁定 / }).click()
+    const dialog = page.getByRole('dialog')
+    await expect(dialog).toHaveAccessibleDescription(/清掉这个人在所有来源上的登录失败次数。他所在的网络如果整体被锁（同一来源失败次数太多），仍要等锁定到期/)
+    await dialog.getByRole('button', { name: '解除锁定', exact: true }).click()
     await expect(row.getByText(/登录已锁定/)).toHaveCount(0)
     await expect(row.getByRole('button', { name: /^解除锁定 / })).toHaveCount(0)
 

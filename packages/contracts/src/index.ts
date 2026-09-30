@@ -210,7 +210,7 @@ export type {
   SpaceView,
   TeamSpace,
 } from './spaces/spaces.ts'
-export { codePointLength, hasBidiControls, hasControlCharacters, hasLineSeparators, hasVisibleCharacters, nameTextSchema, titleTextSchema } from './text/text.ts'
+export { codePointLength, hasBidiControls, hasControlCharacters, hasHiddenCharacters, hasLineSeparators, hasVisibleCharacters, nameTextSchema, titleTextSchema } from './text/text.ts'
 export type { TextRuleOptions } from './text/text.ts'
 export {
   restoredTrashEntrySchema,

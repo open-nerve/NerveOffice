@@ -1,6 +1,6 @@
 // 登录的锁定按"用户名 + 来源"计数（M2-P6 复核 A1，ADR-007）：一个来源连错只锁这个来源，本人从别处照常登录；
 // 另有宽得多的"只按用户名"的上限，从很多来源累计到上限时这个账户被锁；修改密码共用这些计数；完成重置、接受邀请清掉这个账户的计数；
-// 系统管理员能看到锁定并解除（记审计）；成功时按固定的顺序锁三行计数。
+// 系统管理员能看到锁定并解除（记审计），解除按固定的顺序取锁（复验 N1）；账户页只显示还在生效的锁定（复验 N9）；成功时按固定的顺序锁三行计数。
 // 来源由反向代理识别（trust proxy 只信任本机）：测试里每个来源用一个文档专用的地址，经 X-Forwarded-For 带给应用。
 // 用例都是确定的少量请求：上限调小（每个来源 2 次、账户 5 次），几个来源就能到上限。
 import type { Buffer } from 'node:buffer'
@@ -15,7 +15,7 @@ import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
-import { raceAgainstHeldLock } from '../support/held-lock.ts'
+import { completesWithoutWaiting, raceAgainstHeldLock } from '../support/held-lock.ts'
 import { postPublic, tokenOf } from '../support/links.ts'
 import { requestIdOf } from '../support/request-id.ts'
 import { asUser, login, postLogin } from '../support/session-client.ts'
@@ -163,6 +163,54 @@ describe('US-M1-02 登录的锁定按用户名与来源计数（M2-P6 复核 A1�
   })
 })
 
+describe('US-M1-02 "用户名 + 来源"这一维的 IPv6 来源按 /48（复验 N4）', () => {
+  /** 同一个 /48（2001:db8:a::/48，文档专用的前缀）里的 5 个 /64：第 4 组的高 8 位、低 8 位各有不同 */
+  const SITE_A = ['2001:db8:a:1::1', '2001:db8:a:2::1', '2001:db8:a:100::1', '2001:db8:a:ff00::1', '2001:db8:a:ffff::1'] as const
+
+  async function failures(key: string): Promise<{ failures: number, locked: boolean } | undefined> {
+    const [row] = await database.query(async client => (await client.query<{ failures: number, locked: boolean }>(
+      'SELECT failures, coalesce(locked_until > now(), false) AS locked FROM auth_login_throttles WHERE key_hash = $1',
+      [digest(key)],
+    )).rows)
+    return row
+  }
+
+  it('同一个 /48 里不同的 /64 对同一个账户共用那 5 次：第 5 次锁住整个 /48 的这个组合，在这个 /48 里再换一个 /64 用正确的密码也被拒绝；别的 /48 照常登录', async () => {
+    const ned = await createAccount(database, { username: 'ned' })
+    const statuses: number[] = []
+    for (const [index, source] of SITE_A.entries())
+      statuses.push(await statusFrom(app, source, 'ned', `wrong ${index}`))
+    expect(statuses).toEqual([401, 401, 401, 401, 429])
+    expect(await failures('account-address:ned|ip:2001:db8:a::/48')).toEqual({ failures: 5, locked: true })
+    expect(await statusFrom(app, '2001:db8:a:beef::1', 'ned', ned.password)).toBe(429)
+    expect(await statusFrom(app, '2001:db8:b::1', 'ned', ned.password)).toBe(200)
+  })
+
+  it('只按来源的地址维度仍按 /64：同一个 /48 里的每个 /64 各记各的；这个 /48 上别的账户不受影响', async () => {
+    const oli = await createAccount(database, { username: 'oli' })
+    await createAccount(database, { username: 'pia' })
+    for (const [index, source] of SITE_A.entries())
+      expect(await statusFrom(app, source, 'pia', `wrong ${index}`)).toBe(index < 4 ? 401 : 429)
+    for (const source of ['2001:db8:a:1::/64', '2001:db8:a:2::/64', '2001:db8:a:100::/64', '2001:db8:a:ff00::/64', '2001:db8:a:ffff::/64'])
+      expect(await failures(`ip:${source}`), source).toEqual({ failures: 1, locked: false })
+    expect(await failures('ip:2001:db8:a::/48')).toBeUndefined()
+    expect(await statusFrom(app, SITE_A[0], 'oli', oli.password)).toBe(200)
+  })
+
+  it('IPv4 照旧按单个地址，IPv4 映射的 IPv6 与它是同一个来源', async () => {
+    const quin = await createAccount(database, { username: 'quin' })
+    expect([
+      await statusFrom(app, '203.0.113.9', 'quin', 'wrong-1'),
+      await statusFrom(app, '::ffff:203.0.113.9', 'quin', 'wrong-2'),
+      await statusFrom(app, '203.0.113.9', 'quin', 'wrong-3'),
+      await statusFrom(app, '::ffff:203.0.113.9', 'quin', 'wrong-4'),
+      await statusFrom(app, '203.0.113.9', 'quin', 'wrong-5'),
+    ]).toEqual([401, 401, 401, 401, 429])
+    expect(await statusFrom(app, '::ffff:203.0.113.9', 'quin', quin.password)).toBe(429)
+    expect(await statusFrom(app, '203.0.113.10', 'quin', quin.password)).toBe(200)
+  })
+})
+
 describe('US-M2-03 完成重置、US-M2-01 接受邀请：清掉这个账户在所有来源上的计数（M2-P6 复核 A1）', () => {
   it('账户被锁定时签发重置：本人完成之后，立即能用新密码登录，包括原来被锁的来源', async () => {
     const fay = await createAccount(database, { username: 'fay' })
@@ -238,6 +286,92 @@ describe('US-M2-04 系统管理员解除登录锁定（M2-P6 复核 A1）', () =
       [digest(`ip:${S1}`)],
     )).rows)
     expect(address).toEqual({ failures: 1 })
+  })
+})
+
+describe('US-M2-04 账户页只显示还在生效的锁定（复验 N9）', () => {
+  it('计数行的锁定已经到期（窗口还没过）：账户页不显示锁定，本人从那个来源照常登录', async () => {
+    const pam = await createAccount(database, { username: 'pam' })
+    expect(await statusFrom(app, S1, 'pam', 'wrong')).toBe(401)
+    // 把这个账户的两行计数（只按用户名的、按用户名与 S1 的）改成计满、锁定一分钟之前就结束了：模拟锁定 15 分钟之后
+    await database.query(async client => client.query(
+      'UPDATE auth_login_throttles SET failures = 5, locked_until = now() - interval \'1 minute\' WHERE account_hash = $1',
+      [digest('account:pam')],
+    ))
+    expect(await accountRows('pam')).toBe(2)
+    expect((await adminView('pam')).loginLock).toBeNull()
+    const response = await asUser(app.baseUrl, rootSession, `/api/admin/users/${pam.id}`)
+    expect(parseExact(adminUserSchema, await response.json()).loginLock).toBeNull()
+    expect(await statusFrom(app, S1, 'pam', pam.password)).toBe(200)
+  })
+})
+
+describe('US-M2-04 解除锁定的锁顺序（复验 N1）：system-admins 的锁 → 账户行 → 清计数', () => {
+  async function unlock(account: TestAccount): Promise<Response> {
+    return asUser(app.baseUrl, rootSession, `/api/admin/users/${account.id}/unlock-login`, { method: 'POST' })
+  }
+
+  it('解除锁定在账户行上排队（另一个事务持着这一行的 FOR SHARE，例如这个人另一次登录的复核）时，本人从别处用正确的密码登录：登录不等它、直接成功；放开之后解除锁定也成功，清掉剩下的计数', async () => {
+    const kay = await createAccount(database, { username: 'kay' })
+    expect(await statusFrom(app, S1, 'kay', 'wrong-1')).toBe(401)
+    expect(await statusFrom(app, S2, 'kay', 'wrong-2')).toBe(401)
+    // 只按用户名的一行、按用户名与 S1、S2 的各一行
+    expect(await accountRows('kay')).toBe(3)
+    let login: Promise<Response> | undefined
+    let loginCompletedWhileHeld: boolean | undefined
+    const unlocked = await raceAgainstHeldLock(database, {
+      hold: async client => client.query('SELECT 1 FROM users WHERE id = $1 FOR SHARE', [kay.id]),
+      request: async () => unlock(kay),
+      // 解除锁定已经在账户行上等着：这时本人从别处登录。它复核凭据取的 FOR SHARE 与持着的兼容，它要清的计数行也没人锁着，
+      // 在放开之前就走完。解除锁定要是先清计数、后锁账户行，登录就得等它删掉的计数行，而它又在账户行上等：
+      // 这里登录在它后面等着；登录先进了事务（已经持着 FOR SHARE）时两边成环
+      change: async () => {
+        login = loginFrom(app, HOME, 'kay', kay.password)
+        loginCompletedWhileHeld = await completesWithoutWaiting(database, login, 2)
+      },
+    })
+    expect(loginCompletedWhileHeld).toBe(true)
+    expect((await login)?.status).toBe(200)
+    expect(unlocked.status).toBe(200)
+    expect(parseExact(adminUserSchema, await unlocked.json())).toMatchObject({ id: kay.id, loginLock: null })
+    // 登录清了只按用户名的一行（从 HOME 来，没有 HOME 的那一行）；S1、S2 两行由解除锁定清掉，记审计
+    expect(await accountRows('kay')).toBe(0)
+    const [audit] = await database.query(async client => (await client.query<{ action: string }>('SELECT action FROM audit_events WHERE request_id = $1', [requestIdOf(unlocked)])).rows)
+    expect(audit).toEqual({ action: 'users.login_unlocked' })
+  })
+
+  it('解除锁定在 system-admins 的锁上等着（停用或取消系统管理员正持着它，接着要锁这个人的账户行）：这时还没碰账户行与计数；放开之后照常完成', async () => {
+    const lou = await createAccount(database, { username: 'lou' })
+    expect(await statusFrom(app, S1, 'lou', 'wrong')).toBe(401)
+    /** 另开一个连接试着立即锁住（NOWAIT）：被别的事务锁着时为假；试完就回滚 */
+    const lockableNow = async (sql: string, values: unknown[]): Promise<boolean> => database.query(async (client) => {
+      await client.query('BEGIN')
+      try {
+        await client.query(sql, values)
+        return true
+      }
+      catch (error) {
+        if ((error as { code?: string }).code === '55P03')
+          return false
+        throw error
+      }
+      finally {
+        await client.query('ROLLBACK')
+      }
+    })
+    const probes: { accountRow?: boolean, counters?: boolean } = {}
+    const unlocked = await raceAgainstHeldLock(database, {
+      hold: async client => client.query('SELECT pg_advisory_xact_lock(hashtextextended(\'nerve-office:system-admins\', 0))'),
+      request: async () => unlock(lou),
+      // 先锁账户行、再取 system-admins 的锁时，它拿着账户行等这把锁，停用拿着这把锁要锁账户行：成环
+      change: async () => {
+        probes.accountRow = await lockableNow('SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE NOWAIT', [lou.id])
+        probes.counters = await lockableNow('SELECT 1 FROM auth_login_throttles WHERE account_hash = $1 FOR UPDATE NOWAIT', [digest('account:lou')])
+      },
+    })
+    expect(probes).toEqual({ accountRow: true, counters: true })
+    expect(unlocked.status).toBe(200)
+    expect(await accountRows('lou')).toBe(0)
   })
 })
 

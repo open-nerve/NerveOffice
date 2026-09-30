@@ -147,20 +147,38 @@ describe('修改密码：结果未知时（M2-P6 复核 G-1）', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/^当前密码不正确$/))
   })
 
-  it('结果未知之后再提交，登录已过期（多半是上一次已经改好、当前会话随之撤销了）：整页回到登录页，原因是 password_changed', async () => {
-    const { app } = await openPage({ [CHANGE]: inTurn(networkFailure, () => apiError(401, 'SESSION_EXPIRED')) })
+  it('结果未知之后再提交，登录已过期（多半是上一次已经改好、当前会话随之撤销了）：向服务端确认已经没有会话，整页回到登录页，原因是 password_changed', async () => {
+    const { api, app } = await openPage({ [CHANGE]: inTurn(networkFailure, () => apiError(401, 'SESSION_EXPIRED')) })
     fill('old password', 'a brand new password', 'a brand new password')
     submit()
     expect(await screen.findByRole('alert')).toHaveTextContent(UNKNOWN_TEXT)
+    // 上一次的响应没收到：浏览器里还是旧的 Cookie，它随那次修改撤销了（服务端不清除它，复验 N3）
+    api.on('GET /api/auth/session', () => apiError(401, 'SESSION_EXPIRED'))
     submit()
     await waitFor(() => expect(app.page.visits).toEqual(['/login?from=%2Fsettings%2Fpassword&reason=password_changed']))
   })
 
-  it('没有结果未知在前，登录已过期：照常回到登录页，原因是 expired', async () => {
-    const { app } = await openPage({ [CHANGE]: () => apiError(401, 'SESSION_EXPIRED') })
+  it('没有结果未知在前，登录已过期：向服务端确认已经没有会话，照常回到登录页，原因是 expired', async () => {
+    const { api, app } = await openPage({ [CHANGE]: () => apiError(401, 'SESSION_EXPIRED') })
+    api.on('GET /api/auth/session', () => apiError(401, 'UNAUTHENTICATED'))
     fill('old password', 'a brand new password', 'a brand new password')
     submit()
     await waitFor(() => expect(app.page.visits).toEqual(['/login?from=%2Fsettings%2Fpassword&reason=expired']))
+  })
+
+  it('登录已过期，但确认时还是同一个人（本人刚在别的标签页改过密码，这个请求带的是旧 Cookie，复验 N3）：页面不动，说明这次没有改成，可以再提交', async () => {
+    const { api, app } = await openPage({ [CHANGE]: inTurn(() => apiError(401, 'SESSION_EXPIRED'), () => json(200, RENEWED)) })
+    api.on('GET /api/auth/session', () => json(200, { ...SESSION, csrfToken: 'csrf-from-other-tab' }))
+    fill('old password', 'a brand new password', 'a brand new password')
+    submit()
+    expect(await screen.findByRole('alert')).toHaveTextContent('登录状态刚刚变化，这次操作没有完成，请重试')
+    await waitFor(() => expect(app.queryClient.getQueryData<SessionResponse>(SESSION_QUERY_KEY)?.csrfToken).toBe('csrf-from-other-tab'))
+    expect(app.page.visits).toEqual([])
+    // 不自动重试：只发了一次；再提交时带着换上的令牌
+    expect(api.requests.filter(entry => entry.key === CHANGE)).toHaveLength(1)
+    submit()
+    await screen.findByText('密码已修改。你在其他设备上的登录已经退出。')
+    expect(api.requests.filter(entry => entry.key === CHANGE).map(entry => entry.headers['x-csrf-token'])).toEqual(['csrf-1', 'csrf-from-other-tab'])
   })
 
   it('登录页按 password_changed 提示新密码可能已经生效', async () => {

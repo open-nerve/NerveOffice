@@ -5,10 +5,18 @@ import { isAuthenticationError, isCsrfTokenError, isPermissionDeniedError, isTra
 /** 网络问题与服务端的临时错误重试一次；其他错误（4xx）重试也没用 */
 const MAX_TRANSIENT_RETRIES = 1
 
+/** "登录已过期"时带到登录页的原因（见 expiredReason） */
+export type ExpiredReason = Exclude<LoginReason, 'required'>
+
 /** 请求缓存从请求结果里看出的会话变化，由 app/runtime.ts 统一处理。 */
 export interface SessionEvents {
-  /** 请求得到未登录或登录已过期（自己处理未登录的请求除外） */
-  readonly unauthenticated: (reason: LoginReason) => void
+  /** 请求得到"未登录"：没有带会话 Cookie（自己处理未登录的请求除外） */
+  readonly unauthenticated: () => void
+  /**
+   * 请求得到"登录已过期"：带着的会话 Cookie 已经失效（自己处理未登录的请求除外）。可能只是换令牌之前发出的请求
+   * （修改密码、重新登录之后浏览器里已是新的 Cookie），由运行时先向服务端确认（复验 N3）；reason 是确认之后仍要转到登录页时的说明
+   */
+  readonly sessionExpired: (reason: ExpiredReason) => void
   /** 登录成功，或者当前页面换成了新的会话（修改密码，M2-P6 复核 B1）：别的标签页拿着的 CSRF 令牌随之过时 */
   readonly signedIn: () => void
   /** 退出成功，或者退出时会话已经不在了 */
@@ -45,20 +53,44 @@ function sessionTransition(meta: Meta): 'starts' | 'renews' | 'ends' | undefined
  * 得到"登录已过期"时带到登录页的原因：默认 expired；修改密码的结果未知之后再提交时是 password_changed
  * （features/auth 的 RENEWS_SESSION_AFTER_UNKNOWN，M2-P6 复核 G-1）
  */
-function expiredReason(meta: Meta): LoginReason {
+function expiredReason(meta: Meta): ExpiredReason {
   return meta?.expiredReason === 'password_changed' ? 'password_changed' : 'expired'
 }
 
 /**
+ * 本页还在进行的、成功时写入新的会话 Cookie 的变更（登录、修改密码）都结束之后兑现（复验 N3）：
+ * 它们的响应带着新的 Cookie，结束之前向服务端确认会话，带的可能还是旧的。没有这样的变更时立即兑现
+ */
+export async function sessionChangesSettled(queryClient: QueryClient): Promise<void> {
+  const cache = queryClient.getMutationCache()
+  const pending = (): boolean => cache.getAll().some((mutation) => {
+    const transition = sessionTransition(mutation.meta)
+    return mutation.state.status === 'pending' && (transition === 'starts' || transition === 'renews')
+  })
+  if (!pending())
+    return
+  await new Promise<void>((resolve) => {
+    const unsubscribe = cache.subscribe(() => {
+      if (!pending()) {
+        unsubscribe()
+        resolve()
+      }
+    })
+  })
+}
+
+/**
  * 请求缓存（TanStack Query）。请求的结果里与会话有关的，查询与变更都一样，统一交给 events：
- * 未登录或登录已过期、登录与退出、会话过时（CSRF 令牌不对、系统角色被取消）。自己处理未登录的请求（会话、登录）用 meta.handlesAuthentication 标明。
+ * 未登录、登录已过期、登录与退出、会话过时（CSRF 令牌不对、系统角色被取消）。自己处理未登录的请求（会话、登录）用 meta.handlesAuthentication 标明。
  */
 export function createQueryClient(events: SessionEvents): QueryClient {
   function onRequestError(error: unknown, meta: Meta): void {
     if (isCsrfTokenError(error) || (isPermissionDeniedError(error) && systemAdminOnly(meta)))
       events.sessionStale()
+    else if (isAuthenticationError(error) && !handlesAuthentication(meta) && error.code === 'SESSION_EXPIRED')
+      events.sessionExpired(expiredReason(meta))
     else if (isAuthenticationError(error) && !handlesAuthentication(meta))
-      events.unauthenticated(error.code === 'SESSION_EXPIRED' ? expiredReason(meta) : 'required')
+      events.unauthenticated()
   }
   return new QueryClient({
     queryCache: new QueryCache({ onError: (error, query) => onRequestError(error, query.meta) }),

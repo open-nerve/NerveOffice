@@ -56,6 +56,18 @@ export class SessionsRepository {
     return row
   }
 
+  /**
+   * 这个摘要的会话是不是因为 reasons 之一被撤销的；没有这条会话（从没有过、已被清理）、还没撤销（只是过期了）时为假。
+   * 会话守卫只在"会话无效"时经 SessionService 问（复验 N3），按摘要的唯一索引查一次
+   */
+  async revokedFor(tokenHash: Buffer, reasons: readonly SessionRevokeReason[]): Promise<boolean> {
+    const [row] = await this.db
+      .select({ id: authSessions.id })
+      .from(authSessions)
+      .where(and(eq(authSessions.tokenHash, tokenHash), inArray(authSessions.revokedReason, [...reasons])))
+    return row !== undefined
+  }
+
   /** 记录活动，空闲过期顺延，但不超过绝对过期。 */
   async touch(id: string, idleMinutes: number): Promise<void> {
     await this.db

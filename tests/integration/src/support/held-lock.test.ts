@@ -1,9 +1,9 @@
 // held-lock 的自测（M2-P1 复验 X3）：分几步发出请求时，登记过的任何一步没走到锁上就先结束了，等待立即失败并报出它的结果，
-// 不空等到超时，也不丢掉那一步的状态码。
+// 不空等到超时，也不丢掉那一步的状态码。持锁期间另发的请求"不等锁就走完"的判断（M2-P6 复验 N1）两个方向各一例。
 import type { TestDatabase } from './database.ts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createTestDatabase } from './database.ts'
-import { raceAgainstHeldLock } from './held-lock.ts'
+import { completesWithoutWaiting, raceAgainstHeldLock } from './held-lock.ts'
 
 let database: TestDatabase
 
@@ -49,5 +49,32 @@ describe('held-lock', () => {
     })
     await expect(race).rejects.toThrow('HTTP 409')
     expect(performance.now() - started).toBeLessThan(5_000)
+  })
+
+  it('持锁期间另发的请求不碰那把锁：走完了，判断为 true', async () => {
+    let completed: boolean | undefined
+    await raceAgainstHeldLock(database, {
+      hold: async client => client.query(HOLD_ADVISORY_LOCK),
+      request: async () => database.query(async client => client.query(HOLD_ADVISORY_LOCK)),
+      change: async () => {
+        completed = await completesWithoutWaiting(database, answeredAt(200), 2)
+      },
+    })
+    expect(completed).toBe(true)
+  })
+
+  it('持锁期间另发的请求也在锁上等着：判断为 false，放开之后它照常结束', async () => {
+    let completed: boolean | undefined
+    let second: Promise<unknown> | undefined
+    await raceAgainstHeldLock(database, {
+      hold: async client => client.query(HOLD_ADVISORY_LOCK),
+      request: async () => database.query(async client => client.query(HOLD_ADVISORY_LOCK)),
+      change: async () => {
+        second = database.query(async client => client.query(HOLD_ADVISORY_LOCK))
+        completed = await completesWithoutWaiting(database, second, 2)
+      },
+    })
+    expect(completed).toBe(false)
+    await expect(second).resolves.toBeDefined()
   })
 })

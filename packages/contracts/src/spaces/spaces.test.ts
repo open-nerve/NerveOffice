@@ -47,6 +47,12 @@ describe('空间的名称', () => {
     expect(spaceNameSchema.parse('\u05D3\u05D5\u05D3')).toBe('\u05D3\u05D5\u05D3')
   })
 
+  it('名称里夹着看不见的字符（复验 N6）：零宽空格、韩文填充符、词连接符拒绝，与"研发部"看起来一样的名字不能并存；零宽连接符等放行', () => {
+    for (const hidden of ['研\u200B发部', '研\u3164发部', '研发\u2060部'])
+      expect(spaceNameSchema.safeParse(hidden).success, JSON.stringify(hidden)).toBe(false)
+    expect(spaceNameSchema.parse('\u{1F468}\u200D\u{1F4BB} 研发部')).toBe('\u{1F468}\u200D\u{1F4BB} 研发部')
+  })
+
   it('改名的请求只有名称', () => {
     expect(renameSpaceRequestSchema.parse({ name: ' 产品部 ' })).toEqual({ name: '产品部' })
     expect(renameSpaceRequestSchema.safeParse({ name: '产品部', visibleToAll: true }).success).toBe(false)

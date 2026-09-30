@@ -1,7 +1,7 @@
-// 文本规则（M2-P6 复核 B2）。看不见的字符一律写成 \u 转义：源码里直接出现它们，审阅时看不出来。
+// 文本规则（M2-P6 复核 B2；名称里夹着看不见的字符，复验 N6）。看不见的字符一律写成 \u 转义：源码里直接出现它们，审阅时看不出来。
 import { describe, expect, it } from 'vitest'
 import { displayNameSchema } from '../users/users.ts'
-import { codePointLength, hasBidiControls, hasControlCharacters, hasLineSeparators, hasVisibleCharacters, nameTextSchema, titleTextSchema } from './text.ts'
+import { codePointLength, hasBidiControls, hasControlCharacters, hasHiddenCharacters, hasLineSeparators, hasVisibleCharacters, nameTextSchema, titleTextSchema } from './text.ts'
 
 const nameSchema = nameTextSchema({ label: '名称', maxLength: 20 })
 const titleSchema = titleTextSchema({ label: '标题', maxLength: 20 })
@@ -102,10 +102,9 @@ describe('名称的规则（显示名、团队空间名称、文件夹名称共�
     expect(nameSchema.safeParse(`${invisible}${invisible}`).success).toBe(false)
   })
 
-  it('看不见的字符混着空白也不算有字；夹在字中间的零宽字符、韩文填充符不拒绝', () => {
+  it('看不见的字符混着空白也不算有字：说明是"只有看不见的字符"，而不是"不能包含"', () => {
     expect(problemOf(nameSchema, '\u3164 \u200B')).toBe('名称不能只有空白或看不见的字符')
     expect(problemOf(nameSchema, '\u200D\uFE0F')).toBe('名称不能只有空白或看不见的字符')
-    expect(nameSchema.parse('张\u200B三')).toBe('张\u200B三')
   })
 
   it('控制字符、长度照旧', () => {
@@ -117,7 +116,61 @@ describe('名称的规则（显示名、团队空间名称、文件夹名称共�
   it('显示名用的就是这套规则', () => {
     expect(displayNameSchema.safeParse('\u202E文张').success).toBe(false)
     expect(displayNameSchema.safeParse('\u3164').success).toBe(false)
+    expect(displayNameSchema.safeParse('张\u200B三').success).toBe(false)
     expect(displayNameSchema.parse('\u{1F468}\u200D\u{1F469}\u200D\u{1F467} 张三')).toBe('\u{1F468}\u200D\u{1F469}\u200D\u{1F467} 张三')
+  })
+})
+
+/**
+ * 名字里放行的几类默认可忽略字符的正例（复验 N6）：零宽连接符连起来的一家人、带 VS16 的心、国旗与英格兰旗（标签字符）、
+ * 带零宽不连字的波斯文、带零宽连接符的天城文、带异体字选择符的汉字（葛飾的"葛"取另一个字形），
+ * 以及组合用字形连接符、蒙古文的自由变体选择符
+ */
+const ALLOWED_IN_NAMES: readonly (readonly [string, string])[] = [
+  ['零宽连接符连起来的一家人', '\u{1F468}\u200D\u{1F469}\u200D\u{1F467} 张三'],
+  ['带 VS16 的心', '\u2764\uFE0F 李四'],
+  ['国旗', '\u{1F1E8}\u{1F1F3} 王五'],
+  ['英格兰旗（黑旗加标签字符）', '\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F} Alice'],
+  ['带零宽不连字的波斯文', '\u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645'],
+  ['带零宽连接符的天城文', '\u0915\u094D\u200D\u0937'],
+  ['带异体字选择符的汉字', '\u845B\u{E0100}\u98FE'],
+  ['带组合用字形连接符的拉丁字母', 'Zu\u034F\u0308rich'],
+  ['带自由变体选择符的蒙古文', '\u182E\u1823\u1829\u182D\u180B\u1823\u182F'],
+  ['带第四个自由变体选择符的蒙古文', '\u1820\u180F\u1828'],
+  ['两个变体选择符（范围的两头）', '\u845B\uFE00\u845B\u{E01EF}'],
+]
+
+/**
+ * 名字里不放行的默认可忽略字符（复验 N6）：零宽空格、韩文填充符（三种）、词连接符、BOM、软连字符、蒙古文元音分隔符、
+ * 高棉文的两个固有元音、不可见的运算符（四个）、语言标签、速记格式控制符、乐谱的连梁控制符
+ */
+const HIDDEN_IN_NAMES = ['\u200B', '\u3164', '\u115F', '\u1160', '\uFFA0', '\u2060', '\uFEFF', '\u00AD', '\u180E', '\u17B4', '\u17B5', '\u2061', '\u2062', '\u2063', '\u2064', '\u{E0001}', '\u{1BCA0}', '\u{1D173}']
+
+describe('名称里夹着看不见的字符（复验 N6）', () => {
+  it.each(ALLOWED_IN_NAMES)('放行名字里确有用途的几类：%s', (_label, name) => {
+    expect(hasHiddenCharacters(name)).toBe(false)
+    expect(nameSchema.parse(name)).toBe(name)
+  })
+
+  it.each(HIDDEN_IN_NAMES.map(hidden => [JSON.stringify(hidden), hidden]))('拒绝夹在字中间的 %s，说明是"不能包含看不见的字符"', (_label, hidden) => {
+    expect(hasHiddenCharacters(`研${hidden}发部`)).toBe(true)
+    expect(problemOf(nameSchema, `研${hidden}发部`)).toBe('名称不能包含看不见的字符（例如零宽空格）')
+    expect(problemOf(nameSchema, `Ali${hidden}ce`)).toBe('名称不能包含看不见的字符（例如零宽空格）')
+  })
+
+  it('夹在放行的字符旁边也照样拒绝：表情组合里混进零宽空格、异体字选择符后面跟着词连接符', () => {
+    expect(problemOf(nameSchema, '\u{1F468}\u200D\u200B\u{1F469}')).toBe('名称不能包含看不见的字符（例如零宽空格）')
+    expect(problemOf(nameSchema, '\u845B\u{E0100}\u2060\u98FE')).toBe('名称不能包含看不见的字符（例如零宽空格）')
+  })
+
+  it('放行的几类仍然不能单独构成整个名字', () => {
+    for (const alone of ['\u200C', '\u200D', '\u034F', '\u180B', '\u180F', '\uFE0F', '\u{E0100}', '\u{E0067}\u{E0062}\u{E007F}'])
+      expect(problemOf(nameSchema, alone), JSON.stringify(alone)).toBe('名称不能只有空白或看不见的字符')
+  })
+
+  it('双向控制字符也是默认可忽略的字符：说明仍是更具体的"改变文字方向"', () => {
+    expect(problemOf(nameSchema, '张\u200F三')).toBe('名称不能包含改变文字方向的控制字符')
+    expect(problemOf(nameSchema, '张\u2066三')).toBe('名称不能包含改变文字方向的控制字符')
   })
 })
 
@@ -137,9 +190,11 @@ describe('标题的规则', () => {
     expect(problemOf(titleSchema, '周\u2029报')).toBe('标题不能包含换行符')
   })
 
-  it('不能只有看不见的字符；夹在字中间的零宽字符照常保存', () => {
+  it('不能只有看不见的字符；夹在字中间的零宽字符照常保存（复验 N6 只改名称，标题的规则不变）', () => {
     for (const invisible of INVISIBLE)
       expect(titleSchema.safeParse(invisible).success, JSON.stringify(invisible)).toBe(false)
     expect(titleSchema.parse('周\u200B报')).toBe('周\u200B报')
+    for (const hidden of HIDDEN_IN_NAMES)
+      expect(titleSchema.parse(`周${hidden}报`), JSON.stringify(hidden)).toBe(`周${hidden}报`)
   })
 })

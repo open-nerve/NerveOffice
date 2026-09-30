@@ -1,9 +1,11 @@
 import type { SessionResponse } from '@nerve-office/contracts'
 import type { QueryClient } from '@tanstack/react-query'
 import type { DataRouter, RouteObject } from 'react-router'
+import type { LoginReason } from '../shared/lib/login-path.ts'
 import type { PageLocation } from '../shared/lib/page-location.ts'
 import type { SessionChannel } from '../shared/lib/session-channel.ts'
 import type { SessionRecheck } from '../shared/lib/session-recheck.ts'
+import type { ExpiredReason } from './query-client.ts'
 import { createBrowserRouter } from 'react-router'
 import { isOneTimeLinkPage } from '../features/account/index.ts'
 import { sessionQueryOptions } from '../features/auth/index.ts'
@@ -11,7 +13,7 @@ import { isAuthenticationError, requestSession, setCsrfToken } from '../shared/a
 import { isLoginPage, LOGIN_PATH, loginPath } from '../shared/lib/login-path.ts'
 import { browserPageLocation } from '../shared/lib/page-location.ts'
 import { openSessionChannel } from '../shared/lib/session-channel.ts'
-import { createQueryClient } from './query-client.ts'
+import { createQueryClient, sessionChangesSettled } from './query-client.ts'
 import { appRoutes } from './routes.ts'
 
 export interface AppRuntime {
@@ -36,7 +38,10 @@ export interface AppRuntimeOptions {
 
 /**
  * 平台页面的运行时：路由与请求缓存各一份，加上会话的全局处理（ADR-008）：
- * - 请求得到未登录或登录已过期：整页回到登录页，登录后回到原来的地址；
+ * - 请求得到未登录：整页回到登录页，登录后回到原来的地址；
+ * - 请求得到登录已过期：先向服务端确认现在是谁（复验 N3）。这个请求带的可能是换令牌之前的旧 Cookie（本页或别的标签页刚修改了密码、
+ *   刚重新登录，服务端这时不清除 Cookie），浏览器里已经是新的：还是同一个人，换上新的会话与 CSRF 令牌，页面不动；换了人，整页重新加载；
+ *   已经没有会话，才按原来的原因（已过期）整页回到登录页。发出请求的组件照常显示它的错误，不自动重试；
  * - 退出成功（或者会话本来就不在了）：通知其他标签页，整页回到登录页；登录成功：通知其他标签页；
  * - 别的标签页登录或退出了，状态变更的请求得到 CSRF_TOKEN_INVALID，只给系统管理员的请求得到 PERMISSION_DENIED，
  *   或者组件改了本人的账户：向服务端确认现在是谁（审查 B6，M2-P1 审查 B4）。
@@ -59,13 +64,17 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
   let checkAgain = false
   /** 在一次性链接的公开页面上跳过的复核：离开这个页面时补上（M2-P1 复验 N6） */
   let deferredRecheck = false
+  /** 已经开始的确认轮数（每向服务端确认一次加一） */
+  let checksStarted = 0
+  /**
+   * 请求得到"登录已过期"、还没有结论（复验 N3）：reason 是确认之后没有会话时转到登录页的原因；
+   * after 是那时已经开始的确认轮数，只有在它之后开始的一轮才能下结论——更早开始的那一轮带的可能还是换令牌之前的旧 Cookie
+   */
+  let expired: { readonly reason: ExpiredReason, readonly after: number } | undefined
 
   const queryClient = createQueryClient({
-    unauthenticated: (reason) => {
-      const { pathname, search } = router.state.location
-      if (!isLoginPage(pathname))
-        leave(loginPath(`${pathname}${search}`, reason))
-    },
+    unauthenticated: () => leaveToLogin('required'),
+    sessionExpired: reason => void confirmExpiredSession(reason),
     signedIn: () => channel.announce(),
     signedOut: () => {
       channel.announce()
@@ -98,6 +107,24 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
   function leave(url: string): void {
     if (depart())
       page.replace(url)
+  }
+
+  /** 整页回到登录页，登录后回到现在的地址；已经在登录页时不动 */
+  function leaveToLogin(reason: LoginReason): void {
+    const { pathname, search } = router.state.location
+    if (!isLoginPage(pathname))
+      leave(loginPath(`${pathname}${search}`, reason))
+  }
+
+  /**
+   * 请求得到"登录已过期"（复验 N3）：记下原因，向服务端确认现在是谁，结论在 checkSessionOnce 里（页面已经在离开时 recheckSession 不做事）。
+   * 本页还在进行的登录、修改密码先等它结束：它的响应带着新的 Cookie，结束之前确认，带的多半还是旧的。
+   * 几个请求先后过期时保留更具体的 password_changed（修改密码的结果未知之后再提交，M2-P6 复核 G-1）
+   */
+  async function confirmExpiredSession(reason: ExpiredReason): Promise<void> {
+    await sessionChangesSettled(queryClient)
+    expired = { reason: expired?.reason === 'password_changed' ? 'password_changed' : reason, after: checksStarted }
+    await recheckSession()
   }
 
   /** 现在的会话；未登录时为 undefined。网络等其他失败原样抛出。不改动请求层的令牌 */
@@ -143,19 +170,32 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
       deferredRecheck = true
       return
     }
+    const round = ++checksStarted
     try {
       const { queryKey } = sessionQueryOptions()
       const shown = queryClient.getQueryData(queryKey)
       const current = await currentSession()
       if (leaving)
         return
-      if (current?.user.id !== shown?.user.id) {
+      // 请求得到"登录已过期"之后开始的这一轮，才能对它下结论（复验 N3）
+      const concluding = expired !== undefined && round > expired.after ? expired : undefined
+      if (current === undefined && expired !== undefined && concluding === undefined) {
+        // 更早开始的一轮：带的可能还是换令牌之前的旧 Cookie，"没有会话"不作数，等随后补上的那一轮
+        return
+      }
+      if (concluding !== undefined)
+        expired = undefined
+      if (current === undefined && concluding !== undefined) {
+        // 已经没有会话：按请求得到的原因回到登录页。不整页重新加载：Cookie 可能已被清除，重新加载时"已过期"就成了"请先登录"
+        leaveToLogin(concluding.reason)
+      }
+      else if (current?.user.id !== shown?.user.id) {
         // 页面显示的是另一个人（或者未登录时）的内容：新会话的令牌不交给这个页面
         if (depart())
           page.reload()
       }
       else if (current !== undefined) {
-        // 还是同一个人（例如在别的标签页重新登录）：换上新的会话与令牌，页面不动
+        // 还是同一个人（例如在别的标签页重新登录；请求的"登录已过期"是换令牌之前发出的）：换上新的会话与令牌，页面不动
         setCsrfToken(current.csrfToken)
         queryClient.setQueryData(queryKey, current)
       }

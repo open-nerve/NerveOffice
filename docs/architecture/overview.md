@@ -82,9 +82,9 @@ apps/api/src/
 
 **认证与会话**（ADR-007）：
 - 服务端会话：令牌在 HttpOnly Cookie 里（HTTPS 时 `__Host-` 前缀与 `Secure`，`SameSite=Lax`），库里只存摘要；空闲过期（12 小时）随活动顺延，不超过绝对过期（7 天）。
-- 默认拒绝：除 `@Public()`（登录、探针）外都要求有效的会话；没有会话为 `UNAUTHENTICATED`，会话失效为 `SESSION_EXPIRED`。
+- 默认拒绝：除 `@Public()`（登录、探针）外都要求有效的会话；没有会话为 `UNAUTHENTICATED`，会话失效为 `SESSION_EXPIRED`（并清除 Cookie；因换令牌而撤销的——修改密码、同一个浏览器重新登录——不清除，免得晚到的响应删掉新的 Cookie，M2-P6 复验 N3）。
 - 状态变更的请求：Origin 必须等于公开地址（`NERVE_PUBLIC_ORIGIN`）；需要登录的接口另要求 `X-CSRF-Token` 等于由会话令牌派生的令牌。
-- 登录限流按三个维度计数，存在数据库里（M2-P6 复核 A1 起，ADR-007）："用户名 + 客户端地址"（默认 5 次，只锁这个组合）、只按用户名（宽得多，默认 50 次，挡住从很多来源猜同一个账户）、只按客户端地址（IPv6 按 /64）：
+- 登录限流按三个维度计数，存在数据库里（M2-P6 复核 A1 起，ADR-007）："用户名 + 来源"（默认 5 次，只锁这个组合；来源的 IPv6 按 /48，M2-P6 复验 N4）、只按用户名（宽得多，默认 50 次，挡住从很多来源猜同一个账户）、只按客户端地址（IPv6 按 /64）：
   - 两个账户相关的维度的计数行记着所属账户：完成重置、接受邀请时清掉这个账户的全部计数；系统管理员可以在账户页解除锁定（记审计）；
   - 先占用名额、再验证，并发的请求也不能多验证；锁定期间不验证密码；
   - 过期的计数与会话在验证之后、事务之外顺带清理，跳过别人锁着的行；
@@ -107,7 +107,7 @@ apps/api/src/
 | `GET /api/documents/{id}/content` | 当前快照：gzip 字节原样下发（`Content-Encoding: gzip`），修订号作 ETag |
 | `PUT /api/documents/{id}/content?baseRevision&requestId&clientInstanceId&localSeq` | 保存（正文是 gzip 压缩的快照）：压缩前后都限 5 MiB、基本校验、锁文档行、按 `requestId` 幂等、按基准修订号条件写入；冲突时 409，`details` 带当前修订号及其来源 |
 | `GET /api/health/live`、`GET /api/health/ready` | 存活与就绪探针（公开） |
-| `PUT /api/auth/password` | 修改密码（M2-P1）：本人其他地方的登录全部退出 |
+| `PUT /api/auth/password` | 修改密码（M2-P1）：本人其他地方的登录全部退出；M2-P6 起连当前会话的令牌一起换掉，响应与登录相同（新的会话与 CSRF 令牌，写回 Cookie） |
 | `POST /api/auth/invitations/inspect`、`…/accept`、`POST /api/auth/password-resets/inspect`、`…/complete` | 一次性链接（公开，M2-P1）：令牌在请求体里；接受或完成之后已登录，响应同登录；不能用时 410 `LINK_INVALID` 与原因 |
 | `GET /api/users?query=` | 同事目录（M2-P1）：有效账户，显示名或登录名包含关键词，最多 20 条 |
 | `/api/admin/users`、`/api/admin/invitations`、`/api/admin/audit-events` | 系统管理（M2-P1，只给系统管理员）：账户列表、停用与启用、系统角色、签发重置链接；邀请的列表、签发、作废、重发；审计查询。M2-P6 加 `POST /api/admin/users/{id}/unlock-login`（解除登录锁定），账户带着登录的锁定（`loginLock`） |
@@ -180,7 +180,7 @@ apps/web/src/
 
 - React Router 8（数据路由的库模式）、TanStack Query 5、Tailwind CSS 4 与 shadcn/ui 的 Radix 版本（ADR-008）。
 - 请求层：同源请求，状态变更的请求带 CSRF 令牌；错误分为 `ApiError`、`NetworkError`、`ResponseFormatError`；成功的响应按 contracts 校验。
-- 会话结束（任何请求得到未登录或登录已过期、退出）：清掉 CSRF 令牌，整页回到登录页，登录后回到原来的地址；不在单页里清空缓存。
+- 会话结束（任何请求得到未登录或登录已过期、退出）：清掉 CSRF 令牌，整页回到登录页，登录后回到原来的地址；不在单页里清空缓存。得到"登录已过期"时先向服务端确认会话：还是同一个人（请求带的是换令牌之前的旧 Cookie）就换上新的令牌、页面不动（M2-P6 复验 N3，ADR-008）。
 - 多个标签页：登录与退出经 BroadcastChannel 通知；收到消息或得到 `CSRF_TOKEN_INVALID` 时重新确认会话，换了人整页重新加载。
 - 查询与变更不按浏览器的在线状态挂起，断网时照常失败并提示。
 - 平台页面与编辑器页之间整页跳转（两个入口）：列表的条目是普通链接，新建之后 `location.assign`，登录后要回到编辑器页时 `location.replace`。
