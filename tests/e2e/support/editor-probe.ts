@@ -70,10 +70,20 @@ interface DataValidationBuilder {
   readonly build: () => unknown
 }
 
+/** 工作表的选区（sheets 的 Facade 的 FSelection） */
+export interface FacadeSelection {
+  /** 选区里的活动区域（整行选中时 A1 写法是 "20:20"，整列是 "K:K"） */
+  readonly getActiveRange: () => FacadeRange | null
+  /** 选区的主单元格：编辑栏显示的就是它（从 0 开始的行号与列号） */
+  readonly getCurrentCell: () => { readonly actualRow: number, readonly actualColumn: number } | null
+}
+
 export interface FacadeSheet {
   readonly getRange: (a1: string) => FacadeRange
   readonly getSheetId: () => string
   readonly getSheetName: () => string
+  /** 当前的选区；没有时是 null */
+  readonly getSelection: () => FacadeSelection | null
   /** 缩放比例（sheets-ui 的 Facade） */
   readonly getZoom: () => number
   readonly zoom: (ratio: number) => unknown
@@ -175,10 +185,18 @@ export async function probeShortcuts(page: Page): Promise<readonly ProbeShortcut
   return page.evaluate(() => window.__nerveEditorProbe?.shortcuts() ?? [])
 }
 
-/** 编辑栏现在显示的文字（画在画布上，经探针读它的内部文档；M2-P6 复核 F2） */
+/**
+ * 编辑栏现在显示的文字（画在画布上，经探针读它的内部文档；M2-P6 复核 F2）。
+ * 读不出来时失败，不返回空串（M2-P6 复验 N3）：探针取不到编辑栏的编辑器时抛错，页面里没有探针时同样抛错
+ */
 export async function formulaBarText(page: Page): Promise<string> {
   await probeIn(page)
-  return page.evaluate(() => window.__nerveEditorProbe?.formulaBarText() ?? '')
+  return page.evaluate(() => {
+    const probe = window.__nerveEditorProbe
+    if (probe === undefined)
+      throw new Error('页面里没有编辑器的探针')
+    return probe.formulaBarText()
+  })
 }
 
 /** 命令日志：序号大于 after 的各条 */

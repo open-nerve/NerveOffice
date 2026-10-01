@@ -39,10 +39,12 @@ export async function featureSearchKeys(page: Page): Promise<string> {
 // ---- 按 SDK 注册的任意一个快捷键（只读的快捷键回归，M2-P6 复核 F1、F2 之后）----
 // 绑定是 KeyCode 与修饰键的组合（ui 的 services/shortcut/keycode.ts）：低 8 位是浏览器的 keyCode，修饰键在它上面的几位。
 // SDK 收到按键时同样按页面的平台把事件换算成绑定（shortcut.service.ts 的 _deriveBindingFromEvent）：苹果的平台上 Meta 是 CTRL_COMMAND、
-// Control 是 MAC_CTRL；别的平台上 Control 是 CTRL_COMMAND，MAC_CTRL 按不出来
+// Control 是 MAC_CTRL；别的平台上 Control 是 CTRL_COMMAND，没有按键能得出 MAC_CTRL
 
 /** ui 的 MetaKeys */
 const META_KEYS = { SHIFT: 1 << 10, ALT: 1 << 11, CTRL_COMMAND: 1 << 12, MAC_CTRL: 1 << 13 } as const
+/** 绑定里认得的位：keyCode 与上面四个修饰键；别的位（SDK 新加的修饰键）回归不知道怎么按 */
+const KNOWN_BITS = 0xFF | META_KEYS.SHIFT | META_KEYS.ALT | META_KEYS.CTRL_COMMAND | META_KEYS.MAC_CTRL
 
 /** 有名字的 keyCode → Playwright 的键名（美式键盘布局，Playwright 按它送出同样的 keyCode）；数字、字母与 F1–F12 按规律换算 */
 const NAMED_KEYS: Readonly<Record<number, string>> = {
@@ -100,6 +102,32 @@ export function effectiveBinding(item: ShortcutBindings, platform: UniverPlatfor
   return item.binding
 }
 
+/** 一次按键（keydown）里 SDK 换算绑定时用到的部分 */
+export interface KeyEventFields {
+  readonly keyCode: number
+  readonly shiftKey: boolean
+  readonly altKey: boolean
+  readonly ctrlKey: boolean
+  readonly metaKey: boolean
+}
+
+/**
+ * SDK 把一次按键换算成的绑定：与 shortcut.service.ts 的 _deriveBindingFromEvent 同样的规则（苹果的平台上 Meta 是 CTRL_COMMAND、
+ * Control 是 MAC_CTRL，别的平台上 Control 是 CTRL_COMMAND）。快捷键回归按它核对浏览器收到的按键就是要按的组合（M2-P6 复验 N1）
+ */
+export function bindingOf(event: KeyEventFields, platform: UniverPlatform): number {
+  let binding = event.keyCode
+  if (event.shiftKey)
+    binding |= META_KEYS.SHIFT
+  if (event.altKey)
+    binding |= META_KEYS.ALT
+  if (platform.isMac ? event.metaKey : event.ctrlKey)
+    binding |= META_KEYS.CTRL_COMMAND
+  if (platform.isMac && event.ctrlKey)
+    binding |= META_KEYS.MAC_CTRL
+  return binding
+}
+
 /** keyCode → Playwright 的键名；不认识的返回 undefined */
 function keyNameOf(keyCode: number): string | undefined {
   if (keyCode >= 48 && keyCode <= 57)
@@ -111,16 +139,24 @@ function keyNameOf(keyCode: number): string | undefined {
   return NAMED_KEYS[keyCode]
 }
 
-/** 一个绑定在这个页面上怎么按（Playwright 的 press 写法），或者为什么按不出来 */
-export type ShortcutKeys = { readonly keys: string } | { readonly unpressable: string }
+/**
+ * 一个绑定在这个页面上怎么按：
+ * - keys：Playwright 的 press 写法；
+ * - unreachable：SDK 在这个平台上本来就派发不到它，不用按（只有一种：非苹果的平台上带 MAC_CTRL 的绑定）；
+ * - unknown：回归不知道怎么按（keyCode 没有对应的键名，或者有不认得的修饰位）。快捷键回归按这种情况失败，要补上这里的键名表，
+ *   不能悄悄地少按一个（M2-P6 复验 N1）
+ */
+export type ShortcutKeys = { readonly keys: string } | { readonly unreachable: string } | { readonly unknown: string }
 
 export function shortcutKeys(binding: number, platform: UniverPlatform): ShortcutKeys {
+  if ((binding & META_KEYS.MAC_CTRL) !== 0 && !platform.isMac)
+    return { unreachable: 'MAC_CTRL：SDK 只在苹果的平台上由 Control 键得出它（shortcut.service.ts 的 _deriveBindingFromEvent），别的平台上没有按键能派发到这个绑定' }
+  if ((binding & ~KNOWN_BITS) !== 0)
+    return { unknown: `绑定 ${binding} 里有不认得的修饰位（${binding & ~KNOWN_BITS}）` }
   const keyCode = binding & 0xFF
   const key = keyNameOf(keyCode)
   if (key === undefined)
-    return { unpressable: `keyCode ${keyCode} 没有对应的键名` }
-  if ((binding & META_KEYS.MAC_CTRL) !== 0 && !platform.isMac)
-    return { unpressable: 'MAC_CTRL 只在苹果的平台上有效' }
+    return { unknown: `keyCode ${keyCode} 没有对应的键名` }
   const modifiers = [
     ...((binding & META_KEYS.CTRL_COMMAND) !== 0 ? [platform.isMac ? 'Meta' : 'Control'] : []),
     ...((binding & META_KEYS.MAC_CTRL) !== 0 ? ['Control'] : []),

@@ -1,11 +1,18 @@
 // 内部 API 登记表（P4 设计 §3.6.9，ADR-010，规范 §2.5"内部 API 集中封装并登记，每一项都有回归用例"）。
 // internal-api 的两个出口（index.ts 与界面的 ui.ts）导出的每一项在这里登记一次：来自哪里、做什么用、M0 的证据、升级 SDK 时先跑的回归用例。
-// 单元测试核对导出与登记一一对应（registry.test.ts）；新增一项时，先写回归用例，再登记
+// internal-api 之外只能经这两个出口引用（lint 的 nerve/editor-internal-api-exits，M2-P6 复验 N4）。
+// 单元测试（registry.test.ts）核对导出与登记一一对应，并扫描 internal-api 里每个文件对 @univerjs/* 的引用：出口直接再导出的就是登记的那一项，
+// 封装的一项（例如 FORMULA_PROTOCOL）用到的 SDK 符号列在它的 sdk 里，没列出的报出来。新增一项时，先写回归用例，再登记
 export interface InternalApiEntry {
   /** internal-api/index.ts 或 ui.ts 导出的名字 */
   readonly name: string
   /** 来自哪个包、是什么（SDK 的符号，或平台对 SDK 内部约定的封装） */
   readonly origin: string
+  /**
+   * 封装的一项引用的 SDK 符号：包名 → 导入名（值与类型都算）。实现这一项的文件（出口从它再导出这一项，以及它引用的同目录文件）
+   * 对 Univer 的包的每一处引用都要列在这里，列出的每一个也都要还在用（registry.test.ts 扫描核对）。出口直接再导出 SDK 符号的一项不写
+   */
+  readonly sdk?: Readonly<Record<string, readonly string[]>>
   readonly purpose: string
   /** M0 与 P4 探针的证据（报告的章节、源码的位置） */
   readonly evidence: string
@@ -21,7 +28,11 @@ const READ_ONLY_GUARD_REGRESSION = `单元测试 read-only/read-only-guard.test.
 /** 编辑栏的编辑器被聚焦就放开（P3 审查 A1）：单元测试与 E2E */
 const FORMULA_BAR_RELEASE_REGRESSION = '单元测试 read-only/formula-bar.test.ts（焦点落到编辑栏的编辑器时放开、别的编辑器不管）、read-only-guard.test.ts；E2E tests/e2e/specs/editor/read-only.spec.ts"编辑栏点不进去"（点编辑框、从名称框按下在编辑框上松开之后，查找与方向键照常，编辑栏没有收到输入；本机三个浏览器）'
 /** 只读的快捷键回归（M2-P6 复核 F1、F2 之后）：E2E 的探针经它们列出快捷键、读编辑栏 */
-const READ_ONLY_SHORTCUTS_E2E = 'E2E tests/e2e/specs/editor/read-only-shortcuts.spec.ts：只读时逐个按遍 SDK 注册的全部快捷键（按页面的平台取修饰键），每按一个都核对内容不变、没有保存请求与页面错误、编辑栏显示的与当前单元格一致、没有弹出编辑类的面板（本机三个浏览器）；取不到快捷键的清单或读不出编辑栏时失败'
+const READ_ONLY_SHORTCUTS_E2E = [
+  'E2E tests/e2e/specs/editor/read-only-shortcuts.spec.ts：只读时在三种选区（空单元格、整行、整列）下逐个按遍 SDK 注册的全部快捷键（按页面的平台取修饰键），',
+  '每按一个都核对确实按到了 SDK（浏览器收到的按键换算成这个组合，没有前提条件的一定派发，守卫取消的都被取消）、内容不变、没有保存请求与页面错误、',
+  '编辑栏显示的与当前单元格一致、没有弹出编辑类的面板（本机三个浏览器）；取不到快捷键的清单或读不出编辑栏时失败（开头另有读编辑栏的自检）',
+].join('')
 /** 冻结线拖不动（P3 审查 B2）：单元测试与 E2E */
 const FREEZE_LOCK_REGRESSION = '单元测试 read-only/freeze-handles.test.ts、read-only-guard.test.ts；E2E tests/e2e/specs/editor/read-only.spec.ts"拖动冻结线"（只读时光标不是可拖动的 grab、没有 set-frozen、冻结不变；能编辑时的对照冻结确实改变）'
 /** M0 的只读（阅读模式）验证：本地权限点加 mutation 防火墙 */
@@ -31,6 +42,8 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
   {
     name: 'injectorOf',
     origin: '@univerjs/core 的 Univer.__getInjector()（平台的封装）',
+    // injector.ts：参数与返回值的类型
+    sdk: { '@univerjs/core': ['Injector', 'Univer'] },
     purpose: '取 Facade 没有暴露的服务：IFunctionService、IActiveDirtyManagerService，Worker 里的 LifecycleService，只读守卫的 IPermissionService、IUndoRedoService、IDrawingManagerService、IRenderManagerService、IEditorService、IContextService，以及 E2E 的探针（只在测试构建里）的 IShortcutService、IEditorService',
     evidence: 'M0-P3 报告 §7"取服务"；M0 的 create-editor.ts 经它取各项内部服务；P4 探针 (a)–(f) 全程使用',
     regression: 'E2E（S4）编辑器能打开并就绪：任何一处取服务失败都会按加载失败处理；单元测试 install-image-policy.test.ts、calculation-trigger.test.ts 核对取的是哪项服务',
@@ -38,6 +51,18 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
   {
     name: 'FORMULA_PROTOCOL',
     origin: '@univerjs/engine-formula 的 SetFormulaCalculationStart/Stop/Result/NotificationMutation、SetTriggerFormulaCalculationStartMutation、FormulaExecutedStateType，@univerjs/sheets 的 SetRangeValuesMutation；执行选项 applyFormulaCalculationResult 与通知参数 functionsExecutedState（SDK 里的字面量）',
+    // formula-protocol.ts：mutation 的 id 与完成状态取自 SDK 导出的定义
+    sdk: {
+      '@univerjs/engine-formula': [
+        'FormulaExecutedStateType',
+        'SetFormulaCalculationNotificationMutation',
+        'SetFormulaCalculationResultMutation',
+        'SetFormulaCalculationStartMutation',
+        'SetFormulaCalculationStopMutation',
+        'SetTriggerFormulaCalculationStartMutation',
+      ],
+      '@univerjs/sheets': ['SetRangeValuesMutation'],
+    },
     purpose: '公式收齐（P4 设计 §3.6.6）：认出一轮计算的开始、停止、结果、逐表写回与完成',
     evidence: 'M0-P3 报告 §3.3、§3.4、§7；engine-formula 的 calculate.controller.ts:232-257、formula-calculation-trigger.service.ts:166-176，sheets 的 calculate-result-apply.controller.ts:90-97；M0 的 e2e/v07-formula、v07-worker-timeline；P4 探针 (f) 在三个浏览器上录制的序列',
     regression: FORMULA_SETTLE_REGRESSION,
@@ -193,7 +218,7 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
     origin: '@univerjs/ui 的快捷键服务（Facade 之外；Facade 的 FShortcut 只能派发按键与停用快捷键，列不出已注册的快捷键）',
     purpose: 'E2E 的探针（只在测试构建里，testing/e2e-probe.ts 的 shortcuts）：getAllShortcuts 列出 SDK 当前注册的全部快捷键，只读的快捷键回归逐个按遍，SDK 升级带来的新入口由它发现（M2-P6 复核 F1、F2 之后）；生产代码不用它',
     evidence: [
-      'M2-P6 复核 S4：审查者对全部已注册的快捷键（1.0.1 约 143 项、77 种组合）在只读页上逐个按，发现"搜索功能"面板（F1）与快速求和（F2）。',
+      'M2-P6 复核 S4：审查者对全部已注册的快捷键（1.0.1 在苹果的平台上 143 项，按页面的平台归并成 78 种组合）在只读页上逐个按，发现"搜索功能"面板（F1）与快速求和（F2）。',
       'ui 的 services/shortcut/shortcut.service.ts（1.0.1 的 lib/es/index.js:1027-1030 getAllShortcuts 给出每一项；:1109 起 _getBindingFromItem 按平台取 mac、win、linux 或 binding；',
       'PlatformService 按 navigator.appVersion 判断平台，:953-959）',
     ].join(''),

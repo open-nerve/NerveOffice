@@ -81,9 +81,14 @@ function changesIn(commands: readonly ProbeCommand[], phase: ProbeCommand['phase
     && !NOT_CHANGE_MUTATIONS.includes(command.id))
 }
 
-/** mark 之后执行了的、变更检测会认作修改的 mutation：只读时一条都不应该有（防火墙的不变量，M2-P3 设计 §3.3） */
+/** 命令日志里执行了的、变更检测会认作修改的 mutation：只读时一条都不应该有（防火墙的不变量，M2-P3 设计 §3.3） */
+export function documentChangesIn(commands: readonly ProbeCommand[], unitId: string): ProbeCommand[] {
+  return changesIn(commands, 'executed', unitId)
+}
+
+/** mark 之后执行了的、变更检测会认作修改的 mutation（同 documentChangesIn） */
 export async function documentChanges(page: Page, mark: number, unitId: string): Promise<ProbeCommand[]> {
-  return changesIn(await probeCommands(page, mark), 'executed', unitId)
+  return documentChangesIn(await probeCommands(page, mark), unitId)
 }
 
 /**

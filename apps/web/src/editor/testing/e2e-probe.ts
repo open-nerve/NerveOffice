@@ -76,7 +76,10 @@ export interface EditorProbe {
   readonly commands: (after?: number) => readonly ProbeCommand[]
   /** SDK 当前注册的全部快捷键（每次调用时重新读取） */
   readonly shortcuts: () => readonly ProbeShortcut[]
-  /** 编辑栏现在显示的文字：它的内部文档的正文，去掉结尾的段落与节的标记 */
+  /**
+   * 编辑栏现在显示的文字：它的内部文档的正文，去掉结尾的段落与节的标记。取不到编辑栏的编辑器、或者它的文档没有正文时抛错
+   * （M2-P6 复验 N3）：返回空串会让"编辑栏与单元格一致"的核对在两边都读出空串时照样通过
+   */
   readonly formulaBarText: () => string
 }
 
@@ -108,6 +111,17 @@ function toProbeShortcut(item: ShortcutItem): ProbeShortcut {
 
 /** 文档正文的结尾：段落标记 \r 与节的标记 \n（空的编辑栏就是这两个字符） */
 const BODY_END = /\r\n$/
+
+/** 编辑栏显示的文字：按编辑栏的单元 id 取它的编辑器、读它的文档；读不出来时抛错 */
+function readFormulaBar(editors: IEditorService): string {
+  const editor = editors.getEditor(DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY)
+  if (editor == null)
+    throw new Error(`取不到编辑栏的编辑器（${DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY}）：SDK 改了编辑栏的单元 id 或注册方式，回头核对 internal-api 的登记`)
+  const dataStream = editor.getDocumentData().body?.dataStream
+  if (dataStream === undefined)
+    throw new Error('编辑栏的文档没有正文：SDK 改了编辑栏的文档，回头核对 internal-api 的登记')
+  return dataStream.replace(BODY_END, '')
+}
 
 /** 装上探针的编辑器：Univer 实例（取快捷键与编辑器管理的服务）、它的 Facade 与工作簿 */
 export interface ProbeTarget {
@@ -147,7 +161,7 @@ export function installEditorProbe({ univer, univerAPI, workbook }: ProbeTarget)
     snapshot: () => JSON.stringify(workbook.save()),
     commands: (after = 0) => log.filter(command => command.seq > after),
     shortcuts: () => injector.get(IShortcutService).getAllShortcuts().map(toProbeShortcut),
-    formulaBarText: () => (injector.get(IEditorService).getEditor(DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY)?.getDocumentData().body?.dataStream ?? '').replace(BODY_END, ''),
+    formulaBarText: () => readFormulaBar(injector.get(IEditorService)),
   }
   window.__nerveEditorProbe = probe
   return () => {

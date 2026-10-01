@@ -191,12 +191,13 @@ describe('探针的快捷键清单与编辑栏（M2-P6 复核 F1、F2 之后）'
     expect(window.__nerveEditorProbe?.formulaBarText()).toBe('第一行\r第二行')
   })
 
-  it('formulaBarText：还没有编辑栏的编辑器、或者文档没有正文时是空串', () => {
+  it('formulaBarText：按编辑栏的单元 id 取不到编辑器、或者文档没有正文时抛错，不返回空串（M2-P6 复验 N3）', () => {
     const { api } = fakeFacade()
+    // 假的编辑器管理只按编辑栏的单元 id 给出编辑器：SDK 改了这个 id（或者探针按别的 id 取）时就是这样
     installEditorProbe(api, fakeWorkbook(() => ({})), { formulaBar: null })
-    expect(window.__nerveEditorProbe?.formulaBarText()).toBe('')
+    expect(() => window.__nerveEditorProbe?.formulaBarText()).toThrow(`取不到编辑栏的编辑器（${DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY}）`)
     installEditorProbe(api, fakeWorkbook(() => ({})), { formulaBar: {} })
-    expect(window.__nerveEditorProbe?.formulaBarText()).toBe('')
+    expect(() => window.__nerveEditorProbe?.formulaBarText()).toThrow('编辑栏的文档没有正文')
   })
 })
 

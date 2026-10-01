@@ -824,6 +824,29 @@ export default antfu(
     },
   },
   {
+    // 内部 API 只经两个出口引用（M2-P6 复验 N4）：编辑器里 internal-api 之外的文件（测试也一样）只能引用 internal-api/index.ts 与 ui.ts。
+    // 出口导出的每一项在 registry.ts 登记，登记表的自测核对出口与登记一一对应、并扫描 internal-api 里每个文件对 @univerjs/* 的引用都归到
+    // 登记的某一项；绕过出口直接引用里面的文件（例如 formula-protocol.ts），引到的东西就不经登记。
+    // 按解析之后的路径判断：静态导入、import type、再导出与动态 import() 都算，路径的写法（../internal-api/./x.ts、绕一圈的相对路径）拦得住。
+    // 目录名大小写不同的写法（../Internal-API/x.ts）按路径认不出，由类型检查拦下：internal-api 的每个文件都按 tsconfig 的 include 以本来的
+    // 写法进了程序，forceConsistentCasingInFileNames 报 TS1149（Linux 上直接解析不到）。类型里的 import('…') 只带类型、不进产物，
+    // lint 看不出来，由审查保证（ADR-010）
+    name: 'nerve/editor-internal-api-exits',
+    files: ['apps/web/src/editor/**/*.{ts,tsx}'],
+    ignores: ['apps/web/src/editor/internal-api/**'],
+    rules: {
+      'import-x/no-restricted-paths': ['error', {
+        basePath: import.meta.dirname,
+        zones: [{
+          target: 'apps/web/src/editor',
+          from: 'apps/web/src/editor/internal-api',
+          except: ['./index.ts', './ui.ts'],
+          message: '内部 API 只经两个出口引用：internal-api/index.ts 与 ui.ts。要用里面别的文件的东西，经出口导出并在 registry.ts 登记（M2-P6 复验 N4）',
+        }],
+      }],
+    },
+  },
+  {
     name: 'nerve/boundaries',
     // 模块边界只管各元素的目录；配置文件（vite.config.ts 等）不属于任何元素，不在这里检查
     files: [

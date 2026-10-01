@@ -883,6 +883,41 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
       expect(await rulesFor('import { render } from \'@testing-library/react\'\n\nexport const r = render\n', EDITOR_FILE)).not.toContain(RULE)
     })
   })
+
+  describe('内部 API 只经两个出口引用：internal-api/index.ts 与 ui.ts（M2-P6 复验 N4）', () => {
+    const EXITS_MESSAGE = '内部 API 只经两个出口引用：internal-api/index.ts 与 ui.ts'
+    const RULE = 'import-x/no-restricted-paths'
+    const GUARD_FILE = 'apps/web/src/editor/read-only/read-only-guard.ts'
+
+    it('internal-api 之外引用里面别的文件报错：静态导入、import type、再导出与动态 import() 都算，路径换个写法也一样，测试代码也不例外', async () => {
+      const cases: (readonly [string, string])[] = [
+        // 复验者的变异：只读守卫绕过出口，直接引用 formula-protocol.ts
+        [GUARD_FILE, 'import { FORMULA_PROTOCOL } from \'../internal-api/formula-protocol.ts\'\n\nexport const p = FORMULA_PROTOCOL\n'],
+        [GUARD_FILE, 'import type { FORMULA_PROTOCOL } from \'../internal-api/formula-protocol.ts\'\n\nexport type P = typeof FORMULA_PROTOCOL\n'],
+        [EDITOR_FILE, 'export { injectorOf } from \'./internal-api/injector.ts\'\n'],
+        [EDITOR_FILE, 'export async function load(): Promise<unknown> {\n  return import(\'./internal-api/dom-markers.ts\')\n}\n'],
+        [GUARD_FILE, 'import { FORMULA_PROTOCOL } from \'../internal-api/./formula-protocol.ts\'\n\nexport const p = FORMULA_PROTOCOL\n'],
+        [GUARD_FILE, 'import { FORMULA_PROTOCOL } from \'../read-only/../internal-api/formula-protocol.ts\'\n\nexport const p = FORMULA_PROTOCOL\n'],
+        [GUARD_FILE, 'import { INTERNAL_API_REGISTRY } from \'../internal-api/registry.ts\'\n\nexport const r = INTERNAL_API_REGISTRY\n'],
+        ['apps/web/src/editor/read-only/read-only-guard.test.ts', 'import { FORMULA_PROTOCOL } from \'../internal-api/formula-protocol.ts\'\n\nexport const p = FORMULA_PROTOCOL\n'],
+      ]
+      for (const [file, code] of cases) {
+        const report = await lint(code, file)
+        expect(report.rules, `${file}\n${code}`).toContain(RULE)
+        expect(report.messages.join('\n'), `${file}\n${code}`).toContain(EXITS_MESSAGE)
+      }
+    })
+
+    it('两个出口照常引用；internal-api 里的文件之间照常引用', async () => {
+      const exits = [
+        'import { FORMULA_PROTOCOL } from \'../internal-api/index.ts\'\n\nexport const p = FORMULA_PROTOCOL\n',
+        'import { IEditorService } from \'../internal-api/ui.ts\'\n\nexport const s = IEditorService\n',
+      ]
+      for (const code of exits)
+        expect(await rulesFor(code, GUARD_FILE), code).not.toContain(RULE)
+      expect(await rulesFor('export { FORMULA_PROTOCOL } from \'./formula-protocol.ts\'\n', INTERNAL_API_FILE)).not.toContain(RULE)
+    })
+  })
 }, LINT_TIMEOUT)
 
 describe('US-M1-11 lint 规则的自测：类型与写法', () => {
