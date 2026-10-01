@@ -167,7 +167,7 @@ describe('HttpErrorFilter', () => {
     expect(log.error).not.toHaveBeenCalled()
   })
 
-  it('同一个请求里已经有事务提交过再遇到数据库繁忙：500（结果未知），不带 Retry-After；挂上 response.err，记一条 error（写明是提交之后、带着原因），不记 warn（M2-P6 第 3 片复验）', () => {
+  it('同一个请求里已经有事务提交过再遇到数据库繁忙：500（结果未知），不带 Retry-After；挂上 response.err，error 由请求日志据此记一条；这里只记一条 warn（写明是提交之后、带着原因），不另记 error（M2-P6 第 3 片复验）', () => {
     const response = fakeResponse()
     const log = { warn: vi.fn(), error: vi.fn() }
     const error = databaseError('55P03')
@@ -176,8 +176,8 @@ describe('HttpErrorFilter', () => {
     expect(response.headers).toEqual({})
     expect(response.body).toEqual({ error: { code: 'INTERNAL_ERROR', message: '服务器内部错误，请稍后重试', requestId: 'req-after-commit' } })
     expect(response.err).toBe(error)
-    expect(log.error).toHaveBeenCalledExactlyOnceWith({ err: error, reason: 'lock_timeout' }, expect.stringContaining('事务提交之后遇到数据库繁忙'))
-    expect(log.warn).not.toHaveBeenCalled()
+    expect(log.warn).toHaveBeenCalledExactlyOnceWith({ err: error, reason: 'lock_timeout' }, expect.stringContaining('事务提交之后遇到数据库繁忙'))
+    expect(log.error).not.toHaveBeenCalled()
   })
 
   it('请求里还没有事务提交过：数据库繁忙照旧 503（记录是按请求的：前一个请求提交过不算）', () => {
@@ -190,11 +190,14 @@ describe('HttpErrorFilter', () => {
     expect(log.error).not.toHaveBeenCalled()
   })
 
-  it('提交之后遇到数据库繁忙而连接已经关闭：不写响应，那一条 error 照样记下，不再另记"请求中断之后处理失败"', () => {
+  it('提交之后遇到数据库繁忙而连接已经关闭：不写响应；warn 写明是提交之后与原因，error 与其他意外错误一样记一条"请求中断之后处理失败"', () => {
     const log = { warn: vi.fn(), error: vi.fn() }
-    inRequest(commits, true, () => filter.catch(new Error(POOL_TIMEOUT_MESSAGE), hostFor({ id: 'req-after-commit-2', log }, fakeResponse(false, true))))
-    expect(log.error).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ reason: 'pool_timeout' }), expect.stringContaining('事务提交之后遇到数据库繁忙'))
-    expect(log.warn).not.toHaveBeenCalled()
+    const error = new Error(POOL_TIMEOUT_MESSAGE)
+    const response = fakeResponse(false, true)
+    inRequest(commits, true, () => filter.catch(error, hostFor({ id: 'req-after-commit-2', log }, response)))
+    expect(response.body).toBeUndefined()
+    expect(log.warn).toHaveBeenCalledExactlyOnceWith({ err: error, reason: 'pool_timeout' }, expect.stringContaining('事务提交之后遇到数据库繁忙'))
+    expect(log.error).toHaveBeenCalledExactlyOnceWith({ err: error }, '请求中断之后处理失败')
   })
 
   it('数据库繁忙而连接已经关闭：不写响应，warn 照样记下', () => {

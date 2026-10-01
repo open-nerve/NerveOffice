@@ -20,7 +20,7 @@ export interface MappedError {
   readonly details?: ErrorDetails
   /**
    * 数据库繁忙（等锁超时、语句超时、取不到连接）的原因。这个请求里还没有事务提交过时回 503，记一条 warn，不当作意外错误；
-   * 已经有事务提交过时 unexpected 为真：按意外错误回 500（结果未知），记一条 error
+   * 已经有事务提交过时 unexpected 为真：按意外错误回 500（结果未知），另记一条 warn 写明原因，error 与其他意外错误一样只由请求日志记一条
    */
   readonly busy?: DatabaseBusyReason
 }
@@ -83,15 +83,15 @@ function asError(exception: unknown): Error {
 }
 
 /**
- * 数据库繁忙的那一条日志，带着原因与数据库报的错（便于看出是哪条语句在等）：
- * - 还没有事务提交过（503）：正常的锁竞争也会遇到，记 warn 而不是错误，请求结束的那一条也按 503 带 Retry-After 记成 warn（logging 的 levelFor）；
- * - 已经有事务提交过（500，M2-P6 第 3 片复验）：写入已经生效、客户端得到的是"结果未知"，记 error，写明是提交之后遇到的繁忙
+ * 数据库繁忙的那一条日志，带着原因与数据库报的错（便于看出是哪条语句在等），都记 warn：
+ * - 还没有事务提交过（503）：正常的锁竞争也会遇到，不是错误，请求结束的那一条也按 503 带 Retry-After 记成 warn（logging 的 levelFor）；
+ * - 已经有事务提交过（500，M2-P6 第 3 片复验）：写入已经生效、客户端得到的是"结果未知"，这里写明是提交之后遇到的繁忙与原因。
+ *   它是意外错误，error 与其他意外错误一样只记一条：请求日志按挂上的 response.err 记，连接已经关闭时由下面的"请求中断之后处理失败"记。
+ *   这里再记 error 的话，按 error 告警时同一件事会算两次
  */
 function logBusy(request: Request, error: Error, mapped: MappedError): void {
-  if (mapped.unexpected)
-    request.log.error({ err: error, reason: mapped.busy }, '事务提交之后遇到数据库繁忙：这个请求的写入已经生效，按意外错误回 500（结果未知）')
-  else
-    request.log.warn({ err: error, reason: mapped.busy }, '数据库繁忙，回 503 让客户端稍后重试')
+  const message = mapped.unexpected ? '事务提交之后遇到数据库繁忙：这个请求的写入已经生效，按意外错误回 500（结果未知）' : '数据库繁忙，回 503 让客户端稍后重试'
+  request.log.warn({ err: error, reason: mapped.busy }, message)
 }
 
 /**
@@ -110,9 +110,9 @@ export class HttpErrorFilter implements ExceptionFilter {
     if (mapped.busy !== undefined)
       logBusy(request, asError(exception), mapped)
     if (response.writableEnded || response.destroyed) {
-      // 连接已经关闭（客户端中途断开）：响应写不出去，请求日志也已经记过"请求中断"。
-      // 意外错误由这里记进这个请求的日志，不能被吞掉（审查 A4）；提交之后的数据库繁忙上面已经记过
-      if (mapped.unexpected && mapped.busy === undefined)
+      // 连接已经关闭（客户端中途断开）：响应写不出去，请求日志也已经记过"请求中断"（warn）。
+      // 意外错误由这里记进这个请求的日志，不能被吞掉（审查 A4）；提交之后的数据库繁忙也是意外错误，同样在这里记 error
+      if (mapped.unexpected)
         request.log.error({ err: asError(exception) }, '请求中断之后处理失败')
       return
     }

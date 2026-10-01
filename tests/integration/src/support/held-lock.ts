@@ -1,6 +1,18 @@
 // 两个连接的并发测试（M2-P1 审查 A1、A2、A9、A10、A12）：一个连接开着事务、持有锁；等被测的请求在锁上等着了，
 // 再在同一个事务里改数据、提交。被测的请求随后拿到锁，看到的是改过的数据。不靠固定时长的等待，结果是确定的。
+// 前提是应用等锁的时限（默认 5 秒）比"请求开始等锁 → 测试看到它 → 改数据 → 提交"长得多：等锁时限调到几百毫秒的应用不要用
+// raceAgainstHeldLock，否则请求可能先在这把锁上超时、走了另一条路（M2-P6 第 3 片丙批复验，见 api/busy-after-commit.test.ts 的文件头）。
 // 数据库繁忙的用例（M2-P6 复核 A 的 G-2）另用 whileHolding 与表锁：持着锁直到被测的请求结束，请求一定是等满时限失败。
+//
+// 预期就是在最后一步遇到数据库繁忙、应用的等锁时限又是默认 5 秒时，不必等满时限（M2-P6 第 3 片丁批）：cancelWhenWaiting 等被测的请求
+// 停在测试持着的表锁上，取消它正在执行的语句（pg_cancel_backend）。前提：
+// - 应用把语句被取消（SQLSTATE 57014）与等锁超时一样当作数据库繁忙（apps/api 的 database 模块，busy-errors.ts 的 statement_timeout
+//   写明包括被管理员取消）；不再这样当作时，这些用例回 500 而失败，不会悄悄通过；
+// - 测试持着这把锁直到被测的请求结束；在等这把锁的只能是被测的请求：应用的连接、在等这张表（pg_locks 里没授予的表锁）、
+//   被持锁的连接挡住（pg_blocking_pids），这样的连接多于一个就分不清，报错。
+// 这样仍然是确定的构造：看到它在等这把锁之后，它不拿到锁就走不了（应用自己等锁的 5 秒远没到），取消只会落在这条语句上；之后与等满时限走的是同一条路径——
+// 这条语句在业务事务里，事务回滚，这个请求没有提交过，回 503；它在提交之后（例如挪到提交之后、在连接池上的读），这个请求已经提交过，
+// 回 500（CommitLedger）。两个方向都只是把"等满时限"换成了"立即取消"，回答取决于取消落在提交之前还是之后，与时长无关。
 import type { TestDatabase } from './database.ts'
 import { setTimeout as delay } from 'node:timers/promises'
 import pg from 'pg'
@@ -32,6 +44,17 @@ export interface HeldLockRace<T> {
 
 /** 最多等多久：比应用的锁等待上限（5 秒）长也没关系，请求先结束就立即失败（见 waitUntilBlocked） */
 const WAIT_TIMEOUT_MS = 10_000
+
+/** 应用的连接池的 application_name（apps/api 的 database 模块）：cancelWhenWaiting 只取消应用的连接，测试自己的连接不设它 */
+const APPLICATION_NAME = 'nerve-office-api'
+
+/** 这个连接在数据库里的进程号 */
+async function backendPidOf(client: pg.Client): Promise<number> {
+  const pid = (await client.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid
+  if (pid === undefined)
+    throw new Error('取不到持锁连接的进程号')
+  return pid
+}
 
 /**
  * 等到这个库里有 count 个连接在等锁，其中至少一个被 holderPid 挡住。
@@ -117,9 +140,7 @@ export async function raceAgainstHeldLock<T>(database: TestDatabase, race: HeldL
     let pending: Promise<T> | undefined
     try {
       await race.hold(client)
-      const holderPid = (await client.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid
-      if (holderPid === undefined)
-        throw new Error('取不到持锁连接的进程号')
+      const holderPid = await backendPidOf(client)
       /** 登记过的每一步与整个请求的结局：任何一个先有了结局，等待就立即失败 */
       const outcomes: (() => string | undefined)[] = []
       const ended = (): string | undefined => outcomes.map(outcome => outcome()).find(result => result !== undefined)
@@ -166,8 +187,14 @@ export function lockTable(table: string) {
   return async (client: pg.Client) => client.query(`LOCK TABLE ${pg.escapeIdentifier(table)} IN ACCESS EXCLUSIVE MODE`)
 }
 
+/** 测试持着的一把表锁：持锁的连接（进程号）与锁住的表 */
+export interface HeldTableLock {
+  readonly pid: number
+  readonly table: string
+}
+
 /** 另一个连接上要的一把表锁 */
-export interface TableLock {
+export interface TableLock extends HeldTableLock {
   /** 拿到锁时兑现（别的事务持有这张表上的锁时，它排着） */
   readonly granted: Promise<void>
   /** 断开那个连接：没拿到的不再排，拿到的随事务一起放开 */
@@ -182,9 +209,59 @@ export interface TableLock {
 export async function requestTableLock(database: TestDatabase, table: string): Promise<TableLock> {
   const client = new pg.Client({ connectionString: database.url, connectionTimeoutMillis: 5_000 })
   await client.connect()
-  await client.query('BEGIN')
+  let pid: number
+  try {
+    pid = await backendPidOf(client)
+    await client.query('BEGIN')
+  }
+  catch (error) {
+    await client.end()
+    throw error
+  }
   const granted = client.query(`LOCK TABLE ${pg.escapeIdentifier(table)} IN ACCESS EXCLUSIVE MODE`).then(() => undefined)
   // 先接住：断开时还没拿到的话，它以连接断开失败
   granted.catch(() => {})
-  return { granted, release: async () => client.end() }
+  return { pid, table, granted, release: async () => client.end() }
+}
+
+/** 应用的连接里，在等 lock 锁住的那张表、被持锁的连接挡住的（进程号） */
+async function applicationWaitersOn(database: TestDatabase, lock: HeldTableLock): Promise<number[]> {
+  const rows = await database.query(async client => (await client.query<{ pid: number }>(
+    `SELECT a.pid FROM pg_stat_activity a
+     WHERE a.datname = current_database() AND a.application_name = $3 AND a.wait_event_type = 'Lock'
+       AND $1 = ANY(pg_blocking_pids(a.pid))
+       AND EXISTS (SELECT 1 FROM pg_locks l WHERE l.pid = a.pid AND NOT l.granted AND l.locktype = 'relation' AND l.relation = $2::regclass)`,
+    [lock.pid, lock.table, APPLICATION_NAME],
+  )).rows)
+  return rows.map(row => row.pid)
+}
+
+/**
+ * 被测的请求最后会停在测试持着的一把表锁上，预期就是在那一步遇到数据库繁忙：等它在这把锁上等着了，取消它正在执行的语句
+ * （pg_cancel_backend），不必等满应用等锁的时限；返回请求的结果。为什么仍然是确定的构造、前提是什么，见文件头。
+ * lockOf 给出那把锁：要等请求停在别处之后才加锁时（例如在 raceAgainstHeldLock 的 change 里），加锁之前返回 undefined。
+ * 请求没走到这把锁上就结束了（没碰这张表，或者在别处遇到繁忙），立即失败，报出它的结果，与 waitUntilBlocked 相同
+ */
+export async function cancelWhenWaiting<T>(database: TestDatabase, lockOf: () => HeldTableLock | undefined, request: Promise<T>): Promise<T> {
+  const ended = watch(request)
+  const deadline = performance.now() + WAIT_TIMEOUT_MS
+  for (;;) {
+    const lock = lockOf()
+    const waiters = lock === undefined ? [] : await applicationWaitersOn(database, lock)
+    if (waiters.length > 1)
+      throw new Error(`应用有 ${waiters.length} 个连接在等 ${lock?.table} 上的锁，分不清哪个是被测的请求`)
+    const [waiter] = waiters
+    if (waiter !== undefined) {
+      const cancelled = await database.query(async client => (await client.query<{ cancelled: boolean }>('SELECT pg_cancel_backend($1) AS cancelled', [waiter])).rows[0]?.cancelled)
+      if (cancelled !== true)
+        throw new Error(`没能取消进程 ${waiter} 正在执行的语句`)
+      return request
+    }
+    const outcome = ended()
+    if (outcome !== undefined)
+      throw new Error(`被测的请求没有停在 ${lock?.table ?? '测试要加'} 的锁上就结束了（${outcome}）`)
+    if (performance.now() > deadline)
+      throw new Error(`${WAIT_TIMEOUT_MS} ms 内被测的请求没有停在 ${lock?.table ?? '测试要加'} 的锁上`)
+    await delay(20)
+  }
 }

@@ -140,6 +140,25 @@ describe('UsersService.verifyCredentials', () => {
     await service.verifyCredentials('alice', 'wrong')
     expect(repository.reencodePassword).not.toHaveBeenCalled()
   })
+
+  it.each([
+    ['密码错误', { user: ALICE, passwordHash: 'hash:secret', passwordVersion: 1 }, 'alice'],
+    ['账户已停用', { user: { ...ALICE, status: 'disabled' as const }, passwordHash: 'hash:secret', passwordVersion: 1 }, 'alice'],
+    ['用户名不存在', undefined, 'nobody'],
+  ] as const)('%s：比对之后不再访问数据库——调用方据此把这里抛出的数据库繁忙当作"还没有比对"、退回名额（M2-P6 第 3 片复验）', async (_name, credentials, username) => {
+    const { service, repository, hasher } = setup(credentials)
+    hasher.stale = true
+    const accesses = (): number => Object.values(repository).reduce((total, method) => total + method.mock.calls.length, 0)
+    const compare = hasher.verify.bind(hasher)
+    let accessesWhenCompared: number | undefined
+    vi.spyOn(hasher, 'verify').mockImplementation(async (passwordHash, password) => {
+      accessesWhenCompared = accesses()
+      return compare(passwordHash, password)
+    })
+    expect(await service.verifyCredentials(username, 'wrong')).toMatchObject({ valid: false })
+    expect(accessesWhenCompared).toBeGreaterThan(0)
+    expect(accesses()).toBe(accessesWhenCompared)
+  })
 })
 
 describe('库里现存哈希的参数（Codex 评审 CX4）', () => {

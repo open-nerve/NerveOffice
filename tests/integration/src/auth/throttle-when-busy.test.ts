@@ -11,12 +11,13 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { createTestDatabase } from '../support/database.ts'
-import { lockTable, whileHolding } from '../support/held-lock.ts'
+import { completesWithoutWaiting, lockTable, whileHolding } from '../support/held-lock.ts'
 import { postPublic } from '../support/links.ts'
 import { postLogin } from '../support/session-client.ts'
 
 /** 按用户名与来源的上限：重试这么多次就会锁定 */
 const MAX_FAILURES = 3
+const NEW_PASSWORD = 'a brand new long password'
 
 let database: TestDatabase
 let app: TestApp
@@ -106,12 +107,34 @@ describe('登录：已经判定为猜错之后繁忙，照样计数', () => {
   })
 })
 
+describe('登录：比对之后不再访问数据库——读凭据时繁忙退回名额，不会让人借繁忙多猜一次的前提（UsersService.verifyCredentials）', () => {
+  it('账户行被别的事务锁着（FOR UPDATE）：用错的密码登录不等锁，照常 401，三个维度各记一次失败', async () => {
+    const { withoutWaiting, response } = await whileHolding(
+      database,
+      async client => client.query('SELECT 1 FROM users WHERE id = $1 FOR UPDATE', [alice.id]),
+      async () => {
+        // 比对之前读凭据是普通的读，不受行锁影响。比对之后再锁这一行、改这一行（或写引用它的行，外键检查也要锁它）都要在这里等锁，
+        // 等锁超时就会被当作"还没有比对"退回名额，让人借繁忙多猜一次。比对之后的普通读这里测不出来，由 users 的单元测试守着
+        const login = postLogin(app.baseUrl, { username: 'alice', password: 'not the password' })
+        return { withoutWaiting: await completesWithoutWaiting(database, login, 1), response: await login }
+      },
+    )
+    expect(withoutWaiting).toBe(true)
+    expect(response.status).toBe(401)
+    expect(await failures()).toEqual({ account: 1, accountAddress: 1, address: 1, link: 0 })
+  })
+})
+
 describe('一次性链接：读链接记录时繁忙退回名额；令牌不存在之后写审计时繁忙照样计数', () => {
   const token = (): string => randomBytes(32).toString('base64url')
 
-  it('查令牌时繁忙（还不知道令牌对不对）：按地址的名额退回', async () => {
-    await expectBusy(await whileHolding(database, lockTable('auth_invitations'), async () => postPublic(app.baseUrl, '/api/auth/invitations/inspect', { token: token() })))
-    await expectBusy(await whileHolding(database, lockTable('auth_password_resets'), async () => postPublic(app.baseUrl, '/api/auth/password-resets/complete', { token: token(), password: 'a brand new long password' })))
+  it.each([
+    ['查看邀请', 'auth_invitations', '/api/auth/invitations/inspect', {}],
+    ['接受邀请', 'auth_invitations', '/api/auth/invitations/accept', { displayName: '新同事', password: NEW_PASSWORD }],
+    ['查看重置', 'auth_password_resets', '/api/auth/password-resets/inspect', {}],
+    ['完成重置', 'auth_password_resets', '/api/auth/password-resets/complete', { password: NEW_PASSWORD }],
+  ] as const)('%s：查令牌时繁忙（还不知道令牌对不对），按地址的名额退回', async (_name, table, path, body) => {
+    await expectBusy(await whileHolding(database, lockTable(table), async () => postPublic(app.baseUrl, path, { token: token(), ...body })))
     expect((await failures()).link).toBe(0)
   })
 

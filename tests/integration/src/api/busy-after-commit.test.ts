@@ -5,7 +5,15 @@
 // 2. 拼响应用的读挪进了业务事务：那一步遇到繁忙时整个事务回滚，回 503，什么都没改（密码没换、没有新会话、没有 Set-Cookie……）。
 //    业务事务在那之前已经碰过那张表时，表锁挡不住它自己（它再要锁时排到等锁的人前面），改为核对"提交之后不再碰那张表"：
 //    事务停在最后一步之前，给那张表排一把锁，再放它走——请求照常成功；读挪回提交之后的话，那一步等锁超时，回 500。
-// 构造都是确定的：应用等锁 300 毫秒就放弃；测试的连接持着锁直到被测的请求结束，或者让请求停在另一把锁上，不靠等待时长。
+// 构造都是确定的，不靠等待时长。两个应用实例连着同一个库（会话等数据共用），按构造分开用：
+// - 测试的连接持着锁直到被测的请求结束（whileHolding）：请求一定是等满时限失败。用等锁 300 毫秒就放弃的 app，每条不必等上 5 秒；
+// - 请求先停在测试持着的锁上，测试改了数据、提交，再放它走（raceAgainstHeldLock、queuedBehind）：从请求开始等锁，到测试轮询看到它、
+//   另开连接排锁、改数据、提交，都要在应用等锁的时限之内做完，否则请求先在这把锁上超时、走了另一条路，用例可能误报失败，也可能照样通过
+//   （第 3 片丙批复验：改数据之前停 350 毫秒，300 毫秒的实例上 5 条误报失败，"补名字挪到提交之后"的变异存活）。
+//   这些用例用等锁时限为默认 5 秒的 patientApp，暂停有充足的余量。其中预期在最后一步遇到繁忙的 4 条（调整成员角色、三条复核不通过），
+//   不等满 5 秒：请求停在测试持着的那把表锁上时，取消它正在执行的语句（held-lock.ts 的 cancelWhenWaiting）。取消与等锁超时一样算繁忙，
+//   回 503 还是 500 只看这条语句在提交之前还是之后，两个方向走同一条路径（见 held-lock.ts 的文件头）；
+//   queuedBehind 的几条在正确的方向上不等锁，回归的方向等满 5 秒之后失败。
 import type { Transaction } from '@nerve-office/api'
 import type { Database } from '@nerve-office/api/testing'
 import type { Buffer } from 'node:buffer'
@@ -25,8 +33,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { createTestDatabase } from '../support/database.ts'
-import { completesWithoutWaiting, lockTable, raceAgainstHeldLock, requestTableLock, whileHolding } from '../support/held-lock.ts'
-import { postPublic, tokenOf } from '../support/links.ts'
+import { cancelWhenWaiting, completesWithoutWaiting, lockTable, raceAgainstHeldLock, requestTableLock, whileHolding } from '../support/held-lock.ts'
+import { postPublic, tokenDigest, tokenOf } from '../support/links.ts'
 import { asUser, login, postLogin, sessionSetCookie } from '../support/session-client.ts'
 import { createTeamSpace } from '../support/spaces.ts'
 
@@ -85,7 +93,10 @@ const RETRY_AFTER = '5'
 const NEW_PASSWORD = 'a brand new long password'
 
 let database: TestDatabase
+/** 等锁 300 毫秒就放弃：持锁直到被测的请求结束的用例（whileHolding） */
 let app: TestApp
+/** 等锁用默认的 5 秒：请求先停在测试持着的锁上、测试改了数据再放开的用例（raceAgainstHeldLock、queuedBehind，见文件头） */
+let patientApp: TestApp
 let root: TestAccount
 let rootSession: LoggedIn
 
@@ -93,11 +104,13 @@ beforeAll(async () => {
   database = await createTestDatabase()
   await database.query(async client => client.query(TEST_DDL))
   app = await startTestApp({ databaseUrl: database.url, env: { NERVE_DATABASE_LOCK_TIMEOUT_MS: '300' }, additionalModules: [CommitProbeModule] })
+  patientApp = await startTestApp({ databaseUrl: database.url })
   root = await createAccount(database, { username: 'root', systemRole: 'admin' })
   rootSession = await login(app.baseUrl, 'root', root.password)
 })
 
 afterAll(async () => {
+  await patientApp.close()
   await app.close()
   await database.drop()
 })
@@ -142,6 +155,32 @@ async function invite(username: string): Promise<{ readonly id: string, readonly
   return { id: issued.invitation.id, token: tokenOf(issued.url) }
 }
 
+/** 管理员为这个账户签发重置密码的链接：重置的 id（响应里只有链接，按令牌的摘要从库里查）与令牌 */
+async function issueReset(userId: string): Promise<{ readonly id: string, readonly token: string }> {
+  const response = await asUser(app.baseUrl, rootSession, `/api/admin/users/${userId}/password-reset`, { method: 'POST' })
+  expect(response.status, await response.clone().text()).toBe(201)
+  const token = tokenOf(((await response.json()) as { url: string }).url)
+  const id = await database.query(async client => (await client.query<{ id: string }>('SELECT id FROM auth_password_resets WHERE token_hash = $1', [tokenDigest(token)])).rows[0]?.id)
+  if (id === undefined)
+    throw new Error('库里没有刚签发的重置')
+  return { id, token }
+}
+
+/**
+ * 另开一个连接锁住整张表，执行 body，之后放开：与 whileHolding 加 lockTable 相同，只是把这把锁交给 body，
+ * 被测的请求停在它上面时由 cancelWhenWaiting 取消，不必等满 patientApp 等锁的 5 秒
+ */
+async function holdingTable<T>(table: string, body: (lock: TableLock) => Promise<T>): Promise<T> {
+  const lock = await requestTableLock(database, table)
+  try {
+    await lock.granted
+    return await body(lock)
+  }
+  finally {
+    await lock.release()
+  }
+}
+
 /** 在持锁的事务里关上这个审计动作的闸门 */
 function holdGate(action: string) {
   return async (client: pg.Client) => client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`audit-gate:${action}`])
@@ -149,7 +188,7 @@ function holdGate(action: string) {
 
 /**
  * 业务事务停在 pause 上（它已经碰过 table）：给 table 排一把锁，确认它排在业务事务后面，再放开 pause（之前先执行 beforeRelease）。
- * 返回被测请求的响应；锁随后放开
+ * 被测的请求发给 patientApp（见文件头）。返回它的响应；锁随后放开
  */
 async function queuedBehind<T>(options: {
   readonly pause: (client: pg.Client) => Promise<unknown>
@@ -176,7 +215,7 @@ async function queuedBehind<T>(options: {
 }
 
 describe('同一个请求里事务提交之后遇到数据库繁忙：按意外错误回 500（结果未知），不回 503（CommitLedger）', () => {
-  it('提交之后在连接池上读一张被锁住的表：500 INTERNAL_ERROR、不带 Retry-After，写入已经生效；日志记 error，写明是提交之后的繁忙与原因', async () => {
+  it('提交之后在连接池上读一张被锁住的表：500 INTERNAL_ERROR、不带 Retry-After，写入已经生效；error 只有请求结束的那一条，另有一条 warn 写明是提交之后的繁忙与原因', async () => {
     const before = await count('SELECT count(*) FROM commit_probe')
     const response = await whileHolding(database, lockTable('probe_locked'), async () => postPublic(app.baseUrl, '/api/__test/commits/after-commit', {}))
     expect(response.status).toBe(500)
@@ -185,9 +224,9 @@ describe('同一个请求里事务提交之后遇到数据库繁忙：按意外�
     expect(await response.json()).toEqual({ error: { code: 'INTERNAL_ERROR', message: '服务器内部错误，请稍后重试', requestId } })
     expect(await count('SELECT count(*) FROM commit_probe')).toBe(before + 1)
     const lines = app.logs.entries().filter(line => line.requestId === requestId)
-    expect(lines.find(line => line.reason === 'lock_timeout')).toMatchObject({ level: 'error', msg: expect.stringContaining('事务提交之后遇到数据库繁忙') as unknown })
-    expect(lines.find(line => line.statusCode === 500)).toMatchObject({ level: 'error' })
-    expect(lines.filter(line => line.level === 'warn')).toEqual([])
+    // 与其他意外错误一样只记一条 error（请求日志按 response.err 记）：按 error 告警时同一件事不算两次
+    expect(lines.filter(line => line.level === 'error')).toEqual([expect.objectContaining({ statusCode: 500, err: expect.anything() as unknown })])
+    expect(lines.filter(line => line.level === 'warn')).toEqual([expect.objectContaining({ reason: 'lock_timeout', msg: expect.stringContaining('事务提交之后遇到数据库繁忙') as unknown })])
   })
 
   it('同样的繁忙出现在提交之前（事务里）：503 带 Retry-After，事务回滚、什么也没写；记录按请求分开，前一个请求提交过不算', async () => {
@@ -229,9 +268,7 @@ describe('拼响应的读在业务事务里：那一步遇到数据库繁忙，�
 
   it('完成重置：拼响应时读个人空间等锁超时——重置没有用掉、密码没换、没有新会话，链接的名额退回', async () => {
     const amy = await createAccount(database, { username: 'reset-amy' })
-    const issued = await asUser(app.baseUrl, rootSession, `/api/admin/users/${amy.id}/password-reset`, { method: 'POST' })
-    expect(issued.status).toBe(201)
-    const token = tokenOf(((await issued.json()) as { url: string }).url)
+    const { token } = await issueReset(amy.id)
     const before = await credentialsOf(amy.id)
     const linkFailuresBefore = await linkFailures()
     const complete = async (): Promise<Response> => postPublic(app.baseUrl, '/api/auth/password-resets/complete', { token, password: NEW_PASSWORD })
@@ -278,16 +315,18 @@ describe('拼响应的读在业务事务里：那一步遇到数据库繁忙，�
     const ben = await createAccount(database, { username: 'members-ben' })
     const spaceId = await createTeamSpace(database, { name: '成员繁忙', createdBy: root.id, members: { [amy.id]: 'admin', [ben.id]: 'editor' } })
     const amySession = await login(app.baseUrl, 'members-amy', amy.password)
-    const change = async (): Promise<Response> => asUser(app.baseUrl, amySession, `/api/spaces/${spaceId}/members/${ben.id}`, { method: 'PUT', body: { role: 'viewer' } })
+    const change = async (): Promise<Response> => asUser(patientApp.baseUrl, amySession, `/api/spaces/${spaceId}/members/${ben.id}`, { method: 'PUT', body: { role: 'viewer' } })
     let usersLock: TableLock | undefined
     try {
-      // 请求停在锁空间行上（测试的连接持着这一行）：这时它的事务还没碰过账户表，给账户表加上锁，再放开空间行
+      // 请求停在锁空间行上（测试的连接持着这一行）：这时它的事务还没碰过账户表，给账户表加上锁，再放开空间行。
+      // 它随后补名字时停在账户表的锁上，在那里取消它
       const response = await raceAgainstHeldLock(database, {
         hold: async client => client.query('SELECT id FROM spaces WHERE id = $1 FOR UPDATE', [spaceId]),
-        request: change,
+        request: async () => cancelWhenWaiting(database, () => usersLock, change()),
         change: async () => {
           usersLock = await requestTableLock(database, 'users')
-          await usersLock.granted
+          // 立即拿到：业务事务确实还没碰过账户表（碰过的话这把锁要排在它后面，请求在空间行上等锁超时，用例走的就是另一条路）
+          expect(await completesWithoutWaiting(database, usersLock.granted, 2)).toBe(true)
         },
       })
       await expectBusy(response)
@@ -304,10 +343,10 @@ describe('拼响应的读在业务事务里：那一步遇到数据库繁忙，�
 describe('事务里复核不通过时回滚，不留下一次提交：之后写失败的审计遇到数据库繁忙，回答的仍是确定的 503（M2-P6 第 3 片复验）', () => {
   it('登录：验证之后别处改了密码（复核不通过）、写失败的审计时繁忙——503，不是 500；没有新会话，这次按一次失败计', async () => {
     const amy = await createAccount(database, { username: 'changed-amy' })
-    const response = await whileHolding(database, lockTable('audit_events'), async () => raceAgainstHeldLock(database, {
-      // 登录的事务复核凭据时停在账户行上
+    const response = await holdingTable('audit_events', async auditLock => raceAgainstHeldLock(database, {
+      // 登录的事务复核凭据时停在账户行上；复核不通过之后写失败的审计时停在审计表的锁上，在那里取消它
       hold: async client => client.query('SELECT id FROM users WHERE id = $1 FOR UPDATE', [amy.id]),
-      request: async () => postLogin(app.baseUrl, { username: 'changed-amy', password: amy.password }),
+      request: async () => cancelWhenWaiting(database, () => auditLock, postLogin(patientApp.baseUrl, { username: 'changed-amy', password: amy.password })),
       change: async client => client.query('UPDATE users SET password_version = password_version + 1 WHERE id = $1', [amy.id]),
     }))
     await expectBusy(response)
@@ -317,14 +356,29 @@ describe('事务里复核不通过时回滚，不留下一次提交：之后写�
 
   it('接受邀请：查令牌之后邀请被作废（事务里复核不通过）、写拒绝的审计时繁忙——503，不是 500；账户没建', async () => {
     const { id, token } = await invite('revoked-later')
-    const response = await whileHolding(database, lockTable('audit_events'), async () => raceAgainstHeldLock(database, {
-      // 接受的事务锁邀请行时停在这里
+    const response = await holdingTable('audit_events', async auditLock => raceAgainstHeldLock(database, {
+      // 接受的事务锁邀请行时停在这里；写拒绝的审计时停在审计表的锁上，在那里取消它
       hold: async client => client.query('SELECT id FROM auth_invitations WHERE id = $1 FOR UPDATE', [id]),
-      request: async () => postPublic(app.baseUrl, '/api/auth/invitations/accept', { token, displayName: '新同事', password: NEW_PASSWORD }),
+      request: async () => cancelWhenWaiting(database, () => auditLock, postPublic(patientApp.baseUrl, '/api/auth/invitations/accept', { token, displayName: '新同事', password: NEW_PASSWORD })),
       change: async client => client.query('UPDATE auth_invitations SET revoked_at = now(), revoked_by = $2 WHERE id = $1', [id, root.id]),
     }))
     await expectBusy(response)
     expect(await count('SELECT count(*) FROM users WHERE username = \'revoked-later\'')).toBe(0)
+  })
+
+  it('完成重置：查令牌之后重置被作废（事务里复核不通过）、写拒绝的审计时繁忙——503，不是 500；密码没换、没有新会话', async () => {
+    const amy = await createAccount(database, { username: 'reset-revoked-later' })
+    const { id, token } = await issueReset(amy.id)
+    const before = await credentialsOf(amy.id)
+    const response = await holdingTable('audit_events', async auditLock => raceAgainstHeldLock(database, {
+      // 完成的事务锁住账户行之后，锁重置行时停在这里；写拒绝的审计时停在审计表的锁上，在那里取消它
+      hold: async client => client.query('SELECT id FROM auth_password_resets WHERE id = $1 FOR UPDATE', [id]),
+      request: async () => cancelWhenWaiting(database, () => auditLock, postPublic(patientApp.baseUrl, '/api/auth/password-resets/complete', { token, password: NEW_PASSWORD })),
+      change: async client => client.query('UPDATE auth_password_resets SET revoked_at = now() WHERE id = $1', [id]),
+    }))
+    await expectBusy(response)
+    expect(await credentialsOf(amy.id)).toEqual(before)
+    expect(await count('SELECT count(*) FROM auth_sessions WHERE user_id = $1', [amy.id])).toBe(0)
   })
 })
 
@@ -334,7 +388,7 @@ describe('提交之后不再访问数据库：业务事务已经碰过拼响应�
     const response = await queuedBehind({
       pause: holdGate('users.invitation_accepted'),
       table: 'spaces',
-      request: async () => postPublic(app.baseUrl, '/api/auth/invitations/accept', { token, displayName: '新同事', password: NEW_PASSWORD }),
+      request: async () => postPublic(patientApp.baseUrl, '/api/auth/invitations/accept', { token, displayName: '新同事', password: NEW_PASSWORD }),
     })
     expect(response.status, await response.clone().text()).toBe(200)
     expect(sessionSetCookie(response)).toBeDefined()
@@ -348,7 +402,7 @@ describe('提交之后不再访问数据库：业务事务已经碰过拼响应�
     const response = await queuedBehind({
       pause: holdGate('users.login_unlocked'),
       table: 'auth_login_throttles',
-      request: async () => asUser(app.baseUrl, rootSession, `/api/admin/users/${dave.id}/unlock-login`, { method: 'POST' }),
+      request: async () => asUser(patientApp.baseUrl, rootSession, `/api/admin/users/${dave.id}/unlock-login`, { method: 'POST' }),
     })
     expect(response.status, await response.clone().text()).toBe(200)
     expect(await response.json()).toMatchObject({ id: dave.id, loginLock: null })
@@ -360,7 +414,7 @@ describe('提交之后不再访问数据库：业务事务已经碰过拼响应�
     const response = await queuedBehind({
       pause: async client => client.query('SELECT id FROM auth_invitations WHERE id = $1 FOR UPDATE', [id]),
       table: 'users',
-      request: async () => asUser(app.baseUrl, rootSession, `/api/admin/invitations/${id}/revoke`, { method: 'POST' }),
+      request: async () => asUser(patientApp.baseUrl, rootSession, `/api/admin/invitations/${id}/revoke`, { method: 'POST' }),
     })
     expect(response.status, await response.clone().text()).toBe(200)
     expect(await response.json()).toMatchObject({ id, status: 'revoked', createdBy: { id: root.id, username: 'root' } })
@@ -374,7 +428,7 @@ describe('提交之后不再访问数据库：业务事务已经碰过拼响应�
       // 退出的事务撤销这条会话时停在它的行锁上
       pause: async client => client.query('SELECT id FROM auth_sessions WHERE id = $1 FOR UPDATE', [sessionId]),
       table: 'auth_sessions',
-      request: async () => asUser(app.baseUrl, session, '/api/auth/logout', { method: 'POST' }),
+      request: async () => asUser(patientApp.baseUrl, session, '/api/auth/logout', { method: 'POST' }),
       // 同一个浏览器刚重新登录：这条会话换成了新的
       beforeRelease: async client => client.query('UPDATE auth_sessions SET revoked_at = now(), revoked_reason = \'replaced\', idle_expires_at = least(idle_expires_at, now()) WHERE id = $1', [sessionId]),
     })

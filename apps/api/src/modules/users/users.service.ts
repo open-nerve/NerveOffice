@@ -89,6 +89,7 @@ export class UsersService implements OnModuleInit {
    * 验证通过且哈希的参数已经过时，顺带用当前的参数重新哈希（失败只记日志，不影响这次登录）。
    * 数据库只在比对之前读（凭据），比对之后的重新哈希不抛出：调用方据此把这里抛出的数据库繁忙当作"还没有比对"，
    * 退回限流的名额（auth 的 releasingIfBusy，M2-P6 第 3 片复验）。比对之后不能再加会抛出的数据库访问，否则就让人借繁忙多猜一次
+   * （单元测试核对比对失败之后仓储不再被调用；集成测试 auth/throttle-when-busy.test.ts 核对账户行被锁着时错的密码不等锁）
    */
   async verifyCredentials(usernameInput: string, password: string): Promise<CredentialCheck> {
     // 先让哈希器知道库里现存的参数（参数调低之后，旧哈希的计算量更大，失败都要补到它）；读过一次之后不再读
