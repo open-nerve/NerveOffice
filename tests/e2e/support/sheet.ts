@@ -12,14 +12,24 @@ import { expect } from './fixtures.ts'
  *
  * Playwright 默认的 30 秒对这些用例不够用：一份用例要开一到两次编辑器（下载 SDK、起公式 Worker、画完表格），
  * 再键入、保存、逐项核对，而里面单独一步的时限就已经是 30 秒（下面的 waitForEditor）——用例的总时限反倒成了最紧的那一道。
- * 本机实测（2026-09-30 两次全跑，chromium、chrome、webkit，取每份 spec 最慢的那一个用例的较大值）：
- * editor/read-only 12.7 秒、editor/features 10.5 秒、editor/conflict 8.3 秒、editor/reopen 7.1 秒，
+ * 本机实测（2026-09-30 两次全跑；2026-10-01 editor/ 在 chromium、chrome、webkit 上又全跑两次，取每份 spec 最慢的那一个用例）：
+ * editor/read-only 13.3 秒、editor/features 10.6 秒、editor/conflict 8.8 秒、editor/reopen 7.5 秒，
  * 其余（csp、documents/copy、template、save、create、session、access）都在 6.2 秒以内；
  * 满载的本机上 conflict 出现过一次"点保存 30 秒超时"（重跑通过）。CI 的机器比本机慢好几倍，30 秒的余量不到 4 倍。
  * 时限只用来发现卡住的用例，所以按本机最慢的那一份留二十倍上下的余量，取 4 分钟
  * （与 lint 自测同一个做法，见 tools/src/lint/lint-rules.test.ts 的 LINT_TIMEOUT）。不用重试掩盖：出现重试即记为不稳定（规范 §8.4）。
+ * 只读的快捷键回归（editor/read-only-shortcuts）更长，另用 SHORTCUT_SWEEP_TIMEOUT。
  */
 export const EDITOR_TEST_TIMEOUT = 240_000
+
+/**
+ * 只读的快捷键回归（editor/read-only-shortcuts.spec.ts）的时限：一条用例要按遍 SDK 注册的全部快捷键（1.0.1 在苹果的平台上 78 种组合，
+ * 每种都要复位、按下、核对），比别的用例长得多。本机实测（2026-10-01，三种选区各一条）：单个工作进程时每条 16.7–19.2 秒，
+ * 与 editor/ 的其他用例一起跑时 17.5–22.6 秒（两次），9 条同时跑（三个浏览器的三种选区）时 25.1–30.3 秒；拆成三条之前的一条
+ * （只按单元格的选区）本机 21–25 秒、加压时 42 秒（M2-P6 复验 N7）。按最慢的一条留二十倍上下的余量，取 8 分钟：用 4 分钟时
+ * 余量只剩十倍，加压时八倍，CI 慢几倍之后就贴着时限了。别的用例仍是 4 分钟，卡住时不必等更久
+ */
+export const SHORTCUT_SWEEP_TIMEOUT = 480_000
 
 const SHEET = SHEET_TEMPLATE.sheets['sheet-1']
 const GEOMETRY = {
@@ -29,9 +39,14 @@ const GEOMETRY = {
   rowHeight: SHEET.defaultRowHeight,
 }
 
-/** Univer 挂载的容器：页面的状态写在它的 data-editor-state 上 */
+/**
+ * Univer 挂载的容器（编辑器页的 #sheet-editor，作为 UniverUIPlugin 的 container 传入，SDK 把它登记为根容器）：
+ * 页面的状态写在它的 data-editor-state 上；SDK 只派发目标在它（或别的登记过的容器）里的按键
+ */
+export const EDITOR_SURFACE = '#sheet-editor'
+
 export function editorSurface(page: Page): Locator {
-  return page.locator('#sheet-editor')
+  return page.locator(EDITOR_SURFACE)
 }
 
 /** 编辑器页自己的页头（Univer 的功能区也是一个 header） */

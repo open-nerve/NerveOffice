@@ -479,6 +479,20 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
     expect(report.messages.join('\n')).toContain('用静态导入')
   })
 
+  it('internal-api 里不用动态 import()：同目录的文件、绕路的相对路径、别的包都报错，登记表的扫描只认静态的导入导出（M2-P6 第二次复验 S1）；静态引用与 internal-api 之外的动态引入照常', async () => {
+    const MESSAGE = '内部 API（editor/internal-api/）里不用动态 import()'
+    const load = (source: string): string => `export async function load(): Promise<unknown> {\n  return import('${source}')\n}\n`
+    // 复验者的变异三：injector.ts 动态引入同目录的新文件
+    for (const source of ['./helper.ts', '../internal-api/dom-markers.ts', 'zod']) {
+      const report = await lint(load(source), 'apps/web/src/editor/internal-api/injector.ts')
+      expect(report.rules, source).toContain('no-restricted-syntax')
+      expect(report.messages.join('\n'), source).toContain(MESSAGE)
+    }
+    expect(await rulesFor('export { injectorOf } from \'./injector.ts\'\n', INTERNAL_API_FILE)).not.toContain('no-restricted-syntax')
+    // internal-api 之外不受这一条限制（编辑器动态引入探针）
+    expect((await lint(load('./testing/e2e-probe.ts'), EDITOR_FILE)).messages.join('\n')).not.toContain(MESSAGE)
+  })
+
   it('internal-api 的配置不限制内部符号，编辑器的其他位置限制', async () => {
     const internal = restrictedImports(await configFor(INTERNAL_API_FILE))
     expect(internal.paths ?? []).toEqual([])
@@ -753,6 +767,170 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
     }
     // 只是含有相近字样的普通字符串不算
     expect((await lint('export const word = \'uComposer data-u-component-x\'\n', WEB_FEATURE_FILE)).messages.join('\n')).not.toContain(DOM_MARKER_MESSAGE)
+  })
+
+  describe('对 @univerjs/* 的值引用只允许白名单里的公开符号（M2-P6 复核 F4）', () => {
+    const PUBLIC_VALUE_MESSAGE = '对 @univerjs/* 的值引用只允许白名单（eslint.config.ts 的 UNIVER_PUBLIC_VALUES）里的公开符号'
+    /** 编辑器里 internal-api 与测试代码之外的几类文件：编辑器的组装、只读守卫、测试构建的探针、公式 Worker */
+    const OUTSIDE_INTERNAL_API = [EDITOR_FILE, 'apps/web/src/editor/read-only/read-only-guard.ts', 'apps/web/src/editor/testing/e2e-probe.ts', 'apps/web/src/editor/workers/formula.worker.ts']
+
+    it('白名单里的通过：插件类、Univer 与 FUniver、枚举、mergeLocales、主题、语言包的默认导出；副作用导入（Facade、样式）不受限', async () => {
+      const code = [
+        'import { CommandType, LifecycleStages, LocaleType, LogLevel, mergeLocales, Univer } from \'@univerjs/core\'',
+        'import { FUniver } from \'@univerjs/core/facade\'',
+        'import { DeviceInputEventType, UniverRenderEnginePlugin } from \'@univerjs/engine-render\'',
+        'import { UniverRemoteSheetsFormulaPlugin, UniverSheetsFormulaPlugin } from \'@univerjs/sheets-formula\'',
+        'import SheetsZhCN from \'@univerjs/sheets/locale/zh-CN\'',
+        'import { defaultTheme } from \'@univerjs/themes\'',
+        'import { KeyCode, UniverUIPlugin } from \'@univerjs/ui\'',
+        'import \'@univerjs/sheets/facade\'',
+        'import \'@univerjs/sheets-filter/facade\'',
+        'import \'@univerjs/design/lib/index.css\'',
+        '',
+        'export const used = [CommandType, LifecycleStages, LocaleType, LogLevel, mergeLocales, Univer, FUniver, DeviceInputEventType, UniverRenderEnginePlugin, UniverRemoteSheetsFormulaPlugin, UniverSheetsFormulaPlugin, SheetsZhCN, defaultTheme, KeyCode, UniverUIPlugin]',
+        '',
+      ].join('\n')
+      for (const file of OUTSIDE_INTERNAL_API)
+        expect(await rulesFor(code, file), file).not.toContain('no-restricted-imports')
+    })
+
+    it('没登记的内部符号报错：命名导入、改名、默认导入、命名空间导入、再导出与 export * 都算，没列出的包与包里没列出的出口也算', async () => {
+      const cases = [
+        // 审查者的变异：sheets 导出的权限检查控制器不在登记的清单里，原来只报了导入顺序
+        'import { SheetPermissionCheckController } from \'@univerjs/sheets\'\n\nexport const c = SheetPermissionCheckController\n',
+        'import { ICommandService as Commands } from \'@univerjs/core\'\n\nexport const c = Commands\n',
+        'import { ILayoutService } from \'@univerjs/ui\'\n\nexport const s = ILayoutService\n',
+        'import Sheets from \'@univerjs/sheets\'\n\nexport const s = Sheets\n',
+        'import * as filter from \'@univerjs/sheets-filter\'\n\nexport const f = filter\n',
+        'export { SheetPermissionCheckController } from \'@univerjs/sheets\'\n',
+        'export * from \'@univerjs/sheets-filter\'\n',
+        'import { FRange } from \'@univerjs/sheets/facade\'\n\nexport const r = FRange\n',
+        'import { UniverSheetsTablePlugin } from \'@univerjs/sheets-table\'\n\nexport const p = UniverSheetsTablePlugin\n',
+        'import { zhCN } from \'@univerjs/sheets/locale/zh-CN\'\n\nexport const l = zhCN\n',
+      ]
+      for (const file of OUTSIDE_INTERNAL_API) {
+        for (const code of cases) {
+          const report = await lint(code, file)
+          expect(report.rules, `${file}\n${code}`).toContain('no-restricted-imports')
+          expect(report.messages.join('\n'), `${file}\n${code}`).toContain(PUBLIC_VALUE_MESSAGE)
+        }
+      }
+      // 登记过的内部符号的值引用：清单与白名单各报一条
+      const registered = await lint('import { IPermissionService } from \'@univerjs/core\'\n\nexport const s = IPermissionService\n', EDITOR_FILE)
+      expect(registered.messages.join('\n')).toContain(INTERNAL_MESSAGE)
+      expect(registered.messages.join('\n')).toContain(PUBLIC_VALUE_MESSAGE)
+    })
+
+    it('类型引用通过（没登记的内部符号的类型、没列出的出口的类型、export type）；登记过的内部符号的类型仍由清单拦下', async () => {
+      const types = [
+        'import type { SheetPermissionCheckController } from \'@univerjs/sheets\'\n\nexport type C = SheetPermissionCheckController\n',
+        'import type { IShortcutItem } from \'@univerjs/ui\'\n\nexport type S = IShortcutItem\n',
+        'import type { FRange } from \'@univerjs/sheets/facade\'\n\nexport type R = FRange\n',
+        // 命名空间的类型导入：包里有登记过的内部符号时（例如 @univerjs/sheets）仍由清单拦下，见下面
+        'import type * as Filter from \'@univerjs/sheets-filter\'\n\nexport type F = Filter.FilterModel\n',
+        'export type { ICommandInfo } from \'@univerjs/core\'\n',
+      ]
+      for (const file of OUTSIDE_INTERNAL_API) {
+        for (const code of types)
+          expect(await rulesFor(code, file), `${file}\n${code}`).not.toContain('no-restricted-imports')
+      }
+      for (const code of ['import type { IUndoRedoService } from \'@univerjs/core\'\n\nexport type U = IUndoRedoService\n', 'import type * as Sheets from \'@univerjs/sheets\'\n\nexport type W = Sheets.SheetInterceptorService\n']) {
+        const registeredType = await lint(code, EDITOR_FILE)
+        expect(registeredType.messages.join('\n'), code).toContain(INTERNAL_MESSAGE)
+        expect(registeredType.messages.join('\n'), code).not.toContain(PUBLIC_VALUE_MESSAGE)
+      }
+    })
+
+    it('internal-api 里不受限；测试代码不受白名单限制（登记过的内部符号仍由清单拦下）', async () => {
+      const unregistered = 'import { SheetPermissionCheckController } from \'@univerjs/sheets\'\nimport { ICommandService } from \'@univerjs/core\'\n\nexport const used = [SheetPermissionCheckController, ICommandService]\n'
+      for (const file of [INTERNAL_API_FILE, 'apps/web/src/editor/internal-api/ui.ts'])
+        expect(await rulesFor(unregistered, file), file).not.toContain('no-restricted-imports')
+      const testFile = 'apps/web/src/editor/read-only/freeze-handles.test.ts'
+      expect(await rulesFor('import { createInterceptorKey, InterceptorManager } from \'@univerjs/core\'\n\nexport const used = [createInterceptorKey, InterceptorManager]\n', testFile)).not.toContain('no-restricted-imports')
+      expect((await lint('import { IPermissionService } from \'@univerjs/core\'\n\nexport const s = IPermissionService\n', testFile)).messages.join('\n')).toContain(INTERNAL_MESSAGE)
+    })
+
+    it('编辑器里 internal-api 与测试代码之外的每个文件都带着白名单；internal-api 与测试代码没有', async () => {
+      const allowed = (paths: RestrictedImports['paths']): string[] => (paths ?? []).filter(path => 'allowImportNames' in path).map(path => path.name)
+      for (const file of [...OUTSIDE_INTERNAL_API, 'apps/web/src/editor/index.ts', 'apps/web/src/editor/profile/sheet-profile.ts', 'apps/web/src/editor/profile/locale.ts']) {
+        const names = allowed(restrictedImports(await configFor(file)).paths)
+        expect(names, file).toEqual(expect.arrayContaining(['@univerjs/core', '@univerjs/core/facade', '@univerjs/sheets', '@univerjs/ui']))
+      }
+      for (const file of [INTERNAL_API_FILE, 'apps/web/src/editor/read-only/read-only-guard.test.ts', 'apps/web/src/editor/testing/e2e-probe.test.ts'])
+        expect(allowed(restrictedImports(await configFor(file)).paths), file).toEqual([])
+    })
+  })
+
+  describe('编辑器的 E2E 探针（editor/testing/**）只能动态引入（M2-P6 复核 F5）', () => {
+    const PROBE_MESSAGE = '编辑器的 E2E 探针（editor/testing/**）只在测试构建里，只能经动态 import() 引入'
+    const RULE = 'ts/no-restricted-imports'
+
+    it('静态导入、import type、副作用导入、再导出与 export * 都报错：编辑器的组装、公开入口、只读守卫与 internal-api 都一样', async () => {
+      const cases: (readonly [string, string])[] = [
+        [EDITOR_FILE, 'import { installEditorProbe } from \'./testing/e2e-probe.ts\'\n\nexport const install = installEditorProbe\n'],
+        [EDITOR_FILE, 'import type { EditorProbe } from \'./testing/e2e-probe.ts\'\n\nexport type P = EditorProbe\n'],
+        [EDITOR_FILE, 'import \'./testing/probe-facades.ts\'\n\nexport const a = 1\n'],
+        ['apps/web/src/editor/index.ts', 'export { installEditorProbe } from \'./testing/e2e-probe.ts\'\n'],
+        ['apps/web/src/editor/index.ts', 'export * from \'./testing/e2e-probe.ts\'\n'],
+        ['apps/web/src/editor/read-only/read-only-guard.ts', 'import \'../testing/probe-facades.ts\'\n\nexport const a = 1\n'],
+        [INTERNAL_API_FILE, 'export { installEditorProbe } from \'../testing/e2e-probe.ts\'\n'],
+        // 大小写不同（不区分大小写的文件系统上照样找得到）
+        [EDITOR_FILE, 'import \'./Testing/probe-facades.ts\'\n\nexport const a = 1\n'],
+      ]
+      for (const [file, code] of cases) {
+        const report = await lint(code, file)
+        expect(report.rules, `${file}\n${code}`).toContain(RULE)
+        expect(report.messages.join('\n'), `${file}\n${code}`).toContain(PROBE_MESSAGE)
+      }
+    })
+
+    it('动态 import() 通过；testing/ 里的文件之间照常静态引用；测试代码不受限；同一份限制里仍拦着测试与测试辅助', async () => {
+      const load = 'export async function load(): Promise<unknown> {\n  return import(\'./testing/e2e-probe.ts\')\n}\n'
+      expect(await rulesFor(load, EDITOR_FILE)).not.toContain(RULE)
+      expect(await rulesFor('import \'./probe-facades.ts\'\n\nexport const a = 1\n', 'apps/web/src/editor/testing/e2e-probe.ts')).not.toContain(RULE)
+      expect(await rulesFor('import { installEditorProbe } from \'./testing/e2e-probe.ts\'\n\nexport const install = installEditorProbe\n', 'apps/web/src/editor/sheet-editor.test.ts')).not.toContain(RULE)
+      // 这一块覆盖了 nerve/test-code-only-in-tests 的同名规则：测试辅助照样拦下
+      const report = await lint('import { UNIT } from \'./change-tracking/formula-sequences.test-support.ts\'\n\nexport const unit = UNIT\n', EDITOR_FILE)
+      expect(report.rules).toContain(RULE)
+      expect(report.messages.join('\n')).toContain('测试与测试辅助')
+      // 别的目录里叫 testing 的包名不算（只认路径里的 testing 这一段）
+      expect(await rulesFor('import { render } from \'@testing-library/react\'\n\nexport const r = render\n', EDITOR_FILE)).not.toContain(RULE)
+    })
+  })
+
+  describe('内部 API 只经两个出口引用：internal-api/index.ts 与 ui.ts（M2-P6 复验 N4）', () => {
+    const EXITS_MESSAGE = '内部 API 只经两个出口引用：internal-api/index.ts 与 ui.ts'
+    const RULE = 'import-x/no-restricted-paths'
+    const GUARD_FILE = 'apps/web/src/editor/read-only/read-only-guard.ts'
+
+    it('internal-api 之外引用里面别的文件报错：静态导入、import type、再导出与动态 import() 都算，路径换个写法也一样，测试代码也不例外', async () => {
+      const cases: (readonly [string, string])[] = [
+        // 复验者的变异：只读守卫绕过出口，直接引用 formula-protocol.ts
+        [GUARD_FILE, 'import { FORMULA_PROTOCOL } from \'../internal-api/formula-protocol.ts\'\n\nexport const p = FORMULA_PROTOCOL\n'],
+        [GUARD_FILE, 'import type { FORMULA_PROTOCOL } from \'../internal-api/formula-protocol.ts\'\n\nexport type P = typeof FORMULA_PROTOCOL\n'],
+        [EDITOR_FILE, 'export { injectorOf } from \'./internal-api/injector.ts\'\n'],
+        [EDITOR_FILE, 'export async function load(): Promise<unknown> {\n  return import(\'./internal-api/dom-markers.ts\')\n}\n'],
+        [GUARD_FILE, 'import { FORMULA_PROTOCOL } from \'../internal-api/./formula-protocol.ts\'\n\nexport const p = FORMULA_PROTOCOL\n'],
+        [GUARD_FILE, 'import { FORMULA_PROTOCOL } from \'../read-only/../internal-api/formula-protocol.ts\'\n\nexport const p = FORMULA_PROTOCOL\n'],
+        [GUARD_FILE, 'import { INTERNAL_API_REGISTRY } from \'../internal-api/registry.ts\'\n\nexport const r = INTERNAL_API_REGISTRY\n'],
+        ['apps/web/src/editor/read-only/read-only-guard.test.ts', 'import { FORMULA_PROTOCOL } from \'../internal-api/formula-protocol.ts\'\n\nexport const p = FORMULA_PROTOCOL\n'],
+      ]
+      for (const [file, code] of cases) {
+        const report = await lint(code, file)
+        expect(report.rules, `${file}\n${code}`).toContain(RULE)
+        expect(report.messages.join('\n'), `${file}\n${code}`).toContain(EXITS_MESSAGE)
+      }
+    })
+
+    it('两个出口照常引用；internal-api 里的文件之间照常引用', async () => {
+      const exits = [
+        'import { FORMULA_PROTOCOL } from \'../internal-api/index.ts\'\n\nexport const p = FORMULA_PROTOCOL\n',
+        'import { IEditorService } from \'../internal-api/ui.ts\'\n\nexport const s = IEditorService\n',
+      ]
+      for (const code of exits)
+        expect(await rulesFor(code, GUARD_FILE), code).not.toContain(RULE)
+      expect(await rulesFor('export { FORMULA_PROTOCOL } from \'./formula-protocol.ts\'\n', INTERNAL_API_FILE)).not.toContain(RULE)
+    })
   })
 }, LINT_TIMEOUT)
 

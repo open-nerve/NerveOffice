@@ -1,6 +1,10 @@
 // 查看者的只读（M2-P3 设计 §3.3–§3.7、§4 的 E2E 一行，US-M2-11）：查看者与归档空间里的文档只能看不能改。
 // 只读样本（support/read-only-sample.ts：5 张表、浮动图片、批注、超链接、数据验证、条件格式、筛选）写进团队空间，查看者打开后
-// 逐项试 M0 的 28 个表格编辑入口（M0-P3 报告 §5）与界面上还能碰到的入口：
+// 逐项试 M0 的 28 个表格编辑入口（M0-P3 报告 §5）、界面上还能碰到的入口（编辑栏、工作表标签与全部工作表的菜单、图片、批注的浮层、
+// 冻结线与冻结区域的行高、筛选按钮、查找替换，以及格式、撤销与重做、"搜索功能"、快速求和这几个快捷键），
+// 与经 Facade 直接执行的写公式的 mutation（防火墙要排在 SDK 自己的执行前监听之前，M2-P6 复核 F3）。
+// 覆盖的边界：SDK 注册的全部快捷键另由 read-only-shortcuts.spec.ts 逐个按遍（M2-P6 复核 F1、F2 之后，这里只留有专门对照的几个）；
+// 鼠标、触控与输入法的入口没有清单可以遍历，靠这里逐项列出与审查（M2-P6 复核 S4 另外试过约 60 个界面动作，没有发现改动）：
 // - 画布上的内容读不出来：比较测试构建的探针给出的内存快照（support/editor-probe.ts，比较的口径见 contentOf）；
 // - 每项都等到确定的信号再比较，不用固定时长的等待：命令被只读守卫取消、被 SDK 的权限检查拦下（它弹出提示，关掉），或者执行完；
 //   只读时没有控制点的手势（填充柄、非冻结区域的行高分隔线、冻结线、浮动图片）不产生命令：先确认没有意外弹出的提示，再点一个单元格，
@@ -10,79 +14,32 @@
 // - 另有界面的隐藏（同样以作者的界面作对照）、还能读、打开不产生改动、服务端拒绝保存、公式在 Worker 里算出结果、归档空间。
 // S3 的 E2E 发现的 5 个问题与 P3 审查之后的修复（只读守卫 editor/read-only/、语言包 editor/profile/locale.ts）：编辑栏点不进去
 // （点编辑框、从别处按下在编辑框上松开之后，查找、复制、方向键照常）；拦下操作的提示是只读的说法（含筛选按钮）；浮动图片点不中、
-// 拖不动；冻结线拖不动；只读时打不开替换；批注浮层的文本框只读。
+// 拖不动；冻结线拖不动；只读时打不开替换；批注浮层的文本框只读。M2-P6 复核之后：只读时打不开"搜索功能"面板，快速求和没有反应
+// （编辑栏不再显示文档里没有的公式）。
 // Univer 自己的快捷键按页面的平台判断取修饰键（support/keyboard.ts：Linux 上的 WebKit 也报 Mac 的 UA）。
+// 与快捷键回归共用的部分（写好样本的团队空间与成员、页面错误与保存请求的收集、内容的核对、权限检查的提示）在 support/read-only.ts。
 // 用到探针（只在测试构建里）：标签 @test-build，外部模式测生产镜像时按标签排除（playwright.config.ts）；
 // 文件末尾的冒烟用例不用探针，生产镜像上也跑（容器 E2E）。
 import type { BrowserContext, Locator, Page } from '@playwright/test'
-import type { TestUser } from '../../support/database.ts'
-import type { FacadeScope, ProbeCommand } from '../../support/editor-probe.ts'
+import type { FacadeScope } from '../../support/editor-probe.ts'
+import type { Scene } from '../../support/read-only.ts'
 import type { Workbook } from '../../support/sheet.ts'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
 import { SNAPSHOT_UPLOAD_CONTENT_TYPE } from '@nerve-office/contracts'
-import { archiveSpace, createDocumentIn, createTeamSpace, createUser } from '../../support/database.ts'
-import { activeImageCount, cellCenter, cellRect, clickCell, commandMark, contentOf, nameBox, probeCommands, probeSnapshot, runFacade, waitForCommand } from '../../support/editor-probe.ts'
+import { archiveSpace } from '../../support/database.ts'
+import { activeImageCount, cellCenter, cellRect, clickCell, commandMark, contentOf, formulaBarText, nameBox, probeCommands, probeSnapshot, runFacade, waitForCommand } from '../../support/editor-probe.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
-import { deleteDrawingKey, pressUniverShortcut } from '../../support/keyboard.ts'
-import { collectPageErrors } from '../../support/page-errors.ts'
-import { readOnlySampleFor, SAMPLE_CELLS, SAMPLE_FORMULAS, SAMPLE_SHEETS, sampleWithoutFormulaValuesFor } from '../../support/read-only-sample.ts'
+import { deleteDrawingKey, featureSearchKeys, pressUniverShortcut, quickSumKeys } from '../../support/keyboard.ts'
+import { SAMPLE_CELLS, SAMPLE_FORMULAS, SAMPLE_SHEETS, sampleWithoutFormulaValuesFor } from '../../support/read-only-sample.ts'
+import { ALERT, closePermissionAlert, documentChangeAttempts, expectUnchanged, LOOK_ONCE, nextFrames, OPENED, openReadOnly, permissionAlert, scene, unitIdOf, watch } from '../../support/read-only.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { EDITOR_TEST_TIMEOUT, openEditor, resourceOf, saveButton, savedContent, selectCell, sheetCanvas, sheetTab, waitForEditor } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
-
-interface Scene {
-  readonly author: TestUser
-  readonly viewer: TestUser
-  readonly spaceId: string
-  /** 写好样本的一份文档 */
-  readonly documentId: string
-}
-
-/** 系统管理员建团队空间，作者是空间管理员，查看者是查看者；作者在空间里有一份写好样本（默认是只读样本）的文档 */
-async function scene(prefix: string, snapshotFor: (unitId: string) => string = readOnlySampleFor): Promise<Scene> {
-  const admin = await createUser(`${prefix}-admin`, '系统管理员', { systemRole: 'admin' })
-  const author = await createUser(`${prefix}-author`, '作者')
-  const viewer = await createUser(`${prefix}-viewer`, '查看者')
-  const space = await createTeamSpace('只读样本', admin, [[author, 'admin'], [viewer, 'viewer']])
-  return { author, viewer, spaceId: space.id, documentId: await createDocumentIn(space.id, author, '只读样本', { snapshotFor }) }
-}
-
-/**
- * 只读的全过程都应该没有的：页面错误（被取消的命令不产生页面错误，M2-P3 设计 §3.8）与保存请求。
- * 浏览器的 ResizeObserver 通知不算页面错误（support/page-errors.ts）
- */
-function watch(page: Page, documentId: string): { readonly pageErrors: string[], readonly saves: string[] } {
-  const watched = { pageErrors: [] as string[], saves: [] as string[] }
-  collectPageErrors(page, watched.pageErrors)
-  page.on('request', (request) => {
-    if (request.method() === 'PUT' && new URL(request.url()).pathname === `/api/documents/${documentId}/content`)
-      watched.saves.push(request.url())
-  })
-  return watched
-}
-
-/**
- * 打开到 steady：SDK 的一部分控制器在它的 Steady 阶段才装上（例如查找替换：它的快捷键要等查找的提供方注册之后才可用，
- * find-replace 的 find-replace.service.ts 的 _syncActiveProvider），入口要在这之后试
- */
-const OPENED = 'steady'
-
-/** 查看者（或归档空间里的成员）打开：页头显示"只能查看" */
-async function openReadOnly(page: Page, user: TestUser, documentId: string): Promise<void> {
-  await loginThroughApi(page, user)
-  await openEditor(page, documentId, OPENED)
-  await expect(page.locator('#editor-chrome').getByText('只能查看', { exact: true })).toBeVisible()
-}
-
-/** 快照的 unitId（本文档的 mutation 按它认） */
-function unitIdOf(snapshotText: string): string {
-  return (JSON.parse(snapshotText) as Workbook).id
-}
 
 /** 快照里 sheetId 这张工作表 A1 写法的一格的值（v）；没有时为 undefined */
 function cellValueIn(snapshotText: string, sheetId: string, a1: string): unknown {
@@ -93,75 +50,6 @@ function cellValueIn(snapshotText: string, sheetId: string, a1: string): unknown
   const column = (match[1] ?? 'A').charCodeAt(0) - 'A'.charCodeAt(0)
   return (JSON.parse(snapshotText) as Workbook).sheets[sheetId]?.cellData[row]?.[column]?.v
 }
-
-/** 执行选项里带这些标记的 mutation 不是用户的修改（apps/web 的 change-classifier.ts） */
-const NOT_USER_CHANGE_FLAGS = ['onlyLocal', 'fromCollab', 'fromChangeset', 'fromFormula']
-/** 类型是 MUTATION、实际只清除界面上的图片变换框（插件档案 v1 §5.3 的排除名单） */
-const NOT_CHANGE_MUTATIONS = ['sheet.operation.clear-drawing-transformer']
-
-/** mark 之后执行了的、变更检测会认作修改的 mutation：只读时一条都不应该有（防火墙的不变量，M2-P3 设计 §3.3） */
-async function documentChanges(page: Page, mark: number, unitId: string): Promise<ProbeCommand[]> {
-  return (await probeCommands(page, mark)).filter(command => command.phase === 'executed' && command.kind === 'mutation'
-    && (command.unitId === undefined || command.unitId === unitId)
-    && !command.flags.some(flag => NOT_USER_CHANGE_FLAGS.includes(flag))
-    && !NOT_CHANGE_MUTATIONS.includes(command.id))
-}
-
-/**
- * mark 之后尝试过的、变更检测会认作修改的 mutation（执行前的记录，被取消的也算）：就绪到 steady 之间一条都不应该有，
- * 否则就是进入只读时 SDK 试图改文档、被防火墙取消了（P3 审查 B9）
- */
-async function documentChangeAttempts(page: Page, mark: number, unitId: string): Promise<ProbeCommand[]> {
-  return (await probeCommands(page, mark)).filter(command => command.phase === 'before' && command.kind === 'mutation'
-    && (command.unitId === undefined || command.unitId === unitId)
-    && !command.flags.some(flag => NOT_USER_CHANGE_FLAGS.includes(flag))
-    && !NOT_CHANGE_MUTATIONS.includes(command.id))
-}
-
-/** mark 之后内存里的内容与 baseline 相同，也没有改动文档的 mutation 执行 */
-async function expectUnchanged(page: Page, baseline: string, mark: number): Promise<void> {
-  expect(contentOf(await probeSnapshot(page)), '内存里的内容与打开时相同').toEqual(contentOf(baseline))
-  expect(await documentChanges(page, mark, unitIdOf(baseline)), '没有改动文档的 mutation 执行').toEqual([])
-}
-
-/**
- * SDK 的权限检查拦下命令时弹出的提示（sheets-ui 的 sheet-permission-check-ui.controller.ts）。标题是"提示"，
- * 正文由平台的语言包改成只读的说法（editor/profile/locale.ts；SDK 的原文是给保护区域写的）
- */
-function permissionAlert(page: Page): Locator {
-  return page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '提示', exact: true }) })
-}
-
-/** 关掉权限检查的提示：先核对它的说法（text），不再提保护、不让人联系创建者 */
-async function closePermissionAlert(page: Page, text: string): Promise<void> {
-  const alert = permissionAlert(page)
-  await expect(alert).toContainText(text)
-  await expect(alert).not.toContainText(/保护|创建者/)
-  await alert.getByRole('button', { name: '确定', exact: true }).click()
-  await expect(alert).toBeHidden()
-}
-
-/** 各种操作被拦下时的提示（与 editor/profile/locale.ts 的 READ_ONLY_PERMISSION_TEXTS 相同；E2E 引用不到 web 的代码） */
-const ALERT = {
-  edit: '这份文档只能查看，不能修改。',
-  paste: '这份文档只能查看，不能粘贴。',
-  cut: '这份文档只能查看，不能剪切。',
-  style: '这份文档只能查看，不能修改格式。',
-  sheet: '这份文档只能查看，不能调整工作表。',
-  rowCol: '这份文档只能查看，不能调整行列。',
-  insertRowCol: '这份文档只能查看，不能插入行列。',
-  removeRowCol: '这份文档只能查看，不能删除行列。',
-  image: '这份文档只能查看，不能修改图片。',
-  conditionalFormat: '这份文档只能查看，不能修改条件格式。',
-  dataValidation: '这份文档只能查看，不能修改数据验证。',
-  filter: '这份文档只能查看，不能使用筛选。',
-} as const
-
-/**
- * 只看一次、不重试：web 优先的断言给最短的时限，第一次检查不满足就失败（Playwright 的 timeout: 0 是不限时，不能用）。
- * 用在"等到确定的时刻之后，这时应该已经如此"的地方：能编辑时的对照同样只看一次，只读时的否定才有校准
- */
-const LOOK_ONCE = { timeout: 1 } as const
 
 /** 一步操作之后等到的信号 */
 type Outcome
@@ -281,13 +169,6 @@ async function expectImageUnmoved(page: Page, mark: number, center: Point, moved
   await expectImageAt(page, center)
   if (moved !== undefined)
     expect(await cursorAt(page, moved, 0), '拖到的位置没有图片').not.toBe('grab')
-}
-
-/** 等两个动画帧：SDK 在动画帧里结算的状态（标签的拖动位置、右键菜单的弹出）这时已经处理完 */
-async function nextFrames(page: Page): Promise<void> {
-  await page.evaluate(async () => new Promise<void>((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-  }))
 }
 
 /** 键入（M0 的第一个界面入口）：归档空间的用例也用它 */
@@ -615,7 +496,62 @@ const OTHER_UI_ENTRIES: readonly Entry[] = [
   { name: '拖动冻结线："数据"表第 1 行下面的冻结线（D 列处）拖到第 4 行下面', run: dragFreezeLine },
   { name: '拖动冻结区域的行高："数据"表第 1 行（冻结）下面的分隔线往下拖 30 像素', run: dragFrozenRowHeight },
   { name: '筛选按钮："筛选"表 A1 的筛选按钮', run: openFilterPanel },
+  { name: '"搜索功能"面板：按 Ctrl/Cmd+Shift+P（只读时打不开）', run: openFeatureSearch },
+  { name: '快速求和："数据"表选中空的 B10，按 Alt+=（苹果的平台上 Cmd+Option+=）', run: quickSum },
 ]
+
+/**
+ * "搜索功能"面板（M2-P6 复核 F1）：候选项直接取自功能区与右键菜单的菜单登记，只读时界面上隐藏的编辑功能（格式刷、清除格式、冻结、
+ * 剪切、删除、粘贴等）也列在里面。只读时打开它的操作在执行前被只读守卫取消：面板不出现，内容不变。
+ * 能编辑时同一个快捷键弹出面板（对照），在面板里搜"粗体"并执行，A2 确实变成粗体：面板里的确是编辑功能
+ */
+async function openFeatureSearch(page: Page, mode: Mode): Promise<void> {
+  await showSheet(page, SAMPLE_SHEETS.data.name)
+  await clickCell(page, 'A2')
+  const panel = page.getByRole('dialog', { name: '搜索功能' })
+  // 与快捷键的回归（read-only-shortcuts.spec.ts）同样的看法：按下之后等两帧（对话框在动画帧里渲染）、只看一次。
+  // 能编辑时这样看得到面板，这是只读时"没有面板"与那份回归的两帧的校准；之后再等到确定的信号
+  const mark = await commandMark(page)
+  await page.keyboard.press(await featureSearchKeys(page))
+  await nextFrames(page)
+  if (mode === 'read') {
+    await expect(panel).toHaveCount(0, LOOK_ONCE)
+    await settle(page, mark, { canceled: 'ui.operation.open-feature-search' })
+    return
+  }
+  await expect(panel).toBeVisible(LOOK_ONCE)
+  await settle(page, mark, { executed: 'ui.operation.open-feature-search' })
+  await panel.getByPlaceholder('输入功能或菜单名称…').fill('粗体')
+  await step(page, mode, async () => panel.getByRole('option').filter({ hasText: '粗体' }).first().click(), {
+    edit: { executed: 'sheet.command.set-style' },
+  })
+}
+
+/**
+ * 快速求和（M2-P6 复核 F2）：选中空的 B10（上面的 B2:B9 是数字与公式），按快速求和的快捷键。
+ * 只读时这个操作在执行前被只读守卫取消：编辑栏显示的仍是 B10 真实的内容（空），也没有弹出提示，内容不变。修复之前它不管单元格编辑器
+ * 打没打开，直接往编辑栏写入"=SUM(B2:B9"，编辑栏一直显示这个文档里没有的公式，直到选区移开。
+ * 能编辑时同一操作打开单元格编辑器、填好求和公式（编辑栏显示它），回车之后 B10 是这个公式（对照）
+ */
+async function quickSum(page: Page, mode: Mode): Promise<void> {
+  await showSheet(page, SAMPLE_SHEETS.data.name)
+  await clickCell(page, 'B10')
+  // 选区移过来时编辑栏换成 B10 的内容（空）
+  await expect.poll(async () => formulaBarText(page), { message: '编辑栏显示 B10 的内容' }).toBe('')
+  // 与快捷键的回归同样的看法：按下之后等两帧、只看一次（能编辑时这样看得到求和公式，是校准）；之后再等到确定的信号
+  const mark = await commandMark(page)
+  await page.keyboard.press(await quickSumKeys(page))
+  await nextFrames(page)
+  if (mode === 'read') {
+    expect(await formulaBarText(page), '编辑栏显示的是 B10 真实的内容').toBe('')
+    await expect(permissionAlert(page)).toHaveCount(0, LOOK_ONCE)
+    await settle(page, mark, { canceled: 'formula-ui.operation.insert-function' })
+    return
+  }
+  expect(await formulaBarText(page), '能编辑时编辑栏显示填好的求和公式').toBe('=SUM(B2:B9')
+  await settle(page, mark, { executed: 'formula-ui.operation.insert-function' })
+  await step(page, mode, async () => page.keyboard.press('Enter'), { edit: { executed: 'sheet.command.set-range-values' } })
+}
 
 /**
  * 拖动冻结线（P3 审查 B2）。SDK 没有注册冻结线的权限拦截：修复之前只读时冻结线照样显示可以拖动的光标、拖得动，松开时的
@@ -745,6 +681,19 @@ const FACADE_ENTRIES: readonly FacadeEntry[] = [
   { name: '取消已有的超链接（"功能"表 H3）', call: ({ workbook }) => workbook.getSheetByName('功能').getRange('H3').cancelHyperLink(), read: { canceled: 'sheet.mutation.set-range-values' }, edit: { executed: 'sheets.command.cancel-hyper-link' } },
 ]
 
+/**
+ * 经 Facade 直接执行一条写公式的 SetRangeValuesMutation："数据"表 K40 写 =1+1（M2-P6 复核 F3 的复现）。
+ * 在页面里执行（序列化过去），不能引用外面的变量
+ */
+async function writeFormulaMutation({ api, workbook, sheet }: FacadeScope): Promise<boolean> {
+  return api.executeCommand('sheet.mutation.set-range-values', { unitId: workbook.getId(), subUnitId: sheet.getSheetId(), cellValue: { 39: { 10: { f: '=1+1' } } } })
+}
+
+/** "数据"表 K40（第 40 行、K 列）的公式 */
+function formulaOfK40(snapshotText: string): string | undefined {
+  return (JSON.parse(snapshotText) as Workbook).sheets[SAMPLE_SHEETS.data.id]?.cellData[39]?.[10]?.f
+}
+
 /** Facade 入口作为一项：经探针调用（调用抛出的错误接住了，不是页面错误；能编辑时不应该有） */
 function facadeEntry(entry: FacadeEntry): Entry {
   return {
@@ -827,7 +776,7 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
     expect(watched.pageErrors).toEqual([])
   })
 
-  test('界面上还能碰到的其他入口都无效：查找替换、格式的快捷键、撤销与重做、双击与拖动工作表标签、全部工作表的菜单、拖动与删除图片、改批注、冻结线、冻结区域的行高、筛选按钮', async ({ page, context, browserName }) => {
+  test('界面上还能碰到的其他入口都无效：查找替换、格式的快捷键、撤销与重做、双击与拖动工作表标签、全部工作表的菜单、拖动与删除图片、改批注、冻结线、冻结区域的行高、筛选按钮、"搜索功能"面板、快速求和', async ({ page, context, browserName }) => {
     // 与对照组的条件一致（P3 审查 B10）
     await grantClipboard(context, browserName)
     const s = await scene('ro-other')
@@ -870,6 +819,35 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
         await expectUnchanged(page, opened, mark)
       })
     }
+    expect(watched.saves).toEqual([])
+    expect(watched.pageErrors).toEqual([])
+  })
+
+  // 防火墙要排在 SDK 自己的执行前监听之前（M2-P6 复核 F3，sheet-editor.ts 写明的不变量）：sheets-formula 的 UpdateFormulaController
+  // 在每条 SetRangeValuesMutation 执行之前，先同步执行一条带 onlyLocal、fromFormula 的嵌套 mutation 把公式写进单元格。
+  // 防火墙排在它后面时（例如把守卫的订阅都挪到创建工作簿之后），外面这条照样被取消，K40 却已经是公式，而且变更检测看不见
+  test('经 Facade 直接执行写公式的 mutation：被只读守卫取消，SDK 的公式控制器也没有先把公式写进单元格（对照：作者执行时 K40 变成公式，先写的是带 onlyLocal、fromFormula 的嵌套 mutation）', async ({ page, anotherDevice }) => {
+    const s = await scene('ro-formula-write')
+    // 对照：能编辑时这条 mutation 照常执行，执行之前 SDK 先写了嵌套的那条（只读时要在它之前就取消）
+    await loginThroughApi(anotherDevice, s.author)
+    await openEditor(anotherDevice, s.documentId, OPENED)
+    const authorMark = await commandMark(anotherDevice)
+    expect(await runFacade(anotherDevice, writeFormulaMutation)).toEqual({})
+    await waitForCommand(anotherDevice, authorMark, { phase: 'executed', id: 'sheet.mutation.set-range-values', flags: [] })
+    expect(formulaOfK40(await probeSnapshot(anotherDevice))).toBe('=1+1')
+    expect(await probeCommands(anotherDevice, authorMark)).toContainEqual(expect.objectContaining({ phase: 'executed', id: 'sheet.mutation.set-range-values', flags: expect.arrayContaining(['onlyLocal', 'fromFormula']) }))
+
+    const watched = watch(page, s.documentId)
+    await openReadOnly(page, s.viewer, s.documentId)
+    const opened = await probeSnapshot(page)
+    const mark = await commandMark(page)
+    // 被取消时 Facade 抛出的 CanceledError 由命令服务接住，调用方拿到 false，不是页面错误
+    expect(await runFacade(page, writeFormulaMutation)).toEqual({})
+    await waitForCommand(page, mark, { phase: 'before', id: 'sheet.mutation.set-range-values', canceled: true })
+    expect(formulaOfK40(await probeSnapshot(page))).toBeUndefined()
+    await expectUnchanged(page, opened, mark)
+    // 连带 onlyLocal、fromFormula 的嵌套写入也没有：这次调用之后，本文档上一条 mutation 都没有执行
+    expect((await probeCommands(page, mark)).filter(command => command.phase === 'executed' && command.kind === 'mutation' && command.unitId === unitIdOf(opened))).toEqual([])
     expect(watched.saves).toEqual([])
     expect(watched.pageErrors).toEqual([])
   })

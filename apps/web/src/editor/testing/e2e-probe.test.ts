@@ -1,9 +1,12 @@
+import type { Univer } from '@univerjs/core'
 import type { CommandEvent } from '../change-tracking/command-event.ts'
 import { CommandType } from '@univerjs/core'
 import { FUniver } from '@univerjs/core/facade'
 import { FRange, FWorksheet } from '@univerjs/sheets/facade'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { installEditorProbe } from './e2e-probe.ts'
+import { DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY } from '../internal-api/index.ts'
+import { IEditorService, IShortcutService } from '../internal-api/ui.ts'
+import { installEditorProbe as install } from './e2e-probe.ts'
 
 vi.hoisted(() => {
   // jsdom 没有 Path2D：探针补上的插件 Facade 引用表格的界面包，它们在模块求值时就创建它。这里不渲染
@@ -41,6 +44,34 @@ function fakeFacade() {
 
 function fakeWorkbook(content: () => unknown): Workbook {
   return { save: content } as unknown as Workbook
+}
+
+interface FakeServices {
+  /** 快捷键服务 getAllShortcuts 给出的各项 */
+  shortcuts?: readonly Record<string, unknown>[]
+  /** 编辑栏的编辑器的文档；null 时没有这个编辑器 */
+  formulaBar?: { body?: { dataStream: string } } | null
+}
+
+/** 假的 Univer：注入器只给出快捷键服务与编辑器管理（编辑器按 id 取，只有编辑栏的那个） */
+function fakeUniver({ shortcuts = [], formulaBar = { body: { dataStream: '\r\n' } } }: FakeServices = {}): Univer {
+  const services = new Map<unknown, unknown>([
+    [IShortcutService, { getAllShortcuts: () => [...shortcuts] }],
+    [IEditorService, { getEditor: (id: string) => id === DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY && formulaBar !== null ? { getDocumentData: () => formulaBar } : null }],
+  ])
+  return {
+    __getInjector: () => ({
+      get: (id: unknown) => {
+        if (!services.has(id))
+          throw new Error('探针只取快捷键服务与编辑器管理')
+        return services.get(id)
+      },
+    }),
+  } as unknown as Univer
+}
+
+function installEditorProbe(univerAPI: FUniver, workbook: Workbook, services?: FakeServices): () => void {
+  return install({ univer: fakeUniver(services), univerAPI, workbook })
 }
 
 const mutation: FakeEvent = { id: 'sheet.mutation.set-range-values', type: CommandType.MUTATION, params: { unitId: 'unit-1', subUnitId: 'sheet-1' } }
@@ -127,6 +158,46 @@ describe('E2E 的探针（M2-P3 设计 §3.7）', () => {
     installEditorProbe(api, fakeWorkbook(() => ({ n: 2 })))
     removeFirst()
     expect(window.__nerveEditorProbe?.snapshot()).toBe('{"n":2}')
+  })
+})
+
+describe('探针的快捷键清单与编辑栏（M2-P6 复核 F1、F2 之后）', () => {
+  it('shortcuts：每次调用时重新读取快捷键服务的全部项，只取命令、各平台的绑定、优先级与有没有前提条件', () => {
+    const { api } = fakeFacade()
+    const registered: Record<string, unknown>[] = [
+      { id: 'ui.operation.open-feature-search', binding: 4096 | 1024 | 80, description: '搜索功能', group: '10_global-shortcut' },
+      { id: 'formula-ui.operation.insert-function', binding: 2048 | 187, mac: 4096 | 2048 | 187, priority: 2, preconditions: () => true, staticParameters: { value: 'SUM' } },
+      { id: 'sheet.command.set-range-bold', binding: 4096 | 66, eventPreconditions: () => true },
+    ]
+    installEditorProbe(api, fakeWorkbook(() => ({})), { shortcuts: registered })
+    expect(window.__nerveEditorProbe?.shortcuts()).toEqual([
+      { id: 'ui.operation.open-feature-search', binding: 4096 | 1024 | 80, mac: undefined, win: undefined, linux: undefined, priority: 0, conditional: false },
+      { id: 'formula-ui.operation.insert-function', binding: 2048 | 187, mac: 4096 | 2048 | 187, win: undefined, linux: undefined, priority: 2, conditional: true },
+      { id: 'sheet.command.set-range-bold', binding: 4096 | 66, mac: undefined, win: undefined, linux: undefined, priority: 0, conditional: true },
+    ])
+    registered.push({ id: 'univer.command.undo', binding: 4096 | 90 })
+    expect(window.__nerveEditorProbe?.shortcuts().map(item => item.id)).toContain('univer.command.undo')
+  })
+
+  it('formulaBarText：编辑栏的编辑器的文档正文，去掉结尾的段落与节的标记；空的编辑栏是空串', () => {
+    const { api } = fakeFacade()
+    const formulaBar = { body: { dataStream: '=SUM(B2:B9\r\n' } }
+    installEditorProbe(api, fakeWorkbook(() => ({})), { formulaBar })
+    expect(window.__nerveEditorProbe?.formulaBarText()).toBe('=SUM(B2:B9')
+    formulaBar.body.dataStream = '\r\n'
+    expect(window.__nerveEditorProbe?.formulaBarText()).toBe('')
+    // 只去掉结尾的一组：正文里的换行照样留着
+    formulaBar.body.dataStream = '第一行\r第二行\r\n'
+    expect(window.__nerveEditorProbe?.formulaBarText()).toBe('第一行\r第二行')
+  })
+
+  it('formulaBarText：按编辑栏的单元 id 取不到编辑器、或者文档没有正文时抛错，不返回空串（M2-P6 复验 N3）', () => {
+    const { api } = fakeFacade()
+    // 假的编辑器管理只按编辑栏的单元 id 给出编辑器：SDK 改了这个 id（或者探针按别的 id 取）时就是这样
+    installEditorProbe(api, fakeWorkbook(() => ({})), { formulaBar: null })
+    expect(() => window.__nerveEditorProbe?.formulaBarText()).toThrow(`取不到编辑栏的编辑器（${DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY}）`)
+    installEditorProbe(api, fakeWorkbook(() => ({})), { formulaBar: {} })
+    expect(() => window.__nerveEditorProbe?.formulaBarText()).toThrow('编辑栏的文档没有正文')
   })
 })
 

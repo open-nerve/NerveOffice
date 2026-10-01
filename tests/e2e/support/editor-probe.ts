@@ -37,6 +37,10 @@ interface CellRect {
 export interface FacadeRange {
   readonly getRange: () => unknown
   readonly getCell: () => CellRect
+  /** A1 写法（单个单元格时就是它的地址） */
+  readonly getA1Notation: () => string
+  /** 设为当前选区（选区的操作，只读时照常） */
+  readonly activate: () => unknown
   readonly createFilter: () => unknown
   readonly sort: (column: { readonly column: number, readonly ascending: boolean }) => unknown
   readonly merge: () => unknown
@@ -66,8 +70,27 @@ interface DataValidationBuilder {
   readonly build: () => unknown
 }
 
+/** 工作表的选区（sheets 的 Facade 的 FSelection） */
+export interface FacadeSelection {
+  /** 选区里的活动区域（整行选中时 A1 写法是 "20:20"，整列是 "K:K"） */
+  readonly getActiveRange: () => FacadeRange | null
+  /** 选区的主单元格：编辑栏显示的就是它（从 0 开始的行号与列号） */
+  readonly getCurrentCell: () => { readonly actualRow: number, readonly actualColumn: number } | null
+}
+
 export interface FacadeSheet {
   readonly getRange: (a1: string) => FacadeRange
+  readonly getSheetId: () => string
+  readonly getSheetName: () => string
+  /** 当前的选区；没有时是 null */
+  readonly getSelection: () => FacadeSelection | null
+  /** 缩放比例（sheets-ui 的 Facade） */
+  readonly getZoom: () => number
+  readonly zoom: (ratio: number) => unknown
+  /** 滚到这一格在左上角（从 0 开始的行号与列号；sheets-ui 的 Facade） */
+  readonly scrollToCell: (row: number, column: number) => unknown
+  /** 滚动的位置：左上角是第几行、第几列 */
+  readonly getScrollState: () => { readonly sheetViewStartRow: number, readonly sheetViewStartColumn: number }
   readonly setName: (name: string) => unknown
   readonly hideSheet: () => unknown
   readonly setRowHeight: (row: number, height: number) => unknown
@@ -81,7 +104,10 @@ export interface FacadeSheet {
 }
 
 export interface FacadeWorkbook {
+  readonly getId: () => string
   readonly getActiveSheet: () => FacadeSheet
+  /** 当前单元格（选区的主单元格）；没有选区时是 null */
+  readonly getActiveCell: () => FacadeRange | null
   /** 找不到时是 null：入口里按样本的名称取，取不到就让调用抛错（接住后用例失败） */
   readonly getSheetByName: (name: string) => FacadeSheet
   readonly insertSheet: (name: string) => unknown
@@ -96,14 +122,31 @@ interface TextFinder {
 
 export interface FacadeApi {
   readonly getActiveWorkbook: () => FacadeWorkbook
+  /** 直接执行一条命令或 mutation（经命令服务，执行前的事件照常送出） */
+  readonly executeCommand: (id: string, params?: object, options?: object) => Promise<boolean>
   readonly newDataValidation: () => DataValidationBuilder
   readonly createTextFinderAsync: (text: string) => Promise<TextFinder>
+}
+
+/** SDK 注册的一个快捷键（与 e2e-probe.ts 的 ProbeShortcut 相同）：各平台的绑定，按页面的平台取其一（support/keyboard.ts） */
+export interface ProbeShortcut {
+  /** 按下时执行的命令 */
+  readonly id: string
+  readonly binding?: number | undefined
+  readonly mac?: number | undefined
+  readonly win?: number | undefined
+  readonly linux?: number | undefined
+  readonly priority: number
+  /** 有没有前提条件：有的话只在满足时派发 */
+  readonly conditional: boolean
 }
 
 interface EditorProbe {
   readonly univerAPI: FacadeApi
   readonly snapshot: () => string
   readonly commands: (after?: number) => readonly ProbeCommand[]
+  readonly shortcuts: () => readonly ProbeShortcut[]
+  readonly formulaBarText: () => string
 }
 
 declare global {
@@ -134,6 +177,26 @@ async function probeIn(page: Page): Promise<void> {
 export async function probeSnapshot(page: Page): Promise<string> {
   await probeIn(page)
   return page.evaluate(() => window.__nerveEditorProbe?.snapshot() ?? '')
+}
+
+/** SDK 当前注册的全部快捷键（M2-P6 复核 F1、F2 之后） */
+export async function probeShortcuts(page: Page): Promise<readonly ProbeShortcut[]> {
+  await probeIn(page)
+  return page.evaluate(() => window.__nerveEditorProbe?.shortcuts() ?? [])
+}
+
+/**
+ * 编辑栏现在显示的文字（画在画布上，经探针读它的内部文档；M2-P6 复核 F2）。
+ * 读不出来时失败，不返回空串（M2-P6 复验 N3）：探针取不到编辑栏的编辑器时抛错，页面里没有探针时同样抛错
+ */
+export async function formulaBarText(page: Page): Promise<string> {
+  await probeIn(page)
+  return page.evaluate(() => {
+    const probe = window.__nerveEditorProbe
+    if (probe === undefined)
+      throw new Error('页面里没有编辑器的探针')
+    return probe.formulaBarText()
+  })
 }
 
 /** 命令日志：序号大于 after 的各条 */
