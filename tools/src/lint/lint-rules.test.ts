@@ -479,6 +479,20 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
     expect(report.messages.join('\n')).toContain('用静态导入')
   })
 
+  it('internal-api 里不用动态 import()：同目录的文件、绕路的相对路径、别的包都报错，登记表的扫描只认静态的导入导出（M2-P6 第二次复验 S1）；静态引用与 internal-api 之外的动态引入照常', async () => {
+    const MESSAGE = '内部 API（editor/internal-api/）里不用动态 import()'
+    const load = (source: string): string => `export async function load(): Promise<unknown> {\n  return import('${source}')\n}\n`
+    // 复验者的变异三：injector.ts 动态引入同目录的新文件
+    for (const source of ['./helper.ts', '../internal-api/dom-markers.ts', 'zod']) {
+      const report = await lint(load(source), 'apps/web/src/editor/internal-api/injector.ts')
+      expect(report.rules, source).toContain('no-restricted-syntax')
+      expect(report.messages.join('\n'), source).toContain(MESSAGE)
+    }
+    expect(await rulesFor('export { injectorOf } from \'./injector.ts\'\n', INTERNAL_API_FILE)).not.toContain('no-restricted-syntax')
+    // internal-api 之外不受这一条限制（编辑器动态引入探针）
+    expect((await lint(load('./testing/e2e-probe.ts'), EDITOR_FILE)).messages.join('\n')).not.toContain(MESSAGE)
+  })
+
   it('internal-api 的配置不限制内部符号，编辑器的其他位置限制', async () => {
     const internal = restrictedImports(await configFor(INTERNAL_API_FILE))
     expect(internal.paths ?? []).toEqual([])

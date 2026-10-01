@@ -205,7 +205,7 @@ apps/web/src/
   - 编辑器适配层（`src/editor`）只依赖共享与 contracts；只有编辑器页的入口与 `features/sheet-editor` 能引用它（经 `index.ts`）；
   - `features/sheet-editor` 只由编辑器页的入口引用：平台的应用层、其他入口与其他功能都不引用它（Univer 不进平台页面的包）；
   - `features/admin` 与 `features/members` 只由 `app/routes.ts` 动态引用它们的公开入口；在平台页面里，`features/confirmation`、`features/colleagues` 只由这两个功能引用，弹窗文件 `shared/ui/dialog.tsx` 只由这两个功能与 `features/confirmation` 引用（编辑器页是另一个包，不受这几条限制）；弹窗类的 Radix 原语只在 `shared/ui/dialog.tsx` 里引入，对 web 的全部文件生效（M2-P1、M2-P2）；
-  - Univer 的内部符号与 `Univer.__getInjector()` 只能在 `src/editor/internal-api/` 引用，逐项登记（M2-P6 起：internal-api 之外只经它的两个出口引用，`@univerjs/*` 的值引用只许公开符号的白名单，登记表扫描 internal-api 的全部文件）；`@univerjs/*` 只引用包入口、`/facade`、`/locale/<语言>` 与样式（ADR-010）。internal-api 有两个出口：数据的包在 `index.ts`，界面的包（docs-ui、engine-render、sheets-ui 等）只在 `ui.ts`，只由主线程引用——公式 Worker 也引用 `index.ts`，界面的包从那里再导出会整包打进 Worker（门禁 `budgets` 兜底）。
+  - Univer 的内部符号与 `Univer.__getInjector()` 只能在 `src/editor/internal-api/` 引用，逐项登记（M2-P6 起：internal-api 之外只经它的两个出口引用，`@univerjs/*` 的值引用只许公开符号的白名单，登记表扫描 internal-api 的全部文件，清单与目录由 tools 的测试核对）；`@univerjs/*` 只引用包入口、`/facade`、`/locale/<语言>` 与样式（ADR-010）。internal-api 有两个出口：数据的包在 `index.ts`，界面的包（docs-ui、engine-render、sheets-ui 等）只在 `ui.ts`，只由主线程引用——公式 Worker 也引用 `index.ts`，界面的包从那里再导出会整包打进 Worker（门禁 `budgets` 兜底）。
 - **api**：
   - 模块之间只经对方的 `index.ts`，模块不引用应用的组装；
   - admin 与 workspace 是最上层的编排，只由 app 层组装，别的模块都不引用它们；停用者文档的转移（`DocumentTransferService`，不经内容权限）只由 admin 模块引用（M2-P2）；

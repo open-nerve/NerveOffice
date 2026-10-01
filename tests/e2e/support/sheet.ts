@@ -39,9 +39,14 @@ const GEOMETRY = {
   rowHeight: SHEET.defaultRowHeight,
 }
 
-/** Univer 挂载的容器：页面的状态写在它的 data-editor-state 上 */
+/**
+ * Univer 挂载的容器（编辑器页的 #sheet-editor，作为 UniverUIPlugin 的 container 传入，SDK 把它登记为根容器）：
+ * 页面的状态写在它的 data-editor-state 上；SDK 只派发目标在它（或别的登记过的容器）里的按键
+ */
+export const EDITOR_SURFACE = '#sheet-editor'
+
 export function editorSurface(page: Page): Locator {
-  return page.locator('#sheet-editor')
+  return page.locator(EDITOR_SURFACE)
 }
 
 /** 编辑器页自己的页头（Univer 的功能区也是一个 header） */

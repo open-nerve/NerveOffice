@@ -142,14 +142,21 @@ function keyNameOf(keyCode: number): string | undefined {
 /**
  * 一个绑定在这个页面上怎么按：
  * - keys：Playwright 的 press 写法；
- * - unreachable：SDK 在这个平台上本来就派发不到它，不用按（只有一种：非苹果的平台上带 MAC_CTRL 的绑定）；
+ * - unreachable：SDK 在这个平台上本来就派发不到它，不用按（只有一种：非苹果的平台上带 MAC_CTRL 的绑定。1.0.1 的 MAC_CTRL 只出现在
+ *   mac 专用的绑定里，非苹果的平台取的是 win、linux 或 binding，所以这一支两种平台上都走不到；快捷键回归核对苹果的平台上没有不按的组合、
+ *   别的平台上不按的只能是带 MAC_CTRL 的，M2-P6 第二次复验 G5）；
  * - unknown：回归不知道怎么按（keyCode 没有对应的键名，或者有不认得的修饰位）。快捷键回归按这种情况失败，要补上这里的键名表，
  *   不能悄悄地少按一个（M2-P6 复验 N1）
  */
 export type ShortcutKeys = { readonly keys: string } | { readonly unreachable: string } | { readonly unknown: string }
 
+/** 绑定里有没有 MAC_CTRL（苹果的平台上的 Control 键） */
+export function usesMacCtrl(binding: number): boolean {
+  return (binding & META_KEYS.MAC_CTRL) !== 0
+}
+
 export function shortcutKeys(binding: number, platform: UniverPlatform): ShortcutKeys {
-  if ((binding & META_KEYS.MAC_CTRL) !== 0 && !platform.isMac)
+  if (usesMacCtrl(binding) && !platform.isMac)
     return { unreachable: 'MAC_CTRL：SDK 只在苹果的平台上由 Control 键得出它（shortcut.service.ts 的 _deriveBindingFromEvent），别的平台上没有按键能派发到这个绑定' }
   if ((binding & ~KNOWN_BITS) !== 0)
     return { unknown: `绑定 ${binding} 里有不认得的修饰位（${binding & ~KNOWN_BITS}）` }

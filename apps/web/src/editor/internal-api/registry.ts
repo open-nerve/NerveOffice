@@ -1,8 +1,10 @@
 // 内部 API 登记表（P4 设计 §3.6.9，ADR-010，规范 §2.5"内部 API 集中封装并登记，每一项都有回归用例"）。
 // internal-api 的两个出口（index.ts 与界面的 ui.ts）导出的每一项在这里登记一次：来自哪里、做什么用、M0 的证据、升级 SDK 时先跑的回归用例。
 // internal-api 之外只能经这两个出口引用（lint 的 nerve/editor-internal-api-exits，M2-P6 复验 N4）。
-// 单元测试（registry.test.ts）核对导出与登记一一对应，并扫描 internal-api 里每个文件对 @univerjs/* 的引用：出口直接再导出的就是登记的那一项，
-// 封装的一项（例如 FORMULA_PROTOCOL）用到的 SDK 符号列在它的 sdk 里，没列出的报出来。新增一项时，先写回归用例，再登记
+// 单元测试（registry.test.ts）核对导出与登记一一对应，并扫描 internal-api 下的全部文件（测试与测试辅助除外；扫描的清单与目录里的文件
+// 一一对应，由 tools/src/lint/internal-api-sources.test.ts 递归列出目录核对）对 @univerjs/* 的引用：出口直接再导出的就是登记的那一项，
+// 封装的一项（例如 FORMULA_PROTOCOL）用到的 SDK 符号列在它的 sdk 里，没列出的报出来。文件之间只认 ./<文件名> 的静态导入导出：
+// 子目录与 ../ 绕路报为认不出的写法，动态 import() 由 lint 禁止（nerve/editor-internal-api）。新增一项时，先写回归用例，再登记
 export interface InternalApiEntry {
   /** internal-api/index.ts 或 ui.ts 导出的名字 */
   readonly name: string
@@ -30,7 +32,8 @@ const FORMULA_BAR_RELEASE_REGRESSION = '单元测试 read-only/formula-bar.test.
 /** 只读的快捷键回归（M2-P6 复核 F1、F2 之后）：E2E 的探针经它们列出快捷键、读编辑栏 */
 const READ_ONLY_SHORTCUTS_E2E = [
   'E2E tests/e2e/specs/editor/read-only-shortcuts.spec.ts：只读时在三种选区（空单元格、整行、整列）下逐个按遍 SDK 注册的全部快捷键（按页面的平台取修饰键），',
-  '每按一个都核对确实按到了 SDK（浏览器收到的按键换算成这个组合，没有前提条件的一定派发，守卫取消的都被取消）、内容不变、没有保存请求与页面错误、',
+  '每按一个都核对确实按到了 SDK（浏览器收到的按键换算成这个组合、目标在编辑器的容器里，没有前提条件的一定派发，守卫取消的都被取消；',
+  '扫完之后再按一次一定派发的组合作哨兵）、内容不变、没有保存请求与页面错误、',
   '编辑栏显示的与当前单元格一致、没有弹出编辑类的面板（本机三个浏览器）；取不到快捷键的清单或读不出编辑栏时失败（开头另有读编辑栏的自检）',
 ].join('')
 /** 冻结线拖不动（P3 审查 B2）：单元测试与 E2E */

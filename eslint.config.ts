@@ -193,6 +193,14 @@ const EDITOR_DYNAMIC_UNIVER = {
   selector: 'ImportExpression[source.value=/^@univerjs/]',
   message: '编辑器里的 @univerjs/* 用静态导入：内部 API 与深层路径的限制只认静态导入（P4 设计 §3.6.9）',
 }
+// 内部 API 里不用动态 import()（M2-P6 第二次复验 S1）：登记表的自测（internal-api/registry.test.ts）按文本扫描每个文件的导入导出，
+// 只认静态的语句。动态引入的是哪个文件、用了它的哪些名字认不出来（与命名空间导入一样），引入的文件对 SDK 的引用就逃过了登记；
+// internal-api 只是登记过的一层再导出与小封装，用不着动态引入。对 @univerjs/* 的动态引入另由 EDITOR_DYNAMIC_UNIVER 拦下，这里连同
+// 同目录的文件与别的包一起拦。类型里的 import('./x.ts') 只带类型、不进产物，不在此列：只经它引用的文件在扫描里"从出口走不到"，照样报出
+const INTERNAL_API_NO_DYNAMIC_IMPORT = {
+  selector: 'ImportExpression',
+  message: '内部 API（editor/internal-api/）里不用动态 import()：登记表的自测只认静态的导入导出语句，认不出动态引入的文件与它用到的名字（registry.test.ts，M2-P6 第二次复验 S1）',
+}
 // 类型里的 import('…') 同样绕得过：编辑器里的 @univerjs/* 类型用 import type 引用（复验 RB4）
 const EDITOR_TYPE_IMPORT_UNIVER = {
   selector: 'TSImportType[source.value=/^@univerjs/]',
@@ -689,12 +697,12 @@ export default antfu(
   },
   {
     // 内部 API 的出口（P4 设计 §3.6.9；M2-P3 起有两个：数据的包 index.ts、界面的包 ui.ts）：
-    // 这里可以引用受限的内部符号、调用 __getInjector，导出的每一项都要登记（registry.ts）
+    // 这里可以引用受限的内部符号、调用 __getInjector，导出的每一项都要登记（registry.ts）；不用动态 import()（登记表的扫描认不出）
     name: 'nerve/editor-internal-api',
     files: ['apps/web/src/editor/internal-api/**'],
     rules: {
       'no-restricted-imports': ['error', { patterns: EDITOR_UNIVER_SOURCE_PATTERNS }],
-      'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE],
+      'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, INTERNAL_API_NO_DYNAMIC_IMPORT],
     },
   },
   {
