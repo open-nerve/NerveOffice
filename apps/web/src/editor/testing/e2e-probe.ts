@@ -1,8 +1,9 @@
 // E2E 的探针（M2-P3 设计 §3.7）：只在测试构建里（vite build --mode e2e），由 createSheetEditor 在就绪之后动态引入并装上。
-// 生产构建里那个分支与这个分块都被去掉，门禁 artifacts 核对：生产产物里没有探针的分块（TEST_ONLY_ARTIFACTS），也没有 __nerveEditorProbe。
+// 生产构建里那个分支与这个分块都被去掉，门禁 artifacts 核对：生产产物里没有探针的分块（TEST_ONLY_ARTIFACTS），也没有 __nerveEditorProbe；
+// 静态引入它（或 probe-facades.ts）会把补上的 Facade 带进生产构建、门禁认不出，所以 lint 规定非测试代码只能动态引入（M2-P6 复核 F5）。
 // 为什么要它：画布上的内容读不出来，"改动被拦住"要比较内存里的快照；M0 的 28 个表格编辑入口里 21 个是直接调 Facade 的，
 // 只读时界面上没有它们的入口，但防火墙必须拦住它们（SDK 升级可能带来新的入口），E2E 经这里逐项调用。
-// 探针只读取与调用 Facade，不改变编辑器的行为；E2E 的其他用例不用它。
+// 探针只读取与调用 Facade、读取两项内部服务（快捷键的清单、编辑栏的内容，经 internal-api 登记），不改变编辑器的行为；E2E 的其他用例不用它。
 // 放在 editor/ 下：只有编辑器适配层能引用 Univer；文件名不带 test-support，生产代码（sheet-editor.ts）才能引用它。
 // 另外两样（M2-P3 S3）：
 // - 命令日志：订阅 Facade 的执行前与执行后的事件，记下每条命令。探针在就绪之后才装上，排在入口守卫与只读守卫之后，
@@ -12,12 +13,17 @@
 //   要么重新装上探针（先撤掉再装，排到最后），要么让守卫在探针之前订阅；
 //   E2E 据此等到"这次操作已经处理完"（某条命令已被尝试、已被取消或已执行完），不用固定时长的等待；
 // - M0 的 Facade 入口用到的插件 Facade（./probe-facades.ts）：编辑器只引用它自己用到的 Facade（sheet-editor.ts，包体积），
-//   筛选、排序、图片、条件格式、数据验证、超链接、批注、查找替换的方法在各插件的 Facade 里
+//   筛选、排序、图片、条件格式、数据验证、超链接、批注、查找替换的方法在各插件的 Facade 里。
+// 再两样（M2-P6 复核 F1、F2 之后，只读的快捷键回归用）：SDK 当前注册的全部快捷键（Facade 的 FShortcut 只能派发，列不出来），
+// 与编辑栏现在显示的文字（画在画布上，页面上读不出来）
+import type { Univer } from '@univerjs/core'
 import type { FUniver } from '@univerjs/core/facade'
 import type { CommandEvent } from '../change-tracking/command-event.ts'
 import type { CommandKind } from '../change-tracking/command-record.ts'
 import { toCommandRecord } from '../change-tracking/command-event.ts'
 import { stringParam } from '../change-tracking/command-record.ts'
+import { DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY, injectorOf } from '../internal-api/index.ts'
+import { IEditorService, IShortcutService } from '../internal-api/ui.ts'
 import './probe-facades.ts'
 
 type Workbook = ReturnType<FUniver['createWorkbook']>
@@ -41,6 +47,26 @@ export interface ProbeCommand {
   readonly flags: readonly string[]
 }
 
+type ShortcutItem = ReturnType<IShortcutService['getAllShortcuts']>[number]
+
+/**
+ * SDK 注册的一个快捷键（快捷键服务 getAllShortcuts 的一项，只取 E2E 用到的字段）。绑定是 KeyCode 与修饰键（MetaKeys）的组合；
+ * SDK 按页面的平台取其一：苹果的平台先看 mac，Windows 先看 win，Linux 先看 linux，都没有时用 binding（ui 的 shortcut.service.ts 的
+ * _getBindingFromItem）。E2E 按同样的规则算出这个页面上要按的组合（tests/e2e/support/keyboard.ts）
+ */
+export interface ProbeShortcut {
+  /** 按下时执行的命令 */
+  readonly id: string
+  readonly binding: number | undefined
+  readonly mac: number | undefined
+  readonly win: number | undefined
+  readonly linux: number | undefined
+  /** 同一个组合有几项时，先看优先级高的 */
+  readonly priority: number
+  /** 有没有前提条件：有的话只在满足时派发（例如单元格编辑器开着） */
+  readonly conditional: boolean
+}
+
 export interface EditorProbe {
   /** 编辑器的 Facade：E2E 经它调用各个编辑入口 */
   readonly univerAPI: FUniver
@@ -48,6 +74,10 @@ export interface EditorProbe {
   readonly snapshot: () => string
   /** 装上探针之后的命令日志：序号大于 after 的各条（默认全部） */
   readonly commands: (after?: number) => readonly ProbeCommand[]
+  /** SDK 当前注册的全部快捷键（每次调用时重新读取） */
+  readonly shortcuts: () => readonly ProbeShortcut[]
+  /** 编辑栏现在显示的文字：它的内部文档的正文，去掉结尾的段落与节的标记 */
+  readonly formulaBarText: () => string
 }
 
 declare global {
@@ -64,8 +94,30 @@ function flagsOf(options: Readonly<Record<string, unknown>> | undefined): string
   return Object.entries(options ?? {}).filter(([, value]) => Boolean(value)).map(([key]) => key)
 }
 
+function toProbeShortcut(item: ShortcutItem): ProbeShortcut {
+  return {
+    id: item.id,
+    binding: item.binding,
+    mac: item.mac,
+    win: item.win,
+    linux: item.linux,
+    priority: item.priority ?? 0,
+    conditional: item.preconditions !== undefined || item.eventPreconditions !== undefined,
+  }
+}
+
+/** 文档正文的结尾：段落标记 \r 与节的标记 \n（空的编辑栏就是这两个字符） */
+const BODY_END = /\r\n$/
+
+/** 装上探针的编辑器：Univer 实例（取快捷键与编辑器管理的服务）、它的 Facade 与工作簿 */
+export interface ProbeTarget {
+  readonly univer: Univer
+  readonly univerAPI: FUniver
+  readonly workbook: Workbook
+}
+
 /** 装上探针，返回移除它的函数（编辑器销毁时调用：退订命令事件；已经换成别的探针时不动 window 上的那个） */
-export function installEditorProbe(univerAPI: FUniver, workbook: Workbook): () => void {
+export function installEditorProbe({ univer, univerAPI, workbook }: ProbeTarget): () => void {
   const log: ProbeCommand[] = []
   const record = (phase: ProbeCommand['phase'], event: FacadeEvent): void => {
     const command = toCommandRecord(event)
@@ -89,10 +141,13 @@ export function installEditorProbe(univerAPI: FUniver, workbook: Workbook): () =
     univerAPI.addEvent(Event.Undo, event => record('executed', event)),
     univerAPI.addEvent(Event.Redo, event => record('executed', event)),
   ]
+  const injector = injectorOf(univer)
   const probe: EditorProbe = {
     univerAPI,
     snapshot: () => JSON.stringify(workbook.save()),
     commands: (after = 0) => log.filter(command => command.seq > after),
+    shortcuts: () => injector.get(IShortcutService).getAllShortcuts().map(toProbeShortcut),
+    formulaBarText: () => (injector.get(IEditorService).getEditor(DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY)?.getDocumentData().body?.dataStream ?? '').replace(BODY_END, ''),
   }
   window.__nerveEditorProbe = probe
   return () => {

@@ -3,3 +3,4 @@
 export { IEditorService } from '@univerjs/docs-ui'
 export { IRenderManagerService } from '@univerjs/engine-render'
 export { HeaderFreezeRenderController } from '@univerjs/sheets-ui'
+export { IShortcutService } from '@univerjs/ui'

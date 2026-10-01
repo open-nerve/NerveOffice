@@ -210,9 +210,19 @@ describe('只读守卫：只读时没有意义的界面操作（M2-P3 S3 之后�
     expect(facade.fire('BeforeCommandExecute', { id: 'ui.operation.open-find-dialog', type: CommandType.OPERATION, params: undefined }).cancel).toBeUndefined()
   })
 
+  it('"搜索功能"面板（Ctrl/Cmd+Shift+P）与快速求和（Alt+=，苹果的平台上 Cmd+Option+=）在执行前取消（M2-P6 复核 F1、F2）', () => {
+    const facade = fakeFacade()
+    installReadOnlyGuard(fakeServices().univer, facade.api, config)
+    for (const id of ['ui.operation.open-feature-search', 'formula-ui.operation.insert-function'])
+      expect(facade.fire('BeforeCommandExecute', { id, type: CommandType.OPERATION, params: undefined }).cancel, id).toBe(true)
+    // 别的界面操作照常：例如打开快捷键面板、选中单元格
+    for (const id of ['base-ui.operation.toggle-shortcut-panel', 'sheet.operation.set-selections'])
+      expect(facade.fire('BeforeCommandExecute', { id, type: CommandType.OPERATION, params: undefined }).cancel, id).toBeUndefined()
+  })
+
   it('清单的每一项写明来源与原因，id 不重复', () => {
     const ids = READ_ONLY_GUARDED_COMMANDS.map(command => command.id)
-    expect(ids).toEqual(['ui.operation.open-replace-dialog'])
+    expect(ids).toEqual(['ui.operation.open-replace-dialog', 'ui.operation.open-feature-search', 'formula-ui.operation.insert-function'])
     expect(READ_ONLY_GUARDED_COMMANDS.every(command => command.source.trim() !== '')).toBe(true)
     expect(new Set(ids).size).toBe(ids.length)
   })

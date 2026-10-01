@@ -198,6 +198,85 @@ const EDITOR_TYPE_IMPORT_UNIVER = {
   selector: 'TSImportType[source.value=/^@univerjs/]',
   message: '编辑器里的 @univerjs/* 类型用 import type 引用：内部 API 与深层路径的限制只认导入语句（复验 RB4）',
 }
+// 编辑器（含 internal-api）对 Univer 的包的导入源的共同限制：不引用 Pro、node_modules 里的路径、大写的包名、查询串与片段、深层路径
+const EDITOR_UNIVER_SOURCE_PATTERNS = [NO_UNIVER_PRO, NO_NODE_MODULES_PATH, NO_UPPERCASE_PACKAGE, UNIVER_QUERY_IMPORTS, UNIVER_DEEP_IMPORTS]
+
+// ---- 编辑器里能直接引用的 @univerjs/* 的值：白名单（M2-P6 复核 F4）----
+// 上面的 UNIVER_INTERNAL_SYMBOLS 只拦登记过（与决定不用）的内部符号：没登记的新内部符号（例如 @univerjs/sheets 导出的
+// SheetPermissionCheckController）照样能在 internal-api 之外直接引用。所以编辑器里 internal-api 与测试代码之外的文件，
+// 对 @univerjs/* 的值引用只允许这里按导入源列出的公开符号：插件类、Univer 与 FUniver、用到的枚举、mergeLocales、主题，
+// 以及 /locale/<语言> 的语言包（默认导出）。列的是适配层实际用到的；新用一个公开的值时加进来，内部符号经 internal-api 引用并登记。
+// 不受这份白名单限制的：
+// - 类型引用（import type、export type，只在编译时存在）；登记过的内部符号的类型仍由 UNIVER_INTERNAL_SYMBOLS 拦下；
+// - 副作用导入（import '…/facade'、样式）：没有导入名；
+// - internal-api（登记的地方）与测试代码（测试要构造 SDK 的对象，例如拦截器、公式的值对象；不进产物，SDK 改了直接失败）。
+// 登记过的内部符号的值引用会报两条（清单与白名单），说的是同一件事。
+// lint 看不出来、由审查保证的（写进 ADR-010）：Facade 对象上的方法调用（它们本来就是公开 API，其中的内部对象经返回值流出时
+// 认不出来）、经注入器按字符串或变量取服务、对 SDK 对象的私有字段的其他访问写法
+const UNIVER_PUBLIC_VALUES: Readonly<Record<string, readonly string[]>> = {
+  '@univerjs/core': ['CommandType', 'LifecycleStages', 'LocaleType', 'LogLevel', 'mergeLocales', 'Univer'],
+  '@univerjs/core/facade': ['FUniver'],
+  '@univerjs/data-validation': ['UniverDataValidationPlugin'],
+  '@univerjs/docs': ['UniverDocsPlugin'],
+  '@univerjs/docs-drawing': ['UniverDocsDrawingPlugin'],
+  '@univerjs/docs-ui': ['UniverDocsUIPlugin'],
+  '@univerjs/drawing': ['UniverDrawingPlugin'],
+  '@univerjs/drawing-ui': ['UniverDrawingUIPlugin'],
+  '@univerjs/engine-formula': ['UniverFormulaEnginePlugin'],
+  '@univerjs/engine-render': ['DeviceInputEventType', 'UniverRenderEnginePlugin'],
+  '@univerjs/find-replace': ['UniverFindReplacePlugin'],
+  '@univerjs/rpc': ['UniverRPCMainThreadPlugin', 'UniverRPCWorkerThreadPlugin'],
+  '@univerjs/sheets': ['UniverSheetsPlugin'],
+  '@univerjs/sheets-conditional-formatting': ['UniverSheetsConditionalFormattingPlugin'],
+  '@univerjs/sheets-conditional-formatting-ui': ['UniverSheetsConditionalFormattingUIPlugin'],
+  '@univerjs/sheets-data-validation': ['UniverSheetsDataValidationPlugin'],
+  '@univerjs/sheets-data-validation-ui': ['UniverSheetsDataValidationUIPlugin'],
+  '@univerjs/sheets-drawing': ['UniverSheetsDrawingPlugin'],
+  '@univerjs/sheets-drawing-ui': ['UniverSheetsDrawingUIPlugin'],
+  '@univerjs/sheets-filter': ['UniverSheetsFilterPlugin'],
+  '@univerjs/sheets-filter-ui': ['UniverSheetsFilterUIPlugin'],
+  '@univerjs/sheets-find-replace': ['UniverSheetsFindReplacePlugin'],
+  '@univerjs/sheets-formula': ['UniverRemoteSheetsFormulaPlugin', 'UniverSheetsFormulaPlugin'],
+  '@univerjs/sheets-formula-ui': ['UniverSheetsFormulaUIPlugin'],
+  '@univerjs/sheets-hyper-link': ['UniverSheetsHyperLinkPlugin'],
+  '@univerjs/sheets-hyper-link-ui': ['UniverSheetsHyperLinkUIPlugin'],
+  '@univerjs/sheets-note': ['UniverSheetsNotePlugin'],
+  '@univerjs/sheets-note-ui': ['UniverSheetsNoteUIPlugin'],
+  '@univerjs/sheets-numfmt': ['UniverSheetsNumfmtPlugin'],
+  '@univerjs/sheets-numfmt-ui': ['UniverSheetsNumfmtUIPlugin'],
+  '@univerjs/sheets-sort': ['UniverSheetsSortPlugin'],
+  '@univerjs/sheets-sort-ui': ['UniverSheetsSortUIPlugin'],
+  '@univerjs/sheets-ui': ['UniverSheetsUIPlugin'],
+  '@univerjs/themes': ['defaultTheme'],
+  '@univerjs/ui': ['KeyCode', 'UniverUIPlugin'],
+}
+const UNIVER_PUBLIC_VALUE_MESSAGE = '编辑器里（internal-api 与测试代码之外）对 @univerjs/* 的值引用只允许白名单（eslint.config.ts 的 UNIVER_PUBLIC_VALUES）里的公开符号：内部 API 经 apps/web/src/editor/internal-api/ 引用并登记（registry.ts，ADR-010）；新用一个公开的值时加进白名单（M2-P6 复核 F4）'
+/** 白名单里的导入源：只允许列出的值，类型照常 */
+const UNIVER_PUBLIC_VALUE_PATHS = Object.entries(UNIVER_PUBLIC_VALUES).map(([name, allowImportNames]) => ({ name, allowImportNames: [...allowImportNames], allowTypeImports: true, message: UNIVER_PUBLIC_VALUE_MESSAGE }))
+/** 语言包（/locale/<语言>）：只用默认导出 */
+const UNIVER_LOCALE_PATH = String.raw`[^/]+/locale/[\w-]+`
+const UNIVER_LOCALE_DEFAULT_ONLY = { regex: String.raw`^@univerjs/${UNIVER_LOCALE_PATH}$`, allowImportNames: ['default'], allowTypeImports: true, message: UNIVER_PUBLIC_VALUE_MESSAGE }
+/**
+ * 白名单之外的导入源（没列出的包、包里没列出的 /facade 等）：任何值都不允许（导入名的模式 .* 认得出每一个名字，含默认导出、
+ * 命名空间导入与 export *），类型与副作用导入照常。包名里只有小写字母、数字、- 与 /，拼进正则不用转义
+ */
+const UNIVER_UNLISTED_SOURCES = {
+  regex: String.raw`^@univerjs/(?!(?:${Object.keys(UNIVER_PUBLIC_VALUES).map(name => name.slice('@univerjs/'.length)).join('|')})$)(?!${UNIVER_LOCALE_PATH}$)`,
+  importNamePattern: '.*',
+  allowTypeImports: true,
+  message: UNIVER_PUBLIC_VALUE_MESSAGE,
+}
+
+// ---- E2E 的探针只能动态引入（M2-P6 复核 F5）----
+// 探针（editor/testing/**）只在测试构建里，由 sheet-editor.ts 在 import.meta.env.MODE === 'e2e' 的分支里动态 import()（M2-P3 设计 §3.7）。
+// 静态引用会把它的副作用带进生产构建：探针本身被摇树去掉，probe-facades.ts 给 Facade 补上的方法却留下，门禁 artifacts 只认探针的分块
+// 与名字，发现不了。所以测试代码之外，对 testing/ 只能动态 import()：静态导入（含 import type）与再导出都拦下；testing/ 里的文件之间
+// 照常静态引用（它们在同一个分块里），测试代码不受限。按引用路径的文字判断（路径里有 testing 这一段，不区分大小写）；
+// 动态引入发生在哪个分支里 lint 看不出来，由门禁 artifacts（探针的分块与名字）与审查保证
+const EDITOR_PROBE_MODULES = {
+  regex: String.raw`(?:^|/)testing(?:/|$)`,
+  message: '编辑器的 E2E 探针（editor/testing/**）只在测试构建里，只能经动态 import() 引入（sheet-editor.ts 的 e2e 分支）：静态导入与再导出会把 probe-facades.ts 补上的 Facade 带进生产构建，门禁 artifacts 发现不了（M2-P6 复核 F5）',
+}
 
 // 测试与测试辅助只被测试静态引用：nerve/test-code-only-in-tests 按路径拦下的是静态导入，动态导入在这里拦（复验 R3）
 const DYNAMIC_TEST_MODULES = {
@@ -581,8 +660,21 @@ export default antfu(
     name: 'nerve/editor-may-import-univer',
     files: ['apps/web/src/editor/**'],
     rules: {
-      'no-restricted-imports': ['error', { paths: UNIVER_INTERNAL_SYMBOLS, patterns: [NO_UNIVER_PRO, NO_NODE_MODULES_PATH, NO_UPPERCASE_PACKAGE, UNIVER_QUERY_IMPORTS, UNIVER_DEEP_IMPORTS] }],
+      'no-restricted-imports': ['error', { paths: UNIVER_INTERNAL_SYMBOLS, patterns: EDITOR_UNIVER_SOURCE_PATTERNS }],
       'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX, ...NO_GET_INJECTOR, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE],
+    },
+  },
+  {
+    // 编辑器里 internal-api 与测试代码之外：对 @univerjs/* 的值引用只允许白名单里的公开符号（M2-P6 复核 F4），在上一块的基础上加这组限制。
+    // 同名规则后者整体覆盖前者：登记过的内部符号的清单与导入源的限制一并带上
+    name: 'nerve/editor-univer-public-values',
+    files: ['apps/web/src/editor/**'],
+    ignores: [...TEST_CODE, 'apps/web/src/editor/internal-api/**'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        paths: [...UNIVER_INTERNAL_SYMBOLS, ...UNIVER_PUBLIC_VALUE_PATHS],
+        patterns: [...EDITOR_UNIVER_SOURCE_PATTERNS, UNIVER_LOCALE_DEFAULT_ONLY, UNIVER_UNLISTED_SOURCES],
+      }],
     },
   },
   {
@@ -601,7 +693,7 @@ export default antfu(
     name: 'nerve/editor-internal-api',
     files: ['apps/web/src/editor/internal-api/**'],
     rules: {
-      'no-restricted-imports': ['error', { patterns: [NO_UNIVER_PRO, NO_NODE_MODULES_PATH, NO_UPPERCASE_PACKAGE, UNIVER_QUERY_IMPORTS, UNIVER_DEEP_IMPORTS] }],
+      'no-restricted-imports': ['error', { patterns: EDITOR_UNIVER_SOURCE_PATTERNS }],
       'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE],
     },
   },
@@ -655,6 +747,16 @@ export default antfu(
     rules: {
       'import-x/no-extraneous-dependencies': ['error', { devDependencies: false, optionalDependencies: false, peerDependencies: false, includeTypes: true }],
       'ts/no-restricted-imports': ['error', { patterns: [TEST_MODULES] }],
+    },
+  },
+  {
+    // 编辑器的 E2E 探针只能动态引入（M2-P6 复核 F5）：编辑器里测试代码与 testing/ 之外的文件，在上一块的基础上加这条限制。
+    // 同名规则后者整体覆盖前者：测试与测试辅助的限制一并带上
+    name: 'nerve/editor-probe-dynamic-only',
+    files: ['apps/web/src/editor/**'],
+    ignores: [...TEST_CODE, 'apps/web/src/editor/testing/**'],
+    rules: {
+      'ts/no-restricted-imports': ['error', { patterns: [TEST_MODULES, EDITOR_PROBE_MODULES] }],
     },
   },
   {

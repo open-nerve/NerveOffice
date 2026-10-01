@@ -5,7 +5,7 @@
 // 1. 创建公式 Worker（模块 Worker），先挂上它的回报与错误的监听；
 // 2. new Univer（身份替换：授权服务按 access 回答，ADR-009），按档案注册插件（界面的配置按 access）；FUniver.newAPI；
 // 3. 在创建工作簿之前挂上入口守卫、只读守卫（只读时：防火墙与撤销拦截）、变更检测、单元格编辑与生命周期的监听，
-//    加载过程中的命令也看得到、拦得住；
+//    加载过程中的命令也看得到、拦得住；更要紧的是执行前监听的先后，见 mount 里的不变量（M2-P6 复核 F3）；
 // 4. createWorkbook，核对 unitId；只读时把每张工作表的权限点设为只读（read-only/read-only-guard.ts）；
 // 5. 等渲染完成（Rendered）、主线程到 Ready 后装上 IMAGE() 的限制、Worker 回报它那边也装上了；只读时装上渲染之后才有的界面处理
 //    （冻结线、编辑栏的焦点）、清空撤销栈，才返回；
@@ -113,6 +113,7 @@ function createWorkbook(univerAPI: FUniver, snapshot: WorkbookSnapshot): ReturnT
 type Workbook = ReturnType<FUniver['createWorkbook']>
 
 interface MountedEditor {
+  readonly univer: Univer
   readonly univerAPI: FUniver
   readonly workbook: Workbook
   readonly changes: ChangeTracker
@@ -135,6 +136,18 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   for (const entry of sheetPluginEntries({ container, formulaWorker: worker, access }))
     entry.register(univer)
   const univerAPI = FUniver.newAPI(univer)
+  // 不变量（M2-P6 复核 F3）：Facade 的执行前事件（BeforeCommandExecute）在创建工作簿之前就要有订阅者，而且直到销毁都不能减到零。
+  // - Facade 在第一个订阅者出现时才向命令服务注册它自己的执行前监听，最后一个订阅者退订时撤掉，再有订阅者时重新注册、排到最后
+  //   （core 的 facade/f-event-registry.ts:66-104，1.0.1 的 lib/es/facade.js:965-1002；f-univer.ts:217-272）；
+  //   命令服务按注册的先后调用执行前监听。
+  // - 表格插件在 createWorkbook 里同步进入 Ready（core 的 univer.ts:208-229，第一次创建表格单元时启动表格的插件并进入 Ready），
+  //   sheets-formula 的 UpdateFormulaController 这时注册自己的执行前监听：每条 SetRangeValuesMutation 执行之前，它先同步执行一条
+  //   带 onlyLocal、fromFormula 的嵌套 mutation，把公式写进单元格（read-only/read-only-guard.ts 的第 1 条）。
+  // - 只读的防火墙是 Facade 事件的订阅者：Facade 的监听排在 UpdateFormulaController 的前面，防火墙才能在嵌套的写入发生之前取消触发它的
+  //   那条 mutation；排在后面时，写公式的 mutation 照样改掉单元格，而且它带 onlyLocal，变更检测也看不见。
+  // 入口守卫最先订阅、销毁时才退订，Facade 的监听由它占住 SDK 之前的位置：只读守卫自己先装还是后装都不影响这一点，
+  // M3 原地切换时在工作簿已经存在之后装上、撤下只读守卫，订阅者也不会减到零。改动这里的顺序（例如把这些订阅挪到创建工作簿之后，
+  // 或者入口守卫中途退订）都会破坏它：E2E read-only.spec.ts 的用例"经 Facade 直接执行写公式的 mutation"核对（被取消、单元格不变）
   const guards = installEntryGuards(univerAPI)
   cleanup.defer(() => guards.dispose())
   // 变更检测与只读的防火墙用同一份判定的配置：只读时，变更检测会认作修改的一律取消（M2-P3 设计 §3.3）
@@ -161,7 +174,7 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   workerImagePolicy.dispose()
   readOnly?.applyRenderedGuards()
   readOnly?.clearUndoStack()
-  return { univerAPI, workbook, changes, cellEditing, lifecycle }
+  return { univer, univerAPI, workbook, changes, cellEditing, lifecycle }
 }
 
 export async function createSheetEditor(options: CreateSheetEditorOptions): Promise<SheetEditor> {
@@ -171,10 +184,11 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
   try {
     mounted = await mount(options, snapshot, cleanup)
     // 测试构建：就绪之后装上 E2E 的探针（M2-P3 设计 §3.7）。生产构建里 MODE 是 production，这个分支与探针的分块都被去掉，
-    // 门禁 artifacts 核对生产产物里没有它
+    // 门禁 artifacts 核对生产产物里没有它。只能这样动态引入：静态引入时探针本身被摇树去掉，它补上的 Facade（probe-facades.ts）
+    // 却留在生产构建里，门禁认不出（lint 拦下，M2-P6 复核 F5）
     if (import.meta.env.MODE === 'e2e') {
       const { installEditorProbe } = await import('./testing/e2e-probe.ts')
-      cleanup.defer(installEditorProbe(mounted.univerAPI, mounted.workbook))
+      cleanup.defer(installEditorProbe(mounted))
     }
   }
   catch (error) {

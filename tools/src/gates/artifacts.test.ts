@@ -559,4 +559,9 @@ describe('US-M1-09 生产构建里没有测试构建的文件', () => {
     expect(violations.map(v => v.subject)).toEqual(['assets/e2e-probe-CC7cG7BE.js'])
     expect(violations[0]?.detail).toContain('E2E 探针')
   })
+
+  it('探针补上的插件 Facade 单独成块出现在生产构建里同样违规（M2-P6 第 4 片复核 F5）：它没有探针的名字，只能按分块名认', () => {
+    const violations = checkTestOnlyArtifacts(['editor.html', 'assets/probe-facades-Dk3x.js', 'assets/facades-Dk3x.js', 'assets/my-probe-facades-x.js'])
+    expect(violations.map(v => v.subject)).toEqual(['assets/probe-facades-Dk3x.js'])
+  })
 })
