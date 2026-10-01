@@ -189,6 +189,8 @@ export const messages = {
     passwordMaybeChanged: '刚才修改密码时没能确认结果，随后登录失效了：新密码可能已经生效，请试试用新密码登录。',
     // 为自己生成重置链接的结果未知、再试时登录已经失效：多半是上一次已经生成，密码随之失效、会话全部撤销了，链接却没能显示（M2-P6 复核 S1）
     passwordMaybeReset: '刚才为自己生成重置链接时没能确认结果，随后登录失效了：你的密码可能已经失效，那条链接也已经找不回来。请联系另一位系统管理员为你生成新的重置链接。',
+    // 停用自己的结果未知、随后登录失效了：多半是已经停用，会话随之撤销了（M2-P6 复核第五批 G1）
+    accountMaybeDisabled: '刚才停用自己的账户时没能确认结果，随后登录失效了：你的账户可能已经被停用。需要继续使用的话，请联系另一位系统管理员重新启用。',
     checkingSession: '正在确认登录状态…',
     logout: '退出',
     loggingOut: '正在退出…',
@@ -351,9 +353,10 @@ export const messages = {
     copyReplayed: (title: string) => `上一次复制其实已经完成（当时没能确认结果），这次没有再复制一份：副本就是「${title}」。还要再复制一份时，再复制一次。`,
     moveOutcomeUnknown: (name: string, reason: string, refreshed: boolean) => `没能确认「${name}」是否已经移动（${reason}）。${listRefreshed(refreshed)}：它已经不在这里，就是移走了；还在的话可以再移动一次。`,
     deleteOutcomeUnknown: (name: string, reason: string, refreshed: boolean) => `没能确认「${name}」是否已经删除（${reason}）。${listRefreshed(refreshed)}：它已经不在这里，就是已经移到回收站了；还在的话可以再删除一次。`,
-    // 操作被拒绝（M2-P6 复核 S2、S3、S5）：面板随即收起，页面按新的权限重新请求，说明写在列表上方
-    gone: (name: string) => `「${name}」已经不在这里了（可能已经删除，或者被别人移走了），列表已刷新。`,
-    targetOrItemGone: (name: string) => `「${name}」或者目标位置已经不在了（可能被删除或移走），列表已刷新。`,
+    // 操作被拒绝（M2-P6 复核 S2、S3、S5）：面板随即收起，页面按新的权限重新请求，说明写在列表上方。
+    // 列表刷新好了没有按刷新的结果说（第五批 G3）
+    gone: (name: string, refreshed: boolean) => `「${name}」已经不在这里了（可能已经删除，或者被别人移走了），${listRefreshed(refreshed)}。`,
+    targetOrItemGone: (name: string, refreshed: boolean) => `「${name}」或者目标位置已经不在了（可能被删除或移走），${listRefreshed(refreshed)}。`,
     denied: (name: string, reason: string) => `「${name}」的操作没有完成：${reason}`,
   },
   /** 页头里的搜索框（M2-P4）：只带着关键词跳到搜索结果页；结果页的文案随它按需加载（search.ts） */

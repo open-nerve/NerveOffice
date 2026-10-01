@@ -17,6 +17,7 @@ const LOGIN_NOTICES: ReadonlyMap<string, string> = new Map([
   ['expired', messages.auth.sessionExpired],
   ['password_changed', messages.auth.passwordMaybeChanged],
   ['password_reset', messages.auth.passwordMaybeReset],
+  ['account_disabled', messages.auth.accountMaybeDisabled],
 ])
 
 /** 登录后要去的是编辑器页：它是另一个入口，要整页打开，不能在平台页面的路由里切换（P4 设计 §3.8）。 */
@@ -78,7 +79,7 @@ export function LoginPage() {
 
   const error = mutation.isError ? describeError(mutation.error) : undefined
   // 为什么来到登录页（shared/lib/login-path.ts）：登录已过期；或者修改密码的结果未知、随后登录失效了（M2-P6 复核 G-1）；
-  // 或者为自己生成重置链接的结果未知、随后登录失效了（M2-P6 复核 S1）
+  // 或者为自己生成重置链接的结果未知、随后登录失效了（M2-P6 复核 S1）；或者停用自己的结果未知、随后登录失效了（第五批 G1）
   const notice = LOGIN_NOTICES.get(params.get('reason') ?? '')
   return (
     <main className="flex min-h-svh items-center justify-center bg-muted/40 p-4">

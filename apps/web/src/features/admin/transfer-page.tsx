@@ -144,7 +144,7 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
           setSelected(new Set())
           setUnsure(false)
           setDone(<Phrase parts={text.done(result.transferred, target.shown)} />)
-          await queryClient.invalidateQueries({ queryKey: documentsQuery.queryKey })
+          await refreshQueries(queryClient, [documentsQuery.queryKey], { throwOnError: false })
         }
         catch (error) {
           // 结果未知：确认的弹窗随即按 refresh 刷新、说明可能已经转移

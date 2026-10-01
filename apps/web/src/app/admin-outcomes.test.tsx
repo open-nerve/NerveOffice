@@ -1,7 +1,8 @@
 // 管理界面里不带 requestId 的写操作在结果未知之后（M2-P6 复核 S1）：创建团队空间、加入空间、重新生成邀请、生成重置链接。
 // 照修改密码与签发邀请的做法：结果未知时刷新相关列表并说明可能已经生效，之后的 409 给出对应的引导；
 // 给自己生成重置链接的结果未知：先带着"密码可能已经失效"的原因确认会话，已经撤销就回到登录页、登录页这样说明（第三批 R-1）；
-// 会话还在时，之后再试得到"登录已过期"同样这样说明。接口用假的 fetch。
+// 会话还在时，之后再试得到"登录已过期"同样这样说明。停用自己的结果未知同样带着原因（"账户可能已经被停用"，第五批 G1）。
+// 接口用假的 fetch。
 import type { AdminSpace, Invitation } from '@nerve-office/contracts'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
@@ -176,6 +177,86 @@ describe('管理界面：结果未知之后（M2-P6 复核 S1）', () => {
     // 运行时先向服务端确认会话（已经没有了），带着"密码可能已经失效"的原因整页回到登录页
     await waitFor(() => expect(app.page.visits).toEqual(['/login?from=%2Fadmin%2Fusers&reason=password_reset']))
     expect(count(api, `POST /api/admin/users/${ROOT.id}/password-reset`)).toBe(2)
+  })
+
+  it('停用自己的结果未知，服务端其实已经停用（会话随之撤销）：不再请求需要登录的账户列表，带着"账户可能已经被停用"的原因确认会话、回到登录页（第五批 G1）', async () => {
+    let revoked = false
+    const api = installFakeApi({
+      ...SPACES,
+      'GET /api/auth/session': () => (revoked ? apiError(401, 'SESSION_EXPIRED') : json(200, session('admin'))),
+      // 会话撤销之后，需要登录的请求都得到"登录已过期"：去刷新账户列表就会按普通的原因离开（原来的做法）
+      'GET /api/admin/users': () => (revoked ? apiError(401, 'SESSION_EXPIRED') : json(200, listPage([ROOT, { ...AMY, systemRole: 'admin' }]))),
+      [`POST /api/admin/users/${ROOT.id}/disable`]: () => {
+        // 服务端已经停用、撤销了会话，回包却丢了
+        revoked = true
+        return networkFailure()
+      },
+    })
+    const app = renderApp('/admin/users')
+    fireEvent.click(within(await rowOf('root')).getByRole('button', { name: `停用 ${plainName('管理员', 'root')}` }))
+    const dialog = await screen.findByRole('dialog', { name: '停用你自己的账户？' })
+    const listed = count(api, 'GET /api/admin/users')
+    fireEvent.click(within(dialog).getByRole('button', { name: '停用' }))
+    await waitFor(() => expect(app.page.visits).toEqual(['/login?from=%2Fadmin%2Fusers&reason=account_disabled']))
+    await settle()
+    expect(app.page.visits).toHaveLength(1)
+    expect(count(api, 'GET /api/admin/users')).toBe(listed)
+    expect(count(api, `POST /api/admin/users/${ROOT.id}/disable`)).toBe(1)
+  })
+
+  it('停用自己的结果未知，而会话还在（这一次没有生效）：留在页面上说明；再试得到"登录已过期"（晚到的那一次其实生效了），登录页说明账户可能已经被停用（第五批 G1）', async () => {
+    let posts = 0
+    let revoked = false
+    const api = installFakeApi({
+      ...SPACES,
+      'GET /api/auth/session': () => (revoked ? apiError(401, 'UNAUTHENTICATED') : json(200, session('admin'))),
+      'GET /api/admin/users': () => (revoked ? apiError(401, 'SESSION_EXPIRED') : json(200, listPage([ROOT, { ...AMY, systemRole: 'admin' }]))),
+      [`POST /api/admin/users/${ROOT.id}/disable`]: () => {
+        posts += 1
+        return posts === 1 ? apiError(502, 'INTERNAL_ERROR') : apiError(401, 'SESSION_EXPIRED')
+      },
+    })
+    const app = renderApp('/admin/users')
+    fireEvent.click(within(await rowOf('root')).getByRole('button', { name: `停用 ${plainName('管理员', 'root')}` }))
+    const dialog = await screen.findByRole('dialog', { name: '停用你自己的账户？' })
+    const checked = count(api, 'GET /api/auth/session')
+    fireEvent.click(within(dialog).getByRole('button', { name: '停用' }))
+    expect(await within(dialog).findByText('没能确认你自己的账户是否已经停用（服务器出了点问题，请稍后重试）。如果已经停用，你的登录也随之失效：再试时会回到登录页，要继续使用，请联系另一位系统管理员重新启用；还没有停用的话，可以再试一次。')).toBeInTheDocument()
+    // 结果未知时先确认了一次会话：还在，页面不动
+    expect(count(api, 'GET /api/auth/session')).toBeGreaterThan(checked)
+    await settle()
+    expect(app.page.visits).toEqual([])
+
+    // 服务端晚到的那一次其实生效了：会话随之撤销
+    revoked = true
+    fireEvent.click(within(dialog).getByRole('button', { name: '停用' }))
+    await waitFor(() => expect(app.page.visits).toEqual(['/login?from=%2Fadmin%2Fusers&reason=account_disabled']))
+    expect(count(api, `POST /api/admin/users/${ROOT.id}/disable`)).toBe(2)
+  })
+
+  it('停用别人的结果未知：照旧刷新账户列表、说明可能已经生效，不去确认本人的会话', async () => {
+    const api = installFakeApi({
+      ...SPACES,
+      'GET /api/auth/session': () => json(200, session('admin')),
+      'GET /api/admin/users': () => json(200, listPage([ROOT, AMY])),
+      [`POST /api/admin/users/${AMY.id}/disable`]: () => networkFailure(),
+    })
+    renderApp('/admin/users')
+    fireEvent.click(within(await rowOf('amy')).getByRole('button', { name: `停用 ${plainName('艾米', 'amy')}` }))
+    const dialog = await screen.findByRole('dialog', { name: `停用 ${plainName('艾米', 'amy')}？` })
+    const checked = count(api, 'GET /api/auth/session')
+    const listed = count(api, 'GET /api/admin/users')
+    fireEvent.click(within(dialog).getByRole('button', { name: '停用' }))
+    expect(await within(dialog).findByText(/^没能确认是否已经完成（网络连接失败/)).toBeInTheDocument()
+    expect(count(api, 'GET /api/admin/users')).toBeGreaterThan(listed)
+    expect(count(api, 'GET /api/auth/session')).toBe(checked)
+  })
+
+  it('登录页认得"停用自己之后登录失效"的原因：说明账户可能已经被停用、找另一位系统管理员（第五批 G1）', async () => {
+    installFakeApi({ 'GET /api/auth/session': () => apiError(401, 'UNAUTHENTICATED') })
+    renderApp('/login?reason=account_disabled')
+    expect(await screen.findByText('刚才停用自己的账户时没能确认结果，随后登录失效了：你的账户可能已经被停用。需要继续使用的话，请联系另一位系统管理员重新启用。')).toBeInTheDocument()
+    expect(screen.queryByText('登录已过期，请重新登录')).toBeNull()
   })
 
   it('登录页认得"为自己生成重置链接之后登录失效"的原因：说明密码可能已经失效、找另一位系统管理员', async () => {

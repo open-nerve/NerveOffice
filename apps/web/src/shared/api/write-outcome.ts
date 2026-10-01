@@ -12,33 +12,49 @@ import { describeError } from './describe-error.ts'
  */
 export const OUTCOME_REFRESH_TIME_LIMIT_MS = 10_000
 
+export interface RefreshWithinOptions {
+  /** 等刷新的时限，默认 OUTCOME_REFRESH_TIME_LIMIT_MS */
+  readonly timeLimitMs?: number
+  /**
+   * 到了时限还没回来的刷新，之后在后台成功了（M2-P6 复核第五批 G4）：说明已经按"没能刷新"给出，页面随后其实已经刷新好了，
+   * 调用方据此把说法改回"已刷新"（shared/lib/use-outcome-refresh.ts）。之后失败了、或者在时限之内就有了结果，都不调用
+   */
+  readonly onLateRefresh?: () => void
+}
+
 /**
  * 在时限之内刷新（M2-P6 复核第三批 S-a）：refresh 兑现了为 true（页面已按服务端现在的状态刷新）；refresh 拒绝（刷新失败）、
  * 或者到了时限还没回来为 false。refresh 在刷新失败时要拒绝（第三批 G-a）：TanStack Query 的 invalidateQueries 默认吞掉重新请求的失败，
- * 用 shared/lib/refresh-queries.ts 的 refreshQueries
+ * 用 shared/lib/refresh-queries.ts 的 refreshQueries。到了时限之后刷新在后台继续，成功了就调用 onLateRefresh（第五批 G4）
  */
-export async function refreshWithin(refresh: () => Promise<unknown>, timeLimitMs: number = OUTCOME_REFRESH_TIME_LIMIT_MS): Promise<boolean> {
+export async function refreshWithin(refresh: () => Promise<unknown>, { timeLimitMs = OUTCOME_REFRESH_TIME_LIMIT_MS, onLateRefresh }: RefreshWithinOptions = {}): Promise<boolean> {
+  const refreshing = refresh().then(() => true, () => false)
   let timer: ReturnType<typeof setTimeout> | undefined
-  const timedOut = new Promise<boolean>((resolve) => {
-    timer = setTimeout(resolve, timeLimitMs, false)
+  let timedOut = false
+  const limit = new Promise<false>((resolve) => {
+    timer = setTimeout(() => {
+      timedOut = true
+      resolve(false)
+    }, timeLimitMs)
   })
-  try {
-    return await Promise.race([refresh().then(() => true, () => false), timedOut])
+  const refreshed = await Promise.race([refreshing, limit])
+  clearTimeout(timer)
+  if (timedOut && onLateRefresh !== undefined) {
+    void refreshing.then((late) => {
+      if (late)
+        onLateRefresh()
+    })
   }
-  finally {
-    clearTimeout(timer)
-  }
+  return refreshed
 }
 
-export interface RefreshIfUnknownOptions {
+export interface RefreshIfUnknownOptions extends RefreshWithinOptions {
   /**
    * 结果未知之外也要刷新的失败（M2-P6 复核第四批）：确定的拒绝说明上一次多半已经生效——结果未知之后再试得到"已经是成员"、
    * "已有同名"、"登录名已被占用"，或者 requestId 已经用过（shared/api/request-ids.ts 的 earlierAttemptDone）。这时同样在时限之内刷新，
    * 说明同样按刷新好了没有说"已刷新"还是"没能刷新"
    */
   readonly also?: (error: unknown) => boolean
-  /** 等刷新的时限，默认 OUTCOME_REFRESH_TIME_LIMIT_MS */
-  readonly timeLimitMs?: number
 }
 
 /**
@@ -49,10 +65,10 @@ export interface RefreshIfUnknownOptions {
  * 兑现为刷新了、而且页面已经刷新好了：说明里据此说"已刷新"还是"没能刷新"（writeFailureText，第三批 G-a）。
  * 其余确定的失败（4xx、服务端自己回答的 503）不在这里刷新——没有生效，页面上的状态没有变——兑现为 false，说明里用不到它
  */
-export async function refreshIfUnknown(error: unknown, refresh: () => Promise<unknown>, { also, timeLimitMs }: RefreshIfUnknownOptions = {}): Promise<boolean> {
+export async function refreshIfUnknown(error: unknown, refresh: () => Promise<unknown>, { also, ...within }: RefreshIfUnknownOptions = {}): Promise<boolean> {
   if (!isUnknownOutcome(error) && also?.(error) !== true)
     return false
-  return refreshWithin(refresh, timeLimitMs)
+  return refreshWithin(refresh, within)
 }
 
 /**

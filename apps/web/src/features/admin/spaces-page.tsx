@@ -6,7 +6,6 @@ import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-q
 import { useId, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { ApiError, describeError, isUnknownOutcome } from '../../shared/api/index.ts'
-import { refreshIfUnknown } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
@@ -14,6 +13,7 @@ import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { spaceMembersPath } from '../../shared/lib/space-paths.ts'
 import { useDebouncedValue } from '../../shared/lib/use-debounced-value.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
+import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { Alert, AlertDescription, Badge, Button, buttonVariants, Input, Label, NativeSelect, TableCell } from '../../shared/ui/index.ts'
 import { SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
 import { ColleaguePicker } from '../colleagues/index.ts'
@@ -45,7 +45,7 @@ interface CreateSpaceFormProps {
  * 结果未知时空间可能已经建好（M2-P6 复核 S1）：列表随即刷新，说明下面的列表里有它就是建好了；结果未知之后用同一个名称再创建
  * 得到"已有同名"，多半就是刚才那一次，同样刷新并说明。比较的两边都是经契约解析过的名称（规范写法）。
  * 这两种情形的刷新经共用的做法（shared/api/write-outcome.ts，第四批）：最多等 10 秒，刷新失败或者到了时限还没回来，说明里说
- * "列表没能刷新"，按钮也不一直停在"正在创建…"
+ * "列表没能刷新"，按钮也不一直停在"正在创建…"；超时之后刷新才回来的，说明随后改过来（第五批 G4）
  */
 function CreateSpaceForm({ onCreated, refreshAfterUnknown }: CreateSpaceFormProps) {
   const [name, setName] = useState('')
@@ -56,7 +56,7 @@ function CreateSpaceForm({ onCreated, refreshAfterUnknown }: CreateSpaceFormProp
   /** 结果未知的那一次创建用的名称：空间可能已经建好了。成功创建之后清掉 */
   const [unsureName, setUnsureName] = useState<string>()
   /** 上一次失败之后列表刷新好了没有：说明据此说"已刷新"还是"没能刷新"（第四批）。每次失败都重新记下 */
-  const [refreshed, setRefreshed] = useState(false)
+  const { refreshed, refreshAfterFailure } = useOutcomeRefresh()
   const nameId = useId()
   const visibleId = useId()
   const hintId = useId()
@@ -74,7 +74,7 @@ function CreateSpaceForm({ onCreated, refreshAfterUnknown }: CreateSpaceFormProp
     onError: async (error, request) => {
       if (isUnknownOutcome(error))
         setUnsureName(request.name)
-      setRefreshed(await refreshIfUnknown(error, refreshAfterUnknown, { also: failure => isNameTaken(failure) && request.name === unsureName }))
+      await refreshAfterFailure(error, refreshAfterUnknown, { also: failure => isNameTaken(failure) && request.name === unsureName })
     },
   })
   const parsed = spaceNameSchema.safeParse(name)
@@ -153,9 +153,12 @@ export function AdminSpacesPage() {
   const searchId = useId()
   const statusId = useId()
 
-  /** 管理界面的列表与导航（加入、改名、全员可见会改变谁看得到什么）一起刷新；刷新失败时列表自己显示加载失败 */
+  /**
+   * 管理界面的列表与导航（加入、改名、全员可见会改变谁看得到什么）一起刷新；刷新失败时列表自己显示加载失败。
+   * 换了过滤条件、过滤的请求还在路上时创建成功，那个请求也重来（第五批 G6，shared/lib/refresh-queries.ts）
+   */
   async function refresh(): Promise<void> {
-    await Promise.all(LIST_QUERY_KEYS.map(async queryKey => queryClient.invalidateQueries({ queryKey })))
+    await refreshQueries(queryClient, LIST_QUERY_KEYS, { throwOnError: false })
   }
 
   /**

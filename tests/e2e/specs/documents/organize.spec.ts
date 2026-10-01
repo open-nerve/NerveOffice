@@ -182,6 +182,25 @@ test.describe('US-M2-07 文件夹与文档的整理', () => {
     await expect(anotherDevice.getByText('内容不存在，或者你没有访问权限')).toBeVisible()
   })
 
+  test('删除的结果未知（服务端照常删了，回包换成代理的 502）：列表刷新、那一行消失，说明"列表已刷新"——打开着的那份文档再取元数据得到 404，不算没能刷新（M2-P6 复核第五批 S-1）', async ({ page }) => {
+    const owner = await createUser('org-unknown')
+    const id = await createDocument(owner, '要删除的周报')
+    await loginThroughApi(page, owner)
+    await page.goto('/')
+    await page.route(`**/api/documents/${id}`, async (route) => {
+      if (route.request().method() !== 'DELETE')
+        return route.continue()
+      await route.fetch()
+      return route.fulfill({ status: 502, contentType: 'text/html', body: 'bad gateway' })
+    })
+    await openActions(page, '要删除的周报')
+    await page.getByRole('button', { name: '删除', exact: true }).click()
+    // 原来 WebKit 上元数据的 404 先回来，说成"列表没能刷新"，而那一行已经消失了
+    await expect(page.getByText('没能确认「要删除的周报」是否已经删除（出了点问题，请稍后重试）。列表已刷新：它已经不在这里，就是已经移到回收站了；还在的话可以再删除一次。')).toBeVisible()
+    await expect(page.getByRole('button', { name: '操作 要删除的周报', exact: true })).toHaveCount(0)
+    await expect(page.getByText(/列表没能刷新/)).toHaveCount(0)
+  })
+
   test('查看者：没有新建文件夹与新建表格，文件夹那一行没有操作，文档只能复制', async ({ page }) => {
     const lead = await createUser('org-view-lead')
     const reader = await createUser('org-view-reader')

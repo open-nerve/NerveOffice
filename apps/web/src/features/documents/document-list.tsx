@@ -13,7 +13,7 @@ import { problemOf } from '../../shared/lib/validation.ts'
 import { Alert, AlertDescription, Button, buttonVariants, Skeleton } from '../../shared/ui/index.ts'
 import { copyDocument, deleteDocument, documentQueryOptions, folderDocumentsQueryOptions, moveDocument, updateDocument } from './documents-api.ts'
 import { ItemActions } from './item-actions.tsx'
-import { useOrganizeRefresh, useOrganizeRefreshAfterUnknown } from './organize-refresh.ts'
+import { useOrganizeRefresh, useOrganizeRefreshChecked } from './organize-refresh.ts'
 
 const organize = messages.organize
 
@@ -31,7 +31,8 @@ interface DocumentItemProps {
   readonly openTriggerRef: RefObject<HTMLButtonElement | null>
   readonly onToggle: () => void
   readonly onDone: (notice: OrganizeNotice | undefined) => void
-  readonly onDenied: () => void
+  /** 操作按访问权限被拒绝：由空间页重新请求，兑现为列表刷新好了没有（M2-P6 复核第五批 G3） */
+  readonly onDenied: () => Promise<boolean>
 }
 
 /**
@@ -41,7 +42,7 @@ interface DocumentItemProps {
  */
 function DocumentItem({ document, spaceId, targetSpaces, open, openTriggerRef, onToggle, onDone, onDenied }: DocumentItemProps) {
   const refresh = useOrganizeRefresh()
-  const refreshAfterUnknown = useOrganizeRefreshAfterUnknown()
+  const refreshAfterUnknown = useOrganizeRefreshChecked()
   const ledger = useRequestIdLedger()
   const panelId = useId()
   const detail = useQuery({ ...documentQueryOptions(document.id), enabled: open })
@@ -152,7 +153,8 @@ interface DocumentListProps {
   readonly openTriggerRef: RefObject<HTMLButtonElement | null>
   readonly onToggle: (id: string) => void
   readonly onDone: (notice: OrganizeNotice | undefined) => void
-  readonly onDenied: () => void
+  /** 操作按访问权限被拒绝：由空间页重新请求，兑现为列表刷新好了没有（M2-P6 复核第五批 G3） */
+  readonly onDenied: () => Promise<boolean>
   /** 这一层还有没有子文件夹：都没有时"这里还没有文档"才是整块空的说明 */
   readonly hasFolders: boolean
 }

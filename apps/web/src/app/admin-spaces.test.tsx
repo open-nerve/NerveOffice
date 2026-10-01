@@ -297,12 +297,88 @@ describe('US-M2-05 管理界面：团队空间', () => {
     await settle()
     expect(screen.getByRole('dialog')).toBeInTheDocument()
 
-    // 已经是成员：多半就是刚才没能确认的那一次加入（M2-P6 复核 S1），说清楚，列表随之刷新；弹窗留着
+    // 已经是成员（M2-P6 复核 S1）：列表显示的已经过时，随之刷新；弹窗留着。前面没有结果未知的加入，不说"可能就是刚才那一次"（第五批 G5）
     const listed = api.requests.filter(request => request.key === 'GET /api/admin/spaces').length
     join.resolve(apiError(409, 'ALREADY_MEMBER'))
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent('你已经是这个空间的成员了，可能就是刚才没能确认的那一次加入。列表已刷新。')
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(/^你已经是这个空间的成员了。列表已刷新。$/)
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     await waitFor(() => expect(api.requests.filter(request => request.key === 'GET /api/admin/spaces').length).toBeGreaterThan(listed))
+  })
+
+  it('加入空间的结果未知，关掉弹窗再打开、再加入得到"已经是成员"：说可能就是刚才那一次；别的空间得到"已经是成员"只说已经是成员（第五批 G5）', async () => {
+    const other: AdminSpace = { ...SPACE, id: '0199a2c4-0000-7000-8000-0000000000c2', name: '产品部' }
+    let posts = 0
+    admin({
+      'GET /api/admin/spaces': () => json(200, listPage([SPACE, other])),
+      [`POST /api/spaces/${SPACE.id}/members`]: () => {
+        posts += 1
+        return posts === 1 ? apiError(502, 'INTERNAL_ERROR') : apiError(409, 'ALREADY_MEMBER')
+      },
+      [`POST /api/spaces/${other.id}/members`]: () => apiError(409, 'ALREADY_MEMBER'),
+    })
+    renderApp('/admin/spaces')
+    fireEvent.click(within(await rowOf('市场部')).getByRole('button', { name: '加入空间 市场部' }))
+    let dialog = await screen.findByRole('dialog', { name: '加入 市场部' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '加入空间' }))
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(/^没能确认是否已经加入/)
+    fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+
+    // 别的空间：前面没有结果未知的加入
+    fireEvent.click(within(await rowOf('产品部')).getByRole('button', { name: '加入空间 产品部' }))
+    dialog = await screen.findByRole('dialog', { name: '加入 产品部' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '加入空间' }))
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(/^你已经是这个空间的成员了。列表已刷新。$/)
+    fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+
+    // 回到结果未知的那个空间：多半就是刚才那一次
+    fireEvent.click(within(await rowOf('市场部')).getByRole('button', { name: '加入空间 市场部' }))
+    dialog = await screen.findByRole('dialog', { name: '加入 市场部' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '加入空间' }))
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('你已经是这个空间的成员了，可能就是刚才没能确认的那一次加入。列表已刷新。')
+  })
+
+  it('换了过滤条件、过滤的请求还在路上时创建成功：那个请求取消重来，列表显示刚建好的空间，不停在"没有符合条件的"（第五批 G6）', async () => {
+    const created: AdminSpace = { ...SPACE, memberCount: 1 }
+    let spaces: AdminSpace[] = []
+    let release: () => void = () => {}
+    const filtered: boolean[] = []
+    admin({
+      'GET /api/admin/spaces': () => json(200, listPage(spaces)),
+      [`GET /api/admin/spaces${search({ query: '市场' })}`]: async () => {
+        // 发出时有没有建好：第一次过滤的请求慢，创建在它回来之前完成，它带回来的是创建之前的结果
+        const snapshot = spaces
+        filtered.push(snapshot.length > 0)
+        if (filtered.length === 1) {
+          await new Promise<void>((resolve) => {
+            release = resolve
+          })
+        }
+        return json(200, listPage(snapshot))
+      },
+      [`GET /api/users${search({ query: '本' })}`]: () => json(200, { items: [BEN] }),
+      'POST /api/admin/spaces': () => {
+        spaces = [created]
+        return json(201, created)
+      },
+    })
+    renderApp('/admin/spaces')
+    const form = await screen.findByRole('form', { name: '创建团队空间' })
+    await screen.findByText('没有符合条件的团队空间')
+    fireEvent.change(within(form).getByLabelText('首个空间管理员'), { target: { value: '本' } })
+    fireEvent.click(await within(form).findByRole('button', { name: '@ben 本' }))
+    fireEvent.change(within(form).getByLabelText('名称'), { target: { value: '市场部' } })
+    // 换关键词：去抖之后过滤的请求发出、挂着（还没有数据）
+    fireEvent.change(screen.getByLabelText('按名称搜索'), { target: { value: '市场' } })
+    await waitFor(() => expect(filtered).toHaveLength(1), { timeout: 3000 })
+    fireEvent.click(within(form).getByRole('button', { name: '创建团队空间' }))
+    // 创建成功之后的刷新：在路上的那一次取消、重新请求（这一次带回刚建好的）
+    await waitFor(() => expect(filtered).toEqual([false, true]))
+    release()
+    expect(await rowOf('市场部')).toBeInTheDocument()
+    await settle()
+    expect(screen.queryByText('没有符合条件的团队空间')).toBeNull()
   })
 })
 

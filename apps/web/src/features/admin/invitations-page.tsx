@@ -7,12 +7,12 @@ import { createInvitationRequestSchema, INVITATION_LIFETIME_DAYS, INVITATION_STA
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { ApiError, describeError, isUnknownOutcome } from '../../shared/api/index.ts'
-import { refreshIfUnknown } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
+import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { Alert, AlertDescription, Badge, Button, Input, Label, NativeSelect, PersonName, TableCell } from '../../shared/ui/index.ts'
 import { SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
 import { ConfirmDialog } from '../confirmation/index.ts'
@@ -69,7 +69,7 @@ function issueFailureText(error: unknown, request: CreateInvitationRequest | und
  * 给出重新生成，原来的随即作废（审查 B6）。
  * 签发的结果未知时（网络中断、服务端出错）刷新列表、保留输入，引导去列表里重新生成（M2-P6 复核 G-2）。
  * 签发与重新生成在结果未知之后的刷新经共用的做法（shared/api/write-outcome.ts，第四批）：最多等 10 秒，刷新失败或者到了时限
- * 还没回来，说明里说"列表没能刷新"，按钮与弹窗也不一直停在"正在…"。
+ * 还没回来，说明里说"列表没能刷新"，按钮与弹窗也不一直停在"正在…"；超时之后刷新才回来的，说明随后改过来（第五批 G4）。
  */
 export function AdminInvitationsPage() {
   useDocumentTitle(adminMessages.pageTitle(adminMessages.nav.invitations))
@@ -84,7 +84,7 @@ export function AdminInvitationsPage() {
   /** 结果未知的那一次签发的登录名：邀请可能已经建好了。成功签发之后清掉 */
   const [unsureFor, setUnsureFor] = useState<string>()
   /** 上一次签发失败之后列表刷新好了没有：说明据此说"已刷新"还是"没能刷新"（第四批）。每次失败都重新记下 */
-  const [issueRefreshed, setIssueRefreshed] = useState(false)
+  const issueRefresh = useOutcomeRefresh()
   const usernameRef = useRef<HTMLInputElement>(null)
   const statusRef = useRef<HTMLSelectElement>(null)
   const tableRef = useRef<PagedTableHandle>(null)
@@ -94,7 +94,7 @@ export function AdminInvitationsPage() {
 
   /** 刷新邀请列表：刷新失败时列表自己显示加载失败 */
   async function refresh(): Promise<void> {
-    await queryClient.invalidateQueries({ queryKey: INVITATIONS_QUERY_KEY })
+    await refreshQueries(queryClient, [INVITATIONS_QUERY_KEY], { throwOnError: false })
   }
 
   /** 结果未知之后的刷新（签发与确认的弹窗）：刷新失败时拒绝，据此说明页面没能刷新（M2-P6 复核第三批 G-a、第四批） */
@@ -124,7 +124,7 @@ export function AdminInvitationsPage() {
     onError: async (error, request) => {
       if (isUnknownOutcome(error))
         setUnsureFor(request.username)
-      setIssueRefreshed(await refreshIfUnknown(error, refreshAfterUnknown, { also: failure => isRetryTaken(failure, request, unsureFor) }))
+      await issueRefresh.refreshAfterFailure(error, refreshAfterUnknown, { also: failure => isRetryTaken(failure, request, unsureFor) })
     },
   })
 
@@ -221,7 +221,7 @@ export function AdminInvitationsPage() {
     )
   }
 
-  const error = problem ?? (creation.isError ? issueFailureText(creation.error, creation.variables, unsureFor, issueRefreshed) : undefined)
+  const error = problem ?? (creation.isError ? issueFailureText(creation.error, creation.variables, unsureFor, issueRefresh.refreshed) : undefined)
   return (
     <div className="flex flex-col gap-6">
       <form className="flex flex-col gap-3 rounded-lg border p-4" onSubmit={submit} noValidate aria-label={text.issue}>

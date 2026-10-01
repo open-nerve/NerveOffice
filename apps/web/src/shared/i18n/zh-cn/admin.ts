@@ -97,6 +97,8 @@ export const adminMessages = {
     // 生成重置链接的结果未知（M2-P6 复核 S1）：服务端可能已经让密码失效、撤销了会话，链接却只在响应里出现一次
     resetOutcomeUnknown: (reason: string) => `没能确认重置链接是否已经生成（${reason}）。如果已经生成，这个人的当前密码已经失效，链接却没能显示：可以再生成一次，之前那一条随即作废。`,
     resetOwnOutcomeUnknown: (reason: string) => `没能确认重置链接是否已经生成（${reason}）。如果已经生成，你的密码已经失效、登录也已退出，那条链接找不回来：再试时会回到登录页，请联系另一位系统管理员为你生成新的重置链接。`,
+    // 停用自己的结果未知（M2-P6 复核第五批 G1）：已经停用的话本人的登录随之失效、随即回到登录页；弹窗还在，说明那时会话还在
+    disableOwnOutcomeUnknown: (reason: string) => `没能确认你自己的账户是否已经停用（${reason}）。如果已经停用，你的登录也随之失效：再试时会回到登录页，要继续使用，请联系另一位系统管理员重新启用；还没有停用的话，可以再试一次。`,
     // 登录锁定（M2-P6 复核 A1），到时自动解除：只按用户名的上限到了，这个账户在所有来源上都登录不了；
     // 只锁了某些来源（按用户名与来源的组合）时，本人从别的来源照常登录
     loginLocked: (until: string) => `登录已锁定，到 ${until} 解除`,
@@ -180,6 +182,8 @@ export const adminMessages = {
     // 加入的结果未知（M2-P6 复核 S1）：可能已经加入；再加入会得到"已经是成员"。两种情形列表都随即刷新，没能刷新时另说（第四批）
     joinOutcomeUnknown: (reason: string, refreshed: boolean) => `没能确认是否已经加入（${reason}）。${messages.common.listRefreshed(refreshed)}：这个空间的"我的角色"不再是"没有加入"，就是已经加入了。`,
     joinedEarlier: (refreshed: boolean) => `你已经是这个空间的成员了，可能就是刚才没能确认的那一次加入。${messages.common.listRefreshed(refreshed)}。`,
+    // 前面没有结果未知的加入时（第五批 G5）：只说已经是成员，不说"刚才那一次"
+    alreadyJoined: (refreshed: boolean) => `你已经是这个空间的成员了。${messages.common.listRefreshed(refreshed)}。`,
     joinDescription: '系统管理员要看团队空间的内容，得先把自己加入这个空间（全员可见的空间不必加入，所有有效账户都能以查看者的身份看到）。加入会记入审计。',
     joinRole: '以什么角色加入',
   },

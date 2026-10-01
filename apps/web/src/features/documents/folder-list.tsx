@@ -11,7 +11,7 @@ import { problemOf } from '../../shared/lib/validation.ts'
 import { Button } from '../../shared/ui/index.ts'
 import { deleteFolder, moveFolder, updateFolder } from './folders-api.ts'
 import { ItemActions } from './item-actions.tsx'
-import { useOrganizeRefresh, useOrganizeRefreshAfterUnknown } from './organize-refresh.ts'
+import { useOrganizeRefresh, useOrganizeRefreshChecked } from './organize-refresh.ts'
 
 const text = messages.organize
 
@@ -29,7 +29,8 @@ interface FolderRowProps {
   readonly openTriggerRef: RefObject<HTMLButtonElement | null>
   readonly onToggle: () => void
   readonly onDone: (notice: OrganizeNotice | undefined) => void
-  readonly onDenied: () => void
+  /** 操作按访问权限被拒绝：由空间页重新请求，兑现为列表刷新好了没有（M2-P6 复核第五批 G3） */
+  readonly onDenied: () => Promise<boolean>
 }
 
 /**
@@ -38,7 +39,7 @@ interface FolderRowProps {
  */
 function FolderRow({ folder, folderIds, targetSpaces, open, openTriggerRef, onToggle, onDone, onDenied }: FolderRowProps) {
   const refresh = useOrganizeRefresh()
-  const refreshAfterUnknown = useOrganizeRefreshAfterUnknown()
+  const refreshAfterUnknown = useOrganizeRefreshChecked()
   const panelId = useId()
   const { canRename, canMoveWithinSpace, canMoveAcrossSpaces, canDelete } = folder.permissions
   const actionable = canRename || canMoveWithinSpace || canMoveAcrossSpaces || canDelete
@@ -116,7 +117,8 @@ interface FolderListProps {
   readonly openTriggerRef: RefObject<HTMLButtonElement | null>
   readonly onToggle: (id: string) => void
   readonly onDone: (notice: OrganizeNotice | undefined) => void
-  readonly onDenied: () => void
+  /** 操作按访问权限被拒绝：由空间页重新请求，兑现为列表刷新好了没有（M2-P6 复核第五批 G3） */
+  readonly onDenied: () => Promise<boolean>
 }
 
 /** 当前位置下的子文件夹（M2-P4 设计 §3.7）：排在文档前面，空列表时整块不显示（由文档列表说明"这里还没有文档"）。 */

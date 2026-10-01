@@ -6,17 +6,18 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { describeError, isAccessDenied, isMissingResource } from '../../shared/api/index.ts'
-import { refreshIfUnknown, writeFailureText } from '../../shared/api/write-outcome.ts'
+import { refreshWithin, writeFailureText } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { folderIdsFromPath, spaceMembersPath } from '../../shared/lib/space-paths.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
 import { useFocusRescue } from '../../shared/lib/use-focus-rescue.ts'
+import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { problemOf } from '../../shared/lib/validation.ts'
 import { Alert, AlertDescription, Badge, Button, buttonVariants, FieldProblem, Input, Label, Notice, Skeleton } from '../../shared/ui/index.ts'
 import { sessionQueryOptions } from '../auth/index.ts'
-import { NewSheetButton, SpaceContents, useOrganizeRefresh } from '../documents/index.ts'
+import { NewSheetButton, SpaceContents, useOrganizeRefreshChecked } from '../documents/index.ts'
 import { useForgetMissingSpace } from './missing-space.ts'
 import { SpaceNotFound } from './space-not-found.tsx'
 import { renameSpace, spaceQueryOptions, SPACES_QUERY_KEY, spacesQueryOptions } from './spaces-api.ts'
@@ -33,19 +34,19 @@ interface RenameFormProps {
 /**
  * 行内改名（不用弹窗，不进首屏的 Radix Dialog）：保存之后导航与页头随即是新名称；名称不合法时说明原因（M2-P6 复核 S4）。
  * 结果未知时页头与导航刷新、说明可能已经改好（改名按状态幂等，再保存一次是安全的，M2-P6 复核第二批 G-2）；
- * 刷新最多等 10 秒（第三批 S-a），刷新失败或者超时就说明页面没能刷新（第三批 G-a）
+ * 刷新最多等 10 秒（第三批 S-a），刷新失败或者超时就说明页面没能刷新（第三批 G-a）；超时之后刷新才回来的，说明随后改过来（第五批 G4）
  */
 function RenameForm({ space, onDone, onDenied }: RenameFormProps) {
   const queryClient = useQueryClient()
   const [name, setName] = useState(space.name)
   /** 上一次失败之后页面刷新好了没有：说明据此说"已刷新"还是"没能刷新"（第三批 G-a） */
-  const [refreshed, setRefreshed] = useState(false)
+  const { refreshed, refreshAfterFailure } = useOutcomeRefresh()
   const inputId = useId()
   const problemId = useId()
   const mutation = useMutation({
     mutationFn: async (value: string) => renameSpace(space.id, value),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY })
+      await refreshQueries(queryClient, [SPACES_QUERY_KEY], { throwOnError: false })
       onDone()
     },
     onError: async (error) => {
@@ -53,7 +54,7 @@ function RenameForm({ space, onDone, onDenied }: RenameFormProps) {
         onDenied(error)
         return
       }
-      setRefreshed(await refreshIfUnknown(error, async () => refreshQueries(queryClient, [SPACES_QUERY_KEY])))
+      await refreshAfterFailure(error, async () => refreshQueries(queryClient, [SPACES_QUERY_KEY]))
     },
   })
   const parsed = spaceNameSchema.safeParse(name)
@@ -90,7 +91,8 @@ interface SpaceHeaderProps {
   readonly folderId: string | null
   /** 页面的标题（h1）：由空间页持有，内容区与焦点的兜底也用它 */
   readonly titleRef: RefObject<HTMLHeadingElement | null>
-  readonly onDenied: () => void
+  /** 页头的操作被拒绝：由空间页重新请求（页头的说明不提列表，不用等它的结果） */
+  readonly onDenied: () => Promise<boolean>
 }
 
 /**
@@ -114,7 +116,7 @@ function SpaceHeader({ space, folderId, titleRef, onDenied }: SpaceHeaderProps) 
   function denied(message: string): void {
     setRenaming(false)
     setDenial({ message })
-    onDenied()
+    void onDenied()
   }
 
   function closeDenial(): void {
@@ -179,7 +181,7 @@ function SpaceContent({ spaceId, folderIds = [] }: { readonly spaceId: string, r
   const spaces = useQuery({ ...spacesQueryOptions(), refetchOnMount: false })
   const targetSpaces = (spaces.data?.items ?? []).filter(item => item.permissions.canCreateDocuments)
   const missing = isMissingResource(space.error)
-  const refreshOrganize = useOrganizeRefresh()
+  const refreshOrganize = useOrganizeRefreshChecked()
   const titleRef = useRef<HTMLHeadingElement>(null)
   const rescueFocus = useFocusRescue(titleRef)
   useForgetMissingSpace(spaceId, missing)
@@ -189,11 +191,13 @@ function SpaceContent({ spaceId, folderIds = [] }: { readonly spaceId: string, r
   /**
    * 页内的操作按访问权限被拒绝（403、404）：页面显示的权限已经过时，重新请求（M2-P2 复验）——
    * 页头与导航（归档的标记），以及这个空间里各层的文件夹与文档（被拒绝的那一行可能已经不在了，它们的 permissions 也过时了，
-   * M2-P4 审查建议 2）。空间看不到了（404）时另由 useForgetMissingSpace 去掉这个空间的缓存、页面说明"空间不存在"
+   * M2-P4 审查建议 2）。空间看不到了（404）时另由 useForgetMissingSpace 去掉这个空间的缓存、页面说明"空间不存在"。
+   * 兑现为列表刷新好了没有（最多等 10 秒，M2-P6 复核第五批 G3）：整理面板说"它已经不在这里了"时，据此说"列表已刷新"还是"没能刷新"；
+   * 页头与导航照常刷新、不计入
    */
-  function refreshAfterDenied(): void {
-    void queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY })
-    void refreshOrganize([spaceId])
+  async function refreshAfterDenied(): Promise<boolean> {
+    void refreshQueries(queryClient, [SPACES_QUERY_KEY], { throwOnError: false })
+    return refreshWithin(async () => refreshOrganize([spaceId]))
   }
 
   if (space.isPending) {

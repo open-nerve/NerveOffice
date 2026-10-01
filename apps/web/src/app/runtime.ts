@@ -89,6 +89,13 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
    * 在它之后开始的一轮都先等本页的登录、修改密码结束才发出请求（checkSessionOnce），带的是它们换上的新 Cookie
    */
   let expired: { readonly reason: ExpiredReason, readonly after: number } | undefined
+  /**
+   * 本该对 expired 下结论的那一轮确认因网络等失败没有结论（M2-P6 复核第五批 G9）：原因不能一直留着——几个小时以后会话自然过期，
+   * 登录页还会说"刚才……可能已经失效"；也不能就此丢掉——断网期间它可能正是会话结束的原因（例如为自己生成的重置链接已经生效，
+   * 回来时得到"登录已过期"，说"登录已过期"的话，本人会拿原来的密码去登录）。所以等下一个请求成功（连得上服务端了）就再确认一次：
+   * 会话还在，原因随之清掉；已经不在，按它回到登录页。不设固定的有效期：那样断网久了反而丢掉正确的原因
+   */
+  let awaitingReconnect = false
 
   const queryClient = createQueryClient({
     // 未登录：浏览器里已经没有 Cookie，直接下结论。还有请求得到"登录已过期"、正在确认时，按它的原因转到登录页：
@@ -101,6 +108,12 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
       leave(LOGIN_PATH)
     },
     sessionStale: () => void recheckSession(),
+    requestSucceeded: () => {
+      if (!awaitingReconnect)
+        return
+      awaitingReconnect = false
+      void recheckSession()
+    },
   })
   const unsubscribe = channel.subscribe(() => void recheckSession())
   // 公开页面接受或完成之后单页进入个人空间：跳过的复核这时补上。例如接受的响应写入了新账户的 Cookie，
@@ -240,8 +253,10 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
         // 更早开始的一轮：带的可能还是换令牌之前的旧 Cookie，"没有会话"不作数，等随后补上的那一轮
         return
       }
-      if (concluding !== undefined)
+      if (concluding !== undefined) {
         expired = undefined
+        awaitingReconnect = false
+      }
       if (current === undefined && concluding !== undefined) {
         // 已经没有会话：按记下的原因回到登录页。不整页重新加载：Cookie 可能已被清除，重新加载时"已过期"就成了"请先登录"
         leaveToLogin(concluding.reason)
@@ -257,7 +272,9 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
       }
     }
     catch {
-      // 网络等失败：页面照常，下一个请求会显示错误
+      // 网络等失败：页面照常，下一个请求会显示错误。这一轮本该对记下的原因下结论：等下一个请求成功再确认一次（第五批 G9）
+      if (expired !== undefined && round > expired.after)
+        awaitingReconnect = true
     }
   }
 

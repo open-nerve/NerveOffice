@@ -1,8 +1,8 @@
 import type { MutationMeta } from '@tanstack/react-query'
 import { useMutation } from '@tanstack/react-query'
-import { useState } from 'react'
-import { refreshIfUnknown, writeFailureText } from '../../shared/api/write-outcome.ts'
+import { writeFailureText } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../shared/ui/dialog.tsx'
 import { Alert, AlertDescription, Button } from '../../shared/ui/index.ts'
 
@@ -50,19 +50,20 @@ interface ConfirmDialogProps {
  * 结果未知时（M2-P6 复核第二批 G-2）：操作可能已经生效，先按 refresh 刷新页面上的状态，再说明"可能已经生效"——停用、启用、
  * 改系统角色、解除锁定、归档与恢复、全员可见、作废邀请、移出成员、转移、永久删除都经这里，一处做完。
  * 刷新最多等 10 秒（第三批 S-a）：一直不回来时到了时限先给出说明，弹窗不再卡在"正在处理…"；刷新失败或者超时，说明页面没能刷新（第三批 G-a）。
+ * 超时之后刷新在后台继续，回来了（表格随之更新）就把说明改回"已刷新"（第五批 G4，shared/lib/use-outcome-refresh.ts）。
  * refreshAfter 认出的失败（上一次多半已经生效）同样这样刷新（第四批）。
  * 执行经请求缓存：管理界面标明只给系统管理员，被拒绝时由全局处理重新确认会话，系统角色已被取消就切到无权限（审查 B4）。
  * 关闭之后焦点回到打开它的按钮；按钮已经不在了，交给 returnFocus，焦点不落到 body（审查 B9）。
  * 带着 Radix Dialog：只由按需加载的页面引用，不进首屏（ADR-008）。
  */
 export function ConfirmDialog({ pending, onClose, meta }: ConfirmDialogProps) {
-  /** 上一次失败是结果未知、而且页面已经刷新好了：说明据此说"已刷新"还是"没能刷新"（第三批 G-a）。每次失败都重新记下 */
-  const [refreshed, setRefreshed] = useState(false)
+  /** 上一次失败是结果未知、而且页面已经刷新好了：说明据此说"已刷新"还是"没能刷新"（第三批 G-a）；晚到的刷新随后改过来（第五批 G4） */
+  const { refreshed, refreshAfterFailure } = useOutcomeRefresh()
   const mutation = useMutation({
     mutationFn: async (confirmation: PendingConfirmation) => confirmation.run(),
     // 刷新完成（或者到了时限）之后才显示失败：说明与页面上的状态对得上（第二批 G-2，第三批 S-a）
     onError: async (error, confirmation) => {
-      setRefreshed(await refreshIfUnknown(error, confirmation.refresh, { also: confirmation.refreshAfter }))
+      await refreshAfterFailure(error, confirmation.refresh, { also: confirmation.refreshAfter })
     },
     ...(meta === undefined ? {} : { meta }),
   })

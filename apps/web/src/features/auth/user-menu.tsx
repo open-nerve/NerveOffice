@@ -28,8 +28,17 @@ export function UserMenu({ children, className }: { readonly children?: ReactNod
   return (
     // 窄屏时只有名字收窄成省略号，完整的名字在 title 里（M2-P1 审查 B11）；按钮与入口不收窄
     <div className={cn('flex min-w-0 items-center gap-3', className)}>
-      {/* 显示名与登录名分开呈现（M2-P6 复核 M2），完整的名字在 title 里（显示名隔离） */}
-      {session.data !== undefined && <PersonName person={session.data.user} className="min-w-0 truncate text-sm text-muted-foreground" title={messages.people.text(session.data.user)} />}
+      {/*
+        显示名与登录名分开呈现（M2-P6 复核 M2），完整的名字在 title 里（显示名隔离）。
+        窄屏时名字这一栏占满余下的宽度，作为容器查询的容器：余下的宽度连登录名的头几个字都放不下（不到 3rem，只剩"@…"：
+        系统管理员的页头多一个"管理"，320px 宽时就是这样，第五批 G7），名字只给读屏（sr-only），可读的文字与 title 仍是全名。
+        按余下的宽度而不是视口判断：成员的页头在 320px 宽时还放得下"@登录名的头几个字…"，不必藏起来
+      */}
+      {session.data !== undefined && (
+        <span className="flex min-w-0 max-sm:flex-1 max-sm:justify-end max-sm:@container">
+          <PersonName person={session.data.user} className="min-w-0 truncate text-sm text-muted-foreground @max-[3rem]:sr-only" title={messages.people.text(session.data.user)} />
+        </span>
+      )}
       {children}
       {/* 退出失败的说明同样可以收窄（读屏照常读出全文），窄屏时不把页头撑破 */}
       {failure !== undefined && <span role="alert" className="min-w-0 truncate text-sm text-destructive" title={messages.auth.logoutFailed(failure)}>{messages.auth.logoutFailed(failure)}</span>}

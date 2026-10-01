@@ -3,7 +3,17 @@
 import type { Locator, Page } from '@playwright/test'
 import { createDocumentIn, createFolderIn, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { plainName, shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
+
+/** 页头的名字放得下登录名的头几个字时至少有多宽（apps/web 的 UserMenu：容器窄于 3rem 时只给读屏，第五批 G7） */
+const NAME_MIN_WIDTH = 48
+
+/**
+ * 系统管理员的页头在各个宽度下，名字是不是只给读屏（第五批 G7）：320px 宽时余下不到 3rem（原来只剩"@…"）；480px 及更宽时看得见。
+ * 360px 取决于各浏览器的字宽，两种都可以（不在表里）
+ */
+const ADMIN_NAME_HIDDEN: ReadonlyMap<number, boolean> = new Map([[320, true], [480, false], [639, false], [640, false], [768, false]])
 
 /** 量一个元素在页面上的位置；量不到（没渲染出来）就让用例失败 */
 async function boxOf(locator: Locator): Promise<{ readonly x: number, readonly width: number }> {
@@ -11,6 +21,26 @@ async function boxOf(locator: Locator): Promise<{ readonly x: number, readonly w
   if (box === null)
     throw new Error('元素没有出现在页面上，量不到它的位置')
   return box
+}
+
+/** 名字只给读屏（sr-only：绝对定位、1px 见方）：看不见，可读的文字仍在 */
+async function onlyForScreenReaders(name: Locator): Promise<boolean> {
+  return name.evaluate(node => getComputedStyle(node).position === 'absolute' && node.getBoundingClientRect().width <= 1)
+}
+
+/**
+ * 页头的名字（第五批 G7）：要么只给读屏——余下的宽度连登录名的头几个字都放不下；要么看得见，至少放得下登录名的头几个字
+ * （不只剩"@…"）。不论哪种，可读的文字与 title 都是全名。expectedHidden 给出时还要是那一种。返回它是不是只给读屏
+ */
+async function checkHeaderName(name: Locator, person: { readonly username: string, readonly displayName: string }, width: number, expectedHidden: boolean | undefined): Promise<boolean> {
+  const hidden = await onlyForScreenReaders(name)
+  if (expectedHidden !== undefined)
+    expect(hidden, `${width}px：名字${expectedHidden ? '应当只给读屏' : '应当看得见'}`).toBe(expectedHidden)
+  if (!hidden)
+    expect((await boxOf(name)).width, `${width}px：名字只剩"@…"`).toBeGreaterThanOrEqual(NAME_MIN_WIDTH)
+  await expect(name).toHaveText(shownName(person))
+  await expect(name).toHaveAttribute('title', plainName(person))
+  return hidden
 }
 
 /** 视口的宽度 */
@@ -61,7 +91,7 @@ test.describe('US-M2-12 按标题搜索', () => {
     await expect(page).toHaveURL(`/documents/${draftId}`)
   })
 
-  test('窄屏：页头各项互不重叠、不溢出——搜索框折到第二行，宽一些时回到中间、名字收窄（M2-P6 复核第三批 G-e，M2-P1 审查 B11）', async ({ page }) => {
+  test('窄屏：页头各项互不重叠、不溢出——搜索框折到第二行，宽一些时回到中间、名字收窄；余下的宽度连登录名的头几个字都放不下时名字只给读屏（M2-P6 复核第三批 G-e、第五批 G7，M2-P1 审查 B11）', async ({ page }) => {
     // 系统管理员（页头多一个"管理"）、显示名很长：最挤的情形
     const admin = await createUser('narrow-header', '一个很长很长很长很长很长很长很长很长的显示名', { systemRole: 'admin' })
     await loginThroughApi(page, admin)
@@ -80,7 +110,11 @@ test.describe('US-M2-12 按标题搜索', () => {
     for (const width of [320, 360, 480, 639, 640, 768]) {
       await page.setViewportSize({ width, height: 700 })
       await expect(page.getByRole('heading', { level: 1, name: '我的空间' })).toBeVisible()
-      const boxes = await Promise.all(Object.entries(parts).map(async ([part, locator]) => {
+      // 名字：320px 宽时系统管理员的页头只剩不到 3rem，名字只给读屏（原来只剩"@…"，第五批 G7）；宽一些时放得下登录名的头几个字。
+      // 只给读屏的名字不参与下面的出界与重叠的检查
+      const hidden = await checkHeaderName(parts.name, admin, width, ADMIN_NAME_HIDDEN.get(width))
+      const shownParts = Object.entries(parts).filter(([part]) => !hidden || part !== 'name')
+      const boxes = await Promise.all(shownParts.map(async ([part, locator]) => {
         const box = await locator.boundingBox()
         if (box === null)
           throw new Error(`${width}px 宽时页头里的 ${part} 没有出现`)
@@ -98,9 +132,15 @@ test.describe('US-M2-12 按标题搜索', () => {
         }
       }
       expect(await page.evaluate(() => document.documentElement.scrollWidth), `${width}px：页面横向溢出`).toBeLessThanOrEqual(width)
-      // 名字收窄成省略号，可见的宽度不为 0；完整的名字在 title 里
-      const name = boxes.find(({ part }) => part === 'name')?.box
-      expect(name?.width ?? 0, `${width}px：名字被挤没了`).toBeGreaterThan(0)
     }
+  })
+
+  test('窄屏：成员的页头没有"管理"，320px 宽时名字照样看得见、放得下登录名的头几个字（第五批 G7：按余下的宽度藏，不按视口一刀切）', async ({ page }) => {
+    const member = await createUser('narrow-member', '一个很长很长很长很长很长很长的显示名')
+    await loginThroughApi(page, member)
+    await page.setViewportSize({ width: 320, height: 700 })
+    await page.goto('/')
+    await expect(page.getByRole('heading', { level: 1, name: '我的空间' })).toBeVisible()
+    await checkHeaderName(page.getByRole('banner').locator('[data-slot="person-name"]'), member, 320, false)
   })
 })

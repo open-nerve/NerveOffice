@@ -23,6 +23,10 @@ export interface SessionEvents {
    * 或者只给系统管理员的请求得到 PERMISSION_DENIED（系统角色被取消了，M2-P1 审查 B4）
    */
   readonly sessionStale: () => void
+  /**
+   * 查询或变更成功：连得上服务端了。会话的确认之前因网络等失败没有结论时，运行时据此再确认一次（M2-P6 复核第五批 G9）
+   */
+  readonly requestSucceeded: () => void
 }
 
 type Meta = Record<string, unknown> | undefined
@@ -49,11 +53,12 @@ function sessionTransition(meta: Meta): 'starts' | 'renews' | 'ends' | undefined
 /**
  * 得到"登录已过期"时带到登录页的原因：默认 expired；修改密码的结果未知之后再提交时是 password_changed
  * （features/auth 的 RENEWS_SESSION_AFTER_UNKNOWN，M2-P6 复核 G-1）；为自己生成重置链接的结果未知之后再试时是 password_reset
- * （features/auth 的 OWN_RESET_AFTER_UNKNOWN，M2-P6 复核 S1）
+ * （features/auth 的 OWN_RESET_AFTER_UNKNOWN，M2-P6 复核 S1）；停用自己的结果未知之后再试时是 account_disabled
+ * （features/auth 的 OWN_DISABLE_AFTER_UNKNOWN，第五批 G1）
  */
 function expiredReason(meta: Meta): ExpiredReason {
   const reason = meta?.expiredReason
-  return reason === 'password_changed' || reason === 'password_reset' ? reason : 'expired'
+  return reason === 'password_changed' || reason === 'password_reset' || reason === 'account_disabled' ? reason : 'expired'
 }
 
 /**
@@ -129,7 +134,7 @@ export async function sessionChangesSettled(queryClient: QueryClient): Promise<v
 
 /**
  * 请求缓存（TanStack Query）。请求的结果里与会话有关的，查询与变更都一样，统一交给 events：
- * 未登录、登录已过期、登录与退出、会话过时（CSRF 令牌不对、系统角色被取消）。自己处理未登录的请求（会话、登录）用 meta.handlesAuthentication 标明。
+ * 未登录、登录已过期、登录与退出、会话过时（CSRF 令牌不对、系统角色被取消），以及请求成功（连得上服务端了）。自己处理未登录的请求（会话、登录）用 meta.handlesAuthentication 标明。
  */
 export function createQueryClient(events: SessionEvents): QueryClient {
   function onRequestError(error: unknown, meta: Meta): void {
@@ -141,9 +146,10 @@ export function createQueryClient(events: SessionEvents): QueryClient {
       events.unauthenticated()
   }
   return new QueryClient({
-    queryCache: new QueryCache({ onError: (error, query) => onRequestError(error, query.meta) }),
+    queryCache: new QueryCache({ onSuccess: () => events.requestSucceeded(), onError: (error, query) => onRequestError(error, query.meta) }),
     mutationCache: new MutationCache({
       onSuccess: (_data, _variables, _context, mutation) => {
+        events.requestSucceeded()
         const transition = sessionTransition(mutation.meta)
         if (transition === 'starts' || transition === 'renews')
           events.signedIn()

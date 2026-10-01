@@ -327,9 +327,10 @@ describe('M2-P6 复核第二批 S-1：服务端说这次是重放（replayed）�
 describe('M2-P6 复核 S1–S3：结果未知与被拒绝之后', () => {
   it('删除文档的结果未知（其实已经删了）：列表刷新、那一行消失，列表上方说明可能已经删除并给出回收站，焦点在说明上，不落到 body（P2）', async () => {
     let deleted = false
-    loggedIn({
+    const api = loggedIn({
       [documentsKey(SESSION)]: () => json(200, { items: deleted ? [] : [WEEKLY], nextCursor: null }),
-      [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()),
+      // 与真实的服务端一样：删掉之后再取它的元数据是 404（第五批 S-1：原来的假接口仍回 200，"详情 404 被算成列表没能刷新"测不出来）
+      [`GET /api/documents/${WEEKLY_ID}`]: () => (deleted ? apiError(404, 'NOT_FOUND') : json(200, detail())),
       [`DELETE /api/documents/${WEEKLY_ID}`]: () => {
         deleted = true
         return apiError(500, 'INTERNAL_ERROR')
@@ -340,11 +341,92 @@ describe('M2-P6 复核 S1–S3：结果未知与被拒绝之后', () => {
     const remove = await screen.findByRole('button', { name: '删除' })
     remove.focus()
     fireEvent.click(remove)
+    // 列表刷新好了（那一行随之消失）：说"列表已刷新"——打开着的那一份的元数据重新请求得到 404，那是删除生效之后的样子，不计入
     const text = '没能确认「周报」是否已经删除（服务器出了点问题，请稍后重试）。列表已刷新：它已经不在这里，就是已经移到回收站了；还在的话可以再删除一次。'
     expect(await screen.findByText(text)).toBeInTheDocument()
     await waitFor(() => expect(screen.queryByRole('list', { name: '文档列表' })).toBeNull())
     expect(screen.getByRole('link', { name: '打开回收站' })).toHaveAttribute('href', `/spaces/${SPACE_ID}/trash`)
     await waitFor(() => expect(document.activeElement).toBe(noticeOf(text)))
+    // 元数据确实重新请求过、得到了 404（用例覆盖到了这条路）
+    expect(count(api, `GET /api/documents/${WEEKLY_ID}`)).toBeGreaterThan(1)
+  })
+
+  it('移动的结果未知（其实已经移到别的空间、自己在那里看不到它）：元数据重新请求得到 403，同样不算列表没能刷新（第五批 S-1）', async () => {
+    let moved = false
+    loggedIn({
+      [foldersKey(SPACE_ID)]: folderPage([folder(PLAN_ID, '方案')]),
+      [foldersKey(SPACE_ID, PLAN_ID)]: noFolders(),
+      [documentsKey(SESSION)]: () => json(200, { items: moved ? [] : [WEEKLY], nextCursor: null }),
+      [`GET /api/documents/${WEEKLY_ID}`]: () => (moved ? apiError(403, 'PERMISSION_DENIED', '你没有这份文档的权限') : json(200, detail())),
+      [`POST /api/documents/${WEEKLY_ID}/move`]: () => {
+        moved = true
+        return networkFailure()
+      },
+    })
+    renderApp('/')
+    await openActions('周报')
+    fireEvent.click(await screen.findByRole('button', { name: '移动' }))
+    const form = screen.getByRole('form', { name: '移动' })
+    fireEvent.click(await within(form).findByRole('button', { name: '进入 方案' }))
+    fireEvent.click(within(form).getByRole('button', { name: '移动到这里' }))
+    expect(await screen.findByText('没能确认「周报」是否已经移动（网络连接失败，请检查网络后重试）。列表已刷新：它已经不在这里，就是移走了；还在的话可以再移动一次。')).toBeInTheDocument()
+  })
+
+  it('删除得到 404、随后刷新列表失败（仍然断网）：说明列表没能刷新，不说"列表已刷新"——那一行还在（第五批 G3）', async () => {
+    let lists = 0
+    loggedIn({
+      [documentsKey(SESSION)]: () => {
+        lists += 1
+        return lists === 1 ? json(200, { items: [WEEKLY], nextCursor: null }) : networkFailure()
+      },
+      [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()),
+      [`DELETE /api/documents/${WEEKLY_ID}`]: () => apiError(404, 'NOT_FOUND'),
+    })
+    renderApp('/')
+    await openActions('周报')
+    fireEvent.click(await screen.findByRole('button', { name: '删除' }))
+    // 刷新失败（查询重试一次也失败）之后才给出说明
+    const text = '「周报」已经不在这里了（可能已经删除，或者被别人移走了），列表没能刷新，显示的可能还是之前的，请稍后再看。'
+    expect(await screen.findByText(text, {}, { timeout: 4000 })).toBeInTheDocument()
+    expect(lists).toBeGreaterThan(1)
+    expect(screen.queryByText(/列表已刷新/)).toBeNull()
+    expect(screen.getByRole('button', { name: '操作 周报' })).toBeInTheDocument()
+  })
+
+  it('展开"操作"时它已经不在了（取元数据 404）、随后刷新列表失败：说明列表没能刷新（第五批 G3）', async () => {
+    let lists = 0
+    loggedIn({
+      [documentsKey(SESSION)]: () => {
+        lists += 1
+        return lists === 1 ? json(200, { items: [WEEKLY], nextCursor: null }) : networkFailure()
+      },
+      [`GET /api/documents/${WEEKLY_ID}`]: () => apiError(404, 'NOT_FOUND'),
+    })
+    renderApp('/')
+    await openActions('周报')
+    expect(await screen.findByText('「周报」已经不在这里了（可能已经删除，或者被别人移走了），列表没能刷新，显示的可能还是之前的，请稍后再看。', {}, { timeout: 4000 })).toBeInTheDocument()
+    expect(screen.queryByText(/列表已刷新/)).toBeNull()
+  })
+
+  it('移动得到 404（目标或者它自己不在了）、随后刷新列表失败：说明列表没能刷新（第五批 G3）', async () => {
+    let lists = 0
+    loggedIn({
+      [foldersKey(SPACE_ID)]: folderPage([folder(PLAN_ID, '方案')]),
+      [foldersKey(SPACE_ID, PLAN_ID)]: noFolders(),
+      [documentsKey(SESSION)]: () => {
+        lists += 1
+        return lists === 1 ? json(200, { items: [WEEKLY], nextCursor: null }) : networkFailure()
+      },
+      [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()),
+      [`POST /api/documents/${WEEKLY_ID}/move`]: () => apiError(404, 'NOT_FOUND'),
+    })
+    renderApp('/')
+    await openActions('周报')
+    fireEvent.click(await screen.findByRole('button', { name: '移动' }))
+    const form = screen.getByRole('form', { name: '移动' })
+    fireEvent.click(await within(form).findByRole('button', { name: '进入 方案' }))
+    fireEvent.click(within(form).getByRole('button', { name: '移动到这里' }))
+    expect(await screen.findByText('「周报」或者目标位置已经不在了（可能被删除或移走），列表没能刷新，显示的可能还是之前的，请稍后再看。', {}, { timeout: 4000 })).toBeInTheDocument()
   })
 
   it('那一行已经不在了（404）：列表刷新，说明它已经不在这里、给出回收站，不悄悄消失；关掉说明时焦点交给标题（P2、S3）', async () => {

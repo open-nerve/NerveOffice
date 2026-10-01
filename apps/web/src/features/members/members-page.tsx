@@ -6,7 +6,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { ApiError, describeError, isMissingResource, isPermissionDeniedError, isUnknownOutcome } from '../../shared/api/index.ts'
-import { refreshIfUnknown, refreshWithin, writeFailureText } from '../../shared/api/write-outcome.ts'
+import { writeFailureText } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { membersMessages } from '../../shared/i18n/zh-cn/members.ts'
 import { ADMIN_PATHS } from '../../shared/lib/admin-paths.ts'
@@ -15,6 +15,7 @@ import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { HOME_PATH, spacePath } from '../../shared/lib/space-paths.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { useFocusRescue } from '../../shared/lib/use-focus-rescue.ts'
+import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { Alert, AlertDescription, Badge, Button, buttonVariants, Label, NativeSelect, PersonName, Phrase, Skeleton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../shared/ui/index.ts'
 import { sessionQueryOptions } from '../auth/index.ts'
 import { ColleaguePicker } from '../colleagues/index.ts'
@@ -32,12 +33,13 @@ function isAlreadyMember(error: unknown): boolean {
 }
 
 /**
- * 添加失败时的说明（M2-P6 复核 S1）：结果未知时这个人可能已经加好了；已经是成员（多半就是刚才没能确认的那一次，
- * 也可能是别人刚加的）时说清楚；其余按错误码。前两种情形成员列表都随即刷新，refreshed 是刷新好了没有（第四批）
+ * 添加失败时的说明（M2-P6 复核 S1）：结果未知时这个人可能已经加好了；已经是成员时说清楚——之前添加这个人有过结果未知（unsure），
+ * 才说"可能就是刚才没能确认的那一次"，否则只说已经是成员（第五批 G5：多半是别人刚加的，并没有"刚才那一次"）；其余按错误码。
+ * 前两种情形成员列表都随即刷新，refreshed 是刷新好了没有（第四批）
  */
-function addFailureText(error: unknown, refreshed: boolean): string {
+function addFailureText(error: unknown, refreshed: boolean, unsure: boolean): string {
   if (isAlreadyMember(error))
-    return text.addedEarlier(refreshed)
+    return unsure ? text.addedEarlier(refreshed) : text.alreadyMember(refreshed)
   if (isUnknownOutcome(error))
     return text.addOutcomeUnknown(describeError(error).message, refreshed)
   return describeError(error).message
@@ -48,7 +50,7 @@ function addFailureText(error: unknown, refreshed: boolean): string {
  * 结果未知或者得到"已经是成员"时成员列表随即刷新（M2-P6 复核 S1）：加好了的人就出现在表里；
  * 已经是成员时选择随之清掉（这个人不再是候选），再点也只会得到同样的结果。
  * 这时的刷新经共用的做法（shared/api/write-outcome.ts，第四批）：最多等 10 秒，刷新失败或者到了时限还没回来，说明里说
- * "成员列表没能刷新"，按钮也不一直停在"正在添加…"
+ * "成员列表没能刷新"，按钮也不一直停在"正在添加…"；超时之后刷新才回来的，说明随后改过来（第五批 G4）
  */
 function AddMemberForm({ spaceId, members }: { readonly spaceId: string, readonly members: readonly SpaceMember[] }) {
   const queryClient = useQueryClient()
@@ -57,7 +59,12 @@ function AddMemberForm({ spaceId, members }: { readonly spaceId: string, readonl
   // 添加成功之后换一个 key，同事选择整个重新开始：关键词与上一次的候选都清掉（审查 B11）
   const [pickerKey, setPickerKey] = useState(0)
   /** 上一次失败之后成员列表刷新好了没有：说明据此说"已刷新"还是"没能刷新"（第四批）。每次失败都重新记下 */
-  const [refreshed, setRefreshed] = useState(false)
+  const { refreshed, refreshAfterFailure } = useOutcomeRefresh()
+  /**
+   * 结果未知的那一次添加的是谁（第五批 G5，与创建团队空间记下那一次的名称一样）：之后添加这个人得到"已经是成员"，
+   * 才说多半就是那一次。添加这个人成功时清掉
+   */
+  const [unsureUserId, setUnsureUserId] = useState<string>()
   const roleId = useId()
   const hintId = useId()
 
@@ -68,14 +75,17 @@ function AddMemberForm({ spaceId, members }: { readonly spaceId: string, readonl
 
   const mutation = useMutation({
     mutationFn: async (userId: string) => addMember(spaceId, { userId, role }),
-    onSuccess: async () => {
+    onSuccess: async (_member, userId) => {
       startOver()
-      await queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY })
+      setUnsureUserId(current => (current === userId ? undefined : current))
+      await refreshQueries(queryClient, [SPACES_QUERY_KEY], { throwOnError: false })
     },
-    onError: async (error) => {
+    onError: async (error, userId) => {
+      if (isUnknownOutcome(error))
+        setUnsureUserId(userId)
       if (isAlreadyMember(error))
         startOver()
-      setRefreshed(await refreshIfUnknown(error, async () => refreshQueries(queryClient, [SPACES_QUERY_KEY]), { also: isAlreadyMember }))
+      await refreshAfterFailure(error, async () => refreshQueries(queryClient, [SPACES_QUERY_KEY]), { also: isAlreadyMember })
     },
   })
 
@@ -104,7 +114,7 @@ function AddMemberForm({ spaceId, members }: { readonly spaceId: string, readonl
       {user === undefined && <p id={hintId} className="basis-full text-sm text-muted-foreground">{text.pickColleague}</p>}
       {mutation.isError && (
         <Alert variant="destructive" className="basis-full">
-          <AlertDescription>{addFailureText(mutation.error, refreshed)}</AlertDescription>
+          <AlertDescription>{addFailureText(mutation.error, refreshed, mutation.variables === unsureUserId)}</AlertDescription>
         </Alert>
       )}
     </form>
@@ -133,7 +143,8 @@ interface MemberRowProps {
  *   这一行也已经是保存之后的角色，不显示旧的（复验）；
  * - 成员列表刷新完成之后才结束，选择框不先弹回旧的角色；
  * - 失败时恢复原来的角色（失败之后也刷新，显示服务端的实际状态），原因就在这一行说明。结果未知时说明可能已经生效（第二批 G-2）：
- *   这时的刷新最多等 10 秒（第三批 S-a），这一行不一直停在"正在保存…"；刷新失败或者超时，说明页面没能刷新（第三批 G-a）。
+ *   这时的刷新最多等 10 秒（第三批 S-a），这一行不一直停在"正在保存…"；刷新失败或者超时，说明页面没能刷新（第三批 G-a），
+ *   超时之后刷新才回来的，说明随后改过来（第五批 G4）。
  */
 function MemberRow({ spaceId, member, self, canManage, onDemoteSelf, onRemove }: MemberRowProps) {
   const queryClient = useQueryClient()
@@ -145,7 +156,7 @@ function MemberRow({ spaceId, member, self, canManage, onDemoteSelf, onRemove }:
   /** 正在保存的角色 */
   const [saving, setSaving] = useState<SpaceRole>()
   /** 上一次失败之后成员列表刷新好了没有：结果未知的说明据此说"已刷新"还是"没能刷新"（第三批 G-a） */
-  const [refreshed, setRefreshed] = useState(false)
+  const { refreshed, refreshAfterFailure } = useOutcomeRefresh()
   const change = useMutation({
     mutationFn: async (role: SpaceRole) => changeMemberRole(spaceId, member.user.id, role),
     onSuccess: (saved) => {
@@ -155,9 +166,9 @@ function MemberRow({ spaceId, member, self, canManage, onDemoteSelf, onRemove }:
     },
     onSettled: async (_saved, error) => {
       if (error !== null && isUnknownOutcome(error))
-        setRefreshed(await refreshWithin(async () => refreshQueries(queryClient, [SPACES_QUERY_KEY])))
+        await refreshAfterFailure(error, async () => refreshQueries(queryClient, [SPACES_QUERY_KEY]))
       else
-        await queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY })
+        await refreshQueries(queryClient, [SPACES_QUERY_KEY], { throwOnError: false })
       setSaving(undefined)
     },
   })
@@ -244,7 +255,7 @@ function MembersTable({ spaceId, list, selfId, focusTitle }: MembersTableProps) 
 
   /** 成功之后刷新（成员列表、导航与空间页）：刷新失败时列表自己显示加载失败 */
   async function refresh(): Promise<void> {
-    await queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY })
+    await refreshQueries(queryClient, [SPACES_QUERY_KEY], { throwOnError: false })
   }
 
   /** 确认的弹窗在结果未知之后的刷新：刷新失败时拒绝，弹窗据此说明页面没能刷新（M2-P6 复核第三批 G-a） */

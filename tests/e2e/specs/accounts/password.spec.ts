@@ -206,6 +206,33 @@ test.describe('US-M2-02 修改密码', () => {
     await expect(page).toHaveURL(/\/login$/)
   })
 
+  test('修改密码的回包丢了（代理的 502），服务端其实已经改好：随即回到登录页，说明新密码可能已经生效；新密码登录得进去（M2-P6 复核第五批 G2）', async ({ page }) => {
+    const user = await createUser('pw-unknown', '回包丢了的人')
+    await loginThroughApi(page, user)
+    await page.goto('/settings/password')
+    const before = await sessionCookieOf(page)
+    await page.route('**/api/auth/password', async (route) => {
+      // 请求放行到服务端：照常改好（当前会话随之撤销、换发新的会话）。回包换成代理的 502，新会话的 Cookie 随之丢了：
+      // 浏览器里留着的还是原来那个（route.fetch 的响应写进上下文的 Cookie 要还原，才与真实的代理一样）
+      await route.fetch()
+      await page.context().addCookies([before])
+      return route.fulfill({ status: 502, contentType: 'text/html', body: 'bad gateway' })
+    })
+    await page.getByLabel('当前密码').fill(user.password)
+    await page.getByLabel('新密码', { exact: true }).fill(NEW_PASSWORD)
+    await page.getByLabel('再输入一次新密码').fill(NEW_PASSWORD)
+    await page.getByRole('button', { name: '修改密码' }).click()
+    // 不等再提交、不等换页（原来一换页就只说"登录已过期"）：随即带着"新密码可能已经生效"回到登录页
+    await expect(page).toHaveURL(/\/login\?from=%2Fsettings%2Fpassword&reason=password_changed$/)
+    await expect(page.getByText('刚才修改密码时没能确认结果，随后登录失效了：新密码可能已经生效，请试试用新密码登录。')).toBeVisible()
+    await expect(page.getByText('登录已过期，请重新登录')).toBeHidden()
+    await page.unroute('**/api/auth/password')
+    // 新密码确实已经生效：登录之后回到修改密码页
+    await loginThroughUi(page, { username: user.username, password: NEW_PASSWORD })
+    await expect(page).toHaveURL(/\/settings\/password$/)
+    await expect(page.getByLabel('当前密码')).toBeVisible()
+  })
+
   test('当前密码不对：提示，密码不变', async ({ page }) => {
     const user = await createUser('pw-wrong')
     await loginThroughApi(page, user)

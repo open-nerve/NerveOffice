@@ -170,6 +170,72 @@ describe('ConfirmDialog', () => {
     }
   })
 
+  it('到了时限先说明页面没能刷新；后台的刷新随后成功了（表格已经更新）：说明改回"已刷新"，还是同一条 role="alert"，读屏读得到这次更新（第五批 G4）', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      let finish: () => void = () => {}
+      const refresh = vi.fn(async () => new Promise<void>((resolve) => {
+        finish = resolve
+      }))
+      renderPage(confirmation({
+        run: async () => {
+          throw new NetworkError('网络请求失败')
+        },
+        refresh,
+      }))
+      const dialog = await open()
+      fireEvent.click(within(dialog).getByRole('button', { name: '停用' }))
+      await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1))
+      await act(async () => vi.advanceTimersByTimeAsync(OUTCOME_REFRESH_TIME_LIMIT_MS))
+      const alert = await within(dialog).findByRole('alert')
+      expect(alert).toHaveTextContent(/^没能确认是否已经完成（网络连接失败，请检查网络后重试）。可能已经生效，只是页面没能刷新/)
+      await act(async () => {
+        finish()
+      })
+      await waitFor(() => expect(alert).toHaveTextContent('没能确认是否已经完成（网络连接失败，请检查网络后重试）。可能已经生效：页面已按服务端现在的状态刷新，看得出是否已经生效；还没有的话，可以再试一次。'))
+      expect(within(dialog).getByRole('alert')).toBe(alert)
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('再试一次之后，前一次失败的刷新晚到：不改这一次的说法；这一次的刷新晚到才改（第五批 G4）', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const finishes: (() => void)[] = []
+      const refresh = vi.fn(async () => new Promise<void>((resolve) => {
+        finishes.push(resolve)
+      }))
+      renderPage(confirmation({
+        run: async () => {
+          throw new ApiError(502, 'INTERNAL_ERROR', 'x')
+        },
+        refresh,
+      }))
+      const dialog = await open()
+      for (const attempt of [1, 2]) {
+        fireEvent.click(within(dialog).getByRole('button', { name: '停用' }))
+        await waitFor(() => expect(refresh).toHaveBeenCalledTimes(attempt))
+        await act(async () => vi.advanceTimersByTimeAsync(OUTCOME_REFRESH_TIME_LIMIT_MS))
+        expect(await within(dialog).findByRole('alert')).toHaveTextContent(/只是页面没能刷新/)
+      }
+      // 第一次的刷新晚到：这时说明的是第二次的失败，不改
+      await act(async () => {
+        finishes[0]?.()
+      })
+      await act(async () => vi.advanceTimersByTimeAsync(50))
+      expect(within(dialog).getByRole('alert')).toHaveTextContent(/只是页面没能刷新/)
+      await act(async () => {
+        finishes[1]?.()
+      })
+      await waitFor(() => expect(within(dialog).getByRole('alert')).toHaveTextContent(/页面已按服务端现在的状态刷新/))
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('确定的失败（4xx、服务端忙的 503）没有生效：不刷新，按错误码说明', async () => {
     const refresh = vi.fn(async () => {})
     for (const error of [new ApiError(409, 'LAST_ADMIN', 'x'), new ApiError(503, 'SERVICE_UNAVAILABLE', 'x')]) {

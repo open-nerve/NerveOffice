@@ -3,9 +3,10 @@ import { SPACE_ROLES, spaceNameSchema } from '@nerve-office/contracts'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useId, useState } from 'react'
 import { ApiError, describeError, isUnknownOutcome } from '../../shared/api/index.ts'
-import { refreshIfUnknown, writeFailureText } from '../../shared/api/write-outcome.ts'
+import { writeFailureText } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
+import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { problemOf } from '../../shared/lib/validation.ts'
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../shared/ui/dialog.tsx'
 import { Alert, AlertDescription, Button, FieldProblem, Input, Label, NativeSelect } from '../../shared/ui/index.ts'
@@ -30,7 +31,7 @@ interface SpaceDialogProps {
 }
 
 interface SubmissionOptions extends Pick<SpaceDialogProps, 'onDone' | 'refresh' | 'onClose'> {
-  /** 结果未知之外，失败之后还要刷新列表的情形（例如加入时"已经是成员"：多半就是刚才那一次，M2-P6 复核 S1） */
+  /** 结果未知之外，失败之后还要刷新列表的情形（例如加入时"已经是成员"：列表显示的已经过时，可能就是刚才那一次，M2-P6 复核 S1） */
   readonly refreshAfter?: (error: unknown) => boolean
   /**
    * 失败的说明：不给时，结果未知说"可能已经生效"，其余按错误码（writeFailureText）。refreshed：刷新好了没有，
@@ -45,18 +46,19 @@ interface SubmissionOptions extends Pick<SpaceDialogProps, 'onDone' | 'refresh' 
  * - 成功之后先刷新（onDone），再关闭；失败时弹窗留着，说明原因；结果未知时也刷新（refresh）、说明可能已经生效（M2-P6 复核第二批 G-2，
  *   shared/api 的共用做法），按 refreshAfter 还有别的情形要刷新（列表显示服务端的实际状态）。这两种刷新最多等 10 秒（第三批 S-a）：
  *   一直不回来时先给出说明，弹窗不再卡在"正在处理…"；刷新失败或者超时，说明页面没能刷新（第三批 G-a）；
+ *   超时之后刷新才回来的，说明随后改过来（第五批 G4）；
  * - 关闭时清掉上一次的失败，下次打开不带着旧的说明。
  * 服务端逐请求检查；标明只给系统管理员，被拒绝时由全局处理重新确认会话（M2-P1 审查 B4）。
  */
 function useDialogSubmission<T>(action: (value: T) => Promise<unknown>, { onDone, refresh, onClose, refreshAfter, describeFailure }: SubmissionOptions) {
   /** 上一次失败之后页面刷新好了没有：说明据此说"已刷新"还是"没能刷新"（第三批 G-a）。每次失败都重新记下 */
-  const [refreshed, setRefreshed] = useState(false)
+  const { refreshed, refreshAfterFailure } = useOutcomeRefresh()
   const mutation = useMutation({
     mutationFn: action,
     meta: SYSTEM_ADMIN_ONLY,
     onSuccess: async () => onDone(),
     onError: async (error) => {
-      setRefreshed(await refreshIfUnknown(error, refresh, { also: refreshAfter }))
+      await refreshAfterFailure(error, refresh, { also: refreshAfter })
     },
   })
 
@@ -180,22 +182,44 @@ function isAlreadyMember(error: unknown): boolean {
 }
 
 /**
- * 加入失败时的说明（M2-P6 复核 S1）：结果未知时可能已经加入；已经是成员（多半就是刚才没能确认的那一次）时说清楚；其余按错误码。
- * 这两种情形列表都随即刷新，说明按刷新好了没有说"已刷新"还是"没能刷新"（第四批）
+ * 加入失败时的说明（M2-P6 复核 S1）：结果未知时可能已经加入；已经是成员时说清楚——这个空间之前有过结果未知的加入（unsure），
+ * 才说"可能就是刚才没能确认的那一次"，否则只说已经是成员（第五批 G5：别人刚把你加进去、列表还没刷新时，并没有"刚才那一次"）；
+ * 其余按错误码。前两种情形列表都随即刷新，说明按刷新好了没有说"已刷新"还是"没能刷新"（第四批）
  */
-function joinFailureText(error: unknown, refreshed: boolean): string {
+function joinFailureText(error: unknown, refreshed: boolean, unsure: boolean): string {
   if (isAlreadyMember(error))
-    return text.joinedEarlier(refreshed)
+    return unsure ? text.joinedEarlier(refreshed) : text.alreadyJoined(refreshed)
   if (isUnknownOutcome(error))
     return text.joinOutcomeUnknown(describeError(error).message, refreshed)
   return describeError(error).message
 }
 
 export function JoinSpaceDialog({ space, onDone, refresh, onClose, returnFocus }: SpaceDialogProps) {
+  /**
+   * 结果未知的那一次加入是哪个空间（第五批 G5，与创建团队空间记下那一次的名称一样）：之后再加入它得到"已经是成员"，才说多半就是那一次。
+   * 弹窗关掉时不清（再打开、加入同一个空间时仍然记得），加入这个空间成功时清掉
+   */
+  const [unsureSpaceId, setUnsureSpaceId] = useState<string>()
   // 与成员页的"添加成员"是同一个接口：把自己加入时，审计记为系统管理员加入空间
   const submission = useDialogSubmission(
-    async ({ id, userId, role }: { readonly id: string, readonly userId: string, readonly role: SpaceRole }) => addMember(id, { userId, role }),
-    { onDone, refresh, onClose, refreshAfter: isAlreadyMember, describeFailure: joinFailureText },
+    async ({ id, userId, role }: { readonly id: string, readonly userId: string, readonly role: SpaceRole }) => {
+      try {
+        await addMember(id, { userId, role })
+      }
+      catch (error) {
+        if (isUnknownOutcome(error))
+          setUnsureSpaceId(id)
+        throw error
+      }
+      setUnsureSpaceId(current => (current === id ? undefined : current))
+    },
+    {
+      onDone,
+      refresh,
+      onClose,
+      refreshAfter: isAlreadyMember,
+      describeFailure: (error, refreshed) => joinFailureText(error, refreshed, space !== undefined && space.id === unsureSpaceId),
+    },
   )
   return (
     <Dialog open={space !== undefined} onOpenChange={submission.changeOpen}>

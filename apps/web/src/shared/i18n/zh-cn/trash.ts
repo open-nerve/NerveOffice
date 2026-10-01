@@ -31,8 +31,8 @@ export const trashMessages = {
   confirmPurge: (name: string) => `永久删除「${name}」？`,
   purgeDescription: '永久删除之后内容就找不回来了，里面的文档与它们的历史一并清除。',
   purged: (name: string) => `已永久删除「${name}」`,
-  /** 别人已经动过它（恢复或永久删除）：列表刷新之后在上方说明 */
-  gone: '这一条已经不在回收站里了（可能已被别人恢复或永久删除），列表已刷新',
+  /** 别人已经动过它（恢复或永久删除）：列表刷新之后在上方说明，刷新好了没有按刷新的结果说（M2-P6 复核第五批 G3） */
+  gone: (refreshed: boolean) => `这一条已经不在回收站里了（可能已被别人恢复或永久删除），${messages.common.listRefreshed(refreshed)}`,
   // 恢复的结果未知（M2-P6 复核 S1）：列表随即刷新，没能刷新时另说（第四批）
   restoreOutcomeUnknown: (name: string, reason: string, refreshed: boolean) => `没能确认「${name}」是否已经恢复（${reason}）。${messages.common.listRefreshed(refreshed)}：它已经不在回收站里，就是恢复好了。`,
   // 恢复被拒绝（403，例如空间刚被归档）：列表与页头按新的权限重新请求，原因写在说明里（M2-P6 复核 S2、S5）

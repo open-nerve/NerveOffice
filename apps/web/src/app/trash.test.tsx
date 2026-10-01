@@ -237,6 +237,58 @@ describe('US-M2-09 回收站：没能完成时（M2-P6 复核 S1–S5）', () =>
     await waitFor(() => expect(document.activeElement).toBe(screen.getByText(text).closest('[tabindex="-1"]')))
   })
 
+  it('永久删除得到 404（别人已经动过它）：目的已经达到，弹窗关掉，列表刷新之后说明它已经不在回收站里了', async () => {
+    let items = [entry()]
+    loggedIn({
+      [TRASH_KEY]: () => json(200, { items, nextCursor: null }),
+      [`DELETE /api/trash/${ENTRY_ID}`]: () => {
+        items = []
+        return apiError(404, 'NOT_FOUND')
+      },
+    })
+    renderApp(TRASH_PATH)
+    fireEvent.click(await screen.findByRole('button', { name: '永久删除 方案' }))
+    const dialog = await screen.findByRole('dialog', { name: '永久删除「方案」？' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '永久删除' }))
+    expect(await screen.findByText('这一条已经不在回收站里了（可能已被别人恢复或永久删除），列表已刷新')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(screen.getByText('回收站里没有内容')).toBeInTheDocument()
+  })
+
+  it('永久删除得到 404、随后刷新回收站失败（仍然断网）：说明列表没能刷新，不说"列表已刷新"——那一行还在（第五批 G3）', async () => {
+    let lists = 0
+    loggedIn({
+      [TRASH_KEY]: () => {
+        lists += 1
+        return lists === 1 ? json(200, { items: [entry()], nextCursor: null }) : networkFailure()
+      },
+      [`DELETE /api/trash/${ENTRY_ID}`]: () => apiError(404, 'NOT_FOUND'),
+    })
+    renderApp(TRASH_PATH)
+    fireEvent.click(await screen.findByRole('button', { name: '永久删除 方案' }))
+    const dialog = await screen.findByRole('dialog', { name: '永久删除「方案」？' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '永久删除' }))
+    expect(await screen.findByText('这一条已经不在回收站里了（可能已被别人恢复或永久删除），列表没能刷新，显示的可能还是之前的，请稍后再看', {}, { timeout: 4000 })).toBeInTheDocument()
+    expect(lists).toBeGreaterThan(1)
+    expect(screen.queryByText(/列表已刷新/)).toBeNull()
+    expect(screen.getByRole('button', { name: '永久删除 方案' })).toBeInTheDocument()
+  })
+
+  it('恢复得到 404、随后刷新回收站失败：同样说明列表没能刷新（第五批 G3：原来什么也不说）', async () => {
+    let lists = 0
+    loggedIn({
+      [TRASH_KEY]: () => {
+        lists += 1
+        return lists === 1 ? json(200, { items: [entry()], nextCursor: null }) : networkFailure()
+      },
+      [`POST /api/trash/${ENTRY_ID}/restore`]: () => apiError(404, 'NOT_FOUND'),
+    })
+    renderApp(TRASH_PATH)
+    fireEvent.click(await screen.findByRole('button', { name: '恢复 方案' }))
+    expect(await screen.findByText('这一条已经不在回收站里了（可能已被别人恢复或永久删除），列表没能刷新，显示的可能还是之前的，请稍后再看', {}, { timeout: 4000 })).toBeInTheDocument()
+    expect(screen.queryByText(/列表已刷新/)).toBeNull()
+  })
+
   it('恢复的结果未知：列表刷新，说明它可能已经恢复了（S1）', async () => {
     let items = [entry()]
     loggedIn({

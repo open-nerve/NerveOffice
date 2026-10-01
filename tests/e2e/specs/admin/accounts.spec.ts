@@ -246,6 +246,27 @@ test.describe('US-M2-04 停用、启用与系统管理员', () => {
     await expect(anotherDevice.getByRole('heading', { name: '我的空间' })).toBeVisible()
   })
 
+  test('停用自己，服务端照常停用、回包却丢了（代理的 502）：随即回到登录页，说明你的账户可能已经被停用（M2-P6 复核第五批 G1）', async ({ page }) => {
+    // 库里另有有效的系统管理员（并行的用例各建各的，服务脚本也初始化了一个）："至少保留一个"挡不住
+    const admin = await createUser('own-disable', '停用自己的管理员', { systemRole: 'admin' })
+    await loginThroughApi(page, admin)
+    await page.goto('/admin/users')
+    const row = await userRow(page, admin.username)
+    await page.route('**/api/admin/users/*/disable', async (route) => {
+      // 请求放行到服务端：照常停用（本人的会话随之撤销），回包换成代理的 502——结果未知
+      await route.fetch()
+      return route.fulfill({ status: 502, contentType: 'text/html', body: 'bad gateway' })
+    })
+    await confirmAction(page, row, '停用')
+    // 不是按普通的"登录已过期"离开（原来去刷新账户列表、得到 401，登录页只说登录已过期）
+    await expect(page).toHaveURL(/\/login\?from=%2Fadmin%2Fusers&reason=account_disabled$/)
+    await expect(page.getByText('刚才停用自己的账户时没能确认结果，随后登录失效了：你的账户可能已经被停用。需要继续使用的话，请联系另一位系统管理员重新启用。')).toBeVisible()
+    await expect(page.getByText('登录已过期，请重新登录')).toBeHidden()
+    // 确实已经停用：登录不了（与密码错误同一句提示）
+    await loginThroughUi(page, admin)
+    await expect(page.getByRole('alert')).toHaveText('用户名或密码错误')
+  })
+
   test('同事连续输错密码被锁定：账户页说明锁到什么时候；管理员确认解除之后，同事立即能登录（M2-P6 复核 A1）', async ({ page, anotherDevice }) => {
     const admin = await createUser('unlock-admin', '解除锁定的管理员', { systemRole: 'admin' })
     const user = await createUser('unlock-user', '被锁定的人')

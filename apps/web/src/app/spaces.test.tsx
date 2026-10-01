@@ -4,7 +4,7 @@
 import type { SessionResponse, SpaceMember, SpaceMemberListResponse, SpaceRole, SpaceView } from '@nerve-office/contracts'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { apiError, installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
+import { apiError, installFakeApi, json, networkFailure } from '../shared/testing/fake-api.test-support.ts'
 import { personIn, plainName } from '../shared/testing/people.test-support.ts'
 import { documentsKey, foldersKey, noFolders, personalSpaceOf, spaceRoutes } from '../shared/testing/spaces.test-support.ts'
 import { deferred, settle } from './admin.test-support.ts'
@@ -874,6 +874,40 @@ describe('US-M2-06 成员页：角色经明确的保存才提交、结果未知�
     // 选择随之清掉：这个人已经是成员，不再是候选
     expect(screen.getByLabelText('要添加的同事')).toHaveValue('')
     expect(screen.getByRole('button', { name: '添加成员' })).toHaveAttribute('aria-disabled', 'true')
+  })
+
+  it('添加时得到"已经是成员"，而之前添加这个人没有过结果未知（多半是别人刚加的）：只说已经是成员，成员列表刷新，不说"刚才那一次"（第五批 G5）', async () => {
+    const CAT = { id: '0199a2c4-0000-7000-8000-00000000000c', username: 'cat', displayName: '凯特' }
+    let items = [member(SESSION.user, 'admin')]
+    const api = loggedIn(MANAGER, {
+      [MEMBERS_KEY]: () => json(200, membersList(true, items)),
+      [`GET /api/users?${new URLSearchParams({ query: '本' }).toString()}`]: () => json(200, { items: [BEN] }),
+      [`GET /api/users?${new URLSearchParams({ query: '凯' }).toString()}`]: () => json(200, { items: [CAT] }),
+      [`POST /api/spaces/${TEAM_ID}/members`]: (init) => {
+        const body = JSON.parse(String(init?.body)) as { userId: string }
+        // 添加本的结果未知（其实没有加上）；凯特刚被别人加进来了
+        if (body.userId === BEN.id)
+          return networkFailure()
+        items = [...items, member(CAT, 'viewer')]
+        return apiError(409, 'ALREADY_MEMBER')
+      },
+    })
+    renderApp(MEMBERS_PATH)
+    fireEvent.change(await screen.findByLabelText('要添加的同事'), { target: { value: '本' } })
+    fireEvent.click(await screen.findByRole('button', { name: '@ben 本' }))
+    fireEvent.click(screen.getByRole('button', { name: '添加成员' }))
+    expect(await screen.findByText(/^没能确认是否已经添加/)).toBeInTheDocument()
+
+    // 换一个人：结果未知的是本，不是她
+    fireEvent.click(screen.getByRole('button', { name: '重新选择 要添加的同事' }))
+    fireEvent.change(screen.getByLabelText('要添加的同事'), { target: { value: '凯' } })
+    fireEvent.click(await screen.findByRole('button', { name: '@cat 凯特' }))
+    const listed = api.requests.filter(request => request.key === MEMBERS_KEY).length
+    fireEvent.click(screen.getByRole('button', { name: '添加成员' }))
+    expect(await screen.findByText('这个人已经是空间的成员了，成员列表已刷新。')).toBeInTheDocument()
+    expect(screen.queryByText(/刚才没能确认的那一次添加/)).toBeNull()
+    expect(api.requests.filter(request => request.key === MEMBERS_KEY).length).toBeGreaterThan(listed)
+    await waitFor(() => expect(personIn(screen.getByRole('table', { name: '成员列表' }), '凯特', 'cat')).toBeInTheDocument())
   })
 
   it('成员表：显示名写成"李四（lisi）"的人与真正的李四分得清——登录名在单独的元素里；从右到左的显示名在 <bdi> 里（M2）', async () => {

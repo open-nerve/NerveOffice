@@ -6,19 +6,19 @@ import { useMutation } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { describeError, isAccessDenied, isUnknownOutcome } from '../../shared/api/index.ts'
-import { refreshIfUnknown } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { useRequestIdLedger } from '../../shared/lib/request-id-ledger.ts'
 import { spaceFolderPath, spacePath, spaceTrashPath } from '../../shared/lib/space-paths.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
+import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { problemOf } from '../../shared/lib/validation.ts'
 import { Alert, AlertDescription, Button, buttonVariants, FieldProblem, Input, Label, Notice, Skeleton } from '../../shared/ui/index.ts'
 import { DocumentList } from './document-list.tsx'
 import { FolderList } from './folder-list.tsx'
 import { useFolderTrail } from './folder-trail.ts'
 import { createFolder } from './folders-api.ts'
-import { useOrganizeRefresh, useOrganizeRefreshAfterUnknown } from './organize-refresh.ts'
+import { useOrganizeRefresh, useOrganizeRefreshChecked } from './organize-refresh.ts'
 
 const text = messages.organize
 
@@ -79,18 +79,18 @@ interface NewFolderFormProps {
  * 结果未知之后原样再提交，沿用同一个、服务端只建一个；改了名再提交，服务端认出那个 requestId 已经用掉了（REQUEST_ID_CONFLICT），
  * 说明上一次多半已经建好并刷新列表，requestId 随之换新，再提交就建这个新名字的（P1）。结果未知时列表同样刷新。
  * 这两种情形的刷新经共用的做法（shared/api/write-outcome.ts，M2-P6 复核第四批）：最多等 10 秒，刷新失败或者到了时限还没回来，
- * 说明里说"列表没能刷新"，表单也不一直停在"正在新建…"。
+ * 说明里说"列表没能刷新"，表单也不一直停在"正在新建…"；超时之后刷新才回来的，说明随后改过来（第五批 G4）。
  * 服务端说这次是重放（replayed，M2-P6 复核第二批 S-1）：结果未知的那一次其实已经建好了（同一个位置、同一个名称），表单关掉，
  * 在列表上方说明"上一次其实已经完成"，不当成这一次新建的；这件事随之了结，再新建就是另一个。
  * 名称不合法时说明原因（WCAG 3.3.1，M2-P6 复核 S4）。
  */
 function NewFolderForm({ spaceId, parentId, onDone, onCancel, onDenied }: NewFolderFormProps) {
   const refresh = useOrganizeRefresh()
-  const refreshAfterUnknown = useOrganizeRefreshAfterUnknown()
+  const refreshAfterUnknown = useOrganizeRefreshChecked()
   const ledger = useRequestIdLedger()
   const [name, setName] = useState('')
   /** 上一次失败之后列表刷新好了没有：说明据此说"已刷新"还是"没能刷新"（第四批）。每次失败都重新记下 */
-  const [refreshed, setRefreshed] = useState(false)
+  const { refreshed, refreshAfterFailure } = useOutcomeRefresh()
   const inputId = useId()
   const problemId = useId()
   const parsed = folderNameSchema.safeParse(name)
@@ -107,7 +107,7 @@ function NewFolderForm({ spaceId, parentId, onDone, onCancel, onDenied }: NewFol
         return
       }
       // 结果未知，或者上一次已经建好：在时限之内刷新列表，看得到它
-      setRefreshed(await refreshIfUnknown(error, async () => refreshAfterUnknown([spaceId]), { also: ledger.earlierAttemptDone }))
+      await refreshAfterFailure(error, async () => refreshAfterUnknown([spaceId]), { also: ledger.earlierAttemptDone })
     },
   })
 
@@ -156,8 +156,11 @@ interface SpaceContentsProps {
   readonly folderIds: readonly string[]
   /** 我能新建内容的空间（服务端给的 canCreateDocuments）：移动与复制的目标候选。由空间页传入，避免与 features/spaces 成环 */
   readonly targetSpaces: readonly SpaceView[]
-  /** 页内的操作按访问权限被拒绝：由空间页重新请求页头与导航 */
-  readonly onDenied: () => void
+  /**
+   * 页内的操作按访问权限被拒绝：由空间页重新请求页头、导航与各层的列表，兑现为列表刷新好了没有（最多等 10 秒）：
+   * 整理面板的说明据此说"列表已刷新"还是"没能刷新"（M2-P6 复核第五批 G3）
+   */
+  readonly onDenied: () => Promise<boolean>
   /** 页面的标题（h1，tabIndex -1）：关掉说明时那一行已经不在了，焦点交给它（M2-P6 复核 S3） */
   readonly titleRef: RefObject<HTMLElement | null>
 }
@@ -223,7 +226,7 @@ export function SpaceContents({ space, folderIds, targetSpaces, onDenied, titleR
   function creationDenied(denied: OrganizeNotice): void {
     setCreating(false)
     setNotice(denied)
-    onDenied()
+    void onDenied()
   }
 
   if (trail.missing || trail.moved) {

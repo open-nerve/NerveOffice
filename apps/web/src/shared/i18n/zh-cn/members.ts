@@ -49,4 +49,6 @@ export const membersMessages = {
   // 添加的结果未知（M2-P6 复核 S1）：可能已经加好；再添加会得到"已经是成员"。两种情形成员列表都随即刷新，没能刷新时另说（第四批）
   addOutcomeUnknown: (reason: string, refreshed: boolean) => `没能确认是否已经添加（${reason}）。${messages.common.listRefreshed(refreshed, '成员列表')}：这个人在列表里，就是已经加好了。`,
   addedEarlier: (refreshed: boolean) => `这个人已经是空间的成员了（可能就是刚才没能确认的那一次添加），${messages.common.listRefreshed(refreshed, '成员列表')}。`,
+  // 之前添加这个人没有过结果未知（第五批 G5）：只说已经是成员（多半是别人刚加的），不说"刚才那一次"
+  alreadyMember: (refreshed: boolean) => `这个人已经是空间的成员了，${messages.common.listRefreshed(refreshed, '成员列表')}。`,
 } as const

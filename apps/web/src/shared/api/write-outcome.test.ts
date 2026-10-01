@@ -1,4 +1,5 @@
-// 写操作没能确认结果之后的共用做法：结果未知时在时限之内刷新（M2-P6 复核第三批 S-a），刷新失败或者超时时说明里不说"已刷新"（第三批 G-a）。
+// 写操作没能确认结果之后的共用做法：结果未知时在时限之内刷新（M2-P6 复核第三批 S-a），刷新失败或者超时时说明里不说"已刷新"（第三批 G-a）；
+// 超时之后刷新在后台成功了，告诉调用方（第五批 G4）。
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from './client.ts'
 import { OUTCOME_REFRESH_TIME_LIMIT_MS, refreshIfUnknown, refreshWithin, writeFailureText } from './write-outcome.ts'
@@ -32,7 +33,33 @@ describe('refreshWithin：在时限之内刷新（第三批 S-a）', () => {
       vi.useRealTimers()
     }
     expect(OUTCOME_REFRESH_TIME_LIMIT_MS).toBe(10_000)
-    expect(await refreshWithin(hanging, 20)).toBe(false)
+    expect(await refreshWithin(hanging, { timeLimitMs: 20 })).toBe(false)
+  })
+
+  it('到了时限之后刷新在后台成功了：调用 onLateRefresh（说明随后改回"已刷新"，第五批 G4）；后台失败了、在时限之内就有了结果，都不调用', async () => {
+    let finish: (ok: boolean) => void = () => {}
+    const late = async () => new Promise<void>((resolve, reject) => {
+      finish = ok => (ok ? resolve() : reject(new NetworkError('网络请求失败')))
+    })
+    const onLateRefresh = vi.fn()
+    expect(await refreshWithin(late, { timeLimitMs: 20, onLateRefresh })).toBe(false)
+    expect(onLateRefresh).not.toHaveBeenCalled()
+    finish(true)
+    await vi.waitFor(() => expect(onLateRefresh).toHaveBeenCalledTimes(1))
+
+    const failsLater = vi.fn()
+    expect(await refreshWithin(late, { timeLimitMs: 20, onLateRefresh: failsLater })).toBe(false)
+    finish(false)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(failsLater).not.toHaveBeenCalled()
+
+    const inTime = vi.fn()
+    expect(await refreshWithin(async () => {}, { onLateRefresh: inTime })).toBe(true)
+    expect(await refreshWithin(async () => {
+      throw new NetworkError('网络请求失败')
+    }, { onLateRefresh: inTime })).toBe(false)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(inTime).not.toHaveBeenCalled()
   })
 })
 
@@ -46,6 +73,14 @@ describe('refreshIfUnknown：只在结果未知时刷新', () => {
       throw new NetworkError('网络请求失败')
     })).toBe(false)
     expect(await refreshIfUnknown(new ApiError(500, 'INTERNAL_ERROR', 'x'), hanging, { timeLimitMs: 20 })).toBe(false)
+    // 晚到的刷新同样转给调用方
+    let finish: () => void = () => {}
+    const onLateRefresh = vi.fn()
+    expect(await refreshIfUnknown(new NetworkError('网络请求失败'), async () => new Promise<void>((resolve) => {
+      finish = resolve
+    }), { timeLimitMs: 20, onLateRefresh })).toBe(false)
+    finish()
+    await vi.waitFor(() => expect(onLateRefresh).toHaveBeenCalledTimes(1))
 
     refresh.mockClear()
     expect(await refreshIfUnknown(new ApiError(409, 'LAST_ADMIN', 'x'), refresh)).toBe(false)

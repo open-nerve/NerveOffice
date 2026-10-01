@@ -7,7 +7,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { describeError, isAccessDenied, isMissingResource, isUnknownOutcome } from '../../shared/api/index.ts'
-import { refreshIfUnknown } from '../../shared/api/write-outcome.ts'
+import { refreshIfUnknown, refreshWithin } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { trashMessages } from '../../shared/i18n/zh-cn/trash.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
@@ -98,7 +98,8 @@ type TrashQuery = UseInfiniteQueryResult<InfiniteData<TrashListResponse>>
  *
  * 没能完成时（M2-P6 复核 S1、S2）：
  * - 按访问权限被拒绝（403：空间刚被归档；404：这一条已经不在了，或者整个空间看不到了）：回收站、空间的页头与内容一起重新请求，
- *   "恢复"随新的权限消失；说明接住焦点（403 用服务端说的原因）。空间看不到了时页面换成"空间不存在"，不说"列表已刷新"；
+ *   "恢复"随新的权限消失；说明接住焦点（403 用服务端说的原因）。404 的说明等回收站刷新有了结果（或者到了时限）再给出，
+ *   "列表已刷新"还是"没能刷新"按刷新的结果说（第五批 G3，永久删除得到 404 也一样）；空间看不到了时页面随之换成"空间不存在"；
  * - 结果未知：同样刷新，说明它可能已经恢复了。这时的刷新经共用的做法（shared/api/write-outcome.ts，第四批）：最多等 10 秒，
  *   刷新失败或者到了时限还没回来，说明里说"列表没能刷新"，"恢复"也不一直停在"正在恢复…"。
  */
@@ -121,9 +122,12 @@ function TrashList({ space, query, headingRef }: { readonly space: SpaceView, re
   /** 恢复与永久删除会改变的内容：回收站、各层的文件夹与文档 */
   const contentKeys = [spaceTrashQueryKey(space.id), spaceFoldersQueryKey(space.id), spaceDocumentsQueryKey(space.id)]
 
-  /** 恢复与永久删除都会改变空间里的内容：回收站、各层的文件夹与文档一起重新请求；被拒绝时页头（权限、归档）与导航也一起 */
+  /**
+   * 恢复与永久删除都会改变空间里的内容：回收站、各层的文件夹与文档一起重新请求；被拒绝时页头（权限、归档）与导航也一起。
+   * 刷新失败时各自显示加载失败
+   */
   async function refresh(withSpace = false): Promise<void> {
-    await Promise.all([...contentKeys, ...(withSpace ? [SPACES_QUERY_KEY] : [])].map(async queryKey => queryClient.invalidateQueries({ queryKey })))
+    await refreshQueries(queryClient, [...contentKeys, ...(withSpace ? [SPACES_QUERY_KEY] : [])], { throwOnError: false })
   }
 
   /** 结果未知之后的刷新（恢复与确认的弹窗）：刷新失败时拒绝，据此说明页面没能刷新（M2-P6 复核第三批 G-a、第四批） */
@@ -131,9 +135,14 @@ function TrashList({ space, query, headingRef }: { readonly space: SpaceView, re
     await refreshQueries(queryClient, contentKeys)
   }
 
-  /** 回收站刷新出来了：看不到这个空间时它会失败，页面换成"空间不存在"，这时不说"列表已刷新" */
-  function listRefreshed(): boolean {
-    return queryClient.getQueryState(spaceTrashQueryKey(space.id))?.status === 'success'
+  /**
+   * 这一条已经不在回收站里了（404）之后：同样的内容在时限之内重新请求，兑现为刷新好了没有，说明据此说"列表已刷新"还是"没能刷新"
+   * （M2-P6 复核第五批 G3：原来不看刷新的结果，刷新失败、那一行还在时也说"列表已刷新"）。withSpace：页头与导航也一起（不计入）
+   */
+  async function refreshAfterGone(withSpace: boolean): Promise<boolean> {
+    if (withSpace)
+      void refreshQueries(queryClient, [SPACES_QUERY_KEY], { throwOnError: false })
+    return refreshWithin(refreshAfterUnknown)
   }
 
   const restore = useMutation({
@@ -144,16 +153,16 @@ function TrashList({ space, query, headingRef }: { readonly space: SpaceView, re
       setNotice({ message: result.movedToRoot ? text.restoredToRoot(entry.title) : text.restored(entry.title) })
     },
     onError: async (error, entry) => {
+      // 别人已经恢复或永久删除了它（404）：说明一句，不留下一条点不动的行。整个空间看不到了时回收站同样得到 404，
+      // 页面随之换成"空间不存在"，这条说明也就不显示了
+      if (isMissingResource(error)) {
+        setNotice({ message: text.gone(await refreshAfterGone(true)) })
+        return
+      }
+      // 空间刚被归档（403）：用服务端说的原因
       if (isAccessDenied(error)) {
         await refresh(true)
-        // 别人已经恢复或永久删除了它（404）：说明一句，不留下一条点不动的行；空间刚被归档（403）：用服务端说的原因
-        if (isMissingResource(error)) {
-          if (listRefreshed())
-            setNotice({ message: text.gone })
-        }
-        else {
-          setNotice({ message: text.denied(entry.title, describeError(error).message), problem: true })
-        }
+        setNotice({ message: text.denied(entry.title, describeError(error).message), problem: true })
         return
       }
       const refreshed = await refreshIfUnknown(error, refreshAfterUnknown)
@@ -169,8 +178,6 @@ function TrashList({ space, query, headingRef }: { readonly space: SpaceView, re
       confirmLabel: text.purge,
       destructive: true,
       run: async () => {
-        // 别人已经恢复或永久删除了它：目的已经达到，按“已经不在回收站里”说明，不当成失败
-        let gone = false
         try {
           await purgeTrashEntry(entry.id)
         }
@@ -182,10 +189,13 @@ function TrashList({ space, query, headingRef }: { readonly space: SpaceView, re
               await refresh(true)
             throw error
           }
-          gone = true
+          // 别人已经恢复或永久删除了它：目的已经达到，按"已经不在回收站里"说明，不当成失败；"列表已刷新"还是"没能刷新"
+          // 看刷新的结果（第五批 G3）
+          setNotice({ message: text.gone(await refreshAfterGone(false)) })
+          return
         }
         await refresh()
-        setNotice({ message: gone ? text.gone : text.purged(entry.title) })
+        setNotice({ message: text.purged(entry.title) })
       },
       refresh: refreshAfterUnknown,
       // 确认之后这一行就没了，打开弹窗的按钮随之消失：焦点交给页面的标题
