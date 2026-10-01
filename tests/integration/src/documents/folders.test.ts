@@ -321,6 +321,22 @@ describe('US-M2-07 文件夹的改名与移动', () => {
     expect(await depthsOf([deep.at(-1)?.id ?? ''])).toEqual({ [deep.at(-1)?.id ?? '']: FOLDER_MAX_DEPTH })
   })
 
+  it('层数把回收站里的子孙也算进去（M2-P6 复核 B 的 B3）：它们跟着移动、恢复时回到原处，整棵放不下就 409，什么也不改', async () => {
+    const spaceId = await teamSpace()
+    const [top, middle, leaf] = (await chain(spaceId, 3)).map(folder => folder.id)
+    // 第 2、3 层删进回收站：正常状态的只剩第 1 层，回收站里的子孙跟着它移动
+    await trash('folder', spaceId, middle ?? '')
+    const deep = await chain(spaceId, FOLDER_MAX_DEPTH - 2)
+    // 挂到第 8 层下面：回收站里的第 3 层会到第 11 层
+    const tooDeep = await patch(amySession, top ?? '', { parentId: deep.at(-1)?.id })
+    expect(tooDeep.status).toBe(409)
+    expect((await errorOf(tooDeep)).code).toBe('FOLDER_DEPTH_EXCEEDED')
+    expect(await depthsOf([top ?? '', middle ?? '', leaf ?? ''])).toEqual({ [top ?? '']: 1, [middle ?? '']: 2, [leaf ?? '']: 3 })
+    // 挂到第 7 层下面正好放得下：回收站里的子孙一起降到第 9、10 层
+    expect((await updated(await patch(amySession, top ?? '', { parentId: deep.at(-2)?.id }))).depth).toBe(8)
+    expect(await depthsOf([middle ?? '', leaf ?? ''])).toEqual({ [middle ?? '']: 9, [leaf ?? '']: 10 })
+  })
+
   it('目标文件夹在别的空间里：NOT_FOUND（跨空间移动另有接口）', async () => {
     const spaceId = await teamSpace()
     const folder = await newFolder(amySession, { spaceId, name: '资料' })
@@ -502,6 +518,28 @@ describe('US-M2-07 文件夹的跨空间移动', () => {
     expect(await placesOf([top.id])).toEqual({ [top.id]: { space: spaceId, parent: null, depth: 1 } })
   })
 
+  it('层数把回收站里的子孙也算进去（M2-P6 复核 B 的 B3）：目标空间里整棵放不下就 409，什么也不改', async () => {
+    const from = await teamSpace({ amy: 'admin' })
+    const to = await teamSpace()
+    const [top, middle, leaf] = (await chain(from, 3)).map(folder => folder.id ?? '')
+    await trash('folder', from, middle ?? '')
+    const deep = await chain(to, FOLDER_MAX_DEPTH - 2)
+    const tooDeep = await move(amySession, top ?? '', { spaceId: to, folderId: deep.at(-1)?.id })
+    expect(tooDeep.status).toBe(409)
+    expect((await errorOf(tooDeep)).code).toBe('FOLDER_DEPTH_EXCEEDED')
+    expect(await placesOf([top ?? '', middle ?? '', leaf ?? ''])).toEqual({
+      [top ?? '']: { space: from, parent: null, depth: 1 },
+      [middle ?? '']: { space: from, parent: top, depth: 2 },
+      [leaf ?? '']: { space: from, parent: middle, depth: 3 },
+    })
+    // 挂到第 7 层下面正好放得下：回收站里的子孙跟着换空间、降到第 9、10 层
+    expect((await moved(await move(amySession, top ?? '', { spaceId: to, folderId: deep.at(-2)?.id }))).depth).toBe(8)
+    expect(await placesOf([middle ?? '', leaf ?? ''])).toEqual({
+      [middle ?? '']: { space: to, parent: top, depth: 9 },
+      [leaf ?? '']: { space: to, parent: middle, depth: 10 },
+    })
+  })
+
   it('目标文件夹在别的空间里、已经在回收站里、不存在：同一个 NOT_FOUND，什么也不改', async () => {
     const from = await teamSpace({ amy: 'admin' })
     const to = await teamSpace()
@@ -579,7 +617,7 @@ describe('US-M2-14 空间树的锁与并发', () => {
     expect(await depthsOf([folder.id])).toEqual({ [folder.id]: 1 })
   })
 
-  it('跨空间移动等锁期间，有人往子树里移进新文档：锁下才展开子树，那份文档也跟着搬走', async () => {
+  it('跨空间移动等锁期间，有人往这个文件夹里移进新文档：锁下才锁住里面的文档，那份文档也跟着搬走（锁下才展开子树见 structure-locks.test.ts）', async () => {
     const from = await teamSpace({ amy: 'admin' })
     const to = await teamSpace()
     const folder = await newFolder(amySession, { spaceId: from, name: '资料' })

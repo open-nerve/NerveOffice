@@ -12,6 +12,8 @@ import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
+import { TransactionRunner } from '@nerve-office/api'
+import { DocumentsRepository } from '@nerve-office/api/testing'
 import { documentListResponseSchema, errorResponseSchema, folderListResponseSchema, folderSchema, restoredTrashEntrySchema, SHEET_TEMPLATE, TRASH_LIST_PAGE_SIZE, TRASH_RETENTION_DAYS, trashListResponseSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
@@ -188,8 +190,8 @@ async function seedSeparatelyTrashed(spaceId: string, folderId: string, count: n
       [spaceId, folderId, amy.id, count],
     )).rows.map(row => row.id)
     const entries = (await client.query<{ id: string }>(
-      `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_space_id, origin_parent_id, title)
-       SELECT $1, 'document', $2, now() + make_interval(days => $3::int), $1, $4, '连带'
+      `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_parent_id, title)
+       SELECT $1, 'document', $2, now() + make_interval(days => $3::int), $4, '连带'
        FROM unnest($5::uuid[]) RETURNING id`,
       [spaceId, amy.id, TRASH_RETENTION_DAYS, folderId, documents],
     )).rows.map(row => row.id)
@@ -621,6 +623,131 @@ describe('US-M2-09 永久删除（spec §4）', () => {
     expect((await restore(amySession, entryId)).status).toBe(404)
     expect((await purge(amySession, entryId)).status).toBe(404)
   })
+
+  it('要删的都在回收站里（M2-P6 复核 A 的 S-3、B 的 B2）：回收站的文件夹下有正常状态的文档时按数据不一致处理，500，什么也不删，日志里有这一单', async () => {
+    const spaceId = await teamSpace({ amy: 'admin' })
+    const folder = await newFolder(amySession, { spaceId, name: '资料' })
+    const inside = await newFolder(amySession, { spaceId, parentId: folder.id, name: '里面' })
+    const entryId = await trashedEntry(amySession, spaceId, async () => deleteFolder(amySession, folder.id))
+    // 数据不一致：一份正常状态的文档挂在回收站里的子文件夹下。各条路径都不会这样写（锁下的核对守着），这里直接写库摆出来
+    const stray = await createDocument(database, { spaceId, createdBy: amy.id, title: '正常的文档', folderId: inside.id })
+    try {
+      const response = await purge(amySession, entryId)
+      expect(response.status).toBe(500)
+      expect((await errorOf(response)).code).toBe('INTERNAL_ERROR')
+      // 整个事务回滚，什么也没删：两个文件夹还在这一单里，那份文档还在，没有永久删除的审计
+      expect(await foldersOf([folder.id, inside.id])).toEqual({
+        [folder.id]: { status: 'trashed', entry: entryId, space: spaceId, parent: null, depth: 1 },
+        [inside.id]: { status: 'trashed', entry: entryId, space: spaceId, parent: folder.id, depth: 2 },
+      })
+      expect(await documentsOf([stray])).toMatchObject({ [stray]: { status: 'active', folder: inside.id } })
+      expect(await count('SELECT count(*) FROM trash_entries WHERE id = $1', [entryId])).toBe(1)
+      expect((await auditsOf(folder.id)).map(audit => audit.action)).toEqual(['folders.deleted'])
+      // 错误日志里有这一单的 id（没有标题与名称）
+      expect(app.logs.text()).toContain(`永久删除的子树里有正常状态的行（文件夹 0 个、文档 1 份），什么也不删：${entryId}`)
+    }
+    finally {
+      // 收拾好：那份文档挪回空间的根目录，库里不留违反不变量的数据（删库之前会扫一遍）
+      await database.query(async client => client.query('UPDATE documents SET folder_id = NULL WHERE id = $1', [stray]))
+    }
+    // 数据一致之后照常永久删除
+    expect((await purge(amySession, entryId)).status).toBe(204)
+    expect(await documentsOf([stray])).toMatchObject({ [stray]: { status: 'active', folder: null } })
+  })
+
+  it('别的空间里的正常文档挂在回收站的文件夹下（数据不一致）：核对只数这个空间（M2-P6 第 3 片复验），那份文档不被锁住、不被删；删文件夹撞上外键，整个事务回滚，什么也不删', async () => {
+    const spaceId = await teamSpace({ amy: 'admin' })
+    const elsewhere = await teamSpace({ amy: 'admin' })
+    const folder = await newFolder(amySession, { spaceId, name: '资料' })
+    const entryId = await trashedEntry(amySession, spaceId, async () => deleteFolder(amySession, folder.id))
+    // 数据不一致：另一个空间里的文档指着这个文件夹。各条路径都不会这样写，这里直接写库摆出来
+    const stray = await createDocument(database, { spaceId: elsewhere, createdBy: amy.id, title: '别处的文档', folderId: folder.id })
+    try {
+      const response = await purge(amySession, entryId)
+      expect(response.status).toBe(500)
+      expect(await foldersOf([folder.id])).toEqual({ [folder.id]: { status: 'trashed', entry: entryId, space: spaceId, parent: null, depth: 1 } })
+      expect(await documentsOf([stray])).toMatchObject({ [stray]: { status: 'active', space: elsewhere, folder: folder.id } })
+      expect(await count('SELECT count(*) FROM trash_entries WHERE id = $1', [entryId])).toBe(1)
+      expect((await auditsOf(folder.id)).map(audit => audit.action)).toEqual(['folders.deleted'])
+    }
+    finally {
+      // 收拾好：那份文档挪回它所在空间的根目录（删库之前会扫一遍不变量）
+      await database.query(async client => client.query('UPDATE documents SET folder_id = NULL WHERE id = $1', [stray]))
+    }
+    expect((await purge(amySession, entryId)).status).toBe(204)
+  })
+})
+
+describe('US-M2-09 一串 id 超过一条语句的参数上限（M2-P6 复核 A 的 S-2、B 的 G1）', () => {
+  /**
+   * PostgreSQL 一条语句最多 65535 个参数：删除、永久删除、跨空间移动按子树里的文档一次改一批，逐个传参的话，
+   * 一个文件夹里超过这个数的文档就让那条语句每次都失败。现在一串 id 是一个数组参数：这里直接用真实的仓储与数据库，
+   * 给它 7 万个 id（多数不存在），语句照样执行、结果照样对。每条语句只有一个数组参数由单元测试
+   * （apps/api 的 documents/id-array-statements.test.ts）逐个方法核对；不在这里真的建 7 万份文档（太慢）
+   */
+  it('7 万个 id：锁住、计数、放进回收站（再按删除单元找回、恢复）、移动、永久删除、按空间列出都照样执行，只动存在的那几行', async () => {
+    const spaceId = await teamSpace({ amy: 'admin' })
+    const to = await teamSpace({ amy: 'admin' })
+    const folder = await newFolder(amySession, { spaceId, name: '资料' })
+    const inside = await createDocument(database, { spaceId, createdBy: amy.id, title: '里面的', folderId: folder.id })
+    // 放进回收站要一个删除单元：直接建一个，用完（恢复之后它空了）再删掉
+    const entry = await database.query(async client => (await client.query<{ id: string }>(
+      `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_parent_id, title)
+       VALUES ($1, 'document', $2, now() + interval '30 days', $3, '里面的') RETURNING id`,
+      [spaceId, amy.id, folder.id],
+    )).rows[0]?.id ?? '')
+    const absent = Array.from({ length: 70_000 }, () => randomUUID())
+    const repository = app.runtime.get(DocumentsRepository)
+    const listed = await repository.listAccessible({ spaceIds: [...absent, spaceId] }, { limit: 10 })
+    expect(listed.map(row => row.id)).toEqual([inside])
+
+    const outcome = await app.runtime.get(TransactionRunner).run(async (transaction) => {
+      const folders = [...absent, folder.id]
+      const documents = [...absent, inside]
+      const entries = [...absent, entry]
+      const locked = await repository.lockInFolders(folders, spaceId, transaction)
+      const active = await repository.countActiveInFolders(folders, spaceId, transaction)
+      const others = await repository.countCreatedByOthers(folders, spaceId, ben.id, transaction)
+      const transferable = await repository.lockForTransfer(documents, spaceId, transaction)
+      const trashed = await repository.trash(documents, entry, transaction)
+      const inEntries = await repository.lockInEntries(entries, transaction)
+      const counted = await repository.countByTrashEntries(entries, transaction)
+      const restored = await repository.restoreInEntry(entry, undefined, transaction)
+      const moved = await repository.moveToSpace(documents, to, undefined, transaction)
+      const deleted = await repository.deleteMany(absent, transaction)
+      return {
+        locked: locked.map(row => row.id),
+        active,
+        others,
+        transferable,
+        trashed,
+        inEntries: inEntries.map(row => row.id),
+        counted: Object.fromEntries(counted),
+        restored,
+        moved: moved.map(row => row.id),
+        deleted,
+      }
+    })
+    expect(outcome).toEqual({
+      locked: [inside],
+      active: 1,
+      others: 1,
+      transferable: [inside],
+      trashed: 1,
+      inEntries: [inside],
+      counted: { [entry]: 1 },
+      restored: 1,
+      moved: [inside],
+      deleted: 0,
+    })
+    // 放进回收站与跨空间移动各加一次代次（恢复不加）
+    expect(await documentsOf([inside])).toMatchObject({ [inside]: { status: 'active', entry: null, space: to, epoch: 2 } })
+    // 收拾好：文档与它的文件夹要在同一个空间里，空了的删除单元删掉（删库之前会扫一遍不变量）
+    await database.query(async (client) => {
+      await client.query('UPDATE documents SET space_id = $2 WHERE id = $1', [inside, spaceId])
+      await client.query('DELETE FROM trash_entries WHERE id = $1', [entry])
+    })
+  })
 })
 
 describe('US-M2-09 回收站里的东西对普通接口不存在（spec §5）', () => {
@@ -693,13 +820,13 @@ describe('US-M2-09 跨空间移动与删除单元（spec §6b）', () => {
 
     expect(await restored(await restore(amySession, documentEntry))).toMatchObject({ spaceId: to, folderId: inside.id, movedToRoot: false })
     expect(await documentsOf([document])).toMatchObject({ [document]: { status: 'active', space: to, folder: inside.id } })
-    // origin_space_id 也跟着改了
-    expect(await count('SELECT count(*) FROM trash_entries WHERE space_id = $1 AND origin_space_id = $1', [to])).toBe(1)
+    // 文件夹的那一单也跟着搬到了新空间
+    expect(await count('SELECT count(*) FROM trash_entries WHERE space_id = $1', [to])).toBe(1)
   })
 })
 
 describe('US-M2-14 回收站的并发（spec §7）', () => {
-  it('删文件夹等锁期间有人往子树里移进新文档：锁下才展开子树，那份文档也一起进回收站', async () => {
+  it('删文件夹等锁期间有人往这个文件夹里移进新文档：锁下才锁住里面的文档，那份文档也一起进回收站（锁下才展开子树见 structure-locks.test.ts）', async () => {
     const spaceId = await teamSpace({ amy: 'admin' })
     const folder = await newFolder(amySession, { spaceId, name: '资料' })
     const document = await createDocument(database, { spaceId, createdBy: ben.id, title: '后来才进来的' })
@@ -773,7 +900,7 @@ describe('US-M2-14 回收站的并发（spec §7）', () => {
       // 艾米在新空间里也是空间管理员，所以挡住它的只能是锁下"这一单已经不在我锁着的空间里"这一条
       change: async (client) => {
         await client.query('UPDATE documents SET space_id = $2 WHERE id = $1', [document, to])
-        await client.query('UPDATE trash_entries SET space_id = $2, origin_space_id = $2 WHERE id = $1', [entryId, to])
+        await client.query('UPDATE trash_entries SET space_id = $2 WHERE id = $1', [entryId, to])
       },
     })
     expect(response.status).toBe(404)

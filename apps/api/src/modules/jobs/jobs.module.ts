@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common'
 import { DatabaseModule } from '../database/index.ts'
 import { DocumentsModule } from '../documents/index.ts'
-import { Clock, SystemClock } from './clock.ts'
+import { Clock, DatabaseClock } from './clock.ts'
 import { TrashPurgeJob } from './trash-purge.job.ts'
 import { TrashPurgeScheduler } from './trash-purge.scheduler.ts'
 
@@ -13,7 +13,8 @@ import { TrashPurgeScheduler } from './trash-purge.scheduler.ts'
 @Module({
   imports: [DatabaseModule, DocumentsModule],
   providers: [
-    { provide: Clock, useClass: SystemClock },
+    // 每一轮的"现在"取数据库的时间（M2-P6 复核 A 的疑点 Q-1）；测试换成可控的时钟
+    { provide: Clock, useClass: DatabaseClock },
     TrashPurgeJob,
     TrashPurgeScheduler,
   ],

@@ -264,6 +264,12 @@ function threadpoolOf(value: string | undefined): Threadpool | undefined {
 }
 
 /**
+ * 开启回收站的自动清理时连接池至少要有几个连接（M2-P6 复核 A 的 G-3）：清理的一轮用一个连接持着防重复执行的会话级锁
+ * （ExclusiveRunner），每一项的删除在另一个连接的短事务里。只有一个连接时，第二个连接永远等不到，每一轮都失败
+ */
+const TRASH_PURGE_MIN_POOL = 2
+
+/**
  * 变量之间的约束：只在每个变量各自合法之后检查，免得一个错误报两次。
  * threadpool 是 libuv 线程池的大小，不合法时为 undefined（它自己的问题另外报出，这里不再比较）；
  * defaults 是没有设置、用了默认值的变量。
@@ -277,6 +283,15 @@ function crossChecks(env: Environment, threadpool: Threadpool | undefined, defau
       variable: 'NERVE_LOGIN_ACCOUNT_MAX_FAILURES',
       problem: `现在是 ${current('NERVE_LOGIN_ACCOUNT_MAX_FAILURES', env.NERVE_LOGIN_ACCOUNT_MAX_FAILURES)}，必须大于 NERVE_LOGIN_MAX_FAILURES`
         + `（现在是 ${current('NERVE_LOGIN_MAX_FAILURES', env.NERVE_LOGIN_MAX_FAILURES)}）：否则一个来源的失败就能把这个账户在所有来源上锁住`,
+    })
+  }
+  if (env.NERVE_TRASH_PURGE_ENABLED && env.NERVE_DATABASE_POOL_MAX < TRASH_PURGE_MIN_POOL) {
+    issues.push({
+      variable: 'NERVE_DATABASE_POOL_MAX',
+      problem: `现在是 ${current('NERVE_DATABASE_POOL_MAX', env.NERVE_DATABASE_POOL_MAX)}，开启回收站的自动清理时至少为 ${TRASH_PURGE_MIN_POOL}`
+        + `（NERVE_TRASH_PURGE_ENABLED 现在是 true${defaults.has('NERVE_TRASH_PURGE_ENABLED') ? '（默认值）' : ''}）：`
+        + `清理的一轮用一个连接持着防重复执行的锁，每一项的删除在另一个连接的事务里，只有一个连接时每一轮都会失败。`
+        + `把它调到至少 ${TRASH_PURGE_MIN_POOL}，或者把 NERVE_TRASH_PURGE_ENABLED 设为 false（到期的东西改为人工永久删除）`,
     })
   }
   if (env.NERVE_HTTP_HEADERS_TIMEOUT_MS > env.NERVE_HTTP_REQUEST_TIMEOUT_MS)

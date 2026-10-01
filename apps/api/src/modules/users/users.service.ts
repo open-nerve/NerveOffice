@@ -87,6 +87,9 @@ export class UsersService implements OnModuleInit {
    * 账户的哈希参数与当前配置不同时，失败的耗时也与"用户名不存在"相同（Codex 评审 CX4）。
    * 停用的账户对假哈希验证：密码对不对，耗时都一样，不暴露账户已停用（M2-P1 审查 A8）。
    * 验证通过且哈希的参数已经过时，顺带用当前的参数重新哈希（失败只记日志，不影响这次登录）。
+   * 数据库只在比对之前读（凭据），比对之后的重新哈希不抛出：调用方据此把这里抛出的数据库繁忙当作"还没有比对"，
+   * 退回限流的名额（auth 的 releasingIfBusy，M2-P6 第 3 片复验）。比对之后不能再加会抛出的数据库访问，否则就让人借繁忙多猜一次
+   * （单元测试核对比对失败之后仓储不再被调用；集成测试 auth/throttle-when-busy.test.ts 核对账户行被锁着时错的密码不等锁）
    */
   async verifyCredentials(usernameInput: string, password: string): Promise<CredentialCheck> {
     // 先让哈希器知道库里现存的参数（参数调低之后，旧哈希的计算量更大，失败都要补到它）；读过一次之后不再读
@@ -129,7 +132,8 @@ export class UsersService implements OnModuleInit {
 
   /**
    * 按 id 验证密码（修改密码时的旧密码，M2-P1 设计 §3.5）。账户不存在或不可用时同样算一次哈希，
-   * 失败的耗时由哈希器补齐，与登录相同（ADR-007）。通过时返回验证过的凭据，事务里交给 replacePassword 复核
+   * 失败的耗时由哈希器补齐，与登录相同（ADR-007）。通过时返回验证过的凭据，事务里交给 replacePassword 复核。
+   * 数据库只在比对之前读，同 verifyCredentials
    */
   async verifyPasswordOf(userId: string, password: string): Promise<VerifiedCredentials | undefined> {
     await this.observeStoredParameters()
@@ -222,9 +226,12 @@ export class UsersService implements OnModuleInit {
     return this.repository.searchActive(query.query, USER_DIRECTORY_LIMIT)
   }
 
-  /** 按 id 批量取账户（含停用的）：审计查询补名字 */
-  async findByIds(ids: readonly string[]): Promise<ReadonlyMap<string, User>> {
-    const found = await this.repository.findByIds([...new Set(ids)])
+  /**
+   * 按 id 批量取账户（含停用的）：审计查询补名字。写操作的响应要补名字时传入它的事务，在提交之前读：
+   * 提交之后不再访问数据库（M2-P6 第 3 片复验）
+   */
+  async findByIds(ids: readonly string[], transaction?: Transaction): Promise<ReadonlyMap<string, User>> {
+    const found = await this.repository.findByIds([...new Set(ids)], transaction)
     return new Map(found.map(user => [user.id, user]))
   }
 

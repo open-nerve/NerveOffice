@@ -5,7 +5,6 @@ import { acceptInvitationRequestSchema, completePasswordResetRequestSchema, insp
 import { Body, Controller, HttpCode, Post } from '@nestjs/common'
 import { Public } from '../../shared/public.ts'
 import { RequestOrigin } from '../audit/index.ts'
-import { AuthService } from './auth.service.ts'
 import { InvitationsService } from './invitations.service.ts'
 import { PasswordResetsService } from './password-resets.service.ts'
 import { SessionCookieJar } from './principal.ts'
@@ -15,6 +14,8 @@ type HttpOrigin = Extract<AuditOrigin, { source: 'http' }>
 /**
  * 一次性链接的公开接口（M2-P1 设计 §3.3、§3.4）：邀请注册与重置密码。不需要登录，状态变更照样检查 Origin（CSRF 守卫）。
  * 令牌在请求体里：页面从链接的 # 部分读出，不经请求行，不进访问日志。成功接受或完成之后已登录，响应与登录相同。
+ * 响应由服务在业务事务里拼好，全部成功之后才写 Cookie（M2-P6 第 3 片复验）：先写 Cookie 再读库的话，读库失败时
+ * 带着新会话的 Set-Cookie 与错误一起下发
  */
 @Controller('auth')
 @Public()
@@ -22,7 +23,6 @@ export class LinksController {
   constructor(
     private readonly invitations: InvitationsService,
     private readonly resets: PasswordResetsService,
-    private readonly auth: AuthService,
   ) {}
 
   @Post('invitations/inspect')
@@ -39,8 +39,8 @@ export class LinksController {
     @SessionCookieJar() cookie: SessionCookie,
   ): Promise<SessionResponse> {
     const accepted = await this.invitations.accept(body.token, body, origin, cookie.token)
-    cookie.write(accepted.sessionToken)
-    return this.auth.sessionResponseFor(accepted.user, accepted.sessionToken)
+    cookie.write(accepted.token)
+    return accepted.session
   }
 
   @Post('password-resets/inspect')
@@ -57,7 +57,7 @@ export class LinksController {
     @SessionCookieJar() cookie: SessionCookie,
   ): Promise<SessionResponse> {
     const completed = await this.resets.complete(body.token, body, origin, cookie.token)
-    cookie.write(completed.sessionToken)
-    return this.auth.sessionResponseFor(completed.user, completed.sessionToken)
+    cookie.write(completed.token)
+    return completed.session
   }
 }

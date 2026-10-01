@@ -3,8 +3,9 @@ import type { AuditEvent, AuditOrigin } from '../audit/index.ts'
 import type { AppConfig } from '../config/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { User } from '../users/index.ts'
-import type { LinkLookup, LinkOutcome } from './link-state.ts'
+import type { LinkLookup } from './link-state.ts'
 import type { PasswordResetRecord } from './password-resets.repository.ts'
+import type { LoginResult } from './session-response.ts'
 import { oneTimeLinkUrl, PASSWORD_RESET_LIFETIME_HOURS } from '@nerve-office/contracts'
 import { Inject, Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
@@ -13,21 +14,16 @@ import { APP_CONFIG } from '../config/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { AppLogger } from '../logging/index.ts'
 import { PasswordHashingBusyError, UsersService } from '../users/index.ts'
-import { hashingBusy, withHashing } from './attempt-errors.ts'
+import { hashingBusy, releasingIfBusy, settleQuietly } from './attempt-errors.ts'
 import { LinkAttempts } from './link-attempts.ts'
-import { rejectionOf, usabilityOf } from './link-state.ts'
+import { LinkUnusableDuringRequest, rejectionOf, usabilityOf } from './link-state.ts'
 import { generateLinkToken, linkTokenDigest } from './link-token.ts'
 import { LoginLockouts } from './login-lockouts.ts'
 import { PasswordResetsRepository } from './password-resets.repository.ts'
+import { SessionResponses } from './session-response.ts'
 import { SessionService } from './session.service.ts'
 
 type HttpOrigin = Extract<AuditOrigin, { source: 'http' }>
-
-/** 完成重置之后：账户与新会话的令牌（只交给 Cookie） */
-export interface CompletedReset {
-  readonly user: User
-  readonly sessionToken: string
-}
 
 function stateOf(record: PasswordResetRecord) {
   return { completedAt: record.usedAt, revokedAt: record.revokedAt, expired: record.expired }
@@ -46,6 +42,7 @@ export class PasswordResetsService {
     private readonly repository: PasswordResetsRepository,
     private readonly users: UsersService,
     private readonly sessions: SessionService,
+    private readonly responses: SessionResponses,
     private readonly attempts: LinkAttempts,
     private readonly lockouts: LoginLockouts,
     private readonly audit: AuditService,
@@ -142,59 +139,68 @@ export class PasswordResetsService {
     }
   }
 
-  /** 公开：用令牌查看，只给出登录名与显示名；账户已停用的按作废处理 */
+  /**
+   * 公开：用令牌查看，只给出登录名与显示名；账户已停用的按作废处理。查令牌时数据库繁忙：还不知道令牌对不对，退回名额；
+   * 令牌可用时退回名额，尽力而为：查看是只读的，退回失败只记日志，照样给出结果（与邀请相同，M2-P6 第 3 片复验 建议 1）
+   */
   async inspect(token: string, origin: HttpOrigin): Promise<InspectLinkResponse> {
     const ticket = await this.attempts.admit(origin)
-    const found = await this.lookup(token)
+    const found = await releasingIfBusy(ticket, this.#logger, async () => this.lookup(token))
     if (!found.usable)
       throw await this.attempts.rejected(ticket, 'password_reset', found.rejection, origin)
     const { record, user } = found.record
-    await ticket.succeeded()
+    await settleQuietly(async () => ticket.succeeded(), this.#logger)
     return { username: user.username, displayName: user.displayName, expiresAt: record.expiresAt.toISOString() }
   }
 
   /**
    * 公开：设置新密码。先查令牌再算哈希，都在事务之外；然后在一个事务里：先锁账户行、再锁重置行，复核账户仍然有效、
    * 重置仍然可用（审查 A2），退回限流的名额、更新密码、标记已使用、清掉这个账户的登录失败计数（M2-P6 复核 A1：本人已经用链接
-   * 证明控制着这个账户，别人留下的锁定不能挡住他用新密码登录）、撤销这个人的全部会话、新建本次的会话、记审计。
-   * 复核不通过（查令牌之后被用过、作废、账户停用）：事务之外交给 LinkAttempts.rejected，记审计（审查 A10）；
-   * 找到了记录、只是不能用，不计入按地址的失败（M2-P6 复核 B3），另按这条记录计数
+   * 证明控制着这个账户，别人留下的锁定不能挡住他用新密码登录）、撤销这个人的全部会话、新建本次的会话、记审计、拼好响应（与登录相同）：
+   * 提交之后不再访问数据库，控制器随后才写 Cookie（M2-P6 第 3 片复验）。
+   * 复核不通过（查令牌之后被用过、作废、账户停用）：回滚，事务之外交给 LinkAttempts.rejected，记审计（审查 A10）；
+   * 找到了记录、只是不能用，不计入按地址的失败（M2-P6 复核 B3），另按这条记录计数。
+   * 查令牌时、确认令牌可用之后（算哈希、事务里）遇到繁忙，名额退回（M2-P6 第 3 片复验 建议 1）
    */
-  async complete(token: string, request: CompletePasswordResetRequest, origin: HttpOrigin, previousSessionToken: string | undefined): Promise<CompletedReset> {
+  async complete(token: string, request: CompletePasswordResetRequest, origin: HttpOrigin, previousSessionToken: string | undefined): Promise<LoginResult> {
     const ticket = await this.attempts.admit(origin)
-    const found = await this.lookup(token)
+    const found = await releasingIfBusy(ticket, this.#logger, async () => this.lookup(token))
     if (!found.usable)
       throw await this.attempts.rejected(ticket, 'password_reset', found.rejection, origin)
     const { record } = found.record
-    const passwordHash = await withHashing(ticket, this.#logger, async () => this.users.hashPassword(request.password))
-    const outcome = await this.transactions.run(async (transaction): Promise<LinkOutcome<CompletedReset>> => {
-      const account = await this.users.lockAccount(record.userId, transaction)
-      if (account?.status !== 'active')
-        return { done: false, reason: 'revoked' }
-      const locked = await this.repository.findByIdForUpdate(record.id, transaction)
-      const now = locked === undefined ? 'invalid' : usabilityOf(stateOf(locked))
-      if (now !== 'usable')
-        return { done: false, reason: now }
-      await ticket.succeeded(transaction)
-      await this.users.resetPassword(account.id, passwordHash, transaction)
-      await this.repository.markUsed(record.id, transaction)
-      await this.lockouts.clear(account.username, transaction)
-      await this.sessions.revokeAllOf(account.id, 'password_reset', { transaction })
-      if (previousSessionToken !== undefined)
-        await this.sessions.replace(previousSessionToken, transaction)
-      const session = await this.sessions.create(account.id, transaction)
-      await this.audit.record({
-        action: 'users.password_reset_completed',
-        actor: { type: 'user', id: account.id },
-        target: { type: 'user', id: account.id },
-        origin,
-        details: { passwordResetId: record.id },
-      }, { transaction })
-      return { done: true, value: { user: account, sessionToken: session.token } }
-    })
-    if (!outcome.done)
-      throw await this.attempts.rejected(ticket, 'password_reset', rejectionOf(outcome.reason, record.id, { type: 'user', id: record.userId }), origin)
-    return outcome.value
+    const passwordHash = await releasingIfBusy(ticket, this.#logger, async () => this.users.hashPassword(request.password))
+    try {
+      return await releasingIfBusy(ticket, this.#logger, async () => this.transactions.run(async (transaction) => {
+        const account = await this.users.lockAccount(record.userId, transaction)
+        if (account?.status !== 'active')
+          throw new LinkUnusableDuringRequest('revoked')
+        const locked = await this.repository.findByIdForUpdate(record.id, transaction)
+        const now = locked === undefined ? 'invalid' : usabilityOf(stateOf(locked))
+        if (now !== 'usable')
+          throw new LinkUnusableDuringRequest(now)
+        await ticket.succeeded(transaction)
+        await this.users.resetPassword(account.id, passwordHash, transaction)
+        await this.repository.markUsed(record.id, transaction)
+        await this.lockouts.clear(account.username, transaction)
+        await this.sessions.revokeAllOf(account.id, 'password_reset', { transaction })
+        if (previousSessionToken !== undefined)
+          await this.sessions.replace(previousSessionToken, transaction)
+        const session = await this.sessions.create(account.id, transaction)
+        await this.audit.record({
+          action: 'users.password_reset_completed',
+          actor: { type: 'user', id: account.id },
+          target: { type: 'user', id: account.id },
+          origin,
+          details: { passwordResetId: record.id },
+        }, { transaction })
+        return this.responses.forNewSession(account, session.token, transaction)
+      }))
+    }
+    catch (error) {
+      if (error instanceof LinkUnusableDuringRequest)
+        throw await this.attempts.rejected(ticket, 'password_reset', rejectionOf(error.reason, record.id, { type: 'user', id: record.userId }), origin)
+      throw error
+    }
   }
 
   /** 让当前密码失效用的哈希（审查 A7）。等待哈希的请求太多时 503，与登录相同 */

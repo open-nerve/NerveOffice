@@ -2,20 +2,21 @@
 // 时刻由假时钟给出（把"现在"推到 30 天之后，不必真的等）。覆盖：到期的才清、内容与修订记录一起没了、
 // 未到期的不动、审计的操作者是系统、一轮的批量上限与"最早到期的先清"、
 // 两个实例同时跑只有一个干活（另一个连接持有同一把 advisory lock）、归档的空间照样清、
-// 等树锁期间这一单被跨空间搬走时这一轮跳过（留给下一轮）、定时器真的会跑。
+// 等树锁期间这一单被跨空间搬走时这一轮跳过（留给下一轮）、归档先取完空间行时等它提交、一直失败的条目暂缓重试而不挡住后面到期的、定时器真的会跑、
+// 定时器每一轮的"现在"取的是数据库的时间（连接的会话时区不是 UTC 时也一样）。
 import type { TrashListResponse } from '@nerve-office/contracts'
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import { randomUUID } from 'node:crypto'
-import { TRASH_PURGE_LOCK, TrashPurgeJob } from '@nerve-office/api'
+import { Clock, TRASH_PURGE_LOCK, TrashPurgeJob } from '@nerve-office/api'
 import { folderSchema, trashListResponseSchema } from '@nerve-office/contracts'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
-import { createTestDatabase } from '../support/database.ts'
+import { createTestDatabase, withClient } from '../support/database.ts'
 import { createDocument } from '../support/documents.ts'
 import { raceAgainstHeldLock } from '../support/held-lock.ts'
 import { asUser, login } from '../support/session-client.ts'
@@ -228,7 +229,7 @@ describe('US-M2-09 到期的自动清理', () => {
       change: async (client) => {
         await client.query('UPDATE folders SET space_id = $2 WHERE id = $1', [folder, to])
         await client.query('UPDATE documents SET space_id = $2 WHERE folder_id = $1', [folder, to])
-        await client.query('UPDATE trash_entries SET space_id = $2, origin_space_id = $2 WHERE id = $1', [entry.id, to])
+        await client.query('UPDATE trash_entries SET space_id = $2 WHERE id = $1', [entry.id, to])
       },
     })
     expect(round).toEqual({ ran: true, purged: 0, skipped: 1, failed: 0 })
@@ -241,11 +242,90 @@ describe('US-M2-09 到期的自动清理', () => {
     expect(await count('SELECT count(*) FROM folders WHERE id = $1', [folder])).toBe(0)
   })
 
+  /**
+   * 与归档、移出成员互斥（M2-P6 第 3 片复验）：清理与人工的永久删除一样取空间行的共享锁，归档（空间行的 FOR NO KEY UPDATE）
+   * 先取完锁时，这一单的清理等它提交，再照常清掉（归档的空间照样清）。不取这把锁的话，清理不等它、直接走完
+   */
+  it('归档先取完锁（空间行）：这一单的清理等它提交，再照常清掉', async () => {
+    const spaceId = await teamSpace()
+    const document = await createDocument(database, { spaceId, createdBy: amy.id, title: '等归档的' })
+    const entry = await trashed(spaceId, `/api/documents/${document}`)
+    // 别的用例留下的删除单元都挪到还没到期：这一轮只碰这一单
+    await database.query(async client => client.query('UPDATE trash_entries SET deleted_at = now(), expires_at = now() + interval \'30 days\' WHERE space_id <> $1', [spaceId]))
+    const round = await raceAgainstHeldLock(database, {
+      // 归档的效果：锁住空间行（FOR NO KEY UPDATE），提交之前改成已归档
+      hold: async client => client.query('SELECT id FROM spaces WHERE id = $1 FOR NO KEY UPDATE', [spaceId]),
+      request: async () => runPurge(expired(entry)),
+      change: async client => client.query('UPDATE spaces SET status = \'archived\' WHERE id = $1', [spaceId]),
+    })
+    expect(round).toEqual({ ran: true, purged: 1, skipped: 0, failed: 0 })
+    expect(await count('SELECT count(*) FROM documents WHERE id = $1', [document])).toBe(0)
+  })
+
+  /**
+   * 一直失败的条目不挡住后面到期的（M2-P6 复核 A 的 S-1、B 的 G2）：它们到期最早，每一批都从它们取起，
+   * 攒够一批之后后面到期的就再也轮不到。现在本进程记下失败过的条目，之后的几轮取批时让开它们。
+   */
+  it('最早到期的两单一直失败（批量 2）：之后的一轮让开它们，后面到期的那一单照常清掉；失败日志带着连续失败的次数', async () => {
+    const spaceId = await teamSpace()
+    const failing = await Promise.all(['坏的一', '坏的二'].map(async title => createDocument(database, { spaceId, createdBy: amy.id, title })))
+    const good = await createDocument(database, { spaceId, createdBy: amy.id, title: '好的' })
+    const failingEntries: string[] = []
+    for (const document of failing)
+      failingEntries.push((await trashed(spaceId, `/api/documents/${document}`)).id)
+    const goodEntry = (await trashed(spaceId, `/api/documents/${good}`)).id
+    // 别的用例留下的删除单元都挪到还没到期：这几轮只碰这个用例的三单
+    await database.query(async client => client.query('UPDATE trash_entries SET deleted_at = now(), expires_at = now() + interval \'30 days\' WHERE space_id <> $1', [spaceId]))
+    // 两单"坏的"最早到期；"好的"也已经到期，只是晚一点
+    await setExpiry(failingEntries[0] ?? '', '42 days', '-12 days')
+    await setExpiry(failingEntries[1] ?? '', '41 days', '-11 days')
+    await setExpiry(goodEntry, '35 days', '-5 days')
+    // 让"坏的"两份每次永久删除都失败（例如数据不一致、语句超时）：触发器只挡这两份
+    await database.query(async client => client.query(`
+      CREATE FUNCTION refuse_purge() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN
+        IF OLD.id = ANY('{${failing.join(',')}}'::uuid[]) THEN
+          RAISE EXCEPTION '这份文档删不掉';
+        END IF;
+        RETURN OLD;
+      END
+      $$;
+      CREATE TRIGGER refuse_purge BEFORE DELETE ON documents FOR EACH ROW EXECUTE FUNCTION refuse_purge();`))
+    // 单独起一个应用（批量 2）：失败过的条目记在它的内存里，不带进别的用例
+    const isolated = await startTestApp({ databaseUrl: database.url, env: { NERVE_TRASH_PURGE_BATCH: '2' } })
+    try {
+      const job = isolated.runtime.get(TrashPurgeJob)
+      await expect(job.runOnce(new Date())).resolves.toEqual({ ran: true, purged: 0, skipped: 0, failed: 2 })
+      // 下一轮让开那两单："好的"那一单照常清掉
+      await expect(job.runOnce(new Date())).resolves.toEqual({ ran: true, purged: 1, skipped: 0, failed: 0 })
+      expect(await count('SELECT count(*) FROM documents WHERE id = $1', [good])).toBe(0)
+      // 让开的一轮过了：再试一次，仍然失败，连续失败的次数是 2（之后让开两轮）
+      await expect(job.runOnce(new Date())).resolves.toEqual({ ran: true, purged: 0, skipped: 0, failed: 2 })
+      const failures = isolated.logs.entries()
+        .filter(line => line.job === 'trash-purge' && line.level === 'error')
+        .map(line => [line.trashEntryId, line.consecutiveFailures, line.deferredRounds])
+      expect(failures).toEqual([
+        [failingEntries[0], 1, 1],
+        [failingEntries[1], 1, 1],
+        [failingEntries[0], 2, 2],
+        [failingEntries[1], 2, 2],
+      ])
+      expect(await count('SELECT count(*) FROM documents WHERE id = ANY($1::uuid[])', [failing])).toBe(2)
+    }
+    finally {
+      await isolated.close()
+      await database.query(async client => client.query('DROP TRIGGER refuse_purge ON documents; DROP FUNCTION refuse_purge();'))
+    }
+    // 收拾好：两单"坏的"人工永久删除（触发器已经拿掉），不留给后面的用例
+    for (const entry of failingEntries)
+      expect((await asUser(app.baseUrl, amySession, `/api/trash/${entry}`, { method: 'DELETE' })).status).toBe(204)
+  })
+
   it('定时器：应用自己按间隔跑，已经过期的东西不必等谁来触发', async () => {
     const spaceId = await teamSpace()
     const document = await createDocument(database, { spaceId, createdBy: amy.id, title: '等定时器来清' })
     const entry = await trashed(spaceId, `/api/documents/${document}`)
-    // 已经过期（系统时钟看得到的过期）：定时器那一轮用的是真实的时钟
+    // 已经过期：定时器那一轮的"现在"是数据库的时间
     await setExpiry(entry.id, '31 days', '-1 days')
 
     const timed = await startTestApp({ databaseUrl: database.url, env: { NERVE_TRASH_PURGE_ENABLED: 'true', NERVE_TRASH_PURGE_INTERVAL_MS: '1000' } })
@@ -261,6 +341,35 @@ describe('US-M2-09 到期的自动清理', () => {
     }
     finally {
       await timed.close()
+    }
+  })
+
+  it('定时器每一轮的"现在"取数据库的时间，不看应用主机的时钟（M2-P6 复核 A 的疑点 Q-1）：主机的钟拨到 2036 年、应用连接的会话时区是上海，给出的仍是数据库的时间', async () => {
+    // 应用的连接用 UTC 以外的会话时区（M2-P6 第 3 片复验 建议 2）：测试库默认是 UTC，换算时漏了时区也看不出来——
+    // 部署在上海时区的库上，那样会提前 8 小时永久删除
+    const url = new URL(database.url)
+    url.searchParams.set('options', '-c TimeZone=Asia/Shanghai')
+    expect(await withClient(async client => (await client.query<{ TimeZone: string }>('SHOW TimeZone')).rows[0]?.TimeZone, url.toString())).toBe('Asia/Shanghai')
+    const shanghai = await startTestApp({ databaseUrl: url.toString() })
+    try {
+      const databaseNow = async (): Promise<Date> => database.query(async client => (await client.query<{ now: Date }>('SELECT now()')).rows[0]?.now ?? new Date(Number.NaN))
+      const before = await databaseNow()
+      // 只换掉 Date（定时器照旧）：应用里 new Date() 与 Date.now() 都是 2036 年
+      vi.useFakeTimers({ toFake: ['Date'], now: new Date('2036-01-01T00:00:00.000Z') })
+      let now: Date
+      try {
+        expect(new Date().getUTCFullYear()).toBe(2036)
+        now = await shanghai.runtime.get(Clock).now()
+      }
+      finally {
+        vi.useRealTimers()
+      }
+      const after = await databaseNow()
+      expect(now.getTime()).toBeGreaterThanOrEqual(before.getTime())
+      expect(now.getTime()).toBeLessThanOrEqual(after.getTime())
+    }
+    finally {
+      await shanghai.close()
     }
   })
 })

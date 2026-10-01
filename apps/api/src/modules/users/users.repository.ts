@@ -143,11 +143,11 @@ export class UsersRepository {
     return { user, passwordHash, passwordVersion }
   }
 
-  /** 按 id 批量取账户（含停用的）：审计查询补名字用 */
-  async findByIds(ids: readonly string[]): Promise<User[]> {
+  /** 按 id 批量取账户（含停用的）：审计查询补名字用；写操作在它的事务里补名字时传入事务 */
+  async findByIds(ids: readonly string[], transaction?: Transaction): Promise<User[]> {
     if (ids.length === 0)
       return []
-    return this.db.select(USER_COLUMNS).from(users).where(inArray(users.id, [...ids]))
+    return executorOf(this.db, transaction).select(USER_COLUMNS).from(users).where(inArray(users.id, [...ids]))
   }
 
   /**

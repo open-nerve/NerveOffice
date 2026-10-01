@@ -829,6 +829,29 @@ describe('US-M1-11 lint 规则的自测：后端', () => {
       expect(await rulesFor(code, allowed), allowed).not.toContain('no-restricted-imports')
   })
 
+  it('documents 的仓储里一串 id 用 inIdArray，不用 drizzle 的 inArray、notInArray（M2-P6 复核 A 的 S-2）；别的模块的仓储不受影响', async () => {
+    const ID_LISTS_MESSAGE = 'documents 的仓储里一串 id 用 inIdArray'
+    const documentsRepository = 'apps/api/src/modules/documents/folders.repository.ts'
+    const violations = [
+      'import { inArray } from \'drizzle-orm\'\n\nexport const f = inArray\n',
+      'import { notInArray as notIn } from \'drizzle-orm\'\n\nexport const f = notIn\n',
+      // 命名空间导入认不出用的是哪个名字，一并拦下；包里的深层路径同样拿得到它们
+      'import * as orm from \'drizzle-orm\'\n\nexport const f = orm.inArray\n',
+      'import { inArray } from \'drizzle-orm/sql/expressions/conditions\'\n\nexport const f = inArray\n',
+      'export { inArray } from \'drizzle-orm\'\n',
+    ]
+    for (const code of violations) {
+      for (const file of [documentsRepository, 'apps/api/src/modules/documents/space-tree.repository.ts']) {
+        const report = await lint(code, file)
+        expect(report.rules, `${file}：${code}`).toContain('no-restricted-imports')
+        expect(report.messages.join('\n'), `${file}：${code}`).toContain(ID_LISTS_MESSAGE)
+      }
+    }
+    // 同一个仓储里 drizzle-orm 的其余写法照常；别的模块的仓储（id 列表有上限）照样能用 inArray
+    expect(await rulesFor('import { and, eq, sql } from \'drizzle-orm\'\n\nexport const f = [and, eq, sql]\n', documentsRepository)).not.toContain('no-restricted-imports')
+    expect(await rulesFor('import { inArray } from \'drizzle-orm\'\n\nexport const f = inArray\n', 'apps/api/src/modules/auth/sessions.repository.ts')).not.toContain('no-restricted-imports')
+  })
+
   it('控制器不引用仓储；输入必须带 schema；不用 @Req、@Res', async () => {
     expect(await rulesFor('import { AuditRepository } from \'./audit.repository.ts\'\nexport const r = AuditRepository\n', API_CONTROLLER)).toContain('no-restricted-imports')
     const controller = (parameter: string): string => [
@@ -1008,6 +1031,10 @@ describe('US-M1-11 lint 规则的自测：后端', () => {
       expect(report.rules, `${file}：${code}`).toEqual(expect.arrayContaining([...rules]))
       expect(report.messages.join('\n'), `${file}：${code}`).toContain(ENTRY_MESSAGE)
     }
+    // 它为集成测试转出全部的表定义（迁移与表定义逐项核对，M2-P6 复核 B 的 B4）；app 层的其他文件照旧引用不到表定义
+    const importTables = 'import { auditEvents } from \'../db/schema/audit/index.ts\'\nimport { folders } from \'../db/schema/documents/index.ts\'\n\nexport const tables = [auditEvents, folders]\n'
+    expect(await rulesFor(importTables, API_INTEGRATION_ENTRY)).not.toContain('boundaries/dependencies')
+    expect(await rulesFor(importTables, 'apps/api/src/app/app.module.ts')).toContain('boundaries/dependencies')
   })
 
   it('admin 与 workspace 是最上层的编排：只由 app 层组装，别的模块都不引用它们，经 admin 转手的转移同样拦下（M2-P2 复验 N2）', async () => {

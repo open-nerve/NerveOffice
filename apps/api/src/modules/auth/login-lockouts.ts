@@ -23,10 +23,13 @@ export interface LoginLock {
 export class LoginLockouts {
   constructor(private readonly repository: LoginThrottleRepository) {}
 
-  /** 这些账户里登录仍被锁定的，各自的锁定；没有锁定的不在结果里 */
-  async locksOf(usernames: readonly string[]): Promise<ReadonlyMap<string, LoginLock>> {
+  /**
+   * 这些账户里登录仍被锁定的，各自的锁定；没有锁定的不在结果里。管理员改动账户之后的响应传入那个事务，在提交之前读
+   * （M2-P6 第 3 片复验：提交之后不再访问数据库），读到的包括这个事务自己的改动（例如刚解除的锁定）
+   */
+  async locksOf(usernames: readonly string[], transaction?: Transaction): Promise<ReadonlyMap<string, LoginLock>> {
     const byDigest = new Map(usernames.map(username => [accountDigest(username).toString('hex'), username]))
-    const rows = await this.repository.locksOfAccounts([...usernames].map(accountDigest))
+    const rows = await this.repository.locksOfAccounts([...usernames].map(accountDigest), transaction)
     const locks = new Map<string, LoginLock>()
     for (const row of rows) {
       const username = byDigest.get(row.accountHash.toString('hex'))

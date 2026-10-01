@@ -142,11 +142,13 @@ describe('SpaceMembershipService.add', () => {
 })
 
 describe('SpaceMembershipService.changeRole 与 remove', () => {
-  it('调整角色：锁下再判断之后改，在同一个事务里经收回写入权的入口（这个人在这个空间），再记审计', async () => {
-    const { service, calls, writeAccess, transaction } = setup()
+  it('调整角色：锁下再判断之后改，在同一个事务里经收回写入权的入口（这个人在这个空间），再记审计；响应里的名字也在这个事务里补', async () => {
+    const { service, calls, writeAccess, users, transaction } = setup()
     expect(await service.changeRole(principal(AMY), SPACE, BEN, 'editor', ORIGIN)).toMatchObject({ user: { id: BEN }, role: 'editor' })
     expect(calls).toEqual(['check', 'lock', 'check', 'change', 'revoke', 'audit'])
     expect(writeAccess.revoke).toHaveBeenCalledWith({ kind: 'membership', userId: BEN, spaceId: SPACE }, transaction)
+    // M2-P6 第 3 片复验：提交之后不再访问数据库
+    expect(users.findByIds).toHaveBeenCalledWith([BEN], transaction)
   })
 
   it('角色没有变化：不收回、不记审计', async () => {

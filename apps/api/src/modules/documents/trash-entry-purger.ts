@@ -90,13 +90,18 @@ export class TrashEntryPurger {
 
   /**
    * 一个文件夹的删除单元：这一单里的全部行，以及子树里属于别的删除单元的行（spec §4 的"连带"）。
-   * 先删文档再删文件夹（外键是 restrict，文档指着文件夹）；文档的内容与修订记录随外键 cascade
+   * 先删文档再删文件夹（外键是 restrict，文档指着文件夹）；文档的内容与修订记录随外键 cascade。
+   * 锁的实际顺序（调用方已取树锁、空间行、这一单的文档行与回收站行）：之后锁子树里的文档行（lockInFolders，含属于别的删除单元的，
+   * 按 id）→ 删文档行 → 删文件夹行（逐层，锁随删除取得）→ 删连带的回收站行与这一单的回收站行（deleteEmptied）。
+   * 也就是"文档行 → 回收站行 → 文档行 → 文件夹行 → 回收站行"：先后与跨空间移动文件夹不同，不成环靠的是
+   * "文件夹行与回收站行只被持有所在空间树锁的事务改动"（SpaceTreeRepository 的锁顺序说明）
    */
   private async purgeFolder(entry: TrashEntryRow, transaction: Transaction): Promise<PurgeOutcome> {
     const root = rootFolderOf(entry.id, await this.folders.listInEntry(entry.id, transaction))
     // 不按状态过滤地展开整棵子树：里面可能还有早先单独删过、属于别的删除单元的东西
     const folderIds = (await this.folders.summarizeSubtree(root.id, null, transaction)).ids
     const documents = await this.documents.lockInFolders(folderIds, entry.spaceId, transaction)
+    await this.requireAllTrashed(entry, folderIds, transaction)
     const documentIds = documents.map(row => row.id)
     const cascadedEntryIds = [...new Set([
       ...documents.flatMap(row => row.trashEntryId ?? []),
@@ -106,6 +111,21 @@ export class TrashEntryPurger {
     await this.documents.deleteMany(documentIds, transaction)
     await this.folders.deleteMany(folderIds, transaction)
     return { objectId: root.id, kind: 'folder', spaceId: entry.spaceId, folders: folderIds.length, documents: documentIds.length, cascadedEntryIds }
+  }
+
+  /**
+   * 不变量"要删的都在回收站里"（spec §4；M2-P6 复核 A 的 S-3、B 的 B2）：展开出来的文件夹与它们里面的文档，
+   * 每一行都属于这一单或被连带的删除单元，也就是都不是正常状态。
+   * 这一条只由服务保证（删除文件夹时整棵正常状态的子树一起进回收站，往回收站的文件夹里新建、移入都找不到目标，
+   * 结构性的改动都在锁下核对对象还在锁着的空间里），数据库里没有约束。万一不成立（某条路径在错的锁下改动过），
+   * 永久删除会把正常状态的文件夹与文档一起删掉，而且恢复不了。所以删之前用计数核对一次：有正常状态的行就按数据不一致处理——
+   * 抛出意外错误，整个事务回滚、什么也不删，错误日志里有这一单的 id；人工的永久删除回答 500，到期的清理记为失败、之后再试
+   */
+  private async requireAllTrashed(entry: TrashEntryRow, folderIds: readonly string[], transaction: Transaction): Promise<void> {
+    const folders = await this.folders.countActive(folderIds, transaction)
+    const documents = await this.documents.countActiveInFolders(folderIds, entry.spaceId, transaction)
+    if (folders > 0 || documents > 0)
+      throw new Error(`永久删除的子树里有正常状态的行（文件夹 ${folders} 个、文档 ${documents} 份），什么也不删：${entry.id}`)
   }
 
   /** 这些删除单元里已经没有任何行的那些（永久删除之后），一起删掉并返回真正删掉的 id。 */

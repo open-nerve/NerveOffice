@@ -1,9 +1,11 @@
 // 集成测试的数据库（规范 §8.1）：每个测试文件使用独立的数据库，不 mock 数据库。
 // 已迁移的库从模板库复制：模板按迁移的哈希命名，迁移不变时跨运行复用，第一次需要时在 advisory lock 下创建。
+// 删库之前扫一遍只由服务保证的数据不变量（invariants.ts，M2-P6 复核 B 的 B5）：违反了就让这个测试文件失败。
 import { createHash, randomBytes } from 'node:crypto'
 import process from 'node:process'
 import { readExpectedMigrations, runMigrations } from '@nerve-office/api'
 import pg from 'pg'
+import { describeViolations, invariantViolations } from './invariants.ts'
 
 /** 本机开发数据库（deploy/dev/compose.yaml）；CI 用环境变量指向服务容器。建库、删库都经它（维护库）执行。 */
 const LOCAL_DEVELOPMENT_URL = 'postgres://nerve:nerve_dev_only@127.0.0.1:54318/nerve_office'
@@ -43,6 +45,11 @@ export interface TestDatabase {
   readonly url: string
   /** 在这个库上执行 fn（独立的连接） */
   query: <T>(fn: (client: pg.Client) => Promise<T>) => Promise<T>
+  /**
+   * 删掉这个库。迁移好的库删之前先扫一遍数据不变量：有违反时库照样删掉，再抛出错误列出违反的行，
+   * 让这个测试文件失败（afterAll 里调用）。扫描本身出错时同样先删库，再把扫描的错误抛出来（M2-P6 第 3 片复验）。
+   * 用例自己造出的违反（例如核对永久删除拒绝删除不一致的数据）要在用例结束前收拾好
+   */
   drop: () => Promise<void>
 }
 
@@ -107,10 +114,29 @@ async function ensureTemplate(client: pg.Client): Promise<string> {
   return template
 }
 
+/** PostgreSQL 的 SQLSTATE 3D000：库不存在（已经删过了） */
+const INVALID_CATALOG_NAME = '3D000'
+
+/**
+ * 删库之前扫一遍数据不变量（M2-P6 复核 B 的 B5）。库已经不在（删过一次）时没有可扫的。
+ * 成本：每个测试文件一个连接、十几条查询（测试库里的行很少）
+ */
+async function sweepInvariants(url: string): Promise<string | undefined> {
+  try {
+    const violations = await withClient(invariantViolations, url)
+    return violations.length === 0 ? undefined : describeViolations(violations)
+  }
+  catch (error) {
+    if ((error as { code?: unknown }).code === INVALID_CATALOG_NAME)
+      return undefined
+    throw error
+  }
+}
+
 /**
  * 为当前测试文件创建一个独立的数据库。
- * - migrated（默认）：从模板复制，已执行全部迁移；
- * - 否则是空库，用于"迁移从零执行"一类的测试。
+ * - migrated（默认）：从模板复制，已执行全部迁移；删之前扫一遍数据不变量；
+ * - 否则是空库，用于"迁移从零执行"一类的测试：没有那些表，或者只迁移到某一步，不扫。
  */
 export async function createTestDatabase(options: { migrated?: boolean } = {}): Promise<TestDatabase> {
   const name = testDatabaseName()
@@ -133,7 +159,15 @@ export async function createTestDatabase(options: { migrated?: boolean } = {}): 
     url,
     query: async fn => withClient(fn, url),
     drop: async () => {
+      // 扫描的结果或错误先记下：不论扫描结果如何都要删库，不留下孤儿库
+      const swept = options.migrated === false
+        ? { violations: undefined }
+        : await sweepInvariants(url).then(violations => ({ violations }), (error: unknown) => ({ error }))
       await withClient(async client => client.query(`DROP DATABASE IF EXISTS ${pg.escapeIdentifier(name)} WITH (FORCE)`))
+      if ('error' in swept)
+        throw swept.error
+      if (swept.violations !== undefined)
+        throw new Error(`测试留下的数据违反了只由服务保证的不变量（${name}，库已删掉）：\n${swept.violations}`)
     },
   }
 }

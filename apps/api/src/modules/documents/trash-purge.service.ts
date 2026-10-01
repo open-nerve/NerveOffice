@@ -51,19 +51,22 @@ export class TrashPurgeService {
   ) {}
 
   /**
-   * 到这个时刻为止已经到期的删除单元，最早到期的在前，最多 limit 条。
+   * 到这个时刻为止已经到期的删除单元，最早到期的在前，最多 limit 条；except 里的不取（jobs 暂缓重试的那些，
+   * 一直失败的条目不挡住后面到期的，M2-P6 复核 A 的 S-1）。
    * 到期与否按调用方给的时刻判断（时钟由 jobs 提供），不用数据库的 now()
    */
-  async listExpired(now: Date, limit: number): Promise<ExpiredTrashEntry[]> {
-    const rows = await this.entries.listExpired(now, limit)
+  async listExpired(now: Date, limit: number, except: readonly string[] = []): Promise<ExpiredTrashEntry[]> {
+    const rows = await this.entries.listExpired(now, limit, except)
     return rows.map(row => ({ id: row.id, spaceId: row.spaceId, kind: row.kind, expiresAt: row.expiresAt }))
   }
 
   /**
    * 永久删除一个到期的删除单元，一个短事务（一轮里的其他条目各有各的事务，互不影响）。
-   * 取锁的顺序与人工的永久删除相同：空间树的 advisory lock → 空间行 → 文档行 → 回收站行（ADR-007）。
+   * 取锁的顺序与人工的永久删除相同：空间树的 advisory lock → 空间行 → 这一单的文档行 → 回收站行，之后由 TrashEntryPurger 接着锁
+   * 子树里的行（顺序见 purgeFolder 的说明；ADR-014 的"空间树锁与它保护的三类行"，SpaceTreeRepository）。
    * 锁下重新读：这期间它可能被人恢复、被人永久删除（都是"已经不在"），或者随子树被移到别的空间
-   * （这时手里的树锁保护不到它，留给下一轮）。审计的操作者记为系统。
+   * （这时手里的树锁保护不到它，留给下一轮）：8 处锁下核对之一（清单见 FoldersService.update），用例在 tests/integration 的
+   * jobs/trash-purge.test.ts。审计的操作者记为系统。
    */
   async purgeExpired(entry: ExpiredTrashEntry): Promise<ExpiredPurgeResult> {
     return this.transactions.run(async (transaction) => {

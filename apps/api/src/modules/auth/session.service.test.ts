@@ -14,7 +14,7 @@ const TRANSACTION = { opaque: true } as unknown as Transaction
 /** revoked：仓储回答"这条会话是不是因为给出的原因之一被撤销的"；currentActive：撤销当前这条时它还没被撤销过（这次撤销了它） */
 function setup(revoked: boolean, currentActive = true) {
   const repository = {
-    revokedFor: vi.fn(async (_tokenHash: Buffer, _reasons: readonly string[]) => revoked),
+    revokedFor: vi.fn(async (_tokenHash: Buffer, _reasons: readonly string[], _transaction?: Transaction) => revoked),
     revoke: vi.fn(async (_where: { id: string } | { tokenHash: Buffer }, _reason: string, _transaction?: Transaction) => currentActive),
     revokeAllOfUser: vi.fn(async (_userId: string, _reason: string, _transaction?: Transaction) => {}),
   }
@@ -38,6 +38,13 @@ describe('SessionService.invalidatedByRotation（复验 N3）', () => {
   it('不是因为换令牌撤销的（退出、停用、重置密码、修改密码时别的设备上的）、还没撤销（只是过期）、没有这条会话：为假', async () => {
     const { service } = setup(false)
     expect(await service.invalidatedByRotation(generateSessionToken())).toBe(false)
+  })
+
+  it('退出时在退出的事务里问：事务交给仓储（M2-P6 第 3 片复验：提交之后不再访问数据库）', async () => {
+    const token = generateSessionToken()
+    const { service, repository } = setup(true)
+    expect(await service.invalidatedByRotation(token, TRANSACTION)).toBe(true)
+    expect(repository.revokedFor.mock.calls[0]?.[2]).toBe(TRANSACTION)
   })
 
   it('令牌的格式不对（不是我们发的）：不查库，为假', async () => {

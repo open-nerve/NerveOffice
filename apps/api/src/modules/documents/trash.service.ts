@@ -52,8 +52,11 @@ type TrashAuditAction = 'documents.deleted' | 'documents.restored' | 'folders.de
  * 回收站（M2-P4 设计 §3.4 第 3 条，规则细则见 specs/P4-S3-回收站的规则.md，US-M2-09）：
  * 按删除单元删除（一份文档，或一个文件夹连同它当时正常状态的整棵子树）、按空间列出、整单恢复、永久删除。
  *
- * 四个写操作都是结构性改动，所以都按同一个范式：不加锁判断 → 空间树的 advisory lock → 空间行 →
- * 文档行（按 id）→ 回收站行 → 锁下重新判断（ADR-007 的锁顺序）。
+ * 四个写操作都是结构性改动，所以都按同一个范式：不加锁判断 → 空间树的 advisory lock → 空间行 → 树里的行，锁下重新判断。
+ * 树里的行按"文档行（按 id）→ 回收站行 → 文件夹行"取（删除时回收站行是新建的，文件夹行由 UPDATE 锁住；删除一份文档不碰文件夹行）；
+ * 永久删除一个文件夹单元在这之后还锁子树里属于别的单元的文档行、删连带的回收站行（TrashEntryPurger.purgeFolder）。
+ * 这与跨空间移动文件夹的"文件夹行 → 文档行"相反，但不会成环：文件夹行与回收站行只被持有它所在空间树锁的事务改动，
+ * 两边先在树锁上排队（SpaceTreeRepository 的锁顺序说明，M2-P6 复核 A 的 G-1；ADR-014 的"空间树锁与它保护的三类行"）。
  * 回收站里的东西对普通接口一律"不存在"：仓储的 findById / lockById / accessible 都只取正常状态的行。
  */
 @Injectable()
@@ -105,7 +108,8 @@ export class TrashService {
       // 锁下重新读、重新判断：这期间它可能被移走、被别人删，空间可能被归档，自己可能被移出空间
       const { document } = await requireDocumentContent(this.policy, actor.userId, await this.documents.lockById(id, transaction), ['delete'], transaction)
       // 树锁是按取锁之前读到的空间取的：万一刚好有一次跨空间移动提交了，这把锁就保护不到它（与移动、改名相同）。
-      // 这条范式由恢复那一处的集成用例代表（见 lockedEntry 的注释）
+      // 8 处锁下核对之一（清单见 FoldersService.update）；这一处与删除文件夹那一处的集成用例在 tests/integration 的
+      // documents/structure-locks.test.ts（M2-P6 复核 A 的 M-1、B 的 B1）
       if (document.spaceId !== checked.document.spaceId)
         throw new AppError('NOT_FOUND')
 
@@ -113,7 +117,6 @@ export class TrashService {
         spaceId: document.spaceId,
         kind: 'document',
         deletedBy: actor.userId,
-        originSpaceId: document.spaceId,
         originParentId: document.folderId,
         title: document.title,
       }, transaction)
@@ -138,12 +141,14 @@ export class TrashService {
       await this.tree.lock([checked.folder.spaceId], transaction)
       await this.spaces.holdSpace(checked.folder.spaceId, transaction)
       const { folder, space } = await requireFolderContent(this.policy, actor, await this.folders.findById(id, transaction), ['delete'], transaction)
-      // 同上：树锁按取锁之前读到的空间取，刚好被跨空间移走时这把锁保护不到它（范式见 lockedEntry 的注释）
+      // 同上：树锁按取锁之前读到的空间取，刚好被跨空间移走时这把锁保护不到它。这一条是承重的：没有它，删除只拿着原空间的树锁
+      // 改新空间里的子树，那边并发的移动可以把正常的文档放进正在进回收站的子文件夹，随这一单被永久删除（structure-locks.test.ts）
       if (folder.spaceId !== checked.folder.spaceId)
         throw new AppError('NOT_FOUND')
 
       const folderIds = await this.folders.activeSubtreeIds(folder.id, transaction)
-      // 文档行在文件夹之后锁（锁顺序：文件夹行 → 文档行）：保存内容不取树锁，所以要真的锁住它们
+      // 文档行在这里锁住（按 id）：保存内容不取树锁，所以要真的锁住它们。之后是新建的回收站行、trashMany 的 UPDATE 锁住的文件夹行——
+      // "文档行 → 回收站行 → 文件夹行"，与恢复、永久删除相同；文件夹行只被持有本空间树锁的事务改动，排在最后也不会成环
       const documents = await this.documents.lockInFolders(folderIds, folder.spaceId, transaction, 'active')
       // 编辑者只能删"里面只有本人创建的文档"的文件夹：锁下用一条计数语句判断（spec §2）
       // 单独一个错误码（不是 PERMISSION_DENIED）：这一条的说法是"换个人来删"，与"空间已归档，只能查看"
@@ -155,7 +160,6 @@ export class TrashService {
         spaceId: folder.spaceId,
         kind: 'folder',
         deletedBy: actor.userId,
-        originSpaceId: folder.spaceId,
         originParentId: folder.parentId,
         title: folder.name,
       }, transaction)
@@ -183,7 +187,7 @@ export class TrashService {
       const checked = await requireTrashEntry(this.policy, actor, await this.entries.findById(entryId, transaction), ['restore'], transaction)
       await this.tree.lock([checked.entry.spaceId], transaction)
       await this.spaces.holdSpace(checked.entry.spaceId, transaction)
-      // 先锁属于这一单的文档行，再锁回收站行（ADR-007 的锁顺序）；两者都用删除单元 id 找，不必先读它
+      // 先锁属于这一单的文档行，再锁回收站行（ADR-014 的"空间树锁与它保护的三类行"）；两者都用删除单元 id 找，不必先读它
       const documents = await this.documents.lockInEntries([entryId], transaction)
       const entry = await this.lockedEntry(actor, entryId, checked.entry.spaceId, ['restore'], transaction)
 
@@ -210,7 +214,7 @@ export class TrashService {
       const checked = await requireTrashEntry(this.policy, actor, await this.entries.findById(entryId, transaction), ['purge'], transaction)
       await this.tree.lock([checked.entry.spaceId], transaction)
       await this.spaces.holdSpace(checked.entry.spaceId, transaction)
-      // 先锁属于这一单的文档行，再锁回收站行（ADR-007 的锁顺序）
+      // 先锁属于这一单的文档行，再锁回收站行（同恢复）
       await this.documents.lockInEntries([entryId], transaction)
       const entry = await this.lockedEntry(actor, entryId, checked.entry.spaceId, ['purge'], transaction)
       await this.purger.purge(entry, { type: 'user', id: actor.userId }, origin, transaction)
@@ -250,8 +254,8 @@ export class TrashService {
   /**
    * 锁住回收站行并重新判断：这期间它可能被恢复或永久删除（都看到它已经不在，NOT_FOUND，spec §7），
    * 空间可能被归档、自己可能被移出空间；取锁之前刚好有一次跨空间移动提交时，这把树锁保护不到它，同样按"没找到"回答。
-   * 最后这一条由 tests/integration 的"等树锁期间删除单元被搬到别的空间：恢复 404，文档仍在回收站里"覆盖（审查 A 建议 8），
-   * 别处的同一条范式（删除文档、删除文件夹、文件夹与文档的改名和移动）写法相同，由这一条用例代表。
+   * 最后这一条是 8 处锁下核对里恢复与永久删除共用的一处（清单见 FoldersService.update），用例是 tests/integration 的
+   * "等树锁期间这一单被搬到别的空间：恢复 404"（documents/trash.test.ts）与永久删除的同一条（documents/structure-locks.test.ts）。
    */
   private async lockedEntry(
     actor: Actor,

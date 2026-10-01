@@ -11,7 +11,7 @@ import { AuditService } from '../audit/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { SpacesService } from '../spaces/index.ts'
 import { folderPermissionsOf } from './access-rules.ts'
-import { DocumentAccessPolicy, requireCreateTarget, requireFolderContent, requireSpaceContent } from './document-access-policy.ts'
+import { DocumentAccessPolicy, requireCreateTarget, requireFolderContent, requireSpaceContent, requireSpaceOperation } from './document-access-policy.ts'
 import { DocumentsRepository } from './documents.repository.ts'
 import { requireFolderIn } from './folder-location.ts'
 import { toFolder } from './folder-views.ts'
@@ -78,21 +78,19 @@ export class FoldersService {
   /**
    * 新建：要有在这个空间里新建的权限，父文件夹要在同一个空间里，层数不超过上限。
    * requestId 幂等：同一个请求重试只建一个（同一个文件夹里允许同名，看名字分辨不出重复的新建）。
+   * 幂等这一步只要求仍能看到这个空间（与新建文档、复制相同，00 号计划书 §7.4 第 2 步的同一条规则）：建好之后被降为查看者、
+   * 空间被归档，重发同一个请求照样拿到那个文件夹，而不是 403（M2-P6 复核 A 的 S-4）；不是重放才要求能新建。
    */
   async create(actor: Actor, command: CreateFolderCommand, origin: AuditOrigin): Promise<Folder> {
     return this.transactions.run(async (transaction) => {
-      // 先判断（不加锁）：看不到与不能新建的请求不取任何锁
-      await requireSpaceContent(this.policy, actor, command.spaceId, 'createFolders', transaction)
-      // 空间树的结构性改动串行（设计 §3.4 第 2 条）：这把锁排在空间行之前
-      await this.tree.lock([command.spaceId], transaction)
-      // 再取空间的共享锁、锁下再判断：与归档、移出成员（空间行的 FOR NO KEY UPDATE）互斥，它们提交之后的新建一定被拒绝
-      await this.spaces.holdSpace(command.spaceId, transaction)
-      const space = await requireSpaceContent(this.policy, actor, command.spaceId, 'createFolders', transaction)
+      const space = await this.lockIfCreatable(actor, command.spaceId, transaction)
       const permissions = folderPermissionsOf(space.role)
 
       const previous = await this.folders.findByRequestId(command.requestId, transaction)
       if (previous !== undefined)
         return toFolder(this.replay(actor, command, previous), permissions)
+      // 不是重放才要求能新建：能新建时这是锁下的判断，不能新建时就是上面那次（没有取锁）
+      requireSpaceOperation(space, 'createFolders')
 
       const parent = command.parentId === undefined ? undefined : await this.requireFolderIn(command.spaceId, command.parentId, transaction)
       const depth = parent === undefined ? 1 : parent.depth + 1
@@ -127,7 +125,9 @@ export class FoldersService {
       const { folder, permissions } = await this.checkUpdate(actor, await this.folders.findById(id, transaction), command, transaction)
       // 树锁是按取锁之前读到的空间取的。跨空间移动会同时取来源与目标两把树锁，拿到锁之后它换不了空间；
       // 万一取锁之前刚好有一次跨空间移动提交了，这把锁就保护不到它——不在错的锁下改东西，按"没找到"回答，刷新后重试。
-      // 这条范式由回收站恢复那一处的集成用例代表（TrashService.lockedEntry 的注释，审查 A 建议 8）
+      // 这一条是承重的：没有它，换父会在错的树锁下把它挂到别的空间里正在进回收站的文件夹下（M2-P6 复核 A 的 M-1、B 的 B1）。
+      // 这样的锁下核对共 8 处：文件夹与文档的改名、移动各一处，删除文档、删除文件夹各一处，恢复与永久删除共用一处，到期清理一处
+      // （人工操作回 NOT_FOUND，到期清理跳过这一单）。这一处的集成用例在 tests/integration 的 documents/structure-locks.test.ts
       if (folder.spaceId !== checked.folder.spaceId)
         throw new AppError('NOT_FOUND')
 
@@ -162,8 +162,8 @@ export class FoldersService {
         await this.spaces.holdSpace(spaceId, transaction)
       // 锁下重新读、重新判断：这期间它可能被删、被别人移走，空间可能被归档，自己可能被移出空间
       const { folder, target } = await this.checkMove(actor, await this.folders.findById(id, transaction), command, transaction)
-      // 树锁是按取锁之前读到的空间取的：万一刚好有一次跨空间移动提交了，这把锁就保护不到它（与改名、空间内移动相同，
-      // 同一条范式由回收站恢复那一处的集成用例代表）
+      // 树锁是按取锁之前读到的空间取的：万一刚好有一次跨空间移动提交了，这把锁就保护不到它（8 处锁下核对之一，见 update；
+      // 这一处的用例同样在 documents/structure-locks.test.ts）
       if (folder.spaceId !== checked.folder.spaceId)
         throw new AppError('NOT_FOUND')
 
@@ -177,6 +177,22 @@ export class FoldersService {
       }
       return toFolder(await this.toSpace(actor, folder, command.spaceId, parent, origin, transaction), permissions)
     })
+  }
+
+  /**
+   * 判断能否看这个空间的内容（看不到与不存在都是 NOT_FOUND）；能新建时取空间树的锁与空间行的共享锁、锁下再判断一次，返回锁下的判断。
+   * - 空间树的结构性改动串行（设计 §3.4 第 2 条）：这把锁排在空间行之前；
+   * - 空间行的共享锁与归档、移出成员（空间行的 FOR NO KEY UPDATE）互斥，它们提交之后的新建一定被拒绝。
+   * 看不到的请求不取任何锁；不能新建的（查看者、归档的空间）同样不取：它能得到的只有重放，不加锁查一次请求标识就有结论，
+   * 不让结构性的改动为它排队（与保存相同，复验 RA7 的做法）
+   */
+  private async lockIfCreatable(actor: Actor, spaceId: string, transaction: Transaction): Promise<SpaceContentAccess> {
+    const unlocked = await requireSpaceContent(this.policy, actor, spaceId, 'view', transaction)
+    if (!unlocked.permissions.canCreateFolders)
+      return unlocked
+    await this.tree.lock([spaceId], transaction)
+    await this.spaces.holdSpace(spaceId, transaction)
+    return requireSpaceContent(this.policy, actor, spaceId, 'view', transaction)
   }
 
   /** 判断这次改动要的权限：改名要改名的权限，移动要移动的权限，两项都给就两项都要（一条查询判断完）。 */
@@ -231,7 +247,8 @@ export class FoldersService {
    * 子树里的文件夹换空间与层数（一条 UPDATE），里面的文档换空间、写入代次加一、位置不变——
    * 它们仍在各自的父文件夹里，只有被移动的那个文件夹自己换父。
    * 同一个事务里收回这些文档上的写入权（M3 在这个入口里终止租约）。
-   * 文档行在文件夹之后锁（锁顺序：文件夹行 → 文档行）：保存内容不取树锁，所以要真的锁住它们
+   * 文档行在子树的文件夹换了空间之后才锁：这里是"文件夹行 → 文档行 → 回收站行"，与删除、恢复的"文档行 → 回收站行 → 文件夹行"相反，
+   * 但文件夹行与回收站行只被持有树锁的事务改动，不会成环（SpaceTreeRepository 的锁顺序说明）。保存内容不取树锁，所以文档行要真的锁住
    */
   private async toSpace(
     actor: Actor,

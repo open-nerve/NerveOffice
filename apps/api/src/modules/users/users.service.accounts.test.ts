@@ -194,6 +194,22 @@ describe('UsersService.verifyPasswordOf 与 replacePassword（修改密码，审
     }
   })
 
+  it('旧密码错误、账户不存在或已停用：比对之后不再访问数据库，同 verifyCredentials（M2-P6 第 3 片复验）', async () => {
+    for (const target of [account({}), undefined, account({ status: 'disabled' })]) {
+      const { service, repository, hasher } = setup(target)
+      const accesses = (): number => Object.values(repository).reduce((total, method) => total + method.mock.calls.length, 0)
+      const compare = hasher.verify.bind(hasher)
+      let accessesWhenCompared: number | undefined
+      vi.spyOn(hasher, 'verify').mockImplementation(async (passwordHash, password) => {
+        accessesWhenCompared = accesses()
+        return compare(passwordHash, password)
+      })
+      expect(await service.verifyPasswordOf('id', 'wrong')).toBeUndefined()
+      expect(accessesWhenCompared).toBeGreaterThan(0)
+      expect(accesses()).toBe(accessesWhenCompared)
+    }
+  })
+
   it('replacePassword：锁住账户行（no key update），凭据的版本还是验证时的那个才更新', async () => {
     const { service, calls, repository } = setup(account({}))
     const credentials = await service.verifyPasswordOf('id', 'secret')

@@ -155,8 +155,8 @@ async function seedTrashEntry(
 ): Promise<string> {
   return database.query(async (client) => {
     const entry = await client.query<{ id: string }>(
-      `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_space_id, origin_parent_id, title)
-       VALUES ($1, $2, $3, now() + make_interval(days => $4::int), $1, NULL, $5) RETURNING id`,
+      `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_parent_id, title)
+       VALUES ($1, $2, $3, now() + make_interval(days => $4::int), NULL, $5) RETURNING id`,
       [options.spaceId, options.kind, options.deletedBy, TRASH_RETENTION_DAYS, options.title],
     )
     const id = entry.rows[0]?.id

@@ -4,10 +4,35 @@
 // - 不进构建产物（tsconfig.build.json 排除测试辅助），包的出口也只给源码条件，生产环境里解析不到；
 // - 只有 tests/integration 能引用它：apps/api 里的任何文件（包括单元测试）引用都由 lint 拦下（eslint 的 nerve/api-integration-entry），
 //   别的元素由模块边界拦下。
-// 只放这类东西（数据库句柄、documents 的仓储与 spaces 的表定义）；集成测试用到的其余程序接口（建应用、迁移、各模块的服务）照旧经 app/index.ts
-// spaces 的表定义：迁移之后库里判重键（生成列）的表达式与表定义逐字核对（M2-P6 复验 S1）。改生成列的表达式要手写
-// SET EXPRESSION 迁移，门禁 schema 只比较表定义与快照、不看迁移的 SQL，这一步由集成测试核对
-export { spaces } from '../db/schema/spaces/index.ts'
+// 只放这类东西（数据库句柄、documents 的仓储与全部的表定义）；集成测试用到的其余程序接口（建应用、迁移、各模块的服务）照旧经 app/index.ts
+import { auditEvents } from '../db/schema/audit/index.ts'
+import { authInvitations, authLoginThrottles, authPasswordResets, authSessions } from '../db/schema/auth/index.ts'
+import { documentContents, documentRevisions, documents, folders, trashEntries } from '../db/schema/documents/index.ts'
+import { spaceMembers, spaces } from '../db/schema/spaces/index.ts'
+import { users } from '../db/schema/users/index.ts'
+
+/**
+ * 全部的表（与 drizzle.config.ts 的 schema 是同一组模块，src/db/schema/<模块>/index.ts）：集成测试按它用 drizzle-kit 生成建库语句，
+ * 建出的库与执行全部迁移建出的库逐项比较（database/schema-parity.test.ts，M2-P6 复核 B 的 B4）。门禁 schema 只比较表定义与快照、
+ * 不看迁移的 SQL，手写或改过的迁移与表定义不一致要靠这一步发现。
+ * 按名字列出（不用命名空间导入：documents 的模块入口与它同名，受限导入的名单会把命名空间导入当作引用了受限的服务）。
+ * 新加一张表时一并加在这里：漏了的话，迁移建出的库里多出它，那条用例会失败并列出来
+ */
+export const TABLE_DEFINITIONS: Readonly<Record<string, unknown>> = {
+  auditEvents,
+  authInvitations,
+  authLoginThrottles,
+  authPasswordResets,
+  authSessions,
+  documentContents,
+  documentRevisions,
+  documents,
+  folders,
+  trashEntries,
+  spaceMembers,
+  spaces,
+  users,
+}
 // 集成测试的探针直接拿数据库句柄：连接池与关闭顺序的用例（database/pool、api/shutdown）
 export { DATABASE } from '../modules/database/index.ts'
 export type { Database } from '../modules/database/index.ts'

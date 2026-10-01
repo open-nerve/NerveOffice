@@ -17,7 +17,8 @@ type HttpOrigin = Extract<AuditOrigin, { source: 'http' }>
 /**
  * 管理界面的账户操作（M2-P1 设计 §3.5）：跨模块的编排都在一个事务里。
  * 没有变化的操作（例如停用已停用的账户）原样返回，不记审计。
- * 返回的账户带着登录的锁定（M2-P6 复核 A1）：在事务之外按提交之后的状态读。
+ * 返回的账户带着登录的锁定（M2-P6 复核 A1）：在同一个事务里、提交之前读（看得到这个事务自己的改动）。提交之后不再访问数据库——
+ * 提交之后才读的话，这一步遇到数据库繁忙时账户已经停用，客户端却只能得到"结果未知"（M2-P6 第 3 片复验）
  */
 @Injectable()
 export class AdminUsersService {
@@ -53,7 +54,7 @@ export class AdminUsersService {
    * 锁的顺序：system-admins 的锁、账户行、重置与邀请的行、会话、文档（收回写入权，M3 起锁租约与文档行）（ADR-007，审查 A2）
    */
   async disable(actor: Principal, userId: string, origin: HttpOrigin): Promise<AdminUser> {
-    const account = await this.transactions.run(async (transaction) => {
+    return this.transactions.run(async (transaction) => {
       const change = await this.users.disable(userId, actor.user.id, transaction)
       if (change.changed) {
         // 未用的重置链接一并作废：启用之后要重置密码得重新签发
@@ -63,20 +64,18 @@ export class AdminUsersService {
         await this.writeAccess.revoke({ kind: 'user', userId: change.account.id }, transaction)
         await this.audit.record({ action: 'users.disabled', actor: actorOf(actor), target: { type: 'user', id: userId }, origin }, { transaction })
       }
-      return change.account
+      return this.view(change.account, transaction)
     })
-    return this.view(account)
   }
 
   /** 启用：只改状态。个人空间还在；停用期间转移走的文档不会回来（M2-P2 设计 §3.8）；停用时作废的链接也不会恢复 */
   async enable(actor: Principal, userId: string, origin: HttpOrigin): Promise<AdminUser> {
-    const account = await this.transactions.run(async (transaction) => {
+    return this.transactions.run(async (transaction) => {
       const change = await this.users.enable(userId, actor.user.id, transaction)
       if (change.changed)
         await this.audit.record({ action: 'users.enabled', actor: actorOf(actor), target: { type: 'user', id: userId }, origin }, { transaction })
-      return change.account
+      return this.view(change.account, transaction)
     })
-    return this.view(account)
   }
 
   /**
@@ -84,7 +83,7 @@ export class AdminUsersService {
    * 不再是管理员之后，不能再借任期内签发的链接建账户、设置别人的密码
    */
   async changeSystemRole(actor: Principal, userId: string, systemRole: UserSystemRole, origin: HttpOrigin): Promise<AdminUser> {
-    const account = await this.transactions.run(async (transaction) => {
+    return this.transactions.run(async (transaction) => {
       const change = await this.users.changeSystemRole(userId, systemRole, actor.user.id, transaction)
       if (change.changed) {
         const from: UserSystemRole = systemRole === 'admin' ? 'member' : 'admin'
@@ -98,9 +97,8 @@ export class AdminUsersService {
           details: { from, to: systemRole },
         }, { transaction })
       }
-      return change.account
+      return this.view(change.account, transaction)
     })
-    return this.view(account)
   }
 
   /**
@@ -109,16 +107,15 @@ export class AdminUsersService {
    * 修改密码的成功排队）、清计数、记审计 users.login_unlocked。没有计数可清时原样返回，不记审计
    */
   async unlockLogin(actor: Principal, userId: string, origin: HttpOrigin): Promise<AdminUser> {
-    const account = await this.transactions.run(async (transaction) => {
+    return this.transactions.run(async (transaction) => {
       await this.users.lockActingAdmin(actor.user.id, transaction)
       const locked = await this.users.lockAccount(userId, transaction)
       if (locked === undefined)
         throw new AppError('NOT_FOUND')
       if (await this.lockouts.clear(locked.username, transaction))
         await this.audit.record({ action: 'users.login_unlocked', actor: actorOf(actor), target: { type: 'user', id: userId }, origin }, { transaction })
-      return locked
+      return this.view(locked, transaction)
     })
-    return this.view(account)
   }
 
   /**
@@ -130,9 +127,9 @@ export class AdminUsersService {
     await this.invitations.revokeIssuedBy(actor.user, issuerId, reason, origin, transaction)
   }
 
-  /** 管理界面里的账户，带着登录的锁定 */
-  private async view(account: AccountRecord): Promise<AdminUser> {
-    const locks = await this.lockouts.locksOf([account.username])
+  /** 管理界面里的账户，带着登录的锁定；写操作传入它的事务（在提交之前读） */
+  private async view(account: AccountRecord, transaction?: Transaction): Promise<AdminUser> {
+    const locks = await this.lockouts.locksOf([account.username], transaction)
     return toAdminUser(account, locks.get(account.username))
   }
 }

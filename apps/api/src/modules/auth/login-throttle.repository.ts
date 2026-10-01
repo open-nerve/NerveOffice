@@ -116,13 +116,14 @@ export class LoginThrottleRepository {
 
   /**
    * 这些账户里仍在锁定中的（M2-P6 复核 A1，管理界面的账户行）：各自最晚解锁的时间，以及只按用户名的那一行是否也在锁定
-   * （那一行的键就是所属账户；它锁定时这个账户在所有来源上都登录不了）。没有锁定的账户不在结果里
+   * （那一行的键就是所属账户；它锁定时这个账户在所有来源上都登录不了）。没有锁定的账户不在结果里。
+   * 管理员改动账户之后的响应在那个事务里读（传入事务）
    */
-  async locksOfAccounts(accountHashes: readonly Buffer[]): Promise<{ readonly accountHash: Buffer, readonly lockedUntil: Date, readonly allSources: boolean }[]> {
+  async locksOfAccounts(accountHashes: readonly Buffer[], transaction?: Transaction): Promise<{ readonly accountHash: Buffer, readonly lockedUntil: Date, readonly allSources: boolean }[]> {
     if (accountHashes.length === 0)
       return []
     const t = authLoginThrottles
-    const rows = await this.db
+    const rows = await executorOf(this.db, transaction)
       .select({
         accountHash: t.accountHash,
         lockedUntil: sql<Date>`max(${t.lockedUntil})`.mapWith(t.lockedUntil),

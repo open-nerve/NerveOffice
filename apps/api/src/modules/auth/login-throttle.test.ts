@@ -3,6 +3,7 @@ import type { AppConfig } from '../config/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { LockedForSeconds, LoginThrottleRepository, Reservation, ThrottlePolicy } from './login-throttle.repository.ts'
 import { describe, expect, it, vi } from 'vitest'
+import { AppLogger, createRootLogger, RequestContextStore } from '../logging/index.ts'
 import { LinkThrottle, LoginThrottle } from './login-throttle.ts'
 import { keyDigest } from './throttle-keys.ts'
 
@@ -12,6 +13,7 @@ const ACCOUNT_KEY = keyDigest('account:alice')
 const ACCOUNT_ADDRESS_KEY = keyDigest('account-address:alice|ip:203.0.113.7')
 const ADDRESS_KEY = keyDigest('ip:203.0.113.7')
 const TRANSACTION = { opaque: true } as unknown as Transaction
+const LOGGER = new AppLogger(createRootLogger({ level: 'silent' }), new RequestContextStore())
 
 /** 假的仓储：按键给出预先设定的结果，记下每次调用。预检一次查全部三个键；之后被拒绝时只查那一个 */
 function setup(options: {
@@ -26,7 +28,7 @@ function setup(options: {
     reset: vi.fn(async (_key: Buffer, _transaction?: Transaction) => {}),
     purgeExpired: vi.fn(async (_windowMinutes: number) => {}),
   }
-  const throttle = new LoginThrottle(repository as unknown as LoginThrottleRepository, CONFIG)
+  const throttle = new LoginThrottle(repository as unknown as LoginThrottleRepository, CONFIG, LOGGER)
   return { throttle, repository }
 }
 
@@ -93,6 +95,37 @@ describe('LoginThrottle.admit（M2-P6 复核 A1：账户、账户与地址、地
     expect(repository.lockedFor).toHaveBeenLastCalledWith([ADDRESS_KEY])
   })
 
+  it('占名额时出错（例如账户与地址那一维等锁超时）：已经占到的账户名额退回（还没有验证，不算失败），原样抛出，不再占地址的名额（M2-P6 第 3 片复验 建议 1）', async () => {
+    const { throttle, repository } = setup({ reservations: reservations(free('w1')) })
+    const busy = new Error('canceling statement due to lock timeout')
+    repository.reserve.mockImplementation(async (key: Buffer) => {
+      if (key.equals(ACCOUNT_ADDRESS_KEY))
+        throw busy
+      return free('w1')
+    })
+    await expect(throttle.admit(ATTEMPT)).rejects.toBe(busy)
+    expect(repository.reserve).toHaveBeenCalledTimes(2)
+    expect(repository.release.mock.calls).toEqual([[ACCOUNT_KEY, 'w1']])
+  })
+
+  it('占名额出错之后退回也失败：记一条告警，抛出的仍是原来的错误', async () => {
+    const warn = vi.spyOn(AppLogger.prototype, 'warn')
+    const { throttle, repository } = setup()
+    const busy = new Error('canceling statement due to lock timeout')
+    repository.reserve.mockResolvedValueOnce(free('w1')).mockRejectedValueOnce(busy)
+    repository.release.mockRejectedValueOnce(new Error('退回也繁忙'))
+    await expect(throttle.admit(ATTEMPT)).rejects.toBe(busy)
+    expect(warn).toHaveBeenCalledWith('退回登录限流的名额失败，这次尝试按一次失败计', expect.objectContaining({ err: expect.any(Error) as unknown }))
+    warn.mockRestore()
+  })
+
+  it('第一个维度占名额就出错：没有要退回的', async () => {
+    const { throttle, repository } = setup()
+    repository.reserve.mockRejectedValueOnce(new Error('canceling statement due to lock timeout'))
+    await expect(throttle.admit(ATTEMPT)).rejects.toThrow('lock timeout')
+    expect(repository.release).not.toHaveBeenCalled()
+  })
+
   it('被拒绝后查锁定时，锁定恰好结束：至少让客户端等 1 秒', async () => {
     const { throttle } = setup({ reservations: reservations(undefined), lockedAfterRejection: undefined })
     expect(await throttle.admit(ATTEMPT)).toEqual({ admitted: false, retryAfterSeconds: 1 })
@@ -152,7 +185,7 @@ describe('LinkThrottle（M2-P1 设计 §3.4）', () => {
       reset: vi.fn(async (_key: Buffer, _transaction?: Transaction) => {}),
       purgeExpired: vi.fn(async () => {}),
     }
-    return { repository, throttle: new LinkThrottle(repository as unknown as LoginThrottleRepository, CONFIG) }
+    return { repository, throttle: new LinkThrottle(repository as unknown as LoginThrottleRepository, CONFIG, LOGGER) }
   }
 
   it('只按客户端地址计数，键另起前缀（不与登录的地址维度混在一起），阈值沿用登录的地址维度，不记所属账户', async () => {

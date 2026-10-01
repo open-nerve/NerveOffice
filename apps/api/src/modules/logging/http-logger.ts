@@ -24,11 +24,23 @@ function aborted(response: Response): boolean {
 }
 
 /**
- * 出错（包括异常过滤器挂上的 response.err）与 5xx 记 error，4xx 与中断的请求记 warn；
+ * 服务端按约定回答的"繁忙，稍后重试"：503 带 Retry-After（数据库繁忙、等待密码哈希的请求太多）。
+ * 这是预期中的负载状况，不是故障，记 warn；不带 Retry-After 的 503（例如未就绪）照旧记 error（M2-P6 复核 A 的 G-2）
+ */
+function busy(response: Response): boolean {
+  return response.statusCode === 503 && response.getHeader('retry-after') !== undefined
+}
+
+/**
+ * 出错（包括异常过滤器挂上的 response.err）与 5xx 记 error，4xx、中断的请求与"繁忙，稍后重试"的 503 记 warn；
  * 成功的请求：探针不记，免得刷屏；前端的静态文件与页面记 debug（默认级别下不输出）；接口记 info。
  */
 export function levelFor(request: Request, response: Response, failed: boolean): LevelWithSilent {
-  if (failed || response.err !== undefined || response.statusCode >= 500)
+  if (failed || response.err !== undefined)
+    return 'error'
+  if (busy(response))
+    return 'warn'
+  if (response.statusCode >= 500)
     return 'error'
   if (response.statusCode >= 400 || aborted(response))
     return 'warn'
