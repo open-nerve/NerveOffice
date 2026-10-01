@@ -11,7 +11,7 @@ import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import { randomUUID } from 'node:crypto'
 import { Clock, TRASH_PURGE_LOCK, TrashPurgeJob } from '@nerve-office/api'
-import { folderSchema, trashListResponseSchema } from '@nerve-office/contracts'
+import { createdFolderSchema, trashListResponseSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -82,7 +82,7 @@ async function trashed(spaceId: string, path: string): Promise<{ id: string, exp
 async function newFolder(spaceId: string, name: string, parentId?: string): Promise<string> {
   const response = await asUser(app.baseUrl, amySession, '/api/folders', { method: 'POST', body: { spaceId, name, parentId, requestId: randomUUID() } })
   expect(response.status).toBe(201)
-  return parseExact(folderSchema, await response.json()).id
+  return parseExact(createdFolderSchema, await response.json()).id
 }
 
 async function count(query: string, values: unknown[]): Promise<number> {

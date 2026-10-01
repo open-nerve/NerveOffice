@@ -6,28 +6,32 @@ import { HomePage, SpacePage } from '../features/spaces/index.ts'
 import { ADMIN_PATH, ADMIN_PATHS, ADMIN_USER_DOCUMENTS_ROUTE } from '../shared/lib/admin-paths.ts'
 import { LOGIN_PATH } from '../shared/lib/login-path.ts'
 import { SEARCH_PATH, SPACE_FOLDER_ROUTE, SPACE_MEMBERS_ROUTE, SPACE_ROUTE, SPACE_TRASH_ROUTE } from '../shared/lib/space-paths.ts'
+import { loadChunk } from './chunk-load.ts'
 import { AppShell } from './layout/app-shell.tsx'
-import { ErrorPage } from './pages/error-page.tsx'
+import { ErrorPage, RouteErrorBoundary } from './pages/error-page.tsx'
 import { NotFoundPage } from './pages/not-found-page.tsx'
+
+// 按需加载的页面经 loadChunk 下载：失败时是 ChunkLoadError，内容区的错误边界据此说明"页面没能加载"，
+// 部署之后旧的分块已经不在时整页重新加载一次（M2-P6 复核 S6）
 
 /** 管理界面按需加载（M2-P1 设计 §3.8）：它只给系统管理员，不进平台页面的首屏包。这里是它唯一的引用处，而且只能是动态 import（lint 的模块边界保证） */
 async function adminPages() {
-  return import('../features/admin/index.ts')
+  return loadChunk(async () => import('../features/admin/index.ts'))
 }
 
 /** 成员页按需加载（M2-P2 设计 §3.10）：只有管理与查看成员时才用，带着弹窗，不进首屏包。同样只能在这里动态 import */
 async function membersPages() {
-  return import('../features/members/index.ts')
+  return loadChunk(async () => import('../features/members/index.ts'))
 }
 
 /** 回收站页按需加载（M2-P4 设计 §3.7）：只有要找回删掉的东西时才用，带着确认的弹窗，不进首屏包 */
 async function trashPages() {
-  return import('../features/trash/index.ts')
+  return loadChunk(async () => import('../features/trash/index.ts'))
 }
 
 /** 搜索结果页按需加载（M2-P4 设计 §3.7）：页头的搜索框只带着关键词跳过来，结果的渲染不进首屏包 */
 async function searchPages() {
-  return import('../features/search/index.ts')
+  return loadChunk(async () => import('../features/search/index.ts'))
 }
 
 /** 平台页面的路由（P3 设计 §3.7）。编辑器页在 P4 另起入口，整页加载。 */
@@ -45,29 +49,33 @@ export const appRoutes: RouteObject[] = [
     children: [
       {
         Component: AppShell,
-        children: [
-          { index: true, Component: HomePage },
-          { path: SPACE_ROUTE, Component: SpacePage },
-          // 空间里的某个文件夹：地址带着从空间根目录到它的整条 id 路径（shared/lib/space-paths.ts 里写了为什么）
-          { path: SPACE_FOLDER_ROUTE, Component: SpacePage },
-          { path: SPACE_MEMBERS_ROUTE, lazy: async () => ({ Component: (await membersPages()).MembersPage }) },
-          { path: SPACE_TRASH_ROUTE, lazy: async () => ({ Component: (await trashPages()).TrashPage }) },
-          { path: SEARCH_PATH, lazy: async () => ({ Component: (await searchPages()).SearchPage }) },
-          { path: CHANGE_PASSWORD_PATH, Component: ChangePasswordPage },
-          {
-            path: ADMIN_PATH,
-            lazy: async () => ({ Component: (await adminPages()).AdminLayout }),
-            children: [
-              { index: true, lazy: async () => ({ Component: (await adminPages()).AdminIndex }) },
-              { path: ADMIN_PATHS.users, lazy: async () => ({ Component: (await adminPages()).AdminUsersPage }) },
-              { path: ADMIN_PATHS.invitations, lazy: async () => ({ Component: (await adminPages()).AdminInvitationsPage }) },
-              { path: ADMIN_PATHS.spaces, lazy: async () => ({ Component: (await adminPages()).AdminSpacesPage }) },
-              { path: ADMIN_USER_DOCUMENTS_ROUTE, lazy: async () => ({ Component: (await adminPages()).AdminTransferPage }) },
-              { path: ADMIN_PATHS.audit, lazy: async () => ({ Component: (await adminPages()).AdminAuditPage }) },
-            ],
-          },
-          { path: '*', Component: NotFoundPage },
-        ],
+        children: [{
+          // 内容区的错误边界（M2-P6 复核 S6）：页头与导航留着，只换掉内容区；按需加载的页面没能下载下来时说明"页面没能加载"
+          ErrorBoundary: RouteErrorBoundary,
+          children: [
+            { index: true, Component: HomePage },
+            { path: SPACE_ROUTE, Component: SpacePage },
+            // 空间里的某个文件夹：地址带着从空间根目录到它的整条 id 路径（shared/lib/space-paths.ts 里写了为什么）
+            { path: SPACE_FOLDER_ROUTE, Component: SpacePage },
+            { path: SPACE_MEMBERS_ROUTE, lazy: async () => ({ Component: (await membersPages()).MembersPage }) },
+            { path: SPACE_TRASH_ROUTE, lazy: async () => ({ Component: (await trashPages()).TrashPage }) },
+            { path: SEARCH_PATH, lazy: async () => ({ Component: (await searchPages()).SearchPage }) },
+            { path: CHANGE_PASSWORD_PATH, Component: ChangePasswordPage },
+            {
+              path: ADMIN_PATH,
+              lazy: async () => ({ Component: (await adminPages()).AdminLayout }),
+              children: [
+                { index: true, lazy: async () => ({ Component: (await adminPages()).AdminIndex }) },
+                { path: ADMIN_PATHS.users, lazy: async () => ({ Component: (await adminPages()).AdminUsersPage }) },
+                { path: ADMIN_PATHS.invitations, lazy: async () => ({ Component: (await adminPages()).AdminInvitationsPage }) },
+                { path: ADMIN_PATHS.spaces, lazy: async () => ({ Component: (await adminPages()).AdminSpacesPage }) },
+                { path: ADMIN_USER_DOCUMENTS_ROUTE, lazy: async () => ({ Component: (await adminPages()).AdminTransferPage }) },
+                { path: ADMIN_PATHS.audit, lazy: async () => ({ Component: (await adminPages()).AdminAuditPage }) },
+              ],
+            },
+            { path: '*', Component: NotFoundPage },
+          ],
+        }],
       },
     ],
   },

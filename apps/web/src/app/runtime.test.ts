@@ -1,5 +1,6 @@
 // 运行时的组装：默认用浏览器的实现；与会话无关的请求不触发会话的全局处理；会话复核给组件用；
 // 请求得到"登录已过期"时先确认会话（复验 N3），本页的登录、修改密码先等它结束（有上限，M2-P6 复验 一般-1、一般-2）；
+// 带原因的确认因网络失败没有结论时，下一个请求成功就再确认一次（M2-P6 复核第五批 G9）；
 // 退出用的"换上同一个人的新会话"（M2-P6 复验 一般-4）。流程见 app.test.tsx。
 import type { SessionResponse } from '@nerve-office/contracts'
 import type { AppRuntime } from './runtime.ts'
@@ -217,6 +218,105 @@ describe('请求得到"登录已过期"：先向服务端确认会话（复验 N
     await vi.waitFor(() => expect(page.visits).toEqual(['/login?from=%2Fsettings%2Fpassword&reason=password_changed']))
     await settle()
     expect(page.visits).toHaveLength(1)
+  })
+
+  it('组件带着原因要求确认（为自己生成重置链接的结果未知，M2-P6 复核第三批 R-1）：已经没有会话，按这个原因回到登录页，而不是整页重新加载；确认结束才兑现', async () => {
+    const pending = deferredResponse()
+    installFakeApi({ 'GET /api/auth/session': pending.handler })
+    const { runtime, page } = runtimeAt('/admin/users')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    let settled = false
+    const checking = runtime.recheckSession('password_reset').then(() => {
+      settled = true
+    })
+    await settle()
+    expect(settled).toBe(false)
+    pending.resolve(apiError(401, 'SESSION_EXPIRED'))
+    await checking
+    expect(page.visits).toEqual(['/login?from=%2Fadmin%2Fusers&reason=password_reset'])
+  })
+
+  it('组件带着原因要求确认，会话还在（这一次没有生效）：页面不动；确认期间别的请求先得到普通的"登录已过期"，原因仍是更具体的那个', async () => {
+    installFakeApi({ 'GET /api/auth/session': () => json(200, { ...SESSION, csrfToken: 'csrf-2' }) })
+    const { runtime, page } = runtimeAt('/admin/users')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    await runtime.recheckSession('password_reset')
+    expect(page.visits).toEqual([])
+    expect(sessionOf(runtime)?.csrfToken).toBe('csrf-2')
+
+    // 另一回：会话已经撤销，确认有结论之前账户列表先得到普通的"登录已过期"
+    const first = deferredResponse()
+    const api = installFakeApi({ 'GET /api/auth/session': first.handler })
+    const checking = runtime.recheckSession('password_reset')
+    await vi.waitFor(() => expect(api.requests).toHaveLength(1))
+    await failWith(runtime, 'SESSION_EXPIRED')
+    api.on('GET /api/auth/session', () => apiError(401, 'SESSION_EXPIRED'))
+    first.resolve(apiError(401, 'SESSION_EXPIRED'))
+    await checking
+    await vi.waitFor(() => expect(page.visits).toEqual(['/login?from=%2Fadmin%2Fusers&reason=password_reset']))
+    await settle()
+    expect(page.visits).toHaveLength(1)
+  })
+
+  it('带着原因的确认断网、没有结论：原因留着；下一个请求成功（连得上服务端了）就再确认一次，会话还在、原因随之清掉——之后会话自然过期，按"已过期"回到登录页（第五批 G9）', async () => {
+    const api = installFakeApi({ 'GET /api/auth/session': networkFailure, 'GET /api/probe': () => json(200, { ok: true }) })
+    const { runtime, page } = runtimeAt('/admin/users')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    const probe = async (key: string) => runtime.queryClient.fetchQuery({ queryKey: [key], queryFn: async () => apiRequest('/api/probe', { schema: z.object({ ok: z.boolean() }) }) })
+    // 没有待定的原因时，请求成功不多确认
+    await probe('before')
+    expect(api.requests.filter(entry => entry.key === 'GET /api/auth/session')).toHaveLength(0)
+
+    await runtime.recheckSession('password_reset')
+    expect(page.visits).toEqual([])
+    expect(api.requests.filter(entry => entry.key === 'GET /api/auth/session')).toHaveLength(1)
+
+    // 连得上了：会话还在（为自己生成的重置链接没有生效）
+    api.on('GET /api/auth/session', () => json(200, { ...SESSION, csrfToken: 'csrf-2' }))
+    await probe('after')
+    await vi.waitFor(() => expect(sessionOf(runtime)?.csrfToken).toBe('csrf-2'))
+    expect(api.requests.filter(entry => entry.key === 'GET /api/auth/session')).toHaveLength(2)
+    // 已经有了结论：之后的请求成功不再确认
+    await probe('later')
+    await settle()
+    expect(api.requests.filter(entry => entry.key === 'GET /api/auth/session')).toHaveLength(2)
+
+    // 几个小时以后会话自然过期：说"登录已过期"，不再说"刚才……密码可能已经失效"
+    api.on('GET /api/auth/session', () => apiError(401, 'SESSION_EXPIRED'))
+    await failWith(runtime, 'SESSION_EXPIRED')
+    await vi.waitFor(() => expect(page.visits).toEqual(['/login?from=%2Fadmin%2Fusers&reason=expired']))
+  })
+
+  it('同上，连得上时会话已经不在了（重置其实已经生效）：按记下的原因回到登录页；断网期间不按时间丢掉原因（第五批 G9）', async () => {
+    const api = installFakeApi({ 'GET /api/auth/session': networkFailure })
+    const { runtime, page } = runtimeAt('/admin/users')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    await runtime.recheckSession('password_reset')
+    await settle()
+    expect(page.visits).toEqual([])
+
+    // 变更成功同样说明连得上了
+    api.on('GET /api/auth/session', () => apiError(401, 'SESSION_EXPIRED'))
+    await new MutationObserver(runtime.queryClient, { mutationFn: async () => 'ok' }).mutate()
+    await vi.waitFor(() => expect(page.visits).toEqual(['/login?from=%2Fadmin%2Fusers&reason=password_reset']))
+    expect(api.requests.filter(entry => entry.key === 'GET /api/auth/session')).toHaveLength(2)
+  })
+
+  it('带着原因的确认断网之后，别的事（别的标签页的消息）补上的一轮已经有了结论：之后的请求成功不再多确认一次（第五批 G9）', async () => {
+    const bus = sessionBus()
+    const otherTab = bus.open()
+    const api = installFakeApi({ 'GET /api/auth/session': networkFailure, 'GET /api/probe': () => json(200, { ok: true }) })
+    const { runtime, page } = runtimeAt('/admin/users', bus)
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    await runtime.recheckSession('password_reset')
+    api.on('GET /api/auth/session', () => json(200, { ...SESSION, csrfToken: 'csrf-2' }))
+    otherTab.announce()
+    await vi.waitFor(() => expect(sessionOf(runtime)?.csrfToken).toBe('csrf-2'))
+    const checked = api.requests.filter(entry => entry.key === 'GET /api/auth/session').length
+    await runtime.queryClient.fetchQuery({ queryKey: ['probe'], queryFn: async () => apiRequest('/api/probe', { schema: z.object({ ok: z.boolean() }) }) })
+    await settle()
+    expect(api.requests.filter(entry => entry.key === 'GET /api/auth/session')).toHaveLength(checked)
+    expect(page.visits).toEqual([])
   })
 
   it('确认时换了人（别的标签页登录了另一个人）：整页重新加载，新会话的令牌不交给这个页面', async () => {

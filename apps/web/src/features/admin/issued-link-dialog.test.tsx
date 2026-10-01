@@ -8,7 +8,7 @@ import { IssuedLinkDialog } from './issued-link-dialog.tsx'
 const URL_OF_LINK = 'https://docs.example.com/invite#token'
 
 function link(changes: Partial<IssuedLink> = {}): IssuedLink {
-  return { title: '邀请链接', recipient: '张三（zhang.san）', url: URL_OF_LINK, expiresAt: '2026-10-05T02:00:00.000Z', returnFocus: () => {}, ...changes }
+  return { title: '邀请链接', recipient: { displayName: '张三', username: 'zhang.san' }, url: URL_OF_LINK, expiresAt: '2026-10-05T02:00:00.000Z', returnFocus: () => {}, ...changes }
 }
 
 function Page({ issued, onClose }: { readonly issued: IssuedLink, readonly onClose?: () => void }) {
@@ -31,7 +31,8 @@ function Page({ issued, onClose }: { readonly issued: IssuedLink, readonly onClo
 async function openLink(issued: IssuedLink, onClose?: () => void): Promise<HTMLElement> {
   render(<Page issued={issued} onClose={onClose} />)
   fireEvent.click(screen.getByRole('button', { name: '签发' }))
-  return screen.findByRole('dialog', { name: `${issued.title}：${issued.recipient}` })
+  // 弹窗的可读名称来自标题：发给谁用 PersonName 呈现（登录名在前、显示名在后，分开呈现，M2-P6 复核 M2、第二批 M-1）
+  return screen.findByRole('dialog', { name: `${issued.title}：@${issued.recipient.username} ${issued.recipient.displayName}` })
 }
 
 function stubClipboard(writeText: (text: string) => Promise<void>): void {

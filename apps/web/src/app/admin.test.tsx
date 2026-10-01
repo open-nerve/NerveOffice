@@ -4,6 +4,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { formatDateTime } from '../shared/lib/format.ts'
 import { apiError, installFakeApi, inTurn, json, networkFailure } from '../shared/testing/fake-api.test-support.ts'
+import { plainName, shownName } from '../shared/testing/people.test-support.ts'
 import { documentsKey } from '../shared/testing/spaces.test-support.ts'
 import { AMY, deferred, INVITATION, listPage, ROOT, rowOf, session, settle, SPACES } from './admin.test-support.ts'
 import { currentPath, renderApp } from './render-app.test-support.tsx'
@@ -88,8 +89,8 @@ describe('管理界面：账户', () => {
       },
     })
     renderApp('/admin/users')
-    const dialog = await openConfirm(await rowOf('amy'), '停用 艾米（amy）')
-    expect(dialog).toHaveAccessibleName('停用 艾米（amy）？')
+    const dialog = await openConfirm(await rowOf('amy'), `停用 ${plainName('艾米', 'amy')}`)
+    expect(dialog).toHaveAccessibleName(`停用 ${plainName('艾米', 'amy')}？`)
     expect(within(dialog).getByText(/停用后，这个人立即不能访问/)).toBeInTheDocument()
     fireEvent.click(within(dialog).getByRole('button', { name: '停用' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
@@ -98,7 +99,7 @@ describe('管理界面：账户', () => {
     const row = await rowOf('amy')
     await waitFor(() => expect(within(row).getByText('已停用')).toBeInTheDocument())
     // 同一个位置的按钮换成了"启用"：焦点回到它，不落到 body（审查 B9）
-    await waitFor(() => expect(document.activeElement).toBe(within(row).getByRole('button', { name: '启用 艾米（amy）' })))
+    await waitFor(() => expect(document.activeElement).toBe(within(row).getByRole('button', { name: `启用 ${plainName('艾米', 'amy')}` })))
   })
 
   it('取消弹窗：焦点回到打开它的按钮，不发请求', async () => {
@@ -109,10 +110,10 @@ describe('管理界面：账户', () => {
     })
     renderApp('/admin/users')
     const row = await rowOf('amy')
-    const dialog = await openConfirm(row, '设为系统管理员 艾米（amy）')
+    const dialog = await openConfirm(row, `设为系统管理员 ${plainName('艾米', 'amy')}`)
     fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    await waitFor(() => expect(document.activeElement).toBe(within(row).getByRole('button', { name: '设为系统管理员 艾米（amy）' })))
+    await waitFor(() => expect(document.activeElement).toBe(within(row).getByRole('button', { name: `设为系统管理员 ${plainName('艾米', 'amy')}` })))
     expect(api.requests.some(request => request.key.includes('/system-role'))).toBe(false)
   })
 
@@ -132,7 +133,7 @@ describe('管理界面：账户', () => {
     await rowOf('amy')
     fireEvent.change(screen.getByLabelText('状态'), { target: { value: 'active' } })
     await waitFor(() => expect(screen.getByRole('table', { name: '账户列表' })).toBeInTheDocument())
-    const dialog = await openConfirm(await rowOf('amy'), '停用 艾米（amy）')
+    const dialog = await openConfirm(await rowOf('amy'), `停用 ${plainName('艾米', 'amy')}`)
     fireEvent.click(within(dialog).getByRole('button', { name: '停用' }))
     await waitFor(() => expect(screen.queryByText('amy')).toBeNull())
     await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('按名字或登录名搜索')))
@@ -146,10 +147,10 @@ describe('管理界面：账户', () => {
     })
     renderApp('/admin/users')
     const amy = await rowOf('amy')
-    expect(within(amy).getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual(['停用 艾米（amy）', '设为系统管理员 艾米（amy）', '生成重置链接 艾米（amy）'])
-    expect(within(amy).getByRole('button', { name: '停用 艾米（amy）' })).toHaveTextContent('停用')
-    expect(within(await rowOf('root')).getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual(['停用 管理员（root）', '取消系统管理员 管理员（root）', '生成重置链接 管理员（root）'])
-    expect(within(await rowOf('cat')).getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual(['启用 凯特（cat）'])
+    expect(within(amy).getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual([`停用 ${plainName('艾米', 'amy')}`, `设为系统管理员 ${plainName('艾米', 'amy')}`, `生成重置链接 ${plainName('艾米', 'amy')}`])
+    expect(within(amy).getByRole('button', { name: `停用 ${plainName('艾米', 'amy')}` })).toHaveTextContent('停用')
+    expect(within(await rowOf('root')).getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual([`停用 ${plainName('管理员', 'root')}`, `取消系统管理员 ${plainName('管理员', 'root')}`, `生成重置链接 ${plainName('管理员', 'root')}`])
+    expect(within(await rowOf('cat')).getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual([`启用 ${plainName('凯特', 'cat')}`])
   })
 
   it('取消最后一个系统管理员：弹窗里说明原因，弹窗留着', async () => {
@@ -160,7 +161,7 @@ describe('管理界面：账户', () => {
       [`PUT /api/admin/users/${ROOT.id}/system-role`]: () => apiError(409, 'LAST_ADMIN'),
     })
     renderApp('/admin/users')
-    const dialog = await openConfirm(await rowOf('root'), '取消系统管理员 管理员（root）')
+    const dialog = await openConfirm(await rowOf('root'), `取消系统管理员 ${plainName('管理员', 'root')}`)
     fireEvent.click(within(dialog).getByRole('button', { name: '取消系统管理员' }))
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('至少要保留一个有效的系统管理员')
     expect(screen.getByRole('dialog')).toBeInTheDocument()
@@ -175,7 +176,7 @@ describe('管理界面：账户', () => {
       [`POST /api/admin/users/${AMY.id}/disable`]: pending.handler,
     })
     renderApp('/admin/users')
-    const dialog = await openConfirm(await rowOf('amy'), '停用 艾米（amy）')
+    const dialog = await openConfirm(await rowOf('amy'), `停用 ${plainName('艾米', 'amy')}`)
     fireEvent.click(within(dialog).getByRole('button', { name: '停用' }))
     const busy = await within(dialog).findByRole('button', { name: '正在处理…' })
     expect(busy).toHaveAttribute('aria-disabled', 'true')
@@ -200,11 +201,11 @@ describe('管理界面：账户', () => {
     })
     renderApp('/admin/users')
     const row = await rowOf('amy')
-    const dialog = await openConfirm(row, '生成重置链接 艾米（amy）')
-    expect(dialog).toHaveAccessibleName('为 艾米（amy） 生成重置链接？')
+    const dialog = await openConfirm(row, `生成重置链接 ${plainName('艾米', 'amy')}`)
+    expect(dialog).toHaveAccessibleName(`为 ${plainName('艾米', 'amy')} 生成重置链接？`)
     expect(dialog).toHaveAccessibleDescription('生成后，这个人的当前密码立即失效，所有地方的登录都会退出。链接 24 小时内有效，只显示这一次，请交给本人。')
     fireEvent.click(within(dialog).getByRole('button', { name: '生成重置链接' }))
-    const linkDialog = await screen.findByRole('dialog', { name: '重置链接：艾米（amy）' })
+    const linkDialog = await screen.findByRole('dialog', { name: `重置链接：${shownName('艾米', 'amy')}` })
     // 被 aria-hidden 的弹窗也算上：同时打开两个时，按角色查找默认只看得见最上面的一个（复验 N3）
     expect(screen.getAllByRole('dialog', { hidden: true })).toHaveLength(1)
     expect(within(linkDialog).getByLabelText('链接')).toHaveValue('https://docs.example.com/reset-password#token')
@@ -233,7 +234,7 @@ describe('管理界面：账户', () => {
     renderApp('/admin/users')
     const amy = await rowOf('amy')
     expect(within(amy).getByText(`登录已锁定，到 ${formatDateTime(LOCKED_UNTIL)} 解除`)).toBeInTheDocument()
-    expect(within(amy).getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual(['停用 艾米（amy）', '设为系统管理员 艾米（amy）', '生成重置链接 艾米（amy）', '解除锁定 艾米（amy）'])
+    expect(within(amy).getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual([`停用 ${plainName('艾米', 'amy')}`, `设为系统管理员 ${plainName('艾米', 'amy')}`, `生成重置链接 ${plainName('艾米', 'amy')}`, `解除锁定 ${plainName('艾米', 'amy')}`])
     const root = await rowOf('root')
     expect(within(root).queryByText(/登录已锁定/)).toBeNull()
     expect(within(root).queryByRole('button', { name: /^解除锁定/ })).toBeNull()
@@ -249,7 +250,7 @@ describe('管理界面：账户', () => {
     const amy = await rowOf('amy')
     expect(within(amy).getByText(`部分来源的登录已锁定，到 ${formatDateTime(LOCKED_UNTIL)} 解除`)).toBeInTheDocument()
     expect(within(amy).queryByText(/^登录已锁定/)).toBeNull()
-    expect(within(amy).getByRole('button', { name: '解除锁定 艾米（amy）' })).toBeInTheDocument()
+    expect(within(amy).getByRole('button', { name: `解除锁定 ${plainName('艾米', 'amy')}` })).toBeInTheDocument()
   })
 
   it('解除锁定：先确认后果；确认之后请求、刷新列表；锁定的说明与按钮随之消失，焦点回到这一行', async () => {
@@ -264,8 +265,8 @@ describe('管理界面：账户', () => {
       },
     })
     renderApp('/admin/users')
-    const dialog = await openConfirm(await rowOf('amy'), '解除锁定 艾米（amy）')
-    expect(dialog).toHaveAccessibleName('解除 艾米（amy） 的登录锁定？')
+    const dialog = await openConfirm(await rowOf('amy'), `解除锁定 ${plainName('艾米', 'amy')}`)
+    expect(dialog).toHaveAccessibleName(`解除 ${plainName('艾米', 'amy')} 的登录锁定？`)
     // 说明准确（复验 N5）：清掉的是这个人在各个来源上的失败次数；他所在的网络整体被锁时仍要等到期，不说"可以立即登录"
     expect(dialog).toHaveAccessibleDescription(/^解除后，清掉这个人在所有来源上的登录失败次数。他所在的网络如果整体被锁（同一来源失败次数太多），仍要等锁定到期。/)
     expect(dialog).not.toHaveAccessibleDescription(/立即/)
@@ -289,7 +290,7 @@ describe('管理界面：账户', () => {
       [`POST /api/admin/users/${AMY.id}/unlock-login`]: inTurn(networkFailure, () => json(200, AMY)),
     })
     renderApp('/admin/users')
-    const dialog = await openConfirm(await rowOf('amy'), '解除锁定 艾米（amy）')
+    const dialog = await openConfirm(await rowOf('amy'), `解除锁定 ${plainName('艾米', 'amy')}`)
     fireEvent.click(within(dialog).getByRole('button', { name: '解除锁定' }))
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(/网络/)
     expect(screen.getByRole('dialog')).toBeInTheDocument()
@@ -328,7 +329,7 @@ describe('管理界面：对自己的账户操作（审查 B4、A12）', () => {
       },
     })
     const app = renderApp('/admin/users')
-    const dialog = await openConfirm(await rowOf('root'), '取消系统管理员 管理员（root）')
+    const dialog = await openConfirm(await rowOf('root'), `取消系统管理员 ${plainName('管理员', 'root')}`)
     expect(dialog).toHaveAccessibleName('取消你自己的系统管理员？')
     expect(dialog).toHaveAccessibleDescription(/你立即不能再打开管理界面/)
     fireEvent.click(within(dialog).getByRole('button', { name: '取消系统管理员' }))
@@ -356,7 +357,7 @@ describe('管理界面：对自己的账户操作（审查 B4、A12）', () => {
       },
     })
     const app = renderApp('/admin/users')
-    const dialog = await openConfirm(await rowOf('root'), '停用 管理员（root）')
+    const dialog = await openConfirm(await rowOf('root'), `停用 ${plainName('管理员', 'root')}`)
     expect(dialog).toHaveAccessibleName('停用你自己的账户？')
     expect(dialog).toHaveAccessibleDescription(/停用后你立即退出，不能再登录/)
     expect(dialog).not.toHaveTextContent('随时可以重新启用')
@@ -378,11 +379,11 @@ describe('管理界面：对自己的账户操作（审查 B4、A12）', () => {
       },
     })
     const app = renderApp('/admin/users')
-    const dialog = await openConfirm(await rowOf('root'), '生成重置链接 管理员（root）')
+    const dialog = await openConfirm(await rowOf('root'), `生成重置链接 ${plainName('管理员', 'root')}`)
     expect(dialog).toHaveAccessibleName('为你自己生成重置链接？')
     expect(dialog).toHaveAccessibleDescription('生成后，你自己的登录会立即退出，当前密码随即失效，之后用这个链接设置新密码。链接 24 小时内有效，只显示这一次，请先复制保存。')
     fireEvent.click(within(dialog).getByRole('button', { name: '生成重置链接' }))
-    const linkDialog = await screen.findByRole('dialog', { name: '重置链接：管理员（root）' })
+    const linkDialog = await screen.findByRole('dialog', { name: `重置链接：${shownName('管理员', 'root')}` })
     expect(within(linkDialog).getByLabelText('链接')).toHaveValue('https://docs.example.com/reset-password#own')
     expect(within(linkDialog).getByText('你的登录已经退出：关闭之后回到登录页，打开这个链接设置新密码。')).toBeInTheDocument()
     await settle()
@@ -414,7 +415,7 @@ describe('管理界面：邀请', () => {
     const submit = screen.getByRole('button', { name: '生成邀请链接' })
     submit.focus()
     fireEvent.click(submit)
-    const dialog = await screen.findByRole('dialog', { name: '邀请链接：张三（zhang.san）' })
+    const dialog = await screen.findByRole('dialog', { name: `邀请链接：${shownName('张三', 'zhang.san')}` })
     expect(within(dialog).getByLabelText('链接')).toHaveValue('https://docs.example.com/invite#token')
     expect(api.requests.find(request => request.key === 'POST /api/admin/invitations')?.body).toEqual({ username: 'zhang.san', displayName: '张三' })
     fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }))
@@ -451,7 +452,7 @@ describe('管理界面：邀请', () => {
     fireEvent.click(screen.getByRole('button', { name: '生成邀请链接' }))
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent('没能确认邀请是否已经生成（网络连接失败')
-    expect(alert).toHaveTextContent('请在下面的列表里找到这个登录名，点"重新生成"')
+    expect(alert).toHaveTextContent('列表已刷新：在下面的列表里找到这个登录名，点"重新生成"')
     // 列表刷新了：可能已经建好的那一条出现在列表里
     await waitFor(() => expect(requestCount(api, 'GET /api/admin/invitations')).toBe(2))
     expect(await rowOf('amy')).toBeInTheDocument()
@@ -528,7 +529,7 @@ describe('管理界面：邀请', () => {
     fireEvent.click(screen.getByRole('button', { name: '生成邀请链接' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('没能确认邀请是否已经生成')
     fireEvent.click(screen.getByRole('button', { name: '生成邀请链接' }))
-    const dialog = await screen.findByRole('dialog', { name: '邀请链接：艾米（amy）' })
+    const dialog = await screen.findByRole('dialog', { name: `邀请链接：${shownName('艾米', 'amy')}` })
     fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
 
@@ -624,7 +625,7 @@ describe('管理界面：邀请', () => {
     // 列表还在刷新：仍然只有确认的弹窗（被 aria-hidden 的也算上，复验 N3）
     expect(screen.getAllByRole('dialog', { hidden: true })).toEqual([dialog])
     refreshed.resolve(json(200, listPage([reissued, { ...INVITATION, status: 'revoked', superseded: true, revokedAt: '2026-09-28T06:00:00.000Z' }])))
-    const linkDialog = await screen.findByRole('dialog', { name: '邀请链接：贝亚（bea）' })
+    const linkDialog = await screen.findByRole('dialog', { name: `邀请链接：${shownName('贝亚', 'bea')}` })
     expect(screen.getAllByRole('dialog', { hidden: true })).toEqual([linkDialog])
     expect(within(linkDialog).getByLabelText('链接')).toHaveValue('https://docs.example.com/invite#new')
 

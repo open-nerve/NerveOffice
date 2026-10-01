@@ -1,7 +1,7 @@
 // 团队空间里的文档（M2-P2 设计 §3.4–§3.6）：按空间列出、新建到指定空间（M1 兼容、重放、审计）、详情带所在的空间；
 // 全员可见与归档；新建与归档、移出成员的并发（两个连接构造的交错）；已经打开的编辑器在撤权之后的保存（M2-P6 复核 S2）。
 // 逐格的权限见 permissions/content-matrix.test.ts。
-import type { DocumentDetail, DocumentListResponse } from '@nerve-office/contracts'
+import type { CreatedDocument, DocumentListResponse } from '@nerve-office/contracts'
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
@@ -10,7 +10,7 @@ import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
-import { documentDetailSchema, documentListResponseSchema, errorResponseSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
+import { createdDocumentSchema, documentDetailSchema, documentListResponseSchema, errorResponseSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -59,9 +59,9 @@ async function create(user: LoggedIn, body: Record<string, unknown>): Promise<Re
   return asUser(app.baseUrl, user, '/api/documents', { method: 'POST', body: { type: 'sheet', requestId: randomUUID(), ...body } })
 }
 
-async function created(response: Response): Promise<DocumentDetail> {
+async function created(response: Response): Promise<CreatedDocument> {
   expect(response.status).toBe(201)
-  return parseExact(documentDetailSchema, await response.json())
+  return parseExact(createdDocumentSchema, await response.json())
 }
 
 async function list(user: LoggedIn, spaceId?: string): Promise<DocumentListResponse> {
@@ -101,7 +101,9 @@ describe('US-M2-05 团队空间里的文档', () => {
     const spaceId = await teamSpace('产品部')
     const requestId = randomUUID()
     const first = await created(await create(amySession, { requestId, spaceId }))
-    expect(await created(await create(amySession, { requestId, spaceId }))).toEqual(first)
+    expect(first.replayed).toBe(false)
+    // 重放：同一份文档，标为重放（M2-P6 复核第二批 S-1）
+    expect(await created(await create(amySession, { requestId, spaceId }))).toEqual({ ...first, replayed: true })
     for (const body of [{ requestId }, { requestId, spaceId: amy.personalSpaceId }]) {
       const response = await create(amySession, body)
       expect(response.status).toBe(409)

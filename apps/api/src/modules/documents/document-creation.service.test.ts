@@ -60,14 +60,15 @@ describe('DocumentCreationService.create', () => {
     expect(lock).toBeLessThan(lookup)
   })
 
-  it('同一个请求重放：返回同一份文档的当前元数据，不再新建', async () => {
+  it('同一个请求重放：返回同一份文档的当前元数据，标为重放（M2-P6 复核第二批 S-1），不再新建', async () => {
     const { store, service } = setup()
     const first = await service.create(member(ALICE), { type: 'sheet', title: '周报', requestId: REQUEST_ID }, HTTP_ORIGIN)
+    expect(first.replayed).toBe(false)
     const current = store.documents.get(first.id)
     if (current !== undefined)
       store.documents.set(first.id, { ...current, revision: 4 })
     const again = await service.create(member(ALICE), { type: 'sheet', title: '周报', requestId: REQUEST_ID }, HTTP_ORIGIN)
-    expect(again).toEqual({ ...first, revision: 4 })
+    expect(again).toEqual({ ...first, revision: 4, replayed: true })
     expect(store.documents.size).toBe(1)
     expect(store.audits).toHaveLength(1)
   })
@@ -116,7 +117,7 @@ describe('DocumentCreationService.create', () => {
     expect(detail).toMatchObject({ spaceId: TEAM_SPACE, space: { id: TEAM_SPACE, type: 'team', name: '市场部' }, permissions: { canEdit: true } })
     expect(store.revisions[0]?.payloadDigest).toEqual(createdPayloadDigest('sheet', '周报', TEAM_SPACE))
     // 同一个请求重放：同样带着空间，摘要相同
-    expect(await service.create(member(BOB), { type: 'sheet', title: '周报', requestId: REQUEST_ID, spaceId: TEAM_SPACE }, HTTP_ORIGIN)).toEqual(detail)
+    expect(await service.create(member(BOB), { type: 'sheet', title: '周报', requestId: REQUEST_ID, spaceId: TEAM_SPACE }, HTTP_ORIGIN)).toEqual({ ...detail, replayed: true })
     // 同一个 requestId 换一个空间：不是同一个请求
     expect((await rejection(service.create(member(BOB), { type: 'sheet', title: '周报', requestId: REQUEST_ID }, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
   })
@@ -233,7 +234,7 @@ describe('DocumentCreationService.create 的目标文件夹（M2-P4）', () => {
     const another = store.addFolder({ spaceId: ALICE_SPACE, name: '存档' })
     const first = await service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID, folderId: folder.id }, HTTP_ORIGIN)
 
-    expect(await service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID, folderId: folder.id }, HTTP_ORIGIN)).toEqual(first)
+    expect(await service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID, folderId: folder.id }, HTTP_ORIGIN)).toEqual({ ...first, replayed: true })
     expect((await rejection(service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID, folderId: another.id }, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
     expect((await rejection(service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID }, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
     expect(store.documents.size).toBe(1)

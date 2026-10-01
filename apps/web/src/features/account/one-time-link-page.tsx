@@ -7,6 +7,7 @@ import { Link, useLocation, useNavigate } from 'react-router'
 import { ApiError, describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { LOGIN_PATH } from '../../shared/lib/login-path.ts'
+import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { Alert, AlertDescription, Button, buttonVariants, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label, Skeleton } from '../../shared/ui/index.ts'
 import { SESSION_QUERY_KEY, STARTS_SESSION } from '../auth/index.ts'
 import { acceptInvitation, completePasswordReset, inspectLink } from './links-api.ts'
@@ -166,6 +167,7 @@ function LinkForm({ purpose, token }: { purpose: OneTimeLinkPurpose, token: stri
 export function OneTimeLinkPage({ purpose }: { purpose: OneTimeLinkPurpose }) {
   const token = useLinkToken()
   const text = messages.account.link[purpose]
+  useDocumentTitle(text.title)
   return (
     <main className="flex min-h-svh items-center justify-center bg-muted/40 p-4">
       <Card className="w-full max-w-sm">

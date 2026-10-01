@@ -703,6 +703,63 @@ describe('US-M1-11 lint 规则的自测：编辑器适配层与内部 API（P4 �
     }
   })
 
+  it('只给按需加载的页面与编辑器页用的文案（shared/i18n/zh-cn/<功能>.ts）只由对应的功能引用；测试不受限（M2-P6 复核第二批）', async () => {
+    const importTexts = (path: string, name: string): string => `import { ${name} } from '${path}'\n\nexport const texts = ${name}\n`
+    const allowed: [string, string][] = [
+      [importTexts('../../shared/i18n/zh-cn/admin.ts', 'adminMessages'), 'apps/web/src/features/admin/users-page.tsx'],
+      [importTexts('../../shared/i18n/zh-cn/members.ts', 'membersMessages'), 'apps/web/src/features/members/members-page.tsx'],
+      [importTexts('../../shared/i18n/zh-cn/colleagues.ts', 'colleaguesMessages'), 'apps/web/src/features/colleagues/keyword-picker.tsx'],
+      [importTexts('../../shared/i18n/zh-cn/trash.ts', 'trashMessages'), 'apps/web/src/features/trash/trash-page.tsx'],
+      [importTexts('../../shared/i18n/zh-cn/search.ts', 'searchMessages'), 'apps/web/src/features/search/search-page.tsx'],
+      [importTexts('../../shared/i18n/zh-cn/editor.ts', 'editorMessages'), 'apps/web/src/features/sheet-editor/editor-chrome.tsx'],
+      // 测试与测试辅助不进产物
+      [importTexts('../shared/i18n/zh-cn/admin.ts', 'adminMessages'), WEB_TEST_FILE],
+      [importTexts('../shared/i18n/zh-cn/editor.ts', 'editorMessages'), WEB_TEST_SUPPORT],
+      // 首屏的文案照常由各处引用；拆出去的文件引用首屏的那份也照常
+      [importTexts('../../shared/i18n/index.ts', 'messages'), WEB_FEATURE_FILE],
+      [importTexts('./messages.ts', 'messages'), 'apps/web/src/shared/i18n/zh-cn/admin.ts'],
+    ]
+    for (const [code, file] of allowed)
+      expect(await rulesFor(code, file), `${file}：${code}`).not.toContain('boundaries/dependencies')
+    const denied: [string, string][] = [
+      // 首屏的功能、别的按需加载的功能、应用层、入口、共享层（经 index.ts 转出）、编辑器适配层
+      [importTexts('../../shared/i18n/zh-cn/admin.ts', 'adminMessages'), 'apps/web/src/features/spaces/space-page.tsx'],
+      [importTexts('../../shared/i18n/zh-cn/admin.ts', 'adminMessages'), 'apps/web/src/features/members/members-page.tsx'],
+      [importTexts('../shared/i18n/zh-cn/members.ts', 'membersMessages'), WEB_FILE],
+      [`export type { trashMessages } from '../../shared/i18n/zh-cn/trash.ts'\n`, PLATFORM_ENTRY],
+      [importTexts('../../shared/i18n/zh-cn/editor.ts', 'editorMessages'), 'apps/web/src/features/documents/new-sheet-button.tsx'],
+      [importTexts('../shared/i18n/zh-cn/editor.ts', 'editorMessages'), 'apps/web/src/editor/sheet-editor.ts'],
+    ]
+    for (const [code, file] of denied) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain('boundaries/dependencies')
+      expect(report.messages.join('\n'), file).toMatch(/这份文案（shared\/i18n\/zh-cn\/\w+\.ts）只由按需加载的 features\/[\w-]+ 引用/)
+    }
+    // 共享层内部的引用模块边界不检查（同一个元素），改按解析之后的路径拦下：shared/i18n/index.ts 的转出、别的共享文件的中转、弹窗的文件
+    const insideShared: [string, string][] = [
+      [`export { searchMessages } from './zh-cn/search.ts'\n`, 'apps/web/src/shared/i18n/index.ts'],
+      [`export type { adminMessages } from './zh-cn/admin.ts'\n`, 'apps/web/src/shared/i18n/index.ts'],
+      [importTexts('../i18n/zh-cn/colleagues.ts', 'colleaguesMessages'), WEB_SHARED_FILE],
+      [importTexts('./trash.ts', 'trashMessages'), 'apps/web/src/shared/i18n/zh-cn/messages.ts'],
+      [importTexts('../i18n/zh-cn/members.ts', 'membersMessages'), 'apps/web/src/shared/ui/dialog.tsx'],
+    ]
+    for (const [code, file] of insideShared) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain('import-x/no-restricted-paths')
+      expect(report.messages.join('\n'), file).toMatch(/这份文案（shared\/i18n\/zh-cn\/\w+\.ts）只由按需加载的 features\/[\w-]+ 引用/)
+    }
+    // 共享层的测试辅助不受限
+    expect(await rulesFor(importTexts('../i18n/zh-cn/admin.ts', 'adminMessages'), 'apps/web/src/shared/testing/people.test-support.ts')).not.toContain('import-x/no-restricted-paths')
+
+    // 只给平台页面用的请求层模块不经 shared/api/index.ts 转出（编辑器页也引用这个桶文件）；按路径引用照常
+    for (const code of [`export { createRequestIdLedger } from './request-ids.ts'\n`, `export type { RequestIdLedger } from './request-ids.ts'\n`, `export { writeFailureText } from './write-outcome.ts'\n`]) {
+      const report = await lint(code, 'apps/web/src/shared/api/index.ts')
+      expect(report.rules, code).toContain('import-x/no-restricted-paths')
+      expect(report.messages.join('\n'), code).toContain('只给平台页面用，不经 shared/api/index.ts 转出')
+    }
+    expect(await rulesFor('import { createRequestIdLedger } from \'../shared/api/request-ids.ts\'\n\nexport const ledger = createRequestIdLedger\n', WEB_FILE)).not.toContain('import-x/no-restricted-paths')
+  })
+
   it('首屏的限制只管平台页面：编辑器页（它的入口与 sheet-editor）是另一个包，可以引用弹窗、确认的弹窗与同事选择（M2-P2 复验）', async () => {
     const imports = [
       'import { DialogContent } from \'../../shared/ui/dialog.tsx\'\n\nexport const content = DialogContent\n',

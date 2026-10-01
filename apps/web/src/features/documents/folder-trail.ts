@@ -16,8 +16,13 @@ export interface FolderTrail {
   readonly crumbs: readonly FolderCrumb[]
   /** 当前这一层的子文件夹 */
   readonly children: UseQueryResult<FolderListResponse>
-  /** 路径上有一级看不到了（被删、被移走，或者本来就不存在）：整条路径都不成立 */
+  /** 路径上有一级看不到了（被删、被移走到看不到的地方，或者本来就不存在）：整条路径都不成立 */
   readonly missing: boolean
+  /**
+   * 路径上有一级已经不在它上一层里了（被挪到同一个空间的别处，M2-P6 复核 G2）：它自己还看得到，下面的各层照样取得到，
+   * 只是这条路径不再成立，面包屑里它的名字永远读不出来。上一层的列表被截断（超过上限）时看不出来，不算
+   */
+  readonly moved: boolean
 }
 
 /**
@@ -40,5 +45,10 @@ export function useFolderTrail(spaceId: string, folderIds: readonly string[]): F
     // 上面按 [null, ...folderIds] 逐层取，最后一个就是当前这一层
     children: results[folderIds.length] as UseQueryResult<FolderListResponse>,
     missing: results.some(result => isMissingResource(result.error)),
+    // 父亲那一层已经取到（而且不是缓存里正在重新请求的旧数据）、没有截断，却没有它：它被挪走了
+    moved: crumbs.some((crumb, level) => {
+      const parent = results[level]
+      return parent?.data !== undefined && !parent.isFetching && !parent.data.truncated && crumb.name === undefined
+    }),
   }
 }

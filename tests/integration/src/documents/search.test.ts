@@ -11,7 +11,7 @@ import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import { randomUUID } from 'node:crypto'
 import { DocumentsRepository } from '@nerve-office/api/testing'
-import { errorResponseSchema, folderSchema, SEARCH_PAGE_SIZE, searchResponseSchema, trashListResponseSchema } from '@nerve-office/contracts'
+import { createdFolderSchema, errorResponseSchema, SEARCH_PAGE_SIZE, searchResponseSchema, trashListResponseSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -85,7 +85,7 @@ async function seed(spaceId: string, createdBy: string, title: string, folderId?
 async function createFolder(spaceId: string, name: string, parentId?: string): Promise<Folder> {
   const response = await asUser(app.baseUrl, amySession, '/api/folders', { method: 'POST', body: { spaceId, name, parentId, requestId: randomUUID() } })
   expect(response.status, name).toBe(201)
-  return parseExact(folderSchema, await response.json())
+  return parseExact(createdFolderSchema, await response.json())
 }
 
 async function search(user: LoggedIn, query: string, cursor?: string): Promise<SearchResponse> {

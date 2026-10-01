@@ -1,0 +1,35 @@
+// 表格编辑器页的文案（P4）：只由编辑器页（features/sheet-editor）引用，随编辑器页的入口加载，不进平台页面的首屏（lint 的模块边界限定）。
+// 两个入口共用的（通用的说明、错误与登录状态）在 messages.ts
+export const editorMessages = {
+  back: '我的空间',
+  loading: '正在打开表格…',
+  save: '保存',
+  saveShortcut: (keys: string) => `保存（${keys}）`,
+  status: {
+    clean: '已保存到云端',
+    dirty: '有未保存的修改',
+    saving: '保存中…',
+    conflict: '版本冲突',
+    failed: '保存失败',
+    readOnly: '只能查看',
+  },
+  finishCellEditing: '请先完成单元格的编辑',
+  tooLarge: '表格超过容量上限（5 MiB），无法保存',
+  formulasPending: '公式结果尚未保存，请稍后再保存一次',
+  saveFailed: (reason: string) => `保存失败：${reason}`,
+  conflict: '别处保存了更新的版本。本页的修改没有保存；需要的话先复制出来，再重新加载查看最新版本',
+  reload: '重新加载',
+  notFound: '内容不存在，或者你没有访问权限',
+  unsupported: '这份表格的格式比当前页面新，请刷新页面；刷新后仍然打不开，请联系管理员',
+  loadFailed: (reason: string) => `表格加载失败：${reason}`,
+  editorFailed: '编辑器加载失败，请刷新页面重试',
+  signedOut: '登录已过期或已在别处退出。本页的修改还在：请在新的标签页中用同一个账户登录，然后回到这里保存',
+  loginInNewTab: '在新标签页中登录',
+  otherUser: '别的标签页登录了另一个账户，本页不能再保存。原来的账户重新登录之后可以继续保存；也可以先复制出本页的内容',
+  otherUserBeforeReload: '别的标签页登录了另一个账户，重新加载会以那个账户打开。要查看最新版本，先换回原来的账户再重新加载',
+  retrySave: '请求已失效，请再保存一次',
+  // 文档被删除、移走或失去权限之后的保存（M2 总设计 A14，M2-P6 复核 S8）：本页的修改留在页面上，存不进去了
+  saveGone: '这份表格已经被删除、移走，或者你已经没有访问权限，本页的修改没有保存。需要的话先把内容复制出来。',
+  saveDenied: (reason: string) => `${reason}，本页的修改没有保存。需要的话先把内容复制出来。`,
+  sessionCheckFailed: (reason: string) => `暂时无法确认登录状态：${reason}`,
+} as const

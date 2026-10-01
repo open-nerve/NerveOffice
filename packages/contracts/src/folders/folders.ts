@@ -58,6 +58,16 @@ export const folderSchema = z.object({
 
 export type Folder = z.infer<typeof folderSchema>
 
+/**
+ * 新建的响应（POST /api/folders）：那个文件夹，加上这次是不是同一个 requestId 的重放（M2-P6 复核第二批 S-1，接口的加法；
+ * 与新建文档的 createdDocumentSchema 同一个意思）。replayed 为真：之前那一次已经建好了，这次没有再建
+ */
+export const createdFolderSchema = folderSchema.extend({
+  replayed: z.boolean(),
+})
+
+export type CreatedFolder = z.infer<typeof createdFolderSchema>
+
 /** 列出一层（GET /api/folders）：parentId 省略表示空间的根目录。 */
 export const folderListQuerySchema = z.strictObject({
   spaceId: uuidSchema,

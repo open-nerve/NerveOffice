@@ -5,12 +5,15 @@ import { messages } from '../../shared/i18n/index.ts'
 import { SEARCH_QUERY_PARAM, searchPath } from '../../shared/lib/space-paths.ts'
 import { Button, Input } from '../../shared/ui/index.ts'
 
-const text = messages.search
+const text = messages.searchBox
 
 /**
  * 页头里的搜索框（M2-P4 设计 §3.7，US-M2-12）：只负责带着关键词跳到搜索结果页。
  * 结果页按需加载（features/search），所以首屏里只有这个框；关键词放在地址的查询参数里，
  * 刷新、前进后退与分享地址都拿得到同一批结果。
+ * 排布（M2-P6 复核第三批 G-e）：宽屏时占住页头中间的空当，最窄也留够输入框与"搜索"按钮的位置（min-w-40），再窄就由当前用户的名字收窄——
+ * 原来可以收窄到 0，"搜索"按钮（不收窄）就挤出框外、盖到人名上；窄屏（sm 以下）时折到页头的第二行、占满整行：
+ * 一行放不下产品名称、"管理"、搜索框与当前用户那一组（页头不溢出，M2-P1 审查 B11）
  */
 export function SearchBox() {
   const navigate = useNavigate()
@@ -28,8 +31,8 @@ export function SearchBox() {
   return (
     <form
       role="search"
-      // 占住页头中间的空当，窄屏时跟着收窄：页头不换行、不溢出（M2-P1 审查 B11）
-      className="flex min-w-0 max-w-xs flex-1 items-center gap-1"
+      // 窄屏：排在最后（第二行）、占满整行；sm 起：占住页头中间的空当，在 10rem 与 20rem 之间随宽度伸缩
+      className="order-last flex w-full items-center gap-1 sm:order-none sm:w-auto sm:max-w-xs sm:min-w-40 sm:flex-1"
       onSubmit={(event) => {
         event.preventDefault()
         if (parsed.success)
@@ -38,8 +41,8 @@ export function SearchBox() {
     >
       <Input
         type="search"
-        aria-label={text.boxLabel}
-        placeholder={text.title}
+        aria-label={text.label}
+        placeholder={text.placeholder}
         className="h-8 w-full min-w-0"
         value={keyword}
         onChange={event => setKeyword(event.target.value)}

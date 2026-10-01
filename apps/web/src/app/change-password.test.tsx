@@ -1,5 +1,6 @@
 // 修改密码页（US-M2-02）：与生产相同的路由表与请求缓存，接口用假的 fetch。
-// 成功时当前页面换成新的会话（M2-P6 复核 B1）；结果未知时的提示与之后再提交的说法（复核 G-1）。
+// 成功时当前页面换成新的会话（M2-P6 复核 B1）；结果未知时的提示与之后再提交的说法（复核 G-1）；
+// 结果未知时立即带着"新密码可能已经生效"的原因确认会话（第五批 G2）。
 import type { SessionResponse } from '@nerve-office/contracts'
 import type { Handler } from '../shared/testing/fake-api.test-support.ts'
 import { fireEvent, screen, waitFor } from '@testing-library/react'
@@ -116,6 +117,35 @@ describe('修改密码：结果未知时（M2-P6 复核 G-1）', () => {
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent(UNKNOWN_TEXT)
     expect(alert).toHaveTextContent(reason)
+  })
+
+  it('结果未知（代理的 502），服务端其实已经改好、当前会话随之撤销（新会话的 Cookie 随回包一起丢了）：随即带着 password_changed 确认会话、回到登录页，不等再提交（第五批 G2）', async () => {
+    let changed = false
+    const { api, app } = await openPage({
+      'GET /api/auth/session': () => (changed ? apiError(401, 'SESSION_EXPIRED') : json(200, SESSION)),
+      [CHANGE]: () => {
+        changed = true
+        return new Response('<html>Bad Gateway</html>', { status: 502 })
+      },
+    })
+    fill('old password', 'a brand new password', 'a brand new password')
+    submit()
+    // 原来要等别处的请求得到"登录已过期"才离开，一换页就只说"登录已过期"
+    await waitFor(() => expect(app.page.visits).toEqual(['/login?from=%2Fsettings%2Fpassword&reason=password_changed']))
+    expect(api.requests.filter(entry => entry.key === CHANGE)).toHaveLength(1)
+    expect(api.requests.filter(entry => entry.key === 'GET /api/auth/session').length).toBeGreaterThan(1)
+  })
+
+  it('结果未知，确认之后会话还在（没有改成，或者新会话的 Cookie 已经到了）：留在页面上说明新密码可能已经生效，页面不动', async () => {
+    const { api, app } = await openPage({ [CHANGE]: networkFailure })
+    const checked = api.requests.filter(entry => entry.key === 'GET /api/auth/session').length
+    fill('old password', 'a brand new password', 'a brand new password')
+    submit()
+    expect(await screen.findByRole('alert')).toHaveTextContent(UNKNOWN_TEXT)
+    await waitFor(() => expect(api.requests.filter(entry => entry.key === 'GET /api/auth/session').length).toBeGreaterThan(checked))
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(app.page.visits).toEqual([])
+    expect(screen.getByRole('alert')).toHaveTextContent(UNKNOWN_TEXT)
   })
 
   it('服务端自己回答的"服务繁忙"（503）：在写入之前就拒绝了，结果是确定的，照常提示', async () => {

@@ -210,7 +210,9 @@ describe('DocumentCopyService.copy', () => {
     const requestId = nextRequestId()
     const command = { spaceId: ALICE_SPACE, requestId }
     const first = await service.copy(member(ALICE), document.id, command, HTTP_ORIGIN)
-    expect(await service.copy(member(ALICE), document.id, command, HTTP_ORIGIN)).toEqual(first)
+    expect(first.replayed).toBe(false)
+    // 重放：同一份副本，标为重放（M2-P6 复核第二批 S-1）
+    expect(await service.copy(member(ALICE), document.id, command, HTTP_ORIGIN)).toEqual({ ...first, replayed: true })
     expect(store.documents.size).toBe(2)
     // 重放不再记审计
     expect(store.audits).toHaveLength(1)
@@ -230,7 +232,7 @@ describe('DocumentCopyService.copy', () => {
     const command = { spaceId: ALICE_SPACE, requestId: nextRequestId() }
     const first = await service.copy(member(ALICE), document.id, command, HTTP_ORIGIN)
     store.documents.set(document.id, { ...document, title: '月报' })
-    expect(await service.copy(member(ALICE), document.id, command, HTTP_ORIGIN)).toEqual(first)
+    expect(await service.copy(member(ALICE), document.id, command, HTTP_ORIGIN)).toEqual({ ...first, replayed: true })
     expect(store.documents.size).toBe(2)
   })
 })

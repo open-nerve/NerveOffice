@@ -1,4 +1,4 @@
-import type { AuditActionDetailsInput, Folder, FolderListQuery, FolderListResponse } from '@nerve-office/contracts'
+import type { AuditActionDetailsInput, CreatedFolder, Folder, FolderListQuery, FolderListResponse } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { AccessibleFolder, Actor, FolderOperation, SpaceContentAccess } from './document-access-policy.ts'
@@ -80,15 +80,16 @@ export class FoldersService {
    * requestId 幂等：同一个请求重试只建一个（同一个文件夹里允许同名，看名字分辨不出重复的新建）。
    * 幂等这一步只要求仍能看到这个空间（与新建文档、复制相同，00 号计划书 §7.4 第 2 步的同一条规则）：建好之后被降为查看者、
    * 空间被归档，重发同一个请求照样拿到那个文件夹，而不是 403（M2-P6 复核 A 的 S-4）；不是重放才要求能新建。
+   * 响应带 replayed：重放为真，客户端据此说明"上一次其实已经完成"（M2-P6 复核第二批 S-1）。
    */
-  async create(actor: Actor, command: CreateFolderCommand, origin: AuditOrigin): Promise<Folder> {
+  async create(actor: Actor, command: CreateFolderCommand, origin: AuditOrigin): Promise<CreatedFolder> {
     return this.transactions.run(async (transaction) => {
       const space = await this.lockIfCreatable(actor, command.spaceId, transaction)
       const permissions = folderPermissionsOf(space.role)
 
       const previous = await this.folders.findByRequestId(command.requestId, transaction)
       if (previous !== undefined)
-        return toFolder(this.replay(actor, command, previous), permissions)
+        return { ...toFolder(this.replay(actor, command, previous), permissions), replayed: true }
       // 不是重放才要求能新建：能新建时这是锁下的判断，不能新建时就是上面那次（没有取锁）
       requireSpaceOperation(space, 'createFolders')
 
@@ -110,7 +111,7 @@ export class FoldersService {
         throw new AppError('REQUEST_ID_CONFLICT')
       // 只记位置，不记名称（M2 总设计 §2.1 第 5 条，M2-P6 复核 M-1）
       await this.record({ action: 'folders.created', details: { spaceId: folder.spaceId, parentId: folder.parentId } }, actor, folder.id, origin, transaction)
-      return toFolder(folder, permissions)
+      return { ...toFolder(folder, permissions), replayed: false }
     })
   }
 

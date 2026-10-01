@@ -5,7 +5,7 @@
 // 复制的源文档在锁下判断（M2-P6 复核 A 的 S1）：判断之后被移出空间、源被移走时复制被拒绝，
 // 复制进行中的移出、删除、移动与保存都等复制提交之后才生效（不成环）；目标空间同样在锁下再判断（复验 R-S1）。
 // 复制与其他各类操作两个方向的交错见 copy-locks.test.ts。
-import type { DocumentDetail } from '@nerve-office/contracts'
+import type { CreatedDocument, DocumentDetail } from '@nerve-office/contracts'
 import type pg from 'pg'
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
@@ -15,7 +15,7 @@ import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
-import { documentDetailSchema, documentListResponseSchema, errorResponseSchema, folderSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
+import { createdDocumentSchema, createdFolderSchema, documentDetailSchema, documentListResponseSchema, errorResponseSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -66,7 +66,7 @@ async function teamSpace(options: { status?: 'active' | 'archived', amy?: 'admin
 async function newFolder(user: LoggedIn, spaceId: string, name: string): Promise<string> {
   const response = await asUser(app.baseUrl, user, '/api/folders', { method: 'POST', body: { spaceId, name, requestId: randomUUID() } })
   expect(response.status).toBe(201)
-  return parseExact(folderSchema, await response.json()).id
+  return parseExact(createdFolderSchema, await response.json()).id
 }
 
 /** 经删除接口把一个文件夹放进回收站（S3 的接口） */
@@ -86,9 +86,15 @@ async function copy(user: LoggedIn, id: string, body: Record<string, unknown>): 
   return asUser(app.baseUrl, user, `/api/documents/${id}/copy`, { method: 'POST', body: { requestId: randomUUID(), ...body } })
 }
 
-async function detail(response: Response, status = 200): Promise<DocumentDetail> {
-  expect(response.status).toBe(status)
+async function detail(response: Response): Promise<DocumentDetail> {
+  expect(response.status).toBe(200)
   return parseExact(documentDetailSchema, await response.json())
+}
+
+/** 复制的响应：201，副本的元数据加上这次是不是重放（M2-P6 复核第二批 S-1） */
+async function copyResult(response: Response): Promise<CreatedDocument> {
+  expect(response.status).toBe(201)
+  return parseExact(createdDocumentSchema, await response.json())
 }
 
 async function errorOf(response: Response): Promise<{ code: string, message: string }> {
@@ -352,7 +358,7 @@ describe('US-M2-08 复制', () => {
     const spaceId = await teamSpace()
     const source = await sourceDocument(spaceId)
     const folder = await newFolder(amySession, spaceId, '资料')
-    const copied = await detail(await copy(amySession, source.id, { spaceId, folderId: folder }), 201)
+    const copied = await copyResult(await copy(amySession, source.id, { spaceId, folderId: folder }))
     expect(copied.id).not.toBe(source.id)
     expect(copied).toMatchObject({ title: '周报 的副本', spaceId, folderId: folder, revision: 1 })
 
@@ -374,7 +380,7 @@ describe('US-M2-08 复制', () => {
   it('两份各自保存互不影响：副本保存之后源的修订号与内容都不变，反过来也一样', async () => {
     const spaceId = await teamSpace()
     const source = await sourceDocument(spaceId)
-    const copied = await detail(await copy(amySession, source.id, { spaceId }), 201)
+    const copied = await copyResult(await copy(amySession, source.id, { spaceId }))
     const both = { id: copied.id, unitId: source.unitId }
 
     expect((await save(amySession, both, '副本改过', 1)).status).toBe(200)
@@ -393,7 +399,7 @@ describe('US-M2-08 复制', () => {
     const from = await teamSpace({ amy: 'viewer', status: 'archived' })
     const to = await teamSpace({ amy: 'editor' })
     const source = await seedDocument(database, { spaceId: from, createdBy: ben.id, title: '周报' })
-    const copied = await detail(await copy(amySession, source.id, { spaceId: to, title: '我的副本' }), 201)
+    const copied = await copyResult(await copy(amySession, source.id, { spaceId: to, title: '我的副本' }))
     expect(copied).toMatchObject({ title: '我的副本', spaceId: to })
     expect(await stored(copied.id)).toMatchObject({ created_by: amy.id, space_id: to })
   })
@@ -422,7 +428,7 @@ describe('US-M2-08 复制', () => {
     const other = await teamSpace()
     const source = await sourceDocument(spaceId, '季度预算')
     const target = await newFolder(amySession, spaceId, '目标')
-    const copied = await detail(await copy(amySession, source.id, { spaceId, folderId: target }), 201)
+    const copied = await copyResult(await copy(amySession, source.id, { spaceId, folderId: target }))
     expect(copied.folderId).toBe(target)
     expect(await stored(copied.id)).toMatchObject({ folder_id: target, space_id: spaceId })
     expect(await idsIn(amySession, spaceId, target)).toEqual([copied.id])
@@ -447,8 +453,9 @@ describe('US-M2-08 复制', () => {
     const spaceId = await teamSpace()
     const source = await seedDocument(database, { spaceId, createdBy: amy.id, title: '季报' })
     const requestId = randomUUID()
-    const first = await detail(await copy(amySession, source.id, { spaceId, requestId }), 201)
-    expect(await detail(await copy(amySession, source.id, { spaceId, requestId }), 201)).toEqual(first)
+    const first = await copyResult(await copy(amySession, source.id, { spaceId, requestId }))
+    expect(first.replayed).toBe(false)
+    expect(await copyResult(await copy(amySession, source.id, { spaceId, requestId }))).toEqual({ ...first, replayed: true })
     const conflict = await copy(amySession, source.id, { spaceId, requestId, title: '另一个标题' })
     expect(conflict.status).toBe(409)
     expect((await errorOf(conflict)).code).toBe('REQUEST_ID_CONFLICT')
@@ -459,7 +466,7 @@ describe('US-M2-08 复制', () => {
     const spaceId = await teamSpace()
     const title = '😀'.repeat(200)
     const source = await seedDocument(database, { spaceId, createdBy: amy.id, title })
-    const copied = await detail(await copy(amySession, source.id, { spaceId }), 201)
+    const copied = await copyResult(await copy(amySession, source.id, { spaceId }))
     expect(copied.title).toBe(`${'😀'.repeat(196)} 的副本`)
     expect([...copied.title]).toHaveLength(200)
   })
@@ -673,6 +680,6 @@ describe('US-M2-14 复制的并发与锁：源文档在锁下判断（M2-P6 复�
     expect(copied.status, await copied.clone().text()).toBe(201)
     expect(changed.status, await changed.clone().text()).toBe(status)
     // 副本是复制那一刻的内容：之后的保存没有进副本
-    expect(await contentOf((await detail(copied, 201)).id)).not.toContain('复制之后才写的内容')
+    expect(await contentOf((await copyResult(copied)).id)).not.toContain('复制之后才写的内容')
   })
 })

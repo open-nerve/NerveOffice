@@ -90,6 +90,27 @@ describe('US-M2-12 按标题搜索', () => {
     expect(await screen.findByText('旧周报')).toBeInTheDocument()
   })
 
+  it('最后一页加载完"加载更多"随之消失：焦点移到第一条新结果，不落到 body（M2-P6 复核 S3 的 P13）', async () => {
+    loggedIn({
+      [searchKey('周报')]: () => json(200, { items: [result()], nextCursor: 'c1' }),
+      [searchKey('周报', 'c1')]: () => json(200, { items: [result({ id: '0199a2c4-0000-7000-8000-0000000000d2', title: '旧周报', folderPath: [] })], nextCursor: null }),
+    })
+    renderApp('/search?q=周报')
+    const more = await screen.findByRole('button', { name: '加载更多' })
+    more.focus()
+    fireEvent.click(more)
+    expect(await screen.findByText('旧周报')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '加载更多' })).toBeNull()
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('link', { name: /旧周报/ })))
+  })
+
+  it('加载中：读屏读得到"正在搜索…"（状态写在骨架屏的容器上，M2-P6 复核 S4）；浏览器标签页的标题是这次搜索（WCAG 2.4.2）', async () => {
+    loggedIn({ [searchKey('周报')]: async () => new Promise<Response>(() => {}) })
+    renderApp('/search?q=周报')
+    expect(await screen.findByRole('status', { name: '正在搜索…' })).toBeInTheDocument()
+    await waitFor(() => expect(document.title).toBe('“周报”的搜索结果 - NerveOffice'))
+  })
+
   it('加载中有自己的说明；关键词只有空白时按没有关键词处理（契约在客户端就拦下）', async () => {
     const api = loggedIn()
     renderApp('/search?q=%20%20')

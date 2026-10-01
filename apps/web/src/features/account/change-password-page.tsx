@@ -4,6 +4,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { ApiError, describeError, isUnknownOutcome } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { useSessionRecheck } from '../../shared/lib/session-recheck.ts'
+import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
 import { Alert, AlertDescription, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label } from '../../shared/ui/index.ts'
 import { RENEWS_SESSION, RENEWS_SESSION_AFTER_UNKNOWN, SESSION_QUERY_KEY } from '../auth/index.ts'
@@ -30,9 +32,15 @@ function failureText(error: unknown, unsure: boolean): string {
  * 成功时服务端撤销了本人的全部会话（包括当前这个），为当前页面新建了一个（M2-P6 复核 B1）：请求层已换上新的 CSRF 令牌，
  * 这里把新的会话放进请求缓存；其他标签页由请求缓存的全局处理通知（RENEWS_SESSION）。
  * 结果未知时记下来（unsure）：再提交得到"当前密码不正确"或"登录已过期"时，提示新密码可能已经生效（M2-P6 复核 G-1）。
+ * 结果未知的那一刻就带着 password_changed 的原因确认一次会话（第五批 G2，与为自己生成重置链接的 R-1 一样）：已经改好的话，
+ * 当前会话随之撤销（新会话的 Cookie 随丢掉的回包一起丢了），这时就回到登录页、说明新密码可能已经生效，不等再提交；
+ * 原来要等到别处的请求得到"登录已过期"，一换页就只说"登录已过期"。会话还在就留在页面上，说明照旧。
+ * 确认不在 onError 里等：修改密码这时还没结束，确认要先等它结束（运行时的 sessionChangesSettled），等就成了互相等到上限
  */
 export function ChangePasswordPage() {
+  useDocumentTitle(messages.account.changePassword)
   const queryClient = useQueryClient()
+  const recheckSession = useSessionRecheck()
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmation, setConfirmation] = useState('')
@@ -55,8 +63,10 @@ export function ChangePasswordPage() {
       setUnsure(false)
     },
     onError: (error) => {
-      if (isUnknownOutcome(error))
-        setUnsure(true)
+      if (!isUnknownOutcome(error))
+        return
+      setUnsure(true)
+      void recheckSession('password_changed')
     },
   })
 

@@ -3,14 +3,14 @@
 // 看不到与不存在一致、编辑者与查看者的区别、归档的空间；文档列表按目录过滤；
 // 跨空间移动：整棵子树（含里面的文档）换空间、文档的写入代次加一、两边的权限、目标位置的判断；
 // 并发：判断过之后、取空间树的锁之前空间被归档，往子树里移进新文档，两个方向的跨空间移动（两个连接构造的交错）。
-import type { Folder, FolderListResponse, SpaceRole } from '@nerve-office/contracts'
+import type { CreatedFolder, Folder, FolderListResponse, SpaceRole } from '@nerve-office/contracts'
 import type pg from 'pg'
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import { randomUUID } from 'node:crypto'
-import { documentListResponseSchema, errorResponseSchema, FOLDER_MAX_DEPTH, folderListResponseSchema, folderSchema, trashListResponseSchema } from '@nerve-office/contracts'
+import { createdFolderSchema, documentListResponseSchema, errorResponseSchema, FOLDER_MAX_DEPTH, folderListResponseSchema, folderSchema, trashListResponseSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -68,9 +68,9 @@ async function post(user: LoggedIn, body: Record<string, unknown>): Promise<Resp
   return asUser(app.baseUrl, user, '/api/folders', { method: 'POST', body: { requestId: randomUUID(), ...body } })
 }
 
-async function created(response: Response): Promise<Folder> {
+async function created(response: Response): Promise<CreatedFolder> {
   expect(response.status).toBe(201)
-  return parseExact(folderSchema, await response.json())
+  return parseExact(createdFolderSchema, await response.json())
 }
 
 /** 新建一个文件夹并断言成功 */
@@ -264,7 +264,9 @@ describe('US-M2-07 文件夹的新建与列出', () => {
     const spaceId = await teamSpace()
     const requestId = randomUUID()
     const first = await created(await post(amySession, { spaceId, name: '资料', requestId }))
-    expect(await created(await post(amySession, { spaceId, name: '资料', requestId }))).toEqual(first)
+    expect(first.replayed).toBe(false)
+    // 重放：同一个文件夹，标为重放（M2-P6 复核第二批 S-1）
+    expect(await created(await post(amySession, { spaceId, name: '资料', requestId }))).toEqual({ ...first, replayed: true })
     const conflict = await post(amySession, { spaceId, name: '归档', requestId })
     expect(conflict.status).toBe(409)
     expect((await errorOf(conflict)).code).toBe('REQUEST_ID_CONFLICT')

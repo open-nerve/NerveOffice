@@ -1,11 +1,13 @@
 // 取自 shadcn/ui 4.21.0 的 radix-nova 风格，按项目规范改写（ADR-008）。
+// 图标默认尺寸的选择器不带引号（[class*=size-]）：单引号的字符串里转义的 \' 会被 Tailwind 连反斜杠一起读进去，规则永远匹配不上
+// （与 button-variants.ts 同一个问题，M2-P6 复核第四批）
 import type { VariantProps } from 'class-variance-authority'
 import type { ComponentProps } from 'react'
 import { cva } from 'class-variance-authority'
 import { cn } from '../lib/cn.ts'
 
 const alertVariants = cva(
-  'group/alert relative grid w-full gap-0.5 rounded-lg border px-2.5 py-2 text-left text-sm has-[>svg]:grid-cols-[auto_1fr] has-[>svg]:gap-x-2 *:[svg]:row-span-2 *:[svg]:translate-y-0.5 *:[svg]:text-current *:[svg:not([class*=\'size-\'])]:size-4',
+  'group/alert relative grid w-full gap-0.5 rounded-lg border px-2.5 py-2 text-left text-sm has-[>svg]:grid-cols-[auto_1fr] has-[>svg]:gap-x-2 *:[svg]:row-span-2 *:[svg]:translate-y-0.5 *:[svg]:text-current *:[svg:not([class*=size-])]:size-4',
   {
     variants: {
       variant: {

@@ -148,6 +148,14 @@ export function isMissingResource(error: unknown): error is ApiError {
 }
 
 /**
+ * 要的内容不存在，或者看不到了（404 NOT_FOUND）。与 isMissingResource 不同，不含 400：地址里的 id 不合法才按不存在处理，
+ * 保存这类请求的 400 是请求本身的问题，不能说成"已经被删除、移走"（M2-P6 复核第二批 G-5）
+ */
+export function isNotFoundError(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.code === 'NOT_FOUND'
+}
+
+/**
  * 操作按访问权限被拒绝：看不到了（404，与不存在一致），或者看得到却不能做（403）。页面上显示的权限可能已经过时
  * （例如空间刚被归档、刚被移出），页面据此重新请求（M2-P2 复验）。请求内容不合法（400）不算：那是请求本身的问题
  */

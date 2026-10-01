@@ -1,40 +1,91 @@
 import type { SpaceMember, SpaceMemberListResponse, SpaceRole, UserSummary } from '@nerve-office/contracts'
+import type { ReactNode } from 'react'
 import type { PendingConfirmation } from '../confirmation/index.ts'
 import { SPACE_ROLES } from '@nerve-office/contracts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
-import { describeError, isMissingResource, isPermissionDeniedError } from '../../shared/api/index.ts'
+import { ApiError, describeError, isMissingResource, isPermissionDeniedError, isUnknownOutcome } from '../../shared/api/index.ts'
+import { writeFailureText } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { membersMessages } from '../../shared/i18n/zh-cn/members.ts'
 import { ADMIN_PATHS } from '../../shared/lib/admin-paths.ts'
 import { cn } from '../../shared/lib/cn.ts'
+import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { HOME_PATH, spacePath } from '../../shared/lib/space-paths.ts'
-import { Alert, AlertDescription, Badge, Button, buttonVariants, Label, NativeSelect, Skeleton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../shared/ui/index.ts'
+import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
+import { useFocusRescue } from '../../shared/lib/use-focus-rescue.ts'
+import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
+import { Alert, AlertDescription, Badge, Button, buttonVariants, Label, NativeSelect, PersonName, Phrase, Skeleton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../shared/ui/index.ts'
 import { sessionQueryOptions } from '../auth/index.ts'
 import { ColleaguePicker } from '../colleagues/index.ts'
 import { ConfirmDialog } from '../confirmation/index.ts'
 import { addMember, changeMemberRole, forgetSpace, membersQueryOptions, removeMember, SpaceNotFound, SPACES_QUERY_KEY, spacesQueryOptions, useForgetMissingSpace } from '../spaces/index.ts'
 
-const text = messages.members
+const text = membersMessages
 
 /** 角色的选项：从高到低 */
 const ROLE_OPTIONS = [...SPACE_ROLES].reverse()
 
-/** 添加成员：按名字选一个同事、选角色；已经是成员的人不作为候选 */
+/** 要添加的人已经是成员了 */
+function isAlreadyMember(error: unknown): boolean {
+  return error instanceof ApiError && error.code === 'ALREADY_MEMBER'
+}
+
+/**
+ * 添加失败时的说明（M2-P6 复核 S1）：结果未知时这个人可能已经加好了；已经是成员时说清楚——之前添加这个人有过结果未知（unsure），
+ * 才说"可能就是刚才没能确认的那一次"，否则只说已经是成员（第五批 G5：多半是别人刚加的，并没有"刚才那一次"）；其余按错误码。
+ * 前两种情形成员列表都随即刷新，refreshed 是刷新好了没有（第四批）
+ */
+function addFailureText(error: unknown, refreshed: boolean, unsure: boolean): string {
+  if (isAlreadyMember(error))
+    return unsure ? text.addedEarlier(refreshed) : text.alreadyMember(refreshed)
+  if (isUnknownOutcome(error))
+    return text.addOutcomeUnknown(describeError(error).message, refreshed)
+  return describeError(error).message
+}
+
+/**
+ * 添加成员：按名字选一个同事、选角色；已经是成员的人不作为候选。
+ * 结果未知或者得到"已经是成员"时成员列表随即刷新（M2-P6 复核 S1）：加好了的人就出现在表里；
+ * 已经是成员时选择随之清掉（这个人不再是候选），再点也只会得到同样的结果。
+ * 这时的刷新经共用的做法（shared/api/write-outcome.ts，第四批）：最多等 10 秒，刷新失败或者到了时限还没回来，说明里说
+ * "成员列表没能刷新"，按钮也不一直停在"正在添加…"；超时之后刷新才回来的，说明随后改过来（第五批 G4）
+ */
 function AddMemberForm({ spaceId, members }: { readonly spaceId: string, readonly members: readonly SpaceMember[] }) {
   const queryClient = useQueryClient()
   const [user, setUser] = useState<UserSummary>()
   const [role, setRole] = useState<SpaceRole>('viewer')
   // 添加成功之后换一个 key，同事选择整个重新开始：关键词与上一次的候选都清掉（审查 B11）
   const [pickerKey, setPickerKey] = useState(0)
+  /** 上一次失败之后成员列表刷新好了没有：说明据此说"已刷新"还是"没能刷新"（第四批）。每次失败都重新记下 */
+  const { refreshed, refreshAfterFailure } = useOutcomeRefresh()
+  /**
+   * 结果未知的那一次添加的是谁（第五批 G5，与创建团队空间记下那一次的名称一样）：之后添加这个人得到"已经是成员"，
+   * 才说多半就是那一次。添加这个人成功时清掉
+   */
+  const [unsureUserId, setUnsureUserId] = useState<string>()
   const roleId = useId()
   const hintId = useId()
+
+  function startOver(): void {
+    setUser(undefined)
+    setPickerKey(key => key + 1)
+  }
+
   const mutation = useMutation({
     mutationFn: async (userId: string) => addMember(spaceId, { userId, role }),
-    onSuccess: async () => {
-      setUser(undefined)
-      setPickerKey(key => key + 1)
-      await queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY })
+    onSuccess: async (_member, userId) => {
+      startOver()
+      setUnsureUserId(current => (current === userId ? undefined : current))
+      await refreshQueries(queryClient, [SPACES_QUERY_KEY], { throwOnError: false })
+    },
+    onError: async (error, userId) => {
+      if (isUnknownOutcome(error))
+        setUnsureUserId(userId)
+      if (isAlreadyMember(error))
+        startOver()
+      await refreshAfterFailure(error, async () => refreshQueries(queryClient, [SPACES_QUERY_KEY]), { also: isAlreadyMember })
     },
   })
 
@@ -63,7 +114,7 @@ function AddMemberForm({ spaceId, members }: { readonly spaceId: string, readonl
       {user === undefined && <p id={hintId} className="basis-full text-sm text-muted-foreground">{text.pickColleague}</p>}
       {mutation.isError && (
         <Alert variant="destructive" className="basis-full">
-          <AlertDescription>{describeError(mutation.error).message}</AlertDescription>
+          <AlertDescription>{addFailureText(mutation.error, refreshed, mutation.variables === unsureUserId)}</AlertDescription>
         </Alert>
       )}
     </form>
@@ -83,18 +134,29 @@ interface MemberRowProps {
 
 /**
  * 成员表的一行（审查 B3）。能管理时，角色由这一行各自提交，不同的行可以同时调整：
- * - 选择之后立即显示目标角色（记在这一行的状态里，与选择同一次渲染，不等请求的状态）；进行中这一行标为忙碌、说明"正在保存…"，
- *   这期间再改这一行不提交，选择框仍显示正在保存的角色；
+ * - 选择框只是选（记在这一行的状态里），点了"保存"才提交（M2-P6 复核的疑点）：Windows、Linux 上的 Chrome 与 Edge
+ *   在收起的选择框上按方向键直接改值、逐个触发 change，选一下就保存的话会把经过的每个角色都保存一遍；
+ *   选回原来的角色，"保存"随之收起；
+ * - 保存之后立即显示目标角色（与点击同一次渲染，不等请求的状态）；进行中这一行标为忙碌、说明"正在保存…"，
+ *   这期间这一行不再提交，选择框仍显示正在保存的角色；
  * - 保存成功时先用响应替换缓存里的这一行，再刷新成员列表：刷新失败时 TanStack Query 保留上一次的数据，
  *   这一行也已经是保存之后的角色，不显示旧的（复验）；
  * - 成员列表刷新完成之后才结束，选择框不先弹回旧的角色；
- * - 失败时恢复原来的角色（失败之后也刷新，显示服务端的实际状态），原因就在这一行说明。
+ * - 失败时恢复原来的角色（失败之后也刷新，显示服务端的实际状态），原因就在这一行说明。结果未知时说明可能已经生效（第二批 G-2）：
+ *   这时的刷新最多等 10 秒（第三批 S-a），这一行不一直停在"正在保存…"；刷新失败或者超时，说明页面没能刷新（第三批 G-a），
+ *   超时之后刷新才回来的，说明随后改过来（第五批 G4）。
  */
 function MemberRow({ spaceId, member, self, canManage, onDemoteSelf, onRemove }: MemberRowProps) {
   const queryClient = useQueryClient()
   const noteId = useId()
+  const unsavedId = useId()
+  const selectRef = useRef<HTMLSelectElement>(null)
+  /** 选了、还没保存的角色 */
+  const [chosen, setChosen] = useState<SpaceRole>()
   /** 正在保存的角色 */
   const [saving, setSaving] = useState<SpaceRole>()
+  /** 上一次失败之后成员列表刷新好了没有：结果未知的说明据此说"已刷新"还是"没能刷新"（第三批 G-a） */
+  const { refreshed, refreshAfterFailure } = useOutcomeRefresh()
   const change = useMutation({
     mutationFn: async (role: SpaceRole) => changeMemberRole(spaceId, member.user.id, role),
     onSuccess: (saved) => {
@@ -102,51 +164,73 @@ function MemberRow({ spaceId, member, self, canManage, onDemoteSelf, onRemove }:
         ? undefined
         : { ...list, items: list.items.map(item => (item.user.id === member.user.id ? saved : item)) })
     },
-    onSettled: async () => {
-      await queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY })
+    onSettled: async (_saved, error) => {
+      if (error !== null && isUnknownOutcome(error))
+        await refreshAfterFailure(error, async () => refreshQueries(queryClient, [SPACES_QUERY_KEY]))
+      else
+        await refreshQueries(queryClient, [SPACES_QUERY_KEY], { throwOnError: false })
       setSaving(undefined)
     },
   })
-  const name = messages.colleagues.name(member.user)
+  // 纯文字里的人名（选择框与按钮的可读名称）：显示名隔离、登录名另外标出（M2-P6 复核 M2）
+  const name = messages.people.text(member.user)
   const busy = saving !== undefined
+  // 选回了原来的角色（或者角色已经被别处改成了选的那个）：没有要保存的
+  const pending = chosen !== undefined && chosen !== member.role ? chosen : undefined
+  // 选了、还没保存：选择框显示的是选的角色，却还没有生效——看得见"保存"按钮，读屏用户要靠关联的说明才知道（M2-P6 复核第二批 S-3）
+  const unsaved = pending !== undefined && !busy
+  const describedBy = [unsaved ? unsavedId : undefined, busy || change.isError ? noteId : undefined].filter(id => id !== undefined).join(' ')
 
   function choose(role: SpaceRole): void {
-    if (busy || role === member.role)
+    if (!busy)
+      setChosen(role)
+  }
+
+  function save(): void {
+    if (busy || pending === undefined)
       return
+    // "保存"随之收起：焦点先回到这一行的选择框
+    selectRef.current?.focus()
+    setChosen(undefined)
     // 空间管理员降低自己：改完立即失去管理的权限，先确认；失败的原因显示在确认的弹窗里
     if (self && member.role === 'admin') {
-      onDemoteSelf(role)
+      onDemoteSelf(pending)
       return
     }
-    setSaving(role)
-    change.mutate(role)
+    setSaving(pending)
+    change.mutate(pending)
   }
 
   return (
     <TableRow aria-busy={busy}>
       <TableCell className="font-medium">
-        {name}
+        <PersonName person={member.user} />
         {self && text.you}
       </TableCell>
       <TableCell>
         {canManage
           ? (
               <div className="flex flex-col gap-1">
-                <NativeSelect aria-label={text.roleOf(name)} aria-describedby={busy || change.isError ? noteId : undefined} value={saving ?? member.role} onChange={event => choose(event.target.value as SpaceRole)}>
-                  {ROLE_OPTIONS.map(value => <option key={value} value={value}>{messages.spaces.roleName(value)}</option>)}
-                </NativeSelect>
+                <div className="flex items-center gap-2">
+                  <NativeSelect ref={selectRef} aria-label={text.roleOf(name)} aria-describedby={describedBy === '' ? undefined : describedBy} value={saving ?? pending ?? member.role} onChange={event => choose(event.target.value as SpaceRole)}>
+                    {ROLE_OPTIONS.map(value => <option key={value} value={value}>{messages.spaces.roleName(value)}</option>)}
+                  </NativeSelect>
+                  {unsaved && <Button variant="outline" size="sm" aria-label={text.saveRoleOf(name)} onClick={save}>{text.saveRole}</Button>}
+                </div>
+                {unsaved && <span id={unsavedId} className="text-xs text-muted-foreground">{text.unsaved}</span>}
                 {busy && <span id={noteId} className="text-xs text-muted-foreground">{text.saving}</span>}
-                {!busy && change.isError && <span id={noteId} role="alert" className="text-xs text-destructive">{describeError(change.error).message}</span>}
+                {/* 结果未知时成员列表已经刷新（onSettled），说明可能已经生效（M2-P6 复核第二批 G-2）；没能刷新时另说（第三批 G-a） */}
+                {!busy && change.isError && <span id={noteId} role="alert" className="text-xs text-destructive">{writeFailureText(change.error, refreshed)}</span>}
               </div>
             )
           : messages.spaces.roleName(member.role)}
       </TableCell>
       <TableCell>
-        {member.status === 'disabled' ? <Badge variant="destructive">{text.disabled}</Badge> : <Badge variant="secondary">{messages.admin.statusName(member.status)}</Badge>}
+        {member.status === 'disabled' ? <Badge variant="destructive">{text.disabled}</Badge> : <Badge variant="secondary">{messages.people.statusName(member.status)}</Badge>}
       </TableCell>
       {canManage && (
         <TableCell>
-          <Button variant="ghost" size="sm" aria-label={messages.admin.actionOn(text.remove, name)} onClick={onRemove}>{text.remove}</Button>
+          <Button variant="ghost" size="sm" aria-label={messages.common.actionOn(text.remove, name)} onClick={onRemove}>{text.remove}</Button>
         </TableCell>
       )}
     </TableRow>
@@ -167,10 +251,16 @@ function MembersTable({ spaceId, list, selfId, focusTitle }: MembersTableProps) 
   const navigate = useNavigate()
   const [pending, setPending] = useState<PendingConfirmation>()
   /** 表格上方的说明（要移出的人已经不在成员里了）；下一次打开确认的弹窗时清掉 */
-  const [notice, setNotice] = useState<string>()
+  const [notice, setNotice] = useState<ReactNode>()
 
+  /** 成功之后刷新（成员列表、导航与空间页）：刷新失败时列表自己显示加载失败 */
   async function refresh(): Promise<void> {
-    await queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY })
+    await refreshQueries(queryClient, [SPACES_QUERY_KEY], { throwOnError: false })
+  }
+
+  /** 确认的弹窗在结果未知之后的刷新：刷新失败时拒绝，弹窗据此说明页面没能刷新（M2-P6 复核第三批 G-a） */
+  async function refreshAfterUnknown(): Promise<void> {
+    await refreshQueries(queryClient, [SPACES_QUERY_KEY])
   }
 
   function confirm(confirmation: PendingConfirmation): void {
@@ -188,13 +278,14 @@ function MembersTable({ spaceId, list, selfId, focusTitle }: MembersTableProps) 
         await changeMemberRole(spaceId, member.user.id, role)
         await refresh()
       },
+      refresh: refreshAfterUnknown,
       returnFocus: focusTitle,
     })
   }
 
   function confirmRemove(member: SpaceMember): void {
     const self = member.user.id === selfId
-    const name = messages.colleagues.name(member.user)
+    const name = messages.people.text(member.user)
     confirm({
       title: self ? text.confirmRemoveSelf : text.confirmRemove(name),
       description: self ? text.removeSelfDescription : text.removeDescription,
@@ -213,7 +304,7 @@ function MembersTable({ spaceId, list, selfId, focusTitle }: MembersTableProps) 
           await refresh()
           if (queryClient.getQueryState(membersQueryOptions(spaceId).queryKey)?.status !== 'success')
             throw error
-          setNotice(self ? text.alreadyRemovedSelf : text.alreadyRemoved(name))
+          setNotice(self ? text.alreadyRemovedSelf : <Phrase parts={text.alreadyRemoved(<PersonName person={member.user} />)} />)
           return
         }
         if (!self) {
@@ -226,6 +317,8 @@ function MembersTable({ spaceId, list, selfId, focusTitle }: MembersTableProps) 
         await navigate(HOME_PATH)
         await refresh()
       },
+      // 结果未知时确认的弹窗刷新成员列表、说明可能已经移出（M2-P6 复核第二批 G-2）；再试得到 404 时照上面说明"已经不在成员里了"
+      refresh: refreshAfterUnknown,
       returnFocus: focusTitle,
     })
   }
@@ -308,8 +401,17 @@ function MembersContent({ spaceId }: { readonly spaceId: string }) {
   const list = useQuery(membersQueryOptions(spaceId))
   const session = useQuery(sessionQueryOptions())
   const titleRef = useRef<HTMLHeadingElement>(null)
+  // 有焦点的按钮、行随刷新消失时（被移出的人、改成别的角色之后），焦点交给页面的标题（M2-P6 复核 S3）
+  const rescueFocus = useFocusRescue(titleRef)
   const missing = isMissingResource(list.error)
   useForgetMissingSpace(spaceId, missing)
+  // 浏览器标签页的标题（M2-P6 复核 S4）：看不到时由"空间不存在"给出
+  let title: string | undefined
+  if (list.data !== undefined && list.error === null)
+    title = text.title(list.data.space.name)
+  else if (!list.isPending && !missing)
+    title = text.pageTitle
+  useDocumentTitle(title)
   if (list.isPending) {
     return (
       <div role="status" aria-label={text.loading} className="flex flex-col gap-3">
@@ -323,25 +425,30 @@ function MembersContent({ spaceId }: { readonly spaceId: string }) {
   // 原因由服务端判断，前端不按错误码猜（复验；ADR-006：说明面向用户）。重试也一样，不给重试
   if (isPermissionDeniedError(list.error)) {
     return (
-      <Alert>
-        <AlertDescription>{list.error.message}</AlertDescription>
-      </Alert>
+      <section className="flex flex-col gap-4" aria-labelledby="members-title">
+        <h1 id="members-title" className="text-xl font-semibold">{text.pageTitle}</h1>
+        <Alert>
+          <AlertDescription>{describeError(list.error).message}</AlertDescription>
+        </Alert>
+      </section>
     )
   }
   if (list.data === undefined) {
     return (
-      <Alert variant="destructive">
-        <AlertDescription>
-          <p>{text.loadFailed}</p>
-          <p>{describeError(list.error).message}</p>
-          <Button variant="outline" size="sm" className="mt-2" onClick={() => void list.refetch()}>{messages.common.retry}</Button>
-        </AlertDescription>
-      </Alert>
+      <section className="flex flex-col gap-4" aria-labelledby="members-title">
+        <h1 id="members-title" className="text-xl font-semibold">{text.loadFailed}</h1>
+        <Alert variant="destructive">
+          <AlertDescription>
+            <p>{describeError(list.error).message}</p>
+            <Button variant="outline" size="sm" className="mt-2" onClick={() => void list.refetch()}>{messages.common.retry}</Button>
+          </AlertDescription>
+        </Alert>
+      </section>
     )
   }
   const { space } = list.data
   return (
-    <section className="flex flex-col gap-4" aria-labelledby="members-title">
+    <section ref={rescueFocus} className="flex flex-col gap-4" aria-labelledby="members-title">
       <div className="flex flex-wrap items-start justify-between gap-3">
         {/* tabIndex -1：只能由程序聚焦（确认的弹窗关闭之后），Tab 键不经过它 */}
         <h1 ref={titleRef} id="members-title" tabIndex={-1} className="text-xl font-semibold outline-none focus-visible:ring-3 focus-visible:ring-ring/50">{text.title(space.name)}</h1>
