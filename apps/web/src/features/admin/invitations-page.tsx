@@ -7,6 +7,7 @@ import { createInvitationRequestSchema, INVITATION_LIFETIME_DAYS, INVITATION_STA
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { ApiError, describeError, isUnknownOutcome } from '../../shared/api/index.ts'
+import { refreshIfUnknown } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
@@ -41,16 +42,24 @@ function isUsernameTaken(error: unknown): boolean {
 }
 
 /**
- * 签发失败时的说明（M2-P6 复核 G-2）：结果未知时邀请可能已经建好，链接却丢了（只在签发的响应里出现一次），引导去列表里重新生成；
- * 结果未知之后对同一个登录名再签发得到"已被占用"，多半就是刚才那一次，同样引导去重新生成；其余按错误码。
+ * 结果未知之后对同一个登录名再签发得到"已被占用"：多半就是刚才那一次。
  * 比较的两边都是经契约解析过的请求（createInvitationRequestSchema，登录名已是规范写法，复验 N10）：
  * 两次输入只差大小写或首尾空白，也认作同一个登录名
  */
-function issueFailureText(error: unknown, request: CreateInvitationRequest | undefined, unsureFor: string | undefined): string {
+function isRetryTaken(error: unknown, request: CreateInvitationRequest | undefined, unsureFor: string | undefined): boolean {
+  return isUsernameTaken(error) && unsureFor !== undefined && request?.username === unsureFor
+}
+
+/**
+ * 签发失败时的说明（M2-P6 复核 G-2）：结果未知时邀请可能已经建好，链接却丢了（只在签发的响应里出现一次），引导去列表里重新生成；
+ * 结果未知之后对同一个登录名再签发得到"已被占用"，多半就是刚才那一次，同样引导去重新生成；其余按错误码。
+ * 前两种情形列表都随即刷新，refreshed 是刷新好了没有（第四批）
+ */
+function issueFailureText(error: unknown, request: CreateInvitationRequest | undefined, unsureFor: string | undefined, refreshed: boolean): string {
   if (isUnknownOutcome(error))
-    return text.issueOutcomeUnknown(describeError(error).message)
-  if (error instanceof ApiError && error.code === 'USERNAME_TAKEN' && unsureFor !== undefined && request?.username === unsureFor)
-    return text.issueRetryTaken
+    return text.issueOutcomeUnknown(describeError(error).message, refreshed)
+  if (isRetryTaken(error, request, unsureFor))
+    return text.issueRetryTaken(refreshed)
   return describeError(error).message
 }
 
@@ -59,6 +68,8 @@ function issueFailureText(error: unknown, request: CreateInvitationRequest | und
  * 列表按签发时间从新到旧，可按状态过滤；待接受或已过期的可以作废。同一个登录名只对最新的一条（没有接受、后来也没有再签发过）
  * 给出重新生成，原来的随即作废（审查 B6）。
  * 签发的结果未知时（网络中断、服务端出错）刷新列表、保留输入，引导去列表里重新生成（M2-P6 复核 G-2）。
+ * 签发与重新生成在结果未知之后的刷新经共用的做法（shared/api/write-outcome.ts，第四批）：最多等 10 秒，刷新失败或者到了时限
+ * 还没回来，说明里说"列表没能刷新"，按钮与弹窗也不一直停在"正在…"。
  */
 export function AdminInvitationsPage() {
   useDocumentTitle(adminMessages.pageTitle(adminMessages.nav.invitations))
@@ -72,6 +83,8 @@ export function AdminInvitationsPage() {
   const [issued, setIssued] = useState<IssuedLink>()
   /** 结果未知的那一次签发的登录名：邀请可能已经建好了。成功签发之后清掉 */
   const [unsureFor, setUnsureFor] = useState<string>()
+  /** 上一次签发失败之后列表刷新好了没有：说明据此说"已刷新"还是"没能刷新"（第四批）。每次失败都重新记下 */
+  const [issueRefreshed, setIssueRefreshed] = useState(false)
   const usernameRef = useRef<HTMLInputElement>(null)
   const statusRef = useRef<HTMLSelectElement>(null)
   const tableRef = useRef<PagedTableHandle>(null)
@@ -84,7 +97,7 @@ export function AdminInvitationsPage() {
     await queryClient.invalidateQueries({ queryKey: INVITATIONS_QUERY_KEY })
   }
 
-  /** 确认的弹窗在结果未知之后的刷新：刷新失败时拒绝，弹窗据此说明页面没能刷新（M2-P6 复核第三批 G-a） */
+  /** 结果未知之后的刷新（签发与确认的弹窗）：刷新失败时拒绝，据此说明页面没能刷新（M2-P6 复核第三批 G-a、第四批） */
   async function refreshAfterUnknown(): Promise<void> {
     await refreshQueries(queryClient, [INVITATIONS_QUERY_KEY])
   }
@@ -107,12 +120,11 @@ export function AdminInvitationsPage() {
       await refresh()
     },
     // 结果未知：邀请可能已经建好，刷新列表让它出现；输入留着，列表里没有时可以再生成一次。
-    // 记下的是请求里的登录名（规范写法），不是输入框里的原文（复验 N10）
+    // 记下的是请求里的登录名（规范写法），不是输入框里的原文（复验 N10）。之后同一个登录名"已被占用"同样刷新（第四批）
     onError: async (error, request) => {
-      if (!isUnknownOutcome(error))
-        return
-      setUnsureFor(request.username)
-      await refresh()
+      if (isUnknownOutcome(error))
+        setUnsureFor(request.username)
+      setIssueRefreshed(await refreshIfUnknown(error, refreshAfterUnknown, { also: failure => isRetryTaken(failure, request, unsureFor) }))
     },
   })
 
@@ -130,7 +142,8 @@ export function AdminInvitationsPage() {
   /**
    * 重新生成（M2-P6 复核 S1）：结果未知时新的邀请可能已经建好、原来的随即作废，新的链接却只在响应里出现一次——
    * 列表随即刷新（确认的弹窗按 refresh 刷新，第二批 G-2），说明要找到最新的那一条再重新生成；结果未知之后再点得到"已被占用"，
-   * 多半就是刚才那一次，同样刷新并引导。unsure 记在这一次弹窗里：弹窗关掉、下次再打开就是另一次
+   * 多半就是刚才那一次，同样刷新（确认的弹窗按 refreshAfter，第四批）并引导。两种情形的说明都按刷新好了没有说（第四批）。
+   * unsure 记在这一次弹窗里：弹窗关掉、下次再打开就是另一次
    */
   function confirmReissue(invitation: Invitation): void {
     let unsure = false
@@ -138,11 +151,11 @@ export function AdminInvitationsPage() {
       title: text.confirmReissue(invitation.username),
       description: text.reissueDescription,
       confirmLabel: text.reissue,
-      describeFailure: (error) => {
+      describeFailure: (error, refreshed) => {
         if (isUnknownOutcome(error))
-          return text.reissueOutcomeUnknown(describeError(error).message)
+          return text.reissueOutcomeUnknown(describeError(error).message, refreshed)
         if (unsure && isUsernameTaken(error))
-          return text.reissueRetryTaken
+          return text.reissueRetryTaken(refreshed)
         return describeError(error).message
       },
       run: async () => {
@@ -153,8 +166,6 @@ export function AdminInvitationsPage() {
         catch (error) {
           if (isUnknownOutcome(error))
             unsure = true
-          else if (unsure && isUsernameTaken(error))
-            await refresh()
           throw error
         }
         await refresh()
@@ -163,6 +174,7 @@ export function AdminInvitationsPage() {
         setIssued(linkOf(result, () => focusRow(result.invitation.id)))
       },
       refresh: refreshAfterUnknown,
+      refreshAfter: error => unsure && isUsernameTaken(error),
       returnFocus: () => focusRow(invitation.id),
     })
   }
@@ -209,7 +221,7 @@ export function AdminInvitationsPage() {
     )
   }
 
-  const error = problem ?? (creation.isError ? issueFailureText(creation.error, creation.variables, unsureFor) : undefined)
+  const error = problem ?? (creation.isError ? issueFailureText(creation.error, creation.variables, unsureFor, issueRefreshed) : undefined)
   return (
     <div className="flex flex-col gap-6">
       <form className="flex flex-col gap-3 rounded-lg border p-4" onSubmit={submit} noValidate aria-label={text.issue}>

@@ -2,6 +2,7 @@
 // 并行的用例会写入别的事件：按对象过滤之后再断言。
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { searchList } from '../../support/list-search.ts'
 import { shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
 
@@ -11,7 +12,8 @@ test.describe('US-M2-13 审计查询', () => {
     const user = await createUser('audit-user', '被审计的人')
     await loginThroughApi(page, admin)
     await page.goto('/admin/users')
-    await page.getByLabel('按名字或登录名搜索').fill(user.username)
+    // 等搜索的过滤完成再操作这一行：没等的话，背后的表格会在点确认的半途换成加载状态（support/list-search.ts）
+    await searchList(page, '按名字或登录名搜索', user.username)
     const row = page.getByRole('table', { name: '账户列表' }).getByRole('row').filter({ hasText: user.username })
     // 行里按钮的可读名称是"操作 对象"（审查 B14）
     await row.getByRole('button', { name: /^停用 / }).click()

@@ -58,6 +58,12 @@ function lookupOf<TItem>(result: UseQueryResult<TItem[]>, settled: boolean, excl
   return { state: 'found', items: exclude === undefined ? result.data : result.data.filter(item => !exclude(item)) }
 }
 
+/**
+ * 候选与选中之后的标签放得下很长的名字（M2-P6 复核第四批）：显示名可以到 64 个字、登录名 32 个字符而且没有空格，按钮与标签默认不换行，
+ * 窄屏上会撑出表单、页面横向滚动。这里放开换行（高度随内容），按任意位置断开；看到的、读出来的仍是全名
+ */
+const WRAPPING_NAME = 'max-w-full text-left whitespace-normal [overflow-wrap:anywhere]'
+
 /** 查找的结果：失败（可以重试）或者找到的候选。查找中与没有找到只在状态容器里说明 */
 function Candidates<TItem>({ lookup, texts, itemKey, renderItem, onPick }: {
   readonly lookup: Lookup<TItem>
@@ -79,8 +85,8 @@ function Candidates<TItem>({ lookup, texts, itemKey, renderItem, onPick }: {
   return (
     <ul aria-label={texts.candidates} className="flex flex-wrap gap-1">
       {lookup.items.map(item => (
-        <li key={itemKey(item)}>
-          <Button type="button" variant="outline" size="sm" onClick={() => onPick(item)}>{renderItem(item)}</Button>
+        <li key={itemKey(item)} className="max-w-full">
+          <Button type="button" variant="outline" size="sm" className={cn('h-auto min-h-7 py-1', WRAPPING_NAME)} onClick={() => onPick(item)}>{renderItem(item)}</Button>
         </li>
       ))}
     </ul>
@@ -113,7 +119,7 @@ export function KeywordPicker<TQueryFnData, TItem, TQueryKey extends QueryKey>({
       <div className="flex flex-col gap-2">
         <span className="text-sm font-medium">{label}</span>
         <span className="inline-flex flex-wrap items-center gap-2">
-          <Badge variant="secondary"><Phrase parts={colleaguesMessages.selected(renderItem(selected))} /></Badge>
+          <Badge variant="secondary" className={cn('rounded-lg', WRAPPING_NAME)}><Phrase parts={colleaguesMessages.selected(renderItem(selected))} /></Badge>
           <Button
             ref={changeRef}
             type="button"

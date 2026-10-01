@@ -189,6 +189,44 @@ describe('ConfirmDialog', () => {
     expect(refresh).not.toHaveBeenCalled()
   })
 
+  it('refreshAfter 认出的确定拒绝（上一次多半已经生效）：同样按 refresh 刷新，自定的说明拿到刷新好了没有；没认出的照旧不刷新（第四批）', async () => {
+    const taken = new ApiError(409, 'USERNAME_TAKEN', 'x')
+    const describeFailure = vi.fn((_error: unknown, refreshed: boolean) => (refreshed ? '已刷新' : '没能刷新'))
+    for (const refreshFails of [false, true]) {
+      const refresh = vi.fn(async () => {
+        if (refreshFails)
+          throw new NetworkError('网络请求失败')
+      })
+      renderPage(confirmation({
+        run: async () => {
+          throw taken
+        },
+        refresh,
+        refreshAfter: error => error === taken,
+        describeFailure,
+      }))
+      const dialog = await open()
+      fireEvent.click(within(dialog).getByRole('button', { name: '停用' }))
+      expect(await within(dialog).findByRole('alert')).toHaveTextContent(refreshFails ? '没能刷新' : '已刷新')
+      expect(refresh).toHaveBeenCalledTimes(1)
+      expect(describeFailure).toHaveBeenLastCalledWith(taken, !refreshFails)
+      cleanup()
+    }
+
+    const refresh = vi.fn(async () => {})
+    renderPage(confirmation({
+      run: async () => {
+        throw new ApiError(409, 'LAST_ADMIN', 'x')
+      },
+      refresh,
+      refreshAfter: error => error === taken,
+    }))
+    const dialog = await open()
+    fireEvent.click(within(dialog).getByRole('button', { name: '停用' }))
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('至少要保留一个有效的系统管理员')
+    expect(refresh).not.toHaveBeenCalled()
+  })
+
   it('经请求缓存执行，标明只给系统管理员：被拒绝时由全局处理重新确认会话（审查 B4）', async () => {
     const metas: unknown[] = []
     renderPage(confirmation({ run: async () => {

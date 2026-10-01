@@ -13,7 +13,7 @@ import { problemOf } from '../../shared/lib/validation.ts'
 import { Alert, AlertDescription, Button, buttonVariants, Skeleton } from '../../shared/ui/index.ts'
 import { copyDocument, deleteDocument, documentQueryOptions, folderDocumentsQueryOptions, moveDocument, updateDocument } from './documents-api.ts'
 import { ItemActions } from './item-actions.tsx'
-import { useOrganizeRefresh } from './organize-refresh.ts'
+import { useOrganizeRefresh, useOrganizeRefreshAfterUnknown } from './organize-refresh.ts'
 
 const organize = messages.organize
 
@@ -41,6 +41,7 @@ interface DocumentItemProps {
  */
 function DocumentItem({ document, spaceId, targetSpaces, open, openTriggerRef, onToggle, onDone, onDenied }: DocumentItemProps) {
   const refresh = useOrganizeRefresh()
+  const refreshAfterUnknown = useOrganizeRefreshAfterUnknown()
   const ledger = useRequestIdLedger()
   const panelId = useId()
   const detail = useQuery({ ...documentQueryOptions(document.id), enabled: open })
@@ -119,7 +120,7 @@ function DocumentItem({ document, spaceId, targetSpaces, open, openTriggerRef, o
               await deleteDocument(document.id)
               await refresh([sourceSpaceId])
             },
-            refresh: async destination => refresh([sourceSpaceId, ...(destination === undefined ? [] : [destination.spaceId])]),
+            refresh: async destination => refreshAfterUnknown([sourceSpaceId, ...(destination === undefined ? [] : [destination.spaceId])]),
           }}
           onDone={onDone}
           onDenied={onDenied}

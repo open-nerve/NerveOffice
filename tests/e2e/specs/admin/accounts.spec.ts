@@ -7,14 +7,15 @@ import { randomBytes } from 'node:crypto'
 import { issueResetLinkThroughCommand } from '../../support/admin-command.ts'
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { searchList } from '../../support/list-search.ts'
 import { shownName } from '../../support/people.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
 
 const NEW_PASSWORD = 'a good long password'
 
-/** 在账户页按登录名找到这一行 */
+/** 在账户页按登录名找到这一行：等搜索的过滤完成再返回，之后的操作不会赶上表格换成加载状态（support/list-search.ts） */
 async function userRow(page: Page, username: string) {
-  await page.getByLabel('按名字或登录名搜索').fill(username)
+  await searchList(page, '按名字或登录名搜索', username)
   const row = page.getByRole('table', { name: '账户列表' }).getByRole('row').filter({ hasText: username })
   await expect(row).toHaveCount(1)
   return row

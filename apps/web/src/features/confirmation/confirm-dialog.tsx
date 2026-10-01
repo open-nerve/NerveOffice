@@ -21,6 +21,11 @@ export interface PendingConfirmation {
    * 弹窗等它有时限（第三批 S-a，shared/api/write-outcome.ts）：一直不回来时到了时限就先说明，弹窗随之可以关掉
    */
   readonly refresh: () => Promise<unknown>
+  /**
+   * 结果未知之外也要按 refresh 刷新的失败（M2-P6 复核第四批）：之后的拒绝说明上一次多半已经生效，例如重新生成邀请的结果未知之后
+   * 再点得到"已被占用"。同样在时限之内刷新，describeFailure 的 refreshed 同样是刷新好了没有
+   */
+  readonly refreshAfter?: (error: unknown) => boolean
   /** 打开弹窗的按钮随操作消失了（例如作废之后这一行没有"作废"）时，关闭之后焦点去哪里（审查 B9） */
   readonly returnFocus?: () => void
   /**
@@ -45,6 +50,7 @@ interface ConfirmDialogProps {
  * 结果未知时（M2-P6 复核第二批 G-2）：操作可能已经生效，先按 refresh 刷新页面上的状态，再说明"可能已经生效"——停用、启用、
  * 改系统角色、解除锁定、归档与恢复、全员可见、作废邀请、移出成员、转移、永久删除都经这里，一处做完。
  * 刷新最多等 10 秒（第三批 S-a）：一直不回来时到了时限先给出说明，弹窗不再卡在"正在处理…"；刷新失败或者超时，说明页面没能刷新（第三批 G-a）。
+ * refreshAfter 认出的失败（上一次多半已经生效）同样这样刷新（第四批）。
  * 执行经请求缓存：管理界面标明只给系统管理员，被拒绝时由全局处理重新确认会话，系统角色已被取消就切到无权限（审查 B4）。
  * 关闭之后焦点回到打开它的按钮；按钮已经不在了，交给 returnFocus，焦点不落到 body（审查 B9）。
  * 带着 Radix Dialog：只由按需加载的页面引用，不进首屏（ADR-008）。
@@ -56,7 +62,7 @@ export function ConfirmDialog({ pending, onClose, meta }: ConfirmDialogProps) {
     mutationFn: async (confirmation: PendingConfirmation) => confirmation.run(),
     // 刷新完成（或者到了时限）之后才显示失败：说明与页面上的状态对得上（第二批 G-2，第三批 S-a）
     onError: async (error, confirmation) => {
-      setRefreshed(await refreshIfUnknown(error, confirmation.refresh))
+      setRefreshed(await refreshIfUnknown(error, confirmation.refresh, { also: confirmation.refreshAfter }))
     },
     ...(meta === undefined ? {} : { meta }),
   })

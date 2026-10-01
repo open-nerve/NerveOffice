@@ -4,13 +4,14 @@ import type { Page } from '@playwright/test'
 import { randomBytes } from 'node:crypto'
 import { createDocumentIn, createTeamSpace, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { searchList } from '../../support/list-search.ts'
 import { shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
 
-/** 管理界面的团队空间页：按名称找到这一行 */
+/** 管理界面的团队空间页：按名称找到这一行。等搜索的过滤完成再返回，之后的操作不会赶上表格换成加载状态（support/list-search.ts） */
 async function spaceRow(page: Page, name: string) {
   await page.goto('/admin/spaces')
-  await page.getByLabel('按名称搜索', { exact: true }).fill(name)
+  await searchList(page, '按名称搜索', name)
   const row = page.getByRole('table', { name: '团队空间列表' }).getByRole('row').filter({ hasText: name })
   await expect(row).toHaveCount(1)
   return row

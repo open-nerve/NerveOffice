@@ -38,7 +38,7 @@ export function AppShell() {
           {/* 窄屏时占满第一行余下的宽度（基准为 0，不会被挤到下一行），名字在里面收窄，各项贴着右边 */}
           <UserMenu className="max-sm:flex-1 max-sm:justify-end">
             <Link to={CHANGE_PASSWORD_PATH} title={messages.account.changePassword} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>
-              <KeyRound aria-hidden="true" className="size-3.5 sm:hidden" />
+              <KeyRound aria-hidden="true" className="sm:hidden" />
               <span className="max-sm:sr-only">{messages.account.changePassword}</span>
             </Link>
           </UserMenu>

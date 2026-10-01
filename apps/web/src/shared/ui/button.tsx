@@ -2,7 +2,6 @@
 import type { VariantProps } from 'class-variance-authority'
 import type { ComponentProps } from 'react'
 import { Slot } from 'radix-ui'
-import { cn } from '../lib/cn.ts'
 import { buttonVariants } from './button-variants.ts'
 
 export type ButtonProps = ComponentProps<'button'> & VariantProps<typeof buttonVariants> & {
@@ -17,7 +16,7 @@ export function Button({ className, variant = 'default', size = 'default', asChi
       data-slot="button"
       data-variant={variant}
       data-size={size}
-      className={cn(buttonVariants({ variant, size, className }))}
+      className={buttonVariants({ variant, size, className })}
       {...props}
     />
   )

@@ -1,6 +1,6 @@
 // 成员与空间角色（M2-P2，US-M2-06）：空间管理员在成员页按名字搜索同事并添加、调整角色、移出；
 // 被移出的人已打开的页面里，再进这个空间就看不到它（不显示缓存里的旧内容），导航里它随之消失。
-import type { Page } from '@playwright/test'
+import type { Locator, Page } from '@playwright/test'
 import { randomBytes } from 'node:crypto'
 import { createTeamSpace, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
@@ -147,4 +147,40 @@ test.describe('US-M2-06 管理成员与空间角色', () => {
     await expect(page.getByLabel('要添加的同事')).toHaveCount(0)
     await expect(page.getByRole('button', { name: /^移出 / })).toHaveCount(0)
   })
+
+  test('窄屏：显示名到了上限、登录名最长时，同事选择的候选与已选都在表单之内换行，不撑出页面；可读名称仍是全名（M2-P6 复核第四批）', async ({ page }) => {
+    const admin = await createUser('mb-narrow-admin', '管理员', { systemRole: 'admin' })
+    const lead = await createUser('mb-narrow-lead', '空间管理员')
+    // 登录名 32 个字符（上限：前缀 23 个，加上随机的后缀 9 个）；显示名 64 个字符（上限），后半是一个没有空格的长单词
+    const longest = await createUser('n'.repeat(23), `${'很长的显示名'.repeat(5)}Supercalifragilisticexpialidocious`)
+    expect(longest.username).toHaveLength(32)
+    expect([...longest.displayName]).toHaveLength(64)
+    const space = await createTeamSpace('窄屏', admin, [[lead, 'admin']])
+    await page.setViewportSize({ width: 320, height: 800 })
+    await loginThroughApi(page, lead)
+    await page.goto(`/spaces/${space.id}/members`)
+    await page.getByLabel('要添加的同事').fill(longest.username)
+    const form = page.locator('form').filter({ has: page.getByLabel('要添加的同事') })
+
+    // 候选：按钮的可读名称是全名（登录名在前），换行之后仍在表单之内
+    const candidate = page.getByRole('list', { name: '找到的同事' }).getByRole('button', { name: shownName(longest), exact: true })
+    await expect(candidate).toBeVisible()
+    await expectInside(page, form, candidate, '候选')
+    // 选中之后的标签同样
+    await candidate.click()
+    const chosen = form.getByText('已选择：')
+    await expect(chosen).toContainText(shownName(longest))
+    await expectInside(page, form, chosen, '已选')
+  })
 })
+
+/** 这一处在容器之内（左右都不出界），页面没有横向溢出（窄屏的用例，视口 320px 宽） */
+async function expectInside(page: Page, container: Locator, part: Locator, what: string): Promise<void> {
+  const box = await part.boundingBox()
+  const outer = await container.boundingBox()
+  if (box === null || outer === null)
+    throw new Error(`${what} 或者它的容器没有出现`)
+  expect(box.x, `${what} 左边出界`).toBeGreaterThanOrEqual(outer.x - 0.5)
+  expect(box.x + box.width, `${what} 撑出了容器`).toBeLessThanOrEqual(outer.x + outer.width + 0.5)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth), `${what}：页面横向溢出`).toBeLessThanOrEqual(320)
+}

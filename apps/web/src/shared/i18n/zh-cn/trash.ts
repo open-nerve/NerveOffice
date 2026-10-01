@@ -1,5 +1,6 @@
 // 回收站页的文案（M2-P4）：只由按需加载的回收站页（features/trash）引用，不进平台页面的首屏（lint 的模块边界限定）
 import type { TrashEntryKind } from '@nerve-office/contracts'
+import { messages } from './messages.ts'
 
 /** 回收站里一个删除单元的种类（M2-P4）：一份文档，或者一个文件夹连同它的整棵子树 */
 const TRASH_ENTRY_KIND_NAMES: Record<TrashEntryKind, string> = { document: '文档', folder: '文件夹' }
@@ -32,8 +33,8 @@ export const trashMessages = {
   purged: (name: string) => `已永久删除「${name}」`,
   /** 别人已经动过它（恢复或永久删除）：列表刷新之后在上方说明 */
   gone: '这一条已经不在回收站里了（可能已被别人恢复或永久删除），列表已刷新',
-  // 恢复的结果未知（M2-P6 复核 S1）
-  restoreOutcomeUnknown: (name: string, reason: string) => `没能确认「${name}」是否已经恢复（${reason}）。列表已刷新：它已经不在回收站里，就是恢复好了。`,
+  // 恢复的结果未知（M2-P6 复核 S1）：列表随即刷新，没能刷新时另说（第四批）
+  restoreOutcomeUnknown: (name: string, reason: string, refreshed: boolean) => `没能确认「${name}」是否已经恢复（${reason}）。${messages.common.listRefreshed(refreshed)}：它已经不在回收站里，就是恢复好了。`,
   // 恢复被拒绝（403，例如空间刚被归档）：列表与页头按新的权限重新请求，原因写在说明里（M2-P6 复核 S2、S5）
   denied: (name: string, reason: string) => `没能恢复「${name}」：${reason}`,
 } as const

@@ -48,7 +48,7 @@ describe('管理界面：结果未知之后（M2-P6 复核 S1）', () => {
 
     const listed = count(api, 'GET /api/admin/spaces')
     fireEvent.click(within(form).getByRole('button', { name: '创建团队空间' }))
-    expect(await within(form).findByText('已有同名的团队空间，可能就是刚才没能确认的那一次创建。列表已刷新：请在下面的列表里找找它。')).toBeInTheDocument()
+    expect(await within(form).findByText('已有同名的团队空间，可能就是刚才没能确认的那一次创建。列表已刷新：在下面的列表里找找它。')).toBeInTheDocument()
     await waitFor(() => expect(count(api, 'GET /api/admin/spaces')).toBeGreaterThan(listed))
   })
 
@@ -98,12 +98,12 @@ describe('管理界面：结果未知之后（M2-P6 复核 S1）', () => {
     const dialog = await screen.findByRole('dialog')
     const listed = count(api, 'GET /api/admin/invitations')
     fireEvent.click(within(dialog).getByRole('button', { name: '重新生成' }))
-    expect(await within(dialog).findByText('没能确认邀请链接是否已经重新生成（服务器出了点问题，请稍后重试）。如果已经生成，原来的链接已经作废，新的链接不能再次显示：列表已刷新，请找到这个登录名最新的那一条，再点"重新生成"。')).toBeInTheDocument()
+    expect(await within(dialog).findByText('没能确认邀请链接是否已经重新生成（服务器出了点问题，请稍后重试）。如果已经生成，原来的链接已经作废，新的链接不能再次显示。列表已刷新：找到这个登录名最新的那一条，再点"重新生成"。')).toBeInTheDocument()
     await waitFor(() => expect(count(api, 'GET /api/admin/invitations')).toBeGreaterThan(listed))
 
     const again = count(api, 'GET /api/admin/invitations')
     fireEvent.click(within(dialog).getByRole('button', { name: '重新生成' }))
-    expect(await within(dialog).findByText('这个登录名已有待接受的邀请，可能就是刚才没能确认的那一次重新生成。链接不能再次显示：列表已刷新，请找到最新的那一条，再点"重新生成"。')).toBeInTheDocument()
+    expect(await within(dialog).findByText('这个登录名已有待接受的邀请，可能就是刚才没能确认的那一次重新生成。链接不能再次显示。列表已刷新：找到最新的那一条，再点"重新生成"。')).toBeInTheDocument()
     await waitFor(() => expect(count(api, 'GET /api/admin/invitations')).toBeGreaterThan(again))
   })
 

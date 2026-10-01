@@ -7,6 +7,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { describeError, isAccessDenied, isMissingResource, isUnknownOutcome } from '../../shared/api/index.ts'
+import { refreshIfUnknown } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { trashMessages } from '../../shared/i18n/zh-cn/trash.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
@@ -98,7 +99,8 @@ type TrashQuery = UseInfiniteQueryResult<InfiniteData<TrashListResponse>>
  * 没能完成时（M2-P6 复核 S1、S2）：
  * - 按访问权限被拒绝（403：空间刚被归档；404：这一条已经不在了，或者整个空间看不到了）：回收站、空间的页头与内容一起重新请求，
  *   "恢复"随新的权限消失；说明接住焦点（403 用服务端说的原因）。空间看不到了时页面换成"空间不存在"，不说"列表已刷新"；
- * - 结果未知：同样刷新，说明它可能已经恢复了。
+ * - 结果未知：同样刷新，说明它可能已经恢复了。这时的刷新经共用的做法（shared/api/write-outcome.ts，第四批）：最多等 10 秒，
+ *   刷新失败或者到了时限还没回来，说明里说"列表没能刷新"，"恢复"也不一直停在"正在恢复…"。
  */
 function TrashList({ space, query, headingRef }: { readonly space: SpaceView, readonly query: TrashQuery, readonly headingRef: RefObject<HTMLHeadingElement | null> }) {
   const queryClient = useQueryClient()
@@ -124,7 +126,7 @@ function TrashList({ space, query, headingRef }: { readonly space: SpaceView, re
     await Promise.all([...contentKeys, ...(withSpace ? [SPACES_QUERY_KEY] : [])].map(async queryKey => queryClient.invalidateQueries({ queryKey })))
   }
 
-  /** 确认的弹窗在结果未知之后的刷新：刷新失败时拒绝，弹窗据此说明页面没能刷新（M2-P6 复核第三批 G-a） */
+  /** 结果未知之后的刷新（恢复与确认的弹窗）：刷新失败时拒绝，据此说明页面没能刷新（M2-P6 复核第三批 G-a、第四批） */
   async function refreshAfterUnknown(): Promise<void> {
     await refreshQueries(queryClient, contentKeys)
   }
@@ -154,10 +156,9 @@ function TrashList({ space, query, headingRef }: { readonly space: SpaceView, re
         }
         return
       }
-      if (isUnknownOutcome(error)) {
-        await refresh()
-        setNotice({ message: text.restoreOutcomeUnknown(entry.title, describeError(error).message), problem: true })
-      }
+      const refreshed = await refreshIfUnknown(error, refreshAfterUnknown)
+      if (isUnknownOutcome(error))
+        setNotice({ message: text.restoreOutcomeUnknown(entry.title, describeError(error).message, refreshed), problem: true })
     },
   })
 

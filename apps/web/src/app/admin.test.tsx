@@ -452,7 +452,7 @@ describe('管理界面：邀请', () => {
     fireEvent.click(screen.getByRole('button', { name: '生成邀请链接' }))
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent('没能确认邀请是否已经生成（网络连接失败')
-    expect(alert).toHaveTextContent('请在下面的列表里找到这个登录名，点"重新生成"')
+    expect(alert).toHaveTextContent('列表已刷新：在下面的列表里找到这个登录名，点"重新生成"')
     // 列表刷新了：可能已经建好的那一条出现在列表里
     await waitFor(() => expect(requestCount(api, 'GET /api/admin/invitations')).toBe(2))
     expect(await rowOf('amy')).toBeInTheDocument()

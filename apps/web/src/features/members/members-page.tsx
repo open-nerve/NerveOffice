@@ -6,7 +6,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { ApiError, describeError, isMissingResource, isPermissionDeniedError, isUnknownOutcome } from '../../shared/api/index.ts'
-import { refreshWithin, writeFailureText } from '../../shared/api/write-outcome.ts'
+import { refreshIfUnknown, refreshWithin, writeFailureText } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { membersMessages } from '../../shared/i18n/zh-cn/members.ts'
 import { ADMIN_PATHS } from '../../shared/lib/admin-paths.ts'
@@ -33,20 +33,22 @@ function isAlreadyMember(error: unknown): boolean {
 
 /**
  * 添加失败时的说明（M2-P6 复核 S1）：结果未知时这个人可能已经加好了；已经是成员（多半就是刚才没能确认的那一次，
- * 也可能是别人刚加的）时说清楚、成员列表已刷新；其余按错误码
+ * 也可能是别人刚加的）时说清楚；其余按错误码。前两种情形成员列表都随即刷新，refreshed 是刷新好了没有（第四批）
  */
-function addFailureText(error: unknown): string {
+function addFailureText(error: unknown, refreshed: boolean): string {
   if (isAlreadyMember(error))
-    return text.addedEarlier
+    return text.addedEarlier(refreshed)
   if (isUnknownOutcome(error))
-    return text.addOutcomeUnknown(describeError(error).message)
+    return text.addOutcomeUnknown(describeError(error).message, refreshed)
   return describeError(error).message
 }
 
 /**
  * 添加成员：按名字选一个同事、选角色；已经是成员的人不作为候选。
  * 结果未知或者得到"已经是成员"时成员列表随即刷新（M2-P6 复核 S1）：加好了的人就出现在表里；
- * 已经是成员时选择随之清掉（这个人不再是候选），再点也只会得到同样的结果
+ * 已经是成员时选择随之清掉（这个人不再是候选），再点也只会得到同样的结果。
+ * 这时的刷新经共用的做法（shared/api/write-outcome.ts，第四批）：最多等 10 秒，刷新失败或者到了时限还没回来，说明里说
+ * "成员列表没能刷新"，按钮也不一直停在"正在添加…"
  */
 function AddMemberForm({ spaceId, members }: { readonly spaceId: string, readonly members: readonly SpaceMember[] }) {
   const queryClient = useQueryClient()
@@ -54,6 +56,8 @@ function AddMemberForm({ spaceId, members }: { readonly spaceId: string, readonl
   const [role, setRole] = useState<SpaceRole>('viewer')
   // 添加成功之后换一个 key，同事选择整个重新开始：关键词与上一次的候选都清掉（审查 B11）
   const [pickerKey, setPickerKey] = useState(0)
+  /** 上一次失败之后成员列表刷新好了没有：说明据此说"已刷新"还是"没能刷新"（第四批）。每次失败都重新记下 */
+  const [refreshed, setRefreshed] = useState(false)
   const roleId = useId()
   const hintId = useId()
 
@@ -71,8 +75,7 @@ function AddMemberForm({ spaceId, members }: { readonly spaceId: string, readonl
     onError: async (error) => {
       if (isAlreadyMember(error))
         startOver()
-      if (isAlreadyMember(error) || isUnknownOutcome(error))
-        await queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY })
+      setRefreshed(await refreshIfUnknown(error, async () => refreshQueries(queryClient, [SPACES_QUERY_KEY]), { also: isAlreadyMember }))
     },
   })
 
@@ -101,7 +104,7 @@ function AddMemberForm({ spaceId, members }: { readonly spaceId: string, readonl
       {user === undefined && <p id={hintId} className="basis-full text-sm text-muted-foreground">{text.pickColleague}</p>}
       {mutation.isError && (
         <Alert variant="destructive" className="basis-full">
-          <AlertDescription>{addFailureText(mutation.error)}</AlertDescription>
+          <AlertDescription>{addFailureText(mutation.error, refreshed)}</AlertDescription>
         </Alert>
       )}
     </form>

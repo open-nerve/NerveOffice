@@ -3,15 +3,16 @@ import type { RequestIdLedger } from '../../shared/api/request-ids.ts'
 import { documentPagePath } from '@nerve-office/contracts'
 import { useMutation } from '@tanstack/react-query'
 import { FilePlus2 } from 'lucide-react'
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { describeError, isAccessDenied, isUnknownOutcome } from '../../shared/api/index.ts'
+import { refreshIfUnknown } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { usePageLocation } from '../../shared/lib/page-location.ts'
 import { useRequestIdLedger } from '../../shared/lib/request-id-ledger.ts'
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
 import { Alert, AlertDescription, Button, buttonVariants, Notice } from '../../shared/ui/index.ts'
 import { createDocument } from './documents-api.ts'
-import { useOrganizeRefresh } from './organize-refresh.ts'
+import { useOrganizeRefresh, useOrganizeRefreshAfterUnknown } from './organize-refresh.ts'
 
 interface NewSheetButtonProps {
   readonly spaceId: string
@@ -25,12 +26,15 @@ interface NewSheetButtonProps {
   readonly onDenied?: (error: ApiError) => void
 }
 
-/** 失败的说明：上一次可能已经建好（服务端认出了用过的 requestId）、结果未知（再点不会重复新建）、其余按错误码 */
-function failureOf(error: unknown, ledger: RequestIdLedger): ErrorDescription {
+/**
+ * 失败的说明：上一次可能已经建好（服务端认出了用过的 requestId）、结果未知（再点不会重复新建）、其余按错误码。
+ * refreshed：这两种情形之后列表刷新好了没有（M2-P6 复核第四批）
+ */
+function failureOf(error: unknown, ledger: RequestIdLedger, refreshed: boolean): ErrorDescription {
   if (ledger.earlierAttemptDone(error))
-    return { message: messages.documents.createdEarlier }
+    return { message: messages.documents.createdEarlier(refreshed) }
   const described = describeError(error)
-  const message = isUnknownOutcome(error) ? messages.documents.createOutcomeUnknown(described.message) : messages.documents.createFailed(described.message)
+  const message = isUnknownOutcome(error) ? messages.documents.createOutcomeUnknown(described.message, refreshed) : messages.documents.createFailed(described.message)
   return { message, requestId: described.requestId }
 }
 
@@ -39,7 +43,8 @@ function failureOf(error: unknown, ledger: RequestIdLedger): ErrorDescription {
  * requestId 按"在这个位置新建"记账（shared/api/request-ids.ts，M2-P6 复核 M1）：结果未知之后再点沿用同一个，服务端只建一份；
  * 之后撞上会话类的拒绝（别的标签页换了令牌）同样沿用；成功、或者与载荷有关的确定拒绝才换新的。在文件夹之间切换时页头不重来，
  * 换了位置就是另一件事、另一个 requestId，结果未知的那个位置回去之后仍沿用它原来的。
- * 结果未知时列表随即刷新：建好了的话就在列表里。
+ * 结果未知时列表随即刷新：建好了的话就在列表里。这时的刷新经共用的做法（shared/api/write-outcome.ts，M2-P6 复核第四批）：
+ * 最多等 10 秒，刷新失败或者到了时限还没回来，说明里说"列表没能刷新"，按钮也不一直停在"正在新建…"。
  * 服务端说这次是重放（replayed，M2-P6 复核第二批 S-1）：结果未知的那一次其实已经建好了。这时不打开它——用户可能早已给它改了名、
  * 很久以后才回来想另建一份，打开的却是改过名的那一份——而是刷新列表、说明"上一次其实已经完成，就是「…」"，给出打开它的链接；
  * 这件事随之了结（成功就换新的 requestId），再点就是新建一份。说明由说明条（Notice）接住焦点，读屏随之读出（第三批 G-b）：
@@ -53,6 +58,9 @@ export function NewSheetButton({ spaceId, folderId = null, onDenied }: NewSheetB
   const page = usePageLocation()
   const ledger = useRequestIdLedger()
   const refresh = useOrganizeRefresh()
+  const refreshAfterUnknown = useOrganizeRefreshAfterUnknown()
+  /** 上一次失败之后列表刷新好了没有：说明据此说"已刷新"还是"没能刷新"（第四批）。每次失败都重新记下 */
+  const [refreshed, setRefreshed] = useState(false)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const focusAfterRender = useFocusAfterRender()
   const mutation = useMutation({
@@ -71,9 +79,8 @@ export function NewSheetButton({ spaceId, folderId = null, onDenied }: NewSheetB
         onDenied?.(error)
         return
       }
-      // 结果未知、或者上一次已经生效：列表刷新出来，看得到它是不是已经建好了
-      if (isUnknownOutcome(error) || ledger.earlierAttemptDone(error))
-        await refresh([spaceId])
+      // 结果未知、或者上一次已经生效：在时限之内刷新列表，看得到它是不是已经建好了
+      setRefreshed(await refreshIfUnknown(error, async () => refreshAfterUnknown([spaceId]), { also: ledger.earlierAttemptDone }))
     },
   })
   // 建好之后页面正在离开：按钮保持进行中，不能再建一份（重放不离开，按钮照常可用）
@@ -92,7 +99,7 @@ export function NewSheetButton({ spaceId, folderId = null, onDenied }: NewSheetB
   }
 
   // 按访问权限被拒绝的原因由页面说明（按钮可能随新的权限消失）
-  const failure = mutation.isError && !isAccessDenied(mutation.error) ? failureOf(mutation.error, ledger) : undefined
+  const failure = mutation.isError && !isAccessDenied(mutation.error) ? failureOf(mutation.error, ledger, refreshed) : undefined
   return (
     <div className="flex flex-col items-end gap-2">
       {/* 进行中用 aria-disabled：按钮变成 disabled 时焦点会丢（审查 B13）；重复点击由 create 挡住 */}

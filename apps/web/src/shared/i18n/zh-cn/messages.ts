@@ -125,6 +125,15 @@ export function phraseText(phrase: Phrase<string>): string {
   return phrase.join('')
 }
 
+/**
+ * 写操作的结果未知（以及之后的拒绝说明上一次多半已经生效）之后，说明里"列表刷新了没有"那一句（M2-P6 复核第四批）：
+ * 刷新好了说"已刷新"；没能刷新（刷新失败，或者到了时限还没回来：shared/api/write-outcome.ts 的 refreshIfUnknown）时，
+ * 说显示的可能还是之前的、请稍后再看，不说"已刷新"。list 是刷新的是什么（默认"列表"，成员页是"成员列表"）
+ */
+function listRefreshed(refreshed: boolean, list = '列表'): string {
+  return refreshed ? `${list}已刷新` : `${list}没能刷新，显示的可能还是之前的，请稍后再看`
+}
+
 export const messages = {
   app: {
     name: 'NerveOffice',
@@ -160,6 +169,7 @@ export const messages = {
     outcomeUnknown: (reason: string) => `没能确认是否已经完成（${reason}）。可能已经生效：页面已按服务端现在的状态刷新，看得出是否已经生效；还没有的话，可以再试一次。`,
     /** 同上，随后的刷新也失败了、或者到了时限还没回来（M2-P6 复核第三批 G-a）：页面上的可能还是之前的状态，不能说"已刷新" */
     outcomeUnknownNotRefreshed: (reason: string) => `没能确认是否已经完成（${reason}）。可能已经生效，只是页面没能刷新，显示的可能还是之前的状态：请稍后再看；确认还没有生效的话，可以再试一次。`,
+    listRefreshed,
   },
   errors: {
     byCode: errorText,
@@ -264,10 +274,10 @@ export const messages = {
     create: '新建表格',
     creating: '正在新建…',
     createFailed: (reason: string) => `新建表格失败：${reason}`,
-    // 结果未知（M2-P6 复核 M1）：带着 requestId，再点沿用同一个，服务端不会建出第二份
-    createOutcomeUnknown: (reason: string) => `没能确认表格是否已经建好（${reason}）。列表已刷新；再点"新建表格"不会重复新建。`,
+    // 结果未知（M2-P6 复核 M1）：带着 requestId，再点沿用同一个，服务端不会建出第二份。列表随即刷新，没能刷新时另说（第四批）
+    createOutcomeUnknown: (reason: string, refreshed: boolean) => `没能确认表格是否已经建好（${reason}）。${listRefreshed(refreshed)}；再点"新建表格"不会重复新建。`,
     // 结果未知之后服务端认出那个 requestId 已经用掉了：上一次多半已经建好
-    createdEarlier: '上一次新建可能已经建好（当时没能确认结果），列表已刷新：请先在列表里找找它；还要另建一份时再点"新建表格"。',
+    createdEarlier: (refreshed: boolean) => `上一次新建可能已经建好（当时没能确认结果），${listRefreshed(refreshed)}：先在列表里找找它；还要另建一份时再点"新建表格"。`,
     // 服务端说这是重放（M2-P6 复核第二批 S-1）：结果未知的那一次其实已经建好了，这次没有再建；它可能已经改了名、换了位置。
     // 不直接打开它：很久以后想另建一份时，打开的会是改过名的那一份。这件事随之了结，再点就是新建一份
     createdReplayed: (title: string) => `上一次新建其实已经完成（当时没能确认结果），这次没有再建一份：就是「${title}」。还要另建一份时，再点"新建表格"。`,
@@ -290,10 +300,10 @@ export const messages = {
     newFolderName: '文件夹名称',
     creatingFolder: '正在新建…',
     createFolderFailed: (reason: string) => `新建文件夹失败：${reason}`,
-    // 结果未知（M2-P6 复核 M1）：带着 requestId，原样再提交不会重复新建
-    createFolderOutcomeUnknown: (reason: string) => `没能确认文件夹是否已经建好（${reason}）。列表已刷新；原样再提交一次不会重复新建。`,
+    // 结果未知（M2-P6 复核 M1）：带着 requestId，原样再提交不会重复新建。列表随即刷新，没能刷新时另说（第四批）
+    createFolderOutcomeUnknown: (reason: string, refreshed: boolean) => `没能确认文件夹是否已经建好（${reason}）。${listRefreshed(refreshed)}；原样再提交一次不会重复新建。`,
     // 结果未知之后改了名再提交：服务端认出那个 requestId 已经用掉了，上一次多半已经建好
-    createFolderEarlier: '上一次新建可能已经建好（当时没能确认结果），列表已刷新：请先看看列表里是否已经有它；还要另建时再提交一次。',
+    createFolderEarlier: (refreshed: boolean) => `上一次新建可能已经建好（当时没能确认结果），${listRefreshed(refreshed)}：先看看列表里是否已经有它；还要另建时再提交一次。`,
     // 服务端说这是重放（M2-P6 复核第二批 S-1）：结果未知的那一次其实已经建好了（同一个位置、同一个名称），这次没有再建
     createFolderReplayed: (name: string) => `上一次新建其实已经完成（当时没能确认结果），这次没有再建一个：文件夹「${name}」已经在列表里了。`,
     // 新建被拒绝（403：空间刚被归档、自己刚被降为查看者；404：这个位置已经不在了）：表单随即关掉，原因写在说明里（M2-P6 复核 S2）
@@ -332,14 +342,15 @@ export const messages = {
     deleting: '正在删除…',
     goToTrash: '打开回收站',
     trash: '回收站',
-    // 结果未知（M2-P6 复核 S1）：列表随即刷新。删除与移动会让那一行消失，说明写在列表上方；改名与复制留在面板里，可以原样再提交
-    renameOutcomeUnknown: (reason: string) => `没能确认是否已经改好（${reason}）。列表已刷新，可以再保存一次。`,
+    // 结果未知（M2-P6 复核 S1）：列表随即刷新，没能刷新时另说（第四批）。删除与移动会让那一行消失，说明写在列表上方；
+    // 改名与复制留在面板里，可以原样再提交
+    renameOutcomeUnknown: (reason: string, refreshed: boolean) => `没能确认是否已经改好（${reason}）。${listRefreshed(refreshed)}；可以再保存一次。`,
     copyOutcomeUnknown: (reason: string) => `没能确认是否已经复制（${reason}）。再点一次不会重复复制。`,
-    copiedEarlier: '上一次复制可能已经完成（当时没能确认结果），列表已刷新：请先到目标位置看看；还要再复制一份时再点一次。',
+    copiedEarlier: (refreshed: boolean) => `上一次复制可能已经完成（当时没能确认结果），${listRefreshed(refreshed)}：先到目标位置看看；还要再复制一份时再点一次。`,
     // 服务端说这是重放（M2-P6 复核第二批 S-1）：结果未知的那一次其实已经复制好了，这次没有再复制；再点就是再复制一份
     copyReplayed: (title: string) => `上一次复制其实已经完成（当时没能确认结果），这次没有再复制一份：副本就是「${title}」。还要再复制一份时，再复制一次。`,
-    moveOutcomeUnknown: (name: string, reason: string) => `没能确认「${name}」是否已经移动（${reason}）。列表已刷新：它已经不在这里，就是移走了；还在的话可以再移动一次。`,
-    deleteOutcomeUnknown: (name: string, reason: string) => `没能确认「${name}」是否已经删除（${reason}）。列表已刷新：它已经不在这里，就是已经移到回收站了；还在的话可以再删除一次。`,
+    moveOutcomeUnknown: (name: string, reason: string, refreshed: boolean) => `没能确认「${name}」是否已经移动（${reason}）。${listRefreshed(refreshed)}：它已经不在这里，就是移走了；还在的话可以再移动一次。`,
+    deleteOutcomeUnknown: (name: string, reason: string, refreshed: boolean) => `没能确认「${name}」是否已经删除（${reason}）。${listRefreshed(refreshed)}：它已经不在这里，就是已经移到回收站了；还在的话可以再删除一次。`,
     // 操作被拒绝（M2-P6 复核 S2、S3、S5）：面板随即收起，页面按新的权限重新请求，说明写在列表上方
     gone: (name: string) => `「${name}」已经不在这里了（可能已经删除，或者被别人移走了），列表已刷新。`,
     targetOrItemGone: (name: string) => `「${name}」或者目标位置已经不在了（可能被删除或移走），列表已刷新。`,

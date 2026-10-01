@@ -109,10 +109,10 @@ export const adminMessages = {
   invitations: {
     // 有效期来自 contracts 的常量（INVITATION_LIFETIME_DAYS），界面不写死天数（M2-P6 复核 S-2）
     description: (days: number) => `填好登录名与显示名，生成一次性链接（${days} 天内有效），经受控的渠道发给本人。`,
-    // 签发的结果未知：邀请可能已经建好，链接却丢了，只能重新生成（M2-P6 复核 G-2）
-    issueOutcomeUnknown: (reason: string) => `没能确认邀请是否已经生成（${reason}）。如果已经生成，链接不能再次显示：请在下面的列表里找到这个登录名，点"重新生成"得到新的链接（原来的随即作废）；列表里没有时，可以再生成一次。`,
-    // 结果未知之后，同一个登录名再签发得到"已被占用"：多半就是刚才那一次
-    issueRetryTaken: '这个登录名已有待接受的邀请，可能就是刚才没能确认的那一次。链接不能再次显示：请在下面的列表里找到它，点"重新生成"。',
+    // 签发的结果未知：邀请可能已经建好，链接却丢了，只能重新生成（M2-P6 复核 G-2）。列表随即刷新，没能刷新时另说（第四批）
+    issueOutcomeUnknown: (reason: string, refreshed: boolean) => `没能确认邀请是否已经生成（${reason}）。如果已经生成，链接不能再次显示。${messages.common.listRefreshed(refreshed)}：在下面的列表里找到这个登录名，点"重新生成"得到新的链接（原来的随即作废）；列表里没有时，可以再生成一次。`,
+    // 结果未知之后，同一个登录名再签发得到"已被占用"：多半就是刚才那一次，列表同样刷新
+    issueRetryTaken: (refreshed: boolean) => `这个登录名已有待接受的邀请，可能就是刚才没能确认的那一次。链接不能再次显示。${messages.common.listRefreshed(refreshed)}：在下面的列表里找到它，点"重新生成"。`,
     username: '登录名',
     displayName: '显示名',
     issue: '生成邀请链接',
@@ -130,10 +130,11 @@ export const adminMessages = {
     revokeDescription: '作废后这个链接不能再用；需要时可以重新生成。',
     confirmReissue: (username: string) => `为 ${username} 重新生成邀请链接？`,
     reissueDescription: '原来的链接随即作废。',
-    // 重新生成的结果未知（M2-P6 复核 S1）：新的邀请可能已经建好、原来的随即作废，新的链接却只在响应里出现一次
-    reissueOutcomeUnknown: (reason: string) => `没能确认邀请链接是否已经重新生成（${reason}）。如果已经生成，原来的链接已经作废，新的链接不能再次显示：列表已刷新，请找到这个登录名最新的那一条，再点"重新生成"。`,
-    // 结果未知之后再点，同一个登录名已有待接受的邀请：多半就是刚才那一次
-    reissueRetryTaken: '这个登录名已有待接受的邀请，可能就是刚才没能确认的那一次重新生成。链接不能再次显示：列表已刷新，请找到最新的那一条，再点"重新生成"。',
+    // 重新生成的结果未知（M2-P6 复核 S1）：新的邀请可能已经建好、原来的随即作废，新的链接却只在响应里出现一次。
+    // 列表随即刷新，没能刷新时另说（第四批）
+    reissueOutcomeUnknown: (reason: string, refreshed: boolean) => `没能确认邀请链接是否已经重新生成（${reason}）。如果已经生成，原来的链接已经作废，新的链接不能再次显示。${messages.common.listRefreshed(refreshed)}：找到这个登录名最新的那一条，再点"重新生成"。`,
+    // 结果未知之后再点，同一个登录名已有待接受的邀请：多半就是刚才那一次，列表同样刷新
+    reissueRetryTaken: (refreshed: boolean) => `这个登录名已有待接受的邀请，可能就是刚才没能确认的那一次重新生成。链接不能再次显示。${messages.common.listRefreshed(refreshed)}：找到最新的那一条，再点"重新生成"。`,
   },
   spaces: {
     create: '创建团队空间',
@@ -142,9 +143,9 @@ export const adminMessages = {
     visibleToAll: '全员可见：所有有效账户（包括你自己）都能以查看者的身份看到它的内容',
     creating: '正在创建…',
     pickAdmin: '请先选择首个空间管理员',
-    // 创建的结果未知（M2-P6 复核 S1）：空间可能已经建好；再创建会得到"已有同名"
-    createOutcomeUnknown: (reason: string) => `没能确认团队空间是否已经创建（${reason}）。列表已刷新：下面的列表里有它，就是已经建好了。`,
-    createRetryTaken: '已有同名的团队空间，可能就是刚才没能确认的那一次创建。列表已刷新：请在下面的列表里找找它。',
+    // 创建的结果未知（M2-P6 复核 S1）：空间可能已经建好；再创建会得到"已有同名"。两种情形列表都随即刷新，没能刷新时另说（第四批）
+    createOutcomeUnknown: (reason: string, refreshed: boolean) => `没能确认团队空间是否已经创建（${reason}）。${messages.common.listRefreshed(refreshed)}：下面的列表里有它，就是已经建好了。`,
+    createRetryTaken: (refreshed: boolean) => `已有同名的团队空间，可能就是刚才没能确认的那一次创建。${messages.common.listRefreshed(refreshed)}：在下面的列表里找找它。`,
     search: '按名称搜索',
     statusFilter: '状态',
     statusName: (status: SpaceStatus) => SPACE_STATUS_NAMES[status],
@@ -176,9 +177,9 @@ export const adminMessages = {
     restoreDescription: '恢复之后，成员按原来的角色继续使用。',
     join: '加入空间',
     joinTitle: (name: string) => `加入 ${name}`,
-    // 加入的结果未知（M2-P6 复核 S1）：可能已经加入；再加入会得到"已经是成员"
-    joinOutcomeUnknown: (reason: string) => `没能确认是否已经加入（${reason}）。列表已刷新：这个空间的"我的角色"不再是"没有加入"，就是已经加入了。`,
-    joinedEarlier: '你已经是这个空间的成员了，可能就是刚才没能确认的那一次加入。列表已刷新。',
+    // 加入的结果未知（M2-P6 复核 S1）：可能已经加入；再加入会得到"已经是成员"。两种情形列表都随即刷新，没能刷新时另说（第四批）
+    joinOutcomeUnknown: (reason: string, refreshed: boolean) => `没能确认是否已经加入（${reason}）。${messages.common.listRefreshed(refreshed)}：这个空间的"我的角色"不再是"没有加入"，就是已经加入了。`,
+    joinedEarlier: (refreshed: boolean) => `你已经是这个空间的成员了，可能就是刚才没能确认的那一次加入。${messages.common.listRefreshed(refreshed)}。`,
     joinDescription: '系统管理员要看团队空间的内容，得先把自己加入这个空间（全员可见的空间不必加入，所有有效账户都能以查看者的身份看到）。加入会记入审计。',
     joinRole: '以什么角色加入',
   },

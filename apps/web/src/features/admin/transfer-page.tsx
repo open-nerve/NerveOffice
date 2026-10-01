@@ -8,6 +8,7 @@ import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-quer
 import { useId, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { ApiError, describeError, isMissingResource, isUnknownOutcome } from '../../shared/api/index.ts'
+import { refreshWithin } from '../../shared/api/write-outcome.ts'
 import { messages, phraseText } from '../../shared/i18n/index.ts'
 import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { ADMIN_PATHS } from '../../shared/lib/admin-paths.ts'
@@ -105,15 +106,12 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
     setSelected(previous => new Set([...previous].filter(id => present.has(id))))
   }
 
-  /** 同上，返回刷新是否成功（确定的失败之后，按它决定是关掉弹窗在按钮旁说明，还是弹窗留着说明原因） */
+  /**
+   * 同上，返回刷新是否成功（确定的失败之后，按它决定是关掉弹窗在按钮旁说明，还是弹窗留着说明原因）。与结果未知之后一样最多等 10 秒
+   * （shared/api/write-outcome.ts 的 refreshWithin，M2-P6 复核第四批）：一直不回来时按没能刷新处理，弹窗不一直停在"正在处理…"
+   */
   async function refreshAfterFailure(): Promise<boolean> {
-    try {
-      await refreshDocuments()
-      return true
-    }
-    catch {
-      return false
-    }
+    return refreshWithin(refreshDocuments)
   }
 
   const target = targetOf(targetType, person, team)

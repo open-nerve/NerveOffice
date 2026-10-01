@@ -5,6 +5,7 @@ import { useMutation } from '@tanstack/react-query'
 import { useEffect, useEffectEvent, useId, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { describeError, isAccessDenied, isMissingResource, isUnknownOutcome } from '../../shared/api/index.ts'
+import { refreshIfUnknown } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { useRequestIdLedger } from '../../shared/lib/request-id-ledger.ts'
 import { spaceTrashPath } from '../../shared/lib/space-paths.ts'
@@ -42,7 +43,10 @@ export interface ItemOperations {
   /** 只有文档能复制：副本的标题与"打开副本"由它给出 */
   readonly copy?: (destination: Destination) => Promise<OrganizeNotice>
   readonly remove: () => Promise<void>
-  /** 结果未知之后重新请求相关的列表：它所在的空间，加上这次的目标位置所在的空间（移动、复制） */
+  /**
+   * 结果未知之后重新请求相关的列表：它所在的空间，加上这次的目标位置所在的空间（移动、复制）。有一个没能刷新就拒绝
+   * （organize-refresh.ts 的 useOrganizeRefreshAfterUnknown）：面板经共用的做法在时限之内等它，说明据此说"已刷新"还是"没能刷新"（第四批）
+   */
   readonly refresh: (destination?: Destination) => Promise<void>
 }
 
@@ -143,7 +147,8 @@ function RenameForm({ panelId, name, validate, pending, error, onSubmit, onCance
  * - 按访问权限被拒绝（403、404）：页面按新的权限重新请求；面板收起，原因写在列表上方的说明里（403 用服务端说的原因，S5）。
  *   那一行可能随之消失，按钮可能随新的权限不再显示，说明接住焦点；
  * - 结果未知（网络、5xx）：相关的列表随即刷新。删除与移动会让那一行消失，面板收起，说明写在列表上方（可能已经生效）；
- *   改名与复制留在面板里，可以原样再提交（改名是幂等的，复制带着 requestId）；
+ *   改名与复制留在面板里，可以原样再提交（改名是幂等的，复制带着 requestId）。这时的刷新经共用的做法（shared/api/write-outcome.ts，
+ *   第四批）：最多等 10 秒，刷新失败或者到了时限还没回来，说明里说"列表没能刷新"，面板也不一直停在"正在…"；
  * - 其余（同名之类）：留在面板里说明。
  * 展开时取元数据得到 404（文档已经不在了）：同样收起、刷新、说明，不给一个永远失败的"重试"（P15）。
  * 已经打开的改名、移动、复制表单，刷新之后这一种操作不能做了（例如别处的操作被拒绝、页面按新的权限重新请求，空间刚被归档、
@@ -151,6 +156,8 @@ function RenameForm({ panelId, name, validate, pending, error, onSubmit, onCance
  */
 export function ItemActions({ panelId, name, validateName, permissions, loading, error, onRetry, current, excludeFolderId, targetSpaces, operations, onDone, onDenied, onClose }: ItemActionsProps) {
   const [chosen, setChosen] = useState<Exclude<Operation, 'delete'>>()
+  /** 上一次失败之后列表刷新好了没有：留在面板里的说明（改名、复制）据此说"已刷新"还是"没能刷新"（第四批）。每次失败都重新记下 */
+  const [refreshed, setRefreshed] = useState(false)
   const ledger = useRequestIdLedger()
   // 移动/复制提交时目标位置的可读名称，例如"市场部 / 方案"：做完之后在说明里回述
   const targetLabelRef = useRef('')
@@ -175,14 +182,16 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
         onDone(deniedNotice(attempt.operation, failure))
         return
       }
-      if (!isUnknownOutcome(failure) && !ledger.earlierAttemptDone(failure))
+      // 结果未知，或者复制的上一次已经完成：在时限之内刷新相关的列表
+      const listRefreshed = await refreshIfUnknown(failure, async () => operations.refresh(attempt.destination), { also: ledger.earlierAttemptDone })
+      setRefreshed(listRefreshed)
+      if (!isUnknownOutcome(failure))
         return
-      await operations.refresh(attempt.destination)
       const reason = describeError(failure).message
       if (attempt.operation === 'delete')
-        onDone({ message: text.deleteOutcomeUnknown(name, reason), action: trashLink, problem: true })
+        onDone({ message: text.deleteOutcomeUnknown(name, reason, listRefreshed), action: trashLink, problem: true })
       else if (attempt.operation === 'move')
-        onDone({ message: text.moveOutcomeUnknown(name, reason), problem: true })
+        onDone({ message: text.moveOutcomeUnknown(name, reason, listRefreshed), problem: true })
     },
   })
 
@@ -216,17 +225,20 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
     setChosen(undefined)
   const shown = revoked ? undefined : chosen
 
-  /** 留在面板里的失败说明：复制的上一次可能已经完成、改名与复制的结果未知（可以原样再提交），其余按错误码 */
+  /**
+   * 留在面板里的失败说明：复制的上一次可能已经完成、改名与复制的结果未知（可以原样再提交），其余按错误码。
+   * 提到列表的按刷新好了没有说（第四批）
+   */
   function panelError(): string | undefined {
     if (!mutation.isError)
       return undefined
     const failure = mutation.error
     const operation = mutation.variables?.operation
     if (operation === 'copy' && ledger.earlierAttemptDone(failure))
-      return text.copiedEarlier
+      return text.copiedEarlier(refreshed)
     const reason = describeError(failure).message
     if (isUnknownOutcome(failure) && operation === 'rename')
-      return text.renameOutcomeUnknown(reason)
+      return text.renameOutcomeUnknown(reason, refreshed)
     if (isUnknownOutcome(failure) && operation === 'copy')
       return text.copyOutcomeUnknown(reason)
     return reason

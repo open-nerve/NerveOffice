@@ -6,6 +6,7 @@ import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-q
 import { useId, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { ApiError, describeError, isUnknownOutcome } from '../../shared/api/index.ts'
+import { refreshIfUnknown } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
@@ -32,12 +33,21 @@ function isNameTaken(error: unknown): boolean {
   return error instanceof ApiError && error.code === 'SPACE_NAME_TAKEN'
 }
 
+interface CreateSpaceFormProps {
+  /** 创建成功之后刷新列表与导航：刷新失败时列表自己显示加载失败 */
+  readonly onCreated: () => Promise<void>
+  /** 结果未知之后刷新同样的列表与导航：刷新失败时拒绝，说明据此说"没能刷新"（M2-P6 复核第四批） */
+  readonly refreshAfterUnknown: () => Promise<void>
+}
+
 /**
  * 创建团队空间：名称、首个空间管理员（按名字选同事）、是否全员可见。
  * 结果未知时空间可能已经建好（M2-P6 复核 S1）：列表随即刷新，说明下面的列表里有它就是建好了；结果未知之后用同一个名称再创建
- * 得到"已有同名"，多半就是刚才那一次，同样刷新并说明。比较的两边都是经契约解析过的名称（规范写法）
+ * 得到"已有同名"，多半就是刚才那一次，同样刷新并说明。比较的两边都是经契约解析过的名称（规范写法）。
+ * 这两种情形的刷新经共用的做法（shared/api/write-outcome.ts，第四批）：最多等 10 秒，刷新失败或者到了时限还没回来，说明里说
+ * "列表没能刷新"，按钮也不一直停在"正在创建…"
  */
-function CreateSpaceForm({ onCreated }: { readonly onCreated: () => Promise<void> }) {
+function CreateSpaceForm({ onCreated, refreshAfterUnknown }: CreateSpaceFormProps) {
   const [name, setName] = useState('')
   const [admin, setAdmin] = useState<UserSummary>()
   const [visibleToAll, setVisibleToAll] = useState(false)
@@ -45,6 +55,8 @@ function CreateSpaceForm({ onCreated }: { readonly onCreated: () => Promise<void
   const [pickerKey, setPickerKey] = useState(0)
   /** 结果未知的那一次创建用的名称：空间可能已经建好了。成功创建之后清掉 */
   const [unsureName, setUnsureName] = useState<string>()
+  /** 上一次失败之后列表刷新好了没有：说明据此说"已刷新"还是"没能刷新"（第四批）。每次失败都重新记下 */
+  const [refreshed, setRefreshed] = useState(false)
   const nameId = useId()
   const visibleId = useId()
   const hintId = useId()
@@ -62,8 +74,7 @@ function CreateSpaceForm({ onCreated }: { readonly onCreated: () => Promise<void
     onError: async (error, request) => {
       if (isUnknownOutcome(error))
         setUnsureName(request.name)
-      if (isUnknownOutcome(error) || (isNameTaken(error) && request.name === unsureName))
-        await onCreated()
+      setRefreshed(await refreshIfUnknown(error, refreshAfterUnknown, { also: failure => isNameTaken(failure) && request.name === unsureName }))
     },
   })
   const parsed = spaceNameSchema.safeParse(name)
@@ -99,7 +110,7 @@ function CreateSpaceForm({ onCreated }: { readonly onCreated: () => Promise<void
       </div>
       {mutation.isError && (
         <Alert variant="destructive">
-          <AlertDescription>{createFailureText(mutation.error, mutation.variables?.name, unsureName)}</AlertDescription>
+          <AlertDescription>{createFailureText(mutation.error, mutation.variables?.name, unsureName, refreshed)}</AlertDescription>
         </Alert>
       )}
       {/* aria-disabled 的按钮读屏软件读出"不可用"，却不知道为什么：原因写在按钮下方，按钮经 aria-describedby 指向它 */}
@@ -111,12 +122,15 @@ function CreateSpaceForm({ onCreated }: { readonly onCreated: () => Promise<void
   )
 }
 
-/** 创建失败时的说明：结果未知、结果未知之后同一个名称"已有同名"（多半就是那一次），其余按错误码 */
-function createFailureText(error: unknown, name: string | undefined, unsureName: string | undefined): string {
+/**
+ * 创建失败时的说明：结果未知、结果未知之后同一个名称"已有同名"（多半就是那一次），其余按错误码。
+ * refreshed：前两种情形之后列表刷新好了没有（第四批）
+ */
+function createFailureText(error: unknown, name: string | undefined, unsureName: string | undefined, refreshed: boolean): string {
   if (isUnknownOutcome(error))
-    return text.createOutcomeUnknown(describeError(error).message)
+    return text.createOutcomeUnknown(describeError(error).message, refreshed)
   if (isNameTaken(error) && name !== undefined && name === unsureName)
-    return text.createRetryTaken
+    return text.createRetryTaken(refreshed)
   return describeError(error).message
 }
 
@@ -144,7 +158,9 @@ export function AdminSpacesPage() {
     await Promise.all(LIST_QUERY_KEYS.map(async queryKey => queryClient.invalidateQueries({ queryKey })))
   }
 
-  /** 弹窗在结果未知之后的刷新：同样的列表与导航，刷新失败时拒绝，弹窗据此说明页面没能刷新（M2-P6 复核第三批 G-a） */
+  /**
+   * 结果未知之后的刷新（弹窗与创建的表单）：同样的列表与导航，刷新失败时拒绝，据此说明页面没能刷新（M2-P6 复核第三批 G-a、第四批）
+   */
   async function refreshAfterUnknown(): Promise<void> {
     await refreshQueries(queryClient, LIST_QUERY_KEYS)
   }
@@ -191,7 +207,7 @@ export function AdminSpacesPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <CreateSpaceForm onCreated={refresh} />
+      <CreateSpaceForm onCreated={refresh} refreshAfterUnknown={refreshAfterUnknown} />
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex min-w-48 flex-1 flex-col gap-2">
           <Label htmlFor={searchId}>{text.search}</Label>

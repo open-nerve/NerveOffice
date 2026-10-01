@@ -6,6 +6,7 @@ import { useMutation } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { describeError, isAccessDenied, isUnknownOutcome } from '../../shared/api/index.ts'
+import { refreshIfUnknown } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { useRequestIdLedger } from '../../shared/lib/request-id-ledger.ts'
 import { spaceFolderPath, spacePath, spaceTrashPath } from '../../shared/lib/space-paths.ts'
@@ -17,7 +18,7 @@ import { DocumentList } from './document-list.tsx'
 import { FolderList } from './folder-list.tsx'
 import { useFolderTrail } from './folder-trail.ts'
 import { createFolder } from './folders-api.ts'
-import { useOrganizeRefresh } from './organize-refresh.ts'
+import { useOrganizeRefresh, useOrganizeRefreshAfterUnknown } from './organize-refresh.ts'
 
 const text = messages.organize
 
@@ -77,14 +78,19 @@ interface NewFolderFormProps {
  * requestId 按"在这个位置新建文件夹"记账（shared/api/request-ids.ts，M2-P6 复核 M1），名称不在其中：
  * 结果未知之后原样再提交，沿用同一个、服务端只建一个；改了名再提交，服务端认出那个 requestId 已经用掉了（REQUEST_ID_CONFLICT），
  * 说明上一次多半已经建好并刷新列表，requestId 随之换新，再提交就建这个新名字的（P1）。结果未知时列表同样刷新。
+ * 这两种情形的刷新经共用的做法（shared/api/write-outcome.ts，M2-P6 复核第四批）：最多等 10 秒，刷新失败或者到了时限还没回来，
+ * 说明里说"列表没能刷新"，表单也不一直停在"正在新建…"。
  * 服务端说这次是重放（replayed，M2-P6 复核第二批 S-1）：结果未知的那一次其实已经建好了（同一个位置、同一个名称），表单关掉，
  * 在列表上方说明"上一次其实已经完成"，不当成这一次新建的；这件事随之了结，再新建就是另一个。
  * 名称不合法时说明原因（WCAG 3.3.1，M2-P6 复核 S4）。
  */
 function NewFolderForm({ spaceId, parentId, onDone, onCancel, onDenied }: NewFolderFormProps) {
   const refresh = useOrganizeRefresh()
+  const refreshAfterUnknown = useOrganizeRefreshAfterUnknown()
   const ledger = useRequestIdLedger()
   const [name, setName] = useState('')
+  /** 上一次失败之后列表刷新好了没有：说明据此说"已刷新"还是"没能刷新"（第四批）。每次失败都重新记下 */
+  const [refreshed, setRefreshed] = useState(false)
   const inputId = useId()
   const problemId = useId()
   const parsed = folderNameSchema.safeParse(name)
@@ -100,9 +106,8 @@ function NewFolderForm({ spaceId, parentId, onDone, onCancel, onDenied }: NewFol
         onDenied({ message: text.createFolderDenied(describeError(error).message), problem: true })
         return
       }
-      // 结果未知，或者上一次已经建好：列表刷新出来，看得到它
-      if (isUnknownOutcome(error) || ledger.earlierAttemptDone(error))
-        await refresh([spaceId])
+      // 结果未知，或者上一次已经建好：在时限之内刷新列表，看得到它
+      setRefreshed(await refreshIfUnknown(error, async () => refreshAfterUnknown([spaceId]), { also: ledger.earlierAttemptDone }))
     },
   })
 
@@ -110,9 +115,9 @@ function NewFolderForm({ spaceId, parentId, onDone, onCancel, onDenied }: NewFol
   if (mutation.isError) {
     const reason = describeError(mutation.error).message
     if (ledger.earlierAttemptDone(mutation.error))
-      failure = text.createFolderEarlier
+      failure = text.createFolderEarlier(refreshed)
     else if (isUnknownOutcome(mutation.error))
-      failure = text.createFolderOutcomeUnknown(reason)
+      failure = text.createFolderOutcomeUnknown(reason, refreshed)
     else
       failure = text.createFolderFailed(reason)
   }

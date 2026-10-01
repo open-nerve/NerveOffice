@@ -3,7 +3,7 @@ import { SPACE_ROLES, spaceNameSchema } from '@nerve-office/contracts'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useId, useState } from 'react'
 import { ApiError, describeError, isUnknownOutcome } from '../../shared/api/index.ts'
-import { refreshIfUnknown, refreshWithin, writeFailureText } from '../../shared/api/write-outcome.ts'
+import { refreshIfUnknown, writeFailureText } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { problemOf } from '../../shared/lib/validation.ts'
@@ -32,6 +32,11 @@ interface SpaceDialogProps {
 interface SubmissionOptions extends Pick<SpaceDialogProps, 'onDone' | 'refresh' | 'onClose'> {
   /** 结果未知之外，失败之后还要刷新列表的情形（例如加入时"已经是成员"：多半就是刚才那一次，M2-P6 复核 S1） */
   readonly refreshAfter?: (error: unknown) => boolean
+  /**
+   * 失败的说明：不给时，结果未知说"可能已经生效"，其余按错误码（writeFailureText）。refreshed：刷新好了没有，
+   * 说明里提到"已刷新"的要按它说（加入空间的两条说明，M2-P6 复核第四批）
+   */
+  readonly describeFailure?: (error: unknown, refreshed: boolean) => string
 }
 
 /**
@@ -43,7 +48,7 @@ interface SubmissionOptions extends Pick<SpaceDialogProps, 'onDone' | 'refresh' 
  * - 关闭时清掉上一次的失败，下次打开不带着旧的说明。
  * 服务端逐请求检查；标明只给系统管理员，被拒绝时由全局处理重新确认会话（M2-P1 审查 B4）。
  */
-function useDialogSubmission<T>(action: (value: T) => Promise<unknown>, { onDone, refresh, onClose, refreshAfter }: SubmissionOptions) {
+function useDialogSubmission<T>(action: (value: T) => Promise<unknown>, { onDone, refresh, onClose, refreshAfter, describeFailure }: SubmissionOptions) {
   /** 上一次失败之后页面刷新好了没有：说明据此说"已刷新"还是"没能刷新"（第三批 G-a）。每次失败都重新记下 */
   const [refreshed, setRefreshed] = useState(false)
   const mutation = useMutation({
@@ -51,7 +56,7 @@ function useDialogSubmission<T>(action: (value: T) => Promise<unknown>, { onDone
     meta: SYSTEM_ADMIN_ONLY,
     onSuccess: async () => onDone(),
     onError: async (error) => {
-      setRefreshed(refreshAfter?.(error) === true ? await refreshWithin(refresh) : await refreshIfUnknown(error, refresh))
+      setRefreshed(await refreshIfUnknown(error, refresh, { also: refreshAfter }))
     },
   })
 
@@ -62,8 +67,7 @@ function useDialogSubmission<T>(action: (value: T) => Promise<unknown>, { onDone
 
   return {
     pending: mutation.isPending,
-    error: mutation.error,
-    failure: mutation.error === null ? undefined : writeFailureText(mutation.error, refreshed),
+    failure: mutation.error === null ? undefined : (describeFailure?.(mutation.error, refreshed) ?? writeFailureText(mutation.error, refreshed)),
     submit: (value: T): void => {
       if (!mutation.isPending)
         mutation.mutate(value, { onSuccess: close })
@@ -177,15 +181,13 @@ function isAlreadyMember(error: unknown): boolean {
 
 /**
  * 加入失败时的说明（M2-P6 复核 S1）：结果未知时可能已经加入；已经是成员（多半就是刚才没能确认的那一次）时说清楚；其余按错误码。
- * 这两种情形列表都随即刷新
+ * 这两种情形列表都随即刷新，说明按刷新好了没有说"已刷新"还是"没能刷新"（第四批）
  */
-function joinFailureText(error: Error | null): string | undefined {
-  if (error === null)
-    return undefined
+function joinFailureText(error: unknown, refreshed: boolean): string {
   if (isAlreadyMember(error))
-    return text.joinedEarlier
+    return text.joinedEarlier(refreshed)
   if (isUnknownOutcome(error))
-    return text.joinOutcomeUnknown(describeError(error).message)
+    return text.joinOutcomeUnknown(describeError(error).message, refreshed)
   return describeError(error).message
 }
 
@@ -193,7 +195,7 @@ export function JoinSpaceDialog({ space, onDone, refresh, onClose, returnFocus }
   // 与成员页的"添加成员"是同一个接口：把自己加入时，审计记为系统管理员加入空间
   const submission = useDialogSubmission(
     async ({ id, userId, role }: { readonly id: string, readonly userId: string, readonly role: SpaceRole }) => addMember(id, { userId, role }),
-    { onDone, refresh, onClose, refreshAfter: isAlreadyMember },
+    { onDone, refresh, onClose, refreshAfter: isAlreadyMember, describeFailure: joinFailureText },
   )
   return (
     <Dialog open={space !== undefined} onOpenChange={submission.changeOpen}>
@@ -203,7 +205,7 @@ export function JoinSpaceDialog({ space, onDone, refresh, onClose, returnFocus }
             <DialogTitle>{text.joinTitle(space.name)}</DialogTitle>
             <DialogDescription>{text.joinDescription}</DialogDescription>
           </DialogHeader>
-          <JoinForm state={{ pending: submission.pending, failure: joinFailureText(submission.error) }} onSubmit={(userId, role) => submission.submit({ id: space.id, userId, role })} />
+          <JoinForm state={submission} onSubmit={(userId, role) => submission.submit({ id: space.id, userId, role })} />
         </DialogContent>
       )}
     </Dialog>

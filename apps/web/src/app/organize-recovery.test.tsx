@@ -135,7 +135,7 @@ describe('M2-P6 复核 M1：带 requestId 的新建在结果未知之后', () =>
     fireEvent.change(input, { target: { value: '方案二' } })
     const listed = count(api, foldersKey(SPACE_ID))
     fireEvent.click(within(form).getByRole('button', { name: '新建文件夹' }))
-    expect(await within(form).findByText('上一次新建可能已经建好（当时没能确认结果），列表已刷新：请先看看列表里是否已经有它；还要另建时再提交一次。')).toBeInTheDocument()
+    expect(await within(form).findByText('上一次新建可能已经建好（当时没能确认结果），列表已刷新：先看看列表里是否已经有它；还要另建时再提交一次。')).toBeInTheDocument()
     expect(count(api, foldersKey(SPACE_ID))).toBeGreaterThan(listed)
 
     fireEvent.click(within(form).getByRole('button', { name: '新建文件夹' }))
@@ -424,7 +424,7 @@ describe('M2-P6 复核 S1–S3：结果未知与被拒绝之后', () => {
     fireEvent.change(screen.getByLabelText('周报 的新名称'), { target: { value: '周报（终稿）' } })
     const listed = count(api, documentsKey(SESSION))
     fireEvent.click(screen.getByRole('button', { name: '保存' }))
-    expect(await screen.findByText('没能确认是否已经改好（网络连接失败，请检查网络后重试）。列表已刷新，可以再保存一次。')).toBeInTheDocument()
+    expect(await screen.findByText('没能确认是否已经改好（网络连接失败，请检查网络后重试）。列表已刷新；可以再保存一次。')).toBeInTheDocument()
     expect(count(api, documentsKey(SESSION))).toBeGreaterThan(listed)
     expect(screen.getByLabelText('周报 的新名称')).toHaveValue('周报（终稿）')
   })

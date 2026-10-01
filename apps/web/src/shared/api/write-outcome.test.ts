@@ -45,12 +45,30 @@ describe('refreshIfUnknown：只在结果未知时刷新', () => {
     expect(await refreshIfUnknown(new ApiError(500, 'INTERNAL_ERROR', 'x'), async () => {
       throw new NetworkError('网络请求失败')
     })).toBe(false)
-    expect(await refreshIfUnknown(new ApiError(500, 'INTERNAL_ERROR', 'x'), hanging, 20)).toBe(false)
+    expect(await refreshIfUnknown(new ApiError(500, 'INTERNAL_ERROR', 'x'), hanging, { timeLimitMs: 20 })).toBe(false)
 
     refresh.mockClear()
     expect(await refreshIfUnknown(new ApiError(409, 'LAST_ADMIN', 'x'), refresh)).toBe(false)
     expect(await refreshIfUnknown(new ApiError(503, 'SERVICE_UNAVAILABLE', 'x'), refresh)).toBe(false)
     expect(refresh).not.toHaveBeenCalled()
+  })
+
+  it('also 认出的确定拒绝（上一次多半已经生效）同样在时限之内刷新，兑现为刷新好了没有；没认出的照旧不刷新（第四批）', async () => {
+    const taken = new ApiError(409, 'ALREADY_MEMBER', 'x')
+    const also = (error: unknown) => error === taken
+    const refresh = vi.fn(async () => {})
+    expect(await refreshIfUnknown(taken, refresh, { also })).toBe(true)
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(await refreshIfUnknown(taken, async () => {
+      throw new NetworkError('网络请求失败')
+    }, { also })).toBe(false)
+    expect(await refreshIfUnknown(taken, hanging, { also, timeLimitMs: 20 })).toBe(false)
+
+    refresh.mockClear()
+    expect(await refreshIfUnknown(new ApiError(409, 'LAST_ADMIN', 'x'), refresh, { also })).toBe(false)
+    expect(refresh).not.toHaveBeenCalled()
+    // 结果未知时不看 also
+    expect(await refreshIfUnknown(new NetworkError('网络请求失败'), refresh, { also: () => false })).toBe(true)
   })
 })
 
