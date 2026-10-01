@@ -241,6 +241,19 @@ describe('loadConfig', () => {
     expect(loadConfig({ ...REQUIRED, NERVE_LOGIN_MAX_FAILURES: '5', NERVE_LOGIN_ACCOUNT_MAX_FAILURES: '6' }).login.accountMaxFailures).toBe(6)
   })
 
+  it('开启回收站的自动清理时连接池至少 2 个连接（M2-P6 复核 A 的 G-3）：一个连接持着防重复执行的锁，删除在另一个连接上', () => {
+    const issuesWith = (extra: Record<string, string>) => issuesOf(() => loadConfig({ ...REQUIRED, ...extra }))
+    // 自动清理默认开启：只把连接池调成 1 就不行，说明里写出两边的值（以及哪个是默认值）与两种改法
+    const issues = issuesWith({ NERVE_DATABASE_POOL_MAX: '1' })
+    expect(issues.map(issue => issue.variable)).toEqual(['NERVE_DATABASE_POOL_MAX'])
+    expect(issues[0]?.problem).toContain('现在是 1，开启回收站的自动清理时至少为 2（NERVE_TRASH_PURGE_ENABLED 现在是 true（默认值））')
+    expect(issues[0]?.problem).toContain('或者把 NERVE_TRASH_PURGE_ENABLED 设为 false')
+    expect(issuesWith({ NERVE_DATABASE_POOL_MAX: '1', NERVE_TRASH_PURGE_ENABLED: 'true' })[0]?.problem).toContain('NERVE_TRASH_PURGE_ENABLED 现在是 true）')
+    // 关掉自动清理时一个连接也可以；两个连接时可以开
+    expect(loadConfig({ ...REQUIRED, NERVE_DATABASE_POOL_MAX: '1', NERVE_TRASH_PURGE_ENABLED: 'false' }).database.poolMax).toBe(1)
+    expect(loadConfig({ ...REQUIRED, NERVE_DATABASE_POOL_MAX: '2' }).jobs.trashPurge.enabled).toBe(true)
+  })
+
   it('登录与一次性链接的新上限按整数范围校验', () => {
     const variablesOf = (extra: Record<string, string>) => issuesOf(() => loadConfig({ ...REQUIRED, ...extra })).map(issue => issue.variable)
     expect(variablesOf({ NERVE_LOGIN_ACCOUNT_MAX_FAILURES: '1' })).toEqual(['NERVE_LOGIN_ACCOUNT_MAX_FAILURES'])

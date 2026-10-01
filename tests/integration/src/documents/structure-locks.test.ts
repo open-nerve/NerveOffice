@@ -131,9 +131,9 @@ async function folderState(id: string): Promise<FolderState | undefined> {
   )).rows[0])
 }
 
-async function entryState(id: string): Promise<{ space: string, origin: string } | undefined> {
-  return database.query(async client => (await client.query<{ space: string, origin: string }>(
-    'SELECT space_id AS space, origin_space_id AS origin FROM trash_entries WHERE id = $1',
+async function entryState(id: string): Promise<{ space: string } | undefined> {
+  return database.query(async client => (await client.query<{ space: string }>(
+    'SELECT space_id AS space FROM trash_entries WHERE id = $1',
     [id],
   )).rows[0])
 }
@@ -233,12 +233,12 @@ describe('US-M2-14 等树锁期间对象被跨空间移走：写操作在锁下�
       // 这一单连同那份文档被搬到另一个空间（跨空间移动带走子树里的删除单元的效果）
       change: async (client) => {
         await client.query('UPDATE documents SET space_id = $2 WHERE id = $1', [document.id, to])
-        await client.query('UPDATE trash_entries SET space_id = $2, origin_space_id = $2 WHERE id = $1', [entry, to])
+        await client.query('UPDATE trash_entries SET space_id = $2 WHERE id = $1', [entry, to])
       },
     })
     expect(response.status).toBe(404)
     expect(await documentState(document.id)).toMatchObject({ status: 'trashed', space: to, entry })
-    expect(await entryState(entry)).toEqual({ space: to, origin: to })
+    expect(await entryState(entry)).toEqual({ space: to })
   })
 })
 
@@ -304,8 +304,8 @@ describe('US-M2-14 锁下这条核对是承重的：没有它，改动在错的�
             removing = true
             await holdSpaceTree(to)(remover)
             entryId = (await remover.query<{ id: string }>(
-              `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_space_id, origin_parent_id, title)
-               VALUES ($1, 'folder', $2, now() + interval '30 days', $1, NULL, '正在删的') RETURNING id`,
+              `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_parent_id, title)
+               VALUES ($1, 'folder', $2, now() + interval '30 days', NULL, '正在删的') RETURNING id`,
               [to, amy.id],
             )).rows[0]?.id ?? ''
             await remover.query('UPDATE folders SET status = \'trashed\', trash_entry_id = $2 WHERE id = $1', [doomed, entryId])

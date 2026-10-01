@@ -1,7 +1,20 @@
 // 日志里的异常（审查 A2）：数据库错误的消息与属性带着绑定参数和行里的值
 // （drizzle 的 DrizzleQueryError 把参数拼进消息，pg 的消息与 detail 带值），按键名的脱敏覆盖不到。
 // 所以数据库错误只留类型、带占位符的 SQL、SQLSTATE 与约束、表、列名；其他异常保留消息与堆栈，原因（cause）逐层同样处理。
+// 绑定参数从不写进日志（只记个数）：它们是行里的值。
 const MAX_CAUSE_DEPTH = 5
+
+/**
+ * 日志里的 SQL 最多留多少个字符（M2-P6 复核 A 的 G-7）：语句的开头（动词、表与条件的开头）足以定位是哪一处。
+ * 应用里最长的语句约 1400 个字符（整套集成测试实测），留出余量；只截断异常长的——一串 id 曾被展开成几万个参数，
+ * 一条错误日志带着 51 万个字符的 SQL（M2-P6 复核 A 的 S-2，已改成数组参数，这里兜底）
+ */
+export const LOGGED_QUERY_MAX_LENGTH = 4_096
+
+/** 超过上限的 SQL 只留开头，并注明截断了、原来有多长 */
+export function truncatedQuery(query: string): string {
+  return query.length <= LOGGED_QUERY_MAX_LENGTH ? query : `${query.slice(0, LOGGED_QUERY_MAX_LENGTH)}…（已截断，共 ${query.length} 个字符）`
+}
 
 type Fields = Record<string, unknown>
 
@@ -52,7 +65,7 @@ export function serializeError(error: unknown, depth = 0): unknown {
     return error
   const cause = depth < MAX_CAUSE_DEPTH && error.cause !== undefined ? serializeError(error.cause, depth + 1) : undefined
   if (isDrizzleQueryError(error))
-    return defined({ type: 'DrizzleQueryError', message: safeErrorMessage(error), query: error.query, stack: framesOnly(error.stack), cause })
+    return defined({ type: 'DrizzleQueryError', message: safeErrorMessage(error), query: truncatedQuery(error.query), paramCount: error.params.length, stack: framesOnly(error.stack), cause })
   if (isPgDatabaseError(error)) {
     return defined({
       type: 'DatabaseError',

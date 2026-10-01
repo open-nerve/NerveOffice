@@ -275,8 +275,11 @@ export class FoldersRepository {
   }
 
   /**
-   * 永久删除这些文件夹（调用方已删掉里面的文档）：父子的外键是 restrict，同一条语句里删父与子会被立刻拒绝，
-   * 所以按层数从深到浅逐层删。层数最多 FOLDER_MAX_DEPTH，所以至多这么多条语句
+   * 永久删除这些文件夹（调用方已删掉里面的文档），按层数从深到浅逐层删，层数最多 FOLDER_MAX_DEPTH，所以至多这么多条语句。
+   * 逐层删是为了不依赖外键检查的时机：父子的外键是 restrict，每一条语句删的都是剩下的行里最深的一层，删的时候已经没有子行指着它们，
+   * 无论外键是在语句结束时检查、还是像 SQL 标准的 RESTRICT 那样逐行立即检查都成立。PostgreSQL 把 restrict 当作不可延迟的
+   * NO ACTION、在语句结束时才检查，一条语句里同时删父与子其实也能通过（PG 18.6 实测，M2-P6 复核 B 的 G3 订正了原来
+   * "会被立刻拒绝"的说法）；多几条语句的代价可以接受，换来的是正确性不取决于这个时机
    */
   async deleteMany(ids: readonly string[], transaction: Transaction): Promise<number> {
     if (ids.length === 0)

@@ -2,16 +2,17 @@
 // 时刻由假时钟给出（把"现在"推到 30 天之后，不必真的等）。覆盖：到期的才清、内容与修订记录一起没了、
 // 未到期的不动、审计的操作者是系统、一轮的批量上限与"最早到期的先清"、
 // 两个实例同时跑只有一个干活（另一个连接持有同一把 advisory lock）、归档的空间照样清、
-// 等树锁期间这一单被跨空间搬走时这一轮跳过（留给下一轮）、一直失败的条目暂缓重试而不挡住后面到期的、定时器真的会跑。
+// 等树锁期间这一单被跨空间搬走时这一轮跳过（留给下一轮）、一直失败的条目暂缓重试而不挡住后面到期的、定时器真的会跑、
+// 定时器每一轮的"现在"取的是数据库的时间。
 import type { TrashListResponse } from '@nerve-office/contracts'
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import { randomUUID } from 'node:crypto'
-import { TRASH_PURGE_LOCK, TrashPurgeJob } from '@nerve-office/api'
+import { Clock, TRASH_PURGE_LOCK, TrashPurgeJob } from '@nerve-office/api'
 import { folderSchema, trashListResponseSchema } from '@nerve-office/contracts'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
@@ -228,7 +229,7 @@ describe('US-M2-09 到期的自动清理', () => {
       change: async (client) => {
         await client.query('UPDATE folders SET space_id = $2 WHERE id = $1', [folder, to])
         await client.query('UPDATE documents SET space_id = $2 WHERE folder_id = $1', [folder, to])
-        await client.query('UPDATE trash_entries SET space_id = $2, origin_space_id = $2 WHERE id = $1', [entry.id, to])
+        await client.query('UPDATE trash_entries SET space_id = $2 WHERE id = $1', [entry.id, to])
       },
     })
     expect(round).toEqual({ ran: true, purged: 0, skipped: 1, failed: 0 })
@@ -304,7 +305,7 @@ describe('US-M2-09 到期的自动清理', () => {
     const spaceId = await teamSpace()
     const document = await createDocument(database, { spaceId, createdBy: amy.id, title: '等定时器来清' })
     const entry = await trashed(spaceId, `/api/documents/${document}`)
-    // 已经过期（系统时钟看得到的过期）：定时器那一轮用的是真实的时钟
+    // 已经过期：定时器那一轮的"现在"是数据库的时间
     await setExpiry(entry.id, '31 days', '-1 days')
 
     const timed = await startTestApp({ databaseUrl: database.url, env: { NERVE_TRASH_PURGE_ENABLED: 'true', NERVE_TRASH_PURGE_INTERVAL_MS: '1000' } })
@@ -321,5 +322,23 @@ describe('US-M2-09 到期的自动清理', () => {
     finally {
       await timed.close()
     }
+  })
+
+  it('定时器每一轮的"现在"取数据库的时间，不看应用主机的时钟（M2-P6 复核 A 的疑点 Q-1）：主机的钟拨到 2036 年，给出的仍是数据库的时间', async () => {
+    const databaseNow = async (): Promise<Date> => database.query(async client => (await client.query<{ now: Date }>('SELECT now()')).rows[0]?.now ?? new Date(Number.NaN))
+    const before = await databaseNow()
+    // 只换掉 Date（定时器照旧）：应用里 new Date() 与 Date.now() 都是 2036 年
+    vi.useFakeTimers({ toFake: ['Date'], now: new Date('2036-01-01T00:00:00.000Z') })
+    let now: Date
+    try {
+      expect(new Date().getUTCFullYear()).toBe(2036)
+      now = await app.runtime.get(Clock).now()
+    }
+    finally {
+      vi.useRealTimers()
+    }
+    const after = await databaseNow()
+    expect(now.getTime()).toBeGreaterThanOrEqual(before.getTime())
+    expect(now.getTime()).toBeLessThanOrEqual(after.getTime())
   })
 })

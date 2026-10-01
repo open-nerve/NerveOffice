@@ -399,6 +399,14 @@ const API_DOCUMENTS_REPOSITORY = {
   importNames: ['DocumentsRepository'],
   message: 'documents 的仓储（DocumentsRepository）只在 documents 模块里使用，公开入口转出它只为集成测试专用的入口（app/integration.test-support.ts）：别的模块经服务与访问策略（M2-P6 复核 A 的 S3）',
 }
+// documents 的仓储里一串 id 一律作为一个数组参数（database 模块的 inIdArray，M2-P6 复核 A 的 S-2、B 的 G1）：drizzle 的 inArray、
+// notInArray 把每个 id 展开成一个参数，子树里的文件夹、文档与连带的删除单元没有数量上限，超过 65535 个参数时整条语句失败（每次都失败）。
+// 包的入口与深层路径（drizzle-orm/sql/expressions 等）都拦下；别的模块的 id 列表有上限（分页、批量），不受这条限制
+const API_DOCUMENTS_ID_LISTS = {
+  regex: String.raw`^drizzle-orm(?:$|/)`,
+  importNames: ['inArray', 'notInArray'],
+  message: 'documents 的仓储里一串 id 用 inIdArray（database 模块，整串 id 是一个数组参数）：drizzle 的 inArray、notInArray 把每个 id 展开成一个参数，子树没有数量上限，超过 65535 个参数时整条语句失败（M2-P6 复核 A 的 S-2）',
+}
 // 集成测试专用的入口（M2-P6 复验 R-S4）：它转出数据库句柄与 documents 的仓储，只有 tests/integration 能引用。
 // apps/api 里的任何文件（包括 app 层的其他文件与单元测试）引用它都拦下：按解析之后的路径判断，相对路径、包名的出口
 // （@nerve-office/api/testing）都认得出；别的元素（命令行、各模块）另由模块边界拦下
@@ -424,6 +432,8 @@ interface ApiFileKind {
   trashPurge?: boolean
   /** 经 documents 的公开入口引用它的仓储 DocumentsRepository（只有集成测试专用的入口，为集成测试转出） */
   documentsRepository?: boolean
+  /** 一串 id 只用一个数组参数，不用 drizzle 的 inArray、notInArray（documents 的仓储） */
+  idArraysOnly?: boolean
 }
 
 function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
@@ -443,6 +453,7 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
     ...(kind.trashPurge === true ? [] : [API_TRASH_PURGE]),
     API_TRASH_ENTRY_PURGER,
     ...(kind.documentsRepository === true ? [] : [API_DOCUMENTS_REPOSITORY]),
+    ...(kind.idArraysOnly === true ? [API_DOCUMENTS_ID_LISTS] : []),
   ]
   const syntax = [
     ...BASE_RESTRICTED_SYNTAX,
@@ -611,11 +622,13 @@ export default antfu(
   { name: 'nerve/api-document-transfer', files: ['apps/api/src/modules/admin/**/*.ts'], rules: apiRules({ documentTransfer: true }) },
   { name: 'nerve/api-trash-purge', files: ['apps/api/src/modules/jobs/**/*.ts'], rules: apiRules({ trashPurge: true }) },
   { name: 'nerve/api-documents', files: ['apps/api/src/modules/documents/**/*.ts'], rules: apiRules({ documentTransfer: true, trashPurge: true }) },
-  // 集成测试专用的入口为集成测试转出数据库句柄、documents 的仓储与 spaces 的表定义；app 层的程序接口（index.ts）与 app 层的其他文件同样拿不到
-  // （复验 N6，M2-P6 复核 A 的 S3、复验 R-S4、S1）
+  // 集成测试专用的入口为集成测试转出数据库句柄、documents 的仓储与全部的表定义；app 层的程序接口（index.ts）与 app 层的其他文件同样拿不到
+  // （复验 N6，M2-P6 复核 A 的 S3、复验 R-S4、复核 B 的 B4）
   { name: 'nerve/api-integration-entry-exports', files: [API_INTEGRATION_ENTRY], rules: apiRules({ databaseHandles: true, documentsRepository: true, tables: true }) },
   { name: 'nerve/api-database', files: ['apps/api/src/modules/database/**/*.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true }) },
   { name: 'nerve/api-repositories', files: ['apps/api/src/modules/*/*.repository.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true, tables: true }) },
+  // documents 的仓储另外不用 inArray、notInArray（M2-P6 复核 A 的 S-2）：一串 id 一律是一个数组参数
+  { name: 'nerve/api-documents-repositories', files: ['apps/api/src/modules/documents/*.repository.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true, tables: true, idArraysOnly: true }) },
   // 表定义里的 CHECK 约束要把代码里的常量拼成 SQL 字面量（drizzle-kit 不内联参数）；这里只有 DDL 与常量，没有运行时的输入
   { name: 'nerve/api-schema', files: ['apps/api/src/db/schema/**/*.ts'], rules: apiRules({ databaseLibraries: true, tables: true, rawSql: true }) },
   { name: 'nerve/api-controllers', files: ['apps/api/src/**/*.controller.ts'], rules: apiRules({ controller: true }) },
@@ -735,7 +748,7 @@ export default antfu(
         { type: 'web-build', pattern: 'apps/web/build', partialMatch: false },
         // 后端（P2 设计 §3.1）：模块按目录名区分；表定义按所属模块分目录（src/db/schema/<模块>/index.ts）
         // app 是应用的组装与进程入口（main.ts）；index.ts 是命令行与集成测试共用的程序接口，
-        // integration.test-support.ts 是只给集成测试的入口（数据库句柄、documents 的仓储与 spaces 的表定义，M2-P6 复验 R-S4、S1）
+        // integration.test-support.ts 是只给集成测试的入口（数据库句柄、documents 的仓储与全部的表定义，M2-P6 复验 R-S4、复核 B 的 B4）
         { type: 'api-app', pattern: 'apps/api/src/app', partialMatch: false },
         { type: 'api-shared', pattern: 'apps/api/src/shared', partialMatch: false },
         { type: 'api-module', pattern: 'apps/api/src/modules/*', capture: ['module'], partialMatch: false },
@@ -832,8 +845,8 @@ export default antfu(
           },
           // 命令行经模块的入口，或者经 app 层的程序接口（需要组装多个模块时，例如初始化管理员）
           { from: { element: { type: 'api-cli' } }, allow: { to: { element: { type: ['api-module', 'api-app'], fileInternalPath: PUBLIC_ENTRY } } } },
-          // 集成测试专用的入口转出 spaces 的表定义：集成测试核对迁移之后库里的生成列与表定义一致（手写的 SET EXPRESSION 迁移，M2-P6 复验 S1）
-          { from: { element: { type: 'api-app', fileInternalPath: 'integration.test-support.ts' } }, allow: { to: { element: { type: 'api-schema', captured: { module: 'spaces' }, fileInternalPath: PUBLIC_ENTRY } } } },
+          // 集成测试专用的入口转出全部的表定义：集成测试按它生成建库语句，与迁移建出的库逐项比较（M2-P6 复核 B 的 B4；取代复验 S1 只核对判重键的那一条）
+          { from: { element: { type: 'api-app', fileInternalPath: 'integration.test-support.ts' } }, allow: { to: { element: { type: 'api-schema', fileInternalPath: PUBLIC_ENTRY } } } },
           // 集成测试经 @nerve-office/api 的程序接口建应用，经集成测试专用的入口（@nerve-office/api/testing）拿数据库句柄与仓储（M2-P6 复验 R-S4）
           { from: { element: { type: 'integration-tests' } }, allow: { to: { element: { type: 'api-app', fileInternalPath: [PUBLIC_ENTRY, 'integration.test-support.ts'] } } } },
           {

@@ -52,8 +52,10 @@ type TrashAuditAction = 'documents.deleted' | 'documents.restored' | 'folders.de
  * 回收站（M2-P4 设计 §3.4 第 3 条，规则细则见 specs/P4-S3-回收站的规则.md，US-M2-09）：
  * 按删除单元删除（一份文档，或一个文件夹连同它当时正常状态的整棵子树）、按空间列出、整单恢复、永久删除。
  *
- * 四个写操作都是结构性改动，所以都按同一个范式：不加锁判断 → 空间树的 advisory lock → 空间行 →
- * 文档行（按 id）→ 回收站行 → 锁下重新判断（ADR-007 的锁顺序）。
+ * 四个写操作都是结构性改动，所以都按同一个范式：不加锁判断 → 空间树的 advisory lock → 空间行 → 树里的行，锁下重新判断。
+ * 树里的行按"文档行（按 id）→ 回收站行 → 文件夹行"取（删除时回收站行是新建的，文件夹行由 UPDATE 锁住；删除一份文档不碰文件夹行）。
+ * 这与跨空间移动文件夹的"文件夹行 → 文档行"相反，但不会成环：文件夹行与回收站行只被持有它所在空间树锁的事务改动，
+ * 两边先在树锁上排队（SpaceTreeRepository 的锁顺序说明，M2-P6 复核 A 的 G-1）。
  * 回收站里的东西对普通接口一律"不存在"：仓储的 findById / lockById / accessible 都只取正常状态的行。
  */
 @Injectable()
@@ -113,7 +115,6 @@ export class TrashService {
         spaceId: document.spaceId,
         kind: 'document',
         deletedBy: actor.userId,
-        originSpaceId: document.spaceId,
         originParentId: document.folderId,
         title: document.title,
       }, transaction)
@@ -144,7 +145,8 @@ export class TrashService {
         throw new AppError('NOT_FOUND')
 
       const folderIds = await this.folders.activeSubtreeIds(folder.id, transaction)
-      // 文档行在文件夹之后锁（锁顺序：文件夹行 → 文档行）：保存内容不取树锁，所以要真的锁住它们
+      // 文档行在这里锁住（按 id）：保存内容不取树锁，所以要真的锁住它们。之后是新建的回收站行、trashMany 的 UPDATE 锁住的文件夹行——
+      // "文档行 → 回收站行 → 文件夹行"，与恢复、永久删除相同；文件夹行只被持有本空间树锁的事务改动，排在最后也不会成环
       const documents = await this.documents.lockInFolders(folderIds, folder.spaceId, transaction, 'active')
       // 编辑者只能删"里面只有本人创建的文档"的文件夹：锁下用一条计数语句判断（spec §2）
       // 单独一个错误码（不是 PERMISSION_DENIED）：这一条的说法是"换个人来删"，与"空间已归档，只能查看"
@@ -156,7 +158,6 @@ export class TrashService {
         spaceId: folder.spaceId,
         kind: 'folder',
         deletedBy: actor.userId,
-        originSpaceId: folder.spaceId,
         originParentId: folder.parentId,
         title: folder.name,
       }, transaction)

@@ -18,7 +18,6 @@ export interface TrashEntryRow {
   /** 游标用的删除时间：数据库算出的 UTC 文本，保留微秒 */
   readonly position: string
   readonly expiresAt: Date
-  readonly originSpaceId: string
   /** 被删的那一个对象当时的父文件夹；在空间的根目录下时为空 */
   readonly originParentId: string | null
   readonly title: string
@@ -29,7 +28,6 @@ export interface NewTrashEntry {
   readonly spaceId: string
   readonly kind: TrashEntryKind
   readonly deletedBy: string
-  readonly originSpaceId: string
   readonly originParentId: string | null
   readonly title: string
 }
@@ -50,7 +48,6 @@ const COLUMNS = {
   deletedAt: t.deletedAt,
   position: keysetPosition(t.deletedAt),
   expiresAt: t.expiresAt,
-  originSpaceId: t.originSpaceId,
   originParentId: t.originParentId,
   title: t.title,
 }
@@ -82,7 +79,8 @@ export class TrashEntriesRepository {
 
   /**
    * 锁住删除单元（FOR UPDATE）：恢复与永久删除在锁下重新读它，后到的一方看到它已经不在（NOT_FOUND，spec §7）。
-   * 锁的顺序里回收站行排在文件夹行与文档行之后（ADR-007 的补充）
+   * 回收站行排在这一单的文档行之后、文件夹行之前（恢复与永久删除随后才改文件夹行）；回收站行与文件夹行只被持有树锁的事务改动，
+   * 它们之间的先后不会成环（SpaceTreeRepository 的锁顺序说明）
    */
   async lockById(id: string, transaction: Transaction): Promise<TrashEntryRow | undefined> {
     const [row] = await executorOf(this.db, transaction).select(COLUMNS).from(t).where(eq(t.id, id)).for('update')
@@ -120,7 +118,7 @@ export class TrashEntriesRepository {
 
   /**
    * 整棵子树换空间时，把完全落在这棵子树里的删除单元一起迁过去（P4-S3 spec §6b）：
-   * space_id 与 origin_space_id 一起改；origin_parent_id 不用改，它指向的文件夹也在这棵子树里，跟着搬了。
+   * 只改 space_id；origin_parent_id 不用改，它指向的文件夹也在这棵子树里，跟着搬了。
    * 调用方给出的是子树里的行所属的删除单元 id——S2b 保证一个删除单元不会被拆散在两个空间，所以整单迁移是对的
    */
   async moveToSpace(ids: readonly string[], spaceId: string, transaction: Transaction): Promise<number> {
@@ -128,7 +126,7 @@ export class TrashEntriesRepository {
       return 0
     const rows = await executorOf(this.db, transaction)
       .update(t)
-      .set({ spaceId, originSpaceId: spaceId })
+      .set({ spaceId })
       .where(inIdArray(t.id, ids))
       .returning({ id: t.id })
     return rows.length

@@ -33,8 +33,7 @@ export const INVARIANTS: Readonly<Record<string, string>> = {
   'I11 文件夹的删除单元里的文档在同一单的文件夹里':
     `SELECT d.id FROM documents d JOIN trash_entries t ON t.id = d.trash_entry_id AND t.kind = 'folder'
        LEFT JOIN folders f ON f.id = d.folder_id WHERE f.trash_entry_id IS DISTINCT FROM d.trash_entry_id`,
-  'I12 删除单元的原空间就是它所在的空间':
-    'SELECT t.id FROM trash_entries t WHERE t.origin_space_id <> t.space_id',
+  // I12（删除单元的原空间就是它所在的空间）随多余的 origin_space_id 一起删掉了（M2-P6 复核 B 的 G4）；编号不复用
   'I13 文档的删除单元的原位置就是那份文档的文件夹':
     `SELECT t.id FROM trash_entries t JOIN documents d ON d.trash_entry_id = t.id
      WHERE t.kind = 'document' AND t.origin_parent_id IS DISTINCT FROM d.folder_id`,

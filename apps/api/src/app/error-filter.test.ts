@@ -1,8 +1,15 @@
 import type { ArgumentsHost } from '@nestjs/common'
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common'
 import { describe, expect, it, vi } from 'vitest'
+import { POOL_TIMEOUT_MESSAGE } from '../modules/database/index.ts'
 import { AppError } from '../shared/errors/app-error.ts'
-import { HttpErrorFilter, mapException } from './error-filter.ts'
+import { DATABASE_BUSY_RETRY_AFTER_SECONDS, HttpErrorFilter, mapException } from './error-filter.ts'
+
+/** 与 pg 的 DatabaseError 同样的形状，包在 drizzle 的错误里（消息与参数带着值，不能出现在响应里） */
+function databaseError(code: string): Error {
+  const cause = Object.assign(new Error(`canceling statement: 内部细节 ${code}`), { code, severity: 'ERROR' })
+  return Object.assign(new Error('Failed query: select pg_advisory_xact_lock($1)\nparams: 内部细节', { cause }), { query: 'select pg_advisory_xact_lock($1)', params: ['内部细节'] })
+}
 
 describe('mapException', () => {
   it('AppError：它自己的错误码、状态与说明', () => {
@@ -27,6 +34,19 @@ describe('mapException', () => {
 
   it('其他 HttpException 按意外错误处理：业务代码应当抛 AppError', () => {
     expect(mapException(new ForbiddenException())).toMatchObject({ status: 500, code: 'INTERNAL_ERROR', unexpected: true })
+  })
+
+  it('数据库繁忙（等锁超时、语句超时、取不到连接）→ 503 SERVICE_UNAVAILABLE 带 Retry-After，只回通用说明，不算意外错误（M2-P6 复核 A 的 G-2）', () => {
+    const busy = { status: 503, code: 'SERVICE_UNAVAILABLE', message: '服务暂时不可用，请稍后重试', unexpected: false, headers: { 'Retry-After': String(DATABASE_BUSY_RETRY_AFTER_SECONDS) } }
+    expect(mapException(databaseError('55P03'))).toEqual({ ...busy, busy: 'lock_timeout' })
+    expect(mapException(databaseError('57014'))).toEqual({ ...busy, busy: 'statement_timeout' })
+    expect(mapException(new Error(POOL_TIMEOUT_MESSAGE))).toEqual({ ...busy, busy: 'pool_timeout' })
+    expect(DATABASE_BUSY_RETRY_AFTER_SECONDS).toBe(5)
+    // 别的数据库错误（死锁、违反约束）仍是意外错误
+    expect(mapException(databaseError('40P01'))).toMatchObject({ status: 500, code: 'INTERNAL_ERROR', unexpected: true })
+    expect(mapException(databaseError('23505'))).not.toHaveProperty('busy')
+    // 业务代码自己抛的 AppError 以它为准，即使原因是数据库繁忙
+    expect(mapException(new AppError('NOT_FOUND', undefined, { cause: databaseError('55P03') }))).toMatchObject({ status: 404, code: 'NOT_FOUND' })
   })
 
   it('其他异常 → INTERNAL_ERROR，只回通用说明', () => {
@@ -107,6 +127,27 @@ describe('HttpErrorFilter', () => {
     expect(response.statusCode).toBe(500)
     expect(response.err).toBe(error)
     expect(JSON.stringify(response.body)).not.toContain('内部细节')
+  })
+
+  it('数据库繁忙：503 带 Retry-After，响应里没有数据库的细节；不挂 response.err，记一条 warn（原因与数据库报的错），不记 error', () => {
+    const response = fakeResponse()
+    const log = { warn: vi.fn(), error: vi.fn() }
+    const error = databaseError('55P03')
+    filter.catch(error, hostFor({ id: 'req-busy', log }, response))
+    expect(response.statusCode).toBe(503)
+    expect(response.headers).toEqual({ 'Retry-After': '5' })
+    expect(response.body).toEqual({ error: { code: 'SERVICE_UNAVAILABLE', message: '服务暂时不可用，请稍后重试', requestId: 'req-busy' } })
+    expect(JSON.stringify(response.body)).not.toMatch(/内部细节|55P03|advisory|lock/)
+    expect(response.err).toBeUndefined()
+    expect(log.warn).toHaveBeenCalledExactlyOnceWith({ err: error, reason: 'lock_timeout' }, expect.stringContaining('数据库繁忙'))
+    expect(log.error).not.toHaveBeenCalled()
+  })
+
+  it('数据库繁忙而连接已经关闭：不写响应，warn 照样记下', () => {
+    const log = { warn: vi.fn(), error: vi.fn() }
+    filter.catch(new Error(POOL_TIMEOUT_MESSAGE), hostFor({ id: 'req-busy-2', log }, fakeResponse(false, true)))
+    expect(log.warn).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ reason: 'pool_timeout' }), expect.stringContaining('数据库繁忙'))
+    expect(log.error).not.toHaveBeenCalled()
   })
 
   it('抛出的不是 Error 时包成 Error，原值放在 cause 里', () => {

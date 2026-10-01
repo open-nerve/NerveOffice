@@ -15,6 +15,7 @@
     "@node-rs/argon2": "catalog:",
     "@types/node": "catalog:",
     "@types/pg": "catalog:",
+    "drizzle-kit": "catalog:",
     "drizzle-orm": "catalog:",
     "pg": "catalog:",
     "vitest": "catalog:",

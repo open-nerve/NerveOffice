@@ -1,18 +1,13 @@
-// 迁移（P2 设计 §3.7，ADR-005）：从零执行、重复执行、并发执行、等锁超时、库里不一致时拒绝。
+// 迁移（P2 设计 §3.7，ADR-005）：从零执行、重复执行、并发执行、等锁超时、库里不一致时拒绝；个别迁移在旧库上的效果。
+// 迁移建出的库与表定义逐项一致见 schema-parity.test.ts，从各阶段有数据的库一路迁移到最新见 migrations-with-data.test.ts
 import type { Buffer } from 'node:buffer'
-import type pg from 'pg'
 import type { TestDatabase } from '../support/database.ts'
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import path from 'node:path'
-import { MigrationError, MIGRATIONS_FOLDER, readExpectedMigrations, runMigrations } from '@nerve-office/api'
-import { spaces } from '@nerve-office/api/testing'
-import { is, SQL } from 'drizzle-orm'
-import { getTableConfig, PgDialect } from 'drizzle-orm/pg-core'
+import { MigrationError, readExpectedMigrations, runMigrations } from '@nerve-office/api'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { createTestDatabase } from '../support/database.ts'
+import { migrationsUpTo, removeMigrationFolders } from '../support/migration-folders.ts'
 import { postLogin } from '../support/session-client.ts'
 
 /** 与迁移命令用的是同一把锁（apps/api/src/modules/database/migrations.ts）。 */
@@ -38,30 +33,11 @@ async function appliedCount(database: TestDatabase): Promise<number> {
   })
 }
 
-const folders: string[] = []
-
 afterEach(async () => {
   for (const database of databases.splice(0))
     await database.drop()
-  for (const folder of folders.splice(0))
-    rmSync(folder, { recursive: true, force: true })
+  removeMigrationFolders()
 })
-
-/** 只含到 lastTag 为止的迁移的目录：先把库迁移到那个版本，写入旧结构的数据，再执行之后的迁移。 */
-function migrationsUpTo(lastTag: string): string {
-  const journal = JSON.parse(readFileSync(path.join(MIGRATIONS_FOLDER, 'meta/_journal.json'), 'utf8')) as { entries: { tag: string }[] }
-  const end = journal.entries.findIndex(entry => entry.tag === lastTag)
-  if (end < 0)
-    throw new Error(`没有迁移 ${lastTag}`)
-  const folder = mkdtempSync(path.join(tmpdir(), 'nerve-migrations-'))
-  folders.push(folder)
-  mkdirSync(path.join(folder, 'meta'))
-  const entries = journal.entries.slice(0, end + 1)
-  for (const entry of entries)
-    copyFileSync(path.join(MIGRATIONS_FOLDER, `${entry.tag}.sql`), path.join(folder, `${entry.tag}.sql`))
-  writeFileSync(path.join(folder, 'meta/_journal.json'), JSON.stringify({ ...journal, entries }))
-  return folder
-}
 
 describe('迁移', () => {
   it('从零执行：建出全部的表与触发器；再执行一次什么也不做', async () => {
@@ -425,49 +401,6 @@ describe('0017_m2_p6_space_name_key_blanks（M2-P6 复验 R-M1）', () => {
   })
 })
 
-/** 这张表这一列（生成列）的表达式，经 PostgreSQL 反解析（pg_get_expr）；没有这一列或它不是生成列时为 undefined */
-async function generatedExpressionOf(client: pg.Client, table: string, column: string): Promise<string | undefined> {
-  const result = await client.query<{ expression: string }>(
-    `SELECT pg_get_expr(d.adbin, d.adrelid) AS expression
-       FROM pg_attrdef d
-       JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
-      WHERE d.adrelid = $1::regclass AND a.attname = $2 AND a.attgenerated = 's'`,
-    [table, column],
-  )
-  return result.rows[0]?.expression
-}
-
-describe('迁移与表定义一致：判重键的表达式（M2-P6 复验 S1）', () => {
-  // 改生成列的表达式要手写 SET EXPRESSION 迁移（0017），门禁 schema 只比较表定义与快照、不看迁移的 SQL：
-  // 迁移里少写、多写一个字符都发现不了。这里迁移到最新之后，拿库里的表达式与按表定义新建的列比较，两边都经 PostgreSQL 反解析
-  it('迁移到最新之后，库里 spaces.name_key 的表达式与按表定义（nameKeyOf）新建的生成列逐字相同', async () => {
-    const database = await createTestDatabase()
-    databases.push(database)
-    const generated = getTableConfig(spaces).columns.find(column => column.name === 'name_key')?.generated
-    // 表定义里写成返回 SQL 的函数（引用表自己的列），也可以直接是 SQL
-    const as = generated?.as
-    const expression: unknown = typeof as === 'function' ? (as as () => unknown)() : as
-    if (!is(expression, SQL))
-      throw new Error('spaces.name_key 在表定义里不是用 SQL 写的生成列')
-    const query = new PgDialect().sqlToQuery(expression)
-    // 生成列里只能是常量
-    expect(query.params).toEqual([])
-    const [migrated, fromSchema] = await database.query(async (client) => {
-      await client.query('BEGIN')
-      try {
-        // 临时表与它同名（在 pg_temp 里）：表达式里带表名的列引用 "spaces"."name" 照样指向临时表自己的列
-        await client.query(`CREATE TEMP TABLE spaces (name text NOT NULL, name_key text GENERATED ALWAYS AS (${query.sql}) STORED)`)
-        return [await generatedExpressionOf(client, 'public.spaces', 'name_key'), await generatedExpressionOf(client, 'pg_temp.spaces', 'name_key')]
-      }
-      finally {
-        await client.query('ROLLBACK')
-      }
-    })
-    expect(migrated).toBeDefined()
-    expect(migrated).toBe(fromSchema)
-  })
-})
-
 describe('0009_m2_team_spaces', () => {
   it('P1 的库执行之后：个人空间照样满足约束、没有创建人，已有文档的写入代次为 0；团队空间与成员的约束生效', async () => {
     const database = await emptyDatabase()
@@ -507,6 +440,77 @@ describe('0009_m2_team_spaces', () => {
     expect(await violation('INSERT INTO space_members (space_id, user_id, role) VALUES ($1, $2, \'owner\')', [teamId, owner.userId])).toMatchObject({ code: '23514', constraint: 'space_members_role_check' })
     await database.query(async client => client.query('INSERT INTO space_members (space_id, user_id, role) VALUES ($1, $2, \'admin\')', [teamId, owner.userId]))
     expect(await violation('INSERT INTO space_members (space_id, user_id, role) VALUES ($1, $2, \'viewer\')', [teamId, owner.userId])).toMatchObject({ code: '23505', constraint: 'space_members_pkey' })
-    expect(await violation('UPDATE documents SET write_epoch = -1')).toMatchObject({ code: '23514', constraint: 'documents_write_epoch_check' })
+    // 写入代次不能为负：新写入一行时由 CHECK 拦下（更新时先被 0019 的"只增不减"触发器拦下，见下面 0019 的用例）
+    expect(await violation(
+      'INSERT INTO documents (space_id, type, title, created_by, unit_id, profile, format_version, sdk_version, write_epoch) VALUES ($1, \'sheet\', \'负的\', $2, \'unit\', \'sheet@1\', 1, \'1.0.1\', -1)',
+      [owner.spaceId, owner.userId],
+    )).toMatchObject({ code: '23514', constraint: 'documents_write_epoch_check' })
+  })
+})
+
+/** 一个系统管理员与他的个人空间（直接写库，按最新的结构） */
+async function seedOwner(database: TestDatabase): Promise<{ userId: string, spaceId: string }> {
+  return database.query(async (client) => {
+    const userId = (await client.query<{ id: string }>('INSERT INTO users (username, display_name, password_hash, system_role) VALUES (\'root\', \'root\', \'$argon2id$x\', \'admin\') RETURNING id')).rows[0]?.id ?? ''
+    const spaceId = (await client.query<{ id: string }>('INSERT INTO spaces (type, name, owner_user_id) VALUES (\'personal\', \'root\', $1) RETURNING id', [userId])).rows[0]?.id ?? ''
+    return { userId, spaceId }
+  })
+}
+
+describe('0018_m2_p6_trash_entries_origin_space（M2-P6 复核 B 的 G4）', () => {
+  it('0017 的库上已有删除单元：执行之后多余的原空间一列没了，删除单元的其余各列原样保留', async () => {
+    const database = await emptyDatabase()
+    await runMigrations({ connectionString: database.url, lockTimeoutMs: 10_000, migrationsFolder: migrationsUpTo('0017_m2_p6_space_name_key_blanks') })
+    const { userId, spaceId } = await seedOwner(database)
+    const entries = 'SELECT id, space_id, kind, deleted_by, deleted_at, expires_at, origin_parent_id, title FROM trash_entries ORDER BY id'
+    const before = await database.query(async (client) => {
+      await client.query(
+        `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_space_id, origin_parent_id, title)
+         VALUES ($1, 'document', $2, now() + interval '30 days', $1, NULL, '删掉的文档'),
+                ($1, 'folder', $2, now() + interval '3 days', $1, gen_random_uuid(), '删掉的文件夹')`,
+        [spaceId, userId],
+      )
+      return (await client.query<Record<string, unknown>>(entries)).rows
+    })
+    expect(before).toHaveLength(2)
+
+    expect(await migrateDatabase(database)).toMatchObject({ status: 'applied' })
+    const after = await database.query(async client => ({
+      rows: (await client.query<Record<string, unknown>>(entries)).rows,
+      columns: (await client.query<{ column_name: string }>('SELECT column_name FROM information_schema.columns WHERE table_schema = \'public\' AND table_name = \'trash_entries\' ORDER BY column_name')).rows.map(row => row.column_name),
+    }))
+    expect(after.rows).toEqual(before)
+    expect(after.columns).toEqual(['deleted_at', 'deleted_by', 'expires_at', 'id', 'kind', 'origin_parent_id', 'space_id', 'title'])
+  })
+})
+
+describe('0019_m2_p6_write_epoch_monotonic（M2-P6 复核 B 的 G5）', () => {
+  it('0018 的库上已有代次不为 0 的文档：执行之后原样；之后直接写库减小代次被拒、整条语句回滚，不变、加一与只改别的列照常', async () => {
+    const database = await emptyDatabase()
+    await runMigrations({ connectionString: database.url, lockTimeoutMs: 10_000, migrationsFolder: migrationsUpTo('0018_m2_p6_trash_entries_origin_space') })
+    const { userId, spaceId } = await seedOwner(database)
+    const insertDocument = 'INSERT INTO documents (space_id, type, title, created_by, unit_id, profile, format_version, sdk_version, write_epoch) VALUES ($1, \'sheet\', $3, $2, \'unit\', \'sheet@1\', 1, \'1.0.1\', $4) RETURNING id'
+    const [moved, fresh] = await database.query(async client => [
+      (await client.query<{ id: string }>(insertDocument, [spaceId, userId, '搬过三次的', 3])).rows[0]?.id ?? '',
+      (await client.query<{ id: string }>(insertDocument, [spaceId, userId, '新的', 0])).rows[0]?.id ?? '',
+    ])
+
+    expect(await migrateDatabase(database)).toMatchObject({ status: 'applied' })
+    const epochs = async (): Promise<Record<string, number>> => database.query(async client => Object.fromEntries(
+      (await client.query<{ id: string, write_epoch: number }>('SELECT id, write_epoch FROM documents')).rows.map(row => [row.id, row.write_epoch]),
+    ))
+    expect(await epochs()).toEqual({ [moved]: 3, [fresh]: 0 })
+
+    const violation = async (text: string, values: unknown[] = []): Promise<unknown> => database.query(async client => client.query(text, values).then(() => undefined, (error: unknown) => error))
+    const rejected = { code: '23514', constraint: 'documents_write_epoch_monotonic', table: 'documents', column: 'write_epoch' }
+    expect(await violation('UPDATE documents SET write_epoch = write_epoch - 1 WHERE id = $1', [moved])).toMatchObject(rejected)
+    // 一条语句里只要有一行变小，整条语句回滚：另一行不变（0 → 0）也没有写进去
+    expect(await violation('UPDATE documents SET write_epoch = 0, title = \'改过\'')).toMatchObject(rejected)
+    expect(await database.query(async client => (await client.query<{ title: string }>('SELECT title FROM documents ORDER BY title')).rows)).toEqual([{ title: '搬过三次的' }, { title: '新的' }])
+    // 不变（只改别的列、写回原值）与变大照常
+    expect(await violation('UPDATE documents SET title = \'改名\' WHERE id = $1', [moved])).toBeUndefined()
+    expect(await violation('UPDATE documents SET write_epoch = write_epoch WHERE id = $1', [moved])).toBeUndefined()
+    expect(await violation('UPDATE documents SET write_epoch = write_epoch + 1')).toBeUndefined()
+    expect(await epochs()).toEqual({ [moved]: 4, [fresh]: 1 })
   })
 })

@@ -1,11 +1,12 @@
-// 定时器（M2-P4 设计 §3.4 第 6 条）：按间隔触发、时刻取自时钟、一轮结束才排下一轮、
+// 定时器（M2-P4 设计 §3.4 第 6 条）：启动之后先等一小段跑第一轮、之后按间隔触发、时刻取自时钟、一轮结束才排下一轮、
 // 停止之后不再触发、正在跑的一轮等它收尾、一轮失败不影响后面几轮。用假时钟与假的清理，不碰数据库。
 import type { AppConfig } from '../config/index.ts'
+import type { DatabaseTime } from '../database/index.ts'
 import type { TrashPurgeJob, TrashPurgeRound } from './trash-purge.job.ts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AppLogger, createRootLogger, RequestContextStore } from '../logging/index.ts'
-import { Clock, SystemClock } from './clock.ts'
-import { nextDelayMs, TrashPurgeScheduler } from './trash-purge.scheduler.ts'
+import { Clock, DatabaseClock } from './clock.ts'
+import { FIRST_ROUND_DELAY_MS, firstDelayMs, nextDelayMs, TrashPurgeScheduler } from './trash-purge.scheduler.ts'
 
 const INTERVAL_MS = 60_000
 /** 一定跨过一轮的等待（间隔的 ±10%） */
@@ -21,7 +22,7 @@ class FakeClock extends Clock {
     this.#current = start
   }
 
-  now(): Date {
+  async now(): Promise<Date> {
     return this.#current
   }
 
@@ -37,10 +38,10 @@ function deferred<T>() {
   }), resolve }
 }
 
-function setup(enabled = true) {
+function setup(enabled = true, intervalMs = INTERVAL_MS) {
   const clock = new FakeClock(new Date('2026-09-30T02:00:00.000Z'))
   const job = { runOnce: vi.fn(async () => ROUND) }
-  const config = { jobs: { trashPurge: { enabled, intervalMs: INTERVAL_MS, batchSize: 50 } } } as AppConfig
+  const config = { jobs: { trashPurge: { enabled, intervalMs, batchSize: 50 } } } as AppConfig
   const error = vi.spyOn(AppLogger.prototype, 'error')
   const logger = new AppLogger(createRootLogger({ level: 'silent' }), new RequestContextStore())
   return { clock, job, error, scheduler: new TrashPurgeScheduler(job as unknown as TrashPurgeJob, clock, config, logger) }
@@ -69,6 +70,45 @@ describe('TrashPurgeScheduler', () => {
     await vi.advanceTimersByTimeAsync(PAST_ONE_ROUND)
     expect(job.runOnce).toHaveBeenCalledTimes(2)
     expect(job.runOnce).toHaveBeenLastCalledWith(new Date('2026-10-30T02:00:00.000Z'))
+    await scheduler.onModuleDestroy()
+  })
+
+  it('启动之后先等一小段（1 分钟）跑第一轮，不等满一个间隔；之后按间隔（M2-P6 复核 A 的 G-4）', async () => {
+    // 抖动取中间值：等待正好是 1 分钟与 1 小时，前后差 1 毫秒都看得出来
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    const hour = 3_600_000
+    const { scheduler, job } = setup(true, hour)
+    scheduler.onModuleInit()
+    await vi.advanceTimersByTimeAsync(FIRST_ROUND_DELAY_MS - 1)
+    expect(job.runOnce).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(job.runOnce).toHaveBeenCalledTimes(1)
+    // 第二轮按间隔
+    await vi.advanceTimersByTimeAsync(hour - 1)
+    expect(job.runOnce).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(job.runOnce).toHaveBeenCalledTimes(2)
+    await scheduler.onModuleDestroy()
+  })
+
+  it('间隔比那一小段还短（测试用的小间隔）：第一轮也只等一个间隔', async () => {
+    const { scheduler, job } = setup(true, 1_000)
+    scheduler.onModuleInit()
+    await vi.advanceTimersByTimeAsync(1_100)
+    expect(job.runOnce).toHaveBeenCalledTimes(1)
+    await scheduler.onModuleDestroy()
+  })
+
+  it('取不到时间（例如数据库连不上）：这一轮不跑，记日志，下一轮照常', async () => {
+    const { scheduler, job, clock, error } = setup()
+    const failure = new Error('数据库连不上')
+    vi.spyOn(clock, 'now').mockRejectedValueOnce(failure)
+    scheduler.onModuleInit()
+    await vi.advanceTimersByTimeAsync(PAST_ONE_ROUND)
+    expect(job.runOnce).not.toHaveBeenCalled()
+    expect(error).toHaveBeenCalledExactlyOnceWith(expect.stringContaining('没有跑完'), { err: failure })
+    await vi.advanceTimersByTimeAsync(PAST_ONE_ROUND)
+    expect(job.runOnce).toHaveBeenCalledTimes(1)
     await scheduler.onModuleDestroy()
   })
 
@@ -135,9 +175,21 @@ describe('nextDelayMs', () => {
   })
 })
 
-describe('SystemClock', () => {
-  it('给出系统当前时间', () => {
-    vi.setSystemTime(new Date('2026-09-30T02:00:00.000Z'))
-    expect(new SystemClock().now()).toEqual(new Date('2026-09-30T02:00:00.000Z'))
+describe('firstDelayMs', () => {
+  it('第一轮之前等 FIRST_ROUND_DELAY_MS（1 分钟）与间隔里短的那个，同样带 ±10% 的抖动', () => {
+    expect(FIRST_ROUND_DELAY_MS).toBe(60_000)
+    expect(firstDelayMs(3_600_000, () => 0.5)).toBe(60_000)
+    expect(firstDelayMs(86_400_000, () => 0)).toBe(54_000)
+    expect(firstDelayMs(1_000, () => 0.5)).toBe(1_000)
+    expect(firstDelayMs(1_000, () => 0)).toBe(900)
+  })
+})
+
+describe('DatabaseClock', () => {
+  it('给出数据库的当前时间，不看应用主机的时钟（M2-P6 复核 A 的疑点 Q-1）', async () => {
+    vi.setSystemTime(new Date('2030-01-01T00:00:00.000Z'))
+    const time = { now: vi.fn(async () => new Date('2026-09-30T02:00:00.000Z')) }
+    await expect(new DatabaseClock(time as unknown as DatabaseTime).now()).resolves.toEqual(new Date('2026-09-30T02:00:00.000Z'))
+    expect(time.now).toHaveBeenCalledOnce()
   })
 })

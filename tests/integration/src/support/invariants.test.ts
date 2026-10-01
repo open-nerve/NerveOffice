@@ -42,11 +42,11 @@ function writer(client: pg.Client, owner: string) {
          VALUES ($1, $2, 'sheet', '文档', $3, gen_random_uuid()::text, 'sheet@1', 1, 'test', CASE WHEN $4::uuid IS NULL THEN 'active' ELSE 'trashed' END, $4) RETURNING id`,
         [spaceId, options.folderId ?? null, owner, options.entry ?? null],
       )).rows[0]!.id,
-    entry: async (spaceId: string, kind: 'document' | 'folder', options: { originSpaceId?: string, originParentId?: string } = {}): Promise<string> =>
+    entry: async (spaceId: string, kind: 'document' | 'folder', options: { originParentId?: string } = {}): Promise<string> =>
       (await client.query<{ id: string }>(
-        `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_space_id, origin_parent_id, title)
-         VALUES ($1, $2, $3, now() + interval '30 days', $4, $5, '删掉的') RETURNING id`,
-        [spaceId, kind, owner, options.originSpaceId ?? spaceId, options.originParentId ?? null],
+        `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_parent_id, title)
+         VALUES ($1, $2, $3, now() + interval '30 days', $4, '删掉的') RETURNING id`,
+        [spaceId, kind, owner, options.originParentId ?? null],
       )).rows[0]!.id,
   }
 }
@@ -87,8 +87,6 @@ describe('数据不变量的扫描（M2-P6 复核 B 的 B5）', () => {
       const loose = await w.entry(first, 'folder')
       await w.folder(first, { entry: loose })
       await w.document(first, { entry: loose })
-      // I12：原空间不是它所在的空间
-      await w.document(first, { entry: await w.entry(first, 'document', { originSpaceId: second }) })
       // I13：文档的删除单元的原位置不是那份文档的文件夹
       await w.document(first, { entry: await w.entry(first, 'document', { originParentId: shallow }) })
       // I14：文件夹的删除单元的原位置不是根的父文件夹

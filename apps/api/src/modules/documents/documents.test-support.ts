@@ -418,7 +418,7 @@ export class FakeStore {
       for (const id of ids) {
         const row = this.trashEntries.get(id)
         if (row !== undefined)
-          this.trashEntries.set(id, { ...row, spaceId, originSpaceId: spaceId })
+          this.trashEntries.set(id, { ...row, spaceId })
       }
       return ids.length
     }),

@@ -190,8 +190,8 @@ async function seedSeparatelyTrashed(spaceId: string, folderId: string, count: n
       [spaceId, folderId, amy.id, count],
     )).rows.map(row => row.id)
     const entries = (await client.query<{ id: string }>(
-      `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_space_id, origin_parent_id, title)
-       SELECT $1, 'document', $2, now() + make_interval(days => $3::int), $1, $4, '连带'
+      `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_parent_id, title)
+       SELECT $1, 'document', $2, now() + make_interval(days => $3::int), $4, '连带'
        FROM unnest($5::uuid[]) RETURNING id`,
       [spaceId, amy.id, TRASH_RETENTION_DAYS, folderId, documents],
     )).rows.map(row => row.id)
@@ -762,8 +762,8 @@ describe('US-M2-09 跨空间移动与删除单元（spec §6b）', () => {
 
     expect(await restored(await restore(amySession, documentEntry))).toMatchObject({ spaceId: to, folderId: inside.id, movedToRoot: false })
     expect(await documentsOf([document])).toMatchObject({ [document]: { status: 'active', space: to, folder: inside.id } })
-    // origin_space_id 也跟着改了
-    expect(await count('SELECT count(*) FROM trash_entries WHERE space_id = $1 AND origin_space_id = $1', [to])).toBe(1)
+    // 文件夹的那一单也跟着搬到了新空间
+    expect(await count('SELECT count(*) FROM trash_entries WHERE space_id = $1', [to])).toBe(1)
   })
 })
 
@@ -842,7 +842,7 @@ describe('US-M2-14 回收站的并发（spec §7）', () => {
       // 艾米在新空间里也是空间管理员，所以挡住它的只能是锁下"这一单已经不在我锁着的空间里"这一条
       change: async (client) => {
         await client.query('UPDATE documents SET space_id = $2 WHERE id = $1', [document, to])
-        await client.query('UPDATE trash_entries SET space_id = $2, origin_space_id = $2 WHERE id = $1', [entryId, to])
+        await client.query('UPDATE trash_entries SET space_id = $2 WHERE id = $1', [entryId, to])
       },
     })
     expect(response.status).toBe(404)

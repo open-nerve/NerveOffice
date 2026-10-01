@@ -41,7 +41,7 @@ describe('TrashService.deleteDocument', () => {
     await service.deleteDocument(member(ALICE), document.id, HTTP_ORIGIN)
 
     const entry = [...store.trashEntries.values()][0]
-    expect(entry).toMatchObject({ spaceId: ALICE_SPACE, kind: 'document', deletedBy: ALICE, originSpaceId: ALICE_SPACE, originParentId: folder.id, title: '周报' })
+    expect(entry).toMatchObject({ spaceId: ALICE_SPACE, kind: 'document', deletedBy: ALICE, originParentId: folder.id, title: '周报' })
     expect(store.entryOfDocument(document.id)).toBe(entry?.id)
     expect(store.writeEpochs.get(document.id)).toBe(1)
     expect(store.revocations).toEqual([{ kind: 'documents', documentIds: [document.id] }])

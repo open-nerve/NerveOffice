@@ -5,6 +5,7 @@ import pg from 'pg'
 import { APP_CONFIG } from '../config/index.ts'
 import { AppLogger } from '../logging/index.ts'
 import { DatabaseReadiness } from './database-readiness.ts'
+import { DatabaseTime } from './database-time.ts'
 import { createDatabase, DATABASE, PG_POOL } from './database.ts'
 import { ExclusiveRunner } from './exclusive-runner.ts'
 import { createPool } from './pool.ts'
@@ -36,10 +37,11 @@ class PoolLifecycle implements OnApplicationShutdown {
       useFactory: (pool: pg.Pool) => createDatabase(pool),
     },
     DatabaseReadiness,
+    DatabaseTime,
     TransactionRunner,
     ExclusiveRunner,
     PoolLifecycle,
   ],
-  exports: [DATABASE, DatabaseReadiness, TransactionRunner, ExclusiveRunner],
+  exports: [DATABASE, DatabaseReadiness, DatabaseTime, TransactionRunner, ExclusiveRunner],
 })
 export class DatabaseModule {}

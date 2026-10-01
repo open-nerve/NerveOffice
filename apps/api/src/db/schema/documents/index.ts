@@ -17,8 +17,9 @@ const SDK_VERSION_MAX_LENGTH = 64
 
 /**
  * 回收站里的一个删除单元（M2-P4 设计 §3.3）：一次删除操作生成一条，子树里的每一行都指向它。
- * 原位置（origin_space_id、origin_parent_id）只是记录，不做外键：原来的空间或父文件夹可能已经不在了，
- * 恢复时按它当前是否还在判断（与审计表的 actor_id 同样的理由）。
+ * 原位置只记父文件夹（origin_parent_id），不做外键：父文件夹之后可能被永久删除，恢复时按它当前是否还在判断
+ * （与审计表的 actor_id 同样的理由）。原来的空间不另记：删除单元总在它的行所在的空间里，跨空间移动时随子树一起搬
+ * （M2-P6 复核 B 的 G4 删掉了总是等于 space_id、也没有人读的 origin_space_id）。
  */
 export const trashEntries = pgTable('trash_entries', {
   id: uuid('id').primaryKey().default(sql`uuidv7()`),
@@ -29,7 +30,6 @@ export const trashEntries = pgTable('trash_entries', {
   deletedAt: timestamp('deleted_at', { withTimezone: true }).notNull().defaultNow(),
   // 到期自动永久删除的时刻（删除时的时间加 30 天）
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
-  originSpaceId: uuid('origin_space_id').notNull(),
   originParentId: uuid('origin_parent_id'),
   // 删除时的标题或名称：回收站的列表不必去联表读已经在回收站里的行
   title: text('title').notNull(),
@@ -106,7 +106,8 @@ export const documents = pgTable('documents', {
   formatVersion: integer('format_version').notNull(),
   // 最近一次写入时的 Univer 版本
   sdkVersion: text('sdk_version').notNull(),
-  // 写入代次（00 号计划书 §6.4，M2-P2 设计 §3.7）：删除与跨空间移动在同一个事务里加一；M3 的租约与保存按它与修订号条件写入
+  // 写入代次（00 号计划书 §6.4，M2-P2 设计 §3.7）：删除与跨空间移动在同一个事务里加一；M3 的租约与保存按它与修订号条件写入。
+  // 只增不减由迁移里手写的触发器 documents_write_epoch_monotonic 兜底（M2-P6 复核 B 的 G5），表定义里写不出触发器
   writeEpoch: integer('write_epoch').notNull().default(0),
 }, table => [
   check('documents_type_check', oneOf(table.type, DOCUMENT_TYPES)),
