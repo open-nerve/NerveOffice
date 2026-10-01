@@ -4,6 +4,7 @@ import { Inject, Injectable, Module } from '@nestjs/common'
 import pg from 'pg'
 import { APP_CONFIG } from '../config/index.ts'
 import { AppLogger } from '../logging/index.ts'
+import { CommitLedger } from './commit-ledger.ts'
 import { DatabaseReadiness } from './database-readiness.ts'
 import { DatabaseTime } from './database-time.ts'
 import { createDatabase, DATABASE, PG_POOL } from './database.ts'
@@ -36,12 +37,14 @@ class PoolLifecycle implements OnApplicationShutdown {
       inject: [PG_POOL],
       useFactory: (pool: pg.Pool) => createDatabase(pool),
     },
+    // 这个应用里每个请求有没有事务已经提交（M2-P6 第 3 片复验）：事务运行器记账，HTTP 管线的中间件与异常过滤器经 app 层取用
+    CommitLedger,
     DatabaseReadiness,
     DatabaseTime,
     TransactionRunner,
     ExclusiveRunner,
     PoolLifecycle,
   ],
-  exports: [DATABASE, DatabaseReadiness, DatabaseTime, TransactionRunner, ExclusiveRunner],
+  exports: [DATABASE, CommitLedger, DatabaseReadiness, DatabaseTime, TransactionRunner, ExclusiveRunner],
 })
 export class DatabaseModule {}

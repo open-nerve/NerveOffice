@@ -1,9 +1,11 @@
 // 结构性改动的锁（US-M2-14，M2-P6 复核 A 的 M-1、B 的 B1）：两个连接构造的确定交错，不靠固定时长的等待。
 // 1. 树锁是按取锁之前读到的空间取的：等锁期间对象被跨空间移走，写操作都要在锁下发现"它已经不在我锁着的空间里"，
-//    按 NOT_FOUND 回答、什么也不改。八处写操作每处一条；恢复与到期的清理两处另见 trash.test.ts、jobs/trash-purge.test.ts。
+//    按 NOT_FOUND 回答、什么也不改。这样的核对共 8 处：文件夹与文档的改名、移动，删除文档、删除文件夹各一处（这里各一条），
+//    恢复与永久删除共用一处（这里是永久删除的那一条，恢复见 trash.test.ts），到期的清理一处（跳过这一单，见 jobs/trash-purge.test.ts）。
 //    再用两条用例说明这条核对是承重的：去掉它，改动就在错的树锁下进行，另一个空间里并发的改动把正常的东西放进回收站的文件夹。
 // 2. 锁下才展开子树：删除文件夹、跨空间移动文件夹等树锁期间，子树里新建了子文件夹、放进了文档，它们也要一起被带上。
 // 3. 与归档、移出成员互斥（空间行的共享锁）：操作先取完锁时，归档与移出等它提交；归档与移出先取完锁时，操作等它们提交、锁下再判断。
+//    结构性的写操作每个都有两个方向的一条（M2-P6 第 3 片复验补上新建文件夹、移动文件夹与移动文档）；到期清理那一处见 jobs/trash-purge.test.ts。
 // 每条用例之后核对库里只由服务保证的不变量（回收站的文件夹下没有正常的东西；行与父文件夹、删除单元在同一个空间……）。
 //
 // 做法：空间树的锁由测试的连接直接持有（与服务同一个键）；"先取完锁的操作"停在写审计之前——给 audit_events 装一个
@@ -409,21 +411,29 @@ interface BensOperation {
   readonly run: () => Promise<Response>
 }
 
-type OperationName = 'renameFolder' | 'deleteFolder' | 'restore' | 'purge' | 'deleteDocument' | 'moveDocumentWithin'
+type OperationName = 'createFolder' | 'renameFolder' | 'moveFolder' | 'deleteFolder' | 'restore' | 'purge' | 'deleteDocument' | 'moveDocumentWithin' | 'moveDocument'
 
 /** 本（空间管理员）在这个空间里准备好的一个操作：文件夹、文档与删除单元都已经摆好 */
 async function bensOperation(spaceId: string, name: OperationName): Promise<BensOperation> {
   const folder = await newFolder(spaceId, '本的文件夹', undefined, benSession)
   const document = await seedDocument(database, { spaceId, createdBy: ben.id, title: '本的文档' })
   switch (name) {
+    case 'createFolder':
+      return { action: 'folders.created', run: async () => call(benSession, '/api/folders', 'POST', { spaceId, name: '新建的', requestId: randomUUID() }) }
     case 'renameFolder':
       return { action: 'folders.renamed', run: async () => call(benSession, `/api/folders/${folder}`, 'PATCH', { name: '改过' }) }
+    case 'moveFolder': {
+      const target = await newFolder(spaceId, '目标文件夹', undefined, benSession)
+      return { action: 'folders.moved', run: async () => call(benSession, `/api/folders/${folder}/move`, 'POST', { spaceId, folderId: target }) }
+    }
     case 'deleteFolder':
       return { action: 'folders.deleted', run: async () => call(benSession, `/api/folders/${folder}`, 'DELETE') }
     case 'deleteDocument':
       return { action: 'documents.deleted', run: async () => call(benSession, `/api/documents/${document.id}`, 'DELETE') }
     case 'moveDocumentWithin':
       return { action: 'documents.moved', run: async () => call(benSession, `/api/documents/${document.id}`, 'PATCH', { folderId: folder }) }
+    case 'moveDocument':
+      return { action: 'documents.moved', run: async () => call(benSession, `/api/documents/${document.id}/move`, 'POST', { spaceId, folderId: folder }) }
     case 'restore':
     case 'purge': {
       expect((await call(benSession, `/api/documents/${document.id}`, 'DELETE')).status).toBe(204)
@@ -444,7 +454,7 @@ async function contentsOf(spaceId: string): Promise<unknown> {
   }))
 }
 
-const OPERATIONS: readonly OperationName[] = ['renameFolder', 'deleteFolder', 'restore', 'purge', 'deleteDocument', 'moveDocumentWithin']
+const OPERATIONS: readonly OperationName[] = ['createFolder', 'renameFolder', 'moveFolder', 'deleteFolder', 'restore', 'purge', 'deleteDocument', 'moveDocumentWithin', 'moveDocument']
 
 describe('US-M2-14 结构性改动与归档、移出成员互斥：空间行的共享锁（M2-P6 复核 A 的 Aa、Ab）', () => {
   it('删除文件夹先取完锁：归档等它提交（空间行），之后两边都成功', async () => {

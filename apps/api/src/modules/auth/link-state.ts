@@ -1,5 +1,6 @@
 import type { InvitationStatus, LinkInvalidReason } from '@nerve-office/contracts'
 import type { AuditEvent } from '../audit/index.ts'
+import { AppError } from '../../shared/errors/app-error.ts'
 
 /** 一次性链接记录的状态（邀请与重置共用）。"已过期"由查询时数据库算出（expired），不靠定时任务改状态 */
 export interface LinkRecordState {
@@ -38,12 +39,16 @@ export type LinkLookup<T>
     | { readonly usable: false, readonly rejection: LinkRejection }
 
 /**
- * 接受或完成时，事务里锁住记录复核之后的结果：完成了；或者不能用的原因（查令牌之后被用过、作废、账户停用）。
- * 不能用时事务之外再交给 LinkAttempts.rejected（记审计），与查令牌时就不能用的一样（M2-P1 审查 A10）
+ * 接受或完成时，事务里锁住记录复核发现已经不能用（查令牌之后被用过、作废、账户停用）：回滚用。这个事务什么也没改，
+ * 回滚而不是提交，不留下一次提交——之后记审计、按记录计数时遇到数据库繁忙，回答的仍是确定的 503（M2-P6 第 3 片复验）。
+ * 事务之外再交给 LinkAttempts.rejected（记审计），与查令牌时就不能用的一样（M2-P1 审查 A10）。
+ * 是 AppError：事务运行器只把以 AppError 结束的事务的连接放回池里；万一漏接，客户端得到的也是 LINK_INVALID 与原因
  */
-export type LinkOutcome<T>
-  = | { readonly done: true, readonly value: T }
-    | { readonly done: false, readonly reason: LinkInvalidReason }
+export class LinkUnusableDuringRequest extends AppError {
+  constructor(readonly reason: LinkInvalidReason) {
+    super('LINK_INVALID', undefined, { details: { reason } })
+  }
+}
 
 /** 事务里复核不通过时的拒绝：记录找到过（id 与审计的对象），原因是复核时的 */
 export function rejectionOf(reason: LinkInvalidReason, recordId: string, target: AuditEvent['target']): LinkRejection {

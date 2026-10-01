@@ -167,7 +167,8 @@ export function isDefiniteRejection(error: unknown): error is ApiError {
  * 写操作的结果未知：请求可能已经生效，只是没有收到确定的回答（网络中断、服务端或代理出错、回包读不出来）。
  * 与 isDefiniteRejection 的区别只在一处：服务端自己回答的 503 SERVICE_UNAVAILABLE 结果是确定的"没有生效"——
  * 等待密码哈希的请求太多（DEF-015）发生在写入之前；数据库繁忙（等锁超时、语句超时、取不到连接）时事务整体回滚
- * （M2-P6 第 3 片复核 A 的 G-2）。界面据此提示"可能已经生效"（M2-P6 复核 G-1、G-2）
+ * （M2-P6 第 3 片复核 A 的 G-2），而且服务端只在这个请求里还没有事务提交过时才回 503，提交之后遇到繁忙回 500
+ * （M2-P6 第 3 片复验）。界面据此提示"可能已经生效"（M2-P6 复核 G-1、G-2）
  */
 export function isUnknownOutcome(error: unknown): boolean {
   if (error instanceof ApiError)

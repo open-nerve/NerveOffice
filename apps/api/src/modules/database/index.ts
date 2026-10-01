@@ -1,5 +1,6 @@
 export { databaseBusyReasonOf, POOL_TIMEOUT_MESSAGE } from './busy-errors.ts'
 export type { DatabaseBusyReason } from './busy-errors.ts'
+export { CommitLedger } from './commit-ledger.ts'
 export { inSavepoint, isUniqueViolation } from './constraint-errors.ts'
 export { DatabaseReadiness, READINESS_CACHE_MS, READINESS_TIMEOUT_MS } from './database-readiness.ts'
 export type { DatabaseReadinessResult } from './database-readiness.ts'

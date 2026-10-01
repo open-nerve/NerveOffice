@@ -3,6 +3,7 @@ import type { AppConfig } from '../config/index.ts'
 import type { AttemptAdmission, AttemptTicket, ThrottleDimension } from './attempt-throttle.ts'
 import { Inject, Injectable } from '@nestjs/common'
 import { APP_CONFIG } from '../config/index.ts'
+import { AppLogger } from '../logging/index.ts'
 import { AttemptThrottle } from './attempt-throttle.ts'
 import { LoginThrottleRepository } from './login-throttle.repository.ts'
 import { accountAddressKey, accountDigest, addressKey, keyDigest, linkAddressKey, linkRecordKey } from './throttle-keys.ts'
@@ -33,8 +34,9 @@ export class LoginThrottle {
   constructor(
     private readonly repository: LoginThrottleRepository,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
+    logger: AppLogger,
   ) {
-    this.#attempts = new AttemptThrottle(repository)
+    this.#attempts = new AttemptThrottle(repository, logger.with({ module: 'auth' }))
   }
 
   async admit(attempt: LoginAttempt): Promise<Admission> {
@@ -74,8 +76,9 @@ export class LinkThrottle {
   constructor(
     repository: LoginThrottleRepository,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
+    logger: AppLogger,
   ) {
-    this.#attempts = new AttemptThrottle(repository)
+    this.#attempts = new AttemptThrottle(repository, logger.with({ module: 'auth' }))
   }
 
   async admit(clientIp: string | undefined): Promise<Admission> {

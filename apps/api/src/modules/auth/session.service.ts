@@ -60,12 +60,13 @@ export class SessionService {
   /**
    * 这条令牌是不是因为换令牌（ROTATION_REASONS）而失效的（复验 N3）。会话守卫在会话无效时问它：是的话仍回"登录已过期"，
    * 但不清除 Cookie——换令牌之前发出、之后才处理的请求，响应晚于新 Cookie 到达时，清除会把新的删掉，本人随即掉线。
-   * 退出、过期、停用、重置密码、修改密码时别的设备上的会话等其他原因照旧清除。令牌格式不对时不查库
+   * 退出、过期、停用、重置密码、修改密码时别的设备上的会话等其他原因照旧清除。令牌格式不对时不查库。
+   * 退出时在退出的事务里问（传入事务）：提交之后不再访问数据库（M2-P6 第 3 片复验）
    */
-  async invalidatedByRotation(token: string): Promise<boolean> {
+  async invalidatedByRotation(token: string, transaction?: Transaction): Promise<boolean> {
     if (!isWellFormedSessionToken(token))
       return false
-    return this.repository.revokedFor(sessionTokenDigest(token), ROTATION_REASONS)
+    return this.repository.revokedFor(sessionTokenDigest(token), ROTATION_REASONS, transaction)
   }
 
   /** 距上次记录超过 1 分钟时顺延空闲过期（不超过绝对过期） */

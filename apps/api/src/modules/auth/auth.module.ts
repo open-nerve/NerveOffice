@@ -18,6 +18,7 @@ import { LinkThrottle, LoginThrottle } from './login-throttle.ts'
 import { PasswordResetsRepository } from './password-resets.repository.ts'
 import { PasswordResetsService } from './password-resets.service.ts'
 import { SessionCookieSettings } from './session-cookie.ts'
+import { SessionResponses } from './session-response.ts'
 import { SessionGuard } from './session.guard.ts'
 import { SessionService } from './session.service.ts'
 import { SessionsRepository } from './sessions.repository.ts'
@@ -41,6 +42,7 @@ import { SessionsRepository } from './sessions.repository.ts'
     InvitationsService,
     PasswordResetsRepository,
     PasswordResetsService,
+    SessionResponses,
     AuthService,
     SessionGuard,
     CsrfGuard,

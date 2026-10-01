@@ -4,7 +4,8 @@ import type { AppConfig } from '../config/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { User } from '../users/index.ts'
 import type { InvitationRecord } from './invitations.repository.ts'
-import type { LinkLookup, LinkOutcome } from './link-state.ts'
+import type { LinkLookup } from './link-state.ts'
+import type { LoginResult } from './session-response.ts'
 import { ADMIN_PAGE_SIZE, INVITATION_LIFETIME_HOURS, oneTimeLinkUrl } from '@nerve-office/contracts'
 import { Inject, Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
@@ -14,21 +15,16 @@ import { APP_CONFIG } from '../config/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { AppLogger } from '../logging/index.ts'
 import { AccountCreationService, UsersService } from '../users/index.ts'
-import { withHashing } from './attempt-errors.ts'
+import { releasingIfBusy, settleQuietly } from './attempt-errors.ts'
 import { InvitationsRepository } from './invitations.repository.ts'
 import { LinkAttempts } from './link-attempts.ts'
-import { invitationStatusOf, rejectionOf, usabilityOf } from './link-state.ts'
+import { invitationStatusOf, LinkUnusableDuringRequest, rejectionOf, usabilityOf } from './link-state.ts'
 import { generateLinkToken, linkTokenDigest } from './link-token.ts'
 import { LoginLockouts } from './login-lockouts.ts'
+import { SessionResponses } from './session-response.ts'
 import { SessionService } from './session.service.ts'
 
 type HttpOrigin = Extract<AuditOrigin, { source: 'http' }>
-
-/** 接受邀请之后：新账户与它的会话令牌（只交给 Cookie） */
-export interface AcceptedInvitation {
-  readonly user: User
-  readonly sessionToken: string
-}
 
 function stateOf(record: InvitationRecord) {
   return { completedAt: record.acceptedAt, revokedAt: record.revokedAt, expired: record.expired }
@@ -68,6 +64,7 @@ export class InvitationsService {
     private readonly accounts: AccountCreationService,
     private readonly users: UsersService,
     private readonly sessions: SessionService,
+    private readonly responses: SessionResponses,
     private readonly attempts: LinkAttempts,
     private readonly lockouts: LoginLockouts,
     private readonly audit: AuditService,
@@ -112,19 +109,22 @@ export class InvitationsService {
     return { invitation: toInvitation(record, summaryOf(actor, actor.id)), url: this.linkFor(token) }
   }
 
-  /** 作废：已接受或已作废的原样返回，不记审计 */
+  /**
+   * 作废：已接受或已作废的原样返回，不记审计。签发人的名字在同一个事务里补上：提交之后不再访问数据库——
+   * 提交之后才读的话，这一步遇到数据库繁忙时邀请已经作废，客户端却只能得到"结果未知"（M2-P6 第 3 片复验）
+   */
   async revoke(actor: User, invitationId: string, origin: HttpOrigin): Promise<Invitation> {
-    const record = await this.transactions.run(async (transaction) => {
+    return this.transactions.run(async (transaction) => {
       await this.users.lockActingAdmin(actor.id, transaction)
       const current = await this.repository.findByIdForUpdate(invitationId, transaction)
       if (current === undefined)
         throw new AppError('NOT_FOUND')
-      if (current.acceptedAt !== null || current.revokedAt !== null)
-        return current
-      return await this.revokeOpen(actor, current, {}, origin, transaction) ?? current
+      const record = current.acceptedAt !== null || current.revokedAt !== null
+        ? current
+        : await this.revokeOpen(actor, current, {}, origin, transaction) ?? current
+      const issuers = await this.users.findByIds([record.createdBy], transaction)
+      return toInvitation(record, summaryOf(issuers.get(record.createdBy), record.createdBy))
     })
-    const issuers = await this.users.findByIds([record.createdBy])
-    return toInvitation(record, summaryOf(issuers.get(record.createdBy), record.createdBy))
   }
 
   /**
@@ -166,14 +166,17 @@ export class InvitationsService {
     return new Map(rows.map(row => [row.id, row.username]))
   }
 
-  /** 公开：用令牌查看，只给出登录名与显示名 */
+  /**
+   * 公开：用令牌查看，只给出登录名与显示名。查令牌时数据库繁忙：还不知道令牌对不对，退回名额（releasingIfBusy）；
+   * 令牌可用时退回名额，尽力而为（M2-P6 第 3 片复验 建议 1）：查看是只读的，退回失败只记日志，照样给出结果
+   */
   async inspect(token: string, origin: HttpOrigin): Promise<InspectLinkResponse> {
     const ticket = await this.attempts.admit(origin)
-    const found = await this.lookup(token)
+    const found = await releasingIfBusy(ticket, this.#logger, async () => this.lookup(token))
     if (!found.usable)
       throw await this.attempts.rejected(ticket, 'invitation', found.rejection, origin)
     const { record } = found
-    await ticket.succeeded()
+    await settleQuietly(async () => ticket.succeeded(), this.#logger)
     return { username: record.username, displayName: record.displayName, expiresAt: record.expiresAt.toISOString() }
   }
 
@@ -181,44 +184,49 @@ export class InvitationsService {
    * 公开：接受邀请。先查令牌再算新密码的哈希（无效的令牌不触发哈希计算），都在事务之外；然后在一个事务里：
    * 锁住邀请复核、建账户与个人空间、退回限流的名额、标记已接受、清掉这个登录名的登录失败计数（M2-P6 复核 A1：
    * 账户建成之前别人用这个登录名试过的失败不能挡住本人；与完成重置同理，本人用链接证明了控制着这个账户）、
-   * 新建会话（浏览器原来带着的会话作废）、记审计。
-   * 复核不通过（查令牌之后被接受或作废）：事务之外交给 LinkAttempts.rejected，记审计（审查 A10）；
-   * 找到了记录、只是不能用，不计入按地址的失败（M2-P6 复核 B3），另按这条记录计数
+   * 新建会话（浏览器原来带着的会话作废）、记审计、拼好响应（与登录相同）：提交之后不再访问数据库，控制器随后才写 Cookie（M2-P6 第 3 片复验）。
+   * 复核不通过（查令牌之后被接受或作废）：回滚，事务之外交给 LinkAttempts.rejected，记审计（审查 A10）；
+   * 找到了记录、只是不能用，不计入按地址的失败（M2-P6 复核 B3），另按这条记录计数。
+   * 查令牌时、确认令牌可用之后（算哈希、事务里）遇到繁忙，名额退回（M2-P6 第 3 片复验 建议 1）
    */
-  async accept(token: string, request: AcceptInvitationRequest, origin: HttpOrigin, previousSessionToken: string | undefined): Promise<AcceptedInvitation> {
+  async accept(token: string, request: AcceptInvitationRequest, origin: HttpOrigin, previousSessionToken: string | undefined): Promise<LoginResult> {
     const ticket = await this.attempts.admit(origin)
-    const found = await this.lookup(token)
+    const found = await releasingIfBusy(ticket, this.#logger, async () => this.lookup(token))
     if (!found.usable)
       throw await this.attempts.rejected(ticket, 'invitation', found.rejection, origin)
     const { record } = found
-    const passwordHash = await withHashing(ticket, this.#logger, async () => this.users.hashPassword(request.password))
-    const outcome = await this.transactions.run(async (transaction): Promise<LinkOutcome<AcceptedInvitation>> => {
-      await this.accounts.lockUsername(record.username, transaction)
-      const locked = await this.repository.findByIdForUpdate(record.id, transaction)
-      const now = locked === undefined ? 'invalid' : usabilityOf(stateOf(locked))
-      if (now !== 'usable')
-        return { done: false, reason: now }
-      if (await this.accounts.isUsernameTaken(record.username, transaction))
-        throw new AppError('USERNAME_TAKEN')
-      const { user } = await this.accounts.create({ username: record.username, displayName: request.displayName, passwordHash, systemRole: 'member' }, transaction)
-      await ticket.succeeded(transaction)
-      await this.repository.markAccepted(record.id, user.id, transaction)
-      await this.lockouts.clear(user.username, transaction)
-      if (previousSessionToken !== undefined)
-        await this.sessions.replace(previousSessionToken, transaction)
-      const session = await this.sessions.create(user.id, transaction)
-      await this.audit.record({
-        action: 'users.invitation_accepted',
-        actor: { type: 'user', id: user.id },
-        target: { type: 'user', id: user.id },
-        origin,
-        details: { invitationId: record.id },
-      }, { transaction })
-      return { done: true, value: { user, sessionToken: session.token } }
-    })
-    if (!outcome.done)
-      throw await this.attempts.rejected(ticket, 'invitation', rejectionOf(outcome.reason, record.id, { type: 'invitation', id: record.id }), origin)
-    return outcome.value
+    const passwordHash = await releasingIfBusy(ticket, this.#logger, async () => this.users.hashPassword(request.password))
+    try {
+      return await releasingIfBusy(ticket, this.#logger, async () => this.transactions.run(async (transaction) => {
+        await this.accounts.lockUsername(record.username, transaction)
+        const locked = await this.repository.findByIdForUpdate(record.id, transaction)
+        const now = locked === undefined ? 'invalid' : usabilityOf(stateOf(locked))
+        if (now !== 'usable')
+          throw new LinkUnusableDuringRequest(now)
+        if (await this.accounts.isUsernameTaken(record.username, transaction))
+          throw new AppError('USERNAME_TAKEN')
+        const { user } = await this.accounts.create({ username: record.username, displayName: request.displayName, passwordHash, systemRole: 'member' }, transaction)
+        await ticket.succeeded(transaction)
+        await this.repository.markAccepted(record.id, user.id, transaction)
+        await this.lockouts.clear(user.username, transaction)
+        if (previousSessionToken !== undefined)
+          await this.sessions.replace(previousSessionToken, transaction)
+        const session = await this.sessions.create(user.id, transaction)
+        await this.audit.record({
+          action: 'users.invitation_accepted',
+          actor: { type: 'user', id: user.id },
+          target: { type: 'user', id: user.id },
+          origin,
+          details: { invitationId: record.id },
+        }, { transaction })
+        return this.responses.forNewSession(user, session.token, transaction)
+      }))
+    }
+    catch (error) {
+      if (error instanceof LinkUnusableDuringRequest)
+        throw await this.attempts.rejected(ticket, 'invitation', rejectionOf(error.reason, record.id, { type: 'invitation', id: record.id }), origin)
+      throw error
+    }
   }
 
   /** 令牌对应的邀请：可用；或者不能用的原因，以及审计的对象（找到了记录时） */

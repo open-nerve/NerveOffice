@@ -5,7 +5,7 @@
 // 核对每条语句的参数个数与 id 的个数无关、这串 id 作为一个数组参数出现。这些语句在真实数据库上的行为由集成测试覆盖。
 import type { Transaction } from '../database/index.ts'
 import { describe, expect, it, vi } from 'vitest'
-import { TransactionRunner } from '../database/index.ts'
+import { CommitLedger, TransactionRunner } from '../database/index.ts'
 import { DocumentsRepository } from './documents.repository.ts'
 import { FoldersRepository } from './folders.repository.ts'
 import { TrashEntriesRepository } from './trash-entries.repository.ts'
@@ -46,7 +46,7 @@ interface Repositories {
 /** 在一个事务里调用仓储，返回它发出的语句（去掉事务自己的 begin、确认事务可用的 SELECT 1、commit） */
 async function statementsOf(call: (repositories: Repositories, transaction: Transaction) => Promise<unknown>, respond?: (text: string) => unknown[]): Promise<Statement[]> {
   const client = recordingClient(respond)
-  const runner = new TransactionRunner({ connect: async () => client } as unknown as ConstructorParameters<typeof TransactionRunner>[0])
+  const runner = new TransactionRunner({ connect: async () => client } as unknown as ConstructorParameters<typeof TransactionRunner>[0], new CommitLedger())
   await runner.run(async (transaction) => {
     // 事务里的执行器本身就是一个 Drizzle 实例：不收事务的方法（列表、搜索、路径）也经它发语句
     const db = transaction as unknown as ConstructorParameters<typeof DocumentsRepository>[0]
@@ -75,7 +75,7 @@ const DOCUMENTS: Readonly<Record<string, Call>> = {
   '锁住这些文件夹里的文档（删除、跨空间移动、永久删除）': async ({ documents }, transaction) => documents.lockInFolders(IDS, SPACE, transaction),
   '锁住属于这些删除单元的文档': async ({ documents }, transaction) => documents.lockInEntries(IDS, transaction),
   '编辑者删文件夹：数别人的文档': async ({ documents }, transaction) => documents.countCreatedByOthers(IDS, SPACE, USER, transaction),
-  '永久删除之前：数正常状态的文档': async ({ documents }, transaction) => documents.countActiveInFolders(IDS, transaction),
+  '永久删除之前：数这个空间里正常状态的文档': async ({ documents }, transaction) => documents.countActiveInFolders(IDS, SPACE, transaction),
   '放进回收站': async ({ documents }, transaction) => documents.trash(IDS, ENTRY, transaction),
   '每个删除单元里的份数': async ({ documents }, transaction) => documents.countByTrashEntries(IDS, transaction),
   '永久删除': async ({ documents }, transaction) => documents.deleteMany(IDS, transaction),
@@ -109,6 +109,12 @@ describe(`仓储按一串 id 读写：${COUNT} 个 id 也只有一个数组参�
     const statements = await statementsOf(async ({ folders }, transaction) => folders.deleteMany(IDS, transaction), text => text.startsWith('select distinct') ? [[3], [2]] : [])
     expect(statements.map(statement => statement.text.split(' ')[0])).toEqual(['select', 'delete', 'delete'])
     expectIdArrayParameters(statements)
+  })
+
+  it('永久删除之前数正常状态的文档：带着空间的条件，与锁住时同形，走 (space_id, folder_id) 的索引（M2-P6 第 3 片复验）', async () => {
+    const [statement] = await statementsOf(DOCUMENTS['永久删除之前：数这个空间里正常状态的文档'] ?? (async () => undefined))
+    expect(statement?.text).toMatch(/"documents"\."space_id" = \$\d+/)
+    expect(statement?.values).toContain(SPACE)
   })
 
   it('到期的删除单元：让开的那些写成 NOT (id = ANY(…))；没有要让开的就不带这个条件', async () => {

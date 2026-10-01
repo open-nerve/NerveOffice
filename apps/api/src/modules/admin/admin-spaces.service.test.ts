@@ -173,12 +173,14 @@ describe('AdminUsersService.disable', () => {
     const transaction = { transaction: true }
     const transactions = { run: vi.fn(async <T>(work: (transaction: never) => Promise<T>) => work(transaction as never)) }
     const service = new AdminUsersService(users as never, sessions as never, resets as never, invitations as never, lockouts as never, writeAccess, audit as never, transactions as never)
-    return { service, calls, writeAccess, resets, invitations, transaction }
+    return { service, calls, writeAccess, resets, invitations, lockouts, transaction }
   }
 
   it('停用：在同一个事务里作废这个人的重置、他签发给别人的重置与邀请（M2-P6 复核 A2），撤销会话之后经收回写入权的入口（这个人），再记审计', async () => {
-    const { service, calls, writeAccess, resets, invitations, transaction } = disableSetup(true)
+    const { service, calls, writeAccess, resets, invitations, lockouts, transaction } = disableSetup(true)
     await service.disable(ACTOR, AMY, ORIGIN)
+    // 响应里的登录锁定在同一个事务里读（M2-P6 第 3 片复验：提交之后不再访问数据库）
+    expect(lockouts.locksOf).toHaveBeenCalledWith(['amy'], transaction)
     expect(calls).toEqual(['disable', 'resets', 'issued-resets', 'issued-invitations', 'sessions', 'revoke', 'audit'])
     expect(writeAccess.revoke).toHaveBeenCalledWith({ kind: 'user', userId: AMY }, transaction)
     expect(resets.revokeIssuedBy).toHaveBeenCalledWith({ type: 'user', id: ACTOR.user.id }, AMY, 'issuer_disabled', ORIGIN, transaction)
@@ -189,5 +191,34 @@ describe('AdminUsersService.disable', () => {
     const { service, calls } = disableSetup(false)
     await service.disable(ACTOR, AMY, ORIGIN)
     expect(calls).toEqual(['disable'])
+  })
+})
+
+describe('AdminUsersService：响应里的登录锁定在同一个事务里读（M2-P6 第 3 片复验：提交之后不再访问数据库）', () => {
+  const ACCOUNT = { id: AMY, username: 'amy', displayName: '艾米', systemRole: 'member', status: 'active', createdAt: NOW } as const
+
+  function viewSetup() {
+    const transaction = { transaction: true }
+    const users = {
+      enable: vi.fn(async () => ({ account: ACCOUNT, changed: true })),
+      changeSystemRole: vi.fn(async () => ({ account: { ...ACCOUNT, systemRole: 'admin' }, changed: true })),
+      lockActingAdmin: vi.fn(async () => {}),
+      lockAccount: vi.fn(async () => ACCOUNT),
+    }
+    const lockouts = { locksOf: vi.fn(async () => new Map()), clear: vi.fn(async () => true) }
+    const audit = { record: vi.fn(async () => {}) }
+    const transactions = { run: vi.fn(async <T>(work: (transaction: never) => Promise<T>) => work(transaction as never)) }
+    const service = new AdminUsersService(users as never, {} as never, {} as never, {} as never, lockouts as never, {} as never, audit as never, transactions as never)
+    return { service, lockouts, transaction }
+  }
+
+  it.each([
+    ['启用', async (service: AdminUsersService) => service.enable(ACTOR, AMY, ORIGIN)],
+    ['改系统角色', async (service: AdminUsersService) => service.changeSystemRole(ACTOR, AMY, 'admin', ORIGIN)],
+    ['解除登录锁定', async (service: AdminUsersService) => service.unlockLogin(ACTOR, AMY, ORIGIN)],
+  ])('%s', async (_name, run) => {
+    const { service, lockouts, transaction } = viewSetup()
+    await run(service)
+    expect(lockouts.locksOf).toHaveBeenCalledWith(['amy'], transaction)
   })
 })

@@ -63,7 +63,8 @@ export class DocumentOrganizingService {
       // 锁下重新读、重新判断：这期间它可能被移走、被删，空间可能被归档，自己可能被移出空间
       const { document, access } = await this.checkUpdate(actor, await this.documents.lockById(id, transaction), command, transaction)
       // 树锁是按取锁之前读到的空间取的：万一刚好有一次跨空间移动提交了，这把锁就保护不到它（与文件夹的改动相同）。
-      // 八处写操作每处一条集成用例：tests/integration 的 documents/structure-locks.test.ts（M2-P6 复核 A 的 M-1、B 的 B1）
+      // 8 处锁下核对之一（清单见 FoldersService.update）；这一处与 move 那一处的集成用例在 tests/integration 的
+      // documents/structure-locks.test.ts（M2-P6 复核 A 的 M-1、B 的 B1）
       if (document.spaceId !== checked.document.spaceId)
         throw new AppError('NOT_FOUND')
 

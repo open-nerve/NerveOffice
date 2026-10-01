@@ -47,7 +47,8 @@ export interface TestDatabase {
   query: <T>(fn: (client: pg.Client) => Promise<T>) => Promise<T>
   /**
    * 删掉这个库。迁移好的库删之前先扫一遍数据不变量：有违反时库照样删掉，再抛出错误列出违反的行，
-   * 让这个测试文件失败（afterAll 里调用）。用例自己造出的违反（例如核对永久删除拒绝删除不一致的数据）要在用例结束前收拾好
+   * 让这个测试文件失败（afterAll 里调用）。扫描本身出错时同样先删库，再把扫描的错误抛出来（M2-P6 第 3 片复验）。
+   * 用例自己造出的违反（例如核对永久删除拒绝删除不一致的数据）要在用例结束前收拾好
    */
   drop: () => Promise<void>
 }
@@ -158,10 +159,15 @@ export async function createTestDatabase(options: { migrated?: boolean } = {}): 
     url,
     query: async fn => withClient(fn, url),
     drop: async () => {
-      const violations = options.migrated === false ? undefined : await sweepInvariants(url)
+      // 扫描的结果或错误先记下：不论扫描结果如何都要删库，不留下孤儿库
+      const swept = options.migrated === false
+        ? { violations: undefined }
+        : await sweepInvariants(url).then(violations => ({ violations }), (error: unknown) => ({ error }))
       await withClient(async client => client.query(`DROP DATABASE IF EXISTS ${pg.escapeIdentifier(name)} WITH (FORCE)`))
-      if (violations !== undefined)
-        throw new Error(`测试留下的数据违反了只由服务保证的不变量（${name}，库已删掉）：\n${violations}`)
+      if ('error' in swept)
+        throw swept.error
+      if (swept.violations !== undefined)
+        throw new Error(`测试留下的数据违反了只由服务保证的不变量（${name}，库已删掉）：\n${swept.violations}`)
     },
   }
 }

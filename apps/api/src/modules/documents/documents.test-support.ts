@@ -194,9 +194,9 @@ export class FakeStore {
           return entry !== null && entryIds.includes(entry) ? [{ id: row.id, trashEntryId: entry }] : []
         })
         .toSorted((a, b) => a.id.localeCompare(b.id))),
-      /** 这些文件夹里正常状态的文档有多少份（不论在哪个空间，与真实仓储一致） */
-      countActiveInFolders: vi.fn(async (folderIds: readonly string[]) => [...this.documents.values()]
-        .filter(row => row.folderId !== null && folderIds.includes(row.folderId) && this.entryOfDocument(row.id) === null)
+      /** 这个空间里、这些文件夹下正常状态的文档有多少份（与真实仓储一致：条件与 lockInFolders 同形） */
+      countActiveInFolders: vi.fn(async (folderIds: readonly string[], spaceId: string) => [...this.documents.values()]
+        .filter(row => row.folderId !== null && folderIds.includes(row.folderId) && row.spaceId === spaceId && this.entryOfDocument(row.id) === null)
         .length),
       /** 这些文件夹里正常状态的、不是这个人创建的文档有多少份 */
       countCreatedByOthers: vi.fn(async (folderIds: readonly string[], spaceId: string, userId: string) => [...this.documents.values()]

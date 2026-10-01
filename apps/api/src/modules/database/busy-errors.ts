@@ -3,8 +3,10 @@
  * - lock_timeout：等锁超过 lock_timeout（SQLSTATE 55P03）——别的事务正占着同一把锁，例如同一个空间里正在进行的结构改动；
  * - statement_timeout：语句被取消（SQLSTATE 57014）——超过 statement_timeout（等锁的时间也算在内），或者被管理员取消；
  * - pool_timeout：连接池满了，等空闲的连接超过 connectionTimeoutMillis。
- * 三种都发生在写入生效之前：出错的语句连同它所在的事务整体回滚（TransactionRunner），取连接超时则还没开始。
- * 所以客户端得到的是确定的"没有生效"，稍后重试即可——与"结果未知"的意外错误不同，不按 500 回答、不记成错误日志。
+ * 三种都不让出错的那一步生效：出错的语句连同它所在的事务整体回滚（TransactionRunner），取连接超时则还没开始。
+ * 这个请求里还没有事务提交过时（CommitLedger），客户端得到的就是确定的"没有生效"，稍后重试即可——与"结果未知"的意外错误不同，
+ * 不按 500 回答、不记成错误日志。同一个请求里先前已经有事务提交过时就不是这样了：写入已经生效，异常过滤器按意外错误回 500
+ * （M2-P6 第 3 片复验）；写接口因此在业务事务里拼好响应，提交之后不再访问数据库。
  * 死锁（40P01）不在其中：按锁的顺序取锁不会成环，出现了就是缺陷，照旧按意外错误处理
  */
 export type DatabaseBusyReason = 'lock_timeout' | 'statement_timeout' | 'pool_timeout'

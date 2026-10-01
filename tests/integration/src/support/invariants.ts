@@ -53,11 +53,14 @@ export interface InvariantViolation {
   readonly rows: readonly Record<string, unknown>[]
 }
 
-/** 在这个连接的库上扫一遍：返回被违反的不变量与违反它的行（最多 ROWS_PER_INVARIANT 行） */
+/**
+ * 在这个连接的库上扫一遍：返回被违反的不变量与违反它的行（最多 ROWS_PER_INVARIANT 行）。
+ * 按整行排序再取前几行（M2-P6 第 3 片复验）：结果确定，逐条用例前后比较（violationsSince）时同一批违反每次列出的是同样的几行
+ */
 export async function invariantViolations(client: pg.Client): Promise<InvariantViolation[]> {
   const violations: InvariantViolation[] = []
   for (const [invariant, query] of Object.entries(INVARIANTS)) {
-    const { rows } = await client.query<Record<string, unknown>>(`${query} LIMIT ${ROWS_PER_INVARIANT}`)
+    const { rows } = await client.query<Record<string, unknown>>(`SELECT * FROM (${query}) AS violation ORDER BY violation LIMIT ${ROWS_PER_INVARIANT}`)
     if (rows.length > 0)
       violations.push({ invariant, rows })
   }

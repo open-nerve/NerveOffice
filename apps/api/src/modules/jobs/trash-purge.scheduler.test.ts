@@ -120,6 +120,17 @@ describe('TrashPurgeScheduler', () => {
     await scheduler.onModuleDestroy()
   })
 
+  it('第一轮还没触发就退出：第一轮的定时器也清掉，之后不再触发（M2-P6 第 3 片复验）', async () => {
+    const { scheduler, job } = setup()
+    scheduler.onModuleInit()
+    await vi.advanceTimersByTimeAsync(INTERVAL_MS / 2)
+    expect(job.runOnce).not.toHaveBeenCalled()
+    await scheduler.onModuleDestroy()
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(PAST_ONE_ROUND * 5)
+    expect(job.runOnce).not.toHaveBeenCalled()
+  })
+
   it('停止之后不再触发', async () => {
     const { scheduler, job } = setup()
     scheduler.onModuleInit()

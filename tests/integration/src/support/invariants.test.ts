@@ -1,7 +1,8 @@
 // 数据不变量扫描的自测（M2-P6 复核 B 的 B5）：
 // - 阳性对照：每一条不变量都直接写库造一次违反，删库时的扫描一条不落地报出来（查询写错了、永远查不出东西的那一条会在这里露出来），
 //   库照样删掉；
-// - 阴性对照：经接口也好、直接写库也好，数据一致时扫描什么也不报（整套集成测试每个文件删库时都在扫，这里再明确写一条）。
+// - 阴性对照：经接口也好、直接写库也好，数据一致时扫描什么也不报（整套集成测试每个文件删库时都在扫，这里再明确写一条）；
+// - 结果确定（按整行排序再取前几行），扫描本身出错时库照样删掉（M2-P6 第 3 片复验）。
 import type pg from 'pg'
 import type { PassiveAccount } from './accounts.ts'
 import type { TestDatabase } from './database.ts'
@@ -122,6 +123,50 @@ describe('数据不变量的扫描（M2-P6 复核 B 的 B5）', () => {
     })
     expect(violations).toEqual([])
     await database.drop()
+  })
+
+  it('一条不变量违反的行比列出的上限多：按整行排序取前几行，每次扫出来的都一样（M2-P6 第 3 片复验）', async () => {
+    const { database, owner, first } = await world()
+    const result = await database.query(async (client) => {
+      // I8：七个空的删除单元（每个同时违反 I9）。按 id 从大到小写入：不排序时取到的是先写入的那几个（id 最大的），排了序才是最小的几个
+      const entries = Array.from({ length: 7 }, () => randomUUID()).toSorted().toReversed()
+      for (const id of entries) {
+        await client.query(
+          `INSERT INTO trash_entries (id, space_id, kind, deleted_by, expires_at, title) VALUES ($1, $2, 'document', $3, now() + interval '30 days', '空的')`,
+          [id, first, owner.id],
+        )
+      }
+      const scans = [await invariantViolations(client), await invariantViolations(client)]
+      await client.query('DELETE FROM trash_entries WHERE id = ANY($1::uuid[])', [entries])
+      return { entries, scans }
+    })
+    const [firstScan, secondScan] = result.scans
+    expect(secondScan).toEqual(firstScan)
+    const empty = firstScan?.find(violation => violation.invariant.startsWith('I8 '))
+    expect(empty?.rows.map(row => row.id)).toEqual(result.entries.toSorted().slice(0, 5))
+    await database.drop()
+  })
+
+  it('每条查询都先按整行排序、再取前几行：不靠执行计划碰巧给出的顺序（上一条的数据量下，不排序的计划也常常恰好有序）', async () => {
+    const queries: string[] = []
+    const recording = { query: async (text: string) => {
+      queries.push(text)
+      return { rows: [] }
+    } }
+    expect(await invariantViolations(recording as unknown as pg.Client)).toEqual([])
+    expect(queries).toHaveLength(Object.keys(INVARIANTS).length)
+    for (const [index, query] of queries.entries())
+      expect(query, Object.keys(INVARIANTS)[index]).toMatch(/^SELECT \* FROM \([\s\S]+\) AS violation ORDER BY violation LIMIT 5$/)
+  })
+
+  it('扫描本身出错（例如有一张表不见了）：库照样删掉，再把扫描的错误抛出来', async () => {
+    const { database } = await world()
+    await database.query(async client => client.query('DROP TABLE trash_entries CASCADE'))
+    const failure = await database.drop().then(() => undefined, (error: unknown) => error as { code?: string })
+    // 42P01：表不存在（扫描的查询失败），不是"库不存在"
+    expect(failure?.code).toBe('42P01')
+    const left = await withClient(async client => (await client.query('SELECT 1 FROM pg_database WHERE datname = $1', [database.name])).rowCount)
+    expect(left).toBe(0)
   })
 
   it('逐条用例核对时只报新造出来的：之前已有的行不再报，同一条不变量下新增的行照样报', () => {

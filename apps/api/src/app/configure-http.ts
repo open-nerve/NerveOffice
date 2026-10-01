@@ -1,6 +1,7 @@
 import type { NestExpressApplication } from '@nestjs/platform-express'
 import type { Logger } from 'pino'
 import type { AppConfig } from '../modules/config/index.ts'
+import type { CommitLedger } from '../modules/database/index.ts'
 import type { AppLogger, RequestContextStore } from '../modules/logging/index.ts'
 import type { InFlightRequests } from './in-flight-requests.ts'
 import { StandardSchemaValidationPipe } from '@nestjs/common'
@@ -15,6 +16,8 @@ export interface HttpPipeline {
   /** 管线里的中间件记日志用 */
   logger: AppLogger
   requestContext: RequestContextStore
+  /** 这个应用里每个请求有没有事务已经提交（database 模块的 CommitLedger，M2-P6 第 3 片复验） */
+  commits: CommitLedger
   inFlight: InFlightRequests
 }
 
@@ -30,6 +33,9 @@ export function configureHttp(app: NestExpressApplication, config: AppConfig, pi
   // 请求日志与请求标识紧随其后：所有响应都有日志与请求标识
   app.use(createHttpLogger(pipeline.rootLogger))
   app.use(pipeline.requestContext.middleware())
+  // 每个请求一份"有没有事务已经提交"的记录，排在请求上下文之后：事务运行器在提交之后记账，异常过滤器据此决定数据库繁忙时
+  // 回 503（确定没有生效）还是 500（写入已经生效，结果未知）
+  app.use(pipeline.commits.middleware())
   // 代理未被信任时告警一次（DEF-014）：在请求上下文之后，日志带着请求标识
   app.use(proxyTrustCheck(config.http, pipeline.logger.with({ module: 'security' })))
   app.use(securityHeaders())
@@ -42,5 +48,5 @@ export function configureHttp(app: NestExpressApplication, config: AppConfig, pi
   app.setGlobalPrefix('api')
   app.useGlobalInterceptors(pipeline.inFlight.interceptor())
   app.useGlobalPipes(new StandardSchemaValidationPipe({ exceptionFactory: validationError }))
-  app.useGlobalFilters(new HttpErrorFilter())
+  app.useGlobalFilters(new HttpErrorFilter(pipeline.commits))
 }

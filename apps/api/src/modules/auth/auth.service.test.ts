@@ -9,6 +9,7 @@ import { AppError } from '../../shared/errors/app-error.ts'
 import { AppLogger, createRootLogger, RequestContextStore } from '../logging/index.ts'
 import { PasswordHashingBusyError } from '../users/index.ts'
 import { AuthService } from './auth.service.ts'
+import { SessionResponses } from './session-response.ts'
 import { csrfTokenFor, generateSessionToken } from './session-token.ts'
 
 const ALICE: User = { id: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d', username: 'alice', displayName: '爱丽丝', systemRole: 'member', status: 'active' }
@@ -18,7 +19,13 @@ const TRANSACTION = { opaque: true } as unknown as Transaction
 const TOKEN = generateSessionToken()
 const CREDENTIALS: VerifiedCredentials = { user: ALICE, passwordVersion: 1 }
 
-function setup(options: { admission?: Admission, check?: CredentialCheck | Error, purgeFails?: boolean, stillValid?: boolean } = {}) {
+/** 数据库繁忙（等锁超时）：与 pg 的 DatabaseError 同样的形状，包在 drizzle 的错误里 */
+function lockTimeout(): Error {
+  return new Error('Failed query', { cause: Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03', severity: 'ERROR' }) })
+}
+
+/** createFails：新建会话（成功的那个事务里）出错；auditFails：写审计出错（失败的审计在事务之外） */
+function setup(options: { admission?: Admission, check?: CredentialCheck | Error, purgeFails?: boolean, stillValid?: boolean, createFails?: Error, auditFails?: Error } = {}) {
   const ticket = {
     lockedForSeconds: undefined,
     succeeded: vi.fn(async (_transaction?: Transaction) => {}),
@@ -42,25 +49,38 @@ function setup(options: { admission?: Admission, check?: CredentialCheck | Error
     holdCredentials: vi.fn(async (_credentials: VerifiedCredentials, _transaction: Transaction) => options.stillValid ?? true),
   }
   const sessions = {
-    create: vi.fn(async (_userId: string, _transaction?: Transaction) => ({ id: 'session-1', token: TOKEN })),
+    create: vi.fn(async (_userId: string, _transaction?: Transaction) => {
+      if (options.createFails !== undefined)
+        throw options.createFails
+      return { id: 'session-1', token: TOKEN }
+    }),
     replace: vi.fn(async (_token: string, _transaction?: Transaction) => {}),
     purgeExpired: vi.fn(async () => {}),
   }
-  const spaces = { personalSpaceOf: vi.fn(async () => SPACE) }
-  const audit = { record: vi.fn(async (_event: AuditEvent, _options?: { transaction?: Transaction }) => {}) }
-  const transactions = { run: vi.fn(async <T>(work: (transaction: Transaction) => Promise<T>) => work(TRANSACTION)) }
+  const spaces = { personalSpaceOf: vi.fn(async (_userId: string, _options?: { transaction?: Transaction }) => SPACE) }
+  const audit = { record: vi.fn(async (_event: AuditEvent, _options?: { transaction?: Transaction }) => {
+    if (options.auditFails !== undefined)
+      throw options.auditFails
+  }) }
+  /** work 正常返回算提交，抛出算回滚 */
+  const committed = { count: 0 }
+  const transactions = { run: vi.fn(async <T>(work: (transaction: Transaction) => Promise<T>) => {
+    const result = await work(TRANSACTION)
+    committed.count += 1
+    return result
+  }) }
   const warn = vi.spyOn(AppLogger.prototype, 'warn')
   const logger = new AppLogger(createRootLogger({ level: 'silent' }), new RequestContextStore())
   const service = new AuthService(
     users as unknown as UsersService,
-    spaces as unknown as SpacesService,
+    new SessionResponses(spaces as unknown as SpacesService),
     sessions as unknown as SessionService,
     throttle as unknown as LoginThrottle,
     audit as unknown as AuditService,
     transactions as unknown as TransactionRunner,
     logger,
   )
-  return { service, ticket, throttle, users, sessions, audit, transactions, warn }
+  return { service, ticket, throttle, users, sessions, spaces, audit, transactions, committed, warn }
 }
 
 async function errorOf(promise: Promise<unknown>): Promise<AppError> {
@@ -115,9 +135,11 @@ describe('AuthService.login', () => {
     expect(audit.record.mock.calls[0]?.[0]).not.toHaveProperty('target')
   })
 
-  it('成功：在一个事务里先复核凭据，再交回名额、作废原来的会话、新建会话、写审计；事务之外清理；返回会话与 CSRF 令牌', async () => {
-    const { service, ticket, users, sessions, audit, throttle } = setup()
+  it('成功：在一个事务里先复核凭据，再交回名额、作废原来的会话、新建会话、写审计、拼好响应；事务之外清理；返回会话与 CSRF 令牌', async () => {
+    const { service, ticket, users, sessions, spaces, audit, throttle } = setup()
     const result = await service.login(REQUEST, ORIGIN, 'previous-token')
+    // 响应在同一个事务里拼好（M2-P6 第 3 片复验）：提交之后不再访问数据库
+    expect(spaces.personalSpaceOf).toHaveBeenCalledWith(ALICE.id, { transaction: TRANSACTION })
     expect(users.holdCredentials).toHaveBeenCalledWith(CREDENTIALS, TRANSACTION)
     expect(users.holdCredentials.mock.invocationCallOrder[0]).toBeLessThan(ticket.succeeded.mock.invocationCallOrder[0] ?? 0)
     expect(ticket.succeeded).toHaveBeenCalledWith(TRANSACTION)
@@ -135,10 +157,13 @@ describe('AuthService.login', () => {
     })
   })
 
-  it('复核不通过（验证之后改了密码、签发或完成了重置、停用了，审查 A1）：按凭据无效处理，不建会话，名额不退回，写审计（原因另记，复验 N6）', async () => {
-    const { service, ticket, sessions, audit } = setup({ stillValid: false })
+  it('复核不通过（验证之后改了密码、签发或完成了重置、停用了，审查 A1）：事务回滚，按凭据无效处理，不建会话，名额不退回，事务之外写审计（原因另记，复验 N6）', async () => {
+    const { service, ticket, sessions, audit, committed } = setup({ stillValid: false })
     expect((await errorOf(service.login(REQUEST, ORIGIN, 'previous-token'))).code).toBe('INVALID_CREDENTIALS')
+    // 这个事务什么也没改：回滚而不是提交，不留下一次提交（M2-P6 第 3 片复验）
+    expect(committed.count).toBe(0)
     expect(ticket.succeeded).not.toHaveBeenCalled()
+    expect(ticket.abandoned).not.toHaveBeenCalled()
     expect(sessions.replace).not.toHaveBeenCalled()
     expect(sessions.create).not.toHaveBeenCalled()
     expect(audit.record).toHaveBeenCalledWith({
@@ -185,6 +210,36 @@ describe('AuthService.login', () => {
     const error = await errorOf(service.login(REQUEST, ORIGIN))
     expect(error).toMatchObject({ code: 'SERVICE_UNAVAILABLE', headers: { 'Retry-After': '5' } })
     expect(warn).toHaveBeenCalledWith('退回登录限流的名额失败，这次尝试按一次失败计', expect.objectContaining({ err: expect.any(Error) as unknown }))
+  })
+
+  it('读凭据时数据库繁忙（还没有比对密码）：退回名额，原样抛出（异常过滤器回 503），不写审计、不开事务（M2-P6 第 3 片复验 建议 1）', async () => {
+    const busy = lockTimeout()
+    const { service, ticket, audit, transactions } = setup({ check: busy })
+    await expect(service.login(REQUEST, ORIGIN)).rejects.toBe(busy)
+    expect(ticket.abandoned).toHaveBeenCalledOnce()
+    expect(audit.record).not.toHaveBeenCalled()
+    expect(transactions.run).not.toHaveBeenCalled()
+  })
+
+  it('成功的那个事务里数据库繁忙（密码已经确认是对的）：退回名额，原样抛出，不清理', async () => {
+    const busy = lockTimeout()
+    const { service, ticket, throttle } = setup({ createFails: busy })
+    await expect(service.login(REQUEST, ORIGIN)).rejects.toBe(busy)
+    expect(ticket.abandoned).toHaveBeenCalledOnce()
+    expect(throttle.purgeExpired).not.toHaveBeenCalled()
+  })
+
+  it('成功的那个事务里别的错误：名额不退回（只有繁忙才退回）', async () => {
+    const { service, ticket } = setup({ createFails: new Error('约束冲突') })
+    await expect(service.login(REQUEST, ORIGIN)).rejects.toThrow('约束冲突')
+    expect(ticket.abandoned).not.toHaveBeenCalled()
+  })
+
+  it('密码不对之后写审计时数据库繁忙：照样按一次失败计（名额不退回），谁也不能借繁忙多猜一次', async () => {
+    const busy = lockTimeout()
+    const { service, ticket } = setup({ check: { valid: false, user: ALICE }, auditFails: busy })
+    await expect(service.login(REQUEST, ORIGIN)).rejects.toBe(busy)
+    expect(ticket.abandoned).not.toHaveBeenCalled()
   })
 
   it('等待哈希的请求太多（DEF-015）：503 与 Retry-After，退回名额，不写审计、不清理，只记日志', async () => {

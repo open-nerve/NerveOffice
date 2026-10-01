@@ -126,7 +126,8 @@ export class FoldersService {
       // 树锁是按取锁之前读到的空间取的。跨空间移动会同时取来源与目标两把树锁，拿到锁之后它换不了空间；
       // 万一取锁之前刚好有一次跨空间移动提交了，这把锁就保护不到它——不在错的锁下改东西，按"没找到"回答，刷新后重试。
       // 这一条是承重的：没有它，换父会在错的树锁下把它挂到别的空间里正在进回收站的文件夹下（M2-P6 复核 A 的 M-1、B 的 B1）。
-      // 八处写操作每处一条集成用例：tests/integration 的 documents/structure-locks.test.ts
+      // 这样的锁下核对共 8 处：文件夹与文档的改名、移动各一处，删除文档、删除文件夹各一处，恢复与永久删除共用一处，到期清理一处
+      // （人工操作回 NOT_FOUND，到期清理跳过这一单）。这一处的集成用例在 tests/integration 的 documents/structure-locks.test.ts
       if (folder.spaceId !== checked.folder.spaceId)
         throw new AppError('NOT_FOUND')
 
@@ -161,8 +162,8 @@ export class FoldersService {
         await this.spaces.holdSpace(spaceId, transaction)
       // 锁下重新读、重新判断：这期间它可能被删、被别人移走，空间可能被归档，自己可能被移出空间
       const { folder, target } = await this.checkMove(actor, await this.folders.findById(id, transaction), command, transaction)
-      // 树锁是按取锁之前读到的空间取的：万一刚好有一次跨空间移动提交了，这把锁就保护不到它（与改名、空间内移动相同，
-      // 用例见 documents/structure-locks.test.ts）
+      // 树锁是按取锁之前读到的空间取的：万一刚好有一次跨空间移动提交了，这把锁就保护不到它（8 处锁下核对之一，见 update；
+      // 这一处的用例同样在 documents/structure-locks.test.ts）
       if (folder.spaceId !== checked.folder.spaceId)
         throw new AppError('NOT_FOUND')
 

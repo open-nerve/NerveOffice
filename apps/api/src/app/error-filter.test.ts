@@ -1,7 +1,8 @@
 import type { ArgumentsHost } from '@nestjs/common'
+import type { Request, Response } from 'express'
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common'
 import { describe, expect, it, vi } from 'vitest'
-import { POOL_TIMEOUT_MESSAGE } from '../modules/database/index.ts'
+import { CommitLedger, POOL_TIMEOUT_MESSAGE } from '../modules/database/index.ts'
 import { AppError } from '../shared/errors/app-error.ts'
 import { DATABASE_BUSY_RETRY_AFTER_SECONDS, HttpErrorFilter, mapException } from './error-filter.ts'
 
@@ -49,6 +50,19 @@ describe('mapException', () => {
     expect(mapException(new AppError('NOT_FOUND', undefined, { cause: databaseError('55P03') }))).toMatchObject({ status: 404, code: 'NOT_FOUND' })
   })
 
+  it('这个请求里已经有事务提交过：数据库繁忙不再是"确定没有生效"，按意外错误回 500，不带 Retry-After；原因照样带出（M2-P6 第 3 片复验）', () => {
+    const committed = { committed: true }
+    const internal = { status: 500, code: 'INTERNAL_ERROR', message: '服务器内部错误，请稍后重试', unexpected: true, headers: {} }
+    expect(mapException(databaseError('55P03'), committed)).toEqual({ ...internal, busy: 'lock_timeout' })
+    expect(mapException(databaseError('57014'), committed)).toEqual({ ...internal, busy: 'statement_timeout' })
+    expect(mapException(new Error(POOL_TIMEOUT_MESSAGE), committed)).toEqual({ ...internal, busy: 'pool_timeout' })
+    // 还没有提交过：照旧 503
+    expect(mapException(databaseError('55P03'), { committed: false })).toMatchObject({ status: 503, unexpected: false, busy: 'lock_timeout' })
+    // 与繁忙无关的回答不受影响
+    expect(mapException(new AppError('NOT_FOUND'), committed)).toEqual(mapException(new AppError('NOT_FOUND')))
+    expect(mapException(new Error('别的'), committed)).toEqual(mapException(new Error('别的')))
+  })
+
   it('其他异常 → INTERNAL_ERROR，只回通用说明', () => {
     expect(mapException(new Error('数据库密码是 hunter2'))).toEqual({ status: 500, code: 'INTERNAL_ERROR', message: '服务器内部错误，请稍后重试', unexpected: true, headers: {} })
     expect(mapException('抛出的是字符串')).toMatchObject({ code: 'INTERNAL_ERROR', unexpected: true })
@@ -94,8 +108,18 @@ function hostFor(request: object, response: FakeResponse): ArgumentsHost {
   return { switchToHttp: () => ({ getRequest: () => request, getResponse: () => response }) } as unknown as ArgumentsHost
 }
 
+/** 在一个请求的记录里执行 work（与 HTTP 管线里同一个中间件）；committed 为真时先记一笔提交 */
+function inRequest(commits: CommitLedger, committed: boolean, work: () => void): void {
+  commits.middleware()({} as Request, {} as Response, () => {
+    if (committed)
+      commits.recordCommit()
+    work()
+  })
+}
+
 describe('HttpErrorFilter', () => {
-  const filter = new HttpErrorFilter()
+  const commits = new CommitLedger()
+  const filter = new HttpErrorFilter(commits)
 
   it('AppError 带的响应头随错误响应下发', () => {
     const response = fakeResponse()
@@ -141,6 +165,36 @@ describe('HttpErrorFilter', () => {
     expect(response.err).toBeUndefined()
     expect(log.warn).toHaveBeenCalledExactlyOnceWith({ err: error, reason: 'lock_timeout' }, expect.stringContaining('数据库繁忙'))
     expect(log.error).not.toHaveBeenCalled()
+  })
+
+  it('同一个请求里已经有事务提交过再遇到数据库繁忙：500（结果未知），不带 Retry-After；挂上 response.err，记一条 error（写明是提交之后、带着原因），不记 warn（M2-P6 第 3 片复验）', () => {
+    const response = fakeResponse()
+    const log = { warn: vi.fn(), error: vi.fn() }
+    const error = databaseError('55P03')
+    inRequest(commits, true, () => filter.catch(error, hostFor({ id: 'req-after-commit', log }, response)))
+    expect(response.statusCode).toBe(500)
+    expect(response.headers).toEqual({})
+    expect(response.body).toEqual({ error: { code: 'INTERNAL_ERROR', message: '服务器内部错误，请稍后重试', requestId: 'req-after-commit' } })
+    expect(response.err).toBe(error)
+    expect(log.error).toHaveBeenCalledExactlyOnceWith({ err: error, reason: 'lock_timeout' }, expect.stringContaining('事务提交之后遇到数据库繁忙'))
+    expect(log.warn).not.toHaveBeenCalled()
+  })
+
+  it('请求里还没有事务提交过：数据库繁忙照旧 503（记录是按请求的：前一个请求提交过不算）', () => {
+    const response = fakeResponse()
+    const log = { warn: vi.fn(), error: vi.fn() }
+    inRequest(commits, true, () => {})
+    inRequest(commits, false, () => filter.catch(databaseError('57014'), hostFor({ id: 'req-before-commit', log }, response)))
+    expect(response.statusCode).toBe(503)
+    expect(response.headers).toEqual({ 'Retry-After': '5' })
+    expect(log.error).not.toHaveBeenCalled()
+  })
+
+  it('提交之后遇到数据库繁忙而连接已经关闭：不写响应，那一条 error 照样记下，不再另记"请求中断之后处理失败"', () => {
+    const log = { warn: vi.fn(), error: vi.fn() }
+    inRequest(commits, true, () => filter.catch(new Error(POOL_TIMEOUT_MESSAGE), hostFor({ id: 'req-after-commit-2', log }, fakeResponse(false, true))))
+    expect(log.error).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ reason: 'pool_timeout' }), expect.stringContaining('事务提交之后遇到数据库繁忙'))
+    expect(log.warn).not.toHaveBeenCalled()
   })
 
   it('数据库繁忙而连接已经关闭：不写响应，warn 照样记下', () => {

@@ -654,6 +654,28 @@ describe('US-M2-09 永久删除（spec §4）', () => {
     expect((await purge(amySession, entryId)).status).toBe(204)
     expect(await documentsOf([stray])).toMatchObject({ [stray]: { status: 'active', folder: null } })
   })
+
+  it('别的空间里的正常文档挂在回收站的文件夹下（数据不一致）：核对只数这个空间（M2-P6 第 3 片复验），那份文档不被锁住、不被删；删文件夹撞上外键，整个事务回滚，什么也不删', async () => {
+    const spaceId = await teamSpace({ amy: 'admin' })
+    const elsewhere = await teamSpace({ amy: 'admin' })
+    const folder = await newFolder(amySession, { spaceId, name: '资料' })
+    const entryId = await trashedEntry(amySession, spaceId, async () => deleteFolder(amySession, folder.id))
+    // 数据不一致：另一个空间里的文档指着这个文件夹。各条路径都不会这样写，这里直接写库摆出来
+    const stray = await createDocument(database, { spaceId: elsewhere, createdBy: amy.id, title: '别处的文档', folderId: folder.id })
+    try {
+      const response = await purge(amySession, entryId)
+      expect(response.status).toBe(500)
+      expect(await foldersOf([folder.id])).toEqual({ [folder.id]: { status: 'trashed', entry: entryId, space: spaceId, parent: null, depth: 1 } })
+      expect(await documentsOf([stray])).toMatchObject({ [stray]: { status: 'active', space: elsewhere, folder: folder.id } })
+      expect(await count('SELECT count(*) FROM trash_entries WHERE id = $1', [entryId])).toBe(1)
+      expect((await auditsOf(folder.id)).map(audit => audit.action)).toEqual(['folders.deleted'])
+    }
+    finally {
+      // 收拾好：那份文档挪回它所在空间的根目录（删库之前会扫一遍不变量）
+      await database.query(async client => client.query('UPDATE documents SET folder_id = NULL WHERE id = $1', [stray]))
+    }
+    expect((await purge(amySession, entryId)).status).toBe(204)
+  })
 })
 
 describe('US-M2-09 一串 id 超过一条语句的参数上限（M2-P6 复核 A 的 S-2、B 的 G1）', () => {
@@ -663,11 +685,17 @@ describe('US-M2-09 一串 id 超过一条语句的参数上限（M2-P6 复核 A 
    * 给它 7 万个 id（多数不存在），语句照样执行、结果照样对。每条语句只有一个数组参数由单元测试
    * （apps/api 的 documents/id-array-statements.test.ts）逐个方法核对；不在这里真的建 7 万份文档（太慢）
    */
-  it('7 万个 id：锁住、计数、放进回收站、移动、永久删除、按空间列出都照样执行，只动存在的那几行', async () => {
+  it('7 万个 id：锁住、计数、放进回收站（再按删除单元找回、恢复）、移动、永久删除、按空间列出都照样执行，只动存在的那几行', async () => {
     const spaceId = await teamSpace({ amy: 'admin' })
     const to = await teamSpace({ amy: 'admin' })
     const folder = await newFolder(amySession, { spaceId, name: '资料' })
     const inside = await createDocument(database, { spaceId, createdBy: amy.id, title: '里面的', folderId: folder.id })
+    // 放进回收站要一个删除单元：直接建一个，用完（恢复之后它空了）再删掉
+    const entry = await database.query(async client => (await client.query<{ id: string }>(
+      `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_parent_id, title)
+       VALUES ($1, 'document', $2, now() + interval '30 days', $3, '里面的') RETURNING id`,
+      [spaceId, amy.id, folder.id],
+    )).rows[0]?.id ?? '')
     const absent = Array.from({ length: 70_000 }, () => randomUUID())
     const repository = app.runtime.get(DocumentsRepository)
     const listed = await repository.listAccessible({ spaceIds: [...absent, spaceId] }, { limit: 10 })
@@ -676,19 +704,49 @@ describe('US-M2-09 一串 id 超过一条语句的参数上限（M2-P6 复核 A 
     const outcome = await app.runtime.get(TransactionRunner).run(async (transaction) => {
       const folders = [...absent, folder.id]
       const documents = [...absent, inside]
+      const entries = [...absent, entry]
       const locked = await repository.lockInFolders(folders, spaceId, transaction)
-      const active = await repository.countActiveInFolders(folders, transaction)
+      const active = await repository.countActiveInFolders(folders, spaceId, transaction)
       const others = await repository.countCreatedByOthers(folders, spaceId, ben.id, transaction)
       const transferable = await repository.lockForTransfer(documents, spaceId, transaction)
+      const trashed = await repository.trash(documents, entry, transaction)
+      const inEntries = await repository.lockInEntries(entries, transaction)
+      const counted = await repository.countByTrashEntries(entries, transaction)
+      const restored = await repository.restoreInEntry(entry, undefined, transaction)
       const moved = await repository.moveToSpace(documents, to, undefined, transaction)
-      const inEntries = await repository.countByTrashEntries(absent, transaction)
       const deleted = await repository.deleteMany(absent, transaction)
-      return { locked: locked.map(row => row.id), active, others, transferable, moved: moved.map(row => row.id), inEntries: inEntries.size, deleted }
+      return {
+        locked: locked.map(row => row.id),
+        active,
+        others,
+        transferable,
+        trashed,
+        inEntries: inEntries.map(row => row.id),
+        counted: Object.fromEntries(counted),
+        restored,
+        moved: moved.map(row => row.id),
+        deleted,
+      }
     })
-    expect(outcome).toEqual({ locked: [inside], active: 1, others: 1, transferable: [inside], moved: [inside], inEntries: 0, deleted: 0 })
-    expect(await documentsOf([inside])).toMatchObject({ [inside]: { status: 'active', space: to, epoch: 1 } })
-    // 收拾好：文档与它的文件夹要在同一个空间里（删库之前会扫一遍不变量）
-    await database.query(async client => client.query('UPDATE documents SET space_id = $2 WHERE id = $1', [inside, spaceId]))
+    expect(outcome).toEqual({
+      locked: [inside],
+      active: 1,
+      others: 1,
+      transferable: [inside],
+      trashed: 1,
+      inEntries: [inside],
+      counted: { [entry]: 1 },
+      restored: 1,
+      moved: [inside],
+      deleted: 0,
+    })
+    // 放进回收站与跨空间移动各加一次代次（恢复不加）
+    expect(await documentsOf([inside])).toMatchObject({ [inside]: { status: 'active', entry: null, space: to, epoch: 2 } })
+    // 收拾好：文档与它的文件夹要在同一个空间里，空了的删除单元删掉（删库之前会扫一遍不变量）
+    await database.query(async (client) => {
+      await client.query('UPDATE documents SET space_id = $2 WHERE id = $1', [inside, spaceId])
+      await client.query('DELETE FROM trash_entries WHERE id = $1', [entry])
+    })
   })
 })
 

@@ -3,6 +3,7 @@ import { Inject, Injectable } from '@nestjs/common'
 import { sql } from 'drizzle-orm'
 import pg from 'pg'
 import { AppError } from '../../shared/errors/app-error.ts'
+import { CommitLedger } from './commit-ledger.ts'
 import { createDatabase, PG_POOL } from './database.ts'
 
 /** work 吞掉了失败的语句却正常返回时的说明。 */
@@ -44,21 +45,30 @@ async function assertTransactionUsable(tx: DbTransaction): Promise<void> {
  *   下一个借到它的事务提交时，会把失败事务的写入一起提交。
  * 归还的规则：事务以业务错误（AppError）结束时，回滚已经成功（drizzle 只在回滚成功时抛出 work 原来的错误），连接照常放回；
  * 其他失败一律丢弃这个连接，与连接池自己的 query() 一致；连接不是空闲状态（还在事务里、状态未知）时同样丢弃。
+ *
+ * COMMIT 成功之后在这个请求的记录上记一笔（CommitLedger，M2-P6 第 3 片复验）：之后这个请求再遇到数据库繁忙，
+ * 写入已经生效，异常过滤器不再回答"确定没有生效"的 503。回滚、COMMIT 本身失败都不记
  */
 @Injectable()
 export class TransactionRunner {
-  constructor(@Inject(PG_POOL) private readonly pool: pg.Pool) {}
+  constructor(
+    @Inject(PG_POOL) private readonly pool: pg.Pool,
+    private readonly commits: CommitLedger,
+  ) {}
 
   async run<T>(work: (transaction: Transaction) => Promise<T>): Promise<T> {
     const client = await this.pool.connect()
     let discard = false
     try {
-      return await createDatabase(client).transaction(async (tx) => {
-        const result = await work(tx as unknown as Transaction)
+      const result = await createDatabase(client).transaction(async (tx) => {
+        const value = await work(tx as unknown as Transaction)
         // 抛出之后 drizzle 回滚（P2 复验 G3）
         await assertTransactionUsable(tx)
-        return result
+        return value
       })
+      // drizzle 在 COMMIT 返回之后才交回结果：走到这里就是已经提交
+      this.commits.recordCommit()
+      return result
     }
     catch (error) {
       discard = !(error instanceof AppError)

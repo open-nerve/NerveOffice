@@ -1,8 +1,9 @@
 // 两个连接的并发测试（M2-P1 审查 A1、A2、A9、A10、A12）：一个连接开着事务、持有锁；等被测的请求在锁上等着了，
 // 再在同一个事务里改数据、提交。被测的请求随后拿到锁，看到的是改过的数据。不靠固定时长的等待，结果是确定的。
-import type pg from 'pg'
+// 数据库繁忙的用例（M2-P6 复核 A 的 G-2）另用 whileHolding 与表锁：持着锁直到被测的请求结束，请求一定是等满时限失败。
 import type { TestDatabase } from './database.ts'
 import { setTimeout as delay } from 'node:timers/promises'
+import pg from 'pg'
 
 /** 分几步发出请求时用：每一步经 step 登记；waitForWaiting 等到这个库里有 count 个连接在等锁 */
 export interface HeldLockSteps {
@@ -141,4 +142,49 @@ export async function raceAgainstHeldLock<T>(database: TestDatabase, race: HeldL
     }
     return pending
   })
+}
+
+/**
+ * 在一个事务里持着锁，直到 request 结束（不论成败）才回滚：被测的请求一定是等满时限失败，而不是抢在锁之前
+ * （数据库繁忙的用例：应用把等锁的时限调小，M2-P6 复核 A 的 G-2）
+ */
+export async function whileHolding<T>(database: TestDatabase, hold: (client: pg.Client) => Promise<unknown>, request: () => Promise<T>): Promise<T> {
+  return database.query(async (client) => {
+    await client.query('BEGIN')
+    try {
+      await hold(client)
+      return await request()
+    }
+    finally {
+      await client.query('ROLLBACK')
+    }
+  })
+}
+
+/** 在持锁的事务里锁住整张表（ACCESS EXCLUSIVE）：连普通的读也要等它。表名是测试里写定的 */
+export function lockTable(table: string) {
+  return async (client: pg.Client) => client.query(`LOCK TABLE ${pg.escapeIdentifier(table)} IN ACCESS EXCLUSIVE MODE`)
+}
+
+/** 另一个连接上要的一把表锁 */
+export interface TableLock {
+  /** 拿到锁时兑现（别的事务持有这张表上的锁时，它排着） */
+  readonly granted: Promise<void>
+  /** 断开那个连接：没拿到的不再排，拿到的随事务一起放开 */
+  readonly release: () => Promise<void>
+}
+
+/**
+ * 在另一个连接上给整张表要一把 ACCESS EXCLUSIVE 锁，不等拿到就返回（M2-P6 第 3 片复验）。
+ * 排着的这把锁挡住之后所有新来的读写；已经持有这张表上的锁的事务再要锁时，PostgreSQL 让它排到等待者前面，不受影响。
+ * 所以给一个碰过这张表、还没提交的事务排上这把锁：它在提交之前读这张表照常，提交之后谁再读都要等到超时
+ */
+export async function requestTableLock(database: TestDatabase, table: string): Promise<TableLock> {
+  const client = new pg.Client({ connectionString: database.url, connectionTimeoutMillis: 5_000 })
+  await client.connect()
+  await client.query('BEGIN')
+  const granted = client.query(`LOCK TABLE ${pg.escapeIdentifier(table)} IN ACCESS EXCLUSIVE MODE`).then(() => undefined)
+  // 先接住：断开时还没拿到的话，它以连接断开失败
+  granted.catch(() => {})
+  return { granted, release: async () => client.end() }
 }

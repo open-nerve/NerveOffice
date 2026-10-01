@@ -248,16 +248,19 @@ export class DocumentsRepository {
   }
 
   /**
-   * 这些文件夹里正常状态的文档有几份，不论在哪个空间：永久删除之前核对"要删的都在回收站里"
-   * （TrashEntryPurger，M2-P6 复核 A 的 S-3、B 的 B2）。不按空间过滤：别的空间里的行挂在这些文件夹下同样是数据不一致
+   * 这个空间里、这些文件夹下正常状态的文档有几份：永久删除之前核对"要删的都在回收站里"
+   * （TrashEntryPurger，M2-P6 复核 A 的 S-3、B 的 B2）。条件与 lockInFolders 同形（空间 + 文件夹），走 (space_id, folder_id, …) 的索引：
+   * 它在树锁与行锁之下、每次永久删除文件夹单元都执行，不带空间时要扫整个文档索引（M2-P6 第 3 片复验，40 万份时 24 ms 对 0.04 ms）。
+   * 只数这个空间仍然安全：别的空间里挂在这些文件夹下的文档（数据不一致）不会被 lockInFolders 锁住、也不会被删，
+   * 随后删这些文件夹时撞上文档指向文件夹的 RESTRICT 外键，整个事务回滚，什么也不删
    */
-  async countActiveInFolders(folderIds: readonly string[], transaction: Transaction): Promise<number> {
+  async countActiveInFolders(folderIds: readonly string[], spaceId: string, transaction: Transaction): Promise<number> {
     if (folderIds.length === 0)
       return 0
     const [row] = await executorOf(this.db, transaction)
       .select({ count: sql<number>`count(*)::int` })
       .from(d)
-      .where(and(inIdArray(d.folderId, folderIds), eq(d.status, 'active')))
+      .where(and(inIdArray(d.folderId, folderIds), eq(d.spaceId, spaceId), eq(d.status, 'active')))
     return row?.count ?? 0
   }
 

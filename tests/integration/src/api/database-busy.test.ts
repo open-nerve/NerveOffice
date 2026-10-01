@@ -13,7 +13,7 @@ import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
-import { completesWithoutWaiting } from '../support/held-lock.ts'
+import { completesWithoutWaiting, whileHolding } from '../support/held-lock.ts'
 import { asUser, login } from '../support/session-client.ts'
 import { createTeamSpace } from '../support/spaces.ts'
 
@@ -63,20 +63,6 @@ function holdSpaceTree(spaceId: string) {
   return async (client: pg.Client) => client.query('SELECT pg_advisory_xact_lock(hashtextextended(\'nerve-office:space-tree:\' || $1::uuid::text, 0))', [spaceId])
 }
 
-/** 在一个事务里持着锁，直到 request 结束（不论成败）才回滚：请求一定是等满时限失败 */
-async function whileHolding<T>(hold: (client: pg.Client) => Promise<unknown>, request: () => Promise<T>): Promise<T> {
-  return database.query(async (client) => {
-    await client.query('BEGIN')
-    try {
-      await hold(client)
-      return await request()
-    }
-    finally {
-      await client.query('ROLLBACK')
-    }
-  })
-}
-
 /** 503 带 Retry-After，响应只有通用说明 */
 async function expectBusy(response: Response): Promise<void> {
   expect(response.status).toBe(503)
@@ -101,7 +87,7 @@ describe('数据库繁忙：回 503 让客户端稍后重试（M2-P6 复核 A �
   it('等锁超时（树锁被别的事务占着）：503 带 Retry-After，什么也没改，日志记 warn 与 SQLSTATE 55P03；放开之后重试成功', async () => {
     const spaceId = await teamSpace()
     const folder = await newFolder(spaceId, '资料')
-    const response = await whileHolding(holdSpaceTree(spaceId), async () => asUser(app.baseUrl, amySession, `/api/folders/${folder}`, { method: 'DELETE' }))
+    const response = await whileHolding(database, holdSpaceTree(spaceId), async () => asUser(app.baseUrl, amySession, `/api/folders/${folder}`, { method: 'DELETE' }))
     await expectBusy(response)
     expect(await count('SELECT count(*) FROM trash_entries WHERE space_id = $1', [spaceId])).toBe(0)
     expect(await count('SELECT count(*) FROM folders WHERE id = $1 AND status = \'active\'', [folder])).toBe(1)
@@ -116,6 +102,7 @@ describe('数据库繁忙：回 503 让客户端稍后重试（M2-P6 复核 A �
     const child = await newFolder(from, '子', folder)
     const document = await seedDocument(database, { spaceId: from, createdBy: amy.id, title: '里面的', folderId: child })
     const response = await whileHolding(
+      database,
       async client => client.query('SELECT id FROM documents WHERE id = $1 FOR UPDATE', [document.id]),
       async () => asUser(app.baseUrl, amySession, `/api/folders/${folder}/move`, { method: 'POST', body: { spaceId: to } }),
     )
@@ -132,7 +119,7 @@ describe('数据库繁忙：回 503 让客户端稍后重试（M2-P6 复核 A �
       const session = await login(slow.baseUrl, 'amy', amy.password)
       const spaceId = await teamSpace()
       const folder = await newFolder(spaceId, '资料')
-      const response = await whileHolding(holdSpaceTree(spaceId), async () => asUser(slow.baseUrl, session, `/api/folders/${folder}`, { method: 'PATCH', body: { name: '改过' } }))
+      const response = await whileHolding(database, holdSpaceTree(spaceId), async () => asUser(slow.baseUrl, session, `/api/folders/${folder}`, { method: 'PATCH', body: { name: '改过' } }))
       await expectBusy(response)
       expect(JSON.stringify(expectBusyLogs(slow.logs, response, 'statement_timeout'))).toContain('"sqlState":"57014"')
       expect(await count('SELECT count(*) FROM folders WHERE id = $1 AND name = \'资料\'', [folder])).toBe(1)
@@ -149,7 +136,7 @@ describe('数据库繁忙：回 503 让客户端稍后重试（M2-P6 复核 A �
       const session = await login(single.baseUrl, 'amy', amy.password)
       const spaceId = await teamSpace()
       const [first, second] = [await newFolder(spaceId, '一'), await newFolder(spaceId, '二')]
-      const [waiting, starved] = await whileHolding(holdSpaceTree(spaceId), async () => {
+      const [waiting, starved] = await whileHolding(database, holdSpaceTree(spaceId), async () => {
         const pending = asUser(single.baseUrl, session, `/api/folders/${first}`, { method: 'DELETE' })
         // 第一个请求走到树锁上等着，占着唯一的连接
         expect(await completesWithoutWaiting(database, pending, 1)).toBe(false)
