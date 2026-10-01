@@ -54,13 +54,18 @@ export function ErrorPage() {
   )
 }
 
-/** 分块没能下载下来的原因：连不上服务器（断网、服务端挂起、取回来的不是入口页），或者服务器连得上、分块本身下载不下来 */
-type ChunkProblem = 'offline' | 'missing'
+/**
+ * 分块没能下载下来的原因：连不上服务器（offline：断网、服务端挂起、取回来的不是入口页）；服务器连得上、版本也没变，分块本身下载不下来
+ * （missing）；服务器上已经是新版本，这个页面却没能自动换上它（updated，M2-P6 复核第三批 G-c）——已经为这个版本重新加载过一次
+ * 还是没拿到新的分块，或者会话存储不可用、为防循环不自动重新加载。updated 不能说成"版本也没有变"
+ */
+type ChunkProblem = 'offline' | 'missing' | 'updated'
 
 /**
  * 按需加载的页面的代码没能下载下来（M2-P6 复核 S6）：先向服务端要一次入口页（有时限，第二批 G-4）——部署了新版本
- * （旧的分块已经不在了），整页重新加载一次换上新版本（同一个版本只重新加载一次，防止循环）；连不上服务器时说"请检查网络后重试"；
- * 服务器连得上、版本也没变时不说是网络的问题（分块缺失，第二批 G-4），重试不好要告诉管理员。
+ * （旧的分块已经不在了），整页重新加载一次换上新版本（同一个版本只重新加载一次，防止循环）；没能自动换上时说明服务器上已是新版本
+ * （第三批 G-c）；连不上服务器时说"请检查网络后重试"；服务器连得上、版本也没变时不说是网络的问题（分块缺失，第二批 G-4），
+ * 重试不好要告诉管理员。
  * "重试"整页重新加载（浏览器记住了失败的模块，在这一页里再 import 同一个地址也还是失败）。确认期间显示等待的骨架屏
  */
 function ChunkLoadFailure() {
@@ -71,9 +76,15 @@ function ChunkLoadFailure() {
   useEffect(() => {
     let cancelled = false
     void checkDeployment().then((check) => {
-      if (cancelled || (check.kind === 'deployed' && reloadOnceForDeployment(check.version, page.reload)))
+      if (cancelled)
         return
-      // 部署了新版本、却已经为它重新加载过一次（还是没拿到新的分块）：同样是服务器连得上、分块下载不下来
+      if (check.kind === 'deployed') {
+        // 已经为这个版本重新加载过一次（还是没拿到新的分块），或者记不下（会话存储不可用）、为防循环不自动重新加载：
+        // 单独说明服务器上已是新版本，不说"版本也没有变"（第三批 G-c）
+        if (!reloadOnceForDeployment(check.version, page.reload))
+          setProblem('updated')
+        return
+      }
       setProblem(check.kind === 'unreachable' ? 'offline' : 'missing')
     })
     return () => {

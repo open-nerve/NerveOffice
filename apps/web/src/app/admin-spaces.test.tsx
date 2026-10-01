@@ -1,8 +1,9 @@
 // 管理界面：团队空间与停用者文档的转移（M2-P2 设计 §3.10，US-M2-04、05）。接口用假的 fetch。
 import type { AdminSpace, AdminUser } from '@nerve-office/contracts'
-import { fireEvent, screen, waitFor, within } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
-import { apiError, installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+import { OUTCOME_REFRESH_TIME_LIMIT_MS } from '../shared/api/write-outcome.ts'
+import { apiError, installFakeApi, json, networkFailure } from '../shared/testing/fake-api.test-support.ts'
 import { plainName } from '../shared/testing/people.test-support.ts'
 import { AMY, deferred, listPage, ROOT_ID, rowOf, session, settle, SPACES } from './admin.test-support.ts'
 import { renderApp } from './render-app.test-support.tsx'
@@ -228,6 +229,58 @@ describe('US-M2-05 管理界面：团队空间', () => {
     expect(within(again).getByLabelText('名称')).toHaveValue('市场部')
   })
 
+  it('改名的结果未知（其实已经改好）：列表随即刷新、这一行是新名称；弹窗说明可能已经生效、页面已刷新，可以再保存（第二批 G-2，第三批 S-c）', async () => {
+    let name = '市场部'
+    const api = admin({
+      'GET /api/admin/spaces': () => json(200, listPage([{ ...SPACE, name }])),
+      [`PUT /api/spaces/${SPACE.id}/name`]: () => {
+        // 服务端已经改好，回包却丢了
+        name = '市场与品牌部'
+        return apiError(500, 'INTERNAL_ERROR')
+      },
+    })
+    renderApp('/admin/spaces')
+    fireEvent.click(within(await rowOf('市场部')).getByRole('button', { name: '改名 市场部' }))
+    const dialog = await screen.findByRole('dialog', { name: '给 市场部 改名' })
+    fireEvent.change(within(dialog).getByLabelText('名称'), { target: { value: '市场与品牌部' } })
+    const listed = requestCount(api, 'GET /api/admin/spaces')
+    fireEvent.click(within(dialog).getByRole('button', { name: '保存' }))
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('没能确认是否已经完成（服务器出了点问题，请稍后重试）。可能已经生效：页面已按服务端现在的状态刷新，看得出是否已经生效；还没有的话，可以再试一次。')
+    expect(requestCount(api, 'GET /api/admin/spaces')).toBeGreaterThan(listed)
+    expect(await rowOf('市场与品牌部')).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: '保存' })).toHaveAttribute('aria-disabled', 'false')
+  })
+
+  it('改名的结果未知，随后的刷新一直不回来（服务端挂起）：到了时限先说明页面没能刷新，弹窗不再卡在"正在处理…"，取消关得掉（第三批 S-a、G-a）', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      let lists = 0
+      admin({
+        'GET /api/admin/spaces': async () => {
+          lists += 1
+          return lists === 1 ? json(200, listPage([SPACE])) : new Promise<Response>(() => {})
+        },
+        [`PUT /api/spaces/${SPACE.id}/name`]: () => apiError(504, 'INTERNAL_ERROR'),
+      })
+      renderApp('/admin/spaces')
+      fireEvent.click(within(await rowOf('市场部')).getByRole('button', { name: '改名 市场部' }))
+      const dialog = await screen.findByRole('dialog', { name: '给 市场部 改名' })
+      fireEvent.change(within(dialog).getByLabelText('名称'), { target: { value: '产品部' } })
+      fireEvent.click(within(dialog).getByRole('button', { name: '保存' }))
+      await waitFor(() => expect(lists).toBe(2))
+      // 时限之前仍在等刷新；留出 2 秒的余量，测试本身的耗时不会让时限提前到
+      await act(async () => vi.advanceTimersByTimeAsync(OUTCOME_REFRESH_TIME_LIMIT_MS - 2_000))
+      expect(within(dialog).getByRole('button', { name: '正在处理…' })).toBeInTheDocument()
+      await act(async () => vi.advanceTimersByTimeAsync(2_000))
+      expect(await within(dialog).findByRole('alert')).toHaveTextContent('没能确认是否已经完成（服务器出了点问题，请稍后重试）。可能已经生效，只是页面没能刷新，显示的可能还是之前的状态：请稍后再看；确认还没有生效的话，可以再试一次。')
+      fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('加入空间：进行中关不掉；失败时弹窗留着说明原因（审查 B4）', async () => {
     const join = deferred()
     const api = admin({
@@ -409,6 +462,28 @@ describe('US-M2-04 转移停用者的文档', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(screen.getByRole('alert')).toHaveTextContent('有文档已经不在这个人的个人空间里了：多半是你上一次没能确认的那次转移已经完成。列表已刷新，请看看还剩哪些，需要的话重新选择后再转移')
     expect(requestCount(api, TRANSFER_KEY)).toBe(2)
+  })
+
+  it('转移的结果未知，随后刷新标题列表也失败：弹窗说明可能已经转移、列表没能刷新（不说"列表已刷新"），选择不动（第三批 G-a）', async () => {
+    let refreshFails = false
+    admin({
+      [`GET /api/admin/users/${AMY.id}`]: () => json(200, LEAVER),
+      [DOCUMENTS_KEY]: () => (refreshFails ? networkFailure() : json(200, listPage(titles(2)))),
+      [`GET /api/admin/spaces${search({ query: '市场', status: 'active' })}`]: () => json(200, listPage([SPACE])),
+      [TRANSFER_KEY]: () => {
+        refreshFails = true
+        return apiError(502, 'INTERNAL_ERROR')
+      },
+    })
+    renderApp(`/admin/users/${AMY.id}/documents`)
+    fireEvent.click(await screen.findByLabelText('全选已加载的文档'))
+    fireEvent.change(screen.getByLabelText('目标团队空间'), { target: { value: '市场' } })
+    fireEvent.click(await screen.findByRole('button', { name: '市场部' }))
+    fireEvent.click(screen.getByRole('button', { name: '转移' }))
+    const dialog = await screen.findByRole('dialog', { name: '把 2 份文档转移到 市场部？' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '转移' }))
+    expect(await within(dialog).findByRole('alert', {}, { timeout: 3000 })).toHaveTextContent('没能确认是否已经转移（服务器出了点问题，请稍后重试）。可能已经转移了，只是列表没能刷新，显示的可能还是之前的文档：请稍后再看，不在列表里的就是已经转走了；确认还在的再转移。')
+    expect(screen.getByText('已选择 2 份，一次最多 100 份')).toBeInTheDocument()
   })
 
   it('有文档已被别人转走，而刷新标题列表失败：列表还是旧的，弹窗留着说明原因（复验）', async () => {

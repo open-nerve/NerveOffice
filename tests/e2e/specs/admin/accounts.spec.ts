@@ -185,6 +185,26 @@ test.describe('US-M2-03 重置密码', () => {
     await expect(anotherDevice.getByRole('heading', { name: '我的空间' })).toBeVisible()
   })
 
+  test('给自己生成重置链接，服务端照常生成、回包却丢了（代理的 502）：随即回到登录页，说明你的密码可能已经失效、要找另一位系统管理员（M2-P6 复核第三批 R-1）', async ({ page }) => {
+    const admin = await createUser('own-reset', '给自己生成的管理员', { systemRole: 'admin' })
+    await loginThroughApi(page, admin)
+    await page.goto('/admin/users')
+    const row = await userRow(page, admin.username)
+    await page.route('**/api/admin/users/*/password-reset', async (route) => {
+      // 请求放行到服务端：照常生成（当前密码随即失效、本人的会话全部撤销），回包换成代理的 502——结果未知
+      await route.fetch()
+      return route.fulfill({ status: 502, contentType: 'text/html', body: 'bad gateway' })
+    })
+    await confirmAction(page, row, '生成重置链接')
+    // 不是按普通的"登录已过期"离开（第二批的回归：先刷新账户列表、得到 401，登录页只说登录已过期）
+    await expect(page).toHaveURL(/\/login\?from=%2Fadmin%2Fusers&reason=password_reset$/)
+    await expect(page.getByText('刚才为自己生成重置链接时没能确认结果，随后登录失效了：你的密码可能已经失效，那条链接也已经找不回来。请联系另一位系统管理员为你生成新的重置链接。')).toBeVisible()
+    await expect(page.getByText('登录已过期，请重新登录')).toBeHidden()
+    // 密码确实已经失效：原来的密码登录不了
+    await loginThroughUi(page, admin)
+    await expect(page.getByRole('alert')).toHaveText('用户名或密码错误')
+  })
+
   test('唯一的管理员忘了密码：运维命令签发重置链接（标准输出只有链接），打开之后设置新密码，照常进入管理界面', async ({ anotherDevice }) => {
     const admin = await createUser('cli-reset', '忘了密码的管理员', { systemRole: 'admin' })
     // 本机模式直接执行构建产物；容器 E2E 按部署说明经 docker compose exec 执行

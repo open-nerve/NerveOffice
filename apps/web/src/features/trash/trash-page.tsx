@@ -10,6 +10,7 @@ import { describeError, isAccessDenied, isMissingResource, isUnknownOutcome } fr
 import { messages } from '../../shared/i18n/index.ts'
 import { trashMessages } from '../../shared/i18n/zh-cn/trash.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
+import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { spacePath } from '../../shared/lib/space-paths.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { useFocusRescue } from '../../shared/lib/use-focus-rescue.ts'
@@ -115,14 +116,17 @@ function TrashList({ space, query, headingRef }: { readonly space: SpaceView, re
     bodyRef.current?.rows.item(from)?.focus()
   }, [entries.length])
 
+  /** 恢复与永久删除会改变的内容：回收站、各层的文件夹与文档 */
+  const contentKeys = [spaceTrashQueryKey(space.id), spaceFoldersQueryKey(space.id), spaceDocumentsQueryKey(space.id)]
+
   /** 恢复与永久删除都会改变空间里的内容：回收站、各层的文件夹与文档一起重新请求；被拒绝时页头（权限、归档）与导航也一起 */
   async function refresh(withSpace = false): Promise<void> {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: spaceTrashQueryKey(space.id) }),
-      queryClient.invalidateQueries({ queryKey: spaceFoldersQueryKey(space.id) }),
-      queryClient.invalidateQueries({ queryKey: spaceDocumentsQueryKey(space.id) }),
-      ...(withSpace ? [queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY })] : []),
-    ])
+    await Promise.all([...contentKeys, ...(withSpace ? [SPACES_QUERY_KEY] : [])].map(async queryKey => queryClient.invalidateQueries({ queryKey })))
+  }
+
+  /** 确认的弹窗在结果未知之后的刷新：刷新失败时拒绝，弹窗据此说明页面没能刷新（M2-P6 复核第三批 G-a） */
+  async function refreshAfterUnknown(): Promise<void> {
+    await refreshQueries(queryClient, contentKeys)
   }
 
   /** 回收站刷新出来了：看不到这个空间时它会失败，页面换成"空间不存在"，这时不说"列表已刷新" */
@@ -182,7 +186,7 @@ function TrashList({ space, query, headingRef }: { readonly space: SpaceView, re
         await refresh()
         setNotice({ message: gone ? text.gone : text.purged(entry.title) })
       },
-      refresh: async () => refresh(),
+      refresh: refreshAfterUnknown,
       // 确认之后这一行就没了，打开弹窗的按钮随之消失：焦点交给页面的标题
       returnFocus: () => headingRef.current?.focus(),
     })

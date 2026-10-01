@@ -3,11 +3,13 @@ import type { RequestIdLedger } from '../../shared/api/request-ids.ts'
 import { documentPagePath } from '@nerve-office/contracts'
 import { useMutation } from '@tanstack/react-query'
 import { FilePlus2 } from 'lucide-react'
+import { useRef } from 'react'
 import { describeError, isAccessDenied, isUnknownOutcome } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { usePageLocation } from '../../shared/lib/page-location.ts'
 import { useRequestIdLedger } from '../../shared/lib/request-id-ledger.ts'
-import { Alert, AlertDescription, Button, buttonVariants } from '../../shared/ui/index.ts'
+import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
+import { Alert, AlertDescription, Button, buttonVariants, Notice } from '../../shared/ui/index.ts'
 import { createDocument } from './documents-api.ts'
 import { useOrganizeRefresh } from './organize-refresh.ts'
 
@@ -40,7 +42,9 @@ function failureOf(error: unknown, ledger: RequestIdLedger): ErrorDescription {
  * 结果未知时列表随即刷新：建好了的话就在列表里。
  * 服务端说这次是重放（replayed，M2-P6 复核第二批 S-1）：结果未知的那一次其实已经建好了。这时不打开它——用户可能早已给它改了名、
  * 很久以后才回来想另建一份，打开的却是改过名的那一份——而是刷新列表、说明"上一次其实已经完成，就是「…」"，给出打开它的链接；
- * 这件事随之了结（成功就换新的 requestId），再点就是新建一份。
+ * 这件事随之了结（成功就换新的 requestId），再点就是新建一份。说明由说明条（Notice）接住焦点，读屏随之读出（第三批 G-b）：
+ * 与内容一起插入的 role="status" 部分读屏不播报（M2-P2 复验，features/admin/audit-page.tsx），焦点又留在按钮上；
+ * 新建文件夹与复制的重放也是这样说明的。关掉说明之后焦点回到"新建表格"。
  *
  * 在文件夹里新建也是一次请求：目标文件夹随请求给出（契约 createDocumentRequestSchema 的 folderId），
  * 服务端在同一个事务里判断它并写进去，不存在"建好了却没能移进来"的中间状态。
@@ -49,6 +53,8 @@ export function NewSheetButton({ spaceId, folderId = null, onDenied }: NewSheetB
   const page = usePageLocation()
   const ledger = useRequestIdLedger()
   const refresh = useOrganizeRefresh()
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const focusAfterRender = useFocusAfterRender()
   const mutation = useMutation({
     // 建在空间根目录时不带 folderId：契约里省略就是根目录，请求与 M2-P4 之前一样
     mutationFn: async () => ledger.send(`sheet:${spaceId}/${folderId ?? ''}`, async requestId => createDocument({ type: 'sheet', requestId, spaceId, ...(folderId === null ? {} : { folderId }) })),
@@ -79,23 +85,30 @@ export function NewSheetButton({ spaceId, folderId = null, onDenied }: NewSheetB
       mutation.mutate()
   }
 
+  /** 关掉"上一次其实已经完成"的说明：说明条随之消失，焦点回到"新建表格"，不落到 body */
+  function closeReplayed(): void {
+    mutation.reset()
+    focusAfterRender(buttonRef)
+  }
+
   // 按访问权限被拒绝的原因由页面说明（按钮可能随新的权限消失）
   const failure = mutation.isError && !isAccessDenied(mutation.error) ? failureOf(mutation.error, ledger) : undefined
   return (
     <div className="flex flex-col items-end gap-2">
       {/* 进行中用 aria-disabled：按钮变成 disabled 时焦点会丢（审查 B13）；重复点击由 create 挡住 */}
-      <Button aria-disabled={busy} onClick={create}>
+      <Button ref={buttonRef} aria-disabled={busy} onClick={create}>
         <FilePlus2 aria-hidden="true" />
         {busy ? messages.documents.creating : messages.documents.create}
       </Button>
       {replayed !== undefined && (
-        <Alert>
-          <AlertDescription className="flex flex-wrap items-center gap-2">
-            <span>{messages.documents.createdReplayed(replayed.title)}</span>
-            {/* 编辑器页是另一个入口：普通的链接，整页打开 */}
-            <a href={documentPagePath(replayed.id)} className={buttonVariants({ variant: 'outline', size: 'sm' })}>{messages.documents.openReplayed}</a>
-          </AlertDescription>
-        </Alert>
+        <Notice
+          focusKey={replayed}
+          onClose={closeReplayed}
+          // 编辑器页是另一个入口：普通的链接，整页打开
+          action={<a href={documentPagePath(replayed.id)} className={buttonVariants({ variant: 'outline', size: 'sm' })}>{messages.documents.openReplayed}</a>}
+        >
+          {messages.documents.createdReplayed(replayed.title)}
+        </Notice>
       )}
       {failure !== undefined && (
         <Alert variant="destructive">

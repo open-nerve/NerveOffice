@@ -219,6 +219,8 @@ export const adminMessages = {
     conflict: '有文档已经不在这个人的个人空间里了（可能被别人转走了）：列表已刷新，请重新选择后再转移',
     // 转移的结果未知（M2-P6 复核第二批 G-3）：可能已经转移了。列表随即刷新，转走了的不再在列表里，选择也随之去掉
     outcomeUnknown: (reason: string) => `没能确认是否已经转移（${reason}）。可能已经转移了：列表已刷新，不在列表里的就是已经转走了，选择也随之去掉；还在的可以再转移一次。`,
+    // 同上，随后的刷新也失败了、或者到了时限还没回来（M2-P6 复核第三批 G-a）：列表与选择还是之前的，不能说"已刷新"
+    outcomeUnknownNotRefreshed: (reason: string) => `没能确认是否已经转移（${reason}）。可能已经转移了，只是列表没能刷新，显示的可能还是之前的文档：请稍后再看，不在列表里的就是已经转走了；确认还在的再转移。`,
     // 结果未知之后再转移得到 TRANSFER_CONFLICT：多半就是上一次那次转移已经完成
     conflictAfterUnknown: '有文档已经不在这个人的个人空间里了：多半是你上一次没能确认的那次转移已经完成。列表已刷新，请看看还剩哪些，需要的话重新选择后再转移',
   },
@@ -261,7 +263,7 @@ export const adminMessages = {
     onlyTarget: '只看这个对象',
     chipActor: <T>(name: T): Phrase<T> => ['操作者：', name],
     chipTarget: <T>(target: T): Phrase<T> => ['对象：', target],
-    /** 对象：类型与它的名字，例如"账户：艾米 @amy" */
+    /** 对象：类型与它的名字，例如"账户：@amy 艾米"（人名登录名在前，M2-P6 复核第二批 M-1） */
     target: <T>(kind: string, name: T): Phrase<T> => [`${kind}：`, name],
   },
 } as const

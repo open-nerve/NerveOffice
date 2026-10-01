@@ -2,10 +2,11 @@
 // 经请求缓存执行，管理界面标明只给系统管理员（审查 B4）；关闭之后焦点回到打开它的按钮，按钮不在了交给页面（审查 B9）。
 import type { PendingConfirmation } from './confirm-dialog.tsx'
 import { MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { ApiError } from '../../shared/api/index.ts'
+import { ApiError, NetworkError } from '../../shared/api/index.ts'
+import { OUTCOME_REFRESH_TIME_LIMIT_MS } from '../../shared/api/write-outcome.ts'
 import { SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
 import { ConfirmDialog } from './confirm-dialog.tsx'
 
@@ -117,6 +118,56 @@ describe('ConfirmDialog', () => {
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('没能确认是否已经完成（服务器出了点问题，请稍后重试）。可能已经生效：页面已按服务端现在的状态刷新，看得出是否已经生效；还没有的话，可以再试一次。')
     expect(within(dialog).getByRole('button', { name: '停用' })).toHaveAttribute('aria-disabled', 'false')
     expect(order).toEqual(['刷新'])
+  })
+
+  it('结果未知之后的刷新失败：说明可能已经生效、页面没能刷新，不说"已按服务端现在的状态刷新"；自定的说明拿到的也是没能刷新（第三批 G-a）', async () => {
+    const describeFailure = vi.fn((_error: unknown, refreshed: boolean) => (refreshed ? '已刷新' : '没能刷新'))
+    for (const custom of [false, true]) {
+      renderPage(confirmation({
+        run: async () => {
+          throw new ApiError(500, 'INTERNAL_ERROR', 'x')
+        },
+        refresh: async () => {
+          throw new NetworkError('网络请求失败')
+        },
+        ...(custom ? { describeFailure } : {}),
+      }))
+      const dialog = await open()
+      fireEvent.click(within(dialog).getByRole('button', { name: '停用' }))
+      expect(await within(dialog).findByRole('alert')).toHaveTextContent(custom
+        ? '没能刷新'
+        : '没能确认是否已经完成（服务器出了点问题，请稍后重试）。可能已经生效，只是页面没能刷新，显示的可能还是之前的状态：请稍后再看；确认还没有生效的话，可以再试一次。')
+      cleanup()
+    }
+    expect(describeFailure).toHaveBeenLastCalledWith(expect.any(ApiError), false)
+  })
+
+  it('结果未知之后的刷新一直不回来（服务端挂起）：到了时限（10 秒）先说明，页面没能刷新；弹窗不再卡在"正在处理…"，取消关得掉（第三批 S-a）', async () => {
+    // 跟着真实的时间走，另外可以一下子拨过时限；在前面留出 2 秒的余量，测试本身的耗时不会让时限提前到
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const refresh = vi.fn(async () => new Promise<void>(() => {}))
+      renderPage(confirmation({
+        run: async () => {
+          throw new ApiError(504, 'INTERNAL_ERROR', 'x')
+        },
+        refresh,
+      }))
+      const dialog = await open()
+      fireEvent.click(within(dialog).getByRole('button', { name: '停用' }))
+      await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1))
+      await act(async () => vi.advanceTimersByTimeAsync(OUTCOME_REFRESH_TIME_LIMIT_MS - 2_000))
+      expect(within(dialog).getByRole('button', { name: '正在处理…' })).toBeInTheDocument()
+      expect(within(dialog).queryByRole('alert')).toBeNull()
+      await act(async () => vi.advanceTimersByTimeAsync(2_000))
+      expect(await within(dialog).findByRole('alert')).toHaveTextContent(/^没能确认是否已经完成（服务器出了点问题，请稍后重试）。可能已经生效，只是页面没能刷新/)
+      expect(within(dialog).getByRole('button', { name: '停用' })).toHaveAttribute('aria-disabled', 'false')
+      fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    }
+    finally {
+      vi.useRealTimers()
+    }
   })
 
   it('确定的失败（4xx、服务端忙的 503）没有生效：不刷新，按错误码说明', async () => {

@@ -106,7 +106,7 @@ describe('ColleaguePicker', () => {
     renderPicker()
     fireEvent.change(input(), { target: { value: '李四' } })
     const candidates = await screen.findByRole('list', { name: '找到的同事' })
-    // 每个候选里：显示名在 <bdi> 里，登录名是另一个元素（等宽、灰色、前面带 @），显示名里的"（lisi）"只是显示名的一部分
+    // 每个候选里：显示名在 <bdi> 里，登录名是另一个元素（等宽、前面带 @），显示名里的"（lisi）"只是显示名的一部分
     const realName = personIn(candidates, '李四', 'lisi')
     const spoofName = personIn(candidates, '李四（lisi）', 'mallory')
     expect(realName.closest('button')).not.toBe(spoofName.closest('button'))
@@ -117,6 +117,27 @@ describe('ColleaguePicker', () => {
     fireEvent.click(screen.getByRole('button', { name: '@mallory 李四（lisi）' }))
     const chosen = screen.getByText('已选择：')
     expect(personIn(chosen, '李四（lisi）', 'mallory')).toBeInTheDocument()
+  })
+
+  it('登录名与显示名同样醒目（需求方 2026-10-02 的决定，第三批 S-d）：登录名不是次要色、不小一号、不另设粗细，只用等宽字体与 @ 区分；候选与已选都是这样', async () => {
+    const spoof = { id: '0199a2c4-0000-7000-8000-000000000023', username: 'mallory', displayName: '李四（lisi）' }
+    installFakeApi({ [usersKey('李四')]: () => json(200, { items: [spoof] }) })
+    renderPicker()
+    fireEvent.change(input(), { target: { value: '李四' } })
+    const candidates = await screen.findByRole('list', { name: '找到的同事' })
+    function expectSameProminence(person: HTMLElement): void {
+      const login = person.querySelector('[data-slot="person-username"]')
+      expect(login).toHaveClass('font-mono')
+      expect(login).not.toHaveClass('text-muted-foreground')
+      expect(login).not.toHaveClass('text-[0.9em]')
+      expect(login).not.toHaveClass('font-normal')
+      // 颜色、字号、粗细都随所在的地方（与显示名相同）：登录名自己不设任何文字的颜色、字号或粗细
+      expect(login?.className).not.toMatch(/(?:^|\s)(?:text-|font-(?!mono(?:\s|$)))/)
+      expect(person.querySelector('[data-slot="person-display-name"]')?.getAttribute('class')).toBeNull()
+    }
+    expectSameProminence(personIn(candidates, '李四（lisi）', 'mallory'))
+    fireEvent.click(screen.getByRole('button', { name: '@mallory 李四（lisi）' }))
+    expectSameProminence(personIn(screen.getByText('已选择：'), '李四（lisi）', 'mallory'))
   })
 
   it('显示名写成"李四 @lisi"冒充别人：候选与已选的可读名称都是登录名在前，从开头就分得清（M2-P6 复核第二批 M-1）', async () => {

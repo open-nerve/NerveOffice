@@ -1,6 +1,7 @@
 // 首屏 JS 的体积预算（规范 §11，P3 设计 §3.7，P4 设计 §3.9）：按 Vite 的构建清单，入口块加上它静态引用的块（不含动态加载的块），
 // 用 gzip（默认压缩级别）统计。入口创建的 Worker 另列一项：公式 Worker 在编辑器启动时就创建，脚本随页面下载，事实上属于首屏的传输量。
 // 构建清单里每个入口都要有预算；入口能加载到的块（首屏与动态加载）创建的每个 Worker 都要有预算（复验 RA5）。
+// 入口还可以限定首屏的文件数（M2-P6 复核第三批 S-b）：分块方式变了、入口多出几个小块，体积可能仍在预算之内，文件数兜得住。
 // 每一项的预算在建立它的 Phase 里定下；调整要在 Phase 设计里写明原因。
 import type { Violation } from './types.ts'
 import { posix } from 'node:path'
@@ -11,6 +12,12 @@ export interface EntryBudget {
   entry: string
   label: string
   maxGzipBytes: number
+  /**
+   * 首屏最多几个 JS 文件（入口块与它静态引用的块；可选，M2-P6 复核第三批 S-b）。文件数本身也要守住：分块方式一变
+   * （例如只给平台页面用的模块经两个入口共用的桶文件转出），入口就多出几个小块，每个都是首屏多一次请求，体积却可能还在预算之内。
+   * 不给时只看体积
+   */
+  maxInitialFiles?: number
   reason: string
 }
 
@@ -147,13 +154,30 @@ function measure(label: string, subject: string, files: readonly string[], maxGz
   return { violations, notes: [summary] }
 }
 
+/** 首屏的文件数超过上限（M2-P6 复核第三批 S-b）：多出来的多半是分块方式变了，列出全部文件便于对照 */
+function countFiles(budget: EntryBudget, files: readonly string[]): BudgetResult {
+  if (budget.maxInitialFiles === undefined || files.length <= budget.maxInitialFiles)
+    return { violations: [], notes: [] }
+  return {
+    violations: [{
+      rule: 'budgets/too-many-files',
+      subject: budget.entry,
+      detail: `${budget.label}的首屏有 ${files.length} 个 JS 文件（${files.join('、')}），上限 ${budget.maxInitialFiles} 个：多出来的多半是分块方式变了，`
+        + '例如只给平台页面用的模块经两个入口共用的模块转出（shared/api/index.ts 等）、被编辑器页一起引用。先找出是哪个引用把块拆开的；确需调整上限时，在 Phase 设计里写明原因',
+    }],
+    notes: [],
+  }
+}
+
 export function checkBudgets(manifest: ViteManifest, budgets: readonly EntryBudget[], workers: readonly WorkerBudget[], output: BuildOutput): BudgetResult {
   const results: BudgetResult[] = []
   for (const budget of budgets) {
     const files = initialFiles(manifest, budget.entry)
-    results.push(files === undefined
-      ? { violations: [{ rule: 'budgets/missing-entry', subject: budget.entry, detail: `构建清单里没有这个入口：${budget.label}的预算指向的入口不存在，更新预算表` }], notes: [] }
-      : measure(budget.label, budget.entry, files, budget.maxGzipBytes, output))
+    if (files === undefined) {
+      results.push({ violations: [{ rule: 'budgets/missing-entry', subject: budget.entry, detail: `构建清单里没有这个入口：${budget.label}的预算指向的入口不存在，更新预算表` }], notes: [] })
+      continue
+    }
+    results.push(measure(budget.label, budget.entry, files, budget.maxGzipBytes, output), countFiles(budget, files))
   }
   // 构建清单里没有预算的入口：新增入口时要一起定下预算（复验 RA5）
   for (const [entry, chunk] of Object.entries(manifest)) {

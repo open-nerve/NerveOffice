@@ -10,6 +10,7 @@ import { ApiError, describeError, isUnknownOutcome } from '../../shared/api/inde
 import { messages } from '../../shared/i18n/index.ts'
 import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
+import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { Alert, AlertDescription, Badge, Button, Input, Label, NativeSelect, PersonName, TableCell } from '../../shared/ui/index.ts'
 import { SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
@@ -19,6 +20,9 @@ import { IssuedLinkDialog } from './issued-link-dialog.tsx'
 import { PagedTable } from './paged-table.tsx'
 
 const text = adminMessages.invitations
+
+/** 邀请列表（各种状态过滤下的各页） */
+const INVITATIONS_QUERY_KEY = [...ADMIN_QUERY_KEY, 'invitations'] as const
 
 const STATUS_VARIANTS: Record<InvitationStatus, 'default' | 'secondary' | 'destructive' | 'outline'> = {
   pending: 'default',
@@ -75,8 +79,14 @@ export function AdminInvitationsPage() {
   const displayNameId = useId()
   const statusId = useId()
 
+  /** 刷新邀请列表：刷新失败时列表自己显示加载失败 */
   async function refresh(): Promise<void> {
-    await queryClient.invalidateQueries({ queryKey: [...ADMIN_QUERY_KEY, 'invitations'] })
+    await queryClient.invalidateQueries({ queryKey: INVITATIONS_QUERY_KEY })
+  }
+
+  /** 确认的弹窗在结果未知之后的刷新：刷新失败时拒绝，弹窗据此说明页面没能刷新（M2-P6 复核第三批 G-a） */
+  async function refreshAfterUnknown(): Promise<void> {
+    await refreshQueries(queryClient, [INVITATIONS_QUERY_KEY])
   }
 
   /** 焦点回到这条邀请的那一行；这一行不在表里（例如按状态过滤掉了）时回到状态的筛选（审查 B9） */
@@ -152,7 +162,7 @@ export function AdminInvitationsPage() {
         setPending(undefined)
         setIssued(linkOf(result, () => focusRow(result.invitation.id)))
       },
-      refresh,
+      refresh: refreshAfterUnknown,
       returnFocus: () => focusRow(invitation.id),
     })
   }
@@ -177,7 +187,7 @@ export function AdminInvitationsPage() {
                 await refresh()
               },
               // 结果未知时确认的弹窗刷新列表、说明可能已经作废（按状态幂等，再试安全，M2-P6 复核第二批 G-2）
-              refresh,
+              refresh: refreshAfterUnknown,
               // 作废之后这一行没有"作废"了
               returnFocus: () => focusRow(invitation.id),
             })}

@@ -13,6 +13,7 @@ import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { ADMIN_PATHS } from '../../shared/lib/admin-paths.ts'
 import { cn } from '../../shared/lib/cn.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
+import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { Alert, AlertDescription, Button, buttonVariants, Label, PersonName, Phrase, Skeleton, TableCell } from '../../shared/ui/index.ts'
 import { sessionQueryOptions, SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
@@ -95,19 +96,24 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
 
   /**
    * 转移失败（例如有文档已经被别人转走了）或者结果未知之后，刷新标题列表，清掉已经不在列表里的选中项，列表与选择都是服务端的实际状态
-   * （审查 B12，第二批 G-3）。返回刷新是否成功：刷新本身失败时列表不变，选择也不动
+   * （审查 B12，第二批 G-3）。刷新本身失败时拒绝，列表不变，选择也不动：结果未知之后确认的弹窗据此说明列表没能刷新（第三批 G-a）
    */
+  async function refreshDocuments(): Promise<void> {
+    await refreshQueries(queryClient, [documentsQuery.queryKey])
+    const pages = queryClient.getQueryData(documentsQuery.queryKey)?.pages ?? []
+    const present = new Set(pages.flatMap(page => page.items.map(document => document.id)))
+    setSelected(previous => new Set([...previous].filter(id => present.has(id))))
+  }
+
+  /** 同上，返回刷新是否成功（确定的失败之后，按它决定是关掉弹窗在按钮旁说明，还是弹窗留着说明原因） */
   async function refreshAfterFailure(): Promise<boolean> {
     try {
-      await queryClient.invalidateQueries({ queryKey: documentsQuery.queryKey }, { throwOnError: true })
+      await refreshDocuments()
+      return true
     }
     catch {
       return false
     }
-    const pages = queryClient.getQueryData(documentsQuery.queryKey)?.pages ?? []
-    const present = new Set(pages.flatMap(page => page.items.map(document => document.id)))
-    setSelected(previous => new Set([...previous].filter(id => present.has(id))))
-    return true
   }
 
   const target = targetOf(targetType, person, team)
@@ -122,7 +128,8 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
 
   /**
    * 确认之后整批转移。结果未知时（M2-P6 复核第二批 G-3）可能已经转移了：确认的弹窗按 refresh 刷新列表、清掉已经不在的选择，
-   * 说明"可能已经转移"；之后得到 TRANSFER_CONFLICT 时说明多半就是那一次已经完成
+   * 说明"可能已经转移"——列表没能刷新（失败，或者到了时限还没回来）时说明列表还是之前的（第三批 G-a）；
+   * 之后得到 TRANSFER_CONFLICT 时说明多半就是那一次已经完成
    */
   function submit(): void {
     if (blocked !== undefined || target === undefined)
@@ -157,8 +164,13 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
           throw error
         }
       },
-      refresh: refreshAfterFailure,
-      describeFailure: error => (isUnknownOutcome(error) ? text.outcomeUnknown(describeError(error).message) : describeError(error).message),
+      refresh: refreshDocuments,
+      describeFailure: (error, refreshed) => {
+        const reason = describeError(error).message
+        if (!isUnknownOutcome(error))
+          return reason
+        return refreshed ? text.outcomeUnknown(reason) : text.outcomeUnknownNotRefreshed(reason)
+      },
       // WebKit 点按钮时不聚焦按钮，打开之前的焦点记不下来：关闭之后焦点回到"转移"（它一直在，审查 B2）
       returnFocus: () => submitRef.current?.focus(),
     })

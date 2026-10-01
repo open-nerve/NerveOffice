@@ -1,12 +1,9 @@
-import type { LoginReason } from '../shared/lib/login-path.ts'
+import type { ExpiredReason } from '../shared/lib/login-path.ts'
 import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query'
 import { isAuthenticationError, isCsrfTokenError, isPermissionDeniedError, isTransientError } from '../shared/api/index.ts'
 
 /** 网络问题与服务端的临时错误重试一次；其他错误（4xx）重试也没用 */
 const MAX_TRANSIENT_RETRIES = 1
-
-/** "登录已过期"时带到登录页的原因（见 expiredReason） */
-export type ExpiredReason = Exclude<LoginReason, 'required'>
 
 /** 请求缓存从请求结果里看出的会话变化，由 app/runtime.ts 统一处理。 */
 export interface SessionEvents {

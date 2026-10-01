@@ -213,6 +213,29 @@ describe('US-M2-05 空间页', () => {
     // 表单收起之后焦点回到改名的按钮
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: '改名' })))
   })
+
+  it('改名的结果未知（其实已经改好）：页头与导航随即刷新、是新名称；表单留着说明可能已经生效、页面已刷新，可以再保存（第二批 G-2，第三批 S-c）', async () => {
+    let name = '市场部'
+    const api = loggedIn(MANAGER, {
+      'GET /api/spaces': () => json(200, { items: [personalSpaceOf(SESSION), { ...MANAGER, name }] }),
+      [`GET /api/spaces/${TEAM_ID}`]: () => json(200, { ...MANAGER, name }),
+      [`PUT /api/spaces/${TEAM_ID}/name`]: () => {
+        // 服务端已经改好，回包却丢了
+        name = '市场与品牌部'
+        return apiError(502, 'INTERNAL_ERROR')
+      },
+    })
+    renderApp(`/spaces/${TEAM_ID}`)
+    fireEvent.click(await screen.findByRole('button', { name: '改名' }))
+    fireEvent.change(screen.getByLabelText('空间名称'), { target: { value: '市场与品牌部' } })
+    const fetched = api.requests.filter(request => request.key === `GET /api/spaces/${TEAM_ID}`).length
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('没能确认是否已经完成（服务器出了点问题，请稍后重试）。可能已经生效：页面已按服务端现在的状态刷新，看得出是否已经生效；还没有的话，可以再试一次。')
+    expect(api.requests.filter(request => request.key === `GET /api/spaces/${TEAM_ID}`).length).toBeGreaterThan(fetched)
+    expect(screen.getByRole('heading', { name: '市场与品牌部' })).toBeInTheDocument()
+    expect(within(spaceNav()).getByRole('link', { name: '市场与品牌部' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '保存' })).toHaveAttribute('aria-disabled', 'false')
+  })
 })
 
 /** 空间刚被归档之后的页头：所有人只能查看 */
@@ -491,6 +514,39 @@ describe('US-M2-06 成员页', () => {
     expect(row).toHaveAttribute('aria-busy', 'false')
     expect(select).toHaveAccessibleDescription('团队空间至少要保留一个空间管理员')
     expect(screen.getAllByRole('alert')).toHaveLength(1)
+  })
+
+  it('调整角色的结果未知（其实已经改好）：成员列表随即刷新、选择框是新的角色；这一行说明可能已经生效、页面已刷新（第二批 G-2，第三批 S-c）', async () => {
+    let role: SpaceRole = 'viewer'
+    loggedIn(MANAGER, {
+      [MEMBERS_KEY]: () => json(200, membersList(true, [member(SESSION.user, 'admin'), member(BEN, role)])),
+      [memberKey('PUT', BEN)]: () => {
+        // 服务端已经改好，回包却丢了
+        role = 'editor'
+        return apiError(502, 'INTERNAL_ERROR')
+      },
+    })
+    renderApp(MEMBERS_PATH)
+    const { select, row } = await roleOf('本', 'ben')
+    saveRole(select, row, 'editor')
+    expect(await within(row).findByRole('alert')).toHaveTextContent('没能确认是否已经完成（服务器出了点问题，请稍后重试）。可能已经生效：页面已按服务端现在的状态刷新，看得出是否已经生效；还没有的话，可以再试一次。')
+    expect(select).toHaveValue('editor')
+    expect(row).toHaveAttribute('aria-busy', 'false')
+  })
+
+  it('调整角色的结果未知，随后刷新成员列表也失败：这一行说明可能已经生效、页面没能刷新，不说"已按服务端现在的状态刷新"（第三批 G-a）', async () => {
+    const api = loggedIn(MANAGER, {
+      [MEMBERS_KEY]: () => json(200, membersList(true, [member(SESSION.user, 'admin'), member(BEN, 'viewer')])),
+      [memberKey('PUT', BEN)]: () => {
+        api.on(MEMBERS_KEY, () => apiError(500, 'INTERNAL_ERROR'))
+        return apiError(502, 'INTERNAL_ERROR')
+      },
+    })
+    renderApp(MEMBERS_PATH)
+    const { select, row } = await roleOf('本', 'ben')
+    saveRole(select, row, 'editor')
+    expect(await within(row).findByRole('alert', {}, { timeout: 3000 })).toHaveTextContent('没能确认是否已经完成（服务器出了点问题，请稍后重试）。可能已经生效，只是页面没能刷新，显示的可能还是之前的状态：请稍后再看；确认还没有生效的话，可以再试一次。')
+    expect(row).toHaveAttribute('aria-busy', 'false')
   })
 
   it('不同的行可以同时调整（审查 B3）', async () => {

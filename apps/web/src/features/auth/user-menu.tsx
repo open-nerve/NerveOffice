@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { describeError, isAuthenticationError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { cn } from '../../shared/lib/cn.ts'
 import { useAdoptRenewedSession } from '../../shared/lib/renewed-session.ts'
 import { Button, PersonName } from '../../shared/ui/index.ts'
 import { ENDS_SESSION, logout, sessionQueryOptions } from './session.ts'
@@ -12,7 +13,7 @@ import { ENDS_SESSION, logout, sessionQueryOptions } from './session.ts'
  * 上一个会话的数据随页面丢弃，按后退键回到之前的地址时要重新请求，得到 401 后又回到登录页，看不到内容。这里只显示进行中与失败。
  * 退出得到"登录已过期"时先确认一次、可能再退出一次（logout，M2-P6 复验 一般-4），这期间按钮一直是"正在退出"。
  */
-export function UserMenu({ children }: { readonly children?: ReactNode }) {
+export function UserMenu({ children, className }: { readonly children?: ReactNode, readonly className?: string }) {
   const session = useQuery(sessionQueryOptions())
   const adoptRenewedSession = useAdoptRenewedSession()
   const mutation = useMutation({ mutationFn: async () => logout(adoptRenewedSession), meta: ENDS_SESSION })
@@ -26,7 +27,7 @@ export function UserMenu({ children }: { readonly children?: ReactNode }) {
   }
   return (
     // 窄屏时只有名字收窄成省略号，完整的名字在 title 里（M2-P1 审查 B11）；按钮与入口不收窄
-    <div className="flex min-w-0 items-center gap-3">
+    <div className={cn('flex min-w-0 items-center gap-3', className)}>
       {/* 显示名与登录名分开呈现（M2-P6 复核 M2），完整的名字在 title 里（显示名隔离） */}
       {session.data !== undefined && <PersonName person={session.data.user} className="min-w-0 truncate text-sm text-muted-foreground" title={messages.people.text(session.data.user)} />}
       {children}

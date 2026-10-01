@@ -1,5 +1,6 @@
 import type { MutationMeta } from '@tanstack/react-query'
 import { useMutation } from '@tanstack/react-query'
+import { useState } from 'react'
 import { refreshIfUnknown, writeFailureText } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../shared/ui/dialog.tsx'
@@ -15,7 +16,9 @@ export interface PendingConfirmation {
   readonly run: () => Promise<void>
   /**
    * 这个操作改变的是哪些查询显示的状态，重新请求它们（M2-P6 复核第二批 G-2）：结果未知时弹窗先调用它（操作可能已经生效），
-   * 页面随之是服务端现在的状态，再说明"可能已经生效"。必填：每个确认的操作都要说清楚，免得哪一处漏了、表格停在旧的状态
+   * 页面随之是服务端现在的状态，再说明"可能已经生效"。必填：每个确认的操作都要说清楚，免得哪一处漏了、表格停在旧的状态。
+   * 刷新失败时要拒绝（shared/lib/refresh-queries.ts 的 refreshQueries）：弹窗据此说明页面没能刷新，而不是说"已刷新"（第三批 G-a）。
+   * 弹窗等它有时限（第三批 S-a，shared/api/write-outcome.ts）：一直不回来时到了时限就先说明，弹窗随之可以关掉
    */
   readonly refresh: () => Promise<unknown>
   /** 打开弹窗的按钮随操作消失了（例如作废之后这一行没有"作废"）时，关闭之后焦点去哪里（审查 B9） */
@@ -23,9 +26,10 @@ export interface PendingConfirmation {
   /**
    * 失败的说明：不给时，结果未知说"可能已经生效"，其余按错误码（shared/api 的 writeFailureText）。结果未知时链接可能已经签发、
    * 文档可能已经转移（M2-P6 复核 S1：重新生成邀请、生成重置链接；第二批 G-3：转移），或者之后的拒绝其实说明上一次已经生效，
-   * 由页面给出对应的引导
+   * 由页面给出对应的引导。refreshed：结果未知之后页面刷新好了没有（refresh 失败或者到了时限为 false，第三批 G-a），
+   * 说明里提到"已刷新"的要按它说
    */
-  readonly describeFailure?: (error: unknown) => string
+  readonly describeFailure?: (error: unknown, refreshed: boolean) => string
 }
 
 interface ConfirmDialogProps {
@@ -40,15 +44,20 @@ interface ConfirmDialogProps {
  * 失败时按错误码说明原因（例如"至少要保留一个有效的系统管理员"），弹窗留着可以取消。
  * 结果未知时（M2-P6 复核第二批 G-2）：操作可能已经生效，先按 refresh 刷新页面上的状态，再说明"可能已经生效"——停用、启用、
  * 改系统角色、解除锁定、归档与恢复、全员可见、作废邀请、移出成员、转移、永久删除都经这里，一处做完。
+ * 刷新最多等 10 秒（第三批 S-a）：一直不回来时到了时限先给出说明，弹窗不再卡在"正在处理…"；刷新失败或者超时，说明页面没能刷新（第三批 G-a）。
  * 执行经请求缓存：管理界面标明只给系统管理员，被拒绝时由全局处理重新确认会话，系统角色已被取消就切到无权限（审查 B4）。
  * 关闭之后焦点回到打开它的按钮；按钮已经不在了，交给 returnFocus，焦点不落到 body（审查 B9）。
  * 带着 Radix Dialog：只由按需加载的页面引用，不进首屏（ADR-008）。
  */
 export function ConfirmDialog({ pending, onClose, meta }: ConfirmDialogProps) {
+  /** 上一次失败是结果未知、而且页面已经刷新好了：说明据此说"已刷新"还是"没能刷新"（第三批 G-a）。每次失败都重新记下 */
+  const [refreshed, setRefreshed] = useState(false)
   const mutation = useMutation({
     mutationFn: async (confirmation: PendingConfirmation) => confirmation.run(),
-    // 刷新完成之后才显示失败：说明里的"已按服务端现在的状态刷新"成立
-    onError: async (error, confirmation) => refreshIfUnknown(error, confirmation.refresh),
+    // 刷新完成（或者到了时限）之后才显示失败：说明与页面上的状态对得上（第二批 G-2，第三批 S-a）
+    onError: async (error, confirmation) => {
+      setRefreshed(await refreshIfUnknown(error, confirmation.refresh))
+    },
     ...(meta === undefined ? {} : { meta }),
   })
 
@@ -78,7 +87,7 @@ export function ConfirmDialog({ pending, onClose, meta }: ConfirmDialogProps) {
           </DialogHeader>
           {mutation.isError && (
             <Alert variant="destructive">
-              <AlertDescription>{pending.describeFailure?.(mutation.error) ?? writeFailureText(mutation.error)}</AlertDescription>
+              <AlertDescription>{pending.describeFailure?.(mutation.error, refreshed) ?? writeFailureText(mutation.error, refreshed)}</AlertDescription>
             </Alert>
           )}
           <DialogFooter>

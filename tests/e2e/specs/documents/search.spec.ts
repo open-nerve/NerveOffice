@@ -60,4 +60,47 @@ test.describe('US-M2-12 按标题搜索', () => {
     await results.first().getByRole('link').click()
     await expect(page).toHaveURL(`/documents/${draftId}`)
   })
+
+  test('窄屏：页头各项互不重叠、不溢出——搜索框折到第二行，宽一些时回到中间、名字收窄（M2-P6 复核第三批 G-e，M2-P1 审查 B11）', async ({ page }) => {
+    // 系统管理员（页头多一个"管理"）、显示名很长：最挤的情形
+    const admin = await createUser('narrow-header', '一个很长很长很长很长很长很长很长很长的显示名', { systemRole: 'admin' })
+    await loginThroughApi(page, admin)
+    await page.goto('/')
+    const header = page.getByRole('banner')
+    const parts = {
+      'brand': header.getByRole('link', { name: 'NerveOffice', exact: true }),
+      'admin': header.getByRole('link', { name: '管理', exact: true }),
+      'search': header.getByRole('search').getByLabel('按标题搜索文档', { exact: true }),
+      'submit': header.getByRole('search').getByRole('button', { name: '搜索', exact: true }),
+      'name': header.locator('[data-slot="person-name"]'),
+      // 窄屏时只留图标，可读名称不变
+      'change-password': header.getByRole('link', { name: '修改密码', exact: true }),
+      'sign-out': header.getByRole('button', { name: '退出', exact: true }),
+    }
+    for (const width of [320, 360, 480, 639, 640, 768]) {
+      await page.setViewportSize({ width, height: 700 })
+      await expect(page.getByRole('heading', { level: 1, name: '我的空间' })).toBeVisible()
+      const boxes = await Promise.all(Object.entries(parts).map(async ([part, locator]) => {
+        const box = await locator.boundingBox()
+        if (box === null)
+          throw new Error(`${width}px 宽时页头里的 ${part} 没有出现`)
+        return { part, box }
+      }))
+      for (const [index, { part, box }] of boxes.entries()) {
+        // 不溢出：每一项都在视口之内
+        expect(box.x, `${width}px：${part}`).toBeGreaterThanOrEqual(0)
+        expect(box.x + box.width, `${width}px：${part}`).toBeLessThanOrEqual(width + 0.5)
+        // 互不重叠（原来 520px 以下"搜索"按钮挤出搜索框、盖到人名上）
+        for (const other of boxes.slice(index + 1)) {
+          const apart = box.x + box.width <= other.box.x + 0.5 || other.box.x + other.box.width <= box.x + 0.5
+            || box.y + box.height <= other.box.y + 0.5 || other.box.y + other.box.height <= box.y + 0.5
+          expect(apart, `${width}px：${part} 与 ${other.part} 重叠`).toBe(true)
+        }
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth), `${width}px：页面横向溢出`).toBeLessThanOrEqual(width)
+      // 名字收窄成省略号，可见的宽度不为 0；完整的名字在 title 里
+      const name = boxes.find(({ part }) => part === 'name')?.box
+      expect(name?.width ?? 0, `${width}px：名字被挤没了`).toBeGreaterThan(0)
+    }
+  })
 })

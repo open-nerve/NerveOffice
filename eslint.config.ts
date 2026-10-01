@@ -591,7 +591,9 @@ const LAZY_TEXT_ZONES = LAZY_TEXTS.map(({ file, feature }) => ({
 
 /**
  * 只给平台页面用的请求层模块不经 shared/api/index.ts 转出（M2-P6 复核第二批）：编辑器页也引用这个桶文件，转出就进了两个入口共用的块，
- * 实测平台页面的入口随之多出两个小块（共用的 react-router 等不再并进入口块，另有一个运行时的块）。用到的地方按路径引用
+ * 实测平台页面的入口随之多出两个小块（共用的 react-router 等不再并进入口块，另有一个运行时的块）。用到的地方按路径引用。
+ * 这条只是早期提示，只拦得住经桶文件转出这一条路（经 session.ts 等再转出、经 shared/lib 中转、编辑器那边直接引用都拦不住）；
+ * 门禁 budgets 按平台页面首屏的文件数（2 个）从结果上兜住（第三批 S-b，tools/src/gates/policy.ts）
  */
 const PLATFORM_ONLY_API_ZONES = ['request-ids.ts', 'write-outcome.ts'].map(file => ({
   target: 'apps/web/src/shared/api/index.ts',

@@ -214,12 +214,22 @@ describe('M2-P6 复核第二批 S-1：服务端说这次是重放（replayed）�
     fireEvent.click(await screen.findByRole('button', { name: '新建表格' }))
     await screen.findByText(/^没能确认表格是否已经建好/)
     const listed = count(api, documentsKey(SESSION))
-    fireEvent.click(screen.getByRole('button', { name: '新建表格' }))
-    expect(await screen.findByText('上一次新建其实已经完成（当时没能确认结果），这次没有再建一份：就是「第一季度预算」。还要另建一份时，再点"新建表格"。')).toBeInTheDocument()
+    const create = screen.getByRole('button', { name: '新建表格' })
+    create.focus()
+    fireEvent.click(create)
+    const replayed = await screen.findByText('上一次新建其实已经完成（当时没能确认结果），这次没有再建一份：就是「第一季度预算」。还要另建一份时，再点"新建表格"。')
     expect(screen.getByRole('link', { name: '打开它' })).toHaveAttribute('href', `/documents/${NEW_ID}`)
+    // 说明条接住焦点，读屏随之读出（第三批 G-b）：与内容一起插入的 role="status" 部分读屏不播报，焦点又留在按钮上
+    const notice = replayed.closest('[role="status"]')
+    expect(notice).not.toBeNull()
+    await waitFor(() => expect(document.activeElement).toBe(notice))
     // 没有打开它（很久以后想另建一份时，打开的会是改过名的那一份）；列表刷新，看得到它现在的样子
     expect(app.page.visits).toEqual([])
     expect(count(api, documentsKey(SESSION))).toBeGreaterThan(listed)
+    // 关掉说明：焦点回到"新建表格"，不落到 body
+    fireEvent.click(within(notice as HTMLElement).getByRole('button', { name: '关闭' }))
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: '新建表格' })))
+    expect(screen.queryByText(/^上一次新建其实已经完成/)).toBeNull()
     // 按钮照常可用：再点就是新建一份
     fireEvent.click(screen.getByRole('button', { name: '新建表格' }))
     await waitFor(() => expect(app.page.visits).toEqual([`assign /documents/${OTHER_ID}`]))

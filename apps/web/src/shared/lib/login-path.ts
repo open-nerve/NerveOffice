@@ -7,6 +7,9 @@
  */
 export type LoginReason = 'required' | 'expired' | 'password_changed' | 'password_reset'
 
+/** 会话结束、回到登录页时带的原因：除了还没有登录（required）之外的那几种 */
+export type ExpiredReason = Exclude<LoginReason, 'required'>
+
 export const LOGIN_PATH = '/login'
 
 export function loginPath(from: string | undefined, reason: LoginReason = 'required'): string {

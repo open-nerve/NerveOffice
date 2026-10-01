@@ -2,12 +2,11 @@ import type { SessionResponse } from '@nerve-office/contracts'
 import type { QueryClient } from '@tanstack/react-query'
 import type { DataRouter, RouteObject } from 'react-router'
 import type { RequestIdLedger } from '../shared/api/request-ids.ts'
-import type { LoginReason } from '../shared/lib/login-path.ts'
+import type { ExpiredReason, LoginReason } from '../shared/lib/login-path.ts'
 import type { PageLocation } from '../shared/lib/page-location.ts'
 import type { AdoptRenewedSession } from '../shared/lib/renewed-session.ts'
 import type { SessionChannel } from '../shared/lib/session-channel.ts'
 import type { SessionRecheck } from '../shared/lib/session-recheck.ts'
-import type { ExpiredReason } from './query-client.ts'
 import { createBrowserRouter } from 'react-router'
 import { isOneTimeLinkPage } from '../features/account/index.ts'
 import { sessionQueryOptions } from '../features/auth/index.ts'
@@ -24,7 +23,10 @@ export interface AppRuntime {
   readonly queryClient: QueryClient
   /** 整页跳转：组件经 PageLocationContext 取用 */
   readonly page: PageLocation
-  /** 向服务端确认现在是谁：组件经 SessionRecheckContext 取用（例如管理员改了本人的账户之后，M2-P1 审查 B4） */
+  /**
+   * 向服务端确认现在是谁：组件经 SessionRecheckContext 取用（例如管理员改了本人的账户之后，M2-P1 审查 B4）；
+   * 带着原因（ifEnded）时，确认下来已经没有会话就按它回到登录页（为自己生成重置链接的结果未知之后，M2-P6 复核第三批 R-1）
+   */
   readonly recheckSession: SessionRecheck
   /** 请求得到"登录已过期"之后，换上浏览器里同一个人的新会话：退出经 AdoptRenewedSessionContext 取用（M2-P6 复验 一般-4） */
   readonly adoptRenewedSession: AdoptRenewedSession
@@ -81,7 +83,8 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
   /** 已经开始的确认轮数（每向服务端确认一次加一） */
   let checksStarted = 0
   /**
-   * 请求得到"登录已过期"、还没有结论（复验 N3）：reason 是确认之后没有会话时转到登录页的原因；
+   * 请求得到"登录已过期"（复验 N3），或者组件知道会话可能已经结束（recheckSession 带着原因，M2-P6 复核第三批 R-1），还没有结论：
+   * reason 是确认之后没有会话时转到登录页的原因；
    * after 是那时已经开始的确认轮数，只有在它之后开始的一轮才能下结论——更早开始的那一轮带的可能还是换令牌之前的旧 Cookie。
    * 在它之后开始的一轮都先等本页的登录、修改密码结束才发出请求（checkSessionOnce），带的是它们换上的新 Cookie
    */
@@ -91,7 +94,7 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
     // 未登录：浏览器里已经没有 Cookie，直接下结论。还有请求得到"登录已过期"、正在确认时，按它的原因转到登录页：
     // 过期的那次响应清除了 Cookie，之后的请求才成了未登录，原因仍是"已过期"（审查 B7，M2-P6 复验 建议-1）
     unauthenticated: () => leaveToLogin(expired?.reason ?? 'required'),
-    sessionExpired: reason => confirmExpiredSession(reason),
+    sessionExpired: reason => void confirmSessionEnded(reason),
     signedIn: () => channel.announce(),
     signedOut: () => {
       channel.announce()
@@ -134,15 +137,18 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
   }
 
   /**
-   * 请求得到"登录已过期"（复验 N3）：马上记下原因，向服务端确认现在是谁，结论在 checkSessionOnce 里（页面已经在离开时 recheckSession 不做事）。
+   * 会话可能已经结束、知道原因时：请求得到"登录已过期"（复验 N3，原因随请求的元数据），或者组件知道会话可能已经结束
+   * （recheckSession 带着原因：为自己生成重置链接的结果未知，服务端可能已经撤销了本人的会话，M2-P6 复核第三批 R-1）。
+   * 马上记下原因，向服务端确认现在是谁，结论在 checkSessionOnce 里：已经没有会话就按这个原因回到登录页；还是同一个人，页面不动
+   * （页面已经在离开时 recheckSession 不做事）。确认结束（或者合并进正在进行的那一次、它结束）时兑现。
    * 本页还在进行的登录、修改密码由那一轮先等它结束（M2-P6 复验 一般-1）；原因不等它就记下，确认期间别的请求得到未登录时用得上（建议-1）。
-   * 几个请求先后过期时保留更具体的原因：password_changed（修改密码的结果未知之后再提交，M2-P6 复核 G-1）、
-   * password_reset（为自己生成重置链接的结果未知之后再试，M2-P6 复核 S1），不被随后普通的"已过期"盖掉
+   * 先后几个时保留更具体的原因：password_changed（修改密码的结果未知之后再提交，M2-P6 复核 G-1）、
+   * password_reset（为自己生成重置链接的结果未知之后，M2-P6 复核 S1、第三批 R-1），不被随后普通的"已过期"盖掉
    */
-  function confirmExpiredSession(reason: ExpiredReason): void {
+  async function confirmSessionEnded(reason: ExpiredReason): Promise<void> {
     const earlier = expired?.reason
     expired = { reason: earlier === undefined || earlier === 'expired' ? reason : earlier, after: checksStarted }
-    void recheckSession()
+    return recheckSession()
   }
 
   /**
@@ -228,7 +234,7 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
       const current = await currentSession()
       if (leaving)
         return
-      // 请求得到"登录已过期"之后开始的这一轮，才能对它下结论（复验 N3）
+      // 请求得到"登录已过期"（或者组件带着原因要求确认）之后开始的这一轮，才能对它下结论（复验 N3）
       const concluding = expired !== undefined && round > expired.after ? expired : undefined
       if (current === undefined && expired !== undefined && concluding === undefined) {
         // 更早开始的一轮：带的可能还是换令牌之前的旧 Cookie，"没有会话"不作数，等随后补上的那一轮
@@ -237,7 +243,7 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
       if (concluding !== undefined)
         expired = undefined
       if (current === undefined && concluding !== undefined) {
-        // 已经没有会话：按请求得到的原因回到登录页。不整页重新加载：Cookie 可能已被清除，重新加载时"已过期"就成了"请先登录"
+        // 已经没有会话：按记下的原因回到登录页。不整页重新加载：Cookie 可能已被清除，重新加载时"已过期"就成了"请先登录"
         leaveToLogin(concluding.reason)
       }
       else if (current?.user.id !== shown?.user.id) {
@@ -259,7 +265,7 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
     router,
     queryClient,
     page,
-    recheckSession,
+    recheckSession: async ifEnded => (ifEnded === undefined ? recheckSession() : confirmSessionEnded(ifEnded)),
     adoptRenewedSession,
     requestIds: createRequestIdLedger(),
     dispose: () => {

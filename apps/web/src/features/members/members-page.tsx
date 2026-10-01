@@ -6,11 +6,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { ApiError, describeError, isMissingResource, isPermissionDeniedError, isUnknownOutcome } from '../../shared/api/index.ts'
-import { writeFailureText } from '../../shared/api/write-outcome.ts'
+import { refreshWithin, writeFailureText } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { membersMessages } from '../../shared/i18n/zh-cn/members.ts'
 import { ADMIN_PATHS } from '../../shared/lib/admin-paths.ts'
 import { cn } from '../../shared/lib/cn.ts'
+import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { HOME_PATH, spacePath } from '../../shared/lib/space-paths.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { useFocusRescue } from '../../shared/lib/use-focus-rescue.ts'
@@ -128,7 +129,8 @@ interface MemberRowProps {
  * - 保存成功时先用响应替换缓存里的这一行，再刷新成员列表：刷新失败时 TanStack Query 保留上一次的数据，
  *   这一行也已经是保存之后的角色，不显示旧的（复验）；
  * - 成员列表刷新完成之后才结束，选择框不先弹回旧的角色；
- * - 失败时恢复原来的角色（失败之后也刷新，显示服务端的实际状态），原因就在这一行说明。
+ * - 失败时恢复原来的角色（失败之后也刷新，显示服务端的实际状态），原因就在这一行说明。结果未知时说明可能已经生效（第二批 G-2）：
+ *   这时的刷新最多等 10 秒（第三批 S-a），这一行不一直停在"正在保存…"；刷新失败或者超时，说明页面没能刷新（第三批 G-a）。
  */
 function MemberRow({ spaceId, member, self, canManage, onDemoteSelf, onRemove }: MemberRowProps) {
   const queryClient = useQueryClient()
@@ -139,6 +141,8 @@ function MemberRow({ spaceId, member, self, canManage, onDemoteSelf, onRemove }:
   const [chosen, setChosen] = useState<SpaceRole>()
   /** 正在保存的角色 */
   const [saving, setSaving] = useState<SpaceRole>()
+  /** 上一次失败之后成员列表刷新好了没有：结果未知的说明据此说"已刷新"还是"没能刷新"（第三批 G-a） */
+  const [refreshed, setRefreshed] = useState(false)
   const change = useMutation({
     mutationFn: async (role: SpaceRole) => changeMemberRole(spaceId, member.user.id, role),
     onSuccess: (saved) => {
@@ -146,8 +150,11 @@ function MemberRow({ spaceId, member, self, canManage, onDemoteSelf, onRemove }:
         ? undefined
         : { ...list, items: list.items.map(item => (item.user.id === member.user.id ? saved : item)) })
     },
-    onSettled: async () => {
-      await queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY })
+    onSettled: async (_saved, error) => {
+      if (error !== null && isUnknownOutcome(error))
+        setRefreshed(await refreshWithin(async () => refreshQueries(queryClient, [SPACES_QUERY_KEY])))
+      else
+        await queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY })
       setSaving(undefined)
     },
   })
@@ -198,8 +205,8 @@ function MemberRow({ spaceId, member, self, canManage, onDemoteSelf, onRemove }:
                 </div>
                 {unsaved && <span id={unsavedId} className="text-xs text-muted-foreground">{text.unsaved}</span>}
                 {busy && <span id={noteId} className="text-xs text-muted-foreground">{text.saving}</span>}
-                {/* 结果未知时成员列表已经刷新（onSettled），说明可能已经生效（M2-P6 复核第二批 G-2） */}
-                {!busy && change.isError && <span id={noteId} role="alert" className="text-xs text-destructive">{writeFailureText(change.error)}</span>}
+                {/* 结果未知时成员列表已经刷新（onSettled），说明可能已经生效（M2-P6 复核第二批 G-2）；没能刷新时另说（第三批 G-a） */}
+                {!busy && change.isError && <span id={noteId} role="alert" className="text-xs text-destructive">{writeFailureText(change.error, refreshed)}</span>}
               </div>
             )
           : messages.spaces.roleName(member.role)}
@@ -232,8 +239,14 @@ function MembersTable({ spaceId, list, selfId, focusTitle }: MembersTableProps) 
   /** 表格上方的说明（要移出的人已经不在成员里了）；下一次打开确认的弹窗时清掉 */
   const [notice, setNotice] = useState<ReactNode>()
 
+  /** 成功之后刷新（成员列表、导航与空间页）：刷新失败时列表自己显示加载失败 */
   async function refresh(): Promise<void> {
     await queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY })
+  }
+
+  /** 确认的弹窗在结果未知之后的刷新：刷新失败时拒绝，弹窗据此说明页面没能刷新（M2-P6 复核第三批 G-a） */
+  async function refreshAfterUnknown(): Promise<void> {
+    await refreshQueries(queryClient, [SPACES_QUERY_KEY])
   }
 
   function confirm(confirmation: PendingConfirmation): void {
@@ -251,7 +264,7 @@ function MembersTable({ spaceId, list, selfId, focusTitle }: MembersTableProps) 
         await changeMemberRole(spaceId, member.user.id, role)
         await refresh()
       },
-      refresh,
+      refresh: refreshAfterUnknown,
       returnFocus: focusTitle,
     })
   }
@@ -291,7 +304,7 @@ function MembersTable({ spaceId, list, selfId, focusTitle }: MembersTableProps) 
         await refresh()
       },
       // 结果未知时确认的弹窗刷新成员列表、说明可能已经移出（M2-P6 复核第二批 G-2）；再试得到 404 时照上面说明"已经不在成员里了"
-      refresh,
+      refresh: refreshAfterUnknown,
       returnFocus: focusTitle,
     })
   }

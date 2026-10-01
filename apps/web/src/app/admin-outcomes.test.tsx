@@ -1,6 +1,7 @@
 // 管理界面里不带 requestId 的写操作在结果未知之后（M2-P6 复核 S1）：创建团队空间、加入空间、重新生成邀请、生成重置链接。
 // 照修改密码与签发邀请的做法：结果未知时刷新相关列表并说明可能已经生效，之后的 409 给出对应的引导；
-// 给自己生成重置链接的结果未知之后再试得到"登录已过期"，登录页说明密码可能已经失效。接口用假的 fetch。
+// 给自己生成重置链接的结果未知：先带着"密码可能已经失效"的原因确认会话，已经撤销就回到登录页、登录页这样说明（第三批 R-1）；
+// 会话还在时，之后再试得到"登录已过期"同样这样说明。接口用假的 fetch。
 import type { AdminSpace, Invitation } from '@nerve-office/contracts'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
@@ -120,31 +121,57 @@ describe('管理界面：结果未知之后（M2-P6 复核 S1）', () => {
     expect(await within(dialog).findByText('没能确认重置链接是否已经生成（网络连接失败，请检查网络后重试）。如果已经生成，这个人的当前密码已经失效，链接却没能显示：可以再生成一次，之前那一条随即作废。')).toBeInTheDocument()
   })
 
-  it('为自己生成重置链接的结果未知：说明你的密码可能已经失效；再试得到"登录已过期"（上一次其实生效了），登录页说明密码可能已经失效', async () => {
-    let posts = 0
+  it('为自己生成重置链接的结果未知，服务端其实已经生成（会话随之撤销）：不再请求需要登录的账户列表，带着"密码可能已经失效"的原因确认会话、回到登录页（第三批 R-1）', async () => {
     let revoked = false
     const api = installFakeApi({
       ...SPACES,
       'GET /api/auth/session': () => (revoked ? apiError(401, 'UNAUTHENTICATED') : json(200, session('admin'))),
-      'GET /api/admin/users': () => json(200, listPage([ROOT])),
+      // 会话撤销之后，需要登录的请求都得到"登录已过期"：之前的假接口在撤销之后仍回 200，第二批的回归（先刷新账户列表、
+      // 得到 401 之后按普通的"登录已过期"离开，登录页不说密码可能已经失效）就测不出来
+      'GET /api/admin/users': () => (revoked ? apiError(401, 'SESSION_EXPIRED') : json(200, listPage([ROOT]))),
       [`POST /api/admin/users/${ROOT.id}/password-reset`]: () => {
-        posts += 1
-        if (posts === 1) {
-          // 服务端已经让密码失效、撤销了会话，回包却丢了
-          revoked = true
-          return networkFailure()
-        }
-        return apiError(401, 'SESSION_EXPIRED')
+        // 服务端已经让密码失效、撤销了会话，回包却丢了
+        revoked = true
+        return networkFailure()
       },
     })
     const app = renderApp('/admin/users')
     fireEvent.click(within(await rowOf('root')).getByRole('button', { name: `生成重置链接 ${plainName('管理员', 'root')}` }))
     const dialog = await screen.findByRole('dialog', { name: '为你自己生成重置链接？' })
+    const listed = count(api, 'GET /api/admin/users')
+    fireEvent.click(within(dialog).getByRole('button', { name: '生成重置链接' }))
+    await waitFor(() => expect(app.page.visits).toEqual(['/login?from=%2Fadmin%2Fusers&reason=password_reset']))
+    await settle()
+    expect(app.page.visits).toHaveLength(1)
+    expect(count(api, 'GET /api/admin/users')).toBe(listed)
+    expect(count(api, `POST /api/admin/users/${ROOT.id}/password-reset`)).toBe(1)
+  })
+
+  it('为自己生成重置链接的结果未知，而会话还在（这一次没有生效）：留在页面上，说明你的密码可能已经失效；再试得到"登录已过期"（晚到的那一次其实生效了），登录页说明密码可能已经失效', async () => {
+    let posts = 0
+    let revoked = false
+    const api = installFakeApi({
+      ...SPACES,
+      'GET /api/auth/session': () => (revoked ? apiError(401, 'UNAUTHENTICATED') : json(200, session('admin'))),
+      'GET /api/admin/users': () => (revoked ? apiError(401, 'SESSION_EXPIRED') : json(200, listPage([ROOT]))),
+      [`POST /api/admin/users/${ROOT.id}/password-reset`]: () => {
+        posts += 1
+        return posts === 1 ? networkFailure() : apiError(401, 'SESSION_EXPIRED')
+      },
+    })
+    const app = renderApp('/admin/users')
+    fireEvent.click(within(await rowOf('root')).getByRole('button', { name: `生成重置链接 ${plainName('管理员', 'root')}` }))
+    const dialog = await screen.findByRole('dialog', { name: '为你自己生成重置链接？' })
+    const checked = count(api, 'GET /api/auth/session')
     fireEvent.click(within(dialog).getByRole('button', { name: '生成重置链接' }))
     expect(await within(dialog).findByText('没能确认重置链接是否已经生成（网络连接失败，请检查网络后重试）。如果已经生成，你的密码已经失效、登录也已退出，那条链接找不回来：再试时会回到登录页，请联系另一位系统管理员为你生成新的重置链接。')).toBeInTheDocument()
+    // 结果未知时先确认了一次会话：还在，页面不动
+    expect(count(api, 'GET /api/auth/session')).toBeGreaterThan(checked)
     await settle()
     expect(app.page.visits).toEqual([])
 
+    // 服务端晚到的那一次其实生效了：会话随之撤销
+    revoked = true
     fireEvent.click(within(dialog).getByRole('button', { name: '生成重置链接' }))
     // 运行时先向服务端确认会话（已经没有了），带着"密码可能已经失效"的原因整页回到登录页
     await waitFor(() => expect(app.page.visits).toEqual(['/login?from=%2Fadmin%2Fusers&reason=password_reset']))
@@ -182,6 +209,25 @@ describe('管理界面：按状态幂等的操作结果未知时刷新并说明�
     expect(count(api, 'GET /api/admin/users')).toBeGreaterThan(listed)
     // 表格不停在旧的状态
     expect(within(await rowOf('amy')).getByText('已停用')).toBeInTheDocument()
+  })
+
+  it('停用账户的结果未知，随后刷新账户列表也失败（仍然断网）：弹窗说明可能已经生效、页面没能刷新，不说"已按服务端现在的状态刷新"（第三批 G-a）', async () => {
+    let lists = 0
+    installFakeApi({
+      ...SPACES,
+      'GET /api/auth/session': () => json(200, session('admin')),
+      'GET /api/admin/users': () => {
+        lists += 1
+        return lists === 1 ? json(200, listPage([ROOT, AMY])) : networkFailure()
+      },
+      [`POST /api/admin/users/${AMY.id}/disable`]: () => networkFailure(),
+    })
+    renderApp('/admin/users')
+    fireEvent.click(within(await rowOf('amy')).getByRole('button', { name: `停用 ${plainName('艾米', 'amy')}` }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: '停用' }))
+    expect(await within(dialog).findByRole('alert', {}, { timeout: 3000 })).toHaveTextContent('没能确认是否已经完成（网络连接失败，请检查网络后重试）。可能已经生效，只是页面没能刷新，显示的可能还是之前的状态：请稍后再看；确认还没有生效的话，可以再试一次。')
+    expect(lists).toBeGreaterThan(1)
   })
 
   it('归档团队空间的结果未知：同样刷新列表、说明可能已经生效', async () => {

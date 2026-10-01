@@ -11,6 +11,7 @@ import { messages } from '../../shared/i18n/index.ts'
 import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { adminUserDocumentsPath } from '../../shared/lib/admin-paths.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
+import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { useSessionRecheck } from '../../shared/lib/session-recheck.ts'
 import { useDebouncedValue } from '../../shared/lib/use-debounced-value.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
@@ -22,6 +23,9 @@ import { IssuedLinkDialog } from './issued-link-dialog.tsx'
 import { PagedTable } from './paged-table.tsx'
 
 const text = adminMessages.users
+
+/** 账户列表（各种搜索与过滤条件下的各页） */
+const USERS_QUERY_KEY = [...ADMIN_QUERY_KEY, 'users'] as const
 
 /** 拼进纯文字（按钮的可读名称、确认框的标题）的名字：显示名隔离、登录名另外标出（M2-P6 复核 M2） */
 function nameOf(user: AdminUser): string {
@@ -60,7 +64,8 @@ export function AdminUsersPage() {
   const [issued, setIssued] = useState<IssuedReset>()
   /**
    * 为自己生成重置链接的结果未知（M2-P6 复核 S1）：密码可能已经失效、会话已经撤销。确认的弹窗随之换上 OWN_RESET_AFTER_UNKNOWN：
-   * 再试得到"登录已过期"时，登录页说明"你的密码可能已经失效"，而不是只说登录已过期。弹窗关掉时清掉
+   * 再试得到"登录已过期"时，登录页说明"你的密码可能已经失效"，而不是只说登录已过期。弹窗关掉时清掉。
+   * 结果未知的那一刻就先按同一个原因确认一次会话（confirmReset 的 refresh，第三批 R-1）：会话已经撤销的话，不必等再试就回到登录页
    */
   const [ownResetUnsure, setOwnResetUnsure] = useState(false)
   const tableRef = useRef<PagedTableHandle>(null)
@@ -68,8 +73,14 @@ export function AdminUsersPage() {
   const searchId = useId()
   const statusId = useId()
 
+  /** 成功之后刷新账户列表：刷新失败时列表自己显示加载失败，不算这个操作失败 */
   async function refresh(): Promise<void> {
-    await queryClient.invalidateQueries({ queryKey: [...ADMIN_QUERY_KEY, 'users'] })
+    await queryClient.invalidateQueries({ queryKey: USERS_QUERY_KEY })
+  }
+
+  /** 确认的弹窗在结果未知之后的刷新：刷新失败时拒绝，弹窗据此说明页面没能刷新（M2-P6 复核第三批 G-a） */
+  async function refreshAfterUnknown(): Promise<void> {
+    await refreshQueries(queryClient, [USERS_QUERY_KEY])
   }
 
   /** 焦点回到这个账户的那一行；这一行已经不在表里（例如按状态过滤掉了）时回到搜索框（审查 B9） */
@@ -80,7 +91,7 @@ export function AdminUsersPage() {
 
   /**
    * 停用与启用、改系统角色、解除锁定：先确认，再执行。结果未知时（M2-P6 复核第二批 G-2）确认的弹窗刷新账户列表、说明可能已经生效
-   * （这些操作按状态幂等，再试安全）
+   * （这些操作按状态幂等，再试安全）；刷新失败时说明页面没能刷新（第三批 G-a）
    */
   function confirmThen(user: AdminUser, confirmation: Omit<PendingConfirmation, 'run' | 'refresh' | 'returnFocus'>, action: () => Promise<unknown>): void {
     const own = user.id === session.data?.user.id
@@ -93,14 +104,18 @@ export function AdminUsersPage() {
           await recheckSession()
         await refresh()
       },
-      refresh,
+      refresh: refreshAfterUnknown,
       returnFocus: () => focusRow(user),
     })
   }
 
   /**
    * 生成重置链接（M2-P6 复核 S1）：结果未知时服务端可能已经让密码失效、撤销了会话，链接却只在响应里出现一次——
-   * 弹窗里说明这一点（给自己生成的另说"你的密码可能已经失效"）；再生成一次没有冲突，之前那一条随即作废
+   * 弹窗里说明这一点（给自己生成的另说"你的密码可能已经失效"）；再生成一次没有冲突，之前那一条随即作废。
+   * 结果未知之后确认的弹窗按 refresh 确认（第二批 G-2）。生成重置链接不改变账户列表显示的任何一项（状态、角色、锁定都不变），
+   * 给别人生成时没有要重新请求的。给自己生成时，变了的是本人的会话（M2-P6 复核第三批 R-1）：服务端可能已经撤销了它，这时重新请求
+   * 账户列表（或任何需要登录的请求）只会得到"登录已过期"、按普通的原因回到登录页，登录页就不说"你的密码可能已经失效"了。
+   * 所以改为带着 password_reset 的原因确认会话：已经没有会话，就按这个原因回到登录页；还在（这一次没有生效），弹窗留着说明，可以再试
    */
   function confirmReset(user: AdminUser): void {
     const own = user.id === session.data?.user.id
@@ -139,7 +154,7 @@ export function AdminUsersPage() {
           own,
         })
       },
-      refresh,
+      refresh: own ? async () => recheckSession('password_reset') : async () => {},
       returnFocus: () => focusRow(user),
     })
   }

@@ -61,7 +61,7 @@ test.describe('US-M2-06 管理成员与空间角色', () => {
     await expect(nav.getByRole('link', { name: space.name })).toHaveCount(0)
   })
 
-  test('选人：显示名写成"李四（登录名）"冒充别人的，与真正的李四分得清——登录名在单独的元素里、等宽、颜色不同；选中与成员表里一样（M2-P6 复核 M2）', async ({ page }) => {
+  test('选人：显示名写成"李四（登录名）"冒充别人的，与真正的李四分得清——登录名在单独的元素里、等宽、与显示名同样醒目；选中与成员表里一样（M2-P6 复核 M2，第三批 S-d）', async ({ page }) => {
     const admin = await createUser('mb-pick-admin', '管理员', { systemRole: 'admin' })
     const lead = await createUser('mb-pick-lead', '空间管理员')
     const tag = randomBytes(3).toString('hex')
@@ -80,15 +80,22 @@ test.describe('US-M2-06 管理成员与空间角色', () => {
     await expect(realButton.locator('[data-slot="person-username"]')).toHaveText(`@${real.username}`)
     await expect(spoofButton.locator('bdi')).toHaveText(spoof.displayName)
     await expect(spoofButton.locator('[data-slot="person-username"]')).toHaveText(`@${spoof.username}`)
-    // 登录名的样式与显示名明显不同：等宽字体、灰色
+    // 登录名用等宽字体与显示名区分；与显示名同样醒目——颜色、字号、粗细都相同（需求方 2026-10-02 的决定，M2-P6 复核第三批 S-d：
+    // 原来登录名灰色、小一号，冒充者那一行里最醒目的反倒是可以伪造的显示名）
     const styles = await spoofButton.locator('[data-slot="person-username"]').evaluate((username) => {
       const name = username.parentElement?.querySelector('bdi')
       const own = getComputedStyle(username)
-      return { font: own.fontFamily, color: own.color, nameFont: name === null || name === undefined ? '' : getComputedStyle(name).fontFamily, nameColor: name === null || name === undefined ? '' : getComputedStyle(name).color }
+      const shown = name === null || name === undefined ? undefined : getComputedStyle(name)
+      return {
+        login: { font: own.fontFamily, color: own.color, size: own.fontSize, weight: own.fontWeight },
+        name: { font: shown?.fontFamily, color: shown?.color, size: shown?.fontSize, weight: shown?.fontWeight },
+      }
     })
-    expect(styles.font).toMatch(/mono/i)
-    expect(styles.font).not.toBe(styles.nameFont)
-    expect(styles.color).not.toBe(styles.nameColor)
+    expect(styles.login.font).toMatch(/mono/i)
+    expect(styles.login.font).not.toBe(styles.name.font)
+    expect(styles.login.color).toBe(styles.name.color)
+    expect(styles.login.size).toBe(styles.name.size)
+    expect(styles.login.weight).toBe(styles.name.weight)
 
     // 选中冒充者：已选的标签里同样分得清；添加之后成员表里也一样
     await spoofButton.click()

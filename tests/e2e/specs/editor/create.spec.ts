@@ -93,6 +93,8 @@ test.describe('US-M1-04 新建表格并进入编辑', () => {
     // 想再建一份：服务端认出那个 requestId，按重放回答——说明上一次其实已经完成，不打开它
     await page.getByRole('button', { name: '新建表格', exact: true }).click()
     await expect(page.getByText('上一次新建其实已经完成（当时没能确认结果），这次没有再建一份：就是「第一季度预算」。还要另建一份时，再点"新建表格"。')).toBeVisible()
+    // 说明条接住焦点，读屏随之读出（M2-P6 复核第三批 G-b）
+    await expect(page.getByRole('status').filter({ hasText: '上一次新建其实已经完成' })).toBeFocused()
     await expect(page).toHaveURL('/')
     const replayedLink = page.getByRole('link', { name: '打开它', exact: true })
     await expect(replayedLink).toHaveAttribute('href', /^\/documents\/[\da-f-]{36}$/)

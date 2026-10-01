@@ -71,7 +71,7 @@ describe('按需加载的页面没能下载下来（M2-P6 复核 S6）', () => {
     expect(app.page.visits).toEqual([])
   })
 
-  it('部署了新版本（入口脚本变了，旧的分块已经不在）：整页重新加载一次；同一个版本再失败时不再重新加载，说明并可以重试', async () => {
+  it('部署了新版本（入口脚本变了，旧的分块已经不在）：整页重新加载一次；同一个版本再失败时不再重新加载，说明服务器上已是新版本（不说"版本也没有变"，第三批 G-c），可以重试', async () => {
     loggedIn({ 'GET /': entryPage('/assets/index-new.js') })
     const first = renderApp('/search?q=周报')
     await waitFor(() => expect(first.page.visits).toEqual(['reload']))
@@ -80,8 +80,23 @@ describe('按需加载的页面没能下载下来（M2-P6 复核 S6）', () => {
     first.dispose()
     const second = renderApp('/search?q=周报')
     expect(await screen.findAllByRole('heading', { level: 1, name: '页面没能加载' })).not.toHaveLength(0)
+    expect(screen.getByText('服务器上已经部署了新版本，这个页面没能自动换上它。可以重试（重新加载页面）；一直这样的话，请告诉管理员。')).toBeInTheDocument()
+    expect(screen.queryByText(/版本也没有变/)).toBeNull()
     await settle()
     expect(second.page.visits).toEqual([])
+  })
+
+  it('部署了新版本，会话存储不可用（记不下为哪个版本重新加载过，为防循环不自动重新加载）：同样说明服务器上已是新版本，可以重试（第三批 G-c）', async () => {
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('quota', 'QuotaExceededError')
+    })
+    onTestFinished(() => setItem.mockRestore())
+    loggedIn({ 'GET /': entryPage('/assets/index-new.js') })
+    const app = renderApp('/search?q=周报')
+    expect(await screen.findByText('服务器上已经部署了新版本，这个页面没能自动换上它。可以重试（重新加载页面）；一直这样的话，请告诉管理员。')).toBeInTheDocument()
+    expect(app.page.visits).toEqual([])
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    expect(app.page.visits).toEqual(['reload'])
   })
 })
 

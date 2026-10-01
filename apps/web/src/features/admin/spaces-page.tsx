@@ -9,6 +9,7 @@ import { ApiError, describeError, isUnknownOutcome } from '../../shared/api/inde
 import { messages } from '../../shared/i18n/index.ts'
 import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
+import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { spaceMembersPath } from '../../shared/lib/space-paths.ts'
 import { useDebouncedValue } from '../../shared/lib/use-debounced-value.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
@@ -22,6 +23,9 @@ import { PagedTable } from './paged-table.tsx'
 import { JoinSpaceDialog, RenameSpaceDialog } from './space-dialogs.tsx'
 
 const text = adminMessages.spaces
+
+/** 管理界面的团队空间列表与左侧导航（"我能看到的空间"等）：加入、改名、全员可见、归档会改变谁看得到什么 */
+const LIST_QUERY_KEYS = [[...ADMIN_QUERY_KEY, 'spaces'], SPACES_QUERY_KEY] as const
 
 /** 已有同名的团队空间 */
 function isNameTaken(error: unknown): boolean {
@@ -135,12 +139,14 @@ export function AdminSpacesPage() {
   const searchId = useId()
   const statusId = useId()
 
-  /** 管理界面的列表与导航（加入、改名、全员可见会改变谁看得到什么）一起刷新 */
+  /** 管理界面的列表与导航（加入、改名、全员可见会改变谁看得到什么）一起刷新；刷新失败时列表自己显示加载失败 */
   async function refresh(): Promise<void> {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: [...ADMIN_QUERY_KEY, 'spaces'] }),
-      queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY }),
-    ])
+    await Promise.all(LIST_QUERY_KEYS.map(async queryKey => queryClient.invalidateQueries({ queryKey })))
+  }
+
+  /** 弹窗在结果未知之后的刷新：同样的列表与导航，刷新失败时拒绝，弹窗据此说明页面没能刷新（M2-P6 复核第三批 G-a） */
+  async function refreshAfterUnknown(): Promise<void> {
+    await refreshQueries(queryClient, LIST_QUERY_KEYS)
   }
 
   function focusRow(space: AdminSpace): void {
@@ -161,7 +167,7 @@ export function AdminSpacesPage() {
         await action()
         await refresh()
       },
-      refresh,
+      refresh: refreshAfterUnknown,
       returnFocus: () => focusRow(space),
     })
   }
@@ -219,8 +225,8 @@ export function AdminSpacesPage() {
         )}
       />
       <ConfirmDialog pending={pending} onClose={() => setPending(undefined)} meta={SYSTEM_ADMIN_ONLY} />
-      <RenameSpaceDialog space={renaming} onDone={refresh} onClose={() => setRenaming(undefined)} returnFocus={() => focusRowOf(renaming)} />
-      <JoinSpaceDialog space={joining} onDone={refresh} onClose={() => setJoining(undefined)} returnFocus={() => focusRowOf(joining)} />
+      <RenameSpaceDialog space={renaming} onDone={refresh} refresh={refreshAfterUnknown} onClose={() => setRenaming(undefined)} returnFocus={() => focusRowOf(renaming)} />
+      <JoinSpaceDialog space={joining} onDone={refresh} refresh={refreshAfterUnknown} onClose={() => setJoining(undefined)} returnFocus={() => focusRowOf(joining)} />
     </div>
   )
 }

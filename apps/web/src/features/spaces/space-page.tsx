@@ -8,6 +8,7 @@ import { Link, useParams } from 'react-router'
 import { describeError, isAccessDenied, isMissingResource } from '../../shared/api/index.ts'
 import { refreshIfUnknown, writeFailureText } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { folderIdsFromPath, spaceMembersPath } from '../../shared/lib/space-paths.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
@@ -31,11 +32,14 @@ interface RenameFormProps {
 
 /**
  * 行内改名（不用弹窗，不进首屏的 Radix Dialog）：保存之后导航与页头随即是新名称；名称不合法时说明原因（M2-P6 复核 S4）。
- * 结果未知时页头与导航刷新、说明可能已经改好（改名按状态幂等，再保存一次是安全的，M2-P6 复核第二批 G-2）
+ * 结果未知时页头与导航刷新、说明可能已经改好（改名按状态幂等，再保存一次是安全的，M2-P6 复核第二批 G-2）；
+ * 刷新最多等 10 秒（第三批 S-a），刷新失败或者超时就说明页面没能刷新（第三批 G-a）
  */
 function RenameForm({ space, onDone, onDenied }: RenameFormProps) {
   const queryClient = useQueryClient()
   const [name, setName] = useState(space.name)
+  /** 上一次失败之后页面刷新好了没有：说明据此说"已刷新"还是"没能刷新"（第三批 G-a） */
+  const [refreshed, setRefreshed] = useState(false)
   const inputId = useId()
   const problemId = useId()
   const mutation = useMutation({
@@ -49,7 +53,7 @@ function RenameForm({ space, onDone, onDenied }: RenameFormProps) {
         onDenied(error)
         return
       }
-      await refreshIfUnknown(error, async () => queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY }))
+      setRefreshed(await refreshIfUnknown(error, async () => refreshQueries(queryClient, [SPACES_QUERY_KEY])))
     },
   })
   const parsed = spaceNameSchema.safeParse(name)
@@ -74,7 +78,7 @@ function RenameForm({ space, onDone, onDenied }: RenameFormProps) {
       <FieldProblem id={problemId} problem={problem} empty={name === ''} />
       {mutation.isError && !isAccessDenied(mutation.error) && (
         <Alert variant="destructive" className="basis-full">
-          <AlertDescription>{writeFailureText(mutation.error)}</AlertDescription>
+          <AlertDescription>{writeFailureText(mutation.error, refreshed)}</AlertDescription>
         </Alert>
       )}
     </form>

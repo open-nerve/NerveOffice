@@ -219,6 +219,44 @@ describe('请求得到"登录已过期"：先向服务端确认会话（复验 N
     expect(page.visits).toHaveLength(1)
   })
 
+  it('组件带着原因要求确认（为自己生成重置链接的结果未知，M2-P6 复核第三批 R-1）：已经没有会话，按这个原因回到登录页，而不是整页重新加载；确认结束才兑现', async () => {
+    const pending = deferredResponse()
+    installFakeApi({ 'GET /api/auth/session': pending.handler })
+    const { runtime, page } = runtimeAt('/admin/users')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    let settled = false
+    const checking = runtime.recheckSession('password_reset').then(() => {
+      settled = true
+    })
+    await settle()
+    expect(settled).toBe(false)
+    pending.resolve(apiError(401, 'SESSION_EXPIRED'))
+    await checking
+    expect(page.visits).toEqual(['/login?from=%2Fadmin%2Fusers&reason=password_reset'])
+  })
+
+  it('组件带着原因要求确认，会话还在（这一次没有生效）：页面不动；确认期间别的请求先得到普通的"登录已过期"，原因仍是更具体的那个', async () => {
+    installFakeApi({ 'GET /api/auth/session': () => json(200, { ...SESSION, csrfToken: 'csrf-2' }) })
+    const { runtime, page } = runtimeAt('/admin/users')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    await runtime.recheckSession('password_reset')
+    expect(page.visits).toEqual([])
+    expect(sessionOf(runtime)?.csrfToken).toBe('csrf-2')
+
+    // 另一回：会话已经撤销，确认有结论之前账户列表先得到普通的"登录已过期"
+    const first = deferredResponse()
+    const api = installFakeApi({ 'GET /api/auth/session': first.handler })
+    const checking = runtime.recheckSession('password_reset')
+    await vi.waitFor(() => expect(api.requests).toHaveLength(1))
+    await failWith(runtime, 'SESSION_EXPIRED')
+    api.on('GET /api/auth/session', () => apiError(401, 'SESSION_EXPIRED'))
+    first.resolve(apiError(401, 'SESSION_EXPIRED'))
+    await checking
+    await vi.waitFor(() => expect(page.visits).toEqual(['/login?from=%2Fadmin%2Fusers&reason=password_reset']))
+    await settle()
+    expect(page.visits).toHaveLength(1)
+  })
+
   it('确认时换了人（别的标签页登录了另一个人）：整页重新加载，新会话的令牌不交给这个页面', async () => {
     installFakeApi({ 'GET /api/auth/session': () => json(200, OTHER_SESSION) })
     const { runtime, page } = runtimeAt('/')
