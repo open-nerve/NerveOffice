@@ -59,7 +59,7 @@ describe('US-M2-05 管理界面：团队空间', () => {
     expect(submit).toHaveAttribute('aria-disabled', 'true')
     expect(submit).toHaveAccessibleDescription('请先选择首个空间管理员')
     fireEvent.change(within(form).getByLabelText('首个空间管理员'), { target: { value: '本' } })
-    fireEvent.click(await within(form).findByRole('button', { name: '本 @ben' }))
+    fireEvent.click(await within(form).findByRole('button', { name: '@ben 本' }))
     // 选好了空间管理员，名称还是空的：说明名称的要求
     expect(submit).toHaveAttribute('aria-disabled', 'true')
     expect(submit).toHaveAccessibleDescription(/名称/)
@@ -86,7 +86,7 @@ describe('US-M2-05 管理界面：团队空间', () => {
     const form = await screen.findByRole('form', { name: '创建团队空间' })
     fireEvent.change(within(form).getByLabelText('名称'), { target: { value: '市场部' } })
     fireEvent.change(within(form).getByLabelText('首个空间管理员'), { target: { value: '本' } })
-    fireEvent.click(await within(form).findByRole('button', { name: '本 @ben' }))
+    fireEvent.click(await within(form).findByRole('button', { name: '@ben 本' }))
     fireEvent.click(within(form).getByRole('button', { name: '创建团队空间' }))
     expect(await within(form).findByRole('alert')).toHaveTextContent('已有同名的团队空间')
     expect(within(form).getByLabelText('名称')).toHaveValue('市场部')
@@ -282,7 +282,7 @@ describe('US-M2-04 转移停用者的文档', () => {
       },
     })
     renderApp(`/admin/users/${AMY.id}/documents`)
-    expect(await screen.findByRole('heading', { name: '转移 艾米 @amy 的文档' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '转移 @amy 艾米 的文档' })).toBeInTheDocument()
     fireEvent.click(await screen.findByLabelText('选择 文档 0'))
     fireEvent.click(screen.getByLabelText('选择 文档 1'))
     expect(screen.getByText('已选择 2 份，一次最多 100 份')).toBeInTheDocument()
@@ -331,8 +331,8 @@ describe('US-M2-04 转移停用者的文档', () => {
     fireEvent.click(screen.getByRole('radio', { name: '某人的个人空间' }))
     fireEvent.change(screen.getByLabelText('接收文档的同事'), { target: { value: '本' } })
     const candidates = await screen.findByRole('list', { name: '找到的同事' })
-    expect(within(candidates).getAllByRole('button').map(button => button.textContent)).toEqual(['本 @ben'])
-    fireEvent.click(within(candidates).getByRole('button', { name: '本 @ben' }))
+    expect(within(candidates).getAllByRole('button').map(button => button.textContent)).toEqual(['@ben 本'])
+    fireEvent.click(within(candidates).getByRole('button', { name: '@ben 本' }))
     const submit = screen.getByRole('button', { name: '转移' })
     submit.focus()
     fireEvent.click(submit)
@@ -372,6 +372,43 @@ describe('US-M2-04 转移停用者的文档', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(screen.queryByText(/列表已刷新，请重新选择后再转移/)).toBeNull()
     expect(requestCount(api, TRANSFER_KEY)).toBe(1)
+  })
+
+  it('转移的结果未知（其实已经转走）：列表刷新、转走的不再算作选中，弹窗说明可能已经转移；再点得到 TRANSFER_CONFLICT，说明多半是上一次已经完成（第二批 G-3）', async () => {
+    let items = titles(2)
+    let posts = 0
+    const api = admin({
+      [`GET /api/admin/users/${AMY.id}`]: () => json(200, LEAVER),
+      [DOCUMENTS_KEY]: () => json(200, listPage(items)),
+      [`GET /api/admin/spaces${search({ query: '市场', status: 'active' })}`]: () => json(200, listPage([SPACE])),
+      [TRANSFER_KEY]: () => {
+        posts += 1
+        if (posts === 1) {
+          // 服务端已经转走了，回包却丢了
+          items = []
+          return apiError(502, 'INTERNAL_ERROR')
+        }
+        return apiError(409, 'TRANSFER_CONFLICT')
+      },
+    })
+    renderApp(`/admin/users/${AMY.id}/documents`)
+    fireEvent.click(await screen.findByLabelText('全选已加载的文档'))
+    fireEvent.change(screen.getByLabelText('目标团队空间'), { target: { value: '市场' } })
+    fireEvent.click(await screen.findByRole('button', { name: '市场部' }))
+    fireEvent.click(screen.getByRole('button', { name: '转移' }))
+    const dialog = await screen.findByRole('dialog', { name: '把 2 份文档转移到 市场部？' })
+    const listed = requestCount(api, DOCUMENTS_KEY)
+    fireEvent.click(within(dialog).getByRole('button', { name: '转移' }))
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('没能确认是否已经转移（服务器出了点问题，请稍后重试）。可能已经转移了：列表已刷新，不在列表里的就是已经转走了，选择也随之去掉；还在的可以再转移一次。')
+    expect(requestCount(api, DOCUMENTS_KEY)).toBeGreaterThan(listed)
+    expect(screen.queryByText('文档 0')).toBeNull()
+    expect(screen.getByText('已选择 0 份，一次最多 100 份')).toBeInTheDocument()
+
+    // 弹窗还开着，再点一次：那两份已经不在了
+    fireEvent.click(within(dialog).getByRole('button', { name: '转移' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(screen.getByRole('alert')).toHaveTextContent('有文档已经不在这个人的个人空间里了：多半是你上一次没能确认的那次转移已经完成。列表已刷新，请看看还剩哪些，需要的话重新选择后再转移')
+    expect(requestCount(api, TRANSFER_KEY)).toBe(2)
   })
 
   it('有文档已被别人转走，而刷新标题列表失败：列表还是旧的，弹窗留着说明原因（复验）', async () => {

@@ -8,6 +8,7 @@ import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-q
 import { useId, useRef, useState } from 'react'
 import { ApiError, describeError, isUnknownOutcome } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { Alert, AlertDescription, Badge, Button, Input, Label, NativeSelect, PersonName, TableCell } from '../../shared/ui/index.ts'
@@ -17,7 +18,7 @@ import { ADMIN_QUERY_KEY, createInvitation, invitationsQueryOptions, reissueInvi
 import { IssuedLinkDialog } from './issued-link-dialog.tsx'
 import { PagedTable } from './paged-table.tsx'
 
-const text = messages.admin.invitations
+const text = adminMessages.invitations
 
 const STATUS_VARIANTS: Record<InvitationStatus, 'default' | 'secondary' | 'destructive' | 'outline'> = {
   pending: 'default',
@@ -27,7 +28,7 @@ const STATUS_VARIANTS: Record<InvitationStatus, 'default' | 'secondary' | 'destr
 }
 
 function linkOf(issued: IssuedInvitation, returnFocus: () => void): IssuedLink {
-  return { title: messages.admin.link.invitationTitle, recipient: issued.invitation, url: issued.url, expiresAt: issued.invitation.expiresAt, returnFocus }
+  return { title: adminMessages.link.invitationTitle, recipient: issued.invitation, url: issued.url, expiresAt: issued.invitation.expiresAt, returnFocus }
 }
 
 /** 这个登录名已被占用，或者已有待接受的邀请 */
@@ -56,7 +57,7 @@ function issueFailureText(error: unknown, request: CreateInvitationRequest | und
  * 签发的结果未知时（网络中断、服务端出错）刷新列表、保留输入，引导去列表里重新生成（M2-P6 复核 G-2）。
  */
 export function AdminInvitationsPage() {
-  useDocumentTitle(messages.admin.pageTitle(messages.admin.nav.invitations))
+  useDocumentTitle(adminMessages.pageTitle(adminMessages.nav.invitations))
   const queryClient = useQueryClient()
   const [status, setStatus] = useState<InvitationStatus | ''>('')
   const invitations = useInfiniteQuery(invitationsQueryOptions({ status: status === '' ? undefined : status }))
@@ -118,8 +119,8 @@ export function AdminInvitationsPage() {
 
   /**
    * 重新生成（M2-P6 复核 S1）：结果未知时新的邀请可能已经建好、原来的随即作废，新的链接却只在响应里出现一次——
-   * 列表随即刷新，说明要找到最新的那一条再重新生成；结果未知之后再点得到"已被占用"，多半就是刚才那一次，同样刷新并引导。
-   * unsure 记在这一次弹窗里：弹窗关掉、下次再打开就是另一次
+   * 列表随即刷新（确认的弹窗按 refresh 刷新，第二批 G-2），说明要找到最新的那一条再重新生成；结果未知之后再点得到"已被占用"，
+   * 多半就是刚才那一次，同样刷新并引导。unsure 记在这一次弹窗里：弹窗关掉、下次再打开就是另一次
    */
   function confirmReissue(invitation: Invitation): void {
     let unsure = false
@@ -142,7 +143,7 @@ export function AdminInvitationsPage() {
         catch (error) {
           if (isUnknownOutcome(error))
             unsure = true
-          if (isUnknownOutcome(error) || (unsure && isUsernameTaken(error)))
+          else if (unsure && isUsernameTaken(error))
             await refresh()
           throw error
         }
@@ -151,6 +152,7 @@ export function AdminInvitationsPage() {
         setPending(undefined)
         setIssued(linkOf(result, () => focusRow(result.invitation.id)))
       },
+      refresh,
       returnFocus: () => focusRow(invitation.id),
     })
   }
@@ -164,7 +166,7 @@ export function AdminInvitationsPage() {
           <Button
             variant="ghost"
             size="sm"
-            aria-label={messages.admin.actionOn(text.revoke, invitation.username)}
+            aria-label={messages.common.actionOn(text.revoke, invitation.username)}
             onClick={() => setPending({
               title: text.confirmRevoke(invitation.username),
               description: text.revokeDescription,
@@ -174,6 +176,8 @@ export function AdminInvitationsPage() {
                 await revokeInvitation(invitation.id)
                 await refresh()
               },
+              // 结果未知时确认的弹窗刷新列表、说明可能已经作废（按状态幂等，再试安全，M2-P6 复核第二批 G-2）
+              refresh,
               // 作废之后这一行没有"作废"了
               returnFocus: () => focusRow(invitation.id),
             })}
@@ -185,7 +189,7 @@ export function AdminInvitationsPage() {
           <Button
             variant="ghost"
             size="sm"
-            aria-label={messages.admin.actionOn(text.reissue, invitation.username)}
+            aria-label={messages.common.actionOn(text.reissue, invitation.username)}
             onClick={() => confirmReissue(invitation)}
           >
             {text.reissue}

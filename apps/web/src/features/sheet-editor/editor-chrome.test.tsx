@@ -113,6 +113,13 @@ describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
     expect(screen.getByText('请求标识：req-404')).toBeInTheDocument()
   })
 
+  it('请求不合法（400 REQUEST_INVALID）是这次请求本身的问题：按错误码说明，不说成"已经被删除、移走或失去权限"（第二批 G-5）', () => {
+    renderChrome({ save: { ...CLEAN, status: 'failed', problem: { kind: 'request', error: new ApiError(400, 'REQUEST_INVALID', '请求的格式或参数不合法', { requestId: 'req-400' }) } } })
+    expect(screen.getByRole('alert')).toHaveTextContent('保存失败：请求的内容不合法，请检查后重试')
+    expect(screen.queryByText(/已经被删除/)).toBeNull()
+    expect(screen.getByText('请求标识：req-400')).toBeInTheDocument()
+  })
+
   it('能看却不能改了（403，例如空间刚被归档）：用服务端说的原因，并说明本页的修改没有保存（M2-P6 复核 S5、S8）', () => {
     renderChrome({ save: { ...CLEAN, status: 'failed', problem: { kind: 'request', error: new ApiError(403, 'PERMISSION_DENIED', '空间已归档，只能查看') } } })
     expect(screen.getByRole('alert')).toHaveTextContent('保存失败：空间已归档，只能查看，本页的修改没有保存。需要的话先把内容复制出来。')

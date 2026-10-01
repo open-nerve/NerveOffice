@@ -1,4 +1,4 @@
-import type { CopyDocumentRequest, CreateDocumentRequest, DocumentDetail, DocumentListQuery, DocumentListResponse, MoveDocumentRequest, UpdateDocumentRequest } from '@nerve-office/contracts'
+import type { CopyDocumentRequest, CreatedDocument, CreateDocumentRequest, DocumentDetail, DocumentListQuery, DocumentListResponse, MoveDocumentRequest, UpdateDocumentRequest } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Principal } from '../auth/index.ts'
 import { copyDocumentRequestSchema, createDocumentRequestSchema, documentIdSchema, documentListQuerySchema, moveDocumentRequestSchema, updateDocumentRequestSchema } from '@nerve-office/contracts'
@@ -23,13 +23,16 @@ export class DocumentsController {
     private readonly copying: DocumentCopyService,
   ) {}
 
-  /** 同一个 requestId 的重放同样是 201，返回那份文档的当前元数据：与原请求相同的状态（P4 设计 §3.3）。 */
+  /**
+   * 同一个 requestId 的重放同样是 201，返回那份文档的当前元数据：与原请求相同的状态（P4 设计 §3.3）；
+   * 响应里的 replayed 说明这次是不是重放（M2-P6 复核第二批 S-1）。
+   */
   @Post()
   async create(
     @CurrentPrincipal() principal: Principal,
     @Body({ schema: createDocumentRequestSchema }) body: CreateDocumentRequest,
     @RequestOrigin() origin: HttpOrigin,
-  ): Promise<DocumentDetail> {
+  ): Promise<CreatedDocument> {
     return this.creation.create(accessActorOf(principal), body, origin)
   }
 
@@ -72,14 +75,14 @@ export class DocumentsController {
     return this.organizing.move(accessActorOf(principal), id, body, origin)
   }
 
-  /** 复制：建出一份新文档，所以是 201；同一个 requestId 的重放同样是 201，返回那份副本（与新建相同）。 */
+  /** 复制：建出一份新文档，所以是 201；同一个 requestId 的重放同样是 201，返回那份副本、replayed 为真（与新建相同）。 */
   @Post(':id/copy')
   async copy(
     @CurrentPrincipal() principal: Principal,
     @Param('id', { schema: documentIdSchema }) id: string,
     @Body({ schema: copyDocumentRequestSchema }) body: CopyDocumentRequest,
     @RequestOrigin() origin: HttpOrigin,
-  ): Promise<DocumentDetail> {
+  ): Promise<CreatedDocument> {
     return this.copying.copy(accessActorOf(principal), id, body, origin)
   }
 }

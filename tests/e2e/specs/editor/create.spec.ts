@@ -1,6 +1,6 @@
 // 新建表格并进入编辑（US-M1-04，P4 设计 §3.10）：列表里新建 → 整页打开编辑器 → 立即键入被接受；同一个创建请求重复提交只生成一份。
 import { randomUUID } from 'node:crypto'
-import { createUser } from '../../support/database.ts'
+import { createTeamSpace, createUser, withDatabase } from '../../support/database.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
@@ -59,6 +59,52 @@ test.describe('US-M1-04 新建表格并进入编辑', () => {
     await expect(saveStatus(page)).toHaveText('有未保存的修改')
     await saveAndWait(page)
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('after ready')
+  })
+
+  test('新建的结果未知（其实已经建好）→ 给它改名 → 去别的空间再回来 → 再点"新建表格"：说明上一次其实已经完成，不打开改过名的那一份；再点才新建一份（M2-P6 复核第二批 S-1）', async ({ page }) => {
+    const owner = await createUser('create-replayed')
+    const elsewhere = await createTeamSpace('别处', owner, [[owner, 'admin']])
+    await loginThroughApi(page, owner)
+    await page.goto('/')
+    let first = true
+    await page.route('**/api/documents', async (route) => {
+      if (route.request().method() !== 'POST' || !first)
+        return route.continue()
+      first = false
+      // 服务端照常建好，回包换成代理的 502：结果未知
+      await route.fetch()
+      return route.fulfill({ status: 502, contentType: 'text/html', body: 'bad gateway' })
+    })
+    await page.getByRole('button', { name: '新建表格', exact: true }).click()
+    await expect(page.getByText(/^没能确认表格是否已经建好/)).toBeVisible()
+    // 它确实建好了：在列表里改名
+    await page.getByRole('button', { name: '操作 未命名表格', exact: true }).click()
+    await page.getByRole('button', { name: '改名', exact: true }).click()
+    await page.getByLabel('未命名表格 的新名称', { exact: true }).fill('第一季度预算')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await expect(page.getByRole('list', { name: '文档列表' })).toContainText('第一季度预算')
+    // 去别的空间、再回来（单页里切换）
+    const nav = page.getByRole('navigation', { name: '空间' })
+    await nav.getByRole('link', { name: elsewhere.name }).click()
+    await expect(page.getByRole('heading', { level: 1, name: elsewhere.name })).toBeVisible()
+    await nav.getByRole('link', { name: '我的空间' }).click()
+    await expect(page.getByRole('list', { name: '文档列表' })).toContainText('第一季度预算')
+
+    // 想再建一份：服务端认出那个 requestId，按重放回答——说明上一次其实已经完成，不打开它
+    await page.getByRole('button', { name: '新建表格', exact: true }).click()
+    await expect(page.getByText('上一次新建其实已经完成（当时没能确认结果），这次没有再建一份：就是「第一季度预算」。还要另建一份时，再点"新建表格"。')).toBeVisible()
+    await expect(page).toHaveURL('/')
+    const replayedLink = page.getByRole('link', { name: '打开它', exact: true })
+    await expect(replayedLink).toHaveAttribute('href', /^\/documents\/[\da-f-]{36}$/)
+    const replayedPath = await replayedLink.getAttribute('href')
+    const countActive = async (): Promise<number> => withDatabase(async client => Number((await client.query<{ n: string }>('SELECT count(*) AS n FROM documents WHERE space_id = $1 AND status = \'active\'', [owner.personalSpaceId])).rows[0]?.n))
+    expect(await countActive()).toBe(1)
+
+    // 这件事了结了：再点就是新建一份，整页打开它
+    await page.getByRole('button', { name: '新建表格', exact: true }).click()
+    await expect(page).toHaveURL(/\/documents\/[\da-f-]{36}$/)
+    expect(new URL(page.url()).pathname).not.toBe(replayedPath)
+    expect(await countActive()).toBe(2)
   })
 
   test('同一个 requestId 的两次新建请求只生成一份文档（接口层）', async ({ page }) => {

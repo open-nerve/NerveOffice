@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { describeError, isAccessDenied, isMissingResource, isUnknownOutcome } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { trashMessages } from '../../shared/i18n/zh-cn/trash.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { spacePath } from '../../shared/lib/space-paths.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
@@ -18,7 +19,7 @@ import { spaceDocumentsQueryKey, spaceFoldersQueryKey } from '../documents/index
 import { SpaceNotFound, spaceQueryOptions, SPACES_QUERY_KEY, useForgetMissingSpace } from '../spaces/index.ts'
 import { purgeTrashEntry, restoreTrashEntry, spaceTrashQueryKey, spaceTrashQueryOptions } from './trash-api.ts'
 
-const text = messages.trash
+const text = trashMessages
 
 function spaceName(space: SpaceView): string {
   return space.type === 'personal' ? messages.documents.title : space.name
@@ -170,9 +171,10 @@ function TrashList({ space, query, headingRef }: { readonly space: SpaceView, re
         }
         catch (error) {
           if (!isMissingResource(error)) {
-            // 被拒绝（403）或结果未知：列表按服务端的实际状态刷新，弹窗留着说明原因（关掉之后"永久删除"可能已经不在了）
-            if (isAccessDenied(error) || isUnknownOutcome(error))
-              await refresh(isAccessDenied(error))
+            // 被拒绝（403）：列表与页头按新的权限刷新，弹窗留着说明原因（关掉之后"永久删除"可能已经不在了）。
+            // 结果未知由确认的弹窗按 refresh 刷新、说明可能已经删除（M2-P6 复核第二批 G-2）
+            if (isAccessDenied(error))
+              await refresh(true)
             throw error
           }
           gone = true
@@ -180,6 +182,7 @@ function TrashList({ space, query, headingRef }: { readonly space: SpaceView, re
         await refresh()
         setNotice({ message: gone ? text.gone : text.purged(entry.title) })
       },
+      refresh: async () => refresh(),
       // 确认之后这一行就没了，打开弹窗的按钮随之消失：焦点交给页面的标题
       returnFocus: () => headingRef.current?.focus(),
     })
@@ -267,7 +270,8 @@ function TrashList({ space, query, headingRef }: { readonly space: SpaceView, re
 
 /**
  * 回收站页的内容：空间（页头的名称）与回收站的列表。先看错误、再看数据（ADR-008 的请求缓存约定）：两者任何一个得到 404，
- * 这个空间就看不到了，按"空间不存在"显示，不留着旧的行（M2-P6 复核 S2 的 P4）。
+ * 这个空间就看不到了，按"空间不存在"显示，不留着旧的行（M2-P6 复核 S2 的 P4）。两个请求谁先回来都一样：回收站先得到 404 时
+ * 不等页头的请求（它可能还在路上，也可能拿着看不到之前的旧结果回来），直接说空间不存在（第二批 S-2 的 T1）。
  * 有焦点的按钮、行随刷新或新的权限消失时，焦点交给页面的标题（M2-P6 复核 S3）。
  */
 function TrashContent({ spaceId }: { readonly spaceId: string }) {
@@ -283,6 +287,8 @@ function TrashContent({ spaceId }: { readonly spaceId: string }) {
   else if (!space.isPending && !missing)
     title = text.loadFailed
   useDocumentTitle(title)
+  if (missing)
+    return <SpaceNotFound />
   if (space.isPending) {
     return (
       <div role="status" aria-label={text.loading}>
@@ -290,8 +296,6 @@ function TrashContent({ spaceId }: { readonly spaceId: string }) {
       </div>
     )
   }
-  if (missing)
-    return <SpaceNotFound />
   if (space.data === undefined) {
     return (
       <section className="flex flex-col gap-4" aria-labelledby="trash-title">

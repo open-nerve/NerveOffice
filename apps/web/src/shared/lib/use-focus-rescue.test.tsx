@@ -4,13 +4,22 @@ import { useRef, useState } from 'react'
 import { describe, expect, it } from 'vitest'
 import { useFocusRescue } from './use-focus-rescue.ts'
 
-function Page({ moveFocusTo }: { readonly moveFocusTo?: 'notice' }) {
+function Page({ moveFocusTo }: { readonly moveFocusTo?: 'notice' | 'outside' }) {
   const titleRef = useRef<HTMLHeadingElement>(null)
   const rescue = useFocusRescue(titleRef)
   const [shown, setShown] = useState(true)
   return (
     <>
       <button type="button">区域外</button>
+      {/* 与有焦点的元素消失同一次渲染里出现、接过焦点的区域外的元素（例如页头里的说明、Portal 里的弹窗） */}
+      {!shown && moveFocusTo === 'outside' && (
+        <div
+          ref={element => element?.focus()}
+          tabIndex={-1}
+        >
+          区域外的说明
+        </div>
+      )}
       <section ref={rescue}>
         <h1 ref={titleRef} tabIndex={-1}>标题</h1>
         {shown && <button type="button" onClick={() => setShown(false)}>会消失</button>}
@@ -43,6 +52,18 @@ describe('useFocusRescue', () => {
     vanishing.focus()
     fireEvent.click(vanishing)
     await waitFor(() => expect(document.activeElement).toBe(screen.getByText('说明')))
+  })
+
+  it('有焦点的元素消失的同一次渲染里，焦点被区域外新出现的元素接过去（区域里记不到这次聚焦）：不抢（第二批 S-2 的 F2）', async () => {
+    render(<Page moveFocusTo="outside" />)
+    const vanishing = screen.getByRole('button', { name: '会消失' })
+    vanishing.focus()
+    fireEvent.click(vanishing)
+    const outside = screen.getByText('区域外的说明')
+    await waitFor(() => expect(document.activeElement).toBe(outside))
+    // 观察者的回调在这之后才跑：它看到焦点已经不在 body 上，什么也不做
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(document.activeElement).toBe(outside)
   })
 
   it('焦点主动移到区域外的元素之后，区域里之前有焦点的元素再消失：不动焦点', async () => {

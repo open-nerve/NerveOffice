@@ -100,6 +100,7 @@ export {
   COPIED_TITLE_SUFFIX,
   copiedDocumentTitle,
   copyDocumentRequestSchema,
+  createdDocumentSchema,
   createDocumentRequestSchema,
   DEFAULT_DOCUMENT_TITLES,
   DOCUMENT_LIST_ALL_FOLDERS,
@@ -125,6 +126,7 @@ export {
 } from './documents/documents.ts'
 export type {
   CopyDocumentRequest,
+  CreatedDocument,
   CreateDocumentRequest,
   DocumentDetail,
   DocumentListQuery,
@@ -145,6 +147,7 @@ export type { ErrorCode } from './errors/error-codes.ts'
 export { errorCodeSchema, errorResponseSchema } from './errors/error-response.ts'
 export type { ErrorResponse } from './errors/error-response.ts'
 export {
+  createdFolderSchema,
   createFolderRequestSchema,
   FOLDER_LIST_MAX_ITEMS,
   FOLDER_MAX_DEPTH,
@@ -159,6 +162,7 @@ export {
   updateFolderRequestSchema,
 } from './folders/folders.ts'
 export type {
+  CreatedFolder,
   CreateFolderRequest,
   Folder,
   FolderListQuery,

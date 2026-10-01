@@ -8,6 +8,7 @@ import { useId, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { describeError, isUnknownOutcome } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { adminUserDocumentsPath } from '../../shared/lib/admin-paths.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { useSessionRecheck } from '../../shared/lib/session-recheck.ts'
@@ -20,7 +21,7 @@ import { ADMIN_QUERY_KEY, adminUsersQueryOptions, changeSystemRole, disableUser,
 import { IssuedLinkDialog } from './issued-link-dialog.tsx'
 import { PagedTable } from './paged-table.tsx'
 
-const text = messages.admin.users
+const text = adminMessages.users
 
 /** 拼进纯文字（按钮的可读名称、确认框的标题）的名字：显示名隔离、登录名另外标出（M2-P6 复核 M2） */
 function nameOf(user: AdminUser): string {
@@ -47,7 +48,7 @@ interface IssuedReset {
  * 给自己生成的重置链接要先交到本人手里，关闭链接的弹窗之后再确认。
  */
 export function AdminUsersPage() {
-  useDocumentTitle(messages.admin.pageTitle(messages.admin.nav.users))
+  useDocumentTitle(adminMessages.pageTitle(adminMessages.nav.users))
   const queryClient = useQueryClient()
   const recheckSession = useSessionRecheck()
   const session = useQuery(sessionQueryOptions())
@@ -77,7 +78,11 @@ export function AdminUsersPage() {
       searchRef.current?.focus()
   }
 
-  function confirmThen(user: AdminUser, confirmation: Omit<PendingConfirmation, 'run' | 'returnFocus'>, action: () => Promise<unknown>): void {
+  /**
+   * 停用与启用、改系统角色、解除锁定：先确认，再执行。结果未知时（M2-P6 复核第二批 G-2）确认的弹窗刷新账户列表、说明可能已经生效
+   * （这些操作按状态幂等，再试安全）
+   */
+  function confirmThen(user: AdminUser, confirmation: Omit<PendingConfirmation, 'run' | 'refresh' | 'returnFocus'>, action: () => Promise<unknown>): void {
     const own = user.id === session.data?.user.id
     setPending({
       ...confirmation,
@@ -88,6 +93,7 @@ export function AdminUsersPage() {
           await recheckSession()
         await refresh()
       },
+      refresh,
       returnFocus: () => focusRow(user),
     })
   }
@@ -123,16 +129,17 @@ export function AdminUsersPage() {
         setPending(undefined)
         setIssued({
           link: {
-            title: messages.admin.link.resetTitle,
+            title: adminMessages.link.resetTitle,
             recipient: user,
             url: reset.url,
             expiresAt: reset.expiresAt,
-            ...(own ? { note: messages.admin.link.ownResetNote } : {}),
+            ...(own ? { note: adminMessages.link.ownResetNote } : {}),
             returnFocus: () => focusRow(user),
           },
           own,
         })
       },
+      refresh,
       returnFocus: () => focusRow(user),
     })
   }
@@ -154,7 +161,7 @@ export function AdminUsersPage() {
               <Button
                 variant="ghost"
                 size="sm"
-                aria-label={messages.admin.actionOn(text.disable, name)}
+                aria-label={messages.common.actionOn(text.disable, name)}
                 onClick={() => confirmThen(user, own
                   ? { title: text.confirmDisableOwn, description: text.disableOwnDescription, confirmLabel: text.disable, destructive: true }
                   : { title: text.confirmDisable(name), description: text.disableDescription, confirmLabel: text.disable, destructive: true }, async () => disableUser(user.id))}
@@ -163,7 +170,7 @@ export function AdminUsersPage() {
               </Button>
             )
           : (
-              <Button variant="ghost" size="sm" aria-label={messages.admin.actionOn(text.enable, name)} onClick={() => confirmThen(user, { title: text.confirmEnable(name), description: text.enableDescription, confirmLabel: text.enable }, async () => enableUser(user.id))}>
+              <Button variant="ghost" size="sm" aria-label={messages.common.actionOn(text.enable, name)} onClick={() => confirmThen(user, { title: text.confirmEnable(name), description: text.enableDescription, confirmLabel: text.enable }, async () => enableUser(user.id))}>
                 {text.enable}
               </Button>
             )}
@@ -172,7 +179,7 @@ export function AdminUsersPage() {
               <Button
                 variant="ghost"
                 size="sm"
-                aria-label={messages.admin.actionOn(text.revokeAdmin, name)}
+                aria-label={messages.common.actionOn(text.revokeAdmin, name)}
                 onClick={() => confirmThen(user, own
                   ? { title: text.confirmRevokeOwnAdmin, description: text.revokeOwnAdminDescription, confirmLabel: text.revokeAdmin, destructive: true }
                   : { title: text.confirmRevokeAdmin(name), description: text.revokeAdminDescription, confirmLabel: text.revokeAdmin, destructive: true }, async () => changeSystemRole(user.id, 'member'))}
@@ -181,24 +188,24 @@ export function AdminUsersPage() {
               </Button>
             )
           : user.status === 'active' && (
-            <Button variant="ghost" size="sm" aria-label={messages.admin.actionOn(text.grantAdmin, name)} onClick={() => confirmThen(user, { title: text.confirmGrantAdmin(name), description: text.grantAdminDescription, confirmLabel: text.grantAdmin }, async () => changeSystemRole(user.id, 'admin'))}>
+            <Button variant="ghost" size="sm" aria-label={messages.common.actionOn(text.grantAdmin, name)} onClick={() => confirmThen(user, { title: text.confirmGrantAdmin(name), description: text.grantAdminDescription, confirmLabel: text.grantAdmin }, async () => changeSystemRole(user.id, 'admin'))}>
               {text.grantAdmin}
             </Button>
           )}
         {user.status === 'active' && (
-          <Button variant="ghost" size="sm" aria-label={messages.admin.actionOn(text.resetPassword, name)} onClick={() => confirmReset(user)}>
+          <Button variant="ghost" size="sm" aria-label={messages.common.actionOn(text.resetPassword, name)} onClick={() => confirmReset(user)}>
             {text.resetPassword}
           </Button>
         )}
         {/* 登录被锁定（M2-P6 复核 A1）：解除之后这一行不再有这个按钮，焦点回到这一行 */}
         {user.loginLock !== null && (
-          <Button variant="ghost" size="sm" aria-label={messages.admin.actionOn(text.unlockLogin, name)} onClick={() => confirmThen(user, { title: text.confirmUnlockLogin(name), description: text.unlockLoginDescription, confirmLabel: text.unlockLogin }, async () => unlockLogin(user.id))}>
+          <Button variant="ghost" size="sm" aria-label={messages.common.actionOn(text.unlockLogin, name)} onClick={() => confirmThen(user, { title: text.confirmUnlockLogin(name), description: text.unlockLoginDescription, confirmLabel: text.unlockLogin }, async () => unlockLogin(user.id))}>
             {text.unlockLogin}
           </Button>
         )}
         {/* 停用的账户：把个人空间里的文档转移给别人（M2-P2 设计 §3.8） */}
         {user.status === 'disabled' && (
-          <Link to={adminUserDocumentsPath(user.id)} aria-label={messages.admin.actionOn(text.transfer, name)} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>
+          <Link to={adminUserDocumentsPath(user.id)} aria-label={messages.common.actionOn(text.transfer, name)} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>
             {text.transfer}
           </Link>
         )}
@@ -217,7 +224,7 @@ export function AdminUsersPage() {
           <Label htmlFor={statusId}>{text.statusFilter}</Label>
           <NativeSelect id={statusId} value={status} onChange={event => setStatus(event.target.value as UserStatus | '')}>
             <option value="">{messages.common.all}</option>
-            {USER_STATUSES.map(value => <option key={value} value={value}>{messages.admin.statusName(value)}</option>)}
+            {USER_STATUSES.map(value => <option key={value} value={value}>{messages.people.statusName(value)}</option>)}
           </NativeSelect>
         </div>
       </div>
@@ -233,10 +240,10 @@ export function AdminUsersPage() {
             <TableCell className="font-medium">{user.username}</TableCell>
             {/* 显示名单独一列，用 <bdi> 隔离：从右到左的显示名不打乱旁边的格子（M2-P6 复核 M2） */}
             <TableCell><bdi>{user.displayName}</bdi></TableCell>
-            <TableCell><Badge variant={user.systemRole === 'admin' ? 'default' : 'outline'}>{messages.admin.roleName(user.systemRole)}</Badge></TableCell>
+            <TableCell><Badge variant={user.systemRole === 'admin' ? 'default' : 'outline'}>{adminMessages.roleName(user.systemRole)}</Badge></TableCell>
             <TableCell>
               <div className="flex flex-col items-start gap-1">
-                <Badge variant={user.status === 'active' ? 'secondary' : 'destructive'}>{messages.admin.statusName(user.status)}</Badge>
+                <Badge variant={user.status === 'active' ? 'secondary' : 'destructive'}>{messages.people.statusName(user.status)}</Badge>
                 {user.loginLock !== null && <span className="text-xs text-destructive">{loginLockText(user.loginLock)}</span>}
               </div>
             </TableCell>

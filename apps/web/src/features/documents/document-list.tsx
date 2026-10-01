@@ -99,7 +99,10 @@ function DocumentItem({ document, spaceId, targetSpaces, open, openTriggerRef, o
             // requestId 按"把这份文档复制到这个位置"记账（shared/api/request-ids.ts，M2-P6 复核 M1）：目标位置是"空间加文件夹"，
             // 换了位置不沿用旧的（沿用会让重试落回旧目标，M2-P4 审查 B1）；某个位置的结果未知之后切去别处、再切回来，
             // 仍然沿用它原来那一个，不会在那里多出一份副本（M2-P4 复验 S1）；做完之后再往同一个位置复制是另一件事，换新的
-            // （沿用旧的会被服务端按幂等重放，原样返回第一份副本，第二份根本没建出来）
+            // （沿用旧的会被服务端按幂等重放，原样返回第一份副本，第二份根本没建出来）。
+            // 记账是页面一份的：离开这一页再回来，结果未知的那个位置仍沿用原来的 requestId。服务端说这次是重放（replayed，
+            // M2-P6 复核第二批 S-1）：结果未知的那一次其实已经复制好了，说"上一次其实已经完成"，不说成这一次复制出来的；
+            // 这件事随之了结，再点就是再复制一份
             copy: async (destination) => {
               const copy = await ledger.send(`copy:${document.id}->${destination.spaceId}/${destination.folderId ?? ''}`, async requestId => copyDocument(document.id, {
                 spaceId: destination.spaceId,
@@ -108,7 +111,7 @@ function DocumentItem({ document, spaceId, targetSpaces, open, openTriggerRef, o
               }))
               await refresh([copy.spaceId])
               return {
-                message: organize.copied(copy.title),
+                message: copy.replayed ? organize.copyReplayed(copy.title) : organize.copied(copy.title),
                 action: <a href={documentPagePath(copy.id)} className={buttonVariants({ variant: 'outline', size: 'sm' })}>{organize.openCopy}</a>,
               }
             },

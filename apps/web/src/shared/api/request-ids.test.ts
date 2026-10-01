@@ -36,6 +36,8 @@ const busy = (): Error => new ApiError(503, 'SERVICE_UNAVAILABLE', '服务暂时
 const csrf = (): Error => new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
 const expired = (): Error => new ApiError(401, 'SESSION_EXPIRED', '登录已过期')
 const unauthenticated = (): Error => new ApiError(401, 'UNAUTHENTICATED', '请先登录')
+// 请求来源不被允许：与 CSRF 的检查在同一处，同样在业务之前拦下（M2-P6 复核第二批 G-7）
+const origin = (): Error => new ApiError(403, 'ORIGIN_NOT_ALLOWED', '请求来源不被允许')
 const conflict = (): Error => new ApiError(409, 'REQUEST_ID_CONFLICT', '请求标识已被另一个请求使用')
 
 describe('带 requestId 的新建：requestId 的去留（M2-P6 复核 M1）', () => {
@@ -54,8 +56,8 @@ describe('带 requestId 的新建：requestId 的去留（M2-P6 复核 M1）', (
     expect((await attempt(requestIds, 'a', { ok: true })).id).toBe('id-2')
   })
 
-  it('结果未知之后，重试先撞上会话类的拒绝（别的标签页换了令牌、登录状态刚变化）：仍然保留，第三次不会建出第二份（P11）', async () => {
-    for (const rejection of [csrf, expired, unauthenticated]) {
+  it('结果未知之后，重试先撞上会话类的拒绝（别的标签页换了令牌、登录状态刚变化、来源被拦下）：仍然保留，第三次不会建出第二份（P11，第二批 G-7）', async () => {
+    for (const rejection of [csrf, expired, unauthenticated, origin]) {
       const requestIds = ledger()
       const first = await attempt(requestIds, 'a', unknown())
       const second = await attempt(requestIds, 'a', rejection())
@@ -65,9 +67,11 @@ describe('带 requestId 的新建：requestId 的去留（M2-P6 复核 M1）', (
   })
 
   it('会话类的拒绝本身也不换新：服务端没有看这个 requestId', async () => {
-    const requestIds = ledger()
-    await attempt(requestIds, 'a', csrf())
-    expect((await attempt(requestIds, 'a', { ok: true })).id).toBe('id-1')
+    for (const rejection of [csrf, origin]) {
+      const requestIds = ledger()
+      await attempt(requestIds, 'a', rejection())
+      expect((await attempt(requestIds, 'a', { ok: true })).id, rejection().message).toBe('id-1')
+    }
   })
 
   it('服务端忙（503）：这一次确定没有生效，更早那一次却可能生效了，保留', async () => {

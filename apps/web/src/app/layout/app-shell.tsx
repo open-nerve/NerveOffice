@@ -25,7 +25,7 @@ export function AppShell() {
             <Link to="/" className="font-semibold">{messages.app.name}</Link>
             {/* 只是入口的显示；管理接口由服务端逐请求检查系统角色 */}
             {session.data?.user.systemRole === 'admin' && (
-              <Link to={ADMIN_PATH} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>{messages.admin.title}</Link>
+              <Link to={ADMIN_PATH} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>{messages.app.admin}</Link>
             )}
           </div>
           {/* 搜索框（M2-P4）：只带着关键词跳到按需加载的结果页，首屏里只有这个框 */}

@@ -119,7 +119,7 @@ describe('M2-P6 复核 M1：带 requestId 的新建在结果未知之后', () =>
         if (calls === 2)
           return apiError(409, 'REQUEST_ID_CONFLICT')
         created = [...created, folder(QUARTER_ID, body.name)]
-        return json(201, folder(QUARTER_ID, body.name))
+        return json(201, { ...folder(QUARTER_ID, body.name), replayed: false })
       },
     })
     renderApp('/')
@@ -156,7 +156,7 @@ describe('M2-P6 复核 M1：带 requestId 的新建在结果未知之后', () =>
           return networkFailure()
         if (posts === 2)
           return apiError(403, 'CSRF_TOKEN_INVALID')
-        return json(201, detail({ id: NEW_ID }))
+        return json(201, { ...detail({ id: NEW_ID }), replayed: false })
       },
     })
     const app = renderApp('/')
@@ -192,6 +192,125 @@ describe('M2-P6 复核 M1：带 requestId 的新建在结果未知之后', () =>
     const [inPlan, atRoot, backInPlan] = requestIds(api, 'POST /api/documents')
     expect(atRoot).not.toBe(inPlan)
     expect(backInPlan).toBe(inPlan)
+  })
+})
+
+describe('M2-P6 复核第二批 S-1：服务端说这次是重放（replayed）——上一次其实已经完成，这件事随之了结', () => {
+  const OTHER_ID = '0199a2c4-0000-7000-8000-0000000000da'
+
+  it('新建表格：结果未知（其实已经建好、又被改了名）之后再点，服务端重放——不打开它，说明"上一次其实已经完成"并给出链接；再点才新建一份（换新的 requestId）', async () => {
+    let posts = 0
+    const api = loggedIn({
+      'POST /api/documents': () => {
+        posts += 1
+        if (posts === 1)
+          return networkFailure()
+        if (posts === 2)
+          return json(201, { ...detail({ id: NEW_ID, title: '第一季度预算' }), replayed: true })
+        return json(201, { ...detail({ id: OTHER_ID, title: '未命名表格' }), replayed: false })
+      },
+    })
+    const app = renderApp('/')
+    fireEvent.click(await screen.findByRole('button', { name: '新建表格' }))
+    await screen.findByText(/^没能确认表格是否已经建好/)
+    const listed = count(api, documentsKey(SESSION))
+    fireEvent.click(screen.getByRole('button', { name: '新建表格' }))
+    expect(await screen.findByText('上一次新建其实已经完成（当时没能确认结果），这次没有再建一份：就是「第一季度预算」。还要另建一份时，再点"新建表格"。')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '打开它' })).toHaveAttribute('href', `/documents/${NEW_ID}`)
+    // 没有打开它（很久以后想另建一份时，打开的会是改过名的那一份）；列表刷新，看得到它现在的样子
+    expect(app.page.visits).toEqual([])
+    expect(count(api, documentsKey(SESSION))).toBeGreaterThan(listed)
+    // 按钮照常可用：再点就是新建一份
+    fireEvent.click(screen.getByRole('button', { name: '新建表格' }))
+    await waitFor(() => expect(app.page.visits).toEqual([`assign /documents/${OTHER_ID}`]))
+    const [first, second, third] = requestIds(api, 'POST /api/documents')
+    expect(second).toBe(first)
+    expect(third).not.toBe(first)
+  })
+
+  it('复制：结果未知之后离开这一页、再回来复制到同一个位置——沿用原来的 requestId（记账是页面一份的，K3）；服务端重放时说"上一次其实已经完成"，再复制才是第二份', async () => {
+    let copies = 0
+    const api = loggedIn({
+      [foldersKey(SPACE_ID)]: folderPage([folder(PLAN_ID, '方案')]),
+      [foldersKey(SPACE_ID, PLAN_ID)]: noFolders(),
+      ...documentsIn(SPACE_ID, PLAN_ID, []),
+      [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()),
+      [`POST /api/documents/${WEEKLY_ID}/copy`]: () => {
+        copies += 1
+        if (copies === 1)
+          return apiError(500, 'INTERNAL_ERROR')
+        if (copies === 2)
+          return json(201, { ...detail({ id: NEW_ID, title: '周报 的副本' }), replayed: true })
+        return json(201, { ...detail({ id: OTHER_ID, title: '周报 的副本' }), replayed: false })
+      },
+    })
+    const app = renderApp('/')
+    await openActions('周报')
+    fireEvent.click(await screen.findByRole('button', { name: '复制' }))
+    fireEvent.click(within(screen.getByRole('form', { name: '复制' })).getByRole('button', { name: '复制到这里' }))
+    await screen.findByText(/^没能确认是否已经复制/)
+
+    // 离开这一页（进文件夹里，那一行随之卸载），再回来
+    await app.router.navigate(`/spaces/${SPACE_ID}/folders/${PLAN_ID}`)
+    await screen.findByRole('navigation', { name: '位置' })
+    expect(screen.queryByRole('button', { name: '操作 周报' })).toBeNull()
+    await app.router.navigate('/')
+    await openActions('周报')
+    fireEvent.click(await screen.findByRole('button', { name: '复制' }))
+    fireEvent.click(within(screen.getByRole('form', { name: '复制' })).getByRole('button', { name: '复制到这里' }))
+    const replayed = '上一次复制其实已经完成（当时没能确认结果），这次没有再复制一份：副本就是「周报 的副本」。还要再复制一份时，再复制一次。'
+    expect(await screen.findByText(replayed)).toBeInTheDocument()
+    expect(screen.queryByText('已复制出「周报 的副本」')).toBeNull()
+    expect(screen.getByRole('link', { name: '打开副本' })).toHaveAttribute('href', `/documents/${NEW_ID}`)
+
+    // 这件事了结了：再复制一次是第二份
+    await openActions('周报')
+    fireEvent.click(await screen.findByRole('button', { name: '复制' }))
+    fireEvent.click(within(screen.getByRole('form', { name: '复制' })).getByRole('button', { name: '复制到这里' }))
+    expect(await screen.findByText('已复制出「周报 的副本」')).toBeInTheDocument()
+    const [first, again, third] = requestIds(api, `POST /api/documents/${WEEKLY_ID}/copy`)
+    expect(again).toBe(first)
+    expect(third).not.toBe(first)
+  })
+
+  it('新建文件夹：结果未知之后原样再提交，服务端重放——表单关掉，列表上方说明"上一次其实已经完成"、接住焦点；再新建是另一个 requestId', async () => {
+    let posts = 0
+    let created: Folder[] = []
+    const api = loggedIn({
+      [foldersKey(SPACE_ID)]: () => json(200, { items: created, truncated: false }),
+      'POST /api/folders': (init) => {
+        posts += 1
+        const body = JSON.parse(String(init?.body)) as { name: string }
+        if (posts === 1) {
+          created = [folder(PLAN_ID, body.name)]
+          return networkFailure()
+        }
+        if (posts === 2)
+          return json(201, { ...folder(PLAN_ID, body.name), replayed: true })
+        created = [...created, folder(QUARTER_ID, body.name)]
+        return json(201, { ...folder(QUARTER_ID, body.name), replayed: false })
+      },
+    })
+    renderApp('/')
+    fireEvent.click(await screen.findByRole('button', { name: '新建文件夹' }))
+    const form = screen.getByRole('form', { name: '新建文件夹' })
+    fireEvent.change(within(form).getByLabelText('文件夹名称'), { target: { value: '方案' } })
+    fireEvent.click(within(form).getByRole('button', { name: '新建文件夹' }))
+    await within(form).findByText(/^没能确认文件夹是否已经建好/)
+    fireEvent.click(within(form).getByRole('button', { name: '新建文件夹' }))
+    const text = '上一次新建其实已经完成（当时没能确认结果），这次没有再建一个：文件夹「方案」已经在列表里了。'
+    expect(await screen.findByText(text)).toBeInTheDocument()
+    expect(screen.queryByRole('form', { name: '新建文件夹' })).toBeNull()
+    await waitFor(() => expect(document.activeElement).toBe(noticeOf(text)))
+
+    fireEvent.click(screen.getByRole('button', { name: '新建文件夹' }))
+    const next = screen.getByRole('form', { name: '新建文件夹' })
+    fireEvent.change(within(next).getByLabelText('文件夹名称'), { target: { value: '方案' } })
+    fireEvent.click(within(next).getByRole('button', { name: '新建文件夹' }))
+    await waitFor(() => expect(screen.queryByRole('form', { name: '新建文件夹' })).toBeNull())
+    const [first, second, third] = requestIds(api, 'POST /api/folders')
+    expect(second).toBe(first)
+    expect(third).not.toBe(first)
   })
 })
 
@@ -360,6 +479,53 @@ describe('M2-P6 复核 S1–S3：结果未知与被拒绝之后', () => {
     const notice = noticeOf('没能新建表格：空间已归档，只能查看')
     await waitFor(() => expect(document.activeElement).toBe(notice))
   })
+
+  it('文档的改名表单开着，刷新之后不能改名了（只剩复制）：表单收起，回到按新权限列出的操作，不留一个提交了只会被拒绝的表单（第二批 G-6）', async () => {
+    let permissions = detail().permissions
+    let space = personalSpaceOf(SESSION)
+    loggedIn({
+      [`GET /api/spaces/${SPACE_ID}`]: () => json(200, space),
+      [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail({ permissions })),
+      'POST /api/documents': () => {
+        // 自己刚被降为查看者：只能看、能复制
+        permissions = { canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false }
+        space = { ...space, permissions: { ...space.permissions, canCreateDocuments: false, canCreateFolders: false } }
+        return apiError(403, 'PERMISSION_DENIED', '你已经不能在这里新建了')
+      },
+    })
+    renderApp('/')
+    await openActions('周报')
+    fireEvent.click(await screen.findByRole('button', { name: '改名' }))
+    expect(screen.getByLabelText('周报 的新名称')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '新建表格' }))
+    await waitFor(() => expect(screen.queryByLabelText('周报 的新名称')).toBeNull())
+    // 面板还在，按新的权限只列出复制
+    expect(await screen.findByRole('button', { name: '复制' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '改名' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '移动' })).toBeNull()
+  })
+
+  it('文件夹的移动表单开着，刷新之后不能移动了（还能删除）：移动表单收起，面板按新的权限只列出删除（第二批 G-6）', async () => {
+    let permissions = ALL_FOLDER_PERMISSIONS
+    let space = personalSpaceOf(SESSION)
+    loggedIn({
+      [`GET /api/spaces/${SPACE_ID}`]: () => json(200, space),
+      [foldersKey(SPACE_ID)]: () => json(200, { items: [folder(PLAN_ID, '方案', { permissions })], truncated: false }),
+      'POST /api/documents': () => {
+        permissions = { ...NO_FOLDER_PERMISSIONS, canDelete: true }
+        space = { ...space, permissions: { ...space.permissions, canCreateDocuments: false } }
+        return apiError(403, 'PERMISSION_DENIED', '你已经不能在这里新建了')
+      },
+    })
+    renderApp('/')
+    await openActions('方案')
+    fireEvent.click(await screen.findByRole('button', { name: '移动' }))
+    expect(screen.getByRole('form', { name: '移动' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '新建表格' }))
+    await waitFor(() => expect(screen.queryByRole('form', { name: '移动' })).toBeNull())
+    expect(await screen.findByRole('button', { name: '删除' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '移动' })).toBeNull()
+  })
 })
 
 describe('M2-P6 复核 S3、S4：焦点、读屏与浏览器标签页的标题', () => {
@@ -488,7 +654,7 @@ describe('M2-P6 复核 M3：源与目标不同的整理请求（单元部分）'
       [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()),
       [`GET /api/folders?${teamRoot.toString()}`]: folderPage([folder(PLAN_ID, '方案', { spaceId: TEAM_ID })]),
       [foldersKey(TEAM_ID, PLAN_ID)]: noFolders(),
-      [`POST /api/documents/${WEEKLY_ID}/copy`]: () => json(201, detail({ id: NEW_ID, title: '周报 的副本', spaceId: TEAM_ID, folderId: PLAN_ID })),
+      [`POST /api/documents/${WEEKLY_ID}/copy`]: () => json(201, { ...detail({ id: NEW_ID, title: '周报 的副本', spaceId: TEAM_ID, folderId: PLAN_ID }), replayed: false }),
     })
     renderApp('/')
     await openActions('周报')

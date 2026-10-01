@@ -38,7 +38,7 @@ describe('管理界面：结果未知之后（M2-P6 复核 S1）', () => {
     renderApp('/admin/spaces')
     const form = await screen.findByRole('form', { name: '创建团队空间' })
     fireEvent.change(within(form).getByLabelText('首个空间管理员'), { target: { value: '本' } })
-    fireEvent.click(await within(form).findByRole('button', { name: '本 @ben' }))
+    fireEvent.click(await within(form).findByRole('button', { name: '@ben 本' }))
     fireEvent.change(within(form).getByLabelText('名称'), { target: { value: '市场部' } })
     fireEvent.click(within(form).getByRole('button', { name: '创建团队空间' }))
     expect(await within(form).findByText('没能确认团队空间是否已经创建（网络连接失败，请检查网络后重试）。列表已刷新：下面的列表里有它，就是已经建好了。')).toBeInTheDocument()
@@ -66,7 +66,7 @@ describe('管理界面：结果未知之后（M2-P6 复核 S1）', () => {
     renderApp('/admin/spaces')
     const form = await screen.findByRole('form', { name: '创建团队空间' })
     fireEvent.change(within(form).getByLabelText('首个空间管理员'), { target: { value: '本' } })
-    fireEvent.click(await within(form).findByRole('button', { name: '本 @ben' }))
+    fireEvent.click(await within(form).findByRole('button', { name: '@ben 本' }))
     fireEvent.change(within(form).getByLabelText('名称'), { target: { value: '市场部' } })
     fireEvent.click(within(form).getByRole('button', { name: '创建团队空间' }))
     await within(form).findByText(/^没能确认团队空间是否已经创建/)
@@ -156,6 +156,75 @@ describe('管理界面：结果未知之后（M2-P6 复核 S1）', () => {
     renderApp('/login?reason=password_reset')
     expect(await screen.findByText('刚才为自己生成重置链接时没能确认结果，随后登录失效了：你的密码可能已经失效，那条链接也已经找不回来。请联系另一位系统管理员为你生成新的重置链接。')).toBeInTheDocument()
     await waitFor(() => expect(document.title).toBe('登录 - NerveOffice'))
+  })
+})
+
+describe('管理界面：按状态幂等的操作结果未知时刷新并说明（M2-P6 复核第二批 G-2）', () => {
+  const UNKNOWN = '没能确认是否已经完成（服务器出了点问题，请稍后重试）。可能已经生效：页面已按服务端现在的状态刷新，看得出是否已经生效；还没有的话，可以再试一次。'
+
+  it('停用账户的结果未知（其实已经停用）：账户列表刷新、这一行显示已停用；弹窗说明可能已经生效，可以再试', async () => {
+    let amy = AMY
+    const api = installFakeApi({
+      ...SPACES,
+      'GET /api/auth/session': () => json(200, session('admin')),
+      'GET /api/admin/users': () => json(200, listPage([ROOT, amy])),
+      [`POST /api/admin/users/${AMY.id}/disable`]: () => {
+        amy = { ...AMY, status: 'disabled' }
+        return apiError(500, 'INTERNAL_ERROR')
+      },
+    })
+    renderApp('/admin/users')
+    fireEvent.click(within(await rowOf('amy')).getByRole('button', { name: `停用 ${plainName('艾米', 'amy')}` }))
+    const dialog = await screen.findByRole('dialog')
+    const listed = count(api, 'GET /api/admin/users')
+    fireEvent.click(within(dialog).getByRole('button', { name: '停用' }))
+    expect(await within(dialog).findByText(UNKNOWN)).toBeInTheDocument()
+    expect(count(api, 'GET /api/admin/users')).toBeGreaterThan(listed)
+    // 表格不停在旧的状态
+    expect(within(await rowOf('amy')).getByText('已停用')).toBeInTheDocument()
+  })
+
+  it('归档团队空间的结果未知：同样刷新列表、说明可能已经生效', async () => {
+    const space: AdminSpace = { id: TEAM_ID, name: '市场部', status: 'active', visibleToAll: false, memberCount: 1, createdAt: '2026-09-29T01:00:00.000Z', myRole: null }
+    let archived = false
+    const spacesApi = installFakeApi({
+      ...SPACES,
+      'GET /api/auth/session': () => json(200, session('admin')),
+      'GET /api/admin/spaces': () => json(200, listPage([{ ...space, status: archived ? 'archived' : 'active' }])),
+      [`POST /api/admin/spaces/${TEAM_ID}/archive`]: () => {
+        archived = true
+        return networkFailure()
+      },
+    })
+    renderApp('/admin/spaces')
+    fireEvent.click(within(await rowOf('市场部')).getByRole('button', { name: '归档 市场部' }))
+    const archive = await screen.findByRole('dialog')
+    const listed = count(spacesApi, 'GET /api/admin/spaces')
+    fireEvent.click(within(archive).getByRole('button', { name: '归档' }))
+    expect(await within(archive).findByText(/^没能确认是否已经完成（网络连接失败，请检查网络后重试）。可能已经生效/)).toBeInTheDocument()
+    expect(count(spacesApi, 'GET /api/admin/spaces')).toBeGreaterThan(listed)
+    expect(within(await rowOf('市场部')).getByText('已归档')).toBeInTheDocument()
+  })
+
+  it('作废邀请的结果未知：同样刷新列表、说明可能已经生效', async () => {
+    let revoked = false
+    const invitationsApi = installFakeApi({
+      ...SPACES,
+      'GET /api/auth/session': () => json(200, session('admin')),
+      'GET /api/admin/invitations': () => json(200, listPage([{ ...INVITATION, status: revoked ? 'revoked' : 'pending' }] satisfies Invitation[])),
+      [`POST /api/admin/invitations/${INVITATION.id}/revoke`]: () => {
+        revoked = true
+        return apiError(500, 'INTERNAL_ERROR')
+      },
+    })
+    renderApp('/admin/invitations')
+    fireEvent.click(within(await rowOf('bea')).getByRole('button', { name: '作废 bea' }))
+    const revoke = await screen.findByRole('dialog')
+    const before = count(invitationsApi, 'GET /api/admin/invitations')
+    fireEvent.click(within(revoke).getByRole('button', { name: '作废' }))
+    expect(await within(revoke).findByText(UNKNOWN)).toBeInTheDocument()
+    expect(count(invitationsApi, 'GET /api/admin/invitations')).toBeGreaterThan(before)
+    expect(within(await rowOf('bea')).getByText('已作废')).toBeInTheDocument()
   })
 })
 

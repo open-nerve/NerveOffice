@@ -6,6 +6,7 @@ import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { useDebouncedValue } from '../../shared/lib/use-debounced-value.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
@@ -15,7 +16,7 @@ import { actorCandidatesQueryOptions, auditEventsQueryOptions } from './admin-ap
 import { auditTimeFrom, auditTimeTo } from './audit-time.ts'
 import { PagedTable } from './paged-table.tsx'
 
-const text = messages.admin.audit
+const text = adminMessages.audit
 
 type AuditTargetType = NonNullable<AuditEventQuery['targetType']>
 
@@ -117,7 +118,7 @@ function TimeFilter({ id, label, value, invalid, onChange }: { readonly id: stri
     <div className="flex flex-col gap-2">
       <Label htmlFor={id}>{label}</Label>
       <Input id={id} type="datetime-local" value={value} aria-invalid={invalid} aria-describedby={invalid ? hintId : undefined} onChange={event => onChange(event.target.value)} />
-      {invalid && <p id={hintId} className="text-xs text-destructive">{messages.admin.audit.invalidTime}</p>}
+      {invalid && <p id={hintId} className="text-xs text-destructive">{adminMessages.audit.invalidTime}</p>}
     </div>
   )
 }
@@ -129,7 +130,7 @@ function TimeFilter({ id, label, value, invalid, onChange }: { readonly id: stri
  * 清除对象之后回到动作的筛选。
  */
 export function AdminAuditPage() {
-  useDocumentTitle(messages.admin.pageTitle(messages.admin.nav.audit))
+  useDocumentTitle(adminMessages.pageTitle(adminMessages.nav.audit))
   const [action, setAction] = useState<AuditAction | ''>('')
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')

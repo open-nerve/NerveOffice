@@ -22,20 +22,31 @@ function moduleScriptsOf(root: ParentNode): string {
 
 /**
  * 服务端现在的入口页与这个页面加载时的比：deployed 是部署了新版本（version 是新版本的入口脚本）；
- * same 是没有变（分块是临时没下载下来）；unreachable 是服务端连不上（断网）
+ * same 是没有变（服务端连得上、版本也没变，是分块本身没下载下来：一时的网络抖动，或者服务器上缺了这个文件）；
+ * unreachable 是连不上我们的服务端（断网、服务端挂起超过时限、取回来的不是入口页，例如代理或认证网关自己的页面）
  */
 export type DeploymentCheck
   = | { readonly kind: 'deployed', readonly version: string }
     | { readonly kind: 'same' | 'unreachable' }
 
 /**
- * 向服务端要一次入口页（不走缓存），看入口脚本还是不是这个页面加载的那几个。
- * 入口页本身是 no-store 的（apps/api 的 web-hosting），带哈希的资源长期缓存：部署之后旧页面要的分块已经不在了
+ * 向服务端要入口页最多等多久（M2-P6 复核第二批 G-4）：服务端挂起时不一直停在"正在打开页面"的骨架屏上。
+ * 入口页很小、不经过数据库，正常几百毫秒就回来；超过这个时限按连不上处理，说明之后可以重试
  */
-export async function checkDeployment(currentDocument: Document = document): Promise<DeploymentCheck> {
+export const DEPLOYMENT_CHECK_TIMEOUT_MS = 10_000
+
+/**
+ * 向服务端要一次入口页（不走缓存），看入口脚本还是不是这个页面加载的那几个。
+ * 入口页本身是 no-store 的（apps/api 的 web-hosting），带哈希的资源长期缓存：部署之后旧页面要的分块已经不在了。
+ * 取回来的页面里没有模块脚本：那不是我们的入口页（代理的错误页、认证网关的登录页常常也是 200），按连不上处理，
+ * 不当成部署了新版本去整页重新加载
+ */
+export async function checkDeployment(currentDocument: Document = document, timeoutMs: number = DEPLOYMENT_CHECK_TIMEOUT_MS): Promise<DeploymentCheck> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
   let html: string
   try {
-    const response = await fetch('/', { cache: 'no-store', credentials: 'same-origin', headers: { accept: 'text/html' } })
+    const response = await fetch('/', { cache: 'no-store', credentials: 'same-origin', headers: { accept: 'text/html' }, signal: controller.signal })
     if (!response.ok)
       return { kind: 'unreachable' }
     html = await response.text()
@@ -43,8 +54,13 @@ export async function checkDeployment(currentDocument: Document = document): Pro
   catch {
     return { kind: 'unreachable' }
   }
+  finally {
+    clearTimeout(timer)
+  }
   const deployed = moduleScriptsOf(new DOMParser().parseFromString(html, 'text/html'))
-  return deployed !== '' && deployed !== moduleScriptsOf(currentDocument) ? { kind: 'deployed', version: deployed } : { kind: 'same' }
+  if (deployed === '')
+    return { kind: 'unreachable' }
+  return deployed !== moduleScriptsOf(currentDocument) ? { kind: 'deployed', version: deployed } : { kind: 'same' }
 }
 
 const RELOADED_FOR = 'nerve-office:reloaded-for-deployment'

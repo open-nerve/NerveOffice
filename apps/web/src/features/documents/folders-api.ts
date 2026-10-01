@@ -1,7 +1,7 @@
 // 文件夹的接口（M2-P4 设计 §3.2）：列出一层、新建、改名、移动（同一个空间里或连同子树换空间）、删除（进回收站）。
 // 与文档放在同一个功能模块：空间页的一份列表里既有文件夹又有文档，两者的整理操作也是同一套。
-import type { CreateFolderRequest, Folder, FolderListResponse, MoveFolderRequest, UpdateFolderRequest } from '@nerve-office/contracts'
-import { folderListResponseSchema, folderSchema } from '@nerve-office/contracts'
+import type { CreatedFolder, CreateFolderRequest, Folder, FolderListResponse, MoveFolderRequest, UpdateFolderRequest } from '@nerve-office/contracts'
+import { createdFolderSchema, folderListResponseSchema, folderSchema } from '@nerve-office/contracts'
 import { queryOptions } from '@tanstack/react-query'
 import { z } from 'zod'
 import { apiRequest } from '../../shared/api/index.ts'
@@ -31,9 +31,9 @@ export function folderChildrenQueryOptions(spaceId: string, parentId: string | n
   })
 }
 
-/** 新建（US-M2-07）：同一个 requestId 重试只建一个。 */
-export async function createFolder(request: CreateFolderRequest): Promise<Folder> {
-  return apiRequest('/api/folders', { method: 'POST', body: request, schema: folderSchema })
+/** 新建（US-M2-07）：同一个 requestId 重试只建一个；replayed 为真时是之前那一次建好的（M2-P6 复核第二批 S-1）。 */
+export async function createFolder(request: CreateFolderRequest): Promise<CreatedFolder> {
+  return apiRequest('/api/folders', { method: 'POST', body: request, schema: createdFolderSchema })
 }
 
 /** 改名（同一个文件夹里允许同名，所以不必先查重）。 */

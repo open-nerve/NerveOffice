@@ -1,4 +1,5 @@
-import type { ApiError, ErrorDescription, RequestIdLedger } from '../../shared/api/index.ts'
+import type { ApiError, ErrorDescription } from '../../shared/api/index.ts'
+import type { RequestIdLedger } from '../../shared/api/request-ids.ts'
 import { documentPagePath } from '@nerve-office/contracts'
 import { useMutation } from '@tanstack/react-query'
 import { FilePlus2 } from 'lucide-react'
@@ -6,7 +7,7 @@ import { describeError, isAccessDenied, isUnknownOutcome } from '../../shared/ap
 import { messages } from '../../shared/i18n/index.ts'
 import { usePageLocation } from '../../shared/lib/page-location.ts'
 import { useRequestIdLedger } from '../../shared/lib/request-id-ledger.ts'
-import { Alert, AlertDescription, Button } from '../../shared/ui/index.ts'
+import { Alert, AlertDescription, Button, buttonVariants } from '../../shared/ui/index.ts'
 import { createDocument } from './documents-api.ts'
 import { useOrganizeRefresh } from './organize-refresh.ts'
 
@@ -37,6 +38,9 @@ function failureOf(error: unknown, ledger: RequestIdLedger): ErrorDescription {
  * 之后撞上会话类的拒绝（别的标签页换了令牌）同样沿用；成功、或者与载荷有关的确定拒绝才换新的。在文件夹之间切换时页头不重来，
  * 换了位置就是另一件事、另一个 requestId，结果未知的那个位置回去之后仍沿用它原来的。
  * 结果未知时列表随即刷新：建好了的话就在列表里。
+ * 服务端说这次是重放（replayed，M2-P6 复核第二批 S-1）：结果未知的那一次其实已经建好了。这时不打开它——用户可能早已给它改了名、
+ * 很久以后才回来想另建一份，打开的却是改过名的那一份——而是刷新列表、说明"上一次其实已经完成，就是「…」"，给出打开它的链接；
+ * 这件事随之了结（成功就换新的 requestId），再点就是新建一份。
  *
  * 在文件夹里新建也是一次请求：目标文件夹随请求给出（契约 createDocumentRequestSchema 的 folderId），
  * 服务端在同一个事务里判断它并写进去，不存在"建好了却没能移进来"的中间状态。
@@ -48,7 +52,14 @@ export function NewSheetButton({ spaceId, folderId = null, onDenied }: NewSheetB
   const mutation = useMutation({
     // 建在空间根目录时不带 folderId：契约里省略就是根目录，请求与 M2-P4 之前一样
     mutationFn: async () => ledger.send(`sheet:${spaceId}/${folderId ?? ''}`, async requestId => createDocument({ type: 'sheet', requestId, spaceId, ...(folderId === null ? {} : { folderId }) })),
-    onSuccess: document => page.assign(documentPagePath(document.id)),
+    onSuccess: async (document) => {
+      if (!document.replayed) {
+        page.assign(documentPagePath(document.id))
+        return
+      }
+      // 那一份可能已经改了名、移到了别处：这里与它现在所在的空间都刷新
+      await refresh([spaceId, document.spaceId])
+    },
     onError: async (error) => {
       if (isAccessDenied(error)) {
         onDenied?.(error)
@@ -59,8 +70,9 @@ export function NewSheetButton({ spaceId, folderId = null, onDenied }: NewSheetB
         await refresh([spaceId])
     },
   })
-  // 建好之后页面正在离开：按钮保持进行中，不能再建一份
-  const busy = mutation.isPending || mutation.isSuccess
+  // 建好之后页面正在离开：按钮保持进行中，不能再建一份（重放不离开，按钮照常可用）
+  const busy = mutation.isPending || (mutation.isSuccess && !mutation.data.replayed)
+  const replayed = mutation.isSuccess && mutation.data.replayed ? mutation.data : undefined
 
   function create(): void {
     if (!busy)
@@ -76,6 +88,15 @@ export function NewSheetButton({ spaceId, folderId = null, onDenied }: NewSheetB
         <FilePlus2 aria-hidden="true" />
         {busy ? messages.documents.creating : messages.documents.create}
       </Button>
+      {replayed !== undefined && (
+        <Alert>
+          <AlertDescription className="flex flex-wrap items-center gap-2">
+            <span>{messages.documents.createdReplayed(replayed.title)}</span>
+            {/* 编辑器页是另一个入口：普通的链接，整页打开 */}
+            <a href={documentPagePath(replayed.id)} className={buttonVariants({ variant: 'outline', size: 'sm' })}>{messages.documents.openReplayed}</a>
+          </AlertDescription>
+        </Alert>
+      )}
       {failure !== undefined && (
         <Alert variant="destructive">
           <AlertDescription>

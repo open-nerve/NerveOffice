@@ -6,13 +6,14 @@ import { useEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router'
 import { describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { searchMessages } from '../../shared/i18n/zh-cn/search.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { SEARCH_QUERY_PARAM } from '../../shared/lib/space-paths.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { Alert, AlertDescription, Button, Skeleton } from '../../shared/ui/index.ts'
 import { searchQueryOptions } from './search-api.ts'
 
-const text = messages.search
+const text = searchMessages
 
 /** 一条结果：标题是打开编辑器页的链接，下面是它在哪里（空间名 + 文件夹路径）与更新时间 */
 function ResultItem({ result }: { readonly result: SearchResult }) {

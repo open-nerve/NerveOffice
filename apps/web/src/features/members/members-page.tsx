@@ -6,7 +6,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { ApiError, describeError, isMissingResource, isPermissionDeniedError, isUnknownOutcome } from '../../shared/api/index.ts'
+import { writeFailureText } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { membersMessages } from '../../shared/i18n/zh-cn/members.ts'
 import { ADMIN_PATHS } from '../../shared/lib/admin-paths.ts'
 import { cn } from '../../shared/lib/cn.ts'
 import { HOME_PATH, spacePath } from '../../shared/lib/space-paths.ts'
@@ -18,7 +20,7 @@ import { ColleaguePicker } from '../colleagues/index.ts'
 import { ConfirmDialog } from '../confirmation/index.ts'
 import { addMember, changeMemberRole, forgetSpace, membersQueryOptions, removeMember, SpaceNotFound, SPACES_QUERY_KEY, spacesQueryOptions, useForgetMissingSpace } from '../spaces/index.ts'
 
-const text = messages.members
+const text = membersMessages
 
 /** 角色的选项：从高到低 */
 const ROLE_OPTIONS = [...SPACE_ROLES].reverse()
@@ -131,6 +133,7 @@ interface MemberRowProps {
 function MemberRow({ spaceId, member, self, canManage, onDemoteSelf, onRemove }: MemberRowProps) {
   const queryClient = useQueryClient()
   const noteId = useId()
+  const unsavedId = useId()
   const selectRef = useRef<HTMLSelectElement>(null)
   /** 选了、还没保存的角色 */
   const [chosen, setChosen] = useState<SpaceRole>()
@@ -153,6 +156,9 @@ function MemberRow({ spaceId, member, self, canManage, onDemoteSelf, onRemove }:
   const busy = saving !== undefined
   // 选回了原来的角色（或者角色已经被别处改成了选的那个）：没有要保存的
   const pending = chosen !== undefined && chosen !== member.role ? chosen : undefined
+  // 选了、还没保存：选择框显示的是选的角色，却还没有生效——看得见"保存"按钮，读屏用户要靠关联的说明才知道（M2-P6 复核第二批 S-3）
+  const unsaved = pending !== undefined && !busy
+  const describedBy = [unsaved ? unsavedId : undefined, busy || change.isError ? noteId : undefined].filter(id => id !== undefined).join(' ')
 
   function choose(role: SpaceRole): void {
     if (!busy)
@@ -185,23 +191,25 @@ function MemberRow({ spaceId, member, self, canManage, onDemoteSelf, onRemove }:
           ? (
               <div className="flex flex-col gap-1">
                 <div className="flex items-center gap-2">
-                  <NativeSelect ref={selectRef} aria-label={text.roleOf(name)} aria-describedby={busy || change.isError ? noteId : undefined} value={saving ?? pending ?? member.role} onChange={event => choose(event.target.value as SpaceRole)}>
+                  <NativeSelect ref={selectRef} aria-label={text.roleOf(name)} aria-describedby={describedBy === '' ? undefined : describedBy} value={saving ?? pending ?? member.role} onChange={event => choose(event.target.value as SpaceRole)}>
                     {ROLE_OPTIONS.map(value => <option key={value} value={value}>{messages.spaces.roleName(value)}</option>)}
                   </NativeSelect>
-                  {pending !== undefined && !busy && <Button variant="outline" size="sm" aria-label={text.saveRoleOf(name)} onClick={save}>{text.saveRole}</Button>}
+                  {unsaved && <Button variant="outline" size="sm" aria-label={text.saveRoleOf(name)} onClick={save}>{text.saveRole}</Button>}
                 </div>
+                {unsaved && <span id={unsavedId} className="text-xs text-muted-foreground">{text.unsaved}</span>}
                 {busy && <span id={noteId} className="text-xs text-muted-foreground">{text.saving}</span>}
-                {!busy && change.isError && <span id={noteId} role="alert" className="text-xs text-destructive">{describeError(change.error).message}</span>}
+                {/* 结果未知时成员列表已经刷新（onSettled），说明可能已经生效（M2-P6 复核第二批 G-2） */}
+                {!busy && change.isError && <span id={noteId} role="alert" className="text-xs text-destructive">{writeFailureText(change.error)}</span>}
               </div>
             )
           : messages.spaces.roleName(member.role)}
       </TableCell>
       <TableCell>
-        {member.status === 'disabled' ? <Badge variant="destructive">{text.disabled}</Badge> : <Badge variant="secondary">{messages.admin.statusName(member.status)}</Badge>}
+        {member.status === 'disabled' ? <Badge variant="destructive">{text.disabled}</Badge> : <Badge variant="secondary">{messages.people.statusName(member.status)}</Badge>}
       </TableCell>
       {canManage && (
         <TableCell>
-          <Button variant="ghost" size="sm" aria-label={messages.admin.actionOn(text.remove, name)} onClick={onRemove}>{text.remove}</Button>
+          <Button variant="ghost" size="sm" aria-label={messages.common.actionOn(text.remove, name)} onClick={onRemove}>{text.remove}</Button>
         </TableCell>
       )}
     </TableRow>
@@ -243,6 +251,7 @@ function MembersTable({ spaceId, list, selfId, focusTitle }: MembersTableProps) 
         await changeMemberRole(spaceId, member.user.id, role)
         await refresh()
       },
+      refresh,
       returnFocus: focusTitle,
     })
   }
@@ -281,6 +290,8 @@ function MembersTable({ spaceId, list, selfId, focusTitle }: MembersTableProps) 
         await navigate(HOME_PATH)
         await refresh()
       },
+      // 结果未知时确认的弹窗刷新成员列表、说明可能已经移出（M2-P6 复核第二批 G-2）；再试得到 404 时照上面说明"已经不在成员里了"
+      refresh,
       returnFocus: focusTitle,
     })
   }

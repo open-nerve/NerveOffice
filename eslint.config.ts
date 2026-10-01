@@ -563,6 +563,42 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
 /** 元素之间只经公开入口引用；同一个元素内部不受限制（ADR-003）。 */
 const PUBLIC_ENTRY = 'index.{ts,tsx}'
 
+/**
+ * 只给按需加载的页面（与编辑器页）用的文案：shared/i18n/zh-cn/ 下的文件与引用它的那一个功能（M2-P6 复核第二批）。
+ * 平台页面首屏用到的在 messages.ts（经 shared/i18n/index.ts 给出），不在这里
+ */
+const LAZY_TEXTS: readonly { readonly file: string, readonly feature: string }[] = [
+  { file: 'admin.ts', feature: 'admin' },
+  { file: 'members.ts', feature: 'members' },
+  { file: 'colleagues.ts', feature: 'colleagues' },
+  { file: 'trash.ts', feature: 'trash' },
+  { file: 'search.ts', feature: 'search' },
+  { file: 'editor.ts', feature: 'sheet-editor' },
+]
+
+/** web 元素里的测试与测试辅助（相对元素的路径）：不进产物，模块边界上按需放行 */
+const WEB_TEST_CODE = ['**/*.test.{ts,tsx}', '**/*.test-support.{ts,tsx}']
+
+/**
+ * 共享层内部引用这些文案：模块边界不检查同一个元素内部的引用（boundaries/dependencies 的 checkInternals 默认关），
+ * 改按解析之后的路径拦下——shared/i18n/index.ts 转出、shared 里别的文件中转，都会把它们带回首屏（M2-P6 复核第二批）
+ */
+const LAZY_TEXT_ZONES = LAZY_TEXTS.map(({ file, feature }) => ({
+  target: 'apps/web/src/shared',
+  from: `apps/web/src/shared/i18n/zh-cn/${file}`,
+  message: `这份文案（shared/i18n/zh-cn/${file}）只由按需加载的 features/${feature} 引用：共享层（包括 shared/i18n/index.ts）转出或中转会把它带进平台页面的首屏（M2-P6 复核第二批）`,
+}))
+
+/**
+ * 只给平台页面用的请求层模块不经 shared/api/index.ts 转出（M2-P6 复核第二批）：编辑器页也引用这个桶文件，转出就进了两个入口共用的块，
+ * 实测平台页面的入口随之多出两个小块（共用的 react-router 等不再并进入口块，另有一个运行时的块）。用到的地方按路径引用
+ */
+const PLATFORM_ONLY_API_ZONES = ['request-ids.ts', 'write-outcome.ts'].map(file => ({
+  target: 'apps/web/src/shared/api/index.ts',
+  from: `apps/web/src/shared/api/${file}`,
+  message: `shared/api/${file} 只给平台页面用，不经 shared/api/index.ts 转出：编辑器页也引用这个桶文件，转出会让平台页面的入口多出两个小块；用到的地方按路径引用（M2-P6 复核第二批）`,
+}))
+
 // ---- 测试代码只在测试里用（审查 B17）----
 const CODE_FILES = '**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}'
 /** 测试代码：测试、测试辅助、tests/ 下的包与测试的初始化文件。它们可以引用测试库与彼此 */
@@ -827,8 +863,16 @@ export default antfu(
           target: 'apps/web/src/shared',
           from: 'apps/web/src/shared/ui/dialog.tsx',
           message: '弹窗（shared/ui/dialog.tsx，Radix Dialog）不经 shared 的其他文件转出：会随桶文件进平台页面的首屏；用到的功能模块直接引用这个文件（ADR-008，M2-P1 审查 B2）',
-        }],
+        }, ...LAZY_TEXT_ZONES, ...PLATFORM_ONLY_API_ZONES],
       }],
+    },
+  },
+  {
+    // 弹窗的文件不受上一块管（它自己引入 Radix 的原语），只给按需加载的页面用的文案的限制照样要有（同名规则后者整体覆盖前者，单独一块）
+    name: 'nerve/web-dialog-file-texts',
+    files: ['apps/web/src/shared/ui/dialog.tsx'],
+    rules: {
+      'import-x/no-restricted-paths': ['error', { basePath: import.meta.dirname, zones: LAZY_TEXT_ZONES }],
     },
   },
   {
@@ -1100,6 +1144,21 @@ export default antfu(
             ],
             disallow: { to: { element: { type: 'web-feature', captured: { feature: 'colleagues' } } } },
             message: '按关键词选一项（features/colleagues）只由按需加载的功能（features/admin、features/members）引用，不进平台页面的首屏（M2-P2 设计 §3.10，审查 B8）',
+          },
+          // 只给按需加载的页面（与编辑器页）用的文案按功能各放一个文件（shared/i18n/zh-cn/<功能>.ts，M2-P6 复核第二批）：只由对应的功能引用。
+          // 应用层、入口、别的功能、编辑器适配层与共享层（包括 shared/i18n/index.ts 的转出）引用它，就会把它带进平台页面的首屏。
+          // 同样放在允许的策略之后，覆盖"共享层可以随意引用"；测试与测试辅助不进产物，下一条再放行
+          ...LAZY_TEXTS.map(({ file, feature }) => ({
+            from: [
+              { element: { type: ['web-app', 'web-entry', 'web-shared', 'web-editor'] } },
+              { element: { type: 'web-feature', captured: { feature: `!${feature}` } } },
+            ],
+            disallow: { to: { element: { type: 'web-shared', fileInternalPath: `i18n/zh-cn/${file}` } } },
+            message: `这份文案（shared/i18n/zh-cn/${file}）只由按需加载的 features/${feature} 引用：别处引用（包括经 shared/i18n/index.ts 转出）会把它带进平台页面的首屏（M2-P6 复核第二批）`,
+          })),
+          {
+            from: { element: { type: ['web-app', 'web-entry', 'web-feature', 'web-shared', 'web-editor'], fileInternalPath: WEB_TEST_CODE } },
+            allow: { to: { element: { type: 'web-shared', fileInternalPath: LAZY_TEXTS.map(({ file }) => `i18n/zh-cn/${file}`) } } },
           },
         ],
       }],

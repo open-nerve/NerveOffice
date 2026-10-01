@@ -207,14 +207,14 @@ describe('US-M2-07 文件夹导航', () => {
     expect(first).toMatchObject({ spaceId: SPACE_ID, parentId: PLAN_ID, name: '二季度' })
 
     // 重试沿用同一个 requestId：服务端只建一个
-    api.on('POST /api/folders', () => json(201, folder(QUARTER_ID, '二季度', { parentId: PLAN_ID, depth: 2 })))
+    api.on('POST /api/folders', () => json(201, { ...folder(QUARTER_ID, '二季度', { parentId: PLAN_ID, depth: 2 }), replayed: false }))
     fireEvent.click(within(form).getByRole('button', { name: '新建文件夹' }))
     await waitFor(() => expect(screen.queryByRole('form', { name: '新建文件夹' })).not.toBeInTheDocument())
     expect((lastBody(api, 'POST /api/folders') as { requestId: string }).requestId).toBe(first.requestId)
   })
 
   it('在文件夹里新建表格：一次请求就带上 folderId，不再"建到根目录再移进来"；空间根目录下不带 folderId', async () => {
-    const created = detail({ id: QUARTER_ID, title: '未命名表格', folderId: PLAN_ID })
+    const created = { ...detail({ id: QUARTER_ID, title: '未命名表格', folderId: PLAN_ID }), replayed: false }
     const api = loggedIn({
       [foldersKey(SPACE_ID)]: folderPage([folder(PLAN_ID, '方案')]),
       [foldersKey(SPACE_ID, PLAN_ID)]: noFolders(),
@@ -290,7 +290,7 @@ describe('US-M2-07 行内的整理操作', () => {
   })
 
   it('复制：复制到选定的位置，说明里给出副本的标题与打开副本的链接', async () => {
-    const copy = detail({ id: QUARTER_ID, title: '周报 的副本' })
+    const copy = { ...detail({ id: QUARTER_ID, title: '周报 的副本' }), replayed: false }
     const api = loggedIn({
       [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()),
       [`POST /api/documents/${WEEKLY_ID}/copy`]: () => json(201, copy),
@@ -396,7 +396,7 @@ describe('US-M2-07 行内的整理操作', () => {
   it('同一个位置连着复制两次：第二次换一个新的 requestId，第二份副本才真的建得出来（复验 S1）', async () => {
     const api = loggedIn({
       [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()),
-      [`POST /api/documents/${WEEKLY_ID}/copy`]: () => json(201, detail({ id: QUARTER_ID, title: '周报 的副本' })),
+      [`POST /api/documents/${WEEKLY_ID}/copy`]: () => json(201, { ...detail({ id: QUARTER_ID, title: '周报 的副本' }), replayed: false }),
     })
     renderApp('/')
     for (const round of [1, 2]) {
@@ -481,7 +481,7 @@ describe('US-M2-07 行内的整理操作', () => {
   it('说明条先接住焦点；关掉它时那一行还在，焦点还给它的"操作"（审查建议 1）', async () => {
     loggedIn({
       [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()),
-      [`POST /api/documents/${WEEKLY_ID}/copy`]: () => json(201, detail({ id: QUARTER_ID, title: '周报 的副本' })),
+      [`POST /api/documents/${WEEKLY_ID}/copy`]: () => json(201, { ...detail({ id: QUARTER_ID, title: '周报 的副本' }), replayed: false }),
     })
     renderApp('/')
     const trigger = await openActionsFrom('周报')

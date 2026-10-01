@@ -3,14 +3,16 @@ import { SPACE_ROLES, spaceNameSchema } from '@nerve-office/contracts'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useId, useState } from 'react'
 import { ApiError, describeError, isUnknownOutcome } from '../../shared/api/index.ts'
+import { refreshIfUnknown, writeFailureText } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { problemOf } from '../../shared/lib/validation.ts'
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../shared/ui/dialog.tsx'
 import { Alert, AlertDescription, Button, FieldProblem, Input, Label, NativeSelect } from '../../shared/ui/index.ts'
 import { sessionQueryOptions, SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
 import { addMember, renameSpace } from '../spaces/index.ts'
 
-const text = messages.admin.spaces
+const text = adminMessages.spaces
 
 interface SpaceDialogProps {
   /** 要操作的团队空间；为空时弹窗关着 */
@@ -23,14 +25,15 @@ interface SpaceDialogProps {
 }
 
 interface SubmissionOptions extends Pick<SpaceDialogProps, 'onDone' | 'onClose'> {
-  /** 失败之后要不要也刷新列表（例如结果未知：可能已经生效，M2-P6 复核 S1） */
+  /** 结果未知之外，失败之后还要刷新列表的情形（例如加入时"已经是成员"：多半就是刚才那一次，M2-P6 复核 S1） */
   readonly refreshAfter?: (error: unknown) => boolean
 }
 
 /**
  * 弹窗里的提交（改名、加入空间）。与确认的弹窗一样（审查 B4）：
  * - 进行中拦下关闭（Esc、×、取消都不关），结果不会落到已经关掉的弹窗上，也不会让人以为没有提交；
- * - 成功之后先刷新（onDone），再关闭；失败时弹窗留着，说明原因；按 refreshAfter 也刷新（列表显示服务端的实际状态）；
+ * - 成功之后先刷新（onDone），再关闭；失败时弹窗留着，说明原因；结果未知时也刷新、说明可能已经生效（M2-P6 复核第二批 G-2，
+ *   shared/api 的共用做法），按 refreshAfter 还有别的情形要刷新（列表显示服务端的实际状态）；
  * - 关闭时清掉上一次的失败，下次打开不带着旧的说明。
  * 服务端逐请求检查；标明只给系统管理员，被拒绝时由全局处理重新确认会话（M2-P1 审查 B4）。
  */
@@ -42,6 +45,8 @@ function useDialogSubmission<T>(action: (value: T) => Promise<unknown>, { onDone
     onError: async (error) => {
       if (refreshAfter?.(error) === true)
         await onDone()
+      else
+        await refreshIfUnknown(error, onDone)
     },
   })
 
@@ -53,7 +58,7 @@ function useDialogSubmission<T>(action: (value: T) => Promise<unknown>, { onDone
   return {
     pending: mutation.isPending,
     error: mutation.error,
-    failure: mutation.error === null ? undefined : describeError(mutation.error).message,
+    failure: mutation.error === null ? undefined : writeFailureText(mutation.error),
     submit: (value: T): void => {
       if (!mutation.isPending)
         mutation.mutate(value, { onSuccess: close })
@@ -183,7 +188,7 @@ export function JoinSpaceDialog({ space, onDone, onClose, returnFocus }: SpaceDi
   // 与成员页的"添加成员"是同一个接口：把自己加入时，审计记为系统管理员加入空间
   const submission = useDialogSubmission(
     async ({ id, userId, role }: { readonly id: string, readonly userId: string, readonly role: SpaceRole }) => addMember(id, { userId, role }),
-    { onDone, onClose, refreshAfter: error => isUnknownOutcome(error) || isAlreadyMember(error) },
+    { onDone, onClose, refreshAfter: isAlreadyMember },
   )
   return (
     <Dialog open={space !== undefined} onOpenChange={submission.changeOpen}>

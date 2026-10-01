@@ -7,6 +7,7 @@ import { useId, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { ApiError, describeError, isUnknownOutcome } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { spaceMembersPath } from '../../shared/lib/space-paths.ts'
 import { useDebouncedValue } from '../../shared/lib/use-debounced-value.ts'
@@ -20,7 +21,7 @@ import { ADMIN_QUERY_KEY, adminSpacesQueryOptions, archiveSpace, createTeamSpace
 import { PagedTable } from './paged-table.tsx'
 import { JoinSpaceDialog, RenameSpaceDialog } from './space-dialogs.tsx'
 
-const text = messages.admin.spaces
+const text = adminMessages.spaces
 
 /** 已有同名的团队空间 */
 function isNameTaken(error: unknown): boolean {
@@ -120,7 +121,7 @@ function createFailureText(error: unknown, name: string | undefined, unsureName:
  * 改名、全员可见的开关、归档与恢复（先确认）；"成员"进入成员页；没有加入的空间可以"加入空间"（选角色，记审计）。
  */
 export function AdminSpacesPage() {
-  useDocumentTitle(messages.admin.pageTitle(messages.admin.nav.spaces))
+  useDocumentTitle(adminMessages.pageTitle(adminMessages.nav.spaces))
   const queryClient = useQueryClient()
   const [keyword, setKeyword] = useState('')
   const [status, setStatus] = useState<SpaceStatus | ''>('')
@@ -152,19 +153,21 @@ export function AdminSpacesPage() {
       focusRow(space)
   }
 
-  function confirmThen(space: AdminSpace, confirmation: Omit<PendingConfirmation, 'run' | 'returnFocus'>, action: () => Promise<unknown>): void {
+  /** 全员可见、归档与恢复：先确认，再执行。结果未知时确认的弹窗刷新列表与导航、说明可能已经生效（M2-P6 复核第二批 G-2） */
+  function confirmThen(space: AdminSpace, confirmation: Omit<PendingConfirmation, 'run' | 'refresh' | 'returnFocus'>, action: () => Promise<unknown>): void {
     setPending({
       ...confirmation,
       run: async () => {
         await action()
         await refresh()
       },
+      refresh,
       returnFocus: () => focusRow(space),
     })
   }
 
   function actionsOf(space: AdminSpace) {
-    const on = (action: string) => messages.admin.actionOn(action, space.name)
+    const on = (action: string) => messages.common.actionOn(action, space.name)
     return (
       <div className="flex flex-wrap gap-1">
         <Link to={spaceMembersPath(space.id)} aria-label={on(text.members)} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>{text.members}</Link>

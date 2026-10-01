@@ -2,11 +2,11 @@ import type { UserSummary } from '@nerve-office/contracts'
 import { userDirectoryResponseSchema } from '@nerve-office/contracts'
 import { queryOptions } from '@tanstack/react-query'
 import { apiRequest } from '../../shared/api/index.ts'
-import { messages } from '../../shared/i18n/index.ts'
+import { colleaguesMessages } from '../../shared/i18n/zh-cn/colleagues.ts'
 import { PersonName } from '../../shared/ui/index.ts'
 import { KeywordPicker } from './keyword-picker.tsx'
 
-const text = messages.colleagues
+const text = colleaguesMessages
 
 const TEXTS = { placeholder: text.search, candidates: text.candidates, searching: text.searching, none: text.none, failed: text.failed }
 

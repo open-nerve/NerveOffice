@@ -7,8 +7,9 @@ import { TRANSFER_MAX_DOCUMENTS } from '@nerve-office/contracts'
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
-import { ApiError, describeError, isMissingResource } from '../../shared/api/index.ts'
+import { ApiError, describeError, isMissingResource, isUnknownOutcome } from '../../shared/api/index.ts'
 import { messages, phraseText } from '../../shared/i18n/index.ts'
+import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { ADMIN_PATHS } from '../../shared/lib/admin-paths.ts'
 import { cn } from '../../shared/lib/cn.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
@@ -20,7 +21,7 @@ import { ConfirmDialog } from '../confirmation/index.ts'
 import { adminUserQueryOptions, transferDocuments, transferTargetsQueryOptions, userDocumentsQueryOptions } from './admin-api.ts'
 import { PagedTable } from './paged-table.tsx'
 
-const text = messages.admin.transfer
+const text = adminMessages.transfer
 
 /** 找目标团队空间：按名称找没有归档的团队空间（与按名字选同事同一个组件，审查 B13） */
 const TEAM_TEXTS: KeywordPickerTexts = { placeholder: text.searchTeam, candidates: text.teamCandidates, searching: text.searchingTeam, none: text.noTeam, failed: text.teamSearchFailed }
@@ -69,6 +70,11 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
   const [done, setDone] = useState<ReactNode>()
   /** 上一次转移时有文档已经不在了：在转移按钮旁说明，下一次打开确认的弹窗时清掉（转移成功之前一定先打开它） */
   const [conflict, setConflict] = useState(false)
+  /**
+   * 有过结果未知的转移、之后还没有成功过（M2-P6 复核第二批 G-3）：那一次可能已经完成。之后得到 TRANSFER_CONFLICT 时，
+   * 说明多半就是那一次已经转走了，而不是"可能被别人转走了"
+   */
+  const [unsure, setUnsure] = useState(false)
   const submitRef = useRef<HTMLButtonElement>(null)
   const groupId = useId()
   const hintId = useId()
@@ -88,8 +94,8 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
   }
 
   /**
-   * 转移失败（例如有文档已经被别人转走了）之后，刷新标题列表，清掉已经不在列表里的选中项，列表与选择都是服务端的实际状态（审查 B12）。
-   * 返回刷新是否成功：刷新本身失败时列表不变，选择也不动
+   * 转移失败（例如有文档已经被别人转走了）或者结果未知之后，刷新标题列表，清掉已经不在列表里的选中项，列表与选择都是服务端的实际状态
+   * （审查 B12，第二批 G-3）。返回刷新是否成功：刷新本身失败时列表不变，选择也不动
    */
   async function refreshAfterFailure(): Promise<boolean> {
     try {
@@ -114,6 +120,10 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
   else if (target === undefined)
     blocked = text.pickTarget
 
+  /**
+   * 确认之后整批转移。结果未知时（M2-P6 复核第二批 G-3）可能已经转移了：确认的弹窗按 refresh 刷新列表、清掉已经不在的选择，
+   * 说明"可能已经转移"；之后得到 TRANSFER_CONFLICT 时说明多半就是那一次已经完成
+   */
   function submit(): void {
     if (blocked !== undefined || target === undefined)
       return
@@ -127,13 +137,19 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
         try {
           const result = await transferDocuments(account.id, { documentIds, target: target.request })
           setSelected(new Set())
+          setUnsure(false)
           setDone(<Phrase parts={text.done(result.transferred, target.shown)} />)
           await queryClient.invalidateQueries({ queryKey: documentsQuery.queryKey })
         }
         catch (error) {
+          // 结果未知：确认的弹窗随即按 refresh 刷新、说明可能已经转移
+          if (isUnknownOutcome(error)) {
+            setUnsure(true)
+            throw error
+          }
           const refreshed = await refreshAfterFailure()
           // 有文档已经不在了：列表刷新之后关闭弹窗，在转移按钮旁说明，按新的列表重新选择。弹窗留着的话，再点确认只会拿着
-          // 同样的文档原样重发（复验）。其他失败（目标已归档、网络等）与刷新本身失败时，弹窗留着说明原因
+          // 同样的文档原样重发（复验）。其他失败（目标已归档等）与刷新本身失败时，弹窗留着说明原因
           if (refreshed && isTransferConflict(error)) {
             setConflict(true)
             return
@@ -141,6 +157,8 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
           throw error
         }
       },
+      refresh: refreshAfterFailure,
+      describeFailure: error => (isUnknownOutcome(error) ? text.outcomeUnknown(describeError(error).message) : describeError(error).message),
       // WebKit 点按钮时不聚焦按钮，打开之前的焦点记不下来：关闭之后焦点回到"转移"（它一直在，审查 B2）
       returnFocus: () => submitRef.current?.focus(),
     })
@@ -196,7 +214,7 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
       </fieldset>
       {conflict && (
         <Alert variant="destructive">
-          <AlertDescription>{text.conflict}</AlertDescription>
+          <AlertDescription>{unsure ? text.conflictAfterUnknown : text.conflict}</AlertDescription>
         </Alert>
       )}
       {/* 还不能转移时说明原因，按钮经 aria-describedby 指向它（审查 B5） */}
@@ -215,7 +233,7 @@ export function AdminTransferPage() {
   const { userId = '' } = useParams()
   const account = useQuery(adminUserQueryOptions(userId))
   // 浏览器标签页的标题（M2-P6 复核 S4）：账户还没取到或取不到时是账户页的
-  useDocumentTitle(messages.admin.pageTitle(account.data === undefined ? messages.admin.nav.users : phraseText(text.title(messages.people.text(account.data)))))
+  useDocumentTitle(adminMessages.pageTitle(account.data === undefined ? adminMessages.nav.users : phraseText(text.title(messages.people.text(account.data)))))
   const back = <Link to={ADMIN_PATHS.users} className={buttonVariants({ variant: 'outline' })}>{text.back}</Link>
   if (account.isPending) {
     return (

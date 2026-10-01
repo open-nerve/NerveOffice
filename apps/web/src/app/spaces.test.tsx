@@ -177,7 +177,7 @@ describe('US-M2-05 空间页', () => {
   })
 
   it('新建表格：建在这个空间里', async () => {
-    const created = { id: '0199a2c4-0000-7000-8000-0000000000d9', title: '未命名表格', type: 'sheet', createdAt: '2026-09-29T01:00:00.000Z', updatedAt: '2026-09-29T01:00:00.000Z', spaceId: TEAM_ID, space: { id: TEAM_ID, type: 'team', name: '市场部' }, folderId: null, revision: 1, profile: 'sheet@1', formatVersion: 1, permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true } }
+    const created = { id: '0199a2c4-0000-7000-8000-0000000000d9', title: '未命名表格', type: 'sheet', createdAt: '2026-09-29T01:00:00.000Z', updatedAt: '2026-09-29T01:00:00.000Z', spaceId: TEAM_ID, space: { id: TEAM_ID, type: 'team', name: '市场部' }, folderId: null, revision: 1, profile: 'sheet@1', formatVersion: 1, permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true }, replayed: false }
     const api = loggedIn(team(), { 'POST /api/documents': () => json(201, created) })
     const app = renderApp(`/spaces/${TEAM_ID}`)
     fireEvent.click(await screen.findByRole('button', { name: '新建表格' }))
@@ -396,8 +396,8 @@ describe('US-M2-06 成员页', () => {
     fireEvent.change(input, { target: { value: '本' } })
     const candidates = await screen.findByRole('list', { name: '找到的同事' })
     // 自己已经是成员，不作为候选
-    expect(within(candidates).getAllByRole('button').map(button => button.textContent)).toEqual(['本 @ben'])
-    fireEvent.click(within(candidates).getByRole('button', { name: '本 @ben' }))
+    expect(within(candidates).getAllByRole('button').map(button => button.textContent)).toEqual(['@ben 本'])
+    fireEvent.click(within(candidates).getByRole('button', { name: '@ben 本' }))
     expect(screen.getByRole('button', { name: '重新选择 要添加的同事' })).toBeInTheDocument()
     expect(submit).toHaveAttribute('aria-disabled', 'false')
     expect(submit).not.toHaveAccessibleDescription()
@@ -588,7 +588,7 @@ describe('US-M2-06 成员页', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: '移出' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     // 说明里的人名同样用 PersonName（M2-P6 复核 M2）
-    const notice = statuses.find(status => status.textContent === '凯特 @cat 已经不在成员里了（可能已被别人移出），列表已刷新')
+    const notice = statuses.find(status => status.textContent === '@cat 凯特 已经不在成员里了（可能已被别人移出），列表已刷新')
     expect(notice).toBeDefined()
     personIn(notice!, '凯特', 'cat')
     expect(screen.queryByRole('button', { name: `移出 ${plainName('凯特', 'cat')}` })).toBeNull()
@@ -765,6 +765,29 @@ describe('US-M2-06 成员页：角色经明确的保存才提交、结果未知�
     expect(document.activeElement).toBe(select)
   })
 
+  it('选了还没保存：选择框关联一段"还没保存"的说明，读屏用户听得到它还没生效；选回原来的角色、保存完成之后说明随之去掉（第二批 S-3）', async () => {
+    const save = deferred()
+    loggedIn(MANAGER, {
+      [MEMBERS_KEY]: () => json(200, membersList(true, [member(SESSION.user, 'admin'), member(BEN, 'viewer')])),
+      [memberKey('PUT', BEN)]: save.handler,
+    })
+    renderApp(MEMBERS_PATH)
+    const { select, row } = await roleOf('本', 'ben')
+    expect(select).not.toHaveAccessibleDescription()
+    fireEvent.change(select, { target: { value: 'editor' } })
+    expect(select).toHaveAccessibleDescription('还没保存：点"保存"之后才生效')
+    // 选回原来的角色：没有要保存的，说明随"保存"一起收起
+    fireEvent.change(select, { target: { value: 'viewer' } })
+    expect(select).not.toHaveAccessibleDescription()
+    fireEvent.change(select, { target: { value: 'editor' } })
+    fireEvent.click(within(row).getByRole('button', { name: `保存 ${plainName('本', 'ben')} 的角色` }))
+    // 保存进行中：说明换成"正在保存…"
+    expect(select).toHaveAccessibleDescription('正在保存…')
+    save.resolve(json(200, member(BEN, 'editor')))
+    await waitFor(() => expect(row).toHaveAttribute('aria-busy', 'false'))
+    expect(select).not.toHaveAccessibleDescription()
+  })
+
   it('添加的结果未知：成员列表刷新，说明可能已经加好；再点得到"已经是成员"，说明多半就是刚才那一次，同事选择重新开始（S1 / P6）', async () => {
     let items = [member(SESSION.user, 'admin')]
     let posts = 0
@@ -782,7 +805,7 @@ describe('US-M2-06 成员页：角色经明确的保存才提交、结果未知�
     })
     renderApp(MEMBERS_PATH)
     fireEvent.change(await screen.findByLabelText('要添加的同事'), { target: { value: '本' } })
-    fireEvent.click(await screen.findByRole('button', { name: '本 @ben' }))
+    fireEvent.click(await screen.findByRole('button', { name: '@ben 本' }))
     const listed = api.requests.filter(request => request.key === MEMBERS_KEY).length
     fireEvent.click(screen.getByRole('button', { name: '添加成员' }))
     expect(await screen.findByText('没能确认是否已经添加（服务器出了点问题，请稍后重试）。成员列表已刷新：这个人在列表里，就是已经加好了。')).toBeInTheDocument()
@@ -812,7 +835,24 @@ describe('US-M2-06 成员页：角色经明确的保存才提交、结果未知�
     expect(within(spoofName.closest('tr')!).getByRole('button', { name: `移出 ${plainName('李四（lisi）', 'mallory')}` })).toBeInTheDocument()
     expect(personIn(table, 'שלום', 'shalom').querySelector('bdi')).toHaveTextContent('שלום')
     // 本人那一行：名字之后标"（我）"
-    expect(personIn(table, '艾米', 'amy').closest('td')).toHaveTextContent('艾米 @amy（我）')
+    expect(personIn(table, '艾米', 'amy').closest('td')).toHaveTextContent('@amy 艾米（我）')
+  })
+
+  it('显示名写成"李四 @lisi"冒充别人：选择框、移出按钮的可读名称与确认框的标题都是登录名在前，与真正的李四从开头就分得清（第二批 M-1）', async () => {
+    const real = { id: '0199a2c4-0000-7000-8000-000000000034', username: 'lisi', displayName: '李四' }
+    const spoof = { id: '0199a2c4-0000-7000-8000-000000000035', username: 'eve', displayName: '李四 @lisi' }
+    loggedIn(MANAGER, { [MEMBERS_KEY]: () => json(200, membersList(true, [member(SESSION.user, 'admin'), member(real, 'viewer'), member(spoof, 'viewer')])) })
+    renderApp(MEMBERS_PATH)
+    const table = await screen.findByRole('table', { name: '成员列表' })
+    const rowOfSpoof = personIn(table, '李四 @lisi', 'eve').closest('tr')!
+    // 纯文字里的人名：登录名在前、显示名用 FSI…PDI 隔离在后（写出字面量，不拿实现对实现）
+    expect(within(rowOfSpoof).getByRole('combobox')).toHaveAccessibleName('@eve \u2068李四 @lisi\u2069 的角色')
+    expect(within(personIn(table, '李四', 'lisi').closest('tr')!).getByRole('combobox')).toHaveAccessibleName('@lisi \u2068李四\u2069 的角色')
+    // 以真人的可读名称开头的选择框只有真人那一个
+    const roles = within(table).getAllByRole('combobox').map(select => select.getAttribute('aria-label') ?? '')
+    expect(roles.filter(label => label.startsWith('@lisi '))).toEqual(['@lisi \u2068李四\u2069 的角色'])
+    fireEvent.click(within(rowOfSpoof).getByRole('button', { name: '移出 @eve \u2068李四 @lisi\u2069' }))
+    expect(await screen.findByRole('dialog', { name: '把 @eve \u2068李四 @lisi\u2069 移出这个空间？' })).toBeInTheDocument()
   })
 
   it('浏览器标签页的标题是这个空间的成员（WCAG 2.4.2，S4）', async () => {

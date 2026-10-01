@@ -1,4 +1,4 @@
-import type { DocumentDetail } from '@nerve-office/contracts'
+import type { CreatedDocument } from '@nerve-office/contracts'
 import type { Buffer } from 'node:buffer'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Transaction } from '../database/index.ts'
@@ -37,7 +37,7 @@ export interface CopyDocumentCommand {
  * 复制一份文档（M2-P4 设计 §3.4 第 4 条，US-M2-08）：能读源文档 + 在目标空间有新建权限。
  * 副本是一份新文档：新的 id、修订号 1、写入代次 0、创建人是操作者，修订记录写一条（kind='created'）；
  * 不复制历史修订，也不复制单独授权（P5）。快照不经解析，由数据库直接复制压缩后的字节，副本与源逐字节一致（A10）；
- * unitId 原样复制（00 号计划书 §8.3）。requestId 幂等，与新建文档同一个做法。
+ * unitId 原样复制（00 号计划书 §8.3）。requestId 幂等，与新建文档同一个做法：响应带 replayed，重放为真（M2-P6 复核第二批 S-1）。
  *
  * 锁（ADR-007 的顺序：空间树锁 → 空间行按 id → 文档行）：目标空间的树锁（只有目标的结构在变）→ 源空间与目标空间的空间行
  * （FOR SHARE，按 id）→ 源文档行（FOR SHARE），锁下对源文档与目标空间重新判断。源文档因此与判断它的权限在同一把锁下：
@@ -58,7 +58,7 @@ export class DocumentCopyService {
     private readonly audit: AuditService,
   ) {}
 
-  async copy(actor: Actor, id: string, command: CopyDocumentCommand, origin: AuditOrigin): Promise<DocumentDetail> {
+  async copy(actor: Actor, id: string, command: CopyDocumentCommand, origin: AuditOrigin): Promise<CreatedDocument> {
     const userId = actor.userId
     // 摘要只按请求里的东西算（源文档、目标位置与请求里的标题）：源文档随后被改名也不影响重试按重放处理
     const digest = copiedPayloadDigest(id, command.spaceId, command.folderId, command.title)
@@ -113,20 +113,20 @@ export class DocumentCopyService {
         origin,
         details: { sourceId: id, sourceSpaceId: source.document.spaceId, spaceId: copy.spaceId, folderId: copy.folderId },
       }, { transaction })
-      return toDetail(copy, { role: target.role, space: target.space }, userId)
+      return { ...toDetail(copy, { role: target.role, space: target.space }, userId), replayed: false }
     })
   }
 
   /**
    * 同一个 requestId 已经有修订记录：是同一个人、同一次复制（摘要一致），而且这个人仍能访问那份副本，
-   * 才返回那份副本的当前元数据；否则拒绝，不透露那份文档的任何信息（与新建文档相同）。
+   * 才返回那份副本的当前元数据（标为重放）；否则拒绝，不透露那份文档的任何信息（与新建文档相同）。
    */
-  private async replay(userId: string, previous: RevisionRow, digest: Buffer, transaction: Transaction): Promise<DocumentDetail> {
+  private async replay(userId: string, previous: RevisionRow, digest: Buffer, transaction: Transaction): Promise<CreatedDocument> {
     const sameRequest = previous.kind === 'created' && previous.savedBy === userId && previous.payloadDigest.equals(digest)
     const document: DocumentRow | undefined = sameRequest ? await this.documents.findById(previous.documentId, transaction) : undefined
     const access: DocumentAccess | undefined = document === undefined ? undefined : await this.policy.accessOf(userId, document, transaction)
     if (document === undefined || access === undefined)
       throw new AppError('REQUEST_ID_CONFLICT')
-    return toDetail(document, access, userId)
+    return { ...toDetail(document, access, userId), replayed: true }
   }
 }

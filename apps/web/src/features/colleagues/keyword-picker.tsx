@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { colleaguesMessages } from '../../shared/i18n/zh-cn/colleagues.ts'
 import { cn } from '../../shared/lib/cn.ts'
 import { useDebouncedValue } from '../../shared/lib/use-debounced-value.ts'
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
@@ -112,20 +113,20 @@ export function KeywordPicker<TQueryFnData, TItem, TQueryKey extends QueryKey>({
       <div className="flex flex-col gap-2">
         <span className="text-sm font-medium">{label}</span>
         <span className="inline-flex flex-wrap items-center gap-2">
-          <Badge variant="secondary"><Phrase parts={messages.colleagues.selected(renderItem(selected))} /></Badge>
+          <Badge variant="secondary"><Phrase parts={colleaguesMessages.selected(renderItem(selected))} /></Badge>
           <Button
             ref={changeRef}
             type="button"
             variant="ghost"
             size="sm"
-            aria-label={messages.colleagues.changeOf(label)}
+            aria-label={colleaguesMessages.changeOf(label)}
             onClick={() => {
               onSelect(undefined)
               setKeyword('')
               focusAfterRender(inputRef)
             }}
           >
-            {messages.colleagues.change}
+            {colleaguesMessages.change}
           </Button>
         </span>
       </div>

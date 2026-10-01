@@ -65,7 +65,8 @@ function Breadcrumb({ space, folderIds, crumbs }: {
 interface NewFolderFormProps {
   readonly spaceId: string
   readonly parentId: string | undefined
-  readonly onDone: () => void
+  /** 建好了；replayed 时给出说明（服务端说这次是重放：之前那一次已经建好了），由列表上方的说明条接住焦点 */
+  readonly onDone: (notice?: OrganizeNotice) => void
   readonly onCancel: () => void
   /** 新建按访问权限被拒绝：表单关掉，原因交给列表上方的说明（这个表单随新的权限不再显示） */
   readonly onDenied: (notice: OrganizeNotice) => void
@@ -76,6 +77,8 @@ interface NewFolderFormProps {
  * requestId 按"在这个位置新建文件夹"记账（shared/api/request-ids.ts，M2-P6 复核 M1），名称不在其中：
  * 结果未知之后原样再提交，沿用同一个、服务端只建一个；改了名再提交，服务端认出那个 requestId 已经用掉了（REQUEST_ID_CONFLICT），
  * 说明上一次多半已经建好并刷新列表，requestId 随之换新，再提交就建这个新名字的（P1）。结果未知时列表同样刷新。
+ * 服务端说这次是重放（replayed，M2-P6 复核第二批 S-1）：结果未知的那一次其实已经建好了（同一个位置、同一个名称），表单关掉，
+ * 在列表上方说明"上一次其实已经完成"，不当成这一次新建的；这件事随之了结，再新建就是另一个。
  * 名称不合法时说明原因（WCAG 3.3.1，M2-P6 复核 S4）。
  */
 function NewFolderForm({ spaceId, parentId, onDone, onCancel, onDenied }: NewFolderFormProps) {
@@ -88,9 +91,9 @@ function NewFolderForm({ spaceId, parentId, onDone, onCancel, onDenied }: NewFol
   const problem = problemOf(parsed)
   const mutation = useMutation({
     mutationFn: async (value: string) => ledger.send(`folder:${spaceId}/${parentId ?? ''}`, async requestId => createFolder({ spaceId, name: value, requestId, ...(parentId === undefined ? {} : { parentId }) })),
-    onSuccess: async () => {
+    onSuccess: async (folder) => {
       await refresh([spaceId])
-      onDone()
+      onDone(folder.replayed ? { message: text.createFolderReplayed(folder.name) } : undefined)
     },
     onError: async (error) => {
       if (isAccessDenied(error)) {
@@ -200,8 +203,13 @@ export function SpaceContents({ space, folderIds, targetSpaces, onDenied, titleR
     focusTrigger()
   }
 
-  function doneCreating(): void {
+  function doneCreating(done?: OrganizeNotice): void {
     setCreating(false)
+    // 有说明时（服务端说这次是重放）由说明条接住焦点
+    if (done !== undefined) {
+      setNotice(done)
+      return
+    }
     // 新建按钮随新的权限不再显示时（例如空间刚被归档）交给标题
     focusAfterRender(space.permissions.canCreateFolders ? newFolderRef : titleRef)
   }
@@ -236,7 +244,7 @@ export function SpaceContents({ space, folderIds, targetSpaces, onDenied, titleR
       </div>
       {/* 刷新之后不能在这里新建了（例如空间刚被归档）：表单不再显示（M2-P6 复核 S2） */}
       {creating && space.permissions.canCreateFolders && (
-        <NewFolderForm spaceId={space.id} parentId={parentId} onDone={doneCreating} onCancel={doneCreating} onDenied={creationDenied} />
+        <NewFolderForm spaceId={space.id} parentId={parentId} onDone={doneCreating} onCancel={() => doneCreating()} onDenied={creationDenied} />
       )}
       {notice !== undefined && (
         <Notice focusKey={notice} action={notice.action} onClose={closeNotice} variant={notice.problem === true ? 'destructive' : 'default'}>

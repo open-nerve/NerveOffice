@@ -131,7 +131,9 @@ describe('FoldersService.create', () => {
     const requestId = nextRequestId()
     const command = { spaceId: ALICE_SPACE, name: '资料', requestId }
     const first = await service.create(member(ALICE), command, HTTP_ORIGIN)
-    expect(await service.create(member(ALICE), command, HTTP_ORIGIN)).toEqual(first)
+    expect(first.replayed).toBe(false)
+    // 重放：同一个文件夹，标为重放（M2-P6 复核第二批 S-1）
+    expect(await service.create(member(ALICE), command, HTTP_ORIGIN)).toEqual({ ...first, replayed: true })
     expect(store.folders.size).toBe(1)
     // 重放不再记审计
     expect(store.audits).toHaveLength(1)
@@ -152,7 +154,7 @@ describe('FoldersService.create', () => {
 
     store.setMember(TEAM_SPACE, ALICE, 'viewer')
     // 同一个文件夹，权限按现在的角色给
-    expect(await service.create(member(ALICE), command, HTTP_ORIGIN)).toEqual({ ...first, permissions: folderPermissionsOf('viewer') })
+    expect(await service.create(member(ALICE), command, HTTP_ORIGIN)).toEqual({ ...first, permissions: folderPermissionsOf('viewer'), replayed: true })
     const notReplay = await errorOf(service.create(member(ALICE), { ...command, requestId: nextRequestId() }, HTTP_ORIGIN))
     expect([notReplay.code, notReplay.message]).toEqual(['PERMISSION_DENIED', '没有在这个空间里新建文件夹的权限'])
 

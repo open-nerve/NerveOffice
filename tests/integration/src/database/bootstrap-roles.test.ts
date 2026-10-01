@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import zlib from 'node:zlib'
 import { readExpectedMigrations, runMigrations } from '@nerve-office/api'
-import { documentDetailSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
+import { createdDocumentSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
 import pg from 'pg'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
@@ -175,7 +175,7 @@ describe('以不同的角色运行应用', () => {
     const session = await login(app.baseUrl, 'alice', alice.password)
     const created = await asUser(app.baseUrl, session, '/api/documents', { method: 'POST', body: { type: 'sheet', title: '角色验证', requestId: randomUUID() } })
     expect(created.status).toBe(201)
-    const document = parseExact(documentDetailSchema, await created.json())
+    const document = parseExact(createdDocumentSchema, await created.json())
     const contentPath = `/api/documents/${document.id}/content`
     const unitId = (JSON.parse(await (await asUser(app.baseUrl, session, contentPath)).text()) as { id: string }).id
     const sheet = SHEET_TEMPLATE.sheets['sheet-1']

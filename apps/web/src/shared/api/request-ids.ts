@@ -3,11 +3,11 @@
 import { ApiError, isAuthenticationError, isCsrfTokenError, isDefiniteRejection, isUnknownOutcome } from './client.ts'
 
 /**
- * 会话类的拒绝（未登录、登录已过期、CSRF 令牌不对）：请求在进入业务之前就被拦下，服务端没有看它的 requestId，
- * 说明不了更早那一次结果未知的请求有没有生效
+ * 会话类的拒绝（未登录、登录已过期、CSRF 令牌不对、请求来源不被允许）：请求在进入业务之前就被拦下，服务端没有看它的 requestId，
+ * 说明不了更早那一次结果未知的请求有没有生效。来源的检查与 CSRF 的检查在同一处、同样在业务之前（ADR-007；M2-P6 复核第二批 G-7）
  */
 function isSessionRejection(error: unknown): boolean {
-  return isAuthenticationError(error) || isCsrfTokenError(error)
+  return isAuthenticationError(error) || isCsrfTokenError(error) || (error instanceof ApiError && error.code === 'ORIGIN_NOT_ALLOWED')
 }
 
 /**

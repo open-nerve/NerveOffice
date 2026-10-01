@@ -74,6 +74,18 @@ interface ItemActionsProps {
 
 type Operation = 'rename' | 'move' | 'copy' | 'delete'
 
+/** 按服务端给的权限，这一种操作现在还能不能做（复制另外要这一行支持复制：文件夹不能复制） */
+function allows(permissions: OrganizePermissions, operations: ItemOperations, operation: Exclude<Operation, 'delete'>): boolean {
+  switch (operation) {
+    case 'rename':
+      return permissions.canRename
+    case 'move':
+      return permissions.canMoveWithinSpace || permissions.canMoveAcrossSpaces
+    case 'copy':
+      return permissions.canCopy && operations.copy !== undefined
+  }
+}
+
 /** 一次提交：做的是哪种操作、目标位置（移动、复制），以及做这件事的函数（成功时给出列表上方的说明） */
 interface Attempt {
   readonly operation: Operation
@@ -134,6 +146,8 @@ function RenameForm({ panelId, name, validate, pending, error, onSubmit, onCance
  *   改名与复制留在面板里，可以原样再提交（改名是幂等的，复制带着 requestId）；
  * - 其余（同名之类）：留在面板里说明。
  * 展开时取元数据得到 404（文档已经不在了）：同样收起、刷新、说明，不给一个永远失败的"重试"（P15）。
+ * 已经打开的改名、移动、复制表单，刷新之后这一种操作不能做了（例如别处的操作被拒绝、页面按新的权限重新请求，空间刚被归档、
+ * 自己刚被降为查看者）：表单随之收起，回到按新权限列出的操作（M2-P6 复核第二批 G-6；文件夹一个操作都做不了时整个面板收起）。
  */
 export function ItemActions({ panelId, name, validateName, permissions, loading, error, onRetry, current, excludeFolderId, targetSpaces, operations, onDone, onDenied, onClose }: ItemActionsProps) {
   const [chosen, setChosen] = useState<Exclude<Operation, 'delete'>>()
@@ -195,6 +209,13 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
     setChosen(operation)
   }
 
+  // 打开着的表单对应的操作，按刷新之后的权限已经不能做了（G-6）：表单收起，不留着一个提交了只会被拒绝的表单。
+  // 在渲染中清掉选择（React 随即按新的状态重新渲染这一个组件，不用 effect 多渲染一轮）：权限之后又回来时表单也不会自己冒出来
+  const revoked = chosen !== undefined && permissions !== undefined && !allows(permissions, operations, chosen)
+  if (revoked)
+    setChosen(undefined)
+  const shown = revoked ? undefined : chosen
+
   /** 留在面板里的失败说明：复制的上一次可能已经完成、改名与复制的结果未知（可以原样再提交），其余按错误码 */
   function panelError(): string | undefined {
     if (!mutation.isError)
@@ -229,11 +250,10 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
     )
   }
 
-  const canMove = permissions.canMoveWithinSpace || permissions.canMoveAcrossSpaces
   // 不能跨空间时，目标只有它现在所在的空间；能跨空间时，目标是我能新建内容的空间（服务端给的 canCreateDocuments）
   const spaces = permissions.canMoveAcrossSpaces ? targetSpaces : targetSpaces.filter(space => space.id === current.spaceId)
 
-  if (chosen === 'rename') {
+  if (shown === 'rename') {
     return (
       <RenameForm
         panelId={panelId}
@@ -252,13 +272,13 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
       />
     )
   }
-  if (chosen === 'move' || chosen === 'copy') {
+  if (shown === 'move' || shown === 'copy') {
     const copy = operations.copy
     return (
       <DestinationForm
         panelId={panelId}
-        action={chosen}
-        spaces={chosen === 'copy' ? targetSpaces : spaces}
+        action={shown}
+        spaces={shown === 'copy' ? targetSpaces : spaces}
         current={current}
         excludeFolderId={excludeFolderId}
         pending={mutation.isPending}
@@ -266,10 +286,10 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
         onSubmit={(destination, label) => {
           targetLabelRef.current = label
           run({
-            operation: chosen,
+            operation: shown,
             destination,
             run: async () => {
-              if (chosen === 'copy' && copy !== undefined)
+              if (shown === 'copy' && copy !== undefined)
                 return copy(destination)
               await operations.move(destination)
               return { message: text.moved(name, targetLabelRef.current) }
@@ -283,9 +303,9 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
 
   return (
     <div id={panelId} className="flex flex-wrap items-center gap-2 border-t bg-muted/30 px-4 py-2">
-      {permissions.canRename && <Button type="button" variant="outline" size="sm" onClick={() => choose('rename')}>{text.rename}</Button>}
-      {canMove && <Button type="button" variant="outline" size="sm" onClick={() => choose('move')}>{text.move}</Button>}
-      {permissions.canCopy && operations.copy !== undefined && <Button type="button" variant="outline" size="sm" onClick={() => choose('copy')}>{text.copy}</Button>}
+      {allows(permissions, operations, 'rename') && <Button type="button" variant="outline" size="sm" onClick={() => choose('rename')}>{text.rename}</Button>}
+      {allows(permissions, operations, 'move') && <Button type="button" variant="outline" size="sm" onClick={() => choose('move')}>{text.move}</Button>}
+      {allows(permissions, operations, 'copy') && <Button type="button" variant="outline" size="sm" onClick={() => choose('copy')}>{text.copy}</Button>}
       {permissions.canDelete && (
         <Button
           type="button"

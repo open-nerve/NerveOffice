@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { describeError, isAccessDenied, isMissingResource } from '../../shared/api/index.ts'
+import { refreshIfUnknown, writeFailureText } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { folderIdsFromPath, spaceMembersPath } from '../../shared/lib/space-paths.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
@@ -28,7 +29,10 @@ interface RenameFormProps {
   readonly onDenied: (error: ApiError) => void
 }
 
-/** 行内改名（不用弹窗，不进首屏的 Radix Dialog）：保存之后导航与页头随即是新名称；名称不合法时说明原因（M2-P6 复核 S4） */
+/**
+ * 行内改名（不用弹窗，不进首屏的 Radix Dialog）：保存之后导航与页头随即是新名称；名称不合法时说明原因（M2-P6 复核 S4）。
+ * 结果未知时页头与导航刷新、说明可能已经改好（改名按状态幂等，再保存一次是安全的，M2-P6 复核第二批 G-2）
+ */
 function RenameForm({ space, onDone, onDenied }: RenameFormProps) {
   const queryClient = useQueryClient()
   const [name, setName] = useState(space.name)
@@ -40,9 +44,12 @@ function RenameForm({ space, onDone, onDenied }: RenameFormProps) {
       await queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY })
       onDone()
     },
-    onError: (error) => {
-      if (isAccessDenied(error))
+    onError: async (error) => {
+      if (isAccessDenied(error)) {
         onDenied(error)
+        return
+      }
+      await refreshIfUnknown(error, async () => queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY }))
     },
   })
   const parsed = spaceNameSchema.safeParse(name)
@@ -67,7 +74,7 @@ function RenameForm({ space, onDone, onDenied }: RenameFormProps) {
       <FieldProblem id={problemId} problem={problem} empty={name === ''} />
       {mutation.isError && !isAccessDenied(mutation.error) && (
         <Alert variant="destructive" className="basis-full">
-          <AlertDescription>{describeError(mutation.error).message}</AlertDescription>
+          <AlertDescription>{writeFailureText(mutation.error)}</AlertDescription>
         </Alert>
       )}
     </form>

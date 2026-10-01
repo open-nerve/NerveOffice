@@ -16,7 +16,7 @@ import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
-import { documentDetailSchema, errorResponseSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
+import { createdDocumentSchema, errorResponseSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount, createPassiveAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -213,7 +213,7 @@ describe('US-M2-14 复制与其他操作的交错：复制先取完锁，另一�
     expect(response.status, await response.clone().text()).toBe(other.status)
     expect(completed).toBe(!waits)
     // 副本是复制那一刻的源：之后的改名没有进副本
-    expect(parseExact(documentDetailSchema, await copied.json()).title).toBe('源文档 的副本')
+    expect(parseExact(createdDocumentSchema, await copied.json()).title).toBe('源文档 的副本')
   })
 })
 
@@ -265,7 +265,7 @@ describe('US-M2-14 复制与其他操作的交错：另一个操作先取完锁�
       return
     }
     // 复制看到的是另一个操作提交之后的源文档
-    const copy = parseExact(documentDetailSchema, await copied.json())
+    const copy = parseExact(createdDocumentSchema, await copied.json())
     if (name === 'renameSource')
       expect(copy.title).toBe('改过的标题 的副本')
     if (name === 'saveSource') {

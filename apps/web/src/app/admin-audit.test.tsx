@@ -39,7 +39,7 @@ describe('管理界面：审计', () => {
     const table = await screen.findByRole('table', { name: '审计事件' })
     const first = rowAt(table, 1)
     // 操作者与对象都用 PersonName：显示名与登录名分开呈现（M2-P6 复核 M2）
-    expect(first).toHaveTextContent('管理员 @root')
+    expect(first).toHaveTextContent('@root 管理员')
     personIn(first, '管理员', 'root')
     personIn(first, '艾米', 'amy')
     expect(within(first).getByText('停用账户')).toBeInTheDocument()
@@ -72,10 +72,10 @@ describe('管理界面：审计', () => {
       [`${LIST}?targetId=${AMY.id}&targetType=user`]: () => json(200, listPage([EVENT])),
     })
     renderApp('/admin/audit')
-    const target = await screen.findByRole('button', { name: '账户：艾米 @amy' })
+    const target = await screen.findByRole('button', { name: '账户：@amy 艾米' })
     target.focus()
     fireEvent.click(target)
-    expect(await screen.findByText('对象：')).toHaveTextContent('对象：账户：艾米 @amy')
+    expect(await screen.findByText('对象：')).toHaveTextContent('对象：账户：@amy 艾米')
     await waitFor(() => expect(requested(api, `${LIST}?targetId=${AMY.id}&targetType=user`)).toBe(true))
     const clear = screen.getByRole('button', { name: '清除对象的筛选' })
     expect(clear).toHaveTextContent('清除')
@@ -155,10 +155,10 @@ describe('管理界面：审计', () => {
     // 输入停下 300 毫秒之后才查找
     expect(await screen.findByText('正在查找…', {}, { timeout: 2000 })).toBe(status)
     candidates.resolve(json(200, listPage([ROOT])))
-    const candidate = await within(await screen.findByRole('list', { name: '操作者' })).findByRole('button', { name: '管理员 @root' })
+    const candidate = await within(await screen.findByRole('list', { name: '操作者' })).findByRole('button', { name: '@root 管理员' })
     candidate.focus()
     fireEvent.click(candidate)
-    expect(await screen.findByText('操作者：')).toHaveTextContent('操作者：管理员 @root')
+    expect(await screen.findByText('操作者：')).toHaveTextContent('操作者：@root 管理员')
     expect(screen.queryByLabelText('按名字找操作者')).toBeNull()
     await waitFor(() => expect(requested(api, `${LIST}?actorId=${ROOT.id}`)).toBe(true))
     const clear = screen.getByRole('button', { name: '清除操作者的筛选' })
@@ -190,7 +190,7 @@ describe('管理界面：审计', () => {
     expect(alert).toHaveTextContent('查找失败：请求的内容不合法，请检查后重试')
     failing = false
     fireEvent.click(within(alert).getByRole('button', { name: '重试' }))
-    expect(await screen.findByRole('button', { name: '艾米 @amy' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: '@amy 艾米' })).toBeInTheDocument()
     expect(api.requests.filter(request => request.key === 'GET /api/admin/users?query=amy')).toHaveLength(2)
   })
 
@@ -238,7 +238,7 @@ describe('管理界面：审计里的人名（M2-P6 复核 M2）', () => {
     personIn(second, '李四（lisi）', 'mallory')
     // 对象一格不再用拼好的标签（旧页面才用它）
     expect(within(first).queryByText('账户：李四（lisi）')).toBeNull()
-    expect(within(second).getByRole('button', { name: '账户：李四（lisi） @mallory' })).toBeInTheDocument()
+    expect(within(second).getByRole('button', { name: '账户：@mallory 李四（lisi）' })).toBeInTheDocument()
   })
 
   it('从右到左的显示名在 <bdi> 里；邀请与空间的对象名也隔离', async () => {

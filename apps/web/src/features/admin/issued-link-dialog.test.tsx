@@ -31,8 +31,8 @@ function Page({ issued, onClose }: { readonly issued: IssuedLink, readonly onClo
 async function openLink(issued: IssuedLink, onClose?: () => void): Promise<HTMLElement> {
   render(<Page issued={issued} onClose={onClose} />)
   fireEvent.click(screen.getByRole('button', { name: '签发' }))
-  // 弹窗的可读名称来自标题：发给谁用 PersonName 呈现（显示名与登录名分开，M2-P6 复核 M2）
-  return screen.findByRole('dialog', { name: `${issued.title}：${issued.recipient.displayName} @${issued.recipient.username}` })
+  // 弹窗的可读名称来自标题：发给谁用 PersonName 呈现（登录名在前、显示名在后，分开呈现，M2-P6 复核 M2、第二批 M-1）
+  return screen.findByRole('dialog', { name: `${issued.title}：@${issued.recipient.username} ${issued.recipient.displayName}` })
 }
 
 function stubClipboard(writeText: (text: string) => Promise<void>): void {

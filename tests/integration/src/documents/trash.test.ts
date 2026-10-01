@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
 import { TransactionRunner } from '@nerve-office/api'
 import { DocumentsRepository } from '@nerve-office/api/testing'
-import { documentListResponseSchema, errorResponseSchema, folderListResponseSchema, folderSchema, restoredTrashEntrySchema, SHEET_TEMPLATE, TRASH_LIST_PAGE_SIZE, TRASH_RETENTION_DAYS, trashListResponseSchema } from '@nerve-office/contracts'
+import { createdFolderSchema, documentListResponseSchema, errorResponseSchema, folderListResponseSchema, restoredTrashEntrySchema, SHEET_TEMPLATE, TRASH_LIST_PAGE_SIZE, TRASH_RETENTION_DAYS, trashListResponseSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -71,7 +71,7 @@ function holdSpaceTree(spaceId: string) {
 async function newFolder(user: LoggedIn, body: Record<string, unknown>): Promise<Folder> {
   const response = await asUser(app.baseUrl, user, '/api/folders', { method: 'POST', body: { requestId: randomUUID(), ...body } })
   expect(response.status).toBe(201)
-  return parseExact(folderSchema, await response.json())
+  return parseExact(createdFolderSchema, await response.json())
 }
 
 async function deleteDocument(user: LoggedIn, id: string): Promise<Response> {

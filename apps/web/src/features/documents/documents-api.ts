@@ -1,5 +1,5 @@
-import type { CopyDocumentRequest, CreateDocumentRequest, DocumentDetail, DocumentListResponse, MoveDocumentRequest, UpdateDocumentRequest } from '@nerve-office/contracts'
-import { documentDetailSchema, documentListResponseSchema } from '@nerve-office/contracts'
+import type { CopyDocumentRequest, CreatedDocument, CreateDocumentRequest, DocumentDetail, DocumentListResponse, MoveDocumentRequest, UpdateDocumentRequest } from '@nerve-office/contracts'
+import { createdDocumentSchema, documentDetailSchema, documentListResponseSchema } from '@nerve-office/contracts'
 import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query'
 import { z } from 'zod'
 import { apiRequest } from '../../shared/api/index.ts'
@@ -53,9 +53,12 @@ export function documentQueryOptions(documentId: string) {
   })
 }
 
-/** 新建文档（US-M1-04，M2-P2 设计 §3.6）：同一个 requestId 重试只建一份。 */
-export async function createDocument(request: CreateDocumentRequest): Promise<DocumentDetail> {
-  return apiRequest('/api/documents', { method: 'POST', body: request, schema: documentDetailSchema })
+/**
+ * 新建文档（US-M1-04，M2-P2 设计 §3.6）：同一个 requestId 重试只建一份。
+ * replayed 为真：同一个 requestId 的那一次之前已经建好了，这次给出的是那一份现在的样子（M2-P6 复核第二批 S-1）
+ */
+export async function createDocument(request: CreateDocumentRequest): Promise<CreatedDocument> {
+  return apiRequest('/api/documents', { method: 'POST', body: request, schema: createdDocumentSchema })
 }
 
 /** 改名（US-M2-07）。改名与移动都不改更新时间，列表的排序不因整理而抖动（M2-P4 设计 §3.2）。 */
@@ -71,9 +74,12 @@ export async function moveDocument(documentId: string, request: MoveDocumentRequ
   return apiRequest(`/api/documents/${documentId}/move`, { method: 'POST', body: request, schema: documentDetailSchema })
 }
 
-/** 复制到某个空间的某个位置（US-M2-08）：同一个 requestId 重试只复制一份；标题默认是"源标题 的副本"。 */
-export async function copyDocument(documentId: string, request: CopyDocumentRequest): Promise<DocumentDetail> {
-  return apiRequest(`/api/documents/${documentId}/copy`, { method: 'POST', body: request, schema: documentDetailSchema })
+/**
+ * 复制到某个空间的某个位置（US-M2-08）：同一个 requestId 重试只复制一份；标题默认是"源标题 的副本"。
+ * replayed 为真：同一个 requestId 的那一次之前已经复制好了，这次给出的是那一份副本现在的样子（M2-P6 复核第二批 S-1）
+ */
+export async function copyDocument(documentId: string, request: CopyDocumentRequest): Promise<CreatedDocument> {
+  return apiRequest(`/api/documents/${documentId}/copy`, { method: 'POST', body: request, schema: createdDocumentSchema })
 }
 
 /** 删除：进所在空间的回收站，没有响应体（US-M2-09）。 */

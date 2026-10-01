@@ -3,11 +3,11 @@
 // 搜索结果页的模块在这个文件里一律加载失败（相当于断网或者旧的分块已经不在）。
 import type { SessionResponse } from '@nerve-office/contracts'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
 import { documentsKey, spaceRoutes } from '../shared/testing/spaces.test-support.ts'
 import { settle } from './admin.test-support.ts'
-import { checkDeployment, ChunkLoadError, loadChunk, reloadOnceForDeployment } from './chunk-load.ts'
+import { checkDeployment, ChunkLoadError, DEPLOYMENT_CHECK_TIMEOUT_MS, loadChunk, reloadOnceForDeployment } from './chunk-load.ts'
 import { renderApp } from './render-app.test-support.tsx'
 
 vi.mock('../features/search/index.ts', () => {
@@ -39,11 +39,17 @@ afterEach(() => {
 })
 
 describe('按需加载的页面没能下载下来（M2-P6 复核 S6）', () => {
-  it('入口没变（临时没下载下来、断网之后恢复了）：页头与导航留着，内容区说明"页面没能加载，请检查网络后重试"、焦点在标题上；"重试"整页重新加载', async () => {
-    loggedIn({ 'GET /': entryPage() })
+  it('入口没变（服务器连得上、版本也没变，分块本身没下载下来）：页头与导航留着，内容区说明"页面没能加载"——不说是网络的问题（第二批 G-4）、一直这样要告诉管理员；焦点在标题上；"重试"整页重新加载', async () => {
+    // 当前页面加载的入口脚本与服务端现在的相同
+    document.head.innerHTML = '<script type="module" src="/assets/index-same.js"></script>'
+    onTestFinished(() => {
+      document.head.innerHTML = ''
+    })
+    loggedIn({ 'GET /': entryPage('/assets/index-same.js') })
     const app = renderApp('/search?q=周报')
     const heading = await screen.findByRole('heading', { level: 1, name: '页面没能加载' })
-    expect(screen.getByText('请检查网络后重试。')).toBeInTheDocument()
+    expect(screen.getByText('这个页面的代码没能下载下来（服务器连得上，版本也没有变）。可以重试；一直这样的话，请告诉管理员。')).toBeInTheDocument()
+    expect(screen.queryByText(/检查网络/)).toBeNull()
     // 页框还在：可以去别处
     expect(screen.getByRole('banner')).toBeInTheDocument()
     expect(within(screen.getByRole('navigation', { name: '空间' })).getByRole('link', { name: '我的空间' })).toBeInTheDocument()
@@ -55,11 +61,12 @@ describe('按需加载的页面没能下载下来（M2-P6 复核 S6）', () => {
     expect(app.page.visits).toEqual(['reload'])
   })
 
-  it('连服务端都连不上（断网）：同样说明，不自动重新加载（那样只会换成浏览器的断网页）', async () => {
+  it('连服务端都连不上（断网）：说明"连不上服务器，请检查网络后重试"，不自动重新加载（那样只会换成浏览器的断网页）', async () => {
     // 不登记 GET /：假的 fetch 失败，相当于连不上
     loggedIn()
     const app = renderApp('/search?q=周报')
     expect(await screen.findByRole('heading', { level: 1, name: '页面没能加载' })).toBeInTheDocument()
+    expect(screen.getByText('连不上服务器，请检查网络后重试。')).toBeInTheDocument()
     await settle()
     expect(app.page.visits).toEqual([])
   })
@@ -98,6 +105,31 @@ describe('chunk-load 的各个部分', () => {
     expect(await checkDeployment(current)).toEqual({ kind: 'unreachable' })
     installFakeApi({})
     expect(await checkDeployment(current)).toEqual({ kind: 'unreachable' })
+  })
+
+  it('checkDeployment：取回来的页面里没有模块脚本（代理或认证网关自己的 200 页面）不是部署了新版本，按连不上处理，不去整页重新加载（第二批 S-2 的 C2）', async () => {
+    const current = document.implementation.createHTMLDocument('当前')
+    current.head.innerHTML = '<script type="module" src="/assets/index-a.js"></script>'
+    installFakeApi({ 'GET /': () => new Response('<!doctype html><html><body><h1>请先登录公司网络</h1></body></html>', { status: 200, headers: { 'content-type': 'text/html' } }) })
+    expect(await checkDeployment(current)).toEqual({ kind: 'unreachable' })
+  })
+
+  it('checkDeployment：服务端挂起时不一直等，到了时限按连不上处理（第二批 G-4）', async () => {
+    const current = document.implementation.createHTMLDocument('当前')
+    current.head.innerHTML = '<script type="module" src="/assets/index-a.js"></script>'
+    let aborted = false
+    // 像真的 fetch 一样：请求被取消（signal）时以 AbortError 失败；否则一直不回来
+    installFakeApi({
+      'GET /': async init => new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          aborted = true
+          reject(new DOMException('请求被取消', 'AbortError'))
+        })
+      }),
+    })
+    expect(await checkDeployment(current, 20)).toEqual({ kind: 'unreachable' })
+    expect(aborted).toBe(true)
+    expect(DEPLOYMENT_CHECK_TIMEOUT_MS).toBe(10_000)
   })
 
   it('reloadOnceForDeployment：同一个版本只重新加载一次；存不进 sessionStorage 时不重新加载', () => {

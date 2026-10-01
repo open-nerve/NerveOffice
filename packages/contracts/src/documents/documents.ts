@@ -145,6 +145,18 @@ export const documentDetailSchema = documentSummarySchema.extend({
 
 export type DocumentDetail = z.infer<typeof documentDetailSchema>
 
+/**
+ * 带 requestId 的新建与复制的响应（POST /api/documents、POST /api/documents/{id}/copy）：文档的元数据，加上这次是不是重放
+ * （M2-P6 复核第二批 S-1，接口的加法）。replayed 为真：同一个 requestId 的那一次之前已经建好了，这次没有新建，给出的是那一份现在的样子
+ * （可能已经改了名、移了位置）。客户端据此说明"上一次其实已经完成"，不把它当成这一次新建的，这件事随之了结——
+ * 之后再点就是另一件事、另一个 requestId（否则结果未知之后留着的 requestId 会把很久以后的"再建一份"当成重试）
+ */
+export const createdDocumentSchema = documentDetailSchema.extend({
+  replayed: z.boolean(),
+})
+
+export type CreatedDocument = z.infer<typeof createdDocumentSchema>
+
 /** 路径里的文档 id。 */
 export const documentIdSchema = uuidSchema
 

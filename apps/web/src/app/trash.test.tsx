@@ -7,6 +7,7 @@ import { formatDateTime } from '../shared/lib/format.ts'
 import { apiError, installFakeApi, json, networkFailure } from '../shared/testing/fake-api.test-support.ts'
 import { personIn } from '../shared/testing/people.test-support.ts'
 import { personalSpaceOf, spaceRoutes } from '../shared/testing/spaces.test-support.ts'
+import { deferred, settle } from './admin.test-support.ts'
 import { renderApp } from './render-app.test-support.tsx'
 
 const SESSION: SessionResponse = {
@@ -173,6 +174,24 @@ describe('US-M2-09 回收站', () => {
     await waitFor(() => expect(screen.getByText('空间不存在，或者你没有访问权限')).toBeInTheDocument())
     // 这样的页面同样有标题（M2-P6 复核 G5）
     expect(screen.getByRole('heading', { level: 1, name: '空间不存在' })).toBeInTheDocument()
+  })
+
+  it('回收站先得到 404、页头的请求晚回来：不等它，直接说空间不存在；页头拿着看不到之前的旧结果回来也不改口（第二批 S-2 的 T1）', async () => {
+    const header = deferred()
+    loggedIn({
+      [`GET /api/spaces/${SPACE_ID}`]: header.handler,
+      [TRASH_KEY]: () => apiError(404, 'NOT_FOUND'),
+    })
+    renderApp(TRASH_PATH)
+    // 页头的请求还在路上
+    expect(await screen.findByRole('heading', { level: 1, name: '空间不存在' })).toBeInTheDocument()
+    expect(screen.getByText('空间不存在，或者你没有访问权限')).toBeInTheDocument()
+    // 页头回来了（看不到之前就发出的请求，结果还是看得到）：仍是空间不存在，不显示回收站的标题与"加载失败"
+    header.resolve(json(200, personalSpaceOf(SESSION)))
+    await settle()
+    expect(screen.getByRole('heading', { level: 1, name: '空间不存在' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: '我的空间 的回收站' })).toBeNull()
+    expect(screen.queryByText('回收站加载失败')).toBeNull()
   })
 })
 

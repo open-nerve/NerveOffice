@@ -5,7 +5,7 @@ import { messages } from '../../shared/i18n/index.ts'
 import { SEARCH_QUERY_PARAM, searchPath } from '../../shared/lib/space-paths.ts'
 import { Button, Input } from '../../shared/ui/index.ts'
 
-const text = messages.search
+const text = messages.searchBox
 
 /**
  * 页头里的搜索框（M2-P4 设计 §3.7，US-M2-12）：只负责带着关键词跳到搜索结果页。
@@ -38,8 +38,8 @@ export function SearchBox() {
     >
       <Input
         type="search"
-        aria-label={text.boxLabel}
-        placeholder={text.title}
+        aria-label={text.label}
+        placeholder={text.placeholder}
         className="h-8 w-full min-w-0"
         value={keyword}
         onChange={event => setKeyword(event.target.value)}

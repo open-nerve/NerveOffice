@@ -54,32 +54,37 @@ export function ErrorPage() {
   )
 }
 
+/** 分块没能下载下来的原因：连不上服务器（断网、服务端挂起、取回来的不是入口页），或者服务器连得上、分块本身下载不下来 */
+type ChunkProblem = 'offline' | 'missing'
+
 /**
- * 按需加载的页面的代码没能下载下来（M2-P6 复核 S6）：先向服务端要一次入口页——部署了新版本（旧的分块已经不在了），
- * 整页重新加载一次换上新版本（同一个版本只重新加载一次，防止循环）；否则说明"请检查网络后重试"，"重试"整页重新加载
- * （浏览器记住了失败的模块，在这一页里再 import 同一个地址也还是失败）。确认期间显示等待的骨架屏
+ * 按需加载的页面的代码没能下载下来（M2-P6 复核 S6）：先向服务端要一次入口页（有时限，第二批 G-4）——部署了新版本
+ * （旧的分块已经不在了），整页重新加载一次换上新版本（同一个版本只重新加载一次，防止循环）；连不上服务器时说"请检查网络后重试"；
+ * 服务器连得上、版本也没变时不说是网络的问题（分块缺失，第二批 G-4），重试不好要告诉管理员。
+ * "重试"整页重新加载（浏览器记住了失败的模块，在这一页里再 import 同一个地址也还是失败）。确认期间显示等待的骨架屏
  */
 function ChunkLoadFailure() {
   const page = usePageLocation()
-  const [checking, setChecking] = useState(true)
+  const [problem, setProblem] = useState<ChunkProblem>()
   const titleRef = useRef<HTMLHeadingElement>(null)
-  useDocumentTitle(checking ? undefined : messages.routeLoadFailed.title)
+  useDocumentTitle(problem === undefined ? undefined : messages.routeLoadFailed.title)
   useEffect(() => {
     let cancelled = false
     void checkDeployment().then((check) => {
       if (cancelled || (check.kind === 'deployed' && reloadOnceForDeployment(check.version, page.reload)))
         return
-      setChecking(false)
+      // 部署了新版本、却已经为它重新加载过一次（还是没拿到新的分块）：同样是服务器连得上、分块下载不下来
+      setProblem(check.kind === 'unreachable' ? 'offline' : 'missing')
     })
     return () => {
       cancelled = true
     }
   }, [page])
   useEffect(() => {
-    if (!checking && (document.activeElement === null || document.activeElement === document.body))
+    if (problem !== undefined && (document.activeElement === null || document.activeElement === document.body))
       titleRef.current?.focus()
-  }, [checking])
-  if (checking) {
+  }, [problem])
+  if (problem === undefined) {
     return (
       <div role="status" aria-label={messages.app.navigating}>
         <Skeleton className="h-24 w-full" />
@@ -90,7 +95,7 @@ function ChunkLoadFailure() {
     <section className="flex max-w-md flex-col items-start gap-3" aria-labelledby="route-load-failed-title">
       <div role="alert" className="flex flex-col items-start gap-3">
         <h1 ref={titleRef} id="route-load-failed-title" tabIndex={-1} className="text-xl font-semibold outline-none focus-visible:ring-3 focus-visible:ring-ring/50">{messages.routeLoadFailed.title}</h1>
-        <p className="text-muted-foreground">{messages.routeLoadFailed.description}</p>
+        <p className="text-muted-foreground">{messages.routeLoadFailed[problem]}</p>
       </div>
       <Button onClick={() => page.reload()}>{messages.routeLoadFailed.retry}</Button>
     </section>

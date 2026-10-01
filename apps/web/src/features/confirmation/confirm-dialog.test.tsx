@@ -2,7 +2,7 @@
 // 经请求缓存执行，管理界面标明只给系统管理员（审查 B4）；关闭之后焦点回到打开它的按钮，按钮不在了交给页面（审查 B9）。
 import type { PendingConfirmation } from './confirm-dialog.tsx'
 import { MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../shared/api/index.ts'
@@ -10,7 +10,7 @@ import { SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
 import { ConfirmDialog } from './confirm-dialog.tsx'
 
 function confirmation(changes: Partial<PendingConfirmation> = {}): PendingConfirmation {
-  return { title: '停用 艾米？', description: '停用后不能登录。', confirmLabel: '停用', destructive: true, run: async () => {}, ...changes }
+  return { title: '停用 艾米？', description: '停用后不能登录。', confirmLabel: '停用', destructive: true, run: async () => {}, refresh: async () => {}, ...changes }
 }
 
 /** 页面：两个打开弹窗的按钮。"打开"执行成功之后这个按钮就不在了（随操作消失），"只打开"一直在 */
@@ -92,6 +92,50 @@ describe('ConfirmDialog', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     const again = await open()
     expect(within(again).queryByRole('alert')).toBeNull()
+  })
+
+  it('结果未知（网络、5xx、回包读不出来）：先按 refresh 刷新页面上的状态，刷新完了才说明"可能已经生效"，弹窗留着可以再试（第二批 G-2）', async () => {
+    const order: string[] = []
+    let finishRefresh: () => void = () => {}
+    const refresh = vi.fn(async () => new Promise<void>((resolve) => {
+      order.push('刷新')
+      finishRefresh = resolve
+    }))
+    renderPage(confirmation({
+      run: async () => {
+        throw new ApiError(500, 'INTERNAL_ERROR', 'x')
+      },
+      refresh,
+    }))
+    const dialog = await open()
+    fireEvent.click(within(dialog).getByRole('button', { name: '停用' }))
+    await waitFor(() => expect(refresh).toHaveBeenCalledTimes(1))
+    // 刷新完成之前仍在进行中：说明里的"已按服务端现在的状态刷新"要成立
+    expect(within(dialog).getByRole('button', { name: '正在处理…' })).toBeInTheDocument()
+    expect(within(dialog).queryByRole('alert')).toBeNull()
+    finishRefresh()
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('没能确认是否已经完成（服务器出了点问题，请稍后重试）。可能已经生效：页面已按服务端现在的状态刷新，看得出是否已经生效；还没有的话，可以再试一次。')
+    expect(within(dialog).getByRole('button', { name: '停用' })).toHaveAttribute('aria-disabled', 'false')
+    expect(order).toEqual(['刷新'])
+  })
+
+  it('确定的失败（4xx、服务端忙的 503）没有生效：不刷新，按错误码说明', async () => {
+    const refresh = vi.fn(async () => {})
+    for (const error of [new ApiError(409, 'LAST_ADMIN', 'x'), new ApiError(503, 'SERVICE_UNAVAILABLE', 'x')]) {
+      renderPage(confirmation({
+        run: async () => {
+          throw error
+        },
+        refresh,
+      }))
+      const dialog = await open()
+      fireEvent.click(within(dialog).getByRole('button', { name: '停用' }))
+      expect(await within(dialog).findByRole('alert')).not.toHaveTextContent('没能确认是否已经完成')
+      fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+      cleanup()
+    }
+    expect(refresh).not.toHaveBeenCalled()
   })
 
   it('经请求缓存执行，标明只给系统管理员：被拒绝时由全局处理重新确认会话（审查 B4）', async () => {

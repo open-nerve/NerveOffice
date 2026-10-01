@@ -1,5 +1,5 @@
 // 复制文档（M2-P4，US-M2-08）：副本与源逐字节一致（A10），之后两份各自编辑、互不影响。
-import { createDocument, createFolderIn, createTeamSpace, createUser } from '../../support/database.ts'
+import { createDocument, createFolderIn, createTeamSpace, createUser, withDatabase } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openEditor, saveAndWait, savedContent, typeInCell } from '../../support/sheet.ts'
@@ -47,6 +47,42 @@ test.describe('US-M2-08 复制文档', () => {
     const copy = await savedContent(page, copyId)
     expect(cellOf(copy.snapshot, 'B1')?.v).toBe('只在副本里')
     expect(cellOf(copy.snapshot, 'C1')?.v).toBeUndefined()
+  })
+
+  test('复制的结果未知（其实已经复制）→ 收起面板，过一会儿再复制到同一处：说明上一次其实已经完成、没有多出一份；再复制一次才是第二份（M2-P6 复核第二批 S-1）', async ({ page }) => {
+    const owner = await createUser('copy-replayed')
+    await createDocument(owner, '模板')
+    await loginThroughApi(page, owner)
+    await page.goto('/')
+    let first = true
+    await page.route('**/api/documents/*/copy', async (route) => {
+      if (!first)
+        return route.continue()
+      first = false
+      // 服务端照常复制，回包换成代理的 502：结果未知
+      await route.fetch()
+      return route.fulfill({ status: 502, contentType: 'text/html', body: 'bad gateway' })
+    })
+    const copyOnce = async (): Promise<void> => {
+      await page.getByRole('button', { name: '操作 模板', exact: true }).click()
+      await page.getByRole('button', { name: '复制', exact: true }).click()
+      await page.getByRole('form', { name: '复制' }).getByRole('button', { name: '复制到这里', exact: true }).click()
+    }
+    const copies = async (): Promise<number> => withDatabase(async client => Number((await client.query<{ n: string }>('SELECT count(*) AS n FROM documents WHERE space_id = $1 AND title = $2 AND status = \'active\'', [owner.personalSpaceId, '模板 的副本'])).rows[0]?.n))
+    await copyOnce()
+    await expect(page.getByText(/^没能确认是否已经复制/)).toBeVisible()
+    await expect(page.getByRole('list', { name: '文档列表' })).toContainText('模板 的副本')
+    // 看到副本已经在了，收起面板；过一会儿想再要一份
+    await page.getByRole('button', { name: '取消', exact: true }).click()
+    await copyOnce()
+    await expect(page.getByText('上一次复制其实已经完成（当时没能确认结果），这次没有再复制一份：副本就是「模板 的副本」。还要再复制一份时，再复制一次。')).toBeVisible()
+    await expect(page.getByText('已复制出「模板 的副本」')).toHaveCount(0)
+    expect(await copies()).toBe(1)
+
+    // 这件事了结了：再复制一次是第二份
+    await copyOnce()
+    await expect(page.getByText('已复制出「模板 的副本」')).toBeVisible()
+    expect(await copies()).toBe(2)
   })
 
   test('复制到另一个空间里的文件夹：副本在那个空间的那个文件夹里，源所在的空间没有多出副本（M2-P6 复核 M3）', async ({ page }) => {

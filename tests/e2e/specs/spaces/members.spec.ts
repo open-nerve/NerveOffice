@@ -102,6 +102,32 @@ test.describe('US-M2-06 管理成员与空间角色', () => {
     await expect(table.getByRole('row').filter({ hasText: `@${real.username}` })).toHaveCount(0)
   })
 
+  test('选人：显示名写成"李四 @登录名"冒充别人的，候选的可读名称与确认框的标题都是登录名在前，从开头就分得清（M2-P6 复核第二批 M-1）', async ({ page }) => {
+    const admin = await createUser('mb-at-admin', '管理员', { systemRole: 'admin' })
+    const lead = await createUser('mb-at-lead', '空间管理员')
+    const tag = randomBytes(3).toString('hex')
+    const real = await createUser(`lisi${tag}`, `李四${tag}`)
+    const spoof = await createUser(`eve${tag}`, `李四${tag} @${real.username}`)
+    const space = await createTeamSpace('冒充', admin, [[lead, 'admin']])
+    await loginThroughApi(page, lead)
+    await page.goto(`/spaces/${space.id}/members`)
+    await page.getByLabel('要添加的同事').fill(real.username)
+    const candidates = page.getByRole('list', { name: '找到的同事' })
+    await expect(candidates.getByRole('button')).toHaveCount(2)
+    // 读屏读出的候选：登录名在前。原来显示名在前时两个候选的开头相同（"李四… @lisi…"与"李四… @lisi… @eve…"）
+    const names = (await candidates.getByRole('button').allTextContents()).toSorted()
+    expect(names).toEqual([shownName(spoof), shownName(real)].toSorted())
+    expect(names.filter(name => name.startsWith(`@${real.username} `))).toEqual([shownName(real)])
+    await expect(candidates.getByRole('button', { name: shownName(spoof), exact: true })).toHaveAccessibleName(new RegExp(`^@${spoof.username} `))
+
+    // 把冒充者加进来，再打开移出的确认框：标题同样登录名在前
+    await candidates.getByRole('button', { name: shownName(spoof), exact: true }).click()
+    await page.getByRole('button', { name: '添加成员', exact: true }).click()
+    await page.getByRole('button', { name: `移出 ${plainName(spoof)}`, exact: true }).click()
+    await expect(page.getByRole('dialog', { name: `把 ${plainName(spoof)} 移出这个空间？` })).toBeVisible()
+    expect(plainName(spoof).startsWith(`@${spoof.username} `)).toBe(true)
+  })
+
   test('只有空间管理员能管理：编辑者打开成员页只能查看', async ({ page }) => {
     const admin = await createUser('mb-ro-admin', '管理员', { systemRole: 'admin' })
     const lead = await createUser('mb-ro-lead', '空间管理员')
