@@ -2,9 +2,10 @@
  * 登录页的地址：from 是登录后回到的地址，reason 说明为什么要登录：
  * - required：还没有登录，不提示；
  * - expired：登录已过期；
- * - password_changed：修改密码的结果未知、随后登录失效了，新密码可能已经生效（M2-P6 复核 G-1）。
+ * - password_changed：修改密码的结果未知、随后登录失效了，新密码可能已经生效（M2-P6 复核 G-1）；
+ * - password_reset：为自己生成重置链接的结果未知、随后登录失效了，密码可能已经失效（M2-P6 复核 S1）。
  */
-export type LoginReason = 'required' | 'expired' | 'password_changed'
+export type LoginReason = 'required' | 'expired' | 'password_changed' | 'password_reset'
 
 export const LOGIN_PATH = '/login'
 

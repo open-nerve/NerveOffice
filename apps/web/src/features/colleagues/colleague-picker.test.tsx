@@ -7,6 +7,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { useState } from 'react'
 import { describe, expect, it } from 'vitest'
 import { apiError, installFakeApi, json } from '../../shared/testing/fake-api.test-support.ts'
+import { personIn } from '../../shared/testing/people.test-support.ts'
 import { ColleaguePicker } from './colleague-picker.tsx'
 
 const BEN = { id: '0199a2c4-0000-7000-8000-00000000000b', username: 'ben', displayName: '本' }
@@ -41,7 +42,7 @@ describe('ColleaguePicker', () => {
     expect(input()).toHaveAttribute('placeholder', '按名字或登录名搜索同事')
     fireEvent.change(input(), { target: { value: ' 本 ' } })
     const candidates = await screen.findByRole('list', { name: '找到的同事' })
-    expect(within(candidates).getAllByRole('button').map(button => button.textContent)).toEqual(['本（ben）'])
+    expect(within(candidates).getAllByRole('button').map(button => button.textContent)).toEqual(['本 @ben'])
     expect(api.requests.map(request => request.key)).toEqual([usersKey('本')])
     // 找到了：状态容器里没有文字
     expect(screen.getByRole('status')).toBeEmptyDOMElement()
@@ -51,8 +52,8 @@ describe('ColleaguePicker', () => {
     const api = installFakeApi({ [usersKey('本')]: () => json(200, { items: [BEN] }) })
     renderPicker()
     fireEvent.change(input(), { target: { value: '本' } })
-    fireEvent.click(await screen.findByRole('button', { name: '本（ben）' }))
-    expect(screen.getByText('已选择：本（ben）')).toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', { name: '本 @ben' }))
+    expect(screen.getByText('已选择：')).toHaveTextContent('已选择：本 @ben')
     expect(screen.getByText('首个空间管理员')).toBeInTheDocument()
     const change = screen.getByRole('button', { name: '重新选择 首个空间管理员' })
     expect(change).toHaveTextContent('重新选择')
@@ -98,6 +99,35 @@ describe('ColleaguePicker', () => {
     expect(status).toBeEmptyDOMElement()
   })
 
+  it('显示名里写了"（登录名）"冒充别人：候选与已选都把登录名放在单独的元素里，两个人分得清（M2-P6 复核 M2）', async () => {
+    const real = { id: '0199a2c4-0000-7000-8000-000000000021', username: 'lisi', displayName: '李四' }
+    const spoof = { id: '0199a2c4-0000-7000-8000-000000000022', username: 'mallory', displayName: '李四（lisi）' }
+    installFakeApi({ [usersKey('李四')]: () => json(200, { items: [real, spoof] }) })
+    renderPicker()
+    fireEvent.change(input(), { target: { value: '李四' } })
+    const candidates = await screen.findByRole('list', { name: '找到的同事' })
+    // 每个候选里：显示名在 <bdi> 里，登录名是另一个元素（等宽、灰色、前面带 @），显示名里的"（lisi）"只是显示名的一部分
+    const realName = personIn(candidates, '李四', 'lisi')
+    const spoofName = personIn(candidates, '李四（lisi）', 'mallory')
+    expect(realName.closest('button')).not.toBe(spoofName.closest('button'))
+    expect(spoofName.querySelector('[data-slot="person-username"]')).toHaveClass('font-mono')
+    // 按钮的可读名称同样分得清
+    expect(within(candidates).getAllByRole('button').map(button => button.textContent)).toEqual(['李四 @lisi', '李四（lisi） @mallory'])
+
+    fireEvent.click(screen.getByRole('button', { name: '李四（lisi） @mallory' }))
+    const chosen = screen.getByText('已选择：')
+    expect(personIn(chosen, '李四（lisi）', 'mallory')).toBeInTheDocument()
+  })
+
+  it('从右到左的显示名：用 <bdi> 隔离，不打乱旁边的字（M2-P6 复核 M2）', async () => {
+    const hebrew = { id: '0199a2c4-0000-7000-8000-000000000023', username: 'shalom', displayName: 'שלום' }
+    installFakeApi({ [usersKey('shalom')]: () => json(200, { items: [hebrew] }) })
+    renderPicker()
+    fireEvent.change(input(), { target: { value: 'shalom' } })
+    const name = personIn(await screen.findByRole('list', { name: '找到的同事' }), 'שלום', 'shalom')
+    expect(name.querySelector('bdi')).toHaveTextContent('שלום')
+  })
+
   it('查找失败：说明原因，可以重试（审查 B14）', async () => {
     const api = installFakeApi({ [usersKey('本')]: () => apiError(500, 'INTERNAL_ERROR') })
     renderPicker()
@@ -105,7 +135,7 @@ describe('ColleaguePicker', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('查找失败：服务器出了点问题，请稍后重试')
     api.on(usersKey('本'), () => json(200, { items: [BEN] }))
     fireEvent.click(screen.getByRole('button', { name: '重试' }))
-    expect(await screen.findByRole('button', { name: '本（ben）' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: '本 @ben' })).toBeInTheDocument()
     expect(screen.queryByRole('alert')).toBeNull()
   })
 })

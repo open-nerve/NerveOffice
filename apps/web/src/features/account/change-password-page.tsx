@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { ApiError, describeError, isUnknownOutcome } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
 import { Alert, AlertDescription, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label } from '../../shared/ui/index.ts'
 import { RENEWS_SESSION, RENEWS_SESSION_AFTER_UNKNOWN, SESSION_QUERY_KEY } from '../auth/index.ts'
@@ -32,6 +33,7 @@ function failureText(error: unknown, unsure: boolean): string {
  * 结果未知时记下来（unsure）：再提交得到"当前密码不正确"或"登录已过期"时，提示新密码可能已经生效（M2-P6 复核 G-1）。
  */
 export function ChangePasswordPage() {
+  useDocumentTitle(messages.account.changePassword)
   const queryClient = useQueryClient()
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')

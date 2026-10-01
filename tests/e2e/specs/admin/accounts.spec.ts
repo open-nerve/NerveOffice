@@ -7,6 +7,7 @@ import { randomBytes } from 'node:crypto'
 import { issueResetLinkThroughCommand } from '../../support/admin-command.ts'
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { shownName } from '../../support/people.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
 
 const NEW_PASSWORD = 'a good long password'
@@ -56,7 +57,7 @@ test.describe('US-M2-01 邀请注册', () => {
     await page.getByRole('link', { name: '管理', exact: true }).click()
     await page.getByRole('navigation', { name: '管理界面' }).getByRole('link', { name: '邀请' }).click()
     await issueInvitation(page, username, '新来的同事')
-    const dialog = page.getByRole('dialog', { name: `邀请链接：新来的同事（${username}）` })
+    const dialog = page.getByRole('dialog', { name: `邀请链接：${shownName({ displayName: '新来的同事', username })}` })
     const url = await dialog.getByLabel('链接').inputValue()
     expect(url).toMatch(/\/invite#[\w-]{43}$/)
     await expect(dialog.getByText(/链接只显示这一次/)).toBeVisible()
@@ -111,7 +112,7 @@ test.describe('US-M2-01 邀请注册', () => {
     expect(await page.locator('[role="dialog"]').count()).toBe(1)
     releaseRefresh()
 
-    const dialog = page.getByRole('dialog', { name: `邀请链接：重发的同事（${username}）` })
+    const dialog = page.getByRole('dialog', { name: `邀请链接：${shownName({ displayName: '重发的同事', username })}` })
     await expect(dialog.getByLabel('链接')).not.toHaveValue(firstUrl)
     const secondUrl = await dialog.getByLabel('链接').inputValue()
     // eslint-disable-next-line playwright/prefer-to-have-count -- 同上：链接的弹窗出现的那一刻，确认的弹窗已经关掉
@@ -163,7 +164,7 @@ test.describe('US-M2-03 重置密码', () => {
     await page.goto('/admin/users')
     const row = await userRow(page, user.username)
     await confirmAction(page, row, '生成重置链接')
-    const url = await page.getByRole('dialog', { name: `重置链接：忘了密码的人（${user.username}）` }).getByLabel('链接').inputValue()
+    const url = await page.getByRole('dialog', { name: `重置链接：${shownName(user)}` }).getByLabel('链接').inputValue()
     expect(url).toMatch(/\/reset-password#[\w-]{43}$/)
 
     await expectNextRequestAsksToLogIn(anotherDevice)

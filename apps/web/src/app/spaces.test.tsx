@@ -5,6 +5,7 @@ import type { SessionResponse, SpaceMember, SpaceMemberListResponse, SpaceRole, 
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { apiError, installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
+import { personIn, plainName } from '../shared/testing/people.test-support.ts'
 import { documentsKey, foldersKey, noFolders, personalSpaceOf, spaceRoutes } from '../shared/testing/spaces.test-support.ts'
 import { deferred, settle } from './admin.test-support.ts'
 import { currentPath, renderApp } from './render-app.test-support.tsx'
@@ -258,7 +259,7 @@ function spaceTitle(): HTMLElement {
 }
 
 describe('US-M2-05 空间页：页内的操作被拒绝之后，页头按新的权限显示（复验）', () => {
-  it('新建表格得到 403（空间刚被归档）：页头与导航重新请求，按新的权限显示；按钮随之消失，焦点交给标题', async () => {
+  it('新建表格得到 403（空间刚被归档）：页头与导航重新请求，按新的权限显示；按钮随之消失，服务端说的原因写在页头的说明里、说明接住焦点；关掉说明焦点交给标题（M2-P6 复核 S2、S3、S5）', async () => {
     const api = deniedInPage(ARCHIVED)
     await createSheet()
     expect(await screen.findByText('这个空间已归档，只能查看。')).toBeInTheDocument()
@@ -266,21 +267,26 @@ describe('US-M2-05 空间页：页内的操作被拒绝之后，页头按新的�
     expect(screen.getByText('我的角色：查看者')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '改名' })).toBeNull()
     expect(await within(spaceNav()).findByRole('link', { name: '市场部（已归档）' })).toBeInTheDocument()
-    await waitFor(() => expect(document.activeElement).toBe(spaceTitle()))
+    const notice = screen.getByText('没能新建表格：空间已归档，只能查看').closest('[tabindex="-1"]')
+    await waitFor(() => expect(document.activeElement).toBe(notice))
     expect(api.requests.filter(request => request.key === 'POST /api/documents')).toHaveLength(1)
     expect(api.requests.filter(request => request.key === `GET /api/spaces/${TEAM_ID}`)).toHaveLength(2)
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }))
+    await waitFor(() => expect(document.activeElement).toBe(spaceTitle()))
   })
 
-  it('改名得到 403（空间刚被归档）：页头重新请求，按新的权限显示，原因仍在表单里；取消之后"改名"已经没了，焦点交给标题', async () => {
+  it('改名得到 403（空间刚被归档）：页头重新请求，按新的权限显示；改名的表单随之关掉，服务端说的原因写在页头的说明里、说明接住焦点（M2-P6 复核 S2、S3、S5）', async () => {
     deniedInPage(ARCHIVED)
     await renameTo('产品部')
     expect(await screen.findByText('这个空间已归档，只能查看。')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '新建表格' })).toBeNull()
-    expect(screen.getByRole('alert')).toHaveTextContent('你没有执行这个操作的权限')
-    expect(screen.getByLabelText('空间名称')).toHaveValue('产品部')
-    fireEvent.click(screen.getByRole('button', { name: '取消' }))
-    await waitFor(() => expect(document.activeElement).toBe(spaceTitle()))
+    const notice = screen.getByText('没能改名：空间已归档，只能查看').closest('[tabindex="-1"]')
+    await waitFor(() => expect(document.activeElement).toBe(notice))
+    expect(screen.queryByLabelText('空间名称')).toBeNull()
     expect(screen.queryByRole('button', { name: '改名' })).toBeNull()
+    expect(screen.queryByText('你没有执行这个操作的权限')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }))
+    await waitFor(() => expect(document.activeElement).toBe(spaceTitle()))
   })
 
   it.each([
@@ -327,10 +333,16 @@ function memberKey(method: 'PUT' | 'DELETE', user: { readonly id: string }): str
   return `${method} /api/spaces/${TEAM_ID}/members/${user.id}`
 }
 
-/** 成员表里这个人的角色选择框与它所在的行 */
-async function roleOf(name: string): Promise<{ select: HTMLElement, row: HTMLElement }> {
-  const select = await screen.findByRole('combobox', { name: `${name} 的角色` })
+/** 成员表里这个人的角色选择框与它所在的行（可读名称里的人名：显示名隔离、登录名另外标出，M2-P6 复核 M2） */
+async function roleOf(displayName: string, username: string): Promise<{ select: HTMLElement, row: HTMLElement }> {
+  const select = await screen.findByRole('combobox', { name: `${plainName(displayName, username)} 的角色` })
   return { select, row: select.closest('tr')! }
+}
+
+/** 选一个角色，再点这一行的"保存"：角色经明确的保存才提交（M2-P6 复核的疑点） */
+function saveRole(select: HTMLElement, row: HTMLElement, role: SpaceRole): void {
+  fireEvent.change(select, { target: { value: role } })
+  fireEvent.click(within(row).getByRole('button', { name: /^保存 .* 的角色$/ }))
 }
 
 function membersTitle(): HTMLElement {
@@ -361,7 +373,7 @@ describe('US-M2-06 成员页', () => {
     void app.router.navigate(MEMBERS_PATH)
     expect(await screen.findByText('这个空间已归档，所有人只能查看。系统管理员仍然可以调整成员，调整之后空间照样只读。')).toBeInTheDocument()
     expect(screen.getByLabelText('要添加的同事')).toBeInTheDocument()
-    expect(screen.getByRole('combobox', { name: '本（ben） 的角色' })).toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: `${plainName('本', 'ben')} 的角色` })).toBeInTheDocument()
   })
 
   it('添加：按名字找同事（已经是成员的不列出）、选角色；没选同事时按钮说明原因；成功之后列表刷新，同事选择整个重新开始（审查 B5、B10、B11）', async () => {
@@ -384,14 +396,14 @@ describe('US-M2-06 成员页', () => {
     fireEvent.change(input, { target: { value: '本' } })
     const candidates = await screen.findByRole('list', { name: '找到的同事' })
     // 自己已经是成员，不作为候选
-    expect(within(candidates).getAllByRole('button').map(button => button.textContent)).toEqual(['本（ben）'])
-    fireEvent.click(within(candidates).getByRole('button', { name: '本（ben）' }))
+    expect(within(candidates).getAllByRole('button').map(button => button.textContent)).toEqual(['本 @ben'])
+    fireEvent.click(within(candidates).getByRole('button', { name: '本 @ben' }))
     expect(screen.getByRole('button', { name: '重新选择 要添加的同事' })).toBeInTheDocument()
     expect(submit).toHaveAttribute('aria-disabled', 'false')
     expect(submit).not.toHaveAccessibleDescription()
     fireEvent.change(screen.getByLabelText('角色'), { target: { value: 'editor' } })
     fireEvent.click(submit)
-    expect(await screen.findByRole('combobox', { name: '本（ben） 的角色' })).toHaveValue('editor')
+    expect(await screen.findByRole('combobox', { name: `${plainName('本', 'ben')} 的角色` })).toHaveValue('editor')
     expect(api.requests.find(request => request.key === `POST /api/spaces/${TEAM_ID}/members`)?.body).toEqual({ userId: BEN.id, role: 'editor' })
     // 关键词与上一次的候选都清掉了
     expect(screen.getByLabelText('要添加的同事')).toHaveValue('')
@@ -399,7 +411,7 @@ describe('US-M2-06 成员页', () => {
     expect(screen.queryByText('没有找到这个人')).toBeNull()
   })
 
-  it('调整别人的角色：选择之后立即显示目标角色，这一行标为忙碌、说明正在保存；进行中再改不提交；刷新之后是新的角色（审查 B3）', async () => {
+  it('调整别人的角色：保存之后立即显示目标角色，这一行标为忙碌、说明正在保存；进行中再改不提交；刷新之后是新的角色（审查 B3）', async () => {
     let role: SpaceRole = 'viewer'
     const change = deferred()
     const api = loggedIn(MANAGER, {
@@ -407,8 +419,8 @@ describe('US-M2-06 成员页', () => {
       [memberKey('PUT', BEN)]: change.handler,
     })
     renderApp(MEMBERS_PATH)
-    const { select, row } = await roleOf('本（ben）')
-    fireEvent.change(select, { target: { value: 'editor' } })
+    const { select, row } = await roleOf('本', 'ben')
+    saveRole(select, row, 'editor')
     expect(select).toHaveValue('editor')
     expect(row).toHaveAttribute('aria-busy', 'true')
     expect(within(row).getByText('正在保存…')).toBeInTheDocument()
@@ -433,10 +445,10 @@ describe('US-M2-06 成员页', () => {
       [memberKey('PUT', BEN)]: () => json(200, member(BEN, 'editor')),
     })
     renderApp(MEMBERS_PATH)
-    const { select, row } = await roleOf('本（ben）')
+    const { select, row } = await roleOf('本', 'ben')
     // 保存之后的刷新（第二次取成员列表）先挂着
     api.on(MEMBERS_KEY, refreshed.handler)
-    fireEvent.change(select, { target: { value: 'editor' } })
+    saveRole(select, row, 'editor')
     await waitFor(() => expect(api.requests.filter(request => request.key === MEMBERS_KEY)).toHaveLength(2))
     // 保存已经返回：让随后的渲染都走完，再看这一行
     await settle()
@@ -456,9 +468,9 @@ describe('US-M2-06 成员页', () => {
       [memberKey('PUT', BEN)]: () => json(200, member(BEN, 'editor')),
     })
     renderApp(MEMBERS_PATH)
-    const { select, row } = await roleOf('本（ben）')
+    const { select, row } = await roleOf('本', 'ben')
     api.on(MEMBERS_KEY, () => apiError(500, 'INTERNAL_ERROR'))
-    fireEvent.change(select, { target: { value: 'editor' } })
+    saveRole(select, row, 'editor')
     // 刷新失败（连同一次重试）之后这一行结束保存
     await waitFor(() => expect(row).toHaveAttribute('aria-busy', 'false'), { timeout: 3000 })
     expect(api.requests.filter(request => request.key === MEMBERS_KEY).length).toBeGreaterThan(1)
@@ -472,8 +484,8 @@ describe('US-M2-06 成员页', () => {
       [memberKey('PUT', BEN)]: () => apiError(409, 'LAST_SPACE_ADMIN'),
     })
     renderApp(MEMBERS_PATH)
-    const { select, row } = await roleOf('本（ben）')
-    fireEvent.change(select, { target: { value: 'editor' } })
+    const { select, row } = await roleOf('本', 'ben')
+    saveRole(select, row, 'editor')
     expect(await within(row).findByRole('alert')).toHaveTextContent('团队空间至少要保留一个空间管理员')
     expect(select).toHaveValue('viewer')
     expect(row).toHaveAttribute('aria-busy', 'false')
@@ -490,10 +502,10 @@ describe('US-M2-06 成员页', () => {
       [memberKey('PUT', CAT)]: cat.handler,
     })
     renderApp(MEMBERS_PATH)
-    const benRow = await roleOf('本（ben）')
-    const catRow = await roleOf('凯特（cat）')
-    fireEvent.change(benRow.select, { target: { value: 'editor' } })
-    fireEvent.change(catRow.select, { target: { value: 'admin' } })
+    const benRow = await roleOf('本', 'ben')
+    const catRow = await roleOf('凯特', 'cat')
+    saveRole(benRow.select, benRow.row, 'editor')
+    saveRole(catRow.select, catRow.row, 'admin')
     expect(benRow.row).toHaveAttribute('aria-busy', 'true')
     expect(catRow.row).toHaveAttribute('aria-busy', 'true')
     await waitFor(() => expect(api.requests.filter(request => request.key.startsWith('PUT ')).map(request => request.key)).toEqual([memberKey('PUT', BEN), memberKey('PUT', CAT)]))
@@ -519,9 +531,9 @@ describe('US-M2-06 成员页', () => {
       },
     })
     renderApp(MEMBERS_PATH)
-    const { select } = await roleOf('艾米（amy）')
+    const { select, row } = await roleOf('艾米', 'amy')
     select.focus()
-    fireEvent.change(select, { target: { value: 'viewer' } })
+    saveRole(select, row, 'viewer')
     const dialog = await screen.findByRole('dialog', { name: '把你自己的角色改为查看者？' })
     expect(api.requests.some(request => request.key.startsWith('PUT '))).toBe(false)
     fireEvent.click(within(dialog).getByRole('button', { name: '修改' }))
@@ -547,12 +559,12 @@ describe('US-M2-06 成员页', () => {
       },
     })
     renderApp(MEMBERS_PATH)
-    const remove = await screen.findByRole('button', { name: '移出 凯特（cat）' })
+    const remove = await screen.findByRole('button', { name: `移出 ${plainName('凯特', 'cat')}` })
     remove.focus()
     fireEvent.click(remove)
-    const dialog = await screen.findByRole('dialog', { name: '把 凯特（cat） 移出这个空间？' })
+    const dialog = await screen.findByRole('dialog', { name: `把 ${plainName('凯特', 'cat')} 移出这个空间？` })
     fireEvent.click(within(dialog).getByRole('button', { name: '移出' }))
-    await waitFor(() => expect(screen.queryByText('凯特（cat）')).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByText('@cat')).not.toBeInTheDocument())
     expect(api.requests.some(request => request.key === memberKey('DELETE', CAT))).toBe(true)
     await waitFor(() => expect(document.activeElement).toBe(membersTitle()))
   })
@@ -567,23 +579,25 @@ describe('US-M2-06 成员页', () => {
       },
     })
     renderApp(MEMBERS_PATH)
-    const remove = await screen.findByRole('button', { name: '移出 凯特（cat）' })
+    const remove = await screen.findByRole('button', { name: `移出 ${plainName('凯特', 'cat')}` })
     // 说明的容器一开始就在（空的），之后往里填文字，读屏软件才会播报
     const statuses = screen.getAllByRole('status')
     remove.focus()
     fireEvent.click(remove)
-    const dialog = await screen.findByRole('dialog', { name: '把 凯特（cat） 移出这个空间？' })
+    const dialog = await screen.findByRole('dialog', { name: `把 ${plainName('凯特', 'cat')} 移出这个空间？` })
     fireEvent.click(within(dialog).getByRole('button', { name: '移出' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    const notice = screen.getByText('凯特（cat） 已经不在成员里了（可能已被别人移出），列表已刷新')
-    expect(statuses).toContain(notice)
-    expect(screen.queryByRole('button', { name: '移出 凯特（cat）' })).toBeNull()
-    expect(screen.getByRole('button', { name: '移出 艾米（amy）' })).toBeInTheDocument()
+    // 说明里的人名同样用 PersonName（M2-P6 复核 M2）
+    const notice = statuses.find(status => status.textContent === '凯特 @cat 已经不在成员里了（可能已被别人移出），列表已刷新')
+    expect(notice).toBeDefined()
+    personIn(notice!, '凯特', 'cat')
+    expect(screen.queryByRole('button', { name: `移出 ${plainName('凯特', 'cat')}` })).toBeNull()
+    expect(screen.getByRole('button', { name: `移出 ${plainName('艾米', 'amy')}` })).toBeInTheDocument()
     await waitFor(() => expect(document.activeElement).toBe(membersTitle()))
     expect(api.requests.filter(request => request.key === memberKey('DELETE', CAT))).toHaveLength(1)
 
     // 下一次打开确认的弹窗时，说明清掉
-    fireEvent.click(screen.getByRole('button', { name: '移出 艾米（amy）' }))
+    fireEvent.click(screen.getByRole('button', { name: `移出 ${plainName('艾米', 'amy')}` }))
     expect(await screen.findByRole('dialog', { name: '把你自己移出这个空间？' })).toBeInTheDocument()
     expect(notice).toBeEmptyDOMElement()
   })
@@ -599,10 +613,10 @@ describe('US-M2-06 成员页', () => {
       },
     })
     renderApp(MEMBERS_PATH)
-    const remove = await screen.findByRole('button', { name: '移出 凯特（cat）' })
+    const remove = await screen.findByRole('button', { name: `移出 ${plainName('凯特', 'cat')}` })
     remove.focus()
     fireEvent.click(remove)
-    const dialog = await screen.findByRole('dialog', { name: '把 凯特（cat） 移出这个空间？' })
+    const dialog = await screen.findByRole('dialog', { name: `把 ${plainName('凯特', 'cat')} 移出这个空间？` })
     fireEvent.click(within(dialog).getByRole('button', { name: '移出' }))
     const notFound = await screen.findByText('空间不存在，或者你没有访问权限')
     expect(screen.queryByRole('dialog')).toBeNull()
@@ -620,14 +634,14 @@ describe('US-M2-06 成员页', () => {
       },
     })
     renderApp(MEMBERS_PATH)
-    fireEvent.click(await screen.findByRole('button', { name: '移出 凯特（cat）' }))
-    const dialog = await screen.findByRole('dialog', { name: '把 凯特（cat） 移出这个空间？' })
+    fireEvent.click(await screen.findByRole('button', { name: `移出 ${plainName('凯特', 'cat')}` }))
+    const dialog = await screen.findByRole('dialog', { name: `把 ${plainName('凯特', 'cat')} 移出这个空间？` })
     fireEvent.click(within(dialog).getByRole('button', { name: '移出' }))
     expect(await within(dialog).findByRole('alert', {}, { timeout: 3000 })).toHaveTextContent('内容不存在，或者你没有访问权限')
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(screen.queryByText(/已经不在成员里了/)).toBeNull()
     // 弹窗之外的内容被标为 aria-hidden：按角色查找要带上 hidden
-    expect(screen.getByRole('button', { name: '移出 凯特（cat）', hidden: true })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: `移出 ${plainName('凯特', 'cat')}`, hidden: true })).toBeInTheDocument()
   })
 
   it('移出自己：专门的确认文案；确认之后回到首页，导航里不再有这个空间；再进成员页从加载开始（审查 B14）', async () => {
@@ -641,7 +655,7 @@ describe('US-M2-06 成员页', () => {
       },
     })
     const app = renderApp(MEMBERS_PATH)
-    fireEvent.click(await screen.findByRole('button', { name: '移出 艾米（amy）' }))
+    fireEvent.click(await screen.findByRole('button', { name: `移出 ${plainName('艾米', 'amy')}` }))
     const dialog = await screen.findByRole('dialog', { name: '把你自己移出这个空间？' })
     expect(dialog).toHaveAccessibleDescription(/你立即失去这个空间带来的权限/)
     fireEvent.click(within(dialog).getByRole('button', { name: '移出' }))
@@ -672,7 +686,7 @@ describe('US-M2-06 成员页', () => {
       [MEMBERS_KEY]: () => (joined ? json(200, membersList(true, [member(SESSION.user, 'admin'), member(BEN, 'viewer')])) : apiError(404, 'NOT_FOUND')),
     })
     const app = renderApp(MEMBERS_PATH)
-    expect(await screen.findByRole('combobox', { name: '本（ben） 的角色' })).toBeInTheDocument()
+    expect(await screen.findByRole('combobox', { name: `${plainName('本', 'ben')} 的角色` })).toBeInTheDocument()
     fireEvent.click(within(spaceNav()).getByRole('link', { name: '我的空间' }))
     expect(await screen.findByRole('heading', { name: '我的空间' })).toBeInTheDocument()
 
@@ -721,5 +735,128 @@ describe('US-M2-06 成员页', () => {
     list.resolve(json(200, { items: [personalSpaceOf(admin)] }))
     expect(await screen.findByRole('link', { name: '返回团队空间管理' })).toHaveAttribute('href', '/admin/spaces')
     expect(screen.queryByRole('link', { name: '返回空间' })).toBeNull()
+  })
+})
+
+describe('US-M2-06 成员页：角色经明确的保存才提交、结果未知、人名（M2-P6 复核）', () => {
+  it('在收起的选择框上逐个经过别的角色（Windows、Linux 上的 Chrome 与 Edge 按方向键直接改值）：一个也不保存；选回原来的角色，"保存"随之收起；点了"保存"才提交选定的那一个（疑点）', async () => {
+    const api = loggedIn(MANAGER, {
+      [MEMBERS_KEY]: () => json(200, membersList(true, [member(SESSION.user, 'admin'), member(BEN, 'viewer')])),
+      [memberKey('PUT', BEN)]: () => json(200, member(BEN, 'admin')),
+    })
+    renderApp(MEMBERS_PATH)
+    const { select, row } = await roleOf('本', 'ben')
+    // 方向键在收起的选择框上逐个改值：每一步都是一次 change
+    for (const role of ['editor', 'admin', 'editor', 'viewer'] as const)
+      fireEvent.change(select, { target: { value: role } })
+    expect(within(row).queryByRole('button', { name: /^保存/ })).toBeNull()
+    for (const role of ['editor', 'admin'] as const)
+      fireEvent.change(select, { target: { value: role } })
+    await settle()
+    expect(api.requests.some(request => request.key.startsWith('PUT '))).toBe(false)
+    expect(select).toHaveValue('admin')
+
+    const save = within(row).getByRole('button', { name: `保存 ${plainName('本', 'ben')} 的角色` })
+    save.focus()
+    fireEvent.click(save)
+    await waitFor(() => expect(row).toHaveAttribute('aria-busy', 'false'))
+    expect(api.requests.filter(request => request.key === memberKey('PUT', BEN)).map(request => request.body)).toEqual([{ role: 'admin' }])
+    // "保存"收起之后焦点在这一行的选择框上，不落到 body
+    expect(document.activeElement).toBe(select)
+  })
+
+  it('添加的结果未知：成员列表刷新，说明可能已经加好；再点得到"已经是成员"，说明多半就是刚才那一次，同事选择重新开始（S1 / P6）', async () => {
+    let items = [member(SESSION.user, 'admin')]
+    let posts = 0
+    const api = loggedIn(MANAGER, {
+      [MEMBERS_KEY]: () => json(200, membersList(true, items)),
+      [`GET /api/users?${new URLSearchParams({ query: '本' }).toString()}`]: () => json(200, { items: [BEN] }),
+      [`POST /api/spaces/${TEAM_ID}/members`]: () => {
+        posts += 1
+        if (posts === 1) {
+          items = [...items, member(BEN, 'viewer')]
+          return apiError(500, 'INTERNAL_ERROR')
+        }
+        return apiError(409, 'ALREADY_MEMBER')
+      },
+    })
+    renderApp(MEMBERS_PATH)
+    fireEvent.change(await screen.findByLabelText('要添加的同事'), { target: { value: '本' } })
+    fireEvent.click(await screen.findByRole('button', { name: '本 @ben' }))
+    const listed = api.requests.filter(request => request.key === MEMBERS_KEY).length
+    fireEvent.click(screen.getByRole('button', { name: '添加成员' }))
+    expect(await screen.findByText('没能确认是否已经添加（服务器出了点问题，请稍后重试）。成员列表已刷新：这个人在列表里，就是已经加好了。')).toBeInTheDocument()
+    await waitFor(() => expect(api.requests.filter(request => request.key === MEMBERS_KEY).length).toBeGreaterThan(listed))
+    const table = screen.getByRole('table', { name: '成员列表' })
+    await waitFor(() => expect(personIn(table, '本', 'ben')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: '添加成员' }))
+    expect(await screen.findByText('这个人已经是空间的成员了（可能就是刚才没能确认的那一次添加），成员列表已刷新。')).toBeInTheDocument()
+    // 选择随之清掉：这个人已经是成员，不再是候选
+    expect(screen.getByLabelText('要添加的同事')).toHaveValue('')
+    expect(screen.getByRole('button', { name: '添加成员' })).toHaveAttribute('aria-disabled', 'true')
+  })
+
+  it('成员表：显示名写成"李四（lisi）"的人与真正的李四分得清——登录名在单独的元素里；从右到左的显示名在 <bdi> 里（M2）', async () => {
+    const real = { id: '0199a2c4-0000-7000-8000-000000000031', username: 'lisi', displayName: '李四' }
+    const spoof = { id: '0199a2c4-0000-7000-8000-000000000032', username: 'mallory', displayName: '李四（lisi）' }
+    const hebrew = { id: '0199a2c4-0000-7000-8000-000000000033', username: 'shalom', displayName: 'שלום' }
+    loggedIn(MANAGER, { [MEMBERS_KEY]: () => json(200, membersList(true, [member(SESSION.user, 'admin'), member(real, 'viewer'), member(spoof, 'viewer'), member(hebrew, 'editor')])) })
+    renderApp(MEMBERS_PATH)
+    const table = await screen.findByRole('table', { name: '成员列表' })
+    const realName = personIn(table, '李四', 'lisi')
+    const spoofName = personIn(table, '李四（lisi）', 'mallory')
+    expect(realName.closest('tr')).not.toBe(spoofName.closest('tr'))
+    // 选择框与按钮的可读名称：显示名用 FSI…PDI 隔离，登录名另外标出
+    expect(within(spoofName.closest('tr')!).getByRole('combobox')).toHaveAccessibleName(`${plainName('李四（lisi）', 'mallory')} 的角色`)
+    expect(within(spoofName.closest('tr')!).getByRole('button', { name: `移出 ${plainName('李四（lisi）', 'mallory')}` })).toBeInTheDocument()
+    expect(personIn(table, 'שלום', 'shalom').querySelector('bdi')).toHaveTextContent('שלום')
+    // 本人那一行：名字之后标"（我）"
+    expect(personIn(table, '艾米', 'amy').closest('td')).toHaveTextContent('艾米 @amy（我）')
+  })
+
+  it('浏览器标签页的标题是这个空间的成员（WCAG 2.4.2，S4）', async () => {
+    loggedIn(team(), { [MEMBERS_KEY]: () => json(200, membersList(false, [member(SESSION.user, 'admin')])) })
+    renderApp(MEMBERS_PATH)
+    await screen.findByRole('heading', { name: '市场部 的成员' })
+    await waitFor(() => expect(document.title).toBe('市场部 的成员 - NerveOffice'))
+  })
+})
+
+describe('左侧导航与"空间不存在"（M2-P6 复核 G5、G6）', () => {
+  it('用 /spaces/{本人的个人空间} 打开（根目录、文件夹、回收站）："我的空间"是当前项', async () => {
+    const personal = SESSION.personalSpace.id
+    const folderId = '0199a2c4-0000-7000-8000-0000000000f1'
+    loggedIn(team(), {
+      [foldersKey(personal)]: () => json(200, {
+        items: [{ id: folderId, spaceId: personal, parentId: null, name: '方案', depth: 1, createdAt: '2026-09-29T01:00:00.000Z', updatedAt: '2026-09-29T01:00:00.000Z', permissions: { canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canDelete: true } }],
+        truncated: false,
+      }),
+      [foldersKey(personal, folderId)]: noFolders(),
+      [`GET /api/documents?${new URLSearchParams({ spaceId: personal, folderId }).toString()}`]: () => json(200, { items: [], nextCursor: null }),
+      [`GET /api/trash?${new URLSearchParams({ spaceId: personal }).toString()}`]: () => json(200, { items: [], nextCursor: null }),
+    })
+    const app = renderApp(`/spaces/${personal}`)
+    const mine = await within(await screen.findByRole('navigation', { name: '空间' })).findByRole('link', { name: '我的空间' })
+    await waitFor(() => expect(mine).toHaveAttribute('aria-current', 'page'))
+    void app.router.navigate(`/spaces/${personal}/folders/${folderId}`)
+    await screen.findByRole('navigation', { name: '位置' })
+    expect(within(spaceNav()).getByRole('link', { name: '我的空间' })).toHaveAttribute('aria-current', 'page')
+    void app.router.navigate(`/spaces/${personal}/trash`)
+    await screen.findByRole('heading', { name: '我的空间 的回收站' })
+    expect(within(spaceNav()).getByRole('link', { name: '我的空间' })).toHaveAttribute('aria-current', 'page')
+    // 别的空间：不是当前项
+    void app.router.navigate(`/spaces/${TEAM_ID}`)
+    expect(await screen.findByRole('heading', { name: '市场部' })).toBeInTheDocument()
+    expect(within(spaceNav()).getByRole('link', { name: '我的空间' })).not.toHaveAttribute('aria-current')
+    expect(within(spaceNav()).getByRole('link', { name: '市场部' })).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('空间看不到时这一页同样有标题（h1）与浏览器标签页的标题', async () => {
+    loggedIn(team(), { [`GET /api/spaces/${TEAM_ID}`]: () => apiError(404, 'NOT_FOUND') })
+    renderApp(`/spaces/${TEAM_ID}`)
+    expect(await screen.findByRole('heading', { level: 1, name: '空间不存在' })).toBeInTheDocument()
+    expect(screen.getByText('空间不存在，或者你没有访问权限')).toBeInTheDocument()
+    await waitFor(() => expect(document.title).toBe('空间不存在 - NerveOffice'))
   })
 })

@@ -51,10 +51,12 @@ function sessionTransition(meta: Meta): 'starts' | 'renews' | 'ends' | undefined
 
 /**
  * 得到"登录已过期"时带到登录页的原因：默认 expired；修改密码的结果未知之后再提交时是 password_changed
- * （features/auth 的 RENEWS_SESSION_AFTER_UNKNOWN，M2-P6 复核 G-1）
+ * （features/auth 的 RENEWS_SESSION_AFTER_UNKNOWN，M2-P6 复核 G-1）；为自己生成重置链接的结果未知之后再试时是 password_reset
+ * （features/auth 的 OWN_RESET_AFTER_UNKNOWN，M2-P6 复核 S1）
  */
 function expiredReason(meta: Meta): ExpiredReason {
-  return meta?.expiredReason === 'password_changed' ? 'password_changed' : 'expired'
+  const reason = meta?.expiredReason
+  return reason === 'password_changed' || reason === 'password_reset' ? reason : 'expired'
 }
 
 /**

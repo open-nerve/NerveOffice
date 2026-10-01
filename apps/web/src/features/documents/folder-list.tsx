@@ -7,6 +7,7 @@ import { useId } from 'react'
 import { Link } from 'react-router'
 import { messages } from '../../shared/i18n/index.ts'
 import { spaceFolderPath } from '../../shared/lib/space-paths.ts'
+import { problemOf } from '../../shared/lib/validation.ts'
 import { Button } from '../../shared/ui/index.ts'
 import { deleteFolder, moveFolder, updateFolder } from './folders-api.ts'
 import { ItemActions } from './item-actions.tsx'
@@ -14,8 +15,8 @@ import { useOrganizeRefresh } from './organize-refresh.ts'
 
 const text = messages.organize
 
-function validName(value: string): boolean {
-  return folderNameSchema.safeParse(value).success
+function nameProblem(value: string): string | undefined {
+  return problemOf(folderNameSchema.safeParse(value))
 }
 
 interface FolderRowProps {
@@ -65,11 +66,12 @@ function FolderRow({ folder, folderIds, targetSpaces, open, openTriggerRef, onTo
           </Button>
         )}
       </div>
-      {open && (
+      {/* 刷新之后一个操作都做不了了（例如空间刚被归档）：面板不再显示，和"操作"一起消失 */}
+      {open && actionable && (
         <ItemActions
           panelId={panelId}
           name={folder.name}
-          validateName={validName}
+          validateName={nameProblem}
           // 文件夹不能复制（契约里没有这一位）：面板上不出现"复制"
           permissions={{ ...folder.permissions, canCopy: false }}
           loading={false}
@@ -92,6 +94,7 @@ function FolderRow({ folder, folderIds, targetSpaces, open, openTriggerRef, onTo
               await deleteFolder(folder.id)
               await refresh([folder.spaceId])
             },
+            refresh: async destination => refresh([folder.spaceId, ...(destination === undefined ? [] : [destination.spaceId])]),
           }}
           onDone={onDone}
           onDenied={onDenied}

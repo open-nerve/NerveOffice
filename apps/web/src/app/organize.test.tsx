@@ -201,7 +201,8 @@ describe('US-M2-07 文件夹导航', () => {
     const form = screen.getByRole('form', { name: '新建文件夹' })
     fireEvent.change(within(form).getByLabelText('文件夹名称'), { target: { value: '二季度' } })
     fireEvent.click(within(form).getByRole('button', { name: '新建文件夹' }))
-    expect(await screen.findByText(/新建文件夹失败/)).toBeInTheDocument()
+    // 结果未知（M2-P6 复核 M1）：说清楚可能已经建好、原样再提交不会重复新建
+    expect(await screen.findByText(/没能确认文件夹是否已经建好/)).toBeInTheDocument()
     const first = lastBody(api, 'POST /api/folders') as { requestId: string, parentId: string, name: string, spaceId: string }
     expect(first).toMatchObject({ spaceId: SPACE_ID, parentId: PLAN_ID, name: '二季度' })
 
@@ -408,7 +409,7 @@ describe('US-M2-07 行内的整理操作', () => {
     expect(second).not.toBe(first)
   })
 
-  it('编辑者删文件夹被服务端按子树拒绝：说清楚是因为里面有别人创建的文档；空间刚被归档的 403 走通用的说法（审查 B2）', async () => {
+  it('编辑者删文件夹被服务端按子树拒绝：说清楚是因为里面有别人创建的文档；空间刚被归档的 403 用服务端说的原因（审查 B2，M2-P6 复核 S5）', async () => {
     const api = loggedIn({
       [foldersKey(SPACE_ID)]: folderPage([folder(PLAN_ID, '方案')]),
       [`DELETE /api/folders/${PLAN_ID}`]: () => apiError(403, 'FOLDER_HAS_OTHERS_DOCUMENTS'),
@@ -418,11 +419,13 @@ describe('US-M2-07 行内的整理操作', () => {
     fireEvent.click(await screen.findByRole('button', { name: '删除' }))
     expect(await screen.findByText('这个文件夹里有别人创建的文档，只有空间管理员能删除')).toBeInTheDocument()
 
-    // 同一个 403 状态的另一种原因（空间刚被归档，自己刚被降为查看者也走它）：不能说成"里面有别人创建的文档"
-    api.on(`DELETE /api/folders/${PLAN_ID}`, () => apiError(403, 'PERMISSION_DENIED'))
+    // 同一个 403 状态的另一种原因（空间刚被归档，自己刚被降为查看者也走它）：不能说成"里面有别人创建的文档"，
+    // 也不盖成笼统的"没有权限"：服务端写好了具体原因（ADR-008 的例外）。面板收起，原因写在列表上方
+    api.on(`DELETE /api/folders/${PLAN_ID}`, () => apiError(403, 'PERMISSION_DENIED', '空间已归档，只能查看'))
     fireEvent.click(screen.getByRole('button', { name: '删除' }))
-    expect(await screen.findByText('你没有执行这个操作的权限')).toBeInTheDocument()
+    expect(await screen.findByText('「方案」的操作没有完成：空间已归档，只能查看')).toBeInTheDocument()
     expect(screen.queryByText('这个文件夹里有别人创建的文档，只有空间管理员能删除')).not.toBeInTheDocument()
+    expect(screen.queryByText('你没有执行这个操作的权限')).not.toBeInTheDocument()
   })
 
   it('移动文件夹时目标位置里不列出它自己（进去了也只能被服务端的 409 拦下，审查建议 6）', async () => {

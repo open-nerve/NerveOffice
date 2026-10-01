@@ -3,6 +3,7 @@ import type { AdminSpace, AdminUser } from '@nerve-office/contracts'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { apiError, installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
+import { plainName } from '../shared/testing/people.test-support.ts'
 import { AMY, deferred, listPage, ROOT_ID, rowOf, session, settle, SPACES } from './admin.test-support.ts'
 import { renderApp } from './render-app.test-support.tsx'
 
@@ -58,7 +59,7 @@ describe('US-M2-05 管理界面：团队空间', () => {
     expect(submit).toHaveAttribute('aria-disabled', 'true')
     expect(submit).toHaveAccessibleDescription('请先选择首个空间管理员')
     fireEvent.change(within(form).getByLabelText('首个空间管理员'), { target: { value: '本' } })
-    fireEvent.click(await within(form).findByRole('button', { name: '本（ben）' }))
+    fireEvent.click(await within(form).findByRole('button', { name: '本 @ben' }))
     // 选好了空间管理员，名称还是空的：说明名称的要求
     expect(submit).toHaveAttribute('aria-disabled', 'true')
     expect(submit).toHaveAccessibleDescription(/名称/)
@@ -85,7 +86,7 @@ describe('US-M2-05 管理界面：团队空间', () => {
     const form = await screen.findByRole('form', { name: '创建团队空间' })
     fireEvent.change(within(form).getByLabelText('名称'), { target: { value: '市场部' } })
     fireEvent.change(within(form).getByLabelText('首个空间管理员'), { target: { value: '本' } })
-    fireEvent.click(await within(form).findByRole('button', { name: '本（ben）' }))
+    fireEvent.click(await within(form).findByRole('button', { name: '本 @ben' }))
     fireEvent.click(within(form).getByRole('button', { name: '创建团队空间' }))
     expect(await within(form).findByRole('alert')).toHaveTextContent('已有同名的团队空间')
     expect(within(form).getByLabelText('名称')).toHaveValue('市场部')
@@ -176,6 +177,20 @@ describe('US-M2-05 管理界面：团队空间', () => {
     expect(lastBody(api, `PUT /api/spaces/${SPACE.id}/name`)).toEqual({ name: '市场与品牌部' })
   })
 
+  it('改名：名称不合法时除了标 aria-invalid，还用文字说明原因，输入框与保存按钮都指向它（WCAG 3.3.1，M2-P6 复核 S4 / P12）', async () => {
+    admin({ 'GET /api/admin/spaces': () => json(200, listPage([SPACE])) })
+    renderApp('/admin/spaces')
+    fireEvent.click(within(await rowOf('市场部')).getByRole('button', { name: '改名 市场部' }))
+    const dialog = await screen.findByRole('dialog', { name: '给 市场部 改名' })
+    const input = within(dialog).getByLabelText('名称')
+    expect(input).not.toHaveAccessibleDescription()
+    fireEvent.change(input, { target: { value: '市场\u200B部' } })
+    expect(input).toHaveAttribute('aria-invalid', 'true')
+    expect(input).toHaveAccessibleDescription('名称不能包含看不见的字符（例如零宽空格）')
+    expect(within(dialog).getByRole('button', { name: '保存' })).toHaveAccessibleDescription('名称不能包含看不见的字符（例如零宽空格）')
+    expect(within(dialog).getByRole('button', { name: '保存' })).toHaveAttribute('aria-disabled', 'true')
+  })
+
   it('改名：进行中关不掉（取消、×、Esc 都不关）；名称已被使用时弹窗留着说明原因；取消之后再打开不带着上一次的说明（审查 B4、B14）', async () => {
     const rename = deferred()
     const api = admin({
@@ -215,7 +230,7 @@ describe('US-M2-05 管理界面：团队空间', () => {
 
   it('加入空间：进行中关不掉；失败时弹窗留着说明原因（审查 B4）', async () => {
     const join = deferred()
-    admin({
+    const api = admin({
       'GET /api/admin/spaces': () => json(200, listPage([SPACE])),
       [`POST /api/spaces/${SPACE.id}/members`]: join.handler,
     })
@@ -229,9 +244,12 @@ describe('US-M2-05 管理界面：团队空间', () => {
     await settle()
     expect(screen.getByRole('dialog')).toBeInTheDocument()
 
+    // 已经是成员：多半就是刚才没能确认的那一次加入（M2-P6 复核 S1），说清楚，列表随之刷新；弹窗留着
+    const listed = api.requests.filter(request => request.key === 'GET /api/admin/spaces').length
     join.resolve(apiError(409, 'ALREADY_MEMBER'))
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent('这个人已经是空间的成员')
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('你已经是这个空间的成员了，可能就是刚才没能确认的那一次加入。列表已刷新。')
     expect(screen.getByRole('dialog')).toBeInTheDocument()
+    await waitFor(() => expect(api.requests.filter(request => request.key === 'GET /api/admin/spaces').length).toBeGreaterThan(listed))
   })
 })
 
@@ -248,7 +266,7 @@ describe('US-M2-04 转移停用者的文档', () => {
   it('账户页：停用的账户才有"转移文档"', async () => {
     admin({ 'GET /api/admin/users': () => json(200, listPage([LEAVER, { ...AMY, id: '0199a2c4-0000-7000-8000-000000000099', username: 'bea', displayName: '贝亚' }])) })
     renderApp('/admin/users')
-    expect(within(await rowOf('amy')).getByRole('link', { name: '转移文档 艾米（amy）' })).toHaveAttribute('href', `/admin/users/${AMY.id}/documents`)
+    expect(within(await rowOf('amy')).getByRole('link', { name: `转移文档 ${plainName('艾米', 'amy')}` })).toHaveAttribute('href', `/admin/users/${AMY.id}/documents`)
     expect(within(await rowOf('bea')).queryByRole('link', { name: /^转移文档/ })).not.toBeInTheDocument()
   })
 
@@ -264,7 +282,7 @@ describe('US-M2-04 转移停用者的文档', () => {
       },
     })
     renderApp(`/admin/users/${AMY.id}/documents`)
-    expect(await screen.findByRole('heading', { name: '转移 艾米（amy） 的文档' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '转移 艾米 @amy 的文档' })).toBeInTheDocument()
     fireEvent.click(await screen.findByLabelText('选择 文档 0'))
     fireEvent.click(screen.getByLabelText('选择 文档 1'))
     expect(screen.getByText('已选择 2 份，一次最多 100 份')).toBeInTheDocument()
@@ -313,12 +331,12 @@ describe('US-M2-04 转移停用者的文档', () => {
     fireEvent.click(screen.getByRole('radio', { name: '某人的个人空间' }))
     fireEvent.change(screen.getByLabelText('接收文档的同事'), { target: { value: '本' } })
     const candidates = await screen.findByRole('list', { name: '找到的同事' })
-    expect(within(candidates).getAllByRole('button').map(button => button.textContent)).toEqual(['本（ben）'])
-    fireEvent.click(within(candidates).getByRole('button', { name: '本（ben）' }))
+    expect(within(candidates).getAllByRole('button').map(button => button.textContent)).toEqual(['本 @ben'])
+    fireEvent.click(within(candidates).getByRole('button', { name: '本 @ben' }))
     const submit = screen.getByRole('button', { name: '转移' })
     submit.focus()
     fireEvent.click(submit)
-    const dialog = await screen.findByRole('dialog', { name: '把 2 份文档转移到 本（ben） 的个人空间？' })
+    const dialog = await screen.findByRole('dialog', { name: `把 2 份文档转移到 ${plainName('本', 'ben')} 的个人空间？` })
     fireEvent.click(within(dialog).getByRole('button', { name: '转移' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     // 说明在页面上（弹窗之外），不在弹窗里
@@ -332,7 +350,7 @@ describe('US-M2-04 转移停用者的文档', () => {
 
     // 再次打开确认的弹窗：按新的选择；上一次的说明清掉
     fireEvent.click(submit)
-    expect(await screen.findByRole('dialog', { name: '把 1 份文档转移到 本（ben） 的个人空间？' })).toBeInTheDocument()
+    expect(await screen.findByRole('dialog', { name: `把 1 份文档转移到 ${plainName('本', 'ben')} 的个人空间？` })).toBeInTheDocument()
     expect(screen.queryByText(/列表已刷新，请重新选择后再转移/)).toBeNull()
   })
 

@@ -6,7 +6,7 @@ import type { EditorPage, EditorPageLoad, EditorPageView } from './editor-page.t
 import type { SaveProblem, SaveView } from './save-coordinator.ts'
 import { ArrowLeft } from 'lucide-react'
 import { useEffect, useSyncExternalStore } from 'react'
-import { ApiError, describeError, isAuthenticationError, isCsrfTokenError } from '../../shared/api/index.ts'
+import { ApiError, describeError, isAuthenticationError, isCsrfTokenError, isMissingResource, isPermissionDeniedError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { LOGIN_PATH } from '../../shared/lib/login-path.ts'
 import { HOME_PATH, spacePath } from '../../shared/lib/space-paths.ts'
@@ -45,6 +45,12 @@ function problemMessage(problem: SaveProblem, sessionProblem: unknown): { text: 
     return { text: messages.editor.saveFailed(messages.editor.sessionCheckFailed(reason.message)), requestId: reason.requestId, destructive: true }
   }
   const error = describeError(problem.error)
+  // 文档被删除、移走或失去权限之后（M2 总设计 A14，M2-P6 复核 S8）：再保存也存不进去了，说清楚本页的修改没有保存、
+  // 需要的话先复制出来。看不到了（404）与能看却不能改（403，原因由服务端给出，例如空间已归档）分开说
+  if (isMissingResource(problem.error))
+    return { text: messages.editor.saveFailed(messages.editor.saveGone), requestId: error.requestId, destructive: true }
+  if (isPermissionDeniedError(problem.error))
+    return { text: messages.editor.saveFailed(messages.editor.saveDenied(error.message)), requestId: error.requestId, destructive: true }
   return { text: messages.editor.saveFailed(error.message), requestId: error.requestId, destructive: true }
 }
 

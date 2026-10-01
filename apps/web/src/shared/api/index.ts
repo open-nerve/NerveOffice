@@ -2,4 +2,6 @@ export { ApiError, apiFetch, apiRequest, isAccessDenied, isAuthenticationError, 
 export type { HttpMethod, RawRequestOptions, RequestOptions } from './client.ts'
 export { describeError } from './describe-error.ts'
 export type { ErrorDescription } from './describe-error.ts'
+export { createRequestIdLedger } from './request-ids.ts'
+export type { RequestIdLedger } from './request-ids.ts'
 export { requestSession } from './session.ts'

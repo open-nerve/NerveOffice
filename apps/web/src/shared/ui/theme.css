@@ -41,10 +41,16 @@
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
+  /* 比生成结果（0.556）略深：在浅灰底（muted、secondary，0.97）上也到 4.5:1 以上，例如选择框候选里的登录名（M2-P6 复核 G4） */
+  --muted-foreground: oklch(0.54 0 0);
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
+  /*
+   * 比生成结果（0.577 0.245 27.325）深：危险样式的按钮与徽标是淡红底上的红字（bg-destructive/10，悬停时 /20），
+   * 提示的说明文字是九成的红（text-destructive/90），原来只有 4.0:1 与 4.49:1；现在白底 7.2:1、淡红底 5.9:1、
+   * 悬停 4.9:1、说明文字 6.4:1，都在 WCAG 1.4.3 的 4.5:1 以上（M2-P6 复核 G4）
+   */
+  --destructive: oklch(0.48 0.2 27.5);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);

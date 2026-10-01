@@ -11,7 +11,8 @@ export const SESSION_QUERY_KEY = ['auth', 'session'] as const
 // 请求的元数据，交给请求缓存的全局处理（app/query-client.ts）：
 // - handlesAuthentication：这个请求自己处理"未登录"（会话、登录），全局的"回到登录页"不管它；
 // - session：这个变更开始（登录）、换掉（修改密码）或者结束（退出）会话。全局处理通知其他标签页；结束时整页回到登录页；
-// - expiredReason：这个请求得到"登录已过期"时，登录页给出的说明换成这个原因（修改密码的结果未知之后，M2-P6 复核 G-1）；
+// - expiredReason：这个请求得到"登录已过期"时，登录页给出的说明换成这个原因（修改密码的结果未知之后，M2-P6 复核 G-1；
+//   为自己生成重置链接的结果未知之后，M2-P6 复核 S1）；
 // - systemAdminOnly：这个请求只给系统管理员（服务端的 @SystemAdminOnly()）。
 
 /** 查询会话：得到未登录是正常的结果，由需要登录的外层路由与登录页自己处理 */
@@ -35,6 +36,11 @@ export const RENEWS_SESSION_AFTER_UNKNOWN = { session: 'renews', expiredReason: 
  * 全局处理向服务端重新确认会话，管理界面随之切到无权限（M2-P1 审查 B4）
  */
 export const SYSTEM_ADMIN_ONLY = { systemAdminOnly: true } as const
+/**
+ * 同上，用在为自己生成重置链接的结果未知之后（M2-P6 复核 S1）：这时再试得到"登录已过期"，多半是上一次已经生成、
+ * 密码随之失效、会话全部撤销了，登录页据此提示"你的密码可能已经失效"
+ */
+export const OWN_RESET_AFTER_UNKNOWN = { systemAdminOnly: true, expiredReason: 'password_reset' } as const
 
 /** 会话查询用：拿到会话就把它的 CSRF 令牌交给请求层。 */
 export async function fetchSession(signal?: AbortSignal): Promise<SessionResponse> {

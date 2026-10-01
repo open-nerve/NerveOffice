@@ -1,15 +1,11 @@
 // 团队空间（M2-P2，US-M2-05）：系统管理员在管理界面创建团队空间并指定空间管理员；设为全员可见；归档与恢复；
 // 系统管理员要看内容，先把自己加入空间（记审计）。团队空间的名称全库唯一，三个浏览器并行时名称带随机后缀。
 import type { Page } from '@playwright/test'
-import type { TestUser } from '../../support/database.ts'
 import { randomBytes } from 'node:crypto'
 import { createDocumentIn, createTeamSpace, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
-
-function nameOf(user: TestUser): string {
-  return `${user.displayName}（${user.username}）`
-}
 
 /** 管理界面的团队空间页：按名称找到这一行 */
 async function spaceRow(page: Page, name: string) {
@@ -51,7 +47,7 @@ test.describe('US-M2-05 团队空间', () => {
     const form = page.getByRole('form', { name: '创建团队空间' })
     await form.getByLabel('名称', { exact: true }).fill(name)
     await form.getByLabel('首个空间管理员', { exact: true }).fill(lead.username)
-    await form.getByRole('button', { name: nameOf(lead), exact: true }).click()
+    await form.getByRole('button', { name: shownName(lead), exact: true }).click()
     await form.getByRole('button', { name: '创建团队空间', exact: true }).click()
     // 先在当前页面等到创建成功（表单清空），再跳转：跳转会中断还没完成的请求（审查 B6）
     await expect(form.getByLabel('名称', { exact: true })).toHaveValue('')

@@ -1,4 +1,6 @@
 import type { AdminSpace, AdminUser, TransferTarget, UserSummary } from '@nerve-office/contracts'
+import type { ReactNode } from 'react'
+import type { Phrase as PhraseParts } from '../../shared/i18n/index.ts'
 import type { KeywordPickerTexts } from '../colleagues/index.ts'
 import type { PendingConfirmation } from '../confirmation/index.ts'
 import { TRANSFER_MAX_DOCUMENTS } from '@nerve-office/contracts'
@@ -6,11 +8,12 @@ import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-quer
 import { useId, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { ApiError, describeError, isMissingResource } from '../../shared/api/index.ts'
-import { messages } from '../../shared/i18n/index.ts'
+import { messages, phraseText } from '../../shared/i18n/index.ts'
 import { ADMIN_PATHS } from '../../shared/lib/admin-paths.ts'
 import { cn } from '../../shared/lib/cn.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
-import { Alert, AlertDescription, Button, buttonVariants, Label, Skeleton, TableCell } from '../../shared/ui/index.ts'
+import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
+import { Alert, AlertDescription, Button, buttonVariants, Label, PersonName, Phrase, Skeleton, TableCell } from '../../shared/ui/index.ts'
 import { sessionQueryOptions, SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
 import { ColleaguePicker, KeywordPicker } from '../colleagues/index.ts'
 import { ConfirmDialog } from '../confirmation/index.ts'
@@ -26,8 +29,25 @@ function spaceId(space: AdminSpace): string {
   return space.id
 }
 
-function spaceName(space: AdminSpace): string {
-  return space.name
+/** 候选与已选的团队空间：名称用 <bdi> 隔离，从右到左的名称不打乱旁边的字 */
+function spaceName(space: AdminSpace): ReactNode {
+  return <bdi>{space.name}</bdi>
+}
+
+/** 转移的目标：请求、纯文字的叫法（确认框的标题）与界面上的叫法（结果的说明，人名用 PersonName，M2-P6 复核 M2） */
+interface Target {
+  readonly request: TransferTarget
+  readonly text: PhraseParts<string>
+  readonly shown: PhraseParts<ReactNode>
+}
+
+function targetOf(type: TransferTarget['type'], person: UserSummary | undefined, team: AdminSpace | undefined): Target | undefined {
+  if (type === 'personal') {
+    return person === undefined
+      ? undefined
+      : { request: { type: 'personal', userId: person.id }, text: text.personalTarget(messages.people.text(person)), shown: text.personalTarget(<PersonName person={person} />) }
+  }
+  return team === undefined ? undefined : { request: { type: 'team', spaceId: team.id }, text: [team.name], shown: [<bdi key="team">{team.name}</bdi>] }
 }
 
 /** 有文档已经不在这个人的个人空间里了（可能被别人转走了）：整批没有转移 */
@@ -46,7 +66,7 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
   const [person, setPerson] = useState<UserSummary>()
   const [team, setTeam] = useState<AdminSpace>()
   const [pending, setPending] = useState<PendingConfirmation>()
-  const [done, setDone] = useState<string>()
+  const [done, setDone] = useState<ReactNode>()
   /** 上一次转移时有文档已经不在了：在转移按钮旁说明，下一次打开确认的弹窗时清掉（转移成功之前一定先打开它） */
   const [conflict, setConflict] = useState(false)
   const submitRef = useRef<HTMLButtonElement>(null)
@@ -84,9 +104,7 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
     return true
   }
 
-  const target: { readonly request: TransferTarget, readonly label: string } | undefined = targetType === 'personal'
-    ? person === undefined ? undefined : { request: { type: 'personal', userId: person.id }, label: text.personalTarget(messages.colleagues.name(person)) }
-    : team === undefined ? undefined : { request: { type: 'team', spaceId: team.id }, label: team.name }
+  const target = targetOf(targetType, person, team)
   const tooMany = selected.size > TRANSFER_MAX_DOCUMENTS
   let blocked: string | undefined
   if (selected.size === 0)
@@ -102,14 +120,14 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
     const documentIds = [...selected]
     setConflict(false)
     setPending({
-      title: text.confirm(documentIds.length, target.label),
+      title: phraseText(text.confirm(documentIds.length, target.text)),
       description: text.confirmDescription,
       confirmLabel: text.submit,
       run: async () => {
         try {
           const result = await transferDocuments(account.id, { documentIds, target: target.request })
           setSelected(new Set())
-          setDone(text.done(result.transferred, target.label))
+          setDone(<Phrase parts={text.done(result.transferred, target.shown)} />)
           await queryClient.invalidateQueries({ queryKey: documentsQuery.queryKey })
         }
         catch (error) {
@@ -173,7 +191,7 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
           ))}
         </div>
         {targetType === 'team'
-          ? <KeywordPicker label={text.pickTeam} selected={team} onSelect={setTeam} search={transferTargetsQueryOptions} itemKey={spaceId} itemName={spaceName} texts={TEAM_TEXTS} />
+          ? <KeywordPicker label={text.pickTeam} selected={team} onSelect={setTeam} search={transferTargetsQueryOptions} itemKey={spaceId} renderItem={spaceName} texts={TEAM_TEXTS} />
           : <ColleaguePicker label={text.pickPerson} selected={person} onSelect={setPerson} exclude={excludedPeople} />}
       </fieldset>
       {conflict && (
@@ -196,6 +214,8 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
 export function AdminTransferPage() {
   const { userId = '' } = useParams()
   const account = useQuery(adminUserQueryOptions(userId))
+  // 浏览器标签页的标题（M2-P6 复核 S4）：账户还没取到或取不到时是账户页的
+  useDocumentTitle(messages.admin.pageTitle(account.data === undefined ? messages.admin.nav.users : phraseText(text.title(messages.people.text(account.data)))))
   const back = <Link to={ADMIN_PATHS.users} className={buttonVariants({ variant: 'outline' })}>{text.back}</Link>
   if (account.isPending) {
     return (
@@ -230,11 +250,10 @@ export function AdminTransferPage() {
       </div>
     )
   }
-  const name = messages.colleagues.name(account.data)
   return (
     <section className="flex flex-col gap-4" aria-labelledby="transfer-title">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <h2 id="transfer-title" className="text-lg font-semibold">{text.title(name)}</h2>
+        <h2 id="transfer-title" className="text-lg font-semibold"><Phrase parts={text.title(<PersonName person={account.data} />)} /></h2>
         {back}
       </div>
       {account.data.status === 'active'

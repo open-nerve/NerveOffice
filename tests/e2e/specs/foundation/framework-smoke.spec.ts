@@ -12,7 +12,8 @@ test('E2E 框架冒烟：登录页的标题正确，没有脚本错误与 CSP �
 
   await page.goto('/login')
 
-  await expect(page).toHaveTitle('NerveOffice')
+  // 每个页面有自己的标题（WCAG 2.4.2，M2-P6 复核 S4）
+  await expect(page).toHaveTitle('登录 - NerveOffice')
   await expect(page.getByRole('heading', { level: 1, name: 'NerveOffice' })).toBeVisible()
   await expect(page.getByRole('form', { name: '登录' })).toBeVisible()
   expect(errors).toEqual([])

@@ -3,6 +3,7 @@ import { userDirectoryResponseSchema } from '@nerve-office/contracts'
 import { queryOptions } from '@tanstack/react-query'
 import { apiRequest } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { PersonName } from '../../shared/ui/index.ts'
 import { KeywordPicker } from './keyword-picker.tsx'
 
 const text = messages.colleagues
@@ -20,6 +21,11 @@ function colleaguesQueryOptions(keyword: string) {
 
 function userId(user: UserSummary): string {
   return user.id
+}
+
+/** 候选与已选都用 PersonName：同名的两个人、显示名里写了"（登录名）"的人，看登录名就分得清（M2-P6 复核 M2） */
+function personOf(user: UserSummary) {
+  return <PersonName person={user} />
 }
 
 interface ColleaguePickerProps {
@@ -43,7 +49,7 @@ export function ColleaguePicker({ label, selected, onSelect, exclude }: Colleagu
       onSelect={onSelect}
       search={colleaguesQueryOptions}
       itemKey={userId}
-      itemName={text.name}
+      renderItem={personOf}
       exclude={exclude === undefined ? undefined : user => exclude.has(user.id)}
       texts={TEXTS}
     />

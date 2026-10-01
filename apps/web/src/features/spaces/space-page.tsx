@@ -1,14 +1,18 @@
-import type { SpacePermissions, SpaceView } from '@nerve-office/contracts'
+import type { SpaceView } from '@nerve-office/contracts'
 import type { RefObject } from 'react'
+import type { ApiError } from '../../shared/api/index.ts'
 import { spaceNameSchema } from '@nerve-office/contracts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useId, useRef, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { describeError, isAccessDenied, isMissingResource } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { folderIdsFromPath, spaceMembersPath } from '../../shared/lib/space-paths.ts'
+import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
-import { Alert, AlertDescription, Badge, Button, buttonVariants, Input, Label, Skeleton } from '../../shared/ui/index.ts'
+import { useFocusRescue } from '../../shared/lib/use-focus-rescue.ts'
+import { problemOf } from '../../shared/lib/validation.ts'
+import { Alert, AlertDescription, Badge, Button, buttonVariants, FieldProblem, Input, Label, Notice, Skeleton } from '../../shared/ui/index.ts'
 import { sessionQueryOptions } from '../auth/index.ts'
 import { NewSheetButton, SpaceContents, useOrganizeRefresh } from '../documents/index.ts'
 import { useForgetMissingSpace } from './missing-space.ts'
@@ -20,15 +24,16 @@ const text = messages.spaces
 interface RenameFormProps {
   readonly space: SpaceView
   readonly onDone: () => void
-  /** 改名按访问权限被拒绝（403、404）：由页头重新请求自己；原因仍在表单里说明 */
-  readonly onDenied: () => void
+  /** 改名按访问权限被拒绝（403、404）：表单关掉，由页头说明原因并重新请求自己 */
+  readonly onDenied: (error: ApiError) => void
 }
 
-/** 行内改名（不用弹窗，不进首屏的 Radix Dialog）：保存之后导航与页头随即是新名称 */
+/** 行内改名（不用弹窗，不进首屏的 Radix Dialog）：保存之后导航与页头随即是新名称；名称不合法时说明原因（M2-P6 复核 S4） */
 function RenameForm({ space, onDone, onDenied }: RenameFormProps) {
   const queryClient = useQueryClient()
   const [name, setName] = useState(space.name)
   const inputId = useId()
+  const problemId = useId()
   const mutation = useMutation({
     mutationFn: async (value: string) => renameSpace(space.id, value),
     onSuccess: async () => {
@@ -37,10 +42,11 @@ function RenameForm({ space, onDone, onDenied }: RenameFormProps) {
     },
     onError: (error) => {
       if (isAccessDenied(error))
-        onDenied()
+        onDenied(error)
     },
   })
   const parsed = spaceNameSchema.safeParse(name)
+  const problem = problemOf(parsed)
 
   return (
     <form
@@ -54,11 +60,12 @@ function RenameForm({ space, onDone, onDenied }: RenameFormProps) {
       <div className="flex min-w-48 flex-1 flex-col gap-2">
         <Label htmlFor={inputId}>{text.renameLabel}</Label>
         {/* eslint-disable-next-line jsx-a11y/no-autofocus -- 点了改名才出现的输入框：焦点直接给它，不落到 body */}
-        <Input id={inputId} value={name} autoFocus aria-invalid={!parsed.success} onChange={event => setName(event.target.value)} />
+        <Input id={inputId} value={name} autoFocus aria-invalid={!parsed.success} aria-describedby={problem === undefined ? undefined : problemId} onChange={event => setName(event.target.value)} />
       </div>
-      <Button type="submit" aria-disabled={mutation.isPending || !parsed.success}>{mutation.isPending ? text.saving : text.save}</Button>
+      <Button type="submit" aria-disabled={mutation.isPending || !parsed.success} aria-describedby={problem === undefined ? undefined : problemId}>{mutation.isPending ? text.saving : text.save}</Button>
       <Button type="button" variant="ghost" aria-disabled={mutation.isPending} onClick={() => !mutation.isPending && onDone()}>{text.cancel}</Button>
-      {mutation.isError && (
+      <FieldProblem id={problemId} problem={problem} empty={name === ''} />
+      {mutation.isError && !isAccessDenied(mutation.error) && (
         <Alert variant="destructive" className="basis-full">
           <AlertDescription>{describeError(mutation.error).message}</AlertDescription>
         </Alert>
@@ -67,35 +74,41 @@ function RenameForm({ space, onDone, onDenied }: RenameFormProps) {
   )
 }
 
-/**
- * 页头按新的权限重新显示时（页内的操作被拒绝之后重新请求了页头），有焦点的按钮可能随之消失，例如空间刚被归档，"新建表格"没了：
- * 焦点交给标题，不落到 body（M2-P2 复验）。只看权限变了的那一次渲染：打开页面时不动焦点。
- * 权限没变时 TanStack Query 的结构共享保留原来的对象，按引用比较即可
- */
-function useFocusTitleAfterPermissionChange(permissions: SpacePermissions, titleRef: RefObject<HTMLElement | null>): void {
-  const shownRef = useRef(permissions)
-  useEffect(() => {
-    if (shownRef.current === permissions)
-      return
-    shownRef.current = permissions
-    if (document.activeElement === null || document.activeElement === document.body)
-      titleRef.current?.focus()
-  }, [permissions, titleRef])
+interface SpaceHeaderProps {
+  readonly space: SpaceView
+  readonly folderId: string | null
+  /** 页面的标题（h1）：由空间页持有，内容区与焦点的兜底也用它 */
+  readonly titleRef: RefObject<HTMLHeadingElement | null>
+  readonly onDenied: () => void
 }
 
-/** 页头：名称（个人空间显示"我的空间"）、类型与状态、我的角色；只显示能做的操作（新建表格、成员、改名） */
-function SpaceHeader({ space, folderId, onDenied }: { readonly space: SpaceView, readonly folderId: string | null, readonly onDenied: () => void }) {
+/**
+ * 页头：名称（个人空间显示"我的空间"）、类型与状态、我的角色；只显示能做的操作（新建表格、成员、改名）。
+ * 页头的操作被拒绝（403、404，M2-P6 复核 S2、S5）：页面按新的权限重新请求，改名的表单关掉，按钮可能随之消失；
+ * 原因写在页头下方的说明里（403 用服务端说的原因），说明接住焦点。
+ */
+function SpaceHeader({ space, folderId, titleRef, onDenied }: SpaceHeaderProps) {
   const [renaming, setRenaming] = useState(false)
-  const titleRef = useRef<HTMLHeadingElement>(null)
+  // 页头的操作被拒绝的原因：每次一条新的对象（换了一条就再接一次焦点）
+  const [denial, setDenial] = useState<{ readonly message: string }>()
   const renameRef = useRef<HTMLButtonElement>(null)
   const focusAfterRender = useFocusAfterRender()
   const personal = space.type === 'personal'
-  useFocusTitleAfterPermissionChange(space.permissions, titleRef)
 
   function doneRenaming(): void {
     setRenaming(false)
-    // 改名被拒绝之后页头按新的权限重新显示，"改名"可能已经没了（例如空间刚被归档）：焦点交给标题
     focusAfterRender(space.permissions.canRename ? renameRef : titleRef)
+  }
+
+  function denied(message: string): void {
+    setRenaming(false)
+    setDenial({ message })
+    onDenied()
+  }
+
+  function closeDenial(): void {
+    setDenial(undefined)
+    focusAfterRender(titleRef)
   }
 
   return (
@@ -121,10 +134,14 @@ function SpaceHeader({ space, folderId, onDenied }: { readonly space: SpaceView,
             <Button ref={renameRef} variant="outline" onClick={() => setRenaming(true)}>{text.rename}</Button>
           )}
           {/* 新建到当前位置：在文件夹里时建进那个文件夹（M2-P4） */}
-          {space.permissions.canCreateDocuments && <NewSheetButton spaceId={space.id} folderId={folderId} onDenied={onDenied} />}
+          {space.permissions.canCreateDocuments && (
+            <NewSheetButton spaceId={space.id} folderId={folderId} onDenied={error => denied(messages.documents.createDenied(describeError(error).message))} />
+          )}
         </div>
       </div>
-      {renaming && <RenameForm space={space} onDone={doneRenaming} onDenied={onDenied} />}
+      {/* 刷新之后不能改名了（例如空间刚被归档）：表单不再显示（M2-P6 复核 S2） */}
+      {renaming && space.permissions.canRename && <RenameForm space={space} onDone={doneRenaming} onDenied={error => denied(text.renameDenied(describeError(error).message))} />}
+      {denial !== undefined && <Notice focusKey={denial} onClose={closeDenial} variant="destructive">{denial.message}</Notice>}
       {space.status === 'archived' && (
         <Alert>
           <AlertDescription>{text.archivedNotice}</AlertDescription>
@@ -139,6 +156,7 @@ function SpaceHeader({ space, folderId, onDenied }: { readonly space: SpaceView,
  * 先看错误、再看数据：重新请求失败时 TanStack Query 保留上一次的数据。已打开的页面里被移出了空间，再进来时缓存里还有旧的页头，
  * 重新请求得到 404 就按看不到显示，不再显示旧的页头与文档（审查 B1）；导航与这个空间的缓存随之更新。
  * 页内的新建与改名被拒绝之后页头重新请求，同样按这里的状态显示（复验）。
+ * 页面里有焦点的按钮、行随刷新或新的权限消失时，焦点交给页面的标题（M2-P6 复核 S3，shared/lib/use-focus-rescue.ts）。
  */
 function SpaceContent({ spaceId, folderIds = [] }: { readonly spaceId: string, readonly folderIds?: readonly string[] }) {
   const queryClient = useQueryClient()
@@ -151,7 +169,11 @@ function SpaceContent({ spaceId, folderIds = [] }: { readonly spaceId: string, r
   const targetSpaces = (spaces.data?.items ?? []).filter(item => item.permissions.canCreateDocuments)
   const missing = isMissingResource(space.error)
   const refreshOrganize = useOrganizeRefresh()
+  const titleRef = useRef<HTMLHeadingElement>(null)
+  const rescueFocus = useFocusRescue(titleRef)
   useForgetMissingSpace(spaceId, missing)
+  // 浏览器标签页的标题：显示出内容之后由内容区按当前的位置给出，看不到时由"空间不存在"给出（M2-P6 复核 S4）；这里只管加载失败
+  useDocumentTitle(!space.isPending && !missing && space.data === undefined ? text.pageLoadFailed : undefined)
 
   /**
    * 页内的操作按访问权限被拒绝（403、404）：页面显示的权限已经过时，重新请求（M2-P2 复验）——
@@ -175,23 +197,26 @@ function SpaceContent({ spaceId, folderIds = [] }: { readonly spaceId: string, r
     return <SpaceNotFound />
   if (space.data === undefined) {
     return (
-      <Alert variant="destructive">
-        <AlertDescription>
-          <p>{text.pageLoadFailed}</p>
-          <p>{describeError(space.error).message}</p>
-          <Button variant="outline" size="sm" className="mt-2" onClick={() => void space.refetch()}>{messages.common.retry}</Button>
-        </AlertDescription>
-      </Alert>
+      <section className="flex flex-col gap-4" aria-labelledby="space-title">
+        <h1 id="space-title" className="text-xl font-semibold">{text.pageLoadFailed}</h1>
+        <Alert variant="destructive">
+          <AlertDescription>
+            <p>{describeError(space.error).message}</p>
+            <Button variant="outline" size="sm" className="mt-2" onClick={() => void space.refetch()}>{messages.common.retry}</Button>
+          </AlertDescription>
+        </Alert>
+      </section>
     )
   }
   return (
-    <section className="flex flex-col gap-4" aria-labelledby="space-title">
-      <SpaceHeader space={space.data} folderId={folderIds.at(-1) ?? null} onDenied={refreshAfterDenied} />
+    <section ref={rescueFocus} className="flex flex-col gap-4" aria-labelledby="space-title">
+      <SpaceHeader space={space.data} folderId={folderIds.at(-1) ?? null} titleRef={titleRef} onDenied={refreshAfterDenied} />
       <SpaceContents
         space={space.data}
         folderIds={folderIds}
         targetSpaces={targetSpaces}
         onDenied={refreshAfterDenied}
+        titleRef={titleRef}
       />
     </section>
   )

@@ -6,13 +6,15 @@ import { PASSWORD_RESET_LIFETIME_HOURS, USER_STATUSES } from '@nerve-office/cont
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { Link } from 'react-router'
+import { describeError, isUnknownOutcome } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { adminUserDocumentsPath } from '../../shared/lib/admin-paths.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { useSessionRecheck } from '../../shared/lib/session-recheck.ts'
 import { useDebouncedValue } from '../../shared/lib/use-debounced-value.ts'
+import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { Badge, Button, buttonVariants, Input, Label, NativeSelect, TableCell } from '../../shared/ui/index.ts'
-import { sessionQueryOptions, SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
+import { OWN_RESET_AFTER_UNKNOWN, sessionQueryOptions, SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
 import { ConfirmDialog } from '../confirmation/index.ts'
 import { ADMIN_QUERY_KEY, adminUsersQueryOptions, changeSystemRole, disableUser, enableUser, issuePasswordReset, unlockLogin } from './admin-api.ts'
 import { IssuedLinkDialog } from './issued-link-dialog.tsx'
@@ -20,8 +22,9 @@ import { PagedTable } from './paged-table.tsx'
 
 const text = messages.admin.users
 
+/** 拼进纯文字（按钮的可读名称、确认框的标题）的名字：显示名隔离、登录名另外标出（M2-P6 复核 M2） */
 function nameOf(user: AdminUser): string {
-  return `${user.displayName}（${user.username}）`
+  return messages.people.text(user)
 }
 
 /** 登录锁定的说明（M2-P6 复核 A1）：全部来源都锁了，还是只锁了某些来源（本人从别处照常登录） */
@@ -44,6 +47,7 @@ interface IssuedReset {
  * 给自己生成的重置链接要先交到本人手里，关闭链接的弹窗之后再确认。
  */
 export function AdminUsersPage() {
+  useDocumentTitle(messages.admin.pageTitle(messages.admin.nav.users))
   const queryClient = useQueryClient()
   const recheckSession = useSessionRecheck()
   const session = useQuery(sessionQueryOptions())
@@ -53,6 +57,11 @@ export function AdminUsersPage() {
   const users = useInfiniteQuery(adminUsersQueryOptions({ query: query === '' ? undefined : query, status: status === '' ? undefined : status }))
   const [pending, setPending] = useState<PendingConfirmation>()
   const [issued, setIssued] = useState<IssuedReset>()
+  /**
+   * 为自己生成重置链接的结果未知（M2-P6 复核 S1）：密码可能已经失效、会话已经撤销。确认的弹窗随之换上 OWN_RESET_AFTER_UNKNOWN：
+   * 再试得到"登录已过期"时，登录页说明"你的密码可能已经失效"，而不是只说登录已过期。弹窗关掉时清掉
+   */
+  const [ownResetUnsure, setOwnResetUnsure] = useState(false)
   const tableRef = useRef<PagedTableHandle>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const searchId = useId()
@@ -83,6 +92,10 @@ export function AdminUsersPage() {
     })
   }
 
+  /**
+   * 生成重置链接（M2-P6 复核 S1）：结果未知时服务端可能已经让密码失效、撤销了会话，链接却只在响应里出现一次——
+   * 弹窗里说明这一点（给自己生成的另说"你的密码可能已经失效"）；再生成一次没有冲突，之前那一条随即作废
+   */
   function confirmReset(user: AdminUser): void {
     const own = user.id === session.data?.user.id
     const name = nameOf(user)
@@ -90,14 +103,28 @@ export function AdminUsersPage() {
       title: own ? text.confirmResetOwn : text.confirmReset(name),
       description: own ? text.resetOwnDescription(PASSWORD_RESET_LIFETIME_HOURS) : text.resetDescription(PASSWORD_RESET_LIFETIME_HOURS),
       confirmLabel: text.resetPassword,
+      describeFailure: (error) => {
+        const reason = describeError(error).message
+        if (!isUnknownOutcome(error))
+          return reason
+        return own ? text.resetOwnOutcomeUnknown(reason) : text.resetOutcomeUnknown(reason)
+      },
       run: async () => {
-        const reset = await issuePasswordReset(user.id)
+        let reset: Awaited<ReturnType<typeof issuePasswordReset>>
+        try {
+          reset = await issuePasswordReset(user.id)
+        }
+        catch (error) {
+          if (own && isUnknownOutcome(error))
+            setOwnResetUnsure(true)
+          throw error
+        }
         // 确认的弹窗关掉的同时弹出链接：任何时刻只有一个弹窗（审查 B7）
         setPending(undefined)
         setIssued({
           link: {
             title: messages.admin.link.resetTitle,
-            recipient: name,
+            recipient: user,
             url: reset.url,
             expiresAt: reset.expiresAt,
             ...(own ? { note: messages.admin.link.ownResetNote } : {}),
@@ -204,7 +231,8 @@ export function AdminUsersPage() {
         renderCells={user => (
           <>
             <TableCell className="font-medium">{user.username}</TableCell>
-            <TableCell>{user.displayName}</TableCell>
+            {/* 显示名单独一列，用 <bdi> 隔离：从右到左的显示名不打乱旁边的格子（M2-P6 复核 M2） */}
+            <TableCell><bdi>{user.displayName}</bdi></TableCell>
             <TableCell><Badge variant={user.systemRole === 'admin' ? 'default' : 'outline'}>{messages.admin.roleName(user.systemRole)}</Badge></TableCell>
             <TableCell>
               <div className="flex flex-col items-start gap-1">
@@ -217,7 +245,14 @@ export function AdminUsersPage() {
           </>
         )}
       />
-      <ConfirmDialog pending={pending} onClose={() => setPending(undefined)} meta={SYSTEM_ADMIN_ONLY} />
+      <ConfirmDialog
+        pending={pending}
+        onClose={() => {
+          setPending(undefined)
+          setOwnResetUnsure(false)
+        }}
+        meta={ownResetUnsure ? OWN_RESET_AFTER_UNKNOWN : SYSTEM_ADMIN_ONLY}
+      />
       <IssuedLinkDialog link={issued?.link} onClose={closeLink} />
     </div>
   )

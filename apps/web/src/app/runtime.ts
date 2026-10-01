@@ -1,6 +1,7 @@
 import type { SessionResponse } from '@nerve-office/contracts'
 import type { QueryClient } from '@tanstack/react-query'
 import type { DataRouter, RouteObject } from 'react-router'
+import type { RequestIdLedger } from '../shared/api/index.ts'
 import type { LoginReason } from '../shared/lib/login-path.ts'
 import type { PageLocation } from '../shared/lib/page-location.ts'
 import type { AdoptRenewedSession } from '../shared/lib/renewed-session.ts'
@@ -10,7 +11,7 @@ import type { ExpiredReason } from './query-client.ts'
 import { createBrowserRouter } from 'react-router'
 import { isOneTimeLinkPage } from '../features/account/index.ts'
 import { sessionQueryOptions } from '../features/auth/index.ts'
-import { isAuthenticationError, requestSession, setCsrfToken } from '../shared/api/index.ts'
+import { createRequestIdLedger, isAuthenticationError, requestSession, setCsrfToken } from '../shared/api/index.ts'
 import { isLoginPage, LOGIN_PATH, loginPath } from '../shared/lib/login-path.ts'
 import { browserPageLocation } from '../shared/lib/page-location.ts'
 import { openSessionChannel } from '../shared/lib/session-channel.ts'
@@ -26,6 +27,11 @@ export interface AppRuntime {
   readonly recheckSession: SessionRecheck
   /** 请求得到"登录已过期"之后，换上浏览器里同一个人的新会话：退出经 AdoptRenewedSessionContext 取用（M2-P6 复验 一般-4） */
   readonly adoptRenewedSession: AdoptRenewedSession
+  /**
+   * 带 requestId 的新建共用的记账（新建表格、新建文件夹、复制，M2-P6 复核 M1）：页面一份，组件经 RequestIdLedgerContext 取用。
+   * 组件随导航卸载、再回来时，结果未知的那件事仍沿用原来的 requestId
+   */
+  readonly requestIds: RequestIdLedger
   /** 不再接收其他标签页的消息。页面上随页面一起结束；测试里每个用例结束时调用 */
   readonly dispose: () => void
 }
@@ -129,10 +135,12 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
   /**
    * 请求得到"登录已过期"（复验 N3）：马上记下原因，向服务端确认现在是谁，结论在 checkSessionOnce 里（页面已经在离开时 recheckSession 不做事）。
    * 本页还在进行的登录、修改密码由那一轮先等它结束（M2-P6 复验 一般-1）；原因不等它就记下，确认期间别的请求得到未登录时用得上（建议-1）。
-   * 几个请求先后过期时保留更具体的 password_changed（修改密码的结果未知之后再提交，M2-P6 复核 G-1）
+   * 几个请求先后过期时保留更具体的原因：password_changed（修改密码的结果未知之后再提交，M2-P6 复核 G-1）、
+   * password_reset（为自己生成重置链接的结果未知之后再试，M2-P6 复核 S1），不被随后普通的"已过期"盖掉
    */
   function confirmExpiredSession(reason: ExpiredReason): void {
-    expired = { reason: expired?.reason === 'password_changed' ? 'password_changed' : reason, after: checksStarted }
+    const earlier = expired?.reason
+    expired = { reason: earlier === undefined || earlier === 'expired' ? reason : earlier, after: checksStarted }
     void recheckSession()
   }
 
@@ -252,6 +260,7 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
     page,
     recheckSession,
     adoptRenewedSession,
+    requestIds: createRequestIdLedger(),
     dispose: () => {
       unsubscribe()
       unsubscribeRouter()

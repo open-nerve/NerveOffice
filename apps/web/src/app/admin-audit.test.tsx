@@ -3,6 +3,7 @@ import type { AuditEventItem } from '@nerve-office/contracts'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { apiError, installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
+import { personIn } from '../shared/testing/people.test-support.ts'
 import { AMY, deferred, EVENT, listPage, ROOT, session, settle, SPACES } from './admin.test-support.ts'
 import { renderApp } from './render-app.test-support.tsx'
 
@@ -37,7 +38,10 @@ describe('管理界面：审计', () => {
     renderApp('/admin/audit')
     const table = await screen.findByRole('table', { name: '审计事件' })
     const first = rowAt(table, 1)
-    expect(first).toHaveTextContent('管理员（root）')
+    // 操作者与对象都用 PersonName：显示名与登录名分开呈现（M2-P6 复核 M2）
+    expect(first).toHaveTextContent('管理员 @root')
+    personIn(first, '管理员', 'root')
+    personIn(first, '艾米', 'amy')
     expect(within(first).getByText('停用账户')).toBeInTheDocument()
     expect(within(first).getByText('网页 · 192.0.2.1')).toBeInTheDocument()
     // 请求标识：等宽小字，放在来源一格里（审查 B8）
@@ -68,10 +72,10 @@ describe('管理界面：审计', () => {
       [`${LIST}?targetId=${AMY.id}&targetType=user`]: () => json(200, listPage([EVENT])),
     })
     renderApp('/admin/audit')
-    const target = await screen.findByRole('button', { name: '账户：艾米（amy）' })
+    const target = await screen.findByRole('button', { name: '账户：艾米 @amy' })
     target.focus()
     fireEvent.click(target)
-    expect(await screen.findByText('对象：账户：艾米（amy）')).toBeInTheDocument()
+    expect(await screen.findByText('对象：')).toHaveTextContent('对象：账户：艾米 @amy')
     await waitFor(() => expect(requested(api, `${LIST}?targetId=${AMY.id}&targetType=user`)).toBe(true))
     const clear = screen.getByRole('button', { name: '清除对象的筛选' })
     expect(clear).toHaveTextContent('清除')
@@ -80,14 +84,14 @@ describe('管理界面：审计', () => {
     const before = api.requests.length
     fireEvent.click(clear)
     await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('动作')))
-    expect(screen.queryByText('对象：账户：艾米（amy）')).toBeNull()
+    expect(screen.queryByText('对象：')).toBeNull()
     // 回到没有条件的查询：缓存里有，不必再请求；请求的一定没有对象
     await settle()
     expect(api.requests.slice(before).every(request => !request.key.includes('targetId'))).toBe(true)
   })
 
   it('前端不认识的对象类型：只按 id 筛选', async () => {
-    const future = event(3, { target: { type: 'comment', id: '0199a2c4-0000-7000-8000-0000000003aa', label: null } })
+    const future = event(3, { target: { type: 'comment', id: '0199a2c4-0000-7000-8000-0000000003aa', label: null, user: null } })
     const api = audit({
       [LIST]: () => json(200, listPage([future])),
       [`${LIST}?targetId=0199a2c4-0000-7000-8000-0000000003aa`]: () => json(200, listPage([future])),
@@ -151,10 +155,10 @@ describe('管理界面：审计', () => {
     // 输入停下 300 毫秒之后才查找
     expect(await screen.findByText('正在查找…', {}, { timeout: 2000 })).toBe(status)
     candidates.resolve(json(200, listPage([ROOT])))
-    const candidate = await within(await screen.findByRole('list', { name: '操作者' })).findByRole('button', { name: '管理员（root）' })
+    const candidate = await within(await screen.findByRole('list', { name: '操作者' })).findByRole('button', { name: '管理员 @root' })
     candidate.focus()
     fireEvent.click(candidate)
-    expect(await screen.findByText('操作者：管理员（root）')).toBeInTheDocument()
+    expect(await screen.findByText('操作者：')).toHaveTextContent('操作者：管理员 @root')
     expect(screen.queryByLabelText('按名字找操作者')).toBeNull()
     await waitFor(() => expect(requested(api, `${LIST}?actorId=${ROOT.id}`)).toBe(true))
     const clear = screen.getByRole('button', { name: '清除操作者的筛选' })
@@ -186,7 +190,7 @@ describe('管理界面：审计', () => {
     expect(alert).toHaveTextContent('查找失败：请求的内容不合法，请检查后重试')
     failing = false
     fireEvent.click(within(alert).getByRole('button', { name: '重试' }))
-    expect(await screen.findByRole('button', { name: '艾米（amy）' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: '艾米 @amy' })).toBeInTheDocument()
     expect(api.requests.filter(request => request.key === 'GET /api/admin/users?query=amy')).toHaveLength(2)
   })
 
@@ -210,5 +214,42 @@ describe('管理界面：审计', () => {
     expect(within(table).getAllByRole('row')).toHaveLength(3)
     expect(document.activeElement).toBe(screen.getByRole('button', { name: '加载更多' }))
     expect(api.requests.filter(request => request.key === `${LIST}?cursor=c2`)).toHaveLength(2)
+  })
+})
+
+describe('管理界面：审计里的人名（M2-P6 复核 M2）', () => {
+  it('显示名写成"李四（lisi）"冒充别人：操作者与对象都按服务端分开给出的登录名呈现，登录名在单独的元素里，与真正的李四分得清', async () => {
+    const real = { id: '0199a2c4-0000-7000-8000-000000000031', username: 'lisi', displayName: '李四' }
+    const spoof = { id: '0199a2c4-0000-7000-8000-000000000032', username: 'mallory', displayName: '李四（lisi）' }
+    audit({
+      [LIST]: () => json(200, listPage([
+        event(1, { actor: { type: 'user', id: spoof.id, username: spoof.username, displayName: spoof.displayName }, target: { type: 'user', id: real.id, label: '李四（lisi）', user: { username: real.username, displayName: real.displayName } } }),
+        event(2, { actor: { type: 'user', id: real.id, username: real.username, displayName: real.displayName }, target: { type: 'user', id: spoof.id, label: '李四（lisi）（mallory）', user: { username: spoof.username, displayName: spoof.displayName } } }),
+      ])),
+    })
+    renderApp('/admin/audit')
+    const table = await screen.findByRole('table', { name: '审计事件' })
+    const first = rowAt(table, 1)
+    const second = rowAt(table, 2)
+    // 第一条：冒充者操作、对象是真正的李四；第二条反过来。两条的人名各自在 PersonName 里，登录名分得清
+    personIn(first, '李四（lisi）', 'mallory')
+    personIn(first, '李四', 'lisi')
+    personIn(second, '李四', 'lisi')
+    personIn(second, '李四（lisi）', 'mallory')
+    // 对象一格不再用拼好的标签（旧页面才用它）
+    expect(within(first).queryByText('账户：李四（lisi）')).toBeNull()
+    expect(within(second).getByRole('button', { name: '账户：李四（lisi） @mallory' })).toBeInTheDocument()
+  })
+
+  it('从右到左的显示名在 <bdi> 里；邀请与空间的对象名也隔离', async () => {
+    audit({
+      [LIST]: () => json(200, listPage([
+        event(1, { actor: { type: 'user', id: ROOT.id, username: 'shalom', displayName: 'שלום' }, target: { type: 'space', id: '0199a2c4-0000-7000-8000-0000000000c1', label: 'צוות', user: null } }),
+      ])),
+    })
+    renderApp('/admin/audit')
+    const row = rowAt(await screen.findByRole('table', { name: '审计事件' }), 1)
+    expect(personIn(row, 'שלום', 'shalom').querySelector('bdi')).toHaveTextContent('שלום')
+    expect(within(row).getByText('צוות').tagName).toBe('BDI')
   })
 })

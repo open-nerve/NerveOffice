@@ -97,11 +97,12 @@ describe('ConfirmDialog', () => {
   it('经请求缓存执行，标明只给系统管理员：被拒绝时由全局处理重新确认会话（审查 B4）', async () => {
     const metas: unknown[] = []
     renderPage(confirmation({ run: async () => {
-      throw new ApiError(403, 'PERMISSION_DENIED', 'x')
+      throw new ApiError(403, 'PERMISSION_DENIED', '没有执行这个操作的权限')
     } }), meta => metas.push(meta))
     const dialog = await open()
     fireEvent.click(within(dialog).getByRole('button', { name: '停用' }))
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent('你没有执行这个操作的权限')
+    // 看得到却不能做的原因由服务端给出（ADR-008 的例外，M2-P6 复核 S5）
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('没有执行这个操作的权限')
     expect(metas).toEqual([{ systemAdminOnly: true }])
   })
 

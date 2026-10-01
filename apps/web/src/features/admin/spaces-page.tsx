@@ -5,11 +5,12 @@ import { SPACE_STATUSES, spaceNameSchema } from '@nerve-office/contracts'
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { Link } from 'react-router'
-import { describeError } from '../../shared/api/index.ts'
+import { ApiError, describeError, isUnknownOutcome } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { spaceMembersPath } from '../../shared/lib/space-paths.ts'
 import { useDebouncedValue } from '../../shared/lib/use-debounced-value.ts'
+import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { Alert, AlertDescription, Badge, Button, buttonVariants, Input, Label, NativeSelect, TableCell } from '../../shared/ui/index.ts'
 import { SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
 import { ColleaguePicker } from '../colleagues/index.ts'
@@ -21,13 +22,24 @@ import { JoinSpaceDialog, RenameSpaceDialog } from './space-dialogs.tsx'
 
 const text = messages.admin.spaces
 
-/** 创建团队空间：名称、首个空间管理员（按名字选同事）、是否全员可见 */
+/** 已有同名的团队空间 */
+function isNameTaken(error: unknown): boolean {
+  return error instanceof ApiError && error.code === 'SPACE_NAME_TAKEN'
+}
+
+/**
+ * 创建团队空间：名称、首个空间管理员（按名字选同事）、是否全员可见。
+ * 结果未知时空间可能已经建好（M2-P6 复核 S1）：列表随即刷新，说明下面的列表里有它就是建好了；结果未知之后用同一个名称再创建
+ * 得到"已有同名"，多半就是刚才那一次，同样刷新并说明。比较的两边都是经契约解析过的名称（规范写法）
+ */
 function CreateSpaceForm({ onCreated }: { readonly onCreated: () => Promise<void> }) {
   const [name, setName] = useState('')
   const [admin, setAdmin] = useState<UserSummary>()
   const [visibleToAll, setVisibleToAll] = useState(false)
   // 创建成功之后换一个 key，同事选择整个重新开始：关键词与上一次的候选都清掉（与成员页的添加一样，审查 B11）
   const [pickerKey, setPickerKey] = useState(0)
+  /** 结果未知的那一次创建用的名称：空间可能已经建好了。成功创建之后清掉 */
+  const [unsureName, setUnsureName] = useState<string>()
   const nameId = useId()
   const visibleId = useId()
   const hintId = useId()
@@ -39,7 +51,14 @@ function CreateSpaceForm({ onCreated }: { readonly onCreated: () => Promise<void
       setAdmin(undefined)
       setPickerKey(key => key + 1)
       setVisibleToAll(false)
+      setUnsureName(undefined)
       await onCreated()
+    },
+    onError: async (error, request) => {
+      if (isUnknownOutcome(error))
+        setUnsureName(request.name)
+      if (isUnknownOutcome(error) || (isNameTaken(error) && request.name === unsureName))
+        await onCreated()
     },
   })
   const parsed = spaceNameSchema.safeParse(name)
@@ -75,7 +94,7 @@ function CreateSpaceForm({ onCreated }: { readonly onCreated: () => Promise<void
       </div>
       {mutation.isError && (
         <Alert variant="destructive">
-          <AlertDescription>{describeError(mutation.error).message}</AlertDescription>
+          <AlertDescription>{createFailureText(mutation.error, mutation.variables?.name, unsureName)}</AlertDescription>
         </Alert>
       )}
       {/* aria-disabled 的按钮读屏软件读出"不可用"，却不知道为什么：原因写在按钮下方，按钮经 aria-describedby 指向它 */}
@@ -87,11 +106,21 @@ function CreateSpaceForm({ onCreated }: { readonly onCreated: () => Promise<void
   )
 }
 
+/** 创建失败时的说明：结果未知、结果未知之后同一个名称"已有同名"（多半就是那一次），其余按错误码 */
+function createFailureText(error: unknown, name: string | undefined, unsureName: string | undefined): string {
+  if (isUnknownOutcome(error))
+    return text.createOutcomeUnknown(describeError(error).message)
+  if (isNameTaken(error) && name !== undefined && name === unsureName)
+    return text.createRetryTaken
+  return describeError(error).message
+}
+
 /**
  * 管理界面：团队空间（M2-P2 设计 §3.10，US-M2-05）。创建（连同首个空间管理员）；按名称搜索、按状态过滤；
  * 改名、全员可见的开关、归档与恢复（先确认）；"成员"进入成员页；没有加入的空间可以"加入空间"（选角色，记审计）。
  */
 export function AdminSpacesPage() {
+  useDocumentTitle(messages.admin.pageTitle(messages.admin.nav.spaces))
   const queryClient = useQueryClient()
   const [keyword, setKeyword] = useState('')
   const [status, setStatus] = useState<SpaceStatus | ''>('')

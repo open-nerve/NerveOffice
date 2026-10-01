@@ -9,7 +9,8 @@ import { useId, useRef, useState } from 'react'
 import { ApiError, describeError, isUnknownOutcome } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
-import { Alert, AlertDescription, Badge, Button, Input, Label, NativeSelect, TableCell } from '../../shared/ui/index.ts'
+import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
+import { Alert, AlertDescription, Badge, Button, Input, Label, NativeSelect, PersonName, TableCell } from '../../shared/ui/index.ts'
 import { SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
 import { ConfirmDialog } from '../confirmation/index.ts'
 import { ADMIN_QUERY_KEY, createInvitation, invitationsQueryOptions, reissueInvitation, revokeInvitation } from './admin-api.ts'
@@ -26,7 +27,12 @@ const STATUS_VARIANTS: Record<InvitationStatus, 'default' | 'secondary' | 'destr
 }
 
 function linkOf(issued: IssuedInvitation, returnFocus: () => void): IssuedLink {
-  return { title: messages.admin.link.invitationTitle, recipient: `${issued.invitation.displayName}（${issued.invitation.username}）`, url: issued.url, expiresAt: issued.invitation.expiresAt, returnFocus }
+  return { title: messages.admin.link.invitationTitle, recipient: issued.invitation, url: issued.url, expiresAt: issued.invitation.expiresAt, returnFocus }
+}
+
+/** 这个登录名已被占用，或者已有待接受的邀请 */
+function isUsernameTaken(error: unknown): boolean {
+  return error instanceof ApiError && error.code === 'USERNAME_TAKEN'
 }
 
 /**
@@ -50,6 +56,7 @@ function issueFailureText(error: unknown, request: CreateInvitationRequest | und
  * 签发的结果未知时（网络中断、服务端出错）刷新列表、保留输入，引导去列表里重新生成（M2-P6 复核 G-2）。
  */
 export function AdminInvitationsPage() {
+  useDocumentTitle(messages.admin.pageTitle(messages.admin.nav.invitations))
   const queryClient = useQueryClient()
   const [status, setStatus] = useState<InvitationStatus | ''>('')
   const invitations = useInfiniteQuery(invitationsQueryOptions({ status: status === '' ? undefined : status }))
@@ -109,6 +116,45 @@ export function AdminInvitationsPage() {
       creation.mutate(parsed.data)
   }
 
+  /**
+   * 重新生成（M2-P6 复核 S1）：结果未知时新的邀请可能已经建好、原来的随即作废，新的链接却只在响应里出现一次——
+   * 列表随即刷新，说明要找到最新的那一条再重新生成；结果未知之后再点得到"已被占用"，多半就是刚才那一次，同样刷新并引导。
+   * unsure 记在这一次弹窗里：弹窗关掉、下次再打开就是另一次
+   */
+  function confirmReissue(invitation: Invitation): void {
+    let unsure = false
+    setPending({
+      title: text.confirmReissue(invitation.username),
+      description: text.reissueDescription,
+      confirmLabel: text.reissue,
+      describeFailure: (error) => {
+        if (isUnknownOutcome(error))
+          return text.reissueOutcomeUnknown(describeError(error).message)
+        if (unsure && isUsernameTaken(error))
+          return text.reissueRetryTaken
+        return describeError(error).message
+      },
+      run: async () => {
+        let result: IssuedInvitation
+        try {
+          result = await reissueInvitation(invitation.id)
+        }
+        catch (error) {
+          if (isUnknownOutcome(error))
+            unsure = true
+          if (isUnknownOutcome(error) || (unsure && isUsernameTaken(error)))
+            await refresh()
+          throw error
+        }
+        await refresh()
+        // 列表刷新之后，确认的弹窗关掉的同时弹出链接：任何时刻只有一个弹窗（审查 B7）；关闭链接之后焦点到新的那一行
+        setPending(undefined)
+        setIssued(linkOf(result, () => focusRow(result.invitation.id)))
+      },
+      returnFocus: () => focusRow(invitation.id),
+    })
+  }
+
   function actionsOf(invitation: Invitation) {
     const open = invitation.status === 'pending' || invitation.status === 'expired'
     const reissuable = invitation.status !== 'accepted' && !invitation.superseded
@@ -140,19 +186,7 @@ export function AdminInvitationsPage() {
             variant="ghost"
             size="sm"
             aria-label={messages.admin.actionOn(text.reissue, invitation.username)}
-            onClick={() => setPending({
-              title: text.confirmReissue(invitation.username),
-              description: text.reissueDescription,
-              confirmLabel: text.reissue,
-              run: async () => {
-                const result = await reissueInvitation(invitation.id)
-                await refresh()
-                // 列表刷新之后，确认的弹窗关掉的同时弹出链接：任何时刻只有一个弹窗（审查 B7）；关闭链接之后焦点到新的那一行
-                setPending(undefined)
-                setIssued(linkOf(result, () => focusRow(result.invitation.id)))
-              },
-              returnFocus: () => focusRow(invitation.id),
-            })}
+            onClick={() => confirmReissue(invitation)}
           >
             {text.reissue}
           </Button>
@@ -203,9 +237,10 @@ export function AdminInvitationsPage() {
         renderCells={invitation => (
           <>
             <TableCell className="font-medium">{invitation.username}</TableCell>
-            <TableCell>{invitation.displayName}</TableCell>
+            {/* 显示名单独一列，用 <bdi> 隔离；签发人用 PersonName：显示名与登录名分开呈现（M2-P6 复核 M2） */}
+            <TableCell><bdi>{invitation.displayName}</bdi></TableCell>
             <TableCell><Badge variant={STATUS_VARIANTS[invitation.status]}>{text.statusName(invitation.status)}</Badge></TableCell>
-            <TableCell>{invitation.createdBy.displayName}</TableCell>
+            <TableCell><PersonName person={invitation.createdBy} /></TableCell>
             <TableCell className="whitespace-nowrap"><time dateTime={invitation.createdAt}>{formatDateTime(invitation.createdAt)}</time></TableCell>
             <TableCell className="whitespace-nowrap"><time dateTime={invitation.expiresAt}>{formatDateTime(invitation.expiresAt)}</time></TableCell>
             <TableCell>{actionsOf(invitation)}</TableCell>

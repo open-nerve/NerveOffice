@@ -1,10 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
 import { useId, useState } from 'react'
-import { NavLink } from 'react-router'
+import { Link, matchPath, NavLink, useLocation } from 'react-router'
 import { messages } from '../../shared/i18n/index.ts'
 import { cn } from '../../shared/lib/cn.ts'
 import { HOME_PATH, spacePath } from '../../shared/lib/space-paths.ts'
 import { Badge, Button, buttonVariants, Skeleton } from '../../shared/ui/index.ts'
+import { sessionQueryOptions } from '../auth/index.ts'
 import { spacesQueryOptions } from './spaces-api.ts'
 
 const text = messages.spaces
@@ -54,6 +55,19 @@ function TeamSpaces({ headingId, onNavigate }: { readonly headingId: string, rea
 }
 
 /**
+ * "我的空间"是不是当前项（M2-P6 复核 G6）：首页，以及用 /spaces/{本人的个人空间} 打开的任何一页（文件夹、回收站）。
+ * 它的链接指向首页，NavLink 自己只认得首页这一个地址
+ */
+function usePersonalSpaceCurrent(): boolean {
+  const { pathname } = useLocation()
+  const session = useQuery(sessionQueryOptions())
+  const personalId = session.data?.personalSpace.id
+  if (matchPath({ path: HOME_PATH, end: true }, pathname) !== null)
+    return true
+  return personalId !== undefined && matchPath({ path: spacePath(personalId), end: false }, pathname) !== null
+}
+
+/**
  * 左侧导航（M2-P2 设计 §3.10）：我的空间、团队空间（我是成员的与全员可见的，已归档的带标记）。P5 加"与我共享"。
  * 窄屏时收起，由上方的按钮展开（不用弹窗，不进首屏的 Radix Dialog）；点了导航里的链接就收起。
  */
@@ -61,6 +75,7 @@ export function SpaceNav() {
   const [open, setOpen] = useState(false)
   const navId = useId()
   const teamHeadingId = useId()
+  const personalCurrent = usePersonalSpaceCurrent()
   const close = (): void => setOpen(false)
 
   return (
@@ -69,7 +84,7 @@ export function SpaceNav() {
         {text.toggleNav}
       </Button>
       <nav id={navId} aria-label={text.navLabel} className={cn(open ? 'flex' : 'hidden', 'mt-2 flex-col gap-1 md:mt-0 md:flex')}>
-        <NavLink to={HOME_PATH} end className={linkClass} onClick={close}>{text.personal}</NavLink>
+        <Link to={HOME_PATH} aria-current={personalCurrent ? 'page' : undefined} className={linkClass({ isActive: personalCurrent })} onClick={close}>{text.personal}</Link>
         <h2 id={teamHeadingId} className="px-2 pt-3 text-xs font-medium text-muted-foreground">{text.teamHeading}</h2>
         <TeamSpaces headingId={teamHeadingId} onNavigate={close} />
       </nav>

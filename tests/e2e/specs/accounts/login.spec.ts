@@ -220,7 +220,7 @@ test.describe('US-M1-02 多个标签页（审查 B6）', () => {
     await expect(tabA).toHaveURL(/\/login$/)
   })
 
-  test('会话在别处被换掉而本页没有收到消息：退出得到"页面已失效"，随后本页重新加载，显示现在登录的人', async ({ context }) => {
+  test('会话在别处被换掉而本页没有收到消息：退出得到"令牌已过时"，随后本页重新加载，显示现在登录的人', async ({ context }) => {
     const first = await createUser('stale-first', '原来的人')
     const second = await createUser('stale-second', '现在的人')
     await createDocument(first, '原来的人的文档')
@@ -242,7 +242,8 @@ test.describe('US-M1-02 多个标签页（审查 B6）', () => {
       await route.continue()
     })
     await page.getByRole('button', { name: '退出', exact: true }).click()
-    await expect(page.getByRole('alert')).toHaveText('退出失败：页面已失效，请刷新后重试')
+    // 不叫人刷新（M2-P6 复核 G3）：全局处理随即确认会话，换了人就整页重新加载
+    await expect(page.getByRole('alert')).toHaveText('退出失败：登录状态刚刚更新，这次操作没有完成，请再试一次')
     release()
     await expect(page.getByText('现在的人的文档')).toBeVisible()
     await expect(page.getByText('原来的人的文档')).toBeHidden()

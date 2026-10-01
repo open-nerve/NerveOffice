@@ -520,12 +520,12 @@ describe('多个标签页（审查 B6）', () => {
     expect(requestCount(api, 'GET /api/auth/session')).toBe(3)
   })
 
-  it('退出得到 CSRF_TOKEN_INVALID（别的标签页换了人）：提示页面已失效；向服务端确认后换了人，整页重新加载', async () => {
+  it('退出得到 CSRF_TOKEN_INVALID（别的标签页换了人）：说明这次没有完成（不叫人刷新，M2-P6 复核 G3）；向服务端确认后换了人，整页重新加载', async () => {
     const { api, app } = await openList()
     api.on('POST /api/auth/logout', () => apiError(403, 'CSRF_TOKEN_INVALID'))
     api.on('GET /api/auth/session', () => json(200, OTHER_SESSION))
     fireEvent.click(screen.getByRole('button', { name: '退出' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('退出失败：页面已失效，请刷新后重试')
+    expect(await screen.findByRole('alert')).toHaveTextContent('退出失败：登录状态刚刚更新，这次操作没有完成，请再试一次')
     await waitFor(() => expect(app.page.visits).toEqual(['reload']))
   })
 
@@ -689,7 +689,8 @@ describe('US-M1-04 新建表格', () => {
     const api = installFakeApi({ ...LOGGED_IN, ...NO_DOCUMENTS, 'POST /api/documents': () => json(201, { id: 'not-a-detail' }) })
     const app = renderApp('/')
     fireEvent.click(await screen.findByRole('button', { name: '新建表格' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('新建表格失败')
+    // 结果未知：说清楚可能已经建好、再点不会重复新建（M2-P6 复核 M1）
+    expect(await screen.findByRole('alert')).toHaveTextContent('没能确认表格是否已经建好（出了点问题，请稍后重试）。列表已刷新；再点"新建表格"不会重复新建。')
     api.on('POST /api/documents', () => json(201, created))
     fireEvent.click(screen.getByRole('button', { name: '新建表格' }))
     await waitFor(() => expect(app.page.visits).toEqual([`assign /documents/${created.id}`]))
@@ -702,7 +703,7 @@ describe('US-M1-04 新建表格', () => {
     const api = installFakeApi({ ...LOGGED_IN, ...NO_DOCUMENTS, 'POST /api/documents': networkFailure })
     const app = renderApp('/')
     fireEvent.click(await screen.findByRole('button', { name: '新建表格' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('新建表格失败：网络连接失败，请检查网络后重试')
+    expect(await screen.findByRole('alert')).toHaveTextContent('没能确认表格是否已经建好（网络连接失败，请检查网络后重试）')
     api.on('POST /api/documents', () => apiError(400, 'REQUEST_INVALID'))
     fireEvent.click(screen.getByRole('button', { name: '新建表格' }))
     await waitFor(() => expect(requestCount(api, 'POST /api/documents')).toBe(2))

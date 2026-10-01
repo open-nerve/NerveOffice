@@ -2,6 +2,7 @@
 // 空间的成员随即能打开这些文档。系统管理员打不开停用者的文档。
 import { createDocument, createTeamSpace, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
 
 test.describe('US-M2-04 停用者文档的转移', () => {
@@ -25,7 +26,7 @@ test.describe('US-M2-04 停用者文档的转移', () => {
     await row.getByRole('button', { name: /^停用 / }).click()
     await page.getByRole('dialog').getByRole('button', { name: '停用', exact: true }).click()
     await row.getByRole('link', { name: /^转移文档 / }).click()
-    await expect(page.getByRole('heading', { name: `转移 ${leaver.displayName}（${leaver.username}） 的文档` })).toBeVisible()
+    await expect(page.getByRole('heading', { name: `转移 ${shownName(leaver)} 的文档` })).toBeVisible()
     const list = page.getByRole('table', { name: '个人空间里的文档' })
     await expect(list.getByText('交接清单')).toBeVisible()
     await expect(list.getByText('客户名单')).toBeVisible()

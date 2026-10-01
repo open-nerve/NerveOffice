@@ -3,7 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { describeError, isAuthenticationError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { useAdoptRenewedSession } from '../../shared/lib/renewed-session.ts'
-import { Button } from '../../shared/ui/index.ts'
+import { Button, PersonName } from '../../shared/ui/index.ts'
 import { ENDS_SESSION, logout, sessionQueryOptions } from './session.ts'
 
 /**
@@ -27,7 +27,8 @@ export function UserMenu({ children }: { readonly children?: ReactNode }) {
   return (
     // 窄屏时只有名字收窄成省略号，完整的名字在 title 里（M2-P1 审查 B11）；按钮与入口不收窄
     <div className="flex min-w-0 items-center gap-3">
-      {session.data !== undefined && <span className="min-w-0 truncate text-sm text-muted-foreground" title={session.data.user.displayName}>{session.data.user.displayName}</span>}
+      {/* 显示名与登录名分开呈现（M2-P6 复核 M2），完整的名字在 title 里（显示名隔离） */}
+      {session.data !== undefined && <PersonName person={session.data.user} className="min-w-0 truncate text-sm text-muted-foreground" title={messages.people.text(session.data.user)} />}
       {children}
       {/* 退出失败的说明同样可以收窄（读屏照常读出全文），窄屏时不把页头撑破 */}
       {failure !== undefined && <span role="alert" className="min-w-0 truncate text-sm text-destructive" title={messages.auth.logoutFailed(failure)}>{messages.auth.logoutFailed(failure)}</span>}

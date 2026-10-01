@@ -107,6 +107,18 @@ describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
     expect(screen.getByText(text)).toBeInTheDocument()
   })
 
+  it('文档被删除、移走或失去权限之后保存（404）：说清楚存不进去了、本页的修改没有保存，需要的话先复制出来（M2 总设计 A14，M2-P6 复核 S8）', () => {
+    renderChrome({ save: { ...CLEAN, status: 'failed', problem: { kind: 'request', error: new ApiError(404, 'NOT_FOUND', '请求的资源不存在或无权访问', { requestId: 'req-404' }) } } })
+    expect(screen.getByRole('alert')).toHaveTextContent('保存失败：这份表格已经被删除、移走，或者你已经没有访问权限，本页的修改没有保存。需要的话先把内容复制出来。')
+    expect(screen.getByText('请求标识：req-404')).toBeInTheDocument()
+  })
+
+  it('能看却不能改了（403，例如空间刚被归档）：用服务端说的原因，并说明本页的修改没有保存（M2-P6 复核 S5、S8）', () => {
+    renderChrome({ save: { ...CLEAN, status: 'failed', problem: { kind: 'request', error: new ApiError(403, 'PERMISSION_DENIED', '空间已归档，只能查看') } } })
+    expect(screen.getByRole('alert')).toHaveTextContent('保存失败：空间已归档，只能查看，本页的修改没有保存。需要的话先把内容复制出来。')
+    expect(screen.queryByText(/你没有执行这个操作的权限/)).toBeNull()
+  })
+
   it('失败的说明带请求标识', () => {
     renderChrome({ save: { ...CLEAN, status: 'failed', problem: { kind: 'request', error: new ApiError(500, 'INTERNAL_ERROR', 'x', { requestId: 'req-42' }) } } })
     expect(screen.getByText('请求标识：req-42')).toBeInTheDocument()

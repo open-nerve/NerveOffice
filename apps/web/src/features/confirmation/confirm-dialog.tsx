@@ -15,6 +15,11 @@ export interface PendingConfirmation {
   readonly run: () => Promise<void>
   /** 打开弹窗的按钮随操作消失了（例如作废之后这一行没有"作废"）时，关闭之后焦点去哪里（审查 B9） */
   readonly returnFocus?: () => void
+  /**
+   * 失败的说明：不给时按错误码。结果未知时操作可能已经生效（M2-P6 复核 S1：重新生成邀请、生成重置链接），
+   * 或者之后的拒绝其实说明上一次已经生效，由页面给出对应的引导
+   */
+  readonly describeFailure?: (error: unknown) => string
 }
 
 interface ConfirmDialogProps {
@@ -60,7 +65,7 @@ export function ConfirmDialog({ pending, onClose, meta }: ConfirmDialogProps) {
           </DialogHeader>
           {mutation.isError && (
             <Alert variant="destructive">
-              <AlertDescription>{describeError(mutation.error).message}</AlertDescription>
+              <AlertDescription>{pending.describeFailure?.(mutation.error) ?? describeError(mutation.error).message}</AlertDescription>
             </Alert>
           )}
           <DialogFooter>
