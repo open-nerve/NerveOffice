@@ -175,14 +175,15 @@ apps/web/src/
                       空间看不到了（404）时刷新导航、去掉它的缓存（M2-P2）
   features/members/   成员页（M2-P2）：查看、添加、调整角色（每一行各自保存）、移出；按需加载，只被 app/routes.ts 动态引用
   features/colleagues/ 按关键词选一项（M2-P2）：按名字选同事、按名称选团队空间；只由管理界面与成员页引用
-  features/confirmation/ 危险操作的确认弹窗（带 Radix Dialog，M2-P2 从管理界面挪出）：只由按需加载的功能引用
+  features/confirmation/ 危险操作的确认弹窗（带 Radix Dialog，M2-P2 从管理界面挪出）：只由按需加载的功能引用；做完一件事的说明由确认的操作交回，
+                      等弹窗关掉、焦点交还之后再写（`shared/ui/dialog.tsx` 的 `onClosed`，M2-P5）
   features/documents/ 一个空间的文档列表、新建表格（建在这个空间）；行操作里的分享入口（按需加载分享对话框，M2-P5）
   features/sharing/   分享对话框（M2-P5）：授权列表、同事选择加人、调整与取消；平台的入口按需加载、编辑器页静态引用（按需加载会让平台首屏多拆出一个文件）
   features/shared-with-me/ "与我共享"页（M2-P5）：路由级按需加载；个人空间按所有者的人名呈现，不显示所在位置
   features/sheet-editor/ 编辑器页：载入、保存的状态机、页头与提示、快捷键与离开提示、会话；页头的分享入口，只凭授权打开时返回链接回"与我共享"（M2-P5）
   editor/             编辑器适配层（Univer 的一切，ADR-010）：档案、公式 Worker、身份、变更检测、公式收齐、IMAGE()、入口守卫、internal-api/；
                       只读守卫 read-only/（M2-P3，ADR-015）；testing/ 是 E2E 的探针，只在测试构建里（只能动态引入，lint，M2-P6）
-  shared/             请求层（api；M2-P6 加带 requestId 的新建共用的请求标识记账 request-ids）、界面组件（ui，改写后的 shadcn/ui：M2-P1 加弹窗、表格、标签、原生选择框；M2-P6 加人名 PersonName、句子里嵌元素的 Phrase、说明条 Notice、输入的文字说明 FieldProblem）与主题变量、界面文字（i18n：M2-P6 起按范围分文件，只在按需加载的页面用到的不进首屏）、
+  shared/             请求层（api；M2-P6 加带 requestId 的新建共用的请求标识记账 request-ids）、界面组件（ui，改写后的 shadcn/ui：M2-P1 加弹窗、表格、标签、原生选择框；M2-P6 加人名 PersonName、句子里嵌元素的 Phrase、说明条 Notice、输入的文字说明 FieldProblem；M2-P5 加读屏的状态区 StatusRegion、空间的呈现 SpaceLabel、按需加载失败的说明 ChunkLoadNotice）与主题变量、界面文字（i18n：M2-P6 起按范围分文件，只在按需加载的页面用到的不进首屏）、
                       小工具（lib：登录页与管理界面的地址、整页跳转、延时取值、会话复核、渲染之后移焦点等；M2-P6 加焦点兜底 useFocusRescue、页面标题 useDocumentTitle、输入校验的说明 validation、先取消在路上的请求再刷新、可以要求刷新失败时抛出的 refresh-queries，时限之后后台刷新成功时改回说法的 use-outcome-refresh）
 ```
 
