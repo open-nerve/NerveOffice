@@ -322,8 +322,9 @@ function ShareDialogContent({ documentId, documentTitle, currentUserId, refreshD
       destructive: true,
       run: async () => {
         await revokeGrant(documentId, grant.user.id)
-        setNotice(<Phrase parts={text.revoked(<PersonName person={grant.user} />)} />)
         await refresh.afterSuccess(true)
+        // 说明交给确认框，等它关掉、对话框不再被标为 aria-hidden、焦点交还之后才写进状态区：确认框开着时写进去的读屏多半不播报（M2-P5 复验 S1）
+        return () => setNotice(<Phrase parts={text.revoked(<PersonName person={grant.user} />)} />)
       },
       // 结果未知与被拒绝之后：授权列表、文档详情与"与我共享"一起刷新（共用的做法），说明按刷新的结果给
       refresh: refresh.afterFailure,

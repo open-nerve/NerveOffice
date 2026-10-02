@@ -4,6 +4,7 @@
 import type { SessionResponse, SpaceMember, SpaceMemberListResponse, SpaceRole, SpaceView } from '@nerve-office/contracts'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
+import { watchAnnouncement } from '../shared/testing/announcement.test-support.ts'
 import { apiError, installFakeApi, json, networkFailure } from '../shared/testing/fake-api.test-support.ts'
 import { personIn, plainName } from '../shared/testing/people.test-support.ts'
 import { documentsKey, foldersKey, noFolders, personalSpaceOf, spaceRoutes } from '../shared/testing/spaces.test-support.ts'
@@ -641,12 +642,17 @@ describe('US-M2-06 成员页', () => {
     remove.focus()
     fireEvent.click(remove)
     const dialog = await screen.findByRole('dialog', { name: `把 ${plainName('凯特', 'cat')} 移出这个空间？` })
+    const announced = watchAnnouncement('已经不在成员里了')
     fireEvent.click(within(dialog).getByRole('button', { name: '移出' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    // 说明里的人名同样用 PersonName（M2-P6 复核 M2）
-    const notice = statuses.find(status => status.textContent === '@cat 凯特 已经不在成员里了（可能已被别人移出），列表已刷新')
-    expect(notice).toBeDefined()
-    personIn(notice!, '凯特', 'cat')
+    // 说明等弹窗关掉之后才写进状态区（M2-P5 复验 S1）：写进去的那一刻页面不在 aria-hidden 之下、焦点已经交还。说明里的人名同样用 PersonName（M2-P6 复核 M2）
+    const notice = await waitFor(() => {
+      const found = statuses.find(status => status.textContent === '@cat 凯特 已经不在成员里了（可能已被别人移出），列表已刷新')
+      expect(found).toBeDefined()
+      return found!
+    })
+    expect(announced()).toEqual({ ariaHidden: false, focusReturned: true })
+    personIn(notice, '凯特', 'cat')
     expect(screen.queryByRole('button', { name: `移出 ${plainName('凯特', 'cat')}` })).toBeNull()
     expect(screen.getByRole('button', { name: `移出 ${plainName('艾米', 'amy')}` })).toBeInTheDocument()
     await waitFor(() => expect(document.activeElement).toBe(membersTitle()))

@@ -300,12 +300,12 @@ function MembersTable({ spaceId, list, selfId, focusTitle }: MembersTableProps) 
             throw error
           // 已经不是成员了（可能被别人移出，404）：先刷新成员列表，这一行随之消失（审查 B12）。列表取到了就关闭弹窗，在表格上方说明：
           // 弹窗留着的话，再点确认只会原样重发（复验）。列表取不到时照旧在弹窗里说明原因：空间本身看不到了，成员页随之显示
-          // "空间不存在"（B1），不另外说明；刷新失败时列表还是旧的，这一行也还在
+          // "空间不存在"（B1），不另外说明；刷新失败时列表还是旧的，这一行也还在。
+          // 说明交给确认的弹窗，等它关掉、页面不再被标为 aria-hidden、焦点交还之后才写进状态区（M2-P5 复验 S1）
           await refresh()
           if (queryClient.getQueryState(membersQueryOptions(spaceId).queryKey)?.status !== 'success')
             throw error
-          setNotice(self ? text.alreadyRemovedSelf : <Phrase parts={text.alreadyRemoved(<PersonName person={member.user} />)} />)
-          return
+          return () => setNotice(self ? text.alreadyRemovedSelf : <Phrase parts={text.alreadyRemoved(<PersonName person={member.user} />)} />)
         }
         if (!self) {
           await refresh()

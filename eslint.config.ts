@@ -396,11 +396,18 @@ const PERSON_NAME_CONCATENATION = [
 
 // 读屏用的状态区（role="status"）要一直在无障碍树里（M2-P5 审查 B 的 M1）：display: none 或 visibility: hidden 的状态区不在树里，
 // 内容出现时等于与容器一起插入，部分读屏软件不播报（M2-P2 复验）。空的时候只做视觉隐藏：用 shared/ui 的 StatusRegion。
-// lint 近似地拦下 role="status"（字面量）的元素上的几种写法：className 里出现 hidden 或 invisible——字符串、模板字符串、cn() 等调用的参数、
-// 条件表达式的两支都算，带变体前缀的（empty:hidden、md:hidden、!hidden）也算；hidden 属性；style 里 display: 'none' 或 visibility: 'hidden'。
-// 认不出、由审查保证的写法：类名经变量或函数转一手、role 不是字面量、由组件按 props 给出 role 的（例如 Alert 默认 role="status"，
-// <Alert className="hidden"> 认不出）。对 web 的生产代码生效，与人名的限制同在那几块
-const LIVE_STATUS_MESSAGE = '读屏用的状态区（role="status"）要一直在无障碍树里，空的时候不能 display: none（hidden、empty:hidden）或 invisible：用 shared/ui 的 StatusRegion（空的时候只做视觉隐藏，M2-P5 审查 B 的 M1）'
+// lint 近似地拦下 role="status"（字面量）的元素上的几种写法：
+// - className 里出现 hidden 或 invisible：字符串、模板字符串、cn() 等调用的参数、条件表达式的两支都算，带变体前缀的（empty:hidden、
+//   md:hidden、!hidden）也算；cn()、clsx() 的对象写法里键是 hidden 或 invisible 的（{ hidden: 条件 }，键写成字符串的已在上一条里）；
+// - hidden 属性；aria-hidden 属性（M2-P5 复验 G1：状态区自己带 aria-hidden，同样不在树里）；
+// - style 里 display: 'none' 或 visibility: 'hidden'。
+// 认不出、由审查保证的写法（M2-P5 复验 G1 的探针列出的漏报）：类名经变量、常量或函数转一手；style 里的值是条件表达式
+// （display: 条件 ? 'none' : 'block'）、键写成字符串（'display': 'none'）；Tailwind 的 collapse（visibility: collapse）；inert 属性；
+// 只有 aria-live、没有 role 的区域；role 不是字面量；由组件按 props 给出 role 的（例如 Alert 默认 role="status"，<Alert className="hidden">
+// 认不出）；StatusRegion 的 className 是有内容时的样式，写进 hidden（例如 "hidden md:block"）有内容时同样离开无障碍树。
+// 两种误报：hidden={false}、aria-hidden={false} 也拦下（等于没写，去掉即可）；className 里与字面量 'hidden' 做比较的
+// （例如 cn('x', state === 'hidden' && 'y')）也拦下，改写比较即可。对 web 的生产代码生效，与人名的限制同在那几块
+const LIVE_STATUS_MESSAGE = '读屏用的状态区（role="status"）要一直在无障碍树里，空的时候不能 display: none（hidden、empty:hidden）、invisible 或 aria-hidden：用 shared/ui 的 StatusRegion（空的时候只做视觉隐藏，M2-P5 审查 B 的 M1）'
 /** role 是字面量 "status" 的 JSX 元素（role="status" 与 role={'status'}） */
 const LIVE_STATUS_ELEMENT = 'JSXOpeningElement:has(> JSXAttribute[name.name=\'role\']:matches([value.value=\'status\'], [value.expression.value=\'status\']))'
 /** 类名里让元素离开无障碍树的那几个：hidden、invisible，可以带变体前缀（empty:、md:、group-hover/x:）与 Tailwind 的 ! */
@@ -408,7 +415,10 @@ const HIDING_CLASS = String.raw`/(?:^|\s)(?:\S+:)?!?(?:hidden|invisible)!?(?:\s|
 const LIVE_STATUS_HIDDEN = [
   { selector: `${LIVE_STATUS_ELEMENT} > JSXAttribute[name.name='className'] Literal[value=${HIDING_CLASS}]`, message: LIVE_STATUS_MESSAGE },
   { selector: `${LIVE_STATUS_ELEMENT} > JSXAttribute[name.name='className'] TemplateElement[value.raw=${HIDING_CLASS}]`, message: LIVE_STATUS_MESSAGE },
+  // cn()、clsx() 的对象写法里键是标识符的：{ hidden: 条件 }、{ invisible }（计算出来的键 [x] 不算）
+  { selector: `${LIVE_STATUS_ELEMENT} > JSXAttribute[name.name='className'] Property[computed=false][key.type='Identifier'][key.name=/^(?:hidden|invisible)$/]`, message: LIVE_STATUS_MESSAGE },
   { selector: `${LIVE_STATUS_ELEMENT} > JSXAttribute[name.name='hidden']`, message: LIVE_STATUS_MESSAGE },
+  { selector: `${LIVE_STATUS_ELEMENT} > JSXAttribute[name.name='aria-hidden']`, message: LIVE_STATUS_MESSAGE },
   {
     selector: `${LIVE_STATUS_ELEMENT} > JSXAttribute[name.name='style'] Property:matches([key.name='display'][value.value='none'], [key.name='visibility'][value.value='hidden'])`,
     message: LIVE_STATUS_MESSAGE,

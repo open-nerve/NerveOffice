@@ -8,6 +8,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { useRef, useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { SHARED_LIST_QUERY_KEY } from '../../shared/api/shared-list-key.ts'
+import { watchAnnouncement } from '../../shared/testing/announcement.test-support.ts'
 import { apiError, installFakeApi, inTurn, json, networkFailure } from '../../shared/testing/fake-api.test-support.ts'
 import { personIn, plainName, shownName } from '../../shared/testing/people.test-support.ts'
 import { ShareDialog } from './share-dialog.tsx'
@@ -281,9 +282,12 @@ describe('US-M2-10 分享对话框：调整与取消', () => {
     const confirm = await screen.findByRole('dialog', { name: `取消分享给 ${plainName('本', 'ben')}？` })
     // 确认框的说明不假定对方在这个空间里没有角色：取消的是这一条分享（M2-P5 审查 B 的 S4）
     expect(confirm).toHaveAccessibleDescription('取消之后，对方立即不能再凭这条分享访问这份文档，已经打开的页面也一样；他在这个空间里另有角色的，照样按那个角色访问。')
+    const announced = watchAnnouncement(`已取消分享给 ${shownName('本', 'ben')}`)
     fireEvent.click(within(confirm).getByRole('button', { name: '取消分享' }))
     await waitFor(() => expect(screen.queryByRole('dialog', { name: /^取消分享给/ })).toBeNull())
     expect(await within(dialog).findByText((_content, element) => element?.getAttribute('role') === 'status' && element.textContent === `已取消分享给 ${shownName('本', 'ben')}`)).toBeInTheDocument()
+    // 说明等确认框关掉、焦点交还之后才写进状态区（M2-P5 复验 S1）：确认框开着时 Radix 把对话框标为 aria-hidden，那时写进去的读屏多半不播报
+    expect(announced()).toEqual({ ariaHidden: false, focusReturned: true })
     expect(await within(dialog).findByText('还没有单独分享给任何人。')).toBeInTheDocument()
     expect(client.getQueryState(SHARED_LIST_QUERY_KEY)?.isInvalidated).toBe(true)
     await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole('heading', { name: '已分享给' })))

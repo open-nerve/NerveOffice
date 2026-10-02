@@ -1,5 +1,7 @@
 // 单独分享（M2-P5 设计 §3.5、§4 的 E2E 一行，US-M2-10）：
 // - 分享对话框：按名字搜同事（等过滤的响应回来再操作，support/list-search.ts）、给查看者与编辑者、调整、取消，每一步都核对库里的授权；
+//   做完一件事的说明写进一直在的状态区，取消之后的说明等确认框关掉、焦点交还之后才写（写进去的那一刻不在 aria-hidden 之下，
+//   support/status-writes.ts）；
 // - 对方在"与我共享"里看到并打开：查看者只读、编辑者能改；只凭授权的人看不到所在位置（团队空间里的文件夹），没有移动与删除的入口，
 //   编辑器页的返回链接回"与我共享"；个人空间按所有者的人名呈现；
 // - 取消之后立即不能访问：另一台设备上已经打开的页面存不进去，重新打开是"内容不存在"；
@@ -15,6 +17,7 @@ import { searchList } from '../../support/list-search.ts'
 import { plainName, shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { cellOf, EDITOR_TEST_TIMEOUT, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
+import { expectWrittenAfterClose, recordStatusWrites } from '../../support/status-writes.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -86,12 +89,15 @@ test.describe('US-M2-10 单独分享', () => {
     await expect(dialog.getByRole('listitem').filter({ hasText: shownName(reader) })).toHaveAttribute('aria-busy', 'false')
     await expect.poll(async () => grantsOn(documentId)).toEqual({ [reader.username]: 'editor', [writer.username]: 'editor' })
 
-    // 取消：先确认
+    // 取消：先确认。说明等确认框关掉之后才写进状态区（M2-P5 复验 S1）：确认框开着时 Radix 把它之外的内容（这个对话框）标为
+    // aria-hidden，那时写进去的读屏多半不播报，确认框关掉之后文字不再变化，也不会补播。记下状态区每一次内容变化的那一刻
+    await recordStatusWrites(notice)
     await dialog.getByRole('button', { name: `取消分享 ${plainName(writer)}`, exact: true }).click()
     const confirm = page.getByRole('dialog', { name: `取消分享给 ${plainName(writer)}？` })
     await confirm.getByRole('button', { name: '取消分享', exact: true }).click()
     await expect(confirm).toHaveCount(0)
-    await expect(dialog.getByRole('status').filter({ hasText: '已取消分享给' })).toHaveText(`已取消分享给 ${shownName(writer)}`)
+    await expect(dialog.getByRole('status').and(notice)).toHaveText(`已取消分享给 ${shownName(writer)}`)
+    await expectWrittenAfterClose(page, `已取消分享给 ${shownName(writer)}`)
     await expect(dialog.getByRole('combobox', { name: `${plainName(writer)} 的角色` })).toHaveCount(0)
     expect(await grantsOn(documentId)).toEqual({ [reader.username]: 'editor' })
 

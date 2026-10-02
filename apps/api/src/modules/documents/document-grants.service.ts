@@ -34,7 +34,8 @@ export type GrantChange
  * 事务、账户行、空间行、审计与拼响应都在那里；这里只做文档这一段，锁的全局顺序是"账户行 → 空间行 → 文档行"（ADR-007、ADR-014）。
  *
  * 能不能分享只经访问策略判断（requireDocumentContent 的 share：空间管理员或个人空间的所有者，结构性的操作只看空间角色），
- * 归档的空间里冻结，给冻结的说明（SHARING_FROZEN_MESSAGE）。文档行取 FOR UPDATE（lockById）：复制对源文档取 FOR SHARE、
+ * 归档的空间里冻结：冻结的说明（SHARING_FROZEN_MESSAGE）只给恢复之后能分享的人，空间里的编辑者、查看者照旧是"只有空间管理员能分享"，
+ * 只凭授权的人照旧是他自己那一句（访问策略的 documentDeniedMessage）。文档行取 FOR UPDATE（lockById）：复制对源文档取 FOR SHARE、
  * 保存对文档取 FOR UPDATE，都在锁下重新读这个人的授权，所以取消或降级提交之后的复制与保存一定看到变化（设计 §3.4(3)）
  */
 @Injectable()
@@ -48,7 +49,7 @@ export class DocumentGrantsService {
 
   /**
    * 这份文档的授权列表：要有分享的权限才看得到（被授权人列表本身是分享的一部分）；看不到与不存在都是 NOT_FOUND，
-   * 看得到却不能分享是 PERMISSION_DENIED（归档时给冻结的说明）
+   * 看得到却不能分享是 PERMISSION_DENIED（归档时冻结的说明只给恢复之后能分享的人，其余的人照旧是各自的说明）
    */
   async list(actor: Actor, documentId: string): Promise<DocumentGrantRecord[]> {
     await requireDocumentContent(this.policy, actor.userId, await this.documents.findById(documentId), ['share'])

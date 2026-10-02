@@ -514,7 +514,10 @@ describe('US-M1-11 lint 规则的自测：人名经 PersonName 显示，显示�
 describe('US-M1-11 lint 规则的自测：读屏用的状态区（role="status"）不能 display: none 或 invisible，空的时候用 StatusRegion（M2-P5 审查 B 的 M1）', () => {
   const LIVE_STATUS_MESSAGE = '读屏用的状态区（role="status"）要一直在无障碍树里'
   const FEATURE_FILE = 'apps/web/src/features/sharing/share-dialog.tsx'
-  /** 几种写法：字符串里的 hidden 与带变体前缀的、cn() 的参数里条件表达式的一支、模板字符串、hidden 属性、style、invisible 与 role={'status'} */
+  /**
+   * 几种写法：字符串里的 hidden 与带变体前缀的、cn() 的参数里条件表达式的一支、模板字符串、hidden 属性、style、invisible 与 role={'status'}；
+   * cn()、clsx() 的对象写法里键是标识符的 hidden、invisible（含简写），状态区自己带 aria-hidden（M2-P5 复验 G1）
+   */
   const HIDING = [
     'export function Notice({ text }: { text: string }) {\n  return <p role="status" className="text-sm empty:hidden">{text}</p>\n}\n',
     'export function Notice({ text }: { text: string }) {\n  return <p role="status" className="hidden">{text}</p>\n}\n',
@@ -523,6 +526,10 @@ describe('US-M1-11 lint 规则的自测：读屏用的状态区（role="status"�
     'export function Notice({ text }: { text?: string }) {\n  return <p role="status" hidden={text === undefined}>{text}</p>\n}\n',
     'export function Notice({ text }: { text: string }) {\n  return <p role="status" style={{ display: \'none\' }}>{text}</p>\n}\n',
     'export function Notice({ text }: { text: string }) {\n  return <span role={\'status\'} className="!invisible text-sm">{text}</span>\n}\n',
+    'declare function cn(...parts: unknown[]): string\nexport function Notice({ text }: { text?: string }) {\n  return <p role="status" className={cn(\'text-sm\', { hidden: text === undefined })}>{text}</p>\n}\n',
+    'declare function clsx(...parts: unknown[]): string\nexport function Notice({ text, invisible }: { text: string, invisible: boolean }) {\n  return <p role="status" className={clsx(\'text-sm\', { invisible })}>{text}</p>\n}\n',
+    'export function Notice({ text }: { text?: string }) {\n  return <p role="status" aria-hidden={text === undefined}>{text}</p>\n}\n',
+    'export function Notice({ text }: { text: string }) {\n  return <span role={\'status\'} aria-hidden="true">{text}</span>\n}\n',
   ]
 
   it.each([FEATURE_FILE, WEB_FILE, 'apps/web/src/shared/ui/dialog.tsx', PLATFORM_ENTRY])('%s', async (file) => {
@@ -533,15 +540,39 @@ describe('US-M1-11 lint 规则的自测：读屏用的状态区（role="status"�
     }
   })
 
-  it('照常的写法：视觉隐藏（sr-only）、overflow-hidden 这类不让元素离开无障碍树的类名、不是状态区的元素、共用的 StatusRegion；测试不受限', async () => {
+  it('照常的写法：视觉隐藏（sr-only）、overflow-hidden 这类不让元素离开无障碍树的类名、对象写法里别的键与计算出来的键、状态区里面的图标带 aria-hidden、不是状态区的元素、共用的 StatusRegion；测试不受限', async () => {
     const fine = [
       'export function Notice({ text }: { text: string }) {\n  return <p role="status" className="sr-only">{text}</p>\n}\n',
       'export function Notice({ text }: { text: string }) {\n  return <p role="status" className="overflow-hidden text-sm aria-hidden:opacity-0">{text}</p>\n}\n',
+      'declare function cn(...parts: unknown[]): string\ndeclare const key: string\nexport function Notice({ text }: { text?: string }) {\n  return <p role="status" className={cn({ hiddenText: text === undefined, \'overflow-hidden\': true, [key]: true })}>{text}</p>\n}\n',
+      'export function Notice({ text }: { text: string }) {\n  return <p role="status"><svg aria-hidden />{text}</p>\n}\n',
+      'declare function cn(...parts: unknown[]): string\nexport function Notice({ text, hidden }: { text: string, hidden: boolean }) {\n  return <p className={cn({ hidden })} aria-hidden={hidden}>{text}</p>\n}\n',
       'export function Notice({ text }: { text: string }) {\n  return <p className="hidden">{text}</p>\n}\n',
       'declare function StatusRegion(props: { className?: string, children?: string }): null\nexport function Notice({ text }: { text: string }) {\n  return <StatusRegion className="mt-2 text-sm">{text}</StatusRegion>\n}\n',
     ]
     for (const code of fine)
       expect((await lint(code, FEATURE_FILE)).messages.join('\n'), code).not.toContain(LIVE_STATUS_MESSAGE)
     expect((await lint(HIDING[0] ?? '', WEB_TEST_FILE)).messages.join('\n')).not.toContain(LIVE_STATUS_MESSAGE)
+  })
+
+  it('规则的说明里列出的漏报与误报（M2-P5 复验 G1）：漏报照旧认不出、误报照旧拦下——改了规则让哪一种变了，一并改说明', async () => {
+    const missed = [
+      'declare const HIDE: string\ndeclare const SHOW: string\nexport function Notice({ text }: { text?: string }) {\n  return <p role="status" className={text === undefined ? HIDE : SHOW}>{text}</p>\n}\n',
+      'export function Notice({ text }: { text?: string }) {\n  return <p role="status" style={{ display: text === undefined ? \'none\' : \'block\' }}>{text}</p>\n}\n',
+      'export function Notice({ text }: { text: string }) {\n  return <p role="status" style={{ \'display\': \'none\' }}>{text}</p>\n}\n',
+      'export function Notice({ text }: { text: string }) {\n  return <p role="status" className="collapse">{text}</p>\n}\n',
+      'export function Notice({ text }: { text: string }) {\n  return <p role="status" inert>{text}</p>\n}\n',
+      'export function Notice({ text }: { text: string }) {\n  return <div aria-live="polite" className="hidden">{text}</div>\n}\n',
+      'declare function StatusRegion(props: { className?: string, children?: string }): null\nexport function Notice({ text }: { text: string }) {\n  return <StatusRegion className="hidden md:block">{text}</StatusRegion>\n}\n',
+    ]
+    for (const code of missed)
+      expect((await lint(code, FEATURE_FILE)).messages.join('\n'), code).not.toContain(LIVE_STATUS_MESSAGE)
+    const falsePositives = [
+      'export function Notice({ text }: { text: string }) {\n  return <p role="status" hidden={false}>{text}</p>\n}\n',
+      'export function Notice({ text }: { text: string }) {\n  return <p role="status" aria-hidden={false}>{text}</p>\n}\n',
+      'declare function cn(...parts: unknown[]): string\nexport function Notice({ text }: { text: string }) {\n  return <p role="status" className={cn(\'x\', text === \'hidden\' && \'y\')}>{text}</p>\n}\n',
+    ]
+    for (const code of falsePositives)
+      expect((await lint(code, FEATURE_FILE)).messages.join('\n'), code).toContain(LIVE_STATUS_MESSAGE)
   })
 }, LINT_TIMEOUT)

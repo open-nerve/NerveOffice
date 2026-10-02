@@ -79,6 +79,9 @@ test.describe('US-M2-09 回收站', () => {
     await expect(dialog).toContainText('永久删除之后内容就找不回来了')
     await dialog.getByRole('button', { name: '永久删除', exact: true }).click()
     await expect(page.getByText('已永久删除「旧方案」')).toBeVisible()
+    // 说明条等确认框关掉之后才出现，随即接住焦点，读屏读得到（M2-P5 复验 S1）：原来在确认框里就出现，焦点随后交还给了页面的标题
+    await expect(dialog).toHaveCount(0)
+    await expect(page.getByRole('status').filter({ hasText: '已永久删除「旧方案」' })).toBeFocused()
     await expect(page.getByText('回收站里没有内容')).toBeVisible()
   })
 })

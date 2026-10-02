@@ -171,6 +171,11 @@ function TrashList({ space, query, headingRef }: { readonly space: SpaceView, re
     },
   })
 
+  /**
+   * 永久删除要先确认。做完之后的说明交给确认的弹窗，等它关掉、页面不再被标为 aria-hidden、焦点交还之后才出现（M2-P5 复验 S1）：
+   * 说明条随即接住焦点，读屏读得到。原来在 run 里就写：说明条出现时页面还在 aria-hidden 之下，弹窗随后交还焦点（那一行已经不在，
+   * 交给标题），焦点最后停在标题上，说明条没人读
+   */
   function confirmPurge(entry: TrashEntry): void {
     setConfirming({
       title: text.confirmPurge(entry.title),
@@ -191,14 +196,14 @@ function TrashList({ space, query, headingRef }: { readonly space: SpaceView, re
           }
           // 别人已经恢复或永久删除了它：目的已经达到，按"已经不在回收站里"说明，不当成失败；"列表已刷新"还是"没能刷新"
           // 看刷新的结果（第五批 G3）
-          setNotice({ message: text.gone(await refreshAfterGone(false)) })
-          return
+          const refreshed = await refreshAfterGone(false)
+          return () => setNotice({ message: text.gone(refreshed) })
         }
         await refresh()
-        setNotice({ message: text.purged(entry.title) })
+        return () => setNotice({ message: text.purged(entry.title) })
       },
       refresh: refreshAfterUnknown,
-      // 确认之后这一行就没了，打开弹窗的按钮随之消失：焦点交给页面的标题
+      // 确认之后这一行就没了，打开弹窗的按钮随之消失：焦点先交给页面的标题，随后出现的说明条再接住
       returnFocus: () => headingRef.current?.focus(),
     })
   }

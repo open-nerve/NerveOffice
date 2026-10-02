@@ -127,13 +127,16 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
   /**
    * 确认之后整批转移。结果未知时（M2-P6 复核第二批 G-3）可能已经转移了：确认的弹窗按 refresh 刷新列表、清掉已经不在的选择，
    * 说明"可能已经转移"——列表没能刷新（失败，或者到了时限还没回来）时说明列表还是之前的（第三批 G-a）；
-   * 之后得到 TRANSFER_CONFLICT 时说明多半就是那一次已经完成
+   * 之后得到 TRANSFER_CONFLICT 时说明多半就是那一次已经完成。
+   * 结果的说明与"有文档已经不在了"的说明都交给确认的弹窗，等它关掉、页面不再被标为 aria-hidden、焦点交还之后才写（M2-P5 复验 S1）；
+   * 打开确认的弹窗时清掉上一次的：同样的说法（例如又转移了 1 份到同一个空间）照样是一次变化，读屏照样播报
    */
   function submit(): void {
     if (blocked !== undefined || target === undefined)
       return
     const documentIds = [...selected]
     setConflict(false)
+    setDone(undefined)
     setPending({
       title: phraseText(text.confirm(documentIds.length, target.text)),
       description: text.confirmDescription,
@@ -143,8 +146,8 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
           const result = await transferDocuments(account.id, { documentIds, target: target.request })
           setSelected(new Set())
           setUnsure(false)
-          setDone(<Phrase parts={text.done(result.transferred, target.shown)} />)
           await refreshQueries(queryClient, [documentsQuery.queryKey], { throwOnError: false })
+          return () => setDone(<Phrase parts={text.done(result.transferred, target.shown)} />)
         }
         catch (error) {
           // 结果未知：确认的弹窗随即按 refresh 刷新、说明可能已经转移
@@ -155,10 +158,8 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
           const refreshed = await refreshAfterFailure()
           // 有文档已经不在了：列表刷新之后关闭弹窗，在转移按钮旁说明，按新的列表重新选择。弹窗留着的话，再点确认只会拿着
           // 同样的文档原样重发（复验）。其他失败（目标已归档等）与刷新本身失败时，弹窗留着说明原因
-          if (refreshed && isTransferConflict(error)) {
-            setConflict(true)
-            return
-          }
+          if (refreshed && isTransferConflict(error))
+            return () => setConflict(true)
           throw error
         }
       },

@@ -1,10 +1,18 @@
 import type { MutationMeta } from '@tanstack/react-query'
 import { useMutation } from '@tanstack/react-query'
+import { useRef } from 'react'
 import { writeFailureText } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../shared/ui/dialog.tsx'
 import { Alert, AlertDescription, Button } from '../../shared/ui/index.ts'
+
+/**
+ * 确认的操作成功之后、弹窗关掉之后才做的事：往页面的状态区写说明、显示说明条这一类（M2-P5 复验 S1）。
+ * 弹窗开着时 Radix 把弹窗之外的内容都标为 aria-hidden：这时写进状态区的说明，写进去的那一刻在 aria-hidden 之下，读屏多半不播报；
+ * 弹窗关掉之后文字不再变化，也不会补播。所以 run 不直接写，把要做的交回来，由弹窗在关掉、aria-hidden 解除、焦点交还之后执行
+ */
+export type AfterConfirmed = () => void
 
 export interface PendingConfirmation {
   readonly title: string
@@ -12,8 +20,12 @@ export interface PendingConfirmation {
   readonly confirmLabel: string
   /** 危险的操作（停用、取消管理员、作废）用醒目的按钮 */
   readonly destructive?: boolean
-  /** 确认之后执行；失败时弹窗留着，显示原因 */
-  readonly run: () => Promise<void>
+  /**
+   * 确认之后执行；失败时弹窗留着，显示原因。成功之后要告诉用户的（往页面的状态区写说明、显示说明条、在按钮旁说明）不在这里直接写：
+   * 作为返回值交回来（AfterConfirmed），弹窗关掉、aria-hidden 解除、焦点交还之后才执行（M2-P5 复验 S1）。
+   * 失败的说明照旧在弹窗里（role="alert"）
+   */
+  readonly run: () => Promise<AfterConfirmed | void>
   /**
    * 这个操作改变的是哪些查询显示的状态，重新请求它们（M2-P6 复核第二批 G-2）：结果未知时弹窗先调用它（操作可能已经生效），
    * 页面随之是服务端现在的状态，再说明"可能已经生效"。必填：每个确认的操作都要说清楚，免得哪一处漏了、表格停在旧的状态。
@@ -54,11 +66,20 @@ interface ConfirmDialogProps {
  * refreshAfter 认出的失败（上一次多半已经生效）同样这样刷新（第四批）。
  * 执行经请求缓存：管理界面标明只给系统管理员，被拒绝时由全局处理重新确认会话，系统角色已被取消就切到无权限（审查 B4）。
  * 关闭之后焦点回到打开它的按钮；按钮已经不在了，交给 returnFocus，焦点不落到 body（审查 B9）。
+ * 成功之后要告诉用户的由 run 交回（AfterConfirmed），等弹窗关掉、aria-hidden 解除、焦点交还之后才执行（M2-P5 复验 S1）：
+ * 取消分享、转移、移出成员、永久删除这些流程都经这里，一处做完。
  * 带着 Radix Dialog：只由按需加载的页面引用，不进首屏（ADR-008）。
  */
 export function ConfirmDialog({ pending, onClose, meta }: ConfirmDialogProps) {
   /** 上一次失败是结果未知、而且页面已经刷新好了：说明据此说"已刷新"还是"没能刷新"（第三批 G-a）；晚到的刷新随后改过来（第五批 G4） */
   const { refreshed, refreshAfterFailure } = useOutcomeRefresh()
+  /** run 交回的、等弹窗关掉之后才做的事（M2-P5 复验 S1）：弹窗关掉时（closed）执行并清掉 */
+  const afterClosedRef = useRef<AfterConfirmed>(undefined)
+  /**
+   * 确认之后弹窗已经关掉了：run 自己先关掉了弹窗（例如换成签发链接的弹窗）、之后才成功时，交回的事随即执行，
+   * 不留到下一次关掉（那时执行就是在别的弹窗关掉时说上一次的事）。每次确认时重新记为没关
+   */
+  const closedRef = useRef(false)
   const mutation = useMutation({
     mutationFn: async (confirmation: PendingConfirmation) => confirmation.run(),
     // 刷新完成（或者到了时限）之后才显示失败：说明与页面上的状态对得上（第二批 G-2，第三批 S-a）
@@ -76,7 +97,26 @@ export function ConfirmDialog({ pending, onClose, meta }: ConfirmDialogProps) {
   function confirm(): void {
     if (pending === undefined || mutation.isPending)
       return
-    mutation.mutate(pending, { onSuccess: close })
+    closedRef.current = false
+    mutation.mutate(pending, {
+      onSuccess: (afterConfirmed) => {
+        close()
+        if (typeof afterConfirmed !== 'function')
+          return
+        if (closedRef.current)
+          afterConfirmed()
+        else
+          afterClosedRef.current = afterConfirmed
+      },
+    })
+  }
+
+  /** 弹窗关掉、aria-hidden 解除、焦点交还之后（DialogContent 的 onClosed）：执行 run 交回的事 */
+  function closed(): void {
+    closedRef.current = true
+    const afterConfirmed = afterClosedRef.current
+    afterClosedRef.current = undefined
+    afterConfirmed?.()
   }
 
   function changeOpen(open: boolean): void {
@@ -87,7 +127,7 @@ export function ConfirmDialog({ pending, onClose, meta }: ConfirmDialogProps) {
   return (
     <Dialog open={pending !== undefined} onOpenChange={changeOpen}>
       {pending !== undefined && (
-        <DialogContent fallbackFocus={pending.returnFocus}>
+        <DialogContent fallbackFocus={pending.returnFocus} onClosed={closed}>
           <DialogHeader>
             <DialogTitle>{pending.title}</DialogTitle>
             <DialogDescription>{pending.description}</DialogDescription>

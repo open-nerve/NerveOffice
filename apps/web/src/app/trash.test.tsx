@@ -4,6 +4,7 @@ import type { SessionResponse, TrashEntry } from '@nerve-office/contracts'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { formatDateTime } from '../shared/lib/format.ts'
+import { watchAnnouncement } from '../shared/testing/announcement.test-support.ts'
 import { apiError, installFakeApi, json, networkFailure } from '../shared/testing/fake-api.test-support.ts'
 import { personIn } from '../shared/testing/people.test-support.ts'
 import { personalSpaceOf, spaceRoutes } from '../shared/testing/spaces.test-support.ts'
@@ -129,11 +130,14 @@ describe('US-M2-09 回收站', () => {
     fireEvent.click(await screen.findByRole('button', { name: '永久删除 方案' }))
     const dialog = await screen.findByRole('dialog', { name: '永久删除「方案」？' })
     expect(within(dialog).getByText('永久删除之后内容就找不回来了，里面的文档与它们的历史一并清除。')).toBeInTheDocument()
+    const purged = watchAnnouncement('已永久删除「方案」')
     fireEvent.click(within(dialog).getByRole('button', { name: '永久删除' }))
     expect(await screen.findByText('已永久删除「方案」')).toBeInTheDocument()
     expect(api.requests.some(request => request.key === `DELETE /api/trash/${ENTRY_ID}`)).toBe(true)
-    // 打开弹窗的那一行已经不在：焦点交给页面的标题，不落到 body
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('heading', { name: '我的空间 的回收站' })))
+    // 说明条等弹窗关掉之后才出现（M2-P5 复验 S1）：出现的那一刻页面不在 aria-hidden 之下、焦点已经交还。打开弹窗的那一行已经不在：
+    // 弹窗把焦点交给页面的标题，随后出现的说明条接住焦点，读屏读得到；焦点不落到 body
+    expect(purged()).toEqual({ ariaHidden: false, focusReturned: true })
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByText('已永久删除「方案」').closest('[role="status"]')))
   })
 
   it('别人已经动过它（404）：列表刷新，并说明这一条已经不在回收站里了', async () => {
@@ -249,9 +253,14 @@ describe('US-M2-09 回收站：没能完成时（M2-P6 复核 S1–S5）', () =>
     renderApp(TRASH_PATH)
     fireEvent.click(await screen.findByRole('button', { name: '永久删除 方案' }))
     const dialog = await screen.findByRole('dialog', { name: '永久删除「方案」？' })
+    const gone = watchAnnouncement('这一条已经不在回收站里了')
     fireEvent.click(within(dialog).getByRole('button', { name: '永久删除' }))
     expect(await screen.findByText('这一条已经不在回收站里了（可能已被别人恢复或永久删除），列表已刷新')).toBeInTheDocument()
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    // 同样等弹窗关掉、焦点交还之后才出现（M2-P5 复验 S1），随即接住焦点。说明条在自己的 effect 里接焦点：与关掉同一次渲染出现时，
+    // 那一刻焦点已经在它身上，看不出早晚；弹窗随后交还焦点（那一行已经不在，交给标题），焦点最后停在标题上——所以看最后的焦点
+    expect(gone()).toEqual({ ariaHidden: false, focusReturned: true })
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByText('这一条已经不在回收站里了（可能已被别人恢复或永久删除），列表已刷新').closest('[role="status"]')))
     expect(screen.getByText('回收站里没有内容')).toBeInTheDocument()
   })
 
