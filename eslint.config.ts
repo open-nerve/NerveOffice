@@ -401,12 +401,16 @@ const PERSON_NAME_CONCATENATION = [
 //   md:hidden、!hidden）也算；cn()、clsx() 的对象写法里键是 hidden 或 invisible 的（{ hidden: 条件 }，键写成字符串的已在上一条里）；
 // - hidden 属性；aria-hidden 属性（M2-P5 复验 G1：状态区自己带 aria-hidden，同样不在树里）；
 // - style 里 display: 'none' 或 visibility: 'hidden'。
-// 认不出、由审查保证的写法（M2-P5 复验 G1 的探针列出的漏报）：类名经变量、常量或函数转一手；style 里的值是条件表达式
-// （display: 条件 ? 'none' : 'block'）、键写成字符串（'display': 'none'）；Tailwind 的 collapse（visibility: collapse）；inert 属性；
-// 只有 aria-live、没有 role 的区域；role 不是字面量；由组件按 props 给出 role 的（例如 Alert 默认 role="status"，<Alert className="hidden">
-// 认不出）；StatusRegion 的 className 是有内容时的样式，写进 hidden（例如 "hidden md:block"）有内容时同样离开无障碍树。
-// 两种误报：hidden={false}、aria-hidden={false} 也拦下（等于没写，去掉即可）；className 里与字面量 'hidden' 做比较的
-// （例如 cn('x', state === 'hidden' && 'y')）也拦下，改写比较即可。对 web 的生产代码生效，与人名的限制同在那几块
+// 认不出、由审查保证的写法（M2-P5 复验 G1 的探针列出的漏报，复验第二轮 G5 补上最后一段）：类名经变量、常量或函数转一手；
+// style 里的值是条件表达式（display: 条件 ? 'none' : 'block'）、键写成字符串（'display': 'none'）；Tailwind 的 collapse（visibility: collapse）；
+// inert 属性；只有 aria-live、没有 role 的区域；role 不是字面量；由组件按 props 给出 role 的（例如 Alert 默认 role="status"，
+// <Alert className="hidden"> 认不出）；StatusRegion 的 className 是有内容时的样式，写进 hidden（例如 "hidden md:block"）有内容时同样离开无障碍树；
+// 只看元素自己，祖先带 hidden 类、hidden 属性或 aria-hidden 的认不出；隐含 status 角色的 <output>；style 的值带类型断言
+// （display: 'none' as const）、style 里 visibility: 'collapse'；展开的属性（{...{ hidden: true }}）。
+// 会误报的（元素其实还在无障碍树里）：hidden={false}、aria-hidden={false}、aria-hidden="false" 也拦下（等于没写，去掉即可）；
+// className 里与字面量 'hidden' 做比较的（例如 cn('x', state === 'hidden' && 'y')）也拦下，改写比较即可；className 里任何名叫 hidden 或
+// invisible 的属性都拦下，包括对象写法里值是 false 的（{ hidden: false }）、cva 一类的变体参数（variants({ hidden: true })），
+// 改名或去掉即可（复验第二轮 G5）。对 web 的生产代码生效，与人名的限制同在那几块
 const LIVE_STATUS_MESSAGE = '读屏用的状态区（role="status"）要一直在无障碍树里，空的时候不能 display: none（hidden、empty:hidden）、invisible 或 aria-hidden：用 shared/ui 的 StatusRegion（空的时候只做视觉隐藏，M2-P5 审查 B 的 M1）'
 /** role 是字面量 "status" 的 JSX 元素（role="status" 与 role={'status'}） */
 const LIVE_STATUS_ELEMENT = 'JSXOpeningElement:has(> JSXAttribute[name.name=\'role\']:matches([value.value=\'status\'], [value.expression.value=\'status\']))'

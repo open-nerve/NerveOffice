@@ -6,7 +6,7 @@ import { expect, test } from '../../support/fixtures.ts'
 import { searchList } from '../../support/list-search.ts'
 import { shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { expectWrittenAfterClose, recordStatusWrites } from '../../support/status-writes.ts'
+import { expectWrittenAfterClose, recordStatusWrites, statusWrites } from '../../support/status-writes.ts'
 
 test.describe('US-M2-04 停用者文档的转移', () => {
   test('停用之后转移到团队空间：只看得到标题；转移之后空间的成员能打开', async ({ page, anotherDevice }) => {
@@ -51,6 +51,21 @@ test.describe('US-M2-04 停用者文档的转移', () => {
     await expectWrittenAfterClose(page, `已把 1 份文档转移到 ${space.name}`)
     await expect(list.getByText('交接清单')).toHaveCount(0)
     await expect(list.getByText('客户名单')).toBeVisible()
+
+    // 再把"客户名单"转移到同一个空间：得到同样的说法（M2-P5 复验第二轮 G2）。打开确认框时清掉上一次的说明，确认之后再写一次——
+    // 同样的文字照样是状态区的一次变化，读屏照样播报；不清掉的话，关掉之后状态区没有任何变化
+    await page.getByLabel('选择 客户名单').check()
+    await page.getByRole('button', { name: '转移', exact: true }).click()
+    const again = page.getByRole('dialog', { name: `把 1 份文档转移到 ${space.name}？` })
+    await expect(again).toBeVisible()
+    // 确认框开着时状态区在 aria-hidden 之下，按角色找不到：直接看页面上的状态区，哪一个里也没有上一次的说明了
+    await expect(page.locator('[data-slot="status-region"]').filter({ hasText: '已把' })).toHaveCount(0)
+    await again.getByRole('button', { name: '转移', exact: true }).click()
+    await expect(again).toHaveCount(0)
+    await expect(done).toHaveText(`已把 1 份文档转移到 ${space.name}`)
+    expect(await statusWrites(page, `已把 1 份文档转移到 ${space.name}`)).toHaveLength(2)
+    await expectWrittenAfterClose(page, `已把 1 份文档转移到 ${space.name}`)
+    await expect(list.getByText('客户名单')).toHaveCount(0)
 
     await loginThroughApi(anotherDevice, receiver)
     await anotherDevice.goto(`/spaces/${space.id}`)

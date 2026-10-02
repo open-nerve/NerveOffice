@@ -1,6 +1,7 @@
-// 危险操作的确认：先说清楚后果再执行；进行中不能重复提交、不能关闭；失败时弹窗留着说明原因；
-// 经请求缓存执行，管理界面标明只给系统管理员（审查 B4）；关闭之后焦点回到打开它的按钮，按钮不在了交给页面（审查 B9）；
-// 成功之后要告诉用户的由 run 交回，弹窗关掉、aria-hidden 解除、焦点交还之后才写进页面的状态区（M2-P5 复验 S1）。
+// 危险操作的确认：先说清楚后果再执行；进行中不能重复提交、不能关闭（点确认之后、重新渲染之前也一样，M2-P5 复验第二轮 G3）；
+// 失败时弹窗留着说明原因；经请求缓存执行，管理界面标明只给系统管理员（审查 B4）；关闭之后焦点回到打开它的按钮，按钮不在了交给页面（审查 B9）；
+// 成功之后要告诉用户的由 run 交回，弹窗关掉、aria-hidden 解除、焦点交还之后才写进页面的状态区（M2-P5 复验 S1），
+// 执行过一次就清掉、每次确认都重新等关掉（复验第二轮 S1）。
 import type { ReactNode } from 'react'
 import type { AfterConfirmed, PendingConfirmation } from './confirm-dialog.tsx'
 import { MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -44,7 +45,10 @@ function renderPage(pending: PendingConfirmation, onMutationError?: (meta: unkno
   renderInClient(<Page pending={pending} />, onMutationError)
 }
 
-/** 页面交给确认的东西：往页面的状态区写说明（setNotice）、页面自己关掉弹窗（close，例如换成签发链接的弹窗） */
+/**
+ * 页面交给确认的东西：往页面的状态区写说明（setNotice）、页面自己关掉弹窗（close：run 自己先关掉确认的弹窗，没有换成别的模态弹窗；
+ * 换成别的模态弹窗的 run 不交回说明，见 PendingConfirmation.run，M2-P5 复验第二轮 S2）
+ */
 interface NoticePageControls {
   readonly setNotice: (notice: string) => void
   readonly close: () => void
@@ -123,6 +127,61 @@ describe('ConfirmDialog', () => {
     expect(run).toHaveBeenCalledTimes(1)
     finish()
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  // 点确认之后，请求缓存的通知要等一个 setTimeout 才让弹窗重新渲染成"正在处理…"（M2-P5 复验第二轮 G3）。下面两条在同一个任务里接连派发，
+  // 中间不等重新渲染：前提是按钮还是原来的样子（"停用"、没有标为不可用），读的若是上一次渲染的 mutation.isPending，这时还是没在进行
+  it('点确认之后、重新渲染之前（同一个任务里）按 Esc、点取消：弹窗照样关不掉；完成之后才关掉，交回的事执行一次（复验第二轮 G3）', async () => {
+    let finish: () => void = () => {}
+    const written: string[] = []
+    const make = ({ setNotice }: NoticePageControls): PendingConfirmation => confirmation({
+      run: async () => {
+        await new Promise<void>((resolve) => {
+          finish = resolve
+        })
+        return () => {
+          written.push('已停用 艾米')
+          setNotice('已停用 艾米')
+        }
+      },
+    })
+    renderInClient(<NoticePage make={make} />)
+    const region = screen.getByRole('status')
+    const writes = recordWrites(region)
+    const dialog = await open('打开')
+    fireEvent.click(within(dialog).getByRole('button', { name: '停用' }))
+    expect(within(dialog).getByRole('button', { name: '停用' })).toHaveAttribute('aria-disabled', 'false')
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
+    // 重新渲染之后：还是这个弹窗，在进行中
+    expect(await within(dialog).findByRole('button', { name: '正在处理…' })).toBeInTheDocument()
+    expect(screen.getByRole('dialog')).toBe(dialog)
+    await act(async () => {
+      finish()
+    })
+    await waitFor(() => expect(region).toHaveTextContent('已停用 艾米'))
+    expect(written).toEqual(['已停用 艾米'])
+    expect(writes).toEqual([{ text: '已停用 艾米', ariaHidden: false, dialogOpen: false, focused: '打开' }])
+  })
+
+  it('点确认之后、重新渲染之前（同一个任务里）再点一次确认：只执行一次（复验第二轮 G3）', async () => {
+    let finish: () => void = () => {}
+    const run = vi.fn(async () => new Promise<void>((resolve) => {
+      finish = resolve
+    }))
+    renderPage(confirmation({ run }))
+    const dialog = await open()
+    const confirmButton = within(dialog).getByRole('button', { name: '停用' })
+    fireEvent.click(confirmButton)
+    expect(confirmButton).toHaveAttribute('aria-disabled', 'false')
+    fireEvent.click(confirmButton)
+    expect(await within(dialog).findByRole('button', { name: '正在处理…' })).toBeInTheDocument()
+    expect(run).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      finish()
+    })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(run).toHaveBeenCalledTimes(1)
   })
 
   it('失败：按错误码说明原因，弹窗留着；取消之后再打开，上一次的错误不留下', async () => {
@@ -392,7 +451,73 @@ describe('ConfirmDialog：成功之后的说明等弹窗关掉之后才写（M2-
     expect(screen.getByRole('status')).toBe(region)
   })
 
-  it('run 自己先关掉了弹窗（例如换成签发链接的弹窗）、之后才成功：交回的事随即执行，不留到下一次关掉', async () => {
+  it('交回的事在关掉时执行过一次就清掉：再打开、点取消或按 Esc，不再执行；再确认一次，同样在关掉、焦点交还之后执行一次（复验第二轮 S1）', async () => {
+    let attempts = 0
+    const written: string[] = []
+    const make = ({ setNotice }: NoticePageControls): PendingConfirmation => confirmation({
+      run: async () => {
+        attempts += 1
+        const notice = `第 ${attempts} 次：已停用 艾米`
+        return () => {
+          written.push(notice)
+          setNotice(notice)
+        }
+      },
+    })
+    renderInClient(<NoticePage make={make} />)
+    const region = screen.getByRole('status')
+    const writes = recordWrites(region)
+    const opener = screen.getByRole('button', { name: '打开' })
+    fireEvent.click(within(await open('打开')).getByRole('button', { name: '停用' }))
+    await waitFor(() => expect(region).toHaveTextContent('第 1 次：已停用 艾米'))
+    // 再打开、不确认就关掉：上一次交回的事已经执行过，关掉时不再执行
+    const dismissals = [
+      (dialog: HTMLElement) => fireEvent.click(within(dialog).getByRole('button', { name: '取消' })),
+      (dialog: HTMLElement) => fireEvent.keyDown(dialog, { key: 'Escape' }),
+    ]
+    for (const dismiss of dismissals) {
+      dismiss(await open('打开'))
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+      await waitFor(() => expect(document.activeElement).toBe(opener))
+    }
+    expect(written).toEqual(['第 1 次：已停用 艾米'])
+    fireEvent.click(within(await open('打开')).getByRole('button', { name: '停用' }))
+    await waitFor(() => expect(region).toHaveTextContent('第 2 次：已停用 艾米'))
+    expect(written).toEqual(['第 1 次：已停用 艾米', '第 2 次：已停用 艾米'])
+    expect(writes).toEqual(['第 1 次：已停用 艾米', '第 2 次：已停用 艾米'].map(text => ({ text, ariaHidden: false, dialogOpen: false, focused: '打开' })))
+  })
+
+  it('先关掉过一次（点取消；或者失败之后点取消），再打开、确认成功：写进去的那一刻弹窗已经不在、状态区不在 aria-hidden 之下、焦点已经交还（复验第二轮 S1）', async () => {
+    for (const before of ['取消', '失败之后取消'] as const) {
+      let attempts = 0
+      const make = ({ setNotice }: NoticePageControls): PendingConfirmation => confirmation({
+        run: async () => {
+          attempts += 1
+          if (before === '失败之后取消' && attempts === 1)
+            throw new ApiError(409, 'LAST_ADMIN', 'x')
+          return () => setNotice('已停用 艾米')
+        },
+      })
+      renderInClient(<NoticePage make={make} />)
+      const region = screen.getByRole('status')
+      const writes = recordWrites(region)
+      const opener = screen.getByRole('button', { name: '打开' })
+      const first = await open('打开')
+      if (before === '失败之后取消') {
+        fireEvent.click(within(first).getByRole('button', { name: '停用' }))
+        expect(await within(first).findByRole('alert')).toHaveTextContent('至少要保留一个有效的系统管理员')
+      }
+      fireEvent.click(within(first).getByRole('button', { name: '取消' }))
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+      await waitFor(() => expect(document.activeElement).toBe(opener))
+      fireEvent.click(within(await open('打开')).getByRole('button', { name: '停用' }))
+      await waitFor(() => expect(region).toHaveTextContent('已停用 艾米'))
+      expect(writes, before).toEqual([{ text: '已停用 艾米', ariaHidden: false, dialogOpen: false, focused: '打开' }])
+      cleanup()
+    }
+  })
+
+  it('run 自己先关掉了弹窗（没有换成别的模态弹窗）、之后才成功：交回的事随即执行，不留到下一次关掉', async () => {
     let finish: () => void = () => {}
     const written: string[] = []
     const make = ({ setNotice, close }: NoticePageControls): PendingConfirmation => confirmation({

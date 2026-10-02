@@ -6,18 +6,18 @@
 //   编辑器页的返回链接回"与我共享"；个人空间按所有者的人名呈现；
 // - 取消之后立即不能访问：另一台设备上已经打开的页面存不进去，重新打开是"内容不存在"；
 // - 编辑者看不到分享入口（行操作与编辑器的页头），空间管理员看得到（对照）；
-// - 编辑器页头的分享：对话框里输入不改动表格；
+// - 编辑器页头的分享：对话框里输入不改动表格；对话框开着时保存完成或失败，页头的保存状态写进结果的那一刻不在 aria-hidden 之下；
 // - 对话框的代码没能下载下来：入口旁边说明，可以重试。
 // 人名按 support/people.ts 的写法断言（登录名在前）。US-M2-10 在 S4 改为 active（tests/stories.json）；
 // 越权访问的关键路径（猜地址、取消分享与移出空间、停用之后的访问）在 security/unauthorized-access.spec.ts（US-M2-14）。
-import type { Locator, Page } from '@playwright/test'
+import type { Locator, Page, Route } from '@playwright/test'
 import { createDocument, createDocumentIn, createFolderIn, createTeamSpace, createUser, grantDocument, grantsOn } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { searchList } from '../../support/list-search.ts'
 import { plainName, shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { cellOf, EDITOR_TEST_TIMEOUT, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
-import { expectWrittenAfterClose, recordStatusWrites } from '../../support/status-writes.ts'
+import { expectWrittenAfterClose, recordStatusWrites, statusWrites } from '../../support/status-writes.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -237,7 +237,7 @@ test.describe('US-M2-10 单独分享', () => {
     await dialog.getByRole('button', { name: '关闭', exact: true }).click()
     await expect(dialog).toHaveCount(0)
     await expect(page.locator('#editor-chrome').getByRole('button', { name: '分享', exact: true })).toBeFocused()
-    // 对话框里的输入没有进表格：没有未保存的修改（对话框打开时页面的其余部分对读屏隐藏，关掉之后再看页头的保存状态）
+    // 对话框里的输入没有进表格：关掉之后，页头的保存状态仍是没有未保存的修改
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     // 只看保存状态挡不住"输入落进了单元格、还在编辑没提交"（M2-P5 审查 B 的 G4）：点别的单元格写一个对照的值、保存——
     // 单元格里还在编辑的内容随选区移走一起提交，存下来的内容里只有这个对照的值，没有对话框里键入的登录名
@@ -247,6 +247,58 @@ test.describe('US-M2-10 单独分享', () => {
     expect(cellOf(saved.snapshot, 'C3')?.v).toBe('对照')
     expect(saved.text).not.toContain(colleague.username)
   })
+
+  // 保存在后台进行，分享对话框（模态）开着时也会完成或失败（M2-P5 复验第二轮 G1）：Radix 打开模态弹窗时把它之外的内容都标为 aria-hidden，
+  // 只跳过那一刻已经在的、显式写了 aria-live 的元素。页头的保存状态显式写了它：结果写进去的那一刻不在 aria-hidden 之下，读屏照样播报。
+  // 这时焦点在对话框里是对的（结果不是对话框里的操作引起的），只看写进去的那一刻在不在无障碍树里（support/status-writes.ts 的 hidden）。
+  // 被拦住的保存放行时（respond）：完成照常发出；失败回 502（代理出错），另有一条详细说明的提示条（role="alert"）随失败插入
+  const BACKGROUND_SAVES = [
+    { outcome: '完成', user: 'sh-modal-saved', respond: async (route: Route) => route.continue(), status: '已保存到云端', failureNotices: 0 },
+    { outcome: '失败', user: 'sh-modal-failed', respond: async (route: Route) => route.fulfill({ status: 502, contentType: 'text/html', body: 'bad gateway' }), status: '保存失败', failureNotices: 1 },
+  ] as const
+  for (const save of BACKGROUND_SAVES) {
+    test(`编辑器页开着分享对话框时保存${save.outcome}：页头的保存状态写进结果的那一刻不在 aria-hidden 之下；保存失败的详细说明在对话框关掉之后读得到`, async ({ page }) => {
+      const owner = await createUser(save.user, '所有者')
+      const title = `开着对话框保存${save.outcome}的表`
+      const documentId = await createDocument(owner, title)
+      await loginThroughApi(page, owner)
+      await openEditor(page, documentId, 'steady')
+      await expect(saveStatus(page)).toHaveText('已保存到云端')
+      await typeInCell(page, 'B2', '后台保存')
+      await expect(saveStatus(page)).toHaveText('有未保存的修改')
+      // 拦住保存的请求，等分享对话框打开之后再放行
+      let release: () => void = () => {}
+      const released = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      await page.route('**/api/documents/*/content?*', async (route) => {
+        if (route.request().method() !== 'PUT') {
+          await route.continue()
+          return
+        }
+        await released
+        await save.respond(route)
+      })
+      await recordStatusWrites(saveStatus(page))
+      await saveButton(page).click()
+      await expect(saveStatus(page)).toHaveText('保存中…')
+      await page.locator('#editor-chrome').getByRole('button', { name: '分享', exact: true }).click()
+      const dialog = page.getByRole('dialog', { name: `分享「${title}」` })
+      await expect(dialog.getByText('还没有单独分享给任何人。')).toBeVisible()
+      // 前提：对话框开着，页头的其余部分已经对读屏隐藏（保存按钮按角色找不到）
+      await expect(saveButton(page)).toHaveCount(0)
+      release()
+      await expect.poll(async () => (await statusWrites(page, save.status)).length).toBe(1)
+      // 写进去的那一刻对话框还开着，保存状态不在 aria-hidden、inert、hidden 之下；对话框开着时按角色读得到
+      await expect(dialog).toBeVisible()
+      expect((await statusWrites(page, save.status)).map(write => write.hidden)).toEqual([false])
+      await expect(saveStatus(page)).toHaveText(save.status)
+      await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+      await expect(dialog).toHaveCount(0)
+      // 保存失败的详细说明（提示条，随失败插入）：对话框开着时在 aria-hidden 之下，关掉之后读得到
+      await expect(page.getByRole('alert').filter({ hasText: '保存失败：' })).toHaveCount(save.failureNotices)
+    })
+  }
 
   test('分享对话框的代码没能下载下来：入口旁边说明没能加载、可以重试（整页重新加载）；代码取得到之后照常打开', async ({ page }) => {
     const owner = await createUser('sh-chunk-owner', '所有者')

@@ -1,6 +1,7 @@
 // 摆世界共用的那个连接（matrix-world.ts 的 seedingConnection）的两种误用（M2-P5 审查 B 的 G2）：
-// - 回调里嵌套调用 query（复验 G5）：它排在这个回调之后，回调又在等它，原来两边互相等待、一直挂到用例超时，看不出原因。
-//   现在嵌套的调用立即失败、写明原因，外层的回调收到这个失败；之后的调用照常。
+// - 回调还没做完时又调 query（复验 G5）：它排在这个回调之后，回调要是等它，原来两边互相等待、一直挂到用例超时，看不出原因。
+//   现在这样的调用立即失败、写明原因（没有 await 的也一样：分不出回调会不会等它），外层的回调收到这个失败；之后的调用照常。
+//   回调里排下、回调做完之后才执行的调用（定时器、没有 await 的异步操作）不是嵌套，照常排队（复验第二轮 G4）。
 // - 出错（复现用例改成回归用例）：摆好世界、不调 closeWorld 就删库——删库的 FORCE 断开这个连接，pg.Client 发出 'error'。原来没有人接，
 //   测试进程里有两个未处理的错误（57P01、Connection terminated unexpectedly），vitest 报出 Errors、整次运行失败。现在：不再有未处理的错误
 //   （这个文件跑完 vitest 不报 Errors），错误也看得到——之后用世界摆东西直接失败，带着原来的错误。这一条删库，放在最后。
@@ -51,6 +52,68 @@ describe('摆世界的连接：回调里嵌套调用 query', () => {
       const values = await Promise.all([1, 2, 3].map(async value => seed.query(async connection =>
         (await connection.query<{ value: number }>('SELECT $1::int AS value', [value])).rows[0]?.value)))
       expect(values).toEqual([1, 2, 3])
+    }
+    finally {
+      await close()
+    }
+  }, NESTED_TIMEOUT_MS)
+
+  it('回调还没做完时没有 await 的调用：同样立即失败、写明原因（分不出回调会不会等它）；回调照常做完（复验第二轮 G4）', async () => {
+    const { seed, close } = await seedingConnection(database)
+    try {
+      let outcome: Promise<unknown> = Promise.resolve()
+      let failedBeforeCallbackDone = false
+      const own = await seed.query(async (connection) => {
+        // 接住它（结果记成值），不留未处理的拒绝
+        outcome = seed.query(async inner => inner.query('SELECT 1')).then(() => undefined, (error: unknown) => {
+          failedBeforeCallbackDone = true
+          return error
+        })
+        const value = (await connection.query<{ value: number }>('SELECT 7 AS value')).rows[0]?.value
+        // 回调还没做完，它已经失败了：不是排在回调之后
+        return { value, failedBeforeCallbackDone }
+      })
+      expect(own).toEqual({ value: 7, failedBeforeCallbackDone: true })
+      const failure = await outcome
+      expect(failure).toBeInstanceOf(Error)
+      expect((failure as Error).message).toBe(SEEDING_QUERY_NESTED)
+    }
+    finally {
+      await close()
+    }
+  }, NESTED_TIMEOUT_MS)
+
+  it('回调里排下、回调做完（成功或失败）之后才执行的调用（定时器、没有 await 的异步操作）：不是嵌套，照常排队、拿到结果（复验第二轮 G4）', async () => {
+    const { seed, close } = await seedingConnection(database)
+    try {
+      /** 调用一次，结果记成值（失败时是那个错误）：不留未处理的拒绝，失败时也看得到原因 */
+      const valueOf = async (value: number): Promise<unknown> => seed.query(async connection =>
+        (await connection.query<{ value: number }>('SELECT $1::int AS value', [value])).rows[0]?.value).then(result => result, (error: unknown) => error)
+      // 外层的调用都有了结果（回调已经做完）之后才放行
+      let release: () => void = () => {}
+      const released = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const later = new Map<string, Promise<unknown>>()
+      // 定时器：回调里排下，回调做完之后才触发
+      await seed.query(async () => {
+        setTimeout(() => {
+          void released.then(() => later.set('定时器', valueOf(1)))
+        }, 0)
+      })
+      // 没有 await 的异步操作
+      await seed.query(async () => {
+        void released.then(() => later.set('没有等的异步操作', valueOf(2)))
+      })
+      // 回调失败了：同样记为已结束
+      await expect(seed.query(async () => {
+        void released.then(() => later.set('回调失败之后', valueOf(3)))
+        throw new Error('回调自己的失败')
+      })).rejects.toThrow('回调自己的失败')
+      release()
+      await vi.waitFor(() => expect(later.size).toBe(3), { timeout: 2_000, interval: 10 })
+      const values = Object.fromEntries(await Promise.all([...later].map(async ([name, value]) => [name, await value] as const)))
+      expect(values).toEqual({ 定时器: 1, 没有等的异步操作: 2, 回调失败之后: 3 })
     }
     finally {
       await close()

@@ -261,8 +261,8 @@ async function seedTrashEntry(
 /** 摆世界的连接出错之后再用它（见 seedingConnection）：说明加上原来的错误（cause） */
 export const SEEDING_CONNECTION_BROKEN = '摆世界的连接已经出错断开（例如删库之前没有 closeWorld），不能再用它摆东西'
 
-/** 摆世界的连接上，回调里又调了 query（见 seedingConnection）：原来会互相等待、一直挂到超时，现在立即失败 */
-export const SEEDING_QUERY_NESTED = '摆世界的连接上，回调里不能再调 query：它排在这个回调之后，回调又在等它，会一直挂到超时。在回调里用它拿到的连接（connection.query）'
+/** 摆世界的连接上，回调还没做完时又调了 query（见 seedingConnection）：回调等它的话原来会互相等待、一直挂到超时，现在立即失败 */
+export const SEEDING_QUERY_NESTED = '摆世界的连接上，回调还没做完时不能再调 query：它要排在这个回调之后，回调要是等它，两边就会互相等待、一直挂到超时（分不出回调会不会等它，一律不许）。在回调里用它拿到的连接（connection.query）'
 
 /**
  * 摆世界、每一格另建东西用的一个连接（M2-P5 S4）：TestDatabase.query 每次新开一个连接（本机实测约 5 毫秒，一条语句约 0.3 毫秒），
@@ -270,9 +270,10 @@ export const SEEDING_QUERY_NESTED = '摆世界的连接上，回调里不能再�
  * 并发的调用（摆世界时的 Promise.all）在这里排队，一个回调做完再交给下一个——pg 自己的排队已经弃用（pg 9 去掉）。
  * 测试文件结束时先关掉它（world.close），再删库：删库会断开还连着的连接。
  *
- * 回调里不能再调 query：它排在这个回调之后，回调又在等它，两边互相等待、一直挂到用例超时，看不出原因（M2-P5 审查 B 的 G2、复验 G5）。
- * 所以记下正在执行的回调（AsyncLocalStorage：回调里发起的异步操作都带着这个标记，await 之后也一样），回调里再调 query 立即失败、
- * 写明原因（SEEDING_QUERY_NESTED）；回调之外的调用（包括回调做完之后、并发的调用）照常排队。
+ * 回调还没做完时不能再调 query：它排在这个回调之后，回调要是等它，两边互相等待、一直挂到用例超时，看不出原因（M2-P5 审查 B 的 G2、复验 G5）。
+ * 所以记下正在执行的回调（AsyncLocalStorage：回调里发起的异步操作都带着它，await 之后、回调里排下的定时器也一样），回调做完（成功或失败）时
+ * 记为已结束（M2-P5 复验第二轮 G4）：回调还没做完时再调 query 立即失败、写明原因（SEEDING_QUERY_NESTED）——没有 await 的调用也一样，
+ * 分不出回调会不会等它；回调做完之后才执行的调用（回调里排下的定时器、没有 await 的异步操作）与回调之外的调用（并发的调用）照常排队。
  *
  * 连接出错时 pg.Client 发出 'error'（删库的 FORCE 断开它时先是 57P01、再是"Connection terminated unexpectedly"），没有人接就是
  * 测试进程里未处理的错误（M2-P5 审查 B 的 G2）：文件里忘了在删库之前 closeWorld，或者 beforeAll 超时、world 还没赋值时就会这样。
@@ -285,16 +286,25 @@ export async function seedingConnection(database: TestDatabase): Promise<{ reado
     broken ??= error
   })
   await client.connect()
-  /** 正在执行这个连接上的回调：回调里（含它发起的异步操作）取得到 true */
-  const inCallback = new AsyncLocalStorage<true>()
+  /**
+   * 这个连接上执行过的回调：回调里（含它发起的异步操作，回调做完之后才执行的也一样）取得到它。
+   * 标记跟着异步操作一直走，所以单看"取得到"分不出回调做完了没有：做完时记下（done），只认还没做完的
+   */
+  const inCallback = new AsyncLocalStorage<{ done: boolean }>()
   let previous: Promise<unknown> = Promise.resolve()
   const query = async <T>(fn: (connection: pg.Client) => Promise<T>): Promise<T> => {
-    if (inCallback.getStore() === true)
+    if (inCallback.getStore()?.done === false)
       throw new Error(SEEDING_QUERY_NESTED)
     const run = previous.then(async () => {
       if (broken !== undefined)
         throw new Error(SEEDING_CONNECTION_BROKEN, { cause: broken })
-      return inCallback.run(true, async () => fn(client))
+      const callback = { done: false }
+      try {
+        return await inCallback.run(callback, async () => fn(client))
+      }
+      finally {
+        callback.done = true
+      }
     })
     // 前一个失败不拦住后面的：失败由它自己的调用方收到
     previous = run.catch(() => undefined)

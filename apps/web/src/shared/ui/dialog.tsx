@@ -16,7 +16,8 @@ type DialogContentProps = ComponentProps<typeof DialogPrimitive.Content> & {
   /** 关闭之后，打开之前有焦点的元素已经不在了（例如随操作消失的按钮）或者不能聚焦时，焦点去哪里 */
   readonly fallbackFocus?: () => void
   /**
-   * 关掉之后（M2-P5 复验 S1）：弹窗的内容已经卸下，Radix 已经解除弹窗之外的 aria-hidden（卸下时撤销），焦点也已经交还。
+   * 关掉之后（M2-P5 复验 S1）：弹窗的内容已经卸下，Radix 已经解除弹窗之外的 aria-hidden（卸下时撤销），焦点已经交还——
+   * 交还给打开之前有焦点的元素（打开者），打开者不在了或者不能聚焦时交给 fallbackFocus；两者都没有时焦点落在 body（M2-P5 复验第二轮 G6）。
    * 确认的弹窗据此在关掉之后才把成功的说明写进页面的状态区：弹窗开着时写进去的，那一刻在 aria-hidden 之下，读屏多半不播报
    */
   readonly onClosed?: () => void
