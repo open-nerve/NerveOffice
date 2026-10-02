@@ -276,10 +276,11 @@ function detail(): DocumentDetail {
     spaceId: SPACE_ID,
     space: { id: SPACE_ID, type: 'personal', name: '艾米' },
     folderId: null,
+    accessVia: 'space',
     revision: 1,
     profile: 'sheet@1',
     formatVersion: 1,
-    permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true },
+    permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true },
   }
 }
 

@@ -200,13 +200,13 @@ describe('US-M2-12 搜索的范围只由仓储给出（M2-P6 复核 A 的 S3）'
     expect((await asUser(app.baseUrl, amySession, `/api/documents/${trashed}`, { method: 'DELETE' })).status).toBe(204)
 
     const pattern = `%${keyword}%`
-    const found = await repository.searchByTitle({ spaceIds: [openSpace, amy.personalSpaceId] }, { limit: 100, titlePattern: pattern })
+    const found = await repository.searchByTitle({ spaceIds: [openSpace, amy.personalSpaceId], grantsOf: undefined }, { limit: 100, titlePattern: pattern })
     expect(found.map(row => row.id).toSorted()).toEqual([inOpen, inPersonal].toSorted())
     expect(new Set(found.map(row => row.spaceId))).toEqual(new Set([openSpace, amy.personalSpaceId]))
-    expect((await repository.searchByTitle({ spaceIds: [openSpace] }, { limit: 100, titlePattern: pattern })).map(row => row.id)).toEqual([inOpen])
-    expect(await repository.searchByTitle({ spaceIds: [] }, { limit: 100, titlePattern: pattern })).toEqual([])
+    expect((await repository.searchByTitle({ spaceIds: [openSpace], grantsOf: undefined }, { limit: 100, titlePattern: pattern })).map(row => row.id)).toEqual([inOpen])
+    expect(await repository.searchByTitle({ spaceIds: [], grantsOf: undefined }, { limit: 100, titlePattern: pattern })).toEqual([])
     // 列表用的是同一个"可访问文档"的条件
-    const listed = await repository.listAccessible({ spaceIds: [openSpace, amy.personalSpaceId] }, { limit: 100 })
+    const listed = await repository.listAccessible({ spaceIds: [openSpace, amy.personalSpaceId], grantsOf: undefined }, { limit: 100 })
     expect(listed.every(row => row.spaceId === openSpace || row.spaceId === amy.personalSpaceId)).toBe(true)
     expect(listed.map(row => row.id)).toEqual(expect.arrayContaining([inOpen, inPersonal]))
     expect(listed.map(row => row.id)).not.toContain(trashed)

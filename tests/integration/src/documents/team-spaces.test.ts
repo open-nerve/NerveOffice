@@ -125,7 +125,7 @@ describe('US-M2-05 团队空间里的文档', () => {
     expect((await list(catSession, spaceId)).items.map(item => item.title)).toEqual(['放假通知'])
     const detail = parseExact(documentDetailSchema, await (await asUser(app.baseUrl, catSession, `/api/documents/${document.id}`)).json())
     // 查看者只剩下复制（M2-P4）：能读就能复制，目标空间的新建权限另判
-    expect(detail.permissions).toEqual({ canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false })
+    expect(detail.permissions).toEqual({ canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false })
     expect((await create(catSession, { spaceId })).status).toBe(403)
 
     await setSpaceState(database, spaceId, { visibleToAll: false })
@@ -140,7 +140,7 @@ describe('US-M2-05 团队空间里的文档', () => {
     expect((await list(amySession, spaceId)).items.map(item => item.id)).toEqual([document.id])
     const detail = parseExact(documentDetailSchema, await (await asUser(app.baseUrl, amySession, `/api/documents/${document.id}`)).json())
     // 查看者只剩下复制（M2-P4）：能读就能复制，目标空间的新建权限另判
-    expect(detail.permissions).toEqual({ canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false })
+    expect(detail.permissions).toEqual({ canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false })
     const response = await create(amySession, { spaceId })
     expect(response.status).toBe(403)
     expect(await errorOf(response)).toEqual({ code: 'PERMISSION_DENIED', message: '空间已归档，只能查看' })

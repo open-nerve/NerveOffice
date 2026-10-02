@@ -39,14 +39,15 @@ describe('DocumentsService.get', () => {
       spaceId: ALICE_SPACE,
       space: { id: ALICE_SPACE, type: 'personal', name: '爱丽丝' },
       folderId: null,
+      accessVia: 'space',
       revision: 3,
       profile: 'sheet@1',
       formatVersion: 1,
-      permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true },
+      permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true },
     })
   })
 
-  it('别人的与不存在的：同一个 NOT_FOUND，而且都执行了一次空间事实的查询（两条路径做同样的查询）', async () => {
+  it('别人的与不存在的：同一个 NOT_FOUND，而且都执行了一次空间事实与一次授权的查询（两条路径做同样的查询）', async () => {
     const { store, service } = setup()
     const others = at(store, BOB_SPACE, '2026-09-26T10:00:00.000002Z')
     const forbidden = await errorOf(service.get(ALICE, others.id))
@@ -55,6 +56,27 @@ describe('DocumentsService.get', () => {
     expect(missing.message).toBe(forbidden.message)
     expect(store.spaces.accessFactsOf).toHaveBeenCalledTimes(2)
     expect(store.spaces.accessFactsOf).toHaveBeenLastCalledWith(ALICE, '00000000-0000-0000-0000-000000000000', { transaction: undefined })
+    expect(store.grants.roleOf).toHaveBeenCalledTimes(2)
+    expect(store.grants.roleOf).toHaveBeenLastCalledWith('00000000-0000-0000-0000-000000000000', ALICE, undefined)
+  })
+
+  it('只凭单独授权（M2-P5）：能打开，不给所在的文件夹（不给目录结构）；结构性的权限位一律没有', async () => {
+    const { store, service } = setup()
+    const folder = store.addFolder({ spaceId: TEAM_SPACE })
+    const document = store.addDocument({ spaceId: TEAM_SPACE, folderId: folder.id, createdBy: BOB })
+    store.setGrant(document.id, BOB, 'editor')
+    expect(await service.get(BOB, document.id)).toMatchObject({
+      spaceId: TEAM_SPACE,
+      folderId: null,
+      accessVia: 'grant',
+      permissions: { canEdit: true, canRename: true, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false },
+    })
+    // 同一份文档，空间里的成员看到的照常带文件夹
+    store.setMember(TEAM_SPACE, ALICE, 'viewer')
+    expect(await service.get(ALICE, document.id)).toMatchObject({ folderId: folder.id, accessVia: 'space' })
+    // 他另外成了空间里的查看者：途径是空间，文件夹照常给，内容仍是编辑者（取较高者）
+    store.setMember(TEAM_SPACE, BOB, 'viewer')
+    expect(await service.get(BOB, document.id)).toMatchObject({ folderId: folder.id, accessVia: 'space', permissions: { canEdit: true, canMoveWithinSpace: false } })
   })
 
   it('团队空间的查看者不能编辑；全员可见的空间里任何人都是查看者', async () => {
@@ -65,7 +87,7 @@ describe('DocumentsService.get', () => {
     expect((await errorOf(service.get(ALICE, document.id))).code).toBe('NOT_FOUND')
     store.space(TEAM_SPACE).visibleToAll = true
     // 看得到就能复制（目标空间的新建权限另判）；查看者不能改名、不能移动、不能删除
-    expect((await service.get(ALICE, document.id)).permissions).toEqual({ canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false })
+    expect((await service.get(ALICE, document.id)).permissions).toEqual({ canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false })
   })
 })
 
@@ -76,14 +98,26 @@ describe('DocumentsService.list', () => {
     const newer = at(store, ALICE_SPACE, '2026-09-26T11:00:00.000003Z')
     store.repositories.documents.listAccessible.mockImplementation(async (_scope, options) => [newer, older].slice(0, options.limit))
     const page = await service.list(member(ALICE), { limit: 1 })
-    // 没有指定目录：空间的根目录（folderId 为 null）；状态是正常（M2-P4 设计 §3.4 第 1 条）
-    expect(store.repositories.documents.listAccessible).toHaveBeenCalledWith({ spaceIds: [ALICE_SPACE] }, { limit: 2, after: undefined, folderId: null })
+    // 没有指定目录：空间的根目录（folderId 为 null）；状态是正常（M2-P4 设计 §3.4 第 1 条）；只要空间那一半（M2-P5 设计 §3.4(2)）
+    expect(store.repositories.documents.listAccessible).toHaveBeenCalledWith({ spaceIds: [ALICE_SPACE], grantsOf: undefined }, { limit: 2, after: undefined, folderId: null })
     expect(page.items.map(item => item.id)).toEqual([newer.id])
     expect(decodeTimeCursor(page.nextCursor ?? '')).toEqual({ position: newer.position, id: newer.id })
 
     const last = await service.list(member(ALICE), { limit: 5, cursor: page.nextCursor ?? '' })
-    expect(store.repositories.documents.listAccessible).toHaveBeenLastCalledWith({ spaceIds: [ALICE_SPACE] }, { limit: 6, after: { position: newer.position, id: newer.id }, folderId: null })
+    expect(store.repositories.documents.listAccessible).toHaveBeenLastCalledWith({ spaceIds: [ALICE_SPACE], grantsOf: undefined }, { limit: 6, after: { position: newer.position, id: newer.id }, folderId: null })
     expect(last.nextCursor).toBeNull()
+  })
+
+  it('按空间列出不并上单独授权（M2-P5 设计 §3.4(2)）：别处分享给我的文档不出现在我的空间里；只凭授权看不到那个空间的列表', async () => {
+    const { store, service } = setup()
+    const mine = store.addDocument({ spaceId: BOB_SPACE, createdBy: BOB })
+    const shared = store.addDocument({ spaceId: TEAM_SPACE, createdBy: ALICE })
+    store.setGrant(shared.id, BOB, 'editor')
+    // 前提：授权确实在、确实生效——要了授权那一半就会把它列进来，不然下面的断言什么也证明不了
+    expect((await service.get(BOB, shared.id)).accessVia).toBe('grant')
+    expect((await store.repositories.documents.listAccessible({ spaceIds: [BOB_SPACE], grantsOf: BOB }, { limit: 10 })).map(row => row.id)).toEqual([mine.id, shared.id])
+    expect((await service.list(member(BOB), { spaceId: BOB_SPACE, folderId: 'all', limit: 10 })).items.map(item => item.id)).toEqual([mine.id])
+    expect((await errorOf(service.list(member(BOB), { spaceId: TEAM_SPACE, folderId: 'all', limit: 10 }))).code).toBe('NOT_FOUND')
   })
 
   it('指定了团队空间：成员与全员可见时的任何人都能列出；看不到与不存在的空间同一个 NOT_FOUND，查询相同', async () => {

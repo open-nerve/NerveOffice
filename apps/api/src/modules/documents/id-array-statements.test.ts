@@ -69,8 +69,10 @@ function expectIdArrayParameters(statements: readonly Statement[]): void {
 type Call = (repositories: Repositories, transaction: Transaction) => Promise<unknown>
 
 const DOCUMENTS: Readonly<Record<string, Call>> = {
-  '列出可访问的文档（看得到的空间）': async ({ documents }) => documents.listAccessible({ spaceIds: IDS }, { limit: 10 }),
-  '按标题搜索（看得到的空间）': async ({ documents }) => documents.searchByTitle({ spaceIds: IDS }, { limit: 10, titlePattern: '%周报%' }),
+  '列出可访问的文档（看得到的空间）': async ({ documents }) => documents.listAccessible({ spaceIds: IDS, grantsOf: undefined }, { limit: 10 }),
+  '列出可访问的文档（看得到的空间，并上授权）': async ({ documents }) => documents.listAccessible({ spaceIds: IDS, grantsOf: USER }, { limit: 10 }),
+  '按标题搜索（看得到的空间）': async ({ documents }) => documents.searchByTitle({ spaceIds: IDS, grantsOf: undefined }, { limit: 10, titlePattern: '%周报%' }),
+  '按标题搜索（看得到的空间，并上授权）': async ({ documents }) => documents.searchByTitle({ spaceIds: IDS, grantsOf: USER }, { limit: 10, titlePattern: '%周报%' }),
   '停用者文档的转移：锁住要转的文档': async ({ documents }, transaction) => documents.lockForTransfer(IDS, SPACE, transaction),
   '锁住这些文件夹里的文档（删除、跨空间移动、永久删除）': async ({ documents }, transaction) => documents.lockInFolders(IDS, SPACE, transaction),
   '锁住属于这些删除单元的文档': async ({ documents }, transaction) => documents.lockInEntries(IDS, transaction),
@@ -115,6 +117,18 @@ describe(`仓储按一串 id 读写：${COUNT} 个 id 也只有一个数组参�
     const [statement] = await statementsOf(DOCUMENTS['永久删除之前：数这个空间里正常状态的文档'] ?? (async () => undefined))
     expect(statement?.text).toMatch(/"documents"\."space_id" = \$\d+/)
     expect(statement?.values).toContain(SPACE)
+  })
+
+  it('可访问文档的两半（M2-P5 设计 §3.4(2)）：不要授权那一半时语句里没有授权表；要时是同一条语句里的 EXISTS，与空间那一半是"或"', async () => {
+    const [spacesOnly] = await statementsOf(async ({ documents }) => documents.listAccessible({ spaceIds: [SPACE], grantsOf: undefined }, { limit: 10 }))
+    expect(spacesOnly?.text).not.toMatch(/document_grants/)
+    const [both] = await statementsOf(async ({ documents }) => documents.listAccessible({ spaceIds: [SPACE], grantsOf: USER }, { limit: 10 }))
+    expect(both?.text).toMatch(/"documents"\."status" = \$\d+ and \("documents"\."space_id" = ANY\(\$\d+::uuid\[\]\) or EXISTS \(SELECT 1 FROM "document_grants" WHERE \("document_grants"\."document_id" = "documents"\."id" and "document_grants"\."user_id" = \$\d+\)\)\)/)
+    expect(both?.values).toContain(USER)
+    // 只要授权那一半（"与我共享"）：空间那一半是空数组，恒为假，结果只剩授权的文档
+    const [grantsOnly] = await statementsOf(async ({ documents }) => documents.listAccessible({ spaceIds: [], grantsOf: USER }, { limit: 10 }))
+    expect(grantsOnly?.values).toContainEqual([])
+    expect(grantsOnly?.text).toMatch(/EXISTS \(SELECT 1 FROM "document_grants"/)
   })
 
   it('到期的删除单元：让开的那些写成 NOT (id = ANY(…))；没有要让开的就不带这个条件', async () => {

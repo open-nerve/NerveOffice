@@ -38,9 +38,10 @@ export class DocumentSearchService {
     // 我能看到的空间：范围与结果里的空间名都只认这一份，两者不会不一致
     const spaces = new Map((await this.policy.visibleSpaces(actor)).map(access => [access.space.id, access.space]))
     const spaceIds = [...spaces.keys()]
-    // 多取一条，判断还有没有下一页
+    // 多取一条，判断还有没有下一页。现在只要空间那一半：并上授权那一半要同时改不变量的范围（凭授权命中的行由同一条语句标出）、
+    // 给凭授权命中的行补所在的空间，这几样一起接上（M2-P5 设计 §3.4(2)），在那之前只并一半会让不变量把正常的结果判成泄漏
     const rows = await this.documents.searchByTitle(
-      { spaceIds },
+      { spaceIds, grantsOf: undefined },
       { limit: SEARCH_PAGE_SIZE + 1, after, titlePattern: titleSearchPattern(query.query) },
     )
     // 查出来的每一行（含多取的那一条）先核对不变量，再分页、输出：范围之外的行一条也不输出，
@@ -52,7 +53,8 @@ export class DocumentSearchService {
     const paths = folderPathsOf(await this.folders.ancestorsOf(folderIds, spaceIds))
     const last = page.at(-1)?.row
     return {
-      items: page.map(({ row, space }) => toSearchResult(row, space, row.folderId === null ? [] : paths.get(row.folderId) ?? [])),
+      // 结果都来自"我能看到的空间"（上面只要了空间那一半），所以都是凭空间角色看到的
+      items: page.map(({ row, space }) => toSearchResult(row, space, row.folderId === null ? [] : paths.get(row.folderId) ?? [], 'space')),
       nextCursor: located.length > page.length && last !== undefined ? encodeTimeCursor({ position: last.position, id: last.id }) : null,
     }
   }

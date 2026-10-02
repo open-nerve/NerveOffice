@@ -1,6 +1,6 @@
 import type { AdminSpaceListQuery, SpaceRole, SpaceStatus } from '@nerve-office/contracts'
 import type { Transaction } from '../database/index.ts'
-import type { MemberRoleChange, SpaceChange, SpaceFacts, SpaceMemberRecord, SpaceRecord, SpaceSummary, TeamSpaceOverview } from './space.ts'
+import type { MemberRoleChange, SpaceChange, SpaceFacts, SpaceFactsWithOwner, SpaceMemberRecord, SpaceRecord, SpaceSummary, TeamSpaceOverview } from './space.ts'
 import { ADMIN_PAGE_SIZE, SPACE_NAME_MAX_LENGTH } from '@nerve-office/contracts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
@@ -66,6 +66,15 @@ export class SpacesService {
   /** 这个人看某个空间的事实；空间不存在时为 undefined（查询与存在时相同）。 */
   async accessFactsOf(userId: string, spaceId: string, options: QueryOptions = {}): Promise<SpaceFacts | undefined> {
     return this.repository.factsFor(userId, spaceId, options.transaction)
+  }
+
+  /**
+   * 这个人看一批空间的事实，连同所有者（M2-P5："与我共享"与搜索补所在的空间）：按 id 给出，不存在的空间不在里面；
+   * 重复的 id 只查一次。只是事实：看不看得到、是什么角色，仍由 documents 的访问策略按规则算
+   */
+  async accessFactsOfMany(userId: string, spaceIds: readonly string[], options: QueryOptions = {}): Promise<ReadonlyMap<string, SpaceFactsWithOwner>> {
+    const rows = await this.repository.factsForMany(userId, [...new Set(spaceIds)], options.transaction)
+    return new Map(rows.map(row => [row.id, row]))
   }
 
   /** 这个人可能看得到的空间（候选）：个人空间在前，团队空间按名称排序。 */

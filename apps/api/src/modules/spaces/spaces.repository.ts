@@ -2,14 +2,14 @@ import type { SpaceRole, SpaceStatus } from '@nerve-office/contracts'
 import type { SQL } from 'drizzle-orm'
 import type { TimeCursor } from '../../shared/time-cursor.ts'
 import type { Database, Transaction } from '../database/index.ts'
-import type { SpaceFacts, SpaceMemberRecord, SpaceRecord, SpaceSummary, TeamSpaceOverview } from './space.ts'
+import type { SpaceFacts, SpaceFactsWithOwner, SpaceMemberRecord, SpaceRecord, SpaceSummary, TeamSpaceOverview } from './space.ts'
 import { collapseNameBlanks } from '@nerve-office/contracts'
 import { Inject, Injectable } from '@nestjs/common'
 import { and, asc, count, desc, eq, ilike, inArray, isNotNull, or, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { spaceMembers, spaceNameForSearch, spaces } from '../../db/schema/spaces/index.ts'
 import { containsPattern } from '../../shared/like-pattern.ts'
-import { DATABASE, executorOf, inSavepoint, isUniqueViolation, keysetPosition } from '../database/index.ts'
+import { DATABASE, executorOf, inIdArray, inSavepoint, isUniqueViolation, keysetPosition } from '../database/index.ts'
 
 /** 团队空间名称的唯一索引：撞上它就是名称已被使用 */
 const TEAM_NAME_KEY = 'spaces_team_name_key'
@@ -105,6 +105,20 @@ export class SpacesRepository {
       .leftJoin(spaceMembers, and(eq(spaceMembers.spaceId, spaces.id), eq(spaceMembers.userId, userId)))
       .where(eq(spaces.id, spaceId))
     return row
+  }
+
+  /**
+   * 一个人看一批空间的事实，连同所有者（M2-P5）：一条语句，这串 id 作为一个数组参数（inIdArray，数量没有上界时也不会超出
+   * 绑定参数的上限，规范 §5）；不存在的空间没有结果行。与 factsFor 同样左连接这个人的成员行，事实的算法只有 factColumns 一处
+   */
+  async factsForMany(userId: string, spaceIds: readonly string[], transaction?: Transaction): Promise<SpaceFactsWithOwner[]> {
+    if (spaceIds.length === 0)
+      return []
+    return executorOf(this.db, transaction)
+      .select({ ...factColumns(userId), ownerUserId: spaces.ownerUserId })
+      .from(spaces)
+      .leftJoin(spaceMembers, and(eq(spaceMembers.spaceId, spaces.id), eq(spaceMembers.userId, userId)))
+      .where(inIdArray(spaces.id, spaceIds))
   }
 
   /**

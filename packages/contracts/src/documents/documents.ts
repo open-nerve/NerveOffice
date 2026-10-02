@@ -109,20 +109,34 @@ export const documentSpaceSchema = z.object({
 export type DocumentSpace = z.infer<typeof documentSpaceSchema>
 
 /**
+ * 调用者看得到这份文档的途径（M2-P5 设计 §3.4(1)）：
+ * - space：在它所在的空间里有角色（可能另外还有单独授权，权限取较高者）；
+ * - grant：在那个空间里没有角色，只凭单独授权。这时看不到空间的目录结构（00 号计划书 §5.5）：
+ *   详情与搜索结果都不带所在的文件夹，移动、删除、分享这些结构性的操作一律不能做。
+ */
+export const DOCUMENT_ACCESS_VIA = ['space', 'grant'] as const
+export type DocumentAccessVia = (typeof DOCUMENT_ACCESS_VIA)[number]
+
+/**
  * 调用者在这份文档上能做的操作：界面据此只显示能做的，服务端按同一套规则检查（M2-P4 设计 §3.7）。
+ * 内容的操作（保存、改名、复制）看内容权限——空间角色与单独授权取较高者；结构性的操作（移动、删除、分享）只看空间角色，
+ * 只凭授权的人一律没有（M2-P5 设计 §3.4(1)）。归档的空间里所有人至多是查看者，包括被单独授权为编辑者的人。
  */
 export const documentPermissionsSchema = z.object({
-  /** 改动内容（保存）：编辑者及以上 */
+  /** 改动内容（保存）：内容权限是编辑者及以上 */
   canEdit: z.boolean(),
+  /** 改名：与保存同一条规则 */
   canRename: z.boolean(),
-  /** 在同一个空间里换文件夹：编辑者及以上 */
+  /** 在同一个空间里换文件夹：空间角色是编辑者及以上 */
   canMoveWithinSpace: z.boolean(),
   /** 移到别的空间：源空间的空间管理员（目标空间的新建权限另判） */
   canMoveAcrossSpaces: z.boolean(),
   /** 复制：能读就能复制（目标空间的新建权限另判） */
   canCopy: z.boolean(),
-  /** 删除（进回收站）：空间管理员任意，编辑者只能删自己创建的（P4-S3 spec §2） */
+  /** 删除（进回收站）：空间管理员任意，空间角色是编辑者的只能删自己创建的（P4-S3 spec §2） */
   canDelete: z.boolean(),
+  /** 分享（查看、设置、调整、取消这份文档的单独授权）：空间管理员或个人空间的所有者；归档的空间里没有（M2-P5） */
+  canShare: z.boolean(),
 })
 
 export type DocumentPermissions = z.infer<typeof documentPermissionsSchema>
@@ -134,8 +148,13 @@ export type DocumentPermissions = z.infer<typeof documentPermissionsSchema>
 export const documentDetailSchema = documentSummarySchema.extend({
   spaceId: z.uuid(),
   space: documentSpaceSchema,
-  /** 所在的文件夹；在空间的根目录下时为 null（M2-P4） */
+  /**
+   * 所在的文件夹；在空间的根目录下时为 null（M2-P4）。
+   * 只凭单独授权（accessVia 为 grant）时一律为 null：所在的文件夹是空间目录结构的一部分（M2-P5）
+   */
   folderId: z.uuid().nullable(),
+  /** 看得到它的途径：只凭授权时界面不显示所在位置、没有移动与删除的入口（M2-P5） */
+  accessVia: z.enum(DOCUMENT_ACCESS_VIA),
   /** 当前修订号：新建为 1，每次保存加一 */
   revision: z.number().int().min(1),
   profile: z.string().min(1),

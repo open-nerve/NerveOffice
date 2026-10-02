@@ -64,8 +64,22 @@ describe('DocumentCopyService.copy', () => {
     const { document } = seed(store)
     const folder = store.addFolder({ spaceId: TEAM_SPACE, name: '资料' })
     const copy = await service.copy(member(ALICE), document.id, { spaceId: TEAM_SPACE, folderId: folder.id, title: '周报（存档）', requestId: nextRequestId() }, HTTP_ORIGIN)
-    expect(copy).toMatchObject({ title: '周报（存档）', spaceId: TEAM_SPACE, folderId: folder.id, space: { id: TEAM_SPACE, name: '市场部' } })
-    expect(copy.permissions).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true })
+    expect(copy).toMatchObject({ title: '周报（存档）', spaceId: TEAM_SPACE, folderId: folder.id, space: { id: TEAM_SPACE, name: '市场部' }, accessVia: 'space' })
+    expect(copy.permissions).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false })
+  })
+
+  it('只凭授权的人（M2-P5）：查看授权就能复制到自己有新建权限的空间；副本是新文档，不带原文档的授权，响应照常带文件夹', async () => {
+    const { store, service } = setup()
+    const { document } = seed(store, { spaceId: TEAM_SPACE, createdBy: ALICE })
+    store.setGrant(document.id, BOB, 'viewer')
+    store.setGrant(document.id, ALICE, 'editor')
+    const folder = store.addFolder({ spaceId: BOB_SPACE, name: '收集' })
+    const copy = await service.copy(member(BOB), document.id, { spaceId: BOB_SPACE, folderId: folder.id, requestId: nextRequestId() }, HTTP_ORIGIN)
+    expect(copy).toMatchObject({ spaceId: BOB_SPACE, folderId: folder.id, accessVia: 'space', permissions: { canEdit: true, canShare: true } })
+    expect([...store.grantRecords.keys()].filter(key => key.startsWith(copy.id))).toEqual([])
+    // 复制回原文档所在的空间：他在那里没有新建的权限（看不到那个空间），与不存在的空间一样 NOT_FOUND
+    const back = await errorOf(service.copy(member(BOB), document.id, { spaceId: TEAM_SPACE, requestId: nextRequestId() }, HTTP_ORIGIN))
+    expect(back.code).toBe('NOT_FOUND')
   })
 
   it('取锁的顺序：requestId 的锁 → 目标空间的树锁 → 两个空间行（按 id）→ 源文档行（共享锁，M2-P6 复核 A 的 S1）', async () => {

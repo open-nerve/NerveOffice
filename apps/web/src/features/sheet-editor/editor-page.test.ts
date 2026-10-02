@@ -26,10 +26,11 @@ const DETAIL: DocumentDetail = {
   spaceId: ALICE.personalSpace.id,
   space: { id: ALICE.personalSpace.id, type: 'personal', name: '爱丽丝' },
   folderId: null,
+  accessVia: 'space',
   revision: 3,
   profile: 'sheet@1',
   formatVersion: 1,
-  permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true },
+  permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false },
 }
 
 /** 假的编辑器：生命周期可以推进，保存用到的能力都是最简单的实现；记下谁在订阅修改 */

@@ -3,9 +3,10 @@ import type { SQL } from 'drizzle-orm'
 import type { TimeCursor } from '../../shared/time-cursor.ts'
 import type { Database, Transaction } from '../database/index.ts'
 import { Inject, Injectable } from '@nestjs/common'
-import { and, asc, desc, eq, isNull, ne, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, isNull, ne, or, sql } from 'drizzle-orm'
 import { documents } from '../../db/schema/documents/index.ts'
 import { DATABASE, executorOf, inIdArray, keysetPosition } from '../database/index.ts'
+import { grantedTo } from './document-grants.repository.ts'
 import { TITLE_SEARCH_ESCAPE } from './title-search.ts'
 
 export interface DocumentRow {
@@ -42,11 +43,16 @@ export interface NewDocument {
 }
 
 /**
- * "可访问文档"的范围（M2-P2 设计 §3.5，M2-P4 设计 §3.4 第 1 条）：调用者看得到的空间，由访问策略给出。
- * 只有这一维：状态不是参数，见下面的 accessible()。目录与关键词也不进这里，是各自查询自己的条件（设计 §7 的取舍）。
+ * "可访问文档"的范围（M2-P2 设计 §3.5，M2-P4 设计 §3.4 第 1 条，M2-P5 设计 §3.4(2)）：要哪几半，由调用方按访问策略给出。
+ * - 空间那一半：调用者有空间角色的空间（spaceIds；空数组表示不要这一半）；
+ * - 授权那一半：这个人有单独授权的文档（grantsOf；undefined 表示不要这一半）。
+ * grantsOf 是必填的键（可以是 undefined）：每个调用方都得写明要不要授权那一半——按空间列出、转移的标题列表与锁只要空间那一半，
+ * 并上授权就会把别处的文档列进这个空间（M2-P5 设计 §7 的第一条风险；回收站的列表本来就不经这里）。
+ * 状态不是参数，见下面的 accessible()。目录与关键词也不进这里，是各自查询自己的条件（M2-P4 设计 §7 的取舍）。
  */
 export interface AccessibleScope {
   readonly spaceIds: readonly string[]
+  readonly grantsOf: string | undefined
 }
 
 /** 列出可访问文档的条件与分页。 */
@@ -99,12 +105,15 @@ const COLUMNS = {
 }
 
 /**
- * "可访问文档"的条件：列表、搜索、计数、停用者文档的转移都经这一处，不各写各的过滤条件（M2 总设计 §6.1）。
- * **只取正常状态的行**：回收站的列表从 trash_entries 出（TrashService.list），不走这里，所以没有"状态"这一维。
- * P5 在这里并上单独授权（范围那一维）。
+ * "可访问文档"的条件：列表、搜索、计数、停用者文档的转移、"与我共享"都经这一处，不各写各的过滤条件（M2 总设计 §6.1）。
+ * `status = 'active' AND (space_id = ANY(…) OR EXISTS 授权)`：授权那一半只在调用方要它时才出现（见 AccessibleScope），
+ * 空间那一半总在——空数组时恒为假，所以只要授权那一半时（"与我共享"）照样只剩授权的文档，两半都不要时什么也查不出。
+ * **只取正常状态的行**：回收站的列表从 trash_entries 出（TrashService.list），不走这里，所以没有"状态"这一维；
+ * 回收站里的文档即使有授权也不出现。授权那一半的条件由 DocumentGrantsRepository 给出（grantedTo），这里只组合
  */
 function accessible(scope: AccessibleScope): SQL | undefined {
-  return and(eq(d.status, 'active'), inIdArray(d.spaceId, scope.spaceIds))
+  const inSpaces = inIdArray(d.spaceId, scope.spaceIds)
+  return and(eq(d.status, 'active'), scope.grantsOf === undefined ? inSpaces : or(inSpaces, grantedTo(d.id, scope.grantsOf)))
 }
 
 /** 目录的过滤（见 ListOptions.folderId）：不进 accessible，是列表自己的条件。 */
@@ -114,7 +123,10 @@ function inFolder(folderId: string | null | undefined): SQL | undefined {
   return folderId === null ? isNull(d.folderId) : eq(d.folderId, folderId)
 }
 
-/** documents 表的读写在这里（规范 §1.2）。一处例外：读取内容时修订号要与内容一起读，那条联表的语句在同一模块的 document-contents.repository.ts。 */
+/**
+ * documents 表的读写在这里（规范 §1.2）。一处例外：读取内容时修订号要与内容一起读，那条联表的语句在同一模块的 document-contents.repository.ts。
+ * "可访问文档"的授权那一半是 document_grants 上的 EXISTS 子查询，条件由 DocumentGrantsRepository 给出（M2-P5）
+ */
 @Injectable()
 export class DocumentsRepository {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
@@ -186,7 +198,8 @@ export class DocumentsRepository {
     const rows = await executorOf(this.db, transaction)
       .select({ id: d.id })
       .from(d)
-      .where(and(inIdArray(d.id, ids), accessible({ spaceIds: [fromSpaceId] })))
+      // 只要空间那一半：转移搬的是来源空间里的文档，与谁有授权无关（授权跟着文档走，M2-P5 设计 §3.3）
+      .where(and(inIdArray(d.id, ids), accessible({ spaceIds: [fromSpaceId], grantsOf: undefined })))
       .orderBy(asc(d.id))
       .for('update')
     return rows.map(row => row.id)
@@ -310,7 +323,7 @@ export class DocumentsRepository {
     return new Map(rows.flatMap(row => row.trashEntryId === null ? [] : [[row.trashEntryId, row.count] as const]))
   }
 
-  /** 永久删除（调用方已锁住这些行）：内容与修订记录随外键 cascade 一起没了。 */
+  /** 永久删除（调用方已锁住这些行）：内容、修订记录与单独授权随外键 cascade 一起没了（ADR-016 的连带，授权见 M2-P5 设计 §3.3）。 */
   async deleteMany(ids: readonly string[], transaction: Transaction): Promise<number> {
     if (ids.length === 0)
       return 0

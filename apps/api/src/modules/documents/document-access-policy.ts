@@ -2,11 +2,12 @@ import type { DocumentPermissions, FolderPermissions, SpacePermissions, SpaceRol
 import type { Principal } from '../auth/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { SpaceFacts } from '../spaces/index.ts'
-import type { DocumentOwnership } from './access-rules.ts'
+import type { DocumentAccess, DocumentOwnership } from './access-rules.ts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { SpacesService } from '../spaces/index.ts'
-import { documentPermissionsOf, effectiveSpaceRole, folderPermissionsOf, spacePermissionsOf, trashPermissionsOf } from './access-rules.ts'
+import { documentAccessOf, documentPermissionsOf, effectiveSpaceRole, folderPermissionsOf, spacePermissionsOf, trashPermissionsOf } from './access-rules.ts'
+import { DocumentGrantsRepository } from './document-grants.repository.ts'
 
 /** 调用者（M2-P2 设计 §3.4）：系统角色只影响团队空间的管理操作，不带来任何内容权限（00 号计划书 §5.2）。 */
 export interface Actor {
@@ -20,17 +21,11 @@ export function accessActorOf(principal: Principal): Actor {
 }
 
 /**
- * 判断文档权限要用到的文档属性：所在的空间（P5 的单独授权另按文档 id）、创建人（删除的权限按它判断）。
+ * 判断文档权限要用到的文档属性：所在的空间、文档的 id（单独授权按它找）、创建人（删除的权限按它判断）。
  */
 export interface AccessTarget extends DocumentOwnership {
   readonly id: string
   readonly spaceId: string
-}
-
-/** 调用者对一份文档的有效角色，与文档所在的空间。 */
-export interface DocumentAccess {
-  readonly role: SpaceRole
-  readonly space: SpaceFacts
 }
 
 /**
@@ -53,10 +48,13 @@ export interface SpaceContentAccess extends SpaceAccess {
  * 服务只经它判断权限，不自己拼权限条件；在事务里判断时传入事务，查询走事务的连接，不再从连接池另取一个。
  */
 export abstract class DocumentAccessPolicy {
-  /** 文档：有效角色与所在的空间；没有任何权限时为 undefined，调用方按"不存在"处理，不暴露文档是否存在 */
+  /**
+   * 文档：空间角色、内容权限、访问途径与所在的空间（access-rules 的 DocumentAccess）；空间角色与单独授权都没有时为 undefined，
+   * 调用方按"不存在"处理，不暴露文档是否存在
+   */
   abstract accessOf(userId: string, document: AccessTarget, transaction?: Transaction): Promise<DocumentAccess | undefined>
 
-  /** 空间：看不到时为 undefined（不存在与看不到执行同样的查询） */
+  /** 空间：看不到时为 undefined（不存在与看不到执行同样的查询）。不看单独授权：授权不给空间里的任何东西开口子（M2-P5 设计 §3.4(1)） */
   abstract spaceAccessOf(actor: Actor, spaceId: string, transaction?: Transaction): Promise<SpaceAccess | undefined>
 
   /** 我能看到的空间（有内容权限的）：导航与"可访问文档"。个人空间在前，团队空间按名称排序 */
@@ -64,19 +62,28 @@ export abstract class DocumentAccessPolicy {
 }
 
 /**
- * 有效权限（M2-P2）：空间的部分按 spaces 的空间事实计算（access-rules.ts）；P5 在这里并上单独授权。
- * 每个判断只执行一条空间事实的查询，空间或文档不存在时也一样。
+ * 有效权限（M2-P2，M2-P5 并上单独授权）：空间的部分按 spaces 的空间事实计算，文档另并上这个人在它上面的单独授权（access-rules.ts）。
+ * 对空间的判断只执行一条空间事实的查询；对文档的判断执行两条（空间事实、授权），空间或文档不存在时也一样。
  */
 @Injectable()
 export class EffectiveAccessPolicy extends DocumentAccessPolicy {
-  constructor(private readonly spaces: SpacesService) {
+  constructor(
+    private readonly spaces: SpacesService,
+    private readonly grants: DocumentGrantsRepository,
+  ) {
     super()
   }
 
+  /**
+   * 两条语句，总是都执行（M2-P5 设计 §3.1）：空间事实在 spaces、授权在 documents 的仓储，按模块边界不能联成一条（ADR-014 否决跨模块联表）。
+   * 不存在的文档（MISSING_DOCUMENT，全零的 id）同样执行这两条：看不到与不存在的语句序列相同（permissions/hidden-missing-parity 核对）。
+   * 所以不能写成"空间不存在就提前返回"——那样不存在的文档少执行授权那一条。逐条执行（不并发）：语句的先后是确定的，
+   * 在事务里也只有一个连接
+   */
   async accessOf(userId: string, document: AccessTarget, transaction?: Transaction): Promise<DocumentAccess | undefined> {
     const space = await this.spaces.accessFactsOf(userId, document.spaceId, { transaction })
-    const role = space === undefined ? undefined : effectiveSpaceRole(space)
-    return space === undefined || role === undefined ? undefined : { role, space }
+    const grant = await this.grants.roleOf(document.id, userId, transaction)
+    return space === undefined ? undefined : documentAccessOf(space, grant)
   }
 
   async spaceAccessOf(actor: Actor, spaceId: string, transaction?: Transaction): Promise<SpaceAccess | undefined> {
@@ -138,14 +145,27 @@ export interface AccessibleDocument<T extends AccessTarget> extends Accessible<T
 /** 文档上要权限的操作（只看能不能读时用 requireAccess）；edit 是保存内容。 */
 export type DocumentOperation = 'edit' | 'rename' | 'moveWithinSpace' | 'moveAcrossSpaces' | 'copy' | 'delete'
 
-const DOCUMENT_CONTENT: Readonly<Record<DocumentOperation, { readonly permission: keyof DocumentPermissions, readonly message: string }>> = {
+/** 一项操作看的权限位与不能做时的说明 */
+interface DocumentOperationRule {
+  readonly permission: keyof DocumentPermissions
+  readonly message: string
+  /**
+   * 结构性的操作（只看空间角色的权限位）：只凭授权的人一律不能做（M2-P5 设计 §3.4(1)），另给这一句说明——
+   * 原来的说明对他不成立（例如"编辑者只能删除自己创建的文档"：他可能正是创建人，只是已经不在那个空间里）
+   */
+  readonly grantOnlyMessage?: string
+}
+
+const DOCUMENT_CONTENT: Readonly<Record<DocumentOperation, DocumentOperationRule>> = {
+  // 内容的操作：权限位看内容权限（空间角色与授权取较高者）。
   // 保存与其他操作同一套说明：归档的空间里说"空间已归档"，而不是"只能查看"（M2-P6 复核 A 的 G3）
   edit: { permission: 'canEdit', message: '只能查看这份文档，不能保存' },
   rename: { permission: 'canRename', message: '没有给这份文档改名的权限' },
-  moveWithinSpace: { permission: 'canMoveWithinSpace', message: '没有移动这份文档的权限' },
-  moveAcrossSpaces: { permission: 'canMoveAcrossSpaces', message: '只有空间管理员能把文档移出这个空间' },
   copy: { permission: 'canCopy', message: '没有复制这份文档的权限' },
-  delete: { permission: 'canDelete', message: '编辑者只能删除自己创建的文档' },
+  // 结构性的操作：权限位只看空间角色
+  moveWithinSpace: { permission: 'canMoveWithinSpace', message: '没有移动这份文档的权限', grantOnlyMessage: '这份文档是单独分享给你的，不能移动' },
+  moveAcrossSpaces: { permission: 'canMoveAcrossSpaces', message: '只有空间管理员能把文档移出这个空间', grantOnlyMessage: '这份文档是单独分享给你的，不能移动' },
+  delete: { permission: 'canDelete', message: '编辑者只能删除自己创建的文档', grantOnlyMessage: '这份文档是单独分享给你的，不能删除' },
 }
 
 /**
@@ -160,21 +180,40 @@ export async function requireDocumentContent<T extends AccessTarget>(
   transaction?: Transaction,
 ): Promise<AccessibleDocument<T>> {
   const accessible = await requireAccess(policy, userId, document, transaction)
-  const checked = { ...accessible, permissions: documentPermissionsOf(accessible.access.role, accessible.document, userId) }
+  const checked = { ...accessible, permissions: documentPermissionsOf(accessible.access, accessible.document, userId) }
   requireDocumentOperations(checked, operations)
   return checked
 }
 
 /**
  * 已经判断过能访问（requireDocumentContent 的结果）之后，再要求这几项操作：不再查询，不能做是 PERMISSION_DENIED。
- * 保存先按"能访问"查重放、不是重放才要求能编辑时用它（00 号计划书 §7.4 第 2 步，M2-P6 复核 A 的 S-4）
+ * 保存先按"能访问"查重放、不是重放才要求能编辑时用它（00 号计划书 §7.4 第 2 步，M2-P6 复核 A 的 S-4）。
+ * 权限位已经按内容与结构分开算好（access-rules 的 documentPermissionsOf）；只凭授权的人被结构性的操作拒绝时给他自己的说明，
+ * 与空间归不归档无关（恢复之后他照样不能做）
  */
 export function requireDocumentOperations(accessible: AccessibleDocument<AccessTarget>, operations: readonly DocumentOperation[]): void {
   for (const operation of operations) {
-    const { permission, message } = DOCUMENT_CONTENT[operation]
-    if (!accessible.permissions[permission])
-      throw denied(accessible.access.space, message)
+    const { permission, message, grantOnlyMessage } = DOCUMENT_CONTENT[operation]
+    if (accessible.permissions[permission])
+      continue
+    if (grantOnlyMessage !== undefined && accessible.access.accessVia === 'grant')
+      throw new AppError('PERMISSION_DENIED', grantOnlyMessage)
+    throw denied(accessible.access.space, message)
   }
+}
+
+/**
+ * 刚放进这个空间的一份文档上的访问（新建的、复制出来的副本、跨空间移进来的），用于在同一个事务里拼响应：按调用者在目标空间的
+ * 访问算（access-rules 的 documentAccessOf，授权一项为空），服务不手工拼（M2-P5 设计 §3.4(1)）。
+ * 新建与复制出来的文档没有任何授权（复制不带授权，§3.4(6)）；移进来的文档带着它原来的授权，但调用者在目标空间至少是编辑者
+ * （要有新建的权限），授权最高只到编辑者，取较高者仍是空间角色——结果与并上授权相同
+ */
+export function documentAccessIn(target: SpaceContentAccess): DocumentAccess {
+  const access = documentAccessOf(target.space, undefined)
+  // SpaceContentAccess 的 role 就是按同一份事实算出的空间角色、不为空，这里一定有访问
+  if (access === undefined)
+    throw new Error(`有内容权限的空间里算不出文档的访问：${target.space.id}`)
+  return access
 }
 
 /** 空间里的内容操作与各自的权限；'view' 只要有空间角色，没有额外的权限位。 */

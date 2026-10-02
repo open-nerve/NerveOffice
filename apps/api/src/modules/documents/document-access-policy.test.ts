@@ -3,7 +3,7 @@ import type { SpaceFacts } from '../spaces/index.ts'
 import type { DocumentAccessPolicy, SpaceAccess } from './document-access-policy.ts'
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
-import { requireAccess, requireCreateTarget, requireDocumentContent, requireSpaceContent, requireSpaceManagement } from './document-access-policy.ts'
+import { documentAccessIn, requireAccess, requireCreateTarget, requireDocumentContent, requireSpaceContent, requireSpaceManagement } from './document-access-policy.ts'
 import { ALICE, ALICE_SPACE, BOB, BOB_SPACE, FakeStore, member, TEAM_SPACE } from './documents.test-support.ts'
 
 const MISSING = '0199a2c4-0000-7000-8000-0000000000ff'
@@ -18,15 +18,41 @@ async function errorOf(promise: Promise<unknown>): Promise<AppError> {
 }
 
 describe('EffectiveAccessPolicy', () => {
-  it('文档：按所在空间的有效角色；每次判断只查一次空间事实，在事务里判断时走同一个事务', async () => {
+  it('文档：空间事实与授权各查一次（先空间、后授权），在事务里判断时都走同一个事务；按所在空间的有效角色', async () => {
     const store = new FakeStore()
     const transaction = {} as Transaction
     const access = await store.policy.accessOf(ALICE, { id: 'd1', spaceId: ALICE_SPACE, createdBy: ALICE }, transaction)
-    expect(access?.role).toBe('admin')
+    expect(access).toMatchObject({ spaceRole: 'admin', contentRole: 'admin', accessVia: 'space' })
     expect(access?.space).toMatchObject({ id: ALICE_SPACE, type: 'personal' })
     expect(store.spaces.accessFactsOf).toHaveBeenCalledTimes(1)
     expect(store.spaces.accessFactsOf).toHaveBeenCalledWith(ALICE, ALICE_SPACE, { transaction })
+    expect(store.grants.roleOf).toHaveBeenCalledTimes(1)
+    expect(store.grants.roleOf).toHaveBeenCalledWith('d1', ALICE, transaction)
+    expect(store.spaces.accessFactsOf.mock.invocationCallOrder[0]).toBeLessThan(store.grants.roleOf.mock.invocationCallOrder[0] ?? 0)
     expect(await store.policy.accessOf(BOB, { id: 'd1', spaceId: ALICE_SPACE, createdBy: ALICE })).toBeUndefined()
+  })
+
+  it('文档并上单独授权（M2-P5）：在空间里没有角色、只凭授权时途径是 grant；授权给别人、给别的文档都不算', async () => {
+    const store = new FakeStore()
+    const document = { id: 'd1', spaceId: TEAM_SPACE, createdBy: ALICE }
+    store.setGrant('d1', BOB, 'editor')
+    expect(await store.policy.accessOf(BOB, document)).toMatchObject({ spaceRole: undefined, contentRole: 'editor', accessVia: 'grant', space: { id: TEAM_SPACE } })
+    expect(await store.policy.accessOf(ALICE, document)).toBeUndefined()
+    expect(await store.policy.accessOf(BOB, { ...document, id: 'd2' })).toBeUndefined()
+    // 归档之后授权同样降为查看者；取消之后看不到
+    store.space(TEAM_SPACE).status = 'archived'
+    expect(await store.policy.accessOf(BOB, document)).toMatchObject({ contentRole: 'viewer', accessVia: 'grant' })
+    store.setGrant('d1', BOB, undefined)
+    expect(await store.policy.accessOf(BOB, document)).toBeUndefined()
+  })
+
+  it('空间不看单独授权：只凭授权的人看不到那个空间（空间页、按空间列出、文件夹、回收站都经它）', async () => {
+    const store = new FakeStore()
+    store.setGrant('d1', BOB, 'editor')
+    expect(await store.policy.spaceAccessOf(member(BOB), TEAM_SPACE)).toBeUndefined()
+    expect((await errorOf(requireSpaceContent(store.policy, member(BOB), TEAM_SPACE, 'view'))).code).toBe('NOT_FOUND')
+    expect((await store.policy.visibleSpaces(member(BOB))).map(access => access.space.id)).toEqual([BOB_SPACE])
+    expect(store.grants.roleOf).not.toHaveBeenCalled()
   })
 
   it('空间：没有角色的看不到；没有加入的系统管理员看得到团队空间的管理面，看不到个人空间', async () => {
@@ -51,15 +77,16 @@ describe('requireAccess', () => {
   it('能访问：文档与有效角色', async () => {
     const store = new FakeStore()
     const document = { id: 'd1', spaceId: ALICE_SPACE, createdBy: ALICE }
-    expect(await requireAccess(store.policy, ALICE, document)).toMatchObject({ document, access: { role: 'admin' } })
+    expect(await requireAccess(store.policy, ALICE, document)).toMatchObject({ document, access: { spaceRole: 'admin', contentRole: 'admin' } })
   })
 
-  it('别人的与不存在的：同一个 NOT_FOUND；不存在时也用全零的空间查一次', async () => {
+  it('别人的与不存在的：同一个 NOT_FOUND；不存在时也用全零的空间与全零的文档照样查空间事实与授权两次（M2-P5 设计 §3.1）', async () => {
     const store = new FakeStore()
     const others = await errorOf(requireAccess(store.policy, ALICE, { id: 'd2', spaceId: BOB_SPACE, createdBy: BOB }))
     const missing = await errorOf(requireAccess(store.policy, ALICE, undefined))
     expect([others.code, missing.code]).toEqual(['NOT_FOUND', 'NOT_FOUND'])
     expect(store.spaces.accessFactsOf.mock.calls.map(call => call[1])).toEqual([BOB_SPACE, ZERO])
+    expect(store.grants.roleOf.mock.calls.map(call => call.slice(0, 2))).toEqual([['d2', ALICE], [ZERO, ALICE]])
   })
 })
 
@@ -76,6 +103,57 @@ describe('requireDocumentContent：保存（edit）', () => {
     store.space(TEAM_SPACE).status = 'archived'
     for (const userId of [ALICE, BOB])
       expect(await errorOf(requireDocumentContent(store.policy, userId, document, ['edit']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '空间已归档，只能查看' })
+  })
+})
+
+describe('requireDocumentContent：只凭授权的人（M2-P5 设计 §3.4(1)）', () => {
+  const document = { id: 'd1', spaceId: TEAM_SPACE, createdBy: BOB }
+
+  it('编辑授权：保存、改名、复制可以；空间内移动、跨空间移动、删除一律 403，说明是"单独分享给你的"——他是创建人也不能删', async () => {
+    const store = new FakeStore()
+    store.setGrant('d1', BOB, 'editor')
+    const allowed = await requireDocumentContent(store.policy, BOB, document, ['edit', 'rename', 'copy'])
+    expect(allowed.access).toMatchObject({ accessVia: 'grant', contentRole: 'editor' })
+    expect(allowed.permissions).toMatchObject({ canEdit: true, canRename: true, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false })
+    expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['moveWithinSpace']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '这份文档是单独分享给你的，不能移动' })
+    expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['moveAcrossSpaces']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '这份文档是单独分享给你的，不能移动' })
+    expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['delete']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '这份文档是单独分享给你的，不能删除' })
+    // 一次要求多项：改名可以、移动不行，整个请求 403
+    expect((await errorOf(requireDocumentContent(store.policy, BOB, document, ['rename', 'moveWithinSpace']))).code).toBe('PERMISSION_DENIED')
+  })
+
+  it('查看授权：只能读与复制，保存与改名按内容权限的说明拒绝', async () => {
+    const store = new FakeStore()
+    store.setGrant('d1', BOB, 'viewer')
+    expect((await requireDocumentContent(store.policy, BOB, document, ['copy'])).permissions.canCopy).toBe(true)
+    expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['edit']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能保存' })
+    expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['rename']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '没有给这份文档改名的权限' })
+  })
+
+  it('归档：编辑授权也只能查看，内容操作说明"空间已归档"；结构性操作仍说明是单独分享的（恢复之后他照样不能做）', async () => {
+    const store = new FakeStore()
+    store.setGrant('d1', BOB, 'editor')
+    store.space(TEAM_SPACE).status = 'archived'
+    expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['edit']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '空间已归档，只能查看' })
+    expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['delete']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '这份文档是单独分享给你的，不能删除' })
+  })
+
+  it('空间里有角色的人另有授权：结构性操作按空间角色的说明（不是"单独分享给你的"）', async () => {
+    const store = new FakeStore()
+    store.setMember(TEAM_SPACE, ALICE, 'viewer')
+    store.setGrant('d1', ALICE, 'editor')
+    const checked = await requireDocumentContent(store.policy, ALICE, document, ['edit'])
+    expect(checked.access).toMatchObject({ accessVia: 'space', spaceRole: 'viewer', contentRole: 'editor' })
+    expect(await errorOf(requireDocumentContent(store.policy, ALICE, document, ['moveWithinSpace']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '没有移动这份文档的权限' })
+  })
+})
+
+describe('documentAccessIn：刚放进一个空间的文档（新建、复制出来的、跨空间移进来的）', () => {
+  it('按调用者在那个空间的访问：空间角色就是内容权限，途径是空间', async () => {
+    const store = new FakeStore()
+    store.setMember(TEAM_SPACE, BOB, 'editor')
+    const target = await requireSpaceContent(store.policy, member(BOB), TEAM_SPACE, 'createDocuments')
+    expect(documentAccessIn(target)).toEqual({ spaceRole: 'editor', contentRole: 'editor', accessVia: 'space', space: target.space })
   })
 })
 

@@ -1,7 +1,8 @@
 import type { AuditActionDetailsInput, DocumentDetail } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Transaction } from '../database/index.ts'
-import type { AccessibleDocument, Actor, DocumentAccess, DocumentOperation } from './document-access-policy.ts'
+import type { DocumentAccess } from './access-rules.ts'
+import type { AccessibleDocument, Actor, DocumentOperation } from './document-access-policy.ts'
 import type { DocumentRow } from './documents.repository.ts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
@@ -9,7 +10,7 @@ import { inIdOrder } from '../../shared/id-order.ts'
 import { AuditService } from '../audit/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { SpacesService } from '../spaces/index.ts'
-import { DocumentAccessPolicy, requireCreateTarget, requireDocumentContent } from './document-access-policy.ts'
+import { documentAccessIn, DocumentAccessPolicy, requireCreateTarget, requireDocumentContent } from './document-access-policy.ts'
 import { toDetail } from './document-views.ts'
 import { DocumentsRepository } from './documents.repository.ts'
 import { folderIdIn } from './folder-location.ts'
@@ -135,6 +136,7 @@ export class DocumentOrganizingService {
   /**
    * 判断移动要的权限：目标是别的空间时要源空间的空间管理员，还要目标空间的新建权限（目标已归档是 409）；
    * 目标就是现在所在的空间时只要编辑者及以上，不再判断一次目标空间（归档时上一步就拒绝了，403 说明空间已归档）。
+   * 两项都只看空间角色：只凭授权的人一律 403（M2-P5 设计 §3.4(1)）。target 是移过去之后调用者在这份文档上的访问（拼响应用）
    */
   private async checkMove(
     actor: Actor,
@@ -147,7 +149,7 @@ export class DocumentOrganizingService {
     if (sameSpace)
       return { ...accessible, target: accessible.access }
     const target = await requireCreateTarget(this.policy, actor, command.spaceId, 'createDocuments', transaction)
-    return { ...accessible, target: { role: target.role, space: target.space } }
+    return { ...accessible, target: documentAccessIn(target) }
   }
 
   /** 在同一个空间里换文件夹（调用方已锁住这一行、已判断权限与目标位置）。 */

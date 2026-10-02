@@ -32,8 +32,9 @@ export class DocumentsService {
     const spaceId = query.spaceId ?? await this.personalSpaceIdOf(actor.userId)
     await requireSpaceContent(this.policy, actor, spaceId, 'view')
     const folderId = await this.folderFilterOf(spaceId, query.folderId)
-    // 多取一条，判断还有没有下一页
-    const rows = await this.repository.listAccessible({ spaceIds: [spaceId] }, { limit: query.limit + 1, after, folderId })
+    // 多取一条，判断还有没有下一页。只要空间那一半：按空间列出的是这个空间里的文档，单独授权不给空间里的任何东西开口子，
+    // 并上授权就会把别处分享给我的文档列进这个空间（M2-P5 设计 §3.4(2)）
+    const rows = await this.repository.listAccessible({ spaceIds: [spaceId], grantsOf: undefined }, { limit: query.limit + 1, after, folderId })
     const page = rows.slice(0, query.limit)
     const last = page.at(-1)
     return {

@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { DOCUMENT_TITLE_MAX_LENGTH, documentSpaceSchema, documentSummarySchema } from '../documents/documents.ts'
+import { DOCUMENT_ACCESS_VIA, DOCUMENT_TITLE_MAX_LENGTH, documentSpaceSchema, documentSummarySchema } from '../documents/documents.ts'
 import { FOLDER_MAX_DEPTH } from '../folders/folders.ts'
 import { codePointLength } from '../text/text.ts'
 
@@ -28,17 +28,20 @@ export type SearchQuery = z.infer<typeof searchQuerySchema>
 
 /**
  * 搜索结果的一条：文档的摘要，加上它在哪里——所在的空间，以及从空间根目录到它所在文件夹的名称。
- * 响应的结构宽松，见 auth 的会话信息。
+ * 凭单独授权命中（accessVia 为 grant：我在那个空间里没有角色）的一条不给目录结构（M2-P5 设计 §3.4(2)）：
+ * folderId 为 null，folderPath 是空数组。响应的结构宽松，见 auth 的会话信息。
  */
 export const searchResultSchema = documentSummarySchema.extend({
   space: documentSpaceSchema,
-  /** 所在的文件夹；在空间的根目录下时为 null */
+  /** 所在的文件夹；在空间的根目录下、或者凭授权命中时为 null */
   folderId: z.uuid().nullable(),
   /**
-   * 从空间的根目录到它所在文件夹的名称，按从浅到深的顺序；在空间的根目录下时是空数组。
+   * 从空间的根目录到它所在文件夹的名称，按从浅到深的顺序；在空间的根目录下、或者凭授权命中时是空数组。
    * 最长 FOLDER_MAX_DEPTH 段（文件夹最多这么多层）
    */
   folderPath: z.array(z.string()).max(FOLDER_MAX_DEPTH),
+  /** 看得到它的途径（与文档详情的 accessVia 相同） */
+  accessVia: z.enum(DOCUMENT_ACCESS_VIA),
 })
 
 export type SearchResult = z.infer<typeof searchResultSchema>

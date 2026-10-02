@@ -1,6 +1,6 @@
-import type { DocumentDetail, DocumentSpace, DocumentSummary, SearchResult } from '@nerve-office/contracts'
+import type { DocumentAccessVia, DocumentDetail, DocumentSpace, DocumentSummary, SearchResult } from '@nerve-office/contracts'
 import type { SpaceFacts } from '../spaces/index.ts'
-import type { DocumentAccess } from './document-access-policy.ts'
+import type { DocumentAccess } from './access-rules.ts'
 import type { DocumentRow } from './documents.repository.ts'
 import { documentPermissionsOf } from './access-rules.ts'
 
@@ -17,29 +17,36 @@ function toSpace(space: SpaceFacts): DocumentSpace {
 /**
  * 元数据与调用者的权限（权限的规则是 access-rules 里的纯函数，界面与服务端共用同一份）。
  * userId 是看这份文档的人：删除的权限要看他是不是创建人（P4-S3 spec §2）。
+ * 只凭授权（accessVia 为 grant）时不给所在的文件夹（00 号计划书 §5.5，M2-P5 设计 §3.4(1)）：文件夹是空间目录结构的一部分。
+ * 凡是返回文档详情的接口（打开、改名与移动的响应、新建与复制的响应）都经这里，"不给目录结构"只在这一处
  */
 export function toDetail(row: DocumentRow, access: DocumentAccess, userId: string): DocumentDetail {
   return {
     ...toSummary(row),
     spaceId: row.spaceId,
     space: toSpace(access.space),
-    folderId: row.folderId,
+    folderId: access.accessVia === 'grant' ? null : row.folderId,
+    accessVia: access.accessVia,
     revision: row.revision,
     profile: row.profile,
     formatVersion: row.formatVersion,
-    permissions: documentPermissionsOf(access.role, row, userId),
+    permissions: documentPermissionsOf(access, row, userId),
   }
 }
 
 /**
  * 搜索结果的一条（M2-P4 设计 §3.4 第 5 条）：摘要加上它在哪里——所在的空间，
  * 以及从空间根目录到它所在文件夹的名称（在空间的根目录下时是空数组）。不带权限位：点开时按文档自己的规则再判断。
+ * 凭授权命中（accessVia 为 grant）的一条不给目录结构：文件夹为空、路径是空数组，与文档详情同一条规则（M2-P5 设计 §3.4(2)），
+ * 调用方不必为它另查路径
  */
-export function toSearchResult(row: DocumentRow, space: SpaceFacts, folderPath: readonly string[]): SearchResult {
+export function toSearchResult(row: DocumentRow, space: SpaceFacts, folderPath: readonly string[], accessVia: DocumentAccessVia): SearchResult {
+  const viaGrant = accessVia === 'grant'
   return {
     ...toSummary(row),
     space: toSpace(space),
-    folderId: row.folderId,
-    folderPath: [...folderPath],
+    folderId: viaGrant ? null : row.folderId,
+    folderPath: viaGrant ? [] : [...folderPath],
+    accessVia,
   }
 }

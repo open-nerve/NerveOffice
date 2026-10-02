@@ -1,12 +1,14 @@
 // documents 模块单元测试的假仓储：按内存里的记录实现仓储的接口，事务直接执行。
-// 访问策略用真实的实现（EffectiveAccessPolicy），它依赖的空间事实由内存里的空间与成员算出：测试覆盖的是真实的权限规则。
-import type { SpaceRole, SpaceStatus, SpaceType } from '@nerve-office/contracts'
+// 访问策略用真实的实现（EffectiveAccessPolicy），它依赖的空间事实由内存里的空间与成员算出、单独授权由内存里的授权给出（M2-P5）：
+// 测试覆盖的是真实的权限规则。
+import type { GrantRole, SpaceRole, SpaceStatus, SpaceType } from '@nerve-office/contracts'
 import type { Buffer } from 'node:buffer'
 import type { AuditEvent, AuditService } from '../audit/index.ts'
 import type { Transaction, TransactionRunner } from '../database/index.ts'
 import type { SpaceFacts, SpacesService } from '../spaces/index.ts'
 import type { Actor } from './document-access-policy.ts'
 import type { CurrentContent, DocumentContentsRepository, StoredSnapshot } from './document-contents.repository.ts'
+import type { DocumentGrantsRepository } from './document-grants.repository.ts'
 import type { DocumentRevisionsRepository, NewRevision, RevisionRow } from './document-revisions.repository.ts'
 import type { AccessibleScope, CopiedDocument, DocumentRow, DocumentsRepository, ListOptions, NewDocument, SearchOptions } from './documents.repository.ts'
 import type { FolderAncestorRow, FolderRow, FoldersRepository, NewFolder, SubtreeMove, SubtreeSummary } from './folders.repository.ts'
@@ -68,6 +70,8 @@ export class FakeStore {
   readonly writeEpochs = new Map<string, number>()
   /** 收回写入权的调用：跨空间移动要在同一个事务里调一次（M2-P2 设计 §3.7） */
   readonly revocations: WriteAccessScope[] = []
+  /** 单独授权（M2-P5）：键是"文档 id 与账户 id"，访问策略与"可访问文档"的授权那一半据此判断 */
+  readonly grantRecords = new Map<string, GrantRole>()
   /** 空间与成员：访问策略据此算出有效权限 */
   readonly spaceRecords = new Map<string, FakeSpace>([
     [ALICE_SPACE, { type: 'personal', name: '爱丽丝', status: 'active', visibleToAll: false, owner: ALICE, members: new Map() }],
@@ -134,6 +138,21 @@ export class FakeStore {
       space.members.set(userId, role)
   }
 
+  /** 单独授权；role 为 undefined 时取消 */
+  setGrant(documentId: string, userId: string, role: GrantRole | undefined): void {
+    if (role === undefined)
+      this.grantRecords.delete(grantKey(documentId, userId))
+    else
+      this.grantRecords.set(grantKey(documentId, userId), role)
+  }
+
+  /** "可访问文档"的范围（与真实仓储的 accessible 同一个条件）：正常状态，并且在给定的空间里、或者（要授权那一半时）这个人有授权 */
+  private inScope(row: DocumentRow, scope: AccessibleScope): boolean {
+    if (this.entryOfDocument(row.id) !== null)
+      return false
+    return scope.spaceIds.includes(row.spaceId) || (scope.grantsOf !== undefined && this.grantRecords.has(grantKey(row.id, scope.grantsOf)))
+  }
+
   space(spaceId: string): FakeSpace {
     const space = this.spaceRecords.get(spaceId)
     if (space === undefined)
@@ -154,17 +173,17 @@ export class FakeStore {
       lockById: vi.fn(async (id: string) => this.activeDocument(id)),
       /** 共享锁持住（复制的源文档）：假仓储里与 findById 相同，用例据此核对取锁的顺序 */
       holdById: vi.fn(async (id: string) => this.activeDocument(id)),
-      /** 可访问文档：在这些空间里、正常状态（与真实仓储的 accessible 一样，状态不是参数） */
+      /** 可访问文档：范围见 inScope（与真实仓储的 accessible 一样，状态不是参数） */
       listAccessible: vi.fn(async (scope: AccessibleScope, options: ListOptions) =>
         [...this.documents.values()]
-          .filter(row => scope.spaceIds.includes(row.spaceId) && this.entryOfDocument(row.id) === null)
+          .filter(row => this.inScope(row, scope))
           .slice(0, options.limit)),
       /** 按标题搜索：范围与状态同上，再按关键词过滤，按位置从新到旧排序并从游标之后开始 */
       searchByTitle: vi.fn(async (scope: AccessibleScope, options: SearchOptions) => {
         const keyword = keywordOf(options.titlePattern)
         const { after } = options
         return [...this.documents.values()]
-          .filter(row => scope.spaceIds.includes(row.spaceId) && this.entryOfDocument(row.id) === null)
+          .filter(row => this.inScope(row, scope))
           .filter(row => row.title.toLowerCase().includes(keyword))
           .toSorted((a, b) => b.position.localeCompare(a.position) || b.id.localeCompare(a.id))
           .filter(row => after === undefined || row.position < after.position || (row.position === after.position && row.id < after.id))
@@ -436,6 +455,11 @@ export class FakeStore {
     }),
   }
 
+  /** 单独授权的仓储（M2-P5）：访问策略每判断一次文档，就是这里的一次查询（用例据此核对"不存在"时照样查一次） */
+  readonly grants = {
+    roleOf: vi.fn(async (documentId: string, userId: string): Promise<GrantRole | undefined> => this.grantRecords.get(grantKey(documentId, userId))),
+  }
+
   /** 收回写入权的入口：只记下调用（M2 的真实实现也什么都不做，M3 接租约） */
   readonly writeAccess = {
     revoke: vi.fn(async (scope: WriteAccessScope) => {
@@ -457,7 +481,7 @@ export class FakeStore {
   }
 
   /** 真实的访问策略 */
-  readonly policy = new EffectiveAccessPolicy(this.spaces as unknown as SpacesService)
+  readonly policy = new EffectiveAccessPolicy(this.spaces as unknown as SpacesService, this.grants as unknown as DocumentGrantsRepository)
   /** 与真实的 AuditService 一样按严格的结构校验（明细多一个键，例如标题，就抛出，M2-P6 复核 M-1），记下原样的事件 */
   readonly audit = {
     record: vi.fn(async (event: AuditEvent) => {
@@ -519,3 +543,8 @@ export class FakeStore {
 }
 
 export const HTTP_ORIGIN = { source: 'http', requestId: 'req-1', clientIp: '127.0.0.1' } as const
+
+/** 授权表的键：一个人在一份文档上至多一条（与真实表的主键相同） */
+function grantKey(documentId: string, userId: string): string {
+  return `${documentId}\n${userId}`
+}

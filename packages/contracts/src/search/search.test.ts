@@ -16,6 +16,7 @@ const result = {
   space: { id: SPACE_ID, type: 'team', name: '市场部' },
   folderId: FOLDER_ID,
   folderPath: ['资料', '2026'],
+  accessVia: 'space',
 }
 
 describe('搜索的查询参数', () => {
@@ -55,6 +56,13 @@ describe('搜索的结果', () => {
   it('空间根目录下的文档：folderId 为空，路径是空数组', () => {
     const atRoot = { ...result, folderId: null, folderPath: [] }
     expect(searchResponseSchema.parse({ items: [atRoot], nextCursor: 'abc' }).items).toEqual([atRoot])
+  })
+
+  it('看得到它的途径（M2-P5）：必填；凭授权命中的一条不带目录结构（folderId 为空、路径是空数组）', () => {
+    const viaGrant = { ...result, folderId: null, folderPath: [], accessVia: 'grant' }
+    expect(searchResponseSchema.parse({ items: [viaGrant], nextCursor: null }).items).toEqual([viaGrant])
+    expect(searchResponseSchema.safeParse({ items: [{ ...result, accessVia: undefined }], nextCursor: null }).success).toBe(false)
+    expect(searchResponseSchema.safeParse({ items: [{ ...result, accessVia: 'link' }], nextCursor: null }).success).toBe(false)
   })
 
   it('路径最长与文件夹的层数上限一致；结构不对的被拒绝', () => {

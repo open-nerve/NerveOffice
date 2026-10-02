@@ -6,6 +6,7 @@ import {
   copyDocumentRequestSchema,
   createDocumentRequestSchema,
   DEFAULT_DOCUMENT_TITLES,
+  DOCUMENT_ACCESS_VIA,
   DOCUMENT_PROFILE_OF,
   DOCUMENT_PROFILES,
   DOCUMENT_TITLE_MAX_LENGTH,
@@ -118,10 +119,11 @@ describe('文档的元数据', () => {
     spaceId: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0e',
     space: { id: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0e', type: 'team', name: '市场部' },
     folderId: null,
+    accessVia: 'space',
     revision: 1,
     profile: 'sheet@1',
     formatVersion: 1,
-    permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true },
+    permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false },
   }
 
   it('档案与格式版本不按已知的取值校验：客户端自己核对，不认识的显示格式不受支持', () => {
@@ -143,9 +145,17 @@ describe('文档的元数据', () => {
     expect(documentDetailSchema.safeParse({ ...detail, folderId: undefined }).success).toBe(false)
   })
 
-  it('权限的每一位都要给全：界面据此显示能做的操作', () => {
+  it('权限的每一位都要给全：界面据此显示能做的操作（M2-P5 加上分享）', () => {
+    expect(Object.keys(detail.permissions)).toContain('canShare')
     for (const permission of Object.keys(detail.permissions))
       expect(documentDetailSchema.safeParse({ ...detail, permissions: { ...detail.permissions, [permission]: undefined } }).success, permission).toBe(false)
+  })
+
+  it('看得到它的途径（M2-P5）：在空间里有角色是 space，只凭单独授权是 grant；必填，别的取值拒绝', () => {
+    expect(DOCUMENT_ACCESS_VIA).toEqual(['space', 'grant'])
+    expect(documentDetailSchema.parse({ ...detail, accessVia: 'grant' }).accessVia).toBe('grant')
+    expect(documentDetailSchema.safeParse({ ...detail, accessVia: undefined }).success).toBe(false)
+    expect(documentDetailSchema.safeParse({ ...detail, accessVia: 'link' }).success).toBe(false)
   })
 })
 

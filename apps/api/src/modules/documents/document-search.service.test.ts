@@ -31,10 +31,22 @@ describe('DocumentSearchService.search 的范围', () => {
     store.setMember(TEAM_SPACE, ALICE, 'viewer')
     at(store, ALICE_SPACE, '季度预算', '2026-09-26T10:00:00.000001Z')
     await service.search(member(ALICE), { query: '预算' })
+    // 现在只要空间那一半（M2-P5 设计 §3.4(2)：并上授权要同时改不变量与凭授权命中的行，一起接上）
     expect(store.repositories.documents.searchByTitle).toHaveBeenCalledWith(
-      { spaceIds: [ALICE_SPACE, TEAM_SPACE] },
+      { spaceIds: [ALICE_SPACE, TEAM_SPACE], grantsOf: undefined },
       { limit: 51, after: undefined, titlePattern: '%预算%' },
     )
+  })
+
+  it('现在只要空间那一半：分享给我的、在我看不到的空间里的文档不出现，也不让不变量误报', async () => {
+    const { store, service } = setup()
+    const shared = at(store, TEAM_SPACE, '分享来的预算', '2026-09-26T10:00:00.000002Z')
+    at(store, ALICE_SPACE, '我的预算', '2026-09-26T10:00:00.000001Z')
+    store.setGrant(shared.id, ALICE, 'editor')
+    // 前提：要了授权那一半就会搜到它（授权确实在），不然下面的断言什么也证明不了
+    const both = await store.repositories.documents.searchByTitle({ spaceIds: [ALICE_SPACE], grantsOf: ALICE }, { limit: 10, titlePattern: '%预算%' })
+    expect(both.map(row => row.title).toSorted()).toEqual(['分享来的预算', '我的预算'].toSorted())
+    expect((await service.search(member(ALICE), { query: '预算' })).items.map(item => item.title)).toEqual(['我的预算'])
   })
 
   it('看不到的空间：不进范围，里面的文档与空间名都不出现', async () => {
@@ -44,7 +56,7 @@ describe('DocumentSearchService.search 的范围', () => {
     const page = await service.search(member(ALICE), { query: '预算' })
     expect(page.items).toEqual([])
     expect(store.repositories.documents.searchByTitle).toHaveBeenCalledWith(
-      { spaceIds: [ALICE_SPACE] },
+      { spaceIds: [ALICE_SPACE], grantsOf: undefined },
       expect.anything(),
     )
   })
@@ -105,6 +117,7 @@ describe('DocumentSearchService.search 的结果', () => {
       space: { id: TEAM_SPACE, type: 'team', name: '市场部' },
       folderId: inner.id,
       folderPath: ['资料', '2026'],
+      accessVia: 'space',
     }])
   })
 

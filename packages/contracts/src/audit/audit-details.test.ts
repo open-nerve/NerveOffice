@@ -81,6 +81,20 @@ describe('审计明细的结构', () => {
     expect(accepts('users.login_unlocked', { clientIp: '203.0.113.7' })).toBe(false)
   })
 
+  it('单独授权（M2-P5）：与成员的三个动作同形——被授权人与角色，调整记前后的角色；角色只有查看者与编辑者，不收标题', () => {
+    expect(accepts('documents.shared', { userId: ID, role: 'viewer' })).toBe(true)
+    expect(accepts('documents.share_changed', { userId: ID, from: 'editor', to: 'viewer' })).toBe(true)
+    expect(accepts('documents.share_revoked', { userId: ID, role: 'editor' })).toBe(true)
+    // 授权最高只到编辑者
+    expect(accepts('documents.shared', { userId: ID, role: 'admin' })).toBe(false)
+    expect(accepts('documents.share_changed', { userId: ID, from: 'viewer', to: 'admin' })).toBe(false)
+    // 少了被授权人、id 不是 UUID、多了标题都拒绝
+    expect(accepts('documents.shared', { role: 'viewer' })).toBe(false)
+    expect(accepts('documents.share_revoked', { userId: 'amy', role: 'viewer' })).toBe(false)
+    expect(accepts('documents.shared', { userId: ID, role: 'viewer', title: '周报' })).toBe(false)
+    expect(accepts('documents.share_changed', { userId: ID, role: 'viewer' })).toBe(false)
+  })
+
   it('类型不对拒绝：id 不是 UUID、份数是负数或小数、原因不在列表里', () => {
     expect(accepts('documents.deleted', { spaceId: 'x', folderId: null, trashEntryId: OTHER })).toBe(false)
     expect(accepts('folders.deleted', { spaceId: ID, parentId: null, trashEntryId: OTHER, folders: -1, documents: 0 })).toBe(false)

@@ -3,7 +3,7 @@
 // 团队空间（全员可见的、归档的）与成员、写入代次不为 0 的文档，10 层文件夹、两种删除单元与"文件夹的删除单元里还有单独删过的子孙"——
 // 迁移到最新之后核对：每张表的行数不变、约束全部已验证、只由服务保证的不变量都成立，迁移之前的删除单元能经接口恢复与永久删除。
 //
-// 基准是每个阶段结束时的最后一个迁移（7 个），覆盖了到现在为止的每个迁移在有数据的库上的执行；每个基准一个空库，整个文件 3 秒左右。
+// 基准是每个阶段结束时的最后一个迁移（8 个），覆盖了到现在为止的每个迁移在有数据的库上的执行；每个基准一个空库，整个文件 3 秒左右。
 // 以后的阶段结束时在 BASES 里加上它的最后一个迁移；时长涨得多时，去掉中间被后面的基准完全覆盖的那些（写明理由）
 import type pg from 'pg'
 import type { TestDatabase } from '../support/database.ts'
@@ -31,10 +31,12 @@ const BASES: readonly (readonly [label: string, tag: string])[] = [
   ['M2-P4 结束', '0013_m2_audit_job_source'],
   ['M2-P6 第 1 片结束', '0015_m2_p6_login_throttle_accounts'],
   ['M2-P6 第 2 片结束', '0017_m2_p6_space_name_key_blanks'],
+  // 到 0019 为止的库迁到 0020（单独授权的表、审计的三个动作，M2-P5）。0019 之前的库上还没有授权的表，没有要按当时的结构写的授权行
+  ['M2-P6 结束', '0019_m2_p6_write_epoch_monotonic'],
 ]
 
 /** 行数要核对的表（某个基准上还没有的表跳过） */
-const TABLES = ['users', 'spaces', 'space_members', 'documents', 'document_contents', 'document_revisions', 'folders', 'trash_entries', 'audit_events', 'auth_sessions', 'auth_invitations', 'auth_password_resets', 'auth_login_throttles']
+const TABLES = ['users', 'spaces', 'space_members', 'documents', 'document_contents', 'document_revisions', 'document_grants', 'folders', 'trash_entries', 'audit_events', 'auth_sessions', 'auth_invitations', 'auth_password_resets', 'auth_login_throttles']
 
 const PASSWORD = 'correct horse battery staple'
 
@@ -192,11 +194,15 @@ async function seed(client: pg.Client, base: number): Promise<Seeded> {
     await insertDocument(team.id, `第 ${depth} 层的文档`, { folderId: id })
   }
   const level = (depth: number): string => chain[depth - 1] ?? ''
-  // 删除单元按当时的结构写（那时还有 origin_space_id，0018 删掉）
+  // 删除单元按当时的结构写（0018 之前还有 origin_space_id，0018 删掉）
+  const originSpace = !at('0018_m2_p6_trash_entries_origin_space')
   const entry = async (kind: string, originParent: string, title: string): Promise<string> => (await one<{ id: string }>(
     client,
-    `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_space_id, origin_parent_id, title)
-     VALUES ($1, $2, $3, now() + interval '30 days', $1, $4, $5) RETURNING id`,
+    originSpace
+      ? `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_space_id, origin_parent_id, title)
+         VALUES ($1, $2, $3, now() + interval '30 days', $1, $4, $5) RETURNING id`
+      : `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_parent_id, title)
+         VALUES ($1, $2, $3, now() + interval '30 days', $4, $5) RETURNING id`,
     [team.id, kind, amy, originParent, title],
   )).id
   // 删除单元 1：第 8 层里单独删掉的一份文档

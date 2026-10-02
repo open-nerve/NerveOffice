@@ -1,4 +1,4 @@
-export type { MemberRoleChange, SpaceChange, SpaceFacts, SpaceMemberRecord, SpaceRecord, SpaceSummary, TeamSpaceOverview } from './space.ts'
+export type { MemberRoleChange, SpaceChange, SpaceFacts, SpaceFactsWithOwner, SpaceMemberRecord, SpaceRecord, SpaceSummary, TeamSpaceOverview } from './space.ts'
 export { SpacesModule } from './spaces.module.ts'
 export { SpacesService } from './spaces.service.ts'
 export type { CreateOptions as CreateSpaceOptions, NewTeamSpace } from './spaces.service.ts'

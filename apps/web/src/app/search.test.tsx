@@ -32,6 +32,7 @@ function result(changes: Partial<SearchResult> = {}): SearchResult {
     space: { id: '0199a2c4-0000-7000-8000-0000000000c1', type: 'team', name: '市场部' },
     folderId: '0199a2c4-0000-7000-8000-0000000000f1',
     folderPath: ['方案', '二季度'],
+    accessVia: 'space',
     ...changes,
   }
 }

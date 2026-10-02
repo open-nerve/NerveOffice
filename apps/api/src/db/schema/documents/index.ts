@@ -1,9 +1,10 @@
 // documents 模块的表：文档的元数据（P3 设计 §3.2），当前内容与修订记录（P4 设计 §3.2，只做加法），
-// 文件夹与删除单元（M2-P4 设计 §3.3：与文档共用有效权限、空间事实与审计，所以放在同一个模块里）。
+// 文件夹与删除单元（M2-P4 设计 §3.3：与文档共用有效权限、空间事实与审计，所以放在同一个模块里），
+// 单独授权（M2-P5 设计 §3.3：有效权限并上授权，唯一入口在 documents）。
 import type { AnyPgColumn } from 'drizzle-orm/pg-core'
-import { DOCUMENT_PROFILES, DOCUMENT_STATUSES, DOCUMENT_TITLE_MAX_LENGTH, DOCUMENT_TYPES, FOLDER_MAX_DEPTH, FOLDER_NAME_MAX_LENGTH, PLATFORM_FORMAT_VERSIONS, SNAPSHOT_MAX_RAW_BYTES, TRASH_ENTRY_KINDS } from '@nerve-office/contracts'
+import { DOCUMENT_PROFILES, DOCUMENT_STATUSES, DOCUMENT_TITLE_MAX_LENGTH, DOCUMENT_TYPES, FOLDER_MAX_DEPTH, FOLDER_NAME_MAX_LENGTH, GRANT_ROLES, PLATFORM_FORMAT_VERSIONS, SNAPSHOT_MAX_RAW_BYTES, TRASH_ENTRY_KINDS } from '@nerve-office/contracts'
 import { sql } from 'drizzle-orm'
-import { check, index, integer, pgTable, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core'
+import { check, index, integer, pgTable, primaryKey, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core'
 import { bytea, lengthBetween, oneOf } from '../common/index.ts'
 import { spaces } from '../spaces/index.ts'
 import { users } from '../users/index.ts'
@@ -166,4 +167,30 @@ export const documentRevisions = pgTable('document_revisions', {
   check('document_revisions_local_seq_check', sql`${table.localSeq} >= 0`),
   // 保存有来源（两项同时有），新建没有
   check('document_revisions_source_check', sql`(${table.clientInstanceId} IS NULL) = (${table.kind} = 'created') AND (${table.clientInstanceId} IS NULL) = (${table.localSeq} IS NULL)`),
+])
+
+/**
+ * 单独授权（M2-P5 设计 §3.3）：空间管理员或个人空间的所有者把一份文档分享给一个同事，角色是查看者或编辑者。
+ * 一个人在一份文档上至多一条（主键）：调整就是改角色，取消就是删行——不做软删除，历史在审计里。
+ * - 永久删除文档时随之消失（document_id 的外键 ON DELETE CASCADE，ADR-016 的连带）：删除的本体（TrashEntryPurger）因此不必另删；
+ * - 移动文档（空间内、跨空间）、移出空间、归档、停用、停用者文档的转移都不动这张表：授权跟着文档走；
+ * - 账户不删除（停用可以撤回），user_id 与 granted_by 的外键 restrict。
+ * granted_by 是最后设置这个角色的人（新建或调整），updated_at 是那一次的时间。
+ * 不能给自己（M2-P5 设计 §3.2：PUT 给自己是 400）：被授权人与最后设置它的人不是同一个，由 CHECK 兜底——granted_by 只记
+ * 最后设置它的人，而被授权人设置不了自己的那一条，所以这一条对每一行都成立。
+ * 主键覆盖"这份文档的授权列表"与"这个人在这份文档上的授权"；(user_id) 索引给"与我共享"与"可访问文档"的授权那一半
+ */
+export const documentGrants = pgTable('document_grants', {
+  documentId: uuid('document_id').notNull().references(() => documents.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  // enum 只收窄 TypeScript 的类型，数据库里仍是 text 加 CHECK
+  role: text('role', { enum: GRANT_ROLES }).notNull(),
+  grantedBy: uuid('granted_by').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, table => [
+  primaryKey({ name: 'document_grants_pkey', columns: [table.documentId, table.userId] }),
+  check('document_grants_role_check', oneOf(table.role, GRANT_ROLES)),
+  check('document_grants_not_self_check', sql`${table.userId} <> ${table.grantedBy}`),
+  index('document_grants_user_idx').on(table.userId),
 ])

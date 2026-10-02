@@ -8,6 +8,7 @@ import { DocumentContentService } from './document-content.service.ts'
 import { DocumentContentsRepository } from './document-contents.repository.ts'
 import { DocumentCopyService } from './document-copy.service.ts'
 import { DocumentCreationService } from './document-creation.service.ts'
+import { DocumentGrantsRepository } from './document-grants.repository.ts'
 import { DocumentOrganizingService } from './document-organizing.service.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
 import { DocumentSearchService } from './document-search.service.ts'
@@ -34,6 +35,8 @@ import { LeaselessWriteAccessRevocation, WriteAccessRevocation } from './write-a
     FoldersRepository,
     TrashEntriesRepository,
     SpaceTreeRepository,
+    // 单独授权（M2-P5）：只在本模块里用（有效权限读它），不在 exports 里、不经公开入口转出
+    DocumentGrantsRepository,
     DocumentsService,
     DocumentCreationService,
     DocumentContentService,
@@ -46,7 +49,7 @@ import { LeaselessWriteAccessRevocation, WriteAccessRevocation } from './write-a
     TrashPurgeService,
     // 永久删除一个删除单元的本体（不判断权限）：只给本模块的 TrashService 与 TrashPurgeService 用，不在 exports 里
     TrashEntryPurger,
-    // 有效权限的唯一入口（M2-P2 设计 §3.4）；P5 在同一个实现里并上单独授权
+    // 有效权限的唯一入口（M2-P2 设计 §3.4）；M2-P5 在同一个实现里并上单独授权
     { provide: DocumentAccessPolicy, useClass: EffectiveAccessPolicy },
     // 收回写入权的入口（M2-P2 设计 §3.7）；M3 换成接入租约的实现，调用方不改
     { provide: WriteAccessRevocation, useClass: LeaselessWriteAccessRevocation },

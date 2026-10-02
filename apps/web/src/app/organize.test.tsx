@@ -47,10 +47,11 @@ function detail(changes: Partial<DocumentDetail> = {}): DocumentDetail {
     spaceId: SPACE_ID,
     space: { id: SPACE_ID, type: 'personal', name: '艾米' },
     folderId: null,
+    accessVia: 'space',
     revision: 1,
     profile: 'sheet@1',
     formatVersion: 1,
-    permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true },
+    permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true },
     ...changes,
   }
 }
@@ -234,7 +235,7 @@ describe('US-M2-07 行内的整理操作', () => {
   it('文档的操作面板按服务端给的权限显示：查看者只有复制，没有改名、移动、删除', async () => {
     loggedIn({
       [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail({
-        permissions: { canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false },
+        permissions: { canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false },
       })),
     })
     renderApp('/')
