@@ -34,6 +34,9 @@ export default defineConfig({
         test: {
           name: 'integration',
           environment: 'node',
+          // 每个测试文件一个进程（vitest 的默认，这里写明）：登录耗时的测试按这个进程的 CPU 时间量哈希的计算量（auth/login-timing.test.ts），
+          // 换成线程池时别的测试文件的 CPU 时间也会算进来
+          pool: 'forks',
           include: ['tests/integration/src/**/*.test.ts'],
           setupFiles: ['tests/integration/src/setup/database.ts'],
           testTimeout: 30_000,

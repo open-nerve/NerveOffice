@@ -216,6 +216,32 @@ describe('失败的验证与"没有账户"做同样的计算（Codex 评审 CX4�
     expect(computed).toEqual([C, 'm=16384,t=1,p=1（比对）'])
   })
 
+  it('reject 与验证一样受并发上限与排队上限的约束（复验 R3）：前一个计算没完不开始，排队满了立即繁忙', async () => {
+    let release: () => void = () => {}
+    const order: string[] = []
+    const hasher = new Argon2PasswordHasher(CURRENT, 1, { maxWaiting: 1 }, {
+      hash: vi.fn(async (password: string | Uint8Array, _options?: Options | null) => {
+        order.push(`${String(password)}:start`)
+        if (password === 'first') {
+          await new Promise<void>((resolve) => {
+            release = resolve
+          })
+        }
+        order.push(`${String(password)}:end`)
+        return 'hashed'
+      }),
+      verify: vi.fn(async () => false),
+    })
+    const first = hasher.hash('first')
+    const rejected = hasher.reject('second')
+    await expect(hasher.reject('third')).rejects.toBeInstanceOf(PasswordHashingBusyError)
+    await vi.waitFor(() => expect(order).toEqual(['first:start']))
+    release()
+    await first
+    expect(await rejected).toBe(false)
+    expect(order).toEqual(['first:start', 'first:end', 'second:start', 'second:end'])
+  })
+
   it('各组在同一个名额里算完：并发上限为 1 时，失败的验证算完之前别的计算不开始', async () => {
     const order: string[] = []
     let release: () => void = () => {}

@@ -89,7 +89,7 @@ export class UsersService implements OnModuleInit {
    * （单元测试核对比对失败之后仓储不再被调用；集成测试 auth/throttle-when-busy.test.ts 核对账户行被锁着时错的密码不等锁）
    */
   async verifyCredentials(usernameInput: string, password: string): Promise<CredentialCheck> {
-    // 先让哈希器知道库里现存的参数（参数调低之后，旧哈希的计算量更大，失败都要补到它）；读过一次之后不再读
+    // 先让哈希器知道库里现存的参数组：之后的失败与 reject 都把它们各算一次，刚启动时也不少算（单元测试核对不等它读完就不计算）；读过一次之后不再读
     await this.observeStoredParameters()
     const username = usernameSchema.safeParse(usernameInput)
     const credentials = username.success ? await this.repository.findCredentialsByUsername(username.data) : undefined

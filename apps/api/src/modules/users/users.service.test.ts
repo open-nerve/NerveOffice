@@ -1,5 +1,6 @@
 import type { User } from './user.ts'
 import type { UserCredentials, UsersRepository } from './users.repository.ts'
+import { setTimeout as delay } from 'node:timers/promises'
 import { describe, expect, it, vi } from 'vitest'
 import { AppLogger, createRootLogger, RequestContextStore } from '../logging/index.ts'
 import { PasswordHasher, PasswordHashingBusyError } from './password-hasher.ts'
@@ -9,6 +10,8 @@ import { UsersService } from './users.service.ts'
 class FakeHasher extends PasswordHasher {
   readonly verified: string[] = []
   readonly observed: (readonly string[])[] = []
+  /** 按先后记下 observe、verify、reject */
+  readonly events: string[] = []
   hashes = 0
   /** reject 的次数（没有可以比对的哈希：用户名不存在、账户已停用） */
   rejected = 0
@@ -20,11 +23,13 @@ class FakeHasher extends PasswordHasher {
   }
 
   async verify(passwordHash: string, password: string): Promise<boolean> {
+    this.events.push('verify')
     this.verified.push(passwordHash)
     return passwordHash === `hash:${password}`
   }
 
   async reject(): Promise<false> {
+    this.events.push('reject')
     this.rejected += 1
     return false
   }
@@ -34,6 +39,7 @@ class FakeHasher extends PasswordHasher {
   }
 
   observe(parameterSegments: readonly string[]): void {
+    this.events.push('observe')
     this.observed.push(parameterSegments)
   }
 }
@@ -177,7 +183,22 @@ describe('库里现存哈希的参数（Codex 评审 CX4）', () => {
     await vi.waitFor(() => expect(hasher.observed).toEqual([STORED_PARAMETERS]))
   })
 
-  it('验证之前先交给哈希器（第一次验证时还没读完就等它）；读过一次之后不再读', async () => {
+  it('第一次验证时库里的参数还没读完：等它读完、交给哈希器之后才计算（复验 R5：不等的话，刚启动时不存在的用户名少算库里的参数组）', async () => {
+    const { service, repository, hasher } = setup(undefined)
+    let finish: (segments: string[]) => void = () => {}
+    repository.passwordHashParameters.mockReturnValueOnce(new Promise((resolve) => {
+      finish = resolve
+    }))
+    service.onModuleInit()
+    const pending = service.verifyCredentials('nobody', 'secret')
+    await delay(20)
+    expect(hasher.events).toEqual([])
+    finish(STORED_PARAMETERS)
+    expect(await pending).toEqual({ valid: false })
+    expect(hasher.events).toEqual(['observe', 'reject'])
+  })
+
+  it('验证之前先交给哈希器；读过一次之后不再读', async () => {
     const { service, repository, hasher } = setup({ user: ALICE, passwordHash: 'hash:secret', passwordVersion: 1 })
     const verify = vi.spyOn(hasher, 'verify')
     await service.verifyCredentials('alice', 'wrong')
