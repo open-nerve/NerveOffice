@@ -52,10 +52,11 @@ export const auditEventItemSchema = z.object({
     type: z.string(),
     id: z.uuid(),
     /**
-     * 能补上的名字：邀请是登录名，空间是名称；其他为空。对象是账户时这里仍是拼好的"显示名（登录名）"：
-     * 只为打开着的旧页面保留（接口只做加法），新页面用 user（M2-P6 复核 M2）
+     * 不是账户的对象能补上的名字：邀请是被邀请的登录名，空间是当前的名称；文档不补标题（M2 总设计 §2.1 第 5 条），其他为空。
+     * 账户不在这里：用 user（登录名与显示名分开给出）。原来的 label 对账户给的是拼好的"显示名（登录名）"，显示名冒充得了登录名；
+     * 它只为打开着的旧页面保留，v0.1 还没有部署、没有旧页面，M2-P6 第 6 片复核 S2 删掉它（DEF-034）
      */
-    label: z.string().nullable(),
+    name: z.string().nullable(),
     /** 对象是账户时它当前的登录名与显示名（分开给出，M2-P6 复核 M2）；不是账户、或者账户已经不在时为空 */
     user: auditUserNameSchema.nullable(),
   }).nullable(),

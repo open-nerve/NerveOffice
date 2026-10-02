@@ -1,7 +1,11 @@
 // held-lock 的自测（M2-P1 复验 X3）：分几步发出请求时，登记过的任何一步没走到锁上就先结束了，等待立即失败并报出它的结果，
 // 不空等到超时，也不丢掉那一步的状态码。持锁期间另发的请求"不等锁就走完"的判断（M2-P6 复验 N1）两个方向各一例。
+// raceAgainstHeldLock 的前提（应用等锁的时限远长于测试的那段操作）由断言守着：前提不成立时直接失败（M2-P6 第 6 片复核 S4）。
 import type { TestDatabase } from './database.ts'
+import { setTimeout as delay } from 'node:timers/promises'
+import { loadConfig } from '@nerve-office/api'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { testEnvironment } from './api-app.ts'
 import { createTestDatabase } from './database.ts'
 import { completesWithoutWaiting, raceAgainstHeldLock } from './held-lock.ts'
 
@@ -76,5 +80,26 @@ describe('held-lock', () => {
     })
     expect(completed).toBe(false)
     await expect(second).resolves.toBeDefined()
+  })
+})
+
+describe('held-lock 的前提：应用等锁的时限远长于"等到请求 → 改数据 → 提交"这一段（M2-P6 第 6 片复核 S4）', () => {
+  it('测试应用默认的等锁时限不短于 5 秒（raceAgainstHeldLock 的用例大都发给默认的应用）', () => {
+    expect(loadConfig(testEnvironment(database.url)).database.lockTimeoutMs).toBeGreaterThanOrEqual(5_000)
+  })
+
+  it('被测的请求在测试提交之前就等锁超时了（等锁时限比改数据这一段短）：直接失败并写明前提不成立，不拿它超时之后的结果去比', async () => {
+    const race = raceAgainstHeldLock(database, {
+      hold: async client => client.query(HOLD_ADVISORY_LOCK),
+      // 被测的"请求"等锁 200 毫秒就放弃（相当于把应用的等锁时限调到几百毫秒）
+      request: async () => database.query(async (client) => {
+        await client.query('SET lock_timeout = \'200ms\'')
+        return client.query(HOLD_ADVISORY_LOCK)
+      }),
+      // 改数据这一段比它等锁的时限长
+      change: async () => delay(600),
+    })
+    await expect(race).rejects.toThrow('raceAgainstHeldLock 的前提不成立')
+    await expect(race).rejects.toThrow('请求已经结束：失败')
   })
 })

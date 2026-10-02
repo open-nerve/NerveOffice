@@ -258,7 +258,7 @@ describe('US-M2-05 系统管理员要看内容，先把自己加入空间', () =
     const space = await created(await createSpace({ name: '会改名的空间', adminUserId: amy.id }))
     await asUser(app.baseUrl, amySession, `/api/spaces/${space.id}/name`, { method: 'PUT', body: { name: '改过名的空间' } })
     const page = parseExact(auditEventListResponseSchema, await (await asUser(app.baseUrl, rootSession, `/api/admin/audit-events?targetType=space&targetId=${space.id}`)).json())
-    expect(page.items.map(item => [item.action, item.target?.label])).toEqual([['spaces.renamed', '改过名的空间'], ['spaces.created', '改过名的空间']])
+    expect(page.items.map(item => [item.action, item.target?.name])).toEqual([['spaces.renamed', '改过名的空间'], ['spaces.created', '改过名的空间']])
     expect(page.items[0]?.details).toEqual({ from: '会改名的空间', to: '改过名的空间' })
   })
 })

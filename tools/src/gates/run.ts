@@ -92,13 +92,17 @@ function config(): GateOutcome {
   return { name: 'config', title: '包管理配置', violations: [...checkPnpmConfig(readText('pnpm-workspace.yaml'), PNPM_POLICY), ...checkPnpmfiles(pnpmfiles)], notes: [] }
 }
 
-function stories(): GateOutcome {
+/**
+ * 故事对照：读登记表与它列出的各份总设计，列举会执行的测试，交给 checkStories。
+ * run 执行两条列举命令；单元测试注入样例（真的列举全部用例要十几秒，慢在 vitest list：仓库现状由 static-gates 一步核对）
+ */
+export function storiesGate(run: CommandRunner): GateOutcome {
   const registry = parseRegistry(readJson(STORY_REGISTRY))
   const designIds = registry.designs.flatMap(design => parseDesignStoryIds(readText(design)))
   const tests = [
-    ...testsFromVitestList(commandJson('pnpm', ['exec', 'vitest', 'list', '--json']), REPO_ROOT),
+    ...testsFromVitestList(run('pnpm', ['exec', 'vitest', 'list', '--json']), REPO_ROOT),
     // 经 e2e 包的 list 脚本：它按 @nerve-office/source 条件解析工作区的包，用例引用的 contracts 不必先构建（静态检查在构建之前执行）
-    ...testsFromPlaywrightList(commandJson('pnpm', ['--silent', '--filter', '@nerve-office/e2e', 'run', 'list']), E2E_SPECS),
+    ...testsFromPlaywrightList(run('pnpm', ['--silent', '--filter', '@nerve-office/e2e', 'run', 'list']), E2E_SPECS),
   ]
   const active = Object.entries(registry.stories).filter(([, s]) => s.status === 'active').map(([id]) => id)
   return { name: 'stories', title: '故事对照', violations: checkStories(designIds, registry, tests), notes: [`${designIds.length} 个故事，active：${active.join('、') || '无'}；列举出 ${tests.length} 个会执行的测试`] }
@@ -255,7 +259,7 @@ export function auditGate(run: CommandRunner, today: string): GateOutcome {
 const GATES: Readonly<Record<GateName, () => GateOutcome>> = {
   pins,
   config,
-  stories,
+  stories: () => storiesGate(commandJson),
   migrations,
   schema,
   deps,

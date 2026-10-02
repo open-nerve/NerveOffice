@@ -2,6 +2,8 @@
 // 再在同一个事务里改数据、提交。被测的请求随后拿到锁，看到的是改过的数据。不靠固定时长的等待，结果是确定的。
 // 前提是应用等锁的时限（默认 5 秒）比"请求开始等锁 → 测试看到它 → 改数据 → 提交"长得多：等锁时限调到几百毫秒的应用不要用
 // raceAgainstHeldLock，否则请求可能先在这把锁上超时、走了另一条路（M2-P6 第 3 片丙批复验，见 api/busy-after-commit.test.ts 的文件头）。
+// 这个前提由断言守着（M2-P6 第 6 片复核 S4）：提交之前再查一次，被测的请求不在锁上等了（它先超时走了）就直接失败、写明原因，
+// 不让用例误报失败或碰巧通过；测试应用默认的等锁时限不短于 5 秒，由 held-lock.test.ts 核对。
 // 数据库繁忙的用例（M2-P6 复核 A 的 G-2）另用 whileHolding 与表锁：持着锁直到被测的请求结束，请求一定是等满时限失败。
 //
 // 预期就是在最后一步遇到数据库繁忙、应用的等锁时限又是默认 5 秒时，不必等满时限（M2-P6 第 3 片丁批）：cancelWhenWaiting 等被测的请求
@@ -56,6 +58,15 @@ async function backendPidOf(client: pg.Client): Promise<number> {
   return pid
 }
 
+/** 这个库里在等锁的连接数，以及其中被 holderPid 挡住的个数 */
+async function blockedConnections(database: TestDatabase, holderPid: number): Promise<{ total: number, byHolder: number } | undefined> {
+  return database.query(async client => (await client.query<{ total: number, byHolder: number }>(
+    `SELECT count(*)::int AS total, count(*) FILTER (WHERE $1 = ANY(pg_blocking_pids(pid)))::int AS "byHolder"
+     FROM pg_stat_activity WHERE datname = current_database() AND cardinality(pg_blocking_pids(pid)) > 0`,
+    [holderPid],
+  )).rows[0])
+}
+
 /**
  * 等到这个库里有 count 个连接在等锁，其中至少一个被 holderPid 挡住。
  * 被测的请求已经结束（没走到锁上就完成了，或者在别处等锁超时）时立即失败，报出它的结果，不空等到超时（复验 N5）
@@ -63,11 +74,7 @@ async function backendPidOf(client: pg.Client): Promise<number> {
 async function waitUntilBlocked(database: TestDatabase, holderPid: number, count: number, ended: () => string | undefined): Promise<void> {
   const deadline = performance.now() + WAIT_TIMEOUT_MS
   for (;;) {
-    const blocked = await database.query(async client => (await client.query<{ total: number, byHolder: number }>(
-      `SELECT count(*)::int AS total, count(*) FILTER (WHERE $1 = ANY(pg_blocking_pids(pid)))::int AS "byHolder"
-       FROM pg_stat_activity WHERE datname = current_database() AND cardinality(pg_blocking_pids(pid)) > 0`,
-      [holderPid],
-    )).rows[0])
+    const blocked = await blockedConnections(database, holderPid)
     if (blocked !== undefined && blocked.byHolder > 0 && blocked.total >= count)
       return
     const outcome = ended()
@@ -77,6 +84,20 @@ async function waitUntilBlocked(database: TestDatabase, holderPid: number, count
       throw new Error(`${WAIT_TIMEOUT_MS} ms 内没有等到 ${count} 个请求在锁上等待（现在 ${blocked?.total ?? 0} 个）`)
     await delay(20)
   }
+}
+
+/**
+ * 提交之前被测的请求仍在锁上等着（文件头的前提，M2-P6 第 6 片复核 S4）：应用等锁的时限比"等到它 → 改数据"这一段短时，
+ * 它已经超时、走了另一条路，再提交得到的结果就不是这个构造要测的。这时直接失败、写明原因（请求已经结束的话带上它的结果）。
+ * 与 waitUntilBlocked 同一个判断：等锁的连接够 count 个，其中有被持锁的连接挡住的
+ */
+async function assertStillWaiting(database: TestDatabase, holderPid: number, count: number, ended: () => string | undefined): Promise<void> {
+  const blocked = await blockedConnections(database, holderPid)
+  if (blocked !== undefined && blocked.byHolder > 0 && blocked.total >= count)
+    return
+  const outcome = ended()
+  throw new Error(`提交之前被测的请求已经不在锁上等了（等锁的连接 ${blocked?.total ?? 0} 个，要 ${count} 个${outcome === undefined ? '' : `；请求已经结束：${outcome}`}）：`
+    + '应用等锁的时限（lock_timeout）可能比"等到请求 → 改数据"这一段短，raceAgainstHeldLock 的前提不成立（见 held-lock.ts 的文件头）')
 }
 
 /** 这个库里在等锁的连接数（被谁挡住的都算） */
@@ -154,6 +175,7 @@ export async function raceAgainstHeldLock<T>(database: TestDatabase, race: HeldL
       outcomes.push(watch(pending))
       await waitUntilBlocked(database, holderPid, race.waiting ?? 1, ended)
       await race.change(client)
+      await assertStillWaiting(database, holderPid, race.waiting ?? 1, ended)
       await client.query('COMMIT')
     }
     catch (error) {

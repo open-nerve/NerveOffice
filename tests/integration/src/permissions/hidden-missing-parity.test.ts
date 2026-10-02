@@ -6,6 +6,7 @@ import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { ComparableResponse } from '../support/comparable-response.ts'
 import type { TestDatabase } from '../support/database.ts'
+import type { Route } from '../support/routes.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import type { StatementCapture } from '../support/statement-capture.ts'
 import { Buffer } from 'node:buffer'
@@ -18,6 +19,7 @@ import { startTestApp } from '../support/api-app.ts'
 import { comparableOf } from '../support/comparable-response.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
+import { matchesRoute, pathParameters, routesOf } from '../support/routes.ts'
 import { asUser, login } from '../support/session-client.ts'
 import { createTeamSpace } from '../support/spaces.ts'
 import { captureStatements } from '../support/statement-capture.ts'
@@ -132,8 +134,21 @@ interface Probe {
   readonly request: (session: LoggedIn, hidden: boolean) => Promise<Response>
 }
 
+/**
+ * 只记下请求（"方法 路径"）、不发出去：核对这份清单覆盖了哪些接口时用（见文件末尾，M2-P6 第 6 片复核 S5）。
+ * 发请求的两个函数（call、save）都先看它
+ */
+let recording: string[] | undefined
+
+function recorded(method: string, path: string): Response | undefined {
+  if (recording === undefined)
+    return undefined
+  recording.push(`${method} ${path}`)
+  return new Response(null, { status: 204 })
+}
+
 async function call(session: LoggedIn, path: string, method = 'GET', body?: unknown): Promise<Response> {
-  return asUser(app.baseUrl, session, path, body === undefined ? { method } : { method, body })
+  return recorded(method, path) ?? asUser(app.baseUrl, session, path, body === undefined ? { method } : { method, body })
 }
 
 /** 不存在的对象：每次一个新的 id */
@@ -143,7 +158,8 @@ const pick = (hidden: boolean, id: string): string => (hidden ? id : missing())
 
 async function save(session: LoggedIn, documentId: string, unitId: string): Promise<Response> {
   const query = new URLSearchParams({ baseRevision: '1', requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1' })
-  return asUser(app.baseUrl, session, `/api/documents/${documentId}/content?${query.toString()}`, {
+  const path = `/api/documents/${documentId}/content?${query.toString()}`
+  return recorded('PUT', path) ?? asUser(app.baseUrl, session, path, {
     method: 'PUT',
     binary: { contentType: 'application/gzip', bytes: zlib.gzipSync(Buffer.from(sheetSnapshotFor(unitId), 'utf8')) },
   })
@@ -220,6 +236,8 @@ const PROBES: readonly Probe[] = [
   { name: '系统管理员 PUT 个人空间改名', actor: 'systemAdmin', request: async (s, h) => call(s, `/api/spaces/${pick(h, w.owner.personalSpaceId)}/name`, 'PUT', { name: '改名' }) },
   { name: '系统管理员 PUT 个人空间全员可见', actor: 'systemAdmin', request: async (s, h) => call(s, `/api/admin/spaces/${pick(h, w.owner.personalSpaceId)}/visibility`, 'PUT', { visibleToAll: true }) },
   { name: '系统管理员 POST 归档个人空间', actor: 'systemAdmin', request: async (s, h) => call(s, `/api/admin/spaces/${pick(h, w.owner.personalSpaceId)}/archive`, 'POST') },
+  // 路由表的覆盖核对发现的（M2-P6 第 6 片复核 S5）：恢复与归档成对，原来漏了
+  { name: '系统管理员 POST 恢复个人空间', actor: 'systemAdmin', request: async (s, h) => call(s, `/api/admin/spaces/${pick(h, w.owner.personalSpaceId)}/restore`, 'POST') },
   { name: '系统管理员 转移到写成团队空间的个人空间', actor: 'systemAdmin', request: async (s, h) => call(s, `/api/admin/users/${w.leaver.id}/documents/transfer`, 'POST', { documentIds: [w.leaver.document], target: { type: 'team', spaceId: pick(h, w.owner.personalSpaceId) } }) },
 ]
 
@@ -238,3 +256,54 @@ describe('看不到与不存在完全一致：响应、响应头与语句序列�
     expect(hidden.statements.length).toBeGreaterThan(0)
   })
 })
+
+/**
+ * 路径里带 id 的接口里，不在上面清单里的：都是只给系统管理员的管理接口，系统管理员看得到全部账户与邀请（停用的、作废的也在），
+ * 没有"看不到"的对象，别人一律 403（与对象存不存在无关，management-matrix 的反向用例）；不存在的 id 回 404 由各自的集成测试核对
+ */
+const NO_HIDDEN_OBJECTS = '只给系统管理员：系统管理员看得到全部账户与邀请，没有"看不到"的对象；别人一律 403，与对象存不存在无关'
+const EXEMPT: Readonly<Record<string, string>> = {
+  'POST /api/admin/invitations/:id/reissue': NO_HIDDEN_OBJECTS,
+  'POST /api/admin/invitations/:id/revoke': NO_HIDDEN_OBJECTS,
+  'GET /api/admin/users/:id': NO_HIDDEN_OBJECTS,
+  'POST /api/admin/users/:id/disable': NO_HIDDEN_OBJECTS,
+  'GET /api/admin/users/:id/documents': NO_HIDDEN_OBJECTS,
+  'POST /api/admin/users/:id/enable': NO_HIDDEN_OBJECTS,
+  'POST /api/admin/users/:id/password-reset': NO_HIDDEN_OBJECTS,
+  'PUT /api/admin/users/:id/system-role': NO_HIDDEN_OBJECTS,
+  'POST /api/admin/users/:id/unlock-login': NO_HIDDEN_OBJECTS,
+}
+
+describe('路径里带 id 的每个接口都在上面的清单里，或者明确豁免（M2-P6 第 6 片复核 S5）', () => {
+  it('接口从应用的路由表列出（不手写）：清单发出的请求逐个对上路由表；没对上的带 id 的接口都写明豁免的原因，豁免的不在清单里', async () => {
+    const routes = routesOf(app)
+    const requests = await probeRequests()
+    const name = (route: Route): string => `${route.method} ${route.path}`
+    // 清单里的请求都是真实的接口（写错路径的探测会被这里发现）
+    expect(requests.filter(request => !routes.some(route => matchesRoute(route, ...splitRequest(request))))).toEqual([])
+    const withIds = routes.filter(route => pathParameters(route).length > 0)
+    const covered = new Set(withIds.filter(route => requests.some(request => matchesRoute(route, ...splitRequest(request)))).map(name))
+    expect(withIds.map(name).filter(route => !covered.has(route) && EXEMPT[route] === undefined), '既不在清单里、也没有写明豁免的带 id 的接口').toEqual([])
+    expect(Object.keys(EXEMPT).filter(route => covered.has(route) || !withIds.some(item => name(item) === route)), '豁免的接口已经在清单里，或者已经不在路由表里').toEqual([])
+  })
+})
+
+/** 清单里每个探测发出的请求（"方法 路径"）：只记下，不发出去 */
+async function probeRequests(): Promise<string[]> {
+  const requests: string[] = []
+  recording = requests
+  try {
+    for (const probe of PROBES)
+      await probe.request(w.sessions[probe.actor], true)
+  }
+  finally {
+    recording = undefined
+  }
+  return requests
+}
+
+/** "方法 路径" 拆成两段 */
+function splitRequest(request: string): [method: string, path: string] {
+  const [method = '', path = ''] = request.split(' ')
+  return [method, path]
+}

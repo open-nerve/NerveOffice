@@ -38,7 +38,7 @@ export const EVENT: AuditEventItem = {
   occurredAt: '2026-09-28T03:00:00.000Z',
   action: 'users.disabled',
   actor: { type: 'user', id: ROOT_ID, username: 'root', displayName: '管理员' },
-  target: { type: 'user', id: AMY.id, label: '艾米（amy）', user: { username: 'amy', displayName: '艾米' } },
+  target: { type: 'user', id: AMY.id, name: null, user: { username: 'amy', displayName: '艾米' } },
   source: 'http',
   requestId: 'req-1',
   clientIp: '192.0.2.1',
