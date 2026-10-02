@@ -1,6 +1,6 @@
 // 容器 E2E（P5 设计 §3.6）里可以单独测试的部分：编排的参数与变量文件、交给 Playwright 的环境变量、
-// 部署配置的核对（经代理的探针、客户端地址 DEF-014、应用的端口不发布）、遗留编排项目的识别、docker 输出的解析。
-// 执行的步骤在 container-e2e-cli.ts。
+// 部署配置的核对（经代理的探针、客户端地址 DEF-014、应用的端口不发布）、遗留编排项目的识别、docker 输出的解析、
+// 空闲内存的取样与中位数（ADR-001）。执行的步骤在 container-e2e-cli.ts。
 import { Buffer } from 'node:buffer'
 import { randomBytes } from 'node:crypto'
 
@@ -276,6 +276,65 @@ export function memoryBytes(stats: string): number | undefined {
 /** 字节数 → MiB，保留一位小数 */
 export function mebibytes(bytes: number): string {
   return `${(bytes / 1024 ** 2).toFixed(1)} MiB`
+}
+
+/** E2E 期间取样应用容器内存的间隔（峰值取各次的最大值） */
+export const MEMORY_SAMPLE_INTERVAL_MS = 2_000
+
+export interface MemorySampling {
+  /** 第一次取样之前等多久 */
+  readonly settleMs: number
+  /** 取几次 */
+  readonly samples: number
+  /** 两次之间隔多久 */
+  readonly intervalMs: number
+}
+
+/**
+ * 空闲内存的取样（ADR-001，M2-P6 第 6 片复核 M2）：原来部署核对之后紧接着取一次，同一份代码背靠背跑，空闲就有约 210 与约 244 MiB
+ * 两档；核对里那三次登录失败各算一次 Argon2（每次约 19 MiB 的工作内存），疑点在这里。改为等一会儿再取几次、取中位数：
+ * - 先等 10 秒：让核对里的请求结束、内存回落（V8 在分配停下来之后要过几秒才做缩堆的回收）；
+ * - 取 5 次、两次之间隔 2 秒（与 E2E 期间取样的间隔相同，docker stats 每次自己还要一两秒）：中位数不受其中两次离群值的影响，
+ *   各次的值一并打印，看得出是不是还在回落。合计不到半分钟，相对容器 E2E 的十分钟上下可以忽略
+ */
+export const IDLE_MEMORY_SAMPLING: MemorySampling = { settleMs: 10_000, samples: 5, intervalMs: MEMORY_SAMPLE_INTERVAL_MS }
+
+/** 中位数：偶数个时取中间两个的平均；没有数时是 undefined */
+export function median(values: readonly number[]): number | undefined {
+  const sorted = [...values].sort((a, b) => a - b)
+  const upper = sorted[Math.floor(sorted.length / 2)]
+  const lower = sorted.length % 2 === 1 ? upper : sorted[sorted.length / 2 - 1]
+  return upper === undefined || lower === undefined ? undefined : (lower + upper) / 2
+}
+
+export interface MemorySampler {
+  /** 取一次样（字节）；取不到时是 undefined */
+  readonly sample: () => Promise<number | undefined>
+  readonly wait: (ms: number) => Promise<void>
+  /** 收到终止信号：不再等、不再取 */
+  readonly stopped: () => boolean
+}
+
+/** 按 plan 取样：先等 settleMs，再取 samples 次、两次之间等 intervalMs；取不到的一次记为 undefined，停下时返回已经取到的 */
+export async function sampleMemory(plan: MemorySampling, sampler: MemorySampler): Promise<(number | undefined)[]> {
+  const samples: (number | undefined)[] = []
+  while (samples.length < plan.samples && !sampler.stopped()) {
+    await sampler.wait(samples.length === 0 ? plan.settleMs : plan.intervalMs)
+    if (sampler.stopped())
+      break
+    samples.push(await sampler.sample())
+  }
+  return samples
+}
+
+/** 空闲内存的说明：取到的各次的中位数，后面列出各次的值（MiB）；一次也没取到时说明 */
+export function describeIdleMemory(plan: MemorySampling, samples: readonly (number | undefined)[]): string {
+  const taken = samples.filter(bytes => bytes !== undefined)
+  const value = median(taken)
+  if (value === undefined)
+    return '（没有取到）'
+  const each = samples.map(bytes => (bytes === undefined ? '没取到' : (bytes / 1024 ** 2).toFixed(1))).join('、')
+  return `${mebibytes(value)}（部署核对之后等 ${plan.settleMs / 1000} 秒、每 ${plan.intervalMs / 1000} 秒取一次，${taken.length} 次的中位数；各次 ${each} MiB）`
 }
 
 /**

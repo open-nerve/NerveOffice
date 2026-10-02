@@ -1,6 +1,7 @@
 // 按名称执行门禁：从仓库读取输入（执行 pnpm、vitest、playwright 的列举命令），交给各检查模块（纯函数）判断。
 // Vitest 列举全部项目，新增项目时不会漏掉。
-// 读取外部输入的方式（执行命令、产物目录、当天日期）可以注入，便于用样例测试装配逻辑。
+// 读取外部输入的方式（执行命令、产物目录、当天日期）可以注入（GateInputs），门禁表按注入的输入装配：
+// 单元测试经 runGate 走一遍装配，确认每个名字接的就是对应的门禁（M2-P6 第 6 片复核第二批 M-1）。
 import type { CollectedGraph } from './dependency-graph.ts'
 import type { Violation } from './types.ts'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
@@ -39,6 +40,16 @@ export interface GateOutcome {
 /** 执行命令并返回它输出的 JSON。 */
 export type CommandRunner = (command: string, args: readonly string[]) => unknown
 
+/** 门禁从仓库之外读取的输入：runGate 默认用真实的（REPOSITORY_INPUTS），单元测试注入样例 */
+export interface GateInputs {
+  /** 执行命令并返回它输出的 JSON：pnpm 的列举与漏洞扫描、vitest 与 playwright 的列举 */
+  readonly run: CommandRunner
+  /** web 构建产物的目录（绝对路径） */
+  readonly webDist: string
+  /** 当天的日期（YYYY-MM-DD）：漏洞的例外按它判断有没有到期 */
+  readonly today: () => string
+}
+
 const WEB_DIST = join(REPO_ROOT, 'apps/web/dist')
 const STORY_REGISTRY = 'tests/stories.json'
 const E2E_SPECS = 'tests/e2e/specs'
@@ -56,11 +67,16 @@ function productionPackageNames(): string[] {
   return workspacePackageDirs(readWorkspaceConfig()).filter(dir => /^(?:apps|packages)\//.test(dir)).map(packageName)
 }
 
-let productionGraph: CollectedGraph | undefined
-function productionDependencyGraph(): CollectedGraph {
+/** 生产依赖图按执行命令的方式缓存：deps 与 licenses 一起执行时只列举一次 */
+const productionGraphs = new WeakMap<CommandRunner, CollectedGraph>()
+function productionDependencyGraph(run: CommandRunner): CollectedGraph {
+  const cached = productionGraphs.get(run)
+  if (cached !== undefined)
+    return cached
   const filters = productionPackageNames().flatMap(name => ['--filter', name])
-  productionGraph ??= collectInstalled(lsOutputSchema.parse(commandJson('pnpm', ['ls', '--prod', '--json', '--depth', 'Infinity', '--recursive', ...filters])))
-  return productionGraph
+  const graph = collectInstalled(lsOutputSchema.parse(run('pnpm', ['ls', '--prod', '--json', '--depth', 'Infinity', '--recursive', ...filters])))
+  productionGraphs.set(run, graph)
+  return graph
 }
 
 /** 引用容器镜像的文件：deploy 下的 Dockerfile 与编排文件，CI 的工作流 */
@@ -92,13 +108,17 @@ function config(): GateOutcome {
   return { name: 'config', title: '包管理配置', violations: [...checkPnpmConfig(readText('pnpm-workspace.yaml'), PNPM_POLICY), ...checkPnpmfiles(pnpmfiles)], notes: [] }
 }
 
-function stories(): GateOutcome {
+/**
+ * 故事对照：读登记表与它列出的各份总设计，列举会执行的测试，交给 checkStories。
+ * run 执行两条列举命令；单元测试注入样例（真的列举全部用例要十几秒，慢在 vitest list：仓库现状由 static-gates 一步核对）
+ */
+export function storiesGate(run: CommandRunner): GateOutcome {
   const registry = parseRegistry(readJson(STORY_REGISTRY))
   const designIds = registry.designs.flatMap(design => parseDesignStoryIds(readText(design)))
   const tests = [
-    ...testsFromVitestList(commandJson('pnpm', ['exec', 'vitest', 'list', '--json']), REPO_ROOT),
+    ...testsFromVitestList(run('pnpm', ['exec', 'vitest', 'list', '--json']), REPO_ROOT),
     // 经 e2e 包的 list 脚本：它按 @nerve-office/source 条件解析工作区的包，用例引用的 contracts 不必先构建（静态检查在构建之前执行）
-    ...testsFromPlaywrightList(commandJson('pnpm', ['--silent', '--filter', '@nerve-office/e2e', 'run', 'list']), E2E_SPECS),
+    ...testsFromPlaywrightList(run('pnpm', ['--silent', '--filter', '@nerve-office/e2e', 'run', 'list']), E2E_SPECS),
   ]
   const active = Object.entries(registry.stories).filter(([, s]) => s.status === 'active').map(([id]) => id)
   return { name: 'stories', title: '故事对照', violations: checkStories(designIds, registry, tests), notes: [`${designIds.length} 个故事，active：${active.join('、') || '无'}；列举出 ${tests.length} 个会执行的测试`] }
@@ -119,8 +139,8 @@ function workspaceCatalogs(): Record<string, Record<string, string>> {
   return { default: config.catalog, ...config.catalogs }
 }
 
-function deps(): GateOutcome {
-  const graph = productionDependencyGraph()
+function deps(run: CommandRunner): GateOutcome {
+  const graph = productionDependencyGraph(run)
   const univer = graph.installed.filter(p => p.name.startsWith('@univerjs/')).length
   return {
     name: 'deps',
@@ -135,13 +155,13 @@ function deps(): GateOutcome {
   }
 }
 
-function licenses(): GateOutcome {
-  const graph = productionDependencyGraph()
-  const report = licenseReportSchema.parse(commandJson('pnpm', ['licenses', 'list', '--json']))
+function licenses(run: CommandRunner): GateOutcome {
+  const graph = productionDependencyGraph(run)
+  const report = licenseReportSchema.parse(run('pnpm', ['licenses', 'list', '--json']))
   const all = flattenLicenseReport(report)
   const notInstalled = graph.installed.filter(item => !existsSync(item.path)).length
   // 服务端的许可清单随镜像生成（P5 设计 §3.2.1）：这里提前核对依赖图完整、每个包都有许可正文，不必等到构建镜像才失败（审查 A10）
-  const serverGraph = collectInstalled(lsOutputSchema.parse(commandJson('pnpm', ['ls', '--prod', '--json', '--depth', 'Infinity', '--filter', API_PACKAGE])))
+  const serverGraph = collectInstalled(lsOutputSchema.parse(run('pnpm', ['ls', '--prod', '--json', '--depth', 'Infinity', '--filter', API_PACKAGE])))
   const server = serverPackages(serverGraph, SERVER_LICENSE_SUPPLEMENT)
   const serverMissing = serverLicenseViolations(serverGraph, server.packages)
   return {
@@ -252,19 +272,30 @@ export function auditGate(run: CommandRunner, today: string): GateOutcome {
   return { name: 'audit', title: '依赖漏洞', violations: checkAudit(production, AUDIT_EXCEPTIONS, today), notes: [`全部依赖（含开发依赖）的漏洞：${counts}`] }
 }
 
-const GATES: Readonly<Record<GateName, () => GateOutcome>> = {
-  pins,
-  config,
-  stories,
-  migrations,
-  schema,
-  deps,
-  licenses,
-  artifacts: () => artifactsGate(WEB_DIST),
-  budgets: () => budgetsGate(WEB_DIST),
-  audit: () => auditGate(commandJson, new Date().toISOString().slice(0, 10)),
+/** 真实的输入：执行命令、仓库里的 web 构建产物、本机当天的日期 */
+const REPOSITORY_INPUTS: GateInputs = { run: commandJson, webDist: WEB_DIST, today: () => new Date().toISOString().slice(0, 10) }
+
+/**
+ * 门禁表：按注入的输入装配，每个名字一项（类型保证不漏）。故事对照只由 pnpm verify 的静态门禁一步核对仓库现状
+ * （门禁自测不再重复跑，M2-P6 第 6 片复核 M1）：这里的装配由 run.test.ts 经 runGate 用样例核对，
+ * 静态门禁一步带着它由 plan.test.ts 核对（复核第二批 M-1）
+ */
+function gates(inputs: GateInputs): Readonly<Record<GateName, () => GateOutcome>> {
+  return {
+    pins,
+    config,
+    stories: () => storiesGate(inputs.run),
+    migrations,
+    schema,
+    deps: () => deps(inputs.run),
+    licenses: () => licenses(inputs.run),
+    artifacts: () => artifactsGate(inputs.webDist),
+    budgets: () => budgetsGate(inputs.webDist),
+    audit: () => auditGate(inputs.run, inputs.today()),
+  }
 }
 
-export function runGate(name: GateName): GateOutcome {
-  return GATES[name]()
+/** 执行一个门禁；inputs 省略时读真实的仓库（命令行 cli.ts 与"门禁对仓库现状通过"的自测） */
+export function runGate(name: GateName, inputs: GateInputs = REPOSITORY_INPUTS): GateOutcome {
+  return gates(inputs)[name]()
 }

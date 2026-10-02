@@ -330,6 +330,70 @@ const RADIX_DIALOG_OUTSIDE_DIALOG_FILE = [
   },
 ]
 
+// 人名一律经人名组件（shared/ui 的 PersonName）显示，纯文字里用 messages.people.text（规范 §2.4，M2-P6 复核 M2）：显示名是本人填的，
+// 什么都能写（"李四（lisi）""李四 @lisi"），和登录名、别的文字拼成一段就冒充得了别人。lint 近似地拦下几种拼法：显示名（displayName）
+// 出现在模板字符串的插值与 + 的拼接里；JSX 里显示名和别的文字、和登录名（username）是同一个元素的子节点。显示名单独占一个元素
+// （表格里"显示名"那一列、PersonName 自己）照常。显示名与登录名认成员（user.displayName）与同名的变量，外面可以再套两层不改变值的写法：
+// 可选链、?? || &&、条件表达式的两支、非空断言与类型断言（SAME_VALUE_WRAPPERS，例如 `${user?.displayName ?? ''}`，M2-P6 第 6 片复核第二批 S-2）。
+// 认不出、由审查保证的写法（第 6 片复核 S5、第二批 S-2）：
+// - 经变量转一手（const name = user.displayName）、解构时改了名（const { displayName: name } = user）；
+// - 经函数或方法（[…].join()、'…'.concat()、String()、user.displayName.trim()、文案里自己写的拼接函数）；
+// - 外面套了三层以上。
+// 会误报的（第二批 G-b）：文案里同名的属性同样按人名报出，例如列标题、标签的键叫 displayName（`${text.columns.displayName}列`、
+// <label>{text.displayName}：</label>）——文案的键换个名字（例如 displayNameLabel），或在那一行关掉检查、在 -- 之后写明原因。
+// 对 web 的生产代码生效：各自配置 no-restricted-syntax 的块（平台代码、弹窗的文件、入口、编辑器）都带上这组限制
+const PERSON_NAME_MESSAGE = '人名经 PersonName（shared/ui）显示，纯文字里用 messages.people.text：显示名（displayName）不和登录名、别的文字拼成一段（规范 §2.4，M2-P6 复核 M2）'
+/**
+ * 套在值外面、不改变值的写法：节点类型与值所在的属性。条件表达式只算两支（条件本身不是这个值）；
+ * 类型断言的另一个属性是类型，不会是成员或变量
+ */
+const SAME_VALUE_WRAPPERS = [
+  { types: ['ChainExpression', 'TSNonNullExpression', 'TSAsExpression', 'TSSatisfiesExpression'], keys: ['expression'] },
+  { types: ['LogicalExpression'], keys: ['left', 'right'] },
+  { types: ['ConditionalExpression'], keys: ['consequent', 'alternate'] },
+] as const
+/** 外面最多再套几层：`${user?.displayName ?? ''}` 是两层（?? 套着可选链） */
+const SAME_VALUE_DEPTH = 2
+const SAME_VALUE_WRAPPER = `:matches(${SAME_VALUE_WRAPPERS.flatMap(wrapper => wrapper.types).join(', ')})`
+/** 处在外层的值的位置上（字段选择器：是外层节点的 expression、left 等属性） */
+const SAME_VALUE_POSITION = `:matches(${[...new Set(SAME_VALUE_WRAPPERS.flatMap(wrapper => wrapper.keys))].map(key => `.${key}`).join(', ')})`
+
+/** 直接放在 parent 里、值就是 field 本身的成员或变量（报在成员或变量上）：parent > 外层 > 内层 > 成员，外面零到两层 */
+function fieldValueIn(parent: string, field: string): string[] {
+  const leaf = `:matches(MemberExpression[property.name='${field}'], Identifier[name='${field}'])`
+  return Array.from({ length: SAME_VALUE_DEPTH + 1 }, (_, depth) => depth === 0
+    ? `${parent} > ${leaf}`
+    : [parent, SAME_VALUE_WRAPPER, ...Array.from({ length: depth - 1 }).fill(`${SAME_VALUE_WRAPPER}${SAME_VALUE_POSITION}`), `${leaf}${SAME_VALUE_POSITION}`].join(' > '))
+}
+
+/**
+ * 值就是 field 本身的 JSX 子节点 {…}：按从 expression 起的属性路径认（它要作 JSX 兄弟节点 ~ 的左边，只能写成这个节点自己的条件），
+ * 外面零到两层的写法同 fieldValueIn
+ */
+function fieldValueChild(field: string): string {
+  const at = (path: string, depth: number): string[] => [
+    `[${path}.property.name='${field}']`,
+    `[${path}.name='${field}']`,
+    ...(depth === 0
+      ? []
+      : SAME_VALUE_WRAPPERS.flatMap(({ types, keys }) => keys.flatMap(key =>
+          at(`${path}.${key}`, depth - 1).map(inner => `[${path}.type=/^(?:${types.join('|')})$/]${inner}`)))),
+  ]
+  return `JSXExpressionContainer:matches(${at('expression', SAME_VALUE_DEPTH).join(', ')})`
+}
+
+const DISPLAY_NAME_CHILD = fieldValueChild('displayName')
+const USERNAME_CHILD = fieldValueChild('username')
+/** JSX 里显示名的兄弟节点：有字的文本、字符串字面量、登录名 */
+const NAME_NEIGHBOURS = [String.raw`JSXText[value=/\S/]`, String.raw`JSXExpressionContainer[expression.type='Literal'][expression.value=/\S/]`, USERNAME_CHILD]
+const PERSON_NAME_CONCATENATION = [
+  ...[...fieldValueIn('TemplateLiteral', 'displayName'), ...fieldValueIn('BinaryExpression[operator=\'+\']', 'displayName')].map(selector => ({ selector, message: PERSON_NAME_MESSAGE })),
+  ...NAME_NEIGHBOURS.flatMap(neighbour => [
+    { selector: `${neighbour} ~ ${DISPLAY_NAME_CHILD}`, message: PERSON_NAME_MESSAGE },
+    { selector: `${DISPLAY_NAME_CHILD} ~ ${neighbour}`, message: PERSON_NAME_MESSAGE },
+  ]),
+]
+
 // 契约的请求结构里直接用 z.uuid()：大写的 id 原样交给服务端（M2-P2 审查 A1、复验 N3）
 const CONTRACTS_REQUEST_UUID_MESSAGE = '请求里的 UUID 用 uuidSchema（ids/ids.ts，统一转成小写）：服务端按字符串比较 id 的地方（是不是本人、审计的明细）只认小写（M2-P2 审查 A1）'
 const CONTRACTS_REQUEST_UUID = [
@@ -430,6 +494,27 @@ const API_NO_RAW = {
   property: 'raw',
   message: '不用 .raw 拼接 SQL：用 sql 模板标签，动态的片段只能来自代码里的白名单（规范 §5）；表定义里的 CHECK 常量除外',
 }
+// antfu 的配置给 no-restricted-properties 的几项：同名规则后者整体覆盖前者，自己配置这条规则的块（后端、测试）要带上它们
+const ANTFU_RESTRICTED_PROPERTIES = [
+  { property: '__proto__', message: 'Use `Object.getPrototypeOf` or `Object.setPrototypeOf` instead.' },
+  { property: '__defineGetter__', message: 'Use `Object.defineProperty` instead.' },
+  { property: '__defineSetter__', message: 'Use `Object.defineProperty` instead.' },
+  { property: '__lookupGetter__', message: 'Use `Object.getOwnPropertyDescriptor` instead.' },
+  { property: '__lookupSetter__', message: 'Use `Object.getOwnPropertyDescriptor` instead.' },
+]
+// 有条件地跳过用例同样是跳过（规范 §8.4）：test/no-disabled-tests 只认 .skip 与 x 前缀，playwright/no-skipped-test 只认 test.skip 一类。
+// skipIf、runIf 与用例里的 skip()（测试上下文的 ctx.skip()、解构出来的 skip、Playwright 的 testInfo.skip()）在测试里一并拦下；
+// 确需跳过时用 eslint-disable 注释在 -- 之后写明原因（eslint-comments/require-description 要求写），经审查（M2-P6 第 6 片复核 S4）。
+// it.skip、test.skip、describe.skip 另由上面两条规则报出，这里放过，不重复。
+// 会误报的（复核第二批 G-c）：按属性名判断，测试里普通对象的 skip 属性同样报出，例如分页参数（page.skip、{ skip } = query 的解构）；
+// test.describe.skip 这类两层的写法除了 playwright/no-skipped-test 再报一次。现在都没有这样的写法；遇到时换个名字（例如 offset），
+// 或在那一行关掉检查、在 -- 之后写明原因
+const TEST_SKIP_MESSAGE = '有条件地跳过用例（skipIf、runIf、用例里的 skip()）同样是跳过（规范 §8.4）：确需跳过时用 eslint-disable 注释在 -- 之后写明原因，经审查（M2-P6 第 6 片复核 S4）'
+const TEST_SKIP_PROPERTIES = [
+  { property: 'skipIf', message: TEST_SKIP_MESSAGE },
+  { property: 'runIf', message: TEST_SKIP_MESSAGE },
+  { property: 'skip', allowObjects: ['it', 'test', 'describe', 'suite'], message: TEST_SKIP_MESSAGE },
+]
 // 输入都经 contracts 里的结构校验（规范 §4）：参数装饰器必须带 schema；不接受 schema 的装饰器与原始的请求、响应对象会绕过校验（审查 B8）。
 // 不经校验的装饰器在引用处就拦下（改名、命名空间引用、深层路径都拦得住），装饰器的写法再查一遍；
 // 自己写的参数装饰器能拿到整个请求，由审查把关（复验 N6、F2）
@@ -478,13 +563,19 @@ const API_TRASH_ENTRY_PURGER = {
   importNames: ['TrashEntryPurger'],
   message: '永久删除一个删除单元的本体（TrashEntryPurger）不判断权限，只在 documents 模块内部使用：人工的永久删除经 TrashService.purge，到期的清理经 TrashPurgeService（M2-P6 复核 A 的 G1）',
 }
-// documents 的仓储（DocumentsRepository）只在本模块里用：服务经访问策略判断权限之后才查询，别的模块拿到它就能绕开"可访问文档"的范围。
-// 公开入口转出它只为集成测试专用的入口（app/integration.test-support.ts，集成测试直接核对仓储的查询范围，M2-P6 复核 A 的 S3）；
-// 别的文件一律拦下，app 层的程序接口（app/index.ts）也不例外：命令行与 app 层的其他文件引用它时，按路径的限制认不出转手的东西（复验 R-S4）
-const API_DOCUMENTS_REPOSITORY = {
-  regex: String.raw`(?:^|/)documents/index\.ts$`,
-  importNames: ['DocumentsRepository'],
-  message: 'documents 的仓储（DocumentsRepository）只在 documents 模块里使用，公开入口转出它只为集成测试专用的入口（app/integration.test-support.ts）：别的模块经服务与访问策略（M2-P6 复核 A 的 S3）',
+// 一个模块的仓储只在这个模块里用（规范 §1.2）：别的模块需要它的数据时调用它的服务。模块边界只放行经公开入口（index.ts）的引用，
+// 公开入口转出了仓储，别的模块就拿得到——documents 的公开入口转出 DocumentsRepository，只为集成测试专用的入口
+// （app/integration.test-support.ts，集成测试直接核对仓储的查询范围，M2-P6 复核 A 的 S3）；documents 的服务经访问策略判断权限之后
+// 才查询，别的模块拿到它的仓储就绕开了"可访问文档"的范围。所以按导入名拦下经任何 index.ts 引用的 *Repository（静态导入、import type、
+// 再导出、命名空间导入与 export * 都算）：app 层的程序接口（app/index.ts）也不例外，命令行与 app 层的其他文件经它转手时，按路径的限制
+// 认不出来（复验 R-S4）。模块自己的文件按相对路径引用自己的仓储（./x.repository.ts），不经 index.ts，不受影响；
+// 仓储的类名都以 Repository 结尾（lint-rules-api.test.ts 核对每个 *.repository.ts，M2-P6 第 6 片复核 S4）。
+// 会误报的（复核第二批 G-c）：按导入名的模式判断时，命名空间导入与 export * 认不出拿到的是哪些名字，所以 api 里经任何 index.ts 的
+// import * as x 与 export * 一律报出，即使那个入口根本不转出仓储（现在没有这样的写法）；需要时改成按名字导入、按名字转出
+const API_FOREIGN_REPOSITORIES = {
+  regex: String.raw`(?:^|/)index\.ts$`,
+  importNamePattern: 'Repository$',
+  message: '一个模块的仓储只在这个模块里使用（规范 §1.2）：别的模块经它的服务（documents 的服务先经访问策略判断权限，M2-P6 复核 A 的 S3）；公开入口转出仓储只为集成测试专用的入口（app/integration.test-support.ts，M2-P6 第 6 片复核 S4）',
 }
 // documents 的仓储里一串 id 一律作为一个数组参数（database 模块的 inIdArray，M2-P6 复核 A 的 S-2、B 的 G1）：drizzle 的 inArray、
 // notInArray 把每个 id 展开成一个参数，子树里的文件夹、文档与连带的删除单元没有数量上限，超过 65535 个参数时整条语句失败（每次都失败）。
@@ -498,6 +589,26 @@ const API_DOCUMENTS_ID_LISTS = {
 // apps/api 里的任何文件（包括 app 层的其他文件与单元测试）引用它都拦下：按解析之后的路径判断，相对路径、包名的出口
 // （@nerve-office/api/testing）都认得出；别的元素（命令行、各模块）另由模块边界拦下
 const API_INTEGRATION_ENTRY = 'apps/api/src/app/integration.test-support.ts'
+// 与时间有关的判断用数据库时间（规范 §5）：应用主机的时钟与数据库的不一致时，"到期了没有"两边的答案不同，例如定时清理按主机的钟
+// 判断，钟快多少就提前多少永久删除（M2-P6 复核 A 的 Q-1、第 3 片 G7）。后端不取本机的"现在"：Date.now()、不带参数的 new Date()
+// 与当作函数调用的 Date()；业务里的"现在"取数据库的 now()（database 模块的 DatabaseTime），时刻的比较尽量写在 SQL 里。
+// 测试同样不用（规范 §8.1：时间可控，用假时钟）。进程自己的计时不是业务判断，按文件放行（API_WALL_CLOCK_FILES）；
+// 经别名、globalThis.Date 之类的写法 lint 认不出来，由审查保证（M2-P6 第 6 片复核 S5）
+const API_WALL_CLOCK_MESSAGE = '后端不取本机的"现在"（Date.now()、new Date()、Date()）：与时间有关的判断用数据库时间（规范 §5），取 database 模块的 DatabaseTime 或写在 SQL 里；进程自己的计时按文件放行（eslint.config.ts 的 API_WALL_CLOCK_FILES，M2-P6 第 6 片复核 S5）'
+const API_WALL_CLOCK = [
+  { selector: 'CallExpression[callee.object.name=\'Date\'][callee.property.name=\'now\']', message: API_WALL_CLOCK_MESSAGE },
+  { selector: 'NewExpression[callee.name=\'Date\'][arguments.length=0]', message: API_WALL_CLOCK_MESSAGE },
+  { selector: 'CallExpression[callee.name=\'Date\']', message: API_WALL_CLOCK_MESSAGE },
+]
+/**
+ * 可以用本机时钟的后端文件：进程自己的计时，不是业务里的时间判断。
+ * - 关停的时限（app/shutdown.ts）：从收到信号起算的几秒，与数据库无关，数据库可能已经不可用；
+ * - 就绪检查结果的缓存（database 模块的 database-readiness.ts）：探针频繁时一秒内复用上一次的结果，检查本身就是在问数据库还在不在
+ */
+const API_WALL_CLOCK_FILES = {
+  app: ['apps/api/src/app/shutdown.ts'],
+  database: ['apps/api/src/modules/database/database-readiness.ts'],
+}
 
 /** 后端文件允许的例外。 */
 interface ApiFileKind {
@@ -517,10 +628,12 @@ interface ApiFileKind {
   documentTransfer?: boolean
   /** 引用到期的回收站清理 TrashPurgeService（定时任务的模块与 documents 模块） */
   trashPurge?: boolean
-  /** 经 documents 的公开入口引用它的仓储 DocumentsRepository（只有集成测试专用的入口，为集成测试转出） */
-  documentsRepository?: boolean
+  /** 经别的模块的公开入口引用它的仓储（只有集成测试专用的入口，为集成测试转出 documents 的仓储） */
+  foreignRepositories?: boolean
   /** 一串 id 只用一个数组参数，不用 drizzle 的 inArray、notInArray（documents 的仓储） */
   idArraysOnly?: boolean
+  /** 用本机的时钟（Date.now() 等）：进程自己的计时，不是业务里的时间判断（API_WALL_CLOCK_FILES） */
+  wallClock?: boolean
 }
 
 function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
@@ -539,7 +652,7 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
     ...(kind.documentTransfer === true ? [] : [API_DOCUMENT_TRANSFER]),
     ...(kind.trashPurge === true ? [] : [API_TRASH_PURGE]),
     API_TRASH_ENTRY_PURGER,
-    ...(kind.documentsRepository === true ? [] : [API_DOCUMENTS_REPOSITORY]),
+    ...(kind.foreignRepositories === true ? [] : [API_FOREIGN_REPOSITORIES]),
     ...(kind.idArraysOnly === true ? [API_DOCUMENTS_ID_LISTS] : []),
   ]
   const syntax = [
@@ -549,11 +662,12 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
     ...API_PARAMETER_DECORATORS,
     ...(kind.controller === true ? [] : [API_CONTROLLER_OUTSIDE_CONTROLLER_FILE]),
     ...(kind.processEnv === true ? [] : API_PROCESS_ENV_SYNTAX),
+    ...(kind.wallClock === true ? [] : API_WALL_CLOCK),
   ]
   return {
     'no-restricted-imports': ['error', { paths, patterns }],
     'no-restricted-syntax': ['error', ...syntax],
-    'no-restricted-properties': kind.rawSql === true ? 'off' : ['error', API_NO_RAW],
+    'no-restricted-properties': ['error', ...ANTFU_RESTRICTED_PROPERTIES, ...(kind.rawSql === true ? [] : [API_NO_RAW])],
     'node/no-process-env': kind.processEnv === true ? 'off' : 'error',
     // React 的规则把 Nest 的 useFactory、useValue 当作 Hook；后端没有 React
     'react/no-unnecessary-use-prefix': 'off',
@@ -672,6 +786,8 @@ export default antfu(
       'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX],
       // 三斜杠引用（/// <reference path|types|lib>）绕得过受限导入与模块边界：类型经 import type 或 tsconfig 的 types 引用（复验 RB4）
       'ts/triple-slash-reference': ['error', { path: 'never', types: 'never', lib: 'never' }],
+      // 关掉检查的注释（eslint-disable…）要在 -- 之后写明原因，审查时看得到为什么（M2-P6 第 6 片复核 S4）；重新打开的 eslint-enable 不用写
+      'eslint-comments/require-description': ['error', { ignore: ['eslint-enable'] }],
     },
   },
   {
@@ -681,15 +797,15 @@ export default antfu(
     files: ['apps/web/src/**/*.{ts,tsx}'],
     ignores: [...TEST_CODE, 'apps/web/src/shared/ui/dialog.tsx'],
     rules: {
-      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS],
+      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION],
     },
   },
   {
-    // 弹窗的文件自己可以引入 Radix 的弹窗原语（上一块不管它），SDK 的 DOM 标记的限制照样生效（P3 审查 A8）
+    // 弹窗的文件自己可以引入 Radix 的弹窗原语（上一块不管它），SDK 的 DOM 标记与人名的限制照样生效（P3 审查 A8）
     name: 'nerve/web-dialog-file',
     files: ['apps/web/src/shared/ui/dialog.tsx'],
     rules: {
-      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...SDK_DOM_MARKERS],
+      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION],
     },
   },
   {
@@ -698,7 +814,7 @@ export default antfu(
     // CSP 阳性对照只在测试构建里，不用 zod，它的入口里就是探针本身的代码
     ignores: ['apps/web/src/entries/csp-probe/**'],
     rules: {
-      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...APP_ENTRY_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS],
+      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...APP_ENTRY_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION],
     },
   },
   {
@@ -730,7 +846,7 @@ export default antfu(
     files: ['apps/web/src/editor/**'],
     ignores: [...TEST_CODE, 'apps/web/src/editor/internal-api/**'],
     rules: {
-      'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX, ...NO_GET_INJECTOR, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS],
+      'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX, ...NO_GET_INJECTOR, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION],
     },
   },
   {
@@ -762,8 +878,11 @@ export default antfu(
   { name: 'nerve/api-documents', files: ['apps/api/src/modules/documents/**/*.ts'], rules: apiRules({ documentTransfer: true, trashPurge: true }) },
   // 集成测试专用的入口为集成测试转出数据库句柄、documents 的仓储与全部的表定义；app 层的程序接口（index.ts）与 app 层的其他文件同样拿不到
   // （复验 N6，M2-P6 复核 A 的 S3、复验 R-S4、复核 B 的 B4）
-  { name: 'nerve/api-integration-entry-exports', files: [API_INTEGRATION_ENTRY], rules: apiRules({ databaseHandles: true, documentsRepository: true, tables: true }) },
+  { name: 'nerve/api-integration-entry-exports', files: [API_INTEGRATION_ENTRY], rules: apiRules({ databaseHandles: true, foreignRepositories: true, tables: true }) },
   { name: 'nerve/api-database', files: ['apps/api/src/modules/database/**/*.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true }) },
+  // 进程自己的计时可以用本机时钟（API_WALL_CLOCK_FILES）：紧跟在所属的块之后，其余的限制照旧
+  { name: 'nerve/api-app-wall-clock', files: API_WALL_CLOCK_FILES.app, rules: apiRules({ wallClock: true }) },
+  { name: 'nerve/api-database-wall-clock', files: API_WALL_CLOCK_FILES.database, rules: apiRules({ databaseLibraries: true, databaseHandles: true, wallClock: true }) },
   { name: 'nerve/api-repositories', files: ['apps/api/src/modules/*/*.repository.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true, tables: true }) },
   // documents 的仓储另外不用 inArray、notInArray（M2-P6 复核 A 的 S-2）：一串 id 一律是一个数组参数
   { name: 'nerve/api-documents-repositories', files: ['apps/api/src/modules/documents/*.repository.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true, tables: true, idArraysOnly: true }) },
@@ -781,8 +900,12 @@ export default antfu(
       // 不允许跳过或占位的用例（规范 §8.4）；确需临时跳过时，用 eslint-disable 注释写明原因，经审查
       'test/no-disabled-tests': 'error',
       'test/warn-todo': 'error',
+      // 有条件地跳过（skipIf、runIf、用例里的 skip()）同样拦下（TEST_SKIP_PROPERTIES）
+      'no-restricted-properties': ['error', ...ANTFU_RESTRICTED_PROPERTIES, ...TEST_SKIP_PROPERTIES],
     },
   },
+  // 后端的测试：上一块覆盖了后端各块的同名规则，.raw 的限制一并带上
+  { name: 'nerve/api-tests', files: ['apps/api/src/**/*.test.ts'], rules: { 'no-restricted-properties': ['error', ...ANTFU_RESTRICTED_PROPERTIES, API_NO_RAW, ...TEST_SKIP_PROPERTIES] } },
   {
     // 测试代码之外（生产代码与仓库工具）只能引用本包 dependencies 里的包：测试库都在 devDependencies 里，或者根本没有声明。
     // 这条规则同时检查静态导入、动态导入与 import type。本地的测试与测试辅助按路径另外拦下，

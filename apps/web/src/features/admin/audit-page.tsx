@@ -43,14 +43,14 @@ function actorOf(event: AuditEventItem): ReactNode {
 
 /**
  * 对象：类型与它的名字。账户用服务端分开给出的登录名与显示名（target.user），由 PersonName 呈现：
- * 拼好的"显示名（登录名）"冒充得了登录名（M2-P6 复核 M2）；邀请是登录名，空间是名称（<bdi> 隔离），别的只有 id
+ * 拼好的"显示名（登录名）"冒充得了登录名（M2-P6 复核 M2）；邀请是登录名，空间是名称（target.name，<bdi> 隔离），别的只有 id
  */
 function targetOf(target: NonNullable<AuditEventItem['target']>): ReactNode {
   let name: ReactNode = target.id
   if (target.user !== null)
     name = <PersonName person={target.user} />
-  else if (target.label !== null)
-    name = <bdi>{target.label}</bdi>
+  else if (target.name !== null)
+    name = <bdi>{target.name}</bdi>
   return <Phrase parts={text.target(text.targetKind(target.type), name)} />
 }
 

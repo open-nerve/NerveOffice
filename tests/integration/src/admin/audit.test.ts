@@ -47,20 +47,20 @@ async function search(query: string, session: LoggedIn = adminSession) {
 }
 
 describe('US-M2-13 审计查询', () => {
-  it('按时间倒序；账户补上当前的登录名与显示名，对象是账户时两者分开给出（M2-P6 复核 M2），标签仍是"显示名（登录名）"（给打开着的旧页面）', async () => {
+  it('按时间倒序；账户补上当前的登录名与显示名，对象是账户时两者分开给出（M2-P6 复核 M2），不再有拼好的"显示名（登录名）"（M2-P6 第 6 片复核 S2）', async () => {
     const page = await search(`?targetType=user&targetId=${target.id}`)
     expect(page.items.map(item => item.action)).toEqual(['users.enabled', 'users.disabled'])
     const [enabled] = page.items
     expect(enabled?.actor).toEqual({ type: 'user', id: admin.id, username: 'root', displayName: '管理员' })
-    expect(enabled?.target).toEqual({ type: 'user', id: target.id, label: '艾米（amy）', user: { username: 'amy', displayName: '艾米' } })
+    expect(enabled?.target).toEqual({ type: 'user', id: target.id, name: null, user: { username: 'amy', displayName: '艾米' } })
     expect(enabled?.source).toBe('http')
     expect(enabled?.clientIp).toBe('127.0.0.1')
   })
 
-  it('邀请：对象的标签是登录名；details 原样给出', async () => {
+  it('邀请：对象的名字是被邀请的登录名；details 原样给出', async () => {
     const page = await search(`?action=users.invited&targetId=${invitationId}`)
     expect(page.items).toHaveLength(1)
-    expect(page.items[0]?.target).toEqual({ type: 'invitation', id: invitationId, label: 'bea', user: null })
+    expect(page.items[0]?.target).toEqual({ type: 'invitation', id: invitationId, name: 'bea', user: null })
     expect(page.items[0]?.details).toEqual({ username: 'bea' })
   })
 

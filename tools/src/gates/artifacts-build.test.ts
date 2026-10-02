@@ -18,8 +18,7 @@ const JS_CASES: Readonly<Record<string, string>> = {
   'ws': '"wss:evil.example/ws"',
   'tab': '"/\\t/evil.example/tab"',
   'single-label': '"//intranet/single-label"',
-  // 样例的源码里的模板字符串，不是要插值
-  // eslint-disable-next-line no-template-curly-in-string
+  // eslint-disable-next-line no-template-curly-in-string -- 样例的源码里的模板字符串，不是要插值
   'interpolated': '` //evil.example/interpolated/${tail}`',
 }
 

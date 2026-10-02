@@ -1,4 +1,5 @@
-// E2E 断言"没有页面错误"时，哪些 pageerror 不是应用的错误。
+// E2E 断言"没有页面错误"时，哪些 pageerror 不是应用的错误。每个用例都由夹具断言（fixtures.ts 的 pageErrors，M2-P6 第 6 片复核 S6）；
+// 只读的用例另在过程中的检查点上断言（collectPageErrors，support/read-only.ts）。
 import type { Page } from '@playwright/test'
 
 /**

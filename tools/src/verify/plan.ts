@@ -75,6 +75,8 @@ export interface StepResult {
 const LINT: Step = { id: 'lint', command: ['pnpm', 'lint'] }
 const TYPECHECK: Step = { id: 'typecheck', command: ['pnpm', 'typecheck'] }
 const UNIT: Step = { id: 'unit', command: ['pnpm', 'test'] }
+// 门禁分三步执行（STATIC_GATES、ARTIFACT_GATES、AUDIT），合起来恰好是全部门禁（gates/run.ts 的 GATE_NAMES），各一次；
+// 故事对照只在这里对仓库现状核对，必须留在静态门禁一步（--fast 也执行），由 plan.test.ts 核对（M2-P6 第 6 片复核第二批 M-1）
 const STATIC_GATES: Step = { id: 'static-gates', command: ['node', 'tools/src/gates/cli.ts', 'pins', 'config', 'stories', 'migrations', 'schema'] }
 const DATABASE: Step = { id: 'database', command: ['pnpm', 'db:up'] }
 // 单元与集成测试合计的覆盖率（规范 §8.3），需要数据库；已经包含单元测试，完整模式不再单独执行单元测试

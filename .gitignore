@@ -34,5 +34,5 @@ test-results/
 playwright-report/
 blob-report/
 
-# lint 规则自测临时创建的探针文件（tools/src/lint/lint-rules.test.ts）
+# lint 规则自测临时创建的探针文件（tools/src/lint/lint-harness.test-support.ts）
 lint-probe-*

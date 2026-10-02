@@ -27,7 +27,7 @@ describe('审计查询', () => {
       occurredAt: '2026-09-28T00:00:00Z',
       action: 'spaces.created',
       actor: { type: 'user', id: '0192f0c8-0000-7000-8000-000000000002', username: 'admin', displayName: '管理员' },
-      target: { type: 'folder', id: '0192f0c8-0000-7000-8000-000000000003', label: null, user: null },
+      target: { type: 'folder', id: '0192f0c8-0000-7000-8000-000000000003', name: null, user: null },
       source: 'http',
       requestId: 'req-1',
       clientIp: '192.0.2.1',
@@ -42,7 +42,7 @@ describe('审计查询', () => {
       occurredAt: '2026-09-28T00:00:00Z',
       action: 'users.disabled',
       actor: { type: 'user', id: '0192f0c8-0000-7000-8000-000000000002', username: 'admin', displayName: '管理员' },
-      target: { type: 'user', id: '0192f0c8-0000-7000-8000-000000000003', label: '李四（lisi）（mallory）', user: { username: 'mallory', displayName: '李四（lisi）' } },
+      target: { type: 'user', id: '0192f0c8-0000-7000-8000-000000000003', name: null, user: { username: 'mallory', displayName: '李四（lisi）' } },
       source: 'http',
       requestId: null,
       clientIp: null,
@@ -50,6 +50,6 @@ describe('审计查询', () => {
     })
     expect(item.target?.user).toEqual({ username: 'mallory', displayName: '李四（lisi）' })
     // 新页面要靠它分辨人：缺了它不是合法的响应
-    expect(auditEventItemSchema.safeParse({ ...item, target: { type: 'user', id: '0192f0c8-0000-7000-8000-000000000003', label: null } }).success).toBe(false)
+    expect(auditEventItemSchema.safeParse({ ...item, target: { type: 'user', id: '0192f0c8-0000-7000-8000-000000000003', name: null } }).success).toBe(false)
   })
 })

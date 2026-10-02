@@ -49,8 +49,11 @@ export default defineConfig({
   testDir: './specs',
   outputDir: './test-results',
   forbidOnly: true,
-  // 出现重试就记为不稳定，在当前 Phase 内修掉根因（规范 §8.4）
+  // 出现重试就记为不稳定，在当前 Phase 内修掉根因（规范 §8.4）。CI 上重试一次之后通过的用例（flaky）也让这次运行失败：
+  // 原来只写进报告与注解、job 照样成功，M2-P6 第 2 片合并时 chrome 那一片的 admin/audit.spec.ts 就是这样，跨了三片没人发现
+  // （第 6 片复核 M4）。重试仍然保留：它让失败的那一次留下 trace，便于查根因
   retries: CI ? 1 : 0,
+  failOnFlakyTests: CI,
   reporter: [
     ['list'],
     ['html', { open: 'never', outputFolder: './playwright-report' }],

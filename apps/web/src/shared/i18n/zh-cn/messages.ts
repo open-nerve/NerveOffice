@@ -109,6 +109,7 @@ function usernameText(username: string): string {
  * 只有拼进纯文字的地方用这个。显示名本身不含双向控制字符（名称的规则，contracts 的 text.ts），隔离不会被它打断
  */
 function personText(person: Person): string {
+  // eslint-disable-next-line no-restricted-syntax -- 这里就是纯文字里人名的写法本身（登录名在前、显示名隔离），别处经 messages.people.text 用它
   return `${usernameText(person.username)} \u2068${person.displayName}\u2069`
 }
 

@@ -5,7 +5,7 @@
 // 3. 部署配置的核对：经 Caddy 的探针（就绪探针的各种写法都被屏蔽）、客户端地址（DEF-014：本机与编排网络里两个来源、
 //    伪造的转发头不被采信）、应用的端口没有发布到主机；
 // 4. 以外部模式运行 E2E（E2E 的管理员由 Playwright 的全局准备经编排初始化，tests/e2e/support/external-setup.ts）；
-// 5. 打印镜像体积与应用容器的内存（空闲、E2E 期间每 2 秒取样的峰值、跑完之后，ADR-001）；
+// 5. 打印镜像体积与应用容器的内存（空闲：部署核对之后等一会儿、取几次样的中位数；E2E 期间每 2 秒取样的峰值；跑完之后，ADR-001）；
 // 6. 无论成败，把各容器的日志收集到 tests/e2e/test-results/container/，然后 down -v、去掉这次的镜像标签、删除临时目录：
 //    每一步都执行，前一步失败不跳过后面的，有一步失败就以非零退出（Codex 评审 CX13）。
 // 长命令（构建、起环境、编排网络里的核对、E2E）异步执行，收到信号时转给它们，之后不再开始新的步骤（Codex 评审 CX12，
@@ -30,15 +30,18 @@ import {
   COMPOSE_FILE,
   composeArgs,
   createSettings,
+  describeIdleMemory,
   DISTRIBUTED_LICENSE_FILES,
   distributedFileProblems,
   duBytes,
   FILE_SIZES_SCRIPT,
   FORGED_CLIENT_ADDRESS,
+  IDLE_MEMORY_SAMPLING,
   IMAGE_PREFIX,
   imageSizeArgs,
   mebibytes,
   megabytes,
+  MEMORY_SAMPLE_INTERVAL_MS,
   memoryBytes,
   parseAuditAddresses,
   playwrightEnvironment,
@@ -48,6 +51,7 @@ import {
   publicOrigin,
   publishedPortProblems,
   renderEnvFile,
+  sampleMemory,
   serverRequestId,
   staleRuns,
   staleTemporaryDirectories,
@@ -250,8 +254,13 @@ function checkDistributedFiles(settings: ContainerE2eSettings): string[] {
 }
 
 const execFileAsync = promisify(execFile)
-/** E2E 期间取样应用容器内存的间隔 */
-const MEMORY_SAMPLE_INTERVAL_MS = 2_000
+
+/** 等 ms 毫秒；收到终止信号时提前返回（每半秒看一次，与 waitUntilLive 相同） */
+async function pause(ms: number): Promise<void> {
+  const deadline = Date.now() + ms
+  while (!interruption.interrupted() && Date.now() < deadline)
+    await delay(Math.min(500, deadline - Date.now()))
+}
 
 /** 应用容器的 id：重启用例用 kill 与 start，容器还是同一个 */
 function appContainer(settings: ContainerE2eSettings): string {
@@ -391,9 +400,12 @@ async function exercise(settings: ContainerE2eSettings, options: { version: stri
     return 1
   }
   measurement(`镜像体积（镜像里文件的合计，解压之后）：${imageSize(settings.image)}`)
-  measurement(`应用容器的内存（空闲）：${formatMemory(await memoryOf(appContainer(settings)))}`)
+  // 空闲：部署核对里的登录各算一次 Argon2，等内存回落之后取几次样、取中位数（IDLE_MEMORY_SAMPLING 写明了等多久、取几次与理由）
+  const container = appContainer(settings)
+  const idle = await sampleMemory(IDLE_MEMORY_SAMPLING, { sample: async () => memoryOf(container), wait: pause, stopped: () => interruption.interrupted() })
   if (interruption.interrupted())
     return 1
+  measurement(`应用容器的内存（空闲）：${describeIdleMemory(IDLE_MEMORY_SAMPLING, idle)}`)
 
   log(`以外部模式运行 E2E（浏览器 ${options.browsers.join('、')}）`)
   const { status, peak } = await runE2e(settings, options.browsers, options.playwrightArgs)

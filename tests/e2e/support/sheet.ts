@@ -16,8 +16,8 @@ import { expect } from './fixtures.ts'
  * editor/read-only 13.3 秒、editor/features 10.6 秒、editor/conflict 8.8 秒、editor/reopen 7.5 秒，
  * 其余（csp、documents/copy、template、save、create、session、access）都在 6.2 秒以内；
  * 满载的本机上 conflict 出现过一次"点保存 30 秒超时"（重跑通过）。CI 的机器比本机慢好几倍，30 秒的余量不到 4 倍。
- * 时限只用来发现卡住的用例，所以按本机最慢的那一份留二十倍上下的余量，取 4 分钟
- * （与 lint 自测同一个做法，见 tools/src/lint/lint-rules.test.ts 的 LINT_TIMEOUT）。不用重试掩盖：出现重试即记为不稳定（规范 §8.4）。
+ * 时限只用来发现卡住的用例，所以按本机最慢的那一份留二十倍上下的余量，取 4 分钟。不用重试掩盖：出现重试即记为不稳定，
+ * CI 上让这次运行失败（规范 §8.4，playwright.config.ts 的 failOnFlakyTests）。
  * 只读的快捷键回归（editor/read-only-shortcuts）更长，另用 SHORTCUT_SWEEP_TIMEOUT。
  */
 export const EDITOR_TEST_TIMEOUT = 240_000

@@ -91,7 +91,7 @@ describe('管理界面：审计', () => {
   })
 
   it('前端不认识的对象类型：只按 id 筛选', async () => {
-    const future = event(3, { target: { type: 'comment', id: '0199a2c4-0000-7000-8000-0000000003aa', label: null, user: null } })
+    const future = event(3, { target: { type: 'comment', id: '0199a2c4-0000-7000-8000-0000000003aa', name: null, user: null } })
     const api = audit({
       [LIST]: () => json(200, listPage([future])),
       [`${LIST}?targetId=0199a2c4-0000-7000-8000-0000000003aa`]: () => json(200, listPage([future])),
@@ -223,8 +223,8 @@ describe('管理界面：审计里的人名（M2-P6 复核 M2）', () => {
     const spoof = { id: '0199a2c4-0000-7000-8000-000000000032', username: 'mallory', displayName: '李四（lisi）' }
     audit({
       [LIST]: () => json(200, listPage([
-        event(1, { actor: { type: 'user', id: spoof.id, username: spoof.username, displayName: spoof.displayName }, target: { type: 'user', id: real.id, label: '李四（lisi）', user: { username: real.username, displayName: real.displayName } } }),
-        event(2, { actor: { type: 'user', id: real.id, username: real.username, displayName: real.displayName }, target: { type: 'user', id: spoof.id, label: '李四（lisi）（mallory）', user: { username: spoof.username, displayName: spoof.displayName } } }),
+        event(1, { actor: { type: 'user', id: spoof.id, username: spoof.username, displayName: spoof.displayName }, target: { type: 'user', id: real.id, name: null, user: { username: real.username, displayName: real.displayName } } }),
+        event(2, { actor: { type: 'user', id: real.id, username: real.username, displayName: real.displayName }, target: { type: 'user', id: spoof.id, name: null, user: { username: spoof.username, displayName: spoof.displayName } } }),
       ])),
     })
     renderApp('/admin/audit')
@@ -236,7 +236,7 @@ describe('管理界面：审计里的人名（M2-P6 复核 M2）', () => {
     personIn(first, '李四', 'lisi')
     personIn(second, '李四', 'lisi')
     personIn(second, '李四（lisi）', 'mallory')
-    // 对象一格不再用拼好的标签（旧页面才用它）
+    // 对象一格是 PersonName：服务端不再给拼好的"显示名（登录名）"（M2-P6 第 6 片复核 S2）
     expect(within(first).queryByText('账户：李四（lisi）')).toBeNull()
     expect(within(second).getByRole('button', { name: '账户：@mallory 李四（lisi）' })).toBeInTheDocument()
   })
@@ -244,7 +244,7 @@ describe('管理界面：审计里的人名（M2-P6 复核 M2）', () => {
   it('从右到左的显示名在 <bdi> 里；邀请与空间的对象名也隔离', async () => {
     audit({
       [LIST]: () => json(200, listPage([
-        event(1, { actor: { type: 'user', id: ROOT.id, username: 'shalom', displayName: 'שלום' }, target: { type: 'space', id: '0199a2c4-0000-7000-8000-0000000000c1', label: 'צוות', user: null } }),
+        event(1, { actor: { type: 'user', id: ROOT.id, username: 'shalom', displayName: 'שלום' }, target: { type: 'space', id: '0199a2c4-0000-7000-8000-0000000000c1', name: 'צוות', user: null } }),
       ])),
     })
     renderApp('/admin/audit')

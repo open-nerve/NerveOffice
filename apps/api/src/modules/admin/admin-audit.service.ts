@@ -8,20 +8,15 @@ import { SpacesService } from '../spaces/index.ts'
 import { UsersService } from '../users/index.ts'
 
 /**
- * 账户在审计里拼好的名字：显示名（登录名）。只为打开着的旧页面保留（对象的 label，接口只做加法）：
- * 显示名是本人填的，可以写成"李四（lisi）"，新页面用分开给出的 user（M2-P6 复核 M2）
+ * 账户当前的登录名与显示名，分开给出：界面分别呈现，显示名冒充不了登录名（M2-P6 复核 M2）。
+ * 不再给拼好的"显示名（登录名）"（原来对象的 label，只为旧页面保留；v0.1 没有旧页面，M2-P6 第 6 片复核 S2 删掉）
  */
-function userLabel(user: User | undefined): string | null {
-  return user === undefined ? null : `${user.displayName}（${user.username}）`
-}
-
-/** 账户当前的登录名与显示名，分开给出：界面分别呈现，显示名冒充不了登录名（M2-P6 复核 M2） */
 function userName(user: User | undefined): AuditUserName | null {
   return user === undefined ? null : { username: user.username, displayName: user.displayName }
 }
 
 /** 对象的名字：审计表只存 id，查询时按类型补上 */
-interface TargetLabels {
+interface TargetNames {
   readonly users: ReadonlyMap<string, User>
   readonly invitations: ReadonlyMap<string, string>
   readonly spaces: ReadonlyMap<string, string>
@@ -29,8 +24,8 @@ interface TargetLabels {
 
 /**
  * 审计查询（M2-P1 设计 §3.7，US-M2-13）：审计表只存 id，这里补上账户（操作者与对象）当前的登录名与显示名、邀请的登录名、
- * 空间当前的名称（M2-P2）；停用的账户同样显示。对象是账户时登录名与显示名分开给出（target.user，M2-P6 复核 M2）。
- * 文档不补标题（M2 总设计 §2.1 第 5 条）。
+ * 空间当前的名称（M2-P2）；停用的账户同样显示。对象是账户时登录名与显示名分开给出（target.user，M2-P6 复核 M2），
+ * 邀请与空间的名字在 target.name。文档不补标题（M2 总设计 §2.1 第 5 条）。
  * 审计的 details 按原样给出：写入时就不含正文、标题、令牌与密码。
  */
 @Injectable()
@@ -57,12 +52,12 @@ export class AdminAuditService {
     return { items: page.items.map(item => this.toItem(item, { users, invitations, spaces })), nextCursor: page.nextCursor }
   }
 
-  private toItem(record: AuditRecord, labels: TargetLabels): AuditEventItem {
-    const actor = record.actorId === null ? undefined : labels.users.get(record.actorId)
+  private toItem(record: AuditRecord, names: TargetNames): AuditEventItem {
+    const actor = record.actorId === null ? undefined : names.users.get(record.actorId)
     let target: AuditEventItem['target'] = null
     if (record.targetType !== null && record.targetId !== null) {
-      const user = record.targetType === 'user' ? userName(labels.users.get(record.targetId)) : null
-      target = { type: record.targetType, id: record.targetId, label: this.labelOf(record.targetType, record.targetId, labels), user }
+      const user = record.targetType === 'user' ? userName(names.users.get(record.targetId)) : null
+      target = { type: record.targetType, id: record.targetId, name: this.nameOf(record.targetType, record.targetId, names), user }
     }
     return {
       id: record.id,
@@ -77,13 +72,12 @@ export class AdminAuditService {
     }
   }
 
-  private labelOf(type: string, id: string, labels: TargetLabels): string | null {
-    if (type === 'user')
-      return userLabel(labels.users.get(id))
+  /** 不是账户的对象的名字：账户在 target.user 里分开给出，这里不给 */
+  private nameOf(type: string, id: string, names: TargetNames): string | null {
     if (type === 'invitation')
-      return labels.invitations.get(id) ?? null
+      return names.invitations.get(id) ?? null
     if (type === 'space')
-      return labels.spaces.get(id) ?? null
+      return names.spaces.get(id) ?? null
     // 文档不补标题（M2 总设计 §2.1 第 5 条）
     return null
   }
