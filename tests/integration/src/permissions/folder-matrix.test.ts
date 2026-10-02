@@ -7,6 +7,8 @@
 // 删除分两行：空文件夹（只看角色）与"里面有别人创建的文档"（编辑者不能删，锁下用一条计数语句判断）。
 // 跨空间同样拆成两行各固定一端，理由见 document-matrix.test.ts。
 // 列出一层的成功格子另外核对列出来的东西：恰好是这个空间根目录下的文件夹，别处的一个也没有（M2-P6 复核 B 的 S-1）。
+// 两个只凭授权的人（最后两列，M2-P5 S4）：文件夹只看空间角色，授权只到文档一级，不给文件夹开口子——
+// 他们的两列逐格与外人（outsider）那一列相同：看不到的空间 404，全员可见的空间里是查看者。
 import type { ErrorCode } from '@nerve-office/contracts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
@@ -18,7 +20,7 @@ import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { asUser } from '../support/session-client.ts'
-import { buildMatrixWorld, cellsOf, expectCell } from './matrix-world.ts'
+import { buildMatrixWorld, cellsOf, closeWorld, expectCell } from './matrix-world.ts'
 
 let database: TestDatabase
 let app: TestApp
@@ -31,6 +33,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  await closeWorld(world)
   await app.close()
   await database.drop()
 })
@@ -39,50 +42,50 @@ type Operation = 'listFolders' | 'createFolder' | 'renameFolder' | 'moveFolderWi
   | 'deleteFolder' | 'deleteFolderHoldingOthers' | 'moveFolderAcrossSpaces' | 'moveFolderIntoSpace'
 
 /** 归档且全员可见的空间：所有人看得到（查看者），谁都不能改 */
-const NOBODY_CHANGES: Row = [403, 403, 403, 403, 403, 403]
+const NOBODY_CHANGES: Row = [403, 403, 403, 403, 403, 403, 403, 403]
 
 /** 编辑者及以上能做；查看者 403；归档的空间里所有人至多是查看者，也 403；个人空间只有所有者看得到。 */
 function editorOrAbove(success: 200 | 204): Readonly<Record<TargetName, Row>> {
   return {
-    personal: [success, 404, 404, 404, 404, 404],
-    team: [404, success, success, 403, 404, 404],
-    visible: [403, success, success, 403, 403, 403],
-    archived: [404, 403, 403, 403, 404, 404],
+    personal: [success, 404, 404, 404, 404, 404, 404, 404],
+    team: [404, success, success, 403, 404, 404, 404, 404],
+    visible: [403, success, success, 403, 403, 403, 403, 403],
+    archived: [404, 403, 403, 403, 404, 404, 404, 404],
     archivedVisible: NOBODY_CHANGES,
-    missing: [404, 404, 404, 404, 404, 404],
+    missing: [404, 404, 404, 404, 404, 404, 404, 404],
   }
 }
 
 /** 只有空间管理员（个人空间的所有者）能做；其他看得到的人 403。 */
 function spaceAdminOnly(success: 200 | 204): Readonly<Record<TargetName, Row>> {
   return {
-    personal: [success, 404, 404, 404, 404, 404],
-    team: [404, success, 403, 403, 404, 404],
-    visible: [403, success, 403, 403, 403, 403],
-    archived: [404, 403, 403, 403, 404, 404],
+    personal: [success, 404, 404, 404, 404, 404, 404, 404],
+    team: [404, success, 403, 403, 404, 404, 404, 404],
+    visible: [403, success, 403, 403, 403, 403, 403, 403],
+    archived: [404, 403, 403, 403, 404, 404, 404, 404],
     archivedVisible: NOBODY_CHANGES,
-    missing: [404, 404, 404, 404, 404, 404],
+    missing: [404, 404, 404, 404, 404, 404, 404, 404],
   }
 }
 
 const MATRIX: MatrixTable<Operation> = {
   // 列出一层是看空间的内容：有空间角色就行（与按空间列出文档同一条规则）
   listFolders: {
-    personal: [200, 404, 404, 404, 404, 404],
-    team: [404, 200, 200, 200, 404, 404],
-    visible: [200, 200, 200, 200, 200, 200],
-    archived: [404, 200, 200, 200, 404, 404],
-    archivedVisible: [200, 200, 200, 200, 200, 200],
-    missing: [404, 404, 404, 404, 404, 404],
+    personal: [200, 404, 404, 404, 404, 404, 404, 404],
+    team: [404, 200, 200, 200, 404, 404, 404, 404],
+    visible: [200, 200, 200, 200, 200, 200, 200, 200],
+    archived: [404, 200, 200, 200, 404, 404, 404, 404],
+    archivedVisible: [200, 200, 200, 200, 200, 200, 200, 200],
+    missing: [404, 404, 404, 404, 404, 404, 404, 404],
   },
   // 新建文件夹与新建文档同一条规则（00 号计划书 §5.3："在空间内新建文档与文件夹"）
   createFolder: {
-    personal: [201, 404, 404, 404, 404, 404],
-    team: [404, 201, 201, 403, 404, 404],
-    visible: [403, 201, 201, 403, 403, 403],
-    archived: [404, 403, 403, 403, 404, 404],
+    personal: [201, 404, 404, 404, 404, 404, 404, 404],
+    team: [404, 201, 201, 403, 404, 404, 404, 404],
+    visible: [403, 201, 201, 403, 403, 403, 403, 403],
+    archived: [404, 403, 403, 403, 404, 404, 404, 404],
     archivedVisible: NOBODY_CHANGES,
-    missing: [404, 404, 404, 404, 404, 404],
+    missing: [404, 404, 404, 404, 404, 404, 404, 404],
   },
   renameFolder: editorOrAbove(200),
   moveFolderWithinSpace: editorOrAbove(200),
@@ -94,12 +97,12 @@ const MATRIX: MatrixTable<Operation> = {
   moveFolderAcrossSpaces: spaceAdminOnly(200),
   // 目标空间那一维：看得到、没归档（409 SPACE_ARCHIVED）、有新建的权限
   moveFolderIntoSpace: {
-    personal: [200, 404, 404, 404, 404, 404],
-    team: [404, 200, 200, 403, 404, 404],
-    visible: [403, 200, 200, 403, 403, 403],
-    archived: [404, 409, 409, 409, 404, 404],
-    archivedVisible: [409, 409, 409, 409, 409, 409],
-    missing: [404, 404, 404, 404, 404, 404],
+    personal: [200, 404, 404, 404, 404, 404, 404, 404],
+    team: [404, 200, 200, 403, 404, 404, 404, 404],
+    visible: [403, 200, 200, 403, 403, 403, 403, 403],
+    archived: [404, 409, 409, 409, 404, 404, 404, 404],
+    archivedVisible: [409, 409, 409, 409, 409, 409, 409, 409],
+    missing: [404, 404, 404, 404, 404, 404, 404, 404],
   },
 }
 

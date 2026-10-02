@@ -14,10 +14,21 @@ export interface GrantOptions {
 
 /** 新建或调整一条授权（一个人在一份文档上至多一条） */
 export async function setGrant(database: TestDatabase, options: GrantOptions): Promise<void> {
+  await setGrants(database, [options])
+}
+
+/**
+ * 一次新建或调整几条授权：一个连接、一条语句（权限矩阵给每一份新建的文档都摆上两个只凭授权的人的授权，逐条各开一个连接太慢）。
+ * 同一条语句里同一个人在同一份文档上只能出现一次（ON CONFLICT 不能在一条语句里改同一行两次）
+ */
+export async function setGrants(database: TestDatabase, grants: readonly GrantOptions[]): Promise<void> {
+  if (grants.length === 0)
+    return
+  const values = grants.map((_grant, index) => `($${index * 4 + 1}::uuid, $${index * 4 + 2}::uuid, $${index * 4 + 3}, $${index * 4 + 4}::uuid)`)
   await database.query(async client => client.query(
-    `INSERT INTO document_grants (document_id, user_id, role, granted_by) VALUES ($1, $2, $3, $4)
+    `INSERT INTO document_grants (document_id, user_id, role, granted_by) VALUES ${values.join(', ')}
      ON CONFLICT (document_id, user_id) DO UPDATE SET role = excluded.role, granted_by = excluded.granted_by, updated_at = now()`,
-    [options.documentId, options.userId, options.role, options.grantedBy],
+    grants.flatMap(grant => [grant.documentId, grant.userId, grant.role, grant.grantedBy]),
   ))
 }
 

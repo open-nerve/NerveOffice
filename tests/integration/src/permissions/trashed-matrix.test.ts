@@ -18,7 +18,7 @@ import { afterAll, beforeAll, describe, it } from 'vitest'
 import { startTestApp } from '../support/api-app.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { asUser } from '../support/session-client.ts'
-import { buildMatrixWorld, cellsOf, expectCell, snapshotOf } from './matrix-world.ts'
+import { buildMatrixWorld, cellsOf, closeWorld, expectCell, snapshotOf } from './matrix-world.ts'
 
 let database: TestDatabase
 let app: TestApp
@@ -31,6 +31,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  await closeWorld(world)
   await app.close()
   await database.drop()
 })
@@ -38,14 +39,17 @@ afterAll(async () => {
 type Operation = 'readDocument' | 'readContent' | 'saveContent' | 'renameDocument' | 'moveDocument'
   | 'copyDocument' | 'deleteDocument' | 'listFoldersUnder' | 'listDocumentsUnder' | 'renameFolder' | 'moveFolder' | 'deleteFolder'
 
-/** 回收站里的对象：对谁、在哪个空间里，都是"不存在"。 */
+/**
+ * 回收站里的对象：对谁、在哪个空间里，都是"不存在"。两个只凭授权的人（最后两列，M2-P5 S4）在这些文档上都有授权，
+ * 同样是不存在：授权跟着文档走，文档进了回收站，授权对普通接口也就不起作用（永久删除时随外键一起删掉，ADR-016）
+ */
 const GONE: Readonly<Record<TargetName, Row>> = {
-  personal: [404, 404, 404, 404, 404, 404],
-  team: [404, 404, 404, 404, 404, 404],
-  visible: [404, 404, 404, 404, 404, 404],
-  archived: [404, 404, 404, 404, 404, 404],
-  archivedVisible: [404, 404, 404, 404, 404, 404],
-  missing: [404, 404, 404, 404, 404, 404],
+  personal: [404, 404, 404, 404, 404, 404, 404, 404],
+  team: [404, 404, 404, 404, 404, 404, 404, 404],
+  visible: [404, 404, 404, 404, 404, 404, 404, 404],
+  archived: [404, 404, 404, 404, 404, 404, 404, 404],
+  archivedVisible: [404, 404, 404, 404, 404, 404, 404, 404],
+  missing: [404, 404, 404, 404, 404, 404, 404, 404],
 }
 
 const MATRIX: MatrixTable<Operation> = {

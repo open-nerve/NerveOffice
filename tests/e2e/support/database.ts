@@ -159,6 +159,18 @@ export async function grantDocument(documentId: string, user: TestUser, role: 'v
   })
 }
 
+/** 取消单独授权（直接写库：删行，与取消分享的接口写出的一样），作为用例的前置数据——经对话框取消由 US-M2-10 的分享用例覆盖 */
+export async function revokeGrant(documentId: string, user: TestUser): Promise<void> {
+  await withDatabase(async (client) => {
+    await client.query('DELETE FROM document_grants WHERE document_id = $1 AND user_id = $2', [documentId, user.id])
+  })
+}
+
+/** 文档现在的修订号（直接查库）：核对被拒绝的保存什么也没存进去，不必有读这份文档的权限 */
+export async function revisionOf(documentId: string): Promise<number | undefined> {
+  return withDatabase(async client => (await client.query<{ revision: number }>('SELECT revision FROM documents WHERE id = $1', [documentId])).rows[0]?.revision)
+}
+
 /** 这份文档上的单独授权（被授权人的登录名 → 角色）：核对经界面的分享、调整与取消确实写进了库（用例的前提） */
 export async function grantsOn(documentId: string): Promise<Record<string, string>> {
   return withDatabase(async (client) => {

@@ -6,7 +6,8 @@
 // - 编辑者看不到分享入口（行操作与编辑器的页头），空间管理员看得到（对照）；
 // - 编辑器页头的分享：对话框里输入不改动表格；
 // - 对话框的代码没能下载下来：入口旁边说明，可以重试。
-// 人名按 support/people.ts 的写法断言（登录名在前）。US-M2-10 在 S4 才改为 active（tests/stories.json）。
+// 人名按 support/people.ts 的写法断言（登录名在前）。US-M2-10 在 S4 改为 active（tests/stories.json）；
+// 越权访问的关键路径（猜地址、取消分享与移出空间、停用之后的访问）在 security/unauthorized-access.spec.ts（US-M2-14）。
 import type { Locator, Page } from '@playwright/test'
 import { createDocument, createDocumentIn, createFolderIn, createTeamSpace, createUser, grantDocument, grantsOn } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'

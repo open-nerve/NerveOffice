@@ -2,6 +2,8 @@
 // 预期逐格写在表里（00 号计划书 §5.2、§5.3，M2-P2 设计 §3.4），不调用生产代码的规则来算。
 // 会改数据的格子各用各的：添加、调整、移出各用一个新的人，归档与全员可见各用一个新的空间，改名与创建各用一个新的名称，
 // 转移各用一个新的停用者与他的一份文档。
+// 两个只凭授权的人（最后两列，M2-P5 S4）：空间页头、成员与空间的管理只看空间角色，授权不给空间开口子——
+// 他们在这些空间里的文档上都有授权，两列却逐格与外人（outsider）那一列相同；系统管理的接口对他们（普通成员）一律 403。
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { MatrixOperation, MatrixTable, MatrixWorld, Row, TargetName } from './matrix-world.ts'
@@ -11,7 +13,7 @@ import { startTestApp } from '../support/api-app.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { createDocument } from '../support/documents.ts'
 import { asUser } from '../support/session-client.ts'
-import { buildMatrixWorld, cellsOf, expectCell } from './matrix-world.ts'
+import { buildMatrixWorld, cellsOf, closeWorld, expectCell } from './matrix-world.ts'
 
 let database: TestDatabase
 let app: TestApp
@@ -24,6 +26,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  await closeWorld(world)
   await app.close()
   await database.drop()
 })
@@ -37,49 +40,49 @@ type Operation = 'getSpace' | 'listMembers' | 'addMember' | 'changeRole' | 'remo
  */
 function manage(success: 200 | 201 | 204): Readonly<Record<TargetName, Row>> {
   return {
-    personal: [403, 404, 404, 404, 404, 404],
-    team: [404, success, 403, 403, 404, success],
-    visible: [403, success, 403, 403, 403, success],
-    archived: [404, 403, 403, 403, 404, success],
+    personal: [403, 404, 404, 404, 404, 404, 404, 404],
+    team: [404, success, 403, 403, 404, success, 404, 404],
+    visible: [403, success, 403, 403, 403, success, 403, 403],
+    archived: [404, 403, 403, 403, 404, success, 404, 404],
     // 归档且全员可见：所有人看得到（403 而不是 404），只有系统管理员能管理
-    archivedVisible: [403, 403, 403, 403, 403, success],
-    missing: [404, 404, 404, 404, 404, 404],
+    archivedVisible: [403, 403, 403, 403, 403, success, 403, 403],
+    missing: [404, 404, 404, 404, 404, 404, 404, 404],
   }
 }
 
 /** 系统管理的团队空间操作：只有系统管理员（会话守卫拦下其他人）；个人空间与不存在的空间是 404 */
 function administer(success: 200): Readonly<Record<TargetName, Row>> {
   return {
-    personal: [403, 403, 403, 403, 403, 404],
-    team: [403, 403, 403, 403, 403, success],
-    visible: [403, 403, 403, 403, 403, success],
-    archived: [403, 403, 403, 403, 403, success],
-    archivedVisible: [403, 403, 403, 403, 403, success],
-    missing: [403, 403, 403, 403, 403, 404],
+    personal: [403, 403, 403, 403, 403, 404, 403, 403],
+    team: [403, 403, 403, 403, 403, success, 403, 403],
+    visible: [403, 403, 403, 403, 403, success, 403, 403],
+    archived: [403, 403, 403, 403, 403, success, 403, 403],
+    archivedVisible: [403, 403, 403, 403, 403, success, 403, 403],
+    missing: [403, 403, 403, 403, 403, 404, 403, 403],
   }
 }
 
 /** 系统管理员才能做、与目标空间无关的操作（创建团队空间）：每个目标都一样 */
-const ONLY_SYSTEM_ADMIN_CREATES: Row = [403, 403, 403, 403, 403, 201]
+const ONLY_SYSTEM_ADMIN_CREATES: Row = [403, 403, 403, 403, 403, 201, 403, 403]
 
 const MATRIX: MatrixTable<Operation> = {
-  // 空间页头是内容：有空间角色才看得到；没有加入的系统管理员看不到团队空间的内容
+  // 空间页头是内容：有空间角色才看得到；没有加入的系统管理员看不到团队空间的内容；只凭授权的人同样看不到
   getSpace: {
-    personal: [200, 404, 404, 404, 404, 404],
-    team: [404, 200, 200, 200, 404, 404],
-    visible: [200, 200, 200, 200, 200, 200],
-    archived: [404, 200, 200, 200, 404, 404],
-    archivedVisible: [200, 200, 200, 200, 200, 200],
-    missing: [404, 404, 404, 404, 404, 404],
+    personal: [200, 404, 404, 404, 404, 404, 404, 404],
+    team: [404, 200, 200, 200, 404, 404, 404, 404],
+    visible: [200, 200, 200, 200, 200, 200, 200, 200],
+    archived: [404, 200, 200, 200, 404, 404, 404, 404],
+    archivedVisible: [200, 200, 200, 200, 200, 200, 200, 200],
+    missing: [404, 404, 404, 404, 404, 404, 404, 404],
   },
   // 成员列表：团队空间里有空间角色的人与系统管理员；个人空间的所有者 403（个人空间没有成员）
   listMembers: {
-    personal: [403, 404, 404, 404, 404, 404],
-    team: [404, 200, 200, 200, 404, 200],
-    visible: [200, 200, 200, 200, 200, 200],
-    archived: [404, 200, 200, 200, 404, 200],
-    archivedVisible: [200, 200, 200, 200, 200, 200],
-    missing: [404, 404, 404, 404, 404, 404],
+    personal: [403, 404, 404, 404, 404, 404, 404, 404],
+    team: [404, 200, 200, 200, 404, 200, 404, 404],
+    visible: [200, 200, 200, 200, 200, 200, 200, 200],
+    archived: [404, 200, 200, 200, 404, 200, 404, 404],
+    archivedVisible: [200, 200, 200, 200, 200, 200, 200, 200],
+    missing: [404, 404, 404, 404, 404, 404, 404, 404],
   },
   addMember: manage(201),
   changeRole: manage(200),
@@ -100,12 +103,12 @@ const MATRIX: MatrixTable<Operation> = {
   // 停用者的文档转移到目标空间：只有系统管理员；个人空间是转给它的所有者（有效账户）；
   // 团队空间要没有归档（409 SPACE_ARCHIVED），不存在的 404。转移不看系统管理员在目标空间里的角色（他没有加入）
   adminTransfer: {
-    personal: [403, 403, 403, 403, 403, 200],
-    team: [403, 403, 403, 403, 403, 200],
-    visible: [403, 403, 403, 403, 403, 200],
-    archived: [403, 403, 403, 403, 403, 409],
-    archivedVisible: [403, 403, 403, 403, 403, 409],
-    missing: [403, 403, 403, 403, 403, 404],
+    personal: [403, 403, 403, 403, 403, 200, 403, 403],
+    team: [403, 403, 403, 403, 403, 200, 403, 403],
+    visible: [403, 403, 403, 403, 403, 200, 403, 403],
+    archived: [403, 403, 403, 403, 403, 409, 403, 403],
+    archivedVisible: [403, 403, 403, 403, 403, 409, 403, 403],
+    missing: [403, 403, 403, 403, 403, 404, 403, 403],
   },
 }
 
