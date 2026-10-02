@@ -102,4 +102,24 @@ describe('held-lock 的前提：应用等锁的时限远长于"等到请求 → 
     await expect(race).rejects.toThrow('raceAgainstHeldLock 的前提不成立')
     await expect(race).rejects.toThrow('请求已经结束：失败')
   })
+
+  it('被测的请求已经等锁超时结束，change 里另发的请求正在等同一把锁：等锁的连接数够了也不放过，照样报前提不成立（复核第二批 S-3）', async () => {
+    let other: Promise<unknown> | undefined
+    const race = raceAgainstHeldLock(database, {
+      hold: async client => client.query(HOLD_ADVISORY_LOCK),
+      request: async () => database.query(async (client) => {
+        await client.query('SET lock_timeout = \'200ms\'')
+        return client.query(HOLD_ADVISORY_LOCK)
+      }),
+      // 另一个连接在同一把锁上等着（只数等锁的连接时，会把它当成被测的请求），改数据这一段比被测的请求等锁的时限长
+      change: async () => {
+        other = database.query(async client => client.query(HOLD_ADVISORY_LOCK))
+        await delay(600)
+      },
+    })
+    await expect(race).rejects.toThrow('raceAgainstHeldLock 的前提不成立')
+    await expect(race).rejects.toThrow('请求已经结束：失败')
+    // 持锁的事务回滚之后，另发的那个请求拿到锁、照常结束
+    await expect(other).resolves.toBeDefined()
+  })
 })

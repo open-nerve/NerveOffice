@@ -75,7 +75,11 @@ describe('US-M1-11 lint 规则的自测：受限导入', () => {
 }, LINT_TIMEOUT)
 
 describe('US-M1-11 lint 规则的自测：类型与写法（规范 §2.1），每类文件都生效（M2-P6 第 6 片复核 S4）', () => {
-  /** 一段同时违反 §2.1 各条的代码：any、非空断言、console、悬空的 Promise、没覆盖全部分支的 switch、只当类型用却没写 import type、@ts-ignore */
+  /**
+   * 一段同时违反 §2.1 各条的代码：any、非空断言、console、悬空的 Promise、没覆盖全部分支的 switch、只当类型用却没写 import type、@ts-ignore，
+   * 以及 antfu 给 no-restricted-properties 的默认限制（__proto__ 等）：后端与测试的块自己配置这条规则，同名规则后者整体覆盖前者，
+   * 要带上 ANTFU_RESTRICTED_PROPERTIES（eslint.config.ts），漏了就在这里报出（复核第二批 G-a）
+   */
   const VIOLATIONS = [
     'import { z } from \'zod\'',
     '',
@@ -94,8 +98,12 @@ describe('US-M1-11 lint 规则的自测：类型与写法（规范 §2.1），�
     '  return 1',
     '}',
     '',
+    'export function parentOf(value: { __proto__: unknown }): unknown {',
+    '  return value.__proto__',
+    '}',
+    '',
   ].join('\n')
-  const RULES = ['ts/no-explicit-any', 'ts/no-non-null-assertion', 'no-console', 'ts/no-floating-promises', 'ts/switch-exhaustiveness-check', 'ts/consistent-type-imports', 'ts/ban-ts-comment']
+  const RULES = ['ts/no-explicit-any', 'ts/no-non-null-assertion', 'no-console', 'ts/no-floating-promises', 'ts/switch-exhaustiveness-check', 'ts/consistent-type-imports', 'ts/ban-ts-comment', 'no-restricted-properties']
   /** 测试代码可以用非空断言（规范 §2.1）；命令行的入口直接向终端输出（§2.2） */
   const TEST_EXEMPT = ['ts/no-non-null-assertion']
   const CLI_EXEMPT = ['no-console']

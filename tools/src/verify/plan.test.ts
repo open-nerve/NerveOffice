@@ -1,5 +1,6 @@
 import type { StepResult } from './plan.ts'
 import { describe, expect, it } from 'vitest'
+import { GATE_NAMES } from '../gates/run.ts'
 import { parseArgs, planSteps, runSteps, summarize } from './plan.ts'
 
 describe('parseArgs', () => {
@@ -103,6 +104,21 @@ describe('planSteps', () => {
     expect(new Set(sharded)).toEqual(new Set(complete))
     // 两片都构建（E2E 要用构建产物），除此之外没有重复执行的步骤
     expect(sharded.filter((id, index) => sharded.indexOf(id) !== index)).toEqual(['clean', 'build'])
+  })
+
+  /**
+   * 门禁由三步执行：静态门禁（构建之前）、产物门禁（构建之后）与漏洞扫描。故事对照（stories）等门禁只在这里对仓库现状核对，
+   * 门禁自测不再重复跑（M2-P6 第 6 片复核 M1）：哪一步漏带一个门禁，规范标【自动】的检查就静默没了（复核第二批 M-1）
+   */
+  it('静态门禁、产物门禁与漏洞扫描三步合起来恰好执行全部门禁，每个只执行一次；快速门禁的静态门禁一步与之相同', () => {
+    const gateSteps = planSteps({ fast: false, ci: true, audit: false }).filter(step => step.command.slice(0, 2).join(' ') === 'node tools/src/gates/cli.ts')
+    expect(gateSteps.map(step => step.id)).toEqual(['static-gates', 'artifact-gates', 'audit'])
+    const names = gateSteps.flatMap(step => step.command.slice(2))
+    expect([...names].sort()).toEqual([...GATE_NAMES].sort())
+    expect(names.filter((name, index) => names.indexOf(name) !== index)).toEqual([])
+    const staticGates = gateSteps.find(step => step.id === 'static-gates')
+    expect(planSteps({ fast: true, ci: false, audit: false }).find(step => step.id === 'static-gates')).toEqual(staticGates)
+    expect(staticGates?.command).toContain('stories')
   })
 })
 

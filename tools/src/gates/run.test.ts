@@ -1,6 +1,7 @@
-// 对仓库现状执行不依赖网络与构建产物的门禁；故事对照、产物与漏洞三个门禁的装配逻辑用样例与临时目录测试。
+// 对仓库现状执行不依赖网络与构建产物的门禁；故事对照、产物与漏洞三个门禁的装配逻辑用样例与临时目录测试，
+// runGate 的门禁表经注入的样例输入核对（每个名字接的就是对应的门禁，M2-P6 第 6 片复核第二批 M-1）。
 // 前一组会执行 pnpm 的列举命令（pnpm ls、pnpm licenses list），比其他单元测试慢。
-import type { CommandRunner } from './run.ts'
+import type { CommandRunner, GateInputs } from './run.ts'
 import { randomBytes } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -12,6 +13,18 @@ import { parseRegistry } from '../stories/stories.ts'
 import { readFixture } from './fixtures.ts'
 import { ARTIFACT_POLICY } from './policy.ts'
 import { artifactsGate, auditGate, budgetsGate, GATE_NAMES, runGate, storiesGate } from './run.ts'
+
+/** runGate 的样例输入：没有注入的命令一执行就失败（装配用了真实的命令时立即发现），产物目录不存在，日期写定 */
+function sampleInputs(overrides: Partial<GateInputs> = {}): GateInputs {
+  return {
+    run: (command, args) => {
+      throw new Error(`样例没有注入这条命令的输出：${[command, ...args].join(' ')}`)
+    },
+    webDist: join(tmpdir(), 'nerve-no-such-dist'),
+    today: () => '2026-09-26',
+    ...overrides,
+  }
+}
 
 // 故事对照（stories）不在这一组：它要列举仓库里的全部用例，慢在 vitest list --json（本机单独 16.8 秒；playwright --list 只要 0.5 秒），
 // 覆盖率那一轮里与全部单元测试抢 CPU 时要 34 秒。pnpm verify 与 --fast 的 static-gates 一步本来就执行它（tools/src/verify/plan.ts），
@@ -65,6 +78,20 @@ describe('US-M1-11 故事对照门禁的装配', () => {
     expect(id).toBeDefined()
     const outcome = storiesGate(listing({ id: id ?? '', verification: 'e2e' }).run)
     expect(outcome.violations.map(v => [v.rule, v.subject])).toEqual([['stories/missing-test', id]])
+  })
+
+  /**
+   * 门禁自测不再对仓库现状跑 stories（M2-P6 第 6 片复核 M1），仓库现状只由静态门禁一步核对：门禁表里 stories 换成返回空结果的壳、
+   * 或者不用注入的执行器，上面的用例照样通过（复核第二批 M-1）。这里经 runGate 走一遍门禁表，确认接的就是 storiesGate
+   */
+  it('runGate 的 stories 就是这个门禁：用注入的执行器列举两次，对照的结果原样交出（复核第二批 M-1）', () => {
+    const { run, commands } = listing()
+    const outcome = runGate('stories', sampleInputs({ run }))
+    expect(commands).toEqual(['pnpm exec vitest list --json', 'pnpm --silent --filter @nerve-office/e2e run list'])
+    expect(outcome).toEqual(storiesGate(listing().run))
+    const [id] = Object.entries(registry.stories).find(([, story]) => story.status === 'active' && story.verification.includes('e2e')) ?? []
+    const missing = runGate('stories', sampleInputs({ run: listing({ id: id ?? '', verification: 'e2e' }).run }))
+    expect(missing.violations.map(v => [v.rule, v.subject])).toEqual([['stories/missing-test', id]])
   })
 })
 
@@ -251,5 +278,15 @@ describe('US-M1-11 漏洞门禁的装配', () => {
 
   it('pnpm 的输出结构不对时直接报错，不当作没有漏洞', () => {
     expect(() => auditGate(() => ({ advisories: {} }), '2026-09-26')).toThrow()
+  })
+})
+
+describe('US-M1-11 runGate 的门禁表按注入的输入装配（M2-P6 第 6 片复核第二批 M-1）', () => {
+  it('artifacts 与 budgets 用注入的产物目录，audit 用注入的执行器', () => {
+    const dist = writeDist(clean)
+    expect(runGate('artifacts', sampleInputs({ webDist: dist }))).toEqual(artifactsGate(dist))
+    expect(runGate('budgets', sampleInputs({ webDist: dist }))).toEqual(budgetsGate(dist))
+    const report = readFixture('pnpm-12/audit-with-advisories.json')
+    expect(runGate('audit', sampleInputs({ run: () => report }))).toEqual(auditGate(() => report, '2026-09-26'))
   })
 })

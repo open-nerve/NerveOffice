@@ -333,17 +333,61 @@ const RADIX_DIALOG_OUTSIDE_DIALOG_FILE = [
 // 人名一律经人名组件（shared/ui 的 PersonName）显示，纯文字里用 messages.people.text（规范 §2.4，M2-P6 复核 M2）：显示名是本人填的，
 // 什么都能写（"李四（lisi）""李四 @lisi"），和登录名、别的文字拼成一段就冒充得了别人。lint 近似地拦下几种拼法：显示名（displayName）
 // 出现在模板字符串的插值与 + 的拼接里；JSX 里显示名和别的文字、和登录名（username）是同一个元素的子节点。显示名单独占一个元素
-// （表格里"显示名"那一列、PersonName 自己）照常。经变量转一手、数组 join 之类的写法认不出，由审查保证（M2-P6 第 6 片复核 S5）。
+// （表格里"显示名"那一列、PersonName 自己）照常。显示名与登录名认成员（user.displayName）与同名的变量，外面可以再套两层不改变值的写法：
+// 可选链、?? || &&、条件表达式的两支、非空断言与类型断言（SAME_VALUE_WRAPPERS，例如 `${user?.displayName ?? ''}`，M2-P6 第 6 片复核第二批 S-2）。
+// 认不出、由审查保证的写法（第 6 片复核 S5、第二批 S-2）：
+// - 经变量转一手（const name = user.displayName）、解构时改了名（const { displayName: name } = user）；
+// - 经函数或方法（[…].join()、'…'.concat()、String()、user.displayName.trim()、文案里自己写的拼接函数）；
+// - 外面套了三层以上。
+// 会误报的（第二批 G-b）：文案里同名的属性同样按人名报出，例如列标题、标签的键叫 displayName（`${text.columns.displayName}列`、
+// <label>{text.displayName}：</label>）——文案的键换个名字（例如 displayNameLabel），或在那一行关掉检查、在 -- 之后写明原因。
 // 对 web 的生产代码生效：各自配置 no-restricted-syntax 的块（平台代码、弹窗的文件、入口、编辑器）都带上这组限制
 const PERSON_NAME_MESSAGE = '人名经 PersonName（shared/ui）显示，纯文字里用 messages.people.text：显示名（displayName）不和登录名、别的文字拼成一段（规范 §2.4，M2-P6 复核 M2）'
-const DISPLAY_NAME_NODE = ':matches(MemberExpression[property.name=\'displayName\'], Identifier[name=\'displayName\'])'
-const DISPLAY_NAME_CHILD = 'JSXExpressionContainer:matches([expression.property.name=\'displayName\'], [expression.name=\'displayName\'])'
-const USERNAME_CHILD = 'JSXExpressionContainer:matches([expression.property.name=\'username\'], [expression.name=\'username\'])'
+/**
+ * 套在值外面、不改变值的写法：节点类型与值所在的属性。条件表达式只算两支（条件本身不是这个值）；
+ * 类型断言的另一个属性是类型，不会是成员或变量
+ */
+const SAME_VALUE_WRAPPERS = [
+  { types: ['ChainExpression', 'TSNonNullExpression', 'TSAsExpression', 'TSSatisfiesExpression'], keys: ['expression'] },
+  { types: ['LogicalExpression'], keys: ['left', 'right'] },
+  { types: ['ConditionalExpression'], keys: ['consequent', 'alternate'] },
+] as const
+/** 外面最多再套几层：`${user?.displayName ?? ''}` 是两层（?? 套着可选链） */
+const SAME_VALUE_DEPTH = 2
+const SAME_VALUE_WRAPPER = `:matches(${SAME_VALUE_WRAPPERS.flatMap(wrapper => wrapper.types).join(', ')})`
+/** 处在外层的值的位置上（字段选择器：是外层节点的 expression、left 等属性） */
+const SAME_VALUE_POSITION = `:matches(${[...new Set(SAME_VALUE_WRAPPERS.flatMap(wrapper => wrapper.keys))].map(key => `.${key}`).join(', ')})`
+
+/** 直接放在 parent 里、值就是 field 本身的成员或变量（报在成员或变量上）：parent > 外层 > 内层 > 成员，外面零到两层 */
+function fieldValueIn(parent: string, field: string): string[] {
+  const leaf = `:matches(MemberExpression[property.name='${field}'], Identifier[name='${field}'])`
+  return Array.from({ length: SAME_VALUE_DEPTH + 1 }, (_, depth) => depth === 0
+    ? `${parent} > ${leaf}`
+    : [parent, SAME_VALUE_WRAPPER, ...Array.from({ length: depth - 1 }).fill(`${SAME_VALUE_WRAPPER}${SAME_VALUE_POSITION}`), `${leaf}${SAME_VALUE_POSITION}`].join(' > '))
+}
+
+/**
+ * 值就是 field 本身的 JSX 子节点 {…}：按从 expression 起的属性路径认（它要作 JSX 兄弟节点 ~ 的左边，只能写成这个节点自己的条件），
+ * 外面零到两层的写法同 fieldValueIn
+ */
+function fieldValueChild(field: string): string {
+  const at = (path: string, depth: number): string[] => [
+    `[${path}.property.name='${field}']`,
+    `[${path}.name='${field}']`,
+    ...(depth === 0
+      ? []
+      : SAME_VALUE_WRAPPERS.flatMap(({ types, keys }) => keys.flatMap(key =>
+          at(`${path}.${key}`, depth - 1).map(inner => `[${path}.type=/^(?:${types.join('|')})$/]${inner}`)))),
+  ]
+  return `JSXExpressionContainer:matches(${at('expression', SAME_VALUE_DEPTH).join(', ')})`
+}
+
+const DISPLAY_NAME_CHILD = fieldValueChild('displayName')
+const USERNAME_CHILD = fieldValueChild('username')
 /** JSX 里显示名的兄弟节点：有字的文本、字符串字面量、登录名 */
 const NAME_NEIGHBOURS = [String.raw`JSXText[value=/\S/]`, String.raw`JSXExpressionContainer[expression.type='Literal'][expression.value=/\S/]`, USERNAME_CHILD]
 const PERSON_NAME_CONCATENATION = [
-  { selector: `TemplateLiteral > ${DISPLAY_NAME_NODE}`, message: PERSON_NAME_MESSAGE },
-  { selector: `BinaryExpression[operator='+'] > ${DISPLAY_NAME_NODE}`, message: PERSON_NAME_MESSAGE },
+  ...[...fieldValueIn('TemplateLiteral', 'displayName'), ...fieldValueIn('BinaryExpression[operator=\'+\']', 'displayName')].map(selector => ({ selector, message: PERSON_NAME_MESSAGE })),
   ...NAME_NEIGHBOURS.flatMap(neighbour => [
     { selector: `${neighbour} ~ ${DISPLAY_NAME_CHILD}`, message: PERSON_NAME_MESSAGE },
     { selector: `${DISPLAY_NAME_CHILD} ~ ${neighbour}`, message: PERSON_NAME_MESSAGE },
@@ -461,7 +505,10 @@ const ANTFU_RESTRICTED_PROPERTIES = [
 // 有条件地跳过用例同样是跳过（规范 §8.4）：test/no-disabled-tests 只认 .skip 与 x 前缀，playwright/no-skipped-test 只认 test.skip 一类。
 // skipIf、runIf 与用例里的 skip()（测试上下文的 ctx.skip()、解构出来的 skip、Playwright 的 testInfo.skip()）在测试里一并拦下；
 // 确需跳过时用 eslint-disable 注释在 -- 之后写明原因（eslint-comments/require-description 要求写），经审查（M2-P6 第 6 片复核 S4）。
-// it.skip、test.skip、describe.skip 另由上面两条规则报出，这里放过，不重复
+// it.skip、test.skip、describe.skip 另由上面两条规则报出，这里放过，不重复。
+// 会误报的（复核第二批 G-c）：按属性名判断，测试里普通对象的 skip 属性同样报出，例如分页参数（page.skip、{ skip } = query 的解构）；
+// test.describe.skip 这类两层的写法除了 playwright/no-skipped-test 再报一次。现在都没有这样的写法；遇到时换个名字（例如 offset），
+// 或在那一行关掉检查、在 -- 之后写明原因
 const TEST_SKIP_MESSAGE = '有条件地跳过用例（skipIf、runIf、用例里的 skip()）同样是跳过（规范 §8.4）：确需跳过时用 eslint-disable 注释在 -- 之后写明原因，经审查（M2-P6 第 6 片复核 S4）'
 const TEST_SKIP_PROPERTIES = [
   { property: 'skipIf', message: TEST_SKIP_MESSAGE },
@@ -522,7 +569,9 @@ const API_TRASH_ENTRY_PURGER = {
 // 才查询，别的模块拿到它的仓储就绕开了"可访问文档"的范围。所以按导入名拦下经任何 index.ts 引用的 *Repository（静态导入、import type、
 // 再导出、命名空间导入与 export * 都算）：app 层的程序接口（app/index.ts）也不例外，命令行与 app 层的其他文件经它转手时，按路径的限制
 // 认不出来（复验 R-S4）。模块自己的文件按相对路径引用自己的仓储（./x.repository.ts），不经 index.ts，不受影响；
-// 仓储的类名都以 Repository 结尾（lint-rules-api.test.ts 核对每个 *.repository.ts，M2-P6 第 6 片复核 S4）
+// 仓储的类名都以 Repository 结尾（lint-rules-api.test.ts 核对每个 *.repository.ts，M2-P6 第 6 片复核 S4）。
+// 会误报的（复核第二批 G-c）：按导入名的模式判断时，命名空间导入与 export * 认不出拿到的是哪些名字，所以 api 里经任何 index.ts 的
+// import * as x 与 export * 一律报出，即使那个入口根本不转出仓储（现在没有这样的写法）；需要时改成按名字导入、按名字转出
 const API_FOREIGN_REPOSITORIES = {
   regex: String.raw`(?:^|/)index\.ts$`,
   importNamePattern: 'Repository$',

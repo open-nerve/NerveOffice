@@ -416,4 +416,29 @@ describe('US-M1-11 lint 规则的自测：人名经 PersonName 显示，显示�
     expect((await lint(alone, 'apps/web/src/features/admin/users-page.tsx')).messages.join('\n')).not.toContain(PERSON_NAME_MESSAGE)
     expect((await lint(joined, WEB_TEST_FILE)).messages.join('\n')).not.toContain(PERSON_NAME_MESSAGE)
   })
+
+  it('外面套着不改变值的写法同样认得：可选链、??、条件表达式的一支、非空断言，两层套在一起也算（M2-P6 第 6 片复核第二批 S-2）', async () => {
+    const wrapped = [
+      `export function label(user?: { displayName: string, username: string }): string {\n  return \`\${user?.displayName}（\${user?.username}）\`\n}\n`,
+      `export function label(user: { displayName: string | null }): string {\n  return \`用户 \${user.displayName ?? ''}\`\n}\n`,
+      `export function label(user?: { displayName: string }): string {\n  return \`用户 \${user?.displayName ?? ''}\`\n}\n`,
+      'export function label(user?: { displayName: string }): string {\n  return \'用户 \' + user?.displayName\n}\n',
+      `export function label(me: boolean, user: { displayName: string }): string {\n  return \`\${me ? '我' : user.displayName}：\`\n}\n`,
+      'export function Name({ user }: { user?: { displayName: string, username: string } }) {\n  return <span>{user?.displayName}（{user?.username}）</span>\n}\n',
+      'export function Name({ user }: { user: { displayName: string | null, username: string } }) {\n  return <span>{user.displayName ?? \'\'}（{user.username}）</span>\n}\n',
+      'export function Name({ user }: { user?: { displayName?: string } }) {\n  return <span>用户：{user?.displayName!}</span>\n}\n',
+    ]
+    for (const code of wrapped)
+      expect((await lint(code, 'apps/web/src/features/admin/users-page.tsx')).messages.join('\n'), code).toContain(PERSON_NAME_MESSAGE)
+  })
+
+  it('值不是显示名本身的照常：条件表达式的条件、显示名的长度；套着可选链与 ?? 单独占一个元素也照常', async () => {
+    const notJoined = [
+      `export function label(user: { displayName: string }): string {\n  return \`显示名\${user.displayName ? '已填' : '未填'}\`\n}\n`,
+      `export function label(user: { displayName: string }): string {\n  return \`\${user.displayName.length} 个字\`\n}\n`,
+      'export function Cell({ user }: { user?: { displayName: string } }) {\n  return <td><bdi>{user?.displayName ?? \'\'}</bdi></td>\n}\n',
+    ]
+    for (const code of notJoined)
+      expect((await lint(code, 'apps/web/src/features/admin/users-page.tsx')).messages.join('\n'), code).not.toContain(PERSON_NAME_MESSAGE)
+  })
 }, LINT_TIMEOUT)
