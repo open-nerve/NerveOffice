@@ -30,8 +30,6 @@ export type CredentialCheck
 @Injectable()
 export class UsersService implements OnModuleInit {
   readonly #logger: AppLogger
-  /** 用户名不存在时拿来算一次哈希的假哈希：响应时间与"密码错误"相近，不暴露账户是否存在 */
-  #dummyHash: Promise<string> | undefined
   /** 读出库里现存哈希的参数、交给哈希器（Codex 评审 CX4）：成功一次即可 */
   #storedParameters: Promise<void> | undefined
 
@@ -44,12 +42,11 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
-   * 启动时就生成假哈希：否则第一个不存在的用户名要多算一次哈希，响应时间暴露账户不存在（P3 审查 A13）。
-   * 同时读出库里现存哈希的参数，但不等它：数据库暂时连不上时照常启动（就绪探针另有报告），验证时再读。
+   * 启动时读出库里现存哈希的参数，但不等它：数据库暂时连不上时照常启动（就绪探针另有报告），验证时再读。
+   * 原来这里还要生成一个假哈希给不存在的用户名比对（P3 审查 A13）；现在不存在的用户名由哈希器的 reject 按参数直接计算，不再需要它
    */
-  async onModuleInit(): Promise<void> {
+  onModuleInit(): void {
     void this.observeStoredParameters()
-    await this.dummyHash()
   }
 
   /** 按 id 取账户（含停用的） */
@@ -83,9 +80,9 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
-   * 按用户名（不区分大小写）与密码验证。不论账户是否存在、是否可用，都做一次哈希计算；验证失败的计算量由哈希器补齐，
-   * 账户的哈希参数与当前配置不同时，失败的耗时也与"用户名不存在"相同（Codex 评审 CX4）。
-   * 停用的账户对假哈希验证：密码对不对，耗时都一样，不暴露账户已停用（M2-P1 审查 A8）。
+   * 按用户名（不区分大小写）与密码验证。不论账户是否存在、是否可用，都做同样的哈希计算：验证失败与 reject 都把当前参数与库里
+   * 现存的各组参数各算一次，账户的哈希参数与当前配置不同时，失败的耗时也与"用户名不存在"相同（Codex 评审 CX4，ADR-007）。
+   * 停用的账户同样走 reject：密码对不对，耗时都一样，不暴露账户已停用（M2-P1 审查 A8）。
    * 验证通过且哈希的参数已经过时，顺带用当前的参数重新哈希（失败只记日志，不影响这次登录）。
    * 数据库只在比对之前读（凭据），比对之后的重新哈希不抛出：调用方据此把这里抛出的数据库繁忙当作"还没有比对"，
    * 退回限流的名额（auth 的 releasingIfBusy，M2-P6 第 3 片复验）。比对之后不能再加会抛出的数据库访问，否则就让人借繁忙多猜一次
@@ -97,7 +94,7 @@ export class UsersService implements OnModuleInit {
     const username = usernameSchema.safeParse(usernameInput)
     const credentials = username.success ? await this.repository.findCredentialsByUsername(username.data) : undefined
     if (credentials === undefined || credentials.user.status !== 'active') {
-      await this.hasher.verify(await this.dummyHash(), password)
+      await this.hasher.reject(password)
       return credentials === undefined ? { valid: false } : { valid: false, user: credentials.user }
     }
     if (!await this.hasher.verify(credentials.passwordHash, password))
@@ -131,15 +128,15 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
-   * 按 id 验证密码（修改密码时的旧密码，M2-P1 设计 §3.5）。账户不存在或不可用时同样算一次哈希，
-   * 失败的耗时由哈希器补齐，与登录相同（ADR-007）。通过时返回验证过的凭据，事务里交给 replacePassword 复核。
+   * 按 id 验证密码（修改密码时的旧密码，M2-P1 设计 §3.5）。账户不存在或不可用时走 reject，
+   * 与验证失败做同样的计算，同登录（ADR-007）。通过时返回验证过的凭据，事务里交给 replacePassword 复核。
    * 数据库只在比对之前读，同 verifyCredentials
    */
   async verifyPasswordOf(userId: string, password: string): Promise<VerifiedCredentials | undefined> {
     await this.observeStoredParameters()
     const credentials = await this.repository.findCredentialsById(userId)
     if (credentials === undefined || credentials.user.status !== 'active') {
-      await this.hasher.verify(await this.dummyHash(), password)
+      await this.hasher.reject(password)
       return undefined
     }
     return await this.hasher.verify(credentials.passwordHash, password) ? { user: credentials.user, passwordVersion: credentials.passwordVersion } : undefined
@@ -310,30 +307,18 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
-   * 库里现存哈希的参数交给哈希器，它把没见过的各组参数算几次（Codex 评审 CX4）。不会失败：读不出来或校准不了时只记警告，
-   * 下次验证时再做；在那之前，哈希器仍从验证过的哈希里记下各组参数的耗时
+   * 库里现存哈希的参数交给哈希器，之后的失败与 reject 都把各组各算一次（Codex 评审 CX4）。不会失败：读不出来时只记警告，
+   * 下次验证时再读；在那之前，哈希器仍记下验证时遇到的各组参数
    */
   private async observeStoredParameters(): Promise<void> {
-    // 读参数与校准（各组参数算几次）都可能失败（数据库暂时不可用、等待哈希的请求太多）：都只记警告，下次验证时再做
     this.#storedParameters ??= this.repository.passwordHashParameters()
-      .then(async segments => this.hasher.observe(segments))
+      .then((segments) => {
+        this.hasher.observe(segments)
+      })
       .catch((error: unknown) => {
         this.#storedParameters = undefined
-        this.#logger.warn('没能读出或校准现存密码哈希的参数，下次验证时再做', { err: error })
+        this.#logger.warn('没能读出现存密码哈希的参数，下次验证时再读', { err: error })
       })
     return this.#storedParameters
-  }
-
-  /** 生成失败（例如等待哈希的请求太多）时不缓存失败：下次再生成，否则之后不存在的用户名都会一直出错 */
-  private async dummyHash(): Promise<string> {
-    if (this.#dummyHash === undefined) {
-      const pending = this.hasher.hash(randomBytes(32).toString('base64url'))
-      this.#dummyHash = pending
-      pending.catch(() => {
-        if (this.#dummyHash === pending)
-          this.#dummyHash = undefined
-      })
-    }
-    return this.#dummyHash
   }
 }
