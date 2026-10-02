@@ -14,7 +14,8 @@ export default defineConfig({
           name: 'unit',
           environment: 'node',
           // api 的装饰器元数据由 Oxc 按 apps/api/tsconfig.json 输出（ADR-004）
-          include: ['packages/*/src/**/*.test.ts', 'tools/src/**/*.test.ts', 'apps/*/build/**/*.test.ts', 'apps/api/src/**/*.test.ts'],
+          // tests/e2e/support 里的纯函数（例如页面错误里哪些是浏览器的通知）也在这里测，不用起浏览器
+          include: ['packages/*/src/**/*.test.ts', 'tools/src/**/*.test.ts', 'apps/*/build/**/*.test.ts', 'apps/api/src/**/*.test.ts', 'tests/e2e/support/**/*.test.ts'],
         },
       },
       {

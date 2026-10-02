@@ -7,7 +7,8 @@
 //
 // 页面错误（没接住的异常，Playwright 的 pageerror）同样由夹具收集（M2-P6 第 6 片复核 S6）：原来只有只读的用例断言"没有页面错误"，
 // 别的用例里应用抛了没接住的异常照样通过。按浏览器上下文收（weberror：这个上下文里每个页面的都算，跨整页跳转、多个标签页都不丢），
-// 另一台设备的上下文同样挂上；每个用例结束时断言一条都没有。浏览器的 ResizeObserver 通知不是应用的错误，照旧排除（support/page-errors.ts）。
+// 另一台设备的上下文同样挂上；每个用例结束时断言一条都没有。浏览器的通知不是应用的错误，照旧排除（support/page-errors.ts：ResizeObserver 的通知、
+// WebKit 在整页跳转时取消同源请求的诊断），排除掉的另记一份，夹具的自测据此核对排除确实走到了（specs/foundation/page-errors.spec.ts）。
 import type { BrowserContext, Page } from '@playwright/test'
 import { test as base, expect } from '@playwright/test'
 import { isBrowserNotice } from './page-errors.ts'
@@ -58,20 +59,26 @@ async function watchCspViolations(context: BrowserContext, report: (violation: C
 }
 
 export interface PageErrors {
-  /** 到目前为止收到的页面错误（"名称: 说明"），浏览器的 ResizeObserver 通知除外 */
+  /** 到目前为止收到的页面错误（"名称: 说明"），浏览器的通知除外 */
   readonly list: () => readonly string[]
+  /** 到目前为止按浏览器的通知排除掉的（"名称: 说明"）：夹具的自测用 */
+  readonly ignored: () => readonly string[]
   /** 声明本用例预期有页面错误：用例结束时不再断言为空，由用例自己检查收到的错误 */
   readonly expectErrors: () => void
   /** 本用例另开的浏览器上下文也收集，记进同一个列表（在它打开页面之前调用） */
   readonly watch: (context: BrowserContext) => void
 }
 
-/** 这个浏览器上下文里任何页面没接住的异常交给 report（浏览器的通知除外） */
-function watchPageErrors(context: BrowserContext, report: (error: string) => void): void {
+/** 这个浏览器上下文里任何页面没接住的异常交给 report，浏览器的通知交给 ignore（判断同源用报告时页面的地址） */
+function watchPageErrors(context: BrowserContext, report: (error: string) => void, ignore: (notice: string) => void): void {
   context.on('weberror', (webError) => {
     const error = webError.error()
-    if (!isBrowserNotice(error))
-      report(`${error.name}: ${error.message}（${webError.page()?.url() ?? '页面已关闭'}）`)
+    const pageUrl = webError.page()?.url()
+    const text = `${error.name}: ${error.message}（${pageUrl ?? '页面已关闭'}）`
+    if (isBrowserNotice(error, pageUrl))
+      ignore(text)
+    else
+      report(text)
   })
 }
 
@@ -92,17 +99,22 @@ export const test = base.extend<{ cspViolations: CspViolations, pageErrors: Page
   },
   pageErrors: [async ({ context }, use) => {
     const errors: string[] = []
+    const notices: string[] = []
     let expected = false
     const report = (error: string) => {
       errors.push(error)
     }
-    watchPageErrors(context, report)
+    const ignore = (notice: string) => {
+      notices.push(notice)
+    }
+    watchPageErrors(context, report, ignore)
     await use({
       list: () => [...errors],
+      ignored: () => [...notices],
       expectErrors: () => {
         expected = true
       },
-      watch: other => watchPageErrors(other, report),
+      watch: other => watchPageErrors(other, report, ignore),
     })
     if (!expected)
       expect(errors, '页面里出现了没接住的异常（pageerror）').toEqual([])
