@@ -245,9 +245,9 @@ describe('US-M2-12 结果里的位置', () => {
     expect(found).toMatchObject({ folderId: null, folderPath: [] })
   })
 
-  it('个人空间里的文档：空间的类型是 personal，名称是本人的显示名，另带所有者（"人"的结构，M2-P5：界面按所有者的人名呈现）', async () => {
+  it('个人空间里的文档：空间的类型是 personal，只带所有者（"人"的结构，M2-P5：界面按所有者的人名呈现），不带存的名称（可以伪造，规范 §2.4；逐字核对，多给一个字段就失败）', async () => {
     const [found] = (await search(amySession, '季度预算表')).items
-    expect(found?.space).toEqual({ id: amy.personalSpaceId, type: 'personal', name: '艾米', owner: { id: amy.id, username: 'amy', displayName: '艾米' } })
+    expect(found?.space).toEqual({ id: amy.personalSpaceId, type: 'personal', owner: { id: amy.id, username: 'amy', displayName: '艾米' } })
   })
 
   it('深层的文件夹：路径按从浅到深，每一层一段', async () => {

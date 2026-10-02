@@ -275,9 +275,68 @@ describe('US-M1-11 lint 规则的自测：按需加载的页面不进平台页�
     })
   })
 
+  describe('分享对话框与"与我共享"页（M2-P5 设计 §3.5）', () => {
+    const SHARE_ENTRY = 'apps/web/src/features/documents/share-entry.tsx'
+    const EDITOR_SHARE_ENTRY = 'apps/web/src/features/sheet-editor/share-entry.tsx'
+    const importShare = (path: string): string => `import { ShareDialog } from '${path}'\n\nexport const dialog = ShareDialog\n`
+
+    it('分享对话框：平台页面只有文档行操作的入口文件能动态 import() 它的公开入口；编辑器页的页头文件静态引用（另一个包）；别处一律不行', async () => {
+      expect(await rulesFor(dynamicImport('../sharing/index.ts'), SHARE_ENTRY)).not.toContain('boundaries/dependencies')
+      expect(await rulesFor(importShare('../sharing/index.ts'), EDITOR_SHARE_ENTRY)).not.toContain('boundaries/dependencies')
+      const denied: [string, string][] = [
+        // 平台页面的入口文件：静态引用（会进首屏）、动态引用内部文件
+        [importShare('../sharing/index.ts'), SHARE_ENTRY],
+        [`import type { ShareDialogProps } from '../sharing/index.ts'\n\nexport type Props = ShareDialogProps\n`, SHARE_ENTRY],
+        [dynamicImport('../sharing/share-dialog.tsx'), SHARE_ENTRY],
+        // 编辑器页的页头文件同样只经公开入口
+        [importShare('../sharing/share-dialog.tsx'), EDITOR_SHARE_ENTRY],
+        // 行操作、编辑器页头的其他文件、别的功能、应用层、入口
+        [dynamicImport('../sharing/index.ts'), 'apps/web/src/features/documents/item-actions.tsx'],
+        [dynamicImport('../sharing/index.ts'), 'apps/web/src/features/sheet-editor/editor-chrome.tsx'],
+        [dynamicImport('../sharing/index.ts'), WEB_FEATURE_FILE],
+        [dynamicImport('../features/sharing/index.ts'), ROUTES_FILE],
+        [`export { ShareDialog } from '../../features/sharing/index.ts'\n`, PLATFORM_ENTRY],
+      ]
+      for (const [code, file] of denied) {
+        const report = await lint(code, file)
+        expect(report.rules, `${file}：${code}`).toContain('boundaries/dependencies')
+        if (!code.includes('share-dialog.tsx'))
+          expect(report.messages.join('\n'), file).toContain('分享对话框（features/sharing）只由入口所在的两个文件引用')
+      }
+    })
+
+    it('分享对话框可以带弹窗、确认的弹窗与同事选择（三处白名单）', async () => {
+      const imports = [
+        'import { DialogContent } from \'../../shared/ui/dialog.tsx\'\n\nexport const content = DialogContent\n',
+        'import { ConfirmDialog } from \'../confirmation/index.ts\'\n\nexport const dialog = ConfirmDialog\n',
+        'import { ColleaguePicker } from \'../colleagues/index.ts\'\n\nexport const picker = ColleaguePicker\n',
+      ]
+      for (const code of imports)
+        expect(await rulesFor(code, 'apps/web/src/features/sharing/share-dialog.tsx'), code).not.toContain('boundaries/dependencies')
+      // "与我共享"页不带弹窗，引用了照样拦下
+      expect(await rulesFor(imports[0] ?? '', 'apps/web/src/features/shared-with-me/shared-page.tsx')).toContain('boundaries/dependencies')
+    })
+
+    it('"与我共享"页：只有路由表能动态 import() 它的公开入口', async () => {
+      expect(await rulesFor(dynamicImport('../features/shared-with-me/index.ts'), ROUTES_FILE)).not.toContain('boundaries/dependencies')
+      const denied: [string, string][] = [
+        [`import { SharedWithMePage } from '../features/shared-with-me/index.ts'\n\nexport const page = SharedWithMePage\n`, ROUTES_FILE],
+        [dynamicImport('../features/shared-with-me/shared-page.tsx'), ROUTES_FILE],
+        [dynamicImport('../features/shared-with-me/index.ts'), WEB_FILE],
+        [`import type { SharedWithMePage } from '../shared-with-me/index.ts'\n\nexport type Page = typeof SharedWithMePage\n`, WEB_FEATURE_FILE],
+        [`export { SharedWithMePage } from '../../features/shared-with-me/index.ts'\n`, PLATFORM_ENTRY],
+      ]
+      for (const [code, file] of denied) {
+        const report = await lint(code, file)
+        expect(report.rules, `${file}：${code}`).toContain('boundaries/dependencies')
+        expect(report.messages.join('\n'), file).toContain('"与我共享"页（features/shared-with-me）按需加载')
+      }
+    })
+  })
+
   describe('只给按需加载的页面与编辑器页用的文案（shared/i18n/zh-cn/<功能>.ts）只由对应的功能引用；测试不受限（M2-P6 复核第二批）', () => {
     const importTexts = (path: string, name: string): string => `import { ${name} } from '${path}'\n\nexport const texts = ${name}\n`
-    const TEXTS_MESSAGE = /这份文案（shared\/i18n\/zh-cn\/\w+\.ts）只由按需加载的 features\/[\w-]+ 引用/
+    const TEXTS_MESSAGE = /这份文案（shared\/i18n\/zh-cn\/[\w-]+\.ts）只由按需加载的 features\/[\w-]+ 引用/
 
     it('对应的功能照常引用', async () => {
       const allowed: [string, string][] = [
@@ -286,6 +345,8 @@ describe('US-M1-11 lint 规则的自测：按需加载的页面不进平台页�
         [importTexts('../../shared/i18n/zh-cn/colleagues.ts', 'colleaguesMessages'), 'apps/web/src/features/colleagues/keyword-picker.tsx'],
         [importTexts('../../shared/i18n/zh-cn/trash.ts', 'trashMessages'), 'apps/web/src/features/trash/trash-page.tsx'],
         [importTexts('../../shared/i18n/zh-cn/search.ts', 'searchMessages'), 'apps/web/src/features/search/search-page.tsx'],
+        [importTexts('../../shared/i18n/zh-cn/sharing.ts', 'sharingMessages'), 'apps/web/src/features/sharing/share-dialog.tsx'],
+        [importTexts('../../shared/i18n/zh-cn/shared-with-me.ts', 'sharedWithMeMessages'), 'apps/web/src/features/shared-with-me/shared-page.tsx'],
         [importTexts('../../shared/i18n/zh-cn/editor.ts', 'editorMessages'), 'apps/web/src/features/sheet-editor/editor-chrome.tsx'],
       ]
       for (const [code, file] of allowed)
@@ -311,6 +372,11 @@ describe('US-M1-11 lint 规则的自测：按需加载的页面不进平台页�
         [`export type { trashMessages } from '../../shared/i18n/zh-cn/trash.ts'\n`, PLATFORM_ENTRY],
         [importTexts('../../shared/i18n/zh-cn/editor.ts', 'editorMessages'), 'apps/web/src/features/documents/new-sheet-button.tsx'],
         [importTexts('../shared/i18n/zh-cn/editor.ts', 'editorMessages'), 'apps/web/src/editor/sheet-editor.ts'],
+        // 分享对话框的文案：入口所在的文件（平台页面的首屏、编辑器页的页头）与"与我共享"页都不行
+        [importTexts('../../shared/i18n/zh-cn/sharing.ts', 'sharingMessages'), 'apps/web/src/features/documents/share-entry.tsx'],
+        [importTexts('../../shared/i18n/zh-cn/sharing.ts', 'sharingMessages'), 'apps/web/src/features/sheet-editor/share-entry.tsx'],
+        [importTexts('../../shared/i18n/zh-cn/sharing.ts', 'sharingMessages'), 'apps/web/src/features/shared-with-me/shared-page.tsx'],
+        [importTexts('../shared/i18n/zh-cn/shared-with-me.ts', 'sharedWithMeMessages'), WEB_FILE],
       ]
       for (const [code, file] of denied) {
         const report = await lint(code, file)
@@ -323,6 +389,8 @@ describe('US-M1-11 lint 规则的自测：按需加载的页面不进平台页�
       const insideShared: [string, string][] = [
         [`export { searchMessages } from './zh-cn/search.ts'\n`, 'apps/web/src/shared/i18n/index.ts'],
         [`export type { adminMessages } from './zh-cn/admin.ts'\n`, 'apps/web/src/shared/i18n/index.ts'],
+        [`export { sharingMessages } from './zh-cn/sharing.ts'\n`, 'apps/web/src/shared/i18n/index.ts'],
+        [importTexts('../i18n/zh-cn/shared-with-me.ts', 'sharedWithMeMessages'), 'apps/web/src/shared/ui/space-label.tsx'],
         [importTexts('../i18n/zh-cn/colleagues.ts', 'colleaguesMessages'), WEB_SHARED_FILE],
         [importTexts('./trash.ts', 'trashMessages'), 'apps/web/src/shared/i18n/zh-cn/messages.ts'],
         [importTexts('../i18n/zh-cn/members.ts', 'membersMessages'), 'apps/web/src/shared/ui/dialog.tsx'],

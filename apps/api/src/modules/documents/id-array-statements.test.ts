@@ -68,6 +68,13 @@ function expectIdArrayParameters(statements: readonly Statement[]): void {
 
 type Call = (repositories: Repositories, transaction: Transaction) => Promise<unknown>
 
+/** 文档表上一条查询的条件（外层的 where 到 order by 之间）：选出的列里也有子查询的 WHERE，只看外层的 */
+function whereOf(text: string): string {
+  const at = text.indexOf('from "documents" where ')
+  const end = text.indexOf(' order by ', at)
+  return at < 0 ? '' : text.slice(at + 'from "documents" where '.length, end < 0 ? undefined : end)
+}
+
 const DOCUMENTS: Readonly<Record<string, Call>> = {
   '列出可访问的文档（看得到的空间）': async ({ documents }) => documents.listAccessible({ spaceIds: IDS, grantsOf: undefined }, { limit: 10 }),
   '列出可访问的文档（看得到的空间，并上授权）': async ({ documents }) => documents.listAccessible({ spaceIds: IDS, grantsOf: USER }, { limit: 10 }),
@@ -125,10 +132,20 @@ describe(`仓储按一串 id 读写：${COUNT} 个 id 也只有一个数组参�
     const [both] = await statementsOf(async ({ documents }) => documents.listAccessible({ spaceIds: [SPACE], grantsOf: USER }, { limit: 10 }))
     expect(both?.text).toMatch(/"documents"\."status" = \$\d+ and \("documents"\."space_id" = ANY\(\$\d+::uuid\[\]\) or EXISTS \(SELECT 1 FROM "document_grants" WHERE \("document_grants"\."document_id" = "documents"\."id" and "document_grants"\."user_id" = \$\d+\)\)\)/)
     expect(both?.values).toContain(USER)
-    // 只要授权那一半（"与我共享"）：空间那一半是空数组，恒为假，结果只剩授权的文档
-    const [grantsOnly] = await statementsOf(async ({ documents }) => documents.listAccessible({ spaceIds: [], grantsOf: USER }, { limit: 10 }))
-    expect(grantsOnly?.values).toContainEqual([])
-    expect(grantsOnly?.text).toMatch(/EXISTS \(SELECT 1 FROM "document_grants"/)
+    // 只要授权那一半（"与我共享"，M2-P5 S3）：不带恒假的空间条件——`space_id = ANY('{}') OR EXISTS …` 里的 OR 让规划器只能扫整张
+    // 文档表；只剩 EXISTS 时从授权表的 (user_id) 索引出发（真实的计划由集成测试 documents/shared-plan.test.ts 用 EXPLAIN 核对）
+    for (const grantsOnly of [
+      ...await statementsOf(async ({ documents }) => documents.listAccessible({ spaceIds: [], grantsOf: USER }, { limit: 10 })),
+      ...await statementsOf(async ({ documents }) => documents.listGranted(USER, { limit: 10 })),
+    ]) {
+      const where = whereOf(grantsOnly.text)
+      expect(where).toMatch(/^\("documents"\."status" = \$\d+ and EXISTS \(SELECT 1 FROM "document_grants" WHERE \("document_grants"\."document_id" = "documents"\."id" and "document_grants"\."user_id" = \$\d+\)\)\)$/)
+      expect(where).not.toMatch(/space_id/)
+      expect(grantsOnly.values).not.toContainEqual([])
+    }
+    // 两半都不要：恒为假，什么也查不出（不能因为没有条件就成了全部正常状态的文档）
+    const [neither] = await statementsOf(async ({ documents }) => documents.listAccessible({ spaceIds: [], grantsOf: undefined }, { limit: 10 }))
+    expect(whereOf(neither?.text ?? '')).toMatch(/^\("documents"\."status" = \$\d+ and false\)$/)
   })
 
   it('到期的删除单元：让开的那些写成 NOT (id = ANY(…))；没有要让开的就不带这个条件', async () => {

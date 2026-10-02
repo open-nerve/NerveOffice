@@ -274,7 +274,7 @@ function detail(): DocumentDetail {
   return {
     ...WEEKLY,
     spaceId: SPACE_ID,
-    space: { id: SPACE_ID, type: 'personal', name: '艾米' },
+    space: { id: SPACE_ID, type: 'personal' },
     folderId: null,
     accessVia: 'space',
     revision: 1,

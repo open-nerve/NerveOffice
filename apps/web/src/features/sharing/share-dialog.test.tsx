@@ -1,0 +1,288 @@
+// 分享对话框（M2-P5 设计 §3.5，US-M2-10）：授权列表（人名组件）、按名字选同事（排除自己与已有授权的人）、选角色、调整、取消（确认的弹窗）；
+// 结果未知与被拒绝之后按共用的做法刷新（授权列表、文档详情与"与我共享"）再说明，403 显示服务端的说明；焦点进对话框、关闭之后回到入口。
+// 接口用假的 fetch；宿主（平台页面或编辑器页）给出的"刷新文档详情"用记录调用的假实现。
+import type { DocumentGrant, SharedListResponse } from '@nerve-office/contracts'
+import type { ShareDialogProps } from './share-dialog.tsx'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { useRef, useState } from 'react'
+import { describe, expect, it, vi } from 'vitest'
+import { SHARED_LIST_QUERY_KEY } from '../../shared/api/shared-list-key.ts'
+import { apiError, installFakeApi, inTurn, json, networkFailure } from '../../shared/testing/fake-api.test-support.ts'
+import { personIn, plainName, shownName } from '../../shared/testing/people.test-support.ts'
+import { ShareDialog } from './share-dialog.tsx'
+
+const DOCUMENT_ID = '0199a2c4-0000-7000-8000-0000000000d1'
+const ME = { id: '0199a2c4-0000-7000-8000-00000000000a', username: 'amy', displayName: '艾米' }
+const BEN = { id: '0199a2c4-0000-7000-8000-00000000000b', username: 'ben', displayName: '本' }
+const CAT = { id: '0199a2c4-0000-7000-8000-00000000000c', username: 'cat', displayName: '凯特' }
+const DAN = { id: '0199a2c4-0000-7000-8000-00000000000d', username: 'dan', displayName: '丹' }
+
+const GRANTS_KEY = `GET /api/documents/${DOCUMENT_ID}/grants`
+
+function grantOf(user: typeof BEN, changes: Partial<DocumentGrant> = {}): DocumentGrant {
+  return { user, status: 'active', role: 'viewer', grantedBy: ME, grantedAt: '2026-10-02T01:00:00.000Z', ...changes }
+}
+
+function grants(...items: DocumentGrant[]): Response {
+  return json(200, { items })
+}
+
+function putKey(userId: string): string {
+  return `PUT /api/documents/${DOCUMENT_ID}/grants/${userId}`
+}
+
+function deleteKey(userId: string): string {
+  return `DELETE /api/documents/${DOCUMENT_ID}/grants/${userId}`
+}
+
+function colleaguesKey(query: string): string {
+  return `GET /api/users?${new URLSearchParams({ query }).toString()}`
+}
+
+/** 宿主：打开对话框的按钮（入口）与对话框；refreshDocument 记下调用 */
+function Host({ refreshDocument, props }: { readonly refreshDocument: () => void, readonly props?: Partial<ShareDialogProps> }) {
+  const [open, setOpen] = useState(false)
+  const entryRef = useRef<HTMLButtonElement>(null)
+  return (
+    <>
+      <button ref={entryRef} type="button" onClick={() => setOpen(true)}>分享</button>
+      <ShareDialog documentId={DOCUMENT_ID} documentTitle="周报" currentUserId={ME.id} open={open} onOpenChange={setOpen} refreshDocument={refreshDocument} entry={entryRef} fallbackFocus={() => {}} {...props} />
+    </>
+  )
+}
+
+/** "与我共享"已经取过一次（不在显示）：写操作之后要把它作废，下次显示时重新请求 */
+const SHARED_PAGE: SharedListResponse = { items: [], nextCursor: null }
+
+function renderDialog(handlers: Parameters<typeof installFakeApi>[0], props?: Partial<ShareDialogProps>) {
+  const api = installFakeApi(handlers)
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  client.setQueryData(SHARED_LIST_QUERY_KEY, { pages: [SHARED_PAGE], pageParams: [null] })
+  const refreshDocument = vi.fn()
+  render(
+    <QueryClientProvider client={client}>
+      <Host refreshDocument={refreshDocument} props={props} />
+    </QueryClientProvider>,
+  )
+  return { api, client, refreshDocument }
+}
+
+async function openDialog(): Promise<HTMLElement> {
+  const entry = screen.getByRole('button', { name: '分享' })
+  entry.focus()
+  fireEvent.click(entry)
+  return screen.findByRole('dialog', { name: '分享「周报」' })
+}
+
+function requestsTo(api: { readonly requests: readonly { readonly key: string }[] }, key: string): number {
+  return api.requests.filter(request => request.key === key).length
+}
+
+/** 在同事选择里按名字找人：输入停下之后才查找 */
+async function search(dialog: HTMLElement, keyword: string): Promise<HTMLElement> {
+  fireEvent.change(within(dialog).getByLabelText('要分享给的同事'), { target: { value: keyword } })
+  return within(dialog).findByRole('list', { name: '找到的同事' }, { timeout: 2000 })
+}
+
+describe('US-M2-10 分享对话框：列表与人名', () => {
+  it('打开时焦点进对话框；授权列表的被授权人与设置人都用人名组件（登录名在前），停用的标出来；关闭之后焦点回到入口', async () => {
+    renderDialog({ [GRANTS_KEY]: () => grants(grantOf(BEN, { role: 'editor' }), grantOf(CAT, { status: 'disabled' })) })
+    const dialog = await openDialog()
+    expect(dialog).toHaveAccessibleDescription(/只看得到这一份，看不到它所在空间里的其他内容/)
+    expect(dialog.contains(document.activeElement)).toBe(true)
+    const list = await within(dialog).findByRole('list', { name: '已分享给' })
+    const [ben, cat] = within(list).getAllByRole('listitem')
+    personIn(ben as HTMLElement, '本', 'ben')
+    personIn(cat as HTMLElement, '凯特', 'cat')
+    expect(within(cat as HTMLElement).getByText('已停用')).toBeInTheDocument()
+    // 最后设置它的人同样经人名组件
+    expect(within(ben as HTMLElement).getByText((_content, element) => element?.tagName === 'P' && element.textContent?.startsWith(`由 ${shownName('艾米', 'amy')} 设置于`) === true)).toBeInTheDocument()
+    expect(within(ben as HTMLElement).getByRole('combobox', { name: `${plainName('本', 'ben')} 的角色` })).toHaveValue('editor')
+    fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: '分享' }))
+  })
+
+  it('打开之前入口没有焦点（WebKit 点按钮不移焦点，打开时记不下）：关闭之后焦点照样回到入口', async () => {
+    renderDialog({ [GRANTS_KEY]: () => grants() })
+    fireEvent.click(screen.getByRole('button', { name: '分享' }))
+    const dialog = await screen.findByRole('dialog', { name: '分享「周报」' })
+    await within(dialog).findByText('还没有单独分享给任何人。')
+    fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: '分享' })))
+  })
+
+  it('加载中读屏读得到（状态写在骨架屏的容器上）；还没有分享给任何人时说明', async () => {
+    let answer: (response: Response) => void = () => {}
+    renderDialog({ [GRANTS_KEY]: async () => new Promise<Response>((resolve) => {
+      answer = resolve
+    }) })
+    const dialog = await openDialog()
+    expect(within(dialog).getByRole('status', { name: '正在加载分享的情况…' })).toBeInTheDocument()
+    answer(grants())
+    expect(await within(dialog).findByText('还没有单独分享给任何人。')).toBeInTheDocument()
+  })
+
+  it('分享给我自己的那一条（别的空间管理员分享的）：不能调整，只能取消', async () => {
+    renderDialog({ [GRANTS_KEY]: () => grants(grantOf(ME, { grantedBy: BEN })) })
+    const dialog = await openDialog()
+    const item = within(await within(dialog).findByRole('list', { name: '已分享给' })).getByRole('listitem')
+    expect(within(item).queryByRole('combobox')).toBeNull()
+    expect(within(item).getByText('这是分享给你自己的，只能取消')).toBeInTheDocument()
+    expect(within(item).getByRole('button', { name: `取消分享 ${plainName('艾米', 'amy')}` })).toBeInTheDocument()
+  })
+
+  it('加载失败：说明原因，可以重试', async () => {
+    const api = renderDialog({ [GRANTS_KEY]: inTurn(() => apiError(500, 'INTERNAL_ERROR'), () => grants(grantOf(BEN))) }).api
+    const dialog = await openDialog()
+    expect(await within(dialog).findByText('分享的情况没能加载')).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: '重试' }))
+    expect(await within(dialog).findByRole('list', { name: '已分享给' })).toBeInTheDocument()
+    expect(requestsTo(api, GRANTS_KEY)).toBe(2)
+  })
+
+  it('打开时就被拒绝（403：例如空间刚被归档）：显示服务端的说明，不给加人；入口所依据的文档详情随之刷新', async () => {
+    const { refreshDocument } = renderDialog({ [GRANTS_KEY]: () => apiError(403, 'PERMISSION_DENIED', '空间已归档，恢复之后才能调整分享') })
+    const dialog = await openDialog()
+    expect(await within(dialog).findByText('空间已归档，恢复之后才能调整分享')).toBeInTheDocument()
+    expect(within(dialog).queryByLabelText('要分享给的同事')).toBeNull()
+    await waitFor(() => expect(refreshDocument).toHaveBeenCalled())
+  })
+
+  it('看不到这份文档了（404）：说明已经不在了', async () => {
+    renderDialog({ [GRANTS_KEY]: () => apiError(404, 'NOT_FOUND') })
+    const dialog = await openDialog()
+    expect(await within(dialog).findByText('这份文档已经不在了，或者你已经不能访问它。')).toBeInTheDocument()
+  })
+})
+
+describe('US-M2-10 分享对话框：加人', () => {
+  it('同事选择排除自己与已有授权的人', async () => {
+    renderDialog({
+      [GRANTS_KEY]: () => grants(grantOf(BEN)),
+      [colleaguesKey('a')]: () => json(200, { items: [ME, BEN, DAN] }),
+    })
+    const dialog = await openDialog()
+    await within(dialog).findByRole('list', { name: '已分享给' })
+    const candidates = await search(dialog, 'a')
+    expect(within(candidates).getAllByRole('button').map(button => button.textContent)).toEqual([shownName('丹', 'dan')])
+  })
+
+  it('选人、选角色、分享：请求带着角色；成功之后说明已分享给谁（人名组件），列表随即刷新，选择清掉', async () => {
+    const { api } = renderDialog({
+      [GRANTS_KEY]: inTurn(() => grants(), () => grants(grantOf(DAN, { role: 'editor' }))),
+      [colleaguesKey('dan')]: () => json(200, { items: [DAN] }),
+      [putKey(DAN.id)]: () => json(200, grantOf(DAN, { role: 'editor' })),
+    })
+    const dialog = await openDialog()
+    await within(dialog).findByText('还没有单独分享给任何人。')
+    fireEvent.click(within(await search(dialog, 'dan')).getByRole('button', { name: shownName('丹', 'dan') }))
+    fireEvent.change(within(dialog).getByLabelText('角色'), { target: { value: 'editor' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: '分享' }))
+    const notice = await within(dialog).findByText((_content, element) => element?.getAttribute('role') === 'status' && element.textContent === `已分享给 ${shownName('丹', 'dan')}（编辑者）`)
+    personIn(notice, '丹', 'dan')
+    expect(api.requests.find(request => request.key === putKey(DAN.id))?.body).toEqual({ role: 'editor' })
+    expect(await within(dialog).findByRole('list', { name: '已分享给' })).toBeInTheDocument()
+    expect(within(dialog).getByLabelText('要分享给的同事')).toHaveValue('')
+  })
+
+  it('结果未知（网络）：授权列表、文档详情与"与我共享"按共用的做法刷新，说明可能已经生效', async () => {
+    const { api, client, refreshDocument } = renderDialog({
+      [GRANTS_KEY]: inTurn(() => grants(), () => grants(grantOf(DAN))),
+      [colleaguesKey('dan')]: () => json(200, { items: [DAN] }),
+      [putKey(DAN.id)]: networkFailure,
+    })
+    const dialog = await openDialog()
+    await within(dialog).findByText('还没有单独分享给任何人。')
+    fireEvent.click(within(await search(dialog, 'dan')).getByRole('button', { name: shownName('丹', 'dan') }))
+    fireEvent.click(within(dialog).getByRole('button', { name: '分享' }))
+    expect(await within(dialog).findByText(/没能确认是否已经完成（网络连接失败，请检查网络后重试）。可能已经生效：页面已按服务端现在的状态刷新/)).toBeInTheDocument()
+    expect(requestsTo(api, GRANTS_KEY)).toBe(2)
+    expect(refreshDocument).toHaveBeenCalled()
+    expect(client.getQueryState(SHARED_LIST_QUERY_KEY)?.isInvalidated).toBe(true)
+  })
+
+  it('被拒绝（403）：显示服务端的说明；授权列表与文档详情随之刷新（入口随新的权限消失）', async () => {
+    const { refreshDocument } = renderDialog({
+      [GRANTS_KEY]: inTurn(() => grants(), () => apiError(403, 'PERMISSION_DENIED', '空间已归档，恢复之后才能调整分享')),
+      [colleaguesKey('dan')]: () => json(200, { items: [DAN] }),
+      [putKey(DAN.id)]: () => apiError(403, 'PERMISSION_DENIED', '空间已归档，恢复之后才能调整分享'),
+    })
+    const dialog = await openDialog()
+    await within(dialog).findByText('还没有单独分享给任何人。')
+    fireEvent.click(within(await search(dialog, 'dan')).getByRole('button', { name: shownName('丹', 'dan') }))
+    fireEvent.click(within(dialog).getByRole('button', { name: '分享' }))
+    // 列表重新请求也被拒绝：不再显示能操作的表单，说明换成服务端给的原因
+    await waitFor(() => expect(within(dialog).queryByLabelText('要分享给的同事')).toBeNull())
+    expect(within(dialog).getByText('空间已归档，恢复之后才能调整分享')).toBeInTheDocument()
+    expect(refreshDocument).toHaveBeenCalled()
+  })
+})
+
+describe('US-M2-10 分享对话框：调整与取消', () => {
+  it('调整：选好之后点"保存"才提交；结果未知时按共用的做法刷新（授权列表、文档详情与"与我共享"），在这一行说明可能已经生效', async () => {
+    const { api, client, refreshDocument } = renderDialog({
+      [GRANTS_KEY]: inTurn(() => grants(grantOf(BEN)), () => grants(grantOf(BEN))),
+      [putKey(BEN.id)]: () => apiError(502, 'INTERNAL_ERROR'),
+    })
+    const dialog = await openDialog()
+    const role = await within(dialog).findByRole('combobox', { name: `${plainName('本', 'ben')} 的角色` })
+    fireEvent.change(role, { target: { value: 'editor' } })
+    expect(api.requests.some(request => request.key === putKey(BEN.id))).toBe(false)
+    fireEvent.click(within(dialog).getByRole('button', { name: `保存 ${plainName('本', 'ben')} 的角色` }))
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(/没能确认是否已经完成.*可能已经生效：页面已按服务端现在的状态刷新/)
+    expect(api.requests.find(request => request.key === putKey(BEN.id))?.body).toEqual({ role: 'editor' })
+    expect(requestsTo(api, GRANTS_KEY)).toBe(2)
+    expect(refreshDocument).toHaveBeenCalled()
+    expect(client.getQueryState(SHARED_LIST_QUERY_KEY)?.isInvalidated).toBe(true)
+    expect(within(dialog).getByRole('combobox', { name: `${plainName('本', 'ben')} 的角色` })).toHaveValue('viewer')
+  })
+
+  it('取消：先确认（标题里的人名登录名在前）；取消之后说明，列表与"与我共享"随之刷新，那一行不在了，焦点交给"已分享给"', async () => {
+    const { client } = renderDialog({
+      [GRANTS_KEY]: inTurn(() => grants(grantOf(BEN)), () => grants()),
+      [deleteKey(BEN.id)]: () => new Response(null, { status: 204 }),
+    })
+    const dialog = await openDialog()
+    // 点按钮时焦点在它身上（jsdom 的 click 不移焦点）：确认框关闭时要回到的就是它，那一行随取消消失
+    const revoke = await within(dialog).findByRole('button', { name: `取消分享 ${plainName('本', 'ben')}` })
+    revoke.focus()
+    fireEvent.click(revoke)
+    const confirm = await screen.findByRole('dialog', { name: `取消分享给 ${plainName('本', 'ben')}？` })
+    fireEvent.click(within(confirm).getByRole('button', { name: '取消分享' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /^取消分享给/ })).toBeNull())
+    expect(await within(dialog).findByText((_content, element) => element?.getAttribute('role') === 'status' && element.textContent === `已取消分享给 ${shownName('本', 'ben')}`)).toBeInTheDocument()
+    expect(await within(dialog).findByText('还没有单独分享给任何人。')).toBeInTheDocument()
+    expect(client.getQueryState(SHARED_LIST_QUERY_KEY)?.isInvalidated).toBe(true)
+    await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole('heading', { name: '已分享给' })))
+  })
+
+  it('取消的结果未知：确认框里说明可能已经生效；授权列表、文档详情与"与我共享"按共用的做法刷新', async () => {
+    const { api, client, refreshDocument } = renderDialog({
+      [GRANTS_KEY]: inTurn(() => grants(grantOf(BEN)), () => grants()),
+      [deleteKey(BEN.id)]: () => apiError(500, 'INTERNAL_ERROR'),
+    })
+    const dialog = await openDialog()
+    fireEvent.click(await within(dialog).findByRole('button', { name: `取消分享 ${plainName('本', 'ben')}` }))
+    const confirm = await screen.findByRole('dialog', { name: `取消分享给 ${plainName('本', 'ben')}？` })
+    fireEvent.click(within(confirm).getByRole('button', { name: '取消分享' }))
+    expect(await within(confirm).findByText(/没能确认是否已经完成.*可能已经生效：页面已按服务端现在的状态刷新/)).toBeInTheDocument()
+    expect(requestsTo(api, GRANTS_KEY)).toBe(2)
+    expect(refreshDocument).toHaveBeenCalled()
+    expect(client.getQueryState(SHARED_LIST_QUERY_KEY)?.isInvalidated).toBe(true)
+  })
+
+  it('取消时这份文档已经不在了（404）：确认框里说明已经不在了', async () => {
+    renderDialog({
+      [GRANTS_KEY]: inTurn(() => grants(grantOf(BEN)), () => apiError(404, 'NOT_FOUND')),
+      [deleteKey(BEN.id)]: () => apiError(404, 'NOT_FOUND'),
+    })
+    const dialog = await openDialog()
+    fireEvent.click(await within(dialog).findByRole('button', { name: `取消分享 ${plainName('本', 'ben')}` }))
+    const confirm = await screen.findByRole('dialog', { name: `取消分享给 ${plainName('本', 'ben')}？` })
+    fireEvent.click(within(confirm).getByRole('button', { name: '取消分享' }))
+    expect(await within(confirm).findByText('这份文档已经不在了，或者你已经不能访问它。')).toBeInTheDocument()
+  })
+})

@@ -59,7 +59,7 @@ describe('SharedDocumentsService.list 的范围与每一条', () => {
         type: 'sheet',
         createdAt: inTeam.createdAt.toISOString(),
         updatedAt: inTeam.updatedAt.toISOString(),
-        space: { id: TEAM_SPACE, type: 'team', name: '市场部', ownerUserId: null },
+        space: { id: TEAM_SPACE, type: 'team', name: '市场部' },
         contentRole: 'editor',
       },
       {
@@ -68,7 +68,7 @@ describe('SharedDocumentsService.list 的范围与每一条', () => {
         type: 'sheet',
         createdAt: inAlices.createdAt.toISOString(),
         updatedAt: inAlices.updatedAt.toISOString(),
-        space: { id: ALICE_SPACE, type: 'personal', name: '爱丽丝', ownerUserId: ALICE },
+        space: { id: ALICE_SPACE, type: 'personal', ownerUserId: ALICE },
         contentRole: 'viewer',
       },
     ])

@@ -1,4 +1,4 @@
-import type { DocumentGrant, SearchResult, SearchSpace, SharedDocument, SharedSpace, SpaceMember, SpaceRole, SpaceView, TeamSpace, TrashEntry, UserSummary } from '@nerve-office/contracts'
+import type { DocumentGrant, SearchResult, SharedDocument, SpaceIdentity, SpaceMember, SpaceRole, SpaceView, TeamSpace, TrashEntry, UserSummary } from '@nerve-office/contracts'
 import type { DocumentGrantRecord, LocatedSpace, SearchHit, SharedHit, SpaceContentAccess, TrashEntrySummary } from '../documents/index.ts'
 import type { SpaceFacts, SpaceMemberRecord, SpaceRecord } from '../spaces/index.ts'
 import type { User } from '../users/index.ts'
@@ -82,40 +82,27 @@ export function toDocumentGrant(grant: DocumentGrantRecord, accounts: ReadonlyMa
 
 /** 一批空间里个人空间的所有者（去重由 UsersService.findByIds 做）：搜索结果与"与我共享"补人名用 */
 export function ownerIdsOf(spaces: readonly LocatedSpace[]): string[] {
-  return spaces.flatMap(space => space.ownerUserId ?? [])
+  return spaces.flatMap(space => space.type === 'personal' ? [space.ownerUserId] : [])
 }
 
 /**
- * 个人空间的所有者（M2-P5 设计 §3.4(2)(4)）：个人空间存的名称是所有者建号时的显示名、可以伪造（规范 §2.4），
- * 一律按所有者的人呈现，人名来自 users。个人空间一定有所有者，没有就是数据不一致
+ * 搜索结果与"与我共享"里的空间（contracts 的 spaceIdentitySchema，M2-P5 设计 §3.4(2)(4)）：团队空间给名称；
+ * 个人空间只给所有者的"人"（人名来自 users），不给存的名称——那是所有者建号时的显示名，可以伪造（规范 §2.4）
  */
-function ownerOf(space: LocatedSpace, owners: ReadonlyMap<string, User>): UserSummary {
-  if (space.ownerUserId === null)
-    throw new Error(`个人空间没有所有者：${space.id}`)
-  return toUserSummary(accountIn(owners, space.ownerUserId))
-}
-
-/** 搜索结果里的空间（contracts 的 searchSpaceSchema）：个人空间另带所有者；名称照旧给出（与文档详情一致，只做加法） */
-function toSearchSpace(space: LocatedSpace, owners: ReadonlyMap<string, User>): SearchSpace {
-  const { id, name } = space
-  return space.type === 'personal' ? { id, type: 'personal', name, owner: ownerOf(space, owners) } : { id, type: 'team', name }
+function toSpaceIdentity(space: LocatedSpace, owners: ReadonlyMap<string, User>): SpaceIdentity {
+  return space.type === 'personal'
+    ? { id: space.id, type: 'personal', owner: toUserSummary(accountIn(owners, space.ownerUserId)) }
+    : { id: space.id, type: 'team', name: space.name }
 }
 
 /** 搜索结果的一条（contracts 的 searchResultSchema）：所在空间的所有者的人名由 users 补上，其余 documents 已经给齐 */
 export function toSearchResult(hit: SearchHit, owners: ReadonlyMap<string, User>): SearchResult {
-  return { ...hit, space: toSearchSpace(hit.space, owners) }
-}
-
-/**
- * "与我共享"里的空间（contracts 的 sharedSpaceSchema）：团队空间给名称；个人空间只给所有者，不给存的名称（可以伪造，规范 §2.4）
- */
-function toSharedSpace(space: LocatedSpace, owners: ReadonlyMap<string, User>): SharedSpace {
-  return space.type === 'personal' ? { id: space.id, type: 'personal', owner: ownerOf(space, owners) } : { id: space.id, type: 'team', name: space.name }
+  return { ...hit, space: toSpaceIdentity(hit.space, owners) }
 }
 
 /** "与我共享"的一条（contracts 的 sharedDocumentSchema） */
 export function toSharedDocument(hit: SharedHit, owners: ReadonlyMap<string, User>): SharedDocument {
-  return { ...hit, space: toSharedSpace(hit.space, owners) }
+  return { ...hit, space: toSpaceIdentity(hit.space, owners) }
 }
 
 /**

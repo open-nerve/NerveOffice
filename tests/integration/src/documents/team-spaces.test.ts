@@ -91,10 +91,10 @@ describe('US-M2-05 团队空间里的文档', () => {
     expect(await count('SELECT count(*) FROM audit_events WHERE action = \'documents.created\' AND target_id = $1 AND actor_id = $2', [document.id, amy.id])).toBe(1)
   })
 
-  it('详情：个人空间的文档带着个人空间（名称是所有者的显示名）', async () => {
+  it('详情：个人空间的文档带着个人空间，只有 id 与类型（M2-P5：存的名称是所有者建号时的显示名，可以伪造，规范 §2.4；逐字核对，多给一个字段就失败）', async () => {
     const id = await createDocument(database, { spaceId: amy.personalSpaceId, createdBy: amy.id, title: '私人笔记' })
     const response = await asUser(app.baseUrl, amySession, `/api/documents/${id}`)
-    expect(parseExact(documentDetailSchema, await response.json()).space).toEqual({ id: amy.personalSpaceId, type: 'personal', name: '艾米' })
+    expect(parseExact(documentDetailSchema, await response.json()).space).toEqual({ id: amy.personalSpaceId, type: 'personal' })
   })
 
   it('同一个请求重放：同样带着空间时返回同一份文档；同一个 requestId 换了空间（或不带空间）是另一个请求', async () => {

@@ -1,7 +1,7 @@
 import type { SpaceRole } from '../spaces/spaces.ts'
 import { z } from 'zod'
 import { documentSummarySchema } from '../documents/documents.ts'
-import { SPACE_ROLES } from '../spaces/spaces.ts'
+import { SPACE_ROLES, spaceIdentitySchema } from '../spaces/spaces.ts'
 import { USER_STATUSES, userSummarySchema } from '../users/users.ts'
 
 /**
@@ -58,23 +58,15 @@ export const sharedListQuerySchema = z.strictObject({
 export type SharedListQuery = z.infer<typeof sharedListQuerySchema>
 
 /**
- * "与我共享"里一份文档所在的空间：只有类型与认得出它的东西，没有目录结构（M2-P5 设计 §3.4(4)）。
- * - 团队空间：名称；
- * - 个人空间：所有者（"人"的结构）。个人空间存的名称是所有者建号时的显示名，可以伪造（规范 §2.4），所以不给，界面按所有者的人名呈现。
- */
-export const sharedSpaceSchema = z.discriminatedUnion('type', [
-  z.object({ id: z.uuid(), type: z.literal('team'), name: z.string() }),
-  z.object({ id: z.uuid(), type: z.literal('personal'), owner: userSummarySchema }),
-])
-
-export type SharedSpace = z.infer<typeof sharedSpaceSchema>
-
-/**
  * "与我共享"的一条：我有单独授权的一份文档（不论我在那个空间里有没有角色）。文档的元数据不带文件夹；
  * contentRole 是我对这份文档的内容权限——空间角色与授权取较高者，归档的空间里至多是查看者（与文档详情的权限同一套规则）。
  */
 export const sharedDocumentSchema = documentSummarySchema.extend({
-  space: sharedSpaceSchema,
+  /**
+   * 所在的空间：只有类型与认得出它的东西，没有目录结构（M2-P5 设计 §3.4(4)）——团队空间是名称，个人空间是所有者，
+   * 不给存的名称（spaceIdentitySchema，与搜索结果同一个结构）
+   */
+  space: spaceIdentitySchema,
   contentRole: z.enum(SPACE_ROLES),
 })
 

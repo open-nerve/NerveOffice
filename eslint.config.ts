@@ -687,6 +687,8 @@ const LAZY_TEXTS: readonly { readonly file: string, readonly feature: string }[]
   { file: 'colleagues.ts', feature: 'colleagues' },
   { file: 'trash.ts', feature: 'trash' },
   { file: 'search.ts', feature: 'search' },
+  { file: 'sharing.ts', feature: 'sharing' },
+  { file: 'shared-with-me.ts', feature: 'shared-with-me' },
   { file: 'editor.ts', feature: 'sheet-editor' },
 ]
 
@@ -1237,6 +1239,48 @@ export default antfu(
               dependency: { nodeKind: 'dynamic-import' },
             },
           },
+          // 分享对话框（M2-P5 设计 §3.5）：它带着弹窗、同事选择与确认的弹窗。入口在两处，只有这两个文件可以引用它的公开入口：
+          // - 平台页面文档的行操作（features/documents/share-entry.tsx）：只能动态 import()（组件级的按需加载，shared/lib/use-lazy-chunk.ts），
+          //   静态引用会把它带进平台页面的首屏；
+          // - 编辑器页的页头（features/sheet-editor/share-entry.tsx）：静态引用。它用到平台页面首屏里的模块，编辑器页也按需加载的话，
+          //   打包会为"平台页面首屏 + 分享对话框"另拆出一块，平台页面的首屏多一个文件（门禁 budgets 的文件数上限）；理由见那个文件的开头
+          {
+            from: [
+              { element: { type: 'web-app' } },
+              { element: { type: 'web-entry' } },
+              { element: { type: 'web-feature' } },
+            ],
+            disallow: { to: { element: { type: 'web-feature', captured: { feature: 'sharing' } } } },
+            message: '分享对话框（features/sharing）只由入口所在的两个文件引用：平台页面文档的行操作（features/documents/share-entry.tsx，只能动态 import()，静态引用会把它带进平台页面的首屏）与编辑器页的页头（features/sheet-editor/share-entry.tsx）（M2-P5 设计 §3.5）',
+          },
+          {
+            from: { element: { type: 'web-feature', captured: { feature: 'documents' }, fileInternalPath: 'share-entry.tsx' } },
+            allow: {
+              to: { element: { type: 'web-feature', captured: { feature: 'sharing' }, fileInternalPath: PUBLIC_ENTRY } },
+              dependency: { nodeKind: 'dynamic-import' },
+            },
+          },
+          {
+            from: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' }, fileInternalPath: 'share-entry.tsx' } },
+            allow: { to: { element: { type: 'web-feature', captured: { feature: 'sharing' }, fileInternalPath: PUBLIC_ENTRY } } },
+          },
+          // "与我共享"页同样按需加载（M2-P5 设计 §3.5）：左侧导航里只有入口，列表的渲染不进首屏
+          {
+            from: [
+              { element: { type: 'web-app' } },
+              { element: { type: 'web-entry' } },
+              { element: { type: 'web-feature' } },
+            ],
+            disallow: { to: { element: { type: 'web-feature', captured: { feature: 'shared-with-me' } } } },
+            message: '"与我共享"页（features/shared-with-me）按需加载：只有 app/routes.ts 可以动态 import() 它的公开入口，静态引用会把它带进平台页面的首屏（M2-P5 设计 §3.5）',
+          },
+          {
+            from: { element: { type: 'web-app', fileInternalPath: 'routes.ts' } },
+            allow: {
+              to: { element: { type: 'web-feature', captured: { feature: 'shared-with-me' }, fileInternalPath: PUBLIC_ENTRY } },
+              dependency: { nodeKind: 'dynamic-import' },
+            },
+          },
           // 确认的弹窗带着 Radix Dialog（约 12 KiB gzip）：只由按需加载的功能（管理界面、成员页）引用，
           // 首屏的页面、应用层与入口引用它会把弹窗带进平台页面的首屏（ADR-008，M2-P2 设计 §3.10）。
           // 下面三条都只管平台页面：编辑器页（它的入口与 sheet-editor）是另一个包，有自己的预算（M2-P2 复验）
@@ -1244,10 +1288,10 @@ export default antfu(
             from: [
               { element: { type: 'web-app' } },
               { element: { type: 'web-entry', captured: { entry: '!editor' } } },
-              { element: { type: 'web-feature', captured: { feature: '!{admin,members,trash,sheet-editor}' } } },
+              { element: { type: 'web-feature', captured: { feature: '!{admin,members,trash,sharing,sheet-editor}' } } },
             ],
             disallow: { to: { element: { type: 'web-feature', captured: { feature: 'confirmation' } } } },
-            message: '确认的弹窗（features/confirmation，带 Radix Dialog）只由按需加载的功能（features/admin、features/members、features/trash）引用，不进平台页面的首屏（ADR-008）',
+            message: '确认的弹窗（features/confirmation，带 Radix Dialog）只由按需加载的功能（features/admin、features/members、features/trash、features/sharing）引用，不进平台页面的首屏（ADR-008）',
           },
           // 弹窗的文件本身（shared/ui/dialog.tsx，Radix Dialog）同样只由按需加载的功能直接引用（M2-P2 审查 B8）：功能、应用层与入口引用共享层本来是允许的，
           // 这里在允许的策略之后覆盖。shared 内部的中转另由 nerve/web-ui-heavy-components 拦下
@@ -1255,20 +1299,20 @@ export default antfu(
             from: [
               { element: { type: 'web-app' } },
               { element: { type: 'web-entry', captured: { entry: '!editor' } } },
-              { element: { type: 'web-feature', captured: { feature: '!{admin,members,trash,confirmation,sheet-editor}' } } },
+              { element: { type: 'web-feature', captured: { feature: '!{admin,members,trash,confirmation,sharing,sheet-editor}' } } },
             ],
             disallow: { to: { element: { type: 'web-shared', fileInternalPath: 'ui/dialog.tsx' } } },
-            message: '弹窗（shared/ui/dialog.tsx，带 Radix Dialog）只由按需加载的功能（features/admin、features/members、features/trash、features/confirmation）引用：首屏的功能、应用层与入口引用它会把弹窗带进平台页面的首屏（ADR-008，M2-P2 审查 B8）',
+            message: '弹窗（shared/ui/dialog.tsx，带 Radix Dialog）只由按需加载的功能（features/admin、features/members、features/trash、features/confirmation、features/sharing）引用：首屏的功能、应用层与入口引用它会把弹窗带进平台页面的首屏（ADR-008，M2-P2 审查 B8）',
           },
-          // 按关键词选一项（features/colleagues：按名字选同事、选团队空间）只给按需加载的管理界面与成员页用（M2-P2 设计 §3.10，审查 B8）
+          // 按关键词选一项（features/colleagues：按名字选同事、选团队空间）只给按需加载的管理界面、成员页与分享对话框用（M2-P2 设计 §3.10，审查 B8）
           {
             from: [
               { element: { type: 'web-app' } },
               { element: { type: 'web-entry', captured: { entry: '!editor' } } },
-              { element: { type: 'web-feature', captured: { feature: '!{admin,members,sheet-editor}' } } },
+              { element: { type: 'web-feature', captured: { feature: '!{admin,members,sharing,sheet-editor}' } } },
             ],
             disallow: { to: { element: { type: 'web-feature', captured: { feature: 'colleagues' } } } },
-            message: '按关键词选一项（features/colleagues）只由按需加载的功能（features/admin、features/members）引用，不进平台页面的首屏（M2-P2 设计 §3.10，审查 B8）',
+            message: '按关键词选一项（features/colleagues）只由按需加载的功能（features/admin、features/members、features/sharing）引用，不进平台页面的首屏（M2-P2 设计 §3.10，审查 B8）',
           },
           // 只给按需加载的页面（与编辑器页）用的文案按功能各放一个文件（shared/i18n/zh-cn/<功能>.ts，M2-P6 复核第二批）：只由对应的功能引用。
           // 应用层、入口、别的功能、编辑器适配层与共享层（包括 shared/i18n/index.ts 的转出）引用它，就会把它带进平台页面的首屏。

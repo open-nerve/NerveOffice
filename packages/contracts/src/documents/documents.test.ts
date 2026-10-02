@@ -138,6 +138,15 @@ describe('文档的元数据', () => {
   it('带着所在的空间：编辑器页的返回链接回到那里', () => {
     expect(documentDetailSchema.safeParse({ ...detail, space: undefined }).success).toBe(false)
     expect(documentDetailSchema.safeParse({ ...detail, space: { ...detail.space, type: 'shared' } }).success).toBe(false)
+    // 团队空间要有名称（返回链接上显示它）
+    expect(documentDetailSchema.safeParse({ ...detail, space: { id: detail.spaceId, type: 'team' } }).success).toBe(false)
+  })
+
+  it('个人空间只有 id 与类型（M2-P5）：存的名称是所有者建号时的显示名、可以伪造（规范 §2.4），服务端多给了也被丢弃', () => {
+    const personal = { id: detail.spaceId, type: 'personal' }
+    expect(documentDetailSchema.parse({ ...detail, space: personal }).space).toEqual(personal)
+    expect(documentDetailSchema.parse({ ...detail, space: { ...personal, name: '艾米（管理员）' } }).space).toEqual(personal)
+    expect(documentDetailSchema.safeParse({ ...detail, space: { type: 'personal' } }).success).toBe(false)
   })
 
   it('带着所在的文件夹：在空间的根目录下时是 null，不能省略', () => {

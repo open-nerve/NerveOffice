@@ -1,6 +1,5 @@
 import { z } from 'zod'
 import { uuidSchema } from '../ids/ids.ts'
-import { SPACE_TYPES } from '../spaces/spaces.ts'
 import { codePointLength, titleTextSchema } from '../text/text.ts'
 
 /** 文档类型：M1 只有表格，M6 加上文字文档（doc）。新增取值时，同时用迁移更新 documents.type 的 CHECK 约束。 */
@@ -99,12 +98,18 @@ export const documentListResponseSchema = z.object({
 
 export type DocumentListResponse = z.infer<typeof documentListResponseSchema>
 
-/** 文档所在的空间：编辑器页的返回链接回到这里（M2-P2 设计 §3.10）。 */
-export const documentSpaceSchema = z.object({
-  id: z.uuid(),
-  type: z.enum(SPACE_TYPES),
-  name: z.string(),
-})
+/**
+ * 文档所在的空间（文档详情的 space）：编辑器页的返回链接回到这里（M2-P2 设计 §3.10）。
+ * - 团队空间：id、类型与名称；
+ * - 个人空间：只有 id 与类型（M2-P5）。存的名称是所有者建号时的显示名，可以伪造（规范 §2.4），详情也用不着它：
+ *   在个人空间里有角色的只有所有者自己，界面写"我的空间"；只凭授权打开的（accessVia 为 grant）返回"与我共享"。
+ *   documents 模块拿不到人名，这里也就不给所有者。
+ * 响应的结构宽松（见 auth 的会话信息）：服务端多给的字段在客户端被丢弃
+ */
+export const documentSpaceSchema = z.discriminatedUnion('type', [
+  z.object({ id: z.uuid(), type: z.literal('team'), name: z.string() }),
+  z.object({ id: z.uuid(), type: z.literal('personal') }),
+])
 
 export type DocumentSpace = z.infer<typeof documentSpaceSchema>
 

@@ -37,7 +37,7 @@ describe('DocumentsService.get', () => {
       createdAt: own.createdAt.toISOString(),
       updatedAt: own.updatedAt.toISOString(),
       spaceId: ALICE_SPACE,
-      space: { id: ALICE_SPACE, type: 'personal', name: '爱丽丝' },
+      space: { id: ALICE_SPACE, type: 'personal' },
       folderId: null,
       accessVia: 'space',
       revision: 3,

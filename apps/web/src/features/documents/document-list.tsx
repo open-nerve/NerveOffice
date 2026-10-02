@@ -14,6 +14,7 @@ import { Alert, AlertDescription, Button, buttonVariants, Skeleton } from '../..
 import { copyDocument, deleteDocument, documentQueryOptions, folderDocumentsQueryOptions, moveDocument, updateDocument } from './documents-api.ts'
 import { ItemActions } from './item-actions.tsx'
 import { useOrganizeRefresh, useOrganizeRefreshChecked } from './organize-refresh.ts'
+import { ShareEntry } from './share-entry.tsx'
 
 const organize = messages.organize
 
@@ -126,6 +127,15 @@ function DocumentItem({ document, spaceId, targetSpaces, open, openTriggerRef, o
           onDone={onDone}
           onDenied={onDenied}
           onClose={onToggle}
+          shareEntry={fallbackFocus => (
+            <ShareEntry
+              documentId={document.id}
+              documentTitle={detail.data?.title ?? document.title}
+              canShare={detail.data?.permissions.canShare === true}
+              onDenied={() => void onDenied()}
+              fallbackFocus={fallbackFocus}
+            />
+          )}
         />
       )}
     </li>

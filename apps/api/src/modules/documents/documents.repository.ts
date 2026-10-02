@@ -128,14 +128,20 @@ const COLUMNS = {
 
 /**
  * "可访问文档"的条件：列表、搜索、计数、停用者文档的转移、"与我共享"都经这一处，不各写各的过滤条件（M2 总设计 §6.1）。
- * `status = 'active' AND (space_id = ANY(…) OR EXISTS 授权)`：授权那一半只在调用方要它时才出现（见 AccessibleScope），
- * 空间那一半总在——空数组时恒为假，所以只要授权那一半时（"与我共享"）照样只剩授权的文档，两半都不要时什么也查不出。
+ * `status = 'active' AND (space_id = ANY(…) OR EXISTS 授权)`，每一半只在调用方要它时才出现（见 AccessibleScope）：
+ * - 只要授权那一半时（"与我共享"）**不带恒假的空间条件**（M2-P5 S3）：`space_id = ANY('{}') OR EXISTS …` 里的 OR 让规划器没法
+ *   把 EXISTS 变成半连接，只能扫整张文档表、逐行判断授权；只剩 EXISTS 时查询从 document_grants 的 (user_id) 索引出发
+ *   （集成测试 documents/shared-plan.test.ts 用 EXPLAIN 核对）；
+ * - 两半都不要时恒为假（什么也查不出），不能因为没有条件就变成"全部正常状态的文档"。
  * **只取正常状态的行**：回收站的列表从 trash_entries 出（TrashService.list），不走这里，所以没有"状态"这一维；
  * 回收站里的文档即使有授权也不出现。授权那一半的条件由 DocumentGrantsRepository 给出（grantedTo），这里只组合
  */
 function accessible(scope: AccessibleScope): SQL | undefined {
-  const inSpaces = inIdArray(d.spaceId, scope.spaceIds)
-  return and(eq(d.status, 'active'), scope.grantsOf === undefined ? inSpaces : or(inSpaces, grantedTo(d.id, scope.grantsOf)))
+  const halves = [
+    ...(scope.spaceIds.length > 0 ? [inIdArray(d.spaceId, scope.spaceIds)] : []),
+    ...(scope.grantsOf === undefined ? [] : [grantedTo(d.id, scope.grantsOf)]),
+  ]
+  return and(eq(d.status, 'active'), halves.length === 0 ? sql`false` : or(...halves))
 }
 
 /** keyset 分页：上一页最后一条之后（按更新时间从新到旧、同一时间按 id），列表、搜索与"与我共享"同一个条件 */

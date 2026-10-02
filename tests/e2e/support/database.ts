@@ -145,6 +145,31 @@ export async function removeMember(spaceId: string, user: TestUser): Promise<voi
   })
 }
 
+/**
+ * 单独授权（M2-P5）：直接写库，作为用例的前置数据——经分享对话框设置、调整与取消由 US-M2-10 的分享用例覆盖。
+ * grantedBy 是设置它的人，不能是被授权人自己（表上的 CHECK）
+ */
+export async function grantDocument(documentId: string, user: TestUser, role: 'viewer' | 'editor', grantedBy: TestUser): Promise<void> {
+  await withDatabase(async (client) => {
+    await client.query(
+      `INSERT INTO document_grants (document_id, user_id, role, granted_by) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (document_id, user_id) DO UPDATE SET role = excluded.role, granted_by = excluded.granted_by, updated_at = now()`,
+      [documentId, user.id, role, grantedBy.id],
+    )
+  })
+}
+
+/** 这份文档上的单独授权（被授权人的登录名 → 角色）：核对经界面的分享、调整与取消确实写进了库（用例的前提） */
+export async function grantsOn(documentId: string): Promise<Record<string, string>> {
+  return withDatabase(async (client) => {
+    const result = await client.query<{ username: string, role: string }>(
+      'SELECT u.username, g.role FROM document_grants g JOIN users u ON u.id = g.user_id WHERE g.document_id = $1 ORDER BY u.username',
+      [documentId],
+    )
+    return Object.fromEntries(result.rows.map(row => [row.username, row.role]))
+  })
+}
+
 /** 让这个人的全部会话过期（模拟空闲过期） */
 export async function expireSessions(user: TestUser): Promise<void> {
   await withDatabase(async (client) => {

@@ -1,12 +1,13 @@
 import type { RefObject } from 'react'
+import type { ChunkProblem } from '../../shared/lib/chunk-load.ts'
 import { useEffect, useRef, useState } from 'react'
 import { useRouteError } from 'react-router'
 import { describeError, NetworkError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { ChunkLoadError, diagnoseChunkLoad, reloadOnceForDeployment } from '../../shared/lib/chunk-load.ts'
 import { usePageLocation } from '../../shared/lib/page-location.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { Button, Skeleton } from '../../shared/ui/index.ts'
-import { checkDeployment, ChunkLoadError, reloadOnceForDeployment } from '../chunk-load.ts'
 
 /** 出错的页面出现时，焦点在 body（出错的内容连同有焦点的元素一起换掉了）：交给标题，不抢别处的焦点（M2-P6 复核 S6） */
 function useFocusWhenLost(ref: RefObject<HTMLElement | null>): void {
@@ -55,13 +56,6 @@ export function ErrorPage() {
 }
 
 /**
- * 分块没能下载下来的原因：连不上服务器（offline：断网、服务端挂起、取回来的不是入口页）；服务器连得上、版本也没变，分块本身下载不下来
- * （missing）；服务器上已经是新版本，这个页面却没能自动换上它（updated，M2-P6 复核第三批 G-c）——已经为这个版本重新加载过一次
- * 还是没拿到新的分块，或者会话存储不可用、为防循环不自动重新加载。updated 不能说成"版本也没有变"
- */
-type ChunkProblem = 'offline' | 'missing' | 'updated'
-
-/**
  * 按需加载的页面的代码没能下载下来（M2-P6 复核 S6）：先向服务端要一次入口页（有时限，第二批 G-4）——部署了新版本
  * （旧的分块已经不在了），整页重新加载一次换上新版本（同一个版本只重新加载一次，防止循环）；没能自动换上时说明服务器上已是新版本
  * （第三批 G-c）；连不上服务器时说"请检查网络后重试"；服务器连得上、版本也没变时不说是网络的问题（分块缺失，第二批 G-4），
@@ -75,17 +69,11 @@ function ChunkLoadFailure() {
   useDocumentTitle(problem === undefined ? undefined : messages.routeLoadFailed.title)
   useEffect(() => {
     let cancelled = false
-    void checkDeployment().then((check) => {
-      if (cancelled)
-        return
-      if (check.kind === 'deployed') {
-        // 已经为这个版本重新加载过一次（还是没拿到新的分块），或者记不下（会话存储不可用）、为防循环不自动重新加载：
-        // 单独说明服务器上已是新版本，不说"版本也没有变"（第三批 G-c）
-        if (!reloadOnceForDeployment(check.version, page.reload))
-          setProblem('updated')
-        return
-      }
-      setProblem(check.kind === 'unreachable' ? 'offline' : 'missing')
+    // 部署了新版本：整页重新加载一次换上它（已经发起时不必说明）。已经为这个版本重新加载过一次（还是没拿到新的分块），
+    // 或者记不下（会话存储不可用）、为防循环不自动重新加载：单独说明服务器上已是新版本，不说"版本也没有变"（第三批 G-c）
+    void diagnoseChunkLoad(version => reloadOnceForDeployment(version, page.reload)).then((found) => {
+      if (!cancelled && found !== undefined)
+        setProblem(found)
     })
     return () => {
       cancelled = true

@@ -48,7 +48,7 @@ describe('DocumentSearchService.search 的范围', () => {
       ['分享来的预算', 'grant', null, []],
       ['我的预算', 'space', null, []],
     ])
-    expect(page.items[0]?.space).toEqual({ id: TEAM_SPACE, type: 'team', name: '市场部', ownerUserId: null })
+    expect(page.items[0]?.space).toEqual({ id: TEAM_SPACE, type: 'team', name: '市场部' })
     // 它的文件夹不查：路径只给凭空间角色看到的行
     expect(store.repositories.folders.ancestorsOf).toHaveBeenCalledWith([], [ALICE_SPACE])
   })
@@ -80,8 +80,8 @@ describe('DocumentSearchService.search 的范围', () => {
     store.setGrant(shared.id, ALICE, 'viewer')
     const page = await service.search(member(ALICE), { query: '预算' })
     expect(page.items.map(item => item.space)).toEqual([
-      { id: BOB_SPACE, type: 'personal', name: '鲍勃', ownerUserId: BOB },
-      { id: ALICE_SPACE, type: 'personal', name: '爱丽丝', ownerUserId: ALICE },
+      { id: BOB_SPACE, type: 'personal', ownerUserId: BOB },
+      { id: ALICE_SPACE, type: 'personal', ownerUserId: ALICE },
     ])
     expect(store.spaces.accessFactsOfMany).toHaveBeenCalledTimes(1)
     expect(store.spaces.accessFactsOfMany).toHaveBeenCalledWith(ALICE, [BOB_SPACE, ALICE_SPACE])
@@ -150,7 +150,7 @@ describe('DocumentSearchService.search 的结果', () => {
       type: 'sheet',
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
-      space: { id: TEAM_SPACE, type: 'team', name: '市场部', ownerUserId: null },
+      space: { id: TEAM_SPACE, type: 'team', name: '市场部' },
       folderId: inner.id,
       folderPath: ['资料', '2026'],
       accessVia: 'space',

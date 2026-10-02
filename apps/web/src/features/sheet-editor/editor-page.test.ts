@@ -24,7 +24,7 @@ const DETAIL: DocumentDetail = {
   createdAt: '2026-09-27T01:00:00.000Z',
   updatedAt: '2026-09-27T02:00:00.000Z',
   spaceId: ALICE.personalSpace.id,
-  space: { id: ALICE.personalSpace.id, type: 'personal', name: '爱丽丝' },
+  space: { id: ALICE.personalSpace.id, type: 'personal' },
   folderId: null,
   accessVia: 'space',
   revision: 3,
@@ -773,5 +773,52 @@ describe('编辑器页的会话（P4 设计 §3.7.3，审查 B1）', () => {
     const { editorPage, page } = setup()
     editorPage.reload()
     expect(page.reload).toHaveBeenCalledOnce()
+  })
+})
+
+describe('页头的文档详情（M2-P5：只凭授权时返回"与我共享"、分享的入口）', () => {
+  it('就绪时带着页头要的东西：文档 id、看得到它的途径、能不能分享、看这一页的人；编辑器的阶段变化时沿用', async () => {
+    const { editorPage, fake } = setup({ api: { document: async () => ({ ...DETAIL, accessVia: 'grant', permissions: { ...DETAIL.permissions, canShare: true } }) } })
+    await editorPage.load()
+    expect(editorPage.view().load).toMatchObject({ kind: 'ready', documentId: DOCUMENT_ID, title: '周报', accessVia: 'grant', canShare: true, userId: ALICE.user.id })
+    fake.enter('steady')
+    expect(editorPage.view().load).toMatchObject({ stage: 'steady', accessVia: 'grant', canShare: true })
+  })
+
+  it('refreshDetail：重新取文档详情，更新标题、所在的空间、途径与能不能分享；能不能编辑与编辑器的阶段不变，之后的阶段变化也沿用新的', async () => {
+    const document = vi.fn(async (): Promise<DocumentDetail> => ({ ...DETAIL, permissions: { ...DETAIL.permissions, canShare: true } }))
+    const { editorPage, fake } = setup({ api: { document } })
+    await editorPage.load()
+    document.mockResolvedValueOnce({ ...DETAIL, title: '新标题', space: { id: '0199a2c4-0000-7000-8000-0000000000c1', type: 'team', name: '市场部' }, permissions: { ...DETAIL.permissions, canEdit: false, canShare: false } })
+    await editorPage.refreshDetail()
+    expect(editorPage.view().load).toMatchObject({ kind: 'ready', title: '新标题', space: { type: 'team', name: '市场部' }, canShare: false, readOnly: false, stage: 'rendered' })
+    fake.enter('steady')
+    expect(editorPage.view().load).toMatchObject({ title: '新标题', canShare: false, stage: 'steady' })
+  })
+
+  it('refreshDetail 时看不到了（404：已经删除、移走，或者自己被移出、授权被取消）：不再能分享；别的失败页头不变；未登录交给会话的确认', async () => {
+    const document = vi.fn(async (): Promise<DocumentDetail> => ({ ...DETAIL, permissions: { ...DETAIL.permissions, canShare: true } }))
+    const { editorPage, api } = setup({ api: { document } })
+    await editorPage.load()
+    document.mockRejectedValueOnce(new ApiError(503, 'SERVICE_UNAVAILABLE', '繁忙'))
+    await editorPage.refreshDetail()
+    expect(editorPage.view().load).toMatchObject({ canShare: true })
+    document.mockRejectedValueOnce(UNAUTHENTICATED)
+    const sessionChecks = vi.mocked(api.session).mock.calls.length
+    await editorPage.refreshDetail()
+    await vi.waitFor(() => expect(vi.mocked(api.session).mock.calls.length).toBeGreaterThan(sessionChecks))
+    document.mockRejectedValueOnce(new ApiError(404, 'NOT_FOUND', '不存在'))
+    await editorPage.refreshDetail()
+    expect(editorPage.view().load).toMatchObject({ kind: 'ready', canShare: false })
+  })
+
+  it('还没就绪、或者已经卸载：refreshDetail 什么也不做', async () => {
+    const { editorPage, api } = setup()
+    await editorPage.refreshDetail()
+    expect(api.document).not.toHaveBeenCalled()
+    await editorPage.load()
+    editorPage.dispose()
+    await editorPage.refreshDetail()
+    expect(api.document).toHaveBeenCalledTimes(1)
   })
 })

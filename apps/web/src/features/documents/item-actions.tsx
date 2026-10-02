@@ -77,6 +77,11 @@ interface ItemActionsProps {
   readonly onDenied: () => Promise<boolean>
   /** 关掉操作面板 */
   readonly onClose: () => void
+  /**
+   * 分享的入口（只有文档有，M2-P5）：排在复制之后。fallbackFocus：分享对话框关闭时入口已经不在了（随新的权限消失），
+   * 焦点交给面板里的"取消"
+   */
+  readonly shareEntry?: (fallbackFocus: () => void) => ReactNode
 }
 
 type Operation = 'rename' | 'move' | 'copy' | 'delete'
@@ -158,7 +163,7 @@ function RenameForm({ panelId, name, validate, pending, error, onSubmit, onCance
  * 已经打开的改名、移动、复制表单，刷新之后这一种操作不能做了（例如别处的操作被拒绝、页面按新的权限重新请求，空间刚被归档、
  * 自己刚被降为查看者）：表单随之收起，回到按新权限列出的操作（M2-P6 复核第二批 G-6；文件夹一个操作都做不了时整个面板收起）。
  */
-export function ItemActions({ panelId, name, validateName, permissions, loading, error, onRetry, current, excludeFolderId, targetSpaces, operations, onDone, onDenied, onClose }: ItemActionsProps) {
+export function ItemActions({ panelId, name, validateName, permissions, loading, error, onRetry, current, excludeFolderId, targetSpaces, operations, onDone, onDenied, onClose, shareEntry }: ItemActionsProps) {
   const [chosen, setChosen] = useState<Exclude<Operation, 'delete'>>()
   /**
    * 上一次失败之后列表刷新好了没有：留在面板里的说明（改名、复制）据此说"已刷新"还是"没能刷新"（第四批）；
@@ -166,6 +171,7 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
    */
   const { refreshed, refreshAfterFailure } = useOutcomeRefresh()
   const ledger = useRequestIdLedger()
+  const cancelRef = useRef<HTMLButtonElement>(null)
   // 移动/复制提交时目标位置的可读名称，例如"市场部 / 方案"：做完之后在说明里回述
   const targetLabelRef = useRef('')
   const trashLink = <Link to={spaceTrashPath(current.spaceId)} className={buttonVariants({ variant: 'outline', size: 'sm' })}>{text.goToTrash}</Link>
@@ -327,6 +333,7 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
       {allows(permissions, operations, 'rename') && <Button type="button" variant="outline" size="sm" onClick={() => choose('rename')}>{text.rename}</Button>}
       {allows(permissions, operations, 'move') && <Button type="button" variant="outline" size="sm" onClick={() => choose('move')}>{text.move}</Button>}
       {allows(permissions, operations, 'copy') && <Button type="button" variant="outline" size="sm" onClick={() => choose('copy')}>{text.copy}</Button>}
+      {shareEntry?.(() => cancelRef.current?.focus())}
       {permissions.canDelete && (
         <Button
           type="button"
@@ -344,7 +351,7 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
           {mutation.isPending ? text.deleting : text.delete}
         </Button>
       )}
-      <Button type="button" variant="ghost" size="sm" onClick={onClose}>{text.cancel}</Button>
+      <Button ref={cancelRef} type="button" variant="ghost" size="sm" onClick={onClose}>{text.cancel}</Button>
       {/* 删除失败的说明一律按错误码给（shared/i18n）：例如"文件夹里有别人创建的文档"与"空间已归档"是两个不同的 403，
           界面不在这里按错误码分支，免得把其中一种的说法安到另一种头上（M2-P4 审查 B2） */}
       {mutation.isError && (

@@ -183,9 +183,8 @@ export {
   searchQuerySchema,
   searchResponseSchema,
   searchResultSchema,
-  searchSpaceSchema,
 } from './search/search.ts'
-export type { SearchQuery, SearchResponse, SearchResult, SearchSpace } from './search/search.ts'
+export type { SearchQuery, SearchResponse, SearchResult } from './search/search.ts'
 export {
   documentGrantListResponseSchema,
   documentGrantSchema,
@@ -195,7 +194,6 @@ export {
   sharedDocumentSchema,
   sharedListQuerySchema,
   sharedListResponseSchema,
-  sharedSpaceSchema,
 } from './sharing/sharing.ts'
 export type {
   DocumentGrant,
@@ -205,7 +203,6 @@ export type {
   SharedDocument,
   SharedListQuery,
   SharedListResponse,
-  SharedSpace,
 } from './sharing/sharing.ts'
 export {
   addSpaceMemberRequestSchema,
@@ -215,6 +212,7 @@ export {
   SPACE_ROLES,
   SPACE_STATUSES,
   SPACE_TYPES,
+  spaceIdentitySchema,
   spaceIdSchema,
   spaceListResponseSchema,
   spaceMemberListResponseSchema,
@@ -228,6 +226,7 @@ export type {
   AddSpaceMemberRequest,
   ChangeSpaceMemberRoleRequest,
   RenameSpaceRequest,
+  SpaceIdentity,
   SpaceListResponse,
   SpaceMember,
   SpaceMemberListResponse,

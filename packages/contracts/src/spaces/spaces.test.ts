@@ -5,6 +5,7 @@ import {
   renameSpaceRequestSchema,
   SPACE_NAME_MAX_LENGTH,
   SPACE_ROLES,
+  spaceIdentitySchema,
   spaceListResponseSchema,
   spaceMemberListResponseSchema,
   spaceNameSchema,
@@ -68,6 +69,31 @@ describe('我能看到的空间', () => {
     expect(spaceViewSchema.safeParse({ ...view, type: 'shared' }).success).toBe(false)
     expect(spaceViewSchema.safeParse({ ...view, status: 'deleted' }).success).toBe(false)
     expect(spaceViewSchema.safeParse({ ...view, role: 'owner' }).success).toBe(false)
+  })
+})
+
+describe('认得出是哪个空间（搜索结果与"与我共享"，M2-P5）', () => {
+  const owner = { id: USER_ID, username: 'amy', displayName: '艾米' }
+
+  it('团队空间：名称；个人空间：所有者（"人"的结构）', () => {
+    expect(spaceIdentitySchema.parse({ id: SPACE_ID, type: 'team', name: '市场部' })).toEqual({ id: SPACE_ID, type: 'team', name: '市场部' })
+    expect(spaceIdentitySchema.parse({ id: SPACE_ID, type: 'personal', owner })).toEqual({ id: SPACE_ID, type: 'personal', owner })
+  })
+
+  it('个人空间不带存的名称（所有者建号时的显示名，可以伪造，规范 §2.4）：服务端多给了也被丢弃，界面拿不到它', () => {
+    expect(spaceIdentitySchema.parse({ id: SPACE_ID, type: 'personal', owner, name: '艾米（管理员）' })).toEqual({ id: SPACE_ID, type: 'personal', owner })
+    expect(spaceIdentitySchema.parse({ id: SPACE_ID, type: 'team', name: '市场部', owner })).toEqual({ id: SPACE_ID, type: 'team', name: '市场部' })
+  })
+
+  it('个人空间缺了所有者、团队空间缺了名称、别的类型都被拒绝', () => {
+    for (const space of [
+      { id: SPACE_ID, type: 'personal', name: '艾米' },
+      { id: SPACE_ID, type: 'personal', owner: { id: USER_ID } },
+      { id: SPACE_ID, type: 'team', owner },
+      { id: SPACE_ID, type: 'shared', name: '市场部' },
+    ]) {
+      expect(spaceIdentitySchema.safeParse(space).success, JSON.stringify(space)).toBe(false)
+    }
   })
 })
 

@@ -1,17 +1,19 @@
-// 按需加载的页面的代码（分块）没能下载下来（M2-P6 复核 S6）：断网，或者部署之后旧的分块已经不在了（文件名带哈希，部署一次换一批）。
+// 按需加载的代码（分块）没能下载下来（M2-P6 复核 S6）：断网，或者部署之后旧的分块已经不在了（文件名带哈希，部署一次换一批）。
+// 路由级的页面（app/routes.ts，失败由内容区的错误边界接住）与组件级的功能（M2-P5 的分享对话框，失败由入口自己说明，
+// shared/lib/use-lazy-chunk.ts）共用这里的下载与判断原因：放在 shared，功能模块引用不到 app/。
 
 /** 动态 import() 失败：浏览器不给出原因（404 与断网是同一个 TypeError），由错误边界再判断是不是部署了新版本 */
 export class ChunkLoadError extends Error {
   override readonly name = 'ChunkLoadError'
 }
 
-/** 下载按需加载的页面：失败时换成 ChunkLoadError，路由的错误边界据此认出它（而不是按浏览器各不相同的说明去猜） */
+/** 下载按需加载的代码：失败时换成 ChunkLoadError，错误边界与入口据此认出它（而不是按浏览器各不相同的说明去猜） */
 export async function loadChunk<T>(load: () => Promise<T>): Promise<T> {
   try {
     return await load()
   }
   catch (error) {
-    throw new ChunkLoadError('页面的代码没能加载', { cause: error })
+    throw new ChunkLoadError('按需加载的代码没能下载下来', { cause: error })
   }
 }
 
@@ -81,4 +83,23 @@ export function reloadOnceForDeployment(version: string, reload: () => void): bo
   }
   reload()
   return true
+}
+
+/**
+ * 分块没能下载下来的原因（说明用，路由级与组件级共用）：连不上服务器（offline：断网、服务端挂起、取回来的不是入口页）；
+ * 服务器连得上、版本也没变，分块本身下载不下来（missing）；服务器上已经是新版本，这个页面却还是旧的（updated，M2-P6 复核第三批 G-c）。
+ * updated 不能说成"版本也没有变"
+ */
+export type ChunkProblem = 'offline' | 'missing' | 'updated'
+
+/**
+ * 判断分块为什么没能下载下来：向服务端要一次入口页（有时限，checkDeployment）。部署了新版本时先交给 onDeployed：
+ * 路由级的页面整页重新加载一次换上新版本（reloadOnceForDeployment），已经发起时兑现为 undefined——页面马上就换了，不必说明；
+ * 没有给 onDeployed（组件级：页面上可能有用户正在做的事，不自动整页重新加载）或者没能自动换上时是 updated
+ */
+export async function diagnoseChunkLoad(onDeployed?: (version: string) => boolean): Promise<ChunkProblem | undefined> {
+  const check = await checkDeployment()
+  if (check.kind === 'deployed')
+    return onDeployed?.(check.version) === true ? undefined : 'updated'
+  return check.kind === 'unreachable' ? 'offline' : 'missing'
 }

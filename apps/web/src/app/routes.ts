@@ -4,9 +4,9 @@ import { CHANGE_PASSWORD_PATH, ChangePasswordPage, InvitationPage, PasswordReset
 import { LoginPage, RequireSession, SessionCheck } from '../features/auth/index.ts'
 import { HomePage, SpacePage } from '../features/spaces/index.ts'
 import { ADMIN_PATH, ADMIN_PATHS, ADMIN_USER_DOCUMENTS_ROUTE } from '../shared/lib/admin-paths.ts'
+import { loadChunk } from '../shared/lib/chunk-load.ts'
 import { LOGIN_PATH } from '../shared/lib/login-path.ts'
-import { SEARCH_PATH, SPACE_FOLDER_ROUTE, SPACE_MEMBERS_ROUTE, SPACE_ROUTE, SPACE_TRASH_ROUTE } from '../shared/lib/space-paths.ts'
-import { loadChunk } from './chunk-load.ts'
+import { SEARCH_PATH, SHARED_PATH, SPACE_FOLDER_ROUTE, SPACE_MEMBERS_ROUTE, SPACE_ROUTE, SPACE_TRASH_ROUTE } from '../shared/lib/space-paths.ts'
 import { AppShell } from './layout/app-shell.tsx'
 import { ErrorPage, RouteErrorBoundary } from './pages/error-page.tsx'
 import { NotFoundPage } from './pages/not-found-page.tsx'
@@ -32,6 +32,11 @@ async function trashPages() {
 /** 搜索结果页按需加载（M2-P4 设计 §3.7）：页头的搜索框只带着关键词跳过来，结果的渲染不进首屏包 */
 async function searchPages() {
   return loadChunk(async () => import('../features/search/index.ts'))
+}
+
+/** "与我共享"页按需加载（M2-P5 设计 §3.5）：左侧导航里只有入口，列表的渲染不进首屏 */
+async function sharedWithMePages() {
+  return loadChunk(async () => import('../features/shared-with-me/index.ts'))
 }
 
 /** 平台页面的路由（P3 设计 §3.7）。编辑器页在 P4 另起入口，整页加载。 */
@@ -60,6 +65,7 @@ export const appRoutes: RouteObject[] = [
             { path: SPACE_MEMBERS_ROUTE, lazy: async () => ({ Component: (await membersPages()).MembersPage }) },
             { path: SPACE_TRASH_ROUTE, lazy: async () => ({ Component: (await trashPages()).TrashPage }) },
             { path: SEARCH_PATH, lazy: async () => ({ Component: (await searchPages()).SearchPage }) },
+            { path: SHARED_PATH, lazy: async () => ({ Component: (await sharedWithMePages()).SharedWithMePage }) },
             { path: CHANGE_PASSWORD_PATH, Component: ChangePasswordPage },
             {
               path: ADMIN_PATH,

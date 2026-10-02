@@ -238,6 +238,13 @@ export const messages = {
     navLabel: '空间',
     toggleNav: '空间',
     personal: '我的空间',
+    /** 左侧导航里的"与我共享"（M2-P5）：别人单独分享给我的文档；页面的文案随页面按需加载（shared-with-me.ts） */
+    sharedWithMe: '与我共享',
+    /**
+     * 别人的个人空间（搜索结果与"与我共享"，M2-P5）：按所有者的人名呈现（人名组件），不用个人空间存的名称——那是所有者建号时的显示名，
+     * 可以伪造（规范 §2.4）。自己的个人空间写"我的空间"（documents.title）
+     */
+    personalSpaceOf: <T>(owner: T): Phrase<T> => [owner, ' 的个人空间'],
     teamHeading: '团队空间',
     /** 导航与空间页的骨架屏名称不同：分得清是哪一处在加载（审查 B10） */
     navLoading: '正在加载空间列表…',
@@ -321,6 +328,8 @@ export const messages = {
     move: '移动',
     copy: '复制',
     delete: '删除',
+    /** 分享（M2-P5）：只有能分享时（canShare）出现；对话框按需加载，它的文案在 sharing.ts */
+    share: '分享',
     save: '保存',
     saving: '正在保存…',
     cancel: '取消',
@@ -376,6 +385,18 @@ export const messages = {
     description: '页面遇到了意外的问题。可以重新加载试试；问题一直出现时，请告诉管理员。',
     descriptionWithRequestId: '页面遇到了意外的问题。可以重新加载试试；问题一直出现时，把下面的请求标识告诉管理员。',
     reload: '重新加载',
+  },
+  /**
+   * 组件级的按需加载（M2-P5 S3：平台页面文档的行操作里的分享对话框；编辑器页的页头静态引用它，用不到这里）：
+   * 点了入口才下载它的代码。没能下载下来时入口自己说明（shared/ui/chunk-load-notice.tsx），原因的判断与路由级共用；
+   * 不自动整页重新加载（页面上可能有用户正在做的事），"重试"整页重新加载（浏览器记住了失败的模块，在这一页里再下载也还是失败）
+   */
+  lazyFeature: {
+    loading: (feature: string) => `正在打开${feature}…`,
+    offline: (feature: string) => `没能加载${feature}：连不上服务器，请检查网络后重试。`,
+    missing: (feature: string) => `没能加载${feature}：它的代码没能下载下来（服务器连得上，版本也没有变）。可以重试；一直这样的话，请告诉管理员。`,
+    updated: (feature: string) => `没能加载${feature}：服务器上已经部署了新版本，这个页面还是旧的。重试（重新加载页面）之后就能用了。`,
+    retry: '重试',
   },
   /**
    * 按需加载的页面的代码没能下载下来（M2-P6 复核 S6）。部署了新版本时整页重新加载，通常不出现这里的说明；

@@ -1,4 +1,4 @@
-import type { DocumentAccessVia, DocumentDetail, DocumentSpace, DocumentSummary, SearchResult, SpaceRole, SpaceType } from '@nerve-office/contracts'
+import type { DocumentAccessVia, DocumentDetail, DocumentSpace, DocumentSummary, SearchResult, SpaceRole } from '@nerve-office/contracts'
 import type { SpaceFacts } from '../spaces/index.ts'
 import type { DocumentAccess } from './access-rules.ts'
 import type { DocumentRow } from './documents.repository.ts'
@@ -9,9 +9,12 @@ export function toSummary(row: DocumentRow): DocumentSummary {
   return { id: row.id, title: row.title, type: row.type, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString() }
 }
 
-/** 文档所在的空间：元数据与搜索结果都只给这三项，不带成员与权限。 */
+/**
+ * 文档详情里所在的空间（contracts 的 documentSpaceSchema）：团队空间给名称；个人空间只给 id 与类型——存的名称是所有者建号时的显示名，
+ * 可以伪造（规范 §2.4），详情用不着它（本人的个人空间界面写"我的空间"，只凭授权打开的返回"与我共享"，M2-P5）。不带成员与权限
+ */
 function toSpace(space: SpaceFacts): DocumentSpace {
-  return { id: space.id, type: space.type, name: space.name }
+  return space.type === 'personal' ? { id: space.id, type: 'personal' } : { id: space.id, type: 'team', name: space.name }
 }
 
 /**
@@ -35,20 +38,21 @@ export function toDetail(row: DocumentRow, access: DocumentAccess, userId: strin
 }
 
 /**
- * 文档所在的空间，连同个人空间的所有者（M2-P5 设计 §3.4(2)(4)）：有了单独授权，搜索结果与"与我共享"里会出现别人的个人空间，
- * 界面按所有者的人名呈现（个人空间存的名称是所有者建号时的显示名，可以伪造，规范 §2.4）。人名由 workspace 经 users 补上
- * （documents 不依赖 users）。团队空间没有所有者
+ * 搜索结果与"与我共享"里文档所在的空间（M2-P5 设计 §3.4(2)(4)）：有了单独授权，这两处会出现别人的个人空间。
+ * 团队空间给名称；个人空间只给所有者的账户 id，不给存的名称（所有者建号时的显示名，可以伪造，规范 §2.4）——界面按所有者的人名呈现，
+ * 人名由 workspace 经 users 补上（documents 不依赖 users），成为 contracts 的 spaceIdentitySchema
  */
-export interface LocatedSpace {
-  readonly id: string
-  readonly type: SpaceType
-  readonly name: string
-  /** 个人空间的所有者；团队空间为空 */
-  readonly ownerUserId: string | null
-}
+export type LocatedSpace
+  = | { readonly id: string, readonly type: 'team', readonly name: string }
+    | { readonly id: string, readonly type: 'personal', readonly ownerUserId: string }
 
+/** ownerUserId：个人空间的所有者（spaces 按一批 id 取空间事实时一起给出）；个人空间一定有所有者，没有就是数据不一致 */
 export function toLocatedSpace(space: SpaceFacts, ownerUserId: string | null): LocatedSpace {
-  return { ...toSpace(space), ownerUserId }
+  if (space.type === 'team')
+    return { id: space.id, type: 'team', name: space.name }
+  if (ownerUserId === null)
+    throw new Error(`个人空间没有所有者：${space.id}`)
+  return { id: space.id, type: 'personal', ownerUserId }
 }
 
 /** 搜索结果的一条：除了所在空间的所有者的人名，都已齐备（人名由 workspace 补上） */
