@@ -394,6 +394,27 @@ const PERSON_NAME_CONCATENATION = [
   ]),
 ]
 
+// 读屏用的状态区（role="status"）要一直在无障碍树里（M2-P5 审查 B 的 M1）：display: none 或 visibility: hidden 的状态区不在树里，
+// 内容出现时等于与容器一起插入，部分读屏软件不播报（M2-P2 复验）。空的时候只做视觉隐藏：用 shared/ui 的 StatusRegion。
+// lint 近似地拦下 role="status"（字面量）的元素上的几种写法：className 里出现 hidden 或 invisible——字符串、模板字符串、cn() 等调用的参数、
+// 条件表达式的两支都算，带变体前缀的（empty:hidden、md:hidden、!hidden）也算；hidden 属性；style 里 display: 'none' 或 visibility: 'hidden'。
+// 认不出、由审查保证的写法：类名经变量或函数转一手、role 不是字面量、由组件按 props 给出 role 的（例如 Alert 默认 role="status"，
+// <Alert className="hidden"> 认不出）。对 web 的生产代码生效，与人名的限制同在那几块
+const LIVE_STATUS_MESSAGE = '读屏用的状态区（role="status"）要一直在无障碍树里，空的时候不能 display: none（hidden、empty:hidden）或 invisible：用 shared/ui 的 StatusRegion（空的时候只做视觉隐藏，M2-P5 审查 B 的 M1）'
+/** role 是字面量 "status" 的 JSX 元素（role="status" 与 role={'status'}） */
+const LIVE_STATUS_ELEMENT = 'JSXOpeningElement:has(> JSXAttribute[name.name=\'role\']:matches([value.value=\'status\'], [value.expression.value=\'status\']))'
+/** 类名里让元素离开无障碍树的那几个：hidden、invisible，可以带变体前缀（empty:、md:、group-hover/x:）与 Tailwind 的 ! */
+const HIDING_CLASS = String.raw`/(?:^|\s)(?:\S+:)?!?(?:hidden|invisible)!?(?:\s|$)/`
+const LIVE_STATUS_HIDDEN = [
+  { selector: `${LIVE_STATUS_ELEMENT} > JSXAttribute[name.name='className'] Literal[value=${HIDING_CLASS}]`, message: LIVE_STATUS_MESSAGE },
+  { selector: `${LIVE_STATUS_ELEMENT} > JSXAttribute[name.name='className'] TemplateElement[value.raw=${HIDING_CLASS}]`, message: LIVE_STATUS_MESSAGE },
+  { selector: `${LIVE_STATUS_ELEMENT} > JSXAttribute[name.name='hidden']`, message: LIVE_STATUS_MESSAGE },
+  {
+    selector: `${LIVE_STATUS_ELEMENT} > JSXAttribute[name.name='style'] Property:matches([key.name='display'][value.value='none'], [key.name='visibility'][value.value='hidden'])`,
+    message: LIVE_STATUS_MESSAGE,
+  },
+]
+
 // 契约的请求结构里直接用 z.uuid()：大写的 id 原样交给服务端（M2-P2 审查 A1、复验 N3）
 const CONTRACTS_REQUEST_UUID_MESSAGE = '请求里的 UUID 用 uuidSchema（ids/ids.ts，统一转成小写）：服务端按字符串比较 id 的地方（是不是本人、审计的明细）只认小写（M2-P2 审查 A1）'
 const CONTRACTS_REQUEST_UUID = [
@@ -577,13 +598,14 @@ const API_FOREIGN_REPOSITORIES = {
   importNamePattern: 'Repository$',
   message: '一个模块的仓储只在这个模块里使用（规范 §1.2）：别的模块经它的服务（documents 的服务先经访问策略判断权限，M2-P6 复核 A 的 S3）；公开入口转出仓储只为集成测试专用的入口（app/integration.test-support.ts，M2-P6 第 6 片复核 S4）',
 }
-// documents 的仓储里一串 id 一律作为一个数组参数（database 模块的 inIdArray，M2-P6 复核 A 的 S-2、B 的 G1）：drizzle 的 inArray、
-// notInArray 把每个 id 展开成一个参数，子树里的文件夹、文档与连带的删除单元没有数量上限，超过 65535 个参数时整条语句失败（每次都失败）。
+// documents 与 users 的仓储里一串 id 一律作为一个数组参数（database 模块的 inIdArray，M2-P6 复核 A 的 S-2、B 的 G1）：drizzle 的 inArray、
+// notInArray 把每个 id 展开成一个参数，超过 65535 个参数时整条语句失败（每次都失败）。documents：子树里的文件夹、文档与连带的删除单元
+// 没有数量上限；users：授权列表、成员列表补人名的人数没有分页的上界（M2-P5 审查 B 的 G6）。
 // 包的入口与深层路径（drizzle-orm/sql/expressions 等）都拦下；别的模块的 id 列表有上限（分页、批量），不受这条限制
-const API_DOCUMENTS_ID_LISTS = {
+const API_ID_LISTS = {
   regex: String.raw`^drizzle-orm(?:$|/)`,
   importNames: ['inArray', 'notInArray'],
-  message: 'documents 的仓储里一串 id 用 inIdArray（database 模块，整串 id 是一个数组参数）：drizzle 的 inArray、notInArray 把每个 id 展开成一个参数，子树没有数量上限，超过 65535 个参数时整条语句失败（M2-P6 复核 A 的 S-2）',
+  message: 'documents 与 users 的仓储里一串 id 用 inIdArray（database 模块，整串 id 是一个数组参数）：drizzle 的 inArray、notInArray 把每个 id 展开成一个参数，数量没有上限时（子树里的文档、授权列表与成员列表的人）超过 65535 个参数整条语句失败（M2-P6 复核 A 的 S-2，M2-P5 审查 B 的 G6）',
 }
 // 集成测试专用的入口（M2-P6 复验 R-S4）：它转出数据库句柄与 documents 的仓储，只有 tests/integration 能引用。
 // apps/api 里的任何文件（包括 app 层的其他文件与单元测试）引用它都拦下：按解析之后的路径判断，相对路径、包名的出口
@@ -630,7 +652,7 @@ interface ApiFileKind {
   trashPurge?: boolean
   /** 经别的模块的公开入口引用它的仓储（只有集成测试专用的入口，为集成测试转出 documents 的仓储） */
   foreignRepositories?: boolean
-  /** 一串 id 只用一个数组参数，不用 drizzle 的 inArray、notInArray（documents 的仓储） */
+  /** 一串 id 只用一个数组参数，不用 drizzle 的 inArray、notInArray（documents 与 users 的仓储） */
   idArraysOnly?: boolean
   /** 用本机的时钟（Date.now() 等）：进程自己的计时，不是业务里的时间判断（API_WALL_CLOCK_FILES） */
   wallClock?: boolean
@@ -653,7 +675,7 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
     ...(kind.trashPurge === true ? [] : [API_TRASH_PURGE]),
     API_TRASH_ENTRY_PURGER,
     ...(kind.foreignRepositories === true ? [] : [API_FOREIGN_REPOSITORIES]),
-    ...(kind.idArraysOnly === true ? [API_DOCUMENTS_ID_LISTS] : []),
+    ...(kind.idArraysOnly === true ? [API_ID_LISTS] : []),
   ]
   const syntax = [
     ...BASE_RESTRICTED_SYNTAX,
@@ -799,7 +821,7 @@ export default antfu(
     files: ['apps/web/src/**/*.{ts,tsx}'],
     ignores: [...TEST_CODE, 'apps/web/src/shared/ui/dialog.tsx'],
     rules: {
-      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION],
+      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION, ...LIVE_STATUS_HIDDEN],
     },
   },
   {
@@ -807,7 +829,7 @@ export default antfu(
     name: 'nerve/web-dialog-file',
     files: ['apps/web/src/shared/ui/dialog.tsx'],
     rules: {
-      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION],
+      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION, ...LIVE_STATUS_HIDDEN],
     },
   },
   {
@@ -816,7 +838,7 @@ export default antfu(
     // CSP 阳性对照只在测试构建里，不用 zod，它的入口里就是探针本身的代码
     ignores: ['apps/web/src/entries/csp-probe/**'],
     rules: {
-      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...APP_ENTRY_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION],
+      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...APP_ENTRY_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION, ...LIVE_STATUS_HIDDEN],
     },
   },
   {
@@ -848,7 +870,7 @@ export default antfu(
     files: ['apps/web/src/editor/**'],
     ignores: [...TEST_CODE, 'apps/web/src/editor/internal-api/**'],
     rules: {
-      'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX, ...NO_GET_INJECTOR, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION],
+      'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX, ...NO_GET_INJECTOR, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION, ...LIVE_STATUS_HIDDEN],
     },
   },
   {
@@ -886,8 +908,12 @@ export default antfu(
   { name: 'nerve/api-app-wall-clock', files: API_WALL_CLOCK_FILES.app, rules: apiRules({ wallClock: true }) },
   { name: 'nerve/api-database-wall-clock', files: API_WALL_CLOCK_FILES.database, rules: apiRules({ databaseLibraries: true, databaseHandles: true, wallClock: true }) },
   { name: 'nerve/api-repositories', files: ['apps/api/src/modules/*/*.repository.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true, tables: true }) },
-  // documents 的仓储另外不用 inArray、notInArray（M2-P6 复核 A 的 S-2）：一串 id 一律是一个数组参数
-  { name: 'nerve/api-documents-repositories', files: ['apps/api/src/modules/documents/*.repository.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true, tables: true, idArraysOnly: true }) },
+  // documents 与 users 的仓储另外不用 inArray、notInArray（M2-P6 复核 A 的 S-2，M2-P5 审查 B 的 G6）：一串 id 一律是一个数组参数
+  {
+    name: 'nerve/api-id-array-repositories',
+    files: ['apps/api/src/modules/documents/*.repository.ts', 'apps/api/src/modules/users/*.repository.ts'],
+    rules: apiRules({ databaseLibraries: true, databaseHandles: true, tables: true, idArraysOnly: true }),
+  },
   // 表定义里的 CHECK 约束要把代码里的常量拼成 SQL 字面量（drizzle-kit 不内联参数）；这里只有 DDL 与常量，没有运行时的输入
   { name: 'nerve/api-schema', files: ['apps/api/src/db/schema/**/*.ts'], rules: apiRules({ databaseLibraries: true, tables: true, rawSql: true }) },
   { name: 'nerve/api-controllers', files: ['apps/api/src/**/*.controller.ts'], rules: apiRules({ controller: true }) },

@@ -6,7 +6,7 @@ import type { DocumentAccess, DocumentOwnership } from './access-rules.ts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { SpacesService } from '../spaces/index.ts'
-import { documentAccessOf, documentPermissionsOf, effectiveSpaceRole, folderPermissionsOf, spacePermissionsOf, trashPermissionsOf } from './access-rules.ts'
+import { canShareOnceRestored, documentAccessOf, documentPermissionsOf, effectiveSpaceRole, folderPermissionsOf, spacePermissionsOf, trashPermissionsOf } from './access-rules.ts'
 import { DocumentGrantsRepository } from './document-grants.repository.ts'
 
 /** 调用者（M2-P2 设计 §3.4）：系统角色只影响团队空间的管理操作，不带来任何内容权限（00 号计划书 §5.2）。 */
@@ -167,13 +167,14 @@ const ARCHIVED_MESSAGE = '空间已归档，只能查看'
 
 /**
  * 归档的空间里分享冻结（需求方 2026-10-01 确认，M2-P5 设计 §3.2）：授权列表的查看、设置、调整、取消都不能做，要先由系统管理员恢复空间。
- * 与默认的"只能查看"不同：已有的授权照常生效（一律降为查看者），只是不能再改
+ * 与默认的"只能查看"不同：已有的授权照常生效（一律降为查看者），只是不能再改。这句话许诺了恢复之后能调整，只给恢复之后能分享的人
+ * （归档之前是空间管理员的人、个人空间的所有者，access-rules 的 canShareOnceRestored；M2-P5 审查 A 的一般 6、B 的 G1）
  */
 export const SHARING_FROZEN_MESSAGE = '空间已归档，恢复之后才能调整分享'
 
-/** 看得到却不能做时的说明：归档的空间另外说明原因（有的操作有自己的说法，见 DocumentOperationRule.archivedMessage）。 */
-function denied(space: SpaceFacts, message: string, archivedMessage = ARCHIVED_MESSAGE): AppError {
-  return new AppError('PERMISSION_DENIED', space.status === 'archived' ? archivedMessage : message)
+/** 空间、文件夹、回收站上看得到却不能做时的说明：归档的空间另外说明原因（文档上的操作见 documentDeniedMessage）。 */
+function denied(space: SpaceFacts, message: string): AppError {
+  return new AppError('PERMISSION_DENIED', space.status === 'archived' ? ARCHIVED_MESSAGE : message)
 }
 
 /** 能访问的文档、调用者在它上面的权限与所在空间的访问。 */
@@ -187,14 +188,27 @@ export type DocumentOperation = 'edit' | 'rename' | 'moveWithinSpace' | 'moveAcr
 /** 一项操作看的权限位与不能做时的说明 */
 interface DocumentOperationRule {
   readonly permission: keyof DocumentPermissions
-  readonly message: string
+  /**
+   * 看得到却不能做时的说明（空间没归档时；归档时见 frozen）。可以按空间角色区分：删除时空间角色是编辑者的人只是不能删别人创建的，
+   * 不是编辑者的人根本不能删（M2-P5 S4 主会话的决定）
+   */
+  readonly message: string | ((spaceRole: SpaceRole | undefined) => string)
   /**
    * 结构性的操作（只看空间角色的权限位）：只凭授权的人一律不能做（M2-P5 设计 §3.4(1)），另给这一句说明——
    * 原来的说明对他不成立（例如"编辑者只能删除自己创建的文档"：他可能正是创建人，只是已经不在那个空间里）
    */
   readonly grantOnlyMessage?: string
-  /** 归档的空间里不能做时的说明；没有时是默认的"空间已归档，只能查看"（见 denied） */
-  readonly archivedMessage?: string
+  /**
+   * 归档的空间里另有的说法与它给谁（分享：冻结的说明）。这句话许诺了恢复之后能做，只给恢复之后确实能做的人（onceRestored，
+   * 按归档之前的空间角色；M2-P5 审查 A 的一般 6、B 的 G1），其余的人给不归档时的说明。
+   * 没有它的操作在归档的空间里一律是默认的"空间已归档，只能查看"：归档时所有人至多是查看者，这句对谁都成立
+   */
+  readonly frozen?: { readonly message: string, readonly onceRestored: (space: SpaceFacts) => boolean }
+}
+
+/** 删除被拒：空间角色是编辑者的人删的是别人创建的文档；别的人（查看者、全员可见给的查看者）根本不能删（M2-P5 S4 主会话的决定） */
+function deleteDenied(spaceRole: SpaceRole | undefined): string {
+  return spaceRole === 'editor' ? '编辑者只能删除自己创建的文档' : '没有删除这份文档的权限'
 }
 
 const DOCUMENT_CONTENT: Readonly<Record<DocumentOperation, DocumentOperationRule>> = {
@@ -206,14 +220,29 @@ const DOCUMENT_CONTENT: Readonly<Record<DocumentOperation, DocumentOperationRule
   // 结构性的操作：权限位只看空间角色
   moveWithinSpace: { permission: 'canMoveWithinSpace', message: '没有移动这份文档的权限', grantOnlyMessage: '这份文档是单独分享给你的，不能移动' },
   moveAcrossSpaces: { permission: 'canMoveAcrossSpaces', message: '只有空间管理员能把文档移出这个空间', grantOnlyMessage: '这份文档是单独分享给你的，不能移动' },
-  delete: { permission: 'canDelete', message: '编辑者只能删除自己创建的文档', grantOnlyMessage: '这份文档是单独分享给你的，不能删除' },
-  // 分享（M2-P5 设计 §3.2）：结构性的操作，只看空间角色——空间管理员或个人空间的所有者；归档的空间里冻结，给冻结的说明
+  delete: { permission: 'canDelete', message: deleteDenied, grantOnlyMessage: '这份文档是单独分享给你的，不能删除' },
+  // 分享（M2-P5 设计 §3.2）：结构性的操作，只看空间角色——空间管理员或个人空间的所有者；归档的空间里冻结，
+  // 冻结的说明只给恢复之后能分享的人，空间里的编辑者、查看者照旧是"只有空间管理员能分享"
   share: {
     permission: 'canShare',
     message: '只有空间管理员能分享这份文档',
     grantOnlyMessage: '这份文档是单独分享给你的，不能再分享给别人',
-    archivedMessage: SHARING_FROZEN_MESSAGE,
+    frozen: { message: SHARING_FROZEN_MESSAGE, onceRestored: canShareOnceRestored },
   },
+}
+
+/**
+ * 看得到这份文档、却不能做这项操作时的说明（只凭授权的人做结构性的操作另有一句，见 requireDocumentOperations）：
+ * 空间没归档时是这一项通常的说法；归档时有 frozen 的操作给恢复之后能做的人那一句、其余的人通常的说法，没有的给默认的"只能查看"
+ */
+function documentDeniedMessage(rule: DocumentOperationRule, access: DocumentAccess): string {
+  if (access.space.status === 'archived') {
+    if (rule.frozen === undefined)
+      return ARCHIVED_MESSAGE
+    if (rule.frozen.onceRestored(access.space))
+      return rule.frozen.message
+  }
+  return typeof rule.message === 'string' ? rule.message : rule.message(access.spaceRole)
 }
 
 /**
@@ -241,12 +270,12 @@ export async function requireDocumentContent<T extends AccessTarget>(
  */
 export function requireDocumentOperations(accessible: AccessibleDocument<AccessTarget>, operations: readonly DocumentOperation[]): void {
   for (const operation of operations) {
-    const { permission, message, grantOnlyMessage, archivedMessage } = DOCUMENT_CONTENT[operation]
-    if (accessible.permissions[permission])
+    const rule = DOCUMENT_CONTENT[operation]
+    if (accessible.permissions[rule.permission])
       continue
-    if (grantOnlyMessage !== undefined && accessible.access.accessVia === 'grant')
-      throw new AppError('PERMISSION_DENIED', grantOnlyMessage)
-    throw denied(accessible.access.space, message, archivedMessage)
+    if (rule.grantOnlyMessage !== undefined && accessible.access.accessVia === 'grant')
+      throw new AppError('PERMISSION_DENIED', rule.grantOnlyMessage)
+    throw new AppError('PERMISSION_DENIED', documentDeniedMessage(rule, accessible.access))
   }
 }
 

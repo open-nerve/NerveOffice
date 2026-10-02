@@ -209,6 +209,15 @@ describe('DocumentSearchService.search 的分页', () => {
     expect([...first.items, ...second.items].map(item => item.id)).toEqual(rows.map(row => row.id))
   })
 
+  it('恰好是一页的条数：这一页给全，没有下一页的游标（M2-P5 审查 B 的 S1 的同类缺口）', async () => {
+    const { store, service } = setup()
+    const rows = Array.from({ length: SEARCH_PAGE_SIZE }, (_, index) =>
+      at(store, ALICE_SPACE, `预算 ${index}`, `2026-09-26T10:00:00.${String(SEARCH_PAGE_SIZE - index).padStart(6, '0')}Z`))
+    const page = await service.search(member(ALICE), { query: '预算' })
+    expect(page.items.map(item => item.id)).toEqual(rows.map(row => row.id))
+    expect(page.nextCursor).toBeNull()
+  })
+
   it('游标不合法（改过、时间不存在）：REQUEST_INVALID，而且不查询', async () => {
     const { store, service } = setup()
     for (const cursor of ['broken', encodeTimeCursor({ position: '2026-02-30T00:00:00.000000Z', id: ALICE_SPACE })]) {

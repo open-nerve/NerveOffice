@@ -72,7 +72,9 @@ describe('TrashService.deleteDocument', () => {
 
     store.setMember(TEAM_SPACE, BOB, 'viewer')
     const own = store.addDocument({ spaceId: TEAM_SPACE, createdBy: BOB })
-    expect((await errorOf(service.deleteDocument(member(BOB), own.id, HTTP_ORIGIN))).code).toBe('PERMISSION_DENIED')
+    // 查看者不是"只能删自己创建的"：他根本不能删，自己创建的也不能（M2-P5 S4 主会话的决定）
+    const viewerDenied = await errorOf(service.deleteDocument(member(BOB), own.id, HTTP_ORIGIN))
+    expect([viewerDenied.code, viewerDenied.message]).toEqual(['PERMISSION_DENIED', '没有删除这份文档的权限'])
   })
 
   it('归档的空间里不能删，说明空间已归档；回收站里的文档再删是 NOT_FOUND，与不存在一致', async () => {

@@ -56,7 +56,7 @@ describe('DocumentGrantsService.requireSharing（不加锁的判断）', () => {
     expect(await errorOf(service.requireSharing(member(BOB), document.id, TRANSACTION))).toMatchObject({ code: 'PERMISSION_DENIED', message: '这份文档是单独分享给你的，不能再分享给别人' })
   })
 
-  it('归档的空间里冻结：空间管理员也是 403，给冻结的说明（与默认的"只能查看"不同）；只凭授权的人仍是他自己的说明', async () => {
+  it('归档的空间里冻结：空间管理员也是 403，给冻结的说明（与默认的"只能查看"不同）；恢复之后也不能分享的编辑者照旧是"只有空间管理员能分享"；只凭授权的人仍是他自己的说明', async () => {
     const { store, service } = setup()
     const document = teamDocument(store)
     store.setGrant(document.id, BOB, 'editor')
@@ -64,7 +64,7 @@ describe('DocumentGrantsService.requireSharing（不加锁的判断）', () => {
     expect(SHARING_FROZEN_MESSAGE).toBe('空间已归档，恢复之后才能调整分享')
     expect(await errorOf(service.requireSharing(member(ALICE), document.id, TRANSACTION))).toMatchObject({ code: 'PERMISSION_DENIED', message: SHARING_FROZEN_MESSAGE })
     store.setMember(TEAM_SPACE, CAROL, 'editor')
-    expect(await errorOf(service.requireSharing(member(CAROL), document.id, TRANSACTION))).toMatchObject({ message: SHARING_FROZEN_MESSAGE })
+    expect(await errorOf(service.requireSharing(member(CAROL), document.id, TRANSACTION))).toMatchObject({ message: '只有空间管理员能分享这份文档' })
     expect(await errorOf(service.requireSharing(member(BOB), document.id, TRANSACTION))).toMatchObject({ message: '这份文档是单独分享给你的，不能再分享给别人' })
   })
 

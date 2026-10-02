@@ -186,7 +186,7 @@ describe('requireDocumentContent：分享（share，M2-P5 设计 §3.2）', () =
     }
   })
 
-  it('归档的空间里冻结：空间管理员与成员都给冻结的说明（不是默认的"只能查看"）；只凭授权的人给他自己的说明，归档与否都一样', async () => {
+  it('归档的空间里冻结：冻结的说明（不是默认的"只能查看"）只给恢复之后能分享的人——归档之前的空间管理员与个人空间的所有者；只凭授权的人给他自己的说明，归档与否都一样', async () => {
     const store = new FakeStore()
     store.setMember(TEAM_SPACE, ALICE, 'admin')
     store.setGrant('d1', BOB, 'editor')
@@ -196,6 +196,48 @@ describe('requireDocumentContent：分享（share，M2-P5 设计 §3.2）', () =
     expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['share']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '这份文档是单独分享给你的，不能再分享给别人' })
     // 其他操作在归档时仍是默认的说法
     expect(await errorOf(requireDocumentContent(store.policy, ALICE, document, ['rename']))).toMatchObject({ message: '空间已归档，只能查看' })
+  })
+
+  it('归档的空间里，恢复之后也不能分享的人（空间里的编辑者、查看者，含全员可见给的查看者）：照旧是"只有空间管理员能分享"，不许诺恢复之后能调整（M2-P5 审查 A 的一般 6、B 的 G1）', async () => {
+    const store = new FakeStore()
+    store.setMember(TEAM_SPACE, ALICE, 'admin')
+    store.space(TEAM_SPACE).status = 'archived'
+    for (const role of ['editor', 'viewer'] as const) {
+      store.setMember(TEAM_SPACE, BOB, role)
+      // 另有编辑授权也一样：分享只看空间角色
+      store.setGrant('d1', BOB, 'editor')
+      expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['share'])), role).toMatchObject({ code: 'PERMISSION_DENIED', message: '只有空间管理员能分享这份文档' })
+    }
+    store.setMember(TEAM_SPACE, BOB, undefined)
+    store.space(TEAM_SPACE).visibleToAll = true
+    expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['share']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '只有空间管理员能分享这份文档' })
+    // 对照：归档之前的空间管理员照旧是冻结的说明
+    expect(await errorOf(requireDocumentContent(store.policy, ALICE, document, ['share']))).toMatchObject({ message: SHARING_FROZEN_MESSAGE })
+  })
+})
+
+describe('requireDocumentContent：删除被拒时的说明（M2-P5 S4 主会话的决定）', () => {
+  const others = { id: 'd1', spaceId: TEAM_SPACE, createdBy: ALICE }
+
+  it('空间角色是编辑者的人删别人创建的："编辑者只能删除自己创建的文档"；查看者（含全员可见给的）："没有删除这份文档的权限"——他是创建人也一样', async () => {
+    const store = new FakeStore()
+    store.setMember(TEAM_SPACE, BOB, 'editor')
+    expect(await errorOf(requireDocumentContent(store.policy, BOB, others, ['delete']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '编辑者只能删除自己创建的文档' })
+    store.setMember(TEAM_SPACE, BOB, 'viewer')
+    for (const target of [others, { ...others, createdBy: BOB }])
+      expect(await errorOf(requireDocumentContent(store.policy, BOB, target, ['delete'])), target.createdBy).toMatchObject({ code: 'PERMISSION_DENIED', message: '没有删除这份文档的权限' })
+    store.setMember(TEAM_SPACE, BOB, undefined)
+    store.space(TEAM_SPACE).visibleToAll = true
+    expect(await errorOf(requireDocumentContent(store.policy, BOB, others, ['delete']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '没有删除这份文档的权限' })
+    // 归档的空间里仍是默认的"空间已归档，只能查看"；只凭授权的人仍是他自己的那一句
+    store.setMember(TEAM_SPACE, BOB, 'editor')
+    store.space(TEAM_SPACE).status = 'archived'
+    expect(await errorOf(requireDocumentContent(store.policy, BOB, others, ['delete']))).toMatchObject({ message: '空间已归档，只能查看' })
+    store.setMember(TEAM_SPACE, BOB, undefined)
+    store.space(TEAM_SPACE).visibleToAll = false
+    store.space(TEAM_SPACE).status = 'active'
+    store.setGrant('d1', BOB, 'editor')
+    expect(await errorOf(requireDocumentContent(store.policy, BOB, others, ['delete']))).toMatchObject({ message: '这份文档是单独分享给你的，不能删除' })
   })
 })
 

@@ -43,6 +43,28 @@ export function effectiveSpaceRole(space: SpaceFacts): SpaceRole | undefined {
 }
 
 /**
+ * 空间恢复之后（不再归档）这个人的空间角色，也就是归档之前的空间角色（成员的角色、全员可见给的查看者；个人空间的所有者是空间管理员）。
+ * 只用于给说明，不给任何权限：归档的空间里分享冻结，冻结的说明（"恢复之后才能调整分享"）许诺了恢复之后的能力，
+ * 只给恢复之后确实能做的人（M2-P5 审查 A 的一般 6、B 的 G1）
+ */
+export function spaceRoleOnceRestored(space: SpaceFacts): SpaceRole | undefined {
+  return effectiveSpaceRole({ ...space, status: 'active' })
+}
+
+/** 分享的规则：空间角色是空间管理员（个人空间的所有者也是）。documentPermissionsOf 的 canShare 与"恢复之后能不能分享"共用这一处 */
+function sharesAs(spaceRole: SpaceRole | undefined): boolean {
+  return spaceRole === 'admin'
+}
+
+/**
+ * 归档的空间恢复之后，这个人能不能分享这个空间里的文档：按归档之前的空间角色——空间管理员与个人空间的所有者能，
+ * 空间里的编辑者、查看者（含全员可见给的）不能，只凭授权的人也不能（他没有空间角色）。只用于给说明（见 spaceRoleOnceRestored）
+ */
+export function canShareOnceRestored(space: SpaceFacts): boolean {
+  return sharesAs(spaceRoleOnceRestored(space))
+}
+
+/**
  * 调用者对一份文档的访问（M2-P5 设计 §3.4(1)）：空间角色与内容权限分开带——只按一个角色推，只凭授权的编辑者就会拿到
  * 移动与删除的权限、详情还带着所在的文件夹（M2-P6 复核 S2 的 M1）。
  */
@@ -114,7 +136,7 @@ export function documentPermissionsOf(access: DocumentAccess, document: Document
     // 删除（进回收站）：空间管理员任意，空间角色是编辑者的只能删自己创建的（P4-S3 spec §2）
     canDelete: spaceAdmin || (structureEditor && document.createdBy === userId),
     // 分享：空间管理员或个人空间的所有者（有效角色都是空间管理员），归档的空间里没有（M2-P5 设计 §3.2）
-    canShare: spaceAdmin,
+    canShare: sharesAs(access.spaceRole),
   }
 }
 

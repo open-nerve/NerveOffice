@@ -257,6 +257,8 @@ describe('US-M2-14 单独授权不给空间里的任何东西开口子（spaceAc
     const spaceId = await teamSpace()
     const document = await seedDocument(database, { spaceId, createdBy: amy.id, title: '分享出去的' })
     await setGrant(database, { documentId: document.id, userId: ben.id, role: 'editor', grantedBy: amy.id })
+    // 前提：本确实凭授权看得到这份文档——授权没建上时他就是外人，下面的 404 照样成立，什么也证明不了（M2-P5 审查 A 的一般 4）
+    expect((await detailOf(benSession, document.id)).accessVia).toBe('grant')
     const missingSpace = randomUUID()
     const paths = (id: string): string[] => [`/api/spaces/${id}`, `/api/documents?spaceId=${id}`, `/api/folders?spaceId=${id}`, `/api/trash?spaceId=${id}`, `/api/spaces/${id}/members`]
     for (const [index, path] of paths(spaceId).entries()) {

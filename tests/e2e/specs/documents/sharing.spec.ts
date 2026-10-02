@@ -14,7 +14,7 @@ import { expect, test } from '../../support/fixtures.ts'
 import { searchList } from '../../support/list-search.ts'
 import { plainName, shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { EDITOR_TEST_TIMEOUT, openEditor, saveAndWait, saveButton, saveStatus, typeInCell } from '../../support/sheet.ts'
+import { cellOf, EDITOR_TEST_TIMEOUT, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -58,11 +58,18 @@ test.describe('US-M2-10 单独分享', () => {
     await openActions(page, '要分享的表')
     const dialog = await openShareDialog(page, '要分享的表')
     await expect(dialog.getByText('还没有单独分享给任何人。')).toBeVisible()
+    // 做完一件事的说明（对话框自己的状态区）：打开之后、做任何事之前就在无障碍树里，内容出现时读屏才会播报——与内容一起出现的状态区
+    // 部分读屏不播报（M2-P5 审查 B 的 M1：原来空的时候是 display: none，按角色找不到）。现在空的时候只做视觉隐藏：按角色找得到
+    // （getByRole 不认不在无障碍树里的元素），是空的
+    const notice = dialog.locator(':scope > [data-slot="status-region"]')
+    await expect(dialog.getByRole('status').and(notice)).toHaveCount(1)
+    await expect(notice).toBeEmpty()
+    expect(await notice.evaluate(element => getComputedStyle(element).display)).not.toBe('none')
 
-    // 给查看者（默认的角色）
+    // 给查看者（默认的角色）：说明填进了那个一直在的状态区
     await pickColleague(page, dialog, reader)
     await dialog.getByRole('button', { name: '分享', exact: true }).click()
-    await expect(dialog.getByRole('status').filter({ hasText: '已分享给' })).toHaveText(`已分享给 ${shownName(reader)}（查看者）`)
+    await expect(dialog.getByRole('status').and(notice)).toHaveText(`已分享给 ${shownName(reader)}（查看者）`)
     await expect(dialog.getByRole('combobox', { name: `${plainName(reader)} 的角色` })).toHaveValue('viewer')
     // 给编辑者：已经有授权的人不再是候选
     await pickColleague(page, dialog, writer)
@@ -226,6 +233,13 @@ test.describe('US-M2-10 单独分享', () => {
     await expect(page.locator('#editor-chrome').getByRole('button', { name: '分享', exact: true })).toBeFocused()
     // 对话框里的输入没有进表格：没有未保存的修改（对话框打开时页面的其余部分对读屏隐藏，关掉之后再看页头的保存状态）
     await expect(saveStatus(page)).toHaveText('已保存到云端')
+    // 只看保存状态挡不住"输入落进了单元格、还在编辑没提交"（M2-P5 审查 B 的 G4）：点别的单元格写一个对照的值、保存——
+    // 单元格里还在编辑的内容随选区移走一起提交，存下来的内容里只有这个对照的值，没有对话框里键入的登录名
+    await typeInCell(page, 'C3', '对照')
+    await saveAndWait(page)
+    const saved = await savedContent(page, documentId)
+    expect(cellOf(saved.snapshot, 'C3')?.v).toBe('对照')
+    expect(saved.text).not.toContain(colleague.username)
   })
 
   test('分享对话框的代码没能下载下来：入口旁边说明没能加载、可以重试（整页重新加载）；代码取得到之后照常打开', async ({ page }) => {

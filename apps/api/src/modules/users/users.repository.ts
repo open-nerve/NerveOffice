@@ -3,10 +3,10 @@ import type { Database, Transaction } from '../database/index.ts'
 import type { AccountRecord, User } from './user.ts'
 import { collapseNameBlanks } from '@nerve-office/contracts'
 import { Inject, Injectable } from '@nestjs/common'
-import { and, asc, eq, gt, ilike, inArray, ne, or, sql } from 'drizzle-orm'
+import { and, asc, eq, gt, ilike, ne, or, sql } from 'drizzle-orm'
 import { displayNameForSearch, users } from '../../db/schema/users/index.ts'
 import { containsPattern } from '../../shared/like-pattern.ts'
-import { DATABASE, executorOf } from '../database/index.ts'
+import { DATABASE, executorOf, inIdArray } from '../database/index.ts'
 
 export interface NewUser {
   readonly username: string
@@ -143,11 +143,15 @@ export class UsersRepository {
     return { user, passwordHash, passwordVersion }
   }
 
-  /** 按 id 批量取账户（含停用的）：审计查询补名字用；写操作在它的事务里补名字时传入事务 */
+  /**
+   * 按 id 批量取账户（含停用的）：审计查询、授权列表、成员列表补名字用；写操作在它的事务里补名字时传入事务。
+   * 这串 id 作为一个数组参数（inIdArray，规范 §5；M2-P5 审查 B 的 G6）：授权列表、成员列表的人数没有分页的上界，
+   * drizzle 的 inArray 把每个 id 展开成一个参数，超过 65535 个时整条语句失败
+   */
   async findByIds(ids: readonly string[], transaction?: Transaction): Promise<User[]> {
     if (ids.length === 0)
       return []
-    return executorOf(this.db, transaction).select(USER_COLUMNS).from(users).where(inArray(users.id, [...ids]))
+    return executorOf(this.db, transaction).select(USER_COLUMNS).from(users).where(inIdArray(users.id, ids))
   }
 
   /**

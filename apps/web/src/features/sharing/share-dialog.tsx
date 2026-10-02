@@ -9,12 +9,12 @@ import { SHARED_LIST_QUERY_KEY } from '../../shared/api/shared-list-key.ts'
 import { writeFailureText } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { sharingMessages } from '../../shared/i18n/zh-cn/sharing.ts'
-import { cn } from '../../shared/lib/cn.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../../shared/ui/dialog.tsx'
 import { Alert, AlertDescription, Badge, Button, Label, NativeSelect, PersonName, Phrase, Skeleton } from '../../shared/ui/index.ts'
+import { StatusRegion } from '../../shared/ui/status-region.tsx'
 import { ColleaguePicker } from '../colleagues/index.ts'
 import { ConfirmDialog } from '../confirmation/index.ts'
 import { grantsQueryKey, grantsQueryOptions, revokeGrant, setGrant } from './sharing-api.ts'
@@ -141,7 +141,9 @@ interface GrantRowProps {
  * 授权列表的一行：被授权人（人名组件；停用的标出来）、最后设置它的人与时间、角色、取消。
  * 调整与成员页的角色同一个做法：选择框只是选，点了"保存"才提交（收起的选择框上按方向键会逐个改值）；保存之后立即显示目标角色，
  * 进行中这一行标为忙碌；成功时先用响应替换缓存里的这一行再刷新。失败时恢复原来的角色，原因就在这一行说明：
- * 结果未知与被拒绝时按共用的做法刷新（授权列表、文档详情与"与我共享"）再说明
+ * 结果未知与被拒绝时按共用的做法刷新（授权列表、文档详情与"与我共享"）再说明。
+ * 角色不能调整、只能取消的两种：分享给我自己的（PUT 给自己是 400）、被授权人已停用的（服务端对停用的人调整一律 409，
+ * M2-P5 设计 §3.2；授权保留，取消照样可以，M2-P5 审查 B 的 S3）——不给一个注定失败的操作
  */
 function GrantRow({ documentId, grant, self, refresh, onRevoke }: GrantRowProps) {
   const queryClient = useQueryClient()
@@ -170,6 +172,9 @@ function GrantRow({ documentId, grant, self, refresh, onRevoke }: GrantRowProps)
   })
   // 纯文字里的人名（选择框与按钮的可读名称）：登录名在前、显示名隔离（规范 §2.4）
   const name = messages.people.text(grant.user)
+  const disabled = grant.status === 'disabled'
+  /** 只能取消、不能调整角色的一行：分享给我自己的、被授权人已停用的 */
+  const revokeOnly = self || disabled
   const busy = saving !== undefined
   const pending = chosen !== undefined && chosen !== grant.role ? chosen : undefined
   const unsaved = pending !== undefined && !busy
@@ -197,13 +202,13 @@ function GrantRow({ documentId, grant, self, refresh, onRevoke }: GrantRowProps)
           <PersonName person={grant.user} />
           {self && text.you}
         </span>
-        {grant.status === 'disabled' && <Badge variant="destructive">{text.disabled}</Badge>}
+        {disabled && <Badge variant="destructive">{text.disabled}</Badge>}
       </div>
       <p className="m-0 text-xs text-muted-foreground">
         <Phrase parts={text.grantedBy(<PersonName person={grant.grantedBy} />, formatDateTime(grant.grantedAt))} />
       </p>
       <div className="flex flex-wrap items-center gap-2">
-        {self
+        {revokeOnly
           ? <span className="text-sm">{text.roleName(grant.role)}</span>
           : (
               <>
@@ -216,6 +221,7 @@ function GrantRow({ documentId, grant, self, refresh, onRevoke }: GrantRowProps)
         <Button type="button" variant="ghost" size="sm" aria-label={messages.common.actionOn(text.revoke, name)} onClick={onRevoke}>{text.revoke}</Button>
       </div>
       {self && <span className="text-xs text-muted-foreground">{text.ownGrant}</span>}
+      {!self && disabled && <span className="text-xs text-muted-foreground">{text.disabledGrant}</span>}
       {unsaved && <span id={unsavedId} className="text-xs text-muted-foreground">{text.unsaved}</span>}
       {busy && <span id={noteId} className="text-xs text-muted-foreground">{text.saving}</span>}
       {!busy && change.isError && <span id={noteId} role="alert" className="text-xs text-destructive">{failureText(change.error, refreshed)}</span>}
@@ -372,8 +378,8 @@ function ShareDialogContent({ documentId, documentTitle, currentUserId, refreshD
         <DialogTitle>{text.title(documentTitle)}</DialogTitle>
         <DialogDescription>{text.description}</DialogDescription>
       </DialogHeader>
-      {/* 做完一件事的说明：容器一直在（空的时候不占位置），内容变化时往里填，读屏软件才会播报 */}
-      <p role="status" className={cn('m-0 text-sm', notice === undefined ? 'hidden' : 'rounded-lg border p-2')}>{notice}</p>
+      {/* 做完一件事的说明：状态区一直在无障碍树里（空的时候只做视觉隐藏、不占位置），内容变化时往里填，读屏软件才会播报 */}
+      <StatusRegion className="m-0 rounded-lg border p-2 text-sm">{notice}</StatusRegion>
       {body}
       <ConfirmDialog pending={pending} onClose={() => setPending(undefined)} />
     </DialogContent>

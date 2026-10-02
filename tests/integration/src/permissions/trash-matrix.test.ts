@@ -131,24 +131,37 @@ async function searchAs(actor: ActorName): Promise<SearchResult[]> {
  * 预期由 ACCESS_VIA 那一格推出（不是 null 就搜得到；凭什么看到的就是结果里的途径）。回收站里的谁都搜不到，有授权也一样。
  * 按空间列出不同：只看空间角色（ACCESS_VIA 是 space），不并上授权
  */
+/**
+ * 能读到的人在目标空间里搜得到的那几份：有空间角色的是带前缀的三份（根目录下的、文件夹里的、没分享给只凭授权的人的那一份）；
+ * 只凭授权的人只有分享给他的那两份——没分享给他的那一份不在（"授权那一半"要关联到这份文档，M2-P5 审查 B 的 S2）；读不到的一份也没有
+ */
+function searchableIn(actor: ActorName, target: TargetName): string[] {
+  const via = accessViaOf(actor, target)
+  if (via === null)
+    return []
+  const shared = [world.documents[target].id, world.folderDocuments[target].id]
+  return via === 'space' ? [...shared, world.ungrantedDocuments[target].id] : shared
+}
+
 describe('US-M2-12 搜索与按空间列出的范围：能读到才搜得到，按空间列出只看空间角色，回收站里的谁都看不到', () => {
-  // 每个目标空间里带前缀的两份（根目录下的、文件夹里的）：读得到就恰好是这两份，读不到就一份也没有；
+  // 每个目标空间里带前缀的几份（见 searchableIn）：读得到就恰好是那几份，读不到就一份也没有；
   // 凭授权命中的不带文件夹与路径（只凭授权的人看不到空间的目录结构），凭空间角色的照常带
   it.each(SCOPE_CELLS)('US-M2-14 search：$actor 搜 $target 里的文档', async (cell) => {
     const via = accessViaOf(cell.actor, cell.target)
     const items = await searchAs(cell.actor)
     const inTarget = items.filter(item => item.space.id === world.spaces[cell.target])
-    if (via === null) {
-      expect(inTarget).toEqual([])
+    expect(inTarget.map(item => item.id).toSorted()).toEqual(searchableIn(cell.actor, cell.target).toSorted())
+    // 没分享给只凭授权的人的那一份：只有有空间角色的人搜得到（同一个空间里别的文档分享给了他，也不能顺带搜到它）
+    if (via !== 'space')
+      expect(items.map(item => item.id)).not.toContain(world.ungrantedDocuments[cell.target].id)
+    if (via === null)
       return
-    }
-    const atRoot = world.documents[cell.target].id
-    const inFolder = world.folderDocuments[cell.target].id
-    expect(inTarget.map(item => item.id).toSorted()).toEqual([atRoot, inFolder].toSorted())
     for (const item of inTarget) {
       expect(item.accessVia, item.title).toBe(via)
       expect(item.space.type).toBe(cell.target === 'personal' ? 'personal' : 'team')
     }
+    const atRoot = world.documents[cell.target].id
+    const inFolder = world.folderDocuments[cell.target].id
     const folder = world.folders[cell.target]
     expect(inTarget.find(item => item.id === atRoot)).toMatchObject({ folderId: null, folderPath: [] })
     expect(inTarget.find(item => item.id === inFolder)).toMatchObject(via === 'grant' ? { folderId: null, folderPath: [] } : { folderId: folder.id, folderPath: [folder.name] })
@@ -158,8 +171,7 @@ describe('US-M2-12 搜索与按空间列出的范围：能读到才搜得到，�
 
   // 整个结果恰好是能读到的那几个空间里的那几份：别处的一份也没有（例如可访问文档的条件漏了"正常状态"或者"这个人"）
   it.each(ACTORS)('US-M2-14 search：%s 搜到的恰好是能读到的那几份', async (actor) => {
-    const expected = TARGETS.filter(target => accessViaOf(actor, target) !== null)
-      .flatMap(target => [world.documents[target].id, world.folderDocuments[target].id])
+    const expected = TARGETS.flatMap(target => searchableIn(actor, target))
     expect((await searchAs(actor)).map(item => item.id).toSorted()).toEqual(expected.toSorted())
   })
 

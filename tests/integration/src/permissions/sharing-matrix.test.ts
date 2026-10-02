@@ -4,11 +4,13 @@
 // 分享是结构性的操作，只看空间角色：空间管理员与个人空间的所有者能分享，归档的空间里冻结（需求方 2026-10-01 确认）。
 // 403 的说明逐格钉住（S2 定的几句）：
 // - 只凭授权的人（ACCESS_VIA 是 grant）："这份文档是单独分享给你的，不能再分享给别人"——编辑授权也一样，与空间归不归档无关；
-// - 否则在归档的空间里：冻结的说明"空间已归档，恢复之后才能调整分享"（与归档时默认的"只能查看"不同）；
-// - 否则（空间里的编辑者、查看者，含全员可见给的查看者）："只有空间管理员能分享这份文档"。
+// - 归档的空间里恢复之后能分享的人（归档之前是空间管理员的，世界里是 spaceAdmin 这一列）：冻结的说明"空间已归档，恢复之后才能调整分享"
+//   （与归档时默认的"只能查看"不同）。这句话许诺了恢复之后的能力，只给他们（M2-P5 审查 A 的一般 6、B 的 G1）；
+// - 其余（空间里的编辑者、查看者，含全员可见给的查看者，归档与否都一样）："只有空间管理员能分享这份文档"。
 // 设置与取消各用一份新文档（授权会改），授权的列表只读、用固定的那一份。
 //
-// "与我共享"（列表类，谁调用都是 200）：每个人此刻恰好看到他有授权的、正常状态的那几份（直接查库），回收站里的有授权也不出现；
+// "与我共享"（列表类，谁调用都是 200）：每个人此刻恰好看到他有授权的、正常状态的那几份（直接查库），回收站里的有授权也不出现，
+// 每个目标空间里没分享给只凭授权的人的那一份（matrix-world 的 ungrantedDocuments）同一个空间里有别的授权也不出现；
 // 每一条的内容权限按授权与空间角色逐格推出（取较高者，归档降到查看者），个人空间按所有者呈现。
 // 另核对每个人自己的个人空间：按空间列出与回收站里只有自己空间里的东西，分享给他的一份也不混进来。
 import type { DocumentGrant, SharedDocument, SpaceRole } from '@nerve-office/contracts'
@@ -75,11 +77,19 @@ const FROZEN = '空间已归档，恢复之后才能调整分享'
 const NOT_ADMIN = '只有空间管理员能分享这份文档'
 const GRANT_ONLY = '这份文档是单独分享给你的，不能再分享给别人'
 
-/** 这一格 403 的说明：只凭授权的人是他自己的那一句（先于归档）；归档的空间里是冻结；其余是"只有空间管理员能分享" */
+/**
+ * 归档之前是空间管理员的那一列：世界里四个团队空间的空间管理员是 spaceAdmin（所有者只在个人空间里是空间管理员，个人空间不归档）。
+ * 他们恢复之后能分享，归档时给冻结的说明
+ */
+const SHARER_ONCE_RESTORED: ActorName = 'spaceAdmin'
+
+/**
+ * 这一格 403 的说明：只凭授权的人是他自己的那一句（先于归档）；归档的空间里恢复之后能分享的人是冻结；其余是"只有空间管理员能分享"
+ */
 function deniedMessageOf(cell: MatrixCell<Operation>): string {
   if (accessViaOf(cell.actor, cell.target) === 'grant')
     return GRANT_ONLY
-  return isArchived(cell.target) ? FROZEN : NOT_ADMIN
+  return isArchived(cell.target) && cell.actor === SHARER_ONCE_RESTORED ? FROZEN : NOT_ADMIN
 }
 
 /** 设置人：这个空间的空间管理员（个人空间是所有者），与被授权人不是同一个人 */
@@ -102,8 +112,11 @@ const OPERATIONS: Readonly<Record<Operation, MatrixOperation>> = {
   removeGrant: async (actor, target) => {
     const document = await world.freshDocument(target)
     const subject = await world.freshSubject(target, false)
-    if (target !== 'missing')
+    if (target !== 'missing') {
       await setGrant(database, { documentId: document.id, userId: subject, role: 'viewer', grantedBy: grantorOf(target) })
+      // 前提：要取消的这一条确实在库里——取消按状态幂等，什么也没删照样 204，"原来的两条不动"也照样成立（M2-P5 审查 A 的一般 5）
+      expect(await storedGrants(document.id)).toHaveProperty(subject, 'viewer')
+    }
     lastChange = { documentId: document.id, subject }
     return asUser(app.baseUrl, actor.session, `/api/documents/${document.id}/grants/${subject}`, { method: 'DELETE' })
   },
@@ -195,7 +208,9 @@ describe('US-M2-10 "与我共享"：恰好是我有授权的那几份，内容�
   it.each(SCOPE_CELLS)('US-M2-14 sharedWithMe：$actor 在 $target 里', async (cell) => {
     const role = SHARED_CONTENT_ROLE[cell.target][cell.actor]
     const expected = await world.grantedDocumentIds(world.actors[cell.actor].id, cell.target)
-    // 前提：库里的授权与世界的摆法一致——有授权的人在这个空间的固定文档上确实有授权（回收站里的那份不算），别人一条也没有
+    const ungranted = world.ungrantedDocuments[cell.target].id
+    // 前提：库里的授权与世界的摆法一致——有授权的人在这个空间的固定文档上确实有授权（回收站里的那份不算），别人一条也没有；
+    // 没分享给他们的那一份上谁的授权也没有
     if (role === undefined) {
       expect(expected).toEqual([])
     }
@@ -203,8 +218,12 @@ describe('US-M2-10 "与我共享"：恰好是我有授权的那几份，内容�
       expect(expected).toEqual(expect.arrayContaining([world.documents[cell.target].id, world.folderDocuments[cell.target].id]))
       expect(expected).not.toContain(world.trashedDocuments[cell.target].id)
     }
-    const inTarget = (await sharedWithMe(cell.actor)).filter(item => item.space.id === world.spaces[cell.target])
+    expect(expected).not.toContain(ungranted)
+    const listed = await sharedWithMe(cell.actor)
+    const inTarget = listed.filter(item => item.space.id === world.spaces[cell.target])
     expect(inTarget.map(item => item.id).toSorted()).toEqual(expected)
+    // 同一个空间里别的文档分享给了他，没分享的那一份也不能顺带出现（"授权那一半"要关联到这份文档，M2-P5 审查 B 的 S2）
+    expect(listed.map(item => item.id)).not.toContain(ungranted)
     for (const item of inTarget) {
       expect(item.contentRole, item.title).toBe(role)
       // 所在的空间：团队空间是名称，个人空间是所有者（不给存的名称：parseExact 已核对没有多出的字段）
@@ -217,7 +236,10 @@ describe('US-M2-10 "与我共享"：恰好是我有授权的那几份，内容�
   // 整个列表恰好是库里我有授权的、正常状态的那些（跨空间的那一端里另建的也算），别的一份也没有
   it.each(ACTORS)('US-M2-14 sharedWithMe：%s 的整个列表', async (actor) => {
     const expected = await world.grantedDocumentIds(world.actors[actor].id)
-    expect((await sharedWithMe(actor)).map(item => item.id).toSorted()).toEqual(expected)
+    const listed = (await sharedWithMe(actor)).map(item => item.id)
+    expect(listed.toSorted()).toEqual(expected)
+    for (const target of TARGETS)
+      expect(listed, target).not.toContain(world.ungrantedDocuments[target].id)
     if (!(actor === 'grantViewer' || actor === 'grantEditor'))
       expect(expected).toEqual([])
   })

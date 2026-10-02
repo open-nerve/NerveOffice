@@ -323,7 +323,7 @@ describe('US-M2-10 校验与错误（M2-P5 设计 §3.2、§3.6）', () => {
     expect(await errorOf(await share(benSession, document.id, cat.id, 'viewer'))).toEqual(GRANT_ONLY)
   })
 
-  it('归档的空间里分享冻结：查看、设置、调整、取消都 403，说明是冻结的说明；已有的授权照常生效（编辑授权降为查看者）', async () => {
+  it('归档的空间里分享冻结：查看、设置、调整、取消都 403，空间管理员得到冻结的说明；已有的授权照常生效（编辑授权降为查看者）', async () => {
     const spaceId = await teamSpace({ [cat.id]: 'editor' })
     const document = await seedDocument(database, { spaceId, createdBy: amy.id, title: '归档的' })
     await shared(amySession, document.id, ben.id, 'editor')
@@ -332,8 +332,10 @@ describe('US-M2-10 校验与错误（M2-P5 设计 §3.2、§3.6）', () => {
     expect(await errorOf(await share(amySession, document.id, cat.id, 'viewer'))).toEqual(FROZEN)
     expect(await errorOf(await share(amySession, document.id, ben.id, 'viewer'))).toEqual(FROZEN)
     expect(await errorOf(await unshare(amySession, document.id, ben.id))).toEqual(FROZEN)
-    // 空间里的编辑者同样是冻结的说明；只凭授权的本仍是他自己的说明
-    expect(await errorOf(await grantsOf(catSession, document.id))).toEqual(FROZEN)
+    // 空间里的编辑者恢复之后也不能分享：冻结的说明许诺了恢复之后能调整，不给他，照旧是"只有空间管理员能分享"
+    // （M2-P5 审查 A 的一般 6、B 的 G1）；只凭授权的本仍是他自己的说明
+    expect(await errorOf(await grantsOf(catSession, document.id))).toEqual(NOT_ADMIN)
+    expect(await errorOf(await share(catSession, document.id, root.id, 'viewer'))).toEqual(NOT_ADMIN)
     expect(await errorOf(await grantsOf(benSession, document.id))).toEqual(GRANT_ONLY)
     expect(await storedGrant(document.id, ben.id)).toMatchObject({ role: 'editor' })
     expect(parseExact(documentDetailSchema, await (await open(benSession, document.id)).json())).toMatchObject({ accessVia: 'grant', permissions: { canEdit: false, canShare: false } })

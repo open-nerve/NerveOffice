@@ -85,11 +85,23 @@ async function search(dialog: HTMLElement, keyword: string): Promise<HTMLElement
   return within(dialog).findByRole('list', { name: '找到的同事' }, { timeout: 2000 })
 }
 
+/**
+ * 对话框自己的状态区：做完一件事的说明（"已分享给…""已取消分享给…"，同事选择里另有一个查找进展的状态区）。
+ * 确认框打开时 Radix 把它之外的内容标为 aria-hidden，按角色查不到，直接按元素找
+ */
+function noticeIn(dialog: HTMLElement): HTMLElement {
+  const notice = dialog.querySelector<HTMLElement>(':scope > [data-slot="status-region"]')
+  if (notice === null)
+    throw new Error('对话框里没有做完一件事的说明的状态区')
+  return notice
+}
+
 describe('US-M2-10 分享对话框：列表与人名', () => {
   it('打开时焦点进对话框；授权列表的被授权人与设置人都用人名组件（登录名在前），停用的标出来；关闭之后焦点回到入口', async () => {
     renderDialog({ [GRANTS_KEY]: () => grants(grantOf(BEN, { role: 'editor' }), grantOf(CAT, { status: 'disabled' })) })
     const dialog = await openDialog()
-    expect(dialog).toHaveAccessibleDescription(/只看得到这一份，看不到它所在空间里的其他内容/)
+    // 说明不假定对方在这个空间里没有角色（M2-P5 审查 B 的 S4）
+    expect(dialog).toHaveAccessibleDescription(/这条分享只给这一份，不给它所在空间里的其他内容；对方在这个空间里另有角色的，照样按那个角色访问。/)
     expect(dialog.contains(document.activeElement)).toBe(true)
     const list = await within(dialog).findByRole('list', { name: '已分享给' })
     const [ben, cat] = within(list).getAllByRole('listitem')
@@ -132,6 +144,18 @@ describe('US-M2-10 分享对话框：列表与人名', () => {
     expect(within(item).queryByRole('combobox')).toBeNull()
     expect(within(item).getByText('这是分享给你自己的，只能取消')).toBeInTheDocument()
     expect(within(item).getByRole('button', { name: `取消分享 ${plainName('艾米', 'amy')}` })).toBeInTheDocument()
+  })
+
+  it('被授权人已停用：只给"取消分享"，不给调整角色（服务端对停用的人调整一律 409，M2-P5 审查 B 的 S3）；有效的人照常能调整', async () => {
+    renderDialog({ [GRANTS_KEY]: () => grants(grantOf(BEN), grantOf(CAT, { status: 'disabled', role: 'editor' })) })
+    const dialog = await openDialog()
+    const [ben, cat] = within(await within(dialog).findByRole('list', { name: '已分享给' })).getAllByRole('listitem')
+    // 前提：两行都在，对照的那一行（有效的人）照常有角色的选择
+    expect(within(ben as HTMLElement).getByRole('combobox', { name: `${plainName('本', 'ben')} 的角色` })).toHaveValue('viewer')
+    expect(within(cat as HTMLElement).queryByRole('combobox')).toBeNull()
+    expect(within(cat as HTMLElement).getByText('编辑者')).toBeInTheDocument()
+    expect(within(cat as HTMLElement).getByText('对方的账户已停用，只能取消')).toBeInTheDocument()
+    expect(within(cat as HTMLElement).getByRole('button', { name: `取消分享 ${plainName('凯特', 'cat')}` })).toBeInTheDocument()
   })
 
   it('加载失败：说明原因，可以重试', async () => {
@@ -188,7 +212,7 @@ describe('US-M2-10 分享对话框：加人', () => {
     expect(within(dialog).getByLabelText('要分享给的同事')).toHaveValue('')
   })
 
-  it('结果未知（网络）：授权列表、文档详情与"与我共享"按共用的做法刷新，说明可能已经生效', async () => {
+  it('结果未知（网络）：授权列表、文档详情与"与我共享"按共用的做法刷新，说明可能已经生效；对话框的状态区不说"已分享给…"', async () => {
     const { api, client, refreshDocument } = renderDialog({
       [GRANTS_KEY]: inTurn(() => grants(), () => grants(grantOf(DAN))),
       [colleaguesKey('dan')]: () => json(200, { items: [DAN] }),
@@ -202,6 +226,10 @@ describe('US-M2-10 分享对话框：加人', () => {
     expect(requestsTo(api, GRANTS_KEY)).toBe(2)
     expect(refreshDocument).toHaveBeenCalled()
     expect(client.getQueryState(SHARED_LIST_QUERY_KEY)?.isInvalidated).toBe(true)
+    // 没有确认成功：做完一件事的说明是空的（刷新之后列表里有丹，那是服务端的状态，不是"这次分享成功了"，M2-P5 审查 A 的建议 2）
+    expect(noticeIn(dialog)).toBeEmptyDOMElement()
+    // "已分享给"是列表的标题；说明是"已分享给 某人（角色）"
+    expect(within(dialog).queryByText(/已分享给 /)).toBeNull()
   })
 
   it('被拒绝（403）：显示服务端的说明；授权列表与文档详情随之刷新（入口随新的权限消失）', async () => {
@@ -251,6 +279,8 @@ describe('US-M2-10 分享对话框：调整与取消', () => {
     revoke.focus()
     fireEvent.click(revoke)
     const confirm = await screen.findByRole('dialog', { name: `取消分享给 ${plainName('本', 'ben')}？` })
+    // 确认框的说明不假定对方在这个空间里没有角色：取消的是这一条分享（M2-P5 审查 B 的 S4）
+    expect(confirm).toHaveAccessibleDescription('取消之后，对方立即不能再凭这条分享访问这份文档，已经打开的页面也一样；他在这个空间里另有角色的，照样按那个角色访问。')
     fireEvent.click(within(confirm).getByRole('button', { name: '取消分享' }))
     await waitFor(() => expect(screen.queryByRole('dialog', { name: /^取消分享给/ })).toBeNull())
     expect(await within(dialog).findByText((_content, element) => element?.getAttribute('role') === 'status' && element.textContent === `已取消分享给 ${shownName('本', 'ben')}`)).toBeInTheDocument()
@@ -284,5 +314,27 @@ describe('US-M2-10 分享对话框：调整与取消', () => {
     const confirm = await screen.findByRole('dialog', { name: `取消分享给 ${plainName('本', 'ben')}？` })
     fireEvent.click(within(confirm).getByRole('button', { name: '取消分享' }))
     expect(await within(confirm).findByText('这份文档已经不在了，或者你已经不能访问它。')).toBeInTheDocument()
+  })
+
+  // 取消没有确认成功（结果未知、被拒绝、文档已经不在了）：对话框的状态区（读屏会播报）不能说"已取消分享给…"——
+  // 上面两条只核对确认框里的说明，把"已取消分享给…"挪到请求之前照样全绿（M2-P5 审查 A 的建议 2，回归用例 R2 并进来）
+  it.each([
+    ['结果未知（网络）', networkFailure],
+    ['结果未知（500）', () => apiError(500, 'INTERNAL_ERROR')],
+    ['被拒绝（403，空间刚被归档）', () => apiError(403, 'PERMISSION_DENIED', '空间已归档，恢复之后才能调整分享')],
+    ['文档已经不在了（404）', () => apiError(404, 'NOT_FOUND')],
+  ] as const)('取消没有确认成功——%s：对话框不说"已取消分享给…"', async (_name, failure) => {
+    renderDialog({
+      [GRANTS_KEY]: inTurn(() => grants(grantOf(BEN)), () => grants(grantOf(BEN))),
+      [deleteKey(BEN.id)]: failure,
+    })
+    const dialog = await openDialog()
+    fireEvent.click(await within(dialog).findByRole('button', { name: `取消分享 ${plainName('本', 'ben')}` }))
+    const confirm = await screen.findByRole('dialog', { name: `取消分享给 ${plainName('本', 'ben')}？` })
+    fireEvent.click(within(confirm).getByRole('button', { name: '取消分享' }))
+    // 确认框里给出了失败的说明（共用的做法），这时再看对话框的状态区
+    await within(confirm).findByRole('alert')
+    expect(noticeIn(dialog)).toBeEmptyDOMElement()
+    expect(within(dialog).queryByText(/已取消分享给/)).toBeNull()
   })
 })

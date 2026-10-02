@@ -12,11 +12,11 @@ import { refreshWithin } from '../../shared/api/write-outcome.ts'
 import { messages, phraseText } from '../../shared/i18n/index.ts'
 import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { ADMIN_PATHS } from '../../shared/lib/admin-paths.ts'
-import { cn } from '../../shared/lib/cn.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { Alert, AlertDescription, Button, buttonVariants, Label, PersonName, Phrase, Skeleton, TableCell } from '../../shared/ui/index.ts'
+import { StatusRegion } from '../../shared/ui/status-region.tsx'
 import { sessionQueryOptions, SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
 import { ColleaguePicker, KeywordPicker } from '../colleagues/index.ts'
 import { ConfirmDialog } from '../confirmation/index.ts'
@@ -176,8 +176,8 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
 
   return (
     <div className="flex flex-col gap-4">
-      {/* 结果的说明：容器一直在（空的时候没有内容），结果出来时往里填文字，读屏软件才会播报（审查 B10） */}
-      <p role="status" className={cn('text-sm', done !== undefined && 'rounded-lg border p-3')}>{done}</p>
+      {/* 结果的说明：共用的状态区，一直在无障碍树里（空的时候只做视觉隐藏、不占位置），结果出来时往里填文字，读屏软件才会播报（审查 B10） */}
+      <StatusRegion className="rounded-lg border p-3 text-sm">{done}</StatusRegion>
       {loaded.length > 0 && (
         <div className="flex items-center gap-2">
           <input

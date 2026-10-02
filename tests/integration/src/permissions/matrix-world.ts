@@ -24,9 +24,10 @@ import { createTeamSpace, setMember } from '../support/spaces.ts'
  * - outsider：与这些空间都没有关系的成员；
  * - systemAdmin：没有加入任何团队空间的系统管理员；
  * - grantViewer、grantEditor：只凭单独授权的人（M2-P5 S4）。与这些空间都没有关系（不是成员、不是所有者），
- *   但世界里**每一份文档**上都有他们的单独授权（查看者、编辑者）：固定的、每一格另建的、回收站里的，
+ *   但世界里**几乎每一份文档**上都有他们的单独授权（查看者、编辑者）：固定的、每一格另建的、回收站里的，
  *   包括他们看不到的空间（个人空间、团队空间、归档的空间）里的——授权给不给空间里的东西开口子、
  *   结构性的操作是不是只看空间角色，正是这两列要考的。全员可见的两个空间里他们另有"全员可见"给的查看者角色（取较高者）。
+ *   唯一的例外是每个目标空间里一份不给他们授权的固定文档（MatrixWorld.ungrantedDocuments，M2-P5 审查 B 的 S2）。
  */
 export const ACTORS = ['owner', 'spaceAdmin', 'editor', 'viewer', 'outsider', 'systemAdmin', 'grantViewer', 'grantEditor'] as const
 export type ActorName = (typeof ACTORS)[number]
@@ -93,7 +94,7 @@ export function isArchived(target: TargetName): boolean {
 }
 
 /**
- * 固定文档的标题前缀：只有 documents、folderDocuments 与 trashedDocuments 这三批固定的文档带它，
+ * 固定文档的标题前缀：只有 documents、folderDocuments、ungrantedDocuments 与 trashedDocuments 这几批固定的文档带它，
  * 每一格另建的文档都不带。搜索的矩阵拿它当关键词，结果因此是确定的几份，不受别的格子建出来的文档影响。
  */
 export const MATRIX_TITLE_PREFIX = '矩阵：'
@@ -153,6 +154,13 @@ export interface MatrixWorld {
    * documents 那一批在根目录下，文件夹本来就是空的，挡不住"忘了去掉文件夹"
    */
   readonly folderDocuments: Readonly<Record<TargetName, MatrixDocument>>
+  /**
+   * 每个目标空间根目录下一份**不给**两个只凭授权的人授权的文档（不存在的空间对应一个不存在的文档；M2-P5 审查 B 的 S2）。
+   * 世界里别的文档上都有他们的授权，列表类的格子（"与我共享"、搜索）分不出"授权那一半没有关联到这份文档"——
+   * 例如可访问文档的 EXISTS 只按人、不按文档，这个人有任何一条授权就算（审查 B 的变异 B18，两个矩阵原来全部通过）。
+   * 只凭授权的人在"与我共享"与搜索里都不该有它，有空间角色的人照常搜得到。标题带 MATRIX_TITLE_PREFIX，由这个空间的空间管理员创建
+   */
+  readonly ungrantedDocuments: Readonly<Record<TargetName, MatrixDocument>>
   /**
    * 跨空间操作（移动、复制）牵涉两个空间，矩阵的一行只放得下一个目标，所以另建一个
    * **八个人都是空间管理员**的团队空间当固定的那一端（M2-P4 S7；M2-P5 S4 起含两个只凭授权的人）：
@@ -249,18 +257,33 @@ async function seedTrashEntry(
   })
 }
 
+/** 摆世界的连接出错之后再用它（见 seedingConnection）：说明加上原来的错误（cause） */
+export const SEEDING_CONNECTION_BROKEN = '摆世界的连接已经出错断开（例如删库之前没有 closeWorld），不能再用它摆东西'
+
 /**
  * 摆世界、每一格另建东西用的一个连接（M2-P5 S4）：TestDatabase.query 每次新开一个连接（本机实测约 5 毫秒，一条语句约 0.3 毫秒），
  * 扩到八列之后每一格都要另建好几样东西，开连接的时间占了矩阵的大半。这里的语句都不开事务，在一个连接上逐个执行即可：
  * 并发的调用（摆世界时的 Promise.all）在这里排队，一个回调做完再交给下一个——pg 自己的排队已经弃用（pg 9 去掉）。
- * 回调里不能再调 query（会等自己）：用的都是回调拿到的连接。测试文件结束时先关掉它（world.close），再删库：删库会断开还连着的连接
+ * 回调里不能再调 query（会等自己）：用的都是回调拿到的连接。测试文件结束时先关掉它（world.close），再删库：删库会断开还连着的连接。
+ *
+ * 连接出错时 pg.Client 发出 'error'（删库的 FORCE 断开它时先是 57P01、再是"Connection terminated unexpectedly"），没有人接就是
+ * 测试进程里未处理的错误（M2-P5 审查 B 的 G2）：文件里忘了在删库之前 closeWorld，或者 beforeAll 超时、world 还没赋值时就会这样。
+ * 这里接住并记下第一个，之后的调用直接失败、带着它（cause），不再把语句发给断开的连接；关掉照常（断开的连接 end 立即结束）
  */
 async function seedingConnection(database: TestDatabase): Promise<{ readonly seed: TestDatabase, readonly close: () => Promise<void> }> {
   const client = new pg.Client({ connectionString: database.url, connectionTimeoutMillis: 5_000 })
+  let broken: Error | undefined
+  client.on('error', (error: Error) => {
+    broken ??= error
+  })
   await client.connect()
   let previous: Promise<unknown> = Promise.resolve()
   const query = async <T>(fn: (connection: pg.Client) => Promise<T>): Promise<T> => {
-    const run = previous.then(async () => fn(client))
+    const run = previous.then(async () => {
+      if (broken !== undefined)
+        throw new Error(SEEDING_CONNECTION_BROKEN, { cause: broken })
+      return fn(client)
+    })
     // 前一个失败不拦住后面的：失败由它自己的调用方收到
     previous = run.catch(() => undefined)
     return run
@@ -379,6 +402,12 @@ async function populateWorld(database: TestDatabase, app: TestApp): Promise<Omit
       return [target, { id: randomUUID(), unitId: randomUUID() }] as const
     return [target, await seedGranted(spaces[target], adminOf(target), `${MATRIX_TITLE_PREFIX}${target} 目录里`, folders[target].id)] as const
   }))) as Record<TargetName, MatrixDocument>
+  // 不给只凭授权的人授权的那一份（见 MatrixWorld.ungrantedDocuments）：直接建文档，不经 seedGranted
+  const ungrantedDocuments = Object.fromEntries(await Promise.all(TARGETS.map(async (target) => {
+    if (target === 'missing')
+      return [target, { id: randomUUID(), unitId: randomUUID() }] as const
+    return [target, await seedDocument(database, { spaceId: spaces[target], createdBy: adminOf(target), title: `${MATRIX_TITLE_PREFIX}${target} 没分享的` })] as const
+  }))) as Record<TargetName, MatrixDocument>
 
   /** 查库取一列 id（按 id 排序）：目标是不存在的空间时查的也是那个不存在的 id，结果是空的 */
   const idsOf = async (text: string, target: TargetName): Promise<string[]> => database.query(async client =>
@@ -440,9 +469,12 @@ async function populateWorld(database: TestDatabase, app: TestApp): Promise<Omit
   }] as const))) as Record<ActorName, MatrixActor>
 
   // 前提（M2-P5 S4）：两个只凭授权的人在固定的文档上确实有授权、别人一条也没有——没建上的话，他们那两列就与外人一样，
-  // "只凭授权"的格子什么也证明不了（与"授权确实生效"的前提一起，见各矩阵读与搜索的格子）
-  const fixed = TARGETS.filter(target => target !== 'missing').flatMap(target => [documents[target], folderDocuments[target], trashedDocuments[target]])
+  // "只凭授权"的格子什么也证明不了（与"授权确实生效"的前提一起，见各矩阵读与搜索的格子）。
+  // 不给授权的那一份上谁的授权也没有（审查 B 的 S2）：建上了的话，"它不在只凭授权的人的列表里"同样什么也证明不了
+  const real = TARGETS.filter(target => target !== 'missing')
+  const fixed = real.flatMap(target => [documents[target], folderDocuments[target], trashedDocuments[target]])
   await expectGranteesOn(database, fixed.map(document => document.id), GRANTEE_ACTORS.map(name => ({ userId: accounts[name].id, role: grantRoleOf(name) })))
+  await expectGranteesOn(database, real.map(target => ungrantedDocuments[target].id), [])
 
   return {
     actors,
@@ -450,6 +482,7 @@ async function populateWorld(database: TestDatabase, app: TestApp): Promise<Omit
     documents,
     folders,
     folderDocuments,
+    ungrantedDocuments,
     crossSpace,
     trashedDocuments,
     trashedFolders,

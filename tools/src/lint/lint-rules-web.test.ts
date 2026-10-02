@@ -1,4 +1,4 @@
-// lint 规则的自测（平台页面）：前端的模块边界与入口、按需加载与平台页面的首屏、Radix 的弹窗原语、人名的拼法。
+// lint 规则的自测（平台页面）：前端的模块边界与入口、按需加载与平台页面的首屏、Radix 的弹窗原语、人名的拼法、读屏用的状态区。
 // 共用的准备与时限见 lint-harness.test-support.ts
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -508,5 +508,40 @@ describe('US-M1-11 lint 规则的自测：人名经 PersonName 显示，显示�
     ]
     for (const code of notJoined)
       expect((await lint(code, 'apps/web/src/features/admin/users-page.tsx')).messages.join('\n'), code).not.toContain(PERSON_NAME_MESSAGE)
+  })
+}, LINT_TIMEOUT)
+
+describe('US-M1-11 lint 规则的自测：读屏用的状态区（role="status"）不能 display: none 或 invisible，空的时候用 StatusRegion（M2-P5 审查 B 的 M1）', () => {
+  const LIVE_STATUS_MESSAGE = '读屏用的状态区（role="status"）要一直在无障碍树里'
+  const FEATURE_FILE = 'apps/web/src/features/sharing/share-dialog.tsx'
+  /** 几种写法：字符串里的 hidden 与带变体前缀的、cn() 的参数里条件表达式的一支、模板字符串、hidden 属性、style、invisible 与 role={'status'} */
+  const HIDING = [
+    'export function Notice({ text }: { text: string }) {\n  return <p role="status" className="text-sm empty:hidden">{text}</p>\n}\n',
+    'export function Notice({ text }: { text: string }) {\n  return <p role="status" className="hidden">{text}</p>\n}\n',
+    'declare function cn(...parts: unknown[]): string\nexport function Notice({ text }: { text?: string }) {\n  return <p role="status" className={cn(\'m-0 text-sm\', text === undefined ? \'hidden\' : \'rounded-lg border p-2\')}>{text}</p>\n}\n',
+    `export function Notice({ text }: { text: string }) {\n  return <p role="status" className={\`md:hidden \${text}\`}>{text}</p>\n}\n`,
+    'export function Notice({ text }: { text?: string }) {\n  return <p role="status" hidden={text === undefined}>{text}</p>\n}\n',
+    'export function Notice({ text }: { text: string }) {\n  return <p role="status" style={{ display: \'none\' }}>{text}</p>\n}\n',
+    'export function Notice({ text }: { text: string }) {\n  return <span role={\'status\'} className="!invisible text-sm">{text}</span>\n}\n',
+  ]
+
+  it.each([FEATURE_FILE, WEB_FILE, 'apps/web/src/shared/ui/dialog.tsx', PLATFORM_ENTRY])('%s', async (file) => {
+    for (const code of HIDING) {
+      const report = await lint(code, file)
+      expect(report.rules, code).toContain('no-restricted-syntax')
+      expect(report.messages.join('\n'), code).toContain(LIVE_STATUS_MESSAGE)
+    }
+  })
+
+  it('照常的写法：视觉隐藏（sr-only）、overflow-hidden 这类不让元素离开无障碍树的类名、不是状态区的元素、共用的 StatusRegion；测试不受限', async () => {
+    const fine = [
+      'export function Notice({ text }: { text: string }) {\n  return <p role="status" className="sr-only">{text}</p>\n}\n',
+      'export function Notice({ text }: { text: string }) {\n  return <p role="status" className="overflow-hidden text-sm aria-hidden:opacity-0">{text}</p>\n}\n',
+      'export function Notice({ text }: { text: string }) {\n  return <p className="hidden">{text}</p>\n}\n',
+      'declare function StatusRegion(props: { className?: string, children?: string }): null\nexport function Notice({ text }: { text: string }) {\n  return <StatusRegion className="mt-2 text-sm">{text}</StatusRegion>\n}\n',
+    ]
+    for (const code of fine)
+      expect((await lint(code, FEATURE_FILE)).messages.join('\n'), code).not.toContain(LIVE_STATUS_MESSAGE)
+    expect((await lint(HIDING[0] ?? '', WEB_TEST_FILE)).messages.join('\n')).not.toContain(LIVE_STATUS_MESSAGE)
   })
 }, LINT_TIMEOUT)

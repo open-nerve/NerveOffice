@@ -54,13 +54,19 @@ const MATRIX: MatrixTable<Operation> = {
   deleteDocument: spaceAdminOnly(204),
 }
 
+/**
+ * 删除被拒：空间角色是编辑者的人删的是别人创建的文档；查看者等不是编辑者的人根本不能删（自己创建的也不能），
+ * 说"没有删除这份文档的权限"（M2-P5 S4 主会话的决定，S5 修复）
+ */
+const DELETE_DENIED: DeniedMessages = { usual: '没有删除这份文档的权限', editor: '编辑者只能删除自己创建的文档', grantOnly: SHARED_ONLY_DELETE }
+
 /** 每一行 403 的说明（M2-P5 S1 定的两句，S4 逐格钉住；推法见 document-rows.ts 的 deniedMessageOf） */
 const DENIED: Readonly<Record<Operation, DeniedMessages>> = {
   renameDocument: { usual: '没有给这份文档改名的权限' },
   moveWithinSpace: { usual: '没有移动这份文档的权限', grantOnly: SHARED_ONLY_MOVE },
   moveToSameSpace: { usual: '没有移动这份文档的权限', grantOnly: SHARED_ONLY_MOVE },
-  deleteOwnDocument: { usual: '编辑者只能删除自己创建的文档', grantOnly: SHARED_ONLY_DELETE },
-  deleteDocument: { usual: '编辑者只能删除自己创建的文档', grantOnly: SHARED_ONLY_DELETE },
+  deleteOwnDocument: DELETE_DENIED,
+  deleteDocument: DELETE_DENIED,
 }
 
 let renames = 0

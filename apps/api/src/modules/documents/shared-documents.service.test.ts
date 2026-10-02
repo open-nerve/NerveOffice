@@ -142,6 +142,18 @@ describe('SharedDocumentsService.list 的分页', () => {
     expect(store.spaces.accessFactsOfMany.mock.calls[0]?.[1]).toHaveLength(SHARED_PAGE_SIZE)
   })
 
+  it('恰好是一页的条数：这一页给全，没有下一页的游标（"加载更多"不出现，不会取到空的一页；M2-P5 审查 B 的 S1）', async () => {
+    const { store, service } = setup()
+    const rows = Array.from({ length: SHARED_PAGE_SIZE }, (_, index) => {
+      const row = at(store, ALICE_SPACE, `表 ${index}`, `2026-09-26T10:00:00.${String(SHARED_PAGE_SIZE - index).padStart(6, '0')}Z`)
+      store.setGrant(row.id, BOB, 'viewer')
+      return row
+    })
+    const page = await service.list(member(BOB), {})
+    expect(page.items.map(item => item.id)).toEqual(rows.map(row => row.id))
+    expect(page.nextCursor).toBeNull()
+  })
+
   it('游标不合法（改过、时间不存在）：REQUEST_INVALID，而且不查询', async () => {
     const { store, service } = setup()
     for (const cursor of ['broken', encodeTimeCursor({ position: '2026-02-30T00:00:00.000000Z', id: ALICE_SPACE })])

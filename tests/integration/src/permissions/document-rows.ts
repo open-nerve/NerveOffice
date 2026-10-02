@@ -71,6 +71,11 @@ export function intoSpace(success: 200 | 201): Readonly<Record<TargetName, Row>>
 /** 一行被拒时的说法：通常的一句；结构性的操作另有只凭授权的人的那一句（M2-P5 S1 定的两句） */
 export interface DeniedMessages {
   readonly usual: string
+  /**
+   * 空间角色是编辑者的人另有的一句（删除：编辑者只是不能删别人创建的，别的人根本不能删，M2-P5 S4 主会话的决定）。
+   * 世界里空间角色是编辑者的只有 editor 这一列（团队空间与全员可见的空间里；归档的两个空间里按归档说明）
+   */
+  readonly editor?: string
   readonly grantOnly?: string
   /** 目标空间那一维的行：归档的目标是 409、到不了 403，被拒的说明不按归档改写 */
   readonly aboutTarget?: boolean
@@ -84,10 +89,13 @@ export const SHARED_ONLY_DELETE = '这份文档是单独分享给你的，不能
  * 一格 403 的说明，逐格按规则推出（S4 起逐格钉住）：
  * - 只凭授权的人（ACCESS_VIA 是 grant）做结构性的操作：他自己的那一句，与空间归不归档无关（恢复之后他照样不能做）；
  * - 否则在归档的空间里：空间已归档（M2-P6 复核 A 的 G3），目标空间那一维的行除外；
+ * - 否则这一行另有编辑者的说法时，editor 这一列是那一句；
  * - 否则是这一行通常的说法（在全员可见的空间里只凭授权的人有空间角色"查看者"，所以也是这一句）。
  */
 export function deniedMessageOf(messages: DeniedMessages, actor: ActorName, target: TargetName): string {
   if (messages.grantOnly !== undefined && accessViaOf(actor, target) === 'grant')
     return messages.grantOnly
-  return messages.aboutTarget !== true && isArchived(target) ? ARCHIVED : messages.usual
+  if (messages.aboutTarget !== true && isArchived(target))
+    return ARCHIVED
+  return messages.editor !== undefined && actor === 'editor' ? messages.editor : messages.usual
 }

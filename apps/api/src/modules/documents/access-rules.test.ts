@@ -3,7 +3,7 @@ import type { SpaceFacts } from '../spaces/index.ts'
 import type { DocumentAccess } from './access-rules.ts'
 import { GRANT_ROLES, SPACE_ROLES } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
-import { atLeast, documentAccessOf, documentPermissionsOf, effectiveSpaceRole, folderPermissionsOf, spacePermissionsOf, trashPermissionsOf } from './access-rules.ts'
+import { atLeast, canShareOnceRestored, documentAccessOf, documentPermissionsOf, effectiveSpaceRole, folderPermissionsOf, spacePermissionsOf, spaceRoleOnceRestored, trashPermissionsOf } from './access-rules.ts'
 
 const ALICE = '0199a2c4-0000-7000-8000-00000000000a'
 const BOB = '0199a2c4-0000-7000-8000-00000000000b'
@@ -48,6 +48,28 @@ describe('有效的空间角色（00 号计划书 §5.2）', () => {
         expect(effectiveSpaceRole(facts({ status: 'archived', visibleToAll, memberRole })), `${visibleToAll} ${memberRole}`).toBe(expected)
       }
     }
+  })
+})
+
+describe('恢复之后的空间角色与能不能分享（只用于给说明：归档时冻结的说明只给恢复之后能分享的人，M2-P5 审查 A 的一般 6、B 的 G1）', () => {
+  it('归档的团队空间：恢复之后是归档之前的角色（成员的角色、全员可见给的查看者）；只有空间管理员恢复之后能分享', () => {
+    for (const visibleToAll of [false, true]) {
+      for (const memberRole of ROLES) {
+        const archived = facts({ status: 'archived', visibleToAll, memberRole })
+        const before = memberRole ?? (visibleToAll ? 'viewer' : undefined)
+        expect(spaceRoleOnceRestored(archived), `${visibleToAll} ${memberRole}`).toBe(before)
+        expect(canShareOnceRestored(archived), `${visibleToAll} ${memberRole}`).toBe(memberRole === 'admin')
+        // 只给说明：归档时的有效角色照旧至多是查看者
+        expect(effectiveSpaceRole(archived), `${visibleToAll} ${memberRole}`).toBe(before === undefined ? undefined : 'viewer')
+      }
+    }
+  })
+
+  it('没有归档的空间与个人空间：就是现在的空间角色；个人空间的所有者能分享，别人不能', () => {
+    for (const memberRole of ROLES)
+      expect(spaceRoleOnceRestored(facts({ memberRole })), String(memberRole)).toBe(memberRole ?? undefined)
+    expect(canShareOnceRestored(facts({ type: 'personal', owned: true }))).toBe(true)
+    expect(canShareOnceRestored(facts({ type: 'personal', owned: false, memberRole: 'admin' }))).toBe(false)
   })
 })
 

@@ -51,6 +51,8 @@ describe('US-M2-10 "与我共享"页', () => {
     renderApp('/shared')
     expect(await screen.findByRole('heading', { level: 1, name: '与我共享' })).toBeInTheDocument()
     await waitFor(() => expect(document.title).toBe('与我共享 - NerveOffice'))
+    // 页面的说明不假定"我在那个空间里没有角色"：这一页本来就包括我在那个空间里也有角色的（M2-P5 审查 B 的 S4）
+    expect(screen.getByText('别人单独分享给你的文档。分享只给这些文档本身，不给它们所在空间里的其他内容；你在那个空间里另有角色的，照样按那个角色访问。')).toBeInTheDocument()
     const [team, personal] = within(await screen.findByRole('list', { name: '分享给我的文档' })).getAllByRole('listitem')
     expect(within(team as HTMLElement).getByRole('link')).toHaveAttribute('href', `/documents/${IN_TEAM.id}`)
     expect(team).toHaveTextContent('团队的周报市场部 · 可以编辑 · 更新于 2026年9月29日')

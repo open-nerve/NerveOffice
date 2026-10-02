@@ -108,6 +108,14 @@ describe('DocumentsService.list', () => {
     expect(last.nextCursor).toBeNull()
   })
 
+  it('恰好是一页的条数：这一页给全，没有下一页的游标（M2-P5 审查 B 的 S1 的同类缺口）', async () => {
+    const { store, service } = setup()
+    const rows = [3, 2, 1].map(second => at(store, ALICE_SPACE, `2026-09-26T10:00:0${second}.000000Z`))
+    const page = await service.list(member(ALICE), { limit: rows.length })
+    expect(page.items.map(item => item.id)).toEqual(rows.map(row => row.id))
+    expect(page.nextCursor).toBeNull()
+  })
+
   it('按空间列出不并上单独授权（M2-P5 设计 §3.4(2)）：别处分享给我的文档不出现在我的空间里；只凭授权看不到那个空间的列表', async () => {
     const { store, service } = setup()
     const mine = store.addDocument({ spaceId: BOB_SPACE, createdBy: BOB })

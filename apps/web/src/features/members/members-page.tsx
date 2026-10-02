@@ -10,13 +10,13 @@ import { writeFailureText } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { membersMessages } from '../../shared/i18n/zh-cn/members.ts'
 import { ADMIN_PATHS } from '../../shared/lib/admin-paths.ts'
-import { cn } from '../../shared/lib/cn.ts'
 import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { HOME_PATH, spacePath } from '../../shared/lib/space-paths.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { useFocusRescue } from '../../shared/lib/use-focus-rescue.ts'
 import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { Alert, AlertDescription, Badge, Button, buttonVariants, Label, NativeSelect, PersonName, Phrase, Skeleton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../shared/ui/index.ts'
+import { StatusRegion } from '../../shared/ui/status-region.tsx'
 import { sessionQueryOptions } from '../auth/index.ts'
 import { ColleaguePicker } from '../colleagues/index.ts'
 import { ConfirmDialog } from '../confirmation/index.ts'
@@ -325,8 +325,8 @@ function MembersTable({ spaceId, list, selfId, focusTitle }: MembersTableProps) 
 
   return (
     <div>
-      {/* 表格上方的说明：容器一直在（空的时候不占位置），内容变化时往里填文字，读屏软件才会播报（与转移结果的做法相同） */}
-      <p role="status" className={cn('text-sm', notice !== undefined && 'mb-4 rounded-lg border p-3')}>{notice}</p>
+      {/* 表格上方的说明：共用的状态区，一直在无障碍树里（空的时候只做视觉隐藏、不占位置），内容变化时往里填文字，读屏软件才会播报 */}
+      <StatusRegion className="mb-4 rounded-lg border p-3 text-sm">{notice}</StatusRegion>
       {list.items.length === 0
         ? <p className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">{text.empty}</p>
         : (
