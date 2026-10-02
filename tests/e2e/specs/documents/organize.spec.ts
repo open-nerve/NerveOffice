@@ -1,7 +1,7 @@
 // 文件夹与文档的整理（M2-P4，US-M2-07）：新建文件夹、进入与面包屑、在里面新建表格、改名、移动、删除；
 // 跨空间移动之后权限随之改变；查看者看不到这些入口。行内按钮的可读名称是"操作 对象"。
 import type { Page, Request } from '@playwright/test'
-import { createDocumentIn, createFolderIn, createTeamSpace, createUser } from '../../support/database.ts'
+import { createDocument, createDocumentIn, createFolderIn, createTeamSpace, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
 
@@ -100,6 +100,56 @@ test.describe('US-M2-07 文件夹与文档的整理', () => {
     await expect(page.getByText('回收站里没有内容')).toBeVisible()
   })
 
+  test('文件夹改名；把文档、文件夹移进另一个文件夹；在文件夹里新建子文件夹（M2-P6 复核 M3：核心链路里源与目标不同的每一步）', async ({ page }) => {
+    const owner = await createUser('org-into')
+    await createFolderIn(owner.personalSpaceId, owner, '方案')
+    await createFolderIn(owner.personalSpaceId, owner, '草稿')
+    await createDocument(owner, '合同')
+    await loginThroughApi(page, owner)
+    await page.goto('/')
+    const folders = page.getByRole('list', { name: '文件夹列表' })
+
+    // 文件夹改名：列表里是新名称，旧名称不在了
+    await openActions(page, '方案')
+    await page.getByRole('button', { name: '改名', exact: true }).click()
+    await page.getByLabel('方案 的新名称', { exact: true }).fill('季度方案')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await expect(folders.getByRole('link', { name: '季度方案', exact: true })).toBeVisible()
+    await expect(folders.getByRole('link', { name: '方案', exact: true })).toHaveCount(0)
+
+    // 把文档移进"季度方案"：在目标位置里点进那个文件夹，再"移动到这里"
+    await openActions(page, '合同')
+    await page.getByRole('button', { name: '移动', exact: true }).click()
+    const moveDocument = page.getByRole('form', { name: '移动' })
+    await moveDocument.getByRole('button', { name: '进入 季度方案', exact: true }).click()
+    await expect(moveDocument.getByText('目标位置：我的空间 / 季度方案')).toBeVisible()
+    await moveDocument.getByRole('button', { name: '移动到这里', exact: true }).click()
+    await expect(page.getByText('已把「合同」移动到我的空间 / 季度方案')).toBeVisible()
+    await expect(page.getByRole('list', { name: '文档列表' })).toHaveCount(0)
+
+    // 把文件夹"草稿"也移进"季度方案"：根目录下不再有它
+    await openActions(page, '草稿')
+    await page.getByRole('button', { name: '移动', exact: true }).click()
+    const moveFolder = page.getByRole('form', { name: '移动' })
+    await moveFolder.getByRole('button', { name: '进入 季度方案', exact: true }).click()
+    await moveFolder.getByRole('button', { name: '移动到这里', exact: true }).click()
+    await expect(page.getByText('已把「草稿」移动到我的空间 / 季度方案')).toBeVisible()
+    await expect(folders.getByRole('link', { name: '草稿', exact: true })).toHaveCount(0)
+
+    // 进到"季度方案"：文档与文件夹都在这一层
+    await folders.getByRole('link', { name: '季度方案', exact: true }).click()
+    await expect(page).toHaveURL(FOLDER_URL)
+    await expect(page.getByRole('list', { name: '文档列表' })).toContainText('合同')
+    await expect(folders.getByRole('link', { name: '草稿', exact: true })).toBeVisible()
+
+    // 在文件夹里新建子文件夹：它在这一层，不在空间的根目录
+    await createFolder(page, '子文件夹')
+    await expect(folders.getByRole('link', { name: '子文件夹', exact: true })).toBeVisible()
+    await page.getByRole('navigation', { name: '位置' }).getByRole('link', { name: '我的空间', exact: true }).click()
+    await expect(folders.getByRole('link', { name: '季度方案', exact: true })).toBeVisible()
+    await expect(folders.getByRole('link', { name: '子文件夹', exact: true })).toHaveCount(0)
+  })
+
   test('跨空间移动：文档换了空间，原空间的编辑者不再看得到、也打不开它', async ({ page, anotherDevice }) => {
     const lead = await createUser('org-move-lead')
     const mate = await createUser('org-move-mate')
@@ -130,6 +180,25 @@ test.describe('US-M2-07 文件夹与文档的整理', () => {
     await expect(anotherDevice.getByText('这里还没有文档')).toBeVisible()
     await anotherDevice.goto(`/documents/${documentId}`)
     await expect(anotherDevice.getByText('内容不存在，或者你没有访问权限')).toBeVisible()
+  })
+
+  test('删除的结果未知（服务端照常删了，回包换成代理的 502）：列表刷新、那一行消失，说明"列表已刷新"——打开着的那份文档再取元数据得到 404，不算没能刷新（M2-P6 复核第五批 S-1）', async ({ page }) => {
+    const owner = await createUser('org-unknown')
+    const id = await createDocument(owner, '要删除的周报')
+    await loginThroughApi(page, owner)
+    await page.goto('/')
+    await page.route(`**/api/documents/${id}`, async (route) => {
+      if (route.request().method() !== 'DELETE')
+        return route.continue()
+      await route.fetch()
+      return route.fulfill({ status: 502, contentType: 'text/html', body: 'bad gateway' })
+    })
+    await openActions(page, '要删除的周报')
+    await page.getByRole('button', { name: '删除', exact: true }).click()
+    // 原来 WebKit 上元数据的 404 先回来，说成"列表没能刷新"，而那一行已经消失了
+    await expect(page.getByText('没能确认「要删除的周报」是否已经删除（出了点问题，请稍后重试）。列表已刷新：它已经不在这里，就是已经移到回收站了；还在的话可以再删除一次。')).toBeVisible()
+    await expect(page.getByRole('button', { name: '操作 要删除的周报', exact: true })).toHaveCount(0)
+    await expect(page.getByText(/列表没能刷新/)).toHaveCount(0)
   })
 
   test('查看者：没有新建文件夹与新建表格，文件夹那一行没有操作，文档只能复制', async ({ page }) => {

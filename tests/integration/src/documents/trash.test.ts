@@ -1,6 +1,7 @@
 // 回收站（M2-P4 S3 的规则细则，US-M2-09）：删除单元的粒度与"不重组"、谁能删、按空间列出、
 // 整单恢复与原位置的回落、永久删除与连带、回收站里的东西对普通接口一律"不存在"、写入代次、跨空间移动与删除单元；
-// 并发：删文件夹与往里移文档、恢复与永久删除、删除与保存、判断过之后被移出空间（两个连接构造的交错）。
+// 并发：删文件夹与往里移文档、恢复与永久删除、删除与保存、判断过之后被移出空间；永久删除与恢复在判断过之后
+// 被降级、被移出、空间被归档时锁下再判断（M2-P6 复验 R-S2）（两个连接构造的交错）。
 import type { Folder, RestoredTrashEntry, SpaceRole, TrashListResponse } from '@nerve-office/contracts'
 import type pg from 'pg'
 import type { TestAccount } from '../support/accounts.ts'
@@ -11,7 +12,9 @@ import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
-import { documentListResponseSchema, errorResponseSchema, folderListResponseSchema, folderSchema, restoredTrashEntrySchema, SHEET_TEMPLATE, TRASH_LIST_PAGE_SIZE, TRASH_RETENTION_DAYS, trashListResponseSchema } from '@nerve-office/contracts'
+import { TransactionRunner } from '@nerve-office/api'
+import { DocumentsRepository } from '@nerve-office/api/testing'
+import { createdFolderSchema, documentListResponseSchema, errorResponseSchema, folderListResponseSchema, restoredTrashEntrySchema, SHEET_TEMPLATE, TRASH_LIST_PAGE_SIZE, TRASH_RETENTION_DAYS, trashListResponseSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -68,7 +71,7 @@ function holdSpaceTree(spaceId: string) {
 async function newFolder(user: LoggedIn, body: Record<string, unknown>): Promise<Folder> {
   const response = await asUser(app.baseUrl, user, '/api/folders', { method: 'POST', body: { requestId: randomUUID(), ...body } })
   expect(response.status).toBe(201)
-  return parseExact(folderSchema, await response.json())
+  return parseExact(createdFolderSchema, await response.json())
 }
 
 async function deleteDocument(user: LoggedIn, id: string): Promise<Response> {
@@ -187,8 +190,8 @@ async function seedSeparatelyTrashed(spaceId: string, folderId: string, count: n
       [spaceId, folderId, amy.id, count],
     )).rows.map(row => row.id)
     const entries = (await client.query<{ id: string }>(
-      `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_space_id, origin_parent_id, title)
-       SELECT $1, 'document', $2, now() + make_interval(days => $3::int), $1, $4, '连带'
+      `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_parent_id, title)
+       SELECT $1, 'document', $2, now() + make_interval(days => $3::int), $4, '连带'
        FROM unnest($5::uuid[]) RETURNING id`,
       [spaceId, amy.id, TRASH_RETENTION_DAYS, folderId, documents],
     )).rows.map(row => row.id)
@@ -238,6 +241,22 @@ describe('US-M2-09 谁能删（spec §2）', () => {
     expect((await deleteFolder(amySession, mine.id)).status).toBe(204)
     expect((await deleteFolder(amySession, empty.id)).status).toBe(204)
     expect(await foldersOf([mine.id, empty.id])).toMatchObject({ [mine.id]: { status: 'trashed' }, [empty.id]: { status: 'trashed' } })
+  })
+
+  it('编辑者删文件夹只数正常状态的文档：里面别人创建的文档已经单独删进回收站时，照样能删（M2-P6 复核 B 的 S-2）', async () => {
+    const spaceId = await teamSpace()
+    const folder = await newFolder(amySession, { spaceId, name: '艾米的资料' })
+    await createDocument(database, { spaceId, createdBy: amy.id, title: '我的', folderId: folder.id })
+    const bens = await createDocument(database, { spaceId, createdBy: ben.id, title: '本放进来的', folderId: folder.id })
+    // 别人的那一份还在：编辑者不能删
+    const denied = await deleteFolder(amySession, folder.id)
+    expect(denied.status).toBe(403)
+    expect((await errorOf(denied)).code).toBe('FOLDER_HAS_OTHERS_DOCUMENTS')
+    // 本把自己的那一份删进回收站之后：子树里正常状态的文档全是艾米的，她能删
+    expect((await deleteDocument(benSession, bens)).status).toBe(204)
+    const response = await deleteFolder(amySession, folder.id)
+    expect(response.status, await response.clone().text()).toBe(204)
+    expect(await foldersOf([folder.id])).toMatchObject({ [folder.id]: { status: 'trashed' } })
   })
 
   it('空间管理员删任意；查看者一概不能；归档的空间一概不能', async () => {
@@ -537,10 +556,10 @@ describe('US-M2-09 永久删除（spec §4）', () => {
     expect(await count('SELECT count(*) FROM document_contents WHERE document_id = $1', [document.id])).toBe(0)
     expect(await count('SELECT count(*) FROM document_revisions WHERE document_id = $1', [document.id])).toBe(0)
     expect(await count('SELECT count(*) FROM trash_entries WHERE id = $1', [entryId])).toBe(0)
-    expect(await auditsOf(document.id)).toMatchObject([
-      { action: 'documents.deleted' },
-      { action: 'documents.purged', actorType: 'user', details: { spaceId, title: '周报', trashEntryId: entryId, folders: 0, documents: 1, cascadedEntries: 0 } },
-    ])
+    const audits = await auditsOf(document.id)
+    expect(audits).toMatchObject([{ action: 'documents.deleted' }, { action: 'documents.purged', actorType: 'user' }])
+    // 明细逐字段相等：只记份数与删除单元，不记标题（M2 总设计 §2.1 第 5 条，M2-P6 复核 M-1）
+    expect(audits[1]?.details).toEqual({ spaceId, trashEntryId: entryId, folders: 0, documents: 1, cascadedEntries: 0 })
   })
 
   it('连带：子树里属于别的删除单元的行一起删掉，那些单元也一起清掉，审计记下份数', async () => {
@@ -603,6 +622,131 @@ describe('US-M2-09 永久删除（spec §4）', () => {
     // 已经永久删除了：再恢复、再永久删除都是 NOT_FOUND
     expect((await restore(amySession, entryId)).status).toBe(404)
     expect((await purge(amySession, entryId)).status).toBe(404)
+  })
+
+  it('要删的都在回收站里（M2-P6 复核 A 的 S-3、B 的 B2）：回收站的文件夹下有正常状态的文档时按数据不一致处理，500，什么也不删，日志里有这一单', async () => {
+    const spaceId = await teamSpace({ amy: 'admin' })
+    const folder = await newFolder(amySession, { spaceId, name: '资料' })
+    const inside = await newFolder(amySession, { spaceId, parentId: folder.id, name: '里面' })
+    const entryId = await trashedEntry(amySession, spaceId, async () => deleteFolder(amySession, folder.id))
+    // 数据不一致：一份正常状态的文档挂在回收站里的子文件夹下。各条路径都不会这样写（锁下的核对守着），这里直接写库摆出来
+    const stray = await createDocument(database, { spaceId, createdBy: amy.id, title: '正常的文档', folderId: inside.id })
+    try {
+      const response = await purge(amySession, entryId)
+      expect(response.status).toBe(500)
+      expect((await errorOf(response)).code).toBe('INTERNAL_ERROR')
+      // 整个事务回滚，什么也没删：两个文件夹还在这一单里，那份文档还在，没有永久删除的审计
+      expect(await foldersOf([folder.id, inside.id])).toEqual({
+        [folder.id]: { status: 'trashed', entry: entryId, space: spaceId, parent: null, depth: 1 },
+        [inside.id]: { status: 'trashed', entry: entryId, space: spaceId, parent: folder.id, depth: 2 },
+      })
+      expect(await documentsOf([stray])).toMatchObject({ [stray]: { status: 'active', folder: inside.id } })
+      expect(await count('SELECT count(*) FROM trash_entries WHERE id = $1', [entryId])).toBe(1)
+      expect((await auditsOf(folder.id)).map(audit => audit.action)).toEqual(['folders.deleted'])
+      // 错误日志里有这一单的 id（没有标题与名称）
+      expect(app.logs.text()).toContain(`永久删除的子树里有正常状态的行（文件夹 0 个、文档 1 份），什么也不删：${entryId}`)
+    }
+    finally {
+      // 收拾好：那份文档挪回空间的根目录，库里不留违反不变量的数据（删库之前会扫一遍）
+      await database.query(async client => client.query('UPDATE documents SET folder_id = NULL WHERE id = $1', [stray]))
+    }
+    // 数据一致之后照常永久删除
+    expect((await purge(amySession, entryId)).status).toBe(204)
+    expect(await documentsOf([stray])).toMatchObject({ [stray]: { status: 'active', folder: null } })
+  })
+
+  it('别的空间里的正常文档挂在回收站的文件夹下（数据不一致）：核对只数这个空间（M2-P6 第 3 片复验），那份文档不被锁住、不被删；删文件夹撞上外键，整个事务回滚，什么也不删', async () => {
+    const spaceId = await teamSpace({ amy: 'admin' })
+    const elsewhere = await teamSpace({ amy: 'admin' })
+    const folder = await newFolder(amySession, { spaceId, name: '资料' })
+    const entryId = await trashedEntry(amySession, spaceId, async () => deleteFolder(amySession, folder.id))
+    // 数据不一致：另一个空间里的文档指着这个文件夹。各条路径都不会这样写，这里直接写库摆出来
+    const stray = await createDocument(database, { spaceId: elsewhere, createdBy: amy.id, title: '别处的文档', folderId: folder.id })
+    try {
+      const response = await purge(amySession, entryId)
+      expect(response.status).toBe(500)
+      expect(await foldersOf([folder.id])).toEqual({ [folder.id]: { status: 'trashed', entry: entryId, space: spaceId, parent: null, depth: 1 } })
+      expect(await documentsOf([stray])).toMatchObject({ [stray]: { status: 'active', space: elsewhere, folder: folder.id } })
+      expect(await count('SELECT count(*) FROM trash_entries WHERE id = $1', [entryId])).toBe(1)
+      expect((await auditsOf(folder.id)).map(audit => audit.action)).toEqual(['folders.deleted'])
+    }
+    finally {
+      // 收拾好：那份文档挪回它所在空间的根目录（删库之前会扫一遍不变量）
+      await database.query(async client => client.query('UPDATE documents SET folder_id = NULL WHERE id = $1', [stray]))
+    }
+    expect((await purge(amySession, entryId)).status).toBe(204)
+  })
+})
+
+describe('US-M2-09 一串 id 超过一条语句的参数上限（M2-P6 复核 A 的 S-2、B 的 G1）', () => {
+  /**
+   * PostgreSQL 一条语句最多 65535 个参数：删除、永久删除、跨空间移动按子树里的文档一次改一批，逐个传参的话，
+   * 一个文件夹里超过这个数的文档就让那条语句每次都失败。现在一串 id 是一个数组参数：这里直接用真实的仓储与数据库，
+   * 给它 7 万个 id（多数不存在），语句照样执行、结果照样对。每条语句只有一个数组参数由单元测试
+   * （apps/api 的 documents/id-array-statements.test.ts）逐个方法核对；不在这里真的建 7 万份文档（太慢）
+   */
+  it('7 万个 id：锁住、计数、放进回收站（再按删除单元找回、恢复）、移动、永久删除、按空间列出都照样执行，只动存在的那几行', async () => {
+    const spaceId = await teamSpace({ amy: 'admin' })
+    const to = await teamSpace({ amy: 'admin' })
+    const folder = await newFolder(amySession, { spaceId, name: '资料' })
+    const inside = await createDocument(database, { spaceId, createdBy: amy.id, title: '里面的', folderId: folder.id })
+    // 放进回收站要一个删除单元：直接建一个，用完（恢复之后它空了）再删掉
+    const entry = await database.query(async client => (await client.query<{ id: string }>(
+      `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_parent_id, title)
+       VALUES ($1, 'document', $2, now() + interval '30 days', $3, '里面的') RETURNING id`,
+      [spaceId, amy.id, folder.id],
+    )).rows[0]?.id ?? '')
+    const absent = Array.from({ length: 70_000 }, () => randomUUID())
+    const repository = app.runtime.get(DocumentsRepository)
+    const listed = await repository.listAccessible({ spaceIds: [...absent, spaceId] }, { limit: 10 })
+    expect(listed.map(row => row.id)).toEqual([inside])
+
+    const outcome = await app.runtime.get(TransactionRunner).run(async (transaction) => {
+      const folders = [...absent, folder.id]
+      const documents = [...absent, inside]
+      const entries = [...absent, entry]
+      const locked = await repository.lockInFolders(folders, spaceId, transaction)
+      const active = await repository.countActiveInFolders(folders, spaceId, transaction)
+      const others = await repository.countCreatedByOthers(folders, spaceId, ben.id, transaction)
+      const transferable = await repository.lockForTransfer(documents, spaceId, transaction)
+      const trashed = await repository.trash(documents, entry, transaction)
+      const inEntries = await repository.lockInEntries(entries, transaction)
+      const counted = await repository.countByTrashEntries(entries, transaction)
+      const restored = await repository.restoreInEntry(entry, undefined, transaction)
+      const moved = await repository.moveToSpace(documents, to, undefined, transaction)
+      const deleted = await repository.deleteMany(absent, transaction)
+      return {
+        locked: locked.map(row => row.id),
+        active,
+        others,
+        transferable,
+        trashed,
+        inEntries: inEntries.map(row => row.id),
+        counted: Object.fromEntries(counted),
+        restored,
+        moved: moved.map(row => row.id),
+        deleted,
+      }
+    })
+    expect(outcome).toEqual({
+      locked: [inside],
+      active: 1,
+      others: 1,
+      transferable: [inside],
+      trashed: 1,
+      inEntries: [inside],
+      counted: { [entry]: 1 },
+      restored: 1,
+      moved: [inside],
+      deleted: 0,
+    })
+    // 放进回收站与跨空间移动各加一次代次（恢复不加）
+    expect(await documentsOf([inside])).toMatchObject({ [inside]: { status: 'active', entry: null, space: to, epoch: 2 } })
+    // 收拾好：文档与它的文件夹要在同一个空间里，空了的删除单元删掉（删库之前会扫一遍不变量）
+    await database.query(async (client) => {
+      await client.query('UPDATE documents SET space_id = $2 WHERE id = $1', [inside, spaceId])
+      await client.query('DELETE FROM trash_entries WHERE id = $1', [entry])
+    })
   })
 })
 
@@ -676,13 +820,13 @@ describe('US-M2-09 跨空间移动与删除单元（spec §6b）', () => {
 
     expect(await restored(await restore(amySession, documentEntry))).toMatchObject({ spaceId: to, folderId: inside.id, movedToRoot: false })
     expect(await documentsOf([document])).toMatchObject({ [document]: { status: 'active', space: to, folder: inside.id } })
-    // origin_space_id 也跟着改了
-    expect(await count('SELECT count(*) FROM trash_entries WHERE space_id = $1 AND origin_space_id = $1', [to])).toBe(1)
+    // 文件夹的那一单也跟着搬到了新空间
+    expect(await count('SELECT count(*) FROM trash_entries WHERE space_id = $1', [to])).toBe(1)
   })
 })
 
 describe('US-M2-14 回收站的并发（spec §7）', () => {
-  it('删文件夹等锁期间有人往子树里移进新文档：锁下才展开子树，那份文档也一起进回收站', async () => {
+  it('删文件夹等锁期间有人往这个文件夹里移进新文档：锁下才锁住里面的文档，那份文档也一起进回收站（锁下才展开子树见 structure-locks.test.ts）', async () => {
     const spaceId = await teamSpace({ amy: 'admin' })
     const folder = await newFolder(amySession, { spaceId, name: '资料' })
     const document = await createDocument(database, { spaceId, createdBy: ben.id, title: '后来才进来的' })
@@ -756,7 +900,7 @@ describe('US-M2-14 回收站的并发（spec §7）', () => {
       // 艾米在新空间里也是空间管理员，所以挡住它的只能是锁下"这一单已经不在我锁着的空间里"这一条
       change: async (client) => {
         await client.query('UPDATE documents SET space_id = $2 WHERE id = $1', [document, to])
-        await client.query('UPDATE trash_entries SET space_id = $2, origin_space_id = $2 WHERE id = $1', [entryId, to])
+        await client.query('UPDATE trash_entries SET space_id = $2 WHERE id = $1', [entryId, to])
       },
     })
     expect(response.status).toBe(404)
@@ -776,5 +920,69 @@ describe('US-M2-14 回收站的并发（spec §7）', () => {
     expect(response.status).toBe(404)
     expect(await foldersOf([folder.id])).toMatchObject({ [folder.id]: { status: 'active', entry: null } })
     expect(await count('SELECT count(*) FROM trash_entries WHERE space_id = $1', [spaceId])).toBe(0)
+  })
+
+  /**
+   * 人工的永久删除与恢复在锁下再判断权限（M2-P6 复验 R-S2）：不加锁的判断之后、取到空间树的锁之前，操作者的角色或空间的状态变了。
+   * 锁下只核对"删除单元还在、还在原来的空间"而不再判断权限的话，这几条都会照样做成
+   */
+  it('永久删除：判断过之后、取空间树的锁之前空间管理员被降为编辑者，锁下再判断，403，删除单元还在', async () => {
+    const spaceId = await teamSpace({ amy: 'admin' })
+    const document = await createDocument(database, { spaceId, createdBy: amy.id, title: '周报' })
+    const entryId = await trashedEntry(amySession, spaceId, async () => deleteDocument(amySession, document))
+    const response = await raceAgainstHeldLock(database, {
+      hold: holdSpaceTree(spaceId),
+      request: async () => purge(amySession, entryId),
+      change: async client => client.query('UPDATE space_members SET role = \'editor\' WHERE space_id = $1 AND user_id = $2', [spaceId, amy.id]),
+    })
+    expect(response.status).toBe(403)
+    expect((await errorOf(response)).code).toBe('PERMISSION_DENIED')
+    expect(await count('SELECT count(*) FROM trash_entries WHERE id = $1', [entryId])).toBe(1)
+    expect(await documentsOf([document])).toMatchObject({ [document]: { status: 'trashed', entry: entryId } })
+  })
+
+  it('永久删除：判断过之后、取空间树的锁之前空间被归档，锁下再判断，403，删除单元还在', async () => {
+    const spaceId = await teamSpace({ amy: 'admin' })
+    const document = await createDocument(database, { spaceId, createdBy: amy.id, title: '周报' })
+    const entryId = await trashedEntry(amySession, spaceId, async () => deleteDocument(amySession, document))
+    const response = await raceAgainstHeldLock(database, {
+      hold: holdSpaceTree(spaceId),
+      request: async () => purge(amySession, entryId),
+      change: async client => client.query('UPDATE spaces SET status = \'archived\' WHERE id = $1', [spaceId]),
+    })
+    expect(response.status).toBe(403)
+    expect(await errorOf(response)).toEqual({ code: 'PERMISSION_DENIED', message: '空间已归档，只能查看' })
+    expect(await count('SELECT count(*) FROM trash_entries WHERE id = $1', [entryId])).toBe(1)
+    expect(await documentsOf([document])).toMatchObject({ [document]: { status: 'trashed', entry: entryId } })
+  })
+
+  it('恢复：判断过之后、取空间树的锁之前删除者（空间管理员）被移出空间，锁下再判断，404，删除单元还在', async () => {
+    const spaceId = await teamSpace({ amy: 'admin' })
+    const document = await createDocument(database, { spaceId, createdBy: amy.id, title: '周报' })
+    const entryId = await trashedEntry(amySession, spaceId, async () => deleteDocument(amySession, document))
+    const response = await raceAgainstHeldLock(database, {
+      hold: holdSpaceTree(spaceId),
+      request: async () => restore(amySession, entryId),
+      change: async client => client.query('DELETE FROM space_members WHERE space_id = $1 AND user_id = $2', [spaceId, amy.id]),
+    })
+    expect(response.status).toBe(404)
+    expect((await errorOf(response)).code).toBe('NOT_FOUND')
+    expect(await count('SELECT count(*) FROM trash_entries WHERE id = $1', [entryId])).toBe(1)
+    expect(await documentsOf([document])).toMatchObject({ [document]: { status: 'trashed', entry: entryId } })
+  })
+
+  it('恢复：判断过之后、取空间树的锁之前空间被归档，锁下再判断，403，删除单元还在', async () => {
+    const spaceId = await teamSpace({ amy: 'admin' })
+    const document = await createDocument(database, { spaceId, createdBy: ben.id, title: '本的' })
+    const entryId = await trashedEntry(benSession, spaceId, async () => deleteDocument(benSession, document))
+    const response = await raceAgainstHeldLock(database, {
+      hold: holdSpaceTree(spaceId),
+      request: async () => restore(benSession, entryId),
+      change: async client => client.query('UPDATE spaces SET status = \'archived\' WHERE id = $1', [spaceId]),
+    })
+    expect(response.status).toBe(403)
+    expect(await errorOf(response)).toEqual({ code: 'PERMISSION_DENIED', message: '空间已归档，只能查看' })
+    expect(await count('SELECT count(*) FROM trash_entries WHERE id = $1', [entryId])).toBe(1)
+    expect(await documentsOf([document])).toMatchObject({ [document]: { status: 'trashed', entry: entryId } })
   })
 })

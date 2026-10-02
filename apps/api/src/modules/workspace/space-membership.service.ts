@@ -1,6 +1,7 @@
 import type { AddSpaceMemberRequest, SpaceMember, SpaceMemberListResponse, SpaceRole } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Principal } from '../auth/index.ts'
+import type { Transaction } from '../database/index.ts'
 import type { Actor } from '../documents/index.ts'
 import type { SpaceMemberRecord } from '../spaces/index.ts'
 import type { User } from '../users/index.ts'
@@ -59,11 +60,12 @@ export class SpaceMembershipService {
       const member = await this.spaces.addMember(space, account.id, request.role, transaction)
       const joined = account.id === actor.userId
       await this.audit.record({
-        action: joined ? 'spaces.admin_joined' : 'spaces.member_added',
+        ...(joined
+          ? { action: 'spaces.admin_joined', details: { role: member.role } } as const
+          : { action: 'spaces.member_added', details: { userId: member.userId, role: member.role } } as const),
         actor: { type: 'user', id: actor.userId },
         target: { type: 'space', id: space.id },
         origin,
-        details: joined ? { role: member.role } : { userId: member.userId, role: member.role },
       }, { transaction })
       return toSpaceMember(member, account)
     })
@@ -74,7 +76,7 @@ export class SpaceMembershipService {
    * 可以调整自己的角色（不是最后一个空间管理员时），之后立即失去相应的权限
    */
   async changeRole(principal: Principal, spaceId: string, userId: string, role: SpaceRole, origin: AuditOrigin): Promise<SpaceMember> {
-    const member = await this.transactions.run(async (transaction) => {
+    return this.transactions.run(async (transaction) => {
       const actor = await this.managed.actorOf(principal, transaction)
       await this.managed.check(actor, spaceId, 'manageMembers', transaction)
       const { space } = await this.managed.lock(actor, spaceId, 'manageMembers', transaction)
@@ -89,9 +91,8 @@ export class SpaceMembershipService {
           details: { userId: change.member.userId, from: change.previousRole, to: change.member.role },
         }, { transaction })
       }
-      return change.member
+      return this.withAccount(change.member, transaction)
     })
-    return this.withAccount(member)
   }
 
   /** 移出：空间角色带来的权限立即失效（经收回写入权的入口），至少保留一个空间管理员；记审计 */
@@ -112,9 +113,12 @@ export class SpaceMembershipService {
     })
   }
 
-  /** 事务之后补上名字：不在事务里另从连接池取连接 */
-  private async withAccount(member: SpaceMemberRecord): Promise<SpaceMember> {
-    return toSpaceMember(member, this.accountOf(await this.users.findByIds([member.userId]), member.userId))
+  /**
+   * 在调用方的事务里补上名字：用事务自己的连接，不另从连接池取（连接池耗尽时互相等待），也不留到提交之后——
+   * 提交之后才读的话，这一步遇到数据库繁忙时角色已经改了，客户端却只能得到"结果未知"（M2-P6 第 3 片复验）
+   */
+  private async withAccount(member: SpaceMemberRecord, transaction: Transaction): Promise<SpaceMember> {
+    return toSpaceMember(member, this.accountOf(await this.users.findByIds([member.userId], transaction), member.userId))
   }
 
   private accountOf(accounts: ReadonlyMap<string, User>, userId: string): User {

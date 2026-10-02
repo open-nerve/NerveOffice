@@ -9,6 +9,7 @@ import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
+import { requestIdOf } from '../support/request-id.ts'
 import { asUser, login, SESSION_COOKIE, sessionSetCookie } from '../support/session-client.ts'
 
 let database: TestDatabase
@@ -33,14 +34,14 @@ async function codeOf(response: Response): Promise<string> {
 describe('US-M1-02 退出', () => {
   it('成功：204，清除 Cookie，会话撤销（logout），记审计；之后这个会话不能再用', async () => {
     const user = await login(app.baseUrl, 'alice', alice.password)
-    const response = await asUser(app.baseUrl, user, '/api/auth/logout', { method: 'POST', headers: { 'x-request-id': 'logout-1' } })
+    const response = await asUser(app.baseUrl, user, '/api/auth/logout', { method: 'POST' })
     expect(response.status).toBe(204)
     expect(sessionSetCookie(response)).toMatch(/Expires=Thu, 01 Jan 1970/)
 
     const digest = createHash('sha256').update(user.cookie.slice(`${SESSION_COOKIE}=`.length)).digest()
     const [session] = await database.query(async client => (await client.query<{ revoked_reason: string, revoked: boolean }>('SELECT revoked_reason, revoked_at IS NOT NULL AS revoked FROM auth_sessions WHERE token_hash = $1', [digest])).rows)
     expect(session).toEqual({ revoked_reason: 'logout', revoked: true })
-    const [audit] = await database.query(async client => (await client.query<{ action: string, actor_type: string, actor_id: string }>('SELECT action, actor_type, actor_id FROM audit_events WHERE request_id = \'logout-1\'')).rows)
+    const [audit] = await database.query(async client => (await client.query<{ action: string, actor_type: string, actor_id: string }>('SELECT action, actor_type, actor_id FROM audit_events WHERE request_id = $1', [requestIdOf(response)])).rows)
     expect(audit).toEqual({ action: 'auth.logout', actor_type: 'user', actor_id: alice.id })
 
     const after = await asUser(app.baseUrl, user, '/api/auth/session')

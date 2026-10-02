@@ -99,6 +99,48 @@
       "when": 1790709457716,
       "tag": "0013_m2_audit_job_source",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1790757598519,
+      "tag": "0014_m2_p6_accounts_hardening",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1790761914969,
+      "tag": "0015_m2_p6_login_throttle_accounts",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1790786962154,
+      "tag": "0016_m2_p6_space_name_key",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1790794634597,
+      "tag": "0017_m2_p6_space_name_key_blanks",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1790812727994,
+      "tag": "0018_m2_p6_trash_entries_origin_space",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1790812751856,
+      "tag": "0019_m2_p6_write_epoch_monotonic",
+      "breakpoints": true
     }
   ]
 }

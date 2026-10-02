@@ -73,8 +73,8 @@ async function errorOf(response: Response): Promise<{ code: string, message: str
 async function putInTrash(documentId: string, spaceId: string): Promise<void> {
   await database.query(async client => client.query(
     `WITH entry AS (
-       INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_space_id, title)
-       VALUES ($2, 'document', $3, now() + interval '30 days', $2, '回收站里的') RETURNING id
+       INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, title)
+       VALUES ($2, 'document', $3, now() + interval '30 days', '回收站里的') RETURNING id
      )
      UPDATE documents SET status = 'trashed', trash_entry_id = (SELECT id FROM entry) WHERE id = $1`,
     [documentId, spaceId, root.id],

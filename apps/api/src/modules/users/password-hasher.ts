@@ -1,7 +1,4 @@
 import type { SemaphoreLimits } from '../../shared/semaphore.ts'
-import { randomBytes } from 'node:crypto'
-import { performance } from 'node:perf_hooks'
-import { setTimeout as delay } from 'node:timers/promises'
 import { hash, parseOptions, verify } from '@node-rs/argon2'
 import { Semaphore, SemaphoreBusyError } from '../../shared/semaphore.ts'
 
@@ -18,14 +15,16 @@ export class PasswordHashingBusyError extends Error {
 export abstract class PasswordHasher {
   abstract hash(password: string): Promise<string>
   /**
-   * 验证密码。验证失败时，耗时补到"失败的时限"（当前参数与见过的各组参数里最慢的那组）：调整参数之后，
-   * 没再登录过的账户还是旧参数的哈希，失败的耗时也要与"用户名不存在"相同，不暴露账户是否存在（Codex 评审 CX4）
+   * 验证密码。验证失败时的计算与 reject 相同：当前参数与见过的各组参数按同一个顺序各算一次，账户自己那组就是这次比对。
+   * 调整参数之后，没再登录过的账户还是旧参数的哈希，失败的耗时也与"用户名不存在"相同，不暴露账户是否存在（Codex 评审 CX4）
    */
   abstract verify(passwordHash: string, password: string): Promise<boolean>
+  /** 没有可以比对的哈希（用户名不存在、账户已停用）：与验证失败做同样的计算，结果总是不通过 */
+  abstract reject(password: string): Promise<false>
   /** 哈希用的参数与当前配置不同（例如调高了内存）：下次登录成功时应该重新哈希 */
   abstract needsRehash(passwordHash: string): boolean
-  /** 库里现存哈希的参数（PHC 字符串的参数段，例如 m=19456,t=2,p=1）：没见过的各算几次，失败的时限至少补到其中最慢的；认不出的忽略 */
-  abstract observe(parameterSegments: readonly string[]): Promise<void>
+  /** 库里现存哈希的参数（PHC 字符串的参数段，例如 m=19456,t=2,p=1）：记下没见过的各组，之后的失败与 reject 都把它们各算一次；认不出的忽略 */
+  abstract observe(parameterSegments: readonly string[]): void
 }
 
 export interface Argon2Parameters {
@@ -37,30 +36,17 @@ export interface Argon2Parameters {
 /** @node-rs/argon2 的 Algorithm.Argon2id。它是 ambient const enum，isolatedModules 下不能直接引用；库的默认算法就是它 */
 const ARGON2ID = 2
 
-/** 计算用到的 @node-rs/argon2 的函数与时钟：单元测试注入假的，核对补齐的时长 */
+/** 计算用到的 @node-rs/argon2 的函数：单元测试注入假的，核对每条路径按什么顺序算了哪几组参数 */
 export interface Argon2Runtime {
   readonly hash: typeof hash
   readonly verify: typeof verify
-  /** 单调的毫秒时钟 */
-  readonly now: () => number
-  readonly sleep: (ms: number) => Promise<void>
 }
 
-const DEFAULT_RUNTIME: Argon2Runtime = { hash, verify, now: () => performance.now(), sleep: async ms => delay(ms) }
-
-/** 每组参数记下最近几次计算的耗时，按中位数估计：一次偶然的慢（垃圾回收、别的负载）不会抬高时限 */
-const DURATION_SAMPLES = 7
-/** 库里现存、还没见过的参数组，各算几次作为校准 */
-const CALIBRATION_RUNS = 3
-/**
- * 失败的时限是最慢那组参数的耗时中位数的这么多倍：留出余量，绝大多数失败的耗时由补齐决定，
- * 而不是各自计算的快慢，耗时的分布与账户的哈希参数无关
- */
-const FAILURE_TIME_MARGIN = 1.2
+const DEFAULT_RUNTIME: Argon2Runtime = { hash, verify }
 
 /** 一组参数的键 */
-function parametersKey(memoryKib: number, iterations: number, parallelism: number): string {
-  return `m=${memoryKib},t=${iterations},p=${parallelism}`
+function parametersKey(parameters: Argon2Parameters): string {
+  return `m=${parameters.memoryKib},t=${parameters.iterations},p=${parameters.parallelism}`
 }
 
 /** PHC 参数段（m=19456,t=2,p=1）→ 参数；认不出时是 undefined */
@@ -74,11 +60,6 @@ function segmentParameters(segment: string): Argon2Parameters | undefined {
   return valid(memoryKib) && valid(iterations) && valid(parallelism) ? { memoryKib, iterations, parallelism } : undefined
 }
 
-function median(values: readonly number[]): number {
-  const sorted = [...values].sort((a, b) => a - b)
-  return sorted[Math.floor(sorted.length / 2)] ?? 0
-}
-
 /**
  * Argon2id（00 号计划书 §11.1），@node-rs/argon2 在 libuv 的线程池里计算，不阻塞事件循环。
  * 同时进行的计算有上限（配置，默认 2，是线程池默认 4 个线程的一半）：线程池也负责读文件（托管前端产物）
@@ -90,11 +71,12 @@ export class Argon2PasswordHasher extends PasswordHasher {
   readonly #retryAfterSeconds: number
   readonly #runtime: Argon2Runtime
   /**
-   * 各组参数最近几次计算的耗时（毫秒）：验证、哈希与校准都记（Codex 评审 CX4）。
-   * 按实测的耗时补齐，不按"内存 × 迭代次数"换算：内存大小不同时每块内存的耗时也不同（缓存、内存带宽、分配），
-   * 换算的残差足以分辨账户是否存在（独立复验 N2：内存 256 MiB 调到 19 MiB 时耗时之比 1.54）
+   * 当前参数之外见过的各组参数（键 → 参数）：库里现存的（observe）与验证时遇到的。失败的验证与 reject 按 #groups 的顺序把每组各算一次，
+   * 两条路径做的计算相同，耗时的分布就相同，与机器快慢、负载的起落都无关（ADR-007）。
+   * 原来按各组实测耗时的中位数补齐（等到最慢那组的 1.2 倍）：等待不随负载变慢、计算会，负载爬升时中位数跟不上，两条路径的耗时就分开了
+   * ——M2-P6 第 6 片合并之后 CI 上耗时之比 0.67，本机构造负载爬升复现到 0.64 与 2.5
    */
-  readonly #durations = new Map<string, number[]>()
+  readonly #seen = new Map<string, Argon2Parameters>()
 
   constructor(private readonly parameters: Argon2Parameters, concurrency: number, queue: SemaphoreLimits = {}, runtime: Partial<Argon2Runtime> = {}) {
     super()
@@ -104,61 +86,69 @@ export class Argon2PasswordHasher extends PasswordHasher {
   }
 
   async hash(password: string): Promise<string> {
-    const { memoryKib, iterations, parallelism } = this.parameters
-    return this.#limited(async () => this.#timed(parametersKey(memoryKib, iterations, parallelism), async () => this.#runtime.hash(password, {
-      memoryCost: memoryKib,
-      timeCost: iterations,
-      parallelism,
-    })))
+    return this.#limited(async () => this.#hashWith(this.parameters, password))
   }
 
   /**
    * 存的哈希格式不对说明数据损坏，直接抛出，不当作"密码错误"。
-   * 失败时在同一个名额里等到失败的时限：补的那部分不再排一次队，排队的时间与名额的占用都不因账户的哈希参数而不同
+   * 按 #groups 的顺序走：账户自己那组做真正的比对，通过就返回；其余各组用这次的密码与随机的盐各算一次、结果丢弃。
+   * 失败时每组恰好算了一次，与 reject 相同。都在同一个名额里：排队的时间与名额的占用也与账户的哈希参数无关
    */
   async verify(passwordHash: string, password: string): Promise<boolean> {
     return this.#limited(async () => {
       const options = parseOptions(passwordHash)
-      const key = parametersKey(options.memoryCost, options.timeCost, options.parallelism)
-      const started = this.#runtime.now()
-      const matches = await this.#timed(key, async () => this.#runtime.verify(passwordHash, password))
-      if (!matches) {
-        const remaining = this.#failureTimeMs() - (this.#runtime.now() - started)
-        if (remaining > 0)
-          await this.#runtime.sleep(remaining)
+      const own: Argon2Parameters = { memoryKib: options.memoryCost, iterations: options.timeCost, parallelism: options.parallelism }
+      this.#remember(own)
+      for (const group of this.#groups()) {
+        if (parametersKey(group) !== parametersKey(own))
+          await this.#hashWith(group, password)
+        else if (await this.#runtime.verify(passwordHash, password))
+          return true
       }
-      return matches
+      return false
     })
   }
 
-  /** 参数调低之后，旧参数的哈希更慢：没见过的参数组各算几次，之后的失败（包括用户名不存在）都补到它 */
-  async observe(parameterSegments: readonly string[]): Promise<void> {
-    for (const parameters of new Map(parameterSegments.map(segmentParameters).filter(item => item !== undefined).map(item => [parametersKey(item.memoryKib, item.iterations, item.parallelism), item])).values()) {
-      const key = parametersKey(parameters.memoryKib, parameters.iterations, parameters.parallelism)
-      if (this.#durations.has(key))
-        continue
-      for (let run = 0; run < CALIBRATION_RUNS; run++) {
-        await this.#limited(async () => this.#timed(key, async () => this.#runtime.hash(randomBytes(32), {
-          memoryCost: parameters.memoryKib,
-          timeCost: parameters.iterations,
-          parallelism: parameters.parallelism,
-        })))
-      }
+  async reject(password: string): Promise<false> {
+    return this.#limited(async () => {
+      for (const group of this.#groups())
+        await this.#hashWith(group, password)
+      return false as const
+    })
+  }
+
+  observe(parameterSegments: readonly string[]): void {
+    for (const parameters of parameterSegments.map(segmentParameters)) {
+      if (parameters !== undefined)
+        this.#remember(parameters)
     }
   }
 
-  /** 执行一次计算，记下它的耗时 */
-  async #timed<T>(key: string, compute: () => Promise<T>): Promise<T> {
-    const started = this.#runtime.now()
-    const result = await compute()
-    const samples = [...(this.#durations.get(key) ?? []), this.#runtime.now() - started].slice(-DURATION_SAMPLES)
-    this.#durations.set(key, samples)
-    return result
+  needsRehash(passwordHash: string): boolean {
+    const options = parseOptions(passwordHash)
+    return options.algorithm !== ARGON2ID
+      || options.memoryCost !== this.parameters.memoryKib
+      || options.timeCost !== this.parameters.iterations
+      || options.parallelism !== this.parameters.parallelism
   }
 
-  /** 失败的时限：各组参数耗时中位数里最慢的，乘以余量 */
-  #failureTimeMs(): number {
-    return Math.max(0, ...[...this.#durations.values()].map(median)) * FAILURE_TIME_MARGIN
+  #remember(parameters: Argon2Parameters): void {
+    const key = parametersKey(parameters)
+    if (key !== parametersKey(this.parameters))
+      this.#seen.set(key, parameters)
+  }
+
+  /**
+   * 失败的验证与 reject 都按这个顺序把每组算一次：当前参数在前（绝大多数账户的哈希用它，验证通过时不多算），其余按键排序。
+   * 顺序相同，负载在计算之间起落时两条路径受的影响也相同
+   */
+  #groups(): Argon2Parameters[] {
+    return [this.parameters, ...[...this.#seen.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, parameters]) => parameters)]
+  }
+
+  /** 用这组参数算一次哈希（盐由库随机生成） */
+  async #hashWith(parameters: Argon2Parameters, password: string): Promise<string> {
+    return this.#runtime.hash(password, { memoryCost: parameters.memoryKib, timeCost: parameters.iterations, parallelism: parameters.parallelism })
   }
 
   async #limited<T>(task: () => Promise<T>): Promise<T> {
@@ -170,13 +160,5 @@ export class Argon2PasswordHasher extends PasswordHasher {
         throw new PasswordHashingBusyError(this.#retryAfterSeconds, { cause: error })
       throw error
     }
-  }
-
-  needsRehash(passwordHash: string): boolean {
-    const options = parseOptions(passwordHash)
-    return options.algorithm !== ARGON2ID
-      || options.memoryCost !== this.parameters.memoryKib
-      || options.timeCost !== this.parameters.iterations
-      || options.parallelism !== this.parameters.parallelism
   }
 }

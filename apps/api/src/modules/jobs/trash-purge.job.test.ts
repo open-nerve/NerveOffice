@@ -14,7 +14,6 @@ function entry(index: number, overrides: Partial<ExpiredTrashEntry> = {}): Expir
     id: `0199a2c4-0000-7000-8000-00000000000${index}`,
     spaceId: '0199a2c4-0000-7000-8000-0000000000a1',
     kind: 'document',
-    title: `周报 ${index}`,
     expiresAt: new Date('2026-09-28T03:00:00.000Z'),
     ...overrides,
   }
@@ -23,23 +22,27 @@ function entry(index: number, overrides: Partial<ExpiredTrashEntry> = {}): Expir
 interface SetupOptions {
   /** 锁在别处（另一个实例正在清理） */
   held?: boolean
+  /** 到期的条目，最早到期的在前；用例可以之后再改它（模拟有人恢复或永久删除了其中一个） */
   expired?: ExpiredTrashEntry[]
   batchSize?: number
+  /** 两轮之间的间隔：暂缓的上限按它折算成轮数 */
+  intervalMs?: number
 }
 
 function setup(options: SetupOptions = {}) {
-  const { held = false, expired = [], batchSize = 50 } = options
+  const { held = false, expired = [], batchSize = 50, intervalMs = 3_600_000 } = options
   const exclusive = {
     run: vi.fn(async <T>(_name: string, work: () => Promise<T>) => held ? { ran: false } : { ran: true, result: await work() }),
   }
   const trash = {
-    listExpired: vi.fn(async (_now: Date, limit: number) => expired.slice(0, limit)),
+    // 与真实的仓储一样：让开 except 里的，再取最早到期的 limit 个
+    listExpired: vi.fn(async (_now: Date, limit: number, except: readonly string[] = []) => expired.filter(row => !except.includes(row.id)).slice(0, limit)),
     purgeExpired: vi.fn(async (target: ExpiredTrashEntry) => ({
       purged: true as const,
-      outcome: { objectId: target.id, kind: target.kind, title: target.title, spaceId: target.spaceId, folders: 0, documents: 1, cascadedEntryIds: [] },
+      outcome: { objectId: target.id, kind: target.kind, spaceId: target.spaceId, folders: 0, documents: 1, cascadedEntryIds: [] },
     })),
   }
-  const config = { jobs: { trashPurge: { enabled: true, intervalMs: 3_600_000, batchSize } } } as AppConfig
+  const config = { jobs: { trashPurge: { enabled: true, intervalMs, batchSize } } } as AppConfig
   const error = vi.spyOn(AppLogger.prototype, 'error')
   const logger = new AppLogger(createRootLogger({ level: 'silent' }), new RequestContextStore())
   return {
@@ -61,7 +64,8 @@ describe('TrashPurgeJob.runOnce', () => {
 
     await expect(job.runOnce(NOW)).resolves.toEqual({ ran: true, purged: 2, skipped: 0, failed: 0 })
     expect(exclusive.run).toHaveBeenCalledExactlyOnceWith(TRASH_PURGE_LOCK, expect.any(Function))
-    expect(trash.listExpired).toHaveBeenCalledExactlyOnceWith(NOW, 20)
+    // 没有失败过的条目，不必让开谁
+    expect(trash.listExpired).toHaveBeenCalledExactlyOnceWith(NOW, 20, [])
     // 逐个调用（各自一个短事务），顺序与取出来的一致
     expect(trash.purgeExpired.mock.calls.map(([target]) => target.id)).toEqual([expired[0]?.id, expired[1]?.id])
   })
@@ -83,7 +87,7 @@ describe('TrashPurgeJob.runOnce', () => {
     const expired = [entry(1), entry(2), entry(3)]
     const { job, trash, error } = setup({ expired })
     const failure = new Error('永久删除时数据库报错')
-    trash.purgeExpired.mockImplementationOnce(async target => ({ purged: true as const, outcome: { objectId: target.id, kind: target.kind, title: target.title, spaceId: target.spaceId, folders: 0, documents: 1, cascadedEntryIds: [] } }))
+    trash.purgeExpired.mockImplementationOnce(async target => ({ purged: true as const, outcome: { objectId: target.id, kind: target.kind, spaceId: target.spaceId, folders: 0, documents: 1, cascadedEntryIds: [] } }))
     trash.purgeExpired.mockImplementationOnce(async () => {
       throw failure
     })
@@ -97,5 +101,116 @@ describe('TrashPurgeJob.runOnce', () => {
     const { job, trash } = setup({ expired: [entry(1), entry(2)] })
     trash.purgeExpired.mockImplementation(async () => ({ purged: false, reason: 'gone' }) as never)
     await expect(job.runOnce(NOW)).resolves.toEqual({ ran: true, purged: 0, skipped: 2, failed: 0 })
+  })
+})
+
+/** 让这些条目每次永久删除都失败（例如数据不一致），别的照常清掉 */
+function alwaysFailing(trash: ReturnType<typeof setup>['trash'], ids: readonly string[]): void {
+  trash.purgeExpired.mockImplementation(async (target: ExpiredTrashEntry) => {
+    if (ids.includes(target.id))
+      throw new Error('永久删除时数据库报错')
+    return { purged: true as const, outcome: { objectId: target.id, kind: target.kind, spaceId: target.spaceId, folders: 0, documents: 1, cascadedEntryIds: [] } }
+  })
+}
+
+/** 连续跑 rounds 轮，记下每一轮试过哪些条目 */
+async function attemptsOver(job: TrashPurgeJob, trash: ReturnType<typeof setup>['trash'], rounds: number): Promise<string[][]> {
+  const attempts: string[][] = []
+  for (let round = 0; round < rounds; round += 1) {
+    const before = trash.purgeExpired.mock.calls.length
+    await job.runOnce(NOW)
+    attempts.push(trash.purgeExpired.mock.calls.slice(before).map(([target]) => target.id))
+  }
+  return attempts
+}
+
+/** 失败日志里的字段（按失败的先后） */
+function failureFields(error: ReturnType<typeof setup>['error']): Record<string, unknown>[] {
+  return error.mock.calls.map(([, fields]) => fields as Record<string, unknown>)
+}
+
+describe('一直失败的条目暂缓重试，不挡住后面到期的（M2-P6 复核 A 的 S-1、B 的 G2）', () => {
+  it('最早到期的两单一直失败（批量 2）：下一轮取批时让开它们，后面到期的照常清掉', async () => {
+    const [first, second, later] = [entry(1), entry(2), entry(3)]
+    const { job, trash } = setup({ expired: [first, second, later], batchSize: 2 })
+    alwaysFailing(trash, [first.id, second.id])
+
+    await expect(job.runOnce(NOW)).resolves.toEqual({ ran: true, purged: 0, skipped: 0, failed: 2 })
+    await expect(job.runOnce(NOW)).resolves.toEqual({ ran: true, purged: 1, skipped: 0, failed: 0 })
+    expect(trash.listExpired.mock.calls.map(([, limit, except]) => [limit, except])).toEqual([[2, []], [2, [first.id, second.id]]])
+    expect(trash.purgeExpired.mock.calls.map(([target]) => target.id)).toEqual([first.id, second.id, later.id])
+  })
+
+  it('连续失败 n 次就让开之后的 2^(n-1) 轮；失败日志带着连续失败的次数（将来据此告警）', async () => {
+    const failing = entry(1)
+    const { job, trash, error } = setup({ expired: [failing] })
+    alwaysFailing(trash, [failing.id])
+
+    // 第 1 轮失败，让开 1 轮；第 3 轮再失败，让开 2 轮；第 6 轮，让开 4 轮；第 11 轮……
+    const attempts = await attemptsOver(job, trash, 11)
+    expect(attempts.flatMap((ids, round) => ids.length > 0 ? [round + 1] : [])).toEqual([1, 3, 6, 11])
+    expect(failureFields(error).map(fields => [fields.trashEntryId, fields.consecutiveFailures, fields.deferredRounds])).toEqual([
+      [failing.id, 1, 1],
+      [failing.id, 2, 2],
+      [failing.id, 3, 4],
+      [failing.id, 4, 8],
+    ])
+  })
+
+  it('最多让开约一天：按两轮之间的间隔折算成轮数，至少一轮', async () => {
+    const failing = entry(1)
+    // 间隔 6 小时：一天是 4 轮
+    const sixHours = setup({ expired: [failing], intervalMs: 6 * 3_600_000 })
+    alwaysFailing(sixHours.trash, [failing.id])
+    // 第 1、3、6、11 轮试过：之后让开的轮数是 1、2、4、4（不再翻倍）
+    const attempts = await attemptsOver(sixHours.job, sixHours.trash, 15)
+    expect(attempts.flatMap((ids, round) => ids.length > 0 ? [round + 1] : [])).toEqual([1, 3, 6, 11])
+    expect(failureFields(sixHours.error).map(fields => fields.deferredRounds)).toEqual([1, 2, 4, 4])
+    vi.restoreAllMocks()
+
+    // 间隔就是一天：每次失败都只让开一轮
+    const daily = setup({ expired: [failing], intervalMs: 86_400_000 })
+    alwaysFailing(daily.trash, [failing.id])
+    const dailyAttempts = await attemptsOver(daily.job, daily.trash, 6)
+    expect(dailyAttempts.map(ids => ids.length)).toEqual([1, 0, 1, 0, 1, 0])
+    expect(failureFields(daily.error).map(fields => [fields.consecutiveFailures, fields.deferredRounds])).toEqual([[1, 1], [2, 1], [3, 1]])
+  })
+
+  it('清掉了或者跳过了就忘掉：之后再失败从 1 算起', async () => {
+    const flaky = entry(1)
+    const { job, trash, error } = setup({ expired: [flaky] })
+    alwaysFailing(trash, [flaky.id])
+    await job.runOnce(NOW)
+    await job.runOnce(NOW)
+    // 第 3 轮：锁下看到它刚被移到别的空间，跳过（不是失败）
+    trash.purgeExpired.mockImplementationOnce(async () => ({ purged: false, reason: 'moved' }) as never)
+    await expect(job.runOnce(NOW)).resolves.toEqual({ ran: true, purged: 0, skipped: 1, failed: 0 })
+    // 第 4 轮又失败：连续失败的次数从 1 算起，只让开 1 轮
+    await expect(job.runOnce(NOW)).resolves.toMatchObject({ failed: 1 })
+    expect(failureFields(error).map(fields => fields.consecutiveFailures)).toEqual([1, 1])
+    expect(trash.listExpired.mock.calls.at(-1)?.[2]).toEqual([])
+  })
+
+  it('不在回收站里了（被人恢复或永久删除）就忘掉，记着的条目不会越攒越多；一批取满时判断不了，先留着', async () => {
+    const [gone, other] = [entry(1), entry(2)]
+    const expired = [gone, other]
+    const { job, trash, error } = setup({ expired, batchSize: 1 })
+    alwaysFailing(trash, [gone.id, other.id])
+    await job.runOnce(NOW)
+    // 第 2 轮：gone 在让开之列，取到的是 other（取满了一批），也失败
+    await job.runOnce(NOW)
+    expect(failureFields(error).map(fields => [fields.trashEntryId, fields.consecutiveFailures])).toEqual([[gone.id, 1], [other.id, 1]])
+    // gone 被人永久删除了；第 3 轮 other 在让开之列、gone 不在了：这一批没有取满，gone 就被忘掉
+    expired.splice(0, 1)
+    await expect(job.runOnce(NOW)).resolves.toEqual({ ran: true, purged: 0, skipped: 0, failed: 0 })
+    // 回头看：同一个 id 再出现（只为观察记忆里还有没有它），第 4 轮取到它、又失败，连续失败从 1 算起——说明它确实被忘掉了
+    expired.unshift(gone)
+    await job.runOnce(NOW)
+    expect(failureFields(error).at(-1)).toMatchObject({ trashEntryId: gone.id, consecutiveFailures: 1 })
+
+    // 对照：一批取满时不忘。第 4 轮 other 已经不在让开之列，却因为这一批被 gone 取满而没有出现在批里，它仍然记着：
+    // 第 5 轮取到它、又失败，连续失败是 2
+    await job.runOnce(NOW)
+    expect(failureFields(error).filter(fields => fields.trashEntryId === other.id).map(fields => fields.consecutiveFailures)).toEqual([1, 2])
   })
 })

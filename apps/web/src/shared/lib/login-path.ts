@@ -1,5 +1,15 @@
-/** 登录页的地址：from 是登录后回到的地址，reason 说明为什么要登录（过期时提示）。 */
-export type LoginReason = 'required' | 'expired'
+/**
+ * 登录页的地址：from 是登录后回到的地址，reason 说明为什么要登录：
+ * - required：还没有登录，不提示；
+ * - expired：登录已过期；
+ * - password_changed：修改密码的结果未知、随后登录失效了，新密码可能已经生效（M2-P6 复核 G-1）；
+ * - password_reset：为自己生成重置链接的结果未知、随后登录失效了，密码可能已经失效（M2-P6 复核 S1）；
+ * - account_disabled：停用自己的结果未知、随后登录失效了，账户可能已经被停用（M2-P6 复核第五批 G1）。
+ */
+export type LoginReason = 'required' | 'expired' | 'password_changed' | 'password_reset' | 'account_disabled'
+
+/** 会话结束、回到登录页时带的原因：除了还没有登录（required）之外的那几种 */
+export type ExpiredReason = Exclude<LoginReason, 'required'>
 
 export const LOGIN_PATH = '/login'
 
@@ -8,8 +18,8 @@ export function loginPath(from: string | undefined, reason: LoginReason = 'requi
   const target = from === undefined ? undefined : safeRedirectPath(from)
   if (target !== undefined && target !== '/')
     params.set('from', target)
-  if (reason === 'expired')
-    params.set('reason', 'expired')
+  if (reason !== 'required')
+    params.set('reason', reason)
   const query = params.toString()
   return query === '' ? LOGIN_PATH : `${LOGIN_PATH}?${query}`
 }

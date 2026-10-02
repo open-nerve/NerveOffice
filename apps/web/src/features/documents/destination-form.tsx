@@ -28,7 +28,8 @@ interface DestinationFormProps {
    */
   readonly excludeFolderId?: string
   readonly pending: boolean
-  readonly error: Error | null
+  /** 上一次提交的失败说明（由操作面板按错误与操作给出） */
+  readonly error: string | undefined
   /** label 是目标位置的可读名称，例如"市场部 / 方案"：做完之后在说明里回述 */
   readonly onSubmit: (destination: Destination, label: string) => void
   readonly onCancel: () => void
@@ -100,7 +101,11 @@ export function DestinationForm({ panelId, action, spaces, current, excludeFolde
       </p>
       <div className="flex flex-wrap items-center gap-2">
         {crumbs.length > 0 && <Button type="button" variant="outline" size="sm" onClick={goUp}>{text.upOneLevel}</Button>}
-        {children.isPending && <Skeleton className="h-6 w-32" role="status" aria-label={text.targetLoading} />}
+        {children.isPending && (
+          <div role="status" aria-label={text.targetLoading}>
+            <Skeleton className="h-6 w-32" />
+          </div>
+        )}
         {!children.isPending && children.data === undefined && (
           <span role="alert" className="text-sm text-destructive">{text.targetLoadFailed(describeError(children.error).message)}</span>
         )}
@@ -128,9 +133,9 @@ export function DestinationForm({ panelId, action, spaces, current, excludeFolde
         <Button type="button" variant="ghost" size="sm" aria-disabled={pending} onClick={() => !pending && onCancel()}>{text.cancel}</Button>
         {unchanged && <span className="text-sm text-muted-foreground">{text.sameLocation}</span>}
       </div>
-      {error !== null && (
+      {error !== undefined && (
         <Alert variant="destructive">
-          <AlertDescription>{describeError(error).message}</AlertDescription>
+          <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
     </form>

@@ -138,6 +138,13 @@ export async function archiveSpace(spaceId: string): Promise<void> {
   })
 }
 
+/** 把这个人移出团队空间（直接写库：编辑器页失去权限的用例，M2-P6 复核 S8；经成员页移出由 US-M2-06 的用例覆盖） */
+export async function removeMember(spaceId: string, user: TestUser): Promise<void> {
+  await withDatabase(async (client) => {
+    await client.query('DELETE FROM space_members WHERE space_id = $1 AND user_id = $2', [spaceId, user.id])
+  })
+}
+
 /** 让这个人的全部会话过期（模拟空闲过期） */
 export async function expireSessions(user: TestUser): Promise<void> {
   await withDatabase(async (client) => {

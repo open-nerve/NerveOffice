@@ -1,8 +1,8 @@
-import type { Request, Response } from 'express'
+import type { Request, RequestHandler, Response } from 'express'
 import type { LevelWithSilent, Logger } from 'pino'
 import { REQUEST_ID_HEADER } from '@nerve-office/contracts'
 import { pinoHttp, stdSerializers } from 'pino-http'
-import { resolveRequestId } from './request-id.ts'
+import { clientRequestIdOf, generateRequestId } from './request-id.ts'
 import { requestUserId } from './request-user.ts'
 import { LOG_SERIALIZERS } from './root-logger.ts'
 
@@ -24,11 +24,23 @@ function aborted(response: Response): boolean {
 }
 
 /**
- * 出错（包括异常过滤器挂上的 response.err）与 5xx 记 error，4xx 与中断的请求记 warn；
+ * 服务端按约定回答的"繁忙，稍后重试"：503 带 Retry-After（数据库繁忙、等待密码哈希的请求太多）。
+ * 这是预期中的负载状况，不是故障，记 warn；不带 Retry-After 的 503（例如未就绪）照旧记 error（M2-P6 复核 A 的 G-2）
+ */
+function busy(response: Response): boolean {
+  return response.statusCode === 503 && response.getHeader('retry-after') !== undefined
+}
+
+/**
+ * 出错（包括异常过滤器挂上的 response.err）与 5xx 记 error，4xx、中断的请求与"繁忙，稍后重试"的 503 记 warn；
  * 成功的请求：探针不记，免得刷屏；前端的静态文件与页面记 debug（默认级别下不输出）；接口记 info。
  */
 export function levelFor(request: Request, response: Response, failed: boolean): LevelWithSilent {
-  if (failed || response.err !== undefined || response.statusCode >= 500)
+  if (failed || response.err !== undefined)
+    return 'error'
+  if (busy(response))
+    return 'warn'
+  if (response.statusCode >= 500)
     return 'error'
   if (response.statusCode >= 400 || aborted(response))
     return 'warn'
@@ -44,9 +56,19 @@ export function requestSummary(request: Request, response: Response, durationMs:
   return { method: request.method, route: routeOf(request), path: pathOf(request), ...outcome, durationMs }
 }
 
-/** 请求日志与请求标识，排在管线的最前面（P2 设计 §3.2、§3.4）。 */
-export function createHttpLogger(logger: Logger): ReturnType<typeof pinoHttp<Request, Response>> {
-  return pinoHttp<Request, Response>({
+/** 请求结束时那一条日志另带的字段：认证出的用户（规范 §7）、客户端带来的请求标识（M2-P6 复核 C2） */
+function requestProps(request: Request): Record<string, string> {
+  const userId = requestUserId(request)
+  const clientRequestId = clientRequestIdOf(request.headers[REQUEST_ID_HEADER])
+  return { ...(userId === undefined ? {} : { userId }), ...(clientRequestId === undefined ? {} : { clientRequestId }) }
+}
+
+/**
+ * 请求日志与请求标识，排在管线的最前面（P2 设计 §3.2、§3.4）。请求标识由服务端生成（generateRequestId），
+ * 客户端带来的 X-Request-Id 只作为 clientRequestId 记进这个请求的日志（M2-P6 复核 C2）。
+ */
+export function createHttpLogger(logger: Logger): RequestHandler {
+  const httpLogger = pinoHttp<Request, Response>({
     logger,
     // pino-http 建的子日志会用它自己的序列化覆盖根日志的：显式交给它完整的一套，异常用与根日志相同的（审查 A2），
     // 并且不再套一层标准的；请求与响应沿用它自带的标准序列化（它在内部建子日志时会用到）
@@ -56,16 +78,13 @@ export function createHttpLogger(logger: Logger): ReturnType<typeof pinoHttp<Req
     quietReqLogger: true,
     quietResLogger: true,
     customAttributeKeys: { reqId: 'requestId', responseTime: 'durationMs' },
-    genReqId: (request, response) => {
-      const id = resolveRequestId(request.headers[REQUEST_ID_HEADER])
+    genReqId: (_request, response) => {
+      const id = generateRequestId()
       response.setHeader(REQUEST_ID_HEADER, id)
       return id
     },
-    // 请求结束时再取：认证通过的请求带上 userId（规范 §7）
-    customProps: (request) => {
-      const userId = requestUserId(request)
-      return userId === undefined ? {} : { userId }
-    },
+    // 请求结束时再取：认证通过的请求带上 userId（规范 §7）；客户端带了合法的 X-Request-Id 时另带 clientRequestId
+    customProps: requestProps,
     customLogLevel: (request, response, error) => levelFor(request, response, error !== undefined),
     customSuccessObject: (request, response, value: { durationMs: number }) => requestSummary(request, response, value.durationMs),
     customErrorObject: (request, response, _error, value: { durationMs: number }) => ({
@@ -76,4 +95,13 @@ export function createHttpLogger(logger: Logger): ReturnType<typeof pinoHttp<Req
     customSuccessMessage: (_request, response) => (aborted(response) ? '请求中断' : '请求完成'),
     customErrorMessage: () => '请求失败',
   })
+  return (request, response, next) => {
+    httpLogger(request, response, () => {
+      // 请求内的日志（request.log）也带上客户端的请求标识：客户端断开之后的日志，同样能按它找到
+      const clientRequestId = clientRequestIdOf(request.headers[REQUEST_ID_HEADER])
+      if (clientRequestId !== undefined)
+        request.log = request.log.child({ clientRequestId })
+      next()
+    })
+  }
 }

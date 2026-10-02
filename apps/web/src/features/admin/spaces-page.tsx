@@ -5,11 +5,15 @@ import { SPACE_STATUSES, spaceNameSchema } from '@nerve-office/contracts'
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { Link } from 'react-router'
-import { describeError } from '../../shared/api/index.ts'
+import { ApiError, describeError, isUnknownOutcome } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
+import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { spaceMembersPath } from '../../shared/lib/space-paths.ts'
 import { useDebouncedValue } from '../../shared/lib/use-debounced-value.ts'
+import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
+import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { Alert, AlertDescription, Badge, Button, buttonVariants, Input, Label, NativeSelect, TableCell } from '../../shared/ui/index.ts'
 import { SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
 import { ColleaguePicker } from '../colleagues/index.ts'
@@ -19,15 +23,40 @@ import { ADMIN_QUERY_KEY, adminSpacesQueryOptions, archiveSpace, createTeamSpace
 import { PagedTable } from './paged-table.tsx'
 import { JoinSpaceDialog, RenameSpaceDialog } from './space-dialogs.tsx'
 
-const text = messages.admin.spaces
+const text = adminMessages.spaces
 
-/** 创建团队空间：名称、首个空间管理员（按名字选同事）、是否全员可见 */
-function CreateSpaceForm({ onCreated }: { readonly onCreated: () => Promise<void> }) {
+/** 管理界面的团队空间列表与左侧导航（"我能看到的空间"等）：加入、改名、全员可见、归档会改变谁看得到什么 */
+const LIST_QUERY_KEYS = [[...ADMIN_QUERY_KEY, 'spaces'], SPACES_QUERY_KEY] as const
+
+/** 已有同名的团队空间 */
+function isNameTaken(error: unknown): boolean {
+  return error instanceof ApiError && error.code === 'SPACE_NAME_TAKEN'
+}
+
+interface CreateSpaceFormProps {
+  /** 创建成功之后刷新列表与导航：刷新失败时列表自己显示加载失败 */
+  readonly onCreated: () => Promise<void>
+  /** 结果未知之后刷新同样的列表与导航：刷新失败时拒绝，说明据此说"没能刷新"（M2-P6 复核第四批） */
+  readonly refreshAfterUnknown: () => Promise<void>
+}
+
+/**
+ * 创建团队空间：名称、首个空间管理员（按名字选同事）、是否全员可见。
+ * 结果未知时空间可能已经建好（M2-P6 复核 S1）：列表随即刷新，说明下面的列表里有它就是建好了；结果未知之后用同一个名称再创建
+ * 得到"已有同名"，多半就是刚才那一次，同样刷新并说明。比较的两边都是经契约解析过的名称（规范写法）。
+ * 这两种情形的刷新经共用的做法（shared/api/write-outcome.ts，第四批）：最多等 10 秒，刷新失败或者到了时限还没回来，说明里说
+ * "列表没能刷新"，按钮也不一直停在"正在创建…"；超时之后刷新才回来的，说明随后改过来（第五批 G4）
+ */
+function CreateSpaceForm({ onCreated, refreshAfterUnknown }: CreateSpaceFormProps) {
   const [name, setName] = useState('')
   const [admin, setAdmin] = useState<UserSummary>()
   const [visibleToAll, setVisibleToAll] = useState(false)
   // 创建成功之后换一个 key，同事选择整个重新开始：关键词与上一次的候选都清掉（与成员页的添加一样，审查 B11）
   const [pickerKey, setPickerKey] = useState(0)
+  /** 结果未知的那一次创建用的名称：空间可能已经建好了。成功创建之后清掉 */
+  const [unsureName, setUnsureName] = useState<string>()
+  /** 上一次失败之后列表刷新好了没有：说明据此说"已刷新"还是"没能刷新"（第四批）。每次失败都重新记下 */
+  const { refreshed, refreshAfterFailure } = useOutcomeRefresh()
   const nameId = useId()
   const visibleId = useId()
   const hintId = useId()
@@ -39,7 +68,13 @@ function CreateSpaceForm({ onCreated }: { readonly onCreated: () => Promise<void
       setAdmin(undefined)
       setPickerKey(key => key + 1)
       setVisibleToAll(false)
+      setUnsureName(undefined)
       await onCreated()
+    },
+    onError: async (error, request) => {
+      if (isUnknownOutcome(error))
+        setUnsureName(request.name)
+      await refreshAfterFailure(error, refreshAfterUnknown, { also: failure => isNameTaken(failure) && request.name === unsureName })
     },
   })
   const parsed = spaceNameSchema.safeParse(name)
@@ -75,7 +110,7 @@ function CreateSpaceForm({ onCreated }: { readonly onCreated: () => Promise<void
       </div>
       {mutation.isError && (
         <Alert variant="destructive">
-          <AlertDescription>{describeError(mutation.error).message}</AlertDescription>
+          <AlertDescription>{createFailureText(mutation.error, mutation.variables?.name, unsureName, refreshed)}</AlertDescription>
         </Alert>
       )}
       {/* aria-disabled 的按钮读屏软件读出"不可用"，却不知道为什么：原因写在按钮下方，按钮经 aria-describedby 指向它 */}
@@ -88,10 +123,23 @@ function CreateSpaceForm({ onCreated }: { readonly onCreated: () => Promise<void
 }
 
 /**
+ * 创建失败时的说明：结果未知、结果未知之后同一个名称"已有同名"（多半就是那一次），其余按错误码。
+ * refreshed：前两种情形之后列表刷新好了没有（第四批）
+ */
+function createFailureText(error: unknown, name: string | undefined, unsureName: string | undefined, refreshed: boolean): string {
+  if (isUnknownOutcome(error))
+    return text.createOutcomeUnknown(describeError(error).message, refreshed)
+  if (isNameTaken(error) && name !== undefined && name === unsureName)
+    return text.createRetryTaken(refreshed)
+  return describeError(error).message
+}
+
+/**
  * 管理界面：团队空间（M2-P2 设计 §3.10，US-M2-05）。创建（连同首个空间管理员）；按名称搜索、按状态过滤；
  * 改名、全员可见的开关、归档与恢复（先确认）；"成员"进入成员页；没有加入的空间可以"加入空间"（选角色，记审计）。
  */
 export function AdminSpacesPage() {
+  useDocumentTitle(adminMessages.pageTitle(adminMessages.nav.spaces))
   const queryClient = useQueryClient()
   const [keyword, setKeyword] = useState('')
   const [status, setStatus] = useState<SpaceStatus | ''>('')
@@ -105,12 +153,19 @@ export function AdminSpacesPage() {
   const searchId = useId()
   const statusId = useId()
 
-  /** 管理界面的列表与导航（加入、改名、全员可见会改变谁看得到什么）一起刷新 */
+  /**
+   * 管理界面的列表与导航（加入、改名、全员可见会改变谁看得到什么）一起刷新；刷新失败时列表自己显示加载失败。
+   * 换了过滤条件、过滤的请求还在路上时创建成功，那个请求也重来（第五批 G6，shared/lib/refresh-queries.ts）
+   */
   async function refresh(): Promise<void> {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: [...ADMIN_QUERY_KEY, 'spaces'] }),
-      queryClient.invalidateQueries({ queryKey: SPACES_QUERY_KEY }),
-    ])
+    await refreshQueries(queryClient, LIST_QUERY_KEYS, { throwOnError: false })
+  }
+
+  /**
+   * 结果未知之后的刷新（弹窗与创建的表单）：同样的列表与导航，刷新失败时拒绝，据此说明页面没能刷新（M2-P6 复核第三批 G-a、第四批）
+   */
+  async function refreshAfterUnknown(): Promise<void> {
+    await refreshQueries(queryClient, LIST_QUERY_KEYS)
   }
 
   function focusRow(space: AdminSpace): void {
@@ -123,19 +178,21 @@ export function AdminSpacesPage() {
       focusRow(space)
   }
 
-  function confirmThen(space: AdminSpace, confirmation: Omit<PendingConfirmation, 'run' | 'returnFocus'>, action: () => Promise<unknown>): void {
+  /** 全员可见、归档与恢复：先确认，再执行。结果未知时确认的弹窗刷新列表与导航、说明可能已经生效（M2-P6 复核第二批 G-2） */
+  function confirmThen(space: AdminSpace, confirmation: Omit<PendingConfirmation, 'run' | 'refresh' | 'returnFocus'>, action: () => Promise<unknown>): void {
     setPending({
       ...confirmation,
       run: async () => {
         await action()
         await refresh()
       },
+      refresh: refreshAfterUnknown,
       returnFocus: () => focusRow(space),
     })
   }
 
   function actionsOf(space: AdminSpace) {
-    const on = (action: string) => messages.admin.actionOn(action, space.name)
+    const on = (action: string) => messages.common.actionOn(action, space.name)
     return (
       <div className="flex flex-wrap gap-1">
         <Link to={spaceMembersPath(space.id)} aria-label={on(text.members)} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>{text.members}</Link>
@@ -153,7 +210,7 @@ export function AdminSpacesPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <CreateSpaceForm onCreated={refresh} />
+      <CreateSpaceForm onCreated={refresh} refreshAfterUnknown={refreshAfterUnknown} />
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex min-w-48 flex-1 flex-col gap-2">
           <Label htmlFor={searchId}>{text.search}</Label>
@@ -187,8 +244,8 @@ export function AdminSpacesPage() {
         )}
       />
       <ConfirmDialog pending={pending} onClose={() => setPending(undefined)} meta={SYSTEM_ADMIN_ONLY} />
-      <RenameSpaceDialog space={renaming} onDone={refresh} onClose={() => setRenaming(undefined)} returnFocus={() => focusRowOf(renaming)} />
-      <JoinSpaceDialog space={joining} onDone={refresh} onClose={() => setJoining(undefined)} returnFocus={() => focusRowOf(joining)} />
+      <RenameSpaceDialog space={renaming} onDone={refresh} refresh={refreshAfterUnknown} onClose={() => setRenaming(undefined)} returnFocus={() => focusRowOf(renaming)} />
+      <JoinSpaceDialog space={joining} onDone={refresh} refresh={refreshAfterUnknown} onClose={() => setJoining(undefined)} returnFocus={() => focusRowOf(joining)} />
     </div>
   )
 }

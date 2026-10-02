@@ -4,14 +4,18 @@ import {
   composeArgs,
   createSettings,
   databaseUrl,
+  describeIdleMemory,
   DISTRIBUTED_LICENSE_FILES,
   distributedFileProblems,
   duBytes,
   FILE_SIZES_SCRIPT,
   FORGED_CLIENT_ADDRESS,
+  IDLE_MEMORY_SAMPLING,
   imageSizeArgs,
   mebibytes,
+  median,
   megabytes,
+  MEMORY_SAMPLE_INTERVAL_MS,
   memoryBytes,
   parseAuditAddresses,
   playwrightEnvironment,
@@ -20,6 +24,8 @@ import {
   publicOrigin,
   publishedPortProblems,
   renderEnvFile,
+  sampleMemory,
+  serverRequestId,
   staleRuns,
   staleTemporaryDirectories,
 } from './container-e2e.ts'
@@ -95,6 +101,13 @@ describe('中断的运行留下的临时目录（审查 B6）', () => {
 })
 
 describe('客户端地址的核对（DEF-014）', () => {
+  it('应用给请求生成的请求标识：只认 UUID（它要拼进查审计的 SQL），取不到或不是 UUID 时为空（M2-P6 复核 C2）', () => {
+    expect(serverRequestId('0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0d')).toBe('0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0d')
+    expect(serverRequestId(' 0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0d\n')).toBe('0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0d')
+    for (const value of [undefined, '', 'client-trace-1', '\'); DROP TABLE audit_events; --', ['0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0d']])
+      expect(serverRequestId(value), JSON.stringify(value)).toBeUndefined()
+  })
+
   it('psql 的输出解析成请求标识到地址，忽略空行与没有地址的记录', () => {
     expect(parseAuditAddresses('check-host|192.168.0.1\ncheck-network|192.168.0.5\n\nno-address|\n')).toEqual(new Map([['check-host', '192.168.0.1'], ['check-network', '192.168.0.5']]))
   })
@@ -199,6 +212,13 @@ describe('docker 输出的解析', () => {
     expect(imageSizeArgs('nerve-office:e2e-42')).toEqual(['run', '--rm', '--network', 'none', '--user', '0', '--entrypoint', 'du', 'nerve-office:e2e-42', '-sxb', '/'])
   })
 
+  it('中位数：奇数个取中间那个，偶数个取中间两个的平均，与顺序无关；没有数时是 undefined', () => {
+    expect(median([244, 210, 211])).toBe(211)
+    expect(median([212, 210, 209, 244])).toBe(211)
+    expect(median([5])).toBe(5)
+    expect(median([])).toBeUndefined()
+  })
+
   it('du 的输出只认根目录的一行字节数；读不出来时是 undefined', () => {
     expect(duBytes('285717915\t/\n')).toBe(285_717_915)
     expect(duBytes('  267140309 /  ')).toBe(267_140_309)
@@ -208,5 +228,53 @@ describe('docker 输出的解析', () => {
     expect(duBytes('12\t/\n34\t/\n')).toBeUndefined()
     expect(duBytes('99999999999999999999\t/')).toBeUndefined()
     expect(megabytes(285_717_915)).toBe('285.7 MB')
+  })
+})
+
+describe('空闲内存的取样（ADR-001，M2-P6 第 6 片复核第二批）', () => {
+  const MiB = 1024 ** 2
+
+  /** 假的取样：依次给出 values，记下每次等了多久、在第几次之后收到终止信号 */
+  function fakeSampler(values: readonly (number | undefined)[], stopAfter = Number.POSITIVE_INFINITY) {
+    const waits: number[] = []
+    let taken = 0
+    return {
+      waits,
+      sampler: {
+        sample: async () => values[taken++],
+        wait: async (ms: number) => {
+          waits.push(ms)
+        },
+        stopped: () => taken >= stopAfter,
+      },
+    }
+  }
+
+  it('部署核对之后先等 10 秒，再每 2 秒（与 E2E 期间的取样相同）取一次，共 5 次', () => {
+    expect(IDLE_MEMORY_SAMPLING).toEqual({ settleMs: 10_000, samples: 5, intervalMs: MEMORY_SAMPLE_INTERVAL_MS })
+    expect(MEMORY_SAMPLE_INTERVAL_MS).toBe(2_000)
+  })
+
+  it('先等 settleMs、再隔 intervalMs 依次取样，按顺序返回各次的值；取不到的一次记为 undefined', async () => {
+    const { waits, sampler } = fakeSampler([244 * MiB, undefined, 210 * MiB])
+    expect(await sampleMemory({ settleMs: 10_000, samples: 3, intervalMs: 2_000 }, sampler)).toEqual([244 * MiB, undefined, 210 * MiB])
+    expect(waits).toEqual([10_000, 2_000, 2_000])
+  })
+
+  it('收到终止信号就不再等、不再取，返回已经取到的', async () => {
+    const stoppedAfterTwo = fakeSampler([1, 2, 3, 4, 5], 2)
+    expect(await sampleMemory(IDLE_MEMORY_SAMPLING, stoppedAfterTwo.sampler)).toEqual([1, 2])
+    expect(stoppedAfterTwo.waits).toEqual([10_000, 2_000])
+    const stoppedBefore = fakeSampler([1], 0)
+    expect(await sampleMemory(IDLE_MEMORY_SAMPLING, stoppedBefore.sampler)).toEqual([])
+    expect(stoppedBefore.waits).toEqual([])
+  })
+
+  it('说明给出取到的各次的中位数，并列出各次的值；一次也没取到时说明没有取到', () => {
+    // 刚算完 Argon2 的一次（244）不影响中位数
+    expect(describeIdleMemory(IDLE_MEMORY_SAMPLING, [244 * MiB, 211.5 * MiB, undefined, 210 * MiB, 212 * MiB]))
+      .toBe('211.8 MiB（部署核对之后等 10 秒、每 2 秒取一次，4 次的中位数；各次 244.0、211.5、没取到、210.0、212.0 MiB）')
+    expect(describeIdleMemory(IDLE_MEMORY_SAMPLING, [undefined, undefined])).toBe('（没有取到）')
+    expect(describeIdleMemory(IDLE_MEMORY_SAMPLING, [])).toBe('（没有取到）')
   })
 })

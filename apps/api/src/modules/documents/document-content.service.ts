@@ -3,6 +3,7 @@ import type { Buffer } from 'node:buffer'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { GzipBody } from '../security/index.ts'
+import type { AccessibleDocument } from './document-access-policy.ts'
 import type { RevisionRow } from './document-revisions.repository.ts'
 import type { DocumentRow } from './documents.repository.ts'
 import { UNIVER_SDK_VERSION } from '@nerve-office/contracts'
@@ -10,7 +11,7 @@ import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { AuditService } from '../audit/index.ts'
 import { TransactionRunner } from '../database/index.ts'
-import { canEdit, DocumentAccessPolicy, requireAccess } from './document-access-policy.ts'
+import { DocumentAccessPolicy, requireAccess, requireDocumentContent, requireDocumentOperations } from './document-access-policy.ts'
 import { DocumentContentsRepository } from './document-contents.repository.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
 import { DocumentsRepository } from './documents.repository.ts'
@@ -50,20 +51,25 @@ export class DocumentContentService {
 
   /**
    * 保存（P4 设计 §3.5.1）：先做与文档无关的基本校验，再在一个事务里依次
-   * 判断能否编辑 → 锁住文档行、锁下再判断一次 → 按 requestId 幂等 → 核对 unitId → 按基准修订号条件写入。
-   * 先判断能否编辑再加锁：没有权限与只能查看的请求都不在文档上取锁，不让能编辑的人的保存排队，
-   * 没有权限时响应的时序也与不存在的文档相同（审查 A2、复验 RA7）。
-   * 先锁文档再查幂等：同一个请求的两次并发重试，后到的一方拿到锁时前一方已经提交，按幂等返回原结果，而不是误报冲突。
+   * 判断能否访问 → 能编辑时锁住文档行、锁下再判断一次 → 按 requestId 幂等 → 能否编辑 → 核对 unitId → 按基准修订号条件写入。
+   * 幂等这一步只要求仍能访问（00 号计划书 §7.4 第 2 步）：一次结果未知的保存提交之后被降为查看者、空间被归档，
+   * 重发同一个请求照样拿到原来的结果，而不是 403——客户端按约定会把 403 当作"没有提交"（M2-P6 复核 A 的 S-4）；不是重放才要求能编辑。
+   * 先判断再加锁：看不到的请求不在文档上取锁，响应的时序与不存在的文档相同（审查 A2）；只能查看的请求同样不取锁，
+   * 不让能编辑的人的保存排队（复验 RA7）——它能得到的只有重放，不加锁查一次请求标识就有结论。
+   * 能编辑时先锁文档再查幂等：同一个请求的两次并发重试，后到的一方拿到锁时前一方已经提交，按幂等返回原结果，而不是误报冲突。
    */
   async save(userId: string, id: string, query: SaveContentQuery, upload: GzipBody, origin: AuditOrigin): Promise<SaveContentResponse> {
     const snapshot = validateSnapshot(upload.decompressed)
     const digest = savedPayloadDigest(query.baseRevision, upload.decompressed)
     return this.transactions.run(async (transaction) => {
-      const document = await this.lockEditable(userId, id, transaction)
+      const accessible = await this.lockIfEditable(userId, id, transaction)
+      const { document } = accessible
 
       const previous = await this.revisions.findByRequestId(query.requestId, transaction)
       if (previous !== undefined)
         return this.replay(userId, document, previous, digest)
+      // 不是重放才要求能编辑：能编辑时这是锁下的判断，只能查看时就是上面那次（没有取锁）
+      requireDocumentOperations(accessible, ['edit'])
 
       if (snapshot.unitId !== document.unitId)
         throw new AppError('SNAPSHOT_INVALID', '表格内容不属于这份文档')
@@ -98,20 +104,16 @@ export class DocumentContentService {
   }
 
   /**
-   * 判断能否编辑，再锁住文档行，锁下再判断一次，返回锁下的最新状态（修订号等）。
+   * 判断能否访问（别人的与不存在的都是 NOT_FOUND）；能编辑时再锁住文档行、锁下再判断一次，返回锁下的最新状态（修订号等）。
    * 锁下再判断：加锁之前文档可能已经移到别的空间，或者授权被收回了（M2），都按锁下的状态为准（复验 RA7）。
+   * 只能查看的不取锁，返回不加锁读到的那一版：调用方拿它只能查重放，写入之前还要求能编辑。
+   * 与改名、移动、删除走同一个判断（requireDocumentContent）：归档的空间里说明"空间已归档"，而不是"只能查看"
    */
-  private async lockEditable(userId: string, id: string, transaction: Transaction): Promise<DocumentRow> {
-    await this.requireEditable(userId, await this.documents.findById(id, transaction), transaction)
-    return this.requireEditable(userId, await this.documents.lockById(id, transaction), transaction)
-  }
-
-  /** 能编辑就返回文档；别人的与不存在的都是 NOT_FOUND，只能查看是 PERMISSION_DENIED。 */
-  private async requireEditable(userId: string, row: DocumentRow | undefined, transaction: Transaction): Promise<DocumentRow> {
-    const { document, access } = await requireAccess(this.policy, userId, row, transaction)
-    if (!canEdit(access))
-      throw new AppError('PERMISSION_DENIED', '只能查看这份文档，不能保存')
-    return document
+  private async lockIfEditable(userId: string, id: string, transaction: Transaction): Promise<AccessibleDocument<DocumentRow>> {
+    const unlocked = await requireDocumentContent(this.policy, userId, await this.documents.findById(id, transaction), [], transaction)
+    if (!unlocked.permissions.canEdit)
+      return unlocked
+    return requireDocumentContent(this.policy, userId, await this.documents.lockById(id, transaction), [], transaction)
   }
 
   /** 同一个 requestId 已经有修订记录：是同一个人对这份文档的同一次保存（摘要一致）才返回原来的结果。 */

@@ -9,6 +9,8 @@
 
 ## 已有的上游讨论
 
+相关：UR-028（同一个组件：工作簿不可编辑时"搜索功能"照样打开、列出没有按权限停用的编辑功能，不看 `toolbar`/`contextMenu: false`，也关不掉；2026-10-02 起草）。
+
 没有找到（GitHub issue 检索，关键词：`feature search hidden`、`"feature search"`、`featureSearch`、`FeatureSearch`、`open-feature-search`、`"search features"`、`command palette`、`menu hidden submenu`、`menu config hidden children`、`menu hidden config`、`hidden$ menu search`、`SUBITEMS hidden`、`hidden menu still searchable`、`功能搜索`、`搜索功能 菜单 隐藏`；另用 WebSearch 检索网页；2026-09-28）。相关但不是同一个问题：[#2419](https://github.com/dream-num/univer/issues/2419)（[Bug] Failing To Hide Menu Items，v0.1.13 的工具栏隐藏配置不生效，2024 年已关闭，那时还没有功能搜索）。
 
 ---

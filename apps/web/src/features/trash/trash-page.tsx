@@ -1,21 +1,27 @@
-import type { SpaceView, TrashEntry } from '@nerve-office/contracts'
+import type { SpaceView, TrashEntry, TrashListResponse } from '@nerve-office/contracts'
+import type { InfiniteData, UseInfiniteQueryResult } from '@tanstack/react-query'
 import type { RefObject } from 'react'
 import type { PendingConfirmation } from '../confirmation/index.ts'
 import { TRASH_RETENTION_DAYS } from '@nerve-office/contracts'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
-import { describeError, isMissingResource } from '../../shared/api/index.ts'
+import { describeError, isAccessDenied, isMissingResource, isUnknownOutcome } from '../../shared/api/index.ts'
+import { refreshIfUnknown, refreshWithin } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { trashMessages } from '../../shared/i18n/zh-cn/trash.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
+import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { spacePath } from '../../shared/lib/space-paths.ts'
-import { Alert, AlertDescription, Badge, Button, buttonVariants, Skeleton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../shared/ui/index.ts'
+import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
+import { useFocusRescue } from '../../shared/lib/use-focus-rescue.ts'
+import { Alert, AlertDescription, Badge, Button, buttonVariants, Notice, PersonName, Skeleton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../shared/ui/index.ts'
 import { ConfirmDialog } from '../confirmation/index.ts'
 import { spaceDocumentsQueryKey, spaceFoldersQueryKey } from '../documents/index.ts'
-import { SpaceNotFound, spaceQueryOptions, useForgetMissingSpace } from '../spaces/index.ts'
+import { SpaceNotFound, spaceQueryOptions, SPACES_QUERY_KEY, useForgetMissingSpace } from '../spaces/index.ts'
 import { purgeTrashEntry, restoreTrashEntry, spaceTrashQueryKey, spaceTrashQueryOptions } from './trash-api.ts'
 
-const text = messages.trash
+const text = trashMessages
 
 function spaceName(space: SpaceView): string {
   return space.type === 'personal' ? messages.documents.title : space.name
@@ -37,9 +43,9 @@ interface EntryRowProps {
 
 /** 回收站里的一个删除单元：种类与名称、谁在什么时候删的、原位置、到期时间、里面有多少份文档，以及我能做的操作 */
 function EntryRow({ entry, onRestore, onPurge, restoring }: EntryRowProps) {
-  const who = entry.deletedBy === null ? text.unknownUser : messages.colleagues.name(entry.deletedBy)
   return (
-    <TableRow aria-busy={restoring}>
+    // tabIndex -1：只能由程序聚焦（加载更多之后焦点移到第一条新行），Tab 键不经过整行
+    <TableRow aria-busy={restoring} tabIndex={-1} className="outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
       <TableCell>
         <div className="flex flex-col gap-1">
           <span className="flex flex-wrap items-center gap-2">
@@ -50,7 +56,13 @@ function EntryRow({ entry, onRestore, onPurge, restoring }: EntryRowProps) {
           <span className="text-xs text-muted-foreground">{text.documentCount(entry.documentCount)}</span>
         </div>
       </TableCell>
-      <TableCell className="text-sm">{text.deletedBy(who, formatDateTime(entry.deletedAt))}</TableCell>
+      {/* 删除者与时间分两行：删除者的显示名可能是从右到左的文字，与时间拼在一行会被打乱（M2-P6 复核 M2） */}
+      <TableCell className="text-sm">
+        <div className="flex flex-col gap-0.5">
+          {entry.deletedBy === null ? <span>{text.unknownUser}</span> : <PersonName person={entry.deletedBy} />}
+          <time dateTime={entry.deletedAt} className="text-xs text-muted-foreground">{formatDateTime(entry.deletedAt)}</time>
+        </div>
+      </TableCell>
       <TableCell className="text-sm">{originOf(entry)}</TableCell>
       <TableCell className="text-sm">
         <time dateTime={entry.expiresAt}>{formatDateTime(entry.expiresAt)}</time>
@@ -71,38 +83,66 @@ function EntryRow({ entry, onRestore, onPurge, restoring }: EntryRowProps) {
   )
 }
 
-/** 做完一件事之后的说明：那一行随之消失，说明接住焦点，不落到 body */
-function Notice({ message }: { readonly message: string }) {
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    ref.current?.focus()
-  }, [message])
-  return (
-    <Alert ref={ref} tabIndex={-1}>
-      <AlertDescription>{message}</AlertDescription>
-    </Alert>
-  )
+/** 表格上方的说明：每次一条新的对象（换了一条就再接一次焦点） */
+interface TrashNotice {
+  readonly message: string
+  readonly problem?: boolean
 }
+
+type TrashQuery = UseInfiniteQueryResult<InfiniteData<TrashListResponse>>
 
 /**
  * 回收站的列表本体：加载中、加载失败、空列表，以及每一条的恢复与永久删除。
  * headingRef 是页面标题（h1）：确认的弹窗关掉之后，打开它的那一行已经不在，焦点交给标题。
  * 这里不再另起一个同名的 sr-only 标题——读屏按标题导航会把同一句读两遍（M2-P4 审查建议 8）
+ *
+ * 没能完成时（M2-P6 复核 S1、S2）：
+ * - 按访问权限被拒绝（403：空间刚被归档；404：这一条已经不在了，或者整个空间看不到了）：回收站、空间的页头与内容一起重新请求，
+ *   "恢复"随新的权限消失；说明接住焦点（403 用服务端说的原因）。404 的说明等回收站刷新有了结果（或者到了时限）再给出，
+ *   "列表已刷新"还是"没能刷新"按刷新的结果说（第五批 G3，永久删除得到 404 也一样）；空间看不到了时页面随之换成"空间不存在"；
+ * - 结果未知：同样刷新，说明它可能已经恢复了。这时的刷新经共用的做法（shared/api/write-outcome.ts，第四批）：最多等 10 秒，
+ *   刷新失败或者到了时限还没回来，说明里说"列表没能刷新"，"恢复"也不一直停在"正在恢复…"。
  */
-function TrashList({ space, headingRef }: { readonly space: SpaceView, readonly headingRef: RefObject<HTMLHeadingElement | null> }) {
+function TrashList({ space, query, headingRef }: { readonly space: SpaceView, readonly query: TrashQuery, readonly headingRef: RefObject<HTMLHeadingElement | null> }) {
   const queryClient = useQueryClient()
-  const query = useInfiniteQuery(spaceTrashQueryOptions(space.id))
   const entries = query.data?.pages.flatMap(page => page.items) ?? []
-  const [notice, setNotice] = useState<string>()
+  const [notice, setNotice] = useState<TrashNotice>()
   const [confirming, setConfirming] = useState<PendingConfirmation>()
+  // 加载更多时已有的条数：新的一页到了之后，焦点移到第一条新行。按钮在最后一页之后随之消失，焦点不能留在它身上（M1 审查 B13 的做法，P13）
+  const bodyRef = useRef<HTMLTableSectionElement>(null)
+  const focusFromRef = useRef<number>(undefined)
+  useEffect(() => {
+    const from = focusFromRef.current
+    if (from === undefined || entries.length <= from)
+      return
+    focusFromRef.current = undefined
+    bodyRef.current?.rows.item(from)?.focus()
+  }, [entries.length])
 
-  /** 恢复与永久删除都会改变空间里的内容：回收站、各层的文件夹与文档一起重新请求 */
-  async function refresh(): Promise<void> {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: spaceTrashQueryKey(space.id) }),
-      queryClient.invalidateQueries({ queryKey: spaceFoldersQueryKey(space.id) }),
-      queryClient.invalidateQueries({ queryKey: spaceDocumentsQueryKey(space.id) }),
-    ])
+  /** 恢复与永久删除会改变的内容：回收站、各层的文件夹与文档 */
+  const contentKeys = [spaceTrashQueryKey(space.id), spaceFoldersQueryKey(space.id), spaceDocumentsQueryKey(space.id)]
+
+  /**
+   * 恢复与永久删除都会改变空间里的内容：回收站、各层的文件夹与文档一起重新请求；被拒绝时页头（权限、归档）与导航也一起。
+   * 刷新失败时各自显示加载失败
+   */
+  async function refresh(withSpace = false): Promise<void> {
+    await refreshQueries(queryClient, [...contentKeys, ...(withSpace ? [SPACES_QUERY_KEY] : [])], { throwOnError: false })
+  }
+
+  /** 结果未知之后的刷新（恢复与确认的弹窗）：刷新失败时拒绝，据此说明页面没能刷新（M2-P6 复核第三批 G-a、第四批） */
+  async function refreshAfterUnknown(): Promise<void> {
+    await refreshQueries(queryClient, contentKeys)
+  }
+
+  /**
+   * 这一条已经不在回收站里了（404）之后：同样的内容在时限之内重新请求，兑现为刷新好了没有，说明据此说"列表已刷新"还是"没能刷新"
+   * （M2-P6 复核第五批 G3：原来不看刷新的结果，刷新失败、那一行还在时也说"列表已刷新"）。withSpace：页头与导航也一起（不计入）
+   */
+  async function refreshAfterGone(withSpace: boolean): Promise<boolean> {
+    if (withSpace)
+      void refreshQueries(queryClient, [SPACES_QUERY_KEY], { throwOnError: false })
+    return refreshWithin(refreshAfterUnknown)
   }
 
   const restore = useMutation({
@@ -110,14 +150,24 @@ function TrashList({ space, headingRef }: { readonly space: SpaceView, readonly 
     onSuccess: async ({ entry, result }) => {
       await refresh()
       // 原来的位置已经不在（被永久删除、自己也在回收站里、跨空间移动过）：明确告诉用户它回到了空间的根目录
-      setNotice(result.movedToRoot ? text.restoredToRoot(entry.title) : text.restored(entry.title))
+      setNotice({ message: result.movedToRoot ? text.restoredToRoot(entry.title) : text.restored(entry.title) })
     },
-    onError: async (error) => {
-      // 别人已经恢复或永久删除了它：列表刷新之后说明一句，不留下一条点不动的行
+    onError: async (error, entry) => {
+      // 别人已经恢复或永久删除了它（404）：说明一句，不留下一条点不动的行。整个空间看不到了时回收站同样得到 404，
+      // 页面随之换成"空间不存在"，这条说明也就不显示了
       if (isMissingResource(error)) {
-        await refresh()
-        setNotice(text.gone)
+        setNotice({ message: text.gone(await refreshAfterGone(true)) })
+        return
       }
+      // 空间刚被归档（403）：用服务端说的原因
+      if (isAccessDenied(error)) {
+        await refresh(true)
+        setNotice({ message: text.denied(entry.title, describeError(error).message), problem: true })
+        return
+      }
+      const refreshed = await refreshIfUnknown(error, refreshAfterUnknown)
+      if (isUnknownOutcome(error))
+        setNotice({ message: text.restoreOutcomeUnknown(entry.title, describeError(error).message, refreshed), problem: true })
     },
   })
 
@@ -128,26 +178,49 @@ function TrashList({ space, headingRef }: { readonly space: SpaceView, readonly 
       confirmLabel: text.purge,
       destructive: true,
       run: async () => {
-        // 别人已经恢复或永久删除了它：目的已经达到，按“已经不在回收站里”说明，不当成失败
-        let gone = false
         try {
           await purgeTrashEntry(entry.id)
         }
         catch (error) {
-          if (!isMissingResource(error))
+          if (!isMissingResource(error)) {
+            // 被拒绝（403）：列表与页头按新的权限刷新，弹窗留着说明原因（关掉之后"永久删除"可能已经不在了）。
+            // 结果未知由确认的弹窗按 refresh 刷新、说明可能已经删除（M2-P6 复核第二批 G-2）
+            if (isAccessDenied(error))
+              await refresh(true)
             throw error
-          gone = true
+          }
+          // 别人已经恢复或永久删除了它：目的已经达到，按"已经不在回收站里"说明，不当成失败；"列表已刷新"还是"没能刷新"
+          // 看刷新的结果（第五批 G3）
+          setNotice({ message: text.gone(await refreshAfterGone(false)) })
+          return
         }
         await refresh()
-        setNotice(gone ? text.gone : text.purged(entry.title))
+        setNotice({ message: text.purged(entry.title) })
       },
+      refresh: refreshAfterUnknown,
       // 确认之后这一行就没了，打开弹窗的按钮随之消失：焦点交给页面的标题
       returnFocus: () => headingRef.current?.focus(),
     })
   }
 
-  if (query.isPending)
-    return <Skeleton className="h-24 w-full" role="status" aria-label={text.loading} />
+  function loadMore(): void {
+    if (query.isFetchingNextPage)
+      return
+    focusFromRef.current = entries.length
+    void query.fetchNextPage().then((result) => {
+      // 失败时焦点留在按钮上，错误提示由 role="alert" 读出
+      if (result.isError)
+        focusFromRef.current = undefined
+    })
+  }
+
+  if (query.isPending) {
+    return (
+      <div role="status" aria-label={text.loading}>
+        <Skeleton className="h-24 w-full" />
+      </div>
+    )
+  }
   if (query.data === undefined) {
     return (
       <Alert variant="destructive">
@@ -162,8 +235,8 @@ function TrashList({ space, headingRef }: { readonly space: SpaceView, readonly 
 
   return (
     <>
-      {notice !== undefined && <Notice message={notice} />}
-      {restore.isError && !isMissingResource(restore.error) && (
+      {notice !== undefined && <Notice focusKey={notice} variant={notice.problem === true ? 'destructive' : 'default'}>{notice.message}</Notice>}
+      {restore.isError && !isAccessDenied(restore.error) && !isUnknownOutcome(restore.error) && (
         <Alert variant="destructive">
           <AlertDescription>{describeError(restore.error).message}</AlertDescription>
         </Alert>
@@ -181,7 +254,7 @@ function TrashList({ space, headingRef }: { readonly space: SpaceView, readonly 
                   <TableHead>{text.columns.actions}</TableHead>
                 </TableRow>
               </TableHeader>
-              <TableBody>
+              <TableBody ref={bodyRef}>
                 {entries.map(entry => (
                   <EntryRow
                     key={entry.id}
@@ -194,8 +267,14 @@ function TrashList({ space, headingRef }: { readonly space: SpaceView, readonly 
               </TableBody>
             </Table>
           )}
+      {query.isError && (
+        <Alert variant="destructive">
+          <AlertDescription>{describeError(query.error).message}</AlertDescription>
+        </Alert>
+      )}
       {query.hasNextPage && (
-        <Button variant="outline" className="self-center" aria-disabled={query.isFetchingNextPage} onClick={() => !query.isFetchingNextPage && void query.fetchNextPage()}>
+        // 加载中用 aria-disabled：按钮变成 disabled 时浏览器把焦点丢到 body（审查 B13）；重复点击由 loadMore 挡住
+        <Button variant="outline" className="self-center" aria-disabled={query.isFetchingNextPage} onClick={loadMore}>
           {query.isFetchingNextPage ? messages.common.loadingMore : messages.common.loadMore}
         </Button>
       )}
@@ -204,28 +283,49 @@ function TrashList({ space, headingRef }: { readonly space: SpaceView, readonly 
   )
 }
 
+/**
+ * 回收站页的内容：空间（页头的名称）与回收站的列表。先看错误、再看数据（ADR-008 的请求缓存约定）：两者任何一个得到 404，
+ * 这个空间就看不到了，按"空间不存在"显示，不留着旧的行（M2-P6 复核 S2 的 P4）。两个请求谁先回来都一样：回收站先得到 404 时
+ * 不等页头的请求（它可能还在路上，也可能拿着看不到之前的旧结果回来），直接说空间不存在（第二批 S-2 的 T1）。
+ * 有焦点的按钮、行随刷新或新的权限消失时，焦点交给页面的标题（M2-P6 复核 S3）。
+ */
 function TrashContent({ spaceId }: { readonly spaceId: string }) {
   const space = useQuery(spaceQueryOptions(spaceId))
-  const missing = isMissingResource(space.error)
+  const trash = useInfiniteQuery(spaceTrashQueryOptions(spaceId))
+  const missing = isMissingResource(space.error) || isMissingResource(trash.error)
   const titleRef = useRef<HTMLHeadingElement>(null)
+  const rescueFocus = useFocusRescue(titleRef)
   useForgetMissingSpace(spaceId, missing)
-  if (space.isPending)
-    return <Skeleton className="h-24 w-full" role="status" aria-label={text.loading} />
+  let title: string | undefined
+  if (space.data !== undefined && !missing)
+    title = text.heading(spaceName(space.data))
+  else if (!space.isPending && !missing)
+    title = text.loadFailed
+  useDocumentTitle(title)
   if (missing)
     return <SpaceNotFound />
+  if (space.isPending) {
+    return (
+      <div role="status" aria-label={text.loading}>
+        <Skeleton className="h-24 w-full" />
+      </div>
+    )
+  }
   if (space.data === undefined) {
     return (
-      <Alert variant="destructive">
-        <AlertDescription>
-          <p>{text.loadFailed}</p>
-          <p>{describeError(space.error).message}</p>
-          <Button variant="outline" size="sm" className="mt-2" onClick={() => void space.refetch()}>{messages.common.retry}</Button>
-        </AlertDescription>
-      </Alert>
+      <section className="flex flex-col gap-4" aria-labelledby="trash-title">
+        <h1 id="trash-title" className="text-xl font-semibold">{text.loadFailed}</h1>
+        <Alert variant="destructive">
+          <AlertDescription>
+            <p>{describeError(space.error).message}</p>
+            <Button variant="outline" size="sm" className="mt-2" onClick={() => void space.refetch()}>{messages.common.retry}</Button>
+          </AlertDescription>
+        </Alert>
+      </section>
     )
   }
   return (
-    <section className="flex flex-col gap-4" aria-labelledby="trash-title">
+    <section ref={rescueFocus} className="flex flex-col gap-4" aria-labelledby="trash-title">
       <div className="flex flex-wrap items-start justify-between gap-3">
         {/* tabIndex -1：只能由程序聚焦（确认的弹窗关掉之后，打开它的那一行已经不在），Tab 键不经过它 */}
         <h1 ref={titleRef} id="trash-title" tabIndex={-1} className="truncate text-xl font-semibold outline-none focus-visible:ring-3 focus-visible:ring-ring/50">{text.heading(spaceName(space.data))}</h1>
@@ -237,7 +337,7 @@ function TrashContent({ spaceId }: { readonly spaceId: string }) {
           <p>{text.readOnly}</p>
         </AlertDescription>
       </Alert>
-      <TrashList space={space.data} headingRef={titleRef} />
+      <TrashList space={space.data} query={trash} headingRef={titleRef} />
     </section>
   )
 }

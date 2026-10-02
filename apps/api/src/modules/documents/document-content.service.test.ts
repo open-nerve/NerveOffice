@@ -136,16 +136,17 @@ describe('DocumentContentService.save', () => {
     const { store, service } = setup()
     const document = teamDocument(store)
     store.setMember(TEAM_SPACE, BOB, 'viewer')
-    expect((await rejection(service.save(BOB, document.id, query(), upload(document.unitId), HTTP_ORIGIN))).code).toBe('PERMISSION_DENIED')
+    expect(await rejection(service.save(BOB, document.id, query(), upload(document.unitId), HTTP_ORIGIN))).toMatchObject({ code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能保存' })
     expect(store.repositories.documents.lockById).not.toHaveBeenCalled()
   })
 
-  it('归档的空间里所有人至多是查看者：空间管理员同样不能保存', async () => {
+  it('归档的空间里所有人至多是查看者：空间管理员同样不能保存，说明是"空间已归档"（与改名、移动、删除一致，M2-P6 复核 A 的 G3）', async () => {
     const { store, service } = setup()
     const document = teamDocument(store)
     store.setMember(TEAM_SPACE, BOB, 'admin')
     store.space(TEAM_SPACE).status = 'archived'
-    expect(await rejection(service.save(BOB, document.id, query(), upload(document.unitId), HTTP_ORIGIN))).toMatchObject({ code: 'PERMISSION_DENIED' })
+    expect(await rejection(service.save(BOB, document.id, query(), upload(document.unitId), HTTP_ORIGIN))).toMatchObject({ code: 'PERMISSION_DENIED', message: '空间已归档，只能查看' })
+    expect(store.repositories.documents.lockById).not.toHaveBeenCalled()
   })
 
   it('团队空间的编辑者可以保存', async () => {
@@ -187,6 +188,69 @@ describe('DocumentContentService.save', () => {
     expect(again).toEqual(first)
     expect(store.documents.get(document.id)?.revision).toBe(3)
     expect(store.audits).toHaveLength(2)
+  })
+
+  it('重放只要求仍能访问（00 号计划书 §7.4 第 2 步，M2-P6 复核 A 的 S-4）：提交之后被降为查看者、空间被归档，重发拿到原来的结果，不取锁', async () => {
+    const { store, service } = setup()
+    const document = teamDocument(store)
+    store.setMember(TEAM_SPACE, BOB, 'editor')
+    const request = query()
+    const body = upload(document.unitId)
+    const first = await service.save(BOB, document.id, request, body, HTTP_ORIGIN)
+    store.repositories.documents.lockById.mockClear()
+
+    store.setMember(TEAM_SPACE, BOB, 'viewer')
+    expect(await service.save(BOB, document.id, request, body, HTTP_ORIGIN)).toEqual(first)
+    store.setMember(TEAM_SPACE, BOB, 'admin')
+    store.space(TEAM_SPACE).status = 'archived'
+    expect(await service.save(BOB, document.id, request, body, HTTP_ORIGIN)).toEqual(first)
+    // 只能查看的请求不在文档上取锁（复验 RA7）：重放也一样
+    expect(store.repositories.documents.lockById).not.toHaveBeenCalled()
+    expect(store.documents.get(document.id)?.revision).toBe(2)
+    expect(store.audits).toHaveLength(1)
+  })
+
+  it('只能查看时，不是重放的（摘要不同、新的请求标识）照样被拒绝：REQUEST_ID_CONFLICT 与 PERMISSION_DENIED', async () => {
+    const { store, service } = setup()
+    const document = teamDocument(store)
+    store.setMember(TEAM_SPACE, BOB, 'editor')
+    const request = query()
+    await service.save(BOB, document.id, request, upload(document.unitId), HTTP_ORIGIN)
+    store.setMember(TEAM_SPACE, BOB, 'viewer')
+    expect((await rejection(service.save(BOB, document.id, request, upload(document.unitId, ',"z":3'), HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+    expect(await rejection(service.save(BOB, document.id, query({ baseRevision: 2 }), upload(document.unitId), HTTP_ORIGIN))).toMatchObject({ code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能保存' })
+    expect(store.documents.get(document.id)?.revision).toBe(2)
+  })
+
+  it('等锁期间被降为查看者：锁下只要求能访问，先查重放——重放照样返回原来的结果，不是重放才是 PERMISSION_DENIED', async () => {
+    const { store, service } = setup()
+    const document = teamDocument(store)
+    store.setMember(TEAM_SPACE, BOB, 'editor')
+    const request = query()
+    const body = upload(document.unitId)
+    const first = await service.save(BOB, document.id, request, body, HTTP_ORIGIN)
+    const demoteWhileWaiting = async (id: string) => {
+      store.setMember(TEAM_SPACE, BOB, 'viewer')
+      return store.documents.get(id)
+    }
+
+    store.repositories.documents.lockById.mockImplementationOnce(demoteWhileWaiting)
+    expect(await service.save(BOB, document.id, request, body, HTTP_ORIGIN)).toEqual(first)
+    store.setMember(TEAM_SPACE, BOB, 'editor')
+    store.repositories.documents.lockById.mockImplementationOnce(demoteWhileWaiting)
+    expect((await rejection(service.save(BOB, document.id, query({ baseRevision: 2 }), upload(document.unitId), HTTP_ORIGIN))).code).toBe('PERMISSION_DENIED')
+    expect(store.documents.get(document.id)?.revision).toBe(2)
+  })
+
+  it('看不到了（被移出空间）：重放也是 NOT_FOUND，不透露那份文档', async () => {
+    const { store, service } = setup()
+    const document = teamDocument(store)
+    store.setMember(TEAM_SPACE, BOB, 'editor')
+    const request = query()
+    const body = upload(document.unitId)
+    await service.save(BOB, document.id, request, body, HTTP_ORIGIN)
+    store.setMember(TEAM_SPACE, BOB, undefined)
+    expect((await rejection(service.save(BOB, document.id, request, body, HTTP_ORIGIN))).code).toBe('NOT_FOUND')
   })
 
   it('同一个 requestId、不同的负载或别的文档、别的人：REQUEST_ID_CONFLICT', async () => {

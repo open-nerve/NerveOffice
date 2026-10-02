@@ -1,27 +1,29 @@
 import type { AdminUser, AuditAction, AuditEventItem, AuditEventQuery } from '@nerve-office/contracts'
 import type { UseQueryResult } from '@tanstack/react-query'
-import type { Ref } from 'react'
+import type { ReactNode, Ref } from 'react'
 import { AUDIT_ACTIONS, AUDIT_TARGET_TYPES } from '@nerve-office/contracts'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { useDebouncedValue } from '../../shared/lib/use-debounced-value.ts'
+import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
-import { Badge, Button, Input, Label, NativeSelect, TableCell } from '../../shared/ui/index.ts'
+import { Badge, Button, Input, Label, NativeSelect, PersonName, Phrase, TableCell } from '../../shared/ui/index.ts'
 import { actorCandidatesQueryOptions, auditEventsQueryOptions } from './admin-api.ts'
 import { auditTimeFrom, auditTimeTo } from './audit-time.ts'
 import { PagedTable } from './paged-table.tsx'
 
-const text = messages.admin.audit
+const text = adminMessages.audit
 
 type AuditTargetType = NonNullable<AuditEventQuery['targetType']>
 
 /** 筛选里选中的操作者或对象：id 与显示的名字；对象另有类型（前端不认识的类型只按 id 筛选） */
 interface Picked {
   readonly id: string
-  readonly label: string
+  readonly label: ReactNode
   readonly type?: AuditTargetType
 }
 
@@ -29,24 +31,31 @@ function isTargetType(type: string): type is AuditTargetType {
   return (AUDIT_TARGET_TYPES as readonly string[]).includes(type)
 }
 
-function nameOf(user: { readonly displayName: string, readonly username: string }): string {
-  return `${user.displayName}（${user.username}）`
+/** 操作者：账户用 PersonName（显示名与登录名分开呈现，M2-P6 复核 M2），账户已经不在时是它的 id；系统与未登录的访问者按类型 */
+function actorOf(event: AuditEventItem): ReactNode {
+  const { actor } = event
+  if (actor.type !== 'user')
+    return text.actorKind(actor.type)
+  if (actor.displayName === null || actor.username === null)
+    return actor.id ?? ''
+  return <PersonName person={{ displayName: actor.displayName, username: actor.username }} />
 }
 
-function actorOf(event: AuditEventItem): string {
-  if (event.actor.type === 'user')
-    return event.actor.displayName === null ? (event.actor.id ?? '') : nameOf({ displayName: event.actor.displayName, username: event.actor.username ?? '' })
-  return text.actorKind(event.actor.type)
-}
-
-function targetOf(event: AuditEventItem): string {
-  if (event.target === null)
-    return '—'
-  return `${text.targetKind(event.target.type)}：${event.target.label ?? event.target.id}`
+/**
+ * 对象：类型与它的名字。账户用服务端分开给出的登录名与显示名（target.user），由 PersonName 呈现：
+ * 拼好的"显示名（登录名）"冒充得了登录名（M2-P6 复核 M2）；邀请是登录名，空间是名称（target.name，<bdi> 隔离），别的只有 id
+ */
+function targetOf(target: NonNullable<AuditEventItem['target']>): ReactNode {
+  let name: ReactNode = target.id
+  if (target.user !== null)
+    name = <PersonName person={target.user} />
+  else if (target.name !== null)
+    name = <bdi>{target.name}</bdi>
+  return <Phrase parts={text.target(text.targetKind(target.type), name)} />
 }
 
 /** 选中的筛选：显示成一个可以清除的标签；清除按钮的可读名称说明清除的是哪一个（审查 B14） */
-function Chip({ label, clearLabel, onClear, ref }: { readonly label: string, readonly clearLabel: string, readonly onClear: () => void, readonly ref: Ref<HTMLButtonElement> }) {
+function Chip({ label, clearLabel, onClear, ref }: { readonly label: ReactNode, readonly clearLabel: string, readonly onClear: () => void, readonly ref: Ref<HTMLButtonElement> }) {
   return (
     <span className="inline-flex items-center gap-1">
       <Badge variant="secondary">{label}</Badge>
@@ -90,7 +99,7 @@ function ActorCandidates({ candidates, typed, settled, onPick }: ActorCandidates
         <ul aria-label={text.actor} className="flex flex-wrap gap-1">
           {candidates.data.map(user => (
             <li key={user.id}>
-              <Button variant="outline" size="sm" onClick={() => onPick(user)}>{nameOf(user)}</Button>
+              <Button variant="outline" size="sm" onClick={() => onPick(user)}><PersonName person={user} /></Button>
             </li>
           ))}
         </ul>
@@ -109,7 +118,7 @@ function TimeFilter({ id, label, value, invalid, onChange }: { readonly id: stri
     <div className="flex flex-col gap-2">
       <Label htmlFor={id}>{label}</Label>
       <Input id={id} type="datetime-local" value={value} aria-invalid={invalid} aria-describedby={invalid ? hintId : undefined} onChange={event => onChange(event.target.value)} />
-      {invalid && <p id={hintId} className="text-xs text-destructive">{messages.admin.audit.invalidTime}</p>}
+      {invalid && <p id={hintId} className="text-xs text-destructive">{adminMessages.audit.invalidTime}</p>}
     </div>
   )
 }
@@ -121,6 +130,7 @@ function TimeFilter({ id, label, value, invalid, onChange }: { readonly id: stri
  * 清除对象之后回到动作的筛选。
  */
 export function AdminAuditPage() {
+  useDocumentTitle(adminMessages.pageTitle(adminMessages.nav.audit))
   const [action, setAction] = useState<AuditAction | ''>('')
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
@@ -154,7 +164,7 @@ export function AdminAuditPage() {
   const candidates = useQuery({ ...actorCandidatesQueryOptions(keyword), enabled: keyword !== '' && keywordSettled && actor === undefined })
 
   function pickActor(user: AdminUser): void {
-    setActor({ id: user.id, label: nameOf(user) })
+    setActor({ id: user.id, label: <PersonName person={user} /> })
     focusAfterRender(actorClearRef)
   }
 
@@ -167,7 +177,7 @@ export function AdminAuditPage() {
   function pickTarget(event: AuditEventItem): void {
     if (event.target === null)
       return
-    setTarget({ id: event.target.id, label: targetOf(event), ...(isTargetType(event.target.type) ? { type: event.target.type } : {}) })
+    setTarget({ id: event.target.id, label: targetOf(event.target), ...(isTargetType(event.target.type) ? { type: event.target.type } : {}) })
     focusAfterRender(targetClearRef)
   }
 
@@ -198,8 +208,8 @@ export function AdminAuditPage() {
       {actor === undefined && <ActorCandidates candidates={candidates} typed={typedKeyword} settled={keywordSettled} onPick={pickActor} />}
       {(actor !== undefined || target !== undefined) && (
         <div className="flex flex-wrap gap-3">
-          {actor !== undefined && <Chip ref={actorClearRef} label={text.chipActor(actor.label)} clearLabel={text.clearActor} onClear={clearActor} />}
-          {target !== undefined && <Chip ref={targetClearRef} label={text.chipTarget(target.label)} clearLabel={text.clearTarget} onClear={clearTarget} />}
+          {actor !== undefined && <Chip ref={actorClearRef} label={<Phrase parts={text.chipActor(actor.label)} />} clearLabel={text.clearActor} onClear={clearActor} />}
+          {target !== undefined && <Chip ref={targetClearRef} label={<Phrase parts={text.chipTarget(target.label)} />} clearLabel={text.clearTarget} onClear={clearTarget} />}
         </div>
       )}
       <PagedTable
@@ -218,7 +228,7 @@ export function AdminAuditPage() {
                 ? '—'
                 : (
                     <Button variant="link" size="sm" className="h-auto p-0" title={text.onlyTarget} onClick={() => pickTarget(event)}>
-                      {targetOf(event)}
+                      {targetOf(event.target)}
                     </Button>
                   )}
             </TableCell>

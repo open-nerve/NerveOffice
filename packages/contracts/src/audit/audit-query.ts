@@ -26,6 +26,14 @@ export const auditEventQuerySchema = z.strictObject({
 
 export type AuditEventQuery = z.infer<typeof auditEventQuerySchema>
 
+/** 一个账户当前的登录名与显示名：分开给出，界面分别呈现（显示名是本人填的，可以写成"李四（lisi）"，M2-P6 复核 M2） */
+export const auditUserNameSchema = z.object({
+  username: z.string(),
+  displayName: z.string(),
+})
+
+export type AuditUserName = z.infer<typeof auditUserNameSchema>
+
 /**
  * 一条审计事件。响应的结构宽松：动作、对象类型等不按已知的取值校验，以后新增的取值在旧页面上照样能显示。
  * 账户（操作者与对象）另给出当前的登录名与显示名，邀请给出登录名；审计表本身只有 id。
@@ -43,8 +51,14 @@ export const auditEventItemSchema = z.object({
   target: z.object({
     type: z.string(),
     id: z.uuid(),
-    /** 能补上的名字：账户是显示名（登录名），邀请是登录名；其他为空 */
-    label: z.string().nullable(),
+    /**
+     * 不是账户的对象能补上的名字：邀请是被邀请的登录名，空间是当前的名称；文档不补标题（M2 总设计 §2.1 第 5 条），其他为空。
+     * 账户不在这里：用 user（登录名与显示名分开给出）。原来的 label 对账户给的是拼好的"显示名（登录名）"，显示名冒充得了登录名；
+     * 它只为打开着的旧页面保留，v0.1 还没有部署、没有旧页面，M2-P6 第 6 片复核 S2 删掉它（DEF-034）
+     */
+    name: z.string().nullable(),
+    /** 对象是账户时它当前的登录名与显示名（分开给出，M2-P6 复核 M2）；不是账户、或者账户已经不在时为空 */
+    user: auditUserNameSchema.nullable(),
   }).nullable(),
   source: z.string(),
   requestId: z.string().nullable(),

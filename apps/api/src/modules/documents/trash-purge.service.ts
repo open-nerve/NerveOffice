@@ -1,20 +1,22 @@
 import type { TrashEntryKind } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
-import type { PurgeOutcome } from './trash.service.ts'
+import type { PurgeOutcome } from './trash-entry-purger.ts'
 import { Injectable } from '@nestjs/common'
 import { TransactionRunner } from '../database/index.ts'
 import { SpacesService } from '../spaces/index.ts'
 import { DocumentsRepository } from './documents.repository.ts'
 import { SpaceTreeRepository } from './space-tree.repository.ts'
 import { TrashEntriesRepository } from './trash-entries.repository.ts'
-import { TrashService } from './trash.service.ts'
+import { TrashEntryPurger } from './trash-entry-purger.ts'
 
-/** 到期的一个删除单元：jobs 只按 id 与所在空间逐个清理，内容与规则都在 documents 里。 */
+/**
+ * 到期的一个删除单元：jobs 只按 id 与所在空间逐个清理，内容与规则都在 documents 里。
+ * 不带标题：jobs 的日志与审计不经手标题与名称（M2-P6 复核 M-1）
+ */
 export interface ExpiredTrashEntry {
   readonly id: string
   readonly spaceId: string
   readonly kind: TrashEntryKind
-  readonly title: string
   readonly expiresAt: Date
 }
 
@@ -35,7 +37,7 @@ const JOB_ORIGIN: AuditOrigin = { source: 'job' }
  * 删除的语义仍然在这里。
  *
  * 与人工的永久删除（TrashService.purge）的差别只有两点：不判断人的权限（操作者是系统，归档的空间照样清），
- * 以及按到期时间成批取。锁的顺序、连带删除、审计与人工的那条路径完全相同——同一个 purgeUnderLock。
+ * 以及按到期时间成批取。锁的顺序、连带删除、审计与人工的那条路径完全相同——同一个 TrashEntryPurger。
  */
 @Injectable()
 export class TrashPurgeService {
@@ -45,23 +47,26 @@ export class TrashPurgeService {
     private readonly entries: TrashEntriesRepository,
     private readonly tree: SpaceTreeRepository,
     private readonly spaces: SpacesService,
-    private readonly trash: TrashService,
+    private readonly purger: TrashEntryPurger,
   ) {}
 
   /**
-   * 到这个时刻为止已经到期的删除单元，最早到期的在前，最多 limit 条。
+   * 到这个时刻为止已经到期的删除单元，最早到期的在前，最多 limit 条；except 里的不取（jobs 暂缓重试的那些，
+   * 一直失败的条目不挡住后面到期的，M2-P6 复核 A 的 S-1）。
    * 到期与否按调用方给的时刻判断（时钟由 jobs 提供），不用数据库的 now()
    */
-  async listExpired(now: Date, limit: number): Promise<ExpiredTrashEntry[]> {
-    const rows = await this.entries.listExpired(now, limit)
-    return rows.map(row => ({ id: row.id, spaceId: row.spaceId, kind: row.kind, title: row.title, expiresAt: row.expiresAt }))
+  async listExpired(now: Date, limit: number, except: readonly string[] = []): Promise<ExpiredTrashEntry[]> {
+    const rows = await this.entries.listExpired(now, limit, except)
+    return rows.map(row => ({ id: row.id, spaceId: row.spaceId, kind: row.kind, expiresAt: row.expiresAt }))
   }
 
   /**
    * 永久删除一个到期的删除单元，一个短事务（一轮里的其他条目各有各的事务，互不影响）。
-   * 取锁的顺序与人工的永久删除相同：空间树的 advisory lock → 空间行 → 文档行 → 回收站行（ADR-007）。
+   * 取锁的顺序与人工的永久删除相同：空间树的 advisory lock → 空间行 → 这一单的文档行 → 回收站行，之后由 TrashEntryPurger 接着锁
+   * 子树里的行（顺序见 purgeFolder 的说明；ADR-014 的"空间树锁与它保护的三类行"，SpaceTreeRepository）。
    * 锁下重新读：这期间它可能被人恢复、被人永久删除（都是"已经不在"），或者随子树被移到别的空间
-   * （这时手里的树锁保护不到它，留给下一轮）。审计的操作者记为系统。
+   * （这时手里的树锁保护不到它，留给下一轮）：8 处锁下核对之一（清单见 FoldersService.update），用例在 tests/integration 的
+   * jobs/trash-purge.test.ts。审计的操作者记为系统。
    */
   async purgeExpired(entry: ExpiredTrashEntry): Promise<ExpiredPurgeResult> {
     return this.transactions.run(async (transaction) => {
@@ -73,7 +78,7 @@ export class TrashPurgeService {
         return { purged: false, reason: 'gone' }
       if (locked.spaceId !== entry.spaceId)
         return { purged: false, reason: 'moved' }
-      return { purged: true, outcome: await this.trash.purgeUnderLock(locked, { type: 'system' }, JOB_ORIGIN, transaction) }
+      return { purged: true, outcome: await this.purger.purge(locked, { type: 'system' }, JOB_ORIGIN, transaction) }
     })
   }
 }

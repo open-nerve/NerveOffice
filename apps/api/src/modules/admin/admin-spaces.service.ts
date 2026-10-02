@@ -1,4 +1,4 @@
-import type { AdminSpace, AdminSpaceListQuery, AdminSpaceListResponse, AuditAction, CreateTeamSpaceRequest, SpaceStatus } from '@nerve-office/contracts'
+import type { AdminSpace, AdminSpaceListQuery, AdminSpaceListResponse, AuditActionDetailsInput, CreateTeamSpaceRequest, SpaceStatus } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Principal } from '../auth/index.ts'
 import type { Transaction } from '../database/index.ts'
@@ -13,6 +13,9 @@ import { UsersService } from '../users/index.ts'
 import { actorOf, toAdminSpace } from './admin-views.ts'
 
 type HttpOrigin = Extract<AuditOrigin, { source: 'http' }>
+
+/** 空间状态的改动记的审计：动作与明细一起给出（明细按动作的严格结构） */
+type SpaceChangeAudit = Extract<AuditActionDetailsInput, { action: 'spaces.visibility_changed' | 'spaces.archived' | 'spaces.restored' }>
 
 /**
  * 管理界面的团队空间（M2-P2 设计 §3.9，US-M2-05）：列表、创建（连同首个空间管理员）、全员可见、归档与恢复。
@@ -60,8 +63,7 @@ export class AdminSpacesService {
   async setVisibility(actor: Principal, spaceId: string, visibleToAll: boolean, origin: HttpOrigin): Promise<AdminSpace> {
     return this.change(actor, spaceId, origin, async (space, transaction) => ({
       change: await this.spaces.setVisibility(space, visibleToAll, transaction),
-      action: 'spaces.visibility_changed',
-      details: { visibleToAll },
+      audit: { action: 'spaces.visibility_changed', details: { visibleToAll } },
     }))
   }
 
@@ -71,7 +73,7 @@ export class AdminSpacesService {
       const change = await this.spaces.setStatus(space, status, transaction)
       if (change.changed && status === 'archived')
         await this.writeAccess.revoke({ kind: 'space', spaceId: space.id }, transaction)
-      return { change, action: status === 'archived' ? 'spaces.archived' : 'spaces.restored' }
+      return { change, audit: { action: status === 'archived' ? 'spaces.archived' : 'spaces.restored' } }
     })
   }
 
@@ -83,7 +85,7 @@ export class AdminSpacesService {
     actor: Principal,
     spaceId: string,
     origin: HttpOrigin,
-    apply: (space: SpaceRecord, transaction: Transaction) => Promise<{ change: SpaceChange, action: AuditAction, details?: Record<string, boolean> }>,
+    apply: (space: SpaceRecord, transaction: Transaction) => Promise<{ change: SpaceChange, audit: SpaceChangeAudit }>,
   ): Promise<AdminSpace> {
     return this.transactions.run(async (transaction) => {
       await this.users.lockActingAdmin(actor.user.id, transaction)
@@ -92,9 +94,9 @@ export class AdminSpacesService {
       const space = await this.spaces.lockSpace(spaceId, transaction)
       if (space?.type !== 'team')
         throw new AppError('NOT_FOUND')
-      const { change, action, details } = await apply(space, transaction)
+      const { change, audit } = await apply(space, transaction)
       if (change.changed)
-        await this.audit.record({ action, actor: actorOf(actor), target: { type: 'space', id: space.id }, origin, ...(details === undefined ? {} : { details }) }, { transaction })
+        await this.audit.record({ ...audit, actor: actorOf(actor), target: { type: 'space', id: space.id }, origin }, { transaction })
       return this.overview(actor, space.id, transaction)
     })
   }

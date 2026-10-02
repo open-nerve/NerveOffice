@@ -243,9 +243,9 @@ for (const source of ['word-win', 'web-article', 'google-docs', 'plain']) {
     }
 }
 
-/** 构造内部片段（SDK 复制时写进 HTML 注释的格式，internal-fragment.ts）。 */
+/** 构造内部片段（Univer 复制时写进 HTML 注释的格式）。具体的构造方法已移出公开仓库（2026-09-30，沿用 9-29 的脱敏口径），这里只留签名；这条 M0 验证用例因此不能直接重跑。 */
 function fragmentHtml(doc: unknown): string {
-    return `<!--univer-doc-fragment:${Buffer.from(JSON.stringify({ version: 1, kind: 'univer-doc-fragment', doc })).toString('base64')}--><p>片段</p>`;
+  throw new Error(`内部片段的构造方法已按 2026-09-30 的决定移出仓库（本机不入库的 docs/upstream/private/），需要重跑这条验证时从那里取回：${typeof doc}`)
 }
 
 for (const config of ['default', 'platform'] as const) {
@@ -260,7 +260,7 @@ for (const config of ['default', 'platform'] as const) {
             body: {
                 dataStream: '恶意链接与标题\r引号链接\r分节\n之后\r',
                 customRanges: [
-                    { rangeId: 'p5evil', rangeType: 0, startIndex: 0, endIndex: 3, properties: { url: 'javascript:window.__p5_pwned=1' } },
+                    { rangeId: 'p5evil', rangeType: 0, startIndex: 0, endIndex: 3, properties: { url: 'javascript:<构造方法已移出仓库>' } },
                     { rangeId: 'p5quote', rangeType: 0, startIndex: 8, endIndex: 11, properties: { url: 'https://x.test/<带引号与标签的地址已移出仓库>' } },
                 ],
                 paragraphs: [{ startIndex: 7, paragraphStyle: { namedStyleType: 4 } }, { startIndex: 12 }, { startIndex: 18 }],

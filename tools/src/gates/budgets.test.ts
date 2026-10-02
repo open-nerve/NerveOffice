@@ -1,6 +1,7 @@
 import type { BuildOutput, EntryBudget, ViteManifest, WorkerBudget } from './budgets.ts'
 import { describe, expect, it } from 'vitest'
 import { checkBudgets, entryWorkers, initialFiles, reachableFiles, workerClosure } from './budgets.ts'
+import { ENTRY_BUDGETS } from './policy.ts'
 
 const MANIFEST: ViteManifest = {
   'index.html': { file: 'assets/index.js', isEntry: true, imports: ['_shared.js'], css: ['assets/index.css'] },
@@ -61,6 +62,21 @@ describe('US-M1-11 首屏 JS 的体积预算', () => {
   it('超过预算：违规', () => {
     const result = checkBudgets(MANIFEST, [budget('index.html', 34_999), editorBudget], [formulaBudget], OUTPUT)
     expect(result.violations.map(v => v.rule)).toEqual(['budgets/exceeded'])
+  })
+
+  it('首屏文件数的上限（M2-P6 复核第三批 S-b）：不超过时通过；超过时违规、列出全部文件，体积还在预算之内也一样；不设上限时只看体积', () => {
+    const limited = (maxInitialFiles: number): EntryBudget => ({ ...budget('index.html', 35_000), maxInitialFiles })
+    expect(checkBudgets(MANIFEST, [limited(3), editorBudget], [formulaBudget], OUTPUT).violations).toEqual([])
+    const exceeded = checkBudgets(MANIFEST, [limited(2), editorBudget], [formulaBudget], OUTPUT)
+    expect(exceeded.violations).toEqual([expect.objectContaining({ rule: 'budgets/too-many-files', subject: 'index.html' })])
+    expect(exceeded.violations[0]?.detail).toContain('首屏有 3 个 JS 文件（assets/deep.js、assets/index.js、assets/shared.js），上限 2 个')
+    // 体积照常报出
+    expect(exceeded.notes[0]).toContain('34.2 KiB')
+    expect(checkBudgets(MANIFEST, [budget('index.html', 35_000), editorBudget], [formulaBudget], OUTPUT).violations).toEqual([])
+  })
+
+  it('平台页面的首屏限定 2 个文件（入口块与和编辑器页共用的块，M2-P6 复核第三批 S-b）', () => {
+    expect(ENTRY_BUDGETS.find(entry => entry.entry === 'index.html')?.maxInitialFiles).toBe(2)
   })
 
   it('预算指向的入口不存在：违规（预算表要跟着入口一起改）', () => {

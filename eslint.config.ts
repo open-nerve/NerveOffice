@@ -193,10 +193,97 @@ const EDITOR_DYNAMIC_UNIVER = {
   selector: 'ImportExpression[source.value=/^@univerjs/]',
   message: '编辑器里的 @univerjs/* 用静态导入：内部 API 与深层路径的限制只认静态导入（P4 设计 §3.6.9）',
 }
+// 内部 API 里不用动态 import()（M2-P6 第二次复验 S1）：登记表的自测（internal-api/registry.test.ts）按文本扫描每个文件的导入导出，
+// 只认静态的语句。动态引入的是哪个文件、用了它的哪些名字认不出来（与命名空间导入一样），引入的文件对 SDK 的引用就逃过了登记；
+// internal-api 只是登记过的一层再导出与小封装，用不着动态引入。对 @univerjs/* 的动态引入另由 EDITOR_DYNAMIC_UNIVER 拦下，这里连同
+// 同目录的文件与别的包一起拦。类型里的 import('./x.ts') 只带类型、不进产物，不在此列：只经它引用的文件在扫描里"从出口走不到"，照样报出
+const INTERNAL_API_NO_DYNAMIC_IMPORT = {
+  selector: 'ImportExpression',
+  message: '内部 API（editor/internal-api/）里不用动态 import()：登记表的自测只认静态的导入导出语句，认不出动态引入的文件与它用到的名字（registry.test.ts，M2-P6 第二次复验 S1）',
+}
 // 类型里的 import('…') 同样绕得过：编辑器里的 @univerjs/* 类型用 import type 引用（复验 RB4）
 const EDITOR_TYPE_IMPORT_UNIVER = {
   selector: 'TSImportType[source.value=/^@univerjs/]',
   message: '编辑器里的 @univerjs/* 类型用 import type 引用：内部 API 与深层路径的限制只认导入语句（复验 RB4）',
+}
+// 编辑器（含 internal-api）对 Univer 的包的导入源的共同限制：不引用 Pro、node_modules 里的路径、大写的包名、查询串与片段、深层路径
+const EDITOR_UNIVER_SOURCE_PATTERNS = [NO_UNIVER_PRO, NO_NODE_MODULES_PATH, NO_UPPERCASE_PACKAGE, UNIVER_QUERY_IMPORTS, UNIVER_DEEP_IMPORTS]
+
+// ---- 编辑器里能直接引用的 @univerjs/* 的值：白名单（M2-P6 复核 F4）----
+// 上面的 UNIVER_INTERNAL_SYMBOLS 只拦登记过（与决定不用）的内部符号：没登记的新内部符号（例如 @univerjs/sheets 导出的
+// SheetPermissionCheckController）照样能在 internal-api 之外直接引用。所以编辑器里 internal-api 与测试代码之外的文件，
+// 对 @univerjs/* 的值引用只允许这里按导入源列出的公开符号：插件类、Univer 与 FUniver、用到的枚举、mergeLocales、主题，
+// 以及 /locale/<语言> 的语言包（默认导出）。列的是适配层实际用到的；新用一个公开的值时加进来，内部符号经 internal-api 引用并登记。
+// 不受这份白名单限制的：
+// - 类型引用（import type、export type，只在编译时存在）；登记过的内部符号的类型仍由 UNIVER_INTERNAL_SYMBOLS 拦下；
+// - 副作用导入（import '…/facade'、样式）：没有导入名；
+// - internal-api（登记的地方）与测试代码（测试要构造 SDK 的对象，例如拦截器、公式的值对象；不进产物，SDK 改了直接失败）。
+// 登记过的内部符号的值引用会报两条（清单与白名单），说的是同一件事。
+// lint 看不出来、由审查保证的（写进 ADR-010）：Facade 对象上的方法调用（它们本来就是公开 API，其中的内部对象经返回值流出时
+// 认不出来）、经注入器按字符串或变量取服务、对 SDK 对象的私有字段的其他访问写法
+const UNIVER_PUBLIC_VALUES: Readonly<Record<string, readonly string[]>> = {
+  '@univerjs/core': ['CommandType', 'LifecycleStages', 'LocaleType', 'LogLevel', 'mergeLocales', 'Univer'],
+  '@univerjs/core/facade': ['FUniver'],
+  '@univerjs/data-validation': ['UniverDataValidationPlugin'],
+  '@univerjs/docs': ['UniverDocsPlugin'],
+  '@univerjs/docs-drawing': ['UniverDocsDrawingPlugin'],
+  '@univerjs/docs-ui': ['UniverDocsUIPlugin'],
+  '@univerjs/drawing': ['UniverDrawingPlugin'],
+  '@univerjs/drawing-ui': ['UniverDrawingUIPlugin'],
+  '@univerjs/engine-formula': ['UniverFormulaEnginePlugin'],
+  '@univerjs/engine-render': ['DeviceInputEventType', 'UniverRenderEnginePlugin'],
+  '@univerjs/find-replace': ['UniverFindReplacePlugin'],
+  '@univerjs/rpc': ['UniverRPCMainThreadPlugin', 'UniverRPCWorkerThreadPlugin'],
+  '@univerjs/sheets': ['UniverSheetsPlugin'],
+  '@univerjs/sheets-conditional-formatting': ['UniverSheetsConditionalFormattingPlugin'],
+  '@univerjs/sheets-conditional-formatting-ui': ['UniverSheetsConditionalFormattingUIPlugin'],
+  '@univerjs/sheets-data-validation': ['UniverSheetsDataValidationPlugin'],
+  '@univerjs/sheets-data-validation-ui': ['UniverSheetsDataValidationUIPlugin'],
+  '@univerjs/sheets-drawing': ['UniverSheetsDrawingPlugin'],
+  '@univerjs/sheets-drawing-ui': ['UniverSheetsDrawingUIPlugin'],
+  '@univerjs/sheets-filter': ['UniverSheetsFilterPlugin'],
+  '@univerjs/sheets-filter-ui': ['UniverSheetsFilterUIPlugin'],
+  '@univerjs/sheets-find-replace': ['UniverSheetsFindReplacePlugin'],
+  '@univerjs/sheets-formula': ['UniverRemoteSheetsFormulaPlugin', 'UniverSheetsFormulaPlugin'],
+  '@univerjs/sheets-formula-ui': ['UniverSheetsFormulaUIPlugin'],
+  '@univerjs/sheets-hyper-link': ['UniverSheetsHyperLinkPlugin'],
+  '@univerjs/sheets-hyper-link-ui': ['UniverSheetsHyperLinkUIPlugin'],
+  '@univerjs/sheets-note': ['UniverSheetsNotePlugin'],
+  '@univerjs/sheets-note-ui': ['UniverSheetsNoteUIPlugin'],
+  '@univerjs/sheets-numfmt': ['UniverSheetsNumfmtPlugin'],
+  '@univerjs/sheets-numfmt-ui': ['UniverSheetsNumfmtUIPlugin'],
+  '@univerjs/sheets-sort': ['UniverSheetsSortPlugin'],
+  '@univerjs/sheets-sort-ui': ['UniverSheetsSortUIPlugin'],
+  '@univerjs/sheets-ui': ['UniverSheetsUIPlugin'],
+  '@univerjs/themes': ['defaultTheme'],
+  '@univerjs/ui': ['KeyCode', 'UniverUIPlugin'],
+}
+const UNIVER_PUBLIC_VALUE_MESSAGE = '编辑器里（internal-api 与测试代码之外）对 @univerjs/* 的值引用只允许白名单（eslint.config.ts 的 UNIVER_PUBLIC_VALUES）里的公开符号：内部 API 经 apps/web/src/editor/internal-api/ 引用并登记（registry.ts，ADR-010）；新用一个公开的值时加进白名单（M2-P6 复核 F4）'
+/** 白名单里的导入源：只允许列出的值，类型照常 */
+const UNIVER_PUBLIC_VALUE_PATHS = Object.entries(UNIVER_PUBLIC_VALUES).map(([name, allowImportNames]) => ({ name, allowImportNames: [...allowImportNames], allowTypeImports: true, message: UNIVER_PUBLIC_VALUE_MESSAGE }))
+/** 语言包（/locale/<语言>）：只用默认导出 */
+const UNIVER_LOCALE_PATH = String.raw`[^/]+/locale/[\w-]+`
+const UNIVER_LOCALE_DEFAULT_ONLY = { regex: String.raw`^@univerjs/${UNIVER_LOCALE_PATH}$`, allowImportNames: ['default'], allowTypeImports: true, message: UNIVER_PUBLIC_VALUE_MESSAGE }
+/**
+ * 白名单之外的导入源（没列出的包、包里没列出的 /facade 等）：任何值都不允许（导入名的模式 .* 认得出每一个名字，含默认导出、
+ * 命名空间导入与 export *），类型与副作用导入照常。包名里只有小写字母、数字、- 与 /，拼进正则不用转义
+ */
+const UNIVER_UNLISTED_SOURCES = {
+  regex: String.raw`^@univerjs/(?!(?:${Object.keys(UNIVER_PUBLIC_VALUES).map(name => name.slice('@univerjs/'.length)).join('|')})$)(?!${UNIVER_LOCALE_PATH}$)`,
+  importNamePattern: '.*',
+  allowTypeImports: true,
+  message: UNIVER_PUBLIC_VALUE_MESSAGE,
+}
+
+// ---- E2E 的探针只能动态引入（M2-P6 复核 F5）----
+// 探针（editor/testing/**）只在测试构建里，由 sheet-editor.ts 在 import.meta.env.MODE === 'e2e' 的分支里动态 import()（M2-P3 设计 §3.7）。
+// 静态引用会把它的副作用带进生产构建：探针本身被摇树去掉，probe-facades.ts 给 Facade 补上的方法却留下，门禁 artifacts 只认探针的分块
+// 与名字，发现不了。所以测试代码之外，对 testing/ 只能动态 import()：静态导入（含 import type）与再导出都拦下；testing/ 里的文件之间
+// 照常静态引用（它们在同一个分块里），测试代码不受限。按引用路径的文字判断（路径里有 testing 这一段，不区分大小写）；
+// 动态引入发生在哪个分支里 lint 看不出来，由门禁 artifacts（探针的分块与名字）与审查保证
+const EDITOR_PROBE_MODULES = {
+  regex: String.raw`(?:^|/)testing(?:/|$)`,
+  message: '编辑器的 E2E 探针（editor/testing/**）只在测试构建里，只能经动态 import() 引入（sheet-editor.ts 的 e2e 分支）：静态导入与再导出会把 probe-facades.ts 补上的 Facade 带进生产构建，门禁 artifacts 发现不了（M2-P6 复核 F5）',
 }
 
 // 测试与测试辅助只被测试静态引用：nerve/test-code-only-in-tests 按路径拦下的是静态导入，动态导入在这里拦（复验 R3）
@@ -241,6 +328,70 @@ const RADIX_DIALOG_OUTSIDE_DIALOG_FILE = [
     selector: String.raw`:matches(ImportDeclaration[source.value='radix-ui'] > ImportNamespaceSpecifier, ExportAllDeclaration[source.value='radix-ui'], ImportExpression[source.value='radix-ui'])`,
     message: `${RADIX_DIALOG_MESSAGE}。radix-ui 的原语按名字引入（import { Slot } from 'radix-ui'）：命名空间导入、export * 与动态导入认不出引入的是什么`,
   },
+]
+
+// 人名一律经人名组件（shared/ui 的 PersonName）显示，纯文字里用 messages.people.text（规范 §2.4，M2-P6 复核 M2）：显示名是本人填的，
+// 什么都能写（"李四（lisi）""李四 @lisi"），和登录名、别的文字拼成一段就冒充得了别人。lint 近似地拦下几种拼法：显示名（displayName）
+// 出现在模板字符串的插值与 + 的拼接里；JSX 里显示名和别的文字、和登录名（username）是同一个元素的子节点。显示名单独占一个元素
+// （表格里"显示名"那一列、PersonName 自己）照常。显示名与登录名认成员（user.displayName）与同名的变量，外面可以再套两层不改变值的写法：
+// 可选链、?? || &&、条件表达式的两支、非空断言与类型断言（SAME_VALUE_WRAPPERS，例如 `${user?.displayName ?? ''}`，M2-P6 第 6 片复核第二批 S-2）。
+// 认不出、由审查保证的写法（第 6 片复核 S5、第二批 S-2）：
+// - 经变量转一手（const name = user.displayName）、解构时改了名（const { displayName: name } = user）；
+// - 经函数或方法（[…].join()、'…'.concat()、String()、user.displayName.trim()、文案里自己写的拼接函数）；
+// - 外面套了三层以上。
+// 会误报的（第二批 G-b）：文案里同名的属性同样按人名报出，例如列标题、标签的键叫 displayName（`${text.columns.displayName}列`、
+// <label>{text.displayName}：</label>）——文案的键换个名字（例如 displayNameLabel），或在那一行关掉检查、在 -- 之后写明原因。
+// 对 web 的生产代码生效：各自配置 no-restricted-syntax 的块（平台代码、弹窗的文件、入口、编辑器）都带上这组限制
+const PERSON_NAME_MESSAGE = '人名经 PersonName（shared/ui）显示，纯文字里用 messages.people.text：显示名（displayName）不和登录名、别的文字拼成一段（规范 §2.4，M2-P6 复核 M2）'
+/**
+ * 套在值外面、不改变值的写法：节点类型与值所在的属性。条件表达式只算两支（条件本身不是这个值）；
+ * 类型断言的另一个属性是类型，不会是成员或变量
+ */
+const SAME_VALUE_WRAPPERS = [
+  { types: ['ChainExpression', 'TSNonNullExpression', 'TSAsExpression', 'TSSatisfiesExpression'], keys: ['expression'] },
+  { types: ['LogicalExpression'], keys: ['left', 'right'] },
+  { types: ['ConditionalExpression'], keys: ['consequent', 'alternate'] },
+] as const
+/** 外面最多再套几层：`${user?.displayName ?? ''}` 是两层（?? 套着可选链） */
+const SAME_VALUE_DEPTH = 2
+const SAME_VALUE_WRAPPER = `:matches(${SAME_VALUE_WRAPPERS.flatMap(wrapper => wrapper.types).join(', ')})`
+/** 处在外层的值的位置上（字段选择器：是外层节点的 expression、left 等属性） */
+const SAME_VALUE_POSITION = `:matches(${[...new Set(SAME_VALUE_WRAPPERS.flatMap(wrapper => wrapper.keys))].map(key => `.${key}`).join(', ')})`
+
+/** 直接放在 parent 里、值就是 field 本身的成员或变量（报在成员或变量上）：parent > 外层 > 内层 > 成员，外面零到两层 */
+function fieldValueIn(parent: string, field: string): string[] {
+  const leaf = `:matches(MemberExpression[property.name='${field}'], Identifier[name='${field}'])`
+  return Array.from({ length: SAME_VALUE_DEPTH + 1 }, (_, depth) => depth === 0
+    ? `${parent} > ${leaf}`
+    : [parent, SAME_VALUE_WRAPPER, ...Array.from({ length: depth - 1 }).fill(`${SAME_VALUE_WRAPPER}${SAME_VALUE_POSITION}`), `${leaf}${SAME_VALUE_POSITION}`].join(' > '))
+}
+
+/**
+ * 值就是 field 本身的 JSX 子节点 {…}：按从 expression 起的属性路径认（它要作 JSX 兄弟节点 ~ 的左边，只能写成这个节点自己的条件），
+ * 外面零到两层的写法同 fieldValueIn
+ */
+function fieldValueChild(field: string): string {
+  const at = (path: string, depth: number): string[] => [
+    `[${path}.property.name='${field}']`,
+    `[${path}.name='${field}']`,
+    ...(depth === 0
+      ? []
+      : SAME_VALUE_WRAPPERS.flatMap(({ types, keys }) => keys.flatMap(key =>
+          at(`${path}.${key}`, depth - 1).map(inner => `[${path}.type=/^(?:${types.join('|')})$/]${inner}`)))),
+  ]
+  return `JSXExpressionContainer:matches(${at('expression', SAME_VALUE_DEPTH).join(', ')})`
+}
+
+const DISPLAY_NAME_CHILD = fieldValueChild('displayName')
+const USERNAME_CHILD = fieldValueChild('username')
+/** JSX 里显示名的兄弟节点：有字的文本、字符串字面量、登录名 */
+const NAME_NEIGHBOURS = [String.raw`JSXText[value=/\S/]`, String.raw`JSXExpressionContainer[expression.type='Literal'][expression.value=/\S/]`, USERNAME_CHILD]
+const PERSON_NAME_CONCATENATION = [
+  ...[...fieldValueIn('TemplateLiteral', 'displayName'), ...fieldValueIn('BinaryExpression[operator=\'+\']', 'displayName')].map(selector => ({ selector, message: PERSON_NAME_MESSAGE })),
+  ...NAME_NEIGHBOURS.flatMap(neighbour => [
+    { selector: `${neighbour} ~ ${DISPLAY_NAME_CHILD}`, message: PERSON_NAME_MESSAGE },
+    { selector: `${DISPLAY_NAME_CHILD} ~ ${neighbour}`, message: PERSON_NAME_MESSAGE },
+  ]),
 ]
 
 // 契约的请求结构里直接用 z.uuid()：大写的 id 原样交给服务端（M2-P2 审查 A1、复验 N3）
@@ -343,6 +494,27 @@ const API_NO_RAW = {
   property: 'raw',
   message: '不用 .raw 拼接 SQL：用 sql 模板标签，动态的片段只能来自代码里的白名单（规范 §5）；表定义里的 CHECK 常量除外',
 }
+// antfu 的配置给 no-restricted-properties 的几项：同名规则后者整体覆盖前者，自己配置这条规则的块（后端、测试）要带上它们
+const ANTFU_RESTRICTED_PROPERTIES = [
+  { property: '__proto__', message: 'Use `Object.getPrototypeOf` or `Object.setPrototypeOf` instead.' },
+  { property: '__defineGetter__', message: 'Use `Object.defineProperty` instead.' },
+  { property: '__defineSetter__', message: 'Use `Object.defineProperty` instead.' },
+  { property: '__lookupGetter__', message: 'Use `Object.getOwnPropertyDescriptor` instead.' },
+  { property: '__lookupSetter__', message: 'Use `Object.getOwnPropertyDescriptor` instead.' },
+]
+// 有条件地跳过用例同样是跳过（规范 §8.4）：test/no-disabled-tests 只认 .skip 与 x 前缀，playwright/no-skipped-test 只认 test.skip 一类。
+// skipIf、runIf 与用例里的 skip()（测试上下文的 ctx.skip()、解构出来的 skip、Playwright 的 testInfo.skip()）在测试里一并拦下；
+// 确需跳过时用 eslint-disable 注释在 -- 之后写明原因（eslint-comments/require-description 要求写），经审查（M2-P6 第 6 片复核 S4）。
+// it.skip、test.skip、describe.skip 另由上面两条规则报出，这里放过，不重复。
+// 会误报的（复核第二批 G-c）：按属性名判断，测试里普通对象的 skip 属性同样报出，例如分页参数（page.skip、{ skip } = query 的解构）；
+// test.describe.skip 这类两层的写法除了 playwright/no-skipped-test 再报一次。现在都没有这样的写法；遇到时换个名字（例如 offset），
+// 或在那一行关掉检查、在 -- 之后写明原因
+const TEST_SKIP_MESSAGE = '有条件地跳过用例（skipIf、runIf、用例里的 skip()）同样是跳过（规范 §8.4）：确需跳过时用 eslint-disable 注释在 -- 之后写明原因，经审查（M2-P6 第 6 片复核 S4）'
+const TEST_SKIP_PROPERTIES = [
+  { property: 'skipIf', message: TEST_SKIP_MESSAGE },
+  { property: 'runIf', message: TEST_SKIP_MESSAGE },
+  { property: 'skip', allowObjects: ['it', 'test', 'describe', 'suite'], message: TEST_SKIP_MESSAGE },
+]
 // 输入都经 contracts 里的结构校验（规范 §4）：参数装饰器必须带 schema；不接受 schema 的装饰器与原始的请求、响应对象会绕过校验（审查 B8）。
 // 不经校验的装饰器在引用处就拦下（改名、命名空间引用、深层路径都拦得住），装饰器的写法再查一遍；
 // 自己写的参数装饰器能拿到整个请求，由审查把关（复验 N6、F2）
@@ -383,12 +555,66 @@ const API_TRASH_PURGE = {
   importNames: ['TrashPurgeService'],
   message: '到期的回收站清理（TrashPurgeService）不判断人的权限，只由定时任务的模块（modules/jobs）调用（M2-P4 设计 §3.1）',
 }
+// 永久删除一个删除单元的本体（TrashEntryPurger）不判断任何人的权限：只在 documents 模块内部由 TrashService.purge（锁下判断过权限之后）
+// 与 TrashPurgeService（到期的清理）调用，不从公开入口导出。别的模块直接引用它的文件由模块边界拦下；这里再拦下经公开入口的引用，
+// 将来有人把它加进入口也拦得住。jobs 也不例外：它只经 TrashPurgeService（M2-P6 复核 A 的 G1）
+const API_TRASH_ENTRY_PURGER = {
+  regex: String.raw`(?:^|/)documents/index\.ts$`,
+  importNames: ['TrashEntryPurger'],
+  message: '永久删除一个删除单元的本体（TrashEntryPurger）不判断权限，只在 documents 模块内部使用：人工的永久删除经 TrashService.purge，到期的清理经 TrashPurgeService（M2-P6 复核 A 的 G1）',
+}
+// 一个模块的仓储只在这个模块里用（规范 §1.2）：别的模块需要它的数据时调用它的服务。模块边界只放行经公开入口（index.ts）的引用，
+// 公开入口转出了仓储，别的模块就拿得到——documents 的公开入口转出 DocumentsRepository，只为集成测试专用的入口
+// （app/integration.test-support.ts，集成测试直接核对仓储的查询范围，M2-P6 复核 A 的 S3）；documents 的服务经访问策略判断权限之后
+// 才查询，别的模块拿到它的仓储就绕开了"可访问文档"的范围。所以按导入名拦下经任何 index.ts 引用的 *Repository（静态导入、import type、
+// 再导出、命名空间导入与 export * 都算）：app 层的程序接口（app/index.ts）也不例外，命令行与 app 层的其他文件经它转手时，按路径的限制
+// 认不出来（复验 R-S4）。模块自己的文件按相对路径引用自己的仓储（./x.repository.ts），不经 index.ts，不受影响；
+// 仓储的类名都以 Repository 结尾（lint-rules-api.test.ts 核对每个 *.repository.ts，M2-P6 第 6 片复核 S4）。
+// 会误报的（复核第二批 G-c）：按导入名的模式判断时，命名空间导入与 export * 认不出拿到的是哪些名字，所以 api 里经任何 index.ts 的
+// import * as x 与 export * 一律报出，即使那个入口根本不转出仓储（现在没有这样的写法）；需要时改成按名字导入、按名字转出
+const API_FOREIGN_REPOSITORIES = {
+  regex: String.raw`(?:^|/)index\.ts$`,
+  importNamePattern: 'Repository$',
+  message: '一个模块的仓储只在这个模块里使用（规范 §1.2）：别的模块经它的服务（documents 的服务先经访问策略判断权限，M2-P6 复核 A 的 S3）；公开入口转出仓储只为集成测试专用的入口（app/integration.test-support.ts，M2-P6 第 6 片复核 S4）',
+}
+// documents 的仓储里一串 id 一律作为一个数组参数（database 模块的 inIdArray，M2-P6 复核 A 的 S-2、B 的 G1）：drizzle 的 inArray、
+// notInArray 把每个 id 展开成一个参数，子树里的文件夹、文档与连带的删除单元没有数量上限，超过 65535 个参数时整条语句失败（每次都失败）。
+// 包的入口与深层路径（drizzle-orm/sql/expressions 等）都拦下；别的模块的 id 列表有上限（分页、批量），不受这条限制
+const API_DOCUMENTS_ID_LISTS = {
+  regex: String.raw`^drizzle-orm(?:$|/)`,
+  importNames: ['inArray', 'notInArray'],
+  message: 'documents 的仓储里一串 id 用 inIdArray（database 模块，整串 id 是一个数组参数）：drizzle 的 inArray、notInArray 把每个 id 展开成一个参数，子树没有数量上限，超过 65535 个参数时整条语句失败（M2-P6 复核 A 的 S-2）',
+}
+// 集成测试专用的入口（M2-P6 复验 R-S4）：它转出数据库句柄与 documents 的仓储，只有 tests/integration 能引用。
+// apps/api 里的任何文件（包括 app 层的其他文件与单元测试）引用它都拦下：按解析之后的路径判断，相对路径、包名的出口
+// （@nerve-office/api/testing）都认得出；别的元素（命令行、各模块）另由模块边界拦下
+const API_INTEGRATION_ENTRY = 'apps/api/src/app/integration.test-support.ts'
+// 与时间有关的判断用数据库时间（规范 §5）：应用主机的时钟与数据库的不一致时，"到期了没有"两边的答案不同，例如定时清理按主机的钟
+// 判断，钟快多少就提前多少永久删除（M2-P6 复核 A 的 Q-1、第 3 片 G7）。后端不取本机的"现在"：Date.now()、不带参数的 new Date()
+// 与当作函数调用的 Date()；业务里的"现在"取数据库的 now()（database 模块的 DatabaseTime），时刻的比较尽量写在 SQL 里。
+// 测试同样不用（规范 §8.1：时间可控，用假时钟）。进程自己的计时不是业务判断，按文件放行（API_WALL_CLOCK_FILES）；
+// 经别名、globalThis.Date 之类的写法 lint 认不出来，由审查保证（M2-P6 第 6 片复核 S5）
+const API_WALL_CLOCK_MESSAGE = '后端不取本机的"现在"（Date.now()、new Date()、Date()）：与时间有关的判断用数据库时间（规范 §5），取 database 模块的 DatabaseTime 或写在 SQL 里；进程自己的计时按文件放行（eslint.config.ts 的 API_WALL_CLOCK_FILES，M2-P6 第 6 片复核 S5）'
+const API_WALL_CLOCK = [
+  { selector: 'CallExpression[callee.object.name=\'Date\'][callee.property.name=\'now\']', message: API_WALL_CLOCK_MESSAGE },
+  { selector: 'NewExpression[callee.name=\'Date\'][arguments.length=0]', message: API_WALL_CLOCK_MESSAGE },
+  { selector: 'CallExpression[callee.name=\'Date\']', message: API_WALL_CLOCK_MESSAGE },
+]
+/**
+ * 可以用本机时钟的后端文件：进程自己的计时，不是业务里的时间判断。
+ * - 关停的时限（app/shutdown.ts）：从收到信号起算的几秒，与数据库无关，数据库可能已经不可用；
+ * - 就绪检查结果的缓存（database 模块的 database-readiness.ts）：探针频繁时一秒内复用上一次的结果，检查本身就是在问数据库还在不在
+ */
+const API_WALL_CLOCK_FILES = {
+  app: ['apps/api/src/app/shutdown.ts'],
+  database: ['apps/api/src/modules/database/database-readiness.ts'],
+}
 
 /** 后端文件允许的例外。 */
 interface ApiFileKind {
   /** 引用 drizzle-orm 与 pg（database 模块、仓储、表定义） */
   databaseLibraries?: boolean
-  /** 引用 DATABASE、executorOf 与数据库类型（database 模块、仓储；app 层的程序接口为集成测试转出） */
+  /** 引用 DATABASE、executorOf 与数据库类型（database 模块、仓储；集成测试专用的入口为集成测试转出） */
   databaseHandles?: boolean
   /** 引用表定义（仓储、表定义之间） */
   tables?: boolean
@@ -402,6 +628,12 @@ interface ApiFileKind {
   documentTransfer?: boolean
   /** 引用到期的回收站清理 TrashPurgeService（定时任务的模块与 documents 模块） */
   trashPurge?: boolean
+  /** 经别的模块的公开入口引用它的仓储（只有集成测试专用的入口，为集成测试转出 documents 的仓储） */
+  foreignRepositories?: boolean
+  /** 一串 id 只用一个数组参数，不用 drizzle 的 inArray、notInArray（documents 的仓储） */
+  idArraysOnly?: boolean
+  /** 用本机的时钟（Date.now() 等）：进程自己的计时，不是业务里的时间判断（API_WALL_CLOCK_FILES） */
+  wallClock?: boolean
 }
 
 function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
@@ -419,6 +651,9 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
     ...(kind.controller === true ? [API_REPOSITORY_FROM_CONTROLLER, API_TRANSACTIONS_FROM_CONTROLLER] : []),
     ...(kind.documentTransfer === true ? [] : [API_DOCUMENT_TRANSFER]),
     ...(kind.trashPurge === true ? [] : [API_TRASH_PURGE]),
+    API_TRASH_ENTRY_PURGER,
+    ...(kind.foreignRepositories === true ? [] : [API_FOREIGN_REPOSITORIES]),
+    ...(kind.idArraysOnly === true ? [API_DOCUMENTS_ID_LISTS] : []),
   ]
   const syntax = [
     ...BASE_RESTRICTED_SYNTAX,
@@ -427,11 +662,12 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
     ...API_PARAMETER_DECORATORS,
     ...(kind.controller === true ? [] : [API_CONTROLLER_OUTSIDE_CONTROLLER_FILE]),
     ...(kind.processEnv === true ? [] : API_PROCESS_ENV_SYNTAX),
+    ...(kind.wallClock === true ? [] : API_WALL_CLOCK),
   ]
   return {
     'no-restricted-imports': ['error', { paths, patterns }],
     'no-restricted-syntax': ['error', ...syntax],
-    'no-restricted-properties': kind.rawSql === true ? 'off' : ['error', API_NO_RAW],
+    'no-restricted-properties': ['error', ...ANTFU_RESTRICTED_PROPERTIES, ...(kind.rawSql === true ? [] : [API_NO_RAW])],
     'node/no-process-env': kind.processEnv === true ? 'off' : 'error',
     // React 的规则把 Nest 的 useFactory、useValue 当作 Hook；后端没有 React
     'react/no-unnecessary-use-prefix': 'off',
@@ -440,6 +676,44 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
 
 /** 元素之间只经公开入口引用；同一个元素内部不受限制（ADR-003）。 */
 const PUBLIC_ENTRY = 'index.{ts,tsx}'
+
+/**
+ * 只给按需加载的页面（与编辑器页）用的文案：shared/i18n/zh-cn/ 下的文件与引用它的那一个功能（M2-P6 复核第二批）。
+ * 平台页面首屏用到的在 messages.ts（经 shared/i18n/index.ts 给出），不在这里
+ */
+const LAZY_TEXTS: readonly { readonly file: string, readonly feature: string }[] = [
+  { file: 'admin.ts', feature: 'admin' },
+  { file: 'members.ts', feature: 'members' },
+  { file: 'colleagues.ts', feature: 'colleagues' },
+  { file: 'trash.ts', feature: 'trash' },
+  { file: 'search.ts', feature: 'search' },
+  { file: 'editor.ts', feature: 'sheet-editor' },
+]
+
+/** web 元素里的测试与测试辅助（相对元素的路径）：不进产物，模块边界上按需放行 */
+const WEB_TEST_CODE = ['**/*.test.{ts,tsx}', '**/*.test-support.{ts,tsx}']
+
+/**
+ * 共享层内部引用这些文案：模块边界不检查同一个元素内部的引用（boundaries/dependencies 的 checkInternals 默认关），
+ * 改按解析之后的路径拦下——shared/i18n/index.ts 转出、shared 里别的文件中转，都会把它们带回首屏（M2-P6 复核第二批）
+ */
+const LAZY_TEXT_ZONES = LAZY_TEXTS.map(({ file, feature }) => ({
+  target: 'apps/web/src/shared',
+  from: `apps/web/src/shared/i18n/zh-cn/${file}`,
+  message: `这份文案（shared/i18n/zh-cn/${file}）只由按需加载的 features/${feature} 引用：共享层（包括 shared/i18n/index.ts）转出或中转会把它带进平台页面的首屏（M2-P6 复核第二批）`,
+}))
+
+/**
+ * 只给平台页面用的请求层模块不经 shared/api/index.ts 转出（M2-P6 复核第二批）：编辑器页也引用这个桶文件，转出就进了两个入口共用的块，
+ * 实测平台页面的入口随之多出两个小块（共用的 react-router 等不再并进入口块，另有一个运行时的块）。用到的地方按路径引用。
+ * 这条只是早期提示，只拦得住经桶文件转出这一条路（经 session.ts 等再转出、经 shared/lib 中转、编辑器那边直接引用都拦不住）；
+ * 门禁 budgets 按平台页面首屏的文件数（2 个）从结果上兜住（第三批 S-b，tools/src/gates/policy.ts）
+ */
+const PLATFORM_ONLY_API_ZONES = ['request-ids.ts', 'write-outcome.ts'].map(file => ({
+  target: 'apps/web/src/shared/api/index.ts',
+  from: `apps/web/src/shared/api/${file}`,
+  message: `shared/api/${file} 只给平台页面用，不经 shared/api/index.ts 转出：编辑器页也引用这个桶文件，转出会让平台页面的入口多出两个小块；用到的地方按路径引用（M2-P6 复核第二批）`,
+}))
 
 // ---- 测试代码只在测试里用（审查 B17）----
 const CODE_FILES = '**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}'
@@ -512,6 +786,8 @@ export default antfu(
       'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX],
       // 三斜杠引用（/// <reference path|types|lib>）绕得过受限导入与模块边界：类型经 import type 或 tsconfig 的 types 引用（复验 RB4）
       'ts/triple-slash-reference': ['error', { path: 'never', types: 'never', lib: 'never' }],
+      // 关掉检查的注释（eslint-disable…）要在 -- 之后写明原因，审查时看得到为什么（M2-P6 第 6 片复核 S4）；重新打开的 eslint-enable 不用写
+      'eslint-comments/require-description': ['error', { ignore: ['eslint-enable'] }],
     },
   },
   {
@@ -521,15 +797,15 @@ export default antfu(
     files: ['apps/web/src/**/*.{ts,tsx}'],
     ignores: [...TEST_CODE, 'apps/web/src/shared/ui/dialog.tsx'],
     rules: {
-      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS],
+      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION],
     },
   },
   {
-    // 弹窗的文件自己可以引入 Radix 的弹窗原语（上一块不管它），SDK 的 DOM 标记的限制照样生效（P3 审查 A8）
+    // 弹窗的文件自己可以引入 Radix 的弹窗原语（上一块不管它），SDK 的 DOM 标记与人名的限制照样生效（P3 审查 A8）
     name: 'nerve/web-dialog-file',
     files: ['apps/web/src/shared/ui/dialog.tsx'],
     rules: {
-      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...SDK_DOM_MARKERS],
+      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION],
     },
   },
   {
@@ -538,7 +814,7 @@ export default antfu(
     // CSP 阳性对照只在测试构建里，不用 zod，它的入口里就是探针本身的代码
     ignores: ['apps/web/src/entries/csp-probe/**'],
     rules: {
-      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...APP_ENTRY_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS],
+      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...APP_ENTRY_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION],
     },
   },
   {
@@ -546,8 +822,21 @@ export default antfu(
     name: 'nerve/editor-may-import-univer',
     files: ['apps/web/src/editor/**'],
     rules: {
-      'no-restricted-imports': ['error', { paths: UNIVER_INTERNAL_SYMBOLS, patterns: [NO_UNIVER_PRO, NO_NODE_MODULES_PATH, NO_UPPERCASE_PACKAGE, UNIVER_QUERY_IMPORTS, UNIVER_DEEP_IMPORTS] }],
+      'no-restricted-imports': ['error', { paths: UNIVER_INTERNAL_SYMBOLS, patterns: EDITOR_UNIVER_SOURCE_PATTERNS }],
       'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX, ...NO_GET_INJECTOR, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE],
+    },
+  },
+  {
+    // 编辑器里 internal-api 与测试代码之外：对 @univerjs/* 的值引用只允许白名单里的公开符号（M2-P6 复核 F4），在上一块的基础上加这组限制。
+    // 同名规则后者整体覆盖前者：登记过的内部符号的清单与导入源的限制一并带上
+    name: 'nerve/editor-univer-public-values',
+    files: ['apps/web/src/editor/**'],
+    ignores: [...TEST_CODE, 'apps/web/src/editor/internal-api/**'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        paths: [...UNIVER_INTERNAL_SYMBOLS, ...UNIVER_PUBLIC_VALUE_PATHS],
+        patterns: [...EDITOR_UNIVER_SOURCE_PATTERNS, UNIVER_LOCALE_DEFAULT_ONLY, UNIVER_UNLISTED_SOURCES],
+      }],
     },
   },
   {
@@ -557,17 +846,17 @@ export default antfu(
     files: ['apps/web/src/editor/**'],
     ignores: [...TEST_CODE, 'apps/web/src/editor/internal-api/**'],
     rules: {
-      'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX, ...NO_GET_INJECTOR, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS],
+      'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX, ...NO_GET_INJECTOR, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION],
     },
   },
   {
     // 内部 API 的出口（P4 设计 §3.6.9；M2-P3 起有两个：数据的包 index.ts、界面的包 ui.ts）：
-    // 这里可以引用受限的内部符号、调用 __getInjector，导出的每一项都要登记（registry.ts）
+    // 这里可以引用受限的内部符号、调用 __getInjector，导出的每一项都要登记（registry.ts）；不用动态 import()（登记表的扫描认不出）
     name: 'nerve/editor-internal-api',
     files: ['apps/web/src/editor/internal-api/**'],
     rules: {
-      'no-restricted-imports': ['error', { patterns: [NO_UNIVER_PRO, NO_NODE_MODULES_PATH, NO_UPPERCASE_PACKAGE, UNIVER_QUERY_IMPORTS, UNIVER_DEEP_IMPORTS] }],
-      'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE],
+      'no-restricted-imports': ['error', { patterns: EDITOR_UNIVER_SOURCE_PATTERNS }],
+      'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, INTERNAL_API_NO_DYNAMIC_IMPORT],
     },
   },
   {
@@ -587,10 +876,16 @@ export default antfu(
   { name: 'nerve/api-document-transfer', files: ['apps/api/src/modules/admin/**/*.ts'], rules: apiRules({ documentTransfer: true }) },
   { name: 'nerve/api-trash-purge', files: ['apps/api/src/modules/jobs/**/*.ts'], rules: apiRules({ trashPurge: true }) },
   { name: 'nerve/api-documents', files: ['apps/api/src/modules/documents/**/*.ts'], rules: apiRules({ documentTransfer: true, trashPurge: true }) },
-  // app 层的程序接口（index.ts）为集成测试转出数据库句柄；app 层的其他文件同样拿不到（复验 N6）
-  { name: 'nerve/api-app-entry', files: ['apps/api/src/app/index.ts'], rules: apiRules({ databaseHandles: true }) },
+  // 集成测试专用的入口为集成测试转出数据库句柄、documents 的仓储与全部的表定义；app 层的程序接口（index.ts）与 app 层的其他文件同样拿不到
+  // （复验 N6，M2-P6 复核 A 的 S3、复验 R-S4、复核 B 的 B4）
+  { name: 'nerve/api-integration-entry-exports', files: [API_INTEGRATION_ENTRY], rules: apiRules({ databaseHandles: true, foreignRepositories: true, tables: true }) },
   { name: 'nerve/api-database', files: ['apps/api/src/modules/database/**/*.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true }) },
+  // 进程自己的计时可以用本机时钟（API_WALL_CLOCK_FILES）：紧跟在所属的块之后，其余的限制照旧
+  { name: 'nerve/api-app-wall-clock', files: API_WALL_CLOCK_FILES.app, rules: apiRules({ wallClock: true }) },
+  { name: 'nerve/api-database-wall-clock', files: API_WALL_CLOCK_FILES.database, rules: apiRules({ databaseLibraries: true, databaseHandles: true, wallClock: true }) },
   { name: 'nerve/api-repositories', files: ['apps/api/src/modules/*/*.repository.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true, tables: true }) },
+  // documents 的仓储另外不用 inArray、notInArray（M2-P6 复核 A 的 S-2）：一串 id 一律是一个数组参数
+  { name: 'nerve/api-documents-repositories', files: ['apps/api/src/modules/documents/*.repository.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true, tables: true, idArraysOnly: true }) },
   // 表定义里的 CHECK 约束要把代码里的常量拼成 SQL 字面量（drizzle-kit 不内联参数）；这里只有 DDL 与常量，没有运行时的输入
   { name: 'nerve/api-schema', files: ['apps/api/src/db/schema/**/*.ts'], rules: apiRules({ databaseLibraries: true, tables: true, rawSql: true }) },
   { name: 'nerve/api-controllers', files: ['apps/api/src/**/*.controller.ts'], rules: apiRules({ controller: true }) },
@@ -605,8 +900,12 @@ export default antfu(
       // 不允许跳过或占位的用例（规范 §8.4）；确需临时跳过时，用 eslint-disable 注释写明原因，经审查
       'test/no-disabled-tests': 'error',
       'test/warn-todo': 'error',
+      // 有条件地跳过（skipIf、runIf、用例里的 skip()）同样拦下（TEST_SKIP_PROPERTIES）
+      'no-restricted-properties': ['error', ...ANTFU_RESTRICTED_PROPERTIES, ...TEST_SKIP_PROPERTIES],
     },
   },
+  // 后端的测试：上一块覆盖了后端各块的同名规则，.raw 的限制一并带上
+  { name: 'nerve/api-tests', files: ['apps/api/src/**/*.test.ts'], rules: { 'no-restricted-properties': ['error', ...ANTFU_RESTRICTED_PROPERTIES, API_NO_RAW, ...TEST_SKIP_PROPERTIES] } },
   {
     // 测试代码之外（生产代码与仓库工具）只能引用本包 dependencies 里的包：测试库都在 devDependencies 里，或者根本没有声明。
     // 这条规则同时检查静态导入、动态导入与 import type。本地的测试与测试辅助按路径另外拦下，
@@ -617,6 +916,16 @@ export default antfu(
     rules: {
       'import-x/no-extraneous-dependencies': ['error', { devDependencies: false, optionalDependencies: false, peerDependencies: false, includeTypes: true }],
       'ts/no-restricted-imports': ['error', { patterns: [TEST_MODULES] }],
+    },
+  },
+  {
+    // 编辑器的 E2E 探针只能动态引入（M2-P6 复核 F5）：编辑器里测试代码与 testing/ 之外的文件，在上一块的基础上加这条限制。
+    // 同名规则后者整体覆盖前者：测试与测试辅助的限制一并带上
+    name: 'nerve/editor-probe-dynamic-only',
+    files: ['apps/web/src/editor/**'],
+    ignores: [...TEST_CODE, 'apps/web/src/editor/testing/**'],
+    rules: {
+      'ts/no-restricted-imports': ['error', { patterns: [TEST_MODULES, EDITOR_PROBE_MODULES] }],
     },
   },
   {
@@ -646,6 +955,24 @@ export default antfu(
     },
   },
   {
+    // 集成测试专用的入口（app/integration.test-support.ts）只给 tests/integration：apps/api 里的任何文件都不引用它（M2-P6 复验 R-S4）。
+    // 按解析之后的路径判断：相对路径（./integration.test-support.ts、../app/…）与包名的出口（@nerve-office/api/testing）都拦得住；
+    // 单元测试也不例外（测试辅助的限制 nerve/test-code-only-in-tests 只管生产代码，同一个元素内部又不经模块边界）
+    name: 'nerve/api-integration-entry',
+    files: ['apps/api/src/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}'],
+    ignores: [API_INTEGRATION_ENTRY],
+    rules: {
+      'import-x/no-restricted-paths': ['error', {
+        basePath: import.meta.dirname,
+        zones: [{
+          target: 'apps/api/src',
+          from: API_INTEGRATION_ENTRY,
+          message: '集成测试专用的入口（app/integration.test-support.ts）只给 tests/integration：它转出数据库句柄与 documents 的仓储，apps/api 里的文件经各模块的公开入口（M2-P6 复验 R-S4）',
+        }],
+      }],
+    },
+  },
+  {
     // 带第三方运行时的重组件（弹窗 dialog.tsx，Radix Dialog，约 12 KiB gzip）不经 shared 的任何文件转出（ADR-008）：
     // web 没有声明 sideEffects，经 shared/ui 的桶文件引用会把它再导出的每个模块都带进首屏，首屏的预算还有余量、门禁 budgets 发现不了。
     // 按解析之后的路径判断：经 shared 里别的文件中转、换写法（'../ui/dialog.tsx'、'./dialog.js'）都拦得住（M2-P1 审查 B2，复验 N2、X6）。
@@ -661,6 +988,37 @@ export default antfu(
           target: 'apps/web/src/shared',
           from: 'apps/web/src/shared/ui/dialog.tsx',
           message: '弹窗（shared/ui/dialog.tsx，Radix Dialog）不经 shared 的其他文件转出：会随桶文件进平台页面的首屏；用到的功能模块直接引用这个文件（ADR-008，M2-P1 审查 B2）',
+        }, ...LAZY_TEXT_ZONES, ...PLATFORM_ONLY_API_ZONES],
+      }],
+    },
+  },
+  {
+    // 弹窗的文件不受上一块管（它自己引入 Radix 的原语），只给按需加载的页面用的文案的限制照样要有（同名规则后者整体覆盖前者，单独一块）
+    name: 'nerve/web-dialog-file-texts',
+    files: ['apps/web/src/shared/ui/dialog.tsx'],
+    rules: {
+      'import-x/no-restricted-paths': ['error', { basePath: import.meta.dirname, zones: LAZY_TEXT_ZONES }],
+    },
+  },
+  {
+    // 内部 API 只经两个出口引用（M2-P6 复验 N4）：编辑器里 internal-api 之外的文件（测试也一样）只能引用 internal-api/index.ts 与 ui.ts。
+    // 出口导出的每一项在 registry.ts 登记，登记表的自测核对出口与登记一一对应、并扫描 internal-api 里每个文件对 @univerjs/* 的引用都归到
+    // 登记的某一项；绕过出口直接引用里面的文件（例如 formula-protocol.ts），引到的东西就不经登记。
+    // 按解析之后的路径判断：静态导入、import type、再导出与动态 import() 都算，路径的写法（../internal-api/./x.ts、绕一圈的相对路径）拦得住。
+    // 目录名大小写不同的写法（../Internal-API/x.ts）按路径认不出，由类型检查拦下：internal-api 的每个文件都按 tsconfig 的 include 以本来的
+    // 写法进了程序，forceConsistentCasingInFileNames 报 TS1149（Linux 上直接解析不到）。类型里的 import('…') 只带类型、不进产物，
+    // lint 看不出来，由审查保证（ADR-010）
+    name: 'nerve/editor-internal-api-exits',
+    files: ['apps/web/src/editor/**/*.{ts,tsx}'],
+    ignores: ['apps/web/src/editor/internal-api/**'],
+    rules: {
+      'import-x/no-restricted-paths': ['error', {
+        basePath: import.meta.dirname,
+        zones: [{
+          target: 'apps/web/src/editor',
+          from: 'apps/web/src/editor/internal-api',
+          except: ['./index.ts', './ui.ts'],
+          message: '内部 API 只经两个出口引用：internal-api/index.ts 与 ui.ts。要用里面别的文件的东西，经出口导出并在 registry.ts 登记（M2-P6 复验 N4）',
         }],
       }],
     },
@@ -691,7 +1049,8 @@ export default antfu(
         // web 构建用的 Vite 插件（第三方许可清单等），由 vite.config.ts 引用
         { type: 'web-build', pattern: 'apps/web/build', partialMatch: false },
         // 后端（P2 设计 §3.1）：模块按目录名区分；表定义按所属模块分目录（src/db/schema/<模块>/index.ts）
-        // app 是应用的组装与进程入口（main.ts）；index.ts 是命令行与集成测试共用的程序接口
+        // app 是应用的组装与进程入口（main.ts）；index.ts 是命令行与集成测试共用的程序接口，
+        // integration.test-support.ts 是只给集成测试的入口（数据库句柄、documents 的仓储与全部的表定义，M2-P6 复验 R-S4、复核 B 的 B4）
         { type: 'api-app', pattern: 'apps/api/src/app', partialMatch: false },
         { type: 'api-shared', pattern: 'apps/api/src/shared', partialMatch: false },
         { type: 'api-module', pattern: 'apps/api/src/modules/*', capture: ['module'], partialMatch: false },
@@ -788,8 +1147,10 @@ export default antfu(
           },
           // 命令行经模块的入口，或者经 app 层的程序接口（需要组装多个模块时，例如初始化管理员）
           { from: { element: { type: 'api-cli' } }, allow: { to: { element: { type: ['api-module', 'api-app'], fileInternalPath: PUBLIC_ENTRY } } } },
-          // 集成测试经 @nerve-office/api 的程序接口建应用
-          { from: { element: { type: 'integration-tests' } }, allow: { to: { element: { type: 'api-app', fileInternalPath: PUBLIC_ENTRY } } } },
+          // 集成测试专用的入口转出全部的表定义：集成测试按它生成建库语句，与迁移建出的库逐项比较（M2-P6 复核 B 的 B4；取代复验 S1 只核对判重键的那一条）
+          { from: { element: { type: 'api-app', fileInternalPath: 'integration.test-support.ts' } }, allow: { to: { element: { type: 'api-schema', fileInternalPath: PUBLIC_ENTRY } } } },
+          // 集成测试经 @nerve-office/api 的程序接口建应用，经集成测试专用的入口（@nerve-office/api/testing）拿数据库句柄与仓储（M2-P6 复验 R-S4）
+          { from: { element: { type: 'integration-tests' } }, allow: { to: { element: { type: 'api-app', fileInternalPath: [PUBLIC_ENTRY, 'integration.test-support.ts'] } } } },
           {
             from: { element: { type: 'web-entry', captured: { entry: 'platform' } } },
             disallow: { to: { element: { type: 'web-editor' } } },
@@ -908,6 +1269,21 @@ export default antfu(
             ],
             disallow: { to: { element: { type: 'web-feature', captured: { feature: 'colleagues' } } } },
             message: '按关键词选一项（features/colleagues）只由按需加载的功能（features/admin、features/members）引用，不进平台页面的首屏（M2-P2 设计 §3.10，审查 B8）',
+          },
+          // 只给按需加载的页面（与编辑器页）用的文案按功能各放一个文件（shared/i18n/zh-cn/<功能>.ts，M2-P6 复核第二批）：只由对应的功能引用。
+          // 应用层、入口、别的功能、编辑器适配层与共享层（包括 shared/i18n/index.ts 的转出）引用它，就会把它带进平台页面的首屏。
+          // 同样放在允许的策略之后，覆盖"共享层可以随意引用"；测试与测试辅助不进产物，下一条再放行
+          ...LAZY_TEXTS.map(({ file, feature }) => ({
+            from: [
+              { element: { type: ['web-app', 'web-entry', 'web-shared', 'web-editor'] } },
+              { element: { type: 'web-feature', captured: { feature: `!${feature}` } } },
+            ],
+            disallow: { to: { element: { type: 'web-shared', fileInternalPath: `i18n/zh-cn/${file}` } } },
+            message: `这份文案（shared/i18n/zh-cn/${file}）只由按需加载的 features/${feature} 引用：别处引用（包括经 shared/i18n/index.ts 转出）会把它带进平台页面的首屏（M2-P6 复核第二批）`,
+          })),
+          {
+            from: { element: { type: ['web-app', 'web-entry', 'web-feature', 'web-shared', 'web-editor'], fileInternalPath: WEB_TEST_CODE } },
+            allow: { to: { element: { type: 'web-shared', fileInternalPath: LAZY_TEXTS.map(({ file }) => `i18n/zh-cn/${file}`) } } },
           },
         ],
       }],

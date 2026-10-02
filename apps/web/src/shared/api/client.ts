@@ -148,6 +148,14 @@ export function isMissingResource(error: unknown): error is ApiError {
 }
 
 /**
+ * 要的内容不存在，或者看不到了（404 NOT_FOUND）。与 isMissingResource 不同，不含 400：地址里的 id 不合法才按不存在处理，
+ * 保存这类请求的 400 是请求本身的问题，不能说成"已经被删除、移走"（M2-P6 复核第二批 G-5）
+ */
+export function isNotFoundError(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.code === 'NOT_FOUND'
+}
+
+/**
  * 操作按访问权限被拒绝：看不到了（404，与不存在一致），或者看得到却不能做（403）。页面上显示的权限可能已经过时
  * （例如空间刚被归档、刚被移出），页面据此重新请求（M2-P2 复验）。请求内容不合法（400）不算：那是请求本身的问题
  */
@@ -161,6 +169,19 @@ export function isAccessDenied(error: unknown): error is ApiError {
  */
 export function isDefiniteRejection(error: unknown): error is ApiError {
   return error instanceof ApiError && error.status >= 400 && error.status < 500
+}
+
+/**
+ * 写操作的结果未知：请求可能已经生效，只是没有收到确定的回答（网络中断、服务端或代理出错、回包读不出来）。
+ * 与 isDefiniteRejection 的区别只在一处：服务端自己回答的 503 SERVICE_UNAVAILABLE 结果是确定的"没有生效"——
+ * 等待密码哈希的请求太多（DEF-015）发生在写入之前；数据库繁忙（等锁超时、语句超时、取不到连接）时事务整体回滚
+ * （M2-P6 第 3 片复核 A 的 G-2），而且服务端只在这个请求里还没有事务提交过时才回 503，提交之后遇到繁忙回 500
+ * （M2-P6 第 3 片复验）。界面据此提示"可能已经生效"（M2-P6 复核 G-1、G-2）
+ */
+export function isUnknownOutcome(error: unknown): boolean {
+  if (error instanceof ApiError)
+    return error.status >= 500 && error.code !== 'SERVICE_UNAVAILABLE'
+  return true
 }
 
 /** 可以自动重试的失败：网络问题与服务端的临时错误。其他错误重试也没用。 */

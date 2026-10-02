@@ -10,6 +10,8 @@ import { UsersService } from './users.service.ts'
 
 class FakeHasher extends PasswordHasher {
   readonly verified: string[] = []
+  /** reject 的次数（没有可以比对的哈希） */
+  rejected = 0
 
   async hash(password: string): Promise<string> {
     return `hash:${password}`
@@ -20,11 +22,16 @@ class FakeHasher extends PasswordHasher {
     return passwordHash === `hash:${password}`
   }
 
+  async reject(): Promise<false> {
+    this.rejected += 1
+    return false
+  }
+
   needsRehash(): boolean {
     return false
   }
 
-  async observe(): Promise<void> {}
+  observe(): void {}
 }
 
 const TX = {} as Transaction
@@ -185,12 +192,32 @@ describe('UsersService.verifyPasswordOf 与 replacePassword（修改密码，审
     expect(await service.verifyPasswordOf('id', 'wrong')).toBeUndefined()
   })
 
-  it('账户不存在或已停用：不通过，照样算一次哈希（耗时与密码错误相近）', async () => {
+  it('账户不存在或已停用：不通过，按没有账户的做法计算（reject，与密码错误的计算相同），不比对账户的哈希', async () => {
     for (const target of [undefined, account({ status: 'disabled' })]) {
       const { service, hasher } = setup(target)
       expect(await service.verifyPasswordOf('id', 'secret')).toBeUndefined()
-      expect(hasher.verified).toHaveLength(1)
-      expect(hasher.verified[0]).not.toBe('hash:secret')
+      expect(hasher.rejected).toBe(1)
+      expect(hasher.verified).toEqual([])
+    }
+  })
+
+  it('旧密码错误、账户不存在或已停用：比对之后不再访问数据库，同 verifyCredentials（M2-P6 第 3 片复验）', async () => {
+    for (const target of [account({}), undefined, account({ status: 'disabled' })]) {
+      const { service, repository, hasher } = setup(target)
+      const accesses = (): number => Object.values(repository).reduce((total, method) => total + method.mock.calls.length, 0)
+      const compare = hasher.verify.bind(hasher)
+      let accessesWhenCompared: number | undefined
+      vi.spyOn(hasher, 'verify').mockImplementation(async (passwordHash, password) => {
+        accessesWhenCompared = accesses()
+        return compare(passwordHash, password)
+      })
+      vi.spyOn(hasher, 'reject').mockImplementation(async () => {
+        accessesWhenCompared = accesses()
+        return false
+      })
+      expect(await service.verifyPasswordOf('id', 'wrong')).toBeUndefined()
+      expect(accessesWhenCompared).toBeGreaterThan(0)
+      expect(accesses()).toBe(accessesWhenCompared)
     }
   })
 

@@ -1,12 +1,14 @@
 import type { QueryKey, UseQueryOptions, UseQueryResult } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { colleaguesMessages } from '../../shared/i18n/zh-cn/colleagues.ts'
 import { cn } from '../../shared/lib/cn.ts'
 import { useDebouncedValue } from '../../shared/lib/use-debounced-value.ts'
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
-import { Badge, Button, Input, Label } from '../../shared/ui/index.ts'
+import { Badge, Button, Input, Label, Phrase } from '../../shared/ui/index.ts'
 
 /** 按关键词选一项时的界面文字 */
 export interface KeywordPickerTexts {
@@ -28,8 +30,11 @@ interface KeywordPickerProps<TQueryFnData, TItem, TQueryKey extends QueryKey> {
   /** 按关键词（去掉首尾空白、输入停下之后的）查找候选的查询：结果经 select 取成候选的数组 */
   readonly search: (keyword: string) => UseQueryOptions<TQueryFnData, Error, TItem[], TQueryKey>
   readonly itemKey: (item: TItem) => string
-  /** 候选按钮与选中之后的标签上显示的名称 */
-  readonly itemName: (item: TItem) => string
+  /**
+   * 候选按钮与选中之后的标签上怎么显示它：人名用 PersonName（显示名与登录名分开呈现，显示名冒充不了登录名，M2-P6 复核 M2），
+   * 名称用 <bdi>（从右到左的名称不打乱旁边的字）
+   */
+  readonly renderItem: (item: TItem) => ReactNode
   /** 不作为候选的（例如已经是成员的人） */
   readonly exclude?: (item: TItem) => boolean
   readonly texts: KeywordPickerTexts
@@ -53,12 +58,18 @@ function lookupOf<TItem>(result: UseQueryResult<TItem[]>, settled: boolean, excl
   return { state: 'found', items: exclude === undefined ? result.data : result.data.filter(item => !exclude(item)) }
 }
 
+/**
+ * 候选与选中之后的标签放得下很长的名字（M2-P6 复核第四批）：显示名可以到 64 个字、登录名 32 个字符而且没有空格，按钮与标签默认不换行，
+ * 窄屏上会撑出表单、页面横向滚动。这里放开换行（高度随内容），按任意位置断开；看到的、读出来的仍是全名
+ */
+const WRAPPING_NAME = 'max-w-full text-left whitespace-normal [overflow-wrap:anywhere]'
+
 /** 查找的结果：失败（可以重试）或者找到的候选。查找中与没有找到只在状态容器里说明 */
-function Candidates<TItem>({ lookup, texts, itemKey, itemName, onPick }: {
+function Candidates<TItem>({ lookup, texts, itemKey, renderItem, onPick }: {
   readonly lookup: Lookup<TItem>
   readonly texts: KeywordPickerTexts
   readonly itemKey: (item: TItem) => string
-  readonly itemName: (item: TItem) => string
+  readonly renderItem: (item: TItem) => ReactNode
   readonly onPick: (item: TItem) => void
 }) {
   if (lookup.state === 'failed') {
@@ -74,8 +85,8 @@ function Candidates<TItem>({ lookup, texts, itemKey, itemName, onPick }: {
   return (
     <ul aria-label={texts.candidates} className="flex flex-wrap gap-1">
       {lookup.items.map(item => (
-        <li key={itemKey(item)}>
-          <Button type="button" variant="outline" size="sm" onClick={() => onPick(item)}>{itemName(item)}</Button>
+        <li key={itemKey(item)} className="max-w-full">
+          <Button type="button" variant="outline" size="sm" className={cn('h-auto min-h-7 py-1', WRAPPING_NAME)} onClick={() => onPick(item)}>{renderItem(item)}</Button>
         </li>
       ))}
     </ul>
@@ -91,7 +102,7 @@ function Candidates<TItem>({ lookup, texts, itemKey, itemName, onPick }: {
  * 部分读屏软件不播报（M2-P2 复验）。候选列表与失败的提示（role="alert"）随结果出现。
  * 只由按需加载的页面引用，不进首屏。
  */
-export function KeywordPicker<TQueryFnData, TItem, TQueryKey extends QueryKey>({ label, selected, onSelect, search, itemKey, itemName, exclude, texts }: KeywordPickerProps<TQueryFnData, TItem, TQueryKey>) {
+export function KeywordPicker<TQueryFnData, TItem, TQueryKey extends QueryKey>({ label, selected, onSelect, search, itemKey, renderItem, exclude, texts }: KeywordPickerProps<TQueryFnData, TItem, TQueryKey>) {
   const [keyword, setKeyword] = useState('')
   const typed = keyword.trim()
   const query = useDebouncedValue(typed)
@@ -108,20 +119,20 @@ export function KeywordPicker<TQueryFnData, TItem, TQueryKey extends QueryKey>({
       <div className="flex flex-col gap-2">
         <span className="text-sm font-medium">{label}</span>
         <span className="inline-flex flex-wrap items-center gap-2">
-          <Badge variant="secondary">{messages.colleagues.selected(itemName(selected))}</Badge>
+          <Badge variant="secondary" className={cn('rounded-lg', WRAPPING_NAME)}><Phrase parts={colleaguesMessages.selected(renderItem(selected))} /></Badge>
           <Button
             ref={changeRef}
             type="button"
             variant="ghost"
             size="sm"
-            aria-label={messages.colleagues.changeOf(label)}
+            aria-label={colleaguesMessages.changeOf(label)}
             onClick={() => {
               onSelect(undefined)
               setKeyword('')
               focusAfterRender(inputRef)
             }}
           >
-            {messages.colleagues.change}
+            {colleaguesMessages.change}
           </Button>
         </span>
       </div>
@@ -146,7 +157,7 @@ export function KeywordPicker<TQueryFnData, TItem, TQueryKey extends QueryKey>({
           lookup={lookup}
           texts={texts}
           itemKey={itemKey}
-          itemName={itemName}
+          renderItem={renderItem}
           onPick={(item) => {
             onSelect(item)
             focusAfterRender(changeRef)

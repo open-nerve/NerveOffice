@@ -27,6 +27,7 @@ import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
 import { asUser, login } from '../support/session-client.ts'
+import { createTeamSpace } from '../support/spaces.ts'
 
 let database: TestDatabase
 let app: TestApp
@@ -219,6 +220,32 @@ describe('US-M1-05 同一次保存重发不会保存两次', () => {
     expect(response.status).toBe(409)
     expect((await errorOf(response)).code).toBe('REQUEST_ID_CONFLICT')
     expect(await storedRevision(second.id)).toBe(1)
+  })
+
+  // 重放只把原来的结果交给同一个人对同一份文档的同一次保存（M2-P6 第 3 片复验）：下面两条的负载逐字节相同、摘要一致，
+  // 挡住它们的只能是"保存的人"与"文档"这两条核对
+  it('查看者拿别人在同一份文档上用过的 requestId、逐字节相同的负载：409 REQUEST_ID_CONFLICT，不把别人的结果给他', async () => {
+    const spaceId = await createTeamSpace(database, { name: '重放的核对', createdBy: alice.id, members: { [alice.id]: 'editor', [bob.id]: 'viewer' } })
+    const document = await seedDocument(database, { spaceId, createdBy: alice.id, title: '表格' })
+    const raw = snapshotOf(document.unitId, '爱丽丝保存的')
+    const params = { baseRevision: 1, requestId: randomUUID() }
+    await saved(await put(aliceSession, document.id, raw, params))
+    const response = await put(bobSession, document.id, raw, params)
+    expect(response.status).toBe(409)
+    expect((await errorOf(response)).code).toBe('REQUEST_ID_CONFLICT')
+    expect(await storedRevision(document.id)).toBe(2)
+  })
+
+  it('同一个人对 unitId 相同的副本发同一个 requestId 与负载：409 REQUEST_ID_CONFLICT，副本的修订号不变', async () => {
+    const original = await aliceDocument('原件')
+    const copy = await seedDocument(database, { spaceId: alice.personalSpaceId, createdBy: alice.id, title: '副本', unitId: original.unitId })
+    const raw = snapshotOf(original.unitId, '同样的内容')
+    const params = { baseRevision: 1, requestId: randomUUID() }
+    await saved(await put(aliceSession, original.id, raw, params))
+    const response = await put(aliceSession, copy.id, raw, params)
+    expect(response.status).toBe(409)
+    expect((await errorOf(response)).code).toBe('REQUEST_ID_CONFLICT')
+    expect(await storedRevision(copy.id)).toBe(1)
   })
 })
 

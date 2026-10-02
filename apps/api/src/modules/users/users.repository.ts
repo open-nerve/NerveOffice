@@ -1,9 +1,10 @@
 import type { UserStatus, UserSystemRole } from '@nerve-office/contracts'
 import type { Database, Transaction } from '../database/index.ts'
 import type { AccountRecord, User } from './user.ts'
+import { collapseNameBlanks } from '@nerve-office/contracts'
 import { Inject, Injectable } from '@nestjs/common'
 import { and, asc, eq, gt, ilike, inArray, ne, or, sql } from 'drizzle-orm'
-import { users } from '../../db/schema/users/index.ts'
+import { displayNameForSearch, users } from '../../db/schema/users/index.ts'
 import { containsPattern } from '../../shared/like-pattern.ts'
 import { DATABASE, executorOf } from '../database/index.ts'
 
@@ -47,12 +48,15 @@ export interface AccountFilter {
   readonly limit: number
 }
 
-/** 显示名或登录名里包含关键词（不区分大小写，关键词按字面匹配） */
+/**
+ * 显示名或登录名里包含关键词（不区分大小写，关键词按字面匹配）。空白的种类与个数不算区别（M2-P6 复验 G1）：显示名与关键词
+ * 两边的每一段空白都合成一个普通空格再比较（displayNameForSearch 与 collapseNameBlanks，同一份清单）。登录名里没有空白
+ */
 function nameContains(keyword: string | undefined) {
   if (keyword === undefined || keyword === '')
     return undefined
-  const pattern = containsPattern(keyword)
-  return or(ilike(users.displayName, pattern), ilike(users.username, pattern))
+  const pattern = containsPattern(collapseNameBlanks(keyword))
+  return or(ilike(displayNameForSearch, pattern), ilike(users.username, pattern))
 }
 
 /** 只有它读写 users（规范 §1.2）。 */
@@ -139,11 +143,11 @@ export class UsersRepository {
     return { user, passwordHash, passwordVersion }
   }
 
-  /** 按 id 批量取账户（含停用的）：审计查询补名字用 */
-  async findByIds(ids: readonly string[]): Promise<User[]> {
+  /** 按 id 批量取账户（含停用的）：审计查询补名字用；写操作在它的事务里补名字时传入事务 */
+  async findByIds(ids: readonly string[], transaction?: Transaction): Promise<User[]> {
     if (ids.length === 0)
       return []
-    return this.db.select(USER_COLUMNS).from(users).where(inArray(users.id, [...ids]))
+    return executorOf(this.db, transaction).select(USER_COLUMNS).from(users).where(inArray(users.id, [...ids]))
   }
 
   /**

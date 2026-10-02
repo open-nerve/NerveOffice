@@ -19,6 +19,7 @@ import { FoldersRepository } from './folders.repository.ts'
 import { FoldersService } from './folders.service.ts'
 import { SpaceTreeRepository } from './space-tree.repository.ts'
 import { TrashEntriesRepository } from './trash-entries.repository.ts'
+import { TrashEntryPurger } from './trash-entry-purger.ts'
 import { TrashPurgeService } from './trash-purge.service.ts'
 import { TrashService } from './trash.service.ts'
 import { LeaselessWriteAccessRevocation, WriteAccessRevocation } from './write-access.ts'
@@ -43,6 +44,8 @@ import { LeaselessWriteAccessRevocation, WriteAccessRevocation } from './write-a
     FoldersService,
     TrashService,
     TrashPurgeService,
+    // 永久删除一个删除单元的本体（不判断权限）：只给本模块的 TrashService 与 TrashPurgeService 用，不在 exports 里
+    TrashEntryPurger,
     // 有效权限的唯一入口（M2-P2 设计 §3.4）；P5 在同一个实现里并上单独授权
     { provide: DocumentAccessPolicy, useClass: EffectiveAccessPolicy },
     // 收回写入权的入口（M2-P2 设计 §3.7）；M3 换成接入租约的实现，调用方不改

@@ -1,11 +1,17 @@
 import type { Buffer } from 'node:buffer'
 import type { Transaction } from '../database/index.ts'
+import type { AppLogger } from '../logging/index.ts'
 import type { LockedForSeconds, LoginThrottleRepository, Reservation, ThrottlePolicy } from './login-throttle.repository.ts'
 
 /** 限流的一个维度：计数的键（只存摘要）、上限，以及成功时怎么处理这个维度的计数。 */
 export interface ThrottleDimension {
   readonly name: string
   readonly keyHash: Buffer
+  /**
+   * 所属账户的摘要（M2-P6 复核 A1）：登录的两个账户相关的维度（只按用户名、按用户名与来源）才有，记在计数行上，
+   * 完成重置、管理员解除锁定时按它一次清掉这个账户在所有来源上的计数
+   */
+  readonly account?: Buffer
   readonly policy: ThrottlePolicy
   /**
    * 成功时：reset 清除这个键的计数（之前的失败一笔勾销，例如登录的用户名）；
@@ -20,7 +26,10 @@ export interface AttemptTicket {
   readonly lockedForSeconds: LockedForSeconds
   /** 成功：按各维度的 onSuccess 处理。与成功的写入放在同一个事务里 */
   readonly succeeded: (transaction?: Transaction) => Promise<void>
-  /** 没有真正尝试就放弃了（例如等待哈希的请求太多，DEF-015）：退回全部名额，不算失败 */
+  /**
+   * 退回全部名额，不算失败：没有真正尝试就放弃了（例如等待哈希的请求太多，DEF-015），
+   * 或者这次失败不是在猜（一次性链接找到了记录、只是过期或用过了，M2-P6 复核 B3）
+   */
   readonly abandoned: () => Promise<void>
 }
 
@@ -38,12 +47,17 @@ interface Hold extends Reservation {
  * 计数存在数据库里（LoginThrottleRepository）：重启不丢，将来多实例也共用。
  */
 export class AttemptThrottle {
-  constructor(private readonly repository: LoginThrottleRepository) {}
+  constructor(
+    private readonly repository: LoginThrottleRepository,
+    private readonly logger: AppLogger,
+  ) {}
 
   /**
    * 放行或拒绝一次尝试：
    * 1. 预检：任一维度锁定中直接拒绝。只读的一次查询，锁定期间的洪水不写库；正确性不靠它，靠第 2 步；
    * 2. 按给出的顺序依次占用各维度的名额。后一个维度被拒绝时，退回已经占到的名额：这次没有尝试，不算失败。
+   *    后一个维度占名额时出错（例如数据库繁忙）同样退回已经占到的，再把错误抛出去（M2-P6 第 3 片复验 建议 1）：
+   *    否则持续繁忙时，每次重试都在前面的维度上多记一次失败，最后把正确密码的主人锁在门外。
    *    各处按同一个顺序给出维度，成功时的事务按同一顺序锁这些行，互相等待时不会成环。
    */
   async admit(dimensions: readonly ThrottleDimension[]): Promise<AttemptAdmission> {
@@ -53,7 +67,7 @@ export class AttemptThrottle {
 
     const holds: Hold[] = []
     for (const dimension of dimensions) {
-      const reservation = await this.repository.reserve(dimension.keyHash, dimension.policy)
+      const reservation = await this.reserveOrRelease(dimension, holds)
       if (reservation === undefined) {
         await this.release(holds)
         // 预检之后刚被别的请求锁定；查到时锁定可能恰好结束，至少让客户端等 1 秒
@@ -77,6 +91,25 @@ export class AttemptThrottle {
         }
       },
       abandoned: async () => this.release(holds),
+    }
+  }
+
+  /**
+   * 占这一维的名额；出错时先退回已经占到的（尽力而为：退回失败只记日志，这次按一次失败计，与 attempt-errors 的 settleQuietly 一致），
+   * 再把原来的错误抛出去。出错的这一维没有占到：语句失败就没有生效
+   */
+  private async reserveOrRelease(dimension: ThrottleDimension, holds: readonly Hold[]): Promise<Reservation | undefined> {
+    try {
+      return await this.repository.reserve(dimension.keyHash, dimension.policy, dimension.account)
+    }
+    catch (error) {
+      try {
+        await this.release(holds)
+      }
+      catch (releaseError) {
+        this.logger.warn('退回登录限流的名额失败，这次尝试按一次失败计', { err: releaseError })
+      }
+      throw error
     }
   }
 

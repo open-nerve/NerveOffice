@@ -90,8 +90,7 @@ describe('US-M1-11 A01 产物里 eval 与 Function 的引用（语法树）', ()
     expect(references('Function("return this")()')[0]?.literalArguments).toEqual(['return this'])
     expect(references('Function(``)')[0]?.literalArguments).toEqual([''])
     expect(references('Function(code)')[0]?.literalArguments).toBeUndefined()
-    // 样例是带插值的模板字符串原文，不是要插值
-    // eslint-disable-next-line no-template-curly-in-string
+    // eslint-disable-next-line no-template-curly-in-string -- 样例是带插值的模板字符串原文，不是要插值
     expect(references('Function(`a${b}`)')[0]?.literalArguments).toBeUndefined()
   })
 
@@ -130,8 +129,7 @@ describe('US-M1-11 A01 以字符串为代码的定时器调用（语法树，Cod
     ['Reflect.get 的各种写法', 'globalThis.Reflect.get(self,"setInterval")("x");Reflect["get"](window,"setTimeout")("x")', ['setInterval', 'setTimeout']],
     ['.call 与 .apply', 'setTimeout.call(null,"x");window.setTimeout.apply(window,["x",1])', ['setTimeout', 'setTimeout']],
     ['Reflect.apply', 'Reflect.apply(setTimeout,null,["x"])', ['setTimeout']],
-    // 样例是带插值的模板字符串原文，不是要插值
-    // eslint-disable-next-line no-template-curly-in-string
+    // eslint-disable-next-line no-template-curly-in-string -- 样例是带插值的模板字符串原文，不是要插值
     ['代码是拼接的字符串或带插值的模板', 'setTimeout("a"+b);setTimeout(b+(c+"a"));setTimeout(`a${b}`)', ['setTimeout', 'setTimeout', 'setTimeout']],
   ])('认得出：%s', (_case, code, expected) => {
     expect(timers(code)).toEqual(expected)

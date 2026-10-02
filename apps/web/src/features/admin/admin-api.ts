@@ -85,6 +85,11 @@ export async function changeSystemRole(id: string, systemRole: UserSystemRole): 
   return apiRequest(`/api/admin/users/${id}/system-role`, { method: 'PUT', body: { systemRole }, schema: adminUserSchema })
 }
 
+/** 解除登录锁定（M2-P6 复核 A1）：清掉这个账户在所有来源上的登录失败计数 */
+export async function unlockLogin(id: string): Promise<AdminUser> {
+  return apiRequest(`/api/admin/users/${id}/unlock-login`, { method: 'POST', schema: adminUserSchema })
+}
+
 export async function issuePasswordReset(id: string): Promise<IssuedPasswordReset> {
   return apiRequest(`/api/admin/users/${id}/password-reset`, { method: 'POST', schema: issuedPasswordResetSchema })
 }

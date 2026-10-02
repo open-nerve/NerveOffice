@@ -1,4 +1,4 @@
-import type { DocumentDetail } from '@nerve-office/contracts'
+import type { AuditActionDetailsInput, DocumentDetail } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { AccessibleDocument, Actor, DocumentAccess, DocumentOperation } from './document-access-policy.ts'
@@ -63,15 +63,16 @@ export class DocumentOrganizingService {
       // 锁下重新读、重新判断：这期间它可能被移走、被删，空间可能被归档，自己可能被移出空间
       const { document, access } = await this.checkUpdate(actor, await this.documents.lockById(id, transaction), command, transaction)
       // 树锁是按取锁之前读到的空间取的：万一刚好有一次跨空间移动提交了，这把锁就保护不到它（与文件夹的改动相同）。
-      // 这条范式由回收站恢复那一处的集成用例代表（TrashService.lockedEntry 的注释，审查 A 建议 8）
+      // 8 处锁下核对之一（清单见 FoldersService.update）；这一处与 move 那一处的集成用例在 tests/integration 的
+      // documents/structure-locks.test.ts（M2-P6 复核 A 的 M-1、B 的 B1）
       if (document.spaceId !== checked.document.spaceId)
         throw new AppError('NOT_FOUND')
 
       let current = document
       if (command.title !== undefined && command.title !== current.title) {
-        const from = current.title
         current = await this.documents.rename(current.id, command.title, transaction)
-        await this.record('documents.renamed', actor, current, origin, { spaceId: current.spaceId, from, to: current.title }, transaction)
+        // 只记位置，不记改动前后的标题（M2 总设计 §2.1 第 5 条，M2-P6 复核 M-1）：系统管理员能查审计，却看不到别人空间里的标题
+        await this.record({ action: 'documents.renamed', details: { spaceId: current.spaceId, folderId: current.folderId } }, actor, current, origin, transaction)
       }
       if (command.folderId !== undefined) {
         const folderId = await folderIdIn(this.folders, current.spaceId, command.folderId, transaction)
@@ -101,6 +102,7 @@ export class DocumentOrganizingService {
         await this.spaces.holdSpace(spaceId, transaction)
       // 锁下重新读、重新判断：来源与目标的权限、归档状态都以锁下的为准
       const { document, access, target } = await this.checkMove(actor, await this.documents.lockById(id, transaction), command, transaction)
+      // 同上：树锁按取锁之前读到的空间取，刚好被跨空间移走时这把锁保护不到它
       if (document.spaceId !== checked.document.spaceId)
         throw new AppError('NOT_FOUND')
 
@@ -183,23 +185,22 @@ export class DocumentOrganizingService {
     from: { readonly fromSpaceId: string, readonly fromFolderId: string | null },
     transaction: Transaction,
   ): Promise<void> {
-    await this.record('documents.moved', actor, moved, origin, { ...from, toSpaceId: moved.spaceId, toFolderId: moved.folderId }, transaction)
+    await this.record({ action: 'documents.moved', details: { ...from, toSpaceId: moved.spaceId, toFolderId: moved.folderId } }, actor, moved, origin, transaction)
   }
 
+  /** 动作与明细一起给出：明细按动作的严格结构（contracts 的 auditDetailsSchema） */
   private async record(
-    action: 'documents.renamed' | 'documents.moved',
+    audit: Extract<AuditActionDetailsInput, { action: 'documents.renamed' | 'documents.moved' }>,
     actor: Actor,
     document: DocumentRow,
     origin: AuditOrigin,
-    details: Readonly<Record<string, string | null>>,
     transaction: Transaction,
   ): Promise<void> {
     await this.audit.record({
-      action,
+      ...audit,
       actor: { type: 'user', id: actor.userId },
       target: { type: 'document', id: document.id },
       origin,
-      details,
     }, { transaction })
   }
 }

@@ -15,6 +15,7 @@ import type { NewTrashEntry, TrashEntriesRepository, TrashEntryRow } from './tra
 import type { WriteAccessRevocation, WriteAccessScope } from './write-access.ts'
 import { FOLDER_LIST_MAX_ITEMS, TRASH_RETENTION_DAYS } from '@nerve-office/contracts'
 import { vi } from 'vitest'
+import { parseAuditEvent } from '../audit/index.ts'
 import { EffectiveAccessPolicy } from './document-access-policy.ts'
 
 export const ALICE = '0199a2c4-0000-7000-8000-00000000000a'
@@ -151,6 +152,8 @@ export class FakeStore {
     documents: {
       findById: vi.fn(async (id: string) => this.activeDocument(id)),
       lockById: vi.fn(async (id: string) => this.activeDocument(id)),
+      /** 共享锁持住（复制的源文档）：假仓储里与 findById 相同，用例据此核对取锁的顺序 */
+      holdById: vi.fn(async (id: string) => this.activeDocument(id)),
       /** 可访问文档：在这些空间里、正常状态（与真实仓储的 accessible 一样，状态不是参数） */
       listAccessible: vi.fn(async (scope: AccessibleScope, options: ListOptions) =>
         [...this.documents.values()]
@@ -191,6 +194,10 @@ export class FakeStore {
           return entry !== null && entryIds.includes(entry) ? [{ id: row.id, trashEntryId: entry }] : []
         })
         .toSorted((a, b) => a.id.localeCompare(b.id))),
+      /** 这个空间里、这些文件夹下正常状态的文档有多少份（与真实仓储一致：条件与 lockInFolders 同形） */
+      countActiveInFolders: vi.fn(async (folderIds: readonly string[], spaceId: string) => [...this.documents.values()]
+        .filter(row => row.folderId !== null && folderIds.includes(row.folderId) && row.spaceId === spaceId && this.entryOfDocument(row.id) === null)
+        .length),
       /** 这些文件夹里正常状态的、不是这个人创建的文档有多少份 */
       countCreatedByOthers: vi.fn(async (folderIds: readonly string[], spaceId: string, userId: string) => [...this.documents.values()]
         .filter(row => row.folderId !== null && folderIds.includes(row.folderId) && row.spaceId === spaceId)
@@ -307,6 +314,8 @@ export class FakeStore {
           .flatMap(row => walk(row.id))]
         return walk(rootId)
       }),
+      /** 这些文件夹里正常状态的有几个 */
+      countActive: vi.fn(async (ids: readonly string[]) => ids.filter(id => this.folders.has(id) && this.entryOfFolder(id) === null).length),
       /** 这些文件夹分属哪些删除单元（去重，正常状态的不算） */
       trashEntryIdsIn: vi.fn(async (folderIds: readonly string[]) =>
         [...new Set(folderIds.flatMap(id => this.entryOfFolder(id) ?? []))]),
@@ -396,9 +405,9 @@ export class FakeStore {
     }),
     findById: vi.fn(async (id: string) => this.trashEntries.get(id)),
     lockById: vi.fn(async (id: string) => this.trashEntries.get(id)),
-    /** 到这个时刻为止已经到期的，最早到期的在前（M2-P4 S4） */
-    listExpired: vi.fn(async (now: Date, limit: number) => [...this.trashEntries.values()]
-      .filter(row => row.expiresAt <= now)
+    /** 到这个时刻为止已经到期的，最早到期的在前（M2-P4 S4）；except 里的不取（定时清理暂缓重试的那些） */
+    listExpired: vi.fn(async (now: Date, limit: number, except: readonly string[] = []) => [...this.trashEntries.values()]
+      .filter(row => row.expiresAt <= now && !except.includes(row.id))
       .toSorted((a, b) => a.expiresAt.getTime() - b.expiresAt.getTime() || a.id.localeCompare(b.id))
       .slice(0, limit)),
     listBySpace: vi.fn(async (spaceId: string, options: { limit: number }) => [...this.trashEntries.values()]
@@ -409,7 +418,7 @@ export class FakeStore {
       for (const id of ids) {
         const row = this.trashEntries.get(id)
         if (row !== undefined)
-          this.trashEntries.set(id, { ...row, spaceId, originSpaceId: spaceId })
+          this.trashEntries.set(id, { ...row, spaceId })
       }
       return ids.length
     }),
@@ -449,8 +458,10 @@ export class FakeStore {
 
   /** 真实的访问策略 */
   readonly policy = new EffectiveAccessPolicy(this.spaces as unknown as SpacesService)
+  /** 与真实的 AuditService 一样按严格的结构校验（明细多一个键，例如标题，就抛出，M2-P6 复核 M-1），记下原样的事件 */
   readonly audit = {
     record: vi.fn(async (event: AuditEvent) => {
+      parseAuditEvent(event)
       this.audits.push(event)
     }),
   }

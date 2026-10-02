@@ -5,29 +5,34 @@ import { documentPagePath, documentTitleSchema } from '@nerve-office/contracts'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { FileSpreadsheet } from 'lucide-react'
 import { useEffect, useId, useRef } from 'react'
-import { describeError, isDefiniteRejection } from '../../shared/api/index.ts'
+import { describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
+import { useRequestIdLedger } from '../../shared/lib/request-id-ledger.ts'
+import { problemOf } from '../../shared/lib/validation.ts'
 import { Alert, AlertDescription, Button, buttonVariants, Skeleton } from '../../shared/ui/index.ts'
 import { copyDocument, deleteDocument, documentQueryOptions, folderDocumentsQueryOptions, moveDocument, updateDocument } from './documents-api.ts'
 import { ItemActions } from './item-actions.tsx'
-import { useOrganizeRefresh } from './organize-refresh.ts'
+import { useOrganizeRefresh, useOrganizeRefreshChecked } from './organize-refresh.ts'
 
 const organize = messages.organize
 
-function validTitle(value: string): boolean {
-  return documentTitleSchema.safeParse(value).success
+function titleProblem(value: string): string | undefined {
+  return problemOf(documentTitleSchema.safeParse(value))
 }
 
 interface DocumentItemProps {
   readonly document: DocumentSummary
+  /** 列表所在的空间：还没取到元数据时（或者它已经不在了）回收站的入口按它给出 */
+  readonly spaceId: string
   readonly targetSpaces: readonly SpaceView[]
   readonly open: boolean
   /** 记下被点的那个"操作"按钮：面板收起之后空间页把焦点还给它 */
   readonly openTriggerRef: RefObject<HTMLButtonElement | null>
   readonly onToggle: () => void
   readonly onDone: (notice: OrganizeNotice | undefined) => void
-  readonly onDenied: () => void
+  /** 操作按访问权限被拒绝：由空间页重新请求，兑现为列表刷新好了没有（M2-P6 复核第五批 G3） */
+  readonly onDenied: () => Promise<boolean>
 }
 
 /**
@@ -35,16 +40,13 @@ interface DocumentItemProps {
  * 列表的条目只有摘要（契约里没有权限位），所以展开操作时才按 id 取一次元数据：能做哪些操作一律以服务端给的 permissions 为准，
  * 顺带也拿到它现在所在的文件夹（移动与复制要用）。
  */
-function DocumentItem({ document, targetSpaces, open, openTriggerRef, onToggle, onDone, onDenied }: DocumentItemProps) {
+function DocumentItem({ document, spaceId, targetSpaces, open, openTriggerRef, onToggle, onDone, onDenied }: DocumentItemProps) {
   const refresh = useOrganizeRefresh()
+  const refreshAfterUnknown = useOrganizeRefreshChecked()
+  const ledger = useRequestIdLedger()
   const panelId = useId()
   const detail = useQuery({ ...documentQueryOptions(document.id), enabled: open })
-  // 每个目标位置上"还没有确定结果的那一次复制"的 requestId（契约承诺同一个 requestId 只复制一份，新建表格也是同一个范式）：
-  // 结果未知（网络错误、5xx）之后再点，沿用同一个，服务端不会建出第二份副本；确定失败（4xx）与做完之后删掉这一项，下一次换新的。
-  // 按目标位置记账，而不是只记最后一次：换了目标位置不沿用旧的（沿用会让重试落回旧目标，M2-P4 审查 B1）；
-  // 某个位置的结果未知之后切去别处、再切回来，仍然沿用它原来那一个，不会在那里多出一份副本（M2-P4 复验 S1）。
-  // 只有"结果未知"的目标会留在表里，最多与这一行上点过的目标位置一样多，不会无界增长
-  const copyRequestsRef = useRef(new Map<string, string>())
+  const sourceSpaceId = detail.data?.spaceId ?? spaceId
 
   return (
     <li>
@@ -80,12 +82,12 @@ function DocumentItem({ document, targetSpaces, open, openTriggerRef, onToggle, 
         <ItemActions
           panelId={panelId}
           name={document.title}
-          validateName={validTitle}
+          validateName={titleProblem}
           permissions={detail.data?.permissions}
           loading={detail.isPending}
           error={detail.error}
           onRetry={() => void detail.refetch()}
-          current={{ spaceId: detail.data?.spaceId ?? '', folderId: detail.data?.folderId ?? undefined }}
+          current={{ spaceId: sourceSpaceId, folderId: detail.data?.folderId ?? undefined }}
           targetSpaces={targetSpaces}
           operations={{
             rename: async (title) => {
@@ -94,36 +96,32 @@ function DocumentItem({ document, targetSpaces, open, openTriggerRef, onToggle, 
             },
             move: async (destination) => {
               const moved = await moveDocument(document.id, { spaceId: destination.spaceId, ...(destination.folderId === undefined ? {} : { folderId: destination.folderId }) })
-              await refresh([detail.data?.spaceId ?? destination.spaceId, moved.spaceId])
+              await refresh([sourceSpaceId, moved.spaceId])
             },
+            // requestId 按"把这份文档复制到这个位置"记账（shared/api/request-ids.ts，M2-P6 复核 M1）：目标位置是"空间加文件夹"，
+            // 换了位置不沿用旧的（沿用会让重试落回旧目标，M2-P4 审查 B1）；某个位置的结果未知之后切去别处、再切回来，
+            // 仍然沿用它原来那一个，不会在那里多出一份副本（M2-P4 复验 S1）；做完之后再往同一个位置复制是另一件事，换新的
+            // （沿用旧的会被服务端按幂等重放，原样返回第一份副本，第二份根本没建出来）。
+            // 记账是页面一份的：离开这一页再回来，结果未知的那个位置仍沿用原来的 requestId。服务端说这次是重放（replayed，
+            // M2-P6 复核第二批 S-1）：结果未知的那一次其实已经复制好了，说"上一次其实已经完成"，不说成这一次复制出来的；
+            // 这件事随之了结，再点就是再复制一份
             copy: async (destination) => {
-              // 目标位置是"空间加文件夹"：只按空间记账的话，同一个空间里换个文件夹会沿用旧的 requestId，重试落回旧目标
-              const target = `${destination.spaceId}/${destination.folderId ?? ''}`
-              const pending = copyRequestsRef.current
-              const requestId = pending.get(target) ?? crypto.randomUUID()
-              pending.set(target, requestId)
-              try {
-                const copy = await copyDocument(document.id, { spaceId: destination.spaceId, requestId, ...(destination.folderId === undefined ? {} : { folderId: destination.folderId }) })
-                // 这一次复制做完了：再往同一个位置复制是另一件事，要换一个新的 requestId。
-                // 沿用旧的会被服务端按幂等重放，原样返回第一份副本，界面照样说"已复制"，第二份根本没建出来
-                pending.delete(target)
-                await refresh([copy.spaceId])
-                return {
-                  message: organize.copied(copy.title),
-                  action: <a href={documentPagePath(copy.id)} className={buttonVariants({ variant: 'outline', size: 'sm' })}>{organize.openCopy}</a>,
-                }
-              }
-              catch (error) {
-                // 确定被拒绝（4xx）才丢掉它、下一次换新的：结果未知时留着，再点沿用同一个，不会复制出第二份
-                if (isDefiniteRejection(error))
-                  pending.delete(target)
-                throw error
+              const copy = await ledger.send(`copy:${document.id}->${destination.spaceId}/${destination.folderId ?? ''}`, async requestId => copyDocument(document.id, {
+                spaceId: destination.spaceId,
+                requestId,
+                ...(destination.folderId === undefined ? {} : { folderId: destination.folderId }),
+              }))
+              await refresh([copy.spaceId])
+              return {
+                message: copy.replayed ? organize.copyReplayed(copy.title) : organize.copied(copy.title),
+                action: <a href={documentPagePath(copy.id)} className={buttonVariants({ variant: 'outline', size: 'sm' })}>{organize.openCopy}</a>,
               }
             },
             remove: async () => {
               await deleteDocument(document.id)
-              await refresh([detail.data?.spaceId ?? ''])
+              await refresh([sourceSpaceId])
             },
+            refresh: async destination => refreshAfterUnknown([sourceSpaceId, ...(destination === undefined ? [] : [destination.spaceId])]),
           }}
           onDone={onDone}
           onDenied={onDenied}
@@ -155,7 +153,8 @@ interface DocumentListProps {
   readonly openTriggerRef: RefObject<HTMLButtonElement | null>
   readonly onToggle: (id: string) => void
   readonly onDone: (notice: OrganizeNotice | undefined) => void
-  readonly onDenied: () => void
+  /** 操作按访问权限被拒绝：由空间页重新请求，兑现为列表刷新好了没有（M2-P6 复核第五批 G3） */
+  readonly onDenied: () => Promise<boolean>
   /** 这一层还有没有子文件夹：都没有时"这里还没有文档"才是整块空的说明 */
   readonly hasFolders: boolean
 }
@@ -216,6 +215,7 @@ export function DocumentList({ spaceId, folderId, targetSpaces, openId, openTrig
           <DocumentItem
             key={document.id}
             document={document}
+            spaceId={spaceId}
             targetSpaces={targetSpaces}
             open={openId === document.id}
             openTriggerRef={openTriggerRef}

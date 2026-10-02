@@ -1,6 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
+import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { spaceDocumentsQueryKey, spaceFoldersQueryKey } from '../documents/index.ts'
 import { membersQueryOptions, spaceQueryOptions, spacesQueryOptions } from './spaces-api.ts'
 
@@ -20,7 +21,7 @@ export function forgetSpace(queryClient: QueryClient, spaceId: string, options: 
 
 /**
  * 空间看不到了（请求得到 404：被移出、取消了全员可见，或者本来就不存在）时由空间页与成员页调用（M2-P2 审查 B1）：
- * - 导航列表随之重新请求，被移出的空间从导航里消失；
+ * - 导航列表随之重新请求，被移出的空间从导航里消失（在路上的那一次先取消再重来，M2-P6 复核第五批 G6）；
  * - 这个空间的页头、成员与文档列表的缓存去掉，下次进来不先闪出旧的内容（例如成员页里还能管理的控件）；
  *   正在显示的那一个（页头或成员）在离开时去掉。
  * 在 effect 里做，不在渲染时改缓存。
@@ -30,7 +31,7 @@ export function useForgetMissingSpace(spaceId: string, missing: boolean): void {
   useEffect(() => {
     if (!missing)
       return undefined
-    void queryClient.invalidateQueries({ queryKey: spacesQueryOptions().queryKey })
+    void refreshQueries(queryClient, [spacesQueryOptions().queryKey], { throwOnError: false })
     forgetSpace(queryClient, spaceId)
     return () => forgetSpace(queryClient, spaceId)
   }, [queryClient, spaceId, missing])

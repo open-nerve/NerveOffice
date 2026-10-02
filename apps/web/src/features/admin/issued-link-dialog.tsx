@@ -1,13 +1,13 @@
 import { useId, useState } from 'react'
-import { messages } from '../../shared/i18n/index.ts'
+import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../shared/ui/dialog.tsx'
-import { Alert, AlertDescription, Button, Input, Label } from '../../shared/ui/index.ts'
+import { Alert, AlertDescription, Button, Input, Label, PersonName, Phrase } from '../../shared/ui/index.ts'
 
 export interface IssuedLink {
   readonly title: string
-  /** 发给谁：登录名或显示名 */
-  readonly recipient: string
+  /** 发给谁：显示名与登录名分开呈现（M2-P6 复核 M2） */
+  readonly recipient: { readonly displayName: string, readonly username: string }
   readonly url: string
   readonly expiresAt: string
   /** 另外的说明（例如给自己生成的重置链接：关闭之后回到登录页） */
@@ -56,28 +56,28 @@ export function IssuedLinkDialog({ link, onClose }: { readonly link: IssuedLink 
           }}
         >
           <DialogHeader>
-            <DialogTitle>{`${link.title}：${link.recipient}`}</DialogTitle>
-            <DialogDescription>{messages.admin.link.once}</DialogDescription>
+            <DialogTitle><Phrase parts={adminMessages.link.title(link.title, <PersonName person={link.recipient} />)} /></DialogTitle>
+            <DialogDescription>{adminMessages.link.once}</DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-2">
-            <Label htmlFor={inputId}>{messages.admin.link.label}</Label>
+            <Label htmlFor={inputId}>{adminMessages.link.label}</Label>
             {/* 只读的输入框：可以全选、手动复制；点一下就选中全部 */}
             <Input id={inputId} readOnly value={link.url} onFocus={event => event.currentTarget.select()} />
-            <p className="text-sm text-muted-foreground">{messages.admin.link.expiresAt(formatDateTime(link.expiresAt))}</p>
+            <p className="text-sm text-muted-foreground">{adminMessages.link.expiresAt(formatDateTime(link.expiresAt))}</p>
             {link.note !== undefined && <p className="text-sm font-medium">{link.note}</p>}
           </div>
           {copy === 'copied' && (
             <Alert>
-              <AlertDescription>{messages.admin.link.copied}</AlertDescription>
+              <AlertDescription>{adminMessages.link.copied}</AlertDescription>
             </Alert>
           )}
           {copy === 'failed' && (
             <Alert variant="destructive">
-              <AlertDescription>{messages.admin.link.copyFailed}</AlertDescription>
+              <AlertDescription>{adminMessages.link.copyFailed}</AlertDescription>
             </Alert>
           )}
           <DialogFooter>
-            <Button onClick={() => void copyLink()}>{messages.admin.link.copy}</Button>
+            <Button onClick={() => void copyLink()}>{adminMessages.link.copy}</Button>
           </DialogFooter>
         </DialogContent>
       )}

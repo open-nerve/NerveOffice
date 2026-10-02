@@ -4,6 +4,7 @@
 import { TRASH_RETENTION_DAYS } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { ALICE, ALICE_SPACE, FakeStore, HTTP_ORIGIN, member } from './documents.test-support.ts'
+import { TrashEntryPurger } from './trash-entry-purger.ts'
 import { TrashPurgeService } from './trash-purge.service.ts'
 import { TrashService } from './trash.service.ts'
 
@@ -16,8 +17,9 @@ const BEFORE = new Date(EXPIRES_AT.getTime() - 1)
 function setup() {
   const store = new FakeStore()
   const { transactions, documents, folders, entries, tree, spaces, policy, audit, writeAccess } = store.deps
-  const trash = new TrashService(transactions, documents, folders, entries, tree, spaces, policy, audit, writeAccess)
-  return { store, trash, service: new TrashPurgeService(transactions, documents, entries, tree, spaces, trash) }
+  const purger = new TrashEntryPurger(documents, folders, entries, audit)
+  const trash = new TrashService(transactions, documents, folders, entries, tree, spaces, policy, audit, writeAccess, purger)
+  return { store, trash, service: new TrashPurgeService(transactions, documents, entries, tree, spaces, purger) }
 }
 
 /** 删掉一份文档，返回它与它的删除单元 */
@@ -36,8 +38,9 @@ describe('TrashPurgeService.listExpired', () => {
     const { entry } = await deletedDocument(store, trash)
 
     expect(await service.listExpired(BEFORE, 50)).toEqual([])
+    // 不带标题：jobs 的日志与审计不经手标题（M2-P6 复核 M-1）
     expect(await service.listExpired(AFTER, 50)).toEqual([
-      { id: entry.id, spaceId: ALICE_SPACE, kind: 'document', title: '周报', expiresAt: EXPIRES_AT },
+      { id: entry.id, spaceId: ALICE_SPACE, kind: 'document', expiresAt: EXPIRES_AT },
     ])
   })
 
@@ -46,7 +49,15 @@ describe('TrashPurgeService.listExpired', () => {
     await deletedDocument(store, trash, '第一份')
     await deletedDocument(store, trash, '第二份')
     expect(await service.listExpired(AFTER, 1)).toHaveLength(1)
-    expect(store.entries.listExpired).toHaveBeenLastCalledWith(AFTER, 1)
+    expect(store.entries.listExpired).toHaveBeenLastCalledWith(AFTER, 1, [])
+  })
+
+  it('暂缓重试的条目原样传给仓储，取出来的里面没有它们（一直失败的不挡住后面到期的，M2-P6 复核 A 的 S-1）', async () => {
+    const { store, trash, service } = setup()
+    const { entry: first } = await deletedDocument(store, trash, '第一份')
+    const { entry: second } = await deletedDocument(store, trash, '第二份')
+    expect((await service.listExpired(AFTER, 50, [first.id])).map(row => row.id)).toEqual([second.id])
+    expect(store.entries.listExpired).toHaveBeenLastCalledWith(AFTER, 50, [first.id])
   })
 })
 
@@ -57,16 +68,17 @@ describe('TrashPurgeService.purgeExpired', () => {
 
     await expect(service.purgeExpired(entry)).resolves.toEqual({
       purged: true,
-      outcome: { objectId: document.id, kind: 'document', title: '周报', spaceId: ALICE_SPACE, folders: 0, documents: 1, cascadedEntryIds: [] },
+      outcome: { objectId: document.id, kind: 'document', spaceId: ALICE_SPACE, folders: 0, documents: 1, cascadedEntryIds: [] },
     })
     expect(store.documents.has(document.id)).toBe(false)
     expect(store.trashEntries.size).toBe(0)
+    // 审计只记份数与删除单元，不记标题（M2-P6 复核 M-1）
     expect(store.audits.at(-1)).toEqual({
       action: 'documents.purged',
       actor: { type: 'system' },
       target: { type: 'document', id: document.id },
       origin: { source: 'job' },
-      details: { spaceId: ALICE_SPACE, title: '周报', trashEntryId: entry.id, folders: 0, documents: 1, cascadedEntries: 0 },
+      details: { spaceId: ALICE_SPACE, trashEntryId: entry.id, folders: 0, documents: 1, cascadedEntries: 0 },
     })
   })
 

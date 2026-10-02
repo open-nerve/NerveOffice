@@ -2,8 +2,10 @@
 // 出口有两个：这里（主线程与公式 Worker 都引用），与 ui.ts（界面的包里的内部 API，只在主线程引用）。公式 Worker 引用这里，
 // 这里再导出的包都会打进 Worker（Univer 的包没有声明 sideEffects，打包时去不掉），所以这里不从界面的包再导出（单元测试核对，
 // P3 修复时 Worker 因此超出体积预算）。
-// 每一项都在 registry.ts 里登记用途、M0 的证据与回归用例（单元测试核对两个出口导出的每一项都已登记）；
-// 在这个目录之外直接引用受限的符号或调用 __getInjector，lint 会失败（eslint.config.ts 的 UNIVER_INTERNAL_SYMBOLS）。
+// 每一项都在 registry.ts 里登记用途、M0 的证据与回归用例（单元测试核对两个出口导出的每一项都已登记，并扫描这个目录下的全部文件——
+// 测试除外，清单与目录一一对应由 tools 的测试核对——对 @univerjs/* 的引用都归到登记的某一项；这里的文件之间只用 ./<文件名> 的静态
+// 导入导出，不建子目录、不用动态 import()）；在这个目录之外直接引用受限的符号或调用 __getInjector，lint 会失败（eslint.config.ts 的
+// UNIVER_INTERNAL_SYMBOLS），引用这里的文件也只能经两个出口（nerve/editor-internal-api-exits，M2-P6 复验 N4）。
 // 这个文件只写再导出：登记表的核对按这里的写法取出导出的名字
 export { FORMULA_BAR_INPUT_SELECTOR, NOTE_TEXTAREA_SELECTOR } from './dom-markers.ts'
 export { FORMULA_PROTOCOL } from './formula-protocol.ts'

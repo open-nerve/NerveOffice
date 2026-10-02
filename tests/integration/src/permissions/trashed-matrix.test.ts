@@ -44,6 +44,7 @@ const GONE: Readonly<Record<TargetName, Row>> = {
   team: [404, 404, 404, 404, 404, 404],
   visible: [404, 404, 404, 404, 404, 404],
   archived: [404, 404, 404, 404, 404, 404],
+  archivedVisible: [404, 404, 404, 404, 404, 404],
   missing: [404, 404, 404, 404, 404, 404],
 }
 

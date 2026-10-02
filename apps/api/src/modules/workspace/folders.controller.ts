@@ -1,4 +1,4 @@
-import type { CreateFolderRequest, Folder, FolderListQuery, FolderListResponse, MoveFolderRequest, UpdateFolderRequest } from '@nerve-office/contracts'
+import type { CreatedFolder, CreateFolderRequest, Folder, FolderListQuery, FolderListResponse, MoveFolderRequest, UpdateFolderRequest } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Principal } from '../auth/index.ts'
 import { createFolderRequestSchema, folderIdSchema, folderListQuerySchema, moveFolderRequestSchema, updateFolderRequestSchema } from '@nerve-office/contracts'
@@ -22,13 +22,13 @@ export class FoldersController {
     return this.folders.list(accessActorOf(principal), query)
   }
 
-  /** 同一个 requestId 的重放同样是 201，返回那个文件夹（与新建文档相同）。 */
+  /** 同一个 requestId 的重放同样是 201，返回那个文件夹、replayed 为真（与新建文档相同，M2-P6 复核第二批 S-1）。 */
   @Post()
   async create(
     @CurrentPrincipal() principal: Principal,
     @Body({ schema: createFolderRequestSchema }) body: CreateFolderRequest,
     @RequestOrigin() origin: HttpOrigin,
-  ): Promise<Folder> {
+  ): Promise<CreatedFolder> {
     return this.folders.create(accessActorOf(principal), body, origin)
   }
 

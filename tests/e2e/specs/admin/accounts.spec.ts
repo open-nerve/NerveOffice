@@ -1,5 +1,5 @@
 // 管理界面的账户（M2-P1，US-M2-01、03、04）：经界面签发、重新生成邀请与重置链接，同事在另一台设备上打开链接；运维命令签发重置链接；
-// 停用与启用；系统管理员的授予与取消。
+// 停用与启用；系统管理员的授予与取消；解除登录锁定（M2-P6 复核 A1）。
 // 并行的用例各建各的管理员与账户，互不影响；"至少保留一个有效的系统管理员"依赖全库的管理员数量，由集成测试覆盖。
 // 同事"已打开的页面"在下一次请求时被要求重新登录：在页面里新建表格，由全局的处理回到登录页（不是刷新，审查 B12）。
 import type { Locator, Page } from '@playwright/test'
@@ -7,13 +7,15 @@ import { randomBytes } from 'node:crypto'
 import { issueResetLinkThroughCommand } from '../../support/admin-command.ts'
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { searchList } from '../../support/list-search.ts'
+import { shownName } from '../../support/people.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
 
 const NEW_PASSWORD = 'a good long password'
 
-/** 在账户页按登录名找到这一行 */
+/** 在账户页按登录名找到这一行：等搜索的过滤完成再返回，之后的操作不会赶上表格换成加载状态（support/list-search.ts） */
 async function userRow(page: Page, username: string) {
-  await page.getByLabel('按名字或登录名搜索').fill(username)
+  await searchList(page, '按名字或登录名搜索', username)
   const row = page.getByRole('table', { name: '账户列表' }).getByRole('row').filter({ hasText: username })
   await expect(row).toHaveCount(1)
   return row
@@ -56,7 +58,7 @@ test.describe('US-M2-01 邀请注册', () => {
     await page.getByRole('link', { name: '管理', exact: true }).click()
     await page.getByRole('navigation', { name: '管理界面' }).getByRole('link', { name: '邀请' }).click()
     await issueInvitation(page, username, '新来的同事')
-    const dialog = page.getByRole('dialog', { name: `邀请链接：新来的同事（${username}）` })
+    const dialog = page.getByRole('dialog', { name: `邀请链接：${shownName({ displayName: '新来的同事', username })}` })
     const url = await dialog.getByLabel('链接').inputValue()
     expect(url).toMatch(/\/invite#[\w-]{43}$/)
     await expect(dialog.getByText(/链接只显示这一次/)).toBeVisible()
@@ -111,7 +113,7 @@ test.describe('US-M2-01 邀请注册', () => {
     expect(await page.locator('[role="dialog"]').count()).toBe(1)
     releaseRefresh()
 
-    const dialog = page.getByRole('dialog', { name: `邀请链接：重发的同事（${username}）` })
+    const dialog = page.getByRole('dialog', { name: `邀请链接：${shownName({ displayName: '重发的同事', username })}` })
     await expect(dialog.getByLabel('链接')).not.toHaveValue(firstUrl)
     const secondUrl = await dialog.getByLabel('链接').inputValue()
     // eslint-disable-next-line playwright/prefer-to-have-count -- 同上：链接的弹窗出现的那一刻，确认的弹窗已经关掉
@@ -163,7 +165,7 @@ test.describe('US-M2-03 重置密码', () => {
     await page.goto('/admin/users')
     const row = await userRow(page, user.username)
     await confirmAction(page, row, '生成重置链接')
-    const url = await page.getByRole('dialog', { name: `重置链接：忘了密码的人（${user.username}）` }).getByLabel('链接').inputValue()
+    const url = await page.getByRole('dialog', { name: `重置链接：${shownName(user)}` }).getByLabel('链接').inputValue()
     expect(url).toMatch(/\/reset-password#[\w-]{43}$/)
 
     await expectNextRequestAsksToLogIn(anotherDevice)
@@ -182,6 +184,26 @@ test.describe('US-M2-03 重置密码', () => {
     await expect(anotherDevice.getByRole('alert')).toHaveText('用户名或密码错误')
     await loginThroughUi(anotherDevice, { username: user.username, password: NEW_PASSWORD })
     await expect(anotherDevice.getByRole('heading', { name: '我的空间' })).toBeVisible()
+  })
+
+  test('给自己生成重置链接，服务端照常生成、回包却丢了（代理的 502）：随即回到登录页，说明你的密码可能已经失效、要找另一位系统管理员（M2-P6 复核第三批 R-1）', async ({ page }) => {
+    const admin = await createUser('own-reset', '给自己生成的管理员', { systemRole: 'admin' })
+    await loginThroughApi(page, admin)
+    await page.goto('/admin/users')
+    const row = await userRow(page, admin.username)
+    await page.route('**/api/admin/users/*/password-reset', async (route) => {
+      // 请求放行到服务端：照常生成（当前密码随即失效、本人的会话全部撤销），回包换成代理的 502——结果未知
+      await route.fetch()
+      return route.fulfill({ status: 502, contentType: 'text/html', body: 'bad gateway' })
+    })
+    await confirmAction(page, row, '生成重置链接')
+    // 不是按普通的"登录已过期"离开（第二批的回归：先刷新账户列表、得到 401，登录页只说登录已过期）
+    await expect(page).toHaveURL(/\/login\?from=%2Fadmin%2Fusers&reason=password_reset$/)
+    await expect(page.getByText('刚才为自己生成重置链接时没能确认结果，随后登录失效了：你的密码可能已经失效，那条链接也已经找不回来。请联系另一位系统管理员为你生成新的重置链接。')).toBeVisible()
+    await expect(page.getByText('登录已过期，请重新登录')).toBeHidden()
+    // 密码确实已经失效：原来的密码登录不了
+    await loginThroughUi(page, admin)
+    await expect(page.getByRole('alert')).toHaveText('用户名或密码错误')
   })
 
   test('唯一的管理员忘了密码：运维命令签发重置链接（标准输出只有链接），打开之后设置新密码，照常进入管理界面', async ({ anotherDevice }) => {
@@ -220,6 +242,55 @@ test.describe('US-M2-04 停用、启用与系统管理员', () => {
 
     await confirmAction(page, row, '启用')
     await expect(row.getByText('有效')).toBeVisible()
+    await loginThroughUi(anotherDevice, user)
+    await expect(anotherDevice.getByRole('heading', { name: '我的空间' })).toBeVisible()
+  })
+
+  test('停用自己，服务端照常停用、回包却丢了（代理的 502）：随即回到登录页，说明你的账户可能已经被停用（M2-P6 复核第五批 G1）', async ({ page }) => {
+    // 库里另有有效的系统管理员（并行的用例各建各的，服务脚本也初始化了一个）："至少保留一个"挡不住
+    const admin = await createUser('own-disable', '停用自己的管理员', { systemRole: 'admin' })
+    await loginThroughApi(page, admin)
+    await page.goto('/admin/users')
+    const row = await userRow(page, admin.username)
+    await page.route('**/api/admin/users/*/disable', async (route) => {
+      // 请求放行到服务端：照常停用（本人的会话随之撤销），回包换成代理的 502——结果未知
+      await route.fetch()
+      return route.fulfill({ status: 502, contentType: 'text/html', body: 'bad gateway' })
+    })
+    await confirmAction(page, row, '停用')
+    // 不是按普通的"登录已过期"离开（原来去刷新账户列表、得到 401，登录页只说登录已过期）
+    await expect(page).toHaveURL(/\/login\?from=%2Fadmin%2Fusers&reason=account_disabled$/)
+    await expect(page.getByText('刚才停用自己的账户时没能确认结果，随后登录失效了：你的账户可能已经被停用。需要继续使用的话，请联系另一位系统管理员重新启用。')).toBeVisible()
+    await expect(page.getByText('登录已过期，请重新登录')).toBeHidden()
+    // 确实已经停用：登录不了（与密码错误同一句提示）
+    await loginThroughUi(page, admin)
+    await expect(page.getByRole('alert')).toHaveText('用户名或密码错误')
+  })
+
+  test('同事连续输错密码被锁定：账户页说明锁到什么时候；管理员确认解除之后，同事立即能登录（M2-P6 复核 A1）', async ({ page, anotherDevice }) => {
+    const admin = await createUser('unlock-admin', '解除锁定的管理员', { systemRole: 'admin' })
+    const user = await createUser('unlock-user', '被锁定的人')
+    await anotherDevice.goto('/login')
+    for (let attempt = 1; attempt < 5; attempt++) {
+      await loginThroughUi(anotherDevice, { username: user.username, password: `wrong ${attempt}` })
+      await expect(anotherDevice.getByRole('alert')).toHaveText('用户名或密码错误')
+    }
+    await loginThroughUi(anotherDevice, { username: user.username, password: 'wrong 5' })
+    await expect(anotherDevice.getByRole('alert')).toHaveText(/尝试次数过多/)
+
+    await loginThroughApi(page, admin)
+    await page.goto('/admin/users')
+    const row = await userRow(page, user.username)
+    // 只有这一个来源被锁（本人从别处照常登录）：说明写"部分来源"
+    await expect(row.getByText(/^部分来源的登录已锁定，到 .+ 解除$/)).toBeVisible()
+    // 确认的说明准确（复验 N5）：清掉的是这个人在各个来源上的失败次数，他所在的网络整体被锁时仍要等到期
+    await row.getByRole('button', { name: /^解除锁定 / }).click()
+    const dialog = page.getByRole('dialog')
+    await expect(dialog).toHaveAccessibleDescription(/清掉这个人在所有来源上的登录失败次数。他所在的网络如果整体被锁（同一来源失败次数太多），仍要等锁定到期/)
+    await dialog.getByRole('button', { name: '解除锁定', exact: true }).click()
+    await expect(row.getByText(/登录已锁定/)).toHaveCount(0)
+    await expect(row.getByRole('button', { name: /^解除锁定 / })).toHaveCount(0)
+
     await loginThroughUi(anotherDevice, user)
     await expect(anotherDevice.getByRole('heading', { name: '我的空间' })).toBeVisible()
   })

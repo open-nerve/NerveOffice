@@ -217,17 +217,33 @@ describe('安全响应头（P2 设计 §3.6）', () => {
 })
 
 describe('请求标识与请求日志（规范 §7）', () => {
-  it('透传合法的 X-Request-Id：响应头、错误响应与日志一致', async () => {
+  const UUID = /^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/
+
+  it('请求标识由服务端生成：响应头、错误响应与日志一致；客户端带来的 X-Request-Id 不当作请求标识，只在日志里另记 clientRequestId（M2-P6 复核 C2）', async () => {
     const response = await request('/api/no-such-route', { headers: { 'x-request-id': 'client-trace-42' } })
-    expect(response.headers.get('x-request-id')).toBe('client-trace-42')
+    const requestId = response.headers.get('x-request-id') ?? ''
+    expect(requestId).toMatch(UUID)
     const error = await expectError(response, 404, 'NOT_FOUND')
-    expect(error.requestId).toBe('client-trace-42')
-    expect(logsOf('client-trace-42')).toMatchObject([{ level: 'warn', statusCode: 404, path: '/api/no-such-route' }])
+    expect(error.requestId).toBe(requestId)
+    expect(logsOf(requestId)).toMatchObject([{ level: 'warn', statusCode: 404, path: '/api/no-such-route', clientRequestId: 'client-trace-42' }])
+    expect(logsOf('client-trace-42')).toEqual([])
   })
 
-  it('不合法的 X-Request-Id 换成新生成的 UUID', async () => {
-    const response = await request('/api/health/live', { headers: { 'x-request-id': 'has space <and> quotes"' } })
-    expect(response.headers.get('x-request-id')).toMatch(/^[\da-f-]{36}$/)
+  it('每个请求一个新的请求标识：客户端两次带同一个 X-Request-Id，服务端给出两个不同的', async () => {
+    const first = await request('/api/no-such-route', { headers: { 'x-request-id': 'same-trace' } })
+    const second = await request('/api/no-such-route', { headers: { 'x-request-id': 'same-trace' } })
+    expect(first.headers.get('x-request-id')).not.toBe(second.headers.get('x-request-id'))
+  })
+
+  it('不合法的 X-Request-Id 不记进日志；没有带时日志里也没有 clientRequestId', async () => {
+    const malformed = await request('/api/no-such-route', { headers: { 'x-request-id': 'has space <and> quotes"' } })
+    expect(malformed.headers.get('x-request-id')).toMatch(UUID)
+    const [entry] = logsOf(malformed.headers.get('x-request-id') ?? '')
+    expect(entry).toBeDefined()
+    expect(entry).not.toHaveProperty('clientRequestId')
+    expect(app.logs.text()).not.toContain('has space')
+    const plain = await request('/api/no-such-route')
+    expect(logsOf(plain.headers.get('x-request-id') ?? '')[0]).not.toHaveProperty('clientRequestId')
   })
 
   it('请求结束时记一条日志：方法、路由模板、路径、状态码、耗时；不记请求体与查询串', async () => {
@@ -253,14 +269,17 @@ describe('请求标识与请求日志（规范 §7）', () => {
     expect(app.logs.text()).not.toContain('tok-123456')
   })
 
-  it('客户端中途断开：记一条"请求中断"（warn，不记状态码）；之后处理器失败也记进这个请求的日志', async () => {
+  it('客户端中途断开：记一条"请求中断"（warn，不记状态码）；之后处理器失败也记进这个请求的日志（客户端拿不到响应头，按它带来的 clientRequestId 找）', async () => {
     const controller = new AbortController()
     const aborted = fetch(`${app.baseUrl}/api/__test/slow-crash`, { signal: controller.signal, headers: { 'x-request-id': 'abort-trace-1' } }).catch(() => 'aborted')
     await delay(50)
     controller.abort()
     expect(await aborted).toBe('aborted')
-    await waitFor(() => logsOf('abort-trace-1').some(entry => entry.msg === '请求中断之后处理失败'), '处理器失败的日志')
-    const entries = logsOf('abort-trace-1')
+    const byClient = (): LogEntry[] => app.logs.entries().filter(entry => entry.clientRequestId === 'abort-trace-1')
+    await waitFor(() => byClient().some(entry => entry.msg === '请求中断之后处理失败'), '处理器失败的日志')
+    const entries = byClient()
+    // 同一个请求：服务端的请求标识也相同
+    expect(new Set(entries.map(entry => entry.requestId)).size).toBe(1)
     expect(entries.find(entry => entry.msg === '请求中断')).toMatchObject({ level: 'warn', aborted: true, route: '/api/__test/slow-crash' })
     expect(entries.find(entry => entry.msg === '请求中断')).not.toHaveProperty('statusCode')
     expect(entries.find(entry => entry.msg === '请求中断之后处理失败')).toMatchObject({ level: 'error', err: { message: '客户端断开之后处理失败' } })

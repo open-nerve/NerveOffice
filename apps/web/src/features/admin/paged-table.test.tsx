@@ -81,12 +81,13 @@ describe('PagedTable', () => {
 
   it('第一页失败：说明失败与原因，可以重试', async () => {
     const fetchPage = vi.fn<FetchPage>(async () => {
-      throw new ApiError(403, 'PERMISSION_DENIED', 'x')
+      throw new ApiError(403, 'PERMISSION_DENIED', '没有执行这个操作的权限')
     })
     renderTable(fetchPage)
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent('条目加载失败')
-    expect(alert).toHaveTextContent('你没有执行这个操作的权限')
+    // 看得到却不能做的原因由服务端给出（ADR-008 的例外，M2-P6 复核 S5）
+    expect(alert).toHaveTextContent('没有执行这个操作的权限')
     fetchPage.mockResolvedValue({ items: items('甲'), nextCursor: null })
     fireEvent.click(within(alert).getByRole('button', { name: '重试' }))
     expect(await screen.findByRole('table', { name: '条目列表' })).toBeInTheDocument()

@@ -27,7 +27,7 @@
   "policyEvents": [
     {
       "kind": "paste-link",
-      "detail": "去掉链接 javascript:window.__p5_pwned=1"
+      "detail": "去掉链接 javascript:<构造方法已移出仓库>"
     },
     {
       "kind": "paste-link",
@@ -35,7 +35,7 @@
     },
     {
       "kind": "paste-link",
-      "detail": "去掉链接 javascript:window.__p5_pwned=1"
+      "detail": "去掉链接 javascript:<构造方法已移出仓库>"
     },
     {
       "kind": "paste-section-break",

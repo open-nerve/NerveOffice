@@ -3,6 +3,7 @@ import type { DestinationStream } from 'pino'
 import type { AppConfig } from '../modules/config/index.ts'
 import type { AdditionalModules } from './app.module.ts'
 import { NestFactory } from '@nestjs/core'
+import { CommitLedger } from '../modules/database/index.ts'
 import { AppLogger, createRootLogger, NestPinoLogger, RequestContextStore } from '../modules/logging/index.ts'
 import { AppModule } from './app.module.ts'
 import { ApplicationRuntime } from './application-runtime.ts'
@@ -35,7 +36,8 @@ export async function createApplication(config: AppConfig, options: ApplicationO
   server.headersTimeout = config.http.headersTimeoutMs
   server.keepAliveTimeout = config.http.keepAliveTimeoutMs
   const inFlight = new InFlightRequests()
-  configureHttp(app, config, { rootLogger, logger, requestContext, inFlight })
+  // 事务运行器记账用的是这个应用自己的那一份（database 模块提供）：HTTP 管线的中间件与异常过滤器用同一份
+  configureHttp(app, config, { rootLogger, logger, requestContext, commits: app.get(CommitLedger), inFlight })
   await app.init()
   return new ApplicationRuntime(app, config, rootLogger, inFlight)
 }

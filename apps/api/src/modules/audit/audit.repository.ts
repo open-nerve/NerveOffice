@@ -59,7 +59,7 @@ export class AuditRepository {
       source: origin.source,
       requestId: origin.source === 'http' ? origin.requestId : null,
       clientIp: origin.source === 'http' ? origin.clientIp ?? null : null,
-      details: event.details ?? {},
+      details: event.details,
     })
   }
 

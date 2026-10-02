@@ -59,6 +59,17 @@ export class AdminUsersController {
     return this.resets.issue({ type: 'user', id: principal.user.id }, id, origin)
   }
 
+  /** 解除登录锁定（M2-P6 复核 A1）：清掉这个账户在所有来源上的登录失败计数，本人随即可以登录 */
+  @Post(':id/unlock-login')
+  @HttpCode(200)
+  async unlockLogin(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id', { schema: userIdSchema }) id: string,
+    @RequestOrigin() origin: HttpOrigin,
+  ): Promise<AdminUser> {
+    return this.accounts.unlockLogin(principal, id, origin)
+  }
+
   @Put(':id/system-role')
   async changeSystemRole(
     @CurrentPrincipal() principal: Principal,

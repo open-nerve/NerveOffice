@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { uuidSchema } from '../ids/ids.ts'
 import { SPACE_TYPES } from '../spaces/spaces.ts'
-import { codePointLength, hasControlCharacters } from '../text/text.ts'
+import { codePointLength, titleTextSchema } from '../text/text.ts'
 
 /** 文档类型：M1 只有表格，M6 加上文字文档（doc）。新增取值时，同时用迁移更新 documents.type 的 CHECK 约束。 */
 export const DOCUMENT_TYPES = ['sheet'] as const
@@ -54,11 +54,11 @@ export function copiedDocumentTitle(sourceTitle: string): string {
   return `${base}${COPIED_TITLE_SUFFIX}`
 }
 
-/** 标题：去掉首尾空白之后 1–200 个字符，不含控制字符。 */
-export const documentTitleSchema = z.string()
-  .trim()
-  .refine(value => codePointLength(value) >= 1 && codePointLength(value) <= DOCUMENT_TITLE_MAX_LENGTH, `标题为 1–${DOCUMENT_TITLE_MAX_LENGTH} 个字符`)
-  .refine(value => !hasControlCharacters(value), '标题不能包含控制字符')
+/**
+ * 标题：标题的共用规则（text.ts 的 titleTextSchema），去掉首尾空白之后 1–200 个字符。标题是用户的内容，比名称宽：
+ * 原样保存（不做 NFC 归一），只拒绝控制字符、改变文字方向的字符与换行符，并要求不能只有看不见的字符（M2-P6 复核 B2）
+ */
+export const documentTitleSchema = titleTextSchema({ label: '标题', maxLength: DOCUMENT_TITLE_MAX_LENGTH })
 
 export const DOCUMENT_LIST_DEFAULT_LIMIT = 50
 export const DOCUMENT_LIST_MAX_LIMIT = 100
@@ -144,6 +144,18 @@ export const documentDetailSchema = documentSummarySchema.extend({
 })
 
 export type DocumentDetail = z.infer<typeof documentDetailSchema>
+
+/**
+ * 带 requestId 的新建与复制的响应（POST /api/documents、POST /api/documents/{id}/copy）：文档的元数据，加上这次是不是重放
+ * （M2-P6 复核第二批 S-1，接口的加法）。replayed 为真：同一个 requestId 的那一次之前已经建好了，这次没有新建，给出的是那一份现在的样子
+ * （可能已经改了名、移了位置）。客户端据此说明"上一次其实已经完成"，不把它当成这一次新建的，这件事随之了结——
+ * 之后再点就是另一件事、另一个 requestId（否则结果未知之后留着的 requestId 会把很久以后的"再建一份"当成重试）
+ */
+export const createdDocumentSchema = documentDetailSchema.extend({
+  replayed: z.boolean(),
+})
+
+export type CreatedDocument = z.infer<typeof createdDocumentSchema>
 
 /** 路径里的文档 id。 */
 export const documentIdSchema = uuidSchema

@@ -504,9 +504,11 @@ export function classifyArtifact(path: string): ArtifactKind {
  * 只属于测试构建的文件（vite build --mode e2e），不能出现在生产构建里：
  * - CSP 阳性对照的页面与 Worker（P3 设计 §3.9）：它们故意尝试 eval 与跨源请求；
  * - 编辑器的 E2E 探针（M2-P3 设计 §3.7，editor/testing/e2e-probe.ts）：把 Facade 挂在 window 上，只在测试构建里由编辑器动态引入。
- *   它的名字另由禁用关键字（policy.ts 的 __nerveEditorProbe）核对：分块改了名、或者被并进别的分块时同样发现
+ *   它的名字另由禁用关键字（policy.ts 的 __nerveEditorProbe）核对：分块改了名、或者被并进别的分块时同样发现；
+ * - 探针补上的插件 Facade（editor/testing/probe-facades.ts）：平时并在探针的分块里；被单独动态引入时自成一个分块，
+ *   它只有副作用、没有探针的名字，禁用关键字认不出，按分块名核对（M2-P6 第 4 片复核 F5；静态引入由 lint 拦下）
  */
-export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^csp-probe\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe)-[^/]*$/]
+export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^csp-probe\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe|probe-facades)-[^/]*$/]
 
 export function checkTestOnlyArtifacts(paths: readonly string[]): Violation[] {
   return paths

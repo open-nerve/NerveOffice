@@ -1,12 +1,14 @@
 // 改动账户的并发（M2-P1 审查 A1、A2、A9、A10、A12，复验 N1–N3）：验证在事务之外，事务里先锁账户行再复核；锁的顺序统一，
-// 互相等待时不成环；管理操作在锁里复核操作者。
+// 互相等待时不成环；管理操作在锁里复核操作者。签发人离任与他签发的链接同时被使用、同时在签发（M2-P6 复核 A2，复验 N2）。
 // 用两个连接构造确定的交错：一个连接持锁，等被测的请求在锁上等着了，再改数据、提交（support/held-lock.ts）。
+import type { Buffer } from 'node:buffer'
 import type pg from 'pg'
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
+import { setTimeout as delay } from 'node:timers/promises'
 import { errorResponseSchema, issuedInvitationSchema, issuedPasswordResetSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount, passwordHashOf } from '../support/accounts.ts'
@@ -15,7 +17,8 @@ import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { raceAgainstHeldLock } from '../support/held-lock.ts'
 import { linkInvalidReasonOf, postPublic, tokenDigest, tokenOf } from '../support/links.ts'
-import { asUser, login, postLogin } from '../support/session-client.ts'
+import { requestIdOf } from '../support/request-id.ts'
+import { asUser, cookieValue, login, postLogin, sessionSetCookie } from '../support/session-client.ts'
 
 let database: TestDatabase
 let app: TestApp
@@ -92,13 +95,13 @@ describe('US-M2-02 登录与修改密码：验证之后、提交之前的变化�
     const changed = await passwordHashOf('changed elsewhere')
     const response = await raceAgainstHeldLock(database, {
       hold: lockAccountRow(amy),
-      request: async () => postLogin(app.baseUrl, { username: 'amy', password: amy.password }, { 'x-request-id': 'race-login-amy' }),
+      request: async () => postLogin(app.baseUrl, { username: 'amy', password: amy.password }),
       change: async client => client.query(CHANGE_PASSWORD_ELSEWHERE, [changed, amy.id]),
     })
     expect(response.status).toBe(401)
     expect(await codeOf(response)).toBe('INVALID_CREDENTIALS')
     expect(await count('SELECT count(*)::int AS count FROM auth_sessions WHERE user_id = $1', [amy.id])).toBe(0)
-    expect(await one('SELECT action, target_id FROM audit_events WHERE request_id = \'race-login-amy\'', [])).toEqual({ action: 'auth.login_failed', target_id: amy.id })
+    expect(await one('SELECT action, target_id FROM audit_events WHERE request_id = $1', [requestIdOf(response)])).toEqual({ action: 'auth.login_failed', target_id: amy.id })
   })
 
   it('登录验证过密码之后，账户被停用：同样不建会话', async () => {
@@ -150,7 +153,7 @@ describe('US-M2-02 登录与修改密码：验证之后、提交之前的变化�
     const rehashed = await versionOf()
     expect(rehashed?.password_hash).not.toBe(before?.password_hash)
     expect(rehashed?.password_version).toBe(before?.password_version)
-    expect((await asUser(app.baseUrl, here, '/api/auth/password', { method: 'PUT', body: { currentPassword: eli.password, newPassword: 'eli second password' } })).status).toBe(204)
+    expect((await asUser(app.baseUrl, here, '/api/auth/password', { method: 'PUT', body: { currentPassword: eli.password, newPassword: 'eli second password' } })).status).toBe(200)
     expect((await versionOf())?.password_version).toBe((before?.password_version ?? 0) + 1)
     const token = await issuedResetToken(eli)
     expect((await versionOf())?.password_version).toBe((before?.password_version ?? 0) + 2)
@@ -176,7 +179,7 @@ describe('US-M2-02 登录与修改密码：验证之后、提交之前的变化�
       change: async () => undefined,
     })
     // 重新哈希只换编码、版本不变：修改密码照常成功。那次登录排在修改之后提交，这时密码已经改了，按凭据变了拒绝
-    expect(change.status).toBe(204)
+    expect(change.status).toBe(200)
     expect(relogin.status).toBe(401)
     expect((await postLogin(app.baseUrl, { username: 'dot', password: 'dot wants this new one' })).status).toBe(200)
   })
@@ -250,12 +253,12 @@ describe('US-M2-03 重置密码：锁的顺序与事务里的复核（审查 A2�
     const before = await passwordHashOfAccount(fay)
     const response = await raceAgainstHeldLock(database, {
       hold: lockAccountRow(fay),
-      request: async () => completeReset(token, { 'x-request-id': 'race-complete-fay' }),
+      request: async () => completeReset(token),
       change: async client => client.query('UPDATE users SET status = \'disabled\' WHERE id = $1', [fay.id]),
     })
     expect(await linkInvalidReasonOf(response)).toBe('revoked')
     expect(await passwordHashOfAccount(fay)).toBe(before)
-    expect(await one('SELECT action, actor_type, target_type, target_id, details FROM audit_events WHERE request_id = \'race-complete-fay\'', [])).toEqual({
+    expect(await one('SELECT action, actor_type, target_type, target_id, details FROM audit_events WHERE request_id = $1', [requestIdOf(response)])).toEqual({
       action: 'auth.link_rejected',
       actor_type: 'anonymous',
       target_type: 'user',
@@ -269,11 +272,11 @@ describe('US-M2-03 重置密码：锁的顺序与事务里的复核（审查 A2�
     const token = await issuedResetToken(gil)
     const response = await raceAgainstHeldLock(database, {
       hold: lockAccountRow(gil),
-      request: async () => completeReset(token, { 'x-request-id': 'race-complete-gil' }),
+      request: async () => completeReset(token),
       change: async client => client.query('UPDATE auth_password_resets SET used_at = now() WHERE token_hash = $1', [tokenDigest(token)]),
     })
     expect(await linkInvalidReasonOf(response)).toBe('used')
-    expect(await one('SELECT details FROM audit_events WHERE request_id = \'race-complete-gil\'', [])).toEqual({ details: { purpose: 'password_reset', reason: 'used' } })
+    expect(await one('SELECT details FROM audit_events WHERE request_id = $1', [requestIdOf(response)])).toEqual({ details: { purpose: 'password_reset', reason: 'used' } })
     expect(await count('SELECT count(*)::int AS count FROM auth_sessions WHERE user_id = $1', [gil.id])).toBe(0)
   })
 })
@@ -297,6 +300,10 @@ describe('US-M2-04 停用与会话、操作者的复核（审查 A1、A2、A12�
     const gone = await createAccount(database, { username: 'gone' })
     await database.query(async client => client.query('UPDATE users SET status = \'disabled\' WHERE id = $1', [gone.id]))
     const pending = await issuedInvitation('pending-inv')
+    // ivy 留下登录失败的计数：解除登录锁定（M2-P6 复核 A1）被拒之后，计数应当还在
+    expect((await postLogin(app.baseUrl, { username: 'ivy', password: 'wrong password' })).status).toBe(401)
+    const ivyCounters = async () => count('SELECT count(*)::int AS count FROM auth_login_throttles WHERE account_hash = sha256(convert_to(\'account:ivy\', \'UTF8\'))', [])
+    expect(await ivyCounters()).toBe(2)
     const operations: [string, (session: LoggedIn) => Promise<Response>][] = [
       ['停用', async session => asUser(app.baseUrl, session, `/api/admin/users/${ivy.id}/disable`, { method: 'POST' })],
       ['启用', async session => asUser(app.baseUrl, session, `/api/admin/users/${gone.id}/enable`, { method: 'POST' })],
@@ -305,6 +312,7 @@ describe('US-M2-04 停用与会话、操作者的复核（审查 A1、A2、A12�
       ['签发邀请', async session => asUser(app.baseUrl, session, '/api/admin/invitations', { method: 'POST', body: { username: 'never-invited', displayName: '不会被邀请' } })],
       ['作废邀请', async session => asUser(app.baseUrl, session, `/api/admin/invitations/${pending.id}/revoke`, { method: 'POST' })],
       ['重发邀请', async session => asUser(app.baseUrl, session, `/api/admin/invitations/${pending.id}/reissue`, { method: 'POST' })],
+      ['解除登录锁定', async session => asUser(app.baseUrl, session, `/api/admin/users/${ivy.id}/unlock-login`, { method: 'POST' })],
     ]
     for (const [index, [name, operate]] of operations.entries()) {
       const boss = await createAccount(database, { username: `boss-${index}`, systemRole: 'admin' })
@@ -323,6 +331,7 @@ describe('US-M2-04 停用与会话、操作者的复核（审查 A1、A2、A12�
     expect(await count('SELECT count(*)::int AS count FROM auth_password_resets WHERE user_id = $1', [ivy.id])).toBe(0)
     expect(await count('SELECT count(*)::int AS count FROM auth_invitations WHERE username = $1', ['never-invited'])).toBe(0)
     expect(await one('SELECT revoked_at FROM auth_invitations WHERE id = $1', [pending.id])).toEqual({ revoked_at: null })
+    expect(await ivyCounters()).toBe(2)
   })
 
   it('停用已锁住账户行、在重置行上等着时，带这个账户旧 Cookie 的登录进来：登录排在停用后面（先要账户行），复核不通过，没有死锁', async () => {
@@ -351,6 +360,266 @@ describe('US-M2-04 停用与会话、操作者的复核（审查 A1、A2、A12�
   })
 })
 
+describe('US-M2-04 管理员给自己签发了重置，同时有人停用他（M2-P6 复核 A2：锁的顺序是账户行在前、链接行在后）', () => {
+  /** 一位管理员给自己签发重置：自己的会话随即撤销，旧密码失效；返回令牌与这条重置的 id */
+  async function selfIssuedReset(username: string) {
+    const self = await createAccount(database, { username, systemRole: 'admin' })
+    const session = await login(app.baseUrl, username, self.password)
+    const response = await asUser(app.baseUrl, session, `/api/admin/users/${self.id}/password-reset`, { method: 'POST' })
+    expect(response.status, await response.clone().text()).toBe(201)
+    const token = tokenOf(parseExact(issuedPasswordResetSchema, await response.json()).url)
+    const row = await one<{ id: string }>('SELECT id FROM auth_password_resets WHERE token_hash = $1', [tokenDigest(token)])
+    if (row === undefined)
+      throw new Error('签发之后库里没有这条重置')
+    return { self, token, resetId: row.id }
+  }
+
+  function lockResetRow(resetId: string) {
+    return async (client: pg.Client) => client.query('SELECT 1 FROM auth_password_resets WHERE id = $1 FOR UPDATE', [resetId])
+  }
+
+  async function disable(account: TestAccount): Promise<Response> {
+    return asUser(app.baseUrl, adminSession, `/api/admin/users/${account.id}/disable`, { method: 'POST' })
+  }
+
+  it('完成重置先锁住账户行、在重置行上等着，停用在账户行上等它：放开之后两边都成功，没有互相等待；刚得到的会话随停用撤销', async () => {
+    const { self, token, resetId } = await selfIssuedReset('self-race-1')
+    // 完成重置要是先锁重置行、再锁账户行，这里就成环：它拿着重置行等账户行，停用拿着账户行等重置行，一方 500
+    const [completed, disabled] = await raceAgainstHeldLock(database, {
+      hold: lockResetRow(resetId),
+      request: async ({ step, waitForWaiting }) => {
+        const complete = step(completeReset(token))
+        await waitForWaiting(1)
+        const disabling = step(disable(self))
+        return Promise.all([complete, disabling])
+      },
+      waiting: 2,
+      change: async () => undefined,
+    })
+    expect([completed.status, disabled.status]).toEqual([200, 200])
+    expect(await one('SELECT status FROM users WHERE id = $1', [self.id])).toEqual({ status: 'disabled' })
+    expect(await one('SELECT used_at IS NOT NULL AS used, revoked_at IS NOT NULL AS revoked FROM auth_password_resets WHERE id = $1', [resetId])).toEqual({ used: true, revoked: false })
+    expect(await count('SELECT count(*)::int AS count FROM auth_sessions WHERE user_id = $1 AND revoked_at IS NULL', [self.id])).toBe(0)
+  })
+
+  it('停用先锁住账户行、作废他的重置时在重置行上等着，完成重置在账户行上等它：放开之后重置已作废，完成是 410（revoked），密码不变', async () => {
+    const { self, token, resetId } = await selfIssuedReset('self-race-2')
+    const before = await passwordHashOfAccount(self)
+    const [disabled, completed] = await raceAgainstHeldLock(database, {
+      hold: lockResetRow(resetId),
+      request: async ({ step, waitForWaiting }) => {
+        const disabling = step(disable(self))
+        await waitForWaiting(1)
+        const complete = step(completeReset(token))
+        return Promise.all([disabling, complete])
+      },
+      waiting: 2,
+      change: async () => undefined,
+    })
+    expect(disabled.status).toBe(200)
+    expect(await linkInvalidReasonOf(completed)).toBe('revoked')
+    expect(await passwordHashOfAccount(self)).toBe(before)
+    expect(await one('SELECT used_at IS NOT NULL AS used, revoked_at IS NOT NULL AS revoked FROM auth_password_resets WHERE id = $1', [resetId])).toEqual({ used: false, revoked: true })
+    // 给自己签发的是这个账户的重置：随停用按 account_disabled 作废，只记一次
+    expect(await one('SELECT details FROM audit_events WHERE action = \'users.password_reset_revoked\' AND request_id = $1', [requestIdOf(disabled)])).toEqual({ details: { passwordResetId: resetId, reason: 'account_disabled' } })
+  })
+})
+
+describe('US-M2-04 签发人离任，同时他签发的链接正被使用或正在签发（M2-P6 复核 A2，复验 N2）', () => {
+  const NEW_PASSWORD = 'the brand new long password'
+
+  /** 一位管理员（签发人）登录，给另一个人签发重置：返回签发人与他的会话、被重置的人、令牌与这条重置的 id */
+  async function resetIssuedBy(issuerName: string, targetName: string) {
+    const issuer = await createAccount(database, { username: issuerName, systemRole: 'admin' })
+    const target = await createAccount(database, { username: targetName })
+    const issuerSession = await login(app.baseUrl, issuerName, issuer.password)
+    const response = await asUser(app.baseUrl, issuerSession, `/api/admin/users/${target.id}/password-reset`, { method: 'POST' })
+    expect(response.status, await response.clone().text()).toBe(201)
+    const token = tokenOf(parseExact(issuedPasswordResetSchema, await response.json()).url)
+    const row = await one<{ id: string }>('SELECT id FROM auth_password_resets WHERE token_hash = $1', [tokenDigest(token)])
+    if (row === undefined)
+      throw new Error('签发之后库里没有这条重置')
+    return { issuer, target, issuerSession, token, resetId: row.id }
+  }
+
+  /**
+   * 签发人在自己的浏览器里打开链接，替对方设置密码（ADR-013 写明的管理员权限）：浏览器带着签发人的会话，
+   * 完成时它随之作废（replaced），完成重置的事务要改签发人的会话行
+   */
+  async function completeInIssuerBrowser(token: string, issuerSession: LoggedIn): Promise<Response> {
+    return postPublic(app.baseUrl, '/api/auth/password-resets/complete', { token, password: NEW_PASSWORD }, { cookie: issuerSession.cookie })
+  }
+
+  /** 签发人发出的邀请：返回签发人与他的会话、邀请的 id 与令牌 */
+  async function invitationIssuedBy(issuerName: string, invitee: string) {
+    const issuer = await createAccount(database, { username: issuerName, systemRole: 'admin' })
+    const issuerSession = await login(app.baseUrl, issuerName, issuer.password)
+    const response = await asUser(app.baseUrl, issuerSession, '/api/admin/invitations', { method: 'POST', body: { username: invitee, displayName: invitee } })
+    expect(response.status, await response.clone().text()).toBe(201)
+    const issued = parseExact(issuedInvitationSchema, await response.json())
+    return { issuer, issuerSession, invitationId: issued.invitation.id, token: tokenOf(issued.url) }
+  }
+
+  /** 在签发人的浏览器里接受邀请：浏览器原来的会话（签发人的）随之作废 */
+  async function acceptInIssuerBrowser(token: string, issuerSession: LoggedIn): Promise<Response> {
+    return postPublic(app.baseUrl, '/api/auth/invitations/accept', { token, displayName: '新同事', password: NEW_PASSWORD }, { cookie: issuerSession.cookie })
+  }
+
+  function lockResetRow(resetId: string) {
+    return async (client: pg.Client) => client.query('SELECT 1 FROM auth_password_resets WHERE id = $1 FOR UPDATE', [resetId])
+  }
+
+  function lockInvitationRow(invitationId: string) {
+    return async (client: pg.Client) => client.query('SELECT 1 FROM auth_invitations WHERE id = $1 FOR UPDATE', [invitationId])
+  }
+
+  /** 持有 system-admins 的排他锁（取消、停用系统管理员取的就是它）：签发（共享）与停用（排他）都在它上面排队 */
+  async function holdSystemAdmins(client: pg.Client) {
+    return client.query('SELECT pg_advisory_xact_lock(hashtextextended(\'nerve-office:system-admins\', 0))')
+  }
+
+  async function disable(account: TestAccount): Promise<Response> {
+    return asUser(app.baseUrl, adminSession, `/api/admin/users/${account.id}/disable`, { method: 'POST' })
+  }
+
+  async function demote(account: TestAccount): Promise<Response> {
+    return asUser(app.baseUrl, adminSession, `/api/admin/users/${account.id}/system-role`, { method: 'PUT', body: { systemRole: 'member' } })
+  }
+
+  async function activeSessionsOf(account: TestAccount): Promise<number> {
+    return count('SELECT count(*)::int AS count FROM auth_sessions WHERE user_id = $1 AND revoked_at IS NULL', [account.id])
+  }
+
+  it('完成重置先拿到重置行（浏览器带着签发人的会话），停用签发人排在它后面：两边都成功，没有互相等待成环；重置已用、没被作废，签发人没有还能用的会话', async () => {
+    const { issuer, target, issuerSession, token, resetId } = await resetIssuedBy('issuer-a', 'target-a')
+    // 停用里"作废他签发的链接"排在"撤销他的会话"之前：对调时停用先锁住签发人的会话行、再等重置行，完成重置拿着重置行、
+    // 要作废浏览器原来的会话（签发人的）又等会话行，两边成环，一方约 1 秒后 500（复验 N2）
+    const [completed, disabled] = await raceAgainstHeldLock(database, {
+      hold: lockResetRow(resetId),
+      request: async ({ step, waitForWaiting }) => {
+        const complete = step(completeInIssuerBrowser(token, issuerSession))
+        await waitForWaiting(1)
+        const disabling = step(disable(issuer))
+        return Promise.all([complete, disabling])
+      },
+      waiting: 2,
+      change: async () => undefined,
+    })
+    expect([completed.status, disabled.status]).toEqual([200, 200])
+    expect(await one('SELECT used_at IS NOT NULL AS used, revoked_at IS NOT NULL AS revoked FROM auth_password_resets WHERE id = $1', [resetId])).toEqual({ used: true, revoked: false })
+    expect(await one('SELECT status FROM users WHERE id = $1', [issuer.id])).toEqual({ status: 'disabled' })
+    expect(await activeSessionsOf(issuer)).toBe(0)
+    // 被重置的人：完成时新建的这一条
+    expect(await activeSessionsOf(target)).toBe(1)
+  })
+
+  it('停用签发人先拿到重置行（作废它），完成重置排在后面：410（revoked），密码不变；审计记 issuer_disabled，与停用同一个请求标识', async () => {
+    const { issuer, target, issuerSession, token, resetId } = await resetIssuedBy('issuer-b', 'target-b')
+    const before = await passwordHashOfAccount(target)
+    const [disabled, completed] = await raceAgainstHeldLock(database, {
+      hold: lockResetRow(resetId),
+      request: async ({ step, waitForWaiting }) => {
+        const disabling = step(disable(issuer))
+        await waitForWaiting(1)
+        const complete = step(completeInIssuerBrowser(token, issuerSession))
+        return Promise.all([disabling, complete])
+      },
+      waiting: 2,
+      change: async () => undefined,
+    })
+    expect(disabled.status).toBe(200)
+    expect(await linkInvalidReasonOf(completed)).toBe('revoked')
+    expect(await passwordHashOfAccount(target)).toBe(before)
+    expect(await one('SELECT target_id, details FROM audit_events WHERE action = \'users.password_reset_revoked\' AND request_id = $1', [requestIdOf(disabled)]))
+      .toEqual({ target_id: target.id, details: { passwordResetId: resetId, reason: 'issuer_disabled' } })
+  })
+
+  it('接受邀请先拿到邀请行（浏览器带着签发人的会话），取消签发人的系统管理员排在后面：两边都成功，账户建成，邀请没有被作废', async () => {
+    const { issuer, issuerSession, invitationId, token } = await invitationIssuedBy('issuer-c', 'invitee-c')
+    const [accepted, demoted] = await raceAgainstHeldLock(database, {
+      hold: lockInvitationRow(invitationId),
+      request: async ({ step, waitForWaiting }) => {
+        const accept = step(acceptInIssuerBrowser(token, issuerSession))
+        await waitForWaiting(1)
+        const demoting = step(demote(issuer))
+        return Promise.all([accept, demoting])
+      },
+      waiting: 2,
+      change: async () => undefined,
+    })
+    expect([accepted.status, demoted.status]).toEqual([200, 200])
+    expect(await one('SELECT accepted_at IS NOT NULL AS accepted, revoked_at IS NOT NULL AS revoked FROM auth_invitations WHERE id = $1', [invitationId])).toEqual({ accepted: true, revoked: false })
+    expect(await count('SELECT count(*)::int AS count FROM users WHERE username = \'invitee-c\'', [])).toBe(1)
+    expect(await one('SELECT system_role FROM users WHERE id = $1', [issuer.id])).toEqual({ system_role: 'member' })
+    expect(await count('SELECT count(*)::int AS count FROM audit_events WHERE action = \'users.invitation_revoked\' AND request_id = $1', [requestIdOf(demoted)])).toBe(0)
+  })
+
+  it('取消签发人的系统管理员先拿到邀请行（作废它），接受排在后面：410（revoked），不建账户；审计记 issuer_no_longer_admin，作废人是执行取消的管理员', async () => {
+    const { issuer, issuerSession, invitationId, token } = await invitationIssuedBy('issuer-d', 'invitee-d')
+    const [demoted, accepted] = await raceAgainstHeldLock(database, {
+      hold: lockInvitationRow(invitationId),
+      request: async ({ step, waitForWaiting }) => {
+        const demoting = step(demote(issuer))
+        await waitForWaiting(1)
+        const accept = step(acceptInIssuerBrowser(token, issuerSession))
+        return Promise.all([demoting, accept])
+      },
+      waiting: 2,
+      change: async () => undefined,
+    })
+    expect(demoted.status).toBe(200)
+    expect(await linkInvalidReasonOf(accepted)).toBe('revoked')
+    expect(await count('SELECT count(*)::int AS count FROM users WHERE username = \'invitee-d\'', [])).toBe(0)
+    expect(await one('SELECT actor_id, target_id, details FROM audit_events WHERE action = \'users.invitation_revoked\' AND request_id = $1', [requestIdOf(demoted)]))
+      .toEqual({ actor_id: admin.id, target_id: invitationId, details: { reason: 'issuer_no_longer_admin' } })
+    expect(await one('SELECT revoked_by FROM auth_invitations WHERE id = $1', [invitationId])).toEqual({ revoked_by: admin.id })
+  })
+
+  it('签发重置与停用签发人都在 system-admins 的锁上排队，签发在前：签发先提交，停用随后把它作废；结束时签发人没有还能用的链接', async () => {
+    const issuer = await createAccount(database, { username: 'issuer-e', systemRole: 'admin' })
+    const target = await createAccount(database, { username: 'target-e' })
+    const issuerSession = await login(app.baseUrl, 'issuer-e', issuer.password)
+    const [issued, disabled] = await raceAgainstHeldLock(database, {
+      hold: holdSystemAdmins,
+      request: async ({ step, waitForWaiting }) => {
+        const issuing = step(asUser(app.baseUrl, issuerSession, `/api/admin/users/${target.id}/password-reset`, { method: 'POST' }))
+        await waitForWaiting(1)
+        const disabling = step(disable(issuer))
+        return Promise.all([issuing, disabling])
+      },
+      waiting: 2,
+      change: async () => undefined,
+    })
+    expect([issued.status, disabled.status]).toEqual([201, 200])
+    const token = tokenOf(parseExact(issuedPasswordResetSchema, await issued.json()).url)
+    expect(await linkInvalidReasonOf(await postPublic(app.baseUrl, '/api/auth/password-resets/inspect', { token }))).toBe('revoked')
+    expect(await count('SELECT count(*)::int AS count FROM auth_password_resets WHERE created_by = $1 AND used_at IS NULL AND revoked_at IS NULL', [issuer.id])).toBe(0)
+  })
+
+  it('停用签发人在前、签发重置在后（都在 system-admins 的锁上排队）：签发在锁里复核操作者，已被停用，403，不留下重置，被重置的人密码不变', async () => {
+    const issuer = await createAccount(database, { username: 'issuer-f', systemRole: 'admin' })
+    const target = await createAccount(database, { username: 'target-f' })
+    const issuerSession = await login(app.baseUrl, 'issuer-f', issuer.password)
+    const before = await passwordHashOfAccount(target)
+    const [disabled, issued] = await raceAgainstHeldLock(database, {
+      hold: holdSystemAdmins,
+      request: async ({ step, waitForWaiting }) => {
+        const disabling = step(disable(issuer))
+        await waitForWaiting(1)
+        const issuing = step(asUser(app.baseUrl, issuerSession, `/api/admin/users/${target.id}/password-reset`, { method: 'POST' }))
+        return Promise.all([disabling, issuing])
+      },
+      waiting: 2,
+      change: async () => undefined,
+    })
+    expect(disabled.status).toBe(200)
+    expect(issued.status).toBe(403)
+    expect(await codeOf(issued)).toBe('PERMISSION_DENIED')
+    expect(await count('SELECT count(*)::int AS count FROM auth_password_resets WHERE user_id = $1', [target.id])).toBe(0)
+    expect(await passwordHashOfAccount(target)).toBe(before)
+  })
+})
+
 describe('US-M2-01 邀请：作废与接受的并发（审查 A9、A10）', () => {
   it('签发时自动作废过期的旧邀请，同时管理员作废了它：只作废一次，签发不再记一次作废', async () => {
     const old = await issuedInvitation('kit')
@@ -369,16 +638,114 @@ describe('US-M2-01 邀请：作废与接受的并发（审查 A9、A10）', () =
     const issued = await issuedInvitation('lea')
     const response = await raceAgainstHeldLock(database, {
       hold: async client => client.query('SELECT 1 FROM auth_invitations WHERE id = $1 FOR UPDATE', [issued.id]),
-      request: async () => postPublic(app.baseUrl, '/api/auth/invitations/accept', { token: issued.token, displayName: '莉亚', password: 'a good long password' }, { 'x-request-id': 'race-accept-lea' }),
+      request: async () => postPublic(app.baseUrl, '/api/auth/invitations/accept', { token: issued.token, displayName: '莉亚', password: 'a good long password' }),
       change: async client => client.query('UPDATE auth_invitations SET revoked_at = now(), revoked_by = $1 WHERE id = $2', [admin.id, issued.id]),
     })
     expect(await linkInvalidReasonOf(response)).toBe('revoked')
     expect(await count('SELECT count(*)::int AS count FROM users WHERE username = \'lea\'', [])).toBe(0)
-    expect(await one('SELECT action, target_type, target_id, details FROM audit_events WHERE request_id = \'race-accept-lea\'', [])).toEqual({
+    expect(await one('SELECT action, target_type, target_id, details FROM audit_events WHERE request_id = $1', [requestIdOf(response)])).toEqual({
       action: 'auth.link_rejected',
       target_type: 'invitation',
       target_id: issued.id,
       details: { purpose: 'invitation', reason: 'revoked' },
     })
+  })
+})
+
+describe('US-M2-02 退出、修改密码进行中，这条会话先结束了（M2-P6：同一个浏览器里换令牌与退出同时发生）', () => {
+  /** 这个浏览器的会话在库里的摘要 */
+  function sessionDigest(user: LoggedIn): Buffer {
+    return createHash('sha256').update(cookieValue(user.cookie), 'utf8').digest()
+  }
+
+  /** 持有这条会话行的锁：退出撤销它时在这一行上等着 */
+  function lockSessionRow(user: LoggedIn) {
+    return async (client: pg.Client) => client.query('SELECT 1 FROM auth_sessions WHERE token_hash = $1 FOR UPDATE', [sessionDigest(user)])
+  }
+
+  /** 在持锁的事务里撤销这条会话：模拟同一个浏览器里别的标签页先换了令牌（replaced）或先退出了（logout） */
+  function revokeSession(user: LoggedIn, reason: 'replaced' | 'logout') {
+    return async (client: pg.Client) => client.query(
+      'UPDATE auth_sessions SET revoked_at = now(), revoked_reason = $2, idle_expires_at = least(idle_expires_at, now()) WHERE token_hash = $1',
+      [sessionDigest(user), reason],
+    )
+  }
+
+  /** 被持锁的连接挡住的那个连接（这里就是被测的请求用的连接） */
+  async function pidBlockedBy(client: pg.Client): Promise<number | undefined> {
+    const holder = (await client.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid
+    return (await one<{ pid: number }>('SELECT pid FROM pg_stat_activity WHERE datname = current_database() AND $1 = ANY(pg_blocking_pids(pid))', [holder]))?.pid
+  }
+
+  /** 这个连接还在：连接被丢弃之后服务端的进程要过一会儿才退出，最多看 2 秒 */
+  async function connectionAlive(pid: number): Promise<boolean> {
+    for (let attempt = 0; attempt < 40; attempt++) {
+      if (await count('SELECT count(*)::int AS count FROM pg_stat_activity WHERE pid = $1', [pid]) === 0)
+        return false
+      await delay(50)
+    }
+    return true
+  }
+
+  async function logoutAudits(response: Response): Promise<number> {
+    return count('SELECT count(*)::int AS count FROM audit_events WHERE action = \'auth.logout\' AND request_id = $1', [requestIdOf(response)])
+  }
+
+  it('退出在会话行上等着时，这条会话因为换令牌（replaced）先结束了：401 登录已过期，不清除 Cookie（这个浏览器已经拿到了新的），不记退出的审计', async () => {
+    const kaz = await createAccount(database, { username: 'kaz' })
+    const here = await login(app.baseUrl, 'kaz', kaz.password)
+    const response = await raceAgainstHeldLock(database, {
+      hold: lockSessionRow(here),
+      request: async () => asUser(app.baseUrl, here, '/api/auth/logout', { method: 'POST' }),
+      change: revokeSession(here, 'replaced'),
+    })
+    expect(response.status).toBe(401)
+    expect(await codeOf(response)).toBe('SESSION_EXPIRED')
+    expect(sessionSetCookie(response)).toBeUndefined()
+    expect(await logoutAudits(response)).toBe(0)
+    expect(await one('SELECT revoked_reason FROM auth_sessions WHERE token_hash = $1', [sessionDigest(here)])).toEqual({ revoked_reason: 'replaced' })
+  })
+
+  it('退出在会话行上等着时，这条会话因为别的原因（另一个标签页先退出）结束了：401 登录已过期，照常清除 Cookie，不再记一次退出的审计', async () => {
+    const lee = await createAccount(database, { username: 'lee' })
+    const here = await login(app.baseUrl, 'lee', lee.password)
+    const response = await raceAgainstHeldLock(database, {
+      hold: lockSessionRow(here),
+      request: async () => asUser(app.baseUrl, here, '/api/auth/logout', { method: 'POST' }),
+      change: revokeSession(here, 'logout'),
+    })
+    expect(response.status).toBe(401)
+    expect(await codeOf(response)).toBe('SESSION_EXPIRED')
+    expect(sessionSetCookie(response)).toMatch(/Expires=Thu, 01 Jan 1970/)
+    expect(await logoutAudits(response)).toBe(0)
+  })
+
+  it('修改密码在账户行上等着时，当前的会话先结束了（另一个标签页退出）：401 登录已过期，不改密码、不新建会话、不写回 Cookie、不记审计，占的名额退回', async () => {
+    const max = await createAccount(database, { username: 'max' })
+    const here = await login(app.baseUrl, 'max', max.password)
+    const before = await passwordHashOfAccount(max)
+    let changePid: number | undefined
+    const response = await raceAgainstHeldLock(database, {
+      hold: lockAccountRow(max),
+      request: async () => asUser(app.baseUrl, here, '/api/auth/password', { method: 'PUT', body: { currentPassword: max.password, newPassword: 'max wants this new one' } }),
+      change: async (client) => {
+        changePid = await pidBlockedBy(client)
+        await revokeSession(here, 'logout')(client)
+      },
+    })
+    expect(response.status).toBe(401)
+    expect(await codeOf(response)).toBe('SESSION_EXPIRED')
+    expect(sessionSetCookie(response)).toBeUndefined()
+    // 整个事务回滚：密码没变、没有新的会话、没有审计；旧密码照常能登录
+    expect(await passwordHashOfAccount(max)).toBe(before)
+    expect(await count('SELECT count(*)::int AS count FROM auth_sessions WHERE user_id = $1 AND revoked_at IS NULL', [max.id])).toBe(0)
+    expect(await count('SELECT count(*)::int AS count FROM audit_events WHERE action = \'users.password_changed\' AND target_id = $1', [max.id])).toBe(0)
+    // 密码是对的，不算猜错：三个维度占的名额都退回
+    const account = createHash('sha256').update('account:max', 'utf8').digest()
+    expect(await count('SELECT coalesce(sum(failures), 0)::int AS count FROM auth_login_throttles WHERE account_hash = $1', [account])).toBe(0)
+    expect((await postLogin(app.baseUrl, { username: 'max', password: max.password })).status).toBe(200)
+    // 这是业务上的回滚，不是出错：连接照常放回连接池（事务运行器只保留以 AppError 结束的事务的连接，第三轮复验 一般-A）
+    expect(changePid).toBeDefined()
+    expect(await connectionAlive(changePid ?? 0)).toBe(true)
   })
 })

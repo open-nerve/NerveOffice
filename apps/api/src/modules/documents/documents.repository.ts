@@ -3,9 +3,9 @@ import type { SQL } from 'drizzle-orm'
 import type { TimeCursor } from '../../shared/time-cursor.ts'
 import type { Database, Transaction } from '../database/index.ts'
 import { Inject, Injectable } from '@nestjs/common'
-import { and, asc, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, isNull, ne, sql } from 'drizzle-orm'
 import { documents } from '../../db/schema/documents/index.ts'
-import { DATABASE, executorOf, keysetPosition } from '../database/index.ts'
+import { DATABASE, executorOf, inIdArray, keysetPosition } from '../database/index.ts'
 import { TITLE_SEARCH_ESCAPE } from './title-search.ts'
 
 export interface DocumentRow {
@@ -104,7 +104,7 @@ const COLUMNS = {
  * P5 在这里并上单独授权（范围那一维）。
  */
 function accessible(scope: AccessibleScope): SQL | undefined {
-  return and(eq(d.status, 'active'), inArray(d.spaceId, [...scope.spaceIds]))
+  return and(eq(d.status, 'active'), inIdArray(d.spaceId, scope.spaceIds))
 }
 
 /** 目录的过滤（见 ListOptions.folderId）：不进 accessible，是列表自己的条件。 */
@@ -166,6 +166,16 @@ export class DocumentsRepository {
   }
 
   /**
+   * 以共享锁持住文档行（FOR SHARE）再读：复制的源文档用（M2-P6 复核 A 的 S1）。与保存、改名、移动、删除、转移
+   * （都取 FOR UPDATE）互斥：锁下读到的就是复制出去的那一版，复制提交之前它不会被改写、移走或删掉；
+   * 几次复制之间不互斥。等锁期间它进了回收站或被永久删除时返回 undefined
+   */
+  async holdById(id: string, transaction: Transaction): Promise<DocumentRow | undefined> {
+    const [row] = await executorOf(this.db, transaction).select(COLUMNS).from(d).where(and(eq(d.id, id), eq(d.status, 'active'))).for('share')
+    return row
+  }
+
+  /**
    * 按 id 顺序锁住要转移的文档（FOR UPDATE，与保存相同）：两次转移、转移与保存都按同一个顺序取锁，互相等待时不成环。
    * 只锁来源空间里的可访问文档（与标题列表同一个条件）：请求里夹带的别处的文档不被锁住（M2-P2 审查 A4）；
    * 等锁期间被别人转走的行，拿到锁之后按新的内容重新判断，不再返回。返回锁住的 id（按 id 排序）。
@@ -176,7 +186,7 @@ export class DocumentsRepository {
     const rows = await executorOf(this.db, transaction)
       .select({ id: d.id })
       .from(d)
-      .where(and(inArray(d.id, [...ids]), accessible({ spaceIds: [fromSpaceId] })))
+      .where(and(inIdArray(d.id, ids), accessible({ spaceIds: [fromSpaceId] })))
       .orderBy(asc(d.id))
       .for('update')
     return rows.map(row => row.id)
@@ -199,7 +209,7 @@ export class DocumentsRepository {
       .select({ id: d.id, trashEntryId: d.trashEntryId })
       .from(d)
       .where(and(
-        inArray(d.folderId, [...folderIds]),
+        inIdArray(d.folderId, folderIds),
         eq(d.spaceId, spaceId),
         state === undefined ? undefined : eq(d.status, state),
       ))
@@ -217,7 +227,7 @@ export class DocumentsRepository {
     return executorOf(this.db, transaction)
       .select({ id: d.id, trashEntryId: d.trashEntryId })
       .from(d)
-      .where(inArray(d.trashEntryId, [...entryIds]))
+      .where(inIdArray(d.trashEntryId, entryIds))
       .orderBy(asc(d.id))
       .for('update')
   }
@@ -233,7 +243,25 @@ export class DocumentsRepository {
     const [row] = await executorOf(this.db, transaction)
       .select({ count: sql<number>`count(*)::int` })
       .from(d)
-      .where(and(inArray(d.folderId, [...folderIds]), eq(d.spaceId, spaceId), eq(d.status, 'active'), ne(d.createdBy, userId)))
+      .where(and(inIdArray(d.folderId, folderIds), eq(d.spaceId, spaceId), eq(d.status, 'active'), ne(d.createdBy, userId)))
+    return row?.count ?? 0
+  }
+
+  /**
+   * 这个空间里、这些文件夹下正常状态的文档有几份：永久删除之前核对"要删的都在回收站里"
+   * （TrashEntryPurger，M2-P6 复核 A 的 S-3、B 的 B2）。条件与 lockInFolders 同形（空间 + 文件夹），走 (space_id, folder_id, …) 的索引：
+   * 它在树锁与行锁之下、每次永久删除文件夹单元都执行，不带空间时要扫整个文档索引（M2-P6 第 3 片甲批复验者的测量：
+   * 40 万份文档、5000 个空间的库上，不带空间 24 ms，带空间 0.04 ms）。
+   * 只数这个空间仍然安全：别的空间里挂在这些文件夹下的文档（数据不一致）不会被 lockInFolders 锁住、也不会被删，
+   * 随后删这些文件夹时撞上文档指向文件夹的 RESTRICT 外键，整个事务回滚，什么也不删
+   */
+  async countActiveInFolders(folderIds: readonly string[], spaceId: string, transaction: Transaction): Promise<number> {
+    if (folderIds.length === 0)
+      return 0
+    const [row] = await executorOf(this.db, transaction)
+      .select({ count: sql<number>`count(*)::int` })
+      .from(d)
+      .where(and(inIdArray(d.folderId, folderIds), eq(d.spaceId, spaceId), eq(d.status, 'active')))
     return row?.count ?? 0
   }
 
@@ -247,7 +275,7 @@ export class DocumentsRepository {
     const rows = await executorOf(this.db, transaction)
       .update(d)
       .set({ status: 'trashed', trashEntryId, writeEpoch: sql`${d.writeEpoch} + 1` })
-      .where(inArray(d.id, [...ids]))
+      .where(inIdArray(d.id, ids))
       .returning({ id: d.id })
     return rows.length
   }
@@ -277,7 +305,7 @@ export class DocumentsRepository {
     const rows = await executorOf(this.db, transaction)
       .select({ trashEntryId: d.trashEntryId, count: sql<number>`count(*)::int` })
       .from(d)
-      .where(inArray(d.trashEntryId, [...entryIds]))
+      .where(inIdArray(d.trashEntryId, entryIds))
       .groupBy(d.trashEntryId)
     return new Map(rows.flatMap(row => row.trashEntryId === null ? [] : [[row.trashEntryId, row.count] as const]))
   }
@@ -286,7 +314,7 @@ export class DocumentsRepository {
   async deleteMany(ids: readonly string[], transaction: Transaction): Promise<number> {
     if (ids.length === 0)
       return 0
-    const rows = await executorOf(this.db, transaction).delete(d).where(inArray(d.id, [...ids])).returning({ id: d.id })
+    const rows = await executorOf(this.db, transaction).delete(d).where(inIdArray(d.id, ids)).returning({ id: d.id })
     return rows.length
   }
 
@@ -301,7 +329,7 @@ export class DocumentsRepository {
     return executorOf(this.db, transaction)
       .update(d)
       .set(folderId === undefined ? changes : { ...changes, folderId })
-      .where(inArray(d.id, [...ids]))
+      .where(inIdArray(d.id, ids))
       .returning(COLUMNS)
   }
 
@@ -333,7 +361,8 @@ export class DocumentsRepository {
    * 按源文档建一份副本（M2-P4 设计 §3.4 第 4 条）：类型、unitId、档案、格式版本与写入时的 SDK 版本由
    * INSERT … SELECT 从源文档原样复制（unitId 相同是有意的，00 号计划书 §8.3）；
    * 修订号、写入代次、状态与时间用列的默认值（修订号 1、代次 0、正常状态）。
-   * 源文档已经不在（被删或进了回收站）时什么也不写，返回 undefined。内容的复制见 DocumentContentsRepository.copyFrom
+   * 源文档已经不在（被删或进了回收站）时什么也不写，返回 undefined（调用方持着源文档行的共享锁时不会发生）。
+   * 内容的复制见 DocumentContentsRepository.copyFrom
    */
   async copyFrom(sourceId: string, copy: CopiedDocument, transaction: Transaction): Promise<DocumentRow | undefined> {
     const executor = executorOf(this.db, transaction)

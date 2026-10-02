@@ -1,6 +1,8 @@
 // 登录限流在并发与各种来源下的行为（P3 设计 §3.5，P3 审查 A1、A2、A9、A10）：
 // 先占用名额再验证，并发的请求不能都在锁定之前通过；清理在事务之外，并发时不死锁；
 // 地址维度：成功登录只退回自己的名额；IPv6 按 /64；取不到合法地址时归到同一个键。
+// 按用户名与来源、只按用户名的两个维度（M2-P6 复核 A1）见 login-lockout.test.ts。
+// 用例要让账户相关的维度不碍事时，把按用户名与来源的上限调大（100），只按用户名的上限必须比它还大（配置校验）
 import type { Buffer } from 'node:buffer'
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
@@ -11,6 +13,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { createTestDatabase } from '../support/database.ts'
+import { requestIdOf } from '../support/request-id.ts'
 import { postLogin } from '../support/session-client.ts'
 
 let database: TestDatabase
@@ -45,9 +48,9 @@ async function rows<T extends Record<string, unknown>>(query: string, values: un
   return database.query(async client => (await client.query<T>(query, values)).rows)
 }
 
-/** 这批请求里真正验证过密码的次数：只有验证过的失败才写审计 */
-async function failedAudits(prefix: string): Promise<number> {
-  const [row] = await rows<{ count: string }>('SELECT count(*) AS count FROM audit_events WHERE action = \'auth.login_failed\' AND request_id LIKE $1', [`${prefix}%`])
+/** 这批请求里真正验证过密码的次数：只有验证过的失败才写审计（按服务端给每个请求的请求标识找，M2-P6 复核 C2） */
+async function failedAudits(responses: readonly Response[]): Promise<number> {
+  const [row] = await rows<{ count: string }>('SELECT count(*) AS count FROM audit_events WHERE action = \'auth.login_failed\' AND request_id = ANY($1)', [responses.map(requestIdOf)])
   return Number(row?.count)
 }
 
@@ -68,13 +71,12 @@ function tally(statuses: number[]): Record<number, number> {
 }
 
 describe('并发：先占用名额，再验证', () => {
-  it('同一个用户名的一波并发错误密码：只验证上限那么多次，其余直接 429', async () => {
+  it('同一个用户名（同一个来源）的一波并发错误密码：只验证上限那么多次，其余直接 429', async () => {
     const app = await start({ NERVE_LOGIN_MAX_FAILURES: '3', NERVE_LOGIN_IP_MAX_FAILURES: '1000' })
-    const statuses = await Promise.all(Array.from({ length: 30 }, async (_unused, index) =>
-      (await postLogin(app.baseUrl, { username: 'alice', password: 'wrong' }, { 'x-request-id': `burst-user-${index}` })).status))
+    const responses = await Promise.all(Array.from({ length: 30 }, async () => postLogin(app.baseUrl, { username: 'alice', password: 'wrong' })))
     // 第 3 次失败触发锁定，那一次也是 429
-    expect(tally(statuses)).toEqual({ 401: 2, 429: 28 })
-    expect(await failedAudits('burst-user-')).toBe(3)
+    expect(tally(responses.map(response => response.status))).toEqual({ 401: 2, 429: 28 })
+    expect(await failedAudits(responses)).toBe(3)
     expect((await postLogin(app.baseUrl, { username: 'alice', password: alice.password })).status).toBe(429)
   })
 
@@ -82,25 +84,25 @@ describe('并发：先占用名额，再验证', () => {
     const app = await start({ NERVE_LOGIN_MAX_FAILURES: '3', NERVE_LOGIN_IP_MAX_FAILURES: '1000' })
     for (let attempt = 0; attempt < 3; attempt++)
       await postLogin(app.baseUrl, { username: 'alice', password: 'wrong' })
-    const statuses = await Promise.all(Array.from({ length: 10 }, async (_unused, index) =>
-      (await postLogin(app.baseUrl, { username: 'alice', password: index % 2 === 0 ? alice.password : 'wrong' }, { 'x-request-id': `locked-${index}` })).status))
-    expect(statuses).toEqual(Array.from({ length: 10 }).fill(429))
-    expect(await failedAudits('locked-')).toBe(0)
+    const responses = await Promise.all(Array.from({ length: 10 }, async (_unused, index) =>
+      postLogin(app.baseUrl, { username: 'alice', password: index % 2 === 0 ? alice.password : 'wrong' })))
+    expect(responses.map(response => response.status)).toEqual(Array.from({ length: 10 }).fill(429))
+    expect(await failedAudits(responses)).toBe(0)
   })
 
-  it('同一个地址换着用户名并发尝试：只验证地址的上限那么多次；被地址拒绝的请求退回用户名的名额', async () => {
-    const app = await start({ NERVE_LOGIN_MAX_FAILURES: '100', NERVE_LOGIN_IP_MAX_FAILURES: '3' })
-    const statuses = await Promise.all(Array.from({ length: 20 }, async (_unused, index) =>
-      (await postLogin(app.baseUrl, { username: `user${index}`, password: 'wrong' }, { 'x-request-id': `burst-ip-${index}` })).status))
-    expect(tally(statuses)).toEqual({ 401: 2, 429: 18 })
-    expect(await failedAudits('burst-ip-')).toBe(3)
-    // 只有验证过的 3 个用户名留下计数：其余的要么在预检时就被拒绝，要么占到的名额已经退回
+  it('同一个地址换着用户名并发尝试：只验证地址的上限那么多次；被地址拒绝的请求退回两个账户相关的名额', async () => {
+    const app = await start({ NERVE_LOGIN_MAX_FAILURES: '100', NERVE_LOGIN_ACCOUNT_MAX_FAILURES: '1000', NERVE_LOGIN_IP_MAX_FAILURES: '3' })
+    const responses = await Promise.all(Array.from({ length: 20 }, async (_unused, index) =>
+      postLogin(app.baseUrl, { username: `user${index}`, password: 'wrong' })))
+    expect(tally(responses.map(response => response.status))).toEqual({ 401: 2, 429: 18 })
+    expect(await failedAudits(responses)).toBe(3)
+    // 只有验证过的 3 个用户名留下计数（账户、账户与地址各一行）：其余的要么在预检时就被拒绝，要么占到的名额已经退回
     const counted = await rows('SELECT failures FROM auth_login_throttles WHERE failures > 0')
-    expect(counted).toHaveLength(3 + 1)
+    expect(counted).toHaveLength(3 * 2 + 1)
   })
 
   it('一波并发的失败，连同清理过期计数与会话：没有死锁，没有 5xx；过期的记录被清掉', async () => {
-    const app = await start({ NERVE_LOGIN_MAX_FAILURES: '100', NERVE_LOGIN_IP_MAX_FAILURES: '100000' })
+    const app = await start({ NERVE_LOGIN_MAX_FAILURES: '100', NERVE_LOGIN_ACCOUNT_MAX_FAILURES: '1000', NERVE_LOGIN_IP_MAX_FAILURES: '100000' })
     await database.query(async (client) => {
       await client.query(`
         INSERT INTO auth_login_throttles (key_hash, failures, window_started_at)
@@ -124,7 +126,7 @@ describe('并发：先占用名额，再验证', () => {
 
 describe('清理不等待别人正锁着的行', () => {
   it('过期的计数与会话被别的事务锁着：登录照常返回，清理跳过它们，不等锁超时', async () => {
-    const app = await start({ NERVE_LOGIN_MAX_FAILURES: '100', NERVE_LOGIN_IP_MAX_FAILURES: '100000', NERVE_DATABASE_LOCK_TIMEOUT_MS: '1000' })
+    const app = await start({ NERVE_LOGIN_MAX_FAILURES: '100', NERVE_LOGIN_ACCOUNT_MAX_FAILURES: '1000', NERVE_LOGIN_IP_MAX_FAILURES: '100000', NERVE_DATABASE_LOCK_TIMEOUT_MS: '1000' })
     await database.query(async (client) => {
       await client.query(`
         INSERT INTO auth_login_throttles (key_hash, failures, window_started_at)
@@ -158,22 +160,22 @@ describe('清理不等待别人正锁着的行', () => {
 })
 
 describe('退回名额时核对窗口（复验 R4）', () => {
-  // 计数的键是摘要：与 auth 的 throttle-keys 一致（用户名维度 user:<用户名>，本机的 IPv4 地址 ip:<地址>）
+  // 计数的键是摘要：与 auth 的 throttle-keys 一致（账户维度 account:<用户名>，本机的 IPv4 地址 ip:<地址>）
   const digest = (key: string): Buffer => createHash('sha256').update(key, 'utf8').digest()
 
   it('验证期间窗口重新开始了：成功时退回的旧窗口的名额不减新窗口的计数', async () => {
-    const app = await start({ NERVE_LOGIN_MAX_FAILURES: '100', NERVE_LOGIN_IP_MAX_FAILURES: '10', NERVE_DATABASE_LOCK_TIMEOUT_MS: '10000' })
-    // 先失败一次：两个维度的计数都有了行
+    const app = await start({ NERVE_LOGIN_MAX_FAILURES: '100', NERVE_LOGIN_ACCOUNT_MAX_FAILURES: '1000', NERVE_LOGIN_IP_MAX_FAILURES: '10', NERVE_DATABASE_LOCK_TIMEOUT_MS: '10000' })
+    // 先失败一次：三个维度的计数都有了行
     expect((await postLogin(app.baseUrl, { username: 'alice', password: 'wrong' })).status).toBe(401)
-    const userKey = digest('user:alice')
+    const accountKey = digest('account:alice')
     const addressKey = digest('ip:127.0.0.1')
 
     const status = await database.query(async (holder) => {
-      // 持有用户名那一行的 KEY SHARE 锁：占用名额（只改非键列）不受影响，成功时的事务删除这一行要等它，
+      // 持有账户那一行的 KEY SHARE 锁：占用名额（只改非键列）不受影响，成功时的事务删除这一行要等它，
       // 于是登录停在"已占用、已验证、还没退回"之间
       await holder.query('BEGIN')
       try {
-        await holder.query('SELECT 1 FROM auth_login_throttles WHERE key_hash = $1 FOR KEY SHARE', [userKey])
+        await holder.query('SELECT 1 FROM auth_login_throttles WHERE key_hash = $1 FOR KEY SHARE', [accountKey])
         const login = postLogin(app.baseUrl, { username: 'alice', password: alice.password })
         await waitUntil(async () => (await rows<{ count: string }>(
           'SELECT count(*) AS count FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = \'Lock\'',
@@ -196,7 +198,7 @@ describe('退回名额时核对窗口（复验 R4）', () => {
 
 describe('地址维度', () => {
   it('成功登录不清除地址的计数，只退回自己占的名额', async () => {
-    const app = await start({ NERVE_LOGIN_MAX_FAILURES: '100', NERVE_LOGIN_IP_MAX_FAILURES: '3' })
+    const app = await start({ NERVE_LOGIN_MAX_FAILURES: '100', NERVE_LOGIN_ACCOUNT_MAX_FAILURES: '1000', NERVE_LOGIN_IP_MAX_FAILURES: '3' })
     const statuses: number[] = []
     for (const [username, password] of [['u1', 'wrong'], ['alice', alice.password], ['u2', 'wrong'], ['u3', 'wrong']] as const)
       statuses.push((await postLogin(app.baseUrl, { username, password })).status)
@@ -208,7 +210,7 @@ describe('地址维度', () => {
     let proxied: TestApp
 
     beforeEach(async () => {
-      proxied = await start({ NERVE_LOGIN_MAX_FAILURES: '100', NERVE_LOGIN_IP_MAX_FAILURES: '3', NERVE_TRUST_PROXY: 'loopback' })
+      proxied = await start({ NERVE_LOGIN_MAX_FAILURES: '100', NERVE_LOGIN_ACCOUNT_MAX_FAILURES: '1000', NERVE_LOGIN_IP_MAX_FAILURES: '3', NERVE_TRUST_PROXY: 'loopback' })
     })
 
     async function failFrom(forwardedFor: string, username: string): Promise<number> {

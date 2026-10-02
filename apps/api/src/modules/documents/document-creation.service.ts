@@ -1,4 +1,4 @@
-import type { DocumentDetail, DocumentType } from '@nerve-office/contracts'
+import type { CreatedDocument, DocumentType } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { Actor } from './document-access-policy.ts'
@@ -41,6 +41,7 @@ const TEMPLATES: Readonly<Record<DocumentType, (unitId: string) => string>> = { 
  * 在指定的空间（没有指定时是个人空间）的指定文件夹（没有指定时是空间的根目录）里建文档，
  * 内容取收敛的模板快照，修订号 1。要有新建权限：空间角色是编辑者及以上，空间没有归档。
  * requestId 幂等：同一个请求重试只建一份，重放返回那份文档的当前元数据；同一个 requestId 用于不同的请求时拒绝。
+ * 响应带 replayed（M2-P6 复核第二批 S-1）：重放为真，客户端据此说明"上一次其实已经完成"，不当成这一次新建的
  */
 @Injectable()
 export class DocumentCreationService {
@@ -56,7 +57,7 @@ export class DocumentCreationService {
     private readonly audit: AuditService,
   ) {}
 
-  async create(actor: Actor, command: CreateDocumentCommand, origin: AuditOrigin): Promise<DocumentDetail> {
+  async create(actor: Actor, command: CreateDocumentCommand, origin: AuditOrigin): Promise<CreatedDocument> {
     const userId = actor.userId
     const title = command.title ?? DEFAULT_DOCUMENT_TITLES[command.type]
     const digest = createdPayloadDigest(command.type, title, command.spaceId, command.folderId)
@@ -114,21 +115,21 @@ export class DocumentCreationService {
         origin,
         details: { revision: 1, folderId: document.folderId },
       }, { transaction })
-      return toDetail(document, access, userId)
+      return { ...toDetail(document, access, userId), replayed: false }
     })
   }
 
   /**
    * 同一个 requestId 已经有修订记录：是同一个人、同一个新建请求（摘要一致），而且这个人仍能访问那份文档，
-   * 才返回那份文档的当前元数据；否则拒绝，不透露那份文档的任何信息。
+   * 才返回那份文档的当前元数据（标为重放）；否则拒绝，不透露那份文档的任何信息。
    */
-  private async replay(userId: string, previous: RevisionRow, digest: Buffer, transaction: Transaction): Promise<DocumentDetail> {
+  private async replay(userId: string, previous: RevisionRow, digest: Buffer, transaction: Transaction): Promise<CreatedDocument> {
     const sameRequest = previous.kind === 'created' && previous.savedBy === userId && previous.payloadDigest.equals(digest)
     const document = sameRequest ? await this.documents.findById(previous.documentId, transaction) : undefined
     const access = document === undefined ? undefined : await this.policy.accessOf(userId, document, transaction)
     if (document === undefined || access === undefined)
       throw new AppError('REQUEST_ID_CONFLICT')
-    return toDetail(document, access, userId)
+    return { ...toDetail(document, access, userId), replayed: true }
   }
 
   private async personalSpaceIdOf(userId: string, transaction: Transaction): Promise<string> {

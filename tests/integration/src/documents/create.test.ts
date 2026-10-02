@@ -1,5 +1,5 @@
 // 新建文档（P4 设计 §3.3、§3.4，US-M1-04）：模板快照、修订号 1、requestId 幂等（含并发）、目标文件夹、审计、校验、未登录、Origin 与 CSRF。
-import type { DocumentDetail, Folder } from '@nerve-office/contracts'
+import type { CreatedDocument, Folder } from '@nerve-office/contracts'
 import type pg from 'pg'
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
@@ -8,7 +8,7 @@ import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
-import { CSRF_TOKEN_HEADER, documentDetailSchema, documentListResponseSchema, errorResponseSchema, folderSchema, sheetSnapshotFor, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
+import { createdDocumentSchema, createdFolderSchema, CSRF_TOKEN_HEADER, documentListResponseSchema, errorResponseSchema, sheetSnapshotFor, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp, TEST_PUBLIC_ORIGIN } from '../support/api-app.ts'
@@ -44,10 +44,10 @@ async function create(user: LoggedIn, body: unknown): Promise<Response> {
   return asUser(app.baseUrl, user, '/api/documents', { method: 'POST', body })
 }
 
-async function created(user: LoggedIn, body: unknown): Promise<DocumentDetail> {
+async function created(user: LoggedIn, body: unknown): Promise<CreatedDocument> {
   const response = await create(user, body)
   expect(response.status).toBe(201)
-  return parseExact(documentDetailSchema, await response.json())
+  return parseExact(createdDocumentSchema, await response.json())
 }
 
 async function errorOf(response: Response): Promise<{ code: string, message: string }> {
@@ -62,7 +62,7 @@ async function countWhere(sql: string, values: unknown[]): Promise<number> {
 async function newFolder(user: LoggedIn, spaceId: string, name: string): Promise<Folder> {
   const response = await asUser(app.baseUrl, user, '/api/folders', { method: 'POST', body: { spaceId, name, requestId: randomUUID() } })
   expect(response.status).toBe(201)
-  return parseExact(folderSchema, await response.json())
+  return parseExact(createdFolderSchema, await response.json())
 }
 
 /** 一份文档现在的状态与所在的删除单元、文件夹 */
@@ -132,11 +132,12 @@ describe('US-M1-04 新建表格', () => {
 })
 
 describe('US-M1-04 同一个创建请求只生成一份', () => {
-  it('同一个 requestId 重放：同样 201，返回同一份文档，不再新建', async () => {
+  it('同一个 requestId 重放：同样 201，返回同一份文档、标为重放（M2-P6 复核第二批 S-1），不再新建', async () => {
     const requestId = randomUUID()
     const first = await created(aliceSession, { type: 'sheet', title: '重放', requestId })
+    expect(first.replayed).toBe(false)
     const second = await created(aliceSession, { type: 'sheet', title: '重放', requestId })
-    expect(second).toEqual(first)
+    expect(second).toEqual({ ...first, replayed: true })
     expect(await countWhere('SELECT count(*) FROM document_revisions WHERE request_id = $1', [requestId])).toBe(1)
     expect(await countWhere('SELECT count(*) FROM audit_events WHERE action = \'documents.created\' AND target_id = $1', [first.id])).toBe(1)
   })
@@ -145,8 +146,10 @@ describe('US-M1-04 同一个创建请求只生成一份', () => {
     const requestId = randomUUID()
     const responses = await Promise.all(Array.from({ length: 6 }, async () => create(aliceSession, { type: 'sheet', title: '并发', requestId })))
     expect(responses.map(response => response.status)).toEqual(Array.from({ length: 6 }).fill(201))
-    const ids = await Promise.all(responses.map(async response => parseExact(documentDetailSchema, await response.json()).id))
-    expect(new Set(ids).size).toBe(1)
+    const bodies = await Promise.all(responses.map(async response => parseExact(createdDocumentSchema, await response.json())))
+    expect(new Set(bodies.map(body => body.id)).size).toBe(1)
+    // 只有真正建出它的那一个不是重放，其余的都是（M2-P6 复核第二批 S-1）
+    expect(bodies.filter(body => !body.replayed)).toHaveLength(1)
     expect(await countWhere('SELECT count(*) FROM documents WHERE title = $1', ['并发'])).toBe(1)
   })
 
@@ -157,7 +160,7 @@ describe('US-M1-04 同一个创建请求只生成一份', () => {
       const spellings = [requestId, requestId.toUpperCase(), requestId, requestId.toUpperCase()]
       const responses = await Promise.all(spellings.map(async spelling => create(aliceSession, { type: 'sheet', title, requestId: spelling })))
       expect(responses.map(response => response.status), `第 ${group} 组`).toEqual([201, 201, 201, 201])
-      const ids = await Promise.all(responses.map(async response => parseExact(documentDetailSchema, await response.json()).id))
+      const ids = await Promise.all(responses.map(async response => parseExact(createdDocumentSchema, await response.json()).id))
       expect(new Set(ids).size, `第 ${group} 组`).toBe(1)
       expect(await countWhere('SELECT count(*) FROM documents WHERE title = $1', [title])).toBe(1)
       expect(await countWhere('SELECT count(*) FROM document_revisions WHERE request_id = $1', [requestId])).toBe(1)
@@ -221,7 +224,7 @@ describe('US-M2-07 新建到指定的文件夹（M2-P4）', () => {
     const requestId = randomUUID()
     const body = { type: 'sheet', title: '重放到文件夹', requestId, folderId: folder.id }
     const first = await created(aliceSession, body)
-    expect(await created(aliceSession, body)).toEqual(first)
+    expect(await created(aliceSession, body)).toEqual({ ...first, replayed: true })
     expect(await countWhere('SELECT count(*) FROM documents WHERE title = $1', ['重放到文件夹'])).toBe(1)
 
     // 位置进了负载摘要：同一个 requestId 换个文件夹、或者改成根目录，都不是同一个请求

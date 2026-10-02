@@ -32,6 +32,19 @@ test.describe('US-M1-03 个人空间的文档列表', () => {
     await expect(page.getByText('这里还没有文档')).toBeVisible()
   })
 
+  test('按钮里的图标按设计的尺寸显示：按钮 16px，小按钮与做成小按钮样子的链接 14px（M2-P6 复核第四批：选择器写坏时都是 lucide 默认的 24px）', async ({ page }) => {
+    await loginThroughApi(page, await createUser('list-icons'))
+    await page.goto('/')
+    const newSheet = page.getByRole('button', { name: '新建表格', exact: true }).locator('svg')
+    await expect(newSheet).toBeVisible()
+    expect(await newSheet.boundingBox()).toMatchObject({ width: 16, height: 16 })
+    // 窄屏时页头的"修改密码"只留图标：它是做成小按钮样子的链接，没有自己写图标的尺寸
+    await page.setViewportSize({ width: 375, height: 700 })
+    const changePassword = page.getByRole('banner').getByRole('link', { name: '修改密码', exact: true }).locator('svg')
+    await expect(changePassword).toBeVisible()
+    expect(await changePassword.boundingBox()).toMatchObject({ width: 14, height: 14 })
+  })
+
   test('加载中显示列表自己的骨架屏，加载完成后显示文档', async ({ page }) => {
     const owner = await createUser('list-loading')
     await createDocument(owner, '慢慢加载的文档')

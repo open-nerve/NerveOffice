@@ -1,4 +1,6 @@
 // 同事目录（M2-P1 设计 §3.6）：登录的成员按名字搜索有效账户；停用的不出现；关键词按字面匹配；最多 20 条。
+// 空白的种类与个数不算区别（M2-P6 复验 G1）：名字保留单个的全角空格与不换行空格，用半角空格也搜得到。
+// 看不见的字符一律写成 \u 转义：源码里直接出现它们，审阅时看不出来。
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
@@ -21,6 +23,9 @@ beforeAll(async () => {
   await createAccount(database, { username: 'zhang.san', displayName: '张三' })
   await createAccount(database, { username: 'li.si', displayName: '李四' })
   await createAccount(database, { username: 'percent', displayName: '满分 100%' })
+  await createAccount(database, { username: 'yamada', displayName: '山田\u3000太郎' })
+  await createAccount(database, { username: 'jean', displayName: 'Jean\u00A0Dupont' })
+  await createAccount(database, { username: 'ana', displayName: 'Ana Silva' })
   const gone = await createAccount(database, { username: 'zhang.gone', displayName: '张离职' })
   await database.query(async client => client.query('UPDATE users SET status = \'disabled\' WHERE id = $1', [gone.id]))
   viewer = await login(app.baseUrl, 'myself', me.password)
@@ -54,6 +59,20 @@ describe('同事目录', () => {
   it('关键词按字面匹配：% 与 _ 不是通配符', async () => {
     expect((await search('%')).map(user => user.username)).toEqual(['percent'])
     expect(await search('_')).toEqual([])
+  })
+
+  it('空白的种类与个数不算区别：半角空格搜得到全角空格与不换行空格，全角空格搜得到半角空格；有没有空白仍然算区别（M2-P6 复验 G1）', async () => {
+    expect((await search('山田 太郎')).map(user => user.username)).toEqual(['yamada'])
+    expect((await search('Jean Dupont')).map(user => user.username)).toEqual(['jean'])
+    expect((await search('Ana\u3000Silva')).map(user => user.username)).toEqual(['ana'])
+    expect((await search('ana \u00A0\u2009SILVA')).map(user => user.username)).toEqual(['ana'])
+    expect(await search('山田太郎')).toEqual([])
+  })
+
+  it('空白归一之后 % 与 _ 仍然按字面匹配', async () => {
+    expect((await search('满分\u3000100%')).map(user => user.username)).toEqual(['percent'])
+    expect(await search('满分 100_')).toEqual([])
+    expect(await search('_ 1')).toEqual([])
   })
 
   it('不带关键词时按显示名给出前 20 条；多于 20 个有效账户时只给 20 条', async () => {

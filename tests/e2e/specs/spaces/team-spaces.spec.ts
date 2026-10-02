@@ -1,20 +1,17 @@
 // 团队空间（M2-P2，US-M2-05）：系统管理员在管理界面创建团队空间并指定空间管理员；设为全员可见；归档与恢复；
 // 系统管理员要看内容，先把自己加入空间（记审计）。团队空间的名称全库唯一，三个浏览器并行时名称带随机后缀。
 import type { Page } from '@playwright/test'
-import type { TestUser } from '../../support/database.ts'
 import { randomBytes } from 'node:crypto'
 import { createDocumentIn, createTeamSpace, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { searchList } from '../../support/list-search.ts'
+import { shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
 
-function nameOf(user: TestUser): string {
-  return `${user.displayName}（${user.username}）`
-}
-
-/** 管理界面的团队空间页：按名称找到这一行 */
+/** 管理界面的团队空间页：按名称找到这一行。等搜索的过滤完成再返回，之后的操作不会赶上表格换成加载状态（support/list-search.ts） */
 async function spaceRow(page: Page, name: string) {
   await page.goto('/admin/spaces')
-  await page.getByLabel('按名称搜索', { exact: true }).fill(name)
+  await searchList(page, '按名称搜索', name)
   const row = page.getByRole('table', { name: '团队空间列表' }).getByRole('row').filter({ hasText: name })
   await expect(row).toHaveCount(1)
   return row
@@ -51,7 +48,7 @@ test.describe('US-M2-05 团队空间', () => {
     const form = page.getByRole('form', { name: '创建团队空间' })
     await form.getByLabel('名称', { exact: true }).fill(name)
     await form.getByLabel('首个空间管理员', { exact: true }).fill(lead.username)
-    await form.getByRole('button', { name: nameOf(lead), exact: true }).click()
+    await form.getByRole('button', { name: shownName(lead), exact: true }).click()
     await form.getByRole('button', { name: '创建团队空间', exact: true }).click()
     // 先在当前页面等到创建成功（表单清空），再跳转：跳转会中断还没完成的请求（审查 B6）
     await expect(form.getByLabel('名称', { exact: true })).toHaveValue('')

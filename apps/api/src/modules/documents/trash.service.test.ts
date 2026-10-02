@@ -6,6 +6,7 @@ import { AUDIT_DETAILS_MAX_BYTES } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { ALICE, ALICE_SPACE, BOB, FakeStore, HTTP_ORIGIN, member, TEAM_SPACE } from './documents.test-support.ts'
+import { TrashEntryPurger } from './trash-entry-purger.ts'
 import { TrashService } from './trash.service.ts'
 
 const MISSING = '0199a2c4-0000-7000-8000-0000000000fd'
@@ -13,7 +14,8 @@ const MISSING = '0199a2c4-0000-7000-8000-0000000000fd'
 function setup() {
   const store = new FakeStore()
   const { transactions, documents, folders, entries, tree, spaces, policy, audit, writeAccess } = store.deps
-  return { store, service: new TrashService(transactions, documents, folders, entries, tree, spaces, policy, audit, writeAccess) }
+  const purger = new TrashEntryPurger(documents, folders, entries, audit)
+  return { store, service: new TrashService(transactions, documents, folders, entries, tree, spaces, policy, audit, writeAccess, purger) }
 }
 
 async function errorOf(promise: Promise<unknown>): Promise<AppError> {
@@ -39,7 +41,7 @@ describe('TrashService.deleteDocument', () => {
     await service.deleteDocument(member(ALICE), document.id, HTTP_ORIGIN)
 
     const entry = [...store.trashEntries.values()][0]
-    expect(entry).toMatchObject({ spaceId: ALICE_SPACE, kind: 'document', deletedBy: ALICE, originSpaceId: ALICE_SPACE, originParentId: folder.id, title: '周报' })
+    expect(entry).toMatchObject({ spaceId: ALICE_SPACE, kind: 'document', deletedBy: ALICE, originParentId: folder.id, title: '周报' })
     expect(store.entryOfDocument(document.id)).toBe(entry?.id)
     expect(store.writeEpochs.get(document.id)).toBe(1)
     expect(store.revocations).toEqual([{ kind: 'documents', documentIds: [document.id] }])
@@ -182,6 +184,20 @@ describe('TrashService.restore', () => {
     expect(store.documents.get(document.id)?.folderId).toBeNull()
   })
 
+  it('原来的父文件夹还在、却在别的空间里：数据不一致，按意外错误处理，什么也不恢复（不变量，M2-P6 复核 B 的 G-5）', async () => {
+    const { store, service } = setup()
+    const folder = store.addFolder({ spaceId: ALICE_SPACE, name: '资料' })
+    const document = store.addDocument({ folderId: folder.id })
+    await service.deleteDocument(member(ALICE), document.id, HTTP_ORIGIN)
+    const entryId = [...store.trashEntries.keys()][0] ?? ''
+    // 正常的流程造不出这种状态（父文件夹跨空间移动时，子树里回收站的行与删除单元一起搬走）：直接改内存里的行
+    store.folders.set(folder.id, { ...folder, spaceId: TEAM_SPACE, requestId: 'moved' })
+
+    await expect(service.restore(member(ALICE), entryId, HTTP_ORIGIN)).rejects.toThrow(`删除单元与它原来的父文件夹不在同一个空间里：${entryId}`)
+    expect(store.entryOfDocument(document.id)).toBe(entryId)
+    expect(store.documents.get(document.id)?.folderId).toBe(folder.id)
+  })
+
   it('文件夹整单恢复：层数按新位置重算；原来就在根目录下时不算"位置变了"', async () => {
     const { store, service } = setup()
     const [top, middle, leaf] = chain(store, ALICE_SPACE, 3)
@@ -262,11 +278,9 @@ describe('TrashService.purge', () => {
     expect(store.folders.has(folder.id)).toBe(false)
     expect(store.documents.has(document.id)).toBe(false)
     expect(store.trashEntries.size).toBe(0)
-    expect(store.audits.at(-1)).toMatchObject({
-      action: 'folders.purged',
-      target: { type: 'folder', id: folder.id },
-      details: { spaceId: TEAM_SPACE, title: '资料', trashEntryId: entryId, folders: 1, documents: 1, cascadedEntries: 0 },
-    })
+    expect(store.audits.at(-1)).toMatchObject({ action: 'folders.purged', target: { type: 'folder', id: folder.id } })
+    // 明细逐字段相等（不是 toMatchObject）：只有份数与删除单元，多出一个标题或名称都会失败（M2-P6 复核 M-1）
+    expect(store.audits.at(-1)?.details).toEqual({ spaceId: TEAM_SPACE, trashEntryId: entryId, folders: 1, documents: 1, cascadedEntries: 0 })
   })
 
   it('连带：子树里属于别的删除单元的行（文档与整棵子文件夹）一起删掉，那些单元也一起清掉（spec §4）', async () => {
@@ -309,6 +323,28 @@ describe('TrashService.purge', () => {
     expect(details).toMatchObject({ folders: 1, documents: 120, cascadedEntries: 120 })
     // 明细是有界的：换成 id 列表的话，120 个 uuid 就已经超过上限，整条写入失败、那一单永远删不掉
     expect(Buffer.byteLength(JSON.stringify(details))).toBeLessThanOrEqual(AUDIT_DETAILS_MAX_BYTES)
+  })
+
+  it('要删的都在回收站里（M2-P6 复核 A 的 S-3、B 的 B2）：回收站的文件夹下有正常状态的文档或文件夹，按数据不一致处理，什么也不删', async () => {
+    const { store, service } = setup()
+    const [top, middle] = chain(store, ALICE_SPACE, 2)
+    await service.deleteFolder(member(ALICE), top?.id ?? '', HTTP_ORIGIN)
+    const entryId = store.entryOfFolder(top?.id ?? '') ?? ''
+    const audits = store.audits.length
+    // 数据不一致：一份正常状态的文档挂在回收站里的子文件夹下（各条路径都不会这样写，这里直接摆出来）
+    const stray = store.addDocument({ folderId: middle?.id ?? null, title: '正常的' })
+    await expect(service.purge(member(ALICE), entryId, HTTP_ORIGIN)).rejects.toThrow(`永久删除的子树里有正常状态的行（文件夹 0 个、文档 1 份），什么也不删：${entryId}`)
+    // 正常状态的子文件夹同样
+    store.documents.delete(stray.id)
+    const strayFolder = store.addFolder({ spaceId: ALICE_SPACE, parentId: middle?.id ?? null, name: '正常的' })
+    await expect(service.purge(member(ALICE), entryId, HTTP_ORIGIN)).rejects.toThrow('（文件夹 1 个、文档 0 份）')
+
+    // 核对在删任何一行之前：什么也没删，删除单元还在，没有记审计
+    expect(store.repositories.documents.deleteMany).not.toHaveBeenCalled()
+    expect(store.repositories.folders.deleteMany).not.toHaveBeenCalled()
+    expect([top, middle, strayFolder].every(row => store.folders.has(row?.id ?? ''))).toBe(true)
+    expect(store.trashEntries.has(entryId)).toBe(true)
+    expect(store.audits).toHaveLength(audits)
   })
 
   it('恢复与永久删除之后，另一个请求看到删除单元已经不在：NOT_FOUND', async () => {

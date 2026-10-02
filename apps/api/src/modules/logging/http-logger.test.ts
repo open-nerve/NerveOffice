@@ -6,8 +6,10 @@ function request(originalUrl: string, route?: string): Request {
   return { method: 'GET', originalUrl, route: route === undefined ? undefined : { path: route } } as unknown as Request
 }
 
-function response(statusCode: number, options: { finished?: boolean, err?: Error } = {}): Response {
-  return { statusCode, writableFinished: options.finished ?? true, err: options.err } as unknown as Response
+function response(statusCode: number, options: { finished?: boolean, err?: Error, headers?: Record<string, string> } = {}): Response {
+  // 响应头按小写的名字取（Node 的 getHeader 不区分大小写）
+  const headers = new Map(Object.entries(options.headers ?? {}).map(([name, value]) => [name.toLowerCase(), value]))
+  return { statusCode, writableFinished: options.finished ?? true, err: options.err, getHeader: (name: string) => headers.get(name.toLowerCase()) } as unknown as Response
 }
 
 describe('levelFor', () => {
@@ -21,6 +23,13 @@ describe('levelFor', () => {
     ['/api/health/live', response(200), false, 'silent'],
     ['/api/health/ready?x=1', response(200), false, 'silent'],
     ['/api/health/ready', response(503), false, 'error'],
+    // 服务端按约定回答的"繁忙，稍后重试"（503 带 Retry-After：数据库繁忙、等待密码哈希的请求太多）记 warn，不是故障（M2-P6 复核 A 的 G-2）
+    ['/api/folders/x', response(503, { headers: { 'Retry-After': '5' } }), false, 'warn'],
+    ['/api/auth/login', response(503, { headers: { 'retry-after': '1' } }), false, 'warn'],
+    // 带 Retry-After 的不是 503、或者有意外错误时照旧
+    ['/api/documents', response(500, { headers: { 'Retry-After': '5' } }), false, 'error'],
+    ['/api/documents', response(503, { headers: { 'Retry-After': '5' }, err: new Error('写到一半') }), false, 'error'],
+    ['/api/documents', response(503, { headers: { 'Retry-After': '5' } }), true, 'error'],
     ['/api/health/live', response(200, { finished: false }), false, 'warn'],
     // 前端的静态文件与页面：成功记 debug，失败照常
     ['/assets/index-abc.js', response(200), false, 'debug'],

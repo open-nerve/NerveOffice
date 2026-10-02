@@ -1,18 +1,22 @@
 // 团队空间里的文档（M2-P2 设计 §3.4–§3.6）：按空间列出、新建到指定空间（M1 兼容、重放、审计）、详情带所在的空间；
-// 全员可见与归档；新建与归档、移出成员的并发（两个连接构造的交错）。逐格的权限见 permissions/content-matrix.test.ts。
-import type { DocumentDetail, DocumentListResponse } from '@nerve-office/contracts'
+// 全员可见与归档；新建与归档、移出成员的并发（两个连接构造的交错）；已经打开的编辑器在撤权之后的保存（M2-P6 复核 S2）。
+// 逐格的权限见 permissions/content-matrix.test.ts。
+import type { CreatedDocument, DocumentListResponse } from '@nerve-office/contracts'
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
+import type { SeededDocument } from '../support/documents.ts'
 import type { LoggedIn } from '../support/session-client.ts'
+import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
-import { documentDetailSchema, documentListResponseSchema, errorResponseSchema } from '@nerve-office/contracts'
+import zlib from 'node:zlib'
+import { createdDocumentSchema, documentDetailSchema, documentListResponseSchema, errorResponseSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
-import { createDocument } from '../support/documents.ts'
+import { createDocument, seedDocument } from '../support/documents.ts'
 import { raceAgainstHeldLock } from '../support/held-lock.ts'
 import { asUser, login } from '../support/session-client.ts'
 import { createTeamSpace, setMember, setSpaceState } from '../support/spaces.ts'
@@ -23,6 +27,7 @@ let root: TestAccount
 let amy: TestAccount
 let ben: TestAccount
 let cat: TestAccount
+let rootSession: LoggedIn
 let amySession: LoggedIn
 let benSession: LoggedIn
 let catSession: LoggedIn
@@ -34,6 +39,7 @@ beforeAll(async () => {
   amy = await createAccount(database, { username: 'amy', displayName: '艾米' })
   ben = await createAccount(database, { username: 'ben', displayName: '本' })
   cat = await createAccount(database, { username: 'cat', displayName: '凯特' })
+  rootSession = await login(app.baseUrl, 'root', root.password)
   amySession = await login(app.baseUrl, 'amy', amy.password)
   benSession = await login(app.baseUrl, 'ben', ben.password)
   catSession = await login(app.baseUrl, 'cat', cat.password)
@@ -53,9 +59,9 @@ async function create(user: LoggedIn, body: Record<string, unknown>): Promise<Re
   return asUser(app.baseUrl, user, '/api/documents', { method: 'POST', body: { type: 'sheet', requestId: randomUUID(), ...body } })
 }
 
-async function created(response: Response): Promise<DocumentDetail> {
+async function created(response: Response): Promise<CreatedDocument> {
   expect(response.status).toBe(201)
-  return parseExact(documentDetailSchema, await response.json())
+  return parseExact(createdDocumentSchema, await response.json())
 }
 
 async function list(user: LoggedIn, spaceId?: string): Promise<DocumentListResponse> {
@@ -95,7 +101,9 @@ describe('US-M2-05 团队空间里的文档', () => {
     const spaceId = await teamSpace('产品部')
     const requestId = randomUUID()
     const first = await created(await create(amySession, { requestId, spaceId }))
-    expect(await created(await create(amySession, { requestId, spaceId }))).toEqual(first)
+    expect(first.replayed).toBe(false)
+    // 重放：同一份文档，标为重放（M2-P6 复核第二批 S-1）
+    expect(await created(await create(amySession, { requestId, spaceId }))).toEqual({ ...first, replayed: true })
     for (const body of [{ requestId }, { requestId, spaceId: amy.personalSpaceId }]) {
       const response = await create(amySession, body)
       expect(response.status).toBe(409)
@@ -176,5 +184,80 @@ describe('US-M2-14 新建与改动空间的并发', () => {
     })
     expect(response.status).toBe(404)
     expect(await count('SELECT count(*) FROM documents WHERE space_id = $1', [spaceId])).toBe(0)
+  })
+})
+
+describe('US-M2-14 已经打开的编辑器：撤权之后的下一次保存（M2-P6 复核 S2）', () => {
+  /** 模板换上 unitId、A1 写入 value 的快照 */
+  function snapshotOf(unitId: string, value: string): Uint8Array {
+    const sheet = SHEET_TEMPLATE.sheets['sheet-1']
+    return zlib.gzipSync(Buffer.from(JSON.stringify({ ...SHEET_TEMPLATE, id: unitId, sheets: { 'sheet-1': { ...sheet, cellData: { 0: { 0: { v: value } } } } } }), 'utf8'))
+  }
+
+  async function save(user: LoggedIn, document: SeededDocument, value: string, baseRevision = 1): Promise<Response> {
+    const query = new URLSearchParams({ baseRevision: String(baseRevision), requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1' })
+    return asUser(app.baseUrl, user, `/api/documents/${document.id}/content?${query.toString()}`, {
+      method: 'PUT',
+      binary: { contentType: 'application/gzip', bytes: snapshotOf(document.unitId, value) },
+    })
+  }
+
+  async function contentText(documentId: string): Promise<string> {
+    const response = await asUser(app.baseUrl, amySession, `/api/documents/${documentId}/content`)
+    expect(response.status).toBe(200)
+    // 内容带 Content-Encoding: gzip 下发，fetch 已经解压
+    return response.text()
+  }
+
+  it('降为查看者：403（只能查看）；移出：404；归档：403（说明空间已归档）；移到他看不到的空间：404；内容一次也没被改', async () => {
+    const spaceId = await createTeamSpace(database, { name: '撤权', createdBy: root.id, members: { [amy.id]: 'admin', [ben.id]: 'editor' } })
+    const document = await seedDocument(database, { spaceId, createdBy: amy.id, title: '撤权的文档' })
+    // 编辑器已经打开：读到元数据，能编辑
+    const opened = parseExact(documentDetailSchema, await (await asUser(app.baseUrl, benSession, `/api/documents/${document.id}`)).json())
+    expect(opened.permissions.canEdit).toBe(true)
+
+    expect((await asUser(app.baseUrl, amySession, `/api/spaces/${spaceId}/members/${ben.id}`, { method: 'PUT', body: { role: 'viewer' } })).status).toBe(200)
+    const demoted = await save(benSession, document, '降级之后')
+    expect(demoted.status).toBe(403)
+    expect(await errorOf(demoted)).toEqual({ code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能保存' })
+
+    expect((await asUser(app.baseUrl, amySession, `/api/spaces/${spaceId}/members/${ben.id}`, { method: 'DELETE' })).status).toBe(204)
+    const removed = await save(benSession, document, '移出之后')
+    expect(removed.status).toBe(404)
+    expect((await errorOf(removed)).code).toBe('NOT_FOUND')
+
+    expect((await asUser(app.baseUrl, amySession, `/api/spaces/${spaceId}/members`, { method: 'POST', body: { userId: ben.id, role: 'editor' } })).status).toBe(201)
+    expect((await asUser(app.baseUrl, rootSession, `/api/admin/spaces/${spaceId}/archive`, { method: 'POST' })).status).toBe(200)
+    const archived = await save(benSession, document, '归档之后')
+    expect(archived.status).toBe(403)
+    // 与改名、移动、删除一样说明是归档（M2-P6 复核 A 的 G3）
+    expect(await errorOf(archived)).toEqual({ code: 'PERMISSION_DENIED', message: '空间已归档，只能查看' })
+    expect((await asUser(app.baseUrl, rootSession, `/api/admin/spaces/${spaceId}/restore`, { method: 'POST' })).status).toBe(200)
+
+    // 空间管理员把文档移到自己的个人空间：本在那里没有角色
+    expect((await asUser(app.baseUrl, amySession, `/api/documents/${document.id}/move`, { method: 'POST', body: { spaceId: amy.personalSpaceId } })).status).toBe(200)
+    expect((await save(benSession, document, '移走之后')).status).toBe(404)
+
+    expect(await contentText(document.id)).not.toMatch(/之后/)
+  })
+
+  it('M2 已接受的窗口（M2-P2 审查 A3，ADR-014）：保存已经通过锁下的判断、还没提交时空间被归档，保存照样提交——M3 由租约与按代次写入收口', async () => {
+    const spaceId = await createTeamSpace(database, { name: '在途的保存', createdBy: root.id, members: { [amy.id]: 'admin', [ben.id]: 'editor' } })
+    const document = await seedDocument(database, { spaceId, createdBy: amy.id, title: '在途' })
+    const response = await raceAgainstHeldLock(database, {
+      // 挡住保存的最后一步（换内容）：权限的判断在它之前都已经做完
+      hold: async client => client.query('SELECT 1 FROM document_contents WHERE document_id = $1 FOR UPDATE', [document.id]),
+      request: async () => save(benSession, document, '归档之后才提交的保存'),
+      change: async () => {
+        expect((await asUser(app.baseUrl, rootSession, `/api/admin/spaces/${spaceId}/archive`, { method: 'POST' })).status).toBe(200)
+      },
+    })
+    expect(response.status).toBe(200)
+    const state = await database.query(async client => (await client.query<{ status: string, revision: number }>(
+      'SELECT s.status, d.revision FROM documents d JOIN spaces s ON s.id = d.space_id WHERE d.id = $1',
+      [document.id],
+    )).rows[0])
+    expect(state).toEqual({ status: 'archived', revision: 2 })
+    expect(await contentText(document.id)).toContain('归档之后才提交的保存')
   })
 })

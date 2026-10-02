@@ -2,6 +2,8 @@
 // 空间的成员随即能打开这些文档。系统管理员打不开停用者的文档。
 import { createDocument, createTeamSpace, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { searchList } from '../../support/list-search.ts'
+import { shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
 
 test.describe('US-M2-04 停用者文档的转移', () => {
@@ -20,12 +22,13 @@ test.describe('US-M2-04 停用者文档的转移', () => {
 
     // 停用，然后从账户页进入转移页
     await page.goto('/admin/users')
-    await page.getByLabel('按名字或登录名搜索').fill(leaver.username)
+    // 等搜索的过滤完成再操作这一行（support/list-search.ts）
+    await searchList(page, '按名字或登录名搜索', leaver.username)
     const row = page.getByRole('table', { name: '账户列表' }).getByRole('row').filter({ hasText: leaver.username })
     await row.getByRole('button', { name: /^停用 / }).click()
     await page.getByRole('dialog').getByRole('button', { name: '停用', exact: true }).click()
     await row.getByRole('link', { name: /^转移文档 / }).click()
-    await expect(page.getByRole('heading', { name: `转移 ${leaver.displayName}（${leaver.username}） 的文档` })).toBeVisible()
+    await expect(page.getByRole('heading', { name: `转移 ${shownName(leaver)} 的文档` })).toBeVisible()
     const list = page.getByRole('table', { name: '个人空间里的文档' })
     await expect(list.getByText('交接清单')).toBeVisible()
     await expect(list.getByText('客户名单')).toBeVisible()

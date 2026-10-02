@@ -28,6 +28,9 @@ export const REDACTED_KEYS = [
   'databaseUrl',
   'connectionString',
   'snapshot',
+  // 一次性链接（邀请、重置密码）的地址带着令牌（# 之后）：签发接口的响应、运维命令的输出都叫 url（M2-P6 复核 S-6）
+  'url',
+  'link',
 ] as const
 
 export const REDACTION_CENSOR = REDACTED

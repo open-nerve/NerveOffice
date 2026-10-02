@@ -101,147 +101,172 @@ describe('Argon2PasswordHasher', () => {
   })
 })
 
-describe('失败的验证补齐耗时（Codex 评审 CX4，独立复验 N2）', () => {
+/**
+ * 失败的耗时不暴露账户是否存在（Codex 评审 CX4，ADR-007）：失败的验证与 reject（用户名不存在、账户已停用）按同样的顺序
+ * 把同样的几组参数各算一次，两条路径的计算相同，耗时的分布就相同。原来按实测耗时的中位数补齐（等待），负载起落时守不住
+ * （M2-P6 第 6 片合并之后 CI 上耗时之比 0.67）；这里核对的是"计算相同"本身，与快慢无关
+ */
+describe('失败的验证与"没有账户"做同样的计算（Codex 评审 CX4，ADR-007）', () => {
   const CURRENT = { memoryKib: 8_192, iterations: 2, parallelism: 1 }
+  const C = 'm=8192,t=2,p=1'
 
   /** 真实的 PHC 字符串（parseOptions 要能解析），参数由测试给出 */
   async function storedHash(memoryCost: number, timeCost: number): Promise<string> {
     return hash('correct horse battery staple', { memoryCost, timeCost, parallelism: 1 })
   }
 
-  /**
-   * 假的计算与时钟：每组参数的一次计算用多少毫秒由 costs 给出（按"m=…,t=…,p=…"），计算与睡眠都推进假的时钟；
-   * 记下每次睡眠（补齐）的时长
-   */
-  function fakeRuntime(costs: Record<string, number>, matches = false) {
-    let clock = 0
-    const sleeps: number[] = []
-    const cost = (options: Options | null | undefined): number => costs[`m=${options?.memoryCost},t=${options?.timeCost},p=${options?.parallelism}`] ?? 0
+  /** 假的计算：按先后记下每次算的是哪组参数，陪算（hash）记参数，真的比对（verify）另加"（比对）"；matches 是比对的结果 */
+  function fakeRuntime(matches = false) {
+    const computed: string[] = []
     const runtime: Partial<Argon2Runtime> = {
-      now: () => clock,
-      sleep: async (ms) => {
-        sleeps.push(ms)
-        clock += ms
-      },
       hash: vi.fn(async (_password: string | Uint8Array, options?: Options | null) => {
-        clock += cost(options)
+        computed.push(`m=${options?.memoryCost},t=${options?.timeCost},p=${options?.parallelism}`)
         return 'hashed'
       }),
       verify: vi.fn(async (passwordHash: string | Uint8Array) => {
         const [, , , segment = ''] = String(passwordHash).split('$')
-        clock += costs[segment] ?? 0
+        computed.push(`${segment}（比对）`)
         return matches
       }),
     }
-    return { runtime, sleeps, elapsed: () => clock }
+    return { runtime, computed }
   }
 
-  it('只有当前参数：失败补到耗时中位数的 1.2 倍（余量），通过时不补', async () => {
+  /** 只看算了哪几组、按什么顺序（不分陪算与比对） */
+  const groupsOf = (computed: readonly string[]): string[] => computed.map(entry => entry.replace('（比对）', ''))
+
+  /** reject 算的：用同一个哈希器、另记一份 */
+  async function rejected(hasher: Argon2PasswordHasher, computed: string[]): Promise<string[]> {
+    computed.length = 0
+    expect(await hasher.reject('wrong')).toBe(false)
+    return [...computed]
+  }
+
+  it('只有当前参数：失败比对一次，reject 算一次当前参数，两者相同；通过时只比对一次；observe 不计算', async () => {
     const current = await storedHash(8_192, 2)
-    const failing = fakeRuntime({ 'm=8192,t=2,p=1': 10 })
-    const hasher = new Argon2PasswordHasher(CURRENT, 1, {}, failing.runtime)
+    const { runtime, computed } = fakeRuntime()
+    const hasher = new Argon2PasswordHasher(CURRENT, 1, {}, runtime)
+    hasher.observe([C])
+    expect(computed).toEqual([])
     expect(await hasher.verify(current, 'wrong')).toBe(false)
-    expect(failing.sleeps).toEqual([2])
-    expect(failing.elapsed()).toBe(12)
+    expect(computed).toEqual([`${C}（比对）`])
+    expect(await rejected(hasher, computed)).toEqual([C])
 
-    const passing = fakeRuntime({ 'm=8192,t=2,p=1': 10 }, true)
+    const passing = fakeRuntime(true)
     expect(await new Argon2PasswordHasher(CURRENT, 1, {}, passing.runtime).verify(current, 'right')).toBe(true)
-    expect(passing.sleeps).toEqual([])
+    expect(passing.computed).toEqual([`${C}（比对）`])
   })
 
-  it('参数调高之后的旧哈希更快：失败补到当前参数的耗时（启动时的假哈希已经记下它）', async () => {
-    const { runtime, sleeps, elapsed } = fakeRuntime({ 'm=8192,t=2,p=1': 20, 'm=8192,t=1,p=1': 7 })
+  it('参数调高之后的旧哈希（更快）：失败时先陪算当前参数、再比对旧参数，与 reject 的顺序与组数相同；当前参数的账户失败同样如此', async () => {
+    const { runtime, computed } = fakeRuntime()
     const hasher = new Argon2PasswordHasher(CURRENT, 1, {}, runtime)
-    await hasher.hash('假哈希')
-    const started = elapsed()
+    hasher.observe(['m=8192,t=1,p=1'])
     expect(await hasher.verify(await storedHash(8_192, 1), 'wrong')).toBe(false)
-    expect(elapsed() - started).toBe(24)
-    expect(sleeps).toEqual([17])
+    expect(computed).toEqual([C, 'm=8192,t=1,p=1（比对）'])
+    const stale = groupsOf(computed)
+    computed.length = 0
+    expect(await hasher.verify(await storedHash(8_192, 2), 'wrong')).toBe(false)
+    expect(computed).toEqual([`${C}（比对）`, 'm=8192,t=1,p=1'])
+    expect(groupsOf(computed)).toEqual(stale)
+    expect(await rejected(hasher, computed)).toEqual(stale)
   })
 
-  it('改的是内存：同样按实测的耗时补齐，不按"内存 × 迭代次数"换算', async () => {
-    // 内存小了很多、迭代次数没变：按计算量换算会补得不准（N2），按耗时补齐与换算无关
-    const { runtime, elapsed } = fakeRuntime({ 'm=65536,t=2,p=1': 90, 'm=8192,t=2,p=1': 10 })
+  it('参数调低之后（库里现存更慢的一组）：用户名不存在也把它算一次；认不出的参数段忽略，重复的只算一组', async () => {
+    const { runtime, computed } = fakeRuntime()
     const hasher = new Argon2PasswordHasher(CURRENT, 1, {}, runtime)
-    await hasher.observe(['m=65536,t=2,p=1'])
-    const started = elapsed()
-    await hasher.verify(await storedHash(8_192, 2), 'wrong')
-    expect(elapsed() - started).toBe(108)
+    hasher.observe(['m=16384,t=4,p=1', 'not-parameters', 'm=x,t=9,p=1', '', 'm=16384,t=4,p=1'])
+    expect(await rejected(hasher, computed)).toEqual([C, 'm=16384,t=4,p=1'])
+    computed.length = 0
+    expect(await hasher.verify(await storedHash(16_384, 4), 'wrong')).toBe(false)
+    expect(computed).toEqual([C, 'm=16384,t=4,p=1（比对）'])
   })
 
-  it('参数调低之后：库里现存的更慢的参数组各算 3 次校准，之后当前参数的失败（包括用户名不存在的假哈希）都补到它', async () => {
-    const { runtime, sleeps, elapsed } = fakeRuntime({ 'm=8192,t=2,p=1': 10, 'm=16384,t=4,p=1': 40 })
+  it('验证到没见过的参数组（例如读库里的参数失败了）：记下它，之后的失败与 reject 都把它算一次', async () => {
+    const { runtime, computed } = fakeRuntime()
     const hasher = new Argon2PasswordHasher(CURRENT, 1, {}, runtime)
-    await hasher.observe(['m=16384,t=4,p=1', 'not-parameters', 'm=x,t=9,p=1', '', 'm=16384,t=4,p=1'])
-    expect(runtime.hash).toHaveBeenCalledTimes(3)
-    const started = elapsed()
-    await hasher.verify(await storedHash(8_192, 2), 'wrong')
-    expect(elapsed() - started).toBe(48)
-    expect(sleeps).toEqual([38])
+    expect(await rejected(hasher, computed)).toEqual([C])
+    computed.length = 0
+    expect(await hasher.verify(await storedHash(8_192, 5), 'wrong')).toBe(false)
+    expect(computed).toEqual([C, 'm=8192,t=5,p=1（比对）'])
+    expect(await rejected(hasher, computed)).toEqual([C, 'm=8192,t=5,p=1'])
   })
 
-  it('见过的参数组不再校准；验证到没见过的更慢的哈希时，之后的失败也补到它', async () => {
-    const { runtime, elapsed } = fakeRuntime({ 'm=8192,t=2,p=1': 10, 'm=8192,t=5,p=1': 30 })
+  it('三组参数：当前参数在前、其余按键排序；任何一组的账户失败时，算的与 reject 完全相同（每组恰好一次）', async () => {
+    const { runtime, computed } = fakeRuntime()
     const hasher = new Argon2PasswordHasher(CURRENT, 1, {}, runtime)
-    await hasher.verify(await storedHash(8_192, 2), 'wrong')
-    await hasher.observe(['m=8192,t=2,p=1'])
-    expect(runtime.hash).not.toHaveBeenCalled()
-    // 旧哈希（更慢）的失败：补到它自己耗时的 1.2 倍
-    let started = elapsed()
-    await hasher.verify(await storedHash(8_192, 5), 'wrong')
-    expect(elapsed() - started).toBe(36)
-    started = elapsed()
-    await hasher.verify(await storedHash(8_192, 2), 'wrong')
-    expect(elapsed() - started).toBe(36)
+    hasher.observe(['m=8192,t=5,p=1', 'm=16384,t=1,p=1'])
+    const expected = await rejected(hasher, computed)
+    expect(expected).toEqual([C, 'm=16384,t=1,p=1', 'm=8192,t=5,p=1'])
+    for (const [memory, iterations] of [[8_192, 2], [16_384, 1], [8_192, 5]] as const) {
+      computed.length = 0
+      expect(await hasher.verify(await storedHash(memory, iterations), 'wrong')).toBe(false)
+      expect(groupsOf(computed), `m=${memory},t=${iterations}`).toEqual(expected)
+      expect(computed.filter(entry => entry.endsWith('（比对）'))).toEqual([`m=${memory},t=${iterations},p=1（比对）`])
+    }
   })
 
-  it('按中位数估计：一次偶然的慢不抬高时限', async () => {
-    let slow = false
-    const base = fakeRuntime({ 'm=8192,t=2,p=1': 10 })
-    const hasher = new Argon2PasswordHasher(CURRENT, 1, {}, {
-      ...base.runtime,
-      verify: vi.fn(async (passwordHash: string | Uint8Array, password: string | Uint8Array) => {
-        const result = await base.runtime.verify?.(passwordHash, password)
-        if (slow)
-          await base.runtime.sleep?.(490)
-        return result ?? false
-      }),
-    })
-    const current = await storedHash(8_192, 2)
-    await hasher.verify(current, 'wrong')
-    await hasher.verify(current, 'wrong')
-    slow = true
-    await hasher.verify(current, 'wrong')
-    slow = false
-    const started = base.elapsed()
-    await hasher.verify(current, 'wrong')
-    expect(base.elapsed() - started).toBe(12)
+  it('通过时到自己那组为止：当前参数的账户只比对一次；旧参数的账户先陪算排在它前面的各组', async () => {
+    const { runtime, computed } = fakeRuntime(true)
+    const hasher = new Argon2PasswordHasher(CURRENT, 1, {}, runtime)
+    hasher.observe(['m=8192,t=5,p=1', 'm=16384,t=1,p=1'])
+    expect(await hasher.verify(await storedHash(8_192, 2), 'right')).toBe(true)
+    expect(computed).toEqual([`${C}（比对）`])
+    computed.length = 0
+    expect(await hasher.verify(await storedHash(16_384, 1), 'right')).toBe(true)
+    expect(computed).toEqual([C, 'm=16384,t=1,p=1（比对）'])
   })
 
-  it('补齐与验证在同一个名额里：并发上限为 1 时，补完之前别的计算不开始', async () => {
+  it('reject 与验证一样受并发上限与排队上限的约束（复验 R3）：前一个计算没完不开始，排队满了立即繁忙', async () => {
+    let release: () => void = () => {}
     const order: string[] = []
-    let releaseSleep: () => void = () => {}
-    const base = fakeRuntime({ 'm=8192,t=2,p=1': 10 })
-    const hasher = new Argon2PasswordHasher(CURRENT, 1, {}, {
-      ...base.runtime,
-      sleep: vi.fn(async () => {
-        order.push('pad:start')
-        await new Promise<void>((resolve) => {
-          releaseSleep = resolve
-        })
-        order.push('pad:end')
+    const hasher = new Argon2PasswordHasher(CURRENT, 1, { maxWaiting: 1 }, {
+      hash: vi.fn(async (password: string | Uint8Array, _options?: Options | null) => {
+        order.push(`${String(password)}:start`)
+        if (password === 'first') {
+          await new Promise<void>((resolve) => {
+            release = resolve
+          })
+        }
+        order.push(`${String(password)}:end`)
+        return 'hashed'
       }),
-      hash: vi.fn(async () => {
-        order.push('next:start')
+      verify: vi.fn(async () => false),
+    })
+    const first = hasher.hash('first')
+    const rejected = hasher.reject('second')
+    await expect(hasher.reject('third')).rejects.toBeInstanceOf(PasswordHashingBusyError)
+    await vi.waitFor(() => expect(order).toEqual(['first:start']))
+    release()
+    await first
+    expect(await rejected).toBe(false)
+    expect(order).toEqual(['first:start', 'first:end', 'second:start', 'second:end'])
+  })
+
+  it('各组在同一个名额里算完：并发上限为 1 时，失败的验证算完之前别的计算不开始', async () => {
+    const order: string[] = []
+    let release: () => void = () => {}
+    const { runtime } = fakeRuntime()
+    const hasher = new Argon2PasswordHasher(CURRENT, 1, {}, {
+      ...runtime,
+      hash: vi.fn(async (_password: string | Uint8Array, options?: Options | null) => {
+        const label = options?.timeCost === 5 ? 'other' : 'next'
+        order.push(`${label}:start`)
+        if (label === 'other') {
+          await new Promise<void>((resolve) => {
+            release = resolve
+          })
+        }
+        order.push(`${label}:end`)
         return 'hashed'
       }),
     })
+    hasher.observe(['m=8192,t=5,p=1'])
     const failing = hasher.verify(await storedHash(8_192, 2), 'wrong')
     const next = hasher.hash('next')
-    await vi.waitFor(() => expect(order).toEqual(['pad:start']))
-    releaseSleep()
-    await failing
+    await vi.waitFor(() => expect(order).toEqual(['other:start']))
+    release()
+    expect(await failing).toBe(false)
     await next
-    expect(order).toEqual(['pad:start', 'pad:end', 'next:start'])
+    expect(order).toEqual(['other:start', 'other:end', 'next:start', 'next:end'])
   })
 })

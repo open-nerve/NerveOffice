@@ -7,9 +7,18 @@ import { describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { redirectTarget } from '../../shared/lib/login-path.ts'
 import { usePageLocation } from '../../shared/lib/page-location.ts'
+import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { Alert, AlertDescription, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label } from '../../shared/ui/index.ts'
 import { SessionCheck } from './session-check.tsx'
 import { login, SESSION_QUERY_KEY, sessionQueryOptions, STARTS_SESSION } from './session.ts'
+
+/** 为什么来到登录页时的说明（shared/lib/login-path.ts 的 LoginReason；required 不说明） */
+const LOGIN_NOTICES: ReadonlyMap<string, string> = new Map([
+  ['expired', messages.auth.sessionExpired],
+  ['password_changed', messages.auth.passwordMaybeChanged],
+  ['password_reset', messages.auth.passwordMaybeReset],
+  ['account_disabled', messages.auth.accountMaybeDisabled],
+])
 
 /** 登录后要去的是编辑器页：它是另一个入口，要整页打开，不能在平台页面的路由里切换（P4 设计 §3.8）。 */
 function opensEditorPage(target: string): boolean {
@@ -41,6 +50,7 @@ export function LoginPage() {
   const passwordId = useId()
   const target = redirectTarget(params.get('from'))
   const toEditor = opensEditorPage(target)
+  useDocumentTitle(messages.auth.loginTitle)
   const mutation = useMutation({
     mutationFn: login,
     // 登录成功由请求缓存的全局处理通知其他标签页（app/runtime.ts）
@@ -68,6 +78,9 @@ export function LoginPage() {
   }
 
   const error = mutation.isError ? describeError(mutation.error) : undefined
+  // 为什么来到登录页（shared/lib/login-path.ts）：登录已过期；或者修改密码的结果未知、随后登录失效了（M2-P6 复核 G-1）；
+  // 或者为自己生成重置链接的结果未知、随后登录失效了（M2-P6 复核 S1）；或者停用自己的结果未知、随后登录失效了（第五批 G1）
+  const notice = LOGIN_NOTICES.get(params.get('reason') ?? '')
   return (
     <main className="flex min-h-svh items-center justify-center bg-muted/40 p-4">
       <Card className="w-full max-w-sm">
@@ -79,9 +92,9 @@ export function LoginPage() {
         </CardHeader>
         <CardContent>
           <form className="flex flex-col gap-4" onSubmit={submit} noValidate aria-label={messages.auth.loginTitle}>
-            {params.get('reason') === 'expired' && error === undefined && (
+            {notice !== undefined && error === undefined && (
               <Alert>
-                <AlertDescription>{messages.auth.sessionExpired}</AlertDescription>
+                <AlertDescription>{notice}</AlertDescription>
               </Alert>
             )}
             {error !== undefined && (

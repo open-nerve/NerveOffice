@@ -7,8 +7,10 @@ import { bytea, lengthBetween, oneOf, stringLiteral } from '../common/index.ts'
 import { users } from '../users/index.ts'
 
 /**
- * 会话被撤销的原因：退出；同一个浏览器重新登录时换掉原来的会话；账户停用；修改密码（本人的其他会话）；
- * 重置密码（签发与完成时）。新增取值时同时用迁移更新 CHECK 约束
+ * 会话被撤销的原因：退出（logout）；换成了新的会话（replaced：同一个浏览器重新登录时原来的会话，修改密码时当前这条，
+ * 这个浏览器随即拿到新的 Cookie）；账户停用（disabled）；修改密码时本人在别的设备上的会话（password_changed）；
+ * 重置密码（password_reset，签发与完成时）。只有 replaced 的旧 Cookie 再来请求时不清除 Cookie（auth 的 SessionService）。
+ * 新增取值时同时用迁移更新 CHECK 约束
  */
 export const SESSION_REVOKE_REASONS = ['logout', 'replaced', 'disabled', 'password_changed', 'password_reset'] as const
 export type SessionRevokeReason = (typeof SESSION_REVOKE_REASONS)[number]
@@ -36,16 +38,21 @@ export const authSessions = pgTable('auth_sessions', {
 ])
 
 export const authLoginThrottles = pgTable('auth_login_throttles', {
-  // "用户名：xxx""地址：xxx"的摘要：不存用户输入的原文
+  // 计数键（"账户：xxx""账户与地址：xxx""地址：xxx"等，见 auth 的 throttle-keys）的摘要：不存用户输入的原文
   keyHash: bytea('key_hash').primaryKey(),
   // 窗口内失败与正在验证的尝试次数：验证之前先占用名额，成功时退回，所以可以回到 0
   failures: integer('failures').notNull(),
   windowStartedAt: timestamp('window_started_at', { withTimezone: true }).notNull(),
   lockedUntil: timestamp('locked_until', { withTimezone: true }),
+  // 所属账户（M2-P6 复核 A1）：登录的两个账户相关的维度才有，是账户维度的键的摘要。按它一次清掉这个账户在所有来源上的计数
+  // （完成重置密码、管理员解除锁定），也按它查这个账户锁定到什么时候（管理界面）
+  accountHash: bytea('account_hash'),
 }, table => [
   // 清理窗口与锁定都已过期的计数
   index('auth_login_throttles_window_started_at_idx').on(table.windowStartedAt),
+  index('auth_login_throttles_account_hash_idx').on(table.accountHash).where(sql`${table.accountHash} IS NOT NULL`),
   check('auth_login_throttles_key_hash_check', sql`octet_length(${table.keyHash}) = 32`),
+  check('auth_login_throttles_account_hash_check', sql`${table.accountHash} IS NULL OR octet_length(${table.accountHash}) = 32`),
   check('auth_login_throttles_failures_check', sql`${table.failures} >= 0`),
 ])
 
@@ -72,6 +79,8 @@ export const authInvitations = pgTable('auth_invitations', {
   uniqueIndex('auth_invitations_open_username_key').on(table.username).where(sql`${table.acceptedAt} IS NULL AND ${table.revokedAt} IS NULL`),
   // 列表按签发时间从新到旧分页
   index('auth_invitations_created_at_idx').on(table.createdAt, table.id),
+  // 一个账户至多由一条邀请建成（M2-P6 复核 G-4）：接受时建账户与标记已接受在同一个事务里，这里是库里的兜底
+  uniqueIndex('auth_invitations_accepted_user_key').on(table.acceptedUserId),
   check('auth_invitations_token_hash_check', sql`octet_length(${table.tokenHash}) = 32`),
   check('auth_invitations_username_check', sql`${table.username} ~ ${stringLiteral(USERNAME_PATTERN_SOURCE)}`),
   check('auth_invitations_display_name_check', lengthBetween(table.displayName, 1, DISPLAY_NAME_MAX_LENGTH)),
