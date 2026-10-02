@@ -1,4 +1,4 @@
-import type { DocumentProfile, DocumentStatus, DocumentType, PlatformFormatVersion } from '@nerve-office/contracts'
+import type { DocumentProfile, DocumentStatus, DocumentType, GrantRole, PlatformFormatVersion } from '@nerve-office/contracts'
 import type { SQL } from 'drizzle-orm'
 import type { TimeCursor } from '../../shared/time-cursor.ts'
 import type { Database, Transaction } from '../database/index.ts'
@@ -6,7 +6,7 @@ import { Inject, Injectable } from '@nestjs/common'
 import { and, asc, desc, eq, isNull, ne, or, sql } from 'drizzle-orm'
 import { documents } from '../../db/schema/documents/index.ts'
 import { DATABASE, executorOf, inIdArray, keysetPosition } from '../database/index.ts'
-import { grantedTo } from './document-grants.repository.ts'
+import { grantedTo, grantRoleOf } from './document-grants.repository.ts'
 import { TITLE_SEARCH_ESCAPE } from './title-search.ts'
 
 export interface DocumentRow {
@@ -64,6 +64,28 @@ export interface ListOptions {
   readonly folderId?: string | null | undefined
 }
 
+/** 只要授权那一半时的分页（"与我共享"）：排序与分页与列表一样 */
+export interface PageOptions {
+  readonly limit: number
+  /** 上一页最后一条的位置（keyset） */
+  readonly after?: TimeCursor | undefined
+}
+
+/**
+ * 搜索结果的一行：granted 是"这个人在这份文档上有单独授权"，与行出自同一条语句（与"可访问文档"授权那一半同一个条件）。
+ * 搜索据此判断一行是不是凭授权命中——不事后另读一次授权：两次读之间并发的取消分享，会让正常的结果被判为越出范围（M2-P5 设计 §3.4(2)）。
+ * 不要授权那一半时恒为假
+ */
+export interface SearchRow extends DocumentRow {
+  readonly granted: boolean
+}
+
+/** "与我共享"的一行：这个人在这份文档上的授权角色，与行出自同一条语句（同一个快照，M2-P5 设计 §3.4(4)） */
+export interface GrantedDocumentRow extends DocumentRow {
+  /** 条件就是"有授权"，同一条语句里不会为空；类型上仍可为空（标量子查询），调用方按没有授权处理 */
+  readonly grantRole: GrantRole | null
+}
+
 /** 按标题搜索的条件与分页（M2-P4 设计 §3.4 第 5 条）：排序与分页与列表一样，多一个标题的条件。 */
 export interface SearchOptions {
   readonly limit: number
@@ -116,6 +138,11 @@ function accessible(scope: AccessibleScope): SQL | undefined {
   return and(eq(d.status, 'active'), scope.grantsOf === undefined ? inSpaces : or(inSpaces, grantedTo(d.id, scope.grantsOf)))
 }
 
+/** keyset 分页：上一页最后一条之后（按更新时间从新到旧、同一时间按 id），列表、搜索与"与我共享"同一个条件 */
+function afterPosition(after: TimeCursor | undefined): SQL | undefined {
+  return after === undefined ? undefined : sql`(${d.updatedAt}, ${d.id}) < (${after.position}::timestamptz, ${after.id}::uuid)`
+}
+
 /** 目录的过滤（见 ListOptions.folderId）：不进 accessible，是列表自己的条件。 */
 function inFolder(folderId: string | null | undefined): SQL | undefined {
   if (folderId === undefined)
@@ -133,34 +160,42 @@ export class DocumentsRepository {
 
   /** 可访问的文档，按更新时间从新到旧；after 是上一页最后一条的位置（keyset）。 */
   async listAccessible(scope: AccessibleScope, options: ListOptions): Promise<DocumentRow[]> {
-    const { after } = options
     return this.db
       .select(COLUMNS)
       .from(d)
-      .where(and(
-        accessible(scope),
-        inFolder(options.folderId),
-        after === undefined ? undefined : sql`(${d.updatedAt}, ${d.id}) < (${after.position}::timestamptz, ${after.id}::uuid)`,
-      ))
+      .where(and(accessible(scope), inFolder(options.folderId), afterPosition(options.after)))
+      .orderBy(desc(d.updatedAt), desc(d.id))
+      .limit(options.limit)
+  }
+
+  /**
+   * "与我共享"（M2-P5 设计 §3.4(4)）：这个人有单独授权的、正常状态的文档——只要"可访问文档"的授权那一半（条件仍只在 accessible），
+   * 不论他在那个空间里有没有角色；排序与分页与文档列表一致。每行带他在这份文档上的授权角色（同一条语句），
+   * 内容权限由访问策略的批量入口按它与空间事实算（accessOfMany），不在这里算
+   */
+  async listGranted(userId: string, options: PageOptions): Promise<GrantedDocumentRow[]> {
+    return this.db
+      .select({ ...COLUMNS, grantRole: grantRoleOf(d.id, userId) })
+      .from(d)
+      .where(and(accessible({ spaceIds: [], grantsOf: userId }), afterPosition(options.after)))
       .orderBy(desc(d.updatedAt), desc(d.id))
       .limit(options.limit)
   }
 
   /**
    * 标题里包含关键词的可访问文档，排序与分页与列表完全一致（M2-P4 设计 §3.4 第 5 条）。
-   * 范围与状态仍然只由 accessible 给出（回收站里的因此不会出现，P5 的单独授权也只改那一处）；
+   * 范围与状态仍然只由 accessible 给出（回收站里的因此不会出现，P5 的单独授权也只改那一处）；每行另带 granted（见 SearchRow）；
    * 大小写不敏感由两边一起 lower() 做；关键词里的 `\`、`%`、`_` 由调用方转义好，这里显式写出配套的 ESCAPE。
    * 本版不建 pg_trgm 索引（设计 §3.4 第 5 条已登记延期项，M7 压测时复核）
    */
-  async searchByTitle(scope: AccessibleScope, options: SearchOptions): Promise<DocumentRow[]> {
-    const { after } = options
+  async searchByTitle(scope: AccessibleScope, options: SearchOptions): Promise<SearchRow[]> {
     return this.db
-      .select(COLUMNS)
+      .select({ ...COLUMNS, granted: scope.grantsOf === undefined ? sql<boolean>`false` : grantedTo(d.id, scope.grantsOf) })
       .from(d)
       .where(and(
         accessible(scope),
         sql`lower(${d.title}) LIKE lower(${options.titlePattern}) ESCAPE ${TITLE_SEARCH_ESCAPE}`,
-        after === undefined ? undefined : sql`(${d.updatedAt}, ${d.id}) < (${after.position}::timestamptz, ${after.id}::uuid)`,
+        afterPosition(options.after),
       ))
       .orderBy(desc(d.updatedAt), desc(d.id))
       .limit(options.limit)

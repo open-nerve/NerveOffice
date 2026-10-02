@@ -5,12 +5,12 @@ import type { GrantRole, SpaceRole, SpaceStatus, SpaceType } from '@nerve-office
 import type { Buffer } from 'node:buffer'
 import type { AuditEvent, AuditService } from '../audit/index.ts'
 import type { Transaction, TransactionRunner } from '../database/index.ts'
-import type { SpaceFacts, SpacesService } from '../spaces/index.ts'
+import type { SpaceFacts, SpaceFactsWithOwner, SpacesService } from '../spaces/index.ts'
 import type { Actor } from './document-access-policy.ts'
 import type { CurrentContent, DocumentContentsRepository, StoredSnapshot } from './document-contents.repository.ts'
-import type { DocumentGrantsRepository } from './document-grants.repository.ts'
+import type { DocumentGrantsRepository, GrantRow, NewGrant } from './document-grants.repository.ts'
 import type { DocumentRevisionsRepository, NewRevision, RevisionRow } from './document-revisions.repository.ts'
-import type { AccessibleScope, CopiedDocument, DocumentRow, DocumentsRepository, ListOptions, NewDocument, SearchOptions } from './documents.repository.ts'
+import type { AccessibleScope, CopiedDocument, DocumentRow, DocumentsRepository, GrantedDocumentRow, ListOptions, NewDocument, PageOptions, SearchOptions, SearchRow } from './documents.repository.ts'
 import type { FolderAncestorRow, FolderRow, FoldersRepository, NewFolder, SubtreeMove, SubtreeSummary } from './folders.repository.ts'
 import type { SpaceTreeRepository } from './space-tree.repository.ts'
 import type { NewTrashEntry, TrashEntriesRepository, TrashEntryRow } from './trash-entries.repository.ts'
@@ -29,6 +29,8 @@ export const TEAM_SPACE = '0199a2c4-0000-7000-8000-0000000000c1'
 
 const TRANSACTION = { transaction: true } as unknown as Transaction
 const NOW = new Date('2026-09-27T08:00:00.000Z')
+/** 假仓储里分享写入的"数据库时间"：比 NOW 晚，用例据此核对新建与调整更新了设置的时间、没有变化时没更新 */
+export const GRANT_WRITTEN_AT = new Date('2026-09-27T09:00:00.000Z')
 
 /** 普通成员作为调用者 */
 export function member(userId: string): Actor {
@@ -71,7 +73,7 @@ export class FakeStore {
   /** 收回写入权的调用：跨空间移动要在同一个事务里调一次（M2-P2 设计 §3.7） */
   readonly revocations: WriteAccessScope[] = []
   /** 单独授权（M2-P5）：键是"文档 id 与账户 id"，访问策略与"可访问文档"的授权那一半据此判断 */
-  readonly grantRecords = new Map<string, GrantRole>()
+  readonly grantRecords = new Map<string, GrantRow>()
   /** 空间与成员：访问策略据此算出有效权限 */
   readonly spaceRecords = new Map<string, FakeSpace>([
     [ALICE_SPACE, { type: 'personal', name: '爱丽丝', status: 'active', visibleToAll: false, owner: ALICE, members: new Map() }],
@@ -138,12 +140,17 @@ export class FakeStore {
       space.members.set(userId, role)
   }
 
-  /** 单独授权；role 为 undefined 时取消 */
-  setGrant(documentId: string, userId: string, role: GrantRole | undefined): void {
+  /** 单独授权；role 为 undefined 时取消。设置人默认是另一个人（真实的表上有"被授权人不是设置人"的 CHECK） */
+  setGrant(documentId: string, userId: string, role: GrantRole | undefined, grantedBy: string = userId === ALICE ? BOB : ALICE): void {
     if (role === undefined)
       this.grantRecords.delete(grantKey(documentId, userId))
     else
-      this.grantRecords.set(grantKey(documentId, userId), role)
+      this.grantRecords.set(grantKey(documentId, userId), { documentId, userId, role, grantedBy, createdAt: NOW, updatedAt: NOW })
+  }
+
+  /** 这个人在这份文档上的授权（整行），没有时为 undefined */
+  grantOf(documentId: string, userId: string): GrantRow | undefined {
+    return this.grantRecords.get(grantKey(documentId, userId))
   }
 
   /** "可访问文档"的范围（与真实仓储的 accessible 同一个条件）：正常状态，并且在给定的空间里、或者（要授权那一半时）这个人有授权 */
@@ -167,6 +174,23 @@ export class FakeStore {
     return { id: spaceId, type: space.type, name: space.name, status: space.status, visibleToAll: space.visibleToAll, owned: space.owner === userId, memberRole: space.members.get(userId) ?? null }
   }
 
+  /** 一批空间的事实连同所有者（与真实的 accessFactsOfMany 一样：不存在的不在结果里，重复的只算一次） */
+  private factsWithOwnerOf(userId: string, spaceIds: readonly string[]): ReadonlyMap<string, SpaceFactsWithOwner> {
+    return new Map([...new Set(spaceIds)].flatMap((spaceId) => {
+      const facts = this.factsOf(userId, spaceId)
+      return facts === undefined ? [] : [[spaceId, { ...facts, ownerUserId: this.space(spaceId).owner ?? null }] as const]
+    }))
+  }
+
+  /** 按位置从新到旧排序、从游标之后开始（与真实仓储的 keyset 一致） */
+  private static page<T extends DocumentRow>(rows: readonly T[], options: PageOptions): T[] {
+    const { after } = options
+    return rows
+      .toSorted((a, b) => b.position.localeCompare(a.position) || b.id.localeCompare(a.id))
+      .filter(row => after === undefined || row.position < after.position || (row.position === after.position && row.id < after.id))
+      .slice(0, options.limit)
+  }
+
   readonly repositories = {
     documents: {
       findById: vi.fn(async (id: string) => this.activeDocument(id)),
@@ -178,16 +202,25 @@ export class FakeStore {
         [...this.documents.values()]
           .filter(row => this.inScope(row, scope))
           .slice(0, options.limit)),
-      /** 按标题搜索：范围与状态同上，再按关键词过滤，按位置从新到旧排序并从游标之后开始 */
-      searchByTitle: vi.fn(async (scope: AccessibleScope, options: SearchOptions) => {
+      /**
+       * 按标题搜索：范围与状态同上，再按关键词过滤，按位置从新到旧排序并从游标之后开始；
+       * 每行带"这个人有授权"的标志（与真实仓储一样与行同一次读出，要了授权那一半时才可能为真）
+       */
+      searchByTitle: vi.fn(async (scope: AccessibleScope, options: SearchOptions): Promise<SearchRow[]> => {
         const keyword = keywordOf(options.titlePattern)
-        const { after } = options
-        return [...this.documents.values()]
+        const grantsOf = scope.grantsOf
+        const rows = [...this.documents.values()]
           .filter(row => this.inScope(row, scope))
           .filter(row => row.title.toLowerCase().includes(keyword))
-          .toSorted((a, b) => b.position.localeCompare(a.position) || b.id.localeCompare(a.id))
-          .filter(row => after === undefined || row.position < after.position || (row.position === after.position && row.id < after.id))
-          .slice(0, options.limit)
+          .map(row => ({ ...row, granted: grantsOf !== undefined && this.grantRecords.has(grantKey(row.id, grantsOf)) }))
+        return FakeStore.page(rows, options)
+      }),
+      /** "与我共享"：只要授权那一半（与真实仓储同一个范围），每行带授权角色，排序与分页同上 */
+      listGranted: vi.fn(async (userId: string, options: PageOptions): Promise<GrantedDocumentRow[]> => {
+        const rows = [...this.documents.values()]
+          .filter(row => this.inScope(row, { spaceIds: [], grantsOf: userId }))
+          .map(row => ({ ...row, grantRole: this.grantOf(row.id, userId)?.role ?? null }))
+        return FakeStore.page(rows, options)
       }),
       insert: vi.fn(async (document: NewDocument) => this.addDocument({ ...document, revision: 1 })),
       rename: vi.fn(async (id: string, title: string) => this.updateDocument(id, { title })),
@@ -455,9 +488,34 @@ export class FakeStore {
     }),
   }
 
-  /** 单独授权的仓储（M2-P5）：访问策略每判断一次文档，就是这里的一次查询（用例据此核对"不存在"时照样查一次） */
+  /**
+   * 单独授权的仓储（M2-P5）：访问策略每判断一次文档，就是这里的一次查询（用例据此核对"不存在"时照样查一次）；
+   * 分享的写入经 find、insert、updateRole、delete（写入的时间是 GRANT_WRITTEN_AT，代替数据库的当前时间）
+   */
   readonly grants = {
-    roleOf: vi.fn(async (documentId: string, userId: string): Promise<GrantRole | undefined> => this.grantRecords.get(grantKey(documentId, userId))),
+    roleOf: vi.fn(async (documentId: string, userId: string): Promise<GrantRole | undefined> => this.grantOf(documentId, userId)?.role),
+    find: vi.fn(async (documentId: string, userId: string): Promise<GrantRow | undefined> => this.grantOf(documentId, userId)),
+    listFor: vi.fn(async (documentId: string): Promise<GrantRow[]> => [...this.grantRecords.values()].filter(row => row.documentId === documentId)),
+    insert: vi.fn(async (grant: NewGrant): Promise<GrantRow> => {
+      if (this.grantRecords.has(grantKey(grant.documentId, grant.userId)))
+        throw new Error('授权已经存在（真实的表上是主键冲突）')
+      const row = { ...grant, createdAt: GRANT_WRITTEN_AT, updatedAt: GRANT_WRITTEN_AT }
+      this.grantRecords.set(grantKey(grant.documentId, grant.userId), row)
+      return row
+    }),
+    updateRole: vi.fn(async (documentId: string, userId: string, role: GrantRole, grantedBy: string): Promise<GrantRow> => {
+      const row = this.grantOf(documentId, userId)
+      if (row === undefined)
+        throw new Error(`调整授权时授权不在了：${documentId}`)
+      const next = { ...row, role, grantedBy, updatedAt: GRANT_WRITTEN_AT }
+      this.grantRecords.set(grantKey(documentId, userId), next)
+      return next
+    }),
+    delete: vi.fn(async (documentId: string, userId: string): Promise<GrantRow | undefined> => {
+      const row = this.grantOf(documentId, userId)
+      this.grantRecords.delete(grantKey(documentId, userId))
+      return row
+    }),
   }
 
   /** 收回写入权的入口：只记下调用（M2 的真实实现也什么都不做，M3 接租约） */
@@ -475,6 +533,8 @@ export class FakeStore {
     }),
     // 访问策略每判断一次，就是这里的一次查询：测试据此核对"不存在"与"看不到"的查询序列相同
     accessFactsOf: vi.fn(async (userId: string, spaceId: string) => this.factsOf(userId, spaceId)),
+    // 一批空间的事实连同所有者（"与我共享"与搜索）：用例据此核对一页只查一次
+    accessFactsOfMany: vi.fn(async (userId: string, spaceIds: readonly string[]) => this.factsWithOwnerOf(userId, spaceIds)),
     visibleSpacesOf: vi.fn(async (userId: string) => [...this.spaceRecords.keys()].flatMap(id => this.factsOf(userId, id) ?? [])),
     // 取哪个空间的行：用例据此核对多个空间时的取锁顺序
     holdSpace: vi.fn(async (_spaceId: string): Promise<unknown> => undefined),
@@ -501,6 +561,7 @@ export class FakeStore {
       tree: this.tree as unknown as SpaceTreeRepository,
       policy: this.policy,
       spaces: this.spaces as unknown as SpacesService,
+      grants: this.grants as unknown as DocumentGrantsRepository,
       audit: this.audit as unknown as AuditService,
       writeAccess: this.writeAccess as unknown as WriteAccessRevocation,
     }

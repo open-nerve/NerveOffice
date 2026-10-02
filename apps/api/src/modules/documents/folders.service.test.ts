@@ -40,6 +40,7 @@ function withoutFolderCreation(store: FakeStore): DocumentAccessPolicy {
   return {
     accessOf: async (userId, document, transaction) => policy.accessOf(userId, document, transaction),
     visibleSpaces: async actor => policy.visibleSpaces(actor),
+    accessOfMany: async (userId, documents) => policy.accessOfMany(userId, documents),
     spaceAccessOf: async (actor, spaceId, transaction) => {
       const access = await policy.spaceAccessOf(actor, spaceId, transaction)
       return access === undefined ? undefined : { ...access, permissions: { ...access.permissions, canCreateFolders: false } }

@@ -9,6 +9,7 @@ import { DocumentContentsRepository } from './document-contents.repository.ts'
 import { DocumentCopyService } from './document-copy.service.ts'
 import { DocumentCreationService } from './document-creation.service.ts'
 import { DocumentGrantsRepository } from './document-grants.repository.ts'
+import { DocumentGrantsService } from './document-grants.service.ts'
 import { DocumentOrganizingService } from './document-organizing.service.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
 import { DocumentSearchService } from './document-search.service.ts'
@@ -18,6 +19,7 @@ import { DocumentsRepository } from './documents.repository.ts'
 import { DocumentsService } from './documents.service.ts'
 import { FoldersRepository } from './folders.repository.ts'
 import { FoldersService } from './folders.service.ts'
+import { SharedDocumentsService } from './shared-documents.service.ts'
 import { SpaceTreeRepository } from './space-tree.repository.ts'
 import { TrashEntriesRepository } from './trash-entries.repository.ts'
 import { TrashEntryPurger } from './trash-entry-purger.ts'
@@ -44,6 +46,9 @@ import { LeaselessWriteAccessRevocation, WriteAccessRevocation } from './write-a
     DocumentCopyService,
     DocumentSearchService,
     DocumentTransferService,
+    // 分享（M2-P5）：单独授权的判断、锁下复核与写入（写入的编排在 workspace），"与我共享"
+    DocumentGrantsService,
+    SharedDocumentsService,
     FoldersService,
     TrashService,
     TrashPurgeService,
@@ -56,7 +61,18 @@ import { LeaselessWriteAccessRevocation, WriteAccessRevocation } from './write-a
   ],
   // 空间的接口（workspace）与系统管理（admin）经访问策略授权、经这个入口收回写入权；admin 转移停用者的文档；
   // 文件夹、回收站与搜索的接口在 workspace（M2-P4 设计 §3.1），数据与规则在这里；
+  // 分享的接口与写入的编排、"与我共享"在 workspace（要锁被授权人的账户行、补人名，M2-P5 设计 §3.1），授权的规则与数据在这里；
   // 到期的自动清理只给 jobs（M2-P4 设计 §3.1）
-  exports: [DocumentAccessPolicy, WriteAccessRevocation, DocumentSearchService, DocumentTransferService, FoldersService, TrashService, TrashPurgeService],
+  exports: [
+    DocumentAccessPolicy,
+    WriteAccessRevocation,
+    DocumentSearchService,
+    DocumentTransferService,
+    DocumentGrantsService,
+    SharedDocumentsService,
+    FoldersService,
+    TrashService,
+    TrashPurgeService,
+  ],
 })
 export class DocumentsModule {}

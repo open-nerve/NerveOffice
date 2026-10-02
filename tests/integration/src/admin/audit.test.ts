@@ -172,7 +172,7 @@ describe('US-M2-13 审计与日志里没有令牌与密码（审查 A5，M2-P6 �
 })
 
 describe('US-M2-13 审计里没有文档标题与文件夹名称（M2 总设计 §2.1 第 5 条，M2-P6 复核 M-1）', () => {
-  it('新建、改名、移动（空间内与跨空间）、复制、删除、恢复、永久删除、到期自动清理走一遍之后，整张审计表里没有这些标题与名称', async () => {
+  it('新建、改名、移动（空间内与跨空间）、分享（设置、调整、取消）、复制、删除、恢复、永久删除、到期自动清理走一遍之后，整张审计表里没有这些标题与名称', async () => {
     // 特征明显的标题与名称：每个都带一段独有的 ASCII 记号，审计表里出现任何一个记号都说明记进去了（中文在 JSON 文本里原样保存，
     // 记号是 ASCII，怎么转义都认得出）
     const titles = { created: '周报 TTL-CREATED-Q7', renamed: '月报 TTL-RENAMED-Q7', copied: '副本 TTL-COPIED-Q7', expiring: '旧表 TTL-EXPIRING-Q7', inFolder: '夹里 TTL-INFOLDER-Q7' }
@@ -203,6 +203,11 @@ describe('US-M2-13 审计里没有文档标题与文件夹名称（M2 总设计 
     await call(`/api/documents/${document}`, 'PATCH', { folderId: folder })
     const child = await idOf(await call('/api/folders', 'POST', { spaceId: personal, name: names.child, requestId: randomUUID() }))
     await call(`/api/folders/${child}`, 'PATCH', { parentId: folder })
+    // 分享（M2-P5）：给一位同事、调整角色、取消；明细只有被授权人与角色，不记标题
+    const colleague = await createAccount(database, { username: 'fay', displayName: '菲' })
+    await call(`/api/documents/${document}/grants/${colleague.id}`, 'PUT', { role: 'viewer' })
+    await call(`/api/documents/${document}/grants/${colleague.id}`, 'PUT', { role: 'editor' })
+    await call(`/api/documents/${document}/grants/${colleague.id}`, 'DELETE')
     // 复制到团队空间、再跨空间移回来；文件夹跨空间移到团队空间
     const copy = await idOf(await call(`/api/documents/${document}/copy`, 'POST', { spaceId: team, title: titles.copied, requestId: randomUUID() }))
     await call(`/api/documents/${copy}/move`, 'POST', { spaceId: personal })
@@ -232,6 +237,9 @@ describe('US-M2-13 审计里没有文档标题与文件夹名称（M2 总设计 
       'documents.moved',
       'folders.moved',
       'documents.copied',
+      'documents.shared',
+      'documents.share_changed',
+      'documents.share_revoked',
       'documents.deleted',
       'documents.restored',
       'folders.deleted',

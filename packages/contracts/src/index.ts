@@ -183,8 +183,9 @@ export {
   searchQuerySchema,
   searchResponseSchema,
   searchResultSchema,
+  searchSpaceSchema,
 } from './search/search.ts'
-export type { SearchQuery, SearchResponse, SearchResult } from './search/search.ts'
+export type { SearchQuery, SearchResponse, SearchResult, SearchSpace } from './search/search.ts'
 export {
   documentGrantListResponseSchema,
   documentGrantSchema,

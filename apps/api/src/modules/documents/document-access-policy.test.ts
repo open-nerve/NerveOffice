@@ -3,7 +3,7 @@ import type { SpaceFacts } from '../spaces/index.ts'
 import type { DocumentAccessPolicy, SpaceAccess } from './document-access-policy.ts'
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
-import { documentAccessIn, requireAccess, requireCreateTarget, requireDocumentContent, requireSpaceContent, requireSpaceManagement } from './document-access-policy.ts'
+import { documentAccessIn, requireAccess, requireCreateTarget, requireDocumentContent, requireSpaceContent, requireSpaceManagement, SHARING_FROZEN_MESSAGE } from './document-access-policy.ts'
 import { ALICE, ALICE_SPACE, BOB, BOB_SPACE, FakeStore, member, TEAM_SPACE } from './documents.test-support.ts'
 
 const MISSING = '0199a2c4-0000-7000-8000-0000000000ff'
@@ -70,6 +70,29 @@ describe('EffectiveAccessPolicy', () => {
     expect((await store.policy.visibleSpaces(ADMIN)).map(access => access.space.id)).toEqual([ALICE_SPACE])
     store.space(TEAM_SPACE).visibleToAll = true
     expect((await store.policy.visibleSpaces(ADMIN)).map(access => [access.space.id, access.role])).toEqual([[ALICE_SPACE, 'admin'], [TEAM_SPACE, 'viewer']])
+  })
+
+  it('一批文档（M2-P5，"与我共享"）：空间事实一条语句按一批 id 取，规则同 documentAccessOf；授权由调用方带来、不另读；看不到的不在结果里；带所有者', async () => {
+    const store = new FakeStore()
+    store.setMember(TEAM_SPACE, BOB, 'viewer')
+    const accesses = await store.policy.accessOfMany(BOB, [
+      { document: { id: 'shared-team', spaceId: TEAM_SPACE, createdBy: ALICE }, grant: 'editor' },
+      { document: { id: 'shared-personal', spaceId: ALICE_SPACE, createdBy: ALICE }, grant: 'viewer' },
+      { document: { id: 'no-grant', spaceId: ALICE_SPACE, createdBy: ALICE }, grant: undefined },
+      { document: { id: 'missing-space', spaceId: MISSING, createdBy: ALICE }, grant: 'editor' },
+    ])
+    expect([...accesses.keys()]).toEqual(['shared-team', 'shared-personal'])
+    expect(accesses.get('shared-team')).toMatchObject({ access: { spaceRole: 'viewer', contentRole: 'editor', accessVia: 'space' }, ownerUserId: null })
+    expect(accesses.get('shared-personal')).toMatchObject({ access: { spaceRole: undefined, contentRole: 'viewer', accessVia: 'grant', space: { id: ALICE_SPACE } }, ownerUserId: ALICE })
+    expect(store.spaces.accessFactsOfMany).toHaveBeenCalledTimes(1)
+    expect(store.spaces.accessFactsOfMany).toHaveBeenCalledWith(BOB, [TEAM_SPACE, ALICE_SPACE, ALICE_SPACE, MISSING])
+    expect(store.spaces.accessFactsOf).not.toHaveBeenCalled()
+    expect(store.grants.roleOf).not.toHaveBeenCalled()
+    // 归档同样降级（同一个纯函数）；空的一批不查询
+    store.space(TEAM_SPACE).status = 'archived'
+    expect((await store.policy.accessOfMany(BOB, [{ document: { id: 'shared-team', spaceId: TEAM_SPACE, createdBy: ALICE }, grant: 'editor' }])).get('shared-team')?.access.contentRole).toBe('viewer')
+    expect((await store.policy.accessOfMany(BOB, [])).size).toBe(0)
+    expect(store.spaces.accessFactsOfMany).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -148,6 +171,34 @@ describe('requireDocumentContent：只凭授权的人（M2-P5 设计 §3.4(1)）
   })
 })
 
+describe('requireDocumentContent：分享（share，M2-P5 设计 §3.2）', () => {
+  const document = { id: 'd1', spaceId: TEAM_SPACE, createdBy: ALICE }
+
+  it('只看空间角色：空间管理员与个人空间的所有者可以；编辑者与查看者 403（只有空间管理员能分享）——另有编辑授权也不行', async () => {
+    const store = new FakeStore()
+    store.setMember(TEAM_SPACE, ALICE, 'admin')
+    expect((await requireDocumentContent(store.policy, ALICE, document, ['share'])).permissions.canShare).toBe(true)
+    expect((await requireDocumentContent(store.policy, BOB, { id: 'd2', spaceId: BOB_SPACE, createdBy: BOB }, ['share'])).permissions.canShare).toBe(true)
+    for (const role of ['editor', 'viewer'] as const) {
+      store.setMember(TEAM_SPACE, BOB, role)
+      store.setGrant('d1', BOB, 'editor')
+      expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['share'])), role).toMatchObject({ code: 'PERMISSION_DENIED', message: '只有空间管理员能分享这份文档' })
+    }
+  })
+
+  it('归档的空间里冻结：空间管理员与成员都给冻结的说明（不是默认的"只能查看"）；只凭授权的人给他自己的说明，归档与否都一样', async () => {
+    const store = new FakeStore()
+    store.setMember(TEAM_SPACE, ALICE, 'admin')
+    store.setGrant('d1', BOB, 'editor')
+    expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['share']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '这份文档是单独分享给你的，不能再分享给别人' })
+    store.space(TEAM_SPACE).status = 'archived'
+    expect(await errorOf(requireDocumentContent(store.policy, ALICE, document, ['share']))).toMatchObject({ code: 'PERMISSION_DENIED', message: SHARING_FROZEN_MESSAGE })
+    expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['share']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '这份文档是单独分享给你的，不能再分享给别人' })
+    // 其他操作在归档时仍是默认的说法
+    expect(await errorOf(requireDocumentContent(store.policy, ALICE, document, ['rename']))).toMatchObject({ message: '空间已归档，只能查看' })
+  })
+})
+
 describe('documentAccessIn：刚放进一个空间的文档（新建、复制出来的、跨空间移进来的）', () => {
   it('按调用者在那个空间的访问：空间角色就是内容权限，途径是空间', async () => {
     const store = new FakeStore()
@@ -193,7 +244,7 @@ function policyWithCreate(permissions: { readonly canCreateDocuments: boolean, r
     role: 'editor',
     permissions: { ...permissions, canViewMembers: true, canManageMembers: false, canRename: false, canPurgeTrash: false },
   }
-  return { accessOf: async () => undefined, spaceAccessOf: async () => access, visibleSpaces: async () => [] }
+  return { accessOf: async () => undefined, spaceAccessOf: async () => access, visibleSpaces: async () => [], accessOfMany: async () => new Map() }
 }
 
 describe('requireCreateTarget', () => {

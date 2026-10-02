@@ -1,4 +1,4 @@
-import type { DocumentPermissions, FolderPermissions, SpacePermissions, SpaceRole, TrashPermissions } from '@nerve-office/contracts'
+import type { DocumentPermissions, FolderPermissions, GrantRole, SpacePermissions, SpaceRole, TrashPermissions } from '@nerve-office/contracts'
 import type { Principal } from '../auth/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { SpaceFacts } from '../spaces/index.ts'
@@ -43,6 +43,18 @@ export interface SpaceContentAccess extends SpaceAccess {
   readonly role: SpaceRole
 }
 
+/** 批量判断的一份文档：判断它的属性，与这个人在它上面的单独授权（由调用方从列出它的那一条语句里带来，见 accessOfMany） */
+export interface GrantedTarget {
+  readonly document: AccessTarget
+  readonly grant: GrantRole | undefined
+}
+
+/** 批量判断的结果：调用者对这份文档的访问，与所在空间的所有者（个人空间按所有者的人名呈现；团队空间为空） */
+export interface LocatedAccess {
+  readonly access: DocumentAccess
+  readonly ownerUserId: string | null
+}
+
 /**
  * 访问策略：有效权限的唯一入口（M2 总设计 §6.1，M2-P2 设计 §3.4），目标是文档或空间。
  * 服务只经它判断权限，不自己拼权限条件；在事务里判断时传入事务，查询走事务的连接，不再从连接池另取一个。
@@ -59,6 +71,13 @@ export abstract class DocumentAccessPolicy {
 
   /** 我能看到的空间（有内容权限的）：导航与"可访问文档"。个人空间在前，团队空间按名称排序 */
   abstract visibleSpaces(actor: Actor): Promise<SpaceContentAccess[]>
+
+  /**
+   * 一批文档上的访问（M2-P5 设计 §3.4(4)，"与我共享"）：空间事实按一批 id 取（一条语句），规则仍是 documentAccessOf——
+   * 服务不另算。单独授权由调用方从列出这批文档的那一条语句里带来（"与我共享"的条件就是授权那一半，角色与行出自同一个快照；
+   * 再另读一次，两次读之间并发的取消分享会让同一页的结果自相矛盾）。按文档 id 给出；看不到的（空间不存在、两样都没有）不在结果里
+   */
+  abstract accessOfMany(userId: string, documents: readonly GrantedTarget[]): Promise<ReadonlyMap<string, LocatedAccess>>
 }
 
 /**
@@ -104,6 +123,17 @@ export class EffectiveAccessPolicy extends DocumentAccessPolicy {
       return role === undefined ? [] : [{ space, role, permissions: spacePermissionsOf(space, role, actor.systemAdmin) }]
     })
   }
+
+  async accessOfMany(userId: string, documents: readonly GrantedTarget[]): Promise<ReadonlyMap<string, LocatedAccess>> {
+    if (documents.length === 0)
+      return new Map()
+    const facts = await this.spaces.accessFactsOfMany(userId, documents.map(({ document }) => document.spaceId))
+    return new Map(documents.flatMap(({ document, grant }) => {
+      const space = facts.get(document.spaceId)
+      const access = space === undefined ? undefined : documentAccessOf(space, grant)
+      return space === undefined || access === undefined ? [] : [[document.id, { access, ownerUserId: space.ownerUserId }] as const]
+    }))
+  }
 }
 
 /** 不存在的对象也照样判断一次权限：用一个不存在的空间。两条路径做同样的查询，响应时间不暴露对象是否存在（M1-P3 审查 A4）。 */
@@ -132,9 +162,18 @@ export async function requireAccess<T extends AccessTarget>(
   return { document, access }
 }
 
-/** 看得到却不能做时的说明：归档的空间另外说明原因。 */
-function denied(space: SpaceFacts, message: string): AppError {
-  return new AppError('PERMISSION_DENIED', space.status === 'archived' ? '空间已归档，只能查看' : message)
+/** 归档的空间里"不能做"的默认说明：归档时所有人至多是查看者 */
+const ARCHIVED_MESSAGE = '空间已归档，只能查看'
+
+/**
+ * 归档的空间里分享冻结（需求方 2026-10-01 确认，M2-P5 设计 §3.2）：授权列表的查看、设置、调整、取消都不能做，要先由系统管理员恢复空间。
+ * 与默认的"只能查看"不同：已有的授权照常生效（一律降为查看者），只是不能再改
+ */
+export const SHARING_FROZEN_MESSAGE = '空间已归档，恢复之后才能调整分享'
+
+/** 看得到却不能做时的说明：归档的空间另外说明原因（有的操作有自己的说法，见 DocumentOperationRule.archivedMessage）。 */
+function denied(space: SpaceFacts, message: string, archivedMessage = ARCHIVED_MESSAGE): AppError {
+  return new AppError('PERMISSION_DENIED', space.status === 'archived' ? archivedMessage : message)
 }
 
 /** 能访问的文档、调用者在它上面的权限与所在空间的访问。 */
@@ -142,8 +181,8 @@ export interface AccessibleDocument<T extends AccessTarget> extends Accessible<T
   readonly permissions: DocumentPermissions
 }
 
-/** 文档上要权限的操作（只看能不能读时用 requireAccess）；edit 是保存内容。 */
-export type DocumentOperation = 'edit' | 'rename' | 'moveWithinSpace' | 'moveAcrossSpaces' | 'copy' | 'delete'
+/** 文档上要权限的操作（只看能不能读时用 requireAccess）；edit 是保存内容，share 是查看与改动这份文档的单独授权（M2-P5）。 */
+export type DocumentOperation = 'edit' | 'rename' | 'moveWithinSpace' | 'moveAcrossSpaces' | 'copy' | 'delete' | 'share'
 
 /** 一项操作看的权限位与不能做时的说明 */
 interface DocumentOperationRule {
@@ -154,6 +193,8 @@ interface DocumentOperationRule {
    * 原来的说明对他不成立（例如"编辑者只能删除自己创建的文档"：他可能正是创建人，只是已经不在那个空间里）
    */
   readonly grantOnlyMessage?: string
+  /** 归档的空间里不能做时的说明；没有时是默认的"空间已归档，只能查看"（见 denied） */
+  readonly archivedMessage?: string
 }
 
 const DOCUMENT_CONTENT: Readonly<Record<DocumentOperation, DocumentOperationRule>> = {
@@ -166,6 +207,13 @@ const DOCUMENT_CONTENT: Readonly<Record<DocumentOperation, DocumentOperationRule
   moveWithinSpace: { permission: 'canMoveWithinSpace', message: '没有移动这份文档的权限', grantOnlyMessage: '这份文档是单独分享给你的，不能移动' },
   moveAcrossSpaces: { permission: 'canMoveAcrossSpaces', message: '只有空间管理员能把文档移出这个空间', grantOnlyMessage: '这份文档是单独分享给你的，不能移动' },
   delete: { permission: 'canDelete', message: '编辑者只能删除自己创建的文档', grantOnlyMessage: '这份文档是单独分享给你的，不能删除' },
+  // 分享（M2-P5 设计 §3.2）：结构性的操作，只看空间角色——空间管理员或个人空间的所有者；归档的空间里冻结，给冻结的说明
+  share: {
+    permission: 'canShare',
+    message: '只有空间管理员能分享这份文档',
+    grantOnlyMessage: '这份文档是单独分享给你的，不能再分享给别人',
+    archivedMessage: SHARING_FROZEN_MESSAGE,
+  },
 }
 
 /**
@@ -193,12 +241,12 @@ export async function requireDocumentContent<T extends AccessTarget>(
  */
 export function requireDocumentOperations(accessible: AccessibleDocument<AccessTarget>, operations: readonly DocumentOperation[]): void {
   for (const operation of operations) {
-    const { permission, message, grantOnlyMessage } = DOCUMENT_CONTENT[operation]
+    const { permission, message, grantOnlyMessage, archivedMessage } = DOCUMENT_CONTENT[operation]
     if (accessible.permissions[permission])
       continue
     if (grantOnlyMessage !== undefined && accessible.access.accessVia === 'grant')
       throw new AppError('PERMISSION_DENIED', grantOnlyMessage)
-    throw denied(accessible.access.space, message)
+    throw denied(accessible.access.space, message, archivedMessage)
   }
 }
 
