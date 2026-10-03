@@ -171,6 +171,13 @@ export const messages = {
     /** 同上，随后的刷新也失败了、或者到了时限还没回来（M2-P6 复核第三批 G-a）：页面上的可能还是之前的状态，不能说"已刷新" */
     outcomeUnknownNotRefreshed: (reason: string) => `没能确认是否已经完成（${reason}）。可能已经生效，只是页面没能刷新，显示的可能还是之前的状态：请稍后再看；确认还没有生效的话，可以再试一次。`,
     listRefreshed,
+    /**
+     * 写操作成功之后的刷新到了时限还没回来（Codex 对抗评审 CX4，shared/api/write-outcome.ts 的 refreshAfterSuccess）：操作已经完成，
+     * 列表还在后台刷新，好了随之更新；有了结果之后不再显示（shared/ui/still-refreshing.tsx）。list 是刷新的是什么（默认"列表"）
+     */
+    stillRefreshing: (list = '列表') => `${list}还在刷新，显示的可能还是之前的，刷新好了会自动更新`,
+    /** 列表留着之前的数据、重新请求却失败了（Codex 对抗评审 CX5，shared/ui/refresh-problem.tsx）：明说没能刷新，旧的内容照常显示 */
+    refreshFailed: (list = '列表') => `${list}没能刷新，显示的还是之前的内容`,
   },
   errors: {
     byCode: errorText,
@@ -250,6 +257,8 @@ export const messages = {
     navLoading: '正在加载空间列表…',
     loading: '正在加载空间…',
     loadFailed: '空间列表加载失败',
+    /** 导航留着之前的空间列表、刷新却失败了（Codex 对抗评审 CX5）："空间列表没能刷新，显示的还是之前的内容" */
+    listName: '空间列表',
     noTeamSpaces: '还没有加入团队空间',
     archived: '已归档',
     archivedName: (name: string) => `${name}（已归档）`,
@@ -347,6 +356,9 @@ export const messages = {
     copying: '正在复制…',
     sameLocation: '它已经在这里了',
     // 结果与说明
+    // 改名与新建文件夹平时不另外说明（列表随即刷新，看得见）；成功之后的刷新到了时限还没回来时才说，接着说列表还在刷新（Codex 对抗评审 CX4）
+    renamed: (from: string, to: string) => `已把「${from}」改名为「${to}」`,
+    folderCreated: (name: string) => `已新建文件夹「${name}」`,
     moved: (name: string, location: string) => `已把「${name}」移动到${location}`,
     copied: (title: string) => `已复制出「${title}」`,
     openCopy: '打开副本',

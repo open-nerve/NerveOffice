@@ -1,48 +1,64 @@
 import type { SharedDocument } from '@nerve-office/contracts'
-import { documentPagePath } from '@nerve-office/contracts'
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
-import { FileSpreadsheet } from 'lucide-react'
+import type { RefObject } from 'react'
+import type { GoneTexts } from '../documents/index.ts'
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
 import { describeError } from '../../shared/api/index.ts'
+import { SHARED_LIST_QUERY_KEY } from '../../shared/api/shared-list-key.ts'
+import { refreshWithin } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { sharedWithMeMessages } from '../../shared/i18n/zh-cn/shared-with-me.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
+import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
+import { useFocusRescue } from '../../shared/lib/use-focus-rescue.ts'
 import { Alert, AlertDescription, Button, Skeleton } from '../../shared/ui/index.ts'
+import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { SpaceLabel } from '../../shared/ui/space-label.tsx'
 import { sessionQueryOptions } from '../auth/index.ts'
+import { DocumentRow, OrganizeNoticeBar, useOrganizePanels, useOrganizeRefreshChecked } from '../documents/index.ts'
+import { SPACES_QUERY_KEY, spacesQueryOptions } from '../spaces/index.ts'
 import { sharedListQueryOptions } from './shared-api.ts'
 
 const text = sharedWithMeMessages
 
+/** 行内操作得到 404 时的说法：在这一页，它还可能是分享被取消了 */
+const SHARED_GONE_TEXTS: GoneTexts = { gone: text.gone, targetOrItemGone: text.targetOrItemGone }
+
 /**
- * 一条：标题是打开编辑器页的链接（整页打开，另一个入口）；下面是所属的空间（团队空间的名称；个人空间按所有者的人名呈现）、
- * 我能不能编辑与更新时间。不显示所在位置：只凭授权的人看不到空间的目录结构（00 号计划书 §5.5），契约里也不给文件夹
+ * 一条的标题下面：所属的空间（团队空间的名称；个人空间按所有者的人名呈现）、我能不能编辑与更新时间。
+ * 不显示所在位置：只凭授权的人看不到空间的目录结构（00 号计划书 §5.5），契约里也不给文件夹
  */
-function SharedItem({ document, viewerId }: { readonly document: SharedDocument, readonly viewerId: string | undefined }) {
+function SharedDetails({ document, viewerId }: { readonly document: SharedDocument, readonly viewerId: string | undefined }) {
   return (
-    <li>
-      <a href={documentPagePath(document.id)} className="flex items-center gap-3 px-4 py-3 outline-none hover:bg-muted/50 focus-visible:ring-3 focus-visible:ring-ring/50">
-        <FileSpreadsheet className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
-        <span className="flex min-w-0 flex-col">
-          <span className="truncate font-medium">{document.title}</span>
-          <span className="text-xs text-muted-foreground">
-            <SpaceLabel space={document.space} viewerId={viewerId} />
-            {' · '}
-            {document.contentRole === 'viewer' ? text.readOnly : text.canEdit}
-            {' · '}
-            <time dateTime={document.updatedAt}>{messages.documents.updatedAt(formatDateTime(document.updatedAt))}</time>
-          </span>
-        </span>
-      </a>
-    </li>
+    <>
+      <SpaceLabel space={document.space} viewerId={viewerId} />
+      {' · '}
+      {document.contentRole === 'viewer' ? text.readOnly : text.canEdit}
+      {' · '}
+      <time dateTime={document.updatedAt}>{messages.documents.updatedAt(formatDateTime(document.updatedAt))}</time>
+    </>
   )
 }
 
-/** 列表：加载中、加载失败（可以重试）、一份也没有、逐页加载 */
-function SharedList() {
+/**
+ * 列表：加载中、加载失败（可以重试）、一份也没有、逐页加载；留着之前的列表、刷新却失败了时明说、给出重试（Codex 对抗评审 CX5）。
+ * 每一条与空间的文档列表同一个"操作"（features/documents 的 DocumentRow，Codex 对抗评审 CX3）：展开时取这份文档的详情，
+ * 按服务端给的权限只列出能做的——只凭单独授权时，编辑者能改名，能读就能复制，没有移动、删除与分享。
+ * 复制的目标是自己能新建的空间（与空间页同一个候选），源空间不在其中，不显示它的目录结构；改名之后连同这一页一起刷新，
+ * 复制之后刷新目标空间的列表。说明、焦点与刷新的做法与空间页相同（organize-panels.tsx）
+ */
+function SharedList({ titleRef }: { readonly titleRef: RefObject<HTMLHeadingElement | null> }) {
+  const queryClient = useQueryClient()
   const query = useInfiniteQuery(sharedListQueryOptions())
   const session = useQuery(sessionQueryOptions())
+  // 导航已经请求过"我能看到的空间"：复制的目标候选直接用它（服务端给的 canCreateDocuments），共用同一份缓存；
+  // refetchOnMount 关掉的理由与空间页相同（features/spaces/space-page.tsx）
+  const spaces = useQuery({ ...spacesQueryOptions(), refetchOnMount: false })
+  const visibleSpaces = spaces.data?.items ?? []
+  const targetSpaces = visibleSpaces.filter(space => space.permissions.canCreateDocuments)
+  const panels = useOrganizePanels(titleRef)
+  const refreshChecked = useOrganizeRefreshChecked()
   const documents = query.data?.pages.flatMap(page => page.items) ?? []
   // 加载更多时已有的条数：新的一页到了之后，焦点移到第一条新内容。按钮在最后一页之后随之消失，焦点不能留在它身上
   // （文档列表与搜索结果的做法，M1 审查 B13；M2-P6 复核 S3 的 P13）
@@ -55,6 +71,15 @@ function SharedList() {
     focusFromRef.current = undefined
     listRef.current?.children.item(from)?.querySelector('a')?.focus()
   }, [documents.length])
+
+  /**
+   * 行内的操作按访问权限被拒绝（403、404：例如分享刚被取消、文档刚被删除）：这一页显示的已经过时，重新请求"与我共享"与文档详情；
+   * 兑现为列表刷新好了没有（最多等 10 秒，说明据此说"列表已刷新"还是"没能刷新"）。导航（复制的目标候选）照常刷新、不计入
+   */
+  async function refreshAfterDenied(): Promise<boolean> {
+    void refreshQueries(queryClient, [SPACES_QUERY_KEY], { throwOnError: false })
+    return refreshWithin(async () => refreshChecked([], [SHARED_LIST_QUERY_KEY]))
+  }
 
   function loadMore(): void {
     if (query.isFetchingNextPage)
@@ -86,14 +111,37 @@ function SharedList() {
       </Alert>
     )
   }
-  if (documents.length === 0)
-    return <p className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">{text.empty}</p>
   return (
     <>
-      <ul ref={listRef} aria-label={text.listLabel} className="divide-y rounded-lg border">
-        {documents.map(document => <SharedItem key={document.id} document={document} viewerId={session.data?.user.id} />)}
-      </ul>
-      {query.isError && (
+      {/* 列表上方的说明（做完了、没能完成）：那一行常常随之消失（例如分享被取消之后），说明不挂在行里 */}
+      {panels.notice !== undefined && <OrganizeNoticeBar notice={panels.notice} onClose={panels.closeNotice} />}
+      <RefreshProblem query={query} list={text.listName} />
+      {documents.length === 0
+        ? <p className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">{text.empty}</p>
+        : (
+            <ul ref={listRef} aria-label={text.listLabel} className="divide-y rounded-lg border">
+              {documents.map(document => (
+                <DocumentRow
+                  key={document.id}
+                  documentId={document.id}
+                  title={document.title}
+                  details={<SharedDetails document={document} viewerId={session.data?.user.id} />}
+                  spaceId={document.space.id}
+                  targetSpaces={targetSpaces}
+                  open={panels.open?.kind === 'document' && panels.open.id === document.id}
+                  openTriggerRef={panels.openTriggerRef}
+                  onToggle={() => panels.toggle('document', document.id)}
+                  onDone={panels.finish}
+                  onDenied={refreshAfterDenied}
+                  listedIn={SHARED_LIST_QUERY_KEY}
+                  // 看不到它所在空间的人（只凭单独授权）进不去那个空间的回收站：说明里不给"打开回收站"
+                  trashReachable={visibleSpaces.some(space => space.id === document.space.id)}
+                  goneTexts={SHARED_GONE_TEXTS}
+                />
+              ))}
+            </ul>
+          )}
+      {query.isFetchNextPageError && (
         <Alert variant="destructive">
           <AlertDescription>{describeError(query.error).message}</AlertDescription>
         </Alert>
@@ -110,15 +158,20 @@ function SharedList() {
 
 /**
  * "与我共享"（M2-P5 设计 §3.5，US-M2-10）：别人单独分享给我的全部文档（不论我在那个空间里有没有角色），按更新时间从新到旧。
- * 每条显示文档与所属的空间，不显示所在位置。路由级按需加载，不进平台页面的首屏
+ * 每条显示文档与所属的空间，不显示所在位置；每条有"操作"（复制、改名，按权限，Codex 对抗评审 CX3，US-M2-08）。
+ * 页面里有焦点的按钮、行随刷新消失时（例如分享刚被取消），焦点交给页面的标题（M2-P6 复核 S3，shared/lib/use-focus-rescue.ts）。
+ * 路由级按需加载，不进平台页面的首屏
  */
 export function SharedWithMePage() {
   useDocumentTitle(messages.spaces.sharedWithMe)
+  const titleRef = useRef<HTMLHeadingElement>(null)
+  const rescueFocus = useFocusRescue(titleRef)
   return (
-    <section className="flex flex-col gap-4" aria-labelledby="shared-title">
-      <h1 id="shared-title" className="text-xl font-semibold">{messages.spaces.sharedWithMe}</h1>
+    <section ref={rescueFocus} className="flex flex-col gap-4" aria-labelledby="shared-title">
+      {/* tabIndex -1：只能由程序聚焦（那一行随操作或刷新消失之后），Tab 键不经过它 */}
+      <h1 ref={titleRef} id="shared-title" tabIndex={-1} className="text-xl font-semibold outline-none focus-visible:ring-3 focus-visible:ring-ring/50">{messages.spaces.sharedWithMe}</h1>
       <p className="text-sm text-muted-foreground">{text.description}</p>
-      <SharedList />
+      <SharedList titleRef={titleRef} />
     </section>
   )
 }

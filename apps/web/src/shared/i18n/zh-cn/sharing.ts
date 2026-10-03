@@ -18,6 +18,8 @@ export const sharingMessages = {
   listHeading: '已分享给',
   loading: '正在加载分享的情况…',
   loadFailed: '分享的情况没能加载',
+  /** 留着之前的列表、刷新却失败了（Codex 对抗评审 CX5）："分享的情况没能刷新，显示的还是之前的内容" */
+  listName: '分享的情况',
   empty: '还没有单独分享给任何人。',
   disabled: '已停用',
   you: '（我）',

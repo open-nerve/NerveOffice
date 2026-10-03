@@ -1,5 +1,6 @@
 import type { SpaceView } from '@nerve-office/contracts'
 import type { ReactNode } from 'react'
+import type { BackgroundRefresh } from '../../shared/api/write-outcome.ts'
 import type { Destination } from './destination-form.tsx'
 import { useMutation } from '@tanstack/react-query'
 import { useEffect, useEffectEvent, useId, useRef, useState } from 'react'
@@ -21,6 +22,11 @@ export interface OrganizeNotice {
   readonly action?: ReactNode
   /** 说明的是没能完成（被拒绝、结果未知）：醒目的样式 */
   readonly problem?: boolean
+  /**
+   * 成功之后的刷新到了时限还在后台（Codex 对抗评审 CX4）：说明接着说列表还在刷新，刷新有了结果之后不再说
+   * （organize-notice-bar.tsx）
+   */
+  readonly refreshing?: BackgroundRefresh
 }
 
 /**
@@ -37,12 +43,16 @@ export interface OrganizePermissions {
   readonly canDelete: boolean
 }
 
+/**
+ * 一行上的操作。成功之后各自刷新相关的列表（organize-refresh.ts 的 useOrganizeRefresh，最多等到时限），兑现为到了时限还在后台的刷新
+ * （没有时为 undefined）：说明据此接着说列表还在刷新（Codex 对抗评审 CX4）
+ */
 export interface ItemOperations {
-  readonly rename: (name: string) => Promise<unknown>
-  readonly move: (destination: Destination) => Promise<unknown>
-  /** 只有文档能复制：副本的标题与"打开副本"由它给出 */
+  readonly rename: (name: string) => Promise<BackgroundRefresh | undefined>
+  readonly move: (destination: Destination) => Promise<BackgroundRefresh | undefined>
+  /** 只有文档能复制：副本的标题与"打开副本"由它给出（连同还在后台的刷新） */
   readonly copy?: (destination: Destination) => Promise<OrganizeNotice>
-  readonly remove: () => Promise<void>
+  readonly remove: () => Promise<BackgroundRefresh | undefined>
   /**
    * 结果未知之后重新请求相关的列表：它所在的空间，加上这次的目标位置所在的空间（移动、复制）。有一个没能刷新就拒绝
    * （organize-refresh.ts 的 useOrganizeRefreshChecked）：面板经共用的做法在时限之内等它，说明据此说"已刷新"还是"没能刷新"（第四批）
@@ -82,7 +92,25 @@ interface ItemActionsProps {
    * 焦点交给面板里的"取消"
    */
   readonly shareEntry?: (fallbackFocus: () => void) => ReactNode
+  /**
+   * 说明里给不给"打开回收站"（默认给）："与我共享"里的一行，看不到它所在空间的人（只凭单独授权）进不去那个空间的回收站，
+   * 说它已经不在了的时候不给这个入口（Codex 对抗评审 CX3）
+   */
+  readonly trashReachable?: boolean
+  /** 它（或者目标位置）已经不在了的说法：默认是空间里的说法；"与我共享"另给（还可能是分享被取消了，CX3） */
+  readonly goneTexts?: GoneTexts
 }
+
+/** 按访问权限被拒绝、得到 404 时的说法；refreshed 是列表刷新好了没有（第五批 G3） */
+export interface GoneTexts {
+  /** 它已经不在了 */
+  readonly gone: (name: string, refreshed: boolean) => string
+  /** 移动、复制得到 404：它，或者目标位置，已经不在了 */
+  readonly targetOrItemGone: (name: string, refreshed: boolean) => string
+}
+
+/** 空间里的说法：它已经删除，或者被别人移走了 */
+const SPACE_GONE_TEXTS: GoneTexts = { gone: text.gone, targetOrItemGone: text.targetOrItemGone }
 
 type Operation = 'rename' | 'move' | 'copy' | 'delete'
 
@@ -163,7 +191,7 @@ function RenameForm({ panelId, name, validate, pending, error, onSubmit, onCance
  * 已经打开的改名、移动、复制表单，刷新之后这一种操作不能做了（例如别处的操作被拒绝、页面按新的权限重新请求，空间刚被归档、
  * 自己刚被降为查看者）：表单随之收起，回到按新权限列出的操作（M2-P6 复核第二批 G-6；文件夹一个操作都做不了时整个面板收起）。
  */
-export function ItemActions({ panelId, name, validateName, permissions, loading, error, onRetry, current, excludeFolderId, targetSpaces, operations, onDone, onDenied, onClose, shareEntry }: ItemActionsProps) {
+export function ItemActions({ panelId, name, validateName, permissions, loading, error, onRetry, current, excludeFolderId, targetSpaces, operations, onDone, onDenied, onClose, shareEntry, trashReachable = true, goneTexts = SPACE_GONE_TEXTS }: ItemActionsProps) {
   const [chosen, setChosen] = useState<Exclude<Operation, 'delete'>>()
   /**
    * 上一次失败之后列表刷新好了没有：留在面板里的说明（改名、复制）据此说"已刷新"还是"没能刷新"（第四批）；
@@ -174,7 +202,7 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
   const cancelRef = useRef<HTMLButtonElement>(null)
   // 移动/复制提交时目标位置的可读名称，例如"市场部 / 方案"：做完之后在说明里回述
   const targetLabelRef = useRef('')
-  const trashLink = <Link to={spaceTrashPath(current.spaceId)} className={buttonVariants({ variant: 'outline', size: 'sm' })}>{text.goToTrash}</Link>
+  const trashLink = trashReachable ? <Link to={spaceTrashPath(current.spaceId)} className={buttonVariants({ variant: 'outline', size: 'sm' })}>{text.goToTrash}</Link> : undefined
 
   /**
    * 按访问权限被拒绝时的说明：404 说它（或者目标位置）已经不在了，列表刷新好了没有按 listRefreshed 说（第五批 G3）；
@@ -185,8 +213,8 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
       return { message: text.denied(name, describeError(failure).message), problem: true }
     // 移动、复制的 404 也可能是目标文件夹没了：两种都说
     if (operation === 'move' || operation === 'copy')
-      return { message: text.targetOrItemGone(name, listRefreshed), problem: true }
-    return { message: text.gone(name, listRefreshed), action: trashLink, problem: true }
+      return { message: goneTexts.targetOrItemGone(name, listRefreshed), problem: true }
+    return { message: goneTexts.gone(name, listRefreshed), action: trashLink, problem: true }
   }
 
   const mutation = useMutation({
@@ -215,7 +243,7 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
   const gone = !loading && permissions === undefined && isMissingResource(error)
   const reportGone = useEffectEvent(async () => {
     const listRefreshed = await onDenied()
-    onDone({ message: text.gone(name, listRefreshed), action: trashLink, problem: true })
+    onDone({ message: goneTexts.gone(name, listRefreshed), action: trashLink, problem: true })
   })
   useEffect(() => {
     if (gone)
@@ -291,8 +319,9 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
         onSubmit={value => run({
           operation: 'rename',
           run: async () => {
-            await operations.rename(value)
-            return undefined
+            // 平时不另外说明（列表随即刷新，焦点回到这一行的"操作"）；刷新到了时限还在后台时说明改好了、列表还在刷新（CX4）
+            const refreshing = await operations.rename(value)
+            return refreshing === undefined ? undefined : { message: text.renamed(name, value), refreshing }
           },
         })}
         onCancel={onClose}
@@ -318,8 +347,8 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
             run: async () => {
               if (shown === 'copy' && copy !== undefined)
                 return copy(destination)
-              await operations.move(destination)
-              return { message: text.moved(name, targetLabelRef.current) }
+              const refreshing = await operations.move(destination)
+              return { message: text.moved(name, targetLabelRef.current), refreshing }
             },
           })
         }}
@@ -343,8 +372,8 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
           onClick={() => run({
             operation: 'delete',
             run: async () => {
-              await operations.remove()
-              return { message: text.deleted(name), action: trashLink }
+              const refreshing = await operations.remove()
+              return { message: text.deleted(name), action: trashLink, refreshing }
             },
           })}
         >

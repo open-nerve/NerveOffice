@@ -1,12 +1,14 @@
 import type { SpaceMember, SpaceMemberListResponse, SpaceRole, UserSummary } from '@nerve-office/contracts'
+import type { QueryClient } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
+import type { BackgroundRefresh } from '../../shared/api/write-outcome.ts'
 import type { PendingConfirmation } from '../confirmation/index.ts'
 import { SPACE_ROLES } from '@nerve-office/contracts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { ApiError, describeError, isMissingResource, isPermissionDeniedError, isUnknownOutcome } from '../../shared/api/index.ts'
-import { writeFailureText } from '../../shared/api/write-outcome.ts'
+import { refreshAfterSuccess, writeFailureText } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { membersMessages } from '../../shared/i18n/zh-cn/members.ts'
 import { ADMIN_PATHS } from '../../shared/lib/admin-paths.ts'
@@ -16,7 +18,9 @@ import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { useFocusRescue } from '../../shared/lib/use-focus-rescue.ts'
 import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { Alert, AlertDescription, Badge, Button, buttonVariants, Label, NativeSelect, PersonName, Phrase, Skeleton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../shared/ui/index.ts'
+import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { StatusRegion } from '../../shared/ui/status-region.tsx'
+import { StillRefreshing } from '../../shared/ui/still-refreshing.tsx'
 import { sessionQueryOptions } from '../auth/index.ts'
 import { ColleaguePicker } from '../colleagues/index.ts'
 import { ConfirmDialog } from '../confirmation/index.ts'
@@ -26,6 +30,29 @@ const text = membersMessages
 
 /** 角色的选项：从高到低 */
 const ROLE_OPTIONS = [...SPACE_ROLES].reverse()
+
+/**
+ * 写操作成功之后：成员列表、导航与空间页（都在空间的查询下面）一起刷新，最多等到时限（Codex 对抗评审 CX4）。兑现为到了时限还在后台的刷新
+ * （说明里说成员列表还在刷新），刷新已经有了结果时为 undefined；刷新失败不算这个操作失败，成员表自己说明没能刷新（CX5）
+ */
+async function refreshAfterChange(queryClient: QueryClient): Promise<BackgroundRefresh | undefined> {
+  return refreshAfterSuccess(async () => refreshQueries(queryClient, [SPACES_QUERY_KEY]))
+}
+
+/**
+ * 按确定的写入结果直接改成员表的缓存（Codex 对抗评审 CX4）：刷新一直不回来时，成员表也已经是写入之后的样子；刷新回来之后以服务端为准。
+ * change 处理成员的数组
+ */
+function updateMembers(queryClient: QueryClient, spaceId: string, change: (items: readonly SpaceMember[]) => SpaceMember[]): void {
+  queryClient.setQueryData(membersQueryOptions(spaceId).queryKey, list => list === undefined ? undefined : { ...list, items: change(list.items) })
+}
+
+/** 换上这个人的那一行（添加时还没有就加在最后） */
+function putMember(queryClient: QueryClient, spaceId: string, member: SpaceMember): void {
+  updateMembers(queryClient, spaceId, items => items.some(item => item.user.id === member.user.id)
+    ? items.map(item => (item.user.id === member.user.id ? member : item))
+    : [...items, member])
+}
 
 /** 要添加的人已经是成员了 */
 function isAlreadyMember(error: unknown): boolean {
@@ -75,10 +102,13 @@ function AddMemberForm({ spaceId, members }: { readonly spaceId: string, readonl
 
   const mutation = useMutation({
     mutationFn: async (userId: string) => addMember(spaceId, { userId, role }),
-    onSuccess: async (_member, userId) => {
+    onSuccess: async (member, userId) => {
       startOver()
       setUnsureUserId(current => (current === userId ? undefined : current))
-      await refreshQueries(queryClient, [SPACES_QUERY_KEY], { throwOnError: false })
+      // 按确定的写入结果先把这个人放进成员表，再刷新（最多等到时限，Codex 对抗评审 CX4）：刷新一直不回来时按钮照常结束"正在添加…"，
+      // 表里已经有他
+      putMember(queryClient, spaceId, member)
+      await refreshAfterChange(queryClient)
     },
     onError: async (error, userId) => {
       if (isUnknownOutcome(error))
@@ -140,8 +170,8 @@ interface MemberRowProps {
  * - 保存之后立即显示目标角色（与点击同一次渲染，不等请求的状态）；进行中这一行标为忙碌、说明"正在保存…"，
  *   这期间这一行不再提交，选择框仍显示正在保存的角色；
  * - 保存成功时先用响应替换缓存里的这一行，再刷新成员列表：刷新失败时 TanStack Query 保留上一次的数据，
- *   这一行也已经是保存之后的角色，不显示旧的（复验）；
- * - 成员列表刷新完成之后才结束，选择框不先弹回旧的角色；
+ *   这一行也已经是保存之后的角色，不显示旧的（复验），成员表上方说明没能刷新（Codex 对抗评审 CX5）；
+ * - 成员列表刷新完成之后才结束，选择框不先弹回旧的角色；刷新最多等到时限（CX4），一直不回来时这一行照样结束忙碌；
  * - 失败时恢复原来的角色（失败之后也刷新，显示服务端的实际状态），原因就在这一行说明。结果未知时说明可能已经生效（第二批 G-2）：
  *   这时的刷新最多等 10 秒（第三批 S-a），这一行不一直停在"正在保存…"；刷新失败或者超时，说明页面没能刷新（第三批 G-a），
  *   超时之后刷新才回来的，说明随后改过来（第五批 G4）。
@@ -159,16 +189,12 @@ function MemberRow({ spaceId, member, self, canManage, onDemoteSelf, onRemove }:
   const { refreshed, refreshAfterFailure } = useOutcomeRefresh()
   const change = useMutation({
     mutationFn: async (role: SpaceRole) => changeMemberRole(spaceId, member.user.id, role),
-    onSuccess: (saved) => {
-      queryClient.setQueryData(membersQueryOptions(spaceId).queryKey, list => list === undefined
-        ? undefined
-        : { ...list, items: list.items.map(item => (item.user.id === member.user.id ? saved : item)) })
-    },
+    onSuccess: saved => putMember(queryClient, spaceId, saved),
     onSettled: async (_saved, error) => {
       if (error !== null && isUnknownOutcome(error))
         await refreshAfterFailure(error, async () => refreshQueries(queryClient, [SPACES_QUERY_KEY]))
       else
-        await refreshQueries(queryClient, [SPACES_QUERY_KEY], { throwOnError: false })
+        await refreshAfterChange(queryClient)
       setSaving(undefined)
     },
   })
@@ -253,14 +279,24 @@ function MembersTable({ spaceId, list, selfId, focusTitle }: MembersTableProps) 
   /** 表格上方的说明（要移出的人已经不在成员里了）；下一次打开确认的弹窗时清掉 */
   const [notice, setNotice] = useState<ReactNode>()
 
-  /** 成功之后刷新（成员列表、导航与空间页）：刷新失败时列表自己显示加载失败 */
-  async function refresh(): Promise<void> {
-    await refreshQueries(queryClient, [SPACES_QUERY_KEY], { throwOnError: false })
-  }
-
   /** 确认的弹窗在结果未知之后的刷新：刷新失败时拒绝，弹窗据此说明页面没能刷新（M2-P6 复核第三批 G-a） */
   async function refreshAfterUnknown(): Promise<void> {
     await refreshQueries(queryClient, [SPACES_QUERY_KEY])
+  }
+
+  /**
+   * 成功之后交回的说明（等确认的弹窗关掉之后才写，M2-P5 复验 S1）：刷新已经有了结果时不另外说明（成员表看得见）；
+   * 到了时限还在后台时说明做完了什么，接着说成员列表还在刷新（Codex 对抗评审 CX4）
+   */
+  function afterChange(done: ReactNode, refreshing: BackgroundRefresh | undefined): (() => void) | undefined {
+    if (refreshing === undefined)
+      return undefined
+    return () => setNotice(
+      <>
+        {done}
+        <StillRefreshing refresh={refreshing} list={text.listLabel} />
+      </>,
+    )
   }
 
   function confirm(confirmation: PendingConfirmation): void {
@@ -275,8 +311,9 @@ function MembersTable({ spaceId, list, selfId, focusTitle }: MembersTableProps) 
       confirmLabel: text.change,
       destructive: true,
       run: async () => {
-        await changeMemberRole(spaceId, member.user.id, role)
-        await refresh()
+        // 按确定的写入结果先改好这一行，再刷新（最多等到时限，CX4）；能不能管理由服务端在刷新之后的列表里给出
+        putMember(queryClient, spaceId, await changeMemberRole(spaceId, member.user.id, role))
+        return afterChange(text.demotedSelf(role), await refreshAfterChange(queryClient))
       },
       refresh: refreshAfterUnknown,
       returnFocus: focusTitle,
@@ -300,22 +337,23 @@ function MembersTable({ spaceId, list, selfId, focusTitle }: MembersTableProps) 
             throw error
           // 已经不是成员了（可能被别人移出，404）：先刷新成员列表，这一行随之消失（审查 B12）。列表取到了就关闭弹窗，在表格上方说明：
           // 弹窗留着的话，再点确认只会原样重发（复验）。列表取不到时照旧在弹窗里说明原因：空间本身看不到了，成员页随之显示
-          // "空间不存在"（B1），不另外说明；刷新失败时列表还是旧的，这一行也还在。
+          // "空间不存在"（B1），不另外说明；刷新失败、或者到了时限还没回来（Codex 对抗评审 CX4）时列表还是旧的，这一行也还在。
           // 说明交给确认的弹窗，等它关掉、页面不再被标为 aria-hidden、焦点交还之后才写进状态区（M2-P5 复验 S1）
-          await refresh()
-          if (queryClient.getQueryState(membersQueryOptions(spaceId).queryKey)?.status !== 'success')
+          const refreshing = await refreshAfterChange(queryClient)
+          if (refreshing !== undefined || queryClient.getQueryState(membersQueryOptions(spaceId).queryKey)?.status !== 'success')
             throw error
           return () => setNotice(self ? text.alreadyRemovedSelf : <Phrase parts={text.alreadyRemoved(<PersonName person={member.user} />)} />)
         }
         if (!self) {
-          await refresh()
-          return
+          // 按确定的写入结果先去掉这一行，再刷新（最多等到时限，CX4）：刷新一直不回来时弹窗照常关掉，那一行已经不在，焦点交给标题
+          updateMembers(queryClient, spaceId, items => items.filter(item => item.user.id !== member.user.id))
+          return afterChange(<Phrase parts={text.removed(<PersonName person={member.user} />)} />, await refreshAfterChange(queryClient))
         }
         // 移出了自己：这个空间可能已经看不到了，回到首页。离开之前先去掉它的缓存（包括正在显示的成员表）：
         // 回来时从加载开始，不先显示还能管理的旧页面
         forgetSpace(queryClient, spaceId, { leaving: true })
         await navigate(HOME_PATH)
-        await refresh()
+        await refreshAfterChange(queryClient)
       },
       // 结果未知时确认的弹窗刷新成员列表、说明可能已经移出（M2-P6 复核第二批 G-2）；再试得到 404 时照上面说明"已经不在成员里了"
       refresh: refreshAfterUnknown,
@@ -456,6 +494,8 @@ function MembersContent({ spaceId }: { readonly spaceId: string }) {
       </div>
       <ManageNotice list={list.data} />
       {list.data.canManage && <AddMemberForm spaceId={spaceId} members={list.data.items} />}
+      {/* 留着之前的成员表、刷新却失败了（Codex 对抗评审 CX5）：明说没能刷新、给出重试，之前的成员表照常显示 */}
+      <RefreshProblem query={list} list={text.listLabel} />
       <MembersTable spaceId={spaceId} list={list.data} selfId={session.data?.user.id} focusTitle={() => titleRef.current?.focus()} />
     </section>
   )

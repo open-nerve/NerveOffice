@@ -1,12 +1,13 @@
 import type { DocumentGrant, GrantRole, UserSummary } from '@nerve-office/contracts'
 import type { ReactNode, RefObject } from 'react'
+import type { BackgroundRefresh } from '../../shared/api/write-outcome.ts'
 import type { PendingConfirmation } from '../confirmation/index.ts'
 import { GRANT_ROLES } from '@nerve-office/contracts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useEffectEvent, useId, useMemo, useRef, useState } from 'react'
 import { describeError, isAccessDenied, isNotFoundError, isUnknownOutcome } from '../../shared/api/index.ts'
 import { SHARED_LIST_QUERY_KEY } from '../../shared/api/shared-list-key.ts'
-import { writeFailureText } from '../../shared/api/write-outcome.ts'
+import { refreshAfterSuccess, writeFailureText } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { sharingMessages } from '../../shared/i18n/zh-cn/sharing.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
@@ -14,7 +15,9 @@ import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../../shared/ui/dialog.tsx'
 import { Alert, AlertDescription, Badge, Button, Label, NativeSelect, PersonName, Phrase, Skeleton } from '../../shared/ui/index.ts'
+import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { StatusRegion } from '../../shared/ui/status-region.tsx'
+import { StillRefreshing } from '../../shared/ui/still-refreshing.tsx'
 import { ColleaguePicker } from '../colleagues/index.ts'
 import { ConfirmDialog } from '../confirmation/index.ts'
 import { grantsQueryKey, grantsQueryOptions, revokeGrant, setGrant } from './sharing-api.ts'
@@ -25,13 +28,23 @@ const text = sharingMessages
 const ROLE_OPTIONS = [...GRANT_ROLES].reverse()
 
 /**
- * 写操作之后的刷新（M2-P5 设计 §3.5）。被拒绝与结果未知之后走共用的做法（shared/api/write-outcome.ts，经 useOutcomeRefresh 在时限之内等它）。
+ * 写操作之后的缓存与刷新（M2-P5 设计 §3.5）。成功之后的刷新有时限（shared/api/write-outcome.ts 的 refreshAfterSuccess，Codex 对抗评审 CX4），
+ * 被拒绝与结果未知之后走共用的做法（同一个文件，经 useOutcomeRefresh 在时限之内等它）。
  */
 interface ShareRefresh {
   /**
-   * 成功之后：授权列表（取消时连同"与我共享"：取消的可能是分享给我自己的那一条）。刷新失败时列表自己显示加载失败，不算这次操作失败
+   * 按确定的写入结果直接改授权列表的缓存（Codex 对抗评审 CX4）：分享或调整之后换上这一条（还没有就加在最后），刷新一直不回来时
+   * 列表也已经是写入之后的样子；刷新回来之后以服务端为准
    */
-  readonly afterSuccess: (withShared: boolean) => Promise<void>
+  readonly putGrant: (grant: DocumentGrant) => void
+  /** 同上：取消之后去掉这个人的那一条（确认框关掉时打开它的按钮已经不在，焦点交给"已分享给"） */
+  readonly dropGrant: (userId: string) => void
+  /**
+   * 成功之后（调整角色时也包括确定的拒绝之后）：授权列表（取消时连同"与我共享"：取消的可能是分享给我自己的那一条）。
+   * 最多等到时限：兑现为 undefined 是刷新已经有了结果，兑现为 BackgroundRefresh 是到了时限还在后台刷新（说明里说列表还在刷新）。
+   * 刷新失败不算这次操作失败，列表自己说明没能刷新、给出重试（RefreshProblem，CX5）
+   */
+  readonly afterSuccess: (withShared: boolean) => Promise<BackgroundRefresh | undefined>
   /**
    * 结果未知与被拒绝之后：授权列表、文档详情与"与我共享"都刷新——文档详情决定入口还在不在（例如空间刚被归档、自己刚被移出）。
    * 说明里"刷新好了没有"只看授权列表，它没能刷新就拒绝；文档详情与"与我共享"照常刷新，不计入、不等：被拒绝时再取文档详情正是 404
@@ -42,16 +55,23 @@ interface ShareRefresh {
 
 function useShareRefresh(documentId: string, refreshDocument: () => void): ShareRefresh {
   const queryClient = useQueryClient()
-  return useMemo(() => ({
-    afterSuccess: async (withShared) => {
-      await refreshQueries(queryClient, [grantsQueryKey(documentId), ...(withShared ? [SHARED_LIST_QUERY_KEY] : [])], { throwOnError: false })
-    },
-    afterFailure: async () => {
-      refreshDocument()
-      void refreshQueries(queryClient, [SHARED_LIST_QUERY_KEY], { throwOnError: false })
-      await refreshQueries(queryClient, [grantsQueryKey(documentId)])
-    },
-  }), [queryClient, documentId, refreshDocument])
+  return useMemo(() => {
+    function updateGrants(change: (items: readonly DocumentGrant[]) => DocumentGrant[]): void {
+      queryClient.setQueryData(grantsQueryOptions(documentId).queryKey, list => list === undefined ? undefined : { ...list, items: change(list.items) })
+    }
+    return {
+      putGrant: grant => updateGrants(items => items.some(item => item.user.id === grant.user.id)
+        ? items.map(item => (item.user.id === grant.user.id ? grant : item))
+        : [...items, grant]),
+      dropGrant: userId => updateGrants(items => items.filter(item => item.user.id !== userId)),
+      afterSuccess: async withShared => refreshAfterSuccess(async () => refreshQueries(queryClient, [grantsQueryKey(documentId), ...(withShared ? [SHARED_LIST_QUERY_KEY] : [])])),
+      afterFailure: async () => {
+        refreshDocument()
+        void refreshQueries(queryClient, [SHARED_LIST_QUERY_KEY], { throwOnError: false })
+        await refreshQueries(queryClient, [grantsQueryKey(documentId)])
+      },
+    }
+  }, [queryClient, documentId, refreshDocument])
 }
 
 /**
@@ -67,11 +87,13 @@ interface AddGrantFormProps {
   /** 不作为候选的人：自己（不能分享给自己）与已经有授权的人 */
   readonly exclude: ReadonlySet<string>
   readonly refresh: ShareRefresh
-  readonly onAdded: (grant: DocumentGrant) => void
+  /** 分享好了：refreshing 是到了时限还在后台的刷新（说明里说列表还在刷新），刷新已经有了结果时为 undefined */
+  readonly onAdded: (grant: DocumentGrant, refreshing: BackgroundRefresh | undefined) => void
 }
 
 /**
- * 分享给一位同事：按名字选人（同事选择，候选与已选都用人名组件）、选角色。成功之后选择清掉（同事选择整个重新开始）。
+ * 分享给一位同事：按名字选人（同事选择，候选与已选都用人名组件）、选角色。成功之后选择清掉（同事选择整个重新开始），
+ * 这个人先按响应放进列表，再刷新（最多等到时限，Codex 对抗评审 CX4），然后说明已分享给谁。
  * 结果未知与被拒绝时按共用的做法刷新（授权列表、文档详情与"与我共享"）再说明：结果未知时这个人可能已经在列表里了，
  * 再点也只会得到同样的结果（按状态幂等）
  */
@@ -88,8 +110,8 @@ function AddGrantForm({ documentId, exclude, refresh, onAdded }: AddGrantFormPro
     onSuccess: async (grant) => {
       setUser(undefined)
       setPickerKey(key => key + 1)
-      onAdded(grant)
-      await refresh.afterSuccess(false)
+      refresh.putGrant(grant)
+      onAdded(grant, await refresh.afterSuccess(false))
     },
     onError: async (error) => {
       await refreshAfterFailure(error, refresh.afterFailure, { also: isAccessDenied })
@@ -140,13 +162,13 @@ interface GrantRowProps {
 /**
  * 授权列表的一行：被授权人（人名组件；停用的标出来）、最后设置它的人与时间、角色、取消。
  * 调整与成员页的角色同一个做法：选择框只是选，点了"保存"才提交（收起的选择框上按方向键会逐个改值）；保存之后立即显示目标角色，
- * 进行中这一行标为忙碌；成功时先用响应替换缓存里的这一行再刷新。失败时恢复原来的角色，原因就在这一行说明：
+ * 进行中这一行标为忙碌；成功时先用响应替换缓存里的这一行再刷新——刷新最多等到时限（Codex 对抗评审 CX4），一直不回来时这一行
+ * 照样结束忙碌，显示的已经是保存之后的角色。失败时恢复原来的角色，原因就在这一行说明：
  * 结果未知与被拒绝时按共用的做法刷新（授权列表、文档详情与"与我共享"）再说明。
  * 角色不能调整、只能取消的两种：分享给我自己的（PUT 给自己是 400）、被授权人已停用的（服务端对停用的人调整一律 409，
  * M2-P5 设计 §3.2；授权保留，取消照样可以，M2-P5 审查 B 的 S3）——不给一个注定失败的操作
  */
 function GrantRow({ documentId, grant, self, refresh, onRevoke }: GrantRowProps) {
-  const queryClient = useQueryClient()
   const noteId = useId()
   const unsavedId = useId()
   const selectRef = useRef<HTMLSelectElement>(null)
@@ -157,11 +179,7 @@ function GrantRow({ documentId, grant, self, refresh, onRevoke }: GrantRowProps)
   const { refreshed, refreshAfterFailure } = useOutcomeRefresh()
   const change = useMutation({
     mutationFn: async (role: GrantRole) => setGrant(documentId, grant.user.id, role),
-    onSuccess: (saved) => {
-      queryClient.setQueryData(grantsQueryOptions(documentId).queryKey, list => list === undefined
-        ? undefined
-        : { ...list, items: list.items.map(item => (item.user.id === saved.user.id ? saved : item)) })
-    },
+    onSuccess: saved => refresh.putGrant(saved),
     onSettled: async (_saved, error) => {
       if (error !== null && (isUnknownOutcome(error) || isAccessDenied(error)))
         await refreshAfterFailure(error, refresh.afterFailure, { also: isAccessDenied })
@@ -322,9 +340,17 @@ function ShareDialogContent({ documentId, documentTitle, currentUserId, refreshD
       destructive: true,
       run: async () => {
         await revokeGrant(documentId, grant.user.id)
-        await refresh.afterSuccess(true)
+        // 按确定的写入结果先去掉这一行，再刷新（Codex 对抗评审 CX4）：刷新最多等到时限，一直不回来时确认框照常关掉，
+        // 那一行也已经不在，焦点交给"已分享给"；说明里说列表还在刷新
+        refresh.dropGrant(grant.user.id)
+        const refreshing = await refresh.afterSuccess(true)
         // 说明交给确认框，等它关掉、对话框不再被标为 aria-hidden、焦点交还之后才写进状态区：确认框开着时写进去的读屏多半不播报（M2-P5 复验 S1）
-        return () => setNotice(<Phrase parts={text.revoked(<PersonName person={grant.user} />)} />)
+        return () => setNotice(
+          <>
+            <Phrase parts={text.revoked(<PersonName person={grant.user} />)} />
+            <StillRefreshing refresh={refreshing} />
+          </>,
+        )
       },
       // 结果未知与被拒绝之后：授权列表、文档详情与"与我共享"一起刷新（共用的做法），说明按刷新的结果给
       refresh: refresh.afterFailure,
@@ -367,7 +393,19 @@ function ShareDialogContent({ documentId, documentTitle, currentUserId, refreshD
     const exclude = new Set([currentUserId, ...grants.data.map(grant => grant.user.id)])
     body = (
       <>
-        <AddGrantForm documentId={documentId} exclude={exclude} refresh={refresh} onAdded={grant => setNotice(<Phrase parts={text.added(<PersonName person={grant.user} />, text.roleName(grant.role))} />)} />
+        <AddGrantForm
+          documentId={documentId}
+          exclude={exclude}
+          refresh={refresh}
+          onAdded={(grant, refreshing) => setNotice(
+            <>
+              <Phrase parts={text.added(<PersonName person={grant.user} />, text.roleName(grant.role))} />
+              <StillRefreshing refresh={refreshing} />
+            </>,
+          )}
+        />
+        {/* 留着之前的列表、重新请求却失败了（Codex 对抗评审 CX5）：明说没能刷新、给出重试，之前的列表照常显示 */}
+        <RefreshProblem query={grants} list={text.listName} />
         <Grants documentId={documentId} grants={grants.data} currentUserId={currentUserId} refresh={refresh} headingRef={headingRef} onRevoke={confirmRevoke} />
       </>
     )

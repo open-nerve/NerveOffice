@@ -2,10 +2,11 @@
 // 被移出之后不再显示缓存里的旧内容；页内的操作被拒绝之后页头重新请求）、成员页（按需加载：查看、添加、各行各自调整角色、移出，
 // 降低或移出自己先确认；只能查看；看不到；个人空间；加载失败；返回的去处）。接口用假的 fetch。
 import type { SessionResponse, SpaceMember, SpaceMemberListResponse, SpaceRole, SpaceView } from '@nerve-office/contracts'
-import { fireEvent, screen, waitFor, within } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+import { OUTCOME_REFRESH_TIME_LIMIT_MS } from '../shared/api/write-outcome.ts'
 import { watchAnnouncement } from '../shared/testing/announcement.test-support.ts'
-import { apiError, installFakeApi, json, networkFailure } from '../shared/testing/fake-api.test-support.ts'
+import { apiError, installFakeApi, inTurn, json, networkFailure } from '../shared/testing/fake-api.test-support.ts'
 import { personIn, plainName } from '../shared/testing/people.test-support.ts'
 import { documentsKey, foldersKey, noFolders, personalSpaceOf, spaceRoutes } from '../shared/testing/spaces.test-support.ts'
 import { deferred, settle } from './admin.test-support.ts'
@@ -994,5 +995,114 @@ describe('左侧导航与"空间不存在"（M2-P6 复核 G5、G6）', () => {
     expect(await screen.findByRole('heading', { level: 1, name: '空间不存在' })).toBeInTheDocument()
     expect(screen.getByText('空间不存在，或者你没有访问权限')).toBeInTheDocument()
     await waitFor(() => expect(document.title).toBe('空间不存在 - NerveOffice'))
+  })
+})
+
+// 写入已经确定成功之后的刷新（Codex 对抗评审 CX4、CX5）：刷新一直不回来时确认框到了时限照常关掉（原来一直停在"正在处理…"、关不掉）；
+// 留着之前的列表、刷新却失败了时列表明说没能刷新、给出重试（原来照旧显示旧的，看不出已经过时）
+describe('US-M2-06 成员页与导航：写入成功之后的刷新（Codex 对抗评审 CX4、CX5）', () => {
+  it('移出成功（204），随后刷新成员列表的请求一直不回来：到了时限确认框照常关掉，那一行按确定的写入结果已经不在、焦点交给页面的标题；说明在关掉之后写进状态区，说成员列表还在刷新；刷新回来之后不再说', async () => {
+    // 跟着真实的时间走，另外可以一下子拨过时限；在前面留出 2 秒的余量，测试本身的耗时不会让时限提前到
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      let finish: (response: Response) => void = () => {}
+      const api = loggedIn(MANAGER, {
+        [MEMBERS_KEY]: inTurn(() => json(200, membersList(true, [member(SESSION.user, 'admin'), member(CAT, 'editor')])), async () => new Promise<Response>((resolve) => {
+          finish = resolve
+        })),
+        [memberKey('DELETE', CAT)]: () => new Response(null, { status: 204 }),
+      })
+      renderApp(MEMBERS_PATH)
+      const remove = await screen.findByRole('button', { name: `移出 ${plainName('凯特', 'cat')}` })
+      // 说明的容器一开始就在（空的）
+      const statuses = screen.getAllByRole('status')
+      remove.focus()
+      fireEvent.click(remove)
+      const dialog = await screen.findByRole('dialog', { name: `把 ${plainName('凯特', 'cat')} 移出这个空间？` })
+      const announced = watchAnnouncement('已把 @cat 凯特 移出这个空间')
+      fireEvent.click(within(dialog).getByRole('button', { name: '移出' }))
+      // 前提：DELETE 已经成功，刷新成员列表的请求已经发出、还没有回来
+      await waitFor(() => expect(api.requests.filter(request => request.key === MEMBERS_KEY)).toHaveLength(2))
+      await act(async () => vi.advanceTimersByTimeAsync(OUTCOME_REFRESH_TIME_LIMIT_MS - 2_000))
+      expect(within(dialog).getByRole('button', { name: '正在处理…' })).toHaveAttribute('aria-disabled', 'true')
+      await act(async () => vi.advanceTimersByTimeAsync(2_000))
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+      expect(screen.queryByRole('button', { name: `移出 ${plainName('凯特', 'cat')}` })).toBeNull()
+      await waitFor(() => expect(document.activeElement).toBe(membersTitle()))
+      const notice = await waitFor(() => {
+        const found = statuses.find(status => status.textContent.startsWith('已把 '))
+        expect(found).toBeDefined()
+        return found!
+      })
+      expect(notice).toHaveTextContent('已把 @cat 凯特 移出这个空间；成员列表还在刷新，显示的可能还是之前的，刷新好了会自动更新')
+      personIn(notice, '凯特', 'cat')
+      expect(announced()).toEqual({ ariaHidden: false, focusReturned: true })
+      // 刷新回来了：不再说还在刷新
+      await act(async () => finish(json(200, membersList(true, [member(SESSION.user, 'admin')]))))
+      await waitFor(() => expect(notice).toHaveTextContent(/^已把 @cat 凯特 移出这个空间$/))
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('移出成功、刷新也在时限之内回来：照旧不另外说明（成员表看得见），状态区是空的', async () => {
+    let items = [member(SESSION.user, 'admin'), member(CAT, 'editor')]
+    loggedIn(MANAGER, {
+      [MEMBERS_KEY]: () => json(200, membersList(true, items)),
+      [memberKey('DELETE', CAT)]: () => {
+        items = [member(SESSION.user, 'admin')]
+        return new Response(null, { status: 204 })
+      },
+    })
+    renderApp(MEMBERS_PATH)
+    const remove = await screen.findByRole('button', { name: `移出 ${plainName('凯特', 'cat')}` })
+    const statuses = screen.getAllByRole('status')
+    fireEvent.click(remove)
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: '移出' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await settle()
+    expect(statuses.every(status => status.textContent === '')).toBe(true)
+  })
+
+  it('调整角色成功，随后刷新成员列表失败：成员表上方说明没能刷新（原因）、给出重试，这一行已经是保存之后的角色；重试成功之后说明消失，列表是新的', async () => {
+    const api = loggedIn(MANAGER, {
+      [MEMBERS_KEY]: () => json(200, membersList(true, [member(SESSION.user, 'admin'), member(BEN, 'viewer')])),
+      [memberKey('PUT', BEN)]: () => json(200, member(BEN, 'editor')),
+    })
+    renderApp(MEMBERS_PATH)
+    const { select, row } = await roleOf('本', 'ben')
+    api.on(MEMBERS_KEY, () => apiError(500, 'INTERNAL_ERROR'))
+    saveRole(select, row, 'editor')
+    const problem = await screen.findByText('成员列表没能刷新，显示的还是之前的内容', {}, { timeout: 4000 })
+    const alert = problem.closest('[role="alert"]') as HTMLElement
+    expect(alert).toHaveTextContent('服务器出了点问题，请稍后重试')
+    expect(alert.compareDocumentPosition(screen.getByRole('table', { name: '成员列表' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(select).toHaveValue('editor')
+    api.on(MEMBERS_KEY, () => json(200, membersList(true, [member(SESSION.user, 'admin'), member(BEN, 'editor'), member(CAT, 'viewer')])))
+    fireEvent.click(within(alert).getByRole('button', { name: '重试' }))
+    expect(await screen.findByRole('combobox', { name: `${plainName('凯特', 'cat')} 的角色` })).toBeInTheDocument()
+    expect(screen.queryByText('成员列表没能刷新，显示的还是之前的内容')).toBeNull()
+  })
+
+  it('空间改名成功、随后刷新导航失败：导航里明说空间列表没能刷新、给出重试（之前的列表照常显示）；页头已经按响应是新名称', async () => {
+    const api = loggedIn(MANAGER, {
+      [`PUT /api/spaces/${TEAM_ID}/name`]: () => json(200, { id: TEAM_ID, name: '市场二部', status: 'active', visibleToAll: false }),
+    })
+    renderApp(`/spaces/${TEAM_ID}`)
+    fireEvent.click(await screen.findByRole('button', { name: '改名' }))
+    fireEvent.change(screen.getByLabelText('空间名称'), { target: { value: '市场二部' } })
+    api.on('GET /api/spaces', () => apiError(500, 'INTERNAL_ERROR'))
+    api.on(`GET /api/spaces/${TEAM_ID}`, () => apiError(500, 'INTERNAL_ERROR'))
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    const problem = await within(spaceNav()).findByText('空间列表没能刷新，显示的还是之前的内容', {}, { timeout: 4000 })
+    const alert = problem.closest('[role="alert"]') as HTMLElement
+    // 按确定的写入结果先改好的名称：页头与导航都是新名称（刷新失败也不弹回旧的）
+    expect(screen.getByRole('heading', { level: 1, name: '市场二部' })).toBeInTheDocument()
+    expect(within(spaceNav()).getByRole('link', { name: '市场二部' })).toBeInTheDocument()
+    api.on('GET /api/spaces', () => json(200, { items: [personalSpaceOf(SESSION), { ...MANAGER, name: '市场二部' }, team({ id: '0199a2c4-0000-7000-8000-0000000000c2', name: '新来的空间' })] }))
+    fireEvent.click(within(alert).getByRole('button', { name: '重试' }))
+    expect(await within(spaceNav()).findByRole('link', { name: '新来的空间' })).toBeInTheDocument()
+    expect(within(spaceNav()).queryByText('空间列表没能刷新，显示的还是之前的内容')).toBeNull()
   })
 })

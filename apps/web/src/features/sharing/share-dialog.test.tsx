@@ -4,10 +4,11 @@
 import type { DocumentGrant, SharedListResponse } from '@nerve-office/contracts'
 import type { ShareDialogProps } from './share-dialog.tsx'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useRef, useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { SHARED_LIST_QUERY_KEY } from '../../shared/api/shared-list-key.ts'
+import { OUTCOME_REFRESH_TIME_LIMIT_MS } from '../../shared/api/write-outcome.ts'
 import { watchAnnouncement } from '../../shared/testing/announcement.test-support.ts'
 import { apiError, installFakeApi, inTurn, json, networkFailure } from '../../shared/testing/fake-api.test-support.ts'
 import { personIn, plainName, shownName } from '../../shared/testing/people.test-support.ts'
@@ -340,5 +341,109 @@ describe('US-M2-10 分享对话框：调整与取消', () => {
     await within(confirm).findByRole('alert')
     expect(noticeIn(dialog)).toBeEmptyDOMElement()
     expect(within(dialog).queryByText(/已取消分享给/)).toBeNull()
+  })
+})
+
+// 写入已经确定成功之后的刷新（Codex 对抗评审 CX4、CX5，回归用例由 Codex 的前端探针改写）：
+// - 刷新一直不回来：确认框原来一直停在"正在处理…"，取消与 Esc 都关不掉。现在最多等到时限，确认框照常关掉，说明在关掉之后写进状态区、
+//   说列表还在刷新；那一行按确定的写入结果先去掉，焦点交给"已分享给"；后台的刷新回来之后说明不再说还在刷新；
+// - 刷新失败（列表留着之前的数据）：原来照旧显示旧的授权，既不说没能刷新、也没有重试。现在列表上方明说没能刷新、给出重试
+describe('US-M2-10 分享对话框：写入成功之后的刷新（Codex 对抗评审 CX4、CX5）', () => {
+  const STILL = '列表还在刷新，显示的可能还是之前的，刷新好了会自动更新'
+
+  it('取消分享：DELETE 204，随后刷新列表的请求一直不回来——到了时限确认框关掉，说明在关掉之后写进状态区（说列表还在刷新），那一行已经不在、焦点在"已分享给"；后台的刷新回来之后不再说还在刷新', async () => {
+    // 跟着真实的时间走，另外可以一下子拨过时限；在前面留出 2 秒的余量，测试本身的耗时不会让时限提前到
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      let finish: (response: Response) => void = () => {}
+      const { api } = renderDialog({
+        [GRANTS_KEY]: inTurn(() => grants(grantOf(BEN), grantOf(CAT)), async () => new Promise<Response>((resolve) => {
+          finish = resolve
+        })),
+        [deleteKey(BEN.id)]: () => new Response(null, { status: 204 }),
+      })
+      const dialog = await openDialog()
+      const revoke = await within(dialog).findByRole('button', { name: `取消分享 ${plainName('本', 'ben')}` })
+      revoke.focus()
+      fireEvent.click(revoke)
+      const confirm = await screen.findByRole('dialog', { name: `取消分享给 ${plainName('本', 'ben')}？` })
+      const announced = watchAnnouncement(`已取消分享给 ${shownName('本', 'ben')}`)
+      fireEvent.click(within(confirm).getByRole('button', { name: '取消分享' }))
+      // 前提：DELETE 已经成功，刷新的请求已经发出、还没有回来
+      await waitFor(() => expect(requestsTo(api, GRANTS_KEY)).toBe(2))
+      expect(requestsTo(api, deleteKey(BEN.id))).toBe(1)
+      await act(async () => vi.advanceTimersByTimeAsync(OUTCOME_REFRESH_TIME_LIMIT_MS - 2_000))
+      // 时限之前照旧在等（与失败之后的刷新同一个时限）：还在进行中，说明还没有写
+      expect(within(confirm).getByRole('button', { name: '正在处理…' })).toHaveAttribute('aria-disabled', 'true')
+      expect(noticeIn(dialog)).toBeEmptyDOMElement()
+      await act(async () => vi.advanceTimersByTimeAsync(2_000))
+      await waitFor(() => expect(screen.queryByRole('dialog', { name: /^取消分享给/ })).toBeNull())
+      expect(noticeIn(dialog)).toHaveTextContent(`已取消分享给 ${shownName('本', 'ben')}；${STILL}`)
+      // 写进去的那一刻确认框已经关掉、对话框不在 aria-hidden 之下、焦点已经交还（M2-P5 复验 S1 的约定照旧）
+      expect(announced()).toEqual({ ariaHidden: false, focusReturned: true })
+      // 那一行按确定的写入结果已经去掉（刷新还没回来），另一个人还在；焦点交给"已分享给"
+      const list = within(dialog).getByRole('list', { name: '已分享给' })
+      expect(within(list).queryByRole('button', { name: `取消分享 ${plainName('本', 'ben')}` })).toBeNull()
+      expect(within(list).getByRole('button', { name: `取消分享 ${plainName('凯特', 'cat')}` })).toBeInTheDocument()
+      await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByRole('heading', { name: '已分享给' })))
+      // 后台的刷新回来了：说明不再说还在刷新，列表是服务端现在的样子
+      await act(async () => finish(grants(grantOf(CAT))))
+      await waitFor(() => expect(noticeIn(dialog)).toHaveTextContent(new RegExp(`^已取消分享给 ${shownName('本', 'ben')}$`)))
+      expect(within(dialog).getAllByRole('listitem')).toHaveLength(1)
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('分享给一个人：PUT 成功，随后刷新一直不回来——到了时限照常结束（按钮不再"正在分享…"），这个人已经按响应放进列表，说明说列表还在刷新', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      renderDialog({
+        [GRANTS_KEY]: inTurn(() => grants(), async () => new Promise<Response>(() => {})),
+        [colleaguesKey('dan')]: () => json(200, { items: [DAN] }),
+        [putKey(DAN.id)]: () => json(200, grantOf(DAN, { role: 'editor' })),
+      })
+      const dialog = await openDialog()
+      await within(dialog).findByText('还没有单独分享给任何人。')
+      fireEvent.click(within(await search(dialog, 'dan')).getByRole('button', { name: shownName('丹', 'dan') }))
+      fireEvent.change(within(dialog).getByLabelText('角色'), { target: { value: 'editor' } })
+      fireEvent.click(within(dialog).getByRole('button', { name: '分享' }))
+      expect(await within(dialog).findByRole('button', { name: '正在分享…' })).toBeInTheDocument()
+      await act(async () => vi.advanceTimersByTimeAsync(OUTCOME_REFRESH_TIME_LIMIT_MS))
+      await waitFor(() => expect(noticeIn(dialog)).toHaveTextContent(`已分享给 ${shownName('丹', 'dan')}（编辑者）；${STILL}`))
+      expect(within(dialog).getByRole('button', { name: '分享' })).toBeInTheDocument()
+      expect(within(dialog).getByRole('combobox', { name: `${plainName('丹', 'dan')} 的角色` })).toHaveValue('editor')
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('取消分享成功（204），随后刷新列表回 500：列表上方说明没能刷新（原因）、给出重试，那一行按确定的写入结果已经去掉；重试成功之后说明消失，列表是新的', async () => {
+    const { api } = renderDialog({
+      [GRANTS_KEY]: inTurn(() => grants(grantOf(BEN), grantOf(CAT)), () => apiError(500, 'INTERNAL_ERROR'), () => grants(grantOf(CAT), grantOf(DAN))),
+      [deleteKey(BEN.id)]: () => new Response(null, { status: 204 }),
+    })
+    const dialog = await openDialog()
+    fireEvent.click(await within(dialog).findByRole('button', { name: `取消分享 ${plainName('本', 'ben')}` }))
+    const confirm = await screen.findByRole('dialog', { name: `取消分享给 ${plainName('本', 'ben')}？` })
+    fireEvent.click(within(confirm).getByRole('button', { name: '取消分享' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /^取消分享给/ })).toBeNull())
+    // 写入成功：说明照常（刷新已经有了结果，不说还在刷新）；刷新失败不算这次操作失败
+    expect(noticeIn(dialog)).toHaveTextContent(new RegExp(`^已取消分享给 ${shownName('本', 'ben')}$`))
+    const problem = await within(dialog).findByRole('alert')
+    expect(problem).toHaveTextContent('分享的情况没能刷新，显示的还是之前的内容')
+    expect(problem).toHaveTextContent('服务器出了点问题，请稍后重试')
+    // 在列表上方
+    const heading = within(dialog).getByRole('heading', { name: '已分享给' })
+    expect(problem.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // 之前的列表照常显示：取消掉的那一行按确定的写入结果已经去掉，另一个人还在
+    expect(within(dialog).queryByRole('button', { name: `取消分享 ${plainName('本', 'ben')}` })).toBeNull()
+    expect(within(dialog).getByRole('button', { name: `取消分享 ${plainName('凯特', 'cat')}` })).toBeInTheDocument()
+    fireEvent.click(within(problem).getByRole('button', { name: '重试' }))
+    await waitFor(() => expect(within(dialog).queryByRole('alert')).toBeNull())
+    expect(requestsTo(api, GRANTS_KEY)).toBe(3)
+    expect(within(dialog).getByRole('button', { name: `取消分享 ${plainName('丹', 'dan')}` })).toBeInTheDocument()
   })
 })

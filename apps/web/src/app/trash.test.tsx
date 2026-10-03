@@ -1,11 +1,12 @@
 // 回收站页（M2-P4 设计 §3.7，规则细则见 specs/P4-S3-回收站的规则.md，US-M2-09）：按空间列出删除单元、恢复、永久删除。
 // 按需加载的页面，所以这里可以用弹窗（永久删除要确认）。接口用假的 fetch。
 import type { SessionResponse, TrashEntry } from '@nerve-office/contracts'
-import { fireEvent, screen, waitFor, within } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+import { OUTCOME_REFRESH_TIME_LIMIT_MS } from '../shared/api/write-outcome.ts'
 import { formatDateTime } from '../shared/lib/format.ts'
 import { watchAnnouncement } from '../shared/testing/announcement.test-support.ts'
-import { apiError, installFakeApi, json, networkFailure } from '../shared/testing/fake-api.test-support.ts'
+import { apiError, installFakeApi, inTurn, json, networkFailure } from '../shared/testing/fake-api.test-support.ts'
 import { personIn } from '../shared/testing/people.test-support.ts'
 import { personalSpaceOf, spaceRoutes } from '../shared/testing/spaces.test-support.ts'
 import { deferred, settle } from './admin.test-support.ts'
@@ -332,5 +333,65 @@ describe('US-M2-09 回收站：没能完成时（M2-P6 复核 S1–S5）', () =>
     renderApp(TRASH_PATH)
     await screen.findByRole('heading', { name: '我的空间 的回收站' })
     await waitFor(() => expect(document.title).toBe('我的空间 的回收站 - NerveOffice'))
+  })
+})
+
+// 写入已经确定成功之后的刷新（Codex 对抗评审 CX4、CX5）
+describe('US-M2-09 回收站：写入成功之后的刷新（Codex 对抗评审 CX4、CX5）', () => {
+  const STILL = '列表还在刷新，显示的可能还是之前的，刷新好了会自动更新'
+
+  it('永久删除成功（204），随后刷新回收站的请求一直不回来：到了时限确认框照常关掉，那一行按确定的写入结果已经不在；说明在关掉之后出现、说列表还在刷新，接住焦点；刷新回来之后不再说', async () => {
+    // 跟着真实的时间走，另外可以一下子拨过时限；在前面留出 2 秒的余量
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      let finish: (response: Response) => void = () => {}
+      const api = loggedIn({
+        [TRASH_KEY]: inTurn(() => json(200, { items: [entry(), entry({ id: '0199a2c4-0000-7000-8000-0000000000e2', title: '旧周报', kind: 'document', documentCount: 1 })], nextCursor: null }), async () => new Promise<Response>((resolve) => {
+          finish = resolve
+        })),
+        [`DELETE /api/trash/${ENTRY_ID}`]: () => new Response(null, { status: 204 }),
+      })
+      renderApp(TRASH_PATH)
+      fireEvent.click(await screen.findByRole('button', { name: '永久删除 方案' }))
+      const dialog = await screen.findByRole('dialog', { name: '永久删除「方案」？' })
+      const purged = watchAnnouncement('已永久删除「方案」')
+      fireEvent.click(within(dialog).getByRole('button', { name: '永久删除' }))
+      await waitFor(() => expect(api.requests.filter(request => request.key === TRASH_KEY)).toHaveLength(2))
+      await act(async () => vi.advanceTimersByTimeAsync(OUTCOME_REFRESH_TIME_LIMIT_MS - 2_000))
+      expect(within(dialog).getByRole('button', { name: '正在处理…' })).toHaveAttribute('aria-disabled', 'true')
+      await act(async () => vi.advanceTimersByTimeAsync(2_000))
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+      const notice = (await screen.findByText(/^已永久删除「方案」/)).closest('[role="status"]') as HTMLElement
+      expect(notice).toHaveTextContent(`已永久删除「方案」；${STILL}`)
+      expect(purged()).toEqual({ ariaHidden: false, focusReturned: true })
+      await waitFor(() => expect(document.activeElement).toBe(notice))
+      expect(screen.queryByRole('button', { name: '永久删除 方案' })).toBeNull()
+      expect(screen.getByRole('button', { name: '永久删除 旧周报' })).toBeInTheDocument()
+      await act(async () => finish(json(200, { items: [entry({ id: '0199a2c4-0000-7000-8000-0000000000e2', title: '旧周报', kind: 'document', documentCount: 1 })], nextCursor: null })))
+      await waitFor(() => expect(notice).toHaveTextContent(/^已永久删除「方案」$/))
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('恢复成功，随后刷新回收站回 500：列表上方说明没能刷新（原因）、给出重试，那一条按确定的写入结果已经去掉；重试成功之后说明消失，列表是新的', async () => {
+    const api = loggedIn({
+      [TRASH_KEY]: () => json(200, { items: [entry()], nextCursor: null }),
+      [`POST /api/trash/${ENTRY_ID}/restore`]: () => json(200, { id: ENTRY_ID, kind: 'folder', title: '方案', spaceId: SPACE_ID, folderId: null, movedToRoot: false }),
+    })
+    renderApp(TRASH_PATH)
+    const restore = await screen.findByRole('button', { name: '恢复 方案' })
+    api.on(TRASH_KEY, () => apiError(500, 'INTERNAL_ERROR'))
+    fireEvent.click(restore)
+    expect(await screen.findByText('已恢复「方案」', {}, { timeout: 4000 })).toBeInTheDocument()
+    const problem = await screen.findByText('回收站没能刷新，显示的还是之前的内容', {}, { timeout: 4000 })
+    const alert = problem.closest('[role="alert"]') as HTMLElement
+    expect(alert).toHaveTextContent('服务器出了点问题，请稍后重试')
+    expect(screen.getByText('回收站里没有内容')).toBeInTheDocument()
+    api.on(TRASH_KEY, () => json(200, { items: [entry({ id: '0199a2c4-0000-7000-8000-0000000000e3', title: '别人删的', kind: 'document', documentCount: 1 })], nextCursor: null }))
+    fireEvent.click(within(alert).getByRole('button', { name: '重试' }))
+    expect(await screen.findByText('别人删的')).toBeInTheDocument()
+    expect(screen.queryByText('回收站没能刷新，显示的还是之前的内容')).toBeNull()
   })
 })

@@ -140,4 +140,20 @@ describe('US-M2-12 按标题搜索', () => {
     await waitFor(() => expect(screen.getByText('输入关键词后按“搜索”，按标题查找你能访问的文档。')).toBeInTheDocument())
     expect(api.requests.some(request => request.key.startsWith('GET /api/search'))).toBe(false)
   })
+
+  it('留着之前的结果、重新请求却失败了（例如回到这一页时，Codex 对抗评审 CX5）：结果上方说明没能刷新与原因、给出重试；重试成功之后说明消失', async () => {
+    const api = loggedIn({ [searchKey('周报')]: () => json(200, { items: [result()], nextCursor: null }) })
+    const app = renderApp('/search?q=周报')
+    expect(await screen.findByRole('list', { name: '搜索结果' })).toBeInTheDocument()
+    api.on(searchKey('周报'), () => apiError(500, 'INTERNAL_ERROR'))
+    void app.queryClient.invalidateQueries({ queryKey: ['search'] })
+    const problem = await screen.findByText('搜索结果没能刷新，显示的还是之前的内容', {}, { timeout: 4000 })
+    const alert = problem.closest('[role="alert"]') as HTMLElement
+    expect(alert).toHaveTextContent('服务器出了点问题，请稍后重试')
+    expect(screen.getByRole('link', { name: /周报/ })).toBeInTheDocument()
+    api.on(searchKey('周报'), () => json(200, { items: [result(), result({ id: '0199a2c4-0000-7000-8000-0000000000d2', title: '周报（新）' })], nextCursor: null }))
+    fireEvent.click(within(alert).getByRole('button', { name: '重试' }))
+    expect(await screen.findByRole('link', { name: /周报（新）/ })).toBeInTheDocument()
+    expect(screen.queryByText('搜索结果没能刷新，显示的还是之前的内容')).toBeNull()
+  })
 })

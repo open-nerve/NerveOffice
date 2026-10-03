@@ -6,8 +6,9 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { createRef } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
+import { refreshAfterSuccess } from '../../shared/api/write-outcome.ts'
 import { TableCell } from '../../shared/ui/index.ts'
-import { PagedTable } from './paged-table.tsx'
+import { PagedTable, StillRefreshingLine } from './paged-table.tsx'
 
 interface Item {
   readonly id: string
@@ -40,11 +41,12 @@ function Harness({ fetchPage, tableRef }: { readonly fetchPage: FetchPage, reado
 
 function renderTable(fetchPage: FetchPage, tableRef?: Ref<PagedTableHandle>) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(
+  const rendered = render(
     <QueryClientProvider client={client}>
       <Harness fetchPage={fetchPage} tableRef={tableRef} />
     </QueryClientProvider>,
   )
+  return { ...rendered, client }
 }
 
 function items(...names: string[]): Item[] {
@@ -152,5 +154,54 @@ describe('PagedTable', () => {
     const tableRef = createRef<PagedTableHandle>()
     renderTable(pending().fetch, tableRef)
     expect(tableRef.current?.focusRow('id-甲')).toBe(false)
+  })
+
+  it('留着之前的行、刷新却失败了（例如写操作之后，Codex 对抗评审 CX5）：表格上方说明没能刷新与原因、给出重试，旧的行照常显示；重试成功之后说明消失，行是新的', async () => {
+    const fetchPage = vi.fn<FetchPage>(async () => ({ items: items('甲'), nextCursor: null }))
+    const { client } = renderTable(fetchPage)
+    const table = await screen.findByRole('table', { name: '条目列表' })
+    fetchPage.mockRejectedValueOnce(new ApiError(500, 'INTERNAL_ERROR', 'x'))
+    await act(async () => client.invalidateQueries({ queryKey: ['items'] }))
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('列表没能刷新，显示的还是之前的内容')
+    expect(alert).toHaveTextContent('服务器出了点问题，请稍后重试')
+    expect(alert.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(within(table).getByText('甲')).toBeInTheDocument()
+    fetchPage.mockResolvedValueOnce({ items: items('乙'), nextCursor: null })
+    fireEvent.click(within(alert).getByRole('button', { name: '重试' }))
+    expect(await within(table).findByText('乙')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('加载下一页失败：照旧只说原因（在表格下方），不说成"没能刷新"', async () => {
+    const fetchPage = vi.fn<FetchPage>(async (cursor) => {
+      if (cursor === null)
+        return { items: items('甲'), nextCursor: 'c1' }
+      throw new ApiError(500, 'INTERNAL_ERROR', 'x')
+    })
+    renderTable(fetchPage)
+    fireEvent.click(await screen.findByRole('button', { name: '加载更多' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/^服务器出了点问题，请稍后重试$/)
+    expect(screen.queryByText(/没能刷新/)).toBeNull()
+  })
+})
+
+describe('StillRefreshingLine（Codex 对抗评审 CX4）', () => {
+  it('一直在的一行，显式写 aria-live（弹窗开着时遮罩跳过它）：没有在后台的刷新时是空的、只做视觉隐藏；还在后台刷新时说列表还在刷新，有了结果之后又空了', async () => {
+    let finish: () => void = () => {}
+    const background = await refreshAfterSuccess(async () => new Promise<void>((resolve) => {
+      finish = resolve
+    }), { timeLimitMs: 10 })
+    const { rerender } = render(<StillRefreshingLine background={undefined} />)
+    const line = screen.getByRole('status')
+    expect(line).toHaveAttribute('aria-live', 'polite')
+    expect(line).toBeEmptyDOMElement()
+    expect(line).toHaveClass('sr-only')
+    rerender(<StillRefreshingLine background={background} />)
+    expect(screen.getByRole('status')).toBe(line)
+    expect(line).toHaveTextContent('列表还在刷新，显示的可能还是之前的，刷新好了会自动更新。')
+    expect(line).not.toHaveClass('sr-only')
+    await act(async () => finish())
+    expect(line).toBeEmptyDOMElement()
   })
 })

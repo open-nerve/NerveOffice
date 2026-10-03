@@ -1,21 +1,25 @@
 import type { SpaceView, TrashEntry, TrashListResponse } from '@nerve-office/contracts'
 import type { InfiniteData, UseInfiniteQueryResult } from '@tanstack/react-query'
 import type { RefObject } from 'react'
+import type { BackgroundRefresh } from '../../shared/api/write-outcome.ts'
 import type { PendingConfirmation } from '../confirmation/index.ts'
 import { TRASH_RETENTION_DAYS } from '@nerve-office/contracts'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { describeError, isAccessDenied, isMissingResource, isUnknownOutcome } from '../../shared/api/index.ts'
-import { refreshIfUnknown, refreshWithin } from '../../shared/api/write-outcome.ts'
+import { refreshAfterSuccess, refreshIfUnknown, refreshWithin } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { trashMessages } from '../../shared/i18n/zh-cn/trash.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
+import { updatePagedItems } from '../../shared/lib/paged-cache.ts'
 import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { spacePath } from '../../shared/lib/space-paths.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { useFocusRescue } from '../../shared/lib/use-focus-rescue.ts'
 import { Alert, AlertDescription, Badge, Button, buttonVariants, Notice, PersonName, Skeleton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../shared/ui/index.ts'
+import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
+import { StillRefreshing } from '../../shared/ui/still-refreshing.tsx'
 import { ConfirmDialog } from '../confirmation/index.ts'
 import { spaceDocumentsQueryKey, spaceFoldersQueryKey } from '../documents/index.ts'
 import { SpaceNotFound, spaceQueryOptions, SPACES_QUERY_KEY, useForgetMissingSpace } from '../spaces/index.ts'
@@ -87,6 +91,8 @@ function EntryRow({ entry, onRestore, onPurge, restoring }: EntryRowProps) {
 interface TrashNotice {
   readonly message: string
   readonly problem?: boolean
+  /** 成功之后的刷新到了时限还在后台（Codex 对抗评审 CX4）：说明接着说列表还在刷新，有了结果之后不再说 */
+  readonly refreshing?: BackgroundRefresh
 }
 
 type TrashQuery = UseInfiniteQueryResult<InfiniteData<TrashListResponse>>
@@ -102,6 +108,8 @@ type TrashQuery = UseInfiniteQueryResult<InfiniteData<TrashListResponse>>
  *   "列表已刷新"还是"没能刷新"按刷新的结果说（第五批 G3，永久删除得到 404 也一样）；空间看不到了时页面随之换成"空间不存在"；
  * - 结果未知：同样刷新，说明它可能已经恢复了。这时的刷新经共用的做法（shared/api/write-outcome.ts，第四批）：最多等 10 秒，
  *   刷新失败或者到了时限还没回来，说明里说"列表没能刷新"，"恢复"也不一直停在"正在恢复…"。
+ * 做完了（恢复、永久删除）：那一行按确定的写入结果先从列表里去掉，再刷新；刷新同样最多等 10 秒（Codex 对抗评审 CX4），一直不回来时
+ * 照常结束（说明写出、焦点交还），说明接着说列表还在刷新。留着之前的列表、刷新却失败了时列表上方明说、给出重试（CX5）。
  */
 function TrashList({ space, query, headingRef }: { readonly space: SpaceView, readonly query: TrashQuery, readonly headingRef: RefObject<HTMLHeadingElement | null> }) {
   const queryClient = useQueryClient()
@@ -123,11 +131,16 @@ function TrashList({ space, query, headingRef }: { readonly space: SpaceView, re
   const contentKeys = [spaceTrashQueryKey(space.id), spaceFoldersQueryKey(space.id), spaceDocumentsQueryKey(space.id)]
 
   /**
-   * 恢复与永久删除都会改变空间里的内容：回收站、各层的文件夹与文档一起重新请求；被拒绝时页头（权限、归档）与导航也一起。
-   * 刷新失败时各自显示加载失败
+   * 恢复与永久删除都会改变空间里的内容：做完之后回收站、各层的文件夹与文档一起重新请求，最多等到时限（Codex 对抗评审 CX4）。
+   * 兑现为到了时限还在后台的刷新（说明里说列表还在刷新），已经有了结果时为 undefined；刷新失败不算这个操作失败，列表自己说明没能刷新（CX5）
    */
-  async function refresh(withSpace = false): Promise<void> {
-    await refreshQueries(queryClient, [...contentKeys, ...(withSpace ? [SPACES_QUERY_KEY] : [])], { throwOnError: false })
+  async function refreshAfterChange(): Promise<BackgroundRefresh | undefined> {
+    return refreshAfterSuccess(async () => refreshQueries(queryClient, contentKeys))
+  }
+
+  /** 按确定的写入结果先从列表里去掉这一条（恢复了、永久删除了，CX4）：刷新一直不回来时那一行也已经不在 */
+  function dropEntry(entry: TrashEntry): void {
+    updatePagedItems<TrashEntry>(queryClient, spaceTrashQueryKey(space.id), item => (item.id === entry.id ? undefined : item))
   }
 
   /** 结果未知之后的刷新（恢复与确认的弹窗）：刷新失败时拒绝，据此说明页面没能刷新（M2-P6 复核第三批 G-a、第四批） */
@@ -136,10 +149,11 @@ function TrashList({ space, query, headingRef }: { readonly space: SpaceView, re
   }
 
   /**
-   * 这一条已经不在回收站里了（404）之后：同样的内容在时限之内重新请求，兑现为刷新好了没有，说明据此说"列表已刷新"还是"没能刷新"
-   * （M2-P6 复核第五批 G3：原来不看刷新的结果，刷新失败、那一行还在时也说"列表已刷新"）。withSpace：页头与导航也一起（不计入）
+   * 被拒绝之后（404：这一条已经不在回收站里了；403：空间刚被归档）：同样的内容在时限之内重新请求，兑现为刷新好了没有，
+   * 404 的说明据此说"列表已刷新"还是"没能刷新"（M2-P6 复核第五批 G3：原来不看刷新的结果，刷新失败、那一行还在时也说"列表已刷新"）。
+   * withSpace：页头（权限、归档）与导航也一起（不计入、不等）。403 原来不限时地等它（Codex 对抗评审 CX4 一并核对），现在同样最多等到时限
    */
-  async function refreshAfterGone(withSpace: boolean): Promise<boolean> {
+  async function refreshAfterDenied(withSpace: boolean): Promise<boolean> {
     if (withSpace)
       void refreshQueries(queryClient, [SPACES_QUERY_KEY], { throwOnError: false })
     return refreshWithin(refreshAfterUnknown)
@@ -148,20 +162,21 @@ function TrashList({ space, query, headingRef }: { readonly space: SpaceView, re
   const restore = useMutation({
     mutationFn: async (entry: TrashEntry) => ({ entry, result: await restoreTrashEntry(entry.id) }),
     onSuccess: async ({ entry, result }) => {
-      await refresh()
+      dropEntry(entry)
+      const refreshing = await refreshAfterChange()
       // 原来的位置已经不在（被永久删除、自己也在回收站里、跨空间移动过）：明确告诉用户它回到了空间的根目录
-      setNotice({ message: result.movedToRoot ? text.restoredToRoot(entry.title) : text.restored(entry.title) })
+      setNotice({ message: result.movedToRoot ? text.restoredToRoot(entry.title) : text.restored(entry.title), refreshing })
     },
     onError: async (error, entry) => {
       // 别人已经恢复或永久删除了它（404）：说明一句，不留下一条点不动的行。整个空间看不到了时回收站同样得到 404，
       // 页面随之换成"空间不存在"，这条说明也就不显示了
       if (isMissingResource(error)) {
-        setNotice({ message: text.gone(await refreshAfterGone(true)) })
+        setNotice({ message: text.gone(await refreshAfterDenied(true)) })
         return
       }
       // 空间刚被归档（403）：用服务端说的原因
       if (isAccessDenied(error)) {
-        await refresh(true)
+        await refreshAfterDenied(true)
         setNotice({ message: text.denied(entry.title, describeError(error).message), problem: true })
         return
       }
@@ -188,19 +203,21 @@ function TrashList({ space, query, headingRef }: { readonly space: SpaceView, re
         }
         catch (error) {
           if (!isMissingResource(error)) {
-            // 被拒绝（403）：列表与页头按新的权限刷新，弹窗留着说明原因（关掉之后"永久删除"可能已经不在了）。
+            // 被拒绝（403）：列表与页头按新的权限刷新（最多等到时限），弹窗留着说明原因（关掉之后"永久删除"可能已经不在了）。
             // 结果未知由确认的弹窗按 refresh 刷新、说明可能已经删除（M2-P6 复核第二批 G-2）
             if (isAccessDenied(error))
-              await refresh(true)
+              await refreshAfterDenied(true)
             throw error
           }
           // 别人已经恢复或永久删除了它：目的已经达到，按"已经不在回收站里"说明，不当成失败；"列表已刷新"还是"没能刷新"
           // 看刷新的结果（第五批 G3）
-          const refreshed = await refreshAfterGone(false)
+          const refreshed = await refreshAfterDenied(false)
           return () => setNotice({ message: text.gone(refreshed) })
         }
-        await refresh()
-        return () => setNotice({ message: text.purged(entry.title) })
+        // 按确定的写入结果先去掉这一行，再刷新（最多等到时限，CX4）：刷新一直不回来时弹窗照常关掉，说明接着说列表还在刷新
+        dropEntry(entry)
+        const refreshing = await refreshAfterChange()
+        return () => setNotice({ message: text.purged(entry.title), refreshing })
       },
       refresh: refreshAfterUnknown,
       // 确认之后这一行就没了，打开弹窗的按钮随之消失：焦点先交给页面的标题，随后出现的说明条再接住
@@ -240,12 +257,19 @@ function TrashList({ space, query, headingRef }: { readonly space: SpaceView, re
 
   return (
     <>
-      {notice !== undefined && <Notice focusKey={notice} variant={notice.problem === true ? 'destructive' : 'default'}>{notice.message}</Notice>}
+      {notice !== undefined && (
+        <Notice focusKey={notice} variant={notice.problem === true ? 'destructive' : 'default'}>
+          {notice.message}
+          <StillRefreshing refresh={notice.refreshing} />
+        </Notice>
+      )}
       {restore.isError && !isAccessDenied(restore.error) && !isUnknownOutcome(restore.error) && (
         <Alert variant="destructive">
           <AlertDescription>{describeError(restore.error).message}</AlertDescription>
         </Alert>
       )}
+      {/* 留着之前的列表、刷新却失败了（Codex 对抗评审 CX5）：明说没能刷新、给出重试，之前的列表照常显示 */}
+      <RefreshProblem query={query} list={text.title} />
       {entries.length === 0
         ? <p className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">{text.empty}</p>
         : (
@@ -272,7 +296,7 @@ function TrashList({ space, query, headingRef }: { readonly space: SpaceView, re
               </TableBody>
             </Table>
           )}
-      {query.isError && (
+      {query.isFetchNextPageError && (
         <Alert variant="destructive">
           <AlertDescription>{describeError(query.error).message}</AlertDescription>
         </Alert>

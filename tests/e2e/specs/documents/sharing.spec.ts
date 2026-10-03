@@ -2,8 +2,8 @@
 // - 分享对话框：按名字搜同事（等过滤的响应回来再操作，support/list-search.ts）、给查看者与编辑者、调整、取消，每一步都核对库里的授权；
 //   做完一件事的说明写进一直在的状态区，取消之后的说明等确认框关掉、焦点交还之后才写（写进去的那一刻不在 aria-hidden 之下，
 //   support/status-writes.ts）；
-// - 对方在"与我共享"里看到并打开：查看者只读、编辑者能改；只凭授权的人看不到所在位置（团队空间里的文件夹），没有移动与删除的入口，
-//   编辑器页的返回链接回"与我共享"；个人空间按所有者的人名呈现；
+// - 对方在"与我共享"里看到并打开：查看者只读、编辑者能改；只凭授权的人看不到所在位置（团队空间里的文件夹），没有移动、删除与分享的入口
+//   （行操作只有复制，编辑者另有改名：documents/copy.spec.ts 的 US-M2-08），编辑器页的返回链接回"与我共享"；个人空间按所有者的人名呈现；
 // - 取消之后立即不能访问：另一台设备上已经打开的页面存不进去，重新打开是"内容不存在"；
 // - 编辑者看不到分享入口（行操作与编辑器的页头），空间管理员看得到（对照）；
 // - 编辑器页头的分享：对话框里输入不改动表格；对话框开着时保存完成或失败，页头的保存状态写进结果的那一刻不在 aria-hidden 之下；
@@ -129,9 +129,13 @@ test.describe('US-M2-10 单独分享', () => {
     const team = list.getByRole('listitem').filter({ hasText: '部门的周报' })
     await expect(team).toContainText(`${space.name} · 只能查看`)
     await expect(list.getByRole('listitem').filter({ hasText: '个人的计划' })).toContainText(`${shownName(lead)} 的个人空间 · 只能查看`)
-    // 不显示所在位置（团队空间里的文件夹）；没有行操作（移动、删除这些结构性的操作只给空间里有角色的人）
+    // 不显示所在位置（团队空间里的文件夹）；行操作按权限只给能做的：只凭授权的查看者只能复制，没有移动、删除与分享
+    // （结构性的操作只给空间里有角色的人；"与我共享"里的复制与改名见 documents/copy.spec.ts 的 US-M2-08，Codex 对抗评审 CX3）
     await expect(page.getByText('机密目录')).toHaveCount(0)
-    await expect(page.getByRole('button', { name: /^操作 / })).toHaveCount(0)
+    await team.getByRole('button', { name: '操作 部门的周报', exact: true }).click()
+    await expect(team.getByRole('button', { name: '复制', exact: true })).toBeVisible()
+    await expect(team.getByRole('button', { name: /^(?:改名|移动|删除|分享)$/ })).toHaveCount(0)
+    await team.getByRole('button', { name: '取消', exact: true }).click()
     await team.getByRole('link').click()
     await expect(page).toHaveURL(new RegExp(`/documents/${documentId}$`))
     await expect(page.locator('#sheet-editor')).toHaveAttribute('data-editor-state', /^(?:ready|steady)$/, { timeout: 30_000 })

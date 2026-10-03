@@ -1,7 +1,8 @@
 // 管理界面（M2-P1 设计 §3.8，US-M2-01、03、04）：只给系统管理员；账户的操作先确认；一次性链接只显示一次。审计页见 admin-audit.test.tsx。
 import type { Invitation } from '@nerve-office/contracts'
-import { fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
+import { OUTCOME_REFRESH_TIME_LIMIT_MS } from '../shared/api/write-outcome.ts'
 import { formatDateTime } from '../shared/lib/format.ts'
 import { apiError, installFakeApi, inTurn, json, networkFailure } from '../shared/testing/fake-api.test-support.ts'
 import { plainName, shownName } from '../shared/testing/people.test-support.ts'
@@ -635,5 +636,49 @@ describe('管理界面：邀请', () => {
     // 表头之后的第一行是新的邀请
     await waitFor(() => expect(document.activeElement).toBe(rows[1]))
     expect(within(rows[1] ?? document.body).getByText('待接受')).toBeInTheDocument()
+  })
+})
+
+// 写入已经确定成功之后的刷新（Codex 对抗评审 CX4）：管理界面的确认原来等列表刷新回来才关掉，刷新一直不回来时一直停在"正在处理…"
+describe('管理界面：写入成功之后的刷新（Codex 对抗评审 CX4）', () => {
+  it('停用成功，随后刷新账户列表一直不回来：到了时限确认框照常关掉；这一行按响应已经是"已停用"，焦点回到同一个位置换上的"启用"；表格上方说列表还在刷新，刷新回来之后不再说', async () => {
+    // 跟着真实的时间走，另外可以一下子拨过时限；在前面留出 2 秒的余量
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      let calls = 0
+      let finish: (response: Response) => void = () => {}
+      installFakeApi({
+        ...SPACES,
+        'GET /api/auth/session': () => json(200, session('admin')),
+        'GET /api/admin/users': async () => {
+          calls += 1
+          if (calls === 1)
+            return json(200, listPage([ROOT, AMY]))
+          return new Promise<Response>((resolve) => {
+            finish = resolve
+          })
+        },
+        [`POST /api/admin/users/${AMY.id}/disable`]: () => json(200, { ...AMY, status: 'disabled' }),
+      })
+      renderApp('/admin/users')
+      const dialog = await openConfirm(await rowOf('amy'), `停用 ${plainName('艾米', 'amy')}`)
+      fireEvent.click(within(dialog).getByRole('button', { name: '停用' }))
+      await waitFor(() => expect(calls).toBe(2))
+      await act(async () => vi.advanceTimersByTimeAsync(OUTCOME_REFRESH_TIME_LIMIT_MS - 2_000))
+      expect(within(dialog).getByRole('button', { name: '正在处理…' })).toHaveAttribute('aria-disabled', 'true')
+      await act(async () => vi.advanceTimersByTimeAsync(2_000))
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+      const row = await rowOf('amy')
+      expect(within(row).getByText('已停用')).toBeInTheDocument()
+      await waitFor(() => expect(document.activeElement).toBe(within(row).getByRole('button', { name: `启用 ${plainName('艾米', 'amy')}` })))
+      // 一直在的那一行（显式写 aria-live：弹窗开着时写进去也照样播报）
+      const line = screen.getByText('列表还在刷新，显示的可能还是之前的，刷新好了会自动更新。')
+      expect(line).toHaveAttribute('aria-live', 'polite')
+      await act(async () => finish(json(200, listPage([ROOT, { ...AMY, status: 'disabled' }]))))
+      await waitFor(() => expect(line).toBeEmptyDOMElement())
+    }
+    finally {
+      vi.useRealTimers()
+    }
   })
 })

@@ -11,6 +11,7 @@ import { formatDateTime } from '../../shared/lib/format.ts'
 import { SEARCH_QUERY_PARAM } from '../../shared/lib/space-paths.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { Alert, AlertDescription, Button, Skeleton } from '../../shared/ui/index.ts'
+import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { SpaceLabel } from '../../shared/ui/space-label.tsx'
 import { sessionQueryOptions } from '../auth/index.ts'
 import { searchQueryOptions } from './search-api.ts'
@@ -87,14 +88,23 @@ function Results({ keyword }: { readonly keyword: string }) {
       </Alert>
     )
   }
-  if (results.length === 0)
-    return <p className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">{text.empty(keyword)}</p>
+  // 留着之前的结果、重新请求却失败了（例如回到这一页时，Codex 对抗评审 CX5）：明说没能刷新、给出重试，之前的结果照常显示
+  const refreshProblem = <RefreshProblem query={query} list={text.listLabel} />
+  if (results.length === 0) {
+    return (
+      <>
+        {refreshProblem}
+        <p className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">{text.empty(keyword)}</p>
+      </>
+    )
+  }
   return (
     <>
+      {refreshProblem}
       <ul ref={listRef} aria-label={text.listLabel} className="divide-y rounded-lg border">
         {results.map(result => <ResultItem key={result.id} result={result} viewerId={session.data?.user.id} />)}
       </ul>
-      {query.isError && (
+      {query.isFetchNextPageError && (
         <Alert variant="destructive">
           <AlertDescription>{describeError(query.error).message}</AlertDescription>
         </Alert>
