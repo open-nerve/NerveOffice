@@ -119,7 +119,11 @@ test.describe('US-M1-02 登录与退出', () => {
 
     await page.getByRole('button', { name: '退出', exact: true }).click()
     await expect(page).toHaveURL(/\/login$/)
-    await page.goBack()
+    // 退出是整页换成登录页（location.replace）：地址变了只说明新文档已经提交，还在加载。等登录页能用了再后退——
+    // 加载还没完就后退，WebKit 偶发"WebKit encountered an internal error"（M2 收尾合并之后的 CI）
+    await expect(page.getByRole('form', { name: '登录' })).toBeVisible()
+    // 后退到的页面随即发现会话已失效、整页换成登录页：只等后退提交，不等它的 load（随即又被换掉），之后按结果断言
+    await page.goBack({ waitUntil: 'commit' })
     await expect(page).toHaveURL(/\/login/)
     await expect(page.getByText('退出前能看到的文档')).toBeHidden()
     const response = await page.request.get('/api/documents')
