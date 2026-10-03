@@ -15,7 +15,7 @@ import { createDocument, createDocumentIn, createFolderIn, createTeamSpace, crea
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { EDITOR_TEST_TIMEOUT, editorSurface, openEditor, saveButton, saveStatus, typeInCell, waitForEditor } from '../../support/sheet.ts'
+import { blockLeaseRenewals, EDITOR_TEST_TIMEOUT, editorSurface, openEditor, saveButton, saveStatus, typeInCell, waitForEditor } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -124,6 +124,8 @@ test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
     await loginThroughApi(page, me)
     await openEditor(page, documentId)
     await expect(saveButton(page)).toBeVisible()
+    // 心跳续租也会得知失去编辑权（M3-P1）：这条核对的是下一次保存的说明，拦下心跳，让保存那一步确定地先到
+    await blockLeaseRenewals(page)
     await typeInCell(page, 'A1', '降级之后写的')
 
     await loginThroughApi(anotherDevice, owner)
@@ -154,6 +156,8 @@ test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
     await page.goto(`/spaces/${space.id}`)
     await expect(page.getByText('我的角色：编辑者')).toBeVisible()
     await openEditor(page, workingId)
+    // 心跳续租也会得知失去访问（M3-P1）：这条核对的是保存的说明，拦下心跳，让保存那一步确定地先到
+    await blockLeaseRenewals(page)
     await typeInCell(page, 'A1', '移出之后写的')
 
     // 空间管理员在另一台设备上把我移出
@@ -194,6 +198,8 @@ test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
     await loginThroughApi(page, me)
     await openEditor(page, documentId)
     await expect(saveButton(page)).toBeVisible()
+    // 心跳续租也会得知登录已失效（M3-P1，随即暂停保存）：这条核对的是保存时的说明，拦下心跳，让保存那一步确定地先到
+    await blockLeaseRenewals(page)
     await typeInCell(page, 'A1', '停用之后写的')
 
     // 系统管理员在另一台设备上停用我

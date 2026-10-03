@@ -1,12 +1,14 @@
 // 编辑器页的访问（US-M1-08 的页面部分，P4 设计 §3.7.1）：别人的文档与不存在的文档显示相同；未登录先登录，登录后回到编辑器页。
 // 打开之后文档被删除、移走或失去权限（M2 总设计 A14，M2-P6 复核 S8）：下一次保存给出明确的说明。
+// M3-P1 起心跳续租也会得知失去访问（随即说明编辑权已失效）：这几条核对的是保存时的说明，拦下心跳，让保存那一步确定地先到
+// （support/sheet.ts 的 blockLeaseRenewals）
 import type { Page } from '@playwright/test'
 import { randomUUID } from 'node:crypto'
 import { archiveSpace, createDocument, createDocumentIn, createTeamSpace, createUser, removeMember } from '../../support/database.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { EDITOR_TEST_TIMEOUT, editorSurface, openEditor, saveButton, saveStatus, typeInCell, waitForEditor } from '../../support/sheet.ts'
+import { blockLeaseRenewals, EDITOR_TEST_TIMEOUT, editorSurface, openEditor, saveButton, saveStatus, typeInCell, waitForEditor } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -59,6 +61,7 @@ test.describe('US-M2-09 A14 编辑器页：打开之后文档被删除、移走�
     const documentId = await createDocument(owner, '要被删的表')
     await loginThroughApi(page, owner)
     await openEditor(page, documentId)
+    await blockLeaseRenewals(page)
     await typeInCell(page, 'A1', '还没保存的内容')
     await deleteThroughApi(page, documentId)
     await saveButton(page).click()
@@ -73,6 +76,7 @@ test.describe('US-M2-09 A14 编辑器页：打开之后文档被删除、移走�
     const documentId = await createDocumentIn(space.id, lead, '共同的表')
     await loginThroughApi(page, editor)
     await openEditor(page, documentId)
+    await blockLeaseRenewals(page)
     await typeInCell(page, 'A1', '还没保存的内容')
     await removeMember(space.id, editor)
     await saveButton(page).click()
@@ -87,6 +91,7 @@ test.describe('US-M2-09 A14 编辑器页：打开之后文档被删除、移走�
     const documentId = await createDocumentIn(space.id, lead, '共同的表')
     await loginThroughApi(page, editor)
     await openEditor(page, documentId)
+    await blockLeaseRenewals(page)
     await typeInCell(page, 'A1', '还没保存的内容')
     await archiveSpace(space.id)
     await saveButton(page).click()

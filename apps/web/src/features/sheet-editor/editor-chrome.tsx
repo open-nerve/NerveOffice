@@ -264,7 +264,8 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
               <AlertDescription>
                 <p>{save === undefined ? editorMessages.signedOut : editorMessages.signedOutEditing}</p>
                 <SessionCheckProblem problem={view.sessionProblem} />
-                {/* 在新标签页登录：本页不离开，修改留着；那边登录之后，本页收到消息恢复保存 */}
+                {/* 在新标签页登录：本页不离开，修改留着；那边登录之后，本页收到消息恢复保存（持有编辑权的页面随即核对编辑权：
+                    它绑定原来的登录，已经失效，页头改为说明编辑权已失效，M3-P1） */}
                 <a href={LOGIN_PATH} target="_blank" rel="noopener" className={buttonVariants({ variant: 'outline', size: 'sm', className: 'mt-2' })}>
                   {editorMessages.loginInNewTab}
                 </a>

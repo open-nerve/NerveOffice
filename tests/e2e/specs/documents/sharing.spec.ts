@@ -16,7 +16,7 @@ import { expect, test } from '../../support/fixtures.ts'
 import { searchList } from '../../support/list-search.ts'
 import { plainName, shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, EDITOR_TEST_TIMEOUT, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
+import { blockLeaseRenewals, cellOf, EDITOR_TEST_TIMEOUT, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
 import { expectWrittenAfterClose, recordStatusWrites, statusWrites } from '../../support/status-writes.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
@@ -169,10 +169,11 @@ test.describe('US-M2-10 单独分享', () => {
     const documentId = await createDocument(owner, '会被取消的表')
     await grantDocument(documentId, friend, 'editor', owner)
 
-    // 同事在另一台设备上打开着（能编辑）
+    // 同事在另一台设备上打开着（能编辑）。心跳续租也会得知失去访问（M3-P1）：这条核对的是保存被拒的说明，拦下心跳，让保存那一步确定地先到
     await loginThroughApi(anotherDevice, friend)
     await openEditor(anotherDevice, documentId)
     await expect(saveButton(anotherDevice)).toBeVisible()
+    await blockLeaseRenewals(anotherDevice)
 
     // 所有者经对话框取消
     await loginThroughApi(page, owner)

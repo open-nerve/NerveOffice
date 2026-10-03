@@ -1,57 +1,73 @@
-// 两个标签页，旧页面的保存不覆盖新内容（US-M1-07，P4 设计 §3.5.2、§3.10）。
-import { createUser } from '../../support/database.ts'
+// 两个标签页，旧页面的保存不覆盖新内容（US-M1-07，P4 设计 §3.5.2、§3.10）。M3-P1 起同一时刻只有一个标签页能编辑（编辑租约，
+// P1 设计 §3.4.7）：后打开的只能阅读；前一个的编辑权到期之后才轮到它，前一个再保存被拒、保留本页的内容。
+import { createUser, expireEditLease } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openEditor, ribbon, saveAndWait, saveButton, savedContent, saveStatus, typeInCell, waitForEditor } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, editingNotice, EDITOR_TEST_TIMEOUT, isSaveRequest, leaveEditor, openEditor, ribbon, saveAndWait, saveButton, savedContent, saveStatus, typeInCell, waitForEditor } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
 test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容', () => {
-  test('A 保存之后 B 再保存：B 得到版本冲突并保留本页的内容，服务器上是 A 的版本', async ({ page, context }) => {
+  test('A 编辑时 B 只能阅读；A 的编辑权到期之后 B 重新加载、接手保存；A 再保存被拒、保留本页的内容，服务器上是 B 的版本', async ({ page, context }) => {
     await loginThroughApi(page, await createUser('conflict'))
     const documentId = await createSheetThroughApi(page)
-    const other = await context.newPage()
     await openEditor(page, documentId)
-    await openEditor(other, documentId)
-
     await typeInCell(page, 'A1', 'from A')
-    await saveAndWait(page)
 
+    // B（同一个人的另一个标签页）：只能阅读，说明是自己在另一个标签页或设备上编辑，没有保存
+    const other = await context.newPage()
+    await openEditor(other, documentId)
+    await expect(editingNotice(other)).toHaveText('你在另一个标签页或设备上正在编辑这份文档，这里只能阅读')
+    await expect(other.locator('#editor-chrome').getByRole('banner').getByText('只能查看', { exact: true })).toBeVisible()
+    await expect(saveButton(other)).toHaveCount(0)
+
+    // A 的编辑权到期（断网、休眠一类：改写租约行的时间，不等真实的 90 秒）；B 重新加载，取得编辑权，键入并保存
+    await expireEditLease(documentId)
+    await other.reload()
+    await waitForEditor(other)
+    await expect(saveButton(other)).toBeVisible()
+    await expect(editingNotice(other)).toHaveCount(0)
     await typeInCell(other, 'A1', 'from B')
-    await saveButton(other).click()
-    await expect(saveStatus(other)).toHaveText('版本冲突')
-    await expect(other.getByRole('alert')).toContainText('别处保存了更新的版本。本页的修改没有保存')
-    await expect(other.getByRole('button', { name: '重新加载' })).toBeVisible()
-    await expect(saveButton(other)).toHaveAttribute('aria-disabled', 'true')
+    await saveAndWait(other)
 
+    // A 再保存：被拒（编辑权已经在 B 手里；A 的心跳也可能先一步得知到期），页头说明编辑权已失效、本页的修改没有保存
+    await saveButton(page).click()
+    await expect(saveStatus(page)).toHaveText('编辑权已失效')
+    const lost = page.getByRole('alert')
+    await expect(lost).toContainText('编辑权已失效：')
+    await expect(lost).toContainText('本页的修改没有保存')
+    await expect(lost.getByRole('button', { name: '重新加载' })).toBeVisible()
+    await expect(saveButton(page)).toHaveAttribute('aria-disabled', 'true')
+
+    // 服务器上是 B 的版本
     const saved = await savedContent(page, documentId)
-    expect(cellOf(saved.snapshot, 'A1')?.v).toBe('from A')
+    expect(cellOf(saved.snapshot, 'A1')?.v).toBe('from B')
     expect(saved.revision).toBe(2)
 
-    // B 的表格里仍是本页的内容：画布上的字读不出来，用查找核对（Codex 评审的覆盖说明）
-    const data = await ribbon(other, '数据')
+    // A 的表格里仍是本页的内容：画布上的字读不出来，用查找核对（Codex 评审的覆盖说明）
+    const data = await ribbon(page, '数据')
     await data.getByRole('button', { name: '查找替换' }).click()
-    const find = other.getByRole('dialog', { name: '查找' })
+    const find = page.getByRole('dialog', { name: '查找' })
     await find.getByText('替换 / 高级查找').click()
-    await find.getByRole('textbox', { name: '输入查找内容' }).fill('from B')
+    await find.getByRole('textbox', { name: '输入查找内容' }).fill('from A')
     await find.getByRole('button', { name: '查找', exact: true }).click()
     await expect(find).toContainText('1/1')
     await find.getByRole('button', { name: 'Close' }).click()
 
-    // B 保留本页的内容：离开时仍提示有没保存的内容；再按保存不发请求（审查 B7）。
+    // A 保留本页的内容：再按保存不发请求（审查 B7），离开时仍提示有没保存的内容。
     // "没有请求"只能等一段时间再下结论：正常的保存从按键到发出请求不到 100 ms（公式收齐每 20 ms 判断一次），这里等 1 秒
-    const put = other.waitForRequest(request => request.method() === 'PUT', { timeout: 1_000 }).then(() => true, () => false)
-    await other.keyboard.press('ControlOrMeta+s')
+    const put = page.waitForRequest(isSaveRequest, { timeout: 1_000 }).then(() => true, () => false)
+    await page.keyboard.press('ControlOrMeta+s')
     expect(await put).toBe(false)
-    await expect(saveStatus(other)).toHaveText('版本冲突')
+    await expect(saveStatus(page)).toHaveText('编辑权已失效')
     expect((await savedContent(page, documentId)).revision).toBe(2)
     const dialogs: string[] = []
-    other.on('dialog', (dialog) => {
+    page.on('dialog', (dialog) => {
       dialogs.push(dialog.type())
       void dialog.dismiss()
     })
-    await other.close({ runBeforeUnload: true })
+    await page.close({ runBeforeUnload: true })
     await expect.poll(() => dialogs).toEqual(['beforeunload'])
   })
 
@@ -81,33 +97,39 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     expect([cellOf(saved.snapshot, 'A1')?.v, cellOf(saved.snapshot, 'A2')?.v]).toEqual(['first', 'second'])
   })
 
-  test('冲突之后重新加载：看到服务器上的最新版本，可以继续编辑保存', async ({ page, context }) => {
+  test('编辑权失效之后重新加载：看到服务器上的最新版本，可以继续编辑保存', async ({ page, context }) => {
     await loginThroughApi(page, await createUser('conflict-reload'))
     const documentId = await createSheetThroughApi(page)
-    const other = await context.newPage()
     await openEditor(page, documentId)
-    await openEditor(other, documentId)
-    await typeInCell(page, 'A1', 'newer')
-    await saveAndWait(page)
-    await typeInCell(other, 'B1', 'older page')
-    await saveButton(other).click()
-    await expect(saveStatus(other)).toHaveText('版本冲突')
+    await typeInCell(page, 'B1', 'older page')
 
-    // 本页有没保存的修改：重新加载时浏览器先提示，选择离开之后重新加载（不另外打开页面，审查 B7）
+    // 这一页的编辑权到期；另一个标签页接手、保存，然后离开（关闭页面时释放编辑权）。
+    // 等释放到了服务端再往下：这一页重新加载时要取得编辑权，释放晚到时它只能阅读（P1 设计 §7 第一条，P5 用 Web Locks 解决）
+    await expireEditLease(documentId)
+    const other = await context.newPage()
+    await openEditor(other, documentId)
+    await expect(saveButton(other)).toBeVisible()
+    await typeInCell(other, 'A1', 'newer')
+    await saveAndWait(other)
+    await leaveEditor(other, documentId)
+    await other.close()
+
+    // 这一页再保存被拒，说明之后提供重新加载。本页有没保存的修改：重新加载时浏览器先提示，选择离开之后重新加载（不另外打开页面，审查 B7）
+    await saveButton(page).click()
     const dialogs: string[] = []
-    other.on('dialog', (dialog) => {
+    page.on('dialog', (dialog) => {
       dialogs.push(dialog.type())
       void dialog.accept()
     })
-    const reloaded = other.waitForEvent('load')
-    await other.getByRole('button', { name: '重新加载' }).click()
+    const reloaded = page.waitForEvent('load')
+    await page.getByRole('alert').getByRole('button', { name: '重新加载' }).click()
     await reloaded
     expect(dialogs).toEqual(['beforeunload'])
-    await waitForEditor(other, 'steady')
-    await expect(saveStatus(other)).toHaveText('已保存到云端')
-    await typeInCell(other, 'C1', 'after reload')
-    await saveAndWait(other)
-    const saved = (await savedContent(other, documentId)).snapshot
+    await waitForEditor(page, 'steady')
+    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    await typeInCell(page, 'C1', 'after reload')
+    await saveAndWait(page)
+    const saved = (await savedContent(page, documentId)).snapshot
     expect([cellOf(saved, 'A1')?.v, cellOf(saved, 'B1'), cellOf(saved, 'C1')?.v]).toEqual(['newer', undefined, 'after reload'])
   })
 })
