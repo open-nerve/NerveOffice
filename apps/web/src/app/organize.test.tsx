@@ -281,6 +281,33 @@ describe('US-M2-07 行内的整理操作', () => {
     expect(await screen.findByText('已把「周报」移动到市场部 / 方案')).toBeInTheDocument()
   })
 
+  it('移动的行为不变（M2 Codex 评审复验的一般 1 只改复制）：导航的空间列表还没取到时，目标就是它现在所在的空间——取它的目录，点进文件夹就能提交', async () => {
+    let openSpaces: () => void = () => {}
+    const spacesOpened = new Promise<void>((resolve) => {
+      openSpaces = resolve
+    })
+    const api = loggedIn({
+      'GET /api/spaces': async () => {
+        await spacesOpened
+        return json(200, { items: [personalSpaceOf(SESSION), TEAM] })
+      },
+      [foldersKey(SPACE_ID)]: folderPage([folder(PLAN_ID, '方案')]),
+      [foldersKey(SPACE_ID, PLAN_ID)]: noFolders(),
+      [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()),
+      [`POST /api/documents/${WEEKLY_ID}/move`]: () => json(200, detail({ folderId: PLAN_ID })),
+    })
+    renderApp('/')
+    await openActions('周报')
+    fireEvent.click(await screen.findByRole('button', { name: '移动' }))
+    const form = screen.getByRole('form', { name: '移动' })
+    expect(within(form).queryByRole('status', { name: '正在加载可以复制到的空间…' })).toBeNull()
+    fireEvent.click(await within(form).findByRole('button', { name: '进入 方案' }))
+    fireEvent.click(within(form).getByRole('button', { name: '移动到这里' }))
+    await waitFor(() => expect(lastBody(api, `POST /api/documents/${WEEKLY_ID}/move`)).toEqual({ spaceId: SPACE_ID, folderId: PLAN_ID }))
+    expect(await screen.findByText('已把「周报」移动到方案')).toBeInTheDocument()
+    openSpaces()
+  })
+
   it('移动到它现在待的地方：按钮不可用，并说明原因', async () => {
     loggedIn({ [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()) })
     renderApp('/')

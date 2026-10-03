@@ -12,6 +12,7 @@ import type { Buffer } from 'node:buffer'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import { createHash } from 'node:crypto'
+import { APPLICATION_NAME } from '@nerve-office/api/testing'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { createTestDatabase } from '../support/database.ts'
@@ -42,7 +43,6 @@ const OLD = { memoryCost: 12_288, timeCost: 3, parallelism: 1 }
 const OLD_GROUP = 'm=12288,t=3,p=1'
 const WRONG = 'not the password at all'
 /** 应用的连接池的 application_name（apps/api 的 database 模块）：只取消应用的语句 */
-const APPLICATION_NAME = 'nerve-office-api'
 
 /** 限流计数的键的摘要（与 auth 的 throttle-keys 一致；测试都从本机发出） */
 function digest(key: string): Buffer {

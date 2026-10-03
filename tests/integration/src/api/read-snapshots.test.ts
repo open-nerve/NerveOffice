@@ -3,8 +3,10 @@
 // 接口从运行中的应用的路由表列出（support/routes.ts），不手写接口清单：新加的 GET 接口不在下面的请求表里，或者不走快照，这里就失败。
 // 对每个接口用能成功的参数发一次请求（2xx），记下应用发出的语句与发出它的连接（support/statement-capture.ts），断言：
 // - 快照之前只有会话守卫的语句（与"只走守卫"的请求逐条相同：按摘要查会话、按 id 查账户，都在连接池上）；
-// - 守卫之后恰好开了一个快照：BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY，第一条语句是开场核对（按 id 查这个人的账户），
-//   之后的语句全部在同一个连接上，以 COMMIT 结束，COMMIT 之后再没有语句——没有语句在快照之外读数据；
+// - 守卫之后恰好开了一个快照：BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY，开场核对在最前——第一条按 id 查守卫认证过的那条会话
+//   （M2 Codex 评审复验的建议 3），第二条按 id 查这个人的账户，参数是本人的会话与账户；
+//   之后的语句全部在同一个连接上，以 COMMIT 结束，COMMIT 之后再没有语句——没有语句在快照之外读数据。
+//   这里每个接口只发一组参数，走不到的分支另由连接池兜住：快照进行中，连接池上的查询一律报错（apps/api 的 pool.ts，复验的必须修 1）；
 // - 不走快照的 GET 接口只有 EXEMPT 写明的几个，各有原因：都是公开的接口（没有登录，没有要在快照里复核的身份与权限）。
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
@@ -12,7 +14,7 @@ import type { TestDatabase } from '../support/database.ts'
 import type { Route } from '../support/routes.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import type { CapturedQuery, StatementCapture } from '../support/statement-capture.ts'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount, createPassiveAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -20,7 +22,7 @@ import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
 import { setGrants } from '../support/grants.ts'
 import { routesOf } from '../support/routes.ts'
-import { asUser, login } from '../support/session-client.ts'
+import { asUser, login, SESSION_COOKIE } from '../support/session-client.ts'
 import { createTeamSpace } from '../support/spaces.ts'
 import { captureStatements } from '../support/statement-capture.ts'
 
@@ -121,6 +123,15 @@ async function freshSession(who: 'amy' | 'root'): Promise<LoggedIn> {
   return login(app.baseUrl, account.username, account.password)
 }
 
+/** 这条会话在库里的 id：库里只存令牌（Cookie 的值）的 SHA-256 摘要，按摘要找到那一行 */
+async function sessionIdOf(session: LoggedIn): Promise<string> {
+  const digest = createHash('sha256').update(session.cookie.slice(`${SESSION_COOKIE}=`.length), 'utf8').digest()
+  const id = await database.query(async client => (await client.query<{ id: string }>('SELECT id FROM auth_sessions WHERE token_hash = $1', [digest])).rows[0]?.id)
+  if (id === undefined)
+    throw new Error('库里没有这条会话')
+  return id
+}
+
 /** 发请求并读完响应体，返回状态与期间应用发出的全部语句（带参数与连接） */
 async function observe(session: LoggedIn, path: string): Promise<{ status: number, queries: CapturedQuery[] }> {
   const { result, queries } = await capture.during(async () => {
@@ -138,8 +149,14 @@ async function guardStatements(): Promise<CapturedQuery[]> {
   return queries
 }
 
-/** 一个请求的语句不符合"守卫之后恰好一个只读快照、快照之外不读数据"之处 */
-function snapshotProblems(queries: readonly CapturedQuery[], guard: readonly CapturedQuery[], userId: string): string[] {
+/** 开场核对要核对的身份：发请求的这个人与守卫认证过的那条会话 */
+interface Identity {
+  readonly userId: string
+  readonly sessionId: string
+}
+
+/** 一个请求的语句不符合"守卫之后恰好一个只读快照、开场核对在最前、快照之外不读数据"之处 */
+function snapshotProblems(queries: readonly CapturedQuery[], guard: readonly CapturedQuery[], identity: Identity): string[] {
   const begins = queries.flatMap((query, index) => (query.text.toLowerCase() === SNAPSHOT_BEGIN ? [index] : []))
   if (begins.length !== 1)
     return [`应恰好开一个只读快照，实际 ${begins.length} 个；语句：${queries.map(query => query.text).join(' | ')}`]
@@ -149,9 +166,11 @@ function snapshotProblems(queries: readonly CapturedQuery[], guard: readonly Cap
   const before = queries.slice(0, begin).map(query => query.text)
   if (before.join('\n') !== guard.map(query => query.text).join('\n'))
     problems.push(`快照之前应只有会话守卫的语句：${before.join(' | ')}`)
-  const opening = queries[begin + 1]
-  if (opening === undefined || opening.connection !== connection || opening.text !== guard.at(-1)?.text || opening.values[0] !== userId)
-    problems.push(`快照的第一条语句应是开场核对（按 id 查这个人的账户）：${opening?.text ?? '（没有）'}`)
+  const [sessionCheck, accountCheck] = [queries[begin + 1], queries[begin + 2]]
+  if (sessionCheck === undefined || sessionCheck.connection !== connection || !sessionCheck.text.includes('from "auth_sessions"') || !sessionCheck.text.includes('"auth_sessions"."id" = $1') || sessionCheck.values[0] !== identity.sessionId)
+    problems.push(`快照的第一条语句应是开场核对的会话（按 id 查守卫认证过的那条会话）：${sessionCheck?.text ?? '（没有）'}`)
+  if (accountCheck === undefined || accountCheck.connection !== connection || accountCheck.text !== guard.at(-1)?.text || accountCheck.values[0] !== identity.userId)
+    problems.push(`快照的第二条语句应是开场核对的账户（按 id 查这个人的账户）：${accountCheck?.text ?? '（没有）'}`)
   const end = queries.findIndex((query, index) => index > begin && query.connection === connection && query.text.toLowerCase() === 'commit')
   if (end < 0)
     return [...problems, '快照没有以 COMMIT 结束']
@@ -188,19 +207,21 @@ describe('登录之后的 GET 接口都在一个只读快照里判断权限、�
     expect(guard.some(query => query.text.toLowerCase().startsWith('begin'))).toBe(false)
   })
 
-  it('每一个登录之后的 GET 接口：守卫之后恰好一个 REPEATABLE READ READ ONLY 快照，开场核对是第一条语句，其余语句都在同一个连接上，COMMIT 之后再没有语句', async () => {
+  it('每一个登录之后的 GET 接口：守卫之后恰好一个 REPEATABLE READ READ ONLY 快照，开场核对在最前（本人的会话、本人的账户），其余语句都在同一个连接上，COMMIT 之后再没有语句', async () => {
     const guard = await guardStatements()
     const problems: string[] = []
     for (const route of routes.filter(candidate => candidate.method === 'GET' && EXEMPT[nameOf(candidate)] === undefined)) {
       const probe = PROBES[nameOf(route)]?.(w)
       if (probe === undefined)
         continue
-      const { status, queries } = await observe(await freshSession(probe.who), probe.path)
+      const session = await freshSession(probe.who)
+      const { status, queries } = await observe(session, probe.path)
       if (status < 200 || status >= 300) {
         problems.push(`${nameOf(route)}：请求没有成功（${status}），换一个能成功的参数`)
         continue
       }
-      problems.push(...snapshotProblems(queries, guard, probe.who === 'amy' ? w.amy.id : w.root.id).map(problem => `${nameOf(route)}：${problem}`))
+      const identity = { userId: probe.who === 'amy' ? w.amy.id : w.root.id, sessionId: await sessionIdOf(session) }
+      problems.push(...snapshotProblems(queries, guard, identity).map(problem => `${nameOf(route)}：${problem}`))
     }
     expect(problems).toEqual([])
   })

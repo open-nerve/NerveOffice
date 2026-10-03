@@ -22,8 +22,8 @@ import { SessionService } from './session.service.ts'
  *   仍回 SESSION_EXPIRED，但不清除 Cookie：换令牌之前发出、之后才处理的请求，响应晚于新的 Cookie 到达时，清除会把新的删掉，
  *   本人随即掉线。修改密码时别的设备上的会话（password_changed）照常清除（M2-P6 复验 一般-3）；
  * - 标了 @SystemAdminOnly() 的接口，登录的不是系统管理员：PERMISSION_DENIED（M2-P1）。
- * 认证通过之后把这个请求的身份（账户、读到的系统角色）记在请求级的记录里（RequestIdentities，M2 Codex 评审 CX1）：
- * 这里的判断在处理器之前、在连接池上，处理器的只读快照开始之前账户可能被停用、系统角色可能被取消，
+ * 认证通过之后把这个请求的身份（账户、认证过的会话、读到的系统角色）记在请求级的记录里（RequestIdentities，M2 Codex 评审 CX1）：
+ * 这里的判断在处理器之前、在连接池上，处理器的只读快照开始之前会话可能被撤销、账户可能被停用、系统角色可能被取消，
  * 快照的开场核对据此在快照里再查一次（SnapshotIdentityCheck）。这里的判断照旧：提前拒绝、处理 Cookie。
  * 守卫排在处理器的在途计数之前：这里的数据库访问要短（按摘要与主键各查一次，间隔超过 1 分钟时顺延一次，P2 交接单；
  * 会话无效时另按摘要查一次撤销的原因，这条路径本来就少见）。
@@ -62,7 +62,7 @@ export class SessionGuard implements CanActivate {
     await this.sessions.keepAlive(session)
     attachPrincipal(request, { user, sessionId: session.id, csrfToken: csrfTokenFor(token) })
     identifyRequestUser(request, user.id)
-    this.identities.record({ userId: user.id, systemAdmin: user.systemRole === 'admin' })
+    this.identities.record({ userId: user.id, sessionId: session.id, systemAdmin: user.systemRole === 'admin' })
     // 只给系统管理员的接口（M2-P1 设计 §3.1）：系统角色每个请求重新读取，取消之后下一次请求就被拒绝
     if (this.reflector.getAllAndOverride<boolean | undefined>(SYSTEM_ADMIN_ROUTE, [context.getHandler(), context.getClass()]) === true && user.systemRole !== 'admin')
       throw new AppError('PERMISSION_DENIED')

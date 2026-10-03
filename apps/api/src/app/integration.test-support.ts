@@ -37,6 +37,9 @@ export const TABLE_DEFINITIONS: Readonly<Record<string, unknown>> = {
 // 集成测试的探针直接拿数据库句柄：连接池与关闭顺序的用例（database/pool、api/shutdown）
 export { DATABASE } from '../modules/database/index.ts'
 export type { Database } from '../modules/database/index.ts'
+// 应用的连接池的名字（application_name）：单连接核对与语句记录按它认应用自己的连接（support/single-query.ts、statement-capture.ts），
+// 引用这个常量而不各自写死：改名时两项核对跟着走，不会悄悄什么也不记（M2 Codex 评审复验的建议 2）
+export { APPLICATION_NAME } from '../modules/database/index.ts'
 // 直接核对 documents 的仓储只查给定范围里的文档（搜索的范围回归，M2-P6 复核 A 的 S3）；
 // 读正文、搜索在判断完权限、读数据之前停住（只读快照的回归，M2 Codex 评审 CX1）
 export { DocumentContentsRepository, DocumentsRepository } from '../modules/documents/index.ts'

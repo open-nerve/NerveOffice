@@ -16,7 +16,7 @@ import { Alert, AlertDescription, Button, Skeleton } from '../../shared/ui/index
 import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { SpaceLabel } from '../../shared/ui/space-label.tsx'
 import { sessionQueryOptions } from '../auth/index.ts'
-import { DocumentRow, OrganizeNoticeBar, useOrganizePanels, useOrganizeRefreshChecked } from '../documents/index.ts'
+import { DocumentRow, OrganizeNoticeBar, targetSpacesOf, useOrganizePanels, useOrganizeRefreshChecked } from '../documents/index.ts'
 import { SPACES_QUERY_KEY, spacesQueryOptions } from '../spaces/index.ts'
 import { sharedListQueryOptions } from './shared-api.ts'
 
@@ -52,11 +52,12 @@ function SharedList({ titleRef }: { readonly titleRef: RefObject<HTMLHeadingElem
   const queryClient = useQueryClient()
   const query = useInfiniteQuery(sharedListQueryOptions())
   const session = useQuery(sessionQueryOptions())
-  // 导航已经请求过"我能看到的空间"：复制的目标候选直接用它（服务端给的 canCreateDocuments），共用同一份缓存；
+  // 导航已经请求过"我能看到的空间"：复制的目标候选直接用它（服务端给的 canCreateDocuments），共用同一份缓存，
+  // 连同取到了没有：还没取到、取不到时复制的目标说明加载中、没能加载（可以重试），不回落到看不到的源空间（M2 Codex 评审复验的一般 1）；
   // refetchOnMount 关掉的理由与空间页相同（features/spaces/space-page.tsx）
   const spaces = useQuery({ ...spacesQueryOptions(), refetchOnMount: false })
   const visibleSpaces = spaces.data?.items ?? []
-  const targetSpaces = visibleSpaces.filter(space => space.permissions.canCreateDocuments)
+  const targetSpaces = targetSpacesOf(spaces)
   const panels = useOrganizePanels(titleRef)
   const refreshChecked = useOrganizeRefreshChecked()
   const documents = query.data?.pages.flatMap(page => page.items) ?? []

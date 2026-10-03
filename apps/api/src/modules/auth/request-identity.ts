@@ -6,14 +6,17 @@ import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { UsersService } from '../users/index.ts'
+import { SessionService } from './session.service.ts'
 
 /**
  * 会话守卫判断过的、这个请求的身份（M2 Codex 评审 CX1）：只读快照的开场核对据此在快照里再查一次。
+ * sessionId 是守卫认证过的那条会话（M2 Codex 评审复验的建议 3：开场核对另核对它没有撤销、没有过期）。
  * systemAdmin 是守卫读到的系统角色是不是管理员：只给系统管理员的接口按它放行；其余接口的调用者带着同一个值
  * （documents 的 accessActorOf，没有加入的系统管理员看得到团队空间的成员、管理面的权限位按它给）
  */
 export interface RequestIdentity {
   readonly userId: string
+  readonly sessionId: string
   readonly systemAdmin: boolean
 }
 
@@ -56,14 +59,20 @@ export class RequestIdentities {
 }
 
 /**
- * 只读快照的开场核对（M2 Codex 评审 CX1）：会话守卫在处理器之前判断过账户有效、系统角色，那之后到快照开始之间账户被停用、
- * 系统角色被取消，处理器读到的就是"撤权之后的数据"。所以守卫判断过的事实在快照里作为第一条语句再查一次，同时确定快照的时刻：
+ * 只读快照的开场核对（M2 Codex 评审 CX1）：会话守卫在处理器之前判断过会话有效、账户有效、系统角色，那之后到快照开始之间
+ * 会话被撤销、账户被停用、系统角色被取消，处理器读到的就是"撤权之后的数据"。这段时间不只是亚毫秒：还包括快照等连接池给连接的时间，
+ * 连接池满时最长等到取连接的超时（connectTimeoutMs，默认 5 秒）。所以守卫判断过的事实在快照里作为开头的语句再查一次，
+ * 第一条同时确定快照的时刻：
+ * - 守卫认证过的那条会话仍然有效（没有撤销、没有过期），否则 SESSION_EXPIRED（M2 Codex 评审复验的建议 3）。
+ *   签发重置正是拿"撤销全部会话"把入侵者踢出去的，这时账户仍然有效：只看账户的话，守卫之后撤销的会话还能把撤销之后的数据带出去。
+ *   换令牌（同一个浏览器重新登录、在这个浏览器里修改密码，旧会话以 replaced 撤销）时同样回 SESSION_EXPIRED，
+ *   与守卫对"换令牌之前发出、之后才处理的请求"的回答一致；快照是只读的，不碰 Cookie（守卫在这种情形下也不清除），
+ *   前端收到之后向服务端重新确认会话，浏览器里已经是同一个人的新会话，换上它，页面不动（apps/web 的 app/runtime.ts）；
  * - 账户仍然有效，否则 SESSION_EXPIRED（与守卫的说法一致；清除 Cookie、撤销会话由下一个请求经守卫做，快照是只读的）；
  * - 守卫读到是系统管理员的请求，仍是系统管理员，否则 PERMISSION_DENIED（与守卫拒绝只给系统管理员的接口的说法一致）。
  *   只给系统管理员的接口一定是这样的请求；其余接口里，调用者的系统角色同样决定看到什么（没有加入的系统管理员看得到团队空间的成员），
  *   所以不只看"这个接口是不是只给系统管理员"。快照之前刚被授予系统管理员的不拒绝：调用者仍按普通成员判断，看到的只会更少。
- * 会话行本身（撤销、过期）不在快照里重新核对：单纯的会话撤销（退出、换令牌、修改密码时撤销别的设备）不改变这个人对数据的权利，
- * 那之前开始的请求按撤销之前的那一刻回答没有越权；停用会让账户无效，在这里拒绝。
+ * 会话与账户分两条语句（都按主键）：会话表归 auth 的仓储，账户归 users，不跨模块联表（ADR-003）；先会话、后账户，与守卫的顺序相同。
  * 不在请求里（命令行、定时任务）、公开的接口：守卫没有记下身份，什么也不做。
  * 由 auth 向 database 登记（控制反转：database 不依赖 auth、users）
  */
@@ -71,6 +80,7 @@ export class RequestIdentities {
 export class SnapshotIdentityCheck implements OnModuleInit {
   constructor(
     private readonly identities: RequestIdentities,
+    private readonly sessions: SessionService,
     private readonly users: UsersService,
     private readonly transactions: TransactionRunner,
   ) {}
@@ -83,6 +93,8 @@ export class SnapshotIdentityCheck implements OnModuleInit {
     const identity = this.identities.current()
     if (identity === undefined)
       return
+    if (!await this.sessions.isActive(identity.sessionId, transaction))
+      throw new AppError('SESSION_EXPIRED')
     const user = await this.users.findById(identity.userId, transaction)
     if (user?.status !== 'active')
       throw new AppError('SESSION_EXPIRED')

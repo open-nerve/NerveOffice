@@ -117,7 +117,7 @@ describe('SessionGuard', () => {
     expect(sessions.invalidatedByRotation).not.toHaveBeenCalled()
   })
 
-  it('有效：挂上当前用户、会话与派生的 CSRF 令牌，请求日志带上 userId；身份记进请求级的记录（只读快照的开场核对用，M2 Codex 评审 CX1）', async () => {
+  it('有效：挂上当前用户、会话与派生的 CSRF 令牌，请求日志带上 userId；身份（账户、认证过的会话、系统角色）记进请求级的记录（只读快照的开场核对用，M2 Codex 评审 CX1）', async () => {
     const token = generateSessionToken()
     const { guard, sessions, identities } = setup({ session: SESSION, user: ALICE })
     const { context, request, logChild } = exchange(`theme=dark; nerve_session=${token}`)
@@ -131,7 +131,7 @@ describe('SessionGuard', () => {
     expect(requestUserId(request)).toBe(ALICE.id)
     expect(logChild).toHaveBeenCalledWith({ userId: ALICE.id })
     expect(request.log).not.toBe(requestLog)
-    expect(identities.record).toHaveBeenCalledExactlyOnceWith({ userId: ALICE.id, systemAdmin: false })
+    expect(identities.record).toHaveBeenCalledExactlyOnceWith({ userId: ALICE.id, sessionId: SESSION.id, systemAdmin: false })
   })
 
   it('只给系统管理员的接口：成员得到 PERMISSION_DENIED，系统管理员放行（M2-P1）；记下的身份带着读到的系统角色', async () => {
@@ -140,7 +140,7 @@ describe('SessionGuard', () => {
     const admin: User = { ...ALICE, systemRole: 'admin' }
     const { guard, identities } = setup({ adminOnly: true, session: SESSION, user: admin })
     expect(await guard.canActivate(exchange(`nerve_session=${token}`).context)).toBe(true)
-    expect(identities.record).toHaveBeenCalledExactlyOnceWith({ userId: ALICE.id, systemAdmin: true })
+    expect(identities.record).toHaveBeenCalledExactlyOnceWith({ userId: ALICE.id, sessionId: SESSION.id, systemAdmin: true })
   })
 
   it('没有通过认证的请求不记身份：没有会话、会话无效、账户不可用、公开的接口', async () => {

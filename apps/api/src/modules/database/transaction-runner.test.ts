@@ -5,6 +5,7 @@ import { sql } from 'drizzle-orm'
 import { describe, expect, it, vi } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { CommitLedger } from './commit-ledger.ts'
+import { SnapshotScope } from './snapshot-scope.ts'
 import { NESTED_IN_SNAPSHOT_MESSAGE, TRANSACTION_ABORTED_MESSAGE, TransactionRunner } from './transaction-runner.ts'
 
 type TransactionStatus = 'I' | 'T' | 'E'
@@ -48,9 +49,9 @@ function prefix(text: string): string {
   return (text.split(' ')[0] ?? text).toLowerCase()
 }
 
-function runnerWith(client: ReturnType<typeof fakeClient>, commits = new CommitLedger()): TransactionRunner {
+function runnerWith(client: ReturnType<typeof fakeClient>, commits = new CommitLedger(), snapshots = new SnapshotScope()): TransactionRunner {
   const pool = { connect: vi.fn(async () => client) }
-  return new TransactionRunner(pool as unknown as pg.Pool, commits)
+  return new TransactionRunner(pool as unknown as pg.Pool, commits, snapshots)
 }
 
 /** 在一个请求的记录里执行 work：与 HTTP 管线里同一个中间件 */
@@ -154,7 +155,7 @@ describe('TransactionRunner', () => {
     const pool = { connect: vi.fn(async () => {
       throw new Error('timeout exceeded when trying to connect')
     }) }
-    await expect(new TransactionRunner(pool as unknown as pg.Pool, new CommitLedger()).run(async () => 1)).rejects.toThrow('timeout exceeded')
+    await expect(new TransactionRunner(pool as unknown as pg.Pool, new CommitLedger(), new SnapshotScope()).run(async () => 1)).rejects.toThrow('timeout exceeded')
   })
 })
 
@@ -279,7 +280,7 @@ describe('TransactionRunner.readSnapshot：读请求的只读快照（M2 Codex �
   it('一个请求只开一个快照：快照里再开快照或写事务直接报错，不另借连接（连接池满时会与外层互相等待）', async () => {
     const client = fakeClient()
     const pool = { connect: vi.fn(async () => client) }
-    const runner = new TransactionRunner(pool as unknown as pg.Pool, new CommitLedger())
+    const runner = new TransactionRunner(pool as unknown as pg.Pool, new CommitLedger(), new SnapshotScope())
     await expect(runner.readSnapshot(async () => runner.readSnapshot(async () => 1))).rejects.toThrow(NESTED_IN_SNAPSHOT_MESSAGE)
     await expect(runner.readSnapshot(async () => runner.run(async () => 1))).rejects.toThrow(NESTED_IN_SNAPSHOT_MESSAGE)
     expect(pool.connect).toHaveBeenCalledTimes(2)
@@ -288,10 +289,44 @@ describe('TransactionRunner.readSnapshot：读请求的只读快照（M2 Codex �
     await expect(runner.readSnapshot(async () => 3)).resolves.toBe(3)
   })
 
+  it('"正在快照里"的标记是 database 模块共用的那一份（SnapshotScope，连接池据此拒绝查询）：开场核对与 work 里为真，快照之外、结束之后为假', async () => {
+    const snapshots = new SnapshotScope()
+    const runner = runnerWith(fakeClient(), new CommitLedger(), snapshots)
+    const seen: Record<string, boolean | undefined> = {}
+    runner.registerSnapshotOpening(async () => {
+      seen.opening = snapshots.active()
+    })
+    let later: Promise<boolean> | undefined
+    seen.before = snapshots.active()
+    await runner.readSnapshot(async () => {
+      seen.work = snapshots.active()
+      // 快照里排下、结束之后才执行的操作
+      later = new Promise(resolve => setTimeout(resolve, 0)).then(() => snapshots.active())
+    })
+    seen.after = snapshots.active()
+    seen.later = await later
+    expect(seen).toEqual({ before: false, opening: true, work: true, after: false, later: false })
+  })
+
+  it('业务错误、意外错误结束的快照同样结束标记', async () => {
+    const snapshots = new SnapshotScope()
+    let inside: Promise<boolean> | undefined
+    await expect(runnerWith(fakeClient(), new CommitLedger(), snapshots).readSnapshot(async () => {
+      inside = new Promise(resolve => setTimeout(resolve, 0)).then(() => snapshots.active())
+      throw new AppError('NOT_FOUND')
+    })).rejects.toBeInstanceOf(AppError)
+    expect(await inside).toBe(false)
+    await expect(runnerWith(fakeClient(), new CommitLedger(), snapshots).readSnapshot(async () => {
+      inside = new Promise(resolve => setTimeout(resolve, 0)).then(() => snapshots.active())
+      throw new Error('Query read timeout')
+    })).rejects.toThrow('Query read timeout')
+    expect(await inside).toBe(false)
+  })
+
   it('快照里排下、快照结束之后才执行的事务（定时器、没有等的异步操作）不是嵌套：照常执行', async () => {
     const client = fakeClient()
     const pool = { connect: vi.fn(async () => client) }
-    const runner = new TransactionRunner(pool as unknown as pg.Pool, new CommitLedger())
+    const runner = new TransactionRunner(pool as unknown as pg.Pool, new CommitLedger(), new SnapshotScope())
     let release: () => void = () => {}
     const released = new Promise<void>((resolve) => {
       release = resolve

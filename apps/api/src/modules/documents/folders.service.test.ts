@@ -8,6 +8,7 @@ import { AppError } from '../../shared/errors/app-error.ts'
 import { folderPermissionsOf } from './access-rules.ts'
 import { ALICE, ALICE_SPACE, BOB, BOB_SPACE, FakeStore, HTTP_ORIGIN, member, TEAM_SPACE } from './documents.test-support.ts'
 import { FoldersService } from './folders.service.ts'
+import { folderCreatedPayloadDigest } from './payload-digest.ts'
 
 const MISSING_FOLDER = '0199a2c4-0000-7000-8000-0000000000fd'
 
@@ -170,31 +171,39 @@ describe('FoldersService.create', () => {
     expect(store.audits).toHaveLength(1)
   })
 
-  it('等锁期间被降为查看者：锁下只要求能看到空间，先查重放——重放照样返回，不是重放是 PERMISSION_DENIED', async () => {
+  it('同一个请求的两次同时到达（锁外都没查到）：后拿到树锁的一方在锁下查到前一方建好的，是重放，等锁期间被降为查看者也照样返回、不再建；不是重放的、等锁期间被降为查看者，是 PERMISSION_DENIED', async () => {
     const { store, service } = setup()
     store.setMember(TEAM_SPACE, ALICE, 'editor')
     const command = { spaceId: TEAM_SPACE, name: '资料', requestId: nextRequestId() }
-    const first = await service.create(member(ALICE), command, HTTP_ORIGIN)
-    const demoteWhileWaiting = async (spaceIds: readonly string[]): Promise<void> => {
+    let earlier: string | undefined
+    // 等树锁的期间：同一个请求的另一次先拿到锁、建好并提交了，自己随即被降为查看者
+    store.tree.lock.mockImplementationOnce(async (spaceIds: readonly string[]) => {
+      store.treeLocks.push([...spaceIds])
+      earlier = store.addFolder({ spaceId: TEAM_SPACE, name: command.name, requestId: command.requestId, payloadDigest: folderCreatedPayloadDigest(TEAM_SPACE, undefined, command.name) }).id
+      store.setMember(TEAM_SPACE, ALICE, 'viewer')
+    })
+    const replayed = await service.create(member(ALICE), command, HTTP_ORIGIN)
+    expect(replayed).toMatchObject({ id: earlier, permissions: folderPermissionsOf('viewer'), replayed: true })
+    expect(store.folders.size).toBe(1)
+    expect(store.audits).toEqual([])
+
+    store.setMember(TEAM_SPACE, ALICE, 'editor')
+    store.tree.lock.mockImplementationOnce(async (spaceIds: readonly string[]) => {
       store.treeLocks.push([...spaceIds])
       store.setMember(TEAM_SPACE, ALICE, 'viewer')
-    }
-
-    store.tree.lock.mockImplementationOnce(demoteWhileWaiting)
-    expect((await service.create(member(ALICE), command, HTTP_ORIGIN)).id).toBe(first.id)
-    store.setMember(TEAM_SPACE, ALICE, 'editor')
-    store.tree.lock.mockImplementationOnce(demoteWhileWaiting)
+    })
     expect((await errorOf(service.create(member(ALICE), { ...command, requestId: nextRequestId() }, HTTP_ORIGIN))).code).toBe('PERMISSION_DENIED')
     expect(store.folders.size).toBe(1)
   })
 
-  it('看不到这个空间了（被移出）：重放也是 NOT_FOUND，不透露那个文件夹', async () => {
+  it('看不到它所在的空间了（被移出）：重放是冲突（REQUEST_ID_CONFLICT，与新建文档一致），不透露那个文件夹；不是重放的新建是 NOT_FOUND', async () => {
     const { store, service } = setup()
     store.setMember(TEAM_SPACE, ALICE, 'editor')
     const command = { spaceId: TEAM_SPACE, name: '资料', requestId: nextRequestId() }
     await service.create(member(ALICE), command, HTTP_ORIGIN)
     store.setMember(TEAM_SPACE, ALICE, undefined)
-    expect((await errorOf(service.create(member(ALICE), command, HTTP_ORIGIN))).code).toBe('NOT_FOUND')
+    expect((await errorOf(service.create(member(ALICE), command, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+    expect((await errorOf(service.create(member(ALICE), { ...command, requestId: nextRequestId() }, HTTP_ORIGIN))).code).toBe('NOT_FOUND')
   })
 })
 
@@ -237,6 +246,21 @@ describe('FoldersService.create 的重放按新建时的请求（M2 Codex 评审
     await service.update(member(ALICE), first.id, { name: '已整理' }, HTTP_ORIGIN)
     expect((await errorOf(service.create(member(ALICE), { ...command, name: '已整理' }, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
     expect((await errorOf(service.create(member(ALICE), { ...command, parentId: first.id }, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+  })
+
+  it('移到了我看得到的空间、原来的空间我已经看不到：原样重发是重放，权限按它现在所在的空间给，不取锁（先查重放，不先要求这次请求里的空间，M2 Codex 评审复验的一般 4）', async () => {
+    const { store, service } = setup()
+    store.setMember(TEAM_SPACE, ALICE, 'admin')
+    const command = { spaceId: TEAM_SPACE, name: '资料', requestId: nextRequestId() }
+    const first = await service.create(member(ALICE), command, HTTP_ORIGIN)
+    await service.move(member(ALICE), first.id, { spaceId: ALICE_SPACE }, HTTP_ORIGIN)
+    store.setMember(TEAM_SPACE, ALICE, undefined)
+    const locks = store.treeLocks.length
+    const replayed = await service.create(member(ALICE), command, HTTP_ORIGIN)
+    expect(replayed).toMatchObject({ id: first.id, spaceId: ALICE_SPACE, parentId: null, replayed: true })
+    expect(replayed.permissions).toEqual(folderPermissionsOf('admin'))
+    expect(store.treeLocks).toHaveLength(locks)
+    expect(store.folders.size).toBe(1)
   })
 
   it('移到了看不到的空间：原样重发是冲突，不透露它现在在哪里', async () => {

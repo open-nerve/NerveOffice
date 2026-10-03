@@ -1,12 +1,12 @@
 // 读请求的权限判断与读到的数据在同一个快照里（M2 Codex 评审 CX1，A03、US-M2-06/10/12/14）：在途的读请求可以按撤权之前那一刻回答，
 // 或者被拒绝，不能带出撤权之后才写进去的数据。原来权限判断与读数据是连接池上各自自动提交的语句，READ COMMITTED 下
 // 每条语句看到的是它执行那一刻的数据：判断完权限、读数据之前撤权并写入的新数据，会被这个在途的请求带出去（Codex 的三个探针）。
-// 现在每个登录之后的读请求在一个只读快照（REPEATABLE READ READ ONLY）里判断权限、读数据，快照的第一条语句是开场核对：
-// 会话守卫判断过的账户有效、系统角色在快照里再查一次。
+// 现在每个登录之后的读请求在一个只读快照（REPEATABLE READ READ ONLY）里判断权限、读数据，快照开头的语句是开场核对：
+// 会话守卫判断过的会话有效（M2 Codex 评审复验的建议 3）、账户有效、系统角色在快照里再查一次。
 // 做法（确定的交错，与 Codex 的探针相同）：在应用里包装一个方法加闸门，被测的请求走到那里停住，期间经真实的接口撤权、写入新数据，
 // 并用一个新请求自证撤权已经生效；放行之后闸门调用原来的实现。两类停点：
 // - 已经判断完权限、读数据之前（快照里）：读正文停在 DocumentContentsRepository.findCurrent，搜索停在 DocumentsRepository.searchByTitle；
-// - 处理器开始之前（守卫之后、快照之前）：停在 TransactionRunner.readSnapshot，期间停用账户、取消系统管理员。
+// - 处理器开始之前（守卫之后、快照之前）：停在 TransactionRunner.readSnapshot，期间撤销这条会话（签发重置、退出）、停用账户、取消系统管理员。
 // 只用真实的 HTTP 与 PostgreSQL，不 mock 数据库
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
@@ -216,6 +216,44 @@ describe('守卫之后、快照之前撤权：开场核对在快照里再查一�
     })
     const outcome = await errorCodeOf(response)
     expect(outcome.body.includes(marker), '响应里有停用之后才保存的内容').toBe(false)
+    expect([outcome.status, outcome.code]).toEqual([401, 'SESSION_EXPIRED'])
+  })
+
+  /** 账户的状态（直接查库）：撤销会话的用例据此自证账户仍然有效，拒绝只能来自会话的核对 */
+  async function statusOf(userId: string): Promise<string | undefined> {
+    return database.query(async client => (await client.query<{ status: string }>('SELECT status FROM users WHERE id = $1', [userId])).rows[0]?.status)
+  }
+
+  it('读正文时这条会话被撤销（管理员签发重置，撤销这个人的全部会话，账户仍然有效、授权还在），所有者随即保存：登录已过期（401 SESSION_EXPIRED），不返回撤销之后保存的内容（M2 Codex 评审复验的建议 3）', async () => {
+    const { account: viewer, session } = await newPerson()
+    const document = await seedDocument(database, { spaceId: owner.personalSpaceId, createdBy: owner.id, title: '快照：签发重置' })
+    expect((await asUser(app.baseUrl, ownerSession, `/api/documents/${document.id}/grants/${viewer.id}`, { method: 'PUT', body: { role: 'viewer' } })).status).toBe(200)
+    const marker = `reset-${randomUUID()}`
+    const response = await pausedBeforeSnapshot(async () => read(session, document.id), async () => {
+      expect((await asUser(app.baseUrl, rootSession, `/api/admin/users/${viewer.id}/password-reset`, { method: 'POST' })).status).toBe(201)
+      // 撤销已经生效：新请求被守卫拒绝；账户仍然有效（不是停用）
+      expect((await read(session, document.id)).status).toBe(401)
+      expect(await statusOf(viewer.id)).toBe('active')
+      expect((await saveMarker(document.id, document.unitId, marker)).status).toBe(200)
+    })
+    const outcome = await errorCodeOf(response)
+    expect(outcome.body.includes(marker), '响应里有撤销之后才保存的内容').toBe(false)
+    expect([outcome.status, outcome.code]).toEqual([401, 'SESSION_EXPIRED'])
+  })
+
+  it('读正文时本人退出了这条会话（同一个 Cookie），所有者随即保存：401 SESSION_EXPIRED，不返回退出之后保存的内容', async () => {
+    const { account: viewer, session } = await newPerson()
+    const document = await seedDocument(database, { spaceId: owner.personalSpaceId, createdBy: owner.id, title: '快照：退出' })
+    expect((await asUser(app.baseUrl, ownerSession, `/api/documents/${document.id}/grants/${viewer.id}`, { method: 'PUT', body: { role: 'viewer' } })).status).toBe(200)
+    const marker = `logout-${randomUUID()}`
+    const response = await pausedBeforeSnapshot(async () => read(session, document.id), async () => {
+      expect((await asUser(app.baseUrl, session, '/api/auth/logout', { method: 'POST' })).status).toBe(204)
+      expect((await read(session, document.id)).status).toBe(401)
+      expect(await statusOf(viewer.id)).toBe('active')
+      expect((await saveMarker(document.id, document.unitId, marker)).status).toBe(200)
+    })
+    const outcome = await errorCodeOf(response)
+    expect(outcome.body.includes(marker), '响应里有退出之后才保存的内容').toBe(false)
     expect([outcome.status, outcome.code]).toEqual([401, 'SESSION_EXPIRED'])
   })
 

@@ -17,6 +17,7 @@
 // 回 500（CommitLedger）。两个方向都只是把"等满时限"换成了"立即取消"，回答取决于取消落在提交之前还是之后，与时长无关。
 import type { TestDatabase } from './database.ts'
 import { setTimeout as delay } from 'node:timers/promises'
+import { APPLICATION_NAME } from '@nerve-office/api/testing'
 import pg from 'pg'
 
 /** 分几步发出请求时用：每一步经 step 登记；waitForWaiting 等到这个库里有 count 个连接在等锁 */
@@ -48,7 +49,6 @@ export interface HeldLockRace<T> {
 const WAIT_TIMEOUT_MS = 10_000
 
 /** 应用的连接池的 application_name（apps/api 的 database 模块）：cancelWhenWaiting 只取消应用的连接，测试自己的连接不设它 */
-const APPLICATION_NAME = 'nerve-office-api'
 
 /** 这个连接在数据库里的进程号 */
 async function backendPidOf(client: pg.Client): Promise<number> {

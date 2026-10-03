@@ -344,6 +344,10 @@ export const messages = {
     cancel: '取消',
     // 选目标位置（行内的两级选择：先选空间，再一层层点进文件夹）
     targetSpace: '目标空间',
+    // 复制的目标只在能新建的空间里选（M2 Codex 评审复验的一般 1）：这些空间还没取到、取不到、一个也没有时这样说
+    targetSpacesLoading: '正在加载可以复制到的空间…',
+    targetSpacesLoadFailed: (reason: string) => `可以复制到的空间没能加载：${reason}`,
+    noTargetSpaces: '没有可以复制到的空间：你在任何空间里都不能新建文档。',
     targetLocation: '目标位置',
     targetLoading: '正在加载目标位置…',
     targetLoadFailed: (reason: string) => `目标位置加载失败：${reason}`,

@@ -8,7 +8,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { apiError, installFakeApi, inTurn, json } from '../shared/testing/fake-api.test-support.ts'
 import { personIn, shownName } from '../shared/testing/people.test-support.ts'
-import { foldersKey, noFolders, spaceRoutes } from '../shared/testing/spaces.test-support.ts'
+import { foldersKey, noFolders, personalSpaceOf, spaceRoutes } from '../shared/testing/spaces.test-support.ts'
 import { renderApp } from './render-app.test-support.tsx'
 
 const SESSION: SessionResponse = {
@@ -157,6 +157,26 @@ function count(api: ReturnType<typeof installFakeApi>, key: string): number {
   return api.requests.filter(request => request.key === key).length
 }
 
+/** 取过哪些目录（GET /api/folders 的请求），按发出的顺序 */
+function folderRequests(api: ReturnType<typeof installFakeApi>): string[] {
+  return api.requests.filter(request => request.key.startsWith('GET /api/folders')).map(request => request.key)
+}
+
+/** open() 之后才回应的接口：每次请求都在那之后各得到一份新的响应（同一个响应体只能读一次） */
+function gated(respond: () => Response) {
+  let open: () => void = () => {}
+  const opened = new Promise<void>((resolve) => {
+    open = resolve
+  })
+  return {
+    handler: async () => {
+      await opened
+      return respond()
+    },
+    open: () => open(),
+  }
+}
+
 /** 这一条（列表里的 li）上的按钮的文字，按出现的顺序 */
 function buttonsOf(title: string): (string | null)[] {
   const item = screen.getByRole('link', { name: new RegExp(title) }).closest('li') as HTMLElement
@@ -220,6 +240,77 @@ describe('US-M2-08 "与我共享"的行内操作（Codex 对抗评审 CX3）', (
     expect(api.requests.find(request => request.key === `POST /api/documents/${READ_ONLY.id}/copy`)?.body).toEqual({ spaceId: SESSION.personalSpace.id, requestId: expect.stringMatching(/^[\da-f-]{36}$/) as unknown })
     // 复制不改动源文档："与我共享"不重新请求（刷新的是副本所在空间的列表）
     expect(count(api, sharedKey())).toBe(1)
+  })
+
+  it('复制：导航的空间列表还没取到时，说明正在加载可以复制到的空间，不取任何目录、不能提交；列表晚到之后选上我能新建的空间（我的空间），只取它的目录，从不取源空间的（M2 Codex 评审复验的一般 1）', async () => {
+    const spaces = gated(() => json(200, { items: [personalSpaceOf(SESSION), MY_TEAM] }))
+    const api = loggedIn({
+      'GET /api/spaces': spaces.handler,
+      [sharedKey()]: () => json(200, { items: [READ_ONLY], nextCursor: null }),
+      [detailKey(READ_ONLY)]: () => json(200, grantDetail(READ_ONLY, 'viewer')),
+      [foldersKey(SESSION.personalSpace.id)]: noFolders(),
+    })
+    renderApp('/shared')
+    await openActions('只读的报表')
+    fireEvent.click(screen.getByRole('button', { name: '复制' }))
+    const form = screen.getByRole('form', { name: '复制' })
+    expect(within(form).getByRole('status', { name: '正在加载可以复制到的空间…' })).toBeInTheDocument()
+    const submit = within(form).getByRole('button', { name: '复制到这里' })
+    expect(submit).toHaveAttribute('aria-disabled', 'true')
+    fireEvent.click(submit)
+    expect(folderRequests(api)).toEqual([])
+    expect(api.requests.some(request => request.key.startsWith('POST '))).toBe(false)
+
+    spaces.open()
+    expect(await within(form).findByText('这里没有子文件夹')).toBeInTheDocument()
+    expect(within(form).getByLabelText('目标空间')).toHaveValue(SESSION.personalSpace.id)
+    expect(within(form).getByRole('button', { name: '复制到这里' })).toHaveAttribute('aria-disabled', 'false')
+    expect(folderRequests(api)).toEqual([foldersKey(SESSION.personalSpace.id)])
+  })
+
+  it('复制：导航的空间列表取不到（连同一次自动重试）时，说明原因、给出重试，不取任何目录、不能提交；重试取到之后选上我能新建的空间', async () => {
+    const api = loggedIn({
+      'GET /api/spaces': inTurn(
+        () => apiError(500, 'INTERNAL_ERROR'),
+        () => apiError(500, 'INTERNAL_ERROR'),
+        () => json(200, { items: [personalSpaceOf(SESSION), MY_TEAM] }),
+      ),
+      [sharedKey()]: () => json(200, { items: [READ_ONLY], nextCursor: null }),
+      [detailKey(READ_ONLY)]: () => json(200, grantDetail(READ_ONLY, 'viewer')),
+      [foldersKey(SESSION.personalSpace.id)]: noFolders(),
+    })
+    renderApp('/shared')
+    await openActions('只读的报表')
+    fireEvent.click(screen.getByRole('button', { name: '复制' }))
+    const form = screen.getByRole('form', { name: '复制' })
+    const problem = await within(form).findByText('可以复制到的空间没能加载：服务器出了点问题，请稍后重试', {}, { timeout: 4000 })
+    const alert = problem.closest('[role="alert"]') as HTMLElement
+    expect(alert).not.toBeNull()
+    expect(within(form).getByRole('button', { name: '复制到这里' })).toHaveAttribute('aria-disabled', 'true')
+    expect(folderRequests(api)).toEqual([])
+
+    fireEvent.click(within(alert).getByRole('button', { name: '重试' }))
+    expect(await within(form).findByText('这里没有子文件夹')).toBeInTheDocument()
+    expect(within(form).getByLabelText('目标空间')).toHaveValue(SESSION.personalSpace.id)
+    expect(folderRequests(api)).toEqual([foldersKey(SESSION.personalSpace.id)])
+    expect(count(api, 'GET /api/spaces')).toBe(3)
+  })
+
+  it('复制：我在哪个空间里都不能新建（候选一个也没有，源空间也不在其中）：说清楚没有可以复制到的空间，不取任何目录、不能提交', async () => {
+    const personal = personalSpaceOf(SESSION)
+    const api = loggedIn({
+      'GET /api/spaces': () => json(200, { items: [{ ...personal, permissions: { ...personal.permissions, canCreateDocuments: false } }] }),
+      [sharedKey()]: () => json(200, { items: [READ_ONLY], nextCursor: null }),
+      [detailKey(READ_ONLY)]: () => json(200, grantDetail(READ_ONLY, 'viewer')),
+    })
+    renderApp('/shared')
+    await openActions('只读的报表')
+    fireEvent.click(screen.getByRole('button', { name: '复制' }))
+    const form = screen.getByRole('form', { name: '复制' })
+    expect(await within(form).findByText('没有可以复制到的空间：你在任何空间里都不能新建文档。')).toBeInTheDocument()
+    expect(within(form).queryByLabelText('目标空间')).toBeNull()
+    expect(within(form).getByRole('button', { name: '复制到这里' })).toHaveAttribute('aria-disabled', 'true')
+    expect(folderRequests(api)).toEqual([])
   })
 
   it('只凭授权的编辑者改名：成功之后"与我共享"随即刷新、是新的标题，焦点回到这一条的"操作"', async () => {

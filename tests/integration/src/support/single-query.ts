@@ -4,10 +4,9 @@
 // 只看应用自己的连接（application_name 是应用的连接池的名字，与 statement-capture.ts 相同）：这个连接上还有查询在执行或排队时
 // 又发出查询，记下这条语句。集成测试的设置文件（setup/single-query.ts）在每条用例之后取出记录，有就让用例失败。
 // 判断用的是 pg 8 的内部字段（_activeQuery、_queryQueue）：pg 改了它们时，自测（single-query.test.ts）会失败，不会悄悄失效。
+// 应用的连接按 apps/api 的 APPLICATION_NAME 认（连接池的 application_name），引用它而不写死：改名时核对跟着走（M2 Codex 评审复验的建议 2）。
+import { APPLICATION_NAME } from '@nerve-office/api/testing'
 import pg from 'pg'
-
-/** 应用的连接池的 application_name（apps/api 的 database 模块） */
-const APPLICATION_NAME = 'nerve-office-api'
 
 interface ClientInternals {
   readonly connectionParameters?: { readonly application_name?: string }

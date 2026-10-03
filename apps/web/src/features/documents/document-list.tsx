@@ -1,6 +1,6 @@
-import type { SpaceView } from '@nerve-office/contracts'
 import type { RefObject } from 'react'
 import type { OrganizeNotice } from './item-actions.tsx'
+import type { TargetSpaces } from './target-spaces.ts'
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
 import { describeError } from '../../shared/api/index.ts'
@@ -24,8 +24,8 @@ interface DocumentListProps {
   readonly spaceId: string
   /** 当前所在的文件夹；null 表示空间的根目录（M2-P4） */
   readonly folderId: string | null
-  /** 我能新建内容的空间：移动与复制的目标候选 */
-  readonly targetSpaces: readonly SpaceView[]
+  /** 我能新建内容的空间，连同取到了没有：移动与复制的目标候选 */
+  readonly targetSpaces: TargetSpaces
   /** 当前展开操作面板的那一个（整页只有一个） */
   readonly openId: string | undefined
   /** 记下被点的那个"操作"按钮：面板收起之后空间页把焦点还给它 */

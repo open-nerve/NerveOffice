@@ -4,7 +4,7 @@ import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import { setTimeout as delay } from 'node:timers/promises'
 import { DatabaseModule, Public } from '@nerve-office/api'
-import { DATABASE } from '@nerve-office/api/testing'
+import { APPLICATION_NAME, DATABASE } from '@nerve-office/api/testing'
 import { Controller, Get, Inject, Module } from '@nestjs/common'
 import { sql } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -75,7 +75,7 @@ async function startApp(env: Record<string, string> = {}): Promise<TestApp> {
 
 async function applicationConnections(): Promise<number> {
   return database.query(async (client) => {
-    const result = await client.query<{ count: string }>('SELECT count(*) FROM pg_stat_activity WHERE datname = $1 AND application_name = \'nerve-office-api\'', [database.name])
+    const result = await client.query<{ count: string }>('SELECT count(*) FROM pg_stat_activity WHERE datname = $1 AND application_name = $2', [database.name, APPLICATION_NAME])
     return Number(result.rows[0]?.count)
   })
 }

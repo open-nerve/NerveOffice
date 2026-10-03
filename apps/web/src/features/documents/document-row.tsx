@@ -1,9 +1,9 @@
 // 列表里的一份文档与它的行内操作（M2-P4 设计 §3.7）：空间的文档列表与"与我共享"共用（Codex 对抗评审 CX3），不各写一份。
 // 只凭单独授权的人进不去源空间的文档列表，原来没有复制与改名的界面入口；US-M2-08 承诺"能读源文档、在目标空间有新建权限即可复制"。
-import type { SpaceView } from '@nerve-office/contracts'
 import type { QueryKey } from '@tanstack/react-query'
 import type { ReactNode, RefObject } from 'react'
 import type { GoneTexts, OrganizeNotice } from './item-actions.tsx'
+import type { TargetSpaces } from './target-spaces.ts'
 import { documentPagePath, documentTitleSchema } from '@nerve-office/contracts'
 import { useQuery } from '@tanstack/react-query'
 import { FileSpreadsheet } from 'lucide-react'
@@ -28,8 +28,8 @@ interface DocumentPanelProps {
   readonly title: string
   /** 文档所在的空间：还没取到元数据时（或者它已经不在了）回收站的入口与"它现在在哪里"按它给出 */
   readonly spaceId: string
-  /** 我能新建内容的空间（服务端给的 canCreateDocuments）：复制与跨空间移动的候选 */
-  readonly targetSpaces: readonly SpaceView[]
+  /** 我能新建内容的空间（服务端给的 canCreateDocuments），连同取到了没有：复制与跨空间移动的候选 */
+  readonly targetSpaces: TargetSpaces
   readonly onDone: (notice: OrganizeNotice | undefined) => void
   /** 操作按访问权限被拒绝：由页面重新请求，兑现为列表刷新好了没有（M2-P6 复核第五批 G3） */
   readonly onDenied: () => Promise<boolean>

@@ -4,11 +4,10 @@
 // queries 还带着发出它的是应用的哪一个连接（connection，按第一次见到的先后编号）：核对读请求的语句都在同一个连接上的只读快照里
 // （M2 Codex 评审 CX1，api/read-snapshots.test.ts）。
 // 做法：在测试进程里替换 pg.Client.prototype.query（应用与测试在同一个进程里运行，用的是同一个 pg 模块），
-// 只记应用自己连这个库的连接（application_name 是应用的连接池的名字）：测试自己建数据、查数据的连接不算。
+// 只记应用自己连这个库的连接（application_name 是应用的连接池的名字，引用 apps/api 的 APPLICATION_NAME 而不写死：
+// 改名时记录跟着走，M2 Codex 评审复验的建议 2）：测试自己建数据、查数据的连接不算。
+import { APPLICATION_NAME } from '@nerve-office/api/testing'
 import pg from 'pg'
-
-/** 应用的连接池的 application_name（apps/api 的 database 模块） */
-const APPLICATION_NAME = 'nerve-office-api'
 
 interface ClientWithParameters {
   readonly connectionParameters?: { readonly database?: string, readonly application_name?: string }

@@ -1,6 +1,7 @@
 import type { SpaceView } from '@nerve-office/contracts'
 import type { RefObject } from 'react'
 import type { OrganizeNotice } from './item-actions.tsx'
+import type { TargetSpaces } from './target-spaces.ts'
 import { FOLDER_LIST_MAX_ITEMS, folderNameSchema } from '@nerve-office/contracts'
 import { useMutation } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
@@ -155,8 +156,11 @@ interface SpaceContentsProps {
   readonly space: SpaceView
   /** 地址里的 id 路径：空数组就是空间的根目录 */
   readonly folderIds: readonly string[]
-  /** 我能新建内容的空间（服务端给的 canCreateDocuments）：移动与复制的目标候选。由空间页传入，避免与 features/spaces 成环 */
-  readonly targetSpaces: readonly SpaceView[]
+  /**
+   * 我能新建内容的空间（服务端给的 canCreateDocuments），连同取到了没有：移动与复制的目标候选。
+   * 由空间页传入（targetSpacesOf），避免与 features/spaces 成环
+   */
+  readonly targetSpaces: TargetSpaces
   /**
    * 页内的操作按访问权限被拒绝：由空间页重新请求页头、导航与各层的列表，兑现为列表刷新好了没有（最多等 10 秒）：
    * 整理面板的说明据此说"列表已刷新"还是"没能刷新"（M2-P6 复核第五批 G3）

@@ -1,11 +1,12 @@
 import type { DbTransaction, Transaction } from './database.ts'
-import { AsyncLocalStorage } from 'node:async_hooks'
+import type { SnapshotMark } from './snapshot-scope.ts'
 import { Inject, Injectable } from '@nestjs/common'
 import { sql } from 'drizzle-orm'
 import pg from 'pg'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { CommitLedger } from './commit-ledger.ts'
 import { createDatabase, PG_POOL } from './database.ts'
+import { SnapshotScope } from './snapshot-scope.ts'
 
 /** work 吞掉了失败的语句却正常返回时的说明。 */
 export const TRANSACTION_ABORTED_MESSAGE = '事务里有语句失败，事务已中止，不能当作成功提交：预期会失败的语句由仓储放进保存点（transaction()），或者改用 ON CONFLICT'
@@ -68,15 +69,16 @@ async function assertTransactionUsable(tx: DbTransaction): Promise<void> {
 export class TransactionRunner {
   /** 只读快照的开场核对（auth 模块登记）；没有登记时快照不做核对（单元测试、只组装了部分模块的命令行） */
   #opening: SnapshotOpening | undefined
+
   /**
-   * 正在只读快照里：快照里再开事务就报错（NESTED_IN_SNAPSHOT_MESSAGE）。标记跟着快照里发起的异步操作一直走，
+   * snapshots："正在只读快照里"的标记，database 模块共用的一处（连接池与这里拿到的是同一份）。快照里再开事务就报错
+   * （NESTED_IN_SNAPSHOT_MESSAGE），连接池上的查询也报错（pool.ts）。标记跟着快照里发起的异步操作一直走，
    * 快照结束时记为已结束（open 改为 false）：快照里排下、快照结束之后才执行的事务不是嵌套，照常执行
    */
-  readonly #inSnapshot = new AsyncLocalStorage<{ open: boolean }>()
-
   constructor(
     @Inject(PG_POOL) private readonly pool: pg.Pool,
     private readonly commits: CommitLedger,
+    private readonly snapshots: SnapshotScope,
   ) {}
 
   async run<T>(work: (transaction: Transaction) => Promise<T>): Promise<T> {
@@ -127,17 +129,18 @@ export class TransactionRunner {
    *   COMMIT 按回滚处理，读到的仍是同一个快照里的数据；
    * - 连接归还的规则与 run() 一致：业务错误（AppError，包括开场核对不通过）回滚后放回，其他失败丢弃；
    * - 快照里的语句逐条执行，不在同一个事务上并发（pg 在一个连接上排队执行的做法已经弃用）；
-   * - 一个请求只开一个快照：内层的方法接受事务参数。快照里再开快照或写事务直接报错（另借连接，连接池满时与外层互相等待）
+   * - 一个请求只开一个快照：内层的方法接受事务参数。快照里再开快照或写事务直接报错（另借连接，连接池满时与外层互相等待）；
+   * - 快照里的读方法都要传快照的事务：漏传时仓储退回连接池，连接池在快照进行中拒绝查询（pool.ts，M2 Codex 评审复验的必须修 1）
    */
   async readSnapshot<T>(work: (transaction: Transaction) => Promise<T>): Promise<T> {
     this.#refuseInsideSnapshot()
     const client = await this.pool.connect()
-    const snapshot = { open: true }
+    const snapshot: SnapshotMark = { open: true }
     let discard = false
     try {
       return await createDatabase(client).transaction(async (tx) => {
         const transaction = tx as unknown as Transaction
-        return this.#inSnapshot.run(snapshot, async () => {
+        return this.snapshots.run(snapshot, async () => {
           await this.#opening?.(transaction)
           return work(transaction)
         })
@@ -155,7 +158,7 @@ export class TransactionRunner {
   }
 
   #refuseInsideSnapshot(): void {
-    if (this.#inSnapshot.getStore()?.open === true)
+    if (this.snapshots.active())
       throw new Error(NESTED_IN_SNAPSHOT_MESSAGE)
   }
 }

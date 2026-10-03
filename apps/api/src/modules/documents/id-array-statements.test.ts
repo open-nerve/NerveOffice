@@ -5,7 +5,7 @@
 // 核对每条语句的参数个数与 id 的个数无关、这串 id 作为一个数组参数出现。这些语句在真实数据库上的行为由集成测试覆盖。
 import type { Transaction } from '../database/index.ts'
 import { describe, expect, it, vi } from 'vitest'
-import { CommitLedger, TransactionRunner } from '../database/index.ts'
+import { CommitLedger, SnapshotScope, TransactionRunner } from '../database/index.ts'
 import { DocumentsRepository } from './documents.repository.ts'
 import { FoldersRepository } from './folders.repository.ts'
 import { TrashEntriesRepository } from './trash-entries.repository.ts'
@@ -46,7 +46,7 @@ interface Repositories {
 /** 在一个事务里调用仓储，返回它发出的语句（去掉事务自己的 begin、确认事务可用的 SELECT 1、commit） */
 async function statementsOf(call: (repositories: Repositories, transaction: Transaction) => Promise<unknown>, respond?: (text: string) => unknown[]): Promise<Statement[]> {
   const client = recordingClient(respond)
-  const runner = new TransactionRunner({ connect: async () => client } as unknown as ConstructorParameters<typeof TransactionRunner>[0], new CommitLedger())
+  const runner = new TransactionRunner({ connect: async () => client } as unknown as ConstructorParameters<typeof TransactionRunner>[0], new CommitLedger(), new SnapshotScope())
   await runner.run(async (transaction) => {
     // 事务里的执行器本身就是一个 Drizzle 实例：不收事务的方法（列表、搜索、路径）也经它发语句
     const db = transaction as unknown as ConstructorParameters<typeof DocumentsRepository>[0]

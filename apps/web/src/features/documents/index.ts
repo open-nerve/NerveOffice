@@ -9,3 +9,5 @@ export { OrganizeNoticeBar } from './organize-notice-bar.tsx'
 export { useOrganizePanels } from './organize-panels.ts'
 export { useOrganizeRefreshChecked } from './organize-refresh.ts'
 export { SpaceContents } from './space-contents.tsx'
+// 复制与跨空间移动的目标候选：空间页与"与我共享"从导航的空间列表得出（M2 Codex 评审复验的一般 1）
+export { targetSpacesOf } from './target-spaces.ts'

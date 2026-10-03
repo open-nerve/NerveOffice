@@ -10,6 +10,7 @@ import { DatabaseTime } from './database-time.ts'
 import { createDatabase, DATABASE, PG_POOL } from './database.ts'
 import { ExclusiveRunner } from './exclusive-runner.ts'
 import { createPool } from './pool.ts'
+import { SnapshotScope } from './snapshot-scope.ts'
 import { TransactionRunner } from './transaction-runner.ts'
 
 /**
@@ -27,10 +28,12 @@ class PoolLifecycle implements OnApplicationShutdown {
 
 @Module({
   providers: [
+    // "正在只读快照里"的标记：连接池在快照进行中拒绝查询，事务运行器拒绝在快照里再开事务，两处用同一份（M2 Codex 评审复验的必须修 1）
+    SnapshotScope,
     {
       provide: PG_POOL,
-      inject: [APP_CONFIG, AppLogger],
-      useFactory: (config: AppConfig, logger: AppLogger) => createPool(config.database, logger.with({ module: 'database' })),
+      inject: [APP_CONFIG, AppLogger, SnapshotScope],
+      useFactory: (config: AppConfig, logger: AppLogger, snapshots: SnapshotScope) => createPool(config.database, logger.with({ module: 'database' }), snapshots),
     },
     {
       provide: DATABASE,

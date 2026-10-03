@@ -3,6 +3,7 @@
 // 本人重放时已经看不到那份文档（被移出空间、文档进了回收站），同样 409，不返回它的元数据。
 // 本人重放只要求仍能访问（00 号计划书 §7.4 第 2 步，M2-P6 复核 A 的 S-4）：提交之后被降为查看者、空间被归档，
 // 重发同一个请求拿到原来的结果（保存、新建文档、新建文件夹一致），不是 403——客户端会把 403 当作"没有提交"。
+// 新建文件夹与新建文档一样先查重放（M2 Codex 评审复验的一般 4）：只看它现在所在的空间，看得到是重放，看不到是 409。
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
@@ -164,7 +165,7 @@ describe('本人重放只要求仍能访问（00 号计划书 §7.4 第 2 步，
     expect(folders).toBe(1)
   })
 
-  it('看不到了（被移出空间）：保存与新建文件夹的重放都不给结果（404），不透露那份文档与那个文件夹', async () => {
+  it('看不到了（被移出空间）：保存的重放是 404（文档在地址里），新建文件夹的重放与新建文档一样是 409，都不给结果、不透露那份文档与那个文件夹', async () => {
     const spaceId = await editorsSpace()
     const document = await seedDocument(database, { spaceId, createdBy: alice.id, title: '周报' })
     const saveId = randomUUID()
@@ -174,7 +175,9 @@ describe('本人重放只要求仍能访问（00 号计划书 §7.4 第 2 步，
 
     await setMember(database, spaceId, alice.id, undefined)
     expect((await save(document.id, document.unitId, saveId)).status).toBe(404)
-    expect((await asUser(app.baseUrl, aliceSession, '/api/folders', { method: 'POST', body: folderRequest })).status).toBe(404)
+    await expectConflict(await asUser(app.baseUrl, aliceSession, '/api/folders', { method: 'POST', body: folderRequest }))
+    // 不是重放的新建照旧：看不到这个空间是 404
+    expect((await asUser(app.baseUrl, aliceSession, '/api/folders', { method: 'POST', body: { ...folderRequest, requestId: randomUUID() } })).status).toBe(404)
   })
 })
 
@@ -217,6 +220,40 @@ describe('新建文件夹的重放按新建时的请求（M2 Codex 评审 CX6）
     // 个人空间的所有者是空间管理员，Alice 在团队空间里是编辑者（能新建）：可以把它搬过去
     expect((await asUser(app.baseUrl, aliceSession, `/api/folders/${created.folder.id}/move`, { method: 'POST', body: { spaceId: team } })).status).toBe(200)
     expect(await createFolder(request)).toMatchObject({ status: 201, folder: { id: created.folder.id, spaceId: team, parentId: null, replayed: true } })
+  })
+
+  /** 新的团队空间，Alice 是 role（跨空间移动要源空间的空间管理员） */
+  async function spaceWithAlice(role: 'admin' | 'editor'): Promise<string> {
+    spaces += 1
+    return createTeamSpace(database, { name: `幂等：搬走 ${spaces}`, createdBy: rootId, members: { [alice.id]: role } })
+  }
+
+  it('新建 → 跨空间移到看得到的空间 → 原来的空间看不到了 → 原样重发：重放（201、replayed），位置与权限按它现在所在的空间（先查重放，M2 Codex 评审复验的一般 4）', async () => {
+    const origin = await spaceWithAlice('admin')
+    const request = { spaceId: origin, name: '要搬走的', requestId: randomUUID() }
+    const created = await createFolder(request)
+    expect(created.status).toBe(201)
+    expect((await asUser(app.baseUrl, aliceSession, `/api/folders/${created.folder.id}/move`, { method: 'POST', body: { spaceId: alice.personalSpaceId } })).status).toBe(200)
+    await setMember(database, origin, alice.id, undefined)
+    // 原来的空间确实看不到了：不是重放的新建是 404
+    expect((await asUser(app.baseUrl, aliceSession, '/api/folders', { method: 'POST', body: { ...request, requestId: randomUUID() } })).status).toBe(404)
+
+    const replayed = await asUser(app.baseUrl, aliceSession, '/api/folders', { method: 'POST', body: request })
+    expect(replayed.status).toBe(201)
+    expect(await replayed.json()).toMatchObject({ id: created.folder.id, spaceId: alice.personalSpaceId, parentId: null, replayed: true, permissions: { canRename: true, canMoveAcrossSpaces: true, canDelete: true } })
+    expect(await database.query(async client => Number((await client.query<{ count: string }>('SELECT count(*) FROM folders WHERE request_id = $1', [request.requestId])).rows[0]?.count))).toBe(1)
+  })
+
+  it('新建 → 跨空间移走 → 原来的空间与它现在所在的空间都看不到了 → 原样重发：冲突（409），不透露它在哪里', async () => {
+    const origin = await spaceWithAlice('admin')
+    const target = await spaceWithAlice('editor')
+    const request = { spaceId: origin, name: '搬到别处的', requestId: randomUUID() }
+    const created = await createFolder(request)
+    expect(created.status).toBe(201)
+    expect((await asUser(app.baseUrl, aliceSession, `/api/folders/${created.folder.id}/move`, { method: 'POST', body: { spaceId: target } })).status).toBe(200)
+    await setMember(database, origin, alice.id, undefined)
+    await setMember(database, target, alice.id, undefined)
+    await expectConflict(await asUser(app.baseUrl, aliceSession, '/api/folders', { method: 'POST', body: request }))
   })
 
   it('同一个 requestId、载荷不同：冲突（409），即使这次的载荷与文件夹现在的样子相同（改名之后拿新名称重发）', async () => {

@@ -1,7 +1,7 @@
-import type { SpaceView } from '@nerve-office/contracts'
 import type { ReactNode } from 'react'
 import type { BackgroundRefresh } from '../../shared/api/write-outcome.ts'
 import type { Destination } from './destination-form.tsx'
+import type { TargetSpaces } from './target-spaces.ts'
 import { useMutation } from '@tanstack/react-query'
 import { useEffect, useEffectEvent, useId, useRef, useState } from 'react'
 import { Link } from 'react-router'
@@ -75,8 +75,8 @@ interface ItemActionsProps {
   readonly current: Destination
   /** 选目标位置时不列出这个文件夹：移动文件夹时就是它自己（审查建议 6） */
   readonly excludeFolderId?: string
-  /** 我能新建内容的空间（服务端给的 canCreateDocuments）：复制与跨空间移动的候选 */
-  readonly targetSpaces: readonly SpaceView[]
+  /** 我能新建内容的空间（服务端给的 canCreateDocuments），连同取到了没有：复制与跨空间移动的候选 */
+  readonly targetSpaces: TargetSpaces
   readonly operations: ItemOperations
   /** 收起面板；notice 是要在列表上方给出的说明 */
   readonly onDone: (notice: OrganizeNotice | undefined) => void
@@ -305,8 +305,9 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
     )
   }
 
-  // 不能跨空间时，目标只有它现在所在的空间；能跨空间时，目标是我能新建内容的空间（服务端给的 canCreateDocuments）
-  const spaces = permissions.canMoveAcrossSpaces ? targetSpaces : targetSpaces.filter(space => space.id === current.spaceId)
+  // 移动：不能跨空间时，目标只有它现在所在的空间；能跨空间时，目标是我能新建内容的空间（服务端给的 canCreateDocuments）。
+  // 复制的目标是我能新建内容的空间，只落在其中（DestinationForm）
+  const moveTargets: TargetSpaces = permissions.canMoveAcrossSpaces ? targetSpaces : { ...targetSpaces, items: targetSpaces.items?.filter(space => space.id === current.spaceId) }
 
   if (shown === 'rename') {
     return (
@@ -334,7 +335,7 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
       <DestinationForm
         panelId={panelId}
         action={shown}
-        spaces={shown === 'copy' ? targetSpaces : spaces}
+        targets={shown === 'copy' ? targetSpaces : moveTargets}
         current={current}
         excludeFolderId={excludeFolderId}
         pending={mutation.isPending}

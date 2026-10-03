@@ -350,10 +350,11 @@ export async function requireSpaceContent(
 }
 
 /**
- * 已经判断过能看空间的内容（requireSpaceContent 的结果）之后，再要求在里面新建：不再查询，不能做是 PERMISSION_DENIED。
- * 新建文件夹先按"能看到"查重放、不是重放才要求能新建时用它（M2-P6 复核 A 的 S-4）
+ * 已经判断过能看空间的内容之后，再要求在里面做这件事（新建）：不再查询，不能做是 PERMISSION_DENIED。
+ * 只由 requireSpaceContent 用：新建文件夹原来先按"能看到"查重放、不是重放才单独要求能新建（M2-P6 复核 A 的 S-4），
+ * 现在先查重放、不是重放直接要求能新建（M2 Codex 评审复验的一般 4），不再单独用它
  */
-export function requireSpaceOperation(access: SpaceContentAccess, operation: SpaceContentOperation): void {
+function requireSpaceOperation(access: SpaceContentAccess, operation: SpaceContentOperation): void {
   const required = operation === 'view' ? undefined : SPACE_CONTENT[operation]
   if (required !== undefined && !access.permissions[required.permission])
     throw denied(access.space, required.message)

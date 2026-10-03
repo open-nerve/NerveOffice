@@ -17,7 +17,7 @@ import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { problemOf } from '../../shared/lib/validation.ts'
 import { Alert, AlertDescription, Badge, Button, buttonVariants, FieldProblem, Input, Label, Notice, Skeleton } from '../../shared/ui/index.ts'
 import { sessionQueryOptions } from '../auth/index.ts'
-import { NewSheetButton, SpaceContents, useOrganizeRefreshChecked } from '../documents/index.ts'
+import { NewSheetButton, SpaceContents, targetSpacesOf, useOrganizeRefreshChecked } from '../documents/index.ts'
 import { useForgetMissingSpace } from './missing-space.ts'
 import { SpaceNotFound } from './space-not-found.tsx'
 import { renameSpace, spaceQueryOptions, SPACES_QUERY_KEY, spacesQueryOptions } from './spaces-api.ts'
@@ -179,12 +179,13 @@ function SpaceHeader({ space, folderId, titleRef, onDenied }: SpaceHeaderProps) 
 function SpaceContent({ spaceId, folderIds = [] }: { readonly spaceId: string, readonly folderIds?: readonly string[] }) {
   const queryClient = useQueryClient()
   const space = useQuery(spaceQueryOptions(spaceId))
-  // 导航已经请求过"我能看到的空间"：移动与复制的目标候选直接用它（服务端给的 canCreateDocuments），共用同一份缓存。
+  // 导航已经请求过"我能看到的空间"：移动与复制的目标候选直接用它（服务端给的 canCreateDocuments），共用同一份缓存，
+  // 连同取到了没有（复制的目标据此说明加载中、没能加载，M2 Codex 评审复验的一般 1）。
   // 由这里取、往下传，而不是在 features/documents 里取：那会让 documents 反向引用 spaces，两个功能成环。
   // refetchOnMount 关掉：这里只是读导航已经加载的那一份，什么时候重新请求由导航决定；
   // 否则每打开一个空间页都会顺带刷新导航，"已打开的页面里再进来才发现看不到"（M2-P2 审查 B1）就走不到了
   const spaces = useQuery({ ...spacesQueryOptions(), refetchOnMount: false })
-  const targetSpaces = (spaces.data?.items ?? []).filter(item => item.permissions.canCreateDocuments)
+  const targetSpaces = targetSpacesOf(spaces)
   const missing = isMissingResource(space.error)
   const refreshOrganize = useOrganizeRefreshChecked()
   const titleRef = useRef<HTMLHeadingElement>(null)

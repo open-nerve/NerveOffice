@@ -4,7 +4,7 @@
 // lint 另外拦下 users 的仓储引用 drizzle 的 inArray、notInArray（eslint.config.ts 的 API_ID_LISTS）
 import type { Transaction } from '../database/index.ts'
 import { describe, expect, it, vi } from 'vitest'
-import { CommitLedger, TransactionRunner } from '../database/index.ts'
+import { CommitLedger, SnapshotScope, TransactionRunner } from '../database/index.ts'
 import { UsersRepository } from './users.repository.ts'
 
 /** 比 PostgreSQL 一条语句的参数上限（65535）多 */
@@ -33,7 +33,7 @@ function recordingClient() {
 /** 在一个事务里调用仓储，返回它发出的语句（去掉事务自己的 begin、确认事务可用的 SELECT 1、commit） */
 async function statementsOf(call: (repository: UsersRepository, transaction: Transaction) => Promise<unknown>): Promise<Statement[]> {
   const client = recordingClient()
-  const runner = new TransactionRunner({ connect: async () => client } as unknown as ConstructorParameters<typeof TransactionRunner>[0], new CommitLedger())
+  const runner = new TransactionRunner({ connect: async () => client } as unknown as ConstructorParameters<typeof TransactionRunner>[0], new CommitLedger(), new SnapshotScope())
   await runner.run(async (transaction) => {
     // 事务里的执行器本身就是一个 Drizzle 实例：不传事务的调用也经它发语句
     await call(new UsersRepository(transaction as unknown as ConstructorParameters<typeof UsersRepository>[0]), transaction)
