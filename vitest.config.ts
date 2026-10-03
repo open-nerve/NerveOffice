@@ -39,7 +39,8 @@ export default defineConfig({
           // 换成线程池时别的测试文件的 CPU 时间也会算进来
           pool: 'forks',
           include: ['tests/integration/src/**/*.test.ts'],
-          setupFiles: ['tests/integration/src/setup/database.ts'],
+          // single-query：每条用例之后核对应用的一个连接上没有并发过查询（support/single-query.ts）
+          setupFiles: ['tests/integration/src/setup/database.ts', 'tests/integration/src/setup/single-query.ts'],
           testTimeout: 30_000,
           hookTimeout: 60_000,
         },

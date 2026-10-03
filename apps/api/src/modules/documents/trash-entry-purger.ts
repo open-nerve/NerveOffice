@@ -128,12 +128,13 @@ export class TrashEntryPurger {
       throw new Error(`永久删除的子树里有正常状态的行（文件夹 ${folders} 个、文档 ${documents} 份），什么也不删：${entry.id}`)
   }
 
-  /** 这些删除单元里已经没有任何行的那些（永久删除之后），一起删掉并返回真正删掉的 id。 */
+  /**
+   * 这些删除单元里已经没有任何行的那些（永久删除之后），一起删掉并返回真正删掉的 id。
+   * 两次计数逐条执行：同一个事务在一个连接上，pg 在一个连接上排队执行查询的做法已经弃用（M2 Codex 评审的后端修复时发现）
+   */
   private async deleteEmptied(candidates: readonly string[], transaction: Transaction): Promise<string[]> {
-    const [documents, folders] = await Promise.all([
-      this.documents.countByTrashEntries(candidates, transaction),
-      this.folders.countByTrashEntries(candidates, transaction),
-    ])
+    const documents = await this.documents.countByTrashEntries(candidates, transaction)
+    const folders = await this.folders.countByTrashEntries(candidates, transaction)
     const emptied = candidates.filter(id => (documents.get(id) ?? 0) === 0 && (folders.get(id) ?? 0) === 0)
     await this.entries.deleteMany(emptied, transaction)
     return emptied
