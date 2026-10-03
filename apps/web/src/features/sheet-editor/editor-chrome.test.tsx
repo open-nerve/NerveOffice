@@ -381,9 +381,9 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     expect(editingRegion()).toHaveTextContent(text)
   })
 
-  it('是自己（在另一个标签页或设备上）：说明在别处正在编辑，这里只能阅读；刚关闭或刷新过那个页面时，那边的编辑权最多一分半钟后自动结束（审查 B7）', () => {
+  it('是自己（在另一个标签页或设备上）：说明在别处正在编辑，这里只能阅读；刚关闭或刷新过那个页面时，那边的编辑权最多 90 秒后自动结束（审查 B7）', () => {
     renderChrome({ ...VIEWING, editing: { kind: 'elsewhere', holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 } } })
-    expect(editingRegion().textContent).toBe('你在另一个标签页或设备上正在编辑这份文档，这里只能阅读。要是刚刚关闭或刷新过那个页面，那边的编辑权最多一分半钟后自动结束，到时重新加载这一页就能编辑')
+    expect(editingRegion().textContent).toBe('你在另一个标签页或设备上正在编辑这份文档，这里只能阅读。要是刚刚关闭或刷新过那个页面，那边的编辑权最多 90 秒后自动结束，到时重新加载这一页就能编辑')
   })
 
   it('服务端给的详情认不出：通用的说法', () => {
@@ -403,7 +403,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     ['不认识的原因', { kind: 'lease', reason: undefined } as const, '编辑权已失效。本页的修改没有保存，需要的话先把内容复制出来，再重新加载。'],
     ['不能编辑了（403，原因由服务端给出）', { kind: 'denied', error: new ApiError(403, 'PERMISSION_DENIED', '只能查看这份文档，不能编辑') } as const, '编辑权已失效：你已没有编辑这份文档的权限（只能查看这份文档，不能编辑）。本页的修改没有保存，需要的话先把内容复制出来，再重新加载。'],
     ['续上时别人正在编辑', { kind: 'held', holder: { holder: AMY, sameUser: false, lastActiveMinutes: 2 } } as const, '编辑权已失效：@amy 艾米 正在编辑这份文档（最后活动 2 分钟前）。本页的修改没有保存，需要的话先把内容复制出来，再重新加载。'],
-    ['续上时自己在别处正在编辑', { kind: 'held', holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 } } as const, '编辑权已失效：你在另一个标签页或设备上正在编辑这份文档（要是刚刚关闭或刷新过那个页面，那边的编辑权最多一分半钟后自动结束，到时重新加载这一页就能编辑）。本页的修改没有保存，需要的话先把内容复制出来，再重新加载。'],
+    ['续上时自己在别处正在编辑', { kind: 'held', holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 } } as const, '编辑权已失效：你在另一个标签页或设备上正在编辑这份文档（要是刚刚关闭或刷新过那个页面，那边的编辑权最多 90 秒后自动结束，到时重新加载这一页就能编辑）。本页的修改没有保存，需要的话先把内容复制出来，再重新加载。'],
     ['续上时被占用、详情认不出', { kind: 'held', holder: undefined } as const, '编辑权已失效：这份文档正在别处编辑。本页的修改没有保存，需要的话先把内容复制出来，再重新加载。'],
     ['续上时别处保存过更新的版本', { kind: 'newer' } as const, '编辑权已失效：编辑权中断期间，别处保存了更新的版本，本页不能再覆盖它。本页的修改没有保存，需要的话先把内容复制出来，再重新加载。'],
   ] as const

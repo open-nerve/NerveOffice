@@ -20,7 +20,7 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     // B（同一个人的另一个标签页）：只能阅读，说明是自己在另一个标签页或设备上编辑，没有保存
     const other = await context.newPage()
     await openEditor(other, documentId)
-    await expect(editingNotice(other)).toHaveText('你在另一个标签页或设备上正在编辑这份文档，这里只能阅读。要是刚刚关闭或刷新过那个页面，那边的编辑权最多一分半钟后自动结束，到时重新加载这一页就能编辑')
+    await expect(editingNotice(other)).toHaveText('你在另一个标签页或设备上正在编辑这份文档，这里只能阅读。要是刚刚关闭或刷新过那个页面，那边的编辑权最多 90 秒后自动结束，到时重新加载这一页就能编辑')
     await expect(other.locator('#editor-chrome').getByRole('banner').getByText('只能查看', { exact: true })).toBeVisible()
     await expect(saveButton(other)).toHaveCount(0)
 
@@ -40,7 +40,7 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     await saveButton(page).click()
     await expect(saveStatus(page)).toHaveText('编辑权已失效')
     const lost = page.getByRole('alert')
-    await expect(lost).toContainText('编辑权已失效：你在另一个标签页或设备上正在编辑这份文档（要是刚刚关闭或刷新过那个页面，那边的编辑权最多一分半钟后自动结束，到时重新加载这一页就能编辑）。本页的修改没有保存')
+    await expect(lost).toContainText('编辑权已失效：你在另一个标签页或设备上正在编辑这份文档（要是刚刚关闭或刷新过那个页面，那边的编辑权最多 90 秒后自动结束，到时重新加载这一页就能编辑）。本页的修改没有保存')
     await expect(lost.getByRole('button', { name: '重新加载' })).toBeVisible()
     await expect(saveButton(page)).toHaveAttribute('aria-disabled', 'true')
 

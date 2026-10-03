@@ -1,12 +1,13 @@
 // 表格编辑器页的文案（P4）：只由编辑器页（features/sheet-editor）引用，随编辑器页的入口加载，不进平台页面的首屏（lint 的模块边界限定）。
 // 两个入口共用的（通用的说明、错误与登录状态）在 messages.ts
 import type { Phrase } from './messages.ts'
+import { EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
 
 /**
  * 是自己在另一个标签页或设备上编辑时的补充：刚关闭、刷新过的那个页面没能放掉编辑权（释放没送到，或者载入中就离开了），
- * 那一代最多一分半钟（有效期 90 秒）就到期（M3-P1 审查 B7）
+ * 那一代不再续租，最多一个有效期（EDIT_LEASE_TTL_SECONDS）就到期（M3-P1 审查 B7）。时长取自契约，有效期改了说法跟着改
  */
-const SELF_ELSEWHERE_HINT = '要是刚刚关闭或刷新过那个页面，那边的编辑权最多一分半钟后自动结束，到时重新加载这一页就能编辑'
+const SELF_ELSEWHERE_HINT = `要是刚刚关闭或刷新过那个页面，那边的编辑权最多 ${EDIT_LEASE_TTL_SECONDS} 秒后自动结束，到时重新加载这一页就能编辑`
 
 /** 失效的说明的结尾：本页有没有还没确认的内容 × 重新加载能不能看到这份文档（读不到了时只会显示"内容不存在"，M3-P1 审查 B2） */
 function lostEnding(unsaved: boolean, reloadable: boolean): string {
