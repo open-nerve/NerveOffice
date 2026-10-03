@@ -23,6 +23,7 @@ import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
+import { saveContent } from '../support/edit-leases.ts'
 import { completesWithoutWaiting, raceAgainstHeldLock } from '../support/held-lock.ts'
 import { asUser, login } from '../support/session-client.ts'
 import { createTeamSpace } from '../support/spaces.ts'
@@ -75,12 +76,12 @@ function snapshotOf(unitId: string, value: string): Buffer {
   return Buffer.from(JSON.stringify({ ...SHEET_TEMPLATE, id: unitId, sheets: { 'sheet-1': { ...sheet, cellData: { 0: { 0: { v: value } } } } } }), 'utf8')
 }
 
+/**
+ * 保存（M3-P1 起要求编辑租约）：先以这个人申请、保存之后释放（support/edit-leases.ts）。
+ * saveSource 先取完锁的方向：申请不写审计，不停在保存的闸门上，在复制发出之前就做完了；停在闸门上的仍是保存
+ */
 async function save(user: LoggedIn, document: SeededDocument, value: string, baseRevision: number): Promise<Response> {
-  const query = new URLSearchParams({ baseRevision: String(baseRevision), requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1' })
-  return asUser(app.baseUrl, user, `/api/documents/${document.id}/content?${query.toString()}`, {
-    method: 'PUT',
-    binary: { contentType: 'application/gzip', bytes: zlib.gzipSync(snapshotOf(document.unitId, value)) },
-  })
+  return saveContent(app.baseUrl, user, document.id, zlib.gzipSync(snapshotOf(document.unitId, value)), { baseRevision })
 }
 
 async function call(session: LoggedIn, path: string, method: string, body?: unknown): Promise<Response> {

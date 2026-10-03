@@ -36,16 +36,15 @@ function integerParam(min: number) {
  * - baseRevision：这份快照基于的修订号，不是当前修订号时拒绝保存；
  * - requestId：一次保存尝试一个，网络错误后内容没变就用同一个重发；
  * - clientInstanceId：编辑器页每次加载生成；localSeq：捕获时本页的修改序号。两者用来识别"自己追自己"；
- * - writeEpoch：申请编辑权时得到的代次（M3-P1 设计 §3.4.4），与请求头里的租约令牌一起核对：删除、跨空间移动、
- *   收回写入权或者有了新的一代之后就对不上。M3-P1 的 S4（保存要求租约）改为必填：在那之前现有的调用方
- *   （编辑器页与发保存的集成测试）还不带它，先接受缺省，服务端也还不读它。
+ * - writeEpoch：申请编辑权时得到的代次（M3-P1 设计 §3.4.4），与请求头里的租约令牌（EDIT_LEASE_HEADER）一起核对：
+ *   删除、跨空间移动、收回写入权或者有了新的一代之后就对不上，保存被拒（EDIT_LEASE_LOST）。必填（契约是严格结构；v0.1 还没有部署，没有旧页面）
  */
 export const saveContentQuerySchema = z.strictObject({
   baseRevision: integerParam(1),
   requestId: uuidSchema,
   clientInstanceId: uuidSchema,
   localSeq: integerParam(0),
-  writeEpoch: integerParam(0).optional(),
+  writeEpoch: integerParam(0),
 })
 
 export type SaveContentQuery = z.output<typeof saveContentQuerySchema>

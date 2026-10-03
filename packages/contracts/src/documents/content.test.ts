@@ -6,11 +6,12 @@ const valid = {
   requestId: '0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0d',
   clientInstanceId: '0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0e',
   localSeq: '0',
+  writeEpoch: '4',
 }
 
 describe('保存的查询参数', () => {
   it('数字字符串转成整数', () => {
-    expect(saveContentQuerySchema.parse(valid)).toEqual({ ...valid, baseRevision: 3, localSeq: 0 })
+    expect(saveContentQuerySchema.parse(valid)).toEqual({ ...valid, baseRevision: 3, localSeq: 0, writeEpoch: 4 })
     expect(saveContentQuerySchema.parse({ ...valid, baseRevision: '2147483647', localSeq: '2147483647' })).toMatchObject({ baseRevision: 2_147_483_647, localSeq: 2_147_483_647 })
   })
 
@@ -24,7 +25,7 @@ describe('保存的查询参数', () => {
     expect(saveContentQuerySchema.safeParse({ ...valid, localSeq: '0' }).success).toBe(true)
   })
 
-  it('四项都必填，不接受多余的参数', () => {
+  it('五项都必填，不接受多余的参数', () => {
     for (const key of Object.keys(valid)) {
       const { [key as keyof typeof valid]: _omitted, ...rest } = valid
       expect(saveContentQuerySchema.safeParse(rest).success, key).toBe(false)
@@ -38,10 +39,6 @@ describe('保存的查询参数', () => {
     expect(saveContentQuerySchema.parse({ ...valid, writeEpoch: '2147483647' })).toMatchObject({ writeEpoch: 2_147_483_647 })
     for (const value of ['', '-1', '1.0', '01', '0x10', '2147483648'])
       expect(saveContentQuerySchema.safeParse({ ...valid, writeEpoch: value }).success, value).toBe(false)
-  })
-
-  it('代次暂时可以不带：保存要求租约（M3-P1 的 S4）之前，现有的调用方还不带它；S4 改为必填', () => {
-    expect(saveContentQuerySchema.parse(valid)).not.toHaveProperty('writeEpoch')
   })
 })
 

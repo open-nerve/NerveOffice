@@ -37,6 +37,7 @@ import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
+import { saveContent } from '../support/edit-leases.ts'
 import { grantsOn, setGrant } from '../support/grants.ts'
 import { asUser, login } from '../support/session-client.ts'
 import { createTeamSpace, setSpaceState } from '../support/spaces.ts'
@@ -120,13 +121,10 @@ async function open(user: LoggedIn, documentId: string): Promise<Response> {
   return asUser(app.baseUrl, user, `/api/documents/${documentId}`)
 }
 
+/** 保存（M3-P1 起要求编辑租约）：先以这个人申请、保存之后释放（support/edit-leases.ts）；申请不了的人照样发出，结果由先于租约的判断给出 */
 async function save(user: LoggedIn, document: SeededDocument, baseRevision: number): Promise<Response> {
-  const query = new URLSearchParams({ baseRevision: String(baseRevision), requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1' })
   const raw = Buffer.from(JSON.stringify({ ...SHEET_TEMPLATE, id: document.unitId }), 'utf8')
-  return asUser(app.baseUrl, user, `/api/documents/${document.id}/content?${query.toString()}`, {
-    method: 'PUT',
-    binary: { contentType: 'application/gzip', bytes: zlib.gzipSync(raw) },
-  })
+  return saveContent(app.baseUrl, user, document.id, zlib.gzipSync(raw), { baseRevision })
 }
 
 async function search(user: LoggedIn, query: string) {
@@ -200,7 +198,7 @@ describe('US-M2-10 设置、调整、取消与幂等（M2-P5 设计 §3.2）', (
       { action: 'documents.share_changed', actorId: amy.id, details: { userId: ben.id, from: 'editor', to: 'viewer' } },
     ])
     // 降为查看者之后下一次保存即被拒绝
-    expect(await errorOf(await save(benSession, document, 2))).toEqual({ status: 403, code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能保存' })
+    expect(await errorOf(await save(benSession, document, 2))).toEqual({ status: 403, code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能编辑' })
   })
 
   it('取消：204，删行，记 documents.share_revoked（删掉之前的角色）；之后他打开、读内容都与不存在的文档相同', async () => {

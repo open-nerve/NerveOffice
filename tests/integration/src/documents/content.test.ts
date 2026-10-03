@@ -1,10 +1,12 @@
 // 文档的内容（P4 设计 §3.3、§3.5，US-M1-05、06、07、08）：读取（gzip 原样下发、修订号作 ETag）；
 // 保存（条件写入、requestId 幂等含并发、冲突附来源、解压上限与压缩炸弹、内容类型、基本校验、别人的与不存在的相同、未登录、CSRF）。
+// M3-P1 起保存要求编辑租约：每次保存经 support/edit-leases.ts 的 saveContent 先申请、保存之后释放（编辑租约本身的用例在 save-leases.test.ts）。
 import type { SaveContentResponse } from '@nerve-office/contracts'
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { SeededDocument } from '../support/documents.ts'
+import type { HeldLease } from '../support/edit-leases.ts'
 import type { AuthenticatedRequest, LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -26,6 +28,7 @@ import { startTestApp, TEST_PUBLIC_ORIGIN } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
+import { acquireLease, saveContent } from '../support/edit-leases.ts'
 import { asUser, login } from '../support/session-client.ts'
 import { createTeamSpace } from '../support/spaces.ts'
 
@@ -69,8 +72,14 @@ interface SaveParams {
   readonly requestId?: string
   readonly clientInstanceId?: string
   readonly localSeq?: number | string
+  /** 用这份编辑租约（几次并发的保存共用同一个页面的租约）；没给时每次保存先申请、保存之后释放 */
+  readonly lease?: HeldLease
 }
 
+/**
+ * 内容的地址。带 params 时是保存的地址：只给读取正文就被拒绝的用例（请求体的上限、压缩、内容类型，拦截器在校验与服务之前）直接用，
+ * 带着合法的代次，不带租约——这些请求到不了租约那一步；要走到服务的保存经 put（先申请租约）
+ */
 function contentPath(id: string, params?: SaveParams): string {
   if (params === undefined)
     return `/api/documents/${id}/content`
@@ -79,12 +88,21 @@ function contentPath(id: string, params?: SaveParams): string {
     requestId: params.requestId ?? randomUUID(),
     clientInstanceId: params.clientInstanceId ?? TAB_A,
     localSeq: String(params.localSeq ?? 1),
+    writeEpoch: '0',
   })
   return `/api/documents/${id}/content?${query.toString()}`
 }
 
+/** 保存：先以这个人、这个标签页申请编辑租约，带着它保存，再释放（给了 params.lease 就用它，不申请也不释放） */
 async function put(user: LoggedIn, id: string, raw: Buffer, params: SaveParams = {}, request: Omit<AuthenticatedRequest, 'method'> = {}): Promise<Response> {
-  return asUser(app.baseUrl, user, contentPath(id, params), { method: 'PUT', binary: { contentType: 'application/gzip', bytes: zlib.gzipSync(raw) }, ...request })
+  return saveContent(app.baseUrl, user, id, zlib.gzipSync(raw), {
+    baseRevision: params.baseRevision ?? 1,
+    requestId: params.requestId,
+    localSeq: params.localSeq ?? 1,
+    clientInstanceId: params.clientInstanceId ?? TAB_A,
+    lease: params.lease,
+    headers: request.headers,
+  })
 }
 
 async function saved(response: Response): Promise<SaveContentResponse> {
@@ -197,7 +215,8 @@ describe('US-M1-05 同一次保存重发不会保存两次', () => {
   it('并发的相同请求：只保存一次，每个请求都拿到同一个结果', async () => {
     const document = await aliceDocument()
     const raw = snapshotOf(document.unitId, '并发')
-    const params = { baseRevision: 1, requestId: randomUUID() }
+    // 同一个页面的几次重发（M3-P1 起保存要求租约）：共用这个页面申请到的一份租约，各自申请会互相改写成新的一代
+    const params = { baseRevision: 1, requestId: randomUUID(), lease: await acquireLease(app.baseUrl, aliceSession, document.id, TAB_A) }
     const results = await Promise.all(Array.from({ length: 5 }, async () => saved(await put(aliceSession, document.id, raw, params))))
     expect(new Set(results.map(result => JSON.stringify(result))).size).toBe(1)
     expect(await storedRevision(document.id)).toBe(2)
@@ -252,6 +271,8 @@ describe('US-M1-05 同一次保存重发不会保存两次', () => {
 describe('US-M1-07 旧页面的保存不覆盖新内容', () => {
   it('B 基于旧修订号保存：409 DOCUMENT_REVISION_CONFLICT，详情是当前修订号与 A 的来源；服务器上是 A 的版本', async () => {
     const document = await aliceDocument()
+    // M3-P1 起两个标签页不能同时持有编辑权：A 申请、保存、释放之后 B 才申请到（put 每次都这样），B 仍是基于旧修订号保存——
+    // 要验证的冲突与来源不变（B 打开时的修订号是 1，期间 A 保存了 2）
     const fromA = snapshotOf(document.unitId, 'A 的内容')
     await saved(await put(aliceSession, document.id, fromA, { baseRevision: 1, clientInstanceId: TAB_A, localSeq: 3 }))
     const response = await put(aliceSession, document.id, snapshotOf(document.unitId, 'B 的内容'), { baseRevision: 1, clientInstanceId: TAB_B, localSeq: 9 })
@@ -264,8 +285,11 @@ describe('US-M1-07 旧页面的保存不覆盖新内容', () => {
 
   it('同一个基准修订号的并发保存（各自的 requestId）：只有一个成功，其余都是冲突，来源指向成功的那一次', async () => {
     const document = await aliceDocument()
-    const tabs = Array.from({ length: 6 }, () => randomUUID())
-    const responses = await Promise.all(tabs.map(async (tab, index) => put(aliceSession, document.id, snapshotOf(document.unitId, `并发 ${index}`), { baseRevision: 1, clientInstanceId: tab, localSeq: index })))
+    // M3-P1 起同一时刻只有一个标签页能写：原来六个标签页同时保存，改成持有租约的那一个页面并发发出六次保存（各自的 requestId 与本地序号）。
+    // 要验证的仍是修订号的条件写入在文档行的锁下只放过一个，其余都是冲突、来源指向成功的那一次
+    const lease = await acquireLease(app.baseUrl, aliceSession, document.id)
+    const tabs = Array.from<string>({ length: 6 }).fill(lease.clientInstanceId)
+    const responses = await Promise.all(tabs.map(async (tab, index) => put(aliceSession, document.id, snapshotOf(document.unitId, `并发 ${index}`), { baseRevision: 1, clientInstanceId: tab, localSeq: index, lease })))
     const statuses = responses.map(response => response.status)
     expect(statuses.filter(status => status === 200)).toHaveLength(1)
     expect(statuses.filter(status => status === 409)).toHaveLength(tabs.length - 1)

@@ -27,6 +27,7 @@ import { comparableOf } from '../support/comparable-response.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
+import { saveContent } from '../support/edit-leases.ts'
 import { grantsOn } from '../support/grants.ts'
 import { asUser, login } from '../support/session-client.ts'
 import { createTeamSpace } from '../support/spaces.ts'
@@ -60,13 +61,10 @@ async function colleague(): Promise<{ readonly account: TestAccount, readonly se
   return { account, session: await login(app.baseUrl, account.username, account.password) }
 }
 
+/** 保存（M3-P1 起要求编辑租约）：先以这个人申请、保存之后释放（support/edit-leases.ts）；申请不了的人照样发出，结果由先于租约的判断给出 */
 async function save(user: LoggedIn, documentId: string, unitId: string): Promise<Response> {
-  const query = new URLSearchParams({ baseRevision: '1', requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1' })
   const raw = Buffer.from(JSON.stringify({ ...SHEET_TEMPLATE, id: unitId }), 'utf8')
-  return asUser(app.baseUrl, user, `/api/documents/${documentId}/content?${query.toString()}`, {
-    method: 'PUT',
-    binary: { contentType: 'application/gzip', bytes: zlib.gzipSync(raw) },
-  })
+  return saveContent(app.baseUrl, user, documentId, zlib.gzipSync(raw), { baseRevision: 1 })
 }
 
 async function copy(user: LoggedIn, documentId: string, spaceId: string): Promise<Response> {
@@ -111,7 +109,7 @@ describe('US-M2-14 生效时机：取消分享、移出空间、停用之后，�
 
     await share(document.id, ben.id, 'viewer')
     expect(await grantRole(document.id, ben.id)).toBe('viewer')
-    expect(await errorOf(await save(benSession, document.id, document.unitId))).toEqual({ status: 403, code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能保存' })
+    expect(await errorOf(await save(benSession, document.id, document.unitId))).toEqual({ status: 403, code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能编辑' })
     expect((await asUser(app.baseUrl, benSession, `/api/documents/${document.id}/content`)).status).toBe(200)
     const copied = await copy(benSession, document.id, ben.personalSpaceId)
     expect(copied.status, await copied.clone().text()).toBe(201)
@@ -158,7 +156,7 @@ describe('US-M2-14 生效时机：取消分享、移出空间、停用之后，�
     expect((await shared(benSession)).items.map(item => [item.id, item.contentRole])).toEqual([[alsoShared.id, 'viewer']])
     // 有授权的那份仍能复制（复制是内容的操作），保存只剩授权的查看者：403
     expect((await copy(benSession, alsoShared.id, ben.personalSpaceId)).status).toBe(201)
-    expect(await errorOf(await save(benSession, alsoShared.id, alsoShared.unitId))).toEqual({ status: 403, code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能保存' })
+    expect(await errorOf(await save(benSession, alsoShared.id, alsoShared.unitId))).toEqual({ status: 403, code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能编辑' })
   })
 
   it('停用（经接口）之后：他已登录的会话里读、读内容、保存、复制、"与我共享"、搜索一律 401（会话已撤销），什么也没改；他的授权还在', async () => {

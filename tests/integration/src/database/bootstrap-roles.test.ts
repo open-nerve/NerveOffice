@@ -16,6 +16,7 @@ import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { databaseUrl, testDatabaseName, testDatabaseUrl, withClient } from '../support/database.ts'
+import { saveContent } from '../support/edit-leases.ts'
 import { runPsqlScript } from '../support/psql-script.ts'
 import { asUser, login } from '../support/session-client.ts'
 
@@ -180,8 +181,8 @@ describe('以不同的角色运行应用', () => {
     const unitId = (JSON.parse(await (await asUser(app.baseUrl, session, contentPath)).text()) as { id: string }).id
     const sheet = SHEET_TEMPLATE.sheets['sheet-1']
     const raw = Buffer.from(JSON.stringify({ ...SHEET_TEMPLATE, id: unitId, sheets: { 'sheet-1': { ...sheet, cellData: { 0: { 0: { v: '应用角色' } } } } } }), 'utf8')
-    const query = new URLSearchParams({ baseRevision: '1', requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1' })
-    const saved = await asUser(app.baseUrl, session, `${contentPath}?${query.toString()}`, { method: 'PUT', binary: { contentType: 'application/gzip', bytes: zlib.gzipSync(raw) } })
+    // M3-P1 起保存要求编辑租约：申请、保存、释放都以应用角色执行（编辑租约表的权限来自应用角色的默认权限）
+    const saved = await saveContent(app.baseUrl, session, document.id, zlib.gzipSync(raw), { baseRevision: 1 })
     expect(saved.status).toBe(200)
     expect(Buffer.from(await (await asUser(app.baseUrl, session, contentPath)).arrayBuffer())).toEqual(raw)
     expect((await asUser(app.baseUrl, session, '/api/auth/logout', { method: 'POST' })).status).toBe(204)

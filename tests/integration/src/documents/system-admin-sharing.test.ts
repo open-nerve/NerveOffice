@@ -21,6 +21,7 @@ import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
+import { saveContent } from '../support/edit-leases.ts'
 import { grantsOn } from '../support/grants.ts'
 import { asUser, login } from '../support/session-client.ts'
 import { createTeamSpace } from '../support/spaces.ts'
@@ -101,13 +102,10 @@ async function errorOf(response: Response): Promise<{ status: number, code: stri
   return { status: response.status, code, message }
 }
 
+/** 保存（M3-P1 起要求编辑租约）：先以这个人申请、保存之后释放（support/edit-leases.ts）；申请不了的人照样发出，结果由先于租约的判断给出 */
 async function save(user: LoggedIn, document: SeededDocument, baseRevision: number): Promise<Response> {
-  const query = new URLSearchParams({ baseRevision: String(baseRevision), requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1' })
   const raw = Buffer.from(JSON.stringify({ ...SHEET_TEMPLATE, id: document.unitId }), 'utf8')
-  return asUser(app.baseUrl, user, `/api/documents/${document.id}/content?${query.toString()}`, {
-    method: 'PUT',
-    binary: { contentType: 'application/gzip', bytes: zlib.gzipSync(raw) },
-  })
+  return saveContent(app.baseUrl, user, document.id, zlib.gzipSync(raw), { baseRevision })
 }
 
 interface SharingAudit { readonly action: string, readonly actorId: string, readonly details: unknown }
@@ -170,7 +168,7 @@ describe('US-M2-10 系统管理员被单独分享（需求方 2026-10-02 的决�
     const world = await newWorld()
     await shareWithAdmin(world.personalShared, 'viewer')
     expect(await detailOf(adminSession, world.personalShared.id)).toMatchObject({ accessVia: 'grant', permissions: { canEdit: false, canShare: false } })
-    expect(await errorOf(await save(adminSession, world.personalShared, 1))).toEqual({ status: 403, code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能保存' })
+    expect(await errorOf(await save(adminSession, world.personalShared, 1))).toEqual({ status: 403, code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能编辑' })
   })
 
   it('US-M2-14 看不到所在空间的目录结构：空间页头、按空间列出、文件夹、回收站都与不存在的空间逐字相同（404）', async () => {

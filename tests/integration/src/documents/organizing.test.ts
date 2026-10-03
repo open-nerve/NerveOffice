@@ -11,6 +11,7 @@ import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { SeededDocument } from '../support/documents.ts'
+import type { HeldLease } from '../support/edit-leases.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
@@ -22,6 +23,7 @@ import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
+import { acquireLease, saveContent } from '../support/edit-leases.ts'
 import { raceAgainstHeldLock } from '../support/held-lock.ts'
 import { asUser, login } from '../support/session-client.ts'
 import { createTeamSpace, setMember, setSpaceState } from '../support/spaces.ts'
@@ -108,13 +110,12 @@ function snapshotOf(unitId: string, value: string): Buffer {
   return Buffer.from(JSON.stringify({ ...SHEET_TEMPLATE, id: unitId, sheets: { 'sheet-1': { ...sheet, cellData: { 0: { 0: { v: value } } } } } }), 'utf8')
 }
 
-async function save(user: LoggedIn, document: { id: string, unitId: string }, value: string, baseRevision: number): Promise<Response> {
-  const query = new URLSearchParams({ baseRevision: String(baseRevision), requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1' })
-  const raw = snapshotOf(document.unitId, value)
-  return asUser(app.baseUrl, user, `/api/documents/${document.id}/content?${query.toString()}`, {
-    method: 'PUT',
-    binary: { contentType: 'application/gzip', bytes: zlib.gzipSync(raw) },
-  })
+/**
+ * 保存（M3-P1 起要求编辑租约）：没给租约时先以这个人申请、保存之后释放（support/edit-leases.ts）。
+ * 交错的用例在持锁之前先申请好、传进来：申请也要锁文档行，不先申请的话停在锁上的是申请而不是保存
+ */
+async function save(user: LoggedIn, document: { id: string, unitId: string }, value: string, baseRevision: number, lease?: HeldLease): Promise<Response> {
+  return saveContent(app.baseUrl, user, document.id, zlib.gzipSync(snapshotOf(document.unitId, value)), { baseRevision, lease })
 }
 
 interface StoredDocument {
@@ -651,11 +652,14 @@ describe('US-M2-14 复制的并发与锁：源文档在锁下判断（M2-P6 复�
     expect((await asUser(app.baseUrl, benSession, `/api/documents/${document.id}`)).status).toBe(404)
   })
 
-  /** 复制进行中对源文档的改动：都要锁源文档行（FOR UPDATE） */
-  const CHANGES: readonly (readonly [string, (document: SeededDocument, elsewhere: string) => Promise<Response>, number])[] = [
+  /**
+   * 复制进行中对源文档的改动：都要锁源文档行（FOR UPDATE）。保存用的编辑租约在复制之前申请好（M3-P1）：
+   * 申请也要锁文档行，在这里申请的话等在复制的共享锁上的是申请；删除与移动用不到它
+   */
+  const CHANGES: readonly (readonly [string, (document: SeededDocument, elsewhere: string, lease: HeldLease) => Promise<Response>, number])[] = [
     ['删除', async document => asUser(app.baseUrl, amySession, `/api/documents/${document.id}`, { method: 'DELETE' }), 204],
     ['跨空间移动', async (document, elsewhere) => move(amySession, document.id, { spaceId: elsewhere }), 200],
-    ['保存', async document => save(amySession, document, '复制之后才写的内容', 1), 200],
+    ['保存', async (document, _elsewhere, lease) => save(amySession, document, '复制之后才写的内容', 1, lease), 200],
   ]
 
   it.each(CHANGES)('复制持着源文档行的共享锁时%s等它提交之后才生效：复制照常成功，副本是复制那一刻的内容，不成环', async (_name, change, status) => {
@@ -663,6 +667,7 @@ describe('US-M2-14 复制的并发与锁：源文档在锁下判断（M2-P6 复�
     const elsewhere = await teamSpace()
     const document = await seedDocument(database, { spaceId: space, createdBy: amy.id, title: '源文档' })
     const unrelated = await seedDocument(database, { spaceId: cat.personalSpaceId, createdBy: cat.id, title: '无关' })
+    const lease = await acquireLease(app.baseUrl, amySession, document.id)
     const requestId = randomUUID()
     const [copied, changed] = await raceAgainstHeldLock(database, {
       hold: holdRequestId(requestId, unrelated.id),
@@ -670,7 +675,7 @@ describe('US-M2-14 复制的并发与锁：源文档在锁下判断（M2-P6 复�
         const copying = steps.step(copy(benSession, document.id, { spaceId: ben.personalSpaceId, requestId }))
         await steps.waitForWaiting(1)
         // 改动要锁源文档行（FOR UPDATE）：等在复制持有的共享锁上
-        const changing = steps.step(change(document, elsewhere))
+        const changing = steps.step(change(document, elsewhere, lease))
         return Promise.all([copying, changing])
       },
       // 两个请求都在锁上等着（复制等这一行，改动等复制）才放开

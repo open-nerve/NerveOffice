@@ -214,8 +214,9 @@ function deleteDenied(spaceRole: SpaceRole | undefined): string {
 
 const DOCUMENT_CONTENT: Readonly<Record<DocumentOperation, DocumentOperationRule>> = {
   // 内容的操作：权限位看内容权限（空间角色与授权取较高者）。
-  // 保存与其他操作同一套说明：归档的空间里说"空间已归档"，而不是"只能查看"（M2-P6 复核 A 的 G3）
-  edit: { permission: 'canEdit', message: '只能查看这份文档，不能保存' },
+  // 保存与其他操作同一套说明：归档的空间里说"空间已归档"，而不是"只能查看"（M2-P6 复核 A 的 G3）。
+  // edit 由保存与申请编辑权共用（M3-P1），所以说"不能编辑"而不是"不能保存"
+  edit: { permission: 'canEdit', message: '只能查看这份文档，不能编辑' },
   rename: { permission: 'canRename', message: '没有给这份文档改名的权限' },
   copy: { permission: 'canCopy', message: '没有复制这份文档的权限' },
   // 结构性的操作：权限位只看空间角色

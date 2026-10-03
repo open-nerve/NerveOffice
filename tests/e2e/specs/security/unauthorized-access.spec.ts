@@ -132,7 +132,7 @@ test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
 
     await saveButton(page).click()
     await expect(saveStatus(page)).toHaveText('保存失败')
-    await expect(page.getByRole('alert')).toContainText('保存失败：只能查看这份文档，不能保存，本页的修改没有保存。需要的话先把内容复制出来。')
+    await expect(page.getByRole('alert')).toContainText('保存失败：只能查看这份文档，不能编辑，本页的修改没有保存。需要的话先把内容复制出来。')
     expect(await revisionOf(documentId)).toBe(1)
 
     await openEditor(page, documentId)

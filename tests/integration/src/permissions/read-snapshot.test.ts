@@ -24,6 +24,7 @@ import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
+import { saveContent } from '../support/edit-leases.ts'
 import { asUser, login, SESSION_COOKIE } from '../support/session-client.ts'
 import { createTeamSpace } from '../support/spaces.ts'
 
@@ -116,12 +117,14 @@ async function read(session: LoggedIn, documentId: string): Promise<Response> {
   return asUser(app.baseUrl, session, `/api/documents/${documentId}/content`)
 }
 
-/** 保存一份只有一格写着 marker 的内容（撤权之后才写进去的新数据） */
+/**
+ * 保存一份只有一格写着 marker 的内容（撤权之后才写进去的新数据）。M3-P1 起保存要求编辑租约：所有者先申请、保存之后释放
+ * （support/edit-leases.ts）；申请走写事务，不经停住的那个读快照
+ */
 async function saveMarker(documentId: string, unitId: string, marker: string): Promise<Response> {
   const sheet = SHEET_TEMPLATE.sheets['sheet-1']
   const raw = Buffer.from(JSON.stringify({ ...SHEET_TEMPLATE, id: unitId, sheets: { 'sheet-1': { ...sheet, cellData: { 0: { 0: { v: marker } } } } } }), 'utf8')
-  const query = new URLSearchParams({ baseRevision: '1', requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1' })
-  return asUser(app.baseUrl, ownerSession, `/api/documents/${documentId}/content?${query.toString()}`, { method: 'PUT', binary: { contentType: 'application/gzip', bytes: zlib.gzipSync(raw) } })
+  return saveContent(app.baseUrl, ownerSession, documentId, zlib.gzipSync(raw), { baseRevision: 1 })
 }
 
 /** 在途的读正文：按撤权之前那一刻回答（修订号 1、没有新内容），或者被拒绝（404），不能带出撤权之后才保存的 marker */
