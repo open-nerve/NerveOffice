@@ -2,6 +2,7 @@
 // 日志。有效条件本身在 edit-lease-rules.test.ts；SQL、并发与真实的时间在集成测试（documents/edit-leases.test.ts）。
 import type { AppError } from '../../shared/errors/app-error.ts'
 import type { EditingActor } from './edit-lease.service.ts'
+import { Buffer } from 'node:buffer'
 import { EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, editLeaseTokenSchema } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { AppLogger, createRootLogger, RequestContextStore } from '../logging/index.ts'
@@ -30,8 +31,8 @@ function setup() {
   const document = store.addDocument({ spaceId: TEAM_SPACE, revision: 3 })
   const lines: string[] = []
   const logger = new AppLogger(createRootLogger({ level: 'debug', destination: { write: (line: string) => void lines.push(line) } }), new RequestContextStore())
-  const { documents, leases, policy, sessions } = store.deps
-  const service = new EditLeaseService(documents, leases, policy, sessions, logger)
+  const { documents, revisions, leases, policy, sessions } = store.deps
+  const service = new EditLeaseService(documents, revisions, leases, policy, sessions, logger)
   return { store, service, document, logs: () => lines.map(line => JSON.parse(line) as Record<string, unknown>), logText: () => lines.join('') }
 }
 
@@ -81,6 +82,18 @@ describe('EditLeaseService.acquire', () => {
     const steps = [orderOf(documents.findById), orderOf(documents.lockById), orderOf(store.leases.lockByDocument), orderOf(documents.advanceWriteEpoch), orderOf(store.leases.replace)]
     expect(steps).toEqual(steps.toSorted((a, b) => a - b))
     expect(documents.lockById).toHaveBeenCalledWith(document.id, TRANSACTION)
+  })
+
+  it('当前修订的来源：锁下的修订号那一条修订记录的标签页与本地序号（与修订号冲突的详情同一个取法）；新建出来的为 null', async () => {
+    const created = setup()
+    created.store.addRevision({ documentId: created.document.id, revision: 3, kind: 'created', requestId: 'request-created', payloadDigest: Buffer.alloc(32), source: null, savedBy: ALICE })
+    expect(await created.service.acquire(AMY, created.document.id, TAB, TRANSACTION)).toMatchObject({ kind: 'acquired', revision: 3, source: null })
+
+    const saved = setup()
+    for (const [revision, localSeq] of [[2, 4], [3, 7]] as const)
+      saved.store.addRevision({ documentId: saved.document.id, revision, kind: 'saved', requestId: `request-${revision}`, payloadDigest: Buffer.alloc(32), source: { clientInstanceId: OTHER_TAB, localSeq }, savedBy: BOB })
+    expect(await saved.service.acquire(AMY, saved.document.id, TAB, TRANSACTION)).toMatchObject({ kind: 'acquired', revision: 3, source: { clientInstanceId: OTHER_TAB, localSeq: 7 } })
+    expect(saved.store.repositories.revisions.findByRevision).toHaveBeenCalledWith(saved.document.id, 3, TRANSACTION)
   })
 
   it('看不到 404、只能查看 403：都在加锁之前，什么也不写', async () => {

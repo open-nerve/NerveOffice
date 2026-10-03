@@ -34,7 +34,7 @@ export class DocumentEditingService {
   }
 
   /**
-   * 申请（201）：取得新的一代时给出令牌、代次、修订号、到期时间与上一个租约异常结束的提醒（补上一位持有者的人名）；
+   * 申请（201）：取得新的一代时给出令牌、代次、修订号与它的来源、到期时间与上一个租约异常结束的提醒（补上一位持有者的人名）；
    * 有效的租约在别人手里时 409 EDIT_LEASE_HELD，details 带持有者的人名、最后活动时间与是不是自己
    */
   async acquire(actor: EditingActor, documentId: string, clientInstanceId: string): Promise<AcquiredEditLease> {
@@ -49,6 +49,7 @@ export class DocumentEditingService {
         token: outcome.token,
         writeEpoch: outcome.writeEpoch,
         revision: outcome.revision,
+        source: outcome.source,
         expiresAt: outcome.expiresAt.toISOString(),
         interruption: outcome.interruption === undefined ? null : await this.withHolder(outcome.interruption, transaction),
       }

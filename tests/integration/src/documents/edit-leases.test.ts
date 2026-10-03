@@ -10,7 +10,7 @@ import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { createHash, randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
-import { acquiredEditLeaseSchema, EDIT_LEASE_HEADER, EDIT_LEASE_TTL_SECONDS, editLeaseHeldDetailsSchema, editLeaseLostDetailsSchema, editStatusSchema, errorResponseSchema, renewedEditLeaseSchema, sessionResponseSchema, sheetSnapshotFor } from '@nerve-office/contracts'
+import { acquiredEditLeaseSchema, createdDocumentSchema, EDIT_LEASE_HEADER, EDIT_LEASE_TTL_SECONDS, editLeaseHeldDetailsSchema, editLeaseLostDetailsSchema, editStatusSchema, errorResponseSchema, renewedEditLeaseSchema, sessionResponseSchema, sheetSnapshotFor } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -209,6 +209,23 @@ describe('申请、心跳、释放与编辑状态（P1 设计 §3.4.2、§3.4.3�
     expect(after.write_epoch).toBe(before.write_epoch + 1)
     // 申请编辑权不算修改文档：列表的排序不变
     expect(after.updated_at).toEqual(before.updated_at)
+  })
+
+  it('US-M3-11 申请的响应带文档当前修订的来源：新建的为 null；保存之后是那次保存的标签页与本地序号（续上时页面据此认出期间的一版是不是自己的，00 号计划书 §7.5）；复制出来的为 null', async () => {
+    const document = await freshDocument()
+    const tab = randomUUID()
+    const first = await acquired(sessionOf(amy), document.id, tab)
+    expect(first).toMatchObject({ revision: 1, source: null })
+    const raw = zlib.gzipSync(Buffer.from(sheetSnapshotFor(document.unitId), 'utf8'))
+    const saved = await saveContent(app.baseUrl, sessionOf(amy), document.id, raw, { baseRevision: 1, localSeq: 5, lease: { token: first.token, writeEpoch: first.writeEpoch, clientInstanceId: tab } })
+    expect(saved.status, await saved.clone().text()).toBe(200)
+    // 同一个页面重新申请（续上）：修订号前进了一版，来源就是本页那次保存——与修订号冲突的详情同一个取法
+    expect(await acquired(sessionOf(amy), document.id, tab)).toMatchObject({ revision: 2, source: { clientInstanceId: tab, localSeq: 5 } })
+
+    const copied = await asUser(app.baseUrl, sessionOf(amy), `/api/documents/${document.id}/copy`, { method: 'POST', body: { spaceId: team, requestId: randomUUID() } })
+    expect(copied.status, await copied.clone().text()).toBe(201)
+    const copy = parseExact(createdDocumentSchema, await copied.json())
+    expect(await acquired(sessionOf(amy), copy.id)).toMatchObject({ revision: 1, source: null })
   })
 
   it('US-M3-04 编辑状态：能读就能看；有效的租约给出持有者（"人"的结构）、最后活动时间与是不是调用者自己；没有时为 null', async () => {

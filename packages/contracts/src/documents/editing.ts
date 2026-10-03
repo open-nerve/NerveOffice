@@ -3,6 +3,7 @@
 import { z } from 'zod'
 import { uuidSchema } from '../ids/ids.ts'
 import { userSummarySchema } from '../users/users.ts'
+import { revisionSourceSchema } from './content.ts'
 
 /**
  * 有效期（秒）：申请与每次心跳续租时，到期时间是数据库的 now() 加上它（00 号计划书 §6.2，r13）。
@@ -63,6 +64,9 @@ export type EditInterruption = z.infer<typeof editInterruptionSchema>
  * - token：之后的心跳、释放与保存经 EDIT_LEASE_HEADER 带上它；
  * - writeEpoch：这一代的代次（申请时文档的代次加一，所以至少是 1），保存时作为查询参数带上；
  * - revision：文档当前的修订号，页面拿它与自己载入的比较（落后就先重新加载，P2）；
+ * - source：文档当前修订的来源——产生它的那次保存的标签页与本地序号；当前修订是新建、复制出来的时候为 null。
+ *   续上时（编辑权中断之后同一个页面重新申请），修订号比本页的基准新，页面据此认出期间的那一版是不是本页自己一次结果未知的保存：
+ *   是的话以它为基准接着编辑，不当成别处的修改（00 号计划书 §7.5）。取法与修订号冲突的详情相同；
  * - expiresAt：到期时间；interruption：上一个租约异常结束的提醒，没有时为 null。
  * 响应的结构宽松（多出的字段被丢弃），见 auth 的会话信息
  */
@@ -70,6 +74,7 @@ export const acquiredEditLeaseSchema = z.object({
   token: editLeaseTokenSchema,
   writeEpoch: z.number().int().min(1),
   revision: z.number().int().min(1),
+  source: revisionSourceSchema.nullable(),
   expiresAt: z.iso.datetime(),
   interruption: editInterruptionSchema.nullable(),
 })

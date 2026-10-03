@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { revisionConflictDetailsSchema, revisionEtag, revisionFromEtag, saveContentQuerySchema, saveContentResponseSchema } from './content.ts'
+import { revisionConflictDetailsSchema, revisionEtag, revisionFromEtag, revisionSourceSchema, saveContentQuerySchema, saveContentResponseSchema } from './content.ts'
 
 const valid = {
   baseRevision: '3',
@@ -53,6 +53,14 @@ describe('保存的结果与冲突的详情', () => {
     const source = { clientInstanceId: valid.clientInstanceId, localSeq: 12 }
     expect(revisionConflictDetailsSchema.parse({ currentRevision: 5, source })).toEqual({ currentRevision: 5, source })
     expect(revisionConflictDetailsSchema.safeParse({ currentRevision: 5 }).success).toBe(false)
+  })
+
+  it('修订的来源（冲突的详情与申请编辑权的响应共用）：标签页是 UUID，本地序号是不小于 0 的整数', () => {
+    const source = { clientInstanceId: valid.clientInstanceId, localSeq: 0 }
+    expect(revisionSourceSchema.parse(source)).toEqual(source)
+    for (const invalid of [{ ...source, clientInstanceId: 'tab-1' }, { ...source, localSeq: -1 }, { ...source, localSeq: 1.5 }, { clientInstanceId: source.clientInstanceId }])
+      expect(revisionSourceSchema.safeParse(invalid).success, JSON.stringify(invalid)).toBe(false)
+    expect(revisionConflictDetailsSchema.safeParse({ currentRevision: 5, source: { ...source, localSeq: -1 } }).success).toBe(false)
   })
 })
 

@@ -2,6 +2,7 @@ import type { EditLeaseLostReason } from '@nerve-office/contracts'
 import type { Principal } from '../auth/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { AccessTarget } from './document-access-policy.ts'
+import type { RevisionSource } from './document-revisions.repository.ts'
 import type { HolderFacts, LeaseInterruption } from './edit-lease-rules.ts'
 import type { ObservedEditLease } from './edit-leases.repository.ts'
 import { Injectable } from '@nestjs/common'
@@ -9,6 +10,7 @@ import { AppError } from '../../shared/errors/app-error.ts'
 import { SessionService } from '../auth/index.ts'
 import { AppLogger } from '../logging/index.ts'
 import { canEditDocument, DocumentAccessPolicy, requireAccess, requireDocumentContent } from './document-access-policy.ts'
+import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
 import { DocumentsRepository } from './documents.repository.ts'
 import { currentLeaseLoss, interruptionOf, isSamePage, releasableBy, requestLeaseLoss } from './edit-lease-rules.ts'
 import { editLeaseTokenDigest, generateEditLeaseToken } from './edit-lease-token.ts'
@@ -27,7 +29,8 @@ export function editingActorOf(principal: Principal): EditingActor {
 
 /**
  * 申请的结果（P1 设计 §3.4.2）：
- * - acquired：取得了新的一代——令牌（只在这里出现一次）、这一代的代次、文档当前的修订号、到期时间，以及上一个租约异常结束的提醒；
+ * - acquired：取得了新的一代——令牌（只在这里出现一次）、这一代的代次、文档当前的修订号与它的来源（新建、复制出来的为 null）、
+ *   到期时间，以及上一个租约异常结束的提醒；
  * - held：有效的租约在别人手里（同一个人在别的标签页或设备上也算），什么也没写；workspace 补上人名，回 EDIT_LEASE_HELD
  */
 export type LeaseAcquisition
@@ -36,6 +39,7 @@ export type LeaseAcquisition
     readonly token: string
     readonly writeEpoch: number
     readonly revision: number
+    readonly source: RevisionSource | null
     readonly expiresAt: Date
     readonly interruption: LeaseInterruption | undefined
   }
@@ -64,6 +68,7 @@ export class EditLeaseService {
 
   constructor(
     private readonly documents: DocumentsRepository,
+    private readonly revisions: DocumentRevisionsRepository,
     private readonly leases: EditLeasesRepository,
     private readonly policy: DocumentAccessPolicy,
     private readonly sessions: SessionService,
@@ -76,7 +81,8 @@ export class EditLeaseService {
    * 申请（P1 设计 §3.4.2）：不加锁判断能编辑（404 / 403）→ 锁文档行、锁下再判断 → 锁租约行，按有效条件判断当前的租约 →
    * 有效时：同一个登录、同一个标签页的是这个页面的重试（例如上次申请的回包丢了），照样发新的一代；别人的（含自己在别处的）就是被占用，
    * 什么也不写 → 文档的代次加一、生成令牌、改写租约行 → 上一个租约异常结束、而且在 30 分钟以内时给出提醒。
-   * 修订号取锁下的文档行：页面拿它与自己载入的比较
+   * 修订号取锁下的文档行：页面拿它与自己载入的比较。连同这一版的来源（这一条修订记录的标签页与本地序号，与修订号冲突的详情
+   * 同一个取法）：续上时页面据此认出期间的那一版是不是本页自己一次结果未知的保存（00 号计划书 §7.5）
    */
   async acquire(actor: EditingActor, documentId: string, clientInstanceId: string, transaction: Transaction): Promise<LeaseAcquisition> {
     await requireDocumentContent(this.policy, actor.userId, await this.documents.findById(documentId, transaction), ['edit'], transaction)
@@ -98,6 +104,8 @@ export class EditLeaseService {
       tokenDigest: editLeaseTokenDigest(token),
       writeEpoch,
     }, transaction)
+    // 文档行在锁下：这一版不会再变
+    const revision = await this.revisions.findByRevision(documentId, document.revision, transaction)
     // 上一个租约的情形只记原因（none、到期、空闲……，同一个页面的重试记 retry），不记令牌
     this.#logger.debug('申请编辑权：取得新的一代', { documentId, writeEpoch, previous: loss ?? 'retry' })
     return {
@@ -105,6 +113,7 @@ export class EditLeaseService {
       token,
       writeEpoch,
       revision: document.revision,
+      source: revision?.source ?? null,
       expiresAt: lease.expiresAt,
       interruption: interruptionOf(current, loss),
     }

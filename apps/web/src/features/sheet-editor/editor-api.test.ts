@@ -7,7 +7,7 @@ const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 const PAGE_ID = '0199a2c4-1f2e-4a3b-8c4d-00000000aaaa'
 const LEASE = `/api/documents/${DOCUMENT_ID}/edit-lease`
 const TOKEN = 'T'.repeat(43)
-const ACQUIRED = { token: TOKEN, writeEpoch: 2, revision: 4, expiresAt: '2026-10-04T03:01:30.000Z', interruption: null }
+const ACQUIRED = { token: TOKEN, writeEpoch: 2, revision: 4, source: null, expiresAt: '2026-10-04T03:01:30.000Z', interruption: null }
 
 afterEach(() => {
   setCsrfToken(undefined)

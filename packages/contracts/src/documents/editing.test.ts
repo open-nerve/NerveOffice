@@ -26,7 +26,7 @@ const TAB = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c41'
 const AMY = { id: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c33', username: 'amy', displayName: '艾米' }
 const AT = '2026-10-04T08:00:00.000Z'
 
-const acquired = { token: TOKEN, writeEpoch: 3, revision: 7, expiresAt: AT, interruption: null }
+const acquired = { token: TOKEN, writeEpoch: 3, revision: 7, source: null, expiresAt: AT, interruption: null }
 const editor = { holder: AMY, lastActiveAt: AT, sameUser: false }
 
 describe('编辑租约的参数（P1 设计 §3.2，M3 总设计 §2.1）', () => {
@@ -60,8 +60,15 @@ describe('申请编辑权', () => {
     expect(acquireEditLeaseRequestSchema.safeParse({ clientInstanceId: TAB, sessionId: TAB }).success).toBe(false)
   })
 
-  it('响应：令牌、这一代的代次、当前修订号与到期时间；没有异常结束时 interruption 为 null；多出的字段被丢弃', () => {
+  it('响应：令牌、这一代的代次、当前修订号与它的来源、到期时间；没有异常结束时 interruption 为 null；多出的字段被丢弃', () => {
     expect(acquiredEditLeaseSchema.parse({ ...acquired, holderId: AMY.id })).toEqual(acquired)
+  })
+
+  it('当前修订的来源：保存产生的修订给出那次保存的标签页与本地序号，新建、复制出来的为 null；不能省略（与冲突详情的来源同一个结构）', () => {
+    const source = { clientInstanceId: TAB, localSeq: 4 }
+    expect(acquiredEditLeaseSchema.parse({ ...acquired, source }).source).toEqual(source)
+    expect(acquiredEditLeaseSchema.safeParse({ ...acquired, source: undefined }).success).toBe(false)
+    expect(acquiredEditLeaseSchema.safeParse({ ...acquired, source: { clientInstanceId: TAB } }).success).toBe(false)
   })
 
   it('上一个租约异常结束时给出提醒：上一位持有者（"人"的结构）与结束的时间', () => {

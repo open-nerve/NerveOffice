@@ -87,6 +87,7 @@ export {
   revisionConflictDetailsSchema,
   revisionEtag,
   revisionFromEtag,
+  revisionSourceSchema,
   saveContentQuerySchema,
   saveContentResponseSchema,
   SNAPSHOT_MAX_DEPTH,
@@ -94,7 +95,7 @@ export {
   SNAPSHOT_UPLOAD_CONTENT_TYPE,
   UNIVER_SDK_VERSION,
 } from './documents/content.ts'
-export type { RevisionConflictDetails, SaveContentQuery, SaveContentResponse } from './documents/content.ts'
+export type { RevisionConflictDetails, RevisionSource, SaveContentQuery, SaveContentResponse } from './documents/content.ts'
 export { DOCUMENT_PAGE_PATTERN, documentIdFromPagePath, documentPagePath } from './documents/document-page.ts'
 export {
   COPIED_TITLE_SUFFIX,
