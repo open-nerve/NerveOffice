@@ -1,8 +1,8 @@
-// 收回写入权的范围（M2-P2 设计 §3.7，M2-P5 设计 §3.4(3)）：每种范围涉及谁、哪些文档，逐种核对；M2 的实现什么也不做。
-import type { Transaction } from '../database/index.ts'
-import type { DocumentWriter, WriteAccessRevocation, WriteAccessScope } from './write-access.ts'
+// 收回写入权的范围（M2-P2 设计 §3.7，M2-P5 设计 §3.4(3)）：每种范围涉及谁、哪些文档，逐种核对。
+// 接上租约的实现（结束谁的租约、代次加一）在 lease-write-access.test.ts。
+import type { DocumentWriter, WriteAccessScope } from './write-access.ts'
 import { describe, expect, it } from 'vitest'
-import { coversWriter, LeaselessWriteAccessRevocation } from './write-access.ts'
+import { coversWriter } from './write-access.ts'
 
 const AMY = '0199a2c4-0000-7000-8000-00000000000a'
 const BEN = '0199a2c4-0000-7000-8000-00000000000b'
@@ -43,26 +43,5 @@ describe('收回写入权的范围：涉及谁、哪些文档（各种范围的�
     expect(covered({ kind: 'membership', userId: BEN, spaceId: SPACE })).toEqual(['ben/shared', 'ben/also'])
     expect(covered({ kind: 'space', spaceId: SPACE })).toEqual(['amy/shared', 'amy/also', 'ben/shared', 'ben/also'])
     expect(covered({ kind: 'documents', documentIds: [SHARED, ELSEWHERE] })).toEqual(['amy/shared', 'amy/elsewhere', 'ben/shared', 'ben/elsewhere'])
-  })
-})
-
-describe('M2 的实现：还没有租约，入口里没有要终止的东西', () => {
-  it('五种范围都直接完成，不碰事务（不发任何语句）', async () => {
-    const revocation: WriteAccessRevocation = new LeaselessWriteAccessRevocation()
-    // 事务被碰到（取任何属性）就抛错
-    const untouchable = new Proxy({}, {
-      get: () => {
-        throw new Error('M2 的收回写入权不应碰事务')
-      },
-    }) as Transaction
-    const scopes: WriteAccessScope[] = [
-      { kind: 'user', userId: BEN },
-      { kind: 'membership', userId: BEN, spaceId: SPACE },
-      { kind: 'space', spaceId: SPACE },
-      { kind: 'documents', documentIds: [SHARED] },
-      { kind: 'userDocuments', userId: BEN, documentIds: [SHARED] },
-    ]
-    for (const scope of scopes)
-      await expect(revocation.revoke(scope, untouchable), scope.kind).resolves.toBeUndefined()
   })
 })

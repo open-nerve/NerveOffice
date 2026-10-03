@@ -8,8 +8,7 @@ import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { SessionService } from '../auth/index.ts'
 import { AppLogger } from '../logging/index.ts'
-import { documentPermissionsOf } from './access-rules.ts'
-import { DocumentAccessPolicy, requireAccess, requireDocumentContent } from './document-access-policy.ts'
+import { canEditDocument, DocumentAccessPolicy, requireAccess, requireDocumentContent } from './document-access-policy.ts'
 import { DocumentsRepository } from './documents.repository.ts'
 import { currentLeaseLoss, interruptionOf, isSamePage, releasableBy, requestLeaseLoss } from './edit-lease-rules.ts'
 import { editLeaseTokenDigest, generateEditLeaseToken } from './edit-lease-token.ts'
@@ -161,12 +160,7 @@ export class EditLeaseService {
   private holderFacts(lease: ObservedEditLease | undefined, document: AccessTarget, transaction: Transaction): HolderFacts {
     return {
       sessionActive: async () => lease !== undefined && this.sessions.isActive(lease.sessionId, transaction),
-      holderCanEdit: async () => {
-        if (lease === undefined)
-          return false
-        const access = await this.policy.accessOf(lease.holderId, document, transaction)
-        return access !== undefined && documentPermissionsOf(access, document, lease.holderId).canEdit
-      },
+      holderCanEdit: async () => lease !== undefined && canEditDocument(this.policy, lease.holderId, document, transaction),
     }
   }
 

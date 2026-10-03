@@ -465,4 +465,20 @@ export class DocumentsRepository {
       throw new Error(`代次加一时文档不在了：${id}`)
     return row.writeEpoch
   }
+
+  /**
+   * 同 advanceWriteEpoch，一条语句给这些文档的写入代次各加一（收回写入权结束了它们上面的租约，P1 设计 §3.4.6 第 3 步）：
+   * 调用方已锁住这些文档行；更新时间不变，不看状态。一串 id 作为一个数组参数（规范 §5）
+   */
+  async advanceWriteEpochs(ids: readonly string[], transaction: Transaction): Promise<void> {
+    if (ids.length === 0)
+      return
+    const rows = await executorOf(this.db, transaction)
+      .update(d)
+      .set({ writeEpoch: sql`${d.writeEpoch} + 1` })
+      .where(inIdArray(d.id, ids))
+      .returning({ id: d.id })
+    if (rows.length !== new Set(ids).size)
+      throw new Error(`代次加一时有文档不在了：应有 ${new Set(ids).size} 份，改了 ${rows.length} 份`)
+  }
 }

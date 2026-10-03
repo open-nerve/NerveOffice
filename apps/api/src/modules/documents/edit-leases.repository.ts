@@ -1,3 +1,4 @@
+import type { DocumentStatus } from '@nerve-office/contracts'
 import type { SQL } from 'drizzle-orm'
 import type { Buffer } from 'node:buffer'
 import type { EditLeaseEndReason } from '../../db/schema/documents/index.ts'
@@ -52,9 +53,15 @@ export interface NewEditLease {
   readonly writeEpoch: number
 }
 
-/** 收回写入权时锁住的一条租约，连同那份文档现在所在的空间（对应 coversWriter 的 DocumentWriter：持有者、文档、空间） */
+/**
+ * 收回写入权时锁住的一条租约，连同那份文档现在的几项属性（锁住文档行之后读的，看得到调用方刚做的改动）：
+ * 所在的空间（对应 coversWriter 的 DocumentWriter：持有者、文档、空间）、创建人（与空间一起是访问策略判断用的 AccessTarget）、
+ * 状态（删除的调用方先把文档放进回收站：回收站里的文档谁也不能编辑）
+ */
 export interface RevocableEditLease extends ObservedEditLease {
   readonly spaceId: string
+  readonly createdBy: string
+  readonly documentStatus: DocumentStatus
 }
 
 const COLUMNS = {
@@ -87,7 +94,8 @@ const EXPIRES_AT = sql`now() + make_interval(secs => ${EDIT_LEASE_TTL_SECONDS})`
  * - documents：这些文档，不论持有者（删除、跨空间移动、转移）；
  * - userDocuments：持有者是这个人，而且是这些文档（取消或降低单独授权）。
  * 一串文档 id 作为一个数组参数（inIdArray，规范 §5）。改这里时同时改 coversWriter，反过来也一样：
- * edit-lease-statements.test.ts 逐种核对两边按同样的几项、同样的值筛选（多一项、少一项都算不一致）；真实数据库上的效果由 S5 的集成测试覆盖
+ * edit-lease-statements.test.ts 逐种核对两边按同样的几项、同样的值筛选（多一项、少一项都算不一致）；真实数据库上的效果（结束谁的租约、
+ * 只锁涉及的行、锁下再核对）由 tests/integration 的 documents/lease-revocation.test.ts 与 lease-revocation-locks.test.ts 覆盖
  */
 function writersIn(scope: WriteAccessScope): SQL | undefined {
   switch (scope.kind) {
@@ -192,8 +200,22 @@ export class EditLeasesRepository {
   }
 
   /**
+   * 同 end，一条语句记下这些文档上的租约明确结束（收回写入权的第 3 步，P1 设计 §3.4.6：文件夹连同子树移走、归档时一次是一批，
+   * 不逐份发语句）。调用方已按文档 id 的顺序锁住了这些文档行与租约行（lockInScope）；已经明确结束的不改。一串 id 作为一个数组参数
+   */
+  async endAll(documentIds: readonly string[], reason: EditLeaseEndReason, transaction: Transaction): Promise<void> {
+    if (documentIds.length === 0)
+      return
+    await executorOf(this.db, transaction)
+      .update(l)
+      .set({ endedAt: sql`now()`, endReason: reason })
+      .where(and(inIdArray(l.documentId, documentIds), isNull(l.endedAt)))
+  }
+
+  /**
    * 收回写入权（P1 设计 §3.4.6 第 1 步）：找出这次范围涉及的、没有明确结束的租约（范围的条件见 writersIn，与 coversWriter 同义），
-   * 先按文档 id 的顺序锁住它们的文档行，再按同样的顺序锁住这些租约行，返回锁住的租约（带文档所在的空间）。
+   * 先按文档 id 的顺序锁住它们的文档行，再按同样的顺序锁住这些租约行，返回锁住的租约（带文档所在的空间、创建人与状态：
+   * 收回写入权按它们判断持有者还能不能编辑，见 RevocableEditLease）。
    * 调用方在改动权限的事务里调用，之前已经持有账户行、空间行、成员行或这些文档行（ADR-014 的锁顺序，文档行之后才是租约行）。
    * 第二步把条件再核对一次：第一步等文档行的锁时，别的申请可能已经提交、改写了租约（换了持有者），那条语句是按旧的租约行判断的范围；
    * 现在持着文档行的锁，租约不会再被改写（申请要先拿文档行的锁），读到的就是最终的。
@@ -215,7 +237,7 @@ export class EditLeasesRepository {
     if (locked.length === 0)
       return []
     return executor
-      .select({ ...COLUMNS, spaceId: d.spaceId })
+      .select({ ...COLUMNS, spaceId: d.spaceId, createdBy: d.createdBy, documentStatus: d.status })
       .from(l)
       .innerJoin(d, eq(d.id, l.documentId))
       .where(and(inIdArray(l.documentId, locked.map(row => row.id)), open))

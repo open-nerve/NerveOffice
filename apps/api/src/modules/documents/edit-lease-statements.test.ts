@@ -86,6 +86,13 @@ describe('续租与明确结束', () => {
     expect(statement.text).toMatch(/^update "document_edit_leases" set "ended_at" = now\(\), "end_reason" = \$1 where \("document_edit_leases"\."document_id" = \$2 and "document_edit_leases"\."ended_at" is null\)/)
     expect(statement.values).toEqual(['released', DOCUMENT])
   })
+
+  it('一批明确结束（收回写入权）：一条语句，这串文档 id 作为一个数组参数，同样只改还没结束的；没有文档时一条也不发', async () => {
+    const statement = await onlyStatementOf(async (leases, transaction) => leases.endAll([DOCUMENT, OTHER_DOCUMENT], 'revoked', transaction))
+    expect(statement.text).toBe('update "document_edit_leases" set "ended_at" = now(), "end_reason" = $1 where ("document_edit_leases"."document_id" = ANY($2::uuid[]) and "document_edit_leases"."ended_at" is null)')
+    expect(statement.values).toEqual(['revoked', [DOCUMENT, OTHER_DOCUMENT]])
+    expect(await statementsOf(async (leases, transaction) => leases.endAll([], 'revoked', transaction))).toEqual([])
+  })
 })
 
 describe('文档的写入代次加一（申请编辑权、收回写入权，documents 的仓储）', () => {
@@ -96,6 +103,16 @@ describe('文档的写入代次加一（申请编辑权、收回写入权，docu
     })
     expect(statements.map(statement => statement.text)).toEqual(['update "documents" set "write_epoch" = "documents"."write_epoch" + 1 where "documents"."id" = $1 returning "write_epoch"'])
     expect(statements[0]?.values).toEqual([DOCUMENT])
+  })
+
+  it('一批（收回写入权）：一条语句给这些文档的代次各加一，这串 id 作为一个数组参数；更新时间同样不动；没有文档时一条也不发', async () => {
+    const statements = await recordStatements(async (executor, transaction) => {
+      const documents = new DocumentsRepository(executor as ConstructorParameters<typeof DocumentsRepository>[0])
+      await documents.advanceWriteEpochs([], transaction)
+      return documents.advanceWriteEpochs([DOCUMENT, OTHER_DOCUMENT], transaction).catch(() => undefined)
+    })
+    expect(statements.map(statement => statement.text)).toEqual(['update "documents" set "write_epoch" = "documents"."write_epoch" + 1 where "documents"."id" = ANY($1::uuid[]) returning "id"'])
+    expect(statements[0]?.values).toEqual([[DOCUMENT, OTHER_DOCUMENT]])
   })
 })
 
@@ -153,10 +170,10 @@ describe('收回写入权：范围的条件与 coversWriter 逐种同义，先�
     expect(leases && filtersOf(leases)).toEqual([...coveredBy(scope), '没有明确结束', `文档=${DOCUMENT}`].sort())
   })
 
-  it('加锁：第一条按文档 id 的顺序只锁文档行，第二条按同样的顺序只锁租约行，并带回文档所在的空间与 now()', async () => {
+  it('加锁：第一条按文档 id 的顺序只锁文档行，第二条按同样的顺序只锁租约行，并带回 now() 与文档现在所在的空间、创建人与状态', async () => {
     const [documents, leases] = await statementsOf(async (repository, transaction) => repository.lockInScope({ kind: 'space', spaceId: SPACE }, transaction), lockedDocument)
     expect(documents?.text).toMatch(/^select "documents"\."id" from "documents" inner join "document_edit_leases" on "document_edit_leases"\."document_id" = "documents"\."id" where .* order by "documents"\."id" asc for update of "documents"$/)
-    expect(leases?.text).toMatch(/^select .*now\(\), "documents"\."space_id" from "document_edit_leases" inner join "documents" on "documents"\."id" = "document_edit_leases"\."document_id" where \("document_edit_leases"\."document_id" = ANY\(\$1::uuid\[\]\) and .* order by "document_edit_leases"\."document_id" asc for update of "document_edit_leases"$/)
+    expect(leases?.text).toMatch(/^select .*now\(\), "documents"\."space_id", "documents"\."created_by", "documents"\."status" from "document_edit_leases" inner join "documents" on "documents"\."id" = "document_edit_leases"\."document_id" where \("document_edit_leases"\."document_id" = ANY\(\$1::uuid\[\]\) and .* order by "document_edit_leases"\."document_id" asc for update of "document_edit_leases"$/)
     expect(leases?.values[0]).toEqual([DOCUMENT])
   })
 

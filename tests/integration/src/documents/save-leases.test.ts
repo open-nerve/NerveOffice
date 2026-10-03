@@ -2,7 +2,8 @@
 // 能访问 → 能编辑时锁文档行、锁下再判断 → 重放 → 不是重放才要求能编辑 → 租约 → unitId → 基准修订号 → 写入。
 // 租约对不上时 409 EDIT_LEASE_LOST（details 只有原因），什么也不写；重放先于租约（A07）；过期的会话不能覆盖别人的保存（A05）。
 // 与时间有关的（到期、空闲回收）改写租约行的时间来模拟（support/edit-leases.ts），"恰好"的边界由 apps/api 的单元测试按同一个 now 核对。
-// 收回写入权（降级、移出、取消分享、归档、停用、删除）接上租约在 S5，这里的跨空间移动只看代次。
+// 收回写入权（降级、移出、取消分享、归档、停用、删除）接上租约的用例在 lease-revocation.test.ts 与 lease-revocation-locks.test.ts；
+// 这里的跨空间移动是移到他仍能编辑的空间，只看代次。
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'

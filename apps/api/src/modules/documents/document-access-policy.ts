@@ -163,6 +163,16 @@ export async function requireAccess<T extends AccessTarget>(
   return { document, access }
 }
 
+/**
+ * 这个人现在能不能编辑这份文档：访问策略给出的权限里有 canEdit（access-rules 的权限位，与保存、申请编辑权看的是同一位）。
+ * 编辑租约用它判断持有者（有效条件第 7 条、收回写入权，M3-P1 设计 §3.4.1、§3.4.6）。只看权限：文档是不是还在正常状态，
+ * 由调用方按它读到的那一行判断
+ */
+export async function canEditDocument(policy: DocumentAccessPolicy, userId: string, document: AccessTarget, transaction: Transaction): Promise<boolean> {
+  const access = await policy.accessOf(userId, document, transaction)
+  return access !== undefined && documentPermissionsOf(access, document, userId).canEdit
+}
+
 /** 归档的空间里"不能做"的默认说明：归档时所有人至多是查看者 */
 const ARCHIVED_MESSAGE = '空间已归档，只能查看'
 

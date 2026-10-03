@@ -1,10 +1,11 @@
 // 编辑租约（M3-P1）：保存要求租约之后（S4），集成测试发保存之前先申请——令牌放请求头（x-edit-lease），申请得到的代次与
 // 申请时的标签页放进保存的查询参数（writeEpoch、clientInstanceId）。现有用例的保存都经 saveContent：用例本身的断言不变，
-// 它们要验证的仍是租约之外的步骤（权限、幂等、修订号、锁）。另有改写租约行时间的两个辅助（到期、空闲），不等真实的时间。
+// 它们要验证的仍是租约之外的步骤（权限、幂等、修订号、锁）。另有心跳、结局与租约行的读取（收回写入权的用例），
+// 以及改写租约行时间的两个辅助（到期、空闲），不等真实的时间。
 import type { TestDatabase } from './database.ts'
 import type { LoggedIn } from './session-client.ts'
 import { randomUUID } from 'node:crypto'
-import { acquiredEditLeaseSchema, EDIT_LEASE_HEADER } from '@nerve-office/contracts'
+import { acquiredEditLeaseSchema, EDIT_LEASE_HEADER, editLeaseLostDetailsSchema, errorResponseSchema } from '@nerve-office/contracts'
 import { expect } from 'vitest'
 import { parseExact } from './contracts.ts'
 import { asUser } from './session-client.ts'
@@ -43,6 +44,41 @@ export async function acquireLease(baseUrl: string, user: LoggedIn, documentId: 
 /** 释放：不看结果（与页面关闭时的释放一样，接口一律 204；登录已经失效、文档读不到时是 401、404） */
 export async function releaseLease(baseUrl: string, user: LoggedIn, documentId: string, lease: HeldLease): Promise<void> {
   await (await asUser(baseUrl, user, leasePath(documentId), { method: 'DELETE', headers: { [EDIT_LEASE_HEADER]: lease.token } })).arrayBuffer()
+}
+
+/** 心跳续租（页面每 10 秒一次）：带着这份租约的令牌，上报没有空闲 */
+export async function renewLease(baseUrl: string, user: LoggedIn, documentId: string, lease: HeldLease): Promise<Response> {
+  return asUser(baseUrl, user, leasePath(documentId), { method: 'PUT', body: { idleSeconds: 0 }, headers: { [EDIT_LEASE_HEADER]: lease.token } })
+}
+
+/**
+ * 一次心跳、保存或申请的结局，写成一行便于逐个比较：成功时只有状态码（"200"）；失败时是状态码与错误码（"403 PERMISSION_DENIED"），
+ * 编辑权已失效时带上原因（"409 EDIT_LEASE_LOST:revoked"）
+ */
+export async function outcomeOf(response: Response): Promise<string> {
+  if (response.ok) {
+    await response.arrayBuffer()
+    return String(response.status)
+  }
+  const { error } = parseExact(errorResponseSchema, await response.json())
+  const reason = error.code === 'EDIT_LEASE_LOST' ? `:${String(parseExact(editLeaseLostDetailsSchema, error.details).reason)}` : ''
+  return `${response.status} ${error.code}${reason}`
+}
+
+/** 一份文档上的租约行（持有者、明确结束的原因、这一代的代次）与文档现在的代次 */
+export interface LeaseState {
+  readonly holderId: string
+  readonly endReason: string | null
+  readonly leaseEpoch: number
+  readonly documentEpoch: number
+}
+
+export async function leaseStateOf(database: TestDatabase, documentId: string): Promise<LeaseState | undefined> {
+  return database.query(async client => (await client.query<LeaseState>(
+    `SELECT l.holder_id AS "holderId", l.end_reason AS "endReason", l.write_epoch AS "leaseEpoch", d.write_epoch AS "documentEpoch"
+     FROM document_edit_leases l JOIN documents d ON d.id = l.document_id WHERE l.document_id = $1`,
+    [documentId],
+  )).rows[0])
 }
 
 /** 格式合法、谁的也不是的令牌 */

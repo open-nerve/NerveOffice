@@ -22,13 +22,14 @@ import { EditLeaseService } from './edit-lease.service.ts'
 import { EditLeasesRepository } from './edit-leases.repository.ts'
 import { FoldersRepository } from './folders.repository.ts'
 import { FoldersService } from './folders.service.ts'
+import { LeaseWriteAccessRevocation } from './lease-write-access.ts'
 import { SharedDocumentsService } from './shared-documents.service.ts'
 import { SpaceTreeRepository } from './space-tree.repository.ts'
 import { TrashEntriesRepository } from './trash-entries.repository.ts'
 import { TrashEntryPurger } from './trash-entry-purger.ts'
 import { TrashPurgeService } from './trash-purge.service.ts'
 import { TrashService } from './trash.service.ts'
-import { LeaselessWriteAccessRevocation, WriteAccessRevocation } from './write-access.ts'
+import { WriteAccessRevocation } from './write-access.ts'
 
 @Module({
   // auth 只为判断别人的租约绑定的登录还在不在（SessionService.isActive，M3-P1 设计 §3.1）；auth 不依赖 documents，依赖图无环
@@ -63,8 +64,8 @@ import { LeaselessWriteAccessRevocation, WriteAccessRevocation } from './write-a
     TrashEntryPurger,
     // 有效权限的唯一入口（M2-P2 设计 §3.4）；M2-P5 在同一个实现里并上单独授权
     { provide: DocumentAccessPolicy, useClass: EffectiveAccessPolicy },
-    // 收回写入权的入口（M2-P2 设计 §3.7）；M3 换成接入租约的实现，调用方不改
-    { provide: WriteAccessRevocation, useClass: LeaselessWriteAccessRevocation },
+    // 收回写入权的入口（M2-P2 设计 §3.7）：M3-P1 起接上编辑租约（结束失去写入权的人的租约、代次加一），调用方不改
+    { provide: WriteAccessRevocation, useClass: LeaseWriteAccessRevocation },
   ],
   // 空间的接口（workspace）与系统管理（admin）经访问策略授权、经这个入口收回写入权；admin 转移停用者的文档；
   // 文件夹、回收站与搜索的接口在 workspace（M2-P4 设计 §3.1），数据与规则在这里；

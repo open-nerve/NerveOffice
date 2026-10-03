@@ -435,7 +435,7 @@ describe('登录失效，租约随之失效（P1 设计 §1、§3.4.1 第 6 条�
   })
 })
 
-describe('US-M3-12 持有者没了编辑权（有效条件第 7 条：收回写入权在 S5 才接上租约，这里直接改成员的角色）', () => {
+describe('US-M3-12 持有者没了编辑权（有效条件第 7 条：直接改库里的成员角色，不经收回写入权的入口——经接口的收回见 lease-revocation.test.ts）', () => {
   it('US-M3-12 被降为查看者：没人在编辑、别人能申请（不算异常结束，没有提醒）；他再心跳 403（失去编辑权先于租约判断）', async () => {
     const { account: gus, session } = await freshEditor('lease-gus')
     const document = await freshDocument()
