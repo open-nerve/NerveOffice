@@ -17,6 +17,7 @@ import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
+import { idleLeaseFor, passLeaseTime, saveContent } from '../support/edit-leases.ts'
 import { raceAgainstHeldLock } from '../support/held-lock.ts'
 import { asUser, cookieValue, login, SESSION_COOKIE, sessionSetCookie } from '../support/session-client.ts'
 import { createTeamSpace, setMember } from '../support/spaces.ts'
@@ -167,24 +168,6 @@ async function documentOf(documentId: string): Promise<{ readonly write_epoch: n
   return row
 }
 
-/** 时间过去了 seconds 秒：租约行上的时间一起往前挪（约束照样成立），不等真实的时间 */
-async function passTime(documentId: string, seconds: number): Promise<void> {
-  await database.query(async client => client.query(
-    `UPDATE document_edit_leases SET acquired_at = acquired_at - make_interval(secs => $2), renewed_at = renewed_at - make_interval(secs => $2),
-       expires_at = expires_at - make_interval(secs => $2), last_active_at = last_active_at - make_interval(secs => $2) WHERE document_id = $1`,
-    [documentId, seconds],
-  ))
-}
-
-/** 最后一次操作在 seconds 秒之前（心跳还在：续租的时间、到期不动；申请的时间不晚于它） */
-async function idleFor(documentId: string, seconds: number): Promise<void> {
-  await database.query(async client => client.query(
-    `UPDATE document_edit_leases SET last_active_at = now() - make_interval(secs => $2), acquired_at = least(acquired_at, now() - make_interval(secs => $2))
-     WHERE document_id = $1`,
-    [documentId, seconds],
-  ))
-}
-
 /** 这条会话在库里的 id：库里只存令牌（Cookie 的值）的 SHA-256 摘要 */
 async function sessionIdOf(session: LoggedIn): Promise<string> {
   const digest = createHash('sha256').update(session.cookie.slice(`${SESSION_COOKIE}=`.length), 'utf8').digest()
@@ -201,12 +184,8 @@ function digestOf(token: string): Buffer {
 describe('申请、心跳、释放与编辑状态（P1 设计 §3.4.2、§3.4.3）', () => {
   it('US-M3-04 申请：201，令牌、新的一代、锁下的修订号、到期时间；库里只存令牌的摘要，绑定这次登录与这个标签页；文档的代次加一、更新时间不变；响应不缓存', async () => {
     const document = await freshDocument()
-    // 先保存一次（保存在 S4 之前还不要求租约），修订号是 2：申请给出的是文档当前的修订号
-    const query = new URLSearchParams({ baseRevision: '1', requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1' })
-    const saved = await asUser(app.baseUrl, sessionOf(amy), `/api/documents/${document.id}/content?${query.toString()}`, {
-      method: 'PUT',
-      binary: { contentType: 'application/gzip', bytes: zlib.gzipSync(Buffer.from(sheetSnapshotFor(document.unitId), 'utf8')) },
-    })
+    // 先保存一次（在另一个标签页里申请、保存、释放），修订号是 2：申请给出的是文档当前的修订号；上一个租约是释放的，不提醒
+    const saved = await saveContent(app.baseUrl, sessionOf(amy), document.id, zlib.gzipSync(Buffer.from(sheetSnapshotFor(document.unitId), 'utf8')), { baseRevision: 1 })
     expect(saved.status, await saved.clone().text()).toBe(200)
     const before = await documentOf(document.id)
     const tab = randomUUID()
@@ -381,7 +360,7 @@ describe('US-M3-11 到期与空闲：时间以数据库为准（改写租约行�
   it('US-M3-11 到期之后别人能申请，提醒里是上一位持有者与他最后一次续租的时间；持有者的旧令牌心跳得到 replaced', async () => {
     const document = await freshDocument()
     const lease = await acquired(sessionOf(amy), document.id)
-    await passTime(document.id, EDIT_LEASE_TTL_SECONDS)
+    await passLeaseTime(database, document.id, EDIT_LEASE_TTL_SECONDS)
     const renewedAt = (await leaseOf(document.id))?.renewed_at.toISOString()
     expect((await status(sessionOf(ben), document.id)).editor).toBeNull()
     const taken = await acquired(sessionOf(ben), document.id)
@@ -393,25 +372,25 @@ describe('US-M3-11 到期与空闲：时间以数据库为准（改写租约行�
   it('US-M3-11 到期之后没人接手：持有者心跳得到 expired；离到期还有 10 秒时照常续租，别人申请被占用', async () => {
     const valid = await freshDocument()
     const lease = await acquired(sessionOf(amy), valid.id)
-    await passTime(valid.id, EDIT_LEASE_TTL_SECONDS - 10)
+    await passLeaseTime(database, valid.id, EDIT_LEASE_TTL_SECONDS - 10)
     expect((await heldBy(await acquire(sessionOf(ben), valid.id))).holder).toEqual(summaryOf(amy))
     expect((await renew(sessionOf(amy), valid.id, lease.token)).status).toBe(200)
 
     const expired = await freshDocument()
     const old = await acquired(sessionOf(amy), expired.id)
-    await passTime(expired.id, EDIT_LEASE_TTL_SECONDS)
+    await passLeaseTime(database, expired.id, EDIT_LEASE_TTL_SECONDS)
     expect(await lostReason(await renew(sessionOf(amy), expired.id, old.token))).toBe('expired')
   })
 
   it('US-M3-11 空闲满 12 分钟由服务端回收（心跳还在）：持有者心跳得到 idle，别人能申请且有提醒；差 10 秒时照常', async () => {
     const valid = await freshDocument()
     const lease = await acquired(sessionOf(amy), valid.id)
-    await idleFor(valid.id, 720 - 10)
+    await idleLeaseFor(database, valid.id, 720 - 10)
     expect((await renew(sessionOf(amy), valid.id, lease.token, 720 - 10)).status).toBe(200)
 
     const idle = await freshDocument()
     const old = await acquired(sessionOf(amy), idle.id)
-    await idleFor(idle.id, 720)
+    await idleLeaseFor(database, idle.id, 720)
     expect(await lostReason(await renew(sessionOf(amy), idle.id, old.token))).toBe('idle')
     expect((await status(sessionOf(ben), idle.id)).editor).toBeNull()
     const taken = await acquired(sessionOf(ben), idle.id)
@@ -472,12 +451,12 @@ describe('US-M3-10 异常结束的提醒（服务端部分，界面在 P5）', (
   it('到期之后 29 分 50 秒有提醒，30 分 10 秒没有（恰好 30 分钟算以内，由单元测试按同一个 now 核对）', async () => {
     const within = await freshDocument()
     await acquired(sessionOf(amy), within.id)
-    await passTime(within.id, 30 * 60 - 10)
+    await passLeaseTime(database, within.id, 30 * 60 - 10)
     expect((await acquired(sessionOf(ben), within.id)).interruption?.holder).toEqual(summaryOf(amy))
 
     const beyond = await freshDocument()
     await acquired(sessionOf(amy), beyond.id)
-    await passTime(beyond.id, 30 * 60 + 10)
+    await passLeaseTime(database, beyond.id, 30 * 60 + 10)
     expect((await acquired(sessionOf(ben), beyond.id)).interruption).toBeNull()
   })
 
@@ -500,7 +479,7 @@ describe('日志（P1 设计 §3.5）', () => {
     const document = await freshDocument()
     const lease = await acquired(sessionOf(amy), document.id)
     await heldBy(await acquire(sessionOf(ben), document.id))
-    await passTime(document.id, EDIT_LEASE_TTL_SECONDS)
+    await passLeaseTime(database, document.id, EDIT_LEASE_TTL_SECONDS)
     expect(await lostReason(await renew(sessionOf(amy), document.id, lease.token))).toBe('expired')
     const entries = app.logs.entries().filter(entry => entry.documentId === document.id)
     expect(entries.map(entry => [entry.level, entry.msg, entry.previous ?? entry.sameUser ?? entry.reason])).toEqual([

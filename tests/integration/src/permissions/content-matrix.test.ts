@@ -14,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
+import { saveContent } from '../support/edit-leases.ts'
 import { asUser } from '../support/session-client.ts'
 import { buildMatrixWorld, cellsOf, closeWorld, expectCell, expectDetailLocation, isArchived, snapshotOf } from './matrix-world.ts'
 
@@ -101,11 +102,8 @@ const OPERATIONS: Readonly<Record<Operation, MatrixOperation>> = {
   saveContent: async (actor, target) => {
     // 每一格用自己的文档：成功的保存会改变修订号
     const document = await world.freshDocument(target)
-    const query = new URLSearchParams({ baseRevision: '1', requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1' })
-    return asUser(app.baseUrl, actor.session, `/api/documents/${document.id}/content?${query.toString()}`, {
-      method: 'PUT',
-      binary: { contentType: 'application/gzip', bytes: zlib.gzipSync(snapshotOf(document.unitId, '矩阵')) },
-    })
+    // M3-P1 起保存要求编辑租约：能申请的人先申请（保存之后释放）；申请不了的照样发出，这一格的结果由先于租约的判断给出
+    return saveContent(app.baseUrl, actor.session, document.id, zlib.gzipSync(snapshotOf(document.unitId, '矩阵')), { baseRevision: 1 })
   },
   listSpace: async (actor, target) => asUser(app.baseUrl, actor.session, `/api/documents?spaceId=${world.spaces[target]}`),
   createDocument: async (actor, target) => asUser(app.baseUrl, actor.session, '/api/documents', {
@@ -142,7 +140,7 @@ const VERIFY: Partial<Record<Operation, CellOptions['verify']>> = {
 
 /** 保存被拒的说明：归档的空间里与其他操作一样说"空间已归档"，别处是"只能查看"（M2-P6 复核 A 的 G3）；只凭查看授权的人同样 */
 function saveDeniedMessage(target: TargetName): string {
-  return isArchived(target) ? '空间已归档，只能查看' : '只能查看这份文档，不能保存'
+  return isArchived(target) ? '空间已归档，只能查看' : '只能查看这份文档，不能编辑'
 }
 
 const CELLS = cellsOf(MATRIX)

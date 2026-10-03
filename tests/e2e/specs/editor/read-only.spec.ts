@@ -729,10 +729,11 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
     expect(watched.saves).toEqual([])
     expect(watched.pageErrors).toEqual([])
 
-    // 前端的只读只是体验层，写入的边界在服务端（ADR-011）：查看者直接调保存的接口也被拒绝，内容不变
+    // 前端的只读只是体验层，写入的边界在服务端（ADR-011）：查看者直接调保存的接口也被拒绝，内容不变。
+    // 代次是必填的参数（M3-P1）；查看者申请不了编辑权，没有租约照样发出：先被"能编辑"拒绝（403），到不了租约那一步
     const { csrfToken } = await (await page.request.get('/api/auth/session')).json() as { csrfToken: string }
     const edited = { ...workbook, name: '查看者改过' }
-    const query = new URLSearchParams({ baseRevision: String(stored.revision), requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1' })
+    const query = new URLSearchParams({ baseRevision: String(stored.revision), requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1', writeEpoch: '0' })
     const response = await page.request.put(`/api/documents/${s.documentId}/content?${query.toString()}`, {
       data: zlib.gzipSync(Buffer.from(JSON.stringify(edited), 'utf8')),
       headers: { 'content-type': SNAPSHOT_UPLOAD_CONTENT_TYPE, 'origin': e2eOrigin(), 'x-csrf-token': csrfToken },

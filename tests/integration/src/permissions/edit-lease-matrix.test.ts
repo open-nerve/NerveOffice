@@ -150,7 +150,7 @@ const VERIFY: Readonly<Record<Operation, CellOptions['verify']>> = {
 
 /** 申请与心跳被拒的说明：与保存同一条规则（edit），归档的空间里说"空间已归档"，别处是"只能查看" */
 function deniedMessageOf(cell: MatrixCell<Operation>): string {
-  return isArchived(cell.target) ? '空间已归档，只能查看' : '只能查看这份文档，不能保存'
+  return isArchived(cell.target) ? '空间已归档，只能查看' : '只能查看这份文档，不能编辑'
 }
 
 const CELLS = cellsOf(MATRIX)

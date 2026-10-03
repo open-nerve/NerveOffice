@@ -202,12 +202,17 @@ const missing = (): string => randomUUID()
 /** 看不到的对象或不存在的对象 */
 const pick = (hidden: boolean, id: string): string => (hidden ? id : missing())
 
+/**
+ * 保存：带上格式合法的令牌与代次（M3-P1 起保存要求编辑租约，writeEpoch 必填），请求本身合法、只看访问的判断；
+ * 不先申请（看不到的人也申请不了），要比较的语句只有保存这一个请求的。判断访问在租约之前，看不到与不存在一样 404
+ */
 async function save(session: LoggedIn, documentId: string, unitId: string): Promise<Response> {
-  const query = new URLSearchParams({ baseRevision: '1', requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1' })
+  const query = new URLSearchParams({ baseRevision: '1', requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1', writeEpoch: '1' })
   const path = `/api/documents/${documentId}/content?${query.toString()}`
   return recorded('PUT', path) ?? asUser(app.baseUrl, session, path, {
     method: 'PUT',
     binary: { contentType: 'application/gzip', bytes: zlib.gzipSync(Buffer.from(sheetSnapshotFor(unitId), 'utf8')) },
+    headers: LEASE_TOKEN,
   })
 }
 

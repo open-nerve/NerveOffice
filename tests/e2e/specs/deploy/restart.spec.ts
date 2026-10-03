@@ -7,6 +7,7 @@ import type { Page } from '@playwright/test'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
+import { acquiredEditLeaseSchema, EDIT_LEASE_HEADER } from '@nerve-office/contracts'
 import { restartApi } from '../../support/api-process.ts'
 import { createUser, withDatabase } from '../../support/database.ts'
 import { e2eOrigin } from '../../support/environment.ts'
@@ -130,11 +131,19 @@ test.describe('US-M1-10 API 重启后已确认的数据不丢', () => {
     const sheetId = current.snapshot.sheetOrder[0] ?? ''
     const snapshot = { ...current.snapshot, sheets: { ...current.snapshot.sheets, [sheetId]: { ...current.snapshot.sheets[sheetId], cellData: { 0: { 0: { v: '回包丢了' } } } } } }
     const body = zlib.gzipSync(Buffer.from(JSON.stringify(snapshot), 'utf8'))
-    const query = new URLSearchParams({ baseRevision: String(current.revision), requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1' })
+    // M3-P1 起保存要求编辑租约：先经接口申请（这个标签页），保存带上令牌与代次。重启之后的重发是重放，在租约之前判断（US-M3-13）
+    const clientInstanceId = randomUUID()
+    const acquired = await page.request.post(`/api/documents/${documentId}/edit-lease`, {
+      data: { clientInstanceId },
+      headers: { 'origin': e2eOrigin(), 'x-csrf-token': csrfToken },
+    })
+    expect(acquired.status(), await acquired.text()).toBe(201)
+    const lease = acquiredEditLeaseSchema.parse(await acquired.json())
+    const query = new URLSearchParams({ baseRevision: String(current.revision), requestId: randomUUID(), clientInstanceId, localSeq: '1', writeEpoch: String(lease.writeEpoch) })
     const save = async (): Promise<unknown> => {
       const response = await page.request.put(`/api/documents/${documentId}/content?${query.toString()}`, {
         data: body,
-        headers: { 'content-type': 'application/gzip', 'origin': e2eOrigin(), 'x-csrf-token': csrfToken },
+        headers: { 'content-type': 'application/gzip', 'origin': e2eOrigin(), 'x-csrf-token': csrfToken, [EDIT_LEASE_HEADER]: lease.token },
       })
       expect(response.status(), await response.text()).toBe(200)
       return response.json()

@@ -8,6 +8,7 @@ import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { SeededDocument } from '../support/documents.ts'
+import type { HeldLease } from '../support/edit-leases.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
@@ -21,6 +22,7 @@ import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { createDocument, seedDocument } from '../support/documents.ts'
+import { acquireLease, saveContent } from '../support/edit-leases.ts'
 import { raceAgainstHeldLock } from '../support/held-lock.ts'
 import { asUser, login } from '../support/session-client.ts'
 import { createTeamSpace, setMember, setSpaceState } from '../support/spaces.ts'
@@ -161,12 +163,12 @@ function snapshotOf(unitId: string, value: string): Buffer {
   return Buffer.from(JSON.stringify({ ...SHEET_TEMPLATE, id: unitId, sheets: { 'sheet-1': { ...sheet, cellData: { 0: { 0: { v: value } } } } } }), 'utf8')
 }
 
-async function save(user: LoggedIn, document: SeededDocument, value: string, baseRevision: number): Promise<Response> {
-  const query = new URLSearchParams({ baseRevision: String(baseRevision), requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1' })
-  return asUser(app.baseUrl, user, `/api/documents/${document.id}/content?${query.toString()}`, {
-    method: 'PUT',
-    binary: { contentType: 'application/gzip', bytes: zlib.gzipSync(snapshotOf(document.unitId, value)) },
-  })
+/**
+ * 保存（M3-P1 起要求编辑租约）：没给租约时先以这个人申请、保存之后释放（support/edit-leases.ts）；申请不了（文档在回收站里）时照样发出，
+ * 结果由先于租约的判断给出。交错的用例在持锁之前先申请好、传进来：申请也要锁文档行，不先申请的话排在锁上的是申请而不是保存
+ */
+async function save(user: LoggedIn, document: SeededDocument, value: string, baseRevision: number, lease?: HeldLease): Promise<Response> {
+  return saveContent(app.baseUrl, user, document.id, zlib.gzipSync(snapshotOf(document.unitId, value)), { baseRevision, lease })
 }
 
 /** 在一个空间里建一条 levels 层的链；prefix 用来区分同一个用例里的两条链 */
@@ -867,12 +869,13 @@ describe('US-M2-14 回收站的并发（spec §7）', () => {
   it('删除与保存同时发生：删除之前的保存照常写入，删除之后的保存被拒（保存不取树锁）', async () => {
     const spaceId = await teamSpace({ amy: 'admin' })
     const document = await seedDocument(database, { spaceId, createdBy: amy.id, title: '周报' })
+    const lease = await acquireLease(app.baseUrl, amySession, document.id)
     const [saved, removed] = await raceAgainstHeldLock(database, {
       // 持住文档行：保存与删除都要锁它，按到达的顺序排队
       hold: async client => client.query('SELECT id FROM documents WHERE id = $1 FOR UPDATE', [document.id]),
       waiting: 2,
       request: async ({ step, waitForWaiting }) => {
-        const saving = step(save(amySession, document, '删之前写的', 1))
+        const saving = step(save(amySession, document, '删之前写的', 1, lease))
         await waitForWaiting(1)
         return Promise.all([saving, step(deleteDocument(amySession, document.id))])
       },

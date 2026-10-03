@@ -15,6 +15,7 @@ import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { SeededDocument } from '../support/documents.ts'
+import type { HeldLease } from '../support/edit-leases.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
@@ -25,6 +26,7 @@ import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
+import { acquireLease, saveContent } from '../support/edit-leases.ts'
 import { grantsOn, setGrant } from '../support/grants.ts'
 import { completesWithoutWaiting, raceAgainstHeldLock } from '../support/held-lock.ts'
 import { asUser, login } from '../support/session-client.ts'
@@ -88,13 +90,13 @@ async function unshare(user: LoggedIn, documentId: string, userId: string): Prom
   return asUser(app.baseUrl, user, `/api/documents/${documentId}/grants/${userId}`, { method: 'DELETE' })
 }
 
-async function save(user: LoggedIn, document: SeededDocument, baseRevision: number): Promise<Response> {
-  const query = new URLSearchParams({ baseRevision: String(baseRevision), requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1' })
+/**
+ * 保存（M3-P1 起要求编辑租约）：没给租约时先以这个人申请、保存之后释放（support/edit-leases.ts）。
+ * 交错的用例在持锁之前先申请好、传进来：申请也要锁文档行，不先申请的话停在锁上的是申请而不是保存
+ */
+async function save(user: LoggedIn, document: SeededDocument, baseRevision: number, lease?: HeldLease): Promise<Response> {
   const raw = Buffer.from(JSON.stringify({ ...SHEET_TEMPLATE, id: document.unitId }), 'utf8')
-  return asUser(app.baseUrl, user, `/api/documents/${document.id}/content?${query.toString()}`, {
-    method: 'PUT',
-    binary: { contentType: 'application/gzip', bytes: zlib.gzipSync(raw) },
-  })
+  return saveContent(app.baseUrl, user, document.id, zlib.gzipSync(raw), { baseRevision, lease })
 }
 
 async function errorOf(response: Response): Promise<{ code: string, message: string }> {
@@ -385,9 +387,11 @@ describe('US-M2-14 文档行：取消、降级与保存、复制互斥——它�
     const spaceId = await teamSpace()
     const document = await seedDocument(database, { spaceId, createdBy: amy.id, title: '取消 × 保存' })
     await setGrant(database, { documentId: document.id, userId: cat.id, role: 'editor', grantedBy: amy.id })
+    // 卡特先申请好编辑权：停在文档行上的是保存（见 save 的说明）
+    const lease = await acquireLease(app.baseUrl, catSession, document.id)
     const result = await interleave(
       { action: 'documents.share_revoked', actorId: amy.id, run: async () => unshare(amySession, document.id, cat.id) },
-      async () => save(catSession, document, 1),
+      async () => save(catSession, document, 1, lease),
     )
     expect([result.first.status, result.second.status, result.secondWaited]).toEqual([204, 404, true])
     expect(await revisionOf(document.id)).toBe(1)
@@ -397,8 +401,9 @@ describe('US-M2-14 文档行：取消、降级与保存、复制互斥——它�
     const spaceId = await teamSpace()
     const document = await seedDocument(database, { spaceId, createdBy: amy.id, title: '保存 × 取消' })
     await setGrant(database, { documentId: document.id, userId: cat.id, role: 'editor', grantedBy: amy.id })
+    const lease = await acquireLease(app.baseUrl, catSession, document.id)
     const result = await interleave(
-      { action: 'documents.content_saved', actorId: cat.id, run: async () => save(catSession, document, 1) },
+      { action: 'documents.content_saved', actorId: cat.id, run: async () => save(catSession, document, 1, lease) },
       async () => unshare(amySession, document.id, cat.id),
     )
     expect([result.first.status, result.second.status, result.secondWaited]).toEqual([200, 204, true])
@@ -424,12 +429,13 @@ describe('US-M2-14 文档行：取消、降级与保存、复制互斥——它�
     const spaceId = await teamSpace()
     const document = await seedDocument(database, { spaceId, createdBy: amy.id, title: '降级 × 保存' })
     await setGrant(database, { documentId: document.id, userId: cat.id, role: 'editor', grantedBy: amy.id })
+    const lease = await acquireLease(app.baseUrl, catSession, document.id)
     const result = await interleave(
       { action: 'documents.share_changed', actorId: amy.id, run: async () => share(amySession, document.id, cat.id, 'viewer') },
-      async () => save(catSession, document, 1),
+      async () => save(catSession, document, 1, lease),
     )
     expect([result.first.status, result.second.status, result.secondWaited]).toEqual([200, 403, true])
-    expect(await errorOf(result.second)).toEqual({ code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能保存' })
+    expect(await errorOf(result.second)).toEqual({ code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能编辑' })
     expect(await revisionOf(document.id)).toBe(1)
   })
 })

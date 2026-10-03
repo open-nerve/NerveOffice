@@ -23,6 +23,7 @@ import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
+import { saveContent } from '../support/edit-leases.ts'
 import { grantsOn, removeGrant, setGrant } from '../support/grants.ts'
 import { asUser, login } from '../support/session-client.ts'
 import { createTeamSpace, setSpaceState } from '../support/spaces.ts'
@@ -86,13 +87,10 @@ async function errorOf(response: Response): Promise<{ status: number, code: stri
   return { status: response.status, code, message }
 }
 
+/** 保存（M3-P1 起要求编辑租约）：先以这个人申请、保存之后释放（support/edit-leases.ts）；申请不了的人照样发出，结果由先于租约的判断给出 */
 async function save(user: LoggedIn, document: SeededDocument, baseRevision: number): Promise<Response> {
-  const query = new URLSearchParams({ baseRevision: String(baseRevision), requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1' })
   const raw = Buffer.from(JSON.stringify({ ...SHEET_TEMPLATE, id: document.unitId }), 'utf8')
-  return asUser(app.baseUrl, user, `/api/documents/${document.id}/content?${query.toString()}`, {
-    method: 'PUT',
-    binary: { contentType: 'application/gzip', bytes: zlib.gzipSync(raw) },
-  })
+  return saveContent(app.baseUrl, user, document.id, zlib.gzipSync(raw), { baseRevision })
 }
 
 async function patch(user: LoggedIn, id: string, body: Record<string, unknown>): Promise<Response> {
@@ -136,7 +134,7 @@ describe('US-M2-10 有效权限并上单独授权：内容取较高者，结构�
       permissions: { canEdit: false, canRename: false, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false },
     })
     expect((await asUser(app.baseUrl, benSession, `/api/documents/${document.id}/content`)).status).toBe(200)
-    expect(await errorOf(await save(benSession, document, 1))).toEqual({ status: 403, code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能保存' })
+    expect(await errorOf(await save(benSession, document, 1))).toEqual({ status: 403, code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能编辑' })
     expect(await errorOf(await patch(benSession, document.id, { title: '改了' }))).toEqual({ status: 403, code: 'PERMISSION_DENIED', message: '没有给这份文档改名的权限' })
     // 空间里的人照常看到文件夹
     expect(await detailOf(amySession, document.id)).toMatchObject({ folderId, accessVia: 'space', permissions: { canShare: true } })

@@ -21,6 +21,7 @@ import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
+import { saveContent } from '../support/edit-leases.ts'
 import { raceAgainstHeldLock } from '../support/held-lock.ts'
 import { asUser, login } from '../support/session-client.ts'
 import { createTeamSpace, setMember, setSpaceState } from '../support/spaces.ts'
@@ -60,10 +61,6 @@ async function expectConflict(response: Response): Promise<void> {
   expect(Object.keys(body.error).toSorted()).toEqual(['code', 'message', 'requestId'])
 }
 
-function saveQuery(requestId: string): string {
-  return new URLSearchParams({ baseRevision: '1', requestId, clientInstanceId: randomUUID(), localSeq: '1' }).toString()
-}
-
 function gzipOf(unitId: string): Uint8Array {
   return zlib.gzipSync(Buffer.from(sheetSnapshotFor(unitId), 'utf8'))
 }
@@ -90,8 +87,9 @@ describe('别人的 requestId', () => {
     await expectConflict(await asUser(app.baseUrl, bobSession, '/api/folders', { method: 'POST', body: { spaceId: bob.personalSpaceId, name: 'Alice 的目录', requestId: folderId } }))
 
     const saveId = randomUUID()
-    expect((await asUser(app.baseUrl, aliceSession, `/api/documents/${source.id}/content?${saveQuery(saveId)}`, { method: 'PUT', binary: { contentType: 'application/gzip', bytes: gzipOf(source.unitId) } })).status).toBe(200)
-    await expectConflict(await asUser(app.baseUrl, bobSession, `/api/documents/${bobs.id}/content?${saveQuery(saveId)}`, { method: 'PUT', binary: { contentType: 'application/gzip', bytes: gzipOf(bobs.unitId) } }))
+    // M3-P1 起保存要求编辑租约：两人各自先申请（saveContent）；请求标识的冲突在租约之前判断
+    expect((await saveContent(app.baseUrl, aliceSession, source.id, gzipOf(source.unitId), { baseRevision: 1, requestId: saveId })).status).toBe(200)
+    await expectConflict(await saveContent(app.baseUrl, bobSession, bobs.id, gzipOf(bobs.unitId), { baseRevision: 1, requestId: saveId }))
   })
 
   it('本人重放：已经看不到那份文档（被移出空间、文档进了回收站）时 409，不返回它的元数据', async () => {
@@ -117,8 +115,12 @@ describe('本人重放只要求仍能访问（00 号计划书 §7.4 第 2 步，
     return createTeamSpace(database, { name: `幂等：重放 ${spaces}`, createdBy: rootId, members: { [alice.id]: 'editor' } })
   }
 
+  /**
+   * 保存（M3-P1 起要求编辑租约）：先申请、保存之后释放（support/edit-leases.ts）。降为查看者、被移出之后申请不了，
+   * 重发照样发出（谁的也不是的租约）：重放在租约之前判断，拿到原来的结果（US-M3-13）
+   */
   async function save(documentId: string, unitId: string, requestId: string): Promise<Response> {
-    return asUser(app.baseUrl, aliceSession, `/api/documents/${documentId}/content?${saveQuery(requestId)}`, { method: 'PUT', binary: { contentType: 'application/gzip', bytes: gzipOf(unitId) } })
+    return saveContent(app.baseUrl, aliceSession, documentId, gzipOf(unitId), { baseRevision: 1, requestId })
   }
 
   it('保存已经提交、回包丢了；随后被降为查看者或空间被归档，用同一个 requestId 重发：拿到原来的结果；不是重放的保存仍是 403', async () => {

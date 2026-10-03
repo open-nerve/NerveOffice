@@ -17,6 +17,7 @@ import zlib from 'node:zlib'
 import { afterAll, beforeAll, describe, it } from 'vitest'
 import { startTestApp } from '../support/api-app.ts'
 import { createTestDatabase } from '../support/database.ts'
+import { saveContent } from '../support/edit-leases.ts'
 import { asUser } from '../support/session-client.ts'
 import { buildMatrixWorld, cellsOf, closeWorld, expectCell, snapshotOf } from './matrix-world.ts'
 
@@ -72,11 +73,8 @@ const OPERATIONS: Readonly<Record<Operation, MatrixOperation>> = {
   readContent: async (actor, target) => asUser(app.baseUrl, actor.session, `/api/documents/${world.trashedDocuments[target].id}/content`),
   saveContent: async (actor, target) => {
     const document = world.trashedDocuments[target]
-    const query = new URLSearchParams({ baseRevision: '1', requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1' })
-    return asUser(app.baseUrl, actor.session, `/api/documents/${document.id}/content?${query.toString()}`, {
-      method: 'PUT',
-      binary: { contentType: 'application/gzip', bytes: zlib.gzipSync(snapshotOf(document.unitId, '矩阵')) },
-    })
+    // M3-P1 起保存要求编辑租约：回收站里的文档谁也申请不了，保存照样发出（谁的也不是的租约），由先于租约的判断给出 404
+    return saveContent(app.baseUrl, actor.session, document.id, zlib.gzipSync(snapshotOf(document.unitId, '矩阵')), { baseRevision: 1 })
   },
   renameDocument: async (actor, target) => asUser(app.baseUrl, actor.session, `/api/documents/${world.trashedDocuments[target].id}`, {
     method: 'PATCH',

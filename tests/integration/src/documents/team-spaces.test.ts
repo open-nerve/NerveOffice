@@ -17,6 +17,7 @@ import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { createDocument, seedDocument } from '../support/documents.ts'
+import { saveContent } from '../support/edit-leases.ts'
 import { raceAgainstHeldLock } from '../support/held-lock.ts'
 import { asUser, login } from '../support/session-client.ts'
 import { createTeamSpace, setMember, setSpaceState } from '../support/spaces.ts'
@@ -194,12 +195,12 @@ describe('US-M2-14 已经打开的编辑器：撤权之后的下一次保存（M
     return zlib.gzipSync(Buffer.from(JSON.stringify({ ...SHEET_TEMPLATE, id: unitId, sheets: { 'sheet-1': { ...sheet, cellData: { 0: { 0: { v: value } } } } } }), 'utf8'))
   }
 
+  /**
+   * 保存（M3-P1 起要求编辑租约）：先以这个人申请、保存之后释放（support/edit-leases.ts）；申请不了的人照样发出，结果由先于租约的判断给出。
+   * 在途的保存那一条持的是内容行：申请不碰它，停在锁上的仍是保存
+   */
   async function save(user: LoggedIn, document: SeededDocument, value: string, baseRevision = 1): Promise<Response> {
-    const query = new URLSearchParams({ baseRevision: String(baseRevision), requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1' })
-    return asUser(app.baseUrl, user, `/api/documents/${document.id}/content?${query.toString()}`, {
-      method: 'PUT',
-      binary: { contentType: 'application/gzip', bytes: snapshotOf(document.unitId, value) },
-    })
+    return saveContent(app.baseUrl, user, document.id, snapshotOf(document.unitId, value), { baseRevision })
   }
 
   async function contentText(documentId: string): Promise<string> {
@@ -219,7 +220,7 @@ describe('US-M2-14 已经打开的编辑器：撤权之后的下一次保存（M
     expect((await asUser(app.baseUrl, amySession, `/api/spaces/${spaceId}/members/${ben.id}`, { method: 'PUT', body: { role: 'viewer' } })).status).toBe(200)
     const demoted = await save(benSession, document, '降级之后')
     expect(demoted.status).toBe(403)
-    expect(await errorOf(demoted)).toEqual({ code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能保存' })
+    expect(await errorOf(demoted)).toEqual({ code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能编辑' })
 
     expect((await asUser(app.baseUrl, amySession, `/api/spaces/${spaceId}/members/${ben.id}`, { method: 'DELETE' })).status).toBe(204)
     const removed = await save(benSession, document, '移出之后')
