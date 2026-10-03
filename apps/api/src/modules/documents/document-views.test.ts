@@ -27,6 +27,8 @@ const ROW: DocumentRow = {
   unitId: 'unit-1',
   profile: 'sheet@1',
   formatVersion: 1,
+  // 代次不进任何响应（M3-P1）：不为 0，视图把它带出去时下面按原样核对的用例会失败
+  writeEpoch: 4,
 }
 
 function team(memberRole: SpaceFacts['memberRole']): SpaceFacts {

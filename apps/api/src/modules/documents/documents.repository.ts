@@ -26,6 +26,11 @@ export interface DocumentRow {
   readonly unitId: string
   readonly profile: DocumentProfile
   readonly formatVersion: number
+  /**
+   * 写入代次（M2-P2，00 号计划书 §6.4）：编辑租约的有效条件按它判断（M3-P1 设计 §3.4.1 第 3 条）——租约的那一代不是它就过时。
+   * 申请编辑权与收回写入权给它加一（advanceWriteEpoch），删除、跨空间移动与转移也加一；不进任何响应
+   */
+  readonly writeEpoch: number
 }
 
 /** 新建文档要写的列：修订号从 1 开始，状态为正常，时间取数据库的当前时间。 */
@@ -124,6 +129,7 @@ const COLUMNS = {
   unitId: d.unitId,
   profile: d.profile,
   formatVersion: d.formatVersion,
+  writeEpoch: d.writeEpoch,
 }
 
 /**
@@ -442,5 +448,21 @@ export class DocumentsRepository {
       .returning({ id: d.id })
     if (updated.length !== 1)
       throw new Error(`修订号没有从 ${revision - 1} 前进到 ${revision}：${id}`)
+  }
+
+  /**
+   * 写入代次加一（调用方已锁住这一行，M3-P1 设计 §3.3）：申请编辑权产生新的一代，收回写入权结束租约时让旧的那一代过时。
+   * 返回加一之后的代次（申请把它记在租约上）。更新时间不变：申请编辑权与收回写入权都不是修改文档，列表的排序与游标不动
+   * （与改名、移动一致）。不看文档的状态：收回写入权时文档可能刚被放进回收站
+   */
+  async advanceWriteEpoch(id: string, transaction: Transaction): Promise<number> {
+    const [row] = await executorOf(this.db, transaction)
+      .update(d)
+      .set({ writeEpoch: sql`${d.writeEpoch} + 1` })
+      .where(eq(d.id, id))
+      .returning({ writeEpoch: d.writeEpoch })
+    if (row === undefined)
+      throw new Error(`代次加一时文档不在了：${id}`)
+    return row.writeEpoch
   }
 }

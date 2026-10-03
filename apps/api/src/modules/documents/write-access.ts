@@ -31,7 +31,9 @@ export interface DocumentWriter {
  * 这次收回涉及这一处写入吗：范围的含义（上面的清单）在这里写成规则，单元测试逐种核对，
  * 尤其是 userDocuments 只涉及那一个人、documents 涉及那些文档上的所有人（M2-P5 设计 §3.4(3)）。
  * 涉及只是"要重新判断"：M3 的租约实现按它找出涉及的租约，再按变化之后的权限判断谁失去了写入权（调用方不自己判断）。
- * M2 还没有租约，入口里没有可找的东西（见 LeaselessWriteAccessRevocation）
+ * M2 还没有租约，入口里没有可找的东西（见 LeaselessWriteAccessRevocation）。
+ * 租约的仓储按同样的含义写成 SQL 的条件（edit-leases.repository.ts 的 writersIn，M3-P1）：改这里时同时改那里，
+ * 两边逐种同义由 edit-lease-statements.test.ts 核对
  */
 export function coversWriter(scope: WriteAccessScope, writer: DocumentWriter): boolean {
   switch (scope.kind) {

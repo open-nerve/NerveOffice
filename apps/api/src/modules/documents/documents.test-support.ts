@@ -73,8 +73,6 @@ export class FakeStore {
   readonly audits: AuditEvent[] = []
   /** 取过的空间树锁：按取锁的先后记下，用例据此核对锁的顺序 */
   readonly treeLocks: string[][] = []
-  /** 每份文档的写入代次（不在 DocumentRow 里）：跨空间移动加一，用例据此核对空间内移动不加 */
-  readonly writeEpochs = new Map<string, number>()
   /** 收回写入权的调用：跨空间移动要在同一个事务里调一次（M2-P2 设计 §3.7） */
   readonly revocations: WriteAccessScope[] = []
   /** 单独授权（M2-P5）：键是"文档 id 与账户 id"，访问策略与"可访问文档"的授权那一半据此判断 */
@@ -88,10 +86,18 @@ export class FakeStore {
 
   private sequence = 0
 
+  /**
+   * 写入代次不为 0 的文档与它们的代次：代次记在行上（DocumentRow.writeEpoch，新建与复制是 0），这里按行算出来，
+   * 用例据此核对哪些操作加了一（跨空间移动、删除），哪些没加（空间内移动、改名、恢复）
+   */
+  get writeEpochs(): ReadonlyMap<string, number> {
+    return new Map([...this.documents.values()].flatMap(row => row.writeEpoch === 0 ? [] : [[row.id, row.writeEpoch] as const]))
+  }
+
   addDocument(overrides: Partial<DocumentRow> = {}): DocumentRow {
     this.sequence += 1
     const id = `0199a2c4-0000-7000-8000-${String(this.sequence).padStart(12, '0')}`
-    const row: DocumentRow = { id, spaceId: ALICE_SPACE, type: 'sheet', title: '周报', createdBy: ALICE, createdAt: NOW, updatedAt: NOW, position: NOW.toISOString(), revision: 1, unitId: `unit-${id}`, profile: 'sheet@1', formatVersion: 1, ...overrides, folderId: overrides.folderId ?? null }
+    const row: DocumentRow = { id, spaceId: ALICE_SPACE, type: 'sheet', title: '周报', createdBy: ALICE, createdAt: NOW, updatedAt: NOW, position: NOW.toISOString(), revision: 1, unitId: `unit-${id}`, profile: 'sheet@1', formatVersion: 1, writeEpoch: 0, ...overrides, folderId: overrides.folderId ?? null }
     this.documents.set(id, row)
     return row
   }
@@ -232,12 +238,12 @@ export class FakeStore {
       rename: vi.fn(async (id: string, title: string) => this.updateDocument(id, { title })),
       moveToFolder: vi.fn(async (id: string, folderId: string | null) => this.updateDocument(id, { folderId })),
       /**
-       * 跨空间移动：改所属空间，写入代次加一（代次不在 DocumentRow 里，记在 writeEpochs 上，用例据此核对）。
+       * 跨空间移动：改所属空间，写入代次加一（用例经 writeEpochs 核对）。
        * folderId 为 undefined 表示位置不变（跟着所在的文件夹换空间）
        */
       moveToSpace: vi.fn(async (ids: readonly string[], spaceId: string, folderId: string | null | undefined) => ids.map((id) => {
-        this.writeEpochs.set(id, (this.writeEpochs.get(id) ?? 0) + 1)
-        return this.updateDocument(id, folderId === undefined ? { spaceId } : { spaceId, folderId })
+        const writeEpoch = this.epochAfterAdvance(id)
+        return this.updateDocument(id, folderId === undefined ? { spaceId, writeEpoch } : { spaceId, folderId, writeEpoch })
       })),
       /** 这些文件夹里的文档（state 省略时不按状态过滤，与真实仓储一致），按 id 排序 */
       lockInFolders: vi.fn(async (folderIds: readonly string[], spaceId: string, _transaction: Transaction, state?: 'active' | 'trashed') => [...this.documents.values()]
@@ -265,7 +271,7 @@ export class FakeStore {
       trash: vi.fn(async (ids: readonly string[], trashEntryId: string) => {
         for (const id of ids) {
           this.documentEntries.set(id, trashEntryId)
-          this.writeEpochs.set(id, (this.writeEpochs.get(id) ?? 0) + 1)
+          this.updateDocument(id, { writeEpoch: this.epochAfterAdvance(id) })
         }
         return ids.length
       }),
@@ -295,13 +301,13 @@ export class FakeStore {
         }
         return ids.length
       }),
-      /** 按源文档建一份副本：类型、unitId、档案与格式版本原样复制，修订号 1，新的 id */
+      /** 按源文档建一份副本：类型、unitId、档案与格式版本原样复制，修订号 1、代次 0（与真实仓储一样用列的默认值），新的 id */
       copyFrom: vi.fn(async (sourceId: string, copy: CopiedDocument): Promise<DocumentRow | undefined> => {
         const source = this.documents.get(sourceId)
         if (source === undefined)
           return undefined
         const { id: _id, ...columns } = source
-        return this.addDocument({ ...columns, ...copy, revision: 1 })
+        return this.addDocument({ ...columns, ...copy, revision: 1, writeEpoch: 0 })
       }),
       advanceRevision: vi.fn(async (id: string, revision: number) => {
         const row = this.documents.get(id)
@@ -309,6 +315,8 @@ export class FakeStore {
           throw new Error('修订号没有前进')
         this.documents.set(id, { ...row, revision })
       }),
+      /** 写入代次加一（M3-P1），返回加一之后的代次；更新时间不变 */
+      advanceWriteEpoch: vi.fn(async (id: string) => this.updateDocument(id, { writeEpoch: this.epochAfterAdvance(id) }).writeEpoch),
     },
     contents: {
       insert: vi.fn(async (documentId: string, content: StoredSnapshot) => {
@@ -594,6 +602,14 @@ export class FakeStore {
     const next = { ...row, ...changes }
     this.documents.set(id, next)
     return next
+  }
+
+  /** 这份文档的写入代次加一之后的值（与真实仓储的 write_epoch + 1 一样，只增不减） */
+  private epochAfterAdvance(id: string): number {
+    const row = this.documents.get(id)
+    if (row === undefined)
+      throw new Error(`没有文档 ${id}`)
+    return row.writeEpoch + 1
   }
 
   /** 改一个文件夹的几列并返回新的行 */
