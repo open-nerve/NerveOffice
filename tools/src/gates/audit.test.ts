@@ -30,6 +30,13 @@ describe('US-M1-11 A01 漏洞扫描', () => {
     expect(checkAudit(hidden, [], '2026-09-26').map(v => v.rule)).toEqual(['audit/hidden'])
   })
 
+  it('违规：还没有修复版本的高危公告出现在生产依赖里（真实输出：patched_versions 为 null），说明里写还没有修复的版本', () => {
+    const unpatched = auditReportSchema.parse(readFixture('pnpm-12/audit-unpatched-advisory.json'))
+    const violations = checkAudit(unpatched, [], '2026-10-03')
+    expect(violations.map(v => v.rule)).toEqual(['audit/advisory'])
+    expect(violations[0]?.detail).toContain('还没有修复的版本')
+  })
+
   it.each(['info', 'low', 'moderate'] as const)('合规：%s 级别只报告不拦截', (severity) => {
     expect(checkAudit(report(severity), [], '2026-09-26')).toEqual([])
   })
