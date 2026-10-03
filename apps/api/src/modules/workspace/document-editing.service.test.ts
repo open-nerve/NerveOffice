@@ -2,7 +2,7 @@
 // "被占用"转成 EDIT_LEASE_HELD（details 带人名、最后活动时间与是不是自己）。租约的规则与数据在 documents（edit-lease.service.test.ts）。
 import type { EditingActor, LeaseAcquisition, LeaseStatus } from '../documents/index.ts'
 import type { User } from '../users/index.ts'
-import { editLeaseHeldDetailsSchema } from '@nerve-office/contracts'
+import { acquiredEditLeaseSchema, editLeaseHeldDetailsSchema } from '@nerve-office/contracts'
 import { describe, expect, it, vi } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { DocumentEditingService } from './document-editing.service.ts'
@@ -71,7 +71,7 @@ function setup(acquisition: LeaseAcquisition, status: LeaseStatus = { revision: 
   return { service, calls, leases, users, transaction }
 }
 
-const ACQUIRED: LeaseAcquisition = { kind: 'acquired', token: TOKEN, writeEpoch: 4, revision: 3, expiresAt: EXPIRES, interruption: undefined }
+const ACQUIRED: LeaseAcquisition = { kind: 'acquired', token: TOKEN, writeEpoch: 4, revision: 3, source: null, expiresAt: EXPIRES, interruption: undefined }
 
 async function rejection(promise: Promise<unknown>): Promise<AppError> {
   const error: unknown = await promise.then(() => undefined, (rejected: unknown) => rejected)
@@ -81,11 +81,19 @@ async function rejection(promise: Promise<unknown>): Promise<AppError> {
 }
 
 describe('DocumentEditingService.acquire', () => {
-  it('取得新的一代：一个业务事务里申请，响应是令牌、代次、修订号、到期时间（ISO），没有异常结束时提醒为 null', async () => {
+  it('取得新的一代：一个业务事务里申请，响应是令牌、代次、修订号与它的来源、到期时间（ISO），没有异常结束时提醒为 null', async () => {
     const { service, calls, leases, transaction } = setup(ACQUIRED)
-    expect(await service.acquire(ACTOR, DOCUMENT, TAB)).toEqual({ token: TOKEN, writeEpoch: 4, revision: 3, expiresAt: EXPIRES.toISOString(), interruption: null })
+    expect(await service.acquire(ACTOR, DOCUMENT, TAB)).toEqual({ token: TOKEN, writeEpoch: 4, revision: 3, source: null, expiresAt: EXPIRES.toISOString(), interruption: null })
     expect(calls).toEqual(['begin', 'acquire', 'commit'])
     expect(leases.acquire).toHaveBeenCalledWith(ACTOR, DOCUMENT, TAB, transaction)
+  })
+
+  it('当前修订有来源（保存产生的）：原样放进响应，结构与修订号冲突的详情相同', async () => {
+    const source = { clientInstanceId: TAB, localSeq: 9 }
+    const { service } = setup({ ...ACQUIRED, source })
+    const acquired = await service.acquire(ACTOR, DOCUMENT, TAB)
+    expect(acquired.source).toEqual(source)
+    expect(acquiredEditLeaseSchema.parse(acquired)).toEqual(acquired)
   })
 
   it('上一个租约异常结束：提醒里补上上一位持有者的人名（同一个事务里）', async () => {

@@ -10,7 +10,7 @@ import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { createHash, randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
-import { acquiredEditLeaseSchema, EDIT_LEASE_HEADER, EDIT_LEASE_TTL_SECONDS, editLeaseHeldDetailsSchema, editLeaseLostDetailsSchema, editStatusSchema, errorResponseSchema, renewedEditLeaseSchema, sessionResponseSchema, sheetSnapshotFor } from '@nerve-office/contracts'
+import { acquiredEditLeaseSchema, createdDocumentSchema, EDIT_LEASE_HEADER, EDIT_LEASE_TTL_SECONDS, editLeaseHeldDetailsSchema, editLeaseLostDetailsSchema, editStatusSchema, errorResponseSchema, renewedEditLeaseSchema, sessionResponseSchema, sheetSnapshotFor } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -211,6 +211,23 @@ describe('申请、心跳、释放与编辑状态（P1 设计 §3.4.2、§3.4.3�
     expect(after.updated_at).toEqual(before.updated_at)
   })
 
+  it('US-M3-11 申请的响应带文档当前修订的来源：新建的为 null；保存之后是那次保存的标签页与本地序号（续上时页面据此认出期间的一版是不是自己的，00 号计划书 §7.5）；复制出来的为 null', async () => {
+    const document = await freshDocument()
+    const tab = randomUUID()
+    const first = await acquired(sessionOf(amy), document.id, tab)
+    expect(first).toMatchObject({ revision: 1, source: null })
+    const raw = zlib.gzipSync(Buffer.from(sheetSnapshotFor(document.unitId), 'utf8'))
+    const saved = await saveContent(app.baseUrl, sessionOf(amy), document.id, raw, { baseRevision: 1, localSeq: 5, lease: { token: first.token, writeEpoch: first.writeEpoch, clientInstanceId: tab } })
+    expect(saved.status, await saved.clone().text()).toBe(200)
+    // 同一个页面重新申请（续上）：修订号前进了一版，来源就是本页那次保存——与修订号冲突的详情同一个取法
+    expect(await acquired(sessionOf(amy), document.id, tab)).toMatchObject({ revision: 2, source: { clientInstanceId: tab, localSeq: 5 } })
+
+    const copied = await asUser(app.baseUrl, sessionOf(amy), `/api/documents/${document.id}/copy`, { method: 'POST', body: { spaceId: team, requestId: randomUUID() } })
+    expect(copied.status, await copied.clone().text()).toBe(201)
+    const copy = parseExact(createdDocumentSchema, await copied.json())
+    expect(await acquired(sessionOf(amy), copy.id)).toMatchObject({ revision: 1, source: null })
+  })
+
   it('US-M3-04 编辑状态：能读就能看；有效的租约给出持有者（"人"的结构）、最后活动时间与是不是调用者自己；没有时为 null', async () => {
     const document = await freshDocument()
     expect(await status(sessionOf(vic), document.id)).toEqual({ revision: 1, editor: null })
@@ -258,6 +275,26 @@ describe('申请、心跳、释放与编辑状态（P1 设计 §3.4.2、§3.4.3�
     // 再释放一次：已经结束，结束的时间与原因都不变
     expect((await release(sessionOf(amy), document.id, lease.token)).status).toBe(204)
     expect(await leaseOf(document.id)).toEqual(ended)
+  })
+
+  it('US-M3-04 释放要是持有者本人（M3-P1 审查 A4）：能读这份文档的别人拿到了令牌，释放什么也不做（204），租约与心跳照常；本人换了登录（修改密码）之后照样能释放自己那一代', async () => {
+    const { account: hana, session } = await freshEditor('lease-hana')
+    const document = await freshDocument()
+    const lease = await acquired(session, document.id)
+    for (const other of [ben, vic])
+      expect((await release(sessionOf(other), document.id, lease.token)).status, other.username).toBe(204)
+    expect(await leaseOf(document.id)).toMatchObject({ holder_id: hana.id, ended_at: null, end_reason: null })
+    expect((await renew(session, document.id, lease.token)).status).toBe(200)
+
+    // 换令牌之后的页面（续上之前先释放自己那一代）：登录换了，持有者还是她
+    const changed = await asUser(app.baseUrl, session, '/api/auth/password', { method: 'PUT', body: { currentPassword: hana.password, newPassword: 'a brand new long password' } })
+    expect(changed.status, await changed.clone().text()).toBe(200)
+    const setCookie = sessionSetCookie(changed)
+    if (setCookie === undefined)
+      throw new Error('改密码成功却没有写回会话 Cookie')
+    const renewedSession: LoggedIn = { cookie: `${SESSION_COOKIE}=${cookieValue(setCookie)}`, session: parseExact(sessionResponseSchema, await changed.json()) }
+    expect((await release(renewedSession, document.id, lease.token)).status).toBe(204)
+    expect(await leaseOf(document.id)).toMatchObject({ end_reason: 'released' })
   })
 })
 

@@ -2,8 +2,10 @@
 // 保存在租约这一步之前锁住了文档行，撤权要结束持有者的租约、给文档加代次，必须先拿到同一把锁，所以两者必有先后——
 // 1. 保存先取完锁（停在写审计之前）：撤权等它提交，保存写进去，撤权随后生效（租约 revoked、代次加一），之后的保存被拒绝；
 // 2. 撤权先取完锁（租约已结束、代次已加一，停在写审计之前）：保存等它提交，锁下看到变化，被拒绝，什么也不写；
-// 3. 申请在撤权提交之前判断了权限、在它之后才提交：撤权找不到这个还没提交的租约，租约行有了，由有效条件的第 7 条（停用时是第 6 条）
-//    在每次使用时让它失效；分享的写入本身锁文档行，与申请互斥，没有这个窗口。
+// 3. 申请在撤权提交之前判断了权限、在它之后才提交：撤权找不到这个还没提交的租约，租约行有了，由有效条件的第 7 条在每次使用时让它失效；
+//    分享的写入本身锁文档行，与申请互斥，没有这个窗口；停用撤销了全部登录，申请在锁下核对登录时就被拒绝（lease-session.test.ts）。
+// 撤权先取完锁时在途的心跳先回答失去访问或编辑权（M3-P1 审查 A2）；跨空间移动、转移之后仍能编辑的持有者，在途的保存与心跳按锁下读到的
+// 新代次判断（stale，M3-P1 审查 A3）。
 // 另有锁的顺序（文档行 → 租约行）、锁下再核对一次范围、范围只锁涉及的文档。
 // 做法同 sharing-locks.test.ts："先取完锁的操作"停在写审计之前——给 audit_events 装 BEFORE INSERT 的触发器，按"动作 + 操作者"
 // 取 advisory 共享锁（闸门），测试的连接持有同一个键的排他锁。持锁构造的前提由 held-lock.ts 自己核对。
@@ -212,7 +214,7 @@ interface Revocation {
   readonly status: number
   /** 撤权提交之后，持有者新发出的心跳与保存 */
   readonly afterwards: string
-  /** 撤权先取完锁时，已经在等文档行的那次保存（会话守卫在撤权提交之前就放行了它） */
+  /** 撤权先取完锁时，已经在等文档行的那次保存、在等租约行的那次心跳（会话守卫在撤权提交之前就放行了它们）：两者的回答相同 */
   readonly inFlight: string
 }
 
@@ -274,10 +276,10 @@ const REVOCATIONS: readonly Revocation[] = [
     actor: () => root,
     run: async ({ holder }) => asUser(app.baseUrl, rootSession, `/api/admin/users/${holder.account.id}/disable`, { method: 'POST' }),
     status: 200,
-    // 新的请求过不了会话守卫（停用撤销了全部登录）；已经在等锁的那次保存在守卫那里放行过了：访问策略不看账户的状态，
-    // 挡住它的是租约——停用结束了他的租约
+    // 新的请求过不了会话守卫（停用撤销了全部登录）；已经在等锁的那次请求在守卫那里放行过了，访问策略又不看账户的状态——
+    // 挡住它的是锁下对登录的再核对（M3-P1 审查 A1，lease-session.test.ts），同样 401；停用另外结束了他的租约
     afterwards: '401 SESSION_EXPIRED',
-    inFlight: '409 EDIT_LEASE_LOST:revoked',
+    inFlight: '401 SESSION_EXPIRED',
   },
 ]
 
@@ -311,6 +313,20 @@ describe('US-M3-12 进行中的保存与撤权必有先后：撤权先取完锁�
     expect(await writesOf(document.id)).toEqual({ revision: 1, revisions: 1, saves: 0 })
     expect(await leaseStateOf(database, document.id)).toEqual(revoked(holder, lease))
   })
+
+  it.each(REVOCATIONS)('US-M3-12 $name先取完锁（租约行在它手里）：心跳等它提交，回答的是失去访问或编辑权（$inFlight），而不是租约的 revoked（M3-P1 审查 A2）', async (revocation) => {
+    const prepared = await prepare(revocation.via)
+    const { holder, document } = prepared
+    const lease = await acquireLease(app.baseUrl, holder.session, document.id)
+    const result = await interleave(
+      { action: revocation.action, actorId: revocation.actor().id, run: async () => revocation.run(prepared) },
+      async () => renewLease(app.baseUrl, holder.session, document.id, lease),
+    )
+    expect([result.first.status, await outcomeOf(result.second), result.secondWaited]).toEqual([revocation.status, revocation.inFlight, true])
+    // 紧接着的下一次心跳也是同样的回答：页面据此区分"还读得到就给副本"与"读不到就丢弃"，不受交错的影响
+    expect(await outcomeOf(await renewLease(app.baseUrl, holder.session, document.id, lease))).toBe(revocation.afterwards)
+    expect(await leaseStateOf(database, document.id)).toEqual(revoked(holder, lease))
+  })
 })
 
 /** 申请与撤权交错的一种：撤权提交之后持有者的心跳与保存，以及别人（卡特，空间的编辑者）这时申请的结果 */
@@ -338,8 +354,7 @@ const ACQUIRE_RACES: readonly AcquireRace[] = [
   { name: '降为查看者', run: async ({ space, holder }) => asUser(app.baseUrl, amySession, `/api/spaces/${space}/members/${holder.account.id}`, { method: 'PUT', body: { role: 'viewer' } }), status: 200, afterwards: '403 PERMISSION_DENIED', others: { status: 201, notice: false } },
   // 归档之后谁也不能编辑
   { name: '归档', run: async ({ space }) => asUser(app.baseUrl, rootSession, `/api/admin/spaces/${space}/archive`, { method: 'POST' }), status: 200, afterwards: '403 PERMISSION_DENIED', others: { status: 403 } },
-  // 停用：租约绑定的那次登录被撤销了，按第 6 条失效——登录失效算异常结束，别人申请时有提醒
-  { name: '停用', run: async ({ holder }) => asUser(app.baseUrl, rootSession, `/api/admin/users/${holder.account.id}/disable`, { method: 'POST' }), status: 200, afterwards: '401 SESSION_EXPIRED', others: { status: 201, notice: true } },
+  // 停用不在这里：它撤销了全部登录，申请在锁下核对登录时就被拒绝（401），不写下租约（lease-session.test.ts，M3-P1 审查 A1）
 ]
 
 describe('US-M3-12 申请与撤权交错：申请在撤权提交之前判断了权限、在它之后才提交（P1 设计 §3.4.6）', () => {
@@ -368,7 +383,7 @@ describe('US-M3-12 申请与撤权交错：申请在撤权提交之前判断了�
     // 申请在撤权之后提交：这一代的租约行没被结束，代次也没再加
     expect(await leaseStateOf(database, document.id)).toEqual({ holderId: holder.account.id, endReason: null, leaseEpoch: lease.writeEpoch, documentEpoch: lease.writeEpoch })
     expect(await holderOutcomes(prepared, lease)).toEqual([race.afterwards, race.afterwards])
-    // 别人看来没人在编辑（第 7 条；停用是第 6 条）
+    // 别人看来没人在编辑（第 7 条）
     const status = parseExact(editStatusSchema, await (await asUser(app.baseUrl, catSession, `/api/documents/${document.id}/edit-lease`)).json())
     expect(status.editor).toBeNull()
     const { notice } = race.others
@@ -397,6 +412,79 @@ describe('US-M3-12 申请与撤权交错：申请在撤权提交之前判断了�
     const lease: HeldLease = { token: granted.token, writeEpoch: granted.writeEpoch, clientInstanceId: earlier.clientInstanceId }
     expect(await leaseStateOf(database, document.id)).toEqual(revoked(holder, lease))
     expect(await holderOutcomes(prepared, lease)).toEqual(['404 NOT_FOUND', '404 NOT_FOUND'])
+  })
+})
+
+/**
+ * 让持有者"仍能编辑、但旧的一代过时"的改动：跨空间移到他也是编辑者的空间；转移停用者的文档（授权跟着文档走，他凭单独授权仍能编辑）。
+ * 收回写入权不结束他的租约（还能编辑的不动），旧的一代只靠代次失效——保存在文档行的锁下读代次、心跳在锁住租约行之后读代次，
+ * 等锁之前读到的是旧的代次（M3-P1 审查 A3）。prepare 摆好持有者与文档，返回发出这个改动的办法
+ */
+interface Restaling {
+  readonly name: string
+  /** 改动的审计动作与操作者（闸门的键） */
+  readonly action: string
+  readonly actor: () => TestAccount
+  readonly prepare: () => Promise<Prepared & { readonly change: () => Promise<Response> }>
+}
+
+const RESTALINGS: readonly Restaling[] = [
+  {
+    name: '跨空间移动（移到他也是编辑者的空间）',
+    action: 'documents.moved',
+    actor: () => amy,
+    prepare: async () => {
+      const prepared = await prepare('member')
+      spaces += 1
+      const target = await createTeamSpace(database, { name: `收回与交错 ${spaces}`, createdBy: root.id, members: { [amy.id]: 'admin', [prepared.holder.account.id]: 'editor' } })
+      return { ...prepared, change: async () => asUser(app.baseUrl, amySession, `/api/documents/${prepared.document.id}/move`, { method: 'POST', body: { spaceId: target } }) }
+    },
+  },
+  {
+    name: '转移停用者的文档（他凭单独授权仍能编辑）',
+    action: 'documents.transferred',
+    actor: () => root,
+    prepare: async () => {
+      people += 2
+      const owner = await createAccount(database, { username: `revocation-locks-${people - 1}` })
+      const account = await createAccount(database, { username: `revocation-locks-${people}` })
+      const holder = { account, session: await login(app.baseUrl, account.username, account.password) }
+      const document = await seedDocument(database, { spaceId: owner.personalSpaceId, createdBy: owner.id, title: '停用者的文档' })
+      await setGrant(database, { documentId: document.id, userId: account.id, role: 'editor', grantedBy: owner.id })
+      expect((await asUser(app.baseUrl, rootSession, `/api/admin/users/${owner.id}/disable`, { method: 'POST' })).status).toBe(200)
+      spaces += 1
+      const target = await createTeamSpace(database, { name: `收回与交错 ${spaces}`, createdBy: root.id, members: { [amy.id]: 'admin' } })
+      const change = async (): Promise<Response> => asUser(app.baseUrl, rootSession, `/api/admin/users/${owner.id}/documents/transfer`, { method: 'POST', body: { documentIds: [document.id], target: { type: 'team', spaceId: target } } })
+      return { holder, space: owner.personalSpaceId, document, change }
+    },
+  },
+]
+
+describe('US-M3-12 仍能编辑的持有者：改动先取完锁（代次已加一、租约没被结束），在途的保存与心跳按锁下读到的新代次判断（M3-P1 审查 A3）', () => {
+  it.each(RESTALINGS)('US-M3-12 $name先取完锁，这时发出的保存等它提交：锁下读到新的代次，stale，什么也没写', async (restaling) => {
+    const prepared = await restaling.prepare()
+    const { holder, document } = prepared
+    const lease = await acquireLease(app.baseUrl, holder.session, document.id)
+    const result = await interleave(
+      { action: restaling.action, actorId: restaling.actor().id, run: prepared.change },
+      async () => save(holder.session, document, lease),
+    )
+    expect([result.first.status, await outcomeOf(result.second), result.secondWaited]).toEqual([200, '409 EDIT_LEASE_LOST:stale', true])
+    expect(await writesOf(document.id)).toEqual({ revision: 1, revisions: 1, saves: 0 })
+    expect(await leaseStateOf(database, document.id)).toEqual({ holderId: holder.account.id, endReason: null, leaseEpoch: lease.writeEpoch, documentEpoch: lease.writeEpoch + 1 })
+  })
+
+  it.each(RESTALINGS)('US-M3-12 $name先取完锁（租约行在它手里），这时发出的心跳等它提交：锁住租约行之后读到新的代次，stale；同一个页面重新申请之后接着保存（续上）', async (restaling) => {
+    const prepared = await restaling.prepare()
+    const { holder, document } = prepared
+    const lease = await acquireLease(app.baseUrl, holder.session, document.id)
+    const result = await interleave(
+      { action: restaling.action, actorId: restaling.actor().id, run: prepared.change },
+      async () => renewLease(app.baseUrl, holder.session, document.id, lease),
+    )
+    expect([result.first.status, await outcomeOf(result.second), result.secondWaited]).toEqual([200, '409 EDIT_LEASE_LOST:stale', true])
+    const again = await acquireLease(app.baseUrl, holder.session, document.id, lease.clientInstanceId)
+    expect(await outcomeOf(await save(holder.session, document, again))).toBe('200')
   })
 })
 

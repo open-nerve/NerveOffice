@@ -11,12 +11,14 @@ import { UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { AuditService } from '../audit/index.ts'
+import { SessionService } from '../auth/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { DocumentAccessPolicy, requireAccess, requireDocumentContent, requireDocumentOperations } from './document-access-policy.ts'
 import { DocumentContentsRepository } from './document-contents.repository.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
 import { DocumentsRepository } from './documents.repository.ts'
 import { requestLeaseLoss } from './edit-lease-rules.ts'
+import { requireActiveLogin } from './edit-lease.service.ts'
 import { EditLeasesRepository } from './edit-leases.repository.ts'
 import { savedPayloadDigest } from './payload-digest.ts'
 import { validateSnapshot } from './snapshot-validation.ts'
@@ -48,6 +50,7 @@ export class DocumentContentService {
     private readonly contents: DocumentContentsRepository,
     private readonly revisions: DocumentRevisionsRepository,
     private readonly leases: EditLeasesRepository,
+    private readonly sessions: SessionService,
     private readonly policy: DocumentAccessPolicy,
     private readonly audit: AuditService,
   ) {}
@@ -69,10 +72,13 @@ export class DocumentContentService {
 
   /**
    * 保存（P4 设计 §3.5.1，M3-P1 设计 §3.4.4）：先做与文档无关的基本校验，再在一个事务里依次
-   * 判断能否访问 → 能编辑时锁住文档行、锁下再判断一次 → 按 requestId 幂等 → 能否编辑 → 编辑租约 → 核对 unitId → 按基准修订号条件写入。
+   * 判断能否访问 → 能编辑时锁住文档行、锁下再判断一次 → 按 requestId 幂等 → 这次登录仍然有效 → 能否编辑 → 编辑租约 → 核对 unitId
+   * → 按基准修订号条件写入。
    * 幂等这一步只要求仍能访问（00 号计划书 §7.4 第 2 步）：一次结果未知的保存提交之后被降为查看者、空间被归档、租约失效或被别人接手，
    * 重发同一个请求照样拿到原来的结果，而不是 403 或编辑权已失效——客户端按约定会把它们当作"没有提交"（M2-P6 复核 A 的 S-4；
-   * 重放先于租约，A07）；不是重放才要求能编辑、再要求租约。
+   * 重放先于租约，A07）；不是重放才核对登录、要求能编辑、再要求租约。
+   * 登录在锁下再核对一次（M3-P1 审查 A1，requireActiveLogin）：会话守卫之后还隔着上传正文与等锁，这期间退出、签发重置（撤销全部登录）不经文档行，
+   * 只看"请求的登录就是租约绑定的那一个"挡不住撤销之后才落库的保存；失效时 401，与守卫的回答一致。
    * 先判断再加锁：看不到的请求不在文档上取锁，响应的时序与不存在的文档相同（审查 A2）；只能查看的请求同样不取锁，
    * 不让能编辑的人的保存排队（复验 RA7）——它能得到的只有重放，不加锁查一次请求标识就有结论，到不了租约这一步。
    * 能编辑时先锁文档再查幂等：同一个请求的两次并发重试，后到的一方拿到锁时前一方已经提交，按幂等返回原结果，而不是误报冲突。
@@ -87,6 +93,7 @@ export class DocumentContentService {
       const previous = await this.revisions.findByRequestId(query.requestId, transaction)
       if (previous !== undefined)
         return this.replay(saver.userId, document, previous, digest)
+      await requireActiveLogin(this.sessions, saver, transaction)
       // 不是重放才要求能编辑：能编辑时这是锁下的判断，只能查看时就是上面那次（没有取锁）
       requireDocumentOperations(accessible, ['edit'])
       await this.requireLease(saver, document, query, transaction)

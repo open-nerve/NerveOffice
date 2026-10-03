@@ -10,6 +10,7 @@ import { editLeaseTokenDigest } from './edit-lease-token.ts'
 
 const DOCUMENT = '0199a2c4-0000-7000-8000-0000000000d1'
 const AMY = '0199a2c4-0000-7000-8000-00000000000a'
+const BEN = '0199a2c4-0000-7000-8000-00000000000b'
 const SESSION = '0199a2c4-0000-7000-8000-0000000000e1'
 const OTHER_SESSION = '0199a2c4-0000-7000-8000-0000000000e2'
 const TAB = '0199a2c4-0000-7000-8000-0000000000f1'
@@ -239,17 +240,22 @@ describe('申请时这一行是不是页面自己的（同一个登录、同一�
   })
 })
 
-describe('释放：令牌是当前这一行的、而且没有明确结束', () => {
-  it('对得上、没有结束：可以释放；到期、空闲的照样可以（令牌对得上就是持有者本人）', () => {
-    expect(releasableBy(lease(), TOKEN)).toBe(true)
-    expect(releasableBy(lease({ expiresAt: at(-SECOND), lastActiveAt: at(-IDLE) }), TOKEN)).toBe(true)
+describe('释放：令牌是当前这一行的、没有明确结束、释放的人是持有者', () => {
+  it('对得上、没有结束、是持有者：可以释放；到期、空闲的照样可以；不要求同一个登录（换令牌之后续上，要先释放自己那一代）', () => {
+    expect(releasableBy(lease(), TOKEN, AMY)).toBe(true)
+    expect(releasableBy(lease({ expiresAt: at(-SECOND), lastActiveAt: at(-IDLE) }), TOKEN, AMY)).toBe(true)
+    expect(releasableBy(lease({ sessionId: OTHER_SESSION }), TOKEN, AMY)).toBe(true)
   })
 
   it('没有这一行、没带令牌、令牌不是这一行的、已经释放或收回：不动它', () => {
-    expect(releasableBy(undefined, TOKEN)).toBe(false)
-    expect(releasableBy(lease(), undefined)).toBe(false)
-    expect(releasableBy(lease(), OTHER_TOKEN)).toBe(false)
-    expect(releasableBy(lease({ endedAt: at(-SECOND), endReason: 'released' }), TOKEN)).toBe(false)
-    expect(releasableBy(lease({ endedAt: at(-SECOND), endReason: 'revoked' }), TOKEN)).toBe(false)
+    expect(releasableBy(undefined, TOKEN, AMY)).toBe(false)
+    expect(releasableBy(lease(), undefined, AMY)).toBe(false)
+    expect(releasableBy(lease(), OTHER_TOKEN, AMY)).toBe(false)
+    expect(releasableBy(lease({ endedAt: at(-SECOND), endReason: 'released' }), TOKEN, AMY)).toBe(false)
+    expect(releasableBy(lease({ endedAt: at(-SECOND), endReason: 'revoked' }), TOKEN, AMY)).toBe(false)
+  })
+
+  it('别人拿到了令牌（例如经代理的访问日志外泄）：不是持有者，不动它（M3-P1 审查 A4）', () => {
+    expect(releasableBy(lease(), TOKEN, BEN)).toBe(false)
   })
 })

@@ -58,15 +58,24 @@ export const saveContentResponseSchema = z.object({
 export type SaveContentResponse = z.infer<typeof saveContentResponseSchema>
 
 /**
+ * 一次修订的来源：产生它的那次保存的标签页（编辑器页每次加载生成的标识）与那次捕获的本地修改序号。
+ * 页面据此认出"这一版是本页自己的保存"（P4 设计 §3.5.2 的"自己追自己"，00 号计划书 §7.5）：修订号冲突的详情、
+ * 申请编辑权的响应都带它，取法相同（文档当前修订的那一条修订记录）
+ */
+export const revisionSourceSchema = z.object({
+  clientInstanceId: z.uuid(),
+  localSeq: z.number().int().min(0),
+})
+
+export type RevisionSource = z.infer<typeof revisionSourceSchema>
+
+/**
  * 修订号冲突（DOCUMENT_REVISION_CONFLICT）的详情：当前修订号及其来源。
  * 来源是产生当前修订的那次保存；当前修订是新建出来的时候为 null。
  */
 export const revisionConflictDetailsSchema = z.object({
   currentRevision: z.number().int().min(1),
-  source: z.object({
-    clientInstanceId: z.uuid(),
-    localSeq: z.number().int().min(0),
-  }).nullable(),
+  source: revisionSourceSchema.nullable(),
 })
 
 export type RevisionConflictDetails = z.infer<typeof revisionConflictDetailsSchema>
