@@ -94,6 +94,12 @@ describe('数据不变量的扫描（M2-P6 复核 B 的 B5）', () => {
       await w.folder(first, { entry: await w.entry(first, 'folder', { originParentId: shallow }) })
       // I15：个人空间里有成员
       await client.query('INSERT INTO space_members (space_id, user_id, role) VALUES ($1, $2, \'editor\')', [owner.personalSpaceId, owner.id])
+      // I16：租约的代次比文档的代次大（文档的代次是 0）
+      await client.query(
+        `INSERT INTO document_edit_leases (document_id, holder_id, session_id, client_instance_id, token_digest, write_epoch, acquired_at, renewed_at, expires_at, last_active_at)
+         VALUES ($1, $2, $3, $4, sha256('lease'::bytea), 5, now(), now(), now() + interval '90 seconds', now())`,
+        [await w.document(first), owner.id, randomUUID(), randomUUID()],
+      )
     })
 
     const failure = await database.drop().then(() => undefined, (error: unknown) => error as Error)

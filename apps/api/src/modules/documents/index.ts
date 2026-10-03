@@ -18,6 +18,11 @@ export { DocumentsModule } from './documents.module.ts'
 // 只为集成测试专用的入口（app/integration.test-support.ts）转出，集成测试直接核对仓储的查询范围：
 // 别的文件经这里引用它由 eslint 拦下（M2-P6 复核 A 的 S3、复验 R-S4）
 export { DocumentsRepository } from './documents.repository.ts'
+// 编辑租约（M3-P1）：编辑权的接口在 workspace，令牌的参数装饰器也给 S4 的保存用
+export { EditLeaseToken } from './edit-lease-header.ts'
+export type { LeaseInterruption } from './edit-lease-rules.ts'
+export { editingActorOf, EditLeaseService } from './edit-lease.service.ts'
+export type { EditingActor, LeaseAcquisition, LeaseStatus } from './edit-lease.service.ts'
 export { FoldersService } from './folders.service.ts'
 export type { CreateFolderCommand, MoveFolderCommand, UpdateFolderCommand } from './folders.service.ts'
 export { SharedDocumentsService } from './shared-documents.service.ts'

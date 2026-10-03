@@ -5,7 +5,7 @@ import type { HolderFacts, LeaseRequest } from './edit-lease-rules.ts'
 import type { ObservedEditLease } from './edit-leases.repository.ts'
 import { EDIT_INTERRUPTION_NOTICE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
 import { describe, expect, it, vi } from 'vitest'
-import { currentLeaseLoss, interruptionOf, requestLeaseLoss } from './edit-lease-rules.ts'
+import { currentLeaseLoss, interruptionOf, isSamePage, releasableBy, requestLeaseLoss } from './edit-lease-rules.ts'
 import { editLeaseTokenDigest } from './edit-lease-token.ts'
 
 const DOCUMENT = '0199a2c4-0000-7000-8000-0000000000d1'
@@ -228,5 +228,28 @@ describe('异常结束（申请改写这一行之前算，P1 设计 §3.4.5）',
     expect(interruptionOf(ended(NOTICE), 'expired')).toEqual({ holderId: AMY, endedAt: at(-NOTICE) })
     expect(interruptionOf(ended(NOTICE + 1), 'expired')).toBeUndefined()
     expect(interruptionOf(ended(NOTICE + 1), 'idle')).toBeUndefined()
+  })
+})
+
+describe('申请时这一行是不是页面自己的（同一个登录、同一个标签页：重试）', () => {
+  it('登录与标签页都对得上才是；同一个人换了标签页或换了登录（别的设备）都不是', () => {
+    expect(isSamePage(lease(), SESSION, TAB)).toBe(true)
+    expect(isSamePage(lease(), SESSION, OTHER_TAB)).toBe(false)
+    expect(isSamePage(lease(), OTHER_SESSION, TAB)).toBe(false)
+  })
+})
+
+describe('释放：令牌是当前这一行的、而且没有明确结束', () => {
+  it('对得上、没有结束：可以释放；到期、空闲的照样可以（令牌对得上就是持有者本人）', () => {
+    expect(releasableBy(lease(), TOKEN)).toBe(true)
+    expect(releasableBy(lease({ expiresAt: at(-SECOND), lastActiveAt: at(-IDLE) }), TOKEN)).toBe(true)
+  })
+
+  it('没有这一行、没带令牌、令牌不是这一行的、已经释放或收回：不动它', () => {
+    expect(releasableBy(undefined, TOKEN)).toBe(false)
+    expect(releasableBy(lease(), undefined)).toBe(false)
+    expect(releasableBy(lease(), OTHER_TOKEN)).toBe(false)
+    expect(releasableBy(lease({ endedAt: at(-SECOND), endReason: 'released' }), TOKEN)).toBe(false)
+    expect(releasableBy(lease({ endedAt: at(-SECOND), endReason: 'revoked' }), TOKEN)).toBe(false)
   })
 })

@@ -3,6 +3,7 @@
 // 测试覆盖的是真实的权限规则。
 import type { GrantRole, SpaceRole, SpaceStatus, SpaceType } from '@nerve-office/contracts'
 import type { AuditEvent, AuditService } from '../audit/index.ts'
+import type { SessionService } from '../auth/index.ts'
 import type { Transaction, TransactionRunner } from '../database/index.ts'
 import type { SpaceFacts, SpaceFactsWithOwner, SpacesService } from '../spaces/index.ts'
 import type { Actor } from './document-access-policy.ts'
@@ -10,12 +11,13 @@ import type { CurrentContent, DocumentContentsRepository, StoredSnapshot } from 
 import type { DocumentGrantsRepository, GrantRow, NewGrant } from './document-grants.repository.ts'
 import type { DocumentRevisionsRepository, NewRevision, RevisionRow } from './document-revisions.repository.ts'
 import type { AccessibleScope, CopiedDocument, DocumentRow, DocumentsRepository, GrantedDocumentRow, ListOptions, NewDocument, PageOptions, SearchOptions, SearchRow } from './documents.repository.ts'
+import type { EditLeaseRow, EditLeasesRepository, NewEditLease, ObservedEditLease } from './edit-leases.repository.ts'
 import type { CreatedFolderRow, FolderAncestorRow, FolderRow, FoldersRepository, NewFolder, SubtreeMove, SubtreeSummary } from './folders.repository.ts'
 import type { SpaceTreeRepository } from './space-tree.repository.ts'
 import type { NewTrashEntry, TrashEntriesRepository, TrashEntryRow } from './trash-entries.repository.ts'
 import type { WriteAccessRevocation, WriteAccessScope } from './write-access.ts'
 import { Buffer } from 'node:buffer'
-import { FOLDER_LIST_MAX_ITEMS, TRASH_RETENTION_DAYS } from '@nerve-office/contracts'
+import { EDIT_LEASE_TTL_SECONDS, FOLDER_LIST_MAX_ITEMS, TRASH_RETENTION_DAYS } from '@nerve-office/contracts'
 import { vi } from 'vitest'
 import { parseAuditEvent } from '../audit/index.ts'
 import { EffectiveAccessPolicy } from './document-access-policy.ts'
@@ -543,6 +545,53 @@ export class FakeStore {
     }),
   }
 
+  /** 编辑租约（M3-P1）：文档 id → 租约行 */
+  readonly leaseRecords = new Map<string, EditLeaseRow>()
+  /**
+   * 假仓储里数据库的 now()（事务开始的时刻）：读出的租约行带着它，写下的时间也是它。
+   * 用例改它模拟时间过去，不等真实的时间（与集成测试改写租约行的时间同一个意思）
+   */
+  databaseNow: Date = NOW
+  /** 仍然有效的登录：auth 的 SessionService.isActive 的假实现按它回答 */
+  readonly activeSessions = new Set<string>()
+
+  /**
+   * 编辑租约的仓储（M3-P1）：与真实仓储同样的语义——每份文档至多一行，改写为新的一代时清掉明确结束，
+   * 续租时最后活动夹在申请的时间与 now 之间，明确结束不覆盖先记下的原因。SQL 本身由集成测试覆盖
+   */
+  readonly leases = {
+    findByDocument: vi.fn(async (documentId: string) => this.observedLease(documentId)),
+    lockByDocument: vi.fn(async (documentId: string) => this.observedLease(documentId)),
+    replace: vi.fn(async (lease: NewEditLease): Promise<ObservedEditLease> => {
+      const now = this.databaseNow
+      const row: EditLeaseRow = { ...lease, acquiredAt: now, renewedAt: now, lastActiveAt: now, expiresAt: this.expiryFrom(now), endedAt: null, endReason: null }
+      this.leaseRecords.set(lease.documentId, row)
+      return { ...row, now }
+    }),
+    renew: vi.fn(async (documentId: string, idleSeconds: number): Promise<ObservedEditLease> => {
+      const row = this.leaseRecords.get(documentId)
+      if (row === undefined)
+        throw new Error(`续租时租约不在了：${documentId}`)
+      const now = this.databaseNow
+      const lastActiveAt = new Date(Math.min(Math.max(now.getTime() - idleSeconds * 1000, row.acquiredAt.getTime()), now.getTime()))
+      const renewed = { ...row, renewedAt: now, expiresAt: this.expiryFrom(now), lastActiveAt }
+      this.leaseRecords.set(documentId, renewed)
+      return { ...renewed, now }
+    }),
+    end: vi.fn(async (documentId: string, reason: NonNullable<EditLeaseRow['endReason']>) => {
+      const row = this.leaseRecords.get(documentId)
+      if (row === undefined || row.endedAt !== null)
+        return false
+      this.leaseRecords.set(documentId, { ...row, endedAt: this.databaseNow, endReason: reason })
+      return true
+    }),
+  }
+
+  /** auth 的会话服务（M3-P1：判断别人的租约绑定的登录还在不在） */
+  readonly sessions = {
+    isActive: vi.fn(async (sessionId: string) => this.activeSessions.has(sessionId)),
+  }
+
   readonly transactions = {
     run: vi.fn(async <T>(work: (transaction: Transaction) => Promise<T>) => work(TRANSACTION)),
     readSnapshot: vi.fn(async <T>(work: (transaction: Transaction) => Promise<T>) => work(TRANSACTION)),
@@ -586,12 +635,25 @@ export class FakeStore {
       grants: this.grants as unknown as DocumentGrantsRepository,
       audit: this.audit as unknown as AuditService,
       writeAccess: this.writeAccess as unknown as WriteAccessRevocation,
+      leases: this.leases as unknown as EditLeasesRepository,
+      sessions: this.sessions as unknown as SessionService,
     }
   }
 
   /** 正常状态的一份文档（回收站里的对普通接口不存在） */
   private activeDocument(id: string): DocumentRow | undefined {
     return this.entryOfDocument(id) === null ? this.documents.get(id) : undefined
+  }
+
+  /** 读出的租约行带着此刻的"数据库时间"（与真实仓储一样，与行出自同一条语句） */
+  private observedLease(documentId: string): ObservedEditLease | undefined {
+    const row = this.leaseRecords.get(documentId)
+    return row === undefined ? undefined : { ...row, now: this.databaseNow }
+  }
+
+  /** 到期的时刻：now 加有效期 */
+  private expiryFrom(now: Date): Date {
+    return new Date(now.getTime() + EDIT_LEASE_TTL_SECONDS * 1000)
   }
 
   /** 改一份文档的几列并返回新的行 */

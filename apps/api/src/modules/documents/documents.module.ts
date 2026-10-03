@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common'
 import { AuditModule } from '../audit/index.ts'
+import { AuthModule } from '../auth/index.ts'
 import { DatabaseModule } from '../database/index.ts'
 import { SpacesModule } from '../spaces/index.ts'
 import { DocumentAccessPolicy, EffectiveAccessPolicy } from './document-access-policy.ts'
@@ -17,6 +18,8 @@ import { DocumentTransferService } from './document-transfer.service.ts'
 import { DocumentsController } from './documents.controller.ts'
 import { DocumentsRepository } from './documents.repository.ts'
 import { DocumentsService } from './documents.service.ts'
+import { EditLeaseService } from './edit-lease.service.ts'
+import { EditLeasesRepository } from './edit-leases.repository.ts'
 import { FoldersRepository } from './folders.repository.ts'
 import { FoldersService } from './folders.service.ts'
 import { SharedDocumentsService } from './shared-documents.service.ts'
@@ -28,7 +31,8 @@ import { TrashService } from './trash.service.ts'
 import { LeaselessWriteAccessRevocation, WriteAccessRevocation } from './write-access.ts'
 
 @Module({
-  imports: [DatabaseModule, SpacesModule, AuditModule],
+  // auth 只为判断别人的租约绑定的登录还在不在（SessionService.isActive，M3-P1 设计 §3.1）；auth 不依赖 documents，依赖图无环
+  imports: [DatabaseModule, SpacesModule, AuditModule, AuthModule],
   controllers: [DocumentsController, DocumentContentController],
   providers: [
     DocumentsRepository,
@@ -39,6 +43,9 @@ import { LeaselessWriteAccessRevocation, WriteAccessRevocation } from './write-a
     SpaceTreeRepository,
     // 单独授权（M2-P5）：只在本模块里用（有效权限读它），不在 exports 里、不经公开入口转出
     DocumentGrantsRepository,
+    // 编辑租约（M3-P1）：仓储只在本模块里用；申请、心跳、释放与编辑状态的服务给 workspace 的接口编排
+    EditLeasesRepository,
+    EditLeaseService,
     DocumentsService,
     DocumentCreationService,
     DocumentContentService,
@@ -62,9 +69,10 @@ import { LeaselessWriteAccessRevocation, WriteAccessRevocation } from './write-a
   // 空间的接口（workspace）与系统管理（admin）经访问策略授权、经这个入口收回写入权；admin 转移停用者的文档；
   // 文件夹、回收站与搜索的接口在 workspace（M2-P4 设计 §3.1），数据与规则在这里；
   // 分享的接口与写入的编排、"与我共享"在 workspace（要锁被授权人的账户行、补人名，M2-P5 设计 §3.1），授权的规则与数据在这里；
-  // 到期的自动清理只给 jobs（M2-P4 设计 §3.1）
+  // 到期的自动清理只给 jobs（M2-P4 设计 §3.1）；编辑权的接口在 workspace（要补持有者的人名，M3-P1 设计 §3.1），租约的规则与数据在这里
   exports: [
     DocumentAccessPolicy,
+    EditLeaseService,
     WriteAccessRevocation,
     DocumentSearchService,
     DocumentTransferService,

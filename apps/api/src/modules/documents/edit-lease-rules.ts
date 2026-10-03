@@ -8,6 +8,7 @@
 //   以函数的形式给出，规则决定问不问、先问哪个：前五条都满足才问，先问登录，登录不在了就不再问编辑权；
 // - 请求带的租约（requestLeaseLoss，心跳与保存）：持有者自己的请求。先要令牌对得上，第 6 条换成"请求的登录、标签页就是
 //   租约绑定的那一个"，不另查——会话守卫刚认证过这次登录，换过令牌的页面拿的是新的登录，按 session 失效。
+// 另有申请时的重试（isSamePage：同一个登录、同一个标签页）、释放（releasableBy：令牌对得上、没有明确结束）与异常结束的提醒（interruptionOf）。
 import type { EditLeaseLostReason } from '@nerve-office/contracts'
 import type { ObservedEditLease } from './edit-leases.repository.ts'
 import { EDIT_INTERRUPTION_NOTICE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@nerve-office/contracts'
@@ -104,6 +105,23 @@ export function requestLeaseLoss(lease: ObservedEditLease | undefined, documentE
   if (request.sessionId !== lease.sessionId || (request.clientInstanceId !== undefined && request.clientInstanceId !== lease.clientInstanceId))
     return 'session'
   return undefined
+}
+
+/**
+ * 申请时当前的租约有效、而且就是这个页面自己的——同一个登录、同一个标签页（P1 设计 §3.4.2 第 4 步）：这是页面的重试
+ * （例如上次申请的回包丢了），照样发新的一代。别的登录或别的标签页的有效租约（同一个人在别的标签页、设备上也算）是被占用
+ */
+export function isSamePage(lease: ObservedEditLease, sessionId: string, clientInstanceId: string): boolean {
+  return lease.sessionId === sessionId && lease.clientInstanceId === clientInstanceId
+}
+
+/**
+ * 释放（P1 设计 §3.4.3）：令牌是当前这一行的、而且这一行没有明确结束，才记 released。没带令牌、令牌对不上（这一行已经是新的一代）、
+ * 已经释放或收回都不动它：页面关闭时晚到的释放不能结束别人（或自己在别处）申请到的新的一代，也不能改掉先记下的结束原因。
+ * 到期、空闲、登录失效的租约照样可以释放（令牌对得上就是持有者本人）：记下 released，就不再算异常结束
+ */
+export function releasableBy(lease: ObservedEditLease | undefined, token: string | undefined): boolean {
+  return lease !== undefined && token !== undefined && lease.endReason === null && editLeaseTokenMatches(token, lease.tokenDigest)
 }
 
 /**
