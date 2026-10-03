@@ -430,8 +430,10 @@ describe('US-M2-10 分享对话框：写入成功之后的刷新（Codex 对抗�
     const confirm = await screen.findByRole('dialog', { name: `取消分享给 ${plainName('本', 'ben')}？` })
     fireEvent.click(within(confirm).getByRole('button', { name: '取消分享' }))
     await waitFor(() => expect(screen.queryByRole('dialog', { name: /^取消分享给/ })).toBeNull())
-    // 写入成功：说明照常（刷新已经有了结果，不说还在刷新）；刷新失败不算这次操作失败
-    expect(noticeIn(dialog)).toHaveTextContent(new RegExp(`^已取消分享给 ${shownName('本', 'ben')}$`))
+    // 写入成功：说明照常（刷新已经有了结果，不说还在刷新）；刷新失败不算这次操作失败。
+    // 要等：说明在确认框关掉、焦点交还之后才写（Radix 卸下之后延后一个任务交还焦点），确认框不在了的那一刻还没写——
+    // 原来这里同步断言，推送前的快速门禁在负载下失败过一次
+    await waitFor(() => expect(noticeIn(dialog)).toHaveTextContent(new RegExp(`^已取消分享给 ${shownName('本', 'ben')}$`)))
     const problem = await within(dialog).findByRole('alert')
     expect(problem).toHaveTextContent('分享的情况没能刷新，显示的还是之前的内容')
     expect(problem).toHaveTextContent('服务器出了点问题，请稍后重试')
