@@ -1,5 +1,6 @@
 import type { CreateInvitationRequest, Invitation, InvitationStatus, IssuedInvitation } from '@nerve-office/contracts'
 import type { SyntheticEvent } from 'react'
+import type { BackgroundRefresh } from '../../shared/api/write-outcome.ts'
 import type { PendingConfirmation } from '../confirmation/index.ts'
 import type { IssuedLink } from './issued-link-dialog.tsx'
 import type { PagedTableHandle } from './paged-table.tsx'
@@ -7,9 +8,11 @@ import { createInvitationRequestSchema, INVITATION_LIFETIME_DAYS, INVITATION_STA
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { ApiError, describeError, isUnknownOutcome } from '../../shared/api/index.ts'
+import { refreshAfterSuccess } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
+import { updatePagedItems } from '../../shared/lib/paged-cache.ts'
 import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
@@ -18,7 +21,7 @@ import { SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
 import { ConfirmDialog } from '../confirmation/index.ts'
 import { ADMIN_QUERY_KEY, createInvitation, invitationsQueryOptions, reissueInvitation, revokeInvitation } from './admin-api.ts'
 import { IssuedLinkDialog } from './issued-link-dialog.tsx'
-import { PagedTable } from './paged-table.tsx'
+import { PagedTable, StillRefreshingLine } from './paged-table.tsx'
 
 const text = adminMessages.invitations
 
@@ -85,6 +88,8 @@ export function AdminInvitationsPage() {
   const [unsureFor, setUnsureFor] = useState<string>()
   /** 上一次签发失败之后列表刷新好了没有：说明据此说"已刷新"还是"没能刷新"（第四批）。每次失败都重新记下 */
   const issueRefresh = useOutcomeRefresh()
+  /** 写操作成功之后、到了时限还在后台的刷新（Codex 对抗评审 CX4）：表格上方说列表还在刷新 */
+  const [background, setBackground] = useState<BackgroundRefresh>()
   const usernameRef = useRef<HTMLInputElement>(null)
   const statusRef = useRef<HTMLSelectElement>(null)
   const tableRef = useRef<PagedTableHandle>(null)
@@ -92,9 +97,12 @@ export function AdminInvitationsPage() {
   const displayNameId = useId()
   const statusId = useId()
 
-  /** 刷新邀请列表：刷新失败时列表自己显示加载失败 */
+  /**
+   * 成功之后刷新邀请列表，最多等到时限（Codex 对抗评审 CX4）：一直不回来时操作照常结束（签发的链接照常弹出），表格上方说列表还在刷新；
+   * 刷新失败时列表自己说明没能刷新（CX5）
+   */
   async function refresh(): Promise<void> {
-    await refreshQueries(queryClient, [INVITATIONS_QUERY_KEY], { throwOnError: false })
+    setBackground(await refreshAfterSuccess(async () => refreshQueries(queryClient, [INVITATIONS_QUERY_KEY])))
   }
 
   /** 结果未知之后的刷新（签发与确认的弹窗）：刷新失败时拒绝，据此说明页面没能刷新（M2-P6 复核第三批 G-a、第四批） */
@@ -169,7 +177,8 @@ export function AdminInvitationsPage() {
           throw error
         }
         await refresh()
-        // 列表刷新之后，确认的弹窗关掉的同时弹出链接：任何时刻只有一个弹窗（审查 B7）；关闭链接之后焦点到新的那一行
+        // 列表刷新之后（最多等到时限：一直不回来时链接照常弹出，表格上方说列表还在刷新，Codex 对抗评审 CX4），
+        // 确认的弹窗关掉的同时弹出链接：任何时刻只有一个弹窗（审查 B7）；关闭链接之后焦点到新的那一行（还不在表里时回到状态的筛选）
         setPending(undefined)
         setIssued(linkOf(result, () => focusRow(result.invitation.id)))
       },
@@ -195,7 +204,9 @@ export function AdminInvitationsPage() {
               confirmLabel: text.revoke,
               destructive: true,
               run: async () => {
-                await revokeInvitation(invitation.id)
+                // 按确定的写入结果先换上这一行（"作废"随之不在，CX4），再刷新
+                const revoked = await revokeInvitation(invitation.id)
+                updatePagedItems<Invitation>(queryClient, INVITATIONS_QUERY_KEY, item => (item.id === revoked.id ? revoked : item))
                 await refresh()
               },
               // 结果未知时确认的弹窗刷新列表、说明可能已经作废（按状态幂等，再试安全，M2-P6 复核第二批 G-2）
@@ -253,6 +264,7 @@ export function AdminInvitationsPage() {
           {INVITATION_STATUSES.map(value => <option key={value} value={value}>{text.statusName(value)}</option>)}
         </NativeSelect>
       </div>
+      <StillRefreshingLine background={background} />
       <PagedTable
         ref={tableRef}
         query={invitations}

@@ -11,6 +11,7 @@ import { useRequestIdLedger } from '../../shared/lib/request-id-ledger.ts'
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
 import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { Alert, AlertDescription, Button, buttonVariants, Notice } from '../../shared/ui/index.ts'
+import { StillRefreshing } from '../../shared/ui/still-refreshing.tsx'
 import { createDocument } from './documents-api.ts'
 import { useOrganizeRefresh, useOrganizeRefreshChecked } from './organize-refresh.ts'
 
@@ -51,6 +52,7 @@ function failureOf(error: unknown, ledger: RequestIdLedger, refreshed: boolean):
  * 这件事随之了结（成功就换新的 requestId），再点就是新建一份。说明由说明条（Notice）接住焦点，读屏随之读出（第三批 G-b）：
  * 与内容一起插入的 role="status" 部分读屏不播报（M2-P2 复验，features/admin/audit-page.tsx），焦点又留在按钮上；
  * 新建文件夹与复制的重放也是这样说明的。关掉说明之后焦点回到"新建表格"。
+ * 重放之后的刷新最多等到时限（Codex 对抗评审 CX4）：一直不回来时照常给出说明，接着说列表还在刷新。
  *
  * 在文件夹里新建也是一次请求：目标文件夹随请求给出（契约 createDocumentRequestSchema 的 folderId），
  * 服务端在同一个事务里判断它并写进去，不存在"建好了却没能移进来"的中间状态。
@@ -65,15 +67,15 @@ export function NewSheetButton({ spaceId, folderId = null, onDenied }: NewSheetB
   const buttonRef = useRef<HTMLButtonElement>(null)
   const focusAfterRender = useFocusAfterRender()
   const mutation = useMutation({
-    // 建在空间根目录时不带 folderId：契约里省略就是根目录，请求与 M2-P4 之前一样
-    mutationFn: async () => ledger.send(`sheet:${spaceId}/${folderId ?? ''}`, async requestId => createDocument({ type: 'sheet', requestId, spaceId, ...(folderId === null ? {} : { folderId }) })),
-    onSuccess: async (document) => {
-      if (!document.replayed) {
+    // 建在空间根目录时不带 folderId：契约里省略就是根目录，请求与 M2-P4 之前一样。
+    // 重放时随即刷新（那一份可能已经改了名、移到了别处：这里与它现在所在的空间都刷新），说明等刷新有了结果或者到了时限再给出
+    mutationFn: async () => {
+      const document = await ledger.send(`sheet:${spaceId}/${folderId ?? ''}`, async requestId => createDocument({ type: 'sheet', requestId, spaceId, ...(folderId === null ? {} : { folderId }) }))
+      return { document, refreshing: document.replayed ? await refresh([spaceId, document.spaceId]) : undefined }
+    },
+    onSuccess: ({ document }) => {
+      if (!document.replayed)
         page.assign(documentPagePath(document.id))
-        return
-      }
-      // 那一份可能已经改了名、移到了别处：这里与它现在所在的空间都刷新
-      await refresh([spaceId, document.spaceId])
     },
     onError: async (error) => {
       if (isAccessDenied(error)) {
@@ -85,8 +87,8 @@ export function NewSheetButton({ spaceId, folderId = null, onDenied }: NewSheetB
     },
   })
   // 建好之后页面正在离开：按钮保持进行中，不能再建一份（重放不离开，按钮照常可用）
-  const busy = mutation.isPending || (mutation.isSuccess && !mutation.data.replayed)
-  const replayed = mutation.isSuccess && mutation.data.replayed ? mutation.data : undefined
+  const busy = mutation.isPending || (mutation.isSuccess && !mutation.data.document.replayed)
+  const replayed = mutation.isSuccess && mutation.data.document.replayed ? mutation.data : undefined
 
   function create(): void {
     if (!busy)
@@ -113,9 +115,10 @@ export function NewSheetButton({ spaceId, folderId = null, onDenied }: NewSheetB
           focusKey={replayed}
           onClose={closeReplayed}
           // 编辑器页是另一个入口：普通的链接，整页打开
-          action={<a href={documentPagePath(replayed.id)} className={buttonVariants({ variant: 'outline', size: 'sm' })}>{messages.documents.openReplayed}</a>}
+          action={<a href={documentPagePath(replayed.document.id)} className={buttonVariants({ variant: 'outline', size: 'sm' })}>{messages.documents.openReplayed}</a>}
         >
-          {messages.documents.createdReplayed(replayed.title)}
+          {messages.documents.createdReplayed(replayed.document.title)}
+          <StillRefreshing refresh={replayed.refreshing} sentence />
         </Notice>
       )}
       {failure !== undefined && (

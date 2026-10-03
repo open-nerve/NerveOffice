@@ -6,7 +6,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { describeError, isAccessDenied, isMissingResource } from '../../shared/api/index.ts'
-import { refreshWithin, writeFailureText } from '../../shared/api/write-outcome.ts'
+import { refreshAfterSuccess, refreshWithin, writeFailureText } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { folderIdsFromPath, spaceMembersPath } from '../../shared/lib/space-paths.ts'
@@ -33,6 +33,7 @@ interface RenameFormProps {
 
 /**
  * 行内改名（不用弹窗，不进首屏的 Radix Dialog）：保存之后导航与页头随即是新名称；名称不合法时说明原因（M2-P6 复核 S4）。
+ * 成功之后先按响应改页头与导航里的名称，再刷新（最多等到时限，Codex 对抗评审 CX4）：刷新一直不回来时表单照常关掉，名称已经是新的。
  * 结果未知时页头与导航刷新、说明可能已经改好（改名按状态幂等，再保存一次是安全的，M2-P6 复核第二批 G-2）；
  * 刷新最多等 10 秒（第三批 S-a），刷新失败或者超时就说明页面没能刷新（第三批 G-a）；超时之后刷新才回来的，说明随后改过来（第五批 G4）
  */
@@ -45,8 +46,12 @@ function RenameForm({ space, onDone, onDenied }: RenameFormProps) {
   const problemId = useId()
   const mutation = useMutation({
     mutationFn: async (value: string) => renameSpace(space.id, value),
-    onSuccess: async () => {
-      await refreshQueries(queryClient, [SPACES_QUERY_KEY], { throwOnError: false })
+    onSuccess: async (renamed) => {
+      queryClient.setQueryData(spaceQueryOptions(space.id).queryKey, current => current === undefined ? undefined : { ...current, name: renamed.name })
+      queryClient.setQueryData(spacesQueryOptions().queryKey, list => list === undefined
+        ? undefined
+        : { ...list, items: list.items.map(item => (item.id === renamed.id ? { ...item, name: renamed.name } : item)) })
+      await refreshAfterSuccess(async () => refreshQueries(queryClient, [SPACES_QUERY_KEY]))
       onDone()
     },
     onError: async (error) => {

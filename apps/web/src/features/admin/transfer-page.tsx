@@ -1,4 +1,4 @@
-import type { AdminSpace, AdminUser, TransferTarget, UserSummary } from '@nerve-office/contracts'
+import type { AdminSpace, AdminUser, AdminUserDocument, TransferTarget, UserSummary } from '@nerve-office/contracts'
 import type { ReactNode } from 'react'
 import type { Phrase as PhraseParts } from '../../shared/i18n/index.ts'
 import type { KeywordPickerTexts } from '../colleagues/index.ts'
@@ -8,15 +8,17 @@ import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-quer
 import { useId, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { ApiError, describeError, isMissingResource, isUnknownOutcome } from '../../shared/api/index.ts'
-import { refreshWithin } from '../../shared/api/write-outcome.ts'
+import { refreshAfterSuccess, refreshWithin } from '../../shared/api/write-outcome.ts'
 import { messages, phraseText } from '../../shared/i18n/index.ts'
 import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { ADMIN_PATHS } from '../../shared/lib/admin-paths.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
+import { updatePagedItems } from '../../shared/lib/paged-cache.ts'
 import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { Alert, AlertDescription, Button, buttonVariants, Label, PersonName, Phrase, Skeleton, TableCell } from '../../shared/ui/index.ts'
 import { StatusRegion } from '../../shared/ui/status-region.tsx'
+import { StillRefreshing } from '../../shared/ui/still-refreshing.tsx'
 import { sessionQueryOptions, SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
 import { ColleaguePicker, KeywordPicker } from '../colleagues/index.ts'
 import { ConfirmDialog } from '../confirmation/index.ts'
@@ -146,8 +148,17 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
           const result = await transferDocuments(account.id, { documentIds, target: target.request })
           setSelected(new Set())
           setUnsure(false)
-          await refreshQueries(queryClient, [documentsQuery.queryKey], { throwOnError: false })
-          return () => setDone(<Phrase parts={text.done(result.transferred, target.shown)} />)
+          // 按确定的写入结果先从列表里去掉转走的文档（整批转移：成功就是这一批全转走了），再刷新，最多等到时限（Codex 对抗评审 CX4）：
+          // 一直不回来时弹窗照常关掉，说明接着说列表还在刷新；刷新失败时列表自己说明没能刷新（CX5）
+          const transferred = new Set(documentIds)
+          updatePagedItems<AdminUserDocument>(queryClient, documentsQuery.queryKey, document => (transferred.has(document.id) ? undefined : document))
+          const refreshing = await refreshAfterSuccess(async () => refreshQueries(queryClient, [documentsQuery.queryKey]))
+          return () => setDone(
+            <>
+              <Phrase parts={text.done(result.transferred, target.shown)} />
+              <StillRefreshing refresh={refreshing} />
+            </>,
+          )
         }
         catch (error) {
           // 结果未知：确认的弹窗随即按 refresh 刷新、说明可能已经转移

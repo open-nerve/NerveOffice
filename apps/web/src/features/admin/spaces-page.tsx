@@ -1,4 +1,5 @@
 import type { AdminSpace, SpaceStatus, UserSummary } from '@nerve-office/contracts'
+import type { BackgroundRefresh } from '../../shared/api/write-outcome.ts'
 import type { PendingConfirmation } from '../confirmation/index.ts'
 import type { PagedTableHandle } from './paged-table.tsx'
 import { SPACE_STATUSES, spaceNameSchema } from '@nerve-office/contracts'
@@ -6,9 +7,11 @@ import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-q
 import { useId, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { ApiError, describeError, isUnknownOutcome } from '../../shared/api/index.ts'
+import { refreshAfterSuccess } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
+import { updatePagedItems } from '../../shared/lib/paged-cache.ts'
 import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { spaceMembersPath } from '../../shared/lib/space-paths.ts'
 import { useDebouncedValue } from '../../shared/lib/use-debounced-value.ts'
@@ -20,13 +23,16 @@ import { ColleaguePicker } from '../colleagues/index.ts'
 import { ConfirmDialog } from '../confirmation/index.ts'
 import { SPACES_QUERY_KEY } from '../spaces/index.ts'
 import { ADMIN_QUERY_KEY, adminSpacesQueryOptions, archiveSpace, createTeamSpace, restoreSpace, setSpaceVisibility } from './admin-api.ts'
-import { PagedTable } from './paged-table.tsx'
+import { PagedTable, StillRefreshingLine } from './paged-table.tsx'
 import { JoinSpaceDialog, RenameSpaceDialog } from './space-dialogs.tsx'
 
 const text = adminMessages.spaces
 
+/** 管理界面的团队空间列表（各种搜索与过滤条件下的各页） */
+const ADMIN_SPACES_QUERY_KEY = [...ADMIN_QUERY_KEY, 'spaces'] as const
+
 /** 管理界面的团队空间列表与左侧导航（"我能看到的空间"等）：加入、改名、全员可见、归档会改变谁看得到什么 */
-const LIST_QUERY_KEYS = [[...ADMIN_QUERY_KEY, 'spaces'], SPACES_QUERY_KEY] as const
+const LIST_QUERY_KEYS = [ADMIN_SPACES_QUERY_KEY, SPACES_QUERY_KEY] as const
 
 /** 已有同名的团队空间 */
 function isNameTaken(error: unknown): boolean {
@@ -34,7 +40,9 @@ function isNameTaken(error: unknown): boolean {
 }
 
 interface CreateSpaceFormProps {
-  /** 创建成功之后刷新列表与导航：刷新失败时列表自己显示加载失败 */
+  /**
+   * 创建成功之后刷新列表与导航：最多等到时限（Codex 对抗评审 CX4），一直不回来时表格上方说列表还在刷新；刷新失败时列表自己说明没能刷新
+   */
   readonly onCreated: () => Promise<void>
   /** 结果未知之后刷新同样的列表与导航：刷新失败时拒绝，说明据此说"没能刷新"（M2-P6 复核第四批） */
   readonly refreshAfterUnknown: () => Promise<void>
@@ -148,17 +156,20 @@ export function AdminSpacesPage() {
   const [pending, setPending] = useState<PendingConfirmation>()
   const [renaming, setRenaming] = useState<AdminSpace>()
   const [joining, setJoining] = useState<AdminSpace>()
+  /** 写操作成功之后、到了时限还在后台的刷新（Codex 对抗评审 CX4）：表格上方说列表还在刷新 */
+  const [background, setBackground] = useState<BackgroundRefresh>()
   const tableRef = useRef<PagedTableHandle>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const searchId = useId()
   const statusId = useId()
 
   /**
-   * 管理界面的列表与导航（加入、改名、全员可见会改变谁看得到什么）一起刷新；刷新失败时列表自己显示加载失败。
+   * 成功之后管理界面的列表与导航（加入、改名、全员可见会改变谁看得到什么）一起刷新，最多等到时限（Codex 对抗评审 CX4）：
+   * 一直不回来时操作照常结束（弹窗关掉、表单清空），表格上方说列表还在刷新；刷新失败时列表自己说明没能刷新（CX5）。
    * 换了过滤条件、过滤的请求还在路上时创建成功，那个请求也重来（第五批 G6，shared/lib/refresh-queries.ts）
    */
   async function refresh(): Promise<void> {
-    await refreshQueries(queryClient, LIST_QUERY_KEYS, { throwOnError: false })
+    setBackground(await refreshAfterSuccess(async () => refreshQueries(queryClient, LIST_QUERY_KEYS)))
   }
 
   /**
@@ -178,12 +189,16 @@ export function AdminSpacesPage() {
       focusRow(space)
   }
 
-  /** 全员可见、归档与恢复：先确认，再执行。结果未知时确认的弹窗刷新列表与导航、说明可能已经生效（M2-P6 复核第二批 G-2） */
-  function confirmThen(space: AdminSpace, confirmation: Omit<PendingConfirmation, 'run' | 'refresh' | 'returnFocus'>, action: () => Promise<unknown>): void {
+  /**
+   * 全员可见、归档与恢复：先确认，再执行。成功之后先按响应换上这一行（打开确认框的按钮随之换掉，CX4），再刷新。
+   * 结果未知时确认的弹窗刷新列表与导航、说明可能已经生效（M2-P6 复核第二批 G-2）
+   */
+  function confirmThen(space: AdminSpace, confirmation: Omit<PendingConfirmation, 'run' | 'refresh' | 'returnFocus'>, action: () => Promise<AdminSpace>): void {
     setPending({
       ...confirmation,
       run: async () => {
-        await action()
+        const updated = await action()
+        updatePagedItems<AdminSpace>(queryClient, ADMIN_SPACES_QUERY_KEY, item => (item.id === updated.id ? updated : item))
         await refresh()
       },
       refresh: refreshAfterUnknown,
@@ -224,6 +239,7 @@ export function AdminSpacesPage() {
           </NativeSelect>
         </div>
       </div>
+      <StillRefreshingLine background={background} />
       <PagedTable
         ref={tableRef}
         query={spaces}

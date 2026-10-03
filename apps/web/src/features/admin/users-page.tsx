@@ -1,4 +1,5 @@
 import type { AdminUser, UserStatus } from '@nerve-office/contracts'
+import type { BackgroundRefresh } from '../../shared/api/write-outcome.ts'
 import type { PendingConfirmation } from '../confirmation/index.ts'
 import type { IssuedLink } from './issued-link-dialog.tsx'
 import type { PagedTableHandle } from './paged-table.tsx'
@@ -7,10 +8,12 @@ import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-quer
 import { useId, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { describeError, isUnknownOutcome } from '../../shared/api/index.ts'
+import { refreshAfterSuccess } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { adminUserDocumentsPath } from '../../shared/lib/admin-paths.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
+import { updatePagedItems } from '../../shared/lib/paged-cache.ts'
 import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { useSessionRecheck } from '../../shared/lib/session-recheck.ts'
 import { useDebouncedValue } from '../../shared/lib/use-debounced-value.ts'
@@ -20,7 +23,7 @@ import { OWN_DISABLE_AFTER_UNKNOWN, OWN_RESET_AFTER_UNKNOWN, sessionQueryOptions
 import { ConfirmDialog } from '../confirmation/index.ts'
 import { ADMIN_QUERY_KEY, adminUsersQueryOptions, changeSystemRole, disableUser, enableUser, issuePasswordReset, unlockLogin } from './admin-api.ts'
 import { IssuedLinkDialog } from './issued-link-dialog.tsx'
-import { PagedTable } from './paged-table.tsx'
+import { PagedTable, StillRefreshingLine } from './paged-table.tsx'
 
 const text = adminMessages.users
 
@@ -76,14 +79,24 @@ export function AdminUsersPage() {
    * 结果未知的那一刻就先按同一个原因确认一次会话（确认的弹窗的 refresh，第三批 R-1）：会话已经撤销的话，不必等再试就回到登录页
    */
   const [ownUnsure, setOwnUnsure] = useState<keyof typeof OWN_AFTER_UNKNOWN>()
+  /** 写操作成功之后、到了时限还在后台的刷新（Codex 对抗评审 CX4）：表格上方说列表还在刷新 */
+  const [background, setBackground] = useState<BackgroundRefresh>()
   const tableRef = useRef<PagedTableHandle>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const searchId = useId()
   const statusId = useId()
 
-  /** 成功之后刷新账户列表：刷新失败时列表自己显示加载失败，不算这个操作失败 */
+  /**
+   * 成功之后刷新账户列表，最多等到时限（Codex 对抗评审 CX4）：一直不回来时操作照常结束，表格上方说列表还在刷新。
+   * 刷新失败不算这个操作失败，表格自己说明没能刷新（CX5）
+   */
   async function refresh(): Promise<void> {
-    await refreshQueries(queryClient, [USERS_QUERY_KEY], { throwOnError: false })
+    setBackground(await refreshAfterSuccess(async () => refreshQueries(queryClient, [USERS_QUERY_KEY])))
+  }
+
+  /** 按确定的写入结果先换上这个账户的那一行（CX4）：刷新一直不回来时，这一行也已经是操作之后的样子（打开确认框的按钮随之换掉） */
+  function replaceRow(updated: AdminUser): void {
+    updatePagedItems<AdminUser>(queryClient, USERS_QUERY_KEY, item => (item.id === updated.id ? updated : item))
   }
 
   /** 确认的弹窗在结果未知之后的刷新：刷新失败时拒绝，弹窗据此说明页面没能刷新（M2-P6 复核第三批 G-a） */
@@ -101,12 +114,12 @@ export function AdminUsersPage() {
    * 停用与启用、改系统角色、解除锁定：先确认，再执行。结果未知时（M2-P6 复核第二批 G-2）确认的弹窗刷新账户列表、说明可能已经生效
    * （这些操作按状态幂等，再试安全）；刷新失败时说明页面没能刷新（第三批 G-a）
    */
-  function confirmThen(user: AdminUser, confirmation: Omit<PendingConfirmation, 'run' | 'refresh' | 'returnFocus'>, action: () => Promise<unknown>): void {
+  function confirmThen(user: AdminUser, confirmation: Omit<PendingConfirmation, 'run' | 'refresh' | 'returnFocus'>, action: () => Promise<AdminUser>): void {
     const own = user.id === session.data?.user.id
     setPending({
       ...confirmation,
       run: async () => {
-        await action()
+        replaceRow(await action())
         // 改的是自己的账户：先向服务端确认会话，页面随之切到无权限或者整页离开
         if (own)
           await recheckSession()
@@ -284,6 +297,7 @@ export function AdminUsersPage() {
           </NativeSelect>
         </div>
       </div>
+      <StillRefreshingLine background={background} />
       <PagedTable
         ref={tableRef}
         query={users}

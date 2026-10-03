@@ -4,6 +4,7 @@ import { useId, useState } from 'react'
 import { describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { Alert, AlertDescription, Button, Label, NativeSelect, Skeleton } from '../../shared/ui/index.ts'
+import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { folderChildrenQueryOptions } from './folders-api.ts'
 
 const text = messages.organize
@@ -109,6 +110,8 @@ export function DestinationForm({ panelId, action, spaces, current, excludeFolde
         {!children.isPending && children.data === undefined && (
           <span role="alert" className="text-sm text-destructive">{text.targetLoadFailed(describeError(children.error).message)}</span>
         )}
+        {/* 留着之前的子文件夹、刷新却失败了（例如结果未知之后的刷新，Codex 对抗评审 CX5）：明说没能刷新、给出重试 */}
+        <RefreshProblem query={children} list={text.targetLocation} className="basis-full" />
         {children.data !== undefined && (choices.length === 0
           ? <span className="text-sm text-muted-foreground">{text.targetEmpty}</span>
           : (

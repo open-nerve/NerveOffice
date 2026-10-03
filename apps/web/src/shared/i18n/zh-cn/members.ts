@@ -38,6 +38,12 @@ export const membersMessages = {
   /** 要移出的人已经不是成员了（404）：成员列表已刷新，确认的弹窗随之关闭，在成员表上方说明（M2-P2 复验） */
   alreadyRemoved: <T>(name: T): Phrase<T> => [name, ' 已经不在成员里了（可能已被别人移出），列表已刷新'],
   alreadyRemovedSelf: '你已经不在成员里了（可能已被别人移出），列表已刷新',
+  /**
+   * 移出、降低自己成功之后的刷新到了时限还没回来（Codex 对抗评审 CX4）：平时不另外说明（成员表随即刷新，看得见）；这时在成员表上方说明
+   * 已经做完，接着说成员列表还在刷新（这一行已经按确定的写入结果改好）
+   */
+  removed: <T>(name: T): Phrase<T> => ['已把 ', name, ' 移出这个空间'],
+  demotedSelf: (role: SpaceRole) => `已把你的角色改为${messages.spaces.roleName(role)}`,
   confirmDemoteSelf: (role: SpaceRole) => `把你自己的角色改为${messages.spaces.roleName(role)}？`,
   demoteSelfDescription: '改完之后你立即失去空间管理员的权限，只能由另一位空间管理员或系统管理员改回来。',
   change: '修改',

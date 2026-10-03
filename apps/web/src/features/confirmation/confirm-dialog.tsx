@@ -29,7 +29,10 @@ export interface PendingConfirmation {
    * （生成重置链接、重新生成邀请就是这样）。交回的话，确认的弹窗已经关掉、交回的事随即执行，那一刻页面在新弹窗的 aria-hidden 之下、
    * 焦点在新弹窗里，写进去的读屏多半不播报（M2-P5 复验第二轮 S2）。
    * 约定：run 自己关掉弹窗的，放在最后一次 await 之后（关掉之后不再等别的）：页面上的确认共用这一个弹窗的执行状态，关掉之后还在等的话，
-   * 这期间打开的别的确认会显示"正在处理…"、关不掉，之后的失败也会带到下一次打开的弹窗里（第三批修复时发现，现有的流程都是最后才关）
+   * 这期间打开的别的确认会显示"正在处理…"、关不掉，之后的失败也会带到下一次打开的弹窗里（第三批修复时发现，现有的流程都是最后才关）。
+   * 约定：写入成功之后要等的刷新经 shared/api/write-outcome.ts 的 refreshAfterSuccess（有时限，Codex 对抗评审 CX4），不直接 await 刷新：
+   * 刷新一直不回来时 run 也就一直不结束，弹窗停在"正在处理…"、关不掉。到了时限 run 照常交回说明（说列表还在刷新），
+   * 界面要依赖刷新结果才对的（例如那一行要先消失），run 先按确定的写入结果改缓存
    */
   readonly run: () => Promise<AfterConfirmed | void>
   /**
@@ -100,7 +103,9 @@ export function ConfirmDialog({ pending, onClose, meta }: ConfirmDialogProps) {
    * - run 自己先关掉了弹窗：同样在结果出来时清掉，这期间没有弹窗可关；
    * - 组件卸下：标记随组件一起丢掉，不用清。
    * 组件在时观察者一直挂在这次操作上（进行中不 reset、不再 mutate），结果总会以成功或失败二者之一通知到（回调本身出错也一样），
-   * 标记不会一直留着、弹窗不会再也关不掉
+   * 标记不会一直留着、弹窗不会再也关不掉——前提是 run 会结束：写入之后要等的刷新都有时限，成功之后的经 refreshAfterSuccess
+   * （Codex 对抗评审 CX4：原来成功之后 await 的刷新没有时限，刷新的请求一直不回来时弹窗就一直关不掉），失败之后的经
+   * refreshIfUnknown（第三批 S-a），都在 shared/api/write-outcome.ts。写操作的请求本身没有应用层的时限，靠浏览器与网络的超时结束
    */
   const confirmingRef = useRef(false)
   const mutation = useMutation({

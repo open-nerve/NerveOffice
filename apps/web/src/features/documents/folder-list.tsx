@@ -86,15 +86,15 @@ function FolderRow({ folder, folderIds, targetSpaces, open, openTriggerRef, onTo
           operations={{
             rename: async (name) => {
               await updateFolder(folder.id, { name })
-              await refresh([folder.spaceId])
+              return refresh([folder.spaceId])
             },
             move: async (destination) => {
               await moveFolder(folder.id, { spaceId: destination.spaceId, ...(destination.folderId === undefined ? {} : { folderId: destination.folderId }) })
-              await refresh([folder.spaceId, destination.spaceId])
+              return refresh([folder.spaceId, destination.spaceId])
             },
             remove: async () => {
               await deleteFolder(folder.id)
-              await refresh([folder.spaceId])
+              return refresh([folder.spaceId])
             },
             refresh: async destination => refreshAfterUnknown([folder.spaceId, ...(destination === undefined ? [] : [destination.spaceId])]),
           }}
