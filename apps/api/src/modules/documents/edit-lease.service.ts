@@ -15,6 +15,7 @@ import { DocumentsRepository } from './documents.repository.ts'
 import { currentLeaseLoss, interruptionOf, isSamePage, releasableBy, requestLeaseLoss } from './edit-lease-rules.ts'
 import { editLeaseTokenDigest, generateEditLeaseToken } from './edit-lease-token.ts'
 import { EditLeasesRepository } from './edit-leases.repository.ts'
+import { revisionSourceFor } from './revision-source.ts'
 
 /** 编辑权的调用者（M3-P1 设计 §3.4）：账户与这次登录——租约绑定"这个标签页、这次登录"，判断别人的租约也要知道是不是自己 */
 export interface EditingActor {
@@ -94,7 +95,8 @@ export class EditLeaseService {
    * 有效时：同一个登录、同一个标签页的是这个页面的重试（例如上次申请的回包丢了），照样发新的一代；别人的（含自己在别处的）就是被占用，
    * 什么也不写 → 文档的代次加一、生成令牌、改写租约行 → 上一个租约异常结束、而且在 30 分钟以内时给出提醒。
    * 修订号取锁下的文档行：页面拿它与自己载入的比较。连同这一版的来源（这一条修订记录的标签页与本地序号，与修订号冲突的详情
-   * 同一个取法）：续上时页面据此认出期间的那一版是不是本页自己一次结果未知的保存（00 号计划书 §7.5）
+   * 同一个取法，只给保存这一版的人本人，见 revisionSourceFor）：续上时页面据此认出期间的那一版是不是本页自己一次结果未知的保存
+   * （00 号计划书 §7.5）
    */
   async acquire(actor: EditingActor, documentId: string, clientInstanceId: string, transaction: Transaction): Promise<LeaseAcquisition> {
     await requireDocumentContent(this.policy, actor.userId, await this.documents.findById(documentId, transaction), ['edit'], transaction)
@@ -127,7 +129,7 @@ export class EditLeaseService {
       token,
       writeEpoch,
       revision: document.revision,
-      source: revision?.source ?? null,
+      source: revisionSourceFor(revision, actor.userId),
       expiresAt: lease.expiresAt,
       interruption: interruptionOf(current, loss),
     }

@@ -228,6 +228,31 @@ describe('申请、心跳、释放与编辑状态（P1 设计 §3.4.2、§3.4.3�
     expect(await acquired(sessionOf(amy), copy.id)).toMatchObject({ revision: 1, source: null })
   })
 
+  it('US-M3-11 当前修订的来源只给保存它的人本人（M3-P1 复验 C4）：别人申请、别人基于旧修订号保存得到的冲突详情里都是 null；本人在另一个标签页照样得到（页面再按标签页比较）', async () => {
+    const document = await freshDocument()
+    const raw = zlib.gzipSync(Buffer.from(sheetSnapshotFor(document.unitId), 'utf8'))
+    const amyTab = randomUUID()
+    const amys = await acquired(sessionOf(amy), document.id, amyTab)
+    const saved = await saveContent(app.baseUrl, sessionOf(amy), document.id, raw, { baseRevision: 1, localSeq: 5, lease: { token: amys.token, writeEpoch: amys.writeEpoch, clientInstanceId: amyTab } })
+    expect(saved.status, await saved.clone().text()).toBe(200)
+    expect((await release(sessionOf(amy), document.id, amys.token)).status).toBe(204)
+
+    // 别人：申请的响应与冲突的详情都不给来源
+    const benTab = randomUUID()
+    const bens = await acquired(sessionOf(ben), document.id, benTab)
+    expect(bens).toMatchObject({ revision: 2, source: null })
+    const conflict = await saveContent(app.baseUrl, sessionOf(ben), document.id, raw, { baseRevision: 1, lease: { token: bens.token, writeEpoch: bens.writeEpoch, clientInstanceId: benTab } })
+    expect(await errorOf(conflict)).toMatchObject({ status: 409, code: 'DOCUMENT_REVISION_CONFLICT', details: { currentRevision: 2, source: null } })
+    expect((await release(sessionOf(ben), document.id, bens.token)).status).toBe(204)
+
+    // 本人在另一个标签页：照样给出，冲突的详情也一样
+    const otherTab = randomUUID()
+    const again = await acquired(sessionOf(amy), document.id, otherTab)
+    expect(again).toMatchObject({ revision: 2, source: { clientInstanceId: amyTab, localSeq: 5 } })
+    const own = await saveContent(app.baseUrl, sessionOf(amy), document.id, raw, { baseRevision: 1, lease: { token: again.token, writeEpoch: again.writeEpoch, clientInstanceId: otherTab } })
+    expect(await errorOf(own)).toMatchObject({ status: 409, code: 'DOCUMENT_REVISION_CONFLICT', details: { currentRevision: 2, source: { clientInstanceId: amyTab, localSeq: 5 } } })
+  })
+
   it('US-M3-04 编辑状态：能读就能看；有效的租约给出持有者（"人"的结构）、最后活动时间与是不是调用者自己；没有时为 null', async () => {
     const document = await freshDocument()
     expect(await status(sessionOf(vic), document.id)).toEqual({ revision: 1, editor: null })

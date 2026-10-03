@@ -70,7 +70,7 @@ export class DocumentEditingService {
     })
   }
 
-  /** 释放（204）：令牌是当前这一行的、而且没有明确结束才记 released，其余什么也不做 */
+  /** 释放（204）：令牌是当前这一行的、没有明确结束、调用者是持有者本人（不要求同一个登录）才记 released，其余什么也不做 */
   async release(actor: EditingActor, documentId: string, token: string | undefined): Promise<void> {
     await this.transactions.run(async transaction => this.leases.release(actor, documentId, token, transaction))
   }

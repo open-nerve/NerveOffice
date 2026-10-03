@@ -211,6 +211,19 @@ describe('DocumentContentService.save', () => {
     expect(store.documents.get(document.id)?.revision).toBe(2)
   })
 
+  it('当前修订是别人保存的：冲突的来源为 null（只给保存它的人本人，M3-P1 复验 C4）', async () => {
+    const { store, service } = setup()
+    store.setMember(TEAM_SPACE, ALICE, 'editor')
+    store.setMember(TEAM_SPACE, BOB, 'editor')
+    const shared = teamDocument(store)
+    store.addRevision({ documentId: shared.id, revision: 1, kind: 'created', requestId: randomUUID(), payloadDigest: Buffer.alloc(32), source: null, savedBy: ALICE })
+    holding(store, shared.id, BOB)
+    await service.save(saver(BOB), shared.id, query({ localSeq: 9 }), upload(shared.unitId), HTTP_ORIGIN)
+    holding(store, shared.id, ALICE)
+    const error = await rejection(service.save(saver(ALICE), shared.id, query({ baseRevision: 1 }), upload(shared.unitId, ',"x":1'), HTTP_ORIGIN))
+    expect([error.code, error.details]).toEqual(['DOCUMENT_REVISION_CONFLICT', { currentRevision: 2, source: null }])
+  })
+
   it('当前修订是新建出来的：冲突的来源为 null', async () => {
     const { service, document } = setup()
     const error = await rejection(service.save(saver(ALICE), document.id, query({ baseRevision: 7 }), upload(document.unitId), HTTP_ORIGIN))

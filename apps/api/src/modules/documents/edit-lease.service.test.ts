@@ -89,11 +89,18 @@ describe('EditLeaseService.acquire', () => {
     created.store.addRevision({ documentId: created.document.id, revision: 3, kind: 'created', requestId: 'request-created', payloadDigest: Buffer.alloc(32), source: null, savedBy: ALICE })
     expect(await created.service.acquire(AMY, created.document.id, TAB, TRANSACTION)).toMatchObject({ kind: 'acquired', revision: 3, source: null })
 
+    // 本人在另一个标签页保存的：照样给出（页面再按标签页比较）
     const saved = setup()
     for (const [revision, localSeq] of [[2, 4], [3, 7]] as const)
-      saved.store.addRevision({ documentId: saved.document.id, revision, kind: 'saved', requestId: `request-${revision}`, payloadDigest: Buffer.alloc(32), source: { clientInstanceId: OTHER_TAB, localSeq }, savedBy: BOB })
+      saved.store.addRevision({ documentId: saved.document.id, revision, kind: 'saved', requestId: `request-${revision}`, payloadDigest: Buffer.alloc(32), source: { clientInstanceId: OTHER_TAB, localSeq }, savedBy: ALICE })
     expect(await saved.service.acquire(AMY, saved.document.id, TAB, TRANSACTION)).toMatchObject({ kind: 'acquired', revision: 3, source: { clientInstanceId: OTHER_TAB, localSeq: 7 } })
     expect(saved.store.repositories.revisions.findByRevision).toHaveBeenCalledWith(saved.document.id, 3, TRANSACTION)
+  })
+
+  it('当前修订是别人保存的：来源为 null（只给保存它的人本人，M3-P1 复验 C4）——标签页标识是页面自报的，给了别人就能被照着伪造', async () => {
+    const { store, service, document } = setup()
+    store.addRevision({ documentId: document.id, revision: 3, kind: 'saved', requestId: 'request-3', payloadDigest: Buffer.alloc(32), source: { clientInstanceId: TAB, localSeq: 7 }, savedBy: BOB })
+    expect(await service.acquire(AMY, document.id, TAB, TRANSACTION)).toMatchObject({ kind: 'acquired', revision: 3, source: null })
   })
 
   it('这次登录在两把锁之后再核对（M3-P1 审查 A1）：守卫之后被撤销（退出、签发重置、换令牌）时 401 SESSION_EXPIRED，什么也不写', async () => {

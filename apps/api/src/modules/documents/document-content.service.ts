@@ -21,6 +21,7 @@ import { requestLeaseLoss } from './edit-lease-rules.ts'
 import { requireActiveLogin } from './edit-lease.service.ts'
 import { EditLeasesRepository } from './edit-leases.repository.ts'
 import { savedPayloadDigest } from './payload-digest.ts'
+import { revisionSourceFor } from './revision-source.ts'
 import { validateSnapshot } from './snapshot-validation.ts'
 
 /** 读取到的内容：gzip 压缩的快照 JSON 字节，与它对应的修订号（ETag）。 */
@@ -101,7 +102,7 @@ export class DocumentContentService {
       if (snapshot.unitId !== document.unitId)
         throw new AppError('SNAPSHOT_INVALID', '表格内容不属于这份文档')
       if (query.baseRevision !== document.revision)
-        throw await this.conflict(document, transaction)
+        throw await this.conflict(saver.userId, document, transaction)
 
       const next = document.revision + 1
       const revision = await this.revisions.insert({
@@ -164,10 +165,13 @@ export class DocumentContentService {
     return toSaved(previous)
   }
 
-  /** 修订号冲突，详情带当前修订号及其来源：客户端据此判断是不是"自己追自己"（P4 设计 §3.5.2）。 */
-  private async conflict(document: DocumentRow, transaction: Transaction): Promise<AppError> {
+  /**
+   * 修订号冲突，详情带当前修订号及其来源：客户端据此判断是不是"自己追自己"（P4 设计 §3.5.2）。
+   * 来源只给保存这一版的人本人，别人看到 null（revisionSourceFor，M3-P1 复验 C4）
+   */
+  private async conflict(userId: string, document: DocumentRow, transaction: Transaction): Promise<AppError> {
     const current = await this.revisions.findByRevision(document.id, document.revision, transaction)
-    const details: RevisionConflictDetails = { currentRevision: document.revision, source: current?.source ?? null }
+    const details: RevisionConflictDetails = { currentRevision: document.revision, source: revisionSourceFor(current, userId) }
     return new AppError('DOCUMENT_REVISION_CONFLICT', undefined, { details })
   }
 }

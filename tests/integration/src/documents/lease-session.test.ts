@@ -2,6 +2,7 @@
 // 会话守卫在处理器之前判断登录；之后到写入之前还隔着上传正文（拦截器在守卫之后才读正文，时长由客户端决定）与等锁，
 // 这期间退出、签发重置（撤销这个人的全部登录）、停用都不经文档行与租约行，挡不住在途的请求。所以持有者自己的请求——保存、心跳、申请——
 // 在事务里、锁下再核对一次这次登录仍然有效（edit-lease.service.ts 的 requireActiveLogin），失效时 401，什么也不写。
+// 保存先查重放、再核对登录：一次已经提交的保存原样重发，拿到原来的结果（重放只要求能访问：ADR-011，上线门槛 A07），撤销登录之后也一样。
 // 由审查者 A 的探针改成的回归用例：持锁的交错用 support/held-lock.ts；慢上传那一条用"守卫顺延了这次登录"确认请求已经过了守卫，不靠固定的等待。
 import type pg from 'pg'
 import type { TestAccount } from '../support/accounts.ts'
@@ -183,6 +184,28 @@ describe('US-M3-09 登录被撤销之后，已经过了会话守卫的在途请�
     })
     expect(await outcomeOf(saved)).toBe('401 SESSION_EXPIRED')
     expect(await writesOf(document.id)).toEqual(UNTOUCHED)
+  })
+
+  it('US-M3-13 重放先于登录的再核对（M3-P1 复验 C2）：已经提交的保存原样重发、等在文档行上时本人退出登录——放行之后是重放，拿到原来的结果（200），不重复写入，不是 401', async () => {
+    const { account, session } = await editor()
+    const document = await freshDocument()
+    const lease = await acquireLease(app.baseUrl, session, document.id)
+    const requestId = randomUUID()
+    const body = snapshotOf(document, '提交过一次的')
+    const first = await saveContent(app.baseUrl, session, document.id, body, { baseRevision: 1, lease, requestId })
+    expect(first.status, await first.clone().text()).toBe(200)
+    const original: unknown = await first.json()
+    // 回包丢了，页面原样重发；重发停在文档行上时本人退出登录（先提交）
+    const replayed = await raceAgainstHeldLock(database, {
+      hold: holdDocument(document.id),
+      request: async () => saveContent(app.baseUrl, session, document.id, body, { baseRevision: 1, lease, requestId }),
+      change: async () => {
+        expect((await asUser(app.baseUrl, session, '/api/auth/logout', { method: 'POST' })).status).toBe(204)
+        expect(await activeSessionsOf(account.id)).toBe(0)
+      },
+    })
+    expect({ status: replayed.status, body: await replayed.json() }).toEqual({ status: 200, body: original })
+    expect(await writesOf(document.id)).toEqual({ revision: 2, revisions: 2, saves: 1 })
   })
 
   it('US-M3-09 不用任何锁：保存的请求头先到、过了会话守卫，正文晚些传完，其间签发重置并提交——401，什么也没写', async () => {

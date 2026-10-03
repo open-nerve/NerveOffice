@@ -9,7 +9,8 @@
 // - 请求带的租约（requestLeaseLoss，心跳与保存）：持有者自己的请求。先要令牌对得上，第 6 条换成"请求的登录、标签页就是
 //   租约绑定的那一个"——换过令牌的页面拿的是新的登录，按 session 失效。"这次登录现在仍然有效"不在这里判断：调用方在事务里、
 //   锁下另查一次（edit-lease.service.ts 的 requireActiveLogin，M3-P1 审查 A1），失效时回 SESSION_EXPIRED。
-// 另有申请时的重试（isSamePage：同一个登录、同一个标签页）、释放（releasableBy：令牌对得上、没有明确结束）与异常结束的提醒（interruptionOf）。
+// 另有申请时的重试（isSamePage：同一个登录、同一个标签页）、释放（releasableBy：令牌对得上、没有明确结束、调用者是持有者本人——
+// 不要求同一个登录，也不核对登录）与异常结束的提醒（interruptionOf）。
 import type { EditLeaseLostReason } from '@nerve-office/contracts'
 import type { ObservedEditLease } from './edit-leases.repository.ts'
 import { EDIT_INTERRUPTION_NOTICE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@nerve-office/contracts'
