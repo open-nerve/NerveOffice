@@ -46,9 +46,11 @@ async function notFoundSpace(page: Page, spaceId: string): Promise<string> {
   return page.getByRole('main').innerText()
 }
 
-/** 文档被删除、移走或失去权限之后的保存：说明存不进去了（与 editor/access.spec.ts 相同的一句） */
-// 读不到这份文档了：编辑权失效的说明（M3-P1 起保存与心跳得知 404 都转为编辑权失效，说明相同）
-const GONE = '编辑权已失效：你已无法访问这份文档（可能已被删除、移走，或你失去了访问权限）。本页的修改没有保存，需要的话先把内容复制出来，再重新加载。'
+/**
+ * 文档被删除、移走或失去权限之后的保存：说明存不进去了（与 editor/access.spec.ts 相同的一句）。M3-P1 起保存与心跳得知 404 都转为
+ * 编辑权失效，说明相同；读不到了，不提重新加载（重新加载只会显示"内容不存在"，审查 B2）
+ */
+const GONE = '编辑权已失效：你已无法访问这份文档（可能已被删除、移走，或你失去了访问权限）。本页的修改没有保存，需要的话先把内容复制出来。'
 
 test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
   test('US-M2-14 猜文档地址：看不到的文档与不存在的文档，编辑器页的说法与页头逐字相同；猜空间地址同样', async ({ page, anotherDevice }) => {
@@ -165,6 +167,7 @@ test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
     await saveButton(page).click()
     await expect(saveStatus(page)).toHaveText('编辑权已失效')
     await expect(page.getByRole('alert')).toContainText(GONE)
+    await expect(page.getByRole('alert').getByRole('button', { name: '重新加载' })).toHaveCount(0)
     expect(await revisionOf(workingId)).toBe(1)
 
     // 空间页与不存在的空间逐字相同；导航里没有这个空间了

@@ -319,6 +319,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       lastActivity: () => lastActivity,
       // 续上时的比较：服务端确认过的最新修订（保存状态机建好之前是载入的内容的）
       baseRevision: () => coordinator?.baseRevision() ?? loadedRevision,
+      // 期间的那一版是本页自己一次结果未知的保存：保存状态机按它确认（保存状态机建好之前还没有保存过，不会是）
+      adoptOwnRevision: (revision, source) => coordinator?.adoptOwnRevision(revision, source) ?? false,
       onLost: leaseLost,
       onSessionProblem: leaseSessionProblem,
     })
