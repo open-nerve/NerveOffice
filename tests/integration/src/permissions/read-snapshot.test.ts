@@ -6,14 +6,15 @@
 // 做法（确定的交错，与 Codex 的探针相同）：在应用里包装一个方法加闸门，被测的请求走到那里停住，期间经真实的接口撤权、写入新数据，
 // 并用一个新请求自证撤权已经生效；放行之后闸门调用原来的实现。两类停点：
 // - 已经判断完权限、读数据之前（快照里）：读正文停在 DocumentContentsRepository.findCurrent，搜索停在 DocumentsRepository.searchByTitle；
-// - 处理器开始之前（守卫之后、快照之前）：停在 TransactionRunner.readSnapshot，期间撤销这条会话（签发重置、退出）、停用账户、取消系统管理员。
+// - 处理器开始之前（守卫之后、快照之前）：停在 TransactionRunner.readSnapshot，期间撤销这条会话（签发重置、退出）、这条会话空闲过期、
+//   停用账户、取消系统管理员。
 // 只用真实的 HTTP 与 PostgreSQL，不 mock 数据库
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
 import { TransactionRunner } from '@nerve-office/api'
 import { DocumentContentsRepository, DocumentsRepository } from '@nerve-office/api/testing'
@@ -23,7 +24,7 @@ import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
-import { asUser, login } from '../support/session-client.ts'
+import { asUser, login, SESSION_COOKIE } from '../support/session-client.ts'
 import { createTeamSpace } from '../support/spaces.ts'
 
 let database: TestDatabase
@@ -254,6 +255,46 @@ describe('守卫之后、快照之前撤权：开场核对在快照里再查一�
     })
     const outcome = await errorCodeOf(response)
     expect(outcome.body.includes(marker), '响应里有退出之后才保存的内容').toBe(false)
+    expect([outcome.status, outcome.code]).toEqual([401, 'SESSION_EXPIRED'])
+  })
+
+  /** 这条会话在库里按 Cookie 的摘要找（库里只存摘要） */
+  function digestOf(session: LoggedIn): Buffer {
+    return createHash('sha256').update(session.cookie.slice(`${SESSION_COOKIE}=`.length)).digest()
+  }
+
+  /** 这条会话的空闲过期提前到一秒之前；改到的不是正好一行就直接失败（摘要算错时不会悄悄什么也不改） */
+  async function expireIdle(session: LoggedIn): Promise<void> {
+    const changed = await database.query(async client => (await client.query(
+      'UPDATE auth_sessions SET idle_expires_at = now() - interval \'1 second\' WHERE token_hash = $1',
+      [digestOf(session)],
+    )).rowCount)
+    expect(changed, '库里没有这条会话').toBe(1)
+  }
+
+  /** 这条会话现在的样子：撤销了没有、空闲过期与绝对过期到了没有 */
+  async function sessionStateOf(session: LoggedIn): Promise<{ revoked: boolean, idleExpired: boolean, absoluteExpired: boolean } | undefined> {
+    return database.query(async client => (await client.query<{ revoked: boolean, idleExpired: boolean, absoluteExpired: boolean }>(
+      'SELECT revoked_at IS NOT NULL AS revoked, idle_expires_at <= now() AS "idleExpired", absolute_expires_at <= now() AS "absoluteExpired" FROM auth_sessions WHERE token_hash = $1',
+      [digestOf(session)],
+    )).rows[0])
+  }
+
+  it('读正文时这条会话空闲过期了（没有撤销，账户仍然有效、授权还在），所有者随即保存：401 SESSION_EXPIRED，不返回过期之后保存的内容（M2 Codex 评审第二轮复验的建议 2）', async () => {
+    const { account: viewer, session } = await newPerson()
+    const document = await seedDocument(database, { spaceId: owner.personalSpaceId, createdBy: owner.id, title: '快照：空闲过期' })
+    expect((await asUser(app.baseUrl, ownerSession, `/api/documents/${document.id}/grants/${viewer.id}`, { method: 'PUT', body: { role: 'viewer' } })).status).toBe(200)
+    const marker = `idle-${randomUUID()}`
+    const response = await pausedBeforeSnapshot(async () => read(session, document.id), async () => {
+      await expireIdle(session)
+      // 过期已经生效：新请求被守卫拒绝。拒绝只能来自空闲过期：这条会话没有撤销（守卫拒绝过期的会话时不撤销它）、绝对过期还没到，账户仍然有效
+      expect((await read(session, document.id)).status).toBe(401)
+      expect(await sessionStateOf(session)).toEqual({ revoked: false, idleExpired: true, absoluteExpired: false })
+      expect(await statusOf(viewer.id)).toBe('active')
+      expect((await saveMarker(document.id, document.unitId, marker)).status).toBe(200)
+    })
+    const outcome = await errorCodeOf(response)
+    expect(outcome.body.includes(marker), '响应里有过期之后才保存的内容').toBe(false)
     expect([outcome.status, outcome.code]).toEqual([401, 'SESSION_EXPIRED'])
   })
 

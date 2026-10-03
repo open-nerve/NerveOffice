@@ -14,7 +14,11 @@ import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { cellOf, createSheetThroughApi, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
 
-/** 后端连接数据库时的应用名（apps/api 的连接池） */
+/**
+ * 后端连接数据库时的应用名：与 apps/api 的 APPLICATION_NAME（modules/database/pool.ts）相同，那边改名时这里要同步。
+ * E2E 不依赖后端的包，所以照写一份、不引用（M2 Codex 评审第二轮复验的一般 5）。没有同步时，下面的轮询认不出后端在等锁的会话，
+ * 15 秒后明显失败，不会悄悄通过
+ */
 const API_APPLICATION_NAME = 'nerve-office-api'
 
 /** 后端在等锁的会话（测试直连数据库锁住内容行时，后端的保存事务停在这里）的进程号 */

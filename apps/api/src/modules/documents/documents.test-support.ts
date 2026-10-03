@@ -10,7 +10,7 @@ import type { CurrentContent, DocumentContentsRepository, StoredSnapshot } from 
 import type { DocumentGrantsRepository, GrantRow, NewGrant } from './document-grants.repository.ts'
 import type { DocumentRevisionsRepository, NewRevision, RevisionRow } from './document-revisions.repository.ts'
 import type { AccessibleScope, CopiedDocument, DocumentRow, DocumentsRepository, GrantedDocumentRow, ListOptions, NewDocument, PageOptions, SearchOptions, SearchRow } from './documents.repository.ts'
-import type { FolderAncestorRow, FolderRow, FoldersRepository, NewFolder, SubtreeMove, SubtreeSummary } from './folders.repository.ts'
+import type { CreatedFolderRow, FolderAncestorRow, FolderRow, FoldersRepository, NewFolder, SubtreeMove, SubtreeSummary } from './folders.repository.ts'
 import type { SpaceTreeRepository } from './space-tree.repository.ts'
 import type { NewTrashEntry, TrashEntriesRepository, TrashEntryRow } from './trash-entries.repository.ts'
 import type { WriteAccessRevocation, WriteAccessScope } from './write-access.ts'
@@ -344,7 +344,11 @@ export class FakeStore {
     /** 内存里的目录树：层数与父子关系与真实仓储一致，SQL 本身由集成测试覆盖 */
     folders: {
       findById: vi.fn(async (id: string) => this.entryOfFolder(id) === null ? this.folders.get(id) : undefined),
-      findByRequestId: vi.fn(async (requestId: string) => [...this.folders.values()].find(row => row.requestId === requestId)),
+      /** 与真实仓储一样，回收站里的也找出来，带上现在的状态（M2 Codex 评审第二轮复验的一般 4） */
+      findByRequestId: vi.fn(async (requestId: string): Promise<CreatedFolderRow | undefined> => {
+        const row = [...this.folders.values()].find(stored => stored.requestId === requestId)
+        return row === undefined ? undefined : { ...row, status: this.entryOfFolder(row.id) === null ? 'active' : 'trashed' }
+      }),
       listChildren: vi.fn(async (spaceId: string, parentId: string | null) => [...this.folders.values()]
         .filter(row => row.spaceId === spaceId && row.parentId === parentId)
         .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()) || a.id.localeCompare(b.id))

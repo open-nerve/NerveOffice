@@ -48,8 +48,6 @@ export interface HeldLockRace<T> {
 /** 最多等多久：比应用的锁等待上限（5 秒）长也没关系，请求先结束就立即失败（见 waitUntilBlocked） */
 const WAIT_TIMEOUT_MS = 10_000
 
-/** 应用的连接池的 application_name（apps/api 的 database 模块）：cancelWhenWaiting 只取消应用的连接，测试自己的连接不设它 */
-
 /** 这个连接在数据库里的进程号 */
 async function backendPidOf(client: pg.Client): Promise<number> {
   const pid = (await client.query<{ pid: number }>('SELECT pg_backend_pid() AS pid')).rows[0]?.pid

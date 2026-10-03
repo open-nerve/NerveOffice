@@ -90,6 +90,7 @@ export class FoldersService {
    * - 重放只看那个文件夹现在所在的空间还看不看得到（00 号计划书 §7.4 第 2 步的同一条规则）：建好之后被降为查看者、空间被归档，
    *   重发同一个请求照样拿到它，而不是 403（M2-P6 复核 A 的 S-4）；它被移到我看得到的空间、原来的空间我已经看不到了，
    *   同样是重放——原来先要求请求里的空间仍然看得到，这时回 404，客户端会当作没有建成；
+   * - 它进了回收站：按"看不到"回答（REQUEST_ID_CONFLICT），同样不看这次请求里的空间，与新建文档一致（M2 Codex 评审第二轮复验的一般 4）；
    * - 重放不取锁（不让结构性的改动为它排队），也不要求这次请求的空间能新建；不是重放才要求能新建、取锁、锁下再判断。
    * 响应带 replayed：重放为真，客户端据此说明"上一次其实已经完成"（M2-P6 复核第二批 S-1）。
    */
@@ -328,15 +329,19 @@ export class FoldersService {
   }
 
   /**
-   * 同一个 requestId 已经建过文件夹：是同一个人的同一次新建（新建时存下的请求摘要与这次的相同），而且这个人现在仍能看到
-   * 它所在的空间，才返回那个文件夹现在的样子（标为重放），权限按它现在所在的空间给；否则拒绝（REQUEST_ID_CONFLICT），
+   * 同一个 requestId 已经建过文件夹：是同一个人的同一次新建（新建时存下的请求摘要与这次的相同），它不在回收站里，而且这个人
+   * 现在仍能看到它所在的空间，才返回那个文件夹现在的样子（标为重放），权限按它现在所在的空间给；否则拒绝（REQUEST_ID_CONFLICT），
    * 不透露它的任何信息。与新建文档的重放同一个做法（document-creation.service.ts）：按不可变的请求摘要判断，再重新判断现在的访问权。
    * 原来拿请求与文件夹现在的名称、位置比较（M2 Codex 评审 CX6）：建好之后改名或移动过（同一个空间里、跨空间），原样的重试
    * 被判成冲突，客户端随即放弃这个标识、可能让人重建一次；载荷不同、却碰巧与现状相同的请求反而被当成重放。
-   * 只看它现在所在的空间，不看这次请求里的空间（M2 Codex 评审复验的一般 4）：跨空间移动之后，原来的空间看不看得到都不影响重放
+   * 只看它现在所在的空间，不看这次请求里的空间（M2 Codex 评审复验的一般 4）：跨空间移动之后，原来的空间看不看得到都不影响重放。
+   * 进了回收站的按"看不到"回答（M2 Codex 评审第二轮复验的一般 4）：回收站里的东西对普通接口一律不存在（M2-P4，见 trash.service.ts），
+   * 新建文档的重放按 id 只找正常状态的文档，同样是 REQUEST_ID_CONFLICT；恢复之后原样重发又是重放
    */
   private async replay(actor: Actor, digest: Buffer, previous: CreatedFolderRow, transaction: Transaction): Promise<CreatedFolder> {
     if (previous.createdBy !== actor.userId || !previous.payloadDigest.equals(digest))
+      throw new AppError('REQUEST_ID_CONFLICT')
+    if (previous.status !== 'active')
       throw new AppError('REQUEST_ID_CONFLICT')
     const access = await this.policy.spaceAccessOf(actor, previous.spaceId, transaction)
     if (access?.role === undefined)

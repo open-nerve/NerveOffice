@@ -4,6 +4,9 @@
 // 本人重放只要求仍能访问（00 号计划书 §7.4 第 2 步，M2-P6 复核 A 的 S-4）：提交之后被降为查看者、空间被归档，
 // 重发同一个请求拿到原来的结果（保存、新建文档、新建文件夹一致），不是 403——客户端会把 403 当作"没有提交"。
 // 新建文件夹与新建文档一样先查重放（M2 Codex 评审复验的一般 4）：只看它现在所在的空间，看得到是重放，看不到是 409。
+// 同一个新建文件夹的请求两次同时到达：后拿到空间树的锁的一方在锁下查到前一方建好的，按重放回答（M2 Codex 评审第二轮复验的建议 1）；
+// 进了回收站之后原样重发，新建文件夹与新建文档一样是 409，不论这次请求里的空间能新建、只能看还是已经看不到（第二轮复验的一般 4）。
+import type pg from 'pg'
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
@@ -11,13 +14,14 @@ import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
-import { errorResponseSchema, sheetSnapshotFor } from '@nerve-office/contracts'
+import { createdFolderSchema, errorResponseSchema, sheetSnapshotFor } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
+import { raceAgainstHeldLock } from '../support/held-lock.ts'
 import { asUser, login } from '../support/session-client.ts'
 import { createTeamSpace, setMember, setSpaceState } from '../support/spaces.ts'
 
@@ -262,5 +266,77 @@ describe('新建文件夹的重放按新建时的请求（M2 Codex 评审 CX6）
     expect(created.status).toBe(201)
     expect((await asUser(app.baseUrl, aliceSession, `/api/folders/${created.folder.id}`, { method: 'PATCH', body: { name: '已整理' } })).status).toBe(200)
     await expectConflict(await asUser(app.baseUrl, aliceSession, '/api/folders', { method: 'POST', body: { ...request, name: '已整理' } }))
+  })
+})
+
+/**
+ * 同一个新建文件夹的请求两次同时到达（结果未知之后的重试赶上了还在路上的原请求；M2 Codex 评审复验的一般 4 加上的"锁下再查一次重放"，
+ * 第二轮复验的建议 1 补上这条回归）：两次都在锁外查不到，走到空间树的锁上排队；后拿到锁的一方在锁下再查一次，看到前一方建好并提交的，
+ * 按重放回答，而不是插入时撞上 requestId 的唯一约束、回 409。这一步成立靠的是数据库的语义——事务级的 advisory lock 到提交才放开，
+ * READ COMMITTED 下拿到锁之后的语句看得到前一方已经提交的行——只有真实的数据库证明得了，单元测试的假仓储证明不了。
+ * 交错是确定的（support/held-lock.ts）：测试的连接持着这个空间的树锁（与结构性改动的第一步同一个键），等两次请求都在锁上等着了再放开
+ */
+describe('新建文件夹：同一个请求的两次同时到达（锁下再查一次重放，M2 Codex 评审第二轮复验的建议 1）', () => {
+  /** 在持锁的事务里取这个空间的空间树 advisory lock（与结构性改动的第一步同一个键，space-tree.repository.ts） */
+  function holdSpaceTree(spaceId: string) {
+    return async (client: pg.Client) =>
+      client.query('SELECT pg_advisory_xact_lock(hashtextextended(\'nerve-office:space-tree:\' || $1::uuid::text, 0))', [spaceId])
+  }
+
+  it('两次都在空间树的锁上等着，放开之后：一次新建（201、replayed 为假），一次重放（201、replayed 为真、同一个 id），库里只有一行', async () => {
+    const request = { spaceId: alice.personalSpaceId, name: '同时到达的同一个请求', requestId: randomUUID() }
+    const responses = await raceAgainstHeldLock(database, {
+      hold: holdSpaceTree(alice.personalSpaceId),
+      request: async () => Promise.all([
+        asUser(app.baseUrl, aliceSession, '/api/folders', { method: 'POST', body: request }),
+        asUser(app.baseUrl, aliceSession, '/api/folders', { method: 'POST', body: request }),
+      ]),
+      waiting: 2,
+      change: async () => undefined,
+    })
+    expect(responses.map(response => response.status)).toEqual([201, 201])
+    const folders = await Promise.all(responses.map(async response => parseExact(createdFolderSchema, await response.json())))
+    expect(folders.map(folder => folder.replayed).toSorted()).toEqual([false, true])
+    expect(new Set(folders.map(folder => folder.id)).size).toBe(1)
+    expect(await database.query(async client => Number((await client.query<{ count: string }>('SELECT count(*) FROM folders WHERE request_id = $1', [request.requestId])).rows[0]?.count))).toBe(1)
+  })
+})
+
+/**
+ * 进了回收站之后原样重发（M2 Codex 评审第二轮复验的一般 4）：回收站里的东西对普通接口不存在，按"看不到"回答，新建文件夹与新建文档一致。
+ * 原来新建文件夹按 requestId 只找正常状态的，进了回收站的被当成新的请求，回答随这次请求里的空间而变：能新建时插入撞上唯一约束是 409，
+ * 降为查看者是 403，被移出空间是 404——客户端遇到 403、404 会说"新建被拒绝"，实际上却已经建过；新建文档在这三种情况下一律 409
+ */
+describe('进了回收站之后原样重发：新建文件夹与新建文档一样是 409（M2 Codex 评审第二轮复验的一般 4）', () => {
+  /** 这个空间里的文档与文件夹，不论状态 */
+  async function contentsOf(spaceId: string): Promise<{ documents: unknown[], folders: unknown[] }> {
+    return database.query(async client => ({
+      documents: (await client.query('SELECT id, status FROM documents WHERE space_id = $1', [spaceId])).rows,
+      folders: (await client.query('SELECT id, status FROM folders WHERE space_id = $1', [spaceId])).rows,
+    }))
+  }
+
+  it.each([
+    ['仍能新建（空间管理员）', 'admin'],
+    ['降为查看者', 'viewer'],
+    ['被移出空间', undefined],
+  ] as const)('%s：文档与文件夹的重放都是 409，不透露它们，也不再建', async (_name, role) => {
+    spaces += 1
+    const spaceId = await createTeamSpace(database, { name: `幂等：回收站 ${spaces}`, createdBy: rootId, members: { [alice.id]: 'admin' } })
+    const documentRequest = { type: 'sheet', title: '要删的表', spaceId, requestId: randomUUID() }
+    const folderRequest = { spaceId, name: '要删的文件夹', requestId: randomUUID() }
+    const createdDocument = await asUser(app.baseUrl, aliceSession, '/api/documents', { method: 'POST', body: documentRequest })
+    const createdFolder = await asUser(app.baseUrl, aliceSession, '/api/folders', { method: 'POST', body: folderRequest })
+    expect([createdDocument.status, createdFolder.status]).toEqual([201, 201])
+    const ids = { document: ((await createdDocument.json()) as { id: string }).id, folder: ((await createdFolder.json()) as { id: string }).id }
+    expect((await asUser(app.baseUrl, aliceSession, `/api/documents/${ids.document}`, { method: 'DELETE' })).status).toBe(204)
+    expect((await asUser(app.baseUrl, aliceSession, `/api/folders/${ids.folder}`, { method: 'DELETE' })).status).toBe(204)
+
+    if (role !== 'admin')
+      await setMember(database, spaceId, alice.id, role)
+    await expectConflict(await asUser(app.baseUrl, aliceSession, '/api/documents', { method: 'POST', body: documentRequest }))
+    await expectConflict(await asUser(app.baseUrl, aliceSession, '/api/folders', { method: 'POST', body: folderRequest }))
+    // 没有因此再建，回收站里的也没有被恢复出来：这个空间里仍只有那两个，都在回收站里
+    expect(await contentsOf(spaceId)).toEqual({ documents: [{ id: ids.document, status: 'trashed' }], folders: [{ id: ids.folder, status: 'trashed' }] })
   })
 })

@@ -205,6 +205,26 @@ describe('FoldersService.create', () => {
     expect((await errorOf(service.create(member(ALICE), command, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
     expect((await errorOf(service.create(member(ALICE), { ...command, requestId: nextRequestId() }, HTTP_ORIGIN))).code).toBe('NOT_FOUND')
   })
+
+  it('进了回收站：原样重发是冲突（REQUEST_ID_CONFLICT，与新建文档一致），不论这次请求里的空间能新建、只能看还是看不到，都不取锁、不再建；恢复之后又是重放（M2 Codex 评审第二轮复验的一般 4）', async () => {
+    const { store, service } = setup()
+    store.setMember(TEAM_SPACE, ALICE, 'editor')
+    const command = { spaceId: TEAM_SPACE, name: '资料', requestId: nextRequestId() }
+    const first = await service.create(member(ALICE), command, HTTP_ORIGIN)
+    store.folderEntries.set(first.id, 'entry')
+    const locks = store.treeLocks.length
+    for (const role of ['editor', 'viewer', undefined] as const) {
+      store.setMember(TEAM_SPACE, ALICE, role)
+      expect((await errorOf(service.create(member(ALICE), command, HTTP_ORIGIN))).code, `角色：${role ?? '不是成员'}`).toBe('REQUEST_ID_CONFLICT')
+    }
+    expect(store.treeLocks).toHaveLength(locks)
+    expect(store.folders.size).toBe(1)
+    expect(store.audits).toHaveLength(1)
+
+    store.folderEntries.delete(first.id)
+    store.setMember(TEAM_SPACE, ALICE, 'editor')
+    expect(await service.create(member(ALICE), command, HTTP_ORIGIN)).toEqual({ ...first, replayed: true })
+  })
 })
 
 /**

@@ -1,5 +1,5 @@
 // 连接池（P2 设计 §3.3、§3.7）：超时设置取自配置；连接出错不让进程退出（审查 A1）；数据库报错的日志不带参数（审查 A2）；
-// 只读快照进行中，连接池上的查询报错（M2 Codex 评审复验的必须修 1，ADR-017）。
+// 只读快照进行中，连接池上的查询与借连接报错（M2 Codex 评审复验的必须修 1，ADR-017；借连接这一条是第二轮复验的一般 7 补上的）。
 import type { Transaction } from '@nerve-office/api'
 import type { Database } from '@nerve-office/api/testing'
 import type { TestApp } from '../support/api-app.ts'
@@ -99,7 +99,7 @@ describe('连接池', () => {
   })
 })
 
-describe('只读快照进行中，连接池上的查询报错（M2 Codex 评审复验的必须修 1，ADR-017）', () => {
+describe('只读快照进行中，连接池上的查询与借连接报错（M2 Codex 评审复验的必须修 1，ADR-017）', () => {
   /** 连接池拒绝时的说明（apps/api 的 POOL_IN_SNAPSHOT_MESSAGE）：drizzle 把它包在 cause 里 */
   const REFUSED = { cause: expect.objectContaining({ message: expect.stringContaining('只读快照进行中不能在连接池上查询') as unknown }) as unknown }
 
@@ -114,6 +114,20 @@ describe('只读快照进行中，连接池上的查询报错（M2 Codex 评审�
     })).rejects.toMatchObject(REFUSED)
     expect(own).toEqual([{ one: 1 }])
     expect(leaked).toBeUndefined()
+  })
+
+  it('快照里经连接池借连接（在连接池上开事务：仓储自己开事务、独占执行都从这个入口借连接）：同样报错，借不到连接，事务没有开始；快照之外照常借（M2 Codex 评审第二轮复验的一般 7）', async () => {
+    const runner = app.runtime.get(TransactionRunner)
+    const db = app.runtime.get<Database>(DATABASE)
+    let opened = false
+    await expect(runner.readSnapshot(async () => {
+      await db.transaction(async (tx) => {
+        opened = true
+        await tx.execute(sql`SELECT 1`)
+      })
+    })).rejects.toThrow('只读快照进行中不能在连接池上查询或借连接')
+    expect(opened).toBe(false)
+    expect(await db.transaction(async tx => (await tx.execute<{ one: number }>(sql`SELECT 1 AS one`)).rows)).toEqual([{ one: 1 }])
   })
 
   it('快照之外、快照结束之后（快照里排下、结束之后才执行的查询）照常', async () => {

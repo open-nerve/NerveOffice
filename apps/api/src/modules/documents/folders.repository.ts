@@ -1,3 +1,4 @@
+import type { DocumentStatus } from '@nerve-office/contracts'
 import type { SQL } from 'drizzle-orm'
 import type { Buffer } from 'node:buffer'
 import type { Database, Transaction } from '../database/index.ts'
@@ -32,9 +33,11 @@ export interface NewFolder {
   readonly payloadDigest: Buffer
 }
 
-/** 按 requestId 找到的文件夹（新建的重放）：现在的样子，连同新建时存下的请求摘要 */
+/** 按 requestId 找到的文件夹（新建的重放）：现在的样子，连同新建时存下的请求摘要与现在的状态 */
 export interface CreatedFolderRow extends FolderRow {
   readonly payloadDigest: Buffer
+  /** 正常（active）或在回收站里（trashed）：在回收站里的，重放按"看不到"回答（FoldersService 的 replay） */
+  readonly status: DocumentStatus
 }
 
 /** 一棵子树（含根）的摘要：移动之前判断层数与成环，跨空间移动还要按它找出里面的文档。 */
@@ -101,12 +104,17 @@ export class FoldersRepository {
     return row
   }
 
-  /** 同一个 requestId 已经建过的、正常状态的文件夹，连同新建时的请求摘要（新建的重放，见 FoldersService.create）。 */
+  /**
+   * 同一个 requestId 已经建过的文件夹，连同新建时的请求摘要与现在的状态（新建的重放，见 FoldersService.create）。
+   * 进了回收站的也找出来（M2 Codex 评审第二轮复验的一般 4）：原来只找正常状态的，进了回收站之后原样的重发被当成新的请求，
+   * 回答随这次请求里的空间而变——能新建时插入撞上唯一约束是 409，降为查看者是 403，被移出空间是 404，
+   * 而新建文档在这三种情况下一律是 409；客户端遇到 403、404 会说"新建被拒绝"，实际上却已经建过
+   */
   async findByRequestId(requestId: string, transaction: Transaction): Promise<CreatedFolderRow | undefined> {
     const [row] = await executorOf(this.db, transaction)
-      .select({ ...COLUMNS, payloadDigest: f.payloadDigest })
+      .select({ ...COLUMNS, payloadDigest: f.payloadDigest, status: f.status })
       .from(f)
-      .where(and(eq(f.requestId, requestId), eq(f.status, 'active')))
+      .where(eq(f.requestId, requestId))
     return row
   }
 
