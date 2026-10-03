@@ -468,6 +468,81 @@ describe('版本冲突', () => {
   })
 })
 
+describe('编辑权续上时认出期间的那一版是本页自己的保存（adoptOwnRevision，M3-P1 审查 B1）', () => {
+  /** 一次结果未知的保存（其实已经提交，回包丢了）：本页的修改序号 1，基准 4 */
+  async function unknownSave() {
+    const context = setup({ baseRevision: 4 })
+    context.control.edit('甲')
+    const saving = context.coordinator.save()
+    ;(await sent(context.calls, 1)).reject(new NetworkError('断网'))
+    await saving
+    return context
+  }
+
+  it('来源是本页一次结果未知的保存：那次其实已经提交——按它确认，基准前进到那一版，不再说保存失败；之后的修改照常保存', async () => {
+    const { coordinator, control, calls } = await unknownSave()
+    control.edit('甲乙')
+    expect(coordinator.view()).toMatchObject({ status: 'failed', unsaved: true })
+    expect(coordinator.adoptOwnRevision(5, { clientInstanceId: ME, localSeq: 1 })).toBe(true)
+    expect(coordinator.baseRevision()).toBe(5)
+    expect(coordinator.view()).toMatchObject({ status: 'dirty', problem: undefined, unsaved: true })
+    const saving = coordinator.save()
+    const next = await sent(calls, 2)
+    expect(next.request).toMatchObject({ baseRevision: 5, localSeq: 2 })
+    expect(next.request.requestId).not.toBe(calls[0]?.request.requestId)
+    next.resolve(saved(6))
+    await saving
+    expect(coordinator.view()).toMatchObject({ status: 'clean', unsaved: false })
+  })
+
+  it('之后没有再修改：确认之后就是已保存到云端', async () => {
+    const { coordinator } = await unknownSave()
+    expect(coordinator.adoptOwnRevision(5, { clientInstanceId: ME, localSeq: 1 })).toBe(true)
+    expect(coordinator.view()).toMatchObject({ status: 'clean', problem: undefined, unsaved: false })
+    expect(coordinator.hasUnsavedWork()).toBe(false)
+  })
+
+  it.each([
+    ['来源是别的标签页', { clientInstanceId: OTHER_TAB, localSeq: 1 }],
+    ['没有来源（新建、复制出来的）', null],
+    ['来源是本页、却不是结果未知的那几次', { clientInstanceId: ME, localSeq: 9 }],
+  ] as const)('%s：不是本页自己的，返回 false，什么也不变', async (_case, source) => {
+    const { coordinator } = await unknownSave()
+    const before = coordinator.view()
+    expect(coordinator.adoptOwnRevision(5, source)).toBe(false)
+    expect(coordinator.baseRevision()).toBe(4)
+    expect(coordinator.view()).toBe(before)
+  })
+
+  it('版本冲突之后（终态）：不认，返回 false', async () => {
+    const { coordinator, control, calls } = await unknownSave()
+    control.edit('甲乙')
+    const saving = coordinator.save()
+    ;(await sent(calls, 2)).reject(conflictError(6, { clientInstanceId: OTHER_TAB, localSeq: 7 }))
+    await saving
+    expect(coordinator.view().status).toBe('conflict')
+    expect(coordinator.adoptOwnRevision(5, { clientInstanceId: ME, localSeq: 1 })).toBe(false)
+    expect(coordinator.baseRevision()).toBe(4)
+  })
+
+  it('保存先得知编辑权中断：在途的那一次按旧的基准发出，续上之后重发得到冲突、来源正是认出的那一次——照常换上新的基准重发一次，不报冲突', async () => {
+    const { coordinator, control, calls } = await unknownSave()
+    control.edit('甲乙')
+    const saving = coordinator.save()
+    const inFlight = await sent(calls, 2)
+    expect(inFlight.request.baseRevision).toBe(4)
+    // 页面这时续上（这次保存得到编辑权中断），认出期间的那一版是本页的第一次保存；用新的一代重发同一个请求，得到冲突
+    expect(coordinator.adoptOwnRevision(5, { clientInstanceId: ME, localSeq: 1 })).toBe(true)
+    inFlight.reject(conflictError(5, { clientInstanceId: ME, localSeq: 1 }))
+    const rebased = await sent(calls, 3)
+    expect(rebased.request).toMatchObject({ baseRevision: 5, localSeq: 2 })
+    expect(rebased.request.requestId).not.toBe(inFlight.request.requestId)
+    rebased.resolve(saved(6))
+    await saving
+    expect(coordinator.view()).toMatchObject({ status: 'clean', conflict: undefined, unsaved: false })
+  })
+})
+
 describe('重试原样再发结果未知的请求（Codex 评审 CX2）', () => {
   /** 修改之后保存，回包丢了：服务端可能已经提交；返回那次请求 */
   async function lostSave(context: ReturnType<typeof setup>, text: string): Promise<SaveRequest> {

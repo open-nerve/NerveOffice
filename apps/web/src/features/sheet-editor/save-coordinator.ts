@@ -1,5 +1,5 @@
 // 保存的状态机（P4 设计 §3.7.2）：输入是用户的保存、编辑器的修改与接口的结果，不依赖 Univer 与界面，用假的编辑器与假的接口做单元测试。
-import type { RevisionConflictDetails, SaveContentResponse } from '@nerve-office/contracts'
+import type { RevisionConflictDetails, RevisionSource, SaveContentResponse } from '@nerve-office/contracts'
 import { revisionConflictDetailsSchema, SNAPSHOT_MAX_RAW_BYTES } from '@nerve-office/contracts'
 import { ApiError, isAuthenticationError, isCsrfTokenError, isDefiniteRejection } from '../../shared/api/index.ts'
 
@@ -88,6 +88,12 @@ export interface SaveCoordinator {
   readonly subscribe: (listener: () => void) => () => void
   /** 保存的基准：服务端确认过的最新修订号（打开时是内容的修订号）。编辑权续上时拿它与申请得到的修订号比较（M3-P1） */
   readonly baseRevision: () => number
+  /**
+   * 编辑权续上时，文档当前的修订比本页的基准新：它的来源（source）是本页一次结果未知的保存——与冲突时认出"自己追自己"同一条规则——
+   * 那次保存其实已经提交，按那次捕获确认、基准前进到 revision，返回 true；否则（别处保存的、没有来源、版本冲突之后）返回 false，
+   * 页面按别处保存过处理（M3-P1 审查 B1，00 号计划书 §7.5）
+   */
+  readonly adoptOwnRevision: (revision: number, source: RevisionSource | null) => boolean
   /** 保存一次（按钮或快捷键）。同一时间只有一个保存在途，保存中再按不做任何事 */
   readonly save: () => Promise<void>
   /** 离开页面会丢掉内容：有未保存的修改、正在编辑的单元格、保存中、冲突之后本页的内容 */
@@ -203,12 +209,14 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
     return { baseRevision, requestId: newRequestId(), clientInstanceId, localSeq: capture.seq, snapshot }
   }
 
-  /** 冲突的来源是本页一次结果未知的保存：那次保存其实已经提交，只是没收到回包 */
-  function ownUnconfirmedSave(details: RevisionConflictDetails | null | undefined): UnconfirmedSave | undefined {
-    const source = details?.source
+  /**
+   * 来源是本页一次结果未知的保存（冲突的详情、续上时申请得到的当前修订）：那次保存其实已经提交，只是没收到回包。
+   * 给出它的 requestId 与记录
+   */
+  function ownUnconfirmedSave(source: RevisionSource | null | undefined): readonly [string, UnconfirmedSave] | undefined {
     if (source === undefined || source === null || source.clientInstanceId !== clientInstanceId)
       return undefined
-    return [...unconfirmed.values()].find(save => save.localSeq === source.localSeq)
+    return [...unconfirmed.entries()].find(([, save]) => save.localSeq === source.localSeq)
   }
 
   /**
@@ -265,13 +273,13 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
       }
       catch (error) {
         const details = conflictDetails(error)
-        const own = rebased ? undefined : ownUnconfirmedSave(details)
+        const own = rebased ? undefined : ownUnconfirmedSave(details?.source)
         if (own === undefined || details === undefined || details === null) {
           fail(error, request, earlierUnknown)
           return
         }
         // 那次保存已经提交：它就是当前修订。换上当前修订号作基准，用新的 requestId 重发这一次的内容
-        confirm(own.capture, details.currentRevision)
+        confirm(own[1].capture, details.currentRevision)
         request = prepare(snapshot, capture)
         rebased = true
       }
@@ -285,6 +293,23 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
       return () => listeners.delete(listener)
     },
     baseRevision: () => baseRevision,
+    adoptOwnRevision: (revision, source) => {
+      if (conflict !== undefined)
+        return false
+      const own = ownUnconfirmedSave(source)
+      if (own === undefined)
+        return false
+      const [requestId, save] = own
+      confirm(save.capture, revision)
+      // 记录留着：保存先得知编辑权中断时，在途的那一次是按旧的基准发出的，续上之后重发会得到冲突，来源正是它，
+      // 照常按自己追自己换上新的基准。下一次确认时清掉
+      unconfirmed.set(requestId, save)
+      // 那次结果未知的失败已经有了答案（其实已经提交），不再说"保存失败"；之后又有的修改照常是"有未保存的修改"
+      if (problem?.kind === 'request' && !isDefiniteRejection(problem.error))
+        problem = undefined
+      update()
+      return true
+    },
     save: async () => {
       if (inFlight || stopped || conflict !== undefined)
         return

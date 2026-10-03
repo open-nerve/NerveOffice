@@ -13,7 +13,9 @@
 //   先放掉本页手里那一代（令牌对得上就是持有者本人，P1 设计 §3.4.3；不放掉的话，换过登录、原来的登录还在时，它仍然有效，
 //   新的申请会被它占住）——释放的结果未知时不申请，保持现状，下一次心跳再试（审查 B9）；放掉之后页面已经释放或失效就不再申请
 //   （审查 B7）。再申请：取得了、而且修订号就是本页保存的基准（期间没人保存过）：换上新的令牌与代次，接着心跳与保存，
-//   用户不受打扰；修订号变了（别处保存过）：放掉刚申请到的，按失效处理（不覆盖，另存为副本在 P2）；被占用、403、404 按失效处理；
+//   用户不受打扰；修订号变了：当前修订的来源是本页一次结果未知的保存（其实已经提交，回包丢了）时以它为基准接着编辑，
+//   与冲突时认出"自己追自己"同一条规则（审查 B1，00 号计划书 §7.5），否则是别处保存过——放掉刚申请到的，按失效处理
+//   （不覆盖，另存为副本在 P2）；被占用、403、404 按失效处理；
 //   网络错误、5xx 保持现状，下一次心跳或保存时再判断；未登录、令牌失效交给页面确认会话。
 //   每一代至多续上一次有结果（成了是新的一代，不成就是失效，不来回申请）；会话不是本人时不续。
 //   人不在时不续（本页空闲已经到了服务端的回收阈值 EDIT_LEASE_IDLE_RECLAIM_SECONDS），等本页再有操作：人走开之后断网、休眠回来，
@@ -21,7 +23,7 @@
 // - 暂停与恢复：页面的会话不是本人时暂停（不带着别人的登录发续租）；回到本人时恢复并立即续租一次——租约绑定登录，
 //   登录换过之后它已经失效，随即续上；
 // - 释放：页面隐藏、关闭时用 keepalive，结果不管（没送到时服务端按到期回收）。
-import type { AcquiredEditLease, EditLeaseLostReason, RenewedEditLease, UserSummary } from '@nerve-office/contracts'
+import type { AcquiredEditLease, EditLeaseLostReason, RenewedEditLease, RevisionSource, UserSummary } from '@nerve-office/contracts'
 import type { LeaseCredentials } from './editor-api.ts'
 import { EDIT_IDLE_SECONDS_MAX, EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, editLeaseHeldDetailsSchema, editLeaseLostDetailsSchema } from '@nerve-office/contracts'
 import { ApiError, isAuthenticationError, isCsrfTokenError, isNotFoundError, isPermissionDeniedError, isTransientError, ResponseFormatError } from '../../shared/api/index.ts'
@@ -164,8 +166,13 @@ export interface EditLeaseOptions {
   readonly clock: LeaseClock
   /** 本页最后一次键盘、鼠标操作的时刻（clock.now 的时间轴上） */
   readonly lastActivity: () => number
-  /** 本页保存的基准修订号（服务端确认过的最新修订）：续上时与申请得到的修订号比较，不同就是别处保存过 */
+  /** 本页保存的基准修订号（服务端确认过的最新修订）：续上时与申请得到的修订号比较，不同就是有人保存过 */
   readonly baseRevision: () => number
+  /**
+   * 续上时申请得到的修订号不是本页的基准：它的来源（source，没有来源时为 null）是本页一次结果未知的保存时，
+   * 那一版就是本页自己的——页面按它确认（基准前进）并返回 true；否则返回 false，是别处保存过（审查 B1，00 号计划书 §7.5）
+   */
+  readonly adoptOwnRevision: (revision: number, source: RevisionSource | null) => boolean
   /** 编辑权失效（没有续上）：页面停止保存、说明原因。每份租约至多一次 */
   readonly onLost: (loss: LeaseLoss) => void
   /** 续租或续上得到未登录或令牌失效：页面向服务端确认会话；确认之前续租暂停，确认是本人之后由页面恢复 */
@@ -348,8 +355,9 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
       releaseQuietly(next.token)
       return LOST
     }
-    // 期间别处保存过（本页保存的基准不是现在的修订）：不覆盖，放掉刚申请到的
-    if (next.revision !== options.baseRevision()) {
+    // 期间有人保存过（本页保存的基准不是现在的修订）：是本页自己一次结果未知的保存（自己追自己）就以它为基准接着编辑（审查 B1）；
+    // 是别处保存的就不覆盖，放掉刚申请到的
+    if (next.revision !== options.baseRevision() && !options.adoptOwnRevision(next.revision, next.source)) {
       releaseQuietly(next.token)
       fail({ kind: 'newer' })
       return LOST

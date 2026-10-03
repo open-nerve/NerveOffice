@@ -72,6 +72,8 @@ function setup(api: Partial<EditLeaseApi> = {}) {
   }
   const onLost = vi.fn<(loss: LeaseLoss) => void>()
   const onSessionProblem = vi.fn<(error: ApiError) => void>()
+  /** 页面认不认得出期间的那一版是自己的保存：默认认不出（别处保存的） */
+  const adopt = vi.fn<EditLeaseOptions['adoptOwnRevision']>(() => false)
   const options: EditLeaseOptions = {
     documentId: DOCUMENT_ID,
     clientInstanceId: PAGE_ID,
@@ -79,6 +81,7 @@ function setup(api: Partial<EditLeaseApi> = {}) {
     clock: time.clock,
     lastActivity: () => lastActivity,
     baseRevision: () => baseRevision,
+    adoptOwnRevision: adopt,
     onLost,
     onSessionProblem,
   }
@@ -87,6 +90,7 @@ function setup(api: Partial<EditLeaseApi> = {}) {
     api: fakeApi,
     onLost,
     onSessionProblem,
+    adopt,
     options,
     calls,
     /** 本页有一次键盘、鼠标操作：默认在现在，可以给出更早的时刻 */
@@ -349,6 +353,8 @@ describe('续上：编辑权中断而不是失去访问或编辑权，自动重�
     expect(context.api.acquire).toHaveBeenLastCalledWith(DOCUMENT_ID, PAGE_ID)
     expect(lease.credentials()).toEqual({ token: NEXT_TOKEN, writeEpoch: 4 })
     expect(context.onLost).not.toHaveBeenCalled()
+    // 修订号没变：不用问页面期间的那一版是谁的
+    expect(context.adopt).not.toHaveBeenCalled()
     await context.time.advance(10_000)
     expect(renew).toHaveBeenLastCalledWith(DOCUMENT_ID, NEXT_TOKEN, expect.any(Number))
   })
@@ -356,13 +362,30 @@ describe('续上：编辑权中断而不是失去访问或编辑权，自动重�
   it('修订号变了（期间别处保存过）：不覆盖——放掉刚申请到的，按失效处理（newer）', async () => {
     const context = setup({ renew: vi.fn(async () => Promise.reject(lostError('expired'))) })
     const lease = await held(context)
-    context.api.acquire.mockResolvedValueOnce({ ...NEXT, revision: 6 })
+    const source = { clientInstanceId: '0199a2c4-1f2e-4a3b-8c4d-00000000bbbb', localSeq: 3 }
+    context.api.acquire.mockResolvedValueOnce({ ...NEXT, revision: 6, source })
     await context.time.advance(10_000)
+    expect(context.adopt).toHaveBeenCalledExactlyOnceWith(6, source)
     expect(context.onLost).toHaveBeenCalledExactlyOnceWith({ kind: 'newer' })
     expect(context.api.release).toHaveBeenLastCalledWith(DOCUMENT_ID, NEXT_TOKEN)
     expect(lease.credentials().token).toBe(TOKEN)
     await context.time.advance(60_000)
     expect(context.api.renew).toHaveBeenCalledOnce()
+  })
+
+  it('修订号变了、期间的那一版是本页自己一次结果未知的保存（页面认出、按它确认）：以它为基准接着编辑——换上新的一代，不通知页面（审查 B1）', async () => {
+    const context = setup({ renew: vi.fn<EditLeaseApi['renew']>().mockRejectedValueOnce(lostError('expired')).mockResolvedValue(RENEWED) })
+    const lease = await held(context)
+    const source = { clientInstanceId: PAGE_ID, localSeq: 2 }
+    context.api.acquire.mockResolvedValueOnce({ ...NEXT, revision: 6, source })
+    context.adopt.mockReturnValueOnce(true)
+    await context.time.advance(10_000)
+    expect(context.adopt).toHaveBeenCalledExactlyOnceWith(6, source)
+    expect(lease.credentials()).toEqual({ token: NEXT_TOKEN, writeEpoch: 4 })
+    expect(context.onLost).not.toHaveBeenCalled()
+    expect(context.api.release).not.toHaveBeenCalledWith(DOCUMENT_ID, NEXT_TOKEN)
+    await context.time.advance(10_000)
+    expect(context.api.renew).toHaveBeenLastCalledWith(DOCUMENT_ID, NEXT_TOKEN, expect.any(Number))
   })
 
   it('本页保存过、基准跟着往前走：申请得到的修订号等于新的基准就续上', async () => {

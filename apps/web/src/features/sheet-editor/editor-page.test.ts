@@ -98,6 +98,8 @@ function fakeChannel() {
 
 interface Setup {
   readonly documentId?: string | undefined
+  /** 本页这次加载的标识与 requestId 的生成：默认 id-1、id-2……；冲突的详情要按契约解析时换成 UUID 的写法 */
+  readonly newId?: () => string
   readonly api?: Partial<Omit<EditorPageApi, 'editLease'>>
   readonly editLease?: Partial<EditLeaseApi>
   readonly createEditor?: (options: CreateSheetEditorOptions) => Promise<SheetEditor>
@@ -139,7 +141,7 @@ function setup(options: Setup = {}) {
     sessionChannel: channel,
     clock: time.clock,
     currentPath: () => `/documents/${DOCUMENT_ID}`,
-    newId: () => `id-${++id}`,
+    newId: options.newId ?? (() => `id-${++id}`),
     reportError: vi.fn(),
   })
   pages.push(editorPage)
@@ -1159,6 +1161,53 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     expect(api.save).toHaveBeenLastCalledWith(DOCUMENT_ID, expect.anything(), expect.anything(), NEXT_CREDENTIALS)
     await time.advance(10_000)
     expect(editLease.renew).toHaveBeenLastCalledWith(DOCUMENT_ID, NEXT_TOKEN, expect.any(Number))
+  })
+
+  it('本页一次保存结果未知（其实已经提交）之后，心跳得知编辑权到期：续上时认出期间的那一版是本页自己的，以它为基准接着保存（审查 B1）', async () => {
+    const save = vi.fn<EditorPageApi['save']>()
+      .mockRejectedValueOnce(new NetworkError('断网'))
+      .mockResolvedValueOnce({ revision: 5, savedAt: '2026-09-27T03:00:00.000Z' })
+    const { editorPage, editLease, fake, time } = setup({ api: { save }, editLease: { renew: vi.fn<EditLeaseApi['renew']>().mockRejectedValueOnce(leaseLost('expired')).mockResolvedValue(RENEWED) } })
+    await editorPage.load()
+    Object.assign(fake.editor, { changeSeq: () => 1 })
+    fake.changeListeners.forEach(listener => listener())
+    await editorPage.save()
+    expect(editorPage.view().save).toMatchObject({ status: 'failed' })
+    editLease.acquire.mockResolvedValueOnce({ ...NEXT_LEASE, revision: 4, source: { clientInstanceId: 'id-1', localSeq: 1 } })
+    await time.advance(10_000)
+    expect(editorPage.view()).toMatchObject({ editing: { kind: 'editing' }, save: { status: 'clean', problem: undefined } })
+    await editorPage.save()
+    expect(save).toHaveBeenLastCalledWith(DOCUMENT_ID, expect.objectContaining<Partial<SaveRequest>>({ baseRevision: 4 }), expect.anything(), NEXT_CREDENTIALS)
+    expect(editorPage.view().save).toMatchObject({ status: 'clean' })
+  })
+
+  it('本页一次保存结果未知之后，下一次保存先得知编辑权到期：续上时认出是本页自己的，重发得到的冲突来源也是它——换上新的基准再发，保存成功（审查 B1）', async () => {
+    // 冲突的详情按契约解析：本页的标识要是 UUID 的写法
+    let ids = 0
+    const newId = (): string => `0199a2c4-1f2e-4a3b-8c4d-${String(++ids).padStart(12, '0')}`
+    const pageId = '0199a2c4-1f2e-4a3b-8c4d-000000000001'
+    const own = { clientInstanceId: pageId, localSeq: 1 }
+    const save = vi.fn<EditorPageApi['save']>()
+      .mockRejectedValueOnce(new NetworkError('断网'))
+      .mockRejectedValueOnce(leaseLost('expired'))
+      .mockRejectedValueOnce(new ApiError(409, 'DOCUMENT_REVISION_CONFLICT', '别处保存了更新的版本', { details: { currentRevision: 4, source: own } }))
+      .mockResolvedValueOnce({ revision: 5, savedAt: '2026-09-27T03:00:00.000Z' })
+    const { editorPage, editLease, fake } = setup({ api: { save }, newId })
+    await editorPage.load()
+    Object.assign(fake.editor, { changeSeq: () => 1 })
+    fake.changeListeners.forEach(listener => listener())
+    await editorPage.save()
+    Object.assign(fake.editor, { changeSeq: () => 2 })
+    fake.changeListeners.forEach(listener => listener())
+    editLease.acquire.mockResolvedValueOnce({ ...NEXT_LEASE, revision: 4, source: own })
+    await editorPage.save()
+    expect(save).toHaveBeenCalledTimes(4)
+    // 第三次是用新的一代重发第二次（同一个请求），第四次换上新的基准、新的 requestId
+    expect(save.mock.calls[2]?.[1]).toEqual(save.mock.calls[1]?.[1])
+    expect(save.mock.calls[2]?.[3]).toEqual(NEXT_CREDENTIALS)
+    expect(save.mock.calls[3]?.[1]).toMatchObject({ baseRevision: 4, localSeq: 2 })
+    expect(save.mock.calls[3]?.[1].requestId).not.toBe(save.mock.calls[1]?.[1].requestId)
+    expect(editorPage.view()).toMatchObject({ editing: { kind: 'editing' }, save: { status: 'clean', conflict: undefined } })
   })
 
   it('续上时比较的是服务端确认过的最新修订：本页保存过（修订号 4），申请得到 4 就续上，得到 5 就是别处保存过', async () => {
