@@ -1,7 +1,8 @@
 // 编辑器页（P4 设计 §3.7）：载入、保存、会话；编辑租约（M3-P1 设计 §3.4.7）。界面（editor-chrome.tsx）只订阅这里的状态；
 // 编辑器在 React 之外创建：一页一份文档，整页加载与卸载，不随组件的挂载与卸载反复创建（计划书 §10.2）。
 // 能编辑时载入之后就申请编辑权（P2 改为打开即阅读、点"编辑"才申请，租约的管理在 edit-lease.ts，原样复用）：
-// 取得了按可编辑创建编辑器，被占用按只读创建并说明谁在编辑；编辑权失效时停止保存、说明原因；关闭页面时尽力释放。
+// 取得了按可编辑创建编辑器，被占用按只读创建并说明谁在编辑；编辑权中断时自动续上（期间没人保存过），续不上、失去访问或编辑权时
+// 停止保存、说明原因；关闭页面时尽力释放。
 import type { DocumentAccessVia, DocumentDetail, DocumentSpace, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
 import type { CreateSheetEditorOptions, SheetEditor, SheetEditorLifecycle } from '../../editor/index.ts'
 import type { ApiError } from '../../shared/api/index.ts'
@@ -169,6 +170,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   let lease: EditLease | undefined
   /** 本页最后一次键盘、鼠标操作的时刻（单调的时钟）：心跳上报"多久没有操作" */
   let lastActivity = clock.now()
+  /** 载入的内容的修订号：保存状态机建好之前（创建编辑器期间）它就是保存的基准，续上时与申请得到的修订号比较 */
+  let loadedRevision = 0
   /** 页头的信息（就绪之后才有）：refreshDetail 更新它，编辑器的阶段变化时沿用它 */
   let heading: EditorHeading | undefined
   let disposed = false
@@ -314,6 +317,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       api: api.editLease,
       clock,
       lastActivity: () => lastActivity,
+      // 续上时的比较：服务端确认过的最新修订（保存状态机建好之前是载入的内容的）
+      baseRevision: () => coordinator?.baseRevision() ?? loadedRevision,
       onLost: leaseLost,
       onSessionProblem: leaseSessionProblem,
     })
@@ -430,18 +435,29 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   }
 
   /**
-   * 保存：带上编辑租约的令牌与代次。得到编辑权失效（EDIT_LEASE_LOST）时与续租失效同一个处理（P1 设计 §3.4.7）；
-   * 读不到（404）、不能编辑（403）照旧按保存失败说明原因，心跳随后同样得知、转为失效
+   * 保存：带上编辑租约现在的令牌与代次。得到编辑权失效（EDIT_LEASE_LOST）、读不到（404）、不能编辑（403）时，
+   * 与续租得知同一个处理（P1 设计 §3.4.7）——心跳先发现还是保存先发现，结果一样：
+   * - 续上了（或者这次带的是已被续上取代的上一代）：用现在的编辑权重发这一次。上一次在写入之前就被拒绝，确定没有生效，
+   *   requestId 不变；至多重发一次；
+   * - 失效了：照常按保存失败交回（页头只说明编辑权已失效）；
+   * - 暂时说不准（续上时网络出错等）：按那次的错误交回（例如网络连接失败），下一次心跳或保存时再判断
    */
   async function sendSave(documentId: string, held: EditLease, request: SaveRequest, body: Uint8Array<ArrayBuffer>): Promise<SaveContentResponse> {
-    try {
-      return await api.save(documentId, request, body, held.credentials)
-    }
-    catch (error) {
-      const loss = leaseLossOf(error)
-      if (loss?.kind === 'lease')
-        held.lose(loss)
-      throw error
+    for (let resent = false; ; resent = true) {
+      const credentials = held.credentials()
+      try {
+        return await api.save(documentId, request, body, credentials)
+      }
+      catch (error) {
+        const loss = leaseLossOf(error)
+        if (loss === undefined)
+          throw error
+        const outcome = await held.lose(loss, credentials)
+        if (outcome.kind === 'unknown')
+          throw outcome.error ?? error
+        if (outcome.kind === 'lost' || resent)
+          throw error
+      }
     }
   }
 
@@ -506,6 +522,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       const pageWindow = options.chrome.ownerDocument.defaultView ?? window
       cleanups.push(trackActivity(pageWindow, () => {
         lastActivity = clock.now()
+        lease?.noteActivity()
       }))
       const onPageHide = (): void => lease?.release()
       pageWindow.addEventListener('pagehide', onPageHide)
@@ -536,6 +553,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         finish({ kind: 'unsupported' })
         return
       }
+      loadedRevision = content.revision
       // 能编辑时先申请编辑权（P1 设计 §3.4.7）：取得了才按可编辑创建；被占用、刚失去编辑权（403）按只读
       if (document.permissions.canEdit) {
         let acquisition: LeaseAcquisition | undefined
@@ -566,6 +584,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
           if (acquisition.revision !== content.revision) {
             try {
               content = await api.content(documentId)
+              loadedRevision = content.revision
             }
             catch (error) {
               abandonLease()

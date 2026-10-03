@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { setCsrfToken } from '../../shared/api/index.ts'
 import { apiError, installFakeApi, json, networkFailure } from '../../shared/testing/fake-api.test-support.ts'
 import { acquireEditLease, releaseEditLease, renewEditLease, saveContent } from './editor-api.ts'
@@ -30,7 +30,7 @@ describe('编辑租约的请求（M3-P1 设计 §3.2）', () => {
     expect(api.requests[0]).toMatchObject({ key: `PUT ${LEASE}`, body: { idleSeconds: 12 }, headers: { 'x-edit-lease': TOKEN, 'x-csrf-token': 'csrf-1' } })
   })
 
-  it('释放：DELETE，keepalive，带令牌与 CSRF 两个请求头；失败不抛出（结果不管）', async () => {
+  it('释放：DELETE，keepalive，带令牌与 CSRF 两个请求头；有了结果就兑现，失败也不抛出（结果不管）', async () => {
     let init: RequestInit | undefined
     const api = installFakeApi({
       [`DELETE ${LEASE}`]: (received) => {
@@ -39,16 +39,15 @@ describe('编辑租约的请求（M3-P1 设计 §3.2）', () => {
       },
     })
     setCsrfToken('csrf-2')
-    releaseEditLease(DOCUMENT_ID, TOKEN)
-    await vi.waitFor(() => expect(api.requests).toHaveLength(1))
+    await expect(releaseEditLease(DOCUMENT_ID, TOKEN)).resolves.toBeUndefined()
     expect(api.requests[0]?.headers).toMatchObject({ 'x-edit-lease': TOKEN, 'x-csrf-token': 'csrf-2' })
     expect(init?.keepalive).toBe(true)
-    // 断网、被拒：都不抛出（没接住的 Promise 会让测试失败）
+    // 断网、被拒：都照样兑现，不失败（续上时等它，页面关闭时不等）
     api.on(`DELETE ${LEASE}`, networkFailure)
-    releaseEditLease(DOCUMENT_ID, TOKEN)
+    await expect(releaseEditLease(DOCUMENT_ID, TOKEN)).resolves.toBeUndefined()
     api.on(`DELETE ${LEASE}`, () => apiError(404, 'NOT_FOUND'))
-    releaseEditLease(DOCUMENT_ID, TOKEN)
-    await vi.waitFor(() => expect(api.requests).toHaveLength(3))
+    await expect(releaseEditLease(DOCUMENT_ID, TOKEN)).resolves.toBeUndefined()
+    expect(api.requests).toHaveLength(3)
   })
 
   it('保存：查询参数带上代次，请求头带上令牌', async () => {

@@ -34,7 +34,7 @@ export function startSheetEditorPage(elements: SheetEditorPageElements): void {
       editLease: {
         acquire: async (documentId, clientInstanceId) => acquireEditLease(documentId, clientInstanceId),
         renew: async (documentId, token, idleSeconds) => renewEditLease(documentId, token, idleSeconds),
-        release: (documentId, token) => releaseEditLease(documentId, token),
+        release: async (documentId, token) => releaseEditLease(documentId, token),
       },
     },
     createEditor: createSheetEditor,

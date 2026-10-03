@@ -81,6 +81,8 @@ export interface SaveCoordinatorOptions {
 export interface SaveCoordinator {
   readonly view: () => SaveView
   readonly subscribe: (listener: () => void) => () => void
+  /** 保存的基准：服务端确认过的最新修订号（打开时是内容的修订号）。编辑权续上时拿它与申请得到的修订号比较（M3-P1） */
+  readonly baseRevision: () => number
   /** 保存一次（按钮或快捷键）。同一时间只有一个保存在途，保存中再按不做任何事 */
   readonly save: () => Promise<void>
   /** 离开页面会丢掉内容：有未保存的修改、正在编辑的单元格、保存中、冲突之后本页的内容 */
@@ -272,6 +274,7 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
       listeners.add(listener)
       return () => listeners.delete(listener)
     },
+    baseRevision: () => baseRevision,
     save: async () => {
       if (inFlight || stopped || conflict !== undefined)
         return

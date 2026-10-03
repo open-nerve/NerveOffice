@@ -3,12 +3,13 @@
 // 别处正在编辑时说明谁在编辑，失效时说明原因、提供重新加载。
 // 编辑器本身挂在页头之外的容器里（editor.html 的 #sheet-editor），不归 React 管。
 import type { ReactNode } from 'react'
-import type { LeaseLoss } from './edit-lease.ts'
+import type { Phrase as PhraseParts } from '../../shared/i18n/index.ts'
+import type { LeaseHolder, LeaseLoss } from './edit-lease.ts'
 import type { EditorEditing, EditorPage, EditorPageLoad, EditorPageReady, EditorPageSession, EditorPageView } from './editor-page.ts'
 import type { SaveProblem, SaveView } from './save-coordinator.ts'
 import { ArrowLeft } from 'lucide-react'
 import { useEffect, useRef, useSyncExternalStore } from 'react'
-import { ApiError, describeError, isAuthenticationError, isCsrfTokenError, isNotFoundError, isPermissionDeniedError } from '../../shared/api/index.ts'
+import { ApiError, describeError, isAuthenticationError, isCsrfTokenError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { editorMessages } from '../../shared/i18n/zh-cn/editor.ts'
 import { LOGIN_PATH } from '../../shared/lib/login-path.ts'
@@ -56,14 +57,10 @@ function problemMessage(problem: SaveProblem, sessionProblem: unknown): { text: 
     const reason = describeError(sessionProblem)
     return { text: editorMessages.saveFailed(editorMessages.sessionCheckFailed(reason.message)), requestId: reason.requestId, destructive: true }
   }
+  // 文档被删除、移走或失去权限之后（404、403，M2 总设计 A14）：保存与续租一样转为编辑权失效（M3-P1），页头只显示失效的说明
+  // （LeaseLostNotice：看不到了与能看却不能改分开说、本页的修改没有保存），这里的失败说明随之不显示。
+  // 400（请求不合法）是这次请求本身的问题，按错误码说明（M2-P6 复核第二批 G-5）
   const error = describeError(problem.error)
-  // 文档被删除、移走或失去权限之后（M2 总设计 A14，M2-P6 复核 S8）：再保存也存不进去了，说清楚本页的修改没有保存、
-  // 需要的话先复制出来。看不到了（404）与能看却不能改（403，原因由服务端给出，例如空间已归档）分开说。
-  // 只认 404：400（请求不合法）是这次请求本身的问题，不说成"已经被删除、移走"（M2-P6 复核第二批 G-5）
-  if (isNotFoundError(problem.error))
-    return { text: editorMessages.saveFailed(editorMessages.saveGone), requestId: error.requestId, destructive: true }
-  if (isPermissionDeniedError(problem.error))
-    return { text: editorMessages.saveFailed(editorMessages.saveDenied(error.message)), requestId: error.requestId, destructive: true }
   return { text: editorMessages.saveFailed(error.message), requestId: error.requestId, destructive: true }
 }
 
@@ -137,15 +134,33 @@ function SaveNotices({ view, save, onReload }: { view: EditorPageView, save: Sav
   return notices
 }
 
-/** 编辑权失效的原因（P1 设计 §3.2）：租约本身的按服务端给的原因（不认识的为 undefined）；读不到了；不能编辑了用服务端这次给的说明 */
-function lostCause(loss: LeaseLoss): string | undefined {
+/** 续上时别处正在编辑：谁（人名经人名组件）、最后活动几分钟之前；是自己时说在另一个标签页或设备上 */
+function heldCause(holder: LeaseHolder | undefined): PhraseParts<ReactNode> {
+  if (holder === undefined)
+    return [editorMessages.editing.lostHeldUnknown]
+  if (holder.sameUser)
+    return [editorMessages.editing.lostHeldBySelf]
+  const lastActive = holder.lastActiveMinutes === undefined ? undefined : editorMessages.editing.lastActive(holder.lastActiveMinutes)
+  return editorMessages.editing.lostHeldBy(<PersonName person={holder.holder} />, lastActive)
+}
+
+/**
+ * 编辑权失效的原因（P1 设计 §3.2；编辑权中断时先自动续上，到这里的是续不上的，或者失去了访问、编辑权）：
+ * 编辑权被收回；不认识的原因（undefined，只说编辑权已失效）；读不到了（404）与不能编辑了（403，带上服务端这次给的原因）分开说；
+ * 续上时别处正在编辑；续上时发现别处保存过更新的版本
+ */
+function lostCause(loss: LeaseLoss): PhraseParts<ReactNode> | undefined {
   switch (loss.kind) {
     case 'lease':
-      return loss.reason === undefined ? undefined : editorMessages.editing.lostReason(loss.reason)
+      return loss.reason === 'revoked' ? [editorMessages.editing.lostRevoked] : undefined
     case 'not-found':
-      return editorMessages.editing.lostNotFound
+      return [editorMessages.editing.lostNotFound]
     case 'denied':
-      return describeError(loss.error).message
+      return [editorMessages.editing.lostDenied(describeError(loss.error).message)]
+    case 'held':
+      return heldCause(loss.holder)
+    case 'newer':
+      return [editorMessages.editing.lostNewer]
   }
 }
 
@@ -158,7 +173,7 @@ function LeaseLostNotice({ loss, save, session, onReload }: { loss: LeaseLoss, s
   return (
     <Alert variant="destructive">
       <AlertDescription>
-        <p>{editorMessages.editing.lost(lostCause(loss), save.status !== 'clean')}</p>
+        <p><Phrase parts={editorMessages.editing.lost(lostCause(loss), save.status !== 'clean')} /></p>
         {session === 'other-user' && <p>{editorMessages.otherUserBeforeReload}</p>}
         <Button variant="outline" size="sm" className="mt-2" onClick={onReload}>{editorMessages.reload}</Button>
       </AlertDescription>
@@ -257,15 +272,13 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
       {(view.session !== 'active' || save !== undefined) && (
         <div className="flex flex-col gap-2 px-3 empty:hidden [&:not(:empty)]:py-2">
           {leaseLost !== undefined && save !== undefined && <LeaseLostNotice loss={leaseLost} save={save} session={view.session} onReload={page.reload} />}
-          {/* 版本冲突、编辑权失效之后本页不能再保存：会话的提示（"登录之后回到这里保存"）不成立，只显示冲突或失效的说明（复验 SB9；换了人时那条说明里另有一句，复验 TB8）。
-              持有编辑权的页面（有保存）：编辑权绑定这次登录，重新登录之后它已经失效，不说"回到这里保存"（M3-P1，自动续上在 P2） */}
+          {/* 版本冲突、编辑权失效之后本页不能再保存：会话的提示（"登录之后回到这里保存"）不成立，只显示冲突或失效的说明（复验 SB9；换了人时那条说明里另有一句，复验 TB8） */}
           {leaseLost === undefined && view.session === 'signed-out' && save?.conflict === undefined && (
             <Alert variant="destructive">
               <AlertDescription>
-                <p>{save === undefined ? editorMessages.signedOut : editorMessages.signedOutEditing}</p>
+                <p>{editorMessages.signedOut}</p>
                 <SessionCheckProblem problem={view.sessionProblem} />
-                {/* 在新标签页登录：本页不离开，修改留着；那边登录之后，本页收到消息恢复保存（持有编辑权的页面随即核对编辑权：
-                    它绑定原来的登录，已经失效，页头改为说明编辑权已失效，M3-P1） */}
+                {/* 在新标签页登录：本页不离开，修改留着；那边登录之后，本页收到消息恢复保存（编辑权绑定原来的登录：随即自动续上，M3-P1） */}
                 <a href={LOGIN_PATH} target="_blank" rel="noopener" className={buttonVariants({ variant: 'outline', size: 'sm', className: 'mt-2' })}>
                   {editorMessages.loginInNewTab}
                 </a>
@@ -275,7 +288,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
           {leaseLost === undefined && view.session === 'other-user' && save?.conflict === undefined && (
             <Alert variant="destructive">
               <AlertDescription>
-                <p>{save === undefined ? editorMessages.otherUser : editorMessages.otherUserEditing}</p>
+                <p>{editorMessages.otherUser}</p>
                 <SessionCheckProblem problem={view.sessionProblem} />
               </AlertDescription>
             </Alert>

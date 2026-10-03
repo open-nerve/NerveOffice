@@ -83,8 +83,8 @@ export async function renewEditLease(documentId: string, token: string, idleSeco
 
 /**
  * 尽力释放编辑权（204）：页面隐藏、关闭时也要发出去，用 keepalive；结果不管——没送到时由服务端按到期回收（P1 设计 §3.4.3）。
- * 请求层照常带上 CSRF 令牌（状态变更的请求）
+ * 请求层照常带上 CSRF 令牌（状态变更的请求）。兑现于请求有了结果（成功、失败都算），从不失败：续上时等它放掉再申请
  */
-export function releaseEditLease(documentId: string, token: string): void {
-  void apiFetch(leasePath(documentId), { method: 'DELETE', headers: leaseHeaders(token), keepalive: true }).catch(() => undefined)
+export async function releaseEditLease(documentId: string, token: string): Promise<void> {
+  await apiFetch(leasePath(documentId), { method: 'DELETE', headers: leaseHeaders(token), keepalive: true }).then(() => undefined, () => undefined)
 }
