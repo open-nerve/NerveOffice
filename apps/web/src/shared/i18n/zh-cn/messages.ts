@@ -46,6 +46,10 @@ const ERROR_MESSAGES: Record<ErrorCode, string | typeof SERVER_EXPLAINS> = {
   TRANSFER_CONFLICT: '有文档已经不在这个人的个人空间里（可能被别人转走了），请刷新后重试',
   LINK_INVALID: '链接无效或已失效，请联系管理员重新发送',
   DOCUMENT_REVISION_CONFLICT: '别处保存了更新的版本',
+  // 编辑租约（M3-P1）：编辑器页按 details 另有具体的说明（谁在编辑、是不是自己，失效的原因），这里是通用的说法。
+  // 同一个人在另一个标签页或设备上编辑也会得到它，所以不说"别人"
+  EDIT_LEASE_HELD: '这份文档正在别处编辑，现在不能编辑',
+  EDIT_LEASE_LOST: '编辑权已失效，这次操作没有生效',
   REQUEST_ID_CONFLICT: '请求已失效，请重试',
   PAYLOAD_TOO_LARGE: '内容超过容量上限',
   UNSUPPORTED_MEDIA_TYPE: '请求的格式不受支持，请刷新页面后重试',

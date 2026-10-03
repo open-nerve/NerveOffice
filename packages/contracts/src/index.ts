@@ -143,6 +143,37 @@ export type {
   PlatformFormatVersion,
   UpdateDocumentRequest,
 } from './documents/documents.ts'
+export {
+  acquiredEditLeaseSchema,
+  acquireEditLeaseRequestSchema,
+  documentEditorSchema,
+  EDIT_IDLE_SECONDS_MAX,
+  EDIT_INTERRUPTION_NOTICE_SECONDS,
+  EDIT_LEASE_HEADER,
+  EDIT_LEASE_HEARTBEAT_SECONDS,
+  EDIT_LEASE_IDLE_RECLAIM_SECONDS,
+  EDIT_LEASE_LOST_REASONS,
+  EDIT_LEASE_TTL_SECONDS,
+  editInterruptionSchema,
+  editLeaseHeldDetailsSchema,
+  editLeaseLostDetailsSchema,
+  editLeaseTokenSchema,
+  editStatusSchema,
+  renewedEditLeaseSchema,
+  renewEditLeaseRequestSchema,
+} from './documents/editing.ts'
+export type {
+  AcquiredEditLease,
+  AcquireEditLeaseRequest,
+  DocumentEditor,
+  EditInterruption,
+  EditLeaseHeldDetails,
+  EditLeaseLostDetails,
+  EditLeaseLostReason,
+  EditStatus,
+  RenewedEditLease,
+  RenewEditLeaseRequest,
+} from './documents/editing.ts'
 export { SHEET_TEMPLATE, SHEET_TEMPLATE_UNIT_ID, sheetSnapshotFor } from './documents/sheet-template.ts'
 export { ERROR_CODES, errorStatus, RETIRED_ERROR_CODES } from './errors/error-codes.ts'
 export type { ErrorCode } from './errors/error-codes.ts'

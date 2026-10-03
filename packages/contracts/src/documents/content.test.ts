@@ -32,6 +32,17 @@ describe('保存的查询参数', () => {
     expect(saveContentQuerySchema.safeParse({ ...valid, force: '1' }).success).toBe(false)
     expect(saveContentQuerySchema.safeParse({ ...valid, requestId: 'not-a-uuid' }).success).toBe(false)
   })
+
+  it('申请编辑权得到的代次（M3-P1）：写法同本地序号，从 0 开始的整数', () => {
+    expect(saveContentQuerySchema.parse({ ...valid, writeEpoch: '0' })).toMatchObject({ writeEpoch: 0 })
+    expect(saveContentQuerySchema.parse({ ...valid, writeEpoch: '2147483647' })).toMatchObject({ writeEpoch: 2_147_483_647 })
+    for (const value of ['', '-1', '1.0', '01', '0x10', '2147483648'])
+      expect(saveContentQuerySchema.safeParse({ ...valid, writeEpoch: value }).success, value).toBe(false)
+  })
+
+  it('代次暂时可以不带：保存要求租约（M3-P1 的 S4）之前，现有的调用方还不带它；S4 改为必填', () => {
+    expect(saveContentQuerySchema.parse(valid)).not.toHaveProperty('writeEpoch')
+  })
 })
 
 describe('保存的结果与冲突的详情', () => {

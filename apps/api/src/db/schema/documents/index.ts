@@ -1,6 +1,8 @@
 // documents 模块的表：文档的元数据（P3 设计 §3.2），当前内容与修订记录（P4 设计 §3.2，只做加法），
 // 文件夹与删除单元（M2-P4 设计 §3.3：与文档共用有效权限、空间事实与审计，所以放在同一个模块里），
-// 单独授权（M2-P5 设计 §3.3：有效权限并上授权，唯一入口在 documents）。
+// 单独授权（M2-P5 设计 §3.3：有效权限并上授权，唯一入口在 documents），
+// 编辑租约（M3-P1 设计 §3.1、§3.3：保存在文档行的锁下核对它，按空间收回写入权要把它与文档连起来查，所以也在这里）。
+import type { EditLeaseLostReason } from '@nerve-office/contracts'
 import type { AnyPgColumn } from 'drizzle-orm/pg-core'
 import { DOCUMENT_PROFILES, DOCUMENT_STATUSES, DOCUMENT_TITLE_MAX_LENGTH, DOCUMENT_TYPES, FOLDER_MAX_DEPTH, FOLDER_NAME_MAX_LENGTH, GRANT_ROLES, PLATFORM_FORMAT_VERSIONS, SNAPSHOT_MAX_RAW_BYTES, TRASH_ENTRY_KINDS } from '@nerve-office/contracts'
 import { sql } from 'drizzle-orm'
@@ -198,4 +200,52 @@ export const documentGrants = pgTable('document_grants', {
   check('document_grants_role_check', oneOf(table.role, GRANT_ROLES)),
   check('document_grants_not_self_check', sql`${table.userId} <> ${table.grantedBy}`),
   index('document_grants_user_idx').on(table.userId),
+])
+
+/**
+ * 编辑租约明确结束的原因（M3-P1 设计 §3.3）：释放（released）、收回写入权（revoked）。到期、空闲、登录失效、代次过时
+ * 不写进这一列，用到时按有效条件算出来（documents 模块的 edit-lease-rules.ts）。两个取值同时是编辑权失效的原因
+ * （contracts 的 EDIT_LEASE_LOST_REASONS，有效条件的第 2 条原样给出它）。新增取值时同时用迁移更新 CHECK 约束
+ */
+export const EDIT_LEASE_END_REASONS = ['released', 'revoked'] as const satisfies readonly EditLeaseLostReason[]
+export type EditLeaseEndReason = (typeof EDIT_LEASE_END_REASONS)[number]
+
+/**
+ * 编辑租约（M3-P1 设计 §3.3）：同一时刻只有一个标签页能写一份文档（00 号计划书 §6.2）。每份文档至多一行（主键），
+ * 新的申请改写这一行，成为新的一代；租约在数据库里、不在进程内存里，令牌只存摘要，时间一律取数据库的 now()。
+ * - document_id 外键级联删除：永久删除文档时随之消失（与内容、修订记录、单独授权一样，ADR-016 的连带）；
+ * - holder_id：账户不删除（停用可以撤回），外键 restrict；按它的索引给"按人收回写入权"（停用、移出空间、取消授权）；
+ * - session_id 不做外键：会话行过期之后会被清理，绑定的登录还在不在经 auth 判断（SessionService.isActive）；
+ * - client_instance_id：编辑器页每次加载生成的标识（保存一直带着它），租约绑定这个标签页；
+ * - write_epoch：这一代的代次，申请时文档的写入代次（documents.write_epoch）加一之后的值，所以至少是 1；
+ * - 时间：申请时 acquired_at、renewed_at、last_active_at 都是 now()，expires_at 是 now() 加有效期；续租时 renewed_at 与
+ *   expires_at 一起前进，last_active_at 是 now() 减去页面上报的空闲时长，不早于 acquired_at、不晚于 now()。
+ *   表上兜底同一条语句里写下的两个不等式：到期晚于续租、最后活动不晚于续租。"不早于申请"比较的是两个事务的 now()，
+ *   数据库的时钟往回调时可能不成立，不写成拒绝写入的约束；
+ * - 明确结束（释放、收回）记下 ended_at 与 end_reason，两列同时为空或同时有值；到期、空闲、登录失效、代次过时不写，
+ *   按有效条件算出来。
+ * 有效条件与它们的顺序在 documents 模块的 edit-lease-rules.ts；锁的顺序是文档行（FOR UPDATE，代次在那里）→ 租约行（ADR-014）
+ */
+export const documentEditLeases = pgTable('document_edit_leases', {
+  documentId: uuid('document_id').primaryKey().references(() => documents.id, { onDelete: 'cascade' }),
+  holderId: uuid('holder_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  sessionId: uuid('session_id').notNull(),
+  clientInstanceId: uuid('client_instance_id').notNull(),
+  tokenDigest: bytea('token_digest').notNull(),
+  writeEpoch: integer('write_epoch').notNull(),
+  acquiredAt: timestamp('acquired_at', { withTimezone: true }).notNull(),
+  renewedAt: timestamp('renewed_at', { withTimezone: true }).notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  lastActiveAt: timestamp('last_active_at', { withTimezone: true }).notNull(),
+  endedAt: timestamp('ended_at', { withTimezone: true }),
+  // enum 只收窄 TypeScript 的类型，数据库里仍是 text 加 CHECK
+  endReason: text('end_reason', { enum: EDIT_LEASE_END_REASONS }),
+}, table => [
+  check('document_edit_leases_token_digest_check', sql`octet_length(${table.tokenDigest}) = 32`),
+  check('document_edit_leases_write_epoch_check', sql`${table.writeEpoch} >= 1`),
+  check('document_edit_leases_expiry_check', sql`${table.expiresAt} > ${table.renewedAt}`),
+  check('document_edit_leases_last_active_check', sql`${table.lastActiveAt} <= ${table.renewedAt}`),
+  check('document_edit_leases_end_reason_check', oneOf(table.endReason, EDIT_LEASE_END_REASONS)),
+  check('document_edit_leases_ended_check', sql`(${table.endedAt} IS NULL) = (${table.endReason} IS NULL)`),
+  index('document_edit_leases_holder_idx').on(table.holderId),
 ])
