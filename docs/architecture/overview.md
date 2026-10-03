@@ -40,7 +40,8 @@ apps/api/src/
     config/       环境变量（NERVE_*，机密可以用 _FILE），启动时校验；只有这里读 process.env
     logging/      pino 根日志、请求日志与请求标识、脱敏、请求上下文（认证后带 userId）、注入的 AppLogger、Nest 日志适配
     security/     安全响应头（M0 定稿的 CSP 等）、JSON 请求体的上限与嵌套深度、元素数量、代理未被信任的告警
-    database/     连接池与超时、Drizzle、TransactionRunner、迁移执行、就绪检查；请求级的提交记录 CommitLedger（M2-P6）
+    database/     连接池与超时、Drizzle、TransactionRunner（写事务 run 与读请求的只读快照 readSnapshot，ADR-017）、迁移执行、就绪检查；
+                  请求级的提交记录 CommitLedger（M2-P6）
     audit/        审计事件（只追加）；启动时检查数据库角色能否关掉审计表的触发器
     health/       存活与就绪探针（公开）、应用的运行状态
     spaces/       空间与成员的数据与不变量：个人空间、团队空间（创建、改名、全员可见、归档与恢复）、成员与空间角色（至少保留一个空间管理员）、
@@ -75,6 +76,7 @@ apps/api/src/
 | 2 | 请求日志与请求标识（一律生成 UUID；客户端带来的 `X-Request-Id` 合法时只作为 `clientRequestId` 记进日志，M2-P6） |
 | 3 | 请求上下文：之后在这个请求里写的日志都带请求标识 |
 | 3b | 提交记录（`CommitLedger`，M2-P6）：每个请求一份"有没有事务已经提交"，数据库繁忙时据此回 503 还是 500（ADR-006） |
+| 3c | 请求的身份（`RequestIdentities`，auth 模块，M2 Codex 评审）：每个请求一份"会话守卫判断过的身份"，只读快照的开场核对据此在快照里再查一次账户与系统角色（ADR-017） |
 | 4 | 代理未被信任的告警：公开地址是 HTTPS、经代理转发来的请求（带转发头）却不是 HTTPS 时，每个进程记一条（DEF-014） |
 | 5 | 安全响应头：对所有响应生效，包括错误、404、页面、脚本与 Worker 脚本 |
 | 6 | 托管前端产物（配置了 `NERVE_WEB_ROOT` 才有）：只处理 `/api` 以外的 GET、HEAD；带哈希的资源长期缓存，其他不缓存；编辑器页的地址（`/documents/<UUID>`）给 `editor.html`，其他没有扩展名的路径回退到平台页面 |
@@ -140,6 +142,7 @@ apps/api/src/
 - 迁移由单独的命令执行，带 advisory lock；执行前比较已执行的迁移，库里不一致就拒绝。
 - 应用启动时不迁移，只检查库结构版本，不一致时就绪探针失败。
 - 表只由所属模块的仓储读写；服务用 `TransactionRunner` 开启事务，把不透明的 `Transaction` 显式传给仓储。`TransactionRunner` 自己借出、归还连接：除业务错误外，失败的事务丢弃它的连接；work 吞掉失败的语句时不报告成功。
+- 登录之后的读请求（全部 GET 接口）在一个只读快照里判断权限、读数据（`TransactionRunner.readSnapshot`，REPEATABLE READ、READ ONLY，ADR-017）：快照在最外层的服务里开、不嵌套；第一条语句是 auth 登记的开场核对（账户仍然有效、守卫读到是系统管理员的仍是）。同一个事务或快照上的语句逐条执行（集成测试核对应用的连接上没有并发查询）。
 
 **有效权限**（M2-P2，ADR-014）：服务只经 `DocumentAccessPolicy` 判断权限，目标是文档或空间（在事务里判断时，查询走事务的连接）。
 - 空间的部分按 spaces 的空间事实（一条语句）与纯函数的规则计算：个人空间只看所有者；团队空间取成员的角色，全员可见至少是查看者，归档至多是查看者；系统角色只带来团队空间的管理面，不带来内容权限；P5 并上单独授权。
