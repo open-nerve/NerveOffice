@@ -18,15 +18,15 @@ export class DocumentTransferService {
     private readonly writeAccess: WriteAccessRevocation,
   ) {}
 
-  /** 一个空间里正常状态的文档的标题，按更新时间从新到旧分页 */
-  async titles(spaceId: string, cursor: string | undefined): Promise<AdminUserDocumentListResponse> {
+  /** 一个空间里正常状态的文档的标题，按更新时间从新到旧分页；在调用方（admin）开的只读快照里读（M2 Codex 评审 CX1） */
+  async titles(spaceId: string, cursor: string | undefined, transaction: Transaction): Promise<AdminUserDocumentListResponse> {
     const after = cursor === undefined ? undefined : decodeTimeCursor(cursor)
     if (cursor !== undefined && after === undefined)
       throw new AppError('REQUEST_INVALID', '分页的游标不合法，请从第一页重新加载')
     // 与列表用同一个"可访问文档"的条件（在这个空间里；accessible 只取正常状态的行，所以回收站里的文档不列出、
     // 也不转移，M2-P4 设计 §3.4 第 1 条）；只要空间那一半：转移的是这个空间里的文档，与谁有单独授权无关（M2-P5 设计 §3.4(2)）。
     // 不按目录过滤：整个空间里的文档都要列出来。多取一条，判断还有没有下一页
-    const rows = await this.documents.listAccessible({ spaceIds: [spaceId], grantsOf: undefined }, { limit: ADMIN_PAGE_SIZE + 1, after })
+    const rows = await this.documents.listAccessible({ spaceIds: [spaceId], grantsOf: undefined }, { limit: ADMIN_PAGE_SIZE + 1, after }, transaction)
     const page = rows.slice(0, ADMIN_PAGE_SIZE)
     const last = page.at(-1)
     return {

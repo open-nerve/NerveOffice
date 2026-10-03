@@ -34,11 +34,16 @@ export class DocumentSharingService {
     private readonly transactions: TransactionRunner,
   ) {}
 
-  /** 授权列表：要有分享的权限（规则在 documents）；含停用的人的授权（带状态），先按角色、再按显示名排序 */
+  /**
+   * 授权列表：要有分享的权限（规则在 documents）；含停用的人的授权（带状态），先按角色、再按显示名排序。
+   * 判断、读授权与补人名在同一个只读快照里（M2 Codex 评审 CX1）
+   */
   async list(actor: Actor, documentId: string): Promise<DocumentGrantListResponse> {
-    const grants = await this.grants.list(actor, documentId)
-    const accounts = await this.users.findByIds(grants.flatMap(grant => [grant.userId, grant.grantedBy]))
-    return { items: grants.map(grant => toDocumentGrant(grant, accounts)).sort(compareMembers) }
+    return this.transactions.readSnapshot(async (transaction) => {
+      const grants = await this.grants.list(actor, documentId, transaction)
+      const accounts = await this.users.findByIds(grants.flatMap(grant => [grant.userId, grant.grantedBy]), transaction)
+      return { items: grants.map(grant => toDocumentGrant(grant, accounts)).sort(compareMembers) }
+    })
   }
 
   /**

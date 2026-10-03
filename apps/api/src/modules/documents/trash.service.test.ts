@@ -5,7 +5,7 @@ import { Buffer } from 'node:buffer'
 import { AUDIT_DETAILS_MAX_BYTES } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
-import { ALICE, ALICE_SPACE, BOB, FakeStore, HTTP_ORIGIN, member, TEAM_SPACE } from './documents.test-support.ts'
+import { ALICE, ALICE_SPACE, BOB, FakeStore, HTTP_ORIGIN, member, TEAM_SPACE, TRANSACTION } from './documents.test-support.ts'
 import { TrashEntryPurger } from './trash-entry-purger.ts'
 import { TrashService } from './trash.service.ts'
 
@@ -372,7 +372,7 @@ describe('TrashService.list', () => {
     await service.deleteDocument(member(ALICE), loose.id, HTTP_ORIGIN)
     await service.deleteFolder(member(ALICE), folder.id, HTTP_ORIGIN)
 
-    const page = await service.list(member(ALICE), { spaceId: TEAM_SPACE })
+    const page = await service.list(member(ALICE), { spaceId: TEAM_SPACE }, TRANSACTION)
     expect(page.nextCursor).toBeNull()
     expect(page.items.map(item => [item.kind, item.title, item.documentCount])).toEqual([['folder', '资料', 1], ['document', '周报', 1]])
     // 被删的文件夹的原位置是空间的根目录；那份文档的原位置随文件夹一起进了回收站，所以已经不在
@@ -383,15 +383,15 @@ describe('TrashService.list', () => {
     expect(page.items.map(item => item.permissions)).toEqual([{ canRestore: true, canPurge: false }, { canRestore: true, canPurge: false }])
 
     // 查看者看得到列表，但什么也动不了
-    const viewer = await service.list(member(BOB), { spaceId: TEAM_SPACE })
+    const viewer = await service.list(member(BOB), { spaceId: TEAM_SPACE }, TRANSACTION)
     expect(viewer.items.map(item => item.permissions)).toEqual([{ canRestore: false, canPurge: false }, { canRestore: false, canPurge: false }])
   })
 
   it('看不到的空间与不存在的空间：同一个 NOT_FOUND；游标不合法是 REQUEST_INVALID', async () => {
     const { service } = setup()
-    const unseen = await errorOf(service.list(member(BOB), { spaceId: TEAM_SPACE }))
-    const missing = await errorOf(service.list(member(BOB), { spaceId: MISSING }))
+    const unseen = await errorOf(service.list(member(BOB), { spaceId: TEAM_SPACE }, TRANSACTION))
+    const missing = await errorOf(service.list(member(BOB), { spaceId: MISSING }, TRANSACTION))
     expect([unseen.code, missing.code]).toEqual(['NOT_FOUND', 'NOT_FOUND'])
-    expect((await errorOf(service.list(member(ALICE), { spaceId: ALICE_SPACE, cursor: '乱写的' }))).code).toBe('REQUEST_INVALID')
+    expect((await errorOf(service.list(member(ALICE), { spaceId: ALICE_SPACE, cursor: '乱写的' }, TRANSACTION))).code).toBe('REQUEST_INVALID')
   })
 })

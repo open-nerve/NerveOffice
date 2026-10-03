@@ -4,7 +4,7 @@ import type { DocumentAccessPolicy, SpaceAccess } from './document-access-policy
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { documentAccessIn, requireAccess, requireCreateTarget, requireDocumentContent, requireSpaceContent, requireSpaceManagement, SHARING_FROZEN_MESSAGE } from './document-access-policy.ts'
-import { ALICE, ALICE_SPACE, BOB, BOB_SPACE, FakeStore, member, TEAM_SPACE } from './documents.test-support.ts'
+import { ALICE, ALICE_SPACE, BOB, BOB_SPACE, FakeStore, member, TEAM_SPACE, TRANSACTION } from './documents.test-support.ts'
 
 const MISSING = '0199a2c4-0000-7000-8000-0000000000ff'
 const ZERO = '00000000-0000-0000-0000-000000000000'
@@ -51,7 +51,7 @@ describe('EffectiveAccessPolicy', () => {
     store.setGrant('d1', BOB, 'editor')
     expect(await store.policy.spaceAccessOf(member(BOB), TEAM_SPACE)).toBeUndefined()
     expect((await errorOf(requireSpaceContent(store.policy, member(BOB), TEAM_SPACE, 'view'))).code).toBe('NOT_FOUND')
-    expect((await store.policy.visibleSpaces(member(BOB))).map(access => access.space.id)).toEqual([BOB_SPACE])
+    expect((await store.policy.visibleSpaces(member(BOB), TRANSACTION)).map(access => access.space.id)).toEqual([BOB_SPACE])
     expect(store.grants.roleOf).not.toHaveBeenCalled()
   })
 
@@ -66,10 +66,10 @@ describe('EffectiveAccessPolicy', () => {
   it('我能看到的空间：只有有内容权限的；系统管理员没有加入的团队空间不在里面', async () => {
     const store = new FakeStore()
     store.setMember(TEAM_SPACE, BOB, 'editor')
-    expect((await store.policy.visibleSpaces(member(BOB))).map(access => [access.space.id, access.role])).toEqual([[BOB_SPACE, 'admin'], [TEAM_SPACE, 'editor']])
-    expect((await store.policy.visibleSpaces(ADMIN)).map(access => access.space.id)).toEqual([ALICE_SPACE])
+    expect((await store.policy.visibleSpaces(member(BOB), TRANSACTION)).map(access => [access.space.id, access.role])).toEqual([[BOB_SPACE, 'admin'], [TEAM_SPACE, 'editor']])
+    expect((await store.policy.visibleSpaces(ADMIN, TRANSACTION)).map(access => access.space.id)).toEqual([ALICE_SPACE])
     store.space(TEAM_SPACE).visibleToAll = true
-    expect((await store.policy.visibleSpaces(ADMIN)).map(access => [access.space.id, access.role])).toEqual([[ALICE_SPACE, 'admin'], [TEAM_SPACE, 'viewer']])
+    expect((await store.policy.visibleSpaces(ADMIN, TRANSACTION)).map(access => [access.space.id, access.role])).toEqual([[ALICE_SPACE, 'admin'], [TEAM_SPACE, 'viewer']])
   })
 
   it('一批文档（M2-P5，"与我共享"）：空间事实一条语句按一批 id 取，规则同 documentAccessOf；授权由调用方带来、不另读；看不到的不在结果里；带所有者', async () => {
@@ -80,18 +80,18 @@ describe('EffectiveAccessPolicy', () => {
       { document: { id: 'shared-personal', spaceId: ALICE_SPACE, createdBy: ALICE }, grant: 'viewer' },
       { document: { id: 'no-grant', spaceId: ALICE_SPACE, createdBy: ALICE }, grant: undefined },
       { document: { id: 'missing-space', spaceId: MISSING, createdBy: ALICE }, grant: 'editor' },
-    ])
+    ], TRANSACTION)
     expect([...accesses.keys()]).toEqual(['shared-team', 'shared-personal'])
     expect(accesses.get('shared-team')).toMatchObject({ access: { spaceRole: 'viewer', contentRole: 'editor', accessVia: 'space' }, ownerUserId: null })
     expect(accesses.get('shared-personal')).toMatchObject({ access: { spaceRole: undefined, contentRole: 'viewer', accessVia: 'grant', space: { id: ALICE_SPACE } }, ownerUserId: ALICE })
     expect(store.spaces.accessFactsOfMany).toHaveBeenCalledTimes(1)
-    expect(store.spaces.accessFactsOfMany).toHaveBeenCalledWith(BOB, [TEAM_SPACE, ALICE_SPACE, ALICE_SPACE, MISSING])
+    expect(store.spaces.accessFactsOfMany).toHaveBeenCalledWith(BOB, [TEAM_SPACE, ALICE_SPACE, ALICE_SPACE, MISSING], { transaction: TRANSACTION })
     expect(store.spaces.accessFactsOf).not.toHaveBeenCalled()
     expect(store.grants.roleOf).not.toHaveBeenCalled()
     // 归档同样降级（同一个纯函数）；空的一批不查询
     store.space(TEAM_SPACE).status = 'archived'
-    expect((await store.policy.accessOfMany(BOB, [{ document: { id: 'shared-team', spaceId: TEAM_SPACE, createdBy: ALICE }, grant: 'editor' }])).get('shared-team')?.access.contentRole).toBe('viewer')
-    expect((await store.policy.accessOfMany(BOB, [])).size).toBe(0)
+    expect((await store.policy.accessOfMany(BOB, [{ document: { id: 'shared-team', spaceId: TEAM_SPACE, createdBy: ALICE }, grant: 'editor' }], TRANSACTION)).get('shared-team')?.access.contentRole).toBe('viewer')
+    expect((await store.policy.accessOfMany(BOB, [], TRANSACTION)).size).toBe(0)
     expect(store.spaces.accessFactsOfMany).toHaveBeenCalledTimes(2)
   })
 })

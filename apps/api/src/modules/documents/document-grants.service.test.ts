@@ -211,13 +211,13 @@ describe('DocumentGrantsService.list', () => {
     const document = teamDocument(store)
     store.setGrant(document.id, BOB, 'viewer')
     store.setGrant(document.id, CAROL, 'editor')
-    expect((await service.list(member(ALICE), document.id)).map(grant => [grant.userId, grant.role]).toSorted()).toEqual([[BOB, 'viewer'], [CAROL, 'editor']].toSorted())
+    expect((await service.list(member(ALICE), document.id, TRANSACTION)).map(grant => [grant.userId, grant.role]).toSorted()).toEqual([[BOB, 'viewer'], [CAROL, 'editor']].toSorted())
     expect(store.grants.listFor).toHaveBeenCalledTimes(1)
 
-    expect(await errorOf(service.list(member(CAROL), document.id))).toMatchObject({ code: 'PERMISSION_DENIED', message: '这份文档是单独分享给你的，不能再分享给别人' })
-    expect((await errorOf(service.list(member(BOB), MISSING))).code).toBe('NOT_FOUND')
+    expect(await errorOf(service.list(member(CAROL), document.id, TRANSACTION))).toMatchObject({ code: 'PERMISSION_DENIED', message: '这份文档是单独分享给你的，不能再分享给别人' })
+    expect((await errorOf(service.list(member(BOB), MISSING, TRANSACTION))).code).toBe('NOT_FOUND')
     store.space(TEAM_SPACE).status = 'archived'
-    expect(await errorOf(service.list(member(ALICE), document.id))).toMatchObject({ code: 'PERMISSION_DENIED', message: SHARING_FROZEN_MESSAGE })
+    expect(await errorOf(service.list(member(ALICE), document.id, TRANSACTION))).toMatchObject({ code: 'PERMISSION_DENIED', message: SHARING_FROZEN_MESSAGE })
     expect(store.grants.listFor).toHaveBeenCalledTimes(1)
   })
 })

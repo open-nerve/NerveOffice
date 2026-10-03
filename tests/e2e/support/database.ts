@@ -58,7 +58,8 @@ export async function createFolderIn(spaceId: string, createdBy: TestUser, name:
       ? 1
       : Number((await client.query<{ depth: number }>('SELECT depth FROM folders WHERE id = $1', [parentId])).rows[0]?.depth ?? 0) + 1
     const result = await client.query<{ id: string }>(
-      'INSERT INTO folders (space_id, parent_id, name, created_by, depth, request_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
+      // 直接写库的文件夹没有新建请求：请求摘要给空串的摘要，与任何请求都对不上（M2 Codex 评审 CX6）
+      'INSERT INTO folders (space_id, parent_id, name, created_by, depth, request_id, payload_digest) VALUES ($1, $2, $3, $4, $5, $6, sha256(\'\'::bytea)) RETURNING id',
       [spaceId, parentId ?? null, name, createdBy.id, depth, randomUUID()],
     )
     return result.rows[0]?.id ?? ''

@@ -62,6 +62,10 @@ export const folders = pgTable('folders', {
   depth: integer('depth').notNull(),
   // 客户端为每一次新建生成：同一个文件夹里允许同名，重试重发时只能靠它判断是不是同一次新建（P4 设计 §3.2）
   requestId: uuid('request_id').notNull(),
+  // 新建请求的摘要（空间、父文件夹、名称，documents 的 folderCreatedPayloadDigest）：新建时写入、之后不改。
+  // 同一个 requestId 的重试按它判断是不是同一个请求，不拿请求与现在的名称、位置比较——建好之后改名或移动过，原样的重试照样是重放
+  // （M2 Codex 评审 CX6，与修订记录的 payload_digest 同一个做法）
+  payloadDigest: bytea('payload_digest').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, table => [
@@ -72,6 +76,7 @@ export const folders = pgTable('folders', {
   check('folders_root_depth_check', sql`(${table.parentId} IS NULL) = (${table.depth} = 1)`),
   // 在回收站里（trashed）与属于某个删除单元是同一件事（M2-P4 设计 §3.4 第 3 条）
   check('folders_trash_entry_check', sql`(${table.trashEntryId} IS NULL) = (${table.status} = 'active')`),
+  check('folders_payload_digest_check', sql`octet_length(${table.payloadDigest}) = 32`),
   unique('folders_request_id_key').on(table.requestId),
   // 列出一层：索引定位"某个空间里某个父文件夹的直接子文件夹"这一段行。
   // 排序用不上它：列表按 lower(name) 排（不区分大小写），要走索引得另建一个 lower(name) 的表达式索引。

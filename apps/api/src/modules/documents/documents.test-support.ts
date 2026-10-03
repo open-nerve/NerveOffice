@@ -2,7 +2,6 @@
 // 访问策略用真实的实现（EffectiveAccessPolicy），它依赖的空间事实由内存里的空间与成员算出、单独授权由内存里的授权给出（M2-P5）：
 // 测试覆盖的是真实的权限规则。
 import type { GrantRole, SpaceRole, SpaceStatus, SpaceType } from '@nerve-office/contracts'
-import type { Buffer } from 'node:buffer'
 import type { AuditEvent, AuditService } from '../audit/index.ts'
 import type { Transaction, TransactionRunner } from '../database/index.ts'
 import type { SpaceFacts, SpaceFactsWithOwner, SpacesService } from '../spaces/index.ts'
@@ -15,6 +14,7 @@ import type { FolderAncestorRow, FolderRow, FoldersRepository, NewFolder, Subtre
 import type { SpaceTreeRepository } from './space-tree.repository.ts'
 import type { NewTrashEntry, TrashEntriesRepository, TrashEntryRow } from './trash-entries.repository.ts'
 import type { WriteAccessRevocation, WriteAccessScope } from './write-access.ts'
+import { Buffer } from 'node:buffer'
 import { FOLDER_LIST_MAX_ITEMS, TRASH_RETENTION_DAYS } from '@nerve-office/contracts'
 import { vi } from 'vitest'
 import { parseAuditEvent } from '../audit/index.ts'
@@ -27,7 +27,8 @@ export const BOB_SPACE = '0199a2c4-0000-7000-8000-0000000000b1'
 /** 团队空间：一开始没有成员，测试按需加 */
 export const TEAM_SPACE = '0199a2c4-0000-7000-8000-0000000000c1'
 
-const TRANSACTION = { transaction: true } as unknown as Transaction
+/** 假的事务：事务与只读快照都直接执行，用例据此核对传给仓储的是调用方开的那一个 */
+export const TRANSACTION = { transaction: true } as unknown as Transaction
 const NOW = new Date('2026-09-27T08:00:00.000Z')
 /** 假仓储里分享写入的"数据库时间"：比 NOW 晚，用例据此核对新建与调整更新了设置的时间、没有变化时没更新 */
 export const GRANT_WRITTEN_AT = new Date('2026-09-27T09:00:00.000Z')
@@ -55,9 +56,13 @@ interface FakeSpace {
   readonly members: Map<string, SpaceRole>
 }
 
+/** 内存里的一个文件夹：行，连同新建时的 requestId 与请求摘要（M2 Codex 评审 CX6） */
+export type StoredFolder = FolderRow & { readonly requestId: string, readonly payloadDigest: Buffer }
+
 export class FakeStore {
   readonly documents = new Map<string, DocumentRow>()
-  readonly folders = new Map<string, FolderRow & { requestId: string }>()
+  /** 文件夹连同新建时的 requestId 与请求摘要（直接建的没有对应的请求，摘要是全零，与任何请求都对不上） */
+  readonly folders = new Map<string, StoredFolder>()
   /** 回收站里的删除单元（M2-P4 S3）：id → 行 */
   readonly trashEntries = new Map<string, TrashEntryRow>()
   /** 文档与文件夹所属的删除单元（状态不在行类型里）：不在这里就是正常状态 */
@@ -92,7 +97,7 @@ export class FakeStore {
   }
 
   /** 建一个文件夹（层数按父文件夹算好） */
-  addFolder(overrides: Partial<FolderRow> & { requestId?: string } = {}): FolderRow {
+  addFolder(overrides: Partial<StoredFolder> = {}): StoredFolder {
     this.sequence += 1
     const id = `0199a2c4-0000-7000-8000-${String(this.sequence).padStart(12, '0')}`
     const parentId = overrides.parentId ?? null
@@ -107,6 +112,7 @@ export class FakeStore {
       createdAt: NOW,
       updatedAt: NOW,
       requestId: `request-${id}`,
+      payloadDigest: Buffer.alloc(32),
       ...overrides,
     }
     this.folders.set(id, row)
@@ -525,7 +531,11 @@ export class FakeStore {
     }),
   }
 
-  readonly transactions = { run: vi.fn(async <T>(work: (transaction: Transaction) => Promise<T>) => work(TRANSACTION)) }
+  readonly transactions = {
+    run: vi.fn(async <T>(work: (transaction: Transaction) => Promise<T>) => work(TRANSACTION)),
+    readSnapshot: vi.fn(async <T>(work: (transaction: Transaction) => Promise<T>) => work(TRANSACTION)),
+  }
+
   readonly spaces = {
     personalSpaceOf: vi.fn(async (userId: string) => {
       const entry = [...this.spaceRecords.entries()].find(([, space]) => space.type === 'personal' && space.owner === userId)

@@ -165,8 +165,8 @@ export class DocumentsRepository {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
 
   /** 可访问的文档，按更新时间从新到旧；after 是上一页最后一条的位置（keyset）。 */
-  async listAccessible(scope: AccessibleScope, options: ListOptions): Promise<DocumentRow[]> {
-    return this.db
+  async listAccessible(scope: AccessibleScope, options: ListOptions, transaction?: Transaction): Promise<DocumentRow[]> {
+    return executorOf(this.db, transaction)
       .select(COLUMNS)
       .from(d)
       .where(and(accessible(scope), inFolder(options.folderId), afterPosition(options.after)))
@@ -179,8 +179,8 @@ export class DocumentsRepository {
    * 不论他在那个空间里有没有角色；排序与分页与文档列表一致。每行带他在这份文档上的授权角色（同一条语句），
    * 内容权限由访问策略的批量入口按它与空间事实算（accessOfMany），不在这里算
    */
-  async listGranted(userId: string, options: PageOptions): Promise<GrantedDocumentRow[]> {
-    return this.db
+  async listGranted(userId: string, options: PageOptions, transaction?: Transaction): Promise<GrantedDocumentRow[]> {
+    return executorOf(this.db, transaction)
       .select({ ...COLUMNS, grantRole: grantRoleOf(d.id, userId) })
       .from(d)
       .where(and(accessible({ spaceIds: [], grantsOf: userId }), afterPosition(options.after)))
@@ -194,8 +194,8 @@ export class DocumentsRepository {
    * 大小写不敏感由两边一起 lower() 做；关键词里的 `\`、`%`、`_` 由调用方转义好，这里显式写出配套的 ESCAPE。
    * 本版不建 pg_trgm 索引（设计 §3.4 第 5 条已登记延期项，M7 压测时复核）
    */
-  async searchByTitle(scope: AccessibleScope, options: SearchOptions): Promise<SearchRow[]> {
-    return this.db
+  async searchByTitle(scope: AccessibleScope, options: SearchOptions, transaction?: Transaction): Promise<SearchRow[]> {
+    return executorOf(this.db, transaction)
       .select({ ...COLUMNS, granted: scope.grantsOf === undefined ? sql<boolean>`false` : grantedTo(d.id, scope.grantsOf) })
       .from(d)
       .where(and(

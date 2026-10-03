@@ -7,6 +7,7 @@ import { randomBytes } from 'node:crypto'
 import { ADMIN_PAGE_SIZE, USER_DIRECTORY_LIMIT, usernameSchema } from '@nerve-office/contracts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
+import { TransactionRunner } from '../database/index.ts'
 import { AppLogger } from '../logging/index.ts'
 import { decodeAccountCursor, encodeAccountCursor } from './account-cursor.ts'
 import { PasswordHasher } from './password-hasher.ts'
@@ -30,33 +31,36 @@ export type CredentialCheck
 @Injectable()
 export class UsersService implements OnModuleInit {
   readonly #logger: AppLogger
-  /** 读出库里现存哈希的参数、交给哈希器（Codex 评审 CX4）：成功一次即可 */
+  /** 读出库里现存哈希的参数、交给哈希器（Codex 评审 CX4）：成功一次即可；正在读或已经读成功时有值，读失败时清空（M2 Codex 评审 CX2） */
   #storedParameters: Promise<void> | undefined
 
   constructor(
     private readonly repository: UsersRepository,
     private readonly hasher: PasswordHasher,
+    private readonly transactions: TransactionRunner,
     logger: AppLogger,
   ) {
     this.#logger = logger.with({ module: 'users' })
   }
 
   /**
-   * 启动时读出库里现存哈希的参数，但不等它：数据库暂时连不上时照常启动（就绪探针另有报告），验证时再读。
+   * 启动时读出库里现存哈希的参数，但不等它：数据库暂时连不上时照常启动（就绪探针另有报告），读不出来只记警告，第一次验证时再读。
    * 原来这里还要生成一个假哈希给不存在的用户名比对（P3 审查 A13）；现在不存在的用户名由哈希器的 reject 按参数直接计算，不再需要它
    */
   onModuleInit(): void {
-    void this.observeStoredParameters()
+    void this.observeStoredParameters().catch((error: unknown) => {
+      this.#logger.warn('启动时没能读出现存密码哈希的参数，第一次验证时再读', { err: error })
+    })
   }
 
-  /** 按 id 取账户（含停用的） */
-  async findById(id: string): Promise<User | undefined> {
-    return this.repository.findById(id)
+  /** 按 id 取账户（含停用的）。只读快照的开场核对在快照里调用、传入快照的事务（auth 的 SnapshotIdentityCheck） */
+  async findById(id: string, transaction?: Transaction): Promise<User | undefined> {
+    return this.repository.findById(id, transaction)
   }
 
-  /** 按 id 取管理界面用的账户（带创建时间，含停用的）：转移页的页头（M2-P2 设计 §3.10） */
-  async findAccount(id: string): Promise<AccountRecord | undefined> {
-    return this.repository.findRecord(id)
+  /** 按 id 取管理界面用的账户（带创建时间，含停用的）：账户详情、转移页的页头（M2-P2 设计 §3.10），在只读快照里读 */
+  async findAccount(id: string, transaction: Transaction): Promise<AccountRecord | undefined> {
+    return this.repository.findRecord(id, transaction)
   }
 
   /**
@@ -84,12 +88,13 @@ export class UsersService implements OnModuleInit {
    * 现存的各组参数各算一次，账户的哈希参数与当前配置不同时，失败的耗时也与"用户名不存在"相同（Codex 评审 CX4，ADR-007）。
    * 停用的账户同样走 reject：密码对不对，耗时都一样，不暴露账户已停用（M2-P1 审查 A8）。
    * 验证通过且哈希的参数已经过时，顺带用当前的参数重新哈希（失败只记日志，不影响这次登录）。
-   * 数据库只在比对之前读（凭据），比对之后的重新哈希不抛出：调用方据此把这里抛出的数据库繁忙当作"还没有比对"，
+   * 数据库只在比对之前读（现存的参数组、凭据），比对之后的重新哈希不抛出：调用方据此把这里抛出的数据库繁忙当作"还没有比对"，
    * 退回限流的名额（auth 的 releasingIfBusy，M2-P6 第 3 片复验）。比对之后不能再加会抛出的数据库访问，否则就让人借繁忙多猜一次
    * （单元测试核对比对失败之后仓储不再被调用；集成测试 auth/throttle-when-busy.test.ts 核对账户行被锁着时错的密码不等锁）
    */
   async verifyCredentials(usernameInput: string, password: string): Promise<CredentialCheck> {
-    // 先让哈希器知道库里现存的参数组：之后的失败与 reject 都把它们各算一次，刚启动时也不少算（单元测试核对不等它读完就不计算）；读过一次之后不再读
+    // 先让哈希器知道库里现存的参数组：之后的失败与 reject 都把它们各算一次，刚启动时也不少算（单元测试核对不等它读完就不计算）；
+    // 读过一次之后不再读。读不出来时这里就抛出，一次哈希也还没算（M2 Codex 评审 CX2，见 observeStoredParameters）
     await this.observeStoredParameters()
     const username = usernameSchema.safeParse(usernameInput)
     const credentials = username.success ? await this.repository.findCredentialsByUsername(username.data) : undefined
@@ -130,7 +135,7 @@ export class UsersService implements OnModuleInit {
   /**
    * 按 id 验证密码（修改密码时的旧密码，M2-P1 设计 §3.5）。账户不存在或不可用时走 reject，
    * 与验证失败做同样的计算，同登录（ADR-007）。通过时返回验证过的凭据，事务里交给 replacePassword 复核。
-   * 数据库只在比对之前读，同 verifyCredentials
+   * 数据库只在比对之前读，现存的参数组读不出来时同样在比对之前抛出，同 verifyCredentials
    */
   async verifyPasswordOf(userId: string, password: string): Promise<VerifiedCredentials | undefined> {
     await this.observeStoredParameters()
@@ -206,21 +211,24 @@ export class UsersService implements OnModuleInit {
     return { account: await this.repository.setSystemRole(account.id, systemRole, transaction), changed: true }
   }
 
-  /** 管理界面的账户列表（含停用的）：按登录名排序分页 */
-  async listAccounts(query: AdminUserListQuery): Promise<{ readonly items: AccountRecord[], readonly nextCursor: string | null }> {
+  /** 管理界面的账户列表（含停用的）：按登录名排序分页，在只读快照里读（调用方 admin 开快照） */
+  async listAccounts(query: AdminUserListQuery, transaction: Transaction): Promise<{ readonly items: AccountRecord[], readonly nextCursor: string | null }> {
     const afterUsername = query.cursor === undefined ? undefined : decodeAccountCursor(query.cursor)
     if (query.cursor !== undefined && afterUsername === undefined)
       throw new AppError('REQUEST_INVALID', '分页的游标不合法，请从第一页重新加载')
     // 多取一条，判断还有没有下一页
-    const rows = await this.repository.listRecords({ query: query.query, status: query.status, afterUsername, limit: ADMIN_PAGE_SIZE + 1 })
+    const rows = await this.repository.listRecords({ query: query.query, status: query.status, afterUsername, limit: ADMIN_PAGE_SIZE + 1 }, transaction)
     const items = rows.slice(0, ADMIN_PAGE_SIZE)
     const last = items.at(-1)
     return { items, nextCursor: rows.length > ADMIN_PAGE_SIZE && last !== undefined ? encodeAccountCursor(last.username) : null }
   }
 
-  /** 同事目录（M2-P1 设计 §3.6）：有效账户，显示名或登录名包含关键词 */
+  /**
+   * 同事目录（M2-P1 设计 §3.6）：有效账户，显示名或登录名包含关键词。在只读快照里读（M2 Codex 评审 CX1）：
+   * 开场核对确认查的人仍是有效账户，那一刻的目录才给他
+   */
   async directory(query: UserDirectoryQuery): Promise<User[]> {
-    return this.repository.searchActive(query.query, USER_DIRECTORY_LIMIT)
+    return this.transactions.readSnapshot(async transaction => this.repository.searchActive(query.query, USER_DIRECTORY_LIMIT, transaction))
   }
 
   /**
@@ -307,8 +315,14 @@ export class UsersService implements OnModuleInit {
   }
 
   /**
-   * 库里现存哈希的参数交给哈希器，之后的失败与 reject 都把各组各算一次（Codex 评审 CX4）。不会失败：读不出来时只记警告，
-   * 下次验证时再读；在那之前，哈希器仍记下验证时遇到的各组参数
+   * 库里现存哈希的参数交给哈希器，之后的失败与 reject 都把各组各算一次（Codex 评审 CX4）。读成功一次之后缓存，不再读。
+   * 读不出来时照样抛出、不缓存这次失败，下一次验证再读（M2 Codex 评审 CX2）：参数组没有完整读出来之前不进入密码验证。
+   * 原来这里吞掉失败、照常往下验证：哈希器这时只知道当前参数与验证时遇到过的几组，旧参数的账户比对自己那一组，
+   * 不存在的用户名却只算已知的那几组，两条路径的计算不同，失败的耗时就暴露了账户是否存在——ADR-007 的承诺在这个故障窗口里不成立。
+   * 抛出的错误由调用方处理（auth 的 releasingIfBusy）：数据库繁忙（等锁超时、语句超时或被取消、取不到连接）退回限流的名额、回 503，
+   * 这时还没有比对，退回不会让任何人多猜一次；别的失败（例如连接断开）与比对之前读凭据失败同一个规则：原样抛出、回 500，
+   * 名额不退回、按一次失败计——这一步不依赖请求的输入，谁也不能借它挑着让哪次尝试不计数，规则因此不必为它另开一条。
+   * 正在读时并发的几次验证等同一次读取，读失败时一起失败
    */
   private async observeStoredParameters(): Promise<void> {
     this.#storedParameters ??= this.repository.passwordHashParameters()
@@ -317,7 +331,7 @@ export class UsersService implements OnModuleInit {
       })
       .catch((error: unknown) => {
         this.#storedParameters = undefined
-        this.#logger.warn('没能读出现存密码哈希的参数，下次验证时再读', { err: error })
+        throw error
       })
     return this.#storedParameters
   }

@@ -77,8 +77,8 @@ export class UsersRepository {
   }
 
   /** 按 id 取管理界面用的账户（带创建时间，含停用的） */
-  async findRecord(id: string): Promise<AccountRecord | undefined> {
-    const [row] = await this.db.select(RECORD_COLUMNS).from(users).where(eq(users.id, id))
+  async findRecord(id: string, transaction?: Transaction): Promise<AccountRecord | undefined> {
+    const [row] = await executorOf(this.db, transaction).select(RECORD_COLUMNS).from(users).where(eq(users.id, id))
     return row
   }
 
@@ -226,8 +226,8 @@ export class UsersRepository {
   }
 
   /** 管理界面的账户列表（含停用的），按登录名排序，多取的一条由调用方判断有没有下一页 */
-  async listRecords(filter: AccountFilter): Promise<AccountRecord[]> {
-    return this.db
+  async listRecords(filter: AccountFilter, transaction?: Transaction): Promise<AccountRecord[]> {
+    return executorOf(this.db, transaction)
       .select(RECORD_COLUMNS)
       .from(users)
       .where(and(
@@ -240,8 +240,8 @@ export class UsersRepository {
   }
 
   /** 同事目录：有效账户，按显示名（同名再按登录名）排序 */
-  async searchActive(keyword: string | undefined, limit: number): Promise<User[]> {
-    return this.db
+  async searchActive(keyword: string | undefined, limit: number, transaction?: Transaction): Promise<User[]> {
+    return executorOf(this.db, transaction)
       .select(USER_COLUMNS)
       .from(users)
       .where(and(eq(users.status, 'active'), nameContains(keyword)))

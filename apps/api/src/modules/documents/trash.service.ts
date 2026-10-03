@@ -77,17 +77,18 @@ export class TrashService {
   /**
    * 一个空间的回收站（spec §6）：看得到空间内容的人都看得到这个列表（标题在删除之前他本来就看得到），
    * 能不能恢复、能不能永久删除由每一条的 permissions 给出。看不到与空间不存在都是 NOT_FOUND。
+   * 判断权限、列出删除单元、计数与原位置的名称都在调用方（workspace）开的只读快照里（M2 Codex 评审 CX1）
    */
-  async list(actor: Actor, query: TrashListQuery): Promise<TrashPage> {
+  async list(actor: Actor, query: TrashListQuery, transaction: Transaction): Promise<TrashPage> {
     const after = query.cursor === undefined ? undefined : decodeTimeCursor(query.cursor)
     if (query.cursor !== undefined && after === undefined)
       throw new AppError('REQUEST_INVALID', '分页的游标不合法，请从第一页重新加载')
-    const access = await requireSpaceContent(this.policy, actor, query.spaceId, 'view')
+    const access = await requireSpaceContent(this.policy, actor, query.spaceId, 'view', transaction)
     // 多取一条，判断还有没有下一页
-    const rows = await this.entries.listBySpace(query.spaceId, { limit: TRASH_LIST_PAGE_SIZE + 1, after })
+    const rows = await this.entries.listBySpace(query.spaceId, { limit: TRASH_LIST_PAGE_SIZE + 1, after }, transaction)
     const page = rows.slice(0, TRASH_LIST_PAGE_SIZE)
-    const counts = await this.documents.countByTrashEntries(page.map(row => row.id))
-    const parents = await this.folders.activeNamesOf(page.flatMap(row => row.originParentId ?? []), query.spaceId)
+    const counts = await this.documents.countByTrashEntries(page.map(row => row.id), transaction)
+    const parents = await this.folders.activeNamesOf(page.flatMap(row => row.originParentId ?? []), query.spaceId, transaction)
     const last = page.at(-1)
     return {
       items: page.map(row => this.toSummary(row, access, actor.userId, counts.get(row.id) ?? 0, parents)),

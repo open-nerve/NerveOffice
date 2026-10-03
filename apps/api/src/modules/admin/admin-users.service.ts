@@ -33,18 +33,23 @@ export class AdminUsersService {
     private readonly transactions: TransactionRunner,
   ) {}
 
-  /** 一个账户（含停用的）；不存在时 NOT_FOUND */
+  /** 一个账户（含停用的）；不存在时 NOT_FOUND。账户与登录的锁定在同一个只读快照里读（M2 Codex 评审 CX1） */
   async get(userId: string): Promise<AdminUser> {
-    const account = await this.users.findAccount(userId)
-    if (account === undefined)
-      throw new AppError('NOT_FOUND')
-    return this.view(account)
+    return this.transactions.readSnapshot(async (transaction) => {
+      const account = await this.users.findAccount(userId, transaction)
+      if (account === undefined)
+        throw new AppError('NOT_FOUND')
+      return this.view(account, transaction)
+    })
   }
 
+  /** 账户列表与各自的登录锁定：在同一个只读快照里读（M2 Codex 评审 CX1） */
   async list(query: AdminUserListQuery): Promise<AdminUserListResponse> {
-    const page = await this.users.listAccounts(query)
-    const locks = await this.lockouts.locksOf(page.items.map(account => account.username))
-    return { items: page.items.map(account => toAdminUser(account, locks.get(account.username))), nextCursor: page.nextCursor }
+    return this.transactions.readSnapshot(async (transaction) => {
+      const page = await this.users.listAccounts(query, transaction)
+      const locks = await this.lockouts.locksOf(page.items.map(account => account.username), transaction)
+      return { items: page.items.map(account => toAdminUser(account, locks.get(account.username))), nextCursor: page.nextCursor }
+    })
   }
 
   /**
@@ -127,8 +132,8 @@ export class AdminUsersService {
     await this.invitations.revokeIssuedBy(actor.user, issuerId, reason, origin, transaction)
   }
 
-  /** 管理界面里的账户，带着登录的锁定；写操作传入它的事务（在提交之前读） */
-  private async view(account: AccountRecord, transaction?: Transaction): Promise<AdminUser> {
+  /** 管理界面里的账户，带着登录的锁定：写操作传入它的事务（在提交之前读），读接口传入它的只读快照 */
+  private async view(account: AccountRecord, transaction: Transaction): Promise<AdminUser> {
     const locks = await this.lockouts.locksOf([account.username], transaction)
     return toAdminUser(account, locks.get(account.username))
   }

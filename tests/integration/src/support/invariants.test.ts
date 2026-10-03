@@ -33,8 +33,8 @@ function writer(client: pg.Client, owner: string) {
   return {
     folder: async (spaceId: string, options: { parentId?: string, depth?: number, entry?: string } = {}): Promise<string> =>
       (await client.query<{ id: string }>(
-        `INSERT INTO folders (space_id, parent_id, name, created_by, depth, request_id, status, trash_entry_id)
-         VALUES ($1, $2, '夹', $3, $4, $5, CASE WHEN $6::uuid IS NULL THEN 'active' ELSE 'trashed' END, $6) RETURNING id`,
+        `INSERT INTO folders (space_id, parent_id, name, created_by, depth, request_id, payload_digest, status, trash_entry_id)
+         VALUES ($1, $2, '夹', $3, $4, $5, sha256(''::bytea), CASE WHEN $6::uuid IS NULL THEN 'active' ELSE 'trashed' END, $6) RETURNING id`,
         [spaceId, options.parentId ?? null, owner, options.depth ?? (options.parentId === undefined ? 1 : 2), randomUUID(), options.entry ?? null],
       )).rows[0]!.id,
     document: async (spaceId: string, options: { folderId?: string, entry?: string } = {}): Promise<string> =>

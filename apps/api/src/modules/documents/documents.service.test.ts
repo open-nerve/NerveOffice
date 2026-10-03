@@ -3,14 +3,14 @@ import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { decodeTimeCursor, encodeTimeCursor } from '../../shared/time-cursor.ts'
 import { DocumentsService } from './documents.service.ts'
-import { ALICE, ALICE_SPACE, BOB, BOB_SPACE, FakeStore, member, TEAM_SPACE } from './documents.test-support.ts'
+import { ALICE, ALICE_SPACE, BOB, BOB_SPACE, FakeStore, member, TEAM_SPACE, TRANSACTION } from './documents.test-support.ts'
 
 const MISSING_SPACE = '0199a2c4-0000-7000-8000-0000000000ff'
 
 function setup() {
   const store = new FakeStore()
-  const { documents, folders, spaces, policy } = store.deps
-  const service = new DocumentsService(documents, folders, spaces, policy)
+  const { documents, folders, spaces, policy, transactions } = store.deps
+  const service = new DocumentsService(documents, folders, spaces, policy, transactions)
   return { store, service }
 }
 
@@ -55,9 +55,10 @@ describe('DocumentsService.get', () => {
     expect([forbidden.code, missing.code]).toEqual(['NOT_FOUND', 'NOT_FOUND'])
     expect(missing.message).toBe(forbidden.message)
     expect(store.spaces.accessFactsOf).toHaveBeenCalledTimes(2)
-    expect(store.spaces.accessFactsOf).toHaveBeenLastCalledWith(ALICE, '00000000-0000-0000-0000-000000000000', { transaction: undefined })
+    // 都在读请求的只读快照里查（M2 Codex 评审 CX1）
+    expect(store.spaces.accessFactsOf).toHaveBeenLastCalledWith(ALICE, '00000000-0000-0000-0000-000000000000', { transaction: TRANSACTION })
     expect(store.grants.roleOf).toHaveBeenCalledTimes(2)
-    expect(store.grants.roleOf).toHaveBeenLastCalledWith('00000000-0000-0000-0000-000000000000', ALICE, undefined)
+    expect(store.grants.roleOf).toHaveBeenLastCalledWith('00000000-0000-0000-0000-000000000000', ALICE, TRANSACTION)
   })
 
   it('只凭单独授权（M2-P5）：能打开，不给所在的文件夹（不给目录结构）；结构性的权限位一律没有', async () => {
@@ -99,12 +100,12 @@ describe('DocumentsService.list', () => {
     store.repositories.documents.listAccessible.mockImplementation(async (_scope, options) => [newer, older].slice(0, options.limit))
     const page = await service.list(member(ALICE), { limit: 1 })
     // 没有指定目录：空间的根目录（folderId 为 null）；状态是正常（M2-P4 设计 §3.4 第 1 条）；只要空间那一半（M2-P5 设计 §3.4(2)）
-    expect(store.repositories.documents.listAccessible).toHaveBeenCalledWith({ spaceIds: [ALICE_SPACE], grantsOf: undefined }, { limit: 2, after: undefined, folderId: null })
+    expect(store.repositories.documents.listAccessible).toHaveBeenCalledWith({ spaceIds: [ALICE_SPACE], grantsOf: undefined }, { limit: 2, after: undefined, folderId: null }, TRANSACTION)
     expect(page.items.map(item => item.id)).toEqual([newer.id])
     expect(decodeTimeCursor(page.nextCursor ?? '')).toEqual({ position: newer.position, id: newer.id })
 
     const last = await service.list(member(ALICE), { limit: 5, cursor: page.nextCursor ?? '' })
-    expect(store.repositories.documents.listAccessible).toHaveBeenLastCalledWith({ spaceIds: [ALICE_SPACE], grantsOf: undefined }, { limit: 6, after: { position: newer.position, id: newer.id }, folderId: null })
+    expect(store.repositories.documents.listAccessible).toHaveBeenLastCalledWith({ spaceIds: [ALICE_SPACE], grantsOf: undefined }, { limit: 6, after: { position: newer.position, id: newer.id }, folderId: null }, TRANSACTION)
     expect(last.nextCursor).toBeNull()
   })
 
@@ -138,7 +139,7 @@ describe('DocumentsService.list', () => {
     const forbidden = await errorOf(service.list(member(ALICE), { spaceId: TEAM_SPACE, limit: 10 }))
     const missing = await errorOf(service.list(member(ALICE), { spaceId: MISSING_SPACE, limit: 10 }))
     expect([forbidden.code, missing.code]).toEqual(['NOT_FOUND', 'NOT_FOUND'])
-    expect(store.spaces.accessFactsOf.mock.calls).toEqual([[ALICE, TEAM_SPACE, { transaction: undefined }], [ALICE, MISSING_SPACE, { transaction: undefined }]])
+    expect(store.spaces.accessFactsOf.mock.calls).toEqual([[ALICE, TEAM_SPACE, { transaction: TRANSACTION }], [ALICE, MISSING_SPACE, { transaction: TRANSACTION }]])
 
     store.space(TEAM_SPACE).visibleToAll = true
     expect((await service.list(member(ALICE), { spaceId: TEAM_SPACE, limit: 10 })).items).toHaveLength(1)

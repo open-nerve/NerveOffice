@@ -92,8 +92,8 @@ export class DocumentGrantsRepository {
   }
 
   /** 这份文档的全部授权（含停用的人的）：一份文档的授权至多是全部同事，不分页；顺序由调用方按人名排 */
-  async listFor(documentId: string): Promise<GrantRow[]> {
-    return this.db.select(COLUMNS).from(g).where(eq(g.documentId, documentId)).orderBy(asc(g.userId))
+  async listFor(documentId: string, transaction?: Transaction): Promise<GrantRow[]> {
+    return executorOf(this.db, transaction).select(COLUMNS).from(g).where(eq(g.documentId, documentId)).orderBy(asc(g.userId))
   }
 
   /** 新建（调用方已锁住文档行、确认还没有这一条）：被授权人不能是设置人，由表上的 CHECK 兜底 */

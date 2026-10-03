@@ -30,6 +30,18 @@ export function copiedPayloadDigest(sourceId: string, spaceId: string, folderId:
   return createHash('sha256').update(`copied\n${sourceId}\n${spaceId}\n${folderId ?? ''}\n${title ?? ''}`, 'utf8').digest()
 }
 
+/**
+ * 新建文件夹（M2 Codex 评审 CX6）：请求里的空间、父文件夹（没给时留空）与名称（经契约规范化之后的，也就是存下的那个）。
+ * 只按请求里的东西算，新建时存进 folders.payload_digest、之后不再改：建好之后改名、移动（同一个空间里、跨空间），
+ * 同一个 requestId 的原样重试照样按重放处理。名称不含控制字符（契约），按换行分段不会与名称混淆；
+ * id 已由契约统一成小写（M2-P2 审查 A1），与 PostgreSQL 的 uuid::text 写法相同。
+ * 迁移 0021 按同一个写法在 SQL 里给已有的行回填（集成测试经接口原样重发迁移之前的新建请求，核对两边算的一致）：
+ * 改这里的写法，已经存下的摘要就对不上了，要另加迁移
+ */
+export function folderCreatedPayloadDigest(spaceId: string, parentId: string | undefined, name: string): Buffer {
+  return createHash('sha256').update(`folder-created\n${spaceId}\n${parentId ?? ''}\n${name}`, 'utf8').digest()
+}
+
 /** 保存：基准修订号与解压后的快照字节。按解压后的字节算，同一份内容重试时，客户端不必保证压缩结果逐字节相同。 */
 export function savedPayloadDigest(baseRevision: number, raw: Buffer): Buffer {
   return createHash('sha256').update(`saved\n${baseRevision}\n`, 'utf8').update(raw).digest()

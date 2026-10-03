@@ -39,8 +39,8 @@ function withoutFolderCreation(store: FakeStore): DocumentAccessPolicy {
   const { policy } = store
   return {
     accessOf: async (userId, document, transaction) => policy.accessOf(userId, document, transaction),
-    visibleSpaces: async actor => policy.visibleSpaces(actor),
-    accessOfMany: async (userId, documents) => policy.accessOfMany(userId, documents),
+    visibleSpaces: async (actor, transaction) => policy.visibleSpaces(actor, transaction),
+    accessOfMany: async (userId, documents, transaction) => policy.accessOfMany(userId, documents, transaction),
     spaceAccessOf: async (actor, spaceId, transaction) => {
       const access = await policy.spaceAccessOf(actor, spaceId, transaction)
       return access === undefined ? undefined : { ...access, permissions: { ...access.permissions, canCreateFolders: false } }
@@ -195,6 +195,58 @@ describe('FoldersService.create', () => {
     await service.create(member(ALICE), command, HTTP_ORIGIN)
     store.setMember(TEAM_SPACE, ALICE, undefined)
     expect((await errorOf(service.create(member(ALICE), command, HTTP_ORIGIN))).code).toBe('NOT_FOUND')
+  })
+})
+
+/**
+ * 是不是同一个请求按新建时存下的请求摘要判断（M2 Codex 评审 CX6）：原来拿请求与文件夹现在的名称、位置比较，
+ * 建好之后改名、移动过，原样的重试被判成冲突；载荷不同、却碰巧与现状相同的请求反而被当成重放
+ */
+describe('FoldersService.create 的重放按新建时的请求（M2 Codex 评审 CX6）', () => {
+  it('建好之后改名：原样重发是重放，返回同一个文件夹现在的样子（新的名称），不再建、不记审计', async () => {
+    const { store, service } = setup()
+    const command = { spaceId: ALICE_SPACE, name: '待整理', requestId: nextRequestId() }
+    const first = await service.create(member(ALICE), command, HTTP_ORIGIN)
+    await service.update(member(ALICE), first.id, { name: '已整理' }, HTTP_ORIGIN)
+    const replayed = await service.create(member(ALICE), command, HTTP_ORIGIN)
+    expect(replayed).toMatchObject({ id: first.id, name: '已整理', replayed: true })
+    expect(store.folders.size).toBe(1)
+    expect(store.audits.map(event => event.action)).toEqual(['folders.created', 'folders.renamed'])
+  })
+
+  it('建好之后在同一个空间里移动、移到别的空间：原样重发都是重放，位置与权限按它现在所在的空间给', async () => {
+    const { store, service } = setup()
+    const parent = store.addFolder({ spaceId: ALICE_SPACE, name: '上一层' })
+    const command = { spaceId: ALICE_SPACE, parentId: parent.id, name: '资料', requestId: nextRequestId() }
+    const first = await service.create(member(ALICE), command, HTTP_ORIGIN)
+    await service.update(member(ALICE), first.id, { parentId: null }, HTTP_ORIGIN)
+    expect(await service.create(member(ALICE), command, HTTP_ORIGIN)).toMatchObject({ id: first.id, parentId: null, depth: 1, replayed: true })
+
+    store.setMember(TEAM_SPACE, ALICE, 'editor')
+    await service.move(member(ALICE), first.id, { spaceId: TEAM_SPACE }, HTTP_ORIGIN)
+    const moved = await service.create(member(ALICE), command, HTTP_ORIGIN)
+    expect(moved).toMatchObject({ id: first.id, name: first.name, spaceId: TEAM_SPACE, parentId: null, depth: 1, replayed: true })
+    expect(moved.permissions).toEqual(folderPermissionsOf('editor'))
+    expect(store.folders.size).toBe(2)
+  })
+
+  it('同一个 requestId、载荷不同：冲突——即使这次的载荷与文件夹现在的样子相同（改名之后拿新名称重发）', async () => {
+    const { service } = setup()
+    const command = { spaceId: ALICE_SPACE, name: '待整理', requestId: nextRequestId() }
+    const first = await service.create(member(ALICE), command, HTTP_ORIGIN)
+    await service.update(member(ALICE), first.id, { name: '已整理' }, HTTP_ORIGIN)
+    expect((await errorOf(service.create(member(ALICE), { ...command, name: '已整理' }, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+    expect((await errorOf(service.create(member(ALICE), { ...command, parentId: first.id }, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+  })
+
+  it('移到了看不到的空间：原样重发是冲突，不透露它现在在哪里', async () => {
+    const { store, service } = setup()
+    store.setMember(TEAM_SPACE, ALICE, 'editor')
+    const command = { spaceId: ALICE_SPACE, name: '资料', requestId: nextRequestId() }
+    const first = await service.create(member(ALICE), command, HTTP_ORIGIN)
+    await service.move(member(ALICE), first.id, { spaceId: TEAM_SPACE }, HTTP_ORIGIN)
+    store.setMember(TEAM_SPACE, ALICE, undefined)
+    expect((await errorOf(service.create(member(ALICE), command, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
   })
 })
 

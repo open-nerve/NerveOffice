@@ -2,6 +2,7 @@ import type { ExecutionContext } from '@nestjs/common'
 import type { Reflector } from '@nestjs/core'
 import type { Request, Response } from 'express'
 import type { User, UsersService } from '../users/index.ts'
+import type { RequestIdentities, RequestIdentity } from './request-identity.ts'
 import type { AuthenticatedSession, SessionService } from './session.service.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
@@ -26,8 +27,10 @@ function setup(options: { isPublic?: boolean, adminOnly?: boolean, session?: Aut
   }
   const users = { findActiveById: vi.fn(async (_id: string) => options.user) }
   const cookie = new SessionCookieSettings('http://127.0.0.1:4100', 60_000)
-  const guard = new SessionGuard(reflector as unknown as Reflector, sessions as unknown as SessionService, users as unknown as UsersService, cookie)
-  return { guard, sessions, users }
+  // 请求级的身份记录：只核对守卫记下了什么（记录本身见 request-identity.test.ts）
+  const identities = { record: vi.fn((_identity: RequestIdentity) => {}) }
+  const guard = new SessionGuard(reflector as unknown as Reflector, sessions as unknown as SessionService, users as unknown as UsersService, cookie, identities as unknown as RequestIdentities)
+  return { guard, sessions, users, identities }
 }
 
 function exchange(cookieHeader?: string) {
@@ -114,9 +117,9 @@ describe('SessionGuard', () => {
     expect(sessions.invalidatedByRotation).not.toHaveBeenCalled()
   })
 
-  it('有效：挂上当前用户、会话与派生的 CSRF 令牌，请求日志带上 userId', async () => {
+  it('有效：挂上当前用户、会话与派生的 CSRF 令牌，请求日志带上 userId；身份记进请求级的记录（只读快照的开场核对用，M2 Codex 评审 CX1）', async () => {
     const token = generateSessionToken()
-    const { guard, sessions } = setup({ session: SESSION, user: ALICE })
+    const { guard, sessions, identities } = setup({ session: SESSION, user: ALICE })
     const { context, request, logChild } = exchange(`theme=dark; nerve_session=${token}`)
     const requestLog = request.log
     expect(await guard.canActivate(context)).toBe(true)
@@ -128,13 +131,29 @@ describe('SessionGuard', () => {
     expect(requestUserId(request)).toBe(ALICE.id)
     expect(logChild).toHaveBeenCalledWith({ userId: ALICE.id })
     expect(request.log).not.toBe(requestLog)
+    expect(identities.record).toHaveBeenCalledExactlyOnceWith({ userId: ALICE.id, systemAdmin: false })
   })
 
-  it('只给系统管理员的接口：成员得到 PERMISSION_DENIED，系统管理员放行（M2-P1）', async () => {
+  it('只给系统管理员的接口：成员得到 PERMISSION_DENIED，系统管理员放行（M2-P1）；记下的身份带着读到的系统角色', async () => {
     const token = generateSessionToken()
     expect(await codeOf(setup({ adminOnly: true, session: SESSION, user: ALICE }).guard.canActivate(exchange(`nerve_session=${token}`).context))).toBe('PERMISSION_DENIED')
     const admin: User = { ...ALICE, systemRole: 'admin' }
-    expect(await setup({ adminOnly: true, session: SESSION, user: admin }).guard.canActivate(exchange(`nerve_session=${token}`).context)).toBe(true)
+    const { guard, identities } = setup({ adminOnly: true, session: SESSION, user: admin })
+    expect(await guard.canActivate(exchange(`nerve_session=${token}`).context)).toBe(true)
+    expect(identities.record).toHaveBeenCalledExactlyOnceWith({ userId: ALICE.id, systemAdmin: true })
+  })
+
+  it('没有通过认证的请求不记身份：没有会话、会话无效、账户不可用、公开的接口', async () => {
+    const outcomes = [
+      setup(),
+      setup({ session: undefined, user: ALICE }),
+      setup({ session: SESSION, user: undefined }),
+      setup({ isPublic: true, session: SESSION, user: ALICE }),
+    ]
+    for (const { guard } of outcomes)
+      await guard.canActivate(exchange(`nerve_session=${generateSessionToken()}`).context).catch(() => undefined)
+    for (const { identities } of outcomes)
+      expect(identities.record).not.toHaveBeenCalled()
   })
 
   it('只给系统管理员的接口：没有登录时仍然先要求登录（UNAUTHENTICATED），不暴露它是管理接口', async () => {

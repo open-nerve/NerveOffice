@@ -150,19 +150,22 @@ export class InvitationsService {
     const after = query.cursor === undefined ? undefined : decodeTimeCursor(query.cursor)
     if (query.cursor !== undefined && after === undefined)
       throw new AppError('REQUEST_INVALID', '分页的游标不合法，请从第一页重新加载')
-    const rows = await this.repository.list({ status: query.status, after, limit: ADMIN_PAGE_SIZE + 1 })
-    const page = rows.slice(0, ADMIN_PAGE_SIZE)
-    const issuers = await this.users.findByIds(page.map(row => row.createdBy))
-    const last = page.at(-1)
-    return {
-      items: page.map(row => toInvitation(row, summaryOf(issuers.get(row.createdBy), row.createdBy))),
-      nextCursor: rows.length > ADMIN_PAGE_SIZE && last !== undefined ? encodeTimeCursor({ position: last.position, id: last.id }) : null,
-    }
+    // 一页邀请与签发人的名字在同一个只读快照里读（M2 Codex 评审 CX1）
+    return this.transactions.readSnapshot(async (transaction) => {
+      const rows = await this.repository.list({ status: query.status, after, limit: ADMIN_PAGE_SIZE + 1 }, transaction)
+      const page = rows.slice(0, ADMIN_PAGE_SIZE)
+      const issuers = await this.users.findByIds(page.map(row => row.createdBy), transaction)
+      const last = page.at(-1)
+      return {
+        items: page.map(row => toInvitation(row, summaryOf(issuers.get(row.createdBy), row.createdBy))),
+        nextCursor: rows.length > ADMIN_PAGE_SIZE && last !== undefined ? encodeTimeCursor({ position: last.position, id: last.id }) : null,
+      }
+    })
   }
 
-  /** 按 id 批量取邀请的登录名（审计查询补名字） */
-  async usernamesOf(ids: readonly string[]): Promise<ReadonlyMap<string, string>> {
-    const rows = await this.repository.findUsernames([...new Set(ids)])
+  /** 按 id 批量取邀请的登录名（审计查询补名字，在它的只读快照里） */
+  async usernamesOf(ids: readonly string[], transaction: Transaction): Promise<ReadonlyMap<string, string>> {
+    const rows = await this.repository.findUsernames([...new Set(ids)], transaction)
     return new Map(rows.map(row => [row.id, row.username]))
   }
 

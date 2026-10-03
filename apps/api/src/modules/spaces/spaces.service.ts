@@ -78,8 +78,8 @@ export class SpacesService {
   }
 
   /** 这个人可能看得到的空间（候选）：个人空间在前，团队空间按名称排序。 */
-  async visibleSpacesOf(userId: string): Promise<SpaceFacts[]> {
-    return this.repository.visibleCandidatesFor(userId)
+  async visibleSpacesOf(userId: string, options: QueryOptions = {}): Promise<SpaceFacts[]> {
+    return this.repository.visibleCandidatesFor(userId, options.transaction)
   }
 
   /** 以共享锁持住空间行再读：在空间里新建文档、转移的来源与目标（M2-P2 设计 §3.6、§3.8）；不存在时为 undefined */
@@ -118,8 +118,8 @@ export class SpacesService {
     return { space: await this.repository.update(space.id, { status }, transaction), changed: true }
   }
 
-  async members(spaceId: string): Promise<SpaceMemberRecord[]> {
-    return this.repository.listMembers(spaceId)
+  async members(spaceId: string, options: QueryOptions = {}): Promise<SpaceMemberRecord[]> {
+    return this.repository.listMembers(spaceId, options.transaction)
   }
 
   /** 加成员：已经是成员时 ALREADY_MEMBER（改角色用 changeMemberRole） */
@@ -151,12 +151,12 @@ export class SpacesService {
   }
 
   /** 管理界面的团队空间列表：按创建时间从新到旧分页，带成员数与查看者自己的角色 */
-  async listTeamSpaces(viewerId: string, query: AdminSpaceListQuery): Promise<{ readonly items: TeamSpaceOverview[], readonly nextCursor: string | null }> {
+  async listTeamSpaces(viewerId: string, query: AdminSpaceListQuery, options: QueryOptions = {}): Promise<{ readonly items: TeamSpaceOverview[], readonly nextCursor: string | null }> {
     const after = query.cursor === undefined ? undefined : decodeTimeCursor(query.cursor)
     if (query.cursor !== undefined && after === undefined)
       throw new AppError('REQUEST_INVALID', '分页的游标不合法，请从第一页重新加载')
     // 多取一条，判断还有没有下一页
-    const rows = await this.repository.listTeamOverviews(viewerId, { query: query.query, status: query.status, after, limit: ADMIN_PAGE_SIZE + 1 })
+    const rows = await this.repository.listTeamOverviews(viewerId, { query: query.query, status: query.status, after, limit: ADMIN_PAGE_SIZE + 1 }, options.transaction)
     const items = rows.slice(0, ADMIN_PAGE_SIZE)
     const last = items.at(-1)
     return { items, nextCursor: rows.length > ADMIN_PAGE_SIZE && last !== undefined ? encodeTimeCursor({ position: last.position, id: last.id }) : null }
@@ -169,8 +169,8 @@ export class SpacesService {
   }
 
   /** 按 id 批量取空间的名称：审计查询补名字 */
-  async namesOf(ids: readonly string[]): Promise<ReadonlyMap<string, string>> {
-    const found = await this.repository.findNames([...new Set(ids)])
+  async namesOf(ids: readonly string[], options: QueryOptions = {}): Promise<ReadonlyMap<string, string>> {
+    const found = await this.repository.findNames([...new Set(ids)], options.transaction)
     return new Map(found.map(space => [space.id, space.name]))
   }
 

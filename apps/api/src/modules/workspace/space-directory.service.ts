@@ -21,14 +21,14 @@ export class SpaceDirectoryService {
     private readonly transactions: TransactionRunner,
   ) {}
 
-  /** 左侧导航：个人空间、我是成员的团队空间、全员可见的团队空间（含已归档的） */
+  /** 左侧导航：个人空间、我是成员的团队空间、全员可见的团队空间（含已归档的）。在只读快照里读（M2 Codex 评审 CX1） */
   async list(actor: Actor): Promise<SpaceListResponse> {
-    return { items: (await this.policy.visibleSpaces(actor)).map(toSpaceView) }
+    return this.transactions.readSnapshot(async transaction => ({ items: (await this.policy.visibleSpaces(actor, transaction)).map(toSpaceView) }))
   }
 
-  /** 空间页头：看不到与不存在都是 NOT_FOUND（没有加入的系统管理员看不到团队空间的内容） */
+  /** 空间页头：看不到与不存在都是 NOT_FOUND（没有加入的系统管理员看不到团队空间的内容）。在只读快照里读（M2 Codex 评审 CX1） */
   async get(actor: Actor, spaceId: string): Promise<SpaceView> {
-    return toSpaceView(await requireSpaceContent(this.policy, actor, spaceId, 'view'))
+    return this.transactions.readSnapshot(async transaction => toSpaceView(await requireSpaceContent(this.policy, actor, spaceId, 'view', transaction)))
   }
 
   /** 改名：团队空间的空间管理员（空间没有归档）或系统管理员；名称没有变化时原样返回、不记审计 */

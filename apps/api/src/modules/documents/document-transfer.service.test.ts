@@ -56,7 +56,7 @@ describe('DocumentTransferService.transfer', () => {
 describe('DocumentTransferService.titles', () => {
   it('游标不合法：REQUEST_INVALID，不查询', async () => {
     const { service, repository } = setup([])
-    expect((await rejection(service.titles(FROM, 'broken'))).code).toBe('REQUEST_INVALID')
+    expect((await rejection(service.titles(FROM, 'broken', TRANSACTION))).code).toBe('REQUEST_INVALID')
     expect(repository.listAccessible).not.toHaveBeenCalled()
   })
 })

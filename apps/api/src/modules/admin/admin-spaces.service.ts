@@ -32,9 +32,12 @@ export class AdminSpacesService {
     private readonly transactions: TransactionRunner,
   ) {}
 
+  /** 团队空间的列表：在只读快照里读（M2 Codex 评审 CX1） */
   async list(actor: Principal, query: AdminSpaceListQuery): Promise<AdminSpaceListResponse> {
-    const page = await this.spaces.listTeamSpaces(actor.user.id, query)
-    return { items: page.items.map(toAdminSpace), nextCursor: page.nextCursor }
+    return this.transactions.readSnapshot(async (transaction) => {
+      const page = await this.spaces.listTeamSpaces(actor.user.id, query, { transaction })
+      return { items: page.items.map(toAdminSpace), nextCursor: page.nextCursor }
+    })
   }
 
   /**

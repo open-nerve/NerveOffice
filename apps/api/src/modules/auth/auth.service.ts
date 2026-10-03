@@ -139,8 +139,8 @@ export class AuthService {
 
   /**
    * 验证用户名与密码。还没有比对就失败时退回名额（releasingIfBusy）：等待哈希的请求太多（DEF-015）时 503 与 Retry-After，
-   * 与限流拒绝一样只记日志、不写审计；读凭据时数据库繁忙同样退回（UsersService.verifyCredentials 只在比对之前读库）。
-   * 其他错误（例如库里的哈希损坏）原样抛出，名额不退回，按一次失败计。
+   * 与限流拒绝一样只记日志、不写审计；读现存的参数组与凭据时数据库繁忙同样退回（UsersService.verifyCredentials 只在比对之前读库，
+   * 参数组读不出来时不进入比对，M2 Codex 评审 CX2）。其他错误（例如库里的哈希损坏）原样抛出，名额不退回，按一次失败计。
    */
   private async verify(request: LoginRequest, ticket: LoginTicket): Promise<CredentialCheck> {
     return releasingIfBusy(ticket, this.#logger, async () => this.users.verifyCredentials(request.username, request.password))
@@ -228,8 +228,9 @@ export class AuthService {
     })
   }
 
+  /** 当前会话：个人空间在只读快照里读，开场核对确认账户仍然有效（M2 Codex 评审 CX1） */
   async current(principal: Principal): Promise<SessionResponse> {
-    return this.responses.describe(principal.user, principal.csrfToken)
+    return this.transactions.readSnapshot(async transaction => this.responses.describe(principal.user, principal.csrfToken, transaction))
   }
 
   /**

@@ -69,15 +69,16 @@ export abstract class DocumentAccessPolicy {
   /** 空间：看不到时为 undefined（不存在与看不到执行同样的查询）。不看单独授权：授权不给空间里的任何东西开口子（M2-P5 设计 §3.4(1)） */
   abstract spaceAccessOf(actor: Actor, spaceId: string, transaction?: Transaction): Promise<SpaceAccess | undefined>
 
-  /** 我能看到的空间（有内容权限的）：导航与"可访问文档"。个人空间在前，团队空间按名称排序 */
-  abstract visibleSpaces(actor: Actor): Promise<SpaceContentAccess[]>
+  /** 我能看到的空间（有内容权限的）：导航与"可访问文档"。个人空间在前，团队空间按名称排序。在读请求的只读快照里调用（M2 Codex 评审 CX1） */
+  abstract visibleSpaces(actor: Actor, transaction: Transaction): Promise<SpaceContentAccess[]>
 
   /**
    * 一批文档上的访问（M2-P5 设计 §3.4(4)，"与我共享"）：空间事实按一批 id 取（一条语句），规则仍是 documentAccessOf——
    * 服务不另算。单独授权由调用方从列出这批文档的那一条语句里带来（"与我共享"的条件就是授权那一半，角色与行出自同一个快照；
-   * 再另读一次，两次读之间并发的取消分享会让同一页的结果自相矛盾）。按文档 id 给出；看不到的（空间不存在、两样都没有）不在结果里
+   * 再另读一次，两次读之间并发的取消分享会让同一页的结果自相矛盾）。按文档 id 给出；看不到的（空间不存在、两样都没有）不在结果里。
+   * 在读请求的只读快照里调用：空间事实与列出这批文档的语句出自同一个快照（M2 Codex 评审 CX1）
    */
-  abstract accessOfMany(userId: string, documents: readonly GrantedTarget[]): Promise<ReadonlyMap<string, LocatedAccess>>
+  abstract accessOfMany(userId: string, documents: readonly GrantedTarget[], transaction: Transaction): Promise<ReadonlyMap<string, LocatedAccess>>
 }
 
 /**
@@ -116,18 +117,18 @@ export class EffectiveAccessPolicy extends DocumentAccessPolicy {
     return { space, role, permissions: spacePermissionsOf(space, role, actor.systemAdmin) }
   }
 
-  async visibleSpaces(actor: Actor): Promise<SpaceContentAccess[]> {
-    const candidates = await this.spaces.visibleSpacesOf(actor.userId)
+  async visibleSpaces(actor: Actor, transaction: Transaction): Promise<SpaceContentAccess[]> {
+    const candidates = await this.spaces.visibleSpacesOf(actor.userId, { transaction })
     return candidates.flatMap((space) => {
       const role = effectiveSpaceRole(space)
       return role === undefined ? [] : [{ space, role, permissions: spacePermissionsOf(space, role, actor.systemAdmin) }]
     })
   }
 
-  async accessOfMany(userId: string, documents: readonly GrantedTarget[]): Promise<ReadonlyMap<string, LocatedAccess>> {
+  async accessOfMany(userId: string, documents: readonly GrantedTarget[], transaction: Transaction): Promise<ReadonlyMap<string, LocatedAccess>> {
     if (documents.length === 0)
       return new Map()
-    const facts = await this.spaces.accessFactsOfMany(userId, documents.map(({ document }) => document.spaceId))
+    const facts = await this.spaces.accessFactsOfMany(userId, documents.map(({ document }) => document.spaceId), { transaction })
     return new Map(documents.flatMap(({ document, grant }) => {
       const space = facts.get(document.spaceId)
       const access = space === undefined ? undefined : documentAccessOf(space, grant)

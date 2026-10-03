@@ -1,4 +1,5 @@
 import type { SharedListQuery } from '@nerve-office/contracts'
+import type { Transaction } from '../database/index.ts'
 import type { Actor, LocatedAccess } from './document-access-policy.ts'
 import type { SharedHit } from './document-views.ts'
 import type { GrantedDocumentRow } from './documents.repository.ts'
@@ -22,7 +23,8 @@ export interface SharedPage {
  * - 排序与分页与文档列表一致（按更新时间的 keyset，每页 SHARED_PAGE_SIZE 条）；
  * - 每条的内容权限经访问策略的批量入口算（accessOfMany：空间事实按一批 id 取，再经 documentAccessOf），不在这里另算；
  *   授权角色与行出自同一条语句；
- * - 每条带所在的空间（团队空间的名称；个人空间的所有者，人名由 workspace 补上），不带文件夹：看不到空间的目录结构。
+ * - 每条带所在的空间（团队空间的名称；个人空间的所有者，人名由 workspace 补上），不带文件夹：看不到空间的目录结构；
+ * - 每一条语句都在调用方（workspace）开的只读快照里（M2 Codex 评审 CX1）：列出的行、授权角色与空间事实出自同一个快照。
  */
 @Injectable()
 export class SharedDocumentsService {
@@ -31,14 +33,14 @@ export class SharedDocumentsService {
     private readonly policy: DocumentAccessPolicy,
   ) {}
 
-  async list(actor: Actor, query: SharedListQuery): Promise<SharedPage> {
+  async list(actor: Actor, query: SharedListQuery, transaction: Transaction): Promise<SharedPage> {
     const after = query.cursor === undefined ? undefined : decodeTimeCursor(query.cursor)
     if (query.cursor !== undefined && after === undefined)
       throw new AppError('REQUEST_INVALID', '分页的游标不合法，请从第一页重新加载')
     // 多取一条，判断还有没有下一页
-    const rows = await this.documents.listGranted(actor.userId, { limit: SHARED_PAGE_SIZE + 1, after })
+    const rows = await this.documents.listGranted(actor.userId, { limit: SHARED_PAGE_SIZE + 1, after }, transaction)
     const page = rows.slice(0, SHARED_PAGE_SIZE)
-    const accesses = await this.policy.accessOfMany(actor.userId, page.map(row => ({ document: row, grant: row.grantRole ?? undefined })))
+    const accesses = await this.policy.accessOfMany(actor.userId, page.map(row => ({ document: row, grant: row.grantRole ?? undefined })), transaction)
     const last = page.at(-1)
     return {
       items: page.map((row) => {

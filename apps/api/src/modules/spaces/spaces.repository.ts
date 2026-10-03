@@ -125,8 +125,8 @@ export class SpacesRepository {
    * 一个人可能看得到的空间：他的个人空间、他是成员的团队空间、全员可见的团队空间。
    * 只是候选：看不看得到、是什么角色，由访问策略按事实计算。个人空间在前，团队空间按名称（不区分大小写）排序。
    */
-  async visibleCandidatesFor(userId: string): Promise<SpaceFacts[]> {
-    return this.db
+  async visibleCandidatesFor(userId: string, transaction?: Transaction): Promise<SpaceFacts[]> {
+    return executorOf(this.db, transaction)
       .select(factColumns(userId))
       .from(spaces)
       .leftJoin(spaceMembers, and(eq(spaceMembers.spaceId, spaces.id), eq(spaceMembers.userId, userId)))
@@ -203,14 +203,14 @@ export class SpacesRepository {
   }
 
   /** 按 id 批量取空间的名称（含个人空间）：审计查询补名字用 */
-  async findNames(ids: readonly string[]): Promise<SpaceSummary[]> {
+  async findNames(ids: readonly string[], transaction?: Transaction): Promise<SpaceSummary[]> {
     if (ids.length === 0)
       return []
-    return this.db.select({ id: spaces.id, name: spaces.name }).from(spaces).where(inArray(spaces.id, [...ids]))
+    return executorOf(this.db, transaction).select({ id: spaces.id, name: spaces.name }).from(spaces).where(inArray(spaces.id, [...ids]))
   }
 
-  async listMembers(spaceId: string): Promise<SpaceMemberRecord[]> {
-    return this.db.select(MEMBER_COLUMNS).from(spaceMembers).where(eq(spaceMembers.spaceId, spaceId))
+  async listMembers(spaceId: string, transaction?: Transaction): Promise<SpaceMemberRecord[]> {
+    return executorOf(this.db, transaction).select(MEMBER_COLUMNS).from(spaceMembers).where(eq(spaceMembers.spaceId, spaceId))
   }
 
   async findMember(spaceId: string, userId: string, transaction: Transaction): Promise<SpaceMemberRecord | undefined> {

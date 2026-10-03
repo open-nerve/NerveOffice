@@ -1,4 +1,5 @@
 import type { DocumentAccessVia, SearchQuery } from '@nerve-office/contracts'
+import type { Transaction } from '../database/index.ts'
 import type { SpaceFactsWithOwner } from '../spaces/index.ts'
 import type { Actor } from './document-access-policy.ts'
 import type { SearchHit } from './document-views.ts'
@@ -33,6 +34,8 @@ export interface SearchPage {
  * 结果里带它在哪里：所在空间的 id、类型与名称（个人空间另带所有者的 id，人名由 workspace 补上），按本页的空间一次批量取齐；
  * 凭空间角色看到的另带从空间根目录到它所在文件夹的名称（一次批量查询，FoldersRepository.ancestorsOf）。
  * 凭授权命中的不给目录结构：不给文件夹，也不查它的路径（00 号计划书 §5.5）。
+ * 每一条语句都在调用方（workspace）开的只读快照里（M2 Codex 评审 CX1）：原来先取"我能看到的空间"、再拿这份旧的集合去搜，
+ * 两条语句之间被移出空间、随即在那里新建的文档会出现在结果里；现在空间的集合与搜到的行出自同一个快照。
  */
 @Injectable()
 export class DocumentSearchService {
@@ -43,28 +46,29 @@ export class DocumentSearchService {
     private readonly policy: DocumentAccessPolicy,
   ) {}
 
-  async search(actor: Actor, query: SearchQuery): Promise<SearchPage> {
+  async search(actor: Actor, query: SearchQuery, transaction: Transaction): Promise<SearchPage> {
     const after = query.cursor === undefined ? undefined : decodeTimeCursor(query.cursor)
     if (query.cursor !== undefined && after === undefined)
       throw new AppError('REQUEST_INVALID', '分页的游标不合法，请从第一页重新加载')
 
     // 我能看到的空间（有空间角色的）：空间那一半的范围，也是判断一行凭什么看到的依据
-    const spaceIds = (await this.policy.visibleSpaces(actor)).map(access => access.space.id)
+    const spaceIds = (await this.policy.visibleSpaces(actor, transaction)).map(access => access.space.id)
     const visible = new Set(spaceIds)
     // 多取一条，判断还有没有下一页
     const rows = await this.documents.searchByTitle(
       { spaceIds, grantsOf: actor.userId },
       { limit: SEARCH_PAGE_SIZE + 1, after, titlePattern: titleSearchPattern(query.query) },
+      transaction,
     )
     // 查出来的每一行（含多取的那一条）先核对不变量，再分页、输出：范围之外的行一条也不输出，
     // "还有没有下一页"也不会因为它们而成立
     const located = rows.map(row => ({ row, accessVia: accessViaOf(row, visible) }))
     const page = located.slice(0, SEARCH_PAGE_SIZE)
     // 本页的空间连同个人空间的所有者：一条语句按一批 id 取（凭授权命中的行在我看不到的空间里，visibleSpaces 里没有它们）
-    const spaces = await this.spaces.accessFactsOfMany(actor.userId, page.map(({ row }) => row.spaceId))
+    const spaces = await this.spaces.accessFactsOfMany(actor.userId, page.map(({ row }) => row.spaceId), { transaction })
     // 本页凭空间角色看到的行用到的文件夹（去重）：一次批量取齐它们连同祖先的名称，拼路径在内存里做；凭授权命中的不查
     const folderIds = [...new Set(page.flatMap(({ row, accessVia }) => accessVia === 'space' && row.folderId !== null ? [row.folderId] : []))]
-    const paths = folderPathsOf(await this.folders.ancestorsOf(folderIds, spaceIds))
+    const paths = folderPathsOf(await this.folders.ancestorsOf(folderIds, spaceIds, transaction))
     const last = page.at(-1)?.row
     return {
       items: page.map(({ row, accessVia }) => {

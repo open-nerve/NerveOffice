@@ -16,6 +16,10 @@ const SUMMARY = { title: '周报', type: 'sheet', createdAt: '2026-10-02T08:00:0
 
 const AMY_ACCOUNT: User = { id: AMY, username: 'amy', displayName: '艾米', systemRole: 'member', status: 'disabled' }
 
+/** 假的事务：只读快照直接执行（补人名与列出的结果在同一个快照里，用例核对传下去的是它） */
+const TRANSACTION = { transaction: true } as never
+const TRANSACTIONS = { readSnapshot: vi.fn(async <T>(work: (transaction: never) => Promise<T>) => work(TRANSACTION)) } as never
+
 function users(accounts: readonly User[] = [AMY_ACCOUNT]) {
   return { findByIds: vi.fn(async () => new Map(accounts.map(account => [account.id, account]))) }
 }
@@ -34,7 +38,7 @@ describe('搜索结果：个人空间只给所有者（人名），不给存的�
   it('所有者的人名一次批量取（停用的账户照样给人名）；团队空间没有所有者', async () => {
     const directory = users()
     const search = { search: vi.fn(async () => ({ items: SEARCH_HITS, nextCursor: 'next' })) }
-    const service = new SearchDirectoryService(search as never, directory as never)
+    const service = new SearchDirectoryService(search as never, directory as never, TRANSACTIONS)
     expect(await service.search(ACTOR, { query: '周报' })).toEqual({
       items: [
         { id: 'd1', ...SUMMARY, space: { id: PERSONAL, type: 'personal', owner: { id: AMY, username: 'amy', displayName: '艾米' } }, folderId: null, folderPath: [], accessVia: 'grant' },
@@ -43,12 +47,12 @@ describe('搜索结果：个人空间只给所有者（人名），不给存的�
       nextCursor: 'next',
     })
     expect(directory.findByIds).toHaveBeenCalledTimes(1)
-    expect(directory.findByIds).toHaveBeenCalledWith([AMY])
+    expect(directory.findByIds).toHaveBeenCalledWith([AMY], TRANSACTION)
   })
 
   it('所有者的账户取不到（数据不一致）：按意外错误处理', async () => {
     const search = { search: vi.fn(async () => ({ items: SEARCH_HITS, nextCursor: null })) }
-    const service = new SearchDirectoryService(search as never, users([]) as never)
+    const service = new SearchDirectoryService(search as never, users([]) as never, TRANSACTIONS)
     await expect(service.search(ACTOR, { query: '周报' })).rejects.toThrow(`账户不存在：${AMY}`)
   })
 })
@@ -57,7 +61,7 @@ describe('"与我共享"：个人空间只给所有者（人名），不给存�
   it('团队空间给名称；个人空间给所有者；内容权限原样', async () => {
     const directory = users()
     const shared = { list: vi.fn(async () => ({ items: SHARED_HITS, nextCursor: null })) }
-    const service = new SharedDirectoryService(shared as never, directory as never)
+    const service = new SharedDirectoryService(shared as never, directory as never, TRANSACTIONS)
     const response = await service.list(ACTOR, {})
     expect(response).toEqual({
       items: [
@@ -66,12 +70,12 @@ describe('"与我共享"：个人空间只给所有者（人名），不给存�
       ],
       nextCursor: null,
     })
-    expect(directory.findByIds).toHaveBeenCalledWith([AMY])
+    expect(directory.findByIds).toHaveBeenCalledWith([AMY], TRANSACTION)
   })
 
   it('所有者的账户取不到（数据不一致）：按意外错误处理', async () => {
     const shared = { list: vi.fn(async () => ({ items: SHARED_HITS, nextCursor: null })) }
-    const service = new SharedDirectoryService(shared as never, users([]) as never)
+    const service = new SharedDirectoryService(shared as never, users([]) as never, TRANSACTIONS)
     await expect(service.list(ACTOR, {})).rejects.toThrow(`账户不存在：${AMY}`)
   })
 })

@@ -40,13 +40,19 @@ export class DocumentContentService {
     private readonly audit: AuditService,
   ) {}
 
-  /** 能读取就返回当前内容；别人的与不存在的都是 NOT_FOUND。有记录却没有内容是数据不一致，按意外错误处理，不伪装成 404。 */
+  /**
+   * 能读取就返回当前内容；别人的与不存在的都是 NOT_FOUND。有记录却没有内容是数据不一致，按意外错误处理，不伪装成 404。
+   * 判断权限与读内容在同一个只读快照里（M2 Codex 评审 CX1）：原来先判断、再另读内容，判断之后撤权（取消授权、移出空间）、
+   * 随即保存的新内容会被这个在途的请求带出去；现在读到的是判断权限的那一刻的内容
+   */
   async read(userId: string, id: string): Promise<DocumentContent> {
-    await requireAccess(this.policy, userId, await this.documents.findById(id))
-    const content = await this.contents.findCurrent(id)
-    if (content === undefined)
-      throw new Error(`文档有记录却没有内容：${id}`)
-    return content
+    return this.transactions.readSnapshot(async (transaction) => {
+      await requireAccess(this.policy, userId, await this.documents.findById(id, transaction), transaction)
+      const content = await this.contents.findCurrent(id, transaction)
+      if (content === undefined)
+        throw new Error(`文档有记录却没有内容：${id}`)
+      return content
+    })
   }
 
   /**

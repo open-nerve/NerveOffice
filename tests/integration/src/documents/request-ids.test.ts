@@ -177,3 +177,53 @@ describe('本人重放只要求仍能访问（00 号计划书 §7.4 第 2 步，
     expect((await asUser(app.baseUrl, aliceSession, '/api/folders', { method: 'POST', body: folderRequest })).status).toBe(404)
   })
 })
+
+/**
+ * 新建文件夹的重放按新建时存下的请求摘要判断（M2 Codex 评审 CX6）：原来拿请求与文件夹现在的名称、位置比较，
+ * 建好之后改名、移动（同一个空间里、跨空间），原样的重试被判成冲突（409），客户端随即放弃这个标识；
+ * 载荷不同、却碰巧与现状相同的请求反而被当成重放（201、replayed）。与新建文档的重放同一个做法
+ */
+describe('新建文件夹的重放按新建时的请求（M2 Codex 评审 CX6）', () => {
+  interface FolderBody {
+    readonly id: string
+    readonly spaceId: string
+    readonly parentId: string | null
+    readonly name: string
+    readonly replayed?: boolean
+  }
+
+  async function createFolder(body: { readonly spaceId: string, readonly parentId?: string, readonly name: string, readonly requestId: string }): Promise<{ status: number, folder: FolderBody }> {
+    const response = await asUser(app.baseUrl, aliceSession, '/api/folders', { method: 'POST', body })
+    return { status: response.status, folder: (await response.json()) as FolderBody }
+  }
+
+  it('新建 → 改名 → 原样重发：重放（201、同一个 id、replayed），返回现在的名称；不再建', async () => {
+    const request = { spaceId: alice.personalSpaceId, name: '待整理', requestId: randomUUID() }
+    const created = await createFolder(request)
+    expect(created).toMatchObject({ status: 201, folder: { name: '待整理', replayed: false } })
+    expect((await asUser(app.baseUrl, aliceSession, `/api/folders/${created.folder.id}`, { method: 'PATCH', body: { name: '已整理' } })).status).toBe(200)
+    expect(await createFolder(request)).toMatchObject({ status: 201, folder: { id: created.folder.id, name: '已整理', replayed: true } })
+    expect(await database.query(async client => Number((await client.query<{ count: string }>('SELECT count(*) FROM folders WHERE request_id = $1', [request.requestId])).rows[0]?.count))).toBe(1)
+  })
+
+  it('新建 → 同一个空间里移动 → 原样重发：重放；再跨空间移动 → 原样重发：重放，位置是它现在所在的空间', async () => {
+    const parent = await createFolder({ spaceId: alice.personalSpaceId, name: '上一层', requestId: randomUUID() })
+    const request = { spaceId: alice.personalSpaceId, parentId: parent.folder.id, name: '要搬的', requestId: randomUUID() }
+    const created = await createFolder(request)
+    expect(created.status).toBe(201)
+    expect((await asUser(app.baseUrl, aliceSession, `/api/folders/${created.folder.id}`, { method: 'PATCH', body: { parentId: null } })).status).toBe(200)
+    expect(await createFolder(request)).toMatchObject({ status: 201, folder: { id: created.folder.id, spaceId: alice.personalSpaceId, parentId: null, replayed: true } })
+
+    // 个人空间的所有者是空间管理员，Alice 在团队空间里是编辑者（能新建）：可以把它搬过去
+    expect((await asUser(app.baseUrl, aliceSession, `/api/folders/${created.folder.id}/move`, { method: 'POST', body: { spaceId: team } })).status).toBe(200)
+    expect(await createFolder(request)).toMatchObject({ status: 201, folder: { id: created.folder.id, spaceId: team, parentId: null, replayed: true } })
+  })
+
+  it('同一个 requestId、载荷不同：冲突（409），即使这次的载荷与文件夹现在的样子相同（改名之后拿新名称重发）', async () => {
+    const request = { spaceId: alice.personalSpaceId, name: '待整理', requestId: randomUUID() }
+    const created = await createFolder(request)
+    expect(created.status).toBe(201)
+    expect((await asUser(app.baseUrl, aliceSession, `/api/folders/${created.folder.id}`, { method: 'PATCH', body: { name: '已整理' } })).status).toBe(200)
+    await expectConflict(await asUser(app.baseUrl, aliceSession, '/api/folders', { method: 'POST', body: { ...request, name: '已整理' } }))
+  })
+})

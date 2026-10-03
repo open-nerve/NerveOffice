@@ -74,6 +74,11 @@ function setup(change: GrantChange = { kind: 'created', grant: grant(BEN, 'edito
       calls.push('commit')
       return result
     }),
+    // 读接口的只读快照（M2 Codex 评审 CX1）：与写事务分开记
+    readSnapshot: vi.fn(async <T>(work: (transaction: never) => Promise<T>) => {
+      calls.push('snapshot')
+      return work(transaction as never)
+    }),
   }
   const service = new DocumentSharingService(grants as never, spaces as never, users as never, audit as never, transactions as never)
   return { service, calls, grants, spaces, users, audit, transaction }
@@ -197,15 +202,18 @@ describe('DocumentSharingService.remove', () => {
 
 describe('DocumentSharingService.list', () => {
   it('补上被授权人与设置人的名字、被授权人的账户状态（停用的照样列出）；先按角色、再按显示名排序', async () => {
-    const { service, users } = setup()
+    const { service, users, grants, transaction, calls } = setup()
     const response = await service.list(ACTOR, DOCUMENT)
     expect(response.items.map(item => [item.user.username, item.role, item.status, item.grantedBy.username])).toEqual([
       ['ben', 'editor', 'active', 'cat'],
       ['amy', 'viewer', 'active', 'cat'],
       ['cat', 'viewer', 'disabled', 'amy'],
     ])
-    // 一次批量取齐名字
+    // 一次批量取齐名字；判断、读授权与补人名在同一个只读快照里（M2 Codex 评审 CX1）
     expect(users.findByIds).toHaveBeenCalledTimes(1)
+    expect(calls).toEqual(['snapshot', 'names'])
+    expect(grants.list).toHaveBeenCalledWith(ACTOR, DOCUMENT, transaction)
+    expect(users.findByIds).toHaveBeenCalledWith(expect.anything(), transaction)
   })
 
   it('名字取不到（数据不一致）：按意外错误处理', async () => {

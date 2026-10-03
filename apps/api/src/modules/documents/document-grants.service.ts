@@ -49,11 +49,12 @@ export class DocumentGrantsService {
 
   /**
    * 这份文档的授权列表：要有分享的权限才看得到（被授权人列表本身是分享的一部分）；看不到与不存在都是 NOT_FOUND，
-   * 看得到却不能分享是 PERMISSION_DENIED（归档时冻结的说明只给恢复之后能分享的人，其余的人照旧是各自的说明）
+   * 看得到却不能分享是 PERMISSION_DENIED（归档时冻结的说明只给恢复之后能分享的人，其余的人照旧是各自的说明）。
+   * 判断与读授权在调用方（workspace）开的只读快照里（M2 Codex 评审 CX1）：判断之后失去分享权，之后才设置的授权不会出现
    */
-  async list(actor: Actor, documentId: string): Promise<DocumentGrantRecord[]> {
-    await requireDocumentContent(this.policy, actor.userId, await this.documents.findById(documentId), ['share'])
-    return this.grants.listFor(documentId)
+  async list(actor: Actor, documentId: string, transaction: Transaction): Promise<DocumentGrantRecord[]> {
+    await requireDocumentContent(this.policy, actor.userId, await this.documents.findById(documentId, transaction), ['share'], transaction)
+    return this.grants.listFor(documentId, transaction)
   }
 
   /**

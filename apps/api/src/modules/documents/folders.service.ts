@@ -1,8 +1,9 @@
 import type { AuditActionDetailsInput, CreatedFolder, Folder, FolderListQuery, FolderListResponse } from '@nerve-office/contracts'
+import type { Buffer } from 'node:buffer'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { AccessibleFolder, Actor, FolderOperation, SpaceContentAccess } from './document-access-policy.ts'
-import type { FolderRow, SubtreeSummary } from './folders.repository.ts'
+import type { CreatedFolderRow, FolderRow, SubtreeSummary } from './folders.repository.ts'
 import { FOLDER_LIST_MAX_ITEMS, FOLDER_MAX_DEPTH } from '@nerve-office/contracts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
@@ -16,6 +17,7 @@ import { DocumentsRepository } from './documents.repository.ts'
 import { requireFolderIn } from './folder-location.ts'
 import { toFolder } from './folder-views.ts'
 import { FoldersRepository } from './folders.repository.ts'
+import { folderCreatedPayloadDigest } from './payload-digest.ts'
 import { SpaceTreeRepository } from './space-tree.repository.ts'
 import { TrashEntriesRepository } from './trash-entries.repository.ts'
 import { WriteAccessRevocation } from './write-access.ts'
@@ -63,33 +65,39 @@ export class FoldersService {
     private readonly writeAccess: WriteAccessRevocation,
   ) {}
 
-  /** 列出一层：parentId 省略表示空间的根目录。看不到这个空间与它不存在都是 NOT_FOUND。 */
+  /**
+   * 列出一层：parentId 省略表示空间的根目录。看不到这个空间与它不存在都是 NOT_FOUND。
+   * 判断权限与读目录在同一个只读快照里（M2 Codex 评审 CX1）
+   */
   async list(actor: Actor, query: FolderListQuery): Promise<FolderListResponse> {
-    const space = await requireSpaceContent(this.policy, actor, query.spaceId, 'view')
-    const parent = query.parentId === undefined ? null : (await this.requireFolderIn(query.spaceId, query.parentId)).id
-    const rows = await this.folders.listChildren(query.spaceId, parent)
-    const permissions = folderPermissionsOf(space.role)
-    return {
-      items: rows.slice(0, FOLDER_LIST_MAX_ITEMS).map(row => toFolder(row, permissions)),
-      truncated: rows.length > FOLDER_LIST_MAX_ITEMS,
-    }
+    return this.transactions.readSnapshot(async (transaction) => {
+      const space = await requireSpaceContent(this.policy, actor, query.spaceId, 'view', transaction)
+      const parent = query.parentId === undefined ? null : (await this.requireFolderIn(query.spaceId, query.parentId, transaction)).id
+      const rows = await this.folders.listChildren(query.spaceId, parent, transaction)
+      const permissions = folderPermissionsOf(space.role)
+      return {
+        items: rows.slice(0, FOLDER_LIST_MAX_ITEMS).map(row => toFolder(row, permissions)),
+        truncated: rows.length > FOLDER_LIST_MAX_ITEMS,
+      }
+    })
   }
 
   /**
    * 新建：要有在这个空间里新建的权限，父文件夹要在同一个空间里，层数不超过上限。
    * requestId 幂等：同一个请求重试只建一个（同一个文件夹里允许同名，看名字分辨不出重复的新建）。
+   * 是不是同一个请求按新建时存下的请求摘要判断（M2 Codex 评审 CX6，见 replay）。
    * 幂等这一步只要求仍能看到这个空间（与新建文档、复制相同，00 号计划书 §7.4 第 2 步的同一条规则）：建好之后被降为查看者、
    * 空间被归档，重发同一个请求照样拿到那个文件夹，而不是 403（M2-P6 复核 A 的 S-4）；不是重放才要求能新建。
    * 响应带 replayed：重放为真，客户端据此说明"上一次其实已经完成"（M2-P6 复核第二批 S-1）。
    */
   async create(actor: Actor, command: CreateFolderCommand, origin: AuditOrigin): Promise<CreatedFolder> {
+    const digest = folderCreatedPayloadDigest(command.spaceId, command.parentId, command.name)
     return this.transactions.run(async (transaction) => {
       const space = await this.lockIfCreatable(actor, command.spaceId, transaction)
-      const permissions = folderPermissionsOf(space.role)
 
       const previous = await this.folders.findByRequestId(command.requestId, transaction)
       if (previous !== undefined)
-        return { ...toFolder(this.replay(actor, command, previous), permissions), replayed: true }
+        return this.replay(actor, digest, previous, transaction)
       // 不是重放才要求能新建：能新建时这是锁下的判断，不能新建时就是上面那次（没有取锁）
       requireSpaceOperation(space, 'createFolders')
 
@@ -105,13 +113,14 @@ export class FoldersService {
         createdBy: actor.userId,
         depth,
         requestId: command.requestId,
+        payloadDigest: digest,
       }, transaction)
       // 同一个 requestId 同时被别的空间里的新建用掉了（空间树的锁只让同一个空间里的排队）
       if (folder === undefined)
         throw new AppError('REQUEST_ID_CONFLICT')
       // 只记位置，不记名称（M2 总设计 §2.1 第 5 条，M2-P6 复核 M-1）
       await this.record({ action: 'folders.created', details: { spaceId: folder.spaceId, parentId: folder.parentId } }, actor, folder.id, origin, transaction)
-      return { ...toFolder(folder, permissions), replayed: false }
+      return { ...toFolder(folder, folderPermissionsOf(space.role)), replayed: false }
     })
   }
 
@@ -312,18 +321,20 @@ export class FoldersService {
   }
 
   /**
-   * 同一个 requestId 已经建过文件夹：是同一个人、同一次新建（同一个空间、同一个父文件夹、同一个名称），
-   * 才返回那个文件夹；否则拒绝，不透露它的任何信息。
-   * 按当前的行比较：建好之后改名或移动过，再重发同一个 requestId 会被当作另一个请求（重试只发生在几秒之内）
+   * 同一个 requestId 已经建过文件夹：是同一个人的同一次新建（新建时存下的请求摘要与这次的相同），而且这个人现在仍能看到
+   * 它所在的空间，才返回那个文件夹现在的样子（标为重放），权限按它现在所在的空间给；否则拒绝，不透露它的任何信息。
+   * 与新建文档的重放同一个做法（document-creation.service.ts）：按不可变的请求摘要判断，再重新判断现在的访问权。
+   * 原来拿请求与文件夹现在的名称、位置比较（M2 Codex 评审 CX6）：建好之后改名或移动过（同一个空间里、跨空间），原样的重试
+   * 被判成冲突，客户端随即放弃这个标识、可能让人重建一次；载荷不同、却碰巧与现状相同的请求反而被当成重放。
+   * 跨空间移动之后它在别的空间里：仍能看到那个空间就是重放（这次请求里的空间已在 lockIfCreatable 判断过仍能看到）
    */
-  private replay(actor: Actor, command: CreateFolderCommand, previous: FolderRow): FolderRow {
-    const same = previous.createdBy === actor.userId
-      && previous.spaceId === command.spaceId
-      && previous.parentId === (command.parentId ?? null)
-      && previous.name === command.name
-    if (!same)
+  private async replay(actor: Actor, digest: Buffer, previous: CreatedFolderRow, transaction: Transaction): Promise<CreatedFolder> {
+    if (previous.createdBy !== actor.userId || !previous.payloadDigest.equals(digest))
       throw new AppError('REQUEST_ID_CONFLICT')
-    return previous
+    const access = await this.policy.spaceAccessOf(actor, previous.spaceId, transaction)
+    if (access?.role === undefined)
+      throw new AppError('REQUEST_ID_CONFLICT')
+    return { ...toFolder(previous, folderPermissionsOf(access.role)), replayed: true }
   }
 
   /**

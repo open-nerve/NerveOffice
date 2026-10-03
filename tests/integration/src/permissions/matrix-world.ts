@@ -222,7 +222,8 @@ export function snapshotOf(unitId: string, value: string): Buffer {
 async function seedFolder(database: TestDatabase, options: { spaceId: string, createdBy: string, name: string }): Promise<string> {
   return database.query(async (client) => {
     const result = await client.query<{ id: string }>(
-      'INSERT INTO folders (space_id, parent_id, name, created_by, depth, request_id) VALUES ($1, NULL, $2, $3, 1, $4) RETURNING id',
+      // 直接写库的文件夹没有新建请求：请求摘要给空串的摘要，与任何请求都对不上（M2 Codex 评审 CX6）
+      'INSERT INTO folders (space_id, parent_id, name, created_by, depth, request_id, payload_digest) VALUES ($1, NULL, $2, $3, 1, $4, sha256(\'\'::bytea)) RETURNING id',
       [options.spaceId, options.name, options.createdBy, randomUUID()],
     )
     const id = result.rows[0]?.id

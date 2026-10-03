@@ -30,16 +30,21 @@ export class SpaceMembershipService {
     private readonly transactions: TransactionRunner,
   ) {}
 
-  /** 成员列表：含停用的成员（带状态），先按角色、再按显示名排序 */
+  /**
+   * 成员列表：含停用的成员（带状态），先按角色、再按显示名排序。
+   * 判断、读成员与补人名在同一个只读快照里（M2 Codex 评审 CX1）：判断之后被移出、降级，之后才有的成员关系不会出现
+   */
   async list(actor: Actor, spaceId: string): Promise<SpaceMemberListResponse> {
-    const access = await requireSpaceManagement(this.policy, actor, spaceId, 'viewMembers')
-    const members = await this.spaces.members(spaceId)
-    const accounts = await this.users.findByIds(members.map(member => member.userId))
-    return {
-      space: toTeamSpace(access.space),
-      canManage: access.permissions.canManageMembers,
-      items: members.map(member => toSpaceMember(member, accountIn(accounts, member.userId))).sort(compareMembers),
-    }
+    return this.transactions.readSnapshot(async (transaction) => {
+      const access = await requireSpaceManagement(this.policy, actor, spaceId, 'viewMembers', transaction)
+      const members = await this.spaces.members(spaceId, { transaction })
+      const accounts = await this.users.findByIds(members.map(member => member.userId), transaction)
+      return {
+        space: toTeamSpace(access.space),
+        canManage: access.permissions.canManageMembers,
+        items: members.map(member => toSpaceMember(member, accountIn(accounts, member.userId))).sort(compareMembers),
+      }
+    })
   }
 
   /**

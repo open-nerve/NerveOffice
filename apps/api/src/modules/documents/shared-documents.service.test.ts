@@ -6,7 +6,7 @@ import { SHARED_PAGE_SIZE } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { decodeTimeCursor, encodeTimeCursor } from '../../shared/time-cursor.ts'
-import { ALICE, ALICE_SPACE, BOB, BOB_SPACE, FakeStore, member, TEAM_SPACE } from './documents.test-support.ts'
+import { ALICE, ALICE_SPACE, BOB, BOB_SPACE, FakeStore, member, TEAM_SPACE, TRANSACTION } from './documents.test-support.ts'
 import { SharedDocumentsService } from './shared-documents.service.ts'
 
 function setup() {
@@ -39,10 +39,10 @@ describe('SharedDocumentsService.list 的范围与每一条', () => {
     store.setGrant(inTeam.id, BOB, 'editor')
     store.setGrant(inAlices.id, BOB, 'viewer')
     store.setGrant(toOthers.id, ALICE, 'editor', BOB)
-    const page = await service.list(member(BOB), {})
+    const page = await service.list(member(BOB), {}, TRANSACTION)
     expect(page.items.map(item => item.id)).toEqual([inTeam.id, inAlices.id])
     expect(page.items.map(item => item.id)).not.toContain(notShared.id)
-    expect(store.repositories.documents.listGranted).toHaveBeenCalledWith(BOB, { limit: SHARED_PAGE_SIZE + 1, after: undefined })
+    expect(store.repositories.documents.listGranted).toHaveBeenCalledWith(BOB, { limit: SHARED_PAGE_SIZE + 1, after: undefined }, TRANSACTION)
   })
 
   it('每条：摘要（不带文件夹）、所在空间（团队空间的名称；个人空间的所有者 id）、内容权限（空间角色与授权取较高者）', async () => {
@@ -52,7 +52,7 @@ describe('SharedDocumentsService.list 的范围与每一条', () => {
     const inAlices = at(store, ALICE_SPACE, '爱丽丝的表', '2026-09-26T10:00:00.000001Z')
     store.setGrant(inTeam.id, BOB, 'editor')
     store.setGrant(inAlices.id, BOB, 'viewer')
-    expect((await service.list(member(BOB), {})).items).toEqual([
+    expect((await service.list(member(BOB), {}, TRANSACTION)).items).toEqual([
       {
         id: inTeam.id,
         title: '部门的表',
@@ -82,9 +82,9 @@ describe('SharedDocumentsService.list 的范围与每一条', () => {
     store.setGrant(asAdmin.id, BOB, 'viewer')
     store.setGrant(inArchived.id, BOB, 'editor')
     store.space(ALICE_SPACE).status = 'archived'
-    expect((await service.list(member(BOB), {})).items.map(item => [item.title, item.contentRole])).toEqual([['我管的', 'admin'], ['归档里的', 'viewer']])
+    expect((await service.list(member(BOB), {}, TRANSACTION)).items.map(item => [item.title, item.contentRole])).toEqual([['我管的', 'admin'], ['归档里的', 'viewer']])
     expect(store.spaces.accessFactsOfMany).toHaveBeenCalledTimes(1)
-    expect(store.spaces.accessFactsOfMany).toHaveBeenCalledWith(BOB, [TEAM_SPACE, ALICE_SPACE])
+    expect(store.spaces.accessFactsOfMany).toHaveBeenCalledWith(BOB, [TEAM_SPACE, ALICE_SPACE], { transaction: TRANSACTION })
     // 单个的判断入口不用：每条不各查一次
     expect(store.spaces.accessFactsOf).not.toHaveBeenCalled()
     expect(store.grants.roleOf).not.toHaveBeenCalled()
@@ -94,7 +94,7 @@ describe('SharedDocumentsService.list 的范围与每一条', () => {
     const { store, service } = setup()
     const shared = at(store, TEAM_SPACE, '刚被取消的', '2026-09-26T10:00:00.000001Z')
     store.repositories.documents.listGranted.mockResolvedValueOnce([{ ...shared, grantRole: 'editor' }])
-    expect((await service.list(member(BOB), {})).items.map(item => [item.id, item.contentRole])).toEqual([[shared.id, 'editor']])
+    expect((await service.list(member(BOB), {}, TRANSACTION)).items.map(item => [item.id, item.contentRole])).toEqual([[shared.id, 'editor']])
     expect(store.grants.roleOf).not.toHaveBeenCalled()
   })
 
@@ -105,14 +105,14 @@ describe('SharedDocumentsService.list 的范围与每一条', () => {
     store.setGrant(trashed.id, BOB, 'viewer')
     store.setGrant(kept.id, BOB, 'viewer')
     store.documentEntries.set(trashed.id, 'entry-1')
-    expect((await service.list(member(BOB), {})).items.map(item => item.id)).toEqual([kept.id])
+    expect((await service.list(member(BOB), {}, TRANSACTION)).items.map(item => item.id)).toEqual([kept.id])
   })
 
   it('仓储给出的一行算不出访问（条件坏了：没有授权、也不在我有角色的空间里）：按意外错误处理，不静默丢掉', async () => {
     const { store, service } = setup()
     const others = at(store, TEAM_SPACE, '不该出现的', '2026-09-26T10:00:00.000001Z')
     store.repositories.documents.listGranted.mockResolvedValueOnce([{ ...others, grantRole: null }])
-    const failure: unknown = await service.list(member(BOB), {}).then(() => undefined, (error: unknown) => error)
+    const failure: unknown = await service.list(member(BOB), {}, TRANSACTION).then(() => undefined, (error: unknown) => error)
     expect(failure).toBeInstanceOf(Error)
     expect(failure).not.toBeInstanceOf(AppError)
     expect((failure as Error).message).toBe(`"与我共享"里的文档算不出访问：文档 ${others.id}，空间 ${TEAM_SPACE}`)
@@ -132,10 +132,10 @@ describe('SharedDocumentsService.list 的分页', () => {
   it('每页固定条数，多取一条判断下一页；按游标接着取，不丢也不重，取完之后没有游标', async () => {
     const { store, service } = setup()
     const rows = overOnePage(store)
-    const first = await service.list(member(BOB), {})
+    const first = await service.list(member(BOB), {}, TRANSACTION)
     expect(first.items.map(item => item.id)).toEqual(rows.slice(0, SHARED_PAGE_SIZE).map(row => row.id))
     expect(decodeTimeCursor(first.nextCursor ?? '')).toEqual({ position: rows[SHARED_PAGE_SIZE - 1]?.position, id: rows[SHARED_PAGE_SIZE - 1]?.id })
-    const second = await service.list(member(BOB), { cursor: first.nextCursor ?? '' })
+    const second = await service.list(member(BOB), { cursor: first.nextCursor ?? '' }, TRANSACTION)
     expect(second.items.map(item => item.id)).toEqual([rows[SHARED_PAGE_SIZE]?.id])
     expect(second.nextCursor).toBeNull()
     // 本页的空间事实只按本页取（多取的那一条不算）
@@ -149,7 +149,7 @@ describe('SharedDocumentsService.list 的分页', () => {
       store.setGrant(row.id, BOB, 'viewer')
       return row
     })
-    const page = await service.list(member(BOB), {})
+    const page = await service.list(member(BOB), {}, TRANSACTION)
     expect(page.items.map(item => item.id)).toEqual(rows.map(row => row.id))
     expect(page.nextCursor).toBeNull()
   })
@@ -157,13 +157,13 @@ describe('SharedDocumentsService.list 的分页', () => {
   it('游标不合法（改过、时间不存在）：REQUEST_INVALID，而且不查询', async () => {
     const { store, service } = setup()
     for (const cursor of ['broken', encodeTimeCursor({ position: '2026-02-30T00:00:00.000000Z', id: ALICE_SPACE })])
-      expect((await errorOf(service.list(member(BOB), { cursor }))).code, cursor).toBe('REQUEST_INVALID')
+      expect((await errorOf(service.list(member(BOB), { cursor }, TRANSACTION))).code, cursor).toBe('REQUEST_INVALID')
     expect(store.repositories.documents.listGranted).not.toHaveBeenCalled()
   })
 
   it('什么都没有：空的一页，不取空间事实', async () => {
     const { store, service } = setup()
-    expect(await service.list(member(BOB), {})).toEqual({ items: [], nextCursor: null })
+    expect(await service.list(member(BOB), {}, TRANSACTION)).toEqual({ items: [], nextCursor: null })
     expect(store.spaces.accessFactsOfMany).not.toHaveBeenCalled()
   })
 })

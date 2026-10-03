@@ -5,6 +5,9 @@ export {
   requireSpaceManagement,
 } from './document-access-policy.ts'
 export type { Actor, SpaceAccess, SpaceContentAccess } from './document-access-policy.ts'
+// 只为集成测试专用的入口（app/integration.test-support.ts）转出：读正文的回归用例在判断完权限、读正文之前停住
+// （M2 Codex 评审 CX1，permissions/read-snapshot.test.ts）。别的文件经这里引用它由 eslint 拦下
+export { DocumentContentsRepository } from './document-contents.repository.ts'
 export { DocumentGrantsService } from './document-grants.service.ts'
 export type { DocumentGrantRecord, GrantChange, SharingTarget } from './document-grants.service.ts'
 export { DocumentSearchService } from './document-search.service.ts'
