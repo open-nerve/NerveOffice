@@ -19,7 +19,7 @@ export function checkAudit(report: AuditReport, exceptions: readonly AuditExcept
       violations.push({
         rule: 'audit/advisory',
         subject,
-        detail: `${advisory.severity}：${advisory.title}（受影响 ${advisory.vulnerable_versions}，修复于 ${advisory.patched_versions}）${advisory.url}`,
+        detail: `${advisory.severity}：${advisory.title}（受影响 ${advisory.vulnerable_versions}，${advisory.patched_versions === null ? '还没有修复的版本' : `修复于 ${advisory.patched_versions}`}）${advisory.url}`,
       })
     }
     else if (exception.expires < today) {

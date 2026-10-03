@@ -279,6 +279,16 @@ describe('US-M1-11 漏洞门禁的装配', () => {
   it('pnpm 的输出结构不对时直接报错，不当作没有漏洞', () => {
     expect(() => auditGate(() => ({ advisories: {} }), '2026-09-26')).toThrow()
   })
+
+  // 2026-10-03 合并 M2-P5 之后的 CI：开发依赖里出现一条还没有修复版本的高危公告（braces，经 eslint-plugin-boundaries），
+  // pnpm audit 的输出里 patched_versions 是 null，原来的结构要求字符串，门禁在解析全部依赖的报告时直接崩溃
+  it('全部依赖里有还没有修复版本的公告（真实输出：patched_versions 为 null）：照常解析；只在开发依赖里时不失败，计数写进说明', () => {
+    const unpatched = readFixture('pnpm-12/audit-unpatched-advisory.json')
+    const empty = { advisories: {}, metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high: 0, critical: 0 } } }
+    const outcome = auditGate((_command, args) => (args.includes('--prod') ? empty : unpatched), '2026-10-03')
+    expect(outcome.violations).toEqual([])
+    expect(outcome.notes[0]).toContain('high 1')
+  })
 })
 
 describe('US-M1-11 runGate 的门禁表按注入的输入装配（M2-P6 第 6 片复核第二批 M-1）', () => {

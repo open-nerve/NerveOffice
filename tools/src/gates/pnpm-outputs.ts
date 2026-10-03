@@ -56,7 +56,11 @@ export const auditReportSchema = z.object({
     title: z.string(),
     url: z.string(),
     vulnerable_versions: z.string(),
-    patched_versions: z.string(),
+    /**
+     * 还没有修复的版本时是 null（2026-10-03 合并 M2-P5 之后的 CI：开发依赖里 braces 的一条高危公告就是这样，
+     * 原来要求字符串，门禁在解析全部依赖的报告时直接崩溃）
+     */
+    patched_versions: z.string().nullable(),
   })),
   metadata: z.object({
     vulnerabilities: z.record(severitySchema, z.number()),
