@@ -6,7 +6,8 @@ import { createSheetEditor } from '../../editor/index.ts'
 import { requestSession } from '../../shared/api/index.ts'
 import { browserPageLocation } from '../../shared/lib/page-location.ts'
 import { openSessionChannel } from '../../shared/lib/session-channel.ts'
-import { fetchContent, fetchDocument, gzipText, saveContent } from './editor-api.ts'
+import { browserLeaseClock } from './edit-lease.ts'
+import { acquireEditLease, fetchContent, fetchDocument, gzipText, releaseEditLease, renewEditLease, saveContent } from './editor-api.ts'
 import { EditorChrome } from './editor-chrome.tsx'
 import { createEditorPage } from './editor-page.ts'
 import { installPageGuards, isApplePlatform } from './page-guards.ts'
@@ -29,11 +30,17 @@ export function startSheetEditorPage(elements: SheetEditorPageElements): void {
       document: async documentId => fetchDocument(documentId),
       content: async documentId => fetchContent(documentId),
       compress: async snapshot => gzipText(snapshot),
-      save: async (documentId, request, body) => saveContent(documentId, request, body),
+      save: async (documentId, request, body, lease) => saveContent(documentId, request, body, lease),
+      editLease: {
+        acquire: async (documentId, clientInstanceId) => acquireEditLease(documentId, clientInstanceId),
+        renew: async (documentId, token, idleSeconds) => renewEditLease(documentId, token, idleSeconds),
+        release: (documentId, token) => releaseEditLease(documentId, token),
+      },
     },
     createEditor: createSheetEditor,
     page: browserPageLocation,
     sessionChannel: openSessionChannel(),
+    clock: browserLeaseClock,
     currentPath: () => `${window.location.pathname}${window.location.search}`,
     newId: () => crypto.randomUUID(),
     reportError: error => reportError(error),

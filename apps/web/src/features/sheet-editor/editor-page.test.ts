@@ -1,12 +1,14 @@
-import type { DocumentDetail, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
+import type { AcquiredEditLease, DocumentDetail, RenewedEditLease, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
 import type { CreateSheetEditorOptions, SheetEditor, SheetEditorLifecycle } from '../../editor/index.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
+import type { EditLeaseApi } from './edit-lease.ts'
 import type { EditorPageApi } from './editor-page.ts'
 import type { SaveRequest } from './save-coordinator.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError, setCsrfToken } from '../../shared/api/index.ts'
 import { createEditorPage } from './editor-page.ts'
+import { fakeLeaseClock } from './fake-lease-clock.test-support.ts'
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 
@@ -16,6 +18,13 @@ const ALICE: SessionResponse = {
   csrfToken: 'csrf-alice',
 }
 const BOB: SessionResponse = { ...ALICE, user: { ...ALICE.user, id: '0199a2c4-1f2e-7a3b-8c4d-00000000000b', username: 'bob' }, csrfToken: 'csrf-bob' }
+
+/** 申请到的编辑租约：修订号与载入的内容相同（3） */
+const TOKEN = 'L'.repeat(43)
+const ACQUIRED: AcquiredEditLease = { token: TOKEN, writeEpoch: 7, revision: 3, expiresAt: '2026-09-27T03:01:30.000Z', interruption: null }
+const RENEWED: RenewedEditLease = { expiresAt: '2026-09-27T03:01:40.000Z' }
+/** 保存带上的编辑租约 */
+const CREDENTIALS = { token: TOKEN, writeEpoch: 7 }
 
 const DETAIL: DocumentDetail = {
   id: DOCUMENT_ID,
@@ -84,9 +93,13 @@ function fakeChannel() {
 
 interface Setup {
   readonly documentId?: string | undefined
-  readonly api?: Partial<EditorPageApi>
+  readonly api?: Partial<Omit<EditorPageApi, 'editLease'>>
+  readonly editLease?: Partial<EditLeaseApi>
   readonly createEditor?: (options: CreateSheetEditorOptions) => Promise<SheetEditor>
 }
+
+/** 这个用例建过的页面：用例结束时卸载，留下的交互屏障与窗口上的监听不影响下一个用例 */
+const pages: { dispose: () => void }[] = []
 
 function setup(options: Setup = {}) {
   const surface = document.createElement('div')
@@ -94,14 +107,21 @@ function setup(options: Setup = {}) {
   const fake = fakeEditor()
   const page: PageLocation & { visits: string[] } = { visits: [], assign: vi.fn(), replace: url => page.visits.push(url), reload: vi.fn() }
   const { channel, fromOtherTab, listeners } = fakeChannel()
-  const api: EditorPageApi = {
+  const time = fakeLeaseClock()
+  const editLease = {
+    acquire: vi.fn(options.editLease?.acquire ?? (async (): Promise<AcquiredEditLease> => ACQUIRED)),
+    renew: vi.fn(options.editLease?.renew ?? (async (): Promise<RenewedEditLease> => RENEWED)),
+    release: vi.fn(options.editLease?.release ?? ((): void => {})),
+  }
+  const api = {
     session: vi.fn(async () => ALICE),
     document: vi.fn(async () => DETAIL),
     content: vi.fn(async () => ({ snapshot: '{"id":"unit-1"}', revision: 3 })),
     compress: vi.fn(async (snapshot: string) => new TextEncoder().encode(snapshot)),
     save: vi.fn(async (): Promise<SaveContentResponse> => ({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z' })),
     ...options.api,
-  }
+    editLease,
+  } satisfies EditorPageApi
   const createEditor = vi.fn(options.createEditor ?? (async () => fake.editor))
   let id = 0
   const editorPage = createEditorPage({
@@ -112,14 +132,20 @@ function setup(options: Setup = {}) {
     createEditor,
     page,
     sessionChannel: channel,
+    clock: time.clock,
     currentPath: () => `/documents/${DOCUMENT_ID}`,
     newId: () => `id-${++id}`,
     reportError: vi.fn(),
   })
-  return { editorPage, surface, chrome, fake, page, api, createEditor, fromOtherTab, listeners }
+  pages.push(editorPage)
+  return { editorPage, surface, chrome, fake, page, api, editLease, time, createEditor, fromOtherTab, listeners }
 }
 
-afterEach(() => setCsrfToken(undefined))
+afterEach(() => {
+  for (const page of pages.splice(0))
+    page.dispose()
+  setCsrfToken(undefined)
+})
 
 /** 由测试决定何时完成的 Promise */
 function deferred<T>() {
@@ -255,7 +281,7 @@ describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
     expect(editorPage.view().load).toMatchObject({ stage: 'steady' })
 
     await editorPage.save()
-    expect(api.save).toHaveBeenCalledWith(DOCUMENT_ID, expect.objectContaining<Partial<SaveRequest>>({ baseRevision: 3, clientInstanceId: 'id-1', requestId: 'id-2' }), expect.anything())
+    expect(api.save).toHaveBeenCalledWith(DOCUMENT_ID, expect.objectContaining<Partial<SaveRequest>>({ baseRevision: 3, clientInstanceId: 'id-1', requestId: 'id-2' }), expect.anything(), CREDENTIALS)
   })
 
   it.each([
@@ -820,5 +846,332 @@ describe('页头的文档详情（M2-P5：只凭授权时返回"与我共享"、
     editorPage.dispose()
     await editorPage.refreshDetail()
     expect(api.document).toHaveBeenCalledTimes(1)
+  })
+})
+
+const AMY = { id: '0199a2c4-1f2e-7a3b-8c4d-00000000000c', username: 'amy', displayName: '艾米' }
+
+/** 申请被占用：持有者是别人（艾米）或者自己；serverTime 是服务端回答的时刻（响应头 Date） */
+function heldBy(sameUser: boolean, serverTime?: number): ApiError {
+  const holder = sameUser ? { id: ALICE.user.id, username: ALICE.user.username, displayName: ALICE.user.displayName } : AMY
+  return new ApiError(409, 'EDIT_LEASE_HELD', '别人正在编辑这份文档', { details: { holder, lastActiveAt: '2026-09-27T02:55:00.000Z', sameUser }, serverTime })
+}
+
+function leaseLost(reason: string): ApiError {
+  return new ApiError(409, 'EDIT_LEASE_LOST', '编辑权已失效，本次操作没有生效', { details: { reason } })
+}
+
+describe('编辑权（M3-P1 设计 §3.4.7）', () => {
+  it('能编辑：载入元数据与内容之后申请（本页这次加载的标识，保存也带着它），取得了按可编辑创建；保存带上令牌与代次；每 10 秒续租', async () => {
+    const { editorPage, api, editLease, createEditor, surface, time } = setup()
+    await editorPage.load()
+    expect(editLease.acquire).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, 'id-1')
+    expect(editLease.acquire.mock.invocationCallOrder[0]).toBeGreaterThan(Math.max(...vi.mocked(api.content).mock.invocationCallOrder))
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, snapshot: '{"id":"unit-1"}', access: 'edit' })
+    expect(editorPage.view()).toMatchObject({ editing: { kind: 'editing' }, load: { readOnly: false }, save: { canSave: true } })
+    await editorPage.save()
+    expect(api.save).toHaveBeenCalledWith(DOCUMENT_ID, expect.objectContaining<Partial<SaveRequest>>({ clientInstanceId: 'id-1' }), expect.anything(), CREDENTIALS)
+    await time.advance(10_000)
+    expect(editLease.renew).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN, 10)
+    await time.advance(10_000)
+    expect(editLease.renew).toHaveBeenCalledTimes(2)
+  })
+
+  it('续租上报距离本页最后一次键盘、鼠标操作的秒数：操作在窗口的捕获阶段记下', async () => {
+    const { editorPage, editLease, time } = setup()
+    await editorPage.load()
+    await time.advance(4_000)
+    window.dispatchEvent(new Event('keydown'))
+    await time.advance(6_000)
+    expect(editLease.renew).toHaveBeenLastCalledWith(DOCUMENT_ID, TOKEN, 6)
+    window.dispatchEvent(new Event('pointerdown'))
+    await time.advance(10_000)
+    expect(editLease.renew).toHaveBeenLastCalledWith(DOCUMENT_ID, TOKEN, 10)
+  })
+
+  it('申请得到的修订号比载入的内容新（这期间有人保存过）：重新载入一次内容，按新的内容创建，以它的修订号作保存的基准', async () => {
+    const content = vi.fn<EditorPageApi['content']>()
+      .mockResolvedValueOnce({ snapshot: '{"id":"unit-1","v":3}', revision: 3 })
+      .mockResolvedValueOnce({ snapshot: '{"id":"unit-1","v":5}', revision: 5 })
+    const { editorPage, api, createEditor, surface } = setup({ api: { content }, editLease: { acquire: vi.fn(async () => ({ ...ACQUIRED, revision: 5 })) } })
+    await editorPage.load()
+    expect(content).toHaveBeenCalledTimes(2)
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, snapshot: '{"id":"unit-1","v":5}', access: 'edit' })
+    await editorPage.save()
+    expect(api.save).toHaveBeenCalledWith(DOCUMENT_ID, expect.objectContaining<Partial<SaveRequest>>({ baseRevision: 5 }), expect.anything(), CREDENTIALS)
+  })
+
+  it('修订号相同：不重新载入', async () => {
+    const { editorPage, api } = setup()
+    await editorPage.load()
+    expect(api.content).toHaveBeenCalledOnce()
+  })
+
+  it('重新载入内容失败：与载入失败相同，释放已经取得的编辑权', async () => {
+    const content = vi.fn<EditorPageApi['content']>()
+      .mockResolvedValueOnce({ snapshot: '{"id":"unit-1"}', revision: 3 })
+      .mockRejectedValueOnce(new NetworkError('断网'))
+    const { editorPage, editLease, createEditor, time } = setup({ api: { content }, editLease: { acquire: vi.fn(async () => ({ ...ACQUIRED, revision: 4 })) } })
+    await editorPage.load()
+    expect(editorPage.view()).toMatchObject({ load: { kind: 'failed' }, editing: { kind: 'none' } })
+    expect(createEditor).not.toHaveBeenCalled()
+    expect(editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
+    expect(time.pending()).toBe(0)
+  })
+
+  it('别人正在编辑：按只读创建，页头说明持有者与最后活动几分钟之前（按服务端的时间算）；没有保存，不续租', async () => {
+    const serverTime = Date.UTC(2026, 8, 27, 3, 2, 30)
+    const { editorPage, editLease, createEditor, surface, time } = setup({ editLease: { acquire: vi.fn(async () => Promise.reject(heldBy(false, serverTime))) } })
+    await editorPage.load()
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, snapshot: '{"id":"unit-1"}', access: 'read' })
+    expect(editorPage.view()).toMatchObject({
+      load: { kind: 'ready', readOnly: true },
+      save: undefined,
+      editing: { kind: 'elsewhere', holder: { holder: AMY, sameUser: false, lastActiveMinutes: 7 } },
+    })
+    expect(editorPage.hasUnsavedWork()).toBe(false)
+    await time.advance(60_000)
+    expect(editLease.acquire).toHaveBeenCalledOnce()
+    expect(editLease.renew).not.toHaveBeenCalled()
+    editorPage.dispose()
+    expect(editLease.release).not.toHaveBeenCalled()
+  })
+
+  it('自己在别处正在编辑（例如刷新时旧页面的释放还没到，P1 设计 §7）：隔一小会儿再试，旧页面的释放到了就取得', async () => {
+    const acquire = vi.fn<EditLeaseApi['acquire']>().mockRejectedValueOnce(heldBy(true)).mockResolvedValueOnce(ACQUIRED)
+    const { editorPage, createEditor, surface, time } = setup({ editLease: { acquire } })
+    const loading = editorPage.load()
+    await vi.waitFor(() => expect(acquire).toHaveBeenCalledOnce())
+    await time.advance(500)
+    await loading
+    expect(acquire).toHaveBeenCalledTimes(2)
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, snapshot: '{"id":"unit-1"}', access: 'edit' })
+    expect(editorPage.view().editing).toEqual({ kind: 'editing' })
+  })
+
+  it('自己在别处正在编辑、再试几次仍被占用：按只读，说明是自己', async () => {
+    const acquire = vi.fn(async () => Promise.reject(heldBy(true)))
+    const { editorPage, createEditor, time } = setup({ editLease: { acquire } })
+    const loading = editorPage.load()
+    await vi.waitFor(() => expect(acquire).toHaveBeenCalledOnce())
+    await time.advance(1_500)
+    await loading
+    expect(acquire).toHaveBeenCalledTimes(4)
+    expect(createEditor).toHaveBeenCalledWith(expect.objectContaining({ access: 'read' }))
+    expect(editorPage.view().editing).toMatchObject({ kind: 'elsewhere', holder: { sameUser: true } })
+  })
+
+  it('申请时刚失去编辑权（403）：按只读打开，不说明谁在编辑', async () => {
+    const { editorPage, createEditor } = setup({ editLease: { acquire: vi.fn(async () => Promise.reject(new ApiError(403, 'PERMISSION_DENIED', '只能查看这份文档，不能保存'))) } })
+    await editorPage.load()
+    expect(createEditor).toHaveBeenCalledWith(expect.objectContaining({ access: 'read' }))
+    expect(editorPage.view()).toMatchObject({ load: { kind: 'ready', readOnly: true }, save: undefined, editing: { kind: 'none' } })
+  })
+
+  it.each([
+    ['读不到了（404）', new ApiError(404, 'NOT_FOUND', '不存在'), { kind: 'not-found' }],
+    ['网络错误', new NetworkError('断网'), { kind: 'failed' }],
+  ])('申请时%s：与读取元数据、内容失败相同，不创建编辑器', async (_case, error, load) => {
+    const { editorPage, createEditor } = setup({ editLease: { acquire: vi.fn(async () => Promise.reject(error)) } })
+    await editorPage.load()
+    expect(editorPage.view().load).toMatchObject(load)
+    expect(createEditor).not.toHaveBeenCalled()
+  })
+
+  it('申请时未登录：整页转到登录页', async () => {
+    const { editorPage, page } = setup({ editLease: { acquire: vi.fn(async () => Promise.reject(new ApiError(401, 'SESSION_EXPIRED', '已过期'))) } })
+    await editorPage.load()
+    expect(page.visits).toEqual([`/login?from=%2Fdocuments%2F${DOCUMENT_ID}&reason=expired`])
+  })
+
+  it('只能查看：不申请编辑权', async () => {
+    const { editorPage, editLease } = setup({ api: { document: async () => ({ ...DETAIL, permissions: { ...DETAIL.permissions, canEdit: false } }) } })
+    await editorPage.load()
+    expect(editLease.acquire).not.toHaveBeenCalled()
+    expect(editorPage.view().editing).toEqual({ kind: 'none' })
+  })
+
+  it.each([
+    ['被接手（EDIT_LEASE_LOST）', leaseLost('replaced'), { kind: 'lease', reason: 'replaced' }],
+    ['读不到了（404）', new ApiError(404, 'NOT_FOUND', '不存在'), { kind: 'not-found' }],
+    ['不能编辑了（403）', new ApiError(403, 'PERMISSION_DENIED', '空间已归档，只能查看'), { kind: 'denied' }],
+  ])('续租得知编辑权失效（%s）：停止保存，记下来源；离开提示照旧按有没有未保存的修改', async (_case, error, loss) => {
+    const { editorPage, api, editLease, fake, time } = setup({ editLease: { renew: vi.fn(async () => Promise.reject(error)) } })
+    await editorPage.load()
+    Object.assign(fake.editor, { changeSeq: () => 1 })
+    fake.changeListeners.forEach(listener => listener())
+    await time.advance(10_000)
+    expect(editorPage.view()).toMatchObject({ editing: { kind: 'lost', loss }, save: { canSave: false, status: 'dirty' } })
+    expect(editorPage.hasUnsavedWork()).toBe(true)
+    await editorPage.save()
+    expect(api.compress).not.toHaveBeenCalled()
+    expect(api.save).not.toHaveBeenCalled()
+    await time.advance(60_000)
+    expect(editLease.renew).toHaveBeenCalledOnce()
+  })
+
+  it('失效之后会话回到本人：保存仍然停着', async () => {
+    const { editorPage, api, fromOtherTab, time } = setup({ editLease: { renew: vi.fn(async () => Promise.reject(leaseLost('revoked'))) } })
+    await editorPage.load()
+    await time.advance(10_000)
+    expect(editorPage.view().editing).toMatchObject({ kind: 'lost' })
+    vi.mocked(api.session).mockResolvedValueOnce(BOB).mockResolvedValueOnce(ALICE)
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('other-user'))
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('active'))
+    expect(editorPage.view().save?.canSave).toBe(false)
+  })
+
+  it('保存得到 EDIT_LEASE_LOST：与续租失效同一个处理（停止保存与续租），保存显示失败', async () => {
+    const { editorPage, editLease, time } = setup({ api: { save: async () => Promise.reject(leaseLost('replaced')) } })
+    await editorPage.load()
+    await editorPage.save()
+    expect(editorPage.view()).toMatchObject({ editing: { kind: 'lost', loss: { kind: 'lease', reason: 'replaced' } }, save: { status: 'failed', canSave: false } })
+    await time.advance(60_000)
+    expect(editLease.renew).not.toHaveBeenCalled()
+  })
+
+  it('保存得到 404：照旧按保存失败说明，编辑权的状态不变（续租随后得知）', async () => {
+    const { editorPage } = setup({ api: { save: async () => Promise.reject(new ApiError(404, 'NOT_FOUND', '不存在')) } })
+    await editorPage.load()
+    await editorPage.save()
+    expect(editorPage.view()).toMatchObject({ editing: { kind: 'editing' }, save: { status: 'failed', canSave: true } })
+  })
+
+  it('创建编辑器期间续租得知失效：保存状态机一建好就停住', async () => {
+    const creating = deferred<SheetEditor>()
+    const { editorPage, fake, createEditor, time } = setup({ createEditor: async () => creating.promise, editLease: { renew: vi.fn(async () => Promise.reject(leaseLost('expired'))) } })
+    const loading = editorPage.load()
+    await vi.waitFor(() => expect(createEditor).toHaveBeenCalled())
+    await time.advance(10_000)
+    expect(editorPage.view().editing).toMatchObject({ kind: 'lost' })
+    creating.resolve(fake.editor)
+    await loading
+    expect(editorPage.view()).toMatchObject({ load: { kind: 'ready', readOnly: false }, save: { canSave: false } })
+  })
+
+  it('会话不是本人时暂停续租；回到本人时立即续租一次，登录换过的租约得知失效（session），保存停住', async () => {
+    const { editorPage, api, editLease, fromOtherTab, time } = setup()
+    await editorPage.load()
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('other-user'))
+    await time.advance(60_000)
+    expect(editLease.renew).not.toHaveBeenCalled()
+    editLease.renew.mockRejectedValueOnce(leaseLost('session'))
+    vi.mocked(api.session).mockResolvedValueOnce({ ...ALICE, csrfToken: 'csrf-again' })
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().editing).toMatchObject({ kind: 'lost', loss: { kind: 'lease', reason: 'session' } }))
+    expect(editLease.renew).toHaveBeenCalledOnce()
+    expect(editorPage.view()).toMatchObject({ session: 'active', save: { canSave: false } })
+  })
+
+  it('没有人登录时同样暂停；回到本人、租约仍然有效（同一个登录）：照常续租与保存', async () => {
+    const { editorPage, api, editLease, fromOtherTab, time } = setup()
+    await editorPage.load()
+    vi.mocked(api.session).mockRejectedValueOnce(UNAUTHENTICATED)
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('signed-out'))
+    await time.advance(30_000)
+    expect(editLease.renew).not.toHaveBeenCalled()
+    vi.mocked(api.session).mockResolvedValueOnce(ALICE)
+    fromOtherTab()
+    await vi.waitFor(() => expect(editLease.renew).toHaveBeenCalledOnce())
+    expect(editorPage.view()).toMatchObject({ session: 'active', editing: { kind: 'editing' }, save: { canSave: true } })
+    await time.advance(10_000)
+    expect(editLease.renew).toHaveBeenCalledTimes(2)
+  })
+
+  it('按保存时等会话的确认连同编辑权的核对有了结果：登录换过、编辑权随之失效时不发保存', async () => {
+    const save = vi.fn(async (): Promise<SaveContentResponse> => Promise.reject(new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')))
+    const { editorPage, api, editLease } = setup({ api: { save } })
+    await editorPage.load()
+    const check = deferred<SessionResponse>()
+    vi.mocked(api.session).mockReturnValueOnce(check.promise)
+    editLease.renew.mockRejectedValueOnce(leaseLost('session'))
+    await editorPage.save()
+    const again = editorPage.save()
+    check.resolve({ ...ALICE, csrfToken: 'csrf-new' })
+    await again
+    expect(save).toHaveBeenCalledOnce()
+    expect(editLease.renew).toHaveBeenCalledOnce()
+    expect(editorPage.view()).toMatchObject({ session: 'active', editing: { kind: 'lost', loss: { reason: 'session' } } })
+  })
+
+  it('续租得到未登录：向服务端确认会话（不显示"正在确认"），没有人登录就暂停续租', async () => {
+    const { editorPage, api, editLease, time } = setup({ editLease: { renew: vi.fn(async () => Promise.reject(new ApiError(401, 'SESSION_EXPIRED', '已过期'))) } })
+    await editorPage.load()
+    vi.mocked(api.session).mockRejectedValueOnce(new ApiError(401, 'SESSION_EXPIRED', '已过期'))
+    await time.advance(10_000)
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('signed-out'))
+    expect(editorPage.view().confirmingSession).toBe(false)
+    await time.advance(60_000)
+    expect(editLease.renew).toHaveBeenCalledOnce()
+  })
+
+  it('续租得到 CSRF 失效、确认得知换了人：停止保存，不再续租', async () => {
+    const { editorPage, api, editLease, time } = setup({ editLease: { renew: vi.fn(async () => Promise.reject(new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效'))) } })
+    await editorPage.load()
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    await time.advance(10_000)
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('other-user'))
+    expect(editorPage.view().save?.canSave).toBe(false)
+    await time.advance(60_000)
+    expect(editLease.renew).toHaveBeenCalledOnce()
+  })
+
+  it('页面隐藏、关闭（pagehide）：尽力释放编辑权，停止续租；之后卸载不再释放', async () => {
+    const { editorPage, editLease, time } = setup()
+    await editorPage.load()
+    window.dispatchEvent(new Event('pagehide'))
+    expect(editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
+    await time.advance(60_000)
+    expect(editLease.renew).not.toHaveBeenCalled()
+    editorPage.dispose()
+    expect(editLease.release).toHaveBeenCalledOnce()
+  })
+
+  it('卸载：尽力释放编辑权，停止计时器与监听', async () => {
+    const { editorPage, editLease, time } = setup()
+    await editorPage.load()
+    editorPage.dispose()
+    expect(editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
+    expect(time.pending()).toBe(0)
+    window.dispatchEvent(new Event('pagehide'))
+    expect(editLease.release).toHaveBeenCalledOnce()
+  })
+
+  it('载入期间页面卸载了（编辑权已经取得，编辑器还在创建）：随即释放；创建出的编辑器立即销毁', async () => {
+    const creating = deferred<SheetEditor>()
+    const { editorPage, fake, editLease, createEditor } = setup({ createEditor: async () => creating.promise })
+    const loading = editorPage.load()
+    await vi.waitFor(() => expect(createEditor).toHaveBeenCalled())
+    editorPage.dispose()
+    expect(editLease.release).toHaveBeenCalledOnce()
+    creating.resolve(fake.editor)
+    await loading
+    expect(fake.editor.dispose).toHaveBeenCalledOnce()
+    expect(editLease.release).toHaveBeenCalledOnce()
+  })
+
+  it('申请期间页面卸载了：取得之后随即释放，不创建编辑器', async () => {
+    const acquiring = deferred<AcquiredEditLease>()
+    const { editorPage, editLease, createEditor } = setup({ editLease: { acquire: vi.fn(async () => acquiring.promise) } })
+    const loading = editorPage.load()
+    await vi.waitFor(() => expect(editLease.acquire).toHaveBeenCalled())
+    editorPage.dispose()
+    acquiring.resolve(ACQUIRED)
+    await loading
+    expect(editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
+    expect(createEditor).not.toHaveBeenCalled()
+  })
+
+  it('编辑器加载失败：释放已经取得的编辑权', async () => {
+    const { editorPage, editLease, time } = setup({ createEditor: async () => Promise.reject(new Error('就绪超时')) })
+    await editorPage.load()
+    expect(editorPage.view()).toMatchObject({ load: { kind: 'editor-failed' }, editing: { kind: 'none' } })
+    expect(editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
+    expect(time.pending()).toBe(0)
   })
 })

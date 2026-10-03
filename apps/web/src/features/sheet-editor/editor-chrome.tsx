@@ -1,8 +1,10 @@
 // 编辑器页的页头与提示（P4 设计 §3.7.3）：返回文档所在的空间（M2-P2 设计 §3.10；只凭授权时回"与我共享"，M2-P5）、标题、
-// 分享的入口（M2-P5）、保存状态（role="status"）、保存按钮；载入与保存的各种结果。
+// 分享的入口（M2-P5）、保存状态（role="status"）、保存按钮；载入与保存的各种结果；编辑权（M3-P1 设计 §3.4.7）：
+// 别处正在编辑时说明谁在编辑，失效时说明原因、提供重新加载。
 // 编辑器本身挂在页头之外的容器里（editor.html 的 #sheet-editor），不归 React 管。
 import type { ReactNode } from 'react'
-import type { EditorPage, EditorPageLoad, EditorPageReady, EditorPageView } from './editor-page.ts'
+import type { LeaseLoss } from './edit-lease.ts'
+import type { EditorEditing, EditorPage, EditorPageLoad, EditorPageReady, EditorPageSession, EditorPageView } from './editor-page.ts'
 import type { SaveProblem, SaveView } from './save-coordinator.ts'
 import { ArrowLeft } from 'lucide-react'
 import { useEffect, useRef, useSyncExternalStore } from 'react'
@@ -11,7 +13,8 @@ import { messages } from '../../shared/i18n/index.ts'
 import { editorMessages } from '../../shared/i18n/zh-cn/editor.ts'
 import { LOGIN_PATH } from '../../shared/lib/login-path.ts'
 import { HOME_PATH, SHARED_PATH, spacePath } from '../../shared/lib/space-paths.ts'
-import { Alert, AlertDescription, Button, buttonVariants } from '../../shared/ui/index.ts'
+import { Alert, AlertDescription, Button, buttonVariants, PersonName, Phrase } from '../../shared/ui/index.ts'
+import { StatusRegion } from '../../shared/ui/status-region.tsx'
 import { EditorShareEntry } from './share-entry.tsx'
 
 /**
@@ -64,7 +67,14 @@ function problemMessage(problem: SaveProblem, sessionProblem: unknown): { text: 
   return { text: editorMessages.saveFailed(error.message), requestId: error.requestId, destructive: true }
 }
 
-function SaveControls({ save, confirming, onSave, apple }: { save: SaveView, confirming: boolean, onSave: () => void, apple: boolean }) {
+/** 页头的保存状态：确认会话进行中说明正在确认；编辑权失效之后不能再保存（M3 总设计 §6.5 的保存状态） */
+function saveStatusText(save: SaveView, confirming: boolean, leaseLost: boolean): string {
+  if (confirming)
+    return messages.auth.checkingSession
+  return leaseLost ? editorMessages.status.leaseLost : editorMessages.status[save.status]
+}
+
+function SaveControls({ save, confirming, leaseLost, onSave, apple }: { save: SaveView, confirming: boolean, leaseLost: boolean, onSave: () => void, apple: boolean }) {
   return (
     <>
       {/* 按了保存、正在向服务端确认会话：说明正在确认，而不是看起来没有反应（复验 SB5）。
@@ -74,7 +84,7 @@ function SaveControls({ save, confirming, onSave, apple }: { save: SaveView, con
           能打开分享对话框时它一定已经在（页头就绪时保存状态机先于 ready 建好；只读的文档没有保存，也就没有它）。
           保存失败的详细说明（下面的提示条，role="alert"）随失败插入：对话框开着时它在 aria-hidden 之下，但这里会播报"保存失败"，
           对话框关掉之后详细说明读得到，不另做机制 */}
-      <p role="status" aria-live="polite" className="text-sm whitespace-nowrap text-muted-foreground">{confirming ? messages.auth.checkingSession : editorMessages.status[save.status]}</p>
+      <p role="status" aria-live="polite" className="text-sm whitespace-nowrap text-muted-foreground">{saveStatusText(save, confirming, leaseLost)}</p>
       {/* 保存中用 aria-disabled：按钮变成 disabled 时焦点会丢（审查 B13）；重复点击由保存的状态机挡住 */}
       <Button
         size="sm"
@@ -125,6 +135,51 @@ function SaveNotices({ view, save, onReload }: { view: EditorPageView, save: Sav
     )
   }
   return notices
+}
+
+/** 编辑权失效的原因（P1 设计 §3.2）：租约本身的按服务端给的原因（不认识的为 undefined）；读不到了；不能编辑了用服务端这次给的说明 */
+function lostCause(loss: LeaseLoss): string | undefined {
+  switch (loss.kind) {
+    case 'lease':
+      return loss.reason === undefined ? undefined : editorMessages.editing.lostReason(loss.reason)
+    case 'not-found':
+      return editorMessages.editing.lostNotFound
+    case 'denied':
+      return describeError(loss.error).message
+  }
+}
+
+/**
+ * 编辑权失效（M3-P1 设计 §3.4.7）：说明原因、本页的修改有没有保存，提供重新加载。之后本页不能再保存，
+ * 会话的提示（"登录之后回到这里保存"）、保存失败与版本冲突的说明都不再成立，只显示这一条（与版本冲突的做法相同，复验 SB9）；
+ * 换了人时另说明重新加载会以那个账户打开（复验 TB8）
+ */
+function LeaseLostNotice({ loss, save, session, onReload }: { loss: LeaseLoss, save: SaveView, session: EditorPageSession, onReload: () => void }) {
+  return (
+    <Alert variant="destructive">
+      <AlertDescription>
+        <p>{editorMessages.editing.lost(lostCause(loss), save.status !== 'clean')}</p>
+        {session === 'other-user' && <p>{editorMessages.otherUserBeforeReload}</p>}
+        <Button variant="outline" size="sm" className="mt-2" onClick={onReload}>{editorMessages.reload}</Button>
+      </AlertDescription>
+    </Alert>
+  )
+}
+
+/**
+ * 别处正在编辑时的说明（M3-P1 设计 §3.4.7）：谁在编辑（人名经人名组件）、最后活动几分钟之前；是自己时说在另一个标签页或设备上。
+ * 放进一直在的读屏状态区（规范 §2.4）：页面就绪时填进去，读屏照样播报；P2 的定期检查会让它变化
+ */
+function elsewhereNotice(editing: EditorEditing): ReactNode {
+  if (editing.kind !== 'elsewhere')
+    return undefined
+  const { holder } = editing
+  if (holder === undefined)
+    return editorMessages.editing.elsewhereUnknown
+  if (holder.sameUser)
+    return editorMessages.editing.elsewhereBySelf
+  const lastActive = holder.lastActiveMinutes === undefined ? undefined : editorMessages.editing.lastActive(holder.lastActiveMinutes)
+  return <Phrase parts={editorMessages.editing.elsewhere(<PersonName person={holder.holder} />, lastActive)} />
 }
 
 /** 向服务端确认会话失败（例如断网时按了保存）：说明原因，页面照旧等本人重新登录（复验 RB7） */
@@ -179,6 +234,8 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
   if (load.kind !== 'loading' && load.kind !== 'ready')
     return <LoadFailure load={load} />
 
+  const leaseLost = view.editing.kind === 'lost' ? view.editing.loss : undefined
+
   return (
     <>
       <header className="flex h-12 items-center gap-3 border-b border-border px-3">
@@ -193,16 +250,19 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
           {ready !== undefined && <EditorShareEntry page={page} ready={ready} fallbackFocus={() => backRef.current?.focus()} />}
           {load.kind === 'loading' && <p role="status" className="text-sm text-muted-foreground">{editorMessages.loading}</p>}
           {load.kind === 'ready' && load.readOnly && <p className="text-sm text-muted-foreground">{editorMessages.status.readOnly}</p>}
-          {save !== undefined && <SaveControls save={save} confirming={view.confirmingSession} apple={apple} onSave={() => void page.save()} />}
+          {save !== undefined && <SaveControls save={save} confirming={view.confirmingSession} leaseLost={leaseLost !== undefined} apple={apple} onSave={() => void page.save()} />}
         </div>
       </header>
+      <StatusRegion className="mx-3 mt-2 rounded-lg border bg-card px-2.5 py-2 text-sm text-card-foreground">{elsewhereNotice(view.editing)}</StatusRegion>
       {(view.session !== 'active' || save !== undefined) && (
         <div className="flex flex-col gap-2 px-3 empty:hidden [&:not(:empty)]:py-2">
-          {/* 版本冲突之后本页不能再保存：会话的提示（"登录之后回到这里保存"）不成立，只显示冲突的说明（复验 SB9；换了人时冲突的说明里另有一句，复验 TB8） */}
-          {view.session === 'signed-out' && save?.conflict === undefined && (
+          {leaseLost !== undefined && save !== undefined && <LeaseLostNotice loss={leaseLost} save={save} session={view.session} onReload={page.reload} />}
+          {/* 版本冲突、编辑权失效之后本页不能再保存：会话的提示（"登录之后回到这里保存"）不成立，只显示冲突或失效的说明（复验 SB9；换了人时那条说明里另有一句，复验 TB8）。
+              持有编辑权的页面（有保存）：编辑权绑定这次登录，重新登录之后它已经失效，不说"回到这里保存"（M3-P1，自动续上在 P2） */}
+          {leaseLost === undefined && view.session === 'signed-out' && save?.conflict === undefined && (
             <Alert variant="destructive">
               <AlertDescription>
-                <p>{editorMessages.signedOut}</p>
+                <p>{save === undefined ? editorMessages.signedOut : editorMessages.signedOutEditing}</p>
                 <SessionCheckProblem problem={view.sessionProblem} />
                 {/* 在新标签页登录：本页不离开，修改留着；那边登录之后，本页收到消息恢复保存 */}
                 <a href={LOGIN_PATH} target="_blank" rel="noopener" className={buttonVariants({ variant: 'outline', size: 'sm', className: 'mt-2' })}>
@@ -211,15 +271,15 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
               </AlertDescription>
             </Alert>
           )}
-          {view.session === 'other-user' && save?.conflict === undefined && (
+          {leaseLost === undefined && view.session === 'other-user' && save?.conflict === undefined && (
             <Alert variant="destructive">
               <AlertDescription>
-                <p>{editorMessages.otherUser}</p>
+                <p>{save === undefined ? editorMessages.otherUser : editorMessages.otherUserEditing}</p>
                 <SessionCheckProblem problem={view.sessionProblem} />
               </AlertDescription>
             </Alert>
           )}
-          {save !== undefined && <SaveNotices view={view} save={save} onReload={page.reload} />}
+          {leaseLost === undefined && save !== undefined && <SaveNotices view={view} save={save} onReload={page.reload} />}
         </div>
       )}
     </>
