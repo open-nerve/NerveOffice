@@ -1,10 +1,14 @@
 // 登录状态变化时的编辑器页（P4 设计 §3.7.3，审查 B1）：本页可能有未保存的修改，所以不整页跳转、不自动重新加载。
 // 登录已过期或在别处退出：暂停保存，提示在新标签页中登录，本人登录回来之后恢复；别的标签页登录了另一个人：本页不能再保存。
+// M3-P1 起编辑权（编辑租约）绑定"这个标签页、这次登录"（P1 设计 §3.4.1）：本人重新登录之后，页面确认是本人、核对编辑权，
+// 得知它随原来的登录失效，随即自动续上（期间没人保存过），所以"登录回来之后保存成功"照旧成立。
+// 核对保存这一条路遇到未登录、令牌失效时怎样确认会话的几条（1、3、4）拦下心跳（support/sheet.ts 的 blockLeaseRenewals）：
+// 心跳也会发现登录失效或令牌换了，先一步确认会话、换好令牌，用例就看不到保存这一步的确认；到了要恢复、续上的那一步再放开
 import type { Page } from '@playwright/test'
 import { createUser, expireSessions } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
+import { blockLeaseRenewals, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, isSaveRequest, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -36,6 +40,7 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     await loginThroughApi(page, owner)
     const documentId = await createSheetThroughApi(page)
     await openEditor(page, documentId)
+    const renewals = await blockLeaseRenewals(page)
     const editorUrl = page.url()
     await typeInCell(page, 'A1', 'kept')
 
@@ -54,11 +59,13 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     await expect(page.getByRole('alert')).toHaveCount(1)
     expect(page.url()).toBe(editorUrl)
 
+    await renewals.unblock()
     const [loginPage] = await Promise.all([context.waitForEvent('page'), alert.getByRole('link', { name: '在新标签页中登录' }).click()])
     await expect(loginPage.getByRole('form', { name: '登录' })).toBeVisible()
     await loginThroughUi(loginPage, owner)
     await expect(loginPage.getByRole('heading', { name: '我的空间' })).toBeVisible()
-    // 登录的标签页发出消息，本页向服务端确认是同一个人之后恢复保存；"登录已过期"的失败说明随之清掉（复验 RB2）
+    // 登录的标签页发出消息，本页向服务端确认是同一个人之后恢复保存（编辑权随原来的登录失效，随即续上）；
+    // "登录已过期"的失败说明随之清掉（复验 RB2）
     await expect(alert).toBeHidden()
     await expect(page.getByRole('alert')).toHaveCount(0)
     await expect(saveStatus(page)).toHaveText('有未保存的修改')
@@ -99,6 +106,7 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     await loginThroughApi(page, owner)
     const documentId = await createSheetThroughApi(page)
     await openEditor(page, documentId)
+    const renewals = await blockLeaseRenewals(page)
     await typeInCell(page, 'A1', 'csrf-wait')
     // 同一个人经接口重新登录：会话与令牌都换了，没有页面广播消息，本页还拿着旧的令牌
     const oldToken = await csrfTokenOf(page)
@@ -110,10 +118,10 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     const checks = await holdSessionChecks(page)
     const tokens: (string | undefined)[] = []
     page.on('request', (request) => {
-      if (request.method() === 'PUT')
+      if (isSaveRequest(request))
         tokens.push(request.headers()['x-csrf-token'])
     })
-    const first = page.waitForResponse(response => response.request().method() === 'PUT')
+    const first = page.waitForResponse(response => isSaveRequest(response.request()))
     await saveButton(page).click()
     expect((await first).status()).toBe(403)
     await expect.poll(checks.held).toBe(1)
@@ -122,9 +130,11 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     await expect(page.getByRole('alert')).toHaveCount(0)
 
     // 确认期间再按保存：不发，等确认换上新的令牌（复验 RB1、TB3）
-    const early = page.waitForRequest(request => request.method() === 'PUT', { timeout: 500 }).then(() => true, () => false)
+    const early = page.waitForRequest(isSaveRequest, { timeout: 500 }).then(() => true, () => false)
     await page.keyboard.press('ControlOrMeta+s')
     expect(await early).toBe(false)
+    // 确认是本人、换上新的令牌之后核对编辑权：它随原来的登录失效，续上之后等着的那次保存才发出
+    await renewals.unblock()
     checks.release()
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     expect(tokens).toEqual([oldToken, newToken])
@@ -136,6 +146,7 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     await loginThroughApi(page, owner)
     const documentId = await createSheetThroughApi(page)
     await openEditor(page, documentId)
+    const renewals = await blockLeaseRenewals(page)
     await typeInCell(page, 'A1', 'csrf-offline')
     const oldToken = await csrfTokenOf(page)
     const other = await context.newPage()
@@ -143,7 +154,7 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     const newToken = await csrfTokenOf(other)
     const tokens: (string | undefined)[] = []
     page.on('request', (request) => {
-      if (request.method() === 'PUT')
+      if (isSaveRequest(request))
         tokens.push(request.headers()['x-csrf-token'])
     })
 
@@ -151,13 +162,14 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     await saveButton(page).click()
     await expect(page.getByRole('alert')).toHaveText(/保存失败：暂时无法确认登录状态：网络连接失败/)
     // 再按保存：先确认，又断网，不带着失效的令牌再发
-    const resent = page.waitForRequest(request => request.method() === 'PUT', { timeout: 1_000 }).then(() => true, () => false)
+    const resent = page.waitForRequest(isSaveRequest, { timeout: 1_000 }).then(() => true, () => false)
     await saveButton(page).click()
     expect(await resent).toBe(false)
     expect(tokens).toEqual([oldToken])
 
-    // 网络恢复：确认会话、换上新的令牌再保存
+    // 网络恢复：确认会话、换上新的令牌、续上编辑权之后再保存
     await page.unroute('**/api/auth/session')
+    await renewals.unblock()
     await saveAndWait(page)
     expect(tokens).toEqual([oldToken, newToken])
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('csrf-offline')

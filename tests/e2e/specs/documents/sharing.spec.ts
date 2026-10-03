@@ -185,11 +185,11 @@ test.describe('US-M2-10 单独分享', () => {
     // 前提：确实取消成功了（库里已经没有这条授权），下面的"不能访问"才说明问题
     expect(await grantsOn(documentId)).toEqual({})
 
-    // 已经打开的页面：保存被拒绝（按不存在回答）
+    // 已经打开的页面：保存被拒绝（按不存在回答），编辑权失效（M3-P1 起保存与心跳得知都一样）
     await typeInCell(anotherDevice, 'A1', '取消之后写的')
     await saveButton(anotherDevice).click()
-    await expect(saveStatus(anotherDevice)).toHaveText('保存失败')
-    await expect(anotherDevice.getByRole('alert')).toContainText('这份表格已经被删除、移走，或者你已经没有访问权限，本页的修改没有保存')
+    await expect(saveStatus(anotherDevice)).toHaveText('编辑权已失效')
+    await expect(anotherDevice.getByRole('alert')).toContainText('你已无法访问这份文档（可能已被删除、移走，或你失去了访问权限）。本页的修改没有保存')
     // 重新打开：内容不存在；"与我共享"里也没有了
     await anotherDevice.goto(`/documents/${documentId}`)
     await expect(anotherDevice.getByText('内容不存在，或者你没有访问权限')).toBeVisible()

@@ -87,6 +87,35 @@ describe('apiFetch（不是 JSON 的请求与响应）', () => {
     }))
     await expect(apiFetch('/api/blob')).rejects.toBeInstanceOf(NetworkError)
   })
+
+  it('另外的请求头照样带上，覆盖不了请求层自己的那几个；keepalive 交给 fetch（M3-P1：编辑租约的令牌、关闭页面时的释放）', async () => {
+    let init: RequestInit | undefined
+    const api = installFakeApi({
+      'DELETE /api/lease': (received) => {
+        init = received
+        return new Response(null, { status: 204 })
+      },
+    })
+    setCsrfToken('csrf-3')
+    await apiFetch('/api/lease', { method: 'DELETE', headers: { 'x-edit-lease': 'token-1', 'x-csrf-token': 'forged', 'accept': 'text/plain' }, keepalive: true })
+    expect(api.requests[0]?.headers).toMatchObject({ 'x-edit-lease': 'token-1', 'x-csrf-token': 'csrf-3', 'accept': 'application/json' })
+    expect(init?.keepalive).toBe(true)
+    await apiRequest('/api/lease', { method: 'DELETE', headers: { 'x-edit-lease': 'token-2' }, schema: z.undefined() })
+    expect(api.requests[1]?.headers['x-edit-lease']).toBe('token-2')
+    expect(init?.keepalive).toBeUndefined()
+  })
+
+  it('错误响应带上服务端回答的时刻（响应头 Date）；没有或读不出来时为 undefined', async () => {
+    const body = { error: { code: 'EDIT_LEASE_HELD', message: '别人正在编辑', requestId: 'req-2' } }
+    installFakeApi({
+      'POST /api/dated': () => json(409, body, { date: 'Sun, 04 Oct 2026 03:00:00 GMT' }),
+      'POST /api/undated': () => json(409, body),
+      'POST /api/garbled': () => json(409, body, { date: 'yesterday-ish' }),
+    })
+    await expect(apiFetch('/api/dated', { method: 'POST' })).rejects.toMatchObject({ serverTime: Date.UTC(2026, 9, 4, 3, 0, 0) })
+    await expect(apiFetch('/api/undated', { method: 'POST' })).rejects.toMatchObject({ code: 'EDIT_LEASE_HELD', serverTime: undefined })
+    await expect(apiFetch('/api/garbled', { method: 'POST' })).rejects.toMatchObject({ code: 'EDIT_LEASE_HELD', serverTime: undefined })
+  })
 })
 
 describe('readJson', () => {

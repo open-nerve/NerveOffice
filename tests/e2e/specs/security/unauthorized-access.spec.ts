@@ -47,7 +47,8 @@ async function notFoundSpace(page: Page, spaceId: string): Promise<string> {
 }
 
 /** 文档被删除、移走或失去权限之后的保存：说明存不进去了（与 editor/access.spec.ts 相同的一句） */
-const GONE = '保存失败：这份表格已经被删除、移走，或者你已经没有访问权限，本页的修改没有保存。需要的话先把内容复制出来。'
+// 读不到这份文档了：编辑权失效的说明（M3-P1 起保存与心跳得知 404 都转为编辑权失效，说明相同）
+const GONE = '编辑权已失效：你已无法访问这份文档（可能已被删除、移走，或你失去了访问权限）。本页的修改没有保存，需要的话先把内容复制出来，再重新加载。'
 
 test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
   test('US-M2-14 猜文档地址：看不到的文档与不存在的文档，编辑器页的说法与页头逐字相同；猜空间地址同样', async ({ page, anotherDevice }) => {
@@ -130,9 +131,10 @@ test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
     await actAs(anotherDevice, 'PUT', `/api/documents/${documentId}/grants/${me.id}`, { role: 'viewer' })
     expect(await grantsOn(documentId)).toEqual({ [me.username]: 'viewer' })
 
+    // 保存（或者心跳先一步）得知失去编辑权（403）：编辑权失效，说的是服务端给的原因，本页的修改没有保存
     await saveButton(page).click()
-    await expect(saveStatus(page)).toHaveText('保存失败')
-    await expect(page.getByRole('alert')).toContainText('保存失败：只能查看这份文档，不能编辑，本页的修改没有保存。需要的话先把内容复制出来。')
+    await expect(saveStatus(page)).toHaveText('编辑权已失效')
+    await expect(page.getByRole('alert')).toContainText('编辑权已失效：你已没有编辑这份文档的权限（只能查看这份文档，不能编辑）。本页的修改没有保存，需要的话先把内容复制出来，再重新加载。')
     expect(await revisionOf(documentId)).toBe(1)
 
     await openEditor(page, documentId)
@@ -161,7 +163,7 @@ test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
     await actAs(anotherDevice, 'DELETE', `/api/spaces/${space.id}/members/${me.id}`)
 
     await saveButton(page).click()
-    await expect(saveStatus(page)).toHaveText('保存失败')
+    await expect(saveStatus(page)).toHaveText('编辑权已失效')
     await expect(page.getByRole('alert')).toContainText(GONE)
     expect(await revisionOf(workingId)).toBe(1)
 
@@ -200,10 +202,12 @@ test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
     await loginThroughApi(anotherDevice, admin)
     await actAs(anotherDevice, 'POST', `/api/admin/users/${me.id}/disable`)
 
-    // 编辑器页：保存时会话已经撤销，说明登录已失效、本页的修改还在（不整页跳走），什么也没存进去
+    // 编辑器页：会话已经撤销，说明登录已失效、本页的修改还在（不整页跳走），什么也没存进去。
+    // 保存与心跳续租都会得知（M3-P1）：保存先到时页头的保存状态是"保存失败"，心跳先到时按保存只确认会话、不发保存，仍是"有未保存的修改"；
+    // 两条路的说明相同，不断言是哪一条
     await saveButton(page).click()
-    await expect(saveStatus(page)).toHaveText('保存失败')
     await expect(page.getByRole('alert').filter({ hasText: '本页的修改还在' })).toBeVisible()
+    await expect(saveStatus(page)).toHaveText(/^(?:保存失败|有未保存的修改)$/)
     expect(await revisionOf(documentId)).toBe(1)
 
     // 平台页面：下一次请求回到登录页；原来的密码登录不了，说法与密码错误相同

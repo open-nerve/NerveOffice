@@ -8,6 +8,8 @@ export interface ApiErrorDetails {
   readonly retryAfterSeconds?: number
   /** 错误响应的 details：结构按错误码约定，使用方按错误码用 contracts 里的结构再校验（ADR-006） */
   readonly details?: Readonly<Record<string, unknown>>
+  /** 服务端回答的时刻（响应头 Date，毫秒时间戳，精确到秒） */
+  readonly serverTime?: number
 }
 
 /**
@@ -21,6 +23,11 @@ export class ApiError extends Error {
   readonly requestId: string | undefined
   readonly retryAfterSeconds: number | undefined
   readonly details: Readonly<Record<string, unknown>> | undefined
+  /**
+   * 服务端回答这次请求的时刻（响应头 Date；没有或读不出来时为 undefined）。details 里服务端的时间（例如别人的最后活动时间）
+   * 拿它来比，算出"多久之前"，不拿浏览器的时钟去比：浏览器的时钟可能不准（M3 总设计 §2.1）
+   */
+  readonly serverTime: number | undefined
 
   constructor(status: number, code: string, message: string, details: ApiErrorDetails = {}) {
     super(message)
@@ -29,6 +36,7 @@ export class ApiError extends Error {
     this.requestId = details.requestId
     this.retryAfterSeconds = details.retryAfterSeconds
     this.details = details.details
+    this.serverTime = details.serverTime
   }
 }
 
@@ -56,6 +64,8 @@ export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 export interface RequestOptions<T> {
   method?: HttpMethod
   body?: unknown
+  /** 另外的请求头（例如编辑租约的令牌）：不能覆盖请求层自己的那几个（接受的类型、内容类型、CSRF 令牌） */
+  headers?: Readonly<Record<string, string>>
   signal?: AbortSignal
   /** 成功响应的结构（契约）；没有响应体的接口用 z.undefined() */
   schema: z.ZodType<T>
@@ -68,7 +78,20 @@ export interface RawRequestOptions {
   body?: { readonly contentType: string, readonly data: Uint8Array<ArrayBuffer> | string }
   /** 期望的响应类型，默认 JSON */
   accept?: string
+  /** 另外的请求头（例如编辑租约的令牌）：不能覆盖请求层自己的那几个（接受的类型、内容类型、CSRF 令牌） */
+  headers?: Readonly<Record<string, string>>
+  /**
+   * 页面关闭之后请求照样发出（fetch 的 keepalive）：关闭页面时尽力释放编辑租约用，结果没人看（M3-P1 设计 §3.4.7）。
+   * 浏览器限制这类请求的请求体（合计 64 KiB），只用于没有请求体或请求体很小的请求
+   */
+  keepalive?: boolean
   signal?: AbortSignal
+}
+
+/** 响应头 Date 的时刻（毫秒时间戳）；没有或读不出来时为 undefined */
+function serverTimeOf(response: Response): number | undefined {
+  const time = Date.parse(response.headers.get('date') ?? '')
+  return Number.isFinite(time) ? time : undefined
 }
 
 async function errorFrom(response: Response): Promise<ApiError> {
@@ -78,7 +101,7 @@ async function errorFrom(response: Response): Promise<ApiError> {
   if (!parsed.success)
     return new ApiError(response.status, 'UNKNOWN', `服务端返回了意外的响应（HTTP ${response.status}）`)
   const { code, message, requestId, details } = parsed.data.error
-  return new ApiError(response.status, code, message, { requestId, retryAfterSeconds, details })
+  return new ApiError(response.status, code, message, { requestId, retryAfterSeconds, details, serverTime: serverTimeOf(response) })
 }
 
 /**
@@ -87,7 +110,7 @@ async function errorFrom(response: Response): Promise<ApiError> {
  */
 export async function apiFetch(path: string, options: RawRequestOptions = {}): Promise<Response> {
   const method = options.method ?? 'GET'
-  const headers: Record<string, string> = { accept: options.accept ?? 'application/json' }
+  const headers: Record<string, string> = { ...options.headers, accept: options.accept ?? 'application/json' }
   if (options.body !== undefined)
     headers['content-type'] = options.body.contentType
   if (UNSAFE_METHODS.has(method) && csrfToken !== undefined)
@@ -95,7 +118,7 @@ export async function apiFetch(path: string, options: RawRequestOptions = {}): P
 
   let response: Response
   try {
-    response = await fetch(path, { method, headers, credentials: 'same-origin', body: options.body?.data, signal: options.signal })
+    response = await fetch(path, { method, headers, credentials: 'same-origin', body: options.body?.data, keepalive: options.keepalive, signal: options.signal })
   }
   catch (error) {
     if (options.signal?.aborted === true)
@@ -120,7 +143,7 @@ export async function readJson<T>(response: Response, schema: z.ZodType<T>, labe
 export async function apiRequest<T>(path: string, options: RequestOptions<T>): Promise<T> {
   const method = options.method ?? 'GET'
   const body = options.body === undefined ? undefined : { contentType: 'application/json', data: JSON.stringify(options.body) }
-  const response = await apiFetch(path, { method, body, signal: options.signal })
+  const response = await apiFetch(path, { method, body, headers: options.headers, signal: options.signal })
   return readJson(response, options.schema, `${method} ${path}`)
 }
 

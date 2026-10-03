@@ -1,8 +1,9 @@
 // 编辑器页的操作与核对（P4 设计 §3.10）。
 // Univer 把表格画在画布上，单元格没有可访问的元素：选中单元格只能按位置点击画布，位置按模板的默认行高、列宽与表头的大小算；
 // 内容按接口取回的快照核对（服务器上保存的才算数）。页头、按钮与提示照常按角色与名称定位。
-import type { Locator, Page } from '@playwright/test'
+import type { Locator, Page, Request, Route } from '@playwright/test'
 import { revisionFromEtag, SHEET_TEMPLATE } from '@nerve-office/contracts'
+import { editLeaseEndReason } from './database.ts'
 import { e2eOrigin } from './environment.ts'
 import { expect } from './fixtures.ts'
 
@@ -160,6 +161,39 @@ export async function appendSheet(page: Page): Promise<void> {
 export async function saveAndWait(page: Page): Promise<void> {
   await saveButton(page).click()
   await expect(saveStatus(page)).toHaveText('已保存到云端')
+}
+
+/** 页头之外说明谁在编辑的读屏状态区（M3-P1）：别处正在编辑这份文档时有内容 */
+export function editingNotice(page: Page): Locator {
+  return chrome(page).getByRole('status').filter({ hasText: '正在编辑这份文档' })
+}
+
+/** 保存的请求（PUT …/content?…）：心跳续租也是 PUT（…/edit-lease），核对"发没发保存"时要分开 */
+export function isSaveRequest(request: Request): boolean {
+  return request.method() === 'PUT' && new URL(request.url()).pathname.endsWith('/content')
+}
+
+/**
+ * 离开编辑器页（到空白页），等本页的编辑权释放到了服务端（M3-P1）：之后重开的页面能立即取得编辑权。
+ * 释放在页面隐藏时经 keepalive 发出、结果不管；平时它早于重开的页面申请到达（晚到时重开的页面先再试几次，P1 设计 §7 第一条）。
+ * 要在重开之前拦截请求（page.route）的用例先用它离开：WebKit 在拦截请求时，页面关闭时的 keepalive 请求发不出去
+ * （本机实测：服务端收不到释放，重开的页面只能阅读，要等 90 秒到期；Chromium 与 Chrome 照常），所以先放掉编辑权、再装拦截
+ */
+export async function leaveEditor(page: Page, documentId: string): Promise<void> {
+  await page.goto('about:blank')
+  await expect.poll(async () => editLeaseEndReason(documentId)).toBe('released')
+}
+
+/**
+ * 拦下这个页面的心跳续租（M3-P1）：续租一律按断网处理——页面照常隔 10 秒重试，编辑权的状态不变；unblock 之后照常。
+ * 核对保存那一步的用例用它：心跳也会得知失去访问、登录失效，赶在保存之前说明编辑权已失效（页面这样做是对的，
+ * 但那就不是这条用例要核对的那一步了，结果还取决于心跳恰好落在哪里）。申请与释放照常
+ */
+export async function blockLeaseRenewals(page: Page): Promise<{ readonly unblock: () => Promise<void> }> {
+  const pattern = '**/api/documents/*/edit-lease'
+  const handler = async (route: Route): Promise<void> => route.request().method() === 'PUT' ? route.abort('internetdisconnected') : route.continue()
+  await page.route(pattern, handler)
+  return { unblock: async () => page.unroute(pattern, handler) }
 }
 
 export interface SavedContent {

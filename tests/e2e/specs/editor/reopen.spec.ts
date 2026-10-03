@@ -5,7 +5,7 @@ import type { Workbook } from '../../support/sheet.ts'
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, editorSurface, hoverCell, openEditor, resourceOf, saveAndWait, savedContent, saveStatus, selectCell, sheetCanvas, typeInCell, waitForEditor } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, editorSurface, hoverCell, leaveEditor, openEditor, resourceOf, saveAndWait, savedContent, saveStatus, selectCell, sheetCanvas, typeInCell, waitForEditor } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -101,7 +101,9 @@ test.describe('US-M1-06 重开看到最后一次保存的内容', () => {
     const note = async (): Promise<unknown> => resourceOf((await savedContent(page, documentId)).snapshot, 'SHEET_NOTE_PLUGIN')
     expect(await note()).toMatchObject({ 'sheet-1': { 3: { 3: { note: 'original' } } } })
 
-    // 拦住公式 Worker 的脚本再重开：表格画出来了，编辑器停在载入中
+    // 拦住公式 Worker 的脚本再重开：表格画出来了，编辑器停在载入中。
+    // 先离开、等编辑权释放之后再装拦截（M3-P1）：WebKit 在拦截请求时，关闭页面时的释放发不出去，重开的页面就只能阅读（support/sheet.ts 的 leaveEditor）
+    await leaveEditor(page, documentId)
     let release: () => void = () => {}
     const released = new Promise<void>((resolve) => {
       release = resolve
@@ -110,7 +112,7 @@ test.describe('US-M1-06 重开看到最后一次保存的内容', () => {
       await released
       await route.continue()
     })
-    await page.reload()
+    await page.goto(`/documents/${documentId}`)
     await expect(sheetCanvas(page)).toBeVisible({ timeout: 30_000 })
     await expect(editorSurface(page)).toHaveAttribute('data-editor-state', 'loading')
     const noteEditor = page.getByRole('textbox', { name: '在此输入' })
@@ -140,6 +142,8 @@ test.describe('US-M1-06 重开看到最后一次保存的内容', () => {
     await typeInCell(page, 'B1', 'keep')
     await saveAndWait(page)
 
+    // 先离开、等编辑权释放之后再装拦截（M3-P1）：WebKit 在拦截请求时，关闭页面时的释放发不出去，重开的页面就只能阅读（support/sheet.ts 的 leaveEditor）
+    await leaveEditor(page, documentId)
     let release: () => void = () => {}
     const released = new Promise<void>((resolve) => {
       release = resolve
@@ -148,7 +152,7 @@ test.describe('US-M1-06 重开看到最后一次保存的内容', () => {
       await released
       await route.continue()
     })
-    await page.reload()
+    await page.goto(`/documents/${documentId}`)
     await expect(sheetCanvas(page)).toBeVisible({ timeout: 30_000 })
     await expect(editorSurface(page)).toHaveAttribute('data-editor-state', 'loading')
     // 在 Univer 的快捷键里，Tab 是选区右移（A1 到 B1），Ctrl/Cmd+R 是向右填充（B1 被 A1 覆盖）：都不能传给它。
