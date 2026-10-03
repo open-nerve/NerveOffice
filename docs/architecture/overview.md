@@ -113,7 +113,7 @@ apps/api/src/
 | `POST /api/documents` | 新建（`{ type, title?, requestId, spaceId? }`）：建在指定空间（要有新建权限；没有指定时是个人空间），内容是收敛的模板换上新的 `unitId`，修订号 1；同一个 `requestId` 的重放同样 201，返回同一份文档 |
 | `GET /api/documents/{id}` | 文档元数据（含修订号、档案、格式版本、所在的空间）与调用者的权限；看不到的与不存在的文档都是 404 |
 | `GET /api/documents/{id}/content` | 当前快照：gzip 字节原样下发（`Content-Encoding: gzip`），修订号作 ETag |
-| `PUT /api/documents/{id}/content?baseRevision&requestId&clientInstanceId&localSeq&writeEpoch` | 保存（正文是 gzip 压缩的快照，请求头 `X-Edit-Lease` 带编辑租约的令牌）：压缩前后都限 5 MiB、基本校验、锁文档行、锁下核对登录、按 `requestId` 幂等、要求有效的编辑租约（M3-P1）、按基准修订号条件写入；冲突时 409，`details` 带当前修订号及其来源 |
+| `PUT /api/documents/{id}/content?baseRevision&requestId&clientInstanceId&localSeq&writeEpoch` | 保存（正文是 gzip 压缩的快照，请求头 `X-Edit-Lease` 带编辑租约的令牌）：压缩前后都限 5 MiB、基本校验、锁文档行、按 `requestId` 幂等、锁下核对登录、要求有效的编辑租约（M3-P1）、按基准修订号条件写入；冲突时 409，`details` 带当前修订号及其来源 |
 | `GET/POST/PUT/DELETE /api/documents/{id}/edit-lease` | 编辑租约（M3-P1，ADR-018）：编辑状态（能读就能看）、申请（要能编辑；别人持有时 409 `EDIT_LEASE_HELD`；成功时给令牌、代次、修订号与当前修订的来源）、心跳续租（失效时 409 `EDIT_LEASE_LOST`）、释放（持有者本人、令牌是当前这一行的才结束，一律 204） |
 | `GET /api/health/live`、`GET /api/health/ready` | 存活与就绪探针（公开） |
 | `PUT /api/auth/password` | 修改密码（M2-P1）：本人其他地方的登录全部退出；M2-P6 起连当前会话的令牌一起换掉，响应与登录相同（新的会话与 CSRF 令牌，写回 Cookie） |
@@ -158,7 +158,7 @@ apps/api/src/
 
 **文档的内容与保存**（ADR-011）：
 - 快照用 `bytea` 存 gzip 压缩的原始 JSON 字节；修订号是整数，新建为 1，每次保存加一；`unitId` 由服务端生成，终身不变。
-- 保存：与文档无关的基本校验在事务之前；事务里锁住文档行并判断权限 → 锁下核对登录 → 按 `requestId` 幂等（负载摘要按基准修订号与解压后的字节算；重放先于租约）→ 要求有效的编辑租约（M3-P1）→ 核对快照的 `id` → 按基准修订号条件写入 → 写内容、修订记录与审计（`documents.content_saved`）。
+- 保存：与文档无关的基本校验在事务之前；事务里锁住文档行并判断权限 → 按 `requestId` 幂等（负载摘要按基准修订号与解压后的字节算；重放先于登录的再核对与租约）→ 锁下核对登录 → 要求有效的编辑租约（M3-P1）→ 核对快照的 `id` → 按基准修订号条件写入 → 写内容、修订记录与审计（`documents.content_saved`）。
 - **编辑租约**（M3-P1，ADR-018）：每份文档至多一行；有效条件按顺序判断（有这一行、没有明确结束、代次是文档当前的、没有到期、没有空闲 12 分钟、绑定的登录有效、持有者仍能编辑），第一条不满足的就是失效的原因；有效期 90 秒、心跳 10 秒，时间取数据库的 `now()`；申请产生新的一代（代次加一，不动 `updated_at`）；令牌只存 SHA-256 摘要，经请求头传递。
 - 完整的快照校验、内容哈希、`If-None-Match` 与拦截旧客户端在 M3 的后续 Phase。
 
