@@ -1210,6 +1210,31 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     expect(editorPage.view()).toMatchObject({ editing: { kind: 'editing' }, save: { status: 'clean', conflict: undefined } })
   })
 
+  it('在途的保存其实已经提交，这时心跳得知编辑权中断（session）、续上认出了它；随后它自己的回包断网：不说保存失败，已保存到云端；再按保存以认出的那一版为基准（复验 C3）', async () => {
+    const pending = deferred<SaveContentResponse>()
+    const save = vi.fn<EditorPageApi['save']>().mockReturnValueOnce(pending.promise).mockResolvedValue({ revision: 5, savedAt: '2026-09-27T03:00:00.000Z' })
+    const renew = vi.fn<EditLeaseApi['renew']>().mockRejectedValueOnce(leaseLost('session')).mockResolvedValue(RENEWED)
+    const { editorPage, editLease, fake, time } = setup({ api: { save }, editLease: { renew } })
+    await editorPage.load()
+    Object.assign(fake.editor, { changeSeq: () => 1 })
+    fake.changeListeners.forEach(listener => listener())
+    const saving = editorPage.save()
+    await vi.waitFor(() => expect(save).toHaveBeenCalledOnce())
+    editLease.acquire.mockResolvedValueOnce({ ...NEXT_LEASE, revision: 4, source: { clientInstanceId: 'id-1', localSeq: 1 } })
+    await time.advance(10_000)
+    await vi.waitFor(() => expect(editLease.acquire).toHaveBeenCalledTimes(2))
+    expect(editorPage.view()).toMatchObject({ editing: { kind: 'editing' }, save: { status: 'saving', unsaved: false } })
+    pending.reject(new NetworkError('断网'))
+    await saving
+    expect(editorPage.view()).toMatchObject({ editing: { kind: 'editing' }, save: { status: 'clean', problem: undefined, unsaved: false } })
+    expect(editorPage.hasUnsavedWork()).toBe(false)
+    expect(save).toHaveBeenCalledOnce()
+    await editorPage.save()
+    expect(save).toHaveBeenCalledTimes(2)
+    expect(save).toHaveBeenLastCalledWith(DOCUMENT_ID, expect.objectContaining<Partial<SaveRequest>>({ baseRevision: 4 }), expect.anything(), NEXT_CREDENTIALS)
+    expect(editorPage.view().save).toMatchObject({ status: 'clean' })
+  })
+
   it('续上时比较的是服务端确认过的最新修订：本页保存过（修订号 4），申请得到 4 就续上，得到 5 就是别处保存过', async () => {
     const renew = vi.fn<EditLeaseApi['renew']>().mockRejectedValueOnce(leaseLost('stale')).mockResolvedValue(RENEWED)
     const { editorPage, editLease, time } = setup({ editLease: { renew } })

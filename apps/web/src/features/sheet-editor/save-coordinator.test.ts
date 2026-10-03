@@ -552,6 +552,66 @@ describe('编辑权续上时认出期间的那一版是本页自己的保存（a
     await saving
     expect(coordinator.view()).toMatchObject({ status: 'clean', conflict: undefined, unsaved: false })
   })
+
+  /** 在途的保存（修改序号 1，基准 4）：它其实已经提交（修订 5），回包还在路上 */
+  async function inFlightSave() {
+    const context = setup({ baseRevision: 4 })
+    context.control.edit('甲')
+    const saving = context.coordinator.save()
+    const inFlight = await sent(context.calls, 1)
+    return { ...context, saving, inFlight }
+  }
+
+  it('续上时认出的正是在途的那一次，随后它自己的回包以结果未知失败（断网）：就是提交了、回包丢了——按成功收尾，不说保存失败，也不留着原样再发（复验 C3）', async () => {
+    const { coordinator, calls, saving, inFlight } = await inFlightSave()
+    expect(coordinator.adoptOwnRevision(5, { clientInstanceId: ME, localSeq: 1 })).toBe(true)
+    expect(coordinator.view()).toMatchObject({ status: 'saving', unsaved: false })
+    inFlight.reject(new NetworkError('断网'))
+    await saving
+    expect(coordinator.view()).toMatchObject({ status: 'clean', problem: undefined, unsaved: false })
+    expect(coordinator.hasUnsavedWork()).toBe(false)
+    expect(coordinator.baseRevision()).toBe(5)
+    expect(calls).toHaveLength(1)
+    // 再按保存（内容没变也照常上传）：以认出的那一版为基准的新请求，不是原样再发旧基准的那一个
+    const again = coordinator.save()
+    const next = await sent(calls, 2)
+    expect(next.request).toMatchObject({ baseRevision: 5, localSeq: 1 })
+    expect(next.request.requestId).not.toBe(inFlight.request.requestId)
+    next.resolve(saved(6))
+    await again
+    expect(coordinator.view()).toMatchObject({ status: 'clean', problem: undefined })
+  })
+
+  it('认出在途的那一次之后，它的回包其实成功返回：照常确认，已保存到云端', async () => {
+    const { coordinator, saving, inFlight } = await inFlightSave()
+    expect(coordinator.adoptOwnRevision(5, { clientInstanceId: ME, localSeq: 1 })).toBe(true)
+    inFlight.resolve(saved(5))
+    await saving
+    expect(coordinator.view()).toMatchObject({ status: 'clean', problem: undefined, unsaved: false })
+    expect(coordinator.baseRevision()).toBe(5)
+  })
+
+  it('认出在途的那一次之后，它的回包是明确的拒绝（例如登录已过期）：照常按失败处理——说的是这一次没有生效的原因，会话交给页面确认；内容仍算已保存', async () => {
+    const { coordinator, saving, inFlight, onUnauthenticated } = await inFlightSave()
+    expect(coordinator.adoptOwnRevision(5, { clientInstanceId: ME, localSeq: 1 })).toBe(true)
+    const expired = new ApiError(401, 'SESSION_EXPIRED', '登录已过期')
+    inFlight.reject(expired)
+    await saving
+    expect(coordinator.view()).toMatchObject({ status: 'failed', problem: { kind: 'request', error: expired }, unsaved: false })
+    expect(onUnauthenticated).toHaveBeenCalledExactlyOnceWith(expired)
+  })
+
+  it('认出的是更早的那一次、在途的这一次内容更新：它的回包以结果未知失败时照常是保存失败（认出那一次不说明这一次）', async () => {
+    const { coordinator, control, calls } = await unknownSave()
+    control.edit('甲乙')
+    const saving = coordinator.save()
+    const inFlight = await sent(calls, 2)
+    expect(coordinator.adoptOwnRevision(5, { clientInstanceId: ME, localSeq: 1 })).toBe(true)
+    const offline = new NetworkError('断网')
+    inFlight.reject(offline)
+    await saving
+    expect(coordinator.view()).toMatchObject({ status: 'failed', problem: { kind: 'request', error: offline }, unsaved: true })
+  })
 })
 
 describe('重试原样再发结果未知的请求（Codex 评审 CX2）', () => {
