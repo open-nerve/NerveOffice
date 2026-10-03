@@ -502,6 +502,17 @@ describe('编辑权续上时认出期间的那一版是本页自己的保存（a
     expect(coordinator.hasUnsavedWork()).toBe(false)
   })
 
+  it('之后又有一次保存被明确拒绝（例如快照不合格）：认出之后照样显示那次的失败——它说的是之后的内容，与认出的那一次无关', async () => {
+    const { coordinator, control, calls } = await unknownSave()
+    control.edit('甲乙')
+    const saving = coordinator.save()
+    const invalid = new ApiError(422, 'SNAPSHOT_INVALID', '表格内容的格式不正确')
+    ;(await sent(calls, 2)).reject(invalid)
+    await saving
+    expect(coordinator.adoptOwnRevision(5, { clientInstanceId: ME, localSeq: 1 })).toBe(true)
+    expect(coordinator.view()).toMatchObject({ status: 'failed', problem: { kind: 'request', error: invalid } })
+  })
+
   it.each([
     ['来源是别的标签页', { clientInstanceId: OTHER_TAB, localSeq: 1 }],
     ['没有来源（新建、复制出来的）', null],

@@ -750,12 +750,21 @@ describe('释放', () => {
     expect(context.api.renew).not.toHaveBeenCalled()
   })
 
-  it('页面关闭时的释放没送到（断网）：不看结果，不抛出', async () => {
-    const context = setup({ release: vi.fn(async () => Promise.reject(new NetworkError('断网'))) })
+  it('页面关闭时的释放没送到（断网）：不看结果，失败由租约自己接住（没人接时测试进程报 Unhandled Rejection）', async () => {
+    const context = setup()
     const lease = await held(context)
+    // 不经 vi.fn：vi.fn 记录结果时会接住它返回的 Promise，测不出没人接
+    let releases = 0
+    Object.assign(context.api, {
+      release: async (): Promise<void> => {
+        releases += 1
+        return Promise.reject(new NetworkError('断网'))
+      },
+    })
     lease.release()
     await settle()
-    expect(context.api.release).toHaveBeenCalledOnce()
+    await settle()
+    expect(releases).toBe(1)
   })
 
   it('暂停时（会话不是本人）不发：带的会是别人的或已经失效的登录', async () => {
