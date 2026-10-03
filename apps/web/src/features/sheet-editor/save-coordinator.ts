@@ -119,11 +119,14 @@ interface Capture {
  * 结果未知的保存（网络错误、5xx、回包读不出来）：服务端可能已经提交了。认出"自己追自己"只要序号与公式是否收齐，
  * 不留快照本身，断网期间多次保存时内存不随之增长（审查 B9）：
  * - localSeq：请求里的修改序号，冲突的来源按它认。同一个 requestId 的请求不变，一直是第一次发出时的序号；
- * - capture：内容与这个请求相同的最近一次捕获，认出它已经提交时，按它确认（Codex 评审 CX2）
+ * - capture：内容与这个请求相同的最近一次捕获，认出它已经提交时，按它确认（Codex 评审 CX2）；
+ * - adopted：编辑权续上时认出的就是它（adoptOwnRevision）——服务端说期间的那一版正是它，基准已按它确认。
+ *   在途时被认出的，它自己的回包随后以结果未知失败，就是提交了、回包丢了（复验 C3）
  */
 interface UnconfirmedSave {
   readonly localSeq: number
   readonly capture: Capture
+  readonly adopted: boolean
 }
 
 const UTF8 = new TextEncoder()
@@ -264,7 +267,7 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
     let rebased = false
     for (;;) {
       const earlierUnknown = unconfirmed.has(request.requestId)
-      unconfirmed.set(request.requestId, { localSeq: request.localSeq, capture })
+      unconfirmed.set(request.requestId, { localSeq: request.localSeq, capture, adopted: false })
       try {
         const result = await send(request, body)
         // 原样再发的请求，内容与这次捕获的相同：确认到这次捕获的序号
@@ -272,6 +275,11 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
         return
       }
       catch (error) {
+        // 在途时编辑权续上、认出的正是这一次（基准已按它确认）：它自己的回包随后以结果未知失败，就是提交了、回包丢了——
+        // 按成功收尾：不说保存失败，也不留着原样再发（复验 C3）。明确的拒绝照常按失败处理：它说的是这一次没有生效的原因
+        // （会话、权限等），要照常交给页面
+        if (!isDefiniteRejection(error) && unconfirmed.get(request.requestId)?.adopted === true)
+          return
         const details = conflictDetails(error)
         const own = rebased ? undefined : ownUnconfirmedSave(details?.source)
         if (own === undefined || details === undefined || details === null) {
@@ -301,9 +309,10 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
         return false
       const [requestId, save] = own
       confirm(save.capture, revision)
-      // 记录留着：保存先得知编辑权中断时，在途的那一次是按旧的基准发出的，续上之后重发会得到冲突，来源正是它，
-      // 照常按自己追自己换上新的基准。下一次确认时清掉
-      unconfirmed.set(requestId, save)
+      // 记录留着，记下是认出的：保存先得知编辑权中断时，在途的那一次是按旧的基准发出的，续上之后重发会得到冲突，来源正是它，
+      // 照常按自己追自己换上新的基准；认出的正是在途的那一次时，它自己的回包随后以结果未知失败就按成功收尾（复验 C3）。
+      // 下一次确认时清掉
+      unconfirmed.set(requestId, { ...save, adopted: true })
       // 那次结果未知的失败已经有了答案（其实已经提交），不再说"保存失败"；之后又有的修改照常是"有未保存的修改"
       if (problem?.kind === 'request' && !isDefiniteRejection(problem.error))
         problem = undefined
