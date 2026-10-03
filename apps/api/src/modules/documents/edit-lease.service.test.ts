@@ -96,6 +96,18 @@ describe('EditLeaseService.acquire', () => {
     expect(saved.store.repositories.revisions.findByRevision).toHaveBeenCalledWith(saved.document.id, 3, TRANSACTION)
   })
 
+  it('这次登录在两把锁之后再核对（M3-P1 审查 A1）：守卫之后被撤销（退出、签发重置、换令牌）时 401 SESSION_EXPIRED，什么也不写', async () => {
+    const { store, service, document } = setup()
+    store.activeSessions.delete(ALICE_SESSION)
+    const error = await rejection(service.acquire(AMY, document.id, TAB, TRANSACTION))
+    expect([error.code, error.status]).toEqual(['SESSION_EXPIRED', 401])
+    expect(store.leaseRecords.has(document.id)).toBe(false)
+    expect(store.documents.get(document.id)?.writeEpoch).toBe(0)
+    expect(store.sessions.isActive).toHaveBeenCalledWith(ALICE_SESSION, TRANSACTION)
+    const steps = [orderOf(store.repositories.documents.lockById), orderOf(store.leases.lockByDocument), orderOf(store.sessions.isActive)]
+    expect(steps).toEqual(steps.toSorted((a, b) => a - b))
+  })
+
   it('看不到 404、只能查看 403：都在加锁之前，什么也不写', async () => {
     const { store, service, document } = setup()
     expect((await rejection(service.acquire({ userId: CAROL, sessionId: BOB_SESSION }, document.id, TAB, TRANSACTION))).code).toBe('NOT_FOUND')
@@ -234,9 +246,9 @@ describe('EditLeaseService.renew', () => {
     expect(renewed).toEqual({ expiresAt: new Date(store.databaseNow.getTime() + EDIT_LEASE_TTL_SECONDS * SECOND) })
     expect(store.leases.renew).toHaveBeenCalledWith(document.id, 15, TRANSACTION)
     expect(store.leaseRecords.get(document.id)).toMatchObject({ renewedAt: store.databaseNow, lastActiveAt: new Date(store.databaseNow.getTime() - 15 * SECOND) })
-    // 这次续租的两次读文档（判断能编辑、锁住租约行之后读代次）夹着锁租约行（申请时已经各调过一次）
+    // 这次续租的两次读文档（判断能编辑、锁住租约行之后读代次）夹着锁租约行与登录的核对（申请时已经各调过一次）
     const reads = store.repositories.documents.findById.mock.invocationCallOrder.slice(-2)
-    const steps = [reads[0], orderOf(store.leases.lockByDocument, 1), reads[1], orderOf(store.leases.renew)]
+    const steps = [reads[0], orderOf(store.leases.lockByDocument, 1), store.sessions.isActive.mock.invocationCallOrder.at(-1), reads[1], orderOf(store.leases.renew)]
     expect(steps).toEqual(steps.toSorted((a, b) => (a ?? 0) - (b ?? 0)))
     // 心跳不锁文档行
     expect(store.repositories.documents.lockById).toHaveBeenCalledTimes(1)
@@ -281,6 +293,34 @@ describe('EditLeaseService.renew', () => {
       return {}
     })).toEqual({ reason: 'expired' })
     expect(await lostWith(async () => ({ actor: { userId: ALICE, sessionId: ALICE_OTHER_SESSION } }))).toEqual({ reason: 'session' })
+  })
+
+  it('这次登录在锁住租约行之后再核对（M3-P1 审查 A1）：被撤销时 401 SESSION_EXPIRED，不续租', async () => {
+    const setupResult = setup()
+    const { store, service, document } = setupResult
+    const token = await acquired(setupResult)
+    store.activeSessions.delete(ALICE_SESSION)
+    const error = await rejection(service.renew(AMY, document.id, 0, token, TRANSACTION))
+    expect([error.code, error.status]).toEqual(['SESSION_EXPIRED', 401])
+    expect(store.leases.renew).not.toHaveBeenCalled()
+    expect(orderOf(store.leases.lockByDocument, 1)).toBeLessThan(store.sessions.isActive.mock.invocationCallOrder.at(-1) ?? 0)
+  })
+
+  it('失效时先再判断一次能编辑（M3-P1 审查 A2）：等租约行的锁期间被降为查看者、被移出（撤权结束了租约），回 403 / 404 而不是 revoked', async () => {
+    for (const [role, code] of [['viewer', 'PERMISSION_DENIED'], [undefined, 'NOT_FOUND']] as const) {
+      const setupResult = setup()
+      const { store, service, document } = setupResult
+      const token = await acquired(setupResult)
+      store.leases.lockByDocument.mockImplementationOnce(async (documentId: string) => {
+        // 撤权在这期间提交：成员的角色变了，租约记 revoked
+        store.setMember(TEAM_SPACE, ALICE, role)
+        await store.leases.end(documentId, 'revoked')
+        const row = store.leaseRecords.get(documentId)
+        return row === undefined ? undefined : { ...row, now: store.databaseNow }
+      })
+      expect((await rejection(service.renew(AMY, document.id, 0, token, TRANSACTION))).code, String(role)).toBe(code)
+      expect(store.leases.renew).not.toHaveBeenCalled()
+    }
   })
 
   it('没有租约：none', async () => {
@@ -346,6 +386,16 @@ describe('EditLeaseService.release', () => {
     await service.release(AMY, document.id, token, TRANSACTION)
     expect(store.leases.end).not.toHaveBeenCalled()
     expect(store.leaseRecords.get(document.id)?.endReason).toBe('revoked')
+  })
+
+  it('释放的人要是持有者（M3-P1 审查 A4）：别人拿到了令牌也不能结束这一代；同一个人换了登录照样能释放（续上之前先释放自己那一代）', async () => {
+    const setupResult = setup()
+    const { store, service, document } = setupResult
+    const token = await acquired(setupResult)
+    await service.release(BEN, document.id, token, TRANSACTION)
+    expect(store.leaseRecords.get(document.id)?.endReason).toBeNull()
+    await service.release({ userId: ALICE, sessionId: ALICE_OTHER_SESSION }, document.id, token, TRANSACTION)
+    expect(store.leaseRecords.get(document.id)?.endReason).toBe('released')
   })
 
   it('能读就行（读不到 404，在锁租约行之前）：持有者被降为查看者之后仍能释放；到期的也能释放（之后不再算异常结束）', async () => {

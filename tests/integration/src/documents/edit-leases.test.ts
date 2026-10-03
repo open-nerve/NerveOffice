@@ -276,6 +276,26 @@ describe('申请、心跳、释放与编辑状态（P1 设计 §3.4.2、§3.4.3�
     expect((await release(sessionOf(amy), document.id, lease.token)).status).toBe(204)
     expect(await leaseOf(document.id)).toEqual(ended)
   })
+
+  it('US-M3-04 释放要是持有者本人（M3-P1 审查 A4）：能读这份文档的别人拿到了令牌，释放什么也不做（204），租约与心跳照常；本人换了登录（修改密码）之后照样能释放自己那一代', async () => {
+    const { account: hana, session } = await freshEditor('lease-hana')
+    const document = await freshDocument()
+    const lease = await acquired(session, document.id)
+    for (const other of [ben, vic])
+      expect((await release(sessionOf(other), document.id, lease.token)).status, other.username).toBe(204)
+    expect(await leaseOf(document.id)).toMatchObject({ holder_id: hana.id, ended_at: null, end_reason: null })
+    expect((await renew(session, document.id, lease.token)).status).toBe(200)
+
+    // 换令牌之后的页面（续上之前先释放自己那一代）：登录换了，持有者还是她
+    const changed = await asUser(app.baseUrl, session, '/api/auth/password', { method: 'PUT', body: { currentPassword: hana.password, newPassword: 'a brand new long password' } })
+    expect(changed.status, await changed.clone().text()).toBe(200)
+    const setCookie = sessionSetCookie(changed)
+    if (setCookie === undefined)
+      throw new Error('改密码成功却没有写回会话 Cookie')
+    const renewedSession: LoggedIn = { cookie: `${SESSION_COOKIE}=${cookieValue(setCookie)}`, session: parseExact(sessionResponseSchema, await changed.json()) }
+    expect((await release(renewedSession, document.id, lease.token)).status).toBe(204)
+    expect(await leaseOf(document.id)).toMatchObject({ end_reason: 'released' })
+  })
 })
 
 describe('先判断访问与编辑权，再看租约（P1 设计 §3.2）', () => {

@@ -47,8 +47,11 @@ function holding(store: FakeStore, documentId: string, userId: string, clientIns
 
 function setup() {
   const store = new FakeStore()
-  const { transactions, documents, contents, revisions, leases, policy, audit } = store.deps
-  const service = new DocumentContentService(transactions, documents, contents, revisions, leases, policy, audit)
+  // 两人这次的登录都有效（会话守卫放行过；保存在锁下再查一次，M3-P1 审查 A1）
+  for (const session of Object.values(SESSIONS))
+    store.activeSessions.add(session)
+  const { transactions, documents, contents, revisions, leases, sessions, policy, audit } = store.deps
+  const service = new DocumentContentService(transactions, documents, contents, revisions, leases, sessions, policy, audit)
   const document = store.addDocument({ revision: 1 })
   store.contents.set(document.id, { snapshot: zlib.gzipSync('{}'), rawBytes: 2 })
   store.addRevision({ documentId: document.id, revision: 1, kind: 'created', requestId: '0199a2c4-1f2e-4a3b-8c4d-000000000001', payloadDigest: Buffer.alloc(32), source: null, savedBy: ALICE })
@@ -430,5 +433,29 @@ describe('DocumentContentService.save：保存要求编辑租约（M3-P1 设计 
     const stale = setup()
     stale.store.leaseRecords.clear()
     expect((await rejection(stale.service.save(saver(ALICE), stale.document.id, query({ baseRevision: 7 }), upload(stale.document.unitId), HTTP_ORIGIN))).code).toBe('EDIT_LEASE_LOST')
+  })
+})
+
+describe('DocumentContentService.save：这次登录在锁下再核对一次（M3-P1 审查 A1）', () => {
+  it('登录在会话守卫之后被撤销（退出、签发重置、换令牌）：401 SESSION_EXPIRED，什么也没写；在文档行的锁下查，先于能编辑与租约', async () => {
+    const { store, service, document } = setup()
+    store.activeSessions.delete(SESSIONS[ALICE] ?? '')
+    const error = await rejection(service.save(saver(ALICE), document.id, query(), upload(document.unitId), HTTP_ORIGIN))
+    expect([error.code, error.status]).toEqual(['SESSION_EXPIRED', 401])
+    expect(store.documents.get(document.id)?.revision).toBe(1)
+    expect(store.audits).toEqual([])
+    expect(store.sessions.isActive).toHaveBeenCalledWith(SESSIONS[ALICE], expect.anything())
+    expect(store.repositories.documents.lockById.mock.invocationCallOrder[0]).toBeLessThan(store.sessions.isActive.mock.invocationCallOrder[0] ?? 0)
+    expect(store.leases.findByDocument).not.toHaveBeenCalled()
+  })
+
+  it('重放先于登录的核对：保存已经提交、回包丢了，之后登录被撤销，重发同一个请求拿到原来的结果（重放只要求能访问）', async () => {
+    const { store, service, document } = setup()
+    const request = query()
+    const body = upload(document.unitId)
+    const first = await service.save(saver(ALICE), document.id, request, body, HTTP_ORIGIN)
+    store.activeSessions.delete(SESSIONS[ALICE] ?? '')
+    expect(await service.save(saver(ALICE), document.id, request, body, HTTP_ORIGIN)).toEqual(first)
+    expect(store.documents.get(document.id)?.revision).toBe(2)
   })
 })

@@ -7,7 +7,8 @@
 // - 当前的租约（currentLeaseLoss，申请与编辑状态）：从旁判断这一行。第 6、7 条要查数据库（各一两条语句），事实由调用方
 //   以函数的形式给出，规则决定问不问、先问哪个：前五条都满足才问，先问登录，登录不在了就不再问编辑权；
 // - 请求带的租约（requestLeaseLoss，心跳与保存）：持有者自己的请求。先要令牌对得上，第 6 条换成"请求的登录、标签页就是
-//   租约绑定的那一个"，不另查——会话守卫刚认证过这次登录，换过令牌的页面拿的是新的登录，按 session 失效。
+//   租约绑定的那一个"——换过令牌的页面拿的是新的登录，按 session 失效。"这次登录现在仍然有效"不在这里判断：调用方在事务里、
+//   锁下另查一次（edit-lease.service.ts 的 requireActiveLogin，M3-P1 审查 A1），失效时回 SESSION_EXPIRED。
 // 另有申请时的重试（isSamePage：同一个登录、同一个标签页）、释放（releasableBy：令牌对得上、没有明确结束）与异常结束的提醒（interruptionOf）。
 import type { EditLeaseLostReason } from '@nerve-office/contracts'
 import type { ObservedEditLease } from './edit-leases.repository.ts'
@@ -116,12 +117,14 @@ export function isSamePage(lease: ObservedEditLease, sessionId: string, clientIn
 }
 
 /**
- * 释放（P1 设计 §3.4.3）：令牌是当前这一行的、而且这一行没有明确结束，才记 released。没带令牌、令牌对不上（这一行已经是新的一代）、
- * 已经释放或收回都不动它：页面关闭时晚到的释放不能结束别人（或自己在别处）申请到的新的一代，也不能改掉先记下的结束原因。
- * 到期、空闲、登录失效的租约照样可以释放（令牌对得上就是持有者本人）：记下 released，就不再算异常结束
+ * 释放（P1 设计 §3.4.3）：令牌是当前这一行的、这一行没有明确结束、而且释放的人就是持有者，才记 released。没带令牌、令牌对不上
+ * （这一行已经是新的一代）、已经释放或收回都不动它：页面关闭时晚到的释放不能结束别人（或自己在别处）申请到的新的一代，
+ * 也不能改掉先记下的结束原因。另要求是持有者本人（M3-P1 审查 A4，纵深防御）：令牌一旦经别的渠道外泄（例如代理的访问日志记下了请求头），
+ * 能读这份文档的人也不能拿它反复打断别人的编辑；不要求是同一个登录——换过令牌的页面续上之前，要先释放自己那一代。
+ * 到期、空闲、登录失效的租约照样可以释放：记下 released，就不再算异常结束
  */
-export function releasableBy(lease: ObservedEditLease | undefined, token: string | undefined): boolean {
-  return lease !== undefined && token !== undefined && lease.endReason === null && editLeaseTokenMatches(token, lease.tokenDigest)
+export function releasableBy(lease: ObservedEditLease | undefined, token: string | undefined, userId: string): boolean {
+  return lease !== undefined && token !== undefined && lease.endReason === null && lease.holderId === userId && editLeaseTokenMatches(token, lease.tokenDigest)
 }
 
 /**
