@@ -16,7 +16,7 @@ import { expect, test } from '../../support/fixtures.ts'
 import { searchList } from '../../support/list-search.ts'
 import { plainName, shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { blockLeaseRenewals, cellOf, EDITOR_TEST_TIMEOUT, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
+import { cellOf, EDITOR_TEST_TIMEOUT, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
 import { expectWrittenAfterClose, recordStatusWrites, statusWrites } from '../../support/status-writes.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
@@ -169,11 +169,10 @@ test.describe('US-M2-10 单独分享', () => {
     const documentId = await createDocument(owner, '会被取消的表')
     await grantDocument(documentId, friend, 'editor', owner)
 
-    // 同事在另一台设备上打开着（能编辑）。心跳续租也会得知失去访问（M3-P1）：这条核对的是保存被拒的说明，拦下心跳，让保存那一步确定地先到
+    // 同事在另一台设备上打开着（能编辑）
     await loginThroughApi(anotherDevice, friend)
     await openEditor(anotherDevice, documentId)
     await expect(saveButton(anotherDevice)).toBeVisible()
-    await blockLeaseRenewals(anotherDevice)
 
     // 所有者经对话框取消
     await loginThroughApi(page, owner)
@@ -186,11 +185,11 @@ test.describe('US-M2-10 单独分享', () => {
     // 前提：确实取消成功了（库里已经没有这条授权），下面的"不能访问"才说明问题
     expect(await grantsOn(documentId)).toEqual({})
 
-    // 已经打开的页面：保存被拒绝（按不存在回答）
+    // 已经打开的页面：保存被拒绝（按不存在回答），编辑权失效（M3-P1 起保存与心跳得知都一样）
     await typeInCell(anotherDevice, 'A1', '取消之后写的')
     await saveButton(anotherDevice).click()
-    await expect(saveStatus(anotherDevice)).toHaveText('保存失败')
-    await expect(anotherDevice.getByRole('alert')).toContainText('这份表格已经被删除、移走，或者你已经没有访问权限，本页的修改没有保存')
+    await expect(saveStatus(anotherDevice)).toHaveText('编辑权已失效')
+    await expect(anotherDevice.getByRole('alert')).toContainText('你已无法访问这份文档（可能已被删除、移走，或你失去了访问权限）。本页的修改没有保存')
     // 重新打开：内容不存在；"与我共享"里也没有了
     await anotherDevice.goto(`/documents/${documentId}`)
     await expect(anotherDevice.getByText('内容不存在，或者你没有访问权限')).toBeVisible()

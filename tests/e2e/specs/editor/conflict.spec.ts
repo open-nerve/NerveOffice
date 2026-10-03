@@ -1,9 +1,11 @@
 // 两个标签页，旧页面的保存不覆盖新内容（US-M1-07，P4 设计 §3.5.2、§3.10）。M3-P1 起同一时刻只有一个标签页能编辑（编辑租约，
-// P1 设计 §3.4.7）：后打开的只能阅读；前一个的编辑权到期之后才轮到它，前一个再保存被拒、保留本页的内容。
+// P1 设计 §3.4.7）：后打开的只能阅读；前一个断网、休眠到编辑权到期之后才轮到它，前一个回来时续不上（别处在编辑或者保存过），
+// 再保存被拒、保留本页的内容。"到期"用改写租约行的时间模拟，前一个"断网、休眠"用拦下它的心跳模拟（support/sheet.ts 的
+// blockLeaseRenewals）：不拦的话，它自己的心跳会先一步得知到期、自动续上（期间没人保存过），后一个就接不了手
 import { createUser, expireEditLease } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, editingNotice, EDITOR_TEST_TIMEOUT, isSaveRequest, leaveEditor, openEditor, ribbon, saveAndWait, saveButton, savedContent, saveStatus, typeInCell, waitForEditor } from '../../support/sheet.ts'
+import { blockLeaseRenewals, cellOf, createSheetThroughApi, editingNotice, EDITOR_TEST_TIMEOUT, isSaveRequest, leaveEditor, openEditor, ribbon, saveAndWait, saveButton, savedContent, saveStatus, typeInCell, waitForEditor } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -22,7 +24,8 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     await expect(other.locator('#editor-chrome').getByRole('banner').getByText('只能查看', { exact: true })).toBeVisible()
     await expect(saveButton(other)).toHaveCount(0)
 
-    // A 的编辑权到期（断网、休眠一类：改写租约行的时间，不等真实的 90 秒）；B 重新加载，取得编辑权，键入并保存
+    // A 断网、休眠，编辑权到期（改写租约行的时间，不等真实的 90 秒）；B 重新加载，取得编辑权，键入并保存
+    const asleep = await blockLeaseRenewals(page)
     await expireEditLease(documentId)
     await other.reload()
     await waitForEditor(other)
@@ -31,12 +34,13 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     await typeInCell(other, 'A1', 'from B')
     await saveAndWait(other)
 
-    // A 再保存：被拒（编辑权已经在 B 手里；A 的心跳也可能先一步得知到期），页头说明编辑权已失效、本页的修改没有保存
+    // A 回来再保存：被拒（编辑权已经在 B 手里；A 的心跳也可能先一步得知），自动续上时被 B 占着，
+    // 页头说明编辑权已失效、是自己在另一个标签页上编辑、本页的修改没有保存
+    await asleep.unblock()
     await saveButton(page).click()
     await expect(saveStatus(page)).toHaveText('编辑权已失效')
     const lost = page.getByRole('alert')
-    await expect(lost).toContainText('编辑权已失效：')
-    await expect(lost).toContainText('本页的修改没有保存')
+    await expect(lost).toContainText('编辑权已失效：你在另一个标签页或设备上正在编辑这份文档。本页的修改没有保存')
     await expect(lost.getByRole('button', { name: '重新加载' })).toBeVisible()
     await expect(saveButton(page)).toHaveAttribute('aria-disabled', 'true')
 
@@ -103,8 +107,9 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     await openEditor(page, documentId)
     await typeInCell(page, 'B1', 'older page')
 
-    // 这一页的编辑权到期；另一个标签页接手、保存，然后离开（关闭页面时释放编辑权）。
+    // 这一页断网、休眠，编辑权到期；另一个标签页接手、保存，然后离开（关闭页面时释放编辑权）。
     // 等释放到了服务端再往下：这一页重新加载时要取得编辑权，释放晚到时它只能阅读（P1 设计 §7 第一条，P5 用 Web Locks 解决）
+    const asleep = await blockLeaseRenewals(page)
     await expireEditLease(documentId)
     const other = await context.newPage()
     await openEditor(other, documentId)
@@ -114,8 +119,11 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     await leaveEditor(other, documentId)
     await other.close()
 
-    // 这一页再保存被拒，说明之后提供重新加载。本页有没保存的修改：重新加载时浏览器先提示，选择离开之后重新加载（不另外打开页面，审查 B7）
+    // 这一页回来再保存被拒：自动续上时发现别处保存过更新的版本，不覆盖，说明之后提供重新加载。
+    // 本页有没保存的修改：重新加载时浏览器先提示，选择离开之后重新加载（不另外打开页面，审查 B7）
+    await asleep.unblock()
     await saveButton(page).click()
+    await expect(page.getByRole('alert')).toContainText('编辑权已失效：编辑权中断期间，别处保存了更新的版本，本页不能再覆盖它。本页的修改没有保存')
     const dialogs: string[] = []
     page.on('dialog', (dialog) => {
       dialogs.push(dialog.type())

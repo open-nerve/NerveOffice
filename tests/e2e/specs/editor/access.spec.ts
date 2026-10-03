@@ -1,14 +1,13 @@
 // 编辑器页的访问（US-M1-08 的页面部分，P4 设计 §3.7.1）：别人的文档与不存在的文档显示相同；未登录先登录，登录后回到编辑器页。
-// 打开之后文档被删除、移走或失去权限（M2 总设计 A14，M2-P6 复核 S8）：下一次保存给出明确的说明。
-// M3-P1 起心跳续租也会得知失去访问（随即说明编辑权已失效）：这几条核对的是保存时的说明，拦下心跳，让保存那一步确定地先到
-// （support/sheet.ts 的 blockLeaseRenewals）
+// 打开之后文档被删除、移走或失去权限（M2 总设计 A14，M2-P6 复核 S8）：页面给出明确的说明——存不进去了、本页的修改没有保存。
+// M3-P1 起保存与心跳续租得知失去访问（404）、编辑权（403）都转为编辑权失效，说明相同：心跳先发现还是保存先发现，界面一样
 import type { Page } from '@playwright/test'
 import { randomUUID } from 'node:crypto'
 import { archiveSpace, createDocument, createDocumentIn, createTeamSpace, createUser, removeMember } from '../../support/database.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { blockLeaseRenewals, EDITOR_TEST_TIMEOUT, editorSurface, openEditor, saveButton, saveStatus, typeInCell, waitForEditor } from '../../support/sheet.ts'
+import { EDITOR_TEST_TIMEOUT, editorSurface, openEditor, saveButton, saveStatus, typeInCell, waitForEditor } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -52,21 +51,21 @@ async function deleteThroughApi(page: Page, documentId: string): Promise<void> {
   expect(response.status(), await response.text()).toBe(204)
 }
 
-/** 本页的修改存不进去时的说明（页面上的提示，另带请求标识） */
-const GONE = '保存失败：这份表格已经被删除、移走，或者你已经没有访问权限，本页的修改没有保存。需要的话先把内容复制出来。'
+/** 读不到这份文档了：编辑权失效的说明（存不进去了、本页的修改没有保存、需要的话先复制出来） */
+const GONE = '编辑权已失效：你已无法访问这份文档（可能已被删除、移走，或你失去了访问权限）。本页的修改没有保存，需要的话先把内容复制出来，再重新加载。'
 
-test.describe('US-M2-09 A14 编辑器页：打开之后文档被删除、移走或失去权限，下一次保存给出明确的说明（M2-P6 复核 S8）', () => {
+test.describe('US-M2-09 A14 编辑器页：打开之后文档被删除、移走或失去权限，给出明确的说明（M2-P6 复核 S8）', () => {
   test('文档已被删除（进了回收站）：说明存不进去了，本页的修改没有保存', async ({ page }) => {
     const owner = await createUser('save-gone')
     const documentId = await createDocument(owner, '要被删的表')
     await loginThroughApi(page, owner)
     await openEditor(page, documentId)
-    await blockLeaseRenewals(page)
     await typeInCell(page, 'A1', '还没保存的内容')
     await deleteThroughApi(page, documentId)
     await saveButton(page).click()
-    await expect(saveStatus(page)).toHaveText('保存失败')
+    await expect(saveStatus(page)).toHaveText('编辑权已失效')
     await expect(page.getByRole('alert')).toContainText(GONE)
+    await expect(saveButton(page)).toHaveAttribute('aria-disabled', 'true')
   })
 
   test('被移出了空间（失去权限）：同样说明存不进去了', async ({ page }) => {
@@ -76,11 +75,10 @@ test.describe('US-M2-09 A14 编辑器页：打开之后文档被删除、移走�
     const documentId = await createDocumentIn(space.id, lead, '共同的表')
     await loginThroughApi(page, editor)
     await openEditor(page, documentId)
-    await blockLeaseRenewals(page)
     await typeInCell(page, 'A1', '还没保存的内容')
     await removeMember(space.id, editor)
     await saveButton(page).click()
-    await expect(saveStatus(page)).toHaveText('保存失败')
+    await expect(saveStatus(page)).toHaveText('编辑权已失效')
     await expect(page.getByRole('alert')).toContainText(GONE)
   })
 
@@ -91,12 +89,11 @@ test.describe('US-M2-09 A14 编辑器页：打开之后文档被删除、移走�
     const documentId = await createDocumentIn(space.id, lead, '共同的表')
     await loginThroughApi(page, editor)
     await openEditor(page, documentId)
-    await blockLeaseRenewals(page)
     await typeInCell(page, 'A1', '还没保存的内容')
     await archiveSpace(space.id)
     await saveButton(page).click()
-    await expect(saveStatus(page)).toHaveText('保存失败')
-    await expect(page.getByRole('alert')).toContainText('保存失败：空间已归档，只能查看，本页的修改没有保存。需要的话先把内容复制出来。')
+    await expect(saveStatus(page)).toHaveText('编辑权已失效')
+    await expect(page.getByRole('alert')).toContainText('编辑权已失效：你已没有编辑这份文档的权限（空间已归档，只能查看）。本页的修改没有保存，需要的话先把内容复制出来，再重新加载。')
     await expect(page.getByText('你没有执行这个操作的权限')).toHaveCount(0)
   })
 })
