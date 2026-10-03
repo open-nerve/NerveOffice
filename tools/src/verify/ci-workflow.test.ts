@@ -40,14 +40,68 @@ const workflowSchema = z.object({
   jobs: z.record(z.string(), jobSchema),
 })
 
+type Workflow = z.infer<typeof workflowSchema>
 type Job = z.infer<typeof jobSchema>
 type Step = z.infer<typeof stepSchema>
 
-const workflow = workflowSchema.parse(parse(readText(WORKFLOW)))
+function parseWorkflow(text: string): Workflow {
+  return workflowSchema.parse(parse(text))
+}
+
+const workflow = parseWorkflow(readText(WORKFLOW))
 
 /** 一个 job 里执行 pnpm verify 的各步的参数（只认 run 里以 pnpm verify 开头的一行） */
 function verifyArgs(job: Job): string[][] {
   return job.steps.flatMap(step => (step.run ?? '').split('\n').map(line => line.trim().split(/\s+/)).filter(words => words[0] === 'pnpm' && words[1] === 'verify').map(words => words.slice(2)))
+}
+
+/**
+ * CI 与本机完整的一套（pnpm verify 不带参数）只差这两步（plan.ts）：数据库由服务容器提供，CI 不执行 database；
+ * CI 另加漏洞扫描 audit。除此之外，工作流的各个分片合起来要恰好是本机完整的一套
+ */
+const LOCAL_ONLY_STEPS: readonly string[] = ['database']
+const CI_ONLY_STEPS: readonly string[] = ['audit']
+
+/**
+ * 工作流的分片与本机完整的一套是否等价（Codex 评审 CX7）：每一处 pnpm verify 都用 CI 上真正执行的那个 parseArgs 解析，
+ * 拿解析出的全部选项算出这个 job 真正执行的步骤（planSteps），各个 job 合起来与本机完整的一套比较。
+ * 原来只取解析结果里的分片名、比较时另造一份固定的选项（fast 为假），工作流里多写一个 --fast，no-e2e 那片实际只跑
+ * lint、类型检查、单元测试与静态检查（少了集成测试与覆盖率、产物门禁），这条核对照样通过。
+ * 返回不等价之处的说明，等价时为空
+ */
+function shardingProblems(text: string): string[] {
+  const runs = Object.entries(parseWorkflow(text).jobs).flatMap(([id, job]) => verifyArgs(job).map(args => ({ id, parsed: parseArgs(args) })))
+  const problems: string[] = []
+  const shards: { readonly id: string, readonly scope: string, readonly steps: readonly string[] }[] = []
+  for (const { id, parsed } of runs) {
+    if (!parsed.ok)
+      problems.push(`${id}：pnpm verify 不认得这些参数（${parsed.error}）`)
+    else if (!parsed.options.ci)
+      problems.push(`${id}：CI 上要带 --ci`)
+    else
+      shards.push({ id, scope: parsed.options.scope ?? 'all', steps: planSteps(parsed.options).map(step => step.id) })
+  }
+  // 每个分片只跑一次：verify 跑 no-e2e，e2e（按浏览器的矩阵）跑 e2e
+  const scopes = shards.map(shard => `${shard.id}:${shard.scope}`)
+  if (scopes.join(' ') !== 'verify:no-e2e e2e:e2e')
+    problems.push(`分片应为 verify:no-e2e 与 e2e:e2e，实际是 ${scopes.join('、') || '（没有）'}`)
+  const local = parseArgs([])
+  if (!local.ok)
+    throw new Error(`本机的 pnpm verify 不带参数却解析失败：${local.error}`)
+  const expected = new Set([...planSteps(local.options).map(step => step.id).filter(id => !LOCAL_ONLY_STEPS.includes(id)), ...CI_ONLY_STEPS])
+  const actual = new Set(shards.flatMap(shard => shard.steps))
+  const missing = [...expected].filter(id => !actual.has(id))
+  const extra = [...actual].filter(id => !expected.has(id))
+  if (missing.length > 0 || extra.length > 0)
+    problems.push(`各分片合起来与本机完整的一套不同：少了 ${missing.join('、') || '（无）'}，多了 ${extra.join('、') || '（无）'}`)
+  return problems
+}
+
+/** 在内存里改工作流的文字（不改文件）：要换掉的那一段必须恰好出现一次，否则说明工作流改了写法，用例要跟着改 */
+function workflowWith(original: string, replacement: string): string {
+  const text = readText(WORKFLOW)
+  expect(text.split(original).length - 1, `工作流里应恰好有一处：${original}`).toBe(1)
+  return text.replace(original, replacement)
 }
 
 /** 这一步执行检查：pnpm verify 或容器 E2E（run 里有一行以它开头） */
@@ -73,17 +127,23 @@ describe('US-M1-11 CI 的接线与 pnpm verify 的分片一致（规范 §9）',
     expect(workflow.on.schedule?.length).toBe(1)
   })
 
-  it('verify 与 e2e 两个 job 跑的分片合起来与完整的一套相同，每个分片只跑一次；参数都是 pnpm verify 认得的', () => {
-    const runs = Object.entries(workflow.jobs).flatMap(([id, job]) => verifyArgs(job).map(args => ({ id, parsed: parseArgs(args) })))
-    const scopes = runs.map(({ id, parsed }) => {
-      expect(parsed.ok, id).toBe(true)
-      expect(parsed.ok && parsed.options.ci, `${id}：CI 上要带 --ci`).toBe(true)
-      return { id, scope: parsed.ok ? parsed.options.scope : undefined }
-    })
-    expect(scopes).toEqual([{ id: 'verify', scope: 'no-e2e' }, { id: 'e2e', scope: 'e2e' }])
-    const options = { fast: false, ci: true, audit: false } as const
-    const sharded = scopes.flatMap(({ scope }) => planSteps({ ...options, scope }).map(step => step.id))
-    expect(new Set(sharded)).toEqual(new Set(planSteps(options).map(step => step.id)))
+  it('verify 与 e2e 两个 job 按工作流里真实的参数执行的步骤，合起来与本机完整的一套相同（另加漏洞扫描、数据库由服务容器提供），每个分片只跑一次；参数都是 pnpm verify 认得的', () => {
+    expect(shardingProblems(readText(WORKFLOW))).toEqual([])
+  })
+
+  it.each([
+    ['no-e2e 那片多了 --fast：少跑集成测试与覆盖率、产物门禁', 'run: pnpm verify --ci --keep-going --scope=no-e2e', 'run: pnpm verify --ci --keep-going --fast --scope=no-e2e', ['tests', 'artifact-gates']],
+    ['e2e 那片多了 --fast：不构建、不跑 E2E', 'run: pnpm verify --ci --keep-going --scope=e2e', 'run: pnpm verify --ci --fast --keep-going --scope=e2e', ['build-e2e', 'e2e']],
+  ])('改变计划的参数（Codex 评审 CX7 的变异，在内存里改工作流的文字）：%s，等价性核对失败', (_name, original, replacement, missing) => {
+    const problems = shardingProblems(workflowWith(original, replacement))
+    expect(problems).toHaveLength(1)
+    for (const step of missing)
+      expect(problems[0]).toMatch(new RegExp(`少了 [^，]*${step}`))
+  })
+
+  it('verify 那片改成跑完整的一套（--scope=all）：E2E 跑两遍，分片的核对失败', () => {
+    const problems = shardingProblems(workflowWith('run: pnpm verify --ci --keep-going --scope=no-e2e', 'run: pnpm verify --ci --keep-going --scope=all'))
+    expect(problems).toEqual(['分片应为 verify:no-e2e 与 e2e:e2e，实际是 verify:all、e2e:e2e'])
   })
 
   it('E2E 的浏览器矩阵是浏览器表里的全部浏览器（本机三个，另加 Edge），每片只跑自己的浏览器，装的也是它', () => {

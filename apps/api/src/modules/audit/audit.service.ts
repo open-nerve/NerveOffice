@@ -26,13 +26,13 @@ export class AuditService {
 
   /**
    * 按条件查询（M2-P1 设计 §3.7，只给 admin 模块）：按时间倒序，每页 ADMIN_PAGE_SIZE 条。
-   * 游标不是我们发的时候 REQUEST_INVALID
+   * 游标不是我们发的时候 REQUEST_INVALID。在调用方开的只读快照里查（M2 Codex 评审 CX1）
    */
-  async search(query: AuditEventQuery): Promise<{ readonly items: AuditRecord[], readonly nextCursor: string | null }> {
+  async search(query: AuditEventQuery, transaction: Transaction): Promise<{ readonly items: AuditRecord[], readonly nextCursor: string | null }> {
     const after = query.cursor === undefined ? undefined : decodeTimeCursor(query.cursor)
     if (query.cursor !== undefined && after === undefined)
       throw new AppError('REQUEST_INVALID', '分页的游标不合法，请从第一页重新加载')
-    const rows = await this.repository.query({ ...query, after, limit: ADMIN_PAGE_SIZE + 1 })
+    const rows = await this.repository.query({ ...query, after, limit: ADMIN_PAGE_SIZE + 1 }, transaction)
     const items = rows.slice(0, ADMIN_PAGE_SIZE)
     const last = items.at(-1)
     return { items, nextCursor: rows.length > ADMIN_PAGE_SIZE && last !== undefined ? encodeTimeCursor({ position: last.position, id: last.id }) : null }

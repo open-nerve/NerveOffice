@@ -200,13 +200,13 @@ describe('US-M2-12 搜索的范围只由仓储给出（M2-P6 复核 A 的 S3）'
     expect((await asUser(app.baseUrl, amySession, `/api/documents/${trashed}`, { method: 'DELETE' })).status).toBe(204)
 
     const pattern = `%${keyword}%`
-    const found = await repository.searchByTitle({ spaceIds: [openSpace, amy.personalSpaceId] }, { limit: 100, titlePattern: pattern })
+    const found = await repository.searchByTitle({ spaceIds: [openSpace, amy.personalSpaceId], grantsOf: undefined }, { limit: 100, titlePattern: pattern })
     expect(found.map(row => row.id).toSorted()).toEqual([inOpen, inPersonal].toSorted())
     expect(new Set(found.map(row => row.spaceId))).toEqual(new Set([openSpace, amy.personalSpaceId]))
-    expect((await repository.searchByTitle({ spaceIds: [openSpace] }, { limit: 100, titlePattern: pattern })).map(row => row.id)).toEqual([inOpen])
-    expect(await repository.searchByTitle({ spaceIds: [] }, { limit: 100, titlePattern: pattern })).toEqual([])
+    expect((await repository.searchByTitle({ spaceIds: [openSpace], grantsOf: undefined }, { limit: 100, titlePattern: pattern })).map(row => row.id)).toEqual([inOpen])
+    expect(await repository.searchByTitle({ spaceIds: [], grantsOf: undefined }, { limit: 100, titlePattern: pattern })).toEqual([])
     // 列表用的是同一个"可访问文档"的条件
-    const listed = await repository.listAccessible({ spaceIds: [openSpace, amy.personalSpaceId] }, { limit: 100 })
+    const listed = await repository.listAccessible({ spaceIds: [openSpace, amy.personalSpaceId], grantsOf: undefined }, { limit: 100 })
     expect(listed.every(row => row.spaceId === openSpace || row.spaceId === amy.personalSpaceId)).toBe(true)
     expect(listed.map(row => row.id)).toEqual(expect.arrayContaining([inOpen, inPersonal]))
     expect(listed.map(row => row.id)).not.toContain(trashed)
@@ -245,9 +245,9 @@ describe('US-M2-12 结果里的位置', () => {
     expect(found).toMatchObject({ folderId: null, folderPath: [] })
   })
 
-  it('个人空间里的文档：空间的类型是 personal，名称是本人的显示名', async () => {
+  it('个人空间里的文档：空间的类型是 personal，只带所有者（"人"的结构，M2-P5：界面按所有者的人名呈现），不带存的名称（可以伪造，规范 §2.4；逐字核对，多给一个字段就失败）', async () => {
     const [found] = (await search(amySession, '季度预算表')).items
-    expect(found?.space).toEqual({ id: amy.personalSpaceId, type: 'personal', name: '艾米' })
+    expect(found?.space).toEqual({ id: amy.personalSpaceId, type: 'personal', owner: { id: amy.id, username: 'amy', displayName: '艾米' } })
   })
 
   it('深层的文件夹：路径按从浅到深，每一层一段', async () => {

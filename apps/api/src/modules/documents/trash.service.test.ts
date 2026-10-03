@@ -5,7 +5,7 @@ import { Buffer } from 'node:buffer'
 import { AUDIT_DETAILS_MAX_BYTES } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
-import { ALICE, ALICE_SPACE, BOB, FakeStore, HTTP_ORIGIN, member, TEAM_SPACE } from './documents.test-support.ts'
+import { ALICE, ALICE_SPACE, BOB, FakeStore, HTTP_ORIGIN, member, TEAM_SPACE, TRANSACTION } from './documents.test-support.ts'
 import { TrashEntryPurger } from './trash-entry-purger.ts'
 import { TrashService } from './trash.service.ts'
 
@@ -72,7 +72,9 @@ describe('TrashService.deleteDocument', () => {
 
     store.setMember(TEAM_SPACE, BOB, 'viewer')
     const own = store.addDocument({ spaceId: TEAM_SPACE, createdBy: BOB })
-    expect((await errorOf(service.deleteDocument(member(BOB), own.id, HTTP_ORIGIN))).code).toBe('PERMISSION_DENIED')
+    // 查看者不是"只能删自己创建的"：他根本不能删，自己创建的也不能（M2-P5 S4 主会话的决定）
+    const viewerDenied = await errorOf(service.deleteDocument(member(BOB), own.id, HTTP_ORIGIN))
+    expect([viewerDenied.code, viewerDenied.message]).toEqual(['PERMISSION_DENIED', '没有删除这份文档的权限'])
   })
 
   it('归档的空间里不能删，说明空间已归档；回收站里的文档再删是 NOT_FOUND，与不存在一致', async () => {
@@ -370,7 +372,7 @@ describe('TrashService.list', () => {
     await service.deleteDocument(member(ALICE), loose.id, HTTP_ORIGIN)
     await service.deleteFolder(member(ALICE), folder.id, HTTP_ORIGIN)
 
-    const page = await service.list(member(ALICE), { spaceId: TEAM_SPACE })
+    const page = await service.list(member(ALICE), { spaceId: TEAM_SPACE }, TRANSACTION)
     expect(page.nextCursor).toBeNull()
     expect(page.items.map(item => [item.kind, item.title, item.documentCount])).toEqual([['folder', '资料', 1], ['document', '周报', 1]])
     // 被删的文件夹的原位置是空间的根目录；那份文档的原位置随文件夹一起进了回收站，所以已经不在
@@ -381,15 +383,15 @@ describe('TrashService.list', () => {
     expect(page.items.map(item => item.permissions)).toEqual([{ canRestore: true, canPurge: false }, { canRestore: true, canPurge: false }])
 
     // 查看者看得到列表，但什么也动不了
-    const viewer = await service.list(member(BOB), { spaceId: TEAM_SPACE })
+    const viewer = await service.list(member(BOB), { spaceId: TEAM_SPACE }, TRANSACTION)
     expect(viewer.items.map(item => item.permissions)).toEqual([{ canRestore: false, canPurge: false }, { canRestore: false, canPurge: false }])
   })
 
   it('看不到的空间与不存在的空间：同一个 NOT_FOUND；游标不合法是 REQUEST_INVALID', async () => {
     const { service } = setup()
-    const unseen = await errorOf(service.list(member(BOB), { spaceId: TEAM_SPACE }))
-    const missing = await errorOf(service.list(member(BOB), { spaceId: MISSING }))
+    const unseen = await errorOf(service.list(member(BOB), { spaceId: TEAM_SPACE }, TRANSACTION))
+    const missing = await errorOf(service.list(member(BOB), { spaceId: MISSING }, TRANSACTION))
     expect([unseen.code, missing.code]).toEqual(['NOT_FOUND', 'NOT_FOUND'])
-    expect((await errorOf(service.list(member(ALICE), { spaceId: ALICE_SPACE, cursor: '乱写的' }))).code).toBe('REQUEST_INVALID')
+    expect((await errorOf(service.list(member(ALICE), { spaceId: ALICE_SPACE, cursor: '乱写的' }, TRANSACTION))).code).toBe('REQUEST_INVALID')
   })
 })

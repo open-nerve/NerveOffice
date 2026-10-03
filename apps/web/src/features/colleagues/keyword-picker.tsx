@@ -9,6 +9,7 @@ import { cn } from '../../shared/lib/cn.ts'
 import { useDebouncedValue } from '../../shared/lib/use-debounced-value.ts'
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
 import { Badge, Button, Input, Label, Phrase } from '../../shared/ui/index.ts'
+import { StatusRegion } from '../../shared/ui/status-region.tsx'
 
 /** 按关键词选一项时的界面文字 */
 export interface KeywordPickerTexts {
@@ -147,10 +148,10 @@ export function KeywordPicker<TQueryFnData, TItem, TQueryKey extends QueryKey>({
   return (
     <div className="flex flex-col gap-2">
       <Label htmlFor={inputId}>{label}</Label>
-      {/* 状态容器与输入框放在一起：空的时候不占位置（有文字时才加上间距），输入框仍与表单里旁边的控件底边对齐 */}
+      {/* 状态区与输入框放在一起：空的时候只做视觉隐藏、不占位置（有文字时才加上间距），输入框仍与表单里旁边的控件底边对齐 */}
       <div className="flex flex-col">
         <Input ref={inputRef} id={inputId} type="search" placeholder={texts.placeholder} value={keyword} onChange={event => setKeyword(event.target.value)} />
-        <p role="status" className={cn('text-sm text-muted-foreground', progress !== undefined && 'mt-2')}>{progress}</p>
+        <StatusRegion className="mt-2 text-sm text-muted-foreground">{progress}</StatusRegion>
       </div>
       {lookup !== undefined && (
         <Candidates

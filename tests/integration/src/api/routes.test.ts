@@ -59,9 +59,11 @@ describe('全部接口的认证：没有 @Public() 的都要求登录，公开�
   it('路由表列得出全部接口：业务的各个模块都在，公开清单里的每一项都是真实的接口', () => {
     const names = routes.map(nameOf)
     expect(names.length).toBeGreaterThan(40)
-    for (const prefix of ['/api/admin/', '/api/auth/', '/api/documents', '/api/folders', '/api/health/', '/api/search', '/api/spaces', '/api/trash', '/api/users'])
+    for (const prefix of ['/api/admin/', '/api/auth/', '/api/documents', '/api/folders', '/api/health/', '/api/search', '/api/shared', '/api/spaces', '/api/trash', '/api/users'])
       expect(names.some(name => name.split(' ')[1]?.startsWith(prefix)), prefix).toBe(true)
     expect(names).toEqual(expect.arrayContaining([...PUBLIC_ROUTES]))
+    // 分享的接口（M2-P5）都在路由表里：下面的未登录核对因此覆盖它们
+    expect(names).toEqual(expect.arrayContaining(['GET /api/documents/:id/grants', 'PUT /api/documents/:id/grants/:userId', 'DELETE /api/documents/:id/grants/:userId', 'GET /api/shared']))
   })
 
   it('未登录：公开清单之外的每个接口都回 401 UNAUTHENTICATED；清单里的接口不回它', async () => {

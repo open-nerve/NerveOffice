@@ -3,8 +3,9 @@ import { useId, useState } from 'react'
 import { Link, matchPath, NavLink, useLocation } from 'react-router'
 import { messages } from '../../shared/i18n/index.ts'
 import { cn } from '../../shared/lib/cn.ts'
-import { HOME_PATH, spacePath } from '../../shared/lib/space-paths.ts'
+import { HOME_PATH, SHARED_PATH, spacePath } from '../../shared/lib/space-paths.ts'
 import { Badge, Button, buttonVariants, Skeleton } from '../../shared/ui/index.ts'
+import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { sessionQueryOptions } from '../auth/index.ts'
 import { spacesQueryOptions } from './spaces-api.ts'
 
@@ -16,7 +17,8 @@ function linkClass({ isActive }: { readonly isActive: boolean }): string {
 
 /**
  * 团队空间的条目：加载中、失败（可以重试）、还没有团队空间、有团队空间。onNavigate：点了链接（窄屏时收起导航）。
- * 列表以"团队空间"这个标题为名：加载完之后才有它（或者"还没有加入团队空间"），E2E 据此确认导航已经加载完（审查 B6）
+ * 列表以"团队空间"这个标题为名：加载完之后才有它（或者"还没有加入团队空间"），E2E 据此确认导航已经加载完（审查 B6）。
+ * 写操作之后（改名、加入、归档……）会重新请求它：留着之前的列表、刷新却失败了时明说、给出重试（Codex 对抗评审 CX5）
  */
 function TeamSpaces({ headingId, onNavigate }: { readonly headingId: string, readonly onNavigate: () => void }) {
   const spaces = useQuery(spacesQueryOptions())
@@ -37,20 +39,25 @@ function TeamSpaces({ headingId, onNavigate }: { readonly headingId: string, rea
     )
   }
   const teams = spaces.data.items.filter(space => space.type === 'team')
-  if (teams.length === 0)
-    return <p className="px-2 text-sm text-muted-foreground">{text.noTeamSpaces}</p>
   return (
-    <ul aria-labelledby={headingId} className="flex flex-col gap-1">
-      {teams.map(space => (
-        <li key={space.id}>
-          {/* 已归档的给出明确的可读名称：名称与标记之间要不要空格，各浏览器算法不同 */}
-          <NavLink to={spacePath(space.id)} className={linkClass} onClick={onNavigate} aria-label={space.status === 'archived' ? text.archivedName(space.name) : undefined}>
-            <span className="truncate">{space.name}</span>
-            {space.status === 'archived' && <Badge variant="outline">{text.archived}</Badge>}
-          </NavLink>
-        </li>
-      ))}
-    </ul>
+    <>
+      <RefreshProblem query={spaces} list={text.listName} />
+      {teams.length === 0
+        ? <p className="px-2 text-sm text-muted-foreground">{text.noTeamSpaces}</p>
+        : (
+            <ul aria-labelledby={headingId} className="flex flex-col gap-1">
+              {teams.map(space => (
+                <li key={space.id}>
+                  {/* 已归档的给出明确的可读名称：名称与标记之间要不要空格，各浏览器算法不同 */}
+                  <NavLink to={spacePath(space.id)} className={linkClass} onClick={onNavigate} aria-label={space.status === 'archived' ? text.archivedName(space.name) : undefined}>
+                    <span className="truncate">{space.name}</span>
+                    {space.status === 'archived' && <Badge variant="outline">{text.archived}</Badge>}
+                  </NavLink>
+                </li>
+              ))}
+            </ul>
+          )}
+    </>
   )
 }
 
@@ -68,7 +75,8 @@ function usePersonalSpaceCurrent(): boolean {
 }
 
 /**
- * 左侧导航（M2-P2 设计 §3.10）：我的空间、团队空间（我是成员的与全员可见的，已归档的带标记）。P5 加"与我共享"。
+ * 左侧导航（M2-P2 设计 §3.10）：我的空间、与我共享（M2-P5：别人单独分享给我的文档，页面按需加载）、
+ * 团队空间（我是成员的与全员可见的，已归档的带标记）。
  * 窄屏时收起，由上方的按钮展开（不用弹窗，不进首屏的 Radix Dialog）；点了导航里的链接就收起。
  */
 export function SpaceNav() {
@@ -85,6 +93,7 @@ export function SpaceNav() {
       </Button>
       <nav id={navId} aria-label={text.navLabel} className={cn(open ? 'flex' : 'hidden', 'mt-2 flex-col gap-1 md:mt-0 md:flex')}>
         <Link to={HOME_PATH} aria-current={personalCurrent ? 'page' : undefined} className={linkClass({ isActive: personalCurrent })} onClick={close}>{text.personal}</Link>
+        <NavLink to={SHARED_PATH} className={linkClass} onClick={close}>{text.sharedWithMe}</NavLink>
         <h2 id={teamHeadingId} className="px-2 pt-3 text-xs font-medium text-muted-foreground">{text.teamHeading}</h2>
         <TeamSpaces headingId={teamHeadingId} onNavigate={close} />
       </nav>

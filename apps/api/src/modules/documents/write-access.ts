@@ -8,14 +8,45 @@ import { Injectable } from '@nestjs/common'
  * - space：整个空间（归档）；
  * - documents：这些文档上的所有人（跨空间移动：权限随之改变，00 号计划书 §5.4；M2-P4 的删除同样用它）。
  *   一次给一批而不是逐份调用：文件夹连同子树跨空间移动时一次就是整棵子树里的文档，
- *   M3 接租约之后可以一条语句终止它们的租约，调用方不必循环（M2-P4 S2b）。
- * P5 加上某人在某份文档（取消或降低单独授权）。
+ *   M3 接租约之后可以一条语句终止它们的租约，调用方不必循环（M2-P4 S2b）；
+ * - userDocuments：某人在这些文档上（取消或降低单独授权，M2-P5 设计 §3.4(3)）。只涉及这一个人：
+ *   不能用 documents——那是"这些文档上的所有人"，M3 接租约之后会把正在编辑这份文档的别人一起踢掉。
+ * 每种范围涉及谁、哪些文档，见下面的 coversWriter（各种范围的含义只写在那一处）。
  */
 export type WriteAccessScope
   = | { readonly kind: 'user', readonly userId: string }
     | { readonly kind: 'membership', readonly userId: string, readonly spaceId: string }
     | { readonly kind: 'space', readonly spaceId: string }
     | { readonly kind: 'documents', readonly documentIds: readonly string[] }
+    | { readonly kind: 'userDocuments', readonly userId: string, readonly documentIds: readonly string[] }
+
+/** 某人在某份文档上的写入（M3 起是他持有的编辑租约）：documentId 所在的空间是 spaceId */
+export interface DocumentWriter {
+  readonly userId: string
+  readonly documentId: string
+  readonly spaceId: string
+}
+
+/**
+ * 这次收回涉及这一处写入吗：范围的含义（上面的清单）在这里写成规则，单元测试逐种核对，
+ * 尤其是 userDocuments 只涉及那一个人、documents 涉及那些文档上的所有人（M2-P5 设计 §3.4(3)）。
+ * 涉及只是"要重新判断"：M3 的租约实现按它找出涉及的租约，再按变化之后的权限判断谁失去了写入权（调用方不自己判断）。
+ * M2 还没有租约，入口里没有可找的东西（见 LeaselessWriteAccessRevocation）
+ */
+export function coversWriter(scope: WriteAccessScope, writer: DocumentWriter): boolean {
+  switch (scope.kind) {
+    case 'user':
+      return writer.userId === scope.userId
+    case 'membership':
+      return writer.userId === scope.userId && writer.spaceId === scope.spaceId
+    case 'space':
+      return writer.spaceId === scope.spaceId
+    case 'documents':
+      return scope.documentIds.includes(writer.documentId)
+    case 'userDocuments':
+      return writer.userId === scope.userId && scope.documentIds.includes(writer.documentId)
+  }
+}
 
 /**
  * 收回写入权的入口（M2 总设计 §2.1 第 8 条，00 号计划书 §6.4）：撤权、移出空间、停用账户、归档都经这里，
@@ -27,7 +58,8 @@ export abstract class WriteAccessRevocation {
 
 /**
  * M2 的实现：还没有编辑租约，入口里没有要终止的东西。权限的变化与这次调用在同一个事务里提交，
- * 下一次请求重新判断权限，即被拒绝（保存在锁下再判断一次，ADR-011）。
+ * 下一次请求重新判断权限，即被拒绝（保存在锁下再判断一次，ADR-011）。五种范围都一样：
+ * 取消或降低单独授权之后，下一次保存在锁下重新读到的授权就是变化之后的（分享的写入锁住文档行，与保存互斥，M2-P5 设计 §3.4(3)）。
  * M3 换成接入租约的实现：终止失去写入权的人持有的租约，并递增那些文档的 write_epoch；调用方不改。
  */
 @Injectable()

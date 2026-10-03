@@ -12,7 +12,7 @@ import { AppError } from '../../shared/errors/app-error.ts'
 import { AuditService } from '../audit/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { SpacesService } from '../spaces/index.ts'
-import { DocumentAccessPolicy, requireSpaceContent } from './document-access-policy.ts'
+import { documentAccessIn, DocumentAccessPolicy, requireSpaceContent } from './document-access-policy.ts'
 import { DocumentContentsRepository } from './document-contents.repository.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
 import { toDetail } from './document-views.ts'
@@ -115,7 +115,8 @@ export class DocumentCreationService {
         origin,
         details: { revision: 1, folderId: document.folderId },
       }, { transaction })
-      return { ...toDetail(document, access, userId), replayed: false }
+      // 新文档没有任何授权：按调用者在这个空间的访问给出（服务不手工拼文档的访问，M2-P5 设计 §3.4(1)）
+      return { ...toDetail(document, documentAccessIn(access), userId), replayed: false }
     })
   }
 

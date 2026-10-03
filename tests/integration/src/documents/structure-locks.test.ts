@@ -337,7 +337,8 @@ describe('US-M2-14 锁下才展开子树：等树锁期间子树里新建了子�
   /** 在 parent 下面直接新建一个子文件夹、把一份文档放进去（别的请求在这期间提交的效果） */
   async function growUnder(client: pg.Client, spaceId: string, parentId: string, documentId: string): Promise<string> {
     const id = (await client.query<{ id: string }>(
-      'INSERT INTO folders (space_id, parent_id, name, created_by, depth, request_id) VALUES ($1, $2, \'后来建的\', $3, 2, gen_random_uuid()) RETURNING id',
+      // 直接写库的文件夹没有新建请求：请求摘要给空串的摘要，与任何请求都对不上（M2 Codex 评审 CX6）
+      'INSERT INTO folders (space_id, parent_id, name, created_by, depth, request_id, payload_digest) VALUES ($1, $2, \'后来建的\', $3, 2, gen_random_uuid(), sha256(\'\'::bytea)) RETURNING id',
       [spaceId, parentId, amy.id],
     )).rows[0]?.id
     if (id === undefined)

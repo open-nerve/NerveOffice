@@ -1,11 +1,12 @@
-// 连接池（P2 设计 §3.3、§3.7）：超时设置取自配置；连接出错不让进程退出（审查 A1）；数据库报错的日志不带参数（审查 A2）。
+// 连接池（P2 设计 §3.3、§3.7）：超时设置取自配置；连接出错不让进程退出（审查 A1）；数据库报错的日志不带参数（审查 A2）；
+// 只读快照进行中，连接池上的查询与借连接报错（M2 Codex 评审复验的必须修 1，ADR-017；借连接这一条是第二轮复验的一般 7 补上的）。
 import type { Transaction } from '@nerve-office/api'
 import type { Database } from '@nerve-office/api/testing'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import { setTimeout as delay } from 'node:timers/promises'
 import { AppError, DatabaseModule, Public, TransactionRunner } from '@nerve-office/api'
-import { DATABASE } from '@nerve-office/api/testing'
+import { APPLICATION_NAME, DATABASE } from '@nerve-office/api/testing'
 import { Controller, Get, Inject, Module } from '@nestjs/common'
 import { sql } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -18,12 +19,23 @@ const SENSITIVE = 'SENSITIVE-PARAM-7c1f'
 @Public()
 @Controller('__test/database')
 class DatabaseProbeController {
-  constructor(@Inject(DATABASE) private readonly db: Database) {}
+  constructor(
+    @Inject(DATABASE) private readonly db: Database,
+    private readonly transactions: TransactionRunner,
+  ) {}
 
   /** 带着一个"敏感"的参数执行一条会失败的查询（不是合法的 UUID） */
   @Get('failure')
   async failure(): Promise<void> {
     await this.db.execute(sql`SELECT ${SENSITIVE}::uuid`)
+  }
+
+  /** 只读快照里经连接池查询：与仓储的读方法漏传快照的事务、直接用连接池同一个情形 */
+  @Get('snapshot-leak')
+  async snapshotLeak(): Promise<void> {
+    await this.transactions.readSnapshot(async () => {
+      await this.db.execute(sql`SELECT 'leaked'`)
+    })
   }
 }
 
@@ -59,7 +71,7 @@ describe('连接池', () => {
              current_setting('lock_timeout') AS lock_timeout,
              current_setting('idle_in_transaction_session_timeout') AS idle,
              current_setting('application_name') AS application_name`)
-    expect(result.rows[0]).toEqual({ statement_timeout: '300ms', lock_timeout: '400ms', idle: '500ms', application_name: 'nerve-office-api' })
+    expect(result.rows[0]).toEqual({ statement_timeout: '300ms', lock_timeout: '400ms', idle: '500ms', application_name: APPLICATION_NAME })
   })
 
   it('超过语句超时的查询被数据库取消', async () => {
@@ -84,6 +96,57 @@ describe('连接池', () => {
     const entry = app.logs.entries().find(log => log.requestId === requestId && log.level === 'error')
     expect(entry).toMatchObject({ err: { type: 'DrizzleQueryError', query: 'SELECT $1::uuid', cause: { type: 'DatabaseError', sqlState: '22P02' } } })
     expect(app.logs.text()).not.toContain(SENSITIVE)
+  })
+})
+
+describe('只读快照进行中，连接池上的查询与借连接报错（M2 Codex 评审复验的必须修 1，ADR-017）', () => {
+  /** 连接池拒绝时的说明（apps/api 的 POOL_IN_SNAPSHOT_MESSAGE）：drizzle 把它包在 cause 里 */
+  const REFUSED = { cause: expect.objectContaining({ message: expect.stringContaining('只读快照进行中不能在连接池上查询') as unknown }) as unknown }
+
+  it('快照里经连接池查询（仓储漏传快照的事务、直接用连接池）：报错，不返回快照之外的数据；快照自己的语句照常', async () => {
+    const runner = app.runtime.get(TransactionRunner)
+    const db = app.runtime.get<Database>(DATABASE)
+    let own: unknown
+    let leaked: unknown
+    await expect(runner.readSnapshot(async (transaction) => {
+      own = (await (transaction as unknown as Database).execute<{ one: number }>(sql`SELECT 1 AS one`)).rows
+      leaked = (await db.execute<{ two: number }>(sql`SELECT 2 AS two`)).rows
+    })).rejects.toMatchObject(REFUSED)
+    expect(own).toEqual([{ one: 1 }])
+    expect(leaked).toBeUndefined()
+  })
+
+  it('快照里经连接池借连接（在连接池上开事务：仓储自己开事务、独占执行都从这个入口借连接）：同样报错，借不到连接，事务没有开始；快照之外照常借（M2 Codex 评审第二轮复验的一般 7）', async () => {
+    const runner = app.runtime.get(TransactionRunner)
+    const db = app.runtime.get<Database>(DATABASE)
+    let opened = false
+    await expect(runner.readSnapshot(async () => {
+      await db.transaction(async (tx) => {
+        opened = true
+        await tx.execute(sql`SELECT 1`)
+      })
+    })).rejects.toThrow('只读快照进行中不能在连接池上查询或借连接')
+    expect(opened).toBe(false)
+    expect(await db.transaction(async tx => (await tx.execute<{ one: number }>(sql`SELECT 1 AS one`)).rows)).toEqual([{ one: 1 }])
+  })
+
+  it('快照之外、快照结束之后（快照里排下、结束之后才执行的查询）照常', async () => {
+    const runner = app.runtime.get(TransactionRunner)
+    const db = app.runtime.get<Database>(DATABASE)
+    expect((await db.execute<{ one: number }>(sql`SELECT 1 AS one`)).rows).toEqual([{ one: 1 }])
+    let later: Promise<unknown> | undefined
+    await runner.readSnapshot(async () => {
+      later = delay(20).then(async () => (await db.execute<{ three: number }>(sql`SELECT 3 AS three`)).rows)
+    })
+    await expect(later).resolves.toEqual([{ three: 3 }])
+  })
+
+  it('生产的管线里同样生效：意外错误（500），日志说明快照里的读方法要传快照的事务', async () => {
+    const response = await fetch(`${app.baseUrl}/api/__test/database/snapshot-leak`)
+    expect(response.status).toBe(500)
+    const requestId = response.headers.get('x-request-id')
+    const entry = app.logs.entries().find(log => log.requestId === requestId && log.level === 'error')
+    expect(JSON.stringify(entry)).toContain('只读快照进行中不能在连接池上查询')
   })
 })
 

@@ -58,6 +58,14 @@ export class SessionService {
   }
 
   /**
+   * 守卫认证过的这条会话现在仍然有效（没有撤销、没有过期）：只读快照的开场核对在快照里问（M2 Codex 评审复验的建议 3），
+   * 守卫之后到快照开始之间撤销的会话（退出、签发重置撤销全部会话、换令牌）在快照里看得到
+   */
+  async isActive(sessionId: string, transaction: Transaction): Promise<boolean> {
+    return this.repository.isActiveById(sessionId, transaction)
+  }
+
+  /**
    * 这条令牌是不是因为换令牌（ROTATION_REASONS）而失效的（复验 N3）。会话守卫在会话无效时问它：是的话仍回"登录已过期"，
    * 但不清除 Cookie——换令牌之前发出、之后才处理的请求，响应晚于新 Cookie 到达时，清除会把新的删掉，本人随即掉线。
    * 退出、过期、停用、重置密码、修改密码时别的设备上的会话等其他原因照旧清除。令牌格式不对时不查库。

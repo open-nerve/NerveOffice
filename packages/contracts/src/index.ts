@@ -103,6 +103,7 @@ export {
   createdDocumentSchema,
   createDocumentRequestSchema,
   DEFAULT_DOCUMENT_TITLES,
+  DOCUMENT_ACCESS_VIA,
   DOCUMENT_LIST_ALL_FOLDERS,
   DOCUMENT_LIST_DEFAULT_LIMIT,
   DOCUMENT_LIST_MAX_LIMIT,
@@ -128,6 +129,7 @@ export type {
   CopyDocumentRequest,
   CreatedDocument,
   CreateDocumentRequest,
+  DocumentAccessVia,
   DocumentDetail,
   DocumentListQuery,
   DocumentListResponse,
@@ -184,6 +186,25 @@ export {
 } from './search/search.ts'
 export type { SearchQuery, SearchResponse, SearchResult } from './search/search.ts'
 export {
+  documentGrantListResponseSchema,
+  documentGrantSchema,
+  GRANT_ROLES,
+  setDocumentGrantRequestSchema,
+  SHARED_PAGE_SIZE,
+  sharedDocumentSchema,
+  sharedListQuerySchema,
+  sharedListResponseSchema,
+} from './sharing/sharing.ts'
+export type {
+  DocumentGrant,
+  DocumentGrantListResponse,
+  GrantRole,
+  SetDocumentGrantRequest,
+  SharedDocument,
+  SharedListQuery,
+  SharedListResponse,
+} from './sharing/sharing.ts'
+export {
   addSpaceMemberRequestSchema,
   changeSpaceMemberRoleRequestSchema,
   renameSpaceRequestSchema,
@@ -191,6 +212,7 @@ export {
   SPACE_ROLES,
   SPACE_STATUSES,
   SPACE_TYPES,
+  spaceIdentitySchema,
   spaceIdSchema,
   spaceListResponseSchema,
   spaceMemberListResponseSchema,
@@ -204,6 +226,7 @@ export type {
   AddSpaceMemberRequest,
   ChangeSpaceMemberRoleRequest,
   RenameSpaceRequest,
+  SpaceIdentity,
   SpaceListResponse,
   SpaceMember,
   SpaceMemberListResponse,

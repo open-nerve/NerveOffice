@@ -12,6 +12,7 @@ import { useDebouncedValue } from '../../shared/lib/use-debounced-value.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
 import { Badge, Button, Input, Label, NativeSelect, PersonName, Phrase, TableCell } from '../../shared/ui/index.ts'
+import { StatusRegion } from '../../shared/ui/status-region.tsx'
 import { actorCandidatesQueryOptions, auditEventsQueryOptions } from './admin-api.ts'
 import { auditTimeFrom, auditTimeTo } from './audit-time.ts'
 import { PagedTable } from './paged-table.tsx'
@@ -75,7 +76,8 @@ interface ActorCandidatesProps {
 
 /**
  * 找操作者的候选：查找中、失败（可以重试）、没有找到与找到的几个人，都有提示（审查 B8）。
- * 状态容器一直在，内容变化时往里填文字：与内容一起插入的 role="status" 部分读屏不播报（M2-P2 复验，与同事选择相同）。
+ * 状态容器一直在无障碍树里，内容变化时往里填文字：与内容一起插入的 role="status" 部分读屏不播报（M2-P2 复验，与同事选择相同）。
+ * 空的时候原来用 empty:hidden（display: none），同样不在无障碍树里，改用共用的状态区（M2-P5 审查 B 的 M1）。
  * 只显示与输入框里的关键词一致的候选：输入还没停下、或者刚清空时，防抖之后的查询还是上一个关键词的（M2-P2 审查 B11 的同类问题）
  */
 function ActorCandidates({ candidates, typed, settled, onPick }: ActorCandidatesProps) {
@@ -88,7 +90,7 @@ function ActorCandidates({ candidates, typed, settled, onPick }: ActorCandidates
     status = text.noActor
   return (
     <>
-      <p role="status" className="text-sm text-muted-foreground empty:hidden">{status}</p>
+      <StatusRegion className="text-sm text-muted-foreground">{status}</StatusRegion>
       {current && candidates.isError && (
         <div role="alert" className="flex items-center gap-2 text-sm text-destructive">
           <span>{text.actorSearchFailed(describeError(candidates.error).message)}</span>

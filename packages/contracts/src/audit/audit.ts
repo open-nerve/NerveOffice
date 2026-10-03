@@ -60,6 +60,10 @@ export const AUDIT_ACTIONS = [
   'users.password_reset_revoked',
   // M2-P6：系统管理员解除某个账户的登录锁定，清掉这个账户在所有来源上的失败计数（复核 A1）
   'users.login_unlocked',
+  // M2-P5：单独授权（分享）的设置、调整与取消。对象是文档，details 带被授权人的 id 与角色，不记标题（与成员的三个动作同形）
+  'documents.shared',
+  'documents.share_changed',
+  'documents.share_revoked',
 ] as const
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS)

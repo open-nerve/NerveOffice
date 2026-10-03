@@ -61,7 +61,10 @@ function setup() {
       calls.push('audit')
     }),
   }
-  const transactions = { run: vi.fn(async <T>(work: (transaction: never) => Promise<T>) => work({ transaction: true } as never)) }
+  const transactions = {
+    run: vi.fn(async <T>(work: (transaction: never) => Promise<T>) => work({ transaction: true } as never)),
+    readSnapshot: vi.fn(async <T>(work: (transaction: never) => Promise<T>) => work({ snapshot: true } as never)),
+  }
   const service = new AdminTransferService(users as never, spaceService as never, transfers as never, audit as never, transactions as never)
   return { service, calls, accounts, spaces, transfers, audit }
 }
@@ -128,7 +131,8 @@ describe('AdminTransferService.titles', () => {
   it('只对停用的账户：有效的 ACCOUNT_NOT_DISABLED，不存在 NOT_FOUND，都不列标题', async () => {
     const { service, accounts, transfers } = setup()
     await service.titles(SOURCE, {})
-    expect(transfers.titles).toHaveBeenCalledWith(SOURCE_SPACE, undefined)
+    // 账户的状态与标题在同一个只读快照里读（M2 Codex 评审 CX1）
+    expect(transfers.titles).toHaveBeenCalledWith(SOURCE_SPACE, undefined, { snapshot: true })
     accounts.set(SOURCE, account(SOURCE, 'active'))
     expect((await rejection(service.titles(SOURCE, {}))).code).toBe('ACCOUNT_NOT_DISABLED')
     expect((await rejection(service.titles(TARGET_SPACE, {}))).code).toBe('NOT_FOUND')

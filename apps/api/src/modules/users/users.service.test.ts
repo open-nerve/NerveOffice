@@ -1,9 +1,12 @@
+import type { Options } from '@node-rs/argon2'
+import type { Transaction, TransactionRunner } from '../database/index.ts'
 import type { User } from './user.ts'
 import type { UserCredentials, UsersRepository } from './users.repository.ts'
 import { setTimeout as delay } from 'node:timers/promises'
+import { hash } from '@node-rs/argon2'
 import { describe, expect, it, vi } from 'vitest'
 import { AppLogger, createRootLogger, RequestContextStore } from '../logging/index.ts'
-import { PasswordHasher, PasswordHashingBusyError } from './password-hasher.ts'
+import { Argon2PasswordHasher, PasswordHasher, PasswordHashingBusyError } from './password-hasher.ts'
 import { UsersService } from './users.service.ts'
 
 /** 假的哈希：hash(p) = "hash:p"，记下每次验证用的哈希、reject 的次数与交给它的现存参数。 */
@@ -44,6 +47,9 @@ class FakeHasher extends PasswordHasher {
   }
 }
 
+/** 假的事务运行器：只读快照直接执行（这里的用例都不经它） */
+const TRANSACTIONS = { readSnapshot: vi.fn(async <T>(work: (transaction: Transaction) => Promise<T>) => work({} as Transaction)) } as unknown as TransactionRunner
+
 const ALICE: User = { id: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d', username: 'alice', displayName: 'Alice', systemRole: 'member', status: 'active' }
 
 /** 库里现存哈希的参数段 */
@@ -59,7 +65,7 @@ function setup(credentials?: UserCredentials) {
   const hasher = new FakeHasher()
   const logger = new AppLogger(createRootLogger({ level: 'silent' }), new RequestContextStore())
   const warn = vi.spyOn(AppLogger.prototype, 'warn')
-  return { repository, hasher, warn, service: new UsersService(repository as unknown as UsersRepository, hasher, logger) }
+  return { repository, hasher, warn, service: new UsersService(repository as unknown as UsersRepository, hasher, TRANSACTIONS, logger) }
 }
 
 describe('UsersService.verifyCredentials', () => {
@@ -209,16 +215,107 @@ describe('库里现存哈希的参数（Codex 评审 CX4）', () => {
     expect(repository.passwordHashParameters).toHaveBeenCalledTimes(1)
   })
 
-  it('读不出来：只记警告，启动与这次验证照常；下次验证时再读', async () => {
+  it('启动时读不出来：只记警告，启动照常（不抛出）；第一次验证时再读', async () => {
     const { service, repository, hasher, warn } = setup({ user: ALICE, passwordHash: 'hash:secret', passwordVersion: 1 })
-    repository.passwordHashParameters.mockRejectedValueOnce(new Error('数据库不可用')).mockRejectedValueOnce(new Error('数据库不可用'))
+    repository.passwordHashParameters.mockRejectedValueOnce(new Error('数据库不可用'))
     service.onModuleInit()
     await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining('现存密码哈希的参数'), expect.anything()))
     expect(await service.verifyCredentials('alice', 'secret')).toMatchObject({ valid: true })
-    expect(hasher.observed).toEqual([])
-    expect(await service.verifyCredentials('alice', 'wrong')).toMatchObject({ valid: false })
     expect(hasher.observed).toEqual([STORED_PARAMETERS])
-    expect(repository.passwordHashParameters).toHaveBeenCalledTimes(3)
+    expect(repository.passwordHashParameters).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    ['登录（verifyCredentials）', async (service: UsersService) => service.verifyCredentials('alice', 'secret')],
+    ['修改密码时验证旧密码（verifyPasswordOf）', async (service: UsersService) => service.verifyPasswordOf(ALICE.id, 'secret')],
+  ])('%s：参数组读不出来时这次验证照样抛出，哈希器一次也没被调用、凭据也不读（M2 Codex 评审 CX2）；下次再读，读成功之后缓存', async (_name, verify) => {
+    const { service, repository, hasher } = setup({ user: ALICE, passwordHash: 'hash:secret', passwordVersion: 1 })
+    const findCredentialsById = vi.fn(async (_id: string): Promise<UserCredentials> => ({ user: ALICE, passwordHash: 'hash:secret', passwordVersion: 1 }))
+    Object.assign(repository, { findCredentialsById })
+    const unavailable = Object.assign(new Error('canceling statement due to statement timeout'), { code: '57014', severity: 'ERROR' })
+    repository.passwordHashParameters.mockRejectedValueOnce(unavailable)
+    await expect(verify(service)).rejects.toBe(unavailable)
+    expect(hasher.events).toEqual([])
+    expect(hasher.hashes).toBe(0)
+    expect(repository.findCredentialsByUsername).not.toHaveBeenCalled()
+    expect(findCredentialsById).not.toHaveBeenCalled()
+
+    expect(await verify(service)).toBeTruthy()
+    expect(hasher.events).toEqual(['observe', 'verify'])
+    await verify(service)
+    expect(repository.passwordHashParameters).toHaveBeenCalledTimes(2)
+  })
+
+  it('正在读时并发的几次验证等同一次读取：读失败时一起失败，都没有计算', async () => {
+    const { service, repository, hasher } = setup(undefined)
+    let fail: (error: Error) => void = () => {}
+    repository.passwordHashParameters.mockReturnValueOnce(new Promise((_resolve, reject) => {
+      fail = reject
+    }))
+    const first = service.verifyCredentials('nobody', 'secret')
+    const second = service.verifyCredentials('nobody', 'secret')
+    await delay(20)
+    fail(new Error('数据库不可用'))
+    await expect(first).rejects.toThrow('数据库不可用')
+    await expect(second).rejects.toThrow('数据库不可用')
+    expect(repository.passwordHashParameters).toHaveBeenCalledTimes(1)
+    expect(hasher.events).toEqual([])
+  })
+})
+
+/**
+ * 参数组读不出来时不进入密码验证（M2 Codex 评审 CX2，ADR-007）：用真实的哈希器（Argon2PasswordHasher），把库函数换成只记下
+ * 算的是哪组参数的假实现（与 password-hasher.test.ts 相同），核对的是计算本身，不比耗时。
+ * 原来读失败被吞掉、照常验证：不存在的用户名只算当前参数，旧参数的账户另比对自己那组，两条路径算的组不同（Codex 的探针复现）
+ */
+describe('参数组读不出来时不进入验证，恢复之后两条路径算的组相同（M2 Codex 评审 CX2）', () => {
+  /** 当前参数与库里一个旧参数账户的参数（与 Codex 的探针相同） */
+  const CURRENT = { memoryKib: 19_456, iterations: 2, parallelism: 1 }
+  const OLD = 'm=12288,t=3,p=1'
+
+  function realHasher() {
+    const computed: string[] = []
+    const hasher = new Argon2PasswordHasher(CURRENT, 1, {}, {
+      hash: vi.fn(async (_password: string | Uint8Array, options?: Options | null) => {
+        computed.push(`m=${options?.memoryCost},t=${options?.timeCost},p=${options?.parallelism}`)
+        return 'discarded'
+      }),
+      // 比对的是哪组：PHC 字符串的参数段；结果总是不通过（错误的密码）
+      verify: vi.fn(async (passwordHash: string | Uint8Array) => {
+        computed.push(String(passwordHash).split('$')[3] ?? '')
+        return false
+      }),
+    })
+    return { hasher, computed }
+  }
+
+  it('读失败：不存在与旧参数账户的这次验证都抛出、一组也没算；恢复之后先不存在、再旧参数账户、再不存在，算的组完全相同', async () => {
+    // 真实的 PHC 字符串（哈希器先按它解析出账户自己那组参数）
+    const veteran: UserCredentials = { user: ALICE, passwordHash: await hash('correct horse battery staple', { memoryCost: 12_288, timeCost: 3, parallelism: 1 }), passwordVersion: 1 }
+    const { hasher, computed } = realHasher()
+    const repository = {
+      findCredentialsByUsername: vi.fn(async (username: string) => (username === 'alice' ? veteran : undefined)),
+      passwordHashParameters: vi.fn(async () => [OLD, 'm=19456,t=2,p=1']),
+    }
+    const unavailable = Object.assign(new Error('canceling statement due to statement timeout'), { code: '57014', severity: 'ERROR' })
+    repository.passwordHashParameters.mockRejectedValueOnce(unavailable).mockRejectedValueOnce(unavailable)
+    const logger = new AppLogger(createRootLogger({ level: 'silent' }), new RequestContextStore())
+    const service = new UsersService(repository as unknown as UsersRepository, hasher, TRANSACTIONS, logger)
+
+    await expect(service.verifyCredentials('nobody', 'wrong long password')).rejects.toBe(unavailable)
+    await expect(service.verifyCredentials('alice', 'wrong long password')).rejects.toBe(unavailable)
+    expect(computed).toEqual([])
+    expect(repository.findCredentialsByUsername).not.toHaveBeenCalled()
+
+    const groups = async (username: string): Promise<string[]> => {
+      computed.length = 0
+      expect(await service.verifyCredentials(username, 'wrong long password')).toMatchObject({ valid: false })
+      return [...computed].sort()
+    }
+    const missing = await groups('nobody')
+    expect(missing).toEqual(['m=12288,t=3,p=1', 'm=19456,t=2,p=1'])
+    expect(await groups('alice')).toEqual(missing)
+    expect(await groups('nobody')).toEqual(missing)
   })
 })
 

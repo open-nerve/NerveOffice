@@ -3,6 +3,7 @@ import type { AdminSpace, AdminUser } from '@nerve-office/contracts'
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { OUTCOME_REFRESH_TIME_LIMIT_MS } from '../shared/api/write-outcome.ts'
+import { watchAnnouncement } from '../shared/testing/announcement.test-support.ts'
 import { apiError, installFakeApi, json, networkFailure } from '../shared/testing/fake-api.test-support.ts'
 import { plainName } from '../shared/testing/people.test-support.ts'
 import { AMY, deferred, listPage, ROOT_ID, rowOf, session, settle, SPACES } from './admin.test-support.ts'
@@ -435,8 +436,11 @@ describe('US-M2-04 转移停用者的文档', () => {
     ;(document.activeElement as HTMLElement | null)?.blur()
     fireEvent.click(submit)
     const dialog = await screen.findByRole('dialog', { name: '把 2 份文档转移到 市场部？' })
+    const announced = watchAnnouncement('已把 2 份文档转移到 市场部')
     fireEvent.click(within(dialog).getByRole('button', { name: '转移' }))
     await waitFor(() => expect(result).toHaveTextContent('已把 2 份文档转移到 市场部'))
+    // 等确认的弹窗关掉之后才写进去（M2-P5 复验 S1）：写进去的那一刻页面不在 aria-hidden 之下，焦点已经交还
+    expect(announced()).toEqual({ ariaHidden: false, focusReturned: true })
     await waitFor(() => expect(screen.queryByText('文档 0')).not.toBeInTheDocument())
     expect(lastBody(api, TRANSFER_KEY)).toEqual({ documentIds: [titles(3)[0]?.id, titles(3)[1]?.id], target: { type: 'team', spaceId: SPACE.id } })
     await waitFor(() => expect(document.activeElement).toBe(submit))
@@ -466,10 +470,12 @@ describe('US-M2-04 转移停用者的文档', () => {
     submit.focus()
     fireEvent.click(submit)
     const dialog = await screen.findByRole('dialog', { name: `把 2 份文档转移到 ${plainName('本', 'ben')} 的个人空间？` })
+    const announced = watchAnnouncement('有文档已经不在这个人的个人空间里了')
     fireEvent.click(within(dialog).getByRole('button', { name: '转移' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    // 说明在页面上（弹窗之外），不在弹窗里
-    expect(screen.getByRole('alert')).toHaveTextContent('有文档已经不在这个人的个人空间里了（可能被别人转走了）：列表已刷新，请重新选择后再转移')
+    // 说明在页面上（弹窗之外），不在弹窗里；等弹窗关掉、页面不再被标为 aria-hidden、焦点交还之后才出现（M2-P5 复验 S1）
+    expect(await screen.findByRole('alert')).toHaveTextContent('有文档已经不在这个人的个人空间里了（可能被别人转走了）：列表已刷新，请重新选择后再转移')
+    expect(announced()).toEqual({ ariaHidden: false, focusReturned: true })
     expect(lastBody(api, TRANSFER_KEY)).toEqual({ documentIds: titles(2).map(document => document.id), target: { type: 'personal', userId: BEN.id } })
     // 列表刷新了，已经不在的文档不再算作选中
     expect(screen.queryByText('文档 0')).toBeNull()
@@ -536,7 +542,7 @@ describe('US-M2-04 转移停用者的文档', () => {
     // 弹窗还开着，再点一次：那两份已经不在了
     fireEvent.click(within(dialog).getByRole('button', { name: '转移' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    expect(screen.getByRole('alert')).toHaveTextContent('有文档已经不在这个人的个人空间里了：多半是你上一次没能确认的那次转移已经完成。列表已刷新，请看看还剩哪些，需要的话重新选择后再转移')
+    expect(await screen.findByRole('alert')).toHaveTextContent('有文档已经不在这个人的个人空间里了：多半是你上一次没能确认的那次转移已经完成。列表已刷新，请看看还剩哪些，需要的话重新选择后再转移')
     expect(requestCount(api, TRANSFER_KEY)).toBe(2)
   })
 

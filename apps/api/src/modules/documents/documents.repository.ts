@@ -1,11 +1,12 @@
-import type { DocumentProfile, DocumentStatus, DocumentType, PlatformFormatVersion } from '@nerve-office/contracts'
+import type { DocumentProfile, DocumentStatus, DocumentType, GrantRole, PlatformFormatVersion } from '@nerve-office/contracts'
 import type { SQL } from 'drizzle-orm'
 import type { TimeCursor } from '../../shared/time-cursor.ts'
 import type { Database, Transaction } from '../database/index.ts'
 import { Inject, Injectable } from '@nestjs/common'
-import { and, asc, desc, eq, isNull, ne, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, isNull, ne, or, sql } from 'drizzle-orm'
 import { documents } from '../../db/schema/documents/index.ts'
 import { DATABASE, executorOf, inIdArray, keysetPosition } from '../database/index.ts'
+import { grantedTo, grantRoleOf } from './document-grants.repository.ts'
 import { TITLE_SEARCH_ESCAPE } from './title-search.ts'
 
 export interface DocumentRow {
@@ -42,11 +43,16 @@ export interface NewDocument {
 }
 
 /**
- * "可访问文档"的范围（M2-P2 设计 §3.5，M2-P4 设计 §3.4 第 1 条）：调用者看得到的空间，由访问策略给出。
- * 只有这一维：状态不是参数，见下面的 accessible()。目录与关键词也不进这里，是各自查询自己的条件（设计 §7 的取舍）。
+ * "可访问文档"的范围（M2-P2 设计 §3.5，M2-P4 设计 §3.4 第 1 条，M2-P5 设计 §3.4(2)）：要哪几半，由调用方按访问策略给出。
+ * - 空间那一半：调用者有空间角色的空间（spaceIds；空数组表示不要这一半）；
+ * - 授权那一半：这个人有单独授权的文档（grantsOf；undefined 表示不要这一半）。
+ * grantsOf 是必填的键（可以是 undefined）：每个调用方都得写明要不要授权那一半——按空间列出、转移的标题列表与锁只要空间那一半，
+ * 并上授权就会把别处的文档列进这个空间（M2-P5 设计 §7 的第一条风险；回收站的列表本来就不经这里）。
+ * 状态不是参数，见下面的 accessible()。目录与关键词也不进这里，是各自查询自己的条件（M2-P4 设计 §7 的取舍）。
  */
 export interface AccessibleScope {
   readonly spaceIds: readonly string[]
+  readonly grantsOf: string | undefined
 }
 
 /** 列出可访问文档的条件与分页。 */
@@ -56,6 +62,28 @@ export interface ListOptions {
   readonly after?: TimeCursor | undefined
   /** 按目录过滤：省略（undefined）表示不按目录过滤，null 表示空间的根目录，字符串表示某个文件夹 */
   readonly folderId?: string | null | undefined
+}
+
+/** 只要授权那一半时的分页（"与我共享"）：排序与分页与列表一样 */
+export interface PageOptions {
+  readonly limit: number
+  /** 上一页最后一条的位置（keyset） */
+  readonly after?: TimeCursor | undefined
+}
+
+/**
+ * 搜索结果的一行：granted 是"这个人在这份文档上有单独授权"，与行出自同一条语句（与"可访问文档"授权那一半同一个条件）。
+ * 搜索据此判断一行是不是凭授权命中——不事后另读一次授权：两次读之间并发的取消分享，会让正常的结果被判为越出范围（M2-P5 设计 §3.4(2)）。
+ * 不要授权那一半时恒为假
+ */
+export interface SearchRow extends DocumentRow {
+  readonly granted: boolean
+}
+
+/** "与我共享"的一行：这个人在这份文档上的授权角色，与行出自同一条语句（同一个快照，M2-P5 设计 §3.4(4)） */
+export interface GrantedDocumentRow extends DocumentRow {
+  /** 条件就是"有授权"，同一条语句里不会为空；类型上仍可为空（标量子查询），调用方按没有授权处理 */
+  readonly grantRole: GrantRole | null
 }
 
 /** 按标题搜索的条件与分页（M2-P4 设计 §3.4 第 5 条）：排序与分页与列表一样，多一个标题的条件。 */
@@ -99,12 +127,26 @@ const COLUMNS = {
 }
 
 /**
- * "可访问文档"的条件：列表、搜索、计数、停用者文档的转移都经这一处，不各写各的过滤条件（M2 总设计 §6.1）。
- * **只取正常状态的行**：回收站的列表从 trash_entries 出（TrashService.list），不走这里，所以没有"状态"这一维。
- * P5 在这里并上单独授权（范围那一维）。
+ * "可访问文档"的条件：列表、搜索、计数、停用者文档的转移、"与我共享"都经这一处，不各写各的过滤条件（M2 总设计 §6.1）。
+ * `status = 'active' AND (space_id = ANY(…) OR EXISTS 授权)`，每一半只在调用方要它时才出现（见 AccessibleScope）：
+ * - 只要授权那一半时（"与我共享"）**不带恒假的空间条件**（M2-P5 S3）：`space_id = ANY('{}') OR EXISTS …` 里的 OR 让规划器没法
+ *   把 EXISTS 变成半连接，只能扫整张文档表、逐行判断授权；只剩 EXISTS 时查询从 document_grants 的 (user_id) 索引出发
+ *   （集成测试 documents/shared-plan.test.ts 用 EXPLAIN 核对）；
+ * - 两半都不要时恒为假（什么也查不出），不能因为没有条件就变成"全部正常状态的文档"。
+ * **只取正常状态的行**：回收站的列表从 trash_entries 出（TrashService.list），不走这里，所以没有"状态"这一维；
+ * 回收站里的文档即使有授权也不出现。授权那一半的条件由 DocumentGrantsRepository 给出（grantedTo），这里只组合
  */
 function accessible(scope: AccessibleScope): SQL | undefined {
-  return and(eq(d.status, 'active'), inIdArray(d.spaceId, scope.spaceIds))
+  const halves = [
+    ...(scope.spaceIds.length > 0 ? [inIdArray(d.spaceId, scope.spaceIds)] : []),
+    ...(scope.grantsOf === undefined ? [] : [grantedTo(d.id, scope.grantsOf)]),
+  ]
+  return and(eq(d.status, 'active'), halves.length === 0 ? sql`false` : or(...halves))
+}
+
+/** keyset 分页：上一页最后一条之后（按更新时间从新到旧、同一时间按 id），列表、搜索与"与我共享"同一个条件 */
+function afterPosition(after: TimeCursor | undefined): SQL | undefined {
+  return after === undefined ? undefined : sql`(${d.updatedAt}, ${d.id}) < (${after.position}::timestamptz, ${after.id}::uuid)`
 }
 
 /** 目录的过滤（见 ListOptions.folderId）：不进 accessible，是列表自己的条件。 */
@@ -114,41 +156,52 @@ function inFolder(folderId: string | null | undefined): SQL | undefined {
   return folderId === null ? isNull(d.folderId) : eq(d.folderId, folderId)
 }
 
-/** documents 表的读写在这里（规范 §1.2）。一处例外：读取内容时修订号要与内容一起读，那条联表的语句在同一模块的 document-contents.repository.ts。 */
+/**
+ * documents 表的读写在这里（规范 §1.2）。一处例外：读取内容时修订号要与内容一起读，那条联表的语句在同一模块的 document-contents.repository.ts。
+ * "可访问文档"的授权那一半是 document_grants 上的 EXISTS 子查询，条件由 DocumentGrantsRepository 给出（M2-P5）
+ */
 @Injectable()
 export class DocumentsRepository {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
 
   /** 可访问的文档，按更新时间从新到旧；after 是上一页最后一条的位置（keyset）。 */
-  async listAccessible(scope: AccessibleScope, options: ListOptions): Promise<DocumentRow[]> {
-    const { after } = options
-    return this.db
+  async listAccessible(scope: AccessibleScope, options: ListOptions, transaction?: Transaction): Promise<DocumentRow[]> {
+    return executorOf(this.db, transaction)
       .select(COLUMNS)
       .from(d)
-      .where(and(
-        accessible(scope),
-        inFolder(options.folderId),
-        after === undefined ? undefined : sql`(${d.updatedAt}, ${d.id}) < (${after.position}::timestamptz, ${after.id}::uuid)`,
-      ))
+      .where(and(accessible(scope), inFolder(options.folderId), afterPosition(options.after)))
+      .orderBy(desc(d.updatedAt), desc(d.id))
+      .limit(options.limit)
+  }
+
+  /**
+   * "与我共享"（M2-P5 设计 §3.4(4)）：这个人有单独授权的、正常状态的文档——只要"可访问文档"的授权那一半（条件仍只在 accessible），
+   * 不论他在那个空间里有没有角色；排序与分页与文档列表一致。每行带他在这份文档上的授权角色（同一条语句），
+   * 内容权限由访问策略的批量入口按它与空间事实算（accessOfMany），不在这里算
+   */
+  async listGranted(userId: string, options: PageOptions, transaction?: Transaction): Promise<GrantedDocumentRow[]> {
+    return executorOf(this.db, transaction)
+      .select({ ...COLUMNS, grantRole: grantRoleOf(d.id, userId) })
+      .from(d)
+      .where(and(accessible({ spaceIds: [], grantsOf: userId }), afterPosition(options.after)))
       .orderBy(desc(d.updatedAt), desc(d.id))
       .limit(options.limit)
   }
 
   /**
    * 标题里包含关键词的可访问文档，排序与分页与列表完全一致（M2-P4 设计 §3.4 第 5 条）。
-   * 范围与状态仍然只由 accessible 给出（回收站里的因此不会出现，P5 的单独授权也只改那一处）；
+   * 范围与状态仍然只由 accessible 给出（回收站里的因此不会出现，P5 的单独授权也只改那一处）；每行另带 granted（见 SearchRow）；
    * 大小写不敏感由两边一起 lower() 做；关键词里的 `\`、`%`、`_` 由调用方转义好，这里显式写出配套的 ESCAPE。
    * 本版不建 pg_trgm 索引（设计 §3.4 第 5 条已登记延期项，M7 压测时复核）
    */
-  async searchByTitle(scope: AccessibleScope, options: SearchOptions): Promise<DocumentRow[]> {
-    const { after } = options
-    return this.db
-      .select(COLUMNS)
+  async searchByTitle(scope: AccessibleScope, options: SearchOptions, transaction?: Transaction): Promise<SearchRow[]> {
+    return executorOf(this.db, transaction)
+      .select({ ...COLUMNS, granted: scope.grantsOf === undefined ? sql<boolean>`false` : grantedTo(d.id, scope.grantsOf) })
       .from(d)
       .where(and(
         accessible(scope),
         sql`lower(${d.title}) LIKE lower(${options.titlePattern}) ESCAPE ${TITLE_SEARCH_ESCAPE}`,
-        after === undefined ? undefined : sql`(${d.updatedAt}, ${d.id}) < (${after.position}::timestamptz, ${after.id}::uuid)`,
+        afterPosition(options.after),
       ))
       .orderBy(desc(d.updatedAt), desc(d.id))
       .limit(options.limit)
@@ -186,7 +239,8 @@ export class DocumentsRepository {
     const rows = await executorOf(this.db, transaction)
       .select({ id: d.id })
       .from(d)
-      .where(and(inIdArray(d.id, ids), accessible({ spaceIds: [fromSpaceId] })))
+      // 只要空间那一半：转移搬的是来源空间里的文档，与谁有授权无关（授权跟着文档走，M2-P5 设计 §3.3）
+      .where(and(inIdArray(d.id, ids), accessible({ spaceIds: [fromSpaceId], grantsOf: undefined })))
       .orderBy(asc(d.id))
       .for('update')
     return rows.map(row => row.id)
@@ -310,7 +364,7 @@ export class DocumentsRepository {
     return new Map(rows.flatMap(row => row.trashEntryId === null ? [] : [[row.trashEntryId, row.count] as const]))
   }
 
-  /** 永久删除（调用方已锁住这些行）：内容与修订记录随外键 cascade 一起没了。 */
+  /** 永久删除（调用方已锁住这些行）：内容、修订记录与单独授权随外键 cascade 一起没了（ADR-016 的连带，授权见 M2-P5 设计 §3.3）。 */
   async deleteMany(ids: readonly string[], transaction: Transaction): Promise<number> {
     if (ids.length === 0)
       return 0

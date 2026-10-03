@@ -1,4 +1,4 @@
-import type { Transaction } from '../database/index.ts'
+import type { Transaction, TransactionRunner } from '../database/index.ts'
 import type { AccountRecord } from './user.ts'
 import type { UsersRepository } from './users.repository.ts'
 import { describe, expect, it, vi } from 'vitest'
@@ -35,6 +35,8 @@ class FakeHasher extends PasswordHasher {
 }
 
 const TX = {} as Transaction
+/** 假的事务运行器：只读快照直接执行（同事目录在快照里读） */
+const TRANSACTIONS = { readSnapshot: vi.fn(async <T>(work: (transaction: Transaction) => Promise<T>) => work(TX)) } as unknown as TransactionRunner
 const CREATED = new Date('2026-09-28T00:00:00Z')
 const ACTOR_ID = '0199a2c4-0000-7000-8000-0000000000ad'
 
@@ -88,7 +90,7 @@ function setup(target: AccountRecord | undefined, otherActiveAdmins = 1, actor: 
       if (locked !== undefined)
         locked = { ...locked, passwordVersion: locked.passwordVersion + 1 }
     },
-    service: new UsersService(repository as unknown as UsersRepository, hasher, logger),
+    service: new UsersService(repository as unknown as UsersRepository, hasher, TRANSACTIONS, logger),
   }
 }
 
@@ -292,19 +294,19 @@ describe('UsersService.listAccounts', () => {
     const { service, repository } = setup(undefined)
     const rows = Array.from({ length: 51 }, (_, index) => account({ id: `0199a2c4-0000-7000-8000-${String(index).padStart(12, '0')}`, username: `user-${String(index).padStart(2, '0')}` }))
     repository.listRecords.mockResolvedValueOnce(rows)
-    const page = await service.listAccounts({ query: '张' })
-    expect(repository.listRecords).toHaveBeenCalledWith({ query: '张', status: undefined, afterUsername: undefined, limit: 51 })
+    const page = await service.listAccounts({ query: '张' }, TX)
+    expect(repository.listRecords).toHaveBeenCalledWith({ query: '张', status: undefined, afterUsername: undefined, limit: 51 }, TX)
     expect(page.items).toHaveLength(50)
     expect(decodeAccountCursor(page.nextCursor ?? '')).toBe('user-49')
 
     repository.listRecords.mockResolvedValueOnce(rows.slice(0, 3))
-    const last = await service.listAccounts({ cursor: encodeAccountCursor('user-49'), status: 'disabled' })
-    expect(repository.listRecords).toHaveBeenLastCalledWith({ query: undefined, status: 'disabled', afterUsername: 'user-49', limit: 51 })
+    const last = await service.listAccounts({ cursor: encodeAccountCursor('user-49'), status: 'disabled' }, TX)
+    expect(repository.listRecords).toHaveBeenLastCalledWith({ query: undefined, status: 'disabled', afterUsername: 'user-49', limit: 51 }, TX)
     expect(last.nextCursor).toBeNull()
   })
 
   it('不是我们发的游标：REQUEST_INVALID', async () => {
-    expect(await errorCodeOf(setup(undefined).service.listAccounts({ cursor: 'broken' }))).toBe('REQUEST_INVALID')
-    expect(await errorCodeOf(setup(undefined).service.listAccounts({ cursor: encodeAccountCursor('Not A Username') }))).toBe('REQUEST_INVALID')
+    expect(await errorCodeOf(setup(undefined).service.listAccounts({ cursor: 'broken' }, TX))).toBe('REQUEST_INVALID')
+    expect(await errorCodeOf(setup(undefined).service.listAccounts({ cursor: encodeAccountCursor('Not A Username') }, TX))).toBe('REQUEST_INVALID')
   })
 })

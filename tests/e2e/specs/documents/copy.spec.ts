@@ -1,5 +1,7 @@
 // 复制文档（M2-P4，US-M2-08）：副本与源逐字节一致（A10），之后两份各自编辑、互不影响。
-import { createDocument, createFolderIn, createTeamSpace, createUser, withDatabase } from '../../support/database.ts'
+// 只凭单独授权的人（不在源空间里）同样能复制、编辑者能改名（Codex 对抗评审 CX3）：入口在"与我共享"每一条的"操作"里，
+// 与空间的文档列表同一个行内操作；复制的目标是自己能新建的空间，看不到源空间的目录结构；副本不带上源的授权。
+import { createDocument, createDocumentIn, createFolderIn, createTeamSpace, createUser, grantDocument, grantsOn, withDatabase } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openEditor, saveAndWait, savedContent, typeInCell } from '../../support/sheet.ts'
@@ -111,5 +113,104 @@ test.describe('US-M2-08 复制文档', () => {
     await page.goto(`/spaces/${team.id}`)
     await expect(page.getByRole('list', { name: '文件夹列表' }).getByRole('link', { name: '收件', exact: true })).toBeVisible()
     await expect(page.getByText('报价单 的副本')).toHaveCount(0)
+  })
+})
+
+/** 文档现在的标题（直接查库）：核对经界面的改名确实写进了库 */
+async function titleOf(documentId: string): Promise<string | undefined> {
+  return withDatabase(async client => (await client.query<{ title: string }>('SELECT title FROM documents WHERE id = $1', [documentId])).rows[0]?.title)
+}
+
+test.describe('US-M2-08 只凭单独授权在"与我共享"里复制与改名（Codex 对抗评审 CX3）', () => {
+  test('US-M2-08 只凭授权的查看者在"与我共享"里复制到自己的个人空间：副本在个人空间、内容一致，两份各自保存互不影响；副本没有带上授权', async ({ page, anotherDevice }) => {
+    const admin = await createUser('cp-grant-admin', '系统管理员', { systemRole: 'admin' })
+    const lead = await createUser('cp-grant-lead', '空间管理员')
+    const reader = await createUser('cp-grant-reader', '读者')
+    const space = await createTeamSpace('复制来源部', admin, [[lead, 'admin']])
+    const folderId = await createFolderIn(space.id, lead, '机密目录')
+    const sourceId = await createDocumentIn(space.id, lead, '部门的报价单', { folderId })
+    await grantDocument(sourceId, reader, 'viewer', lead)
+
+    // 源里先写一份内容（空间管理员在编辑器里保存）
+    await loginThroughApi(anotherDevice, lead)
+    await openEditor(anotherDevice, sourceId)
+    await typeInCell(anotherDevice, 'A1', '共同的内容')
+    await saveAndWait(anotherDevice)
+
+    // 查看者只凭授权（不在源空间里）：在"与我共享"里展开这一条的"操作"——只有复制
+    await loginThroughApi(page, reader)
+    await page.goto('/shared')
+    const item = page.getByRole('list', { name: '分享给我的文档' }).getByRole('listitem').filter({ hasText: '部门的报价单' })
+    await item.getByRole('button', { name: '操作 部门的报价单', exact: true }).click()
+    await expect(item.getByRole('button', { name: '复制', exact: true })).toBeVisible()
+    await expect(item.getByRole('button', { name: /^(?:改名|移动|删除|分享)$/ })).toHaveCount(0)
+    await item.getByRole('button', { name: '复制', exact: true }).click()
+    // 目标是自己能新建的空间（这里只有我的空间）：源空间不在候选里，它的目录结构也不出现
+    const form = page.getByRole('form', { name: '复制' })
+    await expect(form.getByText('目标位置：我的空间')).toBeVisible()
+    await expect(form.getByText('这里没有子文件夹')).toBeVisible()
+    await expect(page.getByText('机密目录')).toHaveCount(0)
+    await expect(form.getByText(space.name)).toHaveCount(0)
+    await form.getByRole('button', { name: '复制到这里', exact: true }).click()
+    await expect(page.getByText('已复制出「部门的报价单 的副本」')).toBeVisible()
+    const openCopy = page.getByRole('link', { name: '打开副本', exact: true })
+    const copyId = (await openCopy.getAttribute('href') ?? '').split('/').at(-1) ?? ''
+    expect(copyId).not.toBe(sourceId)
+
+    // 副本在我的空间里；副本没有带上授权，源的授权照旧
+    await page.goto('/')
+    await expect(page.getByRole('list', { name: '文档列表' }).getByRole('link', { name: /部门的报价单 的副本/ })).toBeVisible()
+    expect(await grantsOn(copyId)).toEqual({})
+    expect(await grantsOn(sourceId)).toEqual({ [reader.username]: 'viewer' })
+
+    // 打开副本：内容与源一致；在副本里改一处并保存，源不受影响
+    await openEditor(page, copyId)
+    expect(cellOf((await savedContent(page, copyId)).snapshot, 'A1')?.v).toBe('共同的内容')
+    await typeInCell(page, 'B1', '只在副本里')
+    await saveAndWait(page)
+    const source = await savedContent(anotherDevice, sourceId)
+    expect(cellOf(source.snapshot, 'A1')?.v).toBe('共同的内容')
+    expect(cellOf(source.snapshot, 'B1')?.v).toBeUndefined()
+
+    // 源里再改一处并保存：副本不受影响
+    await openEditor(anotherDevice, sourceId)
+    await typeInCell(anotherDevice, 'C1', '只在源里')
+    await saveAndWait(anotherDevice)
+    const copy = await savedContent(page, copyId)
+    expect(cellOf(copy.snapshot, 'B1')?.v).toBe('只在副本里')
+    expect(cellOf(copy.snapshot, 'C1')?.v).toBeUndefined()
+  })
+
+  test('US-M2-08 只凭授权的编辑者在"与我共享"里改名：写进了库，这一页随即是新的标题，焦点回到这一条的"操作"', async ({ page }) => {
+    const owner = await createUser('cp-rename-owner', '所有者')
+    const writer = await createUser('cp-rename-writer', '写手')
+    const documentId = await createDocument(owner, '要改名的表')
+    await grantDocument(documentId, writer, 'editor', owner)
+
+    await loginThroughApi(page, writer)
+    await page.goto('/shared')
+    await page.getByRole('button', { name: '操作 要改名的表', exact: true }).click()
+    await expect(page.getByRole('button', { name: /^(?:移动|删除|分享)$/ })).toHaveCount(0)
+    await page.getByRole('button', { name: '改名', exact: true }).click()
+    await page.getByLabel('要改名的表 的新名称', { exact: true }).fill('改好名的表')
+    await page.getByRole('button', { name: '保存', exact: true }).click()
+    await expect(page.getByRole('button', { name: '操作 改好名的表', exact: true })).toBeFocused()
+    await expect(page.getByRole('list', { name: '分享给我的文档' }).getByRole('link', { name: /改好名的表/ })).toBeVisible()
+    expect(await titleOf(documentId)).toBe('改好名的表')
+  })
+
+  test('US-M2-08 只凭授权的查看者在"与我共享"里没有改名（只有复制）', async ({ page }) => {
+    const owner = await createUser('cp-norename-owner', '所有者')
+    const reader = await createUser('cp-norename-reader', '读者')
+    const documentId = await createDocument(owner, '只能看的表')
+    await grantDocument(documentId, reader, 'viewer', owner)
+
+    await loginThroughApi(page, reader)
+    await page.goto('/shared')
+    await page.getByRole('button', { name: '操作 只能看的表', exact: true }).click()
+    // 前提：面板里的操作已经按权限取到
+    await expect(page.getByRole('button', { name: '复制', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '改名', exact: true })).toHaveCount(0)
+    expect(await titleOf(documentId)).toBe('只能看的表')
   })
 })

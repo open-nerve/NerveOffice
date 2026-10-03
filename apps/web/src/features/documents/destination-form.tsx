@@ -1,9 +1,11 @@
 import type { SpaceView } from '@nerve-office/contracts'
+import type { TargetSpaces } from './target-spaces.ts'
 import { useQuery } from '@tanstack/react-query'
 import { useId, useState } from 'react'
 import { describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { Alert, AlertDescription, Button, Label, NativeSelect, Skeleton } from '../../shared/ui/index.ts'
+import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { folderChildrenQueryOptions } from './folders-api.ts'
 
 const text = messages.organize
@@ -18,8 +20,8 @@ interface DestinationFormProps {
   /** 展开的面板的 id：与“操作”按钮的 aria-controls 对应 */
   readonly panelId: string
   readonly action: 'move' | 'copy'
-  /** 可以选的目标空间：调用方按服务端给的权限筛好（能不能跨空间、目标空间能不能新建） */
-  readonly spaces: readonly SpaceView[]
+  /** 可以选的目标空间，连同取到了没有：调用方按服务端给的权限筛好（能不能跨空间、目标空间能不能新建） */
+  readonly targets: TargetSpaces
   /** 对象现在所在的位置：移动时用来说明"它已经在这里了" */
   readonly current: Destination
   /**
@@ -41,38 +43,71 @@ interface TargetCrumb {
   readonly name: string
 }
 
+/** 选过的目标空间，连同在它里面点进去的那串文件夹 */
+interface TargetChoice {
+  readonly spaceId: string
+  readonly crumbs: readonly TargetCrumb[]
+}
+
+/**
+ * 选得到的目标空间：复制只能是候选里的（我能新建的空间）；移动另可以是它现在所在的空间
+ * （在同一个空间里移动不依赖候选，候选还没取到时也一样，与原来相同）
+ */
+function selectable(action: DestinationFormProps['action'], spaces: readonly SpaceView[], current: Destination, spaceId: string): boolean {
+  return spaces.some(space => space.id === spaceId) || (action === 'move' && spaceId === current.spaceId)
+}
+
+/**
+ * 还没选过时的目标空间：它现在所在的空间在候选里就是它，否则是第一个候选。
+ * 候选一个也没有（还没取到、取不到、确实没有）时：移动是它现在所在的空间；复制没有目标——只凭单独授权时，
+ * 它现在所在的空间是我看不到的源空间，不能去取它的目录，也不能复制到那里（M2 Codex 评审复验的一般 1）。
+ * 每次渲染按当时的候选算：候选晚到时随之选上一个有效的默认值
+ */
+function defaultSpaceOf(action: DestinationFormProps['action'], spaces: readonly SpaceView[], current: Destination): string | undefined {
+  if (spaces.some(space => space.id === current.spaceId))
+    return current.spaceId
+  return spaces[0]?.id ?? (action === 'move' ? current.spaceId : undefined)
+}
+
 /**
  * 行内选目标位置（M2-P4 设计 §3.7）：先选空间，再一层层点进文件夹，最后"移动到这里"/"复制到这里"。
+ * 目标空间只落在选得到的空间里（selectable）：选过的那个不再选得到时（候选刷新之后没有它了），回到默认的目标空间，
+ * 点进去的那串文件夹随之作废（它们属于原来的空间）。复制还没有目标时不取任何目录，按候选的状态说明，"复制到这里"不能提交。
  *
  * 为什么不是弹窗：移动与复制的入口在空间页上，而空间页是平台的首屏页面，首屏不引入 Radix Dialog（ADR-008）。
  * 一次只有一个对象在选目标，所以这个表单由列表渲染在那一行下面，与行内改名同一个形态。
  */
-export function DestinationForm({ panelId, action, spaces, current, excludeFolderId, pending, error, onSubmit, onCancel }: DestinationFormProps) {
+export function DestinationForm({ panelId, action, targets, current, excludeFolderId, pending, error, onSubmit, onCancel }: DestinationFormProps) {
   const spaceSelectId = useId()
-  const [spaceId, setSpaceId] = useState(spaces.some(space => space.id === current.spaceId) ? current.spaceId : (spaces[0]?.id ?? current.spaceId))
-  const [crumbs, setCrumbs] = useState<readonly TargetCrumb[]>([])
+  const [choice, setChoice] = useState<TargetChoice>()
+  const spaces = targets.items ?? []
+  const spaceId = choice !== undefined && selectable(action, spaces, current, choice.spaceId) ? choice.spaceId : defaultSpaceOf(action, spaces, current)
+  const crumbs = choice !== undefined && choice.spaceId === spaceId ? choice.crumbs : []
   const parentId = crumbs.at(-1)?.id ?? null
-  const children = useQuery(folderChildrenQueryOptions(spaceId, parentId))
+  // 没有目标空间（复制的候选还没取到、取不到、一个也没有）时不取目录：键里的空间是占位，不发请求
+  const children = useQuery({ ...folderChildrenQueryOptions(spaceId ?? '', parentId), enabled: spaceId !== undefined })
   const choices = (children.data?.items ?? []).filter(folder => folder.id !== excludeFolderId)
   const target = spaces.find(space => space.id === spaceId)
   const spaceName = target === undefined ? '' : (target.type === 'personal' ? messages.spaces.personal : target.name)
   const label = [spaceName, ...crumbs.map(crumb => crumb.name)].filter(part => part !== '').join(' / ')
-  const destination: Destination = { spaceId, folderId: parentId ?? undefined }
+  const destination: Destination | undefined = spaceId === undefined ? undefined : { spaceId, folderId: parentId ?? undefined }
   // 移动到它现在待的地方没有意义：说明一句，按钮不可用（服务端照样接受，这里只是别让人白点）
-  const unchanged = action === 'move' && destination.spaceId === current.spaceId && destination.folderId === current.folderId
+  const unchanged = action === 'move' && destination?.spaceId === current.spaceId && destination.folderId === current.folderId
+  const blocked = pending || unchanged || destination === undefined
 
   function enter(folder: TargetCrumb): void {
-    setCrumbs([...crumbs, folder])
+    if (spaceId !== undefined)
+      setChoice({ spaceId, crumbs: [...crumbs, folder] })
   }
 
   function goUp(): void {
-    setCrumbs(crumbs.slice(0, -1))
+    if (spaceId !== undefined)
+      setChoice({ spaceId, crumbs: crumbs.slice(0, -1) })
   }
 
   function changeSpace(value: string): void {
-    setSpaceId(value)
     // 换了空间，原来点进去的那串文件夹不属于新空间：回到新空间的根目录
-    setCrumbs([])
+    setChoice({ spaceId: value, crumbs: [] })
   }
 
   return (
@@ -82,11 +117,11 @@ export function DestinationForm({ panelId, action, spaces, current, excludeFolde
       aria-label={action === 'move' ? text.move : text.copy}
       onSubmit={(event) => {
         event.preventDefault()
-        if (!pending && !unchanged)
+        if (!blocked)
           onSubmit(destination, label)
       }}
     >
-      {spaces.length > 1 && (
+      {spaces.length > 1 && spaceId !== undefined && (
         <div className="flex max-w-72 flex-col gap-2">
           <Label htmlFor={spaceSelectId}>{text.targetSpace}</Label>
           <NativeSelect id={spaceSelectId} value={spaceId} onChange={event => changeSpace(event.target.value)}>
@@ -94,38 +129,46 @@ export function DestinationForm({ panelId, action, spaces, current, excludeFolde
           </NativeSelect>
         </div>
       )}
-      <p className="text-sm">
-        {text.targetLocation}
-        ：
-        <span className="font-medium">{label}</span>
-      </p>
-      <div className="flex flex-wrap items-center gap-2">
-        {crumbs.length > 0 && <Button type="button" variant="outline" size="sm" onClick={goUp}>{text.upOneLevel}</Button>}
-        {children.isPending && (
-          <div role="status" aria-label={text.targetLoading}>
-            <Skeleton className="h-6 w-32" />
-          </div>
-        )}
-        {!children.isPending && children.data === undefined && (
-          <span role="alert" className="text-sm text-destructive">{text.targetLoadFailed(describeError(children.error).message)}</span>
-        )}
-        {children.data !== undefined && (choices.length === 0
-          ? <span className="text-sm text-muted-foreground">{text.targetEmpty}</span>
-          : (
-              <ul aria-label={text.targetLocation} className="flex flex-wrap gap-1">
-                {choices.map(folder => (
-                  <li key={folder.id}>
-                    <Button type="button" variant="outline" size="sm" aria-label={text.enterFolder(folder.name)} onClick={() => enter({ id: folder.id, name: folder.name })}>
-                      {folder.name}
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-            ))}
-      </div>
+      {spaceId === undefined
+        ? <TargetSpacesState targets={targets} />
+        : (
+            <>
+              <p className="text-sm">
+                {text.targetLocation}
+                ：
+                <span className="font-medium">{label}</span>
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                {crumbs.length > 0 && <Button type="button" variant="outline" size="sm" onClick={goUp}>{text.upOneLevel}</Button>}
+                {children.isPending && (
+                  <div role="status" aria-label={text.targetLoading}>
+                    <Skeleton className="h-6 w-32" />
+                  </div>
+                )}
+                {!children.isPending && children.data === undefined && (
+                  <span role="alert" className="text-sm text-destructive">{text.targetLoadFailed(describeError(children.error).message)}</span>
+                )}
+                {/* 留着之前的子文件夹、刷新却失败了（例如结果未知之后的刷新，Codex 对抗评审 CX5）：明说没能刷新、给出重试 */}
+                <RefreshProblem query={children} list={text.targetLocation} className="basis-full" />
+                {children.data !== undefined && (choices.length === 0
+                  ? <span className="text-sm text-muted-foreground">{text.targetEmpty}</span>
+                  : (
+                      <ul aria-label={text.targetLocation} className="flex flex-wrap gap-1">
+                        {choices.map(folder => (
+                          <li key={folder.id}>
+                            <Button type="button" variant="outline" size="sm" aria-label={text.enterFolder(folder.name)} onClick={() => enter({ id: folder.id, name: folder.name })}>
+                              {folder.name}
+                            </Button>
+                          </li>
+                        ))}
+                      </ul>
+                    ))}
+              </div>
+            </>
+          )}
       <div className="flex flex-wrap items-center gap-2">
         {/* 进行中与不能提交都用 aria-disabled：按钮变成 disabled 时浏览器把焦点丢到 body（M2-P1 审查 B13） */}
-        <Button type="submit" size="sm" aria-disabled={pending || unchanged}>
+        <Button type="submit" size="sm" aria-disabled={blocked}>
           {pending
             ? (action === 'move' ? text.moving : text.copying)
             : (action === 'move' ? text.moveHere : text.copyHere)}
@@ -139,5 +182,27 @@ export function DestinationForm({ panelId, action, spaces, current, excludeFolde
         </Alert>
       )}
     </form>
+  )
+}
+
+/**
+ * 复制还没有目标空间时，候选的状态（M2 Codex 评审复验的一般 1）：还没取到——加载中（读屏读得到）；
+ * 取不到——说明原因、给出重试（重新请求导航的空间列表，取到之后随即选上默认的目标空间）；取到了却一个也没有——说清楚
+ */
+function TargetSpacesState({ targets }: { readonly targets: TargetSpaces }) {
+  if (targets.items !== undefined)
+    return <p className="text-sm text-muted-foreground">{text.noTargetSpaces}</p>
+  if (targets.error === null) {
+    return (
+      <div role="status" aria-label={text.targetSpacesLoading}>
+        <Skeleton className="h-6 w-32" />
+      </div>
+    )
+  }
+  return (
+    <div role="alert" className="flex flex-wrap items-center gap-2">
+      <span className="text-sm text-destructive">{text.targetSpacesLoadFailed(describeError(targets.error).message)}</span>
+      <Button type="button" variant="outline" size="sm" onClick={targets.retry}>{messages.common.retry}</Button>
+    </div>
   )
 }

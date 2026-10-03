@@ -33,6 +33,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { createTestDatabase } from '../support/database.ts'
+import { seedDocument } from '../support/documents.ts'
+import { setGrant } from '../support/grants.ts'
 import { cancelWhenWaiting, completesWithoutWaiting, lockTable, raceAgainstHeldLock, requestTableLock, whileHolding } from '../support/held-lock.ts'
 import { postPublic, tokenDigest, tokenOf } from '../support/links.ts'
 import { asUser, login, postLogin, sessionSetCookie } from '../support/session-client.ts'
@@ -338,6 +340,67 @@ describe('拼响应的读在业务事务里：那一步遇到数据库繁忙，�
     expect(await count('SELECT count(*) FROM audit_events WHERE action = \'spaces.member_role_changed\' AND target_id = $1', [spaceId])).toBe(0)
     expect((await change()).status).toBe(200)
   })
+
+  // 设置授权（M2-P5 设计 §3.6）：补人名读的是账户表，而这个事务在那之前已经以 FOR SHARE 锁过被授权人的账户行（外键检查也碰过它），
+  // 账户表上的表锁挡不住它自己（它再要锁时排到等锁的人前面），补人名这一步因此构造不出繁忙。这里让它停在补人名之前的最后一步
+  // （写审计）上繁忙：授权已经写进事务、还没提交，整个事务回滚、回 503；"补人名不在提交之后"由下面"提交之后不再访问数据库"的那一条核对
+  it('设置授权：补人名之前的最后一步（写审计）等锁超时——授权没写进去、没有审计', async () => {
+    const amy = await createAccount(database, { username: 'grant-busy-amy' })
+    const ben = await createAccount(database, { username: 'grant-busy-ben' })
+    const spaceId = await createTeamSpace(database, { name: '分享繁忙', createdBy: root.id, members: { [amy.id]: 'admin' } })
+    const document = await seedDocument(database, { spaceId, createdBy: amy.id, title: '繁忙时分享的' })
+    const amySession = await login(app.baseUrl, 'grant-busy-amy', amy.password)
+    const grant = async (): Promise<Response> => asUser(patientApp.baseUrl, amySession, `/api/documents/${document.id}/grants/${ben.id}`, { method: 'PUT', body: { role: 'editor' } })
+    let auditLock: TableLock | undefined
+    try {
+      // 请求停在锁文档行上（测试的连接持着这一行）：这时它的事务还没碰过审计表，给审计表加上锁，再放开文档行。
+      // 它随后写授权、写审计时停在审计表的锁上，在那里取消它
+      const response = await raceAgainstHeldLock(database, {
+        hold: async client => client.query('SELECT id FROM documents WHERE id = $1 FOR UPDATE', [document.id]),
+        request: async () => cancelWhenWaiting(database, () => auditLock, grant()),
+        change: async () => {
+          auditLock = await requestTableLock(database, 'audit_events')
+          // 立即拿到：业务事务确实还没碰过审计表
+          expect(await completesWithoutWaiting(database, auditLock.granted, 2)).toBe(true)
+        },
+      })
+      await expectBusy(response)
+    }
+    finally {
+      await auditLock?.release()
+    }
+    expect(await count('SELECT count(*) FROM document_grants WHERE document_id = $1', [document.id])).toBe(0)
+    expect(await count('SELECT count(*) FROM audit_events WHERE target_id = $1', [document.id])).toBe(0)
+    expect((await grant()).status).toBe(200)
+  })
+
+  it('取消授权：写审计时等锁超时——授权还在、没有审计', async () => {
+    const amy = await createAccount(database, { username: 'revoke-busy-amy' })
+    const ben = await createAccount(database, { username: 'revoke-busy-ben' })
+    const spaceId = await createTeamSpace(database, { name: '取消繁忙', createdBy: root.id, members: { [amy.id]: 'admin' } })
+    const document = await seedDocument(database, { spaceId, createdBy: amy.id, title: '繁忙时取消的' })
+    await setGrant(database, { documentId: document.id, userId: ben.id, role: 'viewer', grantedBy: amy.id })
+    const amySession = await login(app.baseUrl, 'revoke-busy-amy', amy.password)
+    const revoke = async (): Promise<Response> => asUser(patientApp.baseUrl, amySession, `/api/documents/${document.id}/grants/${ben.id}`, { method: 'DELETE' })
+    let auditLock: TableLock | undefined
+    try {
+      const response = await raceAgainstHeldLock(database, {
+        hold: async client => client.query('SELECT id FROM documents WHERE id = $1 FOR UPDATE', [document.id]),
+        request: async () => cancelWhenWaiting(database, () => auditLock, revoke()),
+        change: async () => {
+          auditLock = await requestTableLock(database, 'audit_events')
+          expect(await completesWithoutWaiting(database, auditLock.granted, 2)).toBe(true)
+        },
+      })
+      await expectBusy(response)
+    }
+    finally {
+      await auditLock?.release()
+    }
+    expect(await count('SELECT count(*) FROM document_grants WHERE document_id = $1 AND user_id = $2', [document.id, ben.id])).toBe(1)
+    expect(await count('SELECT count(*) FROM audit_events WHERE target_id = $1', [document.id])).toBe(0)
+    expect((await revoke()).status).toBe(204)
+  })
 })
 
 describe('事务里复核不通过时回滚，不留下一次提交：之后写失败的审计遇到数据库繁忙，回答的仍是确定的 503（M2-P6 第 3 片复验）', () => {
@@ -407,6 +470,26 @@ describe('提交之后不再访问数据库：业务事务已经碰过拼响应�
     expect(response.status, await response.clone().text()).toBe(200)
     expect(await response.json()).toMatchObject({ id: dave.id, loginLock: null })
     expect(await accountFailures('unlock-dave')).toBe(0)
+  })
+
+  it('设置授权（这个事务锁过被授权人的账户行）：200，响应里是被授权人与设置人的人名，授权写进去了——补人名挪到提交之后就会在账户表上等到超时、回 500', async () => {
+    const amy = await createAccount(database, { username: 'grant-queued-amy', displayName: '艾米' })
+    const ben = await createAccount(database, { username: 'grant-queued-ben', displayName: '本' })
+    const spaceId = await createTeamSpace(database, { name: '分享排队', createdBy: root.id, members: { [amy.id]: 'admin' } })
+    const document = await seedDocument(database, { spaceId, createdBy: amy.id, title: '排队时分享的' })
+    const amySession = await login(app.baseUrl, 'grant-queued-amy', amy.password)
+    const response = await queuedBehind({
+      pause: holdGate('documents.shared'),
+      table: 'users',
+      request: async () => asUser(patientApp.baseUrl, amySession, `/api/documents/${document.id}/grants/${ben.id}`, { method: 'PUT', body: { role: 'viewer' } }),
+    })
+    expect(response.status, await response.clone().text()).toBe(200)
+    expect(await response.json()).toMatchObject({
+      user: { id: ben.id, username: 'grant-queued-ben', displayName: '本' },
+      role: 'viewer',
+      grantedBy: { id: amy.id, username: 'grant-queued-amy', displayName: '艾米' },
+    })
+    expect(await count('SELECT count(*) FROM document_grants WHERE document_id = $1 AND user_id = $2', [document.id, ben.id])).toBe(1)
   })
 
   it('作废邀请（这个事务复核操作者时读过账户表）：200，响应里是作废之后的邀请与签发人', async () => {

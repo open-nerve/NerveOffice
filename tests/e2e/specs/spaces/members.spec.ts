@@ -1,11 +1,13 @@
 // 成员与空间角色（M2-P2，US-M2-06）：空间管理员在成员页按名字搜索同事并添加、调整角色、移出；
 // 被移出的人已打开的页面里，再进这个空间就看不到它（不显示缓存里的旧内容），导航里它随之消失。
+// 要移出的人已经被别人移出时，确认框关掉、焦点交还之后才在表格上方说明，写进去的那一刻读屏读得到（M2-P5 复验 S1，support/status-writes.ts）。
 import type { Locator, Page } from '@playwright/test'
 import { randomBytes } from 'node:crypto'
-import { createTeamSpace, createUser } from '../../support/database.ts'
+import { createTeamSpace, createUser, removeMember } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { plainName, shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
+import { expectWrittenAfterClose, recordStatusWrites } from '../../support/status-writes.ts'
 
 function spaceNav(page: Page) {
   return page.getByRole('navigation', { name: '空间' })
@@ -133,6 +135,31 @@ test.describe('US-M2-06 管理成员与空间角色', () => {
     await page.getByRole('button', { name: `移出 ${plainName(spoof)}`, exact: true }).click()
     await expect(page.getByRole('dialog', { name: `把 ${plainName(spoof)} 移出这个空间？` })).toBeVisible()
     expect(plainName(spoof).startsWith(`@${spoof.username} `)).toBe(true)
+  })
+
+  test('要移出的人已经被别人移出：确认框关掉之后才在表格上方说明（写进去的那一刻读屏读得到），那一行随之消失（M2-P5 复验 S1）', async ({ page }) => {
+    const admin = await createUser('mb-gone-admin', '管理员', { systemRole: 'admin' })
+    const lead = await createUser('mb-gone-lead', '空间管理员')
+    const member = await createUser('mb-gone-member', '成员')
+    const space = await createTeamSpace('已被移出', admin, [[lead, 'admin'], [member, 'viewer']])
+    await loginThroughApi(page, lead)
+    await page.goto(`/spaces/${space.id}/members`)
+    await expect(page.getByRole('combobox', { name: `${plainName(member)} 的角色` })).toBeVisible()
+    // 表格上方的状态区一直在（空的时候只做视觉隐藏）：记下它每一次内容变化的那一刻
+    await recordStatusWrites(page.locator('[data-slot="status-region"]'))
+
+    // 别人先把他移出了（直接改库），这一页还显示着他
+    await removeMember(space.id, member)
+    await page.getByRole('button', { name: `移出 ${plainName(member)}`, exact: true }).click()
+    const confirm = page.getByRole('dialog', { name: `把 ${plainName(member)} 移出这个空间？` })
+    await confirm.getByRole('button', { name: '移出', exact: true }).click()
+    await expect(confirm).toHaveCount(0)
+    const text = `${shownName(member)} 已经不在成员里了（可能已被别人移出），列表已刷新`
+    await expect(page.getByRole('status').filter({ hasText: '已经不在成员里了' })).toHaveText(text)
+    // 确认框开着时 Radix 把页面标为 aria-hidden：说明等它关掉、焦点交还之后才写，写进去的那一刻读屏读得到。原来与关掉在同一次渲染里写：
+    // 那一刻 aria-hidden 已经撤销，焦点却还在 body 上（交还焦点在后面），读屏能否播报说不准（M2-P5 复验 S1）
+    await expectWrittenAfterClose(page, text)
+    await expect(page.getByRole('combobox', { name: `${plainName(member)} 的角色` })).toHaveCount(0)
   })
 
   test('只有空间管理员能管理：编辑者打开成员页只能查看', async ({ page }) => {

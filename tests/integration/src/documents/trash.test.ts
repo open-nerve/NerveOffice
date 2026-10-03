@@ -698,7 +698,7 @@ describe('US-M2-09 一串 id 超过一条语句的参数上限（M2-P6 复核 A 
     )).rows[0]?.id ?? '')
     const absent = Array.from({ length: 70_000 }, () => randomUUID())
     const repository = app.runtime.get(DocumentsRepository)
-    const listed = await repository.listAccessible({ spaceIds: [...absent, spaceId] }, { limit: 10 })
+    const listed = await repository.listAccessible({ spaceIds: [...absent, spaceId], grantsOf: undefined }, { limit: 10 })
     expect(listed.map(row => row.id)).toEqual([inside])
 
     const outcome = await app.runtime.get(TransactionRunner).run(async (transaction) => {

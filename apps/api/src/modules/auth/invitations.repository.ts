@@ -110,10 +110,10 @@ export class InvitationsRepository {
   }
 
   /** 按 id 批量取登录名：审计查询补名字用 */
-  async findUsernames(ids: readonly string[]): Promise<{ readonly id: string, readonly username: string }[]> {
+  async findUsernames(ids: readonly string[], transaction?: Transaction): Promise<{ readonly id: string, readonly username: string }[]> {
     if (ids.length === 0)
       return []
-    return this.db.select({ id: i.id, username: i.username }).from(i).where(inArray(i.id, [...ids]))
+    return executorOf(this.db, transaction).select({ id: i.id, username: i.username }).from(i).where(inArray(i.id, [...ids]))
   }
 
   /** 锁住这一条再读：接受、作废、重发在事务里串行，复核之后再改 */
@@ -153,9 +153,9 @@ export class InvitationsRepository {
   }
 
   /** 按签发时间从新到旧；after 是上一页最后一条的位置（keyset）。多取的一条由调用方判断有没有下一页 */
-  async list(filter: { readonly status?: InvitationStatus, readonly after?: TimeCursor, readonly limit: number }): Promise<InvitationRecord[]> {
+  async list(filter: { readonly status?: InvitationStatus, readonly after?: TimeCursor, readonly limit: number }, transaction?: Transaction): Promise<InvitationRecord[]> {
     const { after } = filter
-    return this.db
+    return executorOf(this.db, transaction)
       .select(COLUMNS)
       .from(i)
       .where(and(

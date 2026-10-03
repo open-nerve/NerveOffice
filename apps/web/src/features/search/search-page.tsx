@@ -1,6 +1,6 @@
 import type { SearchResult } from '@nerve-office/contracts'
 import { documentPagePath, searchKeywordSchema } from '@nerve-office/contracts'
-import { useInfiniteQuery } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { FileSpreadsheet } from 'lucide-react'
 import { useEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router'
@@ -11,12 +11,19 @@ import { formatDateTime } from '../../shared/lib/format.ts'
 import { SEARCH_QUERY_PARAM } from '../../shared/lib/space-paths.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { Alert, AlertDescription, Button, Skeleton } from '../../shared/ui/index.ts'
+import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
+import { SpaceLabel } from '../../shared/ui/space-label.tsx'
+import { sessionQueryOptions } from '../auth/index.ts'
 import { searchQueryOptions } from './search-api.ts'
 
 const text = searchMessages
 
-/** 一条结果：标题是打开编辑器页的链接，下面是它在哪里（空间名 + 文件夹路径）与更新时间 */
-function ResultItem({ result }: { readonly result: SearchResult }) {
+/**
+ * 一条结果：标题是打开编辑器页的链接，下面是它在哪里与更新时间。所在的空间：团队空间是名称，自己的个人空间是"我的空间"，
+ * 别人的个人空间（凭单独授权命中，M2-P5）按所有者的人名呈现（人名组件），不用个人空间存的名称（规范 §2.4）；
+ * 后面是从空间根目录到它所在文件夹的路径（凭授权命中的一条没有：看不到空间的目录结构）
+ */
+function ResultItem({ result, viewerId }: { readonly result: SearchResult, readonly viewerId: string | undefined }) {
   return (
     <li>
       {/* 编辑器页是另一个入口：普通的链接，整页打开 */}
@@ -25,7 +32,8 @@ function ResultItem({ result }: { readonly result: SearchResult }) {
         <span className="flex min-w-0 flex-col">
           <span className="truncate font-medium">{result.title}</span>
           <span className="truncate text-xs text-muted-foreground">
-            {text.location(result.space.type === 'personal' ? messages.documents.title : result.space.name, result.folderPath)}
+            <SpaceLabel space={result.space} viewerId={viewerId} />
+            {text.folderPath(result.folderPath)}
             {' · '}
             <time dateTime={result.updatedAt}>{messages.documents.updatedAt(formatDateTime(result.updatedAt))}</time>
           </span>
@@ -37,6 +45,7 @@ function ResultItem({ result }: { readonly result: SearchResult }) {
 
 function Results({ keyword }: { readonly keyword: string }) {
   const query = useInfiniteQuery(searchQueryOptions(keyword))
+  const session = useQuery(sessionQueryOptions())
   const results = query.data?.pages.flatMap(page => page.items) ?? []
   // 加载更多时已有的条数：新的一页到了之后，焦点移到第一条新结果。按钮在最后一页之后随之消失，焦点不能留在它身上
   // （文档列表与管理表格的做法，M1 审查 B13；M2-P6 复核 S3 的 P13）
@@ -79,14 +88,23 @@ function Results({ keyword }: { readonly keyword: string }) {
       </Alert>
     )
   }
-  if (results.length === 0)
-    return <p className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">{text.empty(keyword)}</p>
+  // 留着之前的结果、重新请求却失败了（例如回到这一页时，Codex 对抗评审 CX5）：明说没能刷新、给出重试，之前的结果照常显示
+  const refreshProblem = <RefreshProblem query={query} list={text.listLabel} />
+  if (results.length === 0) {
+    return (
+      <>
+        {refreshProblem}
+        <p className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">{text.empty(keyword)}</p>
+      </>
+    )
+  }
   return (
     <>
+      {refreshProblem}
       <ul ref={listRef} aria-label={text.listLabel} className="divide-y rounded-lg border">
-        {results.map(result => <ResultItem key={result.id} result={result} />)}
+        {results.map(result => <ResultItem key={result.id} result={result} viewerId={session.data?.user.id} />)}
       </ul>
-      {query.isError && (
+      {query.isFetchNextPageError && (
         <Alert variant="destructive">
           <AlertDescription>{describeError(query.error).message}</AlertDescription>
         </Alert>

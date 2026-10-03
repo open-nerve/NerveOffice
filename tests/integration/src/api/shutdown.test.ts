@@ -4,7 +4,7 @@ import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import { setTimeout as delay } from 'node:timers/promises'
 import { DatabaseModule, Public } from '@nerve-office/api'
-import { DATABASE } from '@nerve-office/api/testing'
+import { APPLICATION_NAME, DATABASE } from '@nerve-office/api/testing'
 import { Controller, Get, Inject, Module } from '@nestjs/common'
 import { sql } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -75,9 +75,19 @@ async function startApp(env: Record<string, string> = {}): Promise<TestApp> {
 
 async function applicationConnections(): Promise<number> {
   return database.query(async (client) => {
-    const result = await client.query<{ count: string }>('SELECT count(*) FROM pg_stat_activity WHERE datname = $1 AND application_name = \'nerve-office-api\'', [database.name])
+    const result = await client.query<{ count: string }>('SELECT count(*) FROM pg_stat_activity WHERE datname = $1 AND application_name = $2', [database.name, APPLICATION_NAME])
     return Number(result.rows[0]?.count)
   })
+}
+
+/**
+ * 退出之前的正向对照（M2 Codex 评审第二轮复验的建议 3）：经应用的连接池查询一次，按应用名数到的连接大于 0。
+ * 退出之后"应用的连接数为 0"是按应用名数的，连接不带应用名时那里同样数到 0：连接即使泄漏，那条断言也会悄悄通过。
+ * 先在这里数到它们，这样的改动在这一步就失败
+ */
+async function expectConnected(app: TestApp): Promise<void> {
+  await app.runtime.get<Database>(DATABASE).execute(sql`SELECT 1`)
+  expect(await applicationConnections()).toBeGreaterThan(0)
 }
 
 describe('优雅退出', () => {
@@ -86,6 +96,7 @@ describe('优雅退出', () => {
     const slow = fetch(`${app.baseUrl}/api/__test/slow`)
     await gate.entered
 
+    await expectConnected(app)
     const shutdown = app.runtime.shutdown('测试')
     await expect(statusOnNewConnection(`${app.baseUrl}/api/health/live`)).rejects.toThrow()
 
@@ -108,6 +119,7 @@ describe('优雅退出', () => {
     expect(await slow).toBe('aborted')
     await waitFor(() => app.logs.entries().some(entry => entry.msg === '请求中断'), '请求中断的日志')
 
+    await expectConnected(app)
     let finished = false
     const shutdown = app.runtime.shutdown('测试').then((result) => {
       finished = true
@@ -125,6 +137,7 @@ describe('优雅退出', () => {
     const slow = fetch(`${app.baseUrl}/api/__test/slow`).then(() => 'responded', () => 'disconnected')
     await gate.entered
 
+    await expectConnected(app)
     const started = performance.now()
     expect(await app.runtime.shutdown('测试')).toBe('forced')
     expect(performance.now() - started).toBeLessThan(3_000)

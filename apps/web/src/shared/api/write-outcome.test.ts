@@ -1,8 +1,9 @@
 // 写操作没能确认结果之后的共用做法：结果未知时在时限之内刷新（M2-P6 复核第三批 S-a），刷新失败或者超时时说明里不说"已刷新"（第三批 G-a）；
-// 超时之后刷新在后台成功了，告诉调用方（第五批 G4）。
+// 超时之后刷新在后台成功了，告诉调用方（第五批 G4）。写操作成功之后的刷新同样有时限（Codex 对抗评审 CX4）。
+import type { BackgroundRefresh } from './write-outcome.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from './client.ts'
-import { OUTCOME_REFRESH_TIME_LIMIT_MS, refreshIfUnknown, refreshWithin, writeFailureText } from './write-outcome.ts'
+import { OUTCOME_REFRESH_TIME_LIMIT_MS, refreshAfterSuccess, refreshIfUnknown, refreshWithin, writeFailureText } from './write-outcome.ts'
 
 /** 一直不回来的刷新（服务端挂起） */
 async function hanging(): Promise<void> {
@@ -60,6 +61,59 @@ describe('refreshWithin：在时限之内刷新（第三批 S-a）', () => {
     }, { onLateRefresh: inTime })).toBe(false)
     await new Promise(resolve => setTimeout(resolve, 20))
     expect(inTime).not.toHaveBeenCalled()
+  })
+})
+
+/** 由用例决定何时有结果的刷新：finish(true) 成功，finish(false) 失败 */
+function controlled() {
+  let finish: (ok: boolean) => void = () => {}
+  const refresh = async () => new Promise<void>((resolve, reject) => {
+    finish = ok => (ok ? resolve() : reject(new NetworkError('网络请求失败')))
+  })
+  return { refresh, finish: (ok: boolean) => finish(ok) }
+}
+
+describe('refreshAfterSuccess：写操作成功之后在时限之内等刷新（Codex 对抗评审 CX4）', () => {
+  it('在时限之内有了结果：成功、失败都兑现为 undefined——刷新失败不算这次操作失败（由列表自己说明没能刷新），不拒绝', async () => {
+    expect(await refreshAfterSuccess(async () => {})).toBeUndefined()
+    await expect(refreshAfterSuccess(async () => {
+      throw new NetworkError('网络请求失败')
+    })).resolves.toBeUndefined()
+  })
+
+  it('一直不回来：到了时限就兑现为在后台的刷新，不一直等下去；时限与失败之后的刷新相同（10 秒）', async () => {
+    vi.useFakeTimers()
+    try {
+      let result: BackgroundRefresh | undefined | 'pending' = 'pending'
+      void refreshAfterSuccess(hanging).then((background) => {
+        result = background
+      })
+      await vi.advanceTimersByTimeAsync(OUTCOME_REFRESH_TIME_LIMIT_MS - 1)
+      expect(result).toBe('pending')
+      await vi.advanceTimersByTimeAsync(1)
+      expect(result).not.toBe('pending')
+      expect(result).toBeDefined()
+      expect((result as unknown as BackgroundRefresh).settled()).toBe(false)
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([['成功', true], ['失败', false]] as const)('后台的刷新随后%s：标为已经有了结果，通知订阅者（说明随之不再说"还在刷新"）；取消订阅的不再通知', async (_name, ok) => {
+    const late = controlled()
+    const background = await refreshAfterSuccess(late.refresh, { timeLimitMs: 20 })
+    if (background === undefined)
+      throw new Error('前提：到了时限还没有结果')
+    const listener = vi.fn()
+    const unsubscribed = vi.fn()
+    background.subscribe(listener)
+    background.subscribe(unsubscribed)()
+    expect(background.settled()).toBe(false)
+    late.finish(ok)
+    await vi.waitFor(() => expect(background.settled()).toBe(true))
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(unsubscribed).not.toHaveBeenCalled()
   })
 })
 

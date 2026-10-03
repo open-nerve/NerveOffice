@@ -1,9 +1,7 @@
 import type { ExpiredReason } from '../shared/lib/login-path.ts'
 import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query'
-import { isAuthenticationError, isCsrfTokenError, isPermissionDeniedError, isTransientError } from '../shared/api/index.ts'
-
-/** 网络问题与服务端的临时错误重试一次；其他错误（4xx）重试也没用 */
-const MAX_TRANSIENT_RETRIES = 1
+import { isAuthenticationError, isCsrfTokenError, isPermissionDeniedError } from '../shared/api/index.ts'
+import { QUERY_CLIENT_DEFAULTS } from '../shared/api/query-defaults.ts'
 
 /** 请求缓存从请求结果里看出的会话变化，由 app/runtime.ts 统一处理。 */
 export interface SessionEvents {
@@ -164,16 +162,7 @@ export function createQueryClient(events: SessionEvents): QueryClient {
           onRequestError(error, mutation.meta)
       },
     }),
-    defaultOptions: {
-      // networkMode 'always'：不看 navigator.onLine，断网时请求照常发出、照常失败，由请求层归为 NetworkError 显示出来（审查 B4）。
-      // 默认的 'online' 在浏览器认为离线时把查询与变更挂起，界面一直停在"进行中"：退出时尤其危险，请求根本没发出去，会话仍然有效。
-      // navigator.onLine 本身也不可靠：连着局域网、却到不了服务器时它仍是 true
-      queries: {
-        networkMode: 'always',
-        retry: (failures, error) => isTransientError(error) && failures < MAX_TRANSIENT_RETRIES,
-        refetchOnWindowFocus: false,
-      },
-      mutations: { networkMode: 'always', retry: false },
-    },
+    // 重试与断网时的行为与编辑器页给分享对话框用的请求缓存相同（shared/api/query-defaults.ts）
+    defaultOptions: QUERY_CLIENT_DEFAULTS,
   })
 }

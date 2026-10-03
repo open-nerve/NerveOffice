@@ -1,6 +1,7 @@
 import type { AuditAction } from './audit.ts'
 import { z } from 'zod'
 import { LINK_INVALID_REASONS, ONE_TIME_LINK_PURPOSES } from '../auth/links.ts'
+import { GRANT_ROLES } from '../sharing/sharing.ts'
 import { SPACE_NAME_MAX_LENGTH, SPACE_ROLES } from '../spaces/spaces.ts'
 import { codePointLength } from '../text/text.ts'
 import { USER_SYSTEM_ROLES, USERNAME_PATTERN_SOURCE } from '../users/users.ts'
@@ -24,6 +25,8 @@ const username = z.string().regex(new RegExp(USERNAME_PATTERN_SOURCE))
 /** 团队空间的名称（改名前后）：系统管理员在管理界面本来就看得到 */
 const spaceName = z.string().refine(value => codePointLength(value) >= 1 && codePointLength(value) <= SPACE_NAME_MAX_LENGTH)
 const spaceRole = z.enum(SPACE_ROLES)
+/** 单独授权的角色（M2-P5）：查看者或编辑者 */
+const grantRole = z.enum(GRANT_ROLES)
 const systemRole = z.enum(USER_SYSTEM_ROLES)
 
 /** 没有补充信息的动作 */
@@ -126,6 +129,10 @@ export const auditDetailsSchema = z.discriminatedUnion('action', [
   entry('users.password_reset_revoked', z.strictObject({ passwordResetId: id, reason: z.enum(['reissued', 'account_disabled', ...LINK_ISSUER_REVOCATION_REASONS]) })),
   // M2-P6：系统管理员解除登录锁定，对象是这个账户（复核 A1）。清掉了哪些来源的计数不记：计数的键只存摘要，记下来也认不出来源
   entry('users.login_unlocked', none),
+  // M2-P5：单独授权，对象是文档（不记标题）。与成员的三个动作同形：被授权人的 id 与角色，调整记前后的角色
+  entry('documents.shared', z.strictObject({ userId: id, role: grantRole })),
+  entry('documents.share_changed', z.strictObject({ userId: id, from: grantRole, to: grantRole })),
+  entry('documents.share_revoked', z.strictObject({ userId: id, role: grantRole })),
 ])
 
 /** 一个动作与它的明细（解析之后） */

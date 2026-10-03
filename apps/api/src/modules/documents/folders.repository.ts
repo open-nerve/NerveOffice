@@ -1,4 +1,6 @@
+import type { DocumentStatus } from '@nerve-office/contracts'
 import type { SQL } from 'drizzle-orm'
+import type { Buffer } from 'node:buffer'
 import type { Database, Transaction } from '../database/index.ts'
 import { FOLDER_LIST_MAX_ITEMS } from '@nerve-office/contracts'
 import { Inject, Injectable } from '@nestjs/common'
@@ -27,6 +29,15 @@ export interface NewFolder {
   readonly createdBy: string
   readonly depth: number
   readonly requestId: string
+  /** 新建请求的摘要（payload-digest.ts 的 folderCreatedPayloadDigest）：重放按它判断，之后不改（M2 Codex 评审 CX6） */
+  readonly payloadDigest: Buffer
+}
+
+/** 按 requestId 找到的文件夹（新建的重放）：现在的样子，连同新建时存下的请求摘要与现在的状态 */
+export interface CreatedFolderRow extends FolderRow {
+  readonly payloadDigest: Buffer
+  /** 正常（active）或在回收站里（trashed）：在回收站里的，重放按"看不到"回答（FoldersService 的 replay） */
+  readonly status: DocumentStatus
 }
 
 /** 一棵子树（含根）的摘要：移动之前判断层数与成环，跨空间移动还要按它找出里面的文档。 */
@@ -93,9 +104,17 @@ export class FoldersRepository {
     return row
   }
 
-  /** 同一个 requestId 已经建过的文件夹（新建的重放，见 FoldersService.create）。 */
-  async findByRequestId(requestId: string, transaction: Transaction): Promise<FolderRow | undefined> {
-    const [row] = await executorOf(this.db, transaction).select(COLUMNS).from(f).where(and(eq(f.requestId, requestId), eq(f.status, 'active')))
+  /**
+   * 同一个 requestId 已经建过的文件夹，连同新建时的请求摘要与现在的状态（新建的重放，见 FoldersService.create）。
+   * 进了回收站的也找出来（M2 Codex 评审第二轮复验的一般 4）：原来只找正常状态的，进了回收站之后原样的重发被当成新的请求，
+   * 回答随这次请求里的空间而变——能新建时插入撞上唯一约束是 409，降为查看者是 403，被移出空间是 404，
+   * 而新建文档在这三种情况下一律是 409；客户端遇到 403、404 会说"新建被拒绝"，实际上却已经建过
+   */
+  async findByRequestId(requestId: string, transaction: Transaction): Promise<CreatedFolderRow | undefined> {
+    const [row] = await executorOf(this.db, transaction)
+      .select({ ...COLUMNS, payloadDigest: f.payloadDigest, status: f.status })
+      .from(f)
+      .where(eq(f.requestId, requestId))
     return row
   }
 
@@ -211,7 +230,7 @@ export class FoldersRepository {
    * 起点与每一级祖先都限定在调用者看得到的空间里（设计 §3.5）：万一有哪一行的父文件夹在别的空间里，
    * 那个空间的名称也不会顺着父链漏出来。UNION 去重：多条路径共用祖先时不会重复展开
    */
-  async ancestorsOf(ids: readonly string[], spaceIds: readonly string[]): Promise<FolderAncestorRow[]> {
+  async ancestorsOf(ids: readonly string[], spaceIds: readonly string[], transaction?: Transaction): Promise<FolderAncestorRow[]> {
     if (ids.length === 0 || spaceIds.length === 0)
       return []
     const query = sql`WITH RECURSIVE ancestors(id, parent_id, name) AS (
@@ -221,14 +240,14 @@ export class FoldersRepository {
       SELECT parent.id, parent.parent_id, parent.name FROM ${f} AS parent
         JOIN ancestors ON parent.id = ancestors.parent_id AND ${inIdArray(sql`parent.space_id`, spaceIds)}
     ) SELECT id, parent_id AS "parentId", name FROM ancestors`
-    return (await this.db.execute<{ id: string, parentId: string | null, name: string }>(query)).rows
+    return (await executorOf(this.db, transaction).execute<{ id: string, parentId: string | null, name: string }>(query)).rows
   }
 
   /** 按 id 取这些文件夹里正常状态的那些的名称（回收站列表里"原位置"的显示名）。 */
-  async activeNamesOf(ids: readonly string[], spaceId: string): Promise<ReadonlyMap<string, string>> {
+  async activeNamesOf(ids: readonly string[], spaceId: string, transaction?: Transaction): Promise<ReadonlyMap<string, string>> {
     if (ids.length === 0)
       return new Map()
-    const rows = await this.db
+    const rows = await executorOf(this.db, transaction)
       .select({ id: f.id, name: f.name })
       .from(f)
       .where(and(inIdArray(f.id, [...new Set(ids)]), eq(f.spaceId, spaceId), eq(f.status, 'active')))

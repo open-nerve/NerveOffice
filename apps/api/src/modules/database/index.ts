@@ -14,4 +14,9 @@ export { inIdArray } from './id-array.ts'
 export { keysetPosition } from './keyset-position.ts'
 export { compareMigrations, MigrationError, MIGRATIONS_FOLDER, readAppliedMigrations, readExpectedMigrations, runMigrations } from './migrations.ts'
 export type { AppliedMigration, ExpectedMigration, MigrationOutcome, RunMigrationsOptions, SchemaStatus } from './migrations.ts'
+// 应用的连接池在 pg_stat_activity 里的名字：集成测试认应用的连接用它（经 @nerve-office/api/testing 转出）
+export { APPLICATION_NAME } from './pool.ts'
+// 只由 database 模块提供（不在 DatabaseModule 的 exports 里）：转出只为别的模块的单元测试直接构造 TransactionRunner
+export { SnapshotScope } from './snapshot-scope.ts'
 export { TransactionRunner } from './transaction-runner.ts'
+export type { SnapshotOpening } from './transaction-runner.ts'

@@ -1,6 +1,7 @@
 // 写操作没能确认结果之后的共用做法（M2-P6 复核第二批 G-2；第三批 S-a、G-a；第四批）：确认的弹窗、管理界面的弹窗、成员的角色、
 // 空间页头的改名，以及表单、面板与行内表单（创建团队空间、签发与重新生成邀请、添加成员、新建表格与文件夹、整理面板、回收站的恢复）共用，
 // 不逐处各写一遍。说明里"列表刷新了没有"那一句由 shared/i18n 的 messages.common.listRefreshed 给出。
+// 写操作成功之后的刷新同样在这里（refreshAfterSuccess，Codex 对抗评审 CX4）：与失败之后的刷新同一个时限，同样各处共用。
 import { messages } from '../i18n/index.ts'
 import { isUnknownOutcome } from './client.ts'
 import { describeError } from './describe-error.ts'
@@ -46,6 +47,47 @@ export async function refreshWithin(refresh: () => Promise<unknown>, { timeLimit
     })
   }
   return refreshed
+}
+
+/**
+ * 写操作成功之后、到了时限还没有结果的刷新（Codex 对抗评审 CX4）：它在后台继续。说明里据此说列表还在刷新，有了结果（成功或失败）
+ * 之后不再说（shared/ui/still-refreshing.tsx）。订阅的形状照 React 的 useSyncExternalStore
+ */
+export interface BackgroundRefresh {
+  /** 有了结果没有 */
+  readonly settled: () => boolean
+  /** 有了结果时通知；返回取消订阅 */
+  readonly subscribe: (listener: () => void) => () => void
+}
+
+/**
+ * 写操作成功之后的刷新（Codex 对抗评审 CX4）。写入已经确定成功，这次操作的结束（弹窗关掉、说明写出、焦点交还）不再无限期地等列表刷新：
+ * 原来刷新一直不回来时，确认框一直停在"正在处理…"，取消与 Esc 都关不掉。等刷新的时限与失败之后的相同（OUTCOME_REFRESH_TIME_LIMIT_MS）：
+ * - 在时限之内有了结果（成功或失败）兑现为 undefined。刷新失败不算这次操作失败，由列表自己说明没能刷新、给出重试（shared/ui/refresh-problem.tsx，CX5）；
+ * - 到了时限还没回来兑现为 BackgroundRefresh：刷新在后台继续，操作照常结束，说明里说列表还在刷新（与失败之后"到了时限先说明"对应）。
+ * 界面要依赖刷新的结果才对的地方（例如取消分享之后那一行要先消失，焦点才能交给"已分享给"），调用方先按确定的写入结果直接改缓存，再来刷新。
+ * 不拒绝
+ */
+export async function refreshAfterSuccess(refresh: () => Promise<unknown>, { timeLimitMs = OUTCOME_REFRESH_TIME_LIMIT_MS }: { readonly timeLimitMs?: number } = {}): Promise<BackgroundRefresh | undefined> {
+  let settled = false
+  const listeners = new Set<() => void>()
+  const background: BackgroundRefresh = {
+    settled: () => settled,
+    subscribe: (listener) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+  }
+  // 刷新失败同样算有了结果：这里只等它结束，失败由列表自己说明。晚到的结果（成功或失败）经 refreshWithin 的 onLateRefresh 通知
+  const inTime = await refreshWithin(async () => refresh().catch(() => undefined), {
+    timeLimitMs,
+    onLateRefresh: () => {
+      settled = true
+      for (const listener of listeners)
+        listener()
+    },
+  })
+  return inTime ? undefined : background
 }
 
 export interface RefreshIfUnknownOptions extends RefreshWithinOptions {

@@ -3,6 +3,7 @@ import type { DestinationStream } from 'pino'
 import type { AppConfig } from '../modules/config/index.ts'
 import type { AdditionalModules } from './app.module.ts'
 import { NestFactory } from '@nestjs/core'
+import { RequestIdentities } from '../modules/auth/index.ts'
 import { CommitLedger } from '../modules/database/index.ts'
 import { AppLogger, createRootLogger, NestPinoLogger, RequestContextStore } from '../modules/logging/index.ts'
 import { AppModule } from './app.module.ts'
@@ -36,8 +37,9 @@ export async function createApplication(config: AppConfig, options: ApplicationO
   server.headersTimeout = config.http.headersTimeoutMs
   server.keepAliveTimeout = config.http.keepAliveTimeoutMs
   const inFlight = new InFlightRequests()
-  // 事务运行器记账用的是这个应用自己的那一份（database 模块提供）：HTTP 管线的中间件与异常过滤器用同一份
-  configureHttp(app, config, { rootLogger, logger, requestContext, commits: app.get(CommitLedger), inFlight })
+  // 事务运行器记账用的是这个应用自己的那一份（database 模块提供）：HTTP 管线的中间件与异常过滤器用同一份；
+  // 请求级的身份记录同理（auth 模块提供），会话守卫与只读快照的开场核对用同一份
+  configureHttp(app, config, { rootLogger, logger, requestContext, commits: app.get(CommitLedger), identities: app.get(RequestIdentities), inFlight })
   await app.init()
   return new ApplicationRuntime(app, config, rootLogger, inFlight)
 }

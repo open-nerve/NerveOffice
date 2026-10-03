@@ -16,6 +16,7 @@ const result = {
   space: { id: SPACE_ID, type: 'team', name: '市场部' },
   folderId: FOLDER_ID,
   folderPath: ['资料', '2026'],
+  accessVia: 'space',
 }
 
 describe('搜索的查询参数', () => {
@@ -55,6 +56,31 @@ describe('搜索的结果', () => {
   it('空间根目录下的文档：folderId 为空，路径是空数组', () => {
     const atRoot = { ...result, folderId: null, folderPath: [] }
     expect(searchResponseSchema.parse({ items: [atRoot], nextCursor: 'abc' }).items).toEqual([atRoot])
+  })
+
+  it('看得到它的途径（M2-P5）：必填；凭授权命中的一条不带目录结构（folderId 为空、路径是空数组）', () => {
+    const viaGrant = { ...result, folderId: null, folderPath: [], accessVia: 'grant' }
+    expect(searchResponseSchema.parse({ items: [viaGrant], nextCursor: null }).items).toEqual([viaGrant])
+    expect(searchResponseSchema.safeParse({ items: [{ ...result, accessVia: undefined }], nextCursor: null }).success).toBe(false)
+    expect(searchResponseSchema.safeParse({ items: [{ ...result, accessVia: 'link' }], nextCursor: null }).success).toBe(false)
+  })
+
+  it('个人空间只带所有者（"人"的结构，M2-P5），不带存的名称（建号时的显示名，可以伪造，规范 §2.4）：服务端多给了也被丢弃；缺了所有者、所有者不是"人"的结构都被拒绝', () => {
+    const owner = { id: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c24', username: 'amy', displayName: '艾米' }
+    const personal = { ...result, space: { id: SPACE_ID, type: 'personal', owner } }
+    expect(searchResponseSchema.parse({ items: [personal], nextCursor: null }).items).toEqual([personal])
+    const [withName] = searchResponseSchema.parse({ items: [{ ...personal, space: { ...personal.space, name: '艾米（管理员）' } }], nextCursor: null }).items
+    expect(withName?.space).toEqual({ id: SPACE_ID, type: 'personal', owner })
+    for (const space of [{ id: SPACE_ID, type: 'personal', name: '艾米' }, { id: SPACE_ID, type: 'personal', owner: { id: owner.id } }, { id: SPACE_ID, type: 'personal', owner: null }])
+      expect(searchResponseSchema.safeParse({ items: [{ ...result, space }], nextCursor: null }).success, JSON.stringify(space)).toBe(false)
+  })
+
+  it('团队空间带名称、没有所有者（多给的被丢弃）；别的空间类型被拒绝', () => {
+    const owner = { id: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c24', username: 'amy', displayName: '艾米' }
+    const [team] = searchResponseSchema.parse({ items: [{ ...result, space: { id: SPACE_ID, type: 'team', name: '市场部', owner } }], nextCursor: null }).items
+    expect(team?.space).toEqual({ id: SPACE_ID, type: 'team', name: '市场部' })
+    expect(searchResponseSchema.safeParse({ items: [{ ...result, space: { id: SPACE_ID, type: 'team', owner } }], nextCursor: null }).success).toBe(false)
+    expect(searchResponseSchema.safeParse({ items: [{ ...result, space: { id: SPACE_ID, type: 'folder', name: '市场部' } }], nextCursor: null }).success).toBe(false)
   })
 
   it('路径最长与文件夹的层数上限一致；结构不对的被拒绝', () => {

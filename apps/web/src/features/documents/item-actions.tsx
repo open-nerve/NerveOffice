@@ -1,6 +1,7 @@
-import type { SpaceView } from '@nerve-office/contracts'
 import type { ReactNode } from 'react'
+import type { BackgroundRefresh } from '../../shared/api/write-outcome.ts'
 import type { Destination } from './destination-form.tsx'
+import type { TargetSpaces } from './target-spaces.ts'
 import { useMutation } from '@tanstack/react-query'
 import { useEffect, useEffectEvent, useId, useRef, useState } from 'react'
 import { Link } from 'react-router'
@@ -21,6 +22,11 @@ export interface OrganizeNotice {
   readonly action?: ReactNode
   /** 说明的是没能完成（被拒绝、结果未知）：醒目的样式 */
   readonly problem?: boolean
+  /**
+   * 成功之后的刷新到了时限还在后台（Codex 对抗评审 CX4）：说明接着说列表还在刷新，刷新有了结果之后不再说
+   * （organize-notice-bar.tsx）
+   */
+  readonly refreshing?: BackgroundRefresh
 }
 
 /**
@@ -37,12 +43,16 @@ export interface OrganizePermissions {
   readonly canDelete: boolean
 }
 
+/**
+ * 一行上的操作。成功之后各自刷新相关的列表（organize-refresh.ts 的 useOrganizeRefresh，最多等到时限），兑现为到了时限还在后台的刷新
+ * （没有时为 undefined）：说明据此接着说列表还在刷新（Codex 对抗评审 CX4）
+ */
 export interface ItemOperations {
-  readonly rename: (name: string) => Promise<unknown>
-  readonly move: (destination: Destination) => Promise<unknown>
-  /** 只有文档能复制：副本的标题与"打开副本"由它给出 */
+  readonly rename: (name: string) => Promise<BackgroundRefresh | undefined>
+  readonly move: (destination: Destination) => Promise<BackgroundRefresh | undefined>
+  /** 只有文档能复制：副本的标题与"打开副本"由它给出（连同还在后台的刷新） */
   readonly copy?: (destination: Destination) => Promise<OrganizeNotice>
-  readonly remove: () => Promise<void>
+  readonly remove: () => Promise<BackgroundRefresh | undefined>
   /**
    * 结果未知之后重新请求相关的列表：它所在的空间，加上这次的目标位置所在的空间（移动、复制）。有一个没能刷新就拒绝
    * （organize-refresh.ts 的 useOrganizeRefreshChecked）：面板经共用的做法在时限之内等它，说明据此说"已刷新"还是"没能刷新"（第四批）
@@ -65,8 +75,8 @@ interface ItemActionsProps {
   readonly current: Destination
   /** 选目标位置时不列出这个文件夹：移动文件夹时就是它自己（审查建议 6） */
   readonly excludeFolderId?: string
-  /** 我能新建内容的空间（服务端给的 canCreateDocuments）：复制与跨空间移动的候选 */
-  readonly targetSpaces: readonly SpaceView[]
+  /** 我能新建内容的空间（服务端给的 canCreateDocuments），连同取到了没有：复制与跨空间移动的候选 */
+  readonly targetSpaces: TargetSpaces
   readonly operations: ItemOperations
   /** 收起面板；notice 是要在列表上方给出的说明 */
   readonly onDone: (notice: OrganizeNotice | undefined) => void
@@ -77,7 +87,30 @@ interface ItemActionsProps {
   readonly onDenied: () => Promise<boolean>
   /** 关掉操作面板 */
   readonly onClose: () => void
+  /**
+   * 分享的入口（只有文档有，M2-P5）：排在复制之后。fallbackFocus：分享对话框关闭时入口已经不在了（随新的权限消失），
+   * 焦点交给面板里的"取消"
+   */
+  readonly shareEntry?: (fallbackFocus: () => void) => ReactNode
+  /**
+   * 说明里给不给"打开回收站"（默认给）："与我共享"里的一行，看不到它所在空间的人（只凭单独授权）进不去那个空间的回收站，
+   * 说它已经不在了的时候不给这个入口（Codex 对抗评审 CX3）
+   */
+  readonly trashReachable?: boolean
+  /** 它（或者目标位置）已经不在了的说法：默认是空间里的说法；"与我共享"另给（还可能是分享被取消了，CX3） */
+  readonly goneTexts?: GoneTexts
 }
+
+/** 按访问权限被拒绝、得到 404 时的说法；refreshed 是列表刷新好了没有（第五批 G3） */
+export interface GoneTexts {
+  /** 它已经不在了 */
+  readonly gone: (name: string, refreshed: boolean) => string
+  /** 移动、复制得到 404：它，或者目标位置，已经不在了 */
+  readonly targetOrItemGone: (name: string, refreshed: boolean) => string
+}
+
+/** 空间里的说法：它已经删除，或者被别人移走了 */
+const SPACE_GONE_TEXTS: GoneTexts = { gone: text.gone, targetOrItemGone: text.targetOrItemGone }
 
 type Operation = 'rename' | 'move' | 'copy' | 'delete'
 
@@ -158,7 +191,7 @@ function RenameForm({ panelId, name, validate, pending, error, onSubmit, onCance
  * 已经打开的改名、移动、复制表单，刷新之后这一种操作不能做了（例如别处的操作被拒绝、页面按新的权限重新请求，空间刚被归档、
  * 自己刚被降为查看者）：表单随之收起，回到按新权限列出的操作（M2-P6 复核第二批 G-6；文件夹一个操作都做不了时整个面板收起）。
  */
-export function ItemActions({ panelId, name, validateName, permissions, loading, error, onRetry, current, excludeFolderId, targetSpaces, operations, onDone, onDenied, onClose }: ItemActionsProps) {
+export function ItemActions({ panelId, name, validateName, permissions, loading, error, onRetry, current, excludeFolderId, targetSpaces, operations, onDone, onDenied, onClose, shareEntry, trashReachable = true, goneTexts = SPACE_GONE_TEXTS }: ItemActionsProps) {
   const [chosen, setChosen] = useState<Exclude<Operation, 'delete'>>()
   /**
    * 上一次失败之后列表刷新好了没有：留在面板里的说明（改名、复制）据此说"已刷新"还是"没能刷新"（第四批）；
@@ -166,9 +199,10 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
    */
   const { refreshed, refreshAfterFailure } = useOutcomeRefresh()
   const ledger = useRequestIdLedger()
+  const cancelRef = useRef<HTMLButtonElement>(null)
   // 移动/复制提交时目标位置的可读名称，例如"市场部 / 方案"：做完之后在说明里回述
   const targetLabelRef = useRef('')
-  const trashLink = <Link to={spaceTrashPath(current.spaceId)} className={buttonVariants({ variant: 'outline', size: 'sm' })}>{text.goToTrash}</Link>
+  const trashLink = trashReachable ? <Link to={spaceTrashPath(current.spaceId)} className={buttonVariants({ variant: 'outline', size: 'sm' })}>{text.goToTrash}</Link> : undefined
 
   /**
    * 按访问权限被拒绝时的说明：404 说它（或者目标位置）已经不在了，列表刷新好了没有按 listRefreshed 说（第五批 G3）；
@@ -179,8 +213,8 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
       return { message: text.denied(name, describeError(failure).message), problem: true }
     // 移动、复制的 404 也可能是目标文件夹没了：两种都说
     if (operation === 'move' || operation === 'copy')
-      return { message: text.targetOrItemGone(name, listRefreshed), problem: true }
-    return { message: text.gone(name, listRefreshed), action: trashLink, problem: true }
+      return { message: goneTexts.targetOrItemGone(name, listRefreshed), problem: true }
+    return { message: goneTexts.gone(name, listRefreshed), action: trashLink, problem: true }
   }
 
   const mutation = useMutation({
@@ -209,7 +243,7 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
   const gone = !loading && permissions === undefined && isMissingResource(error)
   const reportGone = useEffectEvent(async () => {
     const listRefreshed = await onDenied()
-    onDone({ message: text.gone(name, listRefreshed), action: trashLink, problem: true })
+    onDone({ message: goneTexts.gone(name, listRefreshed), action: trashLink, problem: true })
   })
   useEffect(() => {
     if (gone)
@@ -271,8 +305,9 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
     )
   }
 
-  // 不能跨空间时，目标只有它现在所在的空间；能跨空间时，目标是我能新建内容的空间（服务端给的 canCreateDocuments）
-  const spaces = permissions.canMoveAcrossSpaces ? targetSpaces : targetSpaces.filter(space => space.id === current.spaceId)
+  // 移动：不能跨空间时，目标只有它现在所在的空间；能跨空间时，目标是我能新建内容的空间（服务端给的 canCreateDocuments）。
+  // 复制的目标是我能新建内容的空间，只落在其中（DestinationForm）
+  const moveTargets: TargetSpaces = permissions.canMoveAcrossSpaces ? targetSpaces : { ...targetSpaces, items: targetSpaces.items?.filter(space => space.id === current.spaceId) }
 
   if (shown === 'rename') {
     return (
@@ -285,8 +320,9 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
         onSubmit={value => run({
           operation: 'rename',
           run: async () => {
-            await operations.rename(value)
-            return undefined
+            // 平时不另外说明（列表随即刷新，焦点回到这一行的"操作"）；刷新到了时限还在后台时说明改好了、列表还在刷新（CX4）
+            const refreshing = await operations.rename(value)
+            return refreshing === undefined ? undefined : { message: text.renamed(name, value), refreshing }
           },
         })}
         onCancel={onClose}
@@ -299,7 +335,7 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
       <DestinationForm
         panelId={panelId}
         action={shown}
-        spaces={shown === 'copy' ? targetSpaces : spaces}
+        targets={shown === 'copy' ? targetSpaces : moveTargets}
         current={current}
         excludeFolderId={excludeFolderId}
         pending={mutation.isPending}
@@ -312,8 +348,8 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
             run: async () => {
               if (shown === 'copy' && copy !== undefined)
                 return copy(destination)
-              await operations.move(destination)
-              return { message: text.moved(name, targetLabelRef.current) }
+              const refreshing = await operations.move(destination)
+              return { message: text.moved(name, targetLabelRef.current), refreshing }
             },
           })
         }}
@@ -327,6 +363,7 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
       {allows(permissions, operations, 'rename') && <Button type="button" variant="outline" size="sm" onClick={() => choose('rename')}>{text.rename}</Button>}
       {allows(permissions, operations, 'move') && <Button type="button" variant="outline" size="sm" onClick={() => choose('move')}>{text.move}</Button>}
       {allows(permissions, operations, 'copy') && <Button type="button" variant="outline" size="sm" onClick={() => choose('copy')}>{text.copy}</Button>}
+      {shareEntry?.(() => cancelRef.current?.focus())}
       {permissions.canDelete && (
         <Button
           type="button"
@@ -336,15 +373,15 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
           onClick={() => run({
             operation: 'delete',
             run: async () => {
-              await operations.remove()
-              return { message: text.deleted(name), action: trashLink }
+              const refreshing = await operations.remove()
+              return { message: text.deleted(name), action: trashLink, refreshing }
             },
           })}
         >
           {mutation.isPending ? text.deleting : text.delete}
         </Button>
       )}
-      <Button type="button" variant="ghost" size="sm" onClick={onClose}>{text.cancel}</Button>
+      <Button ref={cancelRef} type="button" variant="ghost" size="sm" onClick={onClose}>{text.cancel}</Button>
       {/* 删除失败的说明一律按错误码给（shared/i18n）：例如"文件夹里有别人创建的文档"与"空间已归档"是两个不同的 403，
           界面不在这里按错误码分支，免得把其中一种的说法安到另一种头上（M2-P4 审查 B2） */}
       {mutation.isError && (

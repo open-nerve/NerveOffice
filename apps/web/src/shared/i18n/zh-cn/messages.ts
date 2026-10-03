@@ -171,6 +171,13 @@ export const messages = {
     /** 同上，随后的刷新也失败了、或者到了时限还没回来（M2-P6 复核第三批 G-a）：页面上的可能还是之前的状态，不能说"已刷新" */
     outcomeUnknownNotRefreshed: (reason: string) => `没能确认是否已经完成（${reason}）。可能已经生效，只是页面没能刷新，显示的可能还是之前的状态：请稍后再看；确认还没有生效的话，可以再试一次。`,
     listRefreshed,
+    /**
+     * 写操作成功之后的刷新到了时限还没回来（Codex 对抗评审 CX4，shared/api/write-outcome.ts 的 refreshAfterSuccess）：操作已经完成，
+     * 列表还在后台刷新，好了随之更新；有了结果之后不再显示（shared/ui/still-refreshing.tsx）。list 是刷新的是什么（默认"列表"）
+     */
+    stillRefreshing: (list = '列表') => `${list}还在刷新，显示的可能还是之前的，刷新好了会自动更新`,
+    /** 列表留着之前的数据、重新请求却失败了（Codex 对抗评审 CX5，shared/ui/refresh-problem.tsx）：明说没能刷新，旧的内容照常显示 */
+    refreshFailed: (list = '列表') => `${list}没能刷新，显示的还是之前的内容`,
   },
   errors: {
     byCode: errorText,
@@ -238,11 +245,20 @@ export const messages = {
     navLabel: '空间',
     toggleNav: '空间',
     personal: '我的空间',
+    /** 左侧导航里的"与我共享"（M2-P5）：别人单独分享给我的文档；页面的文案随页面按需加载（shared-with-me.ts） */
+    sharedWithMe: '与我共享',
+    /**
+     * 别人的个人空间（搜索结果与"与我共享"，M2-P5）：按所有者的人名呈现（人名组件），不用个人空间存的名称——那是所有者建号时的显示名，
+     * 可以伪造（规范 §2.4）。自己的个人空间写"我的空间"（documents.title）
+     */
+    personalSpaceOf: <T>(owner: T): Phrase<T> => [owner, ' 的个人空间'],
     teamHeading: '团队空间',
     /** 导航与空间页的骨架屏名称不同：分得清是哪一处在加载（审查 B10） */
     navLoading: '正在加载空间列表…',
     loading: '正在加载空间…',
     loadFailed: '空间列表加载失败',
+    /** 导航留着之前的空间列表、刷新却失败了（Codex 对抗评审 CX5）："空间列表没能刷新，显示的还是之前的内容" */
+    listName: '空间列表',
     noTeamSpaces: '还没有加入团队空间',
     archived: '已归档',
     archivedName: (name: string) => `${name}（已归档）`,
@@ -321,11 +337,17 @@ export const messages = {
     move: '移动',
     copy: '复制',
     delete: '删除',
+    /** 分享（M2-P5）：只有能分享时（canShare）出现；对话框按需加载，它的文案在 sharing.ts */
+    share: '分享',
     save: '保存',
     saving: '正在保存…',
     cancel: '取消',
     // 选目标位置（行内的两级选择：先选空间，再一层层点进文件夹）
     targetSpace: '目标空间',
+    // 复制的目标只在能新建的空间里选（M2 Codex 评审复验的一般 1）：这些空间还没取到、取不到、一个也没有时这样说
+    targetSpacesLoading: '正在加载可以复制到的空间…',
+    targetSpacesLoadFailed: (reason: string) => `可以复制到的空间没能加载：${reason}`,
+    noTargetSpaces: '没有可以复制到的空间：你在任何空间里都不能新建文档。',
     targetLocation: '目标位置',
     targetLoading: '正在加载目标位置…',
     targetLoadFailed: (reason: string) => `目标位置加载失败：${reason}`,
@@ -338,6 +360,9 @@ export const messages = {
     copying: '正在复制…',
     sameLocation: '它已经在这里了',
     // 结果与说明
+    // 改名与新建文件夹平时不另外说明（列表随即刷新，看得见）；成功之后的刷新到了时限还没回来时才说，接着说列表还在刷新（Codex 对抗评审 CX4）
+    renamed: (from: string, to: string) => `已把「${from}」改名为「${to}」`,
+    folderCreated: (name: string) => `已新建文件夹「${name}」`,
     moved: (name: string, location: string) => `已把「${name}」移动到${location}`,
     copied: (title: string) => `已复制出「${title}」`,
     openCopy: '打开副本',
@@ -376,6 +401,18 @@ export const messages = {
     description: '页面遇到了意外的问题。可以重新加载试试；问题一直出现时，请告诉管理员。',
     descriptionWithRequestId: '页面遇到了意外的问题。可以重新加载试试；问题一直出现时，把下面的请求标识告诉管理员。',
     reload: '重新加载',
+  },
+  /**
+   * 组件级的按需加载（M2-P5 S3：平台页面文档的行操作里的分享对话框；编辑器页的页头静态引用它，用不到这里）：
+   * 点了入口才下载它的代码。没能下载下来时入口自己说明（shared/ui/chunk-load-notice.tsx），原因的判断与路由级共用；
+   * 不自动整页重新加载（页面上可能有用户正在做的事），"重试"整页重新加载（浏览器记住了失败的模块，在这一页里再下载也还是失败）
+   */
+  lazyFeature: {
+    loading: (feature: string) => `正在打开${feature}…`,
+    offline: (feature: string) => `没能加载${feature}：连不上服务器，请检查网络后重试。`,
+    missing: (feature: string) => `没能加载${feature}：它的代码没能下载下来（服务器连得上，版本也没有变）。可以重试；一直这样的话，请告诉管理员。`,
+    updated: (feature: string) => `没能加载${feature}：服务器上已经部署了新版本，这个页面还是旧的。重试（重新加载页面）之后就能用了。`,
+    retry: '重试',
   },
   /**
    * 按需加载的页面的代码没能下载下来（M2-P6 复核 S6）。部署了新版本时整页重新加载，通常不出现这里的说明；

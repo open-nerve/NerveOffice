@@ -211,7 +211,8 @@ describe('US-M2-04 转移停用者的文档', () => {
   it('原来在文件夹里的文档：转到目标空间的根目录（文件夹属于原来的空间，M2-P4）', async () => {
     const gone = await leaver([])
     const folder = await database.query(async client => (await client.query<{ id: string }>(
-      'INSERT INTO folders (space_id, name, created_by, depth, request_id) VALUES ($1, \'交接\', $2, 1, $3) RETURNING id',
+      // 直接写库的文件夹没有新建请求：请求摘要给空串的摘要，与任何请求都对不上（M2 Codex 评审 CX6）
+      'INSERT INTO folders (space_id, name, created_by, depth, request_id, payload_digest) VALUES ($1, \'交接\', $2, 1, $3, sha256(\'\'::bytea)) RETURNING id',
       [gone.spaceId, gone.id, randomUUID()],
     )).rows[0]?.id)
     const documentId = await createDocument(database, { spaceId: gone.spaceId, createdBy: gone.id, title: '文件夹里的', folderId: folder })

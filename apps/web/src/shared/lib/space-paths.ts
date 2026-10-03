@@ -20,6 +20,11 @@ export const SPACE_TRASH_ROUTE = 'spaces/:spaceId/trash'
  */
 export const SPACE_FOLDER_ROUTE = 'spaces/:spaceId/folders/*'
 
+/**
+ * "与我共享"（M2-P5，按需加载）：别人单独分享给我的文档。左侧导航与编辑器页的返回链接（只凭授权打开的文档回到这里）都用它
+ */
+export const SHARED_PATH = '/shared'
+
 /** 搜索结果页（按需加载）：关键词在查询参数里，地址可以分享、可以刷新 */
 export const SEARCH_PATH = '/search'
 export const SEARCH_QUERY_PARAM = 'q'

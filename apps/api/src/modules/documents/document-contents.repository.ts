@@ -54,8 +54,8 @@ export class DocumentContentsRepository {
    * 当前内容与修订号：一条语句同时读两张表。保存在同一个事务里更新两者，一条语句看到的要么都是旧的、要么都是新的，
    * 修订号（ETag）与内容一定对应；分两次读会在中间插进一次保存，客户端拿着新内容与旧修订号，下次保存就误报冲突。
    */
-  async findCurrent(documentId: string): Promise<CurrentContent | undefined> {
-    const [row] = await this.db
+  async findCurrent(documentId: string, transaction?: Transaction): Promise<CurrentContent | undefined> {
+    const [row] = await executorOf(this.db, transaction)
       .select({ revision: documents.revision, snapshot: c.snapshot })
       .from(c)
       .innerJoin(documents, eq(documents.id, c.documentId))

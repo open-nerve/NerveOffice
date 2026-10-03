@@ -115,6 +115,30 @@ describe('DocumentOrganizingService.update', () => {
     const error = await errorOf(service.update(member(ALICE), document.id, { title: '月报' }, HTTP_ORIGIN))
     expect([error.code, error.message]).toEqual(['PERMISSION_DENIED', '空间已归档，只能查看'])
   })
+
+  it('只凭授权的编辑者（M2-P5）：改名可以，响应不带所在的文件夹；PATCH {folderId} 一律 403、不取锁、不查目标文件夹', async () => {
+    const { store, service } = setup()
+    const folder = store.addFolder({ spaceId: TEAM_SPACE, name: '资料' })
+    const document = store.addDocument({ spaceId: TEAM_SPACE, folderId: folder.id, createdBy: BOB })
+    store.setGrant(document.id, BOB, 'editor')
+    const renamed = await service.update(member(BOB), document.id, { title: '月报' }, HTTP_ORIGIN)
+    expect(renamed).toMatchObject({ title: '月报', folderId: null, accessVia: 'grant', permissions: { canRename: true, canMoveWithinSpace: false } })
+    expect(store.audits.map(event => event.action)).toEqual(['documents.renamed'])
+
+    store.tree.lock.mockClear()
+    store.repositories.folders.findById.mockClear()
+    for (const folderId of [null, folder.id]) {
+      const moved = await errorOf(service.update(member(BOB), document.id, { folderId }, HTTP_ORIGIN))
+      expect([moved.code, moved.message]).toEqual(['PERMISSION_DENIED', '这份文档是单独分享给你的，不能移动'])
+    }
+    // 改名与移动一起给：整个请求 403，标题也不改
+    const both = await errorOf(service.update(member(BOB), document.id, { title: '季报', folderId: null }, HTTP_ORIGIN))
+    expect(both.code).toBe('PERMISSION_DENIED')
+    expect(store.tree.lock).not.toHaveBeenCalled()
+    // 不查目标文件夹：他不能用 200 与 404 分辨一个 id 是不是这个空间的文件夹（M2-P6 复核 S2 的 M1）
+    expect(store.repositories.folders.findById).not.toHaveBeenCalled()
+    expect(store.documents.get(document.id)).toMatchObject({ title: '月报', folderId: folder.id })
+  })
 })
 
 describe('DocumentOrganizingService.move', () => {
@@ -125,8 +149,9 @@ describe('DocumentOrganizingService.move', () => {
     const folder = store.addFolder({ spaceId: TEAM_SPACE, name: '资料' })
     const moved = await service.move(member(ALICE), document.id, { spaceId: TEAM_SPACE, folderId: folder.id }, HTTP_ORIGIN)
     expect(moved).toMatchObject({ spaceId: TEAM_SPACE, folderId: folder.id, space: { id: TEAM_SPACE, name: '市场部' } })
-    // 到了新空间只是编辑者：不能再把它移走
-    expect(moved.permissions).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true })
+    // 到了新空间只是编辑者：不能再把它移走、不能分享；途径是空间（照常带文件夹）
+    expect(moved.permissions).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false })
+    expect(moved.accessVia).toBe('space')
     expect(store.writeEpochs.get(document.id)).toBe(1)
     expect(store.revocations).toEqual([{ kind: 'documents', documentIds: [document.id] }])
     expect(store.audits).toEqual([{
@@ -136,6 +161,21 @@ describe('DocumentOrganizingService.move', () => {
       origin: HTTP_ORIGIN,
       details: { fromSpaceId: ALICE_SPACE, fromFolderId: null, toSpaceId: TEAM_SPACE, toFolderId: folder.id },
     }])
+  })
+
+  it('只凭授权的人（M2-P5）：移到别的空间、移到它所在的空间都 403，不取锁、不查目标', async () => {
+    const { store, service } = setup()
+    store.setMember(TEAM_SPACE, BOB, 'admin')
+    const folder = store.addFolder({ spaceId: ALICE_SPACE, name: '资料' })
+    const document = store.addDocument({ spaceId: ALICE_SPACE, folderId: folder.id })
+    store.setGrant(document.id, BOB, 'editor')
+    for (const command of [{ spaceId: TEAM_SPACE }, { spaceId: ALICE_SPACE }, { spaceId: ALICE_SPACE, folderId: folder.id }]) {
+      const error = await errorOf(service.move(member(BOB), document.id, command, HTTP_ORIGIN))
+      expect([error.code, error.message], JSON.stringify(command)).toEqual(['PERMISSION_DENIED', '这份文档是单独分享给你的，不能移动'])
+    }
+    expect(store.treeLocks).toEqual([])
+    expect(store.documents.get(document.id)).toMatchObject({ spaceId: ALICE_SPACE, folderId: folder.id })
+    expect(store.revocations).toEqual([])
   })
 
   it('两个空间的树锁一次取（顺序由 SpaceTreeRepository 定），空间行按 id 排序取', async () => {

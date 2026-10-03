@@ -66,6 +66,30 @@ describe('refreshQueries', () => {
     expect(queryClient.getQueryData(['spaces', 'filtered'])).toBe('写操作之后')
   })
 
+  // 守住一个依赖的前提：TanStack Query 在手动改缓存（setQueryData）时把回退点更新为改过的样子，所以这里取消在路上的请求（默认 revert）
+  // 不会把"按确定的写入结果先改缓存"（Codex 对抗评审 CX4：取消分享之后先去掉那一行等）退回去。升级 TanStack Query 之后它变了，这里失败
+  it('已经有数据、正在重新请求的查询：先按确定的写入结果改了缓存，再刷新——不退回到改之前，等新的结果回来', async () => {
+    const queryClient = client()
+    const grants = controlled()
+    shown(queryClient, ['grants'], grants.queryFn)
+    await vi.waitFor(() => expect(grants.calls()).toBe(1))
+    grants.resolve(0, '写操作之前')
+    await vi.waitFor(() => expect(queryClient.getQueryData(['grants'])).toBe('写操作之前'))
+    // 别的原因（例如窗口重新获得焦点）发出的重新请求还在路上
+    void queryClient.refetchQueries({ queryKey: ['grants'] })
+    await vi.waitFor(() => expect(grants.calls()).toBe(2))
+    // 写操作确定成功：按结果先改缓存（例如去掉取消的那一条），再刷新
+    queryClient.setQueryData(['grants'], '按写入结果改过')
+    const refreshing = refreshQueries(queryClient, [['grants']], { throwOnError: false })
+    await vi.waitFor(() => expect(grants.calls()).toBe(3))
+    // 在路上的那一次（写操作之前发出的）作废、重新请求，缓存不退回到它发出之前的样子
+    expect(queryClient.getQueryData(['grants'])).toBe('按写入结果改过')
+    grants.resolve(1, '写操作之前发出的')
+    grants.resolve(2, '写操作之后')
+    await refreshing
+    expect(queryClient.getQueryData(['grants'])).toBe('写操作之后')
+  })
+
   it('全部作废、只重新请求正在显示的：没在显示的等下次显示时再请求（invalidateQueries 的语义）', async () => {
     const queryClient = client()
     let hidden = 0

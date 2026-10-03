@@ -2,6 +2,10 @@
 // 对"看不到"的对象与"不存在"的对象发同样的请求，比较状态码、错误体（去掉请求标识）、非易变的响应头，
 // 以及应用在这个请求里对数据库发出的语句序列（语句文本，按顺序）。语句序列相同，执行路径就相同，耗时没有可以分辨的差别。
 // 权限矩阵的 404 格只比较响应；这里另外守着"不存在时也照样查一次"（文件夹、删除单元不存在时用全零的空间判断一次权限）。
+// M2-P5 加了分享的三个带 id 的接口（先判断文档：看不到的文档加不存在的被授权人同样 404），以及"只凭授权的人"对所在空间的
+// 空间级接口（授权不给空间里的任何东西开口子：与不存在的空间执行同样的语句，documents/grants.test.ts 另核对了响应）。
+// S4 起两个只凭授权的人（只有查看授权的、只有编辑授权的）都是发请求的人：他们知道分享给自己的文档在哪个空间，
+// 拿同一个空间里没分享给他们的文档、文件夹、删除单元去试，取消了分享的文档、进了回收站的有授权的文档，都与不存在的一模一样。
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { ComparableResponse } from '../support/comparable-response.ts'
@@ -19,29 +23,44 @@ import { startTestApp } from '../support/api-app.ts'
 import { comparableOf } from '../support/comparable-response.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
+import { grantsOn, removeGrant, setGrants } from '../support/grants.ts'
 import { matchesRoute, pathParameters, routesOf } from '../support/routes.ts'
 import { asUser, login } from '../support/session-client.ts'
 import { createTeamSpace } from '../support/spaces.ts'
 import { captureStatements } from '../support/statement-capture.ts'
 
-/** 发请求的人：外人（与团队空间、别人的个人空间都没有关系）、团队空间的空间管理员、没有加入的系统管理员 */
-type ActorName = 'outsider' | 'admin' | 'systemAdmin'
+/**
+ * 发请求的人：外人（与团队空间、别人的个人空间都没有关系）、团队空间的空间管理员、没有加入的系统管理员，
+ * 以及两个只凭授权的人（M2-P5）：都不是团队空间的成员，teamDocument 上一个有查看授权、一个有编辑授权；
+ * 只有查看授权的人另在 owner 个人空间里的 personalDocument 上有查看授权
+ */
+type ActorName = 'outsider' | 'admin' | 'systemAdmin' | 'grantViewer' | 'grantEditor'
 
 interface World {
   readonly owner: TestAccount
   readonly admin: TestAccount
   readonly outsider: TestAccount
   readonly systemAdmin: TestAccount
+  /** 只有查看授权的人：teamDocument 与 personalDocument 上的查看授权 */
+  readonly grantViewer: TestAccount
+  /** 只有编辑授权的人：teamDocument 上的编辑授权 */
+  readonly grantEditor: TestAccount
   readonly sessions: Readonly<Record<ActorName, LoggedIn>>
   /** 团队空间：空间管理员是 admin，外人与系统管理员都看不到 */
   readonly team: string
   readonly teamDocument: { readonly id: string, readonly unitId: string }
+  /** 团队空间里另一份文档：没有分享给任何人——两个只凭授权的人拿它试探 */
+  readonly teamOtherDocument: { readonly id: string, readonly unitId: string }
+  /** 团队空间里分享给只有查看授权的人、又取消了的文档 */
+  readonly revokedDocument: string
   readonly teamFolder: string
   readonly teamTrashEntry: string
-  /** 团队空间回收站里的那份文档：对空间管理员自己也"不存在" */
+  /** 团队空间回收站里的那份文档：对空间管理员自己也"不存在"；两个只凭授权的人在它上面有授权，同样"不存在" */
   readonly teamTrashedDocument: string
-  /** owner 的个人空间里的文档、文件夹与删除单元：别人一概看不到 */
+  /** owner 的个人空间里的文档、文件夹与删除单元：别人一概看不到（personalDocument 分享给了只有查看授权的人） */
   readonly personalDocument: { readonly id: string, readonly unitId: string }
+  /** owner 的个人空间里另一份文档：没有分享给任何人 */
+  readonly personalOtherDocument: string
   readonly personalFolder: string
   readonly personalTrashEntry: string
   /** 外人自己的个人空间里的文档与文件夹：他拿它们往看不到的地方放 */
@@ -81,28 +100,52 @@ beforeAll(async () => {
   const admin = await createAccount(database, { username: 'parity-admin' })
   const outsider = await createAccount(database, { username: 'parity-outsider' })
   const systemAdmin = await createAccount(database, { username: 'parity-system-admin', systemRole: 'admin' })
+  const grantViewer = await createAccount(database, { username: 'parity-grant-viewer' })
+  const grantEditor = await createAccount(database, { username: 'parity-grant-editor' })
   const sessions = {
     owner: await login(app.baseUrl, owner.username, owner.password),
     admin: await login(app.baseUrl, admin.username, admin.password),
     outsider: await login(app.baseUrl, outsider.username, outsider.password),
     systemAdmin: await login(app.baseUrl, systemAdmin.username, systemAdmin.password),
+    grantViewer: await login(app.baseUrl, grantViewer.username, grantViewer.password),
+    grantEditor: await login(app.baseUrl, grantEditor.username, grantEditor.password),
   }
   const team = await createTeamSpace(database, { name: '一致：团队', createdBy: systemAdmin.id, members: { [admin.id]: 'admin' } })
+  const teamDocument = await seedDocument(database, { spaceId: team, createdBy: admin.id, title: '团队里的文档' })
+  const teamOtherDocument = await seedDocument(database, { spaceId: team, createdBy: admin.id, title: '团队里没分享的文档' })
+  const revokedDocument = (await seedDocument(database, { spaceId: team, createdBy: admin.id, title: '取消了分享的文档' })).id
   const teamTrashedDocument = (await seedDocument(database, { spaceId: team, createdBy: admin.id, title: '团队里删掉的' })).id
+  const personalDocument = await seedDocument(database, { spaceId: owner.personalSpaceId, createdBy: owner.id, title: '个人空间里的文档' })
+  const personalOtherDocument = (await seedDocument(database, { spaceId: owner.personalSpaceId, createdBy: owner.id, title: '个人空间里没分享的' })).id
   const personalTrashed = (await seedDocument(database, { spaceId: owner.personalSpaceId, createdBy: owner.id, title: '个人空间里删掉的' })).id
+  await setGrants(database, [
+    { documentId: teamDocument.id, userId: grantViewer.id, role: 'viewer', grantedBy: admin.id },
+    { documentId: teamDocument.id, userId: grantEditor.id, role: 'editor', grantedBy: admin.id },
+    { documentId: revokedDocument, userId: grantViewer.id, role: 'viewer', grantedBy: admin.id },
+    // 进回收站之前分享给了两个人：授权跟着文档走，文档在回收站里时对普通接口不存在
+    { documentId: teamTrashedDocument, userId: grantViewer.id, role: 'viewer', grantedBy: admin.id },
+    { documentId: teamTrashedDocument, userId: grantEditor.id, role: 'editor', grantedBy: admin.id },
+    { documentId: personalDocument.id, userId: grantViewer.id, role: 'viewer', grantedBy: owner.id },
+  ])
+  await removeGrant(database, revokedDocument, grantViewer.id)
   const leaver = await createPassiveAccount(database, { username: 'parity-leaver', status: 'disabled' })
   w = {
     owner,
     admin,
     outsider,
     systemAdmin,
-    sessions: { outsider: sessions.outsider, admin: sessions.admin, systemAdmin: sessions.systemAdmin },
+    grantViewer,
+    grantEditor,
+    sessions: { outsider: sessions.outsider, admin: sessions.admin, systemAdmin: sessions.systemAdmin, grantViewer: sessions.grantViewer, grantEditor: sessions.grantEditor },
     team,
-    teamDocument: await seedDocument(database, { spaceId: team, createdBy: admin.id, title: '团队里的文档' }),
+    teamDocument,
+    teamOtherDocument,
+    revokedDocument,
     teamFolder: await createFolder(sessions.admin, team, '团队里的文件夹'),
     teamTrashEntry: await trashed(sessions.admin, teamTrashedDocument),
     teamTrashedDocument,
-    personalDocument: await seedDocument(database, { spaceId: owner.personalSpaceId, createdBy: owner.id, title: '个人空间里的文档' }),
+    personalDocument,
+    personalOtherDocument,
     personalFolder: await createFolder(sessions.owner, owner.personalSpaceId, '个人空间里的文件夹'),
     personalTrashEntry: await trashed(sessions.owner, personalTrashed),
     outsiderDocument: (await seedDocument(database, { spaceId: outsider.personalSpaceId, createdBy: outsider.id, title: '外人自己的' })).id,
@@ -236,10 +279,69 @@ const PROBES: readonly Probe[] = [
   { name: '系统管理员 PUT 个人空间改名', actor: 'systemAdmin', request: async (s, h) => call(s, `/api/spaces/${pick(h, w.owner.personalSpaceId)}/name`, 'PUT', { name: '改名' }) },
   { name: '系统管理员 PUT 个人空间全员可见', actor: 'systemAdmin', request: async (s, h) => call(s, `/api/admin/spaces/${pick(h, w.owner.personalSpaceId)}/visibility`, 'PUT', { visibleToAll: true }) },
   { name: '系统管理员 POST 归档个人空间', actor: 'systemAdmin', request: async (s, h) => call(s, `/api/admin/spaces/${pick(h, w.owner.personalSpaceId)}/archive`, 'POST') },
+  // ---- 分享（M2-P5 设计 §3.2、§3.6）：先判断文档，看不到的文档不论被授权人是谁、存不存在都与不存在的文档相同 ----
+  { name: 'GET 授权列表', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/grants`) },
+  { name: 'GET 个人空间文档的授权列表', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.personalDocument.id)}/grants`) },
+  { name: 'PUT 设置授权（被授权人不存在）', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/grants/${missing()}`, 'PUT', { role: 'viewer' }) },
+  { name: 'PUT 设置授权（被授权人是有效账户）', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/grants/${w.admin.id}`, 'PUT', { role: 'editor' }) },
+  { name: 'PUT 设置授权（给自己）', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.personalDocument.id)}/grants/${w.outsider.id}`, 'PUT', { role: 'editor' }) },
+  { name: 'DELETE 取消授权', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/grants/${w.grantEditor.id}`, 'DELETE') },
+  { name: 'DELETE 取消授权（被授权人不存在）', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.personalDocument.id)}/grants/${missing()}`, 'DELETE') },
+  { name: 'GET 回收站里的文档的授权列表（空间管理员自己）', actor: 'admin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/grants`) },
+  { name: 'PUT 给回收站里的文档设置授权（空间管理员自己）', actor: 'admin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/grants/${w.outsider.id}`, 'PUT', { role: 'viewer' }) },
+  { name: 'DELETE 取消回收站里的文档的授权（空间管理员自己）', actor: 'admin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/grants/${w.outsider.id}`, 'DELETE') },
+  { name: '系统管理员 PUT 团队空间文档的授权', actor: 'systemAdmin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/grants/${w.outsider.id}`, 'PUT', { role: 'viewer' }) },
+  // ---- 只凭授权的人对所在空间的空间级接口（M2-P5 设计 §3.4(1)、§3.6）：授权不给空间里的任何东西开口子 ----
+  { name: '只凭授权 GET 空间页头', actor: 'grantEditor', request: async (s, h) => call(s, `/api/spaces/${pick(h, w.team)}`) },
+  { name: '只凭授权 GET 按空间列出文档', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents?spaceId=${pick(h, w.team)}`) },
+  { name: '只凭授权 GET 列出文件夹', actor: 'grantEditor', request: async (s, h) => call(s, `/api/folders?spaceId=${pick(h, w.team)}`) },
+  { name: '只凭授权 GET 回收站', actor: 'grantEditor', request: async (s, h) => call(s, `/api/trash?spaceId=${pick(h, w.team)}`) },
+  { name: '只凭授权 GET 成员', actor: 'grantEditor', request: async (s, h) => call(s, `/api/spaces/${pick(h, w.team)}/members`) },
+  { name: '只凭授权 GET 按文件夹列出文档', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents?spaceId=${w.grantEditor.personalSpaceId}&folderId=${pick(h, w.teamFolder)}`) },
+  { name: '只凭授权 POST 新建文档到所在的空间', actor: 'grantEditor', request: async (s, h) => call(s, '/api/documents', 'POST', { type: 'sheet', requestId: randomUUID(), spaceId: pick(h, w.team) }) },
+  { name: '只凭授权 POST 新建文件夹到所在的空间', actor: 'grantEditor', request: async (s, h) => call(s, '/api/folders', 'POST', { spaceId: pick(h, w.team), name: '新的', requestId: randomUUID() }) },
+  { name: '只凭授权 PATCH 所在空间的文件夹', actor: 'grantEditor', request: async (s, h) => call(s, `/api/folders/${pick(h, w.teamFolder)}`, 'PATCH', { name: '改名' }) },
+  { name: '只凭授权 POST 恢复所在空间的删除单元', actor: 'grantEditor', request: async (s, h) => call(s, `/api/trash/${pick(h, w.teamTrashEntry)}/restore`, 'POST') },
+  { name: '只凭授权 POST 新建文档，文件夹在所在的空间', actor: 'grantEditor', request: async (s, h) => call(s, '/api/documents', 'POST', { type: 'sheet', requestId: randomUUID(), spaceId: w.grantEditor.personalSpaceId, folderId: pick(h, w.teamFolder) }) },
+  { name: '只有查看授权 GET 空间页头（个人空间里的授权）', actor: 'grantViewer', request: async (s, h) => call(s, `/api/spaces/${pick(h, w.owner.personalSpaceId)}`) },
+  { name: '只有查看授权 GET 按空间列出（个人空间里的授权）', actor: 'grantViewer', request: async (s, h) => call(s, `/api/documents?spaceId=${pick(h, w.owner.personalSpaceId)}`) },
+  { name: '只有查看授权 GET 回收站（个人空间里的授权）', actor: 'grantViewer', request: async (s, h) => call(s, `/api/trash?spaceId=${pick(h, w.owner.personalSpaceId)}`) },
+  { name: '只有查看授权 DELETE 个人空间的文件夹', actor: 'grantViewer', request: async (s, h) => call(s, `/api/folders/${pick(h, w.personalFolder)}`, 'DELETE') },
+  // ---- 只凭授权的人对同一个空间里没分享给他的文档（S4）：知道空间、猜得到 id，也与不存在的一模一样 ----
+  { name: '只有查看授权 GET 没分享的文档', actor: 'grantViewer', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}`) },
+  { name: '只有查看授权 GET 没分享的文档的内容', actor: 'grantViewer', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/content`) },
+  { name: '只有查看授权 GET 没分享的文档的授权列表', actor: 'grantViewer', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/grants`) },
+  { name: '只有查看授权 GET 个人空间里没分享的文档', actor: 'grantViewer', request: async (s, h) => call(s, `/api/documents/${pick(h, w.personalOtherDocument)}`) },
+  { name: '只有编辑授权 PUT 保存没分享的文档', actor: 'grantEditor', request: async (s, h) => save(s, pick(h, w.teamOtherDocument.id), h ? w.teamOtherDocument.unitId : randomUUID()) },
+  { name: '只有编辑授权 PATCH 改名没分享的文档', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}`, 'PATCH', { title: '新标题' }) },
+  { name: '只有编辑授权 PATCH 移动没分享的文档', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}`, 'PATCH', { folderId: null }) },
+  { name: '只有编辑授权 POST 移动没分享的文档', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/move`, 'POST', { spaceId: w.grantEditor.personalSpaceId }) },
+  { name: '只有编辑授权 POST 复制没分享的文档', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/copy`, 'POST', { spaceId: w.grantEditor.personalSpaceId, requestId: randomUUID() }) },
+  { name: '只有编辑授权 DELETE 没分享的文档', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}`, 'DELETE') },
+  { name: '只有编辑授权 PUT 给没分享的文档设置授权', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/grants/${w.grantViewer.id}`, 'PUT', { role: 'viewer' }) },
+  { name: '只有编辑授权 DELETE 取消没分享的文档上的授权', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/grants/${w.grantViewer.id}`, 'DELETE') },
+  // ---- 授权没了或者文档进了回收站（S4）：取消了的分享与不存在一样；有授权的文档进了回收站，对被授权的人也不存在 ----
+  { name: '只有查看授权 GET 取消了分享的文档', actor: 'grantViewer', request: async (s, h) => call(s, `/api/documents/${pick(h, w.revokedDocument)}`) },
+  { name: '只有查看授权 GET 取消了分享的文档的内容', actor: 'grantViewer', request: async (s, h) => call(s, `/api/documents/${pick(h, w.revokedDocument)}/content`) },
+  { name: '只有编辑授权 GET 回收站里有授权的文档', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}`) },
+  { name: '只有编辑授权 PATCH 改名回收站里有授权的文档', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}`, 'PATCH', { title: '新标题' }) },
+  { name: '只有查看授权 POST 复制回收站里有授权的文档', actor: 'grantViewer', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/copy`, 'POST', { spaceId: w.grantViewer.personalSpaceId, requestId: randomUUID() }) },
   // 路由表的覆盖核对发现的（M2-P6 第 6 片复核 S5）：恢复与归档成对，原来漏了
   { name: '系统管理员 POST 恢复个人空间', actor: 'systemAdmin', request: async (s, h) => call(s, `/api/admin/spaces/${pick(h, w.owner.personalSpaceId)}/restore`, 'POST') },
   { name: '系统管理员 转移到写成团队空间的个人空间', actor: 'systemAdmin', request: async (s, h) => call(s, `/api/admin/users/${w.leaver.id}/documents/transfer`, 'POST', { documentIds: [w.leaver.document], target: { type: 'team', spaceId: pick(h, w.owner.personalSpaceId) } }) },
 ]
+
+describe('前提：两个只凭授权的人的授权确实生效（不然他们的探测与外人的没有区别）', () => {
+  it('分享给他们的文档打得开，途径是 grant；只有查看授权的人也打得开个人空间里分享给他的那一份；取消了的那一份库里确实没有授权', async () => {
+    for (const [actor, documentId] of [['grantViewer', w.teamDocument.id], ['grantEditor', w.teamDocument.id], ['grantViewer', w.personalDocument.id]] as const) {
+      const response = await asUser(app.baseUrl, w.sessions[actor], `/api/documents/${documentId}`)
+      expect(response.status, `${actor} ${documentId}`).toBe(200)
+      expect((await response.json() as { accessVia: string }).accessVia).toBe('grant')
+    }
+    expect(await grantsOn(database, [w.revokedDocument])).toEqual([])
+    expect((await grantsOn(database, [w.teamTrashedDocument])).map(grant => grant.userId).toSorted()).toEqual([w.grantViewer.id, w.grantEditor.id].toSorted())
+  })
+})
 
 describe('看不到与不存在完全一致：响应、响应头与语句序列（ADR-014，M2-P6 复核 S2）', () => {
   it.each(PROBES)('$name（$actor）', async (probe) => {

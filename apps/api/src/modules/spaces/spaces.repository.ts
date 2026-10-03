@@ -2,14 +2,14 @@ import type { SpaceRole, SpaceStatus } from '@nerve-office/contracts'
 import type { SQL } from 'drizzle-orm'
 import type { TimeCursor } from '../../shared/time-cursor.ts'
 import type { Database, Transaction } from '../database/index.ts'
-import type { SpaceFacts, SpaceMemberRecord, SpaceRecord, SpaceSummary, TeamSpaceOverview } from './space.ts'
+import type { SpaceFacts, SpaceFactsWithOwner, SpaceMemberRecord, SpaceRecord, SpaceSummary, TeamSpaceOverview } from './space.ts'
 import { collapseNameBlanks } from '@nerve-office/contracts'
 import { Inject, Injectable } from '@nestjs/common'
 import { and, asc, count, desc, eq, ilike, inArray, isNotNull, or, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { spaceMembers, spaceNameForSearch, spaces } from '../../db/schema/spaces/index.ts'
 import { containsPattern } from '../../shared/like-pattern.ts'
-import { DATABASE, executorOf, inSavepoint, isUniqueViolation, keysetPosition } from '../database/index.ts'
+import { DATABASE, executorOf, inIdArray, inSavepoint, isUniqueViolation, keysetPosition } from '../database/index.ts'
 
 /** 团队空间名称的唯一索引：撞上它就是名称已被使用 */
 const TEAM_NAME_KEY = 'spaces_team_name_key'
@@ -108,11 +108,25 @@ export class SpacesRepository {
   }
 
   /**
+   * 一个人看一批空间的事实，连同所有者（M2-P5）：一条语句，这串 id 作为一个数组参数（inIdArray，数量没有上界时也不会超出
+   * 绑定参数的上限，规范 §5）；不存在的空间没有结果行。与 factsFor 同样左连接这个人的成员行，事实的算法只有 factColumns 一处
+   */
+  async factsForMany(userId: string, spaceIds: readonly string[], transaction?: Transaction): Promise<SpaceFactsWithOwner[]> {
+    if (spaceIds.length === 0)
+      return []
+    return executorOf(this.db, transaction)
+      .select({ ...factColumns(userId), ownerUserId: spaces.ownerUserId })
+      .from(spaces)
+      .leftJoin(spaceMembers, and(eq(spaceMembers.spaceId, spaces.id), eq(spaceMembers.userId, userId)))
+      .where(inIdArray(spaces.id, spaceIds))
+  }
+
+  /**
    * 一个人可能看得到的空间：他的个人空间、他是成员的团队空间、全员可见的团队空间。
    * 只是候选：看不看得到、是什么角色，由访问策略按事实计算。个人空间在前，团队空间按名称（不区分大小写）排序。
    */
-  async visibleCandidatesFor(userId: string): Promise<SpaceFacts[]> {
-    return this.db
+  async visibleCandidatesFor(userId: string, transaction?: Transaction): Promise<SpaceFacts[]> {
+    return executorOf(this.db, transaction)
       .select(factColumns(userId))
       .from(spaces)
       .leftJoin(spaceMembers, and(eq(spaceMembers.spaceId, spaces.id), eq(spaceMembers.userId, userId)))
@@ -189,14 +203,14 @@ export class SpacesRepository {
   }
 
   /** 按 id 批量取空间的名称（含个人空间）：审计查询补名字用 */
-  async findNames(ids: readonly string[]): Promise<SpaceSummary[]> {
+  async findNames(ids: readonly string[], transaction?: Transaction): Promise<SpaceSummary[]> {
     if (ids.length === 0)
       return []
-    return this.db.select({ id: spaces.id, name: spaces.name }).from(spaces).where(inArray(spaces.id, [...ids]))
+    return executorOf(this.db, transaction).select({ id: spaces.id, name: spaces.name }).from(spaces).where(inArray(spaces.id, [...ids]))
   }
 
-  async listMembers(spaceId: string): Promise<SpaceMemberRecord[]> {
-    return this.db.select(MEMBER_COLUMNS).from(spaceMembers).where(eq(spaceMembers.spaceId, spaceId))
+  async listMembers(spaceId: string, transaction?: Transaction): Promise<SpaceMemberRecord[]> {
+    return executorOf(this.db, transaction).select(MEMBER_COLUMNS).from(spaceMembers).where(eq(spaceMembers.spaceId, spaceId))
   }
 
   async findMember(spaceId: string, userId: string, transaction: Transaction): Promise<SpaceMemberRecord | undefined> {

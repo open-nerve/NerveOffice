@@ -1,4 +1,4 @@
-import type { AdminSpace, AdminUser, TransferTarget, UserSummary } from '@nerve-office/contracts'
+import type { AdminSpace, AdminUser, AdminUserDocument, TransferTarget, UserSummary } from '@nerve-office/contracts'
 import type { ReactNode } from 'react'
 import type { Phrase as PhraseParts } from '../../shared/i18n/index.ts'
 import type { KeywordPickerTexts } from '../colleagues/index.ts'
@@ -8,15 +8,17 @@ import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-quer
 import { useId, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { ApiError, describeError, isMissingResource, isUnknownOutcome } from '../../shared/api/index.ts'
-import { refreshWithin } from '../../shared/api/write-outcome.ts'
+import { refreshAfterSuccess, refreshWithin } from '../../shared/api/write-outcome.ts'
 import { messages, phraseText } from '../../shared/i18n/index.ts'
 import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { ADMIN_PATHS } from '../../shared/lib/admin-paths.ts'
-import { cn } from '../../shared/lib/cn.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
+import { updatePagedItems } from '../../shared/lib/paged-cache.ts'
 import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { Alert, AlertDescription, Button, buttonVariants, Label, PersonName, Phrase, Skeleton, TableCell } from '../../shared/ui/index.ts'
+import { StatusRegion } from '../../shared/ui/status-region.tsx'
+import { StillRefreshing } from '../../shared/ui/still-refreshing.tsx'
 import { sessionQueryOptions, SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
 import { ColleaguePicker, KeywordPicker } from '../colleagues/index.ts'
 import { ConfirmDialog } from '../confirmation/index.ts'
@@ -127,13 +129,16 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
   /**
    * 确认之后整批转移。结果未知时（M2-P6 复核第二批 G-3）可能已经转移了：确认的弹窗按 refresh 刷新列表、清掉已经不在的选择，
    * 说明"可能已经转移"——列表没能刷新（失败，或者到了时限还没回来）时说明列表还是之前的（第三批 G-a）；
-   * 之后得到 TRANSFER_CONFLICT 时说明多半就是那一次已经完成
+   * 之后得到 TRANSFER_CONFLICT 时说明多半就是那一次已经完成。
+   * 结果的说明与"有文档已经不在了"的说明都交给确认的弹窗，等它关掉、页面不再被标为 aria-hidden、焦点交还之后才写（M2-P5 复验 S1）；
+   * 打开确认的弹窗时清掉上一次的：同样的说法（例如又转移了 1 份到同一个空间）照样是一次变化，读屏照样播报
    */
   function submit(): void {
     if (blocked !== undefined || target === undefined)
       return
     const documentIds = [...selected]
     setConflict(false)
+    setDone(undefined)
     setPending({
       title: phraseText(text.confirm(documentIds.length, target.text)),
       description: text.confirmDescription,
@@ -143,8 +148,17 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
           const result = await transferDocuments(account.id, { documentIds, target: target.request })
           setSelected(new Set())
           setUnsure(false)
-          setDone(<Phrase parts={text.done(result.transferred, target.shown)} />)
-          await refreshQueries(queryClient, [documentsQuery.queryKey], { throwOnError: false })
+          // 按确定的写入结果先从列表里去掉转走的文档（整批转移：成功就是这一批全转走了），再刷新，最多等到时限（Codex 对抗评审 CX4）：
+          // 一直不回来时弹窗照常关掉，说明接着说列表还在刷新；刷新失败时列表自己说明没能刷新（CX5）
+          const transferred = new Set(documentIds)
+          updatePagedItems<AdminUserDocument>(queryClient, documentsQuery.queryKey, document => (transferred.has(document.id) ? undefined : document))
+          const refreshing = await refreshAfterSuccess(async () => refreshQueries(queryClient, [documentsQuery.queryKey]))
+          return () => setDone(
+            <>
+              <Phrase parts={text.done(result.transferred, target.shown)} />
+              <StillRefreshing refresh={refreshing} />
+            </>,
+          )
         }
         catch (error) {
           // 结果未知：确认的弹窗随即按 refresh 刷新、说明可能已经转移
@@ -155,10 +169,8 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
           const refreshed = await refreshAfterFailure()
           // 有文档已经不在了：列表刷新之后关闭弹窗，在转移按钮旁说明，按新的列表重新选择。弹窗留着的话，再点确认只会拿着
           // 同样的文档原样重发（复验）。其他失败（目标已归档等）与刷新本身失败时，弹窗留着说明原因
-          if (refreshed && isTransferConflict(error)) {
-            setConflict(true)
-            return
-          }
+          if (refreshed && isTransferConflict(error))
+            return () => setConflict(true)
           throw error
         }
       },
@@ -176,8 +188,8 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
 
   return (
     <div className="flex flex-col gap-4">
-      {/* 结果的说明：容器一直在（空的时候没有内容），结果出来时往里填文字，读屏软件才会播报（审查 B10） */}
-      <p role="status" className={cn('text-sm', done !== undefined && 'rounded-lg border p-3')}>{done}</p>
+      {/* 结果的说明：共用的状态区，一直在无障碍树里（空的时候只做视觉隐藏、不占位置），结果出来时往里填文字，读屏软件才会播报（审查 B10） */}
+      <StatusRegion className="rounded-lg border p-3 text-sm">{done}</StatusRegion>
       {loaded.length > 0 && (
         <div className="flex items-center gap-2">
           <input

@@ -18,7 +18,7 @@ const text = adminMessages.spaces
 interface SpaceDialogProps {
   /** 要操作的团队空间；为空时弹窗关着 */
   readonly space: AdminSpace | undefined
-  /** 成功之后（刷新列表） */
+  /** 成功之后（刷新列表：最多等到时限，一直不回来时弹窗照常关掉，表格上方说列表还在刷新，Codex 对抗评审 CX4） */
   readonly onDone: () => Promise<void>
   /**
    * 结果未知（以及 refreshAfter 认出的情形）之后刷新列表：刷新失败时拒绝，弹窗据此说明页面没能刷新（M2-P6 复核第三批 G-a）；
@@ -43,7 +43,7 @@ interface SubmissionOptions extends Pick<SpaceDialogProps, 'onDone' | 'refresh' 
 /**
  * 弹窗里的提交（改名、加入空间）。与确认的弹窗一样（审查 B4）：
  * - 进行中拦下关闭（Esc、×、取消都不关），结果不会落到已经关掉的弹窗上，也不会让人以为没有提交；
- * - 成功之后先刷新（onDone），再关闭；失败时弹窗留着，说明原因；结果未知时也刷新（refresh）、说明可能已经生效（M2-P6 复核第二批 G-2，
+ * - 成功之后先刷新（onDone，最多等到时限：Codex 对抗评审 CX4），再关闭；失败时弹窗留着，说明原因；结果未知时也刷新（refresh）、说明可能已经生效（M2-P6 复核第二批 G-2，
  *   shared/api 的共用做法），按 refreshAfter 还有别的情形要刷新（列表显示服务端的实际状态）。这两种刷新最多等 10 秒（第三批 S-a）：
  *   一直不回来时先给出说明，弹窗不再卡在"正在处理…"；刷新失败或者超时，说明页面没能刷新（第三批 G-a）；
  *   超时之后刷新才回来的，说明随后改过来（第五批 G4）；

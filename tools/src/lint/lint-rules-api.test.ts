@@ -77,8 +77,8 @@ describe('US-M1-11 lint 规则的自测：只有仓储访问数据库', () => {
       expect(await rulesFor(code, allowed), allowed).not.toContain('no-restricted-imports')
   })
 
-  it('documents 的仓储里一串 id 用 inIdArray，不用 drizzle 的 inArray、notInArray（M2-P6 复核 A 的 S-2）；别的模块的仓储不受影响', async () => {
-    const ID_LISTS_MESSAGE = 'documents 的仓储里一串 id 用 inIdArray'
+  it('documents 与 users 的仓储里一串 id 用 inIdArray，不用 drizzle 的 inArray、notInArray（M2-P6 复核 A 的 S-2，M2-P5 审查 B 的 G6）；别的模块的仓储不受影响', async () => {
+    const ID_LISTS_MESSAGE = 'documents 与 users 的仓储里一串 id 用 inIdArray'
     const documentsRepository = 'apps/api/src/modules/documents/folders.repository.ts'
     const violations = [
       'import { inArray } from \'drizzle-orm\'\n\nexport const f = inArray\n',
@@ -89,7 +89,7 @@ describe('US-M1-11 lint 规则的自测：只有仓储访问数据库', () => {
       'export { inArray } from \'drizzle-orm\'\n',
     ]
     for (const code of violations) {
-      for (const file of [documentsRepository, 'apps/api/src/modules/documents/space-tree.repository.ts']) {
+      for (const file of [documentsRepository, 'apps/api/src/modules/documents/space-tree.repository.ts', 'apps/api/src/modules/users/users.repository.ts']) {
         const report = await lint(code, file)
         expect(report.rules, `${file}：${code}`).toContain('no-restricted-imports')
         expect(report.messages.join('\n'), `${file}：${code}`).toContain(ID_LISTS_MESSAGE)

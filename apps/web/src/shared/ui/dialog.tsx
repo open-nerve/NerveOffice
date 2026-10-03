@@ -15,13 +15,21 @@ export const DialogClose = DialogPrimitive.Close
 type DialogContentProps = ComponentProps<typeof DialogPrimitive.Content> & {
   /** 关闭之后，打开之前有焦点的元素已经不在了（例如随操作消失的按钮）或者不能聚焦时，焦点去哪里 */
   readonly fallbackFocus?: () => void
+  /**
+   * 关掉之后（M2-P5 复验 S1）：弹窗的内容已经卸下，Radix 已经解除弹窗之外的 aria-hidden（卸下时撤销），焦点已经交还——
+   * 交还给打开之前有焦点的元素（打开者），打开者不在了或者不能聚焦时交给 fallbackFocus；两者都没有时焦点落在 body（M2-P5 复验第二轮 G6）。
+   * 确认的弹窗据此在关掉之后才把成功的说明写进页面的状态区：弹窗开着时写进去的，那一刻在 aria-hidden 之下，读屏多半不播报
+   */
+  readonly onClosed?: () => void
 }
 
 /**
  * 弹窗的内容。关闭之后焦点回到打开之前有焦点的元素：Radix 的模态弹窗只把焦点还给 DialogTrigger，
  * 由程序打开的弹窗（确认、签发的链接）没有它，焦点就落到 body（M2-P1 审查 B9）。使用方的 onCloseAutoFocus 先执行，阻止默认时不再处理。
+ * 交还焦点是在 Radix 的 onCloseAutoFocus 里：内容卸下之后（FocusScope 卸下时延后一个任务派发），这时弹窗之外的 aria-hidden
+ * 已经撤销（DialogContent 卸下时 hideOthers 的撤销）。交还之后再告诉使用方弹窗关掉了（onClosed）
  */
-export function DialogContent({ className, children, onOpenAutoFocus, onCloseAutoFocus, fallbackFocus, ...props }: DialogContentProps) {
+export function DialogContent({ className, children, onOpenAutoFocus, onCloseAutoFocus, fallbackFocus, onClosed, ...props }: DialogContentProps) {
   const openerRef = useRef<HTMLElement | null>(null)
 
   function rememberOpener(event: Event): void {
@@ -32,17 +40,18 @@ export function DialogContent({ className, children, onOpenAutoFocus, onCloseAut
 
   function restoreFocus(event: Event): void {
     onCloseAutoFocus?.(event)
-    if (event.defaultPrevented)
-      return
-    const opener = openerRef.current
-    if (opener !== null && opener.isConnected && !opener.matches(':disabled')) {
-      event.preventDefault()
-      opener.focus()
+    if (!event.defaultPrevented) {
+      const opener = openerRef.current
+      if (opener !== null && opener.isConnected && !opener.matches(':disabled')) {
+        event.preventDefault()
+        opener.focus()
+      }
+      else if (fallbackFocus !== undefined) {
+        event.preventDefault()
+        fallbackFocus()
+      }
     }
-    else if (fallbackFocus !== undefined) {
-      event.preventDefault()
-      fallbackFocus()
-    }
+    onClosed?.()
   }
 
   return (

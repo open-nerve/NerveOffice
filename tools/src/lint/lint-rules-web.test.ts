@@ -1,4 +1,4 @@
-// lint 规则的自测（平台页面）：前端的模块边界与入口、按需加载与平台页面的首屏、Radix 的弹窗原语、人名的拼法。
+// lint 规则的自测（平台页面）：前端的模块边界与入口、按需加载与平台页面的首屏、Radix 的弹窗原语、人名的拼法、读屏用的状态区。
 // 共用的准备与时限见 lint-harness.test-support.ts
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -275,9 +275,68 @@ describe('US-M1-11 lint 规则的自测：按需加载的页面不进平台页�
     })
   })
 
+  describe('分享对话框与"与我共享"页（M2-P5 设计 §3.5）', () => {
+    const SHARE_ENTRY = 'apps/web/src/features/documents/share-entry.tsx'
+    const EDITOR_SHARE_ENTRY = 'apps/web/src/features/sheet-editor/share-entry.tsx'
+    const importShare = (path: string): string => `import { ShareDialog } from '${path}'\n\nexport const dialog = ShareDialog\n`
+
+    it('分享对话框：平台页面只有文档行操作的入口文件能动态 import() 它的公开入口；编辑器页的页头文件静态引用（另一个包）；别处一律不行', async () => {
+      expect(await rulesFor(dynamicImport('../sharing/index.ts'), SHARE_ENTRY)).not.toContain('boundaries/dependencies')
+      expect(await rulesFor(importShare('../sharing/index.ts'), EDITOR_SHARE_ENTRY)).not.toContain('boundaries/dependencies')
+      const denied: [string, string][] = [
+        // 平台页面的入口文件：静态引用（会进首屏）、动态引用内部文件
+        [importShare('../sharing/index.ts'), SHARE_ENTRY],
+        [`import type { ShareDialogProps } from '../sharing/index.ts'\n\nexport type Props = ShareDialogProps\n`, SHARE_ENTRY],
+        [dynamicImport('../sharing/share-dialog.tsx'), SHARE_ENTRY],
+        // 编辑器页的页头文件同样只经公开入口
+        [importShare('../sharing/share-dialog.tsx'), EDITOR_SHARE_ENTRY],
+        // 行操作、编辑器页头的其他文件、别的功能、应用层、入口
+        [dynamicImport('../sharing/index.ts'), 'apps/web/src/features/documents/item-actions.tsx'],
+        [dynamicImport('../sharing/index.ts'), 'apps/web/src/features/sheet-editor/editor-chrome.tsx'],
+        [dynamicImport('../sharing/index.ts'), WEB_FEATURE_FILE],
+        [dynamicImport('../features/sharing/index.ts'), ROUTES_FILE],
+        [`export { ShareDialog } from '../../features/sharing/index.ts'\n`, PLATFORM_ENTRY],
+      ]
+      for (const [code, file] of denied) {
+        const report = await lint(code, file)
+        expect(report.rules, `${file}：${code}`).toContain('boundaries/dependencies')
+        if (!code.includes('share-dialog.tsx'))
+          expect(report.messages.join('\n'), file).toContain('分享对话框（features/sharing）只由入口所在的两个文件引用')
+      }
+    })
+
+    it('分享对话框可以带弹窗、确认的弹窗与同事选择（三处白名单）', async () => {
+      const imports = [
+        'import { DialogContent } from \'../../shared/ui/dialog.tsx\'\n\nexport const content = DialogContent\n',
+        'import { ConfirmDialog } from \'../confirmation/index.ts\'\n\nexport const dialog = ConfirmDialog\n',
+        'import { ColleaguePicker } from \'../colleagues/index.ts\'\n\nexport const picker = ColleaguePicker\n',
+      ]
+      for (const code of imports)
+        expect(await rulesFor(code, 'apps/web/src/features/sharing/share-dialog.tsx'), code).not.toContain('boundaries/dependencies')
+      // "与我共享"页不带弹窗，引用了照样拦下
+      expect(await rulesFor(imports[0] ?? '', 'apps/web/src/features/shared-with-me/shared-page.tsx')).toContain('boundaries/dependencies')
+    })
+
+    it('"与我共享"页：只有路由表能动态 import() 它的公开入口', async () => {
+      expect(await rulesFor(dynamicImport('../features/shared-with-me/index.ts'), ROUTES_FILE)).not.toContain('boundaries/dependencies')
+      const denied: [string, string][] = [
+        [`import { SharedWithMePage } from '../features/shared-with-me/index.ts'\n\nexport const page = SharedWithMePage\n`, ROUTES_FILE],
+        [dynamicImport('../features/shared-with-me/shared-page.tsx'), ROUTES_FILE],
+        [dynamicImport('../features/shared-with-me/index.ts'), WEB_FILE],
+        [`import type { SharedWithMePage } from '../shared-with-me/index.ts'\n\nexport type Page = typeof SharedWithMePage\n`, WEB_FEATURE_FILE],
+        [`export { SharedWithMePage } from '../../features/shared-with-me/index.ts'\n`, PLATFORM_ENTRY],
+      ]
+      for (const [code, file] of denied) {
+        const report = await lint(code, file)
+        expect(report.rules, `${file}：${code}`).toContain('boundaries/dependencies')
+        expect(report.messages.join('\n'), file).toContain('"与我共享"页（features/shared-with-me）按需加载')
+      }
+    })
+  })
+
   describe('只给按需加载的页面与编辑器页用的文案（shared/i18n/zh-cn/<功能>.ts）只由对应的功能引用；测试不受限（M2-P6 复核第二批）', () => {
     const importTexts = (path: string, name: string): string => `import { ${name} } from '${path}'\n\nexport const texts = ${name}\n`
-    const TEXTS_MESSAGE = /这份文案（shared\/i18n\/zh-cn\/\w+\.ts）只由按需加载的 features\/[\w-]+ 引用/
+    const TEXTS_MESSAGE = /这份文案（shared\/i18n\/zh-cn\/[\w-]+\.ts）只由按需加载的 features\/[\w-]+ 引用/
 
     it('对应的功能照常引用', async () => {
       const allowed: [string, string][] = [
@@ -286,6 +345,8 @@ describe('US-M1-11 lint 规则的自测：按需加载的页面不进平台页�
         [importTexts('../../shared/i18n/zh-cn/colleagues.ts', 'colleaguesMessages'), 'apps/web/src/features/colleagues/keyword-picker.tsx'],
         [importTexts('../../shared/i18n/zh-cn/trash.ts', 'trashMessages'), 'apps/web/src/features/trash/trash-page.tsx'],
         [importTexts('../../shared/i18n/zh-cn/search.ts', 'searchMessages'), 'apps/web/src/features/search/search-page.tsx'],
+        [importTexts('../../shared/i18n/zh-cn/sharing.ts', 'sharingMessages'), 'apps/web/src/features/sharing/share-dialog.tsx'],
+        [importTexts('../../shared/i18n/zh-cn/shared-with-me.ts', 'sharedWithMeMessages'), 'apps/web/src/features/shared-with-me/shared-page.tsx'],
         [importTexts('../../shared/i18n/zh-cn/editor.ts', 'editorMessages'), 'apps/web/src/features/sheet-editor/editor-chrome.tsx'],
       ]
       for (const [code, file] of allowed)
@@ -311,6 +372,11 @@ describe('US-M1-11 lint 规则的自测：按需加载的页面不进平台页�
         [`export type { trashMessages } from '../../shared/i18n/zh-cn/trash.ts'\n`, PLATFORM_ENTRY],
         [importTexts('../../shared/i18n/zh-cn/editor.ts', 'editorMessages'), 'apps/web/src/features/documents/new-sheet-button.tsx'],
         [importTexts('../shared/i18n/zh-cn/editor.ts', 'editorMessages'), 'apps/web/src/editor/sheet-editor.ts'],
+        // 分享对话框的文案：入口所在的文件（平台页面的首屏、编辑器页的页头）与"与我共享"页都不行
+        [importTexts('../../shared/i18n/zh-cn/sharing.ts', 'sharingMessages'), 'apps/web/src/features/documents/share-entry.tsx'],
+        [importTexts('../../shared/i18n/zh-cn/sharing.ts', 'sharingMessages'), 'apps/web/src/features/sheet-editor/share-entry.tsx'],
+        [importTexts('../../shared/i18n/zh-cn/sharing.ts', 'sharingMessages'), 'apps/web/src/features/shared-with-me/shared-page.tsx'],
+        [importTexts('../shared/i18n/zh-cn/shared-with-me.ts', 'sharedWithMeMessages'), WEB_FILE],
       ]
       for (const [code, file] of denied) {
         const report = await lint(code, file)
@@ -323,6 +389,8 @@ describe('US-M1-11 lint 规则的自测：按需加载的页面不进平台页�
       const insideShared: [string, string][] = [
         [`export { searchMessages } from './zh-cn/search.ts'\n`, 'apps/web/src/shared/i18n/index.ts'],
         [`export type { adminMessages } from './zh-cn/admin.ts'\n`, 'apps/web/src/shared/i18n/index.ts'],
+        [`export { sharingMessages } from './zh-cn/sharing.ts'\n`, 'apps/web/src/shared/i18n/index.ts'],
+        [importTexts('../i18n/zh-cn/shared-with-me.ts', 'sharedWithMeMessages'), 'apps/web/src/shared/ui/space-label.tsx'],
         [importTexts('../i18n/zh-cn/colleagues.ts', 'colleaguesMessages'), WEB_SHARED_FILE],
         [importTexts('./trash.ts', 'trashMessages'), 'apps/web/src/shared/i18n/zh-cn/messages.ts'],
         [importTexts('../i18n/zh-cn/members.ts', 'membersMessages'), 'apps/web/src/shared/ui/dialog.tsx'],
@@ -440,5 +508,71 @@ describe('US-M1-11 lint 规则的自测：人名经 PersonName 显示，显示�
     ]
     for (const code of notJoined)
       expect((await lint(code, 'apps/web/src/features/admin/users-page.tsx')).messages.join('\n'), code).not.toContain(PERSON_NAME_MESSAGE)
+  })
+}, LINT_TIMEOUT)
+
+describe('US-M1-11 lint 规则的自测：读屏用的状态区（role="status"）不能 display: none 或 invisible，空的时候用 StatusRegion（M2-P5 审查 B 的 M1）', () => {
+  const LIVE_STATUS_MESSAGE = '读屏用的状态区（role="status"）要一直在无障碍树里'
+  const FEATURE_FILE = 'apps/web/src/features/sharing/share-dialog.tsx'
+  /**
+   * 几种写法：字符串里的 hidden 与带变体前缀的、cn() 的参数里条件表达式的一支、模板字符串、hidden 属性、style、invisible 与 role={'status'}；
+   * cn()、clsx() 的对象写法里键是标识符的 hidden、invisible（含简写），状态区自己带 aria-hidden（M2-P5 复验 G1）
+   */
+  const HIDING = [
+    'export function Notice({ text }: { text: string }) {\n  return <p role="status" className="text-sm empty:hidden">{text}</p>\n}\n',
+    'export function Notice({ text }: { text: string }) {\n  return <p role="status" className="hidden">{text}</p>\n}\n',
+    'declare function cn(...parts: unknown[]): string\nexport function Notice({ text }: { text?: string }) {\n  return <p role="status" className={cn(\'m-0 text-sm\', text === undefined ? \'hidden\' : \'rounded-lg border p-2\')}>{text}</p>\n}\n',
+    `export function Notice({ text }: { text: string }) {\n  return <p role="status" className={\`md:hidden \${text}\`}>{text}</p>\n}\n`,
+    'export function Notice({ text }: { text?: string }) {\n  return <p role="status" hidden={text === undefined}>{text}</p>\n}\n',
+    'export function Notice({ text }: { text: string }) {\n  return <p role="status" style={{ display: \'none\' }}>{text}</p>\n}\n',
+    'export function Notice({ text }: { text: string }) {\n  return <span role={\'status\'} className="!invisible text-sm">{text}</span>\n}\n',
+    'declare function cn(...parts: unknown[]): string\nexport function Notice({ text }: { text?: string }) {\n  return <p role="status" className={cn(\'text-sm\', { hidden: text === undefined })}>{text}</p>\n}\n',
+    'declare function clsx(...parts: unknown[]): string\nexport function Notice({ text, invisible }: { text: string, invisible: boolean }) {\n  return <p role="status" className={clsx(\'text-sm\', { invisible })}>{text}</p>\n}\n',
+    'export function Notice({ text }: { text?: string }) {\n  return <p role="status" aria-hidden={text === undefined}>{text}</p>\n}\n',
+    'export function Notice({ text }: { text: string }) {\n  return <span role={\'status\'} aria-hidden="true">{text}</span>\n}\n',
+  ]
+
+  it.each([FEATURE_FILE, WEB_FILE, 'apps/web/src/shared/ui/dialog.tsx', PLATFORM_ENTRY])('%s', async (file) => {
+    for (const code of HIDING) {
+      const report = await lint(code, file)
+      expect(report.rules, code).toContain('no-restricted-syntax')
+      expect(report.messages.join('\n'), code).toContain(LIVE_STATUS_MESSAGE)
+    }
+  })
+
+  it('照常的写法：视觉隐藏（sr-only）、overflow-hidden 这类不让元素离开无障碍树的类名、对象写法里别的键与计算出来的键、状态区里面的图标带 aria-hidden、不是状态区的元素、共用的 StatusRegion；测试不受限', async () => {
+    const fine = [
+      'export function Notice({ text }: { text: string }) {\n  return <p role="status" className="sr-only">{text}</p>\n}\n',
+      'export function Notice({ text }: { text: string }) {\n  return <p role="status" className="overflow-hidden text-sm aria-hidden:opacity-0">{text}</p>\n}\n',
+      'declare function cn(...parts: unknown[]): string\ndeclare const key: string\nexport function Notice({ text }: { text?: string }) {\n  return <p role="status" className={cn({ hiddenText: text === undefined, \'overflow-hidden\': true, [key]: true })}>{text}</p>\n}\n',
+      'export function Notice({ text }: { text: string }) {\n  return <p role="status"><svg aria-hidden />{text}</p>\n}\n',
+      'declare function cn(...parts: unknown[]): string\nexport function Notice({ text, hidden }: { text: string, hidden: boolean }) {\n  return <p className={cn({ hidden })} aria-hidden={hidden}>{text}</p>\n}\n',
+      'export function Notice({ text }: { text: string }) {\n  return <p className="hidden">{text}</p>\n}\n',
+      'declare function StatusRegion(props: { className?: string, children?: string }): null\nexport function Notice({ text }: { text: string }) {\n  return <StatusRegion className="mt-2 text-sm">{text}</StatusRegion>\n}\n',
+    ]
+    for (const code of fine)
+      expect((await lint(code, FEATURE_FILE)).messages.join('\n'), code).not.toContain(LIVE_STATUS_MESSAGE)
+    expect((await lint(HIDING[0] ?? '', WEB_TEST_FILE)).messages.join('\n')).not.toContain(LIVE_STATUS_MESSAGE)
+  })
+
+  it('规则的说明里列出的漏报与误报（M2-P5 复验 G1）：漏报照旧认不出、误报照旧拦下——改了规则让哪一种变了，一并改说明', async () => {
+    const missed = [
+      'declare const HIDE: string\ndeclare const SHOW: string\nexport function Notice({ text }: { text?: string }) {\n  return <p role="status" className={text === undefined ? HIDE : SHOW}>{text}</p>\n}\n',
+      'export function Notice({ text }: { text?: string }) {\n  return <p role="status" style={{ display: text === undefined ? \'none\' : \'block\' }}>{text}</p>\n}\n',
+      'export function Notice({ text }: { text: string }) {\n  return <p role="status" style={{ \'display\': \'none\' }}>{text}</p>\n}\n',
+      'export function Notice({ text }: { text: string }) {\n  return <p role="status" className="collapse">{text}</p>\n}\n',
+      'export function Notice({ text }: { text: string }) {\n  return <p role="status" inert>{text}</p>\n}\n',
+      'export function Notice({ text }: { text: string }) {\n  return <div aria-live="polite" className="hidden">{text}</div>\n}\n',
+      'declare function StatusRegion(props: { className?: string, children?: string }): null\nexport function Notice({ text }: { text: string }) {\n  return <StatusRegion className="hidden md:block">{text}</StatusRegion>\n}\n',
+    ]
+    for (const code of missed)
+      expect((await lint(code, FEATURE_FILE)).messages.join('\n'), code).not.toContain(LIVE_STATUS_MESSAGE)
+    const falsePositives = [
+      'export function Notice({ text }: { text: string }) {\n  return <p role="status" hidden={false}>{text}</p>\n}\n',
+      'export function Notice({ text }: { text: string }) {\n  return <p role="status" aria-hidden={false}>{text}</p>\n}\n',
+      'declare function cn(...parts: unknown[]): string\nexport function Notice({ text }: { text: string }) {\n  return <p role="status" className={cn(\'x\', text === \'hidden\' && \'y\')}>{text}</p>\n}\n',
+    ]
+    for (const code of falsePositives)
+      expect((await lint(code, FEATURE_FILE)).messages.join('\n'), code).toContain(LIVE_STATUS_MESSAGE)
   })
 }, LINT_TIMEOUT)

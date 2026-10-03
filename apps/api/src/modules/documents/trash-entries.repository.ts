@@ -103,9 +103,9 @@ export class TrashEntriesRepository {
   }
 
   /** 一个空间的回收站，按删除时间从新到旧；after 是上一页最后一条的位置（keyset，与文档列表一致）。 */
-  async listBySpace(spaceId: string, options: TrashListOptions): Promise<TrashEntryRow[]> {
+  async listBySpace(spaceId: string, options: TrashListOptions, transaction?: Transaction): Promise<TrashEntryRow[]> {
     const { after } = options
-    return this.db
+    return executorOf(this.db, transaction)
       .select(COLUMNS)
       .from(t)
       .where(and(

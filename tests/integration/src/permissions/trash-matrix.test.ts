@@ -6,10 +6,14 @@
 // （个人空间由所有者删除，那里没有别人），一行里同时考出三条规则：空间管理员可以、删除者本人可以、
 // 同一个空间里的其他人不行。"删完之后被降级或被移出空间的删除者"不在这张表里（查看者与外人都不是删除者）：
 // 这种情形由 documents/trash.test.ts 的恢复权限用例覆盖，判断之后、取锁之前才变的由那里的并发用例覆盖（M2-P6 复验 R-S2）。
+// 两个只凭授权的人（最后两列，M2-P5 S4）：删除单元里的文档上同样有他们的授权，但回收站只看空间角色——授权不给回收站开口子，
+// 两列逐格与外人（outsider）那一列相同。
 //
-// 搜索是范围类的操作：谁调用都是 200，真正的判定是"能不能在结果里看到那份文档"，状态码表达不了，
-// 所以单列一张真假表（矩阵之外），见本文件末尾的 describe。
+// 搜索是范围类的操作：谁调用都是 200，真正的判定是"在结果里看到哪几份文档"，状态码表达不了，
+// 所以单列一张表（矩阵之外），见本文件末尾的 describe：结果恰好是能读到的那几份（凭授权命中的不带文件夹与路径），
+// 按空间列出只看空间角色（不并上授权）。
 // 回收站列表与按空间列出的成功格子另外核对列出来的东西：恰好是这个空间里的，别处的一条也没有（M2-P6 复核 B 的 S-1）。
+import type { SearchResult } from '@nerve-office/contracts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { ActorName, CellOptions, MatrixOperation, MatrixTable, MatrixWorld, TargetName } from './matrix-world.ts'
@@ -19,7 +23,7 @@ import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { asUser } from '../support/session-client.ts'
-import { ACTORS, buildMatrixWorld, cellsOf, expectCell, MATRIX_TITLE_PREFIX, TARGETS } from './matrix-world.ts'
+import { accessViaOf, ACTORS, buildMatrixWorld, cellsOf, closeWorld, expectCell, MATRIX_TITLE_PREFIX, TARGETS } from './matrix-world.ts'
 
 let database: TestDatabase
 let app: TestApp
@@ -32,6 +36,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  await closeWorld(world)
   await app.close()
   await database.drop()
 })
@@ -41,31 +46,31 @@ type Operation = 'listTrash' | 'restore' | 'purge'
 const MATRIX: MatrixTable<Operation> = {
   // 看得到空间内容的人都看得到回收站的列表（标题在删除之前他本来就看得到，spec §5）：与按空间列出文档同一条规则
   listTrash: {
-    personal: [200, 404, 404, 404, 404, 404],
-    team: [404, 200, 200, 200, 404, 404],
-    visible: [200, 200, 200, 200, 200, 200],
-    archived: [404, 200, 200, 200, 404, 404],
-    archivedVisible: [200, 200, 200, 200, 200, 200],
-    missing: [404, 404, 404, 404, 404, 404],
+    personal: [200, 404, 404, 404, 404, 404, 404, 404],
+    team: [404, 200, 200, 200, 404, 404, 404, 404],
+    visible: [200, 200, 200, 200, 200, 200, 200, 200],
+    archived: [404, 200, 200, 200, 404, 404, 404, 404],
+    archivedVisible: [200, 200, 200, 200, 200, 200, 200, 200],
+    missing: [404, 404, 404, 404, 404, 404, 404, 404],
   },
   // 恢复（spec §3）：删除者本人（这里是编辑者）或当前的空间管理员；同空间的其他人 403；归档的空间里谁都不能
   restore: {
-    personal: [200, 404, 404, 404, 404, 404],
-    team: [404, 200, 200, 403, 404, 404],
-    visible: [403, 200, 200, 403, 403, 403],
+    personal: [200, 404, 404, 404, 404, 404, 404, 404],
+    team: [404, 200, 200, 403, 404, 404, 404, 404],
+    visible: [403, 200, 200, 403, 403, 403, 403, 403],
     // 归档之后删除者本人（editor 这一列）也不能恢复：有效角色至多是查看者，spec §3 另显式排除归档
-    archived: [404, 403, 403, 403, 404, 404],
-    archivedVisible: [403, 403, 403, 403, 403, 403],
-    missing: [404, 404, 404, 404, 404, 404],
+    archived: [404, 403, 403, 403, 404, 404, 404, 404],
+    archivedVisible: [403, 403, 403, 403, 403, 403, 403, 403],
+    missing: [404, 404, 404, 404, 404, 404, 404, 404],
   },
   // 永久删除（spec §4）：只有空间管理员 / 个人空间的所有者；删除者本人（editor 这一列）也不行
   purge: {
-    personal: [204, 404, 404, 404, 404, 404],
-    team: [404, 204, 403, 403, 404, 404],
-    visible: [403, 204, 403, 403, 403, 403],
-    archived: [404, 403, 403, 403, 404, 404],
-    archivedVisible: [403, 403, 403, 403, 403, 403],
-    missing: [404, 404, 404, 404, 404, 404],
+    personal: [204, 404, 404, 404, 404, 404, 404, 404],
+    team: [404, 204, 403, 403, 404, 404, 404, 404],
+    visible: [403, 204, 403, 403, 403, 403, 403, 403],
+    archived: [404, 403, 403, 403, 404, 404, 404, 404],
+    archivedVisible: [403, 403, 403, 403, 403, 403, 403, 403],
+    missing: [404, 404, 404, 404, 404, 404, 404, 404],
   },
 }
 
@@ -105,55 +110,78 @@ describe('US-M2-14 权限矩阵：回收站', () => {
   })
 })
 
-/** 一行的真假值，顺序同 ACTORS。 */
-type VisibleRow = readonly [boolean, boolean, boolean, boolean, boolean, boolean]
-
-/**
- * 能不能看到这个目标空间里的那份文档（M2-P4 设计 §3.4 第 5 条、§3.5）：搜索只在"我能看到的空间"里查，
- * 所以与"能不能读"完全一致——这张表就是内容矩阵的 READ 一行换成真假值，按空间列出也按同一张表判定。
- */
-const SEARCHABLE: Readonly<Record<TargetName, VisibleRow>> = {
-  personal: [true, false, false, false, false, false],
-  team: [false, true, true, true, false, false],
-  visible: [true, true, true, true, true, true],
-  archived: [false, true, true, true, false, false],
-  archivedVisible: [true, true, true, true, true, true],
-  // 不存在的空间没有这份文档：谁都搜不到
-  missing: [false, false, false, false, false, false],
-}
-
-interface SearchCell {
+interface ScopeCell {
   readonly target: TargetName
   readonly actor: ActorName
-  readonly expected: boolean
 }
 
-const SEARCH_CELLS: SearchCell[] = TARGETS.flatMap(target => ACTORS.map((actor, column) => {
-  const expected = SEARCHABLE[target][column]
-  if (expected === undefined)
-    throw new Error(`搜索的表 ${target} 一行少了第 ${column + 1} 列`)
-  return { target, actor, expected }
-}))
+const SCOPE_CELLS: ScopeCell[] = TARGETS.flatMap(target => ACTORS.map(actor => ({ target, actor })))
 
-describe('US-M2-12 搜索与按空间列出的范围：能读到才看得到，回收站里的谁都看不到', () => {
-  // 关键词只匹配固定的那几份文档（每一格另建的文档都不带这个前缀），结果因此是确定的
-  it.each(SEARCH_CELLS)('US-M2-14 search：$actor 搜 $target 里的文档 → $expected', async (cell) => {
-    const actor = world.actors[cell.actor]
-    const response = await asUser(app.baseUrl, actor.session, `/api/search?query=${encodeURIComponent(MATRIX_TITLE_PREFIX)}`)
-    expect(response.status, await response.clone().text()).toBe(200)
-    const ids = parseExact(searchResponseSchema, await response.json()).items.map(item => item.id)
-    expect(ids.includes(world.documents[cell.target].id)).toBe(cell.expected)
-    // 回收站里的那一份标题同样带前缀，但谁都搜不到（spec §5）
-    expect(ids).not.toContain(world.trashedDocuments[cell.target].id)
+/** 搜到的东西：关键词只匹配固定的那几批文档（每一格另建的文档都不带这个前缀），结果因此是确定的 */
+async function searchAs(actor: ActorName): Promise<SearchResult[]> {
+  const response = await asUser(app.baseUrl, world.actors[actor].session, `/api/search?query=${encodeURIComponent(MATRIX_TITLE_PREFIX)}`)
+  expect(response.status, await response.clone().text()).toBe(200)
+  const page = parseExact(searchResponseSchema, await response.json())
+  expect(page.nextCursor).toBeNull()
+  return page.items
+}
+
+/**
+ * 能读到的人在目标空间里搜得到的那几份：有空间角色的是带前缀的三份（根目录下的、文件夹里的、没分享给只凭授权的人的那一份）；
+ * 只凭授权的人只有分享给他的那两份——没分享给他的那一份不在（"授权那一半"要关联到这份文档，M2-P5 审查 B 的 S2）；读不到的一份也没有
+ */
+function searchableIn(actor: ActorName, target: TargetName): string[] {
+  const via = accessViaOf(actor, target)
+  if (via === null)
+    return []
+  const shared = [world.documents[target].id, world.folderDocuments[target].id]
+  return via === 'space' ? [...shared, world.ungrantedDocuments[target].id] : shared
+}
+
+/**
+ * 搜索的范围（M2-P4 设计 §3.4 第 5 条、§3.5；M2-P5 设计 §3.4(2)）：能读到就搜得到——"我能看到的空间"与"我有单独授权的文档"两半，
+ * 预期由 ACCESS_VIA 那一格推出（不是 null 就搜得到；凭什么看到的就是结果里的途径）。回收站里的谁都搜不到，有授权也一样。
+ * 按空间列出不同：只看空间角色（ACCESS_VIA 是 space），不并上授权
+ */
+describe('US-M2-12 搜索与按空间列出的范围：能读到才搜得到，按空间列出只看空间角色，回收站里的谁都看不到', () => {
+  // 每个目标空间里带前缀的几份（见 searchableIn）：读得到就恰好是那几份，读不到就一份也没有；
+  // 凭授权命中的不带文件夹与路径（只凭授权的人看不到空间的目录结构），凭空间角色的照常带
+  it.each(SCOPE_CELLS)('US-M2-14 search：$actor 搜 $target 里的文档', async (cell) => {
+    const via = accessViaOf(cell.actor, cell.target)
+    const items = await searchAs(cell.actor)
+    const inTarget = items.filter(item => item.space.id === world.spaces[cell.target])
+    expect(inTarget.map(item => item.id).toSorted()).toEqual(searchableIn(cell.actor, cell.target).toSorted())
+    // 没分享给只凭授权的人的那一份：只有有空间角色的人搜得到（同一个空间里别的文档分享给了他，也不能顺带搜到它）
+    if (via !== 'space')
+      expect(items.map(item => item.id)).not.toContain(world.ungrantedDocuments[cell.target].id)
+    if (via === null)
+      return
+    for (const item of inTarget) {
+      expect(item.accessVia, item.title).toBe(via)
+      expect(item.space.type).toBe(cell.target === 'personal' ? 'personal' : 'team')
+    }
+    const atRoot = world.documents[cell.target].id
+    const inFolder = world.folderDocuments[cell.target].id
+    const folder = world.folders[cell.target]
+    expect(inTarget.find(item => item.id === atRoot)).toMatchObject({ folderId: null, folderPath: [] })
+    expect(inTarget.find(item => item.id === inFolder)).toMatchObject(via === 'grant' ? { folderId: null, folderPath: [] } : { folderId: folder.id, folderPath: [folder.name] })
+    // 回收站里的那一份标题同样带前缀、同样有两个只凭授权的人的授权，但谁都搜不到（spec §5）
+    expect(items.map(item => item.id)).not.toContain(world.trashedDocuments[cell.target].id)
   })
 
-  // 按空间列出整个空间：看不到这个空间的人是 404，看得到的人看得到那份文档，但看不到回收站里的（spec §5）；
+  // 整个结果恰好是能读到的那几个空间里的那几份：别处的一份也没有（例如可访问文档的条件漏了"正常状态"或者"这个人"）
+  it.each(ACTORS)('US-M2-14 search：%s 搜到的恰好是能读到的那几份', async (actor) => {
+    const expected = TARGETS.flatMap(target => searchableIn(actor, target))
+    expect((await searchAs(actor)).map(item => item.id).toSorted()).toEqual(expected.toSorted())
+  })
+
+  // 按空间列出整个空间：没有空间角色的人是 404（只凭授权也一样），有的人看得到那份文档，但看不到回收站里的（spec §5）；
   // 列出来的恰好是这个空间里正常状态的文档（查库得到），别的空间里的一份也没有（M2-P6 复核 B 的 S-1）
-  it.each(SEARCH_CELLS)('US-M2-14 listSpace：$actor 列 $target 整个空间 → $expected', async (cell) => {
+  it.each(SCOPE_CELLS)('US-M2-14 listSpace：$actor 列 $target 整个空间', async (cell) => {
     const actor = world.actors[cell.actor]
     const query = new URLSearchParams({ spaceId: world.spaces[cell.target], folderId: DOCUMENT_LIST_ALL_FOLDERS, limit: String(DOCUMENT_LIST_MAX_LIMIT) })
     const response = await asUser(app.baseUrl, actor.session, `/api/documents?${query.toString()}`)
-    if (!cell.expected) {
+    if (accessViaOf(cell.actor, cell.target) !== 'space') {
       expect(response.status, await response.clone().text()).toBe(404)
       return
     }

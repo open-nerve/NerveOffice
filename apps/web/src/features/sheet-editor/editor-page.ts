@@ -1,6 +1,6 @@
 // 编辑器页（P4 设计 §3.7）：载入、保存、会话。界面（editor-chrome.tsx）只订阅这里的状态；
 // 编辑器在 React 之外创建：一页一份文档，整页加载与卸载，不随组件的挂载与卸载反复创建（计划书 §10.2）。
-import type { DocumentDetail, DocumentSpace, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
+import type { DocumentAccessVia, DocumentDetail, DocumentSpace, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
 import type { CreateSheetEditorOptions, SheetEditor, SheetEditorLifecycle } from '../../editor/index.ts'
 import type { ApiError } from '../../shared/api/index.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
@@ -13,10 +13,26 @@ import { loginPath } from '../../shared/lib/login-path.ts'
 import { blockInteractions } from './interaction-barrier.ts'
 import { createSaveCoordinator } from './save-coordinator.ts'
 
+/**
+ * 就绪时页头要的东西：标题与所在的空间（返回链接）、看得到它的途径（只凭授权时返回"与我共享"，M2-P5）、能不能分享（分享的入口）、
+ * 看这一页的人（分享时排除自己）。标题、空间、途径与能不能分享会随 refreshDetail 更新；能不能编辑（readOnly）在创建编辑器时就定了，不变
+ */
+export interface EditorPageReady {
+  readonly kind: 'ready'
+  readonly documentId: string
+  readonly title: string
+  readonly space: DocumentSpace
+  readonly accessVia: DocumentAccessVia
+  readonly canShare: boolean
+  readonly userId: string
+  readonly readOnly: boolean
+  readonly stage: SheetEditorLifecycle
+}
+
 /** 载入的结果：就绪（可以编辑）、内容不存在或无权访问、格式不认识、请求失败、编辑器加载失败。 */
 export type EditorPageLoad
   = | { readonly kind: 'loading' }
-    | { readonly kind: 'ready', readonly title: string, readonly space: DocumentSpace, readonly readOnly: boolean, readonly stage: SheetEditorLifecycle }
+    | EditorPageReady
     | { readonly kind: 'not-found' }
     | { readonly kind: 'unsupported' }
     | { readonly kind: 'failed', readonly error: unknown }
@@ -85,6 +101,16 @@ export interface EditorPage {
   readonly hasUnsavedWork: () => boolean
   /** 整页重新加载（版本冲突之后查看最新版本） */
   readonly reload: () => void
+  /**
+   * 重新取一次文档详情，更新页头（M2-P5：分享对话框里的写操作结果未知或被拒绝之后）：标题、所在的空间、途径与能不能分享；
+   * 看不到了（404）时不再能分享。能不能编辑不变（编辑器已经按打开时的权限创建，保存时由服务端再判断）。失败时页头不变，不抛出
+   */
+  readonly refreshDetail: () => Promise<void>
+  /**
+   * 向服务端确认现在是谁（页头上别的请求得到未登录或令牌失效时，例如分享对话框里的请求）：与别的标签页登录或退出时同一个确认，
+   * 会话的提示随之更新，同一个人时换上新的令牌
+   */
+  readonly recheckSession: () => Promise<void>
   readonly dispose: () => void
 }
 
@@ -96,6 +122,13 @@ function isKnownFormat(document: DocumentDetail): boolean {
     && (PLATFORM_FORMAT_VERSIONS as readonly number[]).includes(document.formatVersion)
 }
 
+/** 就绪时页头的信息里随文档详情更新的部分（见 EditorPageReady） */
+type EditorHeading = Pick<EditorPageReady, 'documentId' | 'title' | 'space' | 'accessVia' | 'canShare' | 'userId'>
+
+function headingOf(document: DocumentDetail, userId: string): EditorHeading {
+  return { documentId: document.id, title: document.title, space: document.space, accessVia: document.accessVia, canShare: document.permissions.canShare, userId }
+}
+
 export function createEditorPage(options: EditorPageOptions): EditorPage {
   const { documentId, surface, api, page, sessionChannel } = options
   const listeners = new Set<() => void>()
@@ -104,6 +137,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   let editor: SheetEditor | undefined
   let coordinator: SaveCoordinator | undefined
   let userId: string | undefined
+  /** 页头的信息（就绪之后才有）：refreshDetail 更新它，编辑器的阶段变化时沿用它 */
+  let heading: EditorHeading | undefined
   let disposed = false
   /** 正在整页转到别处：之后的事件都不再处理 */
   let leaving = false
@@ -156,6 +191,15 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     else {
       releaseBarrier?.()
       releaseBarrier = undefined
+    }
+  }
+
+  /** 页头的信息更新了（refreshDetail）：就绪时随即换上，能不能编辑与编辑器的阶段不变 */
+  function setHeading(next: EditorHeading): void {
+    heading = next
+    if (load.kind === 'ready') {
+      load = { ...load, ...next }
+      update()
     }
   }
 
@@ -303,8 +347,9 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
    * 只读的文档已经以只读创建（createEditor 的 access，M2-P3 设计 §3.5），这里不建保存状态机：没有保存按钮，
    * Ctrl/Cmd+S 不做事，离开不提示
    */
-  function ready(document: DocumentDetail, created: SheetEditor, baseRevision: number): void {
+  function ready(document: DocumentDetail, created: SheetEditor, baseRevision: number, viewer: string): void {
     editor = created
+    heading = headingOf(document, viewer)
     const readOnly = !document.permissions.canEdit
     if (!readOnly) {
       coordinator = createSaveCoordinator({
@@ -331,7 +376,9 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       cleanups.push(coordinator.subscribe(update))
     }
     const enter = (stage: SheetEditorLifecycle): void => {
-      load = { kind: 'ready', title: document.title, space: document.space, readOnly, stage }
+      if (heading === undefined)
+        return
+      load = { kind: 'ready', ...heading, readOnly, stage }
       // 渲染完成之后可以输入（ready）；steady 之后才判断"打开是否被判定为有修改"
       setSurface(stage === 'steady' ? 'steady' : 'ready')
       update()
@@ -392,7 +439,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         created.dispose()
         return
       }
-      ready(document, created, content.revision)
+      ready(document, created, content.revision, session.user.id)
     },
     save: async () => {
       if (coordinator === undefined)
@@ -414,6 +461,27 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     },
     hasUnsavedWork: () => coordinator?.hasUnsavedWork() ?? false,
     reload: () => page.reload(),
+    refreshDetail: async () => {
+      if (documentId === undefined || heading === undefined || disposed)
+        return
+      let document: DocumentDetail
+      try {
+        document = await api.document(documentId)
+      }
+      catch (error) {
+        if (disposed || heading === undefined)
+          return
+        // 看不到了（已经删除、移走，或者自己被移出、授权被取消）：不再能分享。未登录交给会话的确认（页头随之说明）；别的失败页头不变
+        if (isMissingResource(error))
+          setHeading({ ...heading, canShare: false })
+        else if (isAuthenticationError(error))
+          void recheckSession()
+        return
+      }
+      if (!disposed && heading !== undefined)
+        setHeading(headingOf(document, heading.userId))
+    },
+    recheckSession,
     dispose: () => {
       disposed = true
       releaseBarrier?.()

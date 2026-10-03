@@ -17,6 +17,7 @@ import { LoginThrottleRepository } from './login-throttle.repository.ts'
 import { LinkThrottle, LoginThrottle } from './login-throttle.ts'
 import { PasswordResetsRepository } from './password-resets.repository.ts'
 import { PasswordResetsService } from './password-resets.service.ts'
+import { RequestIdentities, SnapshotIdentityCheck } from './request-identity.ts'
 import { SessionCookieSettings } from './session-cookie.ts'
 import { SessionResponses } from './session-response.ts'
 import { SessionGuard } from './session.guard.ts'
@@ -26,6 +27,8 @@ import { SessionsRepository } from './sessions.repository.ts'
 /**
  * 认证（P3 设计 §3.5；M2-P1 加上修改密码与一次性链接）。两个守卫由 app 层注册为全局守卫（APP_GUARD），顺序：先认证，再 CSRF 与 Origin。
  * 导出给 admin 模块：撤销会话（停用账户）、签发与作废邀请和重置（M2-P1 设计 §3.1）、登录锁定的查询与解除（M2-P6 复核 A1）。
+ * 请求级的身份记录（RequestIdentities）导出给 app 层装中间件；只读快照的开场核对（SnapshotIdentityCheck）初始化时向 database 登记
+ * （M2 Codex 评审 CX1）。
  */
 @Module({
   imports: [DatabaseModule, UsersModule, SpacesModule, AuditModule],
@@ -46,12 +49,14 @@ import { SessionsRepository } from './sessions.repository.ts'
     AuthService,
     SessionGuard,
     CsrfGuard,
+    RequestIdentities,
+    SnapshotIdentityCheck,
     {
       provide: SessionCookieSettings,
       inject: [APP_CONFIG],
       useFactory: (config: AppConfig) => new SessionCookieSettings(config.http.publicOrigin, config.session.absoluteTimeoutMinutes * 60_000),
     },
   ],
-  exports: [SessionGuard, CsrfGuard, SessionService, InvitationsService, PasswordResetsService, LoginLockouts],
+  exports: [SessionGuard, CsrfGuard, SessionService, InvitationsService, PasswordResetsService, LoginLockouts, RequestIdentities],
 })
 export class AuthModule {}

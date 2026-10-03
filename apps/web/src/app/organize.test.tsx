@@ -1,8 +1,9 @@
 // 文件夹导航与行内的整理操作（M2-P4 设计 §3.7，US-M2-07、08、09）：面包屑与直达地址、新建文件夹、
 // 按服务端给的权限显示行内操作、改名、移动、复制、删除。接口用假的 fetch。
 import type { DocumentDetail, DocumentSummary, Folder, SessionResponse, SpaceView } from '@nerve-office/contracts'
-import { fireEvent, screen, waitFor, within } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+import { OUTCOME_REFRESH_TIME_LIMIT_MS } from '../shared/api/write-outcome.ts'
 import { apiError, installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
 import { documentsKey, foldersKey, noFolders, personalSpaceOf, spaceRoutes } from '../shared/testing/spaces.test-support.ts'
 import { currentPath, renderApp } from './render-app.test-support.tsx'
@@ -45,12 +46,13 @@ function detail(changes: Partial<DocumentDetail> = {}): DocumentDetail {
   return {
     ...WEEKLY,
     spaceId: SPACE_ID,
-    space: { id: SPACE_ID, type: 'personal', name: '艾米' },
+    space: { id: SPACE_ID, type: 'personal' },
     folderId: null,
+    accessVia: 'space',
     revision: 1,
     profile: 'sheet@1',
     formatVersion: 1,
-    permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true },
+    permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true },
     ...changes,
   }
 }
@@ -234,7 +236,7 @@ describe('US-M2-07 行内的整理操作', () => {
   it('文档的操作面板按服务端给的权限显示：查看者只有复制，没有改名、移动、删除', async () => {
     loggedIn({
       [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail({
-        permissions: { canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false },
+        permissions: { canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false },
       })),
     })
     renderApp('/')
@@ -277,6 +279,33 @@ describe('US-M2-07 行内的整理操作', () => {
     fireEvent.click(within(form).getByRole('button', { name: '移动到这里' }))
     await waitFor(() => expect(lastBody(api, `POST /api/documents/${WEEKLY_ID}/move`)).toEqual({ spaceId: TEAM_ID, folderId: PLAN_ID }))
     expect(await screen.findByText('已把「周报」移动到市场部 / 方案')).toBeInTheDocument()
+  })
+
+  it('移动的行为不变（M2 Codex 评审复验的一般 1 只改复制）：导航的空间列表还没取到时，目标就是它现在所在的空间——取它的目录，点进文件夹就能提交', async () => {
+    let openSpaces: () => void = () => {}
+    const spacesOpened = new Promise<void>((resolve) => {
+      openSpaces = resolve
+    })
+    const api = loggedIn({
+      'GET /api/spaces': async () => {
+        await spacesOpened
+        return json(200, { items: [personalSpaceOf(SESSION), TEAM] })
+      },
+      [foldersKey(SPACE_ID)]: folderPage([folder(PLAN_ID, '方案')]),
+      [foldersKey(SPACE_ID, PLAN_ID)]: noFolders(),
+      [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()),
+      [`POST /api/documents/${WEEKLY_ID}/move`]: () => json(200, detail({ folderId: PLAN_ID })),
+    })
+    renderApp('/')
+    await openActions('周报')
+    fireEvent.click(await screen.findByRole('button', { name: '移动' }))
+    const form = screen.getByRole('form', { name: '移动' })
+    expect(within(form).queryByRole('status', { name: '正在加载可以复制到的空间…' })).toBeNull()
+    fireEvent.click(await within(form).findByRole('button', { name: '进入 方案' }))
+    fireEvent.click(within(form).getByRole('button', { name: '移动到这里' }))
+    await waitFor(() => expect(lastBody(api, `POST /api/documents/${WEEKLY_ID}/move`)).toEqual({ spaceId: SPACE_ID, folderId: PLAN_ID }))
+    expect(await screen.findByText('已把「周报」移动到方案')).toBeInTheDocument()
+    openSpaces()
   })
 
   it('移动到它现在待的地方：按钮不可用，并说明原因', async () => {
@@ -514,5 +543,144 @@ describe('US-M2-07 行内的整理操作', () => {
     expect(screen.queryByRole('button', { name: '操作 方案' })).not.toBeInTheDocument()
     // 回收站的列表看得到（能不能动由每一条的权限决定）
     expect(screen.getByRole('link', { name: '回收站' })).toHaveAttribute('href', `/spaces/${TEAM_ID}/trash`)
+  })
+})
+
+// 写入已经确定成功之后的刷新（Codex 对抗评审 CX4、CX5）：整理面板原来等刷新回来才结束，刷新一直不回来时一直停在"正在…"；
+// 列表留着之前的数据、刷新却失败了时原来只有一句错误的原因（加载下一页的说法），没有说清楚列表没能刷新、也没有重试
+describe('US-M2-07 整理：写入成功之后的刷新（Codex 对抗评审 CX4、CX5）', () => {
+  const STILL = '列表还在刷新，显示的可能还是之前的，刷新好了会自动更新'
+
+  /** 文档列表的请求：第一次照常，之后一直不回来（finish 让它回来） */
+  function hangingAfterFirst() {
+    let calls = 0
+    let finish: (response: Response) => void = () => {}
+    return {
+      handler: async () => {
+        calls += 1
+        if (calls === 1)
+          return json(200, { items: [WEEKLY], nextCursor: null })
+        return new Promise<Response>((resolve) => {
+          finish = resolve
+        })
+      },
+      finish: (response: Response) => finish(response),
+      calls: () => calls,
+    }
+  }
+
+  it('删除成功，随后刷新列表一直不回来：到了时限面板照常收起，说明说已经移到回收站、列表还在刷新；刷新回来之后不再说', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const list = hangingAfterFirst()
+      loggedIn({
+        [documentsKey(SESSION)]: list.handler,
+        [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()),
+        [`DELETE /api/documents/${WEEKLY_ID}`]: () => new Response(null, { status: 204 }),
+      })
+      renderApp('/')
+      await openActions('周报')
+      fireEvent.click(await screen.findByRole('button', { name: '删除' }))
+      await waitFor(() => expect(list.calls()).toBe(2))
+      await act(async () => vi.advanceTimersByTimeAsync(OUTCOME_REFRESH_TIME_LIMIT_MS - 2_000))
+      expect(screen.getByRole('button', { name: '正在删除…' })).toBeInTheDocument()
+      await act(async () => vi.advanceTimersByTimeAsync(2_000))
+      const notice = (await screen.findByText(/^已把「周报」移到回收站/)).closest('[role="status"]') as HTMLElement
+      expect(notice).toHaveTextContent(`已把「周报」移到回收站；${STILL}`)
+      expect(within(notice).getByRole('link', { name: '打开回收站' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: '正在删除…' })).toBeNull()
+      await waitFor(() => expect(document.activeElement).toBe(notice))
+      await act(async () => list.finish(json(200, { items: [], nextCursor: null })))
+      await waitFor(() => expect(notice).not.toHaveTextContent('还在刷新'))
+      expect(await screen.findByText('这里还没有文档')).toBeInTheDocument()
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('改名成功，随后刷新列表一直不回来：到了时限面板照常收起，说明（平时不说）说改好了、列表还在刷新', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const list = hangingAfterFirst()
+      loggedIn({
+        [documentsKey(SESSION)]: list.handler,
+        [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()),
+        [`PATCH /api/documents/${WEEKLY_ID}`]: () => json(200, detail({ title: '周报（终稿）' })),
+      })
+      renderApp('/')
+      await openActions('周报')
+      fireEvent.click(await screen.findByRole('button', { name: '改名' }))
+      fireEvent.change(screen.getByLabelText('周报 的新名称'), { target: { value: '周报（终稿）' } })
+      fireEvent.click(screen.getByRole('button', { name: '保存' }))
+      await waitFor(() => expect(list.calls()).toBe(2))
+      await act(async () => vi.advanceTimersByTimeAsync(OUTCOME_REFRESH_TIME_LIMIT_MS))
+      const notice = (await screen.findByText(/^已把「周报」改名为「周报（终稿）」/)).closest('[role="status"]') as HTMLElement
+      expect(notice).toHaveTextContent(`已把「周报」改名为「周报（终稿）」；${STILL}`)
+      expect(screen.queryByLabelText('周报 的新名称')).toBeNull()
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('改名成功，随后刷新文档列表回 500：列表上方说明没能刷新（原因）、给出重试；重试成功之后说明消失，列表是新的', async () => {
+    const api = loggedIn({
+      [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()),
+      [`PATCH /api/documents/${WEEKLY_ID}`]: () => json(200, detail({ title: '周报（终稿）' })),
+    })
+    renderApp('/')
+    await openActions('周报')
+    fireEvent.click(await screen.findByRole('button', { name: '改名' }))
+    fireEvent.change(screen.getByLabelText('周报 的新名称'), { target: { value: '周报（终稿）' } })
+    api.on(documentsKey(SESSION), () => apiError(500, 'INTERNAL_ERROR'))
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    const problem = await screen.findByText('文档列表没能刷新，显示的还是之前的内容', {}, { timeout: 4000 })
+    const alert = problem.closest('[role="alert"]') as HTMLElement
+    expect(alert).toHaveTextContent('服务器出了点问题，请稍后重试')
+    expect(alert.compareDocumentPosition(screen.getByRole('list', { name: '文档列表' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    api.on(documentsKey(SESSION), () => json(200, { items: [{ ...WEEKLY, title: '周报（终稿）' }], nextCursor: null }))
+    fireEvent.click(within(alert).getByRole('button', { name: '重试' }))
+    expect(await screen.findByRole('button', { name: '操作 周报（终稿）' })).toBeInTheDocument()
+    expect(screen.queryByText('文档列表没能刷新，显示的还是之前的内容')).toBeNull()
+  })
+
+  it('文件夹改名成功，随后刷新文件夹列表回 500：文件夹列表上方说明没能刷新、给出重试；重试成功之后说明消失', async () => {
+    const api = loggedIn({
+      [foldersKey(SPACE_ID)]: folderPage([folder(PLAN_ID, '方案')]),
+      [`PATCH /api/folders/${PLAN_ID}`]: () => json(200, folder(PLAN_ID, '方案二')),
+    })
+    renderApp('/')
+    await openActions('方案')
+    fireEvent.click(await screen.findByRole('button', { name: '改名' }))
+    fireEvent.change(screen.getByLabelText('方案 的新名称'), { target: { value: '方案二' } })
+    api.on(foldersKey(SPACE_ID), () => apiError(500, 'INTERNAL_ERROR'))
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    const problem = await screen.findByText('文件夹列表没能刷新，显示的还是之前的内容', {}, { timeout: 4000 })
+    const alert = problem.closest('[role="alert"]') as HTMLElement
+    expect(screen.getByRole('link', { name: '方案' })).toBeInTheDocument()
+    api.on(foldersKey(SPACE_ID), folderPage([folder(PLAN_ID, '方案二')]))
+    fireEvent.click(within(alert).getByRole('button', { name: '重试' }))
+    expect(await screen.findByRole('link', { name: '方案二' })).toBeInTheDocument()
+    expect(screen.queryByText('文件夹列表没能刷新，显示的还是之前的内容')).toBeNull()
+  })
+
+  it('复制的结果未知，随后刷新目标位置回 500：复制表单里说明目标位置没能刷新、给出重试（之前的子文件夹照常列着）', async () => {
+    const api = loggedIn({
+      [foldersKey(SPACE_ID)]: folderPage([folder(PLAN_ID, '方案')]),
+      [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()),
+      [`POST /api/documents/${WEEKLY_ID}/copy`]: () => apiError(502, 'INTERNAL_ERROR'),
+    })
+    renderApp('/')
+    const form = await openCopyForm()
+    expect(await within(form).findByRole('button', { name: '进入 方案' })).toBeInTheDocument()
+    api.on(foldersKey(SPACE_ID), () => apiError(500, 'INTERNAL_ERROR'))
+    fireEvent.click(within(form).getByRole('button', { name: '复制到这里' }))
+    const problem = await within(form).findByText('目标位置没能刷新，显示的还是之前的内容', {}, { timeout: 4000 })
+    expect(within(form).getByRole('button', { name: '进入 方案' })).toBeInTheDocument()
+    api.on(foldersKey(SPACE_ID), folderPage([folder(PLAN_ID, '方案'), folder(QUARTER_ID, '二季度')]))
+    fireEvent.click(within(problem.closest('[role="alert"]') as HTMLElement).getByRole('button', { name: '重试' }))
+    expect(await within(form).findByRole('button', { name: '进入 二季度' })).toBeInTheDocument()
+    expect(within(form).queryByText('目标位置没能刷新，显示的还是之前的内容')).toBeNull()
   })
 })

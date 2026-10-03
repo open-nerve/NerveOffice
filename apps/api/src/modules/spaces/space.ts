@@ -22,6 +22,15 @@ export interface SpaceFacts {
   readonly memberRole: SpaceRole | null
 }
 
+/**
+ * 一批空间的事实（M2-P5："与我共享"与搜索按一批 id 取所在的空间）：SpaceFacts 之外带上所有者的账户 id——
+ * 个人空间按所有者的人名呈现（存的名称是所有者建号时的显示名，可以伪造，规范 §2.4），人名由调用方经 users 补上
+ */
+export interface SpaceFactsWithOwner extends SpaceFacts {
+  /** 个人空间的所有者；团队空间为空 */
+  readonly ownerUserId: string | null
+}
+
 /** 空间的一行（管理用：改名、全员可见、归档与恢复、成员）。 */
 export interface SpaceRecord {
   readonly id: string

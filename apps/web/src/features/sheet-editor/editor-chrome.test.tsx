@@ -1,12 +1,23 @@
-import type { EditorPage, EditorPageLoad, EditorPageView } from './editor-page.ts'
+import type { EditorPage, EditorPageLoad, EditorPageReady, EditorPageView } from './editor-page.ts'
 import type { SaveView } from './save-coordinator.ts'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
+import { apiError, installFakeApi, json } from '../../shared/testing/fake-api.test-support.ts'
 import { EditorChrome } from './editor-chrome.tsx'
 
-const PERSONAL = { id: '0199a2c4-0000-7000-8000-0000000000a1', type: 'personal', name: '爱丽丝' } as const
-const READY: EditorPageLoad = { kind: 'ready', title: '周报', space: PERSONAL, readOnly: false, stage: 'steady' }
+const PERSONAL = { id: '0199a2c4-0000-7000-8000-0000000000a1', type: 'personal' } as const
+const READY: EditorPageReady = {
+  kind: 'ready',
+  documentId: '0199a2c4-0000-7000-8000-0000000000d1',
+  title: '周报',
+  space: PERSONAL,
+  accessVia: 'space',
+  canShare: false,
+  userId: '0199a2c4-0000-7000-8000-00000000000a',
+  readOnly: false,
+  stage: 'steady',
+}
 const CLEAN: SaveView = { status: 'clean', formulasPending: false, problem: undefined, conflict: undefined, canSave: true }
 
 /** 假的编辑器页：视图由测试设定 */
@@ -23,6 +34,8 @@ function fakePage(initial: Partial<EditorPageView> = {}) {
     save: vi.fn(async () => {}),
     hasUnsavedWork: () => false,
     reload: vi.fn(),
+    refreshDetail: vi.fn(async () => {}),
+    recheckSession: vi.fn(async () => {}),
     dispose: () => {},
   }
   return {
@@ -46,6 +59,56 @@ describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
     expect(screen.getByRole('link', { name: '我的空间' })).toHaveAttribute('href', '/')
     fake.set({ load: { ...READY, space: { id: '0199a2c4-0000-7000-8000-0000000000c1', type: 'team', name: '市场部' } } })
     expect(screen.getByRole('link', { name: '市场部' })).toHaveAttribute('href', '/spaces/0199a2c4-0000-7000-8000-0000000000c1')
+  })
+
+  it('只凭单独授权打开的（accessVia 为 grant，M2-P5）：返回链接回"与我共享"，不显示所在的空间（看不到它的目录结构）', () => {
+    const fake = renderChrome({ load: { ...READY, accessVia: 'grant', space: { id: '0199a2c4-0000-7000-8000-0000000000c1', type: 'team', name: '市场部' } } })
+    expect(screen.getByRole('link', { name: '与我共享' })).toHaveAttribute('href', '/shared')
+    expect(screen.queryByText('市场部')).toBeNull()
+    // 别人的个人空间里的也一样：不当成"我的空间"
+    fake.set({ load: { ...READY, accessVia: 'grant', space: { id: '0199a2c4-0000-7000-8000-0000000000b1', type: 'personal' } } })
+    expect(screen.getByRole('link', { name: '与我共享' })).toHaveAttribute('href', '/shared')
+    expect(screen.queryByRole('link', { name: '我的空间' })).toBeNull()
+  })
+
+  it('分享的入口（M2-P5）：只在能分享时（canShare）出现；打开对话框，关闭之后焦点回到入口', async () => {
+    installFakeApi({ [`GET /api/documents/${READY.documentId}/grants`]: () => json(200, { items: [] }) })
+    const fake = renderChrome()
+    expect(screen.queryByRole('button', { name: '分享' })).toBeNull()
+    fake.set({ load: { ...READY, canShare: true } })
+    const entry = screen.getByRole('button', { name: '分享' })
+    entry.focus()
+    fireEvent.click(entry)
+    const dialog = await screen.findByRole('dialog', { name: '分享「周报」' })
+    expect(await within(dialog).findByText('还没有单独分享给任何人。')).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: '分享' }))
+  })
+
+  it('对话框里被拒绝（例如空间刚被归档）：页头重新取文档详情；入口随之消失时，关闭之后焦点交给返回链接', async () => {
+    installFakeApi({ [`GET /api/documents/${READY.documentId}/grants`]: () => apiError(403, 'PERMISSION_DENIED', '空间已归档，恢复之后才能调整分享') })
+    const fake = renderChrome({ load: { ...READY, canShare: true } })
+    const entry = screen.getByRole('button', { name: '分享' })
+    entry.focus()
+    fireEvent.click(entry)
+    const dialog = await screen.findByRole('dialog', { name: '分享「周报」' })
+    expect(await within(dialog).findByText('空间已归档，恢复之后才能调整分享')).toBeInTheDocument()
+    await waitFor(() => expect(fake.page.refreshDetail).toHaveBeenCalled())
+    // 重新取到的文档详情不能分享了：入口消失，对话框留着
+    fake.set({ load: { ...READY, canShare: false } })
+    expect(screen.queryByRole('button', { name: '分享' })).toBeNull()
+    fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('link', { name: '我的空间' })))
+  })
+
+  it('分享对话框里的请求得到未登录或令牌失效：交给本页的会话确认（页头随之说明）', async () => {
+    installFakeApi({ [`GET /api/documents/${READY.documentId}/grants`]: () => apiError(401, 'SESSION_EXPIRED') })
+    const fake = renderChrome({ load: { ...READY, canShare: true } })
+    fireEvent.click(screen.getByRole('button', { name: '分享' }))
+    await screen.findByRole('dialog', { name: '分享「周报」' })
+    await waitFor(() => expect(fake.page.recheckSession).toHaveBeenCalled())
   })
 
   it('载入中：说明正在打开，页头有回到我的空间的链接（整页跳转）', () => {

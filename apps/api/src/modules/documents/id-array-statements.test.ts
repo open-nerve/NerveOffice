@@ -5,7 +5,7 @@
 // 核对每条语句的参数个数与 id 的个数无关、这串 id 作为一个数组参数出现。这些语句在真实数据库上的行为由集成测试覆盖。
 import type { Transaction } from '../database/index.ts'
 import { describe, expect, it, vi } from 'vitest'
-import { CommitLedger, TransactionRunner } from '../database/index.ts'
+import { CommitLedger, SnapshotScope, TransactionRunner } from '../database/index.ts'
 import { DocumentsRepository } from './documents.repository.ts'
 import { FoldersRepository } from './folders.repository.ts'
 import { TrashEntriesRepository } from './trash-entries.repository.ts'
@@ -46,7 +46,7 @@ interface Repositories {
 /** 在一个事务里调用仓储，返回它发出的语句（去掉事务自己的 begin、确认事务可用的 SELECT 1、commit） */
 async function statementsOf(call: (repositories: Repositories, transaction: Transaction) => Promise<unknown>, respond?: (text: string) => unknown[]): Promise<Statement[]> {
   const client = recordingClient(respond)
-  const runner = new TransactionRunner({ connect: async () => client } as unknown as ConstructorParameters<typeof TransactionRunner>[0], new CommitLedger())
+  const runner = new TransactionRunner({ connect: async () => client } as unknown as ConstructorParameters<typeof TransactionRunner>[0], new CommitLedger(), new SnapshotScope())
   await runner.run(async (transaction) => {
     // 事务里的执行器本身就是一个 Drizzle 实例：不收事务的方法（列表、搜索、路径）也经它发语句
     const db = transaction as unknown as ConstructorParameters<typeof DocumentsRepository>[0]
@@ -68,9 +68,18 @@ function expectIdArrayParameters(statements: readonly Statement[]): void {
 
 type Call = (repositories: Repositories, transaction: Transaction) => Promise<unknown>
 
+/** 文档表上一条查询的条件（外层的 where 到 order by 之间）：选出的列里也有子查询的 WHERE，只看外层的 */
+function whereOf(text: string): string {
+  const at = text.indexOf('from "documents" where ')
+  const end = text.indexOf(' order by ', at)
+  return at < 0 ? '' : text.slice(at + 'from "documents" where '.length, end < 0 ? undefined : end)
+}
+
 const DOCUMENTS: Readonly<Record<string, Call>> = {
-  '列出可访问的文档（看得到的空间）': async ({ documents }) => documents.listAccessible({ spaceIds: IDS }, { limit: 10 }),
-  '按标题搜索（看得到的空间）': async ({ documents }) => documents.searchByTitle({ spaceIds: IDS }, { limit: 10, titlePattern: '%周报%' }),
+  '列出可访问的文档（看得到的空间）': async ({ documents }) => documents.listAccessible({ spaceIds: IDS, grantsOf: undefined }, { limit: 10 }),
+  '列出可访问的文档（看得到的空间，并上授权）': async ({ documents }) => documents.listAccessible({ spaceIds: IDS, grantsOf: USER }, { limit: 10 }),
+  '按标题搜索（看得到的空间）': async ({ documents }) => documents.searchByTitle({ spaceIds: IDS, grantsOf: undefined }, { limit: 10, titlePattern: '%周报%' }),
+  '按标题搜索（看得到的空间，并上授权）': async ({ documents }) => documents.searchByTitle({ spaceIds: IDS, grantsOf: USER }, { limit: 10, titlePattern: '%周报%' }),
   '停用者文档的转移：锁住要转的文档': async ({ documents }, transaction) => documents.lockForTransfer(IDS, SPACE, transaction),
   '锁住这些文件夹里的文档（删除、跨空间移动、永久删除）': async ({ documents }, transaction) => documents.lockInFolders(IDS, SPACE, transaction),
   '锁住属于这些删除单元的文档': async ({ documents }, transaction) => documents.lockInEntries(IDS, transaction),
@@ -115,6 +124,28 @@ describe(`仓储按一串 id 读写：${COUNT} 个 id 也只有一个数组参�
     const [statement] = await statementsOf(DOCUMENTS['永久删除之前：数这个空间里正常状态的文档'] ?? (async () => undefined))
     expect(statement?.text).toMatch(/"documents"\."space_id" = \$\d+/)
     expect(statement?.values).toContain(SPACE)
+  })
+
+  it('可访问文档的两半（M2-P5 设计 §3.4(2)）：不要授权那一半时语句里没有授权表；要时是同一条语句里的 EXISTS，与空间那一半是"或"', async () => {
+    const [spacesOnly] = await statementsOf(async ({ documents }) => documents.listAccessible({ spaceIds: [SPACE], grantsOf: undefined }, { limit: 10 }))
+    expect(spacesOnly?.text).not.toMatch(/document_grants/)
+    const [both] = await statementsOf(async ({ documents }) => documents.listAccessible({ spaceIds: [SPACE], grantsOf: USER }, { limit: 10 }))
+    expect(both?.text).toMatch(/"documents"\."status" = \$\d+ and \("documents"\."space_id" = ANY\(\$\d+::uuid\[\]\) or EXISTS \(SELECT 1 FROM "document_grants" WHERE \("document_grants"\."document_id" = "documents"\."id" and "document_grants"\."user_id" = \$\d+\)\)\)/)
+    expect(both?.values).toContain(USER)
+    // 只要授权那一半（"与我共享"，M2-P5 S3）：不带恒假的空间条件——`space_id = ANY('{}') OR EXISTS …` 里的 OR 让规划器只能扫整张
+    // 文档表；只剩 EXISTS 时从授权表的 (user_id) 索引出发（真实的计划由集成测试 documents/shared-plan.test.ts 用 EXPLAIN 核对）
+    for (const grantsOnly of [
+      ...await statementsOf(async ({ documents }) => documents.listAccessible({ spaceIds: [], grantsOf: USER }, { limit: 10 })),
+      ...await statementsOf(async ({ documents }) => documents.listGranted(USER, { limit: 10 })),
+    ]) {
+      const where = whereOf(grantsOnly.text)
+      expect(where).toMatch(/^\("documents"\."status" = \$\d+ and EXISTS \(SELECT 1 FROM "document_grants" WHERE \("document_grants"\."document_id" = "documents"\."id" and "document_grants"\."user_id" = \$\d+\)\)\)$/)
+      expect(where).not.toMatch(/space_id/)
+      expect(grantsOnly.values).not.toContainEqual([])
+    }
+    // 两半都不要：恒为假，什么也查不出（不能因为没有条件就成了全部正常状态的文档）
+    const [neither] = await statementsOf(async ({ documents }) => documents.listAccessible({ spaceIds: [], grantsOf: undefined }, { limit: 10 }))
+    expect(whereOf(neither?.text ?? '')).toMatch(/^\("documents"\."status" = \$\d+ and false\)$/)
   })
 
   it('到期的删除单元：让开的那些写成 NOT (id = ANY(…))；没有要让开的就不带这个条件', async () => {

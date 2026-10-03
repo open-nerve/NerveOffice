@@ -58,7 +58,8 @@ export async function createFolderIn(spaceId: string, createdBy: TestUser, name:
       ? 1
       : Number((await client.query<{ depth: number }>('SELECT depth FROM folders WHERE id = $1', [parentId])).rows[0]?.depth ?? 0) + 1
     const result = await client.query<{ id: string }>(
-      'INSERT INTO folders (space_id, parent_id, name, created_by, depth, request_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
+      // 直接写库的文件夹没有新建请求：请求摘要给空串的摘要，与任何请求都对不上（M2 Codex 评审 CX6）
+      'INSERT INTO folders (space_id, parent_id, name, created_by, depth, request_id, payload_digest) VALUES ($1, $2, $3, $4, $5, $6, sha256(\'\'::bytea)) RETURNING id',
       [spaceId, parentId ?? null, name, createdBy.id, depth, randomUUID()],
     )
     return result.rows[0]?.id ?? ''
@@ -142,6 +143,43 @@ export async function archiveSpace(spaceId: string): Promise<void> {
 export async function removeMember(spaceId: string, user: TestUser): Promise<void> {
   await withDatabase(async (client) => {
     await client.query('DELETE FROM space_members WHERE space_id = $1 AND user_id = $2', [spaceId, user.id])
+  })
+}
+
+/**
+ * 单独授权（M2-P5）：直接写库，作为用例的前置数据——经分享对话框设置、调整与取消由 US-M2-10 的分享用例覆盖。
+ * grantedBy 是设置它的人，不能是被授权人自己（表上的 CHECK）
+ */
+export async function grantDocument(documentId: string, user: TestUser, role: 'viewer' | 'editor', grantedBy: TestUser): Promise<void> {
+  await withDatabase(async (client) => {
+    await client.query(
+      `INSERT INTO document_grants (document_id, user_id, role, granted_by) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (document_id, user_id) DO UPDATE SET role = excluded.role, granted_by = excluded.granted_by, updated_at = now()`,
+      [documentId, user.id, role, grantedBy.id],
+    )
+  })
+}
+
+/** 取消单独授权（直接写库：删行，与取消分享的接口写出的一样），作为用例的前置数据——经对话框取消由 US-M2-10 的分享用例覆盖 */
+export async function revokeGrant(documentId: string, user: TestUser): Promise<void> {
+  await withDatabase(async (client) => {
+    await client.query('DELETE FROM document_grants WHERE document_id = $1 AND user_id = $2', [documentId, user.id])
+  })
+}
+
+/** 文档现在的修订号（直接查库）：核对被拒绝的保存什么也没存进去，不必有读这份文档的权限 */
+export async function revisionOf(documentId: string): Promise<number | undefined> {
+  return withDatabase(async client => (await client.query<{ revision: number }>('SELECT revision FROM documents WHERE id = $1', [documentId])).rows[0]?.revision)
+}
+
+/** 这份文档上的单独授权（被授权人的登录名 → 角色）：核对经界面的分享、调整与取消确实写进了库（用例的前提） */
+export async function grantsOn(documentId: string): Promise<Record<string, string>> {
+  return withDatabase(async (client) => {
+    const result = await client.query<{ username: string, role: string }>(
+      'SELECT u.username, g.role FROM document_grants g JOIN users u ON u.id = g.user_id WHERE g.document_id = $1 ORDER BY u.username',
+      [documentId],
+    )
+    return Object.fromEntries(result.rows.map(row => [row.username, row.role]))
   })
 }
 

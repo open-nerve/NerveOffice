@@ -1,9 +1,10 @@
 // 从每个阶段结束时"有数据的库"一路迁移到最新（M2-P6 复核 B 的 B6）：单个迁移的用例只在它前一个版本上验证自己，
 // 这里按当时的结构写入有代表性的数据——每个审计动作、目标类型与来源各一条，会话的每个撤销原因，邀请、重置与限流的行，
 // 团队空间（全员可见的、归档的）与成员、写入代次不为 0 的文档，10 层文件夹、两种删除单元与"文件夹的删除单元里还有单独删过的子孙"——
-// 迁移到最新之后核对：每张表的行数不变、约束全部已验证、只由服务保证的不变量都成立，迁移之前的删除单元能经接口恢复与永久删除。
+// 迁移到最新之后核对：每张表的行数不变、约束全部已验证、只由服务保证的不变量都成立，迁移之前的删除单元能经接口恢复与永久删除，
+// 迁移之前建的文件夹原样重发当初的新建请求是重放（0021 在 SQL 里回填的请求摘要与服务算的一致，M2 Codex 评审 CX6）。
 //
-// 基准是每个阶段结束时的最后一个迁移（7 个），覆盖了到现在为止的每个迁移在有数据的库上的执行；每个基准一个空库，整个文件 3 秒左右。
+// 基准是每个阶段结束时的最后一个迁移（8 个），覆盖了到现在为止的每个迁移在有数据的库上的执行；每个基准一个空库，整个文件 3 秒左右。
 // 以后的阶段结束时在 BASES 里加上它的最后一个迁移；时长涨得多时，去掉中间被后面的基准完全覆盖的那些（写明理由）
 import type pg from 'pg'
 import type { TestDatabase } from '../support/database.ts'
@@ -31,10 +32,12 @@ const BASES: readonly (readonly [label: string, tag: string])[] = [
   ['M2-P4 结束', '0013_m2_audit_job_source'],
   ['M2-P6 第 1 片结束', '0015_m2_p6_login_throttle_accounts'],
   ['M2-P6 第 2 片结束', '0017_m2_p6_space_name_key_blanks'],
+  // 到 0019 为止的库迁到 0020（单独授权的表、审计的三个动作，M2-P5）。0019 之前的库上还没有授权的表，没有要按当时的结构写的授权行
+  ['M2-P6 结束', '0019_m2_p6_write_epoch_monotonic'],
 ]
 
 /** 行数要核对的表（某个基准上还没有的表跳过） */
-const TABLES = ['users', 'spaces', 'space_members', 'documents', 'document_contents', 'document_revisions', 'folders', 'trash_entries', 'audit_events', 'auth_sessions', 'auth_invitations', 'auth_password_resets', 'auth_login_throttles']
+const TABLES = ['users', 'spaces', 'space_members', 'documents', 'document_contents', 'document_revisions', 'document_grants', 'folders', 'trash_entries', 'audit_events', 'auth_sessions', 'auth_invitations', 'auth_password_resets', 'auth_login_throttles']
 
 const PASSWORD = 'correct horse battery staple'
 
@@ -74,6 +77,8 @@ interface Seeded {
   /** P4 起：10 层文件夹（第 1 层在前）与三个删除单元 */
   readonly trash?: {
     readonly chain: readonly string[]
+    /** 每一层新建时的 requestId（与 chain 一一对应）：迁移之后原样重发新建请求，核对 0021 回填的请求摘要（M2 Codex 评审 CX6） */
+    readonly requests: readonly string[]
     /** 第 8 层里单独删掉的一份文档 */
     readonly lone: string
     /** 第 9、10 层（连同里面的文档）一起删掉 */
@@ -182,21 +187,28 @@ async function seed(client: pg.Client, base: number): Promise<Seeded> {
 
   // 文件夹：一条 10 层的链，每层一份文档
   const chain: string[] = []
+  const requests: string[] = []
   for (let depth = 1; depth <= 10; depth += 1) {
+    const requestId = randomUUID()
     const { id } = await one<{ id: string }>(
       client,
       'INSERT INTO folders (space_id, parent_id, name, created_by, depth, request_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
-      [team.id, chain.at(-1) ?? null, `第 ${depth} 层`, amy, depth, randomUUID()],
+      [team.id, chain.at(-1) ?? null, `第 ${depth} 层`, amy, depth, requestId],
     )
     chain.push(id)
+    requests.push(requestId)
     await insertDocument(team.id, `第 ${depth} 层的文档`, { folderId: id })
   }
   const level = (depth: number): string => chain[depth - 1] ?? ''
-  // 删除单元按当时的结构写（那时还有 origin_space_id，0018 删掉）
+  // 删除单元按当时的结构写（0018 之前还有 origin_space_id，0018 删掉）
+  const originSpace = !at('0018_m2_p6_trash_entries_origin_space')
   const entry = async (kind: string, originParent: string, title: string): Promise<string> => (await one<{ id: string }>(
     client,
-    `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_space_id, origin_parent_id, title)
-     VALUES ($1, $2, $3, now() + interval '30 days', $1, $4, $5) RETURNING id`,
+    originSpace
+      ? `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_space_id, origin_parent_id, title)
+         VALUES ($1, $2, $3, now() + interval '30 days', $1, $4, $5) RETURNING id`
+      : `INSERT INTO trash_entries (space_id, kind, deleted_by, expires_at, origin_parent_id, title)
+         VALUES ($1, $2, $3, now() + interval '30 days', $4, $5) RETURNING id`,
     [team.id, kind, amy, originParent, title],
   )).id
   // 删除单元 1：第 8 层里单独删掉的一份文档
@@ -211,7 +223,7 @@ async function seed(client: pg.Client, base: number): Promise<Seeded> {
   const folder = await entry('folder', level(5), '第 6 层')
   await client.query('UPDATE folders SET status = \'trashed\', trash_entry_id = $2 WHERE id = ANY($1::uuid[])', [[level(6), level(7), level(8)], folder])
   await client.query('UPDATE documents SET status = \'trashed\', trash_entry_id = $2, write_epoch = write_epoch + 1 WHERE folder_id = ANY($1::uuid[]) AND status = \'active\'', [[level(6), level(7), level(8)], folder])
-  return { amy, teamSpace: team.id, trash: { chain, lone, nested, folder } }
+  return { amy, teamSpace: team.id, trash: { chain, requests, lone, nested, folder } }
 }
 
 async function rowCounts(client: pg.Client): Promise<Record<string, number>> {
@@ -255,6 +267,15 @@ describe('从每个阶段结束时有数据的库迁移到最新（M2-P6 复核 
         expect((await asUser(app.baseUrl, amy, '/api/documents')).status).toBe(200)
         const { teamSpace, trash } = seeded
         if (teamSpace !== undefined && trash !== undefined) {
+          // 迁移之前建的文件夹（第 1 层在空间的根目录、第 2 层在第 1 层下面）：原样重发当初的新建请求是重放（同一个 id），
+          // 说明 0021 在 SQL 里回填的请求摘要与服务按同一个写法算出的一致（M2 Codex 评审 CX6）；载荷不同照样是冲突
+          for (const [index, parentId] of [undefined, trash.chain[0]].entries()) {
+            const request = { spaceId: teamSpace, ...(parentId === undefined ? {} : { parentId }), name: `第 ${index + 1} 层`, requestId: trash.requests[index] }
+            const replayed = await asUser(app.baseUrl, amy, '/api/folders', { method: 'POST', body: request })
+            expect(replayed.status, await replayed.clone().text()).toBe(201)
+            expect(await replayed.json()).toMatchObject({ id: trash.chain[index], replayed: true })
+            expect((await asUser(app.baseUrl, amy, '/api/folders', { method: 'POST', body: { ...request, name: `第 ${index + 1} 层（改）` } })).status).toBe(409)
+          }
           // 第 5 层下面再建一个文件夹（第 6 层）
           const created = await asUser(app.baseUrl, amy, '/api/folders', { method: 'POST', body: { spaceId: teamSpace, parentId: trash.chain[4], name: '新的', requestId: randomUUID() } })
           expect(created.status, await created.clone().text()).toBe(201)

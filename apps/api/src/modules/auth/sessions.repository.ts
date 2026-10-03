@@ -57,6 +57,19 @@ export class SessionsRepository {
   }
 
   /**
+   * 这条会话（按 id，主键）仍然有效：没有撤销、没有超过空闲过期与绝对过期，条件与 findActive 相同。
+   * 只读快照的开场核对在快照里问（传快照的事务，M2 Codex 评审复验的建议 3）：守卫之后撤销的会话在快照里看得到
+   */
+  async isActiveById(id: string, transaction: Transaction): Promise<boolean> {
+    const s = authSessions
+    const [row] = await executorOf(this.db, transaction)
+      .select({ id: s.id })
+      .from(s)
+      .where(and(eq(s.id, id), isNull(s.revokedAt), gt(s.idleExpiresAt, sql`now()`), gt(s.absoluteExpiresAt, sql`now()`)))
+    return row !== undefined
+  }
+
+  /**
    * 这个摘要的会话是不是因为 reasons 之一被撤销的；没有这条会话（从没有过、已被清理）、还没撤销（只是过期了）时为假。
    * 会话守卫只在"会话无效"时经 SessionService 问（复验 N3），按摘要的唯一索引查一次；退出时在退出的事务里问
    */

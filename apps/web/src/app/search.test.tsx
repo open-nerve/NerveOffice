@@ -4,6 +4,7 @@ import type { SearchResult, SessionResponse } from '@nerve-office/contracts'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { apiError, installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
+import { personIn, shownName } from '../shared/testing/people.test-support.ts'
 import { spaceRoutes } from '../shared/testing/spaces.test-support.ts'
 import { currentPath, renderApp } from './render-app.test-support.tsx'
 
@@ -32,6 +33,7 @@ function result(changes: Partial<SearchResult> = {}): SearchResult {
     space: { id: '0199a2c4-0000-7000-8000-0000000000c1', type: 'team', name: '市场部' },
     folderId: '0199a2c4-0000-7000-8000-0000000000f1',
     folderPath: ['方案', '二季度'],
+    accessVia: 'space',
     ...changes,
   }
 }
@@ -64,6 +66,27 @@ describe('US-M2-12 按标题搜索', () => {
     expect(item).toHaveTextContent('市场部 / 方案 / 二季度')
     expect(item).toHaveTextContent('更新于 2026年9月29日')
     expect(screen.getByText('按标题匹配，最近更新在前。')).toBeInTheDocument()
+  })
+
+  it('所在的空间（M2-P5）：自己的个人空间写"我的空间"；别人的个人空间（凭单独授权命中）按所有者的人名呈现（人名组件），不带文件夹路径；不用个人空间存的名称', async () => {
+    const ben = { id: '0199a2c4-0000-7000-8000-00000000000b', username: 'ben', displayName: '本' }
+    loggedIn({
+      [searchKey('周报')]: () => json(200, {
+        items: [
+          result({ space: { id: SESSION.personalSpace.id, type: 'personal', owner: { id: SESSION.user.id, username: 'amy', displayName: '艾米' } }, folderPath: ['方案'] }),
+          result({ id: '0199a2c4-0000-7000-8000-0000000000d2', title: '本的周报', space: { id: '0199a2c4-0000-7000-8000-0000000000b1', type: 'personal', owner: ben }, folderId: null, folderPath: [], accessVia: 'grant' }),
+          result({ id: '0199a2c4-0000-7000-8000-0000000000d3', title: '部门的周报', folderId: null, folderPath: [], accessVia: 'grant' }),
+        ],
+        nextCursor: null,
+      }),
+    })
+    renderApp('/search?q=周报')
+    const [mine, others, team] = within(await screen.findByRole('list', { name: '搜索结果' })).getAllByRole('listitem')
+    expect(mine).toHaveTextContent('我的空间 / 方案 · 更新于')
+    expect(others).toHaveTextContent(`${shownName('本', 'ben')} 的个人空间 · 更新于`)
+    personIn(others as HTMLElement, '本', 'ben')
+    expect(others).not.toHaveTextContent('我的空间')
+    expect(team).toHaveTextContent('市场部 · 更新于')
   })
 
   it('没有关键词：说明怎么用，不发请求', async () => {
@@ -116,5 +139,21 @@ describe('US-M2-12 按标题搜索', () => {
     renderApp('/search?q=%20%20')
     await waitFor(() => expect(screen.getByText('输入关键词后按“搜索”，按标题查找你能访问的文档。')).toBeInTheDocument())
     expect(api.requests.some(request => request.key.startsWith('GET /api/search'))).toBe(false)
+  })
+
+  it('留着之前的结果、重新请求却失败了（例如回到这一页时，Codex 对抗评审 CX5）：结果上方说明没能刷新与原因、给出重试；重试成功之后说明消失', async () => {
+    const api = loggedIn({ [searchKey('周报')]: () => json(200, { items: [result()], nextCursor: null }) })
+    const app = renderApp('/search?q=周报')
+    expect(await screen.findByRole('list', { name: '搜索结果' })).toBeInTheDocument()
+    api.on(searchKey('周报'), () => apiError(500, 'INTERNAL_ERROR'))
+    void app.queryClient.invalidateQueries({ queryKey: ['search'] })
+    const problem = await screen.findByText('搜索结果没能刷新，显示的还是之前的内容', {}, { timeout: 4000 })
+    const alert = problem.closest('[role="alert"]') as HTMLElement
+    expect(alert).toHaveTextContent('服务器出了点问题，请稍后重试')
+    expect(screen.getByRole('link', { name: /周报/ })).toBeInTheDocument()
+    api.on(searchKey('周报'), () => json(200, { items: [result(), result({ id: '0199a2c4-0000-7000-8000-0000000000d2', title: '周报（新）' })], nextCursor: null }))
+    fireEvent.click(within(alert).getByRole('button', { name: '重试' }))
+    expect(await screen.findByRole('link', { name: /周报（新）/ })).toBeInTheDocument()
+    expect(screen.queryByText('搜索结果没能刷新，显示的还是之前的内容')).toBeNull()
   })
 })

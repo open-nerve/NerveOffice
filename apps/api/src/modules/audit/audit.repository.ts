@@ -67,10 +67,10 @@ export class AuditRepository {
    * 按条件查询（M2-P1 设计 §3.7）：条件之间是"并且"，按时间与 id 倒序；after 是上一页最后一条的位置（keyset）。
    * 多取的一条由调用方判断有没有下一页。现有的三个索引（时间、操作者、对象）覆盖这几种条件
    */
-  async query(filter: AuditFilter): Promise<AuditRecord[]> {
+  async query(filter: AuditFilter, transaction?: Transaction): Promise<AuditRecord[]> {
     const e = auditEvents
     const { after } = filter
-    return this.db
+    return executorOf(this.db, transaction)
       .select({
         id: e.id,
         occurredAt: e.occurredAt,

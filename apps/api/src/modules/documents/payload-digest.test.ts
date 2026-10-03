@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { createdPayloadDigest, savedPayloadDigest } from './payload-digest.ts'
+import { createdPayloadDigest, folderCreatedPayloadDigest, savedPayloadDigest } from './payload-digest.ts'
 
 describe('负载摘要', () => {
   it('新建：sha256("created\\n" + 类型 + "\\n" + 标题)', () => {
@@ -44,5 +44,21 @@ describe('负载摘要', () => {
 
   it('新建与保存的摘要不会相同（以种类开头）', () => {
     expect(createdPayloadDigest('sheet', '')).not.toEqual(savedPayloadDigest(1, Buffer.alloc(0)))
+  })
+
+  it('新建文件夹（M2 Codex 评审 CX6）：sha256("folder-created\\n" + 空间 + "\\n" + 父文件夹（没有时留空）+ "\\n" + 名称)，与迁移 0021 回填的写法相同', () => {
+    const spaceId = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0e'
+    const parentId = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0f'
+    expect(folderCreatedPayloadDigest(spaceId, parentId, '资料 甲')).toEqual(createHash('sha256').update(`folder-created\n${spaceId}\n${parentId}\n资料 甲`, 'utf8').digest())
+    expect(folderCreatedPayloadDigest(spaceId, undefined, '资料')).toEqual(createHash('sha256').update(`folder-created\n${spaceId}\n\n资料`, 'utf8').digest())
+    // 每一项都算数：换了空间、父文件夹、名称就不是同一个请求；与新建文档的摘要也分得开
+    const digests = [
+      folderCreatedPayloadDigest(spaceId, undefined, '资料'),
+      folderCreatedPayloadDigest(spaceId, parentId, '资料'),
+      folderCreatedPayloadDigest(parentId, undefined, '资料'),
+      folderCreatedPayloadDigest(spaceId, undefined, '资料2'),
+      createdPayloadDigest('sheet', '资料', spaceId),
+    ]
+    expect(new Set(digests.map(digest => digest.toString('hex'))).size).toBe(digests.length)
   })
 })

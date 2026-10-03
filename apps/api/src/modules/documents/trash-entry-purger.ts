@@ -90,7 +90,7 @@ export class TrashEntryPurger {
 
   /**
    * 一个文件夹的删除单元：这一单里的全部行，以及子树里属于别的删除单元的行（spec §4 的"连带"）。
-   * 先删文档再删文件夹（外键是 restrict，文档指着文件夹）；文档的内容与修订记录随外键 cascade。
+   * 先删文档再删文件夹（外键是 restrict，文档指着文件夹）；文档的内容、修订记录与单独授权随外键 cascade。
    * 锁的实际顺序（调用方已取树锁、空间行、这一单的文档行与回收站行）：之后锁子树里的文档行（lockInFolders，含属于别的删除单元的，
    * 按 id）→ 删文档行 → 删文件夹行（逐层，锁随删除取得）→ 删连带的回收站行与这一单的回收站行（deleteEmptied）。
    * 也就是"文档行 → 回收站行 → 文档行 → 文件夹行 → 回收站行"：先后与跨空间移动文件夹不同，不成环靠的是
@@ -128,12 +128,13 @@ export class TrashEntryPurger {
       throw new Error(`永久删除的子树里有正常状态的行（文件夹 ${folders} 个、文档 ${documents} 份），什么也不删：${entry.id}`)
   }
 
-  /** 这些删除单元里已经没有任何行的那些（永久删除之后），一起删掉并返回真正删掉的 id。 */
+  /**
+   * 这些删除单元里已经没有任何行的那些（永久删除之后），一起删掉并返回真正删掉的 id。
+   * 两次计数逐条执行：同一个事务在一个连接上，pg 在一个连接上排队执行查询的做法已经弃用（M2 Codex 评审的后端修复时发现）
+   */
   private async deleteEmptied(candidates: readonly string[], transaction: Transaction): Promise<string[]> {
-    const [documents, folders] = await Promise.all([
-      this.documents.countByTrashEntries(candidates, transaction),
-      this.folders.countByTrashEntries(candidates, transaction),
-    ])
+    const documents = await this.documents.countByTrashEntries(candidates, transaction)
+    const folders = await this.folders.countByTrashEntries(candidates, transaction)
     const emptied = candidates.filter(id => (documents.get(id) ?? 0) === 0 && (folders.get(id) ?? 0) === 0)
     await this.entries.deleteMany(emptied, transaction)
     return emptied

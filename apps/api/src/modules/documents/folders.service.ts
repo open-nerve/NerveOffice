@@ -1,8 +1,9 @@
 import type { AuditActionDetailsInput, CreatedFolder, Folder, FolderListQuery, FolderListResponse } from '@nerve-office/contracts'
+import type { Buffer } from 'node:buffer'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { AccessibleFolder, Actor, FolderOperation, SpaceContentAccess } from './document-access-policy.ts'
-import type { FolderRow, SubtreeSummary } from './folders.repository.ts'
+import type { CreatedFolderRow, FolderRow, SubtreeSummary } from './folders.repository.ts'
 import { FOLDER_LIST_MAX_ITEMS, FOLDER_MAX_DEPTH } from '@nerve-office/contracts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
@@ -11,11 +12,12 @@ import { AuditService } from '../audit/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { SpacesService } from '../spaces/index.ts'
 import { folderPermissionsOf } from './access-rules.ts'
-import { DocumentAccessPolicy, requireCreateTarget, requireFolderContent, requireSpaceContent, requireSpaceOperation } from './document-access-policy.ts'
+import { DocumentAccessPolicy, requireCreateTarget, requireFolderContent, requireSpaceContent } from './document-access-policy.ts'
 import { DocumentsRepository } from './documents.repository.ts'
 import { requireFolderIn } from './folder-location.ts'
 import { toFolder } from './folder-views.ts'
 import { FoldersRepository } from './folders.repository.ts'
+import { folderCreatedPayloadDigest } from './payload-digest.ts'
 import { SpaceTreeRepository } from './space-tree.repository.ts'
 import { TrashEntriesRepository } from './trash-entries.repository.ts'
 import { WriteAccessRevocation } from './write-access.ts'
@@ -63,35 +65,52 @@ export class FoldersService {
     private readonly writeAccess: WriteAccessRevocation,
   ) {}
 
-  /** 列出一层：parentId 省略表示空间的根目录。看不到这个空间与它不存在都是 NOT_FOUND。 */
+  /**
+   * 列出一层：parentId 省略表示空间的根目录。看不到这个空间与它不存在都是 NOT_FOUND。
+   * 判断权限与读目录在同一个只读快照里（M2 Codex 评审 CX1）
+   */
   async list(actor: Actor, query: FolderListQuery): Promise<FolderListResponse> {
-    const space = await requireSpaceContent(this.policy, actor, query.spaceId, 'view')
-    const parent = query.parentId === undefined ? null : (await this.requireFolderIn(query.spaceId, query.parentId)).id
-    const rows = await this.folders.listChildren(query.spaceId, parent)
-    const permissions = folderPermissionsOf(space.role)
-    return {
-      items: rows.slice(0, FOLDER_LIST_MAX_ITEMS).map(row => toFolder(row, permissions)),
-      truncated: rows.length > FOLDER_LIST_MAX_ITEMS,
-    }
+    return this.transactions.readSnapshot(async (transaction) => {
+      const space = await requireSpaceContent(this.policy, actor, query.spaceId, 'view', transaction)
+      const parent = query.parentId === undefined ? null : (await this.requireFolderIn(query.spaceId, query.parentId, transaction)).id
+      const rows = await this.folders.listChildren(query.spaceId, parent, transaction)
+      const permissions = folderPermissionsOf(space.role)
+      return {
+        items: rows.slice(0, FOLDER_LIST_MAX_ITEMS).map(row => toFolder(row, permissions)),
+        truncated: rows.length > FOLDER_LIST_MAX_ITEMS,
+      }
+    })
   }
 
   /**
    * 新建：要有在这个空间里新建的权限，父文件夹要在同一个空间里，层数不超过上限。
    * requestId 幂等：同一个请求重试只建一个（同一个文件夹里允许同名，看名字分辨不出重复的新建）。
-   * 幂等这一步只要求仍能看到这个空间（与新建文档、复制相同，00 号计划书 §7.4 第 2 步的同一条规则）：建好之后被降为查看者、
-   * 空间被归档，重发同一个请求照样拿到那个文件夹，而不是 403（M2-P6 复核 A 的 S-4）；不是重放才要求能新建。
+   * 是不是同一个请求按新建时存下的请求摘要判断（M2 Codex 评审 CX6，见 replay）。
+   * 先查重放，不是重放才看这次请求的空间（与新建文档的顺序相同，document-creation.service.ts；M2 Codex 评审复验的一般 4）：
+   * - 重放只看那个文件夹现在所在的空间还看不看得到（00 号计划书 §7.4 第 2 步的同一条规则）：建好之后被降为查看者、空间被归档，
+   *   重发同一个请求照样拿到它，而不是 403（M2-P6 复核 A 的 S-4）；它被移到我看得到的空间、原来的空间我已经看不到了，
+   *   同样是重放——原来先要求请求里的空间仍然看得到，这时回 404，客户端会当作没有建成；
+   * - 它进了回收站：按"看不到"回答（REQUEST_ID_CONFLICT），同样不看这次请求里的空间，与新建文档一致（M2 Codex 评审第二轮复验的一般 4）；
+   * - 重放不取锁（不让结构性的改动为它排队），也不要求这次请求的空间能新建；不是重放才要求能新建、取锁、锁下再判断。
    * 响应带 replayed：重放为真，客户端据此说明"上一次其实已经完成"（M2-P6 复核第二批 S-1）。
    */
   async create(actor: Actor, command: CreateFolderCommand, origin: AuditOrigin): Promise<CreatedFolder> {
+    const digest = folderCreatedPayloadDigest(command.spaceId, command.parentId, command.name)
     return this.transactions.run(async (transaction) => {
-      const space = await this.lockIfCreatable(actor, command.spaceId, transaction)
-      const permissions = folderPermissionsOf(space.role)
-
       const previous = await this.folders.findByRequestId(command.requestId, transaction)
       if (previous !== undefined)
-        return { ...toFolder(this.replay(actor, command, previous), permissions), replayed: true }
-      // 不是重放才要求能新建：能新建时这是锁下的判断，不能新建时就是上面那次（没有取锁）
-      requireSpaceOperation(space, 'createFolders')
+        return this.replay(actor, digest, previous, transaction)
+
+      await this.lockCreatable(actor, command.spaceId, transaction)
+      // 锁下再查一次重放：同一个请求的两次同时到达（结果未知之后的重试赶上了还在路上的原请求），都没在上面查到。
+      // 载荷相同，空间也相同，两次由这个空间的树锁排队：后拿到锁的一方在这里看到前一方建好的文件夹，按重放回答，
+      // 而不是插入时撞上 requestId 的唯一约束、回 REQUEST_ID_CONFLICT。新建文档先取 requestId 的 advisory lock 再查，
+      // 做到的是同一件事；这里不另加锁，排队靠新建本来就要取的树锁
+      const concurrent = await this.folders.findByRequestId(command.requestId, transaction)
+      if (concurrent !== undefined)
+        return this.replay(actor, digest, concurrent, transaction)
+      // 锁下再判断：这期间可能被降为查看者、移出空间，空间可能被归档
+      const space = await requireSpaceContent(this.policy, actor, command.spaceId, 'createFolders', transaction)
 
       const parent = command.parentId === undefined ? undefined : await this.requireFolderIn(command.spaceId, command.parentId, transaction)
       const depth = parent === undefined ? 1 : parent.depth + 1
@@ -105,13 +124,14 @@ export class FoldersService {
         createdBy: actor.userId,
         depth,
         requestId: command.requestId,
+        payloadDigest: digest,
       }, transaction)
       // 同一个 requestId 同时被别的空间里的新建用掉了（空间树的锁只让同一个空间里的排队）
       if (folder === undefined)
         throw new AppError('REQUEST_ID_CONFLICT')
       // 只记位置，不记名称（M2 总设计 §2.1 第 5 条，M2-P6 复核 M-1）
       await this.record({ action: 'folders.created', details: { spaceId: folder.spaceId, parentId: folder.parentId } }, actor, folder.id, origin, transaction)
-      return { ...toFolder(folder, permissions), replayed: false }
+      return { ...toFolder(folder, folderPermissionsOf(space.role)), replayed: false }
     })
   }
 
@@ -181,19 +201,16 @@ export class FoldersService {
   }
 
   /**
-   * 判断能否看这个空间的内容（看不到与不存在都是 NOT_FOUND）；能新建时取空间树的锁与空间行的共享锁、锁下再判断一次，返回锁下的判断。
+   * 新建之前：先判断（不加锁）能在这个空间里新建文件夹——看不到与不存在都是 NOT_FOUND，能看却不能新建（查看者、归档的空间）是
+   * PERMISSION_DENIED，都不取锁，不让结构性的改动为它们排队（与保存相同，复验 RA7 的做法）；能新建再取空间树的锁与空间行的共享锁：
    * - 空间树的结构性改动串行（设计 §3.4 第 2 条）：这把锁排在空间行之前；
    * - 空间行的共享锁与归档、移出成员（空间行的 FOR NO KEY UPDATE）互斥，它们提交之后的新建一定被拒绝。
-   * 看不到的请求不取任何锁；不能新建的（查看者、归档的空间）同样不取：它能得到的只有重放，不加锁查一次请求标识就有结论，
-   * 不让结构性的改动为它排队（与保存相同，复验 RA7 的做法）
+   * 锁下的判断由调用方在锁下先查重放之后再做（create）
    */
-  private async lockIfCreatable(actor: Actor, spaceId: string, transaction: Transaction): Promise<SpaceContentAccess> {
-    const unlocked = await requireSpaceContent(this.policy, actor, spaceId, 'view', transaction)
-    if (!unlocked.permissions.canCreateFolders)
-      return unlocked
+  private async lockCreatable(actor: Actor, spaceId: string, transaction: Transaction): Promise<void> {
+    await requireSpaceContent(this.policy, actor, spaceId, 'createFolders', transaction)
     await this.tree.lock([spaceId], transaction)
     await this.spaces.holdSpace(spaceId, transaction)
-    return requireSpaceContent(this.policy, actor, spaceId, 'view', transaction)
   }
 
   /** 判断这次改动要的权限：改名要改名的权限，移动要移动的权限，两项都给就两项都要（一条查询判断完）。 */
@@ -312,18 +329,24 @@ export class FoldersService {
   }
 
   /**
-   * 同一个 requestId 已经建过文件夹：是同一个人、同一次新建（同一个空间、同一个父文件夹、同一个名称），
-   * 才返回那个文件夹；否则拒绝，不透露它的任何信息。
-   * 按当前的行比较：建好之后改名或移动过，再重发同一个 requestId 会被当作另一个请求（重试只发生在几秒之内）
+   * 同一个 requestId 已经建过文件夹：是同一个人的同一次新建（新建时存下的请求摘要与这次的相同），它不在回收站里，而且这个人
+   * 现在仍能看到它所在的空间，才返回那个文件夹现在的样子（标为重放），权限按它现在所在的空间给；否则拒绝（REQUEST_ID_CONFLICT），
+   * 不透露它的任何信息。与新建文档的重放同一个做法（document-creation.service.ts）：按不可变的请求摘要判断，再重新判断现在的访问权。
+   * 原来拿请求与文件夹现在的名称、位置比较（M2 Codex 评审 CX6）：建好之后改名或移动过（同一个空间里、跨空间），原样的重试
+   * 被判成冲突，客户端随即放弃这个标识、可能让人重建一次；载荷不同、却碰巧与现状相同的请求反而被当成重放。
+   * 只看它现在所在的空间，不看这次请求里的空间（M2 Codex 评审复验的一般 4）：跨空间移动之后，原来的空间看不看得到都不影响重放。
+   * 进了回收站的按"看不到"回答（M2 Codex 评审第二轮复验的一般 4）：回收站里的东西对普通接口一律不存在（M2-P4，见 trash.service.ts），
+   * 新建文档的重放按 id 只找正常状态的文档，同样是 REQUEST_ID_CONFLICT；恢复之后原样重发又是重放
    */
-  private replay(actor: Actor, command: CreateFolderCommand, previous: FolderRow): FolderRow {
-    const same = previous.createdBy === actor.userId
-      && previous.spaceId === command.spaceId
-      && previous.parentId === (command.parentId ?? null)
-      && previous.name === command.name
-    if (!same)
+  private async replay(actor: Actor, digest: Buffer, previous: CreatedFolderRow, transaction: Transaction): Promise<CreatedFolder> {
+    if (previous.createdBy !== actor.userId || !previous.payloadDigest.equals(digest))
       throw new AppError('REQUEST_ID_CONFLICT')
-    return previous
+    if (previous.status !== 'active')
+      throw new AppError('REQUEST_ID_CONFLICT')
+    const access = await this.policy.spaceAccessOf(actor, previous.spaceId, transaction)
+    if (access?.role === undefined)
+      throw new AppError('REQUEST_ID_CONFLICT')
+    return { ...toFolder(previous, folderPermissionsOf(access.role)), replayed: true }
   }
 
   /**

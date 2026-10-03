@@ -1,9 +1,12 @@
 import type { Request, Response } from 'express'
 import type pg from 'pg'
+import type { DbTransaction, Transaction } from './database.ts'
+import { sql } from 'drizzle-orm'
 import { describe, expect, it, vi } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { CommitLedger } from './commit-ledger.ts'
-import { TRANSACTION_ABORTED_MESSAGE, TransactionRunner } from './transaction-runner.ts'
+import { SnapshotScope } from './snapshot-scope.ts'
+import { NESTED_IN_SNAPSHOT_MESSAGE, TRANSACTION_ABORTED_MESSAGE, TransactionRunner } from './transaction-runner.ts'
 
 type TransactionStatus = 'I' | 'T' | 'E'
 
@@ -46,9 +49,9 @@ function prefix(text: string): string {
   return (text.split(' ')[0] ?? text).toLowerCase()
 }
 
-function runnerWith(client: ReturnType<typeof fakeClient>, commits = new CommitLedger()): TransactionRunner {
+function runnerWith(client: ReturnType<typeof fakeClient>, commits = new CommitLedger(), snapshots = new SnapshotScope()): TransactionRunner {
   const pool = { connect: vi.fn(async () => client) }
-  return new TransactionRunner(pool as unknown as pg.Pool, commits)
+  return new TransactionRunner(pool as unknown as pg.Pool, commits, snapshots)
 }
 
 /** 在一个请求的记录里执行 work：与 HTTP 管线里同一个中间件 */
@@ -152,7 +155,7 @@ describe('TransactionRunner', () => {
     const pool = { connect: vi.fn(async () => {
       throw new Error('timeout exceeded when trying to connect')
     }) }
-    await expect(new TransactionRunner(pool as unknown as pg.Pool, new CommitLedger()).run(async () => 1)).rejects.toThrow('timeout exceeded')
+    await expect(new TransactionRunner(pool as unknown as pg.Pool, new CommitLedger(), new SnapshotScope()).run(async () => 1)).rejects.toThrow('timeout exceeded')
   })
 })
 
@@ -197,5 +200,142 @@ describe('TransactionRunner：提交之后在这个请求的记录上记一笔�
     const commits = new CommitLedger()
     await expect(runnerWith(fakeClient(), commits).run(async () => 1)).resolves.toBe(1)
     expect(commits.hasCommitted()).toBe(false)
+  })
+})
+
+/** 在快照的事务上发一条语句：测试里把不透明的事务换回执行器（服务只能把事务原样传给仓储） */
+async function select(transaction: Transaction, label: 'opening' | 'work'): Promise<void> {
+  const executor = transaction as unknown as DbTransaction
+  await (label === 'opening' ? executor.execute(sql`select 'opening'`) : executor.execute(sql`select 'work'`))
+}
+
+describe('TransactionRunner.readSnapshot：读请求的只读快照（M2 Codex 评审 CX1）', () => {
+  it('REPEATABLE READ、READ ONLY：先执行登记的开场核对（第一条语句），再执行 work，COMMIT；不记提交、不另发确认的语句，连接照常放回', async () => {
+    const client = fakeClient()
+    const commits = new CommitLedger()
+    const runner = runnerWith(client, commits)
+    runner.registerSnapshotOpening(async transaction => select(transaction, 'opening'))
+    const seen = await inRequest(commits, async () => {
+      const value = await runner.readSnapshot(async (transaction) => {
+        await select(transaction, 'work')
+        return 7
+      })
+      return { value, committed: commits.hasCommitted() }
+    })
+    expect(seen).toEqual({ value: 7, committed: false })
+    expect(client.statements).toEqual(['begin isolation level repeatable read read only', 'select \'opening\'', 'select \'work\'', 'commit'])
+    expect(client.release).toHaveBeenCalledExactlyOnceWith(false)
+  })
+
+  it('开场核对不通过（AppError，例如登录已过期）：work 不执行，回滚，连接照常放回', async () => {
+    const client = fakeClient()
+    const runner = runnerWith(client)
+    const expired = new AppError('SESSION_EXPIRED')
+    runner.registerSnapshotOpening(async () => {
+      throw expired
+    })
+    const work = vi.fn(async () => 1)
+    await expect(runner.readSnapshot(work)).rejects.toBe(expired)
+    expect(work).not.toHaveBeenCalled()
+    expect(client.statements.map(prefix)).toEqual(['begin', 'rollback'])
+    expect(client.release).toHaveBeenCalledExactlyOnceWith(false)
+  })
+
+  it('归还连接的规则与 run() 一致：业务错误回滚后放回，其他错误回滚后丢弃，BEGIN 失败也归还并丢弃', async () => {
+    const business = fakeClient()
+    await expect(runnerWith(business).readSnapshot(async () => {
+      throw new AppError('NOT_FOUND')
+    })).rejects.toBeInstanceOf(AppError)
+    expect(business.statements.map(prefix)).toEqual(['begin', 'rollback'])
+    expect(business.release).toHaveBeenCalledExactlyOnceWith(false)
+
+    const unexpected = fakeClient()
+    await expect(runnerWith(unexpected).readSnapshot(async () => {
+      throw new Error('Query read timeout')
+    })).rejects.toThrow('Query read timeout')
+    expect(unexpected.release).toHaveBeenCalledExactlyOnceWith(true)
+
+    const beginFails = fakeClient(['begin'])
+    const work = vi.fn(async () => 1)
+    await expect(runnerWith(beginFails).readSnapshot(work)).rejects.toThrow()
+    expect(work).not.toHaveBeenCalled()
+    expect(beginFails.release).toHaveBeenCalledExactlyOnceWith(true)
+  })
+
+  it('没有登记开场核对（单元测试、只组装了部分模块的命令行）：只执行 work', async () => {
+    const client = fakeClient()
+    await expect(runnerWith(client).readSnapshot(async (transaction) => {
+      await select(transaction, 'work')
+      return 'ok'
+    })).resolves.toBe('ok')
+    expect(client.statements).toEqual(['begin isolation level repeatable read read only', 'select \'work\'', 'commit'])
+  })
+
+  it('开场核对只能登记一次：再登记是接线错误，报错，不悄悄盖掉先登记的', () => {
+    const runner = runnerWith(fakeClient())
+    runner.registerSnapshotOpening(async () => {})
+    expect(() => runner.registerSnapshotOpening(async () => {})).toThrow('只读快照的开场核对已经登记过')
+  })
+
+  it('一个请求只开一个快照：快照里再开快照或写事务直接报错，不另借连接（连接池满时会与外层互相等待）', async () => {
+    const client = fakeClient()
+    const pool = { connect: vi.fn(async () => client) }
+    const runner = new TransactionRunner(pool as unknown as pg.Pool, new CommitLedger(), new SnapshotScope())
+    await expect(runner.readSnapshot(async () => runner.readSnapshot(async () => 1))).rejects.toThrow(NESTED_IN_SNAPSHOT_MESSAGE)
+    await expect(runner.readSnapshot(async () => runner.run(async () => 1))).rejects.toThrow(NESTED_IN_SNAPSHOT_MESSAGE)
+    expect(pool.connect).toHaveBeenCalledTimes(2)
+    // 快照结束之后照常
+    await expect(runner.run(async () => 2)).resolves.toBe(2)
+    await expect(runner.readSnapshot(async () => 3)).resolves.toBe(3)
+  })
+
+  it('"正在快照里"的标记是 database 模块共用的那一份（SnapshotScope，连接池据此拒绝查询）：开场核对与 work 里为真，快照之外、结束之后为假', async () => {
+    const snapshots = new SnapshotScope()
+    const runner = runnerWith(fakeClient(), new CommitLedger(), snapshots)
+    const seen: Record<string, boolean | undefined> = {}
+    runner.registerSnapshotOpening(async () => {
+      seen.opening = snapshots.active()
+    })
+    let later: Promise<boolean> | undefined
+    seen.before = snapshots.active()
+    await runner.readSnapshot(async () => {
+      seen.work = snapshots.active()
+      // 快照里排下、结束之后才执行的操作
+      later = new Promise(resolve => setTimeout(resolve, 0)).then(() => snapshots.active())
+    })
+    seen.after = snapshots.active()
+    seen.later = await later
+    expect(seen).toEqual({ before: false, opening: true, work: true, after: false, later: false })
+  })
+
+  it('业务错误、意外错误结束的快照同样结束标记', async () => {
+    const snapshots = new SnapshotScope()
+    let inside: Promise<boolean> | undefined
+    await expect(runnerWith(fakeClient(), new CommitLedger(), snapshots).readSnapshot(async () => {
+      inside = new Promise(resolve => setTimeout(resolve, 0)).then(() => snapshots.active())
+      throw new AppError('NOT_FOUND')
+    })).rejects.toBeInstanceOf(AppError)
+    expect(await inside).toBe(false)
+    await expect(runnerWith(fakeClient(), new CommitLedger(), snapshots).readSnapshot(async () => {
+      inside = new Promise(resolve => setTimeout(resolve, 0)).then(() => snapshots.active())
+      throw new Error('Query read timeout')
+    })).rejects.toThrow('Query read timeout')
+    expect(await inside).toBe(false)
+  })
+
+  it('快照里排下、快照结束之后才执行的事务（定时器、没有等的异步操作）不是嵌套：照常执行', async () => {
+    const client = fakeClient()
+    const pool = { connect: vi.fn(async () => client) }
+    const runner = new TransactionRunner(pool as unknown as pg.Pool, new CommitLedger(), new SnapshotScope())
+    let release: () => void = () => {}
+    const released = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let later: Promise<number> | undefined
+    await runner.readSnapshot(async () => {
+      later = released.then(async () => runner.run(async () => 4))
+    })
+    release()
+    await expect(later).resolves.toBe(4)
   })
 })

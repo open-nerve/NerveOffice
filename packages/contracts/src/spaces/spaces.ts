@@ -55,6 +55,21 @@ export const spaceViewSchema = z.object({
 
 export type SpaceView = z.infer<typeof spaceViewSchema>
 
+/**
+ * 认得出是哪个空间的样子（M2-P5 设计 §3.2、§3.5）：搜索结果与"与我共享"里文档所在的空间。有了单独授权，这两处会出现
+ * 别人的个人空间（以及我没有角色的团队空间），所以只给认得出它的东西，不带成员、权限与目录结构：
+ * - 团队空间：名称；
+ * - 个人空间：所有者（"人"的结构），**不给存的名称**——那是所有者建号时的显示名，可以伪造（规范 §2.4）。
+ *   界面按所有者的人名呈现（人名组件）；所有者是自己时写"我的空间"。
+ * 响应的结构宽松（见 auth 的会话信息）：服务端多给的字段（例如个人空间存的名称）在客户端被丢弃
+ */
+export const spaceIdentitySchema = z.discriminatedUnion('type', [
+  z.object({ id: z.uuid(), type: z.literal('team'), name: z.string() }),
+  z.object({ id: z.uuid(), type: z.literal('personal'), owner: userSummarySchema }),
+])
+
+export type SpaceIdentity = z.infer<typeof spaceIdentitySchema>
+
 /** 我能看到的空间：个人空间在前，团队空间按名称排序（M2-P2 设计 §3.3）。 */
 export const spaceListResponseSchema = z.object({
   items: z.array(spaceViewSchema),

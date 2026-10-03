@@ -1,6 +1,7 @@
 import type { SpaceView } from '@nerve-office/contracts'
 import type { RefObject } from 'react'
 import type { OrganizeNotice } from './item-actions.tsx'
+import type { TargetSpaces } from './target-spaces.ts'
 import { FOLDER_LIST_MAX_ITEMS, folderNameSchema } from '@nerve-office/contracts'
 import { useMutation } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
@@ -13,20 +14,17 @@ import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
 import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { problemOf } from '../../shared/lib/validation.ts'
-import { Alert, AlertDescription, Button, buttonVariants, FieldProblem, Input, Label, Notice, Skeleton } from '../../shared/ui/index.ts'
+import { Alert, AlertDescription, Button, buttonVariants, FieldProblem, Input, Label, Skeleton } from '../../shared/ui/index.ts'
+import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { DocumentList } from './document-list.tsx'
 import { FolderList } from './folder-list.tsx'
 import { useFolderTrail } from './folder-trail.ts'
 import { createFolder } from './folders-api.ts'
+import { OrganizeNoticeBar } from './organize-notice-bar.tsx'
+import { useOrganizePanels } from './organize-panels.ts'
 import { useOrganizeRefresh, useOrganizeRefreshChecked } from './organize-refresh.ts'
 
 const text = messages.organize
-
-/** 展开了操作面板的那一个对象（整页只有一个：同时开几个面板既分散注意，也会白白多取几次元数据） */
-interface OpenItem {
-  readonly kind: 'folder' | 'document'
-  readonly id: string
-}
 
 /** 空间在界面上的名字：个人空间是"我的空间" */
 function spaceNameOf(space: SpaceView): string {
@@ -82,6 +80,7 @@ interface NewFolderFormProps {
  * 说明里说"列表没能刷新"，表单也不一直停在"正在新建…"；超时之后刷新才回来的，说明随后改过来（第五批 G4）。
  * 服务端说这次是重放（replayed，M2-P6 复核第二批 S-1）：结果未知的那一次其实已经建好了（同一个位置、同一个名称），表单关掉，
  * 在列表上方说明"上一次其实已经完成"，不当成这一次新建的；这件事随之了结，再新建就是另一个。
+ * 成功之后的刷新最多等到时限（Codex 对抗评审 CX4）：一直不回来时表单照常关掉，在列表上方说明建好了、列表还在刷新。
  * 名称不合法时说明原因（WCAG 3.3.1，M2-P6 复核 S4）。
  */
 function NewFolderForm({ spaceId, parentId, onDone, onCancel, onDenied }: NewFolderFormProps) {
@@ -98,8 +97,11 @@ function NewFolderForm({ spaceId, parentId, onDone, onCancel, onDenied }: NewFol
   const mutation = useMutation({
     mutationFn: async (value: string) => ledger.send(`folder:${spaceId}/${parentId ?? ''}`, async requestId => createFolder({ spaceId, name: value, requestId, ...(parentId === undefined ? {} : { parentId }) })),
     onSuccess: async (folder) => {
-      await refresh([spaceId])
-      onDone(folder.replayed ? { message: text.createFolderReplayed(folder.name) } : undefined)
+      const refreshing = await refresh([spaceId])
+      if (folder.replayed)
+        onDone({ message: text.createFolderReplayed(folder.name), refreshing })
+      else
+        onDone(refreshing === undefined ? undefined : { message: text.folderCreated(folder.name), refreshing })
     },
     onError: async (error) => {
       if (isAccessDenied(error)) {
@@ -154,8 +156,11 @@ interface SpaceContentsProps {
   readonly space: SpaceView
   /** 地址里的 id 路径：空数组就是空间的根目录 */
   readonly folderIds: readonly string[]
-  /** 我能新建内容的空间（服务端给的 canCreateDocuments）：移动与复制的目标候选。由空间页传入，避免与 features/spaces 成环 */
-  readonly targetSpaces: readonly SpaceView[]
+  /**
+   * 我能新建内容的空间（服务端给的 canCreateDocuments），连同取到了没有：移动与复制的目标候选。
+   * 由空间页传入（targetSpacesOf），避免与 features/spaces 成环
+   */
+  readonly targetSpaces: TargetSpaces
   /**
    * 页内的操作按访问权限被拒绝：由空间页重新请求页头、导航与各层的列表，兑现为列表刷新好了没有（最多等 10 秒）：
    * 整理面板的说明据此说"列表已刷新"还是"没能刷新"（M2-P6 复核第五批 G3）
@@ -173,49 +178,20 @@ interface SpaceContentsProps {
 export function SpaceContents({ space, folderIds, targetSpaces, onDenied, titleRef }: SpaceContentsProps) {
   const trail = useFolderTrail(space.id, folderIds)
   const [creating, setCreating] = useState(false)
-  const [open, setOpen] = useState<OpenItem>()
-  // 列表上方的说明：每次一条新的对象（它本身就是这条说明的标识，换了一条就再接一次焦点）
-  const [notice, setNotice] = useState<OrganizeNotice>()
+  // 哪一行展开了操作面板、列表上方的说明与焦点的去处（与"与我共享"共用，organize-panels.tsx）
+  const panels = useOrganizePanels(titleRef)
+  const { open, notice } = panels
   const newFolderRef = useRef<HTMLButtonElement>(null)
-  // 最后一次被点开的那一行的"操作"按钮：面板收起、说明关掉之后焦点回到它身上，不落到 body（M2-P4 审查建议 1）。
-  // 由行在点击时记下这个元素，不用 React 的 ref：面板一收起，绑在"展开的那一行"上的 ref 就被置空了，那时已经晚了
-  const openTriggerRef = useRef<HTMLButtonElement>(null)
   const focusAfterRender = useFocusAfterRender()
   const parentId = folderIds.at(-1)
   const folderName = trail.crumbs.at(-1)?.name
   useDocumentTitle(folderName === undefined ? spaceNameOf(space) : `${folderName} - ${spaceNameOf(space)}`)
 
-  /** 焦点还给那一行的"操作"；那一行已经不在了（删掉了、移走了、随新的权限不再有"操作"）时交给页面的标题 */
-  function focusTrigger(): void {
-    focusAfterRender(openTriggerRef.current?.isConnected === true ? openTriggerRef : titleRef)
-  }
-
-  function toggle(kind: OpenItem['kind'], id: string): void {
-    const same = open?.kind === kind && open.id === id
-    setOpen(same ? undefined : { kind, id })
-    // 收起面板（再点一次"操作"，或者面板里点"取消"）：面板里的按钮随之消失，焦点还给这一行的"操作"
-    if (same)
-      focusTrigger()
-  }
-
-  function finish(done: OrganizeNotice | undefined): void {
-    setOpen(undefined)
-    setNotice(done)
-    // 没有说明条时（例如改名成功）焦点还给这一行的"操作"；有说明条时由它接住（那一行常常随之消失）
-    if (done === undefined)
-      focusTrigger()
-  }
-
-  function closeNotice(): void {
-    setNotice(undefined)
-    focusTrigger()
-  }
-
   function doneCreating(done?: OrganizeNotice): void {
     setCreating(false)
-    // 有说明时（服务端说这次是重放）由说明条接住焦点
+    // 有说明时（服务端说这次是重放、刷新到了时限还在后台）由说明条接住焦点
     if (done !== undefined) {
-      setNotice(done)
+      panels.showNotice(done)
       return
     }
     // 新建按钮随新的权限不再显示时（例如空间刚被归档）交给标题
@@ -225,7 +201,7 @@ export function SpaceContents({ space, folderIds, targetSpaces, onDenied, titleR
   /** 新建文件夹被拒绝：表单关掉，原因写在列表上方（说明接住焦点），页面按新的权限重新请求 */
   function creationDenied(denied: OrganizeNotice): void {
     setCreating(false)
-    setNotice(denied)
+    panels.showNotice(denied)
     void onDenied()
   }
 
@@ -254,11 +230,7 @@ export function SpaceContents({ space, folderIds, targetSpaces, onDenied, titleR
       {creating && space.permissions.canCreateFolders && (
         <NewFolderForm spaceId={space.id} parentId={parentId} onDone={doneCreating} onCancel={() => doneCreating()} onDenied={creationDenied} />
       )}
-      {notice !== undefined && (
-        <Notice focusKey={notice} action={notice.action} onClose={closeNotice} variant={notice.problem === true ? 'destructive' : 'default'}>
-          {notice.message}
-        </Notice>
-      )}
+      {notice !== undefined && <OrganizeNoticeBar notice={notice} onClose={panels.closeNotice} />}
       {trail.children.isPending && (
         <div role="status" aria-label={text.folderLoading}>
           <Skeleton className="h-12 w-full" />
@@ -273,6 +245,8 @@ export function SpaceContents({ space, folderIds, targetSpaces, onDenied, titleR
           </AlertDescription>
         </Alert>
       )}
+      {/* 留着之前的子文件夹、刷新却失败了（Codex 对抗评审 CX5）：明说没能刷新、给出重试，之前的照常显示 */}
+      <RefreshProblem query={trail.children} list={text.folderListLabel} />
       {trail.children.data?.truncated === true && (
         <Alert>
           <AlertDescription>{text.folderTruncated(FOLDER_LIST_MAX_ITEMS)}</AlertDescription>
@@ -283,9 +257,9 @@ export function SpaceContents({ space, folderIds, targetSpaces, onDenied, titleR
         folderIds={folderIds}
         targetSpaces={targetSpaces}
         openId={open?.kind === 'folder' ? open.id : undefined}
-        openTriggerRef={openTriggerRef}
-        onToggle={id => toggle('folder', id)}
-        onDone={finish}
+        openTriggerRef={panels.openTriggerRef}
+        onToggle={id => panels.toggle('folder', id)}
+        onDone={panels.finish}
         onDenied={onDenied}
       />
       <DocumentList
@@ -293,9 +267,9 @@ export function SpaceContents({ space, folderIds, targetSpaces, onDenied, titleR
         folderId={parentId ?? null}
         targetSpaces={targetSpaces}
         openId={open?.kind === 'document' ? open.id : undefined}
-        openTriggerRef={openTriggerRef}
-        onToggle={id => toggle('document', id)}
-        onDone={finish}
+        openTriggerRef={panels.openTriggerRef}
+        onToggle={id => panels.toggle('document', id)}
+        onDone={panels.finish}
         onDenied={onDenied}
         hasFolders={(trail.children.data?.items.length ?? 0) > 0}
       />

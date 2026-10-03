@@ -1,6 +1,7 @@
-import type { Folder, SpaceView } from '@nerve-office/contracts'
+import type { Folder } from '@nerve-office/contracts'
 import type { RefObject } from 'react'
 import type { OrganizeNotice } from './item-actions.tsx'
+import type { TargetSpaces } from './target-spaces.ts'
 import { folderNameSchema } from '@nerve-office/contracts'
 import { Folder as FolderIcon } from 'lucide-react'
 import { useId } from 'react'
@@ -23,7 +24,8 @@ interface FolderRowProps {
   readonly folder: Folder
   /** 当前位置的 id 路径：进入这个文件夹就是在它后面接上自己的 id */
   readonly folderIds: readonly string[]
-  readonly targetSpaces: readonly SpaceView[]
+  /** 我能新建内容的空间，连同取到了没有：移动的目标候选 */
+  readonly targetSpaces: TargetSpaces
   readonly open: boolean
   /** 记下被点的那个"操作"按钮：面板收起之后空间页把焦点还给它 */
   readonly openTriggerRef: RefObject<HTMLButtonElement | null>
@@ -86,15 +88,15 @@ function FolderRow({ folder, folderIds, targetSpaces, open, openTriggerRef, onTo
           operations={{
             rename: async (name) => {
               await updateFolder(folder.id, { name })
-              await refresh([folder.spaceId])
+              return refresh([folder.spaceId])
             },
             move: async (destination) => {
               await moveFolder(folder.id, { spaceId: destination.spaceId, ...(destination.folderId === undefined ? {} : { folderId: destination.folderId }) })
-              await refresh([folder.spaceId, destination.spaceId])
+              return refresh([folder.spaceId, destination.spaceId])
             },
             remove: async () => {
               await deleteFolder(folder.id)
-              await refresh([folder.spaceId])
+              return refresh([folder.spaceId])
             },
             refresh: async destination => refreshAfterUnknown([folder.spaceId, ...(destination === undefined ? [] : [destination.spaceId])]),
           }}
@@ -110,7 +112,8 @@ function FolderRow({ folder, folderIds, targetSpaces, open, openTriggerRef, onTo
 interface FolderListProps {
   readonly folders: readonly Folder[]
   readonly folderIds: readonly string[]
-  readonly targetSpaces: readonly SpaceView[]
+  /** 我能新建内容的空间，连同取到了没有：移动的目标候选 */
+  readonly targetSpaces: TargetSpaces
   /** 当前展开操作面板的那一个（整页只有一个），undefined 表示都没展开 */
   readonly openId: string | undefined
   /** 记下被点的那个"操作"按钮：面板收起之后空间页把焦点还给它 */

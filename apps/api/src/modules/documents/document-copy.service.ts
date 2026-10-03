@@ -2,7 +2,8 @@ import type { CreatedDocument } from '@nerve-office/contracts'
 import type { Buffer } from 'node:buffer'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Transaction } from '../database/index.ts'
-import type { Actor, DocumentAccess } from './document-access-policy.ts'
+import type { DocumentAccess } from './access-rules.ts'
+import type { Actor } from './document-access-policy.ts'
 import type { RevisionRow } from './document-revisions.repository.ts'
 import type { DocumentRow } from './documents.repository.ts'
 import { copiedDocumentTitle } from '@nerve-office/contracts'
@@ -12,7 +13,7 @@ import { inIdOrder } from '../../shared/id-order.ts'
 import { AuditService } from '../audit/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { SpacesService } from '../spaces/index.ts'
-import { DocumentAccessPolicy, requireCreateTarget, requireDocumentContent } from './document-access-policy.ts'
+import { documentAccessIn, DocumentAccessPolicy, requireCreateTarget, requireDocumentContent } from './document-access-policy.ts'
 import { DocumentContentsRepository } from './document-contents.repository.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
 import { toDetail } from './document-views.ts'
@@ -113,7 +114,8 @@ export class DocumentCopyService {
         origin,
         details: { sourceId: id, sourceSpaceId: source.document.spaceId, spaceId: copy.spaceId, folderId: copy.folderId },
       }, { transaction })
-      return { ...toDetail(copy, { role: target.role, space: target.space }, userId), replayed: false }
+      // 副本是一份新文档、不带原文档的授权（§3.4(6)），在调用者有新建权限的目标空间里：按他在目标空间的访问给出，照常带文件夹
+      return { ...toDetail(copy, documentAccessIn(target), userId), replayed: false }
     })
   }
 

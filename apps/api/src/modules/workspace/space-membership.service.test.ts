@@ -79,7 +79,10 @@ function setup(access: SpaceAccess | null = MANAGER) {
       calls.push('audit')
     }),
   }
-  const transactions = { run: vi.fn(async <T>(work: (transaction: never) => Promise<T>) => work(transaction as never)) }
+  const transactions = {
+    run: vi.fn(async <T>(work: (transaction: never) => Promise<T>) => work(transaction as never)),
+    readSnapshot: vi.fn(async <T>(work: (transaction: never) => Promise<T>) => work(transaction as never)),
+  }
   const managed = new ManagedSpaces(policy as never, spaces as never, users as never)
   const service = new SpaceMembershipService(policy as never, spaces as never, users as never, managed, writeAccess, audit as never, transactions as never)
   return { service, calls, policy, spaces, users, writeAccess, audit, transaction }
@@ -169,9 +172,12 @@ describe('SpaceMembershipService.changeRole 与 remove', () => {
 
 describe('SpaceMembershipService.list', () => {
   it('先按角色从高到低、再按显示名；带能不能管理', async () => {
-    const { service } = setup()
+    const { service, spaces, users, transaction } = setup()
     const page = await service.list({ userId: AMY, systemAdmin: false }, SPACE)
     expect(page.canManage).toBe(true)
     expect(page.items.map(item => [item.user.id, item.role])).toEqual([[AMY, 'admin'], [BEN, 'viewer']])
+    // 判断、读成员与补人名在同一个只读快照里（M2 Codex 评审 CX1）
+    expect(spaces.members).toHaveBeenCalledWith(SPACE, { transaction })
+    expect(users.findByIds).toHaveBeenCalledWith(expect.anything(), transaction)
   })
 })

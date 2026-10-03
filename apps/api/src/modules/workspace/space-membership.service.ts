@@ -4,7 +4,6 @@ import type { Principal } from '../auth/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { Actor } from '../documents/index.ts'
 import type { SpaceMemberRecord } from '../spaces/index.ts'
-import type { User } from '../users/index.ts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { AuditService } from '../audit/index.ts'
@@ -13,7 +12,7 @@ import { DocumentAccessPolicy, requireSpaceManagement, WriteAccessRevocation } f
 import { SpacesService } from '../spaces/index.ts'
 import { UsersService } from '../users/index.ts'
 import { ManagedSpaces } from './managed-space.ts'
-import { compareMembers, toSpaceMember, toTeamSpace } from './workspace-views.ts'
+import { accountIn, compareMembers, toSpaceMember, toTeamSpace } from './workspace-views.ts'
 
 /**
  * 团队空间的成员与空间角色（M2-P2 设计 §3.9，US-M2-06）：空间管理员（空间没有归档）与系统管理员管理，
@@ -31,16 +30,21 @@ export class SpaceMembershipService {
     private readonly transactions: TransactionRunner,
   ) {}
 
-  /** 成员列表：含停用的成员（带状态），先按角色、再按显示名排序 */
+  /**
+   * 成员列表：含停用的成员（带状态），先按角色、再按显示名排序。
+   * 判断、读成员与补人名在同一个只读快照里（M2 Codex 评审 CX1）：判断之后被移出、降级，之后才有的成员关系不会出现
+   */
   async list(actor: Actor, spaceId: string): Promise<SpaceMemberListResponse> {
-    const access = await requireSpaceManagement(this.policy, actor, spaceId, 'viewMembers')
-    const members = await this.spaces.members(spaceId)
-    const accounts = await this.users.findByIds(members.map(member => member.userId))
-    return {
-      space: toTeamSpace(access.space),
-      canManage: access.permissions.canManageMembers,
-      items: members.map(member => toSpaceMember(member, this.accountOf(accounts, member.userId))).sort(compareMembers),
-    }
+    return this.transactions.readSnapshot(async (transaction) => {
+      const access = await requireSpaceManagement(this.policy, actor, spaceId, 'viewMembers', transaction)
+      const members = await this.spaces.members(spaceId, { transaction })
+      const accounts = await this.users.findByIds(members.map(member => member.userId), transaction)
+      return {
+        space: toTeamSpace(access.space),
+        canManage: access.permissions.canManageMembers,
+        items: members.map(member => toSpaceMember(member, accountIn(accounts, member.userId))).sort(compareMembers),
+      }
+    })
   }
 
   /**
@@ -118,14 +122,6 @@ export class SpaceMembershipService {
    * 提交之后才读的话，这一步遇到数据库繁忙时角色已经改了，客户端却只能得到"结果未知"（M2-P6 第 3 片复验）
    */
   private async withAccount(member: SpaceMemberRecord, transaction: Transaction): Promise<SpaceMember> {
-    return toSpaceMember(member, this.accountOf(await this.users.findByIds([member.userId], transaction), member.userId))
-  }
-
-  private accountOf(accounts: ReadonlyMap<string, User>, userId: string): User {
-    const account = accounts.get(userId)
-    // 成员行有外键指向账户，账户不删（只停用）：取不到说明数据不一致
-    if (account === undefined)
-      throw new Error(`成员的账户不存在：${userId}`)
-    return account
+    return toSpaceMember(member, accountIn(await this.users.findByIds([member.userId], transaction), member.userId))
   }
 }

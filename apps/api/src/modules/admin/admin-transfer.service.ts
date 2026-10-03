@@ -33,11 +33,16 @@ export class AdminTransferService {
     private readonly transactions: TransactionRunner,
   ) {}
 
-  /** 停用者个人空间里的文档标题：账户不存在 NOT_FOUND；账户仍然有效时 ACCOUNT_NOT_DISABLED（个人空间的内容对系统管理员不可见） */
+  /**
+   * 停用者个人空间里的文档标题：账户不存在 NOT_FOUND；账户仍然有效时 ACCOUNT_NOT_DISABLED（个人空间的内容对系统管理员不可见）。
+   * 账户的状态与标题在同一个只读快照里读（M2 Codex 评审 CX1）：判断之后账户被启用，之后才写进他个人空间的东西不会出现
+   */
   async titles(userId: string, query: AdminUserDocumentListQuery): Promise<AdminUserDocumentListResponse> {
-    const account = (await this.users.findByIds([userId])).get(userId)
-    const personalSpaceId = await this.personalSpaceIdOf(this.requireDisabled(account), undefined)
-    return this.transfers.titles(personalSpaceId, query.cursor)
+    return this.transactions.readSnapshot(async (transaction) => {
+      const account = (await this.users.findByIds([userId], transaction)).get(userId)
+      const personalSpaceId = await this.personalSpaceIdOf(this.requireDisabled(account), transaction)
+      return this.transfers.titles(personalSpaceId, query.cursor, transaction)
+    })
   }
 
   /**
@@ -105,7 +110,7 @@ export class AdminTransferService {
     return space
   }
 
-  private async personalSpaceIdOf(account: Pick<User, 'id'>, transaction: Transaction | undefined): Promise<string> {
+  private async personalSpaceIdOf(account: Pick<User, 'id'>, transaction: Transaction): Promise<string> {
     const space = await this.spaces.personalSpaceOf(account.id, { transaction })
     // 个人空间随账户一起创建；没有说明数据不一致，按意外错误处理
     if (space === undefined)
