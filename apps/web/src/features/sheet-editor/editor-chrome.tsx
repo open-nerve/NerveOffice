@@ -167,15 +167,19 @@ function lostCause(loss: LeaseLoss): PhraseParts<ReactNode> | undefined {
 /**
  * 编辑权失效（M3-P1 设计 §3.4.7）：说明原因、本页的修改有没有保存，提供重新加载。之后本页不能再保存，
  * 会话的提示（"登录之后回到这里保存"）、保存失败与版本冲突的说明都不再成立，只显示这一条（与版本冲突的做法相同，复验 SB9）；
- * 换了人时另说明重新加载会以那个账户打开（复验 TB8）
+ * 换了人时另说明重新加载会以那个账户打开（复验 TB8）。
+ * - 有没有保存只看内容（save.unsaved），不看保存的状态：按了保存才得知与心跳先得知，说法一样（审查 B3）；
+ * - 读不到了（404）：重新加载只会显示"内容不存在"，不提供、也不承诺它（审查 B2）；页头的返回链接照常在。
+ *   能读却不能编辑了（403）等：重新加载能以只读看到最新的版本
  */
 function LeaseLostNotice({ loss, save, session, onReload }: { loss: LeaseLoss, save: SaveView, session: EditorPageSession, onReload: () => void }) {
+  const reloadable = loss.kind !== 'not-found'
   return (
     <Alert variant="destructive">
       <AlertDescription>
-        <p><Phrase parts={editorMessages.editing.lost(lostCause(loss), save.status !== 'clean')} /></p>
-        {session === 'other-user' && <p>{editorMessages.otherUserBeforeReload}</p>}
-        <Button variant="outline" size="sm" className="mt-2" onClick={onReload}>{editorMessages.reload}</Button>
+        <p><Phrase parts={editorMessages.editing.lost(lostCause(loss), save.unsaved, reloadable)} /></p>
+        {reloadable && session === 'other-user' && <p>{editorMessages.otherUserBeforeReload}</p>}
+        {reloadable && <Button variant="outline" size="sm" className="mt-2" onClick={onReload}>{editorMessages.reload}</Button>}
       </AlertDescription>
     </Alert>
   )
@@ -276,7 +280,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
           {leaseLost === undefined && view.session === 'signed-out' && save?.conflict === undefined && (
             <Alert variant="destructive">
               <AlertDescription>
-                <p>{editorMessages.signedOut}</p>
+                <p>{save === undefined ? editorMessages.signedOutReadOnly : editorMessages.signedOut}</p>
                 <SessionCheckProblem problem={view.sessionProblem} />
                 {/* 在新标签页登录：本页不离开，修改留着；那边登录之后，本页收到消息恢复保存（编辑权绑定原来的登录：随即自动续上，M3-P1） */}
                 <a href={LOGIN_PATH} target="_blank" rel="noopener" className={buttonVariants({ variant: 'outline', size: 'sm', className: 'mt-2' })}>
@@ -288,7 +292,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
           {leaseLost === undefined && view.session === 'other-user' && save?.conflict === undefined && (
             <Alert variant="destructive">
               <AlertDescription>
-                <p>{editorMessages.otherUser}</p>
+                <p>{save === undefined ? editorMessages.otherUserReadOnly : editorMessages.otherUser}</p>
                 <SessionCheckProblem problem={view.sessionProblem} />
               </AlertDescription>
             </Alert>

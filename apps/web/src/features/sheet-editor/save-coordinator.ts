@@ -55,6 +55,11 @@ export interface SaveView {
   readonly conflict: RevisionConflictDetails | null | undefined
   /** 能不能保存：保存中、冲突之后、被页面停用时不能 */
   readonly canSave: boolean
+  /**
+   * 本页有没有服务端还没确认的内容（只看内容，不看保存的状态，M3-P1 审查 B3）：确认过的修改序号之后又有修改、
+   * 公式结果尚未保存、单元格里还有没提交的输入，或者冲突之后本页的内容。按了保存却失败、而内容本来都已保存的，不算
+   */
+  readonly unsaved: boolean
 }
 
 export interface SaveCoordinatorOptions {
@@ -157,8 +162,13 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
     else if (problem !== undefined && problem.kind !== 'cell-editing')
       status = 'failed'
     else
-      status = editor.changeSeq() > savedSeq || formulasPending || editor.hasPendingCellInput() ? 'dirty' : 'clean'
-    return { status, formulasPending, problem, conflict, canSave: !inFlight && !stopped && conflict === undefined }
+      status = contentUnsaved() ? 'dirty' : 'clean'
+    return { status, formulasPending, problem, conflict, canSave: !inFlight && !stopped && conflict === undefined, unsaved: conflict !== undefined || contentUnsaved() }
+  }
+
+  /** 内容有服务端还没确认的部分：确认过的修改序号之后又有修改、公式结果尚未保存、单元格里还有没提交的输入 */
+  function contentUnsaved(): boolean {
+    return editor.changeSeq() > savedSeq || formulasPending || editor.hasPendingCellInput()
   }
 
   function update(): void {

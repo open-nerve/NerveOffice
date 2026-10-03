@@ -1,7 +1,8 @@
 // 编辑租约的页面这一侧（M3-P1 设计 §3.4.7）：申请、心跳续租、失效、续上与释放。不依赖 Univer 与界面；计时器与"现在"可注入，
 // 用假的接口与假的时钟做单元测试。P2 的"打开即阅读、点'编辑'才申请"原样复用这里；另存为副本在 P2，交接在 P5。
 // - 申请：持有（令牌、代次、修订号）或被占用（持有者、最后活动、是不是自己）。被占用而且是自己时隔一小会儿再试几次：
-//   刷新页面时，旧页面关闭时的释放可能晚于新页面的申请到达（P1 设计 §7 第一条）；
+//   刷新页面时，旧页面关闭时的释放可能晚于新页面的申请到达（P1 设计 §7 第一条）。结果未知（网络错误、5xx、回包读不出来）时，
+//   用同一个标识再试一次：服务端可能已经批给了本页，同一个页面再申请就是重试，发新的一代，不留下没人用的一代（审查 B7）；
 // - 心跳：每 EDIT_LEASE_HEARTBEAT_SECONDS 秒一次，带上距离本页最后一次键盘、鼠标操作的秒数。只用单调的时钟算相隔多久，
 //   不拿浏览器的时钟去比服务端的时间（M3 总设计 §2.1）；同时只有一个在途，上一个回来之后按它发出的时刻排下一个；
 // - 失效（续租、保存得知）：失去访问（404）与编辑权（403、编辑权被收回）是失效——停止续租、通知页面，403 与 404 分开记下
@@ -10,26 +11,39 @@
 // - 续上（M3 总设计 §2.1 的细化；原在 P2，2026-10-04 决定提前到 P1，已经交付的 US-M1-05 不因编辑权绑定登录而倒退）：
 //   编辑权因为别的原因失效（EDIT_LEASE_LOST 的 none、replaced、released、stale、expired、idle、session），自动重新申请一次：
 //   先放掉本页手里那一代（令牌对得上就是持有者本人，P1 设计 §3.4.3；不放掉的话，换过登录、原来的登录还在时，它仍然有效，
-//   新的申请会被它占住），再申请。取得了、而且修订号就是本页保存的基准（期间没人保存过）：换上新的令牌与代次，接着心跳与保存，
+//   新的申请会被它占住）——释放的结果未知时不申请，保持现状，下一次心跳再试（审查 B9）；放掉之后页面已经释放或失效就不再申请
+//   （审查 B7）。再申请：取得了、而且修订号就是本页保存的基准（期间没人保存过）：换上新的令牌与代次，接着心跳与保存，
 //   用户不受打扰；修订号变了（别处保存过）：放掉刚申请到的，按失效处理（不覆盖，另存为副本在 P2）；被占用、403、404 按失效处理；
 //   网络错误、5xx 保持现状，下一次心跳或保存时再判断；未登录、令牌失效交给页面确认会话。
 //   每一代至多续上一次有结果（成了是新的一代，不成就是失效，不来回申请）；会话不是本人时不续。
-//   因为空闲被服务端回收（idle）的，等本页再有操作才续：人不在时续上，服务端的空闲回收就形同虚设了；
+//   人不在时不续（本页空闲已经到了服务端的回收阈值 EDIT_LEASE_IDLE_RECLAIM_SECONDS），等本页再有操作：人走开之后断网、休眠回来，
+//   服务端给的原因是到期而不是空闲，这时续上会让服务端的空闲回收重新计时，别人要多等一轮（审查 B8）；
 // - 暂停与恢复：页面的会话不是本人时暂停（不带着别人的登录发续租）；回到本人时恢复并立即续租一次——租约绑定登录，
 //   登录换过之后它已经失效，随即续上；
-// - 释放：keepalive，结果不管（没送到时服务端按到期回收）。
+// - 释放：页面隐藏、关闭时用 keepalive，结果不管（没送到时服务端按到期回收）。
 import type { AcquiredEditLease, EditLeaseLostReason, RenewedEditLease, UserSummary } from '@nerve-office/contracts'
 import type { LeaseCredentials } from './editor-api.ts'
-import { EDIT_IDLE_SECONDS_MAX, EDIT_LEASE_HEARTBEAT_SECONDS, editLeaseHeldDetailsSchema, editLeaseLostDetailsSchema } from '@nerve-office/contracts'
-import { ApiError, isAuthenticationError, isCsrfTokenError, isNotFoundError, isPermissionDeniedError } from '../../shared/api/index.ts'
+import { EDIT_IDLE_SECONDS_MAX, EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, editLeaseHeldDetailsSchema, editLeaseLostDetailsSchema } from '@nerve-office/contracts'
+import { ApiError, isAuthenticationError, isCsrfTokenError, isNotFoundError, isPermissionDeniedError, isTransientError, ResponseFormatError } from '../../shared/api/index.ts'
 
 /** 被占用而且是自己时再试的次数：刷新页面时旧页面的释放晚到（P1 设计 §7 第一条） */
 export const SAME_USER_RETRIES = 3
 /** 再试之前等多久（毫秒）：释放在旧页面隐藏时就发出，通常早于新页面载入完成；晚到的也多在这一两秒里 */
 export const SAME_USER_RETRY_DELAY_MS = 500
+/** 申请的结果未知时再试的次数：同一个页面再申请是重试，服务端发新的一代（审查 B7） */
+export const UNKNOWN_OUTCOME_RETRIES = 1
+/** 结果未知之后再试之前等多久（毫秒）：网络抖动、服务繁忙多在这一会儿里过去 */
+export const UNKNOWN_OUTCOME_RETRY_DELAY_MS = 500
 
 const HEARTBEAT_MS = EDIT_LEASE_HEARTBEAT_SECONDS * 1000
 const MINUTE_MS = 60_000
+/** 本页的空闲短于它才算人在（续上的条件）：服务端回收空闲编辑权的阈值 */
+const PRESENCE_MS = EDIT_LEASE_IDLE_RECLAIM_SECONDS * 1000
+
+/** 请求的结果未知：没送到或没收到回答（网络错误）、服务端出错（5xx）、回包读不出来。服务端可能已经处理了 */
+function outcomeUnknown(error: unknown): boolean {
+  return isTransientError(error) || error instanceof ResponseFormatError
+}
 
 /**
  * 可以自动续上的失效原因：编辑权中断了，但不是失去访问或编辑权。revoked（编辑权被收回）不在里面；
@@ -58,8 +72,8 @@ export interface EditLeaseApi {
   readonly acquire: (documentId: string, clientInstanceId: string) => Promise<AcquiredEditLease>
   readonly renew: (documentId: string, token: string, idleSeconds: number) => Promise<RenewedEditLease>
   /**
-   * 尽力释放（keepalive）：兑现于请求有了结果（成功、失败都算），从不失败。页面关闭时不等它；续上时等它，
-   * 放掉之后再申请，两个请求不能交错
+   * 尽力释放（keepalive）：失败时抛出请求层的错误。页面隐藏、关闭时不等它、不看结果；续上时等它——放掉之后再申请，
+   * 两个请求不能交错，结果未知时不申请
    */
   readonly release: (documentId: string, token: string) => Promise<void>
 }
@@ -189,20 +203,30 @@ async function wait(clock: LeaseClock, delayMs: number): Promise<void> {
 
 /**
  * 申请编辑权。被占用而且是自己时，隔 SAME_USER_RETRY_DELAY_MS 再试，最多 SAME_USER_RETRIES 次，仍被占用才按被占用返回。
- * 别的失败（403、404、未登录、网络等）原样抛出，由页面处理
+ * 结果未知（网络错误、5xx、回包读不出来）时隔 UNKNOWN_OUTCOME_RETRY_DELAY_MS 用同一个标识再试 UNKNOWN_OUTCOME_RETRIES 次：
+ * 服务端可能已经批给了本页，同一个页面再申请是重试，发新的一代（审查 B7）。别的失败（403、404、未登录等）、再试之后仍未知的，
+ * 原样抛出，由页面处理
  */
 export async function acquireEditLease(options: EditLeaseOptions): Promise<LeaseAcquisition> {
-  for (let retry = 0; ; retry += 1) {
+  let sameUserRetries = 0
+  let unknownRetries = 0
+  for (;;) {
     let acquired: AcquiredEditLease
     try {
       acquired = await options.api.acquire(options.documentId, options.clientInstanceId)
     }
     catch (error) {
       const held = heldOf(error)
-      if (held === undefined)
-        throw error
-      if (held.holder?.sameUser !== true || retry >= SAME_USER_RETRIES)
+      if (held === undefined) {
+        if (!outcomeUnknown(error) || unknownRetries >= UNKNOWN_OUTCOME_RETRIES)
+          throw error
+        unknownRetries += 1
+        await wait(options.clock, UNKNOWN_OUTCOME_RETRY_DELAY_MS)
+        continue
+      }
+      if (held.holder?.sameUser !== true || sameUserRetries >= SAME_USER_RETRIES)
         return { kind: 'held', holder: held.holder }
+      sameUserRetries += 1
       await wait(options.clock, SAME_USER_RETRY_DELAY_MS)
       continue
     }
@@ -211,7 +235,7 @@ export async function acquireEditLease(options: EditLeaseOptions): Promise<Lease
 }
 
 /**
- * 续租的状态：holding 照常心跳；paused 等页面确认会话；dormant 因为空闲被回收、等本页再有操作才续上；
+ * 续租的状态：holding 照常心跳；paused 等页面确认会话；dormant 编辑权中断时人不在、等本页再有操作才续上；
  * lost、released 是终态
  */
 type LeaseState = 'holding' | 'paused' | 'dormant' | 'lost' | 'released'
@@ -250,14 +274,22 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
     return Math.min(EDIT_IDLE_SECONDS_MAX, Math.max(0, Math.floor((clock.now() - options.lastActivity()) / 1000)))
   }
 
-  /** 本页刚有过操作（一个心跳间隔之内）：人在 */
+  /** 人在：本页的空闲还没到服务端回收空闲编辑权的阈值（再久就与服务端的空闲回收一样，算人不在，审查 B8） */
   function present(): boolean {
-    return clock.now() - options.lastActivity() < HEARTBEAT_MS
+    return clock.now() - options.lastActivity() < PRESENCE_MS
+  }
+
+  /**
+   * 已经到了终态（失效或释放）。经函数读：续上的几步之间隔着请求，状态随时可能被页面（释放、暂停）或另一条路（失效）改掉，
+   * 每次都要读现在的值
+   */
+  function ended(): boolean {
+    return state === 'lost' || state === 'released'
   }
 
   /** 失效（没有续上）：终态，通知页面 */
   function fail(loss: LeaseLoss): void {
-    if (state === 'lost' || state === 'released')
+    if (ended())
       return
     state = 'lost'
     stopTimer()
@@ -266,17 +298,30 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
 
   /**
    * 续上（见文件头）：先放掉本页手里那一代，再申请；取得了、修订号就是本页保存的基准，换上新的一代。
-   * 申请回来时页面已经释放或失效：新的一代随即放掉
+   * 释放的结果未知：不申请（手里那一代可能还占着，申请会被自己占住），保持现状，下一次心跳再试（审查 B9）；
+   * 放掉之后页面已经释放或失效：不再申请（审查 B7）；申请回来时页面已经释放或失效：新的一代随即放掉
    */
   async function recover(): Promise<LeaseOutcome> {
     stopTimer()
-    await api.release(documentId, credentials.token)
+    try {
+      await api.release(documentId, credentials.token)
+    }
+    catch (error) {
+      if (outcomeUnknown(error)) {
+        if (state === 'holding')
+          scheduleRenewal(HEARTBEAT_MS)
+        return { kind: 'unknown', error }
+      }
+      // 确定被拒（读不到、不能编辑、未登录等）：申请会给出确定的回答，照常申请
+    }
+    if (ended())
+      return LOST
     let next: AcquiredEditLease
     try {
       next = await api.acquire(documentId, options.clientInstanceId)
     }
     catch (error) {
-      if (state === 'lost' || state === 'released')
+      if (ended())
         return LOST
       const held = heldOf(error)
       if (held !== undefined) {
@@ -299,13 +344,13 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
         scheduleRenewal(HEARTBEAT_MS)
       return { kind: 'unknown', error }
     }
-    if (state === 'lost' || state === 'released') {
-      void api.release(documentId, next.token)
+    if (ended()) {
+      releaseQuietly(next.token)
       return LOST
     }
     // 期间别处保存过（本页保存的基准不是现在的修订）：不覆盖，放掉刚申请到的
     if (next.revision !== options.baseRevision()) {
-      void api.release(documentId, next.token)
+      releaseQuietly(next.token)
       fail({ kind: 'newer' })
       return LOST
     }
@@ -329,10 +374,10 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
   /**
    * 得知失效（续租或保存），usedToken 是那个请求带的令牌：
    * 那个请求带的是已被续上取代的上一代 → 现在的仍然有效；失去访问或编辑权、不认识的原因 → 失效；
-   * 会话不是本人 → 不续（回到本人时恢复续租会再次得知）；因为空闲被回收、人又不在 → 等本页再有操作；其余续上一次
+   * 会话不是本人 → 不续（回到本人时恢复续租会再次得知）；人不在 → 等本页再有操作；其余续上一次
    */
   async function handleLoss(loss: LeaseLoss, usedToken: string): Promise<LeaseOutcome> {
-    if (state === 'lost' || state === 'released')
+    if (ended())
       return LOST
     if (usedToken !== credentials.token)
       return HELD
@@ -344,12 +389,17 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
       return recovery
     if (state === 'paused')
       return { kind: 'unknown', error: undefined }
-    if (loss.reason === 'idle' && !present()) {
+    if (!present()) {
       state = 'dormant'
       stopTimer()
       return { kind: 'unknown', error: undefined }
     }
     return startRecovery()
+  }
+
+  /** 尽力释放，不等、不看结果（页面隐藏与关闭、放掉续上时刚申请到却用不上的那一代） */
+  function releaseQuietly(token: string): void {
+    void api.release(documentId, token).catch(() => undefined)
   }
 
   async function renewOnce(): Promise<void> {
@@ -431,14 +481,14 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
       }
     },
     release: () => {
-      if (state === 'lost' || state === 'released')
+      if (ended())
         return
       // 暂停时（会话不是本人）不发：带的会是别人的登录或已经失效的登录，什么也释放不了
       const wasPaused = state === 'paused'
       state = 'released'
       stopTimer()
       if (!wasPaused)
-        void api.release(documentId, credentials.token)
+        releaseQuietly(credentials.token)
     },
   }
 }

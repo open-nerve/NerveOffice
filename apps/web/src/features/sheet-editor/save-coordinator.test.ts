@@ -206,6 +206,61 @@ describe('保存状态', () => {
   })
 })
 
+describe('有没有服务端还没确认的内容（unsaved：只看内容，不看保存的状态，M3-P1 审查 B3）', () => {
+  it('打开时没有；修改之后有；保存成功之后没有', async () => {
+    const { coordinator, control, calls } = setup()
+    expect(coordinator.view().unsaved).toBe(false)
+    control.edit('甲')
+    expect(coordinator.view().unsaved).toBe(true)
+    const saving = coordinator.save()
+    ;(await sent(calls, 1)).resolve(saved(2))
+    await saving
+    expect(coordinator.view().unsaved).toBe(false)
+  })
+
+  it('没有修改时按保存、保存被拒：状态是保存失败，内容却都已确认，不算有；有修改时被拒才算有', async () => {
+    const denied = new ApiError(403, 'PERMISSION_DENIED', '空间已归档，只能查看')
+    const clean = setup()
+    const first = clean.coordinator.save()
+    ;(await sent(clean.calls, 1)).reject(denied)
+    await first
+    expect(clean.coordinator.view()).toMatchObject({ status: 'failed', unsaved: false })
+
+    const dirty = setup()
+    dirty.control.edit('甲')
+    const second = dirty.coordinator.save()
+    ;(await sent(dirty.calls, 1)).reject(denied)
+    await second
+    expect(dirty.coordinator.view()).toMatchObject({ status: 'failed', unsaved: true })
+  })
+
+  it('单元格里还有没提交的输入：算有；按 Esc 放弃之后不算', () => {
+    const { coordinator, control } = setup()
+    control.startCellEditing('甲')
+    expect(coordinator.view().unsaved).toBe(true)
+    control.cancelCellEditing()
+    expect(coordinator.view().unsaved).toBe(false)
+  })
+
+  it('公式结果尚未保存：算有', async () => {
+    const { coordinator, control, calls } = setup()
+    control.edit('=SUM(A1:A9)')
+    control.settle = 'timeout'
+    const saving = coordinator.save()
+    ;(await sent(calls, 1)).resolve(saved(2))
+    await saving
+    expect(coordinator.view()).toMatchObject({ formulasPending: true, unsaved: true })
+  })
+
+  it('版本冲突之后：本页的内容没有存进去，算有', async () => {
+    const { coordinator, calls } = setup()
+    const saving = coordinator.save()
+    ;(await sent(calls, 1)).reject(conflictError(3, { clientInstanceId: OTHER_TAB, localSeq: 7 }))
+    await saving
+    expect(coordinator.view()).toMatchObject({ status: 'conflict', unsaved: true })
+  })
+})
+
 describe('单元格里还没提交的输入（Codex 评审 CX6）', () => {
   it('键入之后还没回车：有未保存的修改；按 Esc 放弃，回到已保存到云端', () => {
     const { coordinator, control } = setup()
