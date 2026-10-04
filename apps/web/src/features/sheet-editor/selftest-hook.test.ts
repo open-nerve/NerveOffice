@@ -1,5 +1,5 @@
 // 页面自检的挂接（selftest-hook.ts）：页面到 steady 才引入自检、只跑一次；载入失败、等不到就绪时同样交给自检（它把原因带回去）；
-// 页面错误、console.error 与可见性从挂上起就收集，浏览器的 ResizeObserver 通知另记。
+// 页面错误、console.error 与可见性从挂上起就收集，浏览器的 ResizeObserver 通知另记。M3-P2 起打开即阅读：要在编辑时跑的场景先进入编辑。
 import type { SelftestHost } from '../../editor/testing/selftest.ts'
 import type { EditorPage, EditorPageLoad, EditorPageView } from './editor-page.ts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -10,29 +10,36 @@ vi.mock('../../editor/testing/selftest.ts', () => ({ runSelftestAndReport: run }
 
 const DOCUMENT_ID = '01a0fb60-a504-7c95-8bdf-8aeaec893aaf'
 
-/** 假的编辑器页：只有挂接用到的 view 与 subscribe，load 由测试改 */
-function fakePage(): { readonly page: EditorPage, readonly set: (load: EditorPageLoad) => void } {
+/** 假的编辑器页：只有挂接用到的 view、subscribe 与 enterEditing，视图由测试改 */
+function fakePage() {
   const listeners = new Set<() => void>()
-  let view = { load: { kind: 'loading' } } as EditorPageView
+  let view = { load: { kind: 'loading' }, mode: undefined, surface: 'loading' } as unknown as EditorPageView
+  const enterEditing = vi.fn(async () => {})
   const page = {
     view: () => view,
     subscribe: (listener: () => void) => {
       listeners.add(listener)
       return () => listeners.delete(listener)
     },
+    enterEditing,
   } as unknown as EditorPage
   return {
     page,
-    set: (load) => {
-      view = { ...view, load }
+    enterEditing,
+    set: (next: Partial<EditorPageView>): void => {
+      view = { ...view, ...next }
       for (const listener of [...listeners])
         listener()
     },
   }
 }
 
-function ready(stage: 'rendered' | 'steady', readOnly = true): EditorPageLoad {
-  return { kind: 'ready', documentId: DOCUMENT_ID, title: '只读样本', space: { id: 's', type: 'team', name: '空间' }, accessVia: 'space', canShare: false, userId: 'u', readOnly, stage } as unknown as EditorPageLoad
+const READY: EditorPageLoad = { kind: 'ready', documentId: DOCUMENT_ID, title: '只读样本', space: { id: 's', type: 'team', name: '空间' }, accessVia: 'space', canShare: false, userId: 'u' }
+
+/** 就绪的页面：阅读（readOnly）或编辑，编辑器的容器到了 surface 这一步 */
+function ready(surface: 'ready' | 'steady', readOnly = true): Partial<EditorPageView> {
+  const mode = readOnly ? { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined } as const : { kind: 'editing' } as const
+  return { load: READY, mode, surface }
 }
 
 const elements = { chrome: document.createElement('div'), surface: document.createElement('div') }
@@ -63,7 +70,7 @@ describe('页面自检的挂接', () => {
   it('到 steady 才跑自检，只跑一次：带上文档 id、按只读打开、两个挂载点', async () => {
     const { page, set } = fakePage()
     watchForSelftest(page, elements)
-    set(ready('rendered'))
+    set(ready('ready'))
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(run).not.toHaveBeenCalled()
     set(ready('steady'))
@@ -75,10 +82,40 @@ describe('页面自检的挂接', () => {
     expect(run).toHaveBeenCalledTimes(1)
   })
 
+  it('要在编辑时跑的场景（edit-chrome）：阅读到 steady 之后先进入编辑（只进一次），进入了就等编辑的 steady 再跑，按可编辑打开', async () => {
+    window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=edit-chrome`)
+    const { page, set, enterEditing } = fakePage()
+    let entered: () => void = () => {}
+    enterEditing.mockImplementationOnce(async () => new Promise<void>((resolve) => {
+      entered = resolve
+    }))
+    watchForSelftest(page, elements)
+    set(ready('steady'))
+    set(ready('steady'))
+    expect(enterEditing).toHaveBeenCalledOnce()
+    set({ mode: { kind: 'entering' }, surface: 'loading' })
+    set(ready('ready', false))
+    entered()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(run).not.toHaveBeenCalled()
+    set(ready('steady', false))
+    expect((await hostOfFirstRun()).page).toEqual({ state: 'ready', readOnly: false })
+    expect(enterEditing).toHaveBeenCalledOnce()
+  })
+
+  it('要在编辑时跑的场景进不去编辑（例如别处正在编辑、不能编辑）：进入有了结果、还在阅读时照样跑，按只读打开说明', async () => {
+    window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=edit-chrome`)
+    const { page, set, enterEditing } = fakePage()
+    watchForSelftest(page, elements)
+    set(ready('steady'))
+    expect(enterEditing).toHaveBeenCalledOnce()
+    expect((await hostOfFirstRun()).page).toEqual({ state: 'ready', readOnly: true })
+  })
+
   it('载入失败时同样交给自检，说明失败的原因', async () => {
     const { page, set } = fakePage()
     watchForSelftest(page, elements)
-    set({ kind: 'editor-failed', error: new TypeError('画不出来') })
+    set({ load: { kind: 'editor-failed', error: new TypeError('画不出来') }, surface: 'failed' })
     expect((await hostOfFirstRun()).page).toEqual({ state: 'failed', detail: 'editor-failed：TypeError: 画不出来' })
   })
 

@@ -45,7 +45,7 @@ function lost(loss: LeaseLoss, changes: Partial<LostMode> = {}): LostMode {
 
 /** 假的编辑器页：视图由测试设定 */
 function fakePage(initial: Partial<EditorPageView> = {}) {
-  let view: EditorPageView = { load: READY, mode: EDITING, save: CLEAN, session: 'active', sessionProblem: undefined, confirmingSession: false, detailProblem: undefined, ...initial }
+  let view: EditorPageView = { load: READY, mode: EDITING, save: CLEAN, session: 'active', sessionProblem: undefined, confirmingSession: false, detailProblem: undefined, surface: 'ready', ...initial }
   const listeners = new Set<() => void>()
   const page: EditorPage = {
     view: () => view,

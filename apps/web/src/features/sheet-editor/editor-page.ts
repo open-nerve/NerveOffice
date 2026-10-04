@@ -69,6 +69,11 @@ export interface EditorPageView {
   readonly confirmingSession: boolean
   /** 页头的文档详情没能刷新（DEF-040）：原因；页头留着之前的信息，可以重试。成功之后清掉 */
   readonly detailProblem: unknown
+  /**
+   * 编辑器容器的状态（与 data-editor-state 相同）：loading 是载入或换编辑器期间（交互屏障挂着），ready 是渲染完成，steady 是
+   * 渲染完成之后 3 秒，failed 是没有编辑器。测试构建的页面自检按它等到 steady（selftest-hook.ts）
+   */
+  readonly surface: EditorSurfaceState
 }
 
 export interface EditorPageApi extends EditModeApi {
@@ -141,7 +146,7 @@ export interface EditorPage {
   readonly dispose: () => void
 }
 
-type SurfaceState = 'loading' | 'ready' | 'steady' | 'failed'
+export type EditorSurfaceState = 'loading' | 'ready' | 'steady' | 'failed'
 
 /** 本页认识的档案与格式版本；别的一律不进入编辑，也不改写（计划书 §8.7） */
 function isKnownFormat(document: DocumentDetail): boolean {
@@ -198,11 +203,13 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   const cleanups: (() => void)[] = []
   /** 交互屏障：撤掉它的函数 */
   let releaseBarrier: (() => void) | undefined
+  /** 编辑器容器的状态（写在容器的 data-editor-state 上） */
+  let surfaceState: EditorSurfaceState = 'loading'
   let current = computeView()
 
   function computeView(): EditorPageView {
     const modeView = mode?.view()
-    return { load, mode: modeView?.mode, save: modeView?.save, session, sessionProblem, confirmingSession, detailProblem }
+    return { load, mode: modeView?.mode, save: modeView?.save, session, sessionProblem, confirmingSession, detailProblem, surface: surfaceState }
   }
 
   function update(): void {
@@ -219,7 +226,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
    * 编辑器容器的状态与交互屏障（Codex 评审 CX1，独立复验 N1）：载入、换编辑器期间（loading）页头之外的输入一律拦下，包括
    * Univer 挂在 body 下的浮层；编辑器就绪（ready、steady）或失败时撤掉
    */
-  function setSurface(state: SurfaceState): void {
+  function setSurface(state: EditorSurfaceState): void {
+    surfaceState = state
     surface.dataset.editorState = state
     surface.hidden = state === 'failed'
     if (state === 'loading') {

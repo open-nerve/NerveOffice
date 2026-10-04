@@ -4,7 +4,6 @@
 // 进入与退出、两个人、"有更新"等故事的完整 E2E 在 S5（US-M3-01、05、11、12、13）。
 import type { Page } from '@playwright/test'
 import { archiveSpace, createDocumentIn, createTeamSpace, createUser, withDatabase } from '../../support/database.ts'
-import { runFacade } from '../../support/editor-probe.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { appendSheet, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditing, exitEditing, lostNotice, openEditor, saveAndWait, saveButton, savedContent, saveStatus, sheetTab, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
@@ -49,10 +48,13 @@ test.describe('阅读与编辑的切换保留视图（M3-P2 设计 §3.3）', { 
     await appendSheet(page)
     await expect(sheetTab(page, '工作表2')).toHaveAttribute('aria-selected', 'true')
     await saveAndWait(page)
-    expect(await runFacade(page, ({ sheet }) => {
+    await page.evaluate(() => {
+      const sheet = window.__nerveEditorProbe?.univerAPI.getActiveWorkbook().getActiveSheet()
+      if (sheet === undefined)
+        throw new Error('页面里没有编辑器的探针')
       sheet.scrollToCell(40, 8)
       sheet.getRange('K45:L47').activate()
-    })).toEqual({})
+    })
     await expect.poll(async () => viewOf(page)).toMatchObject({ sheet: '工作表2', top: 40, range: 'K45:L47', current: 'K45' })
     const expected = await viewOf(page)
     expect(expected.left, '往右滚过了').toBeGreaterThan(0)
