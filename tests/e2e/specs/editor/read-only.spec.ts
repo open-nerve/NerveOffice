@@ -18,11 +18,12 @@
 // （编辑栏不再显示文档里没有的公式）。
 // Univer 自己的快捷键按页面的平台判断取修饰键（support/keyboard.ts：Linux 上的 WebKit 也报 Mac 的 UA）。
 // 与快捷键回归共用的部分（写好样本的团队空间与成员、页面错误与保存请求的收集、内容的核对、权限检查的提示）在 support/read-only.ts。
+// Facade 入口的清单、快捷键入口的预期与提示的说法和测试构建的页面自检共用（apps/web/src/editor/testing/read-only-entries.ts，
+// 真实 Safari 上的复核，M3-P2 设计 §3.5），经 support/read-only.ts 转出：改入口或预期时两边一起变。
 // 用到探针（只在测试构建里）：标签 @test-build，外部模式测生产镜像时按标签排除（playwright.config.ts）；
 // 文件末尾的冒烟用例不用探针，生产镜像上也跑（容器 E2E）。
 import type { BrowserContext, Locator, Page } from '@playwright/test'
-import type { FacadeScope } from '../../support/editor-probe.ts'
-import type { Scene } from '../../support/read-only.ts'
+import type { EntryOutcome, FacadeEntry, Scene } from '../../support/read-only.ts'
 import type { Workbook } from '../../support/sheet.ts'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
@@ -34,7 +35,7 @@ import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { deleteDrawingKey, featureSearchKeys, pressUniverShortcut, quickSumKeys } from '../../support/keyboard.ts'
 import { SAMPLE_CELLS, SAMPLE_FORMULAS, SAMPLE_SHEETS, sampleWithoutFormulaValuesFor } from '../../support/read-only-sample.ts'
-import { ALERT, closePermissionAlert, documentChangeAttempts, expectUnchanged, LOOK_ONCE, nextFrames, OPENED, openReadOnly, permissionAlert, scene, unitIdOf, watch } from '../../support/read-only.ts'
+import { ALERT, closePermissionAlert, documentChangeAttempts, expectUnchanged, FACADE_ENTRIES, FORMULA_MUTATION_CELL, LOOK_ONCE, nextFrames, OPENED, openReadOnly, permissionAlert, scene, SHORTCUT_OUTCOMES, unitIdOf, watch, writeFormulaMutation } from '../../support/read-only.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { EDITOR_TEST_TIMEOUT, openEditor, resourceOf, saveButton, savedContent, selectCell, sheetCanvas, sheetTab, waitForEditor } from '../../support/sheet.ts'
 
@@ -51,19 +52,12 @@ function cellValueIn(snapshotText: string, sheetId: string, a1: string): unknown
   return (JSON.parse(snapshotText) as Workbook).sheets[sheetId]?.cellData[row]?.[column]?.v
 }
 
-/** 一步操作之后等到的信号 */
-type Outcome
-  /** 这条命令执行完 */
-  = | { readonly executed: string }
-  /** 被只读守卫（超链接是入口守卫）取消：执行前的记录里 canceled 为真 */
-    | { readonly canceled: string }
-  /** 被 SDK 的权限检查拦下：只有执行前的记录。拦下时 SDK 弹出提示（alert 是提示的说法），关掉它 */
-    | { readonly blocked: string, readonly alert: string }
-  /**
-   * 不产生这条命令（只读时这个手势没有控制点）：之后点 thenClick 这一格，等名称框显示它，确认手势已经处理完。
-   * 点之前先确认没有意外弹出的提示：弹出时点击被它挡住，会一直等到超时
-   */
-    | { readonly absent: string, readonly thenClick: string }
+/**
+ * 一步操作之后等到的信号：执行完、被取消、被 SDK 的权限检查拦下（与页面自检共用的 EntryOutcome，拦下时 SDK 弹出提示，关掉它），
+ * 或者不产生这条命令（只读时这个手势没有控制点）：之后点 thenClick 这一格，等名称框显示它，确认手势已经处理完。
+ * 点之前先确认没有意外弹出的提示：弹出时点击被它挡住，会一直等到超时
+ */
+type Outcome = EntryOutcome | { readonly absent: string, readonly thenClick: string }
 
 async function settle(page: Page, mark: number, outcome: Outcome): Promise<void> {
   if ('executed' in outcome) {
@@ -217,7 +211,7 @@ async function slipOntoFormulaBar(page: Page): Promise<void> {
 
 /** 按查找的快捷键打开查找面板，查"苹果"（"数据"表里 A2 与 G2 两处），关掉 */
 async function findApple(page: Page): Promise<void> {
-  await step(page, 'read', async () => pressUniverShortcut(page, 'F'), { read: { executed: 'ui.operation.open-find-dialog' } })
+  await step(page, 'read', async () => pressUniverShortcut(page, 'F'), SHORTCUT_OUTCOMES.find)
   const find = page.getByRole('dialog', { name: '查找' })
   await find.getByRole('textbox', { name: '输入查找内容' }).fill('苹果')
   await find.getByRole('textbox', { name: '输入查找内容' }).press('Enter')
@@ -233,10 +227,7 @@ const UI_ENTRIES: readonly Entry[] = [
     name: '删除：A2 按 Delete',
     run: async (page, mode) => {
       await clickCell(page, 'A2')
-      await step(page, mode, async () => page.keyboard.press('Delete'), {
-        read: { blocked: 'sheet.command.clear-selection-content', alert: ALERT.edit },
-        edit: { executed: 'sheet.command.clear-selection-content' },
-      })
+      await step(page, mode, async () => page.keyboard.press('Delete'), SHORTCUT_OUTCOMES.clear)
     },
   },
   {
@@ -351,7 +342,7 @@ async function findAndReplaceAll(page: Page, mode: Mode): Promise<void> {
     await find.getByRole('button', { name: 'Close' }).click()
     await expect(find).toBeHidden()
     // 替换的快捷键：苹果的平台上也是 Control+H（find-replace 的 find-replace.shortcut.ts:78-88，mac 绑定的是 MAC_CTRL）
-    await step(page, mode, async () => page.keyboard.press('Control+H'), { read: { canceled: 'ui.operation.open-replace-dialog' } })
+    await step(page, mode, async () => page.keyboard.press('Control+H'), { read: SHORTCUT_OUTCOMES.replace.read })
     await expect(find).toHaveCount(0)
     return
   }
@@ -372,10 +363,7 @@ const OTHER_UI_ENTRIES: readonly Entry[] = [
     run: async (page, mode) => {
       await clickCell(page, 'A2')
       for (const key of ['B', 'I', 'U']) {
-        await step(page, mode, async () => pressUniverShortcut(page, key), {
-          read: { blocked: 'sheet.command.set-style', alert: ALERT.style },
-          edit: { executed: 'sheet.command.set-style' },
-        })
+        await step(page, mode, async () => pressUniverShortcut(page, key), SHORTCUT_OUTCOMES.style)
       }
     },
   },
@@ -444,7 +432,7 @@ const OTHER_UI_ENTRIES: readonly Entry[] = [
       // 只读时图片没有被选中，删除键删的是选中的单元格（被权限检查拦下），不是图片
       const deleteKey = await deleteDrawingKey(page)
       await step(page, mode, async () => page.keyboard.press(deleteKey), {
-        read: { blocked: 'sheet.command.clear-selection-content', alert: ALERT.edit },
+        read: SHORTCUT_OUTCOMES.clear.read,
         edit: { executed: 'sheet.command.remove-sheet-image' },
       })
       if (mode === 'read')
@@ -516,11 +504,11 @@ async function openFeatureSearch(page: Page, mode: Mode): Promise<void> {
   await nextFrames(page)
   if (mode === 'read') {
     await expect(panel).toHaveCount(0, LOOK_ONCE)
-    await settle(page, mark, { canceled: 'ui.operation.open-feature-search' })
+    await settle(page, mark, SHORTCUT_OUTCOMES.featureSearch.read)
     return
   }
   await expect(panel).toBeVisible(LOOK_ONCE)
-  await settle(page, mark, { executed: 'ui.operation.open-feature-search' })
+  await settle(page, mark, SHORTCUT_OUTCOMES.featureSearch.edit)
   await panel.getByPlaceholder('输入功能或菜单名称…').fill('粗体')
   await step(page, mode, async () => panel.getByRole('option').filter({ hasText: '粗体' }).first().click(), {
     edit: { executed: 'sheet.command.set-style' },
@@ -545,11 +533,11 @@ async function quickSum(page: Page, mode: Mode): Promise<void> {
   if (mode === 'read') {
     expect(await formulaBarText(page), '编辑栏显示的是 B10 真实的内容').toBe('')
     await expect(permissionAlert(page)).toHaveCount(0, LOOK_ONCE)
-    await settle(page, mark, { canceled: 'formula-ui.operation.insert-function' })
+    await settle(page, mark, SHORTCUT_OUTCOMES.quickSum.read)
     return
   }
   expect(await formulaBarText(page), '能编辑时编辑栏显示填好的求和公式').toBe('=SUM(B2:B9')
-  await settle(page, mark, { executed: 'formula-ui.operation.insert-function' })
+  await settle(page, mark, SHORTCUT_OUTCOMES.quickSum.edit)
   await step(page, mode, async () => page.keyboard.press('Enter'), { edit: { executed: 'sheet.command.set-range-values' } })
 }
 
@@ -625,9 +613,9 @@ async function openFilterPanel(page: Page, mode: Mode): Promise<void> {
 
 /** 撤销与重做的快捷键（只读时撤销栈本来就是空的：断言它们被只读守卫取消；能编辑时的对照见单独的用例） */
 async function undoAndRedo(page: Page, mode: Mode): Promise<void> {
-  await step(page, mode, async () => pressUniverShortcut(page, 'Z'), { read: { canceled: 'univer.command.undo' }, edit: { executed: 'univer.command.undo' } })
+  await step(page, mode, async () => pressUniverShortcut(page, 'Z'), SHORTCUT_OUTCOMES.undo)
   // 重做的快捷键：各平台都是 Ctrl/Cmd+Y（苹果的平台另有 Cmd+Shift+Z，ui 的 shared-shortcut.controller.ts）
-  await step(page, mode, async () => pressUniverShortcut(page, 'Y'), { read: { canceled: 'univer.command.redo' }, edit: { executed: 'univer.command.redo' } })
+  await step(page, mode, async () => pressUniverShortcut(page, 'Y'), SHORTCUT_OUTCOMES.redo)
 }
 
 /** 工作表标签栏左边"全部工作表"的菜单按钮（图标按钮，没有可访问的名称：按下拉菜单的触发器与 SDK 的组件标记定位） */
@@ -640,58 +628,9 @@ function addSheetButton(page: Page): Locator {
   return page.locator('[data-u-comp="sheet-bar-append-button"]:not([data-slot="dropdown-menu-trigger"] > *)')
 }
 
-/** Facade 入口：M0 的 F 类 21 项（v09-read-mode.spec.ts 的 103–142 行），另加"取消已有的超链接" */
-interface FacadeEntry {
-  readonly name: string
-  /** 在页面里执行（序列化过去，不能引用外面的变量） */
-  readonly call: (scope: FacadeScope) => unknown
-  readonly read: Outcome
-  readonly edit: Outcome
-  readonly unchangedWhenEditable?: true
-}
-
-const FACADE_ENTRIES: readonly FacadeEntry[] = [
-  { name: '筛选', call: ({ sheet }) => sheet.getRange('A1:F6').createFilter(), read: { canceled: 'sheet.mutation.set-filter-range' }, edit: { executed: 'sheet.command.set-filter-range' } },
-  { name: '排序', call: ({ sheet }) => sheet.getRange('A2:F6').sort({ column: 1, ascending: false }), read: { canceled: 'sheet.mutation.reorder-range' }, edit: { executed: 'sheet.command.sort-range' } },
-  { name: '新增工作表', call: ({ workbook }) => workbook.insertSheet('新表'), read: { canceled: 'sheet.mutation.insert-sheet' }, edit: { executed: 'sheet.command.insert-sheet' } },
-  { name: '删除工作表', call: ({ workbook }) => workbook.deleteSheet(workbook.getSheetByName('汇总')), read: { canceled: 'sheet.mutation.remove-sheet' }, edit: { executed: 'sheet.command.remove-sheet' } },
-  { name: '工作表改名', call: ({ workbook }) => workbook.getSheetByName('汇总').setName('汇总二'), read: { blocked: 'sheet.command.set-worksheet-name', alert: ALERT.sheet }, edit: { executed: 'sheet.command.set-worksheet-name' } },
-  { name: '复制工作表', call: ({ workbook }) => workbook.duplicateSheet(workbook.getSheetByName('汇总')), read: { canceled: 'sheet.mutation.insert-sheet' }, edit: { executed: 'sheet.command.copy-sheet' } },
-  { name: '隐藏工作表', call: ({ workbook }) => workbook.getSheetByName('汇总').hideSheet(), read: { canceled: 'sheet.mutation.set-worksheet-hidden' }, edit: { executed: 'sheet.command.set-worksheet-hidden' } },
-  { name: '移动工作表', call: ({ workbook }) => workbook.moveSheet(workbook.getSheetByName('汇总'), 0), read: { blocked: 'sheet.command.set-worksheet-order', alert: ALERT.sheet }, edit: { executed: 'sheet.command.set-worksheet-order' } },
-  { name: '移动图片', call: async ({ workbook }) => workbook.getSheetByName('功能').getImages()[0]?.setPositionAsync(12, 12), read: { blocked: 'sheet.command.set-sheet-image', alert: ALERT.image }, edit: { executed: 'sheet.command.set-sheet-image' } },
-  { name: '删除图片', call: ({ workbook }) => workbook.getSheetByName('功能').getImages()[0]?.remove(), read: { blocked: 'sheet.command.remove-sheet-image', alert: ALERT.image }, edit: { executed: 'sheet.command.remove-sheet-image' } },
-  { name: '缩放图片', call: async ({ workbook }) => workbook.getSheetByName('功能').getImages()[0]?.setSizeAsync(200, 150), read: { blocked: 'sheet.command.set-sheet-image', alert: ALERT.image }, edit: { executed: 'sheet.command.set-sheet-image' } },
-  { name: '设行高', call: ({ sheet }) => sheet.setRowHeight(5, 40), read: { blocked: 'sheet.command.set-row-height', alert: ALERT.rowCol }, edit: { executed: 'sheet.command.set-row-height' } },
-  { name: '插入行', call: ({ sheet }) => sheet.insertRowAfter(3), read: { blocked: 'sheet.command.insert-row-by-range', alert: ALERT.insertRowCol }, edit: { executed: 'sheet.command.insert-row-by-range' } },
-  { name: '删除行', call: ({ sheet }) => sheet.deleteRows(16, 1), read: { blocked: 'sheet.command.remove-row-by-range', alert: ALERT.removeRowCol }, edit: { executed: 'sheet.command.remove-row-by-range' } },
-  { name: '合并单元格', call: ({ sheet }) => sheet.getRange('K10:L11').merge(), read: { canceled: 'sheet.mutation.add-worksheet-merge' }, edit: { executed: 'sheet.command.add-worksheet-merge' } },
-  { name: '加粗', call: ({ sheet }) => sheet.getRange('A2:B3').setFontWeight('bold'), read: { blocked: 'sheet.command.set-style', alert: ALERT.style }, edit: { executed: 'sheet.command.set-style' } },
-  {
-    name: '条件格式',
-    call: ({ sheet }) => sheet.addConditionalFormattingRule(sheet.newConditionalFormattingRule().whenCellNotEmpty().setRanges([sheet.getRange('K1:K20').getRange()]).setBackground('#fecaca').build()),
-    read: { blocked: 'sheet.command.add-conditional-rule', alert: ALERT.conditionalFormat },
-    edit: { executed: 'sheet.command.add-conditional-rule' },
-  },
-  { name: '数据验证', call: ({ api, sheet }) => sheet.getRange('K20:K25').setDataValidation(api.newDataValidation().requireNumberBetween(1, 10).build()), read: { blocked: 'sheet.command.addDataValidation', alert: ALERT.dataValidation }, edit: { executed: 'sheet.command.addDataValidation' } },
-  // M5 之前两种方式都被入口守卫取消（P4 设计 §3.6.8）：能编辑时同样不改动，对照组另有"取消已有的超链接"
-  { name: '超链接', call: async ({ sheet }) => sheet.getRange('K31').setHyperLink('https://example.com/new', '新链接'), read: { canceled: 'sheets.command.add-hyper-link' }, edit: { canceled: 'sheets.command.add-hyper-link' }, unchangedWhenEditable: true },
-  { name: '批注', call: ({ sheet }) => sheet.getRange('K30').createOrUpdateNote({ note: '新备注', width: 160, height: 60 }), read: { canceled: 'sheet.mutation.update-note' }, edit: { executed: 'sheet.mutation.update-note' } },
-  { name: '全部替换', call: async ({ api }) => (await api.createTextFinderAsync('苹果')).replaceAllWithAsync('苹果X'), read: { blocked: 'sheet.command.set-range-values', alert: ALERT.edit }, edit: { executed: 'sheet.command.replace' } },
-  { name: '取消已有的超链接（"功能"表 H3）', call: ({ workbook }) => workbook.getSheetByName('功能').getRange('H3').cancelHyperLink(), read: { canceled: 'sheet.mutation.set-range-values' }, edit: { executed: 'sheets.command.cancel-hyper-link' } },
-]
-
-/**
- * 经 Facade 直接执行一条写公式的 SetRangeValuesMutation："数据"表 K40 写 =1+1（M2-P6 复核 F3 的复现）。
- * 在页面里执行（序列化过去），不能引用外面的变量
- */
-async function writeFormulaMutation({ api, workbook, sheet }: FacadeScope): Promise<boolean> {
-  return api.executeCommand('sheet.mutation.set-range-values', { unitId: workbook.getId(), subUnitId: sheet.getSheetId(), cellValue: { 39: { 10: { f: '=1+1' } } } })
-}
-
-/** "数据"表 K40（第 40 行、K 列）的公式 */
+/** "数据"表 K40（writeFormulaMutation 写的那一格）的公式 */
 function formulaOfK40(snapshotText: string): string | undefined {
-  return (JSON.parse(snapshotText) as Workbook).sheets[SAMPLE_SHEETS.data.id]?.cellData[39]?.[10]?.f
+  return (JSON.parse(snapshotText) as Workbook).sheets[SAMPLE_SHEETS.data.id]?.cellData[FORMULA_MUTATION_CELL.row]?.[FORMULA_MUTATION_CELL.column]?.f
 }
 
 /** Facade 入口作为一项：经探针调用（调用抛出的错误接住了，不是页面错误；能编辑时不应该有） */
@@ -947,7 +886,7 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
     await clickCell(page, 'A2')
     await step(page, 'read', async () => pressUniverShortcut(page, 'C'), { read: { executed: 'univer.command.copy' } })
     await expectClipboardText(page, browserName, SAMPLE_CELLS.a2)
-    await step(page, 'read', async () => pressUniverShortcut(page, 'B'), { read: { blocked: 'sheet.command.set-style', alert: ALERT.style } })
+    await step(page, 'read', async () => pressUniverShortcut(page, 'B'), { read: SHORTCUT_OUTCOMES.style.read })
 
     // 在名称框上按下、拖到编辑框上松开（P3 审查 A1）：编辑框自己的 mouseup 照样聚焦编辑栏的编辑器（SDK 随之在编辑栏的内部文档里
     // 设光标，这是复现了那条路径的证据），只读守卫马上放开

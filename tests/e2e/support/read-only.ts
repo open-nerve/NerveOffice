@@ -1,10 +1,14 @@
 // 只读用例共用的部分（US-M2-11；specs/editor/read-only.spec.ts 与 read-only-shortcuts.spec.ts）：
 // 写好只读样本的团队空间与成员、只读的全过程都不该有的（页面错误、保存请求）、打开到 steady、内存里的内容没有改动，
-// 以及 SDK 的权限检查拦下操作时弹出的提示（平台把它改成只读的说法）
+// 以及 SDK 的权限检查拦下操作时弹出的提示（平台把它改成只读的说法）。
+// 入口的清单与预期、提示的说法、"改文档的 mutation"的判定与测试构建的页面自检共用（apps/web/src/editor/testing/ 的
+// read-only-entries.ts、content-compare.ts，M3-P2 设计 §3.5），这里转出 E2E 用到的
 import type { Locator, Page } from '@playwright/test'
 import type { TestUser } from './database.ts'
 import type { ProbeCommand } from './editor-probe.ts'
 import type { Workbook } from './sheet.ts'
+import { documentChangeAttemptsIn, documentChangesIn } from '../../../apps/web/src/editor/testing/content-compare.ts'
+import { PERMISSION_ALERT_TITLE, PROTECTION_WORDING } from '../../../apps/web/src/editor/testing/read-only-entries.ts'
 import { createDocumentIn, createTeamSpace, createUser } from './database.ts'
 import { contentOf, probeCommands, probeSnapshot } from './editor-probe.ts'
 import { expect } from './fixtures.ts'
@@ -68,23 +72,9 @@ export function unitIdOf(snapshotText: string): string {
   return (JSON.parse(snapshotText) as Workbook).id
 }
 
-/** 执行选项里带这些标记的 mutation 不是用户的修改（apps/web 的 change-classifier.ts） */
-const NOT_USER_CHANGE_FLAGS = ['onlyLocal', 'fromCollab', 'fromChangeset', 'fromFormula']
-/** 类型是 MUTATION、实际只清除界面上的图片变换框（插件档案 v1 §5.3 的排除名单） */
-const NOT_CHANGE_MUTATIONS = ['sheet.operation.clear-drawing-transformer']
-
-/** 变更检测会认作修改的 mutation（本文档的、不带排除标记的、不在排除名单里的）在 phase 这一阶段的记录 */
-function changesIn(commands: readonly ProbeCommand[], phase: ProbeCommand['phase'], unitId: string): ProbeCommand[] {
-  return commands.filter(command => command.phase === phase && command.kind === 'mutation'
-    && (command.unitId === undefined || command.unitId === unitId)
-    && !command.flags.some(flag => NOT_USER_CHANGE_FLAGS.includes(flag))
-    && !NOT_CHANGE_MUTATIONS.includes(command.id))
-}
-
-/** 命令日志里执行了的、变更检测会认作修改的 mutation：只读时一条都不应该有（防火墙的不变量，M2-P3 设计 §3.3） */
-export function documentChangesIn(commands: readonly ProbeCommand[], unitId: string): ProbeCommand[] {
-  return changesIn(commands, 'executed', unitId)
-}
+export { documentChangesIn }
+export { READ_ONLY_ALERT as ALERT, ANY_READ_ONLY_ALERT, FACADE_ENTRIES, FORMULA_MUTATION_CELL, SHORTCUT_OUTCOMES, writeFormulaMutation } from '../../../apps/web/src/editor/testing/read-only-entries.ts'
+export type { EntryOutcome, FacadeEntry } from '../../../apps/web/src/editor/testing/read-only-entries.ts'
 
 /** mark 之后执行了的、变更检测会认作修改的 mutation（同 documentChangesIn） */
 export async function documentChanges(page: Page, mark: number, unitId: string): Promise<ProbeCommand[]> {
@@ -96,7 +86,7 @@ export async function documentChanges(page: Page, mark: number, unitId: string):
  * 否则就是进入只读时 SDK 试图改文档、被防火墙取消了（P3 审查 B9）
  */
 export async function documentChangeAttempts(page: Page, mark: number, unitId: string): Promise<ProbeCommand[]> {
-  return changesIn(await probeCommands(page, mark), 'before', unitId)
+  return documentChangeAttemptsIn(await probeCommands(page, mark), unitId)
 }
 
 /** mark 之后内存里的内容与 baseline 相同，也没有改动文档的 mutation 执行 */
@@ -110,36 +100,17 @@ export async function expectUnchanged(page: Page, baseline: string, mark: number
  * 正文由平台的语言包改成只读的说法（editor/profile/locale.ts；SDK 的原文是给保护区域写的）
  */
 export function permissionAlert(page: Page): Locator {
-  return page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: '提示', exact: true }) })
+  return page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: PERMISSION_ALERT_TITLE, exact: true }) })
 }
 
 /** 关掉权限检查的提示：先核对它的说法（text），不再提保护、不让人联系创建者 */
 export async function closePermissionAlert(page: Page, text: string | RegExp): Promise<void> {
   const alert = permissionAlert(page)
   await expect(alert).toContainText(text)
-  await expect(alert).not.toContainText(/保护|创建者/)
+  await expect(alert).not.toContainText(PROTECTION_WORDING)
   await alert.getByRole('button', { name: '确定', exact: true }).click()
   await expect(alert).toBeHidden()
 }
-
-/** 各种操作被拦下时的提示（与 editor/profile/locale.ts 的 READ_ONLY_PERMISSION_TEXTS 相同；E2E 引用不到 web 的代码） */
-export const ALERT = {
-  edit: '这份文档只能查看，不能修改。',
-  paste: '这份文档只能查看，不能粘贴。',
-  cut: '这份文档只能查看，不能剪切。',
-  style: '这份文档只能查看，不能修改格式。',
-  sheet: '这份文档只能查看，不能调整工作表。',
-  rowCol: '这份文档只能查看，不能调整行列。',
-  insertRowCol: '这份文档只能查看，不能插入行列。',
-  removeRowCol: '这份文档只能查看，不能删除行列。',
-  image: '这份文档只能查看，不能修改图片。',
-  conditionalFormat: '这份文档只能查看，不能修改条件格式。',
-  dataValidation: '这份文档只能查看，不能修改数据验证。',
-  filter: '这份文档只能查看，不能使用筛选。',
-} as const
-
-/** 任何一种只读的提示（READ_ONLY_PERMISSION_TEXTS 的说法都是这个开头） */
-export const ANY_READ_ONLY_ALERT = /这份文档只能查看，不能[^。]+。/
 
 /**
  * 只看一次、不重试：web 优先的断言给最短的时限，第一次检查不满足就失败（Playwright 的 timeout: 0 是不限时，不能用）。

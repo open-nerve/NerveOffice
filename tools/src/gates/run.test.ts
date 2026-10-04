@@ -158,6 +158,19 @@ describe('US-M1-11 产物门禁的装配', () => {
     expect(inlined.violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/keyword', '__nerveEditorProbe']])
   })
 
+  it('违规：页面自检进了生产构建：入口页与分块报出，并进别的分块时结果的格式标识照样报出（M3-P2 设计 §3.5）', () => {
+    // 测试构建（dist-e2e）里自检模块的写法（节选）
+    const selftest = 'const e="nerve-office.editor-selftest.v1";async function t(n){return{format:e,scenario:n.scenario,checks:[]}}export{t as runSelftestAndReport};'
+    const chunk = artifactsGate(writeDist({ ...clean, 'selftest.html': '<!doctype html><title>页面自检</title>', 'assets/selftest-DF73r1gg.js': selftest }))
+    expect(chunk.violations.map(v => [v.rule, v.subject]).sort()).toEqual([
+      ['artifacts/keyword', 'nerve-office.editor-selftest'],
+      ['artifacts/test-only', 'assets/selftest-DF73r1gg.js'],
+      ['artifacts/test-only', 'selftest.html'],
+    ])
+    const inlined = artifactsGate(writeDist({ ...clean, 'assets/index.js': `${clean['assets/index.js']}${selftest}` }))
+    expect(inlined.violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/keyword', 'nerve-office.editor-selftest']])
+  })
+
   it('违规：产物里的动态代码、.json 里的外部地址、未登记的文件类型、缺少许可清单', () => {
     const { '.vite/third-party-packages.json': _omitted, ...withoutBundle } = clean
     const outcome = artifactsGate(writeDist({ ...withoutBundle, 'assets/w.js': 'self.eval(x)', 'config.json': '{"endpoint":"https://evil.example.com"}', 'notes.md': '说明' }))

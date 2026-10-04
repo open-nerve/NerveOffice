@@ -387,6 +387,14 @@ describe('US-M1-11 A01 产物扫描：外部地址与关键字', () => {
   })
 
   it.each([
+    ['测试构建里的写法', 'const e="nerve-office.editor-selftest.v1";function t(n){return{format:e,scenario:n}}'],
+    ['大小写不同', 'x="Nerve-Office.Editor-Selftest.v2"'],
+  ])('违规：页面自检结果的格式标识出现在生产产物里（M3-P2 设计 §3.5）：%s', (_case, code) => {
+    const result = scan(code)
+    expect(result.violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/keyword', 'nerve-office.editor-selftest']])
+  })
+
+  it.each([
     ['测试构建里的写法', 'let n={univerAPI:e,snapshot:()=>JSON.stringify(t.save())};window.__nerveEditorProbe=n'],
     ['方括号访问', 'window["__nerveEditorProbe"]=n'],
     ['大小写不同', 'self.__NERVEEDITORPROBE=n'],
@@ -564,5 +572,20 @@ describe('US-M1-09 生产构建里没有测试构建的文件', () => {
   it('探针补上的插件 Facade 单独成块出现在生产构建里同样违规（M2-P6 第 4 片复核 F5）：它没有探针的名字，只能按分块名认', () => {
     const violations = checkTestOnlyArtifacts(['editor.html', 'assets/probe-facades-Dk3x.js', 'assets/facades-Dk3x.js', 'assets/my-probe-facades-x.js'])
     expect(violations.map(v => v.subject)).toEqual(['assets/probe-facades-Dk3x.js'])
+  })
+
+  it('页面自检（M3-P2 设计 §3.5）的入口页与分块（入口页的脚本、编辑器页的挂接、自检模块、结果的格式）出现在生产构建里即违规；名字相近的不算', () => {
+    const violations = checkTestOnlyArtifacts([
+      'selftest.html',
+      'assets/selftest-CgaJxJD_.js',
+      'assets/selftest-hook-k7BaCYdU.js',
+      'assets/selftest-report-BHKLWSt-.js',
+      'selftests.html',
+      'assets/my-selftest-x.js',
+      'assets/selftests.js',
+      'assets/editor-BcxC.js',
+    ])
+    expect(violations.map(v => v.subject)).toEqual(['selftest.html', 'assets/selftest-CgaJxJD_.js', 'assets/selftest-hook-k7BaCYdU.js', 'assets/selftest-report-BHKLWSt-.js'])
+    expect(violations[0]?.detail).toContain('页面自检')
   })
 })

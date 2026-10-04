@@ -13,6 +13,7 @@
   "include": [
     "specs",
     "support",
+    "safari",
     "tools",
     "playwright.config.ts",
     "playwright.template.config.ts"
