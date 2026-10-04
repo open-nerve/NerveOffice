@@ -1,7 +1,10 @@
+import type { AppConfig } from '../config/index.ts'
 import { Module } from '@nestjs/common'
 import { AuditModule } from '../audit/index.ts'
 import { AuthModule } from '../auth/index.ts'
+import { APP_CONFIG } from '../config/index.ts'
 import { DatabaseModule } from '../database/index.ts'
+import { AppLogger } from '../logging/index.ts'
 import { SpacesModule } from '../spaces/index.ts'
 import { DocumentAccessPolicy, EffectiveAccessPolicy } from './document-access-policy.ts'
 import { DocumentConflictCopyService } from './document-conflict-copy.service.ts'
@@ -25,6 +28,7 @@ import { FoldersRepository } from './folders.repository.ts'
 import { FoldersService } from './folders.service.ts'
 import { LeaseWriteAccessRevocation } from './lease-write-access.ts'
 import { SharedDocumentsService } from './shared-documents.service.ts'
+import { SnapshotInspector } from './snapshot-inspector.ts'
 import { SpaceTreeRepository } from './space-tree.repository.ts'
 import { TrashEntriesRepository } from './trash-entries.repository.ts'
 import { TrashEntryPurger } from './trash-entry-purger.ts'
@@ -69,6 +73,12 @@ import { WriteAccessRevocation } from './write-access.ts'
     { provide: DocumentAccessPolicy, useClass: EffectiveAccessPolicy },
     // 收回写入权的入口（M2-P2 设计 §3.7）：M3-P1 起接上编辑租约（结束失去写入权的人的租约、代次加一），调用方不改
     { provide: WriteAccessRevocation, useClass: LeaseWriteAccessRevocation },
+    // 快照的检查（M3-P3 设计 §3.3）：工作线程池，线程按需创建、退出时结束；只在本模块里用（保存与另存为副本）
+    {
+      provide: SnapshotInspector,
+      inject: [APP_CONFIG, AppLogger],
+      useFactory: (config: AppConfig, logger: AppLogger) => new SnapshotInspector(config.snapshotInspection, logger),
+    },
   ],
   // 空间的接口（workspace）与系统管理（admin）经访问策略授权、经这个入口收回写入权；admin 转移停用者的文档；
   // 文件夹、回收站与搜索的接口在 workspace（M2-P4 设计 §3.1），数据与规则在这里；

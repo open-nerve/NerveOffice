@@ -51,6 +51,8 @@ describe('loadConfig', () => {
       password: { argon2: { memoryKib: 19_456, iterations: 2, parallelism: 1 }, hashConcurrency: 2, hashQueue: { maxWaiting: 64, maxWaitMs: 5_000 } },
       // 回收站的自动清理默认开着：每小时一轮，一轮最多 50 个删除单元
       jobs: { trashPurge: { enabled: true, intervalMs: 3_600_000, batchSize: 50 } },
+      // 快照的检查：2 个工作线程，排队 8 个、等 10 秒，一份 10 秒，每个线程的堆 512 MiB（DEF-018 的测量）
+      snapshotInspection: { threads: 2, queue: { maxWaiting: 8, maxWaitMs: 10_000 }, timeoutMs: 10_000, heapMb: 512 },
     })
   })
 
@@ -92,6 +94,11 @@ describe('loadConfig', () => {
       NERVE_TRASH_PURGE_ENABLED: 'false',
       NERVE_TRASH_PURGE_INTERVAL_MS: '900000',
       NERVE_TRASH_PURGE_BATCH: '10',
+      NERVE_SNAPSHOT_INSPECTION_THREADS: '4',
+      NERVE_SNAPSHOT_INSPECTION_QUEUE_MAX: '0',
+      NERVE_SNAPSHOT_INSPECTION_QUEUE_TIMEOUT_MS: '1500',
+      NERVE_SNAPSHOT_INSPECTION_TIMEOUT_MS: '20000',
+      NERVE_SNAPSHOT_INSPECTION_HEAP_MB: '1024',
     })
     const { url, ...database } = config.database
     expect(url.reveal()).toBe('postgresql://u:p@127.0.0.1:5432/db')
@@ -121,6 +128,24 @@ describe('loadConfig', () => {
     expect(config.oneTimeLinks).toEqual({ recordMaxFailures: 7 })
     expect(config.web.root).toBe('/srv/nerve-office/web')
     expect(config.jobs).toEqual({ trashPurge: { enabled: false, intervalMs: 900_000, batchSize: 10 } })
+    expect(config.snapshotInspection).toEqual({ threads: 4, queue: { maxWaiting: 0, maxWaitMs: 1_500 }, timeoutMs: 20_000, heapMb: 1_024 })
+  })
+
+  it('快照检查的工作线程按整数范围校验；每个线程的堆至少 256 MiB（更低时有的快照在 JSON.parse 里撞上上限，整个进程中止，DEF-018）', () => {
+    const variablesOf = (extra: Record<string, string>) => issuesOf(() => loadConfig({ ...REQUIRED, ...extra })).map(issue => issue.variable)
+    expect(variablesOf({ NERVE_SNAPSHOT_INSPECTION_THREADS: '0' })).toEqual(['NERVE_SNAPSHOT_INSPECTION_THREADS'])
+    expect(variablesOf({ NERVE_SNAPSHOT_INSPECTION_THREADS: '65' })).toEqual(['NERVE_SNAPSHOT_INSPECTION_THREADS'])
+    expect(variablesOf({ NERVE_SNAPSHOT_INSPECTION_QUEUE_MAX: '1001' })).toEqual(['NERVE_SNAPSHOT_INSPECTION_QUEUE_MAX'])
+    expect(variablesOf({ NERVE_SNAPSHOT_INSPECTION_QUEUE_TIMEOUT_MS: '99' })).toEqual(['NERVE_SNAPSHOT_INSPECTION_QUEUE_TIMEOUT_MS'])
+    expect(variablesOf({ NERVE_SNAPSHOT_INSPECTION_TIMEOUT_MS: '999' })).toEqual(['NERVE_SNAPSHOT_INSPECTION_TIMEOUT_MS'])
+    expect(variablesOf({ NERVE_SNAPSHOT_INSPECTION_HEAP_MB: '255' })).toEqual(['NERVE_SNAPSHOT_INSPECTION_HEAP_MB'])
+    expect(variablesOf({ NERVE_SNAPSHOT_INSPECTION_HEAP_MB: '16385' })).toEqual(['NERVE_SNAPSHOT_INSPECTION_HEAP_MB'])
+    expect(loadConfig({ ...REQUIRED, NERVE_SNAPSHOT_INSPECTION_HEAP_MB: '256', NERVE_SNAPSHOT_INSPECTION_THREADS: '1' }).snapshotInspection).toEqual({
+      threads: 1,
+      queue: { maxWaiting: 8, maxWaitMs: 10_000 },
+      timeoutMs: 10_000,
+      heapMb: 256,
+    })
   })
 
   it('开关只认 true 与 false：写错时拒绝启动，不静默当成关掉', () => {

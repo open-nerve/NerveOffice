@@ -6,8 +6,9 @@ import { z } from 'zod'
 
 /**
  * 规则的标识（按检查的先后列出）：
- * - encoding：不是 UTF-8 的文本；json：不是合法的 JSON；
- * - depth：嵌套超过上限（外层与资源 data 里的 JSON 累加）；entries：元素数量超过上限；too-complex：检查用的内存超过上限；
+ * - encoding：不是 UTF-8 的文本；
+ * - depth：嵌套超过上限；entries：元素数量超过上限。两条都在解析之前按文字数（外层与资源 data 里的 JSON 累加），超出的不解析；
+ * - json：不是合法的 JSON；too-complex：检查用的内存超过上限（检查进行到哪一步都可能）；
  * - structure：工作簿的结构（顶层是对象、id 是非空字符串、sheetOrder 是字符串数组且每一项都是 sheets 的键、sheets 的值是对象）；
  * - resources：resources 不是数组，或者某一项不是 { name, data }（两个都是字符串）；resource-duplicate：资源名重复；
  *   resource-unknown：资源名不在插件档案的白名单里；resource-data：已知资源的最小结构（data 是空串或 JSON、顶层是对象、
@@ -19,9 +20,9 @@ import { z } from 'zod'
  */
 export const SNAPSHOT_RULES = [
   'encoding',
-  'json',
   'depth',
   'entries',
+  'json',
   'too-complex',
   'structure',
   'resources',
