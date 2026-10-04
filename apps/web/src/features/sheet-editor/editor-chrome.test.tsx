@@ -20,7 +20,7 @@ const READY: EditorPageReady = {
 }
 const CLEAN: SaveView = { status: 'clean', formulasPending: false, problem: undefined, conflict: undefined, canSave: true, unsaved: false }
 const EDITING: EditModeState = { kind: 'editing' }
-const READING: ReadingMode = { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined }
+const READING: ReadingMode = { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false }
 const AMY = { id: '0199a2c4-0000-7000-8000-0000000000e1', username: 'amy', displayName: '艾米' }
 const COPY = {
   id: '0199a2c4-0000-7000-8000-0000000000c9',
@@ -40,7 +40,7 @@ const COPY = {
 
 /** 失去编辑权（默认：读得到、有修改，可以另存为副本或放弃） */
 function lost(loss: LeaseLoss, changes: Partial<LostMode> = {}): LostMode {
-  return { kind: 'lost', loss, unsaved: true, readable: loss.kind !== 'not-found', checking: false, captureFailed: false, copy: { kind: 'idle' }, reload: { kind: 'idle' }, ...changes }
+  return { kind: 'lost', loss, unsaved: true, readable: loss.kind !== 'not-found', checking: false, captureFailed: false, inputLeft: false, reopenFailed: false, copy: { kind: 'idle' }, reload: { kind: 'idle' }, ...changes }
 }
 
 /** 假的编辑器页：视图由测试设定 */

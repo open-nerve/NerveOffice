@@ -767,34 +767,47 @@ describe('释放', () => {
     expect(releases).toBe(1)
   })
 
-  it('退出编辑时等释放有了结果（M3-P2 设计 §3.4）：请求回来之前不兑现；成功、失败（结果未知）都兑现，从不失败', async () => {
+  it('退出编辑时等释放有了结果（M3-P2 设计 §3.4）：请求回来之前不兑现；成功兑现为服务端确认了（true），失败（结果未知）兑现为没确认（false），从不失败；再释放交回同一个结果（审查 A13）', async () => {
     const context = setup()
     const lease = await held(context)
     let answer: (() => void) | undefined
     context.api.release.mockImplementationOnce(async () => new Promise<void>((resolve) => {
       answer = resolve
     }))
-    let done = false
-    const releasing = lease.release().then(() => {
-      done = true
+    let confirmed: boolean | undefined
+    const releasing = lease.release().then((result) => {
+      confirmed = result
     })
     await settle()
-    expect(done).toBe(false)
+    expect(confirmed).toBeUndefined()
     answer?.()
     await releasing
-    expect(done).toBe(true)
+    expect(confirmed).toBe(true)
+    await expect(lease.release()).resolves.toBe(true)
 
     const failing = setup()
     const other = await held(failing)
     failing.api.release.mockRejectedValueOnce(new NetworkError('断网'))
-    await expect(other.release()).resolves.toBeUndefined()
+    await expect(other.release()).resolves.toBe(false)
+    await expect(other.release()).resolves.toBe(false)
+    expect(failing.api.release).toHaveBeenCalledOnce()
   })
 
-  it('暂停时（会话不是本人）不发：带的会是别人的或已经失效的登录', async () => {
+  it('暂停时（会话不是本人）不发：带的会是别人的或已经失效的登录；那一代还在，兑现为没确认', async () => {
     const context = setup()
     const lease = await held(context)
     lease.pause()
-    void lease.release()
+    await expect(lease.release()).resolves.toBe(false)
+    expect(context.api.release).not.toHaveBeenCalled()
+  })
+
+  it('已经失效：什么也不发，兑现为确认了（本页没有还在的那一代）', async () => {
+    const context = setup()
+    const lease = await held(context)
+    context.api.renew.mockRejectedValueOnce(lostError('revoked'))
+    await context.time.advance(10_000)
+    expect(context.onLost).toHaveBeenCalledOnce()
+    await expect(lease.release()).resolves.toBe(true)
     expect(context.api.release).not.toHaveBeenCalled()
   })
 })

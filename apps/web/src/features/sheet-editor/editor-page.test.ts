@@ -987,13 +987,13 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     expect(api.contentIfChanged).not.toHaveBeenCalled()
   })
 
-  it('重新载入内容失败：与载入失败相同，释放已经取得的编辑权', async () => {
-    const { editorPage, editLease, createEditor, time } = setup({ api: { contentIfChanged: async () => Promise.reject(new NetworkError('断网')) }, editLease: { acquire: vi.fn(async () => ({ ...ACQUIRED, revision: 4 })) } })
+  it('重新载入内容失败（网络）：释放已经取得的编辑权，以只读打开载入的内容，说明没能进入编辑（与"编辑"时相同，审查 A11）；地址里的标记留着', async () => {
+    const { editorPage, editLease, createEditor, surface, editIntent } = setup({ api: { contentIfChanged: async () => Promise.reject(new NetworkError('断网')) }, editLease: { acquire: vi.fn(async () => ({ ...ACQUIRED, revision: 4 })) } })
     await editorPage.load()
-    expect(editorPage.view()).toMatchObject({ load: { kind: 'failed' } })
-    expect(createEditor).not.toHaveBeenCalled()
     expect(editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
-    expect(time.pending()).toBe(0)
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, snapshot: '{"id":"unit-1"}', access: 'read', viewState: undefined })
+    expect(editorPage.view()).toMatchObject({ load: { kind: 'ready' }, mode: { kind: 'reading', canEdit: true, notice: { kind: 'enter-failed' } }, save: undefined })
+    expect(editIntent.clear).not.toHaveBeenCalled()
   })
 
   it('别人正在编辑：按只读创建，页头说明持有者与最后活动几分钟之前（按服务端的时间算）；没有保存，不续租；地址里的标记留着', async () => {
@@ -1069,16 +1069,20 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     expect(modeOf(editorPage)).toEqual({ kind: 'editing' })
   })
 
-  it('申请的结果未知、再试一次仍然未知：与读取元数据、内容失败相同，不创建编辑器', async () => {
-    const acquire = vi.fn(async () => Promise.reject(new NetworkError('断网')))
-    const { editorPage, createEditor, time } = setup({ editLease: { acquire } })
+  it.each([
+    ['结果未知、再试一次仍然未知（网络）', new NetworkError('断网')],
+    ['服务端出错（5xx）', new ApiError(503, 'SERVICE_UNAVAILABLE', '繁忙')],
+  ])('申请的%s：内容已经读到、文档本身没有问题——以只读打开，说明没能进入编辑（与"编辑"时相同，审查 A11），不整页加载失败；地址里的标记留着', async (_case, error) => {
+    const acquire = vi.fn(async () => Promise.reject(error))
+    const { editorPage, createEditor, surface, time, editIntent } = setup({ editLease: { acquire } })
     const loading = editorPage.load()
     await vi.waitFor(() => expect(acquire).toHaveBeenCalledOnce())
     await time.advance(500)
     await loading
-    expect(acquire).toHaveBeenCalledTimes(2)
-    expect(editorPage.view().load).toMatchObject({ kind: 'failed' })
-    expect(createEditor).not.toHaveBeenCalled()
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, snapshot: '{"id":"unit-1"}', access: 'read', viewState: undefined })
+    expect(editorPage.view()).toMatchObject({ load: { kind: 'ready' }, mode: { kind: 'reading', canEdit: true, notice: { kind: 'enter-failed', error } } })
+    expect(surface.dataset.editorState).toBe('ready')
+    expect(editIntent.clear).not.toHaveBeenCalled()
   })
 
   it('申请时未登录：整页转到登录页', async () => {
@@ -1592,6 +1596,94 @@ describe('阅读与编辑的切换（M3-P2 设计 §3.1、§3.4）', () => {
     expect(editorPage.view()).toMatchObject({ mode: { kind: 'editing' }, save: { status: 'clean' } })
     expect(surface.dataset.editorState).toBe('ready')
     expect(blocked(surface)).toBe(false)
+  })
+
+  it('退出编辑的过程中（保存、等释放）挂着交互屏障：可编辑的编辑器还在，保存之后、捕获之前的键入进不去（退出在捕获之后不再核对修改序号，审查 A5）', async () => {
+    const releasing = deferred<undefined>()
+    const { editorPage, surface, chrome, editLease } = setup({ editLease: { release: vi.fn(async () => releasing.promise) } })
+    document.body.append(chrome, surface)
+    await editorPage.load()
+    expect(blocked(surface)).toBe(false)
+    const exiting = editorPage.exitEditing()
+    await vi.waitFor(() => expect(editLease.release).toHaveBeenCalled())
+    expect(modeOf(editorPage)).toEqual({ kind: 'exiting' })
+    expect(editorPage.view().surface).toBe('loading')
+    expect(blocked(surface)).toBe(true)
+    releasing.resolve(undefined)
+    await exiting
+    expect(modeOf(editorPage)).toMatchObject({ kind: 'reading' })
+    expect(blocked(surface)).toBe(false)
+  })
+
+  it('失去编辑权的过程中（等在途的保存，可编辑的编辑器还在）挂着交互屏障；有了结果、以只读重建之后撤掉', async () => {
+    const reply = deferred<SaveContentResponse>()
+    const { editorPage, surface, chrome, fake, api, time } = setup({ api: { save: vi.fn(async () => reply.promise) }, editLease: { renew: vi.fn(async () => Promise.reject(new ApiError(403, 'PERMISSION_DENIED', '只能查看'))) } })
+    document.body.append(chrome, surface)
+    await editorPage.load()
+    Object.assign(fake.editor, { changeSeq: () => 1 })
+    fake.changeListeners.forEach(listener => listener())
+    const saving = editorPage.save()
+    await vi.waitFor(() => expect(api.save).toHaveBeenCalled())
+    await time.advance(10_000)
+    expect(modeOf(editorPage)).toMatchObject({ kind: 'losing' })
+    expect(blocked(surface)).toBe(true)
+    reply.resolve({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z' })
+    await saving
+    await settle()
+    expect(modeOf(editorPage)).toMatchObject({ kind: 'lost', unsaved: false })
+    expect(blocked(surface)).toBe(false)
+  })
+
+  it('失去编辑权之后以只读重建失败（审查 A3）：页面照常（页头、说明与副本），容器按 failed 隐藏、撤掉屏障——不是整页的"编辑器加载失败"', async () => {
+    let calls = 0
+    const fake = fakeEditor()
+    const { editorPage, surface, chrome, time } = setup({
+      createEditor: async () => {
+        calls += 1
+        if (calls > 1)
+          throw new Error('Worker 起不来')
+        return fake.editor
+      },
+      editLease: { renew: vi.fn(async () => Promise.reject(new ApiError(403, 'PERMISSION_DENIED', '只能查看'))) },
+    })
+    document.body.append(chrome, surface)
+    await editorPage.load()
+    Object.assign(fake.editor, { changeSeq: () => 1 })
+    fake.changeListeners.forEach(listener => listener())
+    await time.advance(10_000)
+    await settle()
+    expect(editorPage.view()).toMatchObject({ load: { kind: 'ready' }, mode: { kind: 'lost', reopenFailed: true, unsaved: true }, surface: 'failed' })
+    expect(surface.hidden).toBe(true)
+    expect(blocked(surface)).toBe(false)
+    expect(editorPage.hasUnsavedWork()).toBe(true)
+  })
+
+  it('会话不是本人时点"编辑"：先向服务端确认，还是别人就不申请、留在阅读（审查 A10）；确认是本人了（消息没送到）就照常进入', async () => {
+    const { editorPage, api, editLease, fromOtherTab } = setup({ editIntent: false })
+    await editorPage.load()
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('other-user'))
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    await editorPage.enterEditing()
+    expect(api.session).toHaveBeenCalledTimes(3)
+    expect(editLease.acquire).not.toHaveBeenCalled()
+    expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', notice: undefined })
+    await editorPage.enterEditing()
+    expect(api.session).toHaveBeenCalledTimes(4)
+    expect(editLease.acquire).toHaveBeenCalledOnce()
+    expect(modeOf(editorPage)).toEqual({ kind: 'editing' })
+  })
+
+  it('会话是本人、没有在途的确认：点"编辑"在点下去的这一刻就进入"正在进入编辑"（不先确认会话）', async () => {
+    const acquiring = deferred<AcquiredEditLease>()
+    const { editorPage, api } = setup({ editIntent: false, editLease: { acquire: vi.fn(async () => acquiring.promise) } })
+    await editorPage.load()
+    const entering = editorPage.enterEditing()
+    expect(modeOf(editorPage)).toEqual({ kind: 'entering' })
+    expect(api.session).toHaveBeenCalledOnce()
+    acquiring.resolve(ACQUIRED)
+    await entering
   })
 
   it('退出编辑：会话是本人时先保存、释放、以只读重建，回到阅读', async () => {

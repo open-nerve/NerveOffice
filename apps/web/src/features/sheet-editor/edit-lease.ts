@@ -23,7 +23,8 @@
 //   服务端给的原因是到期而不是空闲，这时续上会让服务端的空闲回收重新计时，别人要多等一轮（审查 B8）；
 // - 暂停与恢复：页面的会话不是本人时暂停（不带着别人的登录发续租）；回到本人时恢复并立即续租一次——租约绑定登录，
 //   登录换过之后它已经失效，随即续上；
-// - 释放：页面隐藏、关闭时用 keepalive，结果不管（没送到时服务端按到期回收）；退出编辑时等它有了结果（结果未知也算结束，M3-P2 设计 §3.4）。
+// - 释放：页面隐藏、关闭时用 keepalive，结果不管（没送到时服务端按到期回收）；退出编辑时等它有了结果（结果未知也算结束，M3-P2 设计 §3.4；
+//   等多久由 edit-mode.ts 设上限），结果交回服务端确认了没有（没确认时那一代可能还在，阅读页如实说明，审查 A13）。
 import type { AcquiredEditLease, DocumentEditor, EditLeaseLostReason, RenewedEditLease, RevisionSource, UserSummary } from '@nerve-office/contracts'
 import type { LeaseCredentials } from './editor-api.ts'
 import { EDIT_IDLE_SECONDS_MAX, EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, editLeaseHeldDetailsSchema, editLeaseLostDetailsSchema } from '@nerve-office/contracts'
@@ -158,9 +159,11 @@ export interface EditLease {
   /**
    * 释放并停止续租（退出编辑、页面隐藏、关闭、卸载）：立即停止续租（之后的失效不再通知），释放的请求有了结果（成功或失败都算，
    * 结果未知时服务端按到期回收）之后兑现，从不失败。页面隐藏、关闭时不等它；退出编辑时等它（M3-P2 设计 §3.4）。
-   * 已经失效或释放过时什么也不做
+   * 兑现为服务端确认了没有（请求成功为 true；会话不是本人时不发、请求失败或结果未知为 false：那一代可能还在服务端，至多一个有效期后
+   * 自行到期，退出编辑之后的阅读据此如实说明，审查 A13）。已经失效时什么也不做、为 true（本页没有还在的那一代）；
+   * 释放过再调用时交回那一次的结果
    */
-  readonly release: () => Promise<void>
+  readonly release: () => Promise<boolean>
 }
 
 export interface EditLeaseOptions {
@@ -272,6 +275,8 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
   let resumes = 0
   /** 进行中的续上：同时只有一个，续租与保存得知的失效都等它 */
   let recovery: Promise<LeaseOutcome> | undefined
+  /** 释放的那一次：服务端确认了没有（再调用 release 时交回它） */
+  let releasing: Promise<boolean> | undefined
 
   function stopTimer(): void {
     cancelTimer?.()
@@ -499,14 +504,16 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
       }
     },
     release: async () => {
+      if (releasing !== undefined)
+        return releasing
       if (ended())
-        return
+        return true
       // 暂停时（会话不是本人）不发：带的会是别人的登录或已经失效的登录，什么也释放不了
       const wasPaused = state === 'paused'
       state = 'released'
       stopTimer()
-      if (!wasPaused)
-        await api.release(documentId, credentials.token).catch(() => undefined)
+      releasing = wasPaused ? Promise.resolve(false) : api.release(documentId, credentials.token).then(() => true, () => false)
+      return releasing
     },
   }
 }
