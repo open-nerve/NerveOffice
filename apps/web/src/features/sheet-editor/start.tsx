@@ -53,5 +53,9 @@ export function startSheetEditorPage(elements: SheetEditorPageElements): void {
       <EditorChrome page={page} apple={apple} />
     </StrictMode>,
   )
+  // 测试构建、地址带 selftest 时：页面自检（真实 Safari 的复核，M3-P2 设计 §3.5）。在开始载入之前引入挂接：它很小，
+  // 会话与内容的请求回来之前就挂上了页面错误的收集。生产构建里 MODE 是 production，这个分支与自检的分块都被去掉（门禁 artifacts 核对）
+  if (import.meta.env.MODE === 'e2e' && new URLSearchParams(window.location.search).has('selftest'))
+    void import('./selftest-hook.ts').then(({ watchForSelftest }) => watchForSelftest(page, elements))
   void page.load()
 }

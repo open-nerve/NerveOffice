@@ -732,6 +732,12 @@ const LAZY_TEXTS: readonly { readonly file: string, readonly feature: string }[]
 const WEB_TEST_CODE = ['**/*.test.{ts,tsx}', '**/*.test-support.{ts,tsx}']
 
 /**
+ * 页面自检与 E2E 共用的文件（M3-P2 设计 §3.5，相对编辑器元素的路径）：只读入口的清单与预期、比较口径、自检结果的格式。
+ * 它们在 editor/testing/ 下（只在测试构建里），E2E 经模块边界的例外引用它们，所以它们不引用任何模块（nerve/editor-testing-shared）
+ */
+const SELFTEST_SHARED_FILES = ['testing/read-only-entries.ts', 'testing/content-compare.ts', 'testing/selftest-report.ts']
+
+/**
  * 共享层内部引用这些文案：模块边界不检查同一个元素内部的引用（boundaries/dependencies 的 checkInternals 默认关），
  * 改按解析之后的路径拦下——shared/i18n/index.ts 转出、shared 里别的文件中转，都会把它们带回首屏（M2-P6 复核第二批）
  */
@@ -971,6 +977,18 @@ export default antfu(
     },
   },
   {
+    // 页面自检与 E2E 共用的文件不引用任何模块（M3-P2 设计 §3.5）：E2E 经模块边界的例外引用它们，Playwright 的进程里不能带进 Univer
+    // 与 web 的其他代码。它们在 editor/testing/ 下，上一块不管它们；同名规则后者整体覆盖前者，测试与测试辅助的限制一并带上
+    name: 'nerve/editor-testing-shared',
+    files: SELFTEST_SHARED_FILES.map(file => `apps/web/src/editor/${file}`),
+    rules: {
+      'ts/no-restricted-imports': ['error', { patterns: [TEST_MODULES, {
+        regex: '.',
+        message: '页面自检与 E2E 共用的文件（SELFTEST_SHARED_FILES）不引用任何模块：E2E 也引用它们，Playwright 的进程里不能带进 Univer 与 web 的其他代码（M3-P2 设计 §3.5）',
+      }] }],
+    },
+  },
+  {
     name: 'nerve/cli-output',
     // 命令行入口直接向终端输出
     files: ['tools/src/**/cli.ts', 'tools/src/**/*-cli.ts', 'tools/src/git/commit-msg.ts'],
@@ -1132,6 +1150,16 @@ export default antfu(
               { element: { type: 'web-feature', captured: { feature: 'sheet-editor' } } },
             ],
             allow: { to: { element: { type: 'web-editor', fileInternalPath: PUBLIC_ENTRY } } },
+          },
+          // 真实 Safari 的页面自检（M3-P2 设计 §3.5）：编辑器的 testing/ 只在测试构建里，这里只开三个口子——
+          // E2E 引用与自检共用的文件（SELFTEST_SHARED_FILES：清单、比较口径、结果的格式，都不引用别的模块）；
+          // 自检的入口页（entries/selftest）引用结果的格式（登录失败时同样交出结果）；
+          // 编辑器页的挂接（sheet-editor 的 selftest-hook.ts，start.tsx 只在测试构建里动态引入它）动态引入自检模块
+          { from: { element: { type: 'e2e-tests' } }, allow: { to: { element: { type: 'web-editor', fileInternalPath: SELFTEST_SHARED_FILES } } } },
+          { from: { element: { type: 'web-entry', captured: { entry: 'selftest' } } }, allow: { to: { element: { type: 'web-editor', fileInternalPath: 'testing/selftest-report.ts' } } } },
+          {
+            from: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' }, fileInternalPath: ['selftest-hook.ts', 'selftest-hook.test.ts'] } },
+            allow: { to: { element: { type: 'web-editor', fileInternalPath: 'testing/selftest.ts' } } },
           },
           {
             from: { element: { type: 'web-app' } },

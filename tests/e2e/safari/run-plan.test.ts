@@ -1,0 +1,99 @@
+// 真实 Safari 的自检的驱动脚本里不碰进程与网络的部分（run-plan.ts）：一串步骤怎么接起来、收集端认哪些请求、每步的结论与退出码。
+import type { SelftestReport } from '../../../apps/web/src/editor/testing/selftest-report.ts'
+import type { TestUser } from '../support/database.ts'
+import type { SelftestScene, SelftestStep } from '../support/selftest-plan.ts'
+import { describe, expect, it } from 'vitest'
+import { SELFTEST_REPORT_FORMAT } from '../../../apps/web/src/editor/testing/selftest-report.ts'
+import { selftestSteps } from '../support/selftest-plan.ts'
+import { chainOf, DONE_PATH, exitCodeOf, nextAfter, outcomeOf, parseReportRequest, REPORT_PATH, reportUrlOf, resultFileName } from './run-plan.ts'
+
+const ORIGIN = 'http://127.0.0.1:4100'
+const COLLECTOR = 'http://127.0.0.1:4200'
+
+function user(username: string): TestUser {
+  return { id: `${username}-id`, username, displayName: username, password: 'password', personalSpaceId: 'space' }
+}
+
+const SCENE: SelftestScene = { author: user('author'), viewer: user('viewer'), sampleId: 'sample-doc', formulasId: 'formulas-doc' }
+const STEPS = selftestSteps(SCENE)
+
+function report(overrides: Partial<SelftestReport> = {}): SelftestReport {
+  return {
+    format: SELFTEST_REPORT_FORMAT,
+    scenario: 'read-only',
+    documentId: 'sample-doc',
+    userAgent: 'Safari',
+    startedAt: '2026-10-04T01:00:00.000Z',
+    finishedAt: '2026-10-04T01:00:09.000Z',
+    page: { state: 'ready', readOnly: true },
+    visibility: [],
+    checks: [{ id: 'facade.筛选', pass: true, detail: '取消了', ms: 3 }],
+    pageErrors: [],
+    consoleErrors: [],
+    ignoredNotices: [],
+    ...overrides,
+  }
+}
+
+describe('一串步骤怎么接起来', () => {
+  it('每一步的结果交回收集端的 /report?step=<序号>，收下之后去下一步的入口页，最后一步之后去结束页', () => {
+    const chain = chainOf(STEPS, ORIGIN, COLLECTOR)
+    expect(chain.map(link => new URLSearchParams(new URL(link.url).hash.slice(1)).get('next'))).toEqual([0, 1, 2].map(index => reportUrlOf(COLLECTOR, index)))
+    expect(chain.every(link => link.url.startsWith(`${ORIGIN}/selftest.html#`))).toBe(true)
+    expect(nextAfter(chain, 0, COLLECTOR)).toBe(chain[1]?.url)
+    expect(nextAfter(chain, 1, COLLECTOR)).toBe(chain[2]?.url)
+    expect(nextAfter(chain, 2, COLLECTOR)).toBe(`${COLLECTOR}${DONE_PATH}`)
+  })
+})
+
+describe('收集端认哪些请求', () => {
+  it('/report?step=<序号>&result=<结果>：序号在步骤的范围里', () => {
+    expect(parseReportRequest(new URL(`${COLLECTOR}${REPORT_PATH}?step=2&result=abc`), 3)).toEqual({ step: 2, encoded: 'abc' })
+  })
+
+  it.each([
+    ['别的路径', `${COLLECTOR}/favicon.ico`],
+    ['序号超出', `${COLLECTOR}${REPORT_PATH}?step=3&result=abc`],
+    ['序号不是数字', `${COLLECTOR}${REPORT_PATH}?step=1e0&result=abc`],
+    ['没有序号', `${COLLECTOR}${REPORT_PATH}?result=abc`],
+    ['没有结果', `${COLLECTOR}${REPORT_PATH}?step=0`],
+    ['结果是空的', `${COLLECTOR}${REPORT_PATH}?step=0&result=`],
+  ])('不认：%s', (_case, url) => {
+    expect(parseReportRequest(new URL(url), 3)).toHaveProperty('error')
+  })
+})
+
+/** 第一步（查看者的只读入口） */
+function firstStep(): SelftestStep {
+  const [step] = STEPS
+  if (step === undefined)
+    throw new Error('没有步骤')
+  return step
+}
+
+describe('每步的结论与退出码', () => {
+  const step = firstStep()
+
+  it('没有交回是 missing；解不开、交回的是别的一步、有问题是 failed；全部通过是 passed', () => {
+    expect(outcomeOf(step, undefined)).toMatchObject({ status: 'missing' })
+    expect(outcomeOf(step, { undecodable: '结果不是 JSON' })).toMatchObject({ status: 'failed', problems: ['交回的结果解不开：结果不是 JSON'] })
+    expect(outcomeOf(step, report({ scenario: 'edit-chrome' }))).toMatchObject({ status: 'failed' })
+    expect(outcomeOf(step, report({ documentId: 'other' }))).toMatchObject({ status: 'failed' })
+    expect(outcomeOf(step, report({ pageErrors: ['TypeError: x'] }))).toMatchObject({ status: 'failed', problems: ['页面错误：TypeError: x'] })
+    expect(outcomeOf(step, report())).toMatchObject({ id: 'read-only', status: 'passed', problems: [] })
+  })
+
+  it('退出码：有没有交回的是 2（超时），有不通过或服务器上的问题是 1，全部通过是 0', () => {
+    const passed = outcomeOf(step, report())
+    const failed = outcomeOf(step, report({ consoleErrors: ['x'] }))
+    const missing = outcomeOf(step, undefined)
+    expect(exitCodeOf([passed, passed], [])).toBe(0)
+    expect(exitCodeOf([passed], ['修订号变了'])).toBe(1)
+    expect(exitCodeOf([passed, failed], [])).toBe(1)
+    expect(exitCodeOf([failed, missing], [])).toBe(2)
+  })
+
+  it('结果文件按开始的时刻命名（UTC，没有冒号与毫秒）', () => {
+    expect(resultFileName(new Date('2026-10-04T02:31:05.123Z'))).toBe('2026-10-04T02-31-05Z.json')
+  })
+})
