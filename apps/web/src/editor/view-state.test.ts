@@ -3,7 +3,7 @@ import type { SheetArea, SheetViewState, ViewWorkbook } from './view-state.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { readViewState, restoreViewState } from './view-state.ts'
 
-/** 一张假的工作表：记下设过的选区、当前单元格与滚动 */
+/** 一张假的工作表：记下设过的选区、当前单元格与滚动；merges 是这张表现在的合并区 */
 interface FakeSheet {
   readonly id: string
   hidden: boolean
@@ -11,23 +11,46 @@ interface FakeSheet {
   maxColumns: number
   scroll: { sheetViewStartRow: number, sheetViewStartColumn: number }
   freeze: { xSplit: number, ySplit: number }
+  merges: IRange[]
   readonly activated: IRange[]
   readonly currentCells: IRange[]
   readonly scrolledTo: [number, number][]
+  /** 让这几个 Facade 方法意外出错（核对报告与"其余各步照常"） */
+  failing?: { activate?: Error, scrollToCell?: Error }
 }
 
 function area(startRow: number, startColumn: number, endRow = startRow, endColumn = startColumn, rangeType?: number): SheetArea {
   return { startRow, endRow, startColumn, endColumn, rangeType }
 }
 
-/** 假的 Facade：FWorkbook、FWorksheet 与 FRange 里用到的方法 */
+const sameArea = (a: IRange, b: IRange): boolean => a.startRow === b.startRow && a.endRow === b.endRow && a.startColumn === b.startColumn && a.endColumn === b.endColumn
+const contains = (outer: IRange, row: number, column: number): boolean => outer.startRow <= row && row <= outer.endRow && outer.startColumn <= column && column <= outer.endColumn
+const overlaps = (a: IRange, b: IRange): boolean => a.startRow <= b.endRow && b.startRow <= a.endRow && a.startColumn <= b.endColumn && b.startColumn <= a.endColumn
+
+/**
+ * 假的 Facade：FWorkbook、FWorksheet 与 FRange 里用到的方法。合并的判断照 SDK：isMerged 是恰好一个合并区，isPartOfMerge 是与合并区相交；
+ * activateAsCurrentCell 按左上角所在的合并区判断，不是"没有合并的单元格"或"恰好那个合并区"时抛出与 SDK 相同的错误
+ * （sheets 的 facade/f-range.ts）——去掉 view-state.ts 里的核对，合并布局变了的用例就会报告错误、结果 failed
+ */
 function fakeWorkbook(sheets: FakeSheet[], options: { activeId?: string, range?: SheetArea, current?: SheetArea } = {}) {
   let activeId = options.activeId ?? sheets[0]?.id ?? ''
   const switched: string[] = []
   const facadeRange = (sheet: FakeSheet, range: IRange) => ({
     getRange: () => range,
-    activate: () => sheet.activated.push(range),
-    activateAsCurrentCell: () => sheet.currentCells.push(range),
+    isMerged: () => sheet.merges.some(merge => sameArea(merge, range)),
+    isPartOfMerge: () => sheet.merges.some(merge => overlaps(merge, range)),
+    activate: () => {
+      if (sheet.failing?.activate !== undefined)
+        throw sheet.failing.activate
+      sheet.activated.push(range)
+    },
+    activateAsCurrentCell: () => {
+      const merge = sheet.merges.find(item => contains(item, range.startRow, range.startColumn))
+      const single = range.startRow === range.endRow && range.startColumn === range.endColumn
+      if (merge === undefined ? !single : !sameArea(merge, range))
+        throw new Error('The range is not a single cell')
+      sheet.currentCells.push(range)
+    },
   })
   const facadeSheet = (sheet: FakeSheet) => ({
     getSheetId: () => sheet.id,
@@ -37,7 +60,11 @@ function fakeWorkbook(sheets: FakeSheet[], options: { activeId?: string, range?:
     getScrollState: () => ({ ...sheet.scroll, offsetX: 3, offsetY: 4 }),
     getFreeze: () => ({ ...sheet.freeze, startRow: -1, startColumn: -1 }),
     getRange: (range: IRange) => facadeRange(sheet, range),
-    scrollToCell: (row: number, column: number) => sheet.scrolledTo.push([row, column]),
+    scrollToCell: (row: number, column: number) => {
+      if (sheet.failing?.scrollToCell !== undefined)
+        throw sheet.failing.scrollToCell
+      sheet.scrolledTo.push([row, column])
+    },
   })
   const byId = (id: string) => sheets.find(sheet => sheet.id === id)
   const workbook = {
@@ -58,7 +85,7 @@ function fakeWorkbook(sheets: FakeSheet[], options: { activeId?: string, range?:
 }
 
 function sheet(id: string, overrides: Partial<FakeSheet> = {}): FakeSheet {
-  return { id, hidden: false, maxRows: 1000, maxColumns: 20, scroll: { sheetViewStartRow: 0, sheetViewStartColumn: 0 }, freeze: { xSplit: 0, ySplit: 0 }, activated: [], currentCells: [], scrolledTo: [], ...overrides }
+  return { id, hidden: false, maxRows: 1000, maxColumns: 20, scroll: { sheetViewStartRow: 0, sheetViewStartColumn: 0 }, freeze: { xSplit: 0, ySplit: 0 }, merges: [], activated: [], currentCells: [], scrolledTo: [], ...overrides }
 }
 
 describe('视图状态的取出（M3-P2 设计 §3.3）', () => {
@@ -136,12 +163,78 @@ describe('视图状态的恢复（M3-P2 设计 §3.3）', () => {
     expect([s2.activated, s2.scrolledTo]).toEqual([[], [[42, 4]]])
   })
 
-  it('Facade 出错：报告，停在那一步（编辑器照常可用）', () => {
+  it('切换工作表时 Facade 出错：报告，停在那一步（编辑器照常可用）', () => {
     const report = vi.fn()
     const workbook = { getSheetBySheetId: () => {
       throw new Error('boom')
     } } as unknown as ViewWorkbook
     expect(restoreViewState(workbook, STATE, report)).toBe('failed')
     expect(report).toHaveBeenCalledOnce()
+  })
+})
+
+describe('视图状态的恢复：按新内容重建之后合并的布局变了（M3-P2 复核 B1）', () => {
+  /** 本页记下的：第 41 行在左上角，选中 B45（从 0 开始是第 44 行、第 1 列），当前单元格就是它 */
+  const SINGLE: SheetViewState = { sheetId: 's1', topLeft: { row: 40, column: 0 }, selection: { range: area(44, 1, 44, 1, 0), current: area(44, 1, 44, 1, 0) } }
+  /** 本页记下的：当前单元格是合并区 B45:C46（getActiveCell 给出整个合并区），选区是 B45 */
+  const MERGED: SheetViewState = { sheetId: 's1', topLeft: { row: 40, column: 0 }, selection: { range: area(44, 1, 44, 1, 0), current: area(44, 1, 45, 2, 0) } }
+  const B45_C46: IRange = { startRow: 44, endRow: 45, startColumn: 1, endColumn: 2 }
+
+  it('记下的是单格，别人合并了它所在的格子（现在落进合并区）：设选区、不设当前单元格（落在选区的左上角），照常滚动，不报告', () => {
+    const report = vi.fn()
+    const s1 = sheet('s1', { merges: [B45_C46] })
+    const { workbook } = fakeWorkbook([s1], { activeId: 's1' })
+    expect(restoreViewState(workbook, SINGLE, report)).toBe('restored')
+    expect(s1.activated).toEqual([{ startRow: 44, endRow: 44, startColumn: 1, endColumn: 1, rangeType: 0, sheetId: 's1' }])
+    expect(s1.currentCells).toEqual([])
+    expect(s1.scrolledTo).toEqual([[40, 0]])
+    expect(report).not.toHaveBeenCalled()
+  })
+
+  it('记下的是合并区，别人取消了合并（现在不是合并区）：同样只设选区、照常滚动，不报告', () => {
+    const report = vi.fn()
+    const s1 = sheet('s1')
+    const { workbook } = fakeWorkbook([s1], { activeId: 's1' })
+    expect(restoreViewState(workbook, MERGED, report)).toBe('restored')
+    expect([s1.activated.length, s1.currentCells, s1.scrolledTo]).toEqual([1, [], [[40, 0]]])
+    expect(report).not.toHaveBeenCalled()
+  })
+
+  it('记下的是合并区，合并改成了另一个范围（B45:D46）：不设当前单元格，不报告', () => {
+    const report = vi.fn()
+    const s1 = sheet('s1', { merges: [{ startRow: 44, endRow: 45, startColumn: 1, endColumn: 3 }] })
+    const { workbook } = fakeWorkbook([s1], { activeId: 's1' })
+    expect(restoreViewState(workbook, MERGED, report)).toBe('restored')
+    expect([s1.currentCells, s1.scrolledTo]).toEqual([[], [[40, 0]]])
+    expect(report).not.toHaveBeenCalled()
+  })
+
+  it('合并的布局没变：合并区仍是那个合并区、单格仍没有合并（别处有合并不相干），照常设当前单元格', () => {
+    const merged = sheet('s1', { merges: [B45_C46] })
+    expect(restoreViewState(fakeWorkbook([merged], { activeId: 's1' }).workbook, MERGED, vi.fn())).toBe('restored')
+    expect(merged.currentCells).toEqual([{ startRow: 44, endRow: 45, startColumn: 1, endColumn: 2, rangeType: 0, sheetId: 's1' }])
+    const single = sheet('s1', { merges: [{ startRow: 0, endRow: 1, startColumn: 0, endColumn: 1 }] })
+    expect(restoreViewState(fakeWorkbook([single], { activeId: 's1' }).workbook, SINGLE, vi.fn())).toBe('restored')
+    expect(single.currentCells).toEqual([{ startRow: 44, endRow: 44, startColumn: 1, endColumn: 1, rangeType: 0, sheetId: 's1' }])
+  })
+
+  it('设选区时 Facade 意外出错：报告（原因是 Facade 的错误），照样滚动到原来的左上角，结果 failed', () => {
+    const report = vi.fn()
+    const failure = new Error('boom')
+    const s1 = sheet('s1', { failing: { activate: failure } })
+    const { workbook } = fakeWorkbook([s1], { activeId: 's1' })
+    expect(restoreViewState(workbook, SINGLE, report)).toBe('failed')
+    expect(report).toHaveBeenCalledOnce()
+    expect((report.mock.calls[0]?.[0] as Error).cause).toBe(failure)
+    expect(s1.scrolledTo).toEqual([[40, 0]])
+  })
+
+  it('滚动时 Facade 意外出错：报告，选区与当前单元格照常设上，结果 failed', () => {
+    const report = vi.fn()
+    const s1 = sheet('s1', { failing: { scrollToCell: new Error('boom') } })
+    const { workbook } = fakeWorkbook([s1], { activeId: 's1' })
+    expect(restoreViewState(workbook, SINGLE, report)).toBe('failed')
+    expect(report).toHaveBeenCalledOnce()
+    expect([s1.activated.length, s1.currentCells.length]).toEqual([1, 1])
   })
 })
