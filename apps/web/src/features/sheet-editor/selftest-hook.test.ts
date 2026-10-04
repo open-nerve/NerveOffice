@@ -112,6 +112,21 @@ describe('页面自检的挂接', () => {
     expect((await hostOfFirstRun()).page).toEqual({ state: 'ready', readOnly: true })
   })
 
+  it('进入、退出编辑的场景（enter-exit）在阅读时开始，不先进入编辑；交给自检的 view 随页面的状态变化（场景里点了"编辑"之后按它等）', async () => {
+    window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=enter-exit`)
+    const { page, set, enterEditing } = fakePage()
+    watchForSelftest(page, elements)
+    set(ready('steady'))
+    const host = await hostOfFirstRun()
+    expect(enterEditing).not.toHaveBeenCalled()
+    expect(host.page).toEqual({ state: 'ready', readOnly: true })
+    expect(host.view()).toEqual({ mode: 'reading', surface: 'steady' })
+    set({ mode: { kind: 'entering' }, surface: 'loading' })
+    expect(host.view()).toEqual({ mode: 'entering', surface: 'loading' })
+    set(ready('ready', false))
+    expect(host.view()).toEqual({ mode: 'editing', surface: 'ready' })
+  })
+
   it('载入失败时同样交给自检，说明失败的原因', async () => {
     const { page, set } = fakePage()
     watchForSelftest(page, elements)

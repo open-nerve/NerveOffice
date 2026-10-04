@@ -21,14 +21,28 @@ export const RESULT_PARAM = 'result'
  * 自检的场景：
  * - read-only：查看者打开只读样本，逐项试只读入口（Facade、撤销与重做、合成的快捷键、界面）；
  * - read-only-formulas：查看者打开去掉公式缓存值的样本，公式在 Worker 里算出结果、没有被防火墙取消；
- * - edit-chrome：能编辑的人打开同一份样本，界面检查的对照（工具栏、右键菜单、底栏在能编辑时都在，合成的右键与按键确实有效）
+ * - edit-chrome：能编辑的人打开同一份样本，界面检查的对照（工具栏、右键菜单、底栏在能编辑时都在，合成的右键与按键确实有效）；
+ * - enter-exit：作者打开自己的一份样本（M3-P2 S5）：阅读 → 点页头的"编辑"→ 经 Facade 改一格（ENTER_EXIT_EDIT）→ 点"退出编辑"
+ *   （先保存）→ 回到阅读之后再试 Facade 的只读入口、撤销与重做（撤销栈已清空）与界面；两次切换的耗时记进 timings
  */
-export const SELFTEST_SCENARIOS = ['read-only', 'read-only-formulas', 'edit-chrome'] as const
+export const SELFTEST_SCENARIOS = ['read-only', 'read-only-formulas', 'edit-chrome', 'enter-exit'] as const
 
 export type SelftestScenario = (typeof SELFTEST_SCENARIOS)[number]
 
 export function isSelftestScenario(value: string): value is SelftestScenario {
   return (SELFTEST_SCENARIOS as readonly string[]).includes(value)
+}
+
+/**
+ * enter-exit 在编辑时改的那一格（"数据"表 K45，从 0 开始是第 44 行、第 10 列；只读入口的清单不碰它）与写进去的值：
+ * 驱动脚本与 E2E 核对服务器上的那份文档恰好多了一个修订、内容里有它
+ */
+export const ENTER_EXIT_EDIT = { sheetName: '数据', sheetId: 'sheet-1', cell: 'K45', row: 44, column: 10, value: '进入、退出编辑的自检' } as const
+
+/** 一项计时（例如 switch.enter：一次切换的各段耗时，毫秒；缺的是 null）。各段的含义见 ./switch-timing.ts 的 switchDurations */
+export interface SelftestTiming {
+  readonly id: string
+  readonly ms: Readonly<Record<string, number | null>>
 }
 
 /** 一项检查的结果 */
@@ -71,6 +85,8 @@ export interface SelftestReport {
   readonly ignoredNotices: readonly string[]
   /** read-only-formulas：打开之后公式算出的值（"工作表 id!A1" → 值），驱动脚本与 E2E 对照样本 */
   readonly formulaValues?: Readonly<Record<string, unknown>> | undefined
+  /** enter-exit：每次切换的各段耗时 */
+  readonly timings?: readonly SelftestTiming[] | undefined
   /** 自检本身没能跑完的原因（编辑器没就绪、自检抛错）；跑完时没有 */
   readonly failure?: string | undefined
 }
@@ -162,6 +178,11 @@ function isCheck(value: unknown): value is SelftestCheck {
   return isObject(value) && typeof value.id === 'string' && typeof value.pass === 'boolean' && typeof value.detail === 'string' && typeof value.ms === 'number'
 }
 
+function isTiming(value: unknown): value is SelftestTiming {
+  return isObject(value) && typeof value.id === 'string' && isObject(value.ms)
+    && Object.values(value.ms).every(item => item === null || (typeof item === 'number' && Number.isFinite(item)))
+}
+
 function isPage(value: unknown): value is SelftestPage {
   return isObject(value) && (value.state === 'ready' || value.state === 'failed' || value.state === 'timeout' || value.state === 'hidden')
     && (value.readOnly === undefined || typeof value.readOnly === 'boolean')
@@ -189,6 +210,8 @@ export function parseSelftestReport(value: unknown): SelftestReport {
     throw new SelftestReportError('结果的 checks 不对')
   if (value.formulaValues !== undefined && !isObject(value.formulaValues))
     throw new SelftestReportError('结果的 formulaValues 不对')
+  if (value.timings !== undefined && (!Array.isArray(value.timings) || !value.timings.every(isTiming)))
+    throw new SelftestReportError('结果的 timings 不对')
   if (value.failure !== undefined && typeof value.failure !== 'string')
     throw new SelftestReportError('结果的 failure 不是字符串')
   return value as unknown as SelftestReport

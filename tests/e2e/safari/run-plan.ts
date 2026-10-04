@@ -2,8 +2,8 @@
 // - 一串步骤怎么接起来（chainOf、nextAfter）：每一步的入口页把结果交回收集端的 /report?step=<序号>，收集端再把页面带到下一步，
 //   最后停在结束页；
 // - 收集端收到的请求（parseReportRequest）；
-// - 每一步的结论与退出码（outcomeOf、exitCodeOf）；结果文件的名字（resultFileName）。
-import type { SelftestReport } from '../../../apps/web/src/editor/testing/selftest-report.ts'
+// - 每一步的结论与退出码（outcomeOf、exitCodeOf）；结果文件的名字（resultFileName）；切换耗时的说明（timingLines）。
+import type { SelftestReport, SelftestTiming } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import type { SelftestStep } from '../support/selftest-plan.ts'
 import { RESULT_PARAM } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import { problemsOf, selftestPageUrl } from '../support/selftest-plan.ts'
@@ -95,4 +95,16 @@ export function exitCodeOf(outcomes: readonly StepOutcome[], serverProblems: rea
 /** 结果文件的名字：开始的时刻（UTC），文件名里不用冒号 */
 export function resultFileName(startedAt: Date): string {
   return `${startedAt.toISOString().replace(/\.\d{3}Z$/, 'Z').replaceAll(':', '-')}.json`
+}
+
+function milliseconds(value: number | null | undefined): string {
+  return typeof value === 'number' ? `${Math.round(value)} ms` : '—'
+}
+
+/**
+ * 切换耗时的说明（enter-exit 交回的 timings，各段见 switch-timing.ts 的 switchDurations），每次切换一行：
+ * 点击到可以操作、到 steady，其中页头、网络与重建各多久
+ */
+export function timingLines(timings: readonly SelftestTiming[]): string[] {
+  return timings.map(({ id, ms }) => `${id}：点击到可以操作 ${milliseconds(ms.ready)}、到 steady ${milliseconds(ms.steady)}（页头 ${milliseconds(ms.header)}，网络 ${milliseconds(ms.network)}，重建 ${milliseconds(ms.rebuild)}）`)
 }

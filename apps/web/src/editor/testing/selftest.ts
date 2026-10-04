@@ -6,7 +6,9 @@
 // - read-only：打开不产生改动、M0 的 Facade 入口逐项、经 Facade 写公式的 mutation、撤销与重做（Facade 与快捷键）、快捷键入口、
 //   界面（工具栏、底栏、单元格与工作表标签的右键菜单）；
 // - read-only-formulas：缓存值缺失的公式在 Worker 里算出结果，没有被防火墙取消；
-// - edit-chrome：能编辑时同样的界面检查都看得到（工具栏、底栏、右键菜单），合成的右键与按键确实有效——只读时"没有"的对照。
+// - edit-chrome：能编辑时同样的界面检查都看得到（工具栏、底栏、右键菜单），合成的右键与按键确实有效——只读时"没有"的对照；
+// - enter-exit（M3-P2 S5）：作者阅读 → 点页头真实的"编辑"（合成的点击）→ 经 Facade 改一格 → 点"退出编辑"（先保存）→ 回到阅读之后
+//   再试 Facade 的只读入口、撤销与重做与界面；两次切换的耗时按 ./switch-timing.ts 记下，随结果交回。
 // 只读的入口里能用 Facade 与合成事件执行的部分才在这里；可信的键盘输入、输入法与鼠标的拖动由 Playwright 的 WebKit 覆盖
 // （read-only.spec.ts、read-only-shortcuts.spec.ts），Worker 作用域里的错误这里看不到（设计 §3.5 第 4 条）。
 // 等待都等确定的信号（命令被取消、被拦下、执行完，提示出现），不用固定时长；每项有时限，超时记为不通过、接着做下一项；
@@ -14,11 +16,19 @@
 import type { EditorProbe, ProbeCommand } from './e2e-probe.ts'
 import type { EntryApi, EntryOutcome, EntryRange, EntryScope, EntrySheet, EntryWorkbook } from './read-only-entries.ts'
 import type { KeyCombo } from './selftest-dom.ts'
-import type { SelftestCheck, SelftestPage, SelftestReport, SelftestScenario } from './selftest-report.ts'
+import type { SelftestCheck, SelftestPage, SelftestReport, SelftestScenario, SelftestTiming } from './selftest-report.ts'
+import type { SwitchDirection, SwitchTimingRecorder } from './switch-timing.ts'
 import { canonicalJson, contentOf, documentChangeAttemptsIn, documentChangesIn, sameContent } from './content-compare.ts'
 import { FACADE_ENTRIES, FORMULA_MUTATION_CELL, FORMULA_MUTATION_ID, PERMISSION_ALERT_TITLE, PROTECTION_WORDING, SHORTCUT_OUTCOMES, writeFormulaMutation } from './read-only-entries.ts'
 import { accessibleName, byExactText, byRole, centerOf, clickAt, dialogTitled, isShown, isVisible, keyboardTarget, nextFrames, pressKeys, rightClickAt, sheetCanvas, sheetTab, univerIsMac, waitFor } from './selftest-dom.ts'
-import { encodeSelftestReport, isSelftestScenario, NEXT_PARAM, reportUrl, SELFTEST_PARAM, SELFTEST_REPORT_FORMAT } from './selftest-report.ts'
+import { encodeSelftestReport, ENTER_EXIT_EDIT, isSelftestScenario, NEXT_PARAM, reportUrl, SELFTEST_PARAM, SELFTEST_REPORT_FORMAT } from './selftest-report.ts'
+import { installSwitchTiming, summarizeSwitch, SWITCH_TIMING_OPTIONS, switchDurations } from './switch-timing.ts'
+
+/** 编辑器页现在的样子：阅读还是编辑（edit-mode.ts 的状态，例如 reading、entering、editing、exiting）与编辑器容器的状态（loading、ready、steady、failed） */
+export interface SelftestPageView {
+  readonly mode: string | undefined
+  readonly surface: string
+}
 
 /** 编辑器页交给自检的（挂接在页面开始载入时就收集页面错误与可见性，到 steady 之后才引入这里） */
 export interface SelftestHost {
@@ -28,6 +38,8 @@ export interface SelftestHost {
   /** 编辑器页开始载入的时刻（ISO 8601） */
   readonly startedAt: string
   readonly page: SelftestPage
+  /** 编辑器页现在的样子：场景里点了"编辑""退出编辑"之后按它等 */
+  readonly view: () => SelftestPageView
   readonly visibility: () => readonly string[]
   readonly pageErrors: () => readonly string[]
   readonly consoleErrors: () => readonly string[]
@@ -52,6 +64,9 @@ const SCENARIO_BUDGET_MS = 180_000
 /** 公式在 Worker 里算出结果最多等多久（Worker 的启动与第一次计算） */
 const FORMULA_TIMEOUT_MS = 30_000
 
+/** 一次切换最多等多久：申请编辑权或保存、释放，重建，再到 steady（渲染完成之后 3 秒）。Playwright 的三个浏览器里 4 秒上下 */
+const SWITCH_TIMEOUT_MS = 60_000
+
 /** 每项的说明最多留多长：结果放在地址里 */
 const DETAIL_LIMIT = 600
 
@@ -68,6 +83,8 @@ interface SelftestRange extends EntryRange {
   /** 单元格在画布上的范围（相对画布的左上角，含行列表头；sheets-ui 的 Facade） */
   readonly getCell: () => CellRect
   readonly getA1Notation: () => string
+  /** 写入一个值（sheet.command.set-range-values） */
+  readonly setValue: (value: string) => unknown
 }
 
 interface SelftestSheet extends EntrySheet {
@@ -76,6 +93,7 @@ interface SelftestSheet extends EntrySheet {
 
 interface SelftestWorkbook extends EntryWorkbook {
   readonly getActiveSheet: () => SelftestSheet
+  readonly getSheetByName: (name: string) => SelftestSheet
   /** 选区的主单元格；没有选区时是 null */
   readonly getActiveCell: () => SelftestRange | null
 }
@@ -121,12 +139,15 @@ async function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
 /** 一次自检：探针、Facade、打开时的快照与记下的检查结果 */
 interface Session {
   readonly host: SelftestHost
-  readonly probe: EditorProbe
-  readonly api: SelftestApi
-  readonly unitId: string
-  /** 打开时（自检开始时）的内存快照 */
-  readonly opened: string
+  /** 当前的编辑器（探针与它的 Facade）：enter-exit 每次切换之后换上新的那一个（adoptEditor） */
+  probe: EditorProbe
+  api: SelftestApi
+  unitId: string
+  /** 比较的基准：打开时（自检开始时）的内存快照；enter-exit 退出编辑之后换成那时的 */
+  opened: string
   readonly checks: SelftestCheck[]
+  /** 切换的耗时（enter-exit） */
+  readonly timings: SelftestTiming[]
   /** 场景的检查最晚做到什么时候（performance.now()）：之后的检查不再做 */
   readonly deadline: number
   /** 页面被隐藏的时刻（自检开始之后第一次）：之后的检查不再做 */
@@ -469,35 +490,12 @@ function resourceOf(snapshot: { readonly resources?: readonly { readonly name: s
 
 // ---- 场景 ----
 
-async function readOnlyScenario(session: Session): Promise<void> {
+/**
+ * 只读入口里能用 Facade 执行的：M0 的 Facade 入口逐项、经 Facade 写公式的 mutation、Facade 的撤销与重做。
+ * 用当前的编辑器（enter-exit 退出编辑之后是新换上的只读编辑器），与 session.opened 比较
+ */
+async function checkFacadeEntries(session: Session): Promise<void> {
   const { probe, api, unitId } = session
-  await checkHeader(session, true)
-  await check(session, 'open.server-content', async () => {
-    // 样本已经收敛（打开之后保存的字节就是它自己），所以逐字节比较（与 E2E"打开不产生改动"相同）
-    const stored = await fetchServerContent(session.host.documentId)
-    if (session.opened !== stored)
-      fail(`内存快照与服务器上的内容不同：${differences(stored, session.opened) || '只差写法'}`)
-    return `内存快照与服务器上的内容逐字节相同（${stored.length} 字符）`
-  })
-  await check(session, 'open.no-change-attempts', async () => {
-    // 探针在就绪时装上：从就绪到 steady，没有改动文档的 mutation 的尝试（被防火墙取消的也没有，M2-P3 审查 B9）
-    const attempts = documentChangeAttemptsIn(probe.commands(), unitId)
-    if (attempts.length > 0)
-      fail(`就绪之后有改动文档的 mutation 的尝试：${attempts.map(describeCommand).join('、')}`)
-    return `就绪之后 ${probe.commands().length} 条命令，没有改动文档的 mutation 的尝试`
-  })
-  await check(session, 'open.resources', async () => {
-    const snapshot = JSON.parse(session.opened) as { readonly resources?: readonly { readonly name: string, readonly data: string }[] }
-    for (const name of ['SHEET_RANGE_PROTECTION_PLUGIN', 'SHEET_WORKSHEET_PROTECTION_PLUGIN', 'SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN']) {
-      const data = resourceOf(snapshot, name)
-      if (canonicalJson(data ?? {}) !== '{}')
-        fail(`${name} 不是空的：${truncate(canonicalJson(data), 120)}`)
-    }
-    if (snapshot.resources?.some(resource => resource.name === 'SHEET_AuthzIoMockService_PLUGIN') === true)
-      fail('快照里有本地授权服务的资源 SHEET_AuthzIoMockService_PLUGIN')
-    return '保护类资源为空，没有本地授权服务的资源'
-  })
-
   for (const entry of FACADE_ENTRIES) {
     await check(session, `facade.${entry.name}`, async () => {
       const mark = lastSeq(probe)
@@ -548,7 +546,38 @@ async function readOnlyScenario(session: Session): Promise<void> {
     expectUnchanged(session, mark)
     return `${undo}；${redo}`
   })
+}
 
+async function readOnlyScenario(session: Session): Promise<void> {
+  const { probe, unitId } = session
+  await checkHeader(session, true)
+  await check(session, 'open.server-content', async () => {
+    // 样本已经收敛（打开之后保存的字节就是它自己），所以逐字节比较（与 E2E"打开不产生改动"相同）
+    const stored = await fetchServerContent(session.host.documentId)
+    if (session.opened !== stored)
+      fail(`内存快照与服务器上的内容不同：${differences(stored, session.opened) || '只差写法'}`)
+    return `内存快照与服务器上的内容逐字节相同（${stored.length} 字符）`
+  })
+  await check(session, 'open.no-change-attempts', async () => {
+    // 探针在就绪时装上：从就绪到 steady，没有改动文档的 mutation 的尝试（被防火墙取消的也没有，M2-P3 审查 B9）
+    const attempts = documentChangeAttemptsIn(probe.commands(), unitId)
+    if (attempts.length > 0)
+      fail(`就绪之后有改动文档的 mutation 的尝试：${attempts.map(describeCommand).join('、')}`)
+    return `就绪之后 ${probe.commands().length} 条命令，没有改动文档的 mutation 的尝试`
+  })
+  await check(session, 'open.resources', async () => {
+    const snapshot = JSON.parse(session.opened) as { readonly resources?: readonly { readonly name: string, readonly data: string }[] }
+    for (const name of ['SHEET_RANGE_PROTECTION_PLUGIN', 'SHEET_WORKSHEET_PROTECTION_PLUGIN', 'SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN']) {
+      const data = resourceOf(snapshot, name)
+      if (canonicalJson(data ?? {}) !== '{}')
+        fail(`${name} 不是空的：${truncate(canonicalJson(data), 120)}`)
+    }
+    if (snapshot.resources?.some(resource => resource.name === 'SHEET_AuthzIoMockService_PLUGIN') === true)
+      fail('快照里有本地授权服务的资源 SHEET_AuthzIoMockService_PLUGIN')
+    return '保护类资源为空，没有本地授权服务的资源'
+  })
+
+  await checkFacadeEntries(session)
   await checkFind(session, true)
 
   await check(session, 'shortcut.undo-redo', async () => {
@@ -706,15 +735,138 @@ async function editChromeScenario(session: Session): Promise<void> {
   })
 }
 
+// ---- 进入、退出编辑（M3-P2 S5） ----
+
+/** 页头里看得见的、名称恰好是 name 的按钮 */
+function chromeButton(session: Session, name: string): HTMLElement | undefined {
+  return byRole('button', { name, root: session.host.chrome }).find(isVisible)
+}
+
+function describeView(session: Session): string {
+  const view = session.host.view()
+  return `页面 ${view.mode ?? '没有状态'}，编辑器 ${view.surface}，容器上是 ${session.host.surface.getAttribute('data-editor-access') ?? '没有编辑器'}`
+}
+
+/**
+ * 点了"编辑""退出编辑"之后等页面到 target（editing 或 reading）的 steady，而且容器上是那一种编辑器（edit、read）。
+ * 先等切换开始（页面进入过程中的状态 passing：entering、exiting；页头的处理是异步的，退出编辑先确认会话，点下去的那一刻还没开始）；
+ * 之后离开了过程中的状态却没有到 target 时不再等：进入没有成功、退出时保存失败、失去编辑权
+ */
+async function untilSwitched(session: Session, target: 'editing' | 'reading', passing: 'entering' | 'exiting'): Promise<void> {
+  const access = target === 'editing' ? 'edit' : 'read'
+  const mode = (): string | undefined => session.host.view().mode
+  if (!await waitFor(() => mode() === passing || mode() === target, SIGNAL_TIMEOUT_MS))
+    fail(`点了之后没有开始切换（${describeView(session)}）`)
+  const settled = (): boolean => {
+    const view = session.host.view()
+    if (view.mode === target)
+      return view.surface === 'steady' && session.host.surface.getAttribute('data-editor-access') === access
+    return view.mode !== passing
+  }
+  if (!await waitFor(settled, SWITCH_TIMEOUT_MS, 50))
+    fail(`${SWITCH_TIMEOUT_MS / 1000} 秒内没有到 steady（${describeView(session)}）`)
+  if (mode() !== target)
+    fail(`没有到${target === 'editing' ? '编辑' : '阅读'}（${describeView(session)}）`)
+}
+
+/** 切换之后换上新的编辑器：探针随编辑器重建（旧的销毁时撤掉，新的就绪时装上） */
+function adoptEditor(session: Session, previous: EditorProbe): void {
+  const probe = window.__nerveEditorProbe
+  if (probe === undefined || probe === previous)
+    fail('页面里没有换上新的编辑器的探针')
+  session.probe = probe
+  session.api = probe.univerAPI as unknown as SelftestApi
+  session.unitId = session.api.getActiveWorkbook().getId()
+}
+
+/** 点页头里的按钮（真实的按钮，合成的点击），等切换完；记下这次切换的耗时，返回说明 */
+async function switchBy(session: Session, timing: SwitchTimingRecorder, button: string, direction: Extract<SwitchDirection, 'enter' | 'exit'>): Promise<string> {
+  const target = chromeButton(session, button)
+  if (target === undefined)
+    fail(`页头没有"${button}"（${describeView(session)}）`)
+  const previous = session.probe
+  timing.clear()
+  target.click()
+  await untilSwitched(session, direction === 'enter' ? 'editing' : 'reading', direction === 'enter' ? 'entering' : 'exiting')
+  adoptEditor(session, previous)
+  const ms = switchDurations(summarizeSwitch(direction, timing.marks(), timing.resources()))
+  session.timings.push({ id: `switch.${direction}`, ms })
+  const network = direction === 'enter' ? `申请编辑权 ${ms.acquire ?? '—'} ms` : `保存 ${ms.save ?? '—'} ms、释放 ${ms.release ?? '—'} ms`
+  return `点击到可以操作 ${ms.ready ?? '—'} ms（页头 ${ms.header ?? '—'} ms；${network}；重建 ${ms.rebuild ?? '—'} ms），到 steady ${ms.steady ?? '—'} ms`
+}
+
+/** 快照里一格的值 */
+function cellValue(snapshotText: string, sheetId: string, row: number, column: number): unknown {
+  const workbook = JSON.parse(snapshotText) as { readonly sheets: Readonly<Record<string, { readonly cellData?: Readonly<Record<string, Readonly<Record<string, { readonly v?: unknown }>>>> }>> }
+  return workbook.sheets[sheetId]?.cellData?.[row]?.[column]?.v
+}
+
+/**
+ * 作者打开自己的一份样本（阅读）：点"编辑"→ 经 Facade 改一格 → 点"退出编辑"（先保存）→ 回到阅读之后，只读入口里能用 Facade 执行的
+ * 那些（与 read-only 同一份清单）、撤销与重做、界面都核对一遍。前一步没做成时后面的不做（记为不通过，看得到卡在哪里）
+ */
+async function enterExitScenario(session: Session): Promise<void> {
+  const timing = installSwitchTiming(SWITCH_TIMING_OPTIONS)
+  const { sheetId, row, column, value } = ENTER_EXIT_EDIT
+  const reading = await check(session, 'page.reading', async () => {
+    if (session.host.page.readOnly !== true)
+      fail('页面没有按阅读打开')
+    if (chromeButton(session, '编辑') === undefined || chromeButton(session, '保存') !== undefined)
+      fail(`页头不是能编辑的人阅读时的样子（${describeView(session)}）`)
+    return '阅读：页头有"编辑"，没有保存按钮'
+  })
+  const entered = reading && await check(session, 'switch.enter', async () => {
+    const seen = await switchBy(session, timing, '编辑', 'enter')
+    if (chromeButton(session, '保存') === undefined || chromeButton(session, '退出编辑') === undefined)
+      fail('进入了编辑，页头没有"保存""退出编辑"')
+    return `进入编辑：${seen}`
+  }, SWITCH_TIMEOUT_MS + CHECK_TIMEOUT_MS)
+  const edited = entered && await check(session, 'edit.set-cell', async () => {
+    const mark = lastSeq(session.probe)
+    session.api.getActiveWorkbook().getSheetByName(ENTER_EXIT_EDIT.sheetName).getRange(ENTER_EXIT_EDIT.cell).setValue(value)
+    if (!await waitFor(() => has(session.probe, mark, 'executed', 'sheet.command.set-range-values'), SIGNAL_TIMEOUT_MS))
+      fail(`写入 ${ENTER_EXIT_EDIT.cell} 没有执行；${seenSince(session.probe, mark)}`)
+    if (cellValue(session.probe.snapshot(), sheetId, row, column) !== value)
+      fail(`内存里 ${ENTER_EXIT_EDIT.cell} 不是写进去的值`)
+    return `能编辑：经 Facade 在"${ENTER_EXIT_EDIT.sheetName}"表 ${ENTER_EXIT_EDIT.cell} 写入"${value}"`
+  })
+  const exited = edited && await check(session, 'switch.exit', async () => {
+    const seen = await switchBy(session, timing, '退出编辑', 'exit')
+    if (chromeButton(session, '编辑') === undefined || chromeButton(session, '保存') !== undefined)
+      fail(`退出之后页头不是阅读的样子（${describeView(session)}）`)
+    return `退出编辑（先保存）：${seen}`
+  }, SWITCH_TIMEOUT_MS + CHECK_TIMEOUT_MS)
+  if (!exited)
+    return
+  session.opened = session.probe.snapshot()
+  await check(session, 'exit.content', async () => {
+    // 退出时先保存、再以捕获的内容重建为只读：阅读的编辑器里与服务器上都是改过的内容
+    if (cellValue(session.opened, sheetId, row, column) !== value)
+      fail(`退出之后阅读的编辑器里 ${ENTER_EXIT_EDIT.cell} 不是写进去的值`)
+    const stored = await fetchServerContent(session.host.documentId)
+    if (!sameContent(stored, session.opened))
+      fail(`阅读的编辑器里的内容与服务器上的不同：${differences(stored, session.opened)}`)
+    return `阅读的编辑器里与服务器上都是保存的内容（${ENTER_EXIT_EDIT.cell} 是"${value}"）`
+  })
+  await checkFacadeEntries(session)
+  await checkChrome(session, false)
+  await check(session, 'content.final', async () => {
+    expectUnchanged(session, 0)
+    return '内存里的内容与退出编辑时相同，回到阅读之后没有改动文档的 mutation 执行'
+  })
+}
+
 const SCENARIOS: Readonly<Record<SelftestScenario, (session: Session) => Promise<void>>> = {
   'read-only': readOnlyScenario,
   'read-only-formulas': formulasScenario,
   'edit-chrome': editChromeScenario,
+  'enter-exit': enterExitScenario,
 }
 
 /** 跑一次自检，返回结果（不跳转） */
 export async function runEditorSelftest(host: SelftestHost, scenario: string): Promise<SelftestReport> {
   const checks: SelftestCheck[] = []
+  const timings: SelftestTiming[] = []
   let failure: string | undefined
   let formulaValues: Record<string, unknown> | undefined
   const probe = window.__nerveEditorProbe
@@ -726,7 +878,7 @@ export async function runEditorSelftest(host: SelftestHost, scenario: string): P
     failure = '页面里没有编辑器的探针（不是测试构建？）'
   if (failure === undefined && probe !== undefined && isSelftestScenario(scenario)) {
     const api = probe.univerAPI as unknown as SelftestApi
-    const session: Session = { host, probe, api, unitId: api.getActiveWorkbook().getId(), opened: probe.snapshot(), checks, deadline: performance.now() + SCENARIO_BUDGET_MS }
+    const session: Session = { host, probe, api, unitId: api.getActiveWorkbook().getId(), opened: probe.snapshot(), checks, timings, deadline: performance.now() + SCENARIO_BUDGET_MS }
     // 页面中途被隐藏（浏览器窗口被挡住、切到别的标签页）：Safari 几秒之后就暂停它，余下的检查不再做，趁计时器还在走把结果交回去
     const onVisibility = (): void => {
       if (document.visibilityState === 'hidden')
@@ -760,6 +912,7 @@ export async function runEditorSelftest(host: SelftestHost, scenario: string): P
     consoleErrors: host.consoleErrors().map(text => truncate(text)),
     ignoredNotices: host.ignoredNotices().map(text => truncate(text)),
     formulaValues,
+    timings: timings.length === 0 ? undefined : timings,
     failure,
   }
 }

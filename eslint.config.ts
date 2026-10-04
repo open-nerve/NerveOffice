@@ -732,10 +732,11 @@ const LAZY_TEXTS: readonly { readonly file: string, readonly feature: string }[]
 const WEB_TEST_CODE = ['**/*.test.{ts,tsx}', '**/*.test-support.{ts,tsx}']
 
 /**
- * 页面自检与 E2E 共用的文件（M3-P2 设计 §3.5，相对编辑器元素的路径）：只读入口的清单与预期、比较口径、自检结果的格式。
+ * 页面自检与 E2E 共用的文件（M3-P2 设计 §3.5，相对编辑器元素的路径）：只读入口的清单与预期、比较口径、自检结果的格式、
+ * 模式切换的计时（S5：E2E 的实测与真实 Safari 的自检用同一套）。
  * 它们在 editor/testing/ 下（只在测试构建里），E2E 经模块边界的例外引用它们，所以它们不引用任何模块（nerve/editor-testing-shared）
  */
-const SELFTEST_SHARED_FILES = ['testing/read-only-entries.ts', 'testing/content-compare.ts', 'testing/selftest-report.ts']
+const SELFTEST_SHARED_FILES = ['testing/read-only-entries.ts', 'testing/content-compare.ts', 'testing/selftest-report.ts', 'testing/switch-timing.ts']
 
 /**
  * 共享层内部引用这些文案：模块边界不检查同一个元素内部的引用（boundaries/dependencies 的 checkInternals 默认关），
