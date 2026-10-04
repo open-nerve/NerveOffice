@@ -1,6 +1,6 @@
 # ADR-010：编辑器适配层与内部 API 登记
 
-> 状态：已接受｜日期：2026-09-27｜来源：M1-P4｜修订：2026-09-28，M1 对抗评审（Codex CX1、CX6）与独立复验（N1、S1）之后，就绪之前的输入由编辑器页的交互屏障拦下，另外跟踪单元格里还没提交的输入；2026-09-29，M2-P3 能不能编辑在创建时决定（`access`），只读守卫与只读的界面，内部 API 加 17 项、拆出界面包的第二个出口 `ui.ts`，测试构建的探针（ADR-015）；2026-10-01，M2-P6 第 4 片复核：`@univerjs/*` 的值引用改为白名单，探针只能动态引入，内部 API 加 `IShortcutService`（只给测试构建的探针）；internal-api 之外只能经两个出口引用，登记表扫描 internal-api 的全部文件
+> 状态：已接受｜日期：2026-09-27｜来源：M1-P4｜修订：2026-09-28，M1 对抗评审（Codex CX1、CX6）与独立复验（N1、S1）之后，就绪之前的输入由编辑器页的交互屏障拦下，另外跟踪单元格里还没提交的输入；2026-09-29，M2-P3 能不能编辑在创建时决定（`access`），只读守卫与只读的界面，内部 API 加 17 项、拆出界面包的第二个出口 `ui.ts`，测试构建的探针（ADR-015）；2026-10-01，M2-P6 第 4 片复核：`@univerjs/*` 的值引用改为白名单，探针只能动态引入，内部 API 加 `IShortcutService`（只给测试构建的探针）；internal-api 之外只能经两个出口引用，登记表扫描 internal-api 的全部文件；2026-10-04，M3-P2：视图状态（`viewState`），内部 API 加 2 项（行列调整的控制器、查找面板的 DOM 标记），入口守卫按参数取消带图片的粘贴，测试构建加真实 Safari 的页面自检
 
 ## 背景
 
@@ -13,9 +13,9 @@
 **适配层**（`apps/web/src/editor/`）回答"这份快照在 Univer 里怎么编辑、怎么捕获"，对外只有一个小接口：
 
 ```ts
-createSheetEditor({ container, snapshot, access }): Promise<SheetEditor>   // access：'edit' | 'read'（M2-P3）
+createSheetEditor({ container, snapshot, access, viewState? }): Promise<SheetEditor>   // access：'edit' | 'read'（M2-P3）；viewState（M3-P2）
 // SheetEditor：unitId、changeSeq、onChange、lifecycle、onLifecycle、isCellEditing、hasPendingCellInput、
-//             onCellEditingChange、commitCellEditing、settleFormulas、capture、dispose
+//             onCellEditingChange、commitCellEditing、settleFormulas、capture、viewState（M3-P2）、dispose
 ```
 
 - `createSheetEditor` 在工作簿创建、渲染完成、主线程与公式 Worker 的 `IMAGE()` 限制都装好之后才返回；任何一步失败（包括创建 Univer、注册插件）都按相反的顺序销毁已经创建的一切并抛出（每创建一样就登记它的销毁，一项销毁出错不妨碍其余各项；加载的各个阶段失败抛 `SheetEditorLoadError`，带原因，其余意外的错误原样抛出），页面显示"编辑器加载失败"。
@@ -46,3 +46,10 @@ createSheetEditor({ container, snapshot, access }): Promise<SheetEditor>   // ac
 - 升级 SDK 或调整档案时：先跑登记表里的回归用例与 E2E（模板收敛、公式收齐、`IMAGE()`、入口守卫），再用 `pnpm --filter @nerve-office/e2e run update:sheet-template` 更新模板（ADR-011）。
 - 新增内部依赖：先在 `internal-api/` 封装并登记（`internal-api/` 之外的值引用已由白名单拦下）；要连类型一起拦，补进受限符号清单与自测。新用到公开的值，加进 `UNIVER_PUBLIC_VALUES` 并补自测。
 - M3（捕获时机、打开自检）、M4（Worker 重建、发件箱）、M5（图片与超链接的入口）都在适配层内扩展，对外的接口按需加法。
+
+## M3-P2 的补充
+
+- **视图状态**（阅读与编辑一律重建，ADR-015 的修订）：`SheetEditor.viewState()` 取出当前工作表、主视口左上角可见的行列（含冻结的口径）与主选区；`createSheetEditor` 的可选 `viewState` 在就绪之后恢复。全部经公开的 Facade（`FWorkbook`、`FWorksheet`、`FRange` 的方法与 sheets-ui 补进的滚动方法），不用内部 API；恢复的都是操作（`SetWorksheetActiveOperation`、`SetSelectionsOperation`、滚动），只读时照常。取不出来、工作表不在了或选区超出范围就跳过那一项（回到默认视图），Facade 意外出错时上报、编辑器照常可用。编辑器的容器带 `data-editor-access`（`read`、`edit`）。
+- **内部 API 加 2 项**（只读守卫，ADR-015 决策第 9 条与第 5 条）：`HeaderResizeRenderController`（DEF-027：在它的拦截点上注册总是不允许的拦截器）、`FIND_ADVANCED_LINK_SELECTOR`（DEF-028：查找面板里"高级查找"那一块的 DOM 标记）。登记表、lint 的受限符号与自测同步。
+- **入口守卫按参数判断**（DEF-035 的旁支）：`isGuardedCommand(id, params)`——清单里的命令按 id 取消；`doc.command.inner-paste` 带图片（`doc.drawings` 有项，或正文有图片的锚点 `customBlocks`；看不懂的参数按带图片算）时取消：编辑栏在编辑时粘贴图片文件或带 `<img>` 的 HTML，会把图片写进单元格。整次粘贴取消（参数由 SDK 组装，改写它要依赖它的结构），M5 开放图片时重新评估。
+- **测试构建**：`testing/` 加真实 Safari 的页面自检（`selftest.ts`、`selftest-dom.ts`、`selftest-report.ts`，由编辑器页的挂接在测试构建、地址带 `selftest` 时动态引入）与两份和 E2E 共用的清单（`read-only-entries.ts`、`content-compare.ts`，不引用任何模块）；入口页 `selftest.html` 只在测试构建里。生产构建里没有它们（门禁 `artifacts` 按文件名与禁用关键字核对）。
