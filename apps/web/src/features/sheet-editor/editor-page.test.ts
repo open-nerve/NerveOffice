@@ -1658,6 +1658,36 @@ describe('阅读与编辑的切换（M3-P2 设计 §3.1、§3.4）', () => {
     expect(editorPage.hasUnsavedWork()).toBe(true)
   })
 
+  it('失去编辑权之后另存为副本、按最新的内容重建又失败（复验 C1）：页面照常——说明已另存为副本、可以重新加载，不是整页的"编辑器加载失败"；容器按 failed 隐藏、撤掉屏障', async () => {
+    let calls = 0
+    const fake = fakeEditor()
+    const { editorPage, surface, chrome, time, api } = setup({
+      createEditor: async () => {
+        calls += 1
+        if (calls > 1)
+          throw new Error('Worker 起不来')
+        return fake.editor
+      },
+      editLease: { renew: vi.fn(async () => Promise.reject(new ApiError(403, 'PERMISSION_DENIED', '只能查看'))) },
+    })
+    document.body.append(chrome, surface)
+    await editorPage.load()
+    Object.assign(fake.editor, { changeSeq: () => 1 })
+    fake.changeListeners.forEach(listener => listener())
+    await time.advance(10_000)
+    await settle()
+    await editorPage.saveCopy()
+    expect(api.conflictCopy).toHaveBeenCalledOnce()
+    expect(editorPage.view()).toMatchObject({
+      load: { kind: 'ready' },
+      mode: { kind: 'lost', reopenFailed: true, copy: { kind: 'done', document: { id: COPY_ID } }, reload: { kind: 'failed' } },
+      surface: 'failed',
+    })
+    expect(surface.hidden).toBe(true)
+    expect(blocked(surface)).toBe(false)
+    expect(editorPage.hasUnsavedWork()).toBe(false)
+  })
+
   it('会话不是本人时点"编辑"：先向服务端确认，还是别人就不申请、留在阅读（审查 A10）；确认是本人了（消息没送到）就照常进入', async () => {
     const { editorPage, api, editLease, fromOtherTab } = setup({ editIntent: false })
     await editorPage.load()

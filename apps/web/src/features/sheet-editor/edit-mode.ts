@@ -24,7 +24,7 @@
 // - losing / lost：失去编辑权（续租或保存得知，续上没有成功；P1 的续上规则不变）：停止保存，提交正在编辑的单元格、捕获本页的内容，
 //   重建为只读、显示本页的内容（重建失败时留在 lost，说明编辑器没能重新打开，副本照常给，审查 A3）。还读得到（不是 404）而且有没保存的
 //   修改：给"另存为副本"与"放弃本页的修改"；有一次结果未知的保存时，给副本之前先原样重发它（重放先于登录与租约，P1）——拿到原来的
-//   结果就按已保存处理。读不到了（404）：说明，本页的内容不再能保存；
+//   结果就按已保存处理。读不到了（404）：说明，本页的内容不再能保存。另存为副本之后按最新的内容重建失败也留在 lost（副本的说明照旧，复验 C1）；
 // - failed：编辑器建不起来（页面按"编辑器加载失败"说明，可以重新加载）；unavailable：放弃本页的修改时读不到了（"内容不存在"）。
 // 每开始一件事（进入、退出、失去编辑权、刷新、放弃）都换一个标识：之前那件事在等待之后发现标识变了，就不再接着做。
 import type { ConflictCopyQuery, CreatedDocument, DocumentDetail, SaveContentResponse } from '@nerve-office/contracts'
@@ -121,7 +121,10 @@ export interface LostMode {
    * 别的修改照常在捕获里
    */
   readonly inputLeft: boolean
-  /** 以只读重建编辑器失败：页面上没有编辑器（说明编辑器没能重新打开）；捕获的内容还在，副本照常给，离开照常提示（审查 A3） */
+  /**
+   * 以只读重建编辑器失败：页面上没有编辑器（说明编辑器没能重新打开）；捕获的内容还在，副本照常给，离开照常提示（审查 A3）。
+   * 另存为副本之后按最新的内容重建失败也是：副本的说明与链接照旧，可以重新加载（复验 C1）
+   */
   readonly reopenFailed: boolean
   readonly copy: CopyState
   readonly reload: ReloadState
@@ -633,7 +636,10 @@ export function createEditMode(options: EditModeOptions): EditMode {
 
   /**
    * 按服务端的最新内容重建为阅读（放弃本页的修改、没有修改时重新加载、另存为副本之后）。放弃时读不到了：显示"内容不存在"；
-   * 别的失败留在失去编辑权、说明原因、可以再试（另存为副本之后也是：副本已经建好，说明照旧给出）
+   * 别的失败留在失去编辑权、说明原因、可以再试（另存为副本之后也是：副本已经建好，说明照旧给出）。
+   * 重建失败：已经另存为副本时同样留在失去编辑权——副本的说明与链接照旧，编辑器没能重新打开，可以重新加载（复验 C1：转入 failed 的话
+   * 整页只剩"编辑器加载失败"，副本已经建好、用户却不知道它在哪里，刷新之后看到的是原文档，多半以为修改丢了）；没有副本（放弃、
+   * 没有修改时的重新加载）本页的内容本来就不要了，按编辑器加载失败说明
    */
   async function reloadLatest(from: LostMode): Promise<void> {
     const copied = from.copy.kind === 'done' ? from.copy.document : undefined
@@ -663,7 +669,11 @@ export function createEditMode(options: EditModeOptions): EditMode {
     if (!still(token))
       return
     if (created === undefined) {
-      fail(new Error('按最新的内容重建编辑器失败'))
+      const error = new Error('按最新的内容重建编辑器失败')
+      if (copied === undefined)
+        fail(error)
+      else
+        begin({ ...from, reopenFailed: true, reload: { kind: 'failed', error } })
       return
     }
     disposeCoordinator()

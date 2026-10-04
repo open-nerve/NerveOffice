@@ -612,6 +612,21 @@ describe('失去编辑权（M3-P2 设计 §3.4）', () => {
     expect(page.discard).toHaveBeenCalledOnce()
   })
 
+  it('另存为副本之后按最新的内容重建失败（复验 C1）：说明已另存为副本（链接照旧）、编辑器没能重新打开、没能载入最新的版本，可以重新加载；不再给副本，不说"没有保存"', () => {
+    const { page } = renderChrome({ mode: lost({ kind: 'denied', error: DENIED }, { reopenFailed: true, copy: { kind: 'done', document: COPY }, reload: { kind: 'failed', error: new Error('按最新的内容重建编辑器失败') } }), save: undefined })
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('本页的修改都已保存，重新加载可以看到最新的版本。')
+    expect(alert).toHaveTextContent('编辑器没能重新打开，表格暂时显示不出来')
+    expect(alert).not.toHaveTextContent('另存为副本照常可用')
+    expect(alert).toHaveTextContent('已另存为副本《周报（冲突副本 2026-10-04 15:30）》。')
+    expect(within(alert).getByRole('link', { name: '打开副本（新标签页）' })).toHaveAttribute('href', `/documents/${COPY.id}`)
+    expect(alert).toHaveTextContent('没能载入最新的版本：出了点问题，请稍后重试')
+    expect(screen.queryByRole('button', { name: '另存为副本' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '放弃本页的修改' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '重新加载' }))
+    expect(page.discard).toHaveBeenCalledOnce()
+  })
+
   it('本页的内容没能取出（编辑器出错）：说明，需要的话先复制出来；只给整页的重新加载', () => {
     const { page } = renderChrome({ mode: lost({ kind: 'newer' }, { captureFailed: true }), save: undefined })
     expect(screen.getByRole('alert')).toHaveTextContent('本页的修改没能取出（编辑器出了问题）。需要的话先把内容复制出来，再重新加载')

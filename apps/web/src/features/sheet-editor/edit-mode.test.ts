@@ -960,6 +960,25 @@ describe('失去编辑权（M3-P2 设计 §3.4）', () => {
     expect(context.factory.last()).toMatchObject({ access: 'read', snapshot: snapshotOf('最新的'), disposed: false })
   })
 
+  it('以只读重建失败之后编辑器一直建不起来（复验 C1）：另存为副本成功、按最新的内容重建又失败——留在失去编辑权，副本的说明照旧（copy 为 done），编辑器没能重新打开、可以重新加载；离开不再提示（内容在副本里）', async () => {
+    const context = setup()
+    await editing(context)
+    context.factory.last().edit('本页的')
+    context.factory.failNext()
+    loseOnNextHeartbeat(context, DENIED)
+    await context.time.advance(HEARTBEAT_MS)
+    await settle()
+    expect(lostOf(context.mode)).toMatchObject({ reopenFailed: true, unsaved: true })
+    // 建不起来的原因还在（例如公式 Worker 的脚本加载不了）：下一次创建同样失败
+    context.factory.failNext()
+    await context.mode.saveCopy()
+    expect(context.api.conflictCopy).toHaveBeenCalledOnce()
+    expect(lostOf(context.mode)).toMatchObject({ copy: { kind: 'done', document: { id: COPY.id } }, reopenFailed: true, reload: { kind: 'failed' } })
+    expect(context.mode.view().surface).toBe('none')
+    expect(context.mode.hasUnsavedWork()).toBe(false)
+    expect(context.reportError).toHaveBeenCalledTimes(2)
+  })
+
   it('以只读重建失败、本页没有修改：照实说都已保存，可以按最新的内容重新打开（放弃即重新加载）', async () => {
     const context = setup()
     await editing(context)
@@ -1100,6 +1119,32 @@ describe('另存为副本与放弃（M3-P2 设计 §3.2、§3.4）', () => {
     context.api.content.mockResolvedValueOnce({ snapshot: snapshotOf('最新的'), revision: 9 })
     await context.mode.discard()
     expect(readingOf(context.mode).notice).toMatchObject({ kind: 'copied' })
+  })
+
+  it('副本建好之后按最新的内容重建失败（复验 C1）：留在这里——副本的说明与链接照旧，编辑器没能重新打开（没有编辑器），可以重新加载；再失败照样留着，建得起来时回到阅读、说明已另存为副本', async () => {
+    const context = await lostWithChanges()
+    context.factory.failNext()
+    await context.mode.saveCopy()
+    expect(lostOf(context.mode)).toMatchObject({ copy: { kind: 'done', document: { id: COPY.id } }, reopenFailed: true, reload: { kind: 'failed' } })
+    expect(context.mode.view().surface).toBe('none')
+    expect(context.factory.created.filter(fake => !fake.disposed)).toEqual([])
+    expect(context.mode.hasUnsavedWork()).toBe(false)
+    context.factory.failNext()
+    await context.mode.discard()
+    expect(lostOf(context.mode)).toMatchObject({ copy: { kind: 'done', document: { id: COPY.id } }, reopenFailed: true, reload: { kind: 'failed' } })
+    await context.mode.discard()
+    expect(readingOf(context.mode).notice).toMatchObject({ kind: 'copied', document: { id: COPY.id } })
+    expect(context.factory.last()).toMatchObject({ access: 'read', snapshot: snapshotOf('最新的'), disposed: false })
+    expect(context.api.conflictCopy).toHaveBeenCalledOnce()
+  })
+
+  it('没有副本（放弃本页的修改）时按最新的内容重建失败：本页的内容本来就不要了，按编辑器加载失败说明（failed）', async () => {
+    const context = await lostWithChanges()
+    context.factory.failNext()
+    await context.mode.discard()
+    expect(modeOf(context.mode).kind).toBe('failed')
+    expect(context.mode.hasUnsavedWork()).toBe(false)
+    expect(context.api.conflictCopy).not.toHaveBeenCalled()
   })
 
   it('放弃本页的修改：按服务端的最新内容（全文读取，不用条件读取：本页的内容不是服务端的哪一版）重建为阅读；失效的原因是不能编辑了，没有"编辑"', async () => {
