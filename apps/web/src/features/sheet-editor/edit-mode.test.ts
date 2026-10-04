@@ -428,6 +428,14 @@ describe('进入编辑（M3-P2 设计 §3.4）', () => {
     expect(context.factory.created).toHaveLength(1)
   })
 
+  it('别人正在编辑：谁在编辑用的是申请时服务端的回答（编辑状态还没读回来时也有）', async () => {
+    const context = setup({ editLease: { acquire: async () => Promise.reject(HELD_BY_AMY) } })
+    await opened(context)
+    context.api.editStatus.mockImplementation(async () => deferred<FetchedEditStatus>().promise)
+    await context.mode.enter()
+    expect(readingOf(context.mode).holder).toEqual({ holder: AMY, sameUser: false, lastActiveMinutes: 3 })
+  })
+
   it('不能编辑了（403）：留在阅读，"编辑"消失，说明服务端的原因', async () => {
     const context = setup({ editLease: { acquire: async () => Promise.reject(DENIED) } })
     await opened(context)
@@ -959,6 +967,50 @@ describe('阅读时的检查（US-M3-05）', () => {
     context.mode.setSession('active')
     await settle()
     expect(context.api.editStatus).toHaveBeenCalledTimes(2)
+  })
+
+  it('读编辑状态的请求在途时页面隐藏：它回来之后不再排下一次，回到前台才读', async () => {
+    const context = setup()
+    await opened(context)
+    const answering = deferred<FetchedEditStatus>()
+    context.api.editStatus.mockImplementationOnce(async () => answering.promise)
+    await context.time.advance(READING_CHECK_INTERVAL_MS)
+    expect(context.api.editStatus).toHaveBeenCalledTimes(2)
+    context.page.set(true)
+    answering.resolve(status(3))
+    await settle()
+    await context.time.advance(READING_CHECK_INTERVAL_MS * 3)
+    expect(context.api.editStatus).toHaveBeenCalledTimes(2)
+    context.page.set(false)
+    await settle()
+    expect(context.api.editStatus).toHaveBeenCalledTimes(3)
+  })
+
+  it('读编辑状态的请求在途时进入编辑：它回来之后不再排下一次，编辑时不读', async () => {
+    const context = setup()
+    await opened(context)
+    const answering = deferred<FetchedEditStatus>()
+    context.api.editStatus.mockImplementationOnce(async () => answering.promise)
+    await context.time.advance(READING_CHECK_INTERVAL_MS)
+    expect(context.api.editStatus).toHaveBeenCalledTimes(2)
+    await context.mode.enter()
+    expect(modeOf(context.mode).kind).toBe('editing')
+    answering.resolve(status(3))
+    await settle()
+    await context.time.advance(READING_CHECK_INTERVAL_MS * 3)
+    expect(context.api.editStatus).toHaveBeenCalledTimes(2)
+  })
+
+  it('离开阅读时停掉检查的计时器：进入编辑之后只剩编辑权的心跳', async () => {
+    const context = setup()
+    await opened(context)
+    expect(context.time.pending()).toBe(1)
+    await context.mode.enter()
+    expect(modeOf(context.mode).kind).toBe('editing')
+    expect(context.time.pending()).toBe(1)
+    await context.time.advance(HEARTBEAT_MS)
+    expect(context.editLease.renew).toHaveBeenCalledOnce()
+    expect(context.time.pending()).toBe(1)
   })
 
   it('编辑时不读编辑状态；退出编辑回到阅读时立即读一次', async () => {
