@@ -84,12 +84,17 @@ function defaultSpaceOf(action: DestinationFormProps['action'], spaces: readonly
  * 为什么不是弹窗：移动与复制的入口在空间页上，而空间页是平台的首屏页面，首屏不引入 Radix Dialog（ADR-008）。
  * 一次只有一个对象在选目标，所以这个表单由列表渲染在那一行下面，与行内改名同一个形态。
  * 复制的候选没能加载、按了"重试"：重试期间说明与按钮留着（不可用、说正在重试）；取到之后焦点交给"目标位置"这一行（随即选上的默认目标），
- * 一个也没有时交给那句说明，不落到 body（规范 §2.4，shared/lib/use-first-load-retry.ts）
+ * 一个也没有时交给那句说明，不落到 body（规范 §2.4，shared/lib/use-first-load-retry.ts）。
+ * 目标空间里这一层的子文件夹第一次就没取到（复制与移动都一样，DEF-046）：说明原因、给出"重试"，重试期间说明与同一个按钮留着、
+ * 不换成加载中；取到之后焦点交给一直在的"目标位置"这一行，又失败时换成新的原因、焦点还在按钮上
  */
 export function DestinationForm({ panelId, action, targets, current, excludeFolderId, pending, error, onSubmit, onCancel }: DestinationFormProps) {
   const spaceSelectId = useId()
   const [choice, setChoice] = useState<TargetChoice>()
-  /** 选好的目标位置这一行，或者"没有可以复制到的空间"（同一时刻只有一个，tabIndex -1）：候选没能加载、按"重试"取到之后焦点交给它 */
+  /**
+   * 选好的目标位置这一行，或者"没有可以复制到的空间"（同一时刻只有一个，tabIndex -1）：候选或者这一层的子文件夹没能加载、
+   * 按"重试"取到之后焦点交给它
+   */
   const targetRef = useRef<HTMLParagraphElement>(null)
   const candidates = useFirstLoadRetry(targets.request, targetRef)
   const spaces = targets.items ?? []
@@ -98,6 +103,8 @@ export function DestinationForm({ panelId, action, targets, current, excludeFold
   const parentId = crumbs.at(-1)?.id ?? null
   // 没有目标空间（复制的候选还没取到、取不到、一个也没有）时不取目录：键里的空间是占位，不发请求
   const children = useQuery({ ...folderChildrenQueryOptions(spaceId ?? '', parentId), enabled: spaceId !== undefined })
+  // 这一层第一次就没取到（DEF-046）：按"重试"取到之后焦点交给"目标位置"这一行（与目标空间的候选同一个 targetRef）
+  const folders = useFirstLoadRetry(children, targetRef)
   const choices = (children.data?.items ?? []).filter(folder => folder.id !== excludeFolderId)
   const target = spaces.find(space => space.id === spaceId)
   const spaceName = target === undefined ? '' : (target.type === 'personal' ? messages.spaces.personal : target.name)
@@ -152,13 +159,17 @@ export function DestinationForm({ panelId, action, targets, current, excludeFold
               </p>
               <div className="flex flex-wrap items-center gap-2">
                 {crumbs.length > 0 && <Button type="button" variant="outline" size="sm" onClick={goUp}>{text.upOneLevel}</Button>}
-                {children.isPending && (
+                {!folders.failed && children.isPending && (
                   <div role="status" aria-label={text.targetLoading}>
                     <Skeleton className="h-6 w-32" />
                   </div>
                 )}
-                {!children.isPending && children.data === undefined && (
-                  <span role="alert" className="text-sm text-destructive">{text.targetLoadFailed(describeError(children.error).message)}</span>
+                {/* 重试期间说明与按钮留着（不可用、说正在重试），上一次的原因不再给（请求缓存已经清掉了它） */}
+                {folders.failed && (
+                  <div role="alert" className="flex flex-wrap items-center gap-2" onFocus={folders.focus.onFocus} onBlur={folders.focus.onBlur}>
+                    <span className="text-sm text-destructive">{text.targetLoadFailed(folders.retrying ? undefined : describeError(children.error).message)}</span>
+                    <RetryButton retrying={folders.retrying} onRetry={() => void children.refetch()} />
+                  </div>
                 )}
                 {/* 留着之前的子文件夹、刷新却失败了（例如结果未知之后的刷新，Codex 对抗评审 CX5）：明说没能刷新、给出重试 */}
                 <RefreshProblem query={children} list={text.targetLocation} className="basis-full" />
