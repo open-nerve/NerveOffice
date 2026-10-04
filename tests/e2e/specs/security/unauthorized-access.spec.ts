@@ -12,23 +12,12 @@
 import type { Page } from '@playwright/test'
 import { randomUUID } from 'node:crypto'
 import { createDocument, createDocumentIn, createFolderIn, createTeamSpace, createUser, grantDocument, grantsOn, revisionOf, revokeGrant } from '../../support/database.ts'
-import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
-import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
+import { actAs, loginThroughApi, loginThroughUi } from '../../support/session.ts'
 import { EDITOR_TEST_TIMEOUT, editorSurface, openAndEnterEditing, openReader, saveButton, saveStatus, typeInCell, waitForEditor } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
-
-/**
- * 另一个人在他自己的浏览器里经接口做的操作（取消分享、降级、移出空间、停用）：状态变更的请求带上与公开地址相同的 Origin 与他的 CSRF 令牌。
- * 请求必须成功，否则后面的"被拒绝"什么也说明不了
- */
-async function actAs(page: Page, method: 'PUT' | 'POST' | 'DELETE', path: string, data?: unknown): Promise<void> {
-  const { csrfToken } = await (await page.request.get('/api/auth/session')).json() as { csrfToken: string }
-  const response = await page.request.fetch(path, { method, headers: { 'origin': e2eOrigin(), 'x-csrf-token': csrfToken }, ...(data === undefined ? {} : { data }) })
-  expect(response.ok(), `${method} ${path}：${response.status()} ${await response.text()}`).toBe(true)
-}
 
 /** 编辑器页打不开时的样子：进入失败状态、说"内容不存在，或者你没有访问权限"；返回页头的全部文字，与别的情形逐字比较 */
 async function notFoundEditor(page: Page, documentId: string): Promise<string> {

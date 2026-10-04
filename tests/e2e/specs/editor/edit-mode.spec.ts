@@ -1,43 +1,229 @@
-// 阅读与编辑的切换（M3-P2 设计 §3.1、§3.3、§3.4）：模式切换一律重建编辑器，重建之前取出视图状态（当前工作表、左上角可见的行列、
-// 主选区），就绪之后恢复——进入、退出编辑之后同一张表、同一个可见区域、同一个选区（风险表"重建丢掉用户的视图"）。
+// 阅读与编辑的切换（US-M3-01；M3-P2 设计 §3.1、§3.3、§3.4）：打开一律是阅读（以只读创建，刚由自己新建的表格经 ?edit=new 直接进入编辑），
+// 点"编辑"申请编辑权、以可编辑重建，"退出编辑"先保存、再释放编辑权、以只读重建。模式切换一律重建编辑器（需求方 2026-10-04 决定）：
+// - 切换之后编辑真的能编辑、只读真的只读（"进入再退出"之后跑与查看者的只读同一套入口检查，support/read-only-checks.ts）、撤销栈已清空
+//   （新的实例：上一段编辑的撤销不再起作用）；销毁旧的编辑器时终止它的公式 Worker，页面的 Worker 回到 1 个；
+// - 以服务端当前的修订为基准：阅读期间别人保存过，点"编辑"先按 If-None-Match 取最新的内容再进入；
+// - 重建之前取出视图状态（当前工作表、左上角可见的行列、主选区），就绪之后恢复（风险表"重建丢掉用户的视图"）。
 // 失去编辑权之后另存为副本：上传本页捕获的内容（服务端按快照新建，M3-P2 S2 的接口），本页按服务器上的最新版本回到阅读。
-// 进入与退出、两个人、"有更新"等故事的完整 E2E 在 S5（US-M3-01、05、11、12、13）。
-import type { Page } from '@playwright/test'
-import { archiveSpace, createDocumentIn, createTeamSpace, createUser, withDatabase } from '../../support/database.ts'
+// 两个人与同一个人的多个标签页（US-M3-04）在 lease-acquire.spec.ts，阅读者的更新提示（US-M3-05）在 reading-updates.spec.ts，
+// 失去编辑权的各种情形（US-M3-11、12、13）在 conflict.spec.ts、access.spec.ts 与 lease-recovery.spec.ts。
+import type { Page, Request } from '@playwright/test'
+import { revisionEtag } from '@nerve-office/contracts'
+import { archiveSpace, createDocumentIn, createTeamSpace, createUser, editLeaseEndReason, withDatabase } from '../../support/database.ts'
+import { editorView, scrollAndSelect } from '../../support/editor-probe.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { pressUniverShortcut } from '../../support/keyboard.ts'
+import { expectEntriesUnchanged, grantClipboard, OTHER_READ_ONLY_ENTRIES, PROBE_FACADE_ENTRIES, UI_ENTRIES } from '../../support/read-only-checks.ts'
+import { ALERT, closePermissionAlert, OPENED, scene, watch } from '../../support/read-only.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { appendSheet, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditing, exitEditing, lostNotice, openAndEnterEditing, saveAndWait, saveButton, savedContent, saveStatus, sheetTab, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { appendSheet, cellOf, createSheetThroughApi, createSheetThroughUi, EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, exitEditButton, exitEditing, isSaveRequest, lostNotice, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, saveStatus, selectCell, sheetTab, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
-/** 编辑器现在的视图：当前工作表、左上角可见的行列、选区与主单元格（经探针的 Facade 读出；探针随编辑器重建，读的是现在的那一个） */
-interface View {
-  readonly sheet: string
-  readonly top: number
-  readonly left: number
-  readonly range: string | undefined
-  readonly current: string | undefined
+/**
+ * 页面的 Worker 回到 1 个（只剩现在这个编辑器的公式 Worker）：重建时销毁旧的编辑器要终止它的 Worker（sheet-editor.ts 的销毁），
+ * 漏掉时每切换一次就多一个。Worker 终止之后 Playwright 才把它从列表里去掉，所以等一会儿
+ */
+async function expectSingleWorker(page: Page): Promise<void> {
+  await expect.poll(() => page.workers().length, { message: '页面的 Worker 回到 1 个' }).toBe(1)
 }
 
-async function viewOf(page: Page): Promise<View> {
-  await expect.poll(async () => page.evaluate(() => window.__nerveEditorProbe !== undefined)).toBe(true)
-  return page.evaluate(() => {
-    const api = window.__nerveEditorProbe?.univerAPI
-    if (api === undefined)
-      throw new Error('页面里没有编辑器的探针')
-    const workbook = api.getActiveWorkbook()
-    const sheet = workbook.getActiveSheet()
-    const scroll = sheet.getScrollState()
-    return {
-      sheet: sheet.getSheetName(),
-      top: scroll.sheetViewStartRow,
-      left: scroll.sheetViewStartColumn,
-      range: sheet.getSelection()?.getActiveRange()?.getA1Notation(),
-      current: workbook.getActiveCell()?.getA1Notation(),
-    }
-  })
+/** 这份文档的编辑状态（GET …/edit-lease，用这个页面的会话）：正在编辑的人，没有时为 null */
+async function editorOnServer(page: Page, documentId: string): Promise<unknown> {
+  const response = await page.request.get(`/api/documents/${documentId}/edit-lease`)
+  expect(response.status(), await response.text()).toBe(200)
+  return (await response.json() as { editor: unknown }).editor
 }
+
+/** 写的请求（保存、申请、释放编辑权）按发出的先后记下来：退出编辑时先保存、再释放 */
+function recordWrites(page: Page, documentId: string): string[] {
+  const writes: string[] = []
+  page.on('request', (request: Request) => {
+    const path = new URL(request.url()).pathname
+    if (isSaveRequest(request) && path === `/api/documents/${documentId}/content`)
+      writes.push('save')
+    else if (path === `/api/documents/${documentId}/edit-lease` && request.method() !== 'GET' && request.method() !== 'PUT')
+      writes.push(request.method() === 'POST' ? 'acquire' : 'release')
+  })
+  return writes
+}
+
+test.describe('US-M3-01 打开文档先阅读，点"编辑"进入编辑，点"退出编辑"回到阅读', () => {
+  test('US-M3-01 打开是阅读（没有工具栏，键入被只读的提示拦下、不发保存）；点"编辑"进入编辑，真的能编辑、保存；撤销栈已清空；有修改时"退出编辑"先保存、再释放编辑权（服务端没有人在编辑）、回到阅读，只读真的只读；进入、退出之后页面的 Worker 都回到 1 个', async ({ page }) => {
+    await loginThroughApi(page, await createUser('read-mode-switch'))
+    const documentId = await createSheetThroughApi(page)
+    const writes = recordWrites(page, documentId)
+
+    // 打开即阅读：以只读创建，能编辑的人有"编辑"；没有工具栏与保存按钮，页头的状态是空的
+    await openReader(page, documentId)
+    await expect(enterEditButton(page)).toBeVisible()
+    await expect(saveStatus(page)).toHaveText('')
+    await expect(saveButton(page)).toHaveCount(0)
+    await expect(page.getByRole('toolbar')).toHaveCount(0)
+    await expectSingleWorker(page)
+    // 阅读时的本地改动不提交：键入被只读的提示拦下；按保存的快捷键也不发请求
+    await selectCell(page, 'K3')
+    await page.keyboard.type('1')
+    await closePermissionAlert(page, ALERT.edit)
+    await page.keyboard.press('ControlOrMeta+s')
+
+    // 点"编辑"：取得编辑权，以可编辑重建（工具栏回来了），保存状态从"已保存到云端"开始
+    await enterEditing(page)
+    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    await expect(page.getByRole('tab', { name: '开始', exact: true })).toBeVisible()
+    await expectSingleWorker(page)
+    expect(writes).toEqual(['acquire'])
+    // 编辑真的能编辑：键入、保存，服务器上有这一次
+    await typeInCell(page, 'A1', 'first')
+    await saveAndWait(page)
+    expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('first')
+
+    // 退出、再进入（两次重建）之后撤销：撤销栈已清空，A1 不变（原地切换会留着上一段编辑的撤销栈，撤销会把 A1 改回空）。
+    // 按键按顺序处理：之后在 B1 键入、保存，存下来的就是撤销之后的内容
+    await exitEditing(page)
+    await enterEditing(page)
+    await selectCell(page, 'C3')
+    await pressUniverShortcut(page, 'Z')
+    await typeInCell(page, 'B1', 'after undo')
+    await saveAndWait(page)
+    const undone = await savedContent(page, documentId)
+    expect([cellOf(undone.snapshot, 'A1')?.v, cellOf(undone.snapshot, 'B1')?.v]).toEqual(['first', 'after undo'])
+
+    // 有修改时"退出编辑"：先保存（服务器上有这一次），再释放编辑权（服务端的编辑状态里没有人在编辑），以只读重建、回到阅读
+    await typeInCell(page, 'A2', 'saved on exit')
+    await expect(saveStatus(page)).toHaveText('有未保存的修改')
+    writes.length = 0
+    await exitEditing(page)
+    expect(writes).toEqual(['save', 'release'])
+    const exited = await savedContent(page, documentId)
+    expect([exited.revision, cellOf(exited.snapshot, 'A2')?.v]).toEqual([undone.revision + 1, 'saved on exit'])
+    expect(await editLeaseEndReason(documentId)).toBe('released')
+    expect(await editorOnServer(page, documentId)).toBeNull()
+    await expect(enterEditButton(page)).toBeVisible()
+    await expect(exitEditButton(page)).toHaveCount(0)
+    await expect(saveButton(page)).toHaveCount(0)
+    await expect(page.getByRole('toolbar')).toHaveCount(0)
+    await expectSingleWorker(page)
+
+    // 只读真的只读：键入被只读的提示拦下，不发保存，服务器上的内容不变
+    await selectCell(page, 'K3')
+    await page.keyboard.type('2')
+    await closePermissionAlert(page, ALERT.edit)
+    await page.keyboard.press('ControlOrMeta+s')
+    await selectCell(page, 'C5')
+    expect(writes).toEqual(['save', 'release'])
+    expect((await savedContent(page, documentId)).revision).toBe(exited.revision)
+  })
+
+  test('US-M3-01 刚新建的表格直接进入编辑，地址里的 ?edit=new 随之去掉；刷新之后是阅读（不再自动进入编辑）', async ({ page }) => {
+    await loginThroughApi(page, await createUser('read-mode-new'))
+    // 列表里新建：跳到带 ?edit=new 的地址，直接以可编辑创建；进入之后地址里没有这个参数（createSheetThroughUi 核对）
+    const documentId = await createSheetThroughUi(page)
+    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    await expect(exitEditButton(page)).toBeVisible()
+    await expect(enterEditButton(page)).toHaveCount(0)
+
+    await page.reload()
+    await waitForEditorAccess(page, 'read')
+    await expect(page).toHaveURL(new RegExp(`/documents/${documentId}$`))
+    await expect(enterEditButton(page)).toBeVisible()
+    await expect(saveButton(page)).toHaveCount(0)
+  })
+
+  test('US-M3-01 查看者与归档空间里的文档：打开是阅读，只能查看、没有"编辑"（对照：归档之前空间管理员有"编辑"）', async ({ page, anotherDevice }) => {
+    const lead = await createUser('read-mode-lead')
+    const viewer = await createUser('read-mode-viewer')
+    const space = await createTeamSpace('打开即阅读', lead, [[lead, 'admin'], [viewer, 'viewer']])
+    const documentId = await createDocumentIn(space.id, lead, '共同的表')
+
+    await loginThroughApi(page, viewer)
+    await openReader(page, documentId)
+    await expect(saveStatus(page)).toHaveText('只能查看')
+    await expect(enterEditButton(page)).toHaveCount(0)
+
+    await loginThroughApi(anotherDevice, lead)
+    await openReader(anotherDevice, documentId)
+    await expect(enterEditButton(anotherDevice)).toBeVisible()
+    await archiveSpace(space.id)
+    await anotherDevice.reload()
+    await waitForEditorAccess(anotherDevice, 'read')
+    await expect(saveStatus(anotherDevice)).toHaveText('只能查看')
+    await expect(enterEditButton(anotherDevice)).toHaveCount(0)
+  })
+
+  test('US-M3-01 阅读期间别人保存了新版本、本页还没刷新：点"编辑"以服务端当前的版本为基准（先按 If-None-Match 取最新的内容），进入之后照常保存，不冲突', async ({ page, anotherDevice }) => {
+    const lead = await createUser('read-mode-behind-lead')
+    const first = await createUser('read-mode-behind-first')
+    const second = await createUser('read-mode-behind-second')
+    const space = await createTeamSpace('本页落后', lead, [[lead, 'admin'], [first, 'editor'], [second, 'editor']])
+    const documentId = await createDocumentIn(space.id, lead, '共同的表')
+
+    // 第二个人先打开阅读（修订 1）
+    await loginThroughApi(anotherDevice, second)
+    await openReader(anotherDevice, documentId)
+    const reads: (string | undefined)[] = []
+    anotherDevice.on('request', (request) => {
+      if (request.method() === 'GET' && new URL(request.url()).pathname === `/api/documents/${documentId}/content`)
+        reads.push(request.headers()['if-none-match'])
+    })
+
+    // 第一个人编辑、保存（修订 2），退出编辑（放掉编辑权）
+    await loginThroughApi(page, first)
+    await openAndEnterEditing(page, documentId)
+    await typeInCell(page, 'A1', 'from first')
+    await saveAndWait(page)
+    await exitEditing(page)
+
+    // 第二个人没有刷新就点"编辑"：申请得到的修订是 2，本页是 1——先按 If-None-Match（本页的修订）取最新的内容，以它重建为可编辑
+    await enterEditing(anotherDevice)
+    expect(reads).toEqual([revisionEtag(1)])
+    await expect(saveStatus(anotherDevice)).toHaveText('已保存到云端')
+    await typeInCell(anotherDevice, 'B1', 'from second')
+    await saveAndWait(anotherDevice)
+    const saved = await savedContent(anotherDevice, documentId)
+    expect([saved.revision, cellOf(saved.snapshot, 'A1')?.v, cellOf(saved.snapshot, 'B1')?.v]).toEqual([3, 'from first', 'from second'])
+  })
+})
+
+// "进入再退出"之后的编辑器是重建出来的只读编辑器：与查看者打开时同一套入口检查（M2-P3 的 read-only.spec.ts，抽在 support/read-only-checks.ts），
+// 免得重建漏装只读守卫、漏设权限点。作者（空间管理员）打开只读样本，进入、退出编辑，不做任何修改，然后逐项试
+test.describe('US-M3-01 进入再退出编辑之后只读真的只读（以只读重建；与查看者的只读同一套检查）', { tag: '@test-build' }, () => {
+  test('US-M3-01 M0 的只读入口清单（界面入口 7 项与 Facade 入口）在"进入再退出"之后逐项都无效；进入、退出之后页面的 Worker 都回到 1 个', async ({ page, context, browserName }) => {
+    // 与查看者的那一份条件一致（P3 审查 B10）
+    await grantClipboard(context, browserName)
+    const s = await scene('switch-m0')
+    await loginThroughApi(page, s.author)
+    await openReader(page, s.documentId, OPENED)
+    await expectSingleWorker(page)
+    await enterEditing(page, OPENED)
+    await expectSingleWorker(page)
+    await exitEditing(page, OPENED)
+    await expectSingleWorker(page)
+    await expect(enterEditButton(page)).toBeVisible()
+
+    const watched = watch(page, s.documentId)
+    await expectEntriesUnchanged(page, [...UI_ENTRIES, ...PROBE_FACADE_ENTRIES])
+    expect(watched.saves).toEqual([])
+    expect(watched.pageErrors).toEqual([])
+  })
+
+  test('US-M3-01 界面上还能碰到的其他入口（查找替换、格式与撤销重做的快捷键、工作表标签与菜单、图片、批注、冻结线与分隔线、筛选、"搜索功能"、快速求和）在"进入再退出"之后同样无效', async ({ page, context, browserName }) => {
+    await grantClipboard(context, browserName)
+    const s = await scene('switch-other')
+    await loginThroughApi(page, s.author)
+    await openReader(page, s.documentId, OPENED)
+    await enterEditing(page, OPENED)
+    await exitEditing(page, OPENED)
+
+    const watched = watch(page, s.documentId)
+    await expectEntriesUnchanged(page, OTHER_READ_ONLY_ENTRIES)
+    // 工作表的顺序与可见的标签都没变（"隐藏"表仍然隐藏）
+    await expect(page.getByRole('tablist', { name: '工作表标签页' }).getByRole('tab')).toHaveText(['数据', '汇总', '功能', '筛选'])
+    expect(watched.saves).toEqual([])
+    expect(watched.pageErrors).toEqual([])
+  })
+})
 
 test.describe('阅读与编辑的切换保留视图（M3-P2 设计 §3.3）', { tag: '@test-build' }, () => {
   test('进入编辑、退出编辑之后：同一张工作表、同一个可见区域、同一个选区', async ({ page }) => {
@@ -48,26 +234,20 @@ test.describe('阅读与编辑的切换保留视图（M3-P2 设计 §3.3）', { 
     await appendSheet(page)
     await expect(sheetTab(page, '工作表2')).toHaveAttribute('aria-selected', 'true')
     await saveAndWait(page)
-    await page.evaluate(() => {
-      const sheet = window.__nerveEditorProbe?.univerAPI.getActiveWorkbook().getActiveSheet()
-      if (sheet === undefined)
-        throw new Error('页面里没有编辑器的探针')
-      sheet.scrollToCell(40, 8)
-      sheet.getRange('K45:L47').activate()
-    })
-    await expect.poll(async () => viewOf(page)).toMatchObject({ sheet: '工作表2', top: 40, range: 'K45:L47', current: 'K45' })
-    const expected = await viewOf(page)
+    await scrollAndSelect(page, 40, 8, 'K45:L47')
+    await expect.poll(async () => editorView(page)).toMatchObject({ sheet: '工作表2', top: 40, range: 'K45:L47', current: 'K45' })
+    const expected = await editorView(page)
     expect(expected.left, '往右滚过了').toBeGreaterThan(0)
 
     // 退出编辑：以只读重建，视图照旧
     await exitEditing(page)
     await expect(sheetTab(page, '工作表2')).toHaveAttribute('aria-selected', 'true')
-    expect(await viewOf(page)).toEqual(expected)
+    expect(await editorView(page)).toEqual(expected)
 
     // 再进入编辑：以可编辑重建，视图照旧
     await enterEditing(page)
     await expect(sheetTab(page, '工作表2')).toHaveAttribute('aria-selected', 'true')
-    expect(await viewOf(page)).toEqual(expected)
+    expect(await editorView(page)).toEqual(expected)
     await expect(saveStatus(page)).toHaveText('已保存到云端')
   })
 })

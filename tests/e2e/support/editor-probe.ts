@@ -8,8 +8,9 @@
 import type { Locator, Page } from '@playwright/test'
 import type { LoggedCommand } from '../../../apps/web/src/editor/testing/content-compare.ts'
 import type { EntryApi, EntryImage, EntryRange, EntryScope, EntrySheet, EntryWorkbook } from '../../../apps/web/src/editor/testing/read-only-entries.ts'
+import type { Workbook } from './sheet.ts'
 import { expect } from './fixtures.ts'
-import { sheetCanvas } from './sheet.ts'
+import { cellOf, sheetCanvas } from './sheet.ts'
 
 export { contentOf } from '../../../apps/web/src/editor/testing/content-compare.ts'
 
@@ -204,6 +205,61 @@ export async function cellRect(page: Page, a1: string): Promise<CellRect> {
 export async function activeImageCount(page: Page): Promise<number> {
   await probeIn(page)
   return page.evaluate(() => window.__nerveEditorProbe?.univerAPI.getActiveWorkbook().getActiveSheet().getActiveImages().length ?? 0)
+}
+
+/** 编辑器现在的视图：当前工作表、左上角可见的行列、选区与主单元格（M3-P2 设计 §3.3：模式切换、"有更新"的重建前后保留它） */
+export interface EditorView {
+  readonly sheet: string
+  readonly top: number
+  readonly left: number
+  readonly range: string | undefined
+  readonly current: string | undefined
+}
+
+/** 经探针的 Facade 读出编辑器现在的视图（探针随编辑器重建，读的是现在的那一个） */
+export async function editorView(page: Page): Promise<EditorView> {
+  await probeIn(page)
+  return page.evaluate(() => {
+    const api = window.__nerveEditorProbe?.univerAPI
+    if (api === undefined)
+      throw new Error('页面里没有编辑器的探针')
+    const workbook = api.getActiveWorkbook()
+    const sheet = workbook.getActiveSheet()
+    const scroll = sheet.getScrollState()
+    return {
+      sheet: sheet.getSheetName(),
+      top: scroll.sheetViewStartRow,
+      left: scroll.sheetViewStartColumn,
+      range: sheet.getSelection()?.getActiveRange()?.getA1Notation(),
+      current: workbook.getActiveCell()?.getA1Notation(),
+    }
+  })
+}
+
+/**
+ * 页面里现在显示的一格的值（探针给出的内存快照；sheetId 默认是第一张表）：没有这一格时为 null。重建期间旧的编辑器已经销毁、
+ * 新的还没就绪，页面里没有探针，这时为 undefined：调用方用 expect.poll 等到新的编辑器
+ */
+export async function shownCell(page: Page, a1: string, sheetId?: string): Promise<unknown> {
+  const text = await page.evaluate(() => window.__nerveEditorProbe?.snapshot() ?? '')
+  if (text === '')
+    return undefined
+  return cellOf(JSON.parse(text) as Workbook, a1, sheetId)?.v ?? null
+}
+
+/**
+ * 经探针在当前工作表上滚到第 row 行、第 column 列（从 0 开始）在左上角，选中 range（A1 写法）：滚动与选区是视图的操作，只读时照常。
+ * 列数不多时往右滚到头，SDK 按能滚到的最远处停
+ */
+export async function scrollAndSelect(page: Page, row: number, column: number, range: string): Promise<void> {
+  await probeIn(page)
+  await page.evaluate(({ row, column, range }) => {
+    const sheet = window.__nerveEditorProbe?.univerAPI.getActiveWorkbook().getActiveSheet()
+    if (sheet === undefined)
+      throw new Error('页面里没有编辑器的探针')
+    sheet.scrollToCell(row, column)
+    sheet.getRange(range).activate()
+  }, { row, column, range })
 }
 
 /** 编辑栏左边的名称框：显示当前单元格的地址（只读时编辑栏照常显示） */

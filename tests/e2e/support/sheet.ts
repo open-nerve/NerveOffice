@@ -6,6 +6,8 @@ import { revisionFromEtag, SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { editLeaseEndReason } from './database.ts'
 import { e2eOrigin } from './environment.ts'
 import { expect } from './fixtures.ts'
+import { pressUniverShortcut } from './keyboard.ts'
+import { shownName } from './people.ts'
 
 /**
  * 要打开编辑器的用例，整份 spec 用这个时限（M2-P4 复验 G3）：
@@ -218,6 +220,32 @@ export async function appendSheet(page: Page): Promise<void> {
   await page.locator('button[data-u-comp="sheet-bar-append-button"]').first().click()
 }
 
+/** 页面此刻会不会拦下离开（派发一次可以取消的 beforeunload，看页面有没有阻止它）：本页还有没保存、没另存为副本的内容时拦下 */
+export async function wouldPromptOnLeave(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const event = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(event)
+    return event.defaultPrevented
+  })
+}
+
+/**
+ * 用查找核对表格里有这段文字，找到 1 处（画布上的字读不出来）：只读时照常能查找，没有工具栏时点一下表格、按查找的快捷键。
+ * 用来核对以只读重建之后显示的是哪一份内容（失去编辑权之后是本页的，放弃或另存为副本之后是服务器上的）。
+ * 先等编辑器到 steady：查找的快捷键要等查找的提供方注册之后才可用，SDK 在它的 Steady 阶段才注册（support/read-only.ts 的 OPENED）
+ */
+export async function expectFoundOnce(page: Page, text: string): Promise<void> {
+  await waitForEditor(page, 'steady')
+  await selectCell(page, 'C3')
+  await pressUniverShortcut(page, 'F')
+  const find = page.getByRole('dialog', { name: '查找' })
+  await find.getByRole('textbox', { name: '输入查找内容' }).fill(text)
+  await find.getByRole('textbox', { name: '输入查找内容' }).press('Enter')
+  await expect(find).toContainText('1/1')
+  await find.getByRole('button', { name: 'Close' }).click()
+  await expect(find).toBeHidden()
+}
+
 /** 点保存并等到"已保存到云端" */
 export async function saveAndWait(page: Page): Promise<void> {
   await saveButton(page).click()
@@ -227,6 +255,19 @@ export async function saveAndWait(page: Page): Promise<void> {
 /** 页头之外说明谁在编辑的读屏状态区（M3-P1；M3-P2 起阅读时随编辑状态更新）：别处正在编辑这份文档时有内容 */
 export function editingNotice(page: Page): Locator {
   return chrome(page).getByRole('status').filter({ hasText: '正在编辑这份文档' })
+}
+
+/** 写进正则的一段原文 */
+function literal(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * editingNotice 里"别人正在编辑"的说明（M3-P2：阅读时能不能编辑都显示）：人名（登录名在前，support/people.ts）、最后活动几分钟之前
+ * （刚刚操作过时是"不到 1 分钟"，用例慢的时候可能过了一分钟）；能编辑的人另说现在只能阅读，查看者不说（页头已经说只能查看）
+ */
+export function editingBy(person: Parameters<typeof shownName>[0], canEdit: boolean): RegExp {
+  return new RegExp(`^${literal(shownName(person))} 正在编辑这份文档（最后活动(?:不到 1| \\d+) 分钟前）${canEdit ? '，你现在只能阅读' : ''}$`)
 }
 
 /** 失去编辑权之后的说明（M3-P2：原因、本页的修改有没有保存，"另存为副本""放弃本页的修改""重新加载"） */

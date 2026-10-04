@@ -4,7 +4,7 @@ import { SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { createDocument, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { appendSheet, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openAndEnterEditing, openCellEditor, saveAndWait, saveButton, savedContent, saveStatus, selectCell, typeInCell } from '../../support/sheet.ts'
+import { appendSheet, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openAndEnterEditing, openCellEditor, saveAndWait, saveButton, savedContent, saveStatus, selectCell, typeInCell, wouldPromptOnLeave } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -21,15 +21,6 @@ async function holdSaves(page: Page): Promise<() => void> {
     await route.continue()
   })
   return release
-}
-
-/** 页面此刻会不会拦下离开（派发一次可以取消的 beforeunload，看页面有没有阻止它） */
-async function wouldPromptOnLeave(page: Page): Promise<boolean> {
-  return page.evaluate(() => {
-    const event = new Event('beforeunload', { cancelable: true })
-    window.dispatchEvent(event)
-    return event.defaultPrevented
-  })
 }
 
 async function openNewSheet(page: Page, prefix: string): Promise<string> {
