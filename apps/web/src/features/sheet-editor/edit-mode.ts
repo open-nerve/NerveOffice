@@ -769,10 +769,11 @@ export function createEditMode(options: EditModeOptions): EditMode {
         return
       lease = undefined
       const revision = saver.baseRevision()
-      disposeCoordinator()
       const created = await slot.replace('read', snapshot)
       if (!still(token))
         return
+      // 保存的状态机留到换好编辑器才去掉：退出的整个过程页头的"保存""正在退出编辑…"都在（审查 A2），这时它说的是已保存
+      disposeCoordinator()
       if (created === undefined) {
         fail(new Error('退出编辑时以只读重建编辑器失败'))
         return

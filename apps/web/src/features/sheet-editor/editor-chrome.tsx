@@ -1,17 +1,18 @@
 // 编辑器页的页头与提示（P4 设计 §3.7.3；M3-P2 设计 §3.4 的表）：返回文档所在的空间（M2-P2 设计 §3.10；只凭授权时回"与我共享"，M2-P5）、
 // 标题、分享的入口（M2-P5）、页头的状态（role="status"）与这一刻能做的事：
 // - 阅读：只能查看；能编辑时"编辑"；有人在编辑时说明是谁（能不能编辑都说，是自己时说在另一个标签页或设备上）；"有更新，点击刷新"；
-// - 进入编辑中、退出编辑中：说明正在做；
+// - 进入编辑中、退出编辑中：说明正在做，按钮留着（标为不可用、说正在进入或退出），没有成功时焦点还在它上面；
 // - 编辑：保存状态、"保存"、"退出编辑"，保存的各种结果；
 // - 失去编辑权：原因；还读得到而且有修改时"另存为副本""放弃本页的修改"（确认），没有修改时"重新加载"，读不到了时只说明。
 // 页头的文档详情没能刷新时说明、可以重试（DEF-040，与列表的"没能刷新"同一个做法）。
-// 编辑器本身挂在页头之外的容器里（editor.html 的 #sheet-editor），不归 React 管。
+// 有焦点的按钮随状态消失时（"编辑"随权限消失、"有更新"载入之后、失去编辑权时的"保存""退出编辑"等），焦点交给一直在的返回链接
+// （规范 §2.4，审查 A2）。编辑器本身挂在页头之外的容器里（editor.html 的 #sheet-editor），不归 React 管。
 import type { ReactNode } from 'react'
 import type { Phrase as PhraseParts } from '../../shared/i18n/index.ts'
 import type { PendingConfirmation } from '../confirmation/index.ts'
 import type { LeaseHolder, LeaseLoss } from './edit-lease.ts'
 import type { LostMode, ReadingMode, ReadingNotice } from './edit-mode.ts'
-import type { EditorPage, EditorPageLoad, EditorPageReady, EditorPageView } from './editor-page.ts'
+import type { EditorPage, EditorPageLoad, EditorPageReady, EditorPageSession, EditorPageView } from './editor-page.ts'
 import type { SaveProblem, SaveView } from './save-coordinator.ts'
 import { documentPagePath } from '@nerve-office/contracts'
 import { QueryClientProvider } from '@tanstack/react-query'
@@ -22,8 +23,9 @@ import { messages } from '../../shared/i18n/index.ts'
 import { editorMessages } from '../../shared/i18n/zh-cn/editor.ts'
 import { LOGIN_PATH } from '../../shared/lib/login-path.ts'
 import { HOME_PATH, SHARED_PATH, spacePath } from '../../shared/lib/space-paths.ts'
+import { useFocusRescue } from '../../shared/lib/use-focus-rescue.ts'
 import { Alert, AlertDescription, Button, buttonVariants, PersonName, Phrase } from '../../shared/ui/index.ts'
-import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
+import { DetailRefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { StatusRegion } from '../../shared/ui/status-region.tsx'
 import { ConfirmDialog } from '../confirmation/index.ts'
 import { editorQueryClient } from './editor-query-client.ts'
@@ -105,13 +107,16 @@ function headerStatus(view: EditorPageView): string {
   }
 }
 
-function SaveControls({ page, save, confirming, apple }: { page: EditorPage, save: SaveView, confirming: boolean, apple: boolean }) {
+/**
+ * 编辑时（与退出编辑的过程中）页头里能做的事。不可用一律用 aria-disabled：按钮变成 disabled 时焦点会丢（审查 B13），重复点击由
+ * 保存的状态机、页面挡住。退出中两个按钮都留着（"退出编辑"说正在退出）：没有退出成功（保存失败、公式没收齐）时焦点还在它上面（审查 A2）
+ */
+function SaveControls({ page, save, confirming, exiting, apple }: { page: EditorPage, save: SaveView, confirming: boolean, exiting: boolean, apple: boolean }) {
   return (
     <>
-      {/* 保存中用 aria-disabled：按钮变成 disabled 时焦点会丢（审查 B13）；重复点击由保存的状态机挡住 */}
       <Button
         size="sm"
-        aria-disabled={!save.canSave || confirming}
+        aria-disabled={!save.canSave || confirming || exiting}
         aria-busy={confirming}
         aria-keyshortcuts={apple ? 'Meta+S' : 'Control+S'}
         title={editorMessages.saveShortcut(apple ? '⌘S' : 'Ctrl+S')}
@@ -120,21 +125,34 @@ function SaveControls({ page, save, confirming, apple }: { page: EditorPage, sav
         {editorMessages.save}
       </Button>
       {/* 退出编辑：先保存（没存上就留在编辑，说明由保存的状态给出），释放编辑权，回到阅读 */}
-      <Button size="sm" variant="outline" aria-disabled={confirming} onClick={() => void page.exitEditing()}>{editorMessages.mode.exit}</Button>
+      <Button size="sm" variant="outline" aria-disabled={confirming || exiting} aria-busy={exiting} onClick={() => void page.exitEditing()}>
+        {exiting ? editorMessages.mode.exiting : editorMessages.mode.exit}
+      </Button>
     </>
   )
 }
 
-/** 阅读时页头里能做的事："编辑"（能编辑、还读得到时）；"有更新，点击刷新" */
-function ReadingControls({ page, reading }: { page: EditorPage, reading: ReadingMode }) {
+/**
+ * 阅读时（与进入编辑的过程中）页头里能做的事："有更新，点击刷新"；"编辑"（能编辑、还读得到时）。reading 为 undefined 是进入编辑中：
+ * "编辑"留着、说正在进入，没有进入成功（被占用、网络失败）时焦点还在它上面（审查 A2）。正在载入最新的版本时（审查 A1）、会话不是本人时
+ * （审查 A10）"编辑"不可用；点了由页面挡住，或者先向服务端确认会话
+ */
+function ReadingControls({ page, reading, session }: { page: EditorPage, reading: ReadingMode | undefined, session: EditorPageSession }) {
+  const entering = reading === undefined
+  const update = reading?.update ?? 'none'
+  const offersEdit = reading === undefined || (reading.canEdit && !reading.gone)
   return (
     <>
-      {reading.update !== 'none' && (
-        <Button size="sm" variant="outline" aria-disabled={reading.update === 'loading'} onClick={() => void page.refreshUpdate()}>
-          {reading.update === 'loading' ? editorMessages.mode.updating : editorMessages.mode.update}
+      {update !== 'none' && (
+        <Button size="sm" variant="outline" aria-disabled={update === 'loading'} onClick={() => void page.refreshUpdate()}>
+          {update === 'loading' ? editorMessages.mode.updating : editorMessages.mode.update}
         </Button>
       )}
-      {reading.canEdit && !reading.gone && <Button size="sm" onClick={() => void page.enterEditing()}>{editorMessages.mode.enter}</Button>}
+      {offersEdit && (
+        <Button size="sm" aria-disabled={entering || update === 'loading' || session !== 'active'} aria-busy={entering} onClick={() => void page.enterEditing()}>
+          {entering ? editorMessages.mode.entering : editorMessages.mode.enter}
+        </Button>
+      )}
     </>
   )
 }
@@ -221,11 +239,13 @@ function CopiedNote({ title, documentId }: { title: string, documentId: string }
  * 失去编辑权（M3-P2 设计 §3.4）：原因与本页的修改有没有保存（只看内容，不看保存的状态，M3-P1 审查 B3），之后能做的事：
  * - 还读得到而且有修改：另存为副本（失败可以再试，内容一律留着）、放弃本页的修改（先确认）；正在核对结果未知的那次保存时先不给；
  * - 还读得到、没有修改（或已经另存为副本）：重新加载——按服务端的最新内容重建为阅读；
- * - 读不到了（404）：只说明（审查 B2：重新加载只会显示"内容不存在"）；页头的返回链接照常在；
- * - 本页的内容没能取出：编辑器留着（还能复制），提供整页重新加载
+ * - 读不到了（404）：只说明（审查 B2）；页头的返回链接照常在；
+ * - 本页的内容没能取出：编辑器留着（还能复制），提供整页重新加载；
+ * - 单元格里正在输入的那一处提交不了：说明它不在取出的内容里（审查 A4）；
+ * - 编辑器没能重新打开（以只读重建失败）：说明表格暂时显示不出来，副本照常（审查 A3）
  */
 function LostNotice({ page, lost, onDiscard }: { page: EditorPage, lost: LostMode, onDiscard: () => void }) {
-  const { loss, unsaved, readable, checking, captureFailed, copy, reload } = lost
+  const { loss, unsaved, readable, checking, captureFailed, inputLeft, reopenFailed, copy, reload } = lost
   const copied = copy.kind === 'done' ? copy.document : undefined
   const offersCopy = readable && unsaved && !checking && !captureFailed && copied === undefined
   const offersReload = readable && !captureFailed && (!unsaved || copied !== undefined)
@@ -234,7 +254,9 @@ function LostNotice({ page, lost, onDiscard }: { page: EditorPage, lost: LostMod
       <AlertDescription>
         {captureFailed
           ? <p>{editorMessages.lost.captureFailed}</p>
-          : <p><Phrase parts={editorMessages.editing.lost(lostCause(loss), unsaved && copied === undefined, readable)} /></p>}
+          : <p><Phrase parts={editorMessages.editing.lost(lostCause(loss), unsaved && copied === undefined, readable, !reopenFailed)} /></p>}
+        {inputLeft && !captureFailed && <p>{editorMessages.lost.inputLeft}</p>}
+        {reopenFailed && <p>{editorMessages.lost.reopenFailed(readable && unsaved && copied === undefined)}</p>}
         {checking && <p>{editorMessages.lost.checking}</p>}
         {copy.kind === 'failed' && <p>{editorMessages.lost.copyFailed(describeError(copy.error).message)}</p>}
         {copied !== undefined && <p><CopiedNote title={copied.title} documentId={copied.id} /></p>}
@@ -279,21 +301,22 @@ function readingFailure(notice: ReadingNotice | undefined): ReactNode {
 
 /**
  * 别处正在编辑时的说明（M3-P1 设计 §3.4.7）：谁在编辑（人名经人名组件）、最后活动几分钟之前；能编辑的人另说现在只能阅读。
- * 是自己、而且现在能编辑时说在另一个标签页或设备上（到时再点"编辑"就能编辑）；不能编辑了时自己那一代已经失效（持有者要能编辑），
- * 只是还没读到新的编辑状态，照别人一样说谁在编辑，不提"再点编辑"
+ * 是自己、而且现在能编辑时说在另一个标签页或设备上（到时再点"编辑"就能编辑）——本页刚退出编辑、没能确认放掉编辑权时多半就是本页那一代，
+ * 照实说（releaseUnconfirmed，审查 A13）；不能编辑了时自己那一代已经失效（持有者要能编辑），只是还没读到新的编辑状态，
+ * 照别人一样说谁在编辑，不提"再点编辑"
  */
-function elsewhereNotice(holder: LeaseHolder | undefined, canEdit: boolean): ReactNode {
+function elsewhereNotice(holder: LeaseHolder | undefined, canEdit: boolean, releaseUnconfirmed: boolean): ReactNode {
   if (holder === undefined)
     return editorMessages.editing.elsewhereUnknown
   if (holder.sameUser && canEdit)
-    return editorMessages.editing.elsewhereBySelf
+    return releaseUnconfirmed ? editorMessages.editing.elsewhereThisPage : editorMessages.editing.elsewhereBySelf
   const lastActive = holder.lastActiveMinutes === undefined ? undefined : editorMessages.editing.lastActive(holder.lastActiveMinutes)
   return <Phrase parts={editorMessages.editing.elsewhere(<PersonName person={holder.holder} />, lastActive, canEdit)} />
 }
 
 /**
  * 阅读时的说明，放进一直在的读屏状态区（规范 §2.4）：谁在编辑（能不能编辑都说：US-M3-04 的"其他人"包括查看者，编辑状态能读就能看；
- * P2 的定期检查会让它变化）、文档读不到了、另存为副本成功
+ * P2 的定期检查会让它变化）、文档读不到了、有更新与正在载入（页头的按钮之外读屏也听得到，审查 A6）、另存为副本成功
  */
 function readingInfo(reading: ReadingMode | undefined): ReactNode {
   if (reading === undefined)
@@ -302,7 +325,9 @@ function readingInfo(reading: ReadingMode | undefined): ReactNode {
   if (reading.gone)
     lines.push(<span key="gone">{editorMessages.mode.gone}</span>)
   else if (reading.holder !== undefined)
-    lines.push(<span key="holder">{elsewhereNotice(reading.holder, reading.canEdit)}</span>)
+    lines.push(<span key="holder">{elsewhereNotice(reading.holder, reading.canEdit, reading.releaseUnconfirmed)}</span>)
+  if (reading.update !== 'none')
+    lines.push(<span key="update">{reading.update === 'loading' ? editorMessages.mode.updating : editorMessages.mode.updateAvailable}</span>)
   if (reading.notice?.kind === 'copied')
     lines.push(<span key="copied"><CopiedNote title={reading.notice.document.title} documentId={reading.notice.document.id} /></span>)
   return lines.length === 0 ? undefined : <>{lines.flatMap((line, index) => index === 0 ? [line] : [' ', line])}</>
@@ -385,6 +410,9 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
   const title = ready?.title
   const back = backLinkOf(ready)
   const backRef = useRef<HTMLAnchorElement>(null)
+  // 页头与说明里有焦点的按钮随状态消失、焦点落到 body 时，交给一直在的返回链接（规范 §2.4，审查 A2）：
+  // "编辑"随权限消失（403、404、检查时读到不能编辑）、"有更新"在载入或得知没有变化之后、失去编辑权时的"保存""退出编辑"、副本建好之后的按钮
+  const rescueFocus = useFocusRescue(backRef)
 
   useEffect(() => {
     if (title !== undefined)
@@ -395,7 +423,9 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
     return <LoadFailure load={load} />
 
   const reading = ready !== undefined && mode?.kind === 'reading' ? mode : undefined
-  const editing = ready !== undefined && mode?.kind === 'editing' && save !== undefined ? save : undefined
+  const entering = ready !== undefined && mode?.kind === 'entering'
+  // 编辑与退出编辑的过程中（先保存再退出）：保存的状态、按钮与说明都在，退出中不卸载
+  const editing = ready !== undefined && (mode?.kind === 'editing' || mode?.kind === 'exiting') && save !== undefined ? save : undefined
   const lost = ready !== undefined && mode?.kind === 'lost' ? mode : undefined
   const failure = readingFailure(reading?.notice)
 
@@ -417,34 +447,42 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
 
   return (
     <QueryClientProvider client={queryClient}>
-      <header className="flex h-12 items-center gap-3 border-b border-border px-3">
-        {/* 回到平台页面是整页跳转（两个入口，P4 设计 §3.8） */}
-        <a ref={backRef} href={back.href} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>
-          <ArrowLeft aria-hidden="true" />
-          {back.label}
-        </a>
-        {title !== undefined && <h1 className="min-w-0 truncate text-base font-medium">{title}</h1>}
-        <div className="ml-auto flex items-center gap-3">
-          {/* 分享（M2-P5）：只在能分享时出现 */}
-          {ready !== undefined && <EditorShareEntry page={page} ready={ready} fallbackFocus={() => backRef.current?.focus()} />}
-          <p role="status" aria-live="polite" className="text-sm whitespace-nowrap text-muted-foreground">{headerStatus(view)}</p>
-          {reading !== undefined && <ReadingControls page={page} reading={reading} />}
-          {editing !== undefined && <SaveControls page={page} save={editing} confirming={view.confirmingSession} apple={apple} />}
+      {/* 只为接住焦点包一层（display: contents，不影响布局） */}
+      <div ref={rescueFocus} className="contents">
+        <header className="flex h-12 items-center gap-3 border-b border-border px-3">
+          {/* 回到平台页面是整页跳转（两个入口，P4 设计 §3.8） */}
+          <a ref={backRef} href={back.href} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>
+            <ArrowLeft aria-hidden="true" />
+            {back.label}
+          </a>
+          {title !== undefined && <h1 className="min-w-0 truncate text-base font-medium">{title}</h1>}
+          <div className="ml-auto flex items-center gap-3">
+            {/* 分享（M2-P5）：只在能分享时出现 */}
+            {ready !== undefined && <EditorShareEntry page={page} ready={ready} fallbackFocus={() => backRef.current?.focus()} />}
+            <p role="status" aria-live="polite" className="text-sm whitespace-nowrap text-muted-foreground">{headerStatus(view)}</p>
+            {(reading !== undefined || entering) && <ReadingControls page={page} reading={reading} session={view.session} />}
+            {editing !== undefined && <SaveControls page={page} save={editing} confirming={view.confirmingSession} exiting={mode?.kind === 'exiting'} apple={apple} />}
+          </div>
+        </header>
+        <StatusRegion className="mx-3 mt-2 rounded-lg border bg-card px-2.5 py-2 text-sm text-card-foreground">{readingInfo(reading)}</StatusRegion>
+        <div className="flex flex-col gap-2 px-3 empty:hidden [&:not(:empty)]:py-2">
+          {/* 一直渲染（没有问题时什么也不画）：重试成功、说明连同"重试"一起消失时它才能把焦点交给返回链接（DEF-040） */}
+          <DetailRefreshProblem
+            query={{ isRefetchError: view.detailProblem !== undefined, error: view.detailProblem, refetch: page.refreshDetail }}
+            detail={editorMessages.detail}
+            fallbackFocus={backRef}
+          />
+          {failure !== undefined && (
+            <Alert variant="destructive">
+              <AlertDescription>{failure}</AlertDescription>
+            </Alert>
+          )}
+          {lost !== undefined && <LostNotice page={page} lost={lost} onDiscard={confirmDiscard} />}
+          {/* 版本冲突之后本页不能再保存：会话的提示（"登录之后回到这里保存"）不成立，只显示冲突的说明（复验 SB9；换了人时那条说明里另有一句，复验 TB8）；
+              读不到了（404）之后没有要做的事，不提登录 */}
+          {editing?.conflict === undefined && !(lost !== undefined && !lost.readable) && <SessionNotice view={view} editing={editing !== undefined} />}
+          {editing !== undefined && <SaveNotices view={view} save={editing} onReload={page.reload} />}
         </div>
-      </header>
-      <StatusRegion className="mx-3 mt-2 rounded-lg border bg-card px-2.5 py-2 text-sm text-card-foreground">{readingInfo(reading)}</StatusRegion>
-      <div className="flex flex-col gap-2 px-3 empty:hidden [&:not(:empty)]:py-2">
-        {view.detailProblem !== undefined && <RefreshProblem query={{ isRefetchError: true, error: view.detailProblem, refetch: page.refreshDetail }} list={editorMessages.detail} />}
-        {failure !== undefined && (
-          <Alert variant="destructive">
-            <AlertDescription>{failure}</AlertDescription>
-          </Alert>
-        )}
-        {lost !== undefined && <LostNotice page={page} lost={lost} onDiscard={confirmDiscard} />}
-        {/* 版本冲突之后本页不能再保存：会话的提示（"登录之后回到这里保存"）不成立，只显示冲突的说明（复验 SB9；换了人时那条说明里另有一句，复验 TB8）；
-            读不到了（404）之后没有要做的事，不提登录 */}
-        {editing?.conflict === undefined && !(lost !== undefined && !lost.readable) && <SessionNotice view={view} editing={editing !== undefined} />}
-        {editing !== undefined && <SaveNotices view={view} save={editing} onReload={page.reload} />}
       </div>
       <ConfirmDialog pending={pendingDiscard} onClose={() => setPendingDiscard(undefined)} />
     </QueryClientProvider>

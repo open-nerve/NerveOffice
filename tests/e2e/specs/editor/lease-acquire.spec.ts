@@ -124,7 +124,8 @@ test.describe('US-M3-04 同一个人在多个标签页：打开、刷新与关�
     const elsewhere = '你在另一个标签页或设备上正在编辑这份文档，这里只能阅读。要是刚刚关闭或刷新过那个页面，那边的编辑权最多 90 秒后自动结束，到时再点"编辑"就能编辑'
     await expect(editingNotice(other)).toHaveText(elsewhere)
 
-    // 点"编辑"：被自己的另一个标签页占着（先隔一小会儿再试几次：刷新时旧页面的释放可能晚到），仍被占用就回到阅读（"编辑"在进入期间不在）
+    // 点"编辑"：被自己的另一个标签页占着（先隔一小会儿再试几次：刷新时旧页面的释放可能晚到），仍被占用就回到阅读
+    // （进入期间那个按钮说"正在进入编辑…"、不可用，名字不是"编辑"）
     const acquisitions = recordAcquisitions(other, documentId)
     await enterEditButton(other).click()
     await expect.poll(() => acquisitions.length).toBeGreaterThan(0)
