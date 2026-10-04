@@ -1,8 +1,8 @@
 import type { FUniver } from '@univerjs/core/facade'
 import { describe, expect, it, vi } from 'vitest'
-import { GUARDED_COMMANDS, HYPERLINK_GUARDED_COMMANDS, IMAGE_GUARDED_COMMANDS, installEntryGuards, isGuardedCommand } from './entry-guards.ts'
+import { GUARDED_COMMANDS, HYPERLINK_GUARDED_COMMANDS, IMAGE_GUARDED_COMMANDS, IMAGE_PASTE_COMMAND, installEntryGuards, isGuardedCommand } from './entry-guards.ts'
 
-interface FakeEvent { id: string, cancel?: boolean }
+interface FakeEvent { id: string, params?: unknown, cancel?: boolean }
 
 /** 只实现 addEvent 与 Event.BeforeCommandExecute 的假 Facade：记下订阅者，由测试模拟 SDK 派发事件 */
 function fakeFacade() {
@@ -19,8 +19,8 @@ function fakeFacade() {
       } }
     }),
   }
-  const fire = (id: string): FakeEvent => {
-    const event: FakeEvent = { id }
+  const fire = (id: string, params?: unknown): FakeEvent => {
+    const event: FakeEvent = { id, params }
     for (const listener of listeners)
       listener(event)
     return event
@@ -63,6 +63,24 @@ describe('M5 之前的入口：命令守卫', () => {
       expect(facade.fire(command.id).cancel, command.id).toBe(true)
     for (const id of ['sheet.command.set-range-values', 'sheet.command.insert-sheet', 'sheets.command.cancel-hyper-link', 'sheet.command.delete-drawing'])
       expect(facade.fire(id).cancel, id).toBeUndefined()
+  })
+
+  it('带图片的粘贴（DEF-035 的旁支）：要贴的内容有 drawings 或图片的锚点就取消；纯文字照常；看不懂的参数按带图片算', () => {
+    const facade = fakeFacade()
+    installEntryGuards(facade.api)
+    const paste = (doc: unknown): boolean | undefined => facade.fire(IMAGE_PASTE_COMMAND.id, { unitId: '__INTERNAL_EDITOR__DOCS_FORMULA_BAR', doc, textRanges: [] }).cancel
+    const image = { drawingId: 'd1', source: 'data:image/png;base64,AAAA', imageSourceType: 'BASE64' }
+    expect(paste({ body: { dataStream: '\b', customBlocks: [{ startIndex: 0, blockId: 'd1' }] }, drawings: { d1: image } })).toBe(true)
+    expect(paste({ body: { dataStream: 'x' }, drawings: { d1: image } })).toBe(true)
+    expect(paste({ body: { dataStream: '\b', customBlocks: [{ startIndex: 0, blockId: 'd1' }] } })).toBe(true)
+    expect(paste({ body: { dataStream: 'x' }, drawings: 'broken' })).toBe(true)
+    expect(facade.fire(IMAGE_PASTE_COMMAND.id, undefined).cancel).toBe(true)
+    expect(facade.fire(IMAGE_PASTE_COMMAND.id, { doc: null }).cancel).toBe(true)
+    // 纯文字（单元格编辑器的粘贴、空的 drawings、空的锚点）照常
+    expect(paste({ body: { dataStream: 'x\r\n' } })).toBeUndefined()
+    expect(paste({ body: { dataStream: 'x', customBlocks: [] }, drawings: {} })).toBeUndefined()
+    expect(isGuardedCommand(IMAGE_PASTE_COMMAND.id, { doc: { body: { dataStream: 'x' } } })).toBe(false)
+    expect(IMAGE_PASTE_COMMAND.source.trim()).not.toBe('')
   })
 
   it('卸下之后不再取消', () => {

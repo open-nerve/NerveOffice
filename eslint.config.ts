@@ -150,9 +150,9 @@ const UNIVER_INTERNAL_SYMBOLS = [
     message: INTERNAL_API_MESSAGE,
   },
   {
-    // 冻结线的渲染控制器：只读守卫在它的拦截点上拦下拖动（P3 审查 B2）
+    // 冻结线与行列调整的渲染控制器：只读守卫在它们的拦截点上拦下拖动（P3 审查 B2；DEF-027，M3-P2 S3）
     name: '@univerjs/sheets-ui',
-    importNames: ['HeaderFreezeRenderController'],
+    importNames: ['HeaderFreezeRenderController', 'HeaderResizeRenderController'],
     message: INTERNAL_API_MESSAGE,
   },
 ]

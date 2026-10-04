@@ -70,6 +70,7 @@ function fakeEditor(stage: SheetEditorLifecycle = 'rendered') {
     commitCellEditing: async () => true,
     settleFormulas: async () => 'settled',
     capture: () => '{"id":"unit-1"}',
+    viewState: () => undefined,
     dispose: vi.fn(),
   }
   return {

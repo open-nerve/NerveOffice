@@ -38,6 +38,10 @@ const READ_ONLY_SHORTCUTS_E2E = [
 ].join('')
 /** 冻结线拖不动（P3 审查 B2）：单元测试与 E2E */
 const FREEZE_LOCK_REGRESSION = '单元测试 read-only/freeze-handles.test.ts、read-only-guard.test.ts；E2E tests/e2e/specs/editor/read-only.spec.ts"拖动冻结线"（只读时光标不是可拖动的 grab、没有 set-frozen、冻结不变；能编辑时的对照冻结确实改变）'
+/** 第 1 行、A 列的分隔线拖不动（DEF-027，M3-P2 S3）：单元测试与 E2E */
+const HEADER_RESIZE_LOCK_REGRESSION = '单元测试 read-only/header-resize.test.ts（复现 SDK 的写法：索引 0 放行；装上之后一律不放行）、read-only-guard.test.ts；E2E tests/e2e/specs/editor/read-only.spec.ts"拖动第 1 行与 A 列的分隔线"（没有冻结的表：只读时光标不是 row-resize、col-resize，没有 delta-row-height、delta-column-width 的尝试；能编辑时的对照确实改变行高、列宽）与"拖动冻结区域的行高"'
+/** 查找面板里没有"替换 / 高级查找"（DEF-028，M3-P2 S3）：单元测试与 E2E */
+const ADVANCED_FIND_REGRESSION = '单元测试 read-only/advanced-find.test.ts、read-only-guard.test.ts；E2E tests/e2e/specs/editor/read-only.spec.ts"查找面板没有高级查找"（只读时查找面板里看不到这个链接、查找照常；能编辑时的对照看得到）'
 /** M0 的只读（阅读模式）验证：本地权限点加 mutation 防火墙 */
 const M0_READ_MODE_EVIDENCE = 'M0-P3 报告 §5（V09：本地权限点加 mutation 防火墙，表格 28 个入口在三个浏览器、含公式 Worker 模式全部拦住；只靠权限点漏掉 9 个）、§7（内部 API 登记）；M0 的 harness/read-mode.ts'
 
@@ -47,7 +51,7 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
     origin: '@univerjs/core 的 Univer.__getInjector()（平台的封装）',
     // injector.ts：参数与返回值的类型
     sdk: { '@univerjs/core': ['Injector', 'Univer'] },
-    purpose: '取 Facade 没有暴露的服务：IFunctionService、IActiveDirtyManagerService，Worker 里的 LifecycleService，只读守卫的 IPermissionService、IUndoRedoService、IDrawingManagerService、IRenderManagerService、IEditorService、IContextService，以及 E2E 的探针（只在测试构建里）的 IShortcutService、IEditorService',
+    purpose: '取 Facade 没有暴露的服务：IFunctionService、IActiveDirtyManagerService，Worker 里的 LifecycleService，只读守卫的 IPermissionService、IUndoRedoService、IDrawingManagerService、IRenderManagerService（冻结线与行列调整的控制器）、IEditorService、IContextService，以及 E2E 的探针（只在测试构建里）的 IShortcutService、IEditorService',
     evidence: 'M0-P3 报告 §7"取服务"；M0 的 create-editor.ts 经它取各项内部服务；P4 探针 (a)–(f) 全程使用',
     regression: 'E2E（S4）编辑器能打开并就绪：任何一处取服务失败都会按加载失败处理；单元测试 install-image-policy.test.ts、calculation-trigger.test.ts 核对取的是哪项服务',
   },
@@ -165,6 +169,13 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
     regression: `单元测试 read-only/formula-bar.test.ts；${READ_ONLY_E2E}（编辑栏点不进去；点过编辑栏、在单元格上键入之后查找与复制照常）`,
   },
   {
+    name: 'FIND_ADVANCED_LINK_SELECTOR',
+    origin: 'find-replace 查找面板的 DOM 标记：根元素 data-u-comp="find-replace-dialog"（views/dialog/FindReplaceDialog.tsx:354）与它下面放着"替换 / 高级查找"链接的那一块（:110-122 的 div > a；1.0.1 的 lib/es/index.js:1632-1639）；平台对这个约定的封装',
+    purpose: '只读守卫（read-only/advanced-find.ts，DEF-028）：只读时在 head 里加一条样式藏起这个链接（它执行的打开替换被只读守卫取消，点了没有反应），销毁时去掉',
+    evidence: 'M2-P3 S3 的 E2E 发现只读时链接仍显示、点了没有反应（DEF-028）；面板的组件没有藏起它的开关，面板经弹出层渲染在 body 下（ui 的 Workbench.tsx 的 portalContainer），不在编辑器的容器里；M3-P2 S3 修复时实测：只读时三个浏览器上都看不到链接，查找照常',
+    regression: ADVANCED_FIND_REGRESSION,
+  },
+  {
     name: 'IEditorService',
     origin: '@univerjs/docs-ui 的编辑器管理服务（Facade 之外）',
     purpose: '只读守卫（read-only/formula-bar.ts 的 releaseFormulaBarEditor）：订阅 focus$，焦点落到编辑栏的编辑器（getFocusId）时 blur(true) 放开；依赖的约定是 focus 先记下焦点再送出 focus$，blur 复位 EDITOR_ACTIVATED 等上下文、移走 DOM 焦点、把当前文档换回聚焦之前的。另外 E2E 的探针（只在测试构建里，testing/e2e-probe.ts 的 formulaBarText）经 getEditor(编辑栏).getDocumentData() 读编辑栏显示的文字（M2-P6 复核 F2）',
@@ -200,9 +211,9 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
   {
     name: 'IRenderManagerService',
     origin: '@univerjs/engine-render 的渲染管理服务（Facade 之外）',
-    purpose: '只读守卫（read-only/freeze-handles.ts）：按 unitId 取这份文档的渲染单元（getRenderUnitById），再取它的冻结线控制器',
+    purpose: '只读守卫（read-only/freeze-handles.ts、header-resize.ts）：按 unitId 取这份文档的渲染单元（getRenderUnitById），再取它的冻结线控制器与行列调整控制器',
     evidence: 'engine-render 的 render-manager/render-manager.service.ts、render-unit.ts（1.0.1 的 lib/es/index.js:38583-38585 with 取渲染单元里的实例，38736-38743 渲染模块注册时加进已有的渲染单元）；P3 审查 B2',
-    regression: FREEZE_LOCK_REGRESSION,
+    regression: `${FREEZE_LOCK_REGRESSION}；${HEADER_RESIZE_LOCK_REGRESSION}`,
   },
   {
     name: 'HeaderFreezeRenderController',
@@ -215,6 +226,19 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
       '冻结线控制器在插件的 onRendered 才注册为渲染模块（:36024-36088），所以就绪时装上',
     ].join(''),
     regression: FREEZE_LOCK_REGRESSION,
+  },
+  {
+    name: 'HeaderResizeRenderController',
+    origin: '@univerjs/sheets-ui 的行列调整渲染控制器（渲染模块，Facade 之外）',
+    purpose: '只读守卫（read-only/header-resize.ts，DEF-027）：在它的拦截点 HEADER_RESIZE_PERMISSION_CHECK 上注册优先级高于 SDK 的、总是不允许的拦截器，只读时任何行列的分隔线都不显示调整的控制点、拖不动',
+    evidence: [
+      'M3-P2 S3 的 E2E 核实（没有冻结的表，只读）：第 1、2 行之间与 A、B 列之间的分隔线移上去是 row-resize、col-resize，拖得动，松开时 delta-row-height、delta-column-width 被权限检查拦下并弹出只读的提示；',
+      '第 5、6 行之间与 D、E 列之间没有光标、没有命令（Chromium、WebKit）。根因：SheetPermissionInterceptorCanvasRenderController._initHeaderResizePermissionInterceptor',
+      '（1.0.1 的 lib/es/index.js:31993-32008）写的是 if (rangeParams.row) … else if (rangeParams.col)，索引 0 两个条件都不成立、一律放行；',
+      '行列调整控制器在移上时问这个拦截点（:15640、15660），拦截器按优先级从高到低执行（core 的 common/interceptor.ts 的 composeInterceptors），SDK 的没有优先级；',
+      '控制器在插件的 onRendered 才注册为渲染模块（sheets-ui 的 plugin.ts 的 _registerRenderModules），所以就绪时装上',
+    ].join(''),
+    regression: HEADER_RESIZE_LOCK_REGRESSION,
   },
   {
     name: 'IShortcutService',
