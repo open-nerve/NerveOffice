@@ -16,7 +16,7 @@ import type { StatementCapture } from '../support/statement-capture.ts'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
-import { sheetSnapshotFor } from '@nerve-office/contracts'
+import { EDIT_LEASE_HEADER, sheetSnapshotFor } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount, createPassiveAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -190,21 +190,29 @@ function recorded(method: string, path: string): Response | undefined {
   return new Response(null, { status: 204 })
 }
 
-async function call(session: LoggedIn, path: string, method = 'GET', body?: unknown): Promise<Response> {
-  return recorded(method, path) ?? asUser(app.baseUrl, session, path, body === undefined ? { method } : { method, body })
+async function call(session: LoggedIn, path: string, method = 'GET', body?: unknown, headers?: Record<string, string>): Promise<Response> {
+  return recorded(method, path) ?? asUser(app.baseUrl, session, path, { method, ...(body === undefined ? {} : { body }), ...(headers === undefined ? {} : { headers }) })
 }
+
+/** 编辑权的心跳与释放带的令牌（M3-P1）：格式合法的一个，判断访问在租约之前，带不带、对不对都一样 404 */
+const LEASE_TOKEN = { [EDIT_LEASE_HEADER]: `${'a'.repeat(41)}-_` }
 
 /** 不存在的对象：每次一个新的 id */
 const missing = (): string => randomUUID()
 /** 看不到的对象或不存在的对象 */
 const pick = (hidden: boolean, id: string): string => (hidden ? id : missing())
 
+/**
+ * 保存：带上格式合法的令牌与代次（M3-P1 起保存要求编辑租约，writeEpoch 必填），请求本身合法、只看访问的判断；
+ * 不先申请（看不到的人也申请不了），要比较的语句只有保存这一个请求的。判断访问在租约之前，看不到与不存在一样 404
+ */
 async function save(session: LoggedIn, documentId: string, unitId: string): Promise<Response> {
-  const query = new URLSearchParams({ baseRevision: '1', requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1' })
+  const query = new URLSearchParams({ baseRevision: '1', requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1', writeEpoch: '1' })
   const path = `/api/documents/${documentId}/content?${query.toString()}`
   return recorded('PUT', path) ?? asUser(app.baseUrl, session, path, {
     method: 'PUT',
     binary: { contentType: 'application/gzip', bytes: zlib.gzipSync(Buffer.from(sheetSnapshotFor(unitId), 'utf8')) },
+    headers: LEASE_TOKEN,
   })
 }
 
@@ -326,6 +334,19 @@ const PROBES: readonly Probe[] = [
   { name: '只有编辑授权 GET 回收站里有授权的文档', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}`) },
   { name: '只有编辑授权 PATCH 改名回收站里有授权的文档', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}`, 'PATCH', { title: '新标题' }) },
   { name: '只有查看授权 POST 复制回收站里有授权的文档', actor: 'grantViewer', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/copy`, 'POST', { spaceId: w.grantViewer.personalSpaceId, requestId: randomUUID() }) },
+  // ---- 编辑权（M3-P1 设计 §3.2、§3.5）：先判断访问与编辑权，看不到的文档与不存在的一样，不读租约、不取任何锁 ----
+  { name: 'GET 编辑状态', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease`) },
+  { name: 'POST 申请编辑权', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease`, 'POST', { clientInstanceId: randomUUID() }) },
+  { name: 'PUT 续租', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease`, 'PUT', { idleSeconds: 0 }, LEASE_TOKEN) },
+  { name: 'DELETE 释放', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease`, 'DELETE', undefined, LEASE_TOKEN) },
+  { name: 'POST 申请个人空间文档的编辑权', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.personalDocument.id)}/edit-lease`, 'POST', { clientInstanceId: randomUUID() }) },
+  { name: 'GET 回收站里的文档的编辑状态（空间管理员自己）', actor: 'admin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/edit-lease`) },
+  { name: 'POST 申请回收站里的文档的编辑权（空间管理员自己）', actor: 'admin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/edit-lease`, 'POST', { clientInstanceId: randomUUID() }) },
+  { name: 'PUT 续租回收站里的文档（空间管理员自己）', actor: 'admin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/edit-lease`, 'PUT', { idleSeconds: 0 }, LEASE_TOKEN) },
+  { name: '系统管理员 POST 申请团队空间文档的编辑权', actor: 'systemAdmin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease`, 'POST', { clientInstanceId: randomUUID() }) },
+  { name: '只有编辑授权 POST 申请没分享的文档的编辑权', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/edit-lease`, 'POST', { clientInstanceId: randomUUID() }) },
+  { name: '只有编辑授权 DELETE 释放没分享的文档', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/edit-lease`, 'DELETE', undefined, LEASE_TOKEN) },
+  { name: '只有查看授权 GET 没分享的文档的编辑状态', actor: 'grantViewer', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/edit-lease`) },
   // 路由表的覆盖核对发现的（M2-P6 第 6 片复核 S5）：恢复与归档成对，原来漏了
   { name: '系统管理员 POST 恢复个人空间', actor: 'systemAdmin', request: async (s, h) => call(s, `/api/admin/spaces/${pick(h, w.owner.personalSpaceId)}/restore`, 'POST') },
   { name: '系统管理员 转移到写成团队空间的个人空间', actor: 'systemAdmin', request: async (s, h) => call(s, `/api/admin/users/${w.leaver.id}/documents/transfer`, 'POST', { documentIds: [w.leaver.document], target: { type: 'team', spaceId: pick(h, w.owner.personalSpaceId) } }) },

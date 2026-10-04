@@ -1,13 +1,16 @@
 // 仓储里按一串 id 读写的每一条语句（M2-P6 复核 A 的 S-2、B 的 G1）：不论多少个 id，都作为一个数组参数交给数据库。
 // PostgreSQL 一条语句最多 65535 个参数。逐个传参（IN ($1, $2, …)）的写法在子树里的文档、连带的删除单元超过这个数时，
 // 删除、永久删除、跨空间移动每次都失败，定时清理也一直清不掉那一单。
-// 这里不连数据库：假的连接记下每条语句与它的参数（事务由真实的 TransactionRunner 开），用超过上限的 id 个数调用每个方法，
-// 核对每条语句的参数个数与 id 的个数无关、这串 id 作为一个数组参数出现。这些语句在真实数据库上的行为由集成测试覆盖。
+// 这里不连数据库：假的连接记下每条语句与它的参数（事务由真实的 TransactionRunner 开，recorded-statements.test-support.ts），
+// 用超过上限的 id 个数调用每个方法，核对每条语句的参数个数与 id 的个数无关、这串 id 作为一个数组参数出现。
+// 这些语句在真实数据库上的行为由集成测试覆盖。
 import type { Transaction } from '../database/index.ts'
-import { describe, expect, it, vi } from 'vitest'
-import { CommitLedger, SnapshotScope, TransactionRunner } from '../database/index.ts'
+import type { RecordedStatement as Statement } from './recorded-statements.test-support.ts'
+import { describe, expect, it } from 'vitest'
 import { DocumentsRepository } from './documents.repository.ts'
+import { EditLeasesRepository } from './edit-leases.repository.ts'
 import { FoldersRepository } from './folders.repository.ts'
+import { recordStatements } from './recorded-statements.test-support.ts'
 import { TrashEntriesRepository } from './trash-entries.repository.ts'
 
 /** 比 PostgreSQL 一条语句的参数上限（65535）多 */
@@ -17,42 +20,20 @@ const SPACE = '0199a2c4-0000-7000-8000-0000000000a1'
 const USER = '0199a2c4-0000-7000-8000-00000000000a'
 const ENTRY = '0199a2c4-0000-7000-8000-0000000000e1'
 
-interface Statement {
-  readonly text: string
-  readonly values: readonly unknown[]
-}
-
-/** 假的连接：记下语句与参数；respond 按语句给出返回的行（默认没有行） */
-function recordingClient(respond: (text: string) => unknown[] = () => []) {
-  const statements: Statement[] = []
-  return {
-    statements,
-    release: vi.fn(),
-    getTransactionStatus: (): 'I' => 'I',
-    query: vi.fn(async (config: string | { readonly text: string }, values?: readonly unknown[]) => {
-      const text = typeof config === 'string' ? config : config.text
-      statements.push({ text, values: values ?? [] })
-      return { rows: respond(text), rowCount: 0, command: '', fields: [] }
-    }),
-  }
-}
-
 interface Repositories {
   readonly documents: DocumentsRepository
   readonly folders: FoldersRepository
   readonly entries: TrashEntriesRepository
+  readonly leases: EditLeasesRepository
 }
 
 /** 在一个事务里调用仓储，返回它发出的语句（去掉事务自己的 begin、确认事务可用的 SELECT 1、commit） */
 async function statementsOf(call: (repositories: Repositories, transaction: Transaction) => Promise<unknown>, respond?: (text: string) => unknown[]): Promise<Statement[]> {
-  const client = recordingClient(respond)
-  const runner = new TransactionRunner({ connect: async () => client } as unknown as ConstructorParameters<typeof TransactionRunner>[0], new CommitLedger(), new SnapshotScope())
-  await runner.run(async (transaction) => {
+  return recordStatements(async (executor, transaction) => {
     // 事务里的执行器本身就是一个 Drizzle 实例：不收事务的方法（列表、搜索、路径）也经它发语句
-    const db = transaction as unknown as ConstructorParameters<typeof DocumentsRepository>[0]
-    await call({ documents: new DocumentsRepository(db), folders: new FoldersRepository(db), entries: new TrashEntriesRepository(db) }, transaction)
-  })
-  return client.statements.filter(statement => !/^(?:begin|commit|select 1)$/i.test(statement.text.trim()))
+    const db = executor as ConstructorParameters<typeof DocumentsRepository>[0]
+    await call({ documents: new DocumentsRepository(db), folders: new FoldersRepository(db), entries: new TrashEntriesRepository(db), leases: new EditLeasesRepository(db) }, transaction)
+  }, respond)
 }
 
 /** 每条语句只有几个参数；这串 id 作为一个数组参数出现，语句里对应的是 `= ANY($n::uuid[])` */
@@ -118,6 +99,16 @@ describe(`仓储按一串 id 读写：${COUNT} 个 id 也只有一个数组参�
     const statements = await statementsOf(async ({ folders }, transaction) => folders.deleteMany(IDS, transaction), text => text.startsWith('select distinct') ? [[3], [2]] : [])
     expect(statements.map(statement => statement.text.split(' ')[0])).toEqual(['select', 'delete', 'delete'])
     expectIdArrayParameters(statements)
+  })
+
+  it('收回写入权按范围锁租约（M3-P1）：这些文档上的、某人在这些文档上的——先锁文档行、再锁租约行，两条语句都只有数组参数', async () => {
+    // 第一条语句（锁文档行）锁住了全部的文档，第二条按它们锁租约行：两串 id（锁住的、范围里的）各是一个数组参数
+    const lockedAll = (text: string): unknown[] => text.includes('for update of "documents"') ? IDS.map(id => [id]) : []
+    for (const scope of [{ kind: 'documents', documentIds: IDS }, { kind: 'userDocuments', userId: USER, documentIds: IDS }] as const) {
+      const statements = await statementsOf(async ({ leases }, transaction) => leases.lockInScope(scope, transaction), lockedAll)
+      expect(statements, scope.kind).toHaveLength(2)
+      expectIdArrayParameters(statements)
+    }
   })
 
   it('永久删除之前数正常状态的文档：带着空间的条件，与锁住时同形，走 (space_id, folder_id) 的索引（M2-P6 第 3 片复验）', async () => {

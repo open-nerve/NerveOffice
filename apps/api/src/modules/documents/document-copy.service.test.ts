@@ -38,10 +38,12 @@ async function errorOf(promise: Promise<unknown>): Promise<AppError> {
 describe('DocumentCopyService.copy', () => {
   it('副本是一份新文档：新的 id、修订号 1、unitId 与源相同、快照原样复制，写一条新建的修订记录与审计', async () => {
     const { store, service } = setup()
-    const { document, snapshot } = seed(store)
+    // 源文档换过空间、有过几代编辑权（代次不为 0）：副本是新的文档，代次从 0 开始，不带源文档的那一代（M3-P1）
+    const { document, snapshot } = seed(store, { writeEpoch: 3 })
     const copy = await service.copy(member(ALICE), document.id, { spaceId: ALICE_SPACE, requestId: nextRequestId() }, HTTP_ORIGIN)
     expect(copy.id).not.toBe(document.id)
     expect(copy).toMatchObject({ title: '周报 的副本', spaceId: ALICE_SPACE, folderId: null, revision: 1, type: 'sheet', profile: 'sheet@1', formatVersion: 1 })
+    expect(store.documents.get(copy.id)?.writeEpoch).toBe(0)
     // unitId 原样复制（00 号计划书 §8.3）：副本与源的快照逐字节一致
     expect(store.documents.get(copy.id)?.unitId).toBe(document.unitId)
     expect(store.contentOf(copy.id)).toBe(snapshot)

@@ -1,10 +1,11 @@
 // 从每个阶段结束时"有数据的库"一路迁移到最新（M2-P6 复核 B 的 B6）：单个迁移的用例只在它前一个版本上验证自己，
 // 这里按当时的结构写入有代表性的数据——每个审计动作、目标类型与来源各一条，会话的每个撤销原因，邀请、重置与限流的行，
-// 团队空间（全员可见的、归档的）与成员、写入代次不为 0 的文档，10 层文件夹、两种删除单元与"文件夹的删除单元里还有单独删过的子孙"——
-// 迁移到最新之后核对：每张表的行数不变、约束全部已验证、只由服务保证的不变量都成立，迁移之前的删除单元能经接口恢复与永久删除，
-// 迁移之前建的文件夹原样重发当初的新建请求是重放（0021 在 SQL 里回填的请求摘要与服务算的一致，M2 Codex 评审 CX6）。
+// 团队空间（全员可见的、归档的）与成员、写入代次不为 0 的文档，10 层文件夹、两种删除单元与"文件夹的删除单元里还有单独删过的子孙"，
+// 单独授权（M2-P5 起）——迁移到最新之后核对：每张表的行数不变、约束全部已验证、只由服务保证的不变量都成立，
+// 迁移之前的删除单元能经接口恢复与永久删除，迁移之前建的文件夹原样重发当初的新建请求是重放（0021 在 SQL 里回填的请求摘要
+// 与服务算的一致，M2 Codex 评审 CX6）。
 //
-// 基准是每个阶段结束时的最后一个迁移（8 个），覆盖了到现在为止的每个迁移在有数据的库上的执行；每个基准一个空库，整个文件 3 秒左右。
+// 基准是每个阶段结束时的最后一个迁移（9 个），覆盖了到现在为止的每个迁移在有数据的库上的执行；每个基准一个空库，整个文件 3 秒左右。
 // 以后的阶段结束时在 BASES 里加上它的最后一个迁移；时长涨得多时，去掉中间被后面的基准完全覆盖的那些（写明理由）
 import type pg from 'pg'
 import type { TestDatabase } from '../support/database.ts'
@@ -34,10 +35,12 @@ const BASES: readonly (readonly [label: string, tag: string])[] = [
   ['M2-P6 第 2 片结束', '0017_m2_p6_space_name_key_blanks'],
   // 到 0019 为止的库迁到 0020（单独授权的表、审计的三个动作，M2-P5）。0019 之前的库上还没有授权的表，没有要按当时的结构写的授权行
   ['M2-P6 结束', '0019_m2_p6_write_epoch_monotonic'],
+  // M2 的最后一个迁移（v0.1-m2）：有授权、文件夹带请求摘要的库迁到 0022（编辑租约的表，M3-P1）。之前的库上还没有租约的表
+  ['M2 结束（v0.1-m2）', '0021_m2_folder_payload_digest'],
 ]
 
 /** 行数要核对的表（某个基准上还没有的表跳过） */
-const TABLES = ['users', 'spaces', 'space_members', 'documents', 'document_contents', 'document_revisions', 'document_grants', 'folders', 'trash_entries', 'audit_events', 'auth_sessions', 'auth_invitations', 'auth_password_resets', 'auth_login_throttles']
+const TABLES = ['users', 'spaces', 'space_members', 'documents', 'document_contents', 'document_revisions', 'document_grants', 'document_edit_leases', 'folders', 'trash_entries', 'audit_events', 'auth_sessions', 'auth_invitations', 'auth_password_resets', 'auth_login_throttles']
 
 const PASSWORD = 'correct horse battery staple'
 
@@ -105,8 +108,7 @@ async function seed(client: pg.Client, base: number): Promise<Seeded> {
   }
   const root = await insertUser('root', 'admin')
   const amy = await insertUser('amy', 'member')
-  if (at('0008_m2_accounts'))
-    await insertUser('dan', 'member', 'disabled')
+  const dan = at('0008_m2_accounts') ? await insertUser('dan', 'member', 'disabled') : undefined
   const personal = await one<{ id: string }>(client, 'SELECT id FROM spaces WHERE owner_user_id = $1', [amy])
 
   // 文档：内容、修订 1（新建）与修订 2（保存）
@@ -133,7 +135,7 @@ async function seed(client: pg.Client, base: number): Promise<Seeded> {
     )
     return id
   }
-  await insertDocument(personal.id, '个人空间的文档')
+  const personalDocument = await insertDocument(personal.id, '个人空间的文档')
 
   // 会话：一条有效的，每个撤销原因各一条
   await client.query('INSERT INTO auth_sessions (user_id, token_hash, idle_expires_at, absolute_expires_at) VALUES ($1, sha256(\'live\'), now() + interval \'1 hour\', now() + interval \'1 day\')', [amy])
@@ -179,21 +181,35 @@ async function seed(client: pg.Client, base: number): Promise<Seeded> {
   const team = await one<{ id: string }>(client, 'INSERT INTO spaces (type, name, created_by, visible_to_all) VALUES (\'team\', \'研发部\', $1, true) RETURNING id', [root])
   const archived = await one<{ id: string }>(client, 'INSERT INTO spaces (type, name, created_by, status) VALUES (\'team\', \'Market  Team\', $1, \'archived\') RETURNING id', [root])
   await client.query('INSERT INTO space_members (space_id, user_id, role) VALUES ($1, $2, \'admin\'), ($1, $3, \'editor\'), ($4, $2, \'viewer\')', [team.id, amy, root, archived.id])
-  await insertDocument(team.id, '团队空间的文档', { epoch: 3 })
+  const teamDocument = await insertDocument(team.id, '团队空间的文档', { epoch: 3 })
   await insertDocument(archived.id, '归档空间的文档', { epoch: 1 })
+
+  // 单独授权（M2-P5）：个人空间的文档分享给系统管理员（查看者），团队空间的文档分享给停用的人（编辑者，停用不动授权）
+  if (at('0020_m2_p5_document_grants') && dan !== undefined) {
+    await client.query(
+      'INSERT INTO document_grants (document_id, user_id, role, granted_by) VALUES ($1, $2, \'viewer\', $3), ($4, $5, \'editor\', $3)',
+      [personalDocument, root, amy, teamDocument, dan],
+    )
+  }
 
   if (!at('0010_m2_folders_trash'))
     return { amy, teamSpace: team.id }
 
-  // 文件夹：一条 10 层的链，每层一份文档
+  // 文件夹：一条 10 层的链，每层一份文档。0021 起新建时存下请求的摘要：按服务的写法（与 0021 的回填同一个写法）在 SQL 里算，
+  // 迁移之后原样重发这些新建请求照样是重放
   const chain: string[] = []
   const requests: string[] = []
   for (let depth = 1; depth <= 10; depth += 1) {
     const requestId = randomUUID()
+    const values = [team.id, chain.at(-1) ?? null, `第 ${depth} 层`, amy, depth, requestId]
     const { id } = await one<{ id: string }>(
       client,
-      'INSERT INTO folders (space_id, parent_id, name, created_by, depth, request_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
-      [team.id, chain.at(-1) ?? null, `第 ${depth} 层`, amy, depth, requestId],
+      at('0021_m2_folder_payload_digest')
+        ? `INSERT INTO folders (space_id, parent_id, name, created_by, depth, request_id, payload_digest)
+           VALUES ($1::uuid, $2::uuid, $3::text, $4, $5, $6,
+                   sha256(convert_to('folder-created' || E'\\n' || $1::uuid::text || E'\\n' || coalesce($2::uuid::text, '') || E'\\n' || $3::text, 'UTF8'))) RETURNING id`
+        : 'INSERT INTO folders (space_id, parent_id, name, created_by, depth, request_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
+      values,
     )
     chain.push(id)
     requests.push(requestId)

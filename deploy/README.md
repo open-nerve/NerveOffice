@@ -130,6 +130,7 @@ NERVE_DB_OWNER_PASSWORD=… NERVE_DB_APP_PASSWORD=… psql -v ON_ERROR_STOP=1 \
 换用别的反向代理时，同样要满足下面几条（`test/Caddyfile` 是参照）：
 
 - **信任代理**：应用设置 `NERVE_TRUST_PROXY=1`，只信任紧挨着的一跳。前提是应用的端口只有反向代理连得到（测试环境不发布应用的端口）；否则任何人都可以伪造 `X-Forwarded-For`，冒充别的客户端地址。代理要转发 `X-Forwarded-For` 与 `X-Forwarded-Proto`，并且不采信客户端自己带来的转发头。配置不对时，应用会记一条告警"反向代理转发来的请求不是 HTTPS……"：这时客户端地址都是代理的地址（登录限流按地址的维度、审计里的地址都会出错），HSTS 也不会下发。
+- **访问日志不记敏感的请求头**：参照的配置没有开访问日志；开了的话不要记 `Cookie`、`X-CSRF-Token` 与 `X-Edit-Lease`（编辑租约的令牌，M3-P1）：令牌只该在页面的内存里。
 - **不压缩、不解压**：文档内容接口直接下发 gzip 字节（`Content-Encoding: gzip`），代理不要再压缩，也不要替客户端透明解压。
 - **请求体上限不低于 6 MB**：快照的上限是 5 MiB，加上查询串与余量。
 - **到应用的空闲连接早于 5 秒回收**：应用的空闲连接超时是 5 秒（`NERVE_HTTP_KEEP_ALIVE_TIMEOUT_MS`），代理复用应用已经关掉的连接会得到 502。

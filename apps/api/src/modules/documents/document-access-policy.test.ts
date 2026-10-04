@@ -122,7 +122,7 @@ describe('requireDocumentContent：保存（edit）', () => {
     expect((await requireDocumentContent(store.policy, ALICE, document, ['edit'])).permissions.canEdit).toBe(true)
     expect((await requireDocumentContent(store.policy, BOB, document, ['edit'])).permissions.canEdit).toBe(true)
     store.setMember(TEAM_SPACE, BOB, 'viewer')
-    expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['edit']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能保存' })
+    expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['edit']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能编辑' })
     store.space(TEAM_SPACE).status = 'archived'
     for (const userId of [ALICE, BOB])
       expect(await errorOf(requireDocumentContent(store.policy, userId, document, ['edit']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '空间已归档，只能查看' })
@@ -149,7 +149,7 @@ describe('requireDocumentContent：只凭授权的人（M2-P5 设计 §3.4(1)）
     const store = new FakeStore()
     store.setGrant('d1', BOB, 'viewer')
     expect((await requireDocumentContent(store.policy, BOB, document, ['copy'])).permissions.canCopy).toBe(true)
-    expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['edit']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能保存' })
+    expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['edit']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能编辑' })
     expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['rename']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '没有给这份文档改名的权限' })
   })
 

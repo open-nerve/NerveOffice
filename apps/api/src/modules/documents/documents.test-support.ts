@@ -3,6 +3,7 @@
 // 测试覆盖的是真实的权限规则。
 import type { GrantRole, SpaceRole, SpaceStatus, SpaceType } from '@nerve-office/contracts'
 import type { AuditEvent, AuditService } from '../audit/index.ts'
+import type { SessionService } from '../auth/index.ts'
 import type { Transaction, TransactionRunner } from '../database/index.ts'
 import type { SpaceFacts, SpaceFactsWithOwner, SpacesService } from '../spaces/index.ts'
 import type { Actor } from './document-access-policy.ts'
@@ -10,15 +11,17 @@ import type { CurrentContent, DocumentContentsRepository, StoredSnapshot } from 
 import type { DocumentGrantsRepository, GrantRow, NewGrant } from './document-grants.repository.ts'
 import type { DocumentRevisionsRepository, NewRevision, RevisionRow } from './document-revisions.repository.ts'
 import type { AccessibleScope, CopiedDocument, DocumentRow, DocumentsRepository, GrantedDocumentRow, ListOptions, NewDocument, PageOptions, SearchOptions, SearchRow } from './documents.repository.ts'
+import type { EditLeaseRow, EditLeasesRepository, NewEditLease, ObservedEditLease, RevocableEditLease } from './edit-leases.repository.ts'
 import type { CreatedFolderRow, FolderAncestorRow, FolderRow, FoldersRepository, NewFolder, SubtreeMove, SubtreeSummary } from './folders.repository.ts'
 import type { SpaceTreeRepository } from './space-tree.repository.ts'
 import type { NewTrashEntry, TrashEntriesRepository, TrashEntryRow } from './trash-entries.repository.ts'
 import type { WriteAccessRevocation, WriteAccessScope } from './write-access.ts'
 import { Buffer } from 'node:buffer'
-import { FOLDER_LIST_MAX_ITEMS, TRASH_RETENTION_DAYS } from '@nerve-office/contracts'
+import { EDIT_LEASE_TTL_SECONDS, FOLDER_LIST_MAX_ITEMS, TRASH_RETENTION_DAYS } from '@nerve-office/contracts'
 import { vi } from 'vitest'
 import { parseAuditEvent } from '../audit/index.ts'
 import { EffectiveAccessPolicy } from './document-access-policy.ts'
+import { coversWriter } from './write-access.ts'
 
 export const ALICE = '0199a2c4-0000-7000-8000-00000000000a'
 export const BOB = '0199a2c4-0000-7000-8000-00000000000b'
@@ -73,8 +76,6 @@ export class FakeStore {
   readonly audits: AuditEvent[] = []
   /** 取过的空间树锁：按取锁的先后记下，用例据此核对锁的顺序 */
   readonly treeLocks: string[][] = []
-  /** 每份文档的写入代次（不在 DocumentRow 里）：跨空间移动加一，用例据此核对空间内移动不加 */
-  readonly writeEpochs = new Map<string, number>()
   /** 收回写入权的调用：跨空间移动要在同一个事务里调一次（M2-P2 设计 §3.7） */
   readonly revocations: WriteAccessScope[] = []
   /** 单独授权（M2-P5）：键是"文档 id 与账户 id"，访问策略与"可访问文档"的授权那一半据此判断 */
@@ -88,10 +89,18 @@ export class FakeStore {
 
   private sequence = 0
 
+  /**
+   * 写入代次不为 0 的文档与它们的代次：代次记在行上（DocumentRow.writeEpoch，新建与复制是 0），这里按行算出来，
+   * 用例据此核对哪些操作加了一（跨空间移动、删除），哪些没加（空间内移动、改名、恢复）
+   */
+  get writeEpochs(): ReadonlyMap<string, number> {
+    return new Map([...this.documents.values()].flatMap(row => row.writeEpoch === 0 ? [] : [[row.id, row.writeEpoch] as const]))
+  }
+
   addDocument(overrides: Partial<DocumentRow> = {}): DocumentRow {
     this.sequence += 1
     const id = `0199a2c4-0000-7000-8000-${String(this.sequence).padStart(12, '0')}`
-    const row: DocumentRow = { id, spaceId: ALICE_SPACE, type: 'sheet', title: '周报', createdBy: ALICE, createdAt: NOW, updatedAt: NOW, position: NOW.toISOString(), revision: 1, unitId: `unit-${id}`, profile: 'sheet@1', formatVersion: 1, ...overrides, folderId: overrides.folderId ?? null }
+    const row: DocumentRow = { id, spaceId: ALICE_SPACE, type: 'sheet', title: '周报', createdBy: ALICE, createdAt: NOW, updatedAt: NOW, position: NOW.toISOString(), revision: 1, unitId: `unit-${id}`, profile: 'sheet@1', formatVersion: 1, writeEpoch: 0, ...overrides, folderId: overrides.folderId ?? null }
     this.documents.set(id, row)
     return row
   }
@@ -232,12 +241,12 @@ export class FakeStore {
       rename: vi.fn(async (id: string, title: string) => this.updateDocument(id, { title })),
       moveToFolder: vi.fn(async (id: string, folderId: string | null) => this.updateDocument(id, { folderId })),
       /**
-       * 跨空间移动：改所属空间，写入代次加一（代次不在 DocumentRow 里，记在 writeEpochs 上，用例据此核对）。
+       * 跨空间移动：改所属空间，写入代次加一（用例经 writeEpochs 核对）。
        * folderId 为 undefined 表示位置不变（跟着所在的文件夹换空间）
        */
       moveToSpace: vi.fn(async (ids: readonly string[], spaceId: string, folderId: string | null | undefined) => ids.map((id) => {
-        this.writeEpochs.set(id, (this.writeEpochs.get(id) ?? 0) + 1)
-        return this.updateDocument(id, folderId === undefined ? { spaceId } : { spaceId, folderId })
+        const writeEpoch = this.epochAfterAdvance(id)
+        return this.updateDocument(id, folderId === undefined ? { spaceId, writeEpoch } : { spaceId, folderId, writeEpoch })
       })),
       /** 这些文件夹里的文档（state 省略时不按状态过滤，与真实仓储一致），按 id 排序 */
       lockInFolders: vi.fn(async (folderIds: readonly string[], spaceId: string, _transaction: Transaction, state?: 'active' | 'trashed') => [...this.documents.values()]
@@ -265,7 +274,7 @@ export class FakeStore {
       trash: vi.fn(async (ids: readonly string[], trashEntryId: string) => {
         for (const id of ids) {
           this.documentEntries.set(id, trashEntryId)
-          this.writeEpochs.set(id, (this.writeEpochs.get(id) ?? 0) + 1)
+          this.updateDocument(id, { writeEpoch: this.epochAfterAdvance(id) })
         }
         return ids.length
       }),
@@ -295,19 +304,26 @@ export class FakeStore {
         }
         return ids.length
       }),
-      /** 按源文档建一份副本：类型、unitId、档案与格式版本原样复制，修订号 1，新的 id */
+      /** 按源文档建一份副本：类型、unitId、档案与格式版本原样复制，修订号 1、代次 0（与真实仓储一样用列的默认值），新的 id */
       copyFrom: vi.fn(async (sourceId: string, copy: CopiedDocument): Promise<DocumentRow | undefined> => {
         const source = this.documents.get(sourceId)
         if (source === undefined)
           return undefined
         const { id: _id, ...columns } = source
-        return this.addDocument({ ...columns, ...copy, revision: 1 })
+        return this.addDocument({ ...columns, ...copy, revision: 1, writeEpoch: 0 })
       }),
       advanceRevision: vi.fn(async (id: string, revision: number) => {
         const row = this.documents.get(id)
         if (row?.revision !== revision - 1)
           throw new Error('修订号没有前进')
         this.documents.set(id, { ...row, revision })
+      }),
+      /** 写入代次加一（M3-P1），返回加一之后的代次；更新时间不变 */
+      advanceWriteEpoch: vi.fn(async (id: string) => this.updateDocument(id, { writeEpoch: this.epochAfterAdvance(id) }).writeEpoch),
+      /** 这些文档的写入代次各加一（收回写入权，M3-P1）；重复的 id 只加一次（与一条 UPDATE 一样） */
+      advanceWriteEpochs: vi.fn(async (ids: readonly string[]) => {
+        for (const id of new Set(ids))
+          this.updateDocument(id, { writeEpoch: this.epochAfterAdvance(id) })
       }),
     },
     contents: {
@@ -528,11 +544,79 @@ export class FakeStore {
     }),
   }
 
-  /** 收回写入权的入口：只记下调用（M2 的真实实现也什么都不做，M3 接租约） */
+  /** 收回写入权的入口：只记下调用，调用方的单元测试据此核对范围（接上租约的实现另有 lease-write-access.test.ts） */
   readonly writeAccess = {
     revoke: vi.fn(async (scope: WriteAccessScope) => {
       this.revocations.push(scope)
     }),
+  }
+
+  /** 编辑租约（M3-P1）：文档 id → 租约行 */
+  readonly leaseRecords = new Map<string, EditLeaseRow>()
+  /**
+   * 假仓储里数据库的 now()（事务开始的时刻）：读出的租约行带着它，写下的时间也是它。
+   * 用例改它模拟时间过去，不等真实的时间（与集成测试改写租约行的时间同一个意思）
+   */
+  databaseNow: Date = NOW
+  /** 仍然有效的登录：auth 的 SessionService.isActive 的假实现按它回答 */
+  readonly activeSessions = new Set<string>()
+
+  /**
+   * 编辑租约的仓储（M3-P1）：与真实仓储同样的语义——每份文档至多一行，改写为新的一代时清掉明确结束，
+   * 续租时最后活动夹在申请的时间与 now 之间，明确结束不覆盖先记下的原因。SQL 本身由集成测试覆盖
+   */
+  readonly leases = {
+    findByDocument: vi.fn(async (documentId: string) => this.observedLease(documentId)),
+    lockByDocument: vi.fn(async (documentId: string) => this.observedLease(documentId)),
+    replace: vi.fn(async (lease: NewEditLease): Promise<ObservedEditLease> => {
+      const now = this.databaseNow
+      const row: EditLeaseRow = { ...lease, acquiredAt: now, renewedAt: now, lastActiveAt: now, expiresAt: this.expiryFrom(now), endedAt: null, endReason: null }
+      this.leaseRecords.set(lease.documentId, row)
+      return { ...row, now }
+    }),
+    renew: vi.fn(async (documentId: string, idleSeconds: number): Promise<ObservedEditLease> => {
+      const row = this.leaseRecords.get(documentId)
+      if (row === undefined)
+        throw new Error(`续租时租约不在了：${documentId}`)
+      const now = this.databaseNow
+      const lastActiveAt = new Date(Math.min(Math.max(now.getTime() - idleSeconds * 1000, row.acquiredAt.getTime()), now.getTime()))
+      const renewed = { ...row, renewedAt: now, expiresAt: this.expiryFrom(now), lastActiveAt }
+      this.leaseRecords.set(documentId, renewed)
+      return { ...renewed, now }
+    }),
+    end: vi.fn(async (documentId: string, reason: NonNullable<EditLeaseRow['endReason']>) => {
+      const row = this.leaseRecords.get(documentId)
+      if (row === undefined || row.endedAt !== null)
+        return false
+      this.leaseRecords.set(documentId, { ...row, endedAt: this.databaseNow, endReason: reason })
+      return true
+    }),
+    endAll: vi.fn(async (documentIds: readonly string[], reason: NonNullable<EditLeaseRow['endReason']>) => {
+      for (const documentId of documentIds) {
+        const row = this.leaseRecords.get(documentId)
+        if (row !== undefined && row.endedAt === null)
+          this.leaseRecords.set(documentId, { ...row, endedAt: this.databaseNow, endReason: reason })
+      }
+    }),
+    /**
+     * 收回写入权的范围涉及的、没有明确结束的租约（按文档 id 排序），带文档现在的空间、创建人与状态：范围的含义就是 coversWriter，
+     * 真实仓储的 SQL 与它逐种同义（edit-lease-statements.test.ts）；加锁与锁下的再核对由集成测试覆盖
+     */
+    lockInScope: vi.fn(async (scope: WriteAccessScope): Promise<RevocableEditLease[]> =>
+      [...this.leaseRecords.values()]
+        .flatMap((row) => {
+          const document = this.documents.get(row.documentId)
+          if (document === undefined || row.endedAt !== null || !coversWriter(scope, { userId: row.holderId, documentId: row.documentId, spaceId: document.spaceId }))
+            return []
+          const documentStatus = this.entryOfDocument(document.id) === null ? 'active' as const : 'trashed' as const
+          return [{ ...row, now: this.databaseNow, spaceId: document.spaceId, createdBy: document.createdBy, documentStatus }]
+        })
+        .toSorted((a, b) => a.documentId.localeCompare(b.documentId))),
+  }
+
+  /** auth 的会话服务（M3-P1：判断别人的租约绑定的登录还在不在） */
+  readonly sessions = {
+    isActive: vi.fn(async (sessionId: string) => this.activeSessions.has(sessionId)),
   }
 
   readonly transactions = {
@@ -578,12 +662,25 @@ export class FakeStore {
       grants: this.grants as unknown as DocumentGrantsRepository,
       audit: this.audit as unknown as AuditService,
       writeAccess: this.writeAccess as unknown as WriteAccessRevocation,
+      leases: this.leases as unknown as EditLeasesRepository,
+      sessions: this.sessions as unknown as SessionService,
     }
   }
 
   /** 正常状态的一份文档（回收站里的对普通接口不存在） */
   private activeDocument(id: string): DocumentRow | undefined {
     return this.entryOfDocument(id) === null ? this.documents.get(id) : undefined
+  }
+
+  /** 读出的租约行带着此刻的"数据库时间"（与真实仓储一样，与行出自同一条语句） */
+  private observedLease(documentId: string): ObservedEditLease | undefined {
+    const row = this.leaseRecords.get(documentId)
+    return row === undefined ? undefined : { ...row, now: this.databaseNow }
+  }
+
+  /** 到期的时刻：now 加有效期 */
+  private expiryFrom(now: Date): Date {
+    return new Date(now.getTime() + EDIT_LEASE_TTL_SECONDS * 1000)
   }
 
   /** 改一份文档的几列并返回新的行 */
@@ -594,6 +691,14 @@ export class FakeStore {
     const next = { ...row, ...changes }
     this.documents.set(id, next)
     return next
+  }
+
+  /** 这份文档的写入代次加一之后的值（与真实仓储的 write_epoch + 1 一样，只增不减） */
+  private epochAfterAdvance(id: string): number {
+    const row = this.documents.get(id)
+    if (row === undefined)
+      throw new Error(`没有文档 ${id}`)
+    return row.writeEpoch + 1
   }
 
   /** 改一个文件夹的几列并返回新的行 */

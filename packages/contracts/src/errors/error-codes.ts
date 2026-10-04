@@ -35,6 +35,16 @@ export const ERROR_CODES = {
   USERNAME_TAKEN: { status: 409, message: '用户名已被占用' },
   /** 保存时的基准修订号不是当前修订号：别处保存了更新的版本。details 带当前修订号及其来源（revisionConflictDetailsSchema） */
   DOCUMENT_REVISION_CONFLICT: { status: 409, message: '别处保存了更新的版本，本次保存没有写入' },
+  /**
+   * 申请编辑权时，有效的编辑租约在别人手里（M3-P1 设计 §3.2）：同一个人在另一个标签页或设备上编辑也算。
+   * details 带正在编辑的人、他的最后活动时间与是不是调用者自己（editLeaseHeldDetailsSchema）
+   */
+  EDIT_LEASE_HELD: { status: 409, message: '别人正在编辑这份文档' },
+  /**
+   * 心跳或保存带的编辑租约已经不再有效（M3-P1 设计 §3.2），这次操作没有生效。details 带原因（editLeaseLostDetailsSchema），
+   * 不认识的原因按通用的"编辑权已失效"处理。读不到（NOT_FOUND）与不能编辑（PERMISSION_DENIED）先于它判断
+   */
+  EDIT_LEASE_LOST: { status: 409, message: '编辑权已失效，本次操作没有生效' },
   /** 同一个 requestId 已经用于另一个请求（负载不同，或者是别的操作） */
   REQUEST_ID_CONFLICT: { status: 409, message: '请求标识已被另一个请求使用' },
   /** 这个操作会让有效的系统管理员一个都不剩（取消或停用最后一个系统管理员） */

@@ -43,6 +43,10 @@ export const INVARIANTS: Readonly<Record<string, string>> = {
      WHERE t.kind = 'folder' AND t.origin_parent_id IS DISTINCT FROM f.parent_id`,
   'I15 空间成员只属于团队空间':
     `SELECT m.space_id, m.user_id FROM space_members m JOIN spaces s ON s.id = m.space_id WHERE s.type <> 'team'`,
+  // 编辑租约（M3-P1）：申请时文档的代次加一、记在租约上，文档的代次只增不减（触发器），所以租约的那一代不会比文档的大。
+  // 比文档大的租约在文档的代次追上来时会重新对得上——已经失效的旧租约又能写了
+  'I16 租约的代次不大于文档的代次':
+    'SELECT l.document_id, l.write_epoch, d.write_epoch AS document_epoch FROM document_edit_leases l JOIN documents d ON d.id = l.document_id WHERE l.write_epoch > d.write_epoch',
 }
 
 /** 每条不变量最多列出几行：够定位，不把整张表打进错误信息 */

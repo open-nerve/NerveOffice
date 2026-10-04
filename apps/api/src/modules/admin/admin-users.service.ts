@@ -56,7 +56,7 @@ export class AdminUsersService {
    * 停用：状态改为停用、作废这个人未用的重置（记审计，M2-P6 复核 C3）、作废这个人签发给别人的还没用的邀请与重置
    * （记审计，M2-P6 复核 A2）、撤销全部会话（原因 disabled）、收回写入权（M2-P2 设计 §3.7）、记审计，一个事务。
    * 会话守卫对每个请求检查账户状态，事务提交之后这个人的请求一律被拒绝。
-   * 锁的顺序：system-admins 的锁、账户行、重置与邀请的行、会话、文档（收回写入权，M3 起锁租约与文档行）（ADR-007，审查 A2）
+   * 锁的顺序：system-admins 的锁、账户行、重置与邀请的行、会话、文档行、租约行（收回写入权，M3-P1 起结束这个人的编辑租约）（ADR-007，审查 A2）
    */
   async disable(actor: Principal, userId: string, origin: HttpOrigin): Promise<AdminUser> {
     return this.transactions.run(async (transaction) => {

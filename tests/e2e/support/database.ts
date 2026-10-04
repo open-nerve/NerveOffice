@@ -189,3 +189,31 @@ export async function expireSessions(user: TestUser): Promise<void> {
     await client.query('UPDATE auth_sessions SET idle_expires_at = now() - interval \'1 second\' WHERE user_id = $1', [user.id])
   })
 }
+
+/**
+ * 让这份文档的编辑租约到期（M3-P1）：改写租约行的时间，不等真实的 90 秒——续租与最后活动在 100 秒前，到期在 10 秒前；
+ * 申请的时间也挪到续租之前。表上的 CHECK 照样成立（到期晚于续租、最后活动不晚于续租）。
+ * 前提是这份文档有一份没有明确结束的租约（有人在编辑器里打开着它），没有时报错，免得用例的前提悄悄落空
+ */
+export async function expireEditLease(documentId: string): Promise<void> {
+  await withDatabase(async (client) => {
+    const result = await client.query(
+      `UPDATE document_edit_leases SET renewed_at = now() - interval '100 seconds', last_active_at = now() - interval '100 seconds',
+         acquired_at = least(acquired_at, now() - interval '100 seconds'), expires_at = now() - interval '10 seconds'
+       WHERE document_id = $1 AND ended_at IS NULL`,
+      [documentId],
+    )
+    if (result.rowCount !== 1)
+      throw new Error(`文档 ${documentId} 没有正在进行的编辑租约`)
+  })
+}
+
+/** 这份文档的编辑租约明确结束的原因（released、revoked）；还没有结束时为 null，从没有过租约时为 undefined */
+export async function editLeaseEndReason(documentId: string): Promise<string | null | undefined> {
+  return withDatabase(async client => (await client.query<{ end_reason: string | null }>('SELECT end_reason FROM document_edit_leases WHERE document_id = $1', [documentId])).rows[0]?.end_reason)
+}
+
+/** 这份文档现在的编辑租约是第几代（每次申请加一）；从没有过租约时为 undefined。核对页面确实重新申请过（续上） */
+export async function editLeaseEpoch(documentId: string): Promise<number | undefined> {
+  return withDatabase(async client => (await client.query<{ write_epoch: number }>('SELECT write_epoch FROM document_edit_leases WHERE document_id = $1', [documentId])).rows[0]?.write_epoch)
+}

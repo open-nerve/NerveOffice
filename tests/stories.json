@@ -2,7 +2,8 @@
   "$comment": "各 M 的用户故事登记（规范 §8.1；M2-P1 起累计登记各 M 的故事，之前 M 的故事由回归测试继续引用）。状态为 active 的故事必须有以其编号开头的测试；每个 Phase 完成时，把它负责的故事改为 active。",
   "designs": [
     "docs/v0.1/M1-工程底座与行走骨架/00-M1-总设计.md",
-    "docs/v0.1/M2-组织空间与权限/00-M2-总设计.md"
+    "docs/v0.1/M2-组织空间与权限/00-M2-总设计.md",
+    "docs/v0.1/M3-编辑权与保存协议/00-M3-总设计.md"
   ],
   "stories": {
     "US-M1-01": { "phase": "P3", "status": "active", "verification": ["integration", "e2e"] },
@@ -29,6 +30,23 @@
     "US-M2-11": { "phase": "P3", "status": "active", "verification": ["e2e"] },
     "US-M2-12": { "phase": "P4", "status": "active", "verification": ["integration", "e2e"] },
     "US-M2-13": { "phase": "P1", "status": "active", "verification": ["integration", "e2e"] },
-    "US-M2-14": { "phase": "P5", "status": "active", "verification": ["integration", "e2e"] }
+    "US-M2-14": { "phase": "P5", "status": "active", "verification": ["integration", "e2e"] },
+    "US-M3-01": { "phase": "P2", "status": "planned", "verification": ["e2e"] },
+    "US-M3-02": { "phase": "P4", "status": "planned", "verification": ["integration", "e2e"] },
+    "US-M3-03": { "phase": "P4", "status": "planned", "verification": ["integration", "e2e"] },
+    "US-M3-04": { "phase": "P2", "status": "planned", "verification": ["integration", "e2e"] },
+    "US-M3-05": { "phase": "P2", "status": "planned", "verification": ["integration", "e2e"] },
+    "US-M3-06": { "phase": "P5", "status": "planned", "verification": ["integration", "e2e"] },
+    "US-M3-07": { "phase": "P5", "status": "planned", "verification": ["integration", "e2e"] },
+    "US-M3-08": { "phase": "P5", "status": "planned", "verification": ["integration", "e2e"] },
+    "US-M3-09": { "phase": "P5", "status": "planned", "verification": ["integration", "e2e"] },
+    "US-M3-10": { "phase": "P5", "status": "planned", "verification": ["integration", "e2e"] },
+    "US-M3-11": { "phase": "P2", "status": "planned", "verification": ["integration", "e2e"] },
+    "US-M3-12": { "phase": "P2", "status": "planned", "verification": ["integration", "e2e"] },
+    "US-M3-13": { "phase": "P2", "status": "planned", "verification": ["integration", "e2e"] },
+    "US-M3-14": { "phase": "P3", "status": "planned", "verification": ["integration", "e2e"] },
+    "US-M3-15": { "phase": "P4", "status": "planned", "verification": ["integration", "e2e"] },
+    "US-M3-16": { "phase": "P3", "status": "planned", "verification": ["integration", "e2e"] },
+    "US-M3-17": { "phase": "P6", "status": "planned", "verification": ["integration", "e2e"] }
   }
 }

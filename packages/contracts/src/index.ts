@@ -87,6 +87,7 @@ export {
   revisionConflictDetailsSchema,
   revisionEtag,
   revisionFromEtag,
+  revisionSourceSchema,
   saveContentQuerySchema,
   saveContentResponseSchema,
   SNAPSHOT_MAX_DEPTH,
@@ -94,7 +95,7 @@ export {
   SNAPSHOT_UPLOAD_CONTENT_TYPE,
   UNIVER_SDK_VERSION,
 } from './documents/content.ts'
-export type { RevisionConflictDetails, SaveContentQuery, SaveContentResponse } from './documents/content.ts'
+export type { RevisionConflictDetails, RevisionSource, SaveContentQuery, SaveContentResponse } from './documents/content.ts'
 export { DOCUMENT_PAGE_PATTERN, documentIdFromPagePath, documentPagePath } from './documents/document-page.ts'
 export {
   COPIED_TITLE_SUFFIX,
@@ -143,6 +144,37 @@ export type {
   PlatformFormatVersion,
   UpdateDocumentRequest,
 } from './documents/documents.ts'
+export {
+  acquiredEditLeaseSchema,
+  acquireEditLeaseRequestSchema,
+  documentEditorSchema,
+  EDIT_IDLE_SECONDS_MAX,
+  EDIT_INTERRUPTION_NOTICE_SECONDS,
+  EDIT_LEASE_HEADER,
+  EDIT_LEASE_HEARTBEAT_SECONDS,
+  EDIT_LEASE_IDLE_RECLAIM_SECONDS,
+  EDIT_LEASE_LOST_REASONS,
+  EDIT_LEASE_TTL_SECONDS,
+  editInterruptionSchema,
+  editLeaseHeldDetailsSchema,
+  editLeaseLostDetailsSchema,
+  editLeaseTokenSchema,
+  editStatusSchema,
+  renewedEditLeaseSchema,
+  renewEditLeaseRequestSchema,
+} from './documents/editing.ts'
+export type {
+  AcquiredEditLease,
+  AcquireEditLeaseRequest,
+  DocumentEditor,
+  EditInterruption,
+  EditLeaseHeldDetails,
+  EditLeaseLostDetails,
+  EditLeaseLostReason,
+  EditStatus,
+  RenewedEditLease,
+  RenewEditLeaseRequest,
+} from './documents/editing.ts'
 export { SHEET_TEMPLATE, SHEET_TEMPLATE_UNIT_ID, sheetSnapshotFor } from './documents/sheet-template.ts'
 export { ERROR_CODES, errorStatus, RETIRED_ERROR_CODES } from './errors/error-codes.ts'
 export type { ErrorCode } from './errors/error-codes.ts'
