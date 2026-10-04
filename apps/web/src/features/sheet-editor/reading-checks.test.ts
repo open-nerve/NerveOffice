@@ -143,6 +143,21 @@ describe('阅读时的检查（US-M3-05）', () => {
     expect(context.time.pending()).toBe(0)
   })
 
+  it('页面隐藏着的时候要立即读一次（例如隐藏时退出了编辑、会话回到了本人）：也不读、不排计时器，回到前台才读', async () => {
+    const context = setup()
+    context.setHidden(true)
+    context.checks.checkNow()
+    await settle()
+    expect(context.fetch).not.toHaveBeenCalled()
+    expect(context.time.pending()).toBe(0)
+    await context.time.advance(READING_CHECK_INTERVAL_MS * 2)
+    expect(context.fetch).not.toHaveBeenCalled()
+    context.setHidden(false)
+    await settle()
+    expect(context.fetch).toHaveBeenCalledOnce()
+    expect(context.time.pending()).toBe(1)
+  })
+
   it('页面隐藏时暂停（在途的那次作废），回到前台立即读一次；卸载之后不再看可见性', async () => {
     const context = setup()
     context.checks.checkNow()

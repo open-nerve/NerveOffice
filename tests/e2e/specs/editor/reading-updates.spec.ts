@@ -14,7 +14,7 @@ import { createDocumentIn, createTeamSpace, createUser } from '../../support/dat
 import { editorView, scrollAndSelect, shownCell } from '../../support/editor-probe.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { appendSheet, editingBy, editingNotice, EDITOR_TEST_TIMEOUT, editorSurface, openAndEnterEditing, openReader, saveAndWait, savedContent, saveStatus, sheetTab, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { appendSheet, cellOf, editingBy, editingNotice, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, enterEditing, exitEditing, openAndEnterEditing, openReader, saveAndWait, savedContent, saveStatus, sheetCanvas, sheetTab, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -169,5 +169,74 @@ test.describe('US-M3-05 别人保存了新版本时阅读者得到提示', { tag
     await expect.poll(async () => shownCell(anotherDevice, 'A1')).toBe('while hidden')
     await expect(updateButton(anotherDevice)).toHaveCount(0)
     expect(reads.content).toEqual([null, revisionEtag(1)])
+  })
+
+  test('US-M3-05 点了"有更新"、正在载入最新的版本时"编辑"不可用：这期间点下去也不申请编辑权、不在同一个容器里再建一个编辑器；载入完了照常能进入编辑、保存（审查 A1）', async ({ page, anotherDevice }) => {
+    const lead = await createUser('update-enter-lead', '组长')
+    const writer = await createUser('update-enter-writer', '甲')
+    const reader = await createUser('update-enter-reader', '乙')
+    const space = await createTeamSpace('载入时点编辑', lead, [[lead, 'admin'], [writer, 'editor'], [reader, 'editor']])
+    const documentId = await createDocumentIn(space.id, lead, '共同的表')
+
+    // 乙（编辑者）：装上可控的时钟再打开；记下申请编辑权的请求
+    await loginThroughApi(anotherDevice, reader)
+    await anotherDevice.clock.install()
+    const reads = recordReads(anotherDevice, documentId)
+    const acquisitions: string[] = []
+    anotherDevice.on('request', (request) => {
+      if (request.method() === 'POST' && new URL(request.url()).pathname === `/api/documents/${documentId}/edit-lease`)
+        acquisitions.push(request.url())
+    })
+    await openReader(anotherDevice, documentId)
+    await statusReadsReach(reads, 1)
+
+    // 甲编辑、保存（修订 2），退出编辑、放掉编辑权：乙这时点"编辑"本来是能取得的（审查时这种情形页面停在没有表格的编辑）
+    await loginThroughApi(page, writer)
+    await openAndEnterEditing(page, documentId)
+    await typeInCell(page, 'A1', 'from writer')
+    await saveAndWait(page)
+    await exitEditing(page)
+
+    // 乙：下一次检查读到修订 2，提示有更新
+    await anotherDevice.clock.fastForward(CHECK_INTERVAL)
+    await expect(updateButton(anotherDevice)).toBeVisible()
+
+    // 拦住公式 Worker 的脚本：按新的版本重建的只读编辑器停在载入中，这段窗口不靠运气
+    let release: () => void = () => {}
+    const released = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await anotherDevice.route('**/assets/formula.worker-*.js', async (route) => {
+      await released
+      await route.continue()
+    })
+    const contentLoaded = anotherDevice.waitForResponse(response => new URL(response.url()).pathname === `/api/documents/${documentId}/content` && response.request().method() === 'GET')
+    await updateButton(anotherDevice).click()
+    await contentLoaded
+    await expect(editorSurface(anotherDevice)).toHaveAttribute('data-editor-state', 'loading')
+
+    // 正在载入最新的版本："编辑"标为不可用，读屏状态区也说正在载入（审查 A6）；照样按下去（键盘：aria-disabled 拦不住按钮被激活，
+    // Playwright 的点击却会一直等它可用）
+    const enter = enterEditButton(anotherDevice)
+    await expect(enter).toHaveAttribute('aria-disabled', 'true')
+    await expect(anotherDevice.locator('#editor-chrome').getByRole('status').filter({ hasText: '正在载入最新的版本…' })).toBeVisible()
+    await enter.focus()
+    await anotherDevice.keyboard.press('Enter')
+
+    // 载入完了：只有一个编辑器（只读，显示最新的版本），"有更新"不在了，"编辑"又能点；这期间没有申请过编辑权
+    release()
+    await waitForEditorAccess(anotherDevice, 'read')
+    await expect.poll(async () => shownCell(anotherDevice, 'A1')).toBe('from writer')
+    await expect(sheetCanvas(anotherDevice)).toHaveCount(1)
+    await expect(updateButton(anotherDevice)).toHaveCount(0)
+    await expect(enter).toHaveAttribute('aria-disabled', 'false')
+    expect(acquisitions).toEqual([])
+
+    // 之后照常进入编辑、保存
+    await enterEditing(anotherDevice)
+    await typeInCell(anotherDevice, 'B1', 'from reader')
+    await saveAndWait(anotherDevice)
+    const saved = (await savedContent(anotherDevice, documentId)).snapshot
+    expect([cellOf(saved, 'A1')?.v, cellOf(saved, 'B1')?.v]).toEqual(['from writer', 'from reader'])
   })
 })
