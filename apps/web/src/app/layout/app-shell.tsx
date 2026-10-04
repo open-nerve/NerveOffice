@@ -1,8 +1,9 @@
+import type { PageStartRef } from '../../features/auth/index.ts'
 import { useQuery } from '@tanstack/react-query'
 import { KeyRound } from 'lucide-react'
-import { Link, Outlet, useNavigation } from 'react-router'
+import { Link, Outlet, useNavigation, useOutletContext } from 'react-router'
 import { CHANGE_PASSWORD_PATH } from '../../features/account/index.ts'
-import { sessionQueryOptions, usePageStartRef, UserMenu } from '../../features/auth/index.ts'
+import { sessionQueryOptions, UserMenu } from '../../features/auth/index.ts'
 import { SpaceNav } from '../../features/spaces/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { ADMIN_PATH } from '../../shared/lib/admin-paths.ts'
@@ -17,8 +18,8 @@ import { SearchBox } from './search-box.tsx'
  */
 export function AppShell() {
   const session = useQuery(sessionQueryOptions())
-  // 页面开头（产品名称）：会话确认失败、按"重试"确认之后焦点交给它（features/auth 的 RequireSession）
-  const pageStartRef = usePageStartRef()
+  // 页面开头（产品名称）：需要登录的外层路由经 Outlet 交来，会话确认失败、按"重试"确认之后焦点交给它（features/auth 的 RequireSession）
+  const pageStartRef = useOutletContext<PageStartRef | undefined>()
   // 单页里切到按需加载的页面（例如第一次点"管理"）时，先要下载它的代码：页头显示进行中（M2-P1 审查 B5）
   const navigating = useNavigation().state !== 'idle'
   return (
