@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { createdPayloadDigest, folderCreatedPayloadDigest, savedPayloadDigest } from './payload-digest.ts'
+import { conflictCopyPayloadDigest, copiedPayloadDigest, createdPayloadDigest, folderCreatedPayloadDigest, savedPayloadDigest } from './payload-digest.ts'
 
 describe('负载摘要', () => {
   it('新建：sha256("created\\n" + 类型 + "\\n" + 标题)', () => {
@@ -58,6 +58,23 @@ describe('负载摘要', () => {
       folderCreatedPayloadDigest(parentId, undefined, '资料'),
       folderCreatedPayloadDigest(spaceId, undefined, '资料2'),
       createdPayloadDigest('sheet', '资料', spaceId),
+    ]
+    expect(new Set(digests.map(digest => digest.toString('hex'))).size).toBe(digests.length)
+  })
+
+  it('另存为副本（M3-P2）：sha256("conflict-copied\\n" + 原文档 + "\\n" + 标题 + "\\n" + 解压后的字节)；放在哪里不算进来', () => {
+    const sourceId = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0e'
+    const raw = Buffer.from('{"id":"u"}', 'utf8')
+    expect(conflictCopyPayloadDigest(sourceId, '周报（冲突副本 2026-10-04 14:30）', raw))
+      .toEqual(createHash('sha256').update(`conflict-copied\n${sourceId}\n周报（冲突副本 2026-10-04 14:30）\n{"id":"u"}`, 'utf8').digest())
+    // 原文档、标题、内容任何一项不同就不是同一个请求；与保存同样的字节、与复制同样的源与标题都分得开
+    const digests = [
+      conflictCopyPayloadDigest(sourceId, '周报', raw),
+      conflictCopyPayloadDigest('0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0f', '周报', raw),
+      conflictCopyPayloadDigest(sourceId, '月报', raw),
+      conflictCopyPayloadDigest(sourceId, '周报', Buffer.from('{"id":"v"}', 'utf8')),
+      savedPayloadDigest(1, raw),
+      copiedPayloadDigest(sourceId, sourceId, undefined, '周报'),
     ]
     expect(new Set(digests.map(digest => digest.toString('hex'))).size).toBe(digests.length)
   })

@@ -1,4 +1,4 @@
-// 文档的内容（P4 设计 §3.3、§3.5，US-M1-05、06、07、08）：读取（gzip 原样下发、修订号作 ETag）；
+// 文档的内容（P4 设计 §3.3、§3.5，US-M1-05、06、07、08）：读取（gzip 原样下发、修订号作 ETag；M3-P2 起带 If-None-Match 而修订号没变时 304，US-M3-05）；
 // 保存（条件写入、requestId 幂等含并发、冲突附来源、解压上限与压缩炸弹、内容类型、基本校验、别人的与不存在的相同、未登录、CSRF）。
 // M3-P1 起保存要求编辑租约：每次保存经 support/edit-leases.ts 的 saveContent 先申请、保存之后释放（编辑租约本身的用例在 save-leases.test.ts）。
 import type { SaveContentResponse } from '@nerve-office/contracts'
@@ -159,6 +159,61 @@ describe('US-M1-06 读取内容', () => {
   it('id 不是 UUID：400；没有登录：401', async () => {
     expect((await read(aliceSession, 'not-a-uuid')).status).toBe(400)
     const anonymous = await fetch(`${app.baseUrl}${contentPath(randomUUID())}`)
+    expect(anonymous.status).toBe(401)
+  })
+})
+
+describe('US-M3-05 读取内容的条件请求（M3-P2 设计 §3.2，DEF-017）：修订号没变时 304，不传内容', () => {
+  async function conditional(user: LoggedIn, id: string, ifNoneMatch: string): Promise<Response> {
+    return asUser(app.baseUrl, user, contentPath(id), { headers: { 'if-none-match': ifNoneMatch } })
+  }
+
+  it('US-M3-05 带着读到的 ETag 再读、修订号没变：304，只带 ETag（与 200 的相同）与不缓存，没有正文、内容编码与内容类型', async () => {
+    const document = await aliceDocument()
+    const first = await read(aliceSession, document.id)
+    const etag = first.headers.get('etag') ?? ''
+    await first.arrayBuffer()
+    const response = await conditional(aliceSession, document.id, etag)
+    expect(response.status).toBe(304)
+    expect(response.headers.get('etag')).toBe(etag)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect([response.headers.get('content-encoding'), response.headers.get('content-type')]).toEqual([null, null])
+    expect(await response.text()).toBe('')
+  })
+
+  it('US-M3-05 有人保存了新版本：修订号比手里的新，200 给新内容与新的 ETag；再带新的 ETag 读又是 304', async () => {
+    const document = await aliceDocument()
+    expect((await put(aliceSession, document.id, snapshotOf(document.unitId, '第二版'))).status).toBe(200)
+    const response = await conditional(aliceSession, document.id, '"1"')
+    expect([response.status, response.headers.get('etag'), response.headers.get('content-encoding')]).toEqual([200, '"2"', 'gzip'])
+    expect(await response.text()).toBe(snapshotOf(document.unitId, '第二版').toString('utf8'))
+    expect((await conditional(aliceSession, document.id, '"2"')).status).toBe(304)
+  })
+
+  it('弱校验器 W/"n"（反向代理改了编码会这样标）、列表里有当前修订、*：304；列表里没有、认不出的标签：200 照常给内容', async () => {
+    const document = await aliceDocument()
+    for (const value of ['W/"1"', '"7", "1"', '*'])
+      expect((await conditional(aliceSession, document.id, value)).status, value).toBe(304)
+    for (const value of ['"2"', '"abc"', '1', '']) {
+      const response = await conditional(aliceSession, document.id, value)
+      expect([response.status, response.headers.get('etag')], value).toEqual([200, '"1"'])
+      expect(await response.text()).toBe(sheetSnapshotFor(document.unitId))
+    }
+  })
+
+  it('US-M3-05 先判断权限（M3-P2 设计 §3.6）：别人的文档带着对得上的修订号也是 404，与不存在的相同，不因为 304 透露它在不在、是第几版', async () => {
+    const document = await aliceDocument()
+    for (const value of ['"1"', '*', 'W/"1"']) {
+      const others = await conditional(bobSession, document.id, value)
+      const missing = await conditional(bobSession, randomUUID(), value)
+      expect([others.status, missing.status], value).toEqual([404, 404])
+      expect(await errorOf(others)).toEqual(await errorOf(missing))
+    }
+  })
+
+  it('没有登录：401（条件请求不放宽认证）', async () => {
+    const document = await aliceDocument()
+    const anonymous = await fetch(`${app.baseUrl}${contentPath(document.id)}`, { headers: { 'if-none-match': '"1"' } })
     expect(anonymous.status).toBe(401)
   })
 })

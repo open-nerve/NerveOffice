@@ -133,6 +133,8 @@ export const auditDetailsSchema = z.discriminatedUnion('action', [
   entry('documents.shared', z.strictObject({ userId: id, role: grantRole })),
   entry('documents.share_changed', z.strictObject({ userId: id, from: grantRole, to: grantRole })),
   entry('documents.share_revoked', z.strictObject({ userId: id, role: grantRole })),
+  // M3-P2：另存为副本，对象是副本（M3-P2 设计 §3.2）。原文档与副本所在的空间（原文档所在的空间，或者本人的个人空间），不记标题
+  entry('documents.conflict_copied', z.strictObject({ sourceId: id, spaceId: id })),
 ])
 
 /** 一个动作与它的明细（解析之后） */

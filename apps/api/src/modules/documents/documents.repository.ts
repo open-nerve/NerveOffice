@@ -106,12 +106,17 @@ export interface TrashedDocumentRow {
   readonly trashEntryId: string | null
 }
 
-/** 复制出来的文档要写的列：其余的列（类型、unitId、档案、格式版本、写入时的 SDK 版本）由数据库从源文档原样复制。 */
+/** 复制出来的文档要写的列：其余的列（类型、unitId、档案、格式版本，写入时的 SDK 版本没给时也是）由数据库从源文档原样复制。 */
 export interface CopiedDocument {
   readonly spaceId: string
   readonly folderId: string | null
   readonly title: string
   readonly createdBy: string
+  /**
+   * 写入时的 SDK 版本：复制不给，照源文档（内容原样复制，版本跟着内容走）；另存为副本给平台内置的版本——
+   * 内容是页面上传的、由平台内置的 SDK 写出（M3-P2 设计 §3.2）
+   */
+  readonly sdkVersion?: string | undefined
 }
 
 const d = documents
@@ -421,14 +426,15 @@ export class DocumentsRepository {
    * 按源文档建一份副本（M2-P4 设计 §3.4 第 4 条）：类型、unitId、档案、格式版本与写入时的 SDK 版本由
    * INSERT … SELECT 从源文档原样复制（unitId 相同是有意的，00 号计划书 §8.3）；
    * 修订号、写入代次、状态与时间用列的默认值（修订号 1、代次 0、正常状态）。
+   * 另存为副本（M3-P2 设计 §3.2）同样经这里：元数据照原文档，只有写入时的 SDK 版本换成给出的（copy.sdkVersion）。
    * 源文档已经不在（被删或进了回收站）时什么也不写，返回 undefined（调用方持着源文档行的共享锁时不会发生）。
-   * 内容的复制见 DocumentContentsRepository.copyFrom
+   * 内容的复制见 DocumentContentsRepository.copyFrom（另存为副本的内容是上传的，调用方另写）
    */
   async copyFrom(sourceId: string, copy: CopiedDocument, transaction: Transaction): Promise<DocumentRow | undefined> {
     const executor = executorOf(this.db, transaction)
     const inserted = await executor.execute<{ id: string }>(sql`
       INSERT INTO ${d} (space_id, folder_id, title, created_by, type, unit_id, profile, format_version, sdk_version)
-      SELECT ${copy.spaceId}::uuid, ${copy.folderId}::uuid, ${copy.title}, ${copy.createdBy}::uuid, ${d.type}, ${d.unitId}, ${d.profile}, ${d.formatVersion}, ${d.sdkVersion}
+      SELECT ${copy.spaceId}::uuid, ${copy.folderId}::uuid, ${copy.title}, ${copy.createdBy}::uuid, ${d.type}, ${d.unitId}, ${d.profile}, ${d.formatVersion}, ${copy.sdkVersion ?? d.sdkVersion}
       FROM ${d} WHERE ${d.id} = ${sourceId}::uuid AND ${d.status} = 'active'
       RETURNING ${d.id}`)
     const id = inserted.rows[0]?.id

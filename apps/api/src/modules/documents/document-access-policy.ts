@@ -361,6 +361,23 @@ export async function requireSpaceContent(
 }
 
 /**
+ * 调用者能在这个空间里新建文档时给出他在那里的访问；不能（看不到、只能查看、已归档）时为 undefined，不抛错。
+ * 与 requireSpaceContent(…, 'createDocuments') 同一条规则（spacePermissionsOf 的 canCreateDocuments）：另存为副本按它决定
+ * 放进原文档所在的空间，还是本人的个人空间（M3-P2 设计 §3.2，00 号计划书 §7.5）——"不能"在那里不是错误，只是换个地方放
+ */
+export async function creatableSpace(
+  policy: DocumentAccessPolicy,
+  actor: Actor,
+  spaceId: string,
+  transaction?: Transaction,
+): Promise<SpaceContentAccess | undefined> {
+  const access = await policy.spaceAccessOf(actor, spaceId, transaction)
+  if (access?.role === undefined || !access.permissions[SPACE_CONTENT.createDocuments.permission])
+    return undefined
+  return { ...access, role: access.role }
+}
+
+/**
  * 已经判断过能看空间的内容之后，再要求在里面做这件事（新建）：不再查询，不能做是 PERMISSION_DENIED。
  * 只由 requireSpaceContent 用：新建文件夹原来先按"能看到"查重放、不是重放才单独要求能新建（M2-P6 复核 A 的 S-4），
  * 现在先查重放、不是重放直接要求能新建（M2 Codex 评审复验的一般 4），不再单独用它

@@ -46,3 +46,15 @@ export function folderCreatedPayloadDigest(spaceId: string, parentId: string | u
 export function savedPayloadDigest(baseRevision: number, raw: Buffer): Buffer {
   return createHash('sha256').update(`saved\n${baseRevision}\n`, 'utf8').update(raw).digest()
 }
+
+/**
+ * 另存为副本（M3-P2 设计 §3.2）：原文档、请求里的标题（经契约去掉首尾空白之后的，也就是存下的那个）与解压后的快照字节。
+ * - 与复制一样只按请求里的东西算：放在哪里由服务端按权限决定、不在请求里，所以不算进来——结果未知之后权限变了（例如被降为查看者），
+ *   原样的重试照样是重放，不因为这次本该放到别处而被当成另一个请求；
+ * - 与保存一样按解压后的字节算：重试时客户端不必保证压缩结果逐字节相同，同一份内容就是同一个请求；内容不同（重试之前又捕获了一次）
+ *   就是另一个请求，同一个 requestId 拒绝（REQUEST_ID_CONFLICT），不把新内容当成上一次的结果。
+ * 标题不含控制字符（契约），按换行分段不会与标题混淆，快照字节接在最后一个换行之后；id 已由契约统一成小写
+ */
+export function conflictCopyPayloadDigest(sourceId: string, title: string, raw: Buffer): Buffer {
+  return createHash('sha256').update(`conflict-copied\n${sourceId}\n${title}\n`, 'utf8').update(raw).digest()
+}

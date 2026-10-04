@@ -64,6 +64,8 @@ export const AUDIT_ACTIONS = [
   'documents.shared',
   'documents.share_changed',
   'documents.share_revoked',
+  // M3-P2：另存为副本（失去编辑权时把本页的内容存成一份新文档）。对象是副本，details 带原文档与副本所在的空间，不记标题
+  'documents.conflict_copied',
 ] as const
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS)

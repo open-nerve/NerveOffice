@@ -109,10 +109,16 @@ describe('心跳续租', () => {
 
 describe('编辑状态与"别人正在编辑"', () => {
   it('编辑状态：当前修订号与正在编辑的人；没有有效的租约时 editor 为 null', () => {
-    expect(editStatusSchema.parse({ revision: 7, editor: null })).toEqual({ revision: 7, editor: null })
-    expect(editStatusSchema.parse({ revision: 7, editor })).toEqual({ revision: 7, editor })
-    expect(editStatusSchema.safeParse({ revision: 7 }).success).toBe(false)
-    expect(editStatusSchema.safeParse({ revision: 0, editor: null }).success).toBe(false)
+    expect(editStatusSchema.parse({ revision: 7, editor: null, canEdit: false })).toEqual({ revision: 7, editor: null, canEdit: false })
+    expect(editStatusSchema.parse({ revision: 7, editor, canEdit: true })).toEqual({ revision: 7, editor, canEdit: true })
+    expect(editStatusSchema.safeParse({ revision: 7, canEdit: true }).success).toBe(false)
+    expect(editStatusSchema.safeParse({ revision: 0, editor: null, canEdit: true }).success).toBe(false)
+  })
+
+  it('US-M3-05 编辑状态带上调用者现在能不能编辑（M3-P2 设计 §3.2）：必填的布尔值，阅读页据此显示或隐藏"编辑"', () => {
+    expect(editStatusSchema.safeParse({ revision: 7, editor: null }).success).toBe(false)
+    expect(editStatusSchema.safeParse({ revision: 7, editor: null, canEdit: 'true' }).success).toBe(false)
+    expect(editStatusSchema.safeParse({ revision: 7, editor: null, canEdit: null }).success).toBe(false)
   })
 
   it('正在编辑的人：持有者是"人"的结构，带最后活动时间与是不是调用者自己；多出的字段（例如令牌）被丢弃', () => {

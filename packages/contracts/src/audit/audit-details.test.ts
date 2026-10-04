@@ -95,6 +95,15 @@ describe('审计明细的结构', () => {
     expect(accepts('documents.share_changed', { userId: ID, role: 'viewer' })).toBe(false)
   })
 
+  it('US-M3-11 另存为副本（M3-P2）：原文档与副本所在的空间，两项都要；不收标题与文件夹', () => {
+    expect(accepts('documents.conflict_copied', { sourceId: ID, spaceId: OTHER })).toBe(true)
+    expect(accepts('documents.conflict_copied', { sourceId: ID })).toBe(false)
+    expect(accepts('documents.conflict_copied', { spaceId: OTHER })).toBe(false)
+    expect(accepts('documents.conflict_copied', { sourceId: 'x', spaceId: OTHER })).toBe(false)
+    expect(accepts('documents.conflict_copied', { sourceId: ID, spaceId: OTHER, title: '周报（冲突副本 2026-10-04 14:30）' })).toBe(false)
+    expect(accepts('documents.conflict_copied', { sourceId: ID, spaceId: OTHER, folderId: null })).toBe(false)
+  })
+
   it('类型不对拒绝：id 不是 UUID、份数是负数或小数、原因不在列表里', () => {
     expect(accepts('documents.deleted', { spaceId: 'x', folderId: null, trashEntryId: OTHER })).toBe(false)
     expect(accepts('folders.deleted', { spaceId: ID, parentId: null, trashEntryId: OTHER, folders: -1, documents: 0 })).toBe(false)

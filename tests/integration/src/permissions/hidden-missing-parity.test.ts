@@ -21,6 +21,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount, createPassiveAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { comparableOf } from '../support/comparable-response.ts'
+import { conflictCopyPath, pageSnapshot } from '../support/conflict-copies.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
 import { grantsOn, removeGrant, setGrants } from '../support/grants.ts'
@@ -216,6 +217,21 @@ async function save(session: LoggedIn, documentId: string, unitId: string): Prom
   })
 }
 
+/**
+ * 另存为副本（M3-P2）：格式合法的请求（快照的顶层 id 是那份文档的 unitId，标题与 requestId 合法），只看访问的判断；
+ * 读不到原文档在 unitId 与放在哪里之前，看不到与不存在一样 404。不存在的那份用随机的 unitId
+ */
+async function conflictCopy(session: LoggedIn, documentId: string, unitId: string): Promise<Response> {
+  const path = conflictCopyPath(documentId)
+  return recorded('POST', path) ?? asUser(app.baseUrl, session, path, {
+    method: 'POST',
+    binary: { contentType: 'application/gzip', bytes: zlib.gzipSync(pageSnapshot(unitId)) },
+  })
+}
+
+/** 读取内容的条件请求（M3-P2）：带着对得上的修订号（新建的文档都是 1）或 *，权限照样先判断 */
+const IF_NONE_MATCH = (value: string): Record<string, string> => ({ 'if-none-match': value })
+
 const PROBES: readonly Probe[] = [
   // ---- 文档：外人对团队空间里的文档 ----
   { name: 'GET 文档元数据', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}`) },
@@ -347,6 +363,16 @@ const PROBES: readonly Probe[] = [
   { name: '只有编辑授权 POST 申请没分享的文档的编辑权', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/edit-lease`, 'POST', { clientInstanceId: randomUUID() }) },
   { name: '只有编辑授权 DELETE 释放没分享的文档', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/edit-lease`, 'DELETE', undefined, LEASE_TOKEN) },
   { name: '只有查看授权 GET 没分享的文档的编辑状态', actor: 'grantViewer', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/edit-lease`) },
+  // ---- 另存为副本与读取的条件请求（M3-P2 设计 §3.2、§3.6）：只要求能读原文档，读不到的与不存在的一样；304 之前照样判断权限 ----
+  { name: 'POST 另存为副本', actor: 'outsider', request: async (s, h) => conflictCopy(s, pick(h, w.teamDocument.id), h ? w.teamDocument.unitId : randomUUID()) },
+  { name: 'POST 另存为副本（个人空间的文档）', actor: 'outsider', request: async (s, h) => conflictCopy(s, pick(h, w.personalDocument.id), h ? w.personalDocument.unitId : randomUUID()) },
+  { name: 'POST 另存为副本（回收站里的文档，空间管理员自己）', actor: 'admin', request: async (s, h) => conflictCopy(s, pick(h, w.teamTrashedDocument), randomUUID()) },
+  { name: '系统管理员 POST 另存为副本（团队空间的文档）', actor: 'systemAdmin', request: async (s, h) => conflictCopy(s, pick(h, w.teamDocument.id), h ? w.teamDocument.unitId : randomUUID()) },
+  { name: '只有查看授权 POST 另存为副本（没分享的文档）', actor: 'grantViewer', request: async (s, h) => conflictCopy(s, pick(h, w.teamOtherDocument.id), h ? w.teamOtherDocument.unitId : randomUUID()) },
+  { name: '只有查看授权 POST 另存为副本（取消了分享的文档）', actor: 'grantViewer', request: async (s, h) => conflictCopy(s, pick(h, w.revokedDocument), randomUUID()) },
+  { name: 'GET 文档内容（条件请求，修订号对得上）', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/content`, 'GET', undefined, IF_NONE_MATCH('"1"')) },
+  { name: 'GET 文档内容（条件请求，*）', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.personalDocument.id)}/content`, 'GET', undefined, IF_NONE_MATCH('*')) },
+  { name: '只有查看授权 GET 取消了分享的文档的内容（条件请求）', actor: 'grantViewer', request: async (s, h) => call(s, `/api/documents/${pick(h, w.revokedDocument)}/content`, 'GET', undefined, IF_NONE_MATCH('"1"')) },
   // 路由表的覆盖核对发现的（M2-P6 第 6 片复核 S5）：恢复与归档成对，原来漏了
   { name: '系统管理员 POST 恢复个人空间', actor: 'systemAdmin', request: async (s, h) => call(s, `/api/admin/spaces/${pick(h, w.owner.personalSpaceId)}/restore`, 'POST') },
   { name: '系统管理员 转移到写成团队空间的个人空间', actor: 'systemAdmin', request: async (s, h) => call(s, `/api/admin/users/${w.leaver.id}/documents/transfer`, 'POST', { documentIds: [w.leaver.document], target: { type: 'team', spaceId: pick(h, w.owner.personalSpaceId) } }) },

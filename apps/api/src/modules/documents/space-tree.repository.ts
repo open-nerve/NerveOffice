@@ -9,7 +9,7 @@ import { DATABASE, executorOf } from '../database/index.ts'
  * 改名、移动、删除、恢复、永久删除文件夹与文档，都在事务的第一步取这把事务级的 advisory lock；新建文件夹也是（FoldersService.create，
  * 能新建时）：它不取按 requestId 的锁，同一个请求的重试在这把树锁上排队、锁下按 requestId 查到前一次的结果，
  * 别的空间里同时用了同一个 requestId 的，由 request_id 的唯一约束加 ON CONFLICT DO NOTHING 挡下（REQUEST_ID_CONFLICT）。
- * 建到文件夹里的新文档与复制也取它，排在按 requestId 的 advisory lock 之后（只有这两处取那把锁，它们的第一把锁是那一把，
+ * 建到文件夹里的新文档、复制与（要放进原文档所在空间的）另存为副本也取它，排在按 requestId 的 advisory lock 之后（只有这三处取那把锁，它们的第一把锁是那一把，
  * 同一个请求的重试先在那里排队）；新建文档建到空间的根目录时不取树锁：不牵涉任何文件夹（DocumentCreationService）。
  * 保存文档内容**不取**它：保存与结构改动互不阻塞（保存只锁文档行，M1-P4）。
  *

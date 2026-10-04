@@ -66,6 +66,8 @@ describe('全部接口的认证：没有 @Public() 的都要求登录，公开�
     expect(names).toEqual(expect.arrayContaining(['GET /api/documents/:id/grants', 'PUT /api/documents/:id/grants/:userId', 'DELETE /api/documents/:id/grants/:userId', 'GET /api/shared']))
     // 编辑权的四个接口（M3-P1）同样在路由表里
     expect(names).toEqual(expect.arrayContaining(['GET /api/documents/:id/edit-lease', 'POST /api/documents/:id/edit-lease', 'PUT /api/documents/:id/edit-lease', 'DELETE /api/documents/:id/edit-lease']))
+    // 另存为副本（M3-P2）：未登录同样一律 401
+    expect(names).toContain('POST /api/documents/:id/conflict-copies')
   })
 
   it('未登录：公开清单之外的每个接口都回 401 UNAUTHENTICATED；清单里的接口不回它', async () => {

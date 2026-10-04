@@ -85,7 +85,30 @@ async function rejection(promise: Promise<unknown>): Promise<AppError> {
 describe('DocumentContentService.read', () => {
   it('当前内容与它的修订号', async () => {
     const { store, service, document } = setup()
-    expect(await service.read(ALICE, document.id)).toEqual({ revision: 1, snapshot: store.contentOf(document.id) })
+    expect(await service.read(ALICE, document.id)).toEqual({ kind: 'current', content: { revision: 1, snapshot: store.contentOf(document.id) } })
+  })
+
+  it('US-M3-05 条件请求（M3-P2 设计 §3.2，DEF-017）：当前修订在 If-None-Match 里就只回修订号、不读内容；不在里面（落后、认不出、空的列表）照常给内容；* 匹配任何现有的版本', async () => {
+    const { store, service, document } = setup()
+    store.documents.set(document.id, { ...document, revision: 3 })
+    expect(await service.read(ALICE, document.id, [3])).toEqual({ kind: 'notModified', revision: 3 })
+    expect(await service.read(ALICE, document.id, [1, 3])).toEqual({ kind: 'notModified', revision: 3 })
+    expect(await service.read(ALICE, document.id, '*')).toEqual({ kind: 'notModified', revision: 3 })
+    expect(store.repositories.contents.findCurrent).not.toHaveBeenCalled()
+    const current = { kind: 'current', content: { revision: 3, snapshot: store.contentOf(document.id) } }
+    for (const noneMatch of [[2], [], [4]])
+      expect(await service.read(ALICE, document.id, noneMatch), JSON.stringify(noneMatch)).toEqual(current)
+  })
+
+  it('条件请求照样先判断权限，在只读快照里（M3-P2 设计 §3.6）：看不到的与不存在的都是 NOT_FOUND，不因为修订号对得上就回 304', async () => {
+    const { store, service, document } = setup()
+    expect((await rejection(service.read(BOB, document.id, [1]))).code).toBe('NOT_FOUND')
+    expect((await rejection(service.read(BOB, document.id, '*'))).code).toBe('NOT_FOUND')
+    expect((await rejection(service.read(ALICE, '0199a2c4-0000-7000-8000-0000000000ff', [1]))).code).toBe('NOT_FOUND')
+    // 看不到与不存在执行同样的查询：两次都判断了权限（不存在的用全零的空间）
+    expect(store.spaces.accessFactsOf).toHaveBeenCalledTimes(3)
+    expect(store.transactions.readSnapshot).toHaveBeenCalledTimes(3)
+    expect(store.transactions.run).not.toHaveBeenCalled()
   })
 
   it('别人的与不存在的：NOT_FOUND', async () => {

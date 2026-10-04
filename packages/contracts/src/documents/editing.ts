@@ -112,11 +112,13 @@ export type DocumentEditor = z.infer<typeof documentEditorSchema>
 
 /**
  * 编辑状态（GET /api/documents/{id}/edit-lease，能读就能看，在只读快照里读，ADR-017）：文档当前的修订号，
- * 以及正在编辑的人——没有有效的租约时为 null
+ * 正在编辑的人——没有有效的租约时为 null，以及调用者现在能不能编辑这份文档（canEdit，M3-P2 设计 §3.2：与详情的
+ * permissions.canEdit 同一个规则、同一个快照里算；阅读页每 30 秒读一次，据此显示或隐藏"编辑"——权限在阅读期间可能变化）
  */
 export const editStatusSchema = z.object({
   revision: z.number().int().min(1),
   editor: documentEditorSchema.nullable(),
+  canEdit: z.boolean(),
 })
 
 export type EditStatus = z.infer<typeof editStatusSchema>

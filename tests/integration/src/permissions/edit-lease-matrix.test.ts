@@ -16,7 +16,7 @@ import { startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { asUser } from '../support/session-client.ts'
-import { buildMatrixWorld, cellsOf, closeWorld, expectCell, isArchived } from './matrix-world.ts'
+import { buildMatrixWorld, cellsOf, closeWorld, columnOf, expectCell, isArchived } from './matrix-world.ts'
 
 let database: TestDatabase
 let app: TestApp
@@ -126,9 +126,11 @@ function written(): { readonly documentId: string, readonly token: string | unde
 
 /** 成功的格子另外核对内容 */
 const VERIFY: Readonly<Record<Operation, CellOptions['verify']>> = {
-  // 固定的文档上没有人在编辑（写的格子都用新文档）：修订号 1、没有正在编辑的人
-  editStatus: async (response) => {
-    expect(parseExact(editStatusSchema, await response.json())).toEqual({ revision: 1, editor: null })
+  // 固定的文档上没有人在编辑（写的格子都用新文档）：修订号 1、没有正在编辑的人；能不能编辑（M3-P2）与这个人能不能申请同一格——
+  // 取表里申请那一行的预期（MATRIX.acquireLease，逐格手写），不调用生产代码的规则
+  editStatus: async (response, target, actor) => {
+    const canEdit = MATRIX.acquireLease[target][columnOf(actor)] === 201
+    expect(parseExact(editStatusSchema, await response.json())).toEqual({ revision: 1, editor: null, canEdit })
   },
   // 申请：第一代（新文档的代次是 0），租约在这个人手里
   acquireLease: async (response, _target, actor) => {
