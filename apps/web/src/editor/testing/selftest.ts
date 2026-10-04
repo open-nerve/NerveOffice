@@ -879,11 +879,13 @@ export async function runEditorSelftest(host: SelftestHost, scenario: string): P
   if (failure === undefined && probe !== undefined && isSelftestScenario(scenario)) {
     const api = probe.univerAPI as unknown as SelftestApi
     const session: Session = { host, probe, api, unitId: api.getActiveWorkbook().getId(), opened: probe.snapshot(), checks, timings, deadline: performance.now() + SCENARIO_BUDGET_MS }
-    // 页面中途被隐藏（浏览器窗口被挡住、切到别的标签页）：Safari 几秒之后就暂停它，余下的检查不再做，趁计时器还在走把结果交回去
+    // 页面中途被隐藏（浏览器窗口被挡住、切到别的标签页）：Safari 几秒之后就暂停它，余下的检查不再做，趁计时器还在走把结果交回去。
+    // 自检开始时已经隐藏了（到 steady 之前就被挡住：挂接只在页面一开始就隐藏时不等 steady）同样算：不然每项都在没有动画帧的页面上超时
     const onVisibility = (): void => {
       if (document.visibilityState === 'hidden')
         session.hiddenAt ??= new Date().toISOString()
     }
+    onVisibility()
     document.addEventListener('visibilitychange', onVisibility)
     try {
       await SCENARIOS[scenario](session)
