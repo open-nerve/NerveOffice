@@ -275,6 +275,11 @@ export const messages = {
     notFoundTitle: '空间不存在',
     notFound: '空间不存在，或者你没有访问权限',
     pageLoadFailed: '空间加载失败',
+    /**
+     * 空间页与回收站页的页头（名称、类型、我的角色、能做的操作）留着之前的、重新请求却失败了（DEF-040）：
+     * "空间信息没能刷新，显示的还是之前的内容"
+     */
+    detailName: '空间信息',
     members: '成员',
     rename: '改名',
     renameLabel: '空间名称',
@@ -336,6 +341,8 @@ export const messages = {
     actionsOn: (name: string) => `操作 ${name}`,
     loadingActions: '正在确认可以做哪些操作…',
     actionsFailed: (reason: string) => `没能确认可以做哪些操作：${reason}`,
+    /** 展开的面板留着之前取到的权限、重新取却失败了（DEF-040）："可以做的操作没能刷新，显示的还是之前的内容" */
+    actionsName: '可以做的操作',
     rename: '改名',
     renameLabel: (name: string) => `${name} 的新名称`,
     move: '移动',

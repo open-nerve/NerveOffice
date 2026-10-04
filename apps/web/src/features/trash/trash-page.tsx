@@ -18,7 +18,7 @@ import { spacePath } from '../../shared/lib/space-paths.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { useFocusRescue } from '../../shared/lib/use-focus-rescue.ts'
 import { Alert, AlertDescription, Badge, Button, buttonVariants, Notice, PersonName, Skeleton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../shared/ui/index.ts'
-import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
+import { DetailRefreshProblem, RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { StillRefreshing } from '../../shared/ui/still-refreshing.tsx'
 import { ConfirmDialog } from '../confirmation/index.ts'
 import { spaceDocumentsQueryKey, spaceFoldersQueryKey } from '../documents/index.ts'
@@ -316,6 +316,7 @@ function TrashList({ space, query, headingRef }: { readonly space: SpaceView, re
  * 回收站页的内容：空间（页头的名称）与回收站的列表。先看错误、再看数据（ADR-008 的请求缓存约定）：两者任何一个得到 404，
  * 这个空间就看不到了，按"空间不存在"显示，不留着旧的行（M2-P6 复核 S2 的 P4）。两个请求谁先回来都一样：回收站先得到 404 时
  * 不等页头的请求（它可能还在路上，也可能拿着看不到之前的旧结果回来），直接说空间不存在（第二批 S-2 的 T1）。
+ * 页头的请求别的失败（网络、5xx）而手里有之前的：留着它，页头下面说明空间信息没能刷新、可以重试（DEF-040）。
  * 有焦点的按钮、行随刷新或新的权限消失时，焦点交给页面的标题（M2-P6 复核 S3）。
  */
 function TrashContent({ spaceId }: { readonly spaceId: string }) {
@@ -360,6 +361,8 @@ function TrashContent({ spaceId }: { readonly spaceId: string }) {
         <h1 ref={titleRef} id="trash-title" tabIndex={-1} className="truncate text-xl font-semibold outline-none focus-visible:ring-3 focus-visible:ring-ring/50">{text.heading(spaceName(space.data))}</h1>
         <Link to={spacePath(spaceId)} className={buttonVariants({ variant: 'outline' })}>{text.backToSpace}</Link>
       </div>
+      {/* 留着之前的页头（空间的名称）、重新请求却失败了（DEF-040）：与空间页的页头同一个说明；重试成功之后焦点交给标题 */}
+      <DetailRefreshProblem query={space} detail={messages.spaces.detailName} fallbackFocus={titleRef} />
       <Alert>
         <AlertDescription>
           <p>{text.retention(TRASH_RETENTION_DAYS)}</p>

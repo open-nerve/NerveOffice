@@ -17,6 +17,7 @@ import { updatePagedItems } from '../../shared/lib/paged-cache.ts'
 import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { Alert, AlertDescription, Button, buttonVariants, Label, PersonName, Phrase, Skeleton, TableCell } from '../../shared/ui/index.ts'
+import { DetailRefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { StatusRegion } from '../../shared/ui/status-region.tsx'
 import { StillRefreshing } from '../../shared/ui/still-refreshing.tsx'
 import { sessionQueryOptions, SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
@@ -250,10 +251,14 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
 /**
  * 管理界面：转移停用者的文档（M2-P2 设计 §3.8、§3.10，US-M2-04）。只看得到标题，打不开内容；
  * 选文档（分页、全选已加载的，一次最多 100 份）、选目标（某人的个人空间或没有归档的团队空间），确认之后整批转移。
+ * 页头的账户留着之前的、重新请求却失败了（DEF-040）：标题下面说明账户信息没能刷新、可以重试（是否停用可能已经变了，服务端转移时照样核对）；
+ * 不存在（404）照旧说明、回到账户；不再是系统管理员（403）由会话的重新确认处理，不说成没能刷新
  */
 export function AdminTransferPage() {
   const { userId = '' } = useParams()
   const account = useQuery(adminUserQueryOptions(userId))
+  // 标题（tabIndex -1，只能由程序聚焦）：重试成功、说明随之消失时焦点交给它
+  const titleRef = useRef<HTMLHeadingElement>(null)
   // 浏览器标签页的标题（M2-P6 复核 S4）：账户还没取到或取不到时是账户页的
   useDocumentTitle(adminMessages.pageTitle(account.data === undefined ? adminMessages.nav.users : phraseText(text.title(messages.people.text(account.data)))))
   const back = <Link to={ADMIN_PATHS.users} className={buttonVariants({ variant: 'outline' })}>{text.back}</Link>
@@ -293,9 +298,10 @@ export function AdminTransferPage() {
   return (
     <section className="flex flex-col gap-4" aria-labelledby="transfer-title">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <h2 id="transfer-title" className="text-lg font-semibold"><Phrase parts={text.title(<PersonName person={account.data} />)} /></h2>
+        <h2 ref={titleRef} id="transfer-title" tabIndex={-1} className="text-lg font-semibold outline-none focus-visible:ring-3 focus-visible:ring-ring/50"><Phrase parts={text.title(<PersonName person={account.data} />)} /></h2>
         {back}
       </div>
+      <DetailRefreshProblem query={account} detail={text.accountName} fallbackFocus={titleRef} />
       {account.data.status === 'active'
         ? (
             <Alert>

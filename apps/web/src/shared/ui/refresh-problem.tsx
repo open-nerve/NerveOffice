@@ -3,6 +3,10 @@
 // 各个列表共用这一处，不逐个列表各写一遍：明说"…没能刷新"与原因、给一个重试，旧的内容照常留着显示。
 // 第一次就没取到（没有数据）仍由各列表自己的"加载失败"说明；加载下一页失败不在这里（isRefetchError 不含它，各列表另有说明）；
 // 按访问权限被拒绝（403、404）由各列表先处理（例如换成"空间不存在"），不走到这里。按路径引用（不经桶文件）。
+// 详情（页头的空间与账户、行内操作取的文档权限）同一个说明，经 DetailRefreshProblem（DEF-040）。
+import type { FocusEvent, RefObject } from 'react'
+import { useLayoutEffect, useRef } from 'react'
+import { isAccessDenied, isMissingResource } from '../api/client.ts'
 import { describeError } from '../api/describe-error.ts'
 import { messages } from '../i18n/index.ts'
 import { Alert, AlertDescription } from './alert.tsx'
@@ -18,22 +22,89 @@ export interface RefreshableQuery {
 
 interface RefreshProblemProps {
   readonly query: RefreshableQuery
-  /** 列表叫什么（默认"列表"），例如"成员列表"、"分享的情况" */
+  /** 列表叫什么（默认"列表"），例如"成员列表"、"分享的情况"；详情是它的名称，例如"空间信息" */
   readonly list?: string
   readonly className?: string
+  /**
+   * 说明消失时（重试成功了，或者别处的刷新成功了）焦点还在它里面（刚按过"重试"）：交给这个一直在的元素，不落到 body（规范 §2.4）。
+   * 不给时由页面自己接住（useFocusRescue 交给页面的标题）
+   */
+  readonly fallbackFocus?: RefObject<HTMLElement | null>
+}
+
+/** 焦点不在任何元素上（落到了 body） */
+function focusIsLost(): boolean {
+  return document.activeElement === null || document.activeElement === document.body
+}
+
+/**
+ * 说明连同"重试"一起消失时，焦点不落到 body（DEF-040）：记下焦点在不在说明里（focusin 记下；移到说明之外的元素时忘掉，
+ * 落到 body、或者按钮被移走时不忘，与 shared/lib/use-focus-rescue.ts 同一个做法），说明消失的那一次提交里交给 fallbackFocus。
+ * 用布局效果：DOM 刚改完、页面的 useFocusRescue（MutationObserver，之后的微任务）之前，焦点留在说明附近，不先跳到页面的标题。
+ * 只在焦点已经落到 body 时交：别处在这之前已经接过焦点，就不抢
+ */
+function useFocusHandOff(shown: boolean, fallbackFocus: RefObject<HTMLElement | null> | undefined) {
+  const insideRef = useRef(false)
+  useLayoutEffect(() => {
+    if (shown || !insideRef.current)
+      return
+    insideRef.current = false
+    if (focusIsLost())
+      fallbackFocus?.current?.focus()
+  }, [shown, fallbackFocus])
+  return {
+    onFocus: () => {
+      insideRef.current = true
+    },
+    onBlur: (event: FocusEvent<HTMLElement>) => {
+      if (event.relatedTarget instanceof Element && !event.currentTarget.contains(event.relatedTarget))
+        insideRef.current = false
+    },
+  }
 }
 
 /** 留着旧数据、刷新失败了：醒目的提示（role="alert"，出现时读屏读出）、原因与重试；重试成功之后随之消失 */
-export function RefreshProblem({ query, list, className }: RefreshProblemProps) {
+export function RefreshProblem({ query, list, className, fallbackFocus }: RefreshProblemProps) {
+  const focus = useFocusHandOff(query.isRefetchError, fallbackFocus)
   if (!query.isRefetchError)
     return null
   return (
-    <Alert variant="destructive" className={className}>
+    <Alert variant="destructive" className={className} onFocus={focus.onFocus} onBlur={focus.onBlur}>
       <AlertDescription>
         <p>{messages.common.refreshFailed(list)}</p>
         <p>{describeError(query.error).message}</p>
         <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => void query.refetch()}>{messages.common.retry}</Button>
       </AlertDescription>
     </Alert>
+  )
+}
+
+interface DetailRefreshProblemProps {
+  /** 详情的请求（useQuery 的结果，或者按同样的意思拼出来的） */
+  readonly query: RefreshableQuery
+  /** 详情叫什么，例如"空间信息"："空间信息没能刷新，显示的还是之前的内容" */
+  readonly detail: string
+  readonly className?: string
+  /** 重试成功、说明随之消失时焦点交给谁（通常是页面的标题；行内的操作面板是面板里的"取消"） */
+  readonly fallbackFocus: RefObject<HTMLElement | null>
+}
+
+/**
+ * 详情留着上一次的数据、重新请求却失败了（DEF-040）：空间页与回收站页的页头、成员页（成员表与空间信息同一个请求）、
+ * 转移页的账户、面包屑、行内操作展开时取的文档权限。说法、原因与重试与列表相同（RefreshProblem）。
+ * 与列表不同的一点：详情决定页面的访问状态，按访问权限被拒绝（403，以及看不到、不存在的 404 与地址里的 id 不合法的 400）时
+ * 页面按现在的做法说明——空间不存在、不能查看成员、账户不存在、回到列表；那不是"没能刷新"，重试也不会好，说成没能刷新还会盖住页面该给的说明。
+ * 页面先处理这几种的这里本来就走不到；没有先处理的（例如操作面板留着之前的权限，等下一次操作被拒绝时再说明）也不会说成没能刷新。
+ * 第一次就没取到（没有数据）照旧由各页面自己的"加载失败"说明。
+ */
+export function DetailRefreshProblem({ query, detail, className, fallbackFocus }: DetailRefreshProblemProps) {
+  const failed = query.isRefetchError && !isAccessDenied(query.error) && !isMissingResource(query.error)
+  return (
+    <RefreshProblem
+      query={{ isRefetchError: failed, error: query.error, refetch: query.refetch }}
+      list={detail}
+      className={className}
+      fallbackFocus={fallbackFocus}
+    />
   )
 }

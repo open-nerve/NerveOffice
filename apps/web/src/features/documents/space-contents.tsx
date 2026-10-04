@@ -15,7 +15,7 @@ import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
 import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { problemOf } from '../../shared/lib/validation.ts'
 import { Alert, AlertDescription, Button, buttonVariants, FieldProblem, Input, Label, Skeleton } from '../../shared/ui/index.ts'
-import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
+import { DetailRefreshProblem, RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { DocumentList } from './document-list.tsx'
 import { FolderList } from './folder-list.tsx'
 import { useFolderTrail } from './folder-trail.ts'
@@ -219,6 +219,9 @@ export function SpaceContents({ space, folderIds, targetSpaces, onDenied, titleR
   return (
     <div className="flex flex-col gap-4">
       {folderIds.length > 0 && <Breadcrumb space={space} folderIds={folderIds} crumbs={trail.crumbs} />}
+      {/* 面包屑的名称取自上面各层的列表：有一层留着之前的、刷新却失败了（DEF-040）时明说位置没能刷新、给出重试；
+          有一层看不到了（404）时上面已经换成"这个文件夹不存在"，不走到这里 */}
+      <DetailRefreshProblem query={trail.location} detail={text.breadcrumbLabel} fallbackFocus={titleRef} />
       <div className="flex flex-wrap items-center gap-2">
         {space.permissions.canCreateFolders && !creating && (
           <Button ref={newFolderRef} variant="outline" size="sm" onClick={() => setCreating(true)}>{text.newFolder}</Button>

@@ -10,6 +10,11 @@ export const membersMessages = {
   backToSpace: '返回空间',
   backToAdmin: '返回团队空间管理',
   listLabel: '成员列表',
+  /**
+   * 成员表与页头的空间信息（名称、归档、能不能管理）是同一个请求：留着之前的、重新请求却失败了时一起说（DEF-040）：
+   * "成员列表与空间信息没能刷新，显示的还是之前的内容"
+   */
+  detailName: '成员列表与空间信息',
   loading: '正在加载成员…',
   loadFailed: '成员列表加载失败',
   readOnly: '只有空间管理员能添加、调整与移出成员。',
