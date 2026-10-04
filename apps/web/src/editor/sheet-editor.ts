@@ -164,8 +164,9 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   //   带 onlyLocal、fromFormula 的嵌套 mutation，把公式写进单元格（read-only/read-only-guard.ts 的第 1 条）。
   // - 只读的防火墙是 Facade 事件的订阅者：Facade 的监听排在 UpdateFormulaController 的前面，防火墙才能在嵌套的写入发生之前取消触发它的
   //   那条 mutation；排在后面时，写公式的 mutation 照样改掉单元格，而且它带 onlyLocal，变更检测也看不见。
-  // 入口守卫最先订阅、销毁时才退订，Facade 的监听由它占住 SDK 之前的位置：只读守卫自己先装还是后装都不影响这一点，
-  // M3 原地切换时在工作簿已经存在之后装上、撤下只读守卫，订阅者也不会减到零。改动这里的顺序（例如把这些订阅挪到创建工作簿之后，
+  // 入口守卫最先订阅、销毁时才退订，Facade 的监听由它占住 SDK 之前的位置：只读守卫自己先装还是后装都不影响这一点。
+  // 只读守卫只在创建编辑器时装上、随编辑器销毁：阅读与编辑之间的切换一律重建编辑器（M3-P2 设计 §3.1），运行中不装也不撤；
+  // 将来要在运行中装上、撤下它，有入口守卫占着，订阅者也不会减到零。改动这里的顺序（例如把这些订阅挪到创建工作簿之后，
   // 或者入口守卫中途退订）都会破坏它：E2E read-only.spec.ts 的用例"经 Facade 直接执行写公式的 mutation"核对（被取消、单元格不变）
   const guards = installEntryGuards(univerAPI)
   cleanup.defer(() => guards.dispose())

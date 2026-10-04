@@ -856,8 +856,9 @@ export default antfu(
   {
     name: 'nerve/web-app-entries',
     files: ['apps/web/src/entries/*/main.{ts,tsx}'],
-    // CSP 阳性对照只在测试构建里，不用 zod，它的入口里就是探针本身的代码
-    ignores: ['apps/web/src/entries/csp-probe/**'],
+    // CSP 阳性对照只在测试构建里，不用 zod，它的入口里就是探针本身的代码；页面自检的入口页同样只在测试构建里、不用 zod，
+    // 而且不能引用 zod-jitless 这类与平台页面、编辑器页共用的模块（M3-P2 复核 B4，见 nerve/selftest-entry-self-contained）
+    ignores: ['apps/web/src/entries/csp-probe/**', 'apps/web/src/entries/selftest/**'],
     rules: {
       'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...APP_ENTRY_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION, ...LIVE_STATUS_HIDDEN],
     },
@@ -986,6 +987,20 @@ export default antfu(
       'ts/no-restricted-imports': ['error', { patterns: [TEST_MODULES, {
         regex: '.',
         message: '页面自检与 E2E 共用的文件（SELFTEST_SHARED_FILES）不引用任何模块：E2E 也引用它们，Playwright 的进程里不能带进 Univer 与 web 的其他代码（M3-P2 设计 §3.5）',
+      }] }],
+    },
+  },
+  {
+    // 页面自检的入口页（entries/selftest，只在测试构建里）不引用平台页面与编辑器页共用的任何模块（contracts、shared、zod……，M3-P2 复核 B4）：
+    // 引用了，那些模块在测试构建里成了三个入口共用的，分块的拆法随之改变，两个页面的入口块就与生产构建的不同，E2E 测的不再是生产的样子。
+    // 只许引用入口页自己目录里的文件与结果的格式（editor/testing/selftest-report.ts，它不引用任何模块）。
+    // 同名规则后者整体覆盖前者：测试与测试辅助的限制一并带上
+    name: 'nerve/selftest-entry-self-contained',
+    files: ['apps/web/src/entries/selftest/**'],
+    rules: {
+      'ts/no-restricted-imports': ['error', { patterns: [TEST_MODULES, {
+        regex: String.raw`^(?!\./[\w-]+\.ts$|\.\./\.\./editor/testing/selftest-report\.ts$)`,
+        message: '页面自检的入口页只引用自己目录里的文件与结果的格式（editor/testing/selftest-report.ts）：引用平台页面、编辑器页共用的模块，测试构建里两个页面的入口块就与生产构建的不同（M3-P2 复核 B4）',
       }] }],
     },
   },

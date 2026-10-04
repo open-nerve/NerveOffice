@@ -49,15 +49,17 @@ describe('US-M1-11 lint 规则的自测：平台页面的模块边界与入口',
     expect(mixed.messages.join('\n')).toContain('只写副作用导入')
   })
 
-  it('写成 main.ts 的入口同样受约束；CSP 阳性对照的入口除外（复验 R7）', async () => {
+  it('写成 main.ts 的入口同样受约束；CSP 阳性对照与页面自检的入口页除外（复验 R7；M3-P2 复核 B4）', async () => {
     const config = await configFor('apps/web/src/entries/editor/main.ts')
     const syntax = config.rules?.['no-restricted-syntax']
     expect(JSON.stringify(syntax)).toContain('zod-jitless')
     const probe = await configFor('apps/web/src/entries/csp-probe/main.ts')
     expect(JSON.stringify(probe.rules?.['no-restricted-syntax'])).not.toContain('zod-jitless')
+    const selftest = await configFor('apps/web/src/entries/selftest/main.ts')
+    expect(JSON.stringify(selftest.rules?.['no-restricted-syntax'])).not.toContain('zod-jitless')
   })
 
-  it('每个页面（apps/web/*.html）引用的入口脚本都受入口规则约束，CSP 阳性对照除外：入口换了名字或写法也不会漏掉（复验 S7）', async () => {
+  it('每个页面（apps/web/*.html）引用的入口脚本都受入口规则约束：CSP 阳性对照除外，页面自检的入口页改受"自给自足"的规则约束；入口换了名字或写法也不会漏掉（复验 S7；M3-P2 复核 B4）', async () => {
     const pages = readdirSync(join(REPO_ROOT, 'apps/web')).filter(name => name.endsWith('.html'))
     expect(pages).toContain('index.html')
     for (const page of pages) {
@@ -65,12 +67,34 @@ describe('US-M1-11 lint 规则的自测：平台页面的模块边界与入口',
       const scripts = [...html.matchAll(/<script[^>]*\ssrc="\/([^"]+)"/g)].map(match => `apps/web/${match[1] ?? ''}`)
       expect(scripts, page).not.toEqual([])
       for (const script of scripts) {
-        const syntax = JSON.stringify((await configFor(script)).rules?.['no-restricted-syntax'])
-        if (page === 'csp-probe.html')
+        const config = await configFor(script)
+        const syntax = JSON.stringify(config.rules?.['no-restricted-syntax'])
+        if (page === 'csp-probe.html') {
           expect(syntax, script).not.toContain('zod-jitless')
-        else
+        }
+        else if (page === 'selftest.html') {
+          expect(syntax, script).not.toContain('zod-jitless')
+          expect(JSON.stringify(config.rules?.['ts/no-restricted-imports']), script).toContain('selftest-report')
+        }
+        else {
           expect(syntax, script).toContain('zod-jitless')
+        }
       }
+    }
+  })
+
+  it('页面自检的入口页（只在测试构建里）只许引用自己目录里的文件与结果的格式：平台页面与编辑器页共用的模块（contracts、shared、zod-jitless）一概不许（M3-P2 复核 B4）', async () => {
+    const signIn = 'apps/web/src/entries/selftest/sign-in.ts'
+    expect(await rulesFor('import \'./sign-in.ts\'\n', 'apps/web/src/entries/selftest/main.ts')).toEqual([])
+    expect(await rulesFor('import { NEXT_PARAM } from \'../../editor/testing/selftest-report.ts\'\n\nexport const next = NEXT_PARAM\n', signIn)).toEqual([])
+    for (const code of [
+      'import { documentPagePath } from \'@nerve-office/contracts\'\n\nexport const path = documentPagePath\n',
+      'import { apiRequest } from \'../../shared/api/index.ts\'\n\nexport const request = apiRequest\n',
+      'import \'../../shared/lib/zod-jitless.ts\'\n',
+    ]) {
+      const report = await lint(code, signIn)
+      expect(report.rules, code).toContain('ts/no-restricted-imports')
+      expect(report.messages.join('\n'), code).toContain('页面自检的入口页只引用自己目录里的文件与结果的格式')
     }
   })
 

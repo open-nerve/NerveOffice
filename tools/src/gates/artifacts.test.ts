@@ -1,6 +1,6 @@
 import type { ArtifactPolicy } from './artifacts.ts'
 import { describe, expect, it } from 'vitest'
-import { checkFileTypes, checkTestOnlyArtifacts, classifyArtifact, scanArtifacts } from './artifacts.ts'
+import { checkFileTypes, checkTestOnlyArtifacts, checkTestOnlySources, classifyArtifact, isTestOnlySource, scanArtifacts } from './artifacts.ts'
 import { ARTIFACT_POLICY } from './policy.ts'
 
 const policy: ArtifactPolicy = {
@@ -552,7 +552,39 @@ describe('US-M1-11 A01 产物的文件类型', () => {
   it('清单文件不扫描内容，其他 .json 按文本扫描', () => {
     expect(classifyArtifact('THIRD-PARTY-LICENSES.md')).toBe('metadata')
     expect(classifyArtifact('.vite/manifest.json')).toBe('metadata')
+    expect(classifyArtifact('.vite/module-sources.json')).toBe('metadata')
     expect(classifyArtifact('config.json')).toBe('text')
+  })
+})
+
+describe('US-M1-09 生产构建里没有测试构建的模块：按来源认（M3-P2 复核 B2）', () => {
+  it('测试专用的来源：编辑器的 testing/、自检与 CSP 探针的入口页与脚本、编辑器页的挂接（查询串不算）；名字相近的、生产的源码、第三方包里同名的目录都不算', () => {
+    const testOnly = ['src/editor/testing/switch-timing.ts', 'src/editor/testing/read-only-entries.ts', 'src/editor/testing/content-compare.ts?raw', 'selftest.html', 'csp-probe.html', 'src/entries/selftest/sign-in.ts', 'src/entries/csp-probe/probe-worker.ts', 'src/features/sheet-editor/selftest-hook.ts']
+    for (const module of testOnly)
+      expect(isTestOnlySource(module), module).toBe(true)
+    const production = ['src/editor/testing-utils/x.ts', 'src/editor/sheet-editor.ts', 'src/features/sheet-editor/selftest-hook-like.ts', 'index.html', 'editor.html', 'src/entries/editor/main.ts', 'node_modules/some-lib/src/editor/testing/x.js', '../../packages/contracts/src/index.ts', 'virtual:rolldown/runtime.js']
+    for (const module of production)
+      expect(isTestOnlySource(module), module).toBe(false)
+  })
+
+  it('脚本里有测试专用的模块即违规——分块名看不出来也认得出（被生产代码直接动态引入、改了名、并进了入口块），说明里列出那几个模块', () => {
+    const violations = checkTestOnlySources({
+      'assets/index-a.js': { name: 'index', modules: ['index.html', 'src/entries/platform/main.ts'] },
+      'assets/timing-b.js': { name: 'timing', modules: ['src/editor/testing/switch-timing.ts'] },
+      'assets/editor-c.js': { name: 'editor', modules: ['editor.html', 'src/editor/sheet-editor.ts', 'src/editor/testing/read-only-entries.ts', 'src/editor/testing/content-compare.ts'] },
+    }, ['index.html', 'assets/index-a.js', 'assets/timing-b.js', 'assets/editor-c.js'])
+    expect(violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/test-only-source', 'assets/timing-b.js'], ['artifacts/test-only-source', 'assets/editor-c.js']])
+    expect(violations[1]?.detail).toContain('src/editor/testing/read-only-entries.ts、src/editor/testing/content-compare.ts')
+  })
+
+  it('产物里的每个脚本（.js、.mjs）都要在清单里：不在的按来源看不到，即违规；别的文件不管', () => {
+    const violations = checkTestOnlySources({ 'assets/index-a.js': { name: 'index', modules: ['index.html'] } }, ['index.html', 'assets/index-a.js', 'assets/extra-b.js', 'assets/worker-c.mjs', 'assets/x.css', '.vite/module-sources.json'])
+    expect(violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/unlisted-script', 'assets/extra-b.js'], ['artifacts/unlisted-script', 'assets/worker-c.mjs']])
+  })
+
+  it('名字的兜底：与 E2E 共用的文件被单独动态引入时自成的分块（入口清单、比较口径、切换的计时）同样按名字认', () => {
+    expect(checkTestOnlyArtifacts(['assets/switch-timing-BFKYlR0-.js', 'assets/read-only-entries-x.js', 'assets/content-compare-y.js', 'assets/timing-z.js']).map(v => v.subject))
+      .toEqual(['assets/switch-timing-BFKYlR0-.js', 'assets/read-only-entries-x.js', 'assets/content-compare-y.js'])
   })
 })
 

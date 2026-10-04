@@ -12,7 +12,7 @@ import { z } from 'zod'
 import { API_PACKAGE, SERVER_LICENSE_SUPPLEMENT, serverLicenseViolations, serverPackages } from '../deploy/server-licenses.ts'
 import { commandJson, listFiles, packageName, readJson, readText, readWorkspaceConfig, REPO_ROOT, workspacePackageDirs } from '../shared/repo.ts'
 import { checkStories, parseDesignStoryIds, parseRegistry, testsFromPlaywrightList, testsFromVitestList } from '../stories/stories.ts'
-import { checkFileTypes, checkTestOnlyArtifacts, classifyArtifact, scanArtifacts } from './artifacts.ts'
+import { checkFileTypes, checkTestOnlyArtifacts, checkTestOnlySources, classifyArtifact, scanArtifacts } from './artifacts.ts'
 import { checkAudit } from './audit.ts'
 import { checkBudgets, entryWorkers, reachableFiles, viteManifestSchema, workerClosure } from './budgets.ts'
 import { checkContainerImages } from './container-images.ts'
@@ -21,6 +21,7 @@ import { bundledPackagesSchema, checkLicenseBundle, checkLicenseText, checkLicen
 import { checkDevelopmentLicenses, checkProductionLicenses, flattenLicenseReport, licensesByPath } from './licenses.ts'
 import { gitIn, runMigrationsGate } from './migrations-gate.ts'
 import { MIGRATIONS_DIR } from './migrations.ts'
+import { MODULE_SOURCES_FILE, moduleSourcesSchema } from './module-sources.ts'
 import { checkPins } from './pins.ts'
 import { checkPnpmConfig, checkPnpmfiles, PNPMFILE_NAMES } from './pnpm-config.ts'
 import { auditReportSchema, licenseReportSchema, lsOutputSchema } from './pnpm-outputs.ts'
@@ -192,6 +193,12 @@ function readManifest(distDir: string): ReturnType<typeof viteManifestSchema.par
   return existsSync(manifestFile) ? viteManifestSchema.parse(JSON.parse(readFileSync(manifestFile, 'utf8'))) : undefined
 }
 
+/** web 构建写出的模块来源清单（M3-P2 复核 B2）；没有时为 undefined */
+function readModuleSources(distDir: string): ReturnType<typeof moduleSourcesSchema.parse> | undefined {
+  const file = join(distDir, MODULE_SOURCES_FILE)
+  return existsSync(file) ? moduleSourcesSchema.parse(JSON.parse(readFileSync(file, 'utf8'))) : undefined
+}
+
 /**
  * 地址可以按前缀放行的文件（P4 设计 §3.9）：编辑器页能加载到的全部产物，即入口页、JS 与样式（首屏与动态加载的块）、
  * 它创建的 Worker 与 Worker 加载的块。其他入口（平台页面与构建清单里别的入口）能加载到的产物（含与编辑器共用的块）除外；
@@ -232,14 +239,19 @@ export function artifactsGate(distDir: string): GateOutcome {
         ...checkLicenseTextFile(licenseText),
       ]
     : [...checkLicenseBundle(bundle, PRODUCTION_LICENSES, LICENSE_EXCEPTIONS), ...checkLicenseText(bundle, licenseText)]
+  // 测试专用的模块按来源认（M3-P2 复核 B2）：没有清单就无从核对，报出来
+  const sources = readModuleSources(distDir)
+  const sourceViolations: Violation[] = sources === undefined
+    ? [{ rule: 'artifacts/missing-module-sources', subject: MODULE_SOURCES_FILE, detail: '没有模块来源清单，检查 web 构建是否挂上了 module-sources 插件' }]
+    : checkTestOnlySources(sources, files)
   const hostSummary = [...hosts].map(([host, count]) => `${host}×${count}`).join('、') || '无'
   const knownSummary = [...knownDynamicCode].map(([name, count]) => `${name}×${count}`).join('、') || '无'
   return {
     name: 'artifacts',
     title,
-    violations: [...checkFileTypes(files), ...checkTestOnlyArtifacts(files), ...violations, ...bundleViolations],
+    violations: [...checkFileTypes(files), ...checkTestOnlyArtifacts(files), ...sourceViolations, ...violations, ...bundleViolations],
     notes: [
-      `${files.length} 个文件，扫描其中 ${textFiles.length} 个；打进产物的第三方包 ${bundle?.length ?? 0} 个`,
+      `${files.length} 个文件，扫描其中 ${textFiles.length} 个；打进产物的第三方包 ${bundle?.length ?? 0} 个；按来源核对了 ${Object.keys(sources ?? {}).length} 个脚本`,
       `出现的主机：${hostSummary}；主机在运行时拼出的地址 ${runtimeHosts} 处（由 CSP 兜底）`,
       `允许清单里这次没出现的地址（核对后删除）：${unusedAddresses.join('、') || '无'}`,
       `已登记的动态代码（出现次数为 0 的登记已经过时，核对后删除）：${knownSummary}；全局对象探测 ${globalThisProbes} 处（上限 ${ARTIFACT_POLICY.globalThisProbeMax}）`,

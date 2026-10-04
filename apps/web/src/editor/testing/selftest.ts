@@ -21,7 +21,7 @@ import type { SwitchDirection, SwitchTimingRecorder } from './switch-timing.ts'
 import { canonicalJson, contentOf, documentChangeAttemptsIn, documentChangesIn, sameContent } from './content-compare.ts'
 import { FACADE_ENTRIES, FORMULA_MUTATION_CELL, FORMULA_MUTATION_ID, PERMISSION_ALERT_TITLE, PROTECTION_WORDING, SHORTCUT_OUTCOMES, writeFormulaMutation } from './read-only-entries.ts'
 import { accessibleName, byExactText, byRole, centerOf, clickAt, dialogTitled, isShown, isVisible, keyboardTarget, nextFrames, pressKeys, rightClickAt, sheetCanvas, sheetTab, univerIsMac, waitFor } from './selftest-dom.ts'
-import { encodeSelftestReport, ENTER_EXIT_EDIT, isSelftestScenario, NEXT_PARAM, reportUrl, SELFTEST_PARAM, SELFTEST_REPORT_FORMAT } from './selftest-report.ts'
+import { encodeSelftestReport, ENTER_EXIT_EDIT, isSelftestScenario, NEXT_PARAM, nextProblem, reportUrl, SELFTEST_PARAM, SELFTEST_REPORT_FORMAT } from './selftest-report.ts'
 import { installSwitchTiming, summarizeSwitch, SWITCH_TIMING_OPTIONS, switchDurations } from './switch-timing.ts'
 
 /** 编辑器页现在的样子：阅读还是编辑（edit-mode.ts 的状态，例如 reading、entering、editing、exiting）与编辑器容器的状态（loading、ready、steady、failed） */
@@ -919,14 +919,28 @@ export async function runEditorSelftest(host: SelftestHost, scenario: string): P
   }
 }
 
+/** 自检没有运行的原因：写在页面的最上面（手工打开时看得到），页面的其余部分照常 */
+function showProblem(text: string): void {
+  const notice = document.createElement('p')
+  notice.setAttribute('role', 'alert')
+  notice.textContent = text
+  document.body.prepend(notice)
+}
+
 /**
  * 跑地址里要求的场景（selftest），把结果带到地址里的 next（整页跳转，替换当前的历史记录）。
- * 没有 next 时只跑、不跳转（手工调试时在开发者工具里看页面）
+ * 没有 next 时只跑、不跳转（手工调试时在开发者工具里看页面）。next 不是本机的地址时（nextProblem，M3-P2 复核 B7）不跑、不跳转，
+ * 原因写在页面上，返回 undefined：带着任意 next 打开测试构建的编辑器页，既不会动这份文档（enter-exit 要保存），也不会把结果带出本机
  */
-export async function runSelftestAndReport(host: SelftestHost): Promise<SelftestReport> {
+export async function runSelftestAndReport(host: SelftestHost): Promise<SelftestReport | undefined> {
   const params = new URL(window.location.href).searchParams
-  const report = await runEditorSelftest(host, params.get(SELFTEST_PARAM) ?? '')
   const next = params.get(NEXT_PARAM)
+  const problem = next === null ? undefined : nextProblem(next)
+  if (problem !== undefined) {
+    showProblem(`页面自检没有运行：${problem}`)
+    return undefined
+  }
+  const report = await runEditorSelftest(host, params.get(SELFTEST_PARAM) ?? '')
   if (next !== null)
     window.location.replace(reportUrl(next, await encodeSelftestReport(report)))
   return report

@@ -91,7 +91,7 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
   {
     name: 'IUndoRedoService',
     origin: '@univerjs/core 的撤销栈服务（Facade 之外）',
-    purpose: '只读守卫：就绪时 clearUndoRedo(unitId) 清空这份文档的撤销栈（以只读创建时本来就空，是给 M3 的原地切换用的同一个入口）；撤销与重做本身经 Facade 的 BeforeUndo、BeforeRedo 取消',
+    purpose: '只读守卫：就绪时 clearUndoRedo(unitId) 清空这份文档的撤销栈（保底：阅读与编辑之间的切换一律重建编辑器，M3-P2 设计 §3.1，以只读创建时撤销栈本来就空；这一步不依赖创建的过程里没有进撤销栈的操作）；撤销与重做本身经 Facade 的 BeforeUndo、BeforeRedo 取消',
     evidence: `${M0_READ_MODE_EVIDENCE}（read-mode.ts:76-84、141-144：四种方案都拦住撤销重做、清空撤销栈，不清空时按快捷键撤销、重做内容也不变）；core 的 services/undoredo/undoredo.service.ts:44-104（clearUndoRedo 按单元清空）、univer.ts:290`,
     regression: `${READ_ONLY_GUARD_REGRESSION}（撤销与重做无效）`,
   },
