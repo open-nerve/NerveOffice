@@ -395,6 +395,17 @@ describe('DEF-040 面包屑（名称取自上一层的列表）', () => {
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('heading', { level: 1, name: '我的空间' })))
   })
 
+  it('当前这一层（不是上一层）刷新失败：照旧是"文件夹列表没能刷新"，面包屑的名称没有过时，不说位置没能刷新', async () => {
+    const api = inFolder()
+    const app = renderApp(FOLDER_PATH)
+    const breadcrumb = await screen.findByRole('navigation', { name: '位置' })
+    expect(await within(breadcrumb).findByText('方案')).toBeInTheDocument()
+    api.on(foldersKey(PERSONAL_ID, PLAN_ID), () => apiError(500, 'INTERNAL_ERROR'))
+    await leaveAndReturn(app)
+    expect(await problemOf('文件夹列表')).toHaveTextContent(SERVER)
+    expect(screen.queryByText(problemText('位置'))).toBeNull()
+  })
+
   it('上一层重新请求得到 404（路径不成立了）：照旧说明这个文件夹不存在，不说位置没能刷新', async () => {
     const api = inFolder()
     const app = renderApp(FOLDER_PATH)

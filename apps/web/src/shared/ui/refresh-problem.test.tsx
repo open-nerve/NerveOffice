@@ -96,6 +96,34 @@ describe('DetailRefreshProblem（DEF-040）', () => {
     expect(document.activeElement).toBe(elsewhere)
   })
 
+  it('焦点先移到别处、后来才落到 body（例如点了空白处）：说明消失时不交——焦点不是因为它消失才丢的', () => {
+    const { rerender } = render(<Page query={failed()} detail />)
+    screen.getByRole('button', { name: '重试' }).focus()
+    const elsewhere = screen.getByRole('button', { name: '别处的按钮' })
+    elsewhere.focus()
+    elsewhere.blur()
+    rerender(<Page query={REFRESHED} detail />)
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it('说明消失的同一次更新里别的元素已经接过焦点（随之出现、自动聚焦的输入框）：不抢', () => {
+    function FollowUp({ query }: { readonly query: RefreshableQuery }) {
+      const titleRef = useRef<HTMLHeadingElement>(null)
+      return (
+        <section>
+          <h1 ref={titleRef} tabIndex={-1}>市场部</h1>
+          {/* eslint-disable-next-line jsx-a11y/no-autofocus -- 用例要的正是"同一次更新里别处接过了焦点" */}
+          {!query.isRefetchError && <input aria-label="接着要填的" autoFocus />}
+          <DetailRefreshProblem query={query} detail="空间信息" fallbackFocus={titleRef} />
+        </section>
+      )
+    }
+    const { rerender } = render(<FollowUp query={failed()} />)
+    screen.getByRole('button', { name: '重试' }).focus()
+    rerender(<FollowUp query={REFRESHED} />)
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: '接着要填的' }))
+  })
+
   it('说明还在（重试又失败了）：焦点留在"重试"上，不挪走', () => {
     const { rerender } = render(<Page query={failed()} detail />)
     const retry = screen.getByRole('button', { name: '重试' })
