@@ -47,10 +47,28 @@ export const COPIED_TITLE_SUFFIX = ' 的副本'
  * 加完超过上限时按码点截断源标题（不截成半个字符），再去掉截断处留下的空白；界面与服务端共用这一条规则。
  */
 export function copiedDocumentTitle(sourceTitle: string): string {
-  const room = DOCUMENT_TITLE_MAX_LENGTH - codePointLength(COPIED_TITLE_SUFFIX)
+  return withTitleSuffix(sourceTitle, COPIED_TITLE_SUFFIX)
+}
+
+/**
+ * 另存为副本（M3-P2 设计 §3.2，00 号计划书 §7.5）的标题：原标题后面加"（冲突副本 <label>）"。
+ * label 是页面按所在的时区写到分钟的时间（例如 2026-10-04 14:30）：服务端不知道页面的时区，标题由页面给出。
+ * 加完超过上限时按码点截断原标题、去掉截断处留下的空白（与 copiedDocumentTitle 同一个写法），结果一定不超过上限。
+ * label 长得连原标题一个字也放不下（后缀本身超过上限）是调用方写错了，抛 RangeError，不交出一个服务端会拒绝的标题
+ */
+export function conflictCopyTitle(sourceTitle: string, label: string): string {
+  const suffix = `（冲突副本 ${label}）`
+  if (codePointLength(suffix) > DOCUMENT_TITLE_MAX_LENGTH)
+    throw new RangeError(`冲突副本的时间太长，标题放不下：${codePointLength(label)} 个字符`)
+  return withTitleSuffix(sourceTitle, suffix)
+}
+
+/** 原标题加上后缀；加完超过上限时按码点截断原标题（不截成半个字符），再去掉截断处留下的空白 */
+function withTitleSuffix(sourceTitle: string, suffix: string): string {
+  const room = DOCUMENT_TITLE_MAX_LENGTH - codePointLength(suffix)
   const points = [...sourceTitle]
   const base = points.length > room ? points.slice(0, room).join('').trimEnd() : sourceTitle
-  return `${base}${COPIED_TITLE_SUFFIX}`
+  return `${base}${suffix}`
 }
 
 /**
@@ -170,7 +188,8 @@ export const documentDetailSchema = documentSummarySchema.extend({
 export type DocumentDetail = z.infer<typeof documentDetailSchema>
 
 /**
- * 带 requestId 的新建与复制的响应（POST /api/documents、POST /api/documents/{id}/copy）：文档的元数据，加上这次是不是重放
+ * 带 requestId 的新建与复制的响应（POST /api/documents、POST /api/documents/{id}/copy，M3-P2 起另存为副本
+ * POST /api/documents/{id}/conflict-copies 同样）：文档的元数据，加上这次是不是重放
  * （M2-P6 复核第二批 S-1，接口的加法）。replayed 为真：同一个 requestId 的那一次之前已经建好了，这次没有新建，给出的是那一份现在的样子
  * （可能已经改了名、移了位置）。客户端据此说明"上一次其实已经完成"，不把它当成这一次新建的，这件事随之了结——
  * 之后再点就是另一件事、另一个 requestId（否则结果未知之后留着的 requestId 会把很久以后的"再建一份"当成重试）
@@ -235,3 +254,17 @@ export const copyDocumentRequestSchema = z.strictObject({
 })
 
 export type CopyDocumentRequest = z.input<typeof copyDocumentRequestSchema>
+
+/**
+ * 另存为副本（POST /api/documents/{id}/conflict-copies，M3-P2 设计 §3.2）的查询参数：正文是 gzip 压缩的快照
+ * （SNAPSHOT_UPLOAD_CONTENT_TYPE，与保存同一个读取方式），元数据只能放在查询串里。
+ * - requestId：与新建、复制一样做幂等，网络错误之后用同一个 requestId 重试只建一份；
+ * - title：副本的标题，由页面给出（conflictCopyTitle：原标题加"（冲突副本 时间）"，时间按页面所在的时区）。
+ * 放在哪里不由请求决定：服务端按"本人在原文档所在的空间能不能新建"放进原文档所在的文件夹或本人的个人空间（00 号计划书 §7.5）
+ */
+export const conflictCopyQuerySchema = z.strictObject({
+  requestId: uuidSchema,
+  title: documentTitleSchema,
+})
+
+export type ConflictCopyQuery = z.output<typeof conflictCopyQuerySchema>

@@ -6,16 +6,17 @@ import { FOLDER_LIST_MAX_ITEMS, folderNameSchema } from '@nerve-office/contracts
 import { useMutation } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { Link } from 'react-router'
-import { describeError, isAccessDenied, isUnknownOutcome } from '../../shared/api/index.ts'
+import { describeError, isAccessDenied, isMissingResource, isUnknownOutcome } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { useRequestIdLedger } from '../../shared/lib/request-id-ledger.ts'
 import { spaceFolderPath, spacePath, spaceTrashPath } from '../../shared/lib/space-paths.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
+import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
 import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { problemOf } from '../../shared/lib/validation.ts'
-import { Alert, AlertDescription, Button, buttonVariants, FieldProblem, Input, Label, Skeleton } from '../../shared/ui/index.ts'
-import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
+import { Alert, AlertDescription, Button, buttonVariants, FieldProblem, Input, Label, RetryButton, Skeleton } from '../../shared/ui/index.ts'
+import { DetailRefreshProblem, RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { DocumentList } from './document-list.tsx'
 import { FolderList } from './folder-list.tsx'
 import { useFolderTrail } from './folder-trail.ts'
@@ -170,13 +171,21 @@ interface SpaceContentsProps {
   readonly titleRef: RefObject<HTMLElement | null>
 }
 
+/** 这一层看不到了（404）：由"这个文件夹不存在"说明（trail.missing），重试也不会好 */
+function notRetryable(error: unknown): boolean {
+  return !isMissingResource(error)
+}
+
 /**
  * 空间页的内容区（M2-P4 设计 §3.7）：面包屑、新建文件夹与回收站的入口、子文件夹（在前）与文档。
  * 地址里带着从空间根目录到当前文件夹的整条 id 路径，所以直接打开深层地址与一层层点进去看到的一样（shared/lib/space-paths.ts）。
  * 浏览器标签页的标题按当前的位置给出（M2-P6 复核 S4）：空间的根目录是空间名，文件夹里是"文件夹名 - 空间名"。
+ * 子文件夹第一次就没取到时按"重试"：重试期间说明与按钮留着（不可用、说正在重试）；取到之后焦点交给页面的标题，不落到 body
+ * （规范 §2.4，shared/lib/use-first-load-retry.ts）
  */
 export function SpaceContents({ space, folderIds, targetSpaces, onDenied, titleRef }: SpaceContentsProps) {
   const trail = useFolderTrail(space.id, folderIds)
+  const folders = useFirstLoadRetry(trail.children, titleRef, { retryable: notRetryable })
   const [creating, setCreating] = useState(false)
   // 哪一行展开了操作面板、列表上方的说明与焦点的去处（与"与我共享"共用，organize-panels.tsx）
   const panels = useOrganizePanels(titleRef)
@@ -219,6 +228,9 @@ export function SpaceContents({ space, folderIds, targetSpaces, onDenied, titleR
   return (
     <div className="flex flex-col gap-4">
       {folderIds.length > 0 && <Breadcrumb space={space} folderIds={folderIds} crumbs={trail.crumbs} />}
+      {/* 面包屑的名称取自上面各层的列表：有一层留着之前的、刷新却失败了（DEF-040）时明说位置没能刷新、给出重试；
+          有一层看不到了（404）时上面已经换成"这个文件夹不存在"，不走到这里 */}
+      <DetailRefreshProblem query={trail.location} detail={text.breadcrumbLabel} fallbackFocus={titleRef} />
       <div className="flex flex-wrap items-center gap-2">
         {space.permissions.canCreateFolders && !creating && (
           <Button ref={newFolderRef} variant="outline" size="sm" onClick={() => setCreating(true)}>{text.newFolder}</Button>
@@ -231,17 +243,18 @@ export function SpaceContents({ space, folderIds, targetSpaces, onDenied, titleR
         <NewFolderForm spaceId={space.id} parentId={parentId} onDone={doneCreating} onCancel={() => doneCreating()} onDenied={creationDenied} />
       )}
       {notice !== undefined && <OrganizeNoticeBar notice={notice} onClose={panels.closeNotice} />}
-      {trail.children.isPending && (
+      {!folders.failed && trail.children.isPending && (
         <div role="status" aria-label={text.folderLoading}>
           <Skeleton className="h-12 w-full" />
         </div>
       )}
-      {!trail.children.isPending && trail.children.data === undefined && (
-        <Alert variant="destructive">
+      {/* 重试期间说明与按钮留着（不可用、说正在重试），上一次的原因不再给（请求缓存已经清掉了它） */}
+      {folders.failed && (
+        <Alert variant="destructive" onFocus={folders.focus.onFocus} onBlur={folders.focus.onBlur}>
           <AlertDescription>
             <p>{text.folderLoadFailed}</p>
-            <p>{describeError(trail.children.error).message}</p>
-            <Button variant="outline" size="sm" className="mt-2" onClick={() => void trail.children.refetch()}>{messages.common.retry}</Button>
+            {!folders.retrying && <p>{describeError(trail.children.error).message}</p>}
+            <RetryButton retrying={folders.retrying} onRetry={() => void trail.children.refetch()} className="mt-2" />
           </AlertDescription>
         </Alert>
       )}
@@ -272,6 +285,7 @@ export function SpaceContents({ space, folderIds, targetSpaces, onDenied, titleR
         onDone={panels.finish}
         onDenied={onDenied}
         hasFolders={(trail.children.data?.items.length ?? 0) > 0}
+        titleRef={titleRef}
       />
     </div>
   )

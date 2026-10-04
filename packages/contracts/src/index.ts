@@ -98,6 +98,8 @@ export {
 export type { RevisionConflictDetails, RevisionSource, SaveContentQuery, SaveContentResponse } from './documents/content.ts'
 export { DOCUMENT_PAGE_PATTERN, documentIdFromPagePath, documentPagePath } from './documents/document-page.ts'
 export {
+  conflictCopyQuerySchema,
+  conflictCopyTitle,
   COPIED_TITLE_SUFFIX,
   copiedDocumentTitle,
   copyDocumentRequestSchema,
@@ -127,6 +129,7 @@ export {
   updateDocumentRequestSchema,
 } from './documents/documents.ts'
 export type {
+  ConflictCopyQuery,
   CopyDocumentRequest,
   CreatedDocument,
   CreateDocumentRequest,

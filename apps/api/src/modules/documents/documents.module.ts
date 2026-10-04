@@ -4,6 +4,7 @@ import { AuthModule } from '../auth/index.ts'
 import { DatabaseModule } from '../database/index.ts'
 import { SpacesModule } from '../spaces/index.ts'
 import { DocumentAccessPolicy, EffectiveAccessPolicy } from './document-access-policy.ts'
+import { DocumentConflictCopyService } from './document-conflict-copy.service.ts'
 import { DocumentContentController } from './document-content.controller.ts'
 import { DocumentContentService } from './document-content.service.ts'
 import { DocumentContentsRepository } from './document-contents.repository.ts'
@@ -52,6 +53,8 @@ import { WriteAccessRevocation } from './write-access.ts'
     DocumentContentService,
     DocumentOrganizingService,
     DocumentCopyService,
+    // 另存为副本（M3-P2）：按上传的快照新建，接口与复制同在 DocumentsController
+    DocumentConflictCopyService,
     DocumentSearchService,
     DocumentTransferService,
     // 分享（M2-P5）：单独授权的判断、锁下复核与写入（写入的编排在 workspace），"与我共享"

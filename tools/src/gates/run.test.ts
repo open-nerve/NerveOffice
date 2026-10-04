@@ -5,7 +5,7 @@ import type { CommandRunner, GateInputs } from './run.ts'
 import { randomBytes } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { readJson, REPO_ROOT } from '../shared/repo.ts'
@@ -111,10 +111,23 @@ afterEach(() => {
     rmSync(dist, { recursive: true, force: true })
 })
 
-function writeDist(files: Record<string, string>): string {
+const MODULE_SOURCES = '.vite/module-sources.json'
+
+/**
+ * 模块来源清单（M3-P2 复核 B2）：样例里没有给出时，按其中的脚本写一份（每个脚本一个普通的源码模块），
+ * 不核对它的用例不必关心；专门核对它的用例自己给出，或者 sources: false 去掉
+ */
+function withSources(files: Record<string, string>): Record<string, string> {
+  if (MODULE_SOURCES in files)
+    return files
+  const scripts = Object.keys(files).filter(path => path.endsWith('.js'))
+  return { ...files, [MODULE_SOURCES]: JSON.stringify(Object.fromEntries(scripts.map(path => [path, { name: basename(path, '.js'), modules: [`src/${basename(path, '.js')}.ts`] }]))) }
+}
+
+function writeDist(files: Record<string, string>, options: { readonly sources?: boolean } = {}): string {
   const dist = mkdtempSync(join(tmpdir(), 'nerve-dist-'))
   dists.push(dist)
-  for (const [path, content] of Object.entries(files)) {
+  for (const [path, content] of Object.entries(options.sources === false ? files : withSources(files))) {
     mkdirSync(join(dist, dirname(path)), { recursive: true })
     writeFileSync(join(dist, path), content)
   }
@@ -156,6 +169,37 @@ describe('US-M1-11 产物门禁的装配', () => {
     expect(chunk.violations.map(v => [v.rule, v.subject]).sort()).toEqual([['artifacts/keyword', '__nerveEditorProbe'], ['artifacts/test-only', 'assets/e2e-probe-CC7cG7BE.js']])
     const inlined = artifactsGate(writeDist({ ...clean, 'assets/index.js': `${clean['assets/index.js']}${probe}` }))
     expect(inlined.violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/keyword', '__nerveEditorProbe']])
+  })
+
+  it('违规：页面自检进了生产构建：入口页与分块报出，并进别的分块时结果的格式标识照样报出（M3-P2 设计 §3.5）', () => {
+    // 测试构建（dist-e2e）里自检模块的写法（节选）
+    const selftest = 'const e="nerve-office.editor-selftest.v1";async function t(n){return{format:e,scenario:n.scenario,checks:[]}}export{t as runSelftestAndReport};'
+    const chunk = artifactsGate(writeDist({ ...clean, 'selftest.html': '<!doctype html><title>页面自检</title>', 'assets/selftest-DF73r1gg.js': selftest }))
+    expect(chunk.violations.map(v => [v.rule, v.subject]).sort()).toEqual([
+      ['artifacts/keyword', 'nerve-office.editor-selftest'],
+      ['artifacts/test-only', 'assets/selftest-DF73r1gg.js'],
+      ['artifacts/test-only', 'selftest.html'],
+    ])
+    const inlined = artifactsGate(writeDist({ ...clean, 'assets/index.js': `${clean['assets/index.js']}${selftest}` }))
+    expect(inlined.violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/keyword', 'nerve-office.editor-selftest']])
+  })
+
+  it('违规：生产代码直接动态引入了测试专用的模块（分块名、关键字都看不出来）：按模块来源认出；并进入口块的同样认出（M3-P2 复核 B2）', () => {
+    const index = { name: 'index', modules: ['index.html', 'src/entries/platform/main.ts'] }
+    const timing = { name: 'timing', modules: ['src/editor/testing/switch-timing.ts'] }
+    const separate = artifactsGate(writeDist({ ...clean, 'assets/timing-x1Y2z3A4.js': 'export const t=1', [MODULE_SOURCES]: JSON.stringify({ 'assets/index.js': index, 'assets/timing-x1Y2z3A4.js': timing }) }))
+    expect(separate.violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/test-only-source', 'assets/timing-x1Y2z3A4.js']])
+    const merged = artifactsGate(writeDist({ ...clean, [MODULE_SOURCES]: JSON.stringify({ 'assets/index.js': { ...index, modules: [...index.modules, ...timing.modules] } }) }))
+    expect(merged.violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/test-only-source', 'assets/index.js']])
+    // 计时挂在 window 上的名字另由禁用关键字兜底
+    const named = artifactsGate(writeDist({ ...clean, 'assets/index.js': 'window.__nerveSwitchTiming={marks:[]}' }))
+    expect(named.violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/keyword', '__nerveSwitchTiming']])
+  })
+
+  it('违规：没有模块来源清单、产物里有清单没记下的脚本（按来源的核对看不到它们）', () => {
+    expect(artifactsGate(writeDist(clean, { sources: false })).violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/missing-module-sources', MODULE_SOURCES]])
+    const unlisted = artifactsGate(writeDist({ ...clean, 'assets/extra-a1.js': 'export {}', [MODULE_SOURCES]: JSON.stringify({ 'assets/index.js': { name: 'index', modules: ['index.html'] } }) }))
+    expect(unlisted.violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/unlisted-script', 'assets/extra-a1.js']])
   })
 
   it('违规：产物里的动态代码、.json 里的外部地址、未登记的文件类型、缺少许可清单', () => {

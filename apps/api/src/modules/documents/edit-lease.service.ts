@@ -57,10 +57,14 @@ export type LeaseAcquisition
   }
   | { readonly kind: 'held', readonly holderId: string, readonly lastActiveAt: Date, readonly sameUser: boolean }
 
-/** 编辑状态（P1 设计 §3.4.3）：文档当前的修订号，有效的租约在谁手里（没有时为 undefined） */
+/**
+ * 编辑状态（P1 设计 §3.4.3）：文档当前的修订号，有效的租约在谁手里（没有时为 undefined），
+ * 以及调用者现在能不能编辑这份文档（M3-P2 设计 §3.2：阅读页据此显示或隐藏"编辑"）
+ */
 export interface LeaseStatus {
   readonly revision: number
   readonly editor: { readonly holderId: string, readonly lastActiveAt: Date, readonly sameUser: boolean } | undefined
+  readonly canEdit: boolean
 }
 
 /**
@@ -174,15 +178,18 @@ export class EditLeaseService {
 
   /**
    * 编辑状态（P1 设计 §3.4.3）：在调用方开的只读快照里（ADR-017），能读就能看（读不到 404）→ 读租约行 → 按有效条件判断
-   * （第 6、7 条查持有者的登录与编辑权，同一个快照）→ 修订号，以及有效时的持有者、最后活动时间、是不是调用者自己
+   * （第 6、7 条查持有者的登录与编辑权，同一个快照）→ 修订号，以及有效时的持有者、最后活动时间、是不是调用者自己。
+   * 调用者能不能编辑（M3-P2 设计 §3.2）：就是判断能读时算出的权限位（requireDocumentContent，与详情的 permissions.canEdit、
+   * 保存与申请看的同一位），不另查询
    */
   async status(actor: EditingActor, documentId: string, transaction: Transaction): Promise<LeaseStatus> {
-    const { document } = await requireAccess(this.policy, actor.userId, await this.documents.findById(documentId, transaction), transaction)
+    const { document, permissions } = await requireDocumentContent(this.policy, actor.userId, await this.documents.findById(documentId, transaction), [], transaction)
     const lease = await this.leases.findByDocument(documentId, transaction)
     const loss = await currentLeaseLoss(lease, document.writeEpoch, this.holderFacts(lease, document, transaction))
     return {
       revision: document.revision,
       editor: lease === undefined || loss !== undefined ? undefined : { holderId: lease.holderId, lastActiveAt: lease.lastActiveAt, sameUser: lease.holderId === actor.userId },
+      canEdit: permissions.canEdit,
     }
   }
 

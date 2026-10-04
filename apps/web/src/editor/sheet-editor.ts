@@ -13,12 +13,15 @@
 // 返回之前（就绪之前）不允许输入（M1 总设计 §6.6）由编辑器页的交互屏障保证（interaction-barrier.ts，Codex 评审 CX1）：
 // 能编辑的文档从创建起就是可编辑的（授权服务一律允许），就绪之前的输入只能靠屏障拦住。
 // 测试构建（vite build --mode e2e）另在就绪之后装上 E2E 的探针（testing/e2e-probe.ts），生产构建里没有这一步。
+// 模式切换一律重建（M3-P2 设计 §3.1）：编辑器页销毁旧的、以目标的 access 新建一个；重建之前取出视图状态（viewState），
+// 新建时交回来，就绪之后恢复（view-state.ts）。容器上写着这一个编辑器的打开方式（data-editor-access，读 / 写），销毁时去掉。
 import type { CellEditingWatch } from './cell-editing-watch.ts'
 import type { ChangeClassifierConfig } from './change-tracking/change-classifier.ts'
 import type { ChangeTracker } from './change-tracking/change-tracker.ts'
 import type { CleanupStack } from './cleanup-stack.ts'
 import type { EditorAccess } from './editor-access.ts'
 import type { LifecycleWatch, SheetEditorLifecycle } from './lifecycle-watch.ts'
+import type { SheetViewState } from './view-state.ts'
 import type { WorkbookSnapshot } from './workbook-snapshot.ts'
 import { LocaleType, LogLevel, Univer } from '@univerjs/core'
 import { FUniver } from '@univerjs/core/facade'
@@ -36,6 +39,7 @@ import { SHEET_ZH_CN } from './profile/locale.ts'
 import { CHANGE_DETECTION_EXCLUDED_MUTATIONS, sheetPluginEntries } from './profile/sheet-profile.ts'
 import { installReadOnlyGuard } from './read-only/read-only-guard.ts'
 import { SheetEditorLoadError } from './sheet-editor-error.ts'
+import { readViewState, restoreViewState } from './view-state.ts'
 import { parseWorkbookSnapshot } from './workbook-snapshot.ts'
 // Facade 只引用用到的部分（包体积）：createWorkbook、getWorkbook、save 在 sheets，编辑中的单元格在 sheets-ui
 import '@univerjs/sheets/facade'
@@ -65,6 +69,11 @@ export interface SheetEditor {
   readonly settleFormulas: (timeoutMs: number) => Promise<'settled' | 'timeout'>
   /** 捕获：JSON.stringify(save())；捕获前不调用 Facade 的读取方法（它们可能改动模型） */
   readonly capture: () => string
+  /**
+   * 现在的视图状态（当前工作表、左上角可见的行列、主选区）：重建之前取出，交给新的编辑器恢复（M3-P2 设计 §3.3）。
+   * 取不出来（Facade 出错，已报告）或已经销毁时为 undefined
+   */
+  readonly viewState: () => SheetViewState | undefined
   /** 销毁实例、终止 Worker；可以重复调用 */
   readonly dispose: () => void
 }
@@ -79,7 +88,15 @@ export interface CreateSheetEditorOptions {
    * 装上只读守卫，界面没有工具栏、右键菜单、底栏菜单与新增工作表按钮（M2-P3 设计 §3.2–§3.4）
    */
   readonly access: EditorAccess
+  /** 重建之前的编辑器给出的视图状态：就绪之后恢复；恢复不了（工作表已经不在等）就是默认视图，不影响编辑器可用 */
+  readonly viewState?: SheetViewState | undefined
 }
+
+/**
+ * 容器上写着这一个编辑器的打开方式（读、写）：创建时写上，销毁时去掉。E2E 据此认出换上的是哪一个编辑器（模式切换一律重建，
+ * 新旧两个先后用同一个容器）
+ */
+export const EDITOR_ACCESS_ATTRIBUTE = 'data-editor-access'
 
 /** 就绪的时限：Worker 20 秒没有回报 IMAGE() 的安装结果就失败（P4 设计 §3.6.7）；渲染与主线程的安装在同一个时限内 */
 const READY_TIMEOUT_MS = 20_000
@@ -124,6 +141,8 @@ interface MountedEditor {
 /** 按顺序创建、等到就绪；每创建一样就在 cleanup 里登记它的销毁，失败时由调用方统一销毁 */
 async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapshot, cleanup: CleanupStack): Promise<MountedEditor> {
   const { container, access } = options
+  container.setAttribute(EDITOR_ACCESS_ATTRIBUTE, access)
+  cleanup.defer(() => container.removeAttribute(EDITOR_ACCESS_ATTRIBUTE))
   // 静态的 new Worker(new URL(...)) 才会被打包成同源的 Worker 脚本；传地址给插件会建出经典 Worker（rpc/src/plugin.ts:86）
   const worker = new Worker(new URL('./workers/formula.worker.ts', import.meta.url), { type: 'module', name: 'nerve-formula' })
   // 传入的 Worker 由我们终止（插件只终止它自己创建的，rpc/src/plugin.ts:71-78）
@@ -145,8 +164,9 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   //   带 onlyLocal、fromFormula 的嵌套 mutation，把公式写进单元格（read-only/read-only-guard.ts 的第 1 条）。
   // - 只读的防火墙是 Facade 事件的订阅者：Facade 的监听排在 UpdateFormulaController 的前面，防火墙才能在嵌套的写入发生之前取消触发它的
   //   那条 mutation；排在后面时，写公式的 mutation 照样改掉单元格，而且它带 onlyLocal，变更检测也看不见。
-  // 入口守卫最先订阅、销毁时才退订，Facade 的监听由它占住 SDK 之前的位置：只读守卫自己先装还是后装都不影响这一点，
-  // M3 原地切换时在工作簿已经存在之后装上、撤下只读守卫，订阅者也不会减到零。改动这里的顺序（例如把这些订阅挪到创建工作簿之后，
+  // 入口守卫最先订阅、销毁时才退订，Facade 的监听由它占住 SDK 之前的位置：只读守卫自己先装还是后装都不影响这一点。
+  // 只读守卫只在创建编辑器时装上、随编辑器销毁：阅读与编辑之间的切换一律重建编辑器（M3-P2 设计 §3.1），运行中不装也不撤；
+  // 将来要在运行中装上、撤下它，有入口守卫占着，订阅者也不会减到零。改动这里的顺序（例如把这些订阅挪到创建工作簿之后，
   // 或者入口守卫中途退订）都会破坏它：E2E read-only.spec.ts 的用例"经 Facade 直接执行写公式的 mutation"核对（被取消、单元格不变）
   const guards = installEntryGuards(univerAPI)
   cleanup.defer(() => guards.dispose())
@@ -183,6 +203,9 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
   let mounted: MountedEditor
   try {
     mounted = await mount(options, snapshot, cleanup)
+    // 重建之前的视图状态：就绪之后恢复（出错时 restoreViewState 报告、停在默认视图，不让创建失败）
+    if (options.viewState !== undefined)
+      restoreViewState(mounted.workbook, options.viewState)
     // 测试构建：就绪之后装上 E2E 的探针（M2-P3 设计 §3.7）。生产构建里 MODE 是 production，这个分支与探针的分块都被去掉，
     // 门禁 artifacts 核对生产产物里没有它。只能这样动态引入：静态引入时探针本身被摇树去掉，它补上的 Facade（probe-facades.ts）
     // 却留在生产构建里，门禁认不出（lint 拦下，M2-P6 复核 F5）
@@ -242,6 +265,7 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
       usable()
       return JSON.stringify(workbook.save())
     },
+    viewState: () => disposed ? undefined : readViewState(workbook),
     dispose,
   }
 }

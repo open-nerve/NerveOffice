@@ -6,6 +6,7 @@ import { FilePlus2 } from 'lucide-react'
 import { useRef } from 'react'
 import { describeError, isAccessDenied, isUnknownOutcome } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
+import { newDocumentPagePath } from '../../shared/lib/edit-intent.ts'
 import { usePageLocation } from '../../shared/lib/page-location.ts'
 import { useRequestIdLedger } from '../../shared/lib/request-id-ledger.ts'
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
@@ -40,7 +41,7 @@ function failureOf(error: unknown, ledger: RequestIdLedger, refreshed: boolean):
 }
 
 /**
- * 新建表格（US-M1-04，P4 设计 §3.7.4，M2-P2 设计 §3.10）：建在当前位置，建好之后整页打开编辑器页（另一个入口）。
+ * 新建表格（US-M1-04，P4 设计 §3.7.4，M2-P2 设计 §3.10）：建在当前位置，建好之后整页打开编辑器页（另一个入口），直接进入编辑（M3-P2）。
  * requestId 按"在这个位置新建"记账（shared/api/request-ids.ts，M2-P6 复核 M1）：结果未知之后再点沿用同一个，服务端只建一份；
  * 之后撞上会话类的拒绝（别的标签页换了令牌）同样沿用；成功、或者与载荷有关的确定拒绝才换新的。在文件夹之间切换时页头不重来，
  * 换了位置就是另一件事、另一个 requestId，结果未知的那个位置回去之后仍沿用它原来的。
@@ -73,9 +74,10 @@ export function NewSheetButton({ spaceId, folderId = null, onDenied }: NewSheetB
       const document = await ledger.send(`sheet:${spaceId}/${folderId ?? ''}`, async requestId => createDocument({ type: 'sheet', requestId, spaceId, ...(folderId === null ? {} : { folderId }) }))
       return { document, refreshing: document.replayed ? await refresh([spaceId, document.spaceId]) : undefined }
     },
+    // 刚建好的表格直接进入编辑（?edit=new，M3-P2 设计 §3.4）：不可能有别人在编辑，不必先阅读
     onSuccess: ({ document }) => {
       if (!document.replayed)
-        page.assign(documentPagePath(document.id))
+        page.assign(newDocumentPagePath(document.id))
     },
     onError: async (error) => {
       if (isAccessDenied(error)) {

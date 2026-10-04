@@ -150,9 +150,9 @@ const UNIVER_INTERNAL_SYMBOLS = [
     message: INTERNAL_API_MESSAGE,
   },
   {
-    // 冻结线的渲染控制器：只读守卫在它的拦截点上拦下拖动（P3 审查 B2）
+    // 冻结线与行列调整的渲染控制器：只读守卫在它们的拦截点上拦下拖动（P3 审查 B2；DEF-027，M3-P2 S3）
     name: '@univerjs/sheets-ui',
-    importNames: ['HeaderFreezeRenderController'],
+    importNames: ['HeaderFreezeRenderController', 'HeaderResizeRenderController'],
     message: INTERNAL_API_MESSAGE,
   },
 ]
@@ -428,6 +428,14 @@ const LIVE_STATUS_HIDDEN = [
     message: LIVE_STATUS_MESSAGE,
   },
 ]
+
+/**
+ * web 的生产代码对 no-restricted-syntax 的整组限制（nerve/web-radix-dialog），与编辑器里 internal-api 与测试代码之外的整组限制
+ * （nerve/editor-sdk-dom-markers）。同名规则后者整体覆盖前者：在它们之上再加一条的块（页面自检的入口页、页面自检与 E2E 共用的文件，
+ * 复验 C3）从这里展开，不各抄一份，免得以后改一处漏一处
+ */
+const WEB_RESTRICTED_SYNTAX = [...BASE_RESTRICTED_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION, ...LIVE_STATUS_HIDDEN]
+const EDITOR_OUTSIDE_INTERNAL_API_SYNTAX = [...EDITOR_RESTRICTED_SYNTAX, ...NO_GET_INJECTOR, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION, ...LIVE_STATUS_HIDDEN]
 
 // 契约的请求结构里直接用 z.uuid()：大写的 id 原样交给服务端（M2-P2 审查 A1、复验 N3）
 const CONTRACTS_REQUEST_UUID_MESSAGE = '请求里的 UUID 用 uuidSchema（ids/ids.ts，统一转成小写）：服务端按字符串比较 id 的地方（是不是本人、审计的明细）只认小写（M2-P2 审查 A1）'
@@ -732,6 +740,25 @@ const LAZY_TEXTS: readonly { readonly file: string, readonly feature: string }[]
 const WEB_TEST_CODE = ['**/*.test.{ts,tsx}', '**/*.test-support.{ts,tsx}']
 
 /**
+ * 页面自检与 E2E 共用的文件（M3-P2 设计 §3.5，相对编辑器元素的路径）：只读入口的清单与预期、比较口径、自检结果的格式、
+ * 模式切换的计时（S5：E2E 的实测与真实 Safari 的自检用同一套）。
+ * 它们在 editor/testing/ 下（只在测试构建里），E2E 经模块边界的例外引用它们，所以它们不引用任何模块（nerve/editor-testing-shared）
+ */
+const SELFTEST_SHARED_FILES = ['testing/read-only-entries.ts', 'testing/content-compare.ts', 'testing/selftest-report.ts', 'testing/switch-timing.ts']
+
+// 动态 import() 同样是引用（复验 C3）：ts/no-restricted-imports 只看 import 与 export 声明，下面两块按路径的限制挡不住动态引入——
+// 自检的入口页动态引入 shared/api 时 lint 放行，测试构建里两个页面的入口块照样多出 api、preload-helper（实测）。
+// 这两组文件本来都用不着动态引入，一律不许
+const SELFTEST_SHARED_NO_DYNAMIC_IMPORT = {
+  selector: 'ImportExpression',
+  message: '页面自检与 E2E 共用的文件（SELFTEST_SHARED_FILES）不引用任何模块，动态 import() 也不行：E2E 也引用它们，Playwright 的进程里不能带进 Univer 与 web 的其他代码（M3-P2 设计 §3.5，复验 C3）',
+}
+const SELFTEST_ENTRY_NO_DYNAMIC_IMPORT = {
+  selector: 'ImportExpression',
+  message: '页面自检的入口页不用动态 import()：受限导入只看 import 与 export 声明，动态引入平台页面、编辑器页共用的模块，测试构建里两个页面的入口块照样与生产构建的不同（M3-P2 复核 B4，复验 C3）',
+}
+
+/**
  * 共享层内部引用这些文案：模块边界不检查同一个元素内部的引用（boundaries/dependencies 的 checkInternals 默认关），
  * 改按解析之后的路径拦下——shared/i18n/index.ts 转出、shared 里别的文件中转，都会把它们带回首屏（M2-P6 复核第二批）
  */
@@ -835,7 +862,7 @@ export default antfu(
     files: ['apps/web/src/**/*.{ts,tsx}'],
     ignores: [...TEST_CODE, 'apps/web/src/shared/ui/dialog.tsx'],
     rules: {
-      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION, ...LIVE_STATUS_HIDDEN],
+      'no-restricted-syntax': ['error', ...WEB_RESTRICTED_SYNTAX],
     },
   },
   {
@@ -849,8 +876,9 @@ export default antfu(
   {
     name: 'nerve/web-app-entries',
     files: ['apps/web/src/entries/*/main.{ts,tsx}'],
-    // CSP 阳性对照只在测试构建里，不用 zod，它的入口里就是探针本身的代码
-    ignores: ['apps/web/src/entries/csp-probe/**'],
+    // CSP 阳性对照只在测试构建里，不用 zod，它的入口里就是探针本身的代码；页面自检的入口页同样只在测试构建里、不用 zod，
+    // 而且不能引用 zod-jitless 这类与平台页面、编辑器页共用的模块（M3-P2 复核 B4，见 nerve/selftest-entry-self-contained）
+    ignores: ['apps/web/src/entries/csp-probe/**', 'apps/web/src/entries/selftest/**'],
     rules: {
       'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...APP_ENTRY_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION, ...LIVE_STATUS_HIDDEN],
     },
@@ -884,7 +912,7 @@ export default antfu(
     files: ['apps/web/src/editor/**'],
     ignores: [...TEST_CODE, 'apps/web/src/editor/internal-api/**'],
     rules: {
-      'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX, ...NO_GET_INJECTOR, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION, ...LIVE_STATUS_HIDDEN],
+      'no-restricted-syntax': ['error', ...EDITOR_OUTSIDE_INTERNAL_API_SYNTAX],
     },
   },
   {
@@ -968,6 +996,35 @@ export default antfu(
     ignores: [...TEST_CODE, 'apps/web/src/editor/testing/**'],
     rules: {
       'ts/no-restricted-imports': ['error', { patterns: [TEST_MODULES, EDITOR_PROBE_MODULES] }],
+    },
+  },
+  {
+    // 页面自检与 E2E 共用的文件不引用任何模块（M3-P2 设计 §3.5）：E2E 经模块边界的例外引用它们，Playwright 的进程里不能带进 Univer
+    // 与 web 的其他代码。它们在 editor/testing/ 下，上一块不管它们；同名规则后者整体覆盖前者，测试与测试辅助的限制一并带上。
+    // 动态 import() 由 no-restricted-syntax 拦下（复验 C3），编辑器里 internal-api 与测试代码之外的整组限制一并带上
+    name: 'nerve/editor-testing-shared',
+    files: SELFTEST_SHARED_FILES.map(file => `apps/web/src/editor/${file}`),
+    rules: {
+      'ts/no-restricted-imports': ['error', { patterns: [TEST_MODULES, {
+        regex: '.',
+        message: '页面自检与 E2E 共用的文件（SELFTEST_SHARED_FILES）不引用任何模块：E2E 也引用它们，Playwright 的进程里不能带进 Univer 与 web 的其他代码（M3-P2 设计 §3.5）',
+      }] }],
+      'no-restricted-syntax': ['error', ...EDITOR_OUTSIDE_INTERNAL_API_SYNTAX, SELFTEST_SHARED_NO_DYNAMIC_IMPORT],
+    },
+  },
+  {
+    // 页面自检的入口页（entries/selftest，只在测试构建里）不引用平台页面与编辑器页共用的任何模块（contracts、shared、zod……，M3-P2 复核 B4）：
+    // 引用了，那些模块在测试构建里成了三个入口共用的，分块的拆法随之改变，两个页面的入口块就与生产构建的不同，E2E 测的不再是生产的样子。
+    // 只许引用入口页自己目录里的文件与结果的格式（editor/testing/selftest-report.ts，它不引用任何模块）。
+    // 同名规则后者整体覆盖前者：测试与测试辅助的限制一并带上。动态 import() 由 no-restricted-syntax 拦下（复验 C3），web 的整组限制一并带上
+    name: 'nerve/selftest-entry-self-contained',
+    files: ['apps/web/src/entries/selftest/**'],
+    rules: {
+      'ts/no-restricted-imports': ['error', { patterns: [TEST_MODULES, {
+        regex: String.raw`^(?!\./[\w-]+\.ts$|\.\./\.\./editor/testing/selftest-report\.ts$)`,
+        message: '页面自检的入口页只引用自己目录里的文件与结果的格式（editor/testing/selftest-report.ts）：引用平台页面、编辑器页共用的模块，测试构建里两个页面的入口块就与生产构建的不同（M3-P2 复核 B4）',
+      }] }],
+      'no-restricted-syntax': ['error', ...WEB_RESTRICTED_SYNTAX, SELFTEST_ENTRY_NO_DYNAMIC_IMPORT],
     },
   },
   {
@@ -1132,6 +1189,16 @@ export default antfu(
               { element: { type: 'web-feature', captured: { feature: 'sheet-editor' } } },
             ],
             allow: { to: { element: { type: 'web-editor', fileInternalPath: PUBLIC_ENTRY } } },
+          },
+          // 真实 Safari 的页面自检（M3-P2 设计 §3.5）：编辑器的 testing/ 只在测试构建里，这里只开三个口子——
+          // E2E 引用与自检共用的文件（SELFTEST_SHARED_FILES：清单、比较口径、结果的格式，都不引用别的模块）；
+          // 自检的入口页（entries/selftest）引用结果的格式（登录失败时同样交出结果）；
+          // 编辑器页的挂接（sheet-editor 的 selftest-hook.ts，start.tsx 只在测试构建里动态引入它）动态引入自检模块
+          { from: { element: { type: 'e2e-tests' } }, allow: { to: { element: { type: 'web-editor', fileInternalPath: SELFTEST_SHARED_FILES } } } },
+          { from: { element: { type: 'web-entry', captured: { entry: 'selftest' } } }, allow: { to: { element: { type: 'web-editor', fileInternalPath: 'testing/selftest-report.ts' } } } },
+          {
+            from: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' }, fileInternalPath: ['selftest-hook.ts', 'selftest-hook.test.ts'] } },
+            allow: { to: { element: { type: 'web-editor', fileInternalPath: 'testing/selftest.ts' } } },
           },
           {
             from: { element: { type: 'web-app' } },

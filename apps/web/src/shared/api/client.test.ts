@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { apiError, installFakeApi, json } from '../testing/fake-api.test-support.ts'
-import { ApiError, apiFetch, apiRequest, isAccessDenied, isAuthenticationError, isMissingResource, isPermissionDeniedError, isTransientError, NetworkError, readJson, ResponseFormatError, setCsrfToken } from './client.ts'
+import { ApiError, apiFetch, apiRequest, isAccessDenied, isAuthenticationError, isMissingResource, isPermissionDeniedError, isTransientError, NetworkError, readJson, ResponseFormatError, serverTimeOf, setCsrfToken } from './client.ts'
 
 const itemSchema = z.strictObject({ name: z.string() })
 
@@ -115,6 +115,25 @@ describe('apiFetch（不是 JSON 的请求与响应）', () => {
     await expect(apiFetch('/api/dated', { method: 'POST' })).rejects.toMatchObject({ serverTime: Date.UTC(2026, 9, 4, 3, 0, 0) })
     await expect(apiFetch('/api/undated', { method: 'POST' })).rejects.toMatchObject({ code: 'EDIT_LEASE_HELD', serverTime: undefined })
     await expect(apiFetch('/api/garbled', { method: 'POST' })).rejects.toMatchObject({ code: 'EDIT_LEASE_HELD', serverTime: undefined })
+  })
+
+  it('条件请求（acceptNotModified，M3-P2 设计 §3.2）：304 原样交回、不算失败；没说接受 304 时照常是失败', async () => {
+    const api = installFakeApi({ 'GET /api/content': () => new Response(null, { status: 304, headers: { etag: '"3"' } }) })
+    const response = await apiFetch('/api/content', { headers: { 'if-none-match': '"3"' }, acceptNotModified: true })
+    expect(response.status).toBe(304)
+    expect(api.requests[0]?.headers).toMatchObject({ 'if-none-match': '"3"' })
+    await expect(apiFetch('/api/content', { headers: { 'if-none-match': '"3"' } })).rejects.toMatchObject({ status: 304, code: 'UNKNOWN' })
+  })
+
+  it('接受 304 只放过 304：别的失败照常抛出', async () => {
+    installFakeApi({ 'GET /api/content': () => apiError(404, 'NOT_FOUND') })
+    await expect(apiFetch('/api/content', { acceptNotModified: true })).rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' })
+  })
+
+  it('成功的响应里服务端回答的时刻（serverTimeOf，编辑状态的最后活动按它算）：读响应头 Date；没有或读不出来时为 undefined', () => {
+    expect(serverTimeOf(new Response(null, { headers: { date: 'Sun, 04 Oct 2026 03:00:00 GMT' } }))).toBe(Date.UTC(2026, 9, 4, 3, 0, 0))
+    expect(serverTimeOf(new Response(null))).toBeUndefined()
+    expect(serverTimeOf(new Response(null, { headers: { date: 'yesterday-ish' } }))).toBeUndefined()
   })
 })
 

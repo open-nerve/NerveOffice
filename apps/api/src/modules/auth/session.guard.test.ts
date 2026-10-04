@@ -5,6 +5,7 @@ import type { User, UsersService } from '../users/index.ts'
 import type { RequestIdentities, RequestIdentity } from './request-identity.ts'
 import type { AuthenticatedSession, SessionService } from './session.service.ts'
 import { describe, expect, it, vi } from 'vitest'
+import { BACKGROUND_REQUEST_ROUTE } from '../../shared/background-request.ts'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { PUBLIC_ROUTE } from '../../shared/public.ts'
 import { SYSTEM_ADMIN_ROUTE } from '../../shared/system-admin-only.ts'
@@ -17,8 +18,9 @@ import { SessionGuard } from './session.guard.ts'
 const ALICE: User = { id: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d', username: 'alice', displayName: '爱丽丝', systemRole: 'member', status: 'active' }
 const SESSION: AuthenticatedSession = { id: '0199a2c4-2a3b-7c4d-9e5f-6a7b8c9d0e1f', userId: ALICE.id, stale: true }
 
-function setup(options: { isPublic?: boolean, adminOnly?: boolean, session?: AuthenticatedSession, user?: User, rotated?: boolean } = {}) {
-  const reflector = { getAllAndOverride: vi.fn((key: string) => (key === PUBLIC_ROUTE ? options.isPublic : key === SYSTEM_ADMIN_ROUTE ? options.adminOnly : undefined)) }
+function setup(options: { isPublic?: boolean, adminOnly?: boolean, background?: boolean, session?: AuthenticatedSession, user?: User, rotated?: boolean } = {}) {
+  const metadata: Readonly<Record<string, boolean | undefined>> = { [PUBLIC_ROUTE]: options.isPublic, [SYSTEM_ADMIN_ROUTE]: options.adminOnly, [BACKGROUND_REQUEST_ROUTE]: options.background }
+  const reflector = { getAllAndOverride: vi.fn((key: string) => metadata[key]) }
   const sessions = {
     authenticate: vi.fn(async (_token: string) => options.session),
     keepAlive: vi.fn(async (_session: AuthenticatedSession) => {}),
@@ -132,6 +134,27 @@ describe('SessionGuard', () => {
     expect(logChild).toHaveBeenCalledWith({ userId: ALICE.id })
     expect(request.log).not.toBe(requestLog)
     expect(identities.record).toHaveBeenCalledExactlyOnceWith({ userId: ALICE.id, sessionId: SESSION.id, systemAdmin: false })
+  })
+
+  it('US-M3-05 后台请求（@BackgroundRequest()，编辑状态与心跳，DEF-043）：认证、账户检查、挂上当前用户与记下身份都照旧，只是不顺延空闲过期', async () => {
+    const token = generateSessionToken()
+    const { guard, sessions, users, identities } = setup({ background: true, session: SESSION, user: ALICE })
+    const { context, request } = exchange(`nerve_session=${token}`)
+    expect(await guard.canActivate(context)).toBe(true)
+    expect(sessions.authenticate).toHaveBeenCalledWith(token)
+    expect(users.findActiveById).toHaveBeenCalledWith(ALICE.id)
+    expect(sessions.keepAlive).not.toHaveBeenCalled()
+    expect(principalOf(request)).toEqual({ user: ALICE, sessionId: SESSION.id, csrfToken: csrfTokenFor(token) })
+    expect(identities.record).toHaveBeenCalledExactlyOnceWith({ userId: ALICE.id, sessionId: SESSION.id, systemAdmin: false })
+  })
+
+  it('后台请求不放宽认证：没有会话、会话无效、账户不可用照样被拒（UNAUTHENTICATED、SESSION_EXPIRED），只给系统管理员的照样 PERMISSION_DENIED', async () => {
+    expect(await codeOf(setup({ background: true }).guard.canActivate(exchange().context))).toBe('UNAUTHENTICATED')
+    expect(await codeOf(setup({ background: true, session: undefined, user: ALICE }).guard.canActivate(exchange(`nerve_session=${generateSessionToken()}`).context))).toBe('SESSION_EXPIRED')
+    const disabled = setup({ background: true, session: SESSION, user: undefined })
+    expect(await codeOf(disabled.guard.canActivate(exchange(`nerve_session=${generateSessionToken()}`).context))).toBe('SESSION_EXPIRED')
+    expect(disabled.sessions.revoke).toHaveBeenCalledWith(SESSION.id, 'disabled')
+    expect(await codeOf(setup({ background: true, adminOnly: true, session: SESSION, user: ALICE }).guard.canActivate(exchange(`nerve_session=${generateSessionToken()}`).context))).toBe('PERMISSION_DENIED')
   })
 
   it('只给系统管理员的接口：成员得到 PERMISSION_DENIED，系统管理员放行（M2-P1）；记下的身份带着读到的系统角色', async () => {

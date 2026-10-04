@@ -12,12 +12,14 @@
 // 这部分由 CSP 兜底：策略里没有 'unsafe-eval'，connect-src 只有 'self'。
 import type { ExtractedValues, LocatedValues } from './addresses.ts'
 import type { Reference, TextValue } from './eval-and-function.ts'
+import type { ModuleSources } from './module-sources.ts'
 import type { Violation } from './types.ts'
 import { crossOriginAddress, hrefOf, isRegexFlags } from './addresses.ts'
 import { cssValues } from './css-values.ts'
 import { analyzeJavaScript, INTERPOLATION_PLACEHOLDER } from './eval-and-function.ts'
 import { htmlValues } from './html-values.ts'
 import { jsonValues } from './json-values.ts'
+import { isScript, MODULE_SOURCES_FILE } from './module-sources.ts'
 import { svgValues } from './svg-values.ts'
 
 export interface ArtifactFile {
@@ -482,8 +484,11 @@ export const ARTIFACT_FILE_TYPES = {
   binary: ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.ico', '.woff', '.woff2', '.ttf', '.otf'],
 } as const
 
-/** 构建清单与第三方许可清单（路径相对产物目录）：只放行这几个文件，不扫描内容，许可正文里的地址不会被请求。 */
-export const ARTIFACT_METADATA_FILES: readonly string[] = ['.vite/manifest.json', '.vite/third-party-packages.json', 'THIRD-PARTY-LICENSES.md']
+/**
+ * 构建清单、模块来源清单与第三方许可清单（路径相对产物目录）：只放行这几个文件，不扫描内容，许可正文里的地址不会被请求。
+ * .vite/ 下的清单不对外托管（托管不发点开头的目录）
+ */
+export const ARTIFACT_METADATA_FILES: readonly string[] = ['.vite/manifest.json', MODULE_SOURCES_FILE, '.vite/third-party-packages.json', 'THIRD-PARTY-LICENSES.md']
 
 export type ArtifactKind = 'text' | 'binary' | 'metadata' | 'unknown'
 
@@ -501,14 +506,59 @@ export function classifyArtifact(path: string): ArtifactKind {
 }
 
 /**
- * 只属于测试构建的文件（vite build --mode e2e），不能出现在生产构建里：
- * - CSP 阳性对照的页面与 Worker（P3 设计 §3.9）：它们故意尝试 eval 与跨源请求；
- * - 编辑器的 E2E 探针（M2-P3 设计 §3.7，editor/testing/e2e-probe.ts）：把 Facade 挂在 window 上，只在测试构建里由编辑器动态引入。
- *   它的名字另由禁用关键字（policy.ts 的 __nerveEditorProbe）核对：分块改了名、或者被并进别的分块时同样发现；
- * - 探针补上的插件 Facade（editor/testing/probe-facades.ts）：平时并在探针的分块里；被单独动态引入时自成一个分块，
- *   它只有副作用、没有探针的名字，禁用关键字认不出，按分块名核对（M2-P6 第 4 片复核 F5；静态引入由 lint 拦下）
+ * 只属于测试构建的源码（vite build --mode e2e；路径相对 web 应用目录，以 / 结尾的是目录），不能出现在生产构建里：
+ * - CSP 阳性对照的页面、脚本与 Worker（P3 设计 §3.9）：它们故意尝试 eval 与跨源请求；
+ * - 编辑器的 testing/（M2-P3 设计 §3.7、M3-P2 设计 §3.5）：E2E 探针（把 Facade 挂在 window 上）与它补上的插件 Facade、页面自检与它
+ *   和 E2E 共用的文件（入口清单、比较口径、结果的格式、切换的计时：switch-timing.ts 装上时替换 window.fetch）；
+ * - 页面自检的入口页与编辑器页的挂接（features/sheet-editor/selftest-hook.ts，start.tsx 只在测试构建里动态引入）。
+ * 按模块的来源认（web 构建写出的模块来源清单，M3-P2 复核 B2）：分块改了名、被并进别的分块、被生产代码直接动态引入成了自己的分块，
+ * 都认得出。分块名（TEST_ONLY_ARTIFACTS）与禁用关键字（policy.ts）照旧作兜底
  */
-export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^csp-probe\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe|probe-facades)-[^/]*$/]
+export const TEST_ONLY_SOURCES: readonly string[] = [
+  'csp-probe.html',
+  'selftest.html',
+  'src/editor/testing/',
+  'src/entries/csp-probe/',
+  'src/entries/selftest/',
+  'src/features/sheet-editor/selftest-hook.ts',
+]
+
+/** 模块是不是只属于测试构建：按路径认（查询串不算） */
+export function isTestOnlySource(module: string): boolean {
+  const path = module.split('?')[0] ?? ''
+  return TEST_ONLY_SOURCES.some(source => source.endsWith('/') ? path.startsWith(source) : path === source)
+}
+
+/**
+ * 按模块来源清单核对生产构建（M3-P2 复核 B2）：每个脚本里有没有只属于测试构建的模块；产物里的每个脚本都要在清单里
+ * （不在的话按来源的核对看不到它）。files 是产物里的全部文件（相对产物目录）
+ */
+export function checkTestOnlySources(sources: ModuleSources, files: readonly string[]): Violation[] {
+  const violations: Violation[] = []
+  for (const [script, { modules }] of Object.entries(sources)) {
+    const testOnly = modules.filter(isTestOnlySource)
+    if (testOnly.length > 0) {
+      violations.push({
+        rule: 'artifacts/test-only-source',
+        subject: script,
+        detail: `生产构建里出现了只属于测试构建的模块（按来源认）：${testOnly.join('、')}。检查 vite.config.ts 的构建入口，以及只在测试构建（e2e 模式）执行的分支里的动态引入（createSheetEditor、编辑器页的 start.tsx）`,
+      })
+    }
+  }
+  for (const script of files.filter(file => isScript(file) && sources[file] === undefined))
+    violations.push({ rule: 'artifacts/unlisted-script', subject: script, detail: `模块来源清单（${MODULE_SOURCES_FILE}）里没有这个脚本：按来源的核对看不到它，检查 web 构建是否挂上了 module-sources 插件（主构建与 Worker）` })
+  return violations
+}
+
+/**
+ * 只属于测试构建的文件，按名字认（兜底，主要的核对按来源，见 TEST_ONLY_SOURCES）：
+ * - CSP 阳性对照的页面与 Worker（P3 设计 §3.9）；
+ * - 编辑器的 E2E 探针（M2-P3 设计 §3.7）与它补上的插件 Facade（M2-P6 第 4 片复核 F5）：探针挂在 window 上的名字另由禁用关键字核对；
+ * - 页面自检（M3-P2 设计 §3.5）：入口页 selftest.html 与它的脚本、编辑器页的挂接（selftest-hook）、自检模块（selftest）与结果的格式
+ *   （selftest-report），分块名都以 selftest- 开头；与 E2E 共用的入口清单（read-only-entries）、比较口径（content-compare）与
+ *   切换的计时（switch-timing）被单独动态引入时也自成分块（M3-P2 复核 B2）。自检结果的格式标识与计时挂在 window 上的名字另由禁用关键字核对
+ */
+export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^(?:csp-probe|selftest)\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe|probe-facades|selftest|read-only-entries|content-compare|switch-timing)-[^/]*$/]
 
 export function checkTestOnlyArtifacts(paths: readonly string[]): Violation[] {
   return paths
@@ -516,7 +566,7 @@ export function checkTestOnlyArtifacts(paths: readonly string[]): Violation[] {
     .map(path => ({
       rule: 'artifacts/test-only',
       subject: path,
-      detail: '生产构建里出现了只属于测试构建的文件（CSP 探针、编辑器的 E2E 探针）：检查 vite.config.ts 的构建入口与 createSheetEditor 里只在测试构建（e2e 模式）执行的分支',
+      detail: '生产构建里出现了只属于测试构建的文件（CSP 探针、编辑器的 E2E 探针、页面自检）：检查 vite.config.ts 的构建入口，以及 createSheetEditor、编辑器页的 start.tsx 里只在测试构建（e2e 模式）执行的分支',
     }))
 }
 

@@ -229,4 +229,17 @@ describe('登录之后的 GET 接口都在一个只读快照里判断权限、�
     }
     expect(problems).toEqual([])
   })
+
+  it('US-M3-05 读取内容的条件请求（If-None-Match 是当前修订，304，M3-P2）：照样在一个只读快照里判断权限，开场核对在最前，COMMIT 之后再没有语句；不读内容', async () => {
+    const guard = await guardStatements()
+    const session = await freshSession('amy')
+    const { result, queries } = await capture.during(async () => {
+      const response = await asUser(app.baseUrl, session, `/api/documents/${w.document}/content`, { headers: { 'if-none-match': '"1"' } })
+      await response.arrayBuffer()
+      return response.status
+    })
+    expect(result).toBe(304)
+    expect(snapshotProblems(queries, guard, { userId: w.amy.id, sessionId: await sessionIdOf(session) })).toEqual([])
+    expect(queries.some(query => query.text.includes('"document_contents"')), '304 不读内容').toBe(false)
+  })
 })

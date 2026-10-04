@@ -9,7 +9,7 @@ import { SHEET_TEMPLATE_UNIT_ID } from '@nerve-office/contracts'
 import { createUser } from '../support/database.ts'
 import { expect, test } from '../support/fixtures.ts'
 import { loginThroughApi } from '../support/session.ts'
-import { createSheetThroughApi, openEditor, saveAndWait, savedContent } from '../support/sheet.ts'
+import { createSheetThroughApi, openAndEnterEditing, saveAndWait, savedContent } from '../support/sheet.ts'
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../..')
 const TEMPLATE_FILE = resolve(REPO_ROOT, 'packages/contracts/src/documents/sheet-template.ts')
@@ -40,7 +40,7 @@ export function sheetSnapshotFor(unitId: string): string {
 async function saveUntilStable(page: Page, documentId: string): Promise<string | undefined> {
   let previous = (await savedContent(page, documentId)).text
   for (let round = 1; round <= MAX_ROUNDS; round += 1) {
-    await openEditor(page, documentId, 'steady')
+    await openAndEnterEditing(page, documentId, 'steady')
     await saveAndWait(page)
     const saved = (await savedContent(page, documentId)).text
     if (saved === previous)

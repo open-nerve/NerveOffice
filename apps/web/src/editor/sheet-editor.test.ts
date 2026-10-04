@@ -14,7 +14,8 @@ import { IAuthzIoService, injectorOf, WorkbookViewPermission } from './internal-
 import { CHANGE_DETECTION_EXCLUDED_MUTATIONS, sheetPluginEntries } from './profile/sheet-profile.ts'
 import { installReadOnlyGuard } from './read-only/read-only-guard.ts'
 import { SheetEditorLoadError } from './sheet-editor-error.ts'
-import { createSheetEditor } from './sheet-editor.ts'
+import { createSheetEditor, EDITOR_ACCESS_ATTRIBUTE } from './sheet-editor.ts'
+import { readViewState, restoreViewState } from './view-state.ts'
 
 vi.hoisted(() => {
   // jsdom 没有 Path2D：表格的界面包在模块求值时就创建它。这里不渲染
@@ -37,6 +38,8 @@ vi.mock('./change-tracking/change-tracker.ts', async (importOriginal) => {
 })
 // 没有注册插件时装不上 IMAGE() 的限制（没有函数服务）：编排的用例要走到就绪，这里当作装上了
 vi.mock('./image-function/install-image-policy.ts', () => ({ installRestrictedImageFunction: vi.fn(() => true) }))
+// 视图状态的取出与恢复本身由 view-state.test.ts 测；这里只核对编排（何时恢复、交给谁）
+vi.mock('./view-state.ts', () => ({ readViewState: vi.fn(() => undefined), restoreViewState: vi.fn(() => 'restored') }))
 
 class FakeWorker extends EventTarget {
   static created: FakeWorker[] = []
@@ -64,6 +67,8 @@ beforeEach(() => {
   vi.mocked(sheetPluginEntries).mockReset()
   vi.mocked(installReadOnlyGuard).mockClear()
   vi.mocked(createChangeTracker).mockClear()
+  vi.mocked(readViewState).mockClear()
+  vi.mocked(restoreViewState).mockClear()
 })
 
 afterEach(() => {
@@ -184,6 +189,7 @@ describe('按打开方式创建（M2-P3 设计 §3.1–§3.4）', () => {
  */
 function steppingFacade(log: string[], unitId: string) {
   const lifecycle = new Set<(event: { stage: LifecycleStages }) => void>()
+  const workbook = { getId: () => unitId }
   const api = {
     Event: new Proxy({}, { get: (_target, name) => String(name) }),
     addEvent: (name: string, listener: (event: { stage: LifecycleStages }) => void) => {
@@ -193,11 +199,13 @@ function steppingFacade(log: string[], unitId: string) {
     },
     createWorkbook: () => {
       log.push('createWorkbook')
-      return { getId: () => unitId }
+      return workbook
     },
   }
   vi.spyOn(FUniver, 'newAPI').mockReturnValue(api as unknown as FUniver)
   return {
+    /** createWorkbook 给出的工作簿 */
+    workbook,
     reach(stage: LifecycleStages): void {
       if (stage === LifecycleStages.Rendered)
         log.push('rendered')
@@ -246,5 +254,77 @@ describe('只读时的编排（M2-P3 设计 §3.3，P3 审查 A3）', () => {
 
     editor.dispose()
     expect(log.at(-1)).toBe('dispose')
+  })
+})
+
+/** 走到就绪：推进生命周期、Worker 回报装好了 IMAGE() 的限制 */
+async function reachReady(facade: ReturnType<typeof steppingFacade>): Promise<void> {
+  facade.reach(LifecycleStages.Ready)
+  facade.reach(LifecycleStages.Rendered)
+  await new Promise(resolve => setTimeout(resolve, 0))
+  FakeWorker.created[0]?.dispatchEvent(new MessageEvent('message', { data: imagePolicyReport(true) }))
+}
+
+describe('模式切换一律重建（M3-P2 设计 §3.1、§3.3）', () => {
+  const STATE = { sheetId: 'sheet-2', topLeft: { row: 40, column: 3 }, selection: undefined }
+
+  it('容器上写着这一个编辑器的打开方式，销毁时去掉；创建失败时同样去掉', async () => {
+    const container = document.createElement('div')
+    const facade = steppingFacade([], 'unit-p2')
+    vi.mocked(installReadOnlyGuard).mockImplementationOnce(() => recordingGuard([]))
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    const creating = createSheetEditor({ container, snapshot: sheetSnapshotFor('unit-p2'), access: 'read' })
+    expect(container.getAttribute(EDITOR_ACCESS_ATTRIBUTE)).toBe('read')
+    await reachReady(facade)
+    const editor = await creating
+    expect(container.getAttribute(EDITOR_ACCESS_ATTRIBUTE)).toBe('read')
+    editor.dispose()
+    expect(container.hasAttribute(EDITOR_ACCESS_ATTRIBUTE)).toBe(false)
+
+    fakeFacade()
+    const failing = document.createElement('div')
+    await createSheetEditor({ container: failing, snapshot: sheetSnapshotFor('unit-p2'), access: 'edit' }).catch(() => undefined)
+    expect(failing.hasAttribute(EDITOR_ACCESS_ATTRIBUTE)).toBe(false)
+  })
+
+  it('给了重建之前的视图状态：就绪之后（渲染完成）恢复到这个工作簿上，然后才返回', async () => {
+    const log: string[] = []
+    const facade = steppingFacade(log, 'unit-p2')
+    vi.mocked(restoreViewState).mockImplementationOnce(() => {
+      log.push('restoreViewState')
+      return 'restored'
+    })
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-p2'), access: 'edit', viewState: STATE })
+    expect(log).toEqual(['createWorkbook'])
+    await reachReady(facade)
+    const editor = await creating
+    expect(log).toEqual(['createWorkbook', 'rendered', 'restoreViewState'])
+    expect(vi.mocked(restoreViewState)).toHaveBeenCalledExactlyOnceWith(facade.workbook, STATE)
+    editor.dispose()
+  })
+
+  it('没有给视图状态：不恢复（默认视图）', async () => {
+    const facade = steppingFacade([], 'unit-p2')
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-p2'), access: 'edit' })
+    await reachReady(facade)
+    const editor = await creating
+    expect(vi.mocked(restoreViewState)).not.toHaveBeenCalled()
+    editor.dispose()
+  })
+
+  it('viewState()：取这个工作簿现在的视图状态；销毁之后为 undefined', async () => {
+    const facade = steppingFacade([], 'unit-p2')
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    vi.mocked(readViewState).mockReturnValue(STATE)
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-p2'), access: 'edit' })
+    await reachReady(facade)
+    const editor = await creating
+    expect(editor.viewState()).toEqual(STATE)
+    expect(vi.mocked(readViewState)).toHaveBeenCalledExactlyOnceWith(facade.workbook)
+    editor.dispose()
+    expect(editor.viewState()).toBeUndefined()
+    expect(vi.mocked(readViewState)).toHaveBeenCalledOnce()
   })
 })

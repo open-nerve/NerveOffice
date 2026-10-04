@@ -2,5 +2,5 @@
 // （会整包打进 Worker，见 index.ts 的开头）。其余同 index.ts：只写再导出，每一项在 registry.ts 登记，单元测试核对
 export { IEditorService } from '@univerjs/docs-ui'
 export { IRenderManagerService } from '@univerjs/engine-render'
-export { HeaderFreezeRenderController } from '@univerjs/sheets-ui'
+export { HeaderFreezeRenderController, HeaderResizeRenderController } from '@univerjs/sheets-ui'
 export { IShortcutService } from '@univerjs/ui'

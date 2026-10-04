@@ -15,10 +15,11 @@ import { ADMIN_PATHS } from '../../shared/lib/admin-paths.ts'
 import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { HOME_PATH, spacePath } from '../../shared/lib/space-paths.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
+import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
 import { useFocusRescue } from '../../shared/lib/use-focus-rescue.ts'
 import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
-import { Alert, AlertDescription, Badge, Button, buttonVariants, Label, NativeSelect, PersonName, Phrase, Skeleton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../shared/ui/index.ts'
-import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
+import { Alert, AlertDescription, Badge, Button, buttonVariants, Label, NativeSelect, PersonName, Phrase, RetryButton, Skeleton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../shared/ui/index.ts'
+import { DetailRefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { StatusRegion } from '../../shared/ui/status-region.tsx'
 import { StillRefreshing } from '../../shared/ui/still-refreshing.tsx'
 import { sessionQueryOptions } from '../auth/index.ts'
@@ -430,10 +431,18 @@ function ManageNotice({ list }: { readonly list: SpaceMemberListResponse }) {
   )
 }
 
+/** 看不到（404，与不存在一致）、看得到却不能查看成员（403，服务端说明原因）：页面另有说明，重试也不会好 */
+function notRetryable(error: unknown): boolean {
+  return !isMissingResource(error) && !isPermissionDeniedError(error)
+}
+
 /**
  * 成员页的内容：加载中；看不到（与不存在一致）；看得到却不能查看成员（服务端说明原因）；加载失败（可以重试）；成员表。
  * 先看错误、再看数据：重新请求失败时 TanStack Query 保留上一次的数据。已打开的页面里被移出了空间，缓存里还是能管理的成员表，
  * 重新请求得到 404 就按看不到显示，管理的控件不再出现（审查 B1）；导航与这个空间的缓存随之更新。
+ * 别的失败（网络、5xx）留着之前的成员表与空间信息，标题下面说明它们没能刷新、可以重试（CX5、DEF-040）。
+ * 第一次就没取到时按"重试"：重试期间说明与按钮留着（不可用、说正在重试）；取到之后焦点交给页面的标题（得到不能查看成员的说明时交给那一页的标题，
+ * 得到 404 时由"空间不存在"接住），不落到 body（规范 §2.4，shared/lib/use-first-load-retry.ts）
  */
 function MembersContent({ spaceId }: { readonly spaceId: string }) {
   const list = useQuery(membersQueryOptions(spaceId))
@@ -441,22 +450,16 @@ function MembersContent({ spaceId }: { readonly spaceId: string }) {
   const titleRef = useRef<HTMLHeadingElement>(null)
   // 有焦点的按钮、行随刷新消失时（被移出的人、改成别的角色之后），焦点交给页面的标题（M2-P6 复核 S3）
   const rescueFocus = useFocusRescue(titleRef)
+  const firstLoad = useFirstLoadRetry(list, titleRef, { retryable: notRetryable })
   const missing = isMissingResource(list.error)
   useForgetMissingSpace(spaceId, missing)
-  // 浏览器标签页的标题（M2-P6 复核 S4）：看不到时由"空间不存在"给出
+  // 浏览器标签页的标题（M2-P6 复核 S4）：看不到时由"空间不存在"给出；重试期间照旧
   let title: string | undefined
   if (list.data !== undefined && list.error === null)
     title = text.title(list.data.space.name)
-  else if (!list.isPending && !missing)
+  else if ((!list.isPending || firstLoad.retrying) && !missing)
     title = text.pageTitle
   useDocumentTitle(title)
-  if (list.isPending) {
-    return (
-      <div role="status" aria-label={text.loading} className="flex flex-col gap-3">
-        {['first', 'second', 'third'].map(row => <Skeleton key={row} className="h-10 w-full" />)}
-      </div>
-    )
-  }
   if (missing)
     return <SpaceNotFound />
   // 看得到这个空间却不能查看成员（现在只有个人空间的所有者会这样）：显示服务端在这次拒绝里给出的说明（例如"个人空间没有成员"），
@@ -464,24 +467,32 @@ function MembersContent({ spaceId }: { readonly spaceId: string }) {
   if (isPermissionDeniedError(list.error)) {
     return (
       <section className="flex flex-col gap-4" aria-labelledby="members-title">
-        <h1 id="members-title" className="text-xl font-semibold">{text.pageTitle}</h1>
+        <h1 ref={titleRef} id="members-title" tabIndex={-1} className="text-xl font-semibold outline-none focus-visible:ring-3 focus-visible:ring-ring/50">{text.pageTitle}</h1>
         <Alert>
           <AlertDescription>{describeError(list.error).message}</AlertDescription>
         </Alert>
       </section>
     )
   }
-  if (list.data === undefined) {
+  if (firstLoad.failed) {
+    // 重试期间说明与按钮留着（不可用、说正在重试），上一次的原因不再给（请求缓存已经清掉了它）
     return (
       <section className="flex flex-col gap-4" aria-labelledby="members-title">
         <h1 id="members-title" className="text-xl font-semibold">{text.loadFailed}</h1>
-        <Alert variant="destructive">
+        <Alert variant="destructive" onFocus={firstLoad.focus.onFocus} onBlur={firstLoad.focus.onBlur}>
           <AlertDescription>
-            <p>{describeError(list.error).message}</p>
-            <Button variant="outline" size="sm" className="mt-2" onClick={() => void list.refetch()}>{messages.common.retry}</Button>
+            {!firstLoad.retrying && <p>{describeError(list.error).message}</p>}
+            <RetryButton retrying={firstLoad.retrying} onRetry={() => void list.refetch()} className={firstLoad.retrying ? undefined : 'mt-2'} />
           </AlertDescription>
         </Alert>
       </section>
+    )
+  }
+  if (list.data === undefined) {
+    return (
+      <div role="status" aria-label={text.loading} className="flex flex-col gap-3">
+        {['first', 'second', 'third'].map(row => <Skeleton key={row} className="h-10 w-full" />)}
+      </div>
     )
   }
   const { space } = list.data
@@ -492,10 +503,11 @@ function MembersContent({ spaceId }: { readonly spaceId: string }) {
         <h1 ref={titleRef} id="members-title" tabIndex={-1} className="text-xl font-semibold outline-none focus-visible:ring-3 focus-visible:ring-ring/50">{text.title(space.name)}</h1>
         <BackLink spaceId={spaceId} />
       </div>
+      {/* 留着之前的成员表、刷新却失败了（Codex 对抗评审 CX5）：明说没能刷新、给出重试，之前的照常显示。页头的空间信息（名称、归档、
+          能不能管理）与成员表是同一个请求，说明放在标题下面、一起说（DEF-040）；重试成功之后焦点交给标题 */}
+      <DetailRefreshProblem query={list} detail={text.detailName} fallbackFocus={titleRef} />
       <ManageNotice list={list.data} />
       {list.data.canManage && <AddMemberForm spaceId={spaceId} members={list.data.items} />}
-      {/* 留着之前的成员表、刷新却失败了（Codex 对抗评审 CX5）：明说没能刷新、给出重试，之前的成员表照常显示 */}
-      <RefreshProblem query={list} list={text.listLabel} />
       <MembersTable spaceId={spaceId} list={list.data} selfId={session.data?.user.id} focusTitle={() => titleRef.current?.focus()} />
     </section>
   )

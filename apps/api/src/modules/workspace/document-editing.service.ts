@@ -22,14 +22,17 @@ export class DocumentEditingService {
     private readonly transactions: TransactionRunner,
   ) {}
 
-  /** 编辑状态：能读就能看；正在编辑的人连同人名、最后活动时间与是不是调用者自己，没有有效的租约时为 null */
+  /**
+   * 编辑状态：能读就能看；正在编辑的人连同人名、最后活动时间与是不是调用者自己，没有有效的租约时为 null；
+   * 调用者现在能不能编辑（M3-P2 设计 §3.2，阅读页每 30 秒读一次，据此显示或隐藏"编辑"）
+   */
   async status(actor: EditingActor, documentId: string): Promise<EditStatus> {
     return this.transactions.readSnapshot(async (transaction) => {
-      const { revision, editor } = await this.leases.status(actor, documentId, transaction)
+      const { revision, editor, canEdit } = await this.leases.status(actor, documentId, transaction)
       if (editor === undefined)
-        return { revision, editor: null }
+        return { revision, editor: null, canEdit }
       const accounts = await this.users.findByIds([editor.holderId], transaction)
-      return { revision, editor: { holder: toUserSummary(accountIn(accounts, editor.holderId)), lastActiveAt: editor.lastActiveAt.toISOString(), sameUser: editor.sameUser } }
+      return { revision, editor: { holder: toUserSummary(accountIn(accounts, editor.holderId)), lastActiveAt: editor.lastActiveAt.toISOString(), sameUser: editor.sameUser }, canEdit }
     })
   }
 

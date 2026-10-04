@@ -12,23 +12,12 @@
 import type { Page } from '@playwright/test'
 import { randomUUID } from 'node:crypto'
 import { createDocument, createDocumentIn, createFolderIn, createTeamSpace, createUser, grantDocument, grantsOn, revisionOf, revokeGrant } from '../../support/database.ts'
-import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
-import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { EDITOR_TEST_TIMEOUT, editorSurface, openEditor, saveButton, saveStatus, typeInCell, waitForEditor } from '../../support/sheet.ts'
+import { actAs, loginThroughApi, loginThroughUi } from '../../support/session.ts'
+import { EDITOR_TEST_TIMEOUT, editorSurface, openAndEnterEditing, openReader, saveButton, saveStatus, typeInCell, waitForEditor } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
-
-/**
- * 另一个人在他自己的浏览器里经接口做的操作（取消分享、降级、移出空间、停用）：状态变更的请求带上与公开地址相同的 Origin 与他的 CSRF 令牌。
- * 请求必须成功，否则后面的"被拒绝"什么也说明不了
- */
-async function actAs(page: Page, method: 'PUT' | 'POST' | 'DELETE', path: string, data?: unknown): Promise<void> {
-  const { csrfToken } = await (await page.request.get('/api/auth/session')).json() as { csrfToken: string }
-  const response = await page.request.fetch(path, { method, headers: { 'origin': e2eOrigin(), 'x-csrf-token': csrfToken }, ...(data === undefined ? {} : { data }) })
-  expect(response.ok(), `${method} ${path}：${response.status()} ${await response.text()}`).toBe(true)
-}
 
 /** 编辑器页打不开时的样子：进入失败状态、说"内容不存在，或者你没有访问权限"；返回页头的全部文字，与别的情形逐字比较 */
 async function notFoundEditor(page: Page, documentId: string): Promise<string> {
@@ -50,7 +39,7 @@ async function notFoundSpace(page: Page, spaceId: string): Promise<string> {
  * 文档被删除、移走或失去权限之后的保存：说明存不进去了（与 editor/access.spec.ts 相同的一句）。M3-P1 起保存与心跳得知 404 都转为
  * 编辑权失效，说明相同；读不到了，不提重新加载（重新加载只会显示"内容不存在"，审查 B2）
  */
-const GONE = '编辑权已失效：你已无法访问这份文档（可能已被删除、移走，或你失去了访问权限）。本页的修改没有保存，需要的话先把内容复制出来。'
+const GONE = '编辑权已失效：你已无法访问这份文档（可能已被删除、移走，或你失去了访问权限）。本页的修改没有保存，也不能再保存到这份文档，需要的话先把内容复制出来。'
 
 test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
   test('US-M2-14 猜文档地址：看不到的文档与不存在的文档，编辑器页的说法与页头逐字相同；猜空间地址同样', async ({ page, anotherDevice }) => {
@@ -71,9 +60,9 @@ test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
     await actAs(anotherDevice, 'DELETE', `/api/documents/${trashedId}`)
     expect(await grantsOn(trashedId)).toEqual({ [me.username]: 'viewer' })
 
-    // 前提：分享给我的那一份打得开（凭授权：页头回"与我共享"）
+    // 前提：分享给我的那一份打得开（凭授权：页头回"与我共享"；查看者打开即阅读）
     await loginThroughApi(page, me)
-    await openEditor(page, sharedId)
+    await openReader(page, sharedId)
     await expect(page.locator('#editor-chrome').getByRole('link', { name: '与我共享', exact: true })).toBeVisible()
 
     const shown: string[] = []
@@ -125,7 +114,7 @@ test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
     const documentId = await createDocument(owner, '会被降级的表')
     await grantDocument(documentId, me, 'editor', owner)
     await loginThroughApi(page, me)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     await expect(saveButton(page)).toBeVisible()
     await typeInCell(page, 'A1', '降级之后写的')
 
@@ -136,10 +125,10 @@ test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
     // 保存（或者心跳先一步）得知失去编辑权（403）：编辑权失效，说的是服务端给的原因，本页的修改没有保存
     await saveButton(page).click()
     await expect(saveStatus(page)).toHaveText('编辑权已失效')
-    await expect(page.getByRole('alert')).toContainText('编辑权已失效：你已没有编辑这份文档的权限（只能查看这份文档，不能编辑）。本页的修改没有保存，需要的话先把内容复制出来，再重新加载。')
+    await expect(page.getByRole('alert')).toContainText('编辑权已失效：你已没有编辑这份文档的权限（只能查看这份文档，不能编辑）。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
     expect(await revisionOf(documentId)).toBe(1)
 
-    await openEditor(page, documentId)
+    await openReader(page, documentId)
     await expect(page.locator('#editor-chrome').getByRole('banner').getByText('只能查看', { exact: true })).toBeVisible()
     await expect(saveButton(page)).toHaveCount(0)
   })
@@ -157,7 +146,7 @@ test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
     await loginThroughApi(page, me)
     await page.goto(`/spaces/${space.id}`)
     await expect(page.getByText('我的角色：编辑者')).toBeVisible()
-    await openEditor(page, workingId)
+    await openAndEnterEditing(page, workingId)
     await typeInCell(page, 'A1', '移出之后写的')
 
     // 空间管理员在另一台设备上把我移出
@@ -167,7 +156,7 @@ test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
     await saveButton(page).click()
     await expect(saveStatus(page)).toHaveText('编辑权已失效')
     await expect(page.getByRole('alert')).toContainText(GONE)
-    await expect(page.getByRole('alert').getByRole('button', { name: '重新加载' })).toHaveCount(0)
+    await expect(page.getByRole('alert').getByRole('button')).toHaveCount(0)
     expect(await revisionOf(workingId)).toBe(1)
 
     // 空间页与不存在的空间逐字相同；导航里没有这个空间了
@@ -197,7 +186,7 @@ test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
     const documentId = await createDocument(owner, '停用之前分享的表')
     await grantDocument(documentId, me, 'editor', owner)
     await loginThroughApi(page, me)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     await expect(saveButton(page)).toBeVisible()
     await typeInCell(page, 'A1', '停用之后写的')
 

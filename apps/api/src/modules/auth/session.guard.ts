@@ -3,6 +3,7 @@ import type { Request, Response } from 'express'
 import type { AuthenticatedSession } from './session.service.ts'
 import { Injectable } from '@nestjs/common'
 import { Reflector } from '@nestjs/core'
+import { BACKGROUND_REQUEST_ROUTE } from '../../shared/background-request.ts'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { PUBLIC_ROUTE } from '../../shared/public.ts'
 import { SYSTEM_ADMIN_ROUTE } from '../../shared/system-admin-only.ts'
@@ -22,6 +23,8 @@ import { SessionService } from './session.service.ts'
  *   仍回 SESSION_EXPIRED，但不清除 Cookie：换令牌之前发出、之后才处理的请求，响应晚于新的 Cookie 到达时，清除会把新的删掉，
  *   本人随即掉线。修改密码时别的设备上的会话（password_changed）照常清除（M2-P6 复验 一般-3）；
  * - 标了 @SystemAdminOnly() 的接口，登录的不是系统管理员：PERMISSION_DENIED（M2-P1）。
+ * 认证通过之后顺延空闲过期（keepAlive），标了 @BackgroundRequest() 的接口除外（M3-P2 设计 §3.2，DEF-043）：页面在后台定时发的请求
+ * （编辑状态、心跳）不让登录一直不过期；认证、账户与系统角色的检查、请求级的身份记录照旧。
  * 认证通过之后把这个请求的身份（账户、认证过的会话、读到的系统角色）记在请求级的记录里（RequestIdentities，M2 Codex 评审 CX1）：
  * 这里的判断在处理器之前、在连接池上，处理器的只读快照开始之前会话可能被撤销、账户可能被停用、系统角色可能被取消，
  * 快照的开场核对据此在快照里再查一次（SnapshotIdentityCheck）。这里的判断照旧：提前拒绝、处理 Cookie。
@@ -59,7 +62,9 @@ export class SessionGuard implements CanActivate {
         this.cookie.clear(response)
       throw new AppError('SESSION_EXPIRED')
     }
-    await this.sessions.keepAlive(session)
+    // 页面在后台定时发的请求不顺延空闲过期（DEF-043），之后的检查照旧
+    if (this.reflector.getAllAndOverride<boolean | undefined>(BACKGROUND_REQUEST_ROUTE, [context.getHandler(), context.getClass()]) !== true)
+      await this.sessions.keepAlive(session)
     attachPrincipal(request, { user, sessionId: session.id, csrfToken: csrfTokenFor(token) })
     identifyRequestUser(request, user.id)
     this.identities.record({ userId: user.id, sessionId: session.id, systemAdmin: user.systemRole === 'admin' })

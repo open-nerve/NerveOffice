@@ -13,7 +13,7 @@ import { createUser, withDatabase } from '../../support/database.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, openAndEnterEditing, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
 
 /**
  * 后端连接数据库时的应用名：与 apps/api 的 APPLICATION_NAME（modules/database/pool.ts）相同，那边改名时这里要同步。
@@ -66,13 +66,13 @@ test.describe('US-M1-10 API 重启后已确认的数据不丢', () => {
   test('已确认的保存：强制结束后端再启动，重新打开时内容与修订号都在', async ({ page, request }) => {
     await loginThroughApi(page, await createUser('restart-confirmed'))
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     await typeInCell(page, 'A1', '重启之前已确认')
     await saveAndWait(page)
     const confirmed = await savedContent(page, documentId)
 
     await restartApi(request)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     const reopened = await savedContent(page, documentId)
     expect(reopened.revision).toBe(confirmed.revision)
@@ -83,7 +83,7 @@ test.describe('US-M1-10 API 重启后已确认的数据不丢', () => {
   test('保存进行中被打断：没有提交；页面再保存一次沿用同一个 requestId，修订号只加一', async ({ page, request }) => {
     await loginThroughApi(page, await createUser('restart-interrupted'))
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     const before = await savedContent(page, documentId)
     const saves = recordSaveRequests(page)
     await typeInCell(page, 'A1', '被打断的保存')

@@ -1,4 +1,4 @@
-// 管理界面的分页表格：加载中、第一页失败（可以重试）、空、有数据；加载更多与焦点；由页面把焦点放回某一行。
+// 管理界面的分页表格：加载中、第一页失败（可以重试，重试期间按钮留着、取到之后焦点交给列表）、空、有数据；加载更多与焦点；由页面把焦点放回某一行。
 import type { Ref } from 'react'
 import type { Page, PagedTableHandle } from './paged-table.tsx'
 import { QueryClient, QueryClientProvider, useInfiniteQuery } from '@tanstack/react-query'
@@ -95,6 +95,76 @@ describe('PagedTable', () => {
     expect(await screen.findByRole('table', { name: '条目列表' })).toBeInTheDocument()
   })
 
+  it('第一页失败、按"重试"：重试期间说明与"重试"留着（同一个按钮，不可用、说正在重试），焦点还在它上面、再按不重复请求；又失败时换成新的原因；取到之后说明连同按钮一起消失，焦点交给表格（规范 §2.4）', async () => {
+    const fetchPage = vi.fn<FetchPage>(async () => {
+      throw new ApiError(500, 'INTERNAL_ERROR', 'x')
+    })
+    renderTable(fetchPage)
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('服务器出了点问题，请稍后重试')
+    const retry = within(alert).getByRole('button', { name: '重试' })
+    retry.focus()
+    const again = pending()
+    fetchPage.mockImplementationOnce(again.fetch)
+    fireEvent.click(retry)
+    await waitFor(() => expect(retry).toHaveTextContent('正在重试…'))
+    expect(screen.getByRole('alert')).toBe(alert)
+    expect(retry).toHaveAttribute('aria-disabled', 'true')
+    expect(retry).toHaveAttribute('aria-busy', 'true')
+    // 上一次的原因不再给（请求缓存已经清掉了它，给出来的只会是笼统的说法）
+    expect(alert.textContent).toBe('条目加载失败正在重试…')
+    expect(screen.queryByRole('status', { name: TEXTS.loading })).toBeNull()
+    expect(document.activeElement).toBe(retry)
+    fireEvent.click(retry)
+    expect(fetchPage).toHaveBeenCalledTimes(2)
+
+    again.reject(new NetworkError('x'))
+    await waitFor(() => expect(retry).toHaveTextContent(/^重试$/))
+    expect(alert).toHaveTextContent('网络连接失败，请检查网络后重试')
+    expect(retry).toHaveAttribute('aria-disabled', 'false')
+    expect(document.activeElement).toBe(retry)
+
+    fetchPage.mockResolvedValueOnce({ items: items('甲'), nextCursor: null })
+    fireEvent.click(retry)
+    const table = await screen.findByRole('table', { name: '条目列表' })
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(document.activeElement).toBe(table)
+  })
+
+  it('第一页失败、重试之后是空的：焦点交给空的说明（不落到 body）', async () => {
+    const fetchPage = vi.fn<FetchPage>(async () => {
+      throw new ApiError(500, 'INTERNAL_ERROR', 'x')
+    })
+    renderTable(fetchPage)
+    const retry = within(await screen.findByRole('alert')).getByRole('button', { name: '重试' })
+    retry.focus()
+    fetchPage.mockResolvedValueOnce({ items: [], nextCursor: null })
+    fireEvent.click(retry)
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+    expect(document.activeElement).toBe(screen.getByText('没有条目'))
+  })
+
+  it('第一页失败之后由别处重新请求（例如写操作之后的刷新）：同样留着说明、说正在重试；焦点不在说明里时取到之后不抢焦点', async () => {
+    const fetchPage = vi.fn<FetchPage>(async () => {
+      throw new ApiError(500, 'INTERNAL_ERROR', 'x')
+    })
+    const { client } = renderTable(fetchPage)
+    const alert = await screen.findByRole('alert')
+    const elsewhere = document.createElement('input')
+    document.body.append(elsewhere)
+    elsewhere.focus()
+    const again = pending()
+    fetchPage.mockImplementationOnce(again.fetch)
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: ['items'] })
+    })
+    await waitFor(() => expect(within(alert).getByRole('button')).toHaveTextContent('正在重试…'))
+    again.resolve({ items: items('甲'), nextCursor: null })
+    await screen.findByRole('table', { name: '条目列表' })
+    expect(document.activeElement).toBe(elsewhere)
+    elsewhere.remove()
+  })
+
   it('加载更多：加载中按钮标为不可用、再点不重复请求；新的一页到了之后焦点移到第一条新行', async () => {
     const second = pending()
     const fetchPage = vi.fn<FetchPage>(async cursor => (cursor === null ? { items: items('甲'), nextCursor: 'c1' } : second.fetch()))
@@ -171,6 +241,29 @@ describe('PagedTable', () => {
     fireEvent.click(within(alert).getByRole('button', { name: '重试' }))
     expect(await within(table).findByText('乙')).toBeInTheDocument()
     expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('没能刷新、按"重试"成功之后说明连同"重试"一起消失：焦点交给表格，不落到 body（规范 §2.4）；刷新之后变成空的也交给空的说明', async () => {
+    const fetchPage = vi.fn<FetchPage>(async () => ({ items: items('甲'), nextCursor: null }))
+    const { client } = renderTable(fetchPage)
+    const table = await screen.findByRole('table', { name: '条目列表' })
+    fetchPage.mockRejectedValueOnce(new ApiError(500, 'INTERNAL_ERROR', 'x'))
+    await act(async () => client.invalidateQueries({ queryKey: ['items'] }))
+    const retry = within(await screen.findByRole('alert')).getByRole('button', { name: '重试' })
+    retry.focus()
+    fetchPage.mockResolvedValueOnce({ items: items('乙'), nextCursor: null })
+    fireEvent.click(retry)
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+    expect(document.activeElement).toBe(table)
+
+    fetchPage.mockRejectedValueOnce(new ApiError(500, 'INTERNAL_ERROR', 'x'))
+    await act(async () => client.invalidateQueries({ queryKey: ['items'] }))
+    const again = within(await screen.findByRole('alert')).getByRole('button', { name: '重试' })
+    again.focus()
+    fetchPage.mockResolvedValueOnce({ items: [], nextCursor: null })
+    fireEvent.click(again)
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+    expect(document.activeElement).toBe(screen.getByText('没有条目'))
   })
 
   it('加载下一页失败：照旧只说原因（在表格下方），不说成"没能刷新"', async () => {

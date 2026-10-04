@@ -7,24 +7,12 @@
 // （对话框本身：实测按需加载时 2011.3 KiB、静态引用 2020.4 KiB，约 0.5%）。组件级的按需加载与它失败时的说明只在平台页面
 // 文档的行操作里（features/documents/share-entry.tsx）。
 //
-// 编辑器页没有平台页面的请求缓存：这里给分享对话框一个自己的（默认选项与平台页面相同），未登录、令牌失效交给本页的会话确认。
+// 编辑器页没有平台页面的请求缓存：分享对话框用页头在最外层提供的那个（editor-query-client.ts）。
 import type { EditorPage, EditorPageReady } from './editor-page.ts'
-import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useRef, useState } from 'react'
-import { isAuthenticationError, isCsrfTokenError } from '../../shared/api/index.ts'
-import { QUERY_CLIENT_DEFAULTS } from '../../shared/api/query-defaults.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { Button } from '../../shared/ui/index.ts'
 import { ShareDialog } from '../sharing/index.ts'
-
-/** 给分享对话框的请求缓存：请求得到未登录或令牌失效时，向服务端确认会话（与别的标签页登录或退出时同一个确认），页头随之说明 */
-function editorQueryClient(page: EditorPage): QueryClient {
-  const onError = (error: unknown): void => {
-    if (isAuthenticationError(error) || isCsrfTokenError(error))
-      void page.recheckSession()
-  }
-  return new QueryClient({ queryCache: new QueryCache({ onError }), mutationCache: new MutationCache({ onError }), defaultOptions: QUERY_CLIENT_DEFAULTS })
-}
 
 interface EditorShareEntryProps {
   readonly page: EditorPage
@@ -35,27 +23,24 @@ interface EditorShareEntryProps {
 
 /**
  * 页头里的"分享"与对话框：能分享时才有按钮；对话框打开着的时候不随它关掉（里面正说明被拒绝的原因）。
- * 对话框里的写操作结果未知或被拒绝之后，页头重新取文档详情（能不能分享、标题、所在的空间）
+ * 对话框里的写操作结果未知或被拒绝之后，页头重新取文档详情（能不能分享、标题、所在的空间）。请求缓存由 EditorChrome 提供
  */
 export function EditorShareEntry({ page, ready, fallbackFocus }: EditorShareEntryProps) {
-  const [queryClient] = useState(() => editorQueryClient(page))
   const [open, setOpen] = useState(false)
   const entryRef = useRef<HTMLButtonElement>(null)
   return (
     <>
       {ready.canShare && <Button ref={entryRef} type="button" variant="outline" size="sm" onClick={() => setOpen(true)}>{messages.organize.share}</Button>}
-      <QueryClientProvider client={queryClient}>
-        <ShareDialog
-          documentId={ready.documentId}
-          documentTitle={ready.title}
-          currentUserId={ready.userId}
-          open={open}
-          onOpenChange={setOpen}
-          refreshDocument={() => void page.refreshDetail()}
-          entry={entryRef}
-          fallbackFocus={fallbackFocus}
-        />
-      </QueryClientProvider>
+      <ShareDialog
+        documentId={ready.documentId}
+        documentTitle={ready.title}
+        currentUserId={ready.userId}
+        open={open}
+        onOpenChange={setOpen}
+        refreshDocument={() => void page.refreshDetail()}
+        entry={entryRef}
+        fallbackFocus={fallbackFocus}
+      />
     </>
   )
 }

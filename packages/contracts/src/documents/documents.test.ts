@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { codePointLength } from '../text/text.ts'
 import {
+  conflictCopyQuerySchema,
+  conflictCopyTitle,
   COPIED_TITLE_SUFFIX,
   copiedDocumentTitle,
   copyDocumentRequestSchema,
@@ -222,5 +224,51 @@ describe('复制的请求', () => {
     expect(documentTitleSchema.parse(title)).toBe(title)
     // 截断处留下的空白去掉，不出现两个空格
     expect(copiedDocumentTitle(`${'甲'.repeat(DOCUMENT_TITLE_MAX_LENGTH - 5)} 乙`)).toBe(`${'甲'.repeat(DOCUMENT_TITLE_MAX_LENGTH - 5)}${COPIED_TITLE_SUFFIX}`)
+  })
+})
+
+describe('另存为副本（M3-P2 设计 §3.2）', () => {
+  const requestId = '0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0d'
+  /** 页面按所在的时区写到分钟的时间 */
+  const LABEL = '2026-10-04 14:30'
+  const SUFFIX = `（冲突副本 ${LABEL}）`
+
+  it('US-M3-11 标题：原标题加"（冲突副本 时间）"，仍然合法', () => {
+    expect(conflictCopyTitle('周报', LABEL)).toBe(`周报${SUFFIX}`)
+    expect(documentTitleSchema.parse(conflictCopyTitle('周报', LABEL))).toBe(`周报${SUFFIX}`)
+    // 副本再失去编辑权、再另存：后缀照样加在后面
+    expect(conflictCopyTitle(`周报${SUFFIX}`, '2026-10-04 15:05')).toBe(`周报${SUFFIX}（冲突副本 2026-10-04 15:05）`)
+  })
+
+  it('US-M3-12 加完超过上限时按码点截断原标题（与"的副本"同一个写法）：不截成半个字符，结果恰好是上限，截断处的空白去掉', () => {
+    const title = conflictCopyTitle('😀'.repeat(DOCUMENT_TITLE_MAX_LENGTH), LABEL)
+    expect(codePointLength(title)).toBe(DOCUMENT_TITLE_MAX_LENGTH)
+    expect(title).toBe('😀'.repeat(DOCUMENT_TITLE_MAX_LENGTH - codePointLength(SUFFIX)) + SUFFIX)
+    expect(documentTitleSchema.parse(title)).toBe(title)
+    const room = DOCUMENT_TITLE_MAX_LENGTH - codePointLength(SUFFIX)
+    expect(conflictCopyTitle(`${'甲'.repeat(room - 1)} 乙`, LABEL)).toBe(`${'甲'.repeat(room - 1)}${SUFFIX}`)
+    // 恰好放得下时不截
+    expect(conflictCopyTitle('乙'.repeat(room), LABEL)).toBe(`${'乙'.repeat(room)}${SUFFIX}`)
+  })
+
+  it('时间长得连后缀本身都超过上限：调用方写错了，抛 RangeError；后缀恰好是上限时原标题一个字也不留，结果仍然合法', () => {
+    const fits = 'x'.repeat(DOCUMENT_TITLE_MAX_LENGTH - codePointLength('（冲突副本 ）'))
+    expect(conflictCopyTitle('周报', fits)).toBe(`（冲突副本 ${fits}）`)
+    expect(documentTitleSchema.parse(conflictCopyTitle('周报', fits))).toBe(`（冲突副本 ${fits}）`)
+    expect(() => conflictCopyTitle('周报', `${fits}x`)).toThrow(RangeError)
+  })
+
+  it('查询参数：requestId 与标题都必填；标题按标题的规则（去掉首尾空白、1–200 个字符），UUID 统一成小写；不接受多余的参数', () => {
+    expect(conflictCopyQuerySchema.parse({ requestId: requestId.toUpperCase(), title: ` 周报${SUFFIX} ` })).toEqual({ requestId, title: `周报${SUFFIX}` })
+    expect(conflictCopyQuerySchema.safeParse({ requestId }).success).toBe(false)
+    expect(conflictCopyQuerySchema.safeParse({ title: '周报' }).success).toBe(false)
+    expect(conflictCopyQuerySchema.safeParse({ requestId, title: '' }).success).toBe(false)
+    expect(conflictCopyQuerySchema.safeParse({ requestId, title: 'x'.repeat(DOCUMENT_TITLE_MAX_LENGTH + 1) }).success).toBe(false)
+    expect(conflictCopyQuerySchema.safeParse({ requestId, title: '周报\n副本' }).success).toBe(false)
+    // 放在哪里由服务端决定，请求里不能指定
+    expect(conflictCopyQuerySchema.safeParse({ requestId, title: '周报', spaceId: requestId }).success).toBe(false)
+    expect(conflictCopyQuerySchema.safeParse({ requestId: 'not-a-uuid', title: '周报' }).success).toBe(false)
+    // 查询串里重复的参数（Express 解析成数组）
+    expect(conflictCopyQuerySchema.safeParse({ requestId, title: ['周报', '月报'] }).success).toBe(false)
   })
 })

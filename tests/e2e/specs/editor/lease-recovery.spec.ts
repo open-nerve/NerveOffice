@@ -3,11 +3,13 @@
 // 页头不出现失效的说明。续不上（别处在编辑、别处保存过）的情形见 conflict.spec.ts（US-M1-07）；
 // 换了登录、原来的登录还在（经接口重新登录）的情形见 session.spec.ts（US-M1-05 的第三条）。
 // 期间的那一版是本页自己一次没收到回包的保存时（US-M3-13）：续上时认出是自己的，以它为基准接着保存，不当成别处保存过（审查 B1）。
+// 没收到回包之后失去了编辑权、还读得到时（US-M3-13，M3-P2 设计 §3.4）：给副本之前先原样重发那一次（重放先于登录与租约，只要求能访问），
+// 拿到原来的结果就按已保存处理，不说"没有保存"、不给副本。
 import type { Page } from '@playwright/test'
-import { createUser, editLeaseEpoch, expireEditLease } from '../../support/database.ts'
+import { createDocumentIn, createTeamSpace, createUser, editLeaseEpoch, expireEditLease, revisionOf, withDatabase } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
-import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { blockLeaseRenewals, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
+import { actAs, loginThroughApi, loginThroughUi } from '../../support/session.ts'
+import { blockLeaseRenewals, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, expectFoundOnce, isSaveRequest, lostNotice, openAndEnterEditing, saveAndWait, saveButton, savedContent, saveStatus, typeInCell, waitForEditorAccess, wouldPromptOnLeave } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -16,7 +18,7 @@ test.describe('US-M3-11 编辑权中断、期间没人保存过：自动续上�
   test('编辑权到期、没人接手（改写租约行的时间）：保存时（或者心跳先一步）续上新的一代，保存成功，不出现失效的说明', async ({ page }) => {
     await loginThroughApi(page, await createUser('recover-expired'))
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     const before = await editLeaseEpoch(documentId)
     await typeInCell(page, 'A1', 'after expiry')
 
@@ -36,7 +38,7 @@ test.describe('US-M3-11 编辑权中断、期间没人保存过：自动续上�
     const owner = await createUser('recover-relogin')
     await loginThroughApi(page, owner)
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     const before = await editLeaseEpoch(documentId)
     await typeInCell(page, 'A1', 'after relogin')
 
@@ -62,7 +64,7 @@ test.describe('US-M3-11 编辑权中断、期间没人保存过：自动续上�
  * 返回打开时编辑权的代次
  */
 async function saveWithLostReply(page: Page, documentId: string): Promise<number> {
-  await openEditor(page, documentId)
+  await openAndEnterEditing(page, documentId)
   const epoch = await editLeaseEpoch(documentId) ?? 0
   await page.route('**/api/documents/*/content?*', async (route) => {
     if (route.request().method() !== 'PUT') {
@@ -118,5 +120,61 @@ test.describe('US-M3-13 没收到保存的确认，这期间编辑权到期：�
     const saved = await savedContent(page, documentId)
     expect(saved.revision).toBe(3)
     expect([cellOf(saved.snapshot, 'A1')?.v, cellOf(saved.snapshot, 'A2')?.v]).toEqual(['first', 'second'])
+  })
+})
+
+test.describe('US-M3-13 没收到保存的确认，随后失去编辑权（还读得到）：给副本之前先原样重发那一次', () => {
+  test('US-M3-13 保存的回包丢了、随后被降为查看者：页面原样重发那一次（同一个请求），拿到原来的结果——按已保存处理，不说"没有保存"、不给副本；服务器上只有一个新修订', async ({ page, anotherDevice }) => {
+    const lead = await createUser('replay-lead', '组长')
+    const me = await createUser('replay-me', '同事')
+    const space = await createTeamSpace('回包丢了', lead, [[lead, 'admin'], [me, 'editor']])
+    const documentId = await createDocumentIn(space.id, lead, '共同的表')
+    await loginThroughApi(page, me)
+    await openAndEnterEditing(page, documentId)
+    const saves: string[] = []
+    page.on('request', (request) => {
+      if (isSaveRequest(request))
+        saves.push(new URL(request.url()).searchParams.get('requestId') ?? '')
+    })
+
+    // 保存：请求照常到达服务端并提交（修订 2），浏览器却收不到回包，页头说保存失败
+    await page.route('**/api/documents/*/content?*', async (route) => {
+      if (route.request().method() !== 'PUT') {
+        await route.continue()
+        return
+      }
+      await route.fetch()
+      await route.abort('connectionreset')
+    }, { times: 1 })
+    await typeInCell(page, 'A1', 'first')
+    await saveButton(page).click()
+    await expect(saveStatus(page)).toHaveText('保存失败')
+    expect(await revisionOf(documentId)).toBe(2)
+
+    // 空间管理员把我降为查看者（收回写入权）：下一次心跳得知不能编辑了（403），编辑权失效，本页换成只读。还读得到：给副本之前，
+    // 先原样重发那一次结果未知的保存——拿到原来的结果，本页的修改其实已经保存，只给"重新加载"。
+    // 心跳每 10 秒一次，之后还要以只读重建、重发那一次：慢的机器（CI 比本机慢几倍）上留足余量
+    await loginThroughApi(anotherDevice, lead)
+    await actAs(anotherDevice, 'PUT', `/api/spaces/${space.id}/members/${me.id}`, { role: 'viewer' })
+    const lost = lostNotice(page)
+    await expect(lost).toContainText('编辑权已失效：你已没有编辑这份文档的权限（只能查看这份文档，不能编辑）。本页的修改都已保存，重新加载可以看到最新的版本。', { timeout: 45_000 })
+    await expect(lost.getByRole('button', { name: '另存为副本', exact: true })).toHaveCount(0)
+    await expect(lost.getByRole('button', { name: '放弃本页的修改', exact: true })).toHaveCount(0)
+    await waitForEditorAccess(page, 'read')
+    expect(await wouldPromptOnLeave(page)).toBe(false)
+
+    // 重发的是同一个请求（requestId 不变），服务端按重放回答原来的结果：没有重复写入，只有一个新修订
+    expect(saves).toHaveLength(2)
+    expect(saves[1]).toBe(saves[0])
+    expect(await revisionOf(documentId)).toBe(2)
+    const revisions = await withDatabase(async client => (await client.query<{ revision: number }>('SELECT revision FROM document_revisions WHERE document_id = $1 ORDER BY revision', [documentId])).rows.map(row => row.revision))
+    expect(revisions).toEqual([1, 2])
+
+    // 重新加载：按服务器上的版本回到阅读，只能查看；那一次保存的内容在
+    await lost.getByRole('button', { name: '重新加载', exact: true }).click()
+    await expect(lostNotice(page)).toHaveCount(0)
+    await expect(saveStatus(page)).toHaveText('只能查看')
+    await expectFoundOnce(page, 'first')
+    expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('first')
   })
 })

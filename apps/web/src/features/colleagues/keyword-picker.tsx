@@ -1,14 +1,15 @@
 import type { QueryKey, UseQueryOptions, UseQueryResult } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
+import type { FirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
 import { useQuery } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { describeError } from '../../shared/api/index.ts'
-import { messages } from '../../shared/i18n/index.ts'
 import { colleaguesMessages } from '../../shared/i18n/zh-cn/colleagues.ts'
 import { cn } from '../../shared/lib/cn.ts'
 import { useDebouncedValue } from '../../shared/lib/use-debounced-value.ts'
+import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
-import { Badge, Button, Input, Label, Phrase } from '../../shared/ui/index.ts'
+import { Badge, Button, Input, Label, Phrase, RetryButton } from '../../shared/ui/index.ts'
 import { StatusRegion } from '../../shared/ui/status-region.tsx'
 
 /** 按关键词选一项时的界面文字 */
@@ -20,7 +21,8 @@ export interface KeywordPickerTexts {
   readonly searching: string
   /** 没有找到 */
   readonly none: string
-  readonly failed: (reason: string) => string
+  /** 查找失败：reason 是原因；按了"重试"、正在重新查找时不给（上一次的原因已经清掉了） */
+  readonly failed: (reason?: string) => string
 }
 
 interface KeywordPickerProps<TQueryFnData, TItem, TQueryKey extends QueryKey> {
@@ -41,21 +43,25 @@ interface KeywordPickerProps<TQueryFnData, TItem, TQueryKey extends QueryKey> {
   readonly texts: KeywordPickerTexts
 }
 
-/** 按关键词查找的情形：查找中、失败（可以重试）、找到的候选（可能一个也没有） */
+/** 按关键词查找的情形：查找中、失败（可以重试；按了"重试"之后说明与按钮留着，见 failure）、找到的候选（可能一个也没有） */
 type Lookup<TItem>
   = | { readonly state: 'searching' }
-    | { readonly state: 'failed', readonly error: Error, readonly retry: () => void }
+    | { readonly state: 'failed', readonly error: Error | null, readonly failure: FirstLoadRetry, readonly retry: () => void }
     | { readonly state: 'found', readonly items: readonly TItem[] }
 
 /**
  * 输入框里有关键词时，查找到了哪一步。输入还没停下（或者刚改过）时，防抖之后的查询还是上一个关键词的：按查找中算，
- * 不显示它的候选（审查 B11）；失败之后点了重试，重新查找期间同样是查找中
+ * 不显示它的候选（审查 B11）。失败之后点了重试，重新查找期间说明与"重试"留着（不可用、说正在重试，规范 §2.4）：
+ * 按查找中算的话说明连同刚按过的按钮一起消失，焦点落到 body
  */
-function lookupOf<TItem>(result: UseQueryResult<TItem[]>, settled: boolean, exclude: ((item: TItem) => boolean) | undefined): Lookup<TItem> {
-  if (!settled || result.isPending || (result.isError && result.isFetching))
+function lookupOf<TItem>(result: UseQueryResult<TItem[]>, failure: FirstLoadRetry, settled: boolean, exclude: ((item: TItem) => boolean) | undefined): Lookup<TItem> {
+  if (!settled)
     return { state: 'searching' }
-  if (result.isError)
-    return { state: 'failed', error: result.error, retry: () => void result.refetch() }
+  if (failure.failed)
+    return { state: 'failed', error: result.error, failure, retry: () => void result.refetch() }
+  // 还在查找；或者重新挂上时缓存里留着这个关键词失败的结果、正在重新查找（没有人按过"重试"）
+  if (result.isPending || result.isError)
+    return { state: 'searching' }
   return { state: 'found', items: exclude === undefined ? result.data : result.data.filter(item => !exclude(item)) }
 }
 
@@ -74,10 +80,11 @@ function Candidates<TItem>({ lookup, texts, itemKey, renderItem, onPick }: {
   readonly onPick: (item: TItem) => void
 }) {
   if (lookup.state === 'failed') {
+    const { failure } = lookup
     return (
-      <div role="alert" className="flex items-center gap-2 text-sm text-destructive">
-        <span>{texts.failed(describeError(lookup.error).message)}</span>
-        <Button type="button" variant="outline" size="sm" onClick={lookup.retry}>{messages.common.retry}</Button>
+      <div role="alert" className="flex items-center gap-2 text-sm text-destructive" onFocus={failure.focus.onFocus} onBlur={failure.focus.onBlur}>
+        <span>{texts.failed(failure.retrying ? undefined : describeError(lookup.error).message)}</span>
+        <RetryButton retrying={failure.retrying} onRetry={lookup.retry} />
       </div>
     )
   }
@@ -101,6 +108,9 @@ function Candidates<TItem>({ lookup, texts, itemKey, renderItem, onPick }: {
  * 它的候选不能挂在新的关键词（或者空的输入框）下面。
  * 查找的进展（查找中、没有找到）放在一直在的状态容器里，内容变化时往里填文字：与内容一起插入的 role="status"，
  * 部分读屏软件不播报（M2-P2 复验）。候选列表与失败的提示（role="alert"）随结果出现。
+ * 查找失败之后按"重试"：重新查找期间说明与按钮留着（不可用、说正在重试）；有了结果之后说明连同"重试"一起消失，焦点交给一直在的输入框，
+ * 不落到 body；又失败了说明换成新的原因，焦点还在"重试"上（规范 §2.4，shared/lib/use-first-load-retry.ts）。
+ * 同一个关键词之前找到过、这次重新查找失败了，同样只说失败（不留之前的候选）。
  * 只由按需加载的页面引用，不进首屏。
  */
 export function KeywordPicker<TQueryFnData, TItem, TQueryKey extends QueryKey>({ label, selected, onSelect, search, itemKey, renderItem, exclude, texts }: KeywordPickerProps<TQueryFnData, TItem, TQueryKey>) {
@@ -111,6 +121,7 @@ export function KeywordPicker<TQueryFnData, TItem, TQueryKey extends QueryKey>({
   const settled = query === typed
   const candidates = useQuery({ ...search(query), enabled: query !== '' && settled && selected === undefined })
   const inputRef = useRef<HTMLInputElement>(null)
+  const failure = useFirstLoadRetry(candidates, inputRef, { hidesDataOnError: true })
   const changeRef = useRef<HTMLButtonElement>(null)
   const focusAfterRender = useFocusAfterRender()
   const inputId = useId()
@@ -139,7 +150,7 @@ export function KeywordPicker<TQueryFnData, TItem, TQueryKey extends QueryKey>({
       </div>
     )
   }
-  const lookup = typed === '' ? undefined : lookupOf(candidates, settled, exclude)
+  const lookup = typed === '' ? undefined : lookupOf(candidates, failure, settled, exclude)
   let progress: string | undefined
   if (lookup?.state === 'searching')
     progress = texts.searching

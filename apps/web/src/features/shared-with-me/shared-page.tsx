@@ -11,8 +11,9 @@ import { sharedWithMeMessages } from '../../shared/i18n/zh-cn/shared-with-me.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
+import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
 import { useFocusRescue } from '../../shared/lib/use-focus-rescue.ts'
-import { Alert, AlertDescription, Button, Skeleton } from '../../shared/ui/index.ts'
+import { Alert, AlertDescription, Button, RetryButton, Skeleton } from '../../shared/ui/index.ts'
 import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { SpaceLabel } from '../../shared/ui/space-label.tsx'
 import { sessionQueryOptions } from '../auth/index.ts'
@@ -46,11 +47,14 @@ function SharedDetails({ document, viewerId }: { readonly document: SharedDocume
  * 每一条与空间的文档列表同一个"操作"（features/documents 的 DocumentRow，Codex 对抗评审 CX3）：展开时取这份文档的详情，
  * 按服务端给的权限只列出能做的——只凭单独授权时，编辑者能改名，能读就能复制，没有移动、删除与分享。
  * 复制的目标是自己能新建的空间（与空间页同一个候选），源空间不在其中，不显示它的目录结构；改名之后连同这一页一起刷新，
- * 复制之后刷新目标空间的列表。说明、焦点与刷新的做法与空间页相同（organize-panels.tsx）
+ * 复制之后刷新目标空间的列表。说明、焦点与刷新的做法与空间页相同（organize-panels.tsx）。
+ * 第一页就没取到时按"重试"：重试期间说明与按钮留着（不可用、说正在重试）；取到之后焦点交给页面的标题，不落到 body
+ * （规范 §2.4，shared/lib/use-first-load-retry.ts）
  */
 function SharedList({ titleRef }: { readonly titleRef: RefObject<HTMLHeadingElement | null> }) {
   const queryClient = useQueryClient()
   const query = useInfiniteQuery(sharedListQueryOptions())
+  const firstLoad = useFirstLoadRetry(query, titleRef)
   const session = useQuery(sessionQueryOptions())
   // 导航已经请求过"我能看到的空间"：复制的目标候选直接用它（服务端给的 canCreateDocuments），共用同一份缓存，
   // 连同取到了没有：还没取到、取不到时复制的目标说明加载中、没能加载（可以重试），不回落到看不到的源空间（M2 Codex 评审复验的一般 1）；
@@ -93,23 +97,24 @@ function SharedList({ titleRef }: { readonly titleRef: RefObject<HTMLHeadingElem
     })
   }
 
-  if (query.isPending) {
+  if (firstLoad.failed) {
+    // 重试期间说明与按钮留着（不可用、说正在重试），上一次的原因不再给（请求缓存已经清掉了它）
+    return (
+      <Alert variant="destructive" onFocus={firstLoad.focus.onFocus} onBlur={firstLoad.focus.onBlur}>
+        <AlertDescription>
+          <p>{text.loadFailed}</p>
+          {!firstLoad.retrying && <p>{describeError(query.error).message}</p>}
+          <RetryButton retrying={firstLoad.retrying} onRetry={() => void query.refetch()} className="mt-2" />
+        </AlertDescription>
+      </Alert>
+    )
+  }
+  if (query.data === undefined) {
     // 骨架屏本身不带 role：状态写在包住它的容器上（M2-P6 复核 S4）
     return (
       <div role="status" aria-label={text.loading} className="flex flex-col gap-3">
         {['first', 'second', 'third'].map(row => <Skeleton key={row} className="h-12 w-full" />)}
       </div>
-    )
-  }
-  if (query.data === undefined) {
-    return (
-      <Alert variant="destructive">
-        <AlertDescription>
-          <p>{text.loadFailed}</p>
-          <p>{describeError(query.error).message}</p>
-          <Button variant="outline" size="sm" className="mt-2" onClick={() => void query.refetch()}>{messages.common.retry}</Button>
-        </AlertDescription>
-      </Alert>
     )
   }
   return (

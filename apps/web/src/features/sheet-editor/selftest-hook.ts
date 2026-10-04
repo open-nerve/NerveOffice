@@ -1,0 +1,146 @@
+// 测试构建的页面自检的挂接（M3-P2 设计 §3.5，真实 Safari 的复核）：start.tsx 只在测试构建、地址带 selftest 时动态引入这里
+// （生产构建里 MODE 是 production，那个分支与这个分块都被去掉，门禁 artifacts 核对）。
+// 页面开始载入时就挂上页面错误与可见性的收集，订阅页面的状态；到 steady（或载入失败、等不到就绪）之后，才动态引入编辑器的自检模块
+// （editor/testing/selftest.ts，模块边界只给这个文件开了这一个口子），由它跑完检查、把结果带到地址里的 next。
+import type { SelftestHost } from '../../editor/testing/selftest.ts'
+import type { EditorPage, EditorPageLoad } from './editor-page.ts'
+import type { SheetEditorPageElements } from './start.tsx'
+import { documentIdFromPagePath } from '@nerve-office/contracts'
+
+/** 等页面到 steady 最多等多久（编辑器的就绪时限是 20 秒，steady 在渲染完成之后 3 秒；留出余量） */
+const STEADY_TIMEOUT_MS = 90_000
+
+/**
+ * 页面开始时在后台（document.visibilityState 是 hidden）：等这么久还是隐藏的，就不等 steady，直接交给自检说明原因。
+ * Safari 不给隐藏的标签页动画帧，几秒之后连计时器也停了（2026-10-04 本机 Safari 27.0 实测：open -g 在后台打开的标签页一开始就是 hidden，
+ * 动画帧 0 帧，计时器约 6 秒之后不再触发），编辑器画不出来、自检做不完；趁计时器还在走把原因交回去，驱动脚本不必等到超时
+ */
+const HIDDEN_GRACE_MS = 2_000
+
+/**
+ * 浏览器按 ResizeObserver 规范报告的"这一帧还有没送达的尺寸变化通知"：不是应用的错误（与 E2E 的 support/page-errors.ts 同一个判断，
+ * 那里写着原委），记进 ignoredNotices
+ */
+const RESIZE_OBSERVER_LOOP_NOTICE = /^ResizeObserver loop (?:completed with undelivered notifications\.?|limit exceeded)$/
+
+/**
+ * 要在编辑时跑的场景（地址里 selftest 的值）：M3-P2 起打开即阅读，到了阅读的 steady 之后先进入编辑（与页头的"编辑"同一个入口），
+ * 到了编辑的 steady 再跑自检。enter-exit 在阅读时开始，场景里自己点页头的"编辑""退出编辑"（S5），按 host.view 等页面的状态变化
+ */
+const EDITING_SCENARIOS: ReadonlySet<string> = new Set(['edit-chrome'])
+
+function describe(value: unknown): string {
+  if (value instanceof Error)
+    return `${value.name}: ${value.message}`
+  if (typeof value === 'string')
+    return value
+  try {
+    return JSON.stringify(value) ?? String(value)
+  }
+  catch {
+    return String(value)
+  }
+}
+
+interface PageLog {
+  readonly pageErrors: string[]
+  readonly consoleErrors: string[]
+  readonly ignoredNotices: string[]
+  readonly visibility: string[]
+}
+
+/** 挂上收集：没接住的异常、没处理的拒绝、console.error 的调用与页面可见性的变化（自检结束之后整页跳走，不必撤掉） */
+function watchPage(target: Window): PageLog {
+  const log: PageLog = { pageErrors: [], consoleErrors: [], ignoredNotices: [], visibility: [`${new Date().toISOString()} ${target.document.visibilityState}`] }
+  target.addEventListener('error', (event) => {
+    const text = event.error instanceof Error ? describe(event.error) : event.message
+    ;(RESIZE_OBSERVER_LOOP_NOTICE.test(event.message) ? log.ignoredNotices : log.pageErrors).push(text)
+  })
+  target.addEventListener('unhandledrejection', (event) => {
+    log.pageErrors.push(`没有处理的拒绝 ${describe(event.reason)}`)
+  })
+  // 自检要收集页面里 console.error 的调用（M3-P2 设计 §3.5）：包装它，照常转给原来的
+  /* eslint-disable no-console -- 见上一行：只在测试构建的自检里包装 console.error */
+  const original = console.error
+  console.error = (...args: unknown[]) => {
+    log.consoleErrors.push(args.map(describe).join(' '))
+    original.apply(console, args)
+  }
+  /* eslint-enable no-console */
+  target.document.addEventListener('visibilitychange', () => {
+    log.visibility.push(`${new Date().toISOString()} ${target.document.visibilityState}`)
+  })
+  return log
+}
+
+/** 载入失败时的说明 */
+function failureOf(load: EditorPageLoad): string {
+  return 'error' in load ? `${load.kind}：${describe(load.error)}` : load.kind
+}
+
+/** 地址带 selftest 时（start.tsx 判断）：等页面到 steady，然后跑自检 */
+export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElements): void {
+  const startedAt = new Date().toISOString()
+  const documentId = documentIdFromPagePath(window.location.pathname)
+  const log = watchPage(window)
+  let started = false
+  let unsubscribe: (() => void) | undefined
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let hiddenTimer: ReturnType<typeof setTimeout> | undefined
+  const begin = (state: SelftestHost['page']): void => {
+    if (started)
+      return
+    started = true
+    unsubscribe?.()
+    clearTimeout(timer)
+    clearTimeout(hiddenTimer)
+    const host: SelftestHost = {
+      documentId: documentId ?? '',
+      surface: elements.surface,
+      chrome: elements.chrome,
+      startedAt,
+      page: state,
+      view: () => {
+        const { mode, surface } = page.view()
+        return { mode: mode?.kind, surface }
+      },
+      visibility: () => log.visibility,
+      pageErrors: () => log.pageErrors,
+      consoleErrors: () => log.consoleErrors,
+      ignoredNotices: () => log.ignoredNotices,
+    }
+    void import('../../editor/testing/selftest.ts').then(async ({ runSelftestAndReport }) => runSelftestAndReport(host))
+  }
+  // 打开即阅读：要在编辑时跑的场景先进入编辑，只进一次。进入有了结果（进入了编辑，或者被占用、不能编辑而留在阅读）之后再看：
+  // 进入了就等编辑的 steady；留在阅读就照样跑，自检按只读打开说明
+  let entering: 'no' | 'requested' | 'settled' = EDITING_SCENARIOS.has(new URLSearchParams(window.location.search).get('selftest') ?? '') ? 'no' : 'settled'
+  const onChange = (): void => {
+    const { load, mode, surface } = page.view()
+    if (load.kind === 'ready' && surface === 'steady' && (mode?.kind === 'reading' || mode?.kind === 'editing')) {
+      if (mode.kind === 'reading' && entering !== 'settled') {
+        if (entering === 'no') {
+          entering = 'requested'
+          const settle = (): void => {
+            entering = 'settled'
+            onChange()
+          }
+          void page.enterEditing().then(settle, settle)
+        }
+        return
+      }
+      begin({ state: 'ready', readOnly: mode.kind === 'reading' })
+    }
+    else if (load.kind !== 'loading' && load.kind !== 'ready') {
+      begin({ state: 'failed', detail: failureOf(load) })
+    }
+  }
+  unsubscribe = page.subscribe(onChange)
+  timer = setTimeout(() => begin({ state: 'timeout', detail: `${STEADY_TIMEOUT_MS / 1000} 秒内没有到 steady（${page.view().load.kind}）` }), STEADY_TIMEOUT_MS)
+  if (document.visibilityState === 'hidden') {
+    hiddenTimer = setTimeout(() => {
+      if (document.visibilityState === 'hidden')
+        begin({ state: 'hidden', detail: '页面在后台（document.visibilityState 是 hidden）：浏览器暂停了隐藏页面的动画帧与计时器，编辑器画不出来，自检做不了。让浏览器的窗口露出来再跑' })
+    }, HIDDEN_GRACE_MS)
+  }
+  onChange()
+}

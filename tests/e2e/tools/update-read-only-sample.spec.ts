@@ -15,7 +15,7 @@ import { createDocument, createUser } from '../support/database.ts'
 import { expect, test } from '../support/fixtures.ts'
 import { readOnlySampleFor, SAMPLE_SHEETS, SAMPLE_UNIT_PLACEHOLDER } from '../support/read-only-sample.ts'
 import { loginThroughApi } from '../support/session.ts'
-import { openEditor, saveAndWait, savedContent, sheetTab } from '../support/sheet.ts'
+import { openAndEnterEditing, saveAndWait, savedContent, sheetTab } from '../support/sheet.ts'
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../..')
 const SAMPLE_FILE = resolve(import.meta.dirname, '../support/read-only-sample.json')
@@ -34,7 +34,7 @@ async function nextFrames(page: Page): Promise<void> {
 
 /** 打开、把每张看得见的工作表画一遍、保存；返回服务器上保存的快照 */
 async function openDrawAndSave(page: Page, documentId: string): Promise<string> {
-  await openEditor(page, documentId, 'steady')
+  await openAndEnterEditing(page, documentId, 'steady')
   for (const sheet of VISIBLE_SHEETS) {
     await sheetTab(page, sheet.name).click()
     await expect(sheetTab(page, sheet.name)).toHaveAttribute('aria-selected', 'true')

@@ -425,15 +425,15 @@ describe('EditLeaseService.status', () => {
     await acquired(setupResult)
     const lastActiveAt = store.leaseRecords.get(document.id)?.lastActiveAt
     store.setMember(TEAM_SPACE, BOB, 'viewer')
-    expect(await service.status(BEN, document.id, TRANSACTION)).toEqual({ revision: 3, editor: { holderId: ALICE, lastActiveAt, sameUser: false } })
-    expect(await service.status(AMY, document.id, TRANSACTION)).toEqual({ revision: 3, editor: { holderId: ALICE, lastActiveAt, sameUser: true } })
+    expect(await service.status(BEN, document.id, TRANSACTION)).toEqual({ revision: 3, editor: { holderId: ALICE, lastActiveAt, sameUser: false }, canEdit: false })
+    expect(await service.status(AMY, document.id, TRANSACTION)).toEqual({ revision: 3, editor: { holderId: ALICE, lastActiveAt, sameUser: true }, canEdit: true })
     expect(store.leases.findByDocument).toHaveBeenCalledWith(document.id, TRANSACTION)
     expect(store.leases.lockByDocument).toHaveBeenCalledTimes(1)
   })
 
   it('没有租约、租约无效（到期、登录失效、没了编辑权）：editor 为空', async () => {
     const { service, document } = setup()
-    expect(await service.status(BEN, document.id, TRANSACTION)).toEqual({ revision: 3, editor: undefined })
+    expect(await service.status(BEN, document.id, TRANSACTION)).toEqual({ revision: 3, editor: undefined, canEdit: true })
     for (const invalidate of [
       ({ store }: Setup) => later(store, EDIT_LEASE_TTL_SECONDS * SECOND),
       ({ store }: Setup) => void store.activeSessions.delete(ALICE_SESSION),
@@ -442,8 +442,31 @@ describe('EditLeaseService.status', () => {
       const setupResult = setup()
       await acquired(setupResult)
       invalidate(setupResult)
-      expect(await setupResult.service.status(BEN, setupResult.document.id, TRANSACTION)).toEqual({ revision: 3, editor: undefined })
+      expect(await setupResult.service.status(BEN, setupResult.document.id, TRANSACTION)).toEqual({ revision: 3, editor: undefined, canEdit: true })
     }
+  })
+
+  it('US-M3-05 调用者能不能编辑（M3-P2 设计 §3.2）：与详情的 permissions.canEdit 同一个规则——编辑者能，查看者、归档空间里的空间管理员、只有查看授权的人不能，只有编辑授权的人能；不多查询', async () => {
+    const { store, service, document } = setup()
+    expect((await service.status(BEN, document.id, TRANSACTION)).canEdit).toBe(true)
+    store.setMember(TEAM_SPACE, BOB, 'viewer')
+    expect((await service.status(BEN, document.id, TRANSACTION)).canEdit).toBe(false)
+    // 只凭授权：查看授权不能、编辑授权能（内容权限取较高者）
+    store.setMember(TEAM_SPACE, BOB, undefined)
+    store.setGrant(document.id, BOB, 'viewer')
+    expect((await service.status(BEN, document.id, TRANSACTION)).canEdit).toBe(false)
+    store.setGrant(document.id, BOB, 'editor')
+    expect((await service.status(BEN, document.id, TRANSACTION)).canEdit).toBe(true)
+    // 归档的空间里所有人至多是查看者
+    store.setMember(TEAM_SPACE, ALICE, 'admin')
+    store.space(TEAM_SPACE).status = 'archived'
+    expect((await service.status(AMY, document.id, TRANSACTION)).canEdit).toBe(false)
+    expect((await service.status(BEN, document.id, TRANSACTION)).canEdit).toBe(false)
+    // 与判断能读的那一次用同一份事实：空间事实与授权各查一次，没有另外的查询
+    store.spaces.accessFactsOf.mockClear()
+    store.grants.roleOf.mockClear()
+    await service.status(BEN, document.id, TRANSACTION)
+    expect([store.spaces.accessFactsOf.mock.calls.length, store.grants.roleOf.mock.calls.length]).toEqual([1, 1])
   })
 
   it('读不到：NOT_FOUND，不读租约', async () => {

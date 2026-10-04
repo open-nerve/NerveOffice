@@ -98,6 +98,8 @@ describe('US-M1-11 lint 规则的自测：内部 API 只经 internal-api 引用�
       'import { IRenderManagerService } from \'@univerjs/engine-render\'\n\nexport const s = IRenderManagerService\n',
       'import { HeaderFreezeRenderController } from \'@univerjs/sheets-ui\'\n\nexport const c = HeaderFreezeRenderController\n',
       'export { HeaderFreezeRenderController as Freeze } from \'@univerjs/sheets-ui\'\n',
+      // 行列调整的控制器（DEF-027，M3-P2 S3）
+      'import { HeaderResizeRenderController } from \'@univerjs/sheets-ui\'\n\nexport const c = HeaderResizeRenderController\n',
       'import * as docsUi from \'@univerjs/docs-ui\'\n\nexport const d = docsUi\n',
     ]
 
@@ -116,9 +118,9 @@ describe('US-M1-11 lint 规则的自测：内部 API 只经 internal-api 引用�
         'import { DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY, FOCUSING_FX_BAR_EDITOR, IContextService } from \'@univerjs/core\'',
         'import { IEditorService } from \'@univerjs/docs-ui\'',
         'import { IRenderManagerService } from \'@univerjs/engine-render\'',
-        'import { HeaderFreezeRenderController } from \'@univerjs/sheets-ui\'',
+        'import { HeaderFreezeRenderController, HeaderResizeRenderController } from \'@univerjs/sheets-ui\'',
         '',
-        'export const used = [DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY, FOCUSING_FX_BAR_EDITOR, IContextService, IEditorService, IRenderManagerService, HeaderFreezeRenderController]',
+        'export const used = [DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY, FOCUSING_FX_BAR_EDITOR, IContextService, IEditorService, IRenderManagerService, HeaderFreezeRenderController, HeaderResizeRenderController]',
         '',
       ].join('\n')
       expect(await rulesFor(internal, INTERNAL_API_FILE)).not.toContain('no-restricted-imports')
@@ -165,7 +167,7 @@ describe('US-M1-11 lint 规则的自测：内部 API 只经 internal-api 引用�
     expect(editor.paths?.find(path => path.name === '@univerjs/core')?.importNames).toEqual(expect.arrayContaining(['IContextService', 'FOCUSING_FX_BAR_EDITOR', 'DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY']))
     expect(editor.paths?.find(path => path.name === '@univerjs/docs-ui')?.importNames).toEqual(['IEditorService'])
     expect(editor.paths?.find(path => path.name === '@univerjs/engine-render')?.importNames).toEqual(['IRenderManagerService'])
-    expect(editor.paths?.find(path => path.name === '@univerjs/sheets-ui')?.importNames).toEqual(['HeaderFreezeRenderController'])
+    expect(editor.paths?.find(path => path.name === '@univerjs/sheets-ui')?.importNames).toEqual(['HeaderFreezeRenderController', 'HeaderResizeRenderController'])
   })
 }, LINT_TIMEOUT)
 

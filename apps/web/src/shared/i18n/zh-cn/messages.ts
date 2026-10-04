@@ -157,6 +157,8 @@ export const messages = {
   },
   common: {
     retry: '重试',
+    /** 第一次就没取到、按了"重试"之后：按钮留着、不可用，说正在重试（规范 §2.4：进行中的操作的按钮不卸载，shared/lib/use-first-load-retry.ts） */
+    retrying: '正在重试…',
     backHome: '回到首页',
     requestId: (id: string) => `请求标识：${id}`,
     close: '关闭',
@@ -204,6 +206,8 @@ export const messages = {
     // 停用自己的结果未知、随后登录失效了：多半是已经停用，会话随之撤销了（M2-P6 复核第五批 G1）
     accountMaybeDisabled: '刚才停用自己的账户时没能确认结果，随后登录失效了：你的账户可能已经被停用。需要继续使用的话，请联系另一位系统管理员重新启用。',
     checkingSession: '正在确认登录状态…',
+    /** 确认登录状态的请求失败了（网络、服务不可用）：整页说明，可以重试（features/auth 的 RequireSession） */
+    sessionCheckFailed: '没能确认登录状态',
     logout: '退出',
     loggingOut: '正在退出…',
     logoutFailed: (reason: string) => `退出失败：${reason}`,
@@ -232,6 +236,8 @@ export const messages = {
         password: '设置密码',
         submit: '设置密码并登录',
         checking: '正在核对邀请链接…',
+        /** 核对链接的请求失败了（网络、服务不可用、尝试次数过多）：可以重试 */
+        checkFailed: '没能核对邀请链接',
       },
       password_reset: {
         title: '重置密码',
@@ -239,6 +245,8 @@ export const messages = {
         password: '新密码',
         submit: '设置新密码并登录',
         checking: '正在核对重置链接…',
+        /** 核对链接的请求失败了（网络、服务不可用、尝试次数过多）：可以重试 */
+        checkFailed: '没能核对重置链接',
       },
       submitting: '正在设置…',
       invalid: (purpose: OneTimeLinkPurpose, reason: LinkInvalidReason) => LINK_INVALID_MESSAGES[purpose][reason],
@@ -275,6 +283,11 @@ export const messages = {
     notFoundTitle: '空间不存在',
     notFound: '空间不存在，或者你没有访问权限',
     pageLoadFailed: '空间加载失败',
+    /**
+     * 空间页与回收站页的页头（名称、类型、我的角色、能做的操作）留着之前的、重新请求却失败了（DEF-040）：
+     * "空间信息没能刷新，显示的还是之前的内容"
+     */
+    detailName: '空间信息',
     members: '成员',
     rename: '改名',
     renameLabel: '空间名称',
@@ -335,7 +348,10 @@ export const messages = {
     actions: '操作',
     actionsOn: (name: string) => `操作 ${name}`,
     loadingActions: '正在确认可以做哪些操作…',
-    actionsFailed: (reason: string) => `没能确认可以做哪些操作：${reason}`,
+    /** 第一次就没取到（原因）；按了"重试"、正在重新取时不给原因（shared/lib/use-first-load-retry.ts） */
+    actionsFailed: (reason?: string) => (reason === undefined ? '没能确认可以做哪些操作' : `没能确认可以做哪些操作：${reason}`),
+    /** 展开的面板留着之前取到的权限、重新取却失败了（DEF-040）："可以做的操作没能刷新，显示的还是之前的内容" */
+    actionsName: '可以做的操作',
     rename: '改名',
     renameLabel: (name: string) => `${name} 的新名称`,
     move: '移动',
@@ -350,7 +366,8 @@ export const messages = {
     targetSpace: '目标空间',
     // 复制的目标只在能新建的空间里选（M2 Codex 评审复验的一般 1）：这些空间还没取到、取不到、一个也没有时这样说
     targetSpacesLoading: '正在加载可以复制到的空间…',
-    targetSpacesLoadFailed: (reason: string) => `可以复制到的空间没能加载：${reason}`,
+    /** 同上：按了"重试"、正在重新取时不给原因 */
+    targetSpacesLoadFailed: (reason?: string) => (reason === undefined ? '可以复制到的空间没能加载' : `可以复制到的空间没能加载：${reason}`),
     noTargetSpaces: '没有可以复制到的空间：你在任何空间里都不能新建文档。',
     targetLocation: '目标位置',
     targetLoading: '正在加载目标位置…',

@@ -304,13 +304,17 @@ export class FakeStore {
         }
         return ids.length
       }),
-      /** 按源文档建一份副本：类型、unitId、档案与格式版本原样复制，修订号 1、代次 0（与真实仓储一样用列的默认值），新的 id */
+      /**
+       * 按源文档建一份副本：类型、unitId、档案与格式版本原样复制，修订号 1、代次 0（与真实仓储一样用列的默认值），新的 id。
+       * 行里没有 SDK 版本（DocumentRow 不带它）：另存为副本给的版本由用例按调用的参数核对
+       */
       copyFrom: vi.fn(async (sourceId: string, copy: CopiedDocument): Promise<DocumentRow | undefined> => {
         const source = this.documents.get(sourceId)
         if (source === undefined)
           return undefined
         const { id: _id, ...columns } = source
-        return this.addDocument({ ...columns, ...copy, revision: 1, writeEpoch: 0 })
+        const { sdkVersion: _sdkVersion, ...placement } = copy
+        return this.addDocument({ ...columns, ...placement, revision: 1, writeEpoch: 0 })
       }),
       advanceRevision: vi.fn(async (id: string, revision: number) => {
         const row = this.documents.get(id)

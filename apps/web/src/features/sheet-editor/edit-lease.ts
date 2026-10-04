@@ -1,5 +1,6 @@
 // 编辑租约的页面这一侧（M3-P1 设计 §3.4.7）：申请、心跳续租、失效、续上与释放。不依赖 Univer 与界面；计时器与"现在"可注入，
-// 用假的接口与假的时钟做单元测试。P2 的"打开即阅读、点'编辑'才申请"原样复用这里；另存为副本在 P2，交接在 P5。
+// 用假的接口与假的时钟做单元测试。P2 的"打开即阅读、点'编辑'才申请"原样复用这里（edit-mode.ts 在进入编辑时申请、退出时释放并等它的结果）；
+// 交接在 P5。
 // - 申请：持有（令牌、代次、修订号）或被占用（持有者、最后活动、是不是自己）。被占用而且是自己时隔一小会儿再试几次：
 //   刷新页面时，旧页面关闭时的释放可能晚于新页面的申请到达（P1 设计 §7 第一条）。结果未知（网络错误、5xx、回包读不出来）时，
 //   用同一个标识再试一次：服务端可能已经批给了本页，同一个页面再申请就是重试，发新的一代，不留下没人用的一代（审查 B7）；
@@ -22,8 +23,9 @@
 //   服务端给的原因是到期而不是空闲，这时续上会让服务端的空闲回收重新计时，别人要多等一轮（审查 B8）；
 // - 暂停与恢复：页面的会话不是本人时暂停（不带着别人的登录发续租）；回到本人时恢复并立即续租一次——租约绑定登录，
 //   登录换过之后它已经失效，随即续上；
-// - 释放：页面隐藏、关闭时用 keepalive，结果不管（没送到时服务端按到期回收）。
-import type { AcquiredEditLease, EditLeaseLostReason, RenewedEditLease, RevisionSource, UserSummary } from '@nerve-office/contracts'
+// - 释放：页面隐藏、关闭时用 keepalive，结果不管（没送到时服务端按到期回收）；退出编辑时等它有了结果（结果未知也算结束，M3-P2 设计 §3.4；
+//   等多久由 edit-mode.ts 设上限），结果交回服务端确认了没有（没确认时那一代可能还在，阅读页如实说明，审查 A13）。
+import type { AcquiredEditLease, DocumentEditor, EditLeaseLostReason, RenewedEditLease, RevisionSource, UserSummary } from '@nerve-office/contracts'
 import type { LeaseCredentials } from './editor-api.ts'
 import { EDIT_IDLE_SECONDS_MAX, EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, editLeaseHeldDetailsSchema, editLeaseLostDetailsSchema } from '@nerve-office/contracts'
 import { ApiError, isAuthenticationError, isCsrfTokenError, isNotFoundError, isPermissionDeniedError, isTransientError, ResponseFormatError } from '../../shared/api/index.ts'
@@ -154,8 +156,14 @@ export interface EditLease {
   readonly lose: (loss: LeaseLoss, used: LeaseCredentials) => Promise<LeaseOutcome>
   /** 本页有键盘、鼠标操作：因为空闲被服务端回收的编辑权，在这时续上 */
   readonly noteActivity: () => void
-  /** 尽力释放并停止续租（页面隐藏、关闭、卸载）；已经失效时什么也不做 */
-  readonly release: () => void
+  /**
+   * 释放并停止续租（退出编辑、页面隐藏、关闭、卸载）：立即停止续租（之后的失效不再通知），释放的请求有了结果（成功或失败都算，
+   * 结果未知时服务端按到期回收）之后兑现，从不失败。页面隐藏、关闭时不等它；退出编辑时等它（M3-P2 设计 §3.4）。
+   * 兑现为服务端确认了没有（请求成功为 true；会话不是本人时不发、请求失败或结果未知为 false：那一代可能还在服务端，至多一个有效期后
+   * 自行到期，退出编辑之后的阅读据此如实说明，审查 A13）。已经失效时什么也不做、为 true（本页没有还在的那一代）；
+   * 释放过再调用时交回那一次的结果
+   */
+  readonly release: () => Promise<boolean>
 }
 
 export interface EditLeaseOptions {
@@ -191,15 +199,20 @@ function minutesBetween(from: number, to: number | undefined): number | undefine
   return Math.floor(Math.max(0, to - from) / MINUTE_MS)
 }
 
+/**
+ * 服务端给出的正在编辑的人（EDIT_LEASE_HELD 的详情、编辑状态的 editor）：最后活动几分钟之前按服务端回答的时刻（serverTime，
+ * 响应头 Date）算，不拿浏览器的时钟去比；没有回答的时刻时不说"多久之前"
+ */
+export function leaseHolderOf(editor: DocumentEditor, serverTime: number | undefined): LeaseHolder {
+  return { holder: editor.holder, sameUser: editor.sameUser, lastActiveMinutes: minutesBetween(Date.parse(editor.lastActiveAt), serverTime) }
+}
+
 /** 申请被占用（EDIT_LEASE_HELD）时的持有者；别的失败为 undefined。详情认不出时 holder 为 undefined */
 function heldOf(error: unknown): { readonly holder: LeaseHolder | undefined } | undefined {
   if (!(error instanceof ApiError) || error.code !== 'EDIT_LEASE_HELD')
     return undefined
   const details = editLeaseHeldDetailsSchema.safeParse(error.details)
-  if (!details.success)
-    return { holder: undefined }
-  const { holder, sameUser, lastActiveAt } = details.data
-  return { holder: { holder, sameUser, lastActiveMinutes: minutesBetween(Date.parse(lastActiveAt), error.serverTime) } }
+  return { holder: details.success ? leaseHolderOf(details.data, error.serverTime) : undefined }
 }
 
 async function wait(clock: LeaseClock, delayMs: number): Promise<void> {
@@ -262,6 +275,8 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
   let resumes = 0
   /** 进行中的续上：同时只有一个，续租与保存得知的失效都等它 */
   let recovery: Promise<LeaseOutcome> | undefined
+  /** 释放的那一次：服务端确认了没有（再调用 release 时交回它） */
+  let releasing: Promise<boolean> | undefined
 
   function stopTimer(): void {
     cancelTimer?.()
@@ -488,15 +503,17 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
         void startRecovery()
       }
     },
-    release: () => {
+    release: async () => {
+      if (releasing !== undefined)
+        return releasing
       if (ended())
-        return
+        return true
       // 暂停时（会话不是本人）不发：带的会是别人的登录或已经失效的登录，什么也释放不了
       const wasPaused = state === 'paused'
       state = 'released'
       stopTimer()
-      if (!wasPaused)
-        releaseQuietly(credentials.token)
+      releasing = wasPaused ? Promise.resolve(false) : api.release(documentId, credentials.token).then(() => true, () => false)
+      return releasing
     },
   }
 }

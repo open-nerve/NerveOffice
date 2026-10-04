@@ -1,19 +1,25 @@
-import type { CopyDocumentRequest, CreatedDocument, CreateDocumentRequest, DocumentDetail, DocumentListQuery, DocumentListResponse, MoveDocumentRequest, UpdateDocumentRequest } from '@nerve-office/contracts'
+import type { ConflictCopyQuery, CopyDocumentRequest, CreatedDocument, CreateDocumentRequest, DocumentDetail, DocumentListQuery, DocumentListResponse, MoveDocumentRequest, UpdateDocumentRequest } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Principal } from '../auth/index.ts'
-import { copyDocumentRequestSchema, createDocumentRequestSchema, documentIdSchema, documentListQuerySchema, moveDocumentRequestSchema, updateDocumentRequestSchema } from '@nerve-office/contracts'
-import { Body, Controller, Get, HttpCode, Param, Patch, Post, Query } from '@nestjs/common'
+import type { GzipBody } from '../security/index.ts'
+import { conflictCopyQuerySchema, copyDocumentRequestSchema, createDocumentRequestSchema, documentIdSchema, documentListQuerySchema, moveDocumentRequestSchema, updateDocumentRequestSchema } from '@nerve-office/contracts'
+import { Body, Controller, Get, HttpCode, Param, Patch, Post, Query, UseInterceptors } from '@nestjs/common'
 import { RequestOrigin } from '../audit/index.ts'
 import { CurrentPrincipal } from '../auth/index.ts'
 import { accessActorOf } from './document-access-policy.ts'
+import { DocumentConflictCopyService } from './document-conflict-copy.service.ts'
 import { DocumentCopyService } from './document-copy.service.ts'
 import { DocumentCreationService } from './document-creation.service.ts'
 import { DocumentOrganizingService } from './document-organizing.service.ts'
 import { DocumentsService } from './documents.service.ts'
+import { SnapshotUpload, SnapshotUploadInterceptor } from './snapshot-upload.ts'
 
 type HttpOrigin = Extract<AuditOrigin, { source: 'http' }>
 
-/** 文档（M1-P3 设计 §3.3、P4 设计 §3.3，M2-P2 设计 §3.3，M2-P4 设计 §3.2）：按空间列出、元数据、新建与整理（改名、移动、复制）。 */
+/**
+ * 文档（M1-P3 设计 §3.3、P4 设计 §3.3，M2-P2 设计 §3.3，M2-P4 设计 §3.2）：按空间列出、元数据、新建与整理（改名、移动、复制）；
+ * 另存为副本（M3-P2 设计 §3.2：按上传的快照新建）
+ */
 @Controller('documents')
 export class DocumentsController {
   constructor(
@@ -21,6 +27,7 @@ export class DocumentsController {
     private readonly creation: DocumentCreationService,
     private readonly organizing: DocumentOrganizingService,
     private readonly copying: DocumentCopyService,
+    private readonly conflictCopying: DocumentConflictCopyService,
   ) {}
 
   /**
@@ -84,5 +91,21 @@ export class DocumentsController {
     @RequestOrigin() origin: HttpOrigin,
   ): Promise<CreatedDocument> {
     return this.copying.copy(accessActorOf(principal), id, body, origin)
+  }
+
+  /**
+   * 另存为副本：正文是 gzip 压缩的快照（与保存同一个读取方式：拦截器在守卫之后读，压缩前后都限 5 MiB、单个完整的 gzip 成员），
+   * 元数据在查询参数里。建出一份新文档，所以是 201；同一个 requestId 的重放同样是 201、replayed 为真（与新建、复制相同）
+   */
+  @Post(':id/conflict-copies')
+  @UseInterceptors(SnapshotUploadInterceptor)
+  async conflictCopy(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id', { schema: documentIdSchema }) id: string,
+    @Query({ schema: conflictCopyQuerySchema }) query: ConflictCopyQuery,
+    @SnapshotUpload() upload: GzipBody,
+    @RequestOrigin() origin: HttpOrigin,
+  ): Promise<CreatedDocument> {
+    return this.conflictCopying.copy(accessActorOf(principal), id, query, upload, origin)
   }
 }

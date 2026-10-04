@@ -6,7 +6,8 @@ import { useEffect, useRef } from 'react'
 import { describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
-import { Alert, AlertDescription, Button, Skeleton } from '../../shared/ui/index.ts'
+import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
+import { Alert, AlertDescription, Button, RetryButton, Skeleton } from '../../shared/ui/index.ts'
 import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { DocumentRow } from './document-row.tsx'
 import { folderDocumentsQueryOptions } from './documents-api.ts'
@@ -36,16 +37,21 @@ interface DocumentListProps {
   readonly onDenied: () => Promise<boolean>
   /** 这一层还有没有子文件夹：都没有时"这里还没有文档"才是整块空的说明 */
   readonly hasFolders: boolean
+  /** 页面的标题（h1，tabIndex -1，一直在）：第一页没取到、按"重试"取到之后焦点交给它 */
+  readonly titleRef: RefObject<HTMLElement | null>
 }
 
 /**
  * 一个空间里某个文件夹下的文档列表（US-M1-03，M2-P2 设计 §3.10，M2-P4 按目录过滤）。
  * 加载中、空列表、加载失败都有明确的显示；分页用"加载更多"。标题与新建在空间页的页头，子文件夹排在这个列表前面。
  * 留着之前的列表、刷新却失败了（例如整理之后）：列表上方明说没能刷新、给出重试（Codex 对抗评审 CX5）；加载下一页失败另在列表下方说明。
- * 每一行与它的操作面板是 document-row.tsx（与"与我共享"共用）
+ * 每一行与它的操作面板是 document-row.tsx（与"与我共享"共用）。
+ * 第一页就没取到时按"重试"：重试期间说明与按钮留着（不可用、说正在重试）；取到之后焦点交给页面的标题，不落到 body
+ * （规范 §2.4，shared/lib/use-first-load-retry.ts）
  */
-export function DocumentList({ spaceId, folderId, targetSpaces, openId, openTriggerRef, onToggle, onDone, onDenied, hasFolders }: DocumentListProps) {
+export function DocumentList({ spaceId, folderId, targetSpaces, openId, openTriggerRef, onToggle, onDone, onDenied, hasFolders, titleRef }: DocumentListProps) {
   const query = useInfiniteQuery(folderDocumentsQueryOptions(spaceId, folderId))
+  const firstLoad = useFirstLoadRetry(query, titleRef)
   const documents = query.data?.pages.flatMap(page => page.items) ?? []
   // 加载更多时已有的条数：新的一页到了之后，焦点移到第一个新条目。按钮可能随之消失（没有下一页了），焦点不能留在它身上（审查 B13）
   const listRef = useRef<HTMLUListElement>(null)
@@ -70,21 +76,21 @@ export function DocumentList({ spaceId, folderId, targetSpaces, openId, openTrig
     })
   }
 
-  if (query.isPending)
-    return <LoadingRows />
-  if (query.data === undefined) {
-    // 第一页就失败了；加载下一页失败时 status 同样是 error，但已经有数据，列表要保留
-    const error = describeError(query.error)
+  if (firstLoad.failed) {
+    // 第一页就失败了；加载下一页失败时 status 同样是 error，但已经有数据，列表要保留。
+    // 重试期间说明与按钮留着（不可用、说正在重试），上一次的原因不再给（请求缓存已经清掉了它）
     return (
-      <Alert variant="destructive">
+      <Alert variant="destructive" onFocus={firstLoad.focus.onFocus} onBlur={firstLoad.focus.onBlur}>
         <AlertDescription>
           <p>{messages.documents.loadFailed}</p>
-          <p>{error.message}</p>
-          <Button variant="outline" size="sm" className="mt-2" onClick={() => void query.refetch()}>{messages.common.retry}</Button>
+          {!firstLoad.retrying && <p>{describeError(query.error).message}</p>}
+          <RetryButton retrying={firstLoad.retrying} onRetry={() => void query.refetch()} className="mt-2" />
         </AlertDescription>
       </Alert>
     )
   }
+  if (query.data === undefined)
+    return <LoadingRows />
   const refreshProblem = <RefreshProblem query={query} list={messages.documents.listLabel} />
   if (documents.length === 0) {
     // 这一层有子文件夹时不说"这里还没有文档"：那会读成整个位置是空的

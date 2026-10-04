@@ -7,7 +7,8 @@
 // - 取消之后立即不能访问：另一台设备上已经打开的页面存不进去，重新打开是"内容不存在"；
 // - 编辑者看不到分享入口（行操作与编辑器的页头），空间管理员看得到（对照）；
 // - 编辑器页头的分享：对话框里输入不改动表格；对话框开着时保存完成或失败，页头的保存状态写进结果的那一刻不在 aria-hidden 之下；
-// - 对话框的代码没能下载下来：入口旁边说明，可以重试。
+// - 对话框的代码没能下载下来：入口旁边说明，可以重试；
+// - 授权列表第一次就没取到：用键盘按"重试"，进行中按钮不卸载，取到之后焦点交给对话框里的说明（规范 §2.4，M3-P2 收尾）。
 // 人名按 support/people.ts 的写法断言（登录名在前）。US-M2-10 在 S4 改为 active（tests/stories.json）；
 // 越权访问的关键路径（猜地址、取消分享与移出空间、停用之后的访问）在 security/unauthorized-access.spec.ts（US-M2-14）。
 import type { Locator, Page, Route } from '@playwright/test'
@@ -16,7 +17,7 @@ import { expect, test } from '../../support/fixtures.ts'
 import { searchList } from '../../support/list-search.ts'
 import { plainName, shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, EDITOR_TEST_TIMEOUT, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
+import { cellOf, EDITOR_TEST_TIMEOUT, enterEditing, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
 import { expectWrittenAfterClose, recordStatusWrites, statusWrites } from '../../support/status-writes.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
@@ -51,6 +52,54 @@ function sharedNav(page: Page): Locator {
 }
 
 test.describe('US-M2-10 单独分享', () => {
+  test('授权列表第一次就没取到之后用键盘按"重试"：重试期间说明与同一个按钮留着（不可用、说正在重试），焦点还在按钮上；取到之后焦点交给对话框里一直在的说明，不落到对话框本身（规范 §2.4）', async ({ page }) => {
+    const owner = await createUser('sh-retry', '所有者')
+    const reader = await createUser('sh-retry-reader', '读者')
+    const documentId = await createDocument(owner, '重试的表')
+    await grantDocument(documentId, reader, 'viewer', owner)
+    await loginThroughApi(page, owner)
+    await page.goto('/')
+    await openActions(page, '重试的表')
+    // 只拦这份文档的授权列表：服务暂时不可用（查询自动重试一次之后才算失败）
+    const isGrants = (url: URL): boolean => url.pathname === `/api/documents/${documentId}/grants`
+    await page.route(isGrants, async route => route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: { code: 'SERVICE_UNAVAILABLE', message: '服务暂时不可用', requestId: 'e2e' } }),
+    }))
+    await page.getByRole('button', { name: '分享', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: '分享「重试的表」' })
+    const problem = dialog.getByRole('alert').filter({ hasText: '分享的情况没能加载' })
+    await expect(problem).toContainText('服务暂时不可用，请稍后重试')
+    // 说明里只有这一个按钮：按名称找的话，它改说"正在重试…"之后就找不到了
+    const retry = problem.getByRole('button')
+    await expect(retry).toHaveText('重试')
+
+    // 恢复之前先挂住重试的那一次请求，看进行中的样子；放开之后照常发给后端
+    let release: () => void = () => {}
+    const released = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await page.unroute(isGrants)
+    await page.route(isGrants, async (route) => {
+      await released
+      await route.continue()
+    })
+    await retry.focus()
+    await page.keyboard.press('Enter')
+    await expect(retry).toHaveText('正在重试…')
+    await expect(retry).toHaveAttribute('aria-disabled', 'true')
+    await expect(retry).toHaveAttribute('aria-busy', 'true')
+    await expect(retry).toBeFocused()
+    await expect(dialog.getByRole('status', { name: '正在加载分享的情况…' })).toHaveCount(0)
+
+    release()
+    await expect(dialog.getByRole('list', { name: '已分享给' }).getByRole('listitem')).toHaveCount(1)
+    await expect(dialog.getByRole('list', { name: '已分享给' })).toContainText(shownName(reader))
+    await expect(problem).toHaveCount(0)
+    await expect(dialog.getByText(/^分享给同事之后，对方在"与我共享"里看得到这份文档。/)).toBeFocused()
+  })
+
   test('分享对话框：按名字搜同事，给查看者与编辑者，调整，取消；每一步都写进了库', async ({ page }) => {
     const owner = await createUser('sh-owner', '所有者')
     const reader = await createUser('sh-reader', '读者')
@@ -146,12 +195,13 @@ test.describe('US-M2-10 单独分享', () => {
     await expect(header).not.toContainText(space.name)
     await expect(header.getByRole('button', { name: /分享|移动|删除/ })).toHaveCount(0)
 
-    // 编辑者：能改，保存成功；返回链接同样回"与我共享"
+    // 编辑者：能改（打开即阅读，点"编辑"进入编辑），保存成功；返回链接同样回"与我共享"
     await loginThroughApi(anotherDevice, writer)
     await anotherDevice.goto('/shared')
     await anotherDevice.getByRole('list', { name: '分享给我的文档' }).getByRole('link', { name: /部门的周报/ }).click()
     await expect(anotherDevice.locator('#sheet-editor')).toHaveAttribute('data-editor-state', /^(?:ready|steady)$/, { timeout: 30_000 })
     await expect(anotherDevice.locator('#editor-chrome').getByRole('banner').getByRole('link', { name: '与我共享', exact: true })).toBeVisible()
+    await enterEditing(anotherDevice)
     await typeInCell(anotherDevice, 'A1', '编辑者写的')
     await saveAndWait(anotherDevice)
 
@@ -171,7 +221,7 @@ test.describe('US-M2-10 单独分享', () => {
 
     // 同事在另一台设备上打开着（能编辑）
     await loginThroughApi(anotherDevice, friend)
-    await openEditor(anotherDevice, documentId)
+    await openAndEnterEditing(anotherDevice, documentId)
     await expect(saveButton(anotherDevice)).toBeVisible()
 
     // 所有者经对话框取消
@@ -209,16 +259,16 @@ test.describe('US-M2-10 单独分享', () => {
     await page.goto(`/spaces/${space.id}`)
     await openActions(page, '部门的表')
     await expect(page.getByRole('button', { name: '分享', exact: true })).toHaveCount(0)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     await expect(saveButton(page)).toBeVisible()
     await expect(page.locator('#editor-chrome').getByRole('button', { name: '分享', exact: true })).toHaveCount(0)
 
-    // 对照：空间管理员两处都有
+    // 对照：空间管理员两处都有（编辑者正在编辑：空间管理员打开即阅读，页头照样有"分享"）
     await loginThroughApi(anotherDevice, lead)
     await anotherDevice.goto(`/spaces/${space.id}`)
     await openActions(anotherDevice, '部门的表')
     await expect(anotherDevice.getByRole('button', { name: '分享', exact: true })).toBeVisible()
-    await openEditor(anotherDevice, documentId)
+    await openReader(anotherDevice, documentId)
     await expect(anotherDevice.locator('#editor-chrome').getByRole('button', { name: '分享', exact: true })).toBeVisible()
   })
 
@@ -227,7 +277,7 @@ test.describe('US-M2-10 单独分享', () => {
     const colleague = await createUser('sh-editor-colleague', '同事')
     const documentId = await createDocument(owner, '编辑器里分享的表')
     await loginThroughApi(page, owner)
-    await openEditor(page, documentId, 'steady')
+    await openAndEnterEditing(page, documentId, 'steady')
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     await page.locator('#editor-chrome').getByRole('button', { name: '分享', exact: true }).click()
     const dialog = page.getByRole('dialog', { name: '分享「编辑器里分享的表」' })
@@ -266,7 +316,7 @@ test.describe('US-M2-10 单独分享', () => {
       const title = `开着对话框保存${save.outcome}的表`
       const documentId = await createDocument(owner, title)
       await loginThroughApi(page, owner)
-      await openEditor(page, documentId, 'steady')
+      await openAndEnterEditing(page, documentId, 'steady')
       await expect(saveStatus(page)).toHaveText('已保存到云端')
       await typeInCell(page, 'B2', '后台保存')
       await expect(saveStatus(page)).toHaveText('有未保存的修改')

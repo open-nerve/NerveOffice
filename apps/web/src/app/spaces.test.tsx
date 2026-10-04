@@ -183,7 +183,7 @@ describe('US-M2-05 空间页', () => {
     const api = loggedIn(team(), { 'POST /api/documents': () => json(201, created) })
     const app = renderApp(`/spaces/${TEAM_ID}`)
     fireEvent.click(await screen.findByRole('button', { name: '新建表格' }))
-    await waitFor(() => expect(app.page.visits).toEqual([`assign /documents/${created.id}`]))
+    await waitFor(() => expect(app.page.visits).toEqual([`assign /documents/${created.id}?edit=new`]))
     expect(api.requests.find(request => request.key === 'POST /api/documents')?.body).toMatchObject({ type: 'sheet', spaceId: TEAM_ID })
   })
 
@@ -1065,7 +1065,7 @@ describe('US-M2-06 成员页与导航：写入成功之后的刷新（Codex 对�
     expect(statuses.every(status => status.textContent === '')).toBe(true)
   })
 
-  it('调整角色成功，随后刷新成员列表失败：成员表上方说明没能刷新（原因）、给出重试，这一行已经是保存之后的角色；重试成功之后说明消失，列表是新的', async () => {
+  it('调整角色成功，随后刷新成员列表失败：标题下面说明成员列表与空间信息没能刷新（原因，同一个请求，DEF-040）、给出重试，这一行已经是保存之后的角色；重试成功之后说明消失，列表是新的', async () => {
     const api = loggedIn(MANAGER, {
       [MEMBERS_KEY]: () => json(200, membersList(true, [member(SESSION.user, 'admin'), member(BEN, 'viewer')])),
       [memberKey('PUT', BEN)]: () => json(200, member(BEN, 'editor')),
@@ -1074,15 +1074,16 @@ describe('US-M2-06 成员页与导航：写入成功之后的刷新（Codex 对�
     const { select, row } = await roleOf('本', 'ben')
     api.on(MEMBERS_KEY, () => apiError(500, 'INTERNAL_ERROR'))
     saveRole(select, row, 'editor')
-    const problem = await screen.findByText('成员列表没能刷新，显示的还是之前的内容', {}, { timeout: 4000 })
+    const problem = await screen.findByText('成员列表与空间信息没能刷新，显示的还是之前的内容', {}, { timeout: 4000 })
     const alert = problem.closest('[role="alert"]') as HTMLElement
     expect(alert).toHaveTextContent('服务器出了点问题，请稍后重试')
+    expect(membersTitle().compareDocumentPosition(alert) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(alert.compareDocumentPosition(screen.getByRole('table', { name: '成员列表' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(select).toHaveValue('editor')
     api.on(MEMBERS_KEY, () => json(200, membersList(true, [member(SESSION.user, 'admin'), member(BEN, 'editor'), member(CAT, 'viewer')])))
     fireEvent.click(within(alert).getByRole('button', { name: '重试' }))
     expect(await screen.findByRole('combobox', { name: `${plainName('凯特', 'cat')} 的角色` })).toBeInTheDocument()
-    expect(screen.queryByText('成员列表没能刷新，显示的还是之前的内容')).toBeNull()
+    expect(screen.queryByText('成员列表与空间信息没能刷新，显示的还是之前的内容')).toBeNull()
   })
 
   it('空间改名成功、随后刷新导航失败：导航里明说空间列表没能刷新、给出重试（之前的列表照常显示）；页头已经按响应是新名称', async () => {
@@ -1100,6 +1101,8 @@ describe('US-M2-06 成员页与导航：写入成功之后的刷新（Codex 对�
     // 按确定的写入结果先改好的名称：页头与导航都是新名称（刷新失败也不弹回旧的）
     expect(screen.getByRole('heading', { level: 1, name: '市场二部' })).toBeInTheDocument()
     expect(within(spaceNav()).getByRole('link', { name: '市场二部' })).toBeInTheDocument()
+    // 页头自己的重新请求同样失败了：页头下面另说空间信息没能刷新（DEF-040）
+    expect(await screen.findByText('空间信息没能刷新，显示的还是之前的内容', {}, { timeout: 4000 })).toBeInTheDocument()
     api.on('GET /api/spaces', () => json(200, { items: [personalSpaceOf(SESSION), { ...MANAGER, name: '市场二部' }, team({ id: '0199a2c4-0000-7000-8000-0000000000c2', name: '新来的空间' })] }))
     fireEvent.click(within(alert).getByRole('button', { name: '重试' }))
     expect(await within(spaceNav()).findByRole('link', { name: '新来的空间' })).toBeInTheDocument()

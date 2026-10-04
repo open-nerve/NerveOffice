@@ -94,6 +94,8 @@
 | `pnpm db:generate --name <名称>` | 按表定义生成迁移（人工审阅后入库；合并后的迁移不再修改） |
 | `pnpm --filter @nerve-office/e2e run update:sheet-template` | 经编辑器页重新生成新建表格用的模板快照（SDK 升级或插件档案变更之后；需要 `pnpm db:up` 与构建，同 `pnpm test:e2e`） |
 | `pnpm --filter @nerve-office/e2e run update:read-only-sample` | 同上，重新生成只读 E2E 用的样本（`tests/e2e/support/read-only-sample.json`：打开与画完每张表之后逐字节不变的形式） |
+| `pnpm --filter @nerve-office/e2e run safari:selftest [--front]` | 在本机真实 Safari 上跑编辑器的页面自检（测试构建的 `selftest.html`：只读入口、公式、进入与退出编辑；不进 CI）。Safari 会暂停看不见的页面：窗口要露在外面，`--front` 把 Safari 带到前台；结果在 `tests/e2e/test-results/safari/` |
+| `pnpm --filter @nerve-office/e2e run measure:switch` / `measure:memory` | 实测阅读与编辑之间切换的耗时（三个浏览器、三份文档）/ 反复切换的内存（Chromium，CDP 回收之后的堆与 DOM 计数）；不进常规 E2E 与 CI，机器空闲时跑；结果在 `tests/e2e/measure/test-results/` |
 | `pnpm test:integration` | 集成测试（需要数据库；先构建后端，进程测试用构建产物） |
 | `pnpm test:e2e` | 构建后端与前端的测试构建后跑 E2E（真实后端与数据库，需要 `pnpm db:up`；端口每次自动挑选，后端日志在 `tests/e2e/test-results/e2e-server.log`） |
 | `pnpm test:e2e:container` | 构建生产镜像，起一套测试环境（应用 + PostgreSQL + Caddy 的 HTTPS，见 `deploy/README.md`），对它跑 E2E（默认只跑 Chromium，`--browsers` 可多选）与重启用例，跑完删除；需要 Docker，各容器的日志在 `tests/e2e/test-results/container/`；放到后台跑用 tmux 或 `setsid`，不用 `nohup` |

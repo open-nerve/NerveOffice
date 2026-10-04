@@ -10,7 +10,7 @@ import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { createHash, randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
-import { acquiredEditLeaseSchema, createdDocumentSchema, EDIT_LEASE_HEADER, EDIT_LEASE_TTL_SECONDS, editLeaseHeldDetailsSchema, editLeaseLostDetailsSchema, editStatusSchema, errorResponseSchema, renewedEditLeaseSchema, sessionResponseSchema, sheetSnapshotFor } from '@nerve-office/contracts'
+import { acquiredEditLeaseSchema, createdDocumentSchema, documentDetailSchema, EDIT_LEASE_HEADER, EDIT_LEASE_TTL_SECONDS, editLeaseHeldDetailsSchema, editLeaseLostDetailsSchema, editStatusSchema, errorResponseSchema, renewedEditLeaseSchema, sessionResponseSchema, sheetSnapshotFor } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -20,7 +20,7 @@ import { seedDocument } from '../support/documents.ts'
 import { idleLeaseFor, passLeaseTime, saveContent } from '../support/edit-leases.ts'
 import { raceAgainstHeldLock } from '../support/held-lock.ts'
 import { asUser, cookieValue, login, SESSION_COOKIE, sessionSetCookie } from '../support/session-client.ts'
-import { createTeamSpace, setMember } from '../support/spaces.ts'
+import { createTeamSpace, setMember, setSpaceState } from '../support/spaces.ts'
 
 let database: TestDatabase
 let app: TestApp
@@ -255,13 +255,37 @@ describe('申请、心跳、释放与编辑状态（P1 设计 §3.4.2、§3.4.3�
 
   it('US-M3-04 编辑状态：能读就能看；有效的租约给出持有者（"人"的结构）、最后活动时间与是不是调用者自己；没有时为 null', async () => {
     const document = await freshDocument()
-    expect(await status(sessionOf(vic), document.id)).toEqual({ revision: 1, editor: null })
+    expect(await status(sessionOf(vic), document.id)).toEqual({ revision: 1, editor: null, canEdit: false })
     await acquired(sessionOf(amy), document.id)
     const row = await leaseOf(document.id)
     const editor = { holder: summaryOf(amy), lastActiveAt: row?.last_active_at.toISOString() }
-    expect(await status(sessionOf(ben), document.id)).toEqual({ revision: 1, editor: { ...editor, sameUser: false } })
-    expect(await status(sessionOf(vic), document.id)).toEqual({ revision: 1, editor: { ...editor, sameUser: false } })
-    expect(await status(sessionOf(amy), document.id)).toEqual({ revision: 1, editor: { ...editor, sameUser: true } })
+    expect(await status(sessionOf(ben), document.id)).toEqual({ revision: 1, editor: { ...editor, sameUser: false }, canEdit: true })
+    expect(await status(sessionOf(vic), document.id)).toEqual({ revision: 1, editor: { ...editor, sameUser: false }, canEdit: false })
+    expect(await status(sessionOf(amy), document.id)).toEqual({ revision: 1, editor: { ...editor, sameUser: true }, canEdit: true })
+  })
+
+  it('US-M3-05 编辑状态带上调用者现在能不能编辑（M3-P2 设计 §3.2）：与详情的 permissions.canEdit 一致；阅读期间被降级、空间被归档、被升为编辑者，下一次读就跟着变', async () => {
+    const { account: hal, session } = await freshEditor('lease-hal')
+    const document = await freshDocument()
+    /** 编辑状态的 canEdit 与同一个人打开详情得到的 permissions.canEdit */
+    async function canEditBoth(): Promise<[boolean, boolean]> {
+      const detail = await asUser(app.baseUrl, session, `/api/documents/${document.id}`)
+      expect(detail.status).toBe(200)
+      return [(await status(session, document.id)).canEdit, parseExact(documentDetailSchema, await detail.json()).permissions.canEdit]
+    }
+    expect(await canEditBoth()).toEqual([true, true])
+    await setMember(database, team, hal.id, 'viewer')
+    expect(await canEditBoth()).toEqual([false, false])
+    await setMember(database, team, hal.id, 'editor')
+    expect(await canEditBoth()).toEqual([true, true])
+    await setSpaceState(database, team, { status: 'archived' })
+    try {
+      expect(await canEditBoth()).toEqual([false, false])
+    }
+    finally {
+      await setSpaceState(database, team, { status: 'active' })
+    }
+    expect(await canEditBoth()).toEqual([true, true])
   })
 
   it('心跳：续租的时间是数据库的 now，到期往后推 90 秒；最后活动是 now 减上报的空闲秒数，不早于申请的时间', async () => {

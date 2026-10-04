@@ -21,7 +21,7 @@ function user(id: string): User {
 }
 
 /** 每一步记进 calls，核对顺序与"都在事务里" */
-function setup(acquisition: LeaseAcquisition, status: LeaseStatus = { revision: 3, editor: undefined }) {
+function setup(acquisition: LeaseAcquisition, status: LeaseStatus = { revision: 3, editor: undefined, canEdit: true }) {
   const calls: string[] = []
   const transaction = { transaction: true }
   const leases = {
@@ -128,11 +128,18 @@ describe('DocumentEditingService 的心跳、释放与编辑状态', () => {
   })
 
   it('编辑状态：一个只读快照里判断、读租约、补人名；没有有效的租约时 editor 为 null、不查人名', async () => {
-    const held = setup(ACQUIRED, { revision: 7, editor: { holderId: AMY, lastActiveAt: ACTIVE, sameUser: false } })
-    expect(await held.service.status(ACTOR, DOCUMENT)).toEqual({ revision: 7, editor: { holder: { id: AMY, username: 'amy', displayName: '艾米' }, lastActiveAt: ACTIVE.toISOString(), sameUser: false } })
+    const held = setup(ACQUIRED, { revision: 7, editor: { holderId: AMY, lastActiveAt: ACTIVE, sameUser: false }, canEdit: true })
+    expect(await held.service.status(ACTOR, DOCUMENT)).toEqual({ revision: 7, editor: { holder: { id: AMY, username: 'amy', displayName: '艾米' }, lastActiveAt: ACTIVE.toISOString(), sameUser: false }, canEdit: true })
     expect(held.calls).toEqual(['snapshot', 'status', 'names', 'end snapshot'])
     const free = setup(ACQUIRED)
-    expect(await free.service.status(ACTOR, DOCUMENT)).toEqual({ revision: 3, editor: null })
+    expect(await free.service.status(ACTOR, DOCUMENT)).toEqual({ revision: 3, editor: null, canEdit: true })
     expect(free.calls).toEqual(['snapshot', 'status', 'end snapshot'])
+  })
+
+  it('US-M3-05 编辑状态带上能不能编辑（M3-P2 设计 §3.2）：原样取 documents 在同一个快照里算出的那一位，有人在编辑、没人在编辑都一样', async () => {
+    const viewer = setup(ACQUIRED, { revision: 7, editor: { holderId: AMY, lastActiveAt: ACTIVE, sameUser: false }, canEdit: false })
+    expect((await viewer.service.status(ACTOR, DOCUMENT)).canEdit).toBe(false)
+    expect((await setup(ACQUIRED, { revision: 7, editor: undefined, canEdit: false }).service.status(ACTOR, DOCUMENT)).canEdit).toBe(false)
+    expect((await setup(ACQUIRED, { revision: 7, editor: undefined, canEdit: true }).service.status(ACTOR, DOCUMENT)).canEdit).toBe(true)
   })
 })

@@ -1,5 +1,6 @@
 // 按标题搜索（M2-P4，US-M2-12）：页头的搜索框找到我能访问的文档，结果里带着它在哪里；回收站里的搜不到。
 // 顺带核对页头的排布（审查 B3）：搜索框加进页头之后，当前用户那一组仍然贴着右边。
+// 搜索失败之后用键盘按"重试"：进行中按钮不卸载，搜到之后焦点交给结果的列表（规范 §2.4，M3-P2 收尾）。
 import type { Locator, Page } from '@playwright/test'
 import { createDocumentIn, createFolderIn, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
@@ -52,6 +53,50 @@ function viewportWidth(page: Page): number {
 }
 
 test.describe('US-M2-12 按标题搜索', () => {
+  test('搜索失败之后用键盘按"重试"：重试期间说明与同一个按钮留着（不可用、说正在重试），焦点还在按钮上；搜到之后焦点交给结果的列表，不落到 body（规范 §2.4）', async ({ page }) => {
+    const owner = await createUser('search-retry')
+    await createDocumentIn(owner.personalSpaceId, owner, '重试之后的预算')
+    await loginThroughApi(page, owner)
+    // 只拦搜索的请求：服务暂时不可用（查询自动重试一次之后才算失败）
+    const isSearch = (url: URL): boolean => url.pathname === '/api/search'
+    await page.route(isSearch, async route => route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: { code: 'SERVICE_UNAVAILABLE', message: '服务暂时不可用', requestId: 'e2e' } }),
+    }))
+    await page.goto(`/search?q=${encodeURIComponent('预算')}`)
+    const problem = page.getByRole('alert').filter({ hasText: '搜索失败' })
+    await expect(problem).toContainText('服务暂时不可用，请稍后重试')
+    // 说明里只有这一个按钮：按名称找的话，它改说"正在重试…"之后就找不到了
+    const retry = problem.getByRole('button')
+    await expect(retry).toHaveText('重试')
+
+    // 恢复之前先挂住重试的那一次请求，看进行中的样子；放开之后照常发给后端
+    let release: () => void = () => {}
+    const released = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await page.unroute(isSearch)
+    await page.route(isSearch, async (route) => {
+      await released
+      await route.continue()
+    })
+    await retry.focus()
+    await page.keyboard.press('Enter')
+    await expect(retry).toHaveText('正在重试…')
+    await expect(retry).toHaveAttribute('aria-disabled', 'true')
+    await expect(retry).toHaveAttribute('aria-busy', 'true')
+    await expect(retry).toBeFocused()
+    await expect(page.getByRole('status', { name: '正在搜索…' })).toHaveCount(0)
+
+    release()
+    const results = page.getByRole('list', { name: '搜索结果' })
+    await expect(results.getByRole('listitem')).toHaveCount(1)
+    await expect(results).toContainText('重试之后的预算')
+    await expect(problem).toHaveCount(0)
+    await expect(results).toBeFocused()
+  })
+
   test('搜到并打开：结果给出空间与文件夹路径；删掉的文档在回收站里，搜不到', async ({ page }) => {
     const owner = await createUser('search-owner')
     const folderId = await createFolderIn(owner.personalSpaceId, owner, '归档')

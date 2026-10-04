@@ -7,6 +7,7 @@ import type { AccessibleDocument } from './document-access-policy.ts'
 import type { RevisionRow } from './document-revisions.repository.ts'
 import type { DocumentRow } from './documents.repository.ts'
 import type { EditingActor } from './edit-lease.service.ts'
+import type { RevisionNoneMatch } from './if-none-match.ts'
 import { UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
@@ -20,6 +21,7 @@ import { DocumentsRepository } from './documents.repository.ts'
 import { requestLeaseLoss } from './edit-lease-rules.ts'
 import { requireActiveLogin } from './edit-lease.service.ts'
 import { EditLeasesRepository } from './edit-leases.repository.ts'
+import { matchesNoneMatch } from './if-none-match.ts'
 import { savedPayloadDigest } from './payload-digest.ts'
 import { revisionSourceFor } from './revision-source.ts'
 import { validateSnapshot } from './snapshot-validation.ts'
@@ -29,6 +31,13 @@ export interface DocumentContent {
   readonly revision: number
   readonly snapshot: Buffer
 }
+
+/**
+ * 读取的结果（M3-P2 设计 §3.2）：当前内容（200）；或者请求带的 If-None-Match 正是当前修订（DEF-017），只有修订号、不读内容（304）
+ */
+export type ContentRead
+  = | { readonly kind: 'current', readonly content: DocumentContent }
+    | { readonly kind: 'notModified', readonly revision: number }
 
 /**
  * 谁在保存（M3-P1 设计 §3.4.4）：账户、这次登录（会话守卫认证过的），与请求头里的编辑租约令牌（没带时为 undefined，按没有租约处理）。
@@ -59,15 +68,19 @@ export class DocumentContentService {
   /**
    * 能读取就返回当前内容；别人的与不存在的都是 NOT_FOUND。有记录却没有内容是数据不一致，按意外错误处理，不伪装成 404。
    * 判断权限与读内容在同一个只读快照里（M2 Codex 评审 CX1）：原来先判断、再另读内容，判断之后撤权（取消授权、移出空间）、
-   * 随即保存的新内容会被这个在途的请求带出去；现在读到的是判断权限的那一刻的内容
+   * 随即保存的新内容会被这个在途的请求带出去；现在读到的是判断权限的那一刻的内容。
+   * 条件请求（noneMatch，M3-P2 设计 §3.2，DEF-017）：权限照常先判断（看不到与不存在一致，304 不透露文档在不在），
+   * 当前修订是条件里的那一个就只回修订号、不读内容。修订号取判断权限时读到的文档行：与内容同一个快照，读出来的一定对应
    */
-  async read(userId: string, id: string): Promise<DocumentContent> {
+  async read(userId: string, id: string, noneMatch?: RevisionNoneMatch): Promise<ContentRead> {
     return this.transactions.readSnapshot(async (transaction) => {
-      await requireAccess(this.policy, userId, await this.documents.findById(id, transaction), transaction)
+      const { document } = await requireAccess(this.policy, userId, await this.documents.findById(id, transaction), transaction)
+      if (noneMatch !== undefined && matchesNoneMatch(noneMatch, document.revision))
+        return { kind: 'notModified', revision: document.revision }
       const content = await this.contents.findCurrent(id, transaction)
       if (content === undefined)
         throw new Error(`文档有记录却没有内容：${id}`)
-      return content
+      return { kind: 'current', content }
     })
   }
 

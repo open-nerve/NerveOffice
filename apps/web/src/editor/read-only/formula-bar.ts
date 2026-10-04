@@ -54,7 +54,8 @@ export interface FormulaBarServices {
 }
 
 /**
- * 编辑栏的编辑器一被聚焦就放开（见文件开头）；装上时已经聚焦的（M3 的原地切换）立即放开。
+ * 编辑栏的编辑器一被聚焦就放开（见文件开头）；装上时已经聚焦的立即放开（保底：只读守卫在创建编辑器时装上，那时编辑栏还没有被聚焦，
+ * 阅读与编辑之间的切换一律重建编辑器，M3-P2 设计 §3.1）。
  * 返回撤掉的函数，可以重复调用；撤掉之后，已经排队的放开也不再执行
  */
 export function releaseFormulaBarEditor({ editors, context }: FormulaBarServices): () => void {

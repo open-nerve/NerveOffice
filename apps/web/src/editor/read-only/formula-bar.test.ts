@@ -180,7 +180,7 @@ describe('只读时编辑栏的编辑器一被聚焦就放开（P3 审查 A1：�
     stop()
   })
 
-  it('装上时已经聚焦在编辑栏（M3 的原地切换）：立即放开', () => {
+  it('装上时已经聚焦在编辑栏（保底：只读守卫在创建编辑器时装上，那时不会已经聚焦）：立即放开', () => {
     const editors = fakeEditors(DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY)
     const { context, setContextValue } = fakeContext()
     const stop = releaseFormulaBarEditor({ editors: editors.editors, context })
