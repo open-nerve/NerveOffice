@@ -758,6 +758,60 @@ describe('模式切换与按钮消失时的焦点（审查 A2，规范 §2.4）'
     await waitFor(() => expect(document.activeElement).toBe(backLink()))
   })
 
+  describe('编辑器没能重新打开（以只读重建失败，审查 A3）：焦点从销毁的编辑器落到了 body，交给失效说明里的按钮（复验 C2）', () => {
+    const DENIED_LOSS: LeaseLoss = { kind: 'denied', error: new ApiError(403, 'PERMISSION_DENIED', '空间已归档，只能查看') }
+
+    /** 焦点在编辑器里（页头之外的容器）；失去编辑权、可编辑的编辑器随之销毁，焦点落到 body */
+    function loseWithFocusInEditor(fake: ReturnType<typeof renderChrome>): void {
+      const editorInput = document.createElement('input')
+      document.body.append(editorInput)
+      editorInput.focus()
+      fake.set({ mode: { kind: 'losing', loss: DENIED_LOSS }, save: undefined })
+      editorInput.remove()
+      expect(document.activeElement).toBe(document.body)
+    }
+
+    it('有修改：交给"另存为副本"', () => {
+      const fake = renderChrome()
+      loseWithFocusInEditor(fake)
+      fake.set({ mode: lost(DENIED_LOSS, { reopenFailed: true }) })
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: '另存为副本' }))
+    })
+
+    it('没有修改：交给"重新加载"', () => {
+      const fake = renderChrome()
+      loseWithFocusInEditor(fake)
+      fake.set({ mode: lost(DENIED_LOSS, { reopenFailed: true, unsaved: false }) })
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: '重新加载' }))
+    })
+
+    it('正在核对那次保存（还没有按钮）、读不到了（没有按钮）：交给返回链接', () => {
+      const fake = renderChrome()
+      loseWithFocusInEditor(fake)
+      fake.set({ mode: lost(DENIED_LOSS, { reopenFailed: true, checking: true }) })
+      expect(document.activeElement).toBe(backLink())
+      cleanup()
+      const gone = renderChrome()
+      loseWithFocusInEditor(gone)
+      gone.set({ mode: lost({ kind: 'not-found', error: new ApiError(404, 'NOT_FOUND', '不存在') }, { reopenFailed: true }) })
+      expect(document.activeElement).toBe(backLink())
+    })
+
+    it('另存为副本之后按最新的内容重建又失败（复验 C1）：焦点已经在返回链接上（副本的按钮消失时交过去的），不抢', () => {
+      const fake = renderChrome({ mode: lost(DENIED_LOSS), save: undefined })
+      backLink().focus()
+      fake.set({ mode: lost(DENIED_LOSS, { reopenFailed: true, copy: { kind: 'done', document: COPY }, reload: { kind: 'failed', error: new Error('按最新的内容重建编辑器失败') } }) })
+      expect(document.activeElement).toBe(backLink())
+    })
+
+    it('以只读重建成功（重建出来的编辑器自己接焦点）：页头不动焦点', () => {
+      const fake = renderChrome()
+      loseWithFocusInEditor(fake)
+      fake.set({ mode: lost(DENIED_LOSS) })
+      expect(document.activeElement).toBe(document.body)
+    })
+  })
+
   it('焦点已经被别处接过（例如重建出来的编辑器的输入框）：不抢', async () => {
     const fake = renderChrome({ mode: READING, save: undefined })
     const elsewhere = document.createElement('input')
