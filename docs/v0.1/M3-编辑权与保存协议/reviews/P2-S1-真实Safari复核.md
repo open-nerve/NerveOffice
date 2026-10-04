@@ -9,7 +9,7 @@
 
 Playwright 只能驱动它自带的 WebKit，驱动不了真实 Safari（M0-P1 报告 §3.2）。所以检查编进测试构建、由编辑器页自己做，驱动脚本只负责起服务、造场景、打开 Safari、收结果。
 
-1. **自检的入口页** `apps/web/selftest.html`（`entries/selftest/`，只在测试构建里，与 CSP 探针同一个做法）：从地址的 `#` 片段读测试账户、文档、场景与结果交回的地址，读完立即从地址里去掉（片段不发给服务器，历史记录里也没有密码）；同源登录（与登录页同一个接口），再整页跳到编辑器页并带上 `selftest=<场景>&next=<收集端>`。登录失败时同样交回结果（写明原因）。
+1. **自检的入口页** `apps/web/selftest.html`（`entries/selftest/`，只在测试构建里，与 CSP 探针同一个做法）：从地址的 `#` 片段读测试账户、文档、场景与结果交回的地址，读完立即从地址里去掉（片段不发给服务器；地址栏与会话历史里随之去掉——第一步的地址作为 `open` 的参数仍会出现在进程表里，Safari 的全局历史是否记下带片段的原始地址没有核实；测试账户与库每次运行随机生成、跑完删除，M3-P2 审查 B7）；同源登录（与登录页同一个接口），再整页跳到编辑器页并带上 `selftest=<场景>&next=<收集端>`。登录失败时同样交回结果（写明原因）。
 2. **编辑器页的挂接** `features/sheet-editor/selftest-hook.ts`：`start.tsx` 只在测试构建、地址带 `selftest` 时动态引入它（在 `page.load()` 之前，两行）。它挂上页面错误的收集（`error`、`unhandledrejection`、包装的 `console.error`，ResizeObserver 的通知另记，与 E2E 的 `page-errors.ts` 同一个判断）与可见性的记录，订阅页面的状态，到 steady 之后（或载入失败、90 秒等不到、页面一开始就在后台）才动态引入自检模块。
 3. **自检模块** `editor/testing/selftest.ts`（与 `selftest-dom.ts`）：用 E2E 的探针（`window.__nerveEditorProbe`）执行编译进测试构建的检查，每项比较执行前后的内存快照与命令日志，等确定的信号（命令被取消、被权限检查拦下并弹出只读的提示、执行完），不用固定时长；被拦下时核对提示的说法、点"确定"关掉。按键与右键用合成事件（`isTrusted` 为假：Univer 的快捷键服务与画布的指针处理都不看它）；找界面元素按可访问的角色与名称（不写 SDK 的 `data-u-comp`，lint 只许 internal-api 写）。每项有时限，一个场景有总时限（180 秒），页面中途被隐藏时余下的检查不做——超时、隐藏也照样把结果交回，看得到卡在哪里。
 4. **共用一份清单**：入口清单、预期、提示的说法与比较口径从 `read-only.spec.ts` 抽到 `editor/testing/read-only-entries.ts`（Facade 入口 22 项、经 Facade 写公式的 mutation、快捷键入口的预期、`READ_ONLY_ALERT`）与 `content-compare.ts`（`contentOf`、"改文档的 mutation"的判定），E2E 与自检都引用它们（模块边界只给这三个不引用任何模块的文件开口；单元测试核对提示与语言包一致、判定与编辑器的变更检测一致、每个 Facade 调用序列化之后照样能执行）。
