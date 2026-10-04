@@ -10,7 +10,8 @@ import { thirdPartyLicenses } from './build/third-party-licenses.ts'
 
 // 第三方许可清单：主构建与 Worker 的产物都要收集（00 号计划书 §3.3）
 const licenses = thirdPartyLicenses({ supplementDir: resolve(import.meta.dirname, 'third-party-licenses') })
-// 每个脚本由哪些源码模块组成（M3-P2 复核 B2、B4）：门禁 artifacts 按来源认测试专用的模块，test-build 比较两份构建的入口块；Worker 同样要记
+// 每个脚本由哪些源码模块组成（M3-P2 复核 B2）：门禁 artifacts 按来源认测试专用的模块；Worker 同样要记。两份构建的入口块相同（复核 B4）
+// 没有跨构建的自动比较（ADR-015），源头由 lint 规则 nerve/selftest-entry-self-contained 拦住
 const sources = moduleSources({ root: import.meta.dirname })
 
 /** 两个入口页：平台页面与编辑器页（整页加载，P4 设计 §3.8） */
