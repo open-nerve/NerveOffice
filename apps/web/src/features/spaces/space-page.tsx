@@ -12,11 +12,12 @@ import { messages } from '../../shared/i18n/index.ts'
 import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { folderIdsFromPath, spaceMembersPath } from '../../shared/lib/space-paths.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
+import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
 import { useFocusRescue } from '../../shared/lib/use-focus-rescue.ts'
 import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { problemOf } from '../../shared/lib/validation.ts'
-import { Alert, AlertDescription, Badge, Button, buttonVariants, FieldProblem, Input, Label, Notice, Skeleton } from '../../shared/ui/index.ts'
+import { Alert, AlertDescription, Badge, Button, buttonVariants, FieldProblem, Input, Label, Notice, RetryButton, Skeleton } from '../../shared/ui/index.ts'
 import { DetailRefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { sessionQueryOptions } from '../auth/index.ts'
 import { NewSheetButton, SpaceContents, targetSpacesOf, useOrganizeRefreshChecked } from '../documents/index.ts'
@@ -176,12 +177,19 @@ function SpaceHeader({ space, query, folderId, titleRef, onDenied }: SpaceHeader
   )
 }
 
+/** 空间看不到了（404，与不存在一致；地址里的 id 不合法也是）：说明"空间不存在"，重试也不会好 */
+function notRetryable(error: unknown): boolean {
+  return !isMissingResource(error)
+}
+
 /**
  * 空间页的内容（M2-P2 设计 §3.10）：页头与文档列表；加载中、看不到（与不存在一致）、加载失败（可以重试）。
  * 先看错误、再看数据：重新请求失败时 TanStack Query 保留上一次的数据。已打开的页面里被移出了空间，再进来时缓存里还有旧的页头，
  * 重新请求得到 404 就按看不到显示，不再显示旧的页头与文档（审查 B1）；导航与这个空间的缓存随之更新。
  * 页内的新建与改名被拒绝之后页头重新请求，同样按这里的状态显示（复验）。别的失败（网络、5xx）留着旧的页头，页头说明没能刷新（DEF-040）。
  * 页面里有焦点的按钮、行随刷新或新的权限消失时，焦点交给页面的标题（M2-P6 复核 S3，shared/lib/use-focus-rescue.ts）。
+ * 第一次就没取到时按"重试"：重试期间说明与按钮留着（不可用、说正在重试）；取到之后焦点交给页面的标题，不落到 body
+ * （规范 §2.4，shared/lib/use-first-load-retry.ts）；得到 404 时由"空间不存在"接住焦点
  */
 function SpaceContent({ spaceId, folderIds = [] }: { readonly spaceId: string, readonly folderIds?: readonly string[] }) {
   const queryClient = useQueryClient()
@@ -197,9 +205,10 @@ function SpaceContent({ spaceId, folderIds = [] }: { readonly spaceId: string, r
   const refreshOrganize = useOrganizeRefreshChecked()
   const titleRef = useRef<HTMLHeadingElement>(null)
   const rescueFocus = useFocusRescue(titleRef)
+  const firstLoad = useFirstLoadRetry(space, titleRef, { retryable: notRetryable })
   useForgetMissingSpace(spaceId, missing)
-  // 浏览器标签页的标题：显示出内容之后由内容区按当前的位置给出，看不到时由"空间不存在"给出（M2-P6 复核 S4）；这里只管加载失败
-  useDocumentTitle(!space.isPending && !missing && space.data === undefined ? text.pageLoadFailed : undefined)
+  // 浏览器标签页的标题：显示出内容之后由内容区按当前的位置给出，看不到时由"空间不存在"给出（M2-P6 复核 S4）；这里只管加载失败（重试期间照旧）
+  useDocumentTitle(firstLoad.failed ? text.pageLoadFailed : undefined)
 
   /**
    * 页内的操作按访问权限被拒绝（403、404）：页面显示的权限已经过时，重新请求（M2-P2 复验）——
@@ -213,27 +222,28 @@ function SpaceContent({ spaceId, folderIds = [] }: { readonly spaceId: string, r
     return refreshWithin(async () => refreshOrganize([spaceId]))
   }
 
-  if (space.isPending) {
+  if (missing)
+    return <SpaceNotFound />
+  if (firstLoad.failed) {
+    // 重试期间说明与按钮留着（不可用、说正在重试），上一次的原因不再给（请求缓存已经清掉了它）
+    return (
+      <section className="flex flex-col gap-4" aria-labelledby="space-title">
+        <h1 id="space-title" className="text-xl font-semibold">{text.pageLoadFailed}</h1>
+        <Alert variant="destructive" onFocus={firstLoad.focus.onFocus} onBlur={firstLoad.focus.onBlur}>
+          <AlertDescription>
+            {!firstLoad.retrying && <p>{describeError(space.error).message}</p>}
+            <RetryButton retrying={firstLoad.retrying} onRetry={() => void space.refetch()} className={firstLoad.retrying ? undefined : 'mt-2'} />
+          </AlertDescription>
+        </Alert>
+      </section>
+    )
+  }
+  if (space.data === undefined) {
     return (
       <div role="status" aria-label={text.loading} className="flex flex-col gap-3">
         <Skeleton className="h-8 w-48" />
         <Skeleton className="h-12 w-full" />
       </div>
-    )
-  }
-  if (missing)
-    return <SpaceNotFound />
-  if (space.data === undefined) {
-    return (
-      <section className="flex flex-col gap-4" aria-labelledby="space-title">
-        <h1 id="space-title" className="text-xl font-semibold">{text.pageLoadFailed}</h1>
-        <Alert variant="destructive">
-          <AlertDescription>
-            <p>{describeError(space.error).message}</p>
-            <Button variant="outline" size="sm" className="mt-2" onClick={() => void space.refetch()}>{messages.common.retry}</Button>
-          </AlertDescription>
-        </Alert>
-      </section>
     )
   }
   return (

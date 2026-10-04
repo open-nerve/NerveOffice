@@ -5,7 +5,8 @@ export const colleaguesMessages = {
   search: '按名字或登录名搜索同事',
   searching: '正在查找…',
   none: '没有找到这个人',
-  failed: (reason: string) => `查找失败：${reason}`,
+  /** 查找失败（原因）；按了"重试"、正在重新查找时不给原因（shared/lib/use-first-load-retry.ts） */
+  failed: (reason?: string) => (reason === undefined ? '查找失败' : `查找失败：${reason}`),
   candidates: '找到的同事',
   selected: <T>(name: T): Phrase<T> => ['已选择：', name],
   change: '重新选择',

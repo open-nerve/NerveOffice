@@ -218,7 +218,8 @@ export const adminMessages = {
     searchTeam: '按名称搜索团队空间',
     searchingTeam: '正在查找…',
     noTeam: '没有找到没有归档的团队空间',
-    teamSearchFailed: (reason: string) => `查找失败：${reason}`,
+    /** 查找失败（原因）；按了"重试"、正在重新查找时不给原因（shared/lib/use-first-load-retry.ts） */
+    teamSearchFailed: (reason?: string) => (reason === undefined ? '查找失败' : `查找失败：${reason}`),
     pickTarget: '请先选择转移到哪里',
     pickDocuments: '请先选择要转移的文档',
     submit: '转移',
@@ -258,7 +259,8 @@ export const adminMessages = {
     searchActor: '按名字找操作者',
     searchingActor: '正在查找…',
     noActor: '没有找到这个人',
-    actorSearchFailed: (reason: string) => `查找失败：${reason}`,
+    /** 查找失败（原因）；按了"重试"、正在重新查找时不给原因（shared/lib/use-first-load-retry.ts） */
+    actorSearchFailed: (reason?: string) => (reason === undefined ? '查找失败' : `查找失败：${reason}`),
     clear: '清除',
     clearActor: '清除操作者的筛选',
     clearTarget: '清除对象的筛选',

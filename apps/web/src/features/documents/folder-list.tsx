@@ -78,9 +78,6 @@ function FolderRow({ folder, folderIds, targetSpaces, open, openTriggerRef, onTo
           validateName={nameProblem}
           // 文件夹不能复制（契约里没有这一位）：面板上不出现"复制"
           permissions={{ ...folder.permissions, canCopy: false }}
-          loading={false}
-          error={null}
-          onRetry={onToggle}
           current={{ spaceId: folder.spaceId, folderId: folder.parentId ?? undefined }}
           // 目标位置里不列出它自己（挪到它所在的那一层时就在眼前）：更深的子孙仍由服务端的 409 拦下（审查建议 6）
           excludeFolderId={folder.id}

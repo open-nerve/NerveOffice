@@ -12,9 +12,10 @@ import { messages } from '../../shared/i18n/index.ts'
 import { sharingMessages } from '../../shared/i18n/zh-cn/sharing.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
+import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
 import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../../shared/ui/dialog.tsx'
-import { Alert, AlertDescription, Badge, Button, Label, NativeSelect, PersonName, Phrase, Skeleton } from '../../shared/ui/index.ts'
+import { Alert, AlertDescription, Badge, Button, Label, NativeSelect, PersonName, Phrase, RetryButton, Skeleton } from '../../shared/ui/index.ts'
 import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { StatusRegion } from '../../shared/ui/status-region.tsx'
 import { StillRefreshing } from '../../shared/ui/still-refreshing.tsx'
@@ -313,7 +314,17 @@ function focusEntry(entry: RefObject<HTMLElement | null>, fallback: () => void):
     fallback()
 }
 
-/** 对话框打开时的内容：每次打开都重新开始（授权列表重新请求，选择与说明清掉） */
+/** 看不到这份文档了（404）或者不能分享（403）：重试也不会好，说明原因、不给重试 */
+function notRetryable(error: unknown): boolean {
+  return !isAccessDenied(error)
+}
+
+/**
+ * 对话框打开时的内容：每次打开都重新开始（授权列表重新请求，选择与说明清掉）。
+ * 授权列表第一次就没取到时按"重试"：重试期间说明与按钮留着（不可用、说正在重试）；取到之后（或者得到被拒绝的说明时）说明连同"重试"
+ * 一起消失，焦点交给对话框里一直在的说明（规范 §2.4，shared/lib/use-first-load-retry.ts），不落到对话框本身。
+ * 留着之前的列表、刷新却失败了的"没能刷新"重试成功之后，焦点交给"已分享给"
+ */
 function ShareDialogContent({ documentId, documentTitle, currentUserId, refreshDocument, entry, fallbackFocus }: Omit<ShareDialogProps, 'open' | 'onOpenChange'>) {
   const grants = useQuery(grantsQueryOptions(documentId))
   const refresh = useShareRefresh(documentId, refreshDocument)
@@ -321,6 +332,9 @@ function ShareDialogContent({ documentId, documentTitle, currentUserId, refreshD
   /** 做完一件事的说明（已分享给谁、已取消分享给谁）：放在一直在的状态容器里，读屏读得到 */
   const [notice, setNotice] = useState<ReactNode>()
   const headingRef = useRef<HTMLHeadingElement>(null)
+  /** 对话框里的说明（tabIndex -1，只能由程序聚焦）：一直在，加载失败的说明消失时焦点交给它 */
+  const descriptionRef = useRef<HTMLParagraphElement>(null)
+  const firstLoad = useFirstLoadRetry(grants, descriptionRef, { retryable: notRetryable })
   // 先看错误、再看数据：重新请求被拒绝时 TanStack Query 保留上一次的数据，不能还显示能操作的列表（与空间页同一个做法）
   const denied = isAccessDenied(grants.error) ? grants.error : undefined
   // 授权列表被拒绝（打开时就是，或者写操作之后重新请求时）：入口所依据的文档详情已经过时，刷新它，入口随之消失
@@ -362,12 +376,16 @@ function ShareDialogContent({ documentId, documentTitle, currentUserId, refreshD
   }
 
   let body: ReactNode
-  if (grants.isPending) {
+  if (firstLoad.failed) {
+    // 重试期间说明与按钮留着（不可用、说正在重试），上一次的原因不再给（请求缓存已经清掉了它）
     body = (
-      <div role="status" aria-label={text.loading} className="flex flex-col gap-2">
-        <Skeleton className="h-8 w-full" />
-        <Skeleton className="h-8 w-full" />
-      </div>
+      <Alert variant="destructive" onFocus={firstLoad.focus.onFocus} onBlur={firstLoad.focus.onBlur}>
+        <AlertDescription>
+          <p>{text.loadFailed}</p>
+          {!firstLoad.retrying && <p>{describeError(grants.error).message}</p>}
+          <RetryButton retrying={firstLoad.retrying} onRetry={() => void grants.refetch()} className="mt-2" />
+        </AlertDescription>
+      </Alert>
     )
   }
   else if (denied !== undefined) {
@@ -380,13 +398,10 @@ function ShareDialogContent({ documentId, documentTitle, currentUserId, refreshD
   }
   else if (grants.data === undefined) {
     body = (
-      <Alert variant="destructive">
-        <AlertDescription>
-          <p>{text.loadFailed}</p>
-          <p>{describeError(grants.error).message}</p>
-          <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => void grants.refetch()}>{messages.common.retry}</Button>
-        </AlertDescription>
-      </Alert>
+      <div role="status" aria-label={text.loading} className="flex flex-col gap-2">
+        <Skeleton className="h-8 w-full" />
+        <Skeleton className="h-8 w-full" />
+      </div>
     )
   }
   else {
@@ -404,8 +419,9 @@ function ShareDialogContent({ documentId, documentTitle, currentUserId, refreshD
             </>,
           )}
         />
-        {/* 留着之前的列表、重新请求却失败了（Codex 对抗评审 CX5）：明说没能刷新、给出重试，之前的列表照常显示 */}
-        <RefreshProblem query={grants} list={text.listName} />
+        {/* 留着之前的列表、重新请求却失败了（Codex 对抗评审 CX5）：明说没能刷新、给出重试，之前的列表照常显示；
+            重试成功、说明随之消失时焦点交给"已分享给"（一直在），不落到对话框本身 */}
+        <RefreshProblem query={grants} list={text.listName} fallbackFocus={headingRef} />
         <Grants documentId={documentId} grants={grants.data} currentUserId={currentUserId} refresh={refresh} headingRef={headingRef} onRevoke={confirmRevoke} />
       </>
     )
@@ -415,7 +431,8 @@ function ShareDialogContent({ documentId, documentTitle, currentUserId, refreshD
     <DialogContent fallbackFocus={() => focusEntry(entry, fallbackFocus)} className="max-h-[calc(100svh-2rem)] overflow-y-auto sm:max-w-xl">
       <DialogHeader>
         <DialogTitle>{text.title(documentTitle)}</DialogTitle>
-        <DialogDescription>{text.description}</DialogDescription>
+        {/* tabIndex -1：只能由程序聚焦（授权列表加载失败的说明随重试成功消失时），Tab 键不经过它 */}
+        <DialogDescription ref={descriptionRef} tabIndex={-1} className="outline-none focus-visible:ring-3 focus-visible:ring-ring/50">{text.description}</DialogDescription>
       </DialogHeader>
       {/* 做完一件事的说明：状态区一直在无障碍树里（空的时候只做视觉隐藏、不占位置），内容变化时往里填，读屏软件才会播报 */}
       <StatusRegion className="m-0 rounded-lg border p-2 text-sm">{notice}</StatusRegion>

@@ -13,6 +13,7 @@ import { watchAnnouncement } from '../../shared/testing/announcement.test-suppor
 import { apiError, installFakeApi, inTurn, json, networkFailure } from '../../shared/testing/fake-api.test-support.ts'
 import { personIn, plainName, shownName } from '../../shared/testing/people.test-support.ts'
 import { ShareDialog } from './share-dialog.tsx'
+import { grantsQueryKey } from './sharing-api.ts'
 
 const DOCUMENT_ID = '0199a2c4-0000-7000-8000-0000000000d1'
 const ME = { id: '0199a2c4-0000-7000-8000-00000000000a', username: 'amy', displayName: '艾米' }
@@ -181,6 +182,79 @@ describe('US-M2-10 分享对话框：列表与人名', () => {
     renderDialog({ [GRANTS_KEY]: () => apiError(404, 'NOT_FOUND') })
     const dialog = await openDialog()
     expect(await within(dialog).findByText('这份文档已经不在了，或者你已经不能访问它。')).toBeInTheDocument()
+  })
+})
+
+describe('分享对话框：授权列表第一次就没取到之后的"重试"（规范 §2.4）', () => {
+  /** 由测试决定何时回来的那一次请求 */
+  function holdNext(api: ReturnType<typeof renderDialog>['api']): { readonly answer: (response: Response) => void } {
+    let answer: (response: Response) => void = () => {}
+    api.on(GRANTS_KEY, async () => new Promise<Response>((resolve) => {
+      answer = resolve
+    }))
+    return { answer: response => answer(response) }
+  }
+
+  it('按"重试"：重试期间说明与同一个按钮留着（不可用、说正在重试，不换成加载中），焦点还在它上面；又失败时换成新的原因；取到之后焦点交给对话框里一直在的说明，不落到对话框本身', async () => {
+    const { api } = renderDialog({ [GRANTS_KEY]: () => apiError(500, 'INTERNAL_ERROR') })
+    const dialog = await openDialog()
+    const alert = (await within(dialog).findByText('分享的情况没能加载')).closest('[role="alert"]') as HTMLElement
+    expect(alert).toHaveTextContent('服务器出了点问题，请稍后重试')
+    const retry = within(alert).getByRole('button', { name: '重试' })
+    const held = holdNext(api)
+    retry.focus()
+    fireEvent.click(retry)
+    await waitFor(() => expect(retry).toHaveTextContent('正在重试…'))
+    expect(within(dialog).getByText('分享的情况没能加载').closest('[role="alert"]')).toBe(alert)
+    // 上一次的原因不再给（请求缓存已经清掉了它）
+    expect(alert.textContent).toBe('分享的情况没能加载正在重试…')
+    expect(retry).toHaveAttribute('aria-disabled', 'true')
+    expect(retry).toHaveAttribute('aria-busy', 'true')
+    expect(within(dialog).queryByRole('status', { name: '正在加载分享的情况…' })).toBeNull()
+    expect(document.activeElement).toBe(retry)
+
+    held.answer(apiError(429, 'TOO_MANY_ATTEMPTS'))
+    await waitFor(() => expect(alert).toHaveTextContent('尝试次数过多，请稍后再试'))
+    expect(retry).toHaveTextContent(/^重试$/)
+    expect(retry).toHaveAttribute('aria-disabled', 'false')
+    expect(document.activeElement).toBe(retry)
+
+    api.on(GRANTS_KEY, () => grants(grantOf(BEN)))
+    fireEvent.click(retry)
+    expect(await within(dialog).findByRole('list', { name: '已分享给' })).toBeInTheDocument()
+    expect(retry).not.toBeInTheDocument()
+    await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByText(/^分享给同事之后，对方在"与我共享"里看得到这份文档。/)))
+    expect(requestsTo(api, GRANTS_KEY)).toBe(3)
+  })
+
+  it('重试之后得到 403（例如空间刚被归档）：说明服务端给的原因、不给重试，焦点同样交给对话框里的说明', async () => {
+    const { api } = renderDialog({ [GRANTS_KEY]: () => apiError(500, 'INTERNAL_ERROR') })
+    const dialog = await openDialog()
+    const retry = within(await within(dialog).findByRole('alert')).getByRole('button', { name: '重试' })
+    api.on(GRANTS_KEY, () => apiError(403, 'PERMISSION_DENIED', '空间已归档，恢复之后才能调整分享'))
+    retry.focus()
+    fireEvent.click(retry)
+    expect(await within(dialog).findByText('空间已归档，恢复之后才能调整分享')).toBeInTheDocument()
+    expect(within(dialog).queryByRole('button', { name: /重试/ })).toBeNull()
+    await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByText(/^分享给同事之后/)))
+  })
+
+  it('留着之前的列表、刷新却失败了（"没能刷新"）：重试成功之后焦点交给"已分享给"，不落到对话框本身', async () => {
+    const { api, client } = renderDialog({ [GRANTS_KEY]: () => grants(grantOf(BEN)) })
+    const dialog = await openDialog()
+    expect(await within(dialog).findByRole('list', { name: '已分享给' })).toBeInTheDocument()
+    api.on(GRANTS_KEY, () => apiError(500, 'INTERNAL_ERROR'))
+    await act(async () => {
+      await client.refetchQueries({ queryKey: grantsQueryKey(DOCUMENT_ID) })
+    })
+    const problem = await within(dialog).findByRole('alert')
+    expect(problem).toHaveTextContent('分享的情况没能刷新，显示的还是之前的内容')
+    api.on(GRANTS_KEY, () => grants(grantOf(BEN), grantOf(CAT)))
+    const retry = within(problem).getByRole('button', { name: '重试' })
+    retry.focus()
+    fireEvent.click(retry)
+    await waitFor(() => expect(within(dialog).queryByRole('alert')).toBeNull())
+    expect(document.activeElement).toBe(within(dialog).getByRole('heading', { name: '已分享给' }))
   })
 })
 

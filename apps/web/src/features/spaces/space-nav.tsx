@@ -6,7 +6,7 @@ import { messages } from '../../shared/i18n/index.ts'
 import { cn } from '../../shared/lib/cn.ts'
 import { HOME_PATH, SHARED_PATH, spacePath } from '../../shared/lib/space-paths.ts'
 import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
-import { Badge, Button, buttonVariants, Skeleton } from '../../shared/ui/index.ts'
+import { Badge, Button, buttonVariants, RetryButton, Skeleton } from '../../shared/ui/index.ts'
 import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { sessionQueryOptions } from '../auth/index.ts'
 import { spacesQueryOptions } from './spaces-api.ts'
@@ -31,9 +31,7 @@ function TeamSpaces({ headingId, heading, onNavigate }: { readonly headingId: st
     return (
       <div role="alert" className="flex flex-col items-start gap-2 px-2 text-sm text-destructive" onFocus={firstLoad.focus.onFocus} onBlur={firstLoad.focus.onBlur}>
         <span>{text.loadFailed}</span>
-        <Button variant="outline" size="sm" aria-disabled={firstLoad.retrying} aria-busy={firstLoad.retrying} onClick={() => void spaces.refetch()}>
-          {firstLoad.retrying ? messages.common.retrying : messages.common.retry}
-        </Button>
+        <RetryButton retrying={firstLoad.retrying} onRetry={() => void spaces.refetch()} />
       </div>
     )
   }

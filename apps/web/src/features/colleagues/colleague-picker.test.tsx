@@ -1,6 +1,6 @@
 // 按名字选同事（按关键词选一项，M2-P2 设计 §3.10）：输入停下之后才查找；候选排除给定的人；选中之后显示成标签，
-// "重新选择"带上选的是什么；选中与重新选择之后焦点移到新出现的元素上；只显示与输入框一致的候选；查找失败可以重试；
-// 查找的进展放在一直在的状态容器里。接口用假的 fetch。
+// "重新选择"带上选的是什么；选中与重新选择之后焦点移到新出现的元素上；只显示与输入框一致的候选；查找失败可以重试
+// （重新查找期间说明与"重试"留着，有了结果之后焦点交给输入框，规范 §2.4）；查找的进展放在一直在的状态容器里。接口用假的 fetch。
 import type { UserSummary } from '@nerve-office/contracts'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -167,6 +167,94 @@ describe('ColleaguePicker', () => {
     fireEvent.change(input(), { target: { value: 'shalom' } })
     const name = personIn(await screen.findByRole('list', { name: '找到的同事' }), 'שלום', 'shalom')
     expect(name.querySelector('bdi')).toHaveTextContent('שלום')
+  })
+
+  it('查找失败、按"重试"：重新查找期间说明与同一个按钮留着（不可用、说正在重试，不换成"正在查找…"），焦点还在它上面；又失败时换成新的原因；找到之后说明消失，焦点交给输入框（规范 §2.4）', async () => {
+    const api = installFakeApi({ [usersKey('本')]: () => apiError(500, 'INTERNAL_ERROR') })
+    renderPicker()
+    fireEvent.change(input(), { target: { value: '本' } })
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('查找失败：服务器出了点问题，请稍后重试')
+    const retry = within(alert).getByRole('button', { name: '重试' })
+    let answer: (response: Response) => void = () => {}
+    api.on(usersKey('本'), async () => new Promise<Response>((resolve) => {
+      answer = resolve
+    }))
+    retry.focus()
+    fireEvent.click(retry)
+    await waitFor(() => expect(retry).toHaveTextContent('正在重试…'))
+    expect(screen.getByRole('alert')).toBe(alert)
+    // 上一次的原因不再给（请求缓存已经清掉了它）
+    expect(alert.textContent).toBe('查找失败正在重试…')
+    expect(retry).toHaveAttribute('aria-disabled', 'true')
+    expect(retry).toHaveAttribute('aria-busy', 'true')
+    expect(screen.getByRole('status')).toBeEmptyDOMElement()
+    expect(document.activeElement).toBe(retry)
+    // 进行中再按：交回在途的那一次，不重复请求
+    fireEvent.click(retry)
+    expect(api.requests.filter(request => request.key === usersKey('本'))).toHaveLength(2)
+
+    answer(apiError(429, 'TOO_MANY_ATTEMPTS'))
+    await waitFor(() => expect(alert).toHaveTextContent('查找失败：尝试次数过多，请稍后再试'))
+    expect(retry).toHaveTextContent(/^重试$/)
+    expect(retry).toHaveAttribute('aria-disabled', 'false')
+    expect(document.activeElement).toBe(retry)
+
+    api.on(usersKey('本'), () => json(200, { items: [BEN] }))
+    fireEvent.click(retry)
+    expect(await screen.findByRole('button', { name: '@ben 本' })).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(document.activeElement).toBe(input())
+  })
+
+  it('同一个关键词之前找到过、这次重新查找失败了：只说失败（不留之前的候选）；按"重试"期间说明与按钮留着，找到之后焦点交给输入框', async () => {
+    const api = installFakeApi({ [usersKey('本')]: () => json(200, { items: [BEN] }), [usersKey('本x')]: () => json(200, { items: [] }) })
+    renderPicker()
+    fireEvent.change(input(), { target: { value: '本' } })
+    expect(await screen.findByRole('list', { name: '找到的同事' })).toBeInTheDocument()
+    fireEvent.change(input(), { target: { value: '本x' } })
+    expect(await screen.findByText('没有找到这个人')).toBeInTheDocument()
+    // 回到"本"：缓存里有之前的候选，重新查找失败了
+    api.on(usersKey('本'), () => apiError(500, 'INTERNAL_ERROR'))
+    fireEvent.change(input(), { target: { value: '本' } })
+    const alert = await screen.findByRole('alert', {}, { timeout: 2000 })
+    expect(alert).toHaveTextContent('查找失败：服务器出了点问题，请稍后重试')
+    expect(screen.queryByRole('list', { name: '找到的同事' })).toBeNull()
+
+    let answer: (response: Response) => void = () => {}
+    api.on(usersKey('本'), async () => new Promise<Response>((resolve) => {
+      answer = resolve
+    }))
+    const retry = within(alert).getByRole('button', { name: '重试' })
+    retry.focus()
+    fireEvent.click(retry)
+    await waitFor(() => expect(retry).toHaveTextContent('正在重试…'))
+    expect(screen.getByRole('alert')).toBe(alert)
+    expect(screen.queryByRole('list', { name: '找到的同事' })).toBeNull()
+    expect(document.activeElement).toBe(retry)
+    answer(json(200, { items: [BEN] }))
+    expect(await screen.findByRole('button', { name: '@ben 本' })).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(document.activeElement).toBe(input())
+  })
+
+  it('回到之前查找失败过的关键词：重新查找期间是"正在查找…"（没有人按过"重试"，不说正在重试）', async () => {
+    const api = installFakeApi({ [usersKey('本')]: () => apiError(500, 'INTERNAL_ERROR'), [usersKey('本x')]: () => json(200, { items: [] }) })
+    renderPicker()
+    fireEvent.change(input(), { target: { value: '本' } })
+    expect(await screen.findByRole('alert')).toHaveTextContent('查找失败')
+    fireEvent.change(input(), { target: { value: '本x' } })
+    expect(await screen.findByText('没有找到这个人')).toBeInTheDocument()
+    let answer: (response: Response) => void = () => {}
+    api.on(usersKey('本'), async () => new Promise<Response>((resolve) => {
+      answer = resolve
+    }))
+    fireEvent.change(input(), { target: { value: '本' } })
+    await waitFor(() => expect(api.requests.filter(request => request.key === usersKey('本'))).toHaveLength(2), { timeout: 2000 })
+    expect(screen.getByRole('status')).toHaveTextContent('正在查找…')
+    expect(screen.queryByRole('alert')).toBeNull()
+    answer(json(200, { items: [BEN] }))
+    expect(await screen.findByRole('button', { name: '@ben 本' })).toBeInTheDocument()
   })
 
   it('查找失败：说明原因，可以重试（审查 B14）', async () => {
