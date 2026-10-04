@@ -1,6 +1,7 @@
 import type { FakeTask } from '../../shared/worker-pool-fakes.test-support.ts'
 import type { SnapshotInspectionSettings } from './snapshot-inspector.ts'
 import { Buffer } from 'node:buffer'
+import { Worker } from 'node:worker_threads'
 import { ERROR_CODES, sheetSnapshotFor, SNAPSHOT_RULES, snapshotInvalidDetailsSchema } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
@@ -85,8 +86,11 @@ describe('工作线程的入口', () => {
 
 describe('线程池没有给出结果时的回答', () => {
   it('线程的内存超过上限：这份快照按 too-complex 拒绝（记 warn），线程被结束', async () => {
+    const posted = vi.spyOn(Worker.prototype, 'postMessage')
     const { inspector, warn } = setup({ threads: 1, heapMb: 64 }, FAKE_ENTRY)
     expect(await inspector.inspect(fake({ kind: 'thread' }), 'sheet@1')).toEqual(expect.any(Number))
+    // 配置的堆上限确实加在线程上
+    expect((posted.mock.contexts[0] as Worker).resourceLimits?.maxOldGenerationSizeMb).toBe(64)
     expect(await inspector.inspect(fake({ kind: 'allocate' }), 'sheet@1')).toEqual({ ok: false, rule: 'too-complex' })
     const [message, fields] = warn.mock.calls[0] ?? []
     expect(message).toContain('too-complex')
@@ -116,7 +120,8 @@ describe('线程池没有给出结果时的回答', () => {
   })
 
   it('超过时限：503，记 warn；下一份照常检查', async () => {
-    const { inspector, warn } = setup({ threads: 1, timeoutMs: 200 }, FAKE_ENTRY)
+    // 时限从交出任务算起，下一份的新线程也要在时限之内加载好：留足余量（慢机器上源码运行的加载要几百毫秒）
+    const { inspector, warn } = setup({ threads: 1, timeoutMs: 2_000 }, FAKE_ENTRY)
     expect((await rejection(inspector.inspect(fake({ kind: 'spin' }), 'sheet@1'))).code).toBe('SERVICE_UNAVAILABLE')
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('超过时限'), expect.anything())
     expect(await inspector.inspect(fake({ kind: 'echo', value: 'next' }), 'sheet@1')).toBe('next')

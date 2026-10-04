@@ -106,7 +106,8 @@ describe('WorkerPool', () => {
   })
 
   it('超过时限：结束那个线程（timeout），下一个任务用新的线程', async () => {
-    const workers = pool({ threads: 1, taskTimeoutMs: 200 })
+    // 时限从交出任务算起，下一个任务的新线程也要在时限之内加载好：慢机器上源码运行的加载要几百毫秒，留足余量
+    const workers = pool({ threads: 1, taskTimeoutMs: 2_000 })
     const before = await workers.run({ kind: 'thread' })
     expect((await failure(workers.run({ kind: 'spin' }))).reason).toBe('timeout')
     expect(workers.liveThreads).toBe(0)
@@ -133,9 +134,12 @@ describe('WorkerPool', () => {
   })
 
   it('线程的堆超过 resourceLimits：这个任务失败（out-of-memory），线程被结束，下一个任务用新的线程', async () => {
+    const posted = vi.spyOn(Worker.prototype, 'postMessage')
     const workers = pool({ threads: 1, resourceLimits: { maxOldGenerationSizeMb: 64 } })
     // 先确认线程加载得起来：内存超限发生在任务里，不是加载时
     const before = await workers.run({ kind: 'thread' })
+    // 上限确实加在线程上（没有它时假任务也会在 V8 默认的上限处超限，只是慢得多、占得多）
+    expect((posted.mock.contexts[0] as Worker).resourceLimits?.maxOldGenerationSizeMb).toBe(64)
     expect((await failure(workers.run({ kind: 'allocate' }))).reason).toBe('out-of-memory')
     expect(await workers.run({ kind: 'thread' })).not.toBe(before)
   })
