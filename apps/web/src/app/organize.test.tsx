@@ -225,7 +225,7 @@ describe('US-M2-07 文件夹导航', () => {
     })
     const app = renderApp(`/spaces/${SPACE_ID}/folders/${PLAN_ID}`)
     fireEvent.click(await screen.findByRole('button', { name: '新建表格' }))
-    await waitFor(() => expect(app.page.visits).toEqual([`assign /documents/${QUARTER_ID}`]))
+    await waitFor(() => expect(app.page.visits).toEqual([`assign /documents/${QUARTER_ID}?edit=new`]))
     expect(lastBody(api, 'POST /api/documents')).toEqual({ type: 'sheet', spaceId: SPACE_ID, folderId: PLAN_ID, requestId: expect.stringMatching(/^[\da-f-]{36}$/) as unknown })
     // 只有新建这一次请求：没有跟着一次移动
     expect(api.requests.filter(request => request.key.endsWith('/move'))).toEqual([])

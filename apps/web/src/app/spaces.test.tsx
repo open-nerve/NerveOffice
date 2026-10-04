@@ -183,7 +183,7 @@ describe('US-M2-05 空间页', () => {
     const api = loggedIn(team(), { 'POST /api/documents': () => json(201, created) })
     const app = renderApp(`/spaces/${TEAM_ID}`)
     fireEvent.click(await screen.findByRole('button', { name: '新建表格' }))
-    await waitFor(() => expect(app.page.visits).toEqual([`assign /documents/${created.id}`]))
+    await waitFor(() => expect(app.page.visits).toEqual([`assign /documents/${created.id}?edit=new`]))
     expect(api.requests.find(request => request.key === 'POST /api/documents')?.body).toMatchObject({ type: 'sheet', spaceId: TEAM_ID })
   })
 
