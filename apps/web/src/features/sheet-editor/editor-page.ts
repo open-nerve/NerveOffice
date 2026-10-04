@@ -65,8 +65,8 @@ export interface EditorPageView {
    */
   readonly sessionProblem: unknown
   /**
-   * 与保存有关的会话确认进行中（保存得到未登录或令牌失效、按保存时要先确认）：页头说明正在确认，按钮不可用，
-   * 会话类的保存失败等确认有了结果再显示（复验 SB5、TB1）
+   * 写的操作要等的会话确认进行中（保存得到未登录或令牌失效；按保存、退出编辑、点"编辑"时要先确认，审查 A10）：页头说明正在确认，
+   * 按钮不可用（阅读时的"编辑"也是，复验 C8），会话类的保存失败等确认有了结果再显示（复验 SB5、TB1）
    */
   readonly confirmingSession: boolean
   /** 页头的文档详情没能刷新（DEF-040）：原因；页头留着之前的信息，可以重试。成功之后清掉 */
@@ -353,8 +353,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   }
 
   /**
-   * 与保存有关的会话确认：进行中页头说明正在确认（复验 SB5、TB1）。trigger 为真时是保存失败触发的新的确认
-   * （确认期间又要求的，结束后再确认一次）；否则是按了保存：有确认在途就等它，不另起一轮
+   * 写的操作要等的会话确认：进行中页头说明正在确认（复验 SB5、TB1、C8）。trigger 为真时是保存失败触发的新的确认
+   * （确认期间又要求的，结束后再确认一次）；否则是要写（按保存、退出编辑、点"编辑"）：有确认在途就等它，不另起一轮
    */
   async function confirmForSave(trigger: boolean): Promise<void> {
     const confirming = trigger || checkInFlight === undefined ? recheckSession() : checkInFlight

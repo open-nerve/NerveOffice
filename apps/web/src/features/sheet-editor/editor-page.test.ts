@@ -1705,6 +1705,25 @@ describe('阅读与编辑的切换（M3-P2 设计 §3.1、§3.4）', () => {
     expect(modeOf(editorPage)).toEqual({ kind: 'editing' })
   })
 
+  it('上一次确认会话失败（断网）时点"编辑"：先向服务端确认，确认期间仍在阅读、confirmingSession 为真（页头说正在确认登录状态，"编辑"不可用，复验 C8）；确认是本人之后清掉、随即进入编辑', async () => {
+    const { editorPage, api, editLease, fromOtherTab } = setup({ editIntent: false })
+    await editorPage.load()
+    vi.mocked(api.session).mockRejectedValueOnce(new NetworkError('断网'))
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().sessionProblem).toBeInstanceOf(NetworkError))
+    expect(editorPage.view()).toMatchObject({ session: 'active', confirmingSession: false })
+    const answer = deferred<SessionResponse>()
+    vi.mocked(api.session).mockImplementationOnce(async () => answer.promise)
+    const entering = editorPage.enterEditing()
+    await settle()
+    expect(editorPage.view()).toMatchObject({ mode: { kind: 'reading' }, confirmingSession: true })
+    expect(editLease.acquire).not.toHaveBeenCalled()
+    answer.resolve(ALICE)
+    await entering
+    expect(editorPage.view()).toMatchObject({ mode: { kind: 'editing' }, confirmingSession: false, sessionProblem: undefined })
+    expect(editLease.acquire).toHaveBeenCalledOnce()
+  })
+
   it('会话是本人、没有在途的确认：点"编辑"在点下去的这一刻就进入"正在进入编辑"（不先确认会话）', async () => {
     const acquiring = deferred<AcquiredEditLease>()
     const { editorPage, api } = setup({ editIntent: false, editLease: { acquire: vi.fn(async () => acquiring.promise) } })

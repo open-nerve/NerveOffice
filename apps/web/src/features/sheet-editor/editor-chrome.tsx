@@ -90,6 +90,9 @@ function headerStatus(view: EditorPageView): string {
     case 'opening':
       return editorMessages.loading
     case 'reading':
+      // 点了"编辑"、要先向服务端确认会话（审查 A10）：确认期间说正在确认，与按保存时的确认相同（复验 C8）
+      if (view.confirmingSession)
+        return messages.auth.checkingSession
       return mode.canEdit ? '' : editorMessages.status.readOnly
     case 'entering':
       return editorMessages.mode.entering
@@ -137,9 +140,10 @@ function SaveControls({ page, save, confirming, exiting, apple }: { page: Editor
 /**
  * 阅读时（与进入编辑的过程中）页头里能做的事："有更新，点击刷新"；"编辑"（能编辑、还读得到时）。reading 为 undefined 是进入编辑中：
  * "编辑"留着、说正在进入，没有进入成功（被占用、网络失败）时焦点还在它上面（审查 A2）。正在载入最新的版本时（审查 A1）、会话不是本人时
- * （审查 A10）"编辑"不可用；点了由页面挡住，或者先向服务端确认会话
+ * （审查 A10）"编辑"不可用；点了由页面挡住，或者先向服务端确认会话。确认会话期间（confirming）"编辑"不可用、标为进行中，文字不变，
+ * 页头的状态说正在确认登录状态——与按保存时的确认同一个做法，确认之后进入编辑时才说正在进入（复验 C8）
  */
-function ReadingControls({ page, reading, session }: { page: EditorPage, reading: ReadingMode | undefined, session: EditorPageSession }) {
+function ReadingControls({ page, reading, session, confirming }: { page: EditorPage, reading: ReadingMode | undefined, session: EditorPageSession, confirming: boolean }) {
   const entering = reading === undefined
   const update = reading?.update ?? 'none'
   const offersEdit = reading === undefined || (reading.canEdit && !reading.gone)
@@ -151,7 +155,7 @@ function ReadingControls({ page, reading, session }: { page: EditorPage, reading
         </Button>
       )}
       {offersEdit && (
-        <Button size="sm" aria-disabled={entering || update === 'loading' || session !== 'active'} aria-busy={entering} onClick={() => void page.enterEditing()}>
+        <Button size="sm" aria-disabled={entering || confirming || update === 'loading' || session !== 'active'} aria-busy={entering || confirming} onClick={() => void page.enterEditing()}>
           {entering ? editorMessages.mode.entering : editorMessages.mode.enter}
         </Button>
       )}
@@ -469,7 +473,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
             {/* 分享（M2-P5）：只在能分享时出现 */}
             {ready !== undefined && <EditorShareEntry page={page} ready={ready} fallbackFocus={() => backRef.current?.focus()} />}
             <p role="status" aria-live="polite" className="text-sm whitespace-nowrap text-muted-foreground">{headerStatus(view)}</p>
-            {(reading !== undefined || entering) && <ReadingControls page={page} reading={reading} session={view.session} />}
+            {(reading !== undefined || entering) && <ReadingControls page={page} reading={reading} session={view.session} confirming={view.confirmingSession} />}
             {editing !== undefined && <SaveControls page={page} save={editing} confirming={view.confirmingSession} exiting={mode?.kind === 'exiting'} apple={apple} />}
           </div>
         </header>

@@ -424,6 +424,29 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
     expect(screen.getByRole('button', { name: '编辑' })).toHaveAttribute('aria-disabled', 'true')
   })
 
+  it('点了"编辑"、要先向服务端确认会话（审查 A10）：确认期间"编辑"不可用、标为进行中（同一个按钮、文字不变，焦点还在它上面），页头说正在确认登录状态——与按保存时的确认相同（复验 C8）；确认之后进入编辑时才说正在进入', () => {
+    const fake = renderChrome({ mode: READING, save: undefined })
+    const enter = screen.getByRole('button', { name: '编辑' })
+    enter.focus()
+    fake.set({ confirmingSession: true })
+    expect(screen.getByRole('button', { name: '编辑' })).toBe(enter)
+    expect(enter).toHaveAttribute('aria-disabled', 'true')
+    expect(enter).toHaveAttribute('aria-busy', 'true')
+    expect(headerStatus()).toHaveTextContent('正在确认登录状态…')
+    expect(document.activeElement).toBe(enter)
+    // 确认是本人：随即进入编辑
+    fake.set({ confirmingSession: false, mode: { kind: 'entering' } })
+    expect(screen.getByRole('button', { name: '正在进入编辑…' })).toBe(enter)
+    expect(headerStatus()).toHaveTextContent('正在进入编辑…')
+    // 另一次：确认之后没有人登录了——不进入，"编辑"不再标为进行中（会话不是本人，仍不可用），页头不再说正在确认
+    fake.set({ mode: READING, confirmingSession: true })
+    fake.set({ confirmingSession: false, session: 'signed-out' })
+    expect(screen.getByRole('button', { name: '编辑' })).toBe(enter)
+    expect(enter).toHaveAttribute('aria-busy', 'false')
+    expect(enter).toHaveAttribute('aria-disabled', 'true')
+    expect(headerStatus()).toBeEmptyDOMElement()
+  })
+
   it('有更新、正在载入：读屏状态区里也说（页头的按钮之外，审查 A6）；有人在编辑时接在后面；没有更新了随之不说', () => {
     const fake = renderChrome({ mode: { ...READING, update: 'available' }, save: undefined })
     const region = infoRegion()
