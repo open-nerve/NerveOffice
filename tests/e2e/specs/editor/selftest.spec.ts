@@ -6,7 +6,8 @@
 // - 自检不会悄悄地坏掉：CI 每次都跑（驱动脚本只在本机按需运行）；
 // - 真实 Safari 的复核报告与 Playwright 的 WebKit 对照时，用的就是这里的结果（附件 selftest-report）。
 // enter-exit（M3-P2 S5）另核对服务器上：那份文档恰好保存了一次（修订号 2），内容里有自检在编辑时改的那一格；别的场景没有保存过。
-// 结果的交回与驱动脚本相同（整页跳到 next，结果在查询参数里）：next 指向一个不存在的主机，这里拦下那次导航、读出结果。
+// 结果的交回与驱动脚本相同（整页跳到 next，结果在查询参数里）：next 是本机的地址（自检只把结果交给本机，M3-P2 复核 B7），
+// 用被测站点自己的源加一个没有的路径，这里拦下那次导航、读出结果。
 // 用到测试构建（自检的入口页与编辑器页里的自检）：标签 @test-build，外部模式测生产镜像时排除
 import type { Page } from '@playwright/test'
 import type { SelftestReport, SelftestScenario } from '../../../../apps/web/src/editor/testing/selftest-report.ts'
@@ -20,17 +21,19 @@ import { EDITOR_TEST_TIMEOUT } from '../../support/sheet.ts'
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
-/** 结果交回的地址：不存在的主机（.invalid 不会解析），导航由这里拦下 */
-const COLLECTOR = 'http://selftest-collector.invalid'
+/** 结果交回的地址：本机的源（被测站点自己的源）加一个没有的路径，导航由这里拦下、不会发到后端 */
+function collector(): string {
+  return `${e2eOrigin()}/selftest-collector`
+}
 
 /** 跑一步自检：打开入口页，等结果交回，解开 */
 async function runSelftest(page: Page, step: SelftestStep): Promise<SelftestReport> {
   const delivered: string[] = []
-  await page.route(`${COLLECTOR}/**`, async (route) => {
+  await page.route(`${collector()}/**`, async (route) => {
     delivered.push(route.request().url())
     await route.fulfill({ status: 200, contentType: 'text/plain; charset=utf-8', body: '自检的结果已收到' })
   })
-  await page.goto(selftestPageUrl(e2eOrigin(), step, `${COLLECTOR}/report?step=${step.id}`))
+  await page.goto(selftestPageUrl(e2eOrigin(), step, `${collector()}/report?step=${step.id}`))
   // 自检要等编辑器到 steady（渲染完成后 3 秒）再逐项检查：给足时限，失败时看附件里的页面
   await expect.poll(() => delivered.length, { message: '等自检把结果交回', timeout: 180_000 }).toBe(1)
   const encoded = new URL(delivered[0] ?? '').searchParams.get(RESULT_PARAM)

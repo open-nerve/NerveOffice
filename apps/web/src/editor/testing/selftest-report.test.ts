@@ -3,7 +3,7 @@
 import type { SelftestReport } from './selftest-report.ts'
 import { DOCUMENT_PAGE_PATTERN, documentPagePath } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
-import { decodeSelftestReport, encodeSelftestReport, isSelftestScenario, NEXT_PARAM, parseSelftestReport, reportUrl, RESULT_PARAM, SELFTEST_PARAM, SELFTEST_REPORT_FORMAT, selftestEditorUrl, selftestPassed, SelftestReportError } from './selftest-report.ts'
+import { decodeSelftestReport, encodeSelftestReport, isSelftestScenario, NEXT_PARAM, nextProblem, parseSelftestReport, reportUrl, RESULT_PARAM, SELFTEST_PARAM, SELFTEST_REPORT_FORMAT, selftestEditorUrl, selftestPassed, SelftestReportError } from './selftest-report.ts'
 
 function report(overrides: Partial<SelftestReport> = {}): SelftestReport {
   return {
@@ -75,6 +75,26 @@ describe('页面自检的结果：编码与解开', () => {
     ['failure 不是字符串', { failure: 1 }],
   ])('字段不对时拒绝：%s', (_case, overrides) => {
     expect(() => parseSelftestReport({ ...report(), ...overrides })).toThrow(SelftestReportError)
+  })
+})
+
+describe('页面自检的结果只交给本机（M3-P2 复核 B7）', () => {
+  it('本机的源可以：127.0.0.1 与 localhost，端口不限（驱动脚本的收集端、E2E 拦下的地址）', () => {
+    for (const next of ['http://127.0.0.1:4200/report?step=2', 'http://localhost:51234/selftest-collector/report', 'http://127.0.0.1/report', 'http://LOCALHOST:8080/'])
+      expect(nextProblem(next), next).toBeUndefined()
+  })
+
+  it('别的一律不行：别的主机、https、看着像本机的主机名、带账户的、IPv6 的本机、不是 http 的、不是完整的地址', () => {
+    const rejected = ['http://selftest-collector.invalid/report', 'https://127.0.0.1:4200/report', 'http://127.0.0.1.example.com/', 'http://localhost.example.com/', 'http://user:secret@127.0.0.1:4200/', 'http://[::1]:4200/', 'javascript:alert(1)', 'data:text/html,x', '/report', '']
+    for (const next of rejected)
+      expect(nextProblem(next), next).toEqual(expect.any(String))
+    expect(nextProblem('https://collector.example/report?step=1')).toBe('next 只能是本机的地址（http://127.0.0.1:<端口> 或 http://localhost:<端口>），这里是 https://collector.example')
+    expect(nextProblem('javascript:alert(1)')).toBe('next 只能是本机的地址（http://127.0.0.1:<端口> 或 http://localhost:<端口>），这里是 javascript:')
+    expect(nextProblem('/report')).toBe('next 不是一个完整的地址')
+  })
+
+  it('reportUrl 同样拒绝（兜底：调用方先用 nextProblem 核对、把原因写在页面上）', () => {
+    expect(() => reportUrl('https://collector.example/report', 'abc')).toThrow(SelftestReportError)
   })
 })
 

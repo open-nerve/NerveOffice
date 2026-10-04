@@ -1,10 +1,11 @@
 // 页面自检（selftest.ts）的整体行为里不依赖编辑器的部分：开始时页面已经隐藏（Safari 暂停了它：没有动画帧，几秒之后计时器也停了），
 // 余下的检查记为没有做、结果说明原因——不在这样的页面上逐项等到超时，给出"提示没有关掉"之类误导的说法（2026-10-04 真实 Safari 的
-// 第一次 S5 运行：窗口在外接显示器上被别的应用铺满屏幕的窗口挡住，steady 之前就隐藏了）。各项检查本身由 E2E 的校准覆盖（selftest.spec.ts）。
+// 第一次 S5 运行：窗口在外接显示器上被别的应用铺满屏幕的窗口挡住，steady 之前就隐藏了）；地址里的 next 不是本机的地址时不跑、
+// 不跳转（M3-P2 复核 B7）。各项检查本身由 E2E 的校准覆盖（selftest.spec.ts）。
 import type { EditorProbe } from './e2e-probe.ts'
 import type { SelftestHost } from './selftest.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { runEditorSelftest } from './selftest.ts'
+import { runEditorSelftest, runSelftestAndReport } from './selftest.ts'
 
 function host(): SelftestHost {
   return {
@@ -52,5 +53,23 @@ describe('页面自检开始时页面已经隐藏', () => {
     const report = await runEditorSelftest(host(), 'read-only-formulas')
     expect(report.checks[0]).toMatchObject({ id: 'page.read-only', pass: false, detail: '页头：没有"只能查看"，没有保存按钮' })
     expect(report.failure).toBeUndefined()
+  })
+})
+
+describe('页面自检的 next 不是本机的地址（M3-P2 复核 B7）', () => {
+  afterEach(() => {
+    document.body.replaceChildren()
+    history.replaceState(null, '', '/')
+  })
+
+  it('不跑（不建结果）、不跳转，原因写在页面上，返回 undefined', async () => {
+    const page = `/documents/01a0fb60-a504-7c95-8bdf-8aeaec893aaf?selftest=enter-exit&next=${encodeURIComponent('https://collector.example/report?step=1')}`
+    history.replaceState(null, '', page)
+    window.__nerveEditorProbe = PROBE
+    const visibility = vi.fn(() => [])
+    expect(await runSelftestAndReport({ ...host(), visibility })).toBeUndefined()
+    expect(visibility).not.toHaveBeenCalled()
+    expect(document.body.querySelector('[role="alert"]')?.textContent).toBe('页面自检没有运行：next 只能是本机的地址（http://127.0.0.1:<端口> 或 http://localhost:<端口>），这里是 https://collector.example')
+    expect(`${window.location.pathname}${window.location.search}`).toBe(page)
   })
 })

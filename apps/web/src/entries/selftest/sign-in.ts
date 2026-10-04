@@ -2,12 +2,13 @@
 // 带上 selftest=<场景> 与 next=<自检结束之后跳去的地址>（驱动脚本起的收集端，tests/e2e/safari/selftest.ts）。
 // 片段的写法（URLSearchParams）：user、password、document（文档 id）、scenario（场景）、next。
 // 片段不发给服务器、不进访问日志；读完马上用 replaceState 从地址栏与会话历史里去掉。
+// next 只能是本机的地址（nextProblem，M3-P2 复核 B7）：不是时不登录、不跳转，原因写在页面上。
 // 登录失败或片段不全时，同样把结果（failure 写明原因）带到 next：驱动脚本不必等到超时。
 // 不引用平台页面与编辑器页共用的任何模块（contracts、shared/api、zod 都不用，登录用原生的 fetch；M3-P2 复核 B4）：
 // 引用了，那些模块在测试构建里成了三个入口共用的，分块的拆法随之改变，平台页面与编辑器页的入口块就与生产构建的不同，
 // E2E 测的不再是生产的样子。只引用结果的格式（editor/testing/selftest-report.ts，它不引用任何模块；lint 只放行它）
 import type { SelftestReport } from '../../editor/testing/selftest-report.ts'
-import { encodeSelftestReport, NEXT_PARAM, reportUrl, SELFTEST_REPORT_FORMAT, selftestEditorUrl } from '../../editor/testing/selftest-report.ts'
+import { encodeSelftestReport, NEXT_PARAM, nextProblem, reportUrl, SELFTEST_REPORT_FORMAT, selftestEditorUrl } from '../../editor/testing/selftest-report.ts'
 
 function show(text: string): void {
   const status = document.getElementById('status')
@@ -71,6 +72,11 @@ async function main(): Promise<void> {
   const next = fragment.get(NEXT_PARAM)
   if (next === null) {
     show('地址的 # 片段里没有 next：不知道结果交给谁')
+    return
+  }
+  const problem = nextProblem(next)
+  if (problem !== undefined) {
+    show(`不登录、不跳转：${problem}`)
     return
   }
   try {

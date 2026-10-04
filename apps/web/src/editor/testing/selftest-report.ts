@@ -155,8 +155,32 @@ export async function decodeSelftestReport(encoded: string): Promise<SelftestRep
   return parseSelftestReport(value)
 }
 
-/** 自检结束之后跳去的地址：next 加上结果 */
+/** next 可以用的主机：本机（M3-P2 复核 B7） */
+const LOCAL_HOSTS: ReadonlySet<string> = new Set(['127.0.0.1', 'localhost'])
+
+/**
+ * next（自检的结果交给谁）只能是本机的源（M3-P2 复核 B7）：http、主机是 127.0.0.1 或 localhost，端口不限，地址里不带账户。
+ * 驱动脚本起的收集端与 E2E 拦下的地址都在本机；结果里有文档 id、检查的结果、页面错误与公式算出的值，测试构建的页面不能被一个
+ * 带着任意 next 的地址把它们整页带到别处。合格时返回 undefined，否则返回原因：入口页与编辑器页把它写在页面上，不登录、不跑、不跳转
+ */
+export function nextProblem(next: string): string | undefined {
+  let url: URL
+  try {
+    url = new URL(next)
+  }
+  catch {
+    return 'next 不是一个完整的地址'
+  }
+  if (url.protocol !== 'http:' || !LOCAL_HOSTS.has(url.hostname) || url.username !== '' || url.password !== '')
+    return `next 只能是本机的地址（http://127.0.0.1:<端口> 或 http://localhost:<端口>），这里是 ${url.origin === 'null' ? url.protocol : url.origin}`
+  return undefined
+}
+
+/** 自检结束之后跳去的地址：next 加上结果。next 不是本机的地址时抛出 SelftestReportError（调用方先用 nextProblem 核对，原因写在页面上） */
 export function reportUrl(next: string, encoded: string): string {
+  const problem = nextProblem(next)
+  if (problem !== undefined)
+    throw new SelftestReportError(problem)
   const url = new URL(next)
   url.searchParams.set(RESULT_PARAM, encoded)
   return url.href
