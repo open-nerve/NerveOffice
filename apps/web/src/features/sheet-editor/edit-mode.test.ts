@@ -3,7 +3,7 @@ import type { EditorAccess, SheetEditor, SheetEditorLifecycle, SheetViewState } 
 import type { EditLeaseApi } from './edit-lease.ts'
 import type { EditMode, EditModeApi, EditModeOptions, EditModeState, LostMode, ReadingMode } from './edit-mode.ts'
 import type { FetchedEditStatus, LoadedContent } from './editor-api.ts'
-import { EDIT_LEASE_HEARTBEAT_SECONDS } from '@nerve-office/contracts'
+import { EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { createEditMode, EXIT_RELEASE_WAIT_MS } from './edit-mode.ts'
@@ -637,6 +637,19 @@ describe('退出编辑（M3-P2 设计 §3.4）', () => {
     expect(modeOf(context.mode).kind).toBe('reading')
   })
 
+  it('退出的重建阶段（释放之后、只读的编辑器建好之前，surface 为 creating）：保存的状态还在——页头的"保存""正在退出编辑…"不卸载（审查 A2，复验 C5）；换好编辑器之后才去掉', async () => {
+    const context = setup()
+    await editing(context)
+    const gate = context.factory.holdNext()
+    const exiting = context.mode.exit()
+    await settle()
+    expect(context.editLease.release).toHaveBeenCalledOnce()
+    expect(context.mode.view()).toMatchObject({ mode: { kind: 'exiting' }, surface: 'creating', save: { status: 'clean' } })
+    gate.release()
+    await exiting
+    expect(context.mode.view()).toMatchObject({ mode: { kind: 'reading' }, surface: 'rendered', save: undefined })
+  })
+
   it('释放的结果未知（网络错误）：照样退出（租约 90 秒内自行到期）；阅读里记下本页那一代没能确认放掉（审查 A13）', async () => {
     const context = setup({ editLease: { release: async () => Promise.reject(new NetworkError('断网')) } })
     await editing(context)
@@ -698,6 +711,78 @@ describe('退出编辑（M3-P2 设计 §3.4）', () => {
     await context.time.advance(5_000)
     await entering
     expect(readingOf(context.mode)).toMatchObject({ releaseUnconfirmed: false, holder: { sameUser: true } })
+  })
+
+  it('没能确认放掉的记号有时限（复验 C4）：本页不再续租，那一代至多一个有效期就到期——到期之前一直读到自己时留着；到期的那一刻立即读一次（不等 30 秒的节奏），之后读到的自己不是本页那一代，记号清掉、不再回来', async () => {
+    const context = setup({ editLease: { release: async () => Promise.reject(new NetworkError('断网')) } })
+    await editing(context)
+    context.api.editStatus.mockResolvedValue(status(3, SELF_EDITING))
+    await context.mode.exit()
+    await settle()
+    expect(readingOf(context.mode)).toMatchObject({ releaseUnconfirmed: true, holder: { sameUser: true } })
+    // 退出 10 秒之后页面隐藏又回到前台：检查的节奏改成 10、40、70、100 秒……，与到期的时刻（90 秒）错开
+    await context.time.advance(10_000)
+    context.page.set(true)
+    context.page.set(false)
+    await context.time.advance(EDIT_LEASE_TTL_SECONDS * 1000 - 10_000 - 1)
+    expect(readingOf(context.mode).releaseUnconfirmed).toBe(true)
+    const before = context.api.editStatus.mock.calls.length
+    await context.time.advance(1)
+    expect(context.api.editStatus).toHaveBeenCalledTimes(before + 1)
+    expect(readingOf(context.mode)).toMatchObject({ releaseUnconfirmed: false, holder: { sameUser: true } })
+    // 复验者的探针 P2：之后 10 分钟一直读到自己，记号不再回来
+    await context.time.advance(10 * 60_000)
+    expect(readingOf(context.mode).releaseUnconfirmed).toBe(false)
+  })
+
+  it('没能确认放掉之后又进入编辑、再退出（又没能确认）：到期从后一次退出算，前一次的计时作废（复验 C4）', async () => {
+    const context = setup({ editLease: { release: async () => Promise.reject(new NetworkError('断网')) } })
+    await editing(context)
+    context.api.editStatus.mockResolvedValue(status(3, SELF_EDITING))
+    await context.mode.exit()
+    await settle()
+    await context.time.advance(60_000)
+    await context.mode.enter()
+    expect(modeOf(context.mode).kind).toBe('editing')
+    await context.mode.exit()
+    await settle()
+    expect(readingOf(context.mode).releaseUnconfirmed).toBe(true)
+    // 前一次退出之后 90 秒（后一次之后 30 秒）：留着
+    await context.time.advance(30_000)
+    expect(readingOf(context.mode).releaseUnconfirmed).toBe(true)
+    // 后一次退出之后 90 秒：清掉
+    await context.time.advance(60_000)
+    expect(readingOf(context.mode).releaseUnconfirmed).toBe(false)
+  })
+
+  it('前一次没能确认放掉的那一代已经到期，之后又进入编辑、再退出（又没能确认）：记号重新算起，到期之前留着（复验 C4）', async () => {
+    const context = setup({ editLease: { release: async () => Promise.reject(new NetworkError('断网')) } })
+    await editing(context)
+    context.api.editStatus.mockResolvedValue(status(3, SELF_EDITING))
+    await context.mode.exit()
+    await settle()
+    await context.time.advance(EDIT_LEASE_TTL_SECONDS * 1000)
+    expect(readingOf(context.mode).releaseUnconfirmed).toBe(false)
+    await context.mode.enter()
+    expect(modeOf(context.mode).kind).toBe('editing')
+    await context.mode.exit()
+    await settle()
+    expect(readingOf(context.mode).releaseUnconfirmed).toBe(true)
+    await context.time.advance(EDIT_LEASE_TTL_SECONDS * 1000 - 1)
+    expect(readingOf(context.mode).releaseUnconfirmed).toBe(true)
+    await context.time.advance(1)
+    expect(readingOf(context.mode).releaseUnconfirmed).toBe(false)
+  })
+
+  it('没能确认放掉之后页面卸载：那一代到期的计时随之取消', async () => {
+    const context = setup({ editLease: { release: async () => Promise.reject(new NetworkError('断网')) } })
+    await editing(context)
+    await context.mode.exit()
+    await settle()
+    // 阅读时检查的计时与那一代到期的计时
+    expect(context.time.pending()).toBe(2)
+    context.mode.dispose()
+    expect(context.time.pending()).toBe(0)
   })
 
   it('有保存在途：等它有了结果再看要不要保存；存上了就退出，不重复保存', async () => {
@@ -960,6 +1045,25 @@ describe('失去编辑权（M3-P2 设计 §3.4）', () => {
     expect(context.factory.last()).toMatchObject({ access: 'read', snapshot: snapshotOf('最新的'), disposed: false })
   })
 
+  it('以只读重建失败之后编辑器一直建不起来（复验 C1）：另存为副本成功、按最新的内容重建又失败——留在失去编辑权，副本的说明照旧（copy 为 done），编辑器没能重新打开、可以重新加载；离开不再提示（内容在副本里）', async () => {
+    const context = setup()
+    await editing(context)
+    context.factory.last().edit('本页的')
+    context.factory.failNext()
+    loseOnNextHeartbeat(context, DENIED)
+    await context.time.advance(HEARTBEAT_MS)
+    await settle()
+    expect(lostOf(context.mode)).toMatchObject({ reopenFailed: true, unsaved: true })
+    // 建不起来的原因还在（例如公式 Worker 的脚本加载不了）：下一次创建同样失败
+    context.factory.failNext()
+    await context.mode.saveCopy()
+    expect(context.api.conflictCopy).toHaveBeenCalledOnce()
+    expect(lostOf(context.mode)).toMatchObject({ copy: { kind: 'done', document: { id: COPY.id } }, reopenFailed: true, reload: { kind: 'failed' } })
+    expect(context.mode.view().surface).toBe('none')
+    expect(context.mode.hasUnsavedWork()).toBe(false)
+    expect(context.reportError).toHaveBeenCalledTimes(2)
+  })
+
   it('以只读重建失败、本页没有修改：照实说都已保存，可以按最新的内容重新打开（放弃即重新加载）', async () => {
     const context = setup()
     await editing(context)
@@ -1100,6 +1204,32 @@ describe('另存为副本与放弃（M3-P2 设计 §3.2、§3.4）', () => {
     context.api.content.mockResolvedValueOnce({ snapshot: snapshotOf('最新的'), revision: 9 })
     await context.mode.discard()
     expect(readingOf(context.mode).notice).toMatchObject({ kind: 'copied' })
+  })
+
+  it('副本建好之后按最新的内容重建失败（复验 C1）：留在这里——副本的说明与链接照旧，编辑器没能重新打开（没有编辑器），可以重新加载；再失败照样留着，建得起来时回到阅读、说明已另存为副本', async () => {
+    const context = await lostWithChanges()
+    context.factory.failNext()
+    await context.mode.saveCopy()
+    expect(lostOf(context.mode)).toMatchObject({ copy: { kind: 'done', document: { id: COPY.id } }, reopenFailed: true, reload: { kind: 'failed' } })
+    expect(context.mode.view().surface).toBe('none')
+    expect(context.factory.created.filter(fake => !fake.disposed)).toEqual([])
+    expect(context.mode.hasUnsavedWork()).toBe(false)
+    context.factory.failNext()
+    await context.mode.discard()
+    expect(lostOf(context.mode)).toMatchObject({ copy: { kind: 'done', document: { id: COPY.id } }, reopenFailed: true, reload: { kind: 'failed' } })
+    await context.mode.discard()
+    expect(readingOf(context.mode).notice).toMatchObject({ kind: 'copied', document: { id: COPY.id } })
+    expect(context.factory.last()).toMatchObject({ access: 'read', snapshot: snapshotOf('最新的'), disposed: false })
+    expect(context.api.conflictCopy).toHaveBeenCalledOnce()
+  })
+
+  it('没有副本（放弃本页的修改）时按最新的内容重建失败：本页的内容本来就不要了，按编辑器加载失败说明（failed）', async () => {
+    const context = await lostWithChanges()
+    context.factory.failNext()
+    await context.mode.discard()
+    expect(modeOf(context.mode).kind).toBe('failed')
+    expect(context.mode.hasUnsavedWork()).toBe(false)
+    expect(context.api.conflictCopy).not.toHaveBeenCalled()
   })
 
   it('放弃本页的修改：按服务端的最新内容（全文读取，不用条件读取：本页的内容不是服务端的哪一版）重建为阅读；失效的原因是不能编辑了，没有"编辑"', async () => {

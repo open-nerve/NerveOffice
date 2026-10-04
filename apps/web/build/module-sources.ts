@@ -1,8 +1,9 @@
-// 构建产物里每个脚本由哪些源码模块组成（M3-P2 复核 B2）：写出 .vite/module-sources.json，供门禁按来源核对。
-// - artifacts：只属于测试构建的源码（编辑器的 testing/、自检与 CSP 探针的入口页）不能出现在生产构建里。按模块的来源认：
-//   分块改了名、被并进别的分块、被生产代码直接动态引入成了自己的分块，都认得出（只按分块名与关键字认时，认不出直接动态引入的
-//   testing/switch-timing.ts 一类）；
-// - test-build：测试构建里平台页面与编辑器页的入口块要与生产构建的相同，按分块里的模块比较（M3-P2 复核 B4）。
+// 构建产物里每个脚本由哪些源码模块组成（M3-P2 复核 B2）：写出 .vite/module-sources.json，供门禁 artifacts 按来源核对——
+// 只属于测试构建的源码（编辑器的 testing/、自检与 CSP 探针的入口页）不能出现在生产构建里。按模块的来源认：分块改了名、
+// 被并进别的分块、被生产代码直接动态引入成了自己的分块，都认得出（只按分块名与关键字认时，认不出直接动态引入的
+// testing/switch-timing.ts 一类）。
+// 测试构建里平台页面与编辑器页的入口块要与生产构建的相同（M3-P2 复核 B4）：跨两份构建的比较没有自动化（ADR-015），
+// 源头由 lint 规则 nerve/selftest-entry-self-contained 拦住，没有门禁读这份清单做这件事。
 // 主构建与 Worker 各自打包，Worker 的产物在主构建里只是一份 asset：collect 放进 worker.plugins 记下 Worker 的分块，emit 放进主构建的
 // plugins，记下主构建的分块并写出清单（同第三方许可清单的做法：Worker 在主构建处理到 new Worker(new URL(...)) 时打包，早于主构建的 generateBundle）。
 // 模块的写法（sourceOf）：相对 web 应用目录的路径（src/…、editor.html；工作区的包是 ../../packages/…）；第三方的包写成

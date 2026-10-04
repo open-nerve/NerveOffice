@@ -6,8 +6,9 @@
 // - 失去编辑权：原因；还读得到而且有修改时"另存为副本""放弃本页的修改"（确认），没有修改时"重新加载"，读不到了时只说明。
 // 页头的文档详情没能刷新时说明、可以重试（DEF-040，与列表的"没能刷新"同一个做法）。
 // 有焦点的按钮随状态消失时（"编辑"随权限消失、"有更新"载入之后、失去编辑权时的"保存""退出编辑"等），焦点交给一直在的返回链接
-// （规范 §2.4，审查 A2）。编辑器本身挂在页头之外的容器里（editor.html 的 #sheet-editor），不归 React 管。
-import type { ReactNode } from 'react'
+// （规范 §2.4，审查 A2）；编辑器没能重新打开时，从销毁的编辑器落到 body 的焦点交给失效说明里的按钮（复验 C2）。
+// 编辑器本身挂在页头之外的容器里（editor.html 的 #sheet-editor），不归 React 管。
+import type { ReactNode, RefObject } from 'react'
 import type { Phrase as PhraseParts } from '../../shared/i18n/index.ts'
 import type { PendingConfirmation } from '../confirmation/index.ts'
 import type { LeaseHolder, LeaseLoss } from './edit-lease.ts'
@@ -23,6 +24,7 @@ import { messages } from '../../shared/i18n/index.ts'
 import { editorMessages } from '../../shared/i18n/zh-cn/editor.ts'
 import { LOGIN_PATH } from '../../shared/lib/login-path.ts'
 import { HOME_PATH, SHARED_PATH, spacePath } from '../../shared/lib/space-paths.ts'
+import { focusIsLost } from '../../shared/lib/use-focus-hand-off.ts'
 import { useFocusRescue } from '../../shared/lib/use-focus-rescue.ts'
 import { Alert, AlertDescription, Button, buttonVariants, PersonName, Phrase } from '../../shared/ui/index.ts'
 import { DetailRefreshProblem } from '../../shared/ui/refresh-problem.tsx'
@@ -88,6 +90,9 @@ function headerStatus(view: EditorPageView): string {
     case 'opening':
       return editorMessages.loading
     case 'reading':
+      // 点了"编辑"、要先向服务端确认会话（审查 A10）：确认期间说正在确认，与按保存时的确认相同（复验 C8）
+      if (view.confirmingSession)
+        return messages.auth.checkingSession
       return mode.canEdit ? '' : editorMessages.status.readOnly
     case 'entering':
       return editorMessages.mode.entering
@@ -135,9 +140,10 @@ function SaveControls({ page, save, confirming, exiting, apple }: { page: Editor
 /**
  * 阅读时（与进入编辑的过程中）页头里能做的事："有更新，点击刷新"；"编辑"（能编辑、还读得到时）。reading 为 undefined 是进入编辑中：
  * "编辑"留着、说正在进入，没有进入成功（被占用、网络失败）时焦点还在它上面（审查 A2）。正在载入最新的版本时（审查 A1）、会话不是本人时
- * （审查 A10）"编辑"不可用；点了由页面挡住，或者先向服务端确认会话
+ * （审查 A10）"编辑"不可用；点了由页面挡住，或者先向服务端确认会话。确认会话期间（confirming）"编辑"不可用、标为进行中，文字不变，
+ * 页头的状态说正在确认登录状态——与按保存时的确认同一个做法，确认之后进入编辑时才说正在进入（复验 C8）
  */
-function ReadingControls({ page, reading, session }: { page: EditorPage, reading: ReadingMode | undefined, session: EditorPageSession }) {
+function ReadingControls({ page, reading, session, confirming }: { page: EditorPage, reading: ReadingMode | undefined, session: EditorPageSession, confirming: boolean }) {
   const entering = reading === undefined
   const update = reading?.update ?? 'none'
   const offersEdit = reading === undefined || (reading.canEdit && !reading.gone)
@@ -149,7 +155,7 @@ function ReadingControls({ page, reading, session }: { page: EditorPage, reading
         </Button>
       )}
       {offersEdit && (
-        <Button size="sm" aria-disabled={entering || update === 'loading' || session !== 'active'} aria-busy={entering} onClick={() => void page.enterEditing()}>
+        <Button size="sm" aria-disabled={entering || confirming || update === 'loading' || session !== 'active'} aria-busy={entering || confirming} onClick={() => void page.enterEditing()}>
           {entering ? editorMessages.mode.entering : editorMessages.mode.enter}
         </Button>
       )}
@@ -242,15 +248,22 @@ function CopiedNote({ title, documentId }: { title: string, documentId: string }
  * - 读不到了（404）：只说明（审查 B2）；页头的返回链接照常在；
  * - 本页的内容没能取出：编辑器留着（还能复制），提供整页重新加载；
  * - 单元格里正在输入的那一处提交不了：说明它不在取出的内容里（审查 A4）；
- * - 编辑器没能重新打开（以只读重建失败）：说明表格暂时显示不出来，副本照常（审查 A3）
+ * - 编辑器没能重新打开（以只读重建失败）：说明表格暂时显示不出来，副本照常（审查 A3）。焦点原在可编辑的编辑器里（单元格的输入框），
+ *   它销毁之后没有新的编辑器接过焦点、落到了 body：交给说明里的第一个按钮（另存为副本、重新加载），没有按钮时（正在核对那次保存）
+ *   交给返回链接；焦点在别处时不抢（复验 C2，规范 §2.4）
  */
-function LostNotice({ page, lost, onDiscard }: { page: EditorPage, lost: LostMode, onDiscard: () => void }) {
+function LostNotice({ page, lost, onDiscard, fallbackFocus }: { page: EditorPage, lost: LostMode, onDiscard: () => void, fallbackFocus: RefObject<HTMLElement | null> }) {
   const { loss, unsaved, readable, checking, captureFailed, inputLeft, reopenFailed, copy, reload } = lost
   const copied = copy.kind === 'done' ? copy.document : undefined
   const offersCopy = readable && unsaved && !checking && !captureFailed && copied === undefined
   const offersReload = readable && !captureFailed && (!unsaved || copied !== undefined)
+  const noticeRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (reopenFailed && focusIsLost())
+      (noticeRef.current?.querySelector('button') ?? fallbackFocus.current)?.focus()
+  }, [reopenFailed, fallbackFocus])
   return (
-    <Alert variant="destructive">
+    <Alert ref={noticeRef} variant="destructive">
       <AlertDescription>
         {captureFailed
           ? <p>{editorMessages.lost.captureFailed}</p>
@@ -460,7 +473,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
             {/* 分享（M2-P5）：只在能分享时出现 */}
             {ready !== undefined && <EditorShareEntry page={page} ready={ready} fallbackFocus={() => backRef.current?.focus()} />}
             <p role="status" aria-live="polite" className="text-sm whitespace-nowrap text-muted-foreground">{headerStatus(view)}</p>
-            {(reading !== undefined || entering) && <ReadingControls page={page} reading={reading} session={view.session} />}
+            {(reading !== undefined || entering) && <ReadingControls page={page} reading={reading} session={view.session} confirming={view.confirmingSession} />}
             {editing !== undefined && <SaveControls page={page} save={editing} confirming={view.confirmingSession} exiting={mode?.kind === 'exiting'} apple={apple} />}
           </div>
         </header>
@@ -477,7 +490,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
               <AlertDescription>{failure}</AlertDescription>
             </Alert>
           )}
-          {lost !== undefined && <LostNotice page={page} lost={lost} onDiscard={confirmDiscard} />}
+          {lost !== undefined && <LostNotice page={page} lost={lost} onDiscard={confirmDiscard} fallbackFocus={backRef} />}
           {/* 版本冲突之后本页不能再保存：会话的提示（"登录之后回到这里保存"）不成立，只显示冲突的说明（复验 SB9；换了人时那条说明里另有一句，复验 TB8）；
               读不到了（404）之后没有要做的事，不提登录 */}
           {editing?.conflict === undefined && !(lost !== undefined && !lost.readable) && <SessionNotice view={view} editing={editing !== undefined} />}

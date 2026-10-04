@@ -5,6 +5,7 @@ import { Link, matchPath, NavLink, useLocation } from 'react-router'
 import { messages } from '../../shared/i18n/index.ts'
 import { cn } from '../../shared/lib/cn.ts'
 import { HOME_PATH, SHARED_PATH, spacePath } from '../../shared/lib/space-paths.ts'
+import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
 import { Badge, Button, buttonVariants, Skeleton } from '../../shared/ui/index.ts'
 import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { sessionQueryOptions } from '../auth/index.ts'
@@ -20,23 +21,27 @@ function linkClass({ isActive }: { readonly isActive: boolean }): string {
  * 团队空间的条目：加载中、失败（可以重试）、还没有团队空间、有团队空间。onNavigate：点了链接（窄屏时收起导航）。
  * 列表以"团队空间"这个标题为名：加载完之后才有它（或者"还没有加入团队空间"），E2E 据此确认导航已经加载完（审查 B6）。
  * 写操作之后（改名、加入、归档……）会重新请求它：留着之前的列表、刷新却失败了时明说、给出重试（Codex 对抗评审 CX5）；
- * 重试成功、说明连同"重试"一起消失时焦点交给一直在的"团队空间"标题（heading），不落到 body（规范 §2.4）
+ * 重试成功、说明连同"重试"一起消失时焦点交给一直在的"团队空间"标题（heading），不落到 body（规范 §2.4）。
+ * 第一次就没取到时按"重试"同样如此：重试期间说明与按钮留着（不可用、说正在重试），取到之后焦点交给标题（use-first-load-retry.ts）
  */
 function TeamSpaces({ headingId, heading, onNavigate }: { readonly headingId: string, readonly heading: RefObject<HTMLHeadingElement | null>, readonly onNavigate: () => void }) {
   const spaces = useQuery(spacesQueryOptions())
-  if (spaces.isPending) {
-    // 名称与空间页的骨架屏不同：读屏软件与测试都能分清是哪一处在加载（审查 B10）
+  const firstLoad = useFirstLoadRetry(spaces, heading)
+  if (firstLoad.failed) {
     return (
-      <div role="status" aria-label={text.navLoading} className="flex flex-col gap-2 px-2">
-        {['first', 'second'].map(row => <Skeleton key={row} className="h-6 w-full" />)}
+      <div role="alert" className="flex flex-col items-start gap-2 px-2 text-sm text-destructive" onFocus={firstLoad.focus.onFocus} onBlur={firstLoad.focus.onBlur}>
+        <span>{text.loadFailed}</span>
+        <Button variant="outline" size="sm" aria-disabled={firstLoad.retrying} aria-busy={firstLoad.retrying} onClick={() => void spaces.refetch()}>
+          {firstLoad.retrying ? messages.common.retrying : messages.common.retry}
+        </Button>
       </div>
     )
   }
   if (spaces.data === undefined) {
+    // 名称与空间页的骨架屏不同：读屏软件与测试都能分清是哪一处在加载（审查 B10）
     return (
-      <div role="alert" className="flex flex-col items-start gap-2 px-2 text-sm text-destructive">
-        <span>{text.loadFailed}</span>
-        <Button variant="outline" size="sm" onClick={() => void spaces.refetch()}>{messages.common.retry}</Button>
+      <div role="status" aria-label={text.navLoading} className="flex flex-col gap-2 px-2">
+        {['first', 'second'].map(row => <Skeleton key={row} className="h-6 w-full" />)}
       </div>
     )
   }

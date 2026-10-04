@@ -11,6 +11,7 @@ import {
   PROBE,
   PROBE_FILES,
   RADIX_DIALOG_MESSAGE,
+  restrictedSyntaxSelectors,
   severity,
   WEB_FEATURE_FILE,
   WEB_FILE,
@@ -96,6 +97,18 @@ describe('US-M1-11 lint 规则的自测：平台页面的模块边界与入口',
       expect(report.rules, code).toContain('ts/no-restricted-imports')
       expect(report.messages.join('\n'), code).toContain('页面自检的入口页只引用自己目录里的文件与结果的格式')
     }
+  })
+
+  it('页面自检的入口页里动态 import() 一律报错（复验 C3：受限导入只看声明，复验者动态引入 shared/api 时 lint 放行、入口块照样与生产的不同）：共用的模块、自己目录里的文件、结果的格式都算；在 web 的整组限制之上只加了这一条', async () => {
+    const signIn = 'apps/web/src/entries/selftest/sign-in.ts'
+    const load = (source: string): string => `export async function load(): Promise<unknown> {\n  return import('${source}')\n}\n`
+    for (const source of ['../../shared/api/index.ts', '@nerve-office/contracts', '../../shared/lib/zod-jitless.ts', './helper.ts', '../../editor/testing/selftest-report.ts']) {
+      const report = await lint(load(source), signIn)
+      expect(report.rules, source).toContain('no-restricted-syntax')
+      expect(report.messages.join('\n'), source).toContain('页面自检的入口页不用动态 import()')
+    }
+    for (const entry of [signIn, 'apps/web/src/entries/selftest/main.ts'])
+      expect(restrictedSyntaxSelectors(await configFor(entry)), entry).toEqual([...restrictedSyntaxSelectors(await configFor(WEB_SHARED_FILE)), 'ImportExpression'])
   })
 
   it('不能借"无主"文件中转绕过边界', async () => {

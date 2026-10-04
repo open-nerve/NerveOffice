@@ -5,6 +5,7 @@ import { useEffect, useImperativeHandle, useMemo, useRef } from 'react'
 import { describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { cn } from '../../shared/lib/cn.ts'
+import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
 import { useStillRefreshing } from '../../shared/lib/use-still-refreshing.ts'
 import { Alert, AlertDescription, Button, Skeleton, Table, TableBody, TableHead, TableHeader, TableRow } from '../../shared/ui/index.ts'
 import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
@@ -53,7 +54,8 @@ const LIST_SELECTOR = '[data-paged-list]'
 /**
  * 管理界面的分页表格（M2-P1 设计 §3.8）：加载中、第一页失败（可以重试）、空、有数据四种状态；"加载更多"按游标取下一页，
  * 失败时保留已有的行并提示。新的一页到了之后，焦点移到第一条新行：按钮可能随之消失，焦点不能留在它身上（M1 审查 B13）。
- * 留着之前的行、刷新却失败了（例如写操作之后）：表格上方明说没能刷新、给出重试（Codex 对抗评审 CX5）；重试成功之后焦点交给列表本身
+ * 留着之前的行、刷新却失败了（例如写操作之后）：表格上方明说没能刷新、给出重试（Codex 对抗评审 CX5）；重试成功之后焦点交给列表本身。
+ * 第一页失败之后按"重试"：重试期间说明与按钮留着（不可用、说正在重试），取到之后焦点同样交给列表本身（规范 §2.4，use-first-load-retry.ts）
  */
 export function PagedTable<T>({ query, label, texts, columns, rowKey, renderCells, ref }: PagedTableProps<T>) {
   const items = query.data?.pages.flatMap(page => page.items) ?? []
@@ -69,6 +71,7 @@ export function PagedTable<T>({ query, label, texts, columns, rowKey, renderCell
       return dataRef.current?.querySelector<HTMLElement>(LIST_SELECTOR) ?? null
     },
   }), [])
+  const firstLoad = useFirstLoadRetry(query, listFocus)
   const focusFromRef = useRef<number>(undefined)
   useEffect(() => {
     const from = focusFromRef.current
@@ -97,22 +100,25 @@ export function PagedTable<T>({ query, label, texts, columns, rowKey, renderCell
     })
   }
 
-  if (query.isPending) {
+  if (firstLoad.failed) {
+    // 重试期间说明与按钮留着（aria-disabled：按钮变成 disabled 时焦点会丢），上一次的原因不再给（请求缓存已经清掉了它）
     return (
-      <div className="flex flex-col gap-3" role="status" aria-label={texts.loading}>
-        {['first', 'second', 'third'].map(row => <Skeleton key={row} className="h-10 w-full" />)}
-      </div>
+      <Alert variant="destructive" onFocus={firstLoad.focus.onFocus} onBlur={firstLoad.focus.onBlur}>
+        <AlertDescription>
+          <p>{texts.loadFailed}</p>
+          {!firstLoad.retrying && <p>{describeError(query.error).message}</p>}
+          <Button variant="outline" size="sm" className="mt-2" aria-disabled={firstLoad.retrying} aria-busy={firstLoad.retrying} onClick={() => void query.refetch()}>
+            {firstLoad.retrying ? messages.common.retrying : messages.common.retry}
+          </Button>
+        </AlertDescription>
+      </Alert>
     )
   }
   if (query.data === undefined) {
     return (
-      <Alert variant="destructive">
-        <AlertDescription>
-          <p>{texts.loadFailed}</p>
-          <p>{describeError(query.error).message}</p>
-          <Button variant="outline" size="sm" className="mt-2" onClick={() => void query.refetch()}>{messages.common.retry}</Button>
-        </AlertDescription>
-      </Alert>
+      <div className="flex flex-col gap-3" role="status" aria-label={texts.loading}>
+        {['first', 'second', 'third'].map(row => <Skeleton key={row} className="h-10 w-full" />)}
+      </div>
     )
   }
   // 有数据（含空）：没能刷新的说明在同一个位置（刷新之后由有行变成空、由空变成有行时它也不重新挂载），重试成功、说明连同"重试"一起

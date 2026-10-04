@@ -1,6 +1,6 @@
 // lint 规则的自测（编辑器适配层对外的边界）：谁能引用编辑器（P4 设计 §3.1）、SDK 的 DOM 标记只在 internal-api 里写、
-// @univerjs/* 值引用的白名单、E2E 探针只能动态引入、内部 API 只经两个出口。另一半（内部符号、取注入器、引用 Univer 的写法）在
-// lint-rules-editor-internal.test.ts。共用的准备与时限见 lint-harness.test-support.ts
+// @univerjs/* 值引用的白名单、E2E 探针只能动态引入、页面自检与 E2E 共用的文件不引用任何模块、内部 API 只经两个出口。
+// 另一半（内部符号、取注入器、引用 Univer 的写法）在 lint-rules-editor-internal.test.ts。共用的准备与时限见 lint-harness.test-support.ts
 import type { RestrictedImports } from './lint-harness.test-support.ts'
 import { describe, expect, it } from 'vitest'
 import {
@@ -12,6 +12,7 @@ import {
   prepareLint,
   PROBE_FILES,
   restrictedImports,
+  restrictedSyntaxSelectors,
   WEB_FEATURE_FILE,
   WEB_FILE,
   WEB_SHARED_FILE,
@@ -192,6 +193,42 @@ describe('US-M1-11 lint 规则的自测：编辑器的 E2E 探针（editor/testi
     expect(report.messages.join('\n')).toContain('测试与测试辅助')
     // 别的目录里叫 testing 的包名不算（只认路径里的 testing 这一段）
     expect(await rulesFor('import { render } from \'@testing-library/react\'\n\nexport const r = render\n', EDITOR_FILE)).not.toContain(RULE)
+  })
+}, LINT_TIMEOUT)
+
+describe('US-M1-11 lint 规则的自测：页面自检与 E2E 共用的文件不引用任何模块（M3-P2 设计 §3.5，nerve/editor-testing-shared）', () => {
+  const SHARED_FILES = ['read-only-entries.ts', 'content-compare.ts', 'selftest-report.ts', 'switch-timing.ts'].map(file => `apps/web/src/editor/testing/${file}`)
+  const REPORT_FILE = 'apps/web/src/editor/testing/selftest-report.ts'
+
+  it('静态导入、import type、再导出都报错：同目录的文件、编辑器的公开入口、别的包都算', async () => {
+    const cases: (readonly [string, string])[] = [
+      ...SHARED_FILES.map(file => [file, 'import { probe } from \'./e2e-probe.ts\'\n\nexport const p = probe\n'] as const),
+      [REPORT_FILE, 'import type { SheetEditor } from \'../index.ts\'\n\nexport type E = SheetEditor\n'],
+      [REPORT_FILE, 'export * from \'zod\'\n'],
+    ]
+    for (const [file, code] of cases) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}\n${code}`).toContain('ts/no-restricted-imports')
+      expect(report.messages.join('\n'), `${file}\n${code}`).toContain('页面自检与 E2E 共用的文件（SELFTEST_SHARED_FILES）不引用任何模块：')
+    }
+  })
+
+  it('动态 import() 同样报错（复验 C3：受限导入只看声明）：同目录的文件、web 的模块、别的包都算；在编辑器的整组限制之上只加了这一条，testing/ 里别的文件照常', async () => {
+    const load = (source: string): string => `export async function load(): Promise<unknown> {\n  return import('${source}')\n}\n`
+    const cases: (readonly [string, string])[] = [
+      ...SHARED_FILES.map(file => [file, './e2e-probe.ts'] as const),
+      [REPORT_FILE, '../../shared/api/index.ts'],
+      [REPORT_FILE, 'zod'],
+    ]
+    for (const [file, source] of cases) {
+      const report = await lint(load(source), file)
+      expect(report.rules, `${file} ${source}`).toContain('no-restricted-syntax')
+      expect(report.messages.join('\n'), `${file} ${source}`).toContain('页面自检与 E2E 共用的文件（SELFTEST_SHARED_FILES）不引用任何模块，动态 import() 也不行')
+    }
+    const others = restrictedSyntaxSelectors(await configFor('apps/web/src/editor/testing/e2e-probe.ts'))
+    expect(others).not.toContain('ImportExpression')
+    for (const file of SHARED_FILES)
+      expect(restrictedSyntaxSelectors(await configFor(file)), file).toEqual([...others, 'ImportExpression'])
   })
 }, LINT_TIMEOUT)
 

@@ -1,5 +1,6 @@
 // web 构建写出的模块来源清单（apps/web/build/module-sources.ts，M3-P2 复核 B2）：产物里每个脚本由哪些源码模块组成。
-// 门禁 artifacts 按它认测试专用的模块，test-build 按它比较测试构建与生产构建的入口块（M3-P2 复核 B4）。
+// 门禁 artifacts 按它认测试专用的模块。测试构建与生产构建的入口块相同（M3-P2 复核 B4）不靠它自动核对：跨两份构建的比较没有自动化
+// （ADR-015），源头由 lint 规则 nerve/selftest-entry-self-contained 拦住。
 // 模块的写法：相对 web 应用目录的路径（src/…、editor.html）、node_modules/<包名>/<包里的路径>、virtual:<名字>
 import { z } from 'zod'
 

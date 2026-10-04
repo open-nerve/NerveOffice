@@ -1,10 +1,6 @@
 import type { RefCallback, RefObject } from 'react'
 import { useCallback } from 'react'
-
-/** 焦点不在任何元素上（落到了 body） */
-function focusIsLost(): boolean {
-  return document.activeElement === null || document.activeElement === document.body
-}
+import { focusIsLost } from './use-focus-hand-off.ts'
 
 /**
  * 区域里有焦点的元素随着页面变化消失时，焦点不落到 body（A14，M2-P6 复核 S3）：交给 fallback（页面的标题，tabIndex -1）。

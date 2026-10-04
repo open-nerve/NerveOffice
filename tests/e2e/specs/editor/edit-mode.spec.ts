@@ -7,6 +7,8 @@
 // - 以服务端当前的修订为基准：阅读期间别人保存过，点"编辑"先按 If-None-Match 取最新的内容再进入；
 // - 重建之前取出视图状态（当前工作表、左上角可见的行列、主选区），就绪之后恢复（风险表"重建丢掉用户的视图"）。
 // 失去编辑权之后另存为副本：上传本页捕获的内容（服务端按快照新建，M3-P2 S2 的接口），本页按服务器上的最新版本回到阅读。
+// 编辑器没能重新打开（以只读重建失败，审查 A3）时留在失去编辑权，焦点交给"另存为副本"；副本之后按最新的内容重建又失败也留着，
+// 副本的说明与链接照旧（复验 C1、C2）。
 // 两个人与同一个人的多个标签页（US-M3-04）在 lease-acquire.spec.ts，阅读者的更新提示（US-M3-05）在 reading-updates.spec.ts，
 // 失去编辑权的各种情形（US-M3-11、12、13）在 conflict.spec.ts、access.spec.ts 与 lease-recovery.spec.ts。
 import type { Page, Request } from '@playwright/test'
@@ -18,7 +20,7 @@ import { pressUniverShortcut } from '../../support/keyboard.ts'
 import { expectEntriesUnchanged, grantClipboard, OTHER_READ_ONLY_ENTRIES, PROBE_FACADE_ENTRIES, UI_ENTRIES } from '../../support/read-only-checks.ts'
 import { ALERT, closePermissionAlert, OPENED, scene, watch } from '../../support/read-only.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { appendSheet, cellOf, createSheetThroughApi, createSheetThroughUi, editingNotice, EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, exitEditButton, exitEditing, isSaveRequest, lostNotice, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, saveStatus, selectCell, sheetTab, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { appendSheet, cellOf, createSheetThroughApi, createSheetThroughUi, editingNotice, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, enterEditing, exitEditButton, exitEditing, isSaveRequest, lostNotice, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, saveStatus, selectCell, sheetTab, typeInCell, waitForEditorAccess, wouldPromptOnLeave } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -306,6 +308,52 @@ test.describe('US-M3-12 失去编辑权之后另存为副本（M3-P2 设计 §3.
     await waitForEditorAccess(opened, 'read')
     await enterEditing(opened)
     await expect(saveStatus(opened)).toHaveText('已保存到云端')
+  })
+
+  test('US-M3-12 失去编辑权时编辑器没能重新打开（公式 Worker 的脚本加载不了，审查 A3）：留在失去编辑权，焦点从销毁的编辑器交给"另存为副本"（复验 C2）；Worker 仍起不来时另存为副本，副本建好、说明与链接照旧，不是整页的"编辑器加载失败"（复验 C1）；Worker 恢复之后重新加载，回到阅读', async ({ page, pageErrors }) => {
+    pageErrors.expectErrors()
+    const lead = await createUser('reopen-failed-lead')
+    const editor = await createUser('reopen-failed-editor')
+    const space = await createTeamSpace('重建失败', lead, [[lead, 'admin'], [editor, 'editor']])
+    const documentId = await createDocumentIn(space.id, lead, '共同的表')
+    await loginThroughApi(page, editor)
+    await openAndEnterEditing(page, documentId)
+    await typeInCell(page, 'A1', '本页的修改')
+
+    // 从现在起公式 Worker 的脚本加载不了（路由让浏览器的缓存失效，每次新建都去取）：以只读重建、按最新的内容重建都会失败
+    const workerScript = '**/assets/formula.worker-*.js'
+    await page.route(workerScript, async route => route.abort())
+    await archiveSpace(space.id)
+
+    // 心跳得知不能编辑了（403）：留在失去编辑权，说明编辑器没能重新打开；焦点原在单元格里，交给"另存为副本"
+    const lost = lostNotice(page)
+    await expect(lost).toContainText('编辑器没能重新打开，表格暂时显示不出来；本页的修改已经取出，另存为副本照常可用', { timeout: 30_000 })
+    await expect(editorSurface(page)).toHaveAttribute('data-editor-state', 'failed')
+    const saveCopy = lost.getByRole('button', { name: '另存为副本', exact: true })
+    await expect(saveCopy).toBeFocused()
+    expect(await wouldPromptOnLeave(page)).toBe(true)
+
+    // 键盘按"另存为副本"：副本建好；按最新的内容重建又失败，留在失去编辑权——说明已另存为副本、链接照旧，可以重新加载，离开不再提示
+    await page.keyboard.press('Enter')
+    await expect(lost).toContainText(/已另存为副本《共同的表（冲突副本 \d{4}-\d{2}-\d{2} \d{2}:\d{2}）》。/)
+    await expect(lost).toContainText('没能载入最新的版本')
+    await expect(page.getByText('编辑器加载失败，请刷新页面重试')).toHaveCount(0)
+    await expect(editorSurface(page)).toHaveAttribute('data-editor-state', 'failed')
+    const link = lost.getByRole('link', { name: '打开副本（新标签页）', exact: true })
+    await expect(link).toHaveAttribute('target', '_blank')
+    expect(await wouldPromptOnLeave(page)).toBe(false)
+    const copyId = (await link.getAttribute('href') ?? '').split('/').at(-1) ?? ''
+    expect(cellOf((await savedContent(page, copyId)).snapshot, 'A1')?.v).toBe('本页的修改')
+
+    // Worker 恢复：重新加载，按服务器上的最新版本回到阅读（只能查看），读屏状态区说明已另存为副本
+    await page.unroute(workerScript)
+    await lost.getByRole('button', { name: '重新加载', exact: true }).click()
+    await expect(lostNotice(page)).toHaveCount(0)
+    await waitForEditorAccess(page, 'read')
+    await expect(saveStatus(page)).toHaveText('只能查看')
+    await expect(page.locator('#editor-chrome').getByRole('status').filter({ hasText: '已另存为副本' })).toBeVisible()
+    // 页面错误只有编辑器建不起来的那两次（以只读重建、按最新的内容重建）
+    expect(pageErrors.list()).toEqual([expect.stringMatching(/^SheetEditorLoadError: 公式 Worker 起不来/), expect.stringMatching(/^SheetEditorLoadError: 公式 Worker 起不来/)])
   })
 })
 
