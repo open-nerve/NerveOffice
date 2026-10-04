@@ -11,11 +11,15 @@ const SELF_ELSEWHERE_HINT = `要是刚刚关闭或刷新过那个页面，那边
 
 /**
  * 失效的说明的结尾（M3-P2 设计 §3.4）：本页有没有还没确认的内容 × 还读不读得到这份文档。
- * 读得到而且有修改：另存为副本或放弃；读不到了（404）：说明，本页的内容不再能保存（M3 总设计 §2.1 第 4 条）
+ * 读得到而且有修改：另存为副本或放弃；读不到了（404）：说明，本页的内容不再能保存（M3 总设计 §2.1 第 4 条）——页面上还显示着本页的内容时
+ * 提一句先复制出来；编辑器没能重新打开、什么也显示不了（shown 为假，审查 A3）时不提
  */
-function lostEnding(unsaved: boolean, readable: boolean): string {
-  if (unsaved)
-    return readable ? '本页的修改没有保存：可以另存为副本，或者放弃这些修改。' : '本页的修改没有保存，也不能再保存到这份文档，需要的话先把内容复制出来。'
+function lostEnding(unsaved: boolean, readable: boolean, shown: boolean): string {
+  if (unsaved) {
+    if (readable)
+      return '本页的修改没有保存：可以另存为副本，或者放弃这些修改。'
+    return shown ? '本页的修改没有保存，也不能再保存到这份文档，需要的话先把内容复制出来。' : '本页的修改没有保存，也不能再保存到这份文档。'
+  }
   return readable ? '本页的修改都已保存，重新加载可以看到最新的版本。' : '本页的修改都已保存。'
 }
 
@@ -49,17 +53,22 @@ export const editorMessages = {
     /** 持有者最后一次操作在几分钟之前（服务端回答时，向下取整） */
     lastActive: (minutes: number) => minutes < 1 ? '最后活动不到 1 分钟前' : `最后活动 ${minutes} 分钟前`,
     elsewhereBySelf: `你在另一个标签页或设备上正在编辑这份文档，这里只能阅读。${SELF_ELSEWHERE_HINT}`,
+    /**
+     * 编辑状态里是"自己在别处编辑"，而本页刚退出编辑、没能确认放掉编辑权（释放的结果未知或超过了等待的上限，审查 A13）：多半就是本页的那一代
+     * （同一个页面再申请照样取得），不说成另一个标签页或设备；那一代至多一个有效期后自行到期
+     */
+    elsewhereThisPage: `本页刚退出编辑，编辑权还没能确认放掉：最多 ${EDIT_LEASE_TTL_SECONDS} 秒后自动结束，这期间别人还不能编辑；这一页可以直接再点"编辑"`,
     /** 服务端给的详情认不出时的通用说法 */
     elsewhereUnknown: '这份文档正在别处编辑，你现在只能阅读',
     /**
      * 失效的说明：cause 是原因（几段，人名经人名组件呈现；不认识的原因为 undefined，只说编辑权已失效）；
      * unsaved 是本页还有服务端没确认的内容（没有时不说"没有保存"，审查 B3）；readable 是还读得到这份文档
-     * （读不到了时不提另存为副本与重新加载，审查 B2）
+     * （读不到了时不提另存为副本与重新加载，审查 B2）；shown 是页面上还显示着本页的内容（编辑器没能重新打开时为假，审查 A3）
      */
-    lost: <T>(cause: Phrase<T> | undefined, unsaved: boolean, readable: boolean): Phrase<T> => [
+    lost: <T>(cause: Phrase<T> | undefined, unsaved: boolean, readable: boolean, shown = true): Phrase<T> => [
       '编辑权已失效',
       ...(cause === undefined ? [] : ['：', ...cause]),
-      `。${lostEnding(unsaved, readable)}`,
+      `。${lostEnding(unsaved, readable, shown)}`,
     ],
     /** 编辑权被收回（明确收回，或者持有者已经不能编辑） */
     lostRevoked: '你对这份文档的编辑权被收回了',
@@ -85,6 +94,8 @@ export const editorMessages = {
     /** 阅读者的更新提示（US-M3-05）：别处保存了新的版本 */
     update: '有更新，点击刷新',
     updating: '正在载入最新的版本…',
+    /** 有更新时读屏状态区里的说明（审查 A6）：页头的按钮之外，读屏也听得到；正在载入时说 updating */
+    updateAvailable: '这份文档有更新的版本',
     /** 阅读时读不到这份文档了（编辑状态、进入编辑或刷新时得到 404）：页面上还是之前打开的内容 */
     gone: '你已无法访问这份文档（可能已被删除、移走，或你失去了访问权限），这里显示的是之前打开的内容',
     /** 进入编辑时不能编辑了（403）：reason 是服务端这次给的原因 */
@@ -115,6 +126,12 @@ export const editorMessages = {
     reloadFailed: (reason: string) => `没能载入最新的版本：${reason}`,
     /** 捕获本页的内容时编辑器出错：编辑器留着（还能复制），不给副本 */
     captureFailed: '本页的修改没能取出（编辑器出了问题）。需要的话先把内容复制出来，再重新加载',
+    /** 单元格里正在输入的那一处提交不了（编辑器提交之后仍在编辑，审查 A4）：取出的内容里没有它，别的修改照常在 */
+    inputLeft: '单元格里正在输入的那一处没能取出（编辑器没有提交它），本页的内容里没有它，另存为副本也不含它',
+    /**
+     * 以只读重建编辑器失败（审查 A3）：页面上没有表格；本页的内容已经取出，copyable（还读得到而且有修改）时另存为副本照常可用
+     */
+    reopenFailed: (copyable: boolean) => `编辑器没能重新打开，表格暂时显示不出来${copyable ? '；本页的修改已经取出，另存为副本照常可用' : ''}`,
   },
   finishCellEditing: '请先完成单元格的编辑',
   tooLarge: '表格超过容量上限（5 MiB），无法保存',

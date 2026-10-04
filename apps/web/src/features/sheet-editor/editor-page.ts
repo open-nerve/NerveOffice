@@ -7,8 +7,10 @@ import type { ApiError } from '../../shared/api/index.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
 import type { LeaseClock } from './edit-lease.ts'
-import type { CreateModeEditor, EditMode, EditModeApi, EditModeState, PageVisibility } from './edit-mode.ts'
+import type { EditMode, EditModeApi, EditModeState } from './edit-mode.ts'
 import type { LoadedContent } from './editor-api.ts'
+import type { CreateModeEditor } from './editor-slot.ts'
+import type { PageVisibility } from './reading-checks.ts'
 import type { SaveView } from './save-coordinator.ts'
 import { DOCUMENT_PROFILES, PLATFORM_FORMAT_VERSIONS } from '@nerve-office/contracts'
 import { isAuthenticationError, isMissingResource, setCsrfToken } from '../../shared/api/index.ts'
@@ -118,7 +120,7 @@ export interface EditorPage {
   readonly subscribe: (listener: () => void) => () => void
   readonly load: () => Promise<void>
   readonly save: () => Promise<void>
-  /** "编辑"：申请编辑权，重建为可编辑 */
+  /** "编辑"：会话是本人时申请编辑权，重建为可编辑 */
   readonly enterEditing: () => Promise<void>
   /** "退出编辑"：先保存，释放编辑权，重建为只读 */
   readonly exitEditing: () => Promise<void>
@@ -245,7 +247,10 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     update()
   }
 
-  /** 阅读与编辑的状态变了：编辑器换掉了就挂上屏障，就绪了就撤掉；编辑器建不起来、读不到了按载入失败说明 */
+  /**
+   * 阅读与编辑的状态变了：编辑器换掉了就挂上屏障，就绪了就撤掉；编辑器建不起来、读不到了按载入失败说明。
+   * 没有编辑器、也没有在换（失去编辑权之后以只读重建失败，审查 A3）：容器按 failed 隐藏、撤掉屏障，页头照常（说明与另存为副本）
+   */
   function modeChanged(): void {
     const view = mode?.view()
     if (view === undefined || disposed)
@@ -260,8 +265,10 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         finish({ kind: 'not-found' })
       return
     }
-    if (switching(view.mode) || view.surface === 'creating' || view.surface === 'none')
+    if (switching(view.mode) || view.surface === 'creating')
       setSurface('loading')
+    else if (view.surface === 'none')
+      setSurface('failed')
     else
       setSurface(view.surface === 'steady' ? 'steady' : 'ready')
     update()
@@ -405,14 +412,19 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   }
 
   /**
-   * 要写的操作（保存、退出编辑）之前：确认会话进行中（别的标签页的消息、保存得到未登录或 CSRF 失效触发的）就等它结束，按确认的结果决定
+   * 要写的操作（保存、进入与退出编辑）之前：确认会话进行中（别的标签页的消息、保存得到未登录或 CSRF 失效触发的）就等它结束，按确认的结果决定
    * （复验 RB1）；暂停或停止保存时、上一次确认失败时（令牌可能没有换成，复验 TB1）先向服务端确认一次：本页的用户可能已经在别处重新登录，
    * 广播的消息没有送到。令牌已知失效时一定先确认（复验 VB1）。返回能不能接着做：会话是本人、页面还在、令牌不是已知失效的（复验 UB1）
    */
   async function readyToWrite(): Promise<boolean> {
-    if (checkInFlight !== undefined || session !== 'active' || sessionProblem !== undefined || staleAfter !== undefined)
+    if (!confirmedForWrite())
       await confirmForSave(false)
     return session === 'active' && !disposed && staleAfter === undefined
+  }
+
+  /** 不必先向服务端确认就能写：没有确认在途、会话是本人、上一次确认没有失败、令牌不是已知失效的 */
+  function confirmedForWrite(): boolean {
+    return checkInFlight === undefined && session === 'active' && sessionProblem === undefined && staleAfter === undefined
   }
 
   function createMode(id: string): EditMode {
@@ -525,7 +537,13 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         await mode?.save()
     },
     enterEditing: async () => {
-      await mode?.enter()
+      if (mode?.view().mode.kind !== 'reading')
+        return
+      // 进入编辑要申请编辑权（写的操作）：与保存、退出编辑同一个会话确认——没有人登录、换了人、令牌已知失效时不申请，
+      // 免得先得到一次"没能进入编辑"（审查 A10）。不必确认时在点下去的这一刻就开始（"正在进入编辑"与交互屏障随之就有）
+      if (!confirmedForWrite() && !(await readyToWrite()))
+        return
+      await mode.enter()
     },
     exitEditing: async () => {
       if (mode?.view().mode.kind !== 'editing')

@@ -1,6 +1,6 @@
-// 编辑器页的组装：真实的接口、编辑器、整页跳转与标签页之间的会话消息；挂上页头、快捷键与离开提示，然后载入。
-import type { PageVisibility } from './edit-mode.ts'
 import type { EditIntent } from './editor-page.ts'
+// 编辑器页的组装：真实的接口、编辑器、整页跳转与标签页之间的会话消息；挂上页头、快捷键与离开提示，然后载入。
+import type { PageVisibility } from './reading-checks.ts'
 import { documentIdFromPagePath } from '@nerve-office/contracts'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'

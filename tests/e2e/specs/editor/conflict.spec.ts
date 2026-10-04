@@ -15,7 +15,7 @@ import { blockLeaseRenewals, cellOf, createSheetThroughApi, editingNotice, EDITO
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
 /**
- * 页面所在的时区里 at 这一刻写到分钟（与页面写进副本标题的写法相同：edit-mode.ts 的 conflictCopyLabel，例如"2026-10-04 15:30"）。
+ * 页面所在的时区里 at 这一刻写到分钟（与页面写进副本标题的写法相同：lost-copy.ts 的 conflictCopyLabel，例如"2026-10-04 15:30"）。
  * timeZone 是用例的浏览器上下文的时区（playwright.config.ts 的 timezoneId）
  */
 function minuteLabel(at: number, timeZone: string): string {
