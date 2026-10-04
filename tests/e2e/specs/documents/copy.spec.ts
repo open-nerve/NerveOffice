@@ -1,6 +1,7 @@
 // 复制文档（M2-P4，US-M2-08）：副本与源逐字节一致（A10），之后两份各自编辑、互不影响。
 // 只凭单独授权的人（不在源空间里）同样能复制、编辑者能改名（Codex 对抗评审 CX3）：入口在"与我共享"每一条的"操作"里，
 // 与空间的文档列表同一个行内操作；复制的目标是自己能新建的空间，看不到源空间的目录结构；副本不带上源的授权。
+// 目标空间的子文件夹第一次就没取到时用键盘按"重试"：进行中按钮不卸载，取到之后焦点交给"目标位置"这一行（规范 §2.4，DEF-046）。
 import { createDocument, createDocumentIn, createFolderIn, createTeamSpace, createUser, grantDocument, grantsOn, withDatabase } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
@@ -114,6 +115,55 @@ test.describe('US-M2-08 复制文档', () => {
     await page.goto(`/spaces/${team.id}`)
     await expect(page.getByRole('list', { name: '文件夹列表' }).getByRole('link', { name: '收件', exact: true })).toBeVisible()
     await expect(page.getByText('报价单 的副本')).toHaveCount(0)
+  })
+
+  test('复制到另一个空间、它的子文件夹第一次就没取到之后用键盘按"重试"：重试期间说明与同一个按钮留着（不可用、说正在重试），焦点还在按钮上；取到之后焦点交给"目标位置"这一行，不落到 body（规范 §2.4，DEF-046）', async ({ page }) => {
+    const owner = await createUser('copy-target-retry')
+    const team = await createTeamSpace('丙组', owner, [[owner, 'editor']])
+    await createFolderIn(team.id, owner, '收件')
+    await createDocument(owner, '报价单')
+    await loginThroughApi(page, owner)
+    await page.goto('/')
+    // 只拦丙组根目录下的子文件夹（首页取的是我的空间的，照常）：服务暂时不可用，查询自动重试一次之后才算失败
+    const targetFolders = `/api/folders?${new URLSearchParams({ spaceId: team.id }).toString()}`
+    const isTargetFolders = (url: URL): boolean => `${url.pathname}${url.search}` === targetFolders
+    await page.route(isTargetFolders, async route => route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: { code: 'SERVICE_UNAVAILABLE', message: '服务暂时不可用', requestId: 'e2e' } }),
+    }))
+    await page.getByRole('button', { name: '操作 报价单', exact: true }).click()
+    await page.getByRole('button', { name: '复制', exact: true }).click()
+    const form = page.getByRole('form', { name: '复制' })
+    await form.getByLabel('目标空间', { exact: true }).selectOption({ label: team.name })
+    const problem = form.getByRole('alert').filter({ hasText: '目标位置加载失败' })
+    await expect(problem).toContainText('服务暂时不可用，请稍后重试')
+    // 说明里只有这一个按钮：按名称找的话，它改说"正在重试…"之后就找不到了
+    const retry = problem.getByRole('button')
+    await expect(retry).toHaveText('重试')
+
+    // 恢复之前先挂住重试的那一次请求，看进行中的样子；放开之后照常发给后端
+    let release: () => void = () => {}
+    const released = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await page.unroute(isTargetFolders)
+    await page.route(isTargetFolders, async (route) => {
+      await released
+      await route.continue()
+    })
+    await retry.focus()
+    await page.keyboard.press('Enter')
+    await expect(retry).toHaveText('正在重试…')
+    await expect(retry).toHaveAttribute('aria-disabled', 'true')
+    await expect(retry).toHaveAttribute('aria-busy', 'true')
+    await expect(retry).toBeFocused()
+    await expect(form.getByRole('status', { name: '正在加载目标位置…' })).toHaveCount(0)
+
+    release()
+    await expect(form.getByRole('button', { name: '进入 收件', exact: true })).toBeVisible()
+    await expect(problem).toHaveCount(0)
+    await expect(form.getByText(`目标位置：${team.name}`)).toBeFocused()
   })
 })
 

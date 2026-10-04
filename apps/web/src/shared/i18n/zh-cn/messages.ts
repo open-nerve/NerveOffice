@@ -374,7 +374,8 @@ export const messages = {
     noTargetSpaces: '没有可以复制到的空间：你在任何空间里都不能新建文档。',
     targetLocation: '目标位置',
     targetLoading: '正在加载目标位置…',
-    targetLoadFailed: (reason: string) => `目标位置加载失败：${reason}`,
+    /** 目标空间里这一层的子文件夹第一次就没取到（原因）；按了"重试"、正在重新取时不给原因（DEF-046） */
+    targetLoadFailed: (reason?: string) => (reason === undefined ? '目标位置加载失败' : `目标位置加载失败：${reason}`),
     targetEmpty: '这里没有子文件夹',
     enterFolder: (name: string) => `进入 ${name}`,
     upOneLevel: '上一级',

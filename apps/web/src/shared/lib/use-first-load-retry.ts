@@ -1,7 +1,7 @@
 // 第一次就没取到（没有数据）时的"重试"（规范 §2.4：进行中的操作的按钮不卸载，说明连同按钮消失时焦点交给一直在的元素）。
 // 用到的地方：管理界面的分页表格、左侧导航的团队空间、搜索结果、空间页（页头、子文件夹、文档列表）、回收站页（页头、列表）、成员页、
 // "与我共享"、转移页的账户、审计页与按关键词选一项的候选、分享对话框的授权列表、需要登录的外层路由（会话）、一次性链接的查看、
-// 行内操作取的文档权限、复制的目标空间。"重试"本身是共用的 RetryButton（shared/ui/retry-button.tsx）。
+// 行内操作取的文档权限、复制的目标空间、复制与移动的目标位置里的子文件夹（DEF-046）。"重试"本身是共用的 RetryButton（shared/ui/retry-button.tsx）。
 // 留着旧数据的"没能刷新"是另一回事（shared/ui/refresh-problem.tsx）：那时请求失败了状态照旧是 error，说明本来就留到有结果。
 import type { RefObject } from 'react'
 import type { FocusHandOffHandlers } from './use-focus-hand-off.ts'
