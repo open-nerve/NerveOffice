@@ -194,7 +194,8 @@ apps/web/src/
   features/shared-with-me/ "与我共享"页（M2-P5）：路由级按需加载；个人空间按所有者的人名呈现，不显示所在位置
   features/sheet-editor/ 编辑器页：载入、保存的状态机、页头与提示、快捷键与离开提示、会话；页头的分享入口，只凭授权打开时返回链接回"与我共享"（M2-P5）；
                       编辑租约的管理（`edit-lease.ts`，M3-P1：申请、心跳、失效、续上与释放，不依赖 Univer 与界面）；
-                      阅读与编辑的状态机（`edit-mode.ts`，M3-P2：持有编辑器、租约与保存的状态机，模式切换一律重建，不依赖 Univer 与界面）
+                      阅读与编辑的状态机（`edit-mode.ts`，M3-P2：持有租约与保存的状态机，模式切换一律重建，不依赖 Univer 与界面；当前的编辑器在
+                      `editor-slot.ts`（单飞重建）、阅读时的检查在 `reading-checks.ts`、失去编辑权之后的那一份在 `lost-copy.ts`）
   editor/             编辑器适配层（Univer 的一切，ADR-010）：档案、公式 Worker、身份、变更检测、公式收齐、IMAGE()、入口守卫、internal-api/；
                       只读守卫 read-only/（M2-P3，ADR-015）；视图状态 view-state.ts（M3-P2）；testing/ 是 E2E 的探针与真实 Safari 的页面自检（M3-P2），只在测试构建里（只能动态引入，lint，M2-P6）
   shared/             请求层（api；M2-P6 加带 requestId 的新建共用的请求标识记账 request-ids）、界面组件（ui，改写后的 shadcn/ui：M2-P1 加弹窗、表格、标签、原生选择框；M2-P6 加人名 PersonName、句子里嵌元素的 Phrase、说明条 Notice、输入的文字说明 FieldProblem；M2-P5 加读屏的状态区 StatusRegion、空间的呈现 SpaceLabel、按需加载失败的说明 ChunkLoadNotice；Codex 评审之后加列表没能刷新的说明 RefreshProblem、说明里"列表还在刷新"的 StillRefreshing）与主题变量、界面文字（i18n：M2-P6 起按范围分文件，只在按需加载的页面用到的不进首屏）、
