@@ -38,7 +38,7 @@ import { deleteDrawingKey, featureSearchKeys, pressUniverShortcut, quickSumKeys 
 import { SAMPLE_CELLS, SAMPLE_FORMULAS, SAMPLE_SHEETS, sampleWithoutFormulaValuesFor } from '../../support/read-only-sample.ts'
 import { ALERT, closePermissionAlert, documentChangeAttempts, expectUnchanged, FACADE_ENTRIES, FORMULA_MUTATION_CELL, LOOK_ONCE, nextFrames, OPENED, openReadOnly, permissionAlert, scene, SHORTCUT_OUTCOMES, unitIdOf, watch, writeFormulaMutation } from '../../support/read-only.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { EDITOR_TEST_TIMEOUT, openEditor, resourceOf, saveButton, savedContent, selectCell, sheetCanvas, sheetTab, waitForEditor } from '../../support/sheet.ts'
+import { EDITOR_TEST_TIMEOUT, openEditor, resourceOf, saveButton, savedContent, selectCell, sheetCanvas, sheetTab, waitForEditorAccess } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -983,7 +983,7 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
 
     const watched = watch(page, s.documentId)
     await page.reload()
-    await waitForEditor(page, OPENED)
+    await waitForEditorAccess(page, 'read', OPENED)
     await expect(page.locator('#editor-chrome').getByText('只能查看', { exact: true })).toBeVisible()
     await expect(saveButton(page)).toHaveCount(0)
     await expect(page.getByRole('toolbar')).toHaveCount(0)

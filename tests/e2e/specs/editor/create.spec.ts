@@ -1,10 +1,11 @@
 // 新建表格并进入编辑（US-M1-04，P4 设计 §3.10）：列表里新建 → 整页打开编辑器 → 立即键入被接受；同一个创建请求重复提交只生成一份。
+// M3-P2 起别的打开一律先阅读，刚新建的表格经 ?edit=new 直接进入编辑（进入之后地址里去掉它）。
 import { randomUUID } from 'node:crypto'
 import { createTeamSpace, createUser, withDatabase } from '../../support/database.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, createSheetThroughUi, EDITOR_TEST_TIMEOUT, editorSurface, openCellEditor, saveAndWait, savedContent, saveStatus, sheetCanvas, typeInCell, waitForEditor } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, createSheetThroughUi, EDITOR_TEST_TIMEOUT, editorSurface, openCellEditor, saveAndWait, savedContent, saveStatus, sheetCanvas, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -40,7 +41,8 @@ test.describe('US-M1-04 新建表格并进入编辑', () => {
       await released
       await route.continue()
     })
-    await page.goto(`/documents/${documentId}`)
+    // 与新建之后的跳转一样带 ?edit=new：直接以可编辑创建（打开即阅读时，这里的载入是只读的编辑器）
+    await page.goto(`/documents/${documentId}?edit=new`)
     await expect(sheetCanvas(page)).toBeVisible({ timeout: 30_000 })
     await expect(editorSurface(page)).toHaveAttribute('data-editor-state', 'loading')
     await openCellEditor(page, 'A1', { force: true })
@@ -49,7 +51,7 @@ test.describe('US-M1-04 新建表格并进入编辑', () => {
     await expect(editorSurface(page)).toHaveAttribute('data-editor-state', 'loading')
 
     release()
-    await waitForEditor(page, 'steady')
+    await waitForEditorAccess(page, 'edit', 'steady')
     // 载入期间的键入没有进到表格里：打开不算修改，保存之后服务器上也没有
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     await saveAndWait(page)

@@ -28,8 +28,7 @@ test.describe('US-M2-08 复制文档', () => {
     const copyId = (await openCopy.getAttribute('href') ?? '').split('/').at(-1) ?? ''
     expect(copyId).not.toBe(sourceId)
 
-    // 副本打开就带着源的内容（快照原样复制，不重新解析）。等编辑器就绪再往下（M3-P1）：载入中的页面已经发出了申请编辑权的请求，
-    // 这时离开，服务端照样批给它，页面却没拿到令牌、释放不了，下面重新打开时只能阅读，要等 90 秒到期（P5 用 Web Locks 解决）
+    // 副本打开就带着源的内容（快照原样复制，不重新解析）。打开即阅读（M3-P2）：等只读的编辑器就绪再往下，之后重新打开、进入编辑
     await openCopy.click()
     await expect(page).toHaveURL(`/documents/${copyId}`)
     await expect(page.getByRole('link', { name: '我的空间', exact: true })).toBeVisible()

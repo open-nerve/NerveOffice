@@ -69,17 +69,86 @@ export async function waitForEditor(page: Page, stage: 'ready' | 'steady' = 'rea
   await expect(editorSurface(page)).toHaveAttribute('data-editor-state', stage === 'steady' ? 'steady' : /^(?:ready|steady)$/, { timeout: 30_000 })
 }
 
-export async function openEditor(page: Page, documentId: string, stage: 'ready' | 'steady' = 'ready'): Promise<void> {
-  await page.goto(`/documents/${documentId}`)
+/**
+ * 编辑器的容器上适配层写的 access（M3-P2 S3）：模式切换一律重建，每个编辑器以 read 或 edit 创建，开始挂载时写上。
+ * 页面的状态（data-editor-state）在切换期间是 loading，所以 access 是 edit 而状态是 ready、steady 时，就是可编辑的编辑器就绪了
+ */
+const EDITOR_ACCESS = 'data-editor-access'
+
+/** 页头里的"编辑"（阅读、能编辑时，M3-P2） */
+export function enterEditButton(page: Page): Locator {
+  return chrome(page).getByRole('banner').getByRole('button', { name: '编辑', exact: true })
+}
+
+/** 页头里的"退出编辑"（编辑时，M3-P2） */
+export function exitEditButton(page: Page): Locator {
+  return chrome(page).getByRole('banner').getByRole('button', { name: '退出编辑', exact: true })
+}
+
+/** 等以 access 创建的编辑器就绪（或 steady） */
+export async function waitForEditorAccess(page: Page, access: 'read' | 'edit', stage: 'ready' | 'steady' = 'ready'): Promise<void> {
+  await expect(editorSurface(page)).toHaveAttribute(EDITOR_ACCESS, access, { timeout: 30_000 })
   await waitForEditor(page, stage)
 }
 
-/** 在列表页点"新建表格"，整页打开编辑器页；返回新文档的 id */
+/**
+ * 点"编辑"，等可编辑的编辑器就绪（M3-P2：申请编辑权、以可编辑重建）。点下去的那个事件里页面就挂上交互屏障
+ * （data-editor-state 变成 loading），所以之后等到的就绪是新建的那一个；进不去（被占用、不能编辑了）时等不到 edit，用例失败
+ */
+export async function enterEditing(page: Page, stage: 'ready' | 'steady' = 'ready'): Promise<void> {
+  await enterEditButton(page).click()
+  await waitForEditorAccess(page, 'edit', stage)
+}
+
+/** 点"退出编辑"，等只读的编辑器就绪（M3-P2：先保存、释放编辑权、以只读重建） */
+export async function exitEditing(page: Page, stage: 'ready' | 'steady' = 'ready'): Promise<void> {
+  await exitEditButton(page).click()
+  await waitForEditorAccess(page, 'read', stage)
+}
+
+/**
+ * 只打开、阅读（M3-P2：打开即阅读）：以只读创建的编辑器就绪，页头有了阅读时的样子（能编辑时有"编辑"，不能时"只能查看"）。
+ * 查看者、别人正在编辑时打开的用例用它
+ */
+export async function openReader(page: Page, documentId: string, stage: 'ready' | 'steady' = 'ready'): Promise<void> {
+  await page.goto(`/documents/${documentId}`)
+  await whenReading(page, stage)
+}
+
+/** 打开或刷新之后：以只读创建的编辑器就绪，页头有了阅读时的样子（载入的结果在编辑器就绪之后一刻才交给页头） */
+async function whenReading(page: Page, stage: 'ready' | 'steady'): Promise<void> {
+  await waitForEditorAccess(page, 'read', stage)
+  await expect(enterEditButton(page).or(saveStatus(page).filter({ hasText: /^只能查看$/ }))).toBeVisible()
+}
+
+/** 打开并进入编辑（M3-P2：打开即阅读，点"编辑"才进入编辑）：要在编辑器里改内容、保存的用例用它 */
+export async function openAndEnterEditing(page: Page, documentId: string, stage: 'ready' | 'steady' = 'ready'): Promise<void> {
+  await page.goto(`/documents/${documentId}`)
+  await whenReading(page, 'ready')
+  await enterEditing(page, stage)
+}
+
+/** 刷新之后进入编辑（刷新出来的页面同样先阅读） */
+export async function reloadAndEnterEditing(page: Page, stage: 'ready' | 'steady' = 'ready'): Promise<void> {
+  await page.reload()
+  await whenReading(page, 'ready')
+  await enterEditing(page, stage)
+}
+
+/**
+ * 打开编辑器、进入编辑。M3-P2 起打开即阅读：暂时由 openAndEnterEditing 代办，原来的调用照旧是"打开就能改"的意思；
+ * 只读的用例改用 openReader（S5 统一调整调用方）
+ */
+export async function openEditor(page: Page, documentId: string, stage: 'ready' | 'steady' = 'ready'): Promise<void> {
+  await openAndEnterEditing(page, documentId, stage)
+}
+
+/** 在列表页点"新建表格"，整页打开编辑器页（?edit=new：刚建好的直接进入编辑，进入之后地址里去掉它）；返回新文档的 id */
 export async function createSheetThroughUi(page: Page): Promise<string> {
   await page.goto('/')
   await page.getByRole('button', { name: '新建表格' }).click()
+  await waitForEditorAccess(page, 'edit')
   await expect(page).toHaveURL(/\/documents\/[\da-f-]{36}$/)
-  await waitForEditor(page)
   return new URL(page.url()).pathname.split('/').at(-1) ?? ''
 }
 
@@ -163,9 +232,14 @@ export async function saveAndWait(page: Page): Promise<void> {
   await expect(saveStatus(page)).toHaveText('已保存到云端')
 }
 
-/** 页头之外说明谁在编辑的读屏状态区（M3-P1）：别处正在编辑这份文档时有内容 */
+/** 页头之外说明谁在编辑的读屏状态区（M3-P1；M3-P2 起阅读时随编辑状态更新）：别处正在编辑这份文档时有内容 */
 export function editingNotice(page: Page): Locator {
   return chrome(page).getByRole('status').filter({ hasText: '正在编辑这份文档' })
+}
+
+/** 失去编辑权之后的说明（M3-P2：原因、本页的修改有没有保存，"另存为副本""放弃本页的修改""重新加载"） */
+export function lostNotice(page: Page): Locator {
+  return chrome(page).getByRole('alert').filter({ hasText: /^编辑权已失效/ })
 }
 
 /** 保存的请求（PUT …/content?…）：心跳续租也是 PUT（…/edit-lease），核对"发没发保存"时要分开 */
