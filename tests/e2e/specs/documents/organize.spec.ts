@@ -201,6 +201,37 @@ test.describe('US-M2-07 文件夹与文档的整理', () => {
     await expect(page.getByText(/列表没能刷新/)).toHaveCount(0)
   })
 
+  test('再次展开"操作"时重新取文档的权限失败：之前的操作照常列出，说明可以做的操作没能刷新；恢复之后按"重试"，说明消失、焦点交给面板里的"取消"（DEF-040）', async ({ page }) => {
+    const owner = await createUser('org-detail')
+    const id = await createDocument(owner, '季度预算')
+    await loginThroughApi(page, owner)
+    await page.goto('/')
+    // 第一次展开取到权限；收起之后缓存里还有
+    await openActions(page, '季度预算')
+    await expect(page.getByRole('button', { name: '改名', exact: true })).toBeVisible()
+    await openActions(page, '季度预算')
+    await expect(page.getByRole('button', { name: '改名', exact: true })).toHaveCount(0)
+
+    // 只拦这份文档的元数据（列表照常）：服务暂时不可用，查询自动重试一次之后才算失败
+    const isDetail = (url: URL): boolean => url.pathname === `/api/documents/${id}`
+    await page.route(isDetail, async route => route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: { code: 'SERVICE_UNAVAILABLE', message: '服务暂时不可用', requestId: 'e2e' } }),
+    }))
+    await openActions(page, '季度预算')
+    const problem = page.getByRole('alert').filter({ hasText: '可以做的操作没能刷新，显示的还是之前的内容' })
+    await expect(problem).toBeVisible()
+    await expect(problem).toContainText('服务暂时不可用，请稍后重试')
+    for (const action of ['改名', '移动', '复制', '删除'])
+      await expect(page.getByRole('button', { name: action, exact: true })).toBeVisible()
+
+    await page.unroute(isDetail)
+    await problem.getByRole('button', { name: '重试', exact: true }).press('Enter')
+    await expect(problem).toHaveCount(0)
+    await expect(page.getByRole('button', { name: '取消', exact: true })).toBeFocused()
+  })
+
   test('查看者：没有新建文件夹与新建表格，文件夹那一行没有操作，文档只能复制', async ({ page }) => {
     const lead = await createUser('org-view-lead')
     const reader = await createUser('org-view-reader')

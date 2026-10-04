@@ -142,4 +142,40 @@ test.describe('US-M2-05 团队空间', () => {
     await expect(archived).toHaveCount(1)
     await expect(archived).toContainText('归档空间')
   })
+
+  test('页头留着之前的、重新请求失败：说明空间信息没能刷新与原因，之前的名称与角色照常显示；恢复之后按"重试"，说明消失、焦点交给标题（DEF-040）', async ({ page }) => {
+    const admin = await createUser('ts-head-admin', '管理员', { systemRole: 'admin' })
+    const editor = await createUser('ts-head-editor', '编辑者')
+    const space = await createTeamSpace('页头', admin, [[editor, 'editor']])
+    await loginThroughApi(page, editor)
+    await page.goto(`/spaces/${space.id}`)
+    const title = page.getByRole('heading', { level: 1, name: space.name, exact: true })
+    await expect(title).toBeVisible()
+    await expect(page.getByText('我的角色：编辑者')).toBeVisible()
+
+    // 只拦这个空间的页头（导航与文档列表照常）：服务暂时不可用，查询自动重试一次之后才算失败
+    const isSpaceHeader = (url: URL): boolean => url.pathname === `/api/spaces/${space.id}`
+    await page.route(isSpaceHeader, async route => route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: { code: 'SERVICE_UNAVAILABLE', message: '服务暂时不可用', requestId: 'e2e' } }),
+    }))
+    // 单页里离开再回来：页头先显示缓存里之前的，同时重新请求
+    await spaceNav(page).getByRole('link', { name: '我的空间', exact: true }).click()
+    await expect(page.getByRole('heading', { level: 1, name: '我的空间', exact: true })).toBeVisible()
+    await spaceNav(page).getByRole('link', { name: space.name, exact: true }).click()
+    const problem = page.getByRole('alert').filter({ hasText: '空间信息没能刷新，显示的还是之前的内容' })
+    await expect(problem).toBeVisible()
+    await expect(problem).toContainText('服务暂时不可用，请稍后重试')
+    await expect(title).toBeVisible()
+    await expect(page.getByText('我的角色：编辑者')).toBeVisible()
+    await expect(page.getByRole('button', { name: '新建表格', exact: true })).toBeVisible()
+
+    // 恢复之后用键盘按"重试"：说明随之消失，焦点不落到 body，交给标题
+    await page.unroute(isSpaceHeader)
+    await problem.getByRole('button', { name: '重试', exact: true }).press('Enter')
+    await expect(problem).toHaveCount(0)
+    await expect(title).toBeFocused()
+    await expect(page.getByText('我的角色：编辑者')).toBeVisible()
+  })
 })
