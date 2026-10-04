@@ -25,7 +25,7 @@ const RESIZE_OBSERVER_LOOP_NOTICE = /^ResizeObserver loop (?:completed with unde
 
 /**
  * 要在编辑时跑的场景（地址里 selftest 的值）：M3-P2 起打开即阅读，到了阅读的 steady 之后先进入编辑（与页头的"编辑"同一个入口），
- * 到了编辑的 steady 再跑自检。场景里自己点"编辑""退出编辑"是 S5 的事（设计 §3.5）
+ * 到了编辑的 steady 再跑自检。enter-exit 在阅读时开始，场景里自己点页头的"编辑""退出编辑"（S5），按 host.view 等页面的状态变化
  */
 const EDITING_SCENARIOS: ReadonlySet<string> = new Set(['edit-chrome'])
 
@@ -100,6 +100,10 @@ export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElem
       chrome: elements.chrome,
       startedAt,
       page: state,
+      view: () => {
+        const { mode, surface } = page.view()
+        return { mode: mode?.kind, surface }
+      },
       visibility: () => log.visibility,
       pageErrors: () => log.pageErrors,
       consoleErrors: () => log.consoleErrors,

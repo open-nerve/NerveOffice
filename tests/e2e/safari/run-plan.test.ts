@@ -1,11 +1,12 @@
-// 真实 Safari 的自检的驱动脚本里不碰进程与网络的部分（run-plan.ts）：一串步骤怎么接起来、收集端认哪些请求、每步的结论与退出码。
+// 真实 Safari 的自检的驱动脚本里不碰进程与网络的部分（run-plan.ts）：一串步骤怎么接起来、收集端认哪些请求、每步的结论与退出码、
+// 切换耗时的说明。
 import type { SelftestReport } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import type { TestUser } from '../support/database.ts'
 import type { SelftestScene, SelftestStep } from '../support/selftest-plan.ts'
 import { describe, expect, it } from 'vitest'
 import { SELFTEST_REPORT_FORMAT } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import { selftestSteps } from '../support/selftest-plan.ts'
-import { chainOf, DONE_PATH, exitCodeOf, nextAfter, outcomeOf, parseReportRequest, REPORT_PATH, reportUrlOf, resultFileName } from './run-plan.ts'
+import { chainOf, DONE_PATH, exitCodeOf, nextAfter, outcomeOf, parseReportRequest, REPORT_PATH, reportUrlOf, resultFileName, timingLines } from './run-plan.ts'
 
 const ORIGIN = 'http://127.0.0.1:4100'
 const COLLECTOR = 'http://127.0.0.1:4200'
@@ -14,7 +15,7 @@ function user(username: string): TestUser {
   return { id: `${username}-id`, username, displayName: username, password: 'password', personalSpaceId: 'space' }
 }
 
-const SCENE: SelftestScene = { author: user('author'), viewer: user('viewer'), sampleId: 'sample-doc', formulasId: 'formulas-doc' }
+const SCENE: SelftestScene = { author: user('author'), viewer: user('viewer'), sampleId: 'sample-doc', formulasId: 'formulas-doc', enterExitId: 'enter-exit-doc' }
 const STEPS = selftestSteps(SCENE)
 
 function report(overrides: Partial<SelftestReport> = {}): SelftestReport {
@@ -38,11 +39,11 @@ function report(overrides: Partial<SelftestReport> = {}): SelftestReport {
 describe('一串步骤怎么接起来', () => {
   it('每一步的结果交回收集端的 /report?step=<序号>，收下之后去下一步的入口页，最后一步之后去结束页', () => {
     const chain = chainOf(STEPS, ORIGIN, COLLECTOR)
-    expect(chain.map(link => new URLSearchParams(new URL(link.url).hash.slice(1)).get('next'))).toEqual([0, 1, 2].map(index => reportUrlOf(COLLECTOR, index)))
+    expect(chain.map(link => new URLSearchParams(new URL(link.url).hash.slice(1)).get('next'))).toEqual([0, 1, 2, 3].map(index => reportUrlOf(COLLECTOR, index)))
     expect(chain.every(link => link.url.startsWith(`${ORIGIN}/selftest.html#`))).toBe(true)
     expect(nextAfter(chain, 0, COLLECTOR)).toBe(chain[1]?.url)
-    expect(nextAfter(chain, 1, COLLECTOR)).toBe(chain[2]?.url)
-    expect(nextAfter(chain, 2, COLLECTOR)).toBe(`${COLLECTOR}${DONE_PATH}`)
+    expect(nextAfter(chain, 2, COLLECTOR)).toBe(chain[3]?.url)
+    expect(nextAfter(chain, 3, COLLECTOR)).toBe(`${COLLECTOR}${DONE_PATH}`)
   })
 })
 
@@ -95,5 +96,18 @@ describe('每步的结论与退出码', () => {
 
   it('结果文件按开始的时刻命名（UTC，没有冒号与毫秒）', () => {
     expect(resultFileName(new Date('2026-10-04T02:31:05.123Z'))).toBe('2026-10-04T02-31-05Z.json')
+  })
+})
+
+describe('切换耗时的说明', () => {
+  it('每次切换一行：点击到可以操作、到 steady，其中页头、网络与重建（毫秒取整，缺的写成"—"）', () => {
+    expect(timingLines([
+      { id: 'switch.enter', ms: { ready: 431.4, steady: 3390.6, header: 431.6, network: 21.2, rebuild: 397 } },
+      { id: 'switch.exit', ms: { ready: 512, steady: null, header: 512, network: null } },
+    ])).toEqual([
+      'switch.enter：点击到可以操作 431 ms、到 steady 3391 ms（页头 432 ms，网络 21 ms，重建 397 ms）',
+      'switch.exit：点击到可以操作 512 ms、到 steady —（页头 512 ms，网络 —，重建 —）',
+    ])
+    expect(timingLines([])).toEqual([])
   })
 })

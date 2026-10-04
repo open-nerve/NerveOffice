@@ -7,8 +7,8 @@
 //    没有收结果的接口；顶层跳转不受 CSP 限制）。收集端收下这一步的结果，把页面带到下一步的入口页，最后停在结束页；
 // 4. open -g -a Safari 在后台打开第一步的入口页（M0 的做法），--front 时 open -a Safari 把 Safari 带到前台：不改 Safari 的设置，
 //    不用"允许远程自动化"；
-// 5. 等全部的结果（总时限，--timeout 秒），核对服务器上的文档没有被保存过，写 tests/e2e/test-results/safari/<时间>.json
-//    （Safari 与 macOS 的版本、每步每项的结果、页面错误），打印汇总；
+// 5. 等全部的结果（总时限，--timeout 秒），核对服务器上的文档（只读的几步没有保存过；enter-exit 恰好保存了一次、内容里有改的那一格），
+//    写 tests/e2e/test-results/safari/<时间>.json（Safari 与 macOS 的版本、每步每项的结果、页面错误、切换的耗时），打印汇总；
 // 6. 停后端、删库。Safari 里留下一个停在结束页的标签页（与 M0 相同），可以关掉。
 // 退出码：0 全部通过；1 有不通过的检查、页面错误或服务器上的核对不对；2 超时（有的步没有交回结果）；3 准备阶段失败（没有构建、
 // 库连不上、Safari 打不开）。
@@ -19,7 +19,7 @@
 // 不再触发），编辑器画不出来。页面开始时是隐藏的，自检马上交回"页面在后台"（不等超时）；这时让 Safari 的窗口露出来再跑，或者加 --front
 import type { ChildProcess } from 'node:child_process'
 import type { AddressInfo } from 'node:net'
-import type { SelftestScene } from '../support/selftest-plan.ts'
+import type { SelftestStep } from '../support/selftest-plan.ts'
 import type { ChainLink, Received, StepOutcome } from './run-plan.ts'
 import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
@@ -28,10 +28,9 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { decodeSelftestReport } from '../../../apps/web/src/editor/testing/selftest-report.ts'
-import { revisionOf } from '../support/database.ts'
 import { databaseUrl, E2E_DATABASE_PREFIX, pickFreePort } from '../support/environment.ts'
-import { selftestScene, selftestSteps } from '../support/selftest-plan.ts'
-import { chainOf, DONE_PATH, exitCodeOf, nextAfter, outcomeOf, parseReportRequest, resultFileName } from './run-plan.ts'
+import { selftestScene, selftestSteps, serverProblemsOf } from '../support/selftest-plan.ts'
+import { chainOf, DONE_PATH, exitCodeOf, nextAfter, outcomeOf, parseReportRequest, resultFileName, timingLines } from './run-plan.ts'
 
 const SERVE_SCRIPT = fileURLToPath(new URL('../support/serve.ts', import.meta.url))
 const SELFTEST_PAGE = fileURLToPath(new URL('../../../apps/web/dist-e2e/selftest.html', import.meta.url))
@@ -167,10 +166,15 @@ async function waitForResults(collector: Collector, steps: number, timeoutMs: nu
     await new Promise(resolve => setTimeout(resolve, 500))
 }
 
-/** 服务器上的核对：自检只看不改，文档都还是修订号 1（没有保存过） */
-async function checkServer(scene: SelftestScene): Promise<{ readonly revisions: Readonly<Record<string, number | undefined>>, readonly problems: string[] }> {
-  const revisions = { [scene.sampleId]: await revisionOf(scene.sampleId), [scene.formulasId]: await revisionOf(scene.formulasId) }
-  const problems = Object.entries(revisions).filter(([, revision]) => revision !== 1).map(([id, revision]) => `文档 ${id} 的修订号是 ${String(revision)}（应当没有保存过，是 1）`)
+/** 服务器上的核对（每一步的文档）：只读的几步没有保存过（修订号仍是 1）；enter-exit 恰好保存了一次、内容里有改的那一格 */
+async function checkServer(steps: readonly SelftestStep[]): Promise<{ readonly revisions: Readonly<Record<string, number | undefined>>, readonly problems: string[] }> {
+  const revisions: Record<string, number | undefined> = {}
+  const problems: string[] = []
+  for (const step of steps) {
+    const checked = await serverProblemsOf(step)
+    revisions[step.documentId] = checked.revision
+    problems.push(...checked.problems.map(problem => `${step.id}：${problem}`))
+  }
   return { revisions, problems }
 }
 
@@ -182,6 +186,8 @@ function printSummary(outcomes: readonly StepOutcome[], serverProblems: readonly
     say(`${STATUS_TEXT[outcome.status]}：${outcome.scenario}（${checks.filter(check => check.pass).length}/${checks.length} 项）`)
     for (const problem of outcome.problems)
       say(`  - ${problem}`)
+    for (const line of timingLines(outcome.report?.timings ?? []))
+      say(`  ${line}`)
   }
   for (const problem of serverProblems)
     say(`服务器上：${problem}`)
@@ -229,7 +235,7 @@ async function main(): Promise<number> {
     await waitForResults(collector, steps.length, timeoutMs)
     const { received } = collector
     const outcomes = steps.map((step, index) => outcomeOf(step, received.get(index)))
-    const stored = await checkServer(scene)
+    const stored = await checkServer(steps)
     const exitCode = exitCodeOf(outcomes, stored.problems)
     mkdirSync(RESULTS_DIR, { recursive: true })
     const file = `${RESULTS_DIR}${resultFileName(startedAt)}`

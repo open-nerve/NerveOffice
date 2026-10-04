@@ -15,7 +15,9 @@
     "support",
     "safari",
     "tools",
+    "measure",
     "playwright.config.ts",
-    "playwright.template.config.ts"
+    "playwright.template.config.ts",
+    "playwright.measure.config.ts"
   ]
 }

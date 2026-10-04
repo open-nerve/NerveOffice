@@ -5,6 +5,7 @@
 //   真实 Safari 上的不通过才说明 Safari 不同，而不是自检写错了；
 // - 自检不会悄悄地坏掉：CI 每次都跑（驱动脚本只在本机按需运行）；
 // - 真实 Safari 的复核报告与 Playwright 的 WebKit 对照时，用的就是这里的结果（附件 selftest-report）。
+// enter-exit（M3-P2 S5）另核对服务器上：那份文档恰好保存了一次（修订号 2），内容里有自检在编辑时改的那一格；别的场景没有保存过。
 // 结果的交回与驱动脚本相同（整页跳到 next，结果在查询参数里）：next 指向一个不存在的主机，这里拦下那次导航、读出结果。
 // 用到测试构建（自检的入口页与编辑器页里的自检）：标签 @test-build，外部模式测生产镜像时排除
 import type { Page } from '@playwright/test'
@@ -13,7 +14,7 @@ import type { SelftestStep } from '../../support/selftest-plan.ts'
 import { decodeSelftestReport, RESULT_PARAM, SELFTEST_SCENARIOS } from '../../../../apps/web/src/editor/testing/selftest-report.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
-import { problemsOf, selftestPageUrl, selftestScene, selftestSteps } from '../../support/selftest-plan.ts'
+import { problemsOf, selftestPageUrl, selftestScene, selftestSteps, serverProblemsOf } from '../../support/selftest-plan.ts'
 import { EDITOR_TEST_TIMEOUT } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
@@ -38,7 +39,7 @@ async function runSelftest(page: Page, step: SelftestStep): Promise<SelftestRepo
 }
 
 /** 各场景的账户名前缀（用户名最长 32 个字符，后面还要加角色与随机后缀） */
-const PREFIXES: Readonly<Record<SelftestScenario, string>> = { 'read-only': 'st-ro', 'read-only-formulas': 'st-fx', 'edit-chrome': 'st-ed' }
+const PREFIXES: Readonly<Record<SelftestScenario, string>> = { 'read-only': 'st-ro', 'read-only-formulas': 'st-fx', 'edit-chrome': 'st-ed', 'enter-exit': 'st-ee' }
 
 /** 造这个场景的样本与账户，取出它那一步（与驱动脚本同样的步骤） */
 async function stepOf(scenario: SelftestScenario): Promise<SelftestStep> {
@@ -51,12 +52,14 @@ async function stepOf(scenario: SelftestScenario): Promise<SelftestStep> {
 test.describe('US-M2-11 页面自检（真实 Safari 复核用）在 Playwright 的浏览器里每项都通过', { tag: '@test-build' }, () => {
   for (const scenario of SELFTEST_SCENARIOS) {
     test(`场景 ${scenario}`, async ({ page }, testInfo) => {
-      const report = await runSelftest(page, await stepOf(scenario))
+      const step = await stepOf(scenario)
+      const report = await runSelftest(page, step)
       await testInfo.attach('selftest-report', { body: JSON.stringify(report, null, 2), contentType: 'application/json' })
       expect(report.scenario).toBe(scenario)
       expect(report.page).toMatchObject({ state: 'ready', readOnly: scenario !== 'edit-chrome' })
       expect(report.checks.length, '有检查').toBeGreaterThan(0)
       expect(problemsOf(report)).toEqual([])
+      expect((await serverProblemsOf(step)).problems, '服务器上的文档').toEqual([])
     })
   }
 })

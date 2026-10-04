@@ -35,8 +35,12 @@ async function gzipBase64Url(text: string): Promise<string> {
 }
 
 describe('页面自检的结果：编码与解开', () => {
-  it('编码之后只有地址里不用转义的字符，解开之后与原来的相同（含中文与 formulaValues）', async () => {
-    const original = report({ formulaValues: { 'sheet-1!G2': '苹果-12', 'sheet-1!B7': 70 }, consoleErrors: ['警告：一段很长的文字'.repeat(40)] })
+  it('编码之后只有地址里不用转义的字符，解开之后与原来的相同（含中文、formulaValues 与切换的耗时）', async () => {
+    const original = report({
+      formulaValues: { 'sheet-1!G2': '苹果-12', 'sheet-1!B7': 70 },
+      consoleErrors: ['警告：一段很长的文字'.repeat(40)],
+      timings: [{ id: 'switch.enter', ms: { ready: 431.2, steady: 3390, content: null } }],
+    })
     const encoded = await encodeSelftestReport(original)
     expect(encoded).toMatch(/^[\w-]+$/)
     expect(await decodeSelftestReport(encoded)).toEqual(original)
@@ -62,6 +66,10 @@ describe('页面自检的结果：编码与解开', () => {
     ['页面的状态不认识', { page: { state: 'unknown' } }],
     ['页面错误不是字符串', { pageErrors: [1] }],
     ['formulaValues 不是对象', { formulaValues: [] }],
+    ['timings 不是数组', { timings: {} }],
+    ['某项计时缺了 id', { timings: [{ ms: {} }] }],
+    ['计时里有不是数字的值', { timings: [{ id: 'switch.enter', ms: { ready: '431' } }] }],
+    ['计时里有不是有限的数', { timings: [{ id: 'switch.enter', ms: { ready: Number.NaN } }] }],
     ['failure 不是字符串', { failure: 1 }],
   ])('字段不对时拒绝：%s', (_case, overrides) => {
     expect(() => parseSelftestReport({ ...report(), ...overrides })).toThrow(SelftestReportError)
@@ -80,8 +88,8 @@ describe('页面自检的结果：什么算通过', () => {
     expect(selftestPassed(report({ failure: '编辑器页没有就绪' }))).toBe(false)
   })
 
-  it('场景只认登记的三个', () => {
-    expect(['read-only', 'read-only-formulas', 'edit-chrome'].every(isSelftestScenario)).toBe(true)
+  it('场景只认登记的四个', () => {
+    expect(['read-only', 'read-only-formulas', 'edit-chrome', 'enter-exit'].every(isSelftestScenario)).toBe(true)
     expect(isSelftestScenario('editing')).toBe(false)
   })
 })
