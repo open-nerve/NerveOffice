@@ -118,10 +118,12 @@ export const ARTIFACT_POLICY: ArtifactPolicy = {
   ],
   /**
    * 出现即违规的关键字（不区分大小写；只扫描生产构建 apps/web/dist）：Pro、许可证校验、第三方统计与遥测上报；
-   * 以及编辑器的 E2E 探针挂在 window 上的名字（M2-P3 设计 §3.7）与页面自检结果的格式标识（M3-P2 设计 §3.5，
-   * editor/testing/selftest-report.ts 的 SELFTEST_REPORT_FORMAT）：它们只在测试构建里（dist-e2e），生产构建里连名字都不能有
+   * 以及编辑器的 E2E 探针挂在 window 上的名字（M2-P3 设计 §3.7）、页面自检结果的格式标识（M3-P2 设计 §3.5，
+   * editor/testing/selftest-report.ts 的 SELFTEST_REPORT_FORMAT）与切换的计时挂在 window 上的名字（editor/testing/switch-timing.ts 的
+   * SWITCH_TIMING_OPTIONS，M3-P2 复核 B2）：它们只在测试构建里（dist-e2e），生产构建里连名字都不能有。
+   * 测试专用的模块主要按来源认（artifacts.ts 的 TEST_ONLY_SOURCES），这几个名字是兜底
    */
-  forbiddenKeywords: ['univerjs-pro', 'univer-pro', 'licensekey', 'license-key', 'license_key', 'posthog', 'sentry', 'google-analytics', 'googletagmanager', 'gtag(', 'mixpanel', 'grpc', 'protobuf', '__nerveEditorProbe', 'nerve-office.editor-selftest'],
+  forbiddenKeywords: ['univerjs-pro', 'univer-pro', 'licensekey', 'license-key', 'license_key', 'posthog', 'sentry', 'google-analytics', 'googletagmanager', 'gtag(', 'mixpanel', 'grpc', 'protobuf', '__nerveEditorProbe', 'nerve-office.editor-selftest', '__nerveSwitchTiming'],
 }
 
 /** 漏洞扫描的例外：GHSA 编号、原因与到期日（到期后必须重新评审）。 */
