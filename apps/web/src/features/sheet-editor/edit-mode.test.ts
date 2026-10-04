@@ -3,7 +3,7 @@ import type { EditorAccess, SheetEditor, SheetEditorLifecycle, SheetViewState } 
 import type { EditLeaseApi } from './edit-lease.ts'
 import type { EditMode, EditModeApi, EditModeOptions, EditModeState, LostMode, ReadingMode } from './edit-mode.ts'
 import type { FetchedEditStatus, LoadedContent } from './editor-api.ts'
-import { EDIT_LEASE_HEARTBEAT_SECONDS } from '@nerve-office/contracts'
+import { EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { createEditMode, EXIT_RELEASE_WAIT_MS } from './edit-mode.ts'
@@ -711,6 +711,78 @@ describe('退出编辑（M3-P2 设计 §3.4）', () => {
     await context.time.advance(5_000)
     await entering
     expect(readingOf(context.mode)).toMatchObject({ releaseUnconfirmed: false, holder: { sameUser: true } })
+  })
+
+  it('没能确认放掉的记号有时限（复验 C4）：本页不再续租，那一代至多一个有效期就到期——到期之前一直读到自己时留着；到期的那一刻立即读一次（不等 30 秒的节奏），之后读到的自己不是本页那一代，记号清掉、不再回来', async () => {
+    const context = setup({ editLease: { release: async () => Promise.reject(new NetworkError('断网')) } })
+    await editing(context)
+    context.api.editStatus.mockResolvedValue(status(3, SELF_EDITING))
+    await context.mode.exit()
+    await settle()
+    expect(readingOf(context.mode)).toMatchObject({ releaseUnconfirmed: true, holder: { sameUser: true } })
+    // 退出 10 秒之后页面隐藏又回到前台：检查的节奏改成 10、40、70、100 秒……，与到期的时刻（90 秒）错开
+    await context.time.advance(10_000)
+    context.page.set(true)
+    context.page.set(false)
+    await context.time.advance(EDIT_LEASE_TTL_SECONDS * 1000 - 10_000 - 1)
+    expect(readingOf(context.mode).releaseUnconfirmed).toBe(true)
+    const before = context.api.editStatus.mock.calls.length
+    await context.time.advance(1)
+    expect(context.api.editStatus).toHaveBeenCalledTimes(before + 1)
+    expect(readingOf(context.mode)).toMatchObject({ releaseUnconfirmed: false, holder: { sameUser: true } })
+    // 复验者的探针 P2：之后 10 分钟一直读到自己，记号不再回来
+    await context.time.advance(10 * 60_000)
+    expect(readingOf(context.mode).releaseUnconfirmed).toBe(false)
+  })
+
+  it('没能确认放掉之后又进入编辑、再退出（又没能确认）：到期从后一次退出算，前一次的计时作废（复验 C4）', async () => {
+    const context = setup({ editLease: { release: async () => Promise.reject(new NetworkError('断网')) } })
+    await editing(context)
+    context.api.editStatus.mockResolvedValue(status(3, SELF_EDITING))
+    await context.mode.exit()
+    await settle()
+    await context.time.advance(60_000)
+    await context.mode.enter()
+    expect(modeOf(context.mode).kind).toBe('editing')
+    await context.mode.exit()
+    await settle()
+    expect(readingOf(context.mode).releaseUnconfirmed).toBe(true)
+    // 前一次退出之后 90 秒（后一次之后 30 秒）：留着
+    await context.time.advance(30_000)
+    expect(readingOf(context.mode).releaseUnconfirmed).toBe(true)
+    // 后一次退出之后 90 秒：清掉
+    await context.time.advance(60_000)
+    expect(readingOf(context.mode).releaseUnconfirmed).toBe(false)
+  })
+
+  it('前一次没能确认放掉的那一代已经到期，之后又进入编辑、再退出（又没能确认）：记号重新算起，到期之前留着（复验 C4）', async () => {
+    const context = setup({ editLease: { release: async () => Promise.reject(new NetworkError('断网')) } })
+    await editing(context)
+    context.api.editStatus.mockResolvedValue(status(3, SELF_EDITING))
+    await context.mode.exit()
+    await settle()
+    await context.time.advance(EDIT_LEASE_TTL_SECONDS * 1000)
+    expect(readingOf(context.mode).releaseUnconfirmed).toBe(false)
+    await context.mode.enter()
+    expect(modeOf(context.mode).kind).toBe('editing')
+    await context.mode.exit()
+    await settle()
+    expect(readingOf(context.mode).releaseUnconfirmed).toBe(true)
+    await context.time.advance(EDIT_LEASE_TTL_SECONDS * 1000 - 1)
+    expect(readingOf(context.mode).releaseUnconfirmed).toBe(true)
+    await context.time.advance(1)
+    expect(readingOf(context.mode).releaseUnconfirmed).toBe(false)
+  })
+
+  it('没能确认放掉之后页面卸载：那一代到期的计时随之取消', async () => {
+    const context = setup({ editLease: { release: async () => Promise.reject(new NetworkError('断网')) } })
+    await editing(context)
+    await context.mode.exit()
+    await settle()
+    // 阅读时检查的计时与那一代到期的计时
+    expect(context.time.pending()).toBe(2)
+    context.mode.dispose()
+    expect(context.time.pending()).toBe(0)
   })
 
   it('有保存在途：等它有了结果再看要不要保存；存上了就退出，不重复保存', async () => {

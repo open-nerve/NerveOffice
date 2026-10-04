@@ -15,7 +15,7 @@
 // - opening：载入之后、第一个编辑器就绪之前；
 // - reading：只读的编辑器。canEdit 决定有没有"编辑"；holder 是正在编辑的人（编辑状态或申请被占用时给出）；update 是服务端有没有
 //   更新的版本（loading 时正在按它重建，这期间不能进入编辑，审查 A1）；gone 是这份文档读不到了；notice 是上一次操作留下的说明；
-//   releaseUnconfirmed 是本页刚退出编辑、没能确认放掉编辑权（审查 A13）。阅读时读编辑状态：进入阅读时立即一次，之后每 30 秒一次
+//   releaseUnconfirmed 是本页刚退出编辑、没能确认放掉编辑权（审查 A13；至多一个有效期，复验 C4）。阅读时读编辑状态：进入阅读时立即一次，之后每 30 秒一次
 //   （页面隐藏、会话不是本人时暂停，回到前台、回到本人时立即读一次）；
 // - entering：申请编辑权、按需要取最新的内容、重建为可编辑（交互屏障挡住期间的输入）；
 // - editing：可编辑的编辑器与保存的状态机；
@@ -36,6 +36,7 @@ import type { CreateModeEditor, EditorSurface } from './editor-slot.ts'
 import type { LostCopy } from './lost-copy.ts'
 import type { PageVisibility, ReadingCheckResult } from './reading-checks.ts'
 import type { CompressSnapshot, SaveCoordinator, SaveRequest, SaveView } from './save-coordinator.ts'
+import { EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
 import { isAuthenticationError, isCsrfTokenError, isNotFoundError, isPermissionDeniedError } from '../../shared/api/index.ts'
 import { acquireEditLease, leaseHolderOf, leaseLossOf } from './edit-lease.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
@@ -87,7 +88,8 @@ export interface ReadingMode {
   /**
    * 本页刚退出编辑，没能确认放掉编辑权（释放的结果未知、超过了等待的上限）：那一代可能还在服务端，至多一个有效期后自行到期。
    * 这期间编辑状态里"自己在别处编辑"多半就是本页的那一代（同一个 clientInstanceId，再点"编辑"就能进入），页面按此说明，
-   * 不说成另一个标签页（审查 A13）；读到持有者不是自己了随之清掉
+   * 不说成另一个标签页（审查 A13）；读到持有者不是自己了随之清掉。有时限：退出之后过了一个有效期，那一代必然已经到期，
+   * 之后读到的"自己"一定在别处，随之清掉（复验 C4）
    */
   readonly releaseUnconfirmed: boolean
 }
@@ -265,6 +267,10 @@ export function createEditMode(options: EditModeOptions): EditMode {
   let lostCopy: LostCopy | undefined
   /** 正在新建可编辑的编辑器（进入编辑、直接进入编辑的打开）：这期间得知的失效等编辑器建好、进入编辑之后再处理 */
   let pendingLoss: LeaseLoss | undefined
+  /** 本页最近一次退出编辑没能确认放掉的那一代必然已经到期（watchUnconfirmedRelease）：之后的检查读到"自己在编辑"不再是本页那一代 */
+  let unconfirmedExpired = false
+  /** 取消那一代到期的计时 */
+  let cancelUnconfirmedExpiry: (() => void) | undefined
   let generation = 0
   let session: 'active' | 'signed-out' | 'other-user' = 'active'
   let disposed = false
@@ -347,8 +353,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
         gone: false,
         // 进入编辑时的"不能编辑了"在又能编辑之后不再成立
         notice: reading.notice?.kind === 'denied' && status.canEdit ? undefined : reading.notice,
-        // 持有者不再是自己：本页那一代已经不在了
-        releaseUnconfirmed: reading.releaseUnconfirmed && holder?.sameUser === true,
+        // 持有者不再是自己：本页那一代已经不在了；那一代必然已经到期之后读到的自己也不是它（复验 C4）
+        releaseUnconfirmed: reading.releaseUnconfirmed && holder?.sameUser === true && !unconfirmedExpired,
       })
     }
     else if (isNotFoundError(result.error)) {
@@ -424,6 +430,25 @@ export function createEditMode(options: EditModeOptions): EditMode {
   function dropLease(): void {
     void lease?.release()
     lease = undefined
+  }
+
+  /**
+   * 退出编辑释放之后（复验 C4）：没能确认放掉时开始计时——本页不再续租，那一代的有效期从最后一次续租算，至多 EDIT_LEASE_TTL_SECONDS
+   * 就到期。到了这个时刻立即读一次编辑状态（在途的那一次作废），按到期之后的回答清掉 releaseUnconfirmed：不在这里直接清掉，免得
+   * 先拿到期之前读到的持有者说成"另一个标签页"，读屏随即播报一句过时的话。确认放掉了、或者又退出了一次时，之前的计时作废
+   */
+  function watchUnconfirmedRelease(released: boolean): void {
+    cancelUnconfirmedExpiry?.()
+    cancelUnconfirmedExpiry = undefined
+    unconfirmedExpired = false
+    if (released)
+      return
+    cancelUnconfirmedExpiry = clock.schedule(() => {
+      cancelUnconfirmedExpiry = undefined
+      unconfirmedExpired = true
+      if (!disposed && mode.kind === 'reading' && mode.releaseUnconfirmed)
+        checks.checkNow()
+    }, EDIT_LEASE_TTL_SECONDS * 1000)
   }
 
   /** 释放手里的编辑权，至多等 EXIT_RELEASE_WAIT_MS：服务端确认了为 true，结果未知、到了时限为 false（照样往下走） */
@@ -778,6 +803,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
       if (!still(token))
         return
       lease = undefined
+      watchUnconfirmedRelease(released)
       const revision = saver.baseRevision()
       const created = await slot.replace('read', snapshot)
       if (!still(token))
@@ -923,6 +949,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
       disposed = true
       generation += 1
       checks.dispose()
+      cancelUnconfirmedExpiry?.()
+      cancelUnconfirmedExpiry = undefined
       void lease?.release()
       lease = undefined
       disposeCoordinator()
