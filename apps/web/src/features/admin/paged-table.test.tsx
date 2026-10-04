@@ -173,6 +173,29 @@ describe('PagedTable', () => {
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
+  it('没能刷新、按"重试"成功之后说明连同"重试"一起消失：焦点交给表格，不落到 body（规范 §2.4）；刷新之后变成空的也交给空的说明', async () => {
+    const fetchPage = vi.fn<FetchPage>(async () => ({ items: items('甲'), nextCursor: null }))
+    const { client } = renderTable(fetchPage)
+    const table = await screen.findByRole('table', { name: '条目列表' })
+    fetchPage.mockRejectedValueOnce(new ApiError(500, 'INTERNAL_ERROR', 'x'))
+    await act(async () => client.invalidateQueries({ queryKey: ['items'] }))
+    const retry = within(await screen.findByRole('alert')).getByRole('button', { name: '重试' })
+    retry.focus()
+    fetchPage.mockResolvedValueOnce({ items: items('乙'), nextCursor: null })
+    fireEvent.click(retry)
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+    expect(document.activeElement).toBe(table)
+
+    fetchPage.mockRejectedValueOnce(new ApiError(500, 'INTERNAL_ERROR', 'x'))
+    await act(async () => client.invalidateQueries({ queryKey: ['items'] }))
+    const again = within(await screen.findByRole('alert')).getByRole('button', { name: '重试' })
+    again.focus()
+    fetchPage.mockResolvedValueOnce({ items: [], nextCursor: null })
+    fireEvent.click(again)
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+    expect(document.activeElement).toBe(screen.getByText('没有条目'))
+  })
+
   it('加载下一页失败：照旧只说原因（在表格下方），不说成"没能刷新"', async () => {
     const fetchPage = vi.fn<FetchPage>(async (cursor) => {
       if (cursor === null)
