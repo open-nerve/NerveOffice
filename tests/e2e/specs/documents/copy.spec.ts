@@ -4,7 +4,7 @@
 import { createDocument, createDocumentIn, createFolderIn, createTeamSpace, createUser, grantDocument, grantsOn, withDatabase } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openEditor, saveAndWait, savedContent, typeInCell, waitForEditor } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openAndEnterEditing, saveAndWait, savedContent, typeInCell, waitForEditor } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -14,7 +14,7 @@ test.describe('US-M2-08 复制文档', () => {
     const owner = await createUser('copy-owner')
     await loginThroughApi(page, owner)
     const sourceId = await createSheetThroughApi(page, '报价单')
-    await openEditor(page, sourceId)
+    await openAndEnterEditing(page, sourceId)
     await typeInCell(page, 'A1', '共同的内容')
     await saveAndWait(page)
 
@@ -36,7 +36,7 @@ test.describe('US-M2-08 复制文档', () => {
     expect(cellOf((await savedContent(page, copyId)).snapshot, 'A1')?.v).toBe('共同的内容')
 
     // 在副本里改一处并保存：源不受影响
-    await openEditor(page, copyId)
+    await openAndEnterEditing(page, copyId)
     await typeInCell(page, 'B1', '只在副本里')
     await saveAndWait(page)
     const source = await savedContent(page, sourceId)
@@ -44,7 +44,7 @@ test.describe('US-M2-08 复制文档', () => {
     expect(cellOf(source.snapshot, 'B1')?.v).toBeUndefined()
 
     // 再在源里改一处并保存：副本不受影响
-    await openEditor(page, sourceId)
+    await openAndEnterEditing(page, sourceId)
     await typeInCell(page, 'C1', '只在源里')
     await saveAndWait(page)
     const copy = await savedContent(page, copyId)
@@ -134,7 +134,7 @@ test.describe('US-M2-08 只凭单独授权在"与我共享"里复制与改名（
 
     // 源里先写一份内容（空间管理员在编辑器里保存）
     await loginThroughApi(anotherDevice, lead)
-    await openEditor(anotherDevice, sourceId)
+    await openAndEnterEditing(anotherDevice, sourceId)
     await typeInCell(anotherDevice, 'A1', '共同的内容')
     await saveAndWait(anotherDevice)
 
@@ -165,7 +165,7 @@ test.describe('US-M2-08 只凭单独授权在"与我共享"里复制与改名（
     expect(await grantsOn(sourceId)).toEqual({ [reader.username]: 'viewer' })
 
     // 打开副本：内容与源一致；在副本里改一处并保存，源不受影响
-    await openEditor(page, copyId)
+    await openAndEnterEditing(page, copyId)
     expect(cellOf((await savedContent(page, copyId)).snapshot, 'A1')?.v).toBe('共同的内容')
     await typeInCell(page, 'B1', '只在副本里')
     await saveAndWait(page)
@@ -174,7 +174,7 @@ test.describe('US-M2-08 只凭单独授权在"与我共享"里复制与改名（
     expect(cellOf(source.snapshot, 'B1')?.v).toBeUndefined()
 
     // 源里再改一处并保存：副本不受影响
-    await openEditor(anotherDevice, sourceId)
+    await openAndEnterEditing(anotherDevice, sourceId)
     await typeInCell(anotherDevice, 'C1', '只在源里')
     await saveAndWait(anotherDevice)
     const copy = await savedContent(page, copyId)

@@ -7,7 +7,7 @@ import type { Page } from '@playwright/test'
 import { createUser, editLeaseEpoch, expireEditLease } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { blockLeaseRenewals, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
+import { blockLeaseRenewals, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openAndEnterEditing, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -16,7 +16,7 @@ test.describe('US-M3-11 编辑权中断、期间没人保存过：自动续上�
   test('编辑权到期、没人接手（改写租约行的时间）：保存时（或者心跳先一步）续上新的一代，保存成功，不出现失效的说明', async ({ page }) => {
     await loginThroughApi(page, await createUser('recover-expired'))
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     const before = await editLeaseEpoch(documentId)
     await typeInCell(page, 'A1', 'after expiry')
 
@@ -36,7 +36,7 @@ test.describe('US-M3-11 编辑权中断、期间没人保存过：自动续上�
     const owner = await createUser('recover-relogin')
     await loginThroughApi(page, owner)
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     const before = await editLeaseEpoch(documentId)
     await typeInCell(page, 'A1', 'after relogin')
 
@@ -62,7 +62,7 @@ test.describe('US-M3-11 编辑权中断、期间没人保存过：自动续上�
  * 返回打开时编辑权的代次
  */
 async function saveWithLostReply(page: Page, documentId: string): Promise<number> {
-  await openEditor(page, documentId)
+  await openAndEnterEditing(page, documentId)
   const epoch = await editLeaseEpoch(documentId) ?? 0
   await page.route('**/api/documents/*/content?*', async (route) => {
     if (route.request().method() !== 'PUT') {

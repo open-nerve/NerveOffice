@@ -4,7 +4,7 @@ import { SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { createDocument, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { appendSheet, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openCellEditor, openEditor, saveAndWait, saveButton, savedContent, saveStatus, selectCell, typeInCell } from '../../support/sheet.ts'
+import { appendSheet, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openAndEnterEditing, openCellEditor, saveAndWait, saveButton, savedContent, saveStatus, selectCell, typeInCell } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -35,7 +35,7 @@ async function wouldPromptOnLeave(page: Page): Promise<boolean> {
 async function openNewSheet(page: Page, prefix: string): Promise<string> {
   await loginThroughApi(page, await createUser(prefix))
   const documentId = await createSheetThroughApi(page)
-  await openEditor(page, documentId)
+  await openAndEnterEditing(page, documentId)
   return documentId
 }
 
@@ -213,7 +213,7 @@ test.describe('US-M1-05 保存到云端，看到真实的保存状态', () => {
     const owner = await createUser('save-during-calculation')
     const documentId = await createDocument(owner, '计算中再改', sheetWithSlowFormulas)
     await loginThroughApi(page, owner)
-    await openEditor(page, documentId, 'steady')
+    await openAndEnterEditing(page, documentId, 'steady')
     // 两处的脏区不相交，SDK 不停下这一轮，而是算完之后再开始下一轮（录制的序列见单元测试的 EDIT_DURING_CALCULATION）
     await typeInCell(page, 'D1', '1000')
     await typeInCell(page, 'D2', '2000')

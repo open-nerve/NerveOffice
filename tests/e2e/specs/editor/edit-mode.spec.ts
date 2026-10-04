@@ -6,7 +6,7 @@ import type { Page } from '@playwright/test'
 import { archiveSpace, createDocumentIn, createTeamSpace, createUser, withDatabase } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { appendSheet, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditing, exitEditing, lostNotice, openEditor, saveAndWait, saveButton, savedContent, saveStatus, sheetTab, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { appendSheet, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditing, exitEditing, lostNotice, openAndEnterEditing, saveAndWait, saveButton, savedContent, saveStatus, sheetTab, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -44,7 +44,7 @@ test.describe('阅读与编辑的切换保留视图（M3-P2 设计 §3.3）', { 
     await loginThroughApi(page, await createUser('view-state'))
     const documentId = await createSheetThroughApi(page)
     // 两张表：在第二张表上往下、往右滚（第 41 行在最上面；列数不多，往右滚到头时 SDK 按能滚到的最远处停），选中 K45:L47
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     await appendSheet(page)
     await expect(sheetTab(page, '工作表2')).toHaveAttribute('aria-selected', 'true')
     await saveAndWait(page)
@@ -79,7 +79,7 @@ test.describe('US-M3-12 失去编辑权之后另存为副本（M3-P2 设计 §3.
     const space = await createTeamSpace('会被归档', lead, [[lead, 'admin'], [editor, 'editor']])
     const documentId = await createDocumentIn(space.id, lead, '共同的表')
     await loginThroughApi(page, editor)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     await typeInCell(page, 'A1', '本页的修改')
     await archiveSpace(space.id)
 

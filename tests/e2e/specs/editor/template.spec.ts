@@ -5,7 +5,7 @@ import { sheetSnapshotFor } from '@nerve-office/contracts'
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openEditor, saveAndWait, savedContent, selectCell, typeInCell } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openAndEnterEditing, saveAndWait, savedContent, selectCell, typeInCell } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -23,7 +23,7 @@ test.describe('US-M1-06 新建的表格用收敛的模板', () => {
     await loginThroughApi(page, await createUser('template-converges'))
     const documentId = await createSheetThroughApi(page)
     const created = await savedContent(page, documentId)
-    await openEditor(page, documentId, 'steady')
+    await openAndEnterEditing(page, documentId, 'steady')
     await saveAndWait(page)
     const saved = await savedContent(page, documentId)
     expect(saved.revision).toBe(2)
@@ -36,7 +36,7 @@ test.describe('US-M1-09 M5 之前没有图片与超链接的入口', () => {
   test('插入菜单与右键菜单里没有图片、链接与保护；Ctrl/Cmd+K 没有反应', async ({ page }) => {
     await loginThroughApi(page, await createUser('guards-menus'))
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId, 'steady')
+    await openAndEnterEditing(page, documentId, 'steady')
     await page.getByRole('tab', { name: '插入', exact: true }).click()
     const toolbar = page.getByRole('toolbar', { name: '插入' })
     await expect(toolbar).toBeVisible()
@@ -58,7 +58,7 @@ test.describe('US-M1-09 M5 之前没有图片与超链接的入口', () => {
   test('键入网址：SDK 自动识别为链接，地址是键入的原文，没有协议时补 https://（不经入口守卫，DEF-021）；普通文字不变', async ({ page }) => {
     await loginThroughApi(page, await createUser('guards-autolink'))
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId, 'steady')
+    await openAndEnterEditing(page, documentId, 'steady')
     await typeInCell(page, 'A1', 'https://example.com/page')
     await typeInCell(page, 'A3', 'example.com')
     await typeInCell(page, 'A5', 'plain text')
@@ -74,7 +74,7 @@ test.describe('US-M1-09 M5 之前没有图片与超链接的入口', () => {
   test('键入邮箱、粘贴纯文本的网址：同样被识别为链接，地址是原文（邮箱写成 mailto://，粘贴的不补协议；DEF-021）', async ({ page }) => {
     await loginThroughApi(page, await createUser('guards-autolink-paste'))
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId, 'steady')
+    await openAndEnterEditing(page, documentId, 'steady')
     await typeInCell(page, 'A1', 'user@example.com')
     for (const [cell, text] of [['C1', 'example.org'], ['C2', 'https://paste.example/p?q=1']] as const) {
       await selectCell(page, cell)
@@ -95,7 +95,7 @@ test.describe('US-M1-09 M5 之前没有图片与超链接的入口', () => {
   test('粘贴图片文件：不产生图片', async ({ page }) => {
     await loginThroughApi(page, await createUser('guards-paste'))
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId, 'steady')
+    await openAndEnterEditing(page, documentId, 'steady')
     await selectCell(page, 'C3')
     await page.evaluate((base64) => {
       const bytes = Uint8Array.from(atob(base64), character => character.charCodeAt(0))

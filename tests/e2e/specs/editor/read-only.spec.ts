@@ -38,7 +38,7 @@ import { deleteDrawingKey, featureSearchKeys, pressUniverShortcut, quickSumKeys 
 import { SAMPLE_CELLS, SAMPLE_FORMULAS, SAMPLE_SHEETS, sampleWithoutFormulaValuesFor } from '../../support/read-only-sample.ts'
 import { ALERT, closePermissionAlert, documentChangeAttempts, expectUnchanged, FACADE_ENTRIES, FORMULA_MUTATION_CELL, LOOK_ONCE, nextFrames, OPENED, openReadOnly, permissionAlert, scene, SHORTCUT_OUTCOMES, unitIdOf, watch, writeFormulaMutation } from '../../support/read-only.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { EDITOR_TEST_TIMEOUT, openEditor, resourceOf, saveButton, savedContent, selectCell, sheetCanvas, sheetTab, waitForEditorAccess } from '../../support/sheet.ts'
+import { EDITOR_TEST_TIMEOUT, openAndEnterEditing, resourceOf, saveButton, savedContent, selectCell, sheetCanvas, sheetTab, waitForEditorAccess } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -730,7 +730,7 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
     // 对照：能编辑时这些入口都在，下面只读时的"没有"才不是空断言
     const authorWatched = watch(anotherDevice, s.documentId)
     await loginThroughApi(anotherDevice, s.author)
-    await openEditor(anotherDevice, s.documentId, OPENED)
+    await openAndEnterEditing(anotherDevice, s.documentId, OPENED)
     await expectEditingChrome(anotherDevice, 'edit')
     expect(authorWatched.pageErrors).toEqual([])
 
@@ -812,7 +812,7 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
     const s = await scene('ro-formula-write')
     // 对照：能编辑时这条 mutation 照常执行，执行之前 SDK 先写了嵌套的那条（只读时要在它之前就取消）
     await loginThroughApi(anotherDevice, s.author)
-    await openEditor(anotherDevice, s.documentId, OPENED)
+    await openAndEnterEditing(anotherDevice, s.documentId, OPENED)
     const authorMark = await commandMark(anotherDevice)
     expect(await runFacade(anotherDevice, writeFormulaMutation)).toEqual({})
     await waitForCommand(anotherDevice, authorMark, { phase: 'executed', id: 'sheet.mutation.set-range-values', flags: [] })
@@ -855,7 +855,7 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
   test('对照：能编辑时，撤销与重做的快捷键确实撤销与重做', async ({ page }) => {
     const s = await scene('ro-ctl-undo')
     await loginThroughApi(page, s.author)
-    await openEditor(page, s.documentId, OPENED)
+    await openAndEnterEditing(page, s.documentId, OPENED)
     const opened = contentOf(await probeSnapshot(page))
     await clickCell(page, 'A2')
     await step(page, 'edit', async () => pressUniverShortcut(page, 'B'), { edit: { executed: 'sheet.command.set-style' } })
@@ -976,7 +976,7 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
   test('归档空间里的文档：空间管理员打开同样只读（只能查看、没有工具栏、键入无效）', async ({ page }) => {
     const s = await scene('ro-archive')
     await loginThroughApi(page, s.author)
-    await openEditor(page, s.documentId, OPENED)
+    await openAndEnterEditing(page, s.documentId, OPENED)
     // 归档之前：空间管理员能编辑
     await expect(saveButton(page)).toBeVisible()
     await archiveSpace(s.spaceId)
@@ -1000,7 +1000,7 @@ type Change = 'changed' | 'unchanged'
 
 /** 作者（能编辑）打开样本，做这一项：内存里的内容有没有变 */
 async function changeWhenEditable(page: Page, s: Scene, entry: Entry): Promise<Change> {
-  await openEditor(page, s.documentId, OPENED)
+  await openAndEnterEditing(page, s.documentId, OPENED)
   const opened = contentOf(await probeSnapshot(page))
   await entry.run(page, 'edit')
   return JSON.stringify(contentOf(await probeSnapshot(page))) === JSON.stringify(opened) ? 'unchanged' : 'changed'

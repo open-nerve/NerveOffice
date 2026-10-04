@@ -4,7 +4,7 @@ import { createUser } from '../../support/database.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openEditor, saveAndWait, savedContent, selectCell, typeInCell } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openAndEnterEditing, openReader, saveAndWait, savedContent, selectCell, typeInCell } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -22,7 +22,7 @@ test.describe('US-M1-09 编辑器在定稿的 CSP 下工作', () => {
       if (/^\/documents\/|^\/assets\/(?:editor|formula\.worker)-[\w-]+\.js$/.test(path))
         policies.set(path, response.headers()['content-security-policy'])
     })
-    await openEditor(page, documentId)
+    await openReader(page, documentId)
     const paths = [...policies.keys()]
     expect(paths.some(path => path.startsWith('/documents/'))).toBe(true)
     expect(paths.some(path => path.startsWith('/assets/editor-'))).toBe(true)
@@ -34,7 +34,7 @@ test.describe('US-M1-09 编辑器在定稿的 CSP 下工作', () => {
   test('键入值与公式、加粗、打开菜单：没有违规，公式由 Worker 算出', async ({ page }) => {
     await loginThroughApi(page, await createUser('editor-csp-edit'))
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId, 'steady')
+    await openAndEnterEditing(page, documentId, 'steady')
     await typeInCell(page, 'A1', '20')
     await typeInCell(page, 'A2', '=A1+22')
     await selectCell(page, 'A1')
@@ -55,7 +55,7 @@ test.describe('US-M1-09 编辑器在定稿的 CSP 下工作', () => {
       if (!request.url().startsWith('data:') && new URL(request.url()).origin !== e2eOrigin())
         external.push(request.url())
     })
-    await openEditor(page, documentId, 'steady')
+    await openAndEnterEditing(page, documentId, 'steady')
     await typeInCell(page, 'A1', '=IMAGE("https://example.com/picture.png")')
     await saveAndWait(page)
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')).toMatchObject({ v: '#VALUE!' })

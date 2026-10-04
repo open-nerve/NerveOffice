@@ -15,7 +15,7 @@ import { createDocument, createDocumentIn, createFolderIn, createTeamSpace, crea
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { EDITOR_TEST_TIMEOUT, editorSurface, openEditor, openReader, saveButton, saveStatus, typeInCell, waitForEditor } from '../../support/sheet.ts'
+import { EDITOR_TEST_TIMEOUT, editorSurface, openAndEnterEditing, openReader, saveButton, saveStatus, typeInCell, waitForEditor } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -125,7 +125,7 @@ test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
     const documentId = await createDocument(owner, '会被降级的表')
     await grantDocument(documentId, me, 'editor', owner)
     await loginThroughApi(page, me)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     await expect(saveButton(page)).toBeVisible()
     await typeInCell(page, 'A1', '降级之后写的')
 
@@ -157,7 +157,7 @@ test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
     await loginThroughApi(page, me)
     await page.goto(`/spaces/${space.id}`)
     await expect(page.getByText('我的角色：编辑者')).toBeVisible()
-    await openEditor(page, workingId)
+    await openAndEnterEditing(page, workingId)
     await typeInCell(page, 'A1', '移出之后写的')
 
     // 空间管理员在另一台设备上把我移出
@@ -197,7 +197,7 @@ test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
     const documentId = await createDocument(owner, '停用之前分享的表')
     await grantDocument(documentId, me, 'editor', owner)
     await loginThroughApi(page, me)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     await expect(saveButton(page)).toBeVisible()
     await typeInCell(page, 'A1', '停用之后写的')
 

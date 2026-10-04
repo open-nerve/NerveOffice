@@ -6,7 +6,7 @@ import type { Workbook } from '../../support/sheet.ts'
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, editorSurface, enterEditing, hoverCell, leaveEditor, openEditor, reloadAndEnterEditing, resourceOf, saveAndWait, savedContent, saveStatus, selectCell, sheetCanvas, typeInCell, waitForEditor, waitForEditorAccess } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, editorSurface, enterEditing, hoverCell, leaveEditor, openAndEnterEditing, reloadAndEnterEditing, resourceOf, saveAndWait, savedContent, saveStatus, selectCell, sheetCanvas, typeInCell, waitForEditor, waitForEditorAccess } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -47,7 +47,7 @@ test.describe('US-M1-06 重开看到最后一次保存的内容', () => {
   test('保存后刷新：值、公式与格式一致，打开到 steady 之后仍是已保存', async ({ page }) => {
     await loginThroughApi(page, await createUser('reopen-refresh'))
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     const saved = await editAndSave(page, documentId)
     await reloadAndEnterEditing(page, 'steady')
     await expect(saveStatus(page)).toHaveText('已保存到云端')
@@ -58,7 +58,7 @@ test.describe('US-M1-06 重开看到最后一次保存的内容', () => {
     const owner = await createUser('reopen-relogin')
     await loginThroughApi(page, owner)
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     const saved = await editAndSave(page, documentId)
     await page.getByRole('link', { name: '我的空间' }).click()
     await page.getByRole('button', { name: '退出', exact: true }).click()
@@ -74,7 +74,7 @@ test.describe('US-M1-06 重开看到最后一次保存的内容', () => {
   test('没有保存的修改：离开之后不出现', async ({ page }) => {
     await loginThroughApi(page, await createUser('reopen-unsaved'))
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     const saved = await editAndSave(page, documentId)
     await typeInCell(page, 'B1', 'not saved')
     await expect(saveStatus(page)).toHaveText('有未保存的修改')
@@ -88,7 +88,7 @@ test.describe('US-M1-06 重开看到最后一次保存的内容', () => {
   test('重开时就绪之前改不了批注：悬停不弹出浮层、键入无效；就绪之后悬停照常弹出（Codex 评审 CX1，独立复验 N1）', async ({ page }) => {
     await loginThroughApi(page, await createUser('reopen-note'))
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     // 先加一条批注并保存：Univer 的批注浮层挂在 body 下，不在编辑器的容器里
     await selectCell(page, 'D4', { button: 'right' })
     await page.getByRole('button', { name: '添加批注' }).click()
@@ -139,7 +139,7 @@ test.describe('US-M1-06 重开看到最后一次保存的内容', () => {
   test('重开时就绪之前按 Tab 与 Ctrl/Cmd+R：浏览器照常处理，表格收不到，内容不变（第二轮复验）', async ({ page }) => {
     await loginThroughApi(page, await createUser('reopen-keys'))
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     await typeInCell(page, 'A1', 'X')
     await typeInCell(page, 'B1', 'keep')
     await saveAndWait(page)

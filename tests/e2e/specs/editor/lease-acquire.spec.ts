@@ -5,7 +5,7 @@
 import { createUser, editLeaseEndReason, editLeaseEpoch } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, editingNotice, EDITOR_TEST_TIMEOUT, openEditor, reloadAndEnterEditing, saveAndWait, saveButton, savedContent, typeInCell } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, editingNotice, EDITOR_TEST_TIMEOUT, openAndEnterEditing, reloadAndEnterEditing, saveAndWait, saveButton, savedContent, typeInCell } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -25,7 +25,7 @@ test.describe('US-M3-04 同一个人在多个标签页：打开、刷新与关�
       await route.fetch()
       await route.abort('connectionreset')
     })
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     await expect(saveButton(page)).toBeVisible()
     await expect(editingNotice(page)).toHaveCount(0)
     // 服务端：第一次申请取得了一代；再试是同一个页面的重试，发了新的一代，取代没人用的那一代
@@ -39,13 +39,13 @@ test.describe('US-M3-04 同一个人在多个标签页：打开、刷新与关�
     await loginThroughApi(page, await createUser('close-releases'))
     const documentId = await createSheetThroughApi(page)
     const editor = await context.newPage()
-    await openEditor(editor, documentId)
+    await openAndEnterEditing(editor, documentId)
     await expect(saveButton(editor)).toBeVisible()
     expect(await editLeaseEndReason(documentId)).toBeNull()
 
     await editor.close()
     await expect.poll(async () => editLeaseEndReason(documentId)).toBe('released')
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     await expect(saveButton(page)).toBeVisible()
     await expect(editingNotice(page)).toHaveCount(0)
   })
@@ -53,7 +53,7 @@ test.describe('US-M3-04 同一个人在多个标签页：打开、刷新与关�
   test('US-M3-04 刷新：刷新出来的页面点"编辑"立即能编辑，每次是新的一代（旧页面的释放晚到时，新页面隔一小会儿再试，P1 设计 §7 第一条）', async ({ page }) => {
     await loginThroughApi(page, await createUser('reload-keeps-editing'))
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     let epoch = await editLeaseEpoch(documentId) ?? 0
     for (let round = 0; round < 3; round += 1) {
       await reloadAndEnterEditing(page)

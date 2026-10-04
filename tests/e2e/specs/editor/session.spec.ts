@@ -8,7 +8,7 @@ import type { Page } from '@playwright/test'
 import { createUser, expireSessions } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { blockLeaseRenewals, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, isSaveRequest, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
+import { blockLeaseRenewals, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, isSaveRequest, openAndEnterEditing, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -39,7 +39,7 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     const owner = await createUser('editor-expired')
     await loginThroughApi(page, owner)
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     const renewals = await blockLeaseRenewals(page)
     const editorUrl = page.url()
     await typeInCell(page, 'A1', 'kept')
@@ -78,7 +78,7 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     const owner = await createUser('editor-check-pending')
     await loginThroughApi(page, owner)
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     await typeInCell(page, 'A1', 'waited')
     await expireSessions(owner)
     await saveButton(page).click()
@@ -105,7 +105,7 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     const owner = await createUser('editor-csrf-stale')
     await loginThroughApi(page, owner)
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     const renewals = await blockLeaseRenewals(page)
     await typeInCell(page, 'A1', 'csrf-wait')
     // 同一个人经接口重新登录：会话与令牌都换了，没有页面广播消息，本页还拿着旧的令牌
@@ -145,7 +145,7 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     const owner = await createUser('editor-csrf-offline')
     await loginThroughApi(page, owner)
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     const renewals = await blockLeaseRenewals(page)
     await typeInCell(page, 'A1', 'csrf-offline')
     const oldToken = await csrfTokenOf(page)
@@ -180,7 +180,7 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     const someoneElse = await createUser('editor-someone-else')
     await loginThroughApi(page, owner)
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     await typeInCell(page, 'A1', 'mine')
 
     const other = await context.newPage()

@@ -135,14 +135,6 @@ export async function reloadAndEnterEditing(page: Page, stage: 'ready' | 'steady
   await enterEditing(page, stage)
 }
 
-/**
- * 打开编辑器、进入编辑。M3-P2 起打开即阅读：暂时由 openAndEnterEditing 代办，原来的调用照旧是"打开就能改"的意思；
- * 只读的用例改用 openReader（S5 统一调整调用方）
- */
-export async function openEditor(page: Page, documentId: string, stage: 'ready' | 'steady' = 'ready'): Promise<void> {
-  await openAndEnterEditing(page, documentId, stage)
-}
-
 /** 在列表页点"新建表格"，整页打开编辑器页（?edit=new：刚建好的直接进入编辑，进入之后地址里去掉它）；返回新文档的 id */
 export async function createSheetThroughUi(page: Page): Promise<string> {
   await page.goto('/')

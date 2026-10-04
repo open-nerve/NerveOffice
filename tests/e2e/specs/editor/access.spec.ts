@@ -9,7 +9,7 @@ import { archiveSpace, createDocument, createDocumentIn, createTeamSpace, create
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { blockLeaseRenewals, EDITOR_TEST_TIMEOUT, editorSurface, lostNotice, openEditor, saveButton, saveStatus, typeInCell, waitForEditor, waitForEditorAccess } from '../../support/sheet.ts'
+import { blockLeaseRenewals, EDITOR_TEST_TIMEOUT, editorSurface, lostNotice, openAndEnterEditing, saveButton, saveStatus, typeInCell, waitForEditor, waitForEditorAccess } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -61,7 +61,7 @@ test.describe('US-M2-09 A14 编辑器页：打开之后文档被删除、移走�
     const owner = await createUser('save-gone')
     const documentId = await createDocument(owner, '要被删的表')
     await loginThroughApi(page, owner)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     await typeInCell(page, 'A1', '还没保存的内容')
     await deleteThroughApi(page, documentId)
     await saveButton(page).click()
@@ -75,7 +75,7 @@ test.describe('US-M2-09 A14 编辑器页：打开之后文档被删除、移走�
     const owner = await createUser('gone-clean')
     const documentId = await createDocument(owner, '没改过就被删的表')
     await loginThroughApi(page, owner)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     await deleteThroughApi(page, documentId)
     // 心跳每 10 秒一次：下一次就得知读不到了
@@ -93,7 +93,7 @@ test.describe('US-M2-09 A14 编辑器页：打开之后文档被删除、移走�
     const space = await createTeamSpace('会被移出', lead, [[lead, 'admin'], [editor, 'editor']])
     const documentId = await createDocumentIn(space.id, lead, '共同的表')
     await loginThroughApi(page, editor)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     await typeInCell(page, 'A1', '还没保存的内容')
     await removeMember(space.id, editor)
     await saveButton(page).click()
@@ -108,7 +108,7 @@ test.describe('US-M2-09 A14 编辑器页：打开之后文档被删除、移走�
     const space = await createTeamSpace('会被归档', lead, [[lead, 'admin'], [editor, 'editor']])
     const documentId = await createDocumentIn(space.id, lead, '共同的表')
     await loginThroughApi(page, editor)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     await typeInCell(page, 'A1', '还没保存的内容')
     await archiveSpace(space.id)
     await saveButton(page).click()
@@ -125,7 +125,7 @@ test.describe('US-M2-09 A14 编辑器页：打开之后文档被删除、移走�
     /** 新建一个团队空间与其中的一份表，打开它（没有任何修改）；返回空间 */
     const openUntouched = async (name: string): Promise<{ id: string }> => {
       const space = await createTeamSpace(name, lead, [[lead, 'admin'], [editor, 'editor']])
-      await openEditor(page, await createDocumentIn(space.id, lead, '没改过的表'))
+      await openAndEnterEditing(page, await createDocumentIn(space.id, lead, '没改过的表'))
       await expect(saveStatus(page)).toHaveText('已保存到云端')
       return space
     }

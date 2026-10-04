@@ -7,7 +7,7 @@ import { createUser, expireEditLease } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { pressUniverShortcut } from '../../support/keyboard.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { blockLeaseRenewals, cellOf, createSheetThroughApi, editingNotice, EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, isSaveRequest, leaveEditor, lostNotice, openEditor, openReader, saveAndWait, saveButton, savedContent, saveStatus, selectCell, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { blockLeaseRenewals, cellOf, createSheetThroughApi, editingNotice, EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, isSaveRequest, leaveEditor, lostNotice, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, saveStatus, selectCell, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -16,7 +16,7 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
   test('A 编辑时 B 只能阅读；A 的编辑权到期之后 B 点"编辑"接手保存；A 再保存被拒、保留本页的内容，服务器上是 B 的版本', async ({ page, context }) => {
     await loginThroughApi(page, await createUser('conflict'))
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     await typeInCell(page, 'A1', 'from A')
 
     // B（同一个人的另一个标签页）：打开即阅读，读到编辑状态，说明是自己在另一个标签页或设备上编辑；能编辑的人照样有"编辑"，没有保存
@@ -81,7 +81,7 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
   test('保存已经提交、回包却丢了：再保存时认出是本页自己的保存（自己追自己），不报冲突', async ({ page }) => {
     await loginThroughApi(page, await createUser('conflict-self'))
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     // 第一次保存：请求照常到达服务端并提交，浏览器却收不到回包
     await page.route('**/api/documents/*/content?*', async (route) => {
       if (route.request().method() !== 'PUT') {
@@ -107,7 +107,7 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
   test('编辑权失效之后放弃本页的修改：看到服务器上的最新版本，点"编辑"可以继续编辑保存', async ({ page, context }) => {
     await loginThroughApi(page, await createUser('conflict-reload'))
     const documentId = await createSheetThroughApi(page)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     await typeInCell(page, 'B1', 'older page')
 
     // 这一页断网、休眠，编辑权到期；另一个标签页接手、保存，然后离开（关闭页面时释放编辑权）。
@@ -115,7 +115,7 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     const asleep = await blockLeaseRenewals(page)
     await expireEditLease(documentId)
     const other = await context.newPage()
-    await openEditor(other, documentId)
+    await openAndEnterEditing(other, documentId)
     await expect(saveButton(other)).toBeVisible()
     await typeInCell(other, 'A1', 'newer')
     await saveAndWait(other)

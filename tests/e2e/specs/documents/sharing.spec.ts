@@ -16,7 +16,7 @@ import { expect, test } from '../../support/fixtures.ts'
 import { searchList } from '../../support/list-search.ts'
 import { plainName, shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, EDITOR_TEST_TIMEOUT, enterEditing, openEditor, openReader, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
+import { cellOf, EDITOR_TEST_TIMEOUT, enterEditing, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
 import { expectWrittenAfterClose, recordStatusWrites, statusWrites } from '../../support/status-writes.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
@@ -172,7 +172,7 @@ test.describe('US-M2-10 单独分享', () => {
 
     // 同事在另一台设备上打开着（能编辑）
     await loginThroughApi(anotherDevice, friend)
-    await openEditor(anotherDevice, documentId)
+    await openAndEnterEditing(anotherDevice, documentId)
     await expect(saveButton(anotherDevice)).toBeVisible()
 
     // 所有者经对话框取消
@@ -210,7 +210,7 @@ test.describe('US-M2-10 单独分享', () => {
     await page.goto(`/spaces/${space.id}`)
     await openActions(page, '部门的表')
     await expect(page.getByRole('button', { name: '分享', exact: true })).toHaveCount(0)
-    await openEditor(page, documentId)
+    await openAndEnterEditing(page, documentId)
     await expect(saveButton(page)).toBeVisible()
     await expect(page.locator('#editor-chrome').getByRole('button', { name: '分享', exact: true })).toHaveCount(0)
 
@@ -228,7 +228,7 @@ test.describe('US-M2-10 单独分享', () => {
     const colleague = await createUser('sh-editor-colleague', '同事')
     const documentId = await createDocument(owner, '编辑器里分享的表')
     await loginThroughApi(page, owner)
-    await openEditor(page, documentId, 'steady')
+    await openAndEnterEditing(page, documentId, 'steady')
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     await page.locator('#editor-chrome').getByRole('button', { name: '分享', exact: true }).click()
     const dialog = page.getByRole('dialog', { name: '分享「编辑器里分享的表」' })
@@ -267,7 +267,7 @@ test.describe('US-M2-10 单独分享', () => {
       const title = `开着对话框保存${save.outcome}的表`
       const documentId = await createDocument(owner, title)
       await loginThroughApi(page, owner)
-      await openEditor(page, documentId, 'steady')
+      await openAndEnterEditing(page, documentId, 'steady')
       await expect(saveStatus(page)).toHaveText('已保存到云端')
       await typeInCell(page, 'B2', '后台保存')
       await expect(saveStatus(page)).toHaveText('有未保存的修改')

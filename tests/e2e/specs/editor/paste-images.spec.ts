@@ -14,7 +14,7 @@ import { commandMark, probeSnapshot, waitForCommand } from '../../support/editor
 import { expect, test } from '../../support/fixtures.ts'
 import { nextFrames } from '../../support/read-only.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { createSheetThroughApi, EDITOR_TEST_TIMEOUT, openEditor, selectCell } from '../../support/sheet.ts'
+import { createSheetThroughApi, EDITOR_TEST_TIMEOUT, openAndEnterEditing, selectCell } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -72,7 +72,7 @@ async function commit(page: Page): Promise<void> {
 
 async function open(page: Page, prefix: string): Promise<void> {
   await loginThroughApi(page, await createUser(prefix))
-  await openEditor(page, await createSheetThroughApi(page), 'steady')
+  await openAndEnterEditing(page, await createSheetThroughApi(page), 'steady')
 }
 
 test.describe('在单元格编辑器与编辑栏里粘贴带图片的内容：单元格里不会有图片（DEF-035 的旁支）', { tag: '@test-build' }, () => {

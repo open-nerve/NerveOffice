@@ -5,7 +5,7 @@ import type { Page } from '@playwright/test'
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { appendSheet, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openEditor, reloadAndEnterEditing, resourceOf, ribbon, saveAndWait, savedContent, saveStatus, selectCell, selectRange, typeInCell } from '../../support/sheet.ts'
+import { appendSheet, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openAndEnterEditing, reloadAndEnterEditing, resourceOf, ribbon, saveAndWait, savedContent, saveStatus, selectCell, selectRange, typeInCell } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -18,7 +18,7 @@ const A1_TO_A3 = { startRow: 0, startColumn: 0, endRow: 2, endColumn: 0 }
 async function openNewSheet(page: Page, prefix: string): Promise<string> {
   await loginThroughApi(page, await createUser(prefix))
   const documentId = await createSheetThroughApi(page)
-  await openEditor(page, documentId, 'steady')
+  await openAndEnterEditing(page, documentId, 'steady')
   return documentId
 }
 
