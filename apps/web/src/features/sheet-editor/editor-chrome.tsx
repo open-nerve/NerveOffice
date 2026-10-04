@@ -1,6 +1,6 @@
 // 编辑器页的页头与提示（P4 设计 §3.7.3；M3-P2 设计 §3.4 的表）：返回文档所在的空间（M2-P2 设计 §3.10；只凭授权时回"与我共享"，M2-P5）、
 // 标题、分享的入口（M2-P5）、页头的状态（role="status"）与这一刻能做的事：
-// - 阅读：只能查看；能编辑时"编辑"，有人在编辑时说明是谁（是自己时说在另一个标签页或设备上）；"有更新，点击刷新"；
+// - 阅读：只能查看；能编辑时"编辑"；有人在编辑时说明是谁（能不能编辑都说，是自己时说在另一个标签页或设备上）；"有更新，点击刷新"；
 // - 进入编辑中、退出编辑中：说明正在做；
 // - 编辑：保存状态、"保存"、"退出编辑"，保存的各种结果；
 // - 失去编辑权：原因；还读得到而且有修改时"另存为副本""放弃本页的修改"（确认），没有修改时"重新加载"，读不到了时只说明。
@@ -277,18 +277,23 @@ function readingFailure(notice: ReadingNotice | undefined): ReactNode {
   }
 }
 
-/** 别处正在编辑时的说明（M3-P1 设计 §3.4.7）：谁在编辑（人名经人名组件）、最后活动几分钟之前；是自己时说在另一个标签页或设备上 */
-function elsewhereNotice(holder: LeaseHolder | undefined): ReactNode {
+/**
+ * 别处正在编辑时的说明（M3-P1 设计 §3.4.7）：谁在编辑（人名经人名组件）、最后活动几分钟之前；能编辑的人另说现在只能阅读。
+ * 是自己、而且现在能编辑时说在另一个标签页或设备上（到时再点"编辑"就能编辑）；不能编辑了时自己那一代已经失效（持有者要能编辑），
+ * 只是还没读到新的编辑状态，照别人一样说谁在编辑，不提"再点编辑"
+ */
+function elsewhereNotice(holder: LeaseHolder | undefined, canEdit: boolean): ReactNode {
   if (holder === undefined)
     return editorMessages.editing.elsewhereUnknown
-  if (holder.sameUser)
+  if (holder.sameUser && canEdit)
     return editorMessages.editing.elsewhereBySelf
   const lastActive = holder.lastActiveMinutes === undefined ? undefined : editorMessages.editing.lastActive(holder.lastActiveMinutes)
-  return <Phrase parts={editorMessages.editing.elsewhere(<PersonName person={holder.holder} />, lastActive)} />
+  return <Phrase parts={editorMessages.editing.elsewhere(<PersonName person={holder.holder} />, lastActive, canEdit)} />
 }
 
 /**
- * 阅读时的说明，放进一直在的读屏状态区（规范 §2.4）：谁在编辑（能编辑时，P2 的定期检查会让它变化）、文档读不到了、另存为副本成功
+ * 阅读时的说明，放进一直在的读屏状态区（规范 §2.4）：谁在编辑（能不能编辑都说：US-M3-04 的"其他人"包括查看者，编辑状态能读就能看；
+ * P2 的定期检查会让它变化）、文档读不到了、另存为副本成功
  */
 function readingInfo(reading: ReadingMode | undefined): ReactNode {
   if (reading === undefined)
@@ -296,8 +301,8 @@ function readingInfo(reading: ReadingMode | undefined): ReactNode {
   const lines: ReactNode[] = []
   if (reading.gone)
     lines.push(<span key="gone">{editorMessages.mode.gone}</span>)
-  else if (reading.canEdit && reading.holder !== undefined)
-    lines.push(<span key="holder">{elsewhereNotice(reading.holder)}</span>)
+  else if (reading.holder !== undefined)
+    lines.push(<span key="holder">{elsewhereNotice(reading.holder, reading.canEdit)}</span>)
   if (reading.notice?.kind === 'copied')
     lines.push(<span key="copied"><CopiedNote title={reading.notice.document.title} documentId={reading.notice.document.id} /></span>)
   return lines.length === 0 ? undefined : <>{lines.flatMap((line, index) => index === 0 ? [line] : [' ', line])}</>

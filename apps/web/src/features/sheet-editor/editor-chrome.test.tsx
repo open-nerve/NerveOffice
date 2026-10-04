@@ -424,12 +424,24 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
     expect(infoRegion().textContent).toBe('你在另一个标签页或设备上正在编辑这份文档，这里只能阅读。要是刚刚关闭或刷新过那个页面，那边的编辑权最多 90 秒后自动结束，到时再点"编辑"就能编辑')
   })
 
-  it('服务端给的详情认不出：通用的说法；只能查看的人不说谁在编辑', () => {
+  it('没有人在编辑：读屏状态区是空的', () => {
     renderChrome({ mode: { ...READING, holder: undefined }, save: undefined })
     expect(infoRegion()).toBeEmptyDOMElement()
-    cleanup()
+  })
+
+  it('只能查看的人（查看者、归档空间）同样看到谁在编辑、最后活动几分钟之前（US-M3-04 的"其他人"），不说"你现在只能阅读"（页头已经说只能查看），没有"编辑"', () => {
     renderChrome({ mode: { ...READING, canEdit: false, holder: { holder: AMY, sameUser: false, lastActiveMinutes: 1 } }, save: undefined })
-    expect(infoRegion()).toBeEmptyDOMElement()
+    const region = infoRegion()
+    expect(region.textContent).toBe('@amy 艾米 正在编辑这份文档（最后活动 1 分钟前）')
+    expect(within(region).getByText('@amy')).toHaveAttribute('data-slot', 'person-username')
+    expect(within(region).getByText('艾米').tagName).toBe('BDI')
+    expect(headerStatus()).toHaveTextContent('只能查看')
+    expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
+  })
+
+  it('不能编辑了、读到的持有者还是自己（自己那一代随之失效，还没读到新的编辑状态）：照别人一样说谁在编辑，不提"再点编辑就能编辑"', () => {
+    renderChrome({ mode: { ...READING, canEdit: false, holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 } }, save: undefined })
+    expect(infoRegion().textContent).toBe('@amy 艾米 正在编辑这份文档（最后活动不到 1 分钟前）')
   })
 
   it('有更新：页头提示"有更新，点击刷新"，点了交给页面；正在载入时标为不可用', () => {

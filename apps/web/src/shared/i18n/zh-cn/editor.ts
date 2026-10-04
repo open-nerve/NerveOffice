@@ -41,8 +41,11 @@ export const editorMessages = {
    * 编辑权中断（到期、空闲回收、换了登录、被接手等）先自动续上，续上了就不说明；这里的失效是续不上、或者失去了访问或编辑权
    */
   editing: {
-    /** 别人正在编辑（持有者经人名组件显示）；lastActive 是"最后活动……"，服务端没给出时为 undefined */
-    elsewhere: <T>(holder: T, lastActive: string | undefined): Phrase<T> => [holder, ` 正在编辑这份文档${lastActive === undefined ? '' : `（${lastActive}）`}，你现在只能阅读`],
+    /**
+     * 别人正在编辑（持有者经人名组件显示）；lastActive 是"最后活动……"，服务端没给出时为 undefined。
+     * canEdit：能编辑的人另说"你现在只能阅读"（等他放下编辑权才能编辑）；查看者本来就只能查看（页头已经说了），只说谁在编辑
+     */
+    elsewhere: <T>(holder: T, lastActive: string | undefined, canEdit: boolean): Phrase<T> => [holder, ` 正在编辑这份文档${lastActive === undefined ? '' : `（${lastActive}）`}${canEdit ? '，你现在只能阅读' : ''}`],
     /** 持有者最后一次操作在几分钟之前（服务端回答时，向下取整） */
     lastActive: (minutes: number) => minutes < 1 ? '最后活动不到 1 分钟前' : `最后活动 ${minutes} 分钟前`,
     elsewhereBySelf: `你在另一个标签页或设备上正在编辑这份文档，这里只能阅读。${SELF_ELSEWHERE_HINT}`,
