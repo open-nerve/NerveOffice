@@ -198,8 +198,8 @@ apps/web/src/
                       `editor-slot.ts`（单飞重建）、阅读时的检查在 `reading-checks.ts`、失去编辑权之后的那一份在 `lost-copy.ts`）
   editor/             编辑器适配层（Univer 的一切，ADR-010）：档案、公式 Worker、身份、变更检测、公式收齐、IMAGE()、入口守卫、internal-api/；
                       只读守卫 read-only/（M2-P3，ADR-015）；视图状态 view-state.ts（M3-P2）；testing/ 是 E2E 的探针与真实 Safari 的页面自检（M3-P2），只在测试构建里（只能动态引入，lint，M2-P6）
-  shared/             请求层（api；M2-P6 加带 requestId 的新建共用的请求标识记账 request-ids）、界面组件（ui，改写后的 shadcn/ui：M2-P1 加弹窗、表格、标签、原生选择框；M2-P6 加人名 PersonName、句子里嵌元素的 Phrase、说明条 Notice、输入的文字说明 FieldProblem；M2-P5 加读屏的状态区 StatusRegion、空间的呈现 SpaceLabel、按需加载失败的说明 ChunkLoadNotice；Codex 评审之后加列表没能刷新的说明 RefreshProblem、说明里"列表还在刷新"的 StillRefreshing）与主题变量、界面文字（i18n：M2-P6 起按范围分文件，只在按需加载的页面用到的不进首屏）、
-                      小工具（lib：登录页与管理界面的地址、整页跳转、延时取值、会话复核、渲染之后移焦点等；M2-P6 加焦点兜底 useFocusRescue、页面标题 useDocumentTitle、输入校验的说明 validation、先取消在路上的请求再刷新、可以要求刷新失败时抛出的 refresh-queries，时限之后后台刷新成功时改回说法的 use-outcome-refresh；Codex 评审之后加成功之后的刷新还在后台的 use-still-refreshing、按确定的写入结果改分页列表缓存的 paged-cache；写操作成功之后的有时限的刷新在 api 的 write-outcome（refreshAfterSuccess））
+  shared/             请求层（api；M2-P6 加带 requestId 的新建共用的请求标识记账 request-ids）、界面组件（ui，改写后的 shadcn/ui：M2-P1 加弹窗、表格、标签、原生选择框；M2-P6 加人名 PersonName、句子里嵌元素的 Phrase、说明条 Notice、输入的文字说明 FieldProblem；M2-P5 加读屏的状态区 StatusRegion、空间的呈现 SpaceLabel、按需加载失败的说明 ChunkLoadNotice；Codex 评审之后加列表没能刷新的说明 RefreshProblem（M3-P2 加详情的变体 DetailRefreshProblem 与 fallbackFocus）、M3-P2 加第一次就没取到时的重试按钮 RetryButton、说明里"列表还在刷新"的 StillRefreshing）与主题变量、界面文字（i18n：M2-P6 起按范围分文件，只在按需加载的页面用到的不进首屏）、
+                      小工具（lib：登录页与管理界面的地址、整页跳转、延时取值、会话复核、渲染之后移焦点等；M2-P6 加焦点兜底 useFocusRescue（M3-P2 加焦点交接 use-focus-hand-off、第一次就没取到时的重试 use-first-load-retry）、页面标题 useDocumentTitle、输入校验的说明 validation、先取消在路上的请求再刷新、可以要求刷新失败时抛出的 refresh-queries，时限之后后台刷新成功时改回说法的 use-outcome-refresh；Codex 评审之后加成功之后的刷新还在后台的 use-still-refreshing、按确定的写入结果改分页列表缓存的 paged-cache；写操作成功之后的有时限的刷新在 api 的 write-outcome（refreshAfterSuccess））
 ```
 
 - React Router 8（数据路由的库模式）、TanStack Query 5、Tailwind CSS 4 与 shadcn/ui 的 Radix 版本（ADR-008）。
@@ -215,7 +215,7 @@ apps/web/src/
   - 只读（M2-P3，ADR-015）：查看者与归档空间里的文档一开始就以只读创建。授权服务只允许查看与复制；只读守卫分三步装上（创建工作簿之前：防火墙与撤销拦截；工作簿创建之后：工作表的权限点与图片；渲染完成时 `applyRenderedGuards`：冻结线与编辑栏，这两处的控制器那时才注册），取消本文档的修改（与变更检测同一个判定）、撤销与重做，关掉工作表的权限点，图片与冻结线拖不动，替换、"搜索功能"面板与快速求和不开放（后两个 M2-P6），批注浮层与编辑栏不能输入；全部已注册的快捷键有只读的回归用例（M2-P6）；界面没有工具栏、右键菜单、底栏菜单与新增工作表按钮，权限提示是只读的说法；页头显示"只能查看"，没有保存。写入的边界仍在服务端；
   - 保存：显式保存（按钮、Ctrl/Cmd+S），状态机见 ADR-011，只在编辑时有；有未保存的修改时离开由浏览器提示（失去编辑权、另存为副本之前同样提示）；
   - 会话：载入之后一律不整页跳转、不自动重新加载（本页可能有未保存的修改）。登录已过期或在别处退出：暂停保存，提示在新标签页中登录，本人登录回来之后恢复；别的标签页登录了另一个人：不能再保存，原来的人回来之后恢复。
-- 首屏 JS 预算（gzip，门禁 `budgets` 检查）：平台页面 180 KiB；编辑器页 2350 KiB；公式 Worker 800 KiB。管理界面与成员页是单独的动态分块，不计入平台页面的首屏；弹窗不经 shared/ui 的桶文件导出，确认弹窗与弹窗文件本身（`shared/ui/dialog.tsx`）只由按需加载的功能引用（M2-P1：首屏 156.4 KiB；M2-P2：161.6 KiB；M2-P4：168.3 KiB；M2-P6 第 5 片之后 170.6 KiB、2 个文件：只给按需加载页面用的文案按功能拆出首屏；门禁同时限定平台页面的首屏文件数不超过 2 个；M2-P5 之后 172.0 KiB、2 个文件，编辑器页 2020.4 KiB；Codex 评审之后 173.0 KiB、2 个文件——首屏的列表接上刷新失败与还在刷新的共用做法，编辑器页 2021.0 KiB；M3-P2 之后 174.0 KiB、2 个文件，编辑器页 2030.7 KiB）。
+- 首屏 JS 预算（gzip，门禁 `budgets` 检查）：平台页面 180 KiB；编辑器页 2350 KiB；公式 Worker 800 KiB。管理界面与成员页是单独的动态分块，不计入平台页面的首屏；弹窗不经 shared/ui 的桶文件导出，确认弹窗与弹窗文件本身（`shared/ui/dialog.tsx`）只由按需加载的功能引用（M2-P1：首屏 156.4 KiB；M2-P2：161.6 KiB；M2-P4：168.3 KiB；M2-P6 第 5 片之后 170.6 KiB、2 个文件：只给按需加载页面用的文案按功能拆出首屏；门禁同时限定平台页面的首屏文件数不超过 2 个；M2-P5 之后 172.0 KiB、2 个文件，编辑器页 2020.4 KiB；Codex 评审之后 173.0 KiB、2 个文件——首屏的列表接上刷新失败与还在刷新的共用做法，编辑器页 2021.0 KiB；M3-P2 之后 174.7 KiB、2 个文件，编辑器页 2032.3 KiB）。
 
 ## 5. 模块边界
 
