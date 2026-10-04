@@ -1,11 +1,18 @@
 import { z } from 'zod'
 import { uuidSchema } from '../ids/ids.ts'
+import { clientFormatQueryShape } from './client-format.ts'
 
 /**
  * 快照解压后的上限（00 号计划书 §12.1）：平台格式的一部分，调整按格式变更处理（P4 设计 §3.11）。
  * 上传的压缩数据同样以它为上限。
  */
 export const SNAPSHOT_MAX_RAW_BYTES = 5 * 1024 * 1024
+
+/**
+ * 快照达到容量的 80% 时页面给一条不打断的提示（US-M3-14，00 号计划书 §7.7）：4,194,304 字节。与上限同一个口径——解压后的字节，
+ * 也就是快照文字的 UTF-8 字节数（页面压缩上传的正是这段字节）
+ */
+export const SNAPSHOT_WARN_RAW_BYTES = (SNAPSHOT_MAX_RAW_BYTES / 5) * 4
 
 /** 快照的嵌套上限（M1 总设计 §6.5 的基本校验）。 */
 export const SNAPSHOT_MAX_DEPTH = 64
@@ -32,12 +39,21 @@ function integerParam(min: number) {
 }
 
 /**
+ * "公式待更新"（M3-P3 设计 §3.8，保存与另存为副本的查询参数）：这份快照里的公式结果可能还没算完（捕获时没等到收齐）。
+ * 只接受 true、false；可选，没有这个参数等于 false（P3 之前的页面不带它；服务端从 S4 起按它记下）
+ */
+export const formulasPendingParam = z.enum(['true', 'false']).transform(value => value === 'true').optional()
+
+/**
  * 保存的元数据（PUT /api/documents/{id}/content 的查询参数，P4 设计 §3.5）：
  * - baseRevision：这份快照基于的修订号，不是当前修订号时拒绝保存；
  * - requestId：一次保存尝试一个，网络错误后内容没变就用同一个重发；
  * - clientInstanceId：编辑器页每次加载生成；localSeq：捕获时本页的修改序号。两者用来识别"自己追自己"；
  * - writeEpoch：申请编辑权时得到的代次（M3-P1 设计 §3.4.4），与请求头里的租约令牌（EDIT_LEASE_HEADER）一起核对：
- *   删除、跨空间移动、收回写入权或者有了新的一代之后就对不上，保存被拒（EDIT_LEASE_LOST）。必填（契约是严格结构；v0.1 还没有部署，没有旧页面）
+ *   删除、跨空间移动、收回写入权或者有了新的一代之后就对不上，保存被拒（EDIT_LEASE_LOST）。必填（契约是严格结构；v0.1 还没有部署，没有旧页面）；
+ * - formulasPending："公式待更新"，可选（formulasPendingParam）；
+ * - clientBuild、univerVersion、profile、formatVersion：客户端的构建与数据格式（M3-P3 设计 §3.5，client-format.ts），可选：
+ *   P3 之前的页面不带它们，重试一次结果未知的保存时要能到得了重放（重放先于拦截旧客户端），缺了由服务端按过旧处理
  */
 export const saveContentQuerySchema = z.strictObject({
   baseRevision: integerParam(1),
@@ -45,14 +61,21 @@ export const saveContentQuerySchema = z.strictObject({
   clientInstanceId: uuidSchema,
   localSeq: integerParam(0),
   writeEpoch: integerParam(0),
+  formulasPending: formulasPendingParam,
+  ...clientFormatQueryShape,
 })
 
 export type SaveContentQuery = z.output<typeof saveContentQuerySchema>
 
-/** 保存成功：新的修订号与保存时间。重放时是原来的结果。 */
+/**
+ * 保存成功：修订号与保存时间。重放时是原来的结果。
+ * unchanged（M3-P3 设计 §3.7）：内容与当前相同（规范化之后的哈希相同），修订号没有增加，revision 与 savedAt 是当前修订的；
+ * 页面照"已保存"处理。S4 之前服务端每次都写入新的修订，一律为 false
+ */
 export const saveContentResponseSchema = z.object({
   revision: z.number().int().min(1),
   savedAt: z.iso.datetime(),
+  unchanged: z.boolean(),
 })
 
 export type SaveContentResponse = z.infer<typeof saveContentResponseSchema>

@@ -121,6 +121,8 @@ function grantDetail(document: SharedDocument, role: 'viewer' | 'editor', change
     revision: 3,
     profile: 'sheet@1',
     formatVersion: 1,
+    sdkVersion: '1.0.1',
+    formulasPending: false,
     permissions: { canEdit: editor, canRename: editor, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false },
     ...changes,
   }

@@ -22,9 +22,9 @@ function snapshotOf(value: string): string {
 
 const LOADED = { snapshot: snapshotOf('载入的'), revision: 3 }
 const TOKEN = 'L'.repeat(43)
-const ACQUIRED: AcquiredEditLease = { token: TOKEN, writeEpoch: 7, revision: 3, source: null, expiresAt: '2026-10-04T03:01:30.000Z', interruption: null }
+const ACQUIRED: AcquiredEditLease = { token: TOKEN, writeEpoch: 7, revision: 3, source: null, expiresAt: '2026-10-04T03:01:30.000Z', interruption: null, formulasPending: false }
 const RENEWED: RenewedEditLease = { expiresAt: '2026-10-04T03:01:40.000Z' }
-const SAVED: SaveContentResponse = { revision: 4, savedAt: '2026-10-04T03:00:00.000Z' }
+const SAVED: SaveContentResponse = { revision: 4, savedAt: '2026-10-04T03:00:00.000Z', unchanged: false }
 const DENIED = new ApiError(403, 'PERMISSION_DENIED', '空间已归档，只能查看')
 const GONE = new ApiError(404, 'NOT_FOUND', '不存在')
 const HEARTBEAT_MS = EDIT_LEASE_HEARTBEAT_SECONDS * 1000
@@ -166,6 +166,8 @@ const COPY = {
   revision: 1,
   profile: 'sheet@1',
   formatVersion: 1,
+  sdkVersion: '1.0.1',
+  formulasPending: false,
   permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true },
 } as const
 
@@ -173,7 +175,7 @@ const COPY = {
 const ANSWERED_AT = '2026-10-04T03:03:10.000Z'
 
 function status(revision: number, editor: DocumentEditor | null = null, canEdit = true): FetchedEditStatus {
-  return { status: { revision, editor, canEdit }, serverTime: Date.parse(ANSWERED_AT) }
+  return { status: { revision, editor, canEdit, formulasPending: false }, serverTime: Date.parse(ANSWERED_AT) }
 }
 
 /** 艾米在编辑（最后活动 3 分钟前） */

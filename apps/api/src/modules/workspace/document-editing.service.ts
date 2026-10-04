@@ -9,6 +9,12 @@ import { UsersService } from '../users/index.ts'
 import { accountIn, toUserSummary } from './workspace-views.ts'
 
 /**
+ * 编辑状态与申请的响应里文档的"公式待更新"（M3-P3 设计 §3.8）：M3-P3-S4 的迁移加上 documents.formulas_pending 之前，
+ * 服务端没有记下它，一律为 false（临时，S4 改为读文档行）
+ */
+const FORMULAS_PENDING_NOT_RECORDED = false
+
+/**
  * 编辑权的接口编排（M3-P1 设计 §3.1、§3.2）：申请、心跳续租、释放与编辑状态。租约的规则与数据在 documents 的 EditLeaseService；
  * 这里开事务、经 users 补持有者的人名（documents 不依赖 users，与分享同一个做法）、拼好响应。
  * 写的三个各是一个业务事务，补人名也在同一个事务里，提交之后不再访问数据库；编辑状态在一个只读快照里（ADR-017）。
@@ -30,9 +36,9 @@ export class DocumentEditingService {
     return this.transactions.readSnapshot(async (transaction) => {
       const { revision, editor, canEdit } = await this.leases.status(actor, documentId, transaction)
       if (editor === undefined)
-        return { revision, editor: null, canEdit }
+        return { revision, editor: null, canEdit, formulasPending: FORMULAS_PENDING_NOT_RECORDED }
       const accounts = await this.users.findByIds([editor.holderId], transaction)
-      return { revision, editor: { holder: toUserSummary(accountIn(accounts, editor.holderId)), lastActiveAt: editor.lastActiveAt.toISOString(), sameUser: editor.sameUser }, canEdit }
+      return { revision, editor: { holder: toUserSummary(accountIn(accounts, editor.holderId)), lastActiveAt: editor.lastActiveAt.toISOString(), sameUser: editor.sameUser }, canEdit, formulasPending: FORMULAS_PENDING_NOT_RECORDED }
     })
   }
 
@@ -55,6 +61,7 @@ export class DocumentEditingService {
         source: outcome.source,
         expiresAt: outcome.expiresAt.toISOString(),
         interruption: outcome.interruption === undefined ? null : await this.withHolder(outcome.interruption, transaction),
+        formulasPending: FORMULAS_PENDING_NOT_RECORDED,
       }
     })
   }

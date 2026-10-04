@@ -129,7 +129,7 @@ async function sent(calls: PendingSend[], count: number): Promise<PendingSend> {
 }
 
 function saved(revision: number): SaveContentResponse {
-  return { revision, savedAt: '2026-09-27T08:00:00.000Z' }
+  return { revision, savedAt: '2026-09-27T08:00:00.000Z', unchanged: false }
 }
 
 function conflictError(currentRevision: number, source: { clientInstanceId: string, localSeq: number } | null): ApiError {

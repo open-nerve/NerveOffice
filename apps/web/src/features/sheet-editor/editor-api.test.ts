@@ -7,7 +7,7 @@ const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 const PAGE_ID = '0199a2c4-1f2e-4a3b-8c4d-00000000aaaa'
 const LEASE = `/api/documents/${DOCUMENT_ID}/edit-lease`
 const TOKEN = 'T'.repeat(43)
-const ACQUIRED = { token: TOKEN, writeEpoch: 2, revision: 4, source: null, expiresAt: '2026-10-04T03:01:30.000Z', interruption: null }
+const ACQUIRED = { token: TOKEN, writeEpoch: 2, revision: 4, source: null, expiresAt: '2026-10-04T03:01:30.000Z', interruption: null, formulasPending: false }
 
 afterEach(() => {
   setCsrfToken(undefined)
@@ -54,9 +54,9 @@ describe('编辑租约的请求（M3-P1 设计 §3.2）', () => {
 
   it('保存：查询参数带上代次，请求头带上令牌', async () => {
     const api = installFakeApi()
-    api.on(`PUT /api/documents/${DOCUMENT_ID}/content?baseRevision=4&requestId=req-1&clientInstanceId=${PAGE_ID}&localSeq=3&writeEpoch=2`, () => json(200, { revision: 5, savedAt: '2026-10-04T03:00:00.000Z' }))
+    api.on(`PUT /api/documents/${DOCUMENT_ID}/content?baseRevision=4&requestId=req-1&clientInstanceId=${PAGE_ID}&localSeq=3&writeEpoch=2`, () => json(200, { revision: 5, savedAt: '2026-10-04T03:00:00.000Z', unchanged: false }))
     const request = { baseRevision: 4, requestId: 'req-1', clientInstanceId: PAGE_ID, localSeq: 3, snapshot: '{}' }
-    await expect(saveContent(DOCUMENT_ID, request, new Uint8Array([1]), { token: TOKEN, writeEpoch: 2 })).resolves.toEqual({ revision: 5, savedAt: '2026-10-04T03:00:00.000Z' })
+    await expect(saveContent(DOCUMENT_ID, request, new Uint8Array([1]), { token: TOKEN, writeEpoch: 2 })).resolves.toEqual({ revision: 5, savedAt: '2026-10-04T03:00:00.000Z', unchanged: false })
     expect(api.requests[0]?.headers).toMatchObject({ 'x-edit-lease': TOKEN, 'content-type': 'application/gzip' })
   })
 })
@@ -92,7 +92,7 @@ describe('内容的读取（P4 设计 §3.3；M3-P2 设计 §3.2 的条件读取
 })
 
 describe('编辑状态与另存为副本（M3-P2 设计 §3.2）', () => {
-  const STATUS = { revision: 3, editor: { holder: { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000e1', username: 'amy', displayName: '艾米' }, lastActiveAt: '2026-10-04T03:00:00.000Z', sameUser: false }, canEdit: true }
+  const STATUS = { revision: 3, editor: { holder: { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000e1', username: 'amy', displayName: '艾米' }, lastActiveAt: '2026-10-04T03:00:00.000Z', sameUser: false }, canEdit: true, formulasPending: false }
 
   it('编辑状态：GET edit-lease，读出修订号、正在编辑的人与能不能编辑，连同服务端回答的时刻（响应头 Date）', async () => {
     const api = installFakeApi({ [`GET ${LEASE}`]: () => json(200, STATUS, { date: 'Sun, 04 Oct 2026 03:03:10 GMT' }) })
@@ -120,6 +120,8 @@ describe('编辑状态与另存为副本（M3-P2 设计 §3.2）', () => {
       revision: 1,
       profile: 'sheet@1',
       formatVersion: 1,
+      sdkVersion: '1.0.1',
+      formulasPending: false,
       permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true },
       replayed: false,
     }

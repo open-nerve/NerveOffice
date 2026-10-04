@@ -26,6 +26,8 @@ export interface DocumentRow {
   readonly unitId: string
   readonly profile: DocumentProfile
   readonly formatVersion: number
+  /** 最后一次写入这份文档的 SDK 版本：详情带上它，页面据此判断文档是不是由更新的版本保存过（M3-P3 设计 §3.5） */
+  readonly sdkVersion: string
   /**
    * 写入代次（M2-P2，00 号计划书 §6.4）：编辑租约的有效条件按它判断（M3-P1 设计 §3.4.1 第 3 条）——租约的那一代不是它就过时。
    * 申请编辑权与收回写入权给它加一（advanceWriteEpoch），删除、跨空间移动与转移也加一；不进任何响应
@@ -134,6 +136,7 @@ const COLUMNS = {
   unitId: d.unitId,
   profile: d.profile,
   formatVersion: d.formatVersion,
+  sdkVersion: d.sdkVersion,
   writeEpoch: d.writeEpoch,
 }
 

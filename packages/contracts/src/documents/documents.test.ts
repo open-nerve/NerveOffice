@@ -125,12 +125,20 @@ describe('文档的元数据', () => {
     revision: 1,
     profile: 'sheet@1',
     formatVersion: 1,
+    sdkVersion: '1.0.1',
+    formulasPending: false,
     permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false },
   }
 
-  it('档案与格式版本不按已知的取值校验：客户端自己核对，不认识的显示格式不受支持', () => {
+  it('档案、格式版本与 SDK 版本不按已知的取值校验：客户端自己核对，不认识的显示格式不受支持', () => {
     expect(documentDetailSchema.parse(detail)).toEqual(detail)
-    expect(documentDetailSchema.parse({ ...detail, profile: 'sheet@9', formatVersion: 7 })).toMatchObject({ profile: 'sheet@9', formatVersion: 7 })
+    expect(documentDetailSchema.parse({ ...detail, profile: 'sheet@9', formatVersion: 7, sdkVersion: '9.9.9-next' })).toMatchObject({ profile: 'sheet@9', formatVersion: 7, sdkVersion: '9.9.9-next' })
+  })
+
+  it('M3-P3：最后一次写入的 SDK 版本（页面据此判断文档是不是由更新的版本保存过）与"公式待更新"都必填', () => {
+    expect(documentDetailSchema.parse({ ...detail, formulasPending: true }).formulasPending).toBe(true)
+    for (const invalid of [{ sdkVersion: undefined }, { sdkVersion: '' }, { formulasPending: undefined }, { formulasPending: 'false' }])
+      expect(documentDetailSchema.safeParse({ ...detail, ...invalid }).success, JSON.stringify(invalid)).toBe(false)
   })
 
   it('修订号从 1 开始', () => {
@@ -270,5 +278,13 @@ describe('另存为副本（M3-P2 设计 §3.2）', () => {
     expect(conflictCopyQuerySchema.safeParse({ requestId: 'not-a-uuid', title: '周报' }).success).toBe(false)
     // 查询串里重复的参数（Express 解析成数组）
     expect(conflictCopyQuerySchema.safeParse({ requestId, title: ['周报', '月报'] }).success).toBe(false)
+  })
+
+  it('M3-P3：与保存相同，"公式待更新"与客户端的构建、数据格式都可选（重试结果未知的副本时要能到得了重放）', () => {
+    const reported = { formulasPending: 'true', clientBuild: '0.1.0', univerVersion: '1.0.1', profile: 'sheet@1', formatVersion: '1' }
+    expect(conflictCopyQuerySchema.parse({ requestId, title: '周报', ...reported })).toEqual({ requestId, title: '周报', ...reported, formulasPending: true, formatVersion: 1 })
+    expect(conflictCopyQuerySchema.parse({ requestId, title: '周报' })).toEqual({ requestId, title: '周报' })
+    expect(conflictCopyQuerySchema.safeParse({ requestId, title: '周报', formulasPending: '1' }).success).toBe(false)
+    expect(conflictCopyQuerySchema.safeParse({ requestId, title: '周报', formatVersion: '0' }).success).toBe(false)
   })
 })

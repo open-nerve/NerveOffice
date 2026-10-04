@@ -47,8 +47,12 @@ export interface ContentSaver extends EditingActor {
   readonly token: string | undefined
 }
 
+/**
+ * 保存的确认：一条修订记录的修订号与时间。unchanged（内容相同、修订号没有增加）要到 M3-P3-S4 的"内容相同不递增"才会为真：
+ * 在那之前每次保存都写入新的修订，这里一律为 false
+ */
 function toSaved(revision: RevisionRow): SaveContentResponse {
-  return { revision: revision.revision, savedAt: revision.createdAt.toISOString() }
+  return { revision: revision.revision, savedAt: revision.createdAt.toISOString(), unchanged: false }
 }
 
 /** 文档的内容（P4 设计 §3.5）：读取当前快照；按基准修订号条件写入新的快照。 */

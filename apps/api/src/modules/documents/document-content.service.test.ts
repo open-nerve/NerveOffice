@@ -129,7 +129,7 @@ describe('DocumentContentService.save', () => {
     const { store, service, document } = setup()
     const body = upload(document.unitId)
     const request = query()
-    expect(await service.save(saver(ALICE), document.id, request, body, HTTP_ORIGIN)).toEqual({ revision: 2, savedAt: '2026-09-27T08:00:00.000Z' })
+    expect(await service.save(saver(ALICE), document.id, request, body, HTTP_ORIGIN)).toEqual({ revision: 2, savedAt: '2026-09-27T08:00:00.000Z', unchanged: false })
     expect(store.documents.get(document.id)?.revision).toBe(2)
     expect(store.repositories.documents.advanceRevision).toHaveBeenCalledWith(document.id, 2, UNIVER_SDK_VERSION, expect.anything())
     expect(store.contents.get(document.id)).toEqual({ snapshot: body.compressed, rawBytes: body.decompressed.length })

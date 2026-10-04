@@ -22,4 +22,10 @@ describe('错误码登记表', () => {
     expect(errorStatus('NOT_FOUND')).toBe(404)
     expect(errorStatus('INTERNAL_ERROR')).toBe(500)
   })
+
+  it('M3-P3：页面过旧与文档比服务端新都是 409（4xx：页面确定这次没有提交）；快照不合法是 422（M1 起）', () => {
+    expect([errorStatus('CLIENT_OUTDATED'), errorStatus('DOCUMENT_TOO_NEW'), errorStatus('SNAPSHOT_INVALID')]).toEqual([409, 409, 422])
+    expect(ERROR_CODES.CLIENT_OUTDATED.message).toBe('页面的版本过旧，本次操作没有生效，请重新加载页面')
+    expect(ERROR_CODES.DOCUMENT_TOO_NEW.message).toBe('这份文档由更新的版本保存过，当前只能阅读')
+  })
 })

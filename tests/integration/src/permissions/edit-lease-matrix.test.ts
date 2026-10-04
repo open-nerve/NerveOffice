@@ -130,7 +130,7 @@ const VERIFY: Readonly<Record<Operation, CellOptions['verify']>> = {
   // 取表里申请那一行的预期（MATRIX.acquireLease，逐格手写），不调用生产代码的规则
   editStatus: async (response, target, actor) => {
     const canEdit = MATRIX.acquireLease[target][columnOf(actor)] === 201
-    expect(parseExact(editStatusSchema, await response.json())).toEqual({ revision: 1, editor: null, canEdit })
+    expect(parseExact(editStatusSchema, await response.json())).toEqual({ revision: 1, editor: null, canEdit, formulasPending: false })
   },
   // 申请：第一代（新文档的代次是 0），租约在这个人手里
   acquireLease: async (response, _target, actor) => {

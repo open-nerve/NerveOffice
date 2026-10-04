@@ -26,7 +26,9 @@ const TAB = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c41'
 const AMY = { id: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c33', username: 'amy', displayName: '艾米' }
 const AT = '2026-10-04T08:00:00.000Z'
 
-const acquired = { token: TOKEN, writeEpoch: 3, revision: 7, source: null, expiresAt: AT, interruption: null }
+const acquired = { token: TOKEN, writeEpoch: 3, revision: 7, source: null, expiresAt: AT, interruption: null, formulasPending: false }
+/** 客户端上报的构建与数据格式（M3-P3 设计 §3.5） */
+const REPORTED = { clientBuild: '0.1.0+abc1234', univerVersion: '1.0.1', profile: 'sheet@1', formatVersion: 1 }
 const editor = { holder: AMY, lastActiveAt: AT, sameUser: false }
 
 describe('编辑租约的参数（P1 设计 §3.2，M3 总设计 §2.1）', () => {
@@ -52,7 +54,7 @@ describe('编辑租约的参数（P1 设计 §3.2，M3 总设计 §2.1）', () =
 })
 
 describe('申请编辑权', () => {
-  it('请求只有标签页的标识：UUID，统一转成小写；缺少、不是 UUID、多余的字段都拒绝（请求是严格结构）', () => {
+  it('请求是标签页的标识：UUID，统一转成小写；缺少、不是 UUID、多余的字段都拒绝（请求是严格结构）', () => {
     expect(acquireEditLeaseRequestSchema.parse({ clientInstanceId: TAB.toUpperCase() })).toEqual({ clientInstanceId: TAB })
     expect(acquireEditLeaseRequestSchema.safeParse({}).success).toBe(false)
     expect(acquireEditLeaseRequestSchema.safeParse({ clientInstanceId: 'tab-1' }).success).toBe(false)
@@ -60,8 +62,19 @@ describe('申请编辑权', () => {
     expect(acquireEditLeaseRequestSchema.safeParse({ clientInstanceId: TAB, sessionId: TAB }).success).toBe(false)
   })
 
+  it('M3-P3：另可带客户端的构建与数据格式，都可选（过旧的页面不让进入编辑，缺了由服务端按过旧处理）', () => {
+    expect(acquireEditLeaseRequestSchema.parse({ clientInstanceId: TAB, ...REPORTED })).toEqual({ clientInstanceId: TAB, ...REPORTED })
+    expect(acquireEditLeaseRequestSchema.safeParse({ clientInstanceId: TAB, ...REPORTED, formatVersion: '1' }).success).toBe(false)
+    expect(acquireEditLeaseRequestSchema.safeParse({ clientInstanceId: TAB, clientBuild: 'abc' }).success).toBe(false)
+  })
+
   it('响应：令牌、这一代的代次、当前修订号与它的来源、到期时间；没有异常结束时 interruption 为 null；多出的字段被丢弃', () => {
     expect(acquiredEditLeaseSchema.parse({ ...acquired, holderId: AMY.id })).toEqual(acquired)
+  })
+
+  it('M3-P3：响应带文档的"公式待更新"（P4 据此在进入编辑时先全量重算），必填的布尔值', () => {
+    expect(acquiredEditLeaseSchema.parse({ ...acquired, formulasPending: true }).formulasPending).toBe(true)
+    expect(acquiredEditLeaseSchema.safeParse({ ...acquired, formulasPending: undefined }).success).toBe(false)
   })
 
   it('当前修订的来源：保存产生的修订给出那次保存的标签页与本地序号，新建、复制出来的为 null；不能省略（与冲突详情的来源同一个结构）', () => {
@@ -101,6 +114,11 @@ describe('心跳续租', () => {
     expect(renewEditLeaseRequestSchema.safeParse({ idleSeconds: 0, token: TOKEN }).success).toBe(false)
   })
 
+  it('M3-P3：与申请相同，另可带客户端的构建与数据格式（服务端升级之后，正在编辑的页面在一次心跳之内就知道需要刷新）', () => {
+    expect(renewEditLeaseRequestSchema.parse({ idleSeconds: 3, ...REPORTED })).toEqual({ idleSeconds: 3, ...REPORTED })
+    expect(renewEditLeaseRequestSchema.safeParse({ idleSeconds: 3, profile: 'sheet 1' }).success).toBe(false)
+  })
+
   it('响应：新的到期时间', () => {
     expect(renewedEditLeaseSchema.parse({ expiresAt: AT, writeEpoch: 3 })).toEqual({ expiresAt: AT })
     expect(renewedEditLeaseSchema.safeParse({}).success).toBe(false)
@@ -109,16 +127,22 @@ describe('心跳续租', () => {
 
 describe('编辑状态与"别人正在编辑"', () => {
   it('编辑状态：当前修订号与正在编辑的人；没有有效的租约时 editor 为 null', () => {
-    expect(editStatusSchema.parse({ revision: 7, editor: null, canEdit: false })).toEqual({ revision: 7, editor: null, canEdit: false })
-    expect(editStatusSchema.parse({ revision: 7, editor, canEdit: true })).toEqual({ revision: 7, editor, canEdit: true })
-    expect(editStatusSchema.safeParse({ revision: 7, canEdit: true }).success).toBe(false)
-    expect(editStatusSchema.safeParse({ revision: 0, editor: null, canEdit: true }).success).toBe(false)
+    expect(editStatusSchema.parse({ revision: 7, editor: null, canEdit: false, formulasPending: false })).toEqual({ revision: 7, editor: null, canEdit: false, formulasPending: false })
+    expect(editStatusSchema.parse({ revision: 7, editor, canEdit: true, formulasPending: false })).toEqual({ revision: 7, editor, canEdit: true, formulasPending: false })
+    expect(editStatusSchema.safeParse({ revision: 7, canEdit: true, formulasPending: false }).success).toBe(false)
+    expect(editStatusSchema.safeParse({ revision: 0, editor: null, canEdit: true, formulasPending: false }).success).toBe(false)
+  })
+
+  it('M3-P3：带文档的"公式待更新"（阅读页据此说明公式结果可能还没更新），必填的布尔值', () => {
+    expect(editStatusSchema.parse({ revision: 7, editor: null, canEdit: false, formulasPending: true }).formulasPending).toBe(true)
+    expect(editStatusSchema.safeParse({ revision: 7, editor: null, canEdit: false }).success).toBe(false)
+    expect(editStatusSchema.safeParse({ revision: 7, editor: null, canEdit: false, formulasPending: 1 }).success).toBe(false)
   })
 
   it('US-M3-05 编辑状态带上调用者现在能不能编辑（M3-P2 设计 §3.2）：必填的布尔值，阅读页据此显示或隐藏"编辑"', () => {
-    expect(editStatusSchema.safeParse({ revision: 7, editor: null }).success).toBe(false)
-    expect(editStatusSchema.safeParse({ revision: 7, editor: null, canEdit: 'true' }).success).toBe(false)
-    expect(editStatusSchema.safeParse({ revision: 7, editor: null, canEdit: null }).success).toBe(false)
+    expect(editStatusSchema.safeParse({ revision: 7, editor: null, formulasPending: false }).success).toBe(false)
+    expect(editStatusSchema.safeParse({ revision: 7, editor: null, canEdit: 'true', formulasPending: false }).success).toBe(false)
+    expect(editStatusSchema.safeParse({ revision: 7, editor: null, canEdit: null, formulasPending: false }).success).toBe(false)
   })
 
   it('正在编辑的人：持有者是"人"的结构，带最后活动时间与是不是调用者自己；多出的字段（例如令牌）被丢弃', () => {

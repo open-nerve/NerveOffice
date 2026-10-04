@@ -47,6 +47,17 @@ export const ERROR_CODES = {
   EDIT_LEASE_LOST: { status: 409, message: '编辑权已失效，本次操作没有生效' },
   /** 同一个 requestId 已经用于另一个请求（负载不同，或者是别的操作） */
   REQUEST_ID_CONFLICT: { status: 409, message: '请求标识已被另一个请求使用' },
+  /**
+   * 页面的版本过旧（M3-P3 设计 §3.5，00 号计划书 §7.4 第 4 条）：上报的数据格式（Univer 版本、插件档案、平台格式版本）与服务端的不同
+   * 或者没有上报，或者构建低于运维开关。保存、另存为副本、申请编辑权与心跳都核对，这次操作没有生效；重新加载页面才能继续。
+   * 重放先于它：已经提交过的同一次请求照样拿到原来的结果。details 带原因（clientOutdatedDetailsSchema：format 或 build）
+   */
+  CLIENT_OUTDATED: { status: 409, message: '页面的版本过旧，本次操作没有生效，请重新加载页面' },
+  /**
+   * 这份文档由比服务端更新的版本保存过（服务端回滚之后，M3-P3 设计 §3.5）：重新加载拿到的还是同一个版本，提示刷新会形成死循环，
+   * 所以与 CLIENT_OUTDATED 分开。这份文档只能阅读
+   */
+  DOCUMENT_TOO_NEW: { status: 409, message: '这份文档由更新的版本保存过，当前只能阅读' },
   /** 这个操作会让有效的系统管理员一个都不剩（取消或停用最后一个系统管理员） */
   LAST_ADMIN: { status: 409, message: '至少要保留一个有效的系统管理员' },
   /** 账户已停用，不能执行这个操作（例如签发重置链接） */
@@ -79,7 +90,10 @@ export const ERROR_CODES = {
   PAYLOAD_TOO_LARGE: { status: 413, message: '请求体超过上限' },
   /** 不支持的字符集或内容编码 */
   UNSUPPORTED_MEDIA_TYPE: { status: 415, message: '不支持的内容类型或编码' },
-  /** 快照不合法：不是 UTF-8 的 JSON 对象、不是工作簿的结构、unitId 不是这份文档的、嵌套过深（M1 的基本校验） */
+  /**
+   * 快照不合法：快照检查的某一条规则没有通过（M1 的基本校验，M3-P3 起是完整的检查：资源、图片与链接地址等，设计 §3.3）。
+   * details 带违反的规则（snapshotInvalidDetailsSchema），不回显快照的内容
+   */
   SNAPSHOT_INVALID: { status: 422, message: '表格内容的格式不正确，无法保存' },
   /** 登录失败次数过多，暂时锁定；响应带 Retry-After */
   TOO_MANY_ATTEMPTS: { status: 429, message: '尝试次数过多，请稍后再试' },

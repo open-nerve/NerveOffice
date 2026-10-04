@@ -83,7 +83,7 @@ async function rejection(promise: Promise<unknown>): Promise<AppError> {
 describe('DocumentEditingService.acquire', () => {
   it('取得新的一代：一个业务事务里申请，响应是令牌、代次、修订号与它的来源、到期时间（ISO），没有异常结束时提醒为 null', async () => {
     const { service, calls, leases, transaction } = setup(ACQUIRED)
-    expect(await service.acquire(ACTOR, DOCUMENT, TAB)).toEqual({ token: TOKEN, writeEpoch: 4, revision: 3, source: null, expiresAt: EXPIRES.toISOString(), interruption: null })
+    expect(await service.acquire(ACTOR, DOCUMENT, TAB)).toEqual({ token: TOKEN, writeEpoch: 4, revision: 3, source: null, expiresAt: EXPIRES.toISOString(), interruption: null, formulasPending: false })
     expect(calls).toEqual(['begin', 'acquire', 'commit'])
     expect(leases.acquire).toHaveBeenCalledWith(ACTOR, DOCUMENT, TAB, transaction)
   })
@@ -129,10 +129,10 @@ describe('DocumentEditingService 的心跳、释放与编辑状态', () => {
 
   it('编辑状态：一个只读快照里判断、读租约、补人名；没有有效的租约时 editor 为 null、不查人名', async () => {
     const held = setup(ACQUIRED, { revision: 7, editor: { holderId: AMY, lastActiveAt: ACTIVE, sameUser: false }, canEdit: true })
-    expect(await held.service.status(ACTOR, DOCUMENT)).toEqual({ revision: 7, editor: { holder: { id: AMY, username: 'amy', displayName: '艾米' }, lastActiveAt: ACTIVE.toISOString(), sameUser: false }, canEdit: true })
+    expect(await held.service.status(ACTOR, DOCUMENT)).toEqual({ revision: 7, editor: { holder: { id: AMY, username: 'amy', displayName: '艾米' }, lastActiveAt: ACTIVE.toISOString(), sameUser: false }, canEdit: true, formulasPending: false })
     expect(held.calls).toEqual(['snapshot', 'status', 'names', 'end snapshot'])
     const free = setup(ACQUIRED)
-    expect(await free.service.status(ACTOR, DOCUMENT)).toEqual({ revision: 3, editor: null, canEdit: true })
+    expect(await free.service.status(ACTOR, DOCUMENT)).toEqual({ revision: 3, editor: null, canEdit: true, formulasPending: false })
     expect(free.calls).toEqual(['snapshot', 'status', 'end snapshot'])
   })
 

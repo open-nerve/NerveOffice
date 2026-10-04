@@ -1,8 +1,8 @@
 import type { BaseValueObject } from '../internal-api/index.ts'
+import { isPlatformAssetAddress } from '@nerve-office/contracts'
 import { ArrayValueObject, NumberValueObject, StringValueObject } from '@univerjs/engine-formula'
 import { describe, expect, it } from 'vitest'
 import { BaseFunction, ErrorType, ErrorValueObject } from '../internal-api/index.ts'
-import { isPlatformAssetAddress } from './platform-asset.ts'
 import { RestrictedImageFunction } from './restricted-image-function.ts'
 
 const ORIGIN = 'https://docs.example.com'

@@ -30,6 +30,8 @@ const DETAIL: DocumentDetail = {
   revision: 1,
   profile: 'sheet@1',
   formatVersion: 1,
+  sdkVersion: '1.0.1',
+  formulasPending: false,
   permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: true },
 }
 

@@ -25,7 +25,7 @@ const BOB: SessionResponse = { ...ALICE, user: { ...ALICE.user, id: '0199a2c4-1f
 
 /** 申请到的编辑租约：修订号与载入的内容相同（3） */
 const TOKEN = 'L'.repeat(43)
-const ACQUIRED: AcquiredEditLease = { token: TOKEN, writeEpoch: 7, revision: 3, source: null, expiresAt: '2026-09-27T03:01:30.000Z', interruption: null }
+const ACQUIRED: AcquiredEditLease = { token: TOKEN, writeEpoch: 7, revision: 3, source: null, expiresAt: '2026-09-27T03:01:30.000Z', interruption: null, formulasPending: false }
 const RENEWED: RenewedEditLease = { expiresAt: '2026-09-27T03:01:40.000Z' }
 /** 保存带上的编辑租约 */
 const CREDENTIALS = { token: TOKEN, writeEpoch: 7 }
@@ -50,6 +50,8 @@ const DETAIL: DocumentDetail = {
   revision: 3,
   profile: 'sheet@1',
   formatVersion: 1,
+  sdkVersion: '1.0.1',
+  formulasPending: false,
   permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false },
 }
 
@@ -148,9 +150,9 @@ function setup(options: Setup = {}) {
     document: vi.fn(overrides.document ?? (async () => DETAIL)),
     content: vi.fn(overrides.content ?? (async (): Promise<LoadedContent> => ({ snapshot: '{"id":"unit-1"}', revision: 3 }))),
     contentIfChanged: vi.fn(overrides.contentIfChanged ?? (async (): Promise<LoadedContent | typeof CONTENT_UNCHANGED> => CONTENT_UNCHANGED)),
-    editStatus: vi.fn(overrides.editStatus ?? (async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: null, canEdit: true }, serverTime: undefined }))),
+    editStatus: vi.fn(overrides.editStatus ?? (async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: null, canEdit: true, formulasPending: false }, serverTime: undefined }))),
     compress: vi.fn(overrides.compress ?? (async (snapshot: string) => new TextEncoder().encode(snapshot))),
-    save: vi.fn(overrides.save ?? (async (): Promise<SaveContentResponse> => ({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z' }))),
+    save: vi.fn(overrides.save ?? (async (): Promise<SaveContentResponse> => ({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false }))),
     conflictCopy: vi.fn(overrides.conflictCopy ?? (async (): Promise<CreatedDocument> => ({ ...DETAIL, id: COPY_ID, title: '周报（冲突副本 2026-10-04 15:30）', revision: 1, replayed: false }))),
     editLease,
   } satisfies EditorPageApi
@@ -183,7 +185,7 @@ function setup(options: Setup = {}) {
 
 /** 查看者读到的编辑状态：不能编辑 */
 async function VIEWER_STATUS(): Promise<FetchedEditStatus> {
-  return { status: { revision: 3, editor: null, canEdit: false }, serverTime: undefined }
+  return { status: { revision: 3, editor: null, canEdit: false, formulasPending: false }, serverTime: undefined }
 }
 
 /** 阅读与编辑的状态 */
@@ -508,7 +510,7 @@ describe('编辑器页的会话（P4 设计 §3.7.3，审查 B1）', () => {
   it('保存得到登录已过期：向服务端确认，没有人登录就暂停保存（不整页跳转，修改留着）；本人登录回来之后失败的说明清掉，再保存成功', async () => {
     let expired = true
     const { editorPage, page, api, fromOtherTab } = setup({
-      api: { save: async () => expired ? Promise.reject(new ApiError(401, 'SESSION_EXPIRED', '已过期')) : ({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z' }) },
+      api: { save: async () => expired ? Promise.reject(new ApiError(401, 'SESSION_EXPIRED', '已过期')) : ({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false }) },
     })
     await editorPage.load()
     vi.mocked(api.session).mockRejectedValueOnce(new ApiError(401, 'SESSION_EXPIRED', '已过期'))
@@ -550,7 +552,7 @@ describe('编辑器页的会话（P4 设计 §3.7.3，审查 B1）', () => {
       calls.push('save')
       if (calls.filter(call => call === 'save').length === 1)
         throw new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
-      return { revision: 4, savedAt: '2026-09-27T03:00:00.000Z' }
+      return { revision: 4, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false }
     })
     const { editorPage, api } = setup({ api: { save } })
     await editorPage.load()
@@ -619,7 +621,7 @@ describe('编辑器页的会话（P4 设计 §3.7.3，审查 B1）', () => {
       calls.push('save')
       if (calls.filter(call => call === 'save').length === 1)
         throw new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
-      return { revision: 4, savedAt: '2026-09-27T03:00:00.000Z' }
+      return { revision: 4, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false }
     })
     const { editorPage, api } = setup({ api: { save } })
     await editorPage.load()
@@ -703,7 +705,7 @@ describe('编辑器页的会话（P4 设计 §3.7.3，审查 B1）', () => {
       calls.push('save')
       if (calls.filter(call => call === 'save').length === 1)
         throw new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
-      return { revision: 4, savedAt: '2026-09-27T03:00:00.000Z' }
+      return { revision: 4, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false }
     })
     const { editorPage, api } = setup({ api: { save } })
     await editorPage.load()
@@ -736,7 +738,7 @@ describe('编辑器页的会话（P4 设计 §3.7.3，审查 B1）', () => {
     const again = editorPage.save()
     expect(editorPage.view()).toMatchObject({ confirmingSession: false, save: { status: 'saving' } })
     check.resolve(ALICE)
-    pending.resolve({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z' })
+    pending.resolve({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false })
     await Promise.all([saving, again])
     expect(api.save).toHaveBeenCalledOnce()
   })
@@ -998,7 +1000,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
 
   it('别人正在编辑：按只读创建，页头说明持有者与最后活动几分钟之前（按服务端的时间算）；没有保存，不续租；地址里的标记留着', async () => {
     const serverTime = Date.UTC(2026, 8, 27, 3, 2, 30)
-    const editStatus = async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: { holder: AMY, lastActiveAt: '2026-09-27T02:55:00.000Z', sameUser: false }, canEdit: true }, serverTime })
+    const editStatus = async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: { holder: AMY, lastActiveAt: '2026-09-27T02:55:00.000Z', sameUser: false }, canEdit: true, formulasPending: false }, serverTime })
     const { editorPage, editLease, createEditor, surface, time, editIntent } = setup({ api: { editStatus }, editLease: { acquire: vi.fn(async () => Promise.reject(heldBy(false, serverTime))) } })
     await editorPage.load()
     await settle()
@@ -1031,7 +1033,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
 
   it('自己在别处正在编辑、再试几次仍被占用：按只读，说明是自己', async () => {
     const acquire = vi.fn(async () => Promise.reject(heldBy(true)))
-    const editStatus = async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: { holder: { id: ALICE.user.id, username: ALICE.user.username, displayName: ALICE.user.displayName }, lastActiveAt: '2026-09-27T02:55:00.000Z', sameUser: true }, canEdit: true }, serverTime: undefined })
+    const editStatus = async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: { holder: { id: ALICE.user.id, username: ALICE.user.username, displayName: ALICE.user.displayName }, lastActiveAt: '2026-09-27T02:55:00.000Z', sameUser: true }, canEdit: true, formulasPending: false }, serverTime: undefined })
     const { editorPage, createEditor, time } = setup({ editLease: { acquire }, api: { editStatus } })
     const loading = editorPage.load()
     await vi.waitFor(() => expect(acquire).toHaveBeenCalledOnce())
@@ -1043,7 +1045,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
   })
 
   it('申请时刚失去编辑权（403）：按只读打开，不说明谁在编辑，没有"编辑"', async () => {
-    const editStatus = async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: null, canEdit: false }, serverTime: undefined })
+    const editStatus = async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: null, canEdit: false, formulasPending: false }, serverTime: undefined })
     const { editorPage, createEditor } = setup({ api: { editStatus }, editLease: { acquire: vi.fn(async () => Promise.reject(new ApiError(403, 'PERMISSION_DENIED', '只能查看这份文档，不能保存'))) } })
     await editorPage.load()
     expect(createEditor).toHaveBeenCalledWith(expect.objectContaining({ access: 'read' }))
@@ -1190,7 +1192,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
   it('保存得到可以续上的失效（到期）：放掉手里那一代、重新申请，续上之后用新的编辑权重发这一次（requestId 不变），保存成功，不出现失效的说明', async () => {
     const save = vi.fn<EditorPageApi['save']>()
       .mockRejectedValueOnce(leaseLost('expired'))
-      .mockResolvedValueOnce({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z' })
+      .mockResolvedValueOnce({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false })
     const { editorPage, editLease } = setup({ api: { save } })
     await editorPage.load()
     editLease.acquire.mockResolvedValueOnce(NEXT_LEASE)
@@ -1220,7 +1222,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     const save = vi.fn<EditorPageApi['save']>()
       .mockRejectedValueOnce(leaseLost('expired'))
       .mockRejectedValueOnce(leaseLost('released'))
-      .mockResolvedValueOnce({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z' })
+      .mockResolvedValueOnce({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false })
     const { editorPage, editLease } = setup({ api: { save } })
     await editorPage.load()
     const offline = new NetworkError('断网')
@@ -1251,7 +1253,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
   it('本页一次保存结果未知（其实已经提交）之后，心跳得知编辑权到期：续上时认出期间的那一版是本页自己的，以它为基准接着保存（审查 B1）', async () => {
     const save = vi.fn<EditorPageApi['save']>()
       .mockRejectedValueOnce(new NetworkError('断网'))
-      .mockResolvedValueOnce({ revision: 5, savedAt: '2026-09-27T03:00:00.000Z' })
+      .mockResolvedValueOnce({ revision: 5, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false })
     const { editorPage, editLease, fake, time } = setup({ api: { save }, editLease: { renew: vi.fn<EditLeaseApi['renew']>().mockRejectedValueOnce(leaseLost('expired')).mockResolvedValue(RENEWED) } })
     await editorPage.load()
     Object.assign(fake.editor, { changeSeq: () => 1 })
@@ -1276,7 +1278,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
       .mockRejectedValueOnce(new NetworkError('断网'))
       .mockRejectedValueOnce(leaseLost('expired'))
       .mockRejectedValueOnce(new ApiError(409, 'DOCUMENT_REVISION_CONFLICT', '别处保存了更新的版本', { details: { currentRevision: 4, source: own } }))
-      .mockResolvedValueOnce({ revision: 5, savedAt: '2026-09-27T03:00:00.000Z' })
+      .mockResolvedValueOnce({ revision: 5, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false })
     const { editorPage, editLease, fake } = setup({ api: { save }, newId })
     await editorPage.load()
     Object.assign(fake.editor, { changeSeq: () => 1 })
@@ -1297,7 +1299,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
 
   it('在途的保存其实已经提交，这时心跳得知编辑权中断（session）、续上认出了它；随后它自己的回包断网：不说保存失败，已保存到云端；再按保存以认出的那一版为基准（复验 C3）', async () => {
     const pending = deferred<SaveContentResponse>()
-    const save = vi.fn<EditorPageApi['save']>().mockReturnValueOnce(pending.promise).mockResolvedValue({ revision: 5, savedAt: '2026-09-27T03:00:00.000Z' })
+    const save = vi.fn<EditorPageApi['save']>().mockReturnValueOnce(pending.promise).mockResolvedValue({ revision: 5, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false })
     const renew = vi.fn<EditLeaseApi['renew']>().mockRejectedValueOnce(leaseLost('session')).mockResolvedValue(RENEWED)
     const { editorPage, editLease, fake, time } = setup({ api: { save }, editLease: { renew } })
     await editorPage.load()
@@ -1448,7 +1450,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
   it('按保存时等会话的确认连同编辑权的核对（与续上）有了结果：登录换过，续上之后用新的编辑权发保存', async () => {
     const save = vi.fn<EditorPageApi['save']>()
       .mockRejectedValueOnce(new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效'))
-      .mockResolvedValueOnce({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z' })
+      .mockResolvedValueOnce({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false })
     const { editorPage, api, editLease } = setup({ api: { save } })
     await editorPage.load()
     const check = deferred<SessionResponse>()
@@ -1627,7 +1629,7 @@ describe('阅读与编辑的切换（M3-P2 设计 §3.1、§3.4）', () => {
     await time.advance(10_000)
     expect(modeOf(editorPage)).toMatchObject({ kind: 'losing' })
     expect(blocked(surface)).toBe(true)
-    reply.resolve({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z' })
+    reply.resolve({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false })
     await saving
     await settle()
     expect(modeOf(editorPage)).toMatchObject({ kind: 'lost', unsaved: false })
@@ -1803,7 +1805,7 @@ describe('阅读与编辑的切换（M3-P2 设计 §3.1、§3.4）', () => {
 
   it('有更新，点击刷新：交给阅读与编辑的状态机（条件读取、重建为阅读）', async () => {
     const { editorPage, api, createEditor } = setup({ editIntent: false, api: {
-      editStatus: async () => ({ status: { revision: 5, editor: null, canEdit: true }, serverTime: undefined }),
+      editStatus: async () => ({ status: { revision: 5, editor: null, canEdit: true, formulasPending: false }, serverTime: undefined }),
       contentIfChanged: async () => ({ snapshot: '{"id":"unit-1","v":5}', revision: 5 }),
     } })
     await editorPage.load()

@@ -1,10 +1,11 @@
 // 安装 IMAGE() 的限制（P4 设计 §3.6.7，沿用 M0 验证过的做法）：主线程与公式 Worker 各装一次。
 // 内置函数在公式引擎插件 onReady 时注册（engine-formula 的 formula.controller.ts:135-147），所以在生命周期到达 Ready 之后调用：
 // 取出原执行器、注册同名的包装（后注册的覆盖先注册的，function.service.ts:74-79）、清掉 IMAGE 的公式缓存，
-// 再在下一个宏任务核对一次生效的仍是包装，防止同一轮里晚到的注册把它覆盖掉
+// 再在下一个宏任务核对一次生效的仍是包装，防止同一轮里晚到的注册把它覆盖掉。
+// 平台的图片地址的判定在 contracts（documents/asset-address.ts），服务端快照检查的图片规则共用它（M3-P3 设计 §3.2）
 import type { Univer } from '@univerjs/core'
+import { isPlatformAssetAddress } from '@nerve-office/contracts'
 import { IFunctionService, injectorOf } from '../internal-api/index.ts'
-import { isPlatformAssetAddress } from './platform-asset.ts'
 import { RestrictedImageFunction } from './restricted-image-function.ts'
 
 const IMAGE = 'IMAGE'

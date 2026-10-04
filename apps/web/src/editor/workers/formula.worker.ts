@@ -2,7 +2,9 @@
 // 插件组合与官方 Worker preset 相同；工作簿副本由主线程经 RPC 创建，所以这里的生命周期要等主线程创建工作簿之后才到 Ready
 // （core 的 univer.ts:202-238）。到 Ready 后装上 IMAGE() 的限制，在同一个 Worker 上回报结果：
 // 主线程收到 ok 才算编辑器就绪，这个回报也顺带证明 Worker 已经启动、收到了工作簿（P4 设计 §3.6.7）。
-// 不引用 contracts 与 zod（Worker 里没有 zod 的 JIT 关闭）
+// 不引用 zod（Worker 里没有 zod 的 JIT 关闭）：IMAGE() 的限制经 contracts 的入口只用平台图片地址的判定（documents/asset-address.ts，
+// 不引用 zod，M3-P3）；contracts 声明了 sideEffects: false，构建只带进用到的模块，Worker 的产物里没有 zod（门禁 artifacts 按 zod 的
+// JIT 探测登记的次数兜底：多出一份就超过上限）
 import { LifecycleStages, LocaleType, LogLevel, Univer } from '@univerjs/core'
 import { installRestrictedImageFunction } from '../image-function/install-image-policy.ts'
 import { imagePolicyReport } from '../image-function/worker-report.ts'

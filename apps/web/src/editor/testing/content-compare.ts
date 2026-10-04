@@ -3,6 +3,8 @@
 // - 命令日志里哪些是"改文档的 mutation"（documentChangesIn、documentChangeAttemptsIn）：与编辑器的变更检测同一个判定
 //   （change-tracking/change-classifier.ts 的排除标记、档案的排除名单，单元测试核对两边一致）。
 // 这个文件不引用任何模块：E2E 经模块边界的例外引用它（eslint.config.ts），Playwright 的进程里不能带进 Univer 与 web 的其他代码。
+// 所以服务端"内容相同不递增"的规范化内容（contracts 的 documents/content-canonical.ts，M3-P3）它也引用不了：
+// 口径相同（视图状态、空资源与"不在"等价、资源里去掉空键、不看键序），单元测试核对两边对"内容相同"的判断一致。
 
 /**
  * 快照的内容（比较用，M0-P3 报告 §3.4 的口径，spikes/m0/src/harness/content-compare.ts）：

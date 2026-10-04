@@ -17,7 +17,7 @@ import type { SpaceTreeRepository } from './space-tree.repository.ts'
 import type { NewTrashEntry, TrashEntriesRepository, TrashEntryRow } from './trash-entries.repository.ts'
 import type { WriteAccessRevocation, WriteAccessScope } from './write-access.ts'
 import { Buffer } from 'node:buffer'
-import { EDIT_LEASE_TTL_SECONDS, FOLDER_LIST_MAX_ITEMS, TRASH_RETENTION_DAYS } from '@nerve-office/contracts'
+import { EDIT_LEASE_TTL_SECONDS, FOLDER_LIST_MAX_ITEMS, TRASH_RETENTION_DAYS, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { vi } from 'vitest'
 import { parseAuditEvent } from '../audit/index.ts'
 import { EffectiveAccessPolicy } from './document-access-policy.ts'
@@ -100,7 +100,7 @@ export class FakeStore {
   addDocument(overrides: Partial<DocumentRow> = {}): DocumentRow {
     this.sequence += 1
     const id = `0199a2c4-0000-7000-8000-${String(this.sequence).padStart(12, '0')}`
-    const row: DocumentRow = { id, spaceId: ALICE_SPACE, type: 'sheet', title: '周报', createdBy: ALICE, createdAt: NOW, updatedAt: NOW, position: NOW.toISOString(), revision: 1, unitId: `unit-${id}`, profile: 'sheet@1', formatVersion: 1, writeEpoch: 0, ...overrides, folderId: overrides.folderId ?? null }
+    const row: DocumentRow = { id, spaceId: ALICE_SPACE, type: 'sheet', title: '周报', createdBy: ALICE, createdAt: NOW, updatedAt: NOW, position: NOW.toISOString(), revision: 1, unitId: `unit-${id}`, profile: 'sheet@1', formatVersion: 1, sdkVersion: UNIVER_SDK_VERSION, writeEpoch: 0, ...overrides, folderId: overrides.folderId ?? null }
     this.documents.set(id, row)
     return row
   }
@@ -306,21 +306,21 @@ export class FakeStore {
       }),
       /**
        * 按源文档建一份副本：类型、unitId、档案与格式版本原样复制，修订号 1、代次 0（与真实仓储一样用列的默认值），新的 id。
-       * 行里没有 SDK 版本（DocumentRow 不带它）：另存为副本给的版本由用例按调用的参数核对
+       * 写入时的 SDK 版本与真实仓储一样：给了（另存为副本）用给的，没给（复制）照源文档
        */
       copyFrom: vi.fn(async (sourceId: string, copy: CopiedDocument): Promise<DocumentRow | undefined> => {
         const source = this.documents.get(sourceId)
         if (source === undefined)
           return undefined
         const { id: _id, ...columns } = source
-        const { sdkVersion: _sdkVersion, ...placement } = copy
-        return this.addDocument({ ...columns, ...placement, revision: 1, writeEpoch: 0 })
+        const { sdkVersion, ...placement } = copy
+        return this.addDocument({ ...columns, ...placement, sdkVersion: sdkVersion ?? source.sdkVersion, revision: 1, writeEpoch: 0 })
       }),
-      advanceRevision: vi.fn(async (id: string, revision: number) => {
+      advanceRevision: vi.fn(async (id: string, revision: number, sdkVersion: string) => {
         const row = this.documents.get(id)
         if (row?.revision !== revision - 1)
           throw new Error('修订号没有前进')
-        this.documents.set(id, { ...row, revision })
+        this.documents.set(id, { ...row, revision, sdkVersion })
       }),
       /** 写入代次加一（M3-P1），返回加一之后的代次；更新时间不变 */
       advanceWriteEpoch: vi.fn(async (id: string) => this.updateDocument(id, { writeEpoch: this.epochAfterAdvance(id) }).writeEpoch),
