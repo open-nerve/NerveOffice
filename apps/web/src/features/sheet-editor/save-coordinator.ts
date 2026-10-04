@@ -1,7 +1,7 @@
 // 保存的状态机（P4 设计 §3.7.2）：输入是用户的保存、编辑器的修改与接口的结果，不依赖 Univer 与界面，用假的编辑器与假的接口做单元测试。
 import type { RevisionConflictDetails, RevisionSource, SaveContentResponse } from '@nerve-office/contracts'
 import { revisionConflictDetailsSchema, SNAPSHOT_MAX_RAW_BYTES } from '@nerve-office/contracts'
-import { ApiError, isAuthenticationError, isCsrfTokenError, isDefiniteRejection } from '../../shared/api/index.ts'
+import { ApiError, isAuthenticationError, isCsrfTokenError, isDefiniteRejection, isNotFoundError } from '../../shared/api/index.ts'
 
 /** 保存用到的编辑器能力（SheetEditor 的子集）。 */
 export interface SaveEditor {
@@ -96,6 +96,17 @@ export interface SaveCoordinator {
   readonly adoptOwnRevision: (revision: number, source: RevisionSource | null) => boolean
   /** 保存一次（按钮或快捷键）。同一时间只有一个保存在途，保存中再按不做任何事 */
   readonly save: () => Promise<void>
+  /** 进行中的保存结束之后兑现（没有在途的保存时立即兑现），从不失败：失去编辑权时先等它，再看本页还有没有没保存的内容 */
+  readonly settled: () => Promise<void>
+  /** 有一次结果未知的保存（网络错误、5xx、回包读不出来）还没有答案：它可能其实已经提交 */
+  readonly hasUnknownOutcome: () => boolean
+  /**
+   * 原样重发最近一次结果未知的保存（M3-P2 设计 §3.4：失去编辑权、给副本之前）。服务端的重放先于登录的再核对与租约（P1）：
+   * 它其实已经提交时拿到原来的结果——按那次捕获确认（committed），本页可能就没有没保存的内容了；确定被拒绝说明它没有提交
+   * （not-committed）；读不到（404）、未登录、令牌失效与结果仍然未知时说不准（unknown，记录留着）。没有这样的保存时为 none。
+   * 停住保存时照样发：这是核对那一次，不是新的保存
+   */
+  readonly replayUnknownOutcome: () => Promise<'none' | 'committed' | 'not-committed' | 'unknown'>
   /** 离开页面会丢掉内容：有未保存的修改、正在编辑的单元格、保存中、冲突之后本页的内容 */
   readonly hasUnsavedWork: () => boolean
   /** 停止保存（例如别的标签页换了人）：之后的保存都不做，直到 resume */
@@ -160,6 +171,8 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
   const unconfirmed = new Map<string, UnconfirmedSave>()
   /** 最近一次结果未知的请求：内容与基准都没变时，重试原样再发它（requestId 与请求的各项都不变） */
   let retryable: SaveRequest | undefined
+  /** 进行中的保存（save 里的那一次）：settled 等它 */
+  let running: Promise<void> | undefined
   let current = computeView()
 
   function computeView(): SaveView {
@@ -325,17 +338,61 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
       inFlight = true
       problem = undefined
       update()
+      const run = (async (): Promise<void> => {
+        try {
+          await attempt()
+        }
+        catch (error) {
+          // 发出请求之前的步骤出了意外（请求本身的失败在 attempt 里已经归类）：显示保存失败，而不是悄悄回到"有未保存的修改"（审查 B5）
+          problem = { kind: 'unexpected', error }
+          options.reportError(error)
+        }
+        finally {
+          inFlight = false
+          running = undefined
+          update()
+        }
+      })()
+      running = run
+      await run
+    },
+    settled: async () => {
+      await running
+    },
+    hasUnknownOutcome: () => retryable !== undefined,
+    replayUnknownOutcome: async () => {
+      await running
+      const request = retryable
+      if (request === undefined)
+        return 'none'
+      const record = unconfirmed.get(request.requestId)
+      let body: Uint8Array<ArrayBuffer>
       try {
-        await attempt()
+        body = await options.compress(request.snapshot)
       }
       catch (error) {
-        // 发出请求之前的步骤出了意外（请求本身的失败在 attempt 里已经归类）：显示保存失败，而不是悄悄回到"有未保存的修改"（审查 B5）
-        problem = { kind: 'unexpected', error }
         options.reportError(error)
+        return 'unknown'
       }
-      finally {
-        inFlight = false
+      try {
+        const result = await send(request, body)
+        // 那一次其实已经提交（重放给出原来的结果）：按它的捕获确认，之前"保存失败"的说明随之不再成立
+        if (record !== undefined)
+          confirm(record.capture, result.revision)
+        if (problem?.kind === 'request' && !isDefiniteRejection(problem.error))
+          problem = undefined
         update()
+        return 'committed'
+      }
+      catch (error) {
+        // 读不到了（重放也要求能访问）、登录或令牌的问题（到不了重放那一步）：说不准它有没有提交
+        if (!isDefiniteRejection(error) || isNotFoundError(error) || isAuthenticationError(error) || isCsrfTokenError(error))
+          return 'unknown'
+        // 别的确定拒绝（编辑权已失效、不能编辑、修订号冲突等）说明它没有提交：提交过的话重放先于这些检查，会给出原来的结果
+        unconfirmed.delete(request.requestId)
+        retryable = undefined
+        update()
+        return 'not-committed'
       }
     },
     hasUnsavedWork: () => conflict !== undefined || inFlight || editor.isCellEditing() || editor.changeSeq() > savedSeq || formulasPending,

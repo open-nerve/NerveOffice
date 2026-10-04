@@ -1,4 +1,6 @@
-import type { EditorPage, EditorPageLoad, EditorPageReady, EditorPageView } from './editor-page.ts'
+import type { LeaseLoss } from './edit-lease.ts'
+import type { EditModeState, LostMode, ReadingMode } from './edit-mode.ts'
+import type { EditorPage, EditorPageReady, EditorPageView } from './editor-page.ts'
 import type { SaveView } from './save-coordinator.ts'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
@@ -15,14 +17,35 @@ const READY: EditorPageReady = {
   accessVia: 'space',
   canShare: false,
   userId: '0199a2c4-0000-7000-8000-00000000000a',
-  readOnly: false,
-  stage: 'steady',
 }
 const CLEAN: SaveView = { status: 'clean', formulasPending: false, problem: undefined, conflict: undefined, canSave: true, unsaved: false }
+const EDITING: EditModeState = { kind: 'editing' }
+const READING: ReadingMode = { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined }
+const AMY = { id: '0199a2c4-0000-7000-8000-0000000000e1', username: 'amy', displayName: '艾米' }
+const COPY = {
+  id: '0199a2c4-0000-7000-8000-0000000000c9',
+  title: '周报（冲突副本 2026-10-04 15:30）',
+  type: 'sheet',
+  createdAt: '2026-10-04T07:31:00.000Z',
+  updatedAt: '2026-10-04T07:31:00.000Z',
+  spaceId: PERSONAL.id,
+  space: PERSONAL,
+  folderId: null,
+  accessVia: 'space',
+  revision: 1,
+  profile: 'sheet@1',
+  formatVersion: 1,
+  permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true },
+} as const
+
+/** 失去编辑权（默认：读得到、有修改，可以另存为副本或放弃） */
+function lost(loss: LeaseLoss, changes: Partial<LostMode> = {}): LostMode {
+  return { kind: 'lost', loss, unsaved: true, readable: loss.kind !== 'not-found', checking: false, captureFailed: false, copy: { kind: 'idle' }, reload: { kind: 'idle' }, ...changes }
+}
 
 /** 假的编辑器页：视图由测试设定 */
 function fakePage(initial: Partial<EditorPageView> = {}) {
-  let view: EditorPageView = { load: READY, save: CLEAN, editing: { kind: 'editing' }, session: 'active', sessionProblem: undefined, confirmingSession: false, ...initial }
+  let view: EditorPageView = { load: READY, mode: EDITING, save: CLEAN, session: 'active', sessionProblem: undefined, confirmingSession: false, detailProblem: undefined, surface: 'ready', ...initial }
   const listeners = new Set<() => void>()
   const page: EditorPage = {
     view: () => view,
@@ -32,6 +55,11 @@ function fakePage(initial: Partial<EditorPageView> = {}) {
     },
     load: async () => {},
     save: vi.fn(async () => {}),
+    enterEditing: vi.fn(async () => {}),
+    exitEditing: vi.fn(async () => {}),
+    refreshUpdate: vi.fn(async () => {}),
+    saveCopy: vi.fn(async () => {}),
+    discard: vi.fn(async () => {}),
     hasUnsavedWork: () => false,
     reload: vi.fn(),
     refreshDetail: vi.fn(async () => {}),
@@ -47,9 +75,17 @@ function fakePage(initial: Partial<EditorPageView> = {}) {
   }
 }
 
-/** 页头里的状态（载入中的说明、保存状态）：页头之外另有说明谁在编辑的读屏状态区 */
+/** 页头里的状态（载入中的说明、阅读与编辑、保存状态）：页头之外另有说明谁在编辑的读屏状态区 */
 function headerStatus(): HTMLElement {
   return within(screen.getByRole('banner')).getByRole('status')
+}
+
+/** 页头之外的读屏状态区（谁在编辑、文档读不到了、另存为副本成功） */
+function infoRegion(): HTMLElement {
+  const region = screen.getAllByRole('status').find(element => element.dataset.slot === 'status-region')
+  if (region === undefined)
+    throw new Error('没有页头之外的读屏状态区')
+  return region
 }
 
 function renderChrome(initial: Partial<EditorPageView> = {}, apple = false) {
@@ -70,7 +106,6 @@ describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
     const fake = renderChrome({ load: { ...READY, accessVia: 'grant', space: { id: '0199a2c4-0000-7000-8000-0000000000c1', type: 'team', name: '市场部' } } })
     expect(screen.getByRole('link', { name: '与我共享' })).toHaveAttribute('href', '/shared')
     expect(screen.queryByText('市场部')).toBeNull()
-    // 别人的个人空间里的也一样：不当成"我的空间"
     fake.set({ load: { ...READY, accessVia: 'grant', space: { id: '0199a2c4-0000-7000-8000-0000000000b1', type: 'personal' } } })
     expect(screen.getByRole('link', { name: '与我共享' })).toHaveAttribute('href', '/shared')
     expect(screen.queryByRole('link', { name: '我的空间' })).toBeNull()
@@ -100,7 +135,6 @@ describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
     const dialog = await screen.findByRole('dialog', { name: '分享「周报」' })
     expect(await within(dialog).findByText('空间已归档，恢复之后才能调整分享')).toBeInTheDocument()
     await waitFor(() => expect(fake.page.refreshDetail).toHaveBeenCalled())
-    // 重新取到的文档详情不能分享了：入口消失，对话框留着
     fake.set({ load: { ...READY, canShare: false } })
     expect(screen.queryByRole('button', { name: '分享' })).toBeNull()
     fireEvent.click(within(dialog).getByRole('button', { name: '关闭' }))
@@ -117,17 +151,35 @@ describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
   })
 
   it('载入中：说明正在打开，页头有回到我的空间的链接（整页跳转）', () => {
-    renderChrome({ load: { kind: 'loading' }, save: undefined })
+    renderChrome({ load: { kind: 'loading' }, mode: undefined, save: undefined })
     expect(headerStatus()).toHaveTextContent('正在打开表格…')
     expect(screen.getByRole('link', { name: '我的空间' })).toHaveAttribute('href', '/')
     expect(screen.queryByRole('button', { name: '保存' })).not.toBeInTheDocument()
   })
 
-  it('就绪：标题、保存状态（role="status"）与保存按钮；浏览器标签页的标题', () => {
-    renderChrome()
+  it('页头的状态一直是同一个元素（role="status"，显式 aria-live）：从载入、阅读到编辑都往里填，读屏随之播报', () => {
+    const fake = renderChrome({ load: { kind: 'loading' }, mode: undefined, save: undefined })
+    const status = headerStatus()
+    expect(status).toHaveAttribute('aria-live', 'polite')
+    fake.set({ load: READY, mode: { ...READING, canEdit: false } })
+    expect(headerStatus()).toBe(status)
+    expect(status).toHaveTextContent('只能查看')
+    fake.set({ mode: { kind: 'entering' } })
+    expect(headerStatus()).toBe(status)
+    expect(status).toHaveTextContent('正在进入编辑…')
+    fake.set({ mode: EDITING, save: CLEAN })
+    expect(headerStatus()).toBe(status)
+    expect(status).toHaveTextContent('已保存到云端')
+  })
+
+  it('编辑：标题、保存状态（role="status"）、保存与退出编辑；浏览器标签页的标题', () => {
+    const { page } = renderChrome()
     expect(screen.getByRole('heading', { name: '周报' })).toBeInTheDocument()
     expect(headerStatus()).toHaveTextContent('已保存到云端')
     expect(document.title).toBe('周报 - NerveOffice')
+    fireEvent.click(screen.getByRole('button', { name: '退出编辑' }))
+    expect(page.exitEditing).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
   })
 
   it('保存按钮：点击保存；快捷键按平台标注', () => {
@@ -175,52 +227,11 @@ describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
     expect(screen.getByText(text)).toBeInTheDocument()
   })
 
-  it('文档被删除、移走或失去权限之后保存（404，保存与续租同样转为失效，M3-P1）：说清楚无法访问了、本页的修改没有保存，需要的话先复制出来；不提供、也不承诺重新加载——读不到了，重新加载只会显示"内容不存在"，页头的返回链接照常在（审查 B2；M2 总设计 A14，M2-P6 复核 S8）', () => {
-    const error = new ApiError(404, 'NOT_FOUND', '请求的资源不存在或无权访问', { requestId: 'req-404' })
-    renderChrome({ save: { ...CLEAN, status: 'failed', canSave: false, problem: { kind: 'request', error }, unsaved: true }, editing: { kind: 'lost', loss: { kind: 'not-found', error } } })
-    expect(headerStatus()).toHaveTextContent('编辑权已失效')
-    expect(screen.getAllByRole('alert')).toHaveLength(1)
-    expect(screen.getByRole('alert').textContent).toBe('编辑权已失效：你已无法访问这份文档（可能已被删除、移走，或你失去了访问权限）。本页的修改没有保存，需要的话先把内容复制出来。')
-    expect(screen.queryByRole('button', { name: '重新加载' })).toBeNull()
-    expect(screen.getByRole('link', { name: '我的空间' })).toHaveAttribute('href', '/')
-    expect(screen.queryByText(/保存失败/)).toBeNull()
-  })
-
-  it.each([
-    ['心跳先得知（保存的状态是已保存）', { ...CLEAN, canSave: false }],
-    ['没有修改时按了保存、保存先得知（保存的状态是失败）', { ...CLEAN, status: 'failed', canSave: false, problem: { kind: 'request', error: new ApiError(404, 'NOT_FOUND', '不存在') } }],
-  ] as const)('读不到了（404）、本页没有未保存的内容（%s）：只说本页的修改都已保存，不提重新加载（审查 B2、B3）', (_case, save) => {
-    renderChrome({ save, editing: { kind: 'lost', loss: { kind: 'not-found', error: new ApiError(404, 'NOT_FOUND', '不存在') } } })
-    expect(screen.getByRole('alert').textContent).toBe('编辑权已失效：你已无法访问这份文档（可能已被删除、移走，或你失去了访问权限）。本页的修改都已保存。')
-    expect(screen.queryByRole('button', { name: '重新加载' })).toBeNull()
-  })
-
   it('请求不合法（400 REQUEST_INVALID）是这次请求本身的问题：按错误码说明，不说成"已经被删除、移走或失去权限"（第二批 G-5）', () => {
     renderChrome({ save: { ...CLEAN, status: 'failed', problem: { kind: 'request', error: new ApiError(400, 'REQUEST_INVALID', '请求的格式或参数不合法', { requestId: 'req-400' }) } } })
     expect(screen.getByRole('alert')).toHaveTextContent('保存失败：请求的内容不合法，请检查后重试')
     expect(screen.queryByText(/已经被删除/)).toBeNull()
     expect(screen.getByText('请求标识：req-400')).toBeInTheDocument()
-  })
-
-  it('能看却不能改了（403，例如空间刚被归档；保存与续租同样转为失效，M3-P1）：说没有编辑的权限、带上服务端说的原因，并说明本页的修改没有保存；重新加载能以只读看到最新的版本，提供它（M2-P6 复核 S5、S8）', () => {
-    const error = new ApiError(403, 'PERMISSION_DENIED', '空间已归档，只能查看')
-    renderChrome({ save: { ...CLEAN, status: 'failed', canSave: false, problem: { kind: 'request', error }, unsaved: true }, editing: { kind: 'lost', loss: { kind: 'denied', error } } })
-    expect(screen.getAllByRole('alert')).toHaveLength(1)
-    expect(screen.getByRole('alert')).toHaveTextContent('编辑权已失效：你已没有编辑这份文档的权限（空间已归档，只能查看）。本页的修改没有保存，需要的话先把内容复制出来，再重新加载。')
-    expect(screen.getByRole('button', { name: '重新加载' })).toBeInTheDocument()
-    expect(screen.queryByText(/你没有执行这个操作的权限/)).toBeNull()
-  })
-
-  it('能看却不能改了（403）、本页没有修改：心跳先得知与按了保存才得知，说法一样——只看本页有没有未保存的内容，不看保存的状态（审查 B3）', () => {
-    const error = new ApiError(403, 'PERMISSION_DENIED', '空间已归档，只能查看')
-    const lost = { kind: 'lost', loss: { kind: 'denied', error } } as const
-    renderChrome({ save: { ...CLEAN, canSave: false }, editing: lost })
-    const heartbeatFirst = screen.getByRole('alert').textContent
-    cleanup()
-    renderChrome({ save: { ...CLEAN, status: 'failed', canSave: false, problem: { kind: 'request', error } }, editing: lost })
-    expect(screen.getByRole('alert').textContent).toBe(heartbeatFirst)
-    expect(screen.getByRole('alert')).toHaveTextContent('编辑权已失效：你已没有编辑这份文档的权限（空间已归档，只能查看）。本页的修改都已保存，重新加载可以看到最新的版本。')
-    expect(screen.getByRole('alert')).not.toHaveTextContent('没有保存')
   })
 
   it('失败的说明带请求标识', () => {
@@ -319,16 +330,28 @@ describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('保存失败：出了点问题，请稍后重试')
   })
 
-  it('只能查看：没有保存按钮', () => {
-    renderChrome({ load: { ...READY, readOnly: true } as EditorPageLoad, save: undefined })
-    expect(screen.getByText('只能查看')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '保存' })).not.toBeInTheDocument()
+  it('持有编辑权的页面没有人登录了、换了人：重新登录之后编辑权自动续上，照旧说"回到这里保存""原来的账户重新登录之后可以继续保存"', () => {
+    renderChrome({ save: { ...CLEAN, status: 'dirty', unsaved: true }, session: 'signed-out' })
+    expect(screen.getByRole('alert')).toHaveTextContent('登录已过期或已在别处退出。本页的修改还在：请在新的标签页中用同一个账户登录，然后回到这里保存')
+    cleanup()
+    renderChrome({ save: { ...CLEAN, status: 'dirty', unsaved: true }, session: 'other-user' })
+    expect(screen.getByRole('alert')).toHaveTextContent('别的标签页登录了另一个账户，本页不能再保存。原来的账户重新登录之后可以继续保存')
+  })
+
+  it('文档详情没能刷新（DEF-040）：与列表同一个说法与原因，可以重试；页头的信息照旧', () => {
+    const { page } = renderChrome({ detailProblem: new ApiError(503, 'SERVICE_UNAVAILABLE', '繁忙') })
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('文档信息没能刷新，显示的还是之前的内容')
+    expect(alert).toHaveTextContent('服务')
+    expect(screen.getByRole('heading', { name: '周报' })).toBeInTheDocument()
+    fireEvent.click(within(alert).getByRole('button', { name: '重试' }))
+    expect(page.refreshDetail).toHaveBeenCalledOnce()
   })
 })
 
 describe('编辑器页的载入失败', () => {
   it('内容不存在或无权访问（别人的与不存在的相同）：说明，可以回到我的空间', () => {
-    renderChrome({ load: { kind: 'not-found' }, save: undefined })
+    renderChrome({ load: { kind: 'not-found' }, mode: undefined, save: undefined })
     expect(screen.getByText('内容不存在，或者你没有访问权限')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '我的空间' })).toHaveAttribute('href', '/')
   })
@@ -338,163 +361,234 @@ describe('编辑器页的载入失败', () => {
     ['编辑器加载失败', { kind: 'editor-failed', error: new Error('x') } as const, '编辑器加载失败，请刷新页面重试'],
     ['请求失败', { kind: 'failed', error: new NetworkError('断网') } as const, '表格加载失败：网络连接失败，请检查网络后重试'],
   ])('%s', (_case, load, text) => {
-    renderChrome({ load, save: undefined })
+    renderChrome({ load, mode: undefined, save: undefined })
     expect(screen.getByRole('alert')).toHaveTextContent(text)
   })
 
   it('请求失败的说明带请求标识', () => {
-    renderChrome({ load: { kind: 'failed', error: new ApiError(503, 'SERVICE_UNAVAILABLE', 'x', { requestId: 'req-7' }) }, save: undefined })
+    renderChrome({ load: { kind: 'failed', error: new ApiError(503, 'SERVICE_UNAVAILABLE', 'x', { requestId: 'req-7' }) }, mode: undefined, save: undefined })
     expect(screen.getByText('请求标识：req-7')).toBeInTheDocument()
   })
 })
 
-describe('编辑权（M3-P1 设计 §3.4.7）', () => {
-  const AMY = { id: '0199a2c4-0000-7000-8000-0000000000e1', username: 'amy', displayName: '艾米' }
-  const VIEWING: Partial<EditorPageView> = { load: { ...READY, readOnly: true }, save: undefined }
+describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
+  it('能编辑：有"编辑"，点了进入编辑；没有保存与退出编辑；页头的状态是空的', () => {
+    const { page } = renderChrome({ mode: READING, save: undefined })
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }))
+    expect(page.enterEditing).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('button', { name: '保存' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '退出编辑' })).toBeNull()
+    expect(headerStatus()).toBeEmptyDOMElement()
+  })
 
-  /** 页头之外说明谁在编辑的读屏状态区 */
-  function editingRegion(): HTMLElement {
-    const region = screen.getAllByRole('status').find(element => element.dataset.slot === 'status-region')
-    if (region === undefined)
-      throw new Error('没有说明谁在编辑的读屏状态区')
-    return region
-  }
+  it('只能查看：说"只能查看"，没有"编辑"', () => {
+    renderChrome({ mode: { ...READING, canEdit: false }, save: undefined })
+    expect(headerStatus()).toHaveTextContent('只能查看')
+    expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
+  })
 
-  it('别人正在编辑：说明谁（人名组件，登录名在前）在编辑、最后活动几分钟之前，只能阅读；读屏状态区载入时就在，就绪时往里填（规范 §2.4）', () => {
-    const fake = renderChrome({ load: { kind: 'loading' }, save: undefined, editing: { kind: 'none' } })
-    const region = editingRegion()
+  it('进入编辑中、退出编辑中、失去编辑权的过程中：页头说明正在做，没有可以点的', () => {
+    const fake = renderChrome({ mode: { kind: 'entering' }, save: undefined })
+    expect(headerStatus()).toHaveTextContent('正在进入编辑…')
+    expect(within(screen.getByRole('banner')).queryAllByRole('button')).toEqual([])
+    fake.set({ mode: { kind: 'exiting' } })
+    expect(headerStatus()).toHaveTextContent('正在退出编辑…')
+    fake.set({ mode: { kind: 'losing', loss: { kind: 'denied', error: new ApiError(403, 'PERMISSION_DENIED', 'x') } } })
+    expect(headerStatus()).toHaveTextContent('编辑权已失效，正在保留本页的内容…')
+    expect(within(screen.getByRole('banner')).queryAllByRole('button')).toEqual([])
+  })
+
+  it('别人正在编辑：读屏状态区说明谁（人名组件，登录名在前）、最后活动几分钟之前；状态区一直在，内容变化时往里填（规范 §2.4）', () => {
+    const fake = renderChrome({ load: { kind: 'loading' }, mode: undefined, save: undefined })
+    const region = infoRegion()
     expect(region).toBeEmptyDOMElement()
-    fake.set({ ...VIEWING, editing: { kind: 'elsewhere', holder: { holder: AMY, sameUser: false, lastActiveMinutes: 3 } } })
-    expect(editingRegion()).toBe(region)
+    fake.set({ load: READY, mode: { ...READING, holder: { holder: AMY, sameUser: false, lastActiveMinutes: 3 } } })
+    expect(infoRegion()).toBe(region)
     expect(region).toHaveTextContent('@amy 艾米 正在编辑这份文档（最后活动 3 分钟前），你现在只能阅读')
     expect(within(region).getByText('@amy')).toHaveAttribute('data-slot', 'person-username')
     expect(within(region).getByText('艾米').tagName).toBe('BDI')
-    expect(screen.getByText('只能查看')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '保存' })).not.toBeInTheDocument()
+    // 仍然可以点"编辑"（被占用时留在阅读、说明谁在编辑）
+    expect(screen.getByRole('button', { name: '编辑' })).toBeInTheDocument()
   })
 
   it.each([
     ['不到 1 分钟', 0, '@amy 艾米 正在编辑这份文档（最后活动不到 1 分钟前），你现在只能阅读'],
     ['服务端没给出回答的时刻', undefined, '@amy 艾米 正在编辑这份文档，你现在只能阅读'],
   ])('最后活动%s', (_case, minutes, text) => {
-    renderChrome({ ...VIEWING, editing: { kind: 'elsewhere', holder: { holder: AMY, sameUser: false, lastActiveMinutes: minutes } } })
-    expect(editingRegion()).toHaveTextContent(text)
+    renderChrome({ mode: { ...READING, holder: { holder: AMY, sameUser: false, lastActiveMinutes: minutes } }, save: undefined })
+    expect(infoRegion()).toHaveTextContent(text)
   })
 
-  it('是自己（在另一个标签页或设备上）：说明在别处正在编辑，这里只能阅读；刚关闭或刷新过那个页面时，那边的编辑权最多 90 秒后自动结束（审查 B7）', () => {
-    renderChrome({ ...VIEWING, editing: { kind: 'elsewhere', holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 } } })
-    expect(editingRegion().textContent).toBe('你在另一个标签页或设备上正在编辑这份文档，这里只能阅读。要是刚刚关闭或刷新过那个页面，那边的编辑权最多 90 秒后自动结束，到时重新加载这一页就能编辑')
+  it('是自己（在另一个标签页或设备上）：说明在别处正在编辑；刚关闭或刷新过那个页面时，那边的编辑权最多 90 秒后自动结束（审查 B7）', () => {
+    renderChrome({ mode: { ...READING, holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 } }, save: undefined })
+    expect(infoRegion().textContent).toBe('你在另一个标签页或设备上正在编辑这份文档，这里只能阅读。要是刚刚关闭或刷新过那个页面，那边的编辑权最多 90 秒后自动结束，到时再点"编辑"就能编辑')
   })
 
-  it('服务端给的详情认不出：通用的说法', () => {
-    renderChrome({ ...VIEWING, editing: { kind: 'elsewhere', holder: undefined } })
-    expect(editingRegion()).toHaveTextContent('这份文档正在别处编辑，你现在只能阅读')
+  it('服务端给的详情认不出：通用的说法；只能查看的人不说谁在编辑', () => {
+    renderChrome({ mode: { ...READING, holder: undefined }, save: undefined })
+    expect(infoRegion()).toBeEmptyDOMElement()
+    cleanup()
+    renderChrome({ mode: { ...READING, canEdit: false, holder: { holder: AMY, sameUser: false, lastActiveMinutes: 1 } }, save: undefined })
+    expect(infoRegion()).toBeEmptyDOMElement()
   })
 
-  it('持有编辑权或只能查看：读屏状态区是空的', () => {
-    renderChrome()
-    expect(editingRegion()).toBeEmptyDOMElement()
+  it('有更新：页头提示"有更新，点击刷新"，点了交给页面；正在载入时标为不可用', () => {
+    const fake = renderChrome({ mode: { ...READING, update: 'available' }, save: undefined })
+    fireEvent.click(screen.getByRole('button', { name: '有更新，点击刷新' }))
+    expect(fake.page.refreshUpdate).toHaveBeenCalledOnce()
+    fake.set({ mode: { ...READING, update: 'loading' } })
+    expect(screen.getByRole('button', { name: '正在载入最新的版本…' })).toHaveAttribute('aria-disabled', 'true')
   })
 
-  const DIRTY: SaveView = { ...CLEAN, status: 'dirty', canSave: false, unsaved: true }
-  /** 重新加载还看得到这份文档的来源：说明之后提供重新加载 */
-  const RELOADABLE_LOSSES = [
-    ['编辑权被收回', { kind: 'lease', reason: 'revoked' } as const, '编辑权已失效：你对这份文档的编辑权被收回了。本页的修改没有保存，需要的话先把内容复制出来，再重新加载。'],
-    ['不认识的原因', { kind: 'lease', reason: undefined } as const, '编辑权已失效。本页的修改没有保存，需要的话先把内容复制出来，再重新加载。'],
-    ['不能编辑了（403，原因由服务端给出）', { kind: 'denied', error: new ApiError(403, 'PERMISSION_DENIED', '只能查看这份文档，不能编辑') } as const, '编辑权已失效：你已没有编辑这份文档的权限（只能查看这份文档，不能编辑）。本页的修改没有保存，需要的话先把内容复制出来，再重新加载。'],
-    ['续上时别人正在编辑', { kind: 'held', holder: { holder: AMY, sameUser: false, lastActiveMinutes: 2 } } as const, '编辑权已失效：@amy 艾米 正在编辑这份文档（最后活动 2 分钟前）。本页的修改没有保存，需要的话先把内容复制出来，再重新加载。'],
-    ['续上时自己在别处正在编辑', { kind: 'held', holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 } } as const, '编辑权已失效：你在另一个标签页或设备上正在编辑这份文档（要是刚刚关闭或刷新过那个页面，那边的编辑权最多 90 秒后自动结束，到时重新加载这一页就能编辑）。本页的修改没有保存，需要的话先把内容复制出来，再重新加载。'],
-    ['续上时被占用、详情认不出', { kind: 'held', holder: undefined } as const, '编辑权已失效：这份文档正在别处编辑。本页的修改没有保存，需要的话先把内容复制出来，再重新加载。'],
-    ['续上时别处保存过更新的版本', { kind: 'newer' } as const, '编辑权已失效：编辑权中断期间，别处保存了更新的版本，本页不能再覆盖它。本页的修改没有保存，需要的话先把内容复制出来，再重新加载。'],
-  ] as const
-  /** 读不到这份文档了（404）：重新加载只会显示"内容不存在"，不提供它（审查 B2） */
-  const NOT_FOUND_LOSS = { kind: 'not-found', error: new ApiError(404, 'NOT_FOUND', '不存在') } as const
-  it.each(RELOADABLE_LOSSES)('编辑权失效（%s）：保存状态说编辑权已失效，说明原因与本页的修改没有保存，提供重新加载', (_case, loss, text) => {
-    const { page } = renderChrome({ save: DIRTY, editing: { kind: 'lost', loss } })
-    expect(headerStatus()).toHaveTextContent('编辑权已失效')
+  it('读不到这份文档了：说明（显示的是之前打开的内容），没有"编辑"', () => {
+    renderChrome({ mode: { ...READING, gone: true, canEdit: false }, save: undefined })
+    expect(infoRegion()).toHaveTextContent('你已无法访问这份文档（可能已被删除、移走，或你失去了访问权限），这里显示的是之前打开的内容')
+    expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
+  })
+
+  it.each([
+    ['不能编辑了（403）', { kind: 'denied', error: new ApiError(403, 'PERMISSION_DENIED', '空间已归档，只能查看') } as const, '没能进入编辑：你已没有编辑这份文档的权限（空间已归档，只能查看）'],
+    ['网络', { kind: 'enter-failed', error: new NetworkError('断网') } as const, '没能进入编辑：网络连接失败，请检查网络后重试'],
+    ['编辑权在建好编辑器之前失效', { kind: 'enter-lost', loss: { kind: 'lease', reason: 'revoked' } } as const, '没能进入编辑：编辑权已失效（你对这份文档的编辑权被收回了）'],
+    ['以编辑方式重建失败', { kind: 'editor-failed' } as const, '编辑器没能以编辑方式打开，已回到阅读，可以再试一次'],
+    ['有更新之后取不到最新的版本', { kind: 'refresh-failed', error: new NetworkError('断网') } as const, '没能载入最新的版本：网络连接失败，请检查网络后重试'],
+  ])('上一次没有成功（%s）：醒目地说明', (_case, notice, text) => {
+    renderChrome({ mode: { ...READING, notice }, save: undefined })
     expect(screen.getByRole('alert')).toHaveTextContent(text)
-    expect(screen.getByRole('button', { name: '保存' })).toHaveAttribute('aria-disabled', 'true')
+  })
+
+  it('另存为副本成功：读屏状态区说明已另存为副本《…》，链接在新标签页打开它', () => {
+    renderChrome({ mode: { ...READING, canEdit: false, notice: { kind: 'copied', document: COPY } }, save: undefined })
+    expect(infoRegion()).toHaveTextContent('已另存为副本《周报（冲突副本 2026-10-04 15:30）》。')
+    const link = within(infoRegion()).getByRole('link', { name: '打开副本（新标签页）' })
+    expect(link).toHaveAttribute('href', `/documents/${COPY.id}`)
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('阅读时没有人登录了、换了人：不提修改与保存（阅读时没有要保存的，审查 B10）', () => {
+    renderChrome({ mode: READING, save: undefined, session: 'signed-out' })
+    expect(screen.getByRole('alert')).toHaveTextContent('登录已过期或已在别处退出。请在新的标签页中用同一个账户登录，然后回到这里继续')
+    expect(screen.getByRole('alert')).not.toHaveTextContent(/修改|保存/)
+    cleanup()
+    renderChrome({ mode: READING, save: undefined, session: 'other-user' })
+    expect(screen.getByRole('alert')).toHaveTextContent('别的标签页登录了另一个账户。原来的账户重新登录之后，这一页可以接着使用')
+  })
+})
+
+describe('失去编辑权（M3-P2 设计 §3.4）', () => {
+  const DENIED = new ApiError(403, 'PERMISSION_DENIED', '空间已归档，只能查看')
+  const NOT_FOUND: LeaseLoss = { kind: 'not-found', error: new ApiError(404, 'NOT_FOUND', '不存在') }
+
+  it('还读得到、有修改：页头说编辑权已失效；说明原因，给"另存为副本"与"放弃本页的修改"；没有保存按钮', () => {
+    const { page } = renderChrome({ mode: lost({ kind: 'denied', error: DENIED }), save: undefined })
+    expect(headerStatus()).toHaveTextContent('编辑权已失效')
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    expect(screen.getByRole('alert').textContent).toContain('编辑权已失效：你已没有编辑这份文档的权限（空间已归档，只能查看）。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
+    expect(screen.queryByRole('button', { name: '保存' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '另存为副本' }))
+    expect(page.saveCopy).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('button', { name: '重新加载' })).toBeNull()
+  })
+
+  it('放弃本页的修改：先确认（确认框说清后果）；确认了交给页面，取消就不放弃', async () => {
+    const { page } = renderChrome({ mode: lost({ kind: 'newer' }), save: undefined })
+    fireEvent.click(screen.getByRole('button', { name: '放弃本页的修改' }))
+    const dialog = await screen.findByRole('dialog', { name: '放弃本页的修改？' })
+    expect(dialog).toHaveTextContent('本页没有保存的修改会被丢弃，页面改为显示服务端的最新版本')
+    fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(page.discard).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '放弃本页的修改' }))
+    fireEvent.click(within(await screen.findByRole('dialog', { name: '放弃本页的修改？' })).getByRole('button', { name: '放弃修改' }))
+    await waitFor(() => expect(page.discard).toHaveBeenCalledOnce())
+  })
+
+  it('另存为副本进行中、失败：按钮标为进行中；失败时说明原因，本页的内容还在、可以再试', () => {
+    const fake = renderChrome({ mode: lost({ kind: 'newer' }, { copy: { kind: 'saving' } }), save: undefined })
+    expect(screen.getByRole('button', { name: '正在另存为副本…' })).toHaveAttribute('aria-disabled', 'true')
+    expect(screen.getByRole('button', { name: '放弃本页的修改' })).toHaveAttribute('aria-disabled', 'true')
+    fake.set({ mode: lost({ kind: 'newer' }, { copy: { kind: 'failed', error: new NetworkError('断网') } }) })
+    expect(screen.getByRole('alert')).toHaveTextContent('没能另存为副本：网络连接失败，请检查网络后重试。本页的内容还在，可以再试一次')
+    expect(screen.getByRole('button', { name: '另存为副本' })).toHaveAttribute('aria-disabled', 'false')
+  })
+
+  it('正在核对结果未知的那次保存：先说明在核对，不给副本与放弃', () => {
+    renderChrome({ mode: lost({ kind: 'denied', error: DENIED }, { checking: true }), save: undefined })
+    expect(screen.getByRole('alert')).toHaveTextContent('正在核对最后一次保存的结果…')
+    expect(screen.queryByRole('button', { name: '另存为副本' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '放弃本页的修改' })).toBeNull()
+  })
+
+  it('没有修改（或核对出那次保存其实已经提交）：说本页的修改都已保存，给"重新加载"（按最新的内容回到阅读）', () => {
+    const { page } = renderChrome({ mode: lost({ kind: 'lease', reason: 'revoked' }, { unsaved: false }), save: undefined })
+    expect(screen.getByRole('alert').textContent).toContain('编辑权已失效：你对这份文档的编辑权被收回了。本页的修改都已保存，重新加载可以看到最新的版本。')
+    expect(screen.getByRole('alert')).not.toHaveTextContent('没有保存')
+    fireEvent.click(screen.getByRole('button', { name: '重新加载' }))
+    expect(page.discard).toHaveBeenCalledOnce()
+    expect(page.reload).not.toHaveBeenCalled()
+  })
+
+  it('读不到了（404）、有修改：说明本页的修改不能再保存到这份文档、需要的话先复制出来；不给副本、不提重新加载，也不提登录（审查 B2）', () => {
+    renderChrome({ mode: lost(NOT_FOUND), save: undefined, session: 'signed-out' })
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    expect(screen.getByRole('alert').textContent).toBe('编辑权已失效：你已无法访问这份文档（可能已被删除、移走，或你失去了访问权限）。本页的修改没有保存，也不能再保存到这份文档，需要的话先把内容复制出来。')
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(screen.getByRole('link', { name: '我的空间' })).toHaveAttribute('href', '/')
+  })
+
+  it('读不到了（404）、没有修改：只说本页的修改都已保存', () => {
+    renderChrome({ mode: lost(NOT_FOUND, { unsaved: false }), save: undefined })
+    expect(screen.getByRole('alert').textContent).toBe('编辑权已失效：你已无法访问这份文档（可能已被删除、移走，或你失去了访问权限）。本页的修改都已保存。')
+  })
+
+  it('另存为副本之后取最新的内容失败：说明已另存为副本（链接在新标签页打开）与没能载入的原因，可以重新加载', () => {
+    const { page } = renderChrome({ mode: lost({ kind: 'newer' }, { copy: { kind: 'done', document: COPY }, reload: { kind: 'failed', error: new NetworkError('断网') } }), save: undefined })
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('已另存为副本《周报（冲突副本 2026-10-04 15:30）》。')
+    expect(alert).toHaveTextContent('没能载入最新的版本：网络连接失败，请检查网络后重试')
+    expect(alert).not.toHaveTextContent('本页的修改没有保存')
+    expect(within(alert).getByRole('link', { name: '打开副本（新标签页）' })).toHaveAttribute('target', '_blank')
+    expect(screen.queryByRole('button', { name: '另存为副本' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '重新加载' }))
+    expect(page.discard).toHaveBeenCalledOnce()
+  })
+
+  it('本页的内容没能取出（编辑器出错）：说明，需要的话先复制出来；只给整页的重新加载', () => {
+    const { page } = renderChrome({ mode: lost({ kind: 'newer' }, { captureFailed: true }), save: undefined })
+    expect(screen.getByRole('alert')).toHaveTextContent('本页的修改没能取出（编辑器出了问题）。需要的话先把内容复制出来，再重新加载')
+    expect(screen.queryByRole('button', { name: '另存为副本' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '重新加载' }))
     expect(page.reload).toHaveBeenCalledOnce()
   })
 
-  it('编辑权失效（读不到了，404）：说明原因与本页的修改没有保存，需要的话先复制出来；不提供重新加载（审查 B2）', () => {
-    renderChrome({ save: DIRTY, editing: { kind: 'lost', loss: NOT_FOUND_LOSS } })
-    expect(headerStatus()).toHaveTextContent('编辑权已失效')
-    expect(screen.getByRole('alert').textContent).toBe('编辑权已失效：你已无法访问这份文档（可能已被删除、移走，或你失去了访问权限）。本页的修改没有保存，需要的话先把内容复制出来。')
-    expect(screen.queryByRole('button', { name: '重新加载' })).toBeNull()
-    expect(screen.getByRole('button', { name: '保存' })).toHaveAttribute('aria-disabled', 'true')
-  })
+  /** 各种失效的原因都有自己的说法 */
+  const LOSSES: readonly (readonly [string, LeaseLoss, string])[] = [
+    ['编辑权被收回', { kind: 'lease', reason: 'revoked' }, '编辑权已失效：你对这份文档的编辑权被收回了。'],
+    ['不认识的原因', { kind: 'lease', reason: undefined }, '编辑权已失效。'],
+    ['不能编辑了（403，原因由服务端给出）', { kind: 'denied', error: new ApiError(403, 'PERMISSION_DENIED', '只能查看这份文档，不能编辑') }, '编辑权已失效：你已没有编辑这份文档的权限（只能查看这份文档，不能编辑）。'],
+    ['续上时别人正在编辑', { kind: 'held', holder: { holder: AMY, sameUser: false, lastActiveMinutes: 2 } }, '编辑权已失效：@amy 艾米 正在编辑这份文档（最后活动 2 分钟前）。'],
+    ['续上时自己在别处正在编辑', { kind: 'held', holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 } }, '编辑权已失效：你在另一个标签页或设备上正在编辑这份文档（要是刚刚关闭或刷新过那个页面，那边的编辑权最多 90 秒后自动结束，到时再点"编辑"就能编辑）。'],
+    ['续上时被占用、详情认不出', { kind: 'held', holder: undefined }, '编辑权已失效：这份文档正在别处编辑。'],
+    ['续上时别处保存过更新的版本', { kind: 'newer' }, '编辑权已失效：编辑权中断期间，别处保存了更新的版本，本页不能再覆盖它。'],
+  ]
 
-  it('读不到了（404）之后换了人：同样不提重新加载（不说"重新加载会以那个账户打开"）', () => {
-    renderChrome({ session: 'other-user', save: DIRTY, editing: { kind: 'lost', loss: NOT_FOUND_LOSS } })
-    expect(screen.getAllByRole('alert')).toHaveLength(1)
-    expect(screen.getByRole('alert')).not.toHaveTextContent('重新加载')
+  it.each(LOSSES)('原因：%s', (_case, loss, text) => {
+    renderChrome({ mode: lost(loss), save: undefined })
+    expect(screen.getByRole('alert').textContent).toContain(text)
   })
 
   it('续上时别人正在编辑：人名经人名组件（登录名在前，显示名隔离）', () => {
-    renderChrome({ save: DIRTY, editing: { kind: 'lost', loss: { kind: 'held', holder: { holder: AMY, sameUser: false, lastActiveMinutes: undefined } } } })
+    renderChrome({ mode: lost({ kind: 'held', holder: { holder: AMY, sameUser: false, lastActiveMinutes: undefined } }), save: undefined })
     const alert = screen.getByRole('alert')
     expect(alert).toHaveTextContent('编辑权已失效：@amy 艾米 正在编辑这份文档。本页的修改没有保存')
     expect(within(alert).getByText('@amy')).toHaveAttribute('data-slot', 'person-username')
     expect(within(alert).getByText('艾米').tagName).toBe('BDI')
   })
 
-  it('每种来源都有自己的说法', () => {
-    const losses = [...RELOADABLE_LOSSES.map(([, loss]) => loss), NOT_FOUND_LOSS]
-    const shown = new Set<string>()
-    for (const loss of losses) {
-      renderChrome({ save: DIRTY, editing: { kind: 'lost', loss } })
-      shown.add(screen.getByRole('alert').textContent)
-      cleanup()
-    }
-    expect(shown.size).toBe(losses.length)
-  })
-
-  it('编辑权失效、本页的修改都已保存：不说"没有保存"', () => {
-    renderChrome({ save: { ...CLEAN, canSave: false }, editing: { kind: 'lost', loss: { kind: 'lease', reason: 'revoked' } } })
-    expect(screen.getByRole('alert')).toHaveTextContent('编辑权已失效：你对这份文档的编辑权被收回了。本页的修改都已保存，重新加载可以看到最新的版本。')
-    expect(screen.getByRole('alert')).not.toHaveTextContent('没有保存')
-  })
-
-  it('编辑权失效之后只显示这一条：会话的提示、保存失败、版本冲突与"公式结果尚未保存"都不再成立', () => {
-    const lost = { kind: 'lost', loss: { kind: 'newer' } } as const
-    renderChrome({ session: 'signed-out', save: { ...DIRTY, status: 'failed', formulasPending: true, problem: { kind: 'request', error: new ApiError(409, 'EDIT_LEASE_LOST', 'x') } }, editing: lost })
-    expect(screen.getAllByRole('alert')).toHaveLength(1)
-    expect(screen.getByRole('alert')).toHaveTextContent('编辑权已失效：编辑权中断期间，别处保存了更新的版本')
-    expect(screen.queryByText(/公式结果尚未保存/)).toBeNull()
-    cleanup()
-    renderChrome({ save: { ...DIRTY, status: 'conflict', conflict: { currentRevision: 5, source: null } }, editing: { kind: 'lost', loss: { kind: 'lease', reason: 'revoked' } } })
-    expect(screen.getAllByRole('alert')).toHaveLength(1)
-    expect(screen.getByRole('alert')).not.toHaveTextContent('别处保存了更新的版本')
-  })
-
-  it('编辑权失效之后换了人：另说明重新加载会以那个账户打开（复验 TB8 的做法）', () => {
-    renderChrome({ session: 'other-user', save: DIRTY, editing: { kind: 'lost', loss: { kind: 'lease', reason: 'revoked' } } })
-    expect(screen.getAllByRole('alert')).toHaveLength(1)
-    expect(screen.getByRole('alert')).toHaveTextContent('别的标签页登录了另一个账户，重新加载会以那个账户打开')
-  })
-
-  it('持有编辑权的页面没有人登录了、换了人：重新登录之后编辑权自动续上，照旧说"回到这里保存""原来的账户重新登录之后可以继续保存"', () => {
-    renderChrome({ save: DIRTY, session: 'signed-out' })
-    expect(screen.getByRole('alert')).toHaveTextContent('登录已过期或已在别处退出。本页的修改还在：请在新的标签页中用同一个账户登录，然后回到这里保存')
-    expect(screen.getByRole('link', { name: '在新标签页中登录' })).toBeInTheDocument()
-    cleanup()
-    renderChrome({ save: DIRTY, session: 'other-user' })
-    expect(screen.getByRole('alert')).toHaveTextContent('别的标签页登录了另一个账户，本页不能再保存。原来的账户重新登录之后可以继续保存')
-  })
-
-  it.each([
-    ['只能查看的页面', VIEWING],
-    ['别处正在编辑、只能阅读的页面', { ...VIEWING, editing: { kind: 'elsewhere', holder: { holder: AMY, sameUser: false, lastActiveMinutes: 3 } } }],
-  ] as const)('%s没有人登录了、换了人：不提修改与保存（只读的页面没有修改，也不能保存，审查 B10）', (_case, view) => {
-    renderChrome({ ...view, session: 'signed-out' })
-    expect(screen.getByRole('alert')).toHaveTextContent('登录已过期或已在别处退出。请在新的标签页中用同一个账户登录，然后回到这里继续')
-    expect(screen.getByRole('alert')).not.toHaveTextContent(/修改|保存/)
-    expect(screen.getByRole('link', { name: '在新标签页中登录' })).toBeInTheDocument()
-    cleanup()
-    renderChrome({ ...view, session: 'other-user' })
-    expect(screen.getByRole('alert')).toHaveTextContent('别的标签页登录了另一个账户。原来的账户重新登录之后，这一页可以接着使用')
-    expect(screen.getByRole('alert')).not.toHaveTextContent(/修改|保存/)
+  it('还读得到、有修改时换了人或没有人登录：另说明要先登录回来（另存为副本要用本人的登录）', () => {
+    renderChrome({ mode: lost({ kind: 'newer' }), save: undefined, session: 'signed-out' })
+    expect(screen.getAllByRole('alert')).toHaveLength(2)
+    expect(screen.getAllByRole('alert')[1]).toHaveTextContent('登录已过期或已在别处退出。请在新的标签页中用同一个账户登录，然后回到这里继续')
   })
 })

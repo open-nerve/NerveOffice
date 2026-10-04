@@ -5,7 +5,7 @@ import type { Page } from '@playwright/test'
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { appendSheet, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openEditor, resourceOf, ribbon, saveAndWait, savedContent, saveStatus, selectCell, selectRange, typeInCell, waitForEditor } from '../../support/sheet.ts'
+import { appendSheet, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openEditor, reloadAndEnterEditing, resourceOf, ribbon, saveAndWait, savedContent, saveStatus, selectCell, selectRange, typeInCell } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -154,8 +154,7 @@ test.describe('US-M1-05 只改视图不算修改，改格式算修改（P4 设�
       dialogs.push(dialog.type())
       void dialog.accept()
     })
-    await page.reload()
-    await waitForEditor(page, 'steady')
+    await reloadAndEnterEditing(page, 'steady')
     expect(dialogs).toEqual([])
     expect((await savedContent(page, documentId)).revision).toBe(revision)
 

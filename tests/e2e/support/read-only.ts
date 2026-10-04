@@ -15,7 +15,7 @@ import { expect } from './fixtures.ts'
 import { collectPageErrors } from './page-errors.ts'
 import { readOnlySampleFor } from './read-only-sample.ts'
 import { loginThroughApi } from './session.ts'
-import { openEditor } from './sheet.ts'
+import { openReader } from './sheet.ts'
 
 export interface Scene {
   readonly author: TestUser
@@ -60,10 +60,10 @@ export function watch(page: Page, documentId: string): Watched {
  */
 export const OPENED = 'steady'
 
-/** 查看者（或归档空间里的成员）打开：页头显示"只能查看" */
+/** 查看者（或归档空间里的成员）打开（M3-P2：打开即阅读）：页头显示"只能查看" */
 export async function openReadOnly(page: Page, user: TestUser, documentId: string): Promise<void> {
   await loginThroughApi(page, user)
-  await openEditor(page, documentId, OPENED)
+  await openReader(page, documentId, OPENED)
   await expect(page.locator('#editor-chrome').getByText('只能查看', { exact: true })).toBeVisible()
 }
 

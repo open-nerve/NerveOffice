@@ -1,27 +1,25 @@
-// 编辑器页（P4 设计 §3.7）：载入、保存、会话；编辑租约（M3-P1 设计 §3.4.7）。界面（editor-chrome.tsx）只订阅这里的状态；
-// 编辑器在 React 之外创建：一页一份文档，整页加载与卸载，不随组件的挂载与卸载反复创建（计划书 §10.2）。
-// 能编辑时载入之后就申请编辑权（P2 改为打开即阅读、点"编辑"才申请，租约的管理在 edit-lease.ts，原样复用）：
-// 取得了按可编辑创建编辑器，被占用按只读创建并说明谁在编辑；编辑权中断时自动续上（期间没人保存过），续不上、失去访问或编辑权时
-// 停止保存、说明原因；关闭页面时尽力释放。
-import type { DocumentAccessVia, DocumentDetail, DocumentSpace, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
-import type { CreateSheetEditorOptions, SheetEditor, SheetEditorLifecycle } from '../../editor/index.ts'
+// 编辑器页（P4 设计 §3.7）：载入、会话与页头的编排。阅读与编辑、编辑权与保存交给 edit-mode.ts（M3-P2 设计 §3.4）；
+// 界面（editor-chrome.tsx）只订阅这里的状态。编辑器在 React 之外创建：一页一份文档，模式切换一律重建（M3-P2 设计 §3.1）。
+// 打开即阅读：载入之后以只读创建；地址带 ?edit=new（新建表格之后的跳转）而且能编辑时直接进入编辑，进入之后去掉这个参数。
+// 交互屏障：载入期间、进入与退出编辑、失去编辑权的过程中，以及每次新建编辑器时，页头之外的输入一律拦下（interaction-barrier.ts）。
+import type { DocumentAccessVia, DocumentDetail, DocumentSpace, SessionResponse } from '@nerve-office/contracts'
 import type { ApiError } from '../../shared/api/index.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
-import type { EditLease, EditLeaseApi, LeaseAcquisition, LeaseClock, LeaseHolder, LeaseLoss } from './edit-lease.ts'
-import type { LeaseCredentials, LoadedContent } from './editor-api.ts'
-import type { SaveCoordinator, SaveRequest, SaveView } from './save-coordinator.ts'
+import type { LeaseClock } from './edit-lease.ts'
+import type { CreateModeEditor, EditMode, EditModeApi, EditModeState, PageVisibility } from './edit-mode.ts'
+import type { LoadedContent } from './editor-api.ts'
+import type { SaveView } from './save-coordinator.ts'
 import { DOCUMENT_PROFILES, PLATFORM_FORMAT_VERSIONS } from '@nerve-office/contracts'
-import { isAuthenticationError, isMissingResource, isPermissionDeniedError, setCsrfToken } from '../../shared/api/index.ts'
+import { isAuthenticationError, isMissingResource, setCsrfToken } from '../../shared/api/index.ts'
 import { loginPath } from '../../shared/lib/login-path.ts'
-import { acquireEditLease, leaseLossOf, trackActivity } from './edit-lease.ts'
+import { trackActivity } from './edit-lease.ts'
+import { createEditMode } from './edit-mode.ts'
 import { blockInteractions } from './interaction-barrier.ts'
-import { createSaveCoordinator } from './save-coordinator.ts'
 
 /**
  * 就绪时页头要的东西：标题与所在的空间（返回链接）、看得到它的途径（只凭授权时返回"与我共享"，M2-P5）、能不能分享（分享的入口）、
- * 看这一页的人（分享时排除自己）。标题、空间、途径与能不能分享会随 refreshDetail 更新；能不能编辑（readOnly）在创建编辑器时就定了，不变：
- * 只能查看、申请编辑权被占用或刚失去编辑权（403）时为真
+ * 看这一页的人（分享时排除自己）。都随 refreshDetail 更新。阅读还是编辑、能不能编辑在 mode 里（edit-mode.ts）
  */
 export interface EditorPageReady {
   readonly kind: 'ready'
@@ -31,11 +29,9 @@ export interface EditorPageReady {
   readonly accessVia: DocumentAccessVia
   readonly canShare: boolean
   readonly userId: string
-  readonly readOnly: boolean
-  readonly stage: SheetEditorLifecycle
 }
 
-/** 载入的结果：就绪（可以编辑）、内容不存在或无权访问、格式不认识、请求失败、编辑器加载失败。 */
+/** 载入的结果：就绪、内容不存在或无权访问、格式不认识、请求失败、编辑器加载失败（之后的重建失败也是它） */
 export type EditorPageLoad
   = | { readonly kind: 'loading' }
     | EditorPageReady
@@ -54,24 +50,12 @@ export type EditorPageLoad
  */
 export type EditorPageSession = 'active' | 'signed-out' | 'other-user'
 
-/**
- * 本页的编辑权（M3-P1 设计 §3.4.7）：
- * - none：不涉及编辑权——载入中、载入失败、只能查看，或者申请时刚失去编辑权（403，按只读）；
- * - editing：本页持有编辑权，可以编辑与保存；
- * - elsewhere：别人（或者自己在另一个标签页、设备上）正在编辑，本页按只读创建。holder 是服务端给出的持有者，认不出时为 undefined；
- * - lost：编辑权失效（续租或保存得知），保存停止，loss 是失效的来源。P2 在这里接上"续上"与"另存为副本"
- */
-export type EditorEditing
-  = | { readonly kind: 'none' }
-    | { readonly kind: 'editing' }
-    | { readonly kind: 'elsewhere', readonly holder: LeaseHolder | undefined }
-    | { readonly kind: 'lost', readonly loss: LeaseLoss }
-
 export interface EditorPageView {
   readonly load: EditorPageLoad
-  /** 就绪、而且持有编辑权时才有（失效之后仍在，停止保存） */
+  /** 阅读还是编辑、编辑权怎样了（载入之后才有） */
+  readonly mode: EditModeState | undefined
+  /** 编辑时（与退出编辑的过程中）才有：保存的状态 */
   readonly save: SaveView | undefined
-  readonly editing: EditorEditing
   readonly session: EditorPageSession
   /**
    * 最近一次向服务端确认会话失败的原因（网络错误等）；确认成功之后清掉。会话不是 active 时显示在会话的提示里（复验 RB7）；
@@ -83,18 +67,24 @@ export interface EditorPageView {
    * 会话类的保存失败等确认有了结果再显示（复验 SB5、TB1）
    */
   readonly confirmingSession: boolean
+  /** 页头的文档详情没能刷新（DEF-040）：原因；页头留着之前的信息，可以重试。成功之后清掉 */
+  readonly detailProblem: unknown
+  /**
+   * 编辑器容器的状态（与 data-editor-state 相同）：loading 是载入或换编辑器期间（交互屏障挂着），ready 是渲染完成，steady 是
+   * 渲染完成之后 3 秒，failed 是没有编辑器。测试构建的页面自检按它等到 steady（selftest-hook.ts）
+   */
+  readonly surface: EditorSurfaceState
 }
 
-export interface EditorPageApi {
+export interface EditorPageApi extends EditModeApi {
   readonly session: () => Promise<SessionResponse>
   readonly document: (documentId: string) => Promise<DocumentDetail>
-  readonly content: (documentId: string) => Promise<LoadedContent>
-  /** 压缩快照（gzip）：本地的一步 */
-  readonly compress: (snapshot: string) => Promise<Uint8Array<ArrayBuffer>>
-  /** 保存：带上编辑租约的令牌与代次（M3-P1 设计 §3.4.4） */
-  readonly save: (documentId: string, request: SaveRequest, body: Uint8Array<ArrayBuffer>, lease: LeaseCredentials) => Promise<SaveContentResponse>
-  /** 编辑权：申请、心跳续租、释放 */
-  readonly editLease: EditLeaseApi
+}
+
+/** 地址里"新建之后直接编辑"的标记（?edit=new）：进入编辑之后去掉，刷新不再自动进入 */
+export interface EditIntent {
+  readonly requested: boolean
+  readonly clear: () => void
 }
 
 export interface EditorPageOptions {
@@ -102,17 +92,23 @@ export interface EditorPageOptions {
   readonly documentId: string | undefined
   /** Univer 挂载的容器；页面的状态写在它的 data-editor-state 上（loading、ready、steady、failed），E2E 按它等待 */
   readonly surface: HTMLElement
-  /** 页头：载入期间只有它可以交互，其余的用户输入都被交互屏障拦下（interaction-barrier.ts） */
+  /** 页头：交互屏障挂着时只有它可以交互（interaction-barrier.ts） */
   readonly chrome: HTMLElement
   readonly api: EditorPageApi
-  readonly createEditor: (options: CreateSheetEditorOptions) => Promise<SheetEditor>
+  /** 新建编辑器（适配层的 createSheetEditor）：容器由这里绑定 */
+  readonly createEditor: (options: Parameters<CreateModeEditor>[0] & { readonly container: HTMLElement }) => ReturnType<CreateModeEditor>
   readonly page: PageLocation
   readonly sessionChannel: SessionChannel
-  /** 编辑租约的时钟（单调的"现在"与计时器）：心跳、空闲的秒数、被占用时的再试 */
+  /** 单调的"现在"与计时器：编辑租约的心跳、阅读时的检查 */
   readonly clock: LeaseClock
+  /** 页面的可见性：隐藏时暂停阅读时的检查 */
+  readonly visibility: PageVisibility
+  readonly editIntent: EditIntent
   /** 当前的地址（路径与查询）：转到登录页时带上，登录之后回到这里 */
   readonly currentPath: () => string
   readonly newId: () => string
+  /** 现在的墙上时间（另存为副本的标题） */
+  readonly now: () => Date
   /** 意外的错误：上报（浏览器的 reportError） */
   readonly reportError: (error: unknown) => void
 }
@@ -122,13 +118,23 @@ export interface EditorPage {
   readonly subscribe: (listener: () => void) => () => void
   readonly load: () => Promise<void>
   readonly save: () => Promise<void>
-  /** 离开页面会丢掉内容（离开提示用；编辑权失效之后照旧按有没有未保存的修改） */
+  /** "编辑"：申请编辑权，重建为可编辑 */
+  readonly enterEditing: () => Promise<void>
+  /** "退出编辑"：先保存，释放编辑权，重建为只读 */
+  readonly exitEditing: () => Promise<void>
+  /** "有更新，点击刷新" */
+  readonly refreshUpdate: () => Promise<void>
+  /** 失去编辑权之后：另存为副本 */
+  readonly saveCopy: () => Promise<void>
+  /** 失去编辑权之后：放弃本页的修改（或重新加载），按服务端的最新内容重建为阅读 */
+  readonly discard: () => Promise<void>
+  /** 离开页面会丢掉内容（离开提示用） */
   readonly hasUnsavedWork: () => boolean
-  /** 整页重新加载（版本冲突、编辑权失效之后查看最新版本） */
+  /** 整页重新加载（版本冲突之后、编辑器加载失败之后） */
   readonly reload: () => void
   /**
-   * 重新取一次文档详情，更新页头（M2-P5：分享对话框里的写操作结果未知或被拒绝之后）：标题、所在的空间、途径与能不能分享；
-   * 看不到了（404）时不再能分享。能不能编辑不变（编辑器已经按打开时的权限创建，保存时由服务端再判断）。失败时页头不变，不抛出
+   * 重新取一次文档详情，更新页头（M2-P5：分享对话框里的写操作结果未知或被拒绝之后；DEF-040 的重试）：标题、所在的空间、途径与
+   * 能不能分享，阅读时能不能编辑随之更新。看不到了（404）时不再能分享。别的失败页头留着之前的信息、说明没能刷新、可以重试。不抛出
    */
   readonly refreshDetail: () => Promise<void>
   /**
@@ -136,11 +142,11 @@ export interface EditorPage {
    * 会话的提示随之更新，同一个人时换上新的令牌
    */
   readonly recheckSession: () => Promise<void>
-  /** 停止心跳与计时器，尽力释放编辑权，销毁编辑器 */
+  /** 停止计时器，尽力释放编辑权，销毁编辑器 */
   readonly dispose: () => void
 }
 
-type SurfaceState = 'loading' | 'ready' | 'steady' | 'failed'
+export type EditorSurfaceState = 'loading' | 'ready' | 'steady' | 'failed'
 
 /** 本页认识的档案与格式版本；别的一律不进入编辑，也不改写（计划书 §8.7） */
 function isKnownFormat(document: DocumentDetail): boolean {
@@ -148,11 +154,16 @@ function isKnownFormat(document: DocumentDetail): boolean {
     && (PLATFORM_FORMAT_VERSIONS as readonly number[]).includes(document.formatVersion)
 }
 
-/** 就绪时页头的信息里随文档详情更新的部分（见 EditorPageReady） */
-type EditorHeading = Pick<EditorPageReady, 'documentId' | 'title' | 'space' | 'accessVia' | 'canShare' | 'userId'>
+/** 页头的信息里随文档详情更新的部分 */
+type EditorHeading = Omit<EditorPageReady, 'kind'>
 
 function headingOf(document: DocumentDetail, userId: string): EditorHeading {
   return { documentId: document.id, title: document.title, space: document.space, accessVia: document.accessVia, canShare: document.permissions.canShare, userId }
+}
+
+/** 这些状态里编辑器在换（或正要换）：交互屏障挂着 */
+function switching(mode: EditModeState): boolean {
+  return mode.kind === 'opening' || mode.kind === 'entering' || mode.kind === 'exiting' || mode.kind === 'losing'
 }
 
 export function createEditorPage(options: EditorPageOptions): EditorPage {
@@ -160,20 +171,16 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   const listeners = new Set<() => void>()
   let load: EditorPageLoad = { kind: 'loading' }
   let session: EditorPageSession = 'active'
-  let editor: SheetEditor | undefined
-  let coordinator: SaveCoordinator | undefined
   let userId: string | undefined
   /** 本页这次加载的标识（P1 设计 §3.2）：编辑租约绑定它，保存也带着它（认出"自己追自己"），两处是同一个 */
   const clientInstanceId = options.newId()
-  let editing: EditorEditing = { kind: 'none' }
-  /** 本页持有的编辑租约（取得之后才有；失效、释放之后仍留着，不再续租） */
-  let lease: EditLease | undefined
+  /** 阅读与编辑（载入之后才有） */
+  let mode: EditMode | undefined
   /** 本页最后一次键盘、鼠标操作的时刻（单调的时钟）：心跳上报"多久没有操作" */
   let lastActivity = clock.now()
-  /** 载入的内容的修订号：保存状态机建好之前（创建编辑器期间）它就是保存的基准，续上时与申请得到的修订号比较 */
-  let loadedRevision = 0
-  /** 页头的信息（就绪之后才有）：refreshDetail 更新它，编辑器的阶段变化时沿用它 */
+  /** 页头的信息（载入了详情之后才有）：refreshDetail 更新它 */
   let heading: EditorHeading | undefined
+  let detailProblem: unknown
   let disposed = false
   /** 正在整页转到别处：之后的事件都不再处理 */
   let leaving = false
@@ -194,30 +201,33 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   let sessionProblem: unknown
   let confirmingSession = false
   const cleanups: (() => void)[] = []
-  /** 载入期间的交互屏障：撤掉它的函数 */
+  /** 交互屏障：撤掉它的函数 */
   let releaseBarrier: (() => void) | undefined
+  /** 编辑器容器的状态（写在容器的 data-editor-state 上） */
+  let surfaceState: EditorSurfaceState = 'loading'
   let current = computeView()
 
   function computeView(): EditorPageView {
-    return { load, save: coordinator?.view(), editing, session, sessionProblem, confirmingSession }
+    const modeView = mode?.view()
+    return { load, mode: modeView?.mode, save: modeView?.save, session, sessionProblem, confirmingSession, detailProblem, surface: surfaceState }
   }
 
   function update(): void {
     const next = computeView()
-    if (next.load === current.load && next.save === current.save && next.editing === current.editing && next.session === current.session
-      && next.sessionProblem === current.sessionProblem && next.confirmingSession === current.confirmingSession) {
+    const changed = (Object.keys(next) as (keyof EditorPageView)[]).some(key => next[key] !== current[key])
+    if (!changed)
       return
-    }
     current = next
     for (const listener of [...listeners])
       listener()
   }
 
   /**
-   * 载入期间挂着交互屏障（interaction-barrier.ts）：编辑器已经画出来、保存与离开提示还没接上，这时页头之外的输入一律拦下，
-   * 包括 Univer 挂在 body 下的浮层（Codex 评审 CX1，独立复验 N1）；就绪（ready、steady）或失败时撤掉
+   * 编辑器容器的状态与交互屏障（Codex 评审 CX1，独立复验 N1）：载入、换编辑器期间（loading）页头之外的输入一律拦下，包括
+   * Univer 挂在 body 下的浮层；编辑器就绪（ready、steady）或失败时撤掉
    */
-  function setSurface(state: SurfaceState): void {
+  function setSurface(state: EditorSurfaceState): void {
+    surfaceState = state
     surface.dataset.editorState = state
     surface.hidden = state === 'failed'
     if (state === 'loading') {
@@ -229,18 +239,31 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     }
   }
 
-  /** 页头的信息更新了（refreshDetail）：就绪时随即换上，能不能编辑与编辑器的阶段不变 */
-  function setHeading(next: EditorHeading): void {
-    heading = next
-    if (load.kind === 'ready') {
-      load = { ...load, ...next }
-      update()
-    }
-  }
-
   function finish(result: Exclude<EditorPageLoad, { kind: 'loading' | 'ready' }>): void {
     load = result
     setSurface('failed')
+    update()
+  }
+
+  /** 阅读与编辑的状态变了：编辑器换掉了就挂上屏障，就绪了就撤掉；编辑器建不起来、读不到了按载入失败说明 */
+  function modeChanged(): void {
+    const view = mode?.view()
+    if (view === undefined || disposed)
+      return
+    if (view.mode.kind === 'failed') {
+      if (load.kind !== 'editor-failed')
+        finish({ kind: 'editor-failed', error: view.mode.error })
+      return
+    }
+    if (view.mode.kind === 'unavailable') {
+      if (load.kind !== 'not-found')
+        finish({ kind: 'not-found' })
+      return
+    }
+    if (switching(view.mode) || view.surface === 'creating' || view.surface === 'none')
+      setSurface('loading')
+    else
+      setSurface(view.surface === 'steady' ? 'steady' : 'ready')
     update()
   }
 
@@ -263,74 +286,19 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       finish({ kind: 'failed', error })
   }
 
-  /**
-   * 保存的状态机停住还是照常：换了人（不把新会话的令牌交给这个页面），或者编辑权已经失效（再保存也一定被拒），都停住。
-   * 没有人登录时不停：按保存会先向服务端确认（save 里），本人在别处登录了就照常保存
-   */
-  function syncSaving(): void {
-    if (session === 'other-user' || editing.kind === 'lost')
-      coordinator?.stop()
-    else
-      coordinator?.resume()
-  }
-
   function enterSession(next: EditorPageSession): void {
-    const previous = session
     session = next
-    syncSaving()
-    // 会话不是本人：暂停续租，不带着别人的登录（或已经失效的登录）发续租。回到本人时由确认会话的那一步恢复
-    if (next !== 'active')
-      lease?.pause()
-    // 从未登录或换了人回到本人：之前"登录已过期""请求已失效"这类失败的说明不再成立（复验 RB2）。
-    // 一直是本人时保留：用户按了保存，要看到这次没有保存成功（页头提示再保存一次，令牌已经换好，复验 SB1）
-    if (next === 'active' && previous !== 'active')
-      coordinator?.dismissSessionProblem()
+    mode?.setSession(next)
     update()
   }
 
-  /** 编辑权失效（续租或保存得知）：停止保存，页头说明原因、提供重新加载。离开提示照旧按有没有未保存的修改 */
-  function leaseLost(loss: LeaseLoss): void {
-    if (disposed)
-      return
-    editing = { kind: 'lost', loss }
-    syncSaving()
-    update()
-  }
-
-  /**
-   * 续租得到未登录或令牌失效：与保存得到它们时同一个处理——向服务端确认现在是谁（不显示"正在确认"：不是用户按了保存）。
-   * 续租随之暂停，确认是本人之后恢复
-   */
-  function leaseSessionProblem(error: ApiError): void {
+  /** 编辑权与另存为副本的请求得到未登录或令牌失效：向服务端确认现在是谁（不显示"正在确认"：不是用户按了保存） */
+  function writeProblem(error: ApiError): void {
     if (isAuthenticationError(error))
       unauthenticatedPending = true
     else
       staleAfter = checksStarted
     void recheckSession()
-  }
-
-  /** 申请编辑权（edit-lease.ts）：被占用而且是自己时先再试几次（刷新时旧页面的释放晚到） */
-  async function acquire(id: string): Promise<LeaseAcquisition> {
-    return acquireEditLease({
-      documentId: id,
-      clientInstanceId,
-      api: api.editLease,
-      clock,
-      lastActivity: () => lastActivity,
-      // 续上时的比较：服务端确认过的最新修订（保存状态机建好之前是载入的内容的）
-      baseRevision: () => coordinator?.baseRevision() ?? loadedRevision,
-      // 期间的那一版是本页自己一次结果未知的保存：保存状态机按它确认（保存状态机建好之前还没有保存过，不会是）
-      adoptOwnRevision: (revision, source) => coordinator?.adoptOwnRevision(revision, source) ?? false,
-      onLost: leaseLost,
-      onSessionProblem: leaseSessionProblem,
-    })
-  }
-
-  /** 载入没有完成（失败、页面卸载）：已经取得的编辑权尽力释放 */
-  function abandonLease(): void {
-    lease?.release()
-    lease = undefined
-    editing = { kind: 'none' }
   }
 
   /** 确认会话得到未登录或登录已过期：现在没有人登录。暂停保存，本页的修改留着，等本页的用户重新登录（不整页跳转，审查 B1） */
@@ -341,7 +309,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   }
 
   /**
-   * 向服务端确认现在是谁：别的标签页登录或退出了、保存得到未登录或 CSRF_TOKEN_INVALID、暂停保存时又按了保存（ADR-008）。
+   * 向服务端确认现在是谁：别的标签页登录或退出了、请求得到未登录或 CSRF_TOKEN_INVALID、暂停保存时又按了保存（ADR-008）。
    * 几次请求合并成一次，确认期间又有请求时结束后再确认一次（与平台页面相同）；返回的 Promise 在这些都结束之后完成（复验 RB1）
    */
   async function recheckSession(): Promise<void> {
@@ -392,9 +360,9 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
 
   async function checkSessionOnce(): Promise<void> {
     const round = ++checksStarted
-    let current: SessionResponse | undefined
+    let confirmed: SessionResponse | undefined
     try {
-      current = await api.session()
+      confirmed = await api.session()
     }
     catch (error) {
       // 网络等失败：会话的状态不变；会话不是 active 时页面说明确认失败的原因（复验 RB7）。
@@ -418,16 +386,16 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     sessionProblem = undefined
     // 原因清掉之后要刷新：会话的状态可能没变（例如一直是未登录，复验 SB2）
     update()
-    if (current === undefined) {
+    if (confirmed === undefined) {
       signedOut()
     }
-    else if (current.user.id === userId) {
-      // 本页的用户（在别的标签页重新登录了）：换上新的令牌，恢复保存
-      setCsrfToken(current.csrfToken)
+    else if (confirmed.user.id === userId) {
+      // 本页的用户（在别的标签页重新登录了）：换上新的令牌，恢复保存与阅读时的检查
+      setCsrfToken(confirmed.csrfToken)
       enterSession('active')
       // 编辑权绑定登录（P1 设计 §3.4.1）：登录可能换过（重新登录、换令牌），恢复续租并立即核对一次——失效时随即说明、停止保存。
       // 确认在它有了结果之后才算结束：按保存时等的是这一步，不带着已经失效的编辑权去保存
-      await lease?.resume()
+      await mode?.resumeLease()
     }
     else {
       // 另一个人：新会话的令牌不交给这个页面，停止保存
@@ -437,75 +405,45 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   }
 
   /**
-   * 保存：带上编辑租约现在的令牌与代次。得到编辑权失效（EDIT_LEASE_LOST）、读不到（404）、不能编辑（403）时，
-   * 与续租得知同一个处理（P1 设计 §3.4.7）——心跳先发现还是保存先发现，结果一样：
-   * - 续上了（或者这次带的是已被续上取代的上一代）：用现在的编辑权重发这一次。上一次在写入之前就被拒绝，确定没有生效，
-   *   requestId 不变；至多重发一次；
-   * - 失效了：照常按保存失败交回（页头只说明编辑权已失效）；
-   * - 暂时说不准（续上时网络出错等）：按那次的错误交回（例如网络连接失败），下一次心跳或保存时再判断
+   * 要写的操作（保存、退出编辑）之前：确认会话进行中（别的标签页的消息、保存得到未登录或 CSRF 失效触发的）就等它结束，按确认的结果决定
+   * （复验 RB1）；暂停或停止保存时、上一次确认失败时（令牌可能没有换成，复验 TB1）先向服务端确认一次：本页的用户可能已经在别处重新登录，
+   * 广播的消息没有送到。令牌已知失效时一定先确认（复验 VB1）。返回能不能接着做：会话是本人、页面还在、令牌不是已知失效的（复验 UB1）
    */
-  async function sendSave(documentId: string, held: EditLease, request: SaveRequest, body: Uint8Array<ArrayBuffer>): Promise<SaveContentResponse> {
-    for (let resent = false; ; resent = true) {
-      const credentials = held.credentials()
-      try {
-        return await api.save(documentId, request, body, credentials)
-      }
-      catch (error) {
-        const loss = leaseLossOf(error)
-        if (loss === undefined)
-          throw error
-        const outcome = await held.lose(loss, credentials)
-        if (outcome.kind === 'unknown')
-          throw outcome.error ?? error
-        if (outcome.kind === 'lost' || resent)
-          throw error
-      }
-    }
+  async function readyToWrite(): Promise<boolean> {
+    if (checkInFlight !== undefined || session !== 'active' || sessionProblem !== undefined || staleAfter !== undefined)
+      await confirmForSave(false)
+    return session === 'active' && !disposed && staleAfter === undefined
   }
 
-  /**
-   * 编辑器就绪：持有编辑权时先建保存状态机（离开提示经它判断），然后才进入 ready、撤掉交互屏障（Codex 评审 CX1）。
-   * 只读的文档、别处正在编辑的文档已经以只读创建（createEditor 的 access，M2-P3 设计 §3.5），这里不建保存状态机：没有保存按钮，
-   * Ctrl/Cmd+S 不做事，离开不提示
-   */
-  function ready(document: DocumentDetail, created: SheetEditor, baseRevision: number, viewer: string): void {
-    editor = created
-    heading = headingOf(document, viewer)
-    const held = lease
-    const readOnly = held === undefined
-    if (held !== undefined) {
-      coordinator = createSaveCoordinator({
-        editor: created,
-        compress: api.compress,
-        send: async (request, body) => sendSave(document.id, held, request, body),
-        baseRevision,
-        clientInstanceId,
-        newRequestId: options.newId,
+  function createMode(id: string): EditMode {
+    const created = createEditMode({
+      documentId: id,
+      clientInstanceId,
+      api,
+      createEditor: async editorOptions => options.createEditor({ ...editorOptions, container: surface }),
+      clock,
+      visibility: options.visibility,
+      lastActivity: () => lastActivity,
+      newId: options.newId,
+      now: options.now,
+      title: () => heading?.title ?? '',
+      session: {
         // 保存得到未登录：先向服务端确认（回包可能是本人在别处重新登录之前发出的那次保存的，不能据此清掉新的令牌，复验 RB7）
-        onUnauthenticated: () => {
+        saveUnauthenticated: () => {
           unauthenticatedPending = true
           void confirmForSave(true)
         },
-        onSessionStale: () => {
+        saveStale: () => {
           staleAfter = checksStarted
           void confirmForSave(true)
         },
-        reportError: options.reportError,
-      })
-      // 创建编辑器期间别的标签页换了人、编辑权已经失效：保存状态机一建好就停住（复验 RB3）
-      syncSaving()
-      cleanups.push(coordinator.subscribe(update))
-    }
-    const enter = (stage: SheetEditorLifecycle): void => {
-      if (heading === undefined)
-        return
-      load = { kind: 'ready', ...heading, readOnly, stage }
-      // 渲染完成之后可以输入（ready）；steady 之后才判断"打开是否被判定为有修改"
-      setSurface(stage === 'steady' ? 'steady' : 'ready')
-      update()
-    }
-    cleanups.push(created.onLifecycle(enter))
-    enter(created.lifecycle())
+        writeProblem,
+        readProblem: () => void recheckSession(),
+      },
+      reportError: options.reportError,
+    })
+    cleanups.push(created.subscribe(modeChanged))
+    return created
   }
 
   return {
@@ -524,9 +462,9 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       const pageWindow = options.chrome.ownerDocument.defaultView ?? window
       cleanups.push(trackActivity(pageWindow, () => {
         lastActivity = clock.now()
-        lease?.noteActivity()
+        mode?.noteActivity()
       }))
-      const onPageHide = (): void => lease?.release()
+      const onPageHide = (): void => mode?.releaseOnHide()
       pageWindow.addEventListener('pagehide', onPageHide)
       cleanups.push(() => pageWindow.removeEventListener('pagehide', onPageHide))
       setSurface('loading')
@@ -555,95 +493,57 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         finish({ kind: 'unsupported' })
         return
       }
-      loadedRevision = content.revision
-      // 能编辑时先申请编辑权（P1 设计 §3.4.7）：取得了才按可编辑创建；被占用、刚失去编辑权（403）按只读
-      if (document.permissions.canEdit) {
-        let acquisition: LeaseAcquisition | undefined
-        try {
-          acquisition = await acquire(documentId)
-        }
-        catch (error) {
-          if (disposed)
-            return
-          // 能不能编辑刚变了（403）：按只读打开。读不到了（404）、未登录、网络等：与读取元数据、内容失败相同
-          if (!isPermissionDeniedError(error)) {
-            loadFailed(error)
-            return
-          }
-        }
-        if (acquisition?.kind === 'acquired') {
-          lease = acquisition.lease
-          editing = { kind: 'editing' }
-          if (disposed) {
-            abandonLease()
-            return
-          }
-          // 申请期间别的标签页换了人或者退出了：先暂停，确认是本人之后恢复
-          if (session !== 'active')
-            lease.pause()
-          // 申请得到的修订号是锁下的当前修订：比载入的内容新，说明这期间有人保存过，重新载入一次。
-          // 持有编辑权之后别人不能再保存，所以一次就够
-          if (acquisition.revision !== content.revision) {
-            try {
-              content = await api.content(documentId)
-              loadedRevision = content.revision
-            }
-            catch (error) {
-              abandonLease()
-              if (!disposed)
-                loadFailed(error)
-              return
-            }
-            if (disposed) {
-              abandonLease()
-              return
-            }
-          }
-        }
-        else if (acquisition?.kind === 'held') {
-          editing = { kind: 'elsewhere', holder: acquisition.holder }
-        }
-        if (disposed)
-          return
-      }
-      let created: SheetEditor
-      try {
-        // 能不能编辑由服务端按有效角色给出（ADR-014），并且要持有编辑权：只读时编辑器一开始就以只读创建，没有工具栏等编辑入口（M2-P3 设计 §3.5）
-        created = await options.createEditor({ container: surface, snapshot: content.snapshot, access: lease === undefined ? 'read' : 'edit' })
-      }
-      catch (error) {
-        abandonLease()
-        if (!disposed)
-          finish({ kind: 'editor-failed', error })
+      heading = headingOf(document, signedIn.user.id)
+      const opened = createMode(documentId)
+      mode = opened
+      // 载入期间别的标签页换了人或者退出了：按确认的结果开始（不是本人时不续租、不检查）
+      opened.setSession(session)
+      const canEdit = document.permissions.canEdit
+      const outcome = await opened.open({ snapshot: content.snapshot, revision: content.revision, canEdit }, { enterEdit: options.editIntent.requested && canEdit })
+      if (disposed)
+        return
+      if (outcome.kind === 'load-failed') {
+        loadFailed(outcome.error)
         return
       }
-      if (disposed) {
-        created.dispose()
-        abandonLease()
+      if (outcome.kind === 'editor-failed')
         return
-      }
-      ready(document, created, content.revision, signedIn.user.id)
+      // 刚由自己新建的表格进入了编辑：去掉地址里的标记，刷新不再自动进入
+      if (outcome.entered)
+        options.editIntent.clear()
+      load = { kind: 'ready', ...heading }
+      modeChanged()
     },
     save: async () => {
-      // 编辑权已经失效：再保存也一定被拒，不做任何事（页头已经说明）
-      if (coordinator === undefined || editing.kind === 'lost')
+      const view = mode?.view()
+      if (view?.mode.kind !== 'editing' || view.save === undefined)
         return
       // 保存中、版本冲突之后再按：不做任何事（P4 设计 §3.7.2）；不因为有确认在途就把"保存中"换成"正在确认"（复验 TB9）
-      const { status } = coordinator.view()
-      if (status === 'saving' || status === 'conflict')
+      if (view.save.status === 'saving' || view.save.status === 'conflict')
         return
-      // 确认会话进行中（别的标签页的消息、保存得到未登录或 CSRF 失效触发的）：等它结束，按确认的结果决定（复验 RB1）；
-      // 暂停或停止保存时、上一次确认失败时（令牌可能没有换成，复验 TB1）先向服务端确认一次：本页的用户可能已经在别处重新登录，
-      // 广播的消息没有送到。令牌已知失效时一定先确认（复验 VB1）：眼下这时确认总是在途或者失败过，这一条保证即使不是这样，
-      // 按保存也会去换令牌，而不是一直不发
-      if (checkInFlight !== undefined || session !== 'active' || sessionProblem !== undefined || staleAfter !== undefined)
-        await confirmForSave(false)
-      // 等确认期间页面卸载了：不再捕获与上传（复验 SB6）。令牌已知失效、确认又没有成功：不带着旧的令牌再发，
-      // 必然又是令牌失效，只会白传一遍快照；失败的原因页头已经说明（复验 UB1）
-      if (session === 'active' && !disposed && staleAfter === undefined)
-        await coordinator.save()
+      if (await readyToWrite())
+        await mode?.save()
     },
-    hasUnsavedWork: () => coordinator?.hasUnsavedWork() ?? false,
+    enterEditing: async () => {
+      await mode?.enter()
+    },
+    exitEditing: async () => {
+      if (mode?.view().mode.kind !== 'editing')
+        return
+      // 退出要先保存：与按保存同一个会话确认（换了人、令牌已知失效时不发，留在编辑）
+      if (await readyToWrite())
+        await mode.exit()
+    },
+    refreshUpdate: async () => {
+      await mode?.refresh()
+    },
+    saveCopy: async () => {
+      await mode?.saveCopy()
+    },
+    discard: async () => {
+      await mode?.discard()
+    },
+    hasUnsavedWork: () => mode?.hasUnsavedWork() ?? false,
     reload: () => page.reload(),
     refreshDetail: async () => {
       if (documentId === undefined || heading === undefined || disposed)
@@ -655,26 +555,41 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       catch (error) {
         if (disposed || heading === undefined)
           return
-        // 看不到了（已经删除、移走，或者自己被移出、授权被取消）：不再能分享。未登录交给会话的确认（页头随之说明）；别的失败页头不变
-        if (isMissingResource(error))
-          setHeading({ ...heading, canShare: false })
-        else if (isAuthenticationError(error))
+        // 看不到了（已经删除、移走，或者自己被移出、授权被取消）：不再能分享。未登录交给会话的确认（页头随之说明）；
+        // 别的失败：页头留着之前的信息，说明没能刷新、可以重试（DEF-040，与列表的"没能刷新"同一个说法）
+        if (isMissingResource(error)) {
+          heading = { ...heading, canShare: false }
+          detailProblem = undefined
+        }
+        else if (isAuthenticationError(error)) {
           void recheckSession()
+          return
+        }
+        else {
+          detailProblem = error
+        }
+        if (load.kind === 'ready')
+          load = { kind: 'ready', ...heading }
+        update()
         return
       }
-      if (!disposed && heading !== undefined)
-        setHeading(headingOf(document, heading.userId))
+      if (disposed || heading === undefined)
+        return
+      heading = headingOf(document, heading.userId)
+      detailProblem = undefined
+      mode?.updateCanEdit(document.permissions.canEdit)
+      if (load.kind === 'ready')
+        load = { kind: 'ready', ...heading }
+      update()
     },
     recheckSession,
     dispose: () => {
       disposed = true
       releaseBarrier?.()
       releaseBarrier = undefined
-      lease?.release()
       for (const cleanup of cleanups.splice(0))
         cleanup()
-      coordinator?.dispose()
-      editor?.dispose()
+      mode?.dispose()
       listeners.clear()
     },
   }

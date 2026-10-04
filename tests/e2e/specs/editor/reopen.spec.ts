@@ -1,11 +1,12 @@
 // 重开看到最后一次保存的内容（US-M1-06，P4 设计 §3.10）：值、公式与格式一致；未保存的修改不出现；打开不被判定为有修改。
 // 编辑器的内容画在画布上，核对重开之后的内容的办法：重开、不做修改，立即再保存一次，服务器上的内容与上一次保存的相同。
+// M3-P2 起打开即阅读：重开之后点"编辑"进入编辑（以可编辑重建），再核对"打开不被判定为有修改"与重新保存。
 import type { Page } from '@playwright/test'
 import type { Workbook } from '../../support/sheet.ts'
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, editorSurface, hoverCell, leaveEditor, openEditor, resourceOf, saveAndWait, savedContent, saveStatus, selectCell, sheetCanvas, typeInCell, waitForEditor } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, editorSurface, enterEditing, hoverCell, leaveEditor, openEditor, reloadAndEnterEditing, resourceOf, saveAndWait, savedContent, saveStatus, selectCell, sheetCanvas, typeInCell, waitForEditor, waitForEditorAccess } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -48,8 +49,7 @@ test.describe('US-M1-06 重开看到最后一次保存的内容', () => {
     const documentId = await createSheetThroughApi(page)
     await openEditor(page, documentId)
     const saved = await editAndSave(page, documentId)
-    await page.reload()
-    await waitForEditor(page, 'steady')
+    await reloadAndEnterEditing(page, 'steady')
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     expect(await contentAfterResave(page, documentId)).toEqual(contentOf(saved))
   })
@@ -65,7 +65,8 @@ test.describe('US-M1-06 重开看到最后一次保存的内容', () => {
     await expect(page.getByRole('form', { name: '登录' })).toBeVisible()
     await loginThroughUi(page, owner)
     await page.getByRole('list', { name: '文档列表' }).getByRole('link').first().click()
-    await waitForEditor(page, 'steady')
+    await waitForEditorAccess(page, 'read')
+    await enterEditing(page, 'steady')
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     expect(await contentAfterResave(page, documentId)).toEqual(contentOf(saved))
   })
@@ -79,8 +80,7 @@ test.describe('US-M1-06 重开看到最后一次保存的内容', () => {
     await expect(saveStatus(page)).toHaveText('有未保存的修改')
     // 离开提示里选择离开
     page.once('dialog', dialog => void dialog.accept())
-    await page.reload()
-    await waitForEditor(page, 'steady')
+    await reloadAndEnterEditing(page, 'steady')
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     expect(await contentAfterResave(page, documentId)).toEqual(contentOf(saved))
   })
@@ -125,6 +125,8 @@ test.describe('US-M1-06 重开看到最后一次保存的内容', () => {
 
     release()
     await waitForEditor(page, 'steady')
+    // 就绪之后（打开即阅读）点"编辑"进入编辑：载入期间的键入没有进到表格里，打开不算修改
+    await enterEditing(page, 'steady')
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     // 就绪之后悬停照常弹出，内容没变；保存之后服务器上也没变
     await hoverCell(page, 'D4')
@@ -162,6 +164,7 @@ test.describe('US-M1-06 重开看到最后一次保存的内容', () => {
 
     release()
     await waitForEditor(page, 'steady')
+    await enterEditing(page, 'steady')
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     // Tab 把焦点移出了表格的输入框：就绪之后点单元格照常能键入
     await typeInCell(page, 'C1', 'after')

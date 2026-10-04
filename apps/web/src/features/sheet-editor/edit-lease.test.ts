@@ -300,7 +300,7 @@ describe('失效：失去访问或编辑权，或者不认识的原因', () => {
     expect(await lease.lose({ kind: 'lease', reason: 'revoked' }, lease.credentials())).toEqual({ kind: 'lost' })
     expect(context.onLost).toHaveBeenCalledExactlyOnceWith({ kind: 'not-found', error: gone })
     await lease.resume()
-    lease.release()
+    void lease.release()
     await context.time.advance(60_000)
     expect(context.api.renew).not.toHaveBeenCalled()
     expect(context.api.release).not.toHaveBeenCalled()
@@ -636,7 +636,7 @@ describe('续上：编辑权中断而不是失去访问或编辑权，自动重�
     context.api.release.mockReturnValueOnce(releasing.promise)
     await context.time.advance(10_000)
     expect(context.api.release).toHaveBeenCalledOnce()
-    lease.release()
+    void lease.release()
     releasing.resolve()
     await settle()
     expect(context.api.acquire).toHaveBeenCalledOnce()
@@ -662,7 +662,7 @@ describe('续上：编辑权中断而不是失去访问或编辑权，自动重�
     const lease = await held(context)
     context.api.acquire.mockReturnValueOnce(acquiring.promise)
     await context.time.advance(10_000)
-    lease.release()
+    void lease.release()
     acquiring.resolve(NEXT)
     await settle()
     expect(context.api.release).toHaveBeenLastCalledWith(DOCUMENT_ID, NEXT_TOKEN)
@@ -741,8 +741,8 @@ describe('释放', () => {
   it('经接口尽力释放（keepalive 在 editor-api.ts）一次，停止续租；再释放不再发', async () => {
     const context = setup()
     const lease = await held(context)
-    lease.release()
-    lease.release()
+    void lease.release()
+    void lease.release()
     expect(context.api.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
     await context.time.advance(60_000)
     expect(context.api.renew).not.toHaveBeenCalled()
@@ -761,17 +761,40 @@ describe('释放', () => {
         return Promise.reject(new NetworkError('断网'))
       },
     })
-    lease.release()
+    void lease.release()
     await settle()
     await settle()
     expect(releases).toBe(1)
+  })
+
+  it('退出编辑时等释放有了结果（M3-P2 设计 §3.4）：请求回来之前不兑现；成功、失败（结果未知）都兑现，从不失败', async () => {
+    const context = setup()
+    const lease = await held(context)
+    let answer: (() => void) | undefined
+    context.api.release.mockImplementationOnce(async () => new Promise<void>((resolve) => {
+      answer = resolve
+    }))
+    let done = false
+    const releasing = lease.release().then(() => {
+      done = true
+    })
+    await settle()
+    expect(done).toBe(false)
+    answer?.()
+    await releasing
+    expect(done).toBe(true)
+
+    const failing = setup()
+    const other = await held(failing)
+    failing.api.release.mockRejectedValueOnce(new NetworkError('断网'))
+    await expect(other.release()).resolves.toBeUndefined()
   })
 
   it('暂停时（会话不是本人）不发：带的会是别人的或已经失效的登录', async () => {
     const context = setup()
     const lease = await held(context)
     lease.pause()
-    lease.release()
+    void lease.release()
     expect(context.api.release).not.toHaveBeenCalled()
   })
 })

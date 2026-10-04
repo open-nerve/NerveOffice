@@ -85,11 +85,16 @@ export interface RawRequestOptions {
    * 浏览器限制这类请求的请求体（合计 64 KiB），只用于没有请求体或请求体很小的请求
    */
   keepalive?: boolean
+  /**
+   * 条件请求（请求头带 If-None-Match）：304 Not Modified 不是失败，原样交回响应（没有正文），由调用方认出"没有变化"
+   * （M3-P2 设计 §3.2，内容的读取）
+   */
+  acceptNotModified?: boolean
   signal?: AbortSignal
 }
 
-/** 响应头 Date 的时刻（毫秒时间戳）；没有或读不出来时为 undefined */
-function serverTimeOf(response: Response): number | undefined {
+/** 响应头 Date 的时刻（毫秒时间戳）；没有或读不出来时为 undefined。成功的响应要它时（例如编辑状态里的最后活动时间）也用它 */
+export function serverTimeOf(response: Response): number | undefined {
   const time = Date.parse(response.headers.get('date') ?? '')
   return Number.isFinite(time) ? time : undefined
 }
@@ -125,6 +130,8 @@ export async function apiFetch(path: string, options: RawRequestOptions = {}): P
       throw error
     throw new NetworkError('网络请求失败', { cause: error })
   }
+  if (response.status === 304 && options.acceptNotModified === true)
+    return response
   if (!response.ok)
     throw await errorFrom(response)
   return response

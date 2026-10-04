@@ -166,7 +166,7 @@ describe('M2-P6 复核 M1：带 requestId 的新建在结果未知之后', () =>
     fireEvent.click(screen.getByRole('button', { name: '新建表格' }))
     expect(await screen.findByText('新建表格失败：登录状态刚刚更新，这次操作没有完成，请再试一次')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '新建表格' }))
-    await waitFor(() => expect(app.page.visits).toEqual([`assign /documents/${NEW_ID}`]))
+    await waitFor(() => expect(app.page.visits).toEqual([`assign /documents/${NEW_ID}?edit=new`]))
     const ids = requestIds(api, 'POST /api/documents')
     expect(ids).toEqual([ids[0], ids[0], ids[0]])
   })
@@ -233,7 +233,7 @@ describe('M2-P6 复核第二批 S-1：服务端说这次是重放（replayed）�
     expect(screen.queryByText(/^上一次新建其实已经完成/)).toBeNull()
     // 按钮照常可用：再点就是新建一份
     fireEvent.click(screen.getByRole('button', { name: '新建表格' }))
-    await waitFor(() => expect(app.page.visits).toEqual([`assign /documents/${OTHER_ID}`]))
+    await waitFor(() => expect(app.page.visits).toEqual([`assign /documents/${OTHER_ID}?edit=new`]))
     const [first, second, third] = requestIds(api, 'POST /api/documents')
     expect(second).toBe(first)
     expect(third).not.toBe(first)

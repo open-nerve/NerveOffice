@@ -13,3 +13,10 @@ export const NOTE_TEXTAREA_SELECTOR = 'textarea[data-u-comp="note-textarea"]'
  * 单元格编辑器里也有一个 formula-editor，按编辑栏的根元素限定。名称框（defined-name）与展开的箭头不在里面
  */
 export const FORMULA_BAR_INPUT_SELECTOR = '[data-u-comp="formula-bar"] [data-u-comp="formula-editor"], [data-u-comp="formula-bar"] [data-u-comp="formula-bar-actions"]'
+
+/**
+ * 查找面板里"替换 / 高级查找"的链接所在的那一块（DEF-028，M3-P2 S3）：find-replace 的查找面板根元素 data-u-comp="find-replace-dialog"
+ * （views/dialog/FindReplaceDialog.tsx:354；1.0.1 的 lib/es/index.js:1828），只显示查找时它的子元素是查找框（SearchInput 的外层 div，
+ * :1532）与放着这个链接的 div（:1632-1639，里面只有一个 <a>）。查找框里没有 <a>，替换面板（ReplaceDialog）只读时打不开
+ */
+export const FIND_ADVANCED_LINK_SELECTOR = '[data-u-comp="find-replace-dialog"] > div:has(> a)'

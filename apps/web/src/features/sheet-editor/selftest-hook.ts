@@ -23,6 +23,12 @@ const HIDDEN_GRACE_MS = 2_000
  */
 const RESIZE_OBSERVER_LOOP_NOTICE = /^ResizeObserver loop (?:completed with undelivered notifications\.?|limit exceeded)$/
 
+/**
+ * 要在编辑时跑的场景（地址里 selftest 的值）：M3-P2 起打开即阅读，到了阅读的 steady 之后先进入编辑（与页头的"编辑"同一个入口），
+ * 到了编辑的 steady 再跑自检。场景里自己点"编辑""退出编辑"是 S5 的事（设计 §3.5）
+ */
+const EDITING_SCENARIOS: ReadonlySet<string> = new Set(['edit-chrome'])
+
 function describe(value: unknown): string {
   if (value instanceof Error)
     return `${value.name}: ${value.message}`
@@ -101,12 +107,28 @@ export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElem
     }
     void import('../../editor/testing/selftest.ts').then(async ({ runSelftestAndReport }) => runSelftestAndReport(host))
   }
+  // 打开即阅读：要在编辑时跑的场景先进入编辑，只进一次。进入有了结果（进入了编辑，或者被占用、不能编辑而留在阅读）之后再看：
+  // 进入了就等编辑的 steady；留在阅读就照样跑，自检按只读打开说明
+  let entering: 'no' | 'requested' | 'settled' = EDITING_SCENARIOS.has(new URLSearchParams(window.location.search).get('selftest') ?? '') ? 'no' : 'settled'
   const onChange = (): void => {
-    const { load } = page.view()
-    if (load.kind === 'ready' && load.stage === 'steady')
-      begin({ state: 'ready', readOnly: load.readOnly })
-    else if (load.kind !== 'loading' && load.kind !== 'ready')
+    const { load, mode, surface } = page.view()
+    if (load.kind === 'ready' && surface === 'steady' && (mode?.kind === 'reading' || mode?.kind === 'editing')) {
+      if (mode.kind === 'reading' && entering !== 'settled') {
+        if (entering === 'no') {
+          entering = 'requested'
+          const settle = (): void => {
+            entering = 'settled'
+            onChange()
+          }
+          void page.enterEditing().then(settle, settle)
+        }
+        return
+      }
+      begin({ state: 'ready', readOnly: mode.kind === 'reading' })
+    }
+    else if (load.kind !== 'loading' && load.kind !== 'ready') {
       begin({ state: 'failed', detail: failureOf(load) })
+    }
   }
   unsubscribe = page.subscribe(onChange)
   timer = setTimeout(() => begin({ state: 'timeout', detail: `${STEADY_TIMEOUT_MS / 1000} 秒内没有到 steady（${page.view().load.kind}）` }), STEADY_TIMEOUT_MS)

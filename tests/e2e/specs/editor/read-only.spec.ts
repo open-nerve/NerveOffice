@@ -7,15 +7,16 @@
 // 鼠标、触控与输入法的入口没有清单可以遍历，靠这里逐项列出与审查（M2-P6 复核 S4 另外试过约 60 个界面动作，没有发现改动）：
 // - 画布上的内容读不出来：比较测试构建的探针给出的内存快照（support/editor-probe.ts，比较的口径见 contentOf）；
 // - 每项都等到确定的信号再比较，不用固定时长的等待：命令被只读守卫取消、被 SDK 的权限检查拦下（它弹出提示，关掉），或者执行完；
-//   只读时没有控制点的手势（填充柄、非冻结区域的行高分隔线、冻结线、浮动图片）不产生命令：先确认没有意外弹出的提示，再点一个单元格，
-//   等名称框显示它（界面的输入按顺序处理）。冻结区域的行高分隔线不同：SDK 在那里仍显示调整的光标，拖动之后被权限检查拦下、
-//   弹出只读的提示（与非冻结区域不一致，已写入上游报告），同样核对数据不变；
+//   只读时没有控制点的手势（填充柄、行列的分隔线、冻结线、浮动图片）不产生命令：先确认没有意外弹出的提示，再点一个单元格，
+//   等名称框显示它（界面的输入按顺序处理）。第 1 行、A 列的分隔线原来不同（DEF-027）：SDK 把索引 0 当作没有给出、一律放行，
+//   只读时那里照样显示调整的光标、拖动之后被权限检查拦下（冻结首行的表上看起来像是"冻结区域"的问题）；M3-P2 起只读守卫补上拦截，
+//   与别的分隔线一样没有控制点；
 // - 对照：作者（能编辑）逐项做同样的事，每项确实改动了内存快照（每项用新写的文档，并行执行），只读时的"没变"才不是空断言；
 // - 另有界面的隐藏（同样以作者的界面作对照）、还能读、打开不产生改动、服务端拒绝保存、公式在 Worker 里算出结果、归档空间。
 // S3 的 E2E 发现的 5 个问题与 P3 审查之后的修复（只读守卫 editor/read-only/、语言包 editor/profile/locale.ts）：编辑栏点不进去
 // （点编辑框、从别处按下在编辑框上松开之后，查找、复制、方向键照常）；拦下操作的提示是只读的说法（含筛选按钮）；浮动图片点不中、
 // 拖不动；冻结线拖不动；只读时打不开替换；批注浮层的文本框只读。M2-P6 复核之后：只读时打不开"搜索功能"面板，快速求和没有反应
-// （编辑栏不再显示文档里没有的公式）。
+// （编辑栏不再显示文档里没有的公式）。M3-P2 S3：第 1 行、A 列的分隔线拖不动（DEF-027）；查找面板上没有"替换 / 高级查找"（DEF-028）。
 // Univer 自己的快捷键按页面的平台判断取修饰键（support/keyboard.ts：Linux 上的 WebKit 也报 Mac 的 UA）。
 // 与快捷键回归共用的部分（写好样本的团队空间与成员、页面错误与保存请求的收集、内容的核对、权限检查的提示）在 support/read-only.ts。
 // Facade 入口的清单、快捷键入口的预期与提示的说法和测试构建的页面自检共用（apps/web/src/editor/testing/read-only-entries.ts，
@@ -37,7 +38,7 @@ import { deleteDrawingKey, featureSearchKeys, pressUniverShortcut, quickSumKeys 
 import { SAMPLE_CELLS, SAMPLE_FORMULAS, SAMPLE_SHEETS, sampleWithoutFormulaValuesFor } from '../../support/read-only-sample.ts'
 import { ALERT, closePermissionAlert, documentChangeAttempts, expectUnchanged, FACADE_ENTRIES, FORMULA_MUTATION_CELL, LOOK_ONCE, nextFrames, OPENED, openReadOnly, permissionAlert, scene, SHORTCUT_OUTCOMES, unitIdOf, watch, writeFormulaMutation } from '../../support/read-only.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { EDITOR_TEST_TIMEOUT, openEditor, resourceOf, saveButton, savedContent, selectCell, sheetCanvas, sheetTab, waitForEditor } from '../../support/sheet.ts'
+import { EDITOR_TEST_TIMEOUT, openEditor, resourceOf, saveButton, savedContent, selectCell, sheetCanvas, sheetTab, waitForEditorAccess } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -318,8 +319,8 @@ const UI_ENTRIES: readonly Entry[] = [
 ]
 
 /**
- * 查找替换：把"苹果"全部替换为"苹果X"。只读时打不开替换（只读守卫在执行前取消打开替换的操作）：查找面板里的"替换 / 高级查找"
- * 与替换的快捷键都进不了替换，查找照常。
+ * 查找替换：把"苹果"全部替换为"苹果X"。只读时打不开替换（只读守卫在执行前取消打开替换的操作）：查找面板里没有"替换 / 高级查找"
+ * （只读守卫藏起它，DEF-028：原来显示着、点了没有反应），替换的快捷键同样进不了替换，查找照常。能编辑时的对照看得到这个链接、点了打开替换。
  * 写成函数声明：lint 的 playwright/no-standalone-expect 把跟在内联箭头函数参数之后的 expect 误判为不在用例里
  */
 async function findAndReplaceAll(page: Page, mode: Mode): Promise<void> {
@@ -331,12 +332,12 @@ async function findAndReplaceAll(page: Page, mode: Mode): Promise<void> {
   await findText.press('Enter')
   // "数据"表里 A2 与 G2（公式的结果）两处
   await expect(find).toContainText(/[12]\/2/)
-  await step(page, mode, async () => find.getByText('替换 / 高级查找').click(), {
-    read: { canceled: 'ui.operation.open-replace-dialog' },
-    edit: { executed: 'ui.operation.open-replace-dialog' },
-  })
+  const advanced = find.getByText('替换 / 高级查找', { exact: true })
   const replaceText = find.getByRole('textbox', { name: '输入替换内容' })
   if (mode === 'read') {
+    // 链接在面板里（SDK 照常渲染它），只是藏起来了：看不见、点不到
+    await expect(advanced).toHaveCount(1)
+    await expect(advanced).toBeHidden()
     await expect(replaceText).toHaveCount(0)
     await expect(find).toContainText(/[12]\/2/)
     await find.getByRole('button', { name: 'Close' }).click()
@@ -346,6 +347,7 @@ async function findAndReplaceAll(page: Page, mode: Mode): Promise<void> {
     await expect(find).toHaveCount(0)
     return
   }
+  await step(page, mode, async () => advanced.click(), { edit: { executed: 'ui.operation.open-replace-dialog' } })
   await replaceText.fill('苹果X')
   await find.getByRole('button', { name: '替换全部', exact: true }).click()
   await step(page, mode, async () => page.getByRole('dialog', { name: '确定要替换所有的匹配项吗？' }).getByRole('button', { name: '确定', exact: true }).click(), {
@@ -483,6 +485,7 @@ const OTHER_UI_ENTRIES: readonly Entry[] = [
   },
   { name: '拖动冻结线："数据"表第 1 行下面的冻结线（D 列处）拖到第 4 行下面', run: dragFreezeLine },
   { name: '拖动冻结区域的行高："数据"表第 1 行（冻结）下面的分隔线往下拖 30 像素', run: dragFrozenRowHeight },
+  { name: '拖动第 1 行与 A 列的分隔线："汇总"表（没有冻结），各往下、往右拖 30 像素（DEF-027）', run: dragFirstRowAndColumnDividers },
   { name: '筛选按钮："筛选"表 A1 的筛选按钮', run: openFilterPanel },
   { name: '"搜索功能"面板：按 Ctrl/Cmd+Shift+P（只读时打不开）', run: openFeatureSearch },
   { name: '快速求和："数据"表选中空的 B10，按 Alt+=（苹果的平台上 Cmd+Option+=）', run: quickSum },
@@ -569,25 +572,64 @@ async function dragFreezeLine(page: Page, mode: Mode): Promise<void> {
 }
 
 /**
- * 拖动冻结区域（第 1 行冻结）的行高：SDK 在冻结区域仍显示调整行高的光标，只读时拖动之后被权限检查拦下、弹出只读的提示
- * （非冻结区域只读时没有这个控制点，见"拖动行高"；不一致已写入上游报告）。数据不变由 expectUnchanged 核对（P3 审查 B7）
+ * 移到分隔线上（from 是旁边的一点，to 是分隔线上），等两帧之后读一次画布的光标（不重试）：能编辑时这样读到的是调整的光标，
+ * 这是只读时"不是调整的光标"的校准
  */
-async function dragFrozenRowHeight(page: Page, mode: Mode): Promise<void> {
-  await showSheet(page, SAMPLE_SHEETS.data.name)
+async function cursorOnDivider(page: Page, from: Point, to: Point): Promise<string> {
+  await page.mouse.move(from.x, from.y)
+  await page.mouse.move(to.x, to.y, { steps: 4 })
+  await nextFrames(page)
+  return sheetCanvas(page).evaluate(canvas => getComputedStyle(canvas).cursor)
+}
+
+/** 拖动第 1 行下面的分隔线（行标题的中间）往下 30 像素：只读时没有控制点（不是 row-resize，不产生调整行高的命令） */
+async function dragFirstRowDivider(page: Page, mode: Mode, thenClick: string): Promise<void> {
   const origin = await canvasOrigin(page)
   const a1 = await cellRect(page, 'A1')
   // 行标题的中间（A1 的左边就是行标题的宽度），第 1 行的下边
-  const x = origin.x + a1.startX / 2
-  const y = origin.y + a1.endY - 1
+  const divider = { x: origin.x + a1.startX / 2, y: origin.y + a1.endY - 1 }
+  const cursor = await cursorOnDivider(page, { x: divider.x, y: divider.y - 8 }, divider)
+  expect(cursor === 'row-resize', `第 1 行的分隔线上的光标是 ${cursor}`).toBe(mode === 'edit')
   await step(page, mode, async () => {
-    await page.mouse.move(x, y - 8)
-    await page.mouse.move(x, y, { steps: 4 })
     await page.mouse.down()
-    await page.mouse.move(x, y + 30, { steps: 6 })
+    await page.mouse.move(divider.x, divider.y + 30, { steps: 6 })
     await page.mouse.up()
   }, {
-    read: { blocked: 'sheet.command.delta-row-height', alert: ALERT.rowCol },
+    read: { absent: 'sheet.command.delta-row-height', thenClick },
     edit: { executed: 'sheet.command.delta-row-height' },
+  })
+}
+
+/**
+ * 拖动冻结区域（第 1 行冻结）的行高：原来只读时 SDK 在这里仍显示调整行高的光标、拖动之后被权限检查拦下（P3 审查 B7 登记为
+ * "冻结区域的分隔线"，DEF-027）；根因其实是第 1 行（索引 0），见下一项。只读守卫补上拦截之后与别的分隔线一样没有控制点
+ */
+async function dragFrozenRowHeight(page: Page, mode: Mode): Promise<void> {
+  await showSheet(page, SAMPLE_SHEETS.data.name)
+  await dragFirstRowDivider(page, mode, 'F12')
+}
+
+/**
+ * 没有冻结的表（"汇总"）上第 1 行、A 列的分隔线（DEF-027 的根因，M3-P2 S3 的 E2E 核实）：SDK 判断行高、列宽的权限时把索引 0 当作
+ * 没有给出、一律放行（sheets-ui 的 _initHeaderResizePermissionInterceptor），只读时这两条分隔线照样显示调整的光标、拖得动，
+ * 松开时被权限检查拦下；别的行列（"拖动行高"那一项）没有。只读守卫在这个拦截点上排在 SDK 之前、一律不允许
+ */
+async function dragFirstRowAndColumnDividers(page: Page, mode: Mode): Promise<void> {
+  await showSheet(page, SAMPLE_SHEETS.summary.name)
+  await dragFirstRowDivider(page, mode, 'D12')
+  const origin = await canvasOrigin(page)
+  const a1 = await cellRect(page, 'A1')
+  // 列标题的中间（A1 的上边就是列标题的高度），A 列的右边
+  const divider = { x: origin.x + a1.endX - 1, y: origin.y + a1.startY / 2 }
+  const cursor = await cursorOnDivider(page, { x: divider.x - 8, y: divider.y }, divider)
+  expect(cursor === 'col-resize', `A 列的分隔线上的光标是 ${cursor}`).toBe(mode === 'edit')
+  await step(page, mode, async () => {
+    await page.mouse.down()
+    await page.mouse.move(divider.x + 30, divider.y, { steps: 6 })
+    await page.mouse.up()
+  }, {
+    read: { absent: 'sheet.command.delta-column-width', thenClick: 'E13' },
+    edit: { executed: 'sheet.command.delta-column-width' },
   })
 }
 
@@ -716,7 +758,7 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
     expect(watched.pageErrors).toEqual([])
   })
 
-  test('界面上还能碰到的其他入口都无效：查找替换、格式的快捷键、撤销与重做、双击与拖动工作表标签、全部工作表的菜单、拖动与删除图片、改批注、冻结线、冻结区域的行高、筛选按钮、"搜索功能"面板、快速求和', async ({ page, context, browserName }) => {
+  test('界面上还能碰到的其他入口都无效：查找替换（没有高级查找）、格式的快捷键、撤销与重做、双击与拖动工作表标签、全部工作表的菜单、拖动与删除图片、改批注、冻结线、冻结区域的行高、第 1 行与 A 列的分隔线、筛选按钮、"搜索功能"面板、快速求和', async ({ page, context, browserName }) => {
     // 与对照组的条件一致（P3 审查 B10）
     await grantClipboard(context, browserName)
     const s = await scene('ro-other')
@@ -941,7 +983,7 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
 
     const watched = watch(page, s.documentId)
     await page.reload()
-    await waitForEditor(page, OPENED)
+    await waitForEditorAccess(page, 'read', OPENED)
     await expect(page.locator('#editor-chrome').getByText('只能查看', { exact: true })).toBeVisible()
     await expect(saveButton(page)).toHaveCount(0)
     await expect(page.getByRole('toolbar')).toHaveCount(0)

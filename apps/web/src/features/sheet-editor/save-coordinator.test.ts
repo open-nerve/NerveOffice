@@ -900,3 +900,119 @@ describe('停止保存与离开', () => {
     expect(listener).not.toHaveBeenCalled()
   })
 })
+
+describe('失去编辑权时核对结果未知的保存（M3-P2 设计 §3.4）', () => {
+  it('settled：等进行中的保存结束；没有在途的保存时立即兑现', async () => {
+    const { coordinator, control, calls } = setup()
+    await coordinator.settled()
+    control.edit('甲')
+    const saving = coordinator.save()
+    let settled = false
+    const waiting = coordinator.settled().then(() => {
+      settled = true
+    })
+    const first = await sent(calls, 1)
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    first.reject(new NetworkError('断网'))
+    await saving
+    await waiting
+    expect(settled).toBe(true)
+  })
+
+  it('没有结果未知的保存：none，不发请求', async () => {
+    const { coordinator, control, calls } = setup()
+    control.edit('甲')
+    const saving = coordinator.save()
+    ;(await sent(calls, 1)).resolve(saved(2))
+    await saving
+    expect(coordinator.hasUnknownOutcome()).toBe(false)
+    await expect(coordinator.replayUnknownOutcome()).resolves.toBe('none')
+    expect(calls).toHaveLength(1)
+  })
+
+  it('原样重发（requestId、序号、正文都不变）；其实已经提交：按那次捕获确认，没有没保存的内容了，"保存失败"不再说；停住保存时照样发', async () => {
+    const { coordinator, control, calls } = setup({ baseRevision: 3 })
+    control.edit('甲')
+    const saving = coordinator.save()
+    const first = await sent(calls, 1)
+    first.reject(new NetworkError('断网'))
+    await saving
+    expect(coordinator.hasUnknownOutcome()).toBe(true)
+    expect(coordinator.view()).toMatchObject({ status: 'failed', unsaved: true })
+    coordinator.stop()
+    const replaying = coordinator.replayUnknownOutcome()
+    const replay = await sent(calls, 2)
+    expect(replay.request).toEqual(first.request)
+    expect(replay.body).toEqual(first.body)
+    replay.resolve(saved(4))
+    await expect(replaying).resolves.toBe('committed')
+    expect(coordinator.view()).toMatchObject({ unsaved: false, problem: undefined })
+    expect(coordinator.baseRevision()).toBe(4)
+    expect(coordinator.hasUnknownOutcome()).toBe(false)
+  })
+
+  it('其实已经提交、之后本页又有修改：确认到那一次，仍有没保存的内容', async () => {
+    const { coordinator, control, calls } = setup()
+    control.edit('甲')
+    const saving = coordinator.save()
+    ;(await sent(calls, 1)).reject(new NetworkError('断网'))
+    await saving
+    control.edit('乙')
+    const replaying = coordinator.replayUnknownOutcome()
+    ;(await sent(calls, 2)).resolve(saved(2))
+    await expect(replaying).resolves.toBe('committed')
+    expect(coordinator.view().unsaved).toBe(true)
+  })
+
+  it.each([
+    ['编辑权已失效（EDIT_LEASE_LOST）', new ApiError(409, 'EDIT_LEASE_LOST', '编辑权已失效', { details: { reason: 'revoked' } })],
+    ['不能编辑（403）', new ApiError(403, 'PERMISSION_DENIED', '只能查看')],
+    ['修订号冲突', conflictError(5, null)],
+  ])('确定被拒绝（%s）：它没有提交——仍有没保存的内容，不再当作结果未知', async (_case, rejection) => {
+    const { coordinator, control, calls } = setup()
+    control.edit('甲')
+    const saving = coordinator.save()
+    ;(await sent(calls, 1)).reject(new NetworkError('断网'))
+    await saving
+    const replaying = coordinator.replayUnknownOutcome()
+    ;(await sent(calls, 2)).reject(rejection)
+    await expect(replaying).resolves.toBe('not-committed')
+    expect(coordinator.view().unsaved).toBe(true)
+    expect(coordinator.hasUnknownOutcome()).toBe(false)
+  })
+
+  it.each([
+    ['读不到了（404：重放也要求能访问）', new ApiError(404, 'NOT_FOUND', '不存在')],
+    ['未登录（到不了重放那一步）', new ApiError(401, 'SESSION_EXPIRED', '登录已过期')],
+    ['令牌失效', new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')],
+    ['结果仍然未知', new NetworkError('断网')],
+  ])('说不准（%s）：unknown，仍算没保存，记录留着', async (_case, failure) => {
+    const { coordinator, control, calls } = setup()
+    control.edit('甲')
+    const saving = coordinator.save()
+    ;(await sent(calls, 1)).reject(new NetworkError('断网'))
+    await saving
+    const replaying = coordinator.replayUnknownOutcome()
+    ;(await sent(calls, 2)).reject(failure)
+    await expect(replaying).resolves.toBe('unknown')
+    expect(coordinator.view().unsaved).toBe(true)
+    expect(coordinator.hasUnknownOutcome()).toBe(true)
+  })
+
+  it('有保存在途时先等它结束再核对：在途的那一次结果未知，核对的就是它', async () => {
+    const { coordinator, control, calls } = setup()
+    control.edit('甲')
+    const saving = coordinator.save()
+    const first = await sent(calls, 1)
+    const replaying = coordinator.replayUnknownOutcome()
+    await Promise.resolve()
+    expect(calls).toHaveLength(1)
+    first.reject(new NetworkError('断网'))
+    await saving
+    const replay = await sent(calls, 2)
+    expect(replay.request).toEqual(first.request)
+    replay.resolve(saved(2))
+    await expect(replaying).resolves.toBe('committed')
+  })
+})

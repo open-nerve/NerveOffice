@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest'
-import { ApiError, NetworkError, setCsrfToken } from '../../shared/api/index.ts'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ApiError, NetworkError, ResponseFormatError, setCsrfToken } from '../../shared/api/index.ts'
 import { apiError, installFakeApi, json, networkFailure } from '../../shared/testing/fake-api.test-support.ts'
-import { acquireEditLease, releaseEditLease, renewEditLease, saveContent } from './editor-api.ts'
+import { acquireEditLease, CONTENT_UNCHANGED, fetchContent, fetchContentIfChanged, fetchEditStatus, releaseEditLease, renewEditLease, saveConflictCopy, saveContent } from './editor-api.ts'
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 const PAGE_ID = '0199a2c4-1f2e-4a3b-8c4d-00000000aaaa'
@@ -58,5 +58,95 @@ describe('编辑租约的请求（M3-P1 设计 §3.2）', () => {
     const request = { baseRevision: 4, requestId: 'req-1', clientInstanceId: PAGE_ID, localSeq: 3, snapshot: '{}' }
     await expect(saveContent(DOCUMENT_ID, request, new Uint8Array([1]), { token: TOKEN, writeEpoch: 2 })).resolves.toEqual({ revision: 5, savedAt: '2026-10-04T03:00:00.000Z' })
     expect(api.requests[0]?.headers).toMatchObject({ 'x-edit-lease': TOKEN, 'content-type': 'application/gzip' })
+  })
+})
+
+const CONTENT = `/api/documents/${DOCUMENT_ID}/content`
+const SNAPSHOT = '{"id":"unit-1"}'
+
+function content(revision: number): Response {
+  return new Response(SNAPSHOT, { status: 200, headers: { etag: `"${revision}"` } })
+}
+
+describe('内容的读取（P4 设计 §3.3；M3-P2 设计 §3.2 的条件读取）', () => {
+  it('全文：原文与 ETag 里的修订号；没有修订号时 ResponseFormatError', async () => {
+    const api = installFakeApi({ [`GET ${CONTENT}`]: () => content(5) })
+    await expect(fetchContent(DOCUMENT_ID)).resolves.toEqual({ snapshot: SNAPSHOT, revision: 5 })
+    expect(api.requests[0]?.headers['if-none-match']).toBeUndefined()
+    api.on(`GET ${CONTENT}`, () => new Response(SNAPSHOT, { status: 200 }))
+    await expect(fetchContent(DOCUMENT_ID)).rejects.toBeInstanceOf(ResponseFormatError)
+  })
+
+  it('条件读取：带 If-None-Match（本页手里的修订号）；服务端还是这一版（304）时给出 CONTENT_UNCHANGED，有更新时读全文', async () => {
+    const api = installFakeApi({ [`GET ${CONTENT}`]: () => new Response(null, { status: 304, headers: { etag: '"3"' } }) })
+    await expect(fetchContentIfChanged(DOCUMENT_ID, 3)).resolves.toBe(CONTENT_UNCHANGED)
+    expect(api.requests[0]?.headers['if-none-match']).toBe('"3"')
+    api.on(`GET ${CONTENT}`, () => content(4))
+    await expect(fetchContentIfChanged(DOCUMENT_ID, 3)).resolves.toEqual({ snapshot: SNAPSHOT, revision: 4 })
+  })
+
+  it('条件读取照常判断权限：读不到时抛出 404（与不存在一致），不当作没有变化', async () => {
+    installFakeApi({ [`GET ${CONTENT}`]: () => apiError(404, 'NOT_FOUND') })
+    await expect(fetchContentIfChanged(DOCUMENT_ID, 3)).rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' })
+  })
+})
+
+describe('编辑状态与另存为副本（M3-P2 设计 §3.2）', () => {
+  const STATUS = { revision: 3, editor: { holder: { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000e1', username: 'amy', displayName: '艾米' }, lastActiveAt: '2026-10-04T03:00:00.000Z', sameUser: false }, canEdit: true }
+
+  it('编辑状态：GET edit-lease，读出修订号、正在编辑的人与能不能编辑，连同服务端回答的时刻（响应头 Date）', async () => {
+    const api = installFakeApi({ [`GET ${LEASE}`]: () => json(200, STATUS, { date: 'Sun, 04 Oct 2026 03:03:10 GMT' }) })
+    await expect(fetchEditStatus(DOCUMENT_ID)).resolves.toEqual({ status: STATUS, serverTime: Date.UTC(2026, 9, 4, 3, 3, 10) })
+    api.on(`GET ${LEASE}`, () => json(200, STATUS))
+    await expect(fetchEditStatus(DOCUMENT_ID)).resolves.toEqual({ status: STATUS, serverTime: undefined })
+  })
+
+  it('编辑状态没有能不能编辑（canEdit）：与契约不一致，ResponseFormatError', async () => {
+    installFakeApi({ [`GET ${LEASE}`]: () => json(200, { revision: 3, editor: null }) })
+    await expect(fetchEditStatus(DOCUMENT_ID)).rejects.toBeInstanceOf(ResponseFormatError)
+  })
+
+  it('另存为副本：POST conflict-copies，requestId 与标题在查询参数里（按 URL 的规则编码，解得回原样），请求体是 gzip 的快照（带 CSRF 令牌）；读出新文档的详情', async () => {
+    const created = {
+      id: '0199a2c4-1f2e-7a3b-8c4d-0000000000c1',
+      title: '周报 A+B&C=D#1（冲突副本 2026-10-04 15:30）',
+      type: 'sheet',
+      createdAt: '2026-10-04T07:31:00.000Z',
+      updatedAt: '2026-10-04T07:31:00.000Z',
+      spaceId: '0199a2c4-1f2e-7a3b-8c4d-0000000000aa',
+      space: { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000aa', type: 'personal' },
+      folderId: null,
+      accessVia: 'space',
+      revision: 1,
+      profile: 'sheet@1',
+      formatVersion: 1,
+      permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true },
+      replayed: false,
+    }
+    const query = { requestId: '0199a2c4-1f2e-4a3b-8c4d-0000000000d1', title: created.title }
+    const compressed = new Uint8Array([31, 139, 8])
+    let url: URL | undefined
+    let init: RequestInit | undefined
+    vi.stubGlobal('fetch', vi.fn(async (input: string, received?: RequestInit) => {
+      url = new URL(input, 'http://127.0.0.1')
+      init = received
+      return json(201, created)
+    }))
+    setCsrfToken('csrf-4')
+    await expect(saveConflictCopy(DOCUMENT_ID, query, compressed)).resolves.toEqual(created)
+    expect(url?.pathname).toBe(`/api/documents/${DOCUMENT_ID}/conflict-copies`)
+    expect(Object.fromEntries(url?.searchParams ?? [])).toEqual(query)
+    expect(init?.method).toBe('POST')
+    expect(init?.body).toBe(compressed)
+    expect(Object.fromEntries(new Headers(init?.headers).entries())).toMatchObject({ 'content-type': 'application/gzip', 'x-csrf-token': 'csrf-4' })
+  })
+
+  it('另存为副本被拒绝：照常抛出（404 读不到、409 同一个 requestId 换了内容），由页面决定能不能再试', async () => {
+    const path = `POST /api/documents/${DOCUMENT_ID}/conflict-copies?requestId=0199a2c4-1f2e-4a3b-8c4d-0000000000d1&title=%E5%91%A8%E6%8A%A5`
+    const api = installFakeApi({ [path]: () => apiError(404, 'NOT_FOUND') })
+    const query = { requestId: '0199a2c4-1f2e-4a3b-8c4d-0000000000d1', title: '周报' }
+    await expect(saveConflictCopy(DOCUMENT_ID, query, new Uint8Array([1]))).rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' })
+    api.on(path, () => apiError(409, 'REQUEST_ID_CONFLICT'))
+    await expect(saveConflictCopy(DOCUMENT_ID, query, new Uint8Array([1]))).rejects.toMatchObject({ status: 409, code: 'REQUEST_ID_CONFLICT' })
   })
 })

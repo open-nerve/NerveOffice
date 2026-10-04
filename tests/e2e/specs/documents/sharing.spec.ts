@@ -16,7 +16,7 @@ import { expect, test } from '../../support/fixtures.ts'
 import { searchList } from '../../support/list-search.ts'
 import { plainName, shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, EDITOR_TEST_TIMEOUT, openEditor, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
+import { cellOf, EDITOR_TEST_TIMEOUT, enterEditing, openEditor, openReader, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
 import { expectWrittenAfterClose, recordStatusWrites, statusWrites } from '../../support/status-writes.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
@@ -146,12 +146,13 @@ test.describe('US-M2-10 单独分享', () => {
     await expect(header).not.toContainText(space.name)
     await expect(header.getByRole('button', { name: /分享|移动|删除/ })).toHaveCount(0)
 
-    // 编辑者：能改，保存成功；返回链接同样回"与我共享"
+    // 编辑者：能改（打开即阅读，点"编辑"进入编辑），保存成功；返回链接同样回"与我共享"
     await loginThroughApi(anotherDevice, writer)
     await anotherDevice.goto('/shared')
     await anotherDevice.getByRole('list', { name: '分享给我的文档' }).getByRole('link', { name: /部门的周报/ }).click()
     await expect(anotherDevice.locator('#sheet-editor')).toHaveAttribute('data-editor-state', /^(?:ready|steady)$/, { timeout: 30_000 })
     await expect(anotherDevice.locator('#editor-chrome').getByRole('banner').getByRole('link', { name: '与我共享', exact: true })).toBeVisible()
+    await enterEditing(anotherDevice)
     await typeInCell(anotherDevice, 'A1', '编辑者写的')
     await saveAndWait(anotherDevice)
 
@@ -213,12 +214,12 @@ test.describe('US-M2-10 单独分享', () => {
     await expect(saveButton(page)).toBeVisible()
     await expect(page.locator('#editor-chrome').getByRole('button', { name: '分享', exact: true })).toHaveCount(0)
 
-    // 对照：空间管理员两处都有
+    // 对照：空间管理员两处都有（编辑者正在编辑：空间管理员打开即阅读，页头照样有"分享"）
     await loginThroughApi(anotherDevice, lead)
     await anotherDevice.goto(`/spaces/${space.id}`)
     await openActions(anotherDevice, '部门的表')
     await expect(anotherDevice.getByRole('button', { name: '分享', exact: true })).toBeVisible()
-    await openEditor(anotherDevice, documentId)
+    await openReader(anotherDevice, documentId)
     await expect(anotherDevice.locator('#editor-chrome').getByRole('button', { name: '分享', exact: true })).toBeVisible()
   })
 
