@@ -168,3 +168,10 @@ export function restrictedImports(config: Linter.Config): RestrictedImports {
 export function restrictedPatterns(config: Linter.Config): string[] {
   return (restrictedImports(config).patterns ?? []).flatMap(p => [...(p.group ?? []), ...(p.regex === undefined ? [] : [p.regex])])
 }
+
+/** no-restricted-syntax 的选择器（按配置里的顺序）：核对某一块是不是只在别的块的整组限制之上加了几条 */
+export function restrictedSyntaxSelectors(config: Linter.Config): string[] {
+  const entry = config.rules?.['no-restricted-syntax']
+  const options: readonly unknown[] = Array.isArray(entry) ? entry.slice(1) : []
+  return options.map(option => typeof option === 'string' ? option : (option as { selector: string }).selector)
+}

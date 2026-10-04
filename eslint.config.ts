@@ -429,6 +429,14 @@ const LIVE_STATUS_HIDDEN = [
   },
 ]
 
+/**
+ * web 的生产代码对 no-restricted-syntax 的整组限制（nerve/web-radix-dialog），与编辑器里 internal-api 与测试代码之外的整组限制
+ * （nerve/editor-sdk-dom-markers）。同名规则后者整体覆盖前者：在它们之上再加一条的块（页面自检的入口页、页面自检与 E2E 共用的文件，
+ * 复验 C3）从这里展开，不各抄一份，免得以后改一处漏一处
+ */
+const WEB_RESTRICTED_SYNTAX = [...BASE_RESTRICTED_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION, ...LIVE_STATUS_HIDDEN]
+const EDITOR_OUTSIDE_INTERNAL_API_SYNTAX = [...EDITOR_RESTRICTED_SYNTAX, ...NO_GET_INJECTOR, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION, ...LIVE_STATUS_HIDDEN]
+
 // 契约的请求结构里直接用 z.uuid()：大写的 id 原样交给服务端（M2-P2 审查 A1、复验 N3）
 const CONTRACTS_REQUEST_UUID_MESSAGE = '请求里的 UUID 用 uuidSchema（ids/ids.ts，统一转成小写）：服务端按字符串比较 id 的地方（是不是本人、审计的明细）只认小写（M2-P2 审查 A1）'
 const CONTRACTS_REQUEST_UUID = [
@@ -738,6 +746,18 @@ const WEB_TEST_CODE = ['**/*.test.{ts,tsx}', '**/*.test-support.{ts,tsx}']
  */
 const SELFTEST_SHARED_FILES = ['testing/read-only-entries.ts', 'testing/content-compare.ts', 'testing/selftest-report.ts', 'testing/switch-timing.ts']
 
+// 动态 import() 同样是引用（复验 C3）：ts/no-restricted-imports 只看 import 与 export 声明，下面两块按路径的限制挡不住动态引入——
+// 自检的入口页动态引入 shared/api 时 lint 放行，测试构建里两个页面的入口块照样多出 api、preload-helper（实测）。
+// 这两组文件本来都用不着动态引入，一律不许
+const SELFTEST_SHARED_NO_DYNAMIC_IMPORT = {
+  selector: 'ImportExpression',
+  message: '页面自检与 E2E 共用的文件（SELFTEST_SHARED_FILES）不引用任何模块，动态 import() 也不行：E2E 也引用它们，Playwright 的进程里不能带进 Univer 与 web 的其他代码（M3-P2 设计 §3.5，复验 C3）',
+}
+const SELFTEST_ENTRY_NO_DYNAMIC_IMPORT = {
+  selector: 'ImportExpression',
+  message: '页面自检的入口页不用动态 import()：受限导入只看 import 与 export 声明，动态引入平台页面、编辑器页共用的模块，测试构建里两个页面的入口块照样与生产构建的不同（M3-P2 复核 B4，复验 C3）',
+}
+
 /**
  * 共享层内部引用这些文案：模块边界不检查同一个元素内部的引用（boundaries/dependencies 的 checkInternals 默认关），
  * 改按解析之后的路径拦下——shared/i18n/index.ts 转出、shared 里别的文件中转，都会把它们带回首屏（M2-P6 复核第二批）
@@ -842,7 +862,7 @@ export default antfu(
     files: ['apps/web/src/**/*.{ts,tsx}'],
     ignores: [...TEST_CODE, 'apps/web/src/shared/ui/dialog.tsx'],
     rules: {
-      'no-restricted-syntax': ['error', ...BASE_RESTRICTED_SYNTAX, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION, ...LIVE_STATUS_HIDDEN],
+      'no-restricted-syntax': ['error', ...WEB_RESTRICTED_SYNTAX],
     },
   },
   {
@@ -892,7 +912,7 @@ export default antfu(
     files: ['apps/web/src/editor/**'],
     ignores: [...TEST_CODE, 'apps/web/src/editor/internal-api/**'],
     rules: {
-      'no-restricted-syntax': ['error', ...EDITOR_RESTRICTED_SYNTAX, ...NO_GET_INJECTOR, ...RADIX_DIALOG_OUTSIDE_DIALOG_FILE, ...SDK_DOM_MARKERS, ...PERSON_NAME_CONCATENATION, ...LIVE_STATUS_HIDDEN],
+      'no-restricted-syntax': ['error', ...EDITOR_OUTSIDE_INTERNAL_API_SYNTAX],
     },
   },
   {
@@ -980,7 +1000,8 @@ export default antfu(
   },
   {
     // 页面自检与 E2E 共用的文件不引用任何模块（M3-P2 设计 §3.5）：E2E 经模块边界的例外引用它们，Playwright 的进程里不能带进 Univer
-    // 与 web 的其他代码。它们在 editor/testing/ 下，上一块不管它们；同名规则后者整体覆盖前者，测试与测试辅助的限制一并带上
+    // 与 web 的其他代码。它们在 editor/testing/ 下，上一块不管它们；同名规则后者整体覆盖前者，测试与测试辅助的限制一并带上。
+    // 动态 import() 由 no-restricted-syntax 拦下（复验 C3），编辑器里 internal-api 与测试代码之外的整组限制一并带上
     name: 'nerve/editor-testing-shared',
     files: SELFTEST_SHARED_FILES.map(file => `apps/web/src/editor/${file}`),
     rules: {
@@ -988,13 +1009,14 @@ export default antfu(
         regex: '.',
         message: '页面自检与 E2E 共用的文件（SELFTEST_SHARED_FILES）不引用任何模块：E2E 也引用它们，Playwright 的进程里不能带进 Univer 与 web 的其他代码（M3-P2 设计 §3.5）',
       }] }],
+      'no-restricted-syntax': ['error', ...EDITOR_OUTSIDE_INTERNAL_API_SYNTAX, SELFTEST_SHARED_NO_DYNAMIC_IMPORT],
     },
   },
   {
     // 页面自检的入口页（entries/selftest，只在测试构建里）不引用平台页面与编辑器页共用的任何模块（contracts、shared、zod……，M3-P2 复核 B4）：
     // 引用了，那些模块在测试构建里成了三个入口共用的，分块的拆法随之改变，两个页面的入口块就与生产构建的不同，E2E 测的不再是生产的样子。
     // 只许引用入口页自己目录里的文件与结果的格式（editor/testing/selftest-report.ts，它不引用任何模块）。
-    // 同名规则后者整体覆盖前者：测试与测试辅助的限制一并带上
+    // 同名规则后者整体覆盖前者：测试与测试辅助的限制一并带上。动态 import() 由 no-restricted-syntax 拦下（复验 C3），web 的整组限制一并带上
     name: 'nerve/selftest-entry-self-contained',
     files: ['apps/web/src/entries/selftest/**'],
     rules: {
@@ -1002,6 +1024,7 @@ export default antfu(
         regex: String.raw`^(?!\./[\w-]+\.ts$|\.\./\.\./editor/testing/selftest-report\.ts$)`,
         message: '页面自检的入口页只引用自己目录里的文件与结果的格式（editor/testing/selftest-report.ts）：引用平台页面、编辑器页共用的模块，测试构建里两个页面的入口块就与生产构建的不同（M3-P2 复核 B4）',
       }] }],
+      'no-restricted-syntax': ['error', ...WEB_RESTRICTED_SYNTAX, SELFTEST_ENTRY_NO_DYNAMIC_IMPORT],
     },
   },
   {
