@@ -1,11 +1,11 @@
 // 从每个阶段结束时"有数据的库"一路迁移到最新（M2-P6 复核 B 的 B6）：单个迁移的用例只在它前一个版本上验证自己，
 // 这里按当时的结构写入有代表性的数据——每个审计动作、目标类型与来源各一条，会话的每个撤销原因，邀请、重置与限流的行，
 // 团队空间（全员可见的、归档的）与成员、写入代次不为 0 的文档，10 层文件夹、两种删除单元与"文件夹的删除单元里还有单独删过的子孙"，
-// 单独授权（M2-P5 起）——迁移到最新之后核对：每张表的行数不变、约束全部已验证、只由服务保证的不变量都成立，
-// 迁移之前的删除单元能经接口恢复与永久删除，迁移之前建的文件夹原样重发当初的新建请求是重放（0021 在 SQL 里回填的请求摘要
-// 与服务算的一致，M2 Codex 评审 CX6）。
+// 单独授权（M2-P5 起），编辑租约（M3-P1 起：一个有效的、一个明确结束的）——迁移到最新之后核对：每张表的行数不变、约束全部已验证、
+// 只由服务保证的不变量都成立，迁移之前的删除单元能经接口恢复与永久删除，迁移之前建的文件夹原样重发当初的新建请求是重放
+// （0021 在 SQL 里回填的请求摘要与服务算的一致，M2 Codex 评审 CX6）。
 //
-// 基准是每个阶段结束时的最后一个迁移（9 个），覆盖了到现在为止的每个迁移在有数据的库上的执行；每个基准一个空库，整个文件 3 秒左右。
+// 基准是每个阶段结束时的最后一个迁移（11 个），覆盖了到现在为止的每个迁移在有数据的库上的执行；每个基准一个空库，整个文件 3 秒左右。
 // 以后的阶段结束时在 BASES 里加上它的最后一个迁移；时长涨得多时，去掉中间被后面的基准完全覆盖的那些（写明理由）
 import type pg from 'pg'
 import type { TestDatabase } from '../support/database.ts'
@@ -24,7 +24,7 @@ import { invariantViolations } from '../support/invariants.ts'
 import { MIGRATION_TAGS, migrationIndexOf, migrationsUpTo, removeMigrationFolders } from '../support/migration-folders.ts'
 import { asUser, login } from '../support/session-client.ts'
 
-/** 每个阶段结束时的最后一个迁移（P3 没有迁移）：从它开始写入数据，再迁移到最新 */
+/** 每个阶段结束时的最后一个迁移（M2-P3 没有迁移）：从它开始写入数据，再迁移到最新 */
 const BASES: readonly (readonly [label: string, tag: string])[] = [
   ['M1 结束（v0.1-m1）', '0007_document_unit_id_not_unique'],
   ['M2-P1 结束', '0008_m2_accounts'],
@@ -37,6 +37,10 @@ const BASES: readonly (readonly [label: string, tag: string])[] = [
   ['M2-P6 结束', '0019_m2_p6_write_epoch_monotonic'],
   // M2 的最后一个迁移（v0.1-m2）：有授权、文件夹带请求摘要的库迁到 0022（编辑租约的表，M3-P1）。之前的库上还没有租约的表
   ['M2 结束（v0.1-m2）', '0021_m2_folder_payload_digest'],
+  // 有编辑租约（有效的与明确结束的）的库迁到 0023（审计加上另存为副本的动作，按全量重列的 CHECK 重建）及以后
+  ['M3-P1 结束', '0022_m3_p1_document_edit_leases'],
+  // 审计里有另存为副本的动作的库迁到以后的（M3-P3 起改文档、内容与修订记录的表）
+  ['M3-P2 结束', '0023_m3_p2_conflict_copy_audit'],
 ]
 
 /** 行数要核对的表（某个基准上还没有的表跳过） */
@@ -182,7 +186,17 @@ async function seed(client: pg.Client, base: number): Promise<Seeded> {
   const archived = await one<{ id: string }>(client, 'INSERT INTO spaces (type, name, created_by, status) VALUES (\'team\', \'Market  Team\', $1, \'archived\') RETURNING id', [root])
   await client.query('INSERT INTO space_members (space_id, user_id, role) VALUES ($1, $2, \'admin\'), ($1, $3, \'editor\'), ($4, $2, \'viewer\')', [team.id, amy, root, archived.id])
   const teamDocument = await insertDocument(team.id, '团队空间的文档', { epoch: 3 })
-  await insertDocument(archived.id, '归档空间的文档', { epoch: 1 })
+  const archivedDocument = await insertDocument(archived.id, '归档空间的文档', { epoch: 1 })
+
+  // 编辑租约（M3-P1）：团队空间的文档上一个有效的（这一代就是文档现在的代次），归档空间的文档上一个已经释放的（明确结束）
+  if (at('0022_m3_p1_document_edit_leases')) {
+    await client.query(
+      `INSERT INTO document_edit_leases (document_id, holder_id, session_id, client_instance_id, token_digest, write_epoch, acquired_at, renewed_at, expires_at, last_active_at, ended_at, end_reason)
+       VALUES ($1, $2, $3, $4, sha256('lease-live'), 3, now() - interval '1 minute', now(), now() + interval '90 seconds', now(), NULL, NULL),
+              ($5, $2, $6, $7, sha256('lease-released'), 1, now() - interval '2 hours', now() - interval '1 hour', now() - interval '58 minutes', now() - interval '1 hour', now() - interval '1 hour', 'released')`,
+      [teamDocument, amy, randomUUID(), randomUUID(), archivedDocument, randomUUID(), randomUUID()],
+    )
+  }
 
   // 单独授权（M2-P5）：个人空间的文档分享给系统管理员（查看者），团队空间的文档分享给停用的人（编辑者，停用不动授权）
   if (at('0020_m2_p5_document_grants') && dan !== undefined) {
@@ -261,7 +275,9 @@ describe('从每个阶段结束时有数据的库迁移到最新（M2-P6 复核 
       const seeded = await database.query(async client => seed(client, base))
       const before = await database.query(rowCounts)
 
-      expect(await runMigrations({ connectionString: database.url, lockTimeoutMs: 10_000 })).toEqual({ status: 'applied', applied: MIGRATION_TAGS.length - base - 1 })
+      // 基准就是最后一个迁移时（这个阶段刚结束、下一个阶段的迁移还没有写），库已经是最新的，什么也不执行
+      const pending = MIGRATION_TAGS.length - base - 1
+      expect(await runMigrations({ connectionString: database.url, lockTimeoutMs: 10_000 })).toEqual(pending === 0 ? { status: 'current' } : { status: 'applied', applied: pending })
       const after = await database.query(async client => ({
         counts: await rowCounts(client),
         unvalidated: (await client.query<{ conname: string }>('SELECT conname FROM pg_constraint WHERE NOT convalidated')).rows,
