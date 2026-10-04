@@ -1,7 +1,8 @@
 // 阅读与编辑的切换（US-M3-01；M3-P2 设计 §3.1、§3.3、§3.4）：打开一律是阅读（以只读创建，刚由自己新建的表格经 ?edit=new 直接进入编辑），
 // 点"编辑"申请编辑权、以可编辑重建，"退出编辑"先保存、再释放编辑权、以只读重建。模式切换一律重建编辑器（需求方 2026-10-04 决定）：
 // - 切换之后编辑真的能编辑、只读真的只读（"进入再退出"之后跑与查看者的只读同一套入口检查，support/read-only-checks.ts）、撤销栈已清空
-//   （新的实例：上一段编辑的撤销不再起作用）；销毁旧的编辑器时终止它的公式 Worker，页面的 Worker 回到 1 个；
+//   （新的实例：上一段编辑的撤销不再起作用；先在同一次编辑里核对同一套按键确实能撤销，阳性对照）；销毁旧的编辑器时终止它的公式 Worker，
+//   页面的 Worker 回到 1 个；
 // - 进入、退出没有成功（403、被占用、退出时保存失败）时焦点留在页头：按钮留着或者交给返回链接（审查 A2）；
 // - 以服务端当前的修订为基准：阅读期间别人保存过，点"编辑"先按 If-None-Match 取最新的内容再进入；
 // - 重建之前取出视图状态（当前工作表、左上角可见的行列、主选区），就绪之后恢复（风险表"重建丢掉用户的视图"）。
@@ -79,6 +80,15 @@ test.describe('US-M3-01 打开文档先阅读，点"编辑"进入编辑，点"�
     await typeInCell(page, 'A1', 'first')
     await saveAndWait(page)
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('first')
+
+    // 阳性对照（审查 A12）：同一次编辑里，同一套按键（点 C3、按撤销的快捷键）确实撤回上一步——C1 键入之后撤销，存下来的没有它。
+    // 有它，下面"重建之后撤销无效"的 A1 不变才说明撤销栈清空了，而不是撤销的快捷键在这里根本没生效
+    await typeInCell(page, 'C1', 'undo me')
+    await selectCell(page, 'C3')
+    await pressUniverShortcut(page, 'Z')
+    await saveAndWait(page)
+    const controlled = await savedContent(page, documentId)
+    expect([cellOf(controlled.snapshot, 'A1')?.v, cellOf(controlled.snapshot, 'C1')?.v]).toEqual(['first', undefined])
 
     // 退出、再进入（两次重建）之后撤销：撤销栈已清空，A1 不变（原地切换会留着上一段编辑的撤销栈，撤销会把 A1 改回空）。
     // 按键按顺序处理：之后在 B1 键入、保存，存下来的就是撤销之后的内容
