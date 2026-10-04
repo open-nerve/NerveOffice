@@ -3,7 +3,8 @@
 // 页面隐藏时不检查，回到前台立即检查一次。
 // 不真等 30 秒：阅读者的浏览器上下文装上 Playwright 的时钟（page.clock.install，打开之前装；之后时间照常流动，页面照常载入、渲染），
 // 要检查的时候 fastForward 30 秒——页面的计时器经注入的时钟（edit-lease.ts 的 browserLeaseClock：setTimeout 与 performance.now）
-// 都是装上的假实现，到点的计时器随之触发。编辑的人在另一个浏览器上下文，用真实的时钟。
+// 都是装上的假实现，到点的计时器随之触发。需要"还没到下一次检查"时先 pauseAt 停住时间，重建编辑器之前 resume（渲染靠动画帧）。
+// 编辑的人在另一个浏览器上下文，用真实的时钟。
 // 页面隐藏没有跨浏览器的办法（Playwright 的页面一直是可见的）：在页面里改写 document.visibilityState、document.hidden 并派发
 // visibilitychange，页面就按它判断（start.tsx 的 browserVisibility 读的就是这两样）。
 // 显示的内容与视图经探针读出（只在测试构建里）：标签 @test-build。
@@ -26,20 +27,23 @@ function updateButton(page: Page) {
   return page.locator('#editor-chrome').getByRole('banner').getByRole('button', { name: '有更新，点击刷新', exact: true })
 }
 
-/** 阅读页读这份文档的请求：内容（带没带 If-None-Match）与编辑状态，按发出的先后 */
+/**
+ * 阅读页读这份文档的请求，按发出的先后：内容（每次读的 If-None-Match；读全文、不带它的是 null——不用 undefined：toEqual 不比较
+ * 数组里的 undefined，多读的一次会被放过）与编辑状态的次数
+ */
 interface Reads {
-  readonly content: (string | undefined)[]
+  readonly content: (string | null)[]
   readonly status: number
 }
 
 function recordReads(page: Page, documentId: string): Reads {
-  const reads = { content: [] as (string | undefined)[], status: 0 }
+  const reads = { content: [] as (string | null)[], status: 0 }
   page.on('request', (request) => {
     if (request.method() !== 'GET')
       return
     const path = new URL(request.url()).pathname
     if (path === `/api/documents/${documentId}/content`)
-      reads.content.push(request.headers()['if-none-match'])
+      reads.content.push(request.headers()['if-none-match'] ?? null)
     else if (path === `/api/documents/${documentId}/edit-lease`)
       reads.status += 1
   })
@@ -88,21 +92,25 @@ test.describe('US-M3-05 别人保存了新版本时阅读者得到提示', { tag
     await scrollAndSelect(anotherDevice, 40, 8, 'K45:L47')
     await expect.poll(async () => editorView(anotherDevice)).toMatchObject({ sheet: '工作表2', top: 40, range: 'K45:L47', current: 'K45' })
     const view = await editorView(anotherDevice)
-    expect(reads.content).toEqual([undefined])
+    expect(reads.content).toEqual([null])
+
+    // 乙的时间先停住（之后只在往前拨的时候走）：甲保存用多久都碰不上乙的下一次检查，机器慢也一样
+    await anotherDevice.clock.pauseAt(await anotherDevice.evaluate(() => Date.now()) + 1_000)
 
     // 甲保存（修订 3）
     await saveAndWait(page)
     const latest = await savedContent(page, documentId)
     expect(latest.revision).toBe(3)
 
-    // 乙：下一次检查（30 秒之后）读到修订 3，提示有更新；期间只读了编辑状态，没有读内容。
-    // 从乙打开到这里不到 30 秒（时间照常流动），还没到下一次检查
+    // 乙：还没到下一次检查，不提示；往前拨 30 秒，那次检查读到修订 3，提示有更新；期间只读了编辑状态，没有读内容
     await expect(updateButton(anotherDevice)).toHaveCount(0)
     const before = reads.status
     await anotherDevice.clock.fastForward(CHECK_INTERVAL)
     await expect(updateButton(anotherDevice)).toBeVisible()
     expect(reads.status).toBe(before + 1)
-    expect(reads.content).toEqual([undefined])
+    expect(reads.content).toEqual([null])
+    // 时间恢复流动：点了之后要以只读重建、画出新的编辑器（渲染靠动画帧，停住的时钟下不走）
+    await anotherDevice.clock.resume()
 
     // 点了：按 If-None-Match（本页的修订 2）取内容，以只读重建，显示修订 3（第二张表的 A1），视图照旧
     await updateButton(anotherDevice).click()
@@ -110,7 +118,7 @@ test.describe('US-M3-05 别人保存了新版本时阅读者得到提示', { tag
     await expect.poll(async () => shownCell(anotherDevice, 'A1', second)).toBe('v3')
     await waitForEditorAccess(anotherDevice, 'read')
     await expect(anotherDevice.locator('#editor-chrome').getByRole('banner').getByRole('button')).toHaveCount(0)
-    expect(reads.content).toEqual([undefined, revisionEtag(2)])
+    expect(reads.content).toEqual([null, revisionEtag(2)])
     expect(await editorView(anotherDevice)).toEqual(view)
     await expect(saveStatus(anotherDevice)).toHaveText('只能查看')
 
@@ -122,7 +130,7 @@ test.describe('US-M3-05 别人保存了新版本时阅读者得到提示', { tag
       return reads.status
     }, { message: '又读了两次编辑状态' }).toBeGreaterThanOrEqual(count + 2)
     await expect(updateButton(anotherDevice)).toHaveCount(0)
-    expect(reads.content).toEqual([undefined, revisionEtag(2)])
+    expect(reads.content).toEqual([null, revisionEtag(2)])
     await expect(editorSurface(anotherDevice)).toHaveAttribute('data-editor-access', 'read')
   })
 
@@ -160,6 +168,6 @@ test.describe('US-M3-05 别人保存了新版本时阅读者得到提示', { tag
     await updateButton(anotherDevice).click()
     await expect.poll(async () => shownCell(anotherDevice, 'A1')).toBe('while hidden')
     await expect(updateButton(anotherDevice)).toHaveCount(0)
-    expect(reads.content).toEqual([undefined, revisionEtag(1)])
+    expect(reads.content).toEqual([null, revisionEtag(1)])
   })
 })

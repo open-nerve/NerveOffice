@@ -162,10 +162,11 @@ test.describe('US-M3-01 打开文档先阅读，点"编辑"进入编辑，点"�
     // 第二个人先打开阅读（修订 1）
     await loginThroughApi(anotherDevice, second)
     await openReader(anotherDevice, documentId)
-    const reads: (string | undefined)[] = []
+    // 读内容的请求带的 If-None-Match（读全文、不带它的是 null：toEqual 不比较数组里的 undefined）
+    const reads: (string | null)[] = []
     anotherDevice.on('request', (request) => {
       if (request.method() === 'GET' && new URL(request.url()).pathname === `/api/documents/${documentId}/content`)
-        reads.push(request.headers()['if-none-match'])
+        reads.push(request.headers()['if-none-match'] ?? null)
     })
 
     // 第一个人编辑、保存（修订 2），退出编辑（放掉编辑权）

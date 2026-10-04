@@ -152,11 +152,12 @@ test.describe('US-M3-13 没收到保存的确认，随后失去编辑权（还�
     expect(await revisionOf(documentId)).toBe(2)
 
     // 空间管理员把我降为查看者（收回写入权）：下一次心跳得知不能编辑了（403），编辑权失效，本页换成只读。还读得到：给副本之前，
-    // 先原样重发那一次结果未知的保存——拿到原来的结果，本页的修改其实已经保存，只给"重新加载"
+    // 先原样重发那一次结果未知的保存——拿到原来的结果，本页的修改其实已经保存，只给"重新加载"。
+    // 心跳每 10 秒一次，之后还要以只读重建、重发那一次：慢的机器（CI 比本机慢几倍）上留足余量
     await loginThroughApi(anotherDevice, lead)
     await actAs(anotherDevice, 'PUT', `/api/spaces/${space.id}/members/${me.id}`, { role: 'viewer' })
     const lost = lostNotice(page)
-    await expect(lost).toContainText('编辑权已失效：你已没有编辑这份文档的权限（只能查看这份文档，不能编辑）。本页的修改都已保存，重新加载可以看到最新的版本。', { timeout: 15_000 })
+    await expect(lost).toContainText('编辑权已失效：你已没有编辑这份文档的权限（只能查看这份文档，不能编辑）。本页的修改都已保存，重新加载可以看到最新的版本。', { timeout: 45_000 })
     await expect(lost.getByRole('button', { name: '另存为副本', exact: true })).toHaveCount(0)
     await expect(lost.getByRole('button', { name: '放弃本页的修改', exact: true })).toHaveCount(0)
     await waitForEditorAccess(page, 'read')
