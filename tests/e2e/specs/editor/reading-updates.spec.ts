@@ -201,30 +201,48 @@ test.describe('US-M3-05 别人保存了新版本时阅读者得到提示', { tag
     await anotherDevice.clock.fastForward(CHECK_INTERVAL)
     await expect(updateButton(anotherDevice)).toBeVisible()
 
-    // 拦住公式 Worker 的脚本：按新的版本重建的只读编辑器停在载入中，这段窗口不靠运气
-    let release: () => void = () => {}
-    const released = new Promise<void>((resolve) => {
-      release = resolve
+    // 刷新的两段都扣住、不靠运气：取最新的内容（回包先扣着）；按新的版本重建（公式 Worker 的脚本先扣着，只读编辑器停在载入中）。
+    // 两段里各用键盘按一次"编辑"：取内容时旧的编辑器还在（审查的 H1），重建时一个编辑器也没有（H2）
+    let releaseContent: () => void = () => {}
+    const contentHeld = new Promise<void>((resolve) => {
+      releaseContent = resolve
     })
-    await anotherDevice.route('**/assets/formula.worker-*.js', async (route) => {
-      await released
+    const isContent = (url: URL): boolean => url.pathname === `/api/documents/${documentId}/content`
+    await anotherDevice.route(isContent, async (route) => {
+      if (route.request().method() === 'GET')
+        await contentHeld
       await route.continue()
     })
-    const contentLoaded = anotherDevice.waitForResponse(response => new URL(response.url()).pathname === `/api/documents/${documentId}/content` && response.request().method() === 'GET')
+    let releaseWorker: () => void = () => {}
+    const workerHeld = new Promise<void>((resolve) => {
+      releaseWorker = resolve
+    })
+    await anotherDevice.route('**/assets/formula.worker-*.js', async (route) => {
+      await workerHeld
+      await route.continue()
+    })
+    const contentRequested = anotherDevice.waitForRequest(request => isContent(new URL(request.url())) && request.method() === 'GET')
     await updateButton(anotherDevice).click()
-    await contentLoaded
-    await expect(editorSurface(anotherDevice)).toHaveAttribute('data-editor-state', 'loading')
+    await contentRequested
 
-    // 正在载入最新的版本："编辑"标为不可用，读屏状态区也说正在载入（审查 A6）；照样按下去（键盘：aria-disabled 拦不住按钮被激活，
-    // Playwright 的点击却会一直等它可用）
+    // 正在载入最新的版本（取内容，旧的编辑器还在）："编辑"标为不可用，读屏状态区也说正在载入（审查 A6）；照样按下去
+    // （键盘：aria-disabled 拦不住按钮被激活，Playwright 的点击却会一直等它可用）
     const enter = enterEditButton(anotherDevice)
     await expect(enter).toHaveAttribute('aria-disabled', 'true')
     await expect(anotherDevice.locator('#editor-chrome').getByRole('status').filter({ hasText: '正在载入最新的版本…' })).toBeVisible()
+    await expect(editorSurface(anotherDevice)).toHaveAttribute('data-editor-access', 'read')
+    await enter.focus()
+    await anotherDevice.keyboard.press('Enter')
+
+    // 内容回来，开始按新的版本重建（容器换成载入中）：再按一次
+    releaseContent()
+    await expect(editorSurface(anotherDevice)).toHaveAttribute('data-editor-state', 'loading')
+    await expect(enter).toHaveAttribute('aria-disabled', 'true')
     await enter.focus()
     await anotherDevice.keyboard.press('Enter')
 
     // 载入完了：只有一个编辑器（只读，显示最新的版本），"有更新"不在了，"编辑"又能点；这期间没有申请过编辑权
-    release()
+    releaseWorker()
     await waitForEditorAccess(anotherDevice, 'read')
     await expect.poll(async () => shownCell(anotherDevice, 'A1')).toBe('from writer')
     await expect(sheetCanvas(anotherDevice)).toHaveCount(1)
