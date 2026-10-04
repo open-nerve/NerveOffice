@@ -1,5 +1,6 @@
 import type { Univer } from '@univerjs/core'
 import type { CommandEvent } from '../change-tracking/command-event.ts'
+import { canonicalLink } from '@nerve-office/contracts'
 import { CommandType } from '@univerjs/core'
 import { FUniver } from '@univerjs/core/facade'
 import { FRange, FWorksheet } from '@univerjs/sheets/facade'
@@ -198,6 +199,15 @@ describe('探针的快捷键清单与编辑栏（M2-P6 复核 F1、F2 之后）'
     expect(() => window.__nerveEditorProbe?.formulaBarText()).toThrow(`取不到编辑栏的编辑器（${DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY}）`)
     installEditorProbe(api, fakeWorkbook(() => ({})), { formulaBar: {} })
     expect(() => window.__nerveEditorProbe?.formulaBarText()).toThrow('编辑栏的文档没有正文')
+  })
+})
+
+describe('探针给出页面里打包的链接地址判定（M3-P3 S2）', () => {
+  it('canonicalLink 就是 contracts 的那一个（链接的改写器经 normalizeCellLinks 用的同一份代码）', () => {
+    const { api } = fakeFacade()
+    installEditorProbe(api, fakeWorkbook(() => ({})))
+    expect(window.__nerveEditorProbe?.canonicalLink).toBe(canonicalLink)
+    expect(window.__nerveEditorProbe?.canonicalLink('HTTPS://Example.COM')).toEqual({ ok: true, href: 'https://example.com/' })
   })
 })
 

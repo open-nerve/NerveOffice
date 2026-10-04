@@ -91,6 +91,12 @@ export const ARTIFACT_POLICY: ArtifactPolicy = {
     { address: 'http://www.w3.org/TR/REC-html40', source: '@univerjs/ui、@univerjs/sheets-ui、@univerjs/docs-ui', reason: '复制到剪贴板的 HTML 里 Excel 用的命名空间（xmlns）' },
     { address: 'http://www.w3.org/1999/xhtml', source: '@univerjs/sheets-ui', reason: 'XHTML 的命名空间' },
     { address: 'https://example.com/a-b.svg', source: '@univerjs/design 的样式', reason: '样式里一个生成出来却没有元素使用的背景图工具类（univer-bg-[url(…)]）；万一用到，CSP 的 img-src 只允许本站' },
+    // ---- 平台自己的代码 ----
+    {
+      address: 'https://relative-link.invalid',
+      source: '@nerve-office/contracts 的链接地址判定（documents/link-address.ts，编辑器页的链接改写器经 normalizeCellLinks 用它，M3-P3 S2）',
+      reason: '本站相对地址（/…）按它解析、再比较来源是否不变（new URL(path, 它)），只用来解析与比较，不发请求；.invalid 按 RFC 2606 不会解析成任何主机。先例是 react-router 的 http://localhost',
+    },
   ],
   /**
    * `Function('return this')()` 这类全局对象探测的次数上限。

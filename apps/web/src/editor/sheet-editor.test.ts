@@ -1,6 +1,7 @@
 // 表格编辑器以 E2E 为主（规范 §8.3）；这里只测 E2E 做不出来的部分：创建过程中出错时，已经创建的都要销毁（审查 B8）；
 // 按打开方式组合的是哪些（M2-P3 设计 §3.1–§3.4：授权服务、插件档案、只读守卫在创建工作簿之前装上）；
-// 只读时的编排（P3 审查 A3）：防火墙与变更检测用同一份判定的配置，创建工作簿之后设权限点，就绪时装界面的处理、清空撤销栈
+// 只读时的编排（P3 审查 A3）：防火墙与变更检测用同一份判定的配置，创建工作簿之后设权限点，就绪时装界面的处理、清空撤销栈；
+// 链接的改写（M3-P3 设计 §3.6）：阅读与编辑都在入口守卫之后、创建工作簿之前装上
 import type { EditorAccess } from './editor-access.ts'
 import type { PluginEntry } from './profile/plugin-entry.ts'
 import type { ReadOnlyGuard } from './read-only/read-only-guard.ts'
@@ -11,6 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createChangeTracker } from './change-tracking/change-tracker.ts'
 import { imagePolicyReport } from './image-function/worker-report.ts'
 import { IAuthzIoService, injectorOf, WorkbookViewPermission } from './internal-api/index.ts'
+import { installEntryGuards } from './profile/entry-guards.ts'
+import { installLinkPolicy } from './profile/link-policy.ts'
 import { CHANGE_DETECTION_EXCLUDED_MUTATIONS, sheetPluginEntries } from './profile/sheet-profile.ts'
 import { installReadOnlyGuard } from './read-only/read-only-guard.ts'
 import { SheetEditorLoadError } from './sheet-editor-error.ts'
@@ -35,6 +38,15 @@ vi.mock('./read-only/read-only-guard.ts', async (importOriginal) => {
 vi.mock('./change-tracking/change-tracker.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./change-tracking/change-tracker.ts')>()
   return { ...actual, createChangeTracker: vi.fn(actual.createChangeTracker) }
+})
+// 入口守卫与链接的改写同样照常装上；装的先后由用例换成记录调用顺序的实现核对
+vi.mock('./profile/entry-guards.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./profile/entry-guards.ts')>()
+  return { ...actual, installEntryGuards: vi.fn(actual.installEntryGuards) }
+})
+vi.mock('./profile/link-policy.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./profile/link-policy.ts')>()
+  return { ...actual, installLinkPolicy: vi.fn(actual.installLinkPolicy) }
 })
 // 没有注册插件时装不上 IMAGE() 的限制（没有函数服务）：编排的用例要走到就绪，这里当作装上了
 vi.mock('./image-function/install-image-policy.ts', () => ({ installRestrictedImageFunction: vi.fn(() => true) }))
@@ -67,6 +79,8 @@ beforeEach(() => {
   vi.mocked(sheetPluginEntries).mockReset()
   vi.mocked(installReadOnlyGuard).mockClear()
   vi.mocked(createChangeTracker).mockClear()
+  vi.mocked(installEntryGuards).mockClear()
+  vi.mocked(installLinkPolicy).mockClear()
   vi.mocked(readViewState).mockClear()
   vi.mocked(restoreViewState).mockClear()
 })
@@ -166,8 +180,8 @@ describe('按打开方式创建（M2-P3 设计 §3.1–§3.4）', () => {
     const error = await createFailingAtWorkbook('read')
     expect(error).toBeInstanceOf(SheetEditorLoadError)
     expect((error as SheetEditorLoadError).reason).toBe('create-failed')
-    // BeforeCommandExecute：入口守卫与防火墙各一个
-    expect(recorded.atCreateWorkbook).toMatchObject({ BeforeCommandExecute: 2, BeforeUndo: 1, BeforeRedo: 1 })
+    // BeforeCommandExecute：入口守卫、链接的改写与防火墙各一个
+    expect(recorded.atCreateWorkbook).toMatchObject({ BeforeCommandExecute: 3, BeforeUndo: 1, BeforeRedo: 1 })
     expect(subscribed()).toBe(0)
     expect(FakeWorker.created[0]?.terminate).toHaveBeenCalledOnce()
   })
@@ -176,7 +190,8 @@ describe('按打开方式创建（M2-P3 设计 §3.1–§3.4）', () => {
     const { recorded, subscribed } = fakeFacade()
     await createFailingAtWorkbook('edit')
     expect(vi.mocked(installReadOnlyGuard)).not.toHaveBeenCalled()
-    expect(recorded.atCreateWorkbook).toMatchObject({ BeforeCommandExecute: 1 })
+    // 入口守卫与链接的改写
+    expect(recorded.atCreateWorkbook).toMatchObject({ BeforeCommandExecute: 2 })
     expect(recorded.atCreateWorkbook).not.toHaveProperty('BeforeUndo')
     expect(recorded.atCreateWorkbook).not.toHaveProperty('BeforeRedo')
     expect(subscribed()).toBe(0)
@@ -254,6 +269,38 @@ describe('只读时的编排（M2-P3 设计 §3.3，P3 审查 A3）', () => {
 
     editor.dispose()
     expect(log.at(-1)).toBe('dispose')
+  })
+})
+
+describe('链接的改写（M3-P3 设计 §3.6，DEF-021）', () => {
+  it.each([
+    ['edit', ['installEntryGuards', 'installLinkPolicy', 'createWorkbook']],
+    ['read', ['installEntryGuards', 'installLinkPolicy', 'installReadOnlyGuard', 'createWorkbook', 'applyWorksheetPoints']],
+  ] as const)('%s：在入口守卫之后、创建工作簿之前装上（打开过程中的写入也改写）；销毁时先于入口守卫卸下（入口守卫直到最后才退订）', async (access, beforeReady) => {
+    const log: string[] = []
+    const facade = steppingFacade(log, 'unit-p3')
+    vi.mocked(installEntryGuards).mockImplementationOnce(() => {
+      log.push('installEntryGuards')
+      return { dispose: () => log.push('disposeEntryGuards') }
+    })
+    vi.mocked(installLinkPolicy).mockImplementationOnce(() => {
+      log.push('installLinkPolicy')
+      return { dispose: () => log.push('disposeLinkPolicy') }
+    })
+    if (access === 'read') {
+      vi.mocked(installReadOnlyGuard).mockImplementationOnce(() => {
+        log.push('installReadOnlyGuard')
+        return recordingGuard(log)
+      })
+    }
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-p3'), access })
+    expect(log).toEqual(beforeReady)
+    expect(vi.mocked(installLinkPolicy)).toHaveBeenCalledOnce()
+    await reachReady(facade)
+    const editor = await creating
+    editor.dispose()
+    expect(log.filter(step => step.startsWith('dispose') && step !== 'dispose')).toEqual(['disposeLinkPolicy', 'disposeEntryGuards'])
   })
 })
 

@@ -161,6 +161,16 @@ describe('US-M1-11 lint 规则的自测：类型与写法（规范 §2.1），�
   })
 }, LINT_TIMEOUT)
 
+describe('US-M1-11 lint 规则的自测：E2E 引用 contracts 只经公开入口，另外只开链接地址判定的跨引擎用例这一个文件（M3-P3 S2）', () => {
+  it('跨引擎用例可以引用；contracts 里别的文件（包括判定本身）不行；别的测试照旧只经入口', async () => {
+    const cases = (root: string): string => `import { LINK_ADDRESS_CASES } from '${root}packages/contracts/src/documents/link-address.test-support.ts'\n\nexport const cases = LINK_ADDRESS_CASES\n`
+    expect(await rulesFor(cases('../../../../'), E2E_FILE)).not.toContain('boundaries/dependencies')
+    expect(await rulesFor('import { canonicalLink } from \'../../../../packages/contracts/src/documents/link-address.ts\'\n\nexport const f = canonicalLink\n', E2E_FILE)).toContain('boundaries/dependencies')
+    expect(await rulesFor('import { PROFILE_RESOURCES } from \'../../../../packages/contracts/src/documents/profile-resources.ts\'\n\nexport const r = PROFILE_RESOURCES\n', E2E_FILE)).toContain('boundaries/dependencies')
+    expect(await rulesFor(cases('../../../../'), INTEGRATION_FILE)).toContain('boundaries/dependencies')
+  })
+}, LINT_TIMEOUT)
+
 describe('US-M1-11 lint 规则的自测：关掉检查的注释要在 -- 之后写明原因（M2-P6 第 6 片复核 S4）', () => {
   const RULE = 'eslint-comments/require-description'
 

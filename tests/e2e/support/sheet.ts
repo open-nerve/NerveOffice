@@ -313,7 +313,13 @@ export interface SavedContent {
 
 interface CustomRange {
   readonly rangeType: number
+  readonly rangeId?: string
   readonly properties?: { readonly url?: string }
+}
+
+interface Paragraph {
+  readonly startIndex: number
+  readonly paragraphId?: string
 }
 
 interface Cell {
@@ -322,7 +328,7 @@ interface Cell {
   readonly s?: unknown
   readonly t?: number
   /** 富文本（例如自动识别出的链接） */
-  readonly p?: { readonly body?: { readonly dataStream?: string, readonly customRanges?: readonly CustomRange[] } }
+  readonly p?: { readonly body?: { readonly dataStream?: string, readonly customRanges?: readonly CustomRange[], readonly paragraphs?: readonly Paragraph[] } }
 }
 
 export interface Workbook {

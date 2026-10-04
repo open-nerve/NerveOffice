@@ -28,6 +28,9 @@ describe('US-M1-11 lint 规则的自测：内部 API 只经 internal-api 引用�
       'import * as formula from \'@univerjs/engine-formula\'\n\nexport const f = formula\n',
       'export { LifecycleService } from \'@univerjs/core\'\n',
       'import { SetRangeValuesMutation } from \'@univerjs/sheets\'\n\nexport const m = SetRangeValuesMutation\n',
+      // 链接的改写认链接用的区间种类（M3-P3 S2）：值与类型都只经 internal-api 的 CELL_LINK_PROTOCOL
+      'import { CustomRangeType } from \'@univerjs/core\'\n\nexport const link = CustomRangeType.HYPERLINK\n',
+      'import type { CustomRangeType } from \'@univerjs/core\'\n\nexport type T = CustomRangeType\n',
       // 决定不用的：setCurrentUser 所在的服务与本地授权服务（ADR-009）
       'import { UserManagerService } from \'@univerjs/core\'\n\nexport const u = UserManagerService\n',
     ]
@@ -138,6 +141,11 @@ describe('US-M1-11 lint 规则的自测：内部 API 只经 internal-api 引用�
     expect(await rulesFor(code, INTERNAL_API_FILE)).not.toContain('no-restricted-imports')
   })
 
+  it('internal-api 里可以引用链接的改写用到的内部符号（M3-P3 S2）', async () => {
+    const code = 'import { CustomRangeType } from \'@univerjs/core\'\nimport { SetRangeValuesMutation } from \'@univerjs/sheets\'\n\nexport const used = [CustomRangeType.HYPERLINK, SetRangeValuesMutation.id]\n'
+    expect(await rulesFor(code, INTERNAL_API_FILE)).not.toContain('no-restricted-imports')
+  })
+
   it('internal-api 里可以引用受限的内部符号、调用 __getInjector', async () => {
     const code = 'import type { Univer } from \'@univerjs/core\'\nimport { LifecycleService } from \'@univerjs/core\'\nimport { IFunctionService } from \'@univerjs/engine-formula\'\n\nexport function services(univer: Univer): unknown[] {\n  return [univer.__getInjector().get(IFunctionService), LifecycleService]\n}\n'
     const rules = await rulesFor(code, INTERNAL_API_FILE)
@@ -165,6 +173,9 @@ describe('US-M1-11 lint 规则的自测：内部 API 只经 internal-api 引用�
     expect(editor.paths?.find(path => path.name === '@univerjs/sheets-drawing')?.importNames).toEqual(['ISheetDrawingService'])
     // 放开编辑栏、拦下冻结线（P3 审查 A1、B2）
     expect(editor.paths?.find(path => path.name === '@univerjs/core')?.importNames).toEqual(expect.arrayContaining(['IContextService', 'FOCUSING_FX_BAR_EDITOR', 'DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY']))
+    // 链接的改写（M3-P3 S2）
+    expect(editor.paths?.find(path => path.name === '@univerjs/core')?.importNames).toEqual(expect.arrayContaining(['CustomRangeType']))
+    expect(editor.paths?.find(path => path.name === '@univerjs/sheets')?.importNames).toEqual(expect.arrayContaining(['SetRangeValuesMutation']))
     expect(editor.paths?.find(path => path.name === '@univerjs/docs-ui')?.importNames).toEqual(['IEditorService'])
     expect(editor.paths?.find(path => path.name === '@univerjs/engine-render')?.importNames).toEqual(['IRenderManagerService'])
     expect(editor.paths?.find(path => path.name === '@univerjs/sheets-ui')?.importNames).toEqual(['HeaderFreezeRenderController', 'HeaderResizeRenderController'])
