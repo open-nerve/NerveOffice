@@ -1,14 +1,15 @@
 import type { LinkInvalidReason, OneTimeLinkPurpose, SessionResponse } from '@nerve-office/contracts'
-import type { SyntheticEvent } from 'react'
+import type { RefObject, SyntheticEvent } from 'react'
 import { displayNameSchema, linkInvalidDetailsSchema, linkTokenFromHash, NEW_PASSWORD_MIN_LENGTH } from '@nerve-office/contracts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { ApiError, describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { LOGIN_PATH } from '../../shared/lib/login-path.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
-import { Alert, AlertDescription, Button, buttonVariants, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label, Skeleton } from '../../shared/ui/index.ts'
+import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
+import { Alert, AlertDescription, Button, buttonVariants, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label, RetryButton, Skeleton } from '../../shared/ui/index.ts'
 import { SESSION_QUERY_KEY, STARTS_SESSION } from '../auth/index.ts'
 import { acceptInvitation, completePasswordReset, inspectLink } from './links-api.ts'
 import { newPasswordProblem } from './new-password.ts'
@@ -19,6 +20,11 @@ function linkInvalidReason(error: unknown): LinkInvalidReason | undefined {
     return undefined
   const details = linkInvalidDetailsSchema.safeParse(error.details)
   return details.success ? details.data.reason : 'invalid'
+}
+
+/** 链接不能用（已用过、过期、作废、无效）：按原因说下一步，重试也不会好 */
+function notRetryable(error: unknown): boolean {
+  return linkInvalidReason(error) === undefined
 }
 
 /**
@@ -57,8 +63,10 @@ function useLinkToken(): string | undefined {
 /**
  * 一个令牌的查看与设置密码：换了令牌时整个重建（key），上一个令牌的查看结果、错误与填了一半的表单都不留下。
  * 先查看链接（只显示登录名与显示名），再设置密码；成功后已登录，与登录一样通知其他标签页，进入个人空间。
+ * 查看失败（网络、服务不可用、尝试次数过多）之后按"重试"：重试期间说明与按钮留着（不可用、说正在重试）；有了结果之后（表单，或者链接不能用的说明）
+ * 说明连同"重试"一起消失，焦点交给一直在的页面标题（titleRef），不落到 body（规范 §2.4，shared/lib/use-first-load-retry.ts）
  */
-function LinkForm({ purpose, token }: { purpose: OneTimeLinkPurpose, token: string }) {
+function LinkForm({ purpose, token, titleRef }: { purpose: OneTimeLinkPurpose, token: string, titleRef: RefObject<HTMLHeadingElement | null> }) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const inspection = useQuery({
@@ -66,6 +74,7 @@ function LinkForm({ purpose, token }: { purpose: OneTimeLinkPurpose, token: stri
     queryFn: async ({ signal }) => inspectLink(purpose, token, signal),
     staleTime: Infinity,
   })
+  const firstLoad = useFirstLoadRetry(inspection, titleRef, { retryable: notRetryable })
   const [displayName, setDisplayName] = useState<string>()
   const [password, setPassword] = useState('')
   const [confirmation, setConfirmation] = useState('')
@@ -90,21 +99,25 @@ function LinkForm({ purpose, token }: { purpose: OneTimeLinkPurpose, token: stri
   const unavailable = linkInvalidReason(inspection.error) ?? linkInvalidReason(mutation.error)
   if (unavailable !== undefined)
     return <LinkUnavailable purpose={purpose} reason={unavailable} />
-  if (inspection.isPending) {
+  if (firstLoad.failed) {
+    // 重试期间上一次的原因不再给（请求缓存已经清掉了它）
+    return (
+      <div className="flex flex-col gap-3" onFocus={firstLoad.focus.onFocus} onBlur={firstLoad.focus.onBlur}>
+        <Alert variant="destructive">
+          <AlertDescription>
+            <p>{text.checkFailed}</p>
+            {!firstLoad.retrying && <p>{describeError(inspection.error).message}</p>}
+          </AlertDescription>
+        </Alert>
+        <RetryButton size="default" retrying={firstLoad.retrying} onRetry={() => void inspection.refetch()} />
+      </div>
+    )
+  }
+  if (inspection.data === undefined) {
     return (
       <div className="flex flex-col gap-3" role="status" aria-label={text.checking}>
         <Skeleton className="h-9 w-full" />
         <Skeleton className="h-9 w-full" />
-      </div>
-    )
-  }
-  if (inspection.isError) {
-    return (
-      <div className="flex flex-col gap-3">
-        <Alert variant="destructive">
-          <AlertDescription>{describeError(inspection.error).message}</AlertDescription>
-        </Alert>
-        <Button variant="outline" onClick={() => void inspection.refetch()}>{messages.common.retry}</Button>
       </div>
     )
   }
@@ -167,13 +180,15 @@ function LinkForm({ purpose, token }: { purpose: OneTimeLinkPurpose, token: stri
 export function OneTimeLinkPage({ purpose }: { purpose: OneTimeLinkPurpose }) {
   const token = useLinkToken()
   const text = messages.account.link[purpose]
+  /** 页面标题（tabIndex -1，只能由程序聚焦）：查看链接失败、按"重试"有了结果之后焦点交给它 */
+  const titleRef = useRef<HTMLHeadingElement>(null)
   useDocumentTitle(text.title)
   return (
     <main className="flex min-h-svh items-center justify-center bg-muted/40 p-4">
       <Card className="w-full max-w-sm">
         <CardHeader>
           <CardTitle>
-            <h1 className="text-lg">{text.title}</h1>
+            <h1 ref={titleRef} tabIndex={-1} className="text-lg outline-none focus-visible:ring-3 focus-visible:ring-ring/50">{text.title}</h1>
           </CardTitle>
           <CardDescription>{text.description}</CardDescription>
         </CardHeader>
@@ -184,7 +199,7 @@ export function OneTimeLinkPage({ purpose }: { purpose: OneTimeLinkPurpose }) {
                   <AlertDescription>{messages.account.link.missing(purpose)}</AlertDescription>
                 </Alert>
               )
-            : <LinkForm key={token} purpose={purpose} token={token} />}
+            : <LinkForm key={token} purpose={purpose} token={token} titleRef={titleRef} />}
         </CardContent>
       </Card>
     </main>

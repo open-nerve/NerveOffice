@@ -1,11 +1,11 @@
 import type { AdminSpace, AdminUser, AdminUserDocument, TransferTarget, UserSummary } from '@nerve-office/contracts'
-import type { ReactNode } from 'react'
+import type { ReactNode, RefObject } from 'react'
 import type { Phrase as PhraseParts } from '../../shared/i18n/index.ts'
 import type { KeywordPickerTexts } from '../colleagues/index.ts'
 import type { PendingConfirmation } from '../confirmation/index.ts'
 import { TRANSFER_MAX_DOCUMENTS } from '@nerve-office/contracts'
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useId, useRef, useState } from 'react'
+import { useId, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { ApiError, describeError, isMissingResource, isUnknownOutcome } from '../../shared/api/index.ts'
 import { refreshAfterSuccess, refreshWithin } from '../../shared/api/write-outcome.ts'
@@ -16,7 +16,8 @@ import { formatDateTime } from '../../shared/lib/format.ts'
 import { updatePagedItems } from '../../shared/lib/paged-cache.ts'
 import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
-import { Alert, AlertDescription, Button, buttonVariants, Label, PersonName, Phrase, Skeleton, TableCell } from '../../shared/ui/index.ts'
+import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
+import { Alert, AlertDescription, Button, buttonVariants, Label, PersonName, Phrase, RetryButton, Skeleton, TableCell } from '../../shared/ui/index.ts'
 import { DetailRefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { StatusRegion } from '../../shared/ui/status-region.tsx'
 import { StillRefreshing } from '../../shared/ui/still-refreshing.tsx'
@@ -248,50 +249,66 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
   )
 }
 
+/** 账户不存在（404，与看不到一致）：重试也不会好，照旧说明、回到账户 */
+function notRetryable(error: unknown): boolean {
+  return !isMissingResource(error)
+}
+
 /**
  * 管理界面：转移停用者的文档（M2-P2 设计 §3.8、§3.10，US-M2-04）。只看得到标题，打不开内容；
  * 选文档（分页、全选已加载的，一次最多 100 份）、选目标（某人的个人空间或没有归档的团队空间），确认之后整批转移。
  * 页头的账户留着之前的、重新请求却失败了（DEF-040）：标题下面说明账户信息没能刷新、可以重试（是否停用可能已经变了，服务端转移时照样核对）；
- * 不存在（404）照旧说明、回到账户；不再是系统管理员（403）由会话的重新确认处理，不说成没能刷新
+ * 不存在（404）照旧说明、回到账户；不再是系统管理员（403）由会话的重新确认处理，不说成没能刷新。
+ * 账户第一次就没取到时按"重试"：重试期间说明与按钮留着（不可用、说正在重试）；取到之后焦点交给标题，得到"不存在"时交给那条说明，
+ * 不落到 body（规范 §2.4，shared/lib/use-first-load-retry.ts）
  */
 export function AdminTransferPage() {
   const { userId = '' } = useParams()
   const account = useQuery(adminUserQueryOptions(userId))
   // 标题（tabIndex -1，只能由程序聚焦）：重试成功、说明随之消失时焦点交给它
   const titleRef = useRef<HTMLHeadingElement>(null)
+  // "账户不存在"的说明（tabIndex -1）：第一次就没取到、重试之后得到 404 时焦点交给它
+  const missingRef = useRef<HTMLDivElement>(null)
+  // 加载失败的说明消失之后焦点的去处：取到了是标题，不存在是那条说明（同一时刻只有一个在页面上）
+  const afterRetry = useMemo<RefObject<HTMLElement | null>>(() => ({
+    get current() {
+      return titleRef.current ?? missingRef.current
+    },
+  }), [])
+  const firstLoad = useFirstLoadRetry(account, afterRetry, { retryable: notRetryable })
   // 浏览器标签页的标题（M2-P6 复核 S4）：账户还没取到或取不到时是账户页的
   useDocumentTitle(adminMessages.pageTitle(account.data === undefined ? adminMessages.nav.users : phraseText(text.title(messages.people.text(account.data)))))
   const back = <Link to={ADMIN_PATHS.users} className={buttonVariants({ variant: 'outline' })}>{text.back}</Link>
-  if (account.isPending) {
-    return (
-      <div role="status" aria-label={text.loadingAccount} className="flex flex-col gap-3">
-        <Skeleton className="h-8 w-64" />
-        <Skeleton className="h-10 w-full" />
-      </div>
-    )
-  }
   if (isMissingResource(account.error)) {
     return (
       <div className="flex flex-col items-start gap-3">
-        <Alert variant="destructive">
+        <Alert ref={missingRef} tabIndex={-1} variant="destructive" className="outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
           <AlertDescription>{messages.errors.byCode('NOT_FOUND', '')}</AlertDescription>
         </Alert>
         {back}
       </div>
     )
   }
-  if (account.data === undefined) {
-    // 网络与服务端的临时错误：可以重试（审查 B5）
+  if (firstLoad.failed) {
+    // 网络与服务端的临时错误：可以重试（审查 B5）。重试期间说明与按钮留着（不可用、说正在重试），上一次的原因不再给（请求缓存已经清掉了它）
     return (
       <div className="flex flex-col items-start gap-3">
-        <Alert variant="destructive">
+        <Alert variant="destructive" onFocus={firstLoad.focus.onFocus} onBlur={firstLoad.focus.onBlur}>
           <AlertDescription>
             <p>{text.loadAccountFailed}</p>
-            <p>{describeError(account.error).message}</p>
-            <Button variant="outline" size="sm" className="mt-2" onClick={() => void account.refetch()}>{messages.common.retry}</Button>
+            {!firstLoad.retrying && <p>{describeError(account.error).message}</p>}
+            <RetryButton retrying={firstLoad.retrying} onRetry={() => void account.refetch()} className="mt-2" />
           </AlertDescription>
         </Alert>
         {back}
+      </div>
+    )
+  }
+  if (account.data === undefined) {
+    return (
+      <div role="status" aria-label={text.loadingAccount} className="flex flex-col gap-3">
+        <Skeleton className="h-8 w-64" />
+        <Skeleton className="h-10 w-full" />
       </div>
     )
   }

@@ -1,6 +1,6 @@
 import type { AdminUser, AuditAction, AuditEventItem, AuditEventQuery } from '@nerve-office/contracts'
 import type { UseQueryResult } from '@tanstack/react-query'
-import type { ReactNode, Ref } from 'react'
+import type { ReactNode, Ref, RefObject } from 'react'
 import { AUDIT_ACTIONS, AUDIT_TARGET_TYPES } from '@nerve-office/contracts'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
@@ -10,8 +10,9 @@ import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { useDebouncedValue } from '../../shared/lib/use-debounced-value.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
+import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
-import { Badge, Button, Input, Label, NativeSelect, PersonName, Phrase, TableCell } from '../../shared/ui/index.ts'
+import { Badge, Button, Input, Label, NativeSelect, PersonName, Phrase, RetryButton, TableCell } from '../../shared/ui/index.ts'
 import { StatusRegion } from '../../shared/ui/status-region.tsx'
 import { actorCandidatesQueryOptions, auditEventsQueryOptions } from './admin-api.ts'
 import { auditTimeFrom, auditTimeTo } from './audit-time.ts'
@@ -72,17 +73,26 @@ interface ActorCandidatesProps {
   /** 防抖之后的关键词与输入框一致：查找针对的就是现在输入的 */
   readonly settled: boolean
   readonly onPick: (user: AdminUser) => void
+  /** 找操作者的输入框（一直在）：查找失败、按"重试"之后找到了（或者没有找到）时焦点交给它 */
+  readonly input: RefObject<HTMLInputElement | null>
 }
 
 /**
  * 找操作者的候选：查找中、失败（可以重试）、没有找到与找到的几个人，都有提示（审查 B8）。
  * 状态容器一直在无障碍树里，内容变化时往里填文字：与内容一起插入的 role="status" 部分读屏不播报（M2-P2 复验，与同事选择相同）。
  * 空的时候原来用 empty:hidden（display: none），同样不在无障碍树里，改用共用的状态区（M2-P5 审查 B 的 M1）。
- * 只显示与输入框里的关键词一致的候选：输入还没停下、或者刚清空时，防抖之后的查询还是上一个关键词的（M2-P2 审查 B11 的同类问题）
+ * 只显示与输入框里的关键词一致的候选：输入还没停下、或者刚清空时，防抖之后的查询还是上一个关键词的（M2-P2 审查 B11 的同类问题）。
+ * 查找失败之后按"重试"（与按名字选同事相同，features/colleagues 的 KeywordPicker）：重新查找期间说明与按钮留着（不可用、说正在重试）；
+ * 有了结果之后说明连同"重试"一起消失，焦点交给找操作者的输入框，不落到 body（规范 §2.4，shared/lib/use-first-load-retry.ts）。
+ * 同一个关键词之前找到过、这次重新查找失败了，同样只说失败（不留之前的候选）
  */
-function ActorCandidates({ candidates, typed, settled, onPick }: ActorCandidatesProps) {
-  const searching = typed !== '' && (!settled || candidates.isPending || (candidates.isError && candidates.isFetching))
-  const current = typed !== '' && settled && !searching
+function ActorCandidates({ candidates, typed, settled, onPick, input }: ActorCandidatesProps) {
+  const lookup = useFirstLoadRetry(candidates, input, { hidesDataOnError: true })
+  // 查找针对的就是现在输入的关键词：输入还没停下时防抖之后的查询还是上一个关键词的
+  const active = typed !== '' && settled
+  const failed = active && lookup.failed
+  const searching = typed !== '' && !failed && (!settled || candidates.isPending || candidates.isError)
+  const current = active && !failed && !searching
   let status = ''
   if (searching)
     status = text.searchingActor
@@ -91,10 +101,10 @@ function ActorCandidates({ candidates, typed, settled, onPick }: ActorCandidates
   return (
     <>
       <StatusRegion className="text-sm text-muted-foreground">{status}</StatusRegion>
-      {current && candidates.isError && (
-        <div role="alert" className="flex items-center gap-2 text-sm text-destructive">
-          <span>{text.actorSearchFailed(describeError(candidates.error).message)}</span>
-          <Button variant="outline" size="sm" onClick={() => void candidates.refetch()}>{messages.common.retry}</Button>
+      {failed && (
+        <div role="alert" className="flex items-center gap-2 text-sm text-destructive" onFocus={lookup.focus.onFocus} onBlur={lookup.focus.onBlur}>
+          <span>{text.actorSearchFailed(lookup.retrying ? undefined : describeError(candidates.error).message)}</span>
+          <RetryButton retrying={lookup.retrying} onRetry={() => void candidates.refetch()} />
         </div>
       )}
       {current && candidates.isSuccess && candidates.data.length > 0 && (
@@ -207,7 +217,7 @@ export function AdminAuditPage() {
           </div>
         )}
       </div>
-      {actor === undefined && <ActorCandidates candidates={candidates} typed={typedKeyword} settled={keywordSettled} onPick={pickActor} />}
+      {actor === undefined && <ActorCandidates candidates={candidates} typed={typedKeyword} settled={keywordSettled} onPick={pickActor} input={actorInputRef} />}
       {(actor !== undefined || target !== undefined) && (
         <div className="flex flex-wrap gap-3">
           {actor !== undefined && <Chip ref={actorClearRef} label={<Phrase parts={text.chipActor(actor.label)} />} clearLabel={text.clearActor} onClear={clearActor} />}

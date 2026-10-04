@@ -16,8 +16,9 @@ import { updatePagedItems } from '../../shared/lib/paged-cache.ts'
 import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { spacePath } from '../../shared/lib/space-paths.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
+import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
 import { useFocusRescue } from '../../shared/lib/use-focus-rescue.ts'
-import { Alert, AlertDescription, Badge, Button, buttonVariants, Notice, PersonName, Skeleton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../shared/ui/index.ts'
+import { Alert, AlertDescription, Badge, Button, buttonVariants, Notice, PersonName, RetryButton, Skeleton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../shared/ui/index.ts'
 import { DetailRefreshProblem, RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { StillRefreshing } from '../../shared/ui/still-refreshing.tsx'
 import { ConfirmDialog } from '../confirmation/index.ts'
@@ -110,10 +111,13 @@ type TrashQuery = UseInfiniteQueryResult<InfiniteData<TrashListResponse>>
  *   刷新失败或者到了时限还没回来，说明里说"列表没能刷新"，"恢复"也不一直停在"正在恢复…"。
  * 做完了（恢复、永久删除）：那一行按确定的写入结果先从列表里去掉，再刷新；刷新同样最多等 10 秒（Codex 对抗评审 CX4），一直不回来时
  * 照常结束（说明写出、焦点交还），说明接着说列表还在刷新。留着之前的列表、刷新却失败了时列表上方明说、给出重试（CX5）。
+ * 第一页就没取到时按"重试"：重试期间说明与按钮留着（不可用、说正在重试）；取到之后焦点交给页面的标题，不落到 body
+ * （规范 §2.4，shared/lib/use-first-load-retry.ts）
  */
 function TrashList({ space, query, headingRef }: { readonly space: SpaceView, readonly query: TrashQuery, readonly headingRef: RefObject<HTMLHeadingElement | null> }) {
   const queryClient = useQueryClient()
   const entries = query.data?.pages.flatMap(page => page.items) ?? []
+  const firstLoad = useFirstLoadRetry(query, headingRef)
   const [notice, setNotice] = useState<TrashNotice>()
   const [confirming, setConfirming] = useState<PendingConfirmation>()
   // 加载更多时已有的条数：新的一页到了之后，焦点移到第一条新行。按钮在最后一页之后随之消失，焦点不能留在它身上（M1 审查 B13 的做法，P13）
@@ -236,22 +240,23 @@ function TrashList({ space, query, headingRef }: { readonly space: SpaceView, re
     })
   }
 
-  if (query.isPending) {
+  if (firstLoad.failed) {
+    // 重试期间说明与按钮留着（不可用、说正在重试），上一次的原因不再给（请求缓存已经清掉了它）
     return (
-      <div role="status" aria-label={text.loading}>
-        <Skeleton className="h-24 w-full" />
-      </div>
+      <Alert variant="destructive" onFocus={firstLoad.focus.onFocus} onBlur={firstLoad.focus.onBlur}>
+        <AlertDescription>
+          <p>{text.loadFailed}</p>
+          {!firstLoad.retrying && <p>{describeError(query.error).message}</p>}
+          <RetryButton retrying={firstLoad.retrying} onRetry={() => void query.refetch()} className="mt-2" />
+        </AlertDescription>
+      </Alert>
     )
   }
   if (query.data === undefined) {
     return (
-      <Alert variant="destructive">
-        <AlertDescription>
-          <p>{text.loadFailed}</p>
-          <p>{describeError(query.error).message}</p>
-          <Button variant="outline" size="sm" className="mt-2" onClick={() => void query.refetch()}>{messages.common.retry}</Button>
-        </AlertDescription>
-      </Alert>
+      <div role="status" aria-label={text.loading}>
+        <Skeleton className="h-24 w-full" />
+      </div>
     )
   }
 
@@ -312,12 +317,19 @@ function TrashList({ space, query, headingRef }: { readonly space: SpaceView, re
   )
 }
 
+/** 空间看不到了（404，与不存在一致）：说明"空间不存在"，重试也不会好 */
+function notRetryable(error: unknown): boolean {
+  return !isMissingResource(error)
+}
+
 /**
  * 回收站页的内容：空间（页头的名称）与回收站的列表。先看错误、再看数据（ADR-008 的请求缓存约定）：两者任何一个得到 404，
  * 这个空间就看不到了，按"空间不存在"显示，不留着旧的行（M2-P6 复核 S2 的 P4）。两个请求谁先回来都一样：回收站先得到 404 时
  * 不等页头的请求（它可能还在路上，也可能拿着看不到之前的旧结果回来），直接说空间不存在（第二批 S-2 的 T1）。
  * 页头的请求别的失败（网络、5xx）而手里有之前的：留着它，页头下面说明空间信息没能刷新、可以重试（DEF-040）。
  * 有焦点的按钮、行随刷新或新的权限消失时，焦点交给页面的标题（M2-P6 复核 S3）。
+ * 页头第一次就没取到时按"重试"：重试期间说明与按钮留着（不可用、说正在重试）；取到之后焦点交给页面的标题，不落到 body
+ * （规范 §2.4，shared/lib/use-first-load-retry.ts）；得到 404 时由"空间不存在"接住焦点
  */
 function TrashContent({ spaceId }: { readonly spaceId: string }) {
   const space = useQuery(spaceQueryOptions(spaceId))
@@ -325,33 +337,35 @@ function TrashContent({ spaceId }: { readonly spaceId: string }) {
   const missing = isMissingResource(space.error) || isMissingResource(trash.error)
   const titleRef = useRef<HTMLHeadingElement>(null)
   const rescueFocus = useFocusRescue(titleRef)
+  const firstLoad = useFirstLoadRetry(space, titleRef, { retryable: notRetryable })
   useForgetMissingSpace(spaceId, missing)
   let title: string | undefined
   if (space.data !== undefined && !missing)
     title = text.heading(spaceName(space.data))
-  else if (!space.isPending && !missing)
+  else if (firstLoad.failed && !missing)
     title = text.loadFailed
   useDocumentTitle(title)
   if (missing)
     return <SpaceNotFound />
-  if (space.isPending) {
+  if (firstLoad.failed) {
+    // 重试期间说明与按钮留着（不可用、说正在重试），上一次的原因不再给（请求缓存已经清掉了它）
     return (
-      <div role="status" aria-label={text.loading}>
-        <Skeleton className="h-24 w-full" />
-      </div>
+      <section className="flex flex-col gap-4" aria-labelledby="trash-title">
+        <h1 id="trash-title" className="text-xl font-semibold">{text.loadFailed}</h1>
+        <Alert variant="destructive" onFocus={firstLoad.focus.onFocus} onBlur={firstLoad.focus.onBlur}>
+          <AlertDescription>
+            {!firstLoad.retrying && <p>{describeError(space.error).message}</p>}
+            <RetryButton retrying={firstLoad.retrying} onRetry={() => void space.refetch()} className={firstLoad.retrying ? undefined : 'mt-2'} />
+          </AlertDescription>
+        </Alert>
+      </section>
     )
   }
   if (space.data === undefined) {
     return (
-      <section className="flex flex-col gap-4" aria-labelledby="trash-title">
-        <h1 id="trash-title" className="text-xl font-semibold">{text.loadFailed}</h1>
-        <Alert variant="destructive">
-          <AlertDescription>
-            <p>{describeError(space.error).message}</p>
-            <Button variant="outline" size="sm" className="mt-2" onClick={() => void space.refetch()}>{messages.common.retry}</Button>
-          </AlertDescription>
-        </Alert>
-      </section>
+      <div role="status" aria-label={text.loading}>
+        <Skeleton className="h-24 w-full" />
+      </div>
     )
   }
   return (

@@ -7,7 +7,7 @@ import { messages } from '../../shared/i18n/index.ts'
 import { cn } from '../../shared/lib/cn.ts'
 import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
 import { useStillRefreshing } from '../../shared/lib/use-still-refreshing.ts'
-import { Alert, AlertDescription, Button, Skeleton, Table, TableBody, TableHead, TableHeader, TableRow } from '../../shared/ui/index.ts'
+import { Alert, AlertDescription, Button, RetryButton, Skeleton, Table, TableBody, TableHead, TableHeader, TableRow } from '../../shared/ui/index.ts'
 import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 
 export interface Page<T> {
@@ -101,15 +101,13 @@ export function PagedTable<T>({ query, label, texts, columns, rowKey, renderCell
   }
 
   if (firstLoad.failed) {
-    // 重试期间说明与按钮留着（aria-disabled：按钮变成 disabled 时焦点会丢），上一次的原因不再给（请求缓存已经清掉了它）
+    // 重试期间说明与按钮留着（不可用、说正在重试），上一次的原因不再给（请求缓存已经清掉了它）
     return (
       <Alert variant="destructive" onFocus={firstLoad.focus.onFocus} onBlur={firstLoad.focus.onBlur}>
         <AlertDescription>
           <p>{texts.loadFailed}</p>
           {!firstLoad.retrying && <p>{describeError(query.error).message}</p>}
-          <Button variant="outline" size="sm" className="mt-2" aria-disabled={firstLoad.retrying} aria-busy={firstLoad.retrying} onClick={() => void query.refetch()}>
-            {firstLoad.retrying ? messages.common.retrying : messages.common.retry}
-          </Button>
+          <RetryButton retrying={firstLoad.retrying} onRetry={() => void query.refetch()} className="mt-2" />
         </AlertDescription>
       </Alert>
     )

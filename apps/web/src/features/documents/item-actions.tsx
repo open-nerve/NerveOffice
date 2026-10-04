@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import type { BackgroundRefresh } from '../../shared/api/write-outcome.ts'
+import type { FirstLoadQuery } from '../../shared/lib/use-first-load-retry.ts'
 import type { Destination } from './destination-form.tsx'
 import type { TargetSpaces } from './target-spaces.ts'
 import { useMutation } from '@tanstack/react-query'
@@ -9,8 +10,9 @@ import { describeError, isAccessDenied, isMissingResource, isUnknownOutcome } fr
 import { messages } from '../../shared/i18n/index.ts'
 import { useRequestIdLedger } from '../../shared/lib/request-id-ledger.ts'
 import { spaceTrashPath } from '../../shared/lib/space-paths.ts'
+import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
 import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
-import { Alert, AlertDescription, Button, buttonVariants, FieldProblem, Input, Label, Skeleton } from '../../shared/ui/index.ts'
+import { Alert, AlertDescription, Button, buttonVariants, FieldProblem, Input, Label, RetryButton, Skeleton } from '../../shared/ui/index.ts'
 import { DetailRefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { DestinationForm } from './destination-form.tsx'
 
@@ -61,6 +63,24 @@ export interface ItemOperations {
   readonly refresh: (destination?: Destination) => Promise<void>
 }
 
+/**
+ * 展开时按 id 取的元数据（文档的权限从这里来，TanStack Query 的结果）：没有权限时的失败是第一次就没取到；
+ * 有权限时是留着之前的、重新取失败了（DEF-040）
+ */
+export interface PermissionsRequest extends FirstLoadQuery {
+  readonly error: Error | null
+  readonly isRefetchError: boolean
+  readonly refetch: () => Promise<unknown>
+}
+
+/** 文件夹：权限随列表一起来，没有要取的 */
+const NOTHING_TO_LOAD: FirstLoadQuery = { data: null, error: null, isPending: false, isError: false, isFetching: false, errorUpdateCount: 0 }
+
+/** 它已经不在了（404）：按"已经不在了"收起面板、说明，重试也不会好（P15） */
+function notRetryable(error: unknown): boolean {
+  return !isMissingResource(error)
+}
+
 interface ItemActionsProps {
   /** 展开的面板的 id：与“操作”按钮的 aria-controls 对应 */
   readonly panelId: string
@@ -69,10 +89,8 @@ interface ItemActionsProps {
   readonly validateName: (value: string) => string | undefined
   /** 还没拿到权限时为空：文档要先取一次元数据 */
   readonly permissions: OrganizePermissions | undefined
-  readonly loading: boolean
-  /** 取元数据的失败：没有权限时是第一次就没取到；有权限时是留着之前的、重新取失败了（DEF-040） */
-  readonly error: Error | null
-  readonly onRetry: () => void
+  /** 取元数据的请求：文档展开时按 id 取；文件夹在列表里就带着权限，没有这个请求 */
+  readonly request?: PermissionsRequest
   /** 它现在在哪里 */
   readonly current: Destination
   /** 选目标位置时不列出这个文件夹：移动文件夹时就是它自己（审查建议 6） */
@@ -190,11 +208,13 @@ function RenameForm({ panelId, name, validate, pending, error, onSubmit, onCance
  *   第四批）：最多等 10 秒，刷新失败或者到了时限还没回来，说明里说"列表没能刷新"，面板也不一直停在"正在…"；
  * - 其余（同名之类）：留在面板里说明。
  * 展开时取元数据得到 404（文档已经不在了）：同样收起、刷新、按刷新的结果说明，不给一个永远失败的"重试"（P15）。
+ * 展开时第一次就没取到（网络、5xx）：说明原因、给出重试；重试期间说明与按钮留着（不可用、说正在重试），取到之后焦点交给面板里的"取消"
+ * （与下面的"没能刷新"相同），不落到 body，也不跳到页面的标题（规范 §2.4，shared/lib/use-first-load-retry.ts）。
  * 留着之前取到的权限、重新取却失败了（网络、5xx）：面板里说明可以做的操作没能刷新、给出重试（DEF-040）。
  * 已经打开的改名、移动、复制表单，刷新之后这一种操作不能做了（例如别处的操作被拒绝、页面按新的权限重新请求，空间刚被归档、
  * 自己刚被降为查看者）：表单随之收起，回到按新权限列出的操作（M2-P6 复核第二批 G-6；文件夹一个操作都做不了时整个面板收起）。
  */
-export function ItemActions({ panelId, name, validateName, permissions, loading, error, onRetry, current, excludeFolderId, targetSpaces, operations, onDone, onDenied, onClose, shareEntry, trashReachable = true, goneTexts = SPACE_GONE_TEXTS }: ItemActionsProps) {
+export function ItemActions({ panelId, name, validateName, permissions, request, current, excludeFolderId, targetSpaces, operations, onDone, onDenied, onClose, shareEntry, trashReachable = true, goneTexts = SPACE_GONE_TEXTS }: ItemActionsProps) {
   const [chosen, setChosen] = useState<Exclude<Operation, 'delete'>>()
   /**
    * 上一次失败之后列表刷新好了没有：留在面板里的说明（改名、复制）据此说"已刷新"还是"没能刷新"（第四批）；
@@ -203,6 +223,7 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
   const { refreshed, refreshAfterFailure } = useOutcomeRefresh()
   const ledger = useRequestIdLedger()
   const cancelRef = useRef<HTMLButtonElement>(null)
+  const firstLoad = useFirstLoadRetry(request ?? NOTHING_TO_LOAD, cancelRef, { retryable: notRetryable })
   // 移动/复制提交时目标位置的可读名称，例如"市场部 / 方案"：做完之后在说明里回述
   const targetLabelRef = useRef('')
   const trashLink = trashReachable ? <Link to={spaceTrashPath(current.spaceId)} className={buttonVariants({ variant: 'outline', size: 'sm' })}>{text.goToTrash}</Link> : undefined
@@ -243,7 +264,7 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
 
   // 展开时取元数据就得到 404：它已经不在了。刷新列表，收起面板并按刷新的结果说明（第五批 G3；在 effect 里做，不在渲染时改缓存与
   // 父组件的状态；只在"已经不在了"出现的那一次做，回调与链接每次渲染都是新的，用 effect 事件读它们）。等刷新时面板显示加载中
-  const gone = !loading && permissions === undefined && isMissingResource(error)
+  const gone = permissions === undefined && isMissingResource(request?.error)
   const reportGone = useEffectEvent(async () => {
     const listRefreshed = await onDenied()
     onDone({ message: goneTexts.gone(name, listRefreshed), action: trashLink, problem: true })
@@ -290,20 +311,22 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
     return reason
   }
 
-  if (loading || gone) {
+  if (firstLoad.failed) {
+    // 重试期间说明与按钮留着（不可用、说正在重试），上一次的原因不再给（请求缓存已经清掉了它）
+    return (
+      <div id={panelId} className="flex flex-wrap items-center gap-2 border-t px-4 py-3" onFocus={firstLoad.focus.onFocus} onBlur={firstLoad.focus.onBlur}>
+        <span role="alert" className="text-sm text-destructive">{text.actionsFailed(firstLoad.retrying ? undefined : describeError(request?.error).message)}</span>
+        <RetryButton retrying={firstLoad.retrying} onRetry={() => void request?.refetch()} />
+      </div>
+    )
+  }
+  // 还在取，或者它已经不在了（等列表刷新、收起面板）
+  if (permissions === undefined) {
     return (
       <div id={panelId} className="border-t px-4 py-3">
         <div role="status" aria-label={text.loadingActions}>
           <Skeleton className="h-6 w-48" />
         </div>
-      </div>
-    )
-  }
-  if (permissions === undefined) {
-    return (
-      <div id={panelId} className="flex flex-wrap items-center gap-2 border-t px-4 py-3">
-        <span role="alert" className="text-sm text-destructive">{text.actionsFailed(describeError(error).message)}</span>
-        <Button type="button" variant="outline" size="sm" onClick={onRetry}>{messages.common.retry}</Button>
       </div>
     )
   }
@@ -388,7 +411,7 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
       {/* 留着之前取到的权限、重新取却失败了（DEF-040：例如再次展开时缓存里有、重新取得到 5xx）：上面列的操作可能已经过时，
           说明没能刷新、给出重试；重试成功、说明随之消失时焦点交给"取消"。排在操作之后：说明晚到时不把正要点的按钮挤开。
           按访问权限被拒绝的不在这里：展开时就 404 的按"已经不在了"收起，留着之前的权限时等下一次操作被拒绝再说明 */}
-      <DetailRefreshProblem query={{ isRefetchError: error !== null, error, refetch: async () => onRetry() }} detail={text.actionsName} fallbackFocus={cancelRef} className="basis-full" />
+      {request !== undefined && <DetailRefreshProblem query={request} detail={text.actionsName} fallbackFocus={cancelRef} className="basis-full" />}
       {/* 删除失败的说明一律按错误码给（shared/i18n）：例如"文件夹里有别人创建的文档"与"空间已归档"是两个不同的 403，
           界面不在这里按错误码分支，免得把其中一种的说法安到另一种头上（M2-P4 审查 B2） */}
       {mutation.isError && (

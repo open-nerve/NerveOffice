@@ -63,9 +63,7 @@ function DocumentPanel({ panelId, documentId, title, spaceId, targetSpaces, onDo
       name={title}
       validateName={titleProblem}
       permissions={detail.data?.permissions}
-      loading={detail.isPending}
-      error={detail.error}
-      onRetry={() => void detail.refetch()}
+      request={detail}
       current={{ spaceId: sourceSpaceId, folderId: detail.data?.folderId ?? undefined }}
       targetSpaces={targetSpaces}
       trashReachable={trashReachable}

@@ -1,14 +1,21 @@
 import type { SpaceView } from '@nerve-office/contracts'
+import type { RefObject } from 'react'
+import type { FirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
 import type { TargetSpaces } from './target-spaces.ts'
 import { useQuery } from '@tanstack/react-query'
-import { useId, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
-import { Alert, AlertDescription, Button, Label, NativeSelect, Skeleton } from '../../shared/ui/index.ts'
+import { cn } from '../../shared/lib/cn.ts'
+import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
+import { Alert, AlertDescription, Button, Label, NativeSelect, RetryButton, Skeleton } from '../../shared/ui/index.ts'
 import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { folderChildrenQueryOptions } from './folders-api.ts'
 
 const text = messages.organize
+
+/** 只能由程序聚焦的元素（tabIndex -1）得到焦点时的样式：键盘操作时看得见焦点在哪里 */
+const FOCUS_RING = 'outline-none focus-visible:ring-3 focus-visible:ring-ring/50'
 
 /** 目标位置：要放进哪个空间的哪个文件夹（选到根目录时 folderId 为 undefined，与契约一致） */
 export interface Destination {
@@ -76,10 +83,15 @@ function defaultSpaceOf(action: DestinationFormProps['action'], spaces: readonly
  *
  * 为什么不是弹窗：移动与复制的入口在空间页上，而空间页是平台的首屏页面，首屏不引入 Radix Dialog（ADR-008）。
  * 一次只有一个对象在选目标，所以这个表单由列表渲染在那一行下面，与行内改名同一个形态。
+ * 复制的候选没能加载、按了"重试"：重试期间说明与按钮留着（不可用、说正在重试）；取到之后焦点交给"目标位置"这一行（随即选上的默认目标），
+ * 一个也没有时交给那句说明，不落到 body（规范 §2.4，shared/lib/use-first-load-retry.ts）
  */
 export function DestinationForm({ panelId, action, targets, current, excludeFolderId, pending, error, onSubmit, onCancel }: DestinationFormProps) {
   const spaceSelectId = useId()
   const [choice, setChoice] = useState<TargetChoice>()
+  /** 选好的目标位置这一行，或者"没有可以复制到的空间"（同一时刻只有一个，tabIndex -1）：候选没能加载、按"重试"取到之后焦点交给它 */
+  const targetRef = useRef<HTMLParagraphElement>(null)
+  const candidates = useFirstLoadRetry(targets.request, targetRef)
   const spaces = targets.items ?? []
   const spaceId = choice !== undefined && selectable(action, spaces, current, choice.spaceId) ? choice.spaceId : defaultSpaceOf(action, spaces, current)
   const crumbs = choice !== undefined && choice.spaceId === spaceId ? choice.crumbs : []
@@ -130,10 +142,10 @@ export function DestinationForm({ panelId, action, targets, current, excludeFold
         </div>
       )}
       {spaceId === undefined
-        ? <TargetSpacesState targets={targets} />
+        ? <TargetSpacesState targets={targets} failure={candidates} noneRef={targetRef} />
         : (
             <>
-              <p className="text-sm">
+              <p ref={targetRef} tabIndex={-1} className={cn('text-sm', FOCUS_RING)}>
                 {text.targetLocation}
                 ：
                 <span className="font-medium">{label}</span>
@@ -187,22 +199,23 @@ export function DestinationForm({ panelId, action, targets, current, excludeFold
 
 /**
  * 复制还没有目标空间时，候选的状态（M2 Codex 评审复验的一般 1）：还没取到——加载中（读屏读得到）；
- * 取不到——说明原因、给出重试（重新请求导航的空间列表，取到之后随即选上默认的目标空间）；取到了却一个也没有——说清楚
+ * 取不到——说明原因、给出重试（重新请求导航的空间列表，取到之后随即选上默认的目标空间）；取到了却一个也没有——说清楚（noneRef）。
+ * 按了"重试"之后说明与按钮留着（failure.retrying），不换成加载中
  */
-function TargetSpacesState({ targets }: { readonly targets: TargetSpaces }) {
-  if (targets.items !== undefined)
-    return <p className="text-sm text-muted-foreground">{text.noTargetSpaces}</p>
-  if (targets.error === null) {
+function TargetSpacesState({ targets, failure, noneRef }: { readonly targets: TargetSpaces, readonly failure: FirstLoadRetry, readonly noneRef: RefObject<HTMLParagraphElement | null> }) {
+  if (failure.failed) {
     return (
-      <div role="status" aria-label={text.targetSpacesLoading}>
-        <Skeleton className="h-6 w-32" />
+      <div role="alert" className="flex flex-wrap items-center gap-2" onFocus={failure.focus.onFocus} onBlur={failure.focus.onBlur}>
+        <span className="text-sm text-destructive">{text.targetSpacesLoadFailed(failure.retrying ? undefined : describeError(targets.error).message)}</span>
+        <RetryButton retrying={failure.retrying} onRetry={targets.retry} />
       </div>
     )
   }
+  if (targets.items !== undefined)
+    return <p ref={noneRef} tabIndex={-1} className={cn('text-sm text-muted-foreground', FOCUS_RING)}>{text.noTargetSpaces}</p>
   return (
-    <div role="alert" className="flex flex-wrap items-center gap-2">
-      <span className="text-sm text-destructive">{text.targetSpacesLoadFailed(describeError(targets.error).message)}</span>
-      <Button type="button" variant="outline" size="sm" onClick={targets.retry}>{messages.common.retry}</Button>
+    <div role="status" aria-label={text.targetSpacesLoading}>
+      <Skeleton className="h-6 w-32" />
     </div>
   )
 }
