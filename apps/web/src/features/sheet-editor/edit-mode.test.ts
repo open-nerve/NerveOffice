@@ -637,6 +637,19 @@ describe('退出编辑（M3-P2 设计 §3.4）', () => {
     expect(modeOf(context.mode).kind).toBe('reading')
   })
 
+  it('退出的重建阶段（释放之后、只读的编辑器建好之前，surface 为 creating）：保存的状态还在——页头的"保存""正在退出编辑…"不卸载（审查 A2，复验 C5）；换好编辑器之后才去掉', async () => {
+    const context = setup()
+    await editing(context)
+    const gate = context.factory.holdNext()
+    const exiting = context.mode.exit()
+    await settle()
+    expect(context.editLease.release).toHaveBeenCalledOnce()
+    expect(context.mode.view()).toMatchObject({ mode: { kind: 'exiting' }, surface: 'creating', save: { status: 'clean' } })
+    gate.release()
+    await exiting
+    expect(context.mode.view()).toMatchObject({ mode: { kind: 'reading' }, surface: 'rendered', save: undefined })
+  })
+
   it('释放的结果未知（网络错误）：照样退出（租约 90 秒内自行到期）；阅读里记下本页那一代没能确认放掉（审查 A13）', async () => {
     const context = setup({ editLease: { release: async () => Promise.reject(new NetworkError('断网')) } })
     await editing(context)
