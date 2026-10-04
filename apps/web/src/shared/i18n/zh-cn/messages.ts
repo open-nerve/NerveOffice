@@ -157,6 +157,8 @@ export const messages = {
   },
   common: {
     retry: '重试',
+    /** 第一次就没取到、按了"重试"之后：按钮留着、不可用，说正在重试（规范 §2.4：进行中的操作的按钮不卸载，shared/lib/use-first-load-retry.ts） */
+    retrying: '正在重试…',
     backHome: '回到首页',
     requestId: (id: string) => `请求标识：${id}`,
     close: '关闭',

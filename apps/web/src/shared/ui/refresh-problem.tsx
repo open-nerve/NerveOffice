@@ -4,11 +4,11 @@
 // 第一次就没取到（没有数据）仍由各列表自己的"加载失败"说明；加载下一页失败不在这里（isRefetchError 不含它，各列表另有说明）；
 // 按访问权限被拒绝（403、404）由各列表先处理（例如换成"空间不存在"），不走到这里。按路径引用（不经桶文件）。
 // 详情（页头的空间与账户、行内操作取的文档权限）同一个说明，经 DetailRefreshProblem（DEF-040）。
-import type { FocusEvent, RefObject } from 'react'
-import { useLayoutEffect, useRef } from 'react'
+import type { RefObject } from 'react'
 import { isAccessDenied, isMissingResource } from '../api/client.ts'
 import { describeError } from '../api/describe-error.ts'
 import { messages } from '../i18n/index.ts'
+import { useFocusHandOff } from '../lib/use-focus-hand-off.ts'
 import { Alert, AlertDescription } from './alert.tsx'
 import { Button } from './button.tsx'
 
@@ -32,38 +32,10 @@ interface RefreshProblemProps {
   readonly fallbackFocus?: RefObject<HTMLElement | null>
 }
 
-/** 焦点不在任何元素上（落到了 body） */
-function focusIsLost(): boolean {
-  return document.activeElement === null || document.activeElement === document.body
-}
-
 /**
- * 说明连同"重试"一起消失时，焦点不落到 body（DEF-040）：记下焦点在不在说明里（focusin 记下；移到说明之外的元素时忘掉，
- * 落到 body、或者按钮被移走时不忘，与 shared/lib/use-focus-rescue.ts 同一个做法），说明消失的那一次提交里交给 fallbackFocus。
- * 用布局效果：DOM 刚改完、页面的 useFocusRescue（MutationObserver，之后的微任务）之前，焦点留在说明附近，不先跳到页面的标题。
- * 只在焦点已经落到 body 时交：别处在这之前已经接过焦点，就不抢
+ * 留着旧数据、刷新失败了：醒目的提示（role="alert"，出现时读屏读出）、原因与重试；重试成功之后随之消失。
+ * 说明连同"重试"一起消失时焦点交给 fallbackFocus，不落到 body（shared/lib/use-focus-hand-off.ts，DEF-040）
  */
-function useFocusHandOff(shown: boolean, fallbackFocus: RefObject<HTMLElement | null> | undefined) {
-  const insideRef = useRef(false)
-  useLayoutEffect(() => {
-    if (shown || !insideRef.current)
-      return
-    insideRef.current = false
-    if (focusIsLost())
-      fallbackFocus?.current?.focus()
-  }, [shown, fallbackFocus])
-  return {
-    onFocus: () => {
-      insideRef.current = true
-    },
-    onBlur: (event: FocusEvent<HTMLElement>) => {
-      if (event.relatedTarget instanceof Element && !event.currentTarget.contains(event.relatedTarget))
-        insideRef.current = false
-    },
-  }
-}
-
-/** 留着旧数据、刷新失败了：醒目的提示（role="alert"，出现时读屏读出）、原因与重试；重试成功之后随之消失 */
 export function RefreshProblem({ query, list, className, fallbackFocus }: RefreshProblemProps) {
   const focus = useFocusHandOff(query.isRefetchError, fallbackFocus)
   if (!query.isRefetchError)
