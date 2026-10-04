@@ -117,6 +117,7 @@ describe('页头的目标状态与请求的角色', () => {
     ['enter', '编辑', false],
     ['exit', '编辑', true],
     ['exit', '保存|退出编辑', false],
+    ['exit', '编辑|退出编辑', false],
     ['exit', '', false],
     ['refresh', '编辑', true],
     ['refresh', '', true],
