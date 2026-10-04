@@ -1,7 +1,9 @@
-// 页面自检的结果（selftest-report.ts）：编码之后放进地址、收集端解开；不是这个格式的一律拒绝；什么算通过。
+// 页面自检的结果（selftest-report.ts）：编码之后放进地址、收集端解开；不是这个格式的一律拒绝；什么算通过；
+// 入口页登录之后跳去的编辑器页的地址。
 import type { SelftestReport } from './selftest-report.ts'
+import { DOCUMENT_PAGE_PATTERN, documentPagePath } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
-import { decodeSelftestReport, encodeSelftestReport, isSelftestScenario, parseSelftestReport, reportUrl, RESULT_PARAM, SELFTEST_REPORT_FORMAT, selftestPassed, SelftestReportError } from './selftest-report.ts'
+import { decodeSelftestReport, encodeSelftestReport, isSelftestScenario, NEXT_PARAM, parseSelftestReport, reportUrl, RESULT_PARAM, SELFTEST_PARAM, SELFTEST_REPORT_FORMAT, selftestEditorUrl, selftestPassed, SelftestReportError } from './selftest-report.ts'
 
 function report(overrides: Partial<SelftestReport> = {}): SelftestReport {
   return {
@@ -73,6 +75,24 @@ describe('页面自检的结果：编码与解开', () => {
     ['failure 不是字符串', { failure: 1 }],
   ])('字段不对时拒绝：%s', (_case, overrides) => {
     expect(() => parseSelftestReport({ ...report(), ...overrides })).toThrow(SelftestReportError)
+  })
+})
+
+describe('页面自检的入口页：登录之后跳去的编辑器页（M3-P2 复核 B4）', () => {
+  it('路径与 contracts 的 documentPagePath 相同（托管与开发服务器按 DOCUMENT_PAGE_PATTERN 交给编辑器页），带着场景与 next', () => {
+    const documentId = '01a0fb60-a504-7c95-8bdf-8aeaec893aaf'
+    const next = 'http://127.0.0.1:4200/report?step=3'
+    const url = new URL(selftestEditorUrl('http://127.0.0.1:4100', documentId, 'enter-exit', next))
+    expect(url.origin).toBe('http://127.0.0.1:4100')
+    expect(url.pathname).toBe(documentPagePath(documentId))
+    expect(DOCUMENT_PAGE_PATTERN.test(url.pathname)).toBe(true)
+    expect(Object.fromEntries(url.searchParams)).toEqual({ [SELFTEST_PARAM]: 'enter-exit', [NEXT_PARAM]: next })
+  })
+
+  it('文档 id 里有路径的分隔符与查询串的字符时转义：跳不出编辑器页的路径，也加不进别的参数', () => {
+    const url = new URL(selftestEditorUrl('http://127.0.0.1:4100', '../admin?next=x', 'read-only', 'http://127.0.0.1:4200/'))
+    expect(url.pathname).toBe('/documents/..%2Fadmin%3Fnext%3Dx')
+    expect(url.searchParams.get(NEXT_PARAM)).toBe('http://127.0.0.1:4200/')
   })
 })
 

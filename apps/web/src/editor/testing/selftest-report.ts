@@ -162,6 +162,17 @@ export function reportUrl(next: string, encoded: string): string {
   return url.href
 }
 
+/**
+ * 入口页登录之后整页跳去的编辑器页：/documents/<文档 id>?selftest=<场景>&next=<…>。路径与 contracts 的 documentPagePath 相同
+ * （单元测试对照）：入口页不引用 contracts 与平台页面、编辑器页共用的任何模块（M3-P2 复核 B4），所以在这里就地写
+ */
+export function selftestEditorUrl(origin: string, documentId: string, scenario: string, next: string): string {
+  const url = new URL(`/documents/${encodeURIComponent(documentId)}`, origin)
+  url.searchParams.set(SELFTEST_PARAM, scenario)
+  url.searchParams.set(NEXT_PARAM, next)
+  return url.href
+}
+
 // ---- 读回时的校验：字段与类型都对才算这个格式（收集端收到的是地址里的任意文字）----
 
 type Json = Readonly<Record<string, unknown>>
