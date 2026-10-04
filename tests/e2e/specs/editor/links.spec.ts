@@ -19,7 +19,7 @@ import { expect, test } from '../../support/fixtures.ts'
 import { pressUniverShortcut } from '../../support/keyboard.ts'
 import { formulaBarEditor, formulaBarInput } from '../../support/read-only-checks.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openAndEnterEditing, openCellEditor, openReader, reloadAndEnterEditing, saveAndWait, savedContent, selectCell } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditing, openAndEnterEditing, openCellEditor, openReader, saveAndWait, savedContent, selectCell, waitForEditorAccess } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -141,6 +141,21 @@ async function undoOrRedo(page: Page, which: 'undo' | 'redo'): Promise<void> {
   await waitForCommand(page, mark, { phase: 'executed', id: `univer.command.${which}` })
 }
 
+/**
+ * 强制全部公式重算（P4 进入编辑时就这样做；执行选项带 onlyLocal，阅读时同样执行），等这一轮的结果写回（fromFormula 的写入，
+ * 执行选项带 applyFormulaCalculationResult）
+ */
+async function recalculate(page: Page): Promise<void> {
+  const mark = await commandMark(page)
+  expect(await runFacade(page, async ({ api }) => api.executeCommand('formula.mutation.set-trigger-formula-calculation-start', { forceCalculation: true }, { onlyLocal: true }))).toEqual({})
+  await expect.poll(async () => probeCommands(page, mark)).toContainEqual(expect.objectContaining({ phase: 'executed', id: SET_RANGE_VALUES, flags: expect.arrayContaining(['applyFormulaCalculationResult']) }))
+}
+
+/** HYPERLINK() 用例里的四个公式格 */
+function formulaCells(workbook: Workbook): Cell[] {
+  return ['A1', 'A2', 'A3', 'A4'].map(a1 => cellOf(workbook, a1))
+}
+
 /** 撤销两步：两格回到空的；再重做两步：与之前完全相同（改写之后的写法就在撤销栈里） */
 async function expectUndoRedoKeepsCanonical(page: Page, lastTwo: readonly [string, string], before: Workbook): Promise<void> {
   // 点一个空单元格让表格拿到焦点（选区不进撤销栈）
@@ -253,7 +268,7 @@ test.describe('US-M3-14 写入之前把自动识别的链接改成规范写法�
     expect(expectServerAccepts(saved.snapshot)).toBe(6)
   })
 
-  test('US-M3-14 HYPERLINK() 的结果：规范写法或去掉链接；链接与段落的标识由位置确定，强制重算、撤销两步重做两步、重开（打开时重算）之后内容不变', async ({ page }) => {
+  test('US-M3-14 HYPERLINK() 的结果：规范写法或去掉链接；链接与段落的标识由位置确定，强制重算、撤销两步重做两步、重开之后（阅读与编辑都重算）内容不变', async ({ page }) => {
     const documentId = await open(page, 'links-formula')
     await selectCell(page, 'B1')
     await typeDown(page, '1')
@@ -280,9 +295,7 @@ test.describe('US-M3-14 写入之前把自动识别的链接改成规范写法�
     expect(expectServerAccepts(first.snapshot)).toBe(3)
 
     // 强制重算（P4 进入编辑时就这样做）：SDK 给的随机值全换了，改写之后内容不变
-    const recalculation = await commandMark(page)
-    expect(await runFacade(page, async ({ api }) => api.executeCommand('formula.mutation.set-trigger-formula-calculation-start', { forceCalculation: true }, { onlyLocal: true }))).toEqual({})
-    await expect.poll(async () => probeCommands(page, recalculation)).toContainEqual(expect.objectContaining({ phase: 'executed', id: SET_RANGE_VALUES, flags: expect.arrayContaining(['applyFormulaCalculationResult']) }))
+    await recalculate(page)
     expect(await shown(page)).toEqual(computed)
 
     // 撤销两步（A4、A3 的公式）、重做两步：重算出来的仍是同样的内容，保存下来的与第一次相同
@@ -299,14 +312,18 @@ test.describe('US-M3-14 写入之前把自动识别的链接改成规范写法�
     await saveAndWait(page)
     expect((await savedContent(page, documentId)).snapshot).toEqual(first.snapshot)
 
-    // 重开：HYPERLINK() 的格子没有值，打开时重算（初次计算只算没有值的公式格）。公式的结果与第一次逐项相同，整份内容的规范写法
-    // （服务端比较"内容相同"用的口径，contracts 的 canonicalContentText）也相同。逐字节不同的只有数据验证的空资源：重开之前是
-    // {"sheet-1":[]}，重开之后是 {}，规范写法里"在而为空"与"不在"等价（M3-P3 设计 §3.2）
-    await reloadAndEnterEditing(page, 'steady')
+    // 重开先阅读：改写器阅读时同样装着（阅读时也会重算，显示的要与编辑时一致）。强制重算一次、等结果写回，公式的结果与保存的逐项相同
+    await page.reload()
+    await waitForEditorAccess(page, 'read', 'steady')
+    await recalculate(page)
+    expect(formulaCells(await shown(page))).toEqual(formulaCells(first.snapshot))
+    // 进入编辑（以可编辑重建；HYPERLINK() 的格子没有值，打开时重算：初次计算只算没有值的公式格）、保存：公式的结果与第一次逐项相同，
+    // 整份内容的规范写法（服务端比较"内容相同"用的口径，contracts 的 canonicalContentText）也相同。逐字节不同的只有数据验证的空资源：
+    // 重开之前是 {"sheet-1":[]}，重开之后是 {}，规范写法里"在而为空"与"不在"等价（M3-P3 设计 §3.2）
+    await enterEditing(page, 'steady')
     await saveAndWait(page)
     const reopened = await savedContent(page, documentId)
-    for (const a1 of ['A1', 'A2', 'A3', 'A4'])
-      expect(cellOf(reopened.snapshot, a1), a1).toEqual(cellOf(first.snapshot, a1))
+    expect(formulaCells(reopened.snapshot)).toEqual(formulaCells(first.snapshot))
     expect(canonicalContentText(reopened.text)).toBe(canonicalContentText(first.text))
   })
 
