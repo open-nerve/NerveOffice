@@ -11,6 +11,7 @@ import { useRequestIdLedger } from '../../shared/lib/request-id-ledger.ts'
 import { spaceTrashPath } from '../../shared/lib/space-paths.ts'
 import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { Alert, AlertDescription, Button, buttonVariants, FieldProblem, Input, Label, Skeleton } from '../../shared/ui/index.ts'
+import { DetailRefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { DestinationForm } from './destination-form.tsx'
 
 const text = messages.organize
@@ -69,6 +70,7 @@ interface ItemActionsProps {
   /** 还没拿到权限时为空：文档要先取一次元数据 */
   readonly permissions: OrganizePermissions | undefined
   readonly loading: boolean
+  /** 取元数据的失败：没有权限时是第一次就没取到；有权限时是留着之前的、重新取失败了（DEF-040） */
   readonly error: Error | null
   readonly onRetry: () => void
   /** 它现在在哪里 */
@@ -188,6 +190,7 @@ function RenameForm({ panelId, name, validate, pending, error, onSubmit, onCance
  *   第四批）：最多等 10 秒，刷新失败或者到了时限还没回来，说明里说"列表没能刷新"，面板也不一直停在"正在…"；
  * - 其余（同名之类）：留在面板里说明。
  * 展开时取元数据得到 404（文档已经不在了）：同样收起、刷新、按刷新的结果说明，不给一个永远失败的"重试"（P15）。
+ * 留着之前取到的权限、重新取却失败了（网络、5xx）：面板里说明可以做的操作没能刷新、给出重试（DEF-040）。
  * 已经打开的改名、移动、复制表单，刷新之后这一种操作不能做了（例如别处的操作被拒绝、页面按新的权限重新请求，空间刚被归档、
  * 自己刚被降为查看者）：表单随之收起，回到按新权限列出的操作（M2-P6 复核第二批 G-6；文件夹一个操作都做不了时整个面板收起）。
  */
@@ -382,6 +385,10 @@ export function ItemActions({ panelId, name, validateName, permissions, loading,
         </Button>
       )}
       <Button ref={cancelRef} type="button" variant="ghost" size="sm" onClick={onClose}>{text.cancel}</Button>
+      {/* 留着之前取到的权限、重新取却失败了（DEF-040：例如再次展开时缓存里有、重新取得到 5xx）：上面列的操作可能已经过时，
+          说明没能刷新、给出重试；重试成功、说明随之消失时焦点交给"取消"。排在操作之后：说明晚到时不把正要点的按钮挤开。
+          按访问权限被拒绝的不在这里：展开时就 404 的按"已经不在了"收起，留着之前的权限时等下一次操作被拒绝再说明 */}
+      <DetailRefreshProblem query={{ isRefetchError: error !== null, error, refetch: async () => onRetry() }} detail={text.actionsName} fallbackFocus={cancelRef} className="basis-full" />
       {/* 删除失败的说明一律按错误码给（shared/i18n）：例如"文件夹里有别人创建的文档"与"空间已归档"是两个不同的 403，
           界面不在这里按错误码分支，免得把其中一种的说法安到另一种头上（M2-P4 审查 B2） */}
       {mutation.isError && (

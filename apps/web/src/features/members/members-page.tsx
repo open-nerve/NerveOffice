@@ -18,7 +18,7 @@ import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { useFocusRescue } from '../../shared/lib/use-focus-rescue.ts'
 import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { Alert, AlertDescription, Badge, Button, buttonVariants, Label, NativeSelect, PersonName, Phrase, Skeleton, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../shared/ui/index.ts'
-import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
+import { DetailRefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { StatusRegion } from '../../shared/ui/status-region.tsx'
 import { StillRefreshing } from '../../shared/ui/still-refreshing.tsx'
 import { sessionQueryOptions } from '../auth/index.ts'
@@ -434,6 +434,7 @@ function ManageNotice({ list }: { readonly list: SpaceMemberListResponse }) {
  * 成员页的内容：加载中；看不到（与不存在一致）；看得到却不能查看成员（服务端说明原因）；加载失败（可以重试）；成员表。
  * 先看错误、再看数据：重新请求失败时 TanStack Query 保留上一次的数据。已打开的页面里被移出了空间，缓存里还是能管理的成员表，
  * 重新请求得到 404 就按看不到显示，管理的控件不再出现（审查 B1）；导航与这个空间的缓存随之更新。
+ * 别的失败（网络、5xx）留着之前的成员表与空间信息，标题下面说明它们没能刷新、可以重试（CX5、DEF-040）。
  */
 function MembersContent({ spaceId }: { readonly spaceId: string }) {
   const list = useQuery(membersQueryOptions(spaceId))
@@ -492,10 +493,11 @@ function MembersContent({ spaceId }: { readonly spaceId: string }) {
         <h1 ref={titleRef} id="members-title" tabIndex={-1} className="text-xl font-semibold outline-none focus-visible:ring-3 focus-visible:ring-ring/50">{text.title(space.name)}</h1>
         <BackLink spaceId={spaceId} />
       </div>
+      {/* 留着之前的成员表、刷新却失败了（Codex 对抗评审 CX5）：明说没能刷新、给出重试，之前的照常显示。页头的空间信息（名称、归档、
+          能不能管理）与成员表是同一个请求，说明放在标题下面、一起说（DEF-040）；重试成功之后焦点交给标题 */}
+      <DetailRefreshProblem query={list} detail={text.detailName} fallbackFocus={titleRef} />
       <ManageNotice list={list.data} />
       {list.data.canManage && <AddMemberForm spaceId={spaceId} members={list.data.items} />}
-      {/* 留着之前的成员表、刷新却失败了（Codex 对抗评审 CX5）：明说没能刷新、给出重试，之前的成员表照常显示 */}
-      <RefreshProblem query={list} list={text.listLabel} />
       <MembersTable spaceId={spaceId} list={list.data} selfId={session.data?.user.id} focusTitle={() => titleRef.current?.focus()} />
     </section>
   )

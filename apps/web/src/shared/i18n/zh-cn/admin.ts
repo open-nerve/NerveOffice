@@ -197,6 +197,8 @@ export const adminMessages = {
     back: '返回账户',
     loadingAccount: '正在加载账户…',
     loadAccountFailed: '账户加载失败',
+    /** 页头的账户（名字、是否停用）留着之前的、重新请求却失败了（DEF-040）："账户信息没能刷新，显示的还是之前的内容" */
+    accountName: '账户信息',
     listLabel: '个人空间里的文档',
     columns: { select: '选择', title: '标题', type: '类型', updatedAt: '更新时间' },
     loading: '正在加载文档…',
