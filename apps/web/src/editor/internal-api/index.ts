@@ -7,6 +7,7 @@
 // 导入导出，不建子目录、不用动态 import()）；在这个目录之外直接引用受限的符号或调用 __getInjector，lint 会失败（eslint.config.ts 的
 // UNIVER_INTERNAL_SYMBOLS），引用这里的文件也只能经两个出口（nerve/editor-internal-api-exits，M2-P6 复验 N4）。
 // 这个文件只写再导出：登记表的核对按这里的写法取出导出的名字
+export { CELL_LINK_PROTOCOL } from './cell-links.ts'
 export { FIND_ADVANCED_LINK_SELECTOR, FORMULA_BAR_INPUT_SELECTOR, NOTE_TEXTAREA_SELECTOR } from './dom-markers.ts'
 export { FORMULA_PROTOCOL } from './formula-protocol.ts'
 export { injectorOf } from './injector.ts'

@@ -79,9 +79,11 @@ const UNIVER_INTERNAL_SYMBOLS = [
   {
     name: '@univerjs/core',
     // IPermissionService、IUndoRedoService：只读守卫的本地权限点与撤销栈（M2-P3 设计 §3.6）；
-    // IContextService、FOCUSING_FX_BAR_EDITOR、DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY：只读守卫放开编辑栏的编辑器（P3 审查 A1）
+    // IContextService、FOCUSING_FX_BAR_EDITOR、DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY：只读守卫放开编辑栏的编辑器（P3 审查 A1）；
+    // CustomRangeType：链接的改写认链接用的区间种类（M3-P3 S2，internal-api 的 CELL_LINK_PROTOCOL，与 contracts 的 HYPERLINK_RANGE_TYPE 核对）
     importNames: [
       'AuthzIoLocalService',
+      'CustomRangeType',
       'DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY',
       'FOCUSING_FX_BAR_EDITOR',
       'IAuthzIoService',
@@ -746,6 +748,9 @@ const WEB_TEST_CODE = ['**/*.test.{ts,tsx}', '**/*.test-support.{ts,tsx}']
  */
 const SELFTEST_SHARED_FILES = ['testing/read-only-entries.ts', 'testing/content-compare.ts', 'testing/selftest-report.ts', 'testing/switch-timing.ts']
 
+/** 链接地址判定的跨引擎用例（M3-P3 设计 §3.2，相对 contracts 元素的路径）：Node 的单元测试与 E2E 共用的测试辅助 */
+const LINK_ADDRESS_CASES_FILE = 'documents/link-address.test-support.ts'
+
 // 动态 import() 同样是引用（复验 C3）：ts/no-restricted-imports 只看 import 与 export 声明，下面两块按路径的限制挡不住动态引入——
 // 自检的入口页动态引入 shared/api 时 lint 放行，测试构建里两个页面的入口块照样多出 api、preload-helper（实测）。
 // 这两组文件本来都用不着动态引入，一律不许
@@ -1223,6 +1228,9 @@ export default antfu(
             ] },
           },
           { from: { element: { type: ['web-shared', 'api-shared', 'integration-tests', 'e2e-tests'] } }, allow: { to: { element: { type: 'contracts', fileInternalPath: PUBLIC_ENTRY } } } },
+          // 链接地址判定的跨引擎用例（M3-P3 设计 §3.2）：同一份表在 Node 的单元测试与三个浏览器的 E2E 里都跑（E2E 经探针调用页面里打包的
+          // canonicalLink）。它是测试辅助，不经 contracts 的入口转出（生产代码引用不到它），这里只给 E2E 开这一个文件
+          { from: { element: { type: 'e2e-tests' } }, allow: { to: { element: { type: 'contracts', fileInternalPath: LINK_ADDRESS_CASES_FILE } } } },
           // 后端：模块之间只经对方的 index.ts；一个模块只能引用自己的表定义；表定义之间经 index.ts 互相引用（外键）
           { from: { element: { type: 'api-module' } }, allow: { to: { element: { type: 'api-module', captured: { module: '{{from.element.captured.module}}' } } } } },
           { from: { element: { type: 'api-schema' } }, allow: { to: { element: { type: ['api-schema', 'contracts'], fileInternalPath: PUBLIC_ENTRY } } } },

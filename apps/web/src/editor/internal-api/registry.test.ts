@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import cellLinksSource from './cell-links.ts?raw'
 import domMarkersSource from './dom-markers.ts?raw'
 import formulaProtocolSource from './formula-protocol.ts?raw'
 import * as internalApi from './index.ts'
@@ -51,6 +52,7 @@ const UI_PACKAGE = /^@univerjs\/(?:[\w-]+-ui|ui|design|engine-render)(?:\/|$)/
 const SOURCES: Readonly<Record<string, string>> = {
   'index.ts': source,
   'ui.ts': uiSource,
+  'cell-links.ts': cellLinksSource,
   'dom-markers.ts': domMarkersSource,
   'formula-protocol.ts': formulaProtocolSource,
   'injector.ts': injectorSource,
