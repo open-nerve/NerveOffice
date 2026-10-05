@@ -11,7 +11,8 @@ import { createDocumentIn, createFolderIn, createTeamSpace, createUser, expireEd
 import { expect, test } from '../../support/fixtures.ts'
 import { shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, disconnectTab, editingNotice, EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, expectFoundOnce, isSaveRequest, leaveEditor, lostNotice, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, saveStatus, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, disconnectTab, editingNotice, EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, expectFoundOnce, headerAnnouncement, isSaveRequest, leaveEditor, lostNotice, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, saveStatus, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { recordStatusWrites, spokenWrites } from '../../support/status-writes.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -106,15 +107,20 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
       await route.fetch()
       await route.abort('connectionreset')
     }, { times: 1 })
-    await typeInCell(page, 'A1', 'first')
-    await saveButton(page).click()
     // 结果未知的失败会自动重试（M3-P4 设计 §3.8）：测试构建暂停了定时的上传，这里不会重试；生产构建里 2 秒之后原样重发那一次，
-    // 服务端按重放给出原来的结果——两条路都不报冲突，下面的结果相同
-    await expect(saveStatus(page)).toHaveText('保存失败，稍后自动重试')
+    // 服务端按重放给出原来的结果——两条路都不报冲突，下面的结果相同。键入之后不回车、由按下的 Ctrl/Cmd+S 提交：单元格编辑器开着时自动保存
+    // 捕获不到这一处，回包丢了的一定是按的这一次。生产构建里看得见的"保存失败"一闪而过，看读屏播报区记下的话（审查 A7 的核对）
+    await recordStatusWrites(headerAnnouncement(page))
+    await typeInCell(page, 'A1', 'first', false)
+    await page.keyboard.press('ControlOrMeta+s')
+    await expect.poll(async () => (await spokenWrites(page)).map(write => write.text)).toContain('保存失败，稍后自动重试')
     expect((await savedContent(page, documentId)).revision).toBe(2)
 
-    // 接着修改再保存：基准修订号已经过时，冲突的来源是本页那一次保存，换上当前修订号重发（生产构建里重发的那一次可能已经认出它）
-    await typeInCell(page, 'A2', 'second')
+    // 接着修改再保存：基准修订号已经过时，冲突的来源是本页那一次保存，换上当前修订号重发（生产构建里重发的那一次可能已经认出它）。
+    // 按下保存时的提交等同回车，选区已在 A2：直接键入，不点画布——生产构建里重发成功时失败的提示条随之消失、画布跟着上移，点下去的那一刻
+    // 布局在变会点错格
+    await page.keyboard.type('second')
+    await page.keyboard.press('Enter')
     await saveAndWait(page)
     const saved = await savedContent(page, documentId)
     expect(saved.revision).toBe(3)
@@ -198,8 +204,10 @@ test.describe('US-M3-11 过期的会话不能覆盖别人的保存：编辑权�
     await expect(lost).toContainText('本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
     const lostBy = Date.now()
     await waitForEditorAccess(page, 'read')
+    // 服务器上是乙的内容、没有甲的：按内容断言，不数修订号——生产构建里乙的自动保存与按的保存之间有迟到的派生修改时多一个修订（审查 A7）
     const rejected = await savedContent(page, documentId)
-    expect([rejected.revision, cellOf(rejected.snapshot, 'A1')?.v]).toEqual([2, 'from second'])
+    expect([cellOf(rejected.snapshot, 'A1')?.v, cellOf(rejected.snapshot, 'B1')?.v]).toEqual(['from second', 'second only'])
+    expect(rejected.revision).toBeGreaterThanOrEqual(2)
 
     // 另存为副本：副本是甲的内容；甲在这个空间能新建，放进原文档所在的文件夹；标题是原标题加失效时的时间（页面所在的时区，写到分钟）
     await lost.getByRole('button', { name: '另存为副本', exact: true }).click()

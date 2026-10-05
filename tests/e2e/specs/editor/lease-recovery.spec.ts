@@ -12,7 +12,8 @@ import type { Page } from '@playwright/test'
 import { createDocumentIn, createTeamSpace, createUser, editLeaseEpoch, expireEditLease, revisionOf, withDatabase } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { actAs, loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, disconnectTab, EDITOR_TEST_TIMEOUT, expectFoundOnce, isSaveRequest, lostNotice, openAndEnterEditing, saveAndWait, saveButton, savedContent, saveStatus, typeInCell, waitForEditorAccess, wouldPromptOnLeave } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, disconnectTab, EDITOR_TEST_TIMEOUT, expectFoundOnce, headerAnnouncement, isSaveRequest, lostNotice, openAndEnterEditing, saveAndWait, savedContent, saveStatus, typeInCell, waitForEditorAccess, wouldPromptOnLeave } from '../../support/sheet.ts'
+import { recordStatusWrites, spokenWrites } from '../../support/status-writes.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -78,12 +79,26 @@ async function saveWithLostReply(page: Page, documentId: string): Promise<number
     await route.fetch()
     await route.abort('connectionreset')
   }, { times: 1 })
-  await typeInCell(page, 'A1', 'first')
-  await saveButton(page).click()
-  await expect(saveStatus(page)).toHaveText('保存失败，稍后自动重试')
+  await saveTypedWithLostReply(page, 'A1', 'first')
   expect((await savedContent(page, documentId)).revision).toBe(2)
-  await typeInCell(page, 'A2', 'second')
+  // 按下保存时的提交等同回车，选区已在 A2：直接键入，不点画布（见 saveTypedWithLostReply）
+  await page.keyboard.type('second')
+  await page.keyboard.press('Enter')
   return epoch
+}
+
+/**
+ * 在 cell 键入 text、不回车，按 Ctrl/Cmd+S（按下的这一刻提交它，等同回车）：回包丢了的就是这一次——单元格编辑器开着时自动保存捕获不到
+ * 这一处，生产构建里也不会先有一次自动保存（否则它拿走回包丢了的那一次，按的保存排在后面、原样重发认出已提交，页头一次也不说失败）。
+ * 页头说过"保存失败，稍后自动重试"：看读屏播报区记下的话，不看此刻的状态——生产构建里自动保存 2 秒之后就原样重发、认出已提交，
+ * 看得见的状态一闪而过；测试构建里一直是它（M3-P4 审查 A7 的核对：时间窗压缩之后的 WebKit）。之后不要马上点画布：生产构建里
+ * 重发成功时失败的提示条随之消失、画布跟着上移，点下去的那一刻布局在变会点错格（按快捷键，焦点留在表格里，接着键入就在下一格）
+ */
+async function saveTypedWithLostReply(page: Page, cell: string, text: string): Promise<void> {
+  await recordStatusWrites(headerAnnouncement(page))
+  await typeInCell(page, cell, text, false)
+  await page.keyboard.press('ControlOrMeta+s')
+  await expect.poll(async () => (await spokenWrites(page)).map(write => write.text)).toContain('保存失败，稍后自动重试')
 }
 
 test.describe('US-M3-13 没收到保存的确认，这期间编辑权到期：续上时认出期间的那一版是本页自己的，不误判为别处保存过', () => {
@@ -155,9 +170,7 @@ test.describe('US-M3-13 没收到保存的确认，随后失去编辑权（还�
       await route.fetch()
       await route.abort('connectionreset')
     }, { times: 1 })
-    await typeInCell(page, 'A1', 'first')
-    await saveButton(page).click()
-    await expect(saveStatus(page)).toHaveText('保存失败，稍后自动重试')
+    await saveTypedWithLostReply(page, 'A1', 'first')
     expect(await revisionOf(documentId)).toBe(2)
 
     // 生产构建里自动保存 2 秒之后原样重发那一次（重放在登录与租约之前判断，降级之后照样拿到原来的结果），之后失去编辑权时就没有要核对的了；

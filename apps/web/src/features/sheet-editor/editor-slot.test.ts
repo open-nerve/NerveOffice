@@ -351,6 +351,27 @@ describe('销毁要等时（M3-P4 设计 §3.14：主线程模式下先停下正
     expect(context.factory.aliveAtCreate()).toEqual([0, 0])
   })
 
+  it('先取后放（审查 B2）：交回了、还没接上的编辑器（可编辑的自检失败）销毁要等时，以只读重建要等它销毁完', async () => {
+    const context = setup()
+    context.factory.holdDisposeOf(0)
+    const entering = context.slot.replace('edit', 'A')
+    await settle()
+    context.factory.gate(0).release()
+    expect(await entering).toBeDefined()
+    // 自检失败：不接上它，直接以只读重建（edit-mode.ts 的 backToReading）
+    const reading = context.slot.replace('read', 'A')
+    await settle()
+    const handedOut = context.factory.created[0] as FakeEditor
+    expect([handedOut.disposed, handedOut.gone]).toEqual([true, false])
+    expect(context.factory.createEditor).toHaveBeenCalledTimes(1)
+    handedOut.finishDispose()
+    await settle()
+    expect(context.factory.createEditor).toHaveBeenCalledTimes(2)
+    context.factory.gate(1).release()
+    expect(await reading).toBeDefined()
+    expect(context.factory.aliveAtCreate()).toEqual([0, 0])
+  })
+
   it('清空之后的销毁还没完：之后的换编辑器等它销毁完再建', async () => {
     const context = setup()
     const reader = await replaced(context, 'read', 'A')

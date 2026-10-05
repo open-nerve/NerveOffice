@@ -1,10 +1,11 @@
 // 保存到云端，看到真实的保存状态（US-M1-05，P4 设计 §3.7.2、§3.10）。
 import type { Page } from '@playwright/test'
 import { SHEET_TEMPLATE } from '@nerve-office/contracts'
+import { uploadedText } from '../../support/autosave.ts'
 import { createDocument, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { appendSheet, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openAndEnterEditing, openCellEditor, saveAndWait, saveButton, savedContent, saveStatus, selectCell, typeInCell, wouldPromptOnLeave } from '../../support/sheet.ts'
+import { appendSheet, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, isSaveRequest, openAndEnterEditing, openCellEditor, saveAndWait, saveButton, savedContent, saveStatus, selectCell, typeInCell, wouldPromptOnLeave } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -21,6 +22,41 @@ async function holdSaves(page: Page): Promise<() => void> {
     await route.continue()
   })
   return release
+}
+
+/**
+ * 一个一个地放行保存的请求：第 n 个（从 1 数）等 release(n) 才发出；releaseAll 之后的都照常。生产构建里自动保存在用例按的保存之后
+ * 也会上传，拦着它，服务器上的内容由用例决定
+ */
+async function holdSavesInTurn(page: Page): Promise<{ readonly release: (n: number) => void, readonly releaseAll: () => void }> {
+  const gates: { readonly passed: Promise<void>, readonly open: () => void }[] = []
+  const gate = (n: number): { readonly passed: Promise<void>, readonly open: () => void } => {
+    while (gates.length < n) {
+      let open: () => void = () => {}
+      const passed = new Promise<void>((resolve) => {
+        open = resolve
+      })
+      gates.push({ passed, open })
+    }
+    return gates[n - 1] as { readonly passed: Promise<void>, readonly open: () => void }
+  }
+  let all = false
+  let seen = 0
+  await page.route('**/api/documents/*/content?*', async (route) => {
+    if (route.request().method() === 'PUT' && !all) {
+      seen += 1
+      await gate(seen).passed
+    }
+    await route.continue()
+  })
+  return {
+    release: n => gate(n).open(),
+    releaseAll: () => {
+      all = true
+      for (const { open } of gates)
+        open()
+    },
+  }
 }
 
 async function openNewSheet(page: Page, prefix: string): Promise<string> {
@@ -116,18 +152,49 @@ test.describe('US-M1-05 保存到云端，看到真实的保存状态', () => {
   test('保存期间继续键入：回包之后仍是有未保存的修改，服务器上是保存那一刻的内容', async ({ page }) => {
     const documentId = await openNewSheet(page, 'save-while-typing')
     await typeInCell(page, 'A1', 'first')
-    const release = await holdSaves(page)
+    // 一个一个地放行：只放行按的那一次，之后的（生产构建里自动保存随后上传 A2）一直拦着——服务器上的内容由用例决定，
+    // 不靠"回包之后 2 秒之内看完"的余量（审查 A7 的核对：时间窗压缩之后）
+    const saves = await holdSavesInTurn(page)
     await saveButton(page).click()
     await expect(saveStatus(page)).toHaveText('保存中…')
     await typeInCell(page, 'A2', 'second')
-    release()
-    await expect(saveStatus(page)).toHaveText('有未保存的修改')
+    const answered = page.waitForResponse(response => isSaveRequest(response.request()))
+    saves.release(1)
+    expect(uploadedText(await answered.then(response => response.request()))).not.toContain('second')
+    // 回包之后 A2 仍算没有保存：页头不说已保存到云端（测试构建里是有未保存的修改；生产构建里自动保存随后上传它、被拦着，是保存中），离开会提示
+    await expect(saveStatus(page)).toHaveText(/^(?:有未保存的修改|保存中…)$/)
+    expect(await wouldPromptOnLeave(page)).toBe(true)
     const saved = (await savedContent(page, documentId)).snapshot
     expect(cellOf(saved, 'A1')?.v).toBe('first')
     expect(cellOf(saved, 'A2')).toBeUndefined()
-    await page.unrouteAll()
+    saves.releaseAll()
     await saveAndWait(page)
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A2')?.v).toBe('second')
+  })
+
+  // M3-P4 审查 A1：排着的保存原来轮到时才提交单元格——按下之后才开始的输入被当作回车提交、选区下移，接着键入的字覆盖下一格。
+  // 生产构建里自动保存照常运行（可能先有一次自动保存在途）：无论在途的是哪一次，按下的那一次都排在被拦住的那一次后面
+  test('保存在途时按 Ctrl/Cmd+S（排一次），按下之后才在另一格开始的输入：排着的那一次轮到时不提交它、不打断——接着键入的字仍在这一格，下一格原来的内容不被覆盖（M3-P4 审查 A1）', async ({ page }) => {
+    const documentId = await openNewSheet(page, 'save-queued-later-input')
+    await typeInCell(page, 'A1', 'one')
+    await typeInCell(page, 'A4', 'keep me')
+    const release = await holdSaves(page)
+    await saveButton(page).click()
+    await expect(saveStatus(page)).toHaveText('保存中…')
+    // 在途时按快捷键：排一次（按下时没有开着的单元格编辑，什么也不提交）
+    await page.keyboard.press('ControlOrMeta+s')
+    // 按下之后才开始的输入：在 A3 键入，还没回车
+    await typeInCell(page, 'A3', 'ab', false)
+    release()
+    // 排着的那一次轮到、存完：没有提交 A3 的输入（单元格编辑器还开着），页头是有未保存的修改
+    await expect(saveStatus(page)).toHaveText('有未保存的修改')
+    // 接着键入、回车：都在 A3 里，A4 原来的内容还在
+    await page.keyboard.type('cd')
+    await page.keyboard.press('Enter')
+    await page.keyboard.press('ControlOrMeta+s')
+    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    const saved = (await savedContent(page, documentId)).snapshot
+    expect([cellOf(saved, 'A1')?.v, cellOf(saved, 'A3')?.v, cellOf(saved, 'A4')?.v]).toEqual(['one', 'abcd', 'keep me'])
   })
 
   test('断网时保存：页头说已离线（修改还在本页，不说已保存在本机），说明保存失败与原因，内容仍算未保存；恢复之后再保存成功', async ({ page, context }) => {

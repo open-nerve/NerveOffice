@@ -306,8 +306,11 @@ export interface EditMode {
   readonly enter: () => Promise<void>
   /** 退出编辑（"退出编辑"按钮，会话由页面先确认） */
   readonly exit: () => Promise<void>
-  /** 立即保存一次（编辑时；按钮与快捷键，会话由页面先确认）：自动保存的立即上传，不去重，在途时排一次 */
-  readonly save: () => Promise<void>
+  /**
+   * 立即保存一次（编辑时；按钮与快捷键）：自动保存的立即上传，不去重，在途时排一次。按下的这一刻就提交这一刻开着的单元格编辑、开始等面板
+   * （之后才开始的输入不提交，审查 A1），ready（页面的会话确认）为真、而且仍在编辑时才上传；不给 ready 时直接上传
+   */
+  readonly save: (ready?: () => Promise<boolean>) => Promise<void>
   /** "有更新，点击刷新"：按条件读取取最新的内容，重建为阅读（保留视图） */
   readonly refresh: () => Promise<void>
   /** 失去编辑权之后：另存为副本 */
@@ -1074,9 +1077,12 @@ export function createEditMode(options: EditModeOptions): EditMode {
       enterReading(created, { snapshot, revision }, { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: !released, blocked, formulasPending: formulasPendingOf(revision), damaged })
     },
 
-    save: async () => {
-      if (mode.kind === 'editing')
-        await autosave?.flush('save-button')
+    save: async (ready) => {
+      if (mode.kind !== 'editing' || autosave === undefined)
+        return
+      // 等会话确认的期间开始了退出、失去了编辑权：不再上传（退出自己存；失去编辑权时调度已经去掉）
+      const stillEditing = (): boolean => mode.kind === 'editing'
+      await autosave.flush('save-button', { ready: async () => (ready === undefined || await ready()) && stillEditing() })
     },
 
     refresh: async () => {

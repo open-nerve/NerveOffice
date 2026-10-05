@@ -1019,23 +1019,40 @@ const ONLINE: AutosaveView = { offline: false, paused: false, retrying: false, h
 const DIRTY: SaveView = { ...CLEAN, status: 'dirty', unsaved: true, unsavedEdits: true }
 const NETWORK_FAILURE: SaveView = { ...DIRTY, status: 'failed', problem: { kind: 'request', error: new NetworkError('断网') } }
 
+const PAUSED: AutosaveView = { ...ONLINE, paused: true }
+
 describe('编辑时页头的保存状态（M3-P4 设计 §3.9）', () => {
-  it.each<[string, SaveView, AutosaveView, string]>([
-    ['已保存到云端', CLEAN, ONLINE, '已保存到云端'],
-    ['有未保存的修改', DIRTY, ONLINE, '有未保存的修改'],
-    ['保存中', { ...DIRTY, status: 'saving' }, ONLINE, '保存中…'],
-    ['只差公式的结果', { ...CLEAN, status: 'dirty', formulasPending: true, unsaved: true }, ONLINE, '公式结果尚未保存（算完之后自动保存）'],
-    ['保存失败、会自动重试', NETWORK_FAILURE, { ...ONLINE, retrying: true }, '保存失败，稍后自动重试'],
-    ['保存失败、要等新内容', NETWORK_FAILURE, ONLINE, '保存失败'],
-    ['已离线（M3 没有本机的发件箱：不说已保存在本机）', DIRTY, { ...ONLINE, offline: true }, '已离线：修改还在本页，恢复网络之后自动保存'],
-    ['暂停（会话）', DIRTY, { ...ONLINE, paused: true }, '暂停保存：登录回来之后自动保存'],
-    ['版本冲突', { ...DIRTY, status: 'conflict', canSave: false, conflict: null }, ONLINE, '版本冲突'],
-    ['需要刷新', { ...DIRTY, status: 'outdated', canSave: false }, ONLINE, '需要刷新'],
-    ['不能保存', { ...DIRTY, status: 'too-new', canSave: false }, ONLINE, '不能保存'],
-  ])('%s', (_case, save, autosave, text) => {
-    renderChrome({ save, autosave })
+  it.each<[string, SaveView, AutosaveView, string, Partial<EditorPageView>]>([
+    ['已保存到云端', CLEAN, ONLINE, '已保存到云端', {}],
+    ['有未保存的修改', DIRTY, ONLINE, '有未保存的修改', {}],
+    ['保存中', { ...DIRTY, status: 'saving' }, ONLINE, '保存中…', {}],
+    ['只差公式的结果', { ...CLEAN, status: 'dirty', formulasPending: true, unsaved: true }, ONLINE, '公式结果尚未保存（算完之后自动保存）', {}],
+    ['保存失败、会自动重试', NETWORK_FAILURE, { ...ONLINE, retrying: true }, '保存失败，稍后自动重试', {}],
+    ['保存失败、要等新内容', NETWORK_FAILURE, ONLINE, '保存失败', {}],
+    ['已离线（M3 没有本机的发件箱：不说已保存在本机）', DIRTY, { ...ONLINE, offline: true }, '已离线：修改还在本页，恢复网络之后自动保存', {}],
+    ['暂停（没有人登录）', DIRTY, PAUSED, '暂停保存：登录回来之后自动保存', { session: 'signed-out' }],
+    ['暂停（换了人）', DIRTY, PAUSED, '暂停保存：登录回来之后自动保存', { session: 'other-user' }],
+    ['暂停（本人在登录中、正在向服务端确认会话：不说"登录回来之后"，审查 A6）', DIRTY, PAUSED, '正在确认登录状态…', {}],
+    ['暂停（本人在登录中、确认会话失败：不说"登录回来之后"，审查 A6）', DIRTY, PAUSED, '暂停保存：暂时无法确认登录状态，稍后自动重试', { sessionProblem: new NetworkError('断网') }],
+    ['版本冲突', { ...DIRTY, status: 'conflict', canSave: false, conflict: null }, ONLINE, '版本冲突', {}],
+    ['需要刷新', { ...DIRTY, status: 'outdated', canSave: false }, ONLINE, '需要刷新', {}],
+    ['不能保存', { ...DIRTY, status: 'too-new', canSave: false }, ONLINE, '不能保存', {}],
+  ])('%s', (_case, save, autosave, text, view) => {
+    renderChrome({ save, autosave, ...view })
     expect(headerStatus()).toHaveTextContent(text)
     expect(headerStatus().textContent).not.toMatch(/本机/)
+  })
+
+  it('读屏播暂停时按原因分开（审查 A6）：不是按保存触发的确认进行中不播；确认失败了播"暂时无法确认"；没有人登录时播"登录回来之后"', () => {
+    const fake = renderChrome({ save: DIRTY, autosave: ONLINE })
+    const spoken = announcement()
+    fake.set({ autosave: PAUSED })
+    expect(headerStatus()).toHaveTextContent('正在确认登录状态…')
+    expect(spoken).toHaveTextContent('')
+    fake.set({ sessionProblem: new NetworkError('断网') })
+    expect(spoken).toHaveTextContent('暂停保存：暂时无法确认登录状态，稍后自动重试')
+    fake.set({ session: 'signed-out' })
+    expect(spoken).toHaveTextContent('暂停保存：登录回来之后自动保存')
   })
 
   it('读屏只播有意义的变化：例行的"有未保存的修改 → 保存中… → 已保存到云端"只改看得见的文字', () => {
@@ -1071,9 +1088,9 @@ describe('编辑时页头的保存状态（M3-P4 设计 §3.9）', () => {
     expect(spoken).toHaveTextContent('已离线')
     fake.set({ save: CLEAN })
     expect(spoken).toHaveTextContent('已保存到云端')
-    fake.set({ save: DIRTY, autosave: { ...ONLINE, paused: true } })
+    fake.set({ save: DIRTY, autosave: PAUSED, session: 'signed-out' })
     expect(spoken).toHaveTextContent('暂停保存：登录回来之后自动保存')
-    fake.set({ save: { ...CLEAN, status: 'dirty', formulasPending: true, unsaved: true }, autosave: ONLINE })
+    fake.set({ save: { ...CLEAN, status: 'dirty', formulasPending: true, unsaved: true }, autosave: ONLINE, session: 'active' })
     expect(spoken).toHaveTextContent('公式结果尚未保存（算完之后自动保存）')
     fake.set({ save: CLEAN })
     expect(spoken).toHaveTextContent('已保存到云端')

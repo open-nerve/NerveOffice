@@ -5,8 +5,10 @@
 // 交互屏障：载入期间、进入与退出编辑、失去编辑权的过程中，以及每次新建编辑器时，页头之外的输入一律拦下（interaction-barrier.ts）。
 // 自动保存（M3-P4 设计 §3.10）：页面把可见性、联网与"会话是本人、令牌不是已知失效"（confirmedForWrite 的口径）交给编辑模式里的调度——
 // 可见性在 visibilitychange 里同步通知（切到后台的捕获与上传不靠计时器），confirmedForWrite 的每次变化都通知（确认开始与结束、会话、
-// 确认失败的原因、令牌失效）；页面关闭（pagehide）时有保存在途不释放编辑权（edit-mode.ts 的 releaseOnHide）；按保存在保存中照样做
-// （在途时排一次）。阅读页的"公式待更新"取载入时的详情（与内容是同一版时）。页头的文档详情正在重新取时给出进行中（DEF-045）。
+// 确认失败的原因、令牌失效）；确认会话失败（网络等）之后，恢复联网、回到前台时立即再确认，另按退避定时再确认（审查 A6：否则人一直在登录中、
+// 自动保存却一直暂停）；页面关闭（pagehide）时有保存在途不释放编辑权（edit-mode.ts 的 releaseOnHide）；按保存在保存中照样做
+// （在途时排一次），按下的这一刻就提交开着的单元格编辑，会话确认之后才上传（审查 A1）。阅读页的"公式待更新"取载入时的详情（与内容是同一版时）。
+// 页头的文档详情正在重新取时给出进行中（DEF-045）。
 import type { DocumentAccessVia, DocumentDetail, DocumentSpace, SessionResponse } from '@nerve-office/contracts'
 import type { ApiError } from '../../shared/api/index.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
@@ -21,6 +23,7 @@ import type { SaveView } from './save-coordinator.ts'
 import { DOCUMENT_PROFILES, PLATFORM_FORMAT_VERSIONS } from '@nerve-office/contracts'
 import { isAuthenticationError, isMissingResource, setCsrfToken } from '../../shared/api/index.ts'
 import { loginPath } from '../../shared/lib/login-path.ts'
+import { DEFAULT_AUTOSAVE_LIMITS, retryDelay } from './autosave.ts'
 import { documentIsNewer } from './client-format.ts'
 import { trackActivity } from './edit-lease.ts'
 import { createEditMode } from './edit-mode.ts'
@@ -231,6 +234,12 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
    */
   let staleAfter: number | undefined
   let sessionProblem: unknown
+  /**
+   * 确认会话失败（sessionProblem，网络等）之后的再确认（审查 A6）：确认有结果之前自动保存暂停，人其实多半一直在登录中——恢复联网、
+   * 回到前台时立即再确认，另按自动保存的退避（2、4……秒，至多 60 秒）定时再确认。确认有了结果（成功、未登录、换了人）就停
+   */
+  let cancelRecheck: (() => void) | undefined
+  let recheckAttempts = 0
   let confirmingSession = false
   /** 在途的重新取页头文档详情的次数（DEF-045：大于 0 时"重试"说正在重试） */
   let detailRefreshes = 0
@@ -406,11 +415,33 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
           confirmingSession = false
           update()
         }
+        recheckIfUnconfirmed()
       }
     }
     checkInFlight = run()
     syncWritable()
     return checkInFlight
+  }
+
+  /** 一轮确认结束之后：还是没能确认（网络等）就按退避再排一次（审查 A6）；有了结果就停、退避清零 */
+  function recheckIfUnconfirmed(): void {
+    cancelRecheck?.()
+    cancelRecheck = undefined
+    if (sessionProblem === undefined || leaving || disposed) {
+      recheckAttempts = 0
+      return
+    }
+    recheckAttempts += 1
+    cancelRecheck = clock.schedule(() => {
+      cancelRecheck = undefined
+      void recheckSession()
+    }, retryDelay(recheckAttempts, DEFAULT_AUTOSAVE_LIMITS))
+  }
+
+  /** 恢复联网、回到前台：上一次确认会话失败了就立即再确认（审查 A6） */
+  function recheckOnReturn(back: boolean): void {
+    if (back && sessionProblem !== undefined && !leaving && !disposed)
+      void recheckSession()
   }
 
   /**
@@ -554,8 +585,12 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       const onPageHide = (): void => mode?.releaseOnHide()
       pageWindow.addEventListener('pagehide', onPageHide)
       cleanups.push(() => pageWindow.removeEventListener('pagehide', onPageHide))
-      // 自动保存的页面信号：可见性（同步通知）与联网
+      // 自动保存的页面信号：可见性（同步通知）与联网；恢复联网、回到前台时上一次确认会话失败了就再确认（审查 A6）
       cleanups.push(options.visibility.onChange(signalPage), options.network.onChange(signalPage))
+      cleanups.push(
+        options.visibility.onChange(() => recheckOnReturn(!options.visibility.hidden())),
+        options.network.onChange(() => recheckOnReturn(options.network.online())),
+      )
       setSurface('loading')
       cleanups.push(sessionChannel.subscribe(() => void recheckSession()))
       let signedIn: SessionResponse
@@ -615,8 +650,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       // 版本冲突之后再按：不做任何事（P4 设计 §3.7.2）。保存中照样做：在途的结束之后立即再存一次（M3-P4 设计 §3.4、§3.9）
       if (view.save.status === 'conflict')
         return
-      if (await readyToWrite())
-        await mode?.save()
+      // 按下的这一刻就提交这一刻开着的单元格编辑（审查 A1：要等会话确认时也不例外，确认期间才开始的输入不提交），会话确认之后才上传
+      await mode?.save(readyToWrite)
     },
     enterEditing: async () => {
       if (mode?.view().mode.kind !== 'reading')
@@ -690,6 +725,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     recheckSession,
     dispose: () => {
       disposed = true
+      cancelRecheck?.()
+      cancelRecheck = undefined
       releaseBarrier?.()
       releaseBarrier = undefined
       for (const cleanup of cleanups.splice(0))

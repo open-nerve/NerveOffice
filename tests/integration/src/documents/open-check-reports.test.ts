@@ -177,6 +177,24 @@ describe('US-M3-15 进程内去重（文档、修订号、失败、构建；10 �
   })
 })
 
+describe('US-M3-15 先判断能不能读，再去重与限量（审查 B4）', () => {
+  it('看不到这份文档的人报（404，不记）：不占用去重键——能读的人报同样的内容照样记一条；也不占用报的人自己的配额', async () => {
+    const { session, documentId } = await fresh('read-first')
+    const outsider = await fresh('read-first-outsider')
+    // 外人知道文档 id、修订号、构建与失败签名：报 21 次（超过每个账户的 20 条），一律 404，什么也不记
+    for (let revision = 1; revision <= 21; revision += 1)
+      expect((await postOpenCheckReport(app.baseUrl, outsider.session, documentId, openCheckReport({ revision }))).status, `第 ${revision} 次`).toBe(404)
+    expect(failureLogs(documentId)).toEqual([])
+    // 能读的人报同样的内容（修订号 1）：照样记下
+    expect((await postOpenCheckReport(app.baseUrl, session, documentId)).status).toBe(204)
+    expect(failureLogs(documentId)).toHaveLength(1)
+    // 外人对自己的文档报：配额没有被那 21 次 404 用掉
+    expect((await postOpenCheckReport(app.baseUrl, outsider.session, outsider.documentId)).status).toBe(204)
+    expect(failureLogs(outsider.documentId)).toHaveLength(1)
+    expect(throttledLogs(outsider.account.id)).toEqual([])
+  })
+})
+
 describe('US-M3-15 按账户限量（每 10 分钟 20 条被采纳）', () => {
   it('第 21 条起照样 204、不记；这个窗口只记一条"上报过多"；别的账户照常记', async () => {
     const { account, session, documentId } = await fresh('limit')

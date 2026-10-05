@@ -99,14 +99,33 @@ export function serverTimeOf(response: Response): number | undefined {
   return Number.isFinite(time) ? time : undefined
 }
 
+/**
+ * 响应头 Retry-After（秒）：秒数，或者 HTTP 日期（反向代理可能这样写）——日期按同一个响应的 Date 算出相隔几秒（向上取整），不拿浏览器的
+ * 时钟去比（它可能不准），没有 Date 时不认。没有、读不出来或者不是正数时为 undefined
+ */
+export function retryAfterOf(response: Response): number | undefined {
+  const value = response.headers.get('retry-after')?.trim() ?? ''
+  if (value === '')
+    return undefined
+  const seconds = Number(value)
+  if (Number.isFinite(seconds))
+    return seconds > 0 ? seconds : undefined
+  const at = Date.parse(value)
+  const now = serverTimeOf(response)
+  if (!Number.isFinite(at) || now === undefined)
+    return undefined
+  const delay = Math.ceil((at - now) / 1000)
+  return delay > 0 ? delay : undefined
+}
+
 async function errorFrom(response: Response): Promise<ApiError> {
-  const retryAfter = Number(response.headers.get('retry-after'))
-  const retryAfterSeconds = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined
+  // 响应头一律照读：错误响应不是约定的格式（例如反向代理自己回的 503、429）时也带上 Retry-After 与 Date，调用方照样按它等（审查 A10）
+  const headers: ApiErrorDetails = { retryAfterSeconds: retryAfterOf(response), serverTime: serverTimeOf(response) }
   const parsed = errorResponseSchema.safeParse(await response.json().catch(() => undefined))
   if (!parsed.success)
-    return new ApiError(response.status, 'UNKNOWN', `服务端返回了意外的响应（HTTP ${response.status}）`)
+    return new ApiError(response.status, 'UNKNOWN', `服务端返回了意外的响应（HTTP ${response.status}）`, headers)
   const { code, message, requestId, details } = parsed.data.error
-  return new ApiError(response.status, code, message, { requestId, retryAfterSeconds, details, serverTime: serverTimeOf(response) })
+  return new ApiError(response.status, code, message, { ...headers, requestId, details })
 }
 
 /**

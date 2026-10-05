@@ -124,8 +124,8 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     const documentId = await createSheetThroughApi(page)
     await openAndEnterEditing(page, documentId)
     const renewals = await blockLeaseRenewals(page)
-    await typeInCell(page, 'A1', 'csrf-wait')
-    // 同一个人经接口重新登录：会话与令牌都换了，没有页面广播消息，本页还拿着旧的令牌
+    // 同一个人经接口重新登录：会话与令牌都换了，没有页面广播消息，本页还拿着旧的令牌。在修改之前就换、在修改之前就拦下确认会话：
+    // 之后的第一次保存（按的那一次，或者生产构建里先到的自动保存）一定带着旧的令牌被拒，不靠"键入到按保存不超过 2 秒"（审查 A7）
     const oldToken = await csrfTokenOf(page)
     const other = await context.newPage()
     await loginThroughApi(other, owner)
@@ -139,7 +139,9 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
         tokens.push(request.headers()['x-csrf-token'])
     })
     const first = page.waitForResponse(response => isSaveRequest(response.request()))
-    await saveButton(page).click()
+    await typeInCell(page, 'A1', 'csrf-wait')
+    // 按快捷键：自动保存先得到令牌失效时确认已经开始，"保存"不可用（点不了），快捷键照样按得下（确认期间不发）
+    await page.keyboard.press('ControlOrMeta+s')
     expect((await first).status()).toBe(403)
     await expect.poll(checks.held).toBe(1)
     // 确认有结果之前：页头说明正在确认，不先提示"请求已失效，请再保存一次"（复验 TB1）
@@ -164,7 +166,8 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     const documentId = await createSheetThroughApi(page)
     await openAndEnterEditing(page, documentId)
     const renewals = await blockLeaseRenewals(page)
-    await typeInCell(page, 'A1', 'csrf-offline')
+    // 在修改之前就换了令牌、让确认会话断网：之后的第一次保存（按的那一次，或者生产构建里先到的自动保存）一定带着旧的令牌被拒、
+    // 确认一定断网，不靠"键入到按保存不超过 2 秒"（审查 A7）
     const oldToken = await csrfTokenOf(page)
     const other = await context.newPage()
     await loginThroughApi(other, owner)
@@ -176,11 +179,13 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     })
 
     await page.route('**/api/auth/session', async route => route.abort('internetdisconnected'))
-    await saveButton(page).click()
+    await typeInCell(page, 'A1', 'csrf-offline')
+    // 按快捷键：确认进行中"保存"不可用，快捷键照样按得下
+    await page.keyboard.press('ControlOrMeta+s')
     await expect(page.getByRole('alert')).toHaveText(/保存失败：暂时无法确认登录状态：网络连接失败/)
-    // 再按保存：先确认，又断网，不带着失效的令牌再发
+    // 再按保存：先确认，又断网，不带着失效的令牌再发（页面自己定时再确认也一样断网）
     const resent = page.waitForRequest(isSaveRequest, { timeout: 1_000 }).then(() => true, () => false)
-    await saveButton(page).click()
+    await page.keyboard.press('ControlOrMeta+s')
     expect(await resent).toBe(false)
     expect(tokens).toEqual([oldToken])
 

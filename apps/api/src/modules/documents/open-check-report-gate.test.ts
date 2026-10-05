@@ -91,6 +91,17 @@ describe('进程内的去重与按账户限量（M3-P4 设计 §3.13）', () => 
     expect(gate.decide('amy', 'b')).toBe('accept')
   })
 
+  it('固定窗口（审查 B5）：窗口里第一条采纳之后过 9 分钟又采纳一条，到第 10 分钟窗口照样重开——不从最近一次采纳顺延（滑动窗口）', () => {
+    const time = clock()
+    const gate = new OpenCheckReportGate({ now: time.now, perAccount: 2 })
+    expect(gate.decide('amy', 'a')).toBe('accept')
+    time.advance(OPEN_CHECK_REPORT_WINDOW_MS - 60_000)
+    expect(gate.decide('amy', 'b')).toBe('accept')
+    expect(gate.decide('amy', 'c')).toBe('throttled-first')
+    time.advance(60_000)
+    expect(gate.decide('amy', 'c')).toBe('accept')
+  })
+
   it('内存有界：过期的键与账户随之清掉；超出上限时丢最旧的', () => {
     const time = clock()
     const gate = new OpenCheckReportGate({ now: time.now, maxKeys: 3, perAccount: 100 })
