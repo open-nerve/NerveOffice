@@ -1729,6 +1729,7 @@ describe('失败的归类（M3-P4 设计 §3.8：会自动重试 / 要等新内�
     ['回包读不出来', new ResponseFormatError('回包不对'), { kind: 'retry', retryAfterMs: undefined }],
     ['503 带 Retry-After（检查池满、每个账户 2 份、数据库繁忙）', new ApiError(503, 'SERVICE_UNAVAILABLE', '繁忙', { retryAfterSeconds: 7 }), { kind: 'retry', retryAfterMs: 7000 }],
     ['503 不带 Retry-After', new ApiError(503, 'SERVICE_UNAVAILABLE', '繁忙'), { kind: 'retry', retryAfterMs: undefined }],
+    ['反向代理自己回的 503（不是约定的格式）带 Retry-After（审查 A10）', new ApiError(503, 'UNKNOWN', '意外的响应', { retryAfterSeconds: 20 }), { kind: 'retry', retryAfterMs: 20_000 }],
     ['429 带 Retry-After', new ApiError(429, 'TOO_MANY_REQUESTS', '太频繁', { retryAfterSeconds: 3 }), { kind: 'retry', retryAfterMs: 3000 }],
     ['requestId 被占用（下次换新的）', new ApiError(409, 'REQUEST_ID_CONFLICT', '被占用'), { kind: 'retry', retryAfterMs: undefined }],
     ['编辑权中断（编辑租约在续上）', new ApiError(409, 'EDIT_LEASE_LOST', '编辑权已失效', { details: { reason: 'expired' } }), { kind: 'retry', retryAfterMs: undefined }],

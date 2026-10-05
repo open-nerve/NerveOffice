@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { apiError, installFakeApi, json } from '../testing/fake-api.test-support.ts'
-import { ApiError, apiFetch, apiRequest, isAccessDenied, isAuthenticationError, isMissingResource, isPermissionDeniedError, isTransientError, NetworkError, readJson, ResponseFormatError, serverTimeOf, setCsrfToken } from './client.ts'
+import { ApiError, apiFetch, apiRequest, isAccessDenied, isAuthenticationError, isMissingResource, isPermissionDeniedError, isTransientError, NetworkError, readJson, ResponseFormatError, retryAfterOf, serverTimeOf, setCsrfToken } from './client.ts'
 
 const itemSchema = z.strictObject({ name: z.string() })
 
@@ -43,7 +43,13 @@ describe('apiRequest', () => {
 
   it('错误响应不是约定的格式（例如反向代理的错误页）：UNKNOWN', async () => {
     installFakeApi({ 'GET /api/item': () => new Response('<html>502 Bad Gateway</html>', { status: 502 }) })
-    await expect(apiRequest('/api/item', { schema: itemSchema })).rejects.toMatchObject({ status: 502, code: 'UNKNOWN' })
+    await expect(apiRequest('/api/item', { schema: itemSchema })).rejects.toMatchObject({ status: 502, code: 'UNKNOWN', retryAfterSeconds: undefined })
+  })
+
+  it('错误响应不是约定的格式、带着 Retry-After（例如反向代理自己回的 503，审查 A10）：照样读出 Retry-After 与 Date', async () => {
+    const date = 'Mon, 05 Oct 2026 08:00:00 GMT'
+    installFakeApi({ 'PUT /api/blob': () => new Response('<html>503 Service Unavailable</html>', { status: 503, headers: { 'retry-after': '30', date } }) })
+    await expect(apiFetch('/api/blob', { method: 'PUT' })).rejects.toMatchObject({ status: 503, code: 'UNKNOWN', retryAfterSeconds: 30, serverTime: Date.parse(date) })
   })
 
   it('成功的响应与契约不一致：ResponseFormatError，不交出错的数据', async () => {
@@ -179,5 +185,22 @@ describe('错误的分类', () => {
     expect(isTransientError(new ApiError(503, 'SERVICE_UNAVAILABLE', 'x'))).toBe(true)
     expect(isTransientError(new ApiError(404, 'NOT_FOUND', 'x'))).toBe(false)
     expect(isTransientError(new Error('x'))).toBe(false)
+  })
+})
+
+describe('Retry-After（秒数或者 HTTP 日期）', () => {
+  const respond = (headers: Record<string, string>): Response => new Response(null, { status: 503, headers })
+
+  it.each<[string, Record<string, string>, number | undefined]>([
+    ['秒数', { 'retry-after': '120' }, 120],
+    ['HTTP 日期：按同一个响应的 Date 算出相隔几秒（向上取整）', { 'retry-after': 'Mon, 05 Oct 2026 08:01:30 GMT', 'date': 'Mon, 05 Oct 2026 08:00:00 GMT' }, 90],
+    ['HTTP 日期、没有 Date：不拿浏览器的时钟比，不认（日期远在将来也不认）', { 'retry-after': 'Thu, 01 Jan 2099 00:00:00 GMT' }, undefined],
+    ['HTTP 日期已经过了', { 'retry-after': 'Mon, 05 Oct 2026 07:59:00 GMT', 'date': 'Mon, 05 Oct 2026 08:00:00 GMT' }, undefined],
+    ['0', { 'retry-after': '0' }, undefined],
+    ['负数', { 'retry-after': '-5' }, undefined],
+    ['读不出来', { 'retry-after': 'later' }, undefined],
+    ['没有', {}, undefined],
+  ])('%s', (_case, headers, expected) => {
+    expect(retryAfterOf(respond(headers))).toBe(expected)
   })
 })
