@@ -201,13 +201,13 @@ export {
   OPEN_CHECK_FAILURE_KINDS,
   OPEN_CHECK_FAILURES_MAX,
   OPEN_CHECK_TRIGGERS,
-  openCheckFailureSchema,
-  openCheckReportSchema,
   PROFILE_FAILURE_KINDS,
   RESOURCE_NAME_PATTERN,
   THROWN_FAILURE_KINDS,
-} from './documents/open-check.ts'
-export type { OpenCheckFailure, OpenCheckFailureKind, OpenCheckReport } from './documents/open-check.ts'
+} from './documents/open-check-failures.ts'
+export type { OpenCheckFailure, OpenCheckFailureKind } from './documents/open-check-failures.ts'
+export { openCheckFailureSchema, openCheckReportSchema } from './documents/open-check.ts'
+export type { OpenCheckReport } from './documents/open-check.ts'
 export { checkResources, hasResourceContent, isDeepEmpty, lostResources, nonEmptyResourceNames, PROFILE_RESOURCES, profileResourceNames, shrunkResources } from './documents/profile-resources.ts'
 export type { LostResources, ProfileResourceName, ResourceCheck, ResourceEntryKind, ResourceOutput, ResourceRule, ResourceRuleId } from './documents/profile-resources.ts'
 export { SHEET_TEMPLATE, SHEET_TEMPLATE_UNIT_ID, sheetSnapshotFor } from './documents/sheet-template.ts'

@@ -6,7 +6,7 @@
 //   入口用到的部分与测试构建的页面自检共用一份声明（editor/testing/read-only-entries.ts 的 Entry*），这里在它上面加 E2E 另外用到的。
 // - 页面里打包的链接地址判定（M3-P3 S2）：跨引擎的同一组用例在三个浏览器里经它核对。
 // 用到探针的用例打上 @test-build：外部模式测生产镜像，里面没有探针，按标签排除（playwright.config.ts）
-import type { CanonicalLink } from '@nerve-office/contracts'
+import type { CanonicalLink, OpenCheckFailure } from '@nerve-office/contracts'
 import type { Locator, Page } from '@playwright/test'
 import type { LoggedCommand } from '../../../apps/web/src/editor/testing/content-compare.ts'
 import type { EntryApi, EntryImage, EntryRange, EntryScope, EntrySheet, EntryWorkbook } from '../../../apps/web/src/editor/testing/read-only-entries.ts'
@@ -92,6 +92,11 @@ export interface ProbeShortcut {
   readonly conditional: boolean
 }
 
+/** 这个编辑器的打开自检的结果（与 web 的 editor/profile/open-check.ts 的 OpenCheck 相同，M3-P4 设计 §3.11） */
+export type ProbeOpenCheck
+  = | { readonly ok: true }
+    | { readonly ok: false, readonly failures: readonly OpenCheckFailure[] }
+
 interface EditorProbe {
   readonly univerAPI: FacadeApi
   readonly snapshot: () => string
@@ -99,6 +104,7 @@ interface EditorProbe {
   readonly shortcuts: () => readonly ProbeShortcut[]
   readonly formulaBarText: () => string
   readonly canonicalLink: (url: string) => CanonicalLink
+  readonly openCheck: ProbeOpenCheck
 }
 
 declare global {
@@ -159,6 +165,17 @@ export async function probeCanonicalLinks(page: Page, urls: readonly string[]): 
       throw new Error('页面里没有编辑器的探针')
     return inputs.map(url => probe.canonicalLink(url))
   }, [...urls])
+}
+
+/** 现在这个编辑器的打开自检的结果（M3-P4 设计 §3.11）：页面里没有探针时失败 */
+export async function probeOpenCheck(page: Page): Promise<ProbeOpenCheck> {
+  await probeIn(page)
+  return page.evaluate(() => {
+    const probe = window.__nerveEditorProbe
+    if (probe === undefined)
+      throw new Error('页面里没有编辑器的探针')
+    return probe.openCheck
+  })
 }
 
 /** 命令日志：序号大于 after 的各条 */
