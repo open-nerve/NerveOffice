@@ -81,7 +81,9 @@ const UNIVER_INTERNAL_SYMBOLS = [
     // IPermissionService、IUndoRedoService：只读守卫的本地权限点与撤销栈（M2-P3 设计 §3.6）；
     // IContextService、FOCUSING_FX_BAR_EDITOR、DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY：只读守卫放开编辑栏的编辑器（P3 审查 A1）；
     // CustomRangeType：链接的改写认链接用的区间种类（M3-P3 S2，internal-api 的 CELL_LINK_PROTOCOL，与 contracts 的 HYPERLINK_RANGE_TYPE 核对）；
-    // LocaleService：语言服务换成销毁之后不抛错的子类（internal-api 的 disposalSafeLocaleOverride），别处不直接取它、不另换
+    // LocaleService：语言服务换成销毁之后不抛错的子类（internal-api 的 disposalSafeLocaleOverride），别处不直接取它、不另换；
+    // ILogService、IResourceHook、IResourceManagerService、ResourceManagerService：打开自检的资源守卫（M3-P4，internal-api 的
+    // createResourceLoadGuard）——资源管理服务的子类与 hook 的形状，类型也只在 internal-api 里
     importNames: [
       'AuthzIoLocalService',
       'CustomRangeType',
@@ -89,10 +91,14 @@ const UNIVER_INTERNAL_SYMBOLS = [
       'FOCUSING_FX_BAR_EDITOR',
       'IAuthzIoService',
       'IContextService',
+      'ILogService',
       'IPermissionService',
+      'IResourceHook',
+      'IResourceManagerService',
       'IUndoRedoService',
       'LifecycleService',
       'LocaleService',
+      'ResourceManagerService',
       'UserManagerService',
     ],
     message: INTERNAL_API_MESSAGE,
@@ -248,7 +254,7 @@ const UNIVER_PUBLIC_VALUES: Readonly<Record<string, readonly string[]>> = {
   '@univerjs/sheets-filter': ['UniverSheetsFilterPlugin'],
   '@univerjs/sheets-filter-ui': ['UniverSheetsFilterUIPlugin'],
   '@univerjs/sheets-find-replace': ['UniverSheetsFindReplacePlugin'],
-  '@univerjs/sheets-formula': ['UniverRemoteSheetsFormulaPlugin', 'UniverSheetsFormulaPlugin'],
+  '@univerjs/sheets-formula': ['CalculationMode', 'UniverRemoteSheetsFormulaPlugin', 'UniverSheetsFormulaPlugin'],
   '@univerjs/sheets-formula-ui': ['UniverSheetsFormulaUIPlugin'],
   '@univerjs/sheets-hyper-link': ['UniverSheetsHyperLinkPlugin'],
   '@univerjs/sheets-hyper-link-ui': ['UniverSheetsHyperLinkUIPlugin'],
@@ -755,10 +761,11 @@ const WEB_TEST_CODE = ['**/*.test.{ts,tsx}', '**/*.test-support.{ts,tsx}']
 
 /**
  * 页面自检与 E2E 共用的文件（M3-P2 设计 §3.5，相对编辑器元素的路径）：只读入口的清单与预期、比较口径、自检结果的格式、
- * 模式切换的计时（S5：E2E 的实测与真实 Safari 的自检用同一套）。
+ * 模式切换的计时（S5：E2E 的实测与真实 Safari 的自检用同一套）、捕获时机复核的样本（M3-P4 S1：E2E 的生成器写库，自检按它核对）、
+ * 测试构建的自动保存控制（M3-P4 设计 §3.14：E2E 用它挂在 window 上的名字、sessionStorage 的键与日志的写法）。
  * 它们在 editor/testing/ 下（只在测试构建里），E2E 经模块边界的例外引用它们，所以它们不引用任何模块（nerve/editor-testing-shared）
  */
-const SELFTEST_SHARED_FILES = ['testing/read-only-entries.ts', 'testing/content-compare.ts', 'testing/selftest-report.ts', 'testing/switch-timing.ts']
+const SELFTEST_SHARED_FILES = ['testing/read-only-entries.ts', 'testing/content-compare.ts', 'testing/selftest-report.ts', 'testing/switch-timing.ts', 'testing/capture-samples.ts', 'testing/autosave-control.ts']
 
 /** 链接地址判定的跨引擎用例（M3-P3 设计 §3.2，相对 contracts 元素的路径）：Node 的单元测试与 E2E 共用的测试辅助 */
 const LINK_ADDRESS_CASES_FILE = 'documents/link-address.test-support.ts'
@@ -1216,6 +1223,11 @@ export default antfu(
           {
             from: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' }, fileInternalPath: ['selftest-hook.ts', 'selftest-hook.test.ts'] } },
             allow: { to: { element: { type: 'web-editor', fileInternalPath: 'testing/selftest.ts' } } },
+          },
+          // 测试构建的自动保存控制（M3-P4 设计 §3.14）：编辑器页的组装处（start.tsx）只在测试构建里动态引入它
+          {
+            from: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' }, fileInternalPath: 'start.tsx' } },
+            allow: { to: { element: { type: 'web-editor', fileInternalPath: 'testing/autosave-control.ts' } } },
           },
           {
             from: { element: { type: 'web-app' } },

@@ -23,7 +23,7 @@ import { pressUniverShortcut } from '../../support/keyboard.ts'
 import { expectEntriesUnchanged, grantClipboard, OTHER_READ_ONLY_ENTRIES, PROBE_FACADE_ENTRIES, UI_ENTRIES } from '../../support/read-only-checks.ts'
 import { ALERT, closePermissionAlert, OPENED, scene, watch } from '../../support/read-only.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { appendSheet, cellOf, createSheetThroughApi, createSheetThroughUi, editingNotice, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, enterEditing, exitEditButton, exitEditing, isSaveRequest, lostNotice, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, saveStatus, selectCell, sheetTab, typeInCell, waitForEditorAccess, wouldPromptOnLeave } from '../../support/sheet.ts'
+import { appendSheet, blockLeaseRenewals, cellOf, createSheetThroughApi, createSheetThroughUi, editingNotice, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, enterEditing, exitEditButton, exitEditing, isSaveRequest, lostNotice, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, saveStatus, selectCell, sheetTab, typeInCell, waitForEditorAccess, wouldPromptOnLeave } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -345,11 +345,13 @@ test.describe('US-M3-12 失去编辑权之后另存为副本（M3-P2 设计 §3.
     const documentId = await createDocumentIn(space.id, lead, '共同的表')
     await loginThroughApi(page, editor)
     await openAndEnterEditing(page, documentId)
-    await typeInCell(page, 'A1', '本页的修改')
+    // 先归档、再改（拦下心跳，免得它先一步得知）：修改自动保存（M3-P4），先改的话生产构建里停 2 秒就存上了
+    await blockLeaseRenewals(page)
     await archiveSpace(space.id)
+    await typeInCell(page, 'A1', '本页的修改')
 
-    // 保存得知不能编辑了（403）：本页换成只读、显示本页的内容，给"另存为副本"与"放弃本页的修改"
-    await saveButton(page).click()
+    // 保存得知不能编辑了（403；自动保存的上传先发出也一样）：本页换成只读、显示本页的内容，给"另存为副本"与"放弃本页的修改"
+    await page.keyboard.press('ControlOrMeta+s')
     const lost = lostNotice(page)
     await expect(lost).toContainText('编辑权已失效：你已没有编辑这份文档的权限（空间已归档，只能查看）。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
     await waitForEditorAccess(page, 'read')
@@ -503,7 +505,8 @@ test.describe('US-M3-01 进入、退出编辑没有成功时焦点留在页头�
     await page.route(isContent, async route => route.request().method() === 'PUT' ? route.abort('internetdisconnected') : route.continue())
     await exitEditButton(page).focus()
     await page.keyboard.press('Enter')
-    await expect(saveStatus(page)).toHaveText('保存失败')
+    // 网络错误：会自动重试（M3-P4 设计 §3.8），留在编辑
+    await expect(saveStatus(page)).toHaveText('保存失败，稍后自动重试')
     await expect(exitEditButton(page)).toBeFocused()
     await page.unroute(isContent)
   })

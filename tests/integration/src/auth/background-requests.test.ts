@@ -1,6 +1,6 @@
 // 后台请求不顺延登录（M3-P2 设计 §3.2，DEF-043）：页面在后台定时发的请求——阅读页每 30 秒读一次编辑状态、编辑时每 10 秒的心跳——
 // 标了 @BackgroundRequest()，会话守卫照常认证，但不顺延空闲过期：页面开着、人却不在时，登录照样按空闲到期。
-// 用户自己的操作（打开、保存、申请编辑权）照常顺延。会话距上次记录活动超过 1 分钟才会顺延（P3 的写法），
+// 用户自己的操作（打开、保存、申请编辑权）照常顺延；自动保存是编辑的结果，同样顺延（US-M3-02，M3-P4 设计 §3.10）。会话距上次记录活动超过 1 分钟才会顺延（P3 的写法），
 // 所以每次先把会话的最后活动挪到 2 分钟之前、空闲过期挪近，再看请求之后这两列有没有变。
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
@@ -18,6 +18,7 @@ import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
 import { acquireLease, renewLease, saveContent } from '../support/edit-leases.ts'
+import { postOpenCheckReport } from '../support/open-check.ts'
 import { asUser, login, SESSION_COOKIE } from '../support/session-client.ts'
 
 let database: TestDatabase
@@ -107,6 +108,11 @@ describe('US-M3-05 后台请求不顺延登录（DEF-043）', () => {
     expect(await keptAlive(session, async () => asUser(app.baseUrl, session, leasePath(document.id), { method: 'POST', body: acquireBody(randomUUID()) }), 201)).toBe(true)
   })
 
+  it('US-M3-15 打开自检失败的上报（页面自己发的，M3-P4 设计 §3.13）：204，不顺延', async () => {
+    const { session, document } = await fresh()
+    expect(await keptAlive(session, async () => postOpenCheckReport(app.baseUrl, session, document.id), 204)).toBe(false)
+  })
+
   it('标记只影响顺延，不放宽认证与 CSRF：心跳缺 CSRF 令牌 403；空闲过期的登录发编辑状态 401', async () => {
     const { session, document } = await fresh()
     const lease = await acquireLease(app.baseUrl, session, document.id)
@@ -115,5 +121,28 @@ describe('US-M3-05 后台请求不顺延登录（DEF-043）', () => {
     await database.query(async client => client.query('UPDATE auth_sessions SET idle_expires_at = now() - interval \'1 second\' WHERE token_hash = $1', [digestOf(session)]))
     const expired = await asUser(app.baseUrl, session, leasePath(document.id))
     expect([expired.status, parseExact(errorResponseSchema, await expired.json()).error.code]).toEqual([401, 'SESSION_EXPIRED'])
+  })
+})
+
+/** 模板的 A1 写上 value（一次编辑之后自动保存捕获的样子），gzip 压缩 */
+function snapshotWith(unitId: string, value: string): Uint8Array {
+  const workbook = JSON.parse(sheetSnapshotFor(unitId)) as { sheets: Record<string, { cellData: Record<string, unknown> }> }
+  const sheet = workbook.sheets['sheet-1']
+  if (sheet === undefined)
+    throw new Error('模板里没有 sheet-1')
+  sheet.cellData = { 0: { 0: { v: value } } }
+  return zlib.gzipSync(Buffer.from(JSON.stringify(workbook), 'utf8'))
+}
+
+describe('US-M3-02 自动保存是编辑的结果，照常顺延登录（不标后台请求，M3-P4 设计 §3.10；DEF-043 的过渡问题随之消失）', () => {
+  it('US-M3-02 编辑中连着几次自动保存（内容变了的保存、内容相同的回执）都顺延登录；同一段时间里的心跳不顺延', async () => {
+    const { session, document } = await fresh()
+    const lease = await acquireLease(app.baseUrl, session, document.id)
+    expect(await keptAlive(session, async () => saveContent(app.baseUrl, session, document.id, snapshotWith(document.unitId, '第一次'), { baseRevision: 1, lease }), 200)).toBe(true)
+    expect(await keptAlive(session, async () => renewLease(app.baseUrl, session, document.id, lease), 200)).toBe(false)
+    // 改了又撤销之后的那一次：内容相同，服务端只写回执（修订号不变），同样是编辑的结果
+    expect(await keptAlive(session, async () => saveContent(app.baseUrl, session, document.id, snapshotWith(document.unitId, '第一次'), { baseRevision: 2, lease, localSeq: 3 }), 200)).toBe(true)
+    expect(await keptAlive(session, async () => saveContent(app.baseUrl, session, document.id, snapshotWith(document.unitId, '第二次'), { baseRevision: 2, lease, localSeq: 4 }), 200)).toBe(true)
+    expect(await keptAlive(session, async () => renewLease(app.baseUrl, session, document.id, lease), 200)).toBe(false)
   })
 })

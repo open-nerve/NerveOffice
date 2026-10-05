@@ -5,6 +5,8 @@
 //   回滚之后文档比服务端新（DOCUMENT_TOO_NEW）；详情的 sdkVersion；
 // - 不缩水（含存量为空：解析上一版）；内容相同不递增（只改视图状态也算）与回执；"公式待更新"的记下与清掉，详情、编辑状态与申请的响应；
 // - 信封：内容的哈希与资源名、修订记录的哈希与客户端构建、文档的 SDK 版本与客户端构建；新建、复制写哈希。
+// M3-P4（US-M3-02、03 的服务端一侧）：自动保存同一份内容连着保存（回执）、修订号只随内容变化增加、结果未知时原样重发；
+// "公式待更新"的记下、补存清掉（内容相同只清不设、内容不同照常加修订号）。
 // 处理的顺序本身（重放、格式、检查、事务里的各步）在单元测试（document-content.service.test.ts）；看不到与不存在的语句序列在
 // permissions/hidden-missing-parity.test.ts。
 import type { ClientFormat, SaveContentResponse } from '@nerve-office/contracts'
@@ -489,7 +491,7 @@ describe('US-M3-16 拦截旧客户端：保存、另存为副本、申请编辑�
   })
 })
 
-describe('信封（00 号计划书 §8.1）与"公式待更新"（M3-P3 设计 §3.4、§3.8）', () => {
+describe('信封（00 号计划书 §8.1）', () => {
   it('保存写下内容的哈希与资源名、修订记录的哈希与客户端构建、文档的 SDK 版本（上报、核对过的）与客户端构建', async () => {
     const document = await amyDocument()
     await database.query(async client => client.query('UPDATE documents SET sdk_version = \'0.9.9\' WHERE id = $1', [document.id]))
@@ -497,42 +499,6 @@ describe('信封（00 号计划书 §8.1）与"公式待更新"（M3-P3 设计 �
     await saved(await save(document, raw, { query: { clientBuild: `${CLIENT_BUILD}+abc123` } }))
     expect(await envelopeOf(document.id)).toMatchObject({ revision: 2, sdkVersion: UNIVER_SDK_VERSION, clientBuild: `${CLIENT_BUILD}+abc123`, formulasPending: false, contentHash: hashOf(raw), resourceNames: ['SHEET_NOTE_PLUGIN'] })
     expect((await revisionsOf(document.id)).at(-1)).toEqual({ revision: 2, content_hash: hashOf(raw), client_build: `${CLIENT_BUILD}+abc123` })
-  })
-
-  it('"公式待更新"：带标记的保存记下（详情、编辑状态、申请的响应都给出），内容相同的保存不带标记时清掉（修订号不变）', async () => {
-    const document = await amyDocument()
-    const raw = bytesOf(workbookOf(document.unitId))
-    await saved(await save(document, raw, { query: { formulasPending: 'true' } }))
-    const detail = async () => parseExact(documentDetailSchema, await (await asUser(app.baseUrl, amySession, `/api/documents/${document.id}`)).json()).formulasPending
-    const status = async () => parseExact(editStatusSchema, await (await asUser(app.baseUrl, amySession, `/api/documents/${document.id}/edit-lease`)).json()).formulasPending
-    expect([await detail(), await status()]).toEqual([true, true])
-    const acquired = parseExact(acquiredEditLeaseSchema, await (await asUser(app.baseUrl, amySession, `/api/documents/${document.id}/edit-lease`, { method: 'POST', body: acquireBody(randomUUID()) })).json())
-    expect(acquired.formulasPending).toBe(true)
-    await releaseLease(app.baseUrl, amySession, document.id, { token: acquired.token, writeEpoch: acquired.writeEpoch, clientInstanceId: randomUUID() })
-    // 收齐之后再保存：内容没变（unchanged），标记清掉
-    expect(await saved(await save(document, raw, { baseRevision: 2, query: { formulasPending: 'false' } }))).toMatchObject({ revision: 2, unchanged: true })
-    expect([await detail(), await status()]).toEqual([false, false])
-    // 标记的写法只认 true、false
-    expect((await save(document, raw, { baseRevision: 2, query: { formulasPending: '1' } })).status).toBe(400)
-  })
-
-  it('"公式待更新"在内容相同时只清不设：库里的内容已经收齐，又一次捕获没等到收齐、内容相同（公式的结果也相同），标记不变', async () => {
-    const document = await amyDocument()
-    const raw = bytesOf(workbookOf(document.unitId))
-    await saved(await save(document, raw))
-    expect((await envelopeOf(document.id)).formulasPending).toBe(false)
-    expect(await saved(await save(document, raw, { baseRevision: 2, query: { formulasPending: 'true' } }))).toMatchObject({ revision: 2, unchanged: true })
-    expect((await envelopeOf(document.id)).formulasPending).toBe(false)
-    expect(await receiptsOf(document.id)).toHaveLength(1)
-  })
-
-  it('"公式待更新"计入负载摘要：同一个 requestId 而标记不同是另一个请求（409 REQUEST_ID_CONFLICT）；同样的标记是重放', async () => {
-    const document = await amyDocument()
-    const raw = bytesOf(workbookOf(document.unitId))
-    const requestId = randomUUID()
-    const first = await saved(await save(document, raw, { requestId, query: { formulasPending: 'true' } }))
-    expect(await saved(await save(document, raw, { requestId, query: { formulasPending: 'true' } }))).toEqual(first)
-    expect(await errorOf(await save(document, raw, { requestId }))).toMatchObject({ status: 409, code: 'REQUEST_ID_CONFLICT' })
   })
 
   it('新建写模板的哈希与资源名（每份文档单独算）；复制连同哈希与资源名带过去，"公式待更新"与客户端构建照源文档', async () => {
@@ -596,6 +562,104 @@ describe('信封（00 号计划书 §8.1）与"公式待更新"（M3-P3 设计 �
           await client.query(`ALTER TABLE documents ADD CONSTRAINT ${name} ${definition}`)
       })
     }
+  })
+})
+
+describe('US-M3-03 "公式待更新"：超过上限时带标记的保存记下，收齐之后的补存清掉；进入编辑时据此强制重算（M3-P3 设计 §3.4、§3.8；M3-P4 设计 §3.5）', () => {
+  it('US-M3-03 "公式待更新"：带标记的保存记下（详情、编辑状态、申请的响应都给出），内容相同的保存不带标记时清掉（修订号不变）', async () => {
+    const document = await amyDocument()
+    const raw = bytesOf(workbookOf(document.unitId))
+    await saved(await save(document, raw, { query: { formulasPending: 'true' } }))
+    const detail = async () => parseExact(documentDetailSchema, await (await asUser(app.baseUrl, amySession, `/api/documents/${document.id}`)).json()).formulasPending
+    const status = async () => parseExact(editStatusSchema, await (await asUser(app.baseUrl, amySession, `/api/documents/${document.id}/edit-lease`)).json()).formulasPending
+    expect([await detail(), await status()]).toEqual([true, true])
+    const acquired = parseExact(acquiredEditLeaseSchema, await (await asUser(app.baseUrl, amySession, `/api/documents/${document.id}/edit-lease`, { method: 'POST', body: acquireBody(randomUUID()) })).json())
+    expect(acquired.formulasPending).toBe(true)
+    await releaseLease(app.baseUrl, amySession, document.id, { token: acquired.token, writeEpoch: acquired.writeEpoch, clientInstanceId: randomUUID() })
+    // 收齐之后再保存：内容没变（unchanged），标记清掉
+    expect(await saved(await save(document, raw, { baseRevision: 2, query: { formulasPending: 'false' } }))).toMatchObject({ revision: 2, unchanged: true })
+    expect([await detail(), await status()]).toEqual([false, false])
+    // 标记的写法只认 true、false
+    expect((await save(document, raw, { baseRevision: 2, query: { formulasPending: '1' } })).status).toBe(400)
+  })
+
+  it('US-M3-03 "公式待更新"在内容相同时只清不设：库里的内容已经收齐，又一次捕获没等到收齐、内容相同（公式的结果也相同），标记不变', async () => {
+    const document = await amyDocument()
+    const raw = bytesOf(workbookOf(document.unitId))
+    await saved(await save(document, raw))
+    expect((await envelopeOf(document.id)).formulasPending).toBe(false)
+    expect(await saved(await save(document, raw, { baseRevision: 2, query: { formulasPending: 'true' } }))).toMatchObject({ revision: 2, unchanged: true })
+    expect((await envelopeOf(document.id)).formulasPending).toBe(false)
+    expect(await receiptsOf(document.id)).toHaveLength(1)
+  })
+
+  it('US-M3-03 "公式待更新"计入负载摘要：同一个 requestId 而标记不同是另一个请求（409 REQUEST_ID_CONFLICT）；同样的标记是重放', async () => {
+    const document = await amyDocument()
+    const raw = bytesOf(workbookOf(document.unitId))
+    const requestId = randomUUID()
+    const first = await saved(await save(document, raw, { requestId, query: { formulasPending: 'true' } }))
+    expect(await saved(await save(document, raw, { requestId, query: { formulasPending: 'true' } }))).toEqual(first)
+    expect(await errorOf(await save(document, raw, { requestId }))).toMatchObject({ status: 409, code: 'REQUEST_ID_CONFLICT' })
+  })
+
+  it('US-M3-03 收齐之后的补存与带标记的那一版内容不同（公式的值算完变了）：照常加修订号，标记清掉；之后又一次带标记的保存（上限又到了）照样记下', async () => {
+    const document = await amyDocument()
+    // A1 是公式，缓存值是上限到时还没算完的旧值
+    const pending = bytesOf(workbookOf(document.unitId, '', withCell({ f: '=1+1', v: 999, t: 2 })))
+    expect(await saved(await save(document, pending, { query: { formulasPending: 'true' } }))).toMatchObject({ revision: 2, unchanged: false })
+    expect((await envelopeOf(document.id)).formulasPending).toBe(true)
+    // 收齐之后的补存：公式的值变了，内容不同
+    const settled = bytesOf(workbookOf(document.unitId, '', withCell({ f: '=1+1', v: 2, t: 2 })))
+    expect(await saved(await save(document, settled, { baseRevision: 2, query: { formulasPending: 'false' } }))).toMatchObject({ revision: 3, unchanged: false })
+    expect(await envelopeOf(document.id)).toMatchObject({ revision: 3, formulasPending: false, contentHash: hashOf(settled) })
+    // 又改了公式、上限到了还没算完：带标记的保存照样记下
+    const again = bytesOf(workbookOf(document.unitId, '', withCell({ f: '=1+2', v: 2, t: 2 })))
+    expect(await saved(await save(document, again, { baseRevision: 3, query: { formulasPending: 'true' } }))).toMatchObject({ revision: 4, unchanged: false })
+    expect((await envelopeOf(document.id)).formulasPending).toBe(true)
+  })
+})
+
+describe('US-M3-02 自动保存的服务端一侧：同一份内容不加修订号（回执），结果未知时原样重发（M3-P3 设计 §3.7；M3-P4 设计 §3.3、§3.7、§3.8）', () => {
+  it('US-M3-02 同一份内容连着保存几次（改了又撤销之后、页面还不知道服务端已有它）：每次都是回执——修订号不变、保存时间是那一版的，不写内容、修订记录与审计，每次一条回执', async () => {
+    const document = await amyDocument()
+    const raw = bytesOf(workbookOf(document.unitId, '撤销之后的样子'))
+    const first = await saved(await save(document, raw))
+    expect(first).toMatchObject({ revision: 2, unchanged: false })
+    const before = await envelopeOf(document.id)
+    const requestIds = [randomUUID(), randomUUID(), randomUUID()]
+    for (const requestId of requestIds)
+      expect(await saved(await save(document, raw, { baseRevision: 2, requestId }))).toEqual({ revision: 2, savedAt: first.savedAt, unchanged: true })
+    expect(await envelopeOf(document.id)).toEqual(before)
+    expect(await revisionsOf(document.id)).toHaveLength(2)
+    expect(await auditsOf(document.id)).toBe(1)
+    expect((await receiptsOf(document.id)).map(receipt => receipt.request_id)).toEqual(requestIds)
+  })
+
+  it('US-M3-02 一段编辑里修订号只随内容的变化增加：变了、没变（回执）、又变、回到更早的内容（与当前的不同，也是变化）——2、2、3、4', async () => {
+    const document = await amyDocument()
+    const first = bytesOf(workbookOf(document.unitId, '甲'))
+    const second = bytesOf(workbookOf(document.unitId, '乙'))
+    expect(await saved(await save(document, first))).toMatchObject({ revision: 2, unchanged: false })
+    expect(await saved(await save(document, first, { baseRevision: 2 }))).toMatchObject({ revision: 2, unchanged: true })
+    expect(await saved(await save(document, second, { baseRevision: 2 }))).toMatchObject({ revision: 3, unchanged: false })
+    expect(await saved(await save(document, first, { baseRevision: 3 }))).toMatchObject({ revision: 4, unchanged: false })
+    expect((await revisionsOf(document.id)).map(row => row.revision)).toEqual([1, 2, 3, 4])
+    expect(await auditsOf(document.id)).toBe(3)
+  })
+
+  it('US-M3-02 结果未知的那次自动保存原样重发（同一个 requestId：断网、5xx、503 之后）：拿到原来的结果，不重复写入；内容相同的回执原样重发同样拿到原来的确认、不再写回执', async () => {
+    const document = await amyDocument()
+    const raw = bytesOf(workbookOf(document.unitId, '回包丢了'))
+    const requestId = randomUUID()
+    const first = await saved(await save(document, raw, { requestId }))
+    expect(await saved(await save(document, raw, { requestId }))).toEqual(first)
+    expect(await revisionsOf(document.id)).toHaveLength(2)
+    expect(await auditsOf(document.id)).toBe(1)
+    const receiptId = randomUUID()
+    const receipt = await saved(await save(document, raw, { baseRevision: 2, requestId: receiptId }))
+    expect(receipt).toMatchObject({ revision: 2, unchanged: true })
+    expect(await saved(await save(document, raw, { baseRevision: 2, requestId: receiptId }))).toEqual(receipt)
+    expect(await receiptsOf(document.id)).toHaveLength(1)
   })
 })
 

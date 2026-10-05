@@ -1,6 +1,6 @@
 // 表格编辑器页的文案（P4）：只由编辑器页（features/sheet-editor）引用，随编辑器页的入口加载，不进平台页面的首屏（lint 的模块边界限定）。
 // 两个入口共用的（通用的说明、错误与登录状态）在 messages.ts
-import type { SnapshotRule } from '@nerve-office/contracts'
+import type { ProfileResourceName, SnapshotRule } from '@nerve-office/contracts'
 import type { Phrase } from './messages.ts'
 import { EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
 
@@ -52,6 +52,23 @@ function lostEnding(unsaved: boolean, readable: boolean, shown: boolean, copyabl
 /** 超过容量上限（保存时本页先算出来，另存为副本时服务端回答 PAYLOAD_TOO_LARGE） */
 const CAPACITY_EXCEEDED = '表格超过容量上限（5 MiB）'
 
+/**
+ * 打开自检里没能完整载入的那部分数据的说法（M3-P4 设计 §3.12）：按 sheet@1 的资源名（contracts 的白名单，档案加了资源而这里没有说法时
+ * 类型检查不通过）。保护类与区域主题服务端要求为空，几乎不会出现，照样给出说法
+ */
+const DAMAGED_RESOURCE_PHRASES: Readonly<Record<ProfileResourceName<'sheet@1'>, string>> = {
+  SHEET_CONDITIONAL_FORMATTING_PLUGIN: '条件格式',
+  SHEET_DATA_VALIDATION_PLUGIN: '数据验证',
+  SHEET_DEFINED_NAME_PLUGIN: '定义名称',
+  SHEET_DRAWING_PLUGIN: '图片',
+  SHEET_FILTER_PLUGIN: '筛选',
+  SHEET_NOTE_PLUGIN: '批注',
+  SHEET_RANGE_PROTECTION_PLUGIN: '保护设置',
+  SHEET_WORKSHEET_PROTECTION_PLUGIN: '保护设置',
+  SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN: '保护设置',
+  SHEET_RANGE_THEME_MODEL_PLUGIN: '表格样式',
+}
+
 export const editorMessages = {
   back: '我的空间',
   loading: '正在打开表格…',
@@ -59,20 +76,43 @@ export const editorMessages = {
   detail: '文档信息',
   save: '保存',
   saveShortcut: (keys: string) => `保存（${keys}）`,
+  /** 页头的状态里与保存无关的几种（阅读、失去编辑权、阅读时与服务端不兼容） */
   status: {
-    'clean': '已保存到云端',
-    'dirty': '有未保存的修改',
-    'saving': '保存中…',
-    'conflict': '版本冲突',
-    'failed': '保存失败',
-    'readOnly': '只能查看',
+    readOnly: '只能查看',
     /** 编辑权失效之后的保存状态（M3 总设计 §6.5）：不能再保存 */
-    'leaseLost': '编辑权已失效',
+    leaseLost: '编辑权已失效',
     /** 本页的版本过旧（CLIENT_OUTDATED，M3-P3）：需要刷新（M3 总设计 §6.5 的页面状态） */
+    outdated: '需要刷新',
+  },
+  /**
+   * 编辑时页头的保存状态（M3-P4 设计 §3.9，save-indicator.ts 的全集）。M3 没有本机的发件箱：没上传的修改只在这个页面里，
+   * 一律不说"已保存在本机"（A14）
+   */
+  saveState: {
+    /** 服务端确认到现在的修改、没有"公式待更新"、单元格里没有没提交的输入 */
+    'saved': '已保存到云端',
+    'unsaved': '有未保存的修改',
+    'saving': '保存中…',
+    /** 修改都已存上，只差公式的结果：收齐之后自动补存（含带"公式待更新"的文档进入编辑时的强制重算） */
+    'formulas-pending': '公式结果尚未保存（算完之后自动保存）',
+    /** 保存失败、会自动重试（原因在页头下面的说明里，重试期间保留） */
+    'retrying': '保存失败，稍后自动重试',
+    /** 保存失败、再试也一样：要等新的修改或者用户的操作（原因在说明里） */
+    'failed': '保存失败',
+    'offline': '已离线：修改还在本页，恢复网络之后自动保存',
+    /** 会话不是本人（没有人登录、换了人；会话的说明另在页头下面）。本人在登录中、只是在确认或者确认失败时另有说法（pausedUnconfirmed） */
+    'paused': '暂停保存：登录回来之后自动保存',
+    'conflict': '版本冲突',
+    /** 本页的版本过旧（CLIENT_OUTDATED，M3-P3）：需要刷新 */
     'outdated': '需要刷新',
     /** 文档由更新的版本保存过（DOCUMENT_TOO_NEW，M3-P3）：不能再保存 */
     'too-new': '不能保存',
   },
+  /**
+   * 自动保存暂停、本人在登录中，只是向服务端确认会话失败了（网络等，M3-P4 审查 A6）：页面在恢复联网、回到前台时与定时再确认，
+   * 确认是本人之后自动保存；不说"登录回来之后"（人没有退出）
+   */
+  pausedUnconfirmed: '暂停保存：暂时无法确认登录状态，稍后自动重试',
   /**
    * 与服务端不兼容（M3-P3 设计 §3.5、§3.10）：本页的版本过旧（服务端更新了数据格式，或者运维要求旧页面都刷新）——重新加载就是新的页面；
    * 文档由更新的版本保存过（服务端回滚之后）——重新加载拿到的还是同一个版本，只能阅读，不提示刷新
@@ -112,6 +152,24 @@ export const editorMessages = {
           return '这份文档由更新的版本保存过，当前只能阅读，不能再保存'
       }
     },
+  },
+  /**
+   * 打开自检失败（M3-P4 设计 §3.12，US-M3-15；00 号计划书 §7.7、§8.2"文档数据不完整，已阻止编辑"）：
+   * - 这份文档的数据没能完整载入（解析出错、被吞成空值、加载出错、写不出来、加载之后不在了或变空了）：能编辑的人说已阻止编辑，另说原因与去向；
+   *   查看者只说显示的内容可能不完整（本来就不能编辑）；
+   * - 编辑器自己没有完整载入（档案不全：构建的问题，任何文档都会这样）：请重新加载页面（给"重新加载"）
+   */
+  damaged: {
+    blocked: '文档数据不完整，已阻止编辑',
+    /** parts：没能完整载入的那几部分的说法（resource 给出，去掉重复、按出现的先后） */
+    reason: (parts: readonly string[]) => `部分数据没能载入（${parts.join('、')}），继续编辑会让它们丢失。已通知管理员`,
+    viewer: '文档的部分数据没能载入，显示的内容可能不完整',
+    /** 编辑器没有完整载入：能编辑的人 */
+    profile: '编辑器没有完整载入，已阻止编辑。请重新加载页面',
+    /** 编辑器没有完整载入：查看者（本来就不能编辑，不说"已阻止编辑"） */
+    profileViewer: '编辑器没有完整载入，显示的内容可能不完整。请重新加载页面',
+    /** 资源名的说法；认不出的（白名单之外）是"其他数据" */
+    resource: (name: string): string => Object.hasOwn(DAMAGED_RESOURCE_PHRASES, name) ? DAMAGED_RESOURCE_PHRASES[name as keyof typeof DAMAGED_RESOURCE_PHRASES] : '其他数据',
   },
   /**
    * 快照达到容量的 80%（US-M3-14，00 号计划书 §7.7）：不打断的说明，percent 是最近一次捕获占上限的百分比（向下取整）
@@ -177,6 +235,11 @@ export const editorMessages = {
     updating: '正在载入最新的版本…',
     /** 有更新时读屏状态区里的说明（审查 A6）：页头的按钮之外，读屏也听得到；正在载入时说 updating */
     updateAvailable: '这份文档有更新的版本',
+    /**
+     * 本页显示的这一版"公式待更新"（M3-P4 设计 §3.5 第 4 条）：上次保存时公式还没算完。能编辑的人另说进入编辑之后会重算并保存
+     * （阅读时不在本页重算）；查看者只说前半句
+     */
+    formulasPending: (canEdit: boolean) => `这份表格的公式结果可能还没更新（上次保存时公式还没算完）${canEdit ? '，进入编辑之后会自动重算并保存' : ''}`,
     /** 阅读时读不到这份文档了（编辑状态、进入编辑或刷新时得到 404）：页面上还是之前打开的内容 */
     gone: '你已无法访问这份文档（可能已被删除、移走，或你失去了访问权限），这里显示的是之前打开的内容',
     /** 进入编辑时不能编辑了（403）：reason 是服务端这次给的原因 */
@@ -225,7 +288,6 @@ export const editorMessages = {
   tooLarge: `${CAPACITY_EXCEEDED}，无法保存`,
   /** 超过容量上限这件事本身（另存为副本被拒时的说法里用） */
   capacityExceeded: CAPACITY_EXCEEDED,
-  formulasPending: '公式结果尚未保存，请稍后再保存一次',
   saveFailed: (reason: string) => `保存失败：${reason}`,
   conflict: '别处保存了更新的版本。本页的修改没有保存；需要的话先复制出来，再重新加载查看最新版本',
   reload: '重新加载',
@@ -233,15 +295,16 @@ export const editorMessages = {
   unsupported: '这份表格的格式比当前页面新，请刷新页面；刷新后仍然打不开，请联系管理员',
   loadFailed: (reason: string) => `表格加载失败：${reason}`,
   editorFailed: '编辑器加载失败，请刷新页面重试',
-  // 编辑权绑定这次登录（M3-P1 设计 §3.4.1）：重新登录之后页面自动续上编辑权，回到这里照常保存；期间别处保存过时，页头另有失效的说明
-  signedOut: '登录已过期或已在别处退出。本页的修改还在：请在新的标签页中用同一个账户登录，然后回到这里保存',
+  // 编辑权绑定这次登录（M3-P1 设计 §3.4.1）：重新登录之后页面自动续上编辑权，修改随即自动保存（M3-P4）；期间别处保存过时，页头另有失效的说明
+  signedOut: '登录已过期或已在别处退出。本页的修改还在：请在新的标签页中用同一个账户登录，回到这里之后会自动保存',
   /** 阅读时（以及只能查看）没有人登录了：没有修改、也不能保存，不提它们（M3-P1 审查 B10） */
   signedOutReadOnly: '登录已过期或已在别处退出。请在新的标签页中用同一个账户登录，然后回到这里继续',
   loginInNewTab: '在新标签页中登录',
-  otherUser: '别的标签页登录了另一个账户，本页不能再保存。原来的账户重新登录之后可以继续保存；也可以先复制出本页的内容',
+  otherUser: '别的标签页登录了另一个账户，本页不能再保存。原来的账户重新登录之后会自动保存；也可以先复制出本页的内容',
   /** 阅读时换了人：同上，不提保存 */
   otherUserReadOnly: '别的标签页登录了另一个账户。原来的账户重新登录之后，这一页可以接着使用',
   otherUserBeforeReload: '别的标签页登录了另一个账户，重新加载会以那个账户打开。要查看最新版本，先换回原来的账户再重新加载',
-  retrySave: '请求已失效，请再保存一次',
+  /** 令牌失效的保存失败、会话随后确认是本人（令牌已换上）：自动保存随即重试（M3-P4），也可以按保存 */
+  retrySave: '请求已失效，稍后自动重试',
   sessionCheckFailed: (reason: string) => `暂时无法确认登录状态：${reason}`,
 } as const

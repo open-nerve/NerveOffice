@@ -164,6 +164,134 @@ describe('公式收齐：触发判断的求值', () => {
     tracker.observe(START)
     tracker.observe(result({ [UNIT]: { 'sheet-1': {} } }))
     tracker.observe(writeBack('sheet-1'))
-    expect(tracker.progress()).toEqual({ round: 1, started: true, stopped: false, completed: false, resultSheets: ['sheet-1'], appliedSheets: ['sheet-1'], queued: false })
+    expect(tracker.progress()).toEqual({ round: 1, started: true, stopped: false, completed: false, resultSheets: ['sheet-1'], appliedSheets: ['sheet-1'], queued: false, awaitingForcedRound: false })
+  })
+})
+
+/** 强制全量重算的触发命令（initialFormulaComputing 为 FORCED 时 SDK 执行的那一条，参数是脏区） */
+const forcedTrigger = (forceCalculation = true): CommandRecord => mutation('formula.mutation.set-trigger-formula-calculation-start', { forceCalculation, dirtyRanges: [] }, { onlyLocal: true })
+/** 触发判断：强制重算的触发命令一定排队（calculation-trigger.ts 的口径），用户的修改也排队 */
+const triggersQueue: CalculationTriggerCheck = record => (record.id === 'formula.mutation.set-trigger-formula-calculation-start' || editsQueue(record) !== null ? () => true : null)
+
+describe('公式收齐：进入编辑时强制全量重算（M3-P4 设计 §3.5 第 3 条）', () => {
+  it('看到强制重算的触发命令之前一律不算收齐（还没开始过计算也不算）：自动保存不会先补存重算之前的旧值', () => {
+    const tracker = createFormulaSettleTracker({ unitId: UNIT, triggerCheck: triggersQueue, forcedRound: true })
+    expect(tracker.isSettled()).toBe(false)
+    expect(tracker.progress().awaitingForcedRound).toBe(true)
+    // 别的一轮（例如 WHEN_EMPTY 的那种、或者用户改了一处）算完也不算：强制的那一轮还没来
+    tracker.observe(edit())
+    tracker.observe(START)
+    tracker.observe(completed(2))
+    expect(tracker.isSettled()).toBe(false)
+  })
+
+  it('看到之后它就是排队的一轮：开始、逐表写回之后才收齐', () => {
+    const tracker = createFormulaSettleTracker({ unitId: UNIT, triggerCheck: triggersQueue, forcedRound: true })
+    tracker.observe(forcedTrigger())
+    expect(tracker.progress().awaitingForcedRound).toBe(false)
+    expect(tracker.isSettled()).toBe(false)
+    tracker.observe(START)
+    tracker.observe(result({ [UNIT]: { 'sheet-1': {}, 'sheet-2': {} } }))
+    tracker.observe(writeBack('sheet-1'))
+    expect(tracker.isSettled()).toBe(false)
+    tracker.observe(writeBack('sheet-2'))
+    expect(tracker.isSettled()).toBe(true)
+  })
+
+  it('不带 forceCalculation 的触发命令（WHEN_EMPTY 的初次计算）不算强制的那一轮', () => {
+    const tracker = createFormulaSettleTracker({ unitId: UNIT, triggerCheck: triggersQueue, forcedRound: true })
+    tracker.observe(forcedTrigger(false))
+    tracker.observe(START)
+    tracker.observe(completed(3))
+    expect(tracker.isSettled()).toBe(false)
+    expect(tracker.progress().awaitingForcedRound).toBe(true)
+  })
+
+  it('不要求强制重算时照旧：还没开始过计算就是收齐', () => {
+    const tracker = createFormulaSettleTracker({ unitId: UNIT, triggerCheck: triggersQueue })
+    expect(tracker.isSettled()).toBe(true)
+    expect(tracker.progress().awaitingForcedRound).toBe(false)
+  })
+})
+
+describe('公式收齐：observe 交回收齐与否可能变了（公式进度的信号，M3-P4）', () => {
+  it('一轮的开始、停止、结果、完成通知、本文档的写回，以及会触发计算的命令：交回 true', () => {
+    const tracker = createFormulaSettleTracker({ unitId: UNIT, triggerCheck: editsQueue })
+    expect([edit(), START, STOP, result({ [UNIT]: { 'sheet-1': {} } }), writeBack('sheet-1'), completed(3)].map(record => tracker.observe(record))).toEqual([true, true, true, true, true, true])
+  })
+
+  it('计算中的进度通知、初始状态的通知、别的单元与不带写回标记的写入、不触发计算的命令：交回 false', () => {
+    const tracker = createFormulaSettleTracker({ unitId: UNIT, triggerCheck: () => null })
+    expect([
+      mutation('formula.mutation.set-formula-calculation-notification', { stageInfo: {} }),
+      completed(0),
+      writeBack('sheet-1', 'other-unit'),
+      writeBack('sheet-1', UNIT, false),
+      mutation('sheet.mutation.set-worksheet-name', { unitId: UNIT }),
+    ].map(record => tracker.observe(record))).toEqual([false, false, false, false, false])
+  })
+
+  it('强制重算的触发命令：交回 true（等它的那一刻结束）', () => {
+    const tracker = createFormulaSettleTracker({ unitId: UNIT, triggerCheck: () => null, forcedRound: true })
+    expect(tracker.observe(forcedTrigger())).toBe(true)
+  })
+})
+
+describe('有一轮在算（roundRunning，M3-P4 设计 §3.14：主线程模式下销毁之前先停下它）', () => {
+  it('还没开始过：不在算；开始之后到收到结束的通知之前都在算（被请求停下、有了结果、写回了、计算中的进度通知都还在算）', () => {
+    const tracker = createFormulaSettleTracker({ unitId: UNIT, triggerCheck: () => null })
+    expect(tracker.roundRunning()).toBe(false)
+    const steps = [START, STOP, result({ [UNIT]: { 'sheet-1': {} } }), writeBack('sheet-1'), mutation('formula.mutation.set-formula-calculation-notification', { stageInfo: {} }), completed(0)]
+    expect(steps.map((record) => {
+      tracker.observe(record)
+      return tracker.roundRunning()
+    })).toEqual([true, true, true, true, true, true])
+    tracker.observe(completed(1))
+    expect(tracker.roundRunning()).toBe(false)
+  })
+
+  it.each([
+    ['停止', 1],
+    ['没有执行', 2],
+    ['算完', 3],
+  ])('结束的通知（%s）之后不在算；下一轮开始又在算', (_, state) => {
+    const tracker = createFormulaSettleTracker({ unitId: UNIT, triggerCheck: () => null })
+    tracker.observe(START)
+    tracker.observe(completed(state))
+    expect(tracker.roundRunning()).toBe(false)
+    tracker.observe(START)
+    expect(tracker.roundRunning()).toBe(true)
+  })
+
+  it('排队不算在算（还没开始的一轮随编辑器销毁）', () => {
+    const tracker = createFormulaSettleTracker({ unitId: UNIT, triggerCheck: editsQueue })
+    tracker.observe(edit())
+    expect(tracker.progress().queued).toBe(true)
+    expect(tracker.roundRunning()).toBe(false)
+  })
+})
+
+describe('DEF-020：判定不看 trigger（M3-P4 设计 §3.16）', () => {
+  /** 被入口守卫取消的命令留在 SDK 的执行栈里，之后命令之外的 mutation 带上它的 trigger（M1-P4 S2 探针 e 实测的那一个） */
+  const TRIGGERS = [undefined, 'sheet.operation.insert-hyper-link-toolbar', 'sheet.command.set-range-bold', 'sheet.command.clear-selection-format', 'x']
+
+  function withTrigger(steps: readonly RecordedStep[], trigger: string | undefined): RecordedStep[] {
+    return steps.map(step => ({ ...step, record: { ...step.record, params: { ...(step.record.params as object), trigger } } }))
+  }
+
+  it.each(TRIGGERS)('录制的序列里每条命令都带 trigger=%s：每一步的收齐与不带时相同', (trigger) => {
+    for (const steps of [SINGLE_EDIT_CROSS_SHEET, EDIT_WITHOUT_FORMULA, EDIT_DURING_CALCULATION])
+      expect(replay(withTrigger(steps, trigger))).toEqual(steps.map(step => step.settled))
+  })
+
+  it('交给触发判断的是同一个 params 对象（含 trigger）：与 SDK 的触发服务读的一样，被串改的 trigger 两边一致', () => {
+    const seen: unknown[] = []
+    const tracker = createFormulaSettleTracker({ unitId: UNIT, triggerCheck: (record) => {
+      seen.push(record.params)
+      return null
+    } })
+    const params = { unitId: UNIT, subUnitId: 'sheet-1', trigger: 'sheet.operation.insert-hyper-link-toolbar' }
+    tracker.observe(mutation('sheet.mutation.set-range-values', params))
+    expect(seen[0]).toBe(params)
   })
 })

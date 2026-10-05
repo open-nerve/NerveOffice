@@ -18,12 +18,19 @@
 // 再两样（M2-P6 复核 F1、F2 之后，只读的快捷键回归用）：SDK 当前注册的全部快捷键（Facade 的 FShortcut 只能派发，列不出来），
 // 与编辑栏现在显示的文字（画在画布上，页面上读不出来）。
 // 还有页面里打包的链接地址判定（M3-P3 S2）：链接的改写器用的就是它（经 contracts 的 normalizeCellLinks），E2E 拿跨引擎的同一组用例
-// （contracts 的 link-address.test-support.ts）在三个浏览器里核对它的结果与 Node 相同
+// （contracts 的 link-address.test-support.ts）在三个浏览器里核对它的结果与 Node 相同。
+// 以及这个编辑器的打开自检的结果（M3-P4 设计 §3.11）：E2E 据此核对模板、样本与大表无误报，各种损坏的构造得到预期的失败；
+// 捕获时机的复核（M3-P4 设计 §3.15，DEF-003）：命令日志每条带时刻（performance.now()）；露出编辑器的变更检测（本地修改序号）、
+// 公式收齐与进度（与保存、自动保存读的是同一个跟踪器）与公式在哪里计算（测试构建可以选主线程模式，./formula-mode.ts）
 import type { CanonicalLink } from '@nerve-office/contracts'
 import type { Univer } from '@univerjs/core'
 import type { FUniver } from '@univerjs/core/facade'
+import type { ChangeTracker } from '../change-tracking/change-tracker.ts'
 import type { CommandEvent } from '../change-tracking/command-event.ts'
 import type { CommandKind } from '../change-tracking/command-record.ts'
+import type { FormulaProgress } from '../change-tracking/formula-settle-tracker.ts'
+import type { OpenCheck } from '../profile/open-check.ts'
+import type { FormulaMode } from '../profile/sheet-profile.ts'
 import { canonicalLink } from '@nerve-office/contracts'
 import { toCommandRecord } from '../change-tracking/command-event.ts'
 import { stringParam } from '../change-tracking/command-record.ts'
@@ -42,6 +49,13 @@ type Workbook = ReturnType<FUniver['createWorkbook']>
 export interface ProbeCommand {
   /** 从 1 开始的序号，按发生的顺序 */
   readonly seq: number
+  /** 记下的时刻（performance.now()，页面的导航开始是 0）：Worker 同步回来的 mutation 是它在主线程上执行的时刻 */
+  readonly at: number
+  /**
+   * 记下时编辑器的本地修改序号：变更检测在探针之前订阅（创建工作簿之前），所以执行完的那一条记下时，这条命令若被认作修改，序号已经加过了。
+   * 前后两条的差就是这条命令算了几次修改——捕获的时机按它（编辑器自己的判定）算，不按命令日志另做的判定
+   */
+  readonly changeSeq: number
   readonly phase: 'before' | 'executed'
   readonly id: string
   readonly kind: CommandKind
@@ -91,6 +105,16 @@ export interface EditorProbe {
    * 规范写法依赖各引擎的 WHATWG URL，E2E 经它在三个浏览器里跑跨引擎的同一组用例
    */
   readonly canonicalLink: (url: string) => CanonicalLink
+  /** 这个编辑器的打开自检的结果（与 SheetEditor.openCheck 相同） */
+  readonly openCheck: OpenCheck
+  /** 编辑器的本地修改序号（变更检测，与保存读的是同一个） */
+  readonly changeSeq: () => number
+  /** 公式收齐了没有（formula-settle-tracker.ts 的三个条件，与保存等的是同一个判断） */
+  readonly formulasSettled: () => boolean
+  /** 公式计算的进度（轮数、开始、被停、完成、带结果与已写回的表、有没有排队） */
+  readonly formulaProgress: () => FormulaProgress
+  /** 公式在哪里计算：worker 或 main-thread（测试构建经地址参数选，./formula-mode.ts） */
+  readonly formulaMode: FormulaMode
 }
 
 declare global {
@@ -133,20 +157,28 @@ function readFormulaBar(editors: IEditorService): string {
   return dataStream.replace(BODY_END, '')
 }
 
-/** 装上探针的编辑器：Univer 实例（取快捷键与编辑器管理的服务）、它的 Facade 与工作簿 */
+/**
+ * 装上探针的编辑器：Univer 实例（取快捷键与编辑器管理的服务）、它的 Facade 与工作簿，变更检测与公式收齐的跟踪器，公式在哪里计算，
+ * 打开自检的结果
+ */
 export interface ProbeTarget {
   readonly univer: Univer
   readonly univerAPI: FUniver
   readonly workbook: Workbook
+  readonly changes: Pick<ChangeTracker, 'changeSeq' | 'formulasSettled' | 'formulaProgress'>
+  readonly formulaMode: FormulaMode
+  readonly openCheck: OpenCheck
 }
 
 /** 装上探针，返回移除它的函数（编辑器销毁时调用：退订命令事件；已经换成别的探针时不动 window 上的那个） */
-export function installEditorProbe({ univer, univerAPI, workbook }: ProbeTarget): () => void {
+export function installEditorProbe({ univer, univerAPI, workbook, changes, formulaMode, openCheck }: ProbeTarget): () => void {
   const log: ProbeCommand[] = []
   const record = (phase: ProbeCommand['phase'], event: FacadeEvent): void => {
     const command = toCommandRecord(event)
     log.push({
       seq: log.length + 1,
+      at: performance.now(),
+      changeSeq: changes.changeSeq(),
       phase,
       id: command.id,
       kind: command.kind,
@@ -173,6 +205,11 @@ export function installEditorProbe({ univer, univerAPI, workbook }: ProbeTarget)
     shortcuts: () => injector.get(IShortcutService).getAllShortcuts().map(toProbeShortcut),
     formulaBarText: () => readFormulaBar(injector.get(IEditorService)),
     canonicalLink,
+    changeSeq: changes.changeSeq,
+    formulasSettled: changes.formulasSettled,
+    formulaProgress: changes.formulaProgress,
+    formulaMode,
+    openCheck,
   }
   window.__nerveEditorProbe = probe
   return () => {

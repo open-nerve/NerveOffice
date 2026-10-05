@@ -1,7 +1,9 @@
 // 两个标签页，旧页面的保存不覆盖新内容（US-M1-07，P4 设计 §3.5.2、§3.10）。M3-P1 起同一时刻只有一个标签页能编辑（编辑租约，
 // P1 设计 §3.4.7）：后打开的只能阅读；前一个断网、休眠到编辑权到期之后才轮到它，前一个回来时续不上（别处在编辑或者保存过），
-// 再保存被拒、保留本页的内容。"到期"用改写租约行的时间模拟，前一个"断网、休眠"用拦下它的心跳模拟（support/sheet.ts 的
-// blockLeaseRenewals）：不拦的话，它自己的心跳会先一步得知到期、自动续上（期间没人保存过），后一个就接不了手。
+// 再保存被拒、保留本页的内容。"到期"用改写租约行的时间模拟，前一个"断网、休眠"用拦下它的心跳与保存模拟（support/sheet.ts 的
+// disconnectTab）：不拦心跳的话，它自己的心跳会先一步得知到期、自动续上（期间没人保存过），后一个就接不了手；M3-P4 起修改自动保存，
+// 不拦保存的话生产构建里停 2 秒就存上了（测试构建的夹具暂停了定时的上传，生产镜像里没有），在修改之前断开，两种构建里修改都没存上。
+// 恢复之后先发出的可能是自动保存的重试，按保存用快捷键（编辑权随之失效、没有保存按钮时它什么也不做）。
 // M3-P2 起打开即阅读、点"编辑"才申请编辑权；失去编辑权之后本页换成只读、显示本页的内容，给"另存为副本"与"放弃本页的修改"。
 // 两个人（US-M3-11）：甲断网、编辑权到期，乙接手并保存；甲回来之后的保存一定被拒，甲的内容另存为副本（服务端按快照新建，
 // 放在哪里按甲在原文档所在空间的新建权限，标题带上失效时的时间）。期间没人保存过时自动续上的情形在 lease-recovery.spec.ts
@@ -9,7 +11,8 @@ import { createDocumentIn, createFolderIn, createTeamSpace, createUser, expireEd
 import { expect, test } from '../../support/fixtures.ts'
 import { shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { blockLeaseRenewals, cellOf, createSheetThroughApi, editingNotice, EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, expectFoundOnce, isSaveRequest, leaveEditor, lostNotice, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, saveStatus, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, disconnectTab, editingNotice, EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, expectFoundOnce, headerAnnouncement, isSaveRequest, leaveEditor, lostNotice, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, saveStatus, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { recordStatusWrites, spokenWrites } from '../../support/status-writes.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -36,6 +39,8 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     await loginThroughApi(page, await createUser('conflict'))
     const documentId = await createSheetThroughApi(page)
     await openAndEnterEditing(page, documentId)
+    // A 断网、休眠（拦下心跳与保存）之后改了一处：这一处存不上
+    const asleep = await disconnectTab(page)
     await typeInCell(page, 'A1', 'from A')
 
     // B（同一个人的另一个标签页）：打开即阅读，读到编辑状态，说明是自己在另一个标签页或设备上编辑；能编辑的人照样有"编辑"，没有保存
@@ -45,8 +50,7 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     await expect(enterEditButton(other)).toBeVisible()
     await expect(saveButton(other)).toHaveCount(0)
 
-    // A 断网、休眠，编辑权到期（改写租约行的时间，不等真实的 90 秒）；B 点"编辑"，取得编辑权，键入并保存
-    const asleep = await blockLeaseRenewals(page)
+    // A 的编辑权到期（改写租约行的时间，不等真实的 90 秒）；B 点"编辑"，取得编辑权，键入并保存
     await expireEditLease(documentId)
     await enterEditing(other)
     await expect(saveButton(other)).toBeVisible()
@@ -56,8 +60,8 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
 
     // A 回来再保存：被拒（编辑权已经在 B 手里；A 的心跳也可能先一步得知），自动续上时被 B 占着：
     // 页头说明编辑权已失效、是自己在另一个标签页上编辑、本页的修改没有保存，可以另存为副本或者放弃；本页换成只读，没有保存按钮
-    await asleep.unblock()
-    await saveButton(page).click()
+    await asleep.reconnect()
+    await page.keyboard.press('ControlOrMeta+s')
     await expect(saveStatus(page)).toHaveText('编辑权已失效')
     const lost = lostNotice(page)
     await expect(lost).toContainText('编辑权已失效：你在另一个标签页或设备上正在编辑这份文档（要是刚刚关闭或刷新过那个页面，那边的编辑权最多 90 秒后自动结束，到时再点"编辑"就能编辑）。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
@@ -103,13 +107,20 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
       await route.fetch()
       await route.abort('connectionreset')
     }, { times: 1 })
-    await typeInCell(page, 'A1', 'first')
-    await saveButton(page).click()
-    await expect(saveStatus(page)).toHaveText('保存失败')
+    // 结果未知的失败会自动重试（M3-P4 设计 §3.8）：测试构建暂停了定时的上传，这里不会重试；生产构建里 2 秒之后原样重发那一次，
+    // 服务端按重放给出原来的结果——两条路都不报冲突，下面的结果相同。键入之后不回车、由按下的 Ctrl/Cmd+S 提交：单元格编辑器开着时自动保存
+    // 捕获不到这一处，回包丢了的一定是按的这一次。生产构建里看得见的"保存失败"一闪而过，看读屏播报区记下的话（审查 A7 的核对）
+    await recordStatusWrites(headerAnnouncement(page))
+    await typeInCell(page, 'A1', 'first', false)
+    await page.keyboard.press('ControlOrMeta+s')
+    await expect.poll(async () => (await spokenWrites(page)).map(write => write.text)).toContain('保存失败，稍后自动重试')
     expect((await savedContent(page, documentId)).revision).toBe(2)
 
-    // 接着修改再保存：基准修订号已经过时，冲突的来源是本页那一次保存，换上当前修订号重发
-    await typeInCell(page, 'A2', 'second')
+    // 接着修改再保存：基准修订号已经过时，冲突的来源是本页那一次保存，换上当前修订号重发（生产构建里重发的那一次可能已经认出它）。
+    // 按下保存时的提交等同回车，选区已在 A2：直接键入，不点画布——生产构建里重发成功时失败的提示条随之消失、画布跟着上移，点下去的那一刻
+    // 布局在变会点错格
+    await page.keyboard.type('second')
+    await page.keyboard.press('Enter')
     await saveAndWait(page)
     const saved = await savedContent(page, documentId)
     expect(saved.revision).toBe(3)
@@ -120,11 +131,12 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     await loginThroughApi(page, await createUser('conflict-reload'))
     const documentId = await createSheetThroughApi(page)
     await openAndEnterEditing(page, documentId)
+    // 这一页断网、休眠（拦下心跳与保存）之后改了一处：这一处存不上
+    const asleep = await disconnectTab(page)
     await typeInCell(page, 'B1', 'older page')
 
-    // 这一页断网、休眠，编辑权到期；另一个标签页接手、保存，然后离开（关闭页面时释放编辑权）。
+    // 编辑权到期；另一个标签页接手、保存，然后离开（关闭页面时释放编辑权）。
     // 等释放到了服务端再往下：这一页重新加载时要取得编辑权，释放晚到时它只能阅读（P1 设计 §7 第一条，P5 用 Web Locks 解决）
-    const asleep = await blockLeaseRenewals(page)
     await expireEditLease(documentId)
     const other = await context.newPage()
     await openAndEnterEditing(other, documentId)
@@ -136,8 +148,8 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
 
     // 这一页回来再保存被拒：自动续上时发现别处保存过更新的版本，不覆盖，说明之后给"另存为副本"与"放弃本页的修改"。
     // 放弃（先确认）：按服务器上的最新版本重建为阅读，不重新加载整页（不出现离开的提示）；之后点"编辑"照常编辑、保存
-    await asleep.unblock()
-    await saveButton(page).click()
+    await asleep.reconnect()
+    await page.keyboard.press('ControlOrMeta+s')
     const lost = lostNotice(page)
     await expect(lost).toContainText('编辑权已失效：编辑权中断期间，别处保存了更新的版本，本页不能再覆盖它。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
     const dialogs: string[] = []
@@ -169,10 +181,11 @@ test.describe('US-M3-11 过期的会话不能覆盖别人的保存：编辑权�
     const documentId = await createDocumentIn(space.id, lead, '共同的表', { folderId })
     await loginThroughApi(page, first)
     await openAndEnterEditing(page, documentId)
+    // 甲断网、休眠（拦下心跳与保存）之后改了一处：这一处存不上
+    const asleep = await disconnectTab(page)
     await typeInCell(page, 'A1', 'from first')
 
-    // 甲断网、休眠（拦下心跳），编辑权到期（改写租约行的时间，不等真实的 90 秒）；乙打开、点"编辑"接手，保存
-    const asleep = await blockLeaseRenewals(page)
+    // 甲的编辑权到期（改写租约行的时间，不等真实的 90 秒）；乙打开、点"编辑"接手，保存
     await expireEditLease(documentId)
     await loginThroughApi(anotherDevice, second)
     await openReader(anotherDevice, documentId)
@@ -181,18 +194,20 @@ test.describe('US-M3-11 过期的会话不能覆盖别人的保存：编辑权�
     await typeInCell(anotherDevice, 'B1', 'second only')
     await saveAndWait(anotherDevice)
 
-    // 甲恢复、按保存：被拒（编辑权已在乙手里，续上时被占用），什么也没存进去；本页换成只读、显示本页的内容，说明是乙在编辑，
-    // 还读得到，给"另存为副本"与"放弃本页的修改"
-    await asleep.unblock()
+    // 甲恢复、按保存（或者自动保存的重试先发出）：被拒（编辑权已在乙手里，续上时被占用），什么也没存进去；本页换成只读、显示本页的内容，
+    // 说明是乙在编辑，还读得到，给"另存为副本"与"放弃本页的修改"
     const lostFrom = Date.now()
-    await saveButton(page).click()
+    await asleep.reconnect()
+    await page.keyboard.press('ControlOrMeta+s')
     const lost = lostNotice(page)
     await expect(lost).toContainText(`编辑权已失效：${shownName(second)} 正在编辑这份文档`)
     await expect(lost).toContainText('本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
     const lostBy = Date.now()
     await waitForEditorAccess(page, 'read')
+    // 服务器上是乙的内容、没有甲的：按内容断言，不数修订号——生产构建里乙的自动保存与按的保存之间有迟到的派生修改时多一个修订（审查 A7）
     const rejected = await savedContent(page, documentId)
-    expect([rejected.revision, cellOf(rejected.snapshot, 'A1')?.v]).toEqual([2, 'from second'])
+    expect([cellOf(rejected.snapshot, 'A1')?.v, cellOf(rejected.snapshot, 'B1')?.v]).toEqual(['from second', 'second only'])
+    expect(rejected.revision).toBeGreaterThanOrEqual(2)
 
     // 另存为副本：副本是甲的内容；甲在这个空间能新建，放进原文档所在的文件夹；标题是原标题加失效时的时间（页面所在的时区，写到分钟）
     await lost.getByRole('button', { name: '另存为副本', exact: true }).click()

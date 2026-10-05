@@ -60,7 +60,6 @@ test.describe('US-M3-04 同一时刻只有一个人能编辑：其他人打开�
     const documentId = await createDocumentIn(space.id, lead, '共同的表')
     await loginThroughApi(page, first)
     await openAndEnterEditing(page, documentId)
-    await typeInCell(page, 'A1', 'from first')
 
     // 乙（编辑者）：打开即阅读，读到编辑状态——甲在编辑，自己现在只能阅读；有"编辑"
     await loginThroughApi(anotherDevice, second)
@@ -83,7 +82,9 @@ test.describe('US-M3-04 同一时刻只有一个人能编辑：其他人打开�
     await expect(editingNotice(anotherDevice)).toHaveText(editingBy(first, false))
     await expect(enterEditButton(anotherDevice)).toHaveCount(0)
 
-    // 甲不受影响：照常保存
+    // 甲不受影响：照常编辑、保存。甲在乙与丙打开之后才改：修改自动保存（M3-P4），先改的话生产构建里停 2 秒就存上了，阅读的两边
+    // 随后读到"有更新"，说明区里多一句
+    await typeInCell(page, 'A1', 'from first')
     await saveAndWait(page)
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('from first')
   })

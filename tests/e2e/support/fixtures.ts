@@ -10,8 +10,16 @@
 // 另一台设备的上下文同样挂上；每个用例结束时断言一条都没有。浏览器的通知不是应用的错误，照旧排除（support/page-errors.ts：ResizeObserver 的通知、
 // WebKit 在整页跳转时取消同源加载的诊断），排除掉的另记一份；排除的写法与接线由 page-errors.test.ts 核对，
 // 真正没接住的异常在真实的浏览器里照样报出由 specs/foundation/page-errors.spec.ts 核对。
+//
+// 自动保存（M3-P4 设计 §3.14）：测试构建里定时的自动保存默认暂停（autosave 选项默认 held，每个文档加载之前经 addInitScript 写
+// sessionStorage，另一台设备的上下文同样）：现有的用例按"按保存才上传"的语义成立，立即上传（保存按钮、快捷键、退出编辑、切到后台）照常。
+// 要自动保存的用例 test.use({ autosave: 'running' })，或者打开之后经 support/autosave.ts 放开。外部模式（生产镜像）里没有这个控制，
+// 自动保存照常运行：那里会跑的用例（没有 @test-build 的）要在自动保存照常运行时也成立（M3-P4 S6 逐条改过），本机用 E2E_AUTOSAVE=running 核对
 import type { BrowserContext, Page } from '@playwright/test'
+import type { AutosaveMode } from './autosave.ts'
+import process from 'node:process'
 import { test as base, expect } from '@playwright/test'
+import { applyAutosaveMode, autosaveModeScript } from './autosave.ts'
 import { watchPageErrors } from './page-errors.ts'
 
 export interface CspViolation {
@@ -70,18 +78,33 @@ export interface PageErrors {
   readonly watch: (context: BrowserContext) => void
 }
 
-export const test = base.extend<{ cspViolations: CspViolations, pageErrors: PageErrors, anotherDevice: Page }>({
+/** 这个浏览器上下文里每个文档加载之前写好"打开时定时的自动保存是否暂停"（support/autosave.ts） */
+async function chooseAutosave(context: BrowserContext, mode: AutosaveMode): Promise<void> {
+  await context.addInitScript(applyAutosaveMode, autosaveModeScript(mode))
+}
+
+export const test = base.extend<{ cspViolations: CspViolations, pageErrors: PageErrors, anotherDevice: Page, autosave: AutosaveMode, autosaveMode: void }>({
+  /**
+   * 打开时定时的自动保存暂停（held，默认）还是照常（running）。E2E_AUTOSAVE=running 让默认也照常：本机按生产镜像里的样子
+   * （自动保存照常运行）跑容器 E2E 会跑的那些用例（--grep-invert @test-build），三个浏览器都能核对它们与自动保存相容
+   */
+  autosave: [process.env.E2E_AUTOSAVE === 'running' ? 'running' : 'held', { option: true }],
+  autosaveMode: [async ({ context, autosave }, use) => {
+    await chooseAutosave(context, autosave)
+    await use()
+  }, { auto: true }],
   /**
    * 另一台设备（M2-P1）：新的浏览器上下文，Cookie 与本用例的页面不共用；沿用配置里的基础地址、证书与语言设置。
    * 用来验证"其他地方的登录被退出"等跨会话的行为；用例结束时关闭。
    * 同样收集 CSP 违规（审查 B1）。trace 与失败时的截图不用另做：测试运行器对用例里新建的每个上下文都开 trace，
    * 关闭上下文时给它的页面截图（Playwright 的 ArtifactsRecorder），按配置的 retain-on-failure、only-on-failure 保留
    */
-  anotherDevice: async ({ browser, cspViolations, pageErrors }, provide, testInfo) => {
+  anotherDevice: async ({ browser, cspViolations, pageErrors, autosave }, provide, testInfo) => {
     const { baseURL, ignoreHTTPSErrors, locale, timezoneId } = testInfo.project.use
     const context = await browser.newContext({ baseURL, ignoreHTTPSErrors, locale, timezoneId })
     await cspViolations.watch(context)
     pageErrors.watch(context)
+    await chooseAutosave(context, autosave)
     await provide(await context.newPage())
     await context.close()
   },

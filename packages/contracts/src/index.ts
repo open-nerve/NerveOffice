@@ -85,6 +85,16 @@ export type {
 } from './auth/links.ts'
 export { isPlatformAssetAddress } from './documents/asset-address.ts'
 export {
+  AUTOSAVE_CAPTURE_MAX_MS,
+  AUTOSAVE_CAPTURE_QUIET_MS,
+  AUTOSAVE_CAPTURE_SPACING_FACTOR,
+  AUTOSAVE_RETRY_AFTER_MAX_MS,
+  AUTOSAVE_RETRY_INITIAL_MS,
+  AUTOSAVE_RETRY_MAX_MS,
+  AUTOSAVE_UPLOAD_MAX_MS,
+  AUTOSAVE_UPLOAD_QUIET_MS,
+} from './documents/autosave.ts'
+export {
   CLIENT_BUILD_MAX_LENGTH,
   CLIENT_OUTDATED_REASONS,
   clientBuildSchema,
@@ -192,8 +202,24 @@ export type {
 } from './documents/editing.ts'
 export { canonicalLink, checkCellLinks, HYPERLINK_RANGE_TYPE, LINK_ADDRESS_INVALID_REASONS, LINK_ADDRESS_MAX_LENGTH, normalizeCellLinks } from './documents/link-address.ts'
 export type { CanonicalLink, CellLinkRule, LinkAddressInvalidReason } from './documents/link-address.ts'
-export { checkResources, isDeepEmpty, PROFILE_RESOURCES, profileResourceNames, shrunkResources } from './documents/profile-resources.ts'
-export type { ProfileResourceName, ResourceCheck, ResourceEntryKind, ResourceRule, ResourceRuleId } from './documents/profile-resources.ts'
+export {
+  compareOpenCheckFailures,
+  ERROR_NAME_PATTERN,
+  errorNameOf,
+  isProfileFailure,
+  OPEN_CHECK_ACCESS,
+  OPEN_CHECK_FAILURE_KINDS,
+  OPEN_CHECK_FAILURES_MAX,
+  OPEN_CHECK_TRIGGERS,
+  PROFILE_FAILURE_KINDS,
+  RESOURCE_NAME_PATTERN,
+  THROWN_FAILURE_KINDS,
+} from './documents/open-check-failures.ts'
+export type { OpenCheckFailure, OpenCheckFailureKind } from './documents/open-check-failures.ts'
+export { openCheckFailureSchema, openCheckReportSchema } from './documents/open-check.ts'
+export type { OpenCheckReport } from './documents/open-check.ts'
+export { checkResources, hasResourceContent, isDeepEmpty, lostResources, nonEmptyResourceNames, PROFILE_RESOURCES, profileResourceNames, shrunkResources } from './documents/profile-resources.ts'
+export type { LostResources, ProfileResourceName, ResourceCheck, ResourceEntryKind, ResourceOutput, ResourceRule, ResourceRuleId } from './documents/profile-resources.ts'
 export { SHEET_TEMPLATE, SHEET_TEMPLATE_UNIT_ID, sheetSnapshotFor } from './documents/sheet-template.ts'
 export { SNAPSHOT_RULES, snapshotInvalidDetailsSchema } from './documents/snapshot-rules.ts'
 export type { RuleCheck, SnapshotInvalidDetails, SnapshotRule } from './documents/snapshot-rules.ts'

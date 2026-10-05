@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DOCUMENT_PROFILES } from './documents.ts'
-import { checkResources, isDeepEmpty, PROFILE_RESOURCES, profileResourceNames, shrunkResources } from './profile-resources.ts'
+import { checkResources, hasResourceContent, isDeepEmpty, lostResources, nonEmptyResourceNames, PROFILE_RESOURCES, profileResourceNames, shrunkResources } from './profile-resources.ts'
 import { SHEET_TEMPLATE } from './sheet-template.ts'
 
 /** 全部 10 项都在、都为空的资源（模板的写法） */
@@ -169,5 +169,130 @@ describe('不缩水（shrunkResources）', () => {
 
   it('上一版没有非空的资源：不会缩水', () => {
     expect(shrunkResources([], [], 'sheet@1')).toEqual([])
+  })
+})
+
+describe('资源有没有内容（hasResourceContent，打开自检的口径）', () => {
+  it.each(['', '{}', '[]', 'null', '""', '{"s1":[]}', '{"s1":{"0":{}}}', '{"rangeThemeStyleRuleMap":{},"rangeThemeStyleMapJson":{}}'])('没有内容：%j', (data) => {
+    expect(hasResourceContent(data)).toBe(false)
+  })
+
+  it.each([
+    ['有规则', '{"s1":[{"cfId":"c1"}]}'],
+    ['数字（结构不对也算有内容）', '{"s1":5}'],
+    ['0 与 false 都不为空', '{"s1":{"a":0}}'],
+    ['截断的 JSON：解析不了，算有内容', '{"s1":[{"cfId":"c'],
+    ['不是 JSON 的文字', 'not json'],
+    ['只有空白的串不是空串：解析不了，算有内容', ' '],
+  ])('有内容：%s', (_case, data) => {
+    expect(hasResourceContent(data)).toBe(true)
+  })
+
+  it('不是字符串的（没经过服务端检查的数据）按深层为空判断；任何输入都不抛出', () => {
+    expect([undefined, null, {}, [], { s1: [] }].map(hasResourceContent)).toEqual([false, false, false, false, false])
+    expect([5, true, { s1: [{ id: 'r' }] }, ['x']].map(hasResourceContent)).toEqual([true, true, true, true])
+    expect(hasResourceContent(`{"s1":${'['.repeat(100_000)}${']'.repeat(100_000)}}`)).toBe(false)
+  })
+})
+
+describe('载入的快照里非空的白名单资源（nonEmptyResourceNames，按 SDK 的读法）', () => {
+  it('模板：一项都没有；非空的按名称排序给出', () => {
+    expect(nonEmptyResourceNames(TEMPLATE_RESOURCES, 'sheet@1')).toEqual([])
+    const resources = [
+      { name: 'SHEET_NOTE_PLUGIN', data: '{"s1":{"0":{"0":{"note":"备注"}}}}' },
+      { name: 'SHEET_CONDITIONAL_FORMATTING_PLUGIN', data: '{"s1":[{"cfId":"c1"}]}' },
+      { name: 'SHEET_FILTER_PLUGIN', data: '{"s1":{}}' },
+      { name: 'SHEET_DATA_VALIDATION_PLUGIN', data: '{"s1":[' },
+    ]
+    expect(nonEmptyResourceNames(resources, 'sheet@1')).toEqual(['SHEET_CONDITIONAL_FORMATTING_PLUGIN', 'SHEET_DATA_VALIDATION_PLUGIN', 'SHEET_NOTE_PLUGIN'])
+  })
+
+  it('同名的取第一条（SDK 加载时按名称找第一条）：第一条为空就不算，第一条非空就算', () => {
+    const empty = { name: 'SHEET_NOTE_PLUGIN', data: '' }
+    const full = { name: 'SHEET_NOTE_PLUGIN', data: '{"s1":{"0":{"0":{"note":"x"}}}}' }
+    expect(nonEmptyResourceNames([empty, full], 'sheet@1')).toEqual([])
+    expect(nonEmptyResourceNames([full, empty], 'sheet@1')).toEqual(['SHEET_NOTE_PLUGIN'])
+  })
+
+  it('只算白名单里的名字：白名单之外的（本来就会被丢掉的本地授权服务的资源、文字文档的资源）、原型上的名字都不算', () => {
+    const resources = [
+      { name: 'SHEET_AuthzIoMockService_PLUGIN', data: '{"x":1}' },
+      { name: 'DOC_DRAWING_PLUGIN', data: '{"x":1}' },
+      { name: '__proto__', data: '{"x":1}' },
+      { name: 'constructor', data: '{"x":1}' },
+    ]
+    expect(nonEmptyResourceNames(resources, 'sheet@1')).toEqual([])
+  })
+
+  it('容错：不是数组、某一项不是对象、名称不是字符串都跳过，不抛出；data 不是字符串的按深层为空判断', () => {
+    for (const value of [undefined, null, 0, 'x', {}, { SHEET_NOTE_PLUGIN: '{"a":1}' }])
+      expect(nonEmptyResourceNames(value, 'sheet@1')).toEqual([])
+    const resources = [null, 'SHEET_NOTE_PLUGIN', ['SHEET_NOTE_PLUGIN', '{"a":1}'], { name: 1, data: '{"a":1}' }, { name: 'SHEET_FILTER_PLUGIN', data: { s1: { ref: 1 } } }, { name: 'SHEET_NOTE_PLUGIN' }]
+    expect(nonEmptyResourceNames(resources, 'sheet@1')).toEqual(['SHEET_FILTER_PLUGIN'])
+  })
+})
+
+describe('打开自检的资源比较（lostResources）', () => {
+  const sample = [
+    { name: 'SHEET_CONDITIONAL_FORMATTING_PLUGIN', data: '{"s1":[{"cfId":"c1","ranges":[{"startRow":0}]}]}' },
+    { name: 'SHEET_NOTE_PLUGIN', data: '{"s1":{"0":{"7":{"note":"备注"}}}}' },
+    { name: 'SHEET_FILTER_PLUGIN', data: '{"s2":{"ref":{"startRow":0}}}' },
+    { name: 'SHEET_DATA_VALIDATION_PLUGIN', data: '{"s1":[{"uid":"d1"}]}' },
+    { name: 'SHEET_RANGE_PROTECTION_PLUGIN', data: '' },
+    { name: 'SHEET_DEFINED_NAME_PLUGIN', data: '{}' },
+  ]
+  const outputsOf = (resources: readonly { name: string, data: string }[]): { name: string, data: string }[] => resources.map(({ name, data }) => ({ name, data }))
+
+  it('加载之后原样都在：没有丢失；模板加载之后同样没有', () => {
+    expect(lostResources(sample, outputsOf(sample), 'sheet@1')).toEqual({ missing: [], emptied: [] })
+    expect(lostResources(TEMPLATE_RESOURCES, outputsOf(TEMPLATE_RESOURCES), 'sheet@1')).toEqual({ missing: [], emptied: [] })
+  })
+
+  it('内容变了而仍有内容的不算（SDK 合法地改写，例如补上默认字段）', () => {
+    const after = outputsOf(sample).map(item => item.name === 'SHEET_NOTE_PLUGIN' ? { ...item, data: '{"s1":{"0":{"7":{"note":"备注","width":160}}}}' } : item)
+    expect(lostResources(sample, after, 'sheet@1')).toEqual({ missing: [], emptied: [] })
+  })
+
+  it('非空的资源加载之后不在了（hook 没有注册）：missing；按名称排序', () => {
+    const after = outputsOf(sample).filter(item => item.name !== 'SHEET_NOTE_PLUGIN' && item.name !== 'SHEET_CONDITIONAL_FORMATTING_PLUGIN')
+    expect(lostResources(sample, after, 'sheet@1')).toEqual({ missing: ['SHEET_CONDITIONAL_FORMATTING_PLUGIN', 'SHEET_NOTE_PLUGIN'], emptied: [] })
+  })
+
+  it.each(['', '{}', '{"s1":[]}', '{"s1":{"0":{}}}', 'null'])('非空的资源加载之后变空（%j）：emptied', (data) => {
+    const after = outputsOf(sample).map(item => item.name === 'SHEET_FILTER_PLUGIN' ? { ...item, data } : item)
+    expect(lostResources(sample, after, 'sheet@1')).toEqual({ missing: [], emptied: ['SHEET_FILTER_PLUGIN'] })
+  })
+
+  it('载入的数据是截断的 JSON（解析不了，算非空）：加载之后为空就是 emptied（被插件吞成空值）', () => {
+    const truncated = sample.map(item => item.name === 'SHEET_CONDITIONAL_FORMATTING_PLUGIN' ? { ...item, data: item.data.slice(0, 20) } : item)
+    const after = outputsOf(sample).map(item => item.name === 'SHEET_CONDITIONAL_FORMATTING_PLUGIN' ? { ...item, data: '{}' } : item)
+    expect(lostResources(truncated, after, 'sheet@1')).toEqual({ missing: [], emptied: ['SHEET_CONDITIONAL_FORMATTING_PLUGIN'] })
+  })
+
+  it('原来就为空的（空串、空对象、深层为空）加载之后不在或为空都不算', () => {
+    const before = [{ name: 'SHEET_FILTER_PLUGIN', data: '' }, { name: 'SHEET_NOTE_PLUGIN', data: '{"s1":{}}' }, { name: 'SHEET_CONDITIONAL_FORMATTING_PLUGIN', data: '{"s1":[]}' }]
+    expect(lostResources(before, [], 'sheet@1')).toEqual({ missing: [], emptied: [] })
+    expect(lostResources(before, [{ name: 'SHEET_FILTER_PLUGIN', data: '' }], 'sheet@1')).toEqual({ missing: [], emptied: [] })
+  })
+
+  it('白名单之外的资源不算：本来就会被丢掉', () => {
+    expect(lostResources([...sample, { name: 'SHEET_AuthzIoMockService_PLUGIN', data: '{"x":1}' }], outputsOf(sample), 'sheet@1')).toEqual({ missing: [], emptied: [] })
+  })
+
+  it('之后一侧解析不了的输出算有内容；同名的输出取第一条', () => {
+    const after = outputsOf(sample).map(item => item.name === 'SHEET_NOTE_PLUGIN' ? { ...item, data: '{"s1":' } : item)
+    expect(lostResources(sample, after, 'sheet@1')).toEqual({ missing: [], emptied: [] })
+    expect(lostResources(sample, [{ name: 'SHEET_NOTE_PLUGIN', data: '{}' }, ...outputsOf(sample)], 'sheet@1').emptied).toEqual(['SHEET_NOTE_PLUGIN'])
+  })
+
+  it('之前一侧按 SDK 的读法：同名的取第一条', () => {
+    const before = [{ name: 'SHEET_NOTE_PLUGIN', data: '' }, { name: 'SHEET_NOTE_PLUGIN', data: '{"s1":{"0":{"0":{"note":"x"}}}}' }]
+    expect(lostResources(before, [], 'sheet@1')).toEqual({ missing: [], emptied: [] })
+    expect(lostResources([...before].reverse(), [], 'sheet@1')).toEqual({ missing: ['SHEET_NOTE_PLUGIN'], emptied: [] })
+  })
+
+  it('任何之前一侧都不抛出', () => {
+    for (const value of [undefined, null, 5, 'x', {}, [null, 1, 'a', [], { name: 2 }]])
+      expect(lostResources(value, [], 'sheet@1')).toEqual({ missing: [], emptied: [] })
   })
 })

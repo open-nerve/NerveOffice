@@ -8,196 +8,33 @@
 // - read-only-formulas：缓存值缺失的公式在 Worker 里算出结果，没有被防火墙取消；
 // - edit-chrome：能编辑时同样的界面检查都看得到（工具栏、底栏、右键菜单），合成的右键与按键确实有效——只读时"没有"的对照；
 // - enter-exit（M3-P2 S5）：作者阅读 → 点页头真实的"编辑"（合成的点击）→ 经 Facade 改一格 → 点"退出编辑"（先保存）→ 回到阅读之后
-//   再试 Facade 的只读入口（样本去掉了图片，操作图片的几项不试，M3-P3）、撤销与重做与界面；两次切换的耗时按 ./switch-timing.ts 记下，随结果交回。
+//   再试 Facade 的只读入口（样本去掉了图片，操作图片的几项不试，M3-P3）、撤销与重做与界面；两次切换的耗时按 ./switch-timing.ts 记下，随结果交回；
+// - 捕获时机的复核（M3-P4 S1：环境、变更检测、公式时序 × 两种模式、自动行高、大表复制、组合输入、隐藏时保存；S7 起观察真实的自动保存）
+//   在 ./selftest-capture.ts。
+// 一次运行的共用部分（编辑器页交给自检的、一项检查怎么记、命令日志的查询）在 ./selftest-session.ts。
 // 只读的入口里能用 Facade 与合成事件执行的部分才在这里；可信的键盘输入、输入法与鼠标的拖动由 Playwright 的 WebKit 覆盖
 // （read-only.spec.ts、read-only-shortcuts.spec.ts），Worker 作用域里的错误这里看不到（设计 §3.5 第 4 条）。
 // 等待都等确定的信号（命令被取消、被拦下、执行完，提示出现），不用固定时长；每项有时限，超时记为不通过、接着做下一项；
 // 一个场景另有总时限，页面中途被隐藏（Safari 几秒之后就暂停隐藏的页面）时余下的检查不做——都照样把结果交回，看得到卡在哪里。
-import type { EditorProbe, ProbeCommand } from './e2e-probe.ts'
-import type { EntryApi, EntryOutcome, EntryRange, EntryScope, EntrySheet, EntryWorkbook, FacadeEntry } from './read-only-entries.ts'
+import type { EditorProbe } from './e2e-probe.ts'
+import type { EntryOutcome, EntryScope, FacadeEntry } from './read-only-entries.ts'
 import type { KeyCombo } from './selftest-dom.ts'
-import type { SelftestCheck, SelftestPage, SelftestReport, SelftestScenario, SelftestTiming } from './selftest-report.ts'
+import type { SelftestCheck, SelftestReport, SelftestScenario, SelftestTiming } from './selftest-report.ts'
+import type { SelftestApi, SelftestHost, Session } from './selftest-session.ts'
 import type { SwitchDirection, SwitchTimingRecorder } from './switch-timing.ts'
-import { canonicalJson, contentOf, documentChangeAttemptsIn, documentChangesIn, sameContent } from './content-compare.ts'
+import { canonicalJson, documentChangeAttemptsIn, documentChangesIn, sameContent } from './content-compare.ts'
 import { FACADE_ENTRIES, FORMULA_MUTATION_CELL, FORMULA_MUTATION_ID, PERMISSION_ALERT_TITLE, PROTECTION_WORDING, SHORTCUT_OUTCOMES, writeFormulaMutation } from './read-only-entries.ts'
+import { holdTimedAutosave } from './selftest-autosave.ts'
+import { CAPTURE_SCENARIO_RUNNERS, EXPECTS_HIDDEN } from './selftest-capture.ts'
 import { accessibleName, byExactText, byRole, centerOf, clickAt, dialogTitled, isShown, isVisible, keyboardTarget, nextFrames, pressKeys, rightClickAt, sheetCanvas, sheetTab, univerIsMac, waitFor } from './selftest-dom.ts'
 import { encodeSelftestReport, ENTER_EXIT_EDIT, isSelftestScenario, NEXT_PARAM, nextProblem, reportUrl, SELFTEST_PARAM, SELFTEST_REPORT_FORMAT } from './selftest-report.ts'
+import { adoptEditor, check, CHECK_TIMEOUT_MS, chromeButton, describe, describeCommand, describeView, differences, fail, fetchServerContent, has, lastSeq, SCENARIO_BUDGET_MS, seenSince, SIGNAL_TIMEOUT_MS, SWITCH_TIMEOUT_MS, truncate, untilSwitched } from './selftest-session.ts'
 import { installSwitchTiming, summarizeSwitch, SWITCH_TIMING_OPTIONS, switchDurations } from './switch-timing.ts'
 
-/** 编辑器页现在的样子：阅读还是编辑（edit-mode.ts 的状态，例如 reading、entering、editing、exiting）与编辑器容器的状态（loading、ready、steady、failed） */
-export interface SelftestPageView {
-  readonly mode: string | undefined
-  readonly surface: string
-}
-
-/** 编辑器页交给自检的（挂接在页面开始载入时就收集页面错误与可见性，到 steady 之后才引入这里） */
-export interface SelftestHost {
-  readonly documentId: string
-  readonly surface: HTMLElement
-  readonly chrome: HTMLElement
-  /** 编辑器页开始载入的时刻（ISO 8601） */
-  readonly startedAt: string
-  readonly page: SelftestPage
-  /** 编辑器页现在的样子：场景里点了"编辑""退出编辑"之后按它等 */
-  readonly view: () => SelftestPageView
-  readonly visibility: () => readonly string[]
-  readonly pageErrors: () => readonly string[]
-  readonly consoleErrors: () => readonly string[]
-  readonly ignoredNotices: () => readonly string[]
-}
-
-/**
- * 等一个信号（命令被取消、被拦下、执行完，提示出现或关掉）最多等多久：Playwright 的三个浏览器里这些信号都在 250 毫秒以内到达，
- * 留出二十倍的余量（与 E2E 的 expect.poll 同一个量级）
- */
-const SIGNAL_TIMEOUT_MS = 5_000
-
-/** 一项检查最多用多久：超时记为不通过（它的后续可能还在进行，下一项照常开始）。一项里最多等两三个信号 */
-const CHECK_TIMEOUT_MS = 15_000
-
-/**
- * 一个场景的检查一共最多用多久：超过之后余下的检查不再做、记为不通过，结果照样交回（真实 Safari 里一项接一项地超时，
- * 也要在驱动脚本的时限之内交回结果，看得到卡在哪里）。Playwright 的三个浏览器里一个场景十几秒
- */
-const SCENARIO_BUDGET_MS = 180_000
+export type { SelftestHost, SelftestPageView } from './selftest-session.ts'
 
 /** 公式在 Worker 里算出结果最多等多久（Worker 的启动与第一次计算） */
 const FORMULA_TIMEOUT_MS = 30_000
-
-/** 一次切换最多等多久：申请编辑权或保存、释放，重建，再到 steady（渲染完成之后 3 秒）。Playwright 的三个浏览器里 4 秒上下 */
-const SWITCH_TIMEOUT_MS = 60_000
-
-/** 每项的说明最多留多长：结果放在地址里 */
-const DETAIL_LIMIT = 600
-
-// ---- Facade：入口清单的声明之外，自检另外用到的几样（sheets 与 sheets-ui 的 Facade 都有） ----
-
-interface CellRect {
-  readonly startX: number
-  readonly startY: number
-  readonly endX: number
-  readonly endY: number
-}
-
-interface SelftestRange extends EntryRange {
-  /** 单元格在画布上的范围（相对画布的左上角，含行列表头；sheets-ui 的 Facade） */
-  readonly getCell: () => CellRect
-  readonly getA1Notation: () => string
-  /** 写入一个值（sheet.command.set-range-values） */
-  readonly setValue: (value: string) => unknown
-}
-
-interface SelftestSheet extends EntrySheet {
-  readonly getRange: (a1: string) => SelftestRange
-}
-
-interface SelftestWorkbook extends EntryWorkbook {
-  readonly getActiveSheet: () => SelftestSheet
-  readonly getSheetByName: (name: string) => SelftestSheet
-  /** 选区的主单元格；没有选区时是 null */
-  readonly getActiveCell: () => SelftestRange | null
-}
-
-interface SelftestApi extends EntryApi {
-  readonly getActiveWorkbook: () => SelftestWorkbook
-  readonly undo: () => Promise<boolean>
-  readonly redo: () => Promise<boolean>
-}
-
-/** 检查不通过：detail 说明看到了什么 */
-class CheckFailure extends Error {
-  override readonly name = 'CheckFailure'
-}
-
-function fail(detail: string): never {
-  throw new CheckFailure(detail)
-}
-
-function describe(error: unknown): string {
-  if (error instanceof CheckFailure)
-    return error.message
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error)
-}
-
-function truncate(text: string, limit = DETAIL_LIMIT): string {
-  return text.length <= limit ? text : `${text.slice(0, limit)}…`
-}
-
-async function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new CheckFailure(`${timeoutMs / 1000} 秒内没有做完`)), timeoutMs)
-  })
-  try {
-    return await Promise.race([work, timeout])
-  }
-  finally {
-    clearTimeout(timer)
-  }
-}
-
-/** 一次自检：探针、Facade、打开时的快照与记下的检查结果 */
-interface Session {
-  readonly host: SelftestHost
-  /** 当前的编辑器（探针与它的 Facade）：enter-exit 每次切换之后换上新的那一个（adoptEditor） */
-  probe: EditorProbe
-  api: SelftestApi
-  unitId: string
-  /** 比较的基准：打开时（自检开始时）的内存快照；enter-exit 退出编辑之后换成那时的 */
-  opened: string
-  readonly checks: SelftestCheck[]
-  /** 切换的耗时（enter-exit） */
-  readonly timings: SelftestTiming[]
-  /** 场景的检查最晚做到什么时候（performance.now()）：之后的检查不再做 */
-  readonly deadline: number
-  /** 页面被隐藏的时刻（自检开始之后第一次）：之后的检查不再做 */
-  hiddenAt?: string
-  formulaValues?: Record<string, unknown>
-}
-
-async function check(session: Session, id: string, run: () => Promise<string>, timeoutMs = CHECK_TIMEOUT_MS): Promise<boolean> {
-  const started = performance.now()
-  if (started > session.deadline) {
-    session.checks.push({ id, pass: false, detail: `没有做：这个场景的检查超过了总时限（${SCENARIO_BUDGET_MS / 1000} 秒）`, ms: 0 })
-    return false
-  }
-  if (session.hiddenAt !== undefined) {
-    session.checks.push({ id, pass: false, detail: `没有做：页面在 ${session.hiddenAt} 被隐藏（浏览器暂停隐藏页面的动画帧与计时器），之后的结果不可信，让浏览器的窗口露出来再跑`, ms: 0 })
-    return false
-  }
-  let pass = true
-  let detail: string
-  try {
-    detail = await withTimeout(run(), timeoutMs)
-  }
-  catch (error) {
-    pass = false
-    detail = describe(error)
-  }
-  session.checks.push({ id, pass, detail: truncate(detail), ms: Math.round(performance.now() - started) })
-  return pass
-}
-
-// ---- 命令日志 ----
-
-function lastSeq(probe: EditorProbe): number {
-  return probe.commands().at(-1)?.seq ?? 0
-}
-
-function describeCommand(command: ProbeCommand): string {
-  const phase = command.phase === 'executed' ? '执行' : command.canceled ? '取消' : '尝试'
-  return `${phase} ${command.id}`
-}
-
-/** mark 之后的命令（给不通过时的说明：最多 12 条） */
-function seenSince(probe: EditorProbe, mark: number): string {
-  const commands = probe.commands(mark)
-  return commands.length === 0 ? '之后没有命令' : `之后的命令：${commands.slice(0, 12).map(describeCommand).join('、')}${commands.length > 12 ? '…' : ''}`
-}
-
-function has(probe: EditorProbe, mark: number, phase: ProbeCommand['phase'], id: string, canceled?: boolean): boolean {
-  return probe.commands(mark).some(command => command.phase === phase && command.id === id && (canceled === undefined || command.canceled === canceled))
-}
 
 // ---- 界面 ----
 
@@ -244,19 +81,6 @@ async function settle(probe: EditorProbe, mark: number, outcome: EntryOutcome): 
   if (has(probe, mark, 'executed', outcome.blocked))
     fail(`${outcome.blocked} 执行了`)
   return `权限检查拦下 ${outcome.blocked}，提示"${alert}"`
-}
-
-/** 内容与 baseline 不同的部分（给不通过时的说明）：顶层的键，工作表按 id */
-function differences(baseline: string, current: string): string {
-  const before = contentOf(baseline) as Record<string, unknown>
-  const after = contentOf(current) as Record<string, unknown>
-  const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])]
-  const changed = keys.filter(key => canonicalJson(before[key]) !== canonicalJson(after[key]))
-  const sheetsBefore = (before.sheets ?? {}) as Record<string, unknown>
-  const sheetsAfter = (after.sheets ?? {}) as Record<string, unknown>
-  const sheets = [...new Set([...Object.keys(sheetsBefore), ...Object.keys(sheetsAfter)])]
-    .filter(id => canonicalJson(sheetsBefore[id]) !== canonicalJson(sheetsAfter[id]))
-  return `${changed.join('、')}${sheets.length > 0 ? `（工作表 ${sheets.join('、')}）` : ''}`
 }
 
 /** mark 之后内存里的内容与打开时相同，也没有改动文档的 mutation 执行 */
@@ -472,14 +296,6 @@ async function checkContextMenus(session: Session, present: boolean): Promise<vo
       fail('点"数据"之后它没有被选中')
     return seen
   })
-}
-
-/** 自检开始时（steady 之后）的内容与命令日志：之后的每一项都与它比较 */
-async function fetchServerContent(documentId: string): Promise<string> {
-  const response = await fetch(`/api/documents/${encodeURIComponent(documentId)}/content`, { cache: 'no-store', credentials: 'same-origin' })
-  if (!response.ok)
-    fail(`读服务器上的内容：${response.status}`)
-  return response.text()
 }
 
 /** 快照里一项资源的数据（JSON 解析之后；空串是 undefined） */
@@ -737,48 +553,6 @@ async function editChromeScenario(session: Session): Promise<void> {
 
 // ---- 进入、退出编辑（M3-P2 S5） ----
 
-/** 页头里看得见的、名称恰好是 name 的按钮 */
-function chromeButton(session: Session, name: string): HTMLElement | undefined {
-  return byRole('button', { name, root: session.host.chrome }).find(isVisible)
-}
-
-function describeView(session: Session): string {
-  const view = session.host.view()
-  return `页面 ${view.mode ?? '没有状态'}，编辑器 ${view.surface}，容器上是 ${session.host.surface.getAttribute('data-editor-access') ?? '没有编辑器'}`
-}
-
-/**
- * 点了"编辑""退出编辑"之后等页面到 target（editing 或 reading）的 steady，而且容器上是那一种编辑器（edit、read）。
- * 先等切换开始（页面进入过程中的状态 passing：entering、exiting；页头的处理是异步的，退出编辑先确认会话，点下去的那一刻还没开始）；
- * 之后离开了过程中的状态却没有到 target 时不再等：进入没有成功、退出时保存失败、失去编辑权
- */
-async function untilSwitched(session: Session, target: 'editing' | 'reading', passing: 'entering' | 'exiting'): Promise<void> {
-  const access = target === 'editing' ? 'edit' : 'read'
-  const mode = (): string | undefined => session.host.view().mode
-  if (!await waitFor(() => mode() === passing || mode() === target, SIGNAL_TIMEOUT_MS))
-    fail(`点了之后没有开始切换（${describeView(session)}）`)
-  const settled = (): boolean => {
-    const view = session.host.view()
-    if (view.mode === target)
-      return view.surface === 'steady' && session.host.surface.getAttribute('data-editor-access') === access
-    return view.mode !== passing
-  }
-  if (!await waitFor(settled, SWITCH_TIMEOUT_MS, 50))
-    fail(`${SWITCH_TIMEOUT_MS / 1000} 秒内没有到 steady（${describeView(session)}）`)
-  if (mode() !== target)
-    fail(`没有到${target === 'editing' ? '编辑' : '阅读'}（${describeView(session)}）`)
-}
-
-/** 切换之后换上新的编辑器：探针随编辑器重建（旧的销毁时撤掉，新的就绪时装上） */
-function adoptEditor(session: Session, previous: EditorProbe): void {
-  const probe = window.__nerveEditorProbe
-  if (probe === undefined || probe === previous)
-    fail('页面里没有换上新的编辑器的探针')
-  session.probe = probe
-  session.api = probe.univerAPI as unknown as SelftestApi
-  session.unitId = session.api.getActiveWorkbook().getId()
-}
-
 /** 点页头里的按钮（真实的按钮，合成的点击），等切换完；记下这次切换的耗时，返回说明 */
 async function switchBy(session: Session, timing: SwitchTimingRecorder, button: string, direction: Extract<SwitchDirection, 'enter' | 'exit'>): Promise<string> {
   const target = chromeButton(session, button)
@@ -863,6 +637,7 @@ const SCENARIOS: Readonly<Record<SelftestScenario, (session: Session) => Promise
   'read-only-formulas': formulasScenario,
   'edit-chrome': editChromeScenario,
   'enter-exit': enterExitScenario,
+  ...CAPTURE_SCENARIO_RUNNERS,
 }
 
 /** 跑一次自检，返回结果（不跳转） */
@@ -883,12 +658,15 @@ export async function runEditorSelftest(host: SelftestHost, scenario: string): P
     const session: Session = { host, probe, api, unitId: api.getActiveWorkbook().getId(), opened: probe.snapshot(), checks, timings, deadline: performance.now() + SCENARIO_BUDGET_MS }
     // 页面中途被隐藏（浏览器窗口被挡住、切到别的标签页）：Safari 几秒之后就暂停它，余下的检查不再做，趁计时器还在走把结果交回去。
     // 自检开始时已经隐藏了（到 steady 之前就被挡住：挂接只在页面一开始就隐藏时不等 steady）同样算：不然每项都在没有动画帧的页面上超时
+    // hidden-save 本来就要页面在中途变成隐藏（EXPECTS_HIDDEN），不按这一条处理
     const onVisibility = (): void => {
-      if (document.visibilityState === 'hidden')
+      if (document.visibilityState === 'hidden' && !EXPECTS_HIDDEN.has(scenario))
         session.hiddenAt ??= new Date().toISOString()
     }
     onVisibility()
     document.addEventListener('visibilitychange', onVisibility)
+    // 定时的自动保存先一律暂停（不依赖打开时的状态，审查 B1）；捕获时机的场景按需要放开（./selftest-autosave.ts）
+    holdTimedAutosave()
     try {
       await SCENARIOS[scenario](session)
     }
@@ -943,7 +721,10 @@ export async function runSelftestAndReport(host: SelftestHost): Promise<Selftest
     return undefined
   }
   const report = await runEditorSelftest(host, params.get(SELFTEST_PARAM) ?? '')
-  if (next !== null)
-    window.location.replace(reportUrl(next, await encodeSelftestReport(report)))
+  if (next !== null) {
+    const url = reportUrl(next, await encodeSelftestReport(report))
+    host.allowLeave()
+    window.location.replace(url)
+  }
   return report
 }

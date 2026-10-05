@@ -2,8 +2,8 @@
 // 编辑租约（M3-P1 设计 §3.2、§3.4.7）：申请、心跳续租、释放，保存带上租约的令牌与代次；
 // 阅读模式（M3-P2 设计 §3.2）：内容的条件读取（If-None-Match，没有变化时 304）、编辑状态（阅读页每 30 秒一次）、另存为副本；
 // 保存协议（M3-P3 设计 §3.5、§3.8）：保存、另存为副本、申请编辑权与心跳都带上本页的构建与数据格式（client-format.ts），
-// 保存与另存为副本另带"公式待更新"。
-import type { AcquiredEditLease, ConflictCopyQuery, CreatedDocument, DocumentDetail, EditStatus, RenewedEditLease, SaveContentResponse } from '@nerve-office/contracts'
+// 保存与另存为副本另带"公式待更新"。打开自检（M3-P4 设计 §3.13）：失败的上报。
+import type { AcquiredEditLease, ConflictCopyQuery, CreatedDocument, DocumentDetail, EditStatus, OpenCheckReport, RenewedEditLease, SaveContentResponse } from '@nerve-office/contracts'
 import type { SaveRequest } from './save-coordinator.ts'
 import { acquiredEditLeaseSchema, createdDocumentSchema, documentDetailSchema, EDIT_LEASE_HEADER, editStatusSchema, renewedEditLeaseSchema, revisionEtag, revisionFromEtag, saveContentResponseSchema, SNAPSHOT_UPLOAD_CONTENT_TYPE } from '@nerve-office/contracts'
 import { apiFetch, apiRequest, readJson, ResponseFormatError, serverTimeOf } from '../../shared/api/index.ts'
@@ -105,6 +105,15 @@ export async function gzipText(text: string): Promise<Uint8Array<ArrayBuffer>> {
   return new Uint8Array(await new Response(source.pipeThrough(new CompressionStream('gzip'))).arrayBuffer())
 }
 
+/**
+ * 快照 UTF-8 字节的 SHA-256（十六进制）：自动保存会话内去重的键（M3-P4 设计 §3.7）。不用弱哈希——碰撞会让改过的内容不上传，就是丢数据。
+ * crypto.subtle 只在安全上下文里有（HTTPS 与本机地址）；没有时抛出，自动保存这一次不去重（照常上传）
+ */
+export async function snapshotDigest(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+}
+
 /** 保存（带上编辑租约的代次与令牌、"公式待更新"、本页的构建与数据格式）：内容与当前相同时服务端回答 unchanged，照"已保存"处理 */
 export async function saveContent(documentId: string, request: SaveRequest, compressed: Uint8Array<ArrayBuffer>, lease: LeaseCredentials): Promise<SaveContentResponse> {
   const query = new URLSearchParams({
@@ -135,6 +144,15 @@ export async function acquireEditLease(documentId: string, clientInstanceId: str
  */
 export async function renewEditLease(documentId: string, token: string, idleSeconds: number): Promise<RenewedEditLease> {
   return apiRequest(leasePath(documentId), { method: 'PUT', body: { idleSeconds, ...PAGE_CLIENT_FORMAT }, headers: leaseHeaders(token), schema: renewedEditLeaseSchema })
+}
+
+/**
+ * 打开自检失败的上报（204，M3-P4 设计 §3.13）：请求体由 open-check-report.ts 给出（普通的 JSON；不经 apiRequest——那要响应的结构，
+ * 这个接口没有响应体，也不引用带 zod 的 openCheckReportSchema）。能读这份文档就能报；服务端去重、按账户限量，标为后台请求（不顺延登录）。
+ * 失败时抛出请求层的错误（调用方不看结果、不重试）
+ */
+export async function reportOpenCheckFailures(documentId: string, report: OpenCheckReport): Promise<void> {
+  await apiFetch(`${documentPath(documentId)}/open-check-failures`, { method: 'POST', body: { contentType: 'application/json', data: JSON.stringify(report) } })
 }
 
 /**

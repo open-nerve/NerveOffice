@@ -5,6 +5,7 @@
 import type { EditorProbe } from './e2e-probe.ts'
 import type { SelftestHost } from './selftest.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { AUTOSAVE_CONTROL_GLOBAL, installAutosaveControl } from './autosave-control.ts'
 import { runEditorSelftest, runSelftestAndReport } from './selftest.ts'
 
 function host(): SelftestHost {
@@ -16,6 +17,7 @@ function host(): SelftestHost {
     page: { state: 'ready', readOnly: true },
     view: () => ({ mode: 'reading', surface: 'steady' }),
     visibility: () => ['2026-10-04T06:13:41.488Z visible', '2026-10-04T06:13:43.320Z hidden'],
+    allowLeave: () => {},
     pageErrors: () => [],
     consoleErrors: () => [],
     ignoredNotices: () => [],
@@ -53,6 +55,32 @@ describe('页面自检开始时页面已经隐藏', () => {
     const report = await runEditorSelftest(host(), 'read-only-formulas')
     expect(report.checks[0]).toMatchObject({ id: 'page.read-only', pass: false, detail: '页头：没有"只能查看"，没有保存按钮' })
     expect(report.failure).toBeUndefined()
+  })
+})
+
+describe('自检开始时暂停定时的自动保存（M3-P4 S7 审查 B1：结果不依赖打开时的状态）', () => {
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>)[AUTOSAVE_CONTROL_GLOBAL]
+  })
+
+  it('打开时照常、换过节奏的页面：自检开始时暂停定时的上传、换回默认的节奏（捕获时机的场景之后按需要放开）', async () => {
+    const defaults = { captureQuietMs: 1000, captureMaxMs: 3000, captureSpacingFactor: 10, uploadQuietMs: 2000, uploadMaxMs: 15_000, retryInitialMs: 2000, retryMaxMs: 60_000 }
+    const { control } = installAutosaveControl(window, defaults)
+    control.setLimits({ captureMaxMs: 50 })
+    expect(control.held()).toBe(false)
+    // 页面隐藏：各项都记为没有做，这里只看开始时的那一步
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    window.__nerveEditorProbe = PROBE
+    await runEditorSelftest(host(), 'read-only-formulas')
+    expect(control.held()).toBe(true)
+    expect(control.limits()).toEqual(defaults)
+  })
+
+  it('页面上没有控制（不是测试构建）：照常开始，不抛出', async () => {
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    window.__nerveEditorProbe = PROBE
+    const report = await runEditorSelftest(host(), 'read-only-formulas')
+    expect(report.failure).toMatch(/被隐藏，余下的检查没有做$/)
   })
 })
 

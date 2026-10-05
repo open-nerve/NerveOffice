@@ -42,7 +42,7 @@ import { allSheetsMenuButton, expectEntriesUnchanged, findApple, FORMULA_BAR_UNI
 import { SAMPLE_CELLS, SAMPLE_FORMULAS, SAMPLE_SHEETS, sampleWithoutFormulaValuesFor, sampleWithoutImagesFor } from '../../support/read-only-sample.ts'
 import { ALERT, closePermissionAlert, documentChangeAttempts, expectUnchanged, FORMULA_MUTATION_CELL, LOOK_ONCE, nextFrames, OPENED, openReadOnly, scene, SHORTCUT_OUTCOMES, unitIdOf, watch, writeFormulaMutation } from '../../support/read-only.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { EDITOR_TEST_TIMEOUT, openAndEnterEditing, resourceOf, saveButton, savedContent, selectCell, sheetCanvas, sheetTab, waitForEditorAccess } from '../../support/sheet.ts'
+import { EDITOR_TEST_TIMEOUT, openAndEnterEditing, resourceOf, saveButton, savedContent, saveStatus, selectCell, sheetCanvas, sheetTab, waitForEditorAccess } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -330,7 +330,7 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
     const watched = watch(page, s.documentId)
     await page.reload()
     await waitForEditorAccess(page, 'read', OPENED)
-    await expect(page.locator('#editor-chrome').getByText('只能查看', { exact: true })).toBeVisible()
+    await expect(saveStatus(page)).toHaveText('只能查看')
     await expect(saveButton(page)).toHaveCount(0)
     await expect(page.getByRole('toolbar')).toHaveCount(0)
     const opened = await probeSnapshot(page)
@@ -376,7 +376,11 @@ async function expectEditingChrome(page: Page, mode: Mode): Promise<void> {
     : expect(locator).toHaveCount(0, LOOK_ONCE)
   // 页头：能编辑时有保存按钮；只读时显示"只能查看"
   await count(saveButton(page))
-  await expect(page.locator('#editor-chrome').getByText('只能查看', { exact: true })).toHaveCount(present ? 0 : 1)
+  // 页头里看得见的状态（读屏的播报区是视觉隐藏的副本，M3-P4）
+  if (present)
+    await expect(saveStatus(page)).not.toHaveText('只能查看')
+  else
+    await expect(saveStatus(page)).toHaveText('只能查看')
   // 工具栏：功能区的标签页、工具栏与其中的命令按钮
   await count(page.getByRole('tab', { name: '开始', exact: true }))
   await count(page.getByRole('toolbar'))

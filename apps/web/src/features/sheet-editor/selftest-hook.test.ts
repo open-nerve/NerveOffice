@@ -38,7 +38,7 @@ const READY: EditorPageLoad = { kind: 'ready', documentId: DOCUMENT_ID, title: '
 
 /** 就绪的页面：阅读（readOnly）或编辑，编辑器的容器到了 surface 这一步 */
 function ready(surface: 'ready' | 'steady', readOnly = true): Partial<EditorPageView> {
-  const mode = readOnly ? { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined } as const : { kind: 'editing' } as const
+  const mode = readOnly ? { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined, formulasPending: false, damaged: undefined } as const : { kind: 'editing' } as const
   return { load: READY, mode, surface }
 }
 
@@ -184,5 +184,27 @@ describe('页面自检的挂接', () => {
     expect(host.consoleErrors()).toEqual(['出错了 {"code":1}'])
     expect(forwarded).toHaveBeenCalledWith('出错了', { code: 1 })
     expect(host.visibility()).toEqual([expect.stringMatching(new RegExp(`^\\S+ ${document.visibilityState}$`))])
+  })
+
+  it('自检交回结果、整页跳走的那一刻（allowLeave 之后）编辑器页的离开提示不拦；之前照常（这一页有过可信的用户操作时浏览器会弹"确定离开"，自检就停住了）', async () => {
+    // 与页面相同的先后：离开提示（page-guards.ts）先装、在冒泡阶段；挂接后装、在捕获阶段
+    const guard = vi.fn((event: Event) => event.preventDefault())
+    window.addEventListener('beforeunload', guard)
+    try {
+      const { page, set } = fakePage()
+      watchForSelftest(page, elements)
+      set(ready('steady'))
+      const host = await hostOfFirstRun()
+      const before = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(before)
+      expect([guard.mock.calls.length, before.defaultPrevented]).toEqual([1, true])
+      host.allowLeave()
+      const leaving = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(leaving)
+      expect([guard.mock.calls.length, leaving.defaultPrevented]).toEqual([1, false])
+    }
+    finally {
+      window.removeEventListener('beforeunload', guard)
+    }
   })
 })

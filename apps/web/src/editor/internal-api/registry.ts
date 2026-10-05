@@ -55,6 +55,15 @@ const CELL_LINK_REGRESSION = [
   'template.spec.ts（键入、粘贴网址之后保存的是规范写法）',
 ].join('')
 
+/** 打开自检的资源守卫（M3-P4 设计 §3.11）：单元测试与三个浏览器的 E2E。SDK 升级改了资源 hook 的注册时机、名字或加载路径时这组先失败 */
+const RESOURCE_LOAD_GUARD_REGRESSION = [
+  '单元测试 internal-api/resource-load-guard.test.ts（真实的 Univer core 带上守卫，假 hook 分别走单元加入时的 loadResources 与晚注册的 loadHookResource：',
+  '解析抛错、吞成空值、加载抛错、序列化抛错各一类，空串与深层为空的输入不误报；包装只观察——异常原样抛出、返回值原样返回、this 与 toJson 的第二个参数原样交给插件）、',
+  'profile/open-check.test.ts（判定）、sheet-editor.test.ts（jsdom 里真实的 Univer core 与带资源 hook 的十个数据插件：模板与各项资源都非空的快照 openCheck 通过，',
+  '截断的条件格式、截断的筛选、{表:5} 的筛选给出预期的失败；守卫在 new Univer 里、捕获在 createWorkbook 刚返回时）；',
+  'E2E tests/e2e/specs/editor/open-check.spec.ts（模板、只读样本与大表在本机三个浏览器里 openCheck 通过，经测试构建的探针读出）与 US-M3-15 的用例（S5）',
+].join('')
+
 export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
   {
     name: 'injectorOf',
@@ -80,9 +89,28 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
       ],
       '@univerjs/sheets': ['SetRangeValuesMutation'],
     },
-    purpose: '公式收齐（P4 设计 §3.6.6）：认出一轮计算的开始、停止、结果、逐表写回与完成',
-    evidence: 'M0-P3 报告 §3.3、§3.4、§7；engine-formula 的 calculate.controller.ts:232-257、formula-calculation-trigger.service.ts:166-176，sheets 的 calculate-result-apply.controller.ts:90-97；M0 的 e2e/v07-formula、v07-worker-timeline；P4 探针 (f) 在三个浏览器上录制的序列',
-    regression: FORMULA_SETTLE_REGRESSION,
+    purpose: [
+      '公式收齐（P4 设计 §3.6.6）：认出一轮计算的开始、停止、结果、逐表写回与完成；M3-P4：认出强制全量重算的触发命令（参数里 forceCalculation 为真，进入编辑时以 FORCED 创建的那一轮，收齐之前不补存）。',
+      'M3-P4（S5，设计 §3.14）：主线程公式模式下销毁编辑器之前，有一轮在算（开始了、还没有结束的通知）就同步执行停止的 mutation（带 onlyLocal），等这一轮结束的通知（completedStates，被停下的是 STOP_EXECUTION）',
+      '再销毁（formula-round-stop.ts，sheet-editor.ts 的 tearDown；编辑器槽位等它销毁完才新建）。依赖的约定：(1) 停止标记只在让出点检查（每 intervalCount 个公式一次，主线程模式是 20），',
+      '被停下的一轮在下一个让出点返回，随即发出结束的通知；(2) 销毁时停止标记被复位（运行时的 dispose 调 reset）——所以必须先停下、等到通知再销毁，否则旧的一轮在让出点之后接着跑，',
+      '用已经清空的函数表把只会得出 #NAME? 的语法树写进模块级的 FORMULA_AST_CACHE（同一页里所有实例共用，键里有 unitId），之后重建的编辑器命中它们；(3) Worker 模式下计算与这份缓存都在 Worker 里、随它终止，不需要等',
+    ].join(''),
+    evidence: [
+      'M0-P3 报告 §3.3、§3.4、§7；engine-formula 的 calculate.controller.ts:232-257、formula-calculation-trigger.service.ts:166-176，sheets 的 calculate-result-apply.controller.ts:90-97；M0 的 e2e/v07-formula、v07-worker-timeline；P4 探针 (f) 在三个浏览器上录制的序列；',
+      'M3-P4：sheets-formula 的 _getDirtyDataByCalculationMode（update-formula.controller.ts:290-305、trigger-calculation.controller.ts:299-315；1.0.1 的 lib/es/index.js:538、:2092 同样写 forceCalculation: calculationMode === 0）。',
+      'M3-P4 S1 真实 Safari 复核的 F2（reviews/P4-S1-真实Safari复核.md：四个浏览器复现，主线程模式下在计算中重建，110–350 个公式得出 #NAME?，Worker 模式不受影响）；engine-formula 1.0.1 的 lib/es/index.js：',
+      ':6084 模块级的 FORMULA_AST_CACHE、:6087-6102 generateAstNode 解析之后写进它；CalculateFormulaService._apply 在让出点（requestImmediateMacroTask，:14884-14891）之后才检查 isStopExecution（:14900），',
+      '停下时 markedAsStopFunctionsExecuted 并返回（:14902），execute 随即在锁里发出结束（:14796），CalculateController 把它写成 SetFormulaCalculationNotificationMutation（:15133-15145）；',
+      'FormulaRuntimeService.dispose 调 reset、把 _stopState 复位为 false（:10004-10006、:10086）；停止的 mutation 由 CalculateController 的命令监听调 stopFormulaExecution（:15060），',
+      '触发服务停下一轮也是这条 mutation、带 onlyLocal（formula-calculation-trigger.service.ts，:43746）；core 的 syncExecuteCommand 执行完同步送出 CommandExecuted（lib/es/index.js:2214-2245）',
+    ].join(''),
+    regression: [
+      `${FORMULA_SETTLE_REGRESSION}；M3-P4：formula-settle-tracker.test.ts"强制全量重算"（看到触发命令之前不算收齐）与 E2E tests/e2e/specs/editor/autosave.spec.ts"带公式待更新的文档进入编辑：强制重算之后补存"；`,
+      'M3-P4（S5）：单元测试 formula-round-stop.test.ts、formula-settle-tracker.test.ts"有一轮在算"、sheet-editor.test.ts"主线程模式下销毁之前停下正在算的一轮"、editor-slot.test.ts"销毁要等时"；',
+      'E2E tests/e2e/specs/editor/formula-rebuild.spec.ts（主线程模式下计算中进入编辑、退出编辑，之后公式的值都对；本机三个浏览器）与页面自检的校准（selftest.spec.ts 的 formula-timing-main：',
+      'formula.rebuild-during-calc 要求全部与按定义算出的一致；SDK 改了停止的做法时这几条先失败）',
+    ].join(''),
   },
   {
     name: 'CELL_LINK_PROTOCOL',
@@ -114,6 +142,35 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
       '（初次计算是 WHEN_EMPTY，HYPERLINK() 的格子没有 v，每次打开都重算：sheets-formula 的 trigger-calculation.controller.ts:291-322、engine-formula 的 formula-data.model.ts:758-796）',
     ].join(''),
     regression: CELL_LINK_REGRESSION,
+  },
+  {
+    name: 'createResourceLoadGuard',
+    origin: '@univerjs/core 的资源管理服务（IResourceManagerService 与它的实现 ResourceManagerService）、资源 hook 的形状（IResourceHook）、ILogService、UniverInstanceType.UNIVER_SHEET；平台对资源加载与序列化的观察的封装（Facade 之外，Facade 没有资源相关的 API）',
+    // resource-load-guard.ts：子类、工厂的覆盖与 hook 的类型
+    sdk: { '@univerjs/core': ['DependencyOverride', 'IDisposable', 'ILogService', 'IResourceHook', 'IResourceManagerService', 'ResourceManagerService', 'UniverInstanceType'] },
+    purpose: [
+      '打开自检（M3-P4 设计 §3.11，US-M3-15）：new Univer({ override }) 以 useFactory（deps: ILogService）换上 ResourceManagerService 的子类，只覆盖 registerPluginResource，',
+      '把每个 hook 的 parseJson、onLoad 包一层只观察的委托，记下 parse-threw（非空的输入解析时抛错）、parse-swallowed（非空的输入解析成深层为空的值）、load-threw（onLoad 抛错），',
+      '只记资源名、种类与异常的构造器名；另给出表格 hook 的名字（档案完整性）与逐个 hook 的 toJson（资源比较与 serialize-threw）。依赖的约定：',
+      '(1) 资源管理服务在注入器创建时就被资源加载服务取走，只能在构造 Univer 时覆盖；(2) 两条加载路径——单元加入时的 loadResources 与之后注册的 hook 经 register$ 的 loadHookResource——',
+      '调的都是登记进来的 hook（getAllResourceHooks 与 register$ 交出的都是交给 registerPluginResource 的那一个）；(3) loadResources 跳过空串，晚注册的路径照样把空串交给 parseJson；',
+      '(4) SDK 自己吞掉 parseJson、onLoad 的异常，只记日志；(5) 保存输出的正是 business 含 UNIVER_SHEET 的各 hook 的 toJson(unitId)；',
+      '(6) 表格的十个 hook 都在 createWorkbook() 同步返回之前注册并加载完（6 个在 Starting 走 loadResources，4 个在 Ready 走晚注册），之后不再注册；',
+      '(7) 各 hook 的 parseJson 返回 JSON 值（JSON.parse 的结果或 {}，无环的普通对象与数组），"吞成空值"用深层为空判断才成立',
+    ].join(''),
+    evidence: [
+      '1.0.1 的 core lib/es/index.js：ResourceManagerService :26688-26760（getResourcesByType :26709 按 business 过滤、registerPluginResource :26723 先放进表再经 register$ 发出、',
+      'loadResources :26733 按名称找第一条、data 为空串时跳过、catch 只记日志）；ResourceLoaderService :28452-28548（loadHookResource :28460 找到同名的就解析、不看是否为空，',
+      'catch 只打 console.error；handleHookAdd :28469；register$ 的订阅 :28501；单元加入时 loadResources :28502；saveUnit :28539 取 getResources(unitId, unit.type)）；',
+      'createUniverInjector :28681-28721（默认 [IResourceManagerService, { useClass: ResourceManagerService, lazy: true }] :28705，mergeOverrideWithDependencies 按标识替换，',
+      ':28719 touchDependencies 资源加载服务）；sheets 的 facade.js:7240 FWorkbook.save() 走 saveUnit。各 hook 的 parseJson（1.0.1 的 lib/es/index.js）：sheets 的区域主题 :1498、',
+      '工作表保护 :16277、保护点 :16325、定义名称 :17905、区域保护 :20714，sheets-drawing :804（toJson 另有第二个参数 model），sheets-conditional-formatting :2701，',
+      'sheets-note :487，data-validation :328——都是"空串给 {}、解析不了给 {}"；sheets-filter :726 是裸 JSON.parse（空串与截断的 JSON 都抛错）。',
+      'P4 设计前的探索 B 的探针（三个浏览器一致，scratchpad 的 p4b-probe-summary.txt）：两条路径都经过包装，十个表格 hook 在 createWorkbook 返回之前注册并加载完、之后没有再注册；',
+      '截断的筛选是解析抛错，截断的条件格式、数据验证、图片、备注、定义名称是吞成空值，{表:5} 与 {表:{a:1}} 的条件格式、数据验证是加载抛错，{表:5} 的备注静默装不进（只有资源比较认得出），',
+      '{表:5} 的筛选加载不报错、之后 toJson 抛错；筛选的 data 为空串时晚注册的路径照样解析而抛错（所以空串不算）；模板、只读样本、大表无误报；只捕获资源 ≤1 ms',
+    ].join(''),
+    regression: RESOURCE_LOAD_GUARD_REGRESSION,
   },
   {
     name: 'IAuthzIoService',
@@ -223,9 +280,20 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
   {
     name: 'NOTE_TEXTAREA_SELECTOR',
     origin: 'sheets-note-ui 的批注浮层给文本框的 DOM 标记 data-u-comp="note-textarea"（views/Note.tsx:156-158；design 的 Textarea 把它放在 <textarea> 上，1.0.1 的 lib/es/index.js:691）；平台对这个约定的封装',
-    purpose: '只读守卫（read-only/note-popup.ts）：在页面上观察批注浮层出现，把文本框设为只读',
+    purpose: '只读守卫（read-only/note-popup.ts）：在页面上观察批注浮层出现，把文本框设为只读；M3-P4：面板的防抖（PANEL_DEBOUNCES 的批注一项）认出批注浮层开着',
     evidence: 'M2-P3 S3 的 E2E：批注浮层总是可以输入的文本框（Note.tsx 没有只读的开关，打开时还会被程序聚焦，:98-106），只读时键入之后写回批注的 mutation 被防火墙取消、界面复原；修复时实测：设为只读之后键入不改内容，文字照常显示',
-    regression: `单元测试 read-only/note-popup.test.ts；${READ_ONLY_E2E}（悬停看到批注，文本框只读，键入之后内容不变）`,
+    regression: `单元测试 read-only/note-popup.test.ts；${READ_ONLY_E2E}（悬停看到批注，文本框只读，键入之后内容不变）；M3-P4 的回归见 PANEL_DEBOUNCES`,
+  },
+  {
+    name: 'PANEL_DEBOUNCES',
+    origin: '按防抖写模型的两个面板的 DOM 标记与防抖时长（SDK 里的字面量）：sheets-note-ui 的批注浮层（文本框 data-u-comp="note-textarea"，ui 的 useDebounceFn 默认 300 ms）、sheets-data-validation-ui 的详情面板（根元素 data-u-comp="data-validation-detail"，lodash debounce 1000 ms）；平台对这两项约定的封装',
+    purpose: '面板的防抖（M3-P4 设计 §3.4，panel-debounce-watch.ts）：这两个面板开着时有用户输入，就记下"SDK 的防抖到点"的时刻；退出编辑、交出与按保存的捕获之前（立即上传在按下时的准备：snapshot-capture.ts 的 settleInputs）、失去编辑权的捕获之前等到这一刻，最后的改动先写进模型再捕获、再销毁编辑器',
+    evidence: [
+      'ui 的 views/hooks/use-debounce.ts:19-30（组件卸载时不清计时器）与 sheets-note-ui 的 views/Note.tsx:110-143（1.0.1 的 ui lib/es/index.js:6584-6592、sheets-note-ui lib/es/index.js:648、:691）；',
+      'sheets-data-validation-ui 的 views/components/DataValidationDetail.tsx:65-72、:114（三种更新共用一个防抖，卸载时不 flush；1.0.1 的 lib/es/index.js:2931-2934、面板根元素 :3140）。',
+      '关闭面板不提交也不取消、没有对外的"立即提交"，只能等它到点；refer 的其余界面包的防抖只管界面（M3-P4 S4 逐包核对），图片的变换面板在 M5 之前进不来',
+    ].join(''),
+    regression: '单元测试 panel-debounce-watch.test.ts（面板开着时的输入才等、等到防抖到点、页头里的不算、销毁时放行）、snapshot-capture.test.ts（捕获之前先等面板）；E2E tests/e2e/specs/editor/autosave.spec.ts"批注里键入之后立即退出编辑""数据验证面板里改了之后立即退出编辑"：服务器上有这次的改动（本机三个浏览器）',
   },
   {
     name: 'FORMULA_BAR_INPUT_SELECTOR',

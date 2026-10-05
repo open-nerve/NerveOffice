@@ -1,10 +1,11 @@
 import type { Univer } from '@univerjs/core'
 import type { PluginEntry } from './plugin-entry.ts'
+import type { FormulaExecution } from './sheet-profile.ts'
 import { DOCUMENT_PROFILE_OF, profileResourceNames } from '@nerve-office/contracts'
 import { describe, expect, it, vi } from 'vitest'
 import { formulaWorkerPluginEntries } from './formula-worker-profile.ts'
 import { sheetMenuConfig } from './menu-config.ts'
-import { CHANGE_DETECTION_EXCLUDED_MUTATIONS, declaredSheetResources, SHEET_PLUGIN_GROUPS, SHEET_PROFILE_ID, sheetPluginEntries } from './sheet-profile.ts'
+import { CHANGE_DETECTION_EXCLUDED_MUTATIONS, declaredSheetResources, MAIN_THREAD_FORMULA_INTERVAL_COUNT, SHEET_PLUGIN_GROUPS, SHEET_PROFILE_ID, sheetPluginEntries } from './sheet-profile.ts'
 
 vi.hoisted(() => {
   // jsdom 没有 Path2D：数据验证的界面包在模块求值时就创建它。这里只展开档案，不运行 Univer
@@ -13,6 +14,9 @@ vi.hoisted(() => {
 
 const container = document.createElement('div')
 const formulaWorker = {} as Worker
+const formula: FormulaExecution = { kind: 'worker', worker: formulaWorker }
+/** 主线程模式（M3-P4 设计 §3.14：M0 推荐、M4 要用的退路，M3 只给测试构建用） */
+const mainThread: FormulaExecution = { kind: 'main-thread' }
 
 function names(entries: readonly PluginEntry[]): string[] {
   return entries.map(entry => entry.plugin.pluginName)
@@ -26,7 +30,7 @@ function configOf(entries: readonly PluginEntry[], pluginName: string): unknown 
 }
 
 describe('插件档案 sheet@1：注册顺序（插件档案 v1 §1，公式在 Worker 里计算）', () => {
-  const entries = sheetPluginEntries({ container, formulaWorker, access: 'edit' })
+  const entries = sheetPluginEntries({ container, formula, access: 'edit' })
 
   it('按组注册，组内与组间的顺序按官方 preset', () => {
     expect(SHEET_PROFILE_ID).toBe('sheet@1')
@@ -75,17 +79,27 @@ describe('插件档案 sheet@1：注册顺序（插件档案 v1 §1，公式在 
   })
 
   it('只读时注册的插件与顺序相同：打开方式只影响界面的配置', () => {
-    expect(names(sheetPluginEntries({ container, formulaWorker, access: 'read' }))).toEqual(names(entries))
+    expect(names(sheetPluginEntries({ container, formula, access: 'read' }))).toEqual(names(entries))
   })
 })
 
 describe.each(['edit', 'read'] as const)('插件档案 sheet@1：影响数据的配置（access = %s，两种方式相同）', (access) => {
-  const entries = sheetPluginEntries({ container, formulaWorker, access })
+  const entries = sheetPluginEntries({ container, formula, access })
 
   it('公式在 Worker 里计算：主线程的引擎、表格与表格公式都不执行公式，RPC 插件拿到传入的 Worker 实例', () => {
     expect(configOf(entries, 'UNIVER_ENGINE_FORMULA_PLUGIN')).toEqual({ notExecuteFormula: true })
-    expect(configOf(entries, 'SHEETS_FORMULA_PLUGIN')).toEqual({ notExecuteFormula: true })
+    expect(configOf(entries, 'SHEETS_FORMULA_PLUGIN')).toStrictEqual({ notExecuteFormula: true })
     expect((configOf(entries, 'UNIVER_RPC_MAIN_THREAD_PLUGIN') as { workerURL: unknown }).workerURL).toBe(formulaWorker)
+  })
+
+  it('打开时强制全量重算（recalculate，M3-P4 设计 §3.5）：只有表格公式插件多一项公开配置 initialFormulaComputing: FORCED，插件与顺序、别的配置不变', () => {
+    const recalculating = sheetPluginEntries({ container, formula, access, recalculate: true })
+    // CalculationMode.FORCED（sheets-formula 的 config/config.ts：FORCED = 0、WHEN_EMPTY = 1、NO_CALCULATION = 2）
+    expect(configOf(recalculating, 'SHEETS_FORMULA_PLUGIN')).toStrictEqual({ notExecuteFormula: true, initialFormulaComputing: 0 })
+    expect(names(recalculating)).toEqual(names(entries))
+    expect(recalculating.filter(entry => entry.plugin.pluginName !== 'SHEETS_FORMULA_PLUGIN').map(entry => entry.config))
+      .toEqual(entries.filter(entry => entry.plugin.pluginName !== 'SHEETS_FORMULA_PLUGIN').map(entry => entry.config))
+    expect(configOf(sheetPluginEntries({ container, formula, access, recalculate: false }), 'SHEETS_FORMULA_PLUGIN')).toStrictEqual({ notExecuteFormula: true })
   })
 
   it('表格插件关掉大表操作的拆分，不写 onlyRegisterFormulaRelatedMutations（它的类型只允许 true）', () => {
@@ -104,6 +118,52 @@ describe.each(['edit', 'read'] as const)('插件档案 sheet@1：影响数据的
   })
 })
 
+describe('插件档案 sheet@1：主线程的公式模式（M3-P4 设计 §3.14，同一份档案的变体）', () => {
+  it.each(['edit', 'read'] as const)('插件与顺序同 Worker 模式，只少了 RPC（%s）', (access) => {
+    const worker = names(sheetPluginEntries({ container, formula, access }))
+    expect(names(sheetPluginEntries({ container, formula: mainThread, access }))).toEqual(worker.filter(name => name !== 'UNIVER_RPC_MAIN_THREAD_PLUGIN'))
+    expect(worker).toContain('UNIVER_RPC_MAIN_THREAD_PLUGIN')
+  })
+
+  it('强制全量重算（recalculate）在主线程模式下同样只给表格公式插件加 initialFormulaComputing: FORCED', () => {
+    const entries = sheetPluginEntries({ container, formula: mainThread, access: 'edit' })
+    const recalculating = sheetPluginEntries({ container, formula: mainThread, access: 'edit', recalculate: true })
+    expect(configOf(recalculating, 'SHEETS_FORMULA_PLUGIN')).toStrictEqual({ notExecuteFormula: false, initialFormulaComputing: 0 })
+    expect(recalculating.filter(entry => entry.plugin.pluginName !== 'SHEETS_FORMULA_PLUGIN').map(entry => entry.config))
+      .toEqual(entries.filter(entry => entry.plugin.pluginName !== 'SHEETS_FORMULA_PLUGIN').map(entry => entry.config))
+  })
+
+  it('三处 notExecuteFormula 为假，引擎的让出间隔调到 20（M0-P3 报告 §6.3）；大表操作照样不拆分', () => {
+    const entries = sheetPluginEntries({ container, formula: mainThread, access: 'edit' })
+    expect(MAIN_THREAD_FORMULA_INTERVAL_COUNT).toBe(20)
+    expect(configOf(entries, 'UNIVER_ENGINE_FORMULA_PLUGIN')).toStrictEqual({ notExecuteFormula: false, intervalCount: 20 })
+    expect(configOf(entries, 'SHEETS_FORMULA_PLUGIN')).toStrictEqual({ notExecuteFormula: false })
+    expect(configOf(entries, 'SHEET_PLUGIN')).toStrictEqual({
+      notExecuteFormula: false,
+      largeSheetOperation: { largeSheetCellCountThreshold: Number.MAX_SAFE_INTEGER },
+    })
+  })
+
+  it('除了公式由谁执行的这几项，别的配置（界面按打开方式的那些）与 Worker 模式相同', () => {
+    const FORMULA_CONFIGURED = new Set(['UNIVER_RPC_MAIN_THREAD_PLUGIN', 'UNIVER_ENGINE_FORMULA_PLUGIN', 'SHEET_PLUGIN', 'SHEETS_FORMULA_PLUGIN'])
+    for (const access of ['edit', 'read'] as const) {
+      const others = (execution: FormulaExecution): [string, unknown][] => sheetPluginEntries({ container, formula: execution, access })
+        .filter(entry => !FORMULA_CONFIGURED.has(entry.plugin.pluginName))
+        .map(entry => [entry.plugin.pluginName, entry.config])
+      expect(others(mainThread)).toEqual(others(formula))
+    }
+  })
+
+  it('资源与 Worker 模式相同：都由同一份插件组声明，档案的标识不变（不影响数据）', () => {
+    // 两种模式展开的是同一组插件组：每个组注册的插件（去掉 RPC）相同，所以写进快照的资源也相同
+    for (const group of SHEET_PLUGIN_GROUPS) {
+      const plugins = (execution: FormulaExecution): string[] => names(group.plugins({ container, formula: execution, access: 'edit' })).filter(name => name !== 'UNIVER_RPC_MAIN_THREAD_PLUGIN')
+      expect(plugins(mainThread), group.id).toEqual(plugins(formula))
+    }
+    expect(declaredSheetResources()).toEqual(profileResourceNames(SHEET_PROFILE_ID))
+  })
+})
+
 describe('插件档案 sheet@1：界面的配置按打开方式（插件档案 v1 §5.2，M2-P3 设计 §3.4）', () => {
   /** 数据相关的配置之外，只有界面插件与表格界面插件按打开方式配置 */
   const DATA_CONFIGURED = ['UNIVER_RPC_MAIN_THREAD_PLUGIN', 'UNIVER_ENGINE_FORMULA_PLUGIN', 'SHEET_PLUGIN', 'SHEETS_FORMULA_PLUGIN']
@@ -113,19 +173,19 @@ describe('插件档案 sheet@1：界面的配置按打开方式（插件档案 v
   }
 
   it('能编辑：界面插件挂到给定的容器，菜单只隐藏两种方式都隐藏的；工具栏、右键菜单与底栏都用默认配置', () => {
-    const entries = sheetPluginEntries({ container, formulaWorker, access: 'edit' })
+    const entries = sheetPluginEntries({ container, formula, access: 'edit' })
     expect(configOf(entries, 'UNIVER_UI_PLUGIN')).toStrictEqual({ container, menu: sheetMenuConfig('edit') })
     expect(configOf(entries, 'SHEET_UI_PLUGIN')).toBeUndefined()
     expect(otherConfigured(entries, [...DATA_CONFIGURED, 'UNIVER_UI_PLUGIN'])).toEqual([])
   })
 
   it('只读：关掉工具栏与右键菜单，保留编辑栏（header 不写，用默认的显示）；菜单另外隐藏工作表标签的 5 项', () => {
-    const entries = sheetPluginEntries({ container, formulaWorker, access: 'read' })
+    const entries = sheetPluginEntries({ container, formula, access: 'read' })
     expect(configOf(entries, 'UNIVER_UI_PLUGIN')).toStrictEqual({ container, menu: sheetMenuConfig('read'), toolbar: false, contextMenu: false })
   })
 
   it('只读：底栏只关掉菜单（网格线开关会写进快照）与新增工作表按钮，工作表标签、统计栏与缩放保持默认', () => {
-    const entries = sheetPluginEntries({ container, formulaWorker, access: 'read' })
+    const entries = sheetPluginEntries({ container, formula, access: 'read' })
     expect(configOf(entries, 'SHEET_UI_PLUGIN')).toStrictEqual({ footer: { menus: false, addSheetButtonConfig: { show: false } } })
     expect(otherConfigured(entries, [...DATA_CONFIGURED, 'UNIVER_UI_PLUGIN', 'SHEET_UI_PLUGIN'])).toEqual([])
   })

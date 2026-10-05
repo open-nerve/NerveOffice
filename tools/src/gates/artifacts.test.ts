@@ -586,9 +586,22 @@ describe('US-M1-09 生产构建里没有测试构建的模块：按来源认（M
     expect(violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/unlisted-script', 'assets/extra-b.js'], ['artifacts/unlisted-script', 'assets/worker-c.mjs']])
   })
 
-  it('名字的兜底：与 E2E 共用的文件被单独动态引入时自成的分块（入口清单、比较口径、切换的计时）同样按名字认', () => {
-    expect(checkTestOnlyArtifacts(['assets/switch-timing-BFKYlR0-.js', 'assets/read-only-entries-x.js', 'assets/content-compare-y.js', 'assets/timing-z.js']).map(v => v.subject))
-      .toEqual(['assets/switch-timing-BFKYlR0-.js', 'assets/read-only-entries-x.js', 'assets/content-compare-y.js'])
+  it('名字的兜底：与 E2E 共用的文件被单独动态引入时自成的分块（入口清单、比较口径、切换的计时、捕获时机的样本）同样按名字认', () => {
+    expect(checkTestOnlyArtifacts(['assets/switch-timing-BFKYlR0-.js', 'assets/read-only-entries-x.js', 'assets/content-compare-y.js', 'assets/timing-z.js', 'assets/capture-samples-a.js', 'assets/capture-c.js']).map(v => v.subject))
+      .toEqual(['assets/switch-timing-BFKYlR0-.js', 'assets/read-only-entries-x.js', 'assets/content-compare-y.js', 'assets/capture-samples-a.js'])
+  })
+
+  it('M3-P4：公式模式的开关（测试构建里地址参数选主线程模式）按来源与分块名都认得出；生产的公式档案不算', () => {
+    expect(isTestOnlySource('src/editor/testing/formula-mode.ts')).toBe(true)
+    expect(isTestOnlySource('src/editor/profile/sheet-profile.ts')).toBe(false)
+    expect(checkTestOnlyArtifacts(['assets/formula-mode-Dx1.js', 'assets/formula-D2.js', 'assets/my-formula-mode-x.js']).map(v => v.subject)).toEqual(['assets/formula-mode-Dx1.js'])
+  })
+
+  it('档案故障开关（M3-P4 设计 §3.14）：来源在 editor/testing/ 下，按来源认；单独成块时按名字兜底，名字相近的不算', () => {
+    expect(isTestOnlySource('src/editor/testing/profile-fault.ts')).toBe(true)
+    expect(checkTestOnlySources({ 'assets/editor-a.js': { name: 'editor', modules: ['src/editor/sheet-editor.ts', 'src/editor/testing/profile-fault.ts'] } }, ['assets/editor-a.js']).map(v => v.rule))
+      .toEqual(['artifacts/test-only-source'])
+    expect(checkTestOnlyArtifacts(['assets/profile-fault-Bx1.js', 'assets/profile-faults.js', 'assets/my-profile-fault-x.js']).map(v => v.subject)).toEqual(['assets/profile-fault-Bx1.js'])
   })
 })
 

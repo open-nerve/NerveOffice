@@ -1,5 +1,6 @@
+import type { AutosaveView } from './autosave.ts'
 import type { LeaseLoss } from './edit-lease.ts'
-import type { EditModeState, LostMode, ReadingMode } from './edit-mode.ts'
+import type { EditModeState, LostMode, OpenCheckFailures, ReadingMode } from './edit-mode.ts'
 import type { EditorPage, EditorPageReady, EditorPageView } from './editor-page.ts'
 import type { SaveView } from './save-coordinator.ts'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -7,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { apiError, installFakeApi, json } from '../../shared/testing/fake-api.test-support.ts'
 import { EditorChrome } from './editor-chrome.tsx'
+import { ANNOUNCEMENT_MS } from './save-indicator.ts'
 
 const PERSONAL = { id: '0199a2c4-0000-7000-8000-0000000000a1', type: 'personal' } as const
 const READY: EditorPageReady = {
@@ -20,7 +22,7 @@ const READY: EditorPageReady = {
 }
 const CLEAN: SaveView = { status: 'clean', formulasPending: false, problem: undefined, conflict: undefined, canSave: true, unsaved: false, unsavedEdits: false, checking: false, snapshotBytes: undefined }
 const EDITING: EditModeState = { kind: 'editing' }
-const READING: ReadingMode = { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined }
+const READING: ReadingMode = { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined, formulasPending: false, damaged: undefined }
 const AMY = { id: '0199a2c4-0000-7000-8000-0000000000e1', username: 'amy', displayName: '艾米' }
 const COPY = {
   id: '0199a2c4-0000-7000-8000-0000000000c9',
@@ -47,7 +49,7 @@ function lost(loss: LeaseLoss, changes: Partial<LostMode> = {}): LostMode {
 
 /** 假的编辑器页：视图由测试设定 */
 function fakePage(initial: Partial<EditorPageView> = {}) {
-  let view: EditorPageView = { load: READY, mode: EDITING, save: CLEAN, session: 'active', sessionProblem: undefined, confirmingSession: false, detailProblem: undefined, surface: 'ready', ...initial }
+  let view: EditorPageView = { load: READY, mode: EDITING, save: CLEAN, autosave: undefined, session: 'active', sessionProblem: undefined, confirmingSession: false, detailProblem: undefined, detailRefreshing: false, surface: 'ready', ...initial }
   const listeners = new Set<() => void>()
   const page: EditorPage = {
     view: () => view,
@@ -77,8 +79,16 @@ function fakePage(initial: Partial<EditorPageView> = {}) {
   }
 }
 
-/** 页头里的状态（载入中的说明、阅读与编辑、保存状态）：页头之外另有说明谁在编辑的读屏状态区 */
+/** 页头里看得见的状态（载入中的说明、阅读与编辑、保存状态）：不是读屏的播报区（M3-P4，例行的变化只改它的文字） */
 function headerStatus(): HTMLElement {
+  const status = screen.getByRole('banner').querySelector<HTMLElement>('[data-slot="header-status"]')
+  if (status === null)
+    throw new Error('页头里没有看得见的状态')
+  return status
+}
+
+/** 页头里读屏的播报区（role="status"，只播有意义的变化，M3-P4 设计 §3.9）：页头之外另有说明谁在编辑的读屏状态区 */
+function announcement(): HTMLElement {
   return within(screen.getByRole('banner')).getByRole('status')
 }
 
@@ -159,19 +169,23 @@ describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
     expect(screen.queryByRole('button', { name: '保存' })).not.toBeInTheDocument()
   })
 
-  it('页头的状态一直是同一个元素（role="status"，显式 aria-live）：从载入、阅读到编辑都往里填，读屏随之播报', () => {
+  it('读屏的播报区一直是同一个元素（role="status"，显式 aria-live，视觉隐藏）：从载入、阅读到编辑，模式的切换都往里填；看得见的状态是另一个元素', () => {
     const fake = renderChrome({ load: { kind: 'loading' }, mode: undefined, save: undefined })
-    const status = headerStatus()
-    expect(status).toHaveAttribute('aria-live', 'polite')
+    const spoken = announcement()
+    expect(spoken).toHaveAttribute('aria-live', 'polite')
+    expect(spoken).toHaveClass('sr-only')
+    expect(headerStatus()).not.toBe(spoken)
+    expect(headerStatus()).not.toHaveAttribute('role')
     fake.set({ load: READY, mode: { ...READING, canEdit: false } })
-    expect(headerStatus()).toBe(status)
-    expect(status).toHaveTextContent('只能查看')
+    expect(announcement()).toBe(spoken)
+    expect(spoken).toHaveTextContent('只能查看')
+    expect(headerStatus()).toHaveTextContent('只能查看')
     fake.set({ mode: { kind: 'entering' } })
-    expect(headerStatus()).toBe(status)
-    expect(status).toHaveTextContent('正在进入编辑…')
+    expect(announcement()).toBe(spoken)
+    expect(spoken).toHaveTextContent('正在进入编辑…')
     fake.set({ mode: EDITING, save: CLEAN })
-    expect(headerStatus()).toBe(status)
-    expect(status).toHaveTextContent('已保存到云端')
+    expect(announcement()).toBe(spoken)
+    expect(spoken).toHaveTextContent('已保存到云端')
   })
 
   it('编辑：标题、保存状态（role="status"）、保存与退出编辑；浏览器标签页的标题', () => {
@@ -198,16 +212,20 @@ describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
     expect(screen.getByRole('button', { name: '保存' })).toHaveAttribute('aria-keyshortcuts', 'Meta+S')
   })
 
-  it('保存状态随状态机变化；保存中按钮标为不可用（aria-disabled），焦点不丢', () => {
+  it('保存状态随状态机变化；保存中"保存"照样可按（在途时按下排一次，M3-P4 设计 §3.9），不能保存时（停住、终态）标为不可用', () => {
     const fake = renderChrome()
-    fake.set({ save: { ...CLEAN, status: 'dirty', unsaved: true } })
+    fake.set({ save: { ...CLEAN, status: 'dirty', unsaved: true, unsavedEdits: true } })
     expect(headerStatus()).toHaveTextContent('有未保存的修改')
-    fake.set({ save: { ...CLEAN, status: 'saving', canSave: false, unsaved: true } })
+    fake.set({ save: { ...CLEAN, status: 'saving', unsaved: true, unsavedEdits: true } })
     expect(headerStatus()).toHaveTextContent('保存中…')
-    expect(screen.getByRole('button', { name: '保存' })).toHaveAttribute('aria-disabled', 'true')
+    const button = screen.getByRole('button', { name: '保存' })
+    expect(button).toHaveAttribute('aria-disabled', 'false')
+    fireEvent.click(button)
+    expect(fake.page.save).toHaveBeenCalledOnce()
     fake.set({ save: CLEAN })
     expect(headerStatus()).toHaveTextContent('已保存到云端')
-    expect(screen.getByRole('button', { name: '保存' })).toHaveAttribute('aria-disabled', 'false')
+    fake.set({ save: { ...CLEAN, canSave: false } })
+    expect(screen.getByRole('button', { name: '保存' })).toHaveAttribute('aria-disabled', 'true')
   })
 
   it('版本冲突：说明保留本页内容，提供重新加载', () => {
@@ -248,11 +266,11 @@ describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
     expect(screen.getByText('请求标识：req-42')).toBeInTheDocument()
   })
 
-  it('公式结果尚未保存：提示稍后再保存一次；保存中不提示', () => {
-    const fake = renderChrome({ save: { ...CLEAN, status: 'dirty', formulasPending: true, unsaved: true } })
-    expect(screen.getByText('公式结果尚未保存，请稍后再保存一次')).toBeInTheDocument()
-    fake.set({ save: { ...CLEAN, status: 'saving', formulasPending: true, canSave: false, unsaved: true } })
-    expect(screen.queryByText('公式结果尚未保存，请稍后再保存一次')).not.toBeInTheDocument()
+  it('公式结果尚未保存（修改都已存上，只差公式）：页头说算完之后自动保存，不另给"请稍后再保存一次"的说明', () => {
+    renderChrome({ save: { ...CLEAN, status: 'dirty', formulasPending: true, unsaved: true } })
+    expect(headerStatus()).toHaveTextContent('公式结果尚未保存（算完之后自动保存）')
+    expect(screen.queryByText(/请稍后再保存一次/)).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('别的标签页登录了另一个账户：提示不能再保存', () => {
@@ -277,9 +295,9 @@ describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
     expect(screen.getByRole('alert')).not.toHaveTextContent('请再保存一次')
   })
 
-  it('会话是本人时的令牌失效与迟到的未登录：提示再保存一次（令牌已经换好，复验 SB1）', () => {
+  it('会话是本人时的令牌失效与迟到的未登录：说明请求已失效、稍后自动重试（令牌已经换好，复验 SB1；M3-P4 自动保存随即重试）', () => {
     renderChrome({ save: { ...CLEAN, status: 'failed', problem: { kind: 'request', error: new ApiError(401, 'SESSION_EXPIRED', 'x') } } })
-    expect(screen.getByRole('alert')).toHaveTextContent('保存失败：请求已失效，请再保存一次')
+    expect(screen.getByRole('alert')).toHaveTextContent('保存失败：请求已失效，稍后自动重试')
   })
 
   it('按了保存、正在确认会话：说明正在确认，按钮不可用（复验 SB5）', () => {
@@ -292,12 +310,12 @@ describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
   it.each([
     ['令牌失效', new ApiError(403, 'CSRF_TOKEN_INVALID', 'x')],
     ['登录已过期', new ApiError(401, 'SESSION_EXPIRED', 'x')],
-  ])('保存得到%s、确认会话进行中：页头说明正在确认，不先提示"再保存一次"；确认之后才提示（复验 TB1）', (_case, error) => {
+  ])('保存得到%s、确认会话进行中：页头说明正在确认，不先说请求已失效；确认之后才说（复验 TB1）', (_case, error) => {
     const fake = renderChrome({ confirmingSession: true, save: { ...CLEAN, status: 'failed', problem: { kind: 'request', error } } })
     expect(headerStatus()).toHaveTextContent('正在确认登录状态…')
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     fake.set({ confirmingSession: false })
-    expect(screen.getByRole('alert')).toHaveTextContent('保存失败：请求已失效，请再保存一次')
+    expect(screen.getByRole('alert')).toHaveTextContent('保存失败：请求已失效，稍后自动重试')
   })
 
   it('会话是本人、令牌失效之后确认会话失败：说明原因，不说"再保存一次"就好（令牌没有换成，复验 TB1）', () => {
@@ -314,13 +332,14 @@ describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
     expect(screen.getByRole('alert')).not.toHaveTextContent('可以继续保存')
   })
 
-  it('版本冲突之后不再显示会话的提示；会话不是本人时不显示"公式结果尚未保存"（复验 SB9）', () => {
+  it('版本冲突之后不再显示会话的提示；会话不是本人时页头说暂停保存（登录回来之后自动保存），不说公式（复验 SB9）', () => {
     renderChrome({ session: 'signed-out', save: { ...CLEAN, status: 'conflict', canSave: false, unsaved: true, conflict: { currentRevision: 5, source: null } } })
     expect(screen.getAllByRole('alert')).toHaveLength(1)
     expect(screen.getByRole('alert')).toHaveTextContent('别处保存了更新的版本')
     cleanup()
-    renderChrome({ session: 'other-user', save: { ...CLEAN, status: 'dirty', canSave: false, formulasPending: true } })
-    expect(screen.queryByText('公式结果尚未保存，请稍后再保存一次')).not.toBeInTheDocument()
+    renderChrome({ session: 'other-user', save: { ...CLEAN, status: 'dirty', canSave: false, formulasPending: true, unsaved: true }, autosave: { offline: false, paused: true, retrying: false, held: false } })
+    expect(headerStatus()).toHaveTextContent('暂停保存：登录回来之后自动保存')
+    expect(screen.queryByText(/公式结果尚未保存/)).toBeNull()
   })
 
   it('确认会话失败（例如断网时按了保存）：在会话的提示里说明原因（复验 RB7）', () => {
@@ -328,9 +347,9 @@ describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('暂时无法确认登录状态：网络连接失败，请检查网络后重试')
   })
 
-  it('CSRF 令牌失效：提示再保存一次，不让用户刷新（刷新会丢掉修改）', () => {
+  it('CSRF 令牌失效：说明请求已失效、稍后自动重试，不让用户刷新（刷新会丢掉修改）', () => {
     renderChrome({ save: { ...CLEAN, status: 'failed', problem: { kind: 'request', error: new ApiError(403, 'CSRF_TOKEN_INVALID', 'x') } } })
-    expect(screen.getByRole('alert')).toHaveTextContent('保存失败：请求已失效，请再保存一次')
+    expect(screen.getByRole('alert')).toHaveTextContent('保存失败：请求已失效，稍后自动重试')
     expect(screen.getByRole('alert')).not.toHaveTextContent('刷新')
   })
 
@@ -339,12 +358,12 @@ describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('保存失败：出了点问题，请稍后重试')
   })
 
-  it('持有编辑权的页面没有人登录了、换了人：重新登录之后编辑权自动续上，照旧说"回到这里保存""原来的账户重新登录之后可以继续保存"', () => {
+  it('持有编辑权的页面没有人登录了、换了人：重新登录之后编辑权自动续上、修改自动保存（M3-P4），说明里这样说', () => {
     renderChrome({ save: { ...CLEAN, status: 'dirty', unsaved: true }, session: 'signed-out' })
-    expect(screen.getByRole('alert')).toHaveTextContent('登录已过期或已在别处退出。本页的修改还在：请在新的标签页中用同一个账户登录，然后回到这里保存')
+    expect(screen.getByRole('alert')).toHaveTextContent('登录已过期或已在别处退出。本页的修改还在：请在新的标签页中用同一个账户登录，回到这里之后会自动保存')
     cleanup()
     renderChrome({ save: { ...CLEAN, status: 'dirty', unsaved: true }, session: 'other-user' })
-    expect(screen.getByRole('alert')).toHaveTextContent('别的标签页登录了另一个账户，本页不能再保存。原来的账户重新登录之后可以继续保存')
+    expect(screen.getByRole('alert')).toHaveTextContent('别的标签页登录了另一个账户，本页不能再保存。原来的账户重新登录之后会自动保存')
   })
 
   it('文档详情没能刷新（DEF-040）：与列表同一个说法与原因，可以重试；页头的信息照旧', () => {
@@ -920,7 +939,7 @@ describe('与服务端不兼容与容量（M3-P3 设计 §3.10）', () => {
     fireEvent.click(within(alert).getByRole('button', { name: '重新加载' }))
     expect(fake.page.reload).toHaveBeenCalledOnce()
     expect(screen.getByRole('button', { name: '保存' })).toHaveAttribute('aria-disabled', 'true')
-    expect(screen.queryByText('公式结果尚未保存，请稍后再保存一次')).toBeNull()
+    expect(screen.queryByText(/公式结果尚未保存/)).toBeNull()
   })
 
   it('编辑时本页过旧、修改都已保存：说明重新加载之后可以接着编辑', () => {
@@ -993,5 +1012,223 @@ describe('与服务端不兼容与容量（M3-P3 设计 §3.10）', () => {
     fake.set({ save: { ...CLEAN, snapshotBytes: 6_000_000, status: 'failed', problem: { kind: 'too-large' } } })
     expect(infoRegion()).toHaveTextContent('')
     expect(screen.getByText('表格超过容量上限（5 MiB），无法保存')).toBeInTheDocument()
+  })
+})
+
+const ONLINE: AutosaveView = { offline: false, paused: false, retrying: false, held: false }
+const DIRTY: SaveView = { ...CLEAN, status: 'dirty', unsaved: true, unsavedEdits: true }
+const NETWORK_FAILURE: SaveView = { ...DIRTY, status: 'failed', problem: { kind: 'request', error: new NetworkError('断网') } }
+
+const PAUSED: AutosaveView = { ...ONLINE, paused: true }
+
+describe('编辑时页头的保存状态（M3-P4 设计 §3.9）', () => {
+  it.each<[string, SaveView, AutosaveView, string, Partial<EditorPageView>]>([
+    ['已保存到云端', CLEAN, ONLINE, '已保存到云端', {}],
+    ['有未保存的修改', DIRTY, ONLINE, '有未保存的修改', {}],
+    ['保存中', { ...DIRTY, status: 'saving' }, ONLINE, '保存中…', {}],
+    ['只差公式的结果', { ...CLEAN, status: 'dirty', formulasPending: true, unsaved: true }, ONLINE, '公式结果尚未保存（算完之后自动保存）', {}],
+    ['保存失败、会自动重试', NETWORK_FAILURE, { ...ONLINE, retrying: true }, '保存失败，稍后自动重试', {}],
+    ['保存失败、要等新内容', NETWORK_FAILURE, ONLINE, '保存失败', {}],
+    ['已离线（M3 没有本机的发件箱：不说已保存在本机）', DIRTY, { ...ONLINE, offline: true }, '已离线：修改还在本页，恢复网络之后自动保存', {}],
+    ['暂停（没有人登录）', DIRTY, PAUSED, '暂停保存：登录回来之后自动保存', { session: 'signed-out' }],
+    ['暂停（换了人）', DIRTY, PAUSED, '暂停保存：登录回来之后自动保存', { session: 'other-user' }],
+    ['暂停（本人在登录中、正在向服务端确认会话：不说"登录回来之后"，审查 A6）', DIRTY, PAUSED, '正在确认登录状态…', {}],
+    ['暂停（本人在登录中、确认会话失败：不说"登录回来之后"，审查 A6）', DIRTY, PAUSED, '暂停保存：暂时无法确认登录状态，稍后自动重试', { sessionProblem: new NetworkError('断网') }],
+    ['版本冲突', { ...DIRTY, status: 'conflict', canSave: false, conflict: null }, ONLINE, '版本冲突', {}],
+    ['需要刷新', { ...DIRTY, status: 'outdated', canSave: false }, ONLINE, '需要刷新', {}],
+    ['不能保存', { ...DIRTY, status: 'too-new', canSave: false }, ONLINE, '不能保存', {}],
+  ])('%s', (_case, save, autosave, text, view) => {
+    renderChrome({ save, autosave, ...view })
+    expect(headerStatus()).toHaveTextContent(text)
+    expect(headerStatus().textContent).not.toMatch(/本机/)
+  })
+
+  it('读屏播暂停时按原因分开（审查 A6）：不是按保存触发的确认进行中不播；确认失败了播"暂时无法确认"；没有人登录时播"登录回来之后"', () => {
+    const fake = renderChrome({ save: DIRTY, autosave: ONLINE })
+    const spoken = announcement()
+    fake.set({ autosave: PAUSED })
+    expect(headerStatus()).toHaveTextContent('正在确认登录状态…')
+    expect(spoken).toHaveTextContent('')
+    fake.set({ sessionProblem: new NetworkError('断网') })
+    expect(spoken).toHaveTextContent('暂停保存：暂时无法确认登录状态，稍后自动重试')
+    fake.set({ session: 'signed-out' })
+    expect(spoken).toHaveTextContent('暂停保存：登录回来之后自动保存')
+  })
+
+  it('读屏只播有意义的变化：例行的"有未保存的修改 → 保存中… → 已保存到云端"只改看得见的文字', () => {
+    const fake = renderChrome({ save: CLEAN, autosave: ONLINE })
+    const spoken = announcement()
+    expect(spoken).toHaveTextContent('已保存到云端')
+    for (const save of [DIRTY, { ...DIRTY, status: 'saving' } as const, CLEAN, DIRTY, { ...DIRTY, status: 'saving' } as const]) {
+      fake.set({ save })
+      expect(spoken).toHaveTextContent('已保存到云端')
+    }
+    expect(headerStatus()).toHaveTextContent('保存中…')
+  })
+
+  it('读屏播：失败（自动重试中）；重试期间（保存中）不播；重试成功回到"已保存到云端"时播（从失败恢复）', () => {
+    const fake = renderChrome({ save: DIRTY, autosave: ONLINE })
+    const spoken = announcement()
+    fake.set({ save: NETWORK_FAILURE, autosave: { ...ONLINE, retrying: true } })
+    expect(spoken).toHaveTextContent('保存失败，稍后自动重试')
+    fake.set({ save: { ...NETWORK_FAILURE, status: 'saving' } })
+    expect(spoken).toHaveTextContent('保存失败，稍后自动重试')
+    fake.set({ save: DIRTY, autosave: ONLINE })
+    expect(spoken).toHaveTextContent('保存失败，稍后自动重试')
+    fake.set({ save: CLEAN })
+    expect(spoken).toHaveTextContent('已保存到云端')
+  })
+
+  it('读屏播：离线与恢复（恢复之后存上时）、暂停、"公式结果尚未保存"与它的结束、终态', () => {
+    const fake = renderChrome({ save: DIRTY, autosave: ONLINE })
+    const spoken = announcement()
+    fake.set({ autosave: { ...ONLINE, offline: true } })
+    expect(spoken).toHaveTextContent('已离线：修改还在本页，恢复网络之后自动保存')
+    fake.set({ autosave: ONLINE, save: { ...DIRTY, status: 'saving' } })
+    expect(spoken).toHaveTextContent('已离线')
+    fake.set({ save: CLEAN })
+    expect(spoken).toHaveTextContent('已保存到云端')
+    fake.set({ save: DIRTY, autosave: PAUSED, session: 'signed-out' })
+    expect(spoken).toHaveTextContent('暂停保存：登录回来之后自动保存')
+    fake.set({ save: { ...CLEAN, status: 'dirty', formulasPending: true, unsaved: true }, autosave: ONLINE, session: 'active' })
+    expect(spoken).toHaveTextContent('公式结果尚未保存（算完之后自动保存）')
+    fake.set({ save: CLEAN })
+    expect(spoken).toHaveTextContent('已保存到云端')
+    fake.set({ save: { ...DIRTY, status: 'conflict', canSave: false, conflict: null } })
+    expect(spoken).toHaveTextContent('版本冲突')
+  })
+
+  it('播报区里的话 ANNOUNCEMENT_MS 之后清空（不留着过时的话）；之后同样的变化照样播', () => {
+    vi.useFakeTimers()
+    try {
+      const fake = renderChrome({ save: DIRTY, autosave: ONLINE })
+      const spoken = announcement()
+      fake.set({ save: NETWORK_FAILURE, autosave: { ...ONLINE, retrying: true } })
+      expect(spoken).toHaveTextContent('保存失败，稍后自动重试')
+      act(() => {
+        vi.advanceTimersByTime(ANNOUNCEMENT_MS)
+      })
+      expect(spoken).toHaveTextContent('')
+      expect(headerStatus()).toHaveTextContent('保存失败，稍后自动重试')
+      fake.set({ save: CLEAN, autosave: ONLINE })
+      expect(spoken).toHaveTextContent('已保存到云端')
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('失败的说明在自动重试期间（保存中、原因留着）不清掉再出现：同一个元素一直在', () => {
+    const fake = renderChrome({ save: NETWORK_FAILURE, autosave: { ...ONLINE, retrying: true } })
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('保存失败：网络连接失败')
+    fake.set({ save: { ...NETWORK_FAILURE, status: 'saving' } })
+    expect(screen.getByRole('alert')).toBe(alert)
+    fake.set({ save: NETWORK_FAILURE })
+    expect(screen.getByRole('alert')).toBe(alert)
+  })
+
+  it('页头的文档详情正在重新取（DEF-045）："重试"说正在重试、不可用，按钮不卸载', () => {
+    const fake = renderChrome({ detailProblem: new ApiError(503, 'SERVICE_UNAVAILABLE', '繁忙') })
+    const retry = within(screen.getByRole('alert')).getByRole('button', { name: '重试' })
+    fake.set({ detailRefreshing: true })
+    const retrying = within(screen.getByRole('alert')).getByRole('button', { name: '正在重试…' })
+    expect(retrying).toBe(retry)
+    expect(retrying).toHaveAttribute('aria-disabled', 'true')
+  })
+})
+
+describe('阅读页的"公式待更新"（M3-P4 设计 §3.5 第 4 条）', () => {
+  it('能编辑的人：一直在的读屏状态区里说明公式结果可能还没更新，进入编辑之后会自动重算并保存（不打断）', () => {
+    renderChrome({ mode: { ...READING, formulasPending: true }, save: undefined })
+    expect(infoRegion()).toHaveTextContent('这份表格的公式结果可能还没更新（上次保存时公式还没算完），进入编辑之后会自动重算并保存')
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('查看者（与服务端不兼容的阅读同样不能进入编辑）：只说前半句', () => {
+    const fake = renderChrome({ mode: { ...READING, canEdit: false, formulasPending: true }, save: undefined })
+    expect(infoRegion()).toHaveTextContent(/^这份表格的公式结果可能还没更新（上次保存时公式还没算完）$/)
+    fake.set({ mode: { ...READING, blocked: 'document-too-new', formulasPending: true } })
+    expect(infoRegion()).not.toHaveTextContent('进入编辑之后')
+  })
+
+  it('没有标记、读不到了：不说', () => {
+    const fake = renderChrome({ mode: READING, save: undefined })
+    expect(infoRegion()).not.toHaveTextContent('公式结果')
+    fake.set({ mode: { ...READING, gone: true, canEdit: false, formulasPending: true } })
+    expect(infoRegion()).not.toHaveTextContent('公式结果')
+  })
+})
+
+describe('打开自检失败的阅读（M3-P4 设计 §3.12，US-M3-15）', () => {
+  /** 数据没能完整载入：截断的筛选，另有保护类的两项（同一个说法） */
+  const FILTER_DAMAGED: OpenCheckFailures = [
+    { kind: 'parse-threw', resource: 'SHEET_FILTER_PLUGIN', error: 'SyntaxError' },
+    { kind: 'resource-emptied', resource: 'SHEET_FILTER_PLUGIN' },
+    { kind: 'resource-emptied', resource: 'SHEET_RANGE_PROTECTION_PLUGIN' },
+    { kind: 'resource-missing', resource: 'SHEET_WORKSHEET_PROTECTION_PLUGIN' },
+  ]
+  /** 编辑器没有完整载入：批注的插件没有注册（样本里的批注随之不在了） */
+  const NOTE_MISSING: OpenCheckFailures = [{ kind: 'profile-missing-hook', resource: 'SHEET_NOTE_PLUGIN' }, { kind: 'resource-missing', resource: 'SHEET_NOTE_PLUGIN' }]
+
+  function backLink(): HTMLElement {
+    return screen.getByRole('link', { name: '我的空间' })
+  }
+
+  it('数据不完整、能编辑的人：没有"编辑"，页头只能查看；提示条（role="alert"）说已阻止编辑，哪些部分没能载入（同一个说法只说一次）、继续编辑会让它们丢失、已通知管理员', () => {
+    renderChrome({ mode: { ...READING, damaged: FILTER_DAMAGED }, save: undefined })
+    expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
+    expect(headerStatus()).toHaveTextContent(/^只能查看$/)
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('文档数据不完整，已阻止编辑')
+    expect(alert).toHaveTextContent('部分数据没能载入（筛选、保护设置），继续编辑会让它们丢失。已通知管理员')
+    expect(within(alert).queryByRole('button')).toBeNull()
+    expect(infoRegion()).not.toHaveTextContent('部分数据')
+  })
+
+  it('数据不完整、查看者：不打断，一直在的读屏状态区里说显示的内容可能不完整；没有提示条', () => {
+    renderChrome({ mode: { ...READING, canEdit: false, damaged: FILTER_DAMAGED }, save: undefined })
+    expect(infoRegion()).toHaveTextContent(/^文档的部分数据没能载入，显示的内容可能不完整$/)
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(headerStatus()).toHaveTextContent(/^只能查看$/)
+  })
+
+  it('编辑器没有完整载入（档案不全）：能编辑的人说已阻止编辑、请重新加载页面，给"重新加载"（整页）；查看者不说已阻止编辑', () => {
+    const fake = renderChrome({ mode: { ...READING, damaged: NOTE_MISSING }, save: undefined })
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent(/^编辑器没有完整载入，已阻止编辑。请重新加载页面重新加载$/)
+    fireEvent.click(within(alert).getByRole('button', { name: '重新加载' }))
+    expect(fake.page.reload).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
+    fake.set({ mode: { ...READING, canEdit: false, damaged: NOTE_MISSING } })
+    expect(screen.getByRole('alert')).toHaveTextContent(/^编辑器没有完整载入，显示的内容可能不完整。请重新加载页面重新加载$/)
+    expect(infoRegion()).not.toHaveTextContent('部分数据')
+  })
+
+  it('白名单之外的资源名说成"其他数据"', () => {
+    renderChrome({ mode: { ...READING, damaged: [{ kind: 'parse-swallowed', resource: 'SHEET_SOMETHING_NEW_PLUGIN' }] }, save: undefined })
+    expect(screen.getByRole('alert')).toHaveTextContent('部分数据没能载入（其他数据）')
+  })
+
+  it('"公式待更新"不说进入编辑之后会重算（数据不完整的不能进入编辑）', () => {
+    renderChrome({ mode: { ...READING, formulasPending: true, damaged: FILTER_DAMAGED }, save: undefined })
+    expect(infoRegion()).toHaveTextContent('这份表格的公式结果可能还没更新（上次保存时公式还没算完）')
+    expect(infoRegion()).not.toHaveTextContent('进入编辑之后')
+  })
+
+  it('"有更新"重建之后新版通过（damaged 清掉）：说明随之消失，"编辑"回来', () => {
+    const fake = renderChrome({ mode: { ...READING, damaged: FILTER_DAMAGED }, save: undefined })
+    fake.set({ mode: READING })
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByRole('button', { name: '编辑' })).toBeInTheDocument()
+  })
+
+  it('"编辑"随打开自检失败消失（进入编辑时新内容没能完整载入）：焦点交给返回链接，不落到 body', async () => {
+    const fake = renderChrome({ mode: READING, save: undefined })
+    screen.getByRole('button', { name: '编辑' }).focus()
+    fake.set({ mode: { kind: 'entering' } })
+    fake.set({ mode: { ...READING, damaged: FILTER_DAMAGED } })
+    expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
+    await waitFor(() => expect(document.activeElement).toBe(backLink()))
   })
 })
