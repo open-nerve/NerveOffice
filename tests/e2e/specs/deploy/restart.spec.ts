@@ -125,11 +125,14 @@ test.describe('US-M1-10 API 重启后已确认的数据不丢', () => {
     const interrupted = saves.sent[0] ?? ''
     expect(await revisionsOf(interrupted)).toBe(0)
 
-    // 恢复之后再保存（生产构建里可能是自动保存的重试先发出）：服务端回答的第一次就是原样重发的那一个 requestId、成功，修订号只加一
+    // 恢复之后再保存（生产构建里可能是自动保存的重试先发出）：第一次成功的就是原样重发的那一个 requestId，修订号只加一。
+    // 之前的回答只有被打断的那一次（经反向代理时它得到 502，直连时连接断开、没有回答）
     await offline?.reconnect()
     await saveAndWait(page)
     expect(saves.sent.length).toBeGreaterThanOrEqual(2)
-    expect(saves.answered[0]).toEqual({ requestId: interrupted, status: 200 })
+    const firstSaved = saves.answered.findIndex(answer => answer.status === 200)
+    expect(saves.answered[firstSaved]?.requestId).toBe(interrupted)
+    expect(saves.answered.slice(0, firstSaved).every(answer => answer.requestId === interrupted && answer.status >= 500)).toBe(true)
     expect(await revisionsOf(interrupted)).toBe(1)
     const saved = await savedContent(page, documentId)
     expect(saved.revision).toBe(before.revision + 1)

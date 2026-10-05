@@ -14,7 +14,7 @@ import type { SelftestFormulaMode } from '../../../../apps/web/src/editor/testin
 import { SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { verifyFormulaSnapshot } from '../../../../apps/web/src/editor/testing/capture-samples.ts'
 import { FORMULA_MODE_PARAM, FORMULA_MODE_VALUES } from '../../../../apps/web/src/editor/testing/selftest-report.ts'
-import { advanceUntil, autosaveLog, capturesOf, logNow, pausedNow, pauseTime, recordWrites, releaseAutosave, saveParam, setAutosaveLimits, uploadedText, uploadsOf } from '../../support/autosave.ts'
+import { advanceUntil, autosaveLog, capturesOf, logNow, pausedNow, pauseTime, recordWrites, releaseAutosave, saveParam, SDK_CALCULATION_DEBOUNCE_MS, setAutosaveLimits, settleAfterEdit, uploadedText, uploadsOf } from '../../support/autosave.ts'
 import { AUTOSAVE_FORMULA_SAMPLE, AUTOSAVE_STOP_SAMPLE, autosaveFormulaSampleFor, autosaveStopSampleFor } from '../../support/capture-samples.ts'
 import { createDocument, createDocumentIn, createTeamSpace, createUser, revisionOf, withDatabase } from '../../support/database.ts'
 import { commandMark, probeCommands, probeFormulaMode, probeFormulasSettled, probeSnapshot, setCellValue, waitForCommand } from '../../support/editor-probe.ts'
@@ -34,6 +34,8 @@ const FORMULA_MODES: Readonly<Record<SelftestFormulaMode, string>> = { 'worker':
 const FORMULA_START = 'formula.mutation.set-formula-calculation-start'
 const FORMULA_STOP = 'formula.mutation.set-formula-calculation-stop'
 const FORMULA_RESULT = 'formula.mutation.set-formula-calculation-result'
+/** 强制全量重算的触发（带"公式待更新"的文档进入编辑时 SDK 执行的同一条，FORCED） */
+const FORMULA_FORCE_TRIGGER = 'formula.mutation.set-trigger-formula-calculation-start'
 
 /** 样本里的表名 */
 const { aggregate: AGGREGATE, chain: CHAIN } = AUTOSAVE_FORMULA_SAMPLE
@@ -249,6 +251,44 @@ test.describe('US-M3-03 保存下来的公式结果与重新计算的一致', { 
       expect(starts.length).toBeGreaterThanOrEqual(2)
       expect(executed).toContain(FORMULA_STOP)
       expect(executed.findIndex(id => id === FORMULA_RESULT), '被 stop 的那一轮没有结果').toBeGreaterThan(starts[1] ?? Number.POSITIVE_INFINITY)
+      await page.clock.resume()
+    })
+
+    test(`US-M3-03 静默到点时公式还没收齐（${label}：改了无关的一格，静默到点之前 1 毫秒强制重算排上了一轮）——到点不捕获，等这一轮算完才捕获，存下的是算完的值`, async ({ page }) => {
+      // A2 = A1 × 2 的缓存值是错的（999）、没有"公式待更新"：进入编辑时不重算（SDK 只算没有结果的公式），本页显示的就是错的值
+      const owner = await createUser('formulas-queued')
+      const documentId = await createDocument(owner, '静默到点时在排队', staleFormulas)
+      await loginThroughApi(page, owner)
+      await page.clock.install()
+      await openReaderIn(page, documentId, mode)
+      await expect(enterEditButton(page)).toBeVisible()
+      await enterEditing(page)
+      expect(await probeFormulaMode(page)).toBe(mode)
+      await releaseAutosave(page)
+      const writes = recordWrites(page, documentId)
+      const start = await pauseTime(page)
+      // 改一格无关的（不牵动公式）：它引起的那一轮马上算完
+      await setCellValue(page, 'C1', '无关的修改')
+      await settleAfterEdit(page)
+      expect(JSON.parse(await probeSnapshot(page))).toMatchObject({ sheets: { [FIRST_SHEET]: { cellData: { 1: { 0: { v: 999 } } } } } })
+      // 静默到点（start + 1000）之前 1 毫秒强制重算（与带"公式待更新"的文档进入编辑时同一条 mutation，带 onlyLocal：不算修改）：
+      // 这一轮在 SDK 的计算防抖之后（start + 1009）才开始，到点的那一刻公式还在排队、没收齐
+      await page.clock.runFor(1_000 - SDK_CALCULATION_DEBOUNCE_MS - 1)
+      await page.evaluate(async (id) => {
+        await window.__nerveEditorProbe?.univerAPI.executeCommand(id, { forceCalculation: true }, { onlyLocal: true })
+      }, FORMULA_FORCE_TRIGGER)
+      expect(await probeFormulasSettled(page)).toBe(false)
+      await page.clock.runFor(1)
+      expect(capturesOf(await logNow(page))).toEqual([])
+      // 这一轮开始、算完之后才捕获（不早于它开始的那一刻），存下的是重算的值
+      await advanceUntil(page, async () => capturesOf(await autosaveLog(page)).length === 1, '这一轮算完之后捕获了')
+      const [capture] = capturesOf(await autosaveLog(page))
+      expect(capture).toMatchObject({ trigger: 'quiet', seq: 1, formulasPending: false })
+      expect(capture?.at).toBeGreaterThanOrEqual(start + 1_009)
+      await advanceUntil(page, async () => writes.saves.length === 1, '捕获的那一份上传了')
+      const uploaded = JSON.parse(uploadedText(writes.saves[0])) as { sheets: Record<string, { cellData: Record<string, Record<string, unknown>> }> }
+      expect(uploaded.sheets[FIRST_SHEET]?.cellData[1]?.[0]).toMatchObject({ f: '=A1*2', v: 2 })
+      expect(uploaded.sheets[FIRST_SHEET]?.cellData[0]?.[2]).toMatchObject({ v: '无关的修改' })
       await page.clock.resume()
     })
 

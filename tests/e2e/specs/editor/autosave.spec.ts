@@ -308,7 +308,7 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     expect(await revisionOf(documentId)).toBe(2)
   })
 
-  test('US-M3-02 离线：页头说已离线（修改还在本页），不发请求；恢复联网立即上传（不等静默）', async ({ page, context }) => {
+  test('US-M3-02 离线：页头说已离线（修改还在本页），过了静默也不发请求；恢复联网立即上传最近一次捕获（不等静默），之后的修改照常', async ({ page, context }) => {
     await page.clock.install()
     const documentId = await openNewSheet(page, 'autosave-offline')
     const writes = recordWrites(page, documentId)
@@ -317,18 +317,25 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     await context.setOffline(true)
     await typeInCell(page, 'A1', 'offline')
     await expect(saveStatus(page)).toHaveText('已离线：修改还在本页，恢复网络之后自动保存')
-    // 照常捕获，不上传
+    // 照常捕获，过了上传的静默也不上传
     await page.clock.runFor(5_000)
-    await expect.poll(async () => capturesOf(await logNow(page))).toMatchObject([{ trigger: 'quiet', at: start + 1_000 }])
+    await expect.poll(async () => capturesOf(await logNow(page))).toMatchObject([{ trigger: 'quiet', at: start + 1_000, seq: 1 }])
     expect(writes.saves).toHaveLength(0)
     expect(uploadsOf(await autosaveLog(page))).toEqual([])
     await expect(saveStatus(page)).toHaveText('已离线：修改还在本页，恢复网络之后自动保存')
-    // 恢复联网：立即上传（停住的时间里，不拨时间）
+    // 离线时又改了一处（start + 5000），0.5 秒之后恢复联网：不等这一处的静默，立即上传最近一次捕获（第一处）
+    await typeInCell(page, 'A2', 'later')
+    await page.clock.runFor(500)
     await context.setOffline(false)
-    await expect.poll(async () => uploadsOf(await logNow(page))).toMatchObject([{ trigger: 'online', startedAt: start + 5_000, outcome: { kind: 'saved' } }])
+    await expect.poll(async () => uploadsOf(await logNow(page))).toMatchObject([{ trigger: 'online', startedAt: start + 5_500, seq: 1, outcome: { kind: 'saved' } }])
+    // 后来的那一处照常：停 1 秒捕获、2 秒上传
+    await page.clock.runFor(1_500)
+    await expect.poll(async () => uploadsOf(await logNow(page)).length).toBe(2)
+    expect(uploadsOf(await autosaveLog(page))[1]).toMatchObject({ trigger: 'quiet', startedAt: start + 7_000, seq: 2, outcome: { kind: 'saved' } })
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     await page.clock.resume()
-    expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('offline')
+    const saved = (await savedContent(page, documentId)).snapshot
+    expect([cellOf(saved, 'A1')?.v, cellOf(saved, 'A2')?.v]).toEqual(['offline', 'later'])
   })
 
   test('US-M3-02 服务繁忙（503 带 Retry-After）与服务端出错（502）：页头说保存失败、稍后自动重试；503 按服务端给的时间等，之后按退避等（第二次失败之后 4 秒），到点原样重发同一个 requestId', async ({ page }) => {
