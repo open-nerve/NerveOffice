@@ -200,6 +200,29 @@ describe('ProcessPool', SPAWNING, () => {
     expect(after).not.toBe(before)
   })
 
+  it('执行任务期间被外部结束（SIGKILL，现实里几乎只有内核的 OOM killer：容器的内存先于堆的上限用尽）：killed（cause 带信号），主进程照常，下一个任务用新的子进程', async () => {
+    const children = pool({ processes: 1 })
+    const blocking = gate()
+    const running = failure(children.run({ kind: 'block', gate: blocking.directory }))
+    await until(() => blocking.started().length === 1)
+    const [pid = 0] = blocking.started()
+    process.kill(pid, 'SIGKILL')
+    const error = await running
+    expect(error.reason).toBe('killed')
+    expect(exitOf(error)).toMatchObject({ exitCode: null, signal: 'SIGKILL' })
+    expect(isRunning(process.pid)).toBe(true)
+    expect(children.liveProcesses).toBe(0)
+    expect(await children.run({ kind: 'pid' })).not.toBe(pid)
+  })
+
+  it('子进程在任务里以 SIGKILL 结束自己（与被外部结束一样，不写标准错误）：同样是 killed；池子自己结束的（超时、关闭）不算，见上下几条', async () => {
+    const children = pool({ processes: 1 })
+    const error = await failure(children.run({ kind: 'sigkill' }))
+    expect(error.reason).toBe('killed')
+    expect(exitOf(error).stderr).toBe('')
+    expect(await children.run({ kind: 'echo', value: 'next' })).toBe('next')
+  })
+
   it.each([{ type: 'ready' }, null, 'result'])('子进程回了不该回的消息（%j）：丢弃它（crashed），主进程不抛出', async (message) => {
     const children = pool({ processes: 1 })
     const before = await children.run({ kind: 'pid' }) as number

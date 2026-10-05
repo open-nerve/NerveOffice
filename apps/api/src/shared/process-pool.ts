@@ -4,7 +4,8 @@
 // Node 结束不了那个线程，整个进程中止。
 // - 子进程数就是同时执行的任务数；超出的按先来后到排队（Semaphore），排队的数量与等待的时长有上限，满了或等不到立即失败；
 // - 子进程按需创建：先等它加载好（回 ready）再交出任务。加载与每个任务各有时限（taskTimeoutMs），超时就结束那个子进程；
-// - 出错（内存超限、超时、崩溃、回了不认识的消息）之后丢弃，下一个任务再起新的：不在出错时立即重建，入口加载不了时不会反复重建；
+// - 出错（内存超限、超时、崩溃、执行任务期间被外部结束、回了不认识的消息）之后丢弃，下一个任务再起新的：不在出错时立即重建，
+//   入口加载不了时不会反复重建；
 // - 空闲超过 idleTimeoutMs 的子进程结束掉，内存还给系统（V8 不会很快把检查用过的堆还回去），下一个任务再起；
 //   空闲的位置后进先出，忙的时候总是同一个子进程先接活，其余的空闲到期退出；
 // - 子进程不继承主进程的 Node 选项（execArgv 与 NODE_OPTIONS：进程入口带的选项，例如 E2E 给后端的 --import，不该在子进程里再执行），
@@ -44,9 +45,11 @@ export interface ProcessPoolOptions {
  * 任务没有得到结果的原因：
  * - 没有执行：queue-full（排队满了）、wait-timeout（排队等待超时）、closed（池子已经关闭）；
  * - 执行了但没有结果：out-of-memory（子进程的堆超过上限，V8 中止了它）、timeout（加载或执行超过时限）、
- *   crashed（子进程出错、意外退出、加载不了或回了不认识的消息，cause 是原因）
+ *   killed（执行这个任务期间被外部以 SIGKILL 结束：池子结束的不算，子进程自己不发 SIGKILL，现实里几乎只有内核的 OOM killer——
+ *   容器的内存上限先于堆的上限用尽，审查 A4）、
+ *   crashed（子进程出错、意外退出、加载时或空闲时被结束、加载不了或回了不认识的消息，cause 是原因）
  */
-export type ProcessPoolFailure = 'queue-full' | 'wait-timeout' | 'closed' | 'out-of-memory' | 'timeout' | 'crashed'
+export type ProcessPoolFailure = 'queue-full' | 'wait-timeout' | 'closed' | 'out-of-memory' | 'timeout' | 'killed' | 'crashed'
 
 export class ProcessPoolError extends Error {
   readonly reason: ProcessPoolFailure
@@ -105,6 +108,21 @@ interface PooledChild {
 /** 一个子进程的位置：子进程按需创建，丢弃之后回到 undefined */
 interface Slot {
   child: PooledChild | undefined
+}
+
+/**
+ * 子进程自己退出了（close 事件；池子结束的在 #discard 里已经丢下，之后的 close 不再处理）时，等着它的任务没有结果的原因：
+ * - 标准错误里有 V8 的内存超限说明：out-of-memory（堆超过 --max-old-space-size，V8 自己中止）；
+ * - 等这个任务的结果时被 SIGKILL：killed——池子结束的不走到这里，子进程自己不发 SIGKILL，现实里几乎只有内核的 OOM killer
+ *   （容器的内存上限先用尽；子进程的 oom_score_adj 是 1000，内核先挑它，主进程保住）。同一份输入重试多半还是这样（审查 A4）；
+ * - 其余（加载时、空闲时被结束，退出码，别的信号）：crashed
+ */
+function exitReason(child: PooledChild, signal: NodeJS.Signals | null): ProcessPoolFailure {
+  if (OUT_OF_MEMORY.test(child.stderr))
+    return 'out-of-memory'
+  if (signal === 'SIGKILL' && child.waiting?.expect === 'result')
+    return 'killed'
+  return 'crashed'
 }
 
 export class ProcessPool<Task, Result> {
@@ -246,7 +264,7 @@ export class ProcessPool<Task, Result> {
     subprocess.on('error', (error: Error) => this.#discard(slot, child, new ProcessPoolError('crashed', { cause: error })))
     subprocess.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
       const cause = new ChildProcessExitError(code, signal, child.stderr)
-      this.#discard(slot, child, new ProcessPoolError(OUT_OF_MEMORY.test(child.stderr) ? 'out-of-memory' : 'crashed', { cause }))
+      this.#discard(slot, child, new ProcessPoolError(exitReason(child, signal), { cause }))
     })
     this.#hold(child, false)
     return child

@@ -5,6 +5,8 @@
 // - 同一个账户在执行与排队里合计至多 INSPECTIONS_PER_ACCOUNT 份（审查 A2）：多出来的只对这个人回 503，别人照常排进来；
 // - 排队满了、等待超时、子进程崩溃或超时、正在退出：503 SERVICE_UNAVAILABLE 带 Retry-After（与数据库繁忙、等待密码哈希同一个做法，
 //   页面的保存照"结果未知"重试）；子进程的堆超过上限：这份快照按"过于复杂"拒绝（规则 too-complex）；
+// - 子进程在检查这一份时被外部结束（SIGKILL，现实里几乎只有内核的 OOM killer：容器的内存上限先于堆上限用尽，审查 A4）：同样按
+//   too-complex 拒绝、记 error——回 503 的话页面会一直原样重发，每次都再把容器推到上限；运维据此调内存（部署说明的内存规则）；
 // - 应用退出时结束全部子进程（onApplicationShutdown：在途的请求已经排空，ADR-004）；应用被强制结束时子进程随 IPC 断开退出。
 // 子进程的入口按这个文件自己的扩展名找：源码运行（单元测试、集成测试按源码条件引用 api）时是 snapshot-inspection.child.ts，
 // 由 Node 直接剥离类型执行，contracts 也按源码条件解析；构建产物与镜像里是同一个目录下的 .js。找不到入口时建不起来（启动即失败），
@@ -155,6 +157,9 @@ export class SnapshotInspector implements OnApplicationShutdown {
     switch (error.reason) {
       case 'out-of-memory':
         this.#logger.warn('快照过于复杂：检查时子进程的堆超过上限，按 too-complex 拒绝', { rawBytes })
+        return { ok: false, rule: 'too-complex' }
+      case 'killed':
+        this.#logger.error('快照检查的子进程在检查期间被系统结束（SIGKILL），多半是容器的内存不够（见部署说明里快照检查的内存规则），这份按 too-complex 拒绝', { err: error, rawBytes })
         return { ok: false, rule: 'too-complex' }
       case 'crashed':
         this.#logger.error('快照检查的子进程出错，这次回 503', { err: error, rawBytes })

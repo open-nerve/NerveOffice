@@ -136,6 +136,19 @@ describe('子进程池没有给出结果时的回答', SPAWNING, () => {
     expect(inspector.liveProcesses).toBe(0)
   })
 
+  it('子进程在检查期间被系统结束（SIGKILL，多半是容器的内存用尽、内核的 OOM killer，审查 A4）：这份按 too-complex 拒绝（不回 503：同一份重发多半还是这样），记 error、指向部署说明的内存规则；之后照常检查', async () => {
+    const { inspector, error: logged } = setup({ processes: 1 }, FAKE_ENTRY)
+    const task = fake({ kind: 'sigkill' })
+    expect(await inspector.inspect(task, 'sheet@1', AMY)).toEqual({ ok: false, rule: 'too-complex' })
+    const [message, fields] = logged.mock.calls[0] ?? []
+    expect(message).toContain('多半是容器的内存不够')
+    expect(message).toContain('部署说明')
+    expect(fields?.rawBytes).toBe(task.byteLength)
+    expect((fields?.err as { reason?: string } | undefined)?.reason).toBe('killed')
+    expect(inspector.liveProcesses).toBe(0)
+    expect(await inspector.inspect(fake({ kind: 'echo', value: 'next' }), 'sheet@1', AMY)).toBe('next')
+  })
+
   it('排队满了：503 带 Retry-After（排队等待的时限，向上取整到秒）', async () => {
     const { inspector } = setup({ processes: 1, queue: { maxWaiting: 0, maxWaitMs: 2_500 } }, FAKE_ENTRY)
     const running = inspector.inspect(fake({ kind: 'spin' }), 'sheet@1', AMY).catch((error: unknown) => error)
