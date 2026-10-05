@@ -12,9 +12,9 @@ import type { Session } from './selftest-session.ts'
 import { FORMULA_PROTOCOL } from '../internal-api/index.ts'
 import { CAPTURE_LIMITS } from './capture-reference.ts'
 import { FORMULA_SAMPLE, randOf, verifyFormulaSnapshot } from './capture-samples.ts'
-import { formulaModeFromSearch } from './formula-mode.ts'
 import { CAPTURE_REASON_TEXT, captureByRule, checkEditing, lastCapture, round, sheetNamed, sleep } from './selftest-capture-rule.ts'
 import { waitFor } from './selftest-dom.ts'
+import { FORMULA_MODE_PARAM, formulaModeOfValue } from './selftest-report.ts'
 import { adoptEditor, check, CHECK_TIMEOUT_MS, chromeButton, describeView, fail, lastSeq, SIGNAL_TIMEOUT_MS, SWITCH_TIMEOUT_MS, untilSwitched } from './selftest-session.ts'
 
 // ---- formula-timing ----
@@ -137,11 +137,15 @@ export async function formulaTimingScenario(session: Session): Promise<void> {
   if (!await checkEditing(session))
     return
   const { probe } = session
-  const requested = formulaModeFromSearch(window.location.search)
   await check(session, 'formula.mode', async () => {
-    if (probe.formulaMode !== requested)
-      fail(`地址选的是 ${requested}，编辑器以 ${probe.formulaMode} 创建`)
-    return requested === 'worker' ? '公式在 Worker 里计算（地址没有选主线程模式）' : '公式在主线程计算（地址 formula=main：不注册 RPC、让出间隔 20）'
+    // 地址选的模式另按参数的写法读（不经编辑器的开关 formula-mode.ts，它写错了这里也看得出来）
+    const value = new URLSearchParams(window.location.search).get(FORMULA_MODE_PARAM)
+    const requested = formulaModeOfValue(value)
+    if (requested === null)
+      fail(`地址里的 ${FORMULA_MODE_PARAM}=${String(value)} 不认识`)
+    if (probe.formulaMode !== (requested ?? 'worker'))
+      fail(`地址选的是 ${requested ?? 'worker（没有选）'}，编辑器以 ${probe.formulaMode} 创建`)
+    return probe.formulaMode === 'worker' ? `公式在 Worker 里计算（地址${requested === undefined ? '没有选' : '选了 Worker'}）` : '公式在主线程计算（地址 formula=main：不注册 RPC、让出间隔 20）'
   })
   const opened = await check(session, 'formula.open', async () => {
     // 样本的公式不带缓存值：打开时 SDK 算全部公式（进入编辑时重建，编辑的编辑器又算一遍）；写回带 onlyLocal，不算修改

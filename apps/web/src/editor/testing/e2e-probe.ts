@@ -49,6 +49,11 @@ export interface ProbeCommand {
   readonly seq: number
   /** 记下的时刻（performance.now()，页面的导航开始是 0）：Worker 同步回来的 mutation 是它在主线程上执行的时刻 */
   readonly at: number
+  /**
+   * 记下时编辑器的本地修改序号：变更检测在探针之前订阅（创建工作簿之前），所以执行完的那一条记下时，这条命令若被认作修改，序号已经加过了。
+   * 前后两条的差就是这条命令算了几次修改——捕获的时机按它（编辑器自己的判定）算，不按命令日志另做的判定
+   */
+  readonly changeSeq: number
   readonly phase: 'before' | 'executed'
   readonly id: string
   readonly kind: CommandKind
@@ -167,6 +172,7 @@ export function installEditorProbe({ univer, univerAPI, workbook, changes, formu
     log.push({
       seq: log.length + 1,
       at: performance.now(),
+      changeSeq: changes.changeSeq(),
       phase,
       id: command.id,
       kind: command.kind,

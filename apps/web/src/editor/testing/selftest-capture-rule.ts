@@ -174,9 +174,27 @@ export interface CaptureLoopOptions {
 
 export const TICK_MS = 10
 
-/** 本文档的修改（变更检测会认作修改的 mutation）：命令日志里 mark 之后的，按发生的顺序 */
+/**
+ * 命令日志按变更检测的口径另做的判定（content-compare.ts，与编辑器的判定是同一份规则，单元测试核对）：mark 之后本文档的修改，
+ * 按发生的顺序。change-detection 拿它与编辑器的本地修改序号对照（两边不一致就是判定出了岔子）
+ */
 export function changesAfter(session: Session, mark: number): ProbeCommand[] {
   return documentChangesIn(session.probe.commands(mark), session.unitId)
+}
+
+/**
+ * 编辑器自己认作修改的命令：mark 之后执行完、记下时本地修改序号比前一条大的那些（探针的 changeSeq）。捕获的时机按它算——
+ * 与自动保存订阅编辑器的修改信号同一个口径，变更检测漏掉的修改在这里也看不到（迟到而没被检测的变化由捕获之后的比较认出）
+ */
+export function detectedChangesAfter(session: Session, mark: number, seqAtMark: number): ProbeCommand[] {
+  let previous = seqAtMark
+  const detected: ProbeCommand[] = []
+  for (const command of session.probe.commands(mark)) {
+    if (command.phase === 'executed' && command.changeSeq > previous)
+      detected.push(command)
+    previous = Math.max(previous, command.changeSeq)
+  }
+  return detected
 }
 
 export async function captureByRule(session: Session, options: CaptureLoopOptions): Promise<CaptureRun> {
@@ -192,7 +210,7 @@ export async function captureByRule(session: Session, options: CaptureLoopOption
   for (;;) {
     const now = performance.now()
     const seq = probe.changeSeq()
-    const uncaptured = changesAfter(session, logMark)
+    const uncaptured = detectedChangesAfter(session, logMark, capturedSeq)
     const settled = probe.formulasSettled()
     if (!settled) {
       unsettledSeen = true

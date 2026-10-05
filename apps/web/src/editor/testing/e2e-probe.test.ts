@@ -224,6 +224,17 @@ describe('探针的快捷键清单与编辑栏（M2-P6 复核 F1、F2 之后）'
 })
 
 describe('探针露出变更检测、公式收齐与进度、公式在哪里计算（M3-P4 设计 §3.15）', () => {
+  it('命令日志的每条带记下时的本地修改序号（变更检测先于探针订阅：执行完的那一条记下时序号已经加过了）', () => {
+    const { api, fire } = fakeFacade()
+    const state = { seq: 0, settled: true, progress: IDLE_PROGRESS }
+    installEditorProbe(api, fakeWorkbook(() => ({})), undefined, { changes: fakeChanges(state) })
+    fire('BeforeCommandExecute', { ...mutation })
+    state.seq = 1
+    fire('CommandExecuted', { ...mutation })
+    fire('CommandExecuted', { ...command })
+    expect(window.__nerveEditorProbe?.commands().map(entry => [entry.phase, entry.changeSeq])).toEqual([['before', 0], ['executed', 1], ['executed', 1]])
+  })
+
   it('读的是编辑器的跟踪器（每次调用时现读）与创建时定下的公式模式', () => {
     const { api } = fakeFacade()
     const state = { seq: 0, settled: true, progress: IDLE_PROGRESS }

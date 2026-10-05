@@ -412,6 +412,12 @@ const COMPOSITION_STEP_MS = 80
 const NOTE_DEBOUNCE_WAIT_MS = 400
 
 /**
+ * 拼音写进批注之后再组字多久才选定：比捕获的静默（1 秒）长，不认组字的规则这时就会在组字中捕获（变异验证）；
+ * 整段组字仍在上限（从第一处修改算起 3 秒）之内
+ */
+const COMPOSITION_HOLD_MS = CAPTURE_LIMITS.quietMs + 300
+
+/**
  * 改受控的 textarea 的值并派发 input：经原型上的 setter 改（Reflect.set 以 textarea 为接收者调用原型的 setter，绕过 React 装在元素上的
  * 值跟踪，React 才认得出值变了、调用 onChange），isComposing 按组字与否
  */
@@ -488,6 +494,7 @@ async function compositionScenario(session: Session): Promise<void> {
       await sleep(NOTE_DEBOUNCE_WAIT_MS)
       const writesWhileComposing = probe.commands(mark).filter(command => command.phase === 'executed' && command.id === 'sheet.mutation.update-note')
       const seqWhileComposing = probe.changeSeq() - baseSeq
+      await sleep(COMPOSITION_HOLD_MS)
       input.dispatchEvent(new CompositionEvent('compositionupdate', { bubbles: true, composed: true, data: COMPOSED_TEXT }))
       typeInto(input, COMPOSED_TEXT, true)
       input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, composed: true, data: COMPOSED_TEXT }))
