@@ -61,6 +61,11 @@ function fakeFactory() {
         onCellEditingChange: () => () => {},
         commitCellEditing: async () => true,
         settleFormulas: async () => 'settled',
+        formulasSettled: () => true,
+        onFormulaProgress: () => () => {},
+        composing: () => false,
+        onCompositionChange: () => () => {},
+        settlePanels: async () => {},
         capture: () => options.snapshot,
         viewState: () => fake.disposed ? undefined : viewStateOf(index),
         openCheck: { ok: true },
@@ -136,6 +141,20 @@ describe('编辑器槽位（审查 A1）', () => {
     second.enter('steady')
     expect(context.slot.surface()).toBe('steady')
     expect(context.onChange).toHaveBeenCalled()
+  })
+
+  it('强制全量重算（M3-P4 设计 §3.5）：replace 的 recalculate 交给工厂；不给时不带这一项', async () => {
+    const context = setup()
+    await replaced(context, 'read', 'A')
+    const recalculating = context.slot.replace('edit', 'B', { recalculate: true })
+    await settle()
+    context.factory.gate(1).release()
+    await recalculating
+    expect(context.factory.createEditor.mock.calls.map(call => call[0])).toEqual([
+      { snapshot: 'A', access: 'read', viewState: undefined },
+      { snapshot: 'B', access: 'edit', viewState: viewStateOf(0), recalculate: true },
+    ])
+    expect(context.factory.createEditor.mock.calls[0]?.[0]).not.toHaveProperty('recalculate')
   })
 
   it('单飞：上一次创建还在途时再换，先等它结束、销毁它的结果（它交回 undefined），再建新的——同一时刻至多一次创建、至多一个编辑器', async () => {

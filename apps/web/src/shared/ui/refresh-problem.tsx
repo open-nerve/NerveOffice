@@ -4,18 +4,23 @@
 // 第一次就没取到（没有数据）仍由各列表自己的"加载失败"说明；加载下一页失败不在这里（isRefetchError 不含它，各列表另有说明）；
 // 按访问权限被拒绝（403、404）由各列表先处理（例如换成"空间不存在"），不走到这里。按路径引用（不经桶文件）。
 // 详情（页头的空间与账户、行内操作取的文档权限）同一个说明，经 DetailRefreshProblem（DEF-040）。
+// "重试"是共用的 RetryButton（DEF-045）：重新请求的过程中按钮留着、不可用、说正在重试，与第一次就没取到时的"重试"说法一致。
 import type { RefObject } from 'react'
 import { isAccessDenied, isMissingResource } from '../api/client.ts'
 import { describeError } from '../api/describe-error.ts'
 import { messages } from '../i18n/index.ts'
 import { useFocusHandOff } from '../lib/use-focus-hand-off.ts'
 import { Alert, AlertDescription } from './alert.tsx'
-import { Button } from './button.tsx'
+import { RetryButton } from './retry-button.tsx'
 
 /** 列表的请求：用到 TanStack Query 结果里的这几项，useQuery 与 useInfiniteQuery 的结果都合用 */
 export interface RefreshableQuery {
   /** 有数据、重新请求失败了（无限列表不含加载下一页的失败：TanStack Query 另算 isFetchNextPageError） */
   readonly isRefetchError: boolean
+  /**
+   * 有数据、正在重新请求（无限列表不含加载下一页：TanStack Query 的 isRefetching 不算它）：说明显示着时"重试"说正在重试（DEF-045）
+   */
+  readonly isRefetching: boolean
   readonly error: unknown
   readonly refetch: () => Promise<unknown>
 }
@@ -33,7 +38,8 @@ interface RefreshProblemProps {
 }
 
 /**
- * 留着旧数据、刷新失败了：醒目的提示（role="alert"，出现时读屏读出）、原因与重试；重试成功之后随之消失。
+ * 留着旧数据、刷新失败了：醒目的提示（role="alert"，出现时读屏读出）、原因与重试；重试成功之后随之消失。重新请求的过程中说明留着
+ * （TanStack Query 在有数据时照旧是 error），"重试"不可用、说正在重试（RetryButton，DEF-045）；又失败了，说明换成新的原因。
  * 说明连同"重试"一起消失时焦点交给 fallbackFocus，不落到 body（shared/lib/use-focus-hand-off.ts，DEF-040）
  */
 export function RefreshProblem({ query, list, className, fallbackFocus }: RefreshProblemProps) {
@@ -45,7 +51,7 @@ export function RefreshProblem({ query, list, className, fallbackFocus }: Refres
       <AlertDescription>
         <p>{messages.common.refreshFailed(list)}</p>
         <p>{describeError(query.error).message}</p>
-        <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => void query.refetch()}>{messages.common.retry}</Button>
+        <RetryButton className="mt-2" retrying={query.isRefetching} onRetry={() => void query.refetch()} />
       </AlertDescription>
     </Alert>
   )
@@ -73,7 +79,7 @@ export function DetailRefreshProblem({ query, detail, className, fallbackFocus }
   const failed = query.isRefetchError && !isAccessDenied(query.error) && !isMissingResource(query.error)
   return (
     <RefreshProblem
-      query={{ isRefetchError: failed, error: query.error, refetch: query.refetch }}
+      query={{ isRefetchError: failed, isRefetching: query.isRefetching, error: query.error, refetch: query.refetch }}
       list={detail}
       className={className}
       fallbackFocus={fallbackFocus}

@@ -9,13 +9,13 @@ import { DetailRefreshProblem, RefreshProblem } from './refresh-problem.tsx'
 
 describe('RefreshProblem', () => {
   it('没有"留着旧数据的刷新失败"（第一次就没取到、加载下一页失败、刷新成功）：什么也不显示', () => {
-    render(<RefreshProblem query={{ isRefetchError: false, error: new ApiError(500, 'INTERNAL_ERROR', 'x'), refetch: async () => {} }} />)
+    render(<RefreshProblem query={{ isRefetchError: false, isRefetching: false, error: new ApiError(500, 'INTERNAL_ERROR', 'x'), refetch: async () => {} }} />)
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('留着旧数据、刷新失败了：醒目的提示说没能刷新（列表叫什么可以指定）与原因，重试就是重新请求', () => {
     const refetch = vi.fn(async () => {})
-    render(<RefreshProblem query={{ isRefetchError: true, error: new ApiError(500, 'INTERNAL_ERROR', 'x'), refetch }} list="成员列表" />)
+    render(<RefreshProblem query={{ isRefetchError: true, isRefetching: false, error: new ApiError(500, 'INTERNAL_ERROR', 'x'), refetch }} list="成员列表" />)
     const alert = screen.getByRole('alert')
     expect(alert).toHaveTextContent('成员列表没能刷新，显示的还是之前的内容')
     expect(alert).toHaveTextContent('服务器出了点问题，请稍后重试')
@@ -23,8 +23,25 @@ describe('RefreshProblem', () => {
     expect(refetch).toHaveBeenCalledTimes(1)
   })
 
+  it('重新请求的过程中（DEF-045）：说明留着，"重试"不可用、说正在重试（与第一次就没取到时的 RetryButton 一致），按钮不卸载、焦点还在它上面', () => {
+    const refetch = vi.fn(async () => {})
+    const failed = { isRefetchError: true, isRefetching: false, error: new ApiError(500, 'INTERNAL_ERROR', 'x'), refetch }
+    const { rerender } = render(<RefreshProblem query={failed} list="成员列表" />)
+    const retry = screen.getByRole('button', { name: '重试' })
+    retry.focus()
+    rerender(<RefreshProblem query={{ ...failed, isRefetching: true }} list="成员列表" />)
+    const retrying = screen.getByRole('button', { name: '正在重试…' })
+    expect(retrying).toBe(retry)
+    expect(retrying).toHaveAttribute('aria-disabled', 'true')
+    expect(retrying).toHaveAttribute('aria-busy', 'true')
+    expect(document.activeElement).toBe(retrying)
+    expect(screen.getByRole('alert')).toHaveTextContent('成员列表没能刷新')
+    rerender(<RefreshProblem query={failed} list="成员列表" />)
+    expect(screen.getByRole('button', { name: '重试' })).not.toHaveAttribute('aria-disabled', 'true')
+  })
+
   it('默认叫"列表"', () => {
-    render(<RefreshProblem query={{ isRefetchError: true, error: new ApiError(502, 'INTERNAL_ERROR', 'x'), refetch: async () => {} }} />)
+    render(<RefreshProblem query={{ isRefetchError: true, isRefetching: false, error: new ApiError(502, 'INTERNAL_ERROR', 'x'), refetch: async () => {} }} />)
     expect(screen.getByRole('alert')).toHaveTextContent(/^列表没能刷新，显示的还是之前的内容/)
   })
 })
@@ -44,10 +61,10 @@ function Page({ query, detail }: { readonly query: RefreshableQuery, readonly de
 }
 
 function failed(error: unknown = new ApiError(500, 'INTERNAL_ERROR', 'x')): RefreshableQuery {
-  return { isRefetchError: true, error, refetch: async () => {} }
+  return { isRefetchError: true, isRefetching: false, error, refetch: async () => {} }
 }
 
-const REFRESHED: RefreshableQuery = { isRefetchError: false, error: null, refetch: async () => {} }
+const REFRESHED: RefreshableQuery = { isRefetchError: false, isRefetching: false, error: null, refetch: async () => {} }
 
 describe('DetailRefreshProblem（DEF-040）', () => {
   it('留着上一次的详情、重新请求失败了（5xx、断网）：与列表同一个说明——详情叫什么、没能刷新与原因，重试就是重新请求', () => {
@@ -75,6 +92,11 @@ describe('DetailRefreshProblem（DEF-040）', () => {
   it('第一次就没取到、或者刷新成功了（isRefetchError 为假）：什么也不显示', () => {
     render(<DetailRefreshProblem query={{ ...REFRESHED, error: new ApiError(500, 'INTERNAL_ERROR', 'x') }} detail="空间信息" fallbackFocus={{ current: null }} />)
     expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('详情的说明同样在重新请求的过程中说正在重试（DEF-045，编辑器页头拼的那一份也带上进行中）', () => {
+    render(<DetailRefreshProblem query={{ ...failed(), isRefetching: true }} detail="空间信息" fallbackFocus={{ current: null }} />)
+    expect(screen.getByRole('button', { name: '正在重试…' })).toHaveAttribute('aria-disabled', 'true')
   })
 
   it('按了"重试"（焦点在说明里）、重试成功、说明随之消失：焦点交给页面给的元素（标题），不落到 body', () => {

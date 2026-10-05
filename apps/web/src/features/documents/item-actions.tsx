@@ -70,6 +70,8 @@ export interface ItemOperations {
 export interface PermissionsRequest extends FirstLoadQuery {
   readonly error: Error | null
   readonly isRefetchError: boolean
+  /** 有数据、正在重新请求（没能刷新的说明里"重试"说正在重试，DEF-045） */
+  readonly isRefetching: boolean
   readonly refetch: () => Promise<unknown>
 }
 

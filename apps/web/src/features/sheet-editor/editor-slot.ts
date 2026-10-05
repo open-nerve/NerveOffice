@@ -14,8 +14,17 @@ import type { EditorAccess, SheetEditor, SheetEditorLifecycle, SheetViewState } 
 /** 当前编辑器的进展：creating 是正在新建（含建好、还没接上；页面的交互屏障挡着），之后随编辑器的生命周期；没有编辑器时为 none */
 export type EditorSurface = 'none' | 'creating' | SheetEditorLifecycle
 
-/** 新建编辑器的工厂：容器由页面绑定 */
-export type CreateModeEditor = (options: { readonly snapshot: string, readonly access: EditorAccess, readonly viewState?: SheetViewState | undefined }) => Promise<SheetEditor>
+/**
+ * 新建编辑器的工厂：容器由页面绑定。recalculate：打开时强制全量重算（带"公式待更新"的文档进入编辑，M3-P4 设计 §3.5；适配层的
+ * createSheetEditor 的同名参数）
+ */
+export type CreateModeEditor = (options: { readonly snapshot: string, readonly access: EditorAccess, readonly viewState?: SheetViewState | undefined, readonly recalculate?: boolean }) => Promise<SheetEditor>
+
+/** 这一次新建的选项 */
+export interface ReplaceOptions {
+  /** 打开时强制全量重算（M3-P4 设计 §3.5：带"公式待更新"的文档进入编辑）；默认不 */
+  readonly recalculate?: boolean
+}
 
 export interface EditorSlotOptions {
   readonly createEditor: CreateModeEditor
@@ -34,7 +43,7 @@ export interface EditorSlot {
    * 就绪之后恢复视图状态。交回新建的编辑器（还没接上，由调用方 attach）。新建失败时上报、surface 为 none、交回 undefined；
    * 被之后的 replace 或 clear 取代时也交回 undefined（结果由这里销毁，失败不上报）
    */
-  readonly replace: (access: EditorAccess, snapshot: string) => Promise<SheetEditor | undefined>
+  readonly replace: (access: EditorAccess, snapshot: string, options?: ReplaceOptions) => Promise<SheetEditor | undefined>
   /** 接上 replace 交回的编辑器：之后 surface 随它的生命周期。不是最近一次交回、还没接上的那一个（已被取代、已销毁）时什么也不做 */
   readonly attach: (created: SheetEditor) => void
   /** 销毁现在的编辑器，在途的创建作废（建好之后销毁）；surface 为 none（读不到了、页面卸载） */
@@ -81,7 +90,7 @@ export function createEditorSlot(options: EditorSlotOptions): EditorSlot {
     editor: () => attached?.editor,
     surface: () => surface,
 
-    replace: async (access, snapshot) => {
+    replace: async (access, snapshot, replaceOptions = {}) => {
       const mine = ++ticket
       // 上一次创建还在途：等它结束（它在自己那边发现被取代，销毁结果）。等的不止一个时只有最后一个接着做：别的 replace、clear
       // 都会让 ticket 前进，所以等完之后还是自己的，就没有别的创建开始过
@@ -97,7 +106,7 @@ export function createEditorSlot(options: EditorSlotOptions): EditorSlot {
         finish = resolve
       })
       try {
-        const created = await options.createEditor({ snapshot, access, viewState })
+        const created = await options.createEditor(replaceOptions.recalculate === true ? { snapshot, access, viewState, recalculate: true } : { snapshot, access, viewState })
         if (mine !== ticket) {
           created.dispose()
           return undefined

@@ -62,3 +62,25 @@ describe('变更检测的判定', () => {
     expect(isDocumentChange(record({ id: 'sheet.mutation.set-worksheet-row-auto-height' }), config)).toBe(true)
   })
 })
+
+describe('DEF-020：判定不看 trigger（M3-P4 设计 §3.16）', () => {
+  // 被入口守卫取消的命令留在 SDK 的执行栈里，之后命令之外的 mutation（自动行高、Worker 的写回、计时器里的操作）带上它的 trigger
+  // （M1-P4 S2 探针 e：Ctrl/Cmd+K 之后是 sheet.operation.insert-hyper-link-toolbar）。变更检测只看类型、执行选项、单元与排除名单
+  const cases: readonly CommandRecord[] = [
+    record(),
+    record({ kind: 'operation' }),
+    record({ options: { onlyLocal: true, fromFormula: true, applyFormulaCalculationResult: true } }),
+    record({ params: { unitId: 'other' } }),
+    record({ id: 'sheet.operation.clear-drawing-transformer' }),
+    record({ id: 'sheet.mutation.set-worksheet-row-auto-height' }),
+    record({ params: {} }),
+  ]
+  const triggers = [undefined, 'sheet.operation.insert-hyper-link-toolbar', 'sheet.command.set-range-bold', 'sheet.command.clear-selection-format', 'x']
+
+  it.each(triggers)('参数里的 trigger 是 %s：每一条的判定与不带时相同', (trigger) => {
+    for (const base of cases) {
+      const params = typeof base.params === 'object' && base.params !== null ? { ...base.params, trigger } : { trigger }
+      expect(classifyCommand({ ...base, params }, config)).toBe(classifyCommand(base, config))
+    }
+  })
+})

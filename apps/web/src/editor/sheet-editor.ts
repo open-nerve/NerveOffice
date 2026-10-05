@@ -20,12 +20,17 @@
 // （testing/profile-fault.ts，地址带 profileFault=<组> 时不注册这几组，M3-P4 设计 §3.14），生产构建里没有这两步。
 // 模式切换一律重建（M3-P2 设计 §3.1）：编辑器页销毁旧的、以目标的 access 新建一个；重建之前取出视图状态（viewState），
 // 新建时交回来，就绪之后恢复（view-state.ts）。容器上写着这一个编辑器的打开方式（data-editor-access，读 / 写），销毁时去掉。
+// M3-P4（设计 §3.2、§3.4–§3.6、§3.10）：自动保存要的信号——公式的进度（变更检测的跟踪器）、组合输入（composition-watch.ts）、
+// 面板的防抖（panel-debounce-watch.ts）；创建参数 recalculate：带"公式待更新"的文档进入编辑时强制全量重算（档案的表格公式插件以
+// CalculationMode.FORCED 创建），收齐的跟踪器在看到它的触发命令之前不算收齐（formula-settle-tracker.ts）。
 import type { CellEditingWatch } from './cell-editing-watch.ts'
 import type { ChangeClassifierConfig } from './change-tracking/change-classifier.ts'
 import type { ChangeTracker } from './change-tracking/change-tracker.ts'
 import type { CleanupStack } from './cleanup-stack.ts'
+import type { CompositionWatch } from './composition-watch.ts'
 import type { EditorAccess } from './editor-access.ts'
 import type { LifecycleWatch, SheetEditorLifecycle } from './lifecycle-watch.ts'
+import type { PanelDebounceWatch } from './panel-debounce-watch.ts'
 import type { OpenCheck } from './profile/open-check.ts'
 import type { SheetViewState } from './view-state.ts'
 import type { WorkbookSnapshot } from './workbook-snapshot.ts'
@@ -36,11 +41,13 @@ import { pollUntil, withDeadline } from './async-tools.ts'
 import { watchCellEditing } from './cell-editing-watch.ts'
 import { createChangeTracker } from './change-tracking/change-tracker.ts'
 import { createCleanupStack } from './cleanup-stack.ts'
+import { watchComposition } from './composition-watch.ts'
 import { editorIdentityOverride } from './identity/editor-authz-io.service.ts'
 import { installRestrictedImageFunction } from './image-function/install-image-policy.ts'
 import { watchWorkerImagePolicy } from './image-function/worker-image-policy.ts'
 import { createResourceLoadGuard, disposalSafeLocaleOverride } from './internal-api/index.ts'
 import { watchLifecycle } from './lifecycle-watch.ts'
+import { watchPanelDebounces } from './panel-debounce-watch.ts'
 import { installEntryGuards } from './profile/entry-guards.ts'
 import { installLinkPolicy } from './profile/link-policy.ts'
 import { SHEET_ZH_CN } from './profile/locale.ts'
@@ -76,6 +83,22 @@ export interface SheetEditor {
   readonly commitCellEditing: () => Promise<boolean>
   /** 等公式收齐（P4 设计 §3.6.6），最多等 timeoutMs */
   readonly settleFormulas: (timeoutMs: number) => Promise<'settled' | 'timeout'>
+  /**
+   * 公式收齐了没有（formula-settle-tracker.ts 的三个条件；以强制全量重算创建时，看到它的触发命令之前不算，M3-P4）：
+   * 自动保存按它决定捕获带不带"公式待更新"、什么时候补存
+   */
+  readonly formulasSettled: () => boolean
+  /** 公式的进度变了（收齐与否可能变了）：在 SDK 执行命令的过程中同步调用，监听者只记下、之后再做 */
+  readonly onFormulaProgress: (listener: () => void) => () => void
+  /** 正在组合输入（输入法组字，composition-watch.ts）：组字中自动保存不捕获（计划书 §7.3） */
+  readonly composing: () => boolean
+  /** 组字开始或结束（组字的元素失焦、页面隐藏时的复位也算结束） */
+  readonly onCompositionChange: (listener: () => void) => () => void
+  /**
+   * 等面板里防抖中的改动写进模型（批注浮层 300 ms、数据验证面板 1 秒，panel-debounce-watch.ts）：这些面板开着时有过输入，就等到
+   * SDK 的防抖到点；没有时立即兑现。退出编辑、交出、按保存与失去编辑权的捕获之前等它（M3-P4 设计 §3.4）。从不失败
+   */
+  readonly settlePanels: () => Promise<void>
   /** 捕获：JSON.stringify(save())；捕获前不调用 Facade 的读取方法（它们可能改动模型） */
   readonly capture: () => string
   /**
@@ -105,6 +128,15 @@ export interface CreateSheetEditorOptions {
   readonly access: EditorAccess
   /** 重建之前的编辑器给出的视图状态：就绪之后恢复；恢复不了（工作表已经不在等）就是默认视图，不影响编辑器可用 */
   readonly viewState?: SheetViewState | undefined
+  /**
+   * 打开时强制全量重算（M3-P4 设计 §3.5 第 3 条：带"公式待更新"的文档进入编辑）：档案的表格公式插件以 CalculationMode.FORCED 创建；
+   * 收齐的跟踪器看到它的触发命令之前不算收齐，自动保存等它算完再补存。重算的写回带 onlyLocal，不算修改
+   */
+  readonly recalculate?: boolean
+  /**
+   * 页面自己的界面（编辑器页的页头）：组合输入与面板防抖的输入目标在它里面的不算（那里的输入不进表格）；不给时都算
+   */
+  readonly pageUi?: Node | undefined
 }
 
 /**
@@ -159,6 +191,8 @@ interface MountedEditor {
   readonly changes: ChangeTracker
   readonly cellEditing: CellEditingWatch
   readonly lifecycle: LifecycleWatch
+  readonly composition: CompositionWatch
+  readonly panels: PanelDebounceWatch
   readonly openCheck: OpenCheck
 }
 
@@ -170,6 +204,7 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
     ? (await import('./testing/profile-fault.ts')).sheetPluginEntriesUnderFault(location.search)
     : sheetPluginEntries
   const { container, access } = options
+  const recalculate = options.recalculate === true
   container.setAttribute(EDITOR_ACCESS_ATTRIBUTE, access)
   cleanup.defer(() => container.removeAttribute(EDITOR_ACCESS_ATTRIBUTE))
   // 静态的 new Worker(new URL(...)) 才会被打包成同源的 Worker 脚本；传地址给插件会建出经典 Worker（rpc/src/plugin.ts:86）
@@ -183,7 +218,7 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   const resourceGuard = createResourceLoadGuard()
   const univer = createUniver(access, resourceGuard)
   cleanup.defer(() => univer.dispose())
-  for (const entry of pluginEntries({ container, formulaWorker: worker, access }))
+  for (const entry of pluginEntries({ container, formulaWorker: worker, access, recalculate }))
     entry.register(univer)
   const univerAPI = FUniver.newAPI(univer)
   // 不变量（M2-P6 复核 F3）：Facade 的执行前事件（BeforeCommandExecute）在创建工作簿之前就要有订阅者，而且直到销毁都不能减到零。
@@ -211,12 +246,17 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   const readOnly = access === 'read' ? installReadOnlyGuard(univer, univerAPI, classifier) : undefined
   if (readOnly !== undefined)
     cleanup.defer(readOnly.dispose)
-  const changes = createChangeTracker(univer, univerAPI, classifier)
+  const changes = createChangeTracker(univer, univerAPI, classifier, { forcedRound: recalculate })
   cleanup.defer(changes.dispose)
   const cellEditing = watchCellEditing(univerAPI, snapshot.unitId, changes.onChange)
   cleanup.defer(cellEditing.dispose)
   const lifecycle = watchLifecycle({ univerAPI, installImagePolicy: async () => installRestrictedImageFunction(univer, location.origin) })
   cleanup.defer(lifecycle.dispose)
+  // 组合输入与面板的防抖（M3-P4）：只看页面上的 DOM 事件，与 SDK 无关；随编辑器销毁
+  const composition = watchComposition(container.ownerDocument, { ignoreWithin: options.pageUi })
+  cleanup.defer(composition.dispose)
+  const panels = watchPanelDebounces(container.ownerDocument, { ignoreWithin: options.pageUi })
+  cleanup.defer(panels.dispose)
 
   // 打开自检的"之前"一侧（M3-P4 设计 §3.11 第 3 条）：SDK 会改动交给 createWorkbook 的对象，先把载入的快照里的资源取出一份
   const resourcesBefore = structuredClone(snapshot.data.resources)
@@ -243,7 +283,7 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   readOnly?.clearUndoStack()
   // 就绪之后再核对一次 hook 集合与这之前记下的加载问题：防 SDK 把注册挪到更晚（1.0.1 里两次的 hook 集合相同）
   const openCheck = recheckReady(created, { profile: SHEET_PROFILE_ID, hookNames: resourceGuard.sheetHookNames(), loadFailures: resourceGuard.loadFailures() })
-  return { univer, univerAPI, workbook, changes, cellEditing, lifecycle, openCheck }
+  return { univer, univerAPI, workbook, changes, cellEditing, lifecycle, composition, panels, openCheck }
 }
 
 export async function createSheetEditor(options: CreateSheetEditorOptions): Promise<SheetEditor> {
@@ -267,7 +307,7 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
     cleanup.run()
     throw error
   }
-  const { workbook, changes, cellEditing, lifecycle, openCheck } = mounted
+  const { workbook, changes, cellEditing, lifecycle, composition, panels, openCheck } = mounted
 
   let disposed = false
   const dispose = (): void => {
@@ -310,6 +350,11 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
       const settled = await pollUntil(changes.formulasSettled, { timeoutMs, intervalMs: SETTLE_POLL_INTERVAL_MS })
       return settled ? 'settled' : 'timeout'
     },
+    formulasSettled: () => !disposed && changes.formulasSettled(),
+    onFormulaProgress: changes.onFormulaProgress,
+    composing: () => !disposed && composition.composing(),
+    onCompositionChange: composition.onChange,
+    settlePanels: async () => panels.settled(),
     capture() {
       usable()
       return JSON.stringify(workbook.save())

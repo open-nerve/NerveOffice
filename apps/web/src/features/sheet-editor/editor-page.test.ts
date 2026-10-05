@@ -2,6 +2,7 @@ import type { AcquiredEditLease, CreatedDocument, DocumentDetail, RenewedEditLea
 import type { EditorAccess, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
+import type { Autosave, AutosaveTuning } from './autosave.ts'
 import type { EditLeaseApi } from './edit-lease.ts'
 import type { EditModeState } from './edit-mode.ts'
 import type { FetchedEditStatus, LoadedContent } from './editor-api.ts'
@@ -10,6 +11,7 @@ import type { SaveRequest } from './save-coordinator.ts'
 import { EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError, setCsrfToken } from '../../shared/api/index.ts'
+import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { createEditorPage } from './editor-page.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
@@ -77,6 +79,11 @@ function fakeEditor(stage: SheetEditorLifecycle = 'rendered') {
     onCellEditingChange: () => () => {},
     commitCellEditing: async () => true,
     settleFormulas: async () => 'settled',
+    formulasSettled: () => true,
+    onFormulaProgress: () => () => {},
+    composing: () => false,
+    onCompositionChange: () => () => {},
+    settlePanels: async () => {},
     capture: () => '{"id":"unit-1"}',
     viewState: () => undefined,
     openCheck: { ok: true },
@@ -104,6 +111,46 @@ function fakeChannel() {
     close: () => {},
   }
   return { channel, fromOtherTab: () => listeners.forEach(listener => listener()), listeners }
+}
+
+/** 可以设的开关（页面的可见性、联网）：变了时同步通知 */
+function fakeSwitch(initial: boolean) {
+  let value = initial
+  const listeners = new Set<() => void>()
+  return {
+    get: () => value,
+    onChange: (listener: () => void) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    set: (next: boolean) => {
+      value = next
+      listeners.forEach(listener => listener())
+    },
+  }
+}
+
+/** 测试构建的自动保存控制的样子：默认暂停定时的上传（与 E2E 的夹具一样）；记下交来的调度 */
+function fakeAutosaveControl() {
+  let held = true
+  const listeners = new Set<() => void>()
+  const tuning: AutosaveTuning = {
+    limits: () => DEFAULT_AUTOSAVE_LIMITS,
+    held: () => held,
+    onChange: (listener) => {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+  }
+  const attached: (Autosave | undefined)[] = []
+  return {
+    hooks: { tuning, attach: (autosave: Autosave | undefined) => attached.push(autosave) },
+    current: (): Autosave | undefined => attached.at(-1),
+    release: () => {
+      held = false
+      listeners.forEach(listener => listener())
+    },
+  }
 }
 
 /** 编辑器页交给适配层的创建参数 */
@@ -163,6 +210,9 @@ function setup(options: Setup = {}) {
     return next.editor
   }))
   const editIntent = { requested: options.editIntent ?? true, clear: vi.fn() }
+  const hidden = fakeSwitch(false)
+  const online = fakeSwitch(true)
+  const autosave = fakeAutosaveControl()
   let id = 0
   const editorPage = createEditorPage({
     documentId: 'documentId' in options ? options.documentId : DOCUMENT_ID,
@@ -173,7 +223,10 @@ function setup(options: Setup = {}) {
     page,
     sessionChannel: channel,
     clock: time.clock,
-    visibility: { hidden: () => false, onChange: () => () => {} },
+    visibility: { hidden: hidden.get, onChange: hidden.onChange },
+    network: { online: online.get, onChange: online.onChange },
+    digest: async snapshot => `sha:${snapshot}`,
+    autosaveControl: autosave.hooks,
     editIntent,
     currentPath: () => `/documents/${DOCUMENT_ID}`,
     newId: options.newId ?? (() => `id-${++id}`),
@@ -181,7 +234,7 @@ function setup(options: Setup = {}) {
     reportError: vi.fn(),
   })
   pages.push(editorPage)
-  return { editorPage, surface, chrome, fake, fakes, page, api, editLease, time, createEditor, fromOtherTab, listeners, editIntent }
+  return { editorPage, surface, chrome, fake, fakes, page, api, editLease, time, createEditor, fromOtherTab, listeners, editIntent, hidden, online, autosave }
 }
 
 /** 查看者读到的编辑状态：不能编辑 */
@@ -745,9 +798,25 @@ describe('编辑器页的会话（P4 设计 §3.7.3，审查 B1）', () => {
     expect(editorPage.view()).toMatchObject({ session: 'active', sessionProblem: undefined, save: { status: 'clean', problem: undefined } })
   })
 
-  it('保存中、同时有确认在途时再按保存：不做任何事，仍是"保存中"，不说明正在确认（复验 TB9）', async () => {
+  it('保存中再按保存（M3-P4 设计 §3.4、§3.9，取代复验 TB9 的"不做任何事"）：会话不必确认时不说正在确认；在途的结束之后立即再存一次', async () => {
     const pending = deferred<SaveContentResponse>()
-    const { editorPage, api, fromOtherTab } = setup({ api: { save: vi.fn(async () => pending.promise) } })
+    const save = vi.fn<EditorPageApi['save']>(async () => pending.promise)
+    const { editorPage, api } = setup({ api: { save } })
+    await editorPage.load()
+    const saving = editorPage.save()
+    await vi.waitFor(() => expect(api.save).toHaveBeenCalledOnce())
+    const again = editorPage.save()
+    expect(editorPage.view()).toMatchObject({ confirmingSession: false, save: { status: 'saving', canSave: true } })
+    save.mockResolvedValueOnce({ revision: 5, savedAt: '2026-09-27T03:00:01.000Z', unchanged: true })
+    pending.resolve({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false })
+    await Promise.all([saving, again])
+    expect(api.save).toHaveBeenCalledTimes(2)
+  })
+
+  it('保存中、同时有确认在途时再按保存：先等确认（页头说正在确认：这一次真的在等它），确认是本人之后排在在途的后面再存一次', async () => {
+    const pending = deferred<SaveContentResponse>()
+    const save = vi.fn<EditorPageApi['save']>(async () => pending.promise)
+    const { editorPage, api, fromOtherTab } = setup({ api: { save } })
     await editorPage.load()
     const saving = editorPage.save()
     await vi.waitFor(() => expect(api.save).toHaveBeenCalledOnce())
@@ -755,11 +824,13 @@ describe('编辑器页的会话（P4 设计 §3.7.3，审查 B1）', () => {
     vi.mocked(api.session).mockReturnValueOnce(check.promise)
     fromOtherTab()
     const again = editorPage.save()
-    expect(editorPage.view()).toMatchObject({ confirmingSession: false, save: { status: 'saving' } })
+    expect(editorPage.view()).toMatchObject({ confirmingSession: true, save: { status: 'saving' } })
     check.resolve(ALICE)
+    save.mockResolvedValueOnce({ revision: 5, savedAt: '2026-09-27T03:00:01.000Z', unchanged: true })
     pending.resolve({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false })
     await Promise.all([saving, again])
-    expect(api.save).toHaveBeenCalledOnce()
+    expect(api.save).toHaveBeenCalledTimes(2)
+    expect(editorPage.view()).toMatchObject({ confirmingSession: false, save: { status: 'clean' } })
   })
 
   it('保存得到未登录、向服务端确认时断网：按没有人登录显示，给出登录的入口（复验 SB4）', async () => {
@@ -1834,5 +1905,116 @@ describe('阅读与编辑的切换（M3-P2 设计 §3.1、§3.4）', () => {
     expect(api.contentIfChanged).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, 3)
     expect(createEditor.mock.calls.map(call => [call[0].access, call[0].snapshot])).toEqual([['read', '{"id":"unit-1"}'], ['read', '{"id":"unit-1","v":5}']])
     expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', update: 'none' })
+  })
+})
+
+describe('自动保存要的页面信号（M3-P4 设计 §3.10）', () => {
+  /** 本页的修改：假的编辑器的修改序号前进一处，通知订阅者 */
+  function edit(fake: ReturnType<typeof fakeEditor>, seq: number): void {
+    Object.assign(fake.editor, { changeSeq: () => seq })
+    fake.changeListeners.forEach(listener => listener())
+  }
+
+  it('编辑时页面的视图带自动保存这一侧的状态；联网与否随 online、offline 变（离线时不上传，恢复时立即上传）', async () => {
+    const { editorPage, fake, api, online, autosave, time } = setup()
+    await editorPage.load()
+    autosave.release()
+    expect(editorPage.view().autosave).toEqual({ offline: false, paused: false, retrying: false, held: false })
+    online.set(false)
+    expect(editorPage.view().autosave?.offline).toBe(true)
+    edit(fake, 1)
+    await time.advance(20_000)
+    expect(api.save).not.toHaveBeenCalled()
+    online.set(true)
+    await time.advance(0)
+    await vi.waitFor(() => expect(api.save).toHaveBeenCalledOnce())
+    expect(editorPage.view().autosave?.offline).toBe(false)
+  })
+
+  it('切到后台：在 visibilitychange 的同步段里就捕获并发出上传（不靠计时器，暂停定时的上传时也照常）', async () => {
+    const { editorPage, fake, api, hidden } = setup()
+    await editorPage.load()
+    edit(fake, 1)
+    hidden.set(true)
+    await vi.waitFor(() => expect(api.save).toHaveBeenCalledOnce())
+  })
+
+  it('会话不是本人、令牌已知失效、会话的确认在途：暂停（不发）；确认是本人之后恢复', async () => {
+    const { editorPage, api, fromOtherTab } = setup()
+    await editorPage.load()
+    const check = deferred<SessionResponse>()
+    vi.mocked(api.session).mockReturnValueOnce(check.promise)
+    fromOtherTab()
+    expect(editorPage.view().autosave?.paused).toBe(true)
+    check.resolve(ALICE)
+    await vi.waitFor(() => expect(editorPage.view().autosave?.paused).toBe(false))
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('other-user'))
+    expect(editorPage.view().autosave?.paused).toBe(true)
+  })
+
+  it('保存得到令牌失效：已知失效期间暂停，确认（换上新的令牌）之后恢复', async () => {
+    const save = vi.fn<EditorPageApi['save']>(async () => Promise.reject(new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')))
+    const { editorPage, api } = setup({ api: { save } })
+    await editorPage.load()
+    const check = deferred<SessionResponse>()
+    vi.mocked(api.session).mockReturnValueOnce(check.promise)
+    await editorPage.save()
+    expect(editorPage.view().autosave?.paused).toBe(true)
+    check.resolve(ALICE)
+    await vi.waitFor(() => expect(editorPage.view().autosave?.paused).toBe(false))
+  })
+
+  it('pagehide 时有保存在途：不释放编辑权（让租约到期，免得那次保存被拒）；没有在途的保存时照旧释放', async () => {
+    const pending = deferred<SaveContentResponse>()
+    const save = vi.fn<EditorPageApi['save']>(async () => pending.promise)
+    const { editorPage, editLease } = setup({ api: { save } })
+    await editorPage.load()
+    const saving = editorPage.save()
+    await vi.waitFor(() => expect(save).toHaveBeenCalledOnce())
+    window.dispatchEvent(new Event('pagehide'))
+    expect(editLease.release).not.toHaveBeenCalled()
+    pending.resolve({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false })
+    await saving
+    window.dispatchEvent(new Event('pagehide'))
+    expect(editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
+  })
+
+  it('测试构建的控制拿到当前的调度：进入编辑时交来，退出编辑之后交回 undefined', async () => {
+    const { editorPage, autosave } = setup()
+    await editorPage.load()
+    expect(typeof autosave.current()?.flush).toBe('function')
+    await editorPage.exitEditing()
+    expect(autosave.current()).toBeUndefined()
+  })
+})
+
+describe('阅读页的"公式待更新"与详情的刷新（M3-P4 设计 §3.5 第 4 条，DEF-045）', () => {
+  it('载入时详情带着标记、与载入的内容是同一版：阅读里带着它', async () => {
+    const { editorPage } = setup({ editIntent: false, api: { document: async () => ({ ...DETAIL, formulasPending: true }), editStatus: async () => ({ status: { revision: 3, editor: null, canEdit: true, formulasPending: true }, serverTime: undefined }) } })
+    await editorPage.load()
+    expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', formulasPending: true })
+  })
+
+  it('详情与载入的内容不是同一版（并行读取之间有人保存过）：不套用', async () => {
+    const { editorPage } = setup({ editIntent: false, api: { document: async () => ({ ...DETAIL, revision: 4, formulasPending: true }) } })
+    await editorPage.load()
+    expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', formulasPending: false })
+  })
+
+  it('重新取文档详情的过程中：detailRefreshing 为真，有了结果（成功或失败）之后为假', async () => {
+    const fetching = deferred<DocumentDetail>()
+    const document = vi.fn<EditorPageApi['document']>(async () => DETAIL)
+    const { editorPage } = setup({ api: { document } })
+    await editorPage.load()
+    expect(editorPage.view().detailRefreshing).toBe(false)
+    document.mockReturnValueOnce(fetching.promise)
+    const refreshing = editorPage.refreshDetail()
+    expect(editorPage.view().detailRefreshing).toBe(true)
+    fetching.reject(new ApiError(503, 'SERVICE_UNAVAILABLE', '繁忙'))
+    await refreshing
+    expect(editorPage.view().detailRefreshing).toBe(false)
+    expect(editorPage.view().detailProblem).toBeInstanceOf(ApiError)
   })
 })

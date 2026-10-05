@@ -212,6 +212,11 @@ export interface SaveCoordinator {
   /** 有一次结果未知的保存（网络错误、5xx、回包读不出来）还没有答案：它可能其实已经提交 */
   readonly hasUnknownOutcome: () => boolean
   /**
+   * 有保存在途或排着，或者转入不兼容的终态之后正在核对（原样重发结果未知的那一次）：这时释放编辑权会让它被拒（M3-P4 设计 §3.4：
+   * 页面关闭时 pagehide 据此不释放，让租约到期——服务端处理保存先在子进程里检查快照再进事务读租约，晚几毫秒发出的释放多半先提交）
+   */
+  readonly busy: () => boolean
+  /**
    * 原样重发最近一次结果未知的保存（M3-P2 设计 §3.4：失去编辑权、给副本之前）。服务端的重放先于登录的再核对与租约（P1）：
    * 它其实已经提交时拿到原来的结果——按那次捕获确认（committed），本页可能就没有没保存的内容了；确定被拒绝说明它没有提交
    * （not-committed）；读不到（404）、未登录、令牌失效与结果仍然未知时说不准（unknown，记录留着）。没有这样的保存时为 none。
@@ -692,6 +697,7 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
       await verifying
     },
     hasUnknownOutcome: () => retryable !== undefined,
+    busy: () => pendingSaves > 0 || verifying !== undefined,
     replayUnknownOutcome: replay,
     hasUnsavedWork: () => conflict !== undefined || pendingSaves > 0 || editor.isCellEditing() || editor.changeSeq() > savedSeq || formulasPending,
     block: kind => enterBlocked(kind, pendingSaves > 0),

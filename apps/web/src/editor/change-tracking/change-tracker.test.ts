@@ -96,3 +96,51 @@ describe('变更检测的订阅', () => {
     expect(tracker.changeSeq()).toBe(0)
   })
 })
+
+describe('公式进度的信号（M3-P4 设计 §3.2、§3.10）', () => {
+  const START: FakeCommandEvent = { id: 'formula.mutation.set-formula-calculation-start', type: CommandType.MUTATION, params: {}, options: { onlyLocal: true } }
+  const COMPLETED: FakeCommandEvent = { id: 'formula.mutation.set-formula-calculation-notification', type: CommandType.MUTATION, params: { functionsExecutedState: 3 }, options: { onlyLocal: true } }
+  const PROGRESS: FakeCommandEvent = { id: 'formula.mutation.set-formula-calculation-notification', type: CommandType.MUTATION, params: { stageInfo: {} }, options: { onlyLocal: true } }
+
+  it('一轮的开始与完成各通知一次，计算中的进度通知与别的命令不通知；在命令执行的过程中同步通知', () => {
+    const facade = fakeFacade()
+    const tracker = createChangeTracker(facade.univer, facade.api, config)
+    const settledAtSignal: boolean[] = []
+    tracker.onFormulaProgress(() => settledAtSignal.push(tracker.formulasSettled()))
+    facade.fire(START)
+    facade.fire(PROGRESS)
+    facade.fire({ id: 'sheet.operation.set-selections', type: CommandType.OPERATION, params: { unitId: 'unit-1' } })
+    facade.fire(COMPLETED)
+    // 两次通知；通知时跟踪器已经记下了这条命令：开始时没收齐，完成时收齐
+    expect(settledAtSignal).toEqual([false, true])
+  })
+
+  it('退订之后不再通知；监听者的异常交给浏览器的错误报告', () => {
+    const reportError = vi.fn()
+    vi.stubGlobal('reportError', reportError)
+    const facade = fakeFacade()
+    const tracker = createChangeTracker(facade.univer, facade.api, config)
+    const failure = new Error('监听者出错')
+    const unsubscribe = tracker.onFormulaProgress(() => {
+      throw failure
+    })
+    expect(() => facade.fire(START)).not.toThrow()
+    expect(reportError).toHaveBeenCalledWith(failure)
+    unsubscribe()
+    facade.fire(COMPLETED)
+    expect(reportError).toHaveBeenCalledTimes(1)
+  })
+
+  it('以强制全量重算创建（forcedRound）：看到它的触发命令之前不算收齐', () => {
+    const facade = fakeFacade()
+    const tracker = createChangeTracker(facade.univer, facade.api, config, { forcedRound: true })
+    expect(tracker.formulasSettled()).toBe(false)
+    const progress = vi.fn()
+    tracker.onFormulaProgress(progress)
+    facade.fire({ id: 'formula.mutation.set-trigger-formula-calculation-start', type: CommandType.MUTATION, params: { forceCalculation: true }, options: { onlyLocal: true } })
+    expect(progress).toHaveBeenCalledOnce()
+    facade.fire(START)
+    facade.fire(COMPLETED)
+    expect(tracker.formulasSettled()).toBe(true)
+  })
+})

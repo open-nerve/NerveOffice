@@ -38,7 +38,7 @@ const READY: EditorPageLoad = { kind: 'ready', documentId: DOCUMENT_ID, title: '
 
 /** 就绪的页面：阅读（readOnly）或编辑，编辑器的容器到了 surface 这一步 */
 function ready(surface: 'ready' | 'steady', readOnly = true): Partial<EditorPageView> {
-  const mode = readOnly ? { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined } as const : { kind: 'editing' } as const
+  const mode = readOnly ? { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined, formulasPending: false } as const : { kind: 'editing' } as const
   return { load: READY, mode, surface }
 }
 

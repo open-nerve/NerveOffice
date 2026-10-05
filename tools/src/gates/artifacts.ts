@@ -557,9 +557,10 @@ export function checkTestOnlySources(sources: ModuleSources, files: readonly str
  * - 页面自检（M3-P2 设计 §3.5）：入口页 selftest.html 与它的脚本、编辑器页的挂接（selftest-hook）、自检模块（selftest）与结果的格式
  *   （selftest-report），分块名都以 selftest- 开头；与 E2E 共用的入口清单（read-only-entries）、比较口径（content-compare）与
  *   切换的计时（switch-timing）被单独动态引入时也自成分块（M3-P2 复核 B2）。自检结果的格式标识与计时挂在 window 上的名字另由禁用关键字核对；
- * - 档案故障开关（M3-P4 设计 §3.14，profile-fault）：编辑器在注册插件之前动态引入它，自成分块
+ * - 档案故障开关（M3-P4 设计 §3.14，profile-fault）：编辑器在注册插件之前动态引入它，自成分块；
+ * - 自动保存的控制（M3-P4 设计 §3.14，autosave-control）：编辑器页的组装处（start.tsx）动态引入它，自成分块
  */
-export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^(?:csp-probe|selftest)\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe|probe-facades|selftest|read-only-entries|content-compare|switch-timing|profile-fault)-[^/]*$/]
+export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^(?:csp-probe|selftest)\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe|probe-facades|selftest|read-only-entries|content-compare|switch-timing|profile-fault|autosave-control)-[^/]*$/]
 
 export function checkTestOnlyArtifacts(paths: readonly string[]): Violation[] {
   return paths

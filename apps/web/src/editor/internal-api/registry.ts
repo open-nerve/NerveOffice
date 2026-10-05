@@ -89,9 +89,9 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
       ],
       '@univerjs/sheets': ['SetRangeValuesMutation'],
     },
-    purpose: '公式收齐（P4 设计 §3.6.6）：认出一轮计算的开始、停止、结果、逐表写回与完成',
-    evidence: 'M0-P3 报告 §3.3、§3.4、§7；engine-formula 的 calculate.controller.ts:232-257、formula-calculation-trigger.service.ts:166-176，sheets 的 calculate-result-apply.controller.ts:90-97；M0 的 e2e/v07-formula、v07-worker-timeline；P4 探针 (f) 在三个浏览器上录制的序列',
-    regression: FORMULA_SETTLE_REGRESSION,
+    purpose: '公式收齐（P4 设计 §3.6.6）：认出一轮计算的开始、停止、结果、逐表写回与完成；M3-P4：认出强制全量重算的触发命令（参数里 forceCalculation 为真，进入编辑时以 FORCED 创建的那一轮，收齐之前不补存）',
+    evidence: 'M0-P3 报告 §3.3、§3.4、§7；engine-formula 的 calculate.controller.ts:232-257、formula-calculation-trigger.service.ts:166-176，sheets 的 calculate-result-apply.controller.ts:90-97；M0 的 e2e/v07-formula、v07-worker-timeline；P4 探针 (f) 在三个浏览器上录制的序列；M3-P4：sheets-formula 的 _getDirtyDataByCalculationMode（update-formula.controller.ts:290-305、trigger-calculation.controller.ts:299-315；1.0.1 的 lib/es/index.js:538、:2092 同样写 forceCalculation: calculationMode === 0）',
+    regression: `${FORMULA_SETTLE_REGRESSION}；M3-P4：formula-settle-tracker.test.ts"强制全量重算"（看到触发命令之前不算收齐）与 E2E tests/e2e/specs/editor/autosave.spec.ts"带公式待更新的文档进入编辑：强制重算之后补存"`,
   },
   {
     name: 'CELL_LINK_PROTOCOL',
@@ -261,9 +261,20 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
   {
     name: 'NOTE_TEXTAREA_SELECTOR',
     origin: 'sheets-note-ui 的批注浮层给文本框的 DOM 标记 data-u-comp="note-textarea"（views/Note.tsx:156-158；design 的 Textarea 把它放在 <textarea> 上，1.0.1 的 lib/es/index.js:691）；平台对这个约定的封装',
-    purpose: '只读守卫（read-only/note-popup.ts）：在页面上观察批注浮层出现，把文本框设为只读',
+    purpose: '只读守卫（read-only/note-popup.ts）：在页面上观察批注浮层出现，把文本框设为只读；M3-P4：面板的防抖（PANEL_DEBOUNCES 的批注一项）认出批注浮层开着',
     evidence: 'M2-P3 S3 的 E2E：批注浮层总是可以输入的文本框（Note.tsx 没有只读的开关，打开时还会被程序聚焦，:98-106），只读时键入之后写回批注的 mutation 被防火墙取消、界面复原；修复时实测：设为只读之后键入不改内容，文字照常显示',
-    regression: `单元测试 read-only/note-popup.test.ts；${READ_ONLY_E2E}（悬停看到批注，文本框只读，键入之后内容不变）`,
+    regression: `单元测试 read-only/note-popup.test.ts；${READ_ONLY_E2E}（悬停看到批注，文本框只读，键入之后内容不变）；M3-P4 的回归见 PANEL_DEBOUNCES`,
+  },
+  {
+    name: 'PANEL_DEBOUNCES',
+    origin: '按防抖写模型的两个面板的 DOM 标记与防抖时长（SDK 里的字面量）：sheets-note-ui 的批注浮层（文本框 data-u-comp="note-textarea"，ui 的 useDebounceFn 默认 300 ms）、sheets-data-validation-ui 的详情面板（根元素 data-u-comp="data-validation-detail"，lodash debounce 1000 ms）；平台对这两项约定的封装',
+    purpose: '面板的防抖（M3-P4 设计 §3.4，panel-debounce-watch.ts）：这两个面板开着时有用户输入，就记下"SDK 的防抖到点"的时刻；退出编辑、交出与按保存的捕获之前（snapshot-capture.ts 的 prepareCapture）、失去编辑权的捕获之前等到这一刻，最后的改动先写进模型再捕获、再销毁编辑器',
+    evidence: [
+      'ui 的 views/hooks/use-debounce.ts:19-30（组件卸载时不清计时器）与 sheets-note-ui 的 views/Note.tsx:110-143（1.0.1 的 ui lib/es/index.js:6584-6592、sheets-note-ui lib/es/index.js:648、:691）；',
+      'sheets-data-validation-ui 的 views/components/DataValidationDetail.tsx:65-72、:114（三种更新共用一个防抖，卸载时不 flush；1.0.1 的 lib/es/index.js:2931-2934、面板根元素 :3140）。',
+      '关闭面板不提交也不取消、没有对外的"立即提交"，只能等它到点；refer 的其余界面包的防抖只管界面（M3-P4 S4 逐包核对），图片的变换面板在 M5 之前进不来',
+    ].join(''),
+    regression: '单元测试 panel-debounce-watch.test.ts（面板开着时的输入才等、等到防抖到点、页头里的不算、销毁时放行）、snapshot-capture.test.ts（捕获之前先等面板）；E2E tests/e2e/specs/editor/autosave.spec.ts"批注里键入之后立即退出编辑""数据验证面板里改了之后立即退出编辑"：服务器上有这次的改动（本机三个浏览器）',
   },
   {
     name: 'FORMULA_BAR_INPUT_SELECTOR',

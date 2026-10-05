@@ -1,11 +1,13 @@
 import type { AcquiredEditLease, CreatedDocument, DocumentEditor, RenewedEditLease, SaveContentResponse } from '@nerve-office/contracts'
 import type { EditorAccess, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
+import type { Autosave, AutosaveLimits, AutosavePage, AutosaveTuning } from './autosave.ts'
 import type { EditLeaseApi } from './edit-lease.ts'
 import type { EditMode, EditModeApi, EditModeOptions, EditModeState, LostMode, ReadingMode } from './edit-mode.ts'
 import type { FetchedEditStatus, LoadedContent } from './editor-api.ts'
 import { EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
+import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
 import { createEditMode, EXIT_RELEASE_WAIT_MS } from './edit-mode.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
@@ -47,13 +49,17 @@ interface FakeEditor {
   readonly snapshot: string
   readonly viewState: SheetViewState | undefined
   readonly index: number
+  /** 创建时要求了强制全量重算（M3-P4） */
+  readonly recalculate: boolean | undefined
   disposed: boolean
   cellEditing: boolean
   failCapture: boolean
-  /** 公式的结果收齐了没有（settleFormulas 的回答）：默认收齐 */
+  /** 公式的结果收齐了没有（settleFormulas 与 formulasSettled 的回答）：默认收齐 */
   formulasSettled: boolean
   edit: (value: string) => void
   enter: (stage: SheetEditorLifecycle) => void
+  /** 公式收齐与否变了（发出公式进度的信号） */
+  settle: (settled: boolean) => void
 }
 
 /** 第 n 个编辑器给出的视图状态：重建时交给下一个 */
@@ -65,7 +71,7 @@ function fakeFactory() {
   const created: FakeEditor[] = []
   /** 下一次创建的结果：默认立即成功；hold 时由测试放行，fail 时失败 */
   let next: 'ok' | 'fail' | { readonly gate: Promise<void> } = 'ok'
-  const createEditor = vi.fn(async (options: { snapshot: string, access: EditorAccess, viewState?: SheetViewState | undefined }) => {
+  const createEditor = vi.fn(async (options: { snapshot: string, access: EditorAccess, viewState?: SheetViewState | undefined, recalculate?: boolean }) => {
     const plan = next
     next = 'ok'
     if (plan === 'fail')
@@ -77,11 +83,13 @@ function fakeFactory() {
     let stage: SheetEditorLifecycle = 'rendered'
     const changeListeners = new Set<() => void>()
     const lifecycleListeners = new Set<(stage: SheetEditorLifecycle) => void>()
+    const progressListeners = new Set<() => void>()
     const fake: FakeEditor = {
       access: options.access,
       snapshot: options.snapshot,
       viewState: options.viewState,
       index: created.length,
+      recalculate: options.recalculate,
       disposed: false,
       cellEditing: false,
       failCapture: false,
@@ -110,6 +118,14 @@ function fakeFactory() {
           return true
         }),
         settleFormulas: vi.fn(async () => fake.formulasSettled ? 'settled' as const : 'timeout' as const),
+        formulasSettled: () => fake.formulasSettled,
+        onFormulaProgress: (listener) => {
+          progressListeners.add(listener)
+          return () => progressListeners.delete(listener)
+        },
+        composing: () => false,
+        onCompositionChange: () => () => {},
+        settlePanels: vi.fn(async () => {}),
         capture: vi.fn(() => {
           if (fake.failCapture)
             throw new Error('SDK 出错')
@@ -129,6 +145,10 @@ function fakeFactory() {
       enter: (nextStage) => {
         stage = nextStage
         lifecycleListeners.forEach(listener => listener(nextStage))
+      },
+      settle: (settled) => {
+        fake.formulasSettled = settled
+        progressListeners.forEach(listener => listener())
       },
     }
     created.push(fake)
@@ -209,10 +229,62 @@ function fakeVisibility() {
   }
 }
 
+/**
+ * 自动保存要的页面一侧与测试构建的控制的样子（M3-P4）：可见、联网、会话可写可设；默认暂停定时的上传（与 E2E 的夹具一样），
+ * 现有的用例按"按保存才上传"的语义成立，要自动上传的用例放开（release）
+ */
+function fakeAutosave(held: boolean) {
+  const state = { visible: true, online: true, writable: true, held, limits: DEFAULT_AUTOSAVE_LIMITS }
+  const pageListeners = new Set<() => void>()
+  const tuningListeners = new Set<() => void>()
+  const page: AutosavePage = {
+    visible: () => state.visible,
+    online: () => state.online,
+    sessionWritable: () => state.writable,
+    onChange: (listener) => {
+      pageListeners.add(listener)
+      return () => pageListeners.delete(listener)
+    },
+  }
+  const tuning: AutosaveTuning = {
+    limits: () => state.limits,
+    held: () => state.held,
+    onChange: (listener) => {
+      tuningListeners.add(listener)
+      return () => tuningListeners.delete(listener)
+    },
+  }
+  const attached: (Autosave | undefined)[] = []
+  return {
+    page,
+    tuning,
+    attach: vi.fn((autosave: Autosave | undefined) => {
+      attached.push(autosave)
+    }),
+    /** 交给控制的调度，按先后（去掉时是 undefined） */
+    attached,
+    current: (): Autosave | undefined => attached.at(-1),
+    setPage(patch: Partial<Pick<typeof state, 'visible' | 'online' | 'writable'>>): void {
+      Object.assign(state, patch)
+      pageListeners.forEach(listener => listener())
+    },
+    release(): void {
+      state.held = false
+      tuningListeners.forEach(listener => listener())
+    },
+    setLimits(patch: Partial<AutosaveLimits>): void {
+      state.limits = { ...state.limits, ...patch }
+      tuningListeners.forEach(listener => listener())
+    },
+  }
+}
+
 interface Setup {
   readonly api?: Partial<Omit<EditModeApi, 'editLease'>>
   readonly editLease?: Partial<EditLeaseApi>
   readonly now?: () => Date
+  /** 定时的自动保存放开（默认暂停） */
+  readonly autosave?: 'held' | 'running'
 }
 
 const modes: EditMode[] = []
@@ -239,6 +311,7 @@ function setup(options: Setup = {}) {
   } satisfies EditModeApi
   const hooks = { saveUnauthenticated: vi.fn(), saveStale: vi.fn(), writeProblem: vi.fn(), readProblem: vi.fn() }
   const reportError = vi.fn()
+  const autosave = fakeAutosave(options.autosave !== 'running')
   const modeOptions: EditModeOptions = {
     documentId: DOCUMENT_ID,
     clientInstanceId: PAGE_ID,
@@ -251,11 +324,12 @@ function setup(options: Setup = {}) {
     now: options.now ?? (() => new Date(2026, 9, 4, 15, 30, 12)),
     title: () => '周报',
     session: hooks,
+    autosave: { page: autosave.page, digest: async snapshot => `sha:${snapshot}`, tuning: autosave.tuning, attach: autosave.attach },
     reportError,
   }
   const mode = createEditMode(modeOptions)
   modes.push(mode)
-  return { mode, factory, time, page, api, editLease, hooks, reportError }
+  return { mode, factory, time, page, api, editLease, hooks, reportError, autosave }
 }
 
 afterEach(() => {
@@ -300,7 +374,7 @@ describe('打开（M3-P2 设计 §3.4：打开即阅读）', () => {
     const outcome = await context.mode.open({ ...LOADED, canEdit: true }, { enterEdit: false })
     expect(outcome).toEqual({ kind: 'opened', entered: false })
     expect(context.factory.created.map(fake => [fake.access, fake.snapshot, fake.viewState])).toEqual([['read', LOADED.snapshot, undefined]])
-    expect(readingOf(context.mode)).toEqual({ kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false })
+    expect(readingOf(context.mode)).toEqual({ kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, formulasPending: false })
     expect(context.mode.view()).toMatchObject({ surface: 'rendered', save: undefined })
     expect(context.editLease.acquire).not.toHaveBeenCalled()
     await settle()
@@ -833,7 +907,8 @@ describe('失去编辑权（M3-P2 设计 §3.4）', () => {
     loseOnNextHeartbeat(context, DENIED)
     await context.time.advance(HEARTBEAT_MS)
     await settle()
-    expect(writer.editor.capture).toHaveBeenCalledOnce()
+    // 自动保存在修改停下 1 秒时捕获过一次（暂停的是定时的上传，捕获照常，M3-P4），失去编辑权时再捕获一次本页的内容
+    expect(writer.editor.capture).toHaveBeenCalledTimes(2)
     expect(writer.disposed).toBe(true)
     expect(context.factory.last()).toMatchObject({ access: 'read', snapshot: snapshotOf('本页的'), viewState: viewStateOf(1) })
     expect(lostOf(context.mode)).toEqual({ kind: 'lost', loss: { kind: 'denied', error: DENIED }, unsaved: true, readable: true, checking: false, captureFailed: false, inputLeft: false, reopenFailed: false, copy: { kind: 'idle' }, reload: { kind: 'idle' } })
@@ -960,9 +1035,12 @@ describe('失去编辑权（M3-P2 设计 §3.4）', () => {
     await editing(context)
     const writer = context.factory.last()
     writer.edit('本页的')
+    // 自动保存的定时捕获先照常做了（M3-P4），之后 SDK 才开始出错：失去编辑权时的捕获出错
+    await context.time.advance(1_000)
+    expect(writer.editor.capture).toHaveBeenCalledOnce()
     writer.failCapture = true
     loseOnNextHeartbeat(context, DENIED)
-    await context.time.advance(HEARTBEAT_MS)
+    await context.time.advance(HEARTBEAT_MS - 1_000)
     await settle()
     expect(lostOf(context.mode)).toMatchObject({ captureFailed: true, unsaved: true })
     expect(context.mode.hasUnsavedWork()).toBe(true)
@@ -1400,6 +1478,8 @@ describe('阅读时的检查（US-M3-05）', () => {
     expect(context.time.pending()).toBe(1)
     await context.mode.enter()
     expect(modeOf(context.mode).kind).toBe('editing')
+    // 自动保存建起来时立即看一次（M3-P4）：没有要捕获、要上传的，之后不再排计时器
+    await context.time.advance(0)
     expect(context.time.pending()).toBe(1)
     await context.time.advance(HEARTBEAT_MS)
     expect(context.editLease.renew).toHaveBeenCalledOnce()
@@ -1847,5 +1927,266 @@ describe('与服务端不兼容（M3-P3 设计 §3.5、§3.10）', () => {
     context.factory.last().edit('长一些的修改内容')
     await context.mode.save()
     expect(context.mode.view().save?.snapshotBytes).toBe(new TextEncoder().encode(snapshotOf('长一些的修改内容')).byteLength)
+  })
+})
+
+/** 保存请求里的那一项（api.save 的第二个参数） */
+function savedRequests(context: ReturnType<typeof setup>) {
+  return context.api.save.mock.calls.map(([, request]) => request)
+}
+
+describe('自动保存的接线（M3-P4 设计 §3.10）', () => {
+  it('进入编辑：先建保存的状态机、再建自动保存的调度、再接上编辑器（建调度时交互屏障还挂着）；调度交给测试构建的控制', async () => {
+    const context = setup()
+    await opened(context)
+    const surfaces: string[] = []
+    context.autosave.attach.mockImplementation(() => {
+      surfaces.push(context.mode.view().surface)
+    })
+    await context.mode.enter()
+    expect(surfaces).toEqual(['creating'])
+    expect(context.autosave.attach).toHaveBeenCalledOnce()
+    const attached = context.autosave.attach.mock.calls[0]?.[0]
+    expect([typeof attached?.flush, typeof attached?.saved]).toEqual(['function', 'function'])
+    expect(context.mode.view()).toMatchObject({ mode: { kind: 'editing' }, autosave: { offline: false, paused: false, retrying: false, held: true } })
+  })
+
+  it('放开定时的自动保存：修改停下 2 秒之后自动上传（不经保存按钮），请求与按保存的一样', async () => {
+    const context = setup({ autosave: 'running' })
+    await editing(context)
+    context.factory.last().edit('甲')
+    await context.time.advance(1_999)
+    expect(context.api.save).not.toHaveBeenCalled()
+    await context.time.advance(1)
+    await settle()
+    expect(savedRequests(context)).toMatchObject([{ baseRevision: 3, localSeq: 1, snapshot: snapshotOf('甲'), formulasPending: false }])
+    expect(context.mode.view().save?.status).toBe('clean')
+  })
+
+  it('暂停（测试构建的控制）时定时的不发；保存按钮照常上传', async () => {
+    const context = setup()
+    await editing(context)
+    context.factory.last().edit('甲')
+    await context.time.advance(20_000)
+    expect(context.api.save).not.toHaveBeenCalled()
+    await context.mode.save()
+    expect(savedRequests(context)).toMatchObject([{ snapshot: snapshotOf('甲') }])
+  })
+
+  it('保存按钮不去重：内容与确认过的相同也上传（给用户一个"强制同步"，服务端只写回执）', async () => {
+    const context = setup()
+    await editing(context)
+    context.factory.last().edit('甲')
+    await context.mode.save()
+    await context.mode.save()
+    expect(savedRequests(context).map(request => request?.snapshot)).toEqual([snapshotOf('甲'), snapshotOf('甲')])
+  })
+
+  it('保存中再按：在途的结束之后立即再存一次，连按只排一次', async () => {
+    const context = setup()
+    await editing(context)
+    const reply = deferred<SaveContentResponse>()
+    context.api.save.mockImplementationOnce(async () => reply.promise)
+    context.factory.last().edit('甲')
+    const first = context.mode.save()
+    await settle()
+    expect(context.mode.view().save).toMatchObject({ status: 'saving', canSave: true })
+    context.factory.last().edit('乙')
+    const second = context.mode.save()
+    const third = context.mode.save()
+    reply.resolve(SAVED)
+    await Promise.all([first, second, third])
+    expect(savedRequests(context).map(request => request?.snapshot)).toEqual([snapshotOf('甲'), snapshotOf('乙')])
+  })
+
+  it('带"公式待更新"进入编辑（申请的响应）：以强制全量重算重建；保存的状态机以它起步（离开会提示）；公式收齐之后补存，请求不带标记', async () => {
+    const context = setup({ autosave: 'running', editLease: { acquire: async () => ({ ...ACQUIRED, formulasPending: true }) } })
+    await opened(context)
+    await context.mode.enter()
+    const writer = context.factory.last()
+    expect(writer).toMatchObject({ access: 'edit', recalculate: true })
+    // 重算还在进行（适配层在看到强制重算的那一轮之前不算收齐）
+    writer.settle(false)
+    // 修改都已存上，只差公式的结果（页头"公式结果尚未保存"，save-indicator.ts）
+    expect(context.mode.view().save).toMatchObject({ status: 'dirty', formulasPending: true, unsaved: true, unsavedEdits: false })
+    expect(context.mode.hasUnsavedWork()).toBe(true)
+    await context.time.advance(5_000)
+    expect(context.api.save).not.toHaveBeenCalled()
+    writer.settle(true)
+    await context.time.advance(0)
+    await settle()
+    expect(savedRequests(context)).toMatchObject([{ baseRevision: 3, localSeq: 0, formulasPending: false }])
+    expect(context.mode.view().save).toMatchObject({ status: 'clean', formulasPending: false, unsaved: false })
+    expect(context.mode.hasUnsavedWork()).toBe(false)
+  })
+
+  it('不带标记进入编辑：不强制重算（创建参数里没有 recalculate）', async () => {
+    const context = setup()
+    await editing(context)
+    expect(context.factory.last().recalculate).toBeUndefined()
+    expect(context.mode.view().save?.formulasPending).toBe(false)
+  })
+
+  it('失去编辑权开始时立即去掉自动保存（交给控制的是 undefined）：之后到点的定时也不再捕获、上传', async () => {
+    const context = setup({ autosave: 'running' })
+    await editing(context)
+    const writer = context.factory.last()
+    loseOnNextHeartbeat(context, DENIED)
+    await context.time.advance(HEARTBEAT_MS - 500)
+    writer.edit('甲')
+    await context.time.advance(500)
+    await settle()
+    expect(modeOf(context.mode).kind).toBe('lost')
+    expect(context.autosave.attached.at(-1)).toBeUndefined()
+    const captures = vi.mocked(writer.editor.capture).mock.calls.length
+    await context.time.advance(20_000)
+    expect(vi.mocked(writer.editor.capture).mock.calls.length).toBe(captures)
+    expect(context.api.save).not.toHaveBeenCalled()
+  })
+
+  it('失去编辑权时先等面板里防抖中的改动写进模型，再提交单元格、捕获（副本里才有它）', async () => {
+    const context = setup()
+    await editing(context)
+    const writer = context.factory.last()
+    const order: string[] = []
+    vi.mocked(writer.editor.settlePanels).mockImplementation(async () => {
+      order.push('panels')
+    })
+    vi.mocked(writer.editor.capture).mockImplementation(() => {
+      order.push('capture')
+      return snapshotOf('本页的')
+    })
+    loseOnNextHeartbeat(context, DENIED)
+    await context.time.advance(HEARTBEAT_MS)
+    await settle()
+    expect(order).toEqual(['panels', 'capture'])
+  })
+
+  it('退出编辑：有没存的就立即上传一次（先等面板、提交单元格、等公式），之后才释放编辑权、以只读重建', async () => {
+    const context = setup()
+    await editing(context)
+    const writer = context.factory.last()
+    writer.edit('甲')
+    await context.mode.exit()
+    expect(vi.mocked(writer.editor.settlePanels)).toHaveBeenCalled()
+    expect(savedRequests(context)).toMatchObject([{ snapshot: snapshotOf('甲'), formulasPending: false }])
+    expect(readingOf(context.mode)).toMatchObject({ canEdit: true, formulasPending: false })
+    expect(context.editLease.release).toHaveBeenCalledOnce()
+  })
+
+  it('退出编辑：都已存上时不上传；去重——内容与确认过的相同（改了又撤销）就不发', async () => {
+    const context = setup()
+    await editing(context)
+    const writer = context.factory.last()
+    writer.edit('甲')
+    await context.mode.save()
+    writer.edit('乙')
+    writer.edit('甲')
+    await context.mode.exit()
+    expect(savedRequests(context).map(request => request?.snapshot)).toEqual([snapshotOf('甲')])
+    expect(modeOf(context.mode).kind).toBe('reading')
+  })
+
+  it('退出编辑时公式没收齐：存上带标记的那一份、留在编辑，调度恢复——收齐之后自动补存', async () => {
+    const context = setup({ autosave: 'running' })
+    await editing(context)
+    const writer = context.factory.last()
+    writer.edit('甲')
+    writer.formulasSettled = false
+    await context.mode.exit()
+    expect(modeOf(context.mode).kind).toBe('editing')
+    expect(savedRequests(context)).toMatchObject([{ snapshot: snapshotOf('甲'), formulasPending: true }])
+    expect(context.editLease.release).not.toHaveBeenCalled()
+    writer.settle(true)
+    // 补捕获之后照上传的规则：距最后一次修改满 2 秒才传
+    await context.time.advance(2_000)
+    await settle()
+    expect(savedRequests(context)).toMatchObject([{ formulasPending: true }, { snapshot: snapshotOf('甲'), formulasPending: false }])
+    expect(context.mode.view().save?.formulasPending).toBe(false)
+  })
+
+  it('退出的过程中调度挂起：定时的捕获与上传都不做（退出用的那一次是立即上传）', async () => {
+    const context = setup({ autosave: 'running' })
+    await editing(context)
+    const writer = context.factory.last()
+    const reply = deferred<SaveContentResponse>()
+    context.api.save.mockImplementationOnce(async () => reply.promise)
+    writer.edit('甲')
+    const exiting = context.mode.exit()
+    await settle()
+    const captures = vi.mocked(writer.editor.capture).mock.calls.length
+    await context.time.advance(20_000)
+    expect(vi.mocked(writer.editor.capture).mock.calls.length).toBe(captures)
+    expect(context.api.save).toHaveBeenCalledOnce()
+    reply.resolve(SAVED)
+    await exiting
+    expect(modeOf(context.mode).kind).toBe('reading')
+  })
+})
+
+describe('页面关闭时的编辑权（M3-P4 设计 §3.4）', () => {
+  it('有保存在途：不释放（让租约到期，免得释放先提交、那次保存被拒）；在途的结束之后照旧释放', async () => {
+    const context = setup()
+    await editing(context)
+    const reply = deferred<SaveContentResponse>()
+    context.api.save.mockImplementationOnce(async () => reply.promise)
+    context.factory.last().edit('甲')
+    const saving = context.mode.save()
+    await settle()
+    context.mode.releaseOnHide()
+    expect(context.editLease.release).not.toHaveBeenCalled()
+    reply.resolve(SAVED)
+    await saving
+    context.mode.releaseOnHide()
+    expect(context.editLease.release).toHaveBeenCalledOnce()
+  })
+
+  it('没有在途的保存：立即释放（结果不管）', async () => {
+    const context = setup()
+    await editing(context)
+    context.mode.releaseOnHide()
+    expect(context.editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
+  })
+})
+
+describe('阅读页的"公式待更新"（M3-P4 设计 §3.5 第 4 条）', () => {
+  function flagged(revision: number, formulasPending: boolean): FetchedEditStatus {
+    return { status: { revision, editor: null, canEdit: true, formulasPending }, serverTime: Date.parse(ANSWERED_AT) }
+  }
+
+  it('载入时详情带着标记：阅读里说明；之后的检查读到本页这一版的标记随之更新', async () => {
+    const context = setup({ api: { editStatus: async () => flagged(3, true) } })
+    await context.mode.open({ ...LOADED, canEdit: true, formulasPending: true }, { enterEdit: false })
+    await settle()
+    expect(readingOf(context.mode).formulasPending).toBe(true)
+    context.api.editStatus.mockResolvedValue(flagged(3, false))
+    await context.time.advance(READING_CHECK_INTERVAL_MS)
+    expect(readingOf(context.mode).formulasPending).toBe(false)
+  })
+
+  it('检查读到更新的一版（有更新）：那一版的标记不套在本页显示的这一版上；"有更新"重建之后按那一版的', async () => {
+    const context = setup({ api: { editStatus: async () => flagged(3, false), contentIfChanged: async () => ({ snapshot: snapshotOf('新的'), revision: 5 }) } })
+    await opened(context)
+    context.api.editStatus.mockResolvedValue(flagged(5, true))
+    await context.time.advance(READING_CHECK_INTERVAL_MS)
+    expect(readingOf(context.mode)).toMatchObject({ update: 'available', formulasPending: false })
+    await context.mode.refresh()
+    expect(readingOf(context.mode)).toMatchObject({ update: 'none', formulasPending: true })
+  })
+
+  it('进入编辑重算、补存之后退出：回到阅读不带标记（之后的检查读到的也是不带的那一版）', async () => {
+    const context = setup({ autosave: 'running', editLease: { acquire: async () => ({ ...ACQUIRED, formulasPending: true }) }, api: { editStatus: async () => flagged(3, true) } })
+    await context.mode.open({ ...LOADED, canEdit: true, formulasPending: true }, { enterEdit: false })
+    await settle()
+    await context.mode.enter()
+    // 公式收齐（假的编辑器一开始就收齐）：补捕获、上传，服务端清掉标记、修订号 4
+    await context.time.advance(0)
+    await settle()
+    expect(savedRequests(context)).toMatchObject([{ formulasPending: false }])
+    context.api.editStatus.mockResolvedValue(flagged(4, false))
+    await context.mode.exit()
+    expect(readingOf(context.mode).formulasPending).toBe(false)
+    await settle()
+    expect(readingOf(context.mode).formulasPending).toBe(false)
   })
 })

@@ -117,10 +117,15 @@ async function held(context: ReturnType<typeof setup>) {
 }
 
 describe('申请（M3-P1 设计 §3.4.7）', () => {
-  it('持有：给出令牌、代次与文档当前的修订号，以本页这次加载的标识申请；10 秒之后第一次续租', async () => {
+  it('文档带着"公式待更新"（M3-P4 设计 §3.5）：申请的结果交回它（进入编辑时强制重算、收齐之后补存）', async () => {
+    const context = setup({ acquire: async () => ({ ...ACQUIRED, formulasPending: true }) })
+    expect(await acquireEditLease(context.options)).toMatchObject({ kind: 'acquired', revision: 5, formulasPending: true })
+  })
+
+  it('持有：给出令牌、代次、文档当前的修订号与"公式待更新"（M3-P4），以本页这次加载的标识申请；10 秒之后第一次续租', async () => {
     const context = setup()
     const result = await acquireEditLease(context.options)
-    expect(result).toMatchObject({ kind: 'acquired', revision: 5 })
+    expect(result).toMatchObject({ kind: 'acquired', revision: 5, formulasPending: false })
     if (result.kind === 'acquired')
       expect(result.lease.credentials()).toEqual({ token: TOKEN, writeEpoch: 3 })
     expect(context.api.acquire).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, PAGE_ID)

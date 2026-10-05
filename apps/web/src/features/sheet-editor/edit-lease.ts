@@ -196,9 +196,12 @@ export interface EditLeaseOptions {
   readonly onIncompatible: (kind: Incompatibility) => void
 }
 
-/** 申请的结果：持有（租约已经开始心跳；修订号是文档当前的）或被占用（认不出服务端给的详情时 holder 为 undefined） */
+/**
+ * 申请的结果：持有（租约已经开始心跳；修订号是文档当前的；formulasPending 是文档当前的"公式待更新"，M3-P4 设计 §3.5——带标记时
+ * 进入编辑以强制全量重算创建、收齐之后补存）或被占用（认不出服务端给的详情时 holder 为 undefined）
+ */
 export type LeaseAcquisition
-  = | { readonly kind: 'acquired', readonly lease: EditLease, readonly revision: number }
+  = | { readonly kind: 'acquired', readonly lease: EditLease, readonly revision: number, readonly formulasPending: boolean }
     | { readonly kind: 'held', readonly holder: LeaseHolder | undefined }
 
 /** 服务端的两个时刻相隔几分钟（向下取整，不小于 0）；缺一个时为 undefined */
@@ -259,7 +262,7 @@ export async function acquireEditLease(options: EditLeaseOptions): Promise<Lease
       await wait(options.clock, SAME_USER_RETRY_DELAY_MS)
       continue
     }
-    return { kind: 'acquired', lease: holdEditLease(options, acquired), revision: acquired.revision }
+    return { kind: 'acquired', lease: holdEditLease(options, acquired), revision: acquired.revision, formulasPending: acquired.formulasPending }
   }
 }
 

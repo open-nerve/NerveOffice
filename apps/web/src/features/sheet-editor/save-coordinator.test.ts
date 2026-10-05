@@ -4,7 +4,7 @@ import type { CaptureEditor } from './snapshot-capture.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError, ResponseFormatError } from '../../shared/api/index.ts'
 import { classifySaveError, createSaveCoordinator } from './save-coordinator.ts'
-import { explicitCaptureSource } from './snapshot-capture.ts'
+import { explicitCaptureSource } from './snapshot-capture.test-support.ts'
 
 const ME = '0199a2c4-1f2e-4a3b-8c4d-00000000aaaa'
 const OTHER_TAB = '0199a2c4-1f2e-4a3b-8c4d-00000000bbbb'
@@ -73,6 +73,7 @@ function fakeEditor() {
       return true
     }),
     settleFormulas: vi.fn(async () => control.settle),
+    settlePanels: vi.fn(async () => {}),
     capture: vi.fn(() => JSON.stringify({ content })),
   }
   return { editor, control }

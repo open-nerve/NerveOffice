@@ -79,3 +79,17 @@ describe('命令会不会触发新的一轮计算', () => {
     expect(get).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('DEF-020：触发判断与 SDK 的触发服务读同一个 params（M3-P4 设计 §3.16）', () => {
+  it('交给 shouldTrigger 的就是命令事件里的那个 params 对象（含被串改的 trigger）：两边的判断一致', () => {
+    const shouldTrigger = vi.fn((command: { params?: unknown }) => (command.params as { trigger?: string }).trigger !== 'sheet.command.set-range-bold')
+    const { univer } = fakeUniver({ 'sheet.mutation.set-range-values': { commandId: 'sheet.mutation.set-range-values', shouldTrigger, getDirtyData: () => ({ forceCalculation: true }) } })
+    const check = createCalculationTriggerCheck(univer)
+    const bold = { unitId: 'unit-1', trigger: 'sheet.command.set-range-bold' }
+    const cancelled = { unitId: 'unit-1', trigger: 'sheet.operation.insert-hyper-link-toolbar' }
+    expect(check({ id: 'sheet.mutation.set-range-values', kind: 'mutation', params: bold, options: undefined })).toBeNull()
+    expect(check({ id: 'sheet.mutation.set-range-values', kind: 'mutation', params: cancelled, options: undefined })?.()).toBe(true)
+    expect(shouldTrigger.mock.calls[0]?.[0].params).toBe(bold)
+    expect(shouldTrigger.mock.calls[1]?.[0].params).toBe(cancelled)
+  })
+})

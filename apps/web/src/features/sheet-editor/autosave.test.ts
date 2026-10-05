@@ -50,6 +50,7 @@ function fakeEditor(elapse: (ms: number) => void, initial: { settled?: boolean, 
       return true
     }),
     settleFormulas: vi.fn(async () => state.settled ? 'settled' as const : 'timeout' as const),
+    settlePanels: vi.fn(async () => {}),
     capture: vi.fn(() => {
       if (state.inCommand)
         state.capturesInCommand += 1
