@@ -9,7 +9,7 @@ import { checkCellLinks, isPlatformAssetAddress, SNAPSHOT_MAX_DEPTH } from '@ner
 
 /**
  * 元素数量的上限（对象的键加数组的项，外层与资源 data 里的 JSON 合计）：只挡最极端的形状。真实形状的 5 MiB 快照约 61 万个
- * （P3 设计前的探索 A §2.5），全是 0 的数组约 260 万、全是空对象的数组约 170 万；60 万个键的大对象挡不住，那要靠工作线程与并发的上限
+ * （P3 设计前的探索 A §2.5），全是 0 的数组约 260 万、全是空对象的数组约 170 万；60 万个键的大对象挡不住，那要靠子进程的堆上限与并发的上限
  */
 export const SNAPSHOT_MAX_ENTRIES = 1_500_000
 

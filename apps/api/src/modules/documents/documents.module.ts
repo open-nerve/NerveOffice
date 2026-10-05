@@ -73,7 +73,7 @@ import { WriteAccessRevocation } from './write-access.ts'
     { provide: DocumentAccessPolicy, useClass: EffectiveAccessPolicy },
     // 收回写入权的入口（M2-P2 设计 §3.7）：M3-P1 起接上编辑租约（结束失去写入权的人的租约、代次加一），调用方不改
     { provide: WriteAccessRevocation, useClass: LeaseWriteAccessRevocation },
-    // 快照的检查（M3-P3 设计 §3.3）：工作线程池，线程按需创建、退出时结束；只在本模块里用（保存与另存为副本）
+    // 快照的检查（M3-P3 设计 §3.3）：子进程池，子进程按需创建、空闲到期与退出时结束；只在本模块里用（保存与另存为副本）
     {
       provide: SnapshotInspector,
       inject: [APP_CONFIG, AppLogger],

@@ -104,19 +104,23 @@ export interface AppConfig {
     readonly hashQueue: { readonly maxWaiting: number, readonly maxWaitMs: number }
   }
   /**
-   * 快照的检查（M3-P3 设计 §3.3，DEF-018）：保存与另存为副本的快照在工作线程池里解析、检查与规范化，主线程的事件循环不被阻塞
+   * 快照的检查（M3-P3 设计 §3.3，DEF-018）：保存与另存为副本的快照在子进程池里解析、检查与规范化，主进程的事件循环不被阻塞，
+   * 子进程的内存超限不影响主进程
    */
   readonly snapshotInspection: {
-    /** 工作线程数：同时检查的快照数的上限。每个线程空闲时约占 30 MiB，检查一份 5 MiB 的快照时堆上再多约 100 MiB */
-    readonly threads: number
+    /**
+     * 子进程数：同时检查的快照数的上限。子进程按需创建，空闲 60 秒之后退出；空闲时每个独占约 30 MiB，检查过一份 5 MiB 的
+     * 真实快照之后约 120 MiB；最费的形状接近堆上限加 48 MiB 的新生代再加 Node 本身（DEF-018 的测量：堆上限 512 时约 600 MiB）
+     */
+    readonly processes: number
     /**
      * 等待检查的排队：排队的请求超过 maxWaiting，或者等待超过 maxWaitMs，立即返回 503（带 Retry-After）。
      * 排队的请求各自占着上传的正文（压缩前后各最多 5 MiB），所以排队的上限也是内存的上限
      */
     readonly queue: { readonly maxWaiting: number, readonly maxWaitMs: number }
-    /** 一份快照的检查时限：超时就结束那个线程，这次返回 503 */
+    /** 一份快照的检查时限（子进程的加载另有同样的时限）：超时就结束那个子进程，这次返回 503 */
     readonly timeoutMs: number
-    /** 每个线程的堆上限（MiB，V8 的 maxOldGenerationSizeMb）：超出时结束那个线程，这份快照按"过于复杂"拒绝 */
+    /** 每个子进程的堆上限（MiB，V8 的 --max-old-space-size）：超出时 V8 中止那个子进程，这份快照按"过于复杂"拒绝 */
     readonly heapMb: number
   }
 }
@@ -244,14 +248,15 @@ const environmentSchema = z.object({
   NERVE_TRASH_PURGE_ENABLED: flag().default(true),
   NERVE_TRASH_PURGE_INTERVAL_MS: integer(1_000, 86_400_000).default(3_600_000),
   NERVE_TRASH_PURGE_BATCH: integer(1, 1_000).default(50),
-  // 快照的检查（M3-P3 设计 §3.3，DEF-018）：默认 2 个工作线程。数字的依据是 DEF-018 的测量（apps/api/scripts/measure-snapshot-inspection.ts）：
-  // 5 MiB 以内最费的形状检查一份约 0.6 秒、堆上要约 256 MiB；堆上限低于约 160 MiB 时，有的形状在 JSON.parse 里撞上上限，
-  // Node 结束不了线程、整个进程中止，所以堆上限的下限是 256、默认 512（两倍余量）
-  NERVE_SNAPSHOT_INSPECTION_THREADS: integer(1, 64).default(2),
+  // 快照的检查（M3-P3 设计 §3.3，DEF-018）：默认 2 个子进程。数字的依据是 DEF-018 的测量（apps/api/scripts/measure-snapshot-inspection.ts）：
+  // 5 MiB 以内最费的形状检查一份约 0.6 秒；子进程的堆（老生代）要 96 MiB 才检查得完 5 MiB 的真实形状，数量上限之内最费的形状要 256 MiB。
+  // 堆超限时 V8 中止的只是那个子进程（这一份按"过于复杂"拒绝），服务照常：下限 128 保证真实形状的大表格不被误拒，
+  // 默认 512 给数量上限之内最费的形状留两倍余量
+  NERVE_SNAPSHOT_INSPECTION_PROCESSES: integer(1, 64).default(2),
   NERVE_SNAPSHOT_INSPECTION_QUEUE_MAX: integer(0, 1_000).default(8),
   NERVE_SNAPSHOT_INSPECTION_QUEUE_TIMEOUT_MS: integer(100, 600_000).default(10_000),
   NERVE_SNAPSHOT_INSPECTION_TIMEOUT_MS: integer(1_000, 600_000).default(10_000),
-  NERVE_SNAPSHOT_INSPECTION_HEAP_MB: integer(256, 16_384).default(512),
+  NERVE_SNAPSHOT_INSPECTION_HEAP_MB: integer(128, 16_384).default(512),
 })
 
 type Environment = z.output<typeof environmentSchema>
@@ -394,7 +399,7 @@ function toAppConfig(env: Environment): AppConfig {
       hashQueue: { maxWaiting: env.NERVE_PASSWORD_HASH_QUEUE_MAX, maxWaitMs: env.NERVE_PASSWORD_HASH_QUEUE_TIMEOUT_MS },
     },
     snapshotInspection: {
-      threads: env.NERVE_SNAPSHOT_INSPECTION_THREADS,
+      processes: env.NERVE_SNAPSHOT_INSPECTION_PROCESSES,
       queue: { maxWaiting: env.NERVE_SNAPSHOT_INSPECTION_QUEUE_MAX, maxWaitMs: env.NERVE_SNAPSHOT_INSPECTION_QUEUE_TIMEOUT_MS },
       timeoutMs: env.NERVE_SNAPSHOT_INSPECTION_TIMEOUT_MS,
       heapMb: env.NERVE_SNAPSHOT_INSPECTION_HEAP_MB,
