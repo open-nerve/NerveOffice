@@ -493,7 +493,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       setCsrfToken(confirmed.csrfToken)
       enterSession('active')
       // 编辑权绑定登录（P1 设计 §3.4.1）：登录可能换过（重新登录、换令牌），恢复续租并立即核对一次——失效时随即说明、停止保存。
-      // 确认在它有了结果之后才算结束：按保存时等的是这一步，不带着已经失效的编辑权去保存
+      // 确认在它有了结果之后才算结束：按保存时等的是这一步，不带着已经失效的编辑权去保存。例外：续租连着第二次起被判会话不对（服务端一直拒绝、
+      // 确认却照常是本人）时只按心跳排下一次，立即兑现（ADR-018 的补充，复验 C1）——保存时服务端照样核对编辑权，失效了会被拒、经续上再判断
       await mode?.resumeLease()
     }
     else {

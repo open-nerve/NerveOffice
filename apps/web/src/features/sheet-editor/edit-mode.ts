@@ -321,7 +321,10 @@ export interface EditMode {
   readonly hasUnsavedWork: () => boolean
   /** 页面的会话变了：换了人时停住保存；不是本人时暂停续租与阅读时的检查；回到本人时恢复，之前会话类的保存失败不再说 */
   readonly setSession: (session: 'active' | 'signed-out' | 'other-user') => void
-  /** 页面确认会话是本人之后：恢复续租并立即续租一次（登录可能换过）；这一次有了结果之后兑现 */
+  /**
+   * 页面确认会话是本人之后：恢复续租并立即续租一次（登录可能换过）；这一次有了结果之后兑现。连着的会话类失败的第二次起只按心跳排下一次、
+   * 立即兑现（edit-lease.ts 的 resume：那时服务端一直拒绝，立即核对也只会再被拒）
+   */
   readonly resumeLease: () => Promise<void>
   /** 页头的文档详情刷新了：能不能编辑随之更新（阅读时） */
   readonly updateCanEdit: (canEdit: boolean) => void

@@ -158,7 +158,7 @@ export type LeaseOutcome
 export interface EditLease {
   /** 现在的令牌与代次：保存带上它 */
   readonly credentials: () => LeaseCredentials
-  /** 页面的会话不是本人：暂停续租 */
+  /** 页面的会话不是本人：暂停续租；连着的会话类失败清零（会话问题是真的，回到本人时立即续租，复核 D1） */
   readonly pause: () => void
   /**
    * 页面的会话确认是本人：恢复续租并立即续租一次（登录可能换过，失效了就随即续上）；这一次有了结果之后兑现。
@@ -537,6 +537,9 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
   return {
     credentials: () => credentials,
     pause: () => {
+      // 页面确认会话不是本人（没有人登录、换了人）：之前的会话类失败有了真正的原因，不是"服务端一直拒绝"——清零，回到本人时立即续租、
+      // 核对编辑权（复核 D1）。续租被拒时已经是 paused，清零放在下面的提前返回之前；服务端一直拒绝时确认都是本人，不会走到这里
+      sessionFailures = 0
       if (state !== 'holding' && state !== 'dormant')
         return
       state = 'paused'

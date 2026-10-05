@@ -807,6 +807,29 @@ describe('会话：暂停与恢复', () => {
     expect(renewedAt.map(at => at - start)).toEqual([10_000, 10_050, 20_100, 30_100, 30_150])
   })
 
+  it('连着两次会话类失败之后页面确认不是本人（暂停：真的登出了）：清零——回到本人时立即续租、核对编辑权（复核 D1）', async () => {
+    const csrf = new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
+    const renewedAt: number[] = []
+    const outcomes: (RenewedEditLease | ApiError)[] = [csrf, csrf]
+    const context = setup({ renew: vi.fn(async () => {
+      renewedAt.push(context.time.now())
+      const outcome = outcomes[renewedAt.length - 1] ?? RENEWED
+      if (outcome instanceof ApiError)
+        throw outcome
+      return outcome
+    }) })
+    const lease = await held(context)
+    const start = context.time.now()
+    // 10 秒的心跳被拒；页面确认是本人、恢复：立即续租又被拒（连着的第二次）
+    await context.time.advance(10_000)
+    await lease.resume()
+    // 页面再确认：没有人登录了（暂停）；一分钟之后本人登录回来
+    lease.pause()
+    await context.time.advance(60_000)
+    await lease.resume()
+    expect(renewedAt.map(at => at - start)).toEqual([10_000, 10_000, 70_000])
+  })
+
   it('续上的申请得到令牌失效也算连着的会话类失败（复验 C1）：失效 → 续上被拒 → 恢复 → 续租又失效 → 续上又被拒，第二轮起按心跳的节奏', async () => {
     const csrf = new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
     const renewedAt: number[] = []
