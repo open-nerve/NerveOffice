@@ -99,6 +99,7 @@
 | `node --expose-gc apps/api/scripts/measure-snapshot-inspection.ts` | 实测快照检查的子进程池（耗时、事件循环延迟、内存，DEF-018；先 `pnpm --filter "@nerve-office/api..." run build`；可以在生产镜像里跑，见脚本开头；不进 CI） |
 | `pnpm test:integration` | 集成测试（需要数据库；先构建后端，进程测试用构建产物） |
 | `pnpm test:e2e` | 构建后端与前端的测试构建后跑 E2E（真实后端与数据库，需要 `pnpm db:up`；端口每次自动挑选，后端日志在 `tests/e2e/test-results/e2e-server.log`） |
+| `E2E_AUTOSAVE=running`（环境变量） | E2E 的夹具不暂停定时的自动保存（默认暂停，M3-P4），按生产镜像的样子跑；在 `tests/e2e` 下与 `--grep-invert @test-build` 一起直接 `npx playwright test`，核对容器 E2E 会跑的用例在自动保存照常运行时也成立 |
 | `pnpm test:e2e:container` | 构建生产镜像，起一套测试环境（应用 + PostgreSQL + Caddy 的 HTTPS，见 `deploy/README.md`），对它跑 E2E（默认只跑 Chromium，`--browsers` 可多选）与重启用例，跑完删除；需要 Docker，各容器的日志在 `tests/e2e/test-results/container/`；放到后台跑用 tmux 或 `setsid`，不用 `nohup` |
 | `pnpm build` / `pnpm clean` | 构建 / 删除构建产物 |
 | `pnpm gate [名称…]` | A01 等检查：pins、config、stories、migrations、schema、deps、licenses、artifacts、budgets、audit |
