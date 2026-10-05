@@ -8,7 +8,7 @@ import { canonicalContentText, contentHashInput, EDIT_LEASE_TTL_SECONDS, UNIVER_
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { DocumentContentService } from './document-content.service.ts'
-import { ALICE, BOB, BOB_SPACE, clientFormatGate, CURRENT_CLIENT, FakeStore, HTTP_ORIGIN, TEAM_SPACE } from './documents.test-support.ts'
+import { ALICE, BOB, BOB_SPACE, clientFormatGate, CURRENT_CLIENT, FakeStore, HTTP_ORIGIN, TEAM_SPACE, TRANSACTION } from './documents.test-support.ts'
 import { editLeaseTokenDigest } from './edit-lease-token.ts'
 import { savedPayloadDigest } from './payload-digest.ts'
 
@@ -219,6 +219,14 @@ describe('DocumentContentService.save', () => {
     expect((await rejection(service.save(saver(BOB), document.id, query(), upload(document.unitId), HTTP_ORIGIN))).code).toBe('NOT_FOUND')
     expect((await rejection(service.save(saver(ALICE), '0199a2c4-0000-7000-8000-0000000000ff', query(), upload(document.unitId), HTTP_ORIGIN))).code).toBe('NOT_FOUND')
     expect(store.repositories.revisions.lockRequest).toHaveBeenCalledTimes(2)
+  })
+
+  it('锁下的再查在这个事务里读两张表（复验 RA14）：不在连接池上另借连接——事务已经占着一个连接，池子满时另借会与别的事务互相等待；预检在事务之外', async () => {
+    const { store, service, document } = setup()
+    const request = query()
+    await service.save(saver(ALICE), document.id, request, upload(document.unitId), HTTP_ORIGIN)
+    for (const findByRequestId of [store.repositories.revisions.findByRequestId, store.repositories.receipts.findByRequestId])
+      expect(findByRequestId.mock.calls).toEqual([[request.requestId, undefined], [request.requestId, TRANSACTION]])
   })
 
   it('别的文档上的回执用了这个 requestId：内容不同的保存同样 REQUEST_ID_CONFLICT，不写修订记录（两张表之间也只用一次，审查 A3）', async () => {
