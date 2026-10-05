@@ -1,6 +1,6 @@
 // 表格编辑器页的文案（P4）：只由编辑器页（features/sheet-editor）引用，随编辑器页的入口加载，不进平台页面的首屏（lint 的模块边界限定）。
 // 两个入口共用的（通用的说明、错误与登录状态）在 messages.ts
-import type { SnapshotRule } from '@nerve-office/contracts'
+import type { ProfileResourceName, SnapshotRule } from '@nerve-office/contracts'
 import type { Phrase } from './messages.ts'
 import { EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
 
@@ -51,6 +51,23 @@ function lostEnding(unsaved: boolean, readable: boolean, shown: boolean, copyabl
 
 /** 超过容量上限（保存时本页先算出来，另存为副本时服务端回答 PAYLOAD_TOO_LARGE） */
 const CAPACITY_EXCEEDED = '表格超过容量上限（5 MiB）'
+
+/**
+ * 打开自检里没能完整载入的那部分数据的说法（M3-P4 设计 §3.12）：按 sheet@1 的资源名（contracts 的白名单，档案加了资源而这里没有说法时
+ * 类型检查不通过）。保护类与区域主题服务端要求为空，几乎不会出现，照样给出说法
+ */
+const DAMAGED_RESOURCE_PHRASES: Readonly<Record<ProfileResourceName<'sheet@1'>, string>> = {
+  SHEET_CONDITIONAL_FORMATTING_PLUGIN: '条件格式',
+  SHEET_DATA_VALIDATION_PLUGIN: '数据验证',
+  SHEET_DEFINED_NAME_PLUGIN: '定义名称',
+  SHEET_DRAWING_PLUGIN: '图片',
+  SHEET_FILTER_PLUGIN: '筛选',
+  SHEET_NOTE_PLUGIN: '批注',
+  SHEET_RANGE_PROTECTION_PLUGIN: '保护设置',
+  SHEET_WORKSHEET_PROTECTION_PLUGIN: '保护设置',
+  SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN: '保护设置',
+  SHEET_RANGE_THEME_MODEL_PLUGIN: '表格样式',
+}
 
 export const editorMessages = {
   back: '我的空间',
@@ -130,6 +147,24 @@ export const editorMessages = {
           return '这份文档由更新的版本保存过，当前只能阅读，不能再保存'
       }
     },
+  },
+  /**
+   * 打开自检失败（M3-P4 设计 §3.12，US-M3-15；00 号计划书 §7.7、§8.2"文档数据不完整，已阻止编辑"）：
+   * - 这份文档的数据没能完整载入（解析出错、被吞成空值、加载出错、写不出来、加载之后不在了或变空了）：能编辑的人说已阻止编辑，另说原因与去向；
+   *   查看者只说显示的内容可能不完整（本来就不能编辑）；
+   * - 编辑器自己没有完整载入（档案不全：构建的问题，任何文档都会这样）：请重新加载页面（给"重新加载"）
+   */
+  damaged: {
+    blocked: '文档数据不完整，已阻止编辑',
+    /** parts：没能完整载入的那几部分的说法（resource 给出，去掉重复、按出现的先后） */
+    reason: (parts: readonly string[]) => `部分数据没能载入（${parts.join('、')}），继续编辑会让它们丢失。已通知管理员`,
+    viewer: '文档的部分数据没能载入，显示的内容可能不完整',
+    /** 编辑器没有完整载入：能编辑的人 */
+    profile: '编辑器没有完整载入，已阻止编辑。请重新加载页面',
+    /** 编辑器没有完整载入：查看者（本来就不能编辑，不说"已阻止编辑"） */
+    profileViewer: '编辑器没有完整载入，显示的内容可能不完整。请重新加载页面',
+    /** 资源名的说法；认不出的（白名单之外）是"其他数据" */
+    resource: (name: string): string => Object.hasOwn(DAMAGED_RESOURCE_PHRASES, name) ? DAMAGED_RESOURCE_PHRASES[name as keyof typeof DAMAGED_RESOURCE_PHRASES] : '其他数据',
   },
   /**
    * 快照达到容量的 80%（US-M3-14，00 号计划书 §7.7）：不打断的说明，percent 是最近一次捕获占上限的百分比（向下取整）

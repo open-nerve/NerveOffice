@@ -1,5 +1,5 @@
-import type { AcquiredEditLease, CreatedDocument, DocumentEditor, RenewedEditLease, SaveContentResponse } from '@nerve-office/contracts'
-import type { EditorAccess, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
+import type { AcquiredEditLease, CreatedDocument, DocumentEditor, OpenCheckFailure, RenewedEditLease, SaveContentResponse } from '@nerve-office/contracts'
+import type { EditorAccess, OpenCheck, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
 import type { Autosave, AutosaveLimits, AutosavePage, AutosaveTuning } from './autosave.ts'
 import type { EditLeaseApi } from './edit-lease.ts'
 import type { EditMode, EditModeApi, EditModeOptions, EditModeState, LostMode, ReadingMode } from './edit-mode.ts'
@@ -8,6 +8,7 @@ import { EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_TTL_SECONDS } from '@nerve-off
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
+import { PAGE_CLIENT_FORMAT } from './client-format.ts'
 import { createEditMode, EXIT_RELEASE_WAIT_MS } from './edit-mode.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
@@ -67,10 +68,14 @@ function viewStateOf(index: number): SheetViewState {
   return { sheetId: `sheet-${index}`, topLeft: { row: index * 10, column: index }, selection: undefined }
 }
 
+/** 新建的编辑器的打开自检的结果按打开方式与快照给出（默认通过） */
+type CheckOf = (options: { readonly access: EditorAccess, readonly snapshot: string }) => OpenCheck
+
 function fakeFactory() {
   const created: FakeEditor[] = []
   /** 下一次创建的结果：默认立即成功；hold 时由测试放行，fail 时失败 */
   let next: 'ok' | 'fail' | { readonly gate: Promise<void> } = 'ok'
+  let checkOf: CheckOf = () => ({ ok: true })
   const createEditor = vi.fn(async (options: { snapshot: string, access: EditorAccess, viewState?: SheetViewState | undefined, recalculate?: boolean }) => {
     const plan = next
     next = 'ok'
@@ -132,7 +137,7 @@ function fakeFactory() {
           return snapshotOf(value)
         }),
         viewState: () => fake.disposed ? undefined : viewStateOf(fake.index),
-        openCheck: { ok: true },
+        openCheck: checkOf(options),
         dispose: vi.fn(async () => {
           fake.disposed = true
         }),
@@ -172,6 +177,10 @@ function fakeFactory() {
       const gate = deferred<void>()
       next = { gate: gate.promise }
       return { release: () => gate.resolve() }
+    },
+    /** 之后新建的编辑器的打开自检按它给出（M3-P4） */
+    checkWith: (next: CheckOf) => {
+      checkOf = next
     },
   }
 }
@@ -307,6 +316,7 @@ function setup(options: Setup = {}) {
     compress: vi.fn(overrides.compress ?? (async (snapshot: string) => new TextEncoder().encode(snapshot))),
     save: vi.fn(overrides.save ?? (async (): Promise<SaveContentResponse> => SAVED)),
     conflictCopy: vi.fn(overrides.conflictCopy ?? (async (): Promise<CreatedDocument> => ({ ...COPY, replayed: false }))),
+    reportOpenCheck: vi.fn(overrides.reportOpenCheck ?? (async (): Promise<void> => {})),
     editLease,
   } satisfies EditModeApi
   const hooks = { saveUnauthenticated: vi.fn(), saveStale: vi.fn(), writeProblem: vi.fn(), readProblem: vi.fn() }
@@ -372,7 +382,7 @@ describe('打开（M3-P2 设计 §3.4：打开即阅读）', () => {
   it('以只读创建、显示载入的内容，进入阅读（能编辑时有"编辑"）；进入阅读时立即读一次编辑状态', async () => {
     const context = setup()
     const outcome = await context.mode.open({ ...LOADED, canEdit: true }, { enterEdit: false })
-    expect(outcome).toEqual({ kind: 'opened', entered: false })
+    expect(outcome).toEqual({ kind: 'opened', entered: false, damaged: false })
     expect(context.factory.created.map(fake => [fake.access, fake.snapshot, fake.viewState])).toEqual([['read', LOADED.snapshot, undefined]])
     expect(readingOf(context.mode)).toEqual({ kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, formulasPending: false })
     expect(context.mode.view()).toMatchObject({ surface: 'rendered', save: undefined })
@@ -412,7 +422,7 @@ describe('打开（M3-P2 设计 §3.4：打开即阅读）', () => {
   it('新建的表格（?edit=new）而且能编辑：直接申请、以可编辑创建（只建一次，不先建只读的），进入编辑', async () => {
     const context = setup()
     const outcome = await context.mode.open({ ...LOADED, canEdit: true }, { enterEdit: true })
-    expect(outcome).toEqual({ kind: 'opened', entered: true })
+    expect(outcome).toEqual({ kind: 'opened', entered: true, damaged: false })
     expect(context.editLease.acquire).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, PAGE_ID)
     expect(context.factory.created.map(fake => [fake.access, fake.snapshot])).toEqual([['edit', LOADED.snapshot]])
     expect(modeOf(context.mode).kind).toBe('editing')
@@ -429,7 +439,7 @@ describe('打开（M3-P2 设计 §3.4：打开即阅读）', () => {
   it('?edit=new 但被占用：以只读创建，说明谁在编辑', async () => {
     const context = setup({ editLease: { acquire: async () => Promise.reject(HELD_BY_AMY) }, api: { editStatus: async () => status(3, AMY_EDITING) } })
     const outcome = await context.mode.open({ ...LOADED, canEdit: true }, { enterEdit: true })
-    expect(outcome).toEqual({ kind: 'opened', entered: false })
+    expect(outcome).toEqual({ kind: 'opened', entered: false, damaged: false })
     expect(context.factory.last().access).toBe('read')
     expect(readingOf(context.mode).holder).toEqual({ holder: AMY, sameUser: false, lastActiveMinutes: 3 })
   })
@@ -459,7 +469,7 @@ describe('打开（M3-P2 设计 §3.4：打开即阅读）', () => {
     const context = setup({ editLease: { acquire: async () => Promise.reject(error) } })
     const opening = context.mode.open({ ...LOADED, canEdit: true }, { enterEdit: true })
     await context.time.advance(1_000)
-    expect(await opening).toEqual({ kind: 'opened', entered: false })
+    expect(await opening).toEqual({ kind: 'opened', entered: false, damaged: false })
     expect(context.factory.created.map(fake => [fake.access, fake.snapshot])).toEqual([['read', LOADED.snapshot]])
     expect(readingOf(context.mode)).toMatchObject({ canEdit: true, notice: { kind: 'enter-failed', error } })
     context.editLease.acquire.mockResolvedValueOnce(ACQUIRED)
@@ -470,14 +480,14 @@ describe('打开（M3-P2 设计 §3.4：打开即阅读）', () => {
   it('?edit=new 申请时令牌失效：交给页面确认会话，以只读打开并说明', async () => {
     const error = new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
     const context = setup({ editLease: { acquire: async () => Promise.reject(error) } })
-    expect(await context.mode.open({ ...LOADED, canEdit: true }, { enterEdit: true })).toEqual({ kind: 'opened', entered: false })
+    expect(await context.mode.open({ ...LOADED, canEdit: true }, { enterEdit: true })).toEqual({ kind: 'opened', entered: false, damaged: false })
     expect(context.hooks.writeProblem).toHaveBeenCalledExactlyOnceWith(error)
     expect(readingOf(context.mode)).toMatchObject({ notice: { kind: 'enter-failed', error } })
   })
 
   it('?edit=new 申请得到的修订号比载入的新、取服务端的内容失败（网络）：释放刚取得的编辑权，以只读打开载入的内容并说明（审查 A11）', async () => {
     const context = setup({ editLease: { acquire: async () => ({ ...ACQUIRED, revision: 5 }) }, api: { contentIfChanged: async () => Promise.reject(new NetworkError('断网')) } })
-    expect(await context.mode.open({ ...LOADED, canEdit: true }, { enterEdit: true })).toEqual({ kind: 'opened', entered: false })
+    expect(await context.mode.open({ ...LOADED, canEdit: true }, { enterEdit: true })).toEqual({ kind: 'opened', entered: false, damaged: false })
     expect(context.editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
     expect(context.factory.created.map(fake => [fake.access, fake.snapshot])).toEqual([['read', LOADED.snapshot]])
     expect(readingOf(context.mode).notice).toMatchObject({ kind: 'enter-failed' })
@@ -2237,5 +2247,181 @@ describe('阅读页的"公式待更新"（M3-P4 设计 §3.5 第 4 条）', () =
     expect(readingOf(context.mode).formulasPending).toBe(false)
     await settle()
     expect(readingOf(context.mode).formulasPending).toBe(false)
+  })
+})
+
+describe('打开自检（M3-P4 设计 §3.11–§3.13，US-M3-15）', () => {
+  /** 数据没能完整载入：截断的筛选（解析抛错、加载之后变空） */
+  const FILTER_FAILURES: readonly [OpenCheckFailure, ...OpenCheckFailure[]] = [{ kind: 'parse-threw', resource: 'SHEET_FILTER_PLUGIN', error: 'SyntaxError' }, { kind: 'resource-emptied', resource: 'SHEET_FILTER_PLUGIN' }]
+  const FILTER_BROKEN: OpenCheck = { ok: false, failures: FILTER_FAILURES }
+  /** 编辑器没有完整载入：批注的插件没有注册 */
+  const NOTE_FAILURES: readonly [OpenCheckFailure, ...OpenCheckFailure[]] = [{ kind: 'profile-missing-hook', resource: 'SHEET_NOTE_PLUGIN' }]
+  const NOTE_MISSING: OpenCheck = { ok: false, failures: NOTE_FAILURES }
+  const OUTDATED = new ApiError(409, 'CLIENT_OUTDATED', '页面的版本过旧', { details: { reason: 'format' } })
+
+  /** 上报过的（打开方式、起因、修订号），按先后 */
+  function reports(context: ReturnType<typeof setup>): (readonly [string, string, number])[] {
+    return context.api.reportOpenCheck.mock.calls.map(([, report]) => [report.access, report.trigger, report.revision] as const)
+  }
+
+  it('打开：只读的编辑器自检失败——阅读带上失败清单（damaged），能不能编辑照旧；结果的 damaged 为真；上报一次（只读、open、载入的修订号、本页的构建与格式）', async () => {
+    const context = setup()
+    context.factory.checkWith(() => FILTER_BROKEN)
+    const outcome = await context.mode.open({ ...LOADED, canEdit: true }, { enterEdit: false })
+    expect(outcome).toEqual({ kind: 'opened', entered: false, damaged: true })
+    expect(readingOf(context.mode)).toMatchObject({ canEdit: true, damaged: FILTER_FAILURES, notice: undefined })
+    expect(context.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { revision: 3, access: 'read', trigger: 'open', failures: FILTER_FAILURES, ...PAGE_CLIENT_FORMAT })
+  })
+
+  it('打开时通过：没有 damaged，不上报', async () => {
+    const context = setup()
+    await opened(context)
+    expect(readingOf(context.mode).damaged).toBeUndefined()
+    expect(context.api.reportOpenCheck).not.toHaveBeenCalled()
+  })
+
+  it('自检失败的阅读不进入编辑（不申请编辑权）；30 秒的检查读到能编辑、页头的详情说能编辑都不恢复', async () => {
+    const context = setup()
+    context.factory.checkWith(() => FILTER_BROKEN)
+    await opened(context)
+    await context.mode.enter()
+    expect(context.editLease.acquire).not.toHaveBeenCalled()
+    context.api.editStatus.mockResolvedValue(status(3, null, true))
+    await context.time.advance(READING_CHECK_INTERVAL_MS)
+    context.mode.updateCanEdit(false)
+    context.mode.updateCanEdit(true)
+    expect(readingOf(context.mode)).toMatchObject({ canEdit: true, damaged: FILTER_FAILURES })
+    await context.mode.enter()
+    expect(context.editLease.acquire).not.toHaveBeenCalled()
+    expect(context.api.reportOpenCheck).toHaveBeenCalledOnce()
+  })
+
+  it('?edit=new：可编辑的编辑器自检失败（先取后放）——不建保存的状态机与调度，释放刚取得的编辑权，以只读重建同一份内容、以 damaged 进入阅读；两个编辑器各报一次；之后没有任何保存', async () => {
+    const context = setup({ autosave: 'running' })
+    context.factory.checkWith(() => NOTE_MISSING)
+    const outcome = await context.mode.open({ ...LOADED, canEdit: true }, { enterEdit: true })
+    expect(outcome).toEqual({ kind: 'opened', entered: false, damaged: true })
+    expect(context.editLease.acquire).toHaveBeenCalledOnce()
+    expect(context.editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
+    expect(context.factory.created.map(fake => [fake.access, fake.snapshot, fake.disposed])).toEqual([['edit', LOADED.snapshot, true], ['read', LOADED.snapshot, false]])
+    expect(context.autosave.attached).toEqual([])
+    expect(context.mode.view()).toMatchObject({ save: undefined, autosave: undefined, surface: 'rendered' })
+    expect(readingOf(context.mode)).toMatchObject({ canEdit: true, damaged: NOTE_FAILURES, notice: undefined, update: 'none' })
+    expect(reports(context)).toEqual([['edit', 'enter', 3], ['read', 'enter', 3]])
+    // 失败的编辑器绝不保存：它上面的修改没有人接着（没有保存的状态机、没有调度），时间过去也没有保存请求
+    context.factory.created[0]?.edit('不该存的')
+    await context.time.advance(60_000)
+    expect(context.api.save).not.toHaveBeenCalled()
+    expect(context.mode.hasUnsavedWork()).toBe(false)
+  })
+
+  it('"编辑"：申请得到更新的修订号、新内容自检失败——释放，以只读重建新内容（显示的就是它），damaged；"公式待更新"按申请时服务端说的', async () => {
+    const context = setup({ editLease: { acquire: async () => ({ ...ACQUIRED, revision: 5, formulasPending: true }) } })
+    await opened(context)
+    context.factory.checkWith(({ snapshot }) => (snapshot === snapshotOf('服务端的') ? FILTER_BROKEN : { ok: true }))
+    await context.mode.enter()
+    expect(context.editLease.release).toHaveBeenCalledOnce()
+    expect(context.factory.created.map(fake => [fake.access, fake.snapshot])).toEqual([['read', LOADED.snapshot], ['edit', snapshotOf('服务端的')], ['read', snapshotOf('服务端的')]])
+    expect(readingOf(context.mode)).toMatchObject({ damaged: FILTER_FAILURES, update: 'none', notice: undefined, formulasPending: true })
+    expect(reports(context)).toEqual([['edit', 'enter', 5], ['read', 'enter', 5]])
+    // 显示的是新内容：之后的检查读到 5 不提示有更新
+    context.api.editStatus.mockResolvedValue(status(5))
+    await context.time.advance(READING_CHECK_INTERVAL_MS)
+    expect(readingOf(context.mode).update).toBe('none')
+  })
+
+  it('"编辑"：可编辑的自检失败而只读的通过（两次不一致）——仍按可编辑时的清单阻止编辑，不来回"先取后放"', async () => {
+    const context = setup()
+    await opened(context)
+    context.factory.checkWith(({ access }) => (access === 'edit' ? FILTER_BROKEN : { ok: true }))
+    await context.mode.enter()
+    expect(readingOf(context.mode).damaged).toEqual(FILTER_FAILURES)
+    expect(reports(context)).toEqual([['edit', 'enter', 3]])
+    await context.mode.enter()
+    expect(context.editLease.acquire).toHaveBeenCalledOnce()
+  })
+
+  it('以可编辑重建失败、回退的只读的自检也失败：不说"可以再试"（没有"编辑"），按只读的清单说明', async () => {
+    const context = setup()
+    await opened(context)
+    context.factory.failNext()
+    context.factory.checkWith(() => FILTER_BROKEN)
+    await context.mode.enter()
+    expect(readingOf(context.mode)).toMatchObject({ notice: undefined, damaged: FILTER_FAILURES })
+    expect(reports(context)).toEqual([['read', 'enter', 3]])
+  })
+
+  it('新建可编辑的编辑器期间续租得知与服务端不兼容、它的自检又失败：回到阅读时带上不兼容（blocked）与 damaged', async () => {
+    const context = setup({ editLease: { renew: async () => Promise.reject(OUTDATED) } })
+    await opened(context)
+    const gate = context.factory.holdNext()
+    context.factory.checkWith(({ access }) => (access === 'edit' ? FILTER_BROKEN : { ok: true }))
+    const entering = context.mode.enter()
+    await settle()
+    await context.time.advance(HEARTBEAT_MS)
+    gate.release()
+    await entering
+    expect(readingOf(context.mode)).toMatchObject({ blocked: 'client-outdated', damaged: FILTER_FAILURES })
+  })
+
+  it('退出编辑：以只读重建刚存下的内容，自检失败——以 damaged 阅读，上报（exit、保存之后的修订号）', async () => {
+    const context = setup()
+    await editing(context)
+    context.factory.last().edit('改了')
+    context.factory.checkWith(() => FILTER_BROKEN)
+    await context.mode.exit()
+    await settle()
+    expect(readingOf(context.mode)).toMatchObject({ damaged: FILTER_FAILURES })
+    expect(reports(context)).toEqual([['read', 'exit', 4]])
+  })
+
+  it('"有更新"：按新内容的结果覆盖——之前失败、新版通过时恢复（damaged 清掉）；新版失败时换成新版的清单', async () => {
+    const context = setup({ api: { editStatus: async () => status(5) } })
+    context.factory.checkWith(() => FILTER_BROKEN)
+    await opened(context)
+    context.factory.checkWith(() => ({ ok: true }))
+    await context.mode.refresh()
+    expect(readingOf(context.mode)).toMatchObject({ damaged: undefined, update: 'none' })
+    context.api.editStatus.mockResolvedValue(status(6))
+    context.api.contentIfChanged.mockResolvedValue({ snapshot: snapshotOf('第六版'), revision: 6 })
+    await context.time.advance(READING_CHECK_INTERVAL_MS)
+    context.factory.checkWith(() => NOTE_MISSING)
+    await context.mode.refresh()
+    expect(readingOf(context.mode).damaged).toEqual(NOTE_FAILURES)
+    expect(reports(context)).toEqual([['read', 'open', 3], ['read', 'refresh', 6]])
+  })
+
+  it('失去编辑权之后以只读重建的自检失败：只上报（lost），失去编辑权之后的选项不变（副本照常给）；副本之后按最新的内容重建、又失败：以 damaged 阅读、上报（reload）', async () => {
+    const context = setup()
+    await editing(context)
+    context.factory.last().edit('本页的')
+    context.factory.checkWith(() => FILTER_BROKEN)
+    loseOnNextHeartbeat(context, DENIED)
+    await context.time.advance(HEARTBEAT_MS)
+    await settle()
+    expect(lostOf(context.mode)).toMatchObject({ unsaved: true, readable: true, reopenFailed: false, captureFailed: false, copy: { kind: 'idle' } })
+    expect(reports(context)).toEqual([['read', 'lost', 3]])
+    await context.mode.saveCopy()
+    expect(context.api.conflictCopy).toHaveBeenCalledOnce()
+    expect(readingOf(context.mode)).toMatchObject({ damaged: FILTER_FAILURES, notice: { kind: 'copied' } })
+    expect(reports(context)).toEqual([['read', 'lost', 3], ['read', 'reload', 9]])
+  })
+
+  it('会话不是本人时不上报：自检照样失败、只能阅读', async () => {
+    const context = setup()
+    context.mode.setSession('other-user')
+    context.factory.checkWith(() => FILTER_BROKEN)
+    await opened(context)
+    expect(readingOf(context.mode).damaged).toEqual(FILTER_FAILURES)
+    expect(context.api.reportOpenCheck).not.toHaveBeenCalled()
+  })
+
+  it('上报失败（网络）：不看结果、不重试，也不当作页面错误', async () => {
+    const context = setup({ api: { reportOpenCheck: async () => Promise.reject(new NetworkError('断网')) } })
+    context.factory.checkWith(() => FILTER_BROKEN)
+    await opened(context)
+    await context.time.advance(60_000)
+    expect(context.api.reportOpenCheck).toHaveBeenCalledOnce()
+    expect(context.reportError).not.toHaveBeenCalled()
   })
 })

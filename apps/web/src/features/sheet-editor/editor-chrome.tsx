@@ -14,6 +14,9 @@
 // 例行的"有未保存的修改 → 保存中… → 已保存到云端"只改看得见的文字。失败的说明在自动重试期间保留（保存的状态机留着上一次的原因）；
 // "保存"不随保存中变灰（在途时按下排一次）。阅读时本页显示的这一版"公式待更新"时，在读屏状态区里说明（能编辑的人另说进入编辑之后会重算）。
 // 页头的文档详情没能刷新时，"重试"在重新取的过程中说正在重试（DEF-045）。
+// M3-P4（设计 §3.12，US-M3-15）：打开自检失败的阅读（damaged）不给"编辑"、页头只能查看，说明按原因与能不能编辑分：编辑器没有完整载入
+// （档案不全）时请重新加载页面、给"重新加载"；这份文档的数据没能完整载入时，能编辑的人说已阻止编辑与哪些部分没能载入（提示条，
+// role="alert"），查看者只说显示的内容可能不完整（读屏状态区）。随之消失的"编辑"上的焦点交给返回链接（与权限消失同一个做法）。
 // 编辑器本身挂在页头之外的容器里（editor.html 的 #sheet-editor），不归 React 管。
 import type { SnapshotRule } from '@nerve-office/contracts'
 import type { ReactNode, RefObject } from 'react'
@@ -21,11 +24,11 @@ import type { Phrase as PhraseParts } from '../../shared/i18n/index.ts'
 import type { PendingConfirmation } from '../confirmation/index.ts'
 import type { Incompatibility } from './client-format.ts'
 import type { LeaseHolder, LeaseLoss } from './edit-lease.ts'
-import type { CopyState, LostMode, ReadingMode, ReadingNotice } from './edit-mode.ts'
+import type { CopyState, LostMode, OpenCheckFailures, ReadingMode, ReadingNotice } from './edit-mode.ts'
 import type { EditorPage, EditorPageLoad, EditorPageReady, EditorPageSession, EditorPageView } from './editor-page.ts'
 import type { SaveProblem, SaveView } from './save-coordinator.ts'
 import type { SaveIndicator } from './save-indicator.ts'
-import { documentPagePath, SNAPSHOT_MAX_RAW_BYTES, SNAPSHOT_WARN_RAW_BYTES, snapshotInvalidDetailsSchema } from '@nerve-office/contracts'
+import { documentPagePath, isProfileFailure, SNAPSHOT_MAX_RAW_BYTES, SNAPSHOT_WARN_RAW_BYTES, snapshotInvalidDetailsSchema } from '@nerve-office/contracts'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { ArrowLeft } from 'lucide-react'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
@@ -117,10 +120,10 @@ function headerStatus(view: EditorPageView): string {
       // 点了"编辑"、要先向服务端确认会话（审查 A10）：确认期间说正在确认，与按保存时的确认相同（复验 C8）
       if (view.confirmingSession)
         return messages.auth.checkingSession
-      // 与服务端不兼容（M3-P3）：本页过旧时需要刷新；文档由更新的版本保存过时只能查看
+      // 与服务端不兼容（M3-P3）：本页过旧时需要刷新；文档由更新的版本保存过时只能查看。打开自检失败（M3-P4）同样只能查看，原因在说明里
       if (mode.blocked === 'client-outdated')
         return editorMessages.status.outdated
-      return mode.canEdit && mode.blocked === undefined ? '' : editorMessages.status.readOnly
+      return mode.canEdit && mode.blocked === undefined && mode.damaged === undefined ? '' : editorMessages.status.readOnly
     case 'entering':
       return editorMessages.mode.entering
     case 'editing':
@@ -216,8 +219,8 @@ function SaveControls({ page, save, confirming, exiting, apple }: { page: Editor
 function ReadingControls({ page, reading, session, confirming }: { page: EditorPage, reading: ReadingMode | undefined, session: EditorPageSession, confirming: boolean }) {
   const entering = reading === undefined
   const update = reading?.update ?? 'none'
-  // 与服务端不兼容（M3-P3）时不给"编辑"：申请也会被拒，重新加载才是新的页面
-  const offersEdit = reading === undefined || (reading.canEdit && !reading.gone && reading.blocked === undefined)
+  // 与服务端不兼容（M3-P3）时不给"编辑"：申请也会被拒，重新加载才是新的页面。打开自检失败（M3-P4）时同样不给：数据不完整的不能编辑
+  const offersEdit = reading === undefined || (reading.canEdit && !reading.gone && reading.blocked === undefined && reading.damaged === undefined)
   return (
     <>
       {update !== 'none' && (
@@ -273,6 +276,44 @@ function IncompatibleNotice({ kind, editing, onReload }: { kind: Incompatibility
       <AlertDescription>
         <p>{editing === undefined ? editorMessages.incompatible.outdatedReading : editorMessages.incompatible.outdatedEditing(editing)}</p>
         <Button variant="outline" size="sm" className="mt-2" onClick={onReload}>{editorMessages.reload}</Button>
+      </AlertDescription>
+    </Alert>
+  )
+}
+
+/** 打开自检失败的原因（M3-P4 设计 §3.12）：编辑器自己没有完整载入（档案不全，有一项就是），或者这份文档的数据没能完整载入 */
+function damageOf(failures: OpenCheckFailures): 'profile' | 'data' {
+  return failures.some(failure => isProfileFailure(failure.kind)) ? 'profile' : 'data'
+}
+
+/** 没能完整载入的那几部分的说法：按失败清单的先后，去掉重复（三种保护设置是一个说法） */
+function damagedParts(failures: OpenCheckFailures): string[] {
+  return [...new Set(failures.map(failure => editorMessages.damaged.resource(failure.resource)))]
+}
+
+/**
+ * 打开自检失败的说明（M3-P4 设计 §3.12）：编辑器没有完整载入时请重新加载页面，给"重新加载"（能编辑的人另说已阻止编辑）；这份文档的数据
+ * 没能完整载入时，能编辑的人说已阻止编辑、哪些部分没能载入、继续编辑会让它们丢失、已通知管理员。查看者的数据不完整只是一句不打断的说明，
+ * 在读屏状态区里（readingInfo），这里不画
+ */
+function DamagedNotice({ failures, canEdit, onReload }: { failures: OpenCheckFailures, canEdit: boolean, onReload: () => void }) {
+  if (damageOf(failures) === 'profile') {
+    return (
+      <Alert variant="destructive">
+        <AlertDescription>
+          <p>{canEdit ? editorMessages.damaged.profile : editorMessages.damaged.profileViewer}</p>
+          <Button variant="outline" size="sm" className="mt-2" onClick={onReload}>{editorMessages.reload}</Button>
+        </AlertDescription>
+      </Alert>
+    )
+  }
+  if (!canEdit)
+    return null
+  return (
+    <Alert variant="destructive">
+      <AlertDescription>
+        <p>{editorMessages.damaged.blocked}</p>
+        <p>{editorMessages.damaged.reason(damagedParts(failures))}</p>
       </AlertDescription>
     </Alert>
   )
@@ -468,14 +509,17 @@ function elsewhereNotice(holder: LeaseHolder | undefined, canEdit: boolean, rele
 }
 
 /**
- * 阅读时的说明，放进一直在的读屏状态区（规范 §2.4）：谁在编辑（能不能编辑都说：US-M3-04 的"其他人"包括查看者，编辑状态能读就能看；
+ * 阅读时的说明，放进一直在的读屏状态区（规范 §2.4）：查看者看到的这一版数据不完整（M3-P4 设计 §3.12：能编辑的人与编辑器没有完整载入的
+ * 说明在提示条里，DamagedNotice）、谁在编辑（能不能编辑都说：US-M3-04 的"其他人"包括查看者，编辑状态能读就能看；
  * P2 的定期检查会让它变化）、文档读不到了、有更新与正在载入（页头的按钮之外读屏也听得到，审查 A6）、另存为副本成功、
- * 本页显示的这一版"公式待更新"（M3-P4 设计 §3.5 第 4 条：能编辑的人另说进入编辑之后会重算并保存）
+ * 本页显示的这一版"公式待更新"（M3-P4 设计 §3.5 第 4 条：能进入编辑的人另说进入编辑之后会重算并保存）
  */
 function readingInfo(reading: ReadingMode | undefined): ReactNode {
   if (reading === undefined)
     return undefined
   const lines: ReactNode[] = []
+  if (reading.damaged !== undefined && !reading.canEdit && damageOf(reading.damaged) === 'data')
+    lines.push(<span key="damaged">{editorMessages.damaged.viewer}</span>)
   if (reading.gone)
     lines.push(<span key="gone">{editorMessages.mode.gone}</span>)
   else if (reading.holder !== undefined)
@@ -484,9 +528,9 @@ function readingInfo(reading: ReadingMode | undefined): ReactNode {
     lines.push(<span key="update">{reading.update === 'loading' ? editorMessages.mode.updating : editorMessages.mode.updateAvailable}</span>)
   if (reading.notice?.kind === 'copied')
     lines.push(<span key="copied"><CopiedNote title={reading.notice.document.title} documentId={reading.notice.document.id} /></span>)
-  // 读不到了时不说（之前打开的内容，进入编辑也不可能）
+  // 读不到了时不说（之前打开的内容，进入编辑也不可能）；数据不完整时不提进入编辑之后重算（不能进入编辑）
   if (reading.formulasPending && !reading.gone)
-    lines.push(<span key="formulas">{editorMessages.mode.formulasPending(reading.canEdit && reading.blocked === undefined)}</span>)
+    lines.push(<span key="formulas">{editorMessages.mode.formulasPending(reading.canEdit && reading.blocked === undefined && reading.damaged === undefined)}</span>)
   return lines.length === 0 ? undefined : <>{lines.flatMap((line, index) => index === 0 ? [line] : [' ', line])}</>
 }
 
@@ -637,6 +681,8 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
               <AlertDescription>{failure}</AlertDescription>
             </Alert>
           )}
+          {/* 打开自检失败（M3-P4）：编辑器没有完整载入，或者能编辑的人看到的这一版数据不完整 */}
+          {reading?.damaged !== undefined && <DamagedNotice failures={reading.damaged} canEdit={reading.canEdit} onReload={page.reload} />}
           {/* 阅读时与服务端不兼容（M3-P3）：打开时就看得出、申请编辑权时得知，或者编辑时得知之后退出了编辑 */}
           {reading?.blocked !== undefined && <IncompatibleNotice kind={reading.blocked} editing={undefined} onReload={page.reload} />}
           {lost !== undefined && <LostNotice page={page} lost={lost} onDiscard={confirmDiscard} fallbackFocus={backRef} />}
