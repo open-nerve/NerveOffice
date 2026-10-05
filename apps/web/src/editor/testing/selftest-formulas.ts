@@ -252,9 +252,9 @@ export async function formulaTimingScenario(session: Session): Promise<void> {
 /**
  * 阅读时强制重算开始之后多久才点"编辑"：sheets-formula 收到一轮开始的通知（stage 为 START 的进度通知）时设一个 1 秒的进度计时器
  * （到点调 LocaleService.t），旧的编辑器在它到点之前销毁，到点就是一条"[LocaleService]: Locale not initialized"的页面异常——那是另一个
- * 已修的问题（main 的 f755729，这个副本里没有）。所以从这一轮第一条进度通知在主线程上执行的时刻算起（Worker 模式下它比开始的
- * mutation 晚，WebKit 里晚得更多），计时器按到期的先后执行：自检的轮询看到已经过了 1.2 秒时，那个 1 秒的计时器已经执行过了；
- * 这里只看语法树缓存这一件事
+ * 问题，main 的 f755729 已修，而写这一项时 S1 的分支（基于 b547644）还没有它。所以从这一轮第一条进度通知在主线程上执行的时刻算起
+ * （Worker 模式下它比开始的 mutation 晚，WebKit 里晚得更多），计时器按到期的先后执行：自检的轮询看到已经过了 1.2 秒时，那个 1 秒的
+ * 计时器已经执行过了；这里只看语法树缓存这一件事。合并进有 f755729 的分支之后，这层等待可以缩短（点"编辑"越早，旧的一轮剩得越多）
  */
 const REBUILD_AFTER_START_MS = 1_200
 
