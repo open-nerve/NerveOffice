@@ -191,7 +191,7 @@ export const documentDetailSchema = documentSummarySchema.extend({
   sdkVersion: z.string().min(1),
   /**
    * "公式待更新"（M3-P3 设计 §3.8）：最近一次写入的快照里公式结果可能还没算完。P4 据此在进入编辑时先全量重算、阅读页给出说明。
-   * S4 之前服务端没有记下它，一律为 false
+   * 存量一律没有标记
    */
   formulasPending: z.boolean(),
   permissions: documentPermissionsSchema,

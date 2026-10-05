@@ -29,7 +29,8 @@ docker build -f deploy/Dockerfile -t nerve-office:test \
   --build-arg VERSION=0.1.0 --build-arg REVISION="$(git rev-parse --short HEAD)" .
 ```
 
-`VERSION` 与 `REVISION` 写进镜像的 OCI 标签，可以不传。镜像里带着服务端依赖的第三方许可清单（`/app/licenses/`）。
+`VERSION` 与 `REVISION` 写进镜像的 OCI 标签，可以不传。`REVISION` 是十六进制的提交号时，还附在页面的构建版本之后（例如 `0.1.0+1a2b3c4`）：
+页面保存时上报它，修订记录里看得到是哪一次构建写的；服务端按 `NERVE_MIN_CLIENT_BUILD` 比较时不看 `+` 之后的部分。镜像里带着服务端依赖的第三方许可清单（`/app/licenses/`）。
 
 ## 起测试环境
 
@@ -95,6 +96,7 @@ docker compose -f deploy/test/compose.yaml exec -T app \
 | `NERVE_TRASH_PURGE_ENABLED` | 回收站的自动清理开关，默认 `true`（只认 `true` 与 `false`）。开启时 `NERVE_DATABASE_POOL_MAX` 至少为 2：一轮要占一个连接拿锁、再用别的连接删，配置校验会检查 |
 | `NERVE_TRASH_PURGE_INTERVAL_MS` | 两轮清理之间的间隔，默认 3600000（1 小时），实际触发时间带 ±10% 的随机抖动 |
 | `NERVE_TRASH_PURGE_BATCH` | 一轮最多清理多少个删除单元，默认 50 |
+| `NERVE_MIN_CLIENT_BUILD` | 最低客户端构建（`x.y.z`，M3-P3）：页面有严重缺陷、修复已经发布时设成修复的版本，还开着的旧页面在保存、另存为副本、申请编辑权与心跳时被拦下（`CLIENT_OUTDATED`），页面提示刷新。不设时不按构建拦——数据格式（Univer 版本、插件档案、平台格式版本）变了的旧页面照样被拦；改了要重启应用 |
 
 三个密码只在第一次初始化数据卷时生效；之后要改，先 `down -v` 删除数据卷。应用的其余配置（`NERVE_*`）见 `apps/api/src/modules/config/config.ts`，未知的 `NERVE_*` 变量会让应用拒绝启动。
 

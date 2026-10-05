@@ -35,6 +35,13 @@ describe('负载摘要', () => {
     expect(savedPayloadDigest(3, raw)).toEqual(createHash('sha256').update('saved\n3\n{"id":"u"}').digest())
   })
 
+  it('保存的"公式待更新"（M3-P3 设计 §3.8）：有标记时开头一行是 saved-formulas-pending；没有标记时与 P3 之前的写法逐字节相同（旧页面在升级之后重试照样是重放）', () => {
+    const raw = Buffer.from('{"id":"u"}', 'utf8')
+    expect(savedPayloadDigest(3, raw, true)).toEqual(createHash('sha256').update('saved-formulas-pending\n3\n{"id":"u"}').digest())
+    expect(savedPayloadDigest(3, raw, false)).toEqual(savedPayloadDigest(3, raw))
+    expect(savedPayloadDigest(3, raw, true)).not.toEqual(savedPayloadDigest(3, raw))
+  })
+
   it('负载的任何一项不同，摘要就不同', () => {
     const raw = Buffer.from('{"id":"u"}', 'utf8')
     expect(savedPayloadDigest(3, raw)).not.toEqual(savedPayloadDigest(4, raw))
@@ -75,7 +82,12 @@ describe('负载摘要', () => {
       conflictCopyPayloadDigest(sourceId, '周报', Buffer.from('{"id":"v"}', 'utf8')),
       savedPayloadDigest(1, raw),
       copiedPayloadDigest(sourceId, sourceId, undefined, '周报'),
+      // "公式待更新"不同也是另一个请求（M3-P3 设计 §3.8）
+      conflictCopyPayloadDigest(sourceId, '周报', raw, true),
     ]
     expect(new Set(digests.map(digest => digest.toString('hex'))).size).toBe(digests.length)
+    expect(conflictCopyPayloadDigest(sourceId, '周报', raw, true))
+      .toEqual(createHash('sha256').update(`conflict-copied-formulas-pending\n${sourceId}\n周报\n{"id":"u"}`, 'utf8').digest())
+    expect(conflictCopyPayloadDigest(sourceId, '周报', raw, false)).toEqual(conflictCopyPayloadDigest(sourceId, '周报', raw))
   })
 })

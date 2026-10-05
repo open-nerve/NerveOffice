@@ -13,6 +13,7 @@ import { CSRF_TOKEN_HEADER, EDIT_LEASE_HEADER, errorResponseSchema, sheetSnapsho
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
+import { acquireBody, renewBody } from '../support/client-format.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
@@ -103,13 +104,13 @@ describe('US-M3-05 后台请求不顺延登录（DEF-043）', () => {
     const raw = zlib.gzipSync(Buffer.from(sheetSnapshotFor(document.unitId), 'utf8'))
     expect(await keptAlive(session, async () => saveContent(app.baseUrl, session, document.id, raw, { baseRevision: 1, lease }), 200)).toBe(true)
     expect(await keptAlive(session, async () => asUser(app.baseUrl, session, leasePath(document.id), { method: 'DELETE', headers: { [EDIT_LEASE_HEADER]: lease.token } }), 204)).toBe(true)
-    expect(await keptAlive(session, async () => asUser(app.baseUrl, session, leasePath(document.id), { method: 'POST', body: { clientInstanceId: randomUUID() } }), 201)).toBe(true)
+    expect(await keptAlive(session, async () => asUser(app.baseUrl, session, leasePath(document.id), { method: 'POST', body: acquireBody(randomUUID()) }), 201)).toBe(true)
   })
 
   it('标记只影响顺延，不放宽认证与 CSRF：心跳缺 CSRF 令牌 403；空闲过期的登录发编辑状态 401', async () => {
     const { session, document } = await fresh()
     const lease = await acquireLease(app.baseUrl, session, document.id)
-    const noToken = await asUser(app.baseUrl, session, leasePath(document.id), { method: 'PUT', body: { idleSeconds: 0 }, headers: { [EDIT_LEASE_HEADER]: lease.token, [CSRF_TOKEN_HEADER]: undefined } })
+    const noToken = await asUser(app.baseUrl, session, leasePath(document.id), { method: 'PUT', body: renewBody(0), headers: { [EDIT_LEASE_HEADER]: lease.token, [CSRF_TOKEN_HEADER]: undefined } })
     expect([noToken.status, parseExact(errorResponseSchema, await noToken.json()).error.code]).toEqual([403, 'CSRF_TOKEN_INVALID'])
     await database.query(async client => client.query('UPDATE auth_sessions SET idle_expires_at = now() - interval \'1 second\' WHERE token_hash = $1', [digestOf(session)]))
     const expired = await asUser(app.baseUrl, session, leasePath(document.id))

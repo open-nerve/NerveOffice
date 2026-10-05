@@ -93,7 +93,9 @@ export class DocumentCopyService {
       const copy = await this.documents.copyFrom(id, { spaceId: command.spaceId, folderId, title, createdBy: userId }, transaction)
       if (copy === undefined)
         throw new Error(`锁住的源文档复制不到：${id}`)
-      if (!await this.contents.copyFrom(id, copy.id, transaction))
+      // 内容连同哈希与非空的资源名原样复制（M3-P3 设计 §3.1）；副本的修订记录记下这份内容的哈希（源是存量时为空）
+      const content = await this.contents.copyFrom(id, copy.id, transaction)
+      if (content === undefined)
         throw new Error(`文档有记录却没有内容：${id}`)
       const revision = await this.revisions.insert({
         documentId: copy.id,
@@ -103,6 +105,9 @@ export class DocumentCopyService {
         payloadDigest: digest,
         source: null,
         savedBy: userId,
+        contentHash: content.contentHash,
+        // 复制是服务端写的，没有客户端构建（文档的信封照源文档，documents.copyFrom）
+        clientBuild: null,
       }, transaction)
       // 同一个 requestId 同时被一次保存用掉了（advisory lock 只让新建与复制之间排队）
       if (revision === undefined)

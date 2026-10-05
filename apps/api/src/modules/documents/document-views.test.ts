@@ -29,6 +29,8 @@ const ROW: DocumentRow = {
   formatVersion: 1,
   // 最后一次写入的 SDK 版本照行里的给出（M3-P3）：故意与平台内置的不同，视图换成内置的常量时下面的用例会失败
   sdkVersion: '1.0.0',
+  // "公式待更新"照行里的给出（M3-P3）：为真，视图写死成 false 时下面的用例会失败
+  formulasPending: true,
   // 代次不进任何响应（M3-P1）：不为 0，视图把它带出去时下面按原样核对的用例会失败
   writeEpoch: 4,
 }
@@ -62,7 +64,7 @@ describe('toDetail：只凭授权时不给所在的文件夹', () => {
       profile: 'sheet@1',
       formatVersion: 1,
       sdkVersion: '1.0.0',
-      formulasPending: false,
+      formulasPending: true,
       permissions: { canEdit: true, canRename: true, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false },
     })
   })

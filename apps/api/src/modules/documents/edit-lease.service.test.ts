@@ -1,12 +1,13 @@
 // 编辑租约的服务（M3-P1 设计 §3.4.2、§3.4.3）：申请、心跳续租、释放与编辑状态的步骤、加锁的先后、每个分支写了什么没写什么、
 // 日志。有效条件本身在 edit-lease-rules.test.ts；SQL、并发与真实的时间在集成测试（documents/edit-leases.test.ts）。
+import type { ClientFormat } from '@nerve-office/contracts'
 import type { AppError } from '../../shared/errors/app-error.ts'
 import type { EditingActor } from './edit-lease.service.ts'
 import { Buffer } from 'node:buffer'
 import { EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, editLeaseTokenSchema } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { AppLogger, createRootLogger, RequestContextStore } from '../logging/index.ts'
-import { ALICE, BOB, FakeStore, TEAM_SPACE, TRANSACTION } from './documents.test-support.ts'
+import { ALICE, BOB, clientFormatGate, CURRENT_CLIENT, FakeStore, TEAM_SPACE, TRANSACTION } from './documents.test-support.ts'
 import { editLeaseTokenDigest } from './edit-lease-token.ts'
 import { EditLeaseService } from './edit-lease.service.ts'
 
@@ -32,11 +33,21 @@ function setup() {
   const lines: string[] = []
   const logger = new AppLogger(createRootLogger({ level: 'debug', destination: { write: (line: string) => void lines.push(line) } }), new RequestContextStore())
   const { documents, revisions, leases, policy, sessions } = store.deps
-  const service = new EditLeaseService(documents, revisions, leases, policy, sessions, logger)
+  const service = new EditLeaseService(documents, revisions, leases, policy, sessions, store.clientFormats, logger)
   return { store, service, document, logs: () => lines.map(line => JSON.parse(line) as Record<string, unknown>), logText: () => lines.join('') }
 }
 
 type Setup = ReturnType<typeof setup>
+
+/** 申请的请求：这个标签页，页面上报的是现在的构建与数据格式（M3-P3） */
+function leaseRequest(clientInstanceId: string, format: ClientFormat = CURRENT_CLIENT) {
+  return { clientInstanceId, format }
+}
+
+/** 心跳的请求：多久没有操作，页面上报的是现在的构建与数据格式 */
+function renewal(idleSeconds: number, format: ClientFormat = CURRENT_CLIENT) {
+  return { idleSeconds, format }
+}
 
 /** 让"数据库时间"往后走 */
 function later(store: FakeStore, milliseconds: number): void {
@@ -45,7 +56,7 @@ function later(store: FakeStore, milliseconds: number): void {
 
 /** 取得一代，返回令牌 */
 async function acquired({ service, document }: Setup, actor: EditingActor = AMY, tab: string = TAB): Promise<string> {
-  const outcome = await service.acquire(actor, document.id, tab, TRANSACTION)
+  const outcome = await service.acquire(actor, document.id, leaseRequest(tab), TRANSACTION)
   if (outcome.kind !== 'acquired')
     throw new Error('期望取得编辑权')
   return outcome.token
@@ -67,7 +78,7 @@ describe('EditLeaseService.acquire', () => {
   it('没有租约：文档的代次加一，记下新的一代（持有者、登录、标签页、令牌的摘要、代次），返回令牌、代次、锁下的修订号与到期时间', async () => {
     const setupResult = setup()
     const { store, service, document } = setupResult
-    const outcome = await service.acquire(AMY, document.id, TAB, TRANSACTION)
+    const outcome = await service.acquire(AMY, document.id, leaseRequest(TAB), TRANSACTION)
     expect(outcome).toMatchObject({ kind: 'acquired', writeEpoch: 1, revision: 3, expiresAt: new Date(store.databaseNow.getTime() + EDIT_LEASE_TTL_SECONDS * SECOND), interruption: undefined })
     if (outcome.kind !== 'acquired')
       return
@@ -87,26 +98,26 @@ describe('EditLeaseService.acquire', () => {
   it('当前修订的来源：锁下的修订号那一条修订记录的标签页与本地序号（与修订号冲突的详情同一个取法）；新建出来的为 null', async () => {
     const created = setup()
     created.store.addRevision({ documentId: created.document.id, revision: 3, kind: 'created', requestId: 'request-created', payloadDigest: Buffer.alloc(32), source: null, savedBy: ALICE })
-    expect(await created.service.acquire(AMY, created.document.id, TAB, TRANSACTION)).toMatchObject({ kind: 'acquired', revision: 3, source: null })
+    expect(await created.service.acquire(AMY, created.document.id, leaseRequest(TAB), TRANSACTION)).toMatchObject({ kind: 'acquired', revision: 3, source: null })
 
     // 本人在另一个标签页保存的：照样给出（页面再按标签页比较）
     const saved = setup()
     for (const [revision, localSeq] of [[2, 4], [3, 7]] as const)
       saved.store.addRevision({ documentId: saved.document.id, revision, kind: 'saved', requestId: `request-${revision}`, payloadDigest: Buffer.alloc(32), source: { clientInstanceId: OTHER_TAB, localSeq }, savedBy: ALICE })
-    expect(await saved.service.acquire(AMY, saved.document.id, TAB, TRANSACTION)).toMatchObject({ kind: 'acquired', revision: 3, source: { clientInstanceId: OTHER_TAB, localSeq: 7 } })
+    expect(await saved.service.acquire(AMY, saved.document.id, leaseRequest(TAB), TRANSACTION)).toMatchObject({ kind: 'acquired', revision: 3, source: { clientInstanceId: OTHER_TAB, localSeq: 7 } })
     expect(saved.store.repositories.revisions.findByRevision).toHaveBeenCalledWith(saved.document.id, 3, TRANSACTION)
   })
 
   it('当前修订是别人保存的：来源为 null（只给保存它的人本人，M3-P1 复验 C4）——标签页标识是页面自报的，给了别人就能被照着伪造', async () => {
     const { store, service, document } = setup()
     store.addRevision({ documentId: document.id, revision: 3, kind: 'saved', requestId: 'request-3', payloadDigest: Buffer.alloc(32), source: { clientInstanceId: TAB, localSeq: 7 }, savedBy: BOB })
-    expect(await service.acquire(AMY, document.id, TAB, TRANSACTION)).toMatchObject({ kind: 'acquired', revision: 3, source: null })
+    expect(await service.acquire(AMY, document.id, leaseRequest(TAB), TRANSACTION)).toMatchObject({ kind: 'acquired', revision: 3, source: null })
   })
 
   it('这次登录在两把锁之后再核对（M3-P1 审查 A1）：守卫之后被撤销（退出、签发重置、换令牌）时 401 SESSION_EXPIRED，什么也不写', async () => {
     const { store, service, document } = setup()
     store.activeSessions.delete(ALICE_SESSION)
-    const error = await rejection(service.acquire(AMY, document.id, TAB, TRANSACTION))
+    const error = await rejection(service.acquire(AMY, document.id, leaseRequest(TAB), TRANSACTION))
     expect([error.code, error.status]).toEqual(['SESSION_EXPIRED', 401])
     expect(store.leaseRecords.has(document.id)).toBe(false)
     expect(store.documents.get(document.id)?.writeEpoch).toBe(0)
@@ -117,10 +128,10 @@ describe('EditLeaseService.acquire', () => {
 
   it('看不到 404、只能查看 403：都在加锁之前，什么也不写', async () => {
     const { store, service, document } = setup()
-    expect((await rejection(service.acquire({ userId: CAROL, sessionId: BOB_SESSION }, document.id, TAB, TRANSACTION))).code).toBe('NOT_FOUND')
+    expect((await rejection(service.acquire({ userId: CAROL, sessionId: BOB_SESSION }, document.id, leaseRequest(TAB), TRANSACTION))).code).toBe('NOT_FOUND')
     store.setMember(TEAM_SPACE, BOB, 'viewer')
-    expect((await rejection(service.acquire(BEN, document.id, TAB, TRANSACTION))).code).toBe('PERMISSION_DENIED')
-    expect((await rejection(service.acquire(AMY, '0199a2c4-0000-7000-8000-0000000000ff', TAB, TRANSACTION))).code).toBe('NOT_FOUND')
+    expect((await rejection(service.acquire(BEN, document.id, leaseRequest(TAB), TRANSACTION))).code).toBe('PERMISSION_DENIED')
+    expect((await rejection(service.acquire(AMY, '0199a2c4-0000-7000-8000-0000000000ff', leaseRequest(TAB), TRANSACTION))).code).toBe('NOT_FOUND')
     expect(store.repositories.documents.lockById).not.toHaveBeenCalled()
     expect(store.leases.lockByDocument).not.toHaveBeenCalled()
     expect(store.leaseRecords.size).toBe(0)
@@ -132,7 +143,7 @@ describe('EditLeaseService.acquire', () => {
       store.setMember(TEAM_SPACE, ALICE, 'viewer')
       return store.documents.get(id)
     })
-    expect((await rejection(service.acquire(AMY, document.id, TAB, TRANSACTION))).code).toBe('PERMISSION_DENIED')
+    expect((await rejection(service.acquire(AMY, document.id, leaseRequest(TAB), TRANSACTION))).code).toBe('PERMISSION_DENIED')
     expect(store.leases.lockByDocument).not.toHaveBeenCalled()
     expect(store.documents.get(document.id)?.writeEpoch).toBe(0)
   })
@@ -143,7 +154,7 @@ describe('EditLeaseService.acquire', () => {
     await acquired(setupResult)
     const before = store.leaseRecords.get(document.id)
     later(store, 5 * SECOND)
-    expect(await service.acquire(BEN, document.id, OTHER_TAB, TRANSACTION)).toEqual({ kind: 'held', holderId: ALICE, lastActiveAt: before?.lastActiveAt, sameUser: false })
+    expect(await service.acquire(BEN, document.id, leaseRequest(OTHER_TAB), TRANSACTION)).toEqual({ kind: 'held', holderId: ALICE, lastActiveAt: before?.lastActiveAt, sameUser: false })
     expect(store.leaseRecords.get(document.id)).toEqual(before)
     expect(store.repositories.documents.advanceWriteEpoch).toHaveBeenCalledTimes(1)
     expect(store.documents.get(document.id)?.writeEpoch).toBe(1)
@@ -154,14 +165,14 @@ describe('EditLeaseService.acquire', () => {
     const { service, document } = setupResult
     await acquired(setupResult)
     for (const [actor, tab] of [[AMY, OTHER_TAB], [{ userId: ALICE, sessionId: ALICE_OTHER_SESSION }, TAB]] as const)
-      expect(await service.acquire(actor, document.id, tab, TRANSACTION)).toMatchObject({ kind: 'held', holderId: ALICE, sameUser: true })
+      expect(await service.acquire(actor, document.id, leaseRequest(tab), TRANSACTION)).toMatchObject({ kind: 'held', holderId: ALICE, sameUser: true })
   })
 
   it('同一个登录、同一个标签页的有效租约：这个页面的重试（上次的回包丢了），发新的一代——代次再加一、换新的令牌，没有提醒', async () => {
     const setupResult = setup()
     const { store, service, document } = setupResult
     const first = await acquired(setupResult)
-    const retried = await service.acquire(AMY, document.id, TAB, TRANSACTION)
+    const retried = await service.acquire(AMY, document.id, leaseRequest(TAB), TRANSACTION)
     expect(retried).toMatchObject({ kind: 'acquired', writeEpoch: 2, interruption: undefined })
     if (retried.kind !== 'acquired')
       return
@@ -188,7 +199,7 @@ describe('EditLeaseService.acquire', () => {
       await acquired(setupResult)
       await invalidate(setupResult)
       const epoch = store.documents.get(document.id)?.writeEpoch ?? 0
-      expect(await service.acquire(BEN, document.id, OTHER_TAB, TRANSACTION), name).toMatchObject({ kind: 'acquired', writeEpoch: epoch + 1 })
+      expect(await service.acquire(BEN, document.id, leaseRequest(OTHER_TAB), TRANSACTION), name).toMatchObject({ kind: 'acquired', writeEpoch: epoch + 1 })
       expect(store.leaseRecords.get(document.id), name).toMatchObject({ holderId: BOB, sessionId: BOB_SESSION, clientInstanceId: OTHER_TAB, endedAt: null, endReason: null })
     }
   })
@@ -199,24 +210,24 @@ describe('EditLeaseService.acquire', () => {
     await acquired(setupResult)
     const renewedAt = store.leaseRecords.get(document.id)?.renewedAt
     later(store, 20 * 60 * SECOND)
-    expect(await service.acquire(BEN, document.id, OTHER_TAB, TRANSACTION)).toMatchObject({ kind: 'acquired', interruption: { holderId: ALICE, endedAt: renewedAt } })
+    expect(await service.acquire(BEN, document.id, leaseRequest(OTHER_TAB), TRANSACTION)).toMatchObject({ kind: 'acquired', interruption: { holderId: ALICE, endedAt: renewedAt } })
   })
 
   it('不给提醒：明确释放的、没了编辑权的、超过 30 分钟的', async () => {
     const released = setup()
     await acquired(released)
     await released.store.leases.end(released.document.id, 'released')
-    expect(await released.service.acquire(BEN, released.document.id, OTHER_TAB, TRANSACTION)).toMatchObject({ kind: 'acquired', interruption: undefined })
+    expect(await released.service.acquire(BEN, released.document.id, leaseRequest(OTHER_TAB), TRANSACTION)).toMatchObject({ kind: 'acquired', interruption: undefined })
 
     const demoted = setup()
     await acquired(demoted)
     demoted.store.setMember(TEAM_SPACE, ALICE, 'viewer')
-    expect(await demoted.service.acquire(BEN, demoted.document.id, OTHER_TAB, TRANSACTION)).toMatchObject({ kind: 'acquired', interruption: undefined })
+    expect(await demoted.service.acquire(BEN, demoted.document.id, leaseRequest(OTHER_TAB), TRANSACTION)).toMatchObject({ kind: 'acquired', interruption: undefined })
 
     const old = setup()
     await acquired(old)
     later(old.store, 30 * 60 * SECOND + 1)
-    expect(await old.service.acquire(BEN, old.document.id, OTHER_TAB, TRANSACTION)).toMatchObject({ kind: 'acquired', interruption: undefined })
+    expect(await old.service.acquire(BEN, old.document.id, leaseRequest(OTHER_TAB), TRANSACTION)).toMatchObject({ kind: 'acquired', interruption: undefined })
   })
 
   it('第 6、7 条的事实在调用方的事务里查：持有者的登录（auth）与持有者对这份文档的编辑权（访问策略）', async () => {
@@ -224,7 +235,7 @@ describe('EditLeaseService.acquire', () => {
     const { store, service, document } = setupResult
     await acquired(setupResult)
     store.spaces.accessFactsOf.mockClear()
-    await service.acquire(BEN, document.id, OTHER_TAB, TRANSACTION)
+    await service.acquire(BEN, document.id, leaseRequest(OTHER_TAB), TRANSACTION)
     expect(store.sessions.isActive).toHaveBeenCalledWith(ALICE_SESSION, TRANSACTION)
     // 访问策略判断了两个人：申请的人（不加锁、锁下各一次）与持有者
     expect(store.spaces.accessFactsOf.mock.calls.map(([userId]) => userId)).toEqual([BOB, BOB, ALICE])
@@ -234,7 +245,7 @@ describe('EditLeaseService.acquire', () => {
     const setupResult = setup()
     const { service, document, logs, logText } = setupResult
     const token = await acquired(setupResult)
-    await service.acquire(BEN, document.id, OTHER_TAB, TRANSACTION)
+    await service.acquire(BEN, document.id, leaseRequest(OTHER_TAB), TRANSACTION)
     expect(logs().map(entry => [entry.level, entry.msg, entry.documentId, entry.previous ?? entry.sameUser])).toEqual([
       ['debug', '申请编辑权：取得新的一代', document.id, 'none'],
       ['debug', '申请编辑权：有效的租约在别人手里', document.id, false],
@@ -249,7 +260,7 @@ describe('EditLeaseService.renew', () => {
     const { store, service, document } = setupResult
     const token = await acquired(setupResult)
     later(store, 60 * SECOND)
-    const renewed = await service.renew(AMY, document.id, 15, token, TRANSACTION)
+    const renewed = await service.renew(AMY, document.id, renewal(15), token, TRANSACTION)
     expect(renewed).toEqual({ expiresAt: new Date(store.databaseNow.getTime() + EDIT_LEASE_TTL_SECONDS * SECOND) })
     expect(store.leases.renew).toHaveBeenCalledWith(document.id, 15, TRANSACTION)
     expect(store.leaseRecords.get(document.id)).toMatchObject({ renewedAt: store.databaseNow, lastActiveAt: new Date(store.databaseNow.getTime() - 15 * SECOND) })
@@ -266,9 +277,9 @@ describe('EditLeaseService.renew', () => {
     const { store, service, document } = setupResult
     const token = await acquired(setupResult)
     store.leases.lockByDocument.mockClear()
-    expect((await rejection(service.renew({ userId: CAROL, sessionId: BOB_SESSION }, document.id, 0, token, TRANSACTION))).code).toBe('NOT_FOUND')
+    expect((await rejection(service.renew({ userId: CAROL, sessionId: BOB_SESSION }, document.id, renewal(0), token, TRANSACTION))).code).toBe('NOT_FOUND')
     store.setMember(TEAM_SPACE, ALICE, 'viewer')
-    expect((await rejection(service.renew(AMY, document.id, 0, token, TRANSACTION))).code).toBe('PERMISSION_DENIED')
+    expect((await rejection(service.renew(AMY, document.id, renewal(0), token, TRANSACTION))).code).toBe('PERMISSION_DENIED')
     expect(store.leases.lockByDocument).not.toHaveBeenCalled()
   })
 
@@ -277,14 +288,14 @@ describe('EditLeaseService.renew', () => {
       const setupResult = setup()
       const token = await acquired(setupResult)
       const request = await prepare(setupResult, token)
-      const error = await rejection(setupResult.service.renew(request.actor ?? AMY, setupResult.document.id, 0, 'token' in request ? request.token : token, TRANSACTION))
+      const error = await rejection(setupResult.service.renew(request.actor ?? AMY, setupResult.document.id, renewal(0), 'token' in request ? request.token : token, TRANSACTION))
       expect(error.code).toBe('EDIT_LEASE_LOST')
       expect(setupResult.store.leases.renew).not.toHaveBeenCalled()
       return error.details
     }
     expect(await lostWith(async () => ({ token: undefined }))).toEqual({ reason: 'none' })
     expect(await lostWith(async ({ service, document }) => {
-      await service.acquire(AMY, document.id, TAB, TRANSACTION)
+      await service.acquire(AMY, document.id, leaseRequest(TAB), TRANSACTION)
       return {}
     })).toEqual({ reason: 'replaced' })
     expect(await lostWith(async ({ store, document }) => {
@@ -307,7 +318,7 @@ describe('EditLeaseService.renew', () => {
     const { store, service, document } = setupResult
     const token = await acquired(setupResult)
     store.activeSessions.delete(ALICE_SESSION)
-    const error = await rejection(service.renew(AMY, document.id, 0, token, TRANSACTION))
+    const error = await rejection(service.renew(AMY, document.id, renewal(0), token, TRANSACTION))
     expect([error.code, error.status]).toEqual(['SESSION_EXPIRED', 401])
     expect(store.leases.renew).not.toHaveBeenCalled()
     expect(orderOf(store.leases.lockByDocument, 1)).toBeLessThan(store.sessions.isActive.mock.invocationCallOrder.at(-1) ?? 0)
@@ -325,14 +336,14 @@ describe('EditLeaseService.renew', () => {
         const row = store.leaseRecords.get(documentId)
         return row === undefined ? undefined : { ...row, now: store.databaseNow }
       })
-      expect((await rejection(service.renew(AMY, document.id, 0, token, TRANSACTION))).code, String(role)).toBe(code)
+      expect((await rejection(service.renew(AMY, document.id, renewal(0), token, TRANSACTION))).code, String(role)).toBe(code)
       expect(store.leases.renew).not.toHaveBeenCalled()
     }
   })
 
   it('没有租约：none', async () => {
     const { service, document } = setup()
-    const error = await rejection(service.renew(AMY, document.id, 0, 'x'.repeat(43), TRANSACTION))
+    const error = await rejection(service.renew(AMY, document.id, renewal(0), 'x'.repeat(43), TRANSACTION))
     expect([error.code, error.details]).toEqual(['EDIT_LEASE_LOST', { reason: 'none' }])
   })
 
@@ -345,7 +356,7 @@ describe('EditLeaseService.renew', () => {
       const row = store.leaseRecords.get(documentId)
       return row === undefined ? undefined : { ...row, now: store.databaseNow }
     })
-    expect((await rejection(service.renew(AMY, document.id, 0, token, TRANSACTION))).details).toEqual({ reason: 'stale' })
+    expect((await rejection(service.renew(AMY, document.id, renewal(0), token, TRANSACTION))).details).toEqual({ reason: 'stale' })
   })
 
   it('锁住租约行之后文档读不到了（删除）：NOT_FOUND', async () => {
@@ -357,7 +368,7 @@ describe('EditLeaseService.renew', () => {
       const row = store.leaseRecords.get(documentId)
       return row === undefined ? undefined : { ...row, now: store.databaseNow }
     })
-    expect((await rejection(service.renew(AMY, document.id, 0, token, TRANSACTION))).code).toBe('NOT_FOUND')
+    expect((await rejection(service.renew(AMY, document.id, renewal(0), token, TRANSACTION))).code).toBe('NOT_FOUND')
   })
 
   it('日志：失效时一条 debug，带文档 id 与原因，不带令牌', async () => {
@@ -365,7 +376,7 @@ describe('EditLeaseService.renew', () => {
     const { store, service, document, logs, logText } = setupResult
     const token = await acquired(setupResult)
     later(store, EDIT_LEASE_TTL_SECONDS * SECOND)
-    await rejection(service.renew(AMY, document.id, 0, token, TRANSACTION))
+    await rejection(service.renew(AMY, document.id, renewal(0), token, TRANSACTION))
     expect(logs().at(-1)).toMatchObject({ level: 'debug', msg: '续租失败：编辑权已失效', documentId: document.id, reason: 'expired' })
     expect(logText()).not.toContain(token)
   })
@@ -425,15 +436,15 @@ describe('EditLeaseService.status', () => {
     await acquired(setupResult)
     const lastActiveAt = store.leaseRecords.get(document.id)?.lastActiveAt
     store.setMember(TEAM_SPACE, BOB, 'viewer')
-    expect(await service.status(BEN, document.id, TRANSACTION)).toEqual({ revision: 3, editor: { holderId: ALICE, lastActiveAt, sameUser: false }, canEdit: false })
-    expect(await service.status(AMY, document.id, TRANSACTION)).toEqual({ revision: 3, editor: { holderId: ALICE, lastActiveAt, sameUser: true }, canEdit: true })
+    expect(await service.status(BEN, document.id, TRANSACTION)).toEqual({ revision: 3, editor: { holderId: ALICE, lastActiveAt, sameUser: false }, canEdit: false, formulasPending: false })
+    expect(await service.status(AMY, document.id, TRANSACTION)).toEqual({ revision: 3, editor: { holderId: ALICE, lastActiveAt, sameUser: true }, canEdit: true, formulasPending: false })
     expect(store.leases.findByDocument).toHaveBeenCalledWith(document.id, TRANSACTION)
     expect(store.leases.lockByDocument).toHaveBeenCalledTimes(1)
   })
 
   it('没有租约、租约无效（到期、登录失效、没了编辑权）：editor 为空', async () => {
     const { service, document } = setup()
-    expect(await service.status(BEN, document.id, TRANSACTION)).toEqual({ revision: 3, editor: undefined, canEdit: true })
+    expect(await service.status(BEN, document.id, TRANSACTION)).toEqual({ revision: 3, editor: undefined, canEdit: true, formulasPending: false })
     for (const invalidate of [
       ({ store }: Setup) => later(store, EDIT_LEASE_TTL_SECONDS * SECOND),
       ({ store }: Setup) => void store.activeSessions.delete(ALICE_SESSION),
@@ -442,7 +453,7 @@ describe('EditLeaseService.status', () => {
       const setupResult = setup()
       await acquired(setupResult)
       invalidate(setupResult)
-      expect(await setupResult.service.status(BEN, setupResult.document.id, TRANSACTION)).toEqual({ revision: 3, editor: undefined, canEdit: true })
+      expect(await setupResult.service.status(BEN, setupResult.document.id, TRANSACTION)).toEqual({ revision: 3, editor: undefined, canEdit: true, formulasPending: false })
     }
   })
 
@@ -473,5 +484,86 @@ describe('EditLeaseService.status', () => {
     const { store, service, document } = setup()
     expect((await rejection(service.status({ userId: CAROL, sessionId: BOB_SESSION }, document.id, TRANSACTION))).code).toBe('NOT_FOUND')
     expect(store.leases.findByDocument).not.toHaveBeenCalled()
+  })
+})
+
+describe('拦截旧客户端（M3-P3 设计 §3.5）：申请与心跳先核对页面的构建与数据格式，文档比服务端新时只能阅读', () => {
+  /** 过旧的页面的几种上报：数据格式不同或没上报（format），构建没上报（build） */
+  const OUTDATED = [
+    ['Univer 版本不同', { ...CURRENT_CLIENT, univerVersion: '0.9.0' }, 'format'],
+    ['插件档案不同', { ...CURRENT_CLIENT, profile: 'sheet@0' }, 'format'],
+    ['平台格式版本不同', { ...CURRENT_CLIENT, formatVersion: 2 }, 'format'],
+    ['P3 之前的页面（什么也没上报）', {}, 'format'],
+    ['没上报构建', { univerVersion: CURRENT_CLIENT.univerVersion, profile: CURRENT_CLIENT.profile, formatVersion: CURRENT_CLIENT.formatVersion }, 'build'],
+  ] as const
+
+  it.each(OUTDATED)('申请：%s → 409 CLIENT_OUTDATED（原因 %s 见 details），在任何查询之前（看不到与不存在得到同样的回答），什么也不写', async (_case, format, reason) => {
+    const { store, service, document } = setup()
+    for (const target of [document.id, '0199a2c4-0000-7000-8000-0000000000ff']) {
+      const error = await rejection(service.acquire(AMY, target, leaseRequest(TAB, format), TRANSACTION))
+      expect([error.code, error.status, error.details]).toEqual(['CLIENT_OUTDATED', 409, { reason }])
+    }
+    expect(store.repositories.documents.findById).not.toHaveBeenCalled()
+    expect(store.leaseRecords.size).toBe(0)
+  })
+
+  it.each(OUTDATED)('心跳：%s → 409 CLIENT_OUTDATED（原因 %s），在任何查询之前、不续租：服务端升级之后，正在编辑的页面一次心跳之内就停下', async (_case, format, reason) => {
+    const setupResult = setup()
+    const { store, service, document } = setupResult
+    const token = await acquired(setupResult)
+    store.repositories.documents.findById.mockClear()
+    const error = await rejection(service.renew(AMY, document.id, renewal(0, format), token, TRANSACTION))
+    expect([error.code, error.details]).toEqual(['CLIENT_OUTDATED', { reason }])
+    expect(store.repositories.documents.findById).not.toHaveBeenCalled()
+    expect(store.leases.renew).not.toHaveBeenCalled()
+  })
+
+  it('运维开关（NERVE_MIN_CLIENT_BUILD）：构建低于它 → CLIENT_OUTDATED（build）；等于、高于它照常（+ 之后的诊断信息不比较）', async () => {
+    for (const [build, outcome] of [['0.1.9', 'CLIENT_OUTDATED'], ['0.2.0', 'acquired'], ['0.2.0+abc123', 'acquired'], ['1.0.0', 'acquired']] as const) {
+      const { store, document } = setup()
+      const { documents, revisions, leases, policy, sessions } = store.deps
+      const service = new EditLeaseService(documents, revisions, leases, policy, sessions, clientFormatGate('0.2.0'), store.logger)
+      const result = await service.acquire(AMY, document.id, leaseRequest(TAB, { ...CURRENT_CLIENT, clientBuild: build }), TRANSACTION).then(value => value.kind, (error: AppError) => `${error.code}:${String((error.details as { reason?: string } | undefined)?.reason)}`)
+      expect(result, build).toBe(outcome === 'acquired' ? 'acquired' : 'CLIENT_OUTDATED:build')
+    }
+  })
+
+  it('文档由比服务端新的版本写过（回滚之后，SDK 版本更高或认不出）：申请 409 DOCUMENT_TOO_NEW，在判断访问、编辑权与登录之后，不加代次、不写租约', async () => {
+    for (const sdkVersion of ['99.0.0', 'not-a-version']) {
+      const { store, service, document } = setup()
+      store.documents.set(document.id, { ...document, sdkVersion })
+      const error = await rejection(service.acquire(AMY, document.id, leaseRequest(TAB), TRANSACTION))
+      expect([error.code, error.status]).toEqual(['DOCUMENT_TOO_NEW', 409])
+      expect(store.leaseRecords.has(document.id)).toBe(false)
+      expect(store.documents.get(document.id)?.writeEpoch).toBe(0)
+      // 看不到的照样 404（不透露它比服务端新）；只能查看的照样 403
+      expect((await rejection(service.acquire({ userId: CAROL, sessionId: BOB_SESSION }, document.id, leaseRequest(TAB), TRANSACTION))).code).toBe('NOT_FOUND')
+      store.setMember(TEAM_SPACE, BOB, 'viewer')
+      expect((await rejection(service.acquire(BEN, document.id, leaseRequest(TAB), TRANSACTION))).code).toBe('PERMISSION_DENIED')
+    }
+    // 比服务端旧的（升级之后）照常申请
+    const older = setup()
+    older.store.documents.set(older.document.id, { ...older.document, sdkVersion: '0.9.9' })
+    expect((await older.service.acquire(AMY, older.document.id, leaseRequest(TAB), TRANSACTION)).kind).toBe('acquired')
+  })
+
+  it('心跳时文档比服务端新：DOCUMENT_TOO_NEW，不续租', async () => {
+    const setupResult = setup()
+    const { store, service, document } = setupResult
+    const token = await acquired(setupResult)
+    store.documents.set(document.id, { ...store.documents.get(document.id) ?? document, sdkVersion: '99.0.0' })
+    expect((await rejection(service.renew(AMY, document.id, renewal(0), token, TRANSACTION))).code).toBe('DOCUMENT_TOO_NEW')
+    expect(store.leases.renew).not.toHaveBeenCalled()
+  })
+})
+
+describe('"公式待更新"（M3-P3 设计 §3.8）：申请的结果与编辑状态给出文档行上的标记', () => {
+  it('有标记的文档：申请与编辑状态都给出 true；没有标记的给出 false', async () => {
+    const { store, service, document } = setup()
+    expect(await service.acquire(AMY, document.id, leaseRequest(TAB), TRANSACTION)).toMatchObject({ kind: 'acquired', formulasPending: false })
+    expect((await service.status(BEN, document.id, TRANSACTION)).formulasPending).toBe(false)
+    store.documents.set(document.id, { ...store.documents.get(document.id) ?? document, formulasPending: true })
+    expect(await service.acquire(AMY, document.id, leaseRequest(TAB), TRANSACTION)).toMatchObject({ kind: 'acquired', formulasPending: true })
+    expect((await service.status(BEN, document.id, TRANSACTION)).formulasPending).toBe(true)
   })
 })

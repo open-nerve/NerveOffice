@@ -27,17 +27,25 @@
 //   结果就按已保存处理。读不到了（404）：说明，本页的内容不再能保存。另存为副本之后按最新的内容重建失败也留在 lost（副本的说明照旧，复验 C1）；
 // - failed：编辑器建不起来（页面按"编辑器加载失败"说明，可以重新加载）；unavailable：放弃本页的修改时读不到了（"内容不存在"）。
 // 每开始一件事（进入、退出、失去编辑权、刷新、放弃）都换一个标识：之前那件事在等待之后发现标识变了，就不再接着做。
+//
+// 与服务端不兼容（M3-P3 设计 §3.5、§3.10）：
+// - 编辑时保存或续租得到 CLIENT_OUTDATED（本页过旧）、DOCUMENT_TOO_NEW（文档比服务端新）：保存的状态机转入终态（需要刷新、不能保存），
+//   编辑租约停止续租、放掉手里那一代；编辑器留着（本页的修改还能复制出来），页头说明并给"重新加载"（过旧时）；
+// - 申请编辑权得到它们：留在阅读并说明，不再给"编辑"（blocked）；打开时就看得出文档比本页新（详情的 sdkVersion）同样只能阅读；
+// - 不兼容的阅读不会因为检查读到能编辑就恢复"编辑"：重新加载才是新的页面。
 import type { ConflictCopyQuery, CreatedDocument, DocumentDetail, SaveContentResponse } from '@nerve-office/contracts'
 import type { SheetEditor } from '../../editor/index.ts'
 import type { ApiError } from '../../shared/api/index.ts'
+import type { Incompatibility } from './client-format.ts'
 import type { EditLease, EditLeaseApi, LeaseAcquisition, LeaseClock, LeaseHolder, LeaseLoss } from './edit-lease.ts'
 import type { FetchedEditStatus, LeaseCredentials, LoadedContent } from './editor-api.ts'
 import type { CreateModeEditor, EditorSurface } from './editor-slot.ts'
 import type { LostCopy } from './lost-copy.ts'
 import type { PageVisibility, ReadingCheckResult } from './reading-checks.ts'
-import type { CompressSnapshot, SaveCoordinator, SaveRequest, SaveView } from './save-coordinator.ts'
+import type { CompressSnapshot, SaveCoordinator, SaveRequest, SaveStatus, SaveView } from './save-coordinator.ts'
 import { EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
 import { isAuthenticationError, isCsrfTokenError, isNotFoundError, isPermissionDeniedError } from '../../shared/api/index.ts'
+import { incompatibilityOf } from './client-format.ts'
 import { acquireEditLease, leaseHolderOf, leaseLossOf } from './edit-lease.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { createEditorSlot } from './editor-slot.ts'
@@ -92,6 +100,11 @@ export interface ReadingMode {
    * 之后读到的"自己"一定在别处，随之清掉（复验 C4）
    */
   readonly releaseUnconfirmed: boolean
+  /**
+   * 本页与服务端不兼容（M3-P3）：本页的版本过旧（申请或编辑时得到 CLIENT_OUTDATED）、文档由更新的版本写过（打开时按详情判断、
+   * 或者申请时得到 DOCUMENT_TOO_NEW）。不给"编辑"，页头说明；不因检查读到能编辑而恢复。没有时为 undefined
+   */
+  readonly blocked: Incompatibility | undefined
 }
 
 /** 另存为副本的进展 */
@@ -210,9 +223,9 @@ export interface EditMode {
   /**
    * 打开（载入之后）：以只读创建，进入阅读。enterEdit（地址带 ?edit=new、而且能编辑）时直接申请编辑权、以可编辑创建
    * （新建的表格不必先阅读，M3 总设计 §2.1 的细化）；被占用、不能编辑了或请求失败就照常阅读、说明原因（与"编辑"相同，审查 A11），
-   * 读不到了（404）、未登录按载入失败
+   * 读不到了（404）、未登录按载入失败。blocked（打开时就看得出与服务端不兼容，M3-P3）：只能阅读，不直接进入编辑
    */
-  readonly open: (initial: { readonly snapshot: string, readonly revision: number, readonly canEdit: boolean }, options: { readonly enterEdit: boolean }) => Promise<OpenOutcome>
+  readonly open: (initial: { readonly snapshot: string, readonly revision: number, readonly canEdit: boolean }, options: { readonly enterEdit: boolean, readonly blocked?: Incompatibility | undefined }) => Promise<OpenOutcome>
   /** 进入编辑（阅读、能编辑、没有在按新的版本重建时；"编辑"按钮，会话由页面先确认） */
   readonly enter: () => Promise<void>
   /** 退出编辑（"退出编辑"按钮，会话由页面先确认） */
@@ -247,8 +260,17 @@ type SettledReading = ReadingMode & { readonly update: 'none' | 'available' }
 /** 失去编辑权之后的阅读：被收回、不能编辑了时没有"编辑"（之后随编辑状态更新）；别处在编辑时说明是谁 */
 function readingAfter(loss: LeaseLoss, notice: ReadingNotice | undefined): ReadingMode {
   const canEdit = loss.kind !== 'denied' && !(loss.kind === 'lease' && loss.reason === 'revoked')
-  return { kind: 'reading', canEdit, holder: loss.kind === 'held' ? loss.holder : undefined, update: 'none', gone: false, notice, releaseUnconfirmed: false }
+  return { kind: 'reading', canEdit, holder: loss.kind === 'held' ? loss.holder : undefined, update: 'none', gone: false, notice, releaseUnconfirmed: false, blocked: undefined }
 }
+
+/** 保存的状态里的不兼容（终态）：退出编辑之后的阅读照样带着它 */
+function blockedBy(status: SaveStatus | undefined): Incompatibility | undefined {
+  if (status === 'outdated')
+    return 'client-outdated'
+  return status === 'too-new' ? 'document-too-new' : undefined
+}
+
+const UTF8 = new TextEncoder()
 
 export function createEditMode(options: EditModeOptions): EditMode {
   const { documentId, api, clock, session: hooks } = options
@@ -262,11 +284,13 @@ export function createEditMode(options: EditModeOptions): EditMode {
   /** 保存的状态机建好之前保存的基准（进入编辑时选定的那一份内容的修订号）：续上时比较 */
   let editingBase = 0
   /** 进入编辑之前的阅读：没有进入成功时回到它 */
-  let readingBefore: SettledReading = { kind: 'reading', canEdit: false, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false }
+  let readingBefore: SettledReading = { kind: 'reading', canEdit: false, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined }
   /** 失去编辑权之后的那一份（捕获的内容、失去的时刻与副本的请求）：按最新的内容回到阅读之后丢掉 */
   let lostCopy: LostCopy | undefined
   /** 正在新建可编辑的编辑器（进入编辑、直接进入编辑的打开）：这期间得知的失效等编辑器建好、进入编辑之后再处理 */
   let pendingLoss: LeaseLoss | undefined
+  /** 同上：这期间续租得知的与服务端不兼容（M3-P3），保存的状态机建好之后交给它 */
+  let pendingBlock: Incompatibility | undefined
   /** 本页最近一次退出编辑没能确认放掉的那一代必然已经到期（watchUnconfirmedRelease）：之后的检查读到"自己在编辑"不再是本页那一代 */
   let unconfirmedExpired = false
   /** 取消那一代到期的计时 */
@@ -380,7 +404,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
   /**
    * 保存：带上编辑租约现在的令牌与代次（P1 设计 §3.4.7）。得到编辑权失效、读不到、不能编辑时，与续租得知同一个处理：
    * 续上了（或者带的是已被续上取代的上一代）就用现在的编辑权重发这一次（上一次在写入之前就被拒绝，requestId 不变），至多一次；
-   * 失效了按保存失败交回；说不准时按那次的错误交回，下一次心跳或保存时再判断
+   * 失效了按保存失败交回；说不准时按那次的错误交回，下一次心跳或保存时再判断。
+   * 与服务端不兼容（M3-P3）：本页写不进去了——停止续租、放掉手里那一代，错误照常交回（保存的状态机据此转入终态）
    */
   async function sendSave(held: EditLease, request: SaveRequest, body: Uint8Array<ArrayBuffer>): Promise<SaveContentResponse> {
     for (let resent = false; ; resent = true) {
@@ -389,6 +414,10 @@ export function createEditMode(options: EditModeOptions): EditMode {
         return await api.save(documentId, request, body, credentials)
       }
       catch (error) {
+        if (incompatibilityOf(error) !== undefined) {
+          void held.release()
+          throw error
+        }
         const loss = leaseLossOf(error)
         if (loss === undefined)
           throw error
@@ -423,7 +452,21 @@ export function createEditMode(options: EditModeOptions): EditMode {
       adoptOwnRevision: (revision, source) => coordinator?.adoptOwnRevision(revision, source) ?? false,
       onLost: lost,
       onSessionProblem: hooks.writeProblem,
+      onIncompatible: incompatible,
     })
+  }
+
+  /**
+   * 续租得知与服务端不兼容（M3-P3）：编辑租约已经停下、放掉了那一代。保存的状态机转入终态（页头说明需要刷新或不能保存）；
+   * 正在新建可编辑的编辑器时记下，建好之后再交给它
+   */
+  function incompatible(kind: Incompatibility): void {
+    if (disposed)
+      return
+    if (coordinator === undefined)
+      pendingBlock = kind
+    else
+      coordinator.block(kind)
   }
 
   /** 编辑权没用上（进入编辑没有成功）：尽力释放，不等 */
@@ -484,8 +527,11 @@ export function createEditMode(options: EditModeOptions): EditMode {
     }
   }
 
-  /** 申请编辑权、取内容的请求失败时阅读里的说明：不能编辑了、读不到了、会话的问题与别的失败 */
+  /** 申请编辑权、取内容的请求失败时阅读里的说明：不能编辑了、读不到了、与服务端不兼容（M3-P3）、会话的问题与别的失败 */
   function readingAfterFailure(error: unknown): SettledReading {
+    const blocked = incompatibilityOf(error)
+    if (blocked !== undefined)
+      return { ...readingBefore, blocked, notice: undefined }
     if (isPermissionDeniedError(error))
       return { ...readingBefore, canEdit: false, notice: { kind: 'denied', error } }
     if (isNotFoundError(error))
@@ -539,7 +585,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
       return 'not-entered'
     }
     shown = content
-    // 先建保存的状态机，再接上编辑器（撤掉屏障）：放开之后的每一处修改都有人接着
+    // 先建保存的状态机，再接上编辑器（撤掉屏障）：放开之后的每一处修改都有人接着。80% 的提示在第一次保存之前按载入的内容算（M3-P3）
     coordinator = createSaveCoordinator({
       editor: created,
       compress: api.compress,
@@ -550,7 +596,11 @@ export function createEditMode(options: EditModeOptions): EditMode {
       onUnauthenticated: hooks.saveUnauthenticated,
       onSessionStale: hooks.saveStale,
       reportError: options.reportError,
+      initialSnapshotBytes: UTF8.encode(content.snapshot).byteLength,
     })
+    if (pendingBlock !== undefined)
+      coordinator.block(pendingBlock)
+    pendingBlock = undefined
     stopWatchingCoordinator = coordinator.subscribe(notify)
     slot.attach(created)
     setMode({ kind: 'editing' })
@@ -618,10 +668,13 @@ export function createEditMode(options: EditModeOptions): EditMode {
     syncSaving()
     let snapshot: string | undefined
     let inputLeft = false
+    // 副本的"公式待更新"（M3-P3 设计 §3.8）：捕获时公式还没收齐就带上标记（这里不等，按此刻的状态）；查不出时保守地带上
+    let formulasPending = true
     try {
       // 提交不了（SDK 提交之后仍在编辑）：这次输入不在捕获里，照实说明（审查 A4）
       if (page?.isCellEditing() === true)
         inputLeft = !(await page.commitCellEditing())
+      formulasPending = page === undefined || (await page.settleFormulas(0)) !== 'settled'
       snapshot = page?.capture()
     }
     catch (error) {
@@ -643,7 +696,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
       return
     // 销毁可编辑的编辑器之前算：销毁之后它正在编辑的单元格一律算没有（审查 A4）
     const unsaved = inputLeft || (saver?.hasUnsavedWork() ?? false)
-    lostCopy = createLostCopy({ documentId, snapshot, lostAt, title: options.title, newId: options.newId, compress: api.compress, conflictCopy: api.conflictCopy })
+    lostCopy = createLostCopy({ documentId, snapshot, lostAt, formulasPending, title: options.title, newId: options.newId, compress: api.compress, conflictCopy: api.conflictCopy })
     const created = await slot.replace('read', snapshot)
     if (!still(token))
       return
@@ -715,11 +768,11 @@ export function createEditMode(options: EditModeOptions): EditMode {
       return () => listeners.delete(listener)
     },
 
-    open: async (initial, { enterEdit }) => {
+    open: async (initial, { enterEdit, blocked }) => {
       shown = { snapshot: initial.snapshot, revision: initial.revision }
-      readingBefore = { kind: 'reading', canEdit: initial.canEdit, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false }
+      readingBefore = { kind: 'reading', canEdit: initial.canEdit, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked }
       const token = generation
-      if (enterEdit && initial.canEdit) {
+      if (enterEdit && initial.canEdit && blocked === undefined) {
         const outcome = await enterOnOpen(token)
         if (outcome !== undefined)
           return outcome
@@ -739,7 +792,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
     enter: async () => {
       // 正在按新的版本取内容、重建（update 为 loading）时不进入：两次重建会叠在一起，而回到阅读时也说不清显示的是哪一版（审查 A1）。
       // 阅读时一定有接上的编辑器，没有就是还在换
-      if (mode.kind !== 'reading' || !mode.canEdit || mode.gone || mode.update === 'loading' || slot.editor() === undefined || disposed)
+      if (mode.kind !== 'reading' || !mode.canEdit || mode.gone || mode.blocked !== undefined || mode.update === 'loading' || slot.editor() === undefined || disposed)
         return
       readingBefore = { ...mode, update: mode.update, notice: undefined }
       const token = begin({ kind: 'entering' })
@@ -805,6 +858,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
       lease = undefined
       watchUnconfirmedRelease(released)
       const revision = saver.baseRevision()
+      // 与服务端不兼容之后（M3-P3）退出：之后的阅读照样不给"编辑"、照样说明
+      const blocked = blockedBy(saver.view().status)
       const created = await slot.replace('read', snapshot)
       if (!still(token))
         return
@@ -814,7 +869,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
         fail(new Error('退出编辑时以只读重建编辑器失败'))
         return
       }
-      enterReading(created, { snapshot, revision }, { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: !released })
+      enterReading(created, { snapshot, revision }, { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: !released, blocked })
     },
 
     save: async () => {

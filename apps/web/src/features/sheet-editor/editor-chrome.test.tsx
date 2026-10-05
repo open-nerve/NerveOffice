@@ -18,9 +18,9 @@ const READY: EditorPageReady = {
   canShare: false,
   userId: '0199a2c4-0000-7000-8000-00000000000a',
 }
-const CLEAN: SaveView = { status: 'clean', formulasPending: false, problem: undefined, conflict: undefined, canSave: true, unsaved: false }
+const CLEAN: SaveView = { status: 'clean', formulasPending: false, problem: undefined, conflict: undefined, canSave: true, unsaved: false, snapshotBytes: undefined }
 const EDITING: EditModeState = { kind: 'editing' }
-const READING: ReadingMode = { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false }
+const READING: ReadingMode = { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined }
 const AMY = { id: '0199a2c4-0000-7000-8000-0000000000e1', username: 'amy', displayName: '艾米' }
 const COPY = {
   id: '0199a2c4-0000-7000-8000-0000000000c9',
@@ -222,7 +222,14 @@ describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
     ['单元格的编辑提交不了', { kind: 'cell-editing' } as const, '请先完成单元格的编辑'],
     ['超过容量上限（本页判断）', { kind: 'too-large' } as const, '表格超过容量上限（5 MiB），无法保存'],
     ['超过容量上限（服务端 413）', { kind: 'request', error: new ApiError(413, 'PAYLOAD_TOO_LARGE', '请求体解压后超过上限') } as const, '表格超过容量上限（5 MiB），无法保存'],
-    ['快照不合格（422）', { kind: 'request', error: new ApiError(422, 'SNAPSHOT_INVALID', 'x', { requestId: 'req-9' }) } as const, '保存失败：表格内容的格式不正确，无法保存'],
+    // 快照不合格（M3-P3）：按违反的规则说；没有规则或不认识的规则照"格式不正确"说
+    ['快照不合格（422，没有规则）', { kind: 'request', error: new ApiError(422, 'SNAPSHOT_INVALID', 'x', { requestId: 'req-9' }) } as const, '保存失败：表格内容的格式不正确'],
+    ['快照不合格（422，不认识的规则）', { kind: 'request', error: new ApiError(422, 'SNAPSHOT_INVALID', 'x', { requestId: 'req-9', details: { rule: 'doc-footer' } }) } as const, '保存失败：表格内容的格式不正确'],
+    ['快照不合格（422，链接）', { kind: 'request', error: new ApiError(422, 'SNAPSHOT_INVALID', 'x', { requestId: 'req-9', details: { rule: 'link-address' } }) } as const, '保存失败：表格里有不能保存的链接'],
+    ['快照不合格（422，图片）', { kind: 'request', error: new ApiError(422, 'SNAPSHOT_INVALID', 'x', { requestId: 'req-9', details: { rule: 'image-source' } }) } as const, '保存失败：表格里有不能保存的图片'],
+    ['快照不合格（422，保护）', { kind: 'request', error: new ApiError(422, 'SNAPSHOT_INVALID', 'x', { requestId: 'req-9', details: { rule: 'resource-not-empty' } }) } as const, '保存失败：表格里有不支持的功能的数据（例如保护）'],
+    ['快照不合格（422，缩水）', { kind: 'request', error: new ApiError(422, 'SNAPSHOT_INVALID', 'x', { requestId: 'req-9', details: { rule: 'resource-missing' } }) } as const, '保存失败：表格里缺少上一版有的内容（例如批注、筛选、条件格式），为免丢失没有保存'],
+    ['快照不合格（422，过于复杂）', { kind: 'request', error: new ApiError(422, 'SNAPSHOT_INVALID', 'x', { requestId: 'req-9', details: { rule: 'too-complex' } }) } as const, '保存失败：表格的内容过于复杂'],
     ['网络错误', { kind: 'request', error: new NetworkError('断网') } as const, '保存失败：网络连接失败，请检查网络后重试'],
   ])('保存没有完成：%s', (_case, problem, text) => {
     renderChrome({ save: { ...CLEAN, status: problem.kind === 'cell-editing' ? 'dirty' : 'failed', problem } })
@@ -848,5 +855,69 @@ describe('模式切换与按钮消失时的焦点（审查 A2，规范 §2.4）'
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(document.activeElement).toBe(elsewhere)
     elsewhere.remove()
+  })
+})
+
+describe('与服务端不兼容与容量（M3-P3 设计 §3.10）', () => {
+  it('编辑时本页过旧（保存的状态 outdated）：页头说需要刷新；说明本页的修改没有保存、先复制出来，给"重新加载"；"保存"不可用、不说公式没保存', () => {
+    const fake = renderChrome({ save: { ...CLEAN, status: 'outdated', canSave: false, unsaved: true, formulasPending: true } })
+    expect(headerStatus()).toHaveTextContent('需要刷新')
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('页面的版本过旧，本页的修改没有保存，也不能再保存。需要的话先把内容复制出来，再重新加载页面')
+    fireEvent.click(within(alert).getByRole('button', { name: '重新加载' }))
+    expect(fake.page.reload).toHaveBeenCalledOnce()
+    expect(screen.getByRole('button', { name: '保存' })).toHaveAttribute('aria-disabled', 'true')
+    expect(screen.queryByText('公式结果尚未保存，请稍后再保存一次')).toBeNull()
+  })
+
+  it('编辑时本页过旧、修改都已保存：说明重新加载之后可以接着编辑', () => {
+    renderChrome({ save: { ...CLEAN, status: 'outdated', canSave: false, unsaved: false } })
+    expect(screen.getByRole('alert')).toHaveTextContent('页面的版本过旧，不能再保存。本页的修改都已保存，重新加载页面之后可以接着编辑')
+  })
+
+  it('编辑时文档由更新的版本保存过（too-new）：页头说不能保存；只说明，不给"重新加载"（重新加载拿到的还是同一个版本）', () => {
+    renderChrome({ save: { ...CLEAN, status: 'too-new', canSave: false, unsaved: true } })
+    expect(headerStatus()).toHaveTextContent('不能保存')
+    expect(screen.getByRole('alert')).toHaveTextContent('这份文档由更新的版本保存过，本页的修改不能再保存。需要的话先把内容复制出来')
+    expect(screen.queryByRole('button', { name: '重新加载' })).toBeNull()
+  })
+
+  it('阅读时本页过旧（申请编辑权时得知）：页头说需要刷新，不给"编辑"，说明并给"重新加载"', () => {
+    const fake = renderChrome({ mode: { ...READING, blocked: 'client-outdated' }, save: undefined })
+    expect(headerStatus()).toHaveTextContent('需要刷新')
+    expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
+    expect(screen.getByRole('alert')).toHaveTextContent('页面的版本过旧，不能进入编辑。重新加载页面之后再编辑')
+    fireEvent.click(screen.getByRole('button', { name: '重新加载' }))
+    expect(fake.page.reload).toHaveBeenCalledOnce()
+  })
+
+  it('阅读时文档由更新的版本保存过（打开时就看得出）：页头说只能查看，不给"编辑"，说明只能阅读，不提示刷新', () => {
+    renderChrome({ mode: { ...READING, blocked: 'document-too-new' }, save: undefined })
+    expect(headerStatus()).toHaveTextContent('只能查看')
+    expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
+    expect(screen.getByText('这份文档由更新的版本保存过，当前只能阅读，不能编辑')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '重新加载' })).toBeNull()
+  })
+
+  it('不兼容的说明出现、"编辑"随之消失：焦点在"编辑"上时交给返回链接，不落到 body（规范 §2.4）', async () => {
+    const fake = renderChrome({ mode: READING, save: undefined })
+    screen.getByRole('button', { name: '编辑' }).focus()
+    fake.set({ mode: { kind: 'entering' } })
+    fake.set({ mode: { ...READING, blocked: 'client-outdated' } })
+    expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('link', { name: '我的空间' })))
+  })
+
+  it('快照达到容量的 80%（US-M3-14）：一直在的读屏状态区里给一条不打断的说明（占上限的百分比）；没到、超过上限（由保存失败说明）时不说', () => {
+    const fake = renderChrome({ save: { ...CLEAN, snapshotBytes: 4_400_000 } })
+    expect(infoRegion()).toHaveTextContent('这份表格已用去容量上限（5 MiB）的 83%，再加内容可能就保存不了了')
+    expect(screen.queryByRole('alert')).toBeNull()
+    fake.set({ save: { ...CLEAN, snapshotBytes: 4_194_303 } })
+    expect(infoRegion()).toHaveTextContent('')
+    fake.set({ save: { ...CLEAN, snapshotBytes: 4_194_304 } })
+    expect(infoRegion()).toHaveTextContent('80%')
+    fake.set({ save: { ...CLEAN, snapshotBytes: 6_000_000, status: 'failed', problem: { kind: 'too-large' } } })
+    expect(infoRegion()).toHaveTextContent('')
+    expect(screen.getByText('表格超过容量上限（5 MiB），无法保存')).toBeInTheDocument()
   })
 })

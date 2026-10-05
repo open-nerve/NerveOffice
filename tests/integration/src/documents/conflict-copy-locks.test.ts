@@ -25,6 +25,7 @@ import { createdDocumentSchema, errorResponseSchema } from '@nerve-office/contra
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
+import { acquireBody } from '../support/client-format.ts'
 import { postConflictCopy } from '../support/conflict-copies.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
@@ -136,7 +137,7 @@ const OTHERS = {
   deleteSource: { action: 'documents.deleted', actor: () => amy, status: 204, run: async w => call(amySession, `/api/documents/${w.document.id}`, 'DELETE') },
   revokeGil: { action: 'documents.share_revoked', actor: () => amy, status: 204, run: async w => call(amySession, `/api/documents/${w.document.id}/grants/${gil.id}`, 'DELETE') },
   shareWithRoot: { action: 'documents.shared', actor: () => amy, status: 200, run: async w => call(amySession, `/api/documents/${w.document.id}/grants/${root.id}`, 'PUT', { role: 'viewer' }) },
-  acquireLeaseSource: { action: undefined, actor: () => amy, status: 201, run: async w => call(amySession, `/api/documents/${w.document.id}/edit-lease`, 'POST', { clientInstanceId: randomUUID() }) },
+  acquireLeaseSource: { action: undefined, actor: () => amy, status: 201, run: async w => call(amySession, `/api/documents/${w.document.id}/edit-lease`, 'POST', acquireBody(randomUUID())) },
   // 原文档所在的文件夹
   deleteSourceFolder: { action: 'folders.deleted', actor: () => amy, status: 204, run: async w => call(amySession, `/api/folders/${w.sourceFolder}`, 'DELETE') },
   // 原文档所在空间的成员与状态

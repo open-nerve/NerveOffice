@@ -1,30 +1,39 @@
 import type { RevisionConflictDetails, SaveContentQuery, SaveContentResponse } from '@nerve-office/contracts'
-import type { Buffer } from 'node:buffer'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { GzipBody } from '../security/index.ts'
+import type { CurrentClient } from './client-format-gate.ts'
 import type { AccessibleDocument } from './document-access-policy.ts'
-import type { RevisionRow } from './document-revisions.repository.ts'
+import type { ContentEnvelope } from './document-contents.repository.ts'
 import type { DocumentRow } from './documents.repository.ts'
 import type { EditingActor } from './edit-lease.service.ts'
 import type { RevisionNoneMatch } from './if-none-match.ts'
-import { UNIVER_SDK_VERSION } from '@nerve-office/contracts'
+import type { RecordedRequest } from './save-outcomes.ts'
+import type { PassedSnapshot } from './upload-inspection.ts'
+import { Buffer } from 'node:buffer'
+import { shrunkResources } from '@nerve-office/contracts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { AuditService } from '../audit/index.ts'
 import { SessionService } from '../auth/index.ts'
 import { TransactionRunner } from '../database/index.ts'
+import { AppLogger } from '../logging/index.ts'
+import { ClientFormatGate, requireWritableDocument } from './client-format-gate.ts'
 import { DocumentAccessPolicy, requireAccess, requireDocumentContent, requireDocumentOperations } from './document-access-policy.ts'
 import { DocumentContentsRepository } from './document-contents.repository.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
+import { DocumentSaveReceiptsRepository } from './document-save-receipts.repository.ts'
 import { DocumentsRepository } from './documents.repository.ts'
 import { requestLeaseLoss } from './edit-lease-rules.ts'
 import { requireActiveLogin } from './edit-lease.service.ts'
 import { EditLeasesRepository } from './edit-leases.repository.ts'
 import { matchesNoneMatch } from './if-none-match.ts'
+import { legacyNonEmptyResources } from './legacy-resources.ts'
 import { savedPayloadDigest } from './payload-digest.ts'
 import { revisionSourceFor } from './revision-source.ts'
-import { validateSnapshot } from './snapshot-validation.ts'
+import { isRecorded, replayedSave, savedOutcome } from './save-outcomes.ts'
+import { SnapshotInspector } from './snapshot-inspector.ts'
+import { INSPECTED_PROFILE, rejectedSnapshot, requirePassingSnapshot } from './upload-inspection.ts'
 
 /** 读取到的内容：gzip 压缩的快照 JSON 字节，与它对应的修订号（ETag）。 */
 export interface DocumentContent {
@@ -47,27 +56,39 @@ export interface ContentSaver extends EditingActor {
   readonly token: string | undefined
 }
 
-/**
- * 保存的确认：一条修订记录的修订号与时间。unchanged（内容相同、修订号没有增加）要到 M3-P3-S4 的"内容相同不递增"才会为真：
- * 在那之前每次保存都写入新的修订，这里一律为 false
- */
-function toSaved(revision: RevisionRow): SaveContentResponse {
-  return { revision: revision.revision, savedAt: revision.createdAt.toISOString(), unchanged: false }
+/** 这一次保存（事务里的各步要的）：请求、负载摘要、"公式待更新"、核对过的页面与检查过的快照 */
+interface SaveAttempt {
+  readonly saver: ContentSaver
+  readonly query: SaveContentQuery
+  readonly upload: GzipBody
+  readonly digest: Buffer
+  readonly formulasPending: boolean
+  readonly client: CurrentClient
+  readonly snapshot: PassedSnapshot
+  readonly origin: AuditOrigin
 }
 
-/** 文档的内容（P4 设计 §3.5）：读取当前快照；按基准修订号条件写入新的快照。 */
+/** 文档的内容（P4 设计 §3.5）：读取当前快照；按基准修订号条件写入新的快照（M3-P3 起有完整的快照检查与"内容相同不递增"）。 */
 @Injectable()
 export class DocumentContentService {
+  readonly #logger: AppLogger
+
   constructor(
     private readonly transactions: TransactionRunner,
     private readonly documents: DocumentsRepository,
     private readonly contents: DocumentContentsRepository,
     private readonly revisions: DocumentRevisionsRepository,
+    private readonly receipts: DocumentSaveReceiptsRepository,
     private readonly leases: EditLeasesRepository,
     private readonly sessions: SessionService,
     private readonly policy: DocumentAccessPolicy,
     private readonly audit: AuditService,
-  ) {}
+    private readonly clients: ClientFormatGate,
+    private readonly inspector: SnapshotInspector,
+    logger: AppLogger,
+  ) {
+    this.#logger = logger.with({ module: 'documents' })
+  }
 
   /**
    * 能读取就返回当前内容；别人的与不存在的都是 NOT_FOUND。有记录却没有内容是数据不一致，按意外错误处理，不伪装成 404。
@@ -89,63 +110,175 @@ export class DocumentContentService {
   }
 
   /**
-   * 保存（P4 设计 §3.5.1，M3-P1 设计 §3.4.4）：先做与文档无关的基本校验，再在一个事务里依次
-   * 判断能否访问 → 能编辑时锁住文档行、锁下再判断一次 → 按 requestId 幂等 → 这次登录仍然有效 → 能否编辑 → 编辑租约 → 核对 unitId
-   * → 按基准修订号条件写入。
-   * 幂等这一步只要求仍能访问（00 号计划书 §7.4 第 2 步）：一次结果未知的保存提交之后被降为查看者、空间被归档、租约失效或被别人接手，
-   * 重发同一个请求照样拿到原来的结果，而不是 403 或编辑权已失效——客户端按约定会把它们当作"没有提交"（M2-P6 复核 A 的 S-4；
-   * 重放先于租约，A07）；不是重放才核对登录、要求能编辑、再要求租约。
-   * 登录在锁下再核对一次（M3-P1 审查 A1，requireActiveLogin）：会话守卫之后还隔着上传正文与等锁，这期间退出、签发重置（撤销全部登录）不经文档行，
-   * 只看"请求的登录就是租约绑定的那一个"挡不住撤销之后才落库的保存；失效时 401，与守卫的回答一致。
+   * 保存（M3-P3 设计 §3.1；P4 设计 §3.5.1，M3-P1 设计 §3.4.4）。守一条原则：同一次保存的重放先于其余一切检查（00 号计划书 §7.4 第 2 步，
+   * M3 总设计 §6.3）——已经提交过的同一次保存，之后不论编辑权、客户端的版本、校验的规则怎样，重试都拿到原来的结果（A07）：
+   * 1. 重放预检（事务之外，不解析快照）：按 requestId 查修订记录与回执，同一个人、同一份文档、负载摘要一致、仍能访问，就返回原来的结果。
+   *    其余情况一律往下走，不提前回答：看不到的、不存在的、另一份文档的 requestId 都留给事务里的再查（"看不到与不存在"的语句序列照旧）；
+   * 2. 客户端的数据格式（与文档无关）：过旧时 CLIENT_OUTDATED（ClientFormatGate）；
+   * 3. 快照的检查（与文档无关，工作线程）：不合格时 SNAPSHOT_INVALID（details.rule），通过时得到 unitId、内容哈希与资源名；
+   * 4. 一个事务：能否访问 → 能编辑时锁文档行、锁下再判断 → 再查一次重放（并发的同一次请求）→ 这次登录仍然有效 → 文档的格式
+   *    （比服务端新：DOCUMENT_TOO_NEW）→ 能编辑 → 编辑租约 → 基准修订号 → unitId → 不缩水 → 内容哈希与当前相同：写回执、设"公式待更新"，
+   *    修订号不变（unchanged）→ 否则写内容（连同哈希与非空的资源名）、修订号加一、修订记录（哈希与客户端构建）、文档的信封、审计。
    * 先判断再加锁：看不到的请求不在文档上取锁，响应的时序与不存在的文档相同（审查 A2）；只能查看的请求同样不取锁，
    * 不让能编辑的人的保存排队（复验 RA7）——它能得到的只有重放，不加锁查一次请求标识就有结论，到不了租约这一步。
    * 能编辑时先锁文档再查幂等：同一个请求的两次并发重试，后到的一方拿到锁时前一方已经提交，按幂等返回原结果，而不是误报冲突。
+   * 重放只要求仍能访问：被降为查看者、空间被归档、租约失效之后重发同一个请求，照样拿到原来的结果（M2-P6 复核 A 的 S-4；A07）。
+   * 登录在锁下再核对一次（M3-P1 审查 A1，requireActiveLogin）：会话守卫之后还隔着上传正文、检查与等锁，这期间的撤销挡在这里；失效时 401。
+   * 租约在基准修订号之前：失去编辑权的页面得到"编辑权已失效"而不是修订号冲突；unitId 与不缩水在基准修订号之后：落后的页面先得到冲突，
+   * 拿过时页面的快照去比当前的资源没有意义。"内容相同"在全部检查之后：编辑权失效之后，内容没变的保存照样被拒（access.spec.ts）
    */
   async save(saver: ContentSaver, id: string, query: SaveContentQuery, upload: GzipBody, origin: AuditOrigin): Promise<SaveContentResponse> {
-    const snapshot = validateSnapshot(upload.decompressed)
-    const digest = savedPayloadDigest(query.baseRevision, upload.decompressed)
+    // 契约里"公式待更新"可选、不带等于否：规整成布尔值再算摘要（同一个 requestId 而标记不同就是另一个请求，§3.8）
+    const formulasPending = query.formulasPending === true
+    const digest = savedPayloadDigest(query.baseRevision, upload.decompressed, formulasPending)
+    const replayed = await this.replayBeforeChecks(saver.userId, id, query.requestId, digest)
+    if (replayed !== undefined)
+      return replayed
+    const client = this.clients.require(query)
+    const snapshot = await requirePassingSnapshot(this.inspector, this.#logger, upload, id)
+    const attempt: SaveAttempt = { saver, query, upload, digest, formulasPending, client, snapshot, origin }
     return this.transactions.run(async (transaction) => {
       const accessible = await this.lockIfEditable(saver.userId, id, transaction)
       const { document } = accessible
 
-      const previous = await this.revisions.findByRequestId(query.requestId, transaction)
-      if (previous !== undefined)
-        return this.replay(saver.userId, document, previous, digest)
+      // 并发的同一次请求：后到的一方拿到锁时前一方已经提交。requestId 用过、却不是这一次保存的：REQUEST_ID_CONFLICT
+      const recorded = await this.recorded(query.requestId, transaction)
+      if (isRecorded(recorded)) {
+        const original = replayedSave(recorded, saver.userId, document.id, digest)
+        if (original === undefined)
+          throw new AppError('REQUEST_ID_CONFLICT')
+        return original
+      }
       await requireActiveLogin(this.sessions, saver, transaction)
+      requireWritableDocument(document)
       // 不是重放才要求能编辑：能编辑时这是锁下的判断，只能查看时就是上面那次（没有取锁）
       requireDocumentOperations(accessible, ['edit'])
       await this.requireLease(saver, document, query, transaction)
-
-      if (snapshot.unitId !== document.unitId)
-        throw new AppError('SNAPSHOT_INVALID', '表格内容不属于这份文档')
       if (query.baseRevision !== document.revision)
         throw await this.conflict(saver.userId, document, transaction)
+      if (snapshot.unitId !== document.unitId)
+        throw rejectedSnapshot(this.#logger, 'unit-id', id)
 
-      const next = document.revision + 1
-      const revision = await this.revisions.insert({
-        documentId: id,
-        revision: next,
-        kind: 'saved',
-        requestId: query.requestId,
-        payloadDigest: digest,
-        source: { clientInstanceId: query.clientInstanceId, localSeq: query.localSeq },
-        savedBy: saver.userId,
-      }, transaction)
-      // 同一个 requestId 同时被另一份文档的保存或一次新建用掉了（它们锁的不是这一行）
-      if (revision === undefined)
-        throw new AppError('REQUEST_ID_CONFLICT')
-      await this.documents.advanceRevision(id, next, UNIVER_SDK_VERSION, transaction)
-      if (!await this.contents.replace(id, { snapshot: upload.compressed, rawBytes: upload.decompressed.length }, transaction))
+      const current = await this.contents.findEnvelope(id, transaction)
+      if (current === undefined)
         throw new Error(`文档有记录却没有内容：${id}`)
-      await this.audit.record({
-        action: 'documents.content_saved',
-        actor: { type: 'user', id: saver.userId },
-        target: { type: 'document', id },
-        origin,
-        details: { revision: next },
-      }, { transaction })
-      return toSaved(revision)
+      this.requireNoShrink(id, current, snapshot)
+      const contentHash = Buffer.from(snapshot.contentHash)
+      // 存量的哈希为空：按"不同"处理，这一次写入补上（第一次保存多一个修订，§3.7）
+      if (current.contentHash?.equals(contentHash) === true)
+        return this.confirmUnchanged(attempt, document, transaction)
+      return this.write(attempt, document, contentHash, transaction)
     })
+  }
+
+  /**
+   * 重放预检（§3.1 第 2 步）：事务之外，在连接池上按 requestId 查修订记录与回执；是这个人对这份文档的同一次保存、而且他现在仍能访问这份文档，
+   * 就给出原来的结果。否则什么也不回答（undefined），交给后面的检查与事务里的再查——看不到与不存在在这里执行同样的两条语句
+   * （查不到这个 requestId），之后走同一条路。读到的记录写下之后不再改，单独的语句读出就是完整的；仍能访问的判断在读出记录之后，
+   * 判断时能访问，原来的结果（修订号与时间）就是他有权知道的
+   */
+  private async replayBeforeChecks(userId: string, id: string, requestId: string, digest: Buffer): Promise<SaveContentResponse | undefined> {
+    const original = replayedSave(await this.recorded(requestId), userId, id, digest)
+    if (original === undefined)
+      return undefined
+    const document = await this.documents.findById(id)
+    const access = document === undefined ? undefined : await this.policy.accessOf(userId, document)
+    return access === undefined ? undefined : original
+  }
+
+  /** 这个 requestId 的修订记录与回执（不带事务时在连接池上读，见 replayBeforeChecks） */
+  private async recorded(requestId: string, transaction?: Transaction): Promise<RecordedRequest> {
+    return {
+      revision: await this.revisions.findByRequestId(requestId, transaction),
+      receipt: await this.receipts.findByRequestId(requestId, transaction),
+    }
+  }
+
+  /**
+   * 不缩水（00 号计划书 §8.2，M3-P3 设计 §3.3）：上一版非空的资源里、在档案白名单之内的，这一版都要在（变空不算缩水）。
+   * 上一版的非空资源名存在 document_contents 里；存量为空时解析上一版得到（legacy-resources.ts，写明了不经工作线程的理由），
+   * 解析不了的存量没有可核对的上一版，记一条警告、照常往下走
+   */
+  private requireNoShrink(id: string, current: ContentEnvelope, snapshot: PassedSnapshot): void {
+    const previous = this.previousNonEmptyResources(id, current)
+    if (previous === undefined)
+      return
+    const missing = shrunkResources(previous, snapshot.presentResources, INSPECTED_PROFILE)
+    if (missing.length > 0)
+      throw rejectedSnapshot(this.#logger, 'resource-missing', id, { missing })
+  }
+
+  /** 上一版非空的资源名：存下的；存量（为空）时解析上一版，解析不了时记一条警告、为 undefined（没有可核对的上一版） */
+  private previousNonEmptyResources(id: string, current: ContentEnvelope): readonly string[] | undefined {
+    if (current.resourceNames !== null)
+      return current.resourceNames
+    const legacy = current.legacySnapshot === null ? undefined : legacyNonEmptyResources(current.legacySnapshot)
+    if (legacy === undefined)
+      this.#logger.warn('存量的快照解析不出资源，这一次保存不核对不缩水', { documentId: id })
+    return legacy
+  }
+
+  /**
+   * 内容与当前相同（§3.7）：修订号不变，不写内容、修订记录与审计；写一条回执（重试照样拿到这个结果），把"公式待更新"设成请求里的值（§3.8），
+   * 给出当前修订与它的时间，unchanged 为真。回执的 requestId 被同时进行的、另一份文档上的同一个 requestId 用掉了：REQUEST_ID_CONFLICT
+   */
+  private async confirmUnchanged(attempt: SaveAttempt, document: DocumentRow, transaction: Transaction): Promise<SaveContentResponse> {
+    const current = await this.revisions.findByRevision(document.id, document.revision, transaction)
+    if (current === undefined)
+      throw new Error(`当前修订没有修订记录：${document.id}`)
+    const receipt = await this.receipts.insert({
+      requestId: attempt.query.requestId,
+      documentId: document.id,
+      revision: document.revision,
+      payloadDigest: attempt.digest,
+      savedBy: attempt.saver.userId,
+      savedAt: current.createdAt,
+    }, transaction)
+    if (receipt === undefined)
+      throw new AppError('REQUEST_ID_CONFLICT')
+    if (document.formulasPending !== attempt.formulasPending)
+      await this.documents.setFormulasPending(document.id, attempt.formulasPending, transaction)
+    return { revision: receipt.revision, savedAt: receipt.savedAt.toISOString(), unchanged: true }
+  }
+
+  /**
+   * 写入新的一版：修订记录（来源、内容哈希、客户端构建）→ 修订号加一与文档的信封（SDK 版本是页面上报、核对过的，客户端构建，
+   * "公式待更新"）→ 内容（gzip 的原样字节、哈希与非空的资源名）→ 审计
+   */
+  private async write(attempt: SaveAttempt, document: DocumentRow, contentHash: Buffer, transaction: Transaction): Promise<SaveContentResponse> {
+    const { saver, query, upload, client, snapshot } = attempt
+    const next = document.revision + 1
+    const revision = await this.revisions.insert({
+      documentId: document.id,
+      revision: next,
+      kind: 'saved',
+      requestId: query.requestId,
+      payloadDigest: attempt.digest,
+      source: { clientInstanceId: query.clientInstanceId, localSeq: query.localSeq },
+      savedBy: saver.userId,
+      contentHash,
+      clientBuild: client.clientBuild,
+    }, transaction)
+    // 同一个 requestId 同时被另一份文档的保存或一次新建用掉了（它们锁的不是这一行）
+    if (revision === undefined)
+      throw new AppError('REQUEST_ID_CONFLICT')
+    await this.documents.advanceRevision(document.id, next, { sdkVersion: client.univerVersion, clientBuild: client.clientBuild, formulasPending: attempt.formulasPending }, transaction)
+    const replaced = await this.contents.replace(document.id, {
+      snapshot: upload.compressed,
+      rawBytes: upload.decompressed.length,
+      contentHash,
+      resourceNames: snapshot.nonEmptyResources,
+    }, transaction)
+    if (!replaced)
+      throw new Error(`文档有记录却没有内容：${document.id}`)
+    await this.audit.record({
+      action: 'documents.content_saved',
+      actor: { type: 'user', id: saver.userId },
+      target: { type: 'document', id: document.id },
+      origin: attempt.origin,
+      details: { revision: next },
+    }, { transaction })
+    return savedOutcome(revision)
   }
 
   /**
@@ -172,14 +305,6 @@ export class DocumentContentService {
     if (!unlocked.permissions.canEdit)
       return unlocked
     return requireDocumentContent(this.policy, userId, await this.documents.lockById(id, transaction), [], transaction)
-  }
-
-  /** 同一个 requestId 已经有修订记录：是同一个人对这份文档的同一次保存（摘要一致）才返回原来的结果。 */
-  private replay(userId: string, document: DocumentRow, previous: RevisionRow, digest: Buffer): SaveContentResponse {
-    const sameRequest = previous.kind === 'saved' && previous.documentId === document.id && previous.savedBy === userId && previous.payloadDigest.equals(digest)
-    if (!sameRequest)
-      throw new AppError('REQUEST_ID_CONFLICT')
-    return toSaved(previous)
   }
 
   /**

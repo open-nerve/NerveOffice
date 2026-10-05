@@ -1139,7 +1139,8 @@ describe('另存为副本与放弃（M3-P2 设计 §3.2、§3.4）', () => {
     await context.mode.saveCopy()
     await settle()
     expect(context.api.compress).toHaveBeenLastCalledWith(snapshotOf('本页的'))
-    expect(context.api.conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { requestId: expect.stringMatching(/^[\da-f-]{36}$/) as unknown, title: '周报（冲突副本 2026-10-04 15:30）' }, expect.anything())
+    // 捕获时公式已经收齐（假的编辑器）：副本不带"公式待更新"（M3-P3）
+    expect(context.api.conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { requestId: expect.stringMatching(/^[\da-f-]{36}$/) as unknown, title: '周报（冲突副本 2026-10-04 15:30）', formulasPending: false }, expect.anything())
     expect(context.api.content).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID)
     expect(context.factory.last()).toMatchObject({ access: 'read', snapshot: snapshotOf('最新的') })
     expect(readingOf(context.mode)).toMatchObject({ canEdit: false, notice: { kind: 'copied', document: { ...COPY, replayed: false } } })
@@ -1680,5 +1681,95 @@ describe('编辑时的保存与编辑权（M3-P1 的接入，原在编辑器页�
     answer.resolve(undefined)
     await exiting
     expect(modeOf(context.mode).kind).toBe('reading')
+  })
+})
+
+describe('与服务端不兼容（M3-P3 设计 §3.5、§3.10）', () => {
+  const OUTDATED = new ApiError(409, 'CLIENT_OUTDATED', '页面的版本过旧', { details: { reason: 'format' } })
+
+  it('打开时就看得出文档比本页新（blocked）：只能阅读，不给"编辑"（进入编辑什么也不做）；?edit=new 也不直接进入；检查读到能编辑也不恢复', async () => {
+    const context = setup()
+    await context.mode.open({ ...LOADED, canEdit: true }, { enterEdit: true, blocked: 'document-too-new' })
+    await settle()
+    expect(readingOf(context.mode)).toMatchObject({ canEdit: true, blocked: 'document-too-new' })
+    expect(context.factory.created.map(fake => fake.access)).toEqual(['read'])
+    await context.mode.enter()
+    expect(context.editLease.acquire).not.toHaveBeenCalled()
+    await context.time.advance(READING_CHECK_INTERVAL_MS)
+    expect(context.api.editStatus).toHaveBeenCalledTimes(2)
+    expect(readingOf(context.mode).blocked).toBe('document-too-new')
+  })
+
+  it.each([
+    ['CLIENT_OUTDATED', 'client-outdated'],
+    ['DOCUMENT_TOO_NEW', 'document-too-new'],
+  ] as const)('申请编辑权得到 %s：留在阅读并说明（blocked %s），不再给"编辑"，不重建编辑器', async (code, kind) => {
+    const context = setup({ editLease: { acquire: async () => Promise.reject(new ApiError(409, code, '不兼容')) } })
+    await opened(context)
+    await context.mode.enter()
+    expect(readingOf(context.mode)).toMatchObject({ blocked: kind, notice: undefined })
+    expect(context.factory.created).toHaveLength(1)
+    await context.mode.enter()
+    expect(context.editLease.acquire).toHaveBeenCalledOnce()
+    expect(context.hooks.writeProblem).not.toHaveBeenCalled()
+  })
+
+  it('编辑时保存得到 CLIENT_OUTDATED：保存的状态是"需要刷新"（终态），放掉编辑权、停止续租；编辑器留着（本页的修改还能复制），离开照样提示', async () => {
+    const context = setup({ api: { save: async () => Promise.reject(OUTDATED) } })
+    await editing(context)
+    context.factory.last().edit('本页的修改')
+    await context.mode.save()
+    await settle()
+    expect(context.mode.view()).toMatchObject({ mode: { kind: 'editing' }, save: { status: 'outdated', canSave: false, unsaved: true } })
+    expect(context.editLease.release).toHaveBeenCalledOnce()
+    await context.time.advance(HEARTBEAT_MS * 3)
+    expect(context.editLease.renew).not.toHaveBeenCalled()
+    expect(context.factory.last().disposed).toBe(false)
+    expect(context.mode.hasUnsavedWork()).toBe(true)
+    // 再按保存不发请求
+    await context.mode.save()
+    expect(context.api.save).toHaveBeenCalledOnce()
+  })
+
+  it('编辑时心跳得到 CLIENT_OUTDATED（服务端升级了）：保存的状态同样转入"需要刷新"、放掉编辑权；之后按保存不发请求', async () => {
+    const context = setup({ editLease: { renew: async () => Promise.reject(OUTDATED) } })
+    await editing(context)
+    await context.time.advance(HEARTBEAT_MS)
+    await settle()
+    expect(context.mode.view().save).toMatchObject({ status: 'outdated', canSave: false })
+    expect(context.editLease.release).toHaveBeenCalledOnce()
+    context.factory.last().edit('本页的修改')
+    await context.mode.save()
+    expect(context.api.save).not.toHaveBeenCalled()
+  })
+
+  it('正在以可编辑重建时心跳就得知不兼容：建好之后保存的状态随即是"需要刷新"', async () => {
+    const context = setup({ editLease: { renew: async () => Promise.reject(OUTDATED) } })
+    await opened(context)
+    const gate = context.factory.holdNext()
+    const entering = context.mode.enter()
+    await settle()
+    await context.time.advance(HEARTBEAT_MS)
+    gate.release()
+    await entering
+    expect(context.mode.view()).toMatchObject({ mode: { kind: 'editing' }, save: { status: 'outdated', canSave: false } })
+  })
+
+  it('不兼容之后退出编辑（本页的修改都已保存）：回到阅读，照样带着说明、不给"编辑"', async () => {
+    const context = setup({ editLease: { renew: async () => Promise.reject(OUTDATED) } })
+    await editing(context)
+    await context.time.advance(HEARTBEAT_MS)
+    await context.mode.exit()
+    await settle()
+    expect(readingOf(context.mode)).toMatchObject({ blocked: 'client-outdated' })
+  })
+
+  it('80% 的提示：进入编辑时按载入的内容先算一次大小（与服务端解压后的字节同一个口径），保存之后换成那次捕获的', async () => {
+    const context = setup()
+    await editing(context)
+    expect(context.mode.view().save?.snapshotBytes).toBe(new TextEncoder().encode(LOADED.snapshot).byteLength)
+    context.factory.last().edit('长一些的修改内容')
+    await context.mode.save()
+    expect(context.mode.view().save?.snapshotBytes).toBe(new TextEncoder().encode(snapshotOf('长一些的修改内容')).byteLength)
   })
 })

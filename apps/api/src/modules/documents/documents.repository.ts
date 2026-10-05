@@ -28,6 +28,8 @@ export interface DocumentRow {
   readonly formatVersion: number
   /** 最后一次写入这份文档的 SDK 版本：详情带上它，页面据此判断文档是不是由更新的版本保存过（M3-P3 设计 §3.5） */
   readonly sdkVersion: string
+  /** "公式待更新"（M3-P3 设计 §3.8）：详情、编辑状态与申请编辑权的响应直接给出 */
+  readonly formulasPending: boolean
   /**
    * 写入代次（M2-P2，00 号计划书 §6.4）：编辑租约的有效条件按它判断（M3-P1 设计 §3.4.1 第 3 条）——租约的那一代不是它就过时。
    * 申请编辑权与收回写入权给它加一（advanceWriteEpoch），删除、跨空间移动与转移也加一；不进任何响应
@@ -108,17 +110,27 @@ export interface TrashedDocumentRow {
   readonly trashEntryId: string | null
 }
 
-/** 复制出来的文档要写的列：其余的列（类型、unitId、档案、格式版本，写入时的 SDK 版本没给时也是）由数据库从源文档原样复制。 */
+/**
+ * 一次写入的信封（M3-P3 设计 §3.4，00 号计划书 §8.1）：页面上报、服务端核对过的 SDK 版本（等于服务端的），页面的构建，
+ * 与这次写入的"公式待更新"
+ */
+export interface WriteEnvelope {
+  readonly sdkVersion: string
+  readonly clientBuild: string
+  readonly formulasPending: boolean
+}
+
+/** 复制出来的文档要写的列：其余的列（类型、unitId、档案、格式版本，信封没给时也是）由数据库从源文档原样复制。 */
 export interface CopiedDocument {
   readonly spaceId: string
   readonly folderId: string | null
   readonly title: string
   readonly createdBy: string
   /**
-   * 写入时的 SDK 版本：复制不给，照源文档（内容原样复制，版本跟着内容走）；另存为副本给平台内置的版本——
-   * 内容是页面上传的、由平台内置的 SDK 写出（M3-P2 设计 §3.2）
+   * 写入的信封（SDK 版本、客户端构建、"公式待更新"）：复制不给，照源文档（内容原样复制，信封跟着内容走）；
+   * 另存为副本给这次上传的（内容是页面上传的，M3-P2 设计 §3.2、M3-P3 设计 §3.1）
    */
-  readonly sdkVersion?: string | undefined
+  readonly envelope?: WriteEnvelope | undefined
 }
 
 const d = documents
@@ -137,6 +149,7 @@ const COLUMNS = {
   profile: d.profile,
   formatVersion: d.formatVersion,
   sdkVersion: d.sdkVersion,
+  formulasPending: d.formulasPending,
   writeEpoch: d.writeEpoch,
 }
 
@@ -426,18 +439,20 @@ export class DocumentsRepository {
   }
 
   /**
-   * 按源文档建一份副本（M2-P4 设计 §3.4 第 4 条）：类型、unitId、档案、格式版本与写入时的 SDK 版本由
-   * INSERT … SELECT 从源文档原样复制（unitId 相同是有意的，00 号计划书 §8.3）；
+   * 按源文档建一份副本（M2-P4 设计 §3.4 第 4 条）：类型、unitId、档案、格式版本与写入的信封（SDK 版本、客户端构建、"公式待更新"，
+   * M3-P3）由 INSERT … SELECT 从源文档原样复制（unitId 相同是有意的，00 号计划书 §8.3；信封跟着内容走：公式结果没算完的内容，复制出去也没算完）；
    * 修订号、写入代次、状态与时间用列的默认值（修订号 1、代次 0、正常状态）。
-   * 另存为副本（M3-P2 设计 §3.2）同样经这里：元数据照原文档，只有写入时的 SDK 版本换成给出的（copy.sdkVersion）。
+   * 另存为副本（M3-P2 设计 §3.2）同样经这里：元数据照原文档，信封换成这次上传的（copy.envelope，M3-P3 设计 §3.1）。
    * 源文档已经不在（被删或进了回收站）时什么也不写，返回 undefined（调用方持着源文档行的共享锁时不会发生）。
    * 内容的复制见 DocumentContentsRepository.copyFrom（另存为副本的内容是上传的，调用方另写）
    */
   async copyFrom(sourceId: string, copy: CopiedDocument, transaction: Transaction): Promise<DocumentRow | undefined> {
     const executor = executorOf(this.db, transaction)
+    const envelope = copy.envelope
     const inserted = await executor.execute<{ id: string }>(sql`
-      INSERT INTO ${d} (space_id, folder_id, title, created_by, type, unit_id, profile, format_version, sdk_version)
-      SELECT ${copy.spaceId}::uuid, ${copy.folderId}::uuid, ${copy.title}, ${copy.createdBy}::uuid, ${d.type}, ${d.unitId}, ${d.profile}, ${d.formatVersion}, ${copy.sdkVersion ?? d.sdkVersion}
+      INSERT INTO ${d} (space_id, folder_id, title, created_by, type, unit_id, profile, format_version, sdk_version, client_build, formulas_pending)
+      SELECT ${copy.spaceId}::uuid, ${copy.folderId}::uuid, ${copy.title}, ${copy.createdBy}::uuid, ${d.type}, ${d.unitId}, ${d.profile}, ${d.formatVersion},
+        ${envelope?.sdkVersion ?? d.sdkVersion}::text, ${envelope?.clientBuild ?? d.clientBuild}::text, ${envelope?.formulasPending ?? d.formulasPending}::boolean
       FROM ${d} WHERE ${d.id} = ${sourceId}::uuid AND ${d.status} = 'active'
       RETURNING ${d.id}`)
     const id = inserted.rows[0]?.id
@@ -446,17 +461,27 @@ export class DocumentsRepository {
   }
 
   /**
-   * 修订号前进到 revision（调用方已经锁住这一行并核对过当前修订号），同时更新更新时间与写入时的 SDK 版本。
-   * 条件里再核对一次前一个修订号：万一调用方没有锁住这一行，也不会把修订号写乱。
+   * 修订号前进到 revision（调用方已经锁住这一行并核对过当前修订号），同时更新更新时间与这次写入的信封（SDK 版本、客户端构建、
+   * "公式待更新"，M3-P3 设计 §3.4）。条件里再核对一次前一个修订号：万一调用方没有锁住这一行，也不会把修订号写乱。
    */
-  async advanceRevision(id: string, revision: number, sdkVersion: string, transaction: Transaction): Promise<void> {
+  async advanceRevision(id: string, revision: number, envelope: WriteEnvelope, transaction: Transaction): Promise<void> {
     const updated = await executorOf(this.db, transaction)
       .update(d)
-      .set({ revision, sdkVersion, updatedAt: sql`now()` })
+      .set({ revision, sdkVersion: envelope.sdkVersion, clientBuild: envelope.clientBuild, formulasPending: envelope.formulasPending, updatedAt: sql`now()` })
       .where(and(eq(d.id, id), eq(d.revision, revision - 1)))
       .returning({ id: d.id })
     if (updated.length !== 1)
       throw new Error(`修订号没有从 ${revision - 1} 前进到 ${revision}：${id}`)
+  }
+
+  /**
+   * 只改"公式待更新"（调用方已锁住这一行，M3-P3 设计 §3.7、§3.8）：内容与当前相同、修订号不变的保存照样把标记设成请求里的值——
+   * 公式等到超时、其实值没变时，收齐之后的再保存要清掉它。更新时间不变：内容没有改，列表的排序与游标不动
+   */
+  async setFormulasPending(id: string, formulasPending: boolean, transaction: Transaction): Promise<void> {
+    const updated = await executorOf(this.db, transaction).update(d).set({ formulasPending }).where(eq(d.id, id)).returning({ id: d.id })
+    if (updated.length !== 1)
+      throw new Error(`改"公式待更新"时文档不在了：${id}`)
   }
 
   /**

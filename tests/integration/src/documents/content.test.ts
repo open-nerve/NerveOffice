@@ -239,11 +239,13 @@ describe('US-M1-05 保存', () => {
     expect(audits).toEqual([{ actor_id: alice.id, details: { revision: 2 } }])
   })
 
-  it('没有修改也可以保存：修订号照常加一', async () => {
+  it('US-M3-14 没有修改的保存（M3-P3 设计 §3.7）：存量（没有内容哈希）的第一次保存照常加一、补上哈希；之后内容相同的保存不加修订号——给出当前修订与它的时间，unchanged 为真', async () => {
     const document = await aliceDocument()
     const raw = Buffer.from(sheetSnapshotFor(document.unitId), 'utf8')
-    expect((await saved(await put(aliceSession, document.id, raw, { baseRevision: 1 }))).revision).toBe(2)
-    expect((await saved(await put(aliceSession, document.id, raw, { baseRevision: 2 }))).revision).toBe(3)
+    const first = await saved(await put(aliceSession, document.id, raw, { baseRevision: 1 }))
+    expect(first).toMatchObject({ revision: 2, unchanged: false })
+    expect(await saved(await put(aliceSession, document.id, raw, { baseRevision: 2 }))).toEqual({ revision: 2, savedAt: first.savedAt, unchanged: true })
+    expect(await storedRevision(document.id)).toBe(2)
   })
 
   it('解压后恰好 5 MiB 可以保存', async () => {
@@ -471,19 +473,19 @@ describe('保存的请求体：上限、压缩与内容类型', () => {
   })
 })
 
-describe('保存的基本校验：422 SNAPSHOT_INVALID', () => {
+describe('保存的快照检查：422 SNAPSHOT_INVALID，details 是违反的规则（M3-P3；每条规则的阳性与阴性见 save-protocol.test.ts）', () => {
   it.each([
-    ['不是 JSON', (_unitId: string) => Buffer.from('{"id":', 'utf8')],
-    ['不是 UTF-8', (_unitId: string) => Buffer.from([0x7B, 0xFF, 0x7D])],
-    ['顶层是数组', (unitId: string) => Buffer.from(JSON.stringify([unitId]), 'utf8')],
-    ['sheets 不是对象', (unitId: string) => Buffer.from(JSON.stringify({ id: unitId, sheetOrder: [], sheets: [] }), 'utf8')],
-    ['嵌套超过 64 层', (unitId: string) => Buffer.from(`{"id":"${unitId}","sheetOrder":[],"sheets":{"a":${'['.repeat(80)}${']'.repeat(80)}}}`, 'utf8')],
-    ['unitId 是别的文档的', (_unitId: string) => snapshotOf(randomUUID(), 'x')],
-  ])('%s', async (_case, build) => {
+    ['不是 JSON', 'json', (_unitId: string) => Buffer.from('{"id":', 'utf8')],
+    ['不是 UTF-8', 'encoding', (_unitId: string) => Buffer.from([0x7B, 0xFF, 0x7D])],
+    ['顶层是数组', 'structure', (unitId: string) => Buffer.from(JSON.stringify([unitId]), 'utf8')],
+    ['sheets 不是对象', 'structure', (unitId: string) => Buffer.from(JSON.stringify({ id: unitId, sheetOrder: [], sheets: [] }), 'utf8')],
+    ['嵌套超过 64 层', 'depth', (unitId: string) => Buffer.from(`{"id":"${unitId}","sheetOrder":[],"sheets":{"a":${'['.repeat(80)}${']'.repeat(80)}}}`, 'utf8')],
+    ['unitId 是别的文档的', 'unit-id', (_unitId: string) => snapshotOf(randomUUID(), 'x')],
+  ])('%s：%s', async (_case, rule, build) => {
     const document = await aliceDocument()
     const response = await put(aliceSession, document.id, build(document.unitId))
     expect(response.status).toBe(422)
-    expect((await errorOf(response)).code).toBe('SNAPSHOT_INVALID')
+    expect(await errorOf(response)).toMatchObject({ code: 'SNAPSHOT_INVALID', details: { rule } })
     expect(await storedRevision(document.id)).toBe(1)
   })
 })

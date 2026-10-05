@@ -40,7 +40,7 @@ function integerParam(min: number) {
 
 /**
  * "公式待更新"（M3-P3 设计 §3.8，保存与另存为副本的查询参数）：这份快照里的公式结果可能还没算完（捕获时没等到收齐）。
- * 只接受 true、false；可选，没有这个参数等于 false（P3 之前的页面不带它；服务端从 S4 起按它记下）
+ * 只接受 true、false；可选，没有这个参数等于 false（P3 之前的页面不带它）。服务端把它记在文档上，并计入负载摘要
  */
 export const formulasPendingParam = z.enum(['true', 'false']).transform(value => value === 'true').optional()
 
@@ -70,7 +70,7 @@ export type SaveContentQuery = z.output<typeof saveContentQuerySchema>
 /**
  * 保存成功：修订号与保存时间。重放时是原来的结果。
  * unchanged（M3-P3 设计 §3.7）：内容与当前相同（规范化之后的哈希相同），修订号没有增加，revision 与 savedAt 是当前修订的；
- * 页面照"已保存"处理。S4 之前服务端每次都写入新的修订，一律为 false
+ * 页面照"已保存"处理（重试拿到的是同一个确认：服务端记下了回执）
  */
 export const saveContentResponseSchema = z.object({
   revision: z.number().int().min(1),

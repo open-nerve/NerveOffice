@@ -293,14 +293,15 @@ describe('US-M3-12 只要求能读原文档；读不到与不存在一致', () =
   })
 
   it.each([
-    ['不是 JSON', () => Buffer.from('{"id":', 'utf8')],
-    ['顶层是数组', () => Buffer.from('[]', 'utf8')],
-    ['sheets 不是对象', (unitId: string) => Buffer.from(JSON.stringify({ id: unitId, sheetOrder: [], sheets: [] }), 'utf8')],
-  ])('快照不合格（%s，与保存同一个基本校验）：422 SNAPSHOT_INVALID', async (_case, build) => {
+    ['不是 JSON', 'json', () => Buffer.from('{"id":', 'utf8')],
+    ['顶层是数组', 'structure', () => Buffer.from('[]', 'utf8')],
+    ['sheets 不是对象', 'structure', (unitId: string) => Buffer.from(JSON.stringify({ id: unitId, sheetOrder: [], sheets: [] }), 'utf8')],
+  ])('快照不合格（%s，与保存同一个检查，M3-P3）：422 SNAPSHOT_INVALID，规则 %s', async (_case, rule, build) => {
     const space = await teamSpace()
     const source = await sourceIn(space)
     const response = await postConflictCopy(app.baseUrl, sessionOf(ben), source.id, source.unitId, { raw: build(source.unitId) })
-    expect(await errorOf(response)).toMatchObject({ status: 422, code: 'SNAPSHOT_INVALID' })
+    const { error } = parseExact(errorResponseSchema, await response.json())
+    expect([response.status, error.code, error.details]).toEqual([422, 'SNAPSHOT_INVALID', { rule }])
     expect(await copiesOf(source.id)).toEqual([])
   })
 

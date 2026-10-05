@@ -14,6 +14,7 @@ import { acquiredEditLeaseSchema, createdDocumentSchema, documentDetailSchema, E
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
+import { acquireBody, renewBody } from '../support/client-format.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
@@ -85,7 +86,7 @@ function leasePath(documentId: string): string {
 }
 
 async function acquire(session: LoggedIn, documentId: string, clientInstanceId: string = randomUUID()): Promise<Response> {
-  return asUser(app.baseUrl, session, leasePath(documentId), { method: 'POST', body: { clientInstanceId } })
+  return asUser(app.baseUrl, session, leasePath(documentId), { method: 'POST', body: acquireBody(clientInstanceId) })
 }
 
 async function acquired(session: LoggedIn, documentId: string, clientInstanceId?: string): Promise<AcquiredEditLease> {
@@ -100,7 +101,7 @@ function leaseHeaders(token: string | undefined): Record<string, string> {
 }
 
 async function renew(session: LoggedIn, documentId: string, token: string | undefined, idleSeconds = 0): Promise<Response> {
-  return asUser(app.baseUrl, session, leasePath(documentId), { method: 'PUT', body: { idleSeconds }, headers: leaseHeaders(token) })
+  return asUser(app.baseUrl, session, leasePath(documentId), { method: 'PUT', body: renewBody(idleSeconds), headers: leaseHeaders(token) })
 }
 
 async function release(session: LoggedIn, documentId: string, token: string | undefined): Promise<Response> {

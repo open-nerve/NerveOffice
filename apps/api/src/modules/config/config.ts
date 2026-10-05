@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 import { isIP } from 'node:net'
 import { isAbsolute } from 'node:path'
 import process from 'node:process'
+import { parseVersion } from '@nerve-office/contracts'
 import { z } from 'zod'
 import { Secret } from '../../shared/secret.ts'
 
@@ -104,6 +105,14 @@ export interface AppConfig {
     readonly hashQueue: { readonly maxWaiting: number, readonly maxWaitMs: number }
   }
   /**
+   * 页面（客户端）的版本（M3-P3 设计 §3.5，M3 总设计 §2.1 第 3 条）：数据格式不同的页面一律拦下（CLIENT_OUTDATED），
+   * 另有这个运维开关——客户端有严重缺陷时，构建低于它的页面在保存、另存为副本、申请编辑权与心跳时都被拦下，提示刷新
+   */
+  readonly clients: {
+    /** 最低的客户端构建（x.y.z）；不设时不按构建拦（只按数据格式）。改了要重启：严重缺陷本来就伴随一次修复发布 */
+    readonly minimumBuild: string | undefined
+  }
+  /**
    * 快照的检查（M3-P3 设计 §3.3，DEF-018）：保存与另存为副本的快照在工作线程池里解析、检查与规范化，主线程的事件循环不被阻塞
    */
   readonly snapshotInspection: {
@@ -169,6 +178,10 @@ const publicOrigin = text().transform((value, ctx): string => {
   }
   return url.origin
 })
+
+/** 最低客户端构建的写法：x.y.z（不带前导零的十进制，与 contracts 的版本比较同一个写法）；不带 + 之后的诊断信息（比较时本来就不看） */
+const MINIMUM_BUILD_PROBLEM = '必须是 x.y.z 的版本号（例如 0.1.3：不带前导零，不带 + 之后的诊断信息）'
+const minimumBuild = text().refine(value => !value.includes('+') && parseVersion(value) !== undefined, MINIMUM_BUILD_PROBLEM)
 
 const TRUST_PROXY_NAMES: ReadonlySet<string> = new Set(['loopback', 'linklocal', 'uniquelocal'])
 const TRUST_PROXY_PROBLEM = '必须是 1–10 的跳数，或者由 IP 地址、网段与 loopback、linklocal、uniquelocal 组成的逗号分隔列表'
@@ -244,6 +257,8 @@ const environmentSchema = z.object({
   NERVE_TRASH_PURGE_ENABLED: flag().default(true),
   NERVE_TRASH_PURGE_INTERVAL_MS: integer(1_000, 86_400_000).default(3_600_000),
   NERVE_TRASH_PURGE_BATCH: integer(1, 1_000).default(50),
+  // 最低客户端构建（M3-P3 设计 §3.5）：运维开关，不设时不按构建拦
+  NERVE_MIN_CLIENT_BUILD: minimumBuild.optional(),
   // 快照的检查（M3-P3 设计 §3.3，DEF-018）：默认 2 个工作线程。数字的依据是 DEF-018 的测量（apps/api/scripts/measure-snapshot-inspection.ts）：
   // 5 MiB 以内最费的形状检查一份约 0.6 秒、堆上要约 256 MiB；堆上限低于约 160 MiB 时，有的形状在 JSON.parse 里撞上上限，
   // Node 结束不了线程、整个进程中止，所以堆上限的下限是 256、默认 512（两倍余量）
@@ -393,6 +408,7 @@ function toAppConfig(env: Environment): AppConfig {
       hashConcurrency: env.NERVE_PASSWORD_HASH_CONCURRENCY,
       hashQueue: { maxWaiting: env.NERVE_PASSWORD_HASH_QUEUE_MAX, maxWaitMs: env.NERVE_PASSWORD_HASH_QUEUE_TIMEOUT_MS },
     },
+    clients: { minimumBuild: env.NERVE_MIN_CLIENT_BUILD },
     snapshotInspection: {
       threads: env.NERVE_SNAPSHOT_INSPECTION_THREADS,
       queue: { maxWaiting: env.NERVE_SNAPSHOT_INSPECTION_QUEUE_MAX, maxWaitMs: env.NERVE_SNAPSHOT_INSPECTION_QUEUE_TIMEOUT_MS },

@@ -2,11 +2,14 @@
 // 申请时的标签页放进保存的查询参数（writeEpoch、clientInstanceId）。现有用例的保存都经 saveContent：用例本身的断言不变，
 // 它们要验证的仍是租约之外的步骤（权限、幂等、修订号、锁）。另有心跳、结局与租约行的读取（收回写入权的用例），
 // 以及改写租约行时间的两个辅助（到期、空闲），不等真实的时间。
+// M3-P3 起申请、心跳与保存都带页面的构建与数据格式（support/client-format.ts）：这里的请求扮演现在的页面。
+import type { ClientFormat } from '@nerve-office/contracts'
 import type { TestDatabase } from './database.ts'
 import type { LoggedIn } from './session-client.ts'
 import { randomUUID } from 'node:crypto'
 import { acquiredEditLeaseSchema, EDIT_LEASE_HEADER, editLeaseLostDetailsSchema, errorResponseSchema } from '@nerve-office/contracts'
 import { expect } from 'vitest'
+import { acquireBody, clientFormatQuery, renewBody } from './client-format.ts'
 import { parseExact } from './contracts.ts'
 import { asUser } from './session-client.ts'
 
@@ -23,7 +26,7 @@ function leasePath(documentId: string): string {
 
 /** 申请编辑权：成功（201）时是租约；申请不了（看不到、只能查看、别人正在编辑、没有登录）时为 undefined */
 export async function tryAcquireLease(baseUrl: string, user: LoggedIn, documentId: string, clientInstanceId: string = randomUUID()): Promise<HeldLease | undefined> {
-  const response = await asUser(baseUrl, user, leasePath(documentId), { method: 'POST', body: { clientInstanceId } })
+  const response = await asUser(baseUrl, user, leasePath(documentId), { method: 'POST', body: acquireBody(clientInstanceId) })
   if (response.status !== 201) {
     await response.arrayBuffer()
     return undefined
@@ -48,7 +51,7 @@ export async function releaseLease(baseUrl: string, user: LoggedIn, documentId: 
 
 /** 心跳续租（页面每 10 秒一次）：带着这份租约的令牌，上报没有空闲 */
 export async function renewLease(baseUrl: string, user: LoggedIn, documentId: string, lease: HeldLease): Promise<Response> {
-  return asUser(baseUrl, user, leasePath(documentId), { method: 'PUT', body: { idleSeconds: 0 }, headers: { [EDIT_LEASE_HEADER]: lease.token } })
+  return asUser(baseUrl, user, leasePath(documentId), { method: 'PUT', body: renewBody(0), headers: { [EDIT_LEASE_HEADER]: lease.token } })
 }
 
 /**
@@ -104,13 +107,15 @@ export interface SaveOptions {
   readonly lease?: HeldLease
   /** 没给租约时申请用的标签页（用例要核对保存的来源时给定）；默认每次一个新的 */
   readonly clientInstanceId?: string
-  /** 覆盖查询参数（反向用例：不合法的参数） */
+  /** 覆盖查询参数（反向用例：不合法的参数；"公式待更新"） */
   readonly query?: Readonly<Record<string, string>>
+  /** 页面上报的构建与数据格式（M3-P3）：默认是现在的页面；旧页面给 {}（什么也不报）或者改写其中的一项 */
+  readonly clientFormat?: ClientFormat
   /** 另加或覆盖的请求头（反向用例：Origin、CSRF 令牌、租约令牌） */
   readonly headers?: Readonly<Record<string, string | undefined>>
 }
 
-/** 保存的地址：查询参数里带着租约的代次与标签页 */
+/** 保存的地址：查询参数里带着租约的代次与标签页，与现在的页面的构建与数据格式（M3-P3） */
 export function contentPathWithLease(documentId: string, lease: HeldLease, options: SaveOptions): string {
   const query = new URLSearchParams({
     baseRevision: String(options.baseRevision),
@@ -118,6 +123,7 @@ export function contentPathWithLease(documentId: string, lease: HeldLease, optio
     clientInstanceId: lease.clientInstanceId,
     localSeq: String(options.localSeq ?? 1),
     writeEpoch: String(lease.writeEpoch),
+    ...clientFormatQuery(options.clientFormat),
     ...options.query,
   })
   return `/api/documents/${documentId}/content?${query.toString()}`

@@ -51,6 +51,8 @@ describe('loadConfig', () => {
       password: { argon2: { memoryKib: 19_456, iterations: 2, parallelism: 1 }, hashConcurrency: 2, hashQueue: { maxWaiting: 64, maxWaitMs: 5_000 } },
       // 回收站的自动清理默认开着：每小时一轮，一轮最多 50 个删除单元
       jobs: { trashPurge: { enabled: true, intervalMs: 3_600_000, batchSize: 50 } },
+      // 页面的版本：默认不按构建拦（只按数据格式，M3-P3 设计 §3.5）
+      clients: { minimumBuild: undefined },
       // 快照的检查：2 个工作线程，排队 8 个、等 10 秒，一份 10 秒，每个线程的堆 512 MiB（DEF-018 的测量）
       snapshotInspection: { threads: 2, queue: { maxWaiting: 8, maxWaitMs: 10_000 }, timeoutMs: 10_000, heapMb: 512 },
     })
@@ -99,6 +101,7 @@ describe('loadConfig', () => {
       NERVE_SNAPSHOT_INSPECTION_QUEUE_TIMEOUT_MS: '1500',
       NERVE_SNAPSHOT_INSPECTION_TIMEOUT_MS: '20000',
       NERVE_SNAPSHOT_INSPECTION_HEAP_MB: '1024',
+      NERVE_MIN_CLIENT_BUILD: '0.2.10',
     })
     const { url, ...database } = config.database
     expect(url.reveal()).toBe('postgresql://u:p@127.0.0.1:5432/db')
@@ -129,6 +132,15 @@ describe('loadConfig', () => {
     expect(config.web.root).toBe('/srv/nerve-office/web')
     expect(config.jobs).toEqual({ trashPurge: { enabled: false, intervalMs: 900_000, batchSize: 10 } })
     expect(config.snapshotInspection).toEqual({ threads: 4, queue: { maxWaiting: 0, maxWaitMs: 1_500 }, timeoutMs: 20_000, heapMb: 1_024 })
+    expect(config.clients).toEqual({ minimumBuild: '0.2.10' })
+  })
+
+  it('最低客户端构建（M3-P3 设计 §3.5）只认 x.y.z：前导零、少一段、多一段、带 + 之后的诊断信息与别的写法都拒绝启动', () => {
+    for (const value of ['1.0', '1.0.0.0', '01.0.0', '1.0.0+abc', 'v1.0.0', '1.0.0-rc.1', 'latest', ' 1.0.0'])
+      expect(issuesOf(() => loadConfig({ ...REQUIRED, NERVE_MIN_CLIENT_BUILD: value })), value).toEqual([{ variable: 'NERVE_MIN_CLIENT_BUILD', problem: '必须是 x.y.z 的版本号（例如 0.1.3：不带前导零，不带 + 之后的诊断信息）' }])
+    expect(loadConfig({ ...REQUIRED, NERVE_MIN_CLIENT_BUILD: '0.0.0' }).clients.minimumBuild).toBe('0.0.0')
+    // 空值视为没有设置（编排文件里 VAR= 的写法）
+    expect(loadConfig({ ...REQUIRED, NERVE_MIN_CLIENT_BUILD: '' }).clients.minimumBuild).toBeUndefined()
   })
 
   it('快照检查的工作线程按整数范围校验；每个线程的堆至少 256 MiB（更低时有的快照在 JSON.parse 里撞上上限，整个进程中止，DEF-018）', () => {

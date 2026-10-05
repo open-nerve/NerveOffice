@@ -24,6 +24,7 @@ import { acquiredEditLeaseSchema, EDIT_LEASE_TTL_SECONDS, editStatusSchema, SHEE
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
+import { acquireBody } from '../support/client-format.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
@@ -110,7 +111,7 @@ async function save(user: LoggedIn, document: SeededDocument, lease: HeldLease, 
 }
 
 async function acquire(user: LoggedIn, documentId: string, clientInstanceId: string = randomUUID()): Promise<Response> {
-  return asUser(app.baseUrl, user, `/api/documents/${documentId}/edit-lease`, { method: 'POST', body: { clientInstanceId } })
+  return asUser(app.baseUrl, user, `/api/documents/${documentId}/edit-lease`, { method: 'POST', body: acquireBody(clientInstanceId) })
 }
 
 /** 持有者之后的心跳与保存各自的结局（同一个页面：同一份租约） */

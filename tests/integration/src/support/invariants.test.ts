@@ -100,6 +100,21 @@ describe('数据不变量的扫描（M2-P6 复核 B 的 B5）', () => {
          VALUES ($1, $2, $3, $4, sha256('lease'::bytea), 5, now(), now(), now() + interval '90 seconds', now())`,
         [await w.document(first), owner.id, randomUUID(), randomUUID()],
       )
+      // I17：当前修订（修订号 1）的记录带着一个内容哈希，内容上是另一个
+      const hashed = await w.document(first)
+      await client.query(
+        `INSERT INTO document_contents (document_id, snapshot, raw_bytes, stored_bytes, content_hash, resource_names) VALUES ($1, '\\x00'::bytea, 1, 1, sha256('a'::bytea), '{}')`,
+        [hashed],
+      )
+      await client.query(
+        `INSERT INTO document_revisions (document_id, revision, kind, request_id, payload_digest, saved_by, content_hash) VALUES ($1, 1, 'created', $2, sha256('c'::bytea), $3, sha256('b'::bytea))`,
+        [hashed, randomUUID(), owner.id],
+      )
+      // I18：回执的修订号比文档的大（文档的修订号是 1）
+      await client.query(
+        `INSERT INTO document_save_receipts (request_id, document_id, revision, payload_digest, saved_by, saved_at) VALUES ($1, $2, 5, sha256('r'::bytea), $3, now())`,
+        [randomUUID(), await w.document(first), owner.id],
+      )
     })
 
     const failure = await database.drop().then(() => undefined, (error: unknown) => error as Error)

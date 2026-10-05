@@ -377,6 +377,24 @@ describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
   })
 
   it.each([
+    ['比本页的 SDK 新', '9.9.9'],
+    ['认不出的写法', 'nightly'],
+  ])('文档记录的 SDK 版本%s（服务端回滚之后，M3-P3）：照常以只读打开，只能阅读（blocked），不直接进入编辑、不申请编辑权', async (_case, sdkVersion) => {
+    const { editorPage, createEditor, api } = setup({ api: { document: async () => ({ ...DETAIL, sdkVersion }) }, editIntent: true })
+    await editorPage.load()
+    expect(editorPage.view().load).toMatchObject({ kind: 'ready' })
+    expect(editorPage.view().mode).toMatchObject({ kind: 'reading', blocked: 'document-too-new' })
+    expect(createEditor).toHaveBeenCalledOnce()
+    expect(api.editLease.acquire).not.toHaveBeenCalled()
+  })
+
+  it('文档记录的 SDK 版本比本页旧（升级之后的存量）：照常打开，?edit=new 直接进入编辑', async () => {
+    const { editorPage } = setup({ api: { document: async () => ({ ...DETAIL, sdkVersion: '0.9.0' }) } })
+    await editorPage.load()
+    expect(editorPage.view().mode).toMatchObject({ kind: 'editing' })
+  })
+
+  it.each([
     ['会话', { session: async () => Promise.reject(new ApiError(401, 'UNAUTHENTICATED', '请先登录')) }, `/login?from=%2Fdocuments%2F${DOCUMENT_ID}`],
     ['内容', { content: async () => Promise.reject(new ApiError(401, 'SESSION_EXPIRED', '已过期')) }, `/login?from=%2Fdocuments%2F${DOCUMENT_ID}&reason=expired`],
   ])('读取%s时未登录：整页转到登录页，登录之后回到这里', async (_case, api, target) => {
@@ -1787,7 +1805,7 @@ describe('阅读与编辑的切换（M3-P2 设计 §3.1、§3.4）', () => {
     await settle()
     expect(modeOf(editorPage)).toMatchObject({ kind: 'lost', unsaved: true, readable: true })
     await editorPage.saveCopy()
-    expect(api.conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { requestId: expect.stringMatching(/^id-\d+$/) as unknown, title: '周报（冲突副本 2026-10-04 15:30）' }, expect.anything())
+    expect(api.conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { requestId: expect.stringMatching(/^id-\d+$/) as unknown, title: '周报（冲突副本 2026-10-04 15:30）', formulasPending: false }, expect.anything())
     expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', notice: { kind: 'copied', document: { id: COPY_ID } } })
   })
 

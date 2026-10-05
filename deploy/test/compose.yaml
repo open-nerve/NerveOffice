@@ -17,6 +17,8 @@ x-nerve-environment: &nerve-environment
   NERVE_TRASH_PURGE_ENABLED: ${NERVE_TRASH_PURGE_ENABLED:-true}
   NERVE_TRASH_PURGE_INTERVAL_MS: ${NERVE_TRASH_PURGE_INTERVAL_MS:-3600000}
   NERVE_TRASH_PURGE_BATCH: ${NERVE_TRASH_PURGE_BATCH:-50}
+  # 最低客户端构建（M3-P3）：构建低于它的页面保存、申请编辑权与心跳时被拦下、提示刷新；空值（默认）不按构建拦
+  NERVE_MIN_CLIENT_BUILD: ${NERVE_MIN_CLIENT_BUILD:-}
 
 services:
   db:

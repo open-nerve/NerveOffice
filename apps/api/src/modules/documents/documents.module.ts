@@ -6,6 +6,7 @@ import { APP_CONFIG } from '../config/index.ts'
 import { DatabaseModule } from '../database/index.ts'
 import { AppLogger } from '../logging/index.ts'
 import { SpacesModule } from '../spaces/index.ts'
+import { ClientFormatGate } from './client-format-gate.ts'
 import { DocumentAccessPolicy, EffectiveAccessPolicy } from './document-access-policy.ts'
 import { DocumentConflictCopyService } from './document-conflict-copy.service.ts'
 import { DocumentContentController } from './document-content.controller.ts'
@@ -17,6 +18,7 @@ import { DocumentGrantsRepository } from './document-grants.repository.ts'
 import { DocumentGrantsService } from './document-grants.service.ts'
 import { DocumentOrganizingService } from './document-organizing.service.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
+import { DocumentSaveReceiptsRepository } from './document-save-receipts.repository.ts'
 import { DocumentSearchService } from './document-search.service.ts'
 import { DocumentTransferService } from './document-transfer.service.ts'
 import { DocumentsController } from './documents.controller.ts'
@@ -44,6 +46,8 @@ import { WriteAccessRevocation } from './write-access.ts'
     DocumentsRepository,
     DocumentContentsRepository,
     DocumentRevisionsRepository,
+    // 保存的回执（M3-P3）：内容相同、修订号没变的确认，只给本模块的保存
+    DocumentSaveReceiptsRepository,
     FoldersRepository,
     TrashEntriesRepository,
     SpaceTreeRepository,
@@ -73,6 +77,8 @@ import { WriteAccessRevocation } from './write-access.ts'
     { provide: DocumentAccessPolicy, useClass: EffectiveAccessPolicy },
     // 收回写入权的入口（M2-P2 设计 §3.7）：M3-P1 起接上编辑租约（结束失去写入权的人的租约、代次加一），调用方不改
     { provide: WriteAccessRevocation, useClass: LeaseWriteAccessRevocation },
+    // 拦截旧客户端（M3-P3 设计 §3.5）：按运维开关核对页面上报的构建与数据格式；保存、另存为副本与编辑租约的服务用
+    ClientFormatGate,
     // 快照的检查（M3-P3 设计 §3.3）：工作线程池，线程按需创建、退出时结束；只在本模块里用（保存与另存为副本）
     {
       provide: SnapshotInspector,

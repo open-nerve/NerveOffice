@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer'
+import { createHash } from 'node:crypto'
 import zlib from 'node:zlib'
-import { sheetSnapshotFor, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
+import { canonicalContentText, contentHashInput, sheetSnapshotFor, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { DocumentCreationService } from './document-creation.service.ts'
@@ -37,8 +38,11 @@ describe('DocumentCreationService.create', () => {
     const raw = zlib.gunzipSync(stored?.snapshot ?? Buffer.alloc(0)).toString('utf8')
     expect(raw).toBe(sheetSnapshotFor(row?.unitId ?? ''))
     expect(stored?.rawBytes).toBe(Buffer.byteLength(raw))
+    // 内容哈希与非空的资源名（M3-P3）：按这份文档的模板算（unitId 不同，哈希就不同）；模板的资源都是空的
+    const contentHash = createHash('sha256').update(contentHashInput(canonicalContentText(raw))).digest()
+    expect(stored).toMatchObject({ contentHash, resourceNames: [] })
 
-    expect(store.revisions).toEqual([expect.objectContaining({ documentId: detail.id, revision: 1, kind: 'created', requestId: REQUEST_ID, source: null, savedBy: ALICE })])
+    expect(store.revisions).toEqual([expect.objectContaining({ documentId: detail.id, revision: 1, kind: 'created', requestId: REQUEST_ID, source: null, savedBy: ALICE, contentHash, clientBuild: null })])
     expect(store.revisions[0]?.payloadDigest).toEqual(createdPayloadDigest('sheet', '周报'))
     expect(store.audits).toEqual([{ action: 'documents.created', actor: { type: 'user', id: ALICE }, target: { type: 'document', id: detail.id }, origin: HTTP_ORIGIN, details: { revision: 1, folderId: null } }])
   })
@@ -49,6 +53,8 @@ describe('DocumentCreationService.create', () => {
     const second = await service.create(member(ALICE), { type: 'sheet', requestId: '0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0e' }, HTTP_ORIGIN)
     expect(first.title).toBe('未命名表格')
     expect(store.documents.get(first.id)?.unitId).not.toBe(store.documents.get(second.id)?.unitId)
+    // 每份新文档的哈希单独算：模板的顶层 id 是各自的 unitId
+    expect(store.contents.get(first.id)?.contentHash).not.toEqual(store.contents.get(second.id)?.contentHash)
   })
 
   it('先按 requestId 排队，再查修订记录', async () => {

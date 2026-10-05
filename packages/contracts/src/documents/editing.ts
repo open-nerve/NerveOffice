@@ -71,7 +71,7 @@ export type EditInterruption = z.infer<typeof editInterruptionSchema>
  *   续上时（编辑权中断之后同一个页面重新申请），修订号比本页的基准新，页面据此认出期间的那一版是不是本页自己一次结果未知的保存：
  *   是的话以它为基准接着编辑，不当成别处的修改（00 号计划书 §7.5）。取法与修订号冲突的详情相同；
  * - expiresAt：到期时间；interruption：上一个租约异常结束的提醒，没有时为 null；
- * - formulasPending：文档的"公式待更新"（M3-P3 设计 §3.8）：P4 据此在进入编辑时先全量重算。S4 之前服务端没有记下它，一律为 false。
+ * - formulasPending：文档的"公式待更新"（M3-P3 设计 §3.8，最近一次写入时页面带来的标记）：P4 据此在进入编辑时先全量重算。
  * 响应的结构宽松（多出的字段被丢弃），见 auth 的会话信息
  */
 export const acquiredEditLeaseSchema = z.object({
@@ -121,7 +121,7 @@ export type DocumentEditor = z.infer<typeof documentEditorSchema>
  * 编辑状态（GET /api/documents/{id}/edit-lease，能读就能看，在只读快照里读，ADR-017）：文档当前的修订号，
  * 正在编辑的人——没有有效的租约时为 null，调用者现在能不能编辑这份文档（canEdit，M3-P2 设计 §3.2：与详情的
  * permissions.canEdit 同一个规则、同一个快照里算；阅读页每 30 秒读一次，据此显示或隐藏"编辑"——权限在阅读期间可能变化），
- * 以及文档的"公式待更新"（formulasPending，M3-P3 设计 §3.8：阅读页据此说明公式结果可能还没更新，P4。S4 之前一律为 false）
+ * 以及文档的"公式待更新"（formulasPending，M3-P3 设计 §3.8：阅读页据此说明公式结果可能还没更新，P4）
  */
 export const editStatusSchema = z.object({
   revision: z.number().int().min(1),

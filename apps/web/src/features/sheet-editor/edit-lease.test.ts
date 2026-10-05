@@ -1,4 +1,5 @@
 import type { AcquiredEditLease, RenewedEditLease, UserSummary } from '@nerve-office/contracts'
+import type { Incompatibility } from './client-format.ts'
 import type { EditLeaseApi, EditLeaseOptions, LeaseLoss } from './edit-lease.ts'
 import { EDIT_IDLE_SECONDS_MAX, EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -72,6 +73,7 @@ function setup(api: Partial<EditLeaseApi> = {}) {
   }
   const onLost = vi.fn<(loss: LeaseLoss) => void>()
   const onSessionProblem = vi.fn<(error: ApiError) => void>()
+  const onIncompatible = vi.fn<(kind: Incompatibility) => void>()
   /** 页面认不认得出期间的那一版是自己的保存：默认认不出（别处保存的） */
   const adopt = vi.fn<EditLeaseOptions['adoptOwnRevision']>(() => false)
   const options: EditLeaseOptions = {
@@ -84,12 +86,14 @@ function setup(api: Partial<EditLeaseApi> = {}) {
     adoptOwnRevision: adopt,
     onLost,
     onSessionProblem,
+    onIncompatible,
   }
   return {
     time,
     api: fakeApi,
     onLost,
     onSessionProblem,
+    onIncompatible,
     adopt,
     options,
     calls,
@@ -834,5 +838,49 @@ describe('trackActivity：在捕获阶段记下键盘、鼠标操作', () => {
     inner.dispatchEvent(new Event('keydown', { bubbles: true }))
     expect(onActivity).toHaveBeenCalledTimes(4)
     window.removeEventListener('keydown', block, { capture: true })
+  })
+})
+
+describe('与服务端不兼容（M3-P3 设计 §3.5）：本页过旧、文档比服务端新', () => {
+  it.each([
+    ['CLIENT_OUTDATED', 'client-outdated'],
+    ['DOCUMENT_TOO_NEW', 'document-too-new'],
+  ] as const)('续租得到 %s：停止续租、尽力放掉手里那一代，通知页面一次（%s），不当作失效、不续上', async (code, kind) => {
+    const context = setup({ renew: vi.fn(async () => Promise.reject(new ApiError(409, code, '不兼容'))) })
+    const lease = await held(context)
+    await context.time.advance(10_000)
+    expect(context.onIncompatible).toHaveBeenCalledExactlyOnceWith(kind)
+    expect(context.onLost).not.toHaveBeenCalled()
+    expect(context.calls).toEqual(['release T'])
+    expect(context.api.acquire).toHaveBeenCalledOnce()
+    await context.time.advance(60_000)
+    expect(context.api.renew).toHaveBeenCalledOnce()
+    expect(context.time.pending()).toBe(0)
+    // 终态：之后再释放不再发，保存得知的失效也不再续上
+    expect(await lease.release()).toBe(true)
+    expect(await lease.lose({ kind: 'lease', reason: 'expired' }, lease.credentials())).toEqual({ kind: 'lost' })
+    expect(context.calls).toEqual(['release T'])
+  })
+
+  it('续上的申请得到 CLIENT_OUTDATED（编辑权中断期间服务端升级了）：通知页面需要刷新，不当作失效', async () => {
+    const context = setup()
+    const renew = vi.fn<EditLeaseApi['renew']>().mockRejectedValueOnce(lostError('expired'))
+    Object.assign(context.api, { renew })
+    await held(context)
+    context.api.acquire.mockRejectedValueOnce(new ApiError(409, 'CLIENT_OUTDATED', '页面的版本过旧', { details: { reason: 'format' } }))
+    await context.time.advance(10_000)
+    expect(context.onIncompatible).toHaveBeenCalledExactlyOnceWith('client-outdated')
+    expect(context.onLost).not.toHaveBeenCalled()
+    await context.time.advance(60_000)
+    expect(renew).toHaveBeenCalledOnce()
+  })
+
+  it('第一次申请得到 CLIENT_OUTDATED、DOCUMENT_TOO_NEW：原样抛出，由页面留在阅读并说明，不再试', async () => {
+    for (const code of ['CLIENT_OUTDATED', 'DOCUMENT_TOO_NEW']) {
+      const error = new ApiError(409, code, '不兼容')
+      const context = setup({ acquire: vi.fn(async () => Promise.reject(error)) })
+      await expect(acquireEditLease(context.options)).rejects.toBe(error)
+      expect(context.api.acquire).toHaveBeenCalledOnce()
+    }
   })
 })

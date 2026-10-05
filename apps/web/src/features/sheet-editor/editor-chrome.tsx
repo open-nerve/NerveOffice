@@ -5,17 +5,20 @@
 // - 编辑：保存状态、"保存"、"退出编辑"，保存的各种结果；
 // - 失去编辑权：原因；还读得到而且有修改时"另存为副本""放弃本页的修改"（确认），没有修改时"重新加载"，读不到了时只说明。
 // 页头的文档详情没能刷新时说明、可以重试（DEF-040，与列表的"没能刷新"同一个做法）。
+// M3-P3（设计 §3.10）：本页与服务端不兼容时说明——编辑时保存的状态是"需要刷新"（本页过旧，给"重新加载"）或"不能保存"（文档由更新的版本
+// 保存过），阅读时不给"编辑"；快照达到容量的 80% 时在一直在的读屏状态区里给一条不打断的说明；保存被拒（SNAPSHOT_INVALID）按违反的规则说。
 // 有焦点的按钮随状态消失时（"编辑"随权限消失、"有更新"载入之后、失去编辑权时的"保存""退出编辑"等），焦点交给一直在的返回链接
 // （规范 §2.4，审查 A2）；编辑器没能重新打开时，从销毁的编辑器落到 body 的焦点交给失效说明里的按钮（复验 C2）。
 // 编辑器本身挂在页头之外的容器里（editor.html 的 #sheet-editor），不归 React 管。
 import type { ReactNode, RefObject } from 'react'
 import type { Phrase as PhraseParts } from '../../shared/i18n/index.ts'
 import type { PendingConfirmation } from '../confirmation/index.ts'
+import type { Incompatibility } from './client-format.ts'
 import type { LeaseHolder, LeaseLoss } from './edit-lease.ts'
 import type { LostMode, ReadingMode, ReadingNotice } from './edit-mode.ts'
 import type { EditorPage, EditorPageLoad, EditorPageReady, EditorPageSession, EditorPageView } from './editor-page.ts'
 import type { SaveProblem, SaveView } from './save-coordinator.ts'
-import { documentPagePath } from '@nerve-office/contracts'
+import { documentPagePath, SNAPSHOT_MAX_RAW_BYTES, SNAPSHOT_WARN_RAW_BYTES, snapshotInvalidDetailsSchema } from '@nerve-office/contracts'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { ArrowLeft } from 'lucide-react'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
@@ -72,6 +75,11 @@ function problemMessage(problem: SaveProblem, sessionProblem: unknown): { text: 
     const reason = describeError(sessionProblem)
     return { text: editorMessages.saveFailed(editorMessages.sessionCheckFailed(reason.message)), requestId: reason.requestId, destructive: true }
   }
+  // 快照被服务端拒绝（M3-P3）：按违反的规则说（链接、图片、资源、过于复杂……），不认识的规则照"格式不正确"说
+  if (problem.error instanceof ApiError && problem.error.code === 'SNAPSHOT_INVALID') {
+    const details = snapshotInvalidDetailsSchema.safeParse(problem.error.details ?? {})
+    return { text: editorMessages.saveFailed(editorMessages.snapshotInvalid(details.success ? details.data.rule : undefined)), requestId: problem.error.requestId, destructive: true }
+  }
   // 400（请求不合法）是这次请求本身的问题，按错误码说明（M2-P6 复核第二批 G-5）
   const error = describeError(problem.error)
   return { text: editorMessages.saveFailed(error.message), requestId: error.requestId, destructive: true }
@@ -93,7 +101,10 @@ function headerStatus(view: EditorPageView): string {
       // 点了"编辑"、要先向服务端确认会话（审查 A10）：确认期间说正在确认，与按保存时的确认相同（复验 C8）
       if (view.confirmingSession)
         return messages.auth.checkingSession
-      return mode.canEdit ? '' : editorMessages.status.readOnly
+      // 与服务端不兼容（M3-P3）：本页过旧时需要刷新；文档由更新的版本保存过时只能查看
+      if (mode.blocked === 'client-outdated')
+        return editorMessages.status.outdated
+      return mode.canEdit && mode.blocked === undefined ? '' : editorMessages.status.readOnly
     case 'entering':
       return editorMessages.mode.entering
     case 'editing':
@@ -146,7 +157,8 @@ function SaveControls({ page, save, confirming, exiting, apple }: { page: Editor
 function ReadingControls({ page, reading, session, confirming }: { page: EditorPage, reading: ReadingMode | undefined, session: EditorPageSession, confirming: boolean }) {
   const entering = reading === undefined
   const update = reading?.update ?? 'none'
-  const offersEdit = reading === undefined || (reading.canEdit && !reading.gone)
+  // 与服务端不兼容（M3-P3）时不给"编辑"：申请也会被拒，重新加载才是新的页面
+  const offersEdit = reading === undefined || (reading.canEdit && !reading.gone && reading.blocked === undefined)
   return (
     <>
       {update !== 'none' && (
@@ -163,9 +175,49 @@ function ReadingControls({ page, reading, session, confirming }: { page: EditorP
   )
 }
 
+/** 编辑时与服务端不兼容（M3-P3）：保存的状态是终态 outdated、too-new；其余为 undefined */
+function editingBlock(save: SaveView): Incompatibility | undefined {
+  if (save.status === 'outdated')
+    return 'client-outdated'
+  return save.status === 'too-new' ? 'document-too-new' : undefined
+}
+
+/**
+ * 与服务端不兼容的说明（M3-P3 设计 §3.10）：本页过旧时给"重新加载"（重新加载就是新的页面；编辑时本页的修改没保存的话先说明复制出来）；
+ * 文档由更新的版本保存过时只说明——重新加载拿到的还是同一个版本，不提示刷新（那会死循环）
+ */
+function IncompatibleNotice({ kind, editing, unsaved, onReload }: { kind: Incompatibility, editing: boolean, unsaved: boolean, onReload: () => void }) {
+  if (kind === 'document-too-new') {
+    return (
+      <Alert variant={editing ? 'destructive' : 'default'}>
+        <AlertDescription>{editing ? editorMessages.incompatible.tooNewEditing(unsaved) : editorMessages.incompatible.tooNewReading}</AlertDescription>
+      </Alert>
+    )
+  }
+  return (
+    <Alert variant="destructive">
+      <AlertDescription>
+        <p>{editing ? editorMessages.incompatible.outdatedEditing(unsaved) : editorMessages.incompatible.outdatedReading}</p>
+        <Button variant="outline" size="sm" className="mt-2" onClick={onReload}>{editorMessages.reload}</Button>
+      </AlertDescription>
+    </Alert>
+  )
+}
+
+/** 最近一次捕获达到容量的 80%（US-M3-14）、还没超过上限时的说明；超过上限由保存失败（too-large）说明 */
+function capacityNote(save: SaveView | undefined): string | undefined {
+  const bytes = save?.snapshotBytes
+  if (bytes === undefined || bytes < SNAPSHOT_WARN_RAW_BYTES || bytes > SNAPSHOT_MAX_RAW_BYTES)
+    return undefined
+  return editorMessages.nearCapacity(Math.floor((bytes / SNAPSHOT_MAX_RAW_BYTES) * 100))
+}
+
 function SaveNotices({ view, save, onReload }: { view: EditorPageView, save: SaveView, onReload: () => void }) {
   const { session } = view
   const notices: ReactNode[] = []
+  const block = editingBlock(save)
+  if (block !== undefined)
+    notices.push(<IncompatibleNotice key="incompatible" kind={block} editing unsaved={save.unsaved} onReload={onReload} />)
   if (save.conflict !== undefined) {
     notices.push(
       <Alert key="conflict" variant="destructive">
@@ -189,8 +241,8 @@ function SaveNotices({ view, save, onReload }: { view: EditorPageView, save: Sav
       </Alert>,
     )
   }
-  // 会话不是本人时本页不能保存，"稍后再保存一次"不成立（复验 SB9）
-  if (save.formulasPending && save.status !== 'saving' && session === 'active') {
+  // 会话不是本人时本页不能保存，"稍后再保存一次"不成立（复验 SB9）；与服务端不兼容之后同样不成立
+  if (save.formulasPending && save.status !== 'saving' && session === 'active' && block === undefined) {
     notices.push(
       <Alert key="formulas">
         <AlertDescription>{editorMessages.formulasPending}</AlertDescription>
@@ -477,7 +529,8 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
             {editing !== undefined && <SaveControls page={page} save={editing} confirming={view.confirmingSession} exiting={mode?.kind === 'exiting'} apple={apple} />}
           </div>
         </header>
-        <StatusRegion className="mx-3 mt-2 rounded-lg border bg-card px-2.5 py-2 text-sm text-card-foreground">{readingInfo(reading)}</StatusRegion>
+        {/* 一直在的读屏状态区：阅读时谁在编辑、有更新等；编辑时快照接近容量上限的说明（不打断，M3-P3） */}
+        <StatusRegion className="mx-3 mt-2 rounded-lg border bg-card px-2.5 py-2 text-sm text-card-foreground">{readingInfo(reading) ?? capacityNote(editing)}</StatusRegion>
         <div className="flex flex-col gap-2 px-3 empty:hidden [&:not(:empty)]:py-2">
           {/* 一直渲染（没有问题时什么也不画）：重试成功、说明连同"重试"一起消失时它才能把焦点交给返回链接（DEF-040） */}
           <DetailRefreshProblem
@@ -490,6 +543,8 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
               <AlertDescription>{failure}</AlertDescription>
             </Alert>
           )}
+          {/* 阅读时与服务端不兼容（M3-P3）：打开时就看得出、申请编辑权时得知，或者编辑时得知之后退出了编辑 */}
+          {reading?.blocked !== undefined && <IncompatibleNotice kind={reading.blocked} editing={false} unsaved={false} onReload={page.reload} />}
           {lost !== undefined && <LostNotice page={page} lost={lost} onDiscard={confirmDiscard} fallbackFocus={backRef} />}
           {/* 版本冲突之后本页不能再保存：会话的提示（"登录之后回到这里保存"）不成立，只显示冲突的说明（复验 SB9；换了人时那条说明里另有一句，复验 TB8）；
               读不到了（404）之后没有要做的事，不提登录 */}

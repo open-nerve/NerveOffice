@@ -24,7 +24,7 @@ function nextRequestId(): string {
 function seed(store: FakeStore, overrides: Parameters<FakeStore['addDocument']>[0] = {}) {
   const document = store.addDocument({ title: '周报', ...overrides })
   const snapshot = Buffer.from(`gzip:${document.id}`, 'utf8')
-  store.contents.set(document.id, { snapshot, rawBytes: 100 })
+  store.contents.set(document.id, { snapshot, rawBytes: 100, contentHash: Buffer.alloc(32, 7), resourceNames: ['SHEET_NOTE_PLUGIN'] })
   return { document, snapshot }
 }
 
@@ -47,7 +47,9 @@ describe('DocumentCopyService.copy', () => {
     // unitId 原样复制（00 号计划书 §8.3）：副本与源的快照逐字节一致
     expect(store.documents.get(copy.id)?.unitId).toBe(document.unitId)
     expect(store.contentOf(copy.id)).toBe(snapshot)
-    expect(store.revisions.filter(row => row.documentId === copy.id)).toMatchObject([{ revision: 1, kind: 'created', savedBy: ALICE }])
+    // 内容哈希与非空的资源名一起复制（M3-P3）；副本的修订记录记下这份内容的哈希，没有客户端构建（服务端写的）
+    expect(store.contents.get(copy.id)).toMatchObject({ contentHash: Buffer.alloc(32, 7), resourceNames: ['SHEET_NOTE_PLUGIN'] })
+    expect(store.revisions.filter(row => row.documentId === copy.id)).toMatchObject([{ revision: 1, kind: 'created', savedBy: ALICE, contentHash: Buffer.alloc(32, 7), clientBuild: null }])
     // 源文档的内容与修订记录一点不动
     expect(store.contentOf(document.id)).toBe(snapshot)
     expect(store.revisions.filter(row => row.documentId === document.id)).toEqual([])

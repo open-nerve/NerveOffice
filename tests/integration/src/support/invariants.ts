@@ -47,6 +47,14 @@ export const INVARIANTS: Readonly<Record<string, string>> = {
   // 比文档大的租约在文档的代次追上来时会重新对得上——已经失效的旧租约又能写了
   'I16 租约的代次不大于文档的代次':
     'SELECT l.document_id, l.write_epoch, d.write_epoch AS document_epoch FROM document_edit_leases l JOIN documents d ON d.id = l.document_id WHERE l.write_epoch > d.write_epoch',
+  // 保存协议（M3-P3）：每次写入内容都写一条修订记录、两边带同一个内容哈希（新建、复制、另存为副本、保存）；内容相同的保存两边都不写。
+  // 所以当前修订的那一条记录与当前内容的哈希相同（存量两边都为空）。只写了一边（例如写了内容、修订记录忘了带哈希）就违反
+  'I17 当前修订的修订记录与当前内容的哈希一致':
+    `SELECT d.id, d.revision FROM documents d JOIN document_contents c ON c.document_id = d.id
+     JOIN document_revisions r ON r.document_id = d.id AND r.revision = d.revision WHERE r.content_hash IS DISTINCT FROM c.content_hash`,
+  // 回执记的是那时的当前修订（M3-P3 设计 §3.7），修订号只增不减：回执的修订号不会比文档现在的大
+  'I18 回执的修订号不大于文档的修订号':
+    'SELECT t.request_id, t.revision, d.revision AS document_revision FROM document_save_receipts t JOIN documents d ON d.id = t.document_id WHERE t.revision > d.revision',
 }
 
 /** 每条不变量最多列出几行：够定位，不把整张表打进错误信息 */

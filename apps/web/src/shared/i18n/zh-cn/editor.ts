@@ -1,5 +1,6 @@
 // 表格编辑器页的文案（P4）：只由编辑器页（features/sheet-editor）引用，随编辑器页的入口加载，不进平台页面的首屏（lint 的模块边界限定）。
 // 两个入口共用的（通用的说明、错误与登录状态）在 messages.ts
+import type { SnapshotRule } from '@nerve-office/contracts'
 import type { Phrase } from './messages.ts'
 import { EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
 
@@ -8,6 +9,30 @@ import { EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
  * 那一代不再续租，最多一个有效期（EDIT_LEASE_TTL_SECONDS）就到期（M3-P1 审查 B7）。时长取自契约，有效期改了说法跟着改
  */
 const SELF_ELSEWHERE_HINT = `要是刚刚关闭或刷新过那个页面，那边的编辑权最多 ${EDIT_LEASE_TTL_SECONDS} 秒后自动结束，到时再点"编辑"就能编辑`
+
+/**
+ * 快照被服务端拒绝时按违反的规则给的说法（SNAPSHOT_INVALID 的 details.rule，M3-P3 设计 §3.10）：链接、图片、资源各一类，
+ * 嵌套与数量、检查用的内存超限合成"过于复杂"；不认识的规则（以后的 Phase 加的）照"格式不正确"说
+ */
+const SNAPSHOT_RULE_PHRASES: Readonly<Record<SnapshotRule, string>> = {
+  'encoding': '表格内容的格式不正确',
+  'json': '表格内容的格式不正确',
+  'structure': '表格内容的格式不正确',
+  'depth': '表格的内容过于复杂（嵌套太深）',
+  'entries': '表格的内容过于复杂（元素太多）',
+  'too-complex': '表格的内容过于复杂',
+  'resources': '表格的插件数据不正确',
+  'resource-duplicate': '表格的插件数据不正确',
+  'resource-unknown': '表格里有不支持的插件数据',
+  'resource-data': '表格的插件数据不正确',
+  'resource-not-empty': '表格里有不支持的功能的数据（例如保护）',
+  'resource-missing': '表格里缺少上一版有的内容（例如批注、筛选、条件格式），为免丢失没有保存',
+  'image-source': '表格里有不能保存的图片',
+  'link-structure': '表格里有不能保存的链接',
+  'link-address': '表格里有不能保存的链接',
+  'link-range-id': '表格里有不能保存的链接',
+  'unit-id': '表格内容不属于这份文档',
+}
 
 /**
  * 失效的说明的结尾（M3-P2 设计 §3.4）：本页有没有还没确认的内容 × 还读不读得到这份文档。
@@ -31,15 +56,43 @@ export const editorMessages = {
   save: '保存',
   saveShortcut: (keys: string) => `保存（${keys}）`,
   status: {
-    clean: '已保存到云端',
-    dirty: '有未保存的修改',
-    saving: '保存中…',
-    conflict: '版本冲突',
-    failed: '保存失败',
-    readOnly: '只能查看',
+    'clean': '已保存到云端',
+    'dirty': '有未保存的修改',
+    'saving': '保存中…',
+    'conflict': '版本冲突',
+    'failed': '保存失败',
+    'readOnly': '只能查看',
     /** 编辑权失效之后的保存状态（M3 总设计 §6.5）：不能再保存 */
-    leaseLost: '编辑权已失效',
+    'leaseLost': '编辑权已失效',
+    /** 本页的版本过旧（CLIENT_OUTDATED，M3-P3）：需要刷新（M3 总设计 §6.5 的页面状态） */
+    'outdated': '需要刷新',
+    /** 文档由更新的版本保存过（DOCUMENT_TOO_NEW，M3-P3）：不能再保存 */
+    'too-new': '不能保存',
   },
+  /**
+   * 与服务端不兼容（M3-P3 设计 §3.5、§3.10）：本页的版本过旧（服务端更新了数据格式，或者运维要求旧页面都刷新）——重新加载就是新的页面；
+   * 文档由更新的版本保存过（服务端回滚之后）——重新加载拿到的还是同一个版本，只能阅读，不提示刷新
+   */
+  incompatible: {
+    /** 编辑时得知本页过旧（保存或心跳）：本页的修改有没有保存（unsaved）决定说法；M4 之前没有发件箱，刷新会丢掉没保存的修改 */
+    outdatedEditing: (unsaved: boolean) => unsaved
+      ? '页面的版本过旧，本页的修改没有保存，也不能再保存。需要的话先把内容复制出来，再重新加载页面'
+      : '页面的版本过旧，不能再保存。本页的修改都已保存，重新加载页面之后可以接着编辑',
+    /** 阅读时（申请编辑权时得知，或者编辑时得知之后退出了编辑）：不能进入编辑 */
+    outdatedReading: '页面的版本过旧，不能进入编辑。重新加载页面之后再编辑',
+    /** 文档由更新的版本保存过：打开时就看得出（详情的 sdkVersion），或者申请编辑权时得知 */
+    tooNewReading: '这份文档由更新的版本保存过，当前只能阅读，不能编辑',
+    /** 编辑时得知文档由更新的版本保存过 */
+    tooNewEditing: (unsaved: boolean) => unsaved
+      ? '这份文档由更新的版本保存过，本页的修改不能再保存。需要的话先把内容复制出来'
+      : '这份文档由更新的版本保存过，当前只能阅读，不能再保存',
+  },
+  /**
+   * 快照达到容量的 80%（US-M3-14，00 号计划书 §7.7）：不打断的说明，percent 是最近一次捕获占上限的百分比（向下取整）
+   */
+  nearCapacity: (percent: number) => `这份表格已用去容量上限（5 MiB）的 ${percent}%，再加内容可能就保存不了了`,
+  /** 快照被服务端拒绝（SNAPSHOT_INVALID）：按违反的规则说（不认识的规则照"格式不正确"说） */
+  snapshotInvalid: (rule: SnapshotRule | undefined) => rule === undefined ? '表格内容的格式不正确' : SNAPSHOT_RULE_PHRASES[rule],
   /**
    * 编辑权（M3-P1 设计 §3.4.7、M3-P2 设计 §3.4）：别处正在编辑时说明是谁；失效时说明原因，读得到时给另存为副本、放弃或重新加载。
    * 编辑权中断（到期、空闲回收、换了登录、被接手等）先自动续上，续上了就不说明；这里的失效是续不上、或者失去了访问或编辑权

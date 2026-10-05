@@ -1016,3 +1016,107 @@ describe('失去编辑权时核对结果未知的保存（M3-P2 设计 §3.4）'
     await expect(replaying).resolves.toBe('committed')
   })
 })
+
+describe('保存协议加固（M3-P3 设计 §3.7、§3.8、§3.10）', () => {
+  it('"公式待更新"：捕获时公式没收齐就带上标记；内容相同（unchanged）的确认照"已保存"处理，基准是确认里的修订号', async () => {
+    const { coordinator, control, calls } = setup({ baseRevision: 3 })
+    control.edit('甲')
+    control.settle = 'timeout'
+    const first = coordinator.save()
+    expect((await sent(calls, 1)).request.formulasPending).toBe(true)
+    calls[0]?.resolve(saved(4))
+    await first
+    expect(coordinator.view()).toMatchObject({ status: 'dirty', formulasPending: true })
+    control.settle = 'settled'
+    const second = coordinator.save()
+    const again = await sent(calls, 2)
+    expect(again.request).toMatchObject({ baseRevision: 4, formulasPending: false })
+    again.resolve({ revision: 4, savedAt: '2026-09-27T08:00:00.000Z', unchanged: true })
+    await second
+    expect(coordinator.view()).toMatchObject({ status: 'clean', formulasPending: false })
+    expect(coordinator.baseRevision()).toBe(4)
+  })
+
+  it('原样重发的判断连"公式待更新"一起比：内容与基准没变、标记变了，就是另一个请求（换新的 requestId，服务端把标记算进摘要）', async () => {
+    const { coordinator, control, calls } = setup()
+    control.edit('甲')
+    control.settle = 'timeout'
+    const first = coordinator.save()
+    ;(await sent(calls, 1)).reject(new NetworkError('断网'))
+    await first
+    // 同样的内容、同样的标记：原样再发
+    const same = coordinator.save()
+    ;(await sent(calls, 2)).reject(new NetworkError('断网'))
+    await same
+    expect(calls[1]?.request).toEqual(calls[0]?.request)
+    // 公式收齐了：标记不同，换新的 requestId
+    control.settle = 'settled'
+    const changed = coordinator.save()
+    const third = await sent(calls, 3)
+    expect(third.request.formulasPending).toBe(false)
+    expect(third.request.requestId).not.toBe(calls[0]?.request.requestId)
+    third.resolve(saved(2))
+    await changed
+  })
+
+  it.each([
+    ['CLIENT_OUTDATED', 'outdated'],
+    ['DOCUMENT_TOO_NEW', 'too-new'],
+  ] as const)('保存得到 %s：转入终态 %s，不能再保存（按保存不发请求），不另记失败；本页的修改仍算没保存', async (code, status) => {
+    const { coordinator, control, calls, send } = setup()
+    control.edit('甲')
+    const saving = coordinator.save()
+    ;(await sent(calls, 1)).reject(new ApiError(409, code, '不兼容'))
+    await saving
+    expect(coordinator.view()).toMatchObject({ status, canSave: false, problem: undefined, unsaved: true })
+    expect(coordinator.hasUnsavedWork()).toBe(true)
+    await coordinator.save()
+    expect(send).toHaveBeenCalledTimes(1)
+    // 终态之后续上认出的"自己的保存"不再采纳
+    expect(coordinator.adoptOwnRevision(2, { clientInstanceId: ME, localSeq: 1 })).toBe(false)
+  })
+
+  it('续租得知不兼容（block）：同样转入终态；冲突之后、已经不兼容时不变', async () => {
+    const outdated = setup()
+    outdated.coordinator.block('client-outdated')
+    expect(outdated.coordinator.view()).toMatchObject({ status: 'outdated', canSave: false })
+    outdated.coordinator.block('document-too-new')
+    expect(outdated.coordinator.view().status).toBe('outdated')
+
+    const conflicted = setup()
+    conflicted.control.edit('甲')
+    const saving = conflicted.coordinator.save()
+    ;(await sent(conflicted.calls, 1)).reject(conflictError(5, null))
+    await saving
+    conflicted.coordinator.block('client-outdated')
+    expect(conflicted.coordinator.view().status).toBe('conflict')
+  })
+
+  it('最近一次捕获的大小（与服务端解压后的字节同一个口径）：第一次保存之前是载入的内容的大小，捕获之后换成捕获的；超过上限的照样记下', async () => {
+    const { editor, control } = fakeEditor()
+    const { send, calls } = fakeSend()
+    const coordinator = createSaveCoordinator({
+      editor,
+      compress: fakeCompress,
+      send,
+      baseRevision: 1,
+      clientInstanceId: ME,
+      newRequestId: () => 'request-size',
+      onUnauthenticated: vi.fn(),
+      onSessionStale: vi.fn(),
+      reportError: vi.fn(),
+      initialSnapshotBytes: 4_200_000,
+      maxSnapshotBytes: 30,
+    })
+    expect(coordinator.view().snapshotBytes).toBe(4_200_000)
+    control.edit('甲乙')
+    const saving = coordinator.save()
+    ;(await sent(calls, 1)).resolve(saved(2))
+    await saving
+    // {"content":"甲乙"}：14 个 ASCII 字符加两个汉字各 3 字节
+    expect(coordinator.view().snapshotBytes).toBe(20)
+    control.edit('很长的内容超过了上限的字节数')
+    await coordinator.save()
+    expect(coordinator.view()).toMatchObject({ problem: { kind: 'too-large' }, snapshotBytes: new TextEncoder().encode('{"content":"很长的内容超过了上限的字节数"}').byteLength })
+  })
+})

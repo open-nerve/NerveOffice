@@ -31,6 +31,10 @@ export interface NewRevision {
   readonly payloadDigest: Buffer
   readonly source: RevisionSource | null
   readonly savedBy: string
+  /** 这一版的规范化内容哈希（M3-P3 设计 §3.4）；复制存量的源文档时为空 */
+  readonly contentHash: Buffer | null
+  /** 写入这一版的页面的构建（保存、另存为副本）；新建与复制是服务端写的，为空 */
+  readonly clientBuild: string | null
 }
 
 /** advisory lock 的命名空间（两个 int4 的形式，与单个 bigint 的形式互不冲突）：新建文档按 requestId 排队。 */
@@ -75,7 +79,11 @@ export class DocumentRevisionsRepository {
     await executorOf(this.db, transaction).execute(sql`SELECT pg_advisory_xact_lock(${CREATE_REQUEST_LOCK_SPACE}, hashtext((${requestId})::uuid::text))`)
   }
 
-  async findByRequestId(requestId: string, transaction: Transaction): Promise<RevisionRow | undefined> {
+  /**
+   * 这个 requestId 的修订记录。不带事务时在连接池上读：保存与另存为副本的重放预检在事务之外（M3-P3 设计 §3.1 第 2 步），
+   * 读到的修订记录写下之后不再改，单独一条语句读出就是完整的
+   */
+  async findByRequestId(requestId: string, transaction?: Transaction): Promise<RevisionRow | undefined> {
     const [row] = await executorOf(this.db, transaction).select(COLUMNS).from(r).where(eq(r.requestId, requestId))
     return row === undefined ? undefined : toRevision(row)
   }
