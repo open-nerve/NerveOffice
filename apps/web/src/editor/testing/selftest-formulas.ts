@@ -211,11 +211,13 @@ function formulaTimeline(session: Session, mark: number, origin: number): Record
 /** 公式收齐与计算的等待最多多久（打开时算全部公式：Worker 的启动与第一次计算） */
 const FORMULA_OPEN_TIMEOUT_MS = 30_000
 
-/** 一项最多等多久自动保存把它上传（静默 2 秒之后上传；CI 慢几倍） */
-const UPLOAD_TIMEOUT_MS = 20_000
+/**
+ * 一项最多等多久自动保存把它上传：静默 2 秒之后上传；"静默到点时还在算"要等强制重算的一轮算完（本机 Chromium 系约 4 秒），CI 慢几倍
+ */
+const UPLOAD_TIMEOUT_MS = 40_000
 
 /** 一项的总时限 */
-const CASE_TIMEOUT_MS = 30_000
+const CASE_TIMEOUT_MS = 60_000
 
 export async function formulaTimingScenario(session: Session): Promise<void> {
   if (!await checkEditing(session, { mode: 'running' }))
