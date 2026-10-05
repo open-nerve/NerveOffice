@@ -373,6 +373,72 @@ describe('节奏（设计 §3.2、§3.3）', () => {
   })
 })
 
+describe('A08：确认只到上传的那一份捕获的序号——捕获之后、上传开始之前的修改不算已确认（审查 A5、A8）', () => {
+  it('15 秒上限的上传：上传的是最近一次捕获（之后还有没捕获的修改），请求的序号是那一份的；回包之后仍有未保存的修改；下一次上限从那一份之后的第一处修改算', async () => {
+    const context = setup()
+    // 每 0.7 秒改一处：从不静默满 1 秒，捕获按 3 秒的上限（3、6.5、10、13.5 秒……），上传按 15 秒的上限
+    const editUntil = async (end: number): Promise<void> => {
+      while (context.time.now() - T0 < end) {
+        context.control.edit(`第 ${context.editor.changeSeq() + 1} 处`)
+        await context.time.advance(700)
+      }
+    }
+    await editUntil(15_000)
+    // 15 秒时上传：最近一次捕获在 13.5 秒（序号 20），14、14.7 秒的两处（序号 21、22）还没捕获
+    const capturedAt = context.captures().map(event => event.at - T0)
+    expect(capturedAt).toEqual([3000, 6500, 10_000, 13_500])
+    const first = await sent(context, 1)
+    expect(first.at - T0).toBe(15_000)
+    expect(first.request.localSeq).toBe(20)
+    expect(context.captures().at(-1)).toMatchObject({ seq: 20 })
+    first.resolve(saved(2))
+    await drain(context)
+    expect(context.coordinator.view()).toMatchObject({ unsavedEdits: true })
+    expect(context.autosave.saved().edits).toBe(false)
+    // 上传的上限从那一份之后的第一处修改（14 秒）算起：29 秒，不是上传开始之后的第一处修改（15.4 秒）加 15 秒
+    await editUntil(31_000)
+    expect((await sent(context, 2)).at - T0).toBe(29_000)
+  })
+
+  it('退避之后的重试：上传的仍是那一份捕获（原样重发），期间新的修改不算已确认', async () => {
+    const context = setup()
+    context.control.edit('甲')
+    await context.time.advance(2000)
+    ;(await sent(context, 1)).reject(new NetworkError('断网'))
+    await drain(context)
+    // 退避（4 秒重试）之前 0.5 秒又改了一处：重试的时候它还没被捕获（静默 1 秒要到 4.5 秒）
+    await context.time.advance(1500)
+    context.control.edit('甲乙')
+    await context.time.advance(500)
+    const retry = await sent(context, 2)
+    expect(retry.request).toMatchObject({ localSeq: 1, snapshot: '{"content":"甲"}' })
+    retry.resolve(saved(2))
+    await drain(context)
+    expect(context.coordinator.view()).toMatchObject({ status: 'dirty', unsavedEdits: true })
+    expect(context.autosave.saved().edits).toBe(false)
+    await context.time.advance(1500)
+    expect((await sent(context, 3)).request).toMatchObject({ localSeq: 2, snapshot: '{"content":"甲乙"}' })
+  })
+
+  it('排在在途后面的切到后台的上传：轮到时上传的是切走时的那一份，之后迟到的修改（例如空闲任务里的行高）不算已确认', async () => {
+    const context = setup()
+    context.control.edit('甲')
+    await context.time.advance(2000)
+    const inFlight = await sent(context, 1)
+    context.control.edit('甲乙')
+    context.page.set({ visible: false })
+    expect(context.captures().at(-1)).toMatchObject({ trigger: 'hidden', seq: 2 })
+    context.control.edit('甲乙（迟到的行高）')
+    inFlight.resolve(saved(2))
+    const queued = await sent(context, 2)
+    expect(queued.request).toMatchObject({ localSeq: 2, snapshot: '{"content":"甲乙"}' })
+    queued.resolve(saved(3))
+    await drain(context)
+    expect(context.coordinator.view()).toMatchObject({ unsavedEdits: true })
+    expect(context.autosave.saved().edits).toBe(false)
+  })
+})
+
 describe('公式（设计 §3.2、§3.5：超过上限带"公式待更新"，收齐之后补存）', () => {
   it('没收齐：静默满了不捕获、也不上传；到了上限照常捕获并带标记、随即上传；收齐之后补捕获、补存（内容相同、标记不同不被去重挡掉）', async () => {
     const context = setup()
