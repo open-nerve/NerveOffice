@@ -5,7 +5,9 @@
 // - Facade：M0 的 Facade 入口经它逐项调用；单元格在画布上的位置也经它取（只读样本的列宽、隐藏的列与行高不是模板的默认值）。
 //   入口用到的部分与测试构建的页面自检共用一份声明（editor/testing/read-only-entries.ts 的 Entry*），这里在它上面加 E2E 另外用到的。
 // - 页面里打包的链接地址判定（M3-P3 S2）：跨引擎的同一组用例在三个浏览器里经它核对。
-// - 公式在哪里计算（M3-P4 设计 §3.14）：测试构建经地址参数选主线程模式，用例据此核对开关确实生效。
+// - 公式在哪里计算（M3-P4 设计 §3.14）：测试构建经地址参数选主线程模式，用例据此核对开关确实生效；
+// - 编辑器的变更检测与公式收齐（M3-P4 设计 §3.15，与保存、自动保存读的是同一个跟踪器）：自动保存的用例在停住的时间里等这一轮算完再往前拨，
+//   上限到时的捕获才不会因为公式没收齐而带上标记（US-M3-02、03 的 E2E，S6）。
 // 用到探针的用例打上 @test-build：外部模式测生产镜像，里面没有探针，按标签排除（playwright.config.ts）
 import type { CanonicalLink, OpenCheckFailure } from '@nerve-office/contracts'
 import type { Locator, Page } from '@playwright/test'
@@ -39,6 +41,10 @@ interface CellRect {
 
 export interface FacadeRange extends EntryRange {
   readonly getCell: () => CellRect
+  /** 写一格的值（SetRangeValuesCommand，同步执行） */
+  readonly setValue: (value: string | number) => unknown
+  /** 单元格的自定义数据（Univer 的 cell.custom） */
+  readonly setCustomMetaData: (data: unknown) => unknown
   /** A1 写法（单个单元格时就是它的地址） */
   readonly getA1Notation: () => string
   /** 设为当前选区（选区的操作，只读时照常） */
@@ -101,6 +107,15 @@ export type ProbeOpenCheck
   = | { readonly ok: true }
     | { readonly ok: false, readonly failures: readonly OpenCheckFailure[] }
 
+/** 公式计算的进度（web 的 formula-settle-tracker.ts 的 FormulaProgress，只写用到的部分） */
+export interface ProbeFormulaProgress {
+  /** 见过的轮数（开始一轮加一） */
+  readonly round: number
+  readonly started: boolean
+  readonly stopped: boolean
+  readonly completed: boolean
+}
+
 interface EditorProbe {
   readonly univerAPI: FacadeApi
   readonly snapshot: () => string
@@ -111,8 +126,11 @@ interface EditorProbe {
   readonly openCheck: ProbeOpenCheck
   /** 公式在哪里计算（worker 或 main-thread） */
   readonly formulaMode: SelftestFormulaMode
-  /** 公式收齐了没有（与保存等的是同一个判断） */
+  /** 编辑器的本地修改序号（变更检测） */
+  readonly changeSeq: () => number
+  /** 公式收齐了没有（与保存、自动保存等的是同一个判断） */
   readonly formulasSettled: () => boolean
+  readonly formulaProgress: () => ProbeFormulaProgress
 }
 
 declare global {
@@ -197,7 +215,7 @@ export async function probeFormulaMode(page: Page): Promise<SelftestFormulaMode>
   })
 }
 
-/** 现在这个编辑器的公式收齐了没有（M3-P4）：页面里没有探针时失败 */
+/** 公式收齐了没有（与保存、自动保存等的是同一个判断）：页面里没有探针时失败 */
 export async function probeFormulasSettled(page: Page): Promise<boolean> {
   await probeIn(page)
   return page.evaluate(() => {
@@ -206,6 +224,32 @@ export async function probeFormulasSettled(page: Page): Promise<boolean> {
       throw new Error('页面里没有编辑器的探针')
     return probe.formulasSettled()
   })
+}
+
+/** 编辑器的本地修改序号（变更检测）：页面里没有探针时失败 */
+export async function probeChangeSeq(page: Page): Promise<number> {
+  await probeIn(page)
+  return page.evaluate(() => {
+    const probe = window.__nerveEditorProbe
+    if (probe === undefined)
+      throw new Error('页面里没有编辑器的探针')
+    return probe.changeSeq()
+  })
+}
+
+/**
+ * 经 Facade 写一格的值（SetRangeValuesCommand，与键入、回车之后写进模型的是同一条命令；同步执行）：sheet 是工作表的名称，默认当前的表。
+ * 不经界面：停住的时间里也不用点画布、等编辑框，节奏类的用例一步一处修改
+ */
+export async function setCellValue(page: Page, a1: string, value: string | number, sheet?: string): Promise<void> {
+  await probeIn(page)
+  await page.evaluate(({ a1, value, sheet }) => {
+    const workbook = window.__nerveEditorProbe?.univerAPI.getActiveWorkbook()
+    if (workbook === undefined)
+      throw new Error('页面里没有编辑器的探针')
+    const target = sheet === undefined ? workbook.getActiveSheet() : workbook.getSheetByName(sheet)
+    target.getRange(a1).setValue(value)
+  }, { a1, value, sheet })
 }
 
 /** 命令日志：序号大于 after 的各条 */

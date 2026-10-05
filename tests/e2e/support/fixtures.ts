@@ -14,9 +14,10 @@
 // 自动保存（M3-P4 设计 §3.14）：测试构建里定时的自动保存默认暂停（autosave 选项默认 held，每个文档加载之前经 addInitScript 写
 // sessionStorage，另一台设备的上下文同样）：现有的用例按"按保存才上传"的语义成立，立即上传（保存按钮、快捷键、退出编辑、切到后台）照常。
 // 要自动保存的用例 test.use({ autosave: 'running' })，或者打开之后经 support/autosave.ts 放开。外部模式（生产镜像）里没有这个控制，
-// 自动保存照常运行
+// 自动保存照常运行：那里会跑的用例（没有 @test-build 的）要在自动保存照常运行时也成立（M3-P4 S6 逐条改过），本机用 E2E_AUTOSAVE=running 核对
 import type { BrowserContext, Page } from '@playwright/test'
 import type { AutosaveMode } from './autosave.ts'
+import process from 'node:process'
 import { test as base, expect } from '@playwright/test'
 import { applyAutosaveMode, autosaveModeScript } from './autosave.ts'
 import { watchPageErrors } from './page-errors.ts'
@@ -83,8 +84,11 @@ async function chooseAutosave(context: BrowserContext, mode: AutosaveMode): Prom
 }
 
 export const test = base.extend<{ cspViolations: CspViolations, pageErrors: PageErrors, anotherDevice: Page, autosave: AutosaveMode, autosaveMode: void }>({
-  /** 打开时定时的自动保存暂停（held，默认）还是照常（running） */
-  autosave: ['held', { option: true }],
+  /**
+   * 打开时定时的自动保存暂停（held，默认）还是照常（running）。E2E_AUTOSAVE=running 让默认也照常：本机按生产镜像里的样子
+   * （自动保存照常运行）跑容器 E2E 会跑的那些用例（--grep-invert @test-build），三个浏览器都能核对它们与自动保存相容
+   */
+  autosave: [process.env.E2E_AUTOSAVE === 'running' ? 'running' : 'held', { option: true }],
   autosaveMode: [async ({ context, autosave }, use) => {
     await chooseAutosave(context, autosave)
     await use()

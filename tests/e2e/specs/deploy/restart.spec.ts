@@ -14,7 +14,7 @@ import { createUser, withDatabase } from '../../support/database.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, openAndEnterEditing, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, disconnectTab, isSaveRequest, openAndEnterEditing, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
 
 /**
  * 后端连接数据库时的应用名：与 apps/api 的 APPLICATION_NAME（modules/database/pool.ts）相同，那边改名时这里要同步。
@@ -50,15 +50,19 @@ async function revisionsOf(requestId: string): Promise<number> {
   })
 }
 
-/** 这个页面发出的保存请求的 requestId，按发出的顺序 */
-function recordSaveRequests(page: Page): string[] {
-  const requestIds: string[] = []
+/** 这个页面发出的保存请求的 requestId 与收到的回答（requestId 与状态码），按先后 */
+function recordSaveRequests(page: Page): { readonly sent: string[], readonly answered: { requestId: string, status: number }[] } {
+  const sent: string[] = []
+  const answered: { requestId: string, status: number }[] = []
   page.on('request', (request) => {
-    const url = new URL(request.url())
-    if (request.method() === 'PUT' && url.pathname.endsWith('/content'))
-      requestIds.push(url.searchParams.get('requestId') ?? '')
+    if (isSaveRequest(request))
+      sent.push(new URL(request.url()).searchParams.get('requestId') ?? '')
   })
-  return requestIds
+  page.on('response', (response) => {
+    if (isSaveRequest(response.request()))
+      answered.push({ requestId: new URL(response.url()).searchParams.get('requestId') ?? '', status: response.status() })
+  })
+  return { sent, answered }
 }
 
 // 三条共用一个后端：同一个文件里的用例按顺序在一个工作进程里执行（这个项目没有开 fullyParallel）。
@@ -91,7 +95,10 @@ test.describe('US-M1-10 API 重启后已确认的数据不丢', () => {
 
     // 测试直连数据库锁住内容行：后端的保存事务已经写了修订记录、推进了修订号，停在替换内容上等锁（审查 B1），
     // 这时强制结束后端。释放锁之后，等被结束的后端的会话消失（拿到锁、发现连接断了、回滚）
+    // 结果未知的失败会自动重试（M3-P4 设计 §3.8）：测试构建暂停了定时的上传，生产构建里 2 秒之后原样重发。被打断之后断开这一页的保存
+    // （与心跳），核对完"没有提交"再恢复：之间的重试到不了服务端
     let waiting: number[] = []
+    let offline: Awaited<ReturnType<typeof disconnectTab>> | undefined
     await withDatabase(async (client) => {
       await client.query('BEGIN')
       try {
@@ -101,6 +108,7 @@ test.describe('US-M1-10 API 重启后已确认的数据不丢', () => {
           waiting = await apiSessionsWaitingForLock()
           return waiting.length
         }, { timeout: 15_000 }).toBeGreaterThan(0)
+        offline = await disconnectTab(page)
         await restartApi(request)
       }
       finally {
@@ -109,17 +117,23 @@ test.describe('US-M1-10 API 重启后已确认的数据不丢', () => {
     })
     await expect.poll(async () => sessionsAlive(waiting), { timeout: 15_000 }).toBe(0)
 
-    // 要么完整提交、要么没有提交：修订号、修订记录与内容都没有变。结果未知的失败会自动重试（M3-P4 设计 §3.8；测试构建暂停了定时的上传，
-    // 这里不会真的重试，下面按保存原样重发）
+    // 要么完整提交、要么没有提交：修订号、修订记录与内容都没有变
     await expect(saveStatus(page)).toHaveText('保存失败，稍后自动重试')
     const afterInterruption = await savedContent(page, documentId)
     expect(afterInterruption.revision).toBe(before.revision)
     expect(afterInterruption.text).toBe(before.text)
-    expect(await revisionsOf(saves[0] ?? '')).toBe(0)
+    const interrupted = saves.sent[0] ?? ''
+    expect(await revisionsOf(interrupted)).toBe(0)
 
+    // 恢复之后再保存（生产构建里可能是自动保存的重试先发出）：第一次成功的就是原样重发的那一个 requestId，修订号只加一。
+    // 之前的回答只有被打断的那一次（经反向代理时它得到 502，直连时连接断开、没有回答）
+    await offline?.reconnect()
     await saveAndWait(page)
-    expect(saves).toHaveLength(2)
-    expect(saves[1]).toBe(saves[0])
+    expect(saves.sent.length).toBeGreaterThanOrEqual(2)
+    const firstSaved = saves.answered.findIndex(answer => answer.status === 200)
+    expect(saves.answered[firstSaved]?.requestId).toBe(interrupted)
+    expect(saves.answered.slice(0, firstSaved).every(answer => answer.requestId === interrupted && answer.status >= 500)).toBe(true)
+    expect(await revisionsOf(interrupted)).toBe(1)
     const saved = await savedContent(page, documentId)
     expect(saved.revision).toBe(before.revision + 1)
     expect(cellOf(saved.snapshot, 'A1')?.v).toBe('被打断的保存')

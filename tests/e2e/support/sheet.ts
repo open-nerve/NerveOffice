@@ -335,6 +335,28 @@ export async function blockLeaseRenewals(page: Page): Promise<{ readonly unblock
   return { unblock: async () => page.unroute(pattern, handler) }
 }
 
+/**
+ * 这一个标签页"断网、休眠"（同一个浏览器上下文里的别的页面照常）：保存（PUT …/content）与心跳续租（PUT …/edit-lease）一律按断网失败，
+ * 申请、释放与读取照常；reconnect 之后照常。M3-P4 起修改自动保存：生产构建里停 2 秒就上传、失败了自动重试（测试构建的夹具暂停了定时的上传，
+ * 生产镜像里没有这个控制）。要"本页的修改在编辑权中断时还没存上"的用例，在修改之前用它断开这一页——两种构建里修改都到不了服务端，
+ * 之后的说法（没有保存、另存为副本）一样。只拦心跳、不拦保存的用 blockLeaseRenewals。
+ * 断开期间生产构建里的自动保存在重试，页头可能是"保存失败，稍后自动重试"；恢复之后先发出的可能是它的重试，不一定是用例按的保存：
+ * 恢复之后按保存用快捷键（编辑权随之失效、保存按钮没了时它什么也不做），不点按钮
+ */
+export async function disconnectTab(page: Page): Promise<{ readonly reconnect: () => Promise<void> }> {
+  const content = '**/api/documents/*/content?*'
+  const lease = '**/api/documents/*/edit-lease'
+  const handler = async (route: Route): Promise<void> => route.request().method() === 'PUT' ? route.abort('internetdisconnected') : route.continue()
+  await page.route(content, handler)
+  await page.route(lease, handler)
+  return {
+    reconnect: async () => {
+      await page.unroute(content, handler)
+      await page.unroute(lease, handler)
+    },
+  }
+}
+
 export interface SavedContent {
   /** 快照的 JSON 原文（接口原样下发的 gzip 解压之后） */
   readonly text: string

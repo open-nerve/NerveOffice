@@ -3,8 +3,10 @@
 // M3-P1 起编辑权（编辑租约）绑定"这个标签页、这次登录"（P1 设计 §3.4.1）：本人重新登录之后，页面确认是本人、核对编辑权，
 // 得知它随原来的登录失效，随即自动续上（期间没人保存过），所以"登录回来之后保存成功"照旧成立。
 // 核对保存这一条路遇到未登录、令牌失效时怎样确认会话的几条（1、3、4）拦下心跳（support/sheet.ts 的 blockLeaseRenewals）：
-// 心跳也会发现登录失效或令牌换了，先一步确认会话、换好令牌，用例就看不到保存这一步的确认；到了要恢复、续上的那一步再放开
-import type { Page } from '@playwright/test'
+// 心跳也会发现登录失效或令牌换了，先一步确认会话、换好令牌，用例就看不到保存这一步的确认；到了要恢复、续上的那一步再放开。
+// M3-P4 起修改自动保存：会话不是本人时不上传，回到本人时立即上传（测试构建的夹具暂停了定时的上传，生产镜像里没有这个控制）——
+// 回来之后不断言"有未保存的修改"，按保存之后看结果；令牌按"之前的都是旧的、之后的都是新的"核对（生产构建里回来时可能多一次自动上传）
+import type { Page, Request } from '@playwright/test'
 import { createUser, expireSessions } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
@@ -17,6 +19,16 @@ test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 async function csrfTokenOf(page: Page): Promise<string> {
   const session = await (await page.request.get('/api/auth/session')).json() as { csrfToken: string }
   return session.csrfToken
+}
+
+/**
+ * 保存带的 CSRF 令牌：第一次是旧的（被拒），之后都是新的、至少一次——生产构建里会话回来时自动保存也上传，可能比按的那一次多一次，
+ * 但不会再带着旧的令牌发
+ */
+function expectTokens(tokens: readonly (string | undefined)[], oldToken: string, newToken: string): void {
+  expect(tokens[0]).toBe(oldToken)
+  expect(tokens.length).toBeGreaterThan(1)
+  expect(new Set(tokens.slice(1))).toEqual(new Set([newToken]))
 }
 
 /** 拖住本页确认会话的请求，直到 release；held 是已经拦住的次数 */
@@ -69,7 +81,6 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     // "登录已过期"的失败说明随之清掉（复验 RB2）
     await expect(alert).toBeHidden()
     await expect(page.getByRole('alert')).toHaveCount(0)
-    await expect(saveStatus(page)).toHaveText('有未保存的修改')
 
     await saveAndWait(page)
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('kept')
@@ -91,13 +102,18 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     await other.goto('/login')
     await loginThroughUi(other, owner)
     await expect(other.getByRole('heading', { name: '我的空间' })).toBeVisible()
-    // 本页收到登录的消息、开始确认会话（被拦住）之后再按保存（复验 SB3）
+    // 本页收到登录的消息、开始确认会话（被拦住）之后再按保存（复验 SB3）：确认有结果之前一次也不发
     await expect.poll(checks.held).toBe(1)
-    const saved = page.waitForResponse(response => response.request().method() === 'PUT' && response.url().includes('/content?'))
+    const sent: Request[] = []
+    page.on('request', (request) => {
+      if (isSaveRequest(request))
+        sent.push(request)
+    })
     await page.keyboard.press('ControlOrMeta+s')
     await expect(saveStatus(page)).toHaveText('正在确认登录状态…')
+    expect(sent).toEqual([])
     checks.release()
-    expect((await saved).status()).toBe(200)
+    // 确认是本人之后保存成功（生产构建里自动保存在会话回来时也上传，先发出的可能是它）
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('waited')
   })
@@ -138,7 +154,7 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     await renewals.unblock()
     checks.release()
     await expect(saveStatus(page)).toHaveText('已保存到云端')
-    expect(tokens).toEqual([oldToken, newToken])
+    expectTokens(tokens, oldToken, newToken)
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('csrf-wait')
   })
 
@@ -172,7 +188,7 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     await page.unroute('**/api/auth/session')
     await renewals.unblock()
     await saveAndWait(page)
-    expect(tokens).toEqual([oldToken, newToken])
+    expectTokens(tokens, oldToken, newToken)
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('csrf-offline')
   })
 
@@ -182,13 +198,15 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     await loginThroughApi(page, owner)
     const documentId = await createSheetThroughApi(page)
     await openAndEnterEditing(page, documentId)
-    await typeInCell(page, 'A1', 'mine')
 
     const other = await context.newPage()
     await other.goto('/')
     await other.getByRole('button', { name: '退出', exact: true }).click()
     await expect(other.getByRole('form', { name: '登录' })).toBeVisible()
     await expect(page.getByRole('alert').filter({ hasText: '本页的修改还在' })).toBeVisible()
+    // 没有人登录时改的：不上传（修改自动保存，在这之前改的话生产构建里停 2 秒就存上了），一直是没存上的修改
+    await typeInCell(page, 'A1', 'mine')
+    await expect(saveStatus(page)).toHaveText('暂停保存：登录回来之后自动保存')
 
     await loginThroughUi(other, someoneElse)
     await expect(other.getByRole('heading', { name: '我的空间' })).toBeVisible()

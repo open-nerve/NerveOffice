@@ -1,13 +1,13 @@
 // 捕获时机复核的样本（capture-samples.ts）：公式样本的结构、按定义的核对认得出过期的值、大表的规模
-import type { SampleCells } from './capture-samples.ts'
+import type { FormulaSample, SampleCells } from './capture-samples.ts'
 import { describe, expect, it } from 'vitest'
 import { aggregateValues, BIG_SHEET, bigSheet, cellCount, FORMULA_SAMPLE, formulaSampleSheets, randOf, verifyFormulaSnapshot } from './capture-samples.ts'
 
 /** 公式样本的快照，公式都按定义填上值（核对应当全部一致）；edit 可以在填值之前改输入 */
-function computedSnapshot(edit: (sheets: Record<string, SampleCells>) => void = () => {}): Record<string, { cellData: SampleCells }> {
-  const sheets = Object.fromEntries(formulaSampleSheets().map(sheet => [sheet.id, structuredClone(sheet.cellData)]))
+function computedSnapshot(edit: (sheets: Record<string, SampleCells>) => void = () => {}, sample: FormulaSample = FORMULA_SAMPLE): Record<string, { cellData: SampleCells }> {
+  const sheets = Object.fromEntries(formulaSampleSheets(sample).map(sheet => [sheet.id, structuredClone(sheet.cellData)]))
   edit(sheets)
-  const { chain, aggregate, cross, slow, volatile, heavy } = FORMULA_SAMPLE
+  const { chain, aggregate, cross, slow, volatile, heavy } = sample
   const cells = (id: string): SampleCells => sheets[id] ?? {}
   const start = cells(chain.id)[0]?.[0]?.v as number
   for (let row = 1; row < chain.length; row += 1)
@@ -119,6 +119,44 @@ describe('按定义核对公式的值（verifyFormulaSnapshot）', () => {
       Object.assign(cell ?? {}, { v: '#NAME?', t: 1 })
     const verdict = verifyFormulaSnapshot(text(sheets))
     expect([verdict.staleCount, verdict.errors, verdict.byKind.slow, verdict.byKind.heavy]).toEqual([3, { '#NAME?': 3 }, '2/100', '1/500'])
+  })
+})
+
+describe('另给的规模（US-M3-03 的 E2E 用更小的一份）', () => {
+  const SMALL: FormulaSample = {
+    ...FORMULA_SAMPLE,
+    chain: { ...FORMULA_SAMPLE.chain, length: 20 },
+    aggregate: { ...FORMULA_SAMPLE.aggregate, rows: 300 },
+    slow: { ...FORMULA_SAMPLE.slow, count: 12, step: 80 },
+    heavy: { ...FORMULA_SAMPLE.heavy, rows: 0, count: 0 },
+  }
+
+  it('表与公式的个数随规模变，"重"表的公式个数为 0 时不生成；聚合的值是同一串的前面几个；范围按行数写', () => {
+    const sheets = formulaSampleSheets(SMALL)
+    expect(sheets.map(sheet => sheet.id)).toEqual(['f-chain', 'f-aggregate', 'f-cross', 'f-slow', 'f-volatile'])
+    const formulas = sheets.flatMap(sheet => Object.values(sheet.cellData).flatMap(row => Object.values(row))).filter(cell => cell.f !== undefined)
+    expect(formulas).toHaveLength(19 + 4 + 3 + 12 + 5)
+    expect(aggregateValues(300)).toEqual(aggregateValues().slice(0, 300))
+    expect(sheets.find(sheet => sheet.id === 'f-slow')?.cellData[2]?.[0]?.f).toBe('=SUMPRODUCT((\'聚合\'!$B$1:$B$300>160)*\'聚合\'!$B$1:$B$300)')
+    expect(sheets.find(sheet => sheet.id === 'f-cross')?.cellData[0]?.[0]?.f).toBe('=\'链\'!A20*2')
+  })
+
+  it('按同一个规模核对：算对的全部一致；改了聚合的一格、公式还是旧值时认出过期的；按默认的规模核对对不上', () => {
+    expect(verifyFormulaSnapshot(text(computedSnapshot(() => {}, SMALL)), 8, SMALL)).toEqual({
+      checked: 19 + 4 + 3 + 12 + 5,
+      stale: [],
+      staleCount: 0,
+      byKind: { chain: '0/19', aggregate: '0/4', cross: '0/3', slow: '0/12', volatile: '0/5', heavy: '0/0' },
+      errors: {},
+    })
+    const stale = computedSnapshot(() => {}, SMALL)
+    const row = stale[SMALL.aggregate.id]?.cellData[0]
+    expect(row?.[1]?.v).toBe(11)
+    if (row?.[1] !== undefined)
+      row[1].v = 1000
+    // B1 是 11、300 个里最大的是 995：改成 1000 之后 SUM、AVERAGE、COUNTIF、MAX 都变了；跨表 A2 变了（A3 = C1 − B1 恰好不变）；12 个 SUMPRODUCT 都变了
+    expect(verifyFormulaSnapshot(text(stale), 8, SMALL).byKind).toMatchObject({ aggregate: '4/4', cross: '1/3', slow: '12/12' })
+    expect(verifyFormulaSnapshot(text(computedSnapshot(() => {}, SMALL))).staleCount).toBeGreaterThan(0)
   })
 })
 
