@@ -1,5 +1,6 @@
 import type { Univer } from '@univerjs/core'
 import type { CommandEvent } from '../change-tracking/command-event.ts'
+import type { OpenCheck } from '../profile/open-check.ts'
 import { canonicalLink } from '@nerve-office/contracts'
 import { CommandType } from '@univerjs/core'
 import { FUniver } from '@univerjs/core/facade'
@@ -71,8 +72,8 @@ function fakeUniver({ shortcuts = [], formulaBar = { body: { dataStream: '\r\n' 
   } as unknown as Univer
 }
 
-function installEditorProbe(univerAPI: FUniver, workbook: Workbook, services?: FakeServices): () => void {
-  return install({ univer: fakeUniver(services), univerAPI, workbook })
+function installEditorProbe(univerAPI: FUniver, workbook: Workbook, services?: FakeServices, openCheck: OpenCheck = { ok: true }): () => void {
+  return install({ univer: fakeUniver(services), univerAPI, workbook, openCheck })
 }
 
 const mutation: FakeEvent = { id: 'sheet.mutation.set-range-values', type: CommandType.MUTATION, params: { unitId: 'unit-1', subUnitId: 'sheet-1' } }
@@ -208,6 +209,15 @@ describe('探针给出页面里打包的链接地址判定（M3-P3 S2）', () =>
     installEditorProbe(api, fakeWorkbook(() => ({})))
     expect(window.__nerveEditorProbe?.canonicalLink).toBe(canonicalLink)
     expect(window.__nerveEditorProbe?.canonicalLink('HTTPS://Example.COM')).toEqual({ ok: true, href: 'https://example.com/' })
+  })
+})
+
+describe('探针给出这个编辑器的打开自检的结果（M3-P4 设计 §3.11）', () => {
+  it('openCheck 就是创建时交来的那一个', () => {
+    const { api } = fakeFacade()
+    const openCheck: OpenCheck = { ok: false, failures: [{ kind: 'resource-emptied', resource: 'SHEET_NOTE_PLUGIN' }] }
+    installEditorProbe(api, fakeWorkbook(() => ({})), undefined, openCheck)
+    expect(window.__nerveEditorProbe?.openCheck).toBe(openCheck)
   })
 })
 

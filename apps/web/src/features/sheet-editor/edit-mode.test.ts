@@ -116,6 +116,7 @@ function fakeFactory() {
           return snapshotOf(value)
         }),
         viewState: () => fake.disposed ? undefined : viewStateOf(fake.index),
+        openCheck: { ok: true },
         dispose: vi.fn(() => {
           fake.disposed = true
         }),

@@ -18,12 +18,14 @@
 // 再两样（M2-P6 复核 F1、F2 之后，只读的快捷键回归用）：SDK 当前注册的全部快捷键（Facade 的 FShortcut 只能派发，列不出来），
 // 与编辑栏现在显示的文字（画在画布上，页面上读不出来）。
 // 还有页面里打包的链接地址判定（M3-P3 S2）：链接的改写器用的就是它（经 contracts 的 normalizeCellLinks），E2E 拿跨引擎的同一组用例
-// （contracts 的 link-address.test-support.ts）在三个浏览器里核对它的结果与 Node 相同
+// （contracts 的 link-address.test-support.ts）在三个浏览器里核对它的结果与 Node 相同。
+// 以及这个编辑器的打开自检的结果（M3-P4 设计 §3.11）：E2E 据此核对模板、样本与大表无误报，各种损坏的构造得到预期的失败
 import type { CanonicalLink } from '@nerve-office/contracts'
 import type { Univer } from '@univerjs/core'
 import type { FUniver } from '@univerjs/core/facade'
 import type { CommandEvent } from '../change-tracking/command-event.ts'
 import type { CommandKind } from '../change-tracking/command-record.ts'
+import type { OpenCheck } from '../profile/open-check.ts'
 import { canonicalLink } from '@nerve-office/contracts'
 import { toCommandRecord } from '../change-tracking/command-event.ts'
 import { stringParam } from '../change-tracking/command-record.ts'
@@ -91,6 +93,8 @@ export interface EditorProbe {
    * 规范写法依赖各引擎的 WHATWG URL，E2E 经它在三个浏览器里跑跨引擎的同一组用例
    */
   readonly canonicalLink: (url: string) => CanonicalLink
+  /** 这个编辑器的打开自检的结果（与 SheetEditor.openCheck 相同） */
+  readonly openCheck: OpenCheck
 }
 
 declare global {
@@ -133,15 +137,16 @@ function readFormulaBar(editors: IEditorService): string {
   return dataStream.replace(BODY_END, '')
 }
 
-/** 装上探针的编辑器：Univer 实例（取快捷键与编辑器管理的服务）、它的 Facade 与工作簿 */
+/** 装上探针的编辑器：Univer 实例（取快捷键与编辑器管理的服务）、它的 Facade 与工作簿、打开自检的结果 */
 export interface ProbeTarget {
   readonly univer: Univer
   readonly univerAPI: FUniver
   readonly workbook: Workbook
+  readonly openCheck: OpenCheck
 }
 
 /** 装上探针，返回移除它的函数（编辑器销毁时调用：退订命令事件；已经换成别的探针时不动 window 上的那个） */
-export function installEditorProbe({ univer, univerAPI, workbook }: ProbeTarget): () => void {
+export function installEditorProbe({ univer, univerAPI, workbook, openCheck }: ProbeTarget): () => void {
   const log: ProbeCommand[] = []
   const record = (phase: ProbeCommand['phase'], event: FacadeEvent): void => {
     const command = toCommandRecord(event)
@@ -173,6 +178,7 @@ export function installEditorProbe({ univer, univerAPI, workbook }: ProbeTarget)
     shortcuts: () => injector.get(IShortcutService).getAllShortcuts().map(toProbeShortcut),
     formulaBarText: () => readFormulaBar(injector.get(IEditorService)),
     canonicalLink,
+    openCheck,
   }
   window.__nerveEditorProbe = probe
   return () => {

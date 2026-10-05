@@ -63,6 +63,7 @@ function fakeFactory() {
         settleFormulas: async () => 'settled',
         capture: () => options.snapshot,
         viewState: () => fake.disposed ? undefined : viewStateOf(index),
+        openCheck: { ok: true },
         dispose: () => {
           fake.disposed = true
         },

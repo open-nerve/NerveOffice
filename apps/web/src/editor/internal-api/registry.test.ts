@@ -7,6 +7,7 @@ import source from './index.ts?raw'
 import injectorSource from './injector.ts?raw'
 import { INTERNAL_API_REGISTRY } from './registry.ts'
 import registrySource from './registry.ts?raw'
+import resourceLoadGuardSource from './resource-load-guard.ts?raw'
 import * as uiApi from './ui.ts'
 import uiSource from './ui.ts?raw'
 
@@ -57,6 +58,7 @@ const SOURCES: Readonly<Record<string, string>> = {
   'formula-protocol.ts': formulaProtocolSource,
   'injector.ts': injectorSource,
   'registry.ts': registrySource,
+  'resource-load-guard.ts': resourceLoadGuardSource,
 }
 /** 两个出口 */
 const EXITS: readonly string[] = ['index.ts', 'ui.ts']

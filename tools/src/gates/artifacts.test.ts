@@ -590,6 +590,13 @@ describe('US-M1-09 生产构建里没有测试构建的模块：按来源认（M
     expect(checkTestOnlyArtifacts(['assets/switch-timing-BFKYlR0-.js', 'assets/read-only-entries-x.js', 'assets/content-compare-y.js', 'assets/timing-z.js']).map(v => v.subject))
       .toEqual(['assets/switch-timing-BFKYlR0-.js', 'assets/read-only-entries-x.js', 'assets/content-compare-y.js'])
   })
+
+  it('档案故障开关（M3-P4 设计 §3.14）：来源在 editor/testing/ 下，按来源认；单独成块时按名字兜底，名字相近的不算', () => {
+    expect(isTestOnlySource('src/editor/testing/profile-fault.ts')).toBe(true)
+    expect(checkTestOnlySources({ 'assets/editor-a.js': { name: 'editor', modules: ['src/editor/sheet-editor.ts', 'src/editor/testing/profile-fault.ts'] } }, ['assets/editor-a.js']).map(v => v.rule))
+      .toEqual(['artifacts/test-only-source'])
+    expect(checkTestOnlyArtifacts(['assets/profile-fault-Bx1.js', 'assets/profile-faults.js', 'assets/my-profile-fault-x.js']).map(v => v.subject)).toEqual(['assets/profile-fault-Bx1.js'])
+  })
 })
 
 describe('US-M1-09 生产构建里没有测试构建的文件', () => {

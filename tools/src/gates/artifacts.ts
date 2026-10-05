@@ -556,9 +556,10 @@ export function checkTestOnlySources(sources: ModuleSources, files: readonly str
  * - 编辑器的 E2E 探针（M2-P3 设计 §3.7）与它补上的插件 Facade（M2-P6 第 4 片复核 F5）：探针挂在 window 上的名字另由禁用关键字核对；
  * - 页面自检（M3-P2 设计 §3.5）：入口页 selftest.html 与它的脚本、编辑器页的挂接（selftest-hook）、自检模块（selftest）与结果的格式
  *   （selftest-report），分块名都以 selftest- 开头；与 E2E 共用的入口清单（read-only-entries）、比较口径（content-compare）与
- *   切换的计时（switch-timing）被单独动态引入时也自成分块（M3-P2 复核 B2）。自检结果的格式标识与计时挂在 window 上的名字另由禁用关键字核对
+ *   切换的计时（switch-timing）被单独动态引入时也自成分块（M3-P2 复核 B2）。自检结果的格式标识与计时挂在 window 上的名字另由禁用关键字核对；
+ * - 档案故障开关（M3-P4 设计 §3.14，profile-fault）：编辑器在注册插件之前动态引入它，自成分块
  */
-export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^(?:csp-probe|selftest)\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe|probe-facades|selftest|read-only-entries|content-compare|switch-timing)-[^/]*$/]
+export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^(?:csp-probe|selftest)\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe|probe-facades|selftest|read-only-entries|content-compare|switch-timing|profile-fault)-[^/]*$/]
 
 export function checkTestOnlyArtifacts(paths: readonly string[]): Violation[] {
   return paths
