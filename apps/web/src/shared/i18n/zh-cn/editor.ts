@@ -36,17 +36,21 @@ const SNAPSHOT_RULE_PHRASES: Readonly<Record<SnapshotRule, string>> = {
 
 /**
  * 失效的说明的结尾（M3-P2 设计 §3.4）：本页有没有还没确认的内容 × 还读不读得到这份文档。
- * 读得到而且有修改：另存为副本或放弃；读不到了（404）：说明，本页的内容不再能保存（M3 总设计 §2.1 第 4 条）——页面上还显示着本页的内容时
- * 提一句先复制出来；编辑器没能重新打开、什么也显示不了（shown 为假，审查 A3）时不提
+ * 读得到而且有修改：另存为副本或放弃（副本被拒、再试也一样时不再提副本，copyable 为假，下一段另有说明，M3-P3 审查 B3）；
+ * 读不到了（404）：说明，本页的内容不再能保存（M3 总设计 §2.1 第 4 条）——页面上还显示着本页的内容时提一句先复制出来；
+ * 编辑器没能重新打开、什么也显示不了（shown 为假，审查 A3）时不提
  */
-function lostEnding(unsaved: boolean, readable: boolean, shown: boolean): string {
+function lostEnding(unsaved: boolean, readable: boolean, shown: boolean, copyable: boolean): string {
   if (unsaved) {
     if (readable)
-      return '本页的修改没有保存：可以另存为副本，或者放弃这些修改。'
+      return copyable ? '本页的修改没有保存：可以另存为副本，或者放弃这些修改。' : '本页的修改没有保存。'
     return shown ? '本页的修改没有保存，也不能再保存到这份文档，需要的话先把内容复制出来。' : '本页的修改没有保存，也不能再保存到这份文档。'
   }
   return readable ? '本页的修改都已保存，重新加载可以看到最新的版本。' : '本页的修改都已保存。'
 }
+
+/** 超过容量上限（保存时本页先算出来，另存为副本时服务端回答 PAYLOAD_TOO_LARGE） */
+const CAPACITY_EXCEEDED = '表格超过容量上限（5 MiB）'
 
 export const editorMessages = {
   back: '我的空间',
@@ -74,18 +78,40 @@ export const editorMessages = {
    * 文档由更新的版本保存过（服务端回滚之后）——重新加载拿到的还是同一个版本，只能阅读，不提示刷新
    */
   incompatible: {
-    /** 编辑时得知本页过旧（保存或心跳）：本页的修改有没有保存（unsaved）决定说法；M4 之前没有发件箱，刷新会丢掉没保存的修改 */
-    outdatedEditing: (unsaved: boolean) => unsaved
-      ? '页面的版本过旧，本页的修改没有保存，也不能再保存。需要的话先把内容复制出来，再重新加载页面'
-      : '页面的版本过旧，不能再保存。本页的修改都已保存，重新加载页面之后可以接着编辑',
+    /**
+     * 编辑时得知本页过旧（保存或心跳）：本页的修改存上了没有（pending）决定说法——正在核对结果未知的那次保存（checking，核对完再下结论，
+     * M3-P3 审查 B5）、修改没有保存（edits）、修改都已保存只有公式的结果没有存上（formulas）、都已保存（none）。
+     * M4 之前没有发件箱，刷新会丢掉没保存的修改
+     */
+    outdatedEditing: (pending: 'checking' | 'edits' | 'formulas' | 'none') => {
+      switch (pending) {
+        case 'checking':
+          return '页面的版本过旧，不能再保存。正在核对最后一次保存的结果…'
+        case 'edits':
+          return '页面的版本过旧，本页的修改没有保存，也不能再保存。需要的话先把内容复制出来，再重新加载页面'
+        case 'formulas':
+          return '页面的版本过旧，不能再保存。本页的修改都已保存，只是公式的结果没有存上；重新加载页面之后可以接着编辑'
+        case 'none':
+          return '页面的版本过旧，不能再保存。本页的修改都已保存，重新加载页面之后可以接着编辑'
+      }
+    },
     /** 阅读时（申请编辑权时得知，或者编辑时得知之后退出了编辑）：不能进入编辑 */
     outdatedReading: '页面的版本过旧，不能进入编辑。重新加载页面之后再编辑',
     /** 文档由更新的版本保存过：打开时就看得出（详情的 sdkVersion），或者申请编辑权时得知 */
     tooNewReading: '这份文档由更新的版本保存过，当前只能阅读，不能编辑',
-    /** 编辑时得知文档由更新的版本保存过 */
-    tooNewEditing: (unsaved: boolean) => unsaved
-      ? '这份文档由更新的版本保存过，本页的修改不能再保存。需要的话先把内容复制出来'
-      : '这份文档由更新的版本保存过，当前只能阅读，不能再保存',
+    /** 编辑时得知文档由更新的版本保存过：pending 同上 */
+    tooNewEditing: (pending: 'checking' | 'edits' | 'formulas' | 'none') => {
+      switch (pending) {
+        case 'checking':
+          return '这份文档由更新的版本保存过，不能再保存。正在核对最后一次保存的结果…'
+        case 'edits':
+          return '这份文档由更新的版本保存过，本页的修改不能再保存。需要的话先把内容复制出来'
+        case 'formulas':
+          return '这份文档由更新的版本保存过，当前只能阅读，不能再保存。本页的修改都已保存，只是公式的结果没有存上'
+        case 'none':
+          return '这份文档由更新的版本保存过，当前只能阅读，不能再保存'
+      }
+    },
   },
   /**
    * 快照达到容量的 80%（US-M3-14，00 号计划书 §7.7）：不打断的说明，percent 是最近一次捕获占上限的百分比（向下取整）
@@ -105,23 +131,25 @@ export const editorMessages = {
     elsewhere: <T>(holder: T, lastActive: string | undefined, canEdit: boolean): Phrase<T> => [holder, ` 正在编辑这份文档${lastActive === undefined ? '' : `（${lastActive}）`}${canEdit ? '，你现在只能阅读' : ''}`],
     /** 持有者最后一次操作在几分钟之前（服务端回答时，向下取整） */
     lastActive: (minutes: number) => minutes < 1 ? '最后活动不到 1 分钟前' : `最后活动 ${minutes} 分钟前`,
-    elsewhereBySelf: `你在另一个标签页或设备上正在编辑这份文档，这里只能阅读。${SELF_ELSEWHERE_HINT}`,
+    /** reenter：这一页能再点"编辑"（与服务端不兼容的阅读不给"编辑"，不提它，M3-P3 审查 B8） */
+    elsewhereBySelf: (reenter: boolean) => `你在另一个标签页或设备上正在编辑这份文档，这里只能阅读${reenter ? `。${SELF_ELSEWHERE_HINT}` : ''}`,
     /**
      * 编辑状态里是"自己在别处编辑"，而本页刚退出编辑、没能确认放掉编辑权（释放的结果未知或超过了等待的上限，审查 A13）：多半就是本页的那一代
-     * （同一个页面再申请照样取得），不说成另一个标签页或设备；那一代至多一个有效期后自行到期
+     * （同一个页面再申请照样取得），不说成另一个标签页或设备；那一代至多一个有效期后自行到期。reenter 同上
      */
-    elsewhereThisPage: `本页刚退出编辑，编辑权还没能确认放掉：最多 ${EDIT_LEASE_TTL_SECONDS} 秒后自动结束，这期间别人还不能编辑；这一页可以直接再点"编辑"`,
+    elsewhereThisPage: (reenter: boolean) => `本页刚退出编辑，编辑权还没能确认放掉：最多 ${EDIT_LEASE_TTL_SECONDS} 秒后自动结束，这期间别人还不能编辑${reenter ? '；这一页可以直接再点"编辑"' : ''}`,
     /** 服务端给的详情认不出时的通用说法 */
     elsewhereUnknown: '这份文档正在别处编辑，你现在只能阅读',
     /**
      * 失效的说明：cause 是原因（几段，人名经人名组件呈现；不认识的原因为 undefined，只说编辑权已失效）；
      * unsaved 是本页还有服务端没确认的内容（没有时不说"没有保存"，审查 B3）；readable 是还读得到这份文档
-     * （读不到了时不提另存为副本与重新加载，审查 B2）；shown 是页面上还显示着本页的内容（编辑器没能重新打开时为假，审查 A3）
+     * （读不到了时不提另存为副本与重新加载，审查 B2）；shown 是页面上还显示着本页的内容（编辑器没能重新打开时为假，审查 A3）；
+     * copyable 是还能另存为副本（副本被拒、再试也一样时为假，M3-P3 审查 B3）
      */
-    lost: <T>(cause: Phrase<T> | undefined, unsaved: boolean, readable: boolean, shown = true): Phrase<T> => [
+    lost: <T>(cause: Phrase<T> | undefined, unsaved: boolean, readable: boolean, shown = true, copyable = true): Phrase<T> => [
       '编辑权已失效',
       ...(cause === undefined ? [] : ['：', ...cause]),
-      `。${lostEnding(unsaved, readable, shown)}`,
+      `。${lostEnding(unsaved, readable, shown, copyable)}`,
     ],
     /** 编辑权被收回（明确收回，或者持有者已经不能编辑） */
     lostRevoked: '你对这份文档的编辑权被收回了',
@@ -171,6 +199,13 @@ export const editorMessages = {
     saveCopy: '另存为副本',
     savingCopy: '正在另存为副本…',
     copyFailed: (reason: string) => `没能另存为副本：${reason}。本页的内容还在，可以再试一次`,
+    /**
+     * 副本被拒、再试也一样（M3-P3 审查 B3）：本页的版本过旧——服务端对副本同样拦旧页面；重新加载会丢掉本页没保存的修改
+     * （M4 之前没有发件箱），先说明复制出来。不再给"另存为副本"
+     */
+    copyOutdated: '页面的版本过旧，不能另存为副本。需要的话先把内容复制出来，再重新加载页面',
+    /** 同上，内容本身不能保存：problem 是按违反的规则（或容量）的说法，不说"可以再试" */
+    copyRefused: (problem: string) => `没能另存为副本：${problem}。这份内容不能另存为副本，需要的话先把内容复制出来，或者放弃这些修改`,
     discard: '放弃本页的修改',
     discardTitle: '放弃本页的修改？',
     discardDescription: '本页没有保存的修改会被丢弃，页面改为显示服务端的最新版本。需要的话先把内容复制出来，或者另存为副本。',
@@ -187,7 +222,9 @@ export const editorMessages = {
     reopenFailed: (copyable: boolean) => `编辑器没能重新打开，表格暂时显示不出来${copyable ? '；本页的修改已经取出，另存为副本照常可用' : ''}`,
   },
   finishCellEditing: '请先完成单元格的编辑',
-  tooLarge: '表格超过容量上限（5 MiB），无法保存',
+  tooLarge: `${CAPACITY_EXCEEDED}，无法保存`,
+  /** 超过容量上限这件事本身（另存为副本被拒时的说法里用） */
+  capacityExceeded: CAPACITY_EXCEEDED,
   formulasPending: '公式结果尚未保存，请稍后再保存一次',
   saveFailed: (reason: string) => `保存失败：${reason}`,
   conflict: '别处保存了更新的版本。本页的修改没有保存；需要的话先复制出来，再重新加载查看最新版本',

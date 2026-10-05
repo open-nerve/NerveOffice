@@ -50,6 +50,8 @@ interface FakeEditor {
   disposed: boolean
   cellEditing: boolean
   failCapture: boolean
+  /** 公式的结果收齐了没有（settleFormulas 的回答）：默认收齐 */
+  formulasSettled: boolean
   edit: (value: string) => void
   enter: (stage: SheetEditorLifecycle) => void
 }
@@ -83,6 +85,7 @@ function fakeFactory() {
       disposed: false,
       cellEditing: false,
       failCapture: false,
+      formulasSettled: true,
       editor: {
         unitId: 'unit-1',
         changeSeq: () => seq,
@@ -106,7 +109,7 @@ function fakeFactory() {
           }
           return true
         }),
-        settleFormulas: async () => 'settled',
+        settleFormulas: vi.fn(async () => fake.formulasSettled ? 'settled' as const : 'timeout' as const),
         capture: vi.fn(() => {
           if (fake.failCapture)
             throw new Error('SDK 出错')
@@ -1147,6 +1150,23 @@ describe('另存为副本与放弃（M3-P2 设计 §3.2、§3.4）', () => {
     expect(context.mode.hasUnsavedWork()).toBe(false)
   })
 
+  it.each([
+    ['公式还没收齐：带上', false, true],
+    ['公式收齐了：不带', true, false],
+  ])('副本的"公式待更新"（M3-P3 设计 §3.8，审查 B6）：按失去编辑权那一刻公式收齐没有（不等）——%s', async (_case, settled, pending) => {
+    const context = setup()
+    await editing(context)
+    const writer = context.factory.last()
+    writer.edit('本页的')
+    writer.formulasSettled = settled
+    loseOnNextHeartbeat(context, DENIED)
+    await context.time.advance(HEARTBEAT_MS)
+    await settle()
+    expect(writer.editor.settleFormulas).toHaveBeenLastCalledWith(0)
+    await context.mode.saveCopy()
+    expect(context.api.conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, expect.objectContaining({ formulasPending: pending }), expect.anything())
+  })
+
   it('副本的标题里的时间是失去编辑权的那一刻，不是点"另存为副本"的那一刻（审查 A5）', async () => {
     let now = new Date(2026, 9, 4, 15, 30, 12)
     const context = await lostWithChanges({ now: () => now })
@@ -1167,15 +1187,43 @@ describe('另存为副本与放弃（M3-P2 设计 §3.2、§3.4）', () => {
     expect(context.api.conflictCopy).toHaveBeenCalledOnce()
   })
 
-  it('确定被拒绝：说明原因，内容留着，可以再试；再试换新的 requestId', async () => {
+  it('确定被拒绝、再试可能成功（请求标识被占用）：说明原因，内容留着，可以再试；再试换新的 requestId', async () => {
     const context = await lostWithChanges()
-    context.api.conflictCopy.mockRejectedValueOnce(new ApiError(422, 'SNAPSHOT_INVALID', '快照不合格'))
+    context.api.conflictCopy.mockRejectedValueOnce(new ApiError(409, 'REQUEST_ID_CONFLICT', '请求已失效'))
     await context.mode.saveCopy()
     expect(lostOf(context.mode).copy).toMatchObject({ kind: 'failed' })
     await context.mode.saveCopy()
     const [first, second] = context.api.conflictCopy.mock.calls.map(call => call[1].requestId)
     expect(second).not.toBe(first)
     expect(modeOf(context.mode).kind).toBe('reading')
+  })
+
+  it('本页过旧（CLIENT_OUTDATED：服务端对副本同样拦旧页面）：再试也一样——记为被拒（outdated），不再上传，内容留着、离开照样提示（审查 B3）', async () => {
+    const context = await lostWithChanges()
+    const outdated = new ApiError(409, 'CLIENT_OUTDATED', '页面的版本过旧', { details: { reason: 'build' } })
+    context.api.conflictCopy.mockRejectedValueOnce(outdated)
+    await context.mode.saveCopy()
+    expect(lostOf(context.mode)).toMatchObject({ copy: { kind: 'refused', refusal: 'outdated', error: outdated }, unsaved: true })
+    await context.mode.saveCopy()
+    expect(context.api.conflictCopy).toHaveBeenCalledOnce()
+    expect(context.mode.hasUnsavedWork()).toBe(true)
+    expect(context.hooks.writeProblem).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['内容不合规则（SNAPSHOT_INVALID）', new ApiError(422, 'SNAPSHOT_INVALID', '快照不合格', { details: { rule: 'link-address' } })],
+    ['超过容量上限（PAYLOAD_TOO_LARGE）', new ApiError(413, 'PAYLOAD_TOO_LARGE', '太大')],
+  ])('%s：捕获的内容不会再变，再试也一样——记为被拒（content），不再上传；还能放弃本页的修改（审查 B3）', async (_case, error) => {
+    const context = await lostWithChanges()
+    context.api.conflictCopy.mockRejectedValueOnce(error)
+    await context.mode.saveCopy()
+    expect(lostOf(context.mode).copy).toEqual({ kind: 'refused', refusal: 'content', error })
+    await context.mode.saveCopy()
+    expect(context.api.conflictCopy).toHaveBeenCalledOnce()
+    expect(context.mode.hasUnsavedWork()).toBe(true)
+    await context.mode.discard()
+    expect(readingOf(context.mode)).toMatchObject({ notice: undefined })
+    expect(context.mode.hasUnsavedWork()).toBe(false)
   })
 
   it('结果未知：再试沿用同一个 requestId（服务端只建一份）；读不到（404，取锁之前被移走的竞态）同样留着内容、可以再试', async () => {
@@ -1743,6 +1791,21 @@ describe('与服务端不兼容（M3-P3 设计 §3.5、§3.10）', () => {
     expect(context.api.save).not.toHaveBeenCalled()
   })
 
+  it('心跳得知过旧时有一次结果未知的保存：原样重发它一次（重放先于拦截旧客户端），其实已经提交时说修改都已保存、离开不再提示（审查 B5）', async () => {
+    const context = setup({ editLease: { renew: async () => Promise.reject(OUTDATED) } })
+    await editing(context)
+    context.factory.last().edit('本页的修改')
+    context.api.save.mockRejectedValueOnce(new NetworkError('断网'))
+    await context.mode.save()
+    expect(context.mode.view().save).toMatchObject({ status: 'failed', unsaved: true })
+    await context.time.advance(HEARTBEAT_MS)
+    await settle()
+    expect(context.api.save).toHaveBeenCalledTimes(2)
+    expect(context.api.save.mock.calls[1]?.[1]).toEqual(context.api.save.mock.calls[0]?.[1])
+    expect(context.mode.view().save).toMatchObject({ status: 'outdated', checking: false, unsaved: false, problem: undefined })
+    expect(context.mode.hasUnsavedWork()).toBe(false)
+  })
+
   it('正在以可编辑重建时心跳就得知不兼容：建好之后保存的状态随即是"需要刷新"', async () => {
     const context = setup({ editLease: { renew: async () => Promise.reject(OUTDATED) } })
     await opened(context)
@@ -1755,13 +1818,25 @@ describe('与服务端不兼容（M3-P3 设计 §3.5、§3.10）', () => {
     expect(context.mode.view()).toMatchObject({ mode: { kind: 'editing' }, save: { status: 'outdated', canSave: false } })
   })
 
-  it('不兼容之后退出编辑（本页的修改都已保存）：回到阅读，照样带着说明、不给"编辑"', async () => {
+  it('不兼容之后退出编辑（本页的修改都已保存）：回到阅读，照样带着说明、不给"编辑"；停住续租时那次释放送到了，不说那一代还在', async () => {
     const context = setup({ editLease: { renew: async () => Promise.reject(OUTDATED) } })
     await editing(context)
     await context.time.advance(HEARTBEAT_MS)
     await context.mode.exit()
     await settle()
-    expect(readingOf(context.mode)).toMatchObject({ blocked: 'client-outdated' })
+    expect(readingOf(context.mode)).toMatchObject({ blocked: 'client-outdated', releaseUnconfirmed: false })
+    expect(context.editLease.release).toHaveBeenCalledOnce()
+  })
+
+  it('心跳得知过旧、停住续租时放掉那一代的请求没送到：之后退出编辑，阅读里如实记下那一代没能确认放掉（审查 B8），不再发释放', async () => {
+    // 编辑状态里的持有者是自己（本页那一代还在）：记号留着
+    const context = setup({ editLease: { renew: async () => Promise.reject(OUTDATED), release: async () => Promise.reject(new NetworkError('断网')) }, api: { editStatus: async () => status(3, SELF_EDITING) } })
+    await editing(context)
+    await context.time.advance(HEARTBEAT_MS)
+    await context.mode.exit()
+    await settle()
+    expect(readingOf(context.mode)).toMatchObject({ blocked: 'client-outdated', releaseUnconfirmed: true })
+    expect(context.editLease.release).toHaveBeenCalledOnce()
   })
 
   it('80% 的提示：进入编辑时按载入的内容先算一次大小（与服务端解压后的字节同一个口径），保存之后换成那次捕获的', async () => {

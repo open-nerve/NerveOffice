@@ -165,7 +165,7 @@ export interface EditLease {
    * 结果未知时服务端按到期回收）之后兑现，从不失败。页面隐藏、关闭时不等它；退出编辑时等它（M3-P2 设计 §3.4）。
    * 兑现为服务端确认了没有（请求成功为 true；会话不是本人时不发、请求失败或结果未知为 false：那一代可能还在服务端，至多一个有效期后
    * 自行到期，退出编辑之后的阅读据此如实说明，审查 A13）。已经失效时什么也不做、为 true（本页没有还在的那一代）；
-   * 释放过再调用时交回那一次的结果
+   * 释放过再调用时交回那一次的结果；与服务端不兼容、停住续租时已经放过一次（halt），交回那一次的结果（审查 B8）
    */
   readonly release: () => Promise<boolean>
 }
@@ -329,14 +329,15 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
 
   /**
    * 与服务端不兼容（M3-P3）：终态。停止续租，尽力放掉手里那一代（释放不核对数据格式，照样送得到；没送到时至多一个有效期后到期），
-   * 通知页面。token 是本页手里的那一代（续上时刚申请到的新一代另由调用方放掉）
+   * 通知页面。token 是本页手里的那一代（续上时刚申请到的新一代另由调用方放掉）。这次释放的结果记下来：之后的 release()（退出编辑时
+   * 等它）交回它，没送到时如实说那一代可能还在，不说成已确认（审查 B8）
    */
   function halt(kind: Incompatibility): void {
     if (ended())
       return
     state = 'halted'
     stopTimer()
-    releaseQuietly(credentials.token)
+    releasing = api.release(documentId, credentials.token).then(() => true, () => false)
     options.onIncompatible(kind)
   }
 

@@ -18,7 +18,7 @@ const READY: EditorPageReady = {
   canShare: false,
   userId: '0199a2c4-0000-7000-8000-00000000000a',
 }
-const CLEAN: SaveView = { status: 'clean', formulasPending: false, problem: undefined, conflict: undefined, canSave: true, unsaved: false, snapshotBytes: undefined }
+const CLEAN: SaveView = { status: 'clean', formulasPending: false, problem: undefined, conflict: undefined, canSave: true, unsaved: false, unsavedEdits: false, checking: false, snapshotBytes: undefined }
 const EDITING: EditModeState = { kind: 'editing' }
 const READING: ReadingMode = { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined }
 const AMY = { id: '0199a2c4-0000-7000-8000-0000000000e1', username: 'amy', displayName: '艾米' }
@@ -476,6 +476,15 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
     expect(infoRegion()).toHaveTextContent('你在另一个标签页或设备上正在编辑这份文档')
   })
 
+  it('与服务端不兼容的阅读（没有"编辑"）读到"自己在别处编辑"：照样说是本页刚退出或在别处，不提"再点编辑"（M3-P3 审查 B8：停住续租之后的那次释放没送到）', () => {
+    const self = { holder: AMY, sameUser: true, lastActiveMinutes: 0 }
+    const fake = renderChrome({ mode: { ...READING, blocked: 'client-outdated', holder: self, releaseUnconfirmed: true }, save: undefined })
+    expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
+    expect(infoRegion().textContent).toBe('本页刚退出编辑，编辑权还没能确认放掉：最多 90 秒后自动结束，这期间别人还不能编辑')
+    fake.set({ mode: { ...READING, blocked: 'client-outdated', holder: self, releaseUnconfirmed: false } })
+    expect(infoRegion().textContent).toBe('你在另一个标签页或设备上正在编辑这份文档，这里只能阅读')
+  })
+
   it('别人正在编辑：读屏状态区说明谁（人名组件，登录名在前）、最后活动几分钟之前；状态区一直在，内容变化时往里填（规范 §2.4）', () => {
     const fake = renderChrome({ load: { kind: 'loading' }, mode: undefined, save: undefined })
     const region = infoRegion()
@@ -601,6 +610,42 @@ describe('失去编辑权（M3-P2 设计 §3.4）', () => {
     fake.set({ mode: lost({ kind: 'newer' }, { copy: { kind: 'failed', error: new NetworkError('断网') } }) })
     expect(screen.getByRole('alert')).toHaveTextContent('没能另存为副本：网络连接失败，请检查网络后重试。本页的内容还在，可以再试一次')
     expect(screen.getByRole('button', { name: '另存为副本' })).toHaveAttribute('aria-disabled', 'false')
+  })
+
+  it('副本因本页过旧被拒（CLIENT_OUTDATED，再试也一样，审查 B3）：说明不能另存为副本、先把内容复制出来再重新加载；不给副本与放弃，不说"可以再试"，"重新加载"是整页的', () => {
+    const outdated = new ApiError(409, 'CLIENT_OUTDATED', '页面的版本过旧')
+    const { page } = renderChrome({ mode: lost({ kind: 'denied', error: DENIED }, { copy: { kind: 'refused', refusal: 'outdated', error: outdated } }), save: undefined })
+    const alert = screen.getByRole('alert')
+    expect(alert.textContent).toBe('编辑权已失效：你已没有编辑这份文档的权限（空间已归档，只能查看）。本页的修改没有保存。页面的版本过旧，不能另存为副本。需要的话先把内容复制出来，再重新加载页面重新加载')
+    expect(alert).not.toHaveTextContent('可以再试')
+    expect(screen.queryByRole('button', { name: '另存为副本' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '放弃本页的修改' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '重新加载' }))
+    expect(page.reload).toHaveBeenCalledOnce()
+    expect(page.discard).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['链接的规则', new ApiError(422, 'SNAPSHOT_INVALID', '快照不合格', { details: { rule: 'link-address' } }), '没能另存为副本：表格里有不能保存的链接。这份内容不能另存为副本，需要的话先把内容复制出来，或者放弃这些修改'],
+    ['认不出的规则', new ApiError(422, 'SNAPSHOT_INVALID', '快照不合格', { details: { rule: 'later-rule' } }), '没能另存为副本：表格内容的格式不正确。这份内容不能另存为副本'],
+    ['超过容量上限', new ApiError(413, 'PAYLOAD_TOO_LARGE', '太大'), '没能另存为副本：表格超过容量上限（5 MiB）。这份内容不能另存为副本'],
+  ])('副本因内容被拒（%s，再试也一样，审查 B3）：按规则说明，不说"可以再试"；不再给副本，给放弃', (_case, error, text) => {
+    renderChrome({ mode: lost({ kind: 'newer' }, { copy: { kind: 'refused', refusal: 'content', error } }), save: undefined })
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent(text)
+    expect(alert).toHaveTextContent('本页的修改没有保存。')
+    expect(alert).not.toHaveTextContent('可以另存为副本')
+    expect(alert).not.toHaveTextContent('可以再试')
+    expect(screen.queryByRole('button', { name: '另存为副本' })).toBeNull()
+    expect(screen.getByRole('button', { name: '放弃本页的修改' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '重新加载' })).toBeNull()
+  })
+
+  it('副本被拒、编辑器又没能重新打开：不说"另存为副本照常可用"', () => {
+    renderChrome({ mode: lost({ kind: 'newer' }, { reopenFailed: true, copy: { kind: 'refused', refusal: 'content', error: new ApiError(413, 'PAYLOAD_TOO_LARGE', '太大') } }), save: undefined })
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('编辑器没能重新打开，表格暂时显示不出来')
+    expect(alert).not.toHaveTextContent('另存为副本照常可用')
   })
 
   it('正在核对结果未知的那次保存：先说明在核对，不给副本与放弃', () => {
@@ -790,6 +835,14 @@ describe('模式切换与按钮消失时的焦点（审查 A2，规范 §2.4）'
     await waitFor(() => expect(document.activeElement).toBe(backLink()))
   })
 
+  it('副本被拒、再试也一样（审查 B3）："另存为副本"随之消失：焦点交给返回链接，不落到 body', async () => {
+    const fake = renderChrome({ mode: lost({ kind: 'newer' }, { copy: { kind: 'saving' } }), save: undefined })
+    screen.getByRole('button', { name: '正在另存为副本…' }).focus()
+    fake.set({ mode: lost({ kind: 'newer' }, { copy: { kind: 'refused', refusal: 'outdated', error: new ApiError(409, 'CLIENT_OUTDATED', '页面的版本过旧') } }) })
+    expect(screen.queryByRole('button', { name: '另存为副本' })).toBeNull()
+    await waitFor(() => expect(document.activeElement).toBe(backLink()))
+  })
+
   describe('编辑器没能重新打开（以只读重建失败，审查 A3）：焦点从销毁的编辑器落到了 body，交给失效说明里的按钮（复验 C2）', () => {
     const DENIED_LOSS: LeaseLoss = { kind: 'denied', error: new ApiError(403, 'PERMISSION_DENIED', '空间已归档，只能查看') }
 
@@ -860,7 +913,7 @@ describe('模式切换与按钮消失时的焦点（审查 A2，规范 §2.4）'
 
 describe('与服务端不兼容与容量（M3-P3 设计 §3.10）', () => {
   it('编辑时本页过旧（保存的状态 outdated）：页头说需要刷新；说明本页的修改没有保存、先复制出来，给"重新加载"；"保存"不可用、不说公式没保存', () => {
-    const fake = renderChrome({ save: { ...CLEAN, status: 'outdated', canSave: false, unsaved: true, formulasPending: true } })
+    const fake = renderChrome({ save: { ...CLEAN, status: 'outdated', canSave: false, unsaved: true, unsavedEdits: true, formulasPending: true } })
     expect(headerStatus()).toHaveTextContent('需要刷新')
     const alert = screen.getByRole('alert')
     expect(alert).toHaveTextContent('页面的版本过旧，本页的修改没有保存，也不能再保存。需要的话先把内容复制出来，再重新加载页面')
@@ -875,11 +928,32 @@ describe('与服务端不兼容与容量（M3-P3 设计 §3.10）', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('页面的版本过旧，不能再保存。本页的修改都已保存，重新加载页面之后可以接着编辑')
   })
 
+  it('编辑时本页过旧、修改都已保存，只有公式的结果没有存上（审查 B5）：单说这一句，不说"本页的修改没有保存"', () => {
+    renderChrome({ save: { ...CLEAN, status: 'outdated', canSave: false, unsaved: true, unsavedEdits: false, formulasPending: true } })
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('页面的版本过旧，不能再保存。本页的修改都已保存，只是公式的结果没有存上；重新加载页面之后可以接着编辑')
+    expect(alert).not.toHaveTextContent('没有保存')
+  })
+
+  it('编辑时本页过旧、正在核对结果未知的那次保存（审查 B5）：先说正在核对，不下"有没有保存"的结论；核对出其实已经提交时说都已保存', () => {
+    const fake = renderChrome({ save: { ...CLEAN, status: 'outdated', canSave: false, unsaved: true, unsavedEdits: true, checking: true } })
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('页面的版本过旧，不能再保存。正在核对最后一次保存的结果…')
+    expect(alert).not.toHaveTextContent('没有保存')
+    fake.set({ save: { ...CLEAN, status: 'outdated', canSave: false } })
+    expect(screen.getByRole('alert')).toHaveTextContent('本页的修改都已保存，重新加载页面之后可以接着编辑')
+  })
+
   it('编辑时文档由更新的版本保存过（too-new）：页头说不能保存；只说明，不给"重新加载"（重新加载拿到的还是同一个版本）', () => {
-    renderChrome({ save: { ...CLEAN, status: 'too-new', canSave: false, unsaved: true } })
+    const fake = renderChrome({ save: { ...CLEAN, status: 'too-new', canSave: false, unsaved: true, unsavedEdits: true } })
     expect(headerStatus()).toHaveTextContent('不能保存')
     expect(screen.getByRole('alert')).toHaveTextContent('这份文档由更新的版本保存过，本页的修改不能再保存。需要的话先把内容复制出来')
     expect(screen.queryByRole('button', { name: '重新加载' })).toBeNull()
+    // 核对中、只有公式的结果没存上：同样的几种说法（审查 B5）
+    fake.set({ save: { ...CLEAN, status: 'too-new', canSave: false, unsaved: true, unsavedEdits: true, checking: true } })
+    expect(screen.getByRole('alert')).toHaveTextContent('这份文档由更新的版本保存过，不能再保存。正在核对最后一次保存的结果…')
+    fake.set({ save: { ...CLEAN, status: 'too-new', canSave: false, unsaved: true, formulasPending: true } })
+    expect(screen.getByRole('alert')).toHaveTextContent('这份文档由更新的版本保存过，当前只能阅读，不能再保存。本页的修改都已保存，只是公式的结果没有存上')
   })
 
   it('阅读时本页过旧（申请编辑权时得知）：页头说需要刷新，不给"编辑"，说明并给"重新加载"', () => {

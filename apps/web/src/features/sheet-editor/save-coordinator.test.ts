@@ -1092,6 +1092,98 @@ describe('保存协议加固（M3-P3 设计 §3.7、§3.8、§3.10）', () => {
     expect(conflicted.coordinator.view().status).toBe('conflict')
   })
 
+  describe('转入不兼容的终态时有一次结果未知的保存（审查 B5）：先原样重发它一次再定说法（重放先于拦截旧客户端，设计 §3.1）', () => {
+    const OUTDATED = new ApiError(409, 'CLIENT_OUTDATED', '页面的版本过旧', { details: { reason: 'build' } })
+
+    /** 改一处、保存，结果未知（断网）：交回那一次的请求 */
+    async function unknownSave(context: ReturnType<typeof setup>): Promise<PendingSend> {
+      context.control.edit('甲')
+      const saving = context.coordinator.save()
+      const first = await sent(context.calls, 1)
+      first.reject(new NetworkError('断网'))
+      await saving
+      expect(context.coordinator.hasUnknownOutcome()).toBe(true)
+      return first
+    }
+
+    it('续租得知过旧（block）：核对期间 checking 为真、还说不准；原样重发拿到原来的结果（其实已经提交）——按它确认，修改都已保存，"保存失败"不再说；settled 等核对完', async () => {
+      const context = setup({ baseRevision: 3 })
+      const first = await unknownSave(context)
+      context.coordinator.block('client-outdated')
+      expect(context.coordinator.view()).toMatchObject({ status: 'outdated', checking: true, unsaved: true, canSave: false })
+      let settled = false
+      const waiting = context.coordinator.settled().then(() => {
+        settled = true
+      })
+      const replay = await sent(context.calls, 2)
+      expect(replay.request).toEqual(first.request)
+      expect(replay.body).toEqual(first.body)
+      await Promise.resolve()
+      expect(settled).toBe(false)
+      replay.resolve(saved(4))
+      await waiting
+      expect(context.coordinator.view()).toMatchObject({ status: 'outdated', checking: false, unsaved: false, unsavedEdits: false, problem: undefined })
+      expect(context.coordinator.hasUnsavedWork()).toBe(false)
+      expect(context.coordinator.baseRevision()).toBe(4)
+      // 终态照旧：按保存不发请求
+      await context.coordinator.save()
+      expect(context.calls).toHaveLength(2)
+    })
+
+    it.each([
+      ['同样被拒（它没有提交）', OUTDATED, false],
+      ['结果仍然未知（断网）', new NetworkError('断网'), true],
+    ])('原样重发%s：仍是修改没有保存，核对结束', async (_case, failure, stillUnknown) => {
+      const context = setup()
+      await unknownSave(context)
+      context.coordinator.block('document-too-new')
+      const replay = await sent(context.calls, 2)
+      replay.reject(failure)
+      await context.coordinator.settled()
+      expect(context.coordinator.view()).toMatchObject({ status: 'too-new', checking: false, unsaved: true, unsavedEdits: true })
+      expect(context.coordinator.hasUnknownOutcome()).toBe(stillUnknown)
+      expect(context.calls).toHaveLength(2)
+    })
+
+    it('保存自己得知过旧（这一次的内容与结果未知的那次不同）：照样原样重发那一次；它提交了，这一次的修改仍没保存', async () => {
+      const context = setup({ baseRevision: 3 })
+      const first = await unknownSave(context)
+      context.control.edit('乙')
+      const saving = context.coordinator.save()
+      const second = await sent(context.calls, 2)
+      expect(second.request.requestId).not.toBe(first.request.requestId)
+      second.reject(OUTDATED)
+      await saving
+      const replay = await sent(context.calls, 3)
+      expect(replay.request).toEqual(first.request)
+      replay.resolve(saved(4))
+      await context.coordinator.settled()
+      expect(context.coordinator.view()).toMatchObject({ status: 'outdated', checking: false, unsaved: true, unsavedEdits: true })
+      expect(context.coordinator.baseRevision()).toBe(4)
+    })
+
+    it('没有结果未知的保存：不重发，不核对', async () => {
+      const context = setup()
+      context.control.edit('甲')
+      context.coordinator.block('client-outdated')
+      await context.coordinator.settled()
+      expect(context.coordinator.view()).toMatchObject({ status: 'outdated', checking: false, unsaved: true, unsavedEdits: true })
+      expect(context.send).not.toHaveBeenCalled()
+    })
+
+    it('修改都已保存、只有公式的结果没有存上：unsaved 为真而 unsavedEdits 为假（页面单说一句）', async () => {
+      const context = setup({ baseRevision: 3 })
+      context.control.edit('甲')
+      context.control.settle = 'timeout'
+      const saving = context.coordinator.save()
+      ;(await sent(context.calls, 1)).resolve(saved(4))
+      await saving
+      context.coordinator.block('client-outdated')
+      expect(context.coordinator.view()).toMatchObject({ status: 'outdated', checking: false, unsaved: true, unsavedEdits: false, formulasPending: true })
+      expect(context.send).toHaveBeenCalledOnce()
+    })
+  })
+
   it('最近一次捕获的大小（与服务端解压后的字节同一个口径）：第一次保存之前是载入的内容的大小，捕获之后换成捕获的；超过上限的照样记下', async () => {
     const { editor, control } = fakeEditor()
     const { send, calls } = fakeSend()
