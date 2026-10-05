@@ -576,6 +576,25 @@ describe('DocumentContentService.save：处理的顺序（M3-P3 设计 §3.1）�
     expect((await rejection(service.save(saver(ALICE), document.id, query({ baseRevision: 2 }), body, HTTP_ORIGIN))).details).toEqual({ rule: 'image-source' })
   })
 
+  it('回执的重放同样先于一切检查：内容相同的那次确认结果未知，之后升级了（旧页面不带构建与数据格式）、规则也收紧了，原样重发拿到原来的确认（unchanged），不被拦成过旧、不检查快照、不开事务', async () => {
+    const { store, service, document } = setup()
+    const request = oldPageQuery()
+    // 内容按现在的规则不合格（data: 图片）：只有重放能让它拿到结果
+    const body = bodyOf(JSON.stringify({ id: document.unitId, sheetOrder: [], sheets: {}, resources: [{ name: 'SHEET_DRAWING_PLUGIN', data: JSON.stringify({ s1: { data: { d1: { source: 'data:image/png;base64,AAAA' } }, order: [] } }) }] }))
+    // 升级之前的那次确认：直接摆下它的回执（摘要按 P3 之前的写法——没有"公式待更新"时与现在逐字节相同）
+    const savedAt = new Date('2026-09-26T08:00:00.000Z')
+    store.receipts.push({ requestId: request.requestId, documentId: document.id, revision: 1, payloadDigest: savedPayloadDigest(1, body.decompressed), savedBy: ALICE, savedAt })
+    expect(await service.save(saver(ALICE), document.id, request, body, HTTP_ORIGIN)).toEqual({ revision: 1, savedAt: savedAt.toISOString(), unchanged: true })
+    expect(store.inspector.inspect).not.toHaveBeenCalled()
+    expect(store.transactions.run).not.toHaveBeenCalled()
+    expect(store.receipts).toHaveLength(1)
+    // 现在的页面原样重发同样是重放（不检查快照）；不是重放的（新的 requestId）照样被拦下：旧页面过旧，现在的页面快照不合格
+    expect(await service.save(saver(ALICE), document.id, { ...query(), requestId: request.requestId }, body, HTTP_ORIGIN)).toMatchObject({ revision: 1, unchanged: true })
+    expect(store.inspector.inspect).not.toHaveBeenCalled()
+    expect((await rejection(service.save(saver(ALICE), document.id, oldPageQuery(), body, HTTP_ORIGIN))).details).toEqual({ reason: 'format' })
+    expect((await rejection(service.save(saver(ALICE), document.id, query(), body, HTTP_ORIGIN))).details).toEqual({ rule: 'image-source' })
+  })
+
   it('预检不提前回答：requestId 用过却不是这一次（别人的、另一份文档的、内容不同的）、看不到了，都往下走——由事务里的再查给出 REQUEST_ID_CONFLICT 或 NOT_FOUND', async () => {
     const { store, service, document } = setup()
     const request = query()

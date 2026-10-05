@@ -347,6 +347,46 @@ describe('重放先于其余一切检查（00 号计划书 §7.4 第 2 步，M3 
     expect(await saved(await save(document, raw, { requestId, clientFormat: OLD_PAGE }))).toMatchObject({ revision: 2, unchanged: false })
     expect((await envelopeOf(document.id)).revision).toBe(2)
   })
+
+  it('回执的重放先于格式拦截：内容相同的那次确认结果未知，运维随后调高了最低构建（NERVE_MIN_CLIENT_BUILD），原样重发拿到原来的确认（unchanged），而不是"需要刷新"', async () => {
+    const document = await amyDocument()
+    const raw = bytesOf(workbookOf(document.unitId))
+    await saved(await save(document, raw))
+    const requestId = randomUUID()
+    const first = await saved(await save(document, raw, { baseRevision: 2, requestId }))
+    expect(first.unchanged).toBe(true)
+    const strict = await startTestApp({ databaseUrl: database.url, env: { NERVE_MIN_CLIENT_BUILD: '99.0.0' } })
+    try {
+      const session = await login(strict.baseUrl, amy.username, amy.password)
+      // 申请在这个应用上被拦下，saveContent 随之用谁的也不是的租约发出：重放先于格式与租约
+      expect(await saved(await saveContent(strict.baseUrl, session, document.id, zlib.gzipSync(raw), { baseRevision: 2, requestId }))).toEqual(first)
+      // 不是重放（新的 requestId）：照样被拦成过旧
+      expect(await errorOf(await saveContent(strict.baseUrl, session, document.id, zlib.gzipSync(raw), { baseRevision: 2 }))).toEqual({ status: 409, code: 'CLIENT_OUTDATED', details: { reason: 'build' } })
+    }
+    finally {
+      await strict.close()
+    }
+    expect(await receiptsOf(document.id)).toHaveLength(1)
+  })
+
+  it('规则收紧之后的回执重放：升级之前那次内容相同的确认（回执），内容按现在的规则不合格（data: 图片），旧页面原样重发照样拿到原来的确认', async () => {
+    const document = await amyDocument()
+    const raw = bytesOf(workbookOf(document.unitId, 'x', withCell({ p: { id: 'd', body: { dataStream: '\b\r\n' }, drawings: { img: { source: 'data:image/png;base64,iVBORw0KGgo=' } } } })))
+    const requestId = randomUUID()
+    // 直接摆下那次确认的回执（修订号 1、摘要按服务端的写法），保存时间是当时当前修订的时间
+    const savedAt = new Date('2026-09-26T08:00:00.000Z')
+    const digest = createHash('sha256').update('saved\n1\n', 'utf8').update(raw).digest()
+    await database.query(async client => client.query(
+      'INSERT INTO document_save_receipts (request_id, document_id, revision, payload_digest, saved_by, saved_at) VALUES ($1, $2, 1, $3, $4, $5)',
+      [requestId, document.id, digest, amy.id, savedAt],
+    ))
+    expect(await saved(await save(document, raw, { requestId, clientFormat: OLD_PAGE }))).toEqual({ revision: 1, savedAt: savedAt.toISOString(), unchanged: true })
+    expect(await saved(await save(document, raw, { requestId }))).toEqual({ revision: 1, savedAt: savedAt.toISOString(), unchanged: true })
+    // 不是重放（新的 requestId）：按现在的规则被拒
+    expect(await errorOf(await save(document, raw, { clientFormat: OLD_PAGE }))).toMatchObject({ status: 409, code: 'CLIENT_OUTDATED' })
+    expect(await errorOf(await save(document, raw))).toMatchObject({ status: 422, details: { rule: 'image-source' } })
+    expect(await receiptsOf(document.id)).toHaveLength(1)
+  })
 })
 
 describe('US-M3-16 拦截旧客户端：保存、另存为副本、申请编辑权与心跳（M3-P3 设计 §3.5）', () => {
