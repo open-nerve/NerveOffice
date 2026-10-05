@@ -995,9 +995,10 @@ export function createEditMode(options: EditModeOptions): EditMode {
         fail(new Error('退出编辑时以只读重建编辑器失败'))
         return
       }
-      // 退出时都已存上（含公式的结果）：这一版不带"公式待更新"
+      // 退出时都已存上（含公式的结果）：这一版不带"公式待更新"——补存的内容与上一版相同时修订号不变（服务端只清标记），
+      // 之前记下的这一版的标记随之作废
       latestFlag = { revision, formulasPending: false }
-      enterReading(created, { snapshot, revision }, { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: !released, blocked, formulasPending: false })
+      enterReading(created, { snapshot, revision }, { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: !released, blocked, formulasPending: formulasPendingOf(revision) })
     },
 
     save: async () => {

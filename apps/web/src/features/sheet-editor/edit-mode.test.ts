@@ -2118,7 +2118,7 @@ describe('自动保存的接线（M3-P4 设计 §3.10）', () => {
     expect(context.mode.view().save?.formulasPending).toBe(false)
   })
 
-  it('退出的过程中调度挂起：定时的捕获与上传都不做（退出用的那一次是立即上传）', async () => {
+  it('退出的过程中调度挂起：定时的捕获与上传都不做（退出用的那一次是立即上传）；这期间到的修改（迟到的自动行高等）留到退出没成功、恢复之后再存', async () => {
     const context = setup({ autosave: 'running' })
     await editing(context)
     const writer = context.factory.last()
@@ -2128,12 +2128,34 @@ describe('自动保存的接线（M3-P4 设计 §3.10）', () => {
     const exiting = context.mode.exit()
     await settle()
     const captures = vi.mocked(writer.editor.capture).mock.calls.length
+    writer.edit('甲乙')
     await context.time.advance(20_000)
     expect(vi.mocked(writer.editor.capture).mock.calls.length).toBe(captures)
     expect(context.api.save).toHaveBeenCalledOnce()
     reply.resolve(SAVED)
     await exiting
-    expect(modeOf(context.mode).kind).toBe('reading')
+    // 退出用的那一份不含迟到的修改：留在编辑，调度恢复，按规则存上它
+    expect(modeOf(context.mode).kind).toBe('editing')
+    await context.time.advance(2_000)
+    await settle()
+    expect(savedRequests(context).map(request => request?.snapshot)).toEqual([snapshotOf('甲'), snapshotOf('甲乙')])
+  })
+
+  it('退出的过程中（立即上传在途）切到后台：调度挂起，不另起一次上传', async () => {
+    const context = setup({ autosave: 'running' })
+    await editing(context)
+    const writer = context.factory.last()
+    const reply = deferred<SaveContentResponse>()
+    context.api.save.mockImplementationOnce(async () => reply.promise)
+    writer.edit('甲')
+    const exiting = context.mode.exit()
+    await settle()
+    writer.edit('甲乙')
+    context.autosave.setPage({ visible: false })
+    await settle()
+    expect(context.api.save).toHaveBeenCalledOnce()
+    reply.resolve(SAVED)
+    await exiting
   })
 })
 
@@ -2185,6 +2207,20 @@ describe('阅读页的"公式待更新"（M3-P4 设计 §3.5 第 4 条）', () =
     expect(readingOf(context.mode)).toMatchObject({ update: 'available', formulasPending: false })
     await context.mode.refresh()
     expect(readingOf(context.mode)).toMatchObject({ update: 'none', formulasPending: true })
+  })
+
+  it('补存的内容与上一版相同（服务端只清标记、修订号不变）之后退出：回到阅读不带标记，载入时记下的这一版的标记作废', async () => {
+    const context = setup({ autosave: 'running', editLease: { acquire: async () => ({ ...ACQUIRED, formulasPending: true }) }, api: { editStatus: async () => flagged(3, true), save: async () => ({ ...SAVED, revision: 3, unchanged: true }) } })
+    await context.mode.open({ ...LOADED, canEdit: true, formulasPending: true }, { enterEdit: false })
+    await settle()
+    await context.mode.enter()
+    await context.time.advance(0)
+    await settle()
+    expect(savedRequests(context)).toMatchObject([{ formulasPending: false }])
+    // 检查要等一会儿才回来：退出之后的阅读先按本页的结果说
+    context.api.editStatus.mockImplementation(async () => new Promise(() => {}))
+    await context.mode.exit()
+    expect(readingOf(context.mode)).toMatchObject({ formulasPending: false })
   })
 
   it('进入编辑重算、补存之后退出：回到阅读不带标记（之后的检查读到的也是不带的那一版）', async () => {

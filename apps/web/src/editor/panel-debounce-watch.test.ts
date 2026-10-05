@@ -142,6 +142,20 @@ describe('面板的防抖（M3-P4 设计 §3.4）', () => {
     watch.dispose()
   })
 
+  it('之前的输入定下的更晚的到点，不被之后较短的覆盖（数据验证面板关掉之后又在批注里键入）', async () => {
+    const time = fakeTime()
+    const { openNote, openDataValidation } = page()
+    const panel = openDataValidation()
+    const watch = watchPanelDebounces(document, { now: time.now, schedule: time.schedule })
+    panel.querySelector('input')?.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    const dvDue = time.now() + DV_MS + PANEL_SETTLE_MARGIN_MS
+    panel.remove()
+    await time.advance(100)
+    openNote().dispatchEvent(new InputEvent('input', { bubbles: true }))
+    expect(watch.pendingUntil()).toBe(dvDue)
+    watch.dispose()
+  })
+
   it.each(['input', 'change', 'keydown', 'pointerup', 'click', 'paste', 'cut', 'drop', 'compositionend'])('%s 算作面板里的改动', (type) => {
     const time = fakeTime()
     const { openNote } = page()
