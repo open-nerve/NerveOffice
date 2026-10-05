@@ -476,6 +476,15 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
     expect(infoRegion()).toHaveTextContent('你在另一个标签页或设备上正在编辑这份文档')
   })
 
+  it('与服务端不兼容的阅读（没有"编辑"）读到"自己在别处编辑"：照样说是本页刚退出或在别处，不提"再点编辑"（M3-P3 审查 B8：停住续租之后的那次释放没送到）', () => {
+    const self = { holder: AMY, sameUser: true, lastActiveMinutes: 0 }
+    const fake = renderChrome({ mode: { ...READING, blocked: 'client-outdated', holder: self, releaseUnconfirmed: true }, save: undefined })
+    expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
+    expect(infoRegion().textContent).toBe('本页刚退出编辑，编辑权还没能确认放掉：最多 90 秒后自动结束，这期间别人还不能编辑')
+    fake.set({ mode: { ...READING, blocked: 'client-outdated', holder: self, releaseUnconfirmed: false } })
+    expect(infoRegion().textContent).toBe('你在另一个标签页或设备上正在编辑这份文档，这里只能阅读')
+  })
+
   it('别人正在编辑：读屏状态区说明谁（人名组件，登录名在前）、最后活动几分钟之前；状态区一直在，内容变化时往里填（规范 §2.4）', () => {
     const fake = renderChrome({ load: { kind: 'loading' }, mode: undefined, save: undefined })
     const region = infoRegion()

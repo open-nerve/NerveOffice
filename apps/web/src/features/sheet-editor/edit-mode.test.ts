@@ -1755,13 +1755,25 @@ describe('与服务端不兼容（M3-P3 设计 §3.5、§3.10）', () => {
     expect(context.mode.view()).toMatchObject({ mode: { kind: 'editing' }, save: { status: 'outdated', canSave: false } })
   })
 
-  it('不兼容之后退出编辑（本页的修改都已保存）：回到阅读，照样带着说明、不给"编辑"', async () => {
+  it('不兼容之后退出编辑（本页的修改都已保存）：回到阅读，照样带着说明、不给"编辑"；停住续租时那次释放送到了，不说那一代还在', async () => {
     const context = setup({ editLease: { renew: async () => Promise.reject(OUTDATED) } })
     await editing(context)
     await context.time.advance(HEARTBEAT_MS)
     await context.mode.exit()
     await settle()
-    expect(readingOf(context.mode)).toMatchObject({ blocked: 'client-outdated' })
+    expect(readingOf(context.mode)).toMatchObject({ blocked: 'client-outdated', releaseUnconfirmed: false })
+    expect(context.editLease.release).toHaveBeenCalledOnce()
+  })
+
+  it('心跳得知过旧、停住续租时放掉那一代的请求没送到：之后退出编辑，阅读里如实记下那一代没能确认放掉（审查 B8），不再发释放', async () => {
+    // 编辑状态里的持有者是自己（本页那一代还在）：记号留着
+    const context = setup({ editLease: { renew: async () => Promise.reject(OUTDATED), release: async () => Promise.reject(new NetworkError('断网')) }, api: { editStatus: async () => status(3, SELF_EDITING) } })
+    await editing(context)
+    await context.time.advance(HEARTBEAT_MS)
+    await context.mode.exit()
+    await settle()
+    expect(readingOf(context.mode)).toMatchObject({ blocked: 'client-outdated', releaseUnconfirmed: true })
+    expect(context.editLease.release).toHaveBeenCalledOnce()
   })
 
   it('80% 的提示：进入编辑时按载入的内容先算一次大小（与服务端解压后的字节同一个口径），保存之后换成那次捕获的', async () => {

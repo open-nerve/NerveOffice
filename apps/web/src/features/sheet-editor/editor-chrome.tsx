@@ -368,13 +368,14 @@ function readingFailure(notice: ReadingNotice | undefined): ReactNode {
  * 别处正在编辑时的说明（M3-P1 设计 §3.4.7）：谁在编辑（人名经人名组件）、最后活动几分钟之前；能编辑的人另说现在只能阅读。
  * 是自己、而且现在能编辑时说在另一个标签页或设备上（到时再点"编辑"就能编辑）——本页刚退出编辑、没能确认放掉编辑权时多半就是本页那一代，
  * 照实说（releaseUnconfirmed，审查 A13）；不能编辑了时自己那一代已经失效（持有者要能编辑），只是还没读到新的编辑状态，
- * 照别人一样说谁在编辑，不提"再点编辑"
+ * 照别人一样说谁在编辑，不提"再点编辑"。与服务端不兼容的阅读（blocked）不给"编辑"，同样不提（M3-P3 审查 B8：停住续租之后退出编辑，
+ * 那次释放没送到时这里也说本页刚退出）
  */
-function elsewhereNotice(holder: LeaseHolder | undefined, canEdit: boolean, releaseUnconfirmed: boolean): ReactNode {
+function elsewhereNotice(holder: LeaseHolder | undefined, canEdit: boolean, releaseUnconfirmed: boolean, blocked: boolean): ReactNode {
   if (holder === undefined)
     return editorMessages.editing.elsewhereUnknown
   if (holder.sameUser && canEdit)
-    return releaseUnconfirmed ? editorMessages.editing.elsewhereThisPage : editorMessages.editing.elsewhereBySelf
+    return releaseUnconfirmed ? editorMessages.editing.elsewhereThisPage(!blocked) : editorMessages.editing.elsewhereBySelf(!blocked)
   const lastActive = holder.lastActiveMinutes === undefined ? undefined : editorMessages.editing.lastActive(holder.lastActiveMinutes)
   return <Phrase parts={editorMessages.editing.elsewhere(<PersonName person={holder.holder} />, lastActive, canEdit)} />
 }
@@ -390,7 +391,7 @@ function readingInfo(reading: ReadingMode | undefined): ReactNode {
   if (reading.gone)
     lines.push(<span key="gone">{editorMessages.mode.gone}</span>)
   else if (reading.holder !== undefined)
-    lines.push(<span key="holder">{elsewhereNotice(reading.holder, reading.canEdit, reading.releaseUnconfirmed)}</span>)
+    lines.push(<span key="holder">{elsewhereNotice(reading.holder, reading.canEdit, reading.releaseUnconfirmed, reading.blocked !== undefined)}</span>)
   if (reading.update !== 'none')
     lines.push(<span key="update">{reading.update === 'loading' ? editorMessages.mode.updating : editorMessages.mode.updateAvailable}</span>)
   if (reading.notice?.kind === 'copied')

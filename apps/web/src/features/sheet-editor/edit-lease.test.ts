@@ -856,10 +856,33 @@ describe('与服务端不兼容（M3-P3 设计 §3.5）：本页过旧、文档�
     await context.time.advance(60_000)
     expect(context.api.renew).toHaveBeenCalledOnce()
     expect(context.time.pending()).toBe(0)
-    // 终态：之后再释放不再发，保存得知的失效也不再续上
+    // 终态：之后再释放不再发（交回停住时那一次释放的结果：服务端确认了），保存得知的失效也不再续上
     expect(await lease.release()).toBe(true)
     expect(await lease.lose({ kind: 'lease', reason: 'expired' }, lease.credentials())).toEqual({ kind: 'lost' })
     expect(context.calls).toEqual(['release T'])
+  })
+
+  it('停住时那一次释放没送到（断网）：之后的 release()（退出编辑时等它）交回没确认（false），不再发、不说成已确认（审查 B8）；还在路上时等它', async () => {
+    const context = setup({ renew: vi.fn(async () => Promise.reject(new ApiError(409, 'CLIENT_OUTDATED', '页面的版本过旧'))) })
+    const lease = await held(context)
+    let fail: ((error: unknown) => void) | undefined
+    context.api.release.mockImplementationOnce(async () => new Promise<void>((_resolve, reject) => {
+      fail = reject
+    }))
+    await context.time.advance(10_000)
+    expect(context.onIncompatible).toHaveBeenCalledOnce()
+    expect(context.api.release).toHaveBeenCalledOnce()
+    let confirmed: boolean | undefined
+    const releasing = lease.release().then((result) => {
+      confirmed = result
+    })
+    await settle()
+    expect(confirmed).toBeUndefined()
+    fail?.(new NetworkError('断网'))
+    await releasing
+    expect(confirmed).toBe(false)
+    await expect(lease.release()).resolves.toBe(false)
+    expect(context.api.release).toHaveBeenCalledOnce()
   })
 
   it('续上的申请得到 CLIENT_OUTDATED（编辑权中断期间服务端升级了）：通知页面需要刷新，不当作失效', async () => {

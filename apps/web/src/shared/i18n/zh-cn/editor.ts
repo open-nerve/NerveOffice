@@ -105,12 +105,13 @@ export const editorMessages = {
     elsewhere: <T>(holder: T, lastActive: string | undefined, canEdit: boolean): Phrase<T> => [holder, ` 正在编辑这份文档${lastActive === undefined ? '' : `（${lastActive}）`}${canEdit ? '，你现在只能阅读' : ''}`],
     /** 持有者最后一次操作在几分钟之前（服务端回答时，向下取整） */
     lastActive: (minutes: number) => minutes < 1 ? '最后活动不到 1 分钟前' : `最后活动 ${minutes} 分钟前`,
-    elsewhereBySelf: `你在另一个标签页或设备上正在编辑这份文档，这里只能阅读。${SELF_ELSEWHERE_HINT}`,
+    /** reenter：这一页能再点"编辑"（与服务端不兼容的阅读不给"编辑"，不提它，M3-P3 审查 B8） */
+    elsewhereBySelf: (reenter: boolean) => `你在另一个标签页或设备上正在编辑这份文档，这里只能阅读${reenter ? `。${SELF_ELSEWHERE_HINT}` : ''}`,
     /**
      * 编辑状态里是"自己在别处编辑"，而本页刚退出编辑、没能确认放掉编辑权（释放的结果未知或超过了等待的上限，审查 A13）：多半就是本页的那一代
-     * （同一个页面再申请照样取得），不说成另一个标签页或设备；那一代至多一个有效期后自行到期
+     * （同一个页面再申请照样取得），不说成另一个标签页或设备；那一代至多一个有效期后自行到期。reenter 同上
      */
-    elsewhereThisPage: `本页刚退出编辑，编辑权还没能确认放掉：最多 ${EDIT_LEASE_TTL_SECONDS} 秒后自动结束，这期间别人还不能编辑；这一页可以直接再点"编辑"`,
+    elsewhereThisPage: (reenter: boolean) => `本页刚退出编辑，编辑权还没能确认放掉：最多 ${EDIT_LEASE_TTL_SECONDS} 秒后自动结束，这期间别人还不能编辑${reenter ? '；这一页可以直接再点"编辑"' : ''}`,
     /** 服务端给的详情认不出时的通用说法 */
     elsewhereUnknown: '这份文档正在别处编辑，你现在只能阅读',
     /**
