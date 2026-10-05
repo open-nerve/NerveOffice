@@ -1,5 +1,6 @@
 // 重开看到最后一次保存的内容（US-M1-06，P4 设计 §3.10）：值、公式与格式一致；未保存的修改不出现；打开不被判定为有修改。
-// 编辑器的内容画在画布上，核对重开之后的内容的办法：重开、不做修改，立即再保存一次，服务器上的内容与上一次保存的相同。
+// 编辑器的内容画在画布上，核对重开之后的内容的办法：重开、不做修改，立即再保存一次，上传的内容与上一次保存的相同
+// （M3-P3 起服务端判为内容相同、修订号不变，所以看上传的正文）。
 // M3-P2 起打开即阅读：重开之后点"编辑"进入编辑（以可编辑重建），再核对"打开不被判定为有修改"与重新保存。
 // "就绪之前"的两条带 ?edit=new 打开（直接以可编辑创建）：载入中的是能编辑的编辑器，验的是交互屏障，不是只读守卫（审查 A8）。
 import type { Page } from '@playwright/test'
@@ -7,7 +8,7 @@ import type { Workbook } from '../../support/sheet.ts'
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, editorSurface, enterEditing, hoverCell, leaveEditor, openAndEnterEditing, reloadAndEnterEditing, resourceOf, saveAndWait, savedContent, saveStatus, selectCell, sheetCanvas, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, editorSurface, enterEditing, hoverCell, leaveEditor, openAndEnterEditing, reloadAndEnterEditing, resourceOf, saveAndCapture, saveAndWait, savedContent, saveStatus, selectCell, sheetCanvas, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -33,15 +34,16 @@ async function editAndSave(page: Page, documentId: string): Promise<Workbook> {
 }
 
 /**
- * 重开之后不做修改立即再保存一次：服务器上的值、公式与格式与重开之前保存的相同，说明页面打开的就是它。
- * 修订号加一：确实存下了本页捕获的内容，而不是没有保存（审查 B7）
+ * 重开之后不做修改立即再保存一次：本页上传的（捕获的）值、公式与格式与重开之前保存的相同，说明页面打开的就是它。
+ * 看上传的正文、不看服务器上的（M3-P3 设计 §3.11）：服务端判为内容相同（§3.7），回答 unchanged、修订号不变、不存这次的字节——
+ * 比较的确实是本页捕获的内容（审查 B7 当初要排除的"其实没有保存"，现在由回答里的 unchanged 与上传的正文排除）
  */
 async function contentAfterResave(page: Page, documentId: string): Promise<ReturnType<typeof contentOf>> {
   const before = (await savedContent(page, documentId)).revision
-  await saveAndWait(page)
-  const after = await savedContent(page, documentId)
-  expect(after.revision).toBe(before + 1)
-  return contentOf(after.snapshot)
+  const { uploaded, answer } = await saveAndCapture(page)
+  expect(answer).toMatchObject({ revision: before, unchanged: true })
+  expect((await savedContent(page, documentId)).revision).toBe(before)
+  return contentOf(JSON.parse(uploaded) as Workbook)
 }
 
 test.describe('US-M1-06 重开看到最后一次保存的内容', () => {

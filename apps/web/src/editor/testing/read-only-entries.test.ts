@@ -76,6 +76,12 @@ describe('只读入口的共用清单：Facade 入口', () => {
     expect(FACADE_ENTRIES.filter(entry => entry.unchangedWhenEditable).map(entry => entry.name)).toEqual(['超链接'])
   })
 
+  it('要样本里的图片的恰好是操作图片的三项（页面自检的 enter-exit 用去掉图片的样本，跳过它们，M3-P3 设计 §3.11）', async () => {
+    expect(FACADE_ENTRIES.filter(entry => entry.needsImage).map(entry => entry.name)).toEqual(['移动图片', '删除图片', '缩放图片'])
+    for (const entry of FACADE_ENTRIES)
+      expect((await runSerialized(entry.call)).some(call => call.path.includes('getImages')), entry.name).toBe(entry.needsImage === true)
+  })
+
   it.each(FACADE_ENTRIES.map(entry => [entry.name, entry] as const))('%s：序列化之后在别的作用域里照样调到 Facade（只用参数，不引用外面的变量）', async (_name, entry) => {
     const calls = await runSerialized(entry.call)
     expect(calls.length).toBeGreaterThan(0)

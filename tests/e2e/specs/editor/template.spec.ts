@@ -1,4 +1,5 @@
-// 模板与档案（P4 设计 §3.4、§3.6.8、§3.10）：新建的文档打开后立即保存，快照与模板逐字节相同（id 除外），即模板仍然收敛；
+// 模板与档案（P4 设计 §3.4、§3.6.8、§3.10）：新建的文档打开后立即保存，上传的快照与模板逐字节相同（id 除外），即模板仍然收敛
+// （M3-P3 起看上传的正文：内容相同的保存服务端不存，设计 §3.11）；
 // M5 之前图片与超链接的入口不存在：菜单里没有，Ctrl/Cmd+K 没有反应，粘贴图片文件不产生图片。
 // 键入、粘贴网址时 SDK 的自动识别不是入口，照常保留；M3-P3 起写进单元格之前改成规范写法、不合法的去掉链接（DEF-021，
 // editor/profile/link-policy.ts）：这里核对存下的是规范写法，各条路径（编辑栏、单元格编辑器、HTML、HYPERLINK()）与撤销重做见 links.spec.ts。
@@ -6,7 +7,7 @@ import { sheetSnapshotFor } from '@nerve-office/contracts'
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openAndEnterEditing, saveAndWait, savedContent, selectCell, typeInCell } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openAndEnterEditing, saveAndCapture, saveAndWait, savedContent, selectCell, typeInCell } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -20,16 +21,18 @@ function linksIn(cell: ReturnType<typeof cellOf>): string[] {
 }
 
 test.describe('US-M1-06 新建的表格用收敛的模板', () => {
-  test('新建的文档打开后立即保存：快照与模板逐字节相同（id 除外），打开不算修改', async ({ page }) => {
+  // M3-P3 起内容相同的保存不存这次的字节（设计 §3.7）：收敛看本页上传的正文（本页捕获的），服务器上的随之不变、修订号不增加
+  test('新建的文档打开后立即保存：上传的快照与模板逐字节相同（id 除外），打开不算修改；内容相同，修订号不增加', async ({ page }) => {
     await loginThroughApi(page, await createUser('template-converges'))
     const documentId = await createSheetThroughApi(page)
     const created = await savedContent(page, documentId)
     await openAndEnterEditing(page, documentId, 'steady')
-    await saveAndWait(page)
+    const { uploaded, answer } = await saveAndCapture(page)
+    expect(uploaded).toBe(sheetSnapshotFor(created.snapshot.id))
+    expect(uploaded).toBe(created.text)
+    expect(answer).toMatchObject({ revision: 1, unchanged: true })
     const saved = await savedContent(page, documentId)
-    expect(saved.revision).toBe(2)
-    expect(saved.text).toBe(sheetSnapshotFor(saved.snapshot.id))
-    expect(saved.text).toBe(created.text)
+    expect([saved.revision, saved.text]).toEqual([1, created.text])
   })
 })
 

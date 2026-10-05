@@ -3,7 +3,7 @@
 // 每个浏览器、每份文档一个用例：
 // 1. 作者打开（新的浏览器上下文里第一次打开），再刷新一次：起点是导航开始，到阅读的 steady（对照）；
 // 2. 进入编辑、退出编辑交替 ROUNDS 次（没有修改：退出时不保存，只有释放）；
-// 3. 查看者打开；作者经接口保存一版、页面立即读一次编辑状态，出现"有更新，点击刷新"之后点它，ROUNDS 次。
+// 3. 查看者打开；作者存一版（直接写库，measure-scene.ts）、页面立即读一次编辑状态，出现"有更新，点击刷新"之后点它，ROUNDS 次。
 // 起点是页面收到点击（捕获阶段）；各个时刻与各段的含义见 apps/web/src/editor/testing/switch-timing.ts。
 // 结果写在 measure/test-results/switch/<浏览器>-<文档>.json（下一次实测覆盖），measure/summarize.ts 汇总成 p50、p95、最大值的表。
 // 次数：MEASURE_ROUNDS（默认 12，设计要求每个方向至少 10 次）。
@@ -17,7 +17,7 @@ import process from 'node:process'
 import { sheetSnapshotFor } from '@nerve-office/contracts'
 import { expect, test } from '../support/fixtures.ts'
 import { largeSheetFor, largeSheetScale } from '../support/large-sheet.ts'
-import { authorApi, checkEditStatusNow, installTiming, measureOpen, measureScene, measureSwitch, updateButton } from '../support/measure-scene.ts'
+import { authorVersions, checkEditStatusNow, installTiming, measureOpen, measureScene, measureSwitch, updateButton } from '../support/measure-scene.ts'
 import { readOnlySampleFor } from '../support/read-only-sample.ts'
 import { loginThroughApi } from '../support/session.ts'
 import { editorSurface, enterEditButton, exitEditButton } from '../support/sheet.ts'
@@ -80,20 +80,15 @@ for (const measured of DOCUMENTS) {
     // 3. 查看者阅读，作者在别处保存了新的版本
     await loginThroughApi(page, scene.viewer)
     await measureOpen(page, async () => page.goto(`/documents/${scene.documentId}`))
-    const author = await authorApi(scene.author)
-    try {
-      for (let round = 1; round <= ROUNDS; round += 1) {
-        await author.saveVersion(scene.documentId, `第 ${round} 版`)
-        await checkEditStatusNow(page)
-        await expect(updateButton(page)).toBeVisible()
-        const refreshed = await measureSwitch(page, 'refresh', async () => updateButton(page).click())
-        await expect(updateButton(page)).toHaveCount(0)
-        expect(refreshed.requests.map(request => request.role).filter(role => role !== 'status'), '按条件读取取新的内容').toEqual(['content'])
-        samples.push({ direction: 'refresh', round, timing: refreshed })
-      }
-    }
-    finally {
-      await author.dispose()
+    const author = authorVersions(scene.author)
+    for (let round = 1; round <= ROUNDS; round += 1) {
+      await author.saveVersion(scene.documentId, `第 ${round} 版`)
+      await checkEditStatusNow(page)
+      await expect(updateButton(page)).toBeVisible()
+      const refreshed = await measureSwitch(page, 'refresh', async () => updateButton(page).click())
+      await expect(updateButton(page)).toHaveCount(0)
+      expect(refreshed.requests.map(request => request.role).filter(role => role !== 'status'), '按条件读取取新的内容').toEqual(['content'])
+      samples.push({ direction: 'refresh', round, timing: refreshed })
     }
 
     const snapshot = measured.snapshotFor('measure-unit')

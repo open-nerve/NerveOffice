@@ -8,13 +8,13 @@
 // - read-only-formulas：缓存值缺失的公式在 Worker 里算出结果，没有被防火墙取消；
 // - edit-chrome：能编辑时同样的界面检查都看得到（工具栏、底栏、右键菜单），合成的右键与按键确实有效——只读时"没有"的对照；
 // - enter-exit（M3-P2 S5）：作者阅读 → 点页头真实的"编辑"（合成的点击）→ 经 Facade 改一格 → 点"退出编辑"（先保存）→ 回到阅读之后
-//   再试 Facade 的只读入口、撤销与重做与界面；两次切换的耗时按 ./switch-timing.ts 记下，随结果交回。
+//   再试 Facade 的只读入口（样本去掉了图片，操作图片的几项不试，M3-P3）、撤销与重做与界面；两次切换的耗时按 ./switch-timing.ts 记下，随结果交回。
 // 只读的入口里能用 Facade 与合成事件执行的部分才在这里；可信的键盘输入、输入法与鼠标的拖动由 Playwright 的 WebKit 覆盖
 // （read-only.spec.ts、read-only-shortcuts.spec.ts），Worker 作用域里的错误这里看不到（设计 §3.5 第 4 条）。
 // 等待都等确定的信号（命令被取消、被拦下、执行完，提示出现），不用固定时长；每项有时限，超时记为不通过、接着做下一项；
 // 一个场景另有总时限，页面中途被隐藏（Safari 几秒之后就暂停隐藏的页面）时余下的检查不做——都照样把结果交回，看得到卡在哪里。
 import type { EditorProbe, ProbeCommand } from './e2e-probe.ts'
-import type { EntryApi, EntryOutcome, EntryRange, EntryScope, EntrySheet, EntryWorkbook } from './read-only-entries.ts'
+import type { EntryApi, EntryOutcome, EntryRange, EntryScope, EntrySheet, EntryWorkbook, FacadeEntry } from './read-only-entries.ts'
 import type { KeyCombo } from './selftest-dom.ts'
 import type { SelftestCheck, SelftestPage, SelftestReport, SelftestScenario, SelftestTiming } from './selftest-report.ts'
 import type { SwitchDirection, SwitchTimingRecorder } from './switch-timing.ts'
@@ -494,9 +494,9 @@ function resourceOf(snapshot: { readonly resources?: readonly { readonly name: s
  * 只读入口里能用 Facade 执行的：M0 的 Facade 入口逐项、经 Facade 写公式的 mutation、Facade 的撤销与重做。
  * 用当前的编辑器（enter-exit 退出编辑之后是新换上的只读编辑器），与 session.opened 比较
  */
-async function checkFacadeEntries(session: Session): Promise<void> {
+async function checkFacadeEntries(session: Session, entries: readonly FacadeEntry[] = FACADE_ENTRIES): Promise<void> {
   const { probe, api, unitId } = session
-  for (const entry of FACADE_ENTRIES) {
+  for (const entry of entries) {
     await check(session, `facade.${entry.name}`, async () => {
       const mark = lastSeq(probe)
       let callError: string | undefined
@@ -848,7 +848,9 @@ async function enterExitScenario(session: Session): Promise<void> {
       fail(`阅读的编辑器里的内容与服务器上的不同：${differences(stored, session.opened)}`)
     return `阅读的编辑器里与服务器上都是保存的内容（${ENTER_EXIT_EDIT.cell} 是"${value}"）`
   })
-  await checkFacadeEntries(session)
+  // 这个场景的样本去掉了图片（M3-P3 设计 §3.11：样本的图片是 data: 地址，服务端拒绝保存，而这里要保存一次）：操作图片的几项没有对象可操作，
+  // 跳过——它们在 read-only 场景（完整的样本）里照样逐项核对，"进入再退出"之后的这几项由 E2E 的 edit-mode.spec.ts 在三个浏览器里核对
+  await checkFacadeEntries(session, FACADE_ENTRIES.filter(entry => entry.needsImage !== true))
   await checkChrome(session, false)
   await check(session, 'content.final', async () => {
     expectUnchanged(session, 0)

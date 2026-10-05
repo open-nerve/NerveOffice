@@ -133,6 +133,11 @@ export interface FacadeEntry extends EntryOutcomes {
   readonly call: (scope: EntryScope) => unknown
   /** 能编辑时也不改动：超链接在 M5 之前被入口守卫取消（P4 设计 §3.6.8） */
   readonly unchangedWhenEditable?: true
+  /**
+   * 操作样本里的图片（"功能"表的第一张浮动图片）：去掉图片的样本上没有对象可操作，调用什么也不做（页面自检的 enter-exit 用那一份，
+   * M3-P3 设计 §3.11），用的地方要跳过这几项
+   */
+  readonly needsImage?: true
 }
 
 /** M0 的 Facade 入口（只读样本上；"数据"是打开时的当前表） */
@@ -145,9 +150,9 @@ export const FACADE_ENTRIES: readonly FacadeEntry[] = [
   { name: '复制工作表', call: ({ workbook }) => workbook.duplicateSheet(workbook.getSheetByName('汇总')), read: { canceled: 'sheet.mutation.insert-sheet' }, edit: { executed: 'sheet.command.copy-sheet' } },
   { name: '隐藏工作表', call: ({ workbook }) => workbook.getSheetByName('汇总').hideSheet(), read: { canceled: 'sheet.mutation.set-worksheet-hidden' }, edit: { executed: 'sheet.command.set-worksheet-hidden' } },
   { name: '移动工作表', call: ({ workbook }) => workbook.moveSheet(workbook.getSheetByName('汇总'), 0), read: { blocked: 'sheet.command.set-worksheet-order', alert: READ_ONLY_ALERT.sheet }, edit: { executed: 'sheet.command.set-worksheet-order' } },
-  { name: '移动图片', call: async ({ workbook }) => workbook.getSheetByName('功能').getImages()[0]?.setPositionAsync(12, 12), read: { blocked: 'sheet.command.set-sheet-image', alert: READ_ONLY_ALERT.image }, edit: { executed: 'sheet.command.set-sheet-image' } },
-  { name: '删除图片', call: ({ workbook }) => workbook.getSheetByName('功能').getImages()[0]?.remove(), read: { blocked: 'sheet.command.remove-sheet-image', alert: READ_ONLY_ALERT.image }, edit: { executed: 'sheet.command.remove-sheet-image' } },
-  { name: '缩放图片', call: async ({ workbook }) => workbook.getSheetByName('功能').getImages()[0]?.setSizeAsync(200, 150), read: { blocked: 'sheet.command.set-sheet-image', alert: READ_ONLY_ALERT.image }, edit: { executed: 'sheet.command.set-sheet-image' } },
+  { name: '移动图片', call: async ({ workbook }) => workbook.getSheetByName('功能').getImages()[0]?.setPositionAsync(12, 12), read: { blocked: 'sheet.command.set-sheet-image', alert: READ_ONLY_ALERT.image }, edit: { executed: 'sheet.command.set-sheet-image' }, needsImage: true },
+  { name: '删除图片', call: ({ workbook }) => workbook.getSheetByName('功能').getImages()[0]?.remove(), read: { blocked: 'sheet.command.remove-sheet-image', alert: READ_ONLY_ALERT.image }, edit: { executed: 'sheet.command.remove-sheet-image' }, needsImage: true },
+  { name: '缩放图片', call: async ({ workbook }) => workbook.getSheetByName('功能').getImages()[0]?.setSizeAsync(200, 150), read: { blocked: 'sheet.command.set-sheet-image', alert: READ_ONLY_ALERT.image }, edit: { executed: 'sheet.command.set-sheet-image' }, needsImage: true },
   { name: '设行高', call: ({ sheet }) => sheet.setRowHeight(5, 40), read: { blocked: 'sheet.command.set-row-height', alert: READ_ONLY_ALERT.rowCol }, edit: { executed: 'sheet.command.set-row-height' } },
   { name: '插入行', call: ({ sheet }) => sheet.insertRowAfter(3), read: { blocked: 'sheet.command.insert-row-by-range', alert: READ_ONLY_ALERT.insertRowCol }, edit: { executed: 'sheet.command.insert-row-by-range' } },
   { name: '删除行', call: ({ sheet }) => sheet.deleteRows(16, 1), read: { blocked: 'sheet.command.remove-row-by-range', alert: READ_ONLY_ALERT.removeRowCol }, edit: { executed: 'sheet.command.remove-row-by-range' } },

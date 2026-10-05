@@ -1,6 +1,7 @@
 // 页面自检怎么跑（M3-P2 设计 §3.5）：真实 Safari 的驱动脚本（safari/selftest.ts）与 Playwright 里的自检用例（specs/editor/selftest.spec.ts）共用。
 // - 场景的样本与账户（selftestScene）：系统管理员建团队空间，作者是空间管理员，查看者是查看者；三份文档：只读样本、
-//   去掉公式缓存值的同一份样本（公式要在 Worker 里算出结果），与作者进入、退出编辑用的另一份只读样本（enter-exit 保存一次）；
+//   去掉公式缓存值的同一份样本（公式要在 Worker 里算出结果），与作者进入、退出编辑用的去掉图片的样本（enter-exit 保存一次：
+//   样本的 data: 图片 M3-P3 起服务端拒绝保存，read-only-sample.ts 的 sampleWithoutImagesFor）；
 // - 每一步的地址（selftestPageUrl）：自检的入口页（测试构建的 selftest.html）带上 # 片段——账户、文档、场景与结果交回的地址；
 // - 结果的核对（problemsOf）：页面上的检查之外，驱动脚本与用例另外核对的（公式算出的值与样本的预期相同；enter-exit 交回了两次切换的耗时）；
 // - 服务器上的核对（serverProblemsOf，直接查库）：只读的几步没有保存过；enter-exit 恰好多了一个修订、内容里有改的那一格。
@@ -11,7 +12,7 @@ import { Buffer } from 'node:buffer'
 import zlib from 'node:zlib'
 import { ENTER_EXIT_EDIT, NEXT_PARAM, selftestPassed } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import { createDocumentIn, createTeamSpace, createUser, withDatabase } from './database.ts'
-import { readOnlySampleFor, SAMPLE_FORMULAS, sampleWithoutFormulaValuesFor } from './read-only-sample.ts'
+import { readOnlySampleFor, SAMPLE_FORMULAS, sampleWithoutFormulaValuesFor, sampleWithoutImagesFor } from './read-only-sample.ts'
 
 /** 自检的入口页（只在测试构建里，vite.config.ts 的 TEST_ONLY_INPUTS） */
 export const SELFTEST_PAGE = '/selftest.html'
@@ -33,7 +34,7 @@ export interface SelftestScene {
   readonly sampleId: string
   /** 去掉公式缓存值的样本（read-only-formulas） */
   readonly formulasId: string
-  /** 作者进入、退出编辑用的样本（enter-exit：改一格、保存一次；与别的步骤分开，它们核对没有保存过） */
+  /** 作者进入、退出编辑用的样本（enter-exit：改一格、保存一次；与别的步骤分开，它们核对没有保存过）：去掉图片的那一份，服务端才收 */
   readonly enterExitId: string
 }
 
@@ -45,7 +46,7 @@ export async function selftestScene(prefix: string): Promise<SelftestScene> {
   const space = await createTeamSpace('页面自检', admin, [[author, 'admin'], [viewer, 'viewer']])
   const sampleId = await createDocumentIn(space.id, author, '只读样本', { snapshotFor: readOnlySampleFor })
   const formulasId = await createDocumentIn(space.id, author, '公式样本', { snapshotFor: sampleWithoutFormulaValuesFor })
-  const enterExitId = await createDocumentIn(space.id, author, '进入退出样本', { snapshotFor: readOnlySampleFor })
+  const enterExitId = await createDocumentIn(space.id, author, '进入退出样本', { snapshotFor: sampleWithoutImagesFor })
   return { author, viewer, sampleId, formulasId, enterExitId }
 }
 

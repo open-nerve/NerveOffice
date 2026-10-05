@@ -5,7 +5,7 @@ import type { ClientFormat } from '@nerve-office/contracts'
 import { readFileSync } from 'node:fs'
 import { DOCUMENT_PROFILE_OF, PLATFORM_FORMAT_VERSION, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 
-/** 根 package.json 的 version：页面的构建版本（apps/web/vite.config.ts 注入同一个值） */
+/** 根 package.json 的 version：页面的构建版本（apps/web/build/client-build.ts 经 Vite 注入同一个值） */
 export const CLIENT_BUILD = (JSON.parse(readFileSync(new URL('../../../../package.json', import.meta.url), 'utf8')) as { version: string }).version
 
 /** 现在的页面上报的四项 */

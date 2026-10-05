@@ -2,7 +2,7 @@
 import { Buffer } from 'node:buffer'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
-import { DOCUMENT_PROFILE_OF, PLATFORM_FORMAT_VERSION, sheetSnapshotFor, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
+import { canonicalContentText, checkResources, contentHashInput, DOCUMENT_PROFILE_OF, PLATFORM_FORMAT_VERSION, sheetSnapshotFor, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { hash } from '@node-rs/argon2'
 import pg from 'pg'
 import { e2eDatabaseUrl } from './environment.ts'
@@ -66,28 +66,95 @@ export async function createFolderIn(spaceId: string, createdBy: TestUser, name:
   })
 }
 
+/** 写进 document_contents 的一份内容：gzip 压缩的快照、解压之后的字节数与信封 */
+interface StoredContent {
+  readonly snapshot: Buffer
+  readonly rawBytes: number
+  /** 规范化内容的 SHA-256（M3-P3 设计 §3.4）；资源过不了检查时为 null（见 storedContent） */
+  readonly contentHash: Buffer | null
+  /** 非空的资源名，按名称排序；与 contentHash 同时为 null */
+  readonly resourceNames: readonly string[] | null
+}
+
 /**
- * 写一份文档：与经接口新建的一致（元数据、快照的内容、修订号 1 的修订记录）。
+ * 一份快照写进库里的样子，与经接口写入的一样（M3-P3 设计 §3.4 的信封）：内容哈希是 contracts 的规范化内容的 SHA-256，资源名是检查之后
+ * 非空的那些（服务端在快照检查里算出同样的两项，"内容相同不递增"与不缩水按它们）。资源过不了检查的快照经接口写不进去，两项都为空
+ * （按存量处理：哈希为空时下一次保存按"不同"，不缩水解析存下的快照）
+ */
+function storedContent(text: string): StoredContent {
+  const raw = Buffer.from(text, 'utf8')
+  const resources = checkResources((JSON.parse(text) as { resources?: unknown }).resources, DOCUMENT_PROFILE_OF.sheet)
+  return {
+    snapshot: zlib.gzipSync(raw),
+    rawBytes: raw.length,
+    contentHash: resources.ok ? createHash('sha256').update(contentHashInput(canonicalContentText(text))).digest() : null,
+    resourceNames: resources.ok ? resources.nonEmpty : null,
+  }
+}
+
+/**
+ * 写一份文档：与经接口新建的一致（元数据、快照的内容与信封、修订号 1 的修订记录）。
  * 快照默认是新建时的模板；spaceId 默认是作者的个人空间；folderId 为空时放在空间的根目录（M2-P4）
  */
 async function insertDocument(client: pg.Client, owner: TestUser, title: string, snapshotFor: SnapshotFor = sheetSnapshotFor, spaceId = owner.personalSpaceId, folderId?: string): Promise<string> {
   const unitId = randomUUID()
-  const raw = Buffer.from(snapshotFor(unitId), 'utf8')
-  const snapshot = zlib.gzipSync(raw)
+  const content = storedContent(snapshotFor(unitId))
   const digest = createHash('sha256').update(`created\nsheet\n${title}`, 'utf8').digest()
   const result = await client.query<{ id: string }>(
     `WITH document AS (
        INSERT INTO documents (space_id, type, title, created_by, unit_id, profile, format_version, sdk_version, folder_id)
        VALUES ($1, 'sheet', $2, $3, $4, $5, $6, $7, $13) RETURNING id
      ), content AS (
-       INSERT INTO document_contents (document_id, snapshot, raw_bytes, stored_bytes) SELECT id, $8, $9, $10 FROM document
+       INSERT INTO document_contents (document_id, snapshot, raw_bytes, stored_bytes, content_hash, resource_names)
+       SELECT id, $8, $9, $10, $14, $15 FROM document
      ), revision AS (
-       INSERT INTO document_revisions (document_id, revision, kind, request_id, payload_digest, saved_by) SELECT id, 1, 'created', $11, $12, $3 FROM document
+       INSERT INTO document_revisions (document_id, revision, kind, request_id, payload_digest, saved_by, content_hash)
+       SELECT id, 1, 'created', $11, $12, $3, $14 FROM document
      )
      SELECT id FROM document`,
-    [spaceId, title, owner.id, unitId, DOCUMENT_PROFILE_OF.sheet, PLATFORM_FORMAT_VERSION, UNIVER_SDK_VERSION, snapshot, raw.length, snapshot.length, randomUUID(), digest, folderId ?? null],
+    [spaceId, title, owner.id, unitId, DOCUMENT_PROFILE_OF.sheet, PLATFORM_FORMAT_VERSION, UNIVER_SDK_VERSION, content.snapshot, content.rawBytes, content.snapshot.length, randomUUID(), digest, folderId ?? null, content.contentHash, content.resourceNames],
   )
   return result.rows[0]?.id ?? ''
+}
+
+/**
+ * 直接写库存一版新的内容（另一个人在别处保存，作为用例的前置数据）：内容与信封、修订号加一、一条修订记录，与经接口保存写出的一样
+ * （修订记录的来源是一个新的标签页；没有页面的构建）。edit 就地改解析之后的快照；返回新的修订号。
+ * 不经保存接口的理由在用它的地方（例如样本的 data: 图片过不了服务端的快照检查，measure-scene.ts）
+ */
+export async function writeVersion(documentId: string, savedBy: TestUser, edit: (snapshot: Record<string, unknown>) => void): Promise<number> {
+  return withDatabase(async (client) => {
+    await client.query('BEGIN')
+    try {
+      const current = (await client.query<{ revision: number, snapshot: Buffer }>(
+        'SELECT d.revision, c.snapshot FROM documents d JOIN document_contents c ON c.document_id = d.id WHERE d.id = $1 FOR UPDATE OF d, c',
+        [documentId],
+      )).rows[0]
+      if (current === undefined)
+        throw new Error(`库里没有文档 ${documentId}`)
+      const snapshot = JSON.parse(zlib.gunzipSync(current.snapshot).toString('utf8')) as Record<string, unknown>
+      edit(snapshot)
+      const content = storedContent(JSON.stringify(snapshot))
+      const revision = current.revision + 1
+      await client.query(
+        `UPDATE document_contents SET snapshot = $2, raw_bytes = $3, stored_bytes = $4, content_hash = $5, resource_names = $6, updated_at = now()
+         WHERE document_id = $1`,
+        [documentId, content.snapshot, content.rawBytes, content.snapshot.length, content.contentHash, content.resourceNames],
+      )
+      await client.query('UPDATE documents SET revision = $2, updated_at = now() WHERE id = $1', [documentId, revision])
+      await client.query(
+        `INSERT INTO document_revisions (document_id, revision, kind, request_id, payload_digest, client_instance_id, local_seq, saved_by, content_hash)
+         VALUES ($1, $2, 'saved', $3, $4, $5, 1, $6, $7)`,
+        [documentId, revision, randomUUID(), randomBytes(32), randomUUID(), savedBy.id, content.contentHash],
+      )
+      await client.query('COMMIT')
+      return revision
+    }
+    catch (error) {
+      await client.query('ROLLBACK')
+      throw error
+    }
+  })
 }
 
 export async function createDocument(owner: TestUser, title: string, snapshotFor?: SnapshotFor): Promise<string> {

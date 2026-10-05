@@ -7,7 +7,8 @@
 // sheet-cell-image.controller.ts 的 resizeImageByCell，不经 mutation）。
 // 写库时换上文档自己的 unitId（与新建的模板相同，database.ts 的 SnapshotFor）。
 // 重新收敛（SDK 升级或插件档案变更之后，"打开不产生改动"等用例失败时）：pnpm --filter @nerve-office/e2e run update:read-only-sample
-// （tools/update-read-only-sample.spec.ts：打开、把每张表画一遍、保存，直到连续两次保存的字节相同，写回 read-only-sample.json）。
+// （tools/update-read-only-sample.spec.ts：打开、把每张表画一遍、经探针取内存里的快照，直到打开的与取出的字节相同，写回 read-only-sample.json；
+// 不经保存：data: 的图片 P3 起服务端拒绝保存）。要经保存接口存样本的地方用去掉图片的那一份（sampleWithoutImagesFor）。
 import { readFileSync } from 'node:fs'
 
 /** 样本里的占位 unitId */
@@ -53,8 +54,38 @@ export const SAMPLE_FORMULAS = [
   { sheetId: SAMPLE_SHEETS.summary.id, cell: 'A2', formula: '=\'数据\'!A2', value: '苹果' },
 ] as const
 
-interface SampleCell { f?: string, v?: unknown, t?: number }
-interface SampleWorkbook { sheets: Record<string, { cellData: Record<string, Record<string, SampleCell>> }> }
+interface SampleCell { f?: string, v?: unknown, t?: number, p?: unknown }
+interface SampleWorkbook {
+  sheets: Record<string, { cellData: Record<string, Record<string, SampleCell>> }>
+  resources: { name: string, data: string }[]
+}
+
+/** 单元格图片所在的格（"功能"表 H5：从 0 开始的第 4 行、第 7 列） */
+const CELL_IMAGE = { sheetId: SAMPLE_SHEETS.features.id, row: '4', column: '7' } as const
+
+/**
+ * 去掉图片的样本（M3-P3 设计 §3.11）：样本的两张图片是 data: 地址，P3 起服务端拒绝保存它（image-source：图片地址必须是平台地址，
+ * 平台的图片在 M5）。要经保存接口存它的地方用这一份——页面自检的 enter-exit 场景（退出编辑时保存一次）、只读用例里查看者直接调保存接口
+ * （要走到权限那一步）。浮动图片（"功能"表 J2，SHEET_DRAWING_PLUGIN 里那张表的一项）与单元格图片（H5 那一格）去掉，其余与样本相同；
+ * 只读、不保存的用例照旧用完整的样本
+ */
+export function sampleWithoutImagesFor(unitId: string): string {
+  const workbook = JSON.parse(readOnlySampleFor(unitId)) as SampleWorkbook
+  const row = workbook.sheets[CELL_IMAGE.sheetId]?.cellData[CELL_IMAGE.row]
+  if (row?.[CELL_IMAGE.column]?.p === undefined)
+    throw new Error('样本的"功能"表 H5 没有单元格图片：样本变了，这里要跟着改')
+  delete row[CELL_IMAGE.column]
+  workbook.resources = workbook.resources.map((resource) => {
+    if (resource.name !== 'SHEET_DRAWING_PLUGIN')
+      return resource
+    const drawings = JSON.parse(resource.data) as Record<string, unknown>
+    if (!(SAMPLE_SHEETS.features.id in drawings))
+      throw new Error('样本的"功能"表没有浮动图片：样本变了，这里要跟着改')
+    delete drawings[SAMPLE_SHEETS.features.id]
+    return { ...resource, data: JSON.stringify(drawings) }
+  })
+  return JSON.stringify(workbook)
+}
 
 /**
  * 去掉公式缓存值的样本（P3 审查 B5）：样本本身逐字节比较，不动它，按它派生。打开时 SDK 只计算没有结果的公式

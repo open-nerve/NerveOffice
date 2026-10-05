@@ -1,8 +1,10 @@
 // 编辑器页的操作与核对（P4 设计 §3.10）。
 // Univer 把表格画在画布上，单元格没有可访问的元素：选中单元格只能按位置点击画布，位置按模板的默认行高、列宽与表头的大小算；
 // 内容按接口取回的快照核对（服务器上保存的才算数）。页头、按钮与提示照常按角色与名称定位。
+import type { SaveContentResponse } from '@nerve-office/contracts'
 import type { Locator, Page, Request, Route } from '@playwright/test'
-import { revisionFromEtag, SHEET_TEMPLATE } from '@nerve-office/contracts'
+import { gunzipSync } from 'node:zlib'
+import { revisionFromEtag, saveContentResponseSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { editLeaseEndReason } from './database.ts'
 import { e2eOrigin } from './environment.ts'
 import { expect } from './fixtures.ts'
@@ -250,6 +252,27 @@ export async function expectFoundOnce(page: Page, text: string): Promise<void> {
 export async function saveAndWait(page: Page): Promise<void> {
   await saveButton(page).click()
   await expect(saveStatus(page)).toHaveText('已保存到云端')
+}
+
+/** 一次保存：本页上传的正文（gzip 解压之后的快照原文，就是本页捕获的内容）与服务端的回答 */
+export interface SaveExchange {
+  readonly uploaded: string
+  readonly answer: SaveContentResponse
+}
+
+/**
+ * 点保存并等到"已保存到云端"，取下这次保存上传的正文与服务端的回答（M3-P3 设计 §3.11）：内容与服务器上的相同时服务端回答 unchanged、
+ * 不存这次的字节，"本页捕获的是什么"要看上传的正文，不能再看服务器上的
+ */
+export async function saveAndCapture(page: Page): Promise<SaveExchange> {
+  const responded = page.waitForResponse(response => isSaveRequest(response.request()))
+  await saveAndWait(page)
+  const response = await responded
+  expect(response.status(), await response.text()).toBe(200)
+  const body = response.request().postDataBuffer()
+  if (body === null)
+    throw new Error('保存的请求里没有正文')
+  return { uploaded: gunzipSync(body).toString('utf8'), answer: saveContentResponseSchema.parse(await response.json()) }
 }
 
 /** 页头之外说明谁在编辑的读屏状态区（M3-P1；M3-P2 起阅读时随编辑状态更新）：别处正在编辑这份文档时有内容 */
