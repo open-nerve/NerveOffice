@@ -491,6 +491,41 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     expect([cellOf(saved, 'A1')?.v, cellOf(saved, 'A2')?.v]).toEqual(['kept', 'also kept'])
   })
 
+  test('US-M3-02 确认会话断网（审查 A6）：自动保存暂停，页头说暂时无法确认登录状态（人一直在登录中，不说"登录回来之后"），确认失败期间不再发；网络恢复之后页面自己再确认、换上新的令牌，不用按保存就存上', async ({ page, context }) => {
+    const owner = await createUser('autosave-unconfirmed')
+    await loginThroughApi(page, owner)
+    const documentId = await createSheetThroughApi(page)
+    await openAndEnterEditing(page, documentId)
+    const writes = recordWrites(page, documentId)
+    await releaseAutosave(page)
+    // 同一个人在别处经接口重新登录：本页的令牌失效（没有广播）；本页确认会话断网
+    const other = await context.newPage()
+    await loginThroughApi(other, owner)
+    let checks = 0
+    await page.route('**/api/auth/session', async (route) => {
+      checks += 1
+      await route.abort('internetdisconnected')
+    })
+    // 自动保存的上传得到令牌失效，页面确认会话、断网：暂停
+    await typeInCell(page, 'A1', 'kept')
+    await expect(saveStatus(page)).toHaveText('暂停保存：暂时无法确认登录状态，稍后自动重试')
+    expect(writes.saves).toHaveLength(1)
+    // 之后的修改不上传：页面定时再确认（2、4……秒）照样断网，不带着失效的令牌再发
+    await typeInCell(page, 'A2', 'also kept')
+    const failedChecks = checks
+    await expect.poll(() => checks, { timeout: 15_000 }).toBeGreaterThan(failedChecks)
+    expect(writes.saves).toHaveLength(1)
+    await expect(saveStatus(page)).toHaveText('暂停保存：暂时无法确认登录状态，稍后自动重试')
+    // 网络恢复（联网的事件）：页面立即再确认，是本人、换上新的令牌、续上编辑权，自动保存随即上传
+    await page.unroute('**/api/auth/session')
+    await context.setOffline(true)
+    await context.setOffline(false)
+    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    expect(writes.saves.length).toBeGreaterThan(1)
+    const saved = (await savedContent(page, documentId)).snapshot
+    expect([cellOf(saved, 'A1')?.v, cellOf(saved, 'A2')?.v]).toEqual(['kept', 'also kept'])
+  })
+
   test('US-M3-02 失去编辑权（空间刚被归档，自动保存得知 403）：自动保存停下，之后不再发；本页的内容另存为副本照常', async ({ page }) => {
     const lead = await createUser('autosave-lost-lead')
     const editor = await createUser('autosave-lost-editor')
