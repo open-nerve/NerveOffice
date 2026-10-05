@@ -29,6 +29,9 @@ import { EditLeasesRepository } from './edit-leases.repository.ts'
 import { FoldersRepository } from './folders.repository.ts'
 import { FoldersService } from './folders.service.ts'
 import { LeaseWriteAccessRevocation } from './lease-write-access.ts'
+import { OpenCheckReportGate } from './open-check-report-gate.ts'
+import { OpenCheckReportsController } from './open-check-reports.controller.ts'
+import { OpenCheckReportService } from './open-check-reports.service.ts'
 import { RequestLedger } from './request-ledger.ts'
 import { RevisionPurgeService } from './revision-purge.service.ts'
 import { SharedDocumentsService } from './shared-documents.service.ts'
@@ -43,7 +46,7 @@ import { WriteAccessRevocation } from './write-access.ts'
 @Module({
   // auth 只为判断别人的租约绑定的登录还在不在（SessionService.isActive，M3-P1 设计 §3.1）；auth 不依赖 documents，依赖图无环
   imports: [DatabaseModule, SpacesModule, AuditModule, AuthModule],
-  controllers: [DocumentsController, DocumentContentController],
+  controllers: [DocumentsController, DocumentContentController, OpenCheckReportsController],
   providers: [
     DocumentsRepository,
     DocumentContentsRepository,
@@ -85,6 +88,9 @@ import { WriteAccessRevocation } from './write-access.ts'
     { provide: WriteAccessRevocation, useClass: LeaseWriteAccessRevocation },
     // 拦截旧客户端（M3-P3 设计 §3.5）：按运维开关核对页面上报的构建与数据格式；保存、另存为副本与编辑租约的服务用
     ClientFormatGate,
+    // 打开自检失败的上报（M3-P4 设计 §3.13）：能读就能报、记 warn；进程内的去重与按账户限量（每个应用实例一份，单调时钟）
+    OpenCheckReportService,
+    { provide: OpenCheckReportGate, useFactory: () => new OpenCheckReportGate() },
     // 快照的检查（M3-P3 设计 §3.3）：子进程池，子进程按需创建、空闲到期与退出时结束；只在本模块里用（保存与另存为副本）
     {
       provide: SnapshotInspector,

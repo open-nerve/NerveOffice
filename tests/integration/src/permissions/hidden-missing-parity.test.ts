@@ -26,6 +26,7 @@ import { conflictCopyPath, pageSnapshot } from '../support/conflict-copies.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
 import { grantsOn, removeGrant, setGrants } from '../support/grants.ts'
+import { openCheckPath, openCheckReport } from '../support/open-check.ts'
 import { matchesRoute, pathParameters, routesOf } from '../support/routes.ts'
 import { asUser, login } from '../support/session-client.ts'
 import { createTeamSpace } from '../support/spaces.ts'
@@ -375,6 +376,14 @@ const PROBES: readonly Probe[] = [
   { name: 'GET 文档内容（条件请求，修订号对得上）', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/content`, 'GET', undefined, IF_NONE_MATCH('"1"')) },
   { name: 'GET 文档内容（条件请求，*）', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.personalDocument.id)}/content`, 'GET', undefined, IF_NONE_MATCH('*')) },
   { name: '只有查看授权 GET 取消了分享的文档的内容（条件请求）', actor: 'grantViewer', request: async (s, h) => call(s, `/api/documents/${pick(h, w.revokedDocument)}/content`, 'GET', undefined, IF_NONE_MATCH('"1"')) },
+  // ---- 打开自检失败的上报（M3-P4 设计 §3.13）：能读就能报，在只读快照里判断；读不到的、回收站里的与不存在的一样，进程内的去重与限量都在判断之后 ----
+  { name: 'POST 打开自检的上报', actor: 'outsider', request: async (s, h) => call(s, openCheckPath(pick(h, w.teamDocument.id)), 'POST', openCheckReport()) },
+  { name: 'POST 打开自检的上报（个人空间的文档）', actor: 'outsider', request: async (s, h) => call(s, openCheckPath(pick(h, w.personalDocument.id)), 'POST', openCheckReport()) },
+  { name: 'POST 打开自检的上报（回收站里的文档，空间管理员自己）', actor: 'admin', request: async (s, h) => call(s, openCheckPath(pick(h, w.teamTrashedDocument)), 'POST', openCheckReport()) },
+  { name: '系统管理员 POST 打开自检的上报（团队空间的文档）', actor: 'systemAdmin', request: async (s, h) => call(s, openCheckPath(pick(h, w.teamDocument.id)), 'POST', openCheckReport()) },
+  { name: '只有查看授权 POST 打开自检的上报（没分享的文档）', actor: 'grantViewer', request: async (s, h) => call(s, openCheckPath(pick(h, w.teamOtherDocument.id)), 'POST', openCheckReport()) },
+  { name: '只有查看授权 POST 打开自检的上报（取消了分享的文档）', actor: 'grantViewer', request: async (s, h) => call(s, openCheckPath(pick(h, w.revokedDocument)), 'POST', openCheckReport()) },
+  { name: '只有编辑授权 POST 打开自检的上报（回收站里有授权的文档）', actor: 'grantEditor', request: async (s, h) => call(s, openCheckPath(pick(h, w.teamTrashedDocument)), 'POST', openCheckReport()) },
   // 路由表的覆盖核对发现的（M2-P6 第 6 片复核 S5）：恢复与归档成对，原来漏了
   { name: '系统管理员 POST 恢复个人空间', actor: 'systemAdmin', request: async (s, h) => call(s, `/api/admin/spaces/${pick(h, w.owner.personalSpaceId)}/restore`, 'POST') },
   { name: '系统管理员 转移到写成团队空间的个人空间', actor: 'systemAdmin', request: async (s, h) => call(s, `/api/admin/users/${w.leaver.id}/documents/transfer`, 'POST', { documentIds: [w.leaver.document], target: { type: 'team', spaceId: pick(h, w.owner.personalSpaceId) } }) },
