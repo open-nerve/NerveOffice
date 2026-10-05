@@ -42,7 +42,7 @@ import type { FetchedEditStatus, LeaseCredentials, LoadedContent } from './edito
 import type { CreateModeEditor, EditorSurface } from './editor-slot.ts'
 import type { LostCopy } from './lost-copy.ts'
 import type { PageVisibility, ReadingCheckResult } from './reading-checks.ts'
-import type { CompressSnapshot, SaveCoordinator, SaveRequest, SaveStatus, SaveView } from './save-coordinator.ts'
+import type { CompressSnapshot, SaveCoordinator, SaveOptions, SaveRequest, SaveStatus, SaveView } from './save-coordinator.ts'
 import { EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
 import { ApiError, isAuthenticationError, isCsrfTokenError, isNotFoundError, isPermissionDeniedError } from '../../shared/api/index.ts'
 import { incompatibilityOf } from './client-format.ts'
@@ -52,6 +52,13 @@ import { createEditorSlot } from './editor-slot.ts'
 import { createLostCopy } from './lost-copy.ts'
 import { createReadingChecks } from './reading-checks.ts'
 import { createSaveCoordinator } from './save-coordinator.ts'
+import { explicitCaptureSource } from './snapshot-capture.ts'
+
+/**
+ * 显式保存（保存按钮、快捷键与退出编辑之前的那一次）：先提交单元格、等公式至多 3 秒再捕获，一律上传（不去重）。
+ * M3-P4 设计 §6 的 S4 改由自动保存的立即上传（autosave.ts 的 flush）给出捕获
+ */
+const EXPLICIT_SAVE: SaveOptions = { dedupe: false }
 
 /**
  * 退出编辑时等释放的结果，至多这么久（审查 A7）：释放只是让别人早一点能编辑，不影响正确性——没送到的那一代至多一个有效期
@@ -853,7 +860,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
       if (!still(token))
         return
       if (saver.hasUnsavedWork()) {
-        await saver.save()
+        await saver.save(explicitCaptureSource(page), EXPLICIT_SAVE)
         if (!still(token))
           return
         if (saver.hasUnsavedWork()) {
@@ -893,8 +900,9 @@ export function createEditMode(options: EditModeOptions): EditMode {
     },
 
     save: async () => {
-      if (mode.kind === 'editing')
-        await coordinator?.save()
+      const page = slot.editor()
+      if (mode.kind === 'editing' && page !== undefined)
+        await coordinator?.save(explicitCaptureSource(page), EXPLICIT_SAVE)
     },
 
     refresh: async () => {
