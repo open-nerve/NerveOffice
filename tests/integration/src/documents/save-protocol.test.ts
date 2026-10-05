@@ -409,6 +409,9 @@ describe('US-M3-16 拦截旧客户端：保存、另存为副本、申请编辑�
     const document = await amyDocument()
     const response = await postConflictCopy(app.baseUrl, amySession, document.id, document.unitId, { clientFormat })
     expect(await errorOf(response)).toEqual({ status: 409, code: 'CLIENT_OUTDATED', details: { reason } })
+    // 确实没建副本：副本与原文档的 unitId 相同，库里只有原文档这一份；也没有另存为副本的审计
+    expect(await database.query(async client => (await client.query<{ count: number }>('SELECT count(*)::int AS count FROM documents WHERE unit_id = $1', [document.unitId])).rows[0]?.count)).toBe(1)
+    expect(await database.query(async client => (await client.query('SELECT 1 FROM audit_events WHERE action = \'documents.conflict_copied\' AND details->>\'sourceId\' = $1', [document.id])).rowCount)).toBe(0)
   })
 
   it.each(OUTDATED)('%s：申请 409 CLIENT_OUTDATED，不写租约', async (_case, clientFormat, reason) => {
