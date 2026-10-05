@@ -3,13 +3,14 @@
 // 片段的写法（URLSearchParams）：user、password、document（文档 id）、scenario（场景）、next，可选的 formula（公式模式，
 // 测试构建的开关：main 是主线程模式，M3-P4 设计 §3.14；原样带到编辑器页的地址上）。
 // 片段不发给服务器、不进访问日志；读完马上用 replaceState 从地址栏与会话历史里去掉。
+// 跳到编辑器页之前在 sessionStorage 里暂停定时的自动保存（SELFTEST_AUTOSAVE_HOLD，M3-P4 S7 审查 B1）。
 // next 只能是本机的地址（nextProblem，M3-P2 复核 B7）：不是时不登录、不跳转，原因写在页面上。
 // 登录失败或片段不全时，同样把结果（failure 写明原因）带到 next：驱动脚本不必等到超时。
 // 不引用平台页面与编辑器页共用的任何模块（contracts、shared/api、zod 都不用，登录用原生的 fetch；M3-P2 复核 B4）：
 // 引用了，那些模块在测试构建里成了三个入口共用的，分块的拆法随之改变，平台页面与编辑器页的入口块就与生产构建的不同，
 // E2E 测的不再是生产的样子。只引用结果的格式（editor/testing/selftest-report.ts，它不引用任何模块；lint 只放行它）
 import type { SelftestReport } from '../../editor/testing/selftest-report.ts'
-import { encodeSelftestReport, FORMULA_MODE_PARAM, FORMULA_MODE_VALUES, formulaModeOfValue, NEXT_PARAM, nextProblem, reportUrl, SELFTEST_REPORT_FORMAT, selftestEditorUrl } from '../../editor/testing/selftest-report.ts'
+import { encodeSelftestReport, FORMULA_MODE_PARAM, FORMULA_MODE_VALUES, formulaModeOfValue, NEXT_PARAM, nextProblem, reportUrl, SELFTEST_AUTOSAVE_HOLD, SELFTEST_REPORT_FORMAT, selftestEditorUrl } from '../../editor/testing/selftest-report.ts'
 
 function show(text: string): void {
   const status = document.getElementById('status')
@@ -96,8 +97,22 @@ async function main(): Promise<void> {
     return
   }
   const target = selftestEditorUrl(window.location.origin, documentId, scenario, next, formula ?? undefined)
+  holdTimedAutosave()
   show(`打开 ${new URL(target).pathname}…`)
   window.location.replace(target)
+}
+
+/**
+ * 打开编辑器页之前暂停定时的自动保存（SELFTEST_AUTOSAVE_HOLD，M3-P4 S7 审查 B1）：不验证自动保存的场景从打开起就不会按时上传，
+ * 与 Playwright 的夹具默认的一样；捕获时机的场景开始时自己放开。sessionStorage 写不进去（隐私模式等）时照样跳转：自检开始时还会再暂停一次
+ */
+function holdTimedAutosave(): void {
+  try {
+    sessionStorage.setItem(SELFTEST_AUTOSAVE_HOLD.key, SELFTEST_AUTOSAVE_HOLD.value)
+  }
+  catch {
+    // 见上
+  }
 }
 
 void main()

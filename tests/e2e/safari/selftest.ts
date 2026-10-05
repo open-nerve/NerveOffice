@@ -7,11 +7,12 @@
 //    没有收结果的接口；顶层跳转不受 CSP 限制）。收集端收下这一步的结果，把页面带到下一步的入口页，最后停在结束页；
 // 4. open -g -a Safari 在后台打开第一步的入口页（M0 的做法），--front 时 open -a Safari 把 Safari 带到前台：不改 Safari 的设置，
 //    不用"允许远程自动化"；
-// 5. 等全部的结果（总时限，--timeout 秒），核对服务器上的文档（只读与捕获时机的几步没有保存过；enter-exit 恰好保存了一次、内容里有改的那一格），
+// 5. 等全部的结果（总时限，--timeout 秒），核对服务器上的文档（support/selftest-plan.ts 的 storedProblems：只看不改的几步没有保存过；
+//    enter-exit 恰好保存了一次、内容里有改的那一格；自动保存照常运行的几步至少保存了一次、存下的内容按定义核对），
 //    写 tests/e2e/test-results/safari/<时间>.json（Safari 与 macOS 的版本、每步每项的结果、页面错误、计时与时间线），打印汇总；
-//    最后一步 hidden-save（M3-P4 S1）由这里编排：在库里看到它第一次保存（修订号 2）之后，open -a Safari 另开收集端的空白页（HIDE_PATH），
-//    编辑器页随之真的变成隐藏，页面在隐藏的那一刻保存；按库里的证据判定（修订号 3、内容里有隐藏的那一刻写的那一格）与用时，
-//    页面在后台交不回结果也不算超时；
+//    最后一步 hidden-save（M3-P4 S1；S7 起由自动保存上传）由这里编排：在库里看到它第一次上传（修订号 2）之后，open -a Safari 另开收集端的
+//    空白页（HIDE_PATH），编辑器页随之真的变成隐藏，自动保存在隐藏的那一刻捕获、上传留着的第二格；按库里的证据判定（修订号 3、内容里有两格）
+//    与用时，页面在后台交不回结果也不算超时；
 // 6. 停后端、删库。Safari 里留下一个停在结束页的标签页（与 M0 相同），可以关掉。
 // 退出码：0 全部通过；1 有不通过的检查、页面错误或服务器上的核对不对；2 超时（有的步没有交回结果）；3 准备阶段失败（没有构建、
 // 库连不上、Safari 打不开）。
@@ -186,24 +187,24 @@ async function waitForRevision(documentId: string, revision: number, deadline: n
   return undefined
 }
 
-/** hidden-save 等第一次保存最多多久（这一步的页面要登录、打开、进入编辑、保存） */
+/** hidden-save 等第一次上传最多多久（这一步的页面要登录、打开、进入编辑、上传第一格） */
 const HIDDEN_FIRST_SAVE_TIMEOUT_MS = 120_000
 
-/** 另开标签页之后，等隐藏的那一刻的保存最多多久（Safari 约 6 秒之后停隐藏页面的计时器：保存要在那之前发出） */
+/** 另开标签页之后，等自动保存在隐藏时上传的那一版最多多久（Safari 约 6 秒之后停隐藏页面的计时器：上传要在那之前发出） */
 const HIDDEN_SAVE_TIMEOUT_MS = 60_000
 
-/** 隐藏的那一刻的保存存下之后，再等页面交回结果多久（交不回也不算失败：页面在后台） */
+/** 隐藏时上传的那一版存下之后，再等页面交回结果多久（交不回也不算失败：页面在后台） */
 const HIDDEN_REPORT_GRACE_MS = 30_000
 
 /**
- * 编排 hidden-save（最后一步）：等它第一次保存（修订号 2）→ open -a Safari 另开收集端的空白页，编辑器页随之变成隐藏 →
- * 等隐藏的那一刻的保存（修订号 3）→ 再等一会儿页面的结果。返回证据的说明
+ * 编排 hidden-save（最后一步）：等它第一次上传（修订号 2）→ open -a Safari 另开收集端的空白页，编辑器页随之变成隐藏 →
+ * 等自动保存在隐藏时上传的那一版（修订号 3）→ 再等一会儿页面的结果。返回证据的说明
  */
 async function driveHiddenSave(collector: Collector, step: SelftestStep, index: number, deadline: number): Promise<string> {
   const first = await waitForRevision(step.documentId, 2, Math.min(deadline, Date.now() + HIDDEN_FIRST_SAVE_TIMEOUT_MS))
   if (first === undefined)
-    return `${HIDDEN_FIRST_SAVE_TIMEOUT_MS / 1000} 秒内没有等到第一次保存（修订号 2），没有另开标签页`
-  say('hidden-save：库里有了第一次保存，另开标签页让编辑器页隐藏')
+    return `${HIDDEN_FIRST_SAVE_TIMEOUT_MS / 1000} 秒内没有等到第一次上传（修订号 2），没有另开标签页`
+  say('hidden-save：库里有了第一次上传，另开标签页让编辑器页隐藏')
   const opened = Date.now()
   try {
     execFileSync('open', ['-a', 'Safari', new URL(HIDE_PATH, collector.origin).href])
@@ -213,13 +214,13 @@ async function driveHiddenSave(collector: Collector, step: SelftestStep, index: 
   }
   const second = await waitForRevision(step.documentId, 3, Math.min(deadline, opened + HIDDEN_SAVE_TIMEOUT_MS))
   if (second === undefined)
-    return `另开标签页之后 ${HIDDEN_SAVE_TIMEOUT_MS / 1000} 秒内库里没有隐藏的那一刻的保存（修订号 3）`
-  say(`hidden-save：另开标签页之后 ${second - opened} ms 库里有了隐藏的那一刻的保存`)
+    return `另开标签页之后 ${HIDDEN_SAVE_TIMEOUT_MS / 1000} 秒内库里没有自动保存在隐藏时上传的那一版（修订号 3）`
+  say(`hidden-save：另开标签页之后 ${second - opened} ms 库里有了自动保存在隐藏时上传的那一版`)
   await waitForResults(collector, index + 1, Math.min(deadline, Date.now() + HIDDEN_REPORT_GRACE_MS))
-  return `库里看到第一次保存之后另开标签页；另开之后 ${second - opened} ms 库里有了隐藏的那一刻的保存（每 100 毫秒查一次库）；页面的结果${collector.received.has(index) ? '交回了' : `在 ${HIDDEN_REPORT_GRACE_MS / 1000} 秒内没有交回（页面在后台）`}`
+  return `库里看到第一次上传之后另开标签页；另开之后 ${second - opened} ms 库里有了自动保存在隐藏时上传的那一版（每 100 毫秒查一次库）；页面的结果${collector.received.has(index) ? '交回了' : `在 ${HIDDEN_REPORT_GRACE_MS / 1000} 秒内没有交回（页面在后台）`}`
 }
 
-/** 服务器上的核对（每一步的文档）：只读的几步没有保存过（修订号仍是 1）；enter-exit 恰好保存了一次、内容里有改的那一格 */
+/** 服务器上的核对（每一步的文档，support/selftest-plan.ts 的 storedProblems） */
 async function checkServer(steps: readonly SelftestStep[]): Promise<{ readonly revisions: Readonly<Record<string, number | undefined>>, readonly problems: string[] }> {
   const revisions: Record<string, number | undefined> = {}
   const problems: string[] = []
