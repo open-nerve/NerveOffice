@@ -4,9 +4,10 @@
 // 保存就先原样重发它一次，核对完再定"修改存上了没有"的说法（审查 B5，重放先于拦截；续租得知时在途的那一次先等它的结果，复验 C1）；
 // 视图带最近一次捕获的大小（与服务端解压后的字节同一个口径），页面据此在达到容量的 80% 时提示。
 // M3-P4（设计 §3.1、§3.4、§3.7–§3.9）：两级的上传这一级——上传一份给定的捕获，不自己捕获：
-// - 捕获由来源给出（CaptureSource）：自动保存给的是"最近一次捕获"（autosave.ts），立即上传与显式保存给的是先提交单元格、等公式再捕获的那个
+// - 捕获由来源给出（CaptureSource）：自动保存给的是"最近一次捕获"（autosave.ts），立即上传与显式保存给的是等完按下时的准备、等公式再捕获的那个
 //   （snapshot-capture.ts）。来源在轮到这一次时才取，所以每次上传的都是那一刻最新的捕获，先后不会颠倒；
-// - 保存一个接一个（同时至多一个在途）；不去重的（显式保存）在途时按下排一次，再按并进排着的那一次（设计 §3.4、§3.9）；
+// - 保存一个接一个（同时至多一个在途）：在途时再来的排在后面（显式保存在途时按下排一次，再按并进排着的那一次，由自动保存的调度合并，
+//   设计 §3.4、§3.9，审查 A2）；
 // - 会话内去重（设计 §3.7）：键是快照字节的摘要连同"公式待更新"，与最近一次确认过的相同就不上传、按这次捕获的序号确认；
 //   还有结果未知的请求时不去重（服务端上可能是那一次的内容）；同样的内容被拒、再试也一样的（要等新内容）不再发。显式保存一律上传；
 // - "公式待更新"的初值由调用方给出（进入编辑时申请编辑权的响应里的标记，设计 §3.5）；
@@ -51,13 +52,13 @@ export type CaptureSource = () => PreparedCapture | Promise<PreparedCapture>
 export interface SaveOptions {
   /**
    * 会话内去重（设计 §3.7）：自动保存、切到后台、退出编辑与交出时为真；显式保存（保存按钮、Cmd/Ctrl+S）为假——一律上传，兜住变更检测
-   * 看不见的改动，在途时排一次
+   * 看不见的改动
    */
   readonly dedupe: boolean
   /**
    * 这一次的结果出来时、视图随之更新之前同步调用（M3-P4 S4）：调度据此先记下退避与"传过了没有"，页头连同两边的状态一起变——
    * 否则视图先变成"保存失败"、调度的"会自动重试"晚一拍，页头与读屏先说"保存失败"再说"稍后自动重试"。
-   * 停住、终态时直接交回的结果（skipped）与并进排着的那一次时不调用（调用方等 save 兑现再处理）；抛出的错误上报，不影响保存
+   * 停住、终态时直接交回的结果（skipped）不调用（调用方等 save 兑现再处理）；抛出的错误上报，不影响保存
    */
   readonly onOutcome?: ((outcome: SaveOutcome) => void) | undefined
 }
@@ -200,8 +201,8 @@ export interface SaveCoordinator {
    */
   readonly adoptOwnRevision: (revision: number, source: RevisionSource | null) => boolean
   /**
-   * 上传 source 给出的捕获（见文件头）。一个接一个：前面还有保存时排在它后面，轮到时才向 source 要捕获；dedupe 为假（显式保存）时
-   * 已经有一次排着还没开始的，就并进那一次、交回它的结果。停住、终态时不做（skipped）。从不失败（失败归在结果里）
+   * 上传 source 给出的捕获（见文件头）。一个接一个：前面还有保存时排在它后面，轮到时才向 source 要捕获；每次调用都是自己的一次上传、
+   * 自己的结果（合并连按的显式保存是调用方的事，autosave.ts）。停住、终态时不做（skipped）。从不失败（失败归在结果里）
    */
   readonly save: (source: CaptureSource, options: SaveOptions) => Promise<SaveOutcome>
   /** 自动保存在保存之外捕获了一次（定时的捕获，autosave.ts）：视图里的大小随之更新，80% 的提示不等上传（US-M3-14） */
@@ -325,8 +326,6 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
   let pendingSaves = 0
   /** 保存一个接一个：最后排上的那一次结束时兑现（从不失败） */
   let tail: Promise<void> = Promise.resolve()
-  /** 排着还没开始的那一次不去重的保存（显式保存）：在途时再按，并进它 */
-  let queuedExplicit: Promise<SaveOutcome> | undefined
   let stopped = false
   let problem: SaveProblem | undefined
   let conflict: RevisionConflictDetails | null | undefined
@@ -655,20 +654,15 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
       update()
       return true
     },
-    // 排队（pendingSaves、tail、queuedExplicit）在第一个 await 之前同步完成：调用之后视图立即是"保存中"，先后按调用的顺序
+    // 排队（pendingSaves、tail）在第一个 await 之前同步完成：调用之后视图立即是"保存中"，先后按调用的顺序
     save: async (source, saveOptions) => {
       if (stopped)
         return SKIPPED_STOPPED
       if (ended())
         return SKIPPED_ENDED
-      // 显式保存在途时按下排一次，再按并进排着的那一次（它轮到时才捕获，捕获的是那一刻的内容）
-      if (!saveOptions.dedupe && queuedExplicit !== undefined)
-        return queuedExplicit
       pendingSaves += 1
       update()
       const run = async (): Promise<SaveOutcome> => {
-        if (!saveOptions.dedupe)
-          queuedExplicit = undefined
         let outcome: SaveOutcome
         try {
           outcome = await attempt(source, saveOptions)
@@ -690,8 +684,6 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
       }
       const outcome = tail.then(run)
       tail = outcome.then(() => undefined)
-      if (!saveOptions.dedupe)
-        queuedExplicit = outcome
       return outcome
     },
     noteCapture: (capture) => {

@@ -615,8 +615,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       // 版本冲突之后再按：不做任何事（P4 设计 §3.7.2）。保存中照样做：在途的结束之后立即再存一次（M3-P4 设计 §3.4、§3.9）
       if (view.save.status === 'conflict')
         return
-      if (await readyToWrite())
-        await mode?.save()
+      // 按下的这一刻就提交这一刻开着的单元格编辑（审查 A1：要等会话确认时也不例外，确认期间才开始的输入不提交），会话确认之后才上传
+      await mode?.save(readyToWrite)
     },
     enterEditing: async () => {
       if (mode?.view().mode.kind !== 'reading')

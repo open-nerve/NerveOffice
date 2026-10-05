@@ -6,8 +6,9 @@
 // - 上传（设计 §3.3）：最近一次捕获还没传过时，修改停下 AUTOSAVE_UPLOAD_QUIET_MS、捕获覆盖了全部修改就上传；持续编辑时从第一处没上传的修改算起
 //   最长 AUTOSAVE_UPLOAD_MAX_MS 上传一次；同时至多一个在途（保存的状态机一个接一个，这里在它结束之前不再发起），在途期间照常捕获，回包之后立即再看。
 //   只在联网、会话是本人且令牌不是已知失效、没被停住、不在终态时上传；会话回到本人、恢复联网、回到前台时立即再看；
-// - 立即上传（设计 §3.4，flush）：保存按钮、退出编辑、交出与空闲释放（P5）先等面板里防抖中的改动写进模型、提交单元格、
-//   等公式（至多捕获的上限，从按下算）再捕获、上传；
+// - 立即上传（设计 §3.4，flush）：保存按钮、退出编辑、交出与空闲释放（P5）在调用（按下）的这一刻就提交这一刻开着的单元格编辑、
+//   开始等面板里防抖中的改动写进模型——要提交哪一次编辑在按下时定，之后才开始的输入不提交、不打断（审查 A1）；轮到这一次上传时
+//   再等公式（至多捕获的上限，从按下算）、捕获、上传。显式保存排着还没轮到时再按，并进排着的那一次，同一个结果只记一次账（审查 A2）；
 //   切到后台（可见性变成 hidden）由这里按页面的信号同步捕获（不提交单元格、不等公式，没收齐就带标记）、立刻发起上传——全程不靠计时器
 //   （Safari 约 6 秒之后停计时器）；恢复联网时不等上传的静默；
 // - 会话内去重（设计 §3.7）：上传带上快照的摘要（注入的 digest，生产是 crypto.subtle 的 SHA-256），由保存的状态机比较；显式保存不去重；
@@ -19,7 +20,7 @@
 import type { CaptureLimits, CaptureReason } from './capture-policy.ts'
 import type { LeaseClock } from './edit-lease.ts'
 import type { PreparedCapture, SaveCoordinator, SaveFailure, SaveOutcome, SaveStatus, SnapshotCapture } from './save-coordinator.ts'
-import type { CaptureEditor } from './snapshot-capture.ts'
+import type { CaptureEditor, InputsSettled } from './snapshot-capture.ts'
 import {
   AUTOSAVE_CAPTURE_MAX_MS,
   AUTOSAVE_CAPTURE_QUIET_MS,
@@ -30,7 +31,7 @@ import {
   AUTOSAVE_UPLOAD_QUIET_MS,
 } from '@nerve-office/contracts'
 import { decideCapture } from './capture-policy.ts'
-import { prepareCapture, takeSnapshot } from './snapshot-capture.ts'
+import { captureSettled, settleInputs, takeSnapshot } from './snapshot-capture.ts'
 
 /** 自动保存用到的编辑器能力（SheetEditor 的子集；公式进度与组合输入的信号由适配层给出，设计 §3.10） */
 export interface AutosaveEditor extends CaptureEditor {
@@ -100,21 +101,35 @@ export const DEFAULT_AUTOSAVE_TUNING: AutosaveTuning = {
 
 /**
  * 立即上传的原因（设计 §3.4）：
- * - save-button：保存按钮与 Cmd/Ctrl+S——提交单元格、等公式至多捕获的上限（从按下算），一律上传（不去重），在途时排一次；
- * - exit：退出编辑——提交单元格、等公式，去重（调用方先 suspend，没全部存上就 resume 留在编辑）；
+ * - save-button：保存按钮与 Cmd/Ctrl+S——按下时提交单元格、等面板，轮到时等公式至多捕获的上限（从按下算），一律上传（不去重）；
+ *   在途时排一次，排着还没轮到时再按并进它；
+ * - exit：退出编辑——同样先提交单元格、等公式，去重（调用方先 suspend，没全部存上就 resume 留在编辑）；
  * - handover、idle-release：交出编辑权、空闲释放（P5）——同 exit；没收齐就带标记交出（下一个人进入编辑时强制重算）；
  * - control：测试构建的控制——与切到后台同样的规则（不提交单元格、不等公式、去重，会话与联网照样挡）。
- * 前四种由调用方先确认会话（编辑器页的 readyToWrite），这里不再按会话、联网与 hold 挡。切到后台、恢复联网由调度按页面的信号自己做
+ * 提交哪一次单元格编辑一律在调用的这一刻定（审查 A1）：之后才开始的输入不提交、不打断——要连它们一起存上的调用方（交出之后要销毁编辑器）
+ * 在调用之前先挡住输入（退出编辑挂着交互屏障）。前四种由调用方确认会话（编辑器页的 readyToWrite：调用之前，或者经 FlushOptions.ready
+ * 在按下的准备之后），这里不再按会话、联网与 hold 挡。切到后台、恢复联网由调度按页面的信号自己做
  */
 export type FlushReason = 'save-button' | 'exit' | 'handover' | 'idle-release' | 'control'
 
-/** 各种立即上传的做法：先提交单元格、等公式再捕获（否则需要时当场捕获）；去重；按会话与联网挡 */
-const FLUSH_RULES: Readonly<Record<FlushReason, { readonly prepare: boolean, readonly dedupe: boolean, readonly gated: boolean }>> = {
-  'save-button': { prepare: true, dedupe: false, gated: false },
-  'exit': { prepare: true, dedupe: true, gated: false },
-  'handover': { prepare: true, dedupe: true, gated: false },
-  'idle-release': { prepare: true, dedupe: true, gated: false },
-  'control': { prepare: false, dedupe: true, gated: true },
+/** 立即上传的选项 */
+export interface FlushOptions {
+  /**
+   * 能不能上传（编辑器页的会话确认）：按下的这一刻先做准备（提交这一刻开着的单元格编辑、开始等面板，审查 A1），再等它——为假时不上传
+   * （单元格的提交留在本页，等同按了回车）。不给时直接上传
+   */
+  readonly ready?: (() => Promise<boolean>) | undefined
+}
+
+/** 按下时提交单元格、等面板，轮到时等公式再捕获的那几种立即上传（control 之外的都是） */
+type PreparedReason = Exclude<FlushReason, 'control'>
+
+/** 这几种立即上传去不去重：显式保存一律上传（兜住变更检测看不见的改动），其余的去重 */
+const PREPARED_DEDUPE: Readonly<Record<PreparedReason, boolean>> = {
+  'save-button': false,
+  'exit': true,
+  'handover': true,
+  'idle-release': true,
 }
 
 /** 定时上传的原因：静默、上限、退避到点的重试、恢复联网 */
@@ -177,8 +192,8 @@ export interface AutosaveOptions {
 export interface Autosave {
   readonly view: () => AutosaveView
   readonly subscribe: (listener: () => void) => () => void
-  /** 立即上传（见 FlushReason）：这一次上传结束之后兑现，交回存上了没有。从不失败 */
-  readonly flush: (reason: FlushReason) => Promise<FlushResult>
+  /** 立即上传（见 FlushReason、FlushOptions）：这一次上传结束之后兑现，交回存上了没有。从不失败 */
+  readonly flush: (reason: FlushReason, options?: FlushOptions) => Promise<FlushResult>
   /** 全部存上了没有（此刻） */
   readonly saved: () => SavedState
   /** 挂起定时的捕获与上传、切到后台的上传（开始退出编辑，设计 §3.10）；立即上传照常 */
@@ -251,6 +266,27 @@ interface UploadRun {
   seq: number | undefined
 }
 
+/** 交给了保存的状态机的一次上传：outcome 在它结束、记完账之后兑现（从不失败） */
+interface StartedUpload {
+  readonly run: UploadRun
+  readonly outcome: Promise<SaveOutcome>
+}
+
+/**
+ * 立即上传在按下时做的准备（审查 A1）：各次按下的"提交单元格、等面板"（并进排着的显式保存时不止一次），与等公式的时限（从按下算，
+ * 并进时按最晚的一次按下）
+ */
+interface Prepared {
+  readonly inputs: Promise<InputsSettled>[]
+  deadline: number
+}
+
+/** 排着、还没轮到的那一次显式保存（保存按钮、快捷键）：再按并进它（审查 A2） */
+interface QueuedExplicit {
+  readonly upload: StartedUpload
+  readonly prepared: Prepared
+}
+
 export function createAutosave(options: AutosaveOptions): Autosave {
   const { editor, page, uploader, clock } = options
   const tuning = options.tuning ?? DEFAULT_AUTOSAVE_TUNING
@@ -281,6 +317,8 @@ export function createAutosave(options: AutosaveOptions): Autosave {
 
   // 上传
   const runs = new Set<UploadRun>()
+  /** 排着、还没轮到的那一次显式保存：再按并进它；它开始了或者结束了就不再并进 */
+  let queuedExplicit: QueuedExplicit | undefined
   /** 上传成功（确认或去重）了的最新捕获 */
   let uploadedSerial = 0
   /** 要等新内容：这一份与更早的捕获不再自动上传 */
@@ -467,10 +505,10 @@ export function createAutosave(options: AutosaveOptions): Autosave {
   }
 
   /**
-   * 交给保存的状态机上传：source 在轮到时给出要上传的那一份（最近一次捕获，或先提交单元格、等公式再捕获的那一份）。
-   * 结束之后按结果更新退避与"传过了没有"，立即再看
+   * 交给保存的状态机上传（同步排上：调用之后它的视图立即是保存中，先后按调用的顺序）：source 在轮到时给出要上传的那一份（最近一次捕获，
+   * 或者等完按下时的准备与公式再捕获的那一份）。结束之后按结果更新退避与"传过了没有"（每次上传只记一次账），立即再看
    */
-  async function runUpload(trigger: UploadTrigger, source: () => SlotCapture | 'cell-editing' | Promise<SlotCapture | 'cell-editing'>, dedupe: boolean): Promise<SaveOutcome> {
+  function startUpload(trigger: UploadTrigger, source: () => SlotCapture | 'cell-editing' | Promise<SlotCapture | 'cell-editing'>, dedupe: boolean): StartedUpload {
     const run: UploadRun = { started: false, serial: undefined, seq: undefined }
     runs.add(run)
     const startedAt = clock.now()
@@ -485,6 +523,8 @@ export function createAutosave(options: AutosaveOptions): Autosave {
         return
       finished = true
       runs.delete(run)
+      if (queuedExplicit?.upload.run === run)
+        queuedExplicit = undefined
       if (disposed)
         return
       observe({ kind: 'upload', trigger, startedAt, at: clock.now(), seq: run.seq, outcome })
@@ -492,7 +532,7 @@ export function createAutosave(options: AutosaveOptions): Autosave {
       notify()
       kick()
     }
-    const outcome = await uploader.save(async (): Promise<PreparedCapture> => {
+    const saving = uploader.save(async (): Promise<PreparedCapture> => {
       run.started = true
       const entry = await source()
       if (entry === 'cell-editing')
@@ -503,8 +543,49 @@ export function createAutosave(options: AutosaveOptions): Autosave {
       firstUnuploadedAt = firstUncapturedAt
       return { seq: entry.seq, snapshot: entry.snapshot, bytes: entry.bytes, formulasPending: entry.formulasPending, digest: await digestOf(entry) }
     }, { dedupe, onOutcome: finish })
-    finish(outcome)
-    return outcome
+    const outcome = saving.then((result) => {
+      finish(result)
+      return result
+    })
+    return { run, outcome }
+  }
+
+  async function runUpload(trigger: UploadTrigger, source: () => SlotCapture | 'cell-editing' | Promise<SlotCapture | 'cell-editing'>, dedupe: boolean): Promise<SaveOutcome> {
+    return startUpload(trigger, source, dedupe).outcome
+  }
+
+  /**
+   * 立即上传在调用（按下）的这一刻的准备（审查 A1，snapshot-capture.ts 的 settleInputs）：提交这一刻开着的单元格编辑（同步发起）、
+   * 开始等面板；等公式的时限从这一刻算。没有轮到它（会话不对、已停下）时它的出错不成为没处理的拒绝：轮到时等它照样抛出
+   */
+  function prepareNow(): Prepared {
+    const inputs = settleInputs(editor)
+    inputs.catch(() => undefined)
+    return { inputs: [inputs], deadline: clock.now() + tuning.limits().captureMaxMs }
+  }
+
+  /**
+   * 上传按下时准备过的那一份（save-button、exit、handover、idle-release）：轮到时等按下时的准备都做完、等公式（至多到时限）、捕获。
+   * 按下时提交不了单元格而它现在还开着：中止（只是提示）；之后用户自己提交或放弃了就照常存。
+   * 显式保存排着、还没轮到时再按：并进它——这一次按下的准备也等到，等公式的时限按最晚的一次按下算，结果是同一个，只记一次账（审查 A2：
+   * 不能各自再记一遍，否则失败、意外按两次算，退避翻倍过快、一次意外就不再重试，422 挡住之后新的捕获）
+   */
+  async function uploadPrepared(reason: PreparedReason, prepared: Prepared): Promise<SaveOutcome> {
+    const queued = queuedExplicit
+    if (reason === 'save-button' && queued !== undefined && !queued.upload.run.started) {
+      queued.prepared.inputs.push(...prepared.inputs)
+      queued.prepared.deadline = Math.max(queued.prepared.deadline, prepared.deadline)
+      return queued.upload.outcome
+    }
+    const upload = startUpload(reason, async () => {
+      const results = await Promise.all(prepared.inputs)
+      if (results.includes('cell-editing') && editor.isCellEditing())
+        return 'cell-editing'
+      return captureSettled(editor, { settleTimeoutMs: () => prepared.deadline - clock.now(), take: formulasPending => captureNow(reason, formulasPending) })
+    }, PREPARED_DEDUPE[reason])
+    if (reason === 'save-button')
+      queuedExplicit = { upload, prepared }
+    return upload.outcome
   }
 
   /** 按这一次上传的结果更新退避与"传过了没有" */
@@ -710,23 +791,25 @@ export function createAutosave(options: AutosaveOptions): Autosave {
       listeners.add(listener)
       return () => listeners.delete(listener)
     },
-    flush: async (reason) => {
+    flush: async (reason, flushOptions) => {
       if (disposed || ended)
         return { ...savedState(), outcome: undefined }
-      const rule = FLUSH_RULES[reason]
-      if (rule.prepare) {
-        // 等公式至多捕获的上限，从按下算（排在在途的保存后面、等面板的防抖、提交单元格时，用掉的时间也算在里面）
-        const deadline = clock.now() + tuning.limits().captureMaxMs
-        const outcome = await runUpload(reason, async () => prepareCapture(editor, {
-          settleTimeoutMs: () => deadline - clock.now(),
-          take: formulasPending => captureNow(reason, formulasPending),
-        }), rule.dedupe)
+      if (reason !== 'control') {
+        // 按下的这一刻：提交这一刻开着的单元格编辑、开始等面板，等公式的时限从这一刻算（排在在途的保存后面、等会话的确认、等面板的防抖、
+        // 提交单元格时，用掉的时间都算在里面）
+        const prepared = prepareNow()
+        if (flushOptions?.ready !== undefined && !(await flushOptions.ready()))
+          return { ...savedState(), outcome: undefined }
+        if (disposed || ended)
+          return { ...savedState(), outcome: undefined }
+        const outcome = await uploadPrepared(reason, prepared)
         return { ...savedState(), outcome }
       }
+      // 测试构建的控制：与切到后台同样的规则——当场捕获、去重，会话或联网不对时不发
       captureIfNeeded(reason)
-      if ((rule.gated && (!page.online() || !page.sessionWritable())) || latest === undefined || latest.serial <= uploadedSerial)
+      if (!page.online() || !page.sessionWritable() || latest === undefined || latest.serial <= uploadedSerial)
         return { ...savedState(), outcome: undefined }
-      const outcome = await runUpload(reason, latestCapture, rule.dedupe)
+      const outcome = await runUpload(reason, latestCapture, true)
       return { ...savedState(), outcome }
     },
     saved: savedState,

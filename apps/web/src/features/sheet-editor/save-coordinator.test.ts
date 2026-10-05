@@ -171,16 +171,15 @@ describe('保存状态', () => {
     expect(calls[1]?.request.requestId).not.toBe(calls[0]?.request.requestId)
   })
 
-  // M3-P4 设计 §3.4、§3.9：原来"保存中再按不做任何事"，改为在途时按下排一次——在途的那一次结束之后立即再存一次（捕获的是那一刻的内容），
-  // 再按几次也只排一次；同一时间仍只有一个请求在途
-  it('保存中再按：排一次，在途的结束之后立即再存一次；再按几次也只排一次，同一时间只有一个请求在途', async () => {
+  // M3-P4 设计 §3.4、§3.9：原来"保存中再按不做任何事"，改为在途时按下排一次——在途的那一次结束之后立即再存一次（捕获的是那一刻的内容）；
+  // 同一时间仍只有一个请求在途。连按只排一次由自动保存的调度合并（autosave.test.ts，审查 A2），这里每次调用都是自己的一次
+  it('保存中再按：排在后面，在途的结束之后立即再存一次（捕获的是那一刻的内容）；同一时间只有一个请求在途', async () => {
     const { coordinator, control, calls, send } = setup()
     control.edit('甲')
     const saving = coordinator.save()
     const first = await sent(calls, 1)
     control.edit('甲乙')
     const again = coordinator.save()
-    const thrice = coordinator.save()
     await Promise.resolve()
     expect(send).toHaveBeenCalledTimes(1)
     first.resolve(saved(2))
@@ -190,7 +189,6 @@ describe('保存状态', () => {
     expect(coordinator.view().status).toBe('saving')
     second.resolve(saved(3))
     await expect(again).resolves.toEqual({ kind: 'saved', requestId: second.request.requestId })
-    await expect(thrice).resolves.toEqual({ kind: 'saved', requestId: second.request.requestId })
     expect(send).toHaveBeenCalledTimes(2)
     expect(coordinator.view().status).toBe('clean')
   })
@@ -1474,21 +1472,23 @@ describe('结果交给调用方的时机（onOutcome，M3-P4 S4）', () => {
     expect(real.view().status).toBe('clean')
   })
 
-  it('停住、终态时直接交回的结果与并进排着的那一次：不调用（调用方等 save 兑现再处理）', async () => {
+  it('排着的每一次各自交一次自己的结果（连按的显式保存由调度合并，审查 A2）；停住、终态时直接交回的结果不调用（调用方等 save 兑现再处理）', async () => {
     const { real, control, calls } = setup()
     control.edit('甲')
     const first = real.save(given(captureOf(1, '甲')), EXPLICIT)
     const inFlight = await sent(calls, 1)
-    const queued = vi.fn()
-    const merged = vi.fn()
-    void real.save(given(captureOf(1, '甲')), { ...EXPLICIT, onOutcome: queued })
-    const joined = real.save(given(captureOf(1, '甲')), { ...EXPLICIT, onOutcome: merged })
+    const second = vi.fn()
+    const third = vi.fn()
+    const queued = real.save(given(captureOf(1, '甲')), { ...EXPLICIT, onOutcome: second })
+    const later = real.save(given(captureOf(1, '甲')), { ...EXPLICIT, onOutcome: third })
     inFlight.resolve(saved(2))
     await first
     ;(await sent(calls, 2)).resolve(saved(3))
-    await joined
-    expect(queued).toHaveBeenCalledOnce()
-    expect(merged).not.toHaveBeenCalled()
+    await expect(queued).resolves.toEqual({ kind: 'saved', requestId: calls[1]?.request.requestId })
+    ;(await sent(calls, 3)).resolve(saved(3))
+    await expect(later).resolves.toEqual({ kind: 'saved', requestId: calls[2]?.request.requestId })
+    expect(second).toHaveBeenCalledExactlyOnceWith({ kind: 'saved', requestId: calls[1]?.request.requestId })
+    expect(third).toHaveBeenCalledExactlyOnceWith({ kind: 'saved', requestId: calls[2]?.request.requestId })
     real.stop()
     const stopped = vi.fn()
     await expect(real.save(given(captureOf(1, '甲')), { ...AUTO, onOutcome: stopped })).resolves.toEqual({ kind: 'skipped', reason: 'stopped' })

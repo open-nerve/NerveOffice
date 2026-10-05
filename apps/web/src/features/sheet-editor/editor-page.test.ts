@@ -858,6 +858,32 @@ describe('编辑器页的会话（P4 设计 §3.7.3，审查 B1）', () => {
     expect(editorPage.view()).toMatchObject({ confirmingSession: false, save: { status: 'clean' } })
   })
 
+  it('按保存时要等会话的确认（审查 A1）：按下的这一刻就提交开着的单元格编辑，确认期间才开始的输入不提交；确认是本人之后才上传', async () => {
+    const cell = { open: true }
+    const created = fakeEditor()
+    const commitCellEditing = vi.fn(async () => {
+      cell.open = false
+      return true
+    })
+    const editor: SheetEditor = { ...created.editor, isCellEditing: () => cell.open, commitCellEditing }
+    const { editorPage, api, fromOtherTab } = setup({ createEditor: async () => editor })
+    await editorPage.load()
+    const check = deferred<SessionResponse>()
+    vi.mocked(api.session).mockReturnValueOnce(check.promise)
+    fromOtherTab()
+    const saving = editorPage.save()
+    expect(commitCellEditing).toHaveBeenCalledOnce()
+    expect(editorPage.view()).toMatchObject({ confirmingSession: true })
+    // 确认期间点了另一格开始键入
+    cell.open = true
+    await settle()
+    expect(api.save).not.toHaveBeenCalled()
+    check.resolve(ALICE)
+    await saving
+    expect(api.save).toHaveBeenCalledOnce()
+    expect(commitCellEditing).toHaveBeenCalledOnce()
+  })
+
   it('保存得到未登录、向服务端确认时断网：按没有人登录显示，给出登录的入口（复验 SB4）', async () => {
     const { editorPage, api } = setup({ api: { save: async () => Promise.reject(new ApiError(401, 'SESSION_EXPIRED', '已过期')) } })
     await editorPage.load()

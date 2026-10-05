@@ -90,6 +90,14 @@ function fakeEditor(elapse: (ms: number) => void, initial: { settled?: boolean, 
       state.cellInput = text
       cellEditing.notify()
     },
+    /** 按 Esc 放弃单元格编辑 */
+    cancelCellEditing(): void {
+      state.editing = false
+      state.pendingInput = false
+      cellEditing.notify()
+    },
+    /** 现在的工作簿内容与单元格编辑器（断言用） */
+    state: () => ({ content: state.content, editing: state.editing, cellInput: state.cellInput }),
     captureCost(ms: number): void {
       state.captureCost = ms
     },
@@ -556,6 +564,282 @@ describe('立即上传（设计 §3.4）', () => {
     expect(context.editor.settleFormulas).not.toHaveBeenCalled()
     // 没有新的捕获：不再上传
     await expect(context.autosave.flush('control')).resolves.toMatchObject({ outcome: undefined })
+  })
+})
+
+/** 由测试决定何时兑现的 Promise */
+function deferred<T>() {
+  let resolve: (value: T) => void = () => {}
+  const promise = new Promise<T>((settle) => {
+    resolve = settle
+  })
+  return { promise, resolve }
+}
+
+describe('立即上传在按下的这一刻定下要提交的单元格编辑（审查 A1）：之后才开始的输入不提交、不打断', () => {
+  it('自动保存在途时按保存：按下的这一刻就提交开着的那一次编辑（不等在途的回来）；按下之后才开始的输入，排着的那一次轮到时不提交，只捕获工作簿', async () => {
+    const context = setup()
+    context.control.edit('甲')
+    await context.time.advance(2000)
+    const inFlight = await sent(context, 1)
+    context.control.startCellEditing('甲乙')
+    const flushing = context.autosave.flush('save-button')
+    // 按下的这一刻：开着的编辑已经提交（等同回车），在途的还没回来
+    expect(context.editor.commitCellEditing).toHaveBeenCalledOnce()
+    expect(context.control.state()).toMatchObject({ content: '甲乙', editing: false })
+    // 按下之后：点了另一格开始键入，还没回车
+    context.control.startCellEditing('之后才开始')
+    inFlight.resolve(saved(2))
+    const queued = await sent(context, 2)
+    // 轮到时不再提交：上传的是按下时的内容，之后的输入留在单元格编辑器里（没有被当成回车提交、选区不动）
+    expect(queued.request).toMatchObject({ localSeq: 2, snapshot: '{"content":"甲乙"}' })
+    expect(context.editor.commitCellEditing).toHaveBeenCalledOnce()
+    expect(context.control.state()).toMatchObject({ editing: true, cellInput: '之后才开始' })
+    queued.resolve(saved(3))
+    await expect(flushing).resolves.toMatchObject({ edits: false, formulas: true, outcome: { kind: 'saved' } })
+    // 单元格里还有没提交的输入：页头照旧有未保存的修改
+    expect(context.coordinator.view()).toMatchObject({ status: 'dirty', unsavedEdits: true })
+  })
+
+  it('按下时面板的防抖还没到点：先提交开着的编辑，再等面板；等面板期间才开始的输入不提交', async () => {
+    const context = setup()
+    const panels = deferred<undefined>()
+    vi.mocked(context.editor.settlePanels).mockImplementationOnce(async () => panels.promise)
+    context.control.startCellEditing('甲')
+    const flushing = context.autosave.flush('save-button')
+    expect(context.editor.commitCellEditing).toHaveBeenCalledOnce()
+    context.control.startCellEditing('等面板时才开始')
+    panels.resolve(undefined)
+    const call = await sent(context, 1)
+    expect(call.request).toMatchObject({ localSeq: 1, snapshot: '{"content":"甲"}' })
+    expect(context.editor.commitCellEditing).toHaveBeenCalledOnce()
+    call.resolve(saved(2))
+    await flushing
+    expect(context.control.state()).toMatchObject({ editing: true, cellInput: '等面板时才开始' })
+  })
+
+  it('要等会话的确认（ready）：确认之前就提交开着的编辑；确认期间才开始的输入不提交；确认为假时不上传', async () => {
+    const context = setup()
+    const confirmation = deferred<boolean>()
+    context.control.startCellEditing('甲')
+    const flushing = context.autosave.flush('save-button', { ready: async () => confirmation.promise })
+    expect(context.editor.commitCellEditing).toHaveBeenCalledOnce()
+    // 确认还没有结果：不上传、不是保存中
+    await drain(context)
+    expect(context.calls).toHaveLength(0)
+    expect(context.coordinator.view().status).toBe('dirty')
+    context.control.startCellEditing('确认时才开始')
+    confirmation.resolve(true)
+    const call = await sent(context, 1)
+    expect(call.request.snapshot).toBe('{"content":"甲"}')
+    expect(context.editor.commitCellEditing).toHaveBeenCalledOnce()
+    call.resolve(saved(2))
+    await flushing
+
+    const refused = setup()
+    refused.control.startCellEditing('乙')
+    await expect(refused.autosave.flush('save-button', { ready: async () => false })).resolves.toMatchObject({ outcome: undefined })
+    // 提交留在本页（等同按了回车），没有上传
+    expect(refused.control.state()).toMatchObject({ content: '乙', editing: false })
+    await drain(refused)
+    expect(refused.calls).toHaveLength(0)
+  })
+
+  it('按下时提交不了：排着的那一次轮到时它还开着就中止（只是提示）；用户自己放弃了就照常存', async () => {
+    const stillOpen = setup()
+    stillOpen.control.edit('甲')
+    await stillOpen.time.advance(2000)
+    const first = await sent(stillOpen, 1)
+    stillOpen.control.startCellEditing('不合格')
+    vi.mocked(stillOpen.editor.commitCellEditing).mockResolvedValueOnce(false)
+    const flushing = stillOpen.autosave.flush('save-button')
+    first.resolve(saved(2))
+    await expect(flushing).resolves.toMatchObject({ outcome: { kind: 'failed', failure: { kind: 'cell-editing' } } })
+    expect(stillOpen.calls).toHaveLength(1)
+    expect(stillOpen.coordinator.view().problem).toEqual({ kind: 'cell-editing' })
+
+    const cancelled = setup()
+    cancelled.control.edit('甲')
+    await cancelled.time.advance(2000)
+    const inFlight = await sent(cancelled, 1)
+    cancelled.control.edit('甲乙')
+    cancelled.control.startCellEditing('不合格')
+    vi.mocked(cancelled.editor.commitCellEditing).mockResolvedValueOnce(false)
+    const saving = cancelled.autosave.flush('save-button')
+    cancelled.control.cancelCellEditing()
+    inFlight.resolve(saved(2))
+    const queued = await sent(cancelled, 2)
+    expect(queued.request).toMatchObject({ localSeq: 2, snapshot: '{"content":"甲乙"}' })
+    queued.resolve(saved(3))
+    await expect(saving).resolves.toMatchObject({ edits: true, outcome: { kind: 'saved' } })
+  })
+
+  it('退出编辑、交出与空闲释放同样在调用的这一刻提交（P5 一并适用）：在途的回来之后轮到时，之后才开始的输入不提交', async () => {
+    for (const reason of ['exit', 'handover', 'idle-release'] as const) {
+      const context = setup()
+      context.control.edit('甲')
+      await context.time.advance(2000)
+      const inFlight = await sent(context, 1)
+      context.control.startCellEditing('甲乙')
+      const flushing = context.autosave.flush(reason)
+      expect(context.editor.commitCellEditing).toHaveBeenCalledOnce()
+      context.control.startCellEditing('之后才开始')
+      inFlight.resolve(saved(2))
+      const queued = await sent(context, 2)
+      expect(queued.request.snapshot).toBe('{"content":"甲乙"}')
+      queued.resolve(saved(3))
+      await flushing
+      expect(context.editor.commitCellEditing).toHaveBeenCalledOnce()
+    }
+  })
+
+  it('按下时的提交出错（SDK 的缺陷）：轮到时按意外的错误处理（上报、保存失败）；没轮到（会话不对）时不成为没处理的拒绝', async () => {
+    const context = setup()
+    const failure = new Error('提交单元格时 SDK 出错')
+    context.control.startCellEditing('甲')
+    vi.mocked(context.editor.commitCellEditing).mockRejectedValueOnce(failure)
+    await expect(context.autosave.flush('save-button')).resolves.toMatchObject({ outcome: { kind: 'failed', failure: { kind: 'unexpected' } } })
+    expect(context.reportError).toHaveBeenCalledWith(failure)
+    expect(context.calls).toHaveLength(0)
+
+    const refused = setup()
+    refused.control.startCellEditing('乙')
+    vi.mocked(refused.editor.commitCellEditing).mockRejectedValueOnce(failure)
+    await expect(refused.autosave.flush('save-button', { ready: async () => false })).resolves.toMatchObject({ outcome: undefined })
+    await drain(refused)
+    expect(refused.reportError).not.toHaveBeenCalled()
+  })
+})
+
+describe('在途时连按保存：并进排着的那一次，同一个结果只记一次账（审查 A2，与只按一次对照）', () => {
+  /** 在途（自动保存的第 1 个请求）时按 presses 次保存（按住快捷键时每次重复都是一次），之后让在途的回来 */
+  async function pressWhileInFlight(presses: number) {
+    const context = setup()
+    context.control.edit('甲')
+    await context.time.advance(2000)
+    const inFlight = await sent(context, 1)
+    context.control.edit('甲乙')
+    const flushes = Array.from({ length: presses }, async () => context.autosave.flush('save-button'))
+    return { context, inFlight, flushes }
+  }
+
+  it.each([1, 2, 5])('按 %i 次、显式保存遇到网络错误：只算一次失败——2 秒之后重试（不是 4 秒），日志里这一次上传只有一条，每次按下交回同一个结果', async (presses) => {
+    const { context, inFlight, flushes } = await pressWhileInFlight(presses)
+    inFlight.resolve(saved(2))
+    const explicit = await sent(context, 2)
+    explicit.reject(new NetworkError('断网'))
+    const results = await Promise.all(flushes)
+    expect(new Set(results.map(result => JSON.stringify(result.outcome))).size).toBe(1)
+    expect(results[0]?.outcome).toMatchObject({ kind: 'failed', failure: { kind: 'retry' }, requestId: explicit.request.requestId })
+    await drain(context)
+    expect(context.uploads().filter(event => event.trigger === 'save-button')).toHaveLength(1)
+    await context.time.advance(1999)
+    expect(context.calls).toHaveLength(2)
+    await context.time.advance(1)
+    expect((await sent(context, 3)).request).toEqual(explicit.request)
+    expect(context.send).toHaveBeenCalledTimes(3)
+  })
+
+  it.each([1, 2, 5])('按 %i 次、显式保存压缩出错（意外）：只算一次意外——退避之后照常再试一次', async (presses) => {
+    const { context, inFlight, flushes } = await pressWhileInFlight(presses)
+    context.compress.mockRejectedValueOnce(new Error('压缩出错'))
+    inFlight.resolve(saved(2))
+    const results = await Promise.all(flushes)
+    expect(results.every(result => result.outcome?.kind === 'failed' && result.outcome.failure.kind === 'unexpected')).toBe(true)
+    await drain(context)
+    expect(context.autosave.view().retrying).toBe(true)
+    await context.time.advance(2000)
+    expect((await sent(context, 2)).request).toMatchObject({ localSeq: 2, snapshot: '{"content":"甲乙"}' })
+  })
+
+  it.each([1, 2, 5])('按 %i 次、显式保存得到 422（要等新内容）：挡住的只是那一份，之后新的捕获照常自动上传', async (presses) => {
+    const { context, inFlight, flushes } = await pressWhileInFlight(presses)
+    inFlight.resolve(saved(2))
+    const explicit = await sent(context, 2)
+    // 显式保存在途期间又改了一处，静默 1 秒捕获（新的一份）
+    context.control.edit('甲乙丙')
+    await context.time.advance(1000)
+    expect(context.captures().at(-1)).toMatchObject({ trigger: 'quiet', seq: 3 })
+    explicit.reject(new ApiError(422, 'SNAPSHOT_INVALID', '不合格'))
+    await Promise.all(flushes)
+    await context.time.advance(30_000)
+    expect(context.calls.map(call => call.request.localSeq)).toEqual([1, 2, 3])
+  })
+
+  it('排着的那一次已经开始（在等公式）之后再按：另排一次，不并进已经开始的', async () => {
+    const context = setup()
+    context.control.edit('甲')
+    await context.time.advance(2000)
+    const inFlight = await sent(context, 1)
+    const formulas = deferred<'settled' | 'timeout'>()
+    vi.mocked(context.editor.settleFormulas).mockImplementationOnce(async () => formulas.promise)
+    const first = context.autosave.flush('save-button')
+    inFlight.resolve(saved(2))
+    await vi.waitFor(() => expect(context.editor.settleFormulas).toHaveBeenCalledOnce())
+    context.control.edit('甲乙')
+    const second = context.autosave.flush('save-button')
+    formulas.resolve('settled')
+    ;(await sent(context, 2)).resolve(saved(3))
+    await expect(first).resolves.toMatchObject({ outcome: { kind: 'saved' } })
+    const again = await sent(context, 3)
+    expect(again.request).toMatchObject({ localSeq: 2, snapshot: '{"content":"甲乙"}' })
+    again.resolve(saved(4))
+    await expect(second).resolves.toMatchObject({ edits: true, outcome: { kind: 'saved' } })
+  })
+
+  it('并进的那一次按下时的准备也等到：第二次按下时面板的防抖还没到点，排着的那一次等它写进模型再捕获', async () => {
+    const context = setup()
+    context.control.edit('甲')
+    await context.time.advance(2000)
+    const inFlight = await sent(context, 1)
+    const first = context.autosave.flush('save-button')
+    const panels = deferred<undefined>()
+    vi.mocked(context.editor.settlePanels).mockImplementationOnce(async () => {
+      await panels.promise
+      context.control.edit('批注里刚键入的')
+    })
+    const second = context.autosave.flush('save-button')
+    inFlight.resolve(saved(2))
+    await drain(context)
+    expect(context.calls).toHaveLength(1)
+    panels.resolve(undefined)
+    const queued = await sent(context, 2)
+    expect(queued.request).toMatchObject({ localSeq: 2, snapshot: '{"content":"批注里刚键入的"}' })
+    queued.resolve(saved(3))
+    const results = await Promise.all([first, second])
+    expect(results.map(result => result.outcome)).toEqual([{ kind: 'saved', requestId: queued.request.requestId }, { kind: 'saved', requestId: queued.request.requestId }])
+  })
+
+  it('并进时等公式的时限按最晚的一次按下算（从按下算）', async () => {
+    const context = setup()
+    context.control.edit('甲')
+    await context.time.advance(2000)
+    const inFlight = await sent(context, 1)
+    const first = context.autosave.flush('save-button')
+    await context.time.advance(1000)
+    const second = context.autosave.flush('save-button')
+    await context.time.advance(500)
+    inFlight.resolve(saved(2))
+    ;(await sent(context, 2)).resolve(saved(3))
+    await Promise.all([first, second])
+    // 第二次按下在 1.5 秒之前：3 秒的时限还剩 2.5 秒
+    expect(context.editor.settleFormulas).toHaveBeenCalledExactlyOnceWith(2500)
+  })
+
+  it('排着的那一次因为停住而没做（skipped）：之后再按不并进它，照常存', async () => {
+    const context = setup()
+    context.control.edit('甲')
+    await context.time.advance(2000)
+    const inFlight = await sent(context, 1)
+    const stopped = context.autosave.flush('save-button')
+    context.coordinator.stop()
+    inFlight.resolve(saved(2))
+    await expect(stopped).resolves.toMatchObject({ outcome: { kind: 'skipped', reason: 'stopped' } })
+    context.coordinator.resume()
+    context.control.edit('甲乙')
+    const again = context.autosave.flush('save-button')
+    ;(await sent(context, 2)).resolve(saved(3))
+    await expect(again).resolves.toMatchObject({ edits: true, outcome: { kind: 'saved' } })
   })
 })
 
