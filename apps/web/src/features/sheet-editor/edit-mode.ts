@@ -24,7 +24,8 @@
 // - losing / lost：失去编辑权（续租或保存得知，续上没有成功；P1 的续上规则不变）：停止保存，提交正在编辑的单元格、捕获本页的内容，
 //   重建为只读、显示本页的内容（重建失败时留在 lost，说明编辑器没能重新打开，副本照常给，审查 A3）。还读得到（不是 404）而且有没保存的
 //   修改：给"另存为副本"与"放弃本页的修改"；有一次结果未知的保存时，给副本之前先原样重发它（重放先于登录与租约，P1）——拿到原来的
-//   结果就按已保存处理。读不到了（404）：说明，本页的内容不再能保存。另存为副本之后按最新的内容重建失败也留在 lost（副本的说明照旧，复验 C1）；
+//   结果就按已保存处理。副本被拒、再试也一样（本页过旧、内容不合规则或太大，M3-P3 审查 B3）：不再给副本，内容留着。
+//   读不到了（404）：说明，本页的内容不再能保存。另存为副本之后按最新的内容重建失败也留在 lost（副本的说明照旧，复验 C1）；
 // - failed：编辑器建不起来（页面按"编辑器加载失败"说明，可以重新加载）；unavailable：放弃本页的修改时读不到了（"内容不存在"）。
 // 每开始一件事（进入、退出、失去编辑权、刷新、放弃）都换一个标识：之前那件事在等待之后发现标识变了，就不再接着做。
 //
@@ -35,7 +36,6 @@
 // - 不兼容的阅读不会因为检查读到能编辑就恢复"编辑"：重新加载才是新的页面。
 import type { ConflictCopyQuery, CreatedDocument, DocumentDetail, SaveContentResponse } from '@nerve-office/contracts'
 import type { SheetEditor } from '../../editor/index.ts'
-import type { ApiError } from '../../shared/api/index.ts'
 import type { Incompatibility } from './client-format.ts'
 import type { EditLease, EditLeaseApi, LeaseAcquisition, LeaseClock, LeaseHolder, LeaseLoss } from './edit-lease.ts'
 import type { FetchedEditStatus, LeaseCredentials, LoadedContent } from './editor-api.ts'
@@ -44,7 +44,7 @@ import type { LostCopy } from './lost-copy.ts'
 import type { PageVisibility, ReadingCheckResult } from './reading-checks.ts'
 import type { CompressSnapshot, SaveCoordinator, SaveRequest, SaveStatus, SaveView } from './save-coordinator.ts'
 import { EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
-import { isAuthenticationError, isCsrfTokenError, isNotFoundError, isPermissionDeniedError } from '../../shared/api/index.ts'
+import { ApiError, isAuthenticationError, isCsrfTokenError, isNotFoundError, isPermissionDeniedError } from '../../shared/api/index.ts'
 import { incompatibilityOf } from './client-format.ts'
 import { acquireEditLease, leaseHolderOf, leaseLossOf } from './edit-lease.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
@@ -107,11 +107,22 @@ export interface ReadingMode {
   readonly blocked: Incompatibility | undefined
 }
 
+/**
+ * 服务端不收本页的这份内容、再试也一样（M3-P3 审查 B3）：
+ * - outdated：本页的版本过旧（CLIENT_OUTDATED）——服务端对副本同样拦旧页面（设计 §3.5），要重新加载页面，本页的内容先复制出来；
+ * - content：内容本身不合规则（SNAPSHOT_INVALID，规则在错误的详情里）或者超过容量上限（PAYLOAD_TOO_LARGE）——失去编辑权时捕获的内容
+ *   不会再变
+ */
+export type CopyRefusal = 'outdated' | 'content'
+
 /** 另存为副本的进展 */
 export type CopyState
   = | { readonly kind: 'idle' }
     | { readonly kind: 'saving' }
+  /** 没有成功、可以再试（网络、服务端出错、登录的问题、读不到、请求标识被占用等）：内容一律留着 */
     | { readonly kind: 'failed', readonly error: unknown }
+  /** 被拒、再试也一样（refusal）：不再给"另存为副本"，内容照样留着（离开照样提示） */
+    | { readonly kind: 'refused', readonly refusal: CopyRefusal, readonly error: ApiError }
     | { readonly kind: 'done', readonly document: DocumentDetail }
 
 /** 按服务端的最新内容重建为阅读（放弃本页的修改、重新加载、另存为副本之后）的进展 */
@@ -261,6 +272,15 @@ type SettledReading = ReadingMode & { readonly update: 'none' | 'available' }
 function readingAfter(loss: LeaseLoss, notice: ReadingNotice | undefined): ReadingMode {
   const canEdit = loss.kind !== 'denied' && !(loss.kind === 'lease' && loss.reason === 'revoked')
   return { kind: 'reading', canEdit, holder: loss.kind === 'held' ? loss.holder : undefined, update: 'none', gone: false, notice, releaseUnconfirmed: false, blocked: undefined }
+}
+
+/** 副本的失败是不是"再试也一样"（见 CopyRefusal）：是的话给出是哪一种与那次的错误 */
+function copyRefusalOf(error: unknown): { readonly refusal: CopyRefusal, readonly error: ApiError } | undefined {
+  if (!(error instanceof ApiError))
+    return undefined
+  if (incompatibilityOf(error) === 'client-outdated')
+    return { refusal: 'outdated', error }
+  return error.code === 'SNAPSHOT_INVALID' || error.code === 'PAYLOAD_TOO_LARGE' ? { refusal: 'content', error } : undefined
 }
 
 /** 保存的状态里的不兼容（终态）：退出编辑之后的阅读照样带着它 */
@@ -918,7 +938,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
 
     saveCopy: async () => {
       if (mode.kind !== 'lost' || !mode.readable || !mode.unsaved || mode.checking || mode.captureFailed
-        || mode.copy.kind === 'saving' || mode.copy.kind === 'done' || mode.reload.kind === 'loading' || lostCopy === undefined) {
+        || mode.copy.kind === 'saving' || mode.copy.kind === 'done' || mode.copy.kind === 'refused' || mode.reload.kind === 'loading' || lostCopy === undefined) {
         return
       }
       const copy = lostCopy
@@ -928,11 +948,14 @@ export function createEditMode(options: EditModeOptions): EditMode {
         created = await copy.save()
       }
       catch (error) {
-        // 内容一律留着，可以再试（读不到时也是：可能只是取锁之前被移到了别的空间，再试会成功）
+        // 内容一律留着。再试也一样的（本页过旧、内容不合规则或太大，审查 B3）不再给副本，页面说明先把内容复制出来；
+        // 别的可以再试（读不到时也是：可能只是取锁之前被移到了别的空间，再试会成功）
         if (isAuthenticationError(error) || isCsrfTokenError(error))
           hooks.writeProblem(error)
-        if (still(token) && mode.kind === 'lost')
-          begin({ ...mode, copy: { kind: 'failed', error } })
+        if (still(token) && mode.kind === 'lost') {
+          const refused = copyRefusalOf(error)
+          begin({ ...mode, copy: refused === undefined ? { kind: 'failed', error } : { kind: 'refused', ...refused } })
+        }
         return
       }
       if (!still(token) || mode.kind !== 'lost')

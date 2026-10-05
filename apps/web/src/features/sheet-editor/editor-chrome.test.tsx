@@ -612,6 +612,42 @@ describe('失去编辑权（M3-P2 设计 §3.4）', () => {
     expect(screen.getByRole('button', { name: '另存为副本' })).toHaveAttribute('aria-disabled', 'false')
   })
 
+  it('副本因本页过旧被拒（CLIENT_OUTDATED，再试也一样，审查 B3）：说明不能另存为副本、先把内容复制出来再重新加载；不给副本与放弃，不说"可以再试"，"重新加载"是整页的', () => {
+    const outdated = new ApiError(409, 'CLIENT_OUTDATED', '页面的版本过旧')
+    const { page } = renderChrome({ mode: lost({ kind: 'denied', error: DENIED }, { copy: { kind: 'refused', refusal: 'outdated', error: outdated } }), save: undefined })
+    const alert = screen.getByRole('alert')
+    expect(alert.textContent).toBe('编辑权已失效：你已没有编辑这份文档的权限（空间已归档，只能查看）。本页的修改没有保存。页面的版本过旧，不能另存为副本。需要的话先把内容复制出来，再重新加载页面重新加载')
+    expect(alert).not.toHaveTextContent('可以再试')
+    expect(screen.queryByRole('button', { name: '另存为副本' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '放弃本页的修改' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '重新加载' }))
+    expect(page.reload).toHaveBeenCalledOnce()
+    expect(page.discard).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['链接的规则', new ApiError(422, 'SNAPSHOT_INVALID', '快照不合格', { details: { rule: 'link-address' } }), '没能另存为副本：表格里有不能保存的链接。这份内容不能另存为副本，需要的话先把内容复制出来，或者放弃这些修改'],
+    ['认不出的规则', new ApiError(422, 'SNAPSHOT_INVALID', '快照不合格', { details: { rule: 'later-rule' } }), '没能另存为副本：表格内容的格式不正确。这份内容不能另存为副本'],
+    ['超过容量上限', new ApiError(413, 'PAYLOAD_TOO_LARGE', '太大'), '没能另存为副本：表格超过容量上限（5 MiB）。这份内容不能另存为副本'],
+  ])('副本因内容被拒（%s，再试也一样，审查 B3）：按规则说明，不说"可以再试"；不再给副本，给放弃', (_case, error, text) => {
+    renderChrome({ mode: lost({ kind: 'newer' }, { copy: { kind: 'refused', refusal: 'content', error } }), save: undefined })
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent(text)
+    expect(alert).toHaveTextContent('本页的修改没有保存。')
+    expect(alert).not.toHaveTextContent('可以另存为副本')
+    expect(alert).not.toHaveTextContent('可以再试')
+    expect(screen.queryByRole('button', { name: '另存为副本' })).toBeNull()
+    expect(screen.getByRole('button', { name: '放弃本页的修改' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '重新加载' })).toBeNull()
+  })
+
+  it('副本被拒、编辑器又没能重新打开：不说"另存为副本照常可用"', () => {
+    renderChrome({ mode: lost({ kind: 'newer' }, { reopenFailed: true, copy: { kind: 'refused', refusal: 'content', error: new ApiError(413, 'PAYLOAD_TOO_LARGE', '太大') } }), save: undefined })
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('编辑器没能重新打开，表格暂时显示不出来')
+    expect(alert).not.toHaveTextContent('另存为副本照常可用')
+  })
+
   it('正在核对结果未知的那次保存：先说明在核对，不给副本与放弃', () => {
     renderChrome({ mode: lost({ kind: 'denied', error: DENIED }, { checking: true }), save: undefined })
     expect(screen.getByRole('alert')).toHaveTextContent('正在核对最后一次保存的结果…')
@@ -796,6 +832,14 @@ describe('模式切换与按钮消失时的焦点（审查 A2，规范 §2.4）'
     const fake = renderChrome()
     screen.getByRole('button', { name: '保存' }).focus()
     fake.set({ mode: { kind: 'losing', loss: { kind: 'denied', error: new ApiError(403, 'PERMISSION_DENIED', 'x') } }, save: undefined })
+    await waitFor(() => expect(document.activeElement).toBe(backLink()))
+  })
+
+  it('副本被拒、再试也一样（审查 B3）："另存为副本"随之消失：焦点交给返回链接，不落到 body', async () => {
+    const fake = renderChrome({ mode: lost({ kind: 'newer' }, { copy: { kind: 'saving' } }), save: undefined })
+    screen.getByRole('button', { name: '正在另存为副本…' }).focus()
+    fake.set({ mode: lost({ kind: 'newer' }, { copy: { kind: 'refused', refusal: 'outdated', error: new ApiError(409, 'CLIENT_OUTDATED', '页面的版本过旧') } }) })
+    expect(screen.queryByRole('button', { name: '另存为副本' })).toBeNull()
     await waitFor(() => expect(document.activeElement).toBe(backLink()))
   })
 

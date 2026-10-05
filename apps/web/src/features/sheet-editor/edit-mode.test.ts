@@ -1167,15 +1167,43 @@ describe('另存为副本与放弃（M3-P2 设计 §3.2、§3.4）', () => {
     expect(context.api.conflictCopy).toHaveBeenCalledOnce()
   })
 
-  it('确定被拒绝：说明原因，内容留着，可以再试；再试换新的 requestId', async () => {
+  it('确定被拒绝、再试可能成功（请求标识被占用）：说明原因，内容留着，可以再试；再试换新的 requestId', async () => {
     const context = await lostWithChanges()
-    context.api.conflictCopy.mockRejectedValueOnce(new ApiError(422, 'SNAPSHOT_INVALID', '快照不合格'))
+    context.api.conflictCopy.mockRejectedValueOnce(new ApiError(409, 'REQUEST_ID_CONFLICT', '请求已失效'))
     await context.mode.saveCopy()
     expect(lostOf(context.mode).copy).toMatchObject({ kind: 'failed' })
     await context.mode.saveCopy()
     const [first, second] = context.api.conflictCopy.mock.calls.map(call => call[1].requestId)
     expect(second).not.toBe(first)
     expect(modeOf(context.mode).kind).toBe('reading')
+  })
+
+  it('本页过旧（CLIENT_OUTDATED：服务端对副本同样拦旧页面）：再试也一样——记为被拒（outdated），不再上传，内容留着、离开照样提示（审查 B3）', async () => {
+    const context = await lostWithChanges()
+    const outdated = new ApiError(409, 'CLIENT_OUTDATED', '页面的版本过旧', { details: { reason: 'build' } })
+    context.api.conflictCopy.mockRejectedValueOnce(outdated)
+    await context.mode.saveCopy()
+    expect(lostOf(context.mode)).toMatchObject({ copy: { kind: 'refused', refusal: 'outdated', error: outdated }, unsaved: true })
+    await context.mode.saveCopy()
+    expect(context.api.conflictCopy).toHaveBeenCalledOnce()
+    expect(context.mode.hasUnsavedWork()).toBe(true)
+    expect(context.hooks.writeProblem).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['内容不合规则（SNAPSHOT_INVALID）', new ApiError(422, 'SNAPSHOT_INVALID', '快照不合格', { details: { rule: 'link-address' } })],
+    ['超过容量上限（PAYLOAD_TOO_LARGE）', new ApiError(413, 'PAYLOAD_TOO_LARGE', '太大')],
+  ])('%s：捕获的内容不会再变，再试也一样——记为被拒（content），不再上传；还能放弃本页的修改（审查 B3）', async (_case, error) => {
+    const context = await lostWithChanges()
+    context.api.conflictCopy.mockRejectedValueOnce(error)
+    await context.mode.saveCopy()
+    expect(lostOf(context.mode).copy).toEqual({ kind: 'refused', refusal: 'content', error })
+    await context.mode.saveCopy()
+    expect(context.api.conflictCopy).toHaveBeenCalledOnce()
+    expect(context.mode.hasUnsavedWork()).toBe(true)
+    await context.mode.discard()
+    expect(readingOf(context.mode)).toMatchObject({ notice: undefined })
+    expect(context.mode.hasUnsavedWork()).toBe(false)
   })
 
   it('结果未知：再试沿用同一个 requestId（服务端只建一份）；读不到（404，取锁之前被移走的竞态）同样留着内容、可以再试', async () => {

@@ -10,12 +10,13 @@
 // 有焦点的按钮随状态消失时（"编辑"随权限消失、"有更新"载入之后、失去编辑权时的"保存""退出编辑"等），焦点交给一直在的返回链接
 // （规范 §2.4，审查 A2）；编辑器没能重新打开时，从销毁的编辑器落到 body 的焦点交给失效说明里的按钮（复验 C2）。
 // 编辑器本身挂在页头之外的容器里（editor.html 的 #sheet-editor），不归 React 管。
+import type { SnapshotRule } from '@nerve-office/contracts'
 import type { ReactNode, RefObject } from 'react'
 import type { Phrase as PhraseParts } from '../../shared/i18n/index.ts'
 import type { PendingConfirmation } from '../confirmation/index.ts'
 import type { Incompatibility } from './client-format.ts'
 import type { LeaseHolder, LeaseLoss } from './edit-lease.ts'
-import type { LostMode, ReadingMode, ReadingNotice } from './edit-mode.ts'
+import type { CopyState, LostMode, ReadingMode, ReadingNotice } from './edit-mode.ts'
 import type { EditorPage, EditorPageLoad, EditorPageReady, EditorPageSession, EditorPageView } from './editor-page.ts'
 import type { SaveProblem, SaveView } from './save-coordinator.ts'
 import { documentPagePath, SNAPSHOT_MAX_RAW_BYTES, SNAPSHOT_WARN_RAW_BYTES, snapshotInvalidDetailsSchema } from '@nerve-office/contracts'
@@ -61,6 +62,12 @@ function isSessionProblem(problem: SaveProblem): boolean {
   return problem.kind === 'request' && (isAuthenticationError(problem.error) || isCsrfTokenError(problem.error))
 }
 
+/** SNAPSHOT_INVALID 的详情里违反的规则（宽松解析，认不出时为 undefined：照"格式不正确"说） */
+function snapshotRuleOf(error: ApiError): SnapshotRule | undefined {
+  const details = snapshotInvalidDetailsSchema.safeParse(error.details ?? {})
+  return details.success ? details.data.rule : undefined
+}
+
 /** sessionProblem：最近一次确认会话失败的原因 */
 function problemMessage(problem: SaveProblem, sessionProblem: unknown): { text: string, requestId?: string, destructive: boolean } {
   if (problem.kind === 'cell-editing')
@@ -76,10 +83,8 @@ function problemMessage(problem: SaveProblem, sessionProblem: unknown): { text: 
     return { text: editorMessages.saveFailed(editorMessages.sessionCheckFailed(reason.message)), requestId: reason.requestId, destructive: true }
   }
   // 快照被服务端拒绝（M3-P3）：按违反的规则说（链接、图片、资源、过于复杂……），不认识的规则照"格式不正确"说
-  if (problem.error instanceof ApiError && problem.error.code === 'SNAPSHOT_INVALID') {
-    const details = snapshotInvalidDetailsSchema.safeParse(problem.error.details ?? {})
-    return { text: editorMessages.saveFailed(editorMessages.snapshotInvalid(details.success ? details.data.rule : undefined)), requestId: problem.error.requestId, destructive: true }
-  }
+  if (problem.error instanceof ApiError && problem.error.code === 'SNAPSHOT_INVALID')
+    return { text: editorMessages.saveFailed(editorMessages.snapshotInvalid(snapshotRuleOf(problem.error))), requestId: problem.error.requestId, destructive: true }
   // 400（请求不合法）是这次请求本身的问题，按错误码说明（M2-P6 复核第二批 G-5）
   const error = describeError(problem.error)
   return { text: editorMessages.saveFailed(error.message), requestId: error.requestId, destructive: true }
@@ -294,8 +299,21 @@ function CopiedNote({ title, documentId }: { title: string, documentId: string }
 }
 
 /**
+ * 副本被拒、再试也一样时的说明（M3-P3 审查 B3）：本页过旧时说先把内容复制出来、再重新加载页面；内容不能保存时按违反的规则
+ * （或超过容量）说，与编辑时保存被拒同一套说法，不说"可以再试"
+ */
+function copyRefusalMessage(refused: Extract<CopyState, { kind: 'refused' }>): string {
+  if (refused.refusal === 'outdated')
+    return editorMessages.lost.copyOutdated
+  const problem = refused.error.code === 'PAYLOAD_TOO_LARGE' ? editorMessages.capacityExceeded : editorMessages.snapshotInvalid(snapshotRuleOf(refused.error))
+  return editorMessages.lost.copyRefused(problem)
+}
+
+/**
  * 失去编辑权（M3-P2 设计 §3.4）：原因与本页的修改有没有保存（只看内容，不看保存的状态，M3-P1 审查 B3），之后能做的事：
  * - 还读得到而且有修改：另存为副本（失败可以再试，内容一律留着）、放弃本页的修改（先确认）；正在核对结果未知的那次保存时先不给；
+ *   副本被拒、再试也一样时（M3-P3 审查 B3）不再给副本——本页过旧时只给整页的重新加载（重新加载就是新的页面，说明里先请用户把内容
+ *   复制出来），内容不能保存时给放弃；
  * - 还读得到、没有修改（或已经另存为副本）：重新加载——按服务端的最新内容重建为阅读；
  * - 读不到了（404）：只说明（审查 B2）；页头的返回链接照常在；
  * - 本页的内容没能取出：编辑器留着（还能复制），提供整页重新加载；
@@ -307,8 +325,14 @@ function CopiedNote({ title, documentId }: { title: string, documentId: string }
 function LostNotice({ page, lost, onDiscard, fallbackFocus }: { page: EditorPage, lost: LostMode, onDiscard: () => void, fallbackFocus: RefObject<HTMLElement | null> }) {
   const { loss, unsaved, readable, checking, captureFailed, inputLeft, reopenFailed, copy, reload } = lost
   const copied = copy.kind === 'done' ? copy.document : undefined
-  const offersCopy = readable && unsaved && !checking && !captureFailed && copied === undefined
+  const refused = copy.kind === 'refused' ? copy : undefined
+  // 还能另存为副本：读得到、有修改、取出了内容、还没建好，也没有被拒得再试也一样
+  const copyable = readable && unsaved && !captureFailed && copied === undefined && refused === undefined
+  const offersCopy = copyable && !checking
+  const offersDiscard = offersCopy || refused?.refusal === 'content'
   const offersReload = readable && !captureFailed && (!unsaved || copied !== undefined)
+  // 整页的重新加载：本页的内容没能取出时；副本因本页过旧被拒时（重新加载就是新的页面）
+  const offersPageReload = captureFailed || refused?.refusal === 'outdated'
   const noticeRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (reopenFailed && focusIsLost())
@@ -319,24 +343,25 @@ function LostNotice({ page, lost, onDiscard, fallbackFocus }: { page: EditorPage
       <AlertDescription>
         {captureFailed
           ? <p>{editorMessages.lost.captureFailed}</p>
-          : <p><Phrase parts={editorMessages.editing.lost(lostCause(loss), unsaved && copied === undefined, readable, !reopenFailed)} /></p>}
+          : <p><Phrase parts={editorMessages.editing.lost(lostCause(loss), unsaved && copied === undefined, readable, !reopenFailed, refused === undefined)} /></p>}
         {inputLeft && !captureFailed && <p>{editorMessages.lost.inputLeft}</p>}
-        {reopenFailed && <p>{editorMessages.lost.reopenFailed(readable && unsaved && copied === undefined)}</p>}
+        {reopenFailed && <p>{editorMessages.lost.reopenFailed(copyable)}</p>}
         {checking && <p>{editorMessages.lost.checking}</p>}
         {copy.kind === 'failed' && <p>{editorMessages.lost.copyFailed(describeError(copy.error).message)}</p>}
+        {refused !== undefined && <p>{copyRefusalMessage(refused)}</p>}
         {copied !== undefined && <p><CopiedNote title={copied.title} documentId={copied.id} /></p>}
         {reload.kind === 'loading' && <p>{editorMessages.lost.reloading}</p>}
         {reload.kind === 'failed' && <p>{editorMessages.lost.reloadFailed(describeError(reload.error).message)}</p>}
-        {(offersCopy || offersReload || captureFailed) && (
+        {(offersCopy || offersDiscard || offersReload || offersPageReload) && (
           <div className="mt-2 flex flex-wrap gap-2">
             {offersCopy && (
               <Button variant="outline" size="sm" aria-disabled={copy.kind === 'saving' || reload.kind === 'loading'} onClick={() => void page.saveCopy()}>
                 {copy.kind === 'saving' ? editorMessages.lost.savingCopy : editorMessages.lost.saveCopy}
               </Button>
             )}
-            {offersCopy && <Button variant="outline" size="sm" aria-disabled={copy.kind === 'saving' || reload.kind === 'loading'} onClick={onDiscard}>{editorMessages.lost.discard}</Button>}
+            {offersDiscard && <Button variant="outline" size="sm" aria-disabled={copy.kind === 'saving' || reload.kind === 'loading'} onClick={onDiscard}>{editorMessages.lost.discard}</Button>}
             {offersReload && <Button variant="outline" size="sm" aria-disabled={reload.kind === 'loading'} onClick={() => void page.discard()}>{editorMessages.reload}</Button>}
-            {captureFailed && <Button variant="outline" size="sm" onClick={page.reload}>{editorMessages.reload}</Button>}
+            {offersPageReload && <Button variant="outline" size="sm" onClick={page.reload}>{editorMessages.reload}</Button>}
           </div>
         )}
       </AlertDescription>
