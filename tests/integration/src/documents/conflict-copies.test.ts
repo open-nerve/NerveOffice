@@ -293,14 +293,15 @@ describe('US-M3-12 只要求能读原文档；读不到与不存在一致', () =
   })
 
   it.each([
-    ['不是 JSON', () => Buffer.from('{"id":', 'utf8')],
-    ['顶层是数组', () => Buffer.from('[]', 'utf8')],
-    ['sheets 不是对象', (unitId: string) => Buffer.from(JSON.stringify({ id: unitId, sheetOrder: [], sheets: [] }), 'utf8')],
-  ])('快照不合格（%s，与保存同一个基本校验）：422 SNAPSHOT_INVALID', async (_case, build) => {
+    ['不是 JSON', 'json', () => Buffer.from('{"id":', 'utf8')],
+    ['顶层是数组', 'structure', () => Buffer.from('[]', 'utf8')],
+    ['sheets 不是对象', 'structure', (unitId: string) => Buffer.from(JSON.stringify({ id: unitId, sheetOrder: [], sheets: [] }), 'utf8')],
+  ])('快照不合格（%s，与保存同一个检查，M3-P3）：422 SNAPSHOT_INVALID，规则 %s', async (_case, rule, build) => {
     const space = await teamSpace()
     const source = await sourceIn(space)
     const response = await postConflictCopy(app.baseUrl, sessionOf(ben), source.id, source.unitId, { raw: build(source.unitId) })
-    expect(await errorOf(response)).toMatchObject({ status: 422, code: 'SNAPSHOT_INVALID' })
+    const { error } = parseExact(errorResponseSchema, await response.json())
+    expect([response.status, error.code, error.details]).toEqual([422, 'SNAPSHOT_INVALID', { rule }])
     expect(await copiesOf(source.id)).toEqual([])
   })
 
@@ -390,7 +391,8 @@ describe('US-M3-13 requestId 幂等（与新建、复制同一个做法）', () 
     const space = await teamSpace()
     const source = await sourceIn(space)
     const requestId = randomUUID()
-    const responses = await Promise.all(Array.from({ length: 5 }, async () => postConflictCopy(app.baseUrl, sessionOf(ben), source.id, source.unitId, { requestId })))
+    // 同时发两次：同一个人在快照检查池里至多两份（INSPECTIONS_PER_ACCOUNT，M3-P3 审查 A2），多出来的立即 503、由页面过一会儿重发
+    const responses = await Promise.all(Array.from({ length: 2 }, async () => postConflictCopy(app.baseUrl, sessionOf(ben), source.id, source.unitId, { requestId })))
     const copies = await Promise.all(responses.map(async response => copyOf(response)))
     expect(new Set(copies.map(copy => copy.id)).size).toBe(1)
     expect(copies.filter(copy => !copy.replayed)).toHaveLength(1)

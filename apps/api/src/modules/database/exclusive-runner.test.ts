@@ -1,4 +1,8 @@
+import type { SQL } from 'drizzle-orm'
 import type pg from 'pg'
+import type { Database, Transaction } from './database.ts'
+import type { TransactionRunner } from './transaction-runner.ts'
+import { PgDialect } from 'drizzle-orm/pg-core'
 import { describe, expect, it, vi } from 'vitest'
 import { ExclusiveRunner } from './exclusive-runner.ts'
 
@@ -33,7 +37,38 @@ function fakeClient(options: FakeOptions = {}) {
 
 function runnerWith(client: ReturnType<typeof fakeClient>): ExclusiveRunner {
   const pool = { connect: vi.fn(async () => client) }
-  return new ExclusiveRunner(pool as unknown as pg.Pool)
+  return new ExclusiveRunner(pool as unknown as pg.Pool, {} as Database, {} as TransactionRunner)
+}
+
+const dialect = new PgDialect()
+
+/** 事务级的版本：假的事务记下执行过的语句（SQL 文本与参数），取锁的结果由用例给定；假的事务运行器记下提交还是回滚 */
+function transactional(locked: boolean) {
+  const statements: { sql: string, params: unknown[] }[] = []
+  const outcomes: ('committed' | 'rolled back')[] = []
+  const transaction = {
+    execute: vi.fn(async (query: SQL) => {
+      const { sql: text, params } = dialect.sqlToQuery(query)
+      statements.push({ sql: text, params })
+      return { rows: [{ locked }] }
+    }),
+  }
+  const transactions = {
+    run: vi.fn(async <T>(work: (tx: Transaction) => Promise<T>): Promise<T> => {
+      try {
+        const result = await work(transaction as unknown as Transaction)
+        outcomes.push('committed')
+        return result
+      }
+      catch (error) {
+        outcomes.push('rolled back')
+        throw error
+      }
+    }),
+  }
+  const pool = { connect: vi.fn() }
+  const runner = new ExclusiveRunner(pool as unknown as pg.Pool, {} as Database, transactions as unknown as TransactionRunner)
+  return { runner, statements, outcomes, transaction, pool }
 }
 
 describe('ExclusiveRunner', () => {
@@ -74,5 +109,41 @@ describe('ExclusiveRunner', () => {
     const notHeld = fakeClient({ unlocked: false })
     await expect(runnerWith(notHeld).run(LOCK, async () => 1)).resolves.toEqual({ ran: true, result: 1 })
     expect(notHeld.release).toHaveBeenCalledExactlyOnceWith(true)
+  })
+})
+
+describe('ExclusiveRunner.runTransaction（事务级的锁：一件本身就是一个短事务的事，M3-P3 设计 §3.9）', () => {
+  const REVISION_LOCK = 'nerve-office:revision-purge'
+
+  it('拿到锁：在同一个事务里先取锁、再执行 work，正常返回时提交；锁随事务结束释放，没有释放的语句，也不另借连接', async () => {
+    const { runner, statements, outcomes, transaction, pool } = transactional(true)
+    const work = vi.fn(async (tx: Transaction) => {
+      // work 拿到的就是取锁的那个事务
+      expect(tx).toBe(transaction)
+      return 7
+    })
+    await expect(runner.runTransaction(REVISION_LOCK, work)).resolves.toEqual({ ran: true, result: 7 })
+    expect(work).toHaveBeenCalledTimes(1)
+    expect(statements).toEqual([{ sql: 'SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0)) AS locked', params: [REVISION_LOCK] }])
+    expect(outcomes).toEqual(['committed'])
+    // 只用事务运行器借的那一个连接
+    expect(pool.connect).not.toHaveBeenCalled()
+  })
+
+  it('锁在别处：不执行 work，空事务照常结束', async () => {
+    const { runner, statements, outcomes } = transactional(false)
+    const work = vi.fn(async () => 7)
+    await expect(runner.runTransaction(REVISION_LOCK, work)).resolves.toEqual({ ran: false })
+    expect(work).not.toHaveBeenCalled()
+    expect(statements).toHaveLength(1)
+    expect(outcomes).toEqual(['committed'])
+  })
+
+  it('work 抛出：事务回滚，原来的错误抛给调用方', async () => {
+    const { runner, outcomes } = transactional(true)
+    await expect(runner.runTransaction(REVISION_LOCK, async () => {
+      throw new Error('这一批跑砸了')
+    })).rejects.toThrow('这一批跑砸了')
+    expect(outcomes).toEqual(['rolled back'])
   })
 })

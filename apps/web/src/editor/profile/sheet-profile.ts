@@ -1,8 +1,11 @@
 // 表格插件档案 sheet@1（插件档案 v1 §1，P4 设计 §3.6.2）。
 // 档案是数据：插件清单、注册顺序、影响数据的配置、声明的资源名都集中在这里；
 // 增删插件、改影响数据的配置、升级 SDK 都按数据格式变更处理（00 号计划书 §8.7），先做保存重开回归。
+// 资源的白名单与规则在 contracts（documents/profile-resources.ts，服务端的快照检查共用，M3-P3 设计 §3.2）：各组按那里的名称声明资源
+// （写错名字类型检查不通过），单元测试核对各组声明的合起来等于白名单。
 // 插件按组注册，组内与组间的顺序按官方 preset；不注册 @univerjs/network、评论、水印、table、十字高亮等，不注册任何遥测实现。
 // 界面的配置按这次的打开方式（EditorAccess）组合：只读时一开始就以只读的界面创建（插件档案 v1 §5.2 的"销毁重建"一栏，M2-P3 设计 §3.4）
+import type { DocumentProfile, ProfileResourceName } from '@nerve-office/contracts'
 import type { EditorAccess } from '../editor-access.ts'
 import type { PluginEntry } from './plugin-entry.ts'
 import { UniverDataValidationPlugin } from '@univerjs/data-validation'
@@ -40,8 +43,8 @@ import { UniverUIPlugin } from '@univerjs/ui'
 import { sheetMenuConfig } from './menu-config.ts'
 import { pluginEntry } from './plugin-entry.ts'
 
-/** 插件档案的标识与版本，写进平台的元数据（00 号计划书 §8.1） */
-export const SHEET_PROFILE_ID = 'sheet@1'
+/** 插件档案的标识与版本，写进平台的元数据（00 号计划书 §8.1）；是 contracts 登记的档案之一 */
+export const SHEET_PROFILE_ID = 'sheet@1' satisfies DocumentProfile
 
 export interface SheetProfileContext {
   /** 编辑器挂载的容器 */
@@ -54,8 +57,8 @@ export interface SheetProfileContext {
 
 export interface PluginGroup {
   readonly id: string
-  /** 这一组写进工作簿快照的资源名（插件档案 v1 §3；运行时以注册的资源 hook 为准，E2E 核对） */
-  readonly resources: readonly string[]
+  /** 这一组写进工作簿快照的资源名（插件档案 v1 §3，contracts 的白名单里的名称；运行时以注册的资源 hook 为准，P4 的打开自检核对） */
+  readonly resources: readonly ProfileResourceName<typeof SHEET_PROFILE_ID>[]
   readonly plugins: (context: SheetProfileContext) => readonly PluginEntry[]
 }
 
@@ -185,9 +188,9 @@ export function sheetPluginEntries(context: SheetProfileContext): PluginEntry[] 
   return SHEET_PLUGIN_GROUPS.flatMap(group => group.plugins(context))
 }
 
-/** 档案声明的资源名（按名称排序）：快照的 resources 只应该有这些 */
+/** 档案声明的资源名（按名称排序）：快照的 resources 只应该有这些（等于 contracts 的白名单，单元测试核对） */
 export function declaredSheetResources(): string[] {
-  return [...new Set(SHEET_PLUGIN_GROUPS.flatMap(group => group.resources))].sort()
+  return [...new Set<string>(SHEET_PLUGIN_GROUPS.flatMap(group => group.resources))].sort()
 }
 
 /**

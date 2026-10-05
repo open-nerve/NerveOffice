@@ -49,8 +49,17 @@ describe('loadConfig', () => {
       shutdown: { timeoutMs: 8_000 },
       log: { level: 'info' },
       password: { argon2: { memoryKib: 19_456, iterations: 2, parallelism: 1 }, hashConcurrency: 2, hashQueue: { maxWaiting: 64, maxWaitMs: 5_000 } },
-      // 回收站的自动清理默认开着：每小时一轮，一轮最多 50 个删除单元
-      jobs: { trashPurge: { enabled: true, intervalMs: 3_600_000, batchSize: 50 } },
+      // 回收站的自动清理默认开着：每小时一轮，一轮最多 50 个删除单元；
+      // 修订记录与回执的保留期清理默认开着：每小时一轮，一批最多 1000 条，保留 30 天（M3-P3 设计 §3.9）
+      jobs: {
+        trashPurge: { enabled: true, intervalMs: 3_600_000, batchSize: 50 },
+        revisionPurge: { enabled: true, intervalMs: 3_600_000, batchSize: 1_000 },
+      },
+      revisions: { retentionDays: 30 },
+      // 页面的版本：默认不按构建拦（只按数据格式，M3-P3 设计 §3.5）
+      clients: { minimumBuild: undefined },
+      // 快照的检查：2 个子进程，排队 8 个、等 10 秒，一份 10 秒，每个子进程的堆 512 MiB（DEF-018 的测量）
+      snapshotInspection: { processes: 2, queue: { maxWaiting: 8, maxWaitMs: 10_000 }, timeoutMs: 10_000, heapMb: 512 },
     })
   })
 
@@ -92,6 +101,16 @@ describe('loadConfig', () => {
       NERVE_TRASH_PURGE_ENABLED: 'false',
       NERVE_TRASH_PURGE_INTERVAL_MS: '900000',
       NERVE_TRASH_PURGE_BATCH: '10',
+      NERVE_REVISION_RETENTION_DAYS: '45',
+      NERVE_REVISION_PURGE_ENABLED: 'false',
+      NERVE_REVISION_PURGE_INTERVAL_MS: '600000',
+      NERVE_REVISION_PURGE_BATCH: '250',
+      NERVE_SNAPSHOT_INSPECTION_PROCESSES: '4',
+      NERVE_SNAPSHOT_INSPECTION_QUEUE_MAX: '0',
+      NERVE_SNAPSHOT_INSPECTION_QUEUE_TIMEOUT_MS: '1500',
+      NERVE_SNAPSHOT_INSPECTION_TIMEOUT_MS: '20000',
+      NERVE_SNAPSHOT_INSPECTION_HEAP_MB: '1024',
+      NERVE_MIN_CLIENT_BUILD: '0.2.10',
     })
     const { url, ...database } = config.database
     expect(url.reveal()).toBe('postgresql://u:p@127.0.0.1:5432/db')
@@ -120,13 +139,66 @@ describe('loadConfig', () => {
     expect(config.login).toEqual({ maxFailures: 3, accountMaxFailures: 40, ipMaxFailures: 1_000, windowMinutes: 10, lockoutMinutes: 20 })
     expect(config.oneTimeLinks).toEqual({ recordMaxFailures: 7 })
     expect(config.web.root).toBe('/srv/nerve-office/web')
-    expect(config.jobs).toEqual({ trashPurge: { enabled: false, intervalMs: 900_000, batchSize: 10 } })
+    expect(config.jobs).toEqual({
+      trashPurge: { enabled: false, intervalMs: 900_000, batchSize: 10 },
+      revisionPurge: { enabled: false, intervalMs: 600_000, batchSize: 250 },
+    })
+    expect(config.revisions).toEqual({ retentionDays: 45 })
+    expect(config.snapshotInspection).toEqual({ processes: 4, queue: { maxWaiting: 0, maxWaitMs: 1_500 }, timeoutMs: 20_000, heapMb: 1_024 })
+    expect(config.clients).toEqual({ minimumBuild: '0.2.10' })
+  })
+
+  it('最低客户端构建（M3-P3 设计 §3.5）只认 x.y.z：前导零、少一段、多一段、带 + 之后的诊断信息与别的写法都拒绝启动', () => {
+    for (const value of ['1.0', '1.0.0.0', '01.0.0', '1.0.0+abc', 'v1.0.0', '1.0.0-rc.1', 'latest', ' 1.0.0'])
+      expect(issuesOf(() => loadConfig({ ...REQUIRED, NERVE_MIN_CLIENT_BUILD: value })), value).toEqual([{ variable: 'NERVE_MIN_CLIENT_BUILD', problem: '必须是 x.y.z 的版本号（例如 0.1.3：不带前导零，不带 + 之后的诊断信息）' }])
+    expect(loadConfig({ ...REQUIRED, NERVE_MIN_CLIENT_BUILD: '0.0.0' }).clients.minimumBuild).toBe('0.0.0')
+    // 空值视为没有设置（编排文件里 VAR= 的写法）
+    expect(loadConfig({ ...REQUIRED, NERVE_MIN_CLIENT_BUILD: '' }).clients.minimumBuild).toBeUndefined()
+  })
+
+  it('快照检查的子进程按整数范围校验；每个子进程的堆至少 128 MiB（5 MiB 的真实形状要 96 MiB，更低时大表格被误拒为过于复杂，DEF-018）', () => {
+    const variablesOf = (extra: Record<string, string>) => issuesOf(() => loadConfig({ ...REQUIRED, ...extra })).map(issue => issue.variable)
+    expect(variablesOf({ NERVE_SNAPSHOT_INSPECTION_PROCESSES: '0' })).toEqual(['NERVE_SNAPSHOT_INSPECTION_PROCESSES'])
+    expect(variablesOf({ NERVE_SNAPSHOT_INSPECTION_PROCESSES: '65' })).toEqual(['NERVE_SNAPSHOT_INSPECTION_PROCESSES'])
+    expect(variablesOf({ NERVE_SNAPSHOT_INSPECTION_QUEUE_MAX: '1001' })).toEqual(['NERVE_SNAPSHOT_INSPECTION_QUEUE_MAX'])
+    expect(variablesOf({ NERVE_SNAPSHOT_INSPECTION_QUEUE_TIMEOUT_MS: '99' })).toEqual(['NERVE_SNAPSHOT_INSPECTION_QUEUE_TIMEOUT_MS'])
+    expect(variablesOf({ NERVE_SNAPSHOT_INSPECTION_TIMEOUT_MS: '999' })).toEqual(['NERVE_SNAPSHOT_INSPECTION_TIMEOUT_MS'])
+    expect(variablesOf({ NERVE_SNAPSHOT_INSPECTION_HEAP_MB: '127' })).toEqual(['NERVE_SNAPSHOT_INSPECTION_HEAP_MB'])
+    expect(variablesOf({ NERVE_SNAPSHOT_INSPECTION_HEAP_MB: '16385' })).toEqual(['NERVE_SNAPSHOT_INSPECTION_HEAP_MB'])
+    expect(loadConfig({ ...REQUIRED, NERVE_SNAPSHOT_INSPECTION_HEAP_MB: '128', NERVE_SNAPSHOT_INSPECTION_PROCESSES: '1' }).snapshotInspection).toEqual({
+      processes: 1,
+      queue: { maxWaiting: 8, maxWaitMs: 10_000 },
+      timeoutMs: 10_000,
+      heapMb: 128,
+    })
   })
 
   it('开关只认 true 与 false：写错时拒绝启动，不静默当成关掉', () => {
     expect(loadConfig({ ...REQUIRED, NERVE_TRASH_PURGE_ENABLED: 'true' }).jobs.trashPurge.enabled).toBe(true)
-    for (const value of ['1', 'yes', 'on', 'True'])
-      expect(issuesOf(() => loadConfig({ ...REQUIRED, NERVE_TRASH_PURGE_ENABLED: value }))).toEqual([{ variable: 'NERVE_TRASH_PURGE_ENABLED', problem: '必须是 true 或 false' }])
+    expect(loadConfig({ ...REQUIRED, NERVE_REVISION_PURGE_ENABLED: 'true' }).jobs.revisionPurge.enabled).toBe(true)
+    for (const variable of ['NERVE_TRASH_PURGE_ENABLED', 'NERVE_REVISION_PURGE_ENABLED']) {
+      for (const value of ['1', 'yes', 'on', 'True'])
+        expect(issuesOf(() => loadConfig({ ...REQUIRED, [variable]: value }))).toEqual([{ variable, problem: '必须是 true 或 false' }])
+    }
+  })
+
+  it('修订记录与回执的保留天数至少 15（M3-P3 设计 §3.9）：要长于本机发件箱一条记录的最长留存 14 天，说明里写明理由；上限 3650', () => {
+    for (const value of ['14', '0', '3651', '30.5', 'thirty']) {
+      const issues = issuesOf(() => loadConfig({ ...REQUIRED, NERVE_REVISION_RETENTION_DAYS: value }))
+      expect(issues.map(issue => issue.variable), value).toEqual(['NERVE_REVISION_RETENTION_DAYS'])
+      expect(issues[0]?.problem, value).toBe('必须是 15–3650 之间的整数：保留期要长于本机发件箱一条记录的最长留存（14 天，M4），否则发件箱里结果未知的保存重发时找不到原来的结果、重放不了')
+    }
+    expect(loadConfig({ ...REQUIRED, NERVE_REVISION_RETENTION_DAYS: '15' }).revisions.retentionDays).toBe(15)
+    expect(loadConfig({ ...REQUIRED, NERVE_REVISION_RETENTION_DAYS: '3650' }).revisions.retentionDays).toBe(3_650)
+  })
+
+  it('保留期清理的间隔与一批的数量按整数范围校验（间隔与回收站的清理相同：1 秒到一天）', () => {
+    const variablesOf = (extra: Record<string, string>) => issuesOf(() => loadConfig({ ...REQUIRED, ...extra })).map(issue => issue.variable)
+    expect(variablesOf({ NERVE_REVISION_PURGE_INTERVAL_MS: '999' })).toEqual(['NERVE_REVISION_PURGE_INTERVAL_MS'])
+    expect(variablesOf({ NERVE_REVISION_PURGE_INTERVAL_MS: '86400001' })).toEqual(['NERVE_REVISION_PURGE_INTERVAL_MS'])
+    expect(variablesOf({ NERVE_REVISION_PURGE_BATCH: '0' })).toEqual(['NERVE_REVISION_PURGE_BATCH'])
+    expect(variablesOf({ NERVE_REVISION_PURGE_BATCH: '10001' })).toEqual(['NERVE_REVISION_PURGE_BATCH'])
+    expect(loadConfig({ ...REQUIRED, NERVE_REVISION_PURGE_INTERVAL_MS: '1000', NERVE_REVISION_PURGE_BATCH: '1' }).jobs.revisionPurge).toEqual({ enabled: true, intervalMs: 1_000, batchSize: 1 })
   })
 
   it('缺少必填项时失败', () => {
@@ -252,6 +324,16 @@ describe('loadConfig', () => {
     // 关掉自动清理时一个连接也可以；两个连接时可以开
     expect(loadConfig({ ...REQUIRED, NERVE_DATABASE_POOL_MAX: '1', NERVE_TRASH_PURGE_ENABLED: 'false' }).database.poolMax).toBe(1)
     expect(loadConfig({ ...REQUIRED, NERVE_DATABASE_POOL_MAX: '2' }).jobs.trashPurge.enabled).toBe(true)
+  })
+
+  it('修订记录与回执的保留期清理不抬高连接池的下限（M3-P3 设计 §3.9）：每一批是一个短事务、只占一个连接，两个清理都开着时 2 个连接也够', () => {
+    // 两个都开着（默认）：仍然是 2
+    const both = loadConfig({ ...REQUIRED, NERVE_DATABASE_POOL_MAX: '2' })
+    expect([both.jobs.trashPurge.enabled, both.jobs.revisionPurge.enabled]).toEqual([true, true])
+    // 只开保留期清理：1 个连接也可以
+    expect(loadConfig({ ...REQUIRED, NERVE_DATABASE_POOL_MAX: '1', NERVE_TRASH_PURGE_ENABLED: 'false', NERVE_REVISION_PURGE_ENABLED: 'true' }).jobs.revisionPurge.enabled).toBe(true)
+    // 回收站的清理开着、连接池是 1：照旧只报回收站的那一条，不因为保留期清理多报
+    expect(issuesOf(() => loadConfig({ ...REQUIRED, NERVE_DATABASE_POOL_MAX: '1' })).map(issue => issue.variable)).toEqual(['NERVE_DATABASE_POOL_MAX'])
   })
 
   it('登录与一次性链接的新上限按整数范围校验', () => {

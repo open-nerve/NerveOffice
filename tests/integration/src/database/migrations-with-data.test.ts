@@ -1,11 +1,13 @@
 // 从每个阶段结束时"有数据的库"一路迁移到最新（M2-P6 复核 B 的 B6）：单个迁移的用例只在它前一个版本上验证自己，
 // 这里按当时的结构写入有代表性的数据——每个审计动作、目标类型与来源各一条，会话的每个撤销原因，邀请、重置与限流的行，
 // 团队空间（全员可见的、归档的）与成员、写入代次不为 0 的文档，10 层文件夹、两种删除单元与"文件夹的删除单元里还有单独删过的子孙"，
-// 单独授权（M2-P5 起）——迁移到最新之后核对：每张表的行数不变、约束全部已验证、只由服务保证的不变量都成立，
-// 迁移之前的删除单元能经接口恢复与永久删除，迁移之前建的文件夹原样重发当初的新建请求是重放（0021 在 SQL 里回填的请求摘要
-// 与服务算的一致，M2 Codex 评审 CX6）。
+// 单独授权（M2-P5 起），编辑租约（M3-P1 起：一个有效的、一个明确结束的），保存协议的信封与回执（M3-P3 起：内容哈希、资源名、
+// 客户端构建、"公式待更新"、一条回执）——迁移到最新之后核对：每张表的行数不变、约束全部已验证、
+// 只由服务保证的不变量都成立，迁移之前的删除单元能经接口恢复与永久删除，迁移之前建的文件夹原样重发当初的新建请求是重放
+// （0021 在 SQL 里回填的请求摘要与服务算的一致，M2 Codex 评审 CX6），迁移之前的文档能经接口保存（M3-P3：存量没有内容哈希与资源名，
+// 第一次保存照常加一个修订、补上它们，之后内容相同的保存不加修订号）。
 //
-// 基准是每个阶段结束时的最后一个迁移（9 个），覆盖了到现在为止的每个迁移在有数据的库上的执行；每个基准一个空库，整个文件 3 秒左右。
+// 基准是每个阶段结束时的最后一个迁移（11 个），覆盖了到现在为止的每个迁移在有数据的库上的执行；每个基准一个空库，整个文件 3 秒左右。
 // 以后的阶段结束时在 BASES 里加上它的最后一个迁移；时长涨得多时，去掉中间被后面的基准完全覆盖的那些（写明理由）
 import type pg from 'pg'
 import type { TestDatabase } from '../support/database.ts'
@@ -20,11 +22,12 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { passwordHashOf } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { createTestDatabase } from '../support/database.ts'
+import { saveContent } from '../support/edit-leases.ts'
 import { invariantViolations } from '../support/invariants.ts'
 import { MIGRATION_TAGS, migrationIndexOf, migrationsUpTo, removeMigrationFolders } from '../support/migration-folders.ts'
 import { asUser, login } from '../support/session-client.ts'
 
-/** 每个阶段结束时的最后一个迁移（P3 没有迁移）：从它开始写入数据，再迁移到最新 */
+/** 每个阶段结束时的最后一个迁移（M2-P3 没有迁移）：从它开始写入数据，再迁移到最新 */
 const BASES: readonly (readonly [label: string, tag: string])[] = [
   ['M1 结束（v0.1-m1）', '0007_document_unit_id_not_unique'],
   ['M2-P1 结束', '0008_m2_accounts'],
@@ -37,10 +40,16 @@ const BASES: readonly (readonly [label: string, tag: string])[] = [
   ['M2-P6 结束', '0019_m2_p6_write_epoch_monotonic'],
   // M2 的最后一个迁移（v0.1-m2）：有授权、文件夹带请求摘要的库迁到 0022（编辑租约的表，M3-P1）。之前的库上还没有租约的表
   ['M2 结束（v0.1-m2）', '0021_m2_folder_payload_digest'],
+  // 有编辑租约（有效的与明确结束的）的库迁到 0023（审计加上另存为副本的动作，按全量重列的 CHECK 重建）及以后
+  ['M3-P1 结束', '0022_m3_p1_document_edit_leases'],
+  // 审计里有另存为副本的动作的库迁到 0024（M3-P3：文档、内容与修订记录的表加信封的列，新的回执表）及以后
+  ['M3-P2 结束', '0023_m3_p2_conflict_copy_audit'],
+  // 有内容哈希、资源名、客户端构建、"公式待更新"与回执的库迁到以后的
+  ['M3-P3 结束', '0024_m3_p3_save_protocol'],
 ]
 
 /** 行数要核对的表（某个基准上还没有的表跳过） */
-const TABLES = ['users', 'spaces', 'space_members', 'documents', 'document_contents', 'document_revisions', 'document_grants', 'document_edit_leases', 'folders', 'trash_entries', 'audit_events', 'auth_sessions', 'auth_invitations', 'auth_password_resets', 'auth_login_throttles']
+const TABLES = ['users', 'spaces', 'space_members', 'documents', 'document_contents', 'document_revisions', 'document_grants', 'document_edit_leases', 'document_save_receipts', 'folders', 'trash_entries', 'audit_events', 'auth_sessions', 'auth_invitations', 'auth_password_resets', 'auth_login_throttles']
 
 const PASSWORD = 'correct horse battery staple'
 
@@ -75,6 +84,8 @@ async function one<T>(client: pg.Client, text: string, values: unknown[] = []): 
 /** 写入的数据里，迁移之后经接口要用到的部分 */
 interface Seeded {
   readonly amy: string
+  /** 艾米个人空间里的一份文档（修订号 2，内容是模板）：迁移之后经接口保存它 */
+  readonly personalDocument: { readonly id: string, readonly unitId: string }
   /** P2 起：艾米是空间管理员的团队空间 */
   readonly teamSpace?: string
   /** P4 起：10 层文件夹（第 1 层在前）与三个删除单元 */
@@ -111,8 +122,10 @@ async function seed(client: pg.Client, base: number): Promise<Seeded> {
   const dan = at('0008_m2_accounts') ? await insertUser('dan', 'member', 'disabled') : undefined
   const personal = await one<{ id: string }>(client, 'SELECT id FROM spaces WHERE owner_user_id = $1', [amy])
 
-  // 文档：内容、修订 1（新建）与修订 2（保存）
-  const insertDocument = async (spaceId: string, title: string, extra: { folderId?: string, epoch?: number } = {}): Promise<string> => {
+  // 文档：内容、修订 1（新建）与修订 2（保存）。0024 起带信封：内容的哈希与资源名、修订记录的哈希与客户端构建（当前修订与内容的哈希相同，
+  // 不变量 I17）、文档的客户端构建与"公式待更新"
+  const envelope = at('0024_m3_p3_save_protocol')
+  const insertDocument = async (spaceId: string, title: string, extra: { folderId?: string, epoch?: number } = {}): Promise<{ id: string, unitId: string }> => {
     const unitId = randomUUID()
     const raw = Buffer.from(sheetSnapshotFor(unitId), 'utf8')
     const gzipped = zlib.gzipSync(raw)
@@ -126,14 +139,31 @@ async function seed(client: pg.Client, base: number): Promise<Seeded> {
       columns.push('folder_id')
       values.push(extra.folderId ?? null)
     }
+    if (envelope) {
+      columns.push('client_build', 'formulas_pending')
+      values.push('0.1.0+old', true)
+    }
     const { id } = await one<{ id: string }>(client, `INSERT INTO documents (${columns.join(', ')}) VALUES (${values.map((_, index) => `$${index + 1}`).join(', ')}) RETURNING id`, values)
-    await client.query('INSERT INTO document_contents (document_id, snapshot, raw_bytes, stored_bytes) VALUES ($1, $2, $3, $4)', [id, gzipped, raw.length, gzipped.length])
+    if (envelope) {
+      await client.query(
+        'INSERT INTO document_contents (document_id, snapshot, raw_bytes, stored_bytes, content_hash, resource_names) VALUES ($1, $2, $3, $4, sha256($5::bytea), $6)',
+        [id, gzipped, raw.length, gzipped.length, Buffer.from(`content-${id}`), ['SHEET_NOTE_PLUGIN']],
+      )
+    }
+    else {
+      await client.query('INSERT INTO document_contents (document_id, snapshot, raw_bytes, stored_bytes) VALUES ($1, $2, $3, $4)', [id, gzipped, raw.length, gzipped.length])
+    }
     await client.query('INSERT INTO document_revisions (document_id, revision, kind, request_id, payload_digest, saved_by) VALUES ($1, 1, \'created\', $2, sha256(\'c\'), $3)', [id, randomUUID(), amy])
     await client.query(
-      'INSERT INTO document_revisions (document_id, revision, kind, request_id, payload_digest, saved_by, client_instance_id, local_seq) VALUES ($1, 2, \'saved\', $2, sha256(\'s\'), $3, $4, 7)',
-      [id, randomUUID(), amy, randomUUID()],
+      envelope
+        ? 'INSERT INTO document_revisions (document_id, revision, kind, request_id, payload_digest, saved_by, client_instance_id, local_seq, content_hash, client_build) VALUES ($1, 2, \'saved\', $2, sha256(\'s\'), $3, $4, 7, sha256($5::bytea), \'0.1.0+old\')'
+        : 'INSERT INTO document_revisions (document_id, revision, kind, request_id, payload_digest, saved_by, client_instance_id, local_seq) VALUES ($1, 2, \'saved\', $2, sha256(\'s\'), $3, $4, 7)',
+      envelope ? [id, randomUUID(), amy, randomUUID(), Buffer.from(`content-${id}`)] : [id, randomUUID(), amy, randomUUID()],
     )
-    return id
+    // 回执（M3-P3）：内容相同的一次保存的确认，记的是当前修订
+    if (envelope)
+      await client.query('INSERT INTO document_save_receipts (request_id, document_id, revision, payload_digest, saved_by, saved_at) VALUES ($1, $2, 2, sha256(\'r\'), $3, now())', [randomUUID(), id, amy])
+    return { id, unitId }
   }
   const personalDocument = await insertDocument(personal.id, '个人空间的文档')
 
@@ -175,25 +205,35 @@ async function seed(client: pg.Client, base: number): Promise<Seeded> {
     await client.query('INSERT INTO auth_login_throttles (key_hash, failures, window_started_at, account_hash) VALUES (sha256(\'k2\'), 3, now(), sha256(\'acct\'))')
 
   if (!at('0009_m2_team_spaces'))
-    return { amy }
+    return { amy, personalDocument }
 
   // 团队空间：一个正常并全员可见、一个归档；成员；写入代次不为 0 的文档
   const team = await one<{ id: string }>(client, 'INSERT INTO spaces (type, name, created_by, visible_to_all) VALUES (\'team\', \'研发部\', $1, true) RETURNING id', [root])
   const archived = await one<{ id: string }>(client, 'INSERT INTO spaces (type, name, created_by, status) VALUES (\'team\', \'Market  Team\', $1, \'archived\') RETURNING id', [root])
   await client.query('INSERT INTO space_members (space_id, user_id, role) VALUES ($1, $2, \'admin\'), ($1, $3, \'editor\'), ($4, $2, \'viewer\')', [team.id, amy, root, archived.id])
   const teamDocument = await insertDocument(team.id, '团队空间的文档', { epoch: 3 })
-  await insertDocument(archived.id, '归档空间的文档', { epoch: 1 })
+  const archivedDocument = await insertDocument(archived.id, '归档空间的文档', { epoch: 1 })
+
+  // 编辑租约（M3-P1）：团队空间的文档上一个有效的（这一代就是文档现在的代次），归档空间的文档上一个已经释放的（明确结束）
+  if (at('0022_m3_p1_document_edit_leases')) {
+    await client.query(
+      `INSERT INTO document_edit_leases (document_id, holder_id, session_id, client_instance_id, token_digest, write_epoch, acquired_at, renewed_at, expires_at, last_active_at, ended_at, end_reason)
+       VALUES ($1, $2, $3, $4, sha256('lease-live'), 3, now() - interval '1 minute', now(), now() + interval '90 seconds', now(), NULL, NULL),
+              ($5, $2, $6, $7, sha256('lease-released'), 1, now() - interval '2 hours', now() - interval '1 hour', now() - interval '58 minutes', now() - interval '1 hour', now() - interval '1 hour', 'released')`,
+      [teamDocument.id, amy, randomUUID(), randomUUID(), archivedDocument.id, randomUUID(), randomUUID()],
+    )
+  }
 
   // 单独授权（M2-P5）：个人空间的文档分享给系统管理员（查看者），团队空间的文档分享给停用的人（编辑者，停用不动授权）
   if (at('0020_m2_p5_document_grants') && dan !== undefined) {
     await client.query(
       'INSERT INTO document_grants (document_id, user_id, role, granted_by) VALUES ($1, $2, \'viewer\', $3), ($4, $5, \'editor\', $3)',
-      [personalDocument, root, amy, teamDocument, dan],
+      [personalDocument.id, root, amy, teamDocument.id, dan],
     )
   }
 
   if (!at('0010_m2_folders_trash'))
-    return { amy, teamSpace: team.id }
+    return { amy, personalDocument, teamSpace: team.id }
 
   // 文件夹：一条 10 层的链，每层一份文档。0021 起新建时存下请求的摘要：按服务的写法（与 0021 的回填同一个写法）在 SQL 里算，
   // 迁移之后原样重发这些新建请求照样是重放
@@ -228,7 +268,7 @@ async function seed(client: pg.Client, base: number): Promise<Seeded> {
     [team.id, kind, amy, originParent, title],
   )).id
   // 删除单元 1：第 8 层里单独删掉的一份文档
-  const loneDocument = await insertDocument(team.id, '单独删的', { folderId: level(8) })
+  const loneDocument = (await insertDocument(team.id, '单独删的', { folderId: level(8) })).id
   const lone = await entry('document', level(8), '单独删的')
   await client.query('UPDATE documents SET status = \'trashed\', trash_entry_id = $2, write_epoch = write_epoch + 1 WHERE id = $1', [loneDocument, lone])
   // 删除单元 2：第 9、10 层连同里面的文档
@@ -239,7 +279,7 @@ async function seed(client: pg.Client, base: number): Promise<Seeded> {
   const folder = await entry('folder', level(5), '第 6 层')
   await client.query('UPDATE folders SET status = \'trashed\', trash_entry_id = $2 WHERE id = ANY($1::uuid[])', [[level(6), level(7), level(8)], folder])
   await client.query('UPDATE documents SET status = \'trashed\', trash_entry_id = $2, write_epoch = write_epoch + 1 WHERE folder_id = ANY($1::uuid[]) AND status = \'active\'', [[level(6), level(7), level(8)], folder])
-  return { amy, teamSpace: team.id, trash: { chain, requests, lone, nested, folder } }
+  return { amy, personalDocument, teamSpace: team.id, trash: { chain, requests, lone, nested, folder } }
 }
 
 async function rowCounts(client: pg.Client): Promise<Record<string, number>> {
@@ -261,7 +301,9 @@ describe('从每个阶段结束时有数据的库迁移到最新（M2-P6 复核 
       const seeded = await database.query(async client => seed(client, base))
       const before = await database.query(rowCounts)
 
-      expect(await runMigrations({ connectionString: database.url, lockTimeoutMs: 10_000 })).toEqual({ status: 'applied', applied: MIGRATION_TAGS.length - base - 1 })
+      // 基准就是最后一个迁移时（这个阶段刚结束、下一个阶段的迁移还没有写），库已经是最新的，什么也不执行
+      const pending = MIGRATION_TAGS.length - base - 1
+      expect(await runMigrations({ connectionString: database.url, lockTimeoutMs: 10_000 })).toEqual(pending === 0 ? { status: 'current' } : { status: 'applied', applied: pending })
       const after = await database.query(async client => ({
         counts: await rowCounts(client),
         unvalidated: (await client.query<{ conname: string }>('SELECT conname FROM pg_constraint WHERE NOT convalidated')).rows,
@@ -281,6 +323,15 @@ describe('从每个阶段结束时有数据的库迁移到最新（M2-P6 复核 
       try {
         const amy = await login(app.baseUrl, 'amy', PASSWORD)
         expect((await asUser(app.baseUrl, amy, '/api/documents')).status).toBe(200)
+        // 迁移之前的文档经接口保存（M3-P3）：内容与库里的一样（模板）。存量没有内容哈希（或者存的是别的哈希）时照常加一个修订、补上哈希与
+        // 资源名，之后同样的内容不再加修订号；不缩水按存下的（或者解析出的）上一版核对：0024 的基准存的资源名里有备注，模板里也有
+        // （空的，变空不算缩水）
+        const raw = zlib.gzipSync(Buffer.from(sheetSnapshotFor(seeded.personalDocument.unitId), 'utf8'))
+        const first = await saveContent(app.baseUrl, amy, seeded.personalDocument.id, raw, { baseRevision: 2 })
+        expect(first.status, await first.clone().text()).toBe(200)
+        expect(await first.json()).toMatchObject({ revision: 3, unchanged: false })
+        const again = await saveContent(app.baseUrl, amy, seeded.personalDocument.id, raw, { baseRevision: 3 })
+        expect(await again.json()).toMatchObject({ revision: 3, unchanged: true })
         const { teamSpace, trash } = seeded
         if (teamSpace !== undefined && trash !== undefined) {
           // 迁移之前建的文件夹（第 1 层在空间的根目录、第 2 层在第 1 层下面）：原样重发当初的新建请求是重放（同一个 id），

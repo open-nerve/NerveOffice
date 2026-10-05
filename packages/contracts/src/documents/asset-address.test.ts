@@ -1,10 +1,11 @@
+// 平台的图片地址：IMAGE() 的限制（web）与服务端的图片规则共用（从 web 的 editor/image-function/platform-asset.ts 移来，用例照旧）
 import { describe, expect, it } from 'vitest'
-import { isPlatformAssetAddress } from './platform-asset.ts'
+import { isPlatformAssetAddress } from './asset-address.ts'
 
 const ORIGIN = 'https://docs.example.com'
 const ASSET = '/api/assets/0192d4c3-7a1b-7c2d-8e3f-0123456789ab'
 
-describe('平台资源地址', () => {
+describe('平台的图片地址', () => {
   it.each([
     ASSET,
     `${ORIGIN}${ASSET}`,
@@ -34,9 +35,10 @@ describe('平台资源地址', () => {
     expect(isPlatformAssetAddress(value, ORIGIN)).toBe(false)
   })
 
-  it('不透明源与空源没有本站的绝对地址，相对地址照常接受', () => {
+  it('不透明源与空源没有本站的绝对地址，相对地址照常接受（服务端不传本站的源时只认相对地址）', () => {
     expect(isPlatformAssetAddress(`null${ASSET}`, 'null')).toBe(false)
     expect(isPlatformAssetAddress(`${ORIGIN}${ASSET}`, '')).toBe(false)
     expect(isPlatformAssetAddress(ASSET, 'null')).toBe(true)
+    expect(isPlatformAssetAddress(ASSET, '')).toBe(true)
   })
 })

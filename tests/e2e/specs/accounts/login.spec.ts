@@ -1,10 +1,25 @@
 // 账户（P3，US-M1-01、US-M1-02）：命令行初始化的管理员登录；登录、错误提示、限流、退出、会话过期、断网、多个标签页。
+// 登录页的初始焦点（DEF-047）：直接打开、会话确认之后转来时，焦点给用户名；带着为什么来到这里的说明时先给说明。
 import type { Page } from '@playwright/test'
 import { DOCUMENT_LIST_DEFAULT_LIMIT } from '@nerve-office/contracts'
 import { createDocument, createDocuments, createUser, expireSessions } from '../../support/database.ts'
 import { E2E_ADMIN } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
+
+/** 会话的确认（需要登录的页面打开时向服务端确认登录状态） */
+function isSessionCheck(url: URL): boolean {
+  return url.pathname === '/api/auth/session'
+}
+
+/** 会话的确认一律得到"服务暂时不可用"（查询自动重试一次之后才算失败），直到 page.unroute(isSessionCheck) */
+async function failSessionChecks(page: Page): Promise<void> {
+  await page.route(isSessionCheck, async route => route.fulfill({
+    status: 503,
+    contentType: 'application/json',
+    body: JSON.stringify({ error: { code: 'SERVICE_UNAVAILABLE', message: '服务暂时不可用', requestId: 'e2e' } }),
+  }))
+}
 
 /** 页面发出的接口请求（方法与路径，含查询） */
 function recordApiRequests(page: Page): string[] {
@@ -55,6 +70,51 @@ test.describe('US-M1-02 登录与退出', () => {
     await page.keyboard.press('Enter')
     await expect(page.getByRole('alert')).toHaveText('用户名或密码错误')
     await expect(submit).toBeFocused()
+  })
+
+  test('直接打开登录页：焦点在用户名上，只用键盘就能登录（DEF-047）', async ({ page }) => {
+    const user = await createUser('login-initial-focus')
+    await page.goto('/login')
+    await expect(page.getByLabel('用户名')).toBeFocused()
+    await page.keyboard.type(user.username)
+    await page.keyboard.press('Tab')
+    await expect(page.getByLabel('密码')).toBeFocused()
+    await page.keyboard.type(user.password)
+    await page.keyboard.press('Enter')
+    await expect(page.getByRole('heading', { name: '我的空间' })).toBeVisible()
+  })
+
+  test('会话确认失败、用键盘按"重试"之后得到未登录：转到登录页，焦点交给用户名，不落到 body（DEF-047）', async ({ page }) => {
+    await failSessionChecks(page)
+    await page.goto('/')
+    await expect(page.getByText('没能确认登录状态')).toBeVisible()
+    await page.unroute(isSessionCheck)
+    await page.getByRole('button', { name: '重试', exact: true }).focus()
+    await page.keyboard.press('Enter')
+    await expect(page.getByRole('form', { name: '登录' })).toBeVisible()
+    expect(new URL(page.url()).pathname).toBe('/login')
+    await expect(page.getByLabel('用户名')).toBeFocused()
+  })
+
+  test('登录已过期、会话确认又失败，用键盘按"重试"：转到登录页，焦点先给"登录已过期"的说明（读屏先读到它），按 Tab 到用户名，接着用键盘登录（DEF-047）', async ({ page }) => {
+    const user = await createUser('expired-retry')
+    await loginThroughApi(page, user)
+    await expireSessions(user)
+    await failSessionChecks(page)
+    await page.goto('/')
+    await expect(page.getByText('没能确认登录状态')).toBeVisible()
+    await page.unroute(isSessionCheck)
+    await page.getByRole('button', { name: '重试', exact: true }).focus()
+    await page.keyboard.press('Enter')
+    await expect(page).toHaveURL(/\/login\?reason=expired$/)
+    await expect(page.getByRole('status').filter({ hasText: '登录已过期，请重新登录' })).toBeFocused()
+    await page.keyboard.press('Tab')
+    await expect(page.getByLabel('用户名')).toBeFocused()
+    await page.keyboard.type(user.username)
+    await page.keyboard.press('Tab')
+    await page.keyboard.type(user.password)
+    await page.keyboard.press('Enter')
+    await expect(page.getByRole('heading', { name: '我的空间' })).toBeVisible()
   })
 
   test('连续失败触发限流：提示多久之后再试', async ({ page }) => {

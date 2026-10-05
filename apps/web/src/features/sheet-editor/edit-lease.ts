@@ -25,10 +25,14 @@
 //   登录换过之后它已经失效，随即续上；
 // - 释放：页面隐藏、关闭时用 keepalive，结果不管（没送到时服务端按到期回收）；退出编辑时等它有了结果（结果未知也算结束，M3-P2 设计 §3.4；
 //   等多久由 edit-mode.ts 设上限），结果交回服务端确认了没有（没确认时那一代可能还在，阅读页如实说明，审查 A13）。
+// - 与服务端不兼容（M3-P3 设计 §3.5）：续租或续上的申请得到 CLIENT_OUTDATED（本页过旧）或 DOCUMENT_TOO_NEW（文档比服务端新）——
+//   本页写不进去了：停止续租、尽力放掉手里那一代（别人与重新加载之后的本页立即能申请，不用等它到期），经 onIncompatible 通知页面。终态
 import type { AcquiredEditLease, DocumentEditor, EditLeaseLostReason, RenewedEditLease, RevisionSource, UserSummary } from '@nerve-office/contracts'
+import type { Incompatibility } from './client-format.ts'
 import type { LeaseCredentials } from './editor-api.ts'
 import { EDIT_IDLE_SECONDS_MAX, EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, editLeaseHeldDetailsSchema, editLeaseLostDetailsSchema } from '@nerve-office/contracts'
 import { ApiError, isAuthenticationError, isCsrfTokenError, isNotFoundError, isPermissionDeniedError, isTransientError, ResponseFormatError } from '../../shared/api/index.ts'
+import { incompatibilityOf } from './client-format.ts'
 
 /** 被占用而且是自己时再试的次数：刷新页面时旧页面的释放晚到（P1 设计 §7 第一条） */
 export const SAME_USER_RETRIES = 3
@@ -161,7 +165,7 @@ export interface EditLease {
    * 结果未知时服务端按到期回收）之后兑现，从不失败。页面隐藏、关闭时不等它；退出编辑时等它（M3-P2 设计 §3.4）。
    * 兑现为服务端确认了没有（请求成功为 true；会话不是本人时不发、请求失败或结果未知为 false：那一代可能还在服务端，至多一个有效期后
    * 自行到期，退出编辑之后的阅读据此如实说明，审查 A13）。已经失效时什么也不做、为 true（本页没有还在的那一代）；
-   * 释放过再调用时交回那一次的结果
+   * 释放过再调用时交回那一次的结果；与服务端不兼容、停住续租时已经放过一次（halt），交回那一次的结果（审查 B8）
    */
   readonly release: () => Promise<boolean>
 }
@@ -185,6 +189,11 @@ export interface EditLeaseOptions {
   readonly onLost: (loss: LeaseLoss) => void
   /** 续租或续上得到未登录或令牌失效：页面向服务端确认会话；确认之前续租暂停，确认是本人之后由页面恢复 */
   readonly onSessionProblem: (error: ApiError) => void
+  /**
+   * 续租或续上的申请得知本页与服务端不兼容（M3-P3）：已经停止续租、放掉了手里那一代，页面停住保存、说明需要刷新（或只能阅读）。
+   * 每份租约至多一次
+   */
+  readonly onIncompatible: (kind: Incompatibility) => void
 }
 
 /** 申请的结果：持有（租约已经开始心跳；修订号是文档当前的）或被占用（认不出服务端给的详情时 holder 为 undefined） */
@@ -256,9 +265,9 @@ export async function acquireEditLease(options: EditLeaseOptions): Promise<Lease
 
 /**
  * 续租的状态：holding 照常心跳；paused 等页面确认会话；dormant 编辑权中断时人不在、等本页再有操作才续上；
- * lost、released 是终态
+ * lost、released、halted（与服务端不兼容，M3-P3）是终态
  */
-type LeaseState = 'holding' | 'paused' | 'dormant' | 'lost' | 'released'
+type LeaseState = 'holding' | 'paused' | 'dormant' | 'lost' | 'released' | 'halted'
 
 const LOST: LeaseOutcome = { kind: 'lost' }
 const HELD: LeaseOutcome = { kind: 'held' }
@@ -306,7 +315,7 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
    * 每次都要读现在的值
    */
   function ended(): boolean {
-    return state === 'lost' || state === 'released'
+    return state === 'lost' || state === 'released' || state === 'halted'
   }
 
   /** 失效（没有续上）：终态，通知页面 */
@@ -316,6 +325,20 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
     state = 'lost'
     stopTimer()
     options.onLost(loss)
+  }
+
+  /**
+   * 与服务端不兼容（M3-P3）：终态。停止续租，尽力放掉手里那一代（释放不核对数据格式，照样送得到；没送到时至多一个有效期后到期），
+   * 通知页面。token 是本页手里的那一代（续上时刚申请到的新一代另由调用方放掉）。这次释放的结果记下来：之后的 release()（退出编辑时
+   * 等它）交回它，没送到时如实说那一代可能还在，不说成已确认（审查 B8）
+   */
+  function halt(kind: Incompatibility): void {
+    if (ended())
+      return
+    state = 'halted'
+    stopTimer()
+    releasing = api.release(documentId, credentials.token).then(() => true, () => false)
+    options.onIncompatible(kind)
   }
 
   /**
@@ -345,6 +368,11 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
     catch (error) {
       if (ended())
         return LOST
+      const incompatible = incompatibilityOf(error)
+      if (incompatible !== undefined) {
+        halt(incompatible)
+        return LOST
+      }
       const held = heldOf(error)
       if (held !== undefined) {
         fail({ kind: 'held', holder: held.holder })
@@ -433,6 +461,11 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
       await api.renew(documentId, used, idleSeconds())
     }
     catch (error) {
+      const incompatible = incompatibilityOf(error)
+      if (incompatible !== undefined) {
+        halt(incompatible)
+        return
+      }
       const loss = leaseLossOf(error)
       if (loss !== undefined) {
         await handleLoss(loss, used)

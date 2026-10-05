@@ -2,13 +2,13 @@ import type { SaveContentQuery } from '@nerve-office/contracts'
 import type { GzipBody } from '../security/index.ts'
 import type { ContentSaver } from './document-content.service.ts'
 import { Buffer } from 'node:buffer'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
-import { EDIT_LEASE_TTL_SECONDS, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
+import { canonicalContentText, contentHashInput, EDIT_LEASE_TTL_SECONDS, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { DocumentContentService } from './document-content.service.ts'
-import { ALICE, BOB, BOB_SPACE, FakeStore, HTTP_ORIGIN, TEAM_SPACE } from './documents.test-support.ts'
+import { ALICE, BOB, BOB_SPACE, clientFormatGate, CURRENT_CLIENT, FakeStore, HTTP_ORIGIN, TEAM_SPACE, TRANSACTION } from './documents.test-support.ts'
 import { editLeaseTokenDigest } from './edit-lease-token.ts'
 import { savedPayloadDigest } from './payload-digest.ts'
 
@@ -45,15 +45,25 @@ function holding(store: FakeStore, documentId: string, userId: string, clientIns
   })
 }
 
+/** 保存的服务：运维开关（最低客户端构建）按用例给 */
+function serviceOf(store: FakeStore, minimumBuild?: string): DocumentContentService {
+  const { transactions, documents, contents, revisions, receipts, ledger, leases, sessions, policy, audit, inspector, logger } = store.deps
+  return new DocumentContentService(transactions, documents, contents, revisions, receipts, ledger, leases, sessions, policy, audit, clientFormatGate(minimumBuild), inspector, logger)
+}
+
+/** 存量（P3 之前写的）内容：gzip 的快照，没有内容哈希与资源名 */
+function legacyContent(snapshot: string) {
+  return { snapshot: zlib.gzipSync(snapshot), rawBytes: Buffer.byteLength(snapshot), contentHash: null, resourceNames: null }
+}
+
 function setup() {
   const store = new FakeStore()
   // 两人这次的登录都有效（会话守卫放行过；保存在锁下再查一次，M3-P1 审查 A1）
   for (const session of Object.values(SESSIONS))
     store.activeSessions.add(session)
-  const { transactions, documents, contents, revisions, leases, sessions, policy, audit } = store.deps
-  const service = new DocumentContentService(transactions, documents, contents, revisions, leases, sessions, policy, audit)
+  const service = serviceOf(store)
   const document = store.addDocument({ revision: 1 })
-  store.contents.set(document.id, { snapshot: zlib.gzipSync('{}'), rawBytes: 2 })
+  store.contents.set(document.id, legacyContent('{}'))
   store.addRevision({ documentId: document.id, revision: 1, kind: 'created', requestId: '0199a2c4-1f2e-4a3b-8c4d-000000000001', payloadDigest: Buffer.alloc(32), source: null, savedBy: ALICE })
   holding(store, document.id, ALICE)
   return { store, service, document }
@@ -62,16 +72,37 @@ function setup() {
 /** 团队空间里的一份文档（成员按用例另加） */
 function teamDocument(store: FakeStore) {
   const document = store.addDocument({ spaceId: TEAM_SPACE, revision: 1 })
-  store.contents.set(document.id, { snapshot: zlib.gzipSync('{}'), rawBytes: 2 })
+  store.contents.set(document.id, legacyContent('{}'))
   return document
 }
 
-function upload(unitId: string, extra = ''): GzipBody {
-  const decompressed = Buffer.from(`{"id":"${unitId}","sheetOrder":[],"sheets":{}${extra}}`, 'utf8')
+function bodyOf(text: string): GzipBody {
+  const decompressed = Buffer.from(text, 'utf8')
   return { compressed: zlib.gzipSync(decompressed), decompressed }
 }
 
+/** 一份合格的快照：工作簿的结构，extra 是追加在顶层的键（让内容不同） */
+function upload(unitId: string, extra = ''): GzipBody {
+  return bodyOf(`{"id":"${unitId}","sheetOrder":[],"sheets":{}${extra}}`)
+}
+
+/** 带资源的快照：resources 原样写进去 */
+function withResources(unitId: string, resources: readonly { name: string, data: string }[]): GzipBody {
+  return bodyOf(JSON.stringify({ id: unitId, sheetOrder: [], sheets: {}, resources }))
+}
+
+/** 规范化的内容哈希（contracts 的口径，服务端用 SHA-256） */
+function hashOf(body: GzipBody): Buffer {
+  return createHash('sha256').update(contentHashInput(canonicalContentText(body.decompressed.toString('utf8')))).digest()
+}
+
+/** 保存的查询参数：页面上报的是现在的构建与数据格式（M3-P3） */
 function query(overrides: Partial<SaveContentQuery> = {}): SaveContentQuery {
+  return { baseRevision: 1, requestId: randomUUID(), clientInstanceId: CLIENT, localSeq: 5, writeEpoch: 0, ...CURRENT_CLIENT, ...overrides }
+}
+
+/** P3 之前的页面发的查询参数：没有构建、数据格式与"公式待更新" */
+function oldPageQuery(overrides: Partial<SaveContentQuery> = {}): SaveContentQuery {
   return { baseRevision: 1, requestId: randomUUID(), clientInstanceId: CLIENT, localSeq: 5, writeEpoch: 0, ...overrides }
 }
 
@@ -125,25 +156,39 @@ describe('DocumentContentService.read', () => {
 })
 
 describe('DocumentContentService.save', () => {
-  it('成功：修订号加一，换上客户端的 gzip 字节，修订记录带来源，写审计', async () => {
+  it('成功：修订号加一，换上客户端的 gzip 字节（连同规范化的哈希与非空的资源名），修订记录带来源、哈希与客户端构建，文档的信封，写审计', async () => {
     const { store, service, document } = setup()
-    const body = upload(document.unitId)
+    const body = withResources(document.unitId, [{ name: 'SHEET_NOTE_PLUGIN', data: '{"s1":{"0":{"0":{"note":"n"}}}}' }, { name: 'SHEET_FILTER_PLUGIN', data: '{}' }])
     const request = query()
-    expect(await service.save(saver(ALICE), document.id, request, body, HTTP_ORIGIN)).toEqual({ revision: 2, savedAt: '2026-09-27T08:00:00.000Z' })
+    expect(await service.save(saver(ALICE), document.id, request, body, HTTP_ORIGIN)).toEqual({ revision: 2, savedAt: '2026-09-27T08:00:00.000Z', unchanged: false })
     expect(store.documents.get(document.id)?.revision).toBe(2)
-    expect(store.repositories.documents.advanceRevision).toHaveBeenCalledWith(document.id, 2, UNIVER_SDK_VERSION, expect.anything())
-    expect(store.contents.get(document.id)).toEqual({ snapshot: body.compressed, rawBytes: body.decompressed.length })
-    expect(store.revisions.at(-1)).toMatchObject({ documentId: document.id, revision: 2, kind: 'saved', requestId: request.requestId, source: { clientInstanceId: CLIENT, localSeq: 5 }, savedBy: ALICE })
+    // 信封：SDK 版本是页面上报、核对过的（等于服务端的），客户端构建，"公式待更新"没带等于否
+    expect(store.repositories.documents.advanceRevision).toHaveBeenCalledWith(document.id, 2, { sdkVersion: UNIVER_SDK_VERSION, clientBuild: '0.1.0', formulasPending: false }, expect.anything())
+    expect(store.clientBuilds.get(document.id)).toBe('0.1.0')
+    expect(store.contents.get(document.id)).toEqual({ snapshot: body.compressed, rawBytes: body.decompressed.length, contentHash: hashOf(body), resourceNames: ['SHEET_NOTE_PLUGIN'] })
+    expect(store.revisions.at(-1)).toMatchObject({ documentId: document.id, revision: 2, kind: 'saved', requestId: request.requestId, source: { clientInstanceId: CLIENT, localSeq: 5 }, savedBy: ALICE, contentHash: hashOf(body), clientBuild: '0.1.0' })
     expect(store.revisions.at(-1)?.payloadDigest).toEqual(savedPayloadDigest(1, body.decompressed))
     expect(store.audits).toEqual([{ action: 'documents.content_saved', actor: { type: 'user', id: ALICE }, target: { type: 'document', id: document.id }, origin: HTTP_ORIGIN, details: { revision: 2 } }])
+    expect(store.receipts).toEqual([])
   })
 
-  it('快照不合格：SNAPSHOT_INVALID，不开事务（与文档无关，别人的与不存在的结果相同）', async () => {
+  it('快照不合格：SNAPSHOT_INVALID（details 是违反的规则），不开事务（与文档无关，别人的与不存在的结果相同）；记一条 warn（规则与文档 id），不记内容', async () => {
     const { store, service, document } = setup()
-    const decompressed = Buffer.from('[1]', 'utf8')
-    const error = await rejection(service.save(saver(ALICE), document.id, query(), { compressed: zlib.gzipSync(decompressed), decompressed }, HTTP_ORIGIN))
-    expect(error.code).toBe('SNAPSHOT_INVALID')
+    const error = await rejection(service.save(saver(ALICE), document.id, query(), bodyOf('[1]'), HTTP_ORIGIN))
+    expect([error.code, error.status, error.details]).toEqual(['SNAPSHOT_INVALID', 422, { rule: 'structure' }])
     expect(store.transactions.run).not.toHaveBeenCalled()
+    // 检查池按发起的账户限份数（审查 A2）：传的是保存的人
+    expect(store.inspector.inspect).toHaveBeenCalledWith(expect.anything(), 'sheet@1', ALICE)
+    const others = await rejection(service.save(saver(BOB), document.id, query(), bodyOf('[1]'), HTTP_ORIGIN))
+    expect(store.inspector.inspect).toHaveBeenLastCalledWith(expect.anything(), 'sheet@1', BOB)
+    const missing = await rejection(service.save(saver(ALICE), '0199a2c4-0000-7000-8000-0000000000ff', query(), bodyOf('[1]'), HTTP_ORIGIN))
+    expect([others.details, missing.details]).toEqual([{ rule: 'structure' }, { rule: 'structure' }])
+    expect(store.logs().filter(entry => entry.msg === '快照不合格，拒绝写入').map(entry => [entry.level, entry.rule, entry.documentId])).toEqual([
+      ['warn', 'structure', document.id],
+      ['warn', 'structure', document.id],
+      ['warn', 'structure', '0199a2c4-0000-7000-8000-0000000000ff'],
+    ])
+    expect(store.logLines.join('')).not.toContain('[1]')
   })
 
   it('别人的与不存在的：NOT_FOUND；两者都判断一次权限', async () => {
@@ -154,6 +199,44 @@ describe('DocumentContentService.save', () => {
     expect(store.spaces.accessFactsOf).toHaveBeenCalledTimes(2)
     expect(store.spaces.accessFactsOf).toHaveBeenLastCalledWith(ALICE, '00000000-0000-0000-0000-000000000000', expect.anything())
     expect(store.revisions).toHaveLength(1)
+  })
+
+  it('requestId 的锁是事务的第一把锁（审查 A3）：先于判断访问与锁文档行，与新建、复制、另存为副本取锁的先后一致；看不到与不存在的同样取它', async () => {
+    const { store, service, document } = setup()
+    const request = query()
+    await service.save(saver(ALICE), document.id, request, upload(document.unitId), HTTP_ORIGIN)
+    expect(store.repositories.revisions.lockRequest).toHaveBeenCalledExactlyOnceWith(request.requestId, expect.anything())
+    const lock = store.repositories.revisions.lockRequest.mock.invocationCallOrder[0] ?? Number.NaN
+    const checked = store.repositories.documents.findById.mock.invocationCallOrder[0] ?? Number.NaN
+    const locked = store.repositories.documents.lockById.mock.invocationCallOrder[0] ?? Number.NaN
+    expect(lock).toBeLessThan(checked)
+    expect(lock).toBeLessThan(locked)
+    // 再查重放在锁下（锁之后）
+    const rechecked = store.repositories.receipts.findByRequestId.mock.invocationCallOrder.at(-1) ?? Number.NaN
+    expect(lock).toBeLessThan(rechecked)
+    // 看不到的与不存在的：同样先取这把锁（与文档无关），再得到 NOT_FOUND
+    store.repositories.revisions.lockRequest.mockClear()
+    expect((await rejection(service.save(saver(BOB), document.id, query(), upload(document.unitId), HTTP_ORIGIN))).code).toBe('NOT_FOUND')
+    expect((await rejection(service.save(saver(ALICE), '0199a2c4-0000-7000-8000-0000000000ff', query(), upload(document.unitId), HTTP_ORIGIN))).code).toBe('NOT_FOUND')
+    expect(store.repositories.revisions.lockRequest).toHaveBeenCalledTimes(2)
+  })
+
+  it('锁下的再查在这个事务里读两张表（复验 RA14）：不在连接池上另借连接——事务已经占着一个连接，池子满时另借会与别的事务互相等待；预检在事务之外', async () => {
+    const { store, service, document } = setup()
+    const request = query()
+    await service.save(saver(ALICE), document.id, request, upload(document.unitId), HTTP_ORIGIN)
+    for (const findByRequestId of [store.repositories.revisions.findByRequestId, store.repositories.receipts.findByRequestId])
+      expect(findByRequestId.mock.calls).toEqual([[request.requestId, undefined], [request.requestId, TRANSACTION]])
+  })
+
+  it('别的文档上的回执用了这个 requestId：内容不同的保存同样 REQUEST_ID_CONFLICT，不写修订记录（两张表之间也只用一次，审查 A3）', async () => {
+    const { store, service, document } = setup()
+    const other = store.addDocument({ revision: 1 })
+    const request = query()
+    store.receipts.push({ requestId: request.requestId, documentId: other.id, revision: 1, payloadDigest: Buffer.alloc(32), savedBy: ALICE, savedAt: new Date('2026-09-27T08:00:00.000Z') })
+    expect((await rejection(service.save(saver(ALICE), document.id, request, upload(document.unitId, ',"z":1'), HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+    expect(store.revisions).toHaveLength(1)
+    expect(store.documents.get(document.id)?.revision).toBe(1)
   })
 
   it('先判断权限再加锁：没有权限的请求不在别人的文档上取锁（审查 A2）', async () => {
@@ -216,10 +299,16 @@ describe('DocumentContentService.save', () => {
     expect(await service.save(saver(BOB), document.id, query(), upload(document.unitId), HTTP_ORIGIN)).toMatchObject({ revision: 2 })
   })
 
-  it('unitId 不是这份文档的：SNAPSHOT_INVALID', async () => {
-    const { service, document } = setup()
+  it('unitId 不是这份文档的：SNAPSHOT_INVALID（规则 unit-id），什么也不写', async () => {
+    const { store, service, document } = setup()
     const error = await rejection(service.save(saver(ALICE), document.id, query(), upload('another-unit'), HTTP_ORIGIN))
-    expect(error).toMatchObject({ code: 'SNAPSHOT_INVALID', message: '表格内容不属于这份文档' })
+    expect(error).toMatchObject({ code: 'SNAPSHOT_INVALID', message: '表格内容不属于这份文档', details: { rule: 'unit-id' } })
+    expect(store.documents.get(document.id)?.revision).toBe(1)
+  })
+
+  it('unitId 在基准修订号之后（M3-P3 设计 §3.1）：落后的页面先得到冲突，即使它的快照的 unitId 也不对', async () => {
+    const { service, document } = setup()
+    expect((await rejection(service.save(saver(ALICE), document.id, query({ baseRevision: 7 }), upload('another-unit'), HTTP_ORIGIN))).code).toBe('DOCUMENT_REVISION_CONFLICT')
   })
 
   it('基准修订号不是当前的：DOCUMENT_REVISION_CONFLICT，详情带当前修订号及其来源', async () => {
@@ -313,8 +402,11 @@ describe('DocumentContentService.save', () => {
       return store.documents.get(id)
     }
 
+    // 预检时还没有记录（并发的同一次请求：前一方还在提交），拿到锁时已经有了：锁下的再查给出原来的结果
+    store.repositories.revisions.findByRequestId.mockResolvedValueOnce(undefined)
     store.repositories.documents.lockById.mockImplementationOnce(demoteWhileWaiting)
     expect(await service.save(saver(BOB), document.id, request, body, HTTP_ORIGIN)).toEqual(first)
+    expect(store.repositories.documents.lockById).toHaveBeenCalledTimes(2)
     store.setMember(TEAM_SPACE, BOB, 'editor')
     store.repositories.documents.lockById.mockImplementationOnce(demoteWhileWaiting)
     expect((await rejection(service.save(saver(BOB), document.id, query({ baseRevision: 2 }), upload(document.unitId), HTTP_ORIGIN))).code).toBe('PERMISSION_DENIED')
@@ -341,7 +433,7 @@ describe('DocumentContentService.save', () => {
     expect((await rejection(service.save(saver(ALICE), document.id, { ...request, baseRevision: 2 }, upload(document.unitId), HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
 
     const another = store.addDocument({ revision: 2 })
-    store.contents.set(another.id, { snapshot: zlib.gzipSync('{}'), rawBytes: 2 })
+    store.contents.set(another.id, legacyContent('{}'))
     expect((await rejection(service.save(saver(ALICE), another.id, request, upload(another.unitId), HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
 
     const bobs = store.addDocument({ spaceId: BOB_SPACE, unitId: document.unitId })
@@ -493,5 +585,231 @@ describe('DocumentContentService.save：这次登录在锁下再核对一次（M
     store.activeSessions.delete(SESSIONS[ALICE] ?? '')
     expect(await service.save(saver(ALICE), document.id, request, body, HTTP_ORIGIN)).toEqual(first)
     expect(store.documents.get(document.id)?.revision).toBe(2)
+  })
+})
+
+describe('DocumentContentService.save：处理的顺序（M3-P3 设计 §3.1）——重放先于其余一切检查', () => {
+  it('旧页面的重放：升级之前提交了、回包丢了，旧页面（不带构建与数据格式）原样重发，拿到原来的结果——不被拦成过旧，也不再检查快照', async () => {
+    const { store, service, document } = setup()
+    const request = oldPageQuery()
+    const body = upload(document.unitId)
+    // 升级之前的那次保存：直接摆下它的修订记录（摘要按 P3 之前的写法——没有"公式待更新"时与现在逐字节相同）
+    store.addRevision({ documentId: document.id, revision: 2, kind: 'saved', requestId: request.requestId, payloadDigest: savedPayloadDigest(1, body.decompressed), source: { clientInstanceId: CLIENT, localSeq: 5 }, savedBy: ALICE })
+    store.documents.set(document.id, { ...document, revision: 2 })
+    expect(await service.save(saver(ALICE), document.id, request, body, HTTP_ORIGIN)).toEqual({ revision: 2, savedAt: '2026-09-27T08:00:00.000Z', unchanged: false })
+    expect(store.inspector.inspect).not.toHaveBeenCalled()
+    expect(store.transactions.run).not.toHaveBeenCalled()
+    // 不是重放的同一种请求（新的 requestId）照样被拦下：过旧
+    const outdated = await rejection(service.save(saver(ALICE), document.id, oldPageQuery({ baseRevision: 2 }), body, HTTP_ORIGIN))
+    expect([outdated.code, outdated.status, outdated.details]).toEqual(['CLIENT_OUTDATED', 409, { reason: 'format' }])
+  })
+
+  it('规则收紧之后的重放：当初存下的内容按现在的规则不合格（例如 data: 图片），原样重发照样拿到原来的结果，不检查快照', async () => {
+    const { store, service, document } = setup()
+    const request = query()
+    const body = bodyOf(JSON.stringify({ id: document.unitId, sheetOrder: [], sheets: {}, resources: [{ name: 'SHEET_DRAWING_PLUGIN', data: JSON.stringify({ s1: { data: { d1: { source: 'data:image/png;base64,AAAA' } }, order: [] } }) }] }))
+    store.addRevision({ documentId: document.id, revision: 2, kind: 'saved', requestId: request.requestId, payloadDigest: savedPayloadDigest(1, body.decompressed), source: { clientInstanceId: CLIENT, localSeq: 5 }, savedBy: ALICE })
+    store.documents.set(document.id, { ...document, revision: 2 })
+    expect(await service.save(saver(ALICE), document.id, request, body, HTTP_ORIGIN)).toMatchObject({ revision: 2, unchanged: false })
+    expect(store.inspector.inspect).not.toHaveBeenCalled()
+    // 不是重放（新的 requestId）：按现在的规则被拒
+    expect((await rejection(service.save(saver(ALICE), document.id, query({ baseRevision: 2 }), body, HTTP_ORIGIN))).details).toEqual({ rule: 'image-source' })
+  })
+
+  it('回执的重放同样先于一切检查：内容相同的那次确认结果未知，之后升级了（旧页面不带构建与数据格式）、规则也收紧了，原样重发拿到原来的确认（unchanged），不被拦成过旧、不检查快照、不开事务', async () => {
+    const { store, service, document } = setup()
+    const request = oldPageQuery()
+    // 内容按现在的规则不合格（data: 图片）：只有重放能让它拿到结果
+    const body = bodyOf(JSON.stringify({ id: document.unitId, sheetOrder: [], sheets: {}, resources: [{ name: 'SHEET_DRAWING_PLUGIN', data: JSON.stringify({ s1: { data: { d1: { source: 'data:image/png;base64,AAAA' } }, order: [] } }) }] }))
+    // 升级之前的那次确认：直接摆下它的回执（摘要按 P3 之前的写法——没有"公式待更新"时与现在逐字节相同）
+    const savedAt = new Date('2026-09-26T08:00:00.000Z')
+    store.receipts.push({ requestId: request.requestId, documentId: document.id, revision: 1, payloadDigest: savedPayloadDigest(1, body.decompressed), savedBy: ALICE, savedAt })
+    expect(await service.save(saver(ALICE), document.id, request, body, HTTP_ORIGIN)).toEqual({ revision: 1, savedAt: savedAt.toISOString(), unchanged: true })
+    expect(store.inspector.inspect).not.toHaveBeenCalled()
+    expect(store.transactions.run).not.toHaveBeenCalled()
+    expect(store.receipts).toHaveLength(1)
+    // 现在的页面原样重发同样是重放（不检查快照）；不是重放的（新的 requestId）照样被拦下：旧页面过旧，现在的页面快照不合格
+    expect(await service.save(saver(ALICE), document.id, { ...query(), requestId: request.requestId }, body, HTTP_ORIGIN)).toMatchObject({ revision: 1, unchanged: true })
+    expect(store.inspector.inspect).not.toHaveBeenCalled()
+    expect((await rejection(service.save(saver(ALICE), document.id, oldPageQuery(), body, HTTP_ORIGIN))).details).toEqual({ reason: 'format' })
+    expect((await rejection(service.save(saver(ALICE), document.id, query(), body, HTTP_ORIGIN))).details).toEqual({ rule: 'image-source' })
+  })
+
+  it('预检不提前回答：requestId 用过却不是这一次（别人的、另一份文档的、内容不同的）、看不到了，都往下走——由事务里的再查给出 REQUEST_ID_CONFLICT 或 NOT_FOUND', async () => {
+    const { store, service, document } = setup()
+    const request = query()
+    await service.save(saver(ALICE), document.id, request, upload(document.unitId), HTTP_ORIGIN)
+    store.inspector.inspect.mockClear()
+    // 内容不同：预检没有结论，照常检查快照，事务里是 REQUEST_ID_CONFLICT
+    expect((await rejection(service.save(saver(ALICE), document.id, { ...request, baseRevision: 2 }, upload(document.unitId, ',"z":1'), HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+    expect(store.inspector.inspect).toHaveBeenCalledTimes(1)
+  })
+
+  it('格式拦截在快照检查之前、事务之前：过旧的页面带着不合格的快照得到的是 CLIENT_OUTDATED（先说需要刷新），不检查快照、不开事务', async () => {
+    const { store, service, document } = setup()
+    for (const [format, reason] of [
+      [{ univerVersion: '0.9.0' }, 'format'],
+      [{ profile: 'sheet@2' }, 'format'],
+      [{ formatVersion: 2 }, 'format'],
+      [{ clientBuild: undefined }, 'build'],
+    ] as const) {
+      const error = await rejection(service.save(saver(ALICE), document.id, query(format), bodyOf('[1]'), HTTP_ORIGIN))
+      expect([error.code, error.details], JSON.stringify(format)).toEqual(['CLIENT_OUTDATED', { reason }])
+    }
+    expect(store.inspector.inspect).not.toHaveBeenCalled()
+    expect(store.transactions.run).not.toHaveBeenCalled()
+  })
+
+  it('运维开关（NERVE_MIN_CLIENT_BUILD）：构建低于它 → CLIENT_OUTDATED（build）；不低于它照常保存', async () => {
+    const { store, document } = setup()
+    const service = serviceOf(store, '0.2.0')
+    expect((await rejection(service.save(saver(ALICE), document.id, query({ clientBuild: '0.1.9' }), upload(document.unitId), HTTP_ORIGIN))).details).toEqual({ reason: 'build' })
+    expect(await service.save(saver(ALICE), document.id, query({ clientBuild: '0.2.0+0123abc' }), upload(document.unitId), HTTP_ORIGIN)).toMatchObject({ revision: 2 })
+    expect(store.clientBuilds.get(document.id)).toBe('0.2.0+0123abc')
+  })
+
+  it('文档由比服务端新的版本写过（回滚之后）：DOCUMENT_TOO_NEW，在登录的核对之后、能编辑与租约之前，什么也不写', async () => {
+    const { store, service, document } = setup()
+    store.documents.set(document.id, { ...document, sdkVersion: '99.0.0' })
+    const error = await rejection(service.save(saver(ALICE), document.id, query(), upload(document.unitId), HTTP_ORIGIN))
+    expect([error.code, error.status]).toEqual(['DOCUMENT_TOO_NEW', 409])
+    expect(store.leases.findByDocument).not.toHaveBeenCalled()
+    expect(store.revisions).toHaveLength(1)
+    // 看不到的照样 404：不透露它比服务端新
+    expect((await rejection(service.save(saver(BOB), document.id, query(), upload(document.unitId), HTTP_ORIGIN))).code).toBe('NOT_FOUND')
+  })
+})
+
+describe('DocumentContentService.save：不缩水（00 号计划书 §8.2，M3-P3 设计 §3.3）', () => {
+  const NOTE = { name: 'SHEET_NOTE_PLUGIN', data: '{"s1":{"0":{"0":{"note":"n"}}}}' }
+
+  it('上一版非空的资源这一版不在了：SNAPSHOT_INVALID（resource-missing），记 warn（缺了哪些）；变空不算缩水', async () => {
+    const { store, service, document } = setup()
+    await service.save(saver(ALICE), document.id, query(), withResources(document.unitId, [NOTE]), HTTP_ORIGIN)
+    expect(store.contents.get(document.id)?.resourceNames).toEqual(['SHEET_NOTE_PLUGIN'])
+    const error = await rejection(service.save(saver(ALICE), document.id, query({ baseRevision: 2 }), upload(document.unitId), HTTP_ORIGIN))
+    expect([error.code, error.details]).toEqual(['SNAPSHOT_INVALID', { rule: 'resource-missing' }])
+    expect(store.logs().find(entry => entry.rule === 'resource-missing')).toMatchObject({ level: 'warn', documentId: document.id, missing: ['SHEET_NOTE_PLUGIN'] })
+    expect(store.documents.get(document.id)?.revision).toBe(2)
+    // 在、但删光了（变空）：照常保存，这一版之后没有非空的资源
+    expect(await service.save(saver(ALICE), document.id, query({ baseRevision: 2 }), withResources(document.unitId, [{ name: 'SHEET_NOTE_PLUGIN', data: '{"s1":{}}' }]), HTTP_ORIGIN)).toMatchObject({ revision: 3 })
+    expect(store.contents.get(document.id)?.resourceNames).toEqual([])
+  })
+
+  it('存量（资源名为空）：解析上一版得到非空的资源；白名单之外的（例如 M1 去掉的 AuthzIoMock）不算缩水', async () => {
+    const { store, service, document } = setup()
+    store.contents.set(document.id, legacyContent(JSON.stringify({ id: document.unitId, resources: [NOTE, { name: 'SHEET_AuthzIoMockService_PLUGIN', data: '{"x":1}' }, { name: 'SHEET_FILTER_PLUGIN', data: '' }] })))
+    expect((await rejection(service.save(saver(ALICE), document.id, query(), upload(document.unitId), HTTP_ORIGIN))).details).toEqual({ rule: 'resource-missing' })
+    expect(await service.save(saver(ALICE), document.id, query(), withResources(document.unitId, [NOTE]), HTTP_ORIGIN)).toMatchObject({ revision: 2 })
+  })
+
+  it('存量解析不出来（坏了的内容）：没有可核对的上一版，记一条 warn，照常保存', async () => {
+    const { store, service, document } = setup()
+    store.contents.set(document.id, { ...legacyContent('x'), snapshot: Buffer.from('不是 gzip') })
+    expect(await service.save(saver(ALICE), document.id, query(), upload(document.unitId), HTTP_ORIGIN)).toMatchObject({ revision: 2 })
+    expect(store.logs().find(entry => entry.msg === '存量的快照解析不出资源，这一次保存不核对不缩水')).toMatchObject({ level: 'warn', documentId: document.id })
+  })
+})
+
+describe('DocumentContentService.save：内容相同不递增与回执（M3-P3 设计 §3.7）', () => {
+  it('内容与当前相同：修订号不变（给出当前修订与它的时间，unchanged），不写内容、修订记录与审计，写一条回执', async () => {
+    const { store, service, document } = setup()
+    const body = upload(document.unitId)
+    await service.save(saver(ALICE), document.id, query(), body, HTTP_ORIGIN)
+    const stored = store.contents.get(document.id)
+    const request = query({ baseRevision: 2 })
+    expect(await service.save(saver(ALICE), document.id, request, upload(document.unitId), HTTP_ORIGIN)).toEqual({ revision: 2, savedAt: '2026-09-27T08:00:00.000Z', unchanged: true })
+    expect(store.documents.get(document.id)?.revision).toBe(2)
+    expect(store.contents.get(document.id)).toBe(stored)
+    expect(store.revisions).toHaveLength(2)
+    expect(store.audits).toHaveLength(1)
+    expect(store.receipts).toEqual([{ requestId: request.requestId, documentId: document.id, revision: 2, payloadDigest: savedPayloadDigest(2, body.decompressed), savedBy: ALICE, savedAt: new Date('2026-09-27T08:00:00.000Z') }])
+  })
+
+  it('只改了视图状态（缩放、滚动）也算相同；存量（哈希为空）按不同处理，第一次保存多一个修订', async () => {
+    const { store, service, document } = setup()
+    expect(store.contents.get(document.id)?.contentHash).toBeNull()
+    const sheet = (zoomRatio: number) => bodyOf(JSON.stringify({ id: document.unitId, sheetOrder: ['s1'], sheets: { s1: { id: 's1', zoomRatio, scrollTop: zoomRatio * 10 } } }))
+    expect(await service.save(saver(ALICE), document.id, query(), sheet(1), HTTP_ORIGIN)).toMatchObject({ revision: 2, unchanged: false })
+    expect(await service.save(saver(ALICE), document.id, query({ baseRevision: 2 }), sheet(2), HTTP_ORIGIN)).toMatchObject({ revision: 2, unchanged: true })
+  })
+
+  it('内容相同仍要过全部检查：基准过时是冲突、编辑权失效是 EDIT_LEASE_LOST（access.spec 的情形），都在比较内容之前', async () => {
+    const { store, service, document } = setup()
+    await service.save(saver(ALICE), document.id, query(), upload(document.unitId), HTTP_ORIGIN)
+    expect((await rejection(service.save(saver(ALICE), document.id, query({ baseRevision: 1 }), upload(document.unitId), HTTP_ORIGIN))).code).toBe('DOCUMENT_REVISION_CONFLICT')
+    store.leaseRecords.clear()
+    expect((await rejection(service.save(saver(ALICE), document.id, query({ baseRevision: 2 }), upload(document.unitId), HTTP_ORIGIN))).code).toBe('EDIT_LEASE_LOST')
+    expect(store.receipts).toEqual([])
+  })
+
+  it('回执的重放：内容相同的那次保存结果未知，之后编辑权到期、被别人接手、登录被撤销，原样重发照样拿到原来的确认（unchanged），不再写回执', async () => {
+    const { store, service, document } = setup()
+    await service.save(saver(ALICE), document.id, query(), upload(document.unitId), HTTP_ORIGIN)
+    const request = query({ baseRevision: 2 })
+    const first = await service.save(saver(ALICE), document.id, request, upload(document.unitId), HTTP_ORIGIN)
+    store.databaseNow = new Date(store.databaseNow.getTime() + EDIT_LEASE_TTL_SECONDS * 1000)
+    holding(store, document.id, BOB)
+    store.activeSessions.delete(SESSIONS[ALICE] ?? '')
+    expect(await service.save(saver(ALICE), document.id, request, upload(document.unitId), HTTP_ORIGIN)).toEqual(first)
+    expect(store.receipts).toHaveLength(1)
+    // 同一个 requestId、内容不同：不是那一次，REQUEST_ID_CONFLICT
+    store.activeSessions.add(SESSIONS[ALICE] ?? '')
+    holding(store, document.id, ALICE)
+    expect((await rejection(service.save(saver(ALICE), document.id, request, upload(document.unitId, ',"z":1'), HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+  })
+
+  it('回执的 requestId 刚被别处用掉：REQUEST_ID_CONFLICT，标记不改', async () => {
+    const { store, service, document } = setup()
+    await service.save(saver(ALICE), document.id, query({ formulasPending: true }), upload(document.unitId), HTTP_ORIGIN)
+    store.repositories.receipts.insert.mockResolvedValueOnce(undefined)
+    // 收齐之后的再保存本该清掉标记：回执没写成，标记照旧
+    expect((await rejection(service.save(saver(ALICE), document.id, query({ baseRevision: 2 }), upload(document.unitId), HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+    expect(store.repositories.documents.setFormulasPending).not.toHaveBeenCalled()
+    expect(store.documents.get(document.id)?.formulasPending).toBe(true)
+  })
+})
+
+describe('DocumentContentService.save："公式待更新"（M3-P3 设计 §3.8）', () => {
+  it('写入时设成请求里的值；内容相同、修订号不变时照样清掉（收齐之后的再保存）', async () => {
+    const { store, service, document } = setup()
+    await service.save(saver(ALICE), document.id, query({ formulasPending: true }), upload(document.unitId), HTTP_ORIGIN)
+    expect(store.documents.get(document.id)?.formulasPending).toBe(true)
+    // 内容相同、这次也没收齐：留着
+    expect(await service.save(saver(ALICE), document.id, query({ baseRevision: 2, formulasPending: true }), upload(document.unitId), HTTP_ORIGIN)).toMatchObject({ revision: 2, unchanged: true })
+    expect(store.repositories.documents.setFormulasPending).not.toHaveBeenCalled()
+    expect(await service.save(saver(ALICE), document.id, query({ baseRevision: 2, formulasPending: false }), upload(document.unitId), HTTP_ORIGIN)).toMatchObject({ revision: 2, unchanged: true })
+    expect(store.documents.get(document.id)?.formulasPending).toBe(false)
+    expect(store.repositories.documents.setFormulasPending).toHaveBeenCalledTimes(1)
+    // 标记没变时不改
+    await service.save(saver(ALICE), document.id, query({ baseRevision: 2 }), upload(document.unitId), HTTP_ORIGIN)
+    expect(store.repositories.documents.setFormulasPending).toHaveBeenCalledTimes(1)
+  })
+
+  it('内容相同时只清不设（审查 A6）：库里已经收齐，这次捕获没等到收齐（标记为真）——内容相同就是公式的结果相同，这份就是收齐的那一版，标记不变；回执照写', async () => {
+    const { store, service, document } = setup()
+    await service.save(saver(ALICE), document.id, query(), upload(document.unitId), HTTP_ORIGIN)
+    expect(store.documents.get(document.id)?.formulasPending).toBe(false)
+    const request = query({ baseRevision: 2, formulasPending: true })
+    expect(await service.save(saver(ALICE), document.id, request, upload(document.unitId), HTTP_ORIGIN)).toMatchObject({ revision: 2, unchanged: true })
+    expect(store.documents.get(document.id)?.formulasPending).toBe(false)
+    expect(store.repositories.documents.setFormulasPending).not.toHaveBeenCalled()
+    expect(store.receipts.map(receipt => receipt.requestId)).toEqual([request.requestId])
+    // 内容变了的写入照样按请求设上
+    expect(await service.save(saver(ALICE), document.id, query({ baseRevision: 2, formulasPending: true }), upload(document.unitId, ',"z":1'), HTTP_ORIGIN)).toMatchObject({ revision: 3, unchanged: false })
+    expect(store.documents.get(document.id)?.formulasPending).toBe(true)
+  })
+
+  it('计入负载摘要：同一个 requestId 而标记不同，是另一个请求（REQUEST_ID_CONFLICT）；不带标记等于否', async () => {
+    const { store, service, document } = setup()
+    const request = query({ formulasPending: true })
+    const body = upload(document.unitId)
+    const first = await service.save(saver(ALICE), document.id, request, body, HTTP_ORIGIN)
+    expect(store.revisions.at(-1)?.payloadDigest).toEqual(savedPayloadDigest(1, body.decompressed, true))
+    expect(await service.save(saver(ALICE), document.id, request, body, HTTP_ORIGIN)).toEqual(first)
+    expect((await rejection(service.save(saver(ALICE), document.id, { ...request, formulasPending: false }, body, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+    const plain = query({ baseRevision: 2 })
+    await service.save(saver(ALICE), document.id, plain, upload(document.unitId, ',"a":1'), HTTP_ORIGIN)
+    expect(await service.save(saver(ALICE), document.id, { ...plain, formulasPending: false }, upload(document.unitId, ',"a":1'), HTTP_ORIGIN)).toMatchObject({ revision: 3 })
   })
 })

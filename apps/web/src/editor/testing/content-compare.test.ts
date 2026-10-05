@@ -1,6 +1,9 @@
 // "改动被拦住"的比较口径（content-compare.ts）：E2E 与页面自检共用。内容的规范化、两份快照比较时不看键的顺序、
 // 命令日志里"改文档的 mutation"的判定与编辑器的变更检测一致。
+// content-compare.ts 不引用任何模块（E2E 也引用它，lint 规则 nerve/editor-testing-shared），用不了 contracts 的规范化内容
+// （documents/content-canonical.ts，服务端"内容相同不递增"的口径）：这里核对两边对"内容相同"的判断一致
 import type { LoggedCommand } from './content-compare.ts'
+import { canonicalContentText } from '@nerve-office/contracts'
 import { describe, expect, it, vi } from 'vitest'
 import { EXCLUDED_EXECUTION_OPTIONS } from '../change-tracking/change-classifier.ts'
 import { CHANGE_DETECTION_EXCLUDED_MUTATIONS } from '../profile/sheet-profile.ts'
@@ -32,6 +35,13 @@ function command(overrides: Partial<LoggedCommand> = {}): LoggedCommand {
 }
 
 describe('快照的内容（比较的口径）', () => {
+  it('资源 data 只在第一层（每张表一个键）去掉空值，更深的层级原样保留（与服务端的规范化内容同一个口径，审查 A5）', () => {
+    const resources = [{ name: 'SHEET_FILTER_PLUGIN', data: '{"s1":{"ref":{"startRow":0},"cachedFilteredOut":[],"filterColumns":[{"colId":0,"filters":{}}]},"s2":{}}' }]
+    expect((contentOf(snapshot({ resources })) as { resources: unknown }).resources).toEqual([
+      { name: 'SHEET_FILTER_PLUGIN', data: { s1: { ref: { startRow: 0 }, cachedFilteredOut: [], filterColumns: [{ colId: 0, filters: {} }] } } },
+    ])
+  })
+
   it('去掉工作表的视图状态、取值为空的资源，资源按名称排序', () => {
     expect(contentOf(snapshot())).toEqual({
       id: UNIT,
@@ -54,6 +64,30 @@ describe('快照的内容（比较的口径）', () => {
 
   it('排好键的写法：键的顺序不影响，数组的顺序照旧', () => {
     expect(canonicalJson({ b: 1, a: { d: [2, 1], c: null } })).toBe('{"a":{"c":null,"d":[2,1]},"b":1}')
+  })
+
+  it('与服务端的规范化内容（contracts 的 canonicalContentText）判断一致：一样的算相同，不一样的算不同', () => {
+    const filtered = (column: string) => ({ name: 'SHEET_FILTER_PLUGIN', data: `{"s1":{"ref":{"startRow":0},"filterColumns":[${column}]}}` })
+    const variants = [
+      snapshot(),
+      snapshot({ sheets: { s1: { cellData: { 0: { 0: { v: 1 } } }, name: '数据', zoomRatio: 2, scrollTop: 300, scrollLeft: 10 } } }),
+      // 资源 data 的第一层：补上的空规则表与"不在"等价
+      snapshot({ resources: [{ name: 'SHEET_RANGE_PROTECTION_PLUGIN', data: '{"s1":[]}' }, { name: 'SHEET_FILTER_PLUGIN', data: '{"s1":{"ref":{"startRow":0}},"s2":{}}' }, { name: 'SHEET_DATA_VALIDATION_PLUGIN', data: '{"s1":[],"s2":[]}' }] }),
+      // 更深的层级：空值是内容（审查 A5）
+      snapshot({ resources: [{ name: 'SHEET_RANGE_PROTECTION_PLUGIN', data: '{"s1":[]}' }, { name: 'SHEET_FILTER_PLUGIN', data: '{"s1":{"ref":{"startRow":0},"filterColumns":[]}}' }] }),
+      snapshot({ resources: [filtered('{"colId":0,"customFilters":{"customFilters":[{"val":""}]}}')] }),
+      snapshot({ resources: [filtered('{"colId":0,"filters":{}}')] }),
+      snapshot({ resources: [filtered('{"colId":0}')] }),
+      snapshot({ resources: [{ name: 'SHEET_FILTER_PLUGIN', data: '{"s1":{"ref":{"startRow":1}}}' }] }),
+      snapshot({ sheets: { s1: { name: '数据', cellData: { 0: { 0: { v: 2 } } } } } }),
+      snapshot({ sheets: { s1: { name: '数据', cellData: { 0: { 0: { v: 1, m: '' } } } } } }),
+      snapshot({ sheetOrder: ['s1', 's2'] }),
+      snapshot({ resources: [] }),
+    ]
+    for (const a of variants) {
+      for (const b of variants)
+        expect(sameContent(a, b), `${a}\n${b}`).toBe(canonicalContentText(a) === canonicalContentText(b))
+    }
   })
 })
 

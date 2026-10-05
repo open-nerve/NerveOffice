@@ -1,26 +1,33 @@
 // documents 模块单元测试的假仓储：按内存里的记录实现仓储的接口，事务直接执行。
 // 访问策略用真实的实现（EffectiveAccessPolicy），它依赖的空间事实由内存里的空间与成员算出、单独授权由内存里的授权给出（M2-P5）：
 // 测试覆盖的是真实的权限规则。
-import type { GrantRole, SpaceRole, SpaceStatus, SpaceType } from '@nerve-office/contracts'
+import type { ClientFormat, DocumentProfile, GrantRole, SpaceRole, SpaceStatus, SpaceType } from '@nerve-office/contracts'
 import type { AuditEvent, AuditService } from '../audit/index.ts'
 import type { SessionService } from '../auth/index.ts'
+import type { AppConfig } from '../config/index.ts'
 import type { Transaction, TransactionRunner } from '../database/index.ts'
 import type { SpaceFacts, SpaceFactsWithOwner, SpacesService } from '../spaces/index.ts'
 import type { Actor } from './document-access-policy.ts'
-import type { CurrentContent, DocumentContentsRepository, StoredSnapshot } from './document-contents.repository.ts'
+import type { ContentEnvelope, CurrentContent, DocumentContentsRepository, StoredSnapshot } from './document-contents.repository.ts'
 import type { DocumentGrantsRepository, GrantRow, NewGrant } from './document-grants.repository.ts'
 import type { DocumentRevisionsRepository, NewRevision, RevisionRow } from './document-revisions.repository.ts'
-import type { AccessibleScope, CopiedDocument, DocumentRow, DocumentsRepository, GrantedDocumentRow, ListOptions, NewDocument, PageOptions, SearchOptions, SearchRow } from './documents.repository.ts'
+import type { DocumentSaveReceiptsRepository, ReceiptRow } from './document-save-receipts.repository.ts'
+import type { AccessibleScope, CopiedDocument, DocumentRow, DocumentsRepository, GrantedDocumentRow, ListOptions, NewDocument, PageOptions, SearchOptions, SearchRow, WriteEnvelope } from './documents.repository.ts'
 import type { EditLeaseRow, EditLeasesRepository, NewEditLease, ObservedEditLease, RevocableEditLease } from './edit-leases.repository.ts'
 import type { CreatedFolderRow, FolderAncestorRow, FolderRow, FoldersRepository, NewFolder, SubtreeMove, SubtreeSummary } from './folders.repository.ts'
+import type { SnapshotInspector } from './snapshot-inspector.ts'
 import type { SpaceTreeRepository } from './space-tree.repository.ts'
 import type { NewTrashEntry, TrashEntriesRepository, TrashEntryRow } from './trash-entries.repository.ts'
 import type { WriteAccessRevocation, WriteAccessScope } from './write-access.ts'
 import { Buffer } from 'node:buffer'
-import { EDIT_LEASE_TTL_SECONDS, FOLDER_LIST_MAX_ITEMS, TRASH_RETENTION_DAYS } from '@nerve-office/contracts'
+import { DOCUMENT_PROFILE_OF, EDIT_LEASE_TTL_SECONDS, FOLDER_LIST_MAX_ITEMS, PLATFORM_FORMAT_VERSION, TRASH_RETENTION_DAYS, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { vi } from 'vitest'
 import { parseAuditEvent } from '../audit/index.ts'
+import { AppLogger, createRootLogger, RequestContextStore } from '../logging/index.ts'
+import { ClientFormatGate } from './client-format-gate.ts'
 import { EffectiveAccessPolicy } from './document-access-policy.ts'
+import { RequestLedger } from './request-ledger.ts'
+import { inspectSnapshot } from './snapshot-inspection.ts'
 import { coversWriter } from './write-access.ts'
 
 export const ALICE = '0199a2c4-0000-7000-8000-00000000000a'
@@ -62,6 +69,31 @@ interface FakeSpace {
 /** 内存里的一个文件夹：行，连同新建时的 requestId 与请求摘要（M2 Codex 评审 CX6） */
 export type StoredFolder = FolderRow & { readonly requestId: string, readonly payloadDigest: Buffer }
 
+/**
+ * 内存里的一份内容：P3 起的写入带着内容哈希与非空的资源名（StoredSnapshot）；存量（P3 之前写的）两者都为空，
+ * 用例直接摆存量时写 contentHash 与 resourceNames 为 null
+ */
+export interface FakeContent {
+  readonly snapshot: Buffer
+  readonly rawBytes: number
+  readonly contentHash: Buffer | null
+  readonly resourceNames: readonly string[] | null
+}
+
+/** 内存里的一条修订记录：行，连同 requestId 与这一版的信封（内容哈希、客户端构建） */
+export type StoredRevision = RevisionRow & { readonly requestId: string, readonly contentHash: Buffer | null, readonly clientBuild: string | null }
+
+/** 摆一条修订记录：信封两项不给时为空（存量的写法） */
+export type RevisionSeed = Omit<NewRevision, 'contentHash' | 'clientBuild'> & Partial<Pick<NewRevision, 'contentHash' | 'clientBuild'>> & { readonly createdAt?: Date }
+
+/** 现在的页面上报的构建与数据格式（M3-P3）：保存、另存为副本、申请编辑权与心跳的用例都带它 */
+export const CURRENT_CLIENT: ClientFormat = { clientBuild: '0.1.0', univerVersion: UNIVER_SDK_VERSION, profile: DOCUMENT_PROFILE_OF.sheet, formatVersion: PLATFORM_FORMAT_VERSION }
+
+/** 拦截旧客户端的运维开关（M3-P3）：默认不设，用例要核对开关时另建 ClientFormatGate */
+export function clientFormatGate(minimumBuild?: string): ClientFormatGate {
+  return new ClientFormatGate({ clients: { minimumBuild } } as unknown as AppConfig)
+}
+
 export class FakeStore {
   readonly documents = new Map<string, DocumentRow>()
   /** 文件夹连同新建时的 requestId 与请求摘要（直接建的没有对应的请求，摘要是全零，与任何请求都对不上） */
@@ -71,8 +103,12 @@ export class FakeStore {
   /** 文档与文件夹所属的删除单元（状态不在行类型里）：不在这里就是正常状态 */
   readonly documentEntries = new Map<string, string>()
   readonly folderEntries = new Map<string, string>()
-  readonly contents = new Map<string, StoredSnapshot>()
-  readonly revisions: (RevisionRow & { requestId: string })[] = []
+  readonly contents = new Map<string, FakeContent>()
+  readonly revisions: StoredRevision[] = []
+  /** 保存的回执（M3-P3）：内容相同、修订号没变的确认 */
+  readonly receipts: ReceiptRow[] = []
+  /** 日志（debug 级）收进内存：一行一条 JSON */
+  readonly logLines: string[] = []
   readonly audits: AuditEvent[] = []
   /** 取过的空间树锁：按取锁的先后记下，用例据此核对锁的顺序 */
   readonly treeLocks: string[][] = []
@@ -100,7 +136,7 @@ export class FakeStore {
   addDocument(overrides: Partial<DocumentRow> = {}): DocumentRow {
     this.sequence += 1
     const id = `0199a2c4-0000-7000-8000-${String(this.sequence).padStart(12, '0')}`
-    const row: DocumentRow = { id, spaceId: ALICE_SPACE, type: 'sheet', title: '周报', createdBy: ALICE, createdAt: NOW, updatedAt: NOW, position: NOW.toISOString(), revision: 1, unitId: `unit-${id}`, profile: 'sheet@1', formatVersion: 1, writeEpoch: 0, ...overrides, folderId: overrides.folderId ?? null }
+    const row: DocumentRow = { id, spaceId: ALICE_SPACE, type: 'sheet', title: '周报', createdBy: ALICE, createdAt: NOW, updatedAt: NOW, position: NOW.toISOString(), revision: 1, unitId: `unit-${id}`, profile: 'sheet@1', formatVersion: 1, sdkVersion: UNIVER_SDK_VERSION, formulasPending: false, writeEpoch: 0, ...overrides, folderId: overrides.folderId ?? null }
     this.documents.set(id, row)
     return row
   }
@@ -305,22 +341,41 @@ export class FakeStore {
         return ids.length
       }),
       /**
-       * 按源文档建一份副本：类型、unitId、档案与格式版本原样复制，修订号 1、代次 0（与真实仓储一样用列的默认值），新的 id。
-       * 行里没有 SDK 版本（DocumentRow 不带它）：另存为副本给的版本由用例按调用的参数核对
+       * 按源文档建一份副本：类型与 unitId 原样复制，修订号 1、代次 0（与真实仓储一样用列的默认值），新的 id。
+       * 内容的信封（档案、格式版本、SDK 版本、"公式待更新"）与真实仓储一样：给了（另存为副本）用给的，没给（复制）照源文档；
+       * 客户端构建另记在 clientBuilds 里（行上没有）
        */
       copyFrom: vi.fn(async (sourceId: string, copy: CopiedDocument): Promise<DocumentRow | undefined> => {
         const source = this.documents.get(sourceId)
         if (source === undefined)
           return undefined
         const { id: _id, ...columns } = source
-        const { sdkVersion: _sdkVersion, ...placement } = copy
-        return this.addDocument({ ...columns, ...placement, revision: 1, writeEpoch: 0 })
+        const { envelope, ...placement } = copy
+        const row = this.addDocument({
+          ...columns,
+          ...placement,
+          profile: envelope?.profile ?? source.profile,
+          formatVersion: envelope?.formatVersion ?? source.formatVersion,
+          sdkVersion: envelope?.sdkVersion ?? source.sdkVersion,
+          formulasPending: envelope?.formulasPending ?? source.formulasPending,
+          revision: 1,
+          writeEpoch: 0,
+        })
+        const build = envelope === undefined ? this.clientBuilds.get(sourceId) : envelope.clientBuild
+        if (build !== undefined)
+          this.clientBuilds.set(row.id, build)
+        return row
       }),
-      advanceRevision: vi.fn(async (id: string, revision: number) => {
+      advanceRevision: vi.fn(async (id: string, revision: number, envelope: WriteEnvelope) => {
         const row = this.documents.get(id)
         if (row?.revision !== revision - 1)
           throw new Error('修订号没有前进')
-        this.documents.set(id, { ...row, revision })
+        this.documents.set(id, { ...row, revision, sdkVersion: envelope.sdkVersion, formulasPending: envelope.formulasPending })
+        this.clientBuilds.set(id, envelope.clientBuild)
+      }),
+      /** 只改"公式待更新"（内容相同的保存，M3-P3）；更新时间不变 */
+      setFormulasPending: vi.fn(async (id: string, formulasPending: boolean) => {
+        this.updateDocument(id, { formulasPending })
       }),
       /** 写入代次加一（M3-P1），返回加一之后的代次；更新时间不变 */
       advanceWriteEpoch: vi.fn(async (id: string) => this.updateDocument(id, { writeEpoch: this.epochAfterAdvance(id) }).writeEpoch),
@@ -337,16 +392,23 @@ export class FakeStore {
       copyFrom: vi.fn(async (sourceId: string, targetId: string) => {
         const content = this.contents.get(sourceId)
         if (content === undefined)
-          return false
-        // 原样搬过去：同一个 Buffer，用例据此核对副本与源逐字节一致
+          return undefined
+        // 原样搬过去（连同哈希与资源名）：同一个 Buffer，用例据此核对副本与源逐字节一致
         this.contents.set(targetId, content)
-        return true
+        return { contentHash: content.contentHash }
       }),
       replace: vi.fn(async (documentId: string, content: StoredSnapshot) => {
         if (!this.contents.has(documentId))
           return false
         this.contents.set(documentId, content)
         return true
+      }),
+      /** 与真实仓储一样：资源名为空（存量）时另给压缩的快照 */
+      findEnvelope: vi.fn(async (documentId: string): Promise<ContentEnvelope | undefined> => {
+        const content = this.contents.get(documentId)
+        if (content === undefined)
+          return undefined
+        return { contentHash: content.contentHash, resourceNames: content.resourceNames, legacySnapshot: content.resourceNames === null ? content.snapshot : null }
       }),
       findCurrent: vi.fn(async (documentId: string): Promise<CurrentContent | undefined> => {
         const content = this.contents.get(documentId)
@@ -355,11 +417,22 @@ export class FakeStore {
       }),
     },
     revisions: {
-      lockCreateRequest: vi.fn(async () => {}),
+      /** requestId 的锁（RequestLedger 经它取）：只记下取过哪些 requestId，用例据此核对取锁的先后 */
+      lockRequest: vi.fn(async (_requestId: string) => {}),
       findByRequestId: vi.fn(async (requestId: string) => this.revisions.find(revision => revision.requestId === requestId)),
       findByRevision: vi.fn(async (documentId: string, revision: number) => this.revisions.find(row => row.documentId === documentId && row.revision === revision)),
       insert: vi.fn(async (revision: NewRevision): Promise<RevisionRow | undefined> =>
         this.revisions.some(row => row.requestId === revision.requestId) ? undefined : this.addRevision(revision)),
+    },
+    /** 保存的回执（M3-P3）：requestId 主键，重复的不写（与真实仓储的 ON CONFLICT 一样） */
+    receipts: {
+      findByRequestId: vi.fn(async (requestId: string) => this.receipts.find(receipt => receipt.requestId === requestId)),
+      insert: vi.fn(async (receipt: ReceiptRow): Promise<ReceiptRow | undefined> => {
+        if (this.receipts.some(row => row.requestId === receipt.requestId))
+          return undefined
+        this.receipts.push(receipt)
+        return receipt
+      }),
     },
     /** 内存里的目录树：层数与父子关系与真实仓储一致，SQL 本身由集成测试覆盖 */
     folders: {
@@ -564,6 +637,19 @@ export class FakeStore {
   databaseNow: Date = NOW
   /** 仍然有效的登录：auth 的 SessionService.isActive 的假实现按它回答 */
   readonly activeSessions = new Set<string>()
+  /** 文档最近一次写入的客户端构建（documents.client_build；行类型里没有，保存与另存为副本写下，M3-P3） */
+  readonly clientBuilds = new Map<string, string>()
+  /** 日志：debug 级，收进 logLines */
+  readonly logger = new AppLogger(createRootLogger({ level: 'debug', destination: { write: (line: string) => void this.logLines.push(line) } }), new RequestContextStore())
+  /** 拦截旧客户端（M3-P3）：真实的规则，运维开关不设 */
+  readonly clientFormats = clientFormatGate()
+  /**
+   * 快照的检查（M3-P3）：真实的规则，在测试的线程里直接执行（子进程池本身与按账户的份数在 snapshot-inspector.test.ts 与
+   * shared/process-pool.test.ts）；requester 是发起的账户，用例据此核对传的是谁
+   */
+  readonly inspector = {
+    inspect: vi.fn(async (raw: Uint8Array, profile: DocumentProfile, _requester: string) => inspectSnapshot(raw, profile)),
+  }
 
   /**
    * 编辑租约的仓储（M3-P1）：与真实仓储同样的语义——每份文档至多一行，改写为新的一代时清掉明确结束，
@@ -644,6 +730,8 @@ export class FakeStore {
 
   /** 真实的访问策略 */
   readonly policy = new EffectiveAccessPolicy(this.spaces as unknown as SpacesService, this.grants as unknown as DocumentGrantsRepository)
+  /** 真实的 requestId 记录（锁与两张表的查询经上面的假仓储） */
+  readonly ledger = new RequestLedger(this.repositories.revisions as unknown as DocumentRevisionsRepository, this.repositories.receipts as unknown as DocumentSaveReceiptsRepository)
   /** 与真实的 AuditService 一样按严格的结构校验（明细多一个键，例如标题，就抛出，M2-P6 复核 M-1），记下原样的事件 */
   readonly audit = {
     record: vi.fn(async (event: AuditEvent) => {
@@ -668,7 +756,17 @@ export class FakeStore {
       writeAccess: this.writeAccess as unknown as WriteAccessRevocation,
       leases: this.leases as unknown as EditLeasesRepository,
       sessions: this.sessions as unknown as SessionService,
+      receipts: this.repositories.receipts as unknown as DocumentSaveReceiptsRepository,
+      ledger: this.ledger,
+      clientFormats: this.clientFormats,
+      inspector: this.inspector as unknown as SnapshotInspector,
+      logger: this.logger,
     }
+  }
+
+  /** 收进内存的日志，一条一个对象 */
+  logs(): Record<string, unknown>[] {
+    return this.logLines.map(line => JSON.parse(line) as Record<string, unknown>)
   }
 
   /** 正常状态的一份文档（回收站里的对普通接口不存在） */
@@ -715,8 +813,8 @@ export class FakeStore {
     return next
   }
 
-  addRevision(revision: NewRevision & { createdAt?: Date }): RevisionRow {
-    const row = { ...revision, createdAt: revision.createdAt ?? NOW }
+  addRevision(revision: RevisionSeed): RevisionRow {
+    const row: StoredRevision = { ...revision, contentHash: revision.contentHash ?? null, clientBuild: revision.clientBuild ?? null, createdAt: revision.createdAt ?? NOW }
     this.revisions.push(row)
     return row
   }

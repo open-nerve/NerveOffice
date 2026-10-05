@@ -19,6 +19,8 @@ export interface LostCopyOptions {
   readonly snapshot: string
   /** 失去编辑权的时刻（墙上时间）：副本的标题里的时间用它，不用点"另存为副本"的时刻 */
   readonly lostAt: Date
+  /** 捕获时公式还没收齐（M3-P3 设计 §3.8）：副本带上"公式待更新"，服务端记在副本上 */
+  readonly formulasPending: boolean
   /** 原文档现在的标题：副本的标题以它开头 */
   readonly title: () => string
   readonly newId: () => string
@@ -37,7 +39,7 @@ export function createLostCopy(options: LostCopyOptions): LostCopy {
   let query: ConflictCopyQuery | undefined
   return {
     save: async () => {
-      const sending = query ?? { requestId: options.newId(), title: conflictCopyTitle(options.title(), conflictCopyLabel(options.lostAt)) }
+      const sending = query ?? { requestId: options.newId(), title: conflictCopyTitle(options.title(), conflictCopyLabel(options.lostAt)), formulasPending: options.formulasPending }
       query = sending
       try {
         const created = await options.conflictCopy(options.documentId, sending, await options.compress(options.snapshot))

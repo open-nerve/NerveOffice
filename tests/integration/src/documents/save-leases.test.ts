@@ -17,6 +17,7 @@ import { EDIT_LEASE_HEADER, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECO
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
+import { acquireBody } from '../support/client-format.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
@@ -260,7 +261,7 @@ describe('US-M3-11 过期的会话不能覆盖别人的保存（A05 的在线部
     const content = await contentOf(document.id)
     expect([content.includes('艾米接手之后写的'), content.includes('本的旧内容')]).toEqual([true, false])
     // 他的页面续不上：艾米正在编辑
-    const retry = await asUser(app.baseUrl, benSession, `/api/documents/${document.id}/edit-lease`, { method: 'POST', body: { clientInstanceId: stale.clientInstanceId } })
+    const retry = await asUser(app.baseUrl, benSession, `/api/documents/${document.id}/edit-lease`, { method: 'POST', body: acquireBody(stale.clientInstanceId) })
     expect(retry.status).toBe(409)
     expect(parseExact(errorResponseSchema, await retry.json()).error.code).toBe('EDIT_LEASE_HELD')
   })

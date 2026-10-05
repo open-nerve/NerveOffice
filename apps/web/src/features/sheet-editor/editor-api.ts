@@ -1,10 +1,13 @@
 // 编辑器页的接口（P4 设计 §3.3）：元数据、内容（快照的原文与修订号）与保存（gzip 压缩的快照）；
 // 编辑租约（M3-P1 设计 §3.2、§3.4.7）：申请、心跳续租、释放，保存带上租约的令牌与代次；
-// 阅读模式（M3-P2 设计 §3.2）：内容的条件读取（If-None-Match，没有变化时 304）、编辑状态（阅读页每 30 秒一次）、另存为副本。
+// 阅读模式（M3-P2 设计 §3.2）：内容的条件读取（If-None-Match，没有变化时 304）、编辑状态（阅读页每 30 秒一次）、另存为副本；
+// 保存协议（M3-P3 设计 §3.5、§3.8）：保存、另存为副本、申请编辑权与心跳都带上本页的构建与数据格式（client-format.ts），
+// 保存与另存为副本另带"公式待更新"。
 import type { AcquiredEditLease, ConflictCopyQuery, CreatedDocument, DocumentDetail, EditStatus, RenewedEditLease, SaveContentResponse } from '@nerve-office/contracts'
 import type { SaveRequest } from './save-coordinator.ts'
 import { acquiredEditLeaseSchema, createdDocumentSchema, documentDetailSchema, EDIT_LEASE_HEADER, editStatusSchema, renewedEditLeaseSchema, revisionEtag, revisionFromEtag, saveContentResponseSchema, SNAPSHOT_UPLOAD_CONTENT_TYPE } from '@nerve-office/contracts'
 import { apiFetch, apiRequest, readJson, ResponseFormatError, serverTimeOf } from '../../shared/api/index.ts'
+import { clientFormatParams, PAGE_CLIENT_FORMAT } from './client-format.ts'
 
 /** 内容的原文（浏览器已按 Content-Encoding 解压）与它的修订号（ETag）：修订号是保存的基准。 */
 export interface LoadedContent {
@@ -78,10 +81,10 @@ export async function fetchEditStatus(documentId: string): Promise<FetchedEditSt
 
 /**
  * 另存为副本（M3-P2 设计 §3.2）：上传本页捕获的快照（gzip，与保存同一个读取方式），服务端按它新建一份文档，给出新文档的详情
- * （与复制相同，带 replayed）。requestId 做幂等：结果未知之后用同一个重试只建一份
+ * （与复制相同，带 replayed）。requestId 做幂等：结果未知之后用同一个重试只建一份。带上"公式待更新"与本页的构建与数据格式（M3-P3）
  */
 export async function saveConflictCopy(documentId: string, query: ConflictCopyQuery, compressed: Uint8Array<ArrayBuffer>): Promise<CreatedDocument> {
-  const search = new URLSearchParams({ requestId: query.requestId, title: query.title })
+  const search = new URLSearchParams({ requestId: query.requestId, title: query.title, formulasPending: String(query.formulasPending === true), ...clientFormatParams() })
   const path = `${documentPath(documentId)}/conflict-copies?${search.toString()}`
   const response = await apiFetch(path, { method: 'POST', body: { contentType: SNAPSHOT_UPLOAD_CONTENT_TYPE, data: compressed } })
   return readJson(response, createdDocumentSchema, `POST ${documentPath(documentId)}/conflict-copies`)
@@ -102,6 +105,7 @@ export async function gzipText(text: string): Promise<Uint8Array<ArrayBuffer>> {
   return new Uint8Array(await new Response(source.pipeThrough(new CompressionStream('gzip'))).arrayBuffer())
 }
 
+/** 保存（带上编辑租约的代次与令牌、"公式待更新"、本页的构建与数据格式）：内容与当前相同时服务端回答 unchanged，照"已保存"处理 */
 export async function saveContent(documentId: string, request: SaveRequest, compressed: Uint8Array<ArrayBuffer>, lease: LeaseCredentials): Promise<SaveContentResponse> {
   const query = new URLSearchParams({
     baseRevision: String(request.baseRevision),
@@ -109,20 +113,28 @@ export async function saveContent(documentId: string, request: SaveRequest, comp
     clientInstanceId: request.clientInstanceId,
     localSeq: String(request.localSeq),
     writeEpoch: String(lease.writeEpoch),
+    formulasPending: String(request.formulasPending),
+    ...clientFormatParams(),
   })
   const path = `${contentPath(documentId)}?${query.toString()}`
   const response = await apiFetch(path, { method: 'PUT', headers: leaseHeaders(lease.token), body: { contentType: SNAPSHOT_UPLOAD_CONTENT_TYPE, data: compressed } })
   return readJson(response, saveContentResponseSchema, `PUT ${contentPath(documentId)}`)
 }
 
-/** 申请编辑权（201）：clientInstanceId 是本页这次加载的标识，租约绑定它与这次登录。被占用时抛出 EDIT_LEASE_HELD（ApiError） */
+/**
+ * 申请编辑权（201）：clientInstanceId 是本页这次加载的标识，租约绑定它与这次登录；带上本页的构建与数据格式（M3-P3）。
+ * 被占用时抛出 EDIT_LEASE_HELD，本页过旧时 CLIENT_OUTDATED，文档比服务端新时 DOCUMENT_TOO_NEW（ApiError）
+ */
 export async function acquireEditLease(documentId: string, clientInstanceId: string): Promise<AcquiredEditLease> {
-  return apiRequest(leasePath(documentId), { method: 'POST', body: { clientInstanceId }, schema: acquiredEditLeaseSchema })
+  return apiRequest(leasePath(documentId), { method: 'POST', body: { clientInstanceId, ...PAGE_CLIENT_FORMAT }, schema: acquiredEditLeaseSchema })
 }
 
-/** 心跳续租（200）：带上距离本页最后一次键盘、鼠标操作的秒数。租约不再有效时抛出 EDIT_LEASE_LOST（ApiError） */
+/**
+ * 心跳续租（200）：带上距离本页最后一次键盘、鼠标操作的秒数与本页的构建与数据格式（M3-P3）。租约不再有效时抛出 EDIT_LEASE_LOST，
+ * 本页过旧时 CLIENT_OUTDATED（ApiError）
+ */
 export async function renewEditLease(documentId: string, token: string, idleSeconds: number): Promise<RenewedEditLease> {
-  return apiRequest(leasePath(documentId), { method: 'PUT', body: { idleSeconds }, headers: leaseHeaders(token), schema: renewedEditLeaseSchema })
+  return apiRequest(leasePath(documentId), { method: 'PUT', body: { idleSeconds, ...PAGE_CLIENT_FORMAT }, headers: leaseHeaders(token), schema: renewedEditLeaseSchema })
 }
 
 /**

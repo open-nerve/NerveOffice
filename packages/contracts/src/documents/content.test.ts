@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { revisionConflictDetailsSchema, revisionEtag, revisionFromEtag, revisionSourceSchema, saveContentQuerySchema, saveContentResponseSchema } from './content.ts'
+import { revisionConflictDetailsSchema, revisionEtag, revisionFromEtag, revisionSourceSchema, saveContentQuerySchema, saveContentResponseSchema, SNAPSHOT_MAX_RAW_BYTES, SNAPSHOT_WARN_RAW_BYTES } from './content.ts'
 
 const valid = {
   baseRevision: '3',
@@ -34,6 +34,22 @@ describe('保存的查询参数', () => {
     expect(saveContentQuerySchema.safeParse({ ...valid, requestId: 'not-a-uuid' }).success).toBe(false)
   })
 
+  it('M3-P3："公式待更新"可选，只接受 true、false（没有这个参数等于 false）', () => {
+    expect(saveContentQuerySchema.parse({ ...valid, formulasPending: 'true' })).toMatchObject({ formulasPending: true })
+    expect(saveContentQuerySchema.parse({ ...valid, formulasPending: 'false' })).toMatchObject({ formulasPending: false })
+    expect(saveContentQuerySchema.parse(valid).formulasPending).toBeUndefined()
+    for (const value of ['', '1', '0', 'TRUE', 'yes'])
+      expect(saveContentQuerySchema.safeParse({ ...valid, formulasPending: value }).success, value).toBe(false)
+  })
+
+  it('M3-P3：客户端的构建与数据格式都可选——P3 之前的页面不带它们，重试结果未知的保存时要能到得了重放（设计 §3.1 第 3 步）', () => {
+    const reported = { clientBuild: '0.1.0+abc1234', univerVersion: '1.0.1', profile: 'sheet@1', formatVersion: '1' }
+    expect(saveContentQuerySchema.parse({ ...valid, ...reported })).toEqual({ ...valid, ...reported, baseRevision: 3, localSeq: 0, writeEpoch: 4, formatVersion: 1 })
+    expect(saveContentQuerySchema.parse(valid)).toEqual({ baseRevision: 3, requestId: valid.requestId, clientInstanceId: valid.clientInstanceId, localSeq: 0, writeEpoch: 4 })
+    expect(saveContentQuerySchema.safeParse({ ...valid, formatVersion: '01' }).success).toBe(false)
+    expect(saveContentQuerySchema.safeParse({ ...valid, clientBuild: 'abc' }).success).toBe(false)
+  })
+
   it('申请编辑权得到的代次（M3-P1）：写法同本地序号，从 0 开始的整数', () => {
     expect(saveContentQuerySchema.parse({ ...valid, writeEpoch: '0' })).toMatchObject({ writeEpoch: 0 })
     expect(saveContentQuerySchema.parse({ ...valid, writeEpoch: '2147483647' })).toMatchObject({ writeEpoch: 2_147_483_647 })
@@ -42,10 +58,25 @@ describe('保存的查询参数', () => {
   })
 })
 
+describe('容量', () => {
+  it('上限 5 MiB；达到 80%（4,194,304 字节）时页面提示（US-M3-14）', () => {
+    expect(SNAPSHOT_MAX_RAW_BYTES).toBe(5_242_880)
+    expect(SNAPSHOT_WARN_RAW_BYTES).toBe(4_194_304)
+    expect(SNAPSHOT_WARN_RAW_BYTES / SNAPSHOT_MAX_RAW_BYTES).toBe(0.8)
+  })
+})
+
 describe('保存的结果与冲突的详情', () => {
   it('保存成功：修订号与 UTC 时间', () => {
-    expect(saveContentResponseSchema.safeParse({ revision: 4, savedAt: '2026-09-27T08:00:00.000Z' }).success).toBe(true)
-    expect(saveContentResponseSchema.safeParse({ revision: 0, savedAt: '2026-09-27T08:00:00.000Z' }).success).toBe(false)
+    expect(saveContentResponseSchema.safeParse({ revision: 4, savedAt: '2026-09-27T08:00:00.000Z', unchanged: false }).success).toBe(true)
+    expect(saveContentResponseSchema.safeParse({ revision: 0, savedAt: '2026-09-27T08:00:00.000Z', unchanged: false }).success).toBe(false)
+  })
+
+  it('M3-P3：内容相同不递增时 unchanged 为真（修订号与时间是当前修订的）；必填的布尔值，多出的字段被丢弃', () => {
+    const saved = { revision: 4, savedAt: '2026-09-27T08:00:00.000Z', unchanged: true }
+    expect(saveContentResponseSchema.parse({ ...saved, digest: 'x' })).toEqual(saved)
+    expect(saveContentResponseSchema.safeParse({ revision: 4, savedAt: saved.savedAt }).success).toBe(false)
+    expect(saveContentResponseSchema.safeParse({ ...saved, unchanged: 'true' }).success).toBe(false)
   })
 
   it('冲突的来源：保存产生的修订有来源，新建产生的修订为 null', () => {

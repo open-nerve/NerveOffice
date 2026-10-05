@@ -1,5 +1,6 @@
 import type { Univer } from '@univerjs/core'
 import type { PluginEntry } from './plugin-entry.ts'
+import { DOCUMENT_PROFILE_OF, profileResourceNames } from '@nerve-office/contracts'
 import { describe, expect, it, vi } from 'vitest'
 import { formulaWorkerPluginEntries } from './formula-worker-profile.ts'
 import { sheetMenuConfig } from './menu-config.ts'
@@ -152,6 +153,14 @@ describe('插件档案 sheet@1：声明的资源（插件档案 v1 §3，去掉 
     expect(declared).toHaveLength(10)
     expect(declared).toEqual([...declared].sort())
     expect(declared).not.toContain('SHEET_AuthzIoMockService_PLUGIN')
+  })
+
+  it('M3-P3：档案注册的插件声明的资源 = contracts 的白名单（服务端的快照检查按它核对资源名，设计 §3.2）', () => {
+    expect(SHEET_PROFILE_ID).toBe(DOCUMENT_PROFILE_OF.sheet)
+    expect(declaredSheetResources()).toEqual(profileResourceNames(SHEET_PROFILE_ID))
+    // 一项资源只由一组声明
+    const all = SHEET_PLUGIN_GROUPS.flatMap(group => group.resources)
+    expect(new Set(all).size).toBe(all.length)
   })
 })
 

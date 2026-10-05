@@ -44,6 +44,16 @@ const HEADER_RESIZE_LOCK_REGRESSION = '单元测试 read-only/header-resize.test
 const ADVANCED_FIND_REGRESSION = '单元测试 read-only/advanced-find.test.ts、read-only-guard.test.ts；E2E tests/e2e/specs/editor/read-only.spec.ts"查找面板没有高级查找"（只读时查找面板里看不到这个链接、查找照常；能编辑时的对照看得到）'
 /** M0 的只读（阅读模式）验证：本地权限点加 mutation 防火墙 */
 const M0_READ_MODE_EVIDENCE = 'M0-P3 报告 §5（V09：本地权限点加 mutation 防火墙，表格 28 个入口在三个浏览器、含公式 Worker 模式全部拦住；只靠权限点漏掉 9 个）、§7（内部 API 登记）；M0 的 harness/read-mode.ts'
+/** 链接的改写（M3-P3 设计 §3.6，DEF-021）：单元测试与三个浏览器的 E2E。SDK 升级后改成复制参数时改写静默失效，这组 E2E 先失败 */
+const CELL_LINK_REGRESSION = [
+  '单元测试 profile/link-policy.test.ts（各条路径写出的 p 的形状、公式结果的确定的标识、只处理这一条 mutation、绝不抛出；SDK 的 CustomRangeType.HYPERLINK 等于 contracts 的 HYPERLINK_RANGE_TYPE）、',
+  'sheet-editor.test.ts（阅读与编辑都在入口守卫之后、创建工作簿之前装上）；',
+  'E2E tests/e2e/specs/editor/links.spec.ts（US-M3-14，本机三个浏览器）：键入、编辑栏里键入与粘贴、选中单元格粘贴纯文本、单元格编辑器里粘贴、粘贴带链接的 HTML、HYPERLINK() 之后',
+  '页面里是规范写法或链接已去掉，撤销两步、重做两步之后不变，保存之后服务器上的每个链接都通过 checkCellLinks；含 HYPERLINK() 的表格强制重算、重开之后内容不变；',
+  '"endIndex 含在内"（约定 3）的回归是其中单元格编辑器里粘贴两行的 G3（链接改用第二行的文字；含义变了时这一格的链接被去掉，这条先失败），',
+  '另有 contracts 的 link-address.test.ts（覆盖的文字按 endIndex 含在内取，下标不合理时去掉链接）；',
+  'template.spec.ts（键入、粘贴网址之后保存的是规范写法）',
+].join('')
 
 export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
   {
@@ -73,6 +83,37 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
     purpose: '公式收齐（P4 设计 §3.6.6）：认出一轮计算的开始、停止、结果、逐表写回与完成',
     evidence: 'M0-P3 报告 §3.3、§3.4、§7；engine-formula 的 calculate.controller.ts:232-257、formula-calculation-trigger.service.ts:166-176，sheets 的 calculate-result-apply.controller.ts:90-97；M0 的 e2e/v07-formula、v07-worker-timeline；P4 探针 (f) 在三个浏览器上录制的序列',
     regression: FORMULA_SETTLE_REGRESSION,
+  },
+  {
+    name: 'CELL_LINK_PROTOCOL',
+    origin: '@univerjs/sheets 的 SetRangeValuesMutation（id 与参数 cellValue[行][列] 的形状），@univerjs/core 的 CustomRangeType.HYPERLINK 与单元格富文本 p.body.customRanges 的形状（区间的 rangeId、rangeType、properties.url）；执行选项 fromFormula（SDK 里的字面量）；平台对这几项内部约定的封装',
+    // cell-links.ts：mutation 的 id 与链接区间的种类取自 SDK 导出的定义
+    sdk: { '@univerjs/core': ['CustomRangeType'], '@univerjs/sheets': ['SetRangeValuesMutation'] },
+    purpose: [
+      '链接的改写（profile/link-policy.ts，M3-P3 设计 §3.6，DEF-021）：订阅 Facade 的 BeforeCommandExecute，只处理这条 mutation，参数里带 p.body.customRanges 的单元格交给 contracts 的',
+      ' normalizeCellLinks 就地改成规范写法、不合法的去掉链接；带 fromFormula 的（公式的结果）再把 SDK 每次重算都随机生成的链接 rangeId 与段落 paragraphId 换成由位置与序号确定的值。',
+      '依赖的约定：(1) 执行前事件交出的 params 就是命令服务交给处理器、命令放进撤销栈的同一个对象，就地改写对执行、撤销与重做都生效，不多产生 mutation；',
+      '(2) SDK 自动识别出的链接都经这条 mutation 写进单元格（改写器的输入假设，各种写法见证据）；',
+      '(3) 链接区间的 startIndex、endIndex 都含在内（endIndex 是区间最后一个字符的下标）：单元格编辑器里粘贴多行时 SDK 把整段文字当作地址，',
+      'normalizeCellLinks 改用区间覆盖的文字（contracts 的 coveredText 按 dataStream.slice(startIndex, endIndex + 1) 取）修复地址，依赖这一条；',
+      'SDK 改了含义时修复静默失效——链接被去掉、文字还在，不出错（M3-P3 审查 B9）',
+    ].join(''),
+    evidence: [
+      '同一个对象：core 的 command.service.ts:430-448、491-509（commandInfo 带着同一个 params，先调执行前的监听再交给处理器）、facade/f-univer.ts:255-268（事件的 params 是同一个引用；',
+      'f-event-registry.ts:120-125 先调完全部订阅者再看 cancel，没有 try/catch，订阅者抛出会让这条命令失败）；sheets 的 set-range-values.command.ts:101-155（执行过的参数原样放进撤销栈）、',
+      'sheets-ui 的 clipboard.service.ts:1090-1180（粘贴执行过的 redoMutationsInfo 原样放进撤销栈）；set-range-values.mutation.ts:253-265（处理器把 p 深拷贝进模型）；',
+      'M0-P5 报告 §7 的 C7c（文字文档的命令级：改写链接地址依赖事件参数与命令处理器是同一个对象）；P3 设计前的探索 B 的探针（三个浏览器：就地改写有效，每次编辑只有一条 set-range-values，',
+      '撤销两步、重做两步之后仍是改写后的写法、改写的次数不变）。',
+      'SDK 自动识别的写法（1.0.1）：键入与编辑栏里键入是 sheets-hyper-link 的 set-range.controller.ts:141-207（isLegalUrl 时 Tools.normalizeUrl：有协议原样、邮箱补 mailto://、其余补 https://，ftp:// 也识别）；',
+      '选中单元格粘贴纯文本是 sheets-ui 的 clipboard.controller.ts:567-640（原文，不补协议）；单元格编辑器里粘贴是 core 的 text-x/build-utils/parse.ts:55 的 fromPlainText（整段文字，两行时带换行；',
+      '区间的 endIndex 是 cursor + urlText.length - 1，含在内，:70）；',
+      '粘贴带 <a> 的 HTML 是 html-to-usm/converter.ts:823-842（HTMLAnchorElement.href，about:blank 的文档里相对地址原样，rangeId 取 data-rangeid 原样）；编辑栏里粘贴 HTML 是 docs-ui 的 html-to-udm',
+      '（按页面地址解析成本站的绝对地址）；HYPERLINK() 是 engine-formula 的 hyperlink-engine-formula.service.ts:36-71（isLegalUrl 时 normalizeUrl，否则原文；RichTextBuilder 每次随机生成 rangeId 与 paragraphId），',
+      '经 sheets 的 calculate-result-apply.controller.ts:90-97 写回（onlyLocal、fromFormula、applyFormulaCalculationResult）。不经这条 mutation 改写链接的只有引用的区域变化时 sheets-hyper-link 的',
+      ' update-rich-hyper-link（只写 #gid=…&range=… 的内部锚点，本来就是规范写法）。S2 实现时的探针：公式结果的 p 有一个段落，强制重算与重开都换新的 rangeId 与 paragraphId',
+      '（初次计算是 WHEN_EMPTY，HYPERLINK() 的格子没有 v，每次打开都重算：sheets-formula 的 trigger-calculation.controller.ts:291-322、engine-formula 的 formula-data.model.ts:758-796）',
+    ].join(''),
+    regression: CELL_LINK_REGRESSION,
   },
   {
     name: 'IAuthzIoService',

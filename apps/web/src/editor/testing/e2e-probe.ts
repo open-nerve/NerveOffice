@@ -16,11 +16,15 @@
 // - M0 的 Facade 入口用到的插件 Facade（./probe-facades.ts）：编辑器只引用它自己用到的 Facade（sheet-editor.ts，包体积），
 //   筛选、排序、图片、条件格式、数据验证、超链接、批注、查找替换的方法在各插件的 Facade 里。
 // 再两样（M2-P6 复核 F1、F2 之后，只读的快捷键回归用）：SDK 当前注册的全部快捷键（Facade 的 FShortcut 只能派发，列不出来），
-// 与编辑栏现在显示的文字（画在画布上，页面上读不出来）
+// 与编辑栏现在显示的文字（画在画布上，页面上读不出来）。
+// 还有页面里打包的链接地址判定（M3-P3 S2）：链接的改写器用的就是它（经 contracts 的 normalizeCellLinks），E2E 拿跨引擎的同一组用例
+// （contracts 的 link-address.test-support.ts）在三个浏览器里核对它的结果与 Node 相同
+import type { CanonicalLink } from '@nerve-office/contracts'
 import type { Univer } from '@univerjs/core'
 import type { FUniver } from '@univerjs/core/facade'
 import type { CommandEvent } from '../change-tracking/command-event.ts'
 import type { CommandKind } from '../change-tracking/command-record.ts'
+import { canonicalLink } from '@nerve-office/contracts'
 import { toCommandRecord } from '../change-tracking/command-event.ts'
 import { stringParam } from '../change-tracking/command-record.ts'
 import { DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY, injectorOf } from '../internal-api/index.ts'
@@ -82,6 +86,11 @@ export interface EditorProbe {
    * （M2-P6 复验 N3）：返回空串会让"编辑栏与单元格一致"的核对在两边都读出空串时照样通过
    */
   readonly formulaBarText: () => string
+  /**
+   * 页面里打包的链接地址判定（contracts 的 canonicalLink，M3-P3 设计 §3.2）：与链接的改写器（profile/link-policy.ts）用的是同一份代码。
+   * 规范写法依赖各引擎的 WHATWG URL，E2E 经它在三个浏览器里跑跨引擎的同一组用例
+   */
+  readonly canonicalLink: (url: string) => CanonicalLink
 }
 
 declare global {
@@ -163,6 +172,7 @@ export function installEditorProbe({ univer, univerAPI, workbook }: ProbeTarget)
     commands: (after = 0) => log.filter(command => command.seq > after),
     shortcuts: () => injector.get(IShortcutService).getAllShortcuts().map(toProbeShortcut),
     formulaBarText: () => readFormulaBar(injector.get(IEditorService)),
+    canonicalLink,
   }
   window.__nerveEditorProbe = probe
   return () => {

@@ -1,12 +1,13 @@
 // documents 模块的表：文档的元数据（P3 设计 §3.2），当前内容与修订记录（P4 设计 §3.2，只做加法），
 // 文件夹与删除单元（M2-P4 设计 §3.3：与文档共用有效权限、空间事实与审计，所以放在同一个模块里），
 // 单独授权（M2-P5 设计 §3.3：有效权限并上授权，唯一入口在 documents），
-// 编辑租约（M3-P1 设计 §3.1、§3.3：保存在文档行的锁下核对它，按空间收回写入权要把它与文档连起来查，所以也在这里）。
+// 编辑租约（M3-P1 设计 §3.1、§3.3：保存在文档行的锁下核对它，按空间收回写入权要把它与文档连起来查，所以也在这里），
+// 保存的回执（M3-P3 设计 §3.4、§3.7：内容相同、修订号没变的确认，与修订记录一起做 requestId 的幂等）。
 import type { EditLeaseLostReason } from '@nerve-office/contracts'
 import type { AnyPgColumn } from 'drizzle-orm/pg-core'
-import { DOCUMENT_PROFILES, DOCUMENT_STATUSES, DOCUMENT_TITLE_MAX_LENGTH, DOCUMENT_TYPES, FOLDER_MAX_DEPTH, FOLDER_NAME_MAX_LENGTH, GRANT_ROLES, PLATFORM_FORMAT_VERSIONS, SNAPSHOT_MAX_RAW_BYTES, TRASH_ENTRY_KINDS } from '@nerve-office/contracts'
+import { CLIENT_BUILD_MAX_LENGTH, DOCUMENT_PROFILES, DOCUMENT_STATUSES, DOCUMENT_TITLE_MAX_LENGTH, DOCUMENT_TYPES, FOLDER_MAX_DEPTH, FOLDER_NAME_MAX_LENGTH, GRANT_ROLES, PLATFORM_FORMAT_VERSIONS, SNAPSHOT_MAX_RAW_BYTES, TRASH_ENTRY_KINDS } from '@nerve-office/contracts'
 import { sql } from 'drizzle-orm'
-import { check, index, integer, pgTable, primaryKey, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core'
+import { boolean, check, index, integer, pgTable, primaryKey, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core'
 import { bytea, lengthBetween, oneOf } from '../common/index.ts'
 import { spaces } from '../spaces/index.ts'
 import { users } from '../users/index.ts'
@@ -15,8 +16,11 @@ import { users } from '../users/index.ts'
 export const DOCUMENT_REVISION_KINDS = ['created', 'saved'] as const
 export type DocumentRevisionKind = (typeof DOCUMENT_REVISION_KINDS)[number]
 
-/** SDK 版本号的长度上限：只是兜底，版本号由平台写入。 */
+/** SDK 版本号的长度上限：只是兜底，版本号是客户端上报、服务端核对过的（M3-P3 设计 §3.5）。 */
 const SDK_VERSION_MAX_LENGTH = 64
+
+/** 内容哈希与负载摘要的字节数：SHA-256 */
+const SHA256_BYTES = 32
 
 /**
  * 回收站里的一个删除单元（M2-P4 设计 §3.3）：一次删除操作生成一条，子树里的每一行都指向它。
@@ -112,8 +116,14 @@ export const documents = pgTable('documents', {
   unitId: text('unit_id').notNull(),
   profile: text('profile', { enum: DOCUMENT_PROFILES }).notNull(),
   formatVersion: integer('format_version').notNull(),
-  // 最近一次写入时的 Univer 版本
+  // 最近一次写入时的 Univer 版本（M3-P3 起是客户端上报、服务端核对过等于自己的；新建是服务端内置的）
   sdkVersion: text('sdk_version').notNull(),
+  // 最近一次写入的客户端构建（M3-P3 设计 §3.4、§3.5，00 号计划书 §8.1 的信封）：x.y.z，可带 + 之后的诊断信息；
+  // 新建（服务端写模板）与 P3 之前的为空，复制照源文档
+  clientBuild: text('client_build'),
+  // "公式待更新"（M3-P3 设计 §3.8）：最近一次写入的快照里公式结果可能还没算完。每次成功的写入（包括内容相同、修订号不变的保存）
+  // 设成请求里的值；编辑状态、申请编辑权与详情直接读它，不联表。存量一律没有标记
+  formulasPending: boolean('formulas_pending').notNull().default(false),
   // 写入代次（00 号计划书 §6.4，M2-P2 设计 §3.7）：删除与跨空间移动在同一个事务里加一；M3 的租约与保存按它与修订号条件写入。
   // 只增不减由迁移里手写的触发器 documents_write_epoch_monotonic 兜底（M2-P6 复核 B 的 G5），表定义里写不出触发器
   writeEpoch: integer('write_epoch').notNull().default(0),
@@ -125,6 +135,7 @@ export const documents = pgTable('documents', {
   check('documents_profile_check', oneOf(table.profile, DOCUMENT_PROFILES)),
   check('documents_format_version_check', sql`${table.formatVersion} IN (${sql.raw(PLATFORM_FORMAT_VERSIONS.join(', '))})`),
   check('documents_sdk_version_check', lengthBetween(table.sdkVersion, 1, SDK_VERSION_MAX_LENGTH)),
+  check('documents_client_build_check', lengthBetween(table.clientBuild, 1, CLIENT_BUILD_MAX_LENGTH)),
   check('documents_write_epoch_check', sql`${table.writeEpoch} >= 0`),
   // 在回收站里（trashed）与属于某个删除单元是同一件事（M2-P4 设计 §3.4 第 3 条）
   check('documents_trash_entry_check', sql`(${table.trashEntryId} IS NULL) = (${table.status} = 'active')`),
@@ -144,9 +155,18 @@ export const documentContents = pgTable('document_contents', {
   rawBytes: integer('raw_bytes').notNull(),
   storedBytes: integer('stored_bytes').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  // 规范化的内容哈希（M3-P3 设计 §3.2、§3.7：contracts 的规范化文字的 SHA-256）："内容相同不递增"拿它与上传的比较。
+  // 存量（P3 之前写的）为空，比较时按"不同"处理，第一次写入时补上（不回填：要解压、解析每一份快照，只能在应用里做）
+  contentHash: bytea('content_hash'),
+  // 这一版里非空的资源名（按名称排序，M3-P3 设计 §3.3）：下一次保存的"不缩水"按它核对，事务里不必解析上一版。与内容哈希同时写，
+  // 存量同样为空——那时解析上一版得到
+  resourceNames: text('resource_names').array(),
 }, table => [
   check('document_contents_raw_bytes_check', sql`${table.rawBytes} BETWEEN 1 AND ${sql.raw(String(SNAPSHOT_MAX_RAW_BYTES))}`),
   check('document_contents_stored_bytes_check', sql`${table.storedBytes} = octet_length(${table.snapshot}) AND ${table.storedBytes} BETWEEN 1 AND ${sql.raw(String(SNAPSHOT_MAX_RAW_BYTES))}`),
+  check('document_contents_content_hash_check', sql`octet_length(${table.contentHash}) = ${sql.raw(String(SHA256_BYTES))}`),
+  // 两列是同一次写入的结果：同时为空（存量）或同时有值
+  check('document_contents_envelope_check', sql`(${table.contentHash} IS NULL) = (${table.resourceNames} IS NULL)`),
 ])
 
 /** 每次新建或保存一行（不存正文）：修订号的来源与 requestId 的幂等（P4 设计 §3.5）。 */
@@ -163,6 +183,9 @@ export const documentRevisions = pgTable('document_revisions', {
   localSeq: integer('local_seq'),
   savedBy: uuid('saved_by').notNull().references(() => users.id, { onDelete: 'restrict' }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  // 这一版的信封（M3-P3 设计 §3.4）：规范化的内容哈希，与写入它的页面的构建（新建、复制是服务端写的，没有构建）。存量为空
+  contentHash: bytea('content_hash'),
+  clientBuild: text('client_build'),
 }, table => [
   unique('document_revisions_document_revision_key').on(table.documentId, table.revision),
   unique('document_revisions_request_id_key').on(table.requestId),
@@ -171,9 +194,37 @@ export const documentRevisions = pgTable('document_revisions', {
   // 新建的就是修订号 1，之后的都是保存
   check('document_revisions_created_check', sql`(${table.kind} = 'created') = (${table.revision} = 1)`),
   check('document_revisions_payload_digest_check', sql`octet_length(${table.payloadDigest}) = 32`),
+  check('document_revisions_content_hash_check', sql`octet_length(${table.contentHash}) = ${sql.raw(String(SHA256_BYTES))}`),
+  check('document_revisions_client_build_check', lengthBetween(table.clientBuild, 1, CLIENT_BUILD_MAX_LENGTH)),
   check('document_revisions_local_seq_check', sql`${table.localSeq} >= 0`),
   // 保存有来源（两项同时有），新建没有
   check('document_revisions_source_check', sql`(${table.clientInstanceId} IS NULL) = (${table.kind} = 'created') AND (${table.clientInstanceId} IS NULL) = (${table.localSeq} IS NULL)`),
+  // 保留期的清理（M3-P3 设计 §3.9）按创建时间取一批
+  index('document_revisions_created_idx').on(table.createdAt),
+])
+
+/**
+ * 保存的回执（M3-P3 设计 §3.7）：内容与当前相同、修订号没有增加的那次保存的确认——不写修订记录，所以另记在这里，
+ * 结果未知之后的重试照样拿到原来的结果（A07）。requestId 与修订记录的一起做幂等：保存的重放先查两边（document-content.service.ts）。
+ * - revision 与 saved_at 是那次确认给出的结果（当前修订与它的时间），重放原样给出，不依赖那一行修订记录还在不在（保留期）；
+ * - 负载摘要与保存的人：同一个人对同一份文档的同一次保存（摘要一致）才算重放；
+ * - 永久删除文档时随外键级联删除；保存的人 restrict（账户不删除）；
+ * - 按创建时间的索引给保留期的清理（§3.9），按文档的索引给级联删除。
+ * 只有不递增的确认写在这里；写入了新修订的保存仍以修订记录为准
+ */
+export const documentSaveReceipts = pgTable('document_save_receipts', {
+  requestId: uuid('request_id').primaryKey(),
+  documentId: uuid('document_id').notNull().references(() => documents.id, { onDelete: 'cascade' }),
+  revision: integer('revision').notNull(),
+  payloadDigest: bytea('payload_digest').notNull(),
+  savedBy: uuid('saved_by').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  savedAt: timestamp('saved_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, table => [
+  check('document_save_receipts_revision_check', sql`${table.revision} >= 1`),
+  check('document_save_receipts_payload_digest_check', sql`octet_length(${table.payloadDigest}) = ${sql.raw(String(SHA256_BYTES))}`),
+  index('document_save_receipts_created_idx').on(table.createdAt),
+  index('document_save_receipts_document_idx').on(table.documentId),
 ])
 
 /**

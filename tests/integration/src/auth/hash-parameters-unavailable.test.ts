@@ -124,9 +124,11 @@ describe('参数组读不出来时不进入密码验证（M2 Codex 评审 CX2，
         await holder.query('ROLLBACK')
       }
     })
-    // 放锁之后才取结果：吞掉失败的写法这时才读到凭据、带着不全的参数组验证（401）；现在两次登录在取消时就已经是 503
+    // 放锁之后才取结果：吞掉失败的写法这时才读到凭据、带着不全的参数组验证（401）；现在两次登录在取消时就已经是 503。
+    // 两次都有了结果再数名额：地址这一维是两次登录共用的，先到的那一次的结果出来时，另一次可能还没退回它占的名额
+    const responses = await Promise.all(pending)
     for (const [index, username] of ['nobody', 'veteran'].entries()) {
-      const response = await pending[index]
+      const response = responses[index]
       expect(response?.status, `${username}：${await response?.clone().text()}`).toBe(503)
       expect(response?.headers.get('retry-after')).toBe('5')
       // 还没有比对：三个维度的名额都退回

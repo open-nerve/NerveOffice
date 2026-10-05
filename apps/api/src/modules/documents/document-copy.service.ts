@@ -21,6 +21,7 @@ import { DocumentsRepository } from './documents.repository.ts'
 import { folderIdIn } from './folder-location.ts'
 import { FoldersRepository } from './folders.repository.ts'
 import { copiedPayloadDigest } from './payload-digest.ts'
+import { RequestLedger } from './request-ledger.ts'
 import { SpaceTreeRepository } from './space-tree.repository.ts'
 
 /** 复制请求（已经过 contracts 的校验）。 */
@@ -52,6 +53,7 @@ export class DocumentCopyService {
     private readonly documents: DocumentsRepository,
     private readonly contents: DocumentContentsRepository,
     private readonly revisions: DocumentRevisionsRepository,
+    private readonly ledger: RequestLedger,
     private readonly folders: FoldersRepository,
     private readonly tree: SpaceTreeRepository,
     private readonly spaces: SpacesService,
@@ -64,9 +66,9 @@ export class DocumentCopyService {
     // 摘要只按请求里的东西算（源文档、目标位置与请求里的标题）：源文档随后被改名也不影响重试按重放处理
     const digest = copiedPayloadDigest(id, command.spaceId, command.folderId, command.title)
     return this.transactions.run(async (transaction) => {
-      // 同一个 requestId 的两次复制排队执行：后到的一方在下面就能看到前一方的修订记录，按重放处理（与新建文档相同，锁排在最前）
-      await this.revisions.lockCreateRequest(command.requestId, transaction)
-      const previous = await this.revisions.findByRequestId(command.requestId, transaction)
+      // 同一个 requestId 的写入排队执行：后到的一方在下面就能看到前一方的修订记录，按重放处理（与新建文档相同，锁排在最前，RequestLedger）；
+      // 它用在一次内容相同的保存上（回执）时 REQUEST_ID_CONFLICT
+      const previous = await this.ledger.lockForCreated(command.requestId, transaction)
       if (previous !== undefined)
         return this.replay(userId, previous, digest, transaction)
 
@@ -93,7 +95,9 @@ export class DocumentCopyService {
       const copy = await this.documents.copyFrom(id, { spaceId: command.spaceId, folderId, title, createdBy: userId }, transaction)
       if (copy === undefined)
         throw new Error(`锁住的源文档复制不到：${id}`)
-      if (!await this.contents.copyFrom(id, copy.id, transaction))
+      // 内容连同哈希与非空的资源名原样复制（M3-P3 设计 §3.1）；副本的修订记录记下这份内容的哈希（源是存量时为空）
+      const content = await this.contents.copyFrom(id, copy.id, transaction)
+      if (content === undefined)
         throw new Error(`文档有记录却没有内容：${id}`)
       const revision = await this.revisions.insert({
         documentId: copy.id,
@@ -103,8 +107,11 @@ export class DocumentCopyService {
         payloadDigest: digest,
         source: null,
         savedBy: userId,
+        contentHash: content.contentHash,
+        // 复制是服务端写的，没有客户端构建（文档的信封照源文档，documents.copyFrom）
+        clientBuild: null,
       }, transaction)
-      // 同一个 requestId 同时被一次保存用掉了（advisory lock 只让新建与复制之间排队）
+      // requestId 已经被用掉（在它的锁下查过两张表，走到这里不会撞上；留作兜底）
       if (revision === undefined)
         throw new AppError('REQUEST_ID_CONFLICT')
       await this.audit.record({

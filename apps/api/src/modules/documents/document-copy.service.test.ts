@@ -10,8 +10,8 @@ const MISSING_ID = '0199a2c4-0000-7000-8000-0000000000fd'
 
 function setup() {
   const store = new FakeStore()
-  const { transactions, documents, contents, revisions, folders, tree, spaces, policy, audit } = store.deps
-  return { store, service: new DocumentCopyService(transactions, documents, contents, revisions, folders, tree, spaces, policy, audit) }
+  const { transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit } = store.deps
+  return { store, service: new DocumentCopyService(transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit) }
 }
 
 let requests = 0
@@ -24,7 +24,7 @@ function nextRequestId(): string {
 function seed(store: FakeStore, overrides: Parameters<FakeStore['addDocument']>[0] = {}) {
   const document = store.addDocument({ title: '周报', ...overrides })
   const snapshot = Buffer.from(`gzip:${document.id}`, 'utf8')
-  store.contents.set(document.id, { snapshot, rawBytes: 100 })
+  store.contents.set(document.id, { snapshot, rawBytes: 100, contentHash: Buffer.alloc(32, 7), resourceNames: ['SHEET_NOTE_PLUGIN'] })
   return { document, snapshot }
 }
 
@@ -36,6 +36,17 @@ async function errorOf(promise: Promise<unknown>): Promise<AppError> {
 }
 
 describe('DocumentCopyService.copy', () => {
+  it('用在一次内容相同的保存上（回执）的 requestId：REQUEST_ID_CONFLICT，不建副本（审查 A3）', async () => {
+    const { store, service } = setup()
+    const { document } = seed(store)
+    const requestId = nextRequestId()
+    store.receipts.push({ requestId, documentId: document.id, revision: 1, payloadDigest: Buffer.alloc(32), savedBy: ALICE, savedAt: new Date('2026-09-27T08:00:00.000Z') })
+    expect((await errorOf(service.copy(member(ALICE), document.id, { spaceId: ALICE_SPACE, requestId }, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+    expect(store.documents.size).toBe(1)
+    expect(store.repositories.revisions.lockRequest).toHaveBeenCalledWith(requestId, expect.anything())
+    expect(store.audits).toEqual([])
+  })
+
   it('副本是一份新文档：新的 id、修订号 1、unitId 与源相同、快照原样复制，写一条新建的修订记录与审计', async () => {
     const { store, service } = setup()
     // 源文档换过空间、有过几代编辑权（代次不为 0）：副本是新的文档，代次从 0 开始，不带源文档的那一代（M3-P1）
@@ -47,7 +58,9 @@ describe('DocumentCopyService.copy', () => {
     // unitId 原样复制（00 号计划书 §8.3）：副本与源的快照逐字节一致
     expect(store.documents.get(copy.id)?.unitId).toBe(document.unitId)
     expect(store.contentOf(copy.id)).toBe(snapshot)
-    expect(store.revisions.filter(row => row.documentId === copy.id)).toMatchObject([{ revision: 1, kind: 'created', savedBy: ALICE }])
+    // 内容哈希与非空的资源名一起复制（M3-P3）；副本的修订记录记下这份内容的哈希，没有客户端构建（服务端写的）
+    expect(store.contents.get(copy.id)).toMatchObject({ contentHash: Buffer.alloc(32, 7), resourceNames: ['SHEET_NOTE_PLUGIN'] })
+    expect(store.revisions.filter(row => row.documentId === copy.id)).toMatchObject([{ revision: 1, kind: 'created', savedBy: ALICE, contentHash: Buffer.alloc(32, 7), clientBuild: null }])
     // 源文档的内容与修订记录一点不动
     expect(store.contentOf(document.id)).toBe(snapshot)
     expect(store.revisions.filter(row => row.documentId === document.id)).toEqual([])
@@ -93,7 +106,7 @@ describe('DocumentCopyService.copy', () => {
     expect(store.treeLocks).toEqual([[TEAM_SPACE]])
     // 源空间（个人空间）与目标空间的行都取共享锁，按 id 的顺序
     expect(store.spaces.holdSpace.mock.calls.map(call => call[0])).toEqual([ALICE_SPACE, TEAM_SPACE].toSorted())
-    const request = store.repositories.revisions.lockCreateRequest.mock.invocationCallOrder[0] ?? 0
+    const request = store.repositories.revisions.lockRequest.mock.invocationCallOrder[0] ?? 0
     const tree = store.tree.lock.mock.invocationCallOrder[0] ?? 0
     const spaceRows = store.spaces.holdSpace.mock.invocationCallOrder
     const sourceRow = store.repositories.documents.holdById.mock.invocationCallOrder

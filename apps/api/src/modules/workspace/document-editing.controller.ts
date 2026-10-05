@@ -29,17 +29,18 @@ export class DocumentEditingController {
     return this.editing.status(editingActorOf(principal), id)
   }
 
-  /** 申请：201；有效的租约在别人手里时 409 EDIT_LEASE_HELD */
+  /** 申请：201；有效的租约在别人手里时 409 EDIT_LEASE_HELD；页面过旧 409 CLIENT_OUTDATED，文档比服务端新 409 DOCUMENT_TOO_NEW */
   @Post()
   async acquire(
     @CurrentPrincipal() principal: Principal,
     @Param('id', { schema: documentIdSchema }) id: string,
     @Body({ schema: acquireEditLeaseRequestSchema }) body: AcquireEditLeaseRequest,
   ): Promise<AcquiredEditLease> {
-    return this.editing.acquire(editingActorOf(principal), id, body.clientInstanceId)
+    const { clientInstanceId, ...format } = body
+    return this.editing.acquire(editingActorOf(principal), id, { clientInstanceId, format })
   }
 
-  /** 心跳续租：200；租约不再有效时 409 EDIT_LEASE_LOST。每 10 秒一次，不顺延登录（编辑中的保存照常顺延） */
+  /** 心跳续租：200；租约不再有效时 409 EDIT_LEASE_LOST，页面过旧 409 CLIENT_OUTDATED。每 10 秒一次，不顺延登录（编辑中的保存照常顺延） */
   @Put()
   @BackgroundRequest()
   async renew(
@@ -48,7 +49,8 @@ export class DocumentEditingController {
     @Body({ schema: renewEditLeaseRequestSchema }) body: RenewEditLeaseRequest,
     @EditLeaseToken() token: string | undefined,
   ): Promise<RenewedEditLease> {
-    return this.editing.renew(editingActorOf(principal), id, body.idleSeconds, token)
+    const { idleSeconds, ...format } = body
+    return this.editing.renew(editingActorOf(principal), id, { idleSeconds, format }, token)
   }
 
   /** 释放：204，没有响应体；令牌不是当前的、已经结束时同样 204（页面关闭时的 keepalive 请求不看结果） */

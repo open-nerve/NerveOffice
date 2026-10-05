@@ -1,6 +1,6 @@
 import type { AcquiredEditLease, EditInterruption, EditLeaseHeldDetails, EditStatus, RenewedEditLease } from '@nerve-office/contracts'
 import type { Transaction } from '../database/index.ts'
-import type { EditingActor, LeaseInterruption } from '../documents/index.ts'
+import type { EditingActor, LeaseInterruption, LeaseRequest, RenewalRequest } from '../documents/index.ts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { TransactionRunner } from '../database/index.ts'
@@ -24,25 +24,26 @@ export class DocumentEditingService {
 
   /**
    * 编辑状态：能读就能看；正在编辑的人连同人名、最后活动时间与是不是调用者自己，没有有效的租约时为 null；
-   * 调用者现在能不能编辑（M3-P2 设计 §3.2，阅读页每 30 秒读一次，据此显示或隐藏"编辑"）
+   * 调用者现在能不能编辑（M3-P2 设计 §3.2，阅读页每 30 秒读一次，据此显示或隐藏"编辑"）；文档的"公式待更新"（M3-P3 设计 §3.8）
    */
   async status(actor: EditingActor, documentId: string): Promise<EditStatus> {
     return this.transactions.readSnapshot(async (transaction) => {
-      const { revision, editor, canEdit } = await this.leases.status(actor, documentId, transaction)
+      const { revision, editor, canEdit, formulasPending } = await this.leases.status(actor, documentId, transaction)
       if (editor === undefined)
-        return { revision, editor: null, canEdit }
+        return { revision, editor: null, canEdit, formulasPending }
       const accounts = await this.users.findByIds([editor.holderId], transaction)
-      return { revision, editor: { holder: toUserSummary(accountIn(accounts, editor.holderId)), lastActiveAt: editor.lastActiveAt.toISOString(), sameUser: editor.sameUser }, canEdit }
+      return { revision, editor: { holder: toUserSummary(accountIn(accounts, editor.holderId)), lastActiveAt: editor.lastActiveAt.toISOString(), sameUser: editor.sameUser }, canEdit, formulasPending }
     })
   }
 
   /**
-   * 申请（201）：取得新的一代时给出令牌、代次、修订号与它的来源、到期时间与上一个租约异常结束的提醒（补上一位持有者的人名）；
-   * 有效的租约在别人手里时 409 EDIT_LEASE_HELD，details 带持有者的人名、最后活动时间与是不是自己
+   * 申请（201）：取得新的一代时给出令牌、代次、修订号与它的来源、到期时间、上一个租约异常结束的提醒（补上一位持有者的人名）
+   * 与文档的"公式待更新"；有效的租约在别人手里时 409 EDIT_LEASE_HELD，details 带持有者的人名、最后活动时间与是不是自己。
+   * 页面过旧时 409 CLIENT_OUTDATED、文档比服务端新时 409 DOCUMENT_TOO_NEW（documents 抛出，M3-P3 设计 §3.5）
    */
-  async acquire(actor: EditingActor, documentId: string, clientInstanceId: string): Promise<AcquiredEditLease> {
+  async acquire(actor: EditingActor, documentId: string, request: LeaseRequest): Promise<AcquiredEditLease> {
     return this.transactions.run(async (transaction) => {
-      const outcome = await this.leases.acquire(actor, documentId, clientInstanceId, transaction)
+      const outcome = await this.leases.acquire(actor, documentId, request, transaction)
       if (outcome.kind === 'held') {
         const accounts = await this.users.findByIds([outcome.holderId], transaction)
         const details: EditLeaseHeldDetails = { holder: toUserSummary(accountIn(accounts, outcome.holderId)), lastActiveAt: outcome.lastActiveAt.toISOString(), sameUser: outcome.sameUser }
@@ -55,6 +56,7 @@ export class DocumentEditingService {
         source: outcome.source,
         expiresAt: outcome.expiresAt.toISOString(),
         interruption: outcome.interruption === undefined ? null : await this.withHolder(outcome.interruption, transaction),
+        formulasPending: outcome.formulasPending,
       }
     })
   }
@@ -65,10 +67,13 @@ export class DocumentEditingService {
     return { holder: toUserSummary(accountIn(accounts, interruption.holderId)), endedAt: interruption.endedAt.toISOString() }
   }
 
-  /** 心跳续租（200）：新的到期时间；租约不再有效时 409 EDIT_LEASE_LOST（documents 抛出，details 带原因） */
-  async renew(actor: EditingActor, documentId: string, idleSeconds: number, token: string | undefined): Promise<RenewedEditLease> {
+  /**
+   * 心跳续租（200）：新的到期时间；租约不再有效时 409 EDIT_LEASE_LOST（documents 抛出，details 带原因）；
+   * 页面过旧时 409 CLIENT_OUTDATED（M3-P3 设计 §3.5）
+   */
+  async renew(actor: EditingActor, documentId: string, request: RenewalRequest, token: string | undefined): Promise<RenewedEditLease> {
     return this.transactions.run(async (transaction) => {
-      const { expiresAt } = await this.leases.renew(actor, documentId, idleSeconds, token, transaction)
+      const { expiresAt } = await this.leases.renew(actor, documentId, request, token, transaction)
       return { expiresAt: expiresAt.toISOString() }
     })
   }

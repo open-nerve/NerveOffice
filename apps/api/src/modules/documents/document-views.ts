@@ -33,6 +33,9 @@ export function toDetail(row: DocumentRow, access: DocumentAccess, userId: strin
     revision: row.revision,
     profile: row.profile,
     formatVersion: row.formatVersion,
+    sdkVersion: row.sdkVersion,
+    // "公式待更新"（M3-P3 设计 §3.8）：最近一次写入时页面带来的标记，存量一律没有
+    formulasPending: row.formulasPending,
     permissions: documentPermissionsOf(access, row, userId),
   }
 }

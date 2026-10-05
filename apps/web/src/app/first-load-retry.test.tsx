@@ -1,9 +1,10 @@
 // 第一次就没取到 → 按"重试"（规范 §2.4，shared/lib/use-first-load-retry.ts）：各页面逐处核对同一件事——
 // 重试期间说明与同一个"重试"留着（不可用、标为忙碌、说"正在重试…"，不换成加载中），焦点还在按钮上；又失败了说明换成新的原因，焦点还在按钮上；
-// 取到之后说明连同按钮一起消失，焦点交给一直在的元素（标题、列表、页头开头、输入框、面板里的"取消"），不落到 body。
-// 得到页面另有说明的错误（404、403、链接不能用）时焦点同样有去处。分页表格与左侧导航见各自的测试，对话框与按关键词选一项见各自的组件测试。
+// 取到之后说明连同按钮一起消失，焦点交给一直在的元素（标题、列表、页头开头、输入框、面板里的"取消"、选目标位置时的"目标位置"这一行），不落到 body。
+// 得到页面另有说明的错误（404、403、链接不能用）时焦点同样有去处；得到未登录、转到登录页时由登录页接住（DEF-047）。
+// 分页表格与左侧导航见各自的测试，对话框与按关键词选一项见各自的组件测试。
 // 接口用假的 fetch；计时器是假的（跟着真实的时间走，另外可以拨过查询自动重试的 1 秒）。
-import type { AdminUser, DocumentDetail, DocumentSummary, SearchResult, SessionResponse, SpaceMemberListResponse, SpaceView } from '@nerve-office/contracts'
+import type { AdminUser, DocumentDetail, DocumentSummary, Folder, SearchResult, SessionResponse, SpaceMemberListResponse, SpaceView } from '@nerve-office/contracts'
 import type { FakeApi, Handler } from '../shared/testing/fake-api.test-support.ts'
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -50,6 +51,22 @@ function team(changes: Partial<SpaceView> = {}): SpaceView {
 
 const WEEKLY: DocumentSummary = { id: WEEKLY_ID, title: '周报', type: 'sheet', createdAt: '2026-09-29T01:00:00.000Z', updatedAt: '2026-09-29T02:00:00.000Z' }
 
+const PLAN_ID = '0199a2c4-0000-7000-8000-0000000000f1'
+
+/** 空间根目录下的一个文件夹（选目标位置时点得进去） */
+function rootFolder(spaceId: string, name: string): Folder {
+  return {
+    id: PLAN_ID,
+    spaceId,
+    parentId: null,
+    name,
+    depth: 1,
+    createdAt: '2026-09-29T01:00:00.000Z',
+    updatedAt: '2026-09-29T01:00:00.000Z',
+    permissions: { canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canDelete: true },
+  }
+}
+
 function detail(): DocumentDetail {
   return {
     ...WEEKLY,
@@ -60,6 +77,8 @@ function detail(): DocumentDetail {
     revision: 1,
     profile: 'sheet@1',
     formatVersion: 1,
+    sdkVersion: '1.0.1',
+    formulasPending: false,
     permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: false },
   }
 }
@@ -307,7 +326,7 @@ describe('需要登录的外层路由（会话确认失败的整页说明）', (
     expect(await screen.findByRole('heading', { level: 1, name: '我的空间' })).toBeInTheDocument()
   })
 
-  it('重试之后得到"未登录"：转到登录页（不再是加载失败的说明）', async () => {
+  it('重试之后得到"未登录"：转到登录页（不再是加载失败的说明），焦点交给用户名，不落到 body（DEF-047）', async () => {
     const check = controlled(server)
     const api = installFakeApi({ 'GET /api/auth/session': check.handler })
     const app = renderApp('/')
@@ -318,6 +337,22 @@ describe('需要登录的外层路由（会话确认失败的整页说明）', (
     fireEvent.click(retry)
     expect(await screen.findByRole('form', { name: '登录' })).toBeInTheDocument()
     expect(currentPath(app)).toBe('/login')
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('用户名')))
+  })
+
+  it('重试之后得到"登录已过期"：转到登录页，焦点交给"登录已过期"的说明（读屏先读到它，DEF-047）', async () => {
+    const check = controlled(server)
+    const api = installFakeApi({ 'GET /api/auth/session': check.handler })
+    const app = renderApp('/')
+    await untilRequested(api, 'GET /api/auth/session', 2)
+    const retry = within(await waitFor(() => blockWith('没能确认登录状态'))).getByRole('button', { name: '重试' })
+    check.answer(() => apiError(401, 'SESSION_EXPIRED'))
+    retry.focus()
+    fireEvent.click(retry)
+    const notice = (await screen.findByText('登录已过期，请重新登录')).closest('[role="status"]')
+    expect(notice).not.toBeNull()
+    expect(currentPath(app)).toBe('/login?reason=expired')
+    await waitFor(() => expect(document.activeElement).toBe(notice))
   })
 })
 
@@ -494,6 +529,56 @@ describe('空间页的行内操作', () => {
       target: () => within(form).getByText('目标位置：'),
     })
     expect(within(form).getByText('目标位置：')).toHaveTextContent('目标位置：市场部')
+  })
+
+  it('复制到另一个空间、它的子文件夹第一次就没取到，按"重试"：重试期间说明与按钮留着；取到之后焦点交给"目标位置"这一行（DEF-046）', async () => {
+    const folders = controlled(server)
+    const api = loggedIn({ [foldersKey(TEAM_ID)]: folders.handler, [DETAIL_KEY]: () => json(200, detail()) })
+    renderApp('/')
+    fireEvent.click(await screen.findByRole('button', { name: '操作 周报' }))
+    fireEvent.click(await screen.findByRole('button', { name: '复制' }))
+    const form = await screen.findByRole('form', { name: '复制' })
+    // 换到市场部：它的子文件夹还没取过（首页取的是我的空间的）
+    fireEvent.change(within(form).getByLabelText('目标空间'), { target: { value: TEAM_ID } })
+    await retryFlow({
+      api,
+      key: foldersKey(TEAM_ID),
+      endpoint: folders,
+      problem: () => alertWith(`目标位置加载失败：${SERVER}`),
+      loading: '正在加载目标位置…',
+      ok: () => json(200, { items: [rootFolder(TEAM_ID, '方案')], truncated: false }),
+      target: () => within(form).getByText('目标位置：'),
+      // 重试期间不再给上一次的原因（请求缓存已经清掉了它）
+      whileRetrying: () => expect(within(form).getByText('目标位置加载失败')).toBeInTheDocument(),
+    })
+    expect(within(form).getByText('目标位置：')).toHaveTextContent('目标位置：市场部')
+    expect(within(form).getByRole('button', { name: '进入 方案' })).toBeInTheDocument()
+  })
+
+  it('移动时点进的文件夹第一次就没取到，按"重试"：重试期间说明与按钮留着；取到之后焦点交给"目标位置"这一行（DEF-046）', async () => {
+    const folders = controlled(server)
+    const personal = SESSION.personalSpace.id
+    const api = loggedIn({
+      [foldersKey(personal)]: () => json(200, { items: [rootFolder(personal, '方案')], truncated: false }),
+      [foldersKey(personal, PLAN_ID)]: folders.handler,
+      [DETAIL_KEY]: () => json(200, detail()),
+    })
+    renderApp('/')
+    fireEvent.click(await screen.findByRole('button', { name: '操作 周报' }))
+    fireEvent.click(await screen.findByRole('button', { name: '移动' }))
+    const form = await screen.findByRole('form', { name: '移动' })
+    fireEvent.click(await within(form).findByRole('button', { name: '进入 方案' }))
+    await retryFlow({
+      api,
+      key: foldersKey(personal, PLAN_ID),
+      endpoint: folders,
+      problem: () => alertWith(`目标位置加载失败：${SERVER}`),
+      loading: '正在加载目标位置…',
+      ok: () => json(200, { items: [], truncated: false }),
+      target: () => within(form).getByText('目标位置：'),
+    })
+    expect(within(form).getByText('目标位置：')).toHaveTextContent('目标位置：我的空间 / 方案')
+    expect(within(form).getByText('这里没有子文件夹')).toBeInTheDocument()
   })
 })
 

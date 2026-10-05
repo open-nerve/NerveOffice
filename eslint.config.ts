@@ -79,9 +79,11 @@ const UNIVER_INTERNAL_SYMBOLS = [
   {
     name: '@univerjs/core',
     // IPermissionService、IUndoRedoService：只读守卫的本地权限点与撤销栈（M2-P3 设计 §3.6）；
-    // IContextService、FOCUSING_FX_BAR_EDITOR、DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY：只读守卫放开编辑栏的编辑器（P3 审查 A1）
+    // IContextService、FOCUSING_FX_BAR_EDITOR、DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY：只读守卫放开编辑栏的编辑器（P3 审查 A1）；
+    // CustomRangeType：链接的改写认链接用的区间种类（M3-P3 S2，internal-api 的 CELL_LINK_PROTOCOL，与 contracts 的 HYPERLINK_RANGE_TYPE 核对）
     importNames: [
       'AuthzIoLocalService',
+      'CustomRangeType',
       'DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY',
       'FOCUSING_FX_BAR_EDITOR',
       'IAuthzIoService',
@@ -598,6 +600,13 @@ const API_TRASH_PURGE = {
   importNames: ['TrashPurgeService'],
   message: '到期的回收站清理（TrashPurgeService）不判断人的权限，只由定时任务的模块（modules/jobs）调用（M2-P4 设计 §3.1）',
 }
+// 修订记录与回执的保留期清理（RevisionPurgeService）同样不判断人的权限，删掉的是别人的请求记录（M3-P3 设计 §3.9）：
+// 只由定时任务的模块调用，写法同上
+const API_REVISION_PURGE = {
+  regex: String.raw`(?:^|/)documents/index\.ts$`,
+  importNames: ['RevisionPurgeService'],
+  message: '修订记录与回执的保留期清理（RevisionPurgeService）不判断人的权限，只由定时任务的模块（modules/jobs）调用（M3-P3 设计 §3.9）',
+}
 // 永久删除一个删除单元的本体（TrashEntryPurger）不判断任何人的权限：只在 documents 模块内部由 TrashService.purge（锁下判断过权限之后）
 // 与 TrashPurgeService（到期的清理）调用，不从公开入口导出。别的模块直接引用它的文件由模块边界拦下；这里再拦下经公开入口的引用，
 // 将来有人把它加进入口也拦得住。jobs 也不例外：它只经 TrashPurgeService（M2-P6 复核 A 的 G1）
@@ -670,8 +679,11 @@ interface ApiFileKind {
   processEnv?: boolean
   /** 引用停用者文档的转移 DocumentTransferService（管理界面的模块与 documents 模块） */
   documentTransfer?: boolean
-  /** 引用到期的回收站清理 TrashPurgeService（定时任务的模块与 documents 模块） */
-  trashPurge?: boolean
+  /**
+   * 引用 documents 只给定时任务的入口：到期的回收站清理 TrashPurgeService、修订记录与回执的保留期清理 RevisionPurgeService
+   * （定时任务的模块与 documents 模块）
+   */
+  jobEntries?: boolean
   /** 经别的模块的公开入口引用它的仓储（只有集成测试专用的入口，为集成测试转出 documents 的仓储） */
   foreignRepositories?: boolean
   /** 一串 id 只用一个数组参数，不用 drizzle 的 inArray、notInArray（documents 与 users 的仓储） */
@@ -694,7 +706,7 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
     ...(kind.tables === true ? [] : [API_TABLES]),
     ...(kind.controller === true ? [API_REPOSITORY_FROM_CONTROLLER, API_TRANSACTIONS_FROM_CONTROLLER] : []),
     ...(kind.documentTransfer === true ? [] : [API_DOCUMENT_TRANSFER]),
-    ...(kind.trashPurge === true ? [] : [API_TRASH_PURGE]),
+    ...(kind.jobEntries === true ? [] : [API_TRASH_PURGE, API_REVISION_PURGE]),
     API_TRASH_ENTRY_PURGER,
     ...(kind.foreignRepositories === true ? [] : [API_FOREIGN_REPOSITORIES]),
     ...(kind.idArraysOnly === true ? [API_ID_LISTS] : []),
@@ -745,6 +757,9 @@ const WEB_TEST_CODE = ['**/*.test.{ts,tsx}', '**/*.test-support.{ts,tsx}']
  * 它们在 editor/testing/ 下（只在测试构建里），E2E 经模块边界的例外引用它们，所以它们不引用任何模块（nerve/editor-testing-shared）
  */
 const SELFTEST_SHARED_FILES = ['testing/read-only-entries.ts', 'testing/content-compare.ts', 'testing/selftest-report.ts', 'testing/switch-timing.ts']
+
+/** 链接地址判定的跨引擎用例（M3-P3 设计 §3.2，相对 contracts 元素的路径）：Node 的单元测试与 E2E 共用的测试辅助 */
+const LINK_ADDRESS_CASES_FILE = 'documents/link-address.test-support.ts'
 
 // 动态 import() 同样是引用（复验 C3）：ts/no-restricted-imports 只看 import 与 export 声明，下面两块按路径的限制挡不住动态引入——
 // 自检的入口页动态引入 shared/api 时 lint 放行，测试构建里两个页面的入口块照样多出 api、preload-helper（实测）。
@@ -937,11 +952,11 @@ export default antfu(
   },
   // 后端：先是所有文件的限制，后面的块按文件类型放开各自需要的部分（后面的块覆盖前面的同名规则）
   { name: 'nerve/api', files: ['apps/api/src/**/*.ts'], rules: apiRules() },
-  // 管理界面的模块可以引用停用者文档的转移（M2-P2 审查 A9），定时任务的模块可以引用到期的回收站清理（M2-P4 设计 §3.1）；
-  // documents 模块自己两样都可以。紧跟在上一块之后：后面按文件类型的块（控制器、仓储等）照常拦下，它们不需要
+  // 管理界面的模块可以引用停用者文档的转移（M2-P2 审查 A9），定时任务的模块可以引用到期的回收站清理与修订记录、回执的保留期清理
+  // （M2-P4 设计 §3.1，M3-P3 设计 §3.9）；documents 模块自己都可以。紧跟在上一块之后：后面按文件类型的块（控制器、仓储等）照常拦下，它们不需要
   { name: 'nerve/api-document-transfer', files: ['apps/api/src/modules/admin/**/*.ts'], rules: apiRules({ documentTransfer: true }) },
-  { name: 'nerve/api-trash-purge', files: ['apps/api/src/modules/jobs/**/*.ts'], rules: apiRules({ trashPurge: true }) },
-  { name: 'nerve/api-documents', files: ['apps/api/src/modules/documents/**/*.ts'], rules: apiRules({ documentTransfer: true, trashPurge: true }) },
+  { name: 'nerve/api-jobs', files: ['apps/api/src/modules/jobs/**/*.ts'], rules: apiRules({ jobEntries: true }) },
+  { name: 'nerve/api-documents', files: ['apps/api/src/modules/documents/**/*.ts'], rules: apiRules({ documentTransfer: true, jobEntries: true }) },
   // 集成测试专用的入口为集成测试转出数据库句柄、documents 的仓储与全部的表定义；app 层的程序接口（index.ts）与 app 层的其他文件同样拿不到
   // （复验 N6，M2-P6 复核 A 的 S3、复验 R-S4、复核 B 的 B4）
   { name: 'nerve/api-integration-entry-exports', files: [API_INTEGRATION_ENTRY], rules: apiRules({ databaseHandles: true, foreignRepositories: true, tables: true }) },
@@ -1223,6 +1238,9 @@ export default antfu(
             ] },
           },
           { from: { element: { type: ['web-shared', 'api-shared', 'integration-tests', 'e2e-tests'] } }, allow: { to: { element: { type: 'contracts', fileInternalPath: PUBLIC_ENTRY } } } },
+          // 链接地址判定的跨引擎用例（M3-P3 设计 §3.2）：同一份表在 Node 的单元测试与三个浏览器的 E2E 里都跑（E2E 经探针调用页面里打包的
+          // canonicalLink）。它是测试辅助，不经 contracts 的入口转出（生产代码引用不到它），这里只给 E2E 开这一个文件
+          { from: { element: { type: 'e2e-tests' } }, allow: { to: { element: { type: 'contracts', fileInternalPath: LINK_ADDRESS_CASES_FILE } } } },
           // 后端：模块之间只经对方的 index.ts；一个模块只能引用自己的表定义；表定义之间经 index.ts 互相引用（外键）
           { from: { element: { type: 'api-module' } }, allow: { to: { element: { type: 'api-module', captured: { module: '{{from.element.captured.module}}' } } } } },
           { from: { element: { type: 'api-schema' } }, allow: { to: { element: { type: ['api-schema', 'contracts'], fileInternalPath: PUBLIC_ENTRY } } } },

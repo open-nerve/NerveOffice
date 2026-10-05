@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import { uuidSchema } from '../ids/ids.ts'
 import { codePointLength, titleTextSchema } from '../text/text.ts'
+import { clientFormatQueryShape } from './client-format.ts'
+import { formulasPendingParam } from './content.ts'
 
 /** 文档类型：M1 只有表格，M6 加上文字文档（doc）。新增取值时，同时用迁移更新 documents.type 的 CHECK 约束。 */
 export const DOCUMENT_TYPES = ['sheet'] as const
@@ -166,7 +168,7 @@ export type DocumentPermissions = z.infer<typeof documentPermissionsSchema>
 
 /**
  * 文档的元数据与调用者的权限（GET /api/documents/{id}，新建、改动与复制的响应）。
- * 档案与格式版本不按已知的取值校验：客户端自己核对，不认识的显示"格式不受支持"，而不是当作响应不合法（P4 设计 §3.7.1）。
+ * 档案、格式版本与 SDK 版本不按已知的取值校验：客户端自己核对，不认识的显示"格式不受支持"，而不是当作响应不合法（P4 设计 §3.7.1）。
  */
 export const documentDetailSchema = documentSummarySchema.extend({
   spaceId: z.uuid(),
@@ -182,6 +184,16 @@ export const documentDetailSchema = documentSummarySchema.extend({
   revision: z.number().int().min(1),
   profile: z.string().min(1),
   formatVersion: z.number().int().min(1),
+  /**
+   * 最后一次写入这份文档的 SDK 版本（documents.sdk_version，M3-P3 设计 §3.5）：比本页的 SDK 新时，这份文档由更新的版本保存过
+   * （服务端回滚之后），页面一开始就只能阅读（DOCUMENT_TOO_NEW）
+   */
+  sdkVersion: z.string().min(1),
+  /**
+   * "公式待更新"（M3-P3 设计 §3.8）：最近一次写入的快照里公式结果可能还没算完。P4 据此在进入编辑时先全量重算、阅读页给出说明。
+   * 存量一律没有标记
+   */
+  formulasPending: z.boolean(),
   permissions: documentPermissionsSchema,
 })
 
@@ -259,12 +271,15 @@ export type CopyDocumentRequest = z.input<typeof copyDocumentRequestSchema>
  * 另存为副本（POST /api/documents/{id}/conflict-copies，M3-P2 设计 §3.2）的查询参数：正文是 gzip 压缩的快照
  * （SNAPSHOT_UPLOAD_CONTENT_TYPE，与保存同一个读取方式），元数据只能放在查询串里。
  * - requestId：与新建、复制一样做幂等，网络错误之后用同一个 requestId 重试只建一份；
- * - title：副本的标题，由页面给出（conflictCopyTitle：原标题加"（冲突副本 时间）"，时间按页面所在的时区）。
+ * - title：副本的标题，由页面给出（conflictCopyTitle：原标题加"（冲突副本 时间）"，时间按页面所在的时区）；
+ * - formulasPending 与客户端的构建、数据格式：与保存相同，都可选（M3-P3 设计 §3.5、§3.8）。
  * 放在哪里不由请求决定：服务端按"本人在原文档所在的空间能不能新建"放进原文档所在的文件夹或本人的个人空间（00 号计划书 §7.5）
  */
 export const conflictCopyQuerySchema = z.strictObject({
   requestId: uuidSchema,
   title: documentTitleSchema,
+  formulasPending: formulasPendingParam,
+  ...clientFormatQueryShape,
 })
 
 export type ConflictCopyQuery = z.output<typeof conflictCopyQuerySchema>

@@ -390,6 +390,55 @@ describe('US-M1-02 登录与退出', () => {
     fireEvent.click(screen.getByRole('button', { name: '重试' }))
     expect(await screen.findByRole('heading', { name: '我的空间' })).toBeInTheDocument()
   })
+
+  describe('登录页的初始焦点（DEF-047）', () => {
+    it('直接打开登录页：确认会话之后表单出现，焦点在用户名上', async () => {
+      installFakeApi(LOGGED_OUT)
+      renderApp('/login')
+      const username = await screen.findByLabelText('用户名')
+      await waitFor(() => expect(window.document.activeElement).toBe(username))
+    })
+
+    it.each([
+      ['expired', '登录已过期，请重新登录'],
+      ['password_changed', '刚才修改密码时没能确认结果，随后登录失效了：新密码可能已经生效，请试试用新密码登录。'],
+      ['password_reset', '刚才为自己生成重置链接时没能确认结果，随后登录失效了：你的密码可能已经失效，那条链接也已经找不回来。请联系另一位系统管理员为你生成新的重置链接。'],
+      ['account_disabled', '刚才停用自己的账户时没能确认结果，随后登录失效了：你的账户可能已经被停用。需要继续使用的话，请联系另一位系统管理员重新启用。'],
+    ])('带着为什么来到登录页的说明（%s）：焦点先给说明（读屏先读到它），不给用户名', async (reason, text) => {
+      installFakeApi(LOGGED_OUT)
+      renderApp(`/login?reason=${reason}`)
+      const notice = (await screen.findByText(text)).closest('[role="status"]')
+      expect(notice).not.toBeNull()
+      await waitFor(() => expect(window.document.activeElement).toBe(notice))
+    })
+
+    it('焦点已经在别处时不抢：表单出现时焦点照旧留在那里', async () => {
+      const pending = deferred()
+      installFakeApi({ 'GET /api/auth/session': pending.handler })
+      renderApp('/login')
+      await screen.findByRole('status', { name: '正在确认登录状态…' })
+      const elsewhere = window.document.createElement('button')
+      window.document.body.append(elsewhere)
+      onTestFinished(() => elsewhere.remove())
+      elsewhere.focus()
+      pending.resolve(apiError(401, 'UNAUTHENTICATED'))
+      await screen.findByRole('form', { name: '登录' })
+      await settle()
+      expect(window.document.activeElement).toBe(elsewhere)
+    })
+
+    it('焦点还在说明上时登录失败（说明换成错误的说明）：焦点交给登录按钮，不落到 body', async () => {
+      installFakeApi({ ...LOGGED_OUT, 'POST /api/auth/login': () => apiError(401, 'INVALID_CREDENTIALS') })
+      renderApp('/login?reason=expired')
+      const notice = (await screen.findByText('登录已过期，请重新登录')).closest('[role="status"]')
+      await waitFor(() => expect(window.document.activeElement).toBe(notice))
+      // 填写与点击都不移动焦点（例如密码管理器填好之后用鼠标点"登录"，Safari 里按钮不接焦点）：焦点还在说明上
+      await fillLogin('alice', 'wrong')
+      expect(await screen.findByRole('alert')).toHaveTextContent('用户名或密码错误')
+      expect(screen.queryByText('登录已过期，请重新登录')).toBeNull()
+      expect(window.document.activeElement).toBe(screen.getByRole('button', { name: '登录' }))
+    })
+  })
 })
 
 describe('会话的全局处理', () => {
@@ -663,7 +712,7 @@ describe('US-M1-03 个人空间的文档列表', () => {
 })
 
 describe('US-M1-04 新建表格', () => {
-  const created = { ...document(9), title: '未命名表格', spaceId: SESSION.personalSpace.id, space: { id: SESSION.personalSpace.id, type: 'personal' }, folderId: null, accessVia: 'space', revision: 1, profile: 'sheet@1', formatVersion: 1, permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true }, replayed: false }
+  const created = { ...document(9), title: '未命名表格', spaceId: SESSION.personalSpace.id, space: { id: SESSION.personalSpace.id, type: 'personal' }, folderId: null, accessVia: 'space', revision: 1, profile: 'sheet@1', formatVersion: 1, sdkVersion: '1.0.1', formulasPending: false, permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true }, replayed: false }
 
   it('新建：带 requestId 发出请求，建好之后整页打开编辑器页；进行中与离开之前按钮都标为不可用，重复点击不再请求', async () => {
     const pending = deferred()

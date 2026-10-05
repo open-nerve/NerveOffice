@@ -7,7 +7,7 @@
 // 只放这类东西（数据库句柄、documents 的仓储与全部的表定义）；集成测试用到的其余程序接口（建应用、迁移、各模块的服务）照旧经 app/index.ts
 import { auditEvents } from '../db/schema/audit/index.ts'
 import { authInvitations, authLoginThrottles, authPasswordResets, authSessions } from '../db/schema/auth/index.ts'
-import { documentContents, documentEditLeases, documentGrants, documentRevisions, documents, folders, trashEntries } from '../db/schema/documents/index.ts'
+import { documentContents, documentEditLeases, documentGrants, documentRevisions, documents, documentSaveReceipts, folders, trashEntries } from '../db/schema/documents/index.ts'
 import { spaceMembers, spaces } from '../db/schema/spaces/index.ts'
 import { users } from '../db/schema/users/index.ts'
 
@@ -29,6 +29,7 @@ export const TABLE_DEFINITIONS: Readonly<Record<string, unknown>> = {
   documentGrants,
   documentRevisions,
   documents,
+  documentSaveReceipts,
   folders,
   trashEntries,
   spaceMembers,

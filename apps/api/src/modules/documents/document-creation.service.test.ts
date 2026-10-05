@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer'
+import { createHash } from 'node:crypto'
 import zlib from 'node:zlib'
-import { sheetSnapshotFor, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
+import { canonicalContentText, contentHashInput, sheetSnapshotFor, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { DocumentCreationService } from './document-creation.service.ts'
@@ -12,8 +13,8 @@ const MISSING_ID = '0199a2c4-0000-7000-8000-0000000000fe'
 
 function setup() {
   const store = new FakeStore()
-  const { transactions, documents, contents, revisions, folders, tree, spaces, policy, audit } = store.deps
-  const service = new DocumentCreationService(transactions, documents, contents, revisions, folders, tree, spaces, policy, audit)
+  const { transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit } = store.deps
+  const service = new DocumentCreationService(transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit)
   return { store, service }
 }
 
@@ -37,8 +38,11 @@ describe('DocumentCreationService.create', () => {
     const raw = zlib.gunzipSync(stored?.snapshot ?? Buffer.alloc(0)).toString('utf8')
     expect(raw).toBe(sheetSnapshotFor(row?.unitId ?? ''))
     expect(stored?.rawBytes).toBe(Buffer.byteLength(raw))
+    // 内容哈希与非空的资源名（M3-P3）：按这份文档的模板算（unitId 不同，哈希就不同）；模板的资源都是空的
+    const contentHash = createHash('sha256').update(contentHashInput(canonicalContentText(raw))).digest()
+    expect(stored).toMatchObject({ contentHash, resourceNames: [] })
 
-    expect(store.revisions).toEqual([expect.objectContaining({ documentId: detail.id, revision: 1, kind: 'created', requestId: REQUEST_ID, source: null, savedBy: ALICE })])
+    expect(store.revisions).toEqual([expect.objectContaining({ documentId: detail.id, revision: 1, kind: 'created', requestId: REQUEST_ID, source: null, savedBy: ALICE, contentHash, clientBuild: null })])
     expect(store.revisions[0]?.payloadDigest).toEqual(createdPayloadDigest('sheet', '周报'))
     expect(store.audits).toEqual([{ action: 'documents.created', actor: { type: 'user', id: ALICE }, target: { type: 'document', id: detail.id }, origin: HTTP_ORIGIN, details: { revision: 1, folderId: null } }])
   })
@@ -49,15 +53,19 @@ describe('DocumentCreationService.create', () => {
     const second = await service.create(member(ALICE), { type: 'sheet', requestId: '0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0e' }, HTTP_ORIGIN)
     expect(first.title).toBe('未命名表格')
     expect(store.documents.get(first.id)?.unitId).not.toBe(store.documents.get(second.id)?.unitId)
+    // 每份新文档的哈希单独算：模板的顶层 id 是各自的 unitId
+    expect(store.contents.get(first.id)?.contentHash).not.toEqual(store.contents.get(second.id)?.contentHash)
   })
 
-  it('先按 requestId 排队，再查修订记录', async () => {
+  it('先按 requestId 排队，再查修订记录与回执', async () => {
     const { store, service } = setup()
     await service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID }, HTTP_ORIGIN)
-    const lock = store.repositories.revisions.lockCreateRequest.mock.invocationCallOrder[0] ?? Number.NaN
+    const lock = store.repositories.revisions.lockRequest.mock.invocationCallOrder[0] ?? Number.NaN
     const lookup = store.repositories.revisions.findByRequestId.mock.invocationCallOrder[0] ?? Number.NaN
-    expect(store.repositories.revisions.lockCreateRequest).toHaveBeenCalledWith(REQUEST_ID, expect.anything())
+    const receipts = store.repositories.receipts.findByRequestId.mock.invocationCallOrder[0] ?? Number.NaN
+    expect(store.repositories.revisions.lockRequest).toHaveBeenCalledWith(REQUEST_ID, expect.anything())
     expect(lock).toBeLessThan(lookup)
+    expect(lock).toBeLessThan(receipts)
   })
 
   it('同一个请求重放：返回同一份文档的当前元数据，标为重放（M2-P6 复核第二批 S-1），不再新建', async () => {
@@ -92,6 +100,16 @@ describe('DocumentCreationService.create', () => {
     const document = store.addDocument()
     store.addRevision({ documentId: document.id, revision: 2, kind: 'saved', requestId: REQUEST_ID, payloadDigest: createdPayloadDigest('sheet', '未命名表格'), source: { clientInstanceId: REQUEST_ID, localSeq: 1 }, savedBy: ALICE })
     expect((await rejection(service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID }, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+  })
+
+  it('用在一次内容相同的保存上（回执）的 requestId：REQUEST_ID_CONFLICT，不建文档——一个 requestId 不同时出现在回执与修订记录里（审查 A3）', async () => {
+    const { store, service } = setup()
+    const document = store.addDocument()
+    store.receipts.push({ requestId: REQUEST_ID, documentId: document.id, revision: 1, payloadDigest: createdPayloadDigest('sheet', '未命名表格'), savedBy: ALICE, savedAt: new Date('2026-09-27T08:00:00.000Z') })
+    expect((await rejection(service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID }, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+    expect(store.documents.size).toBe(1)
+    expect(store.revisions).toEqual([])
+    expect(store.audits).toEqual([])
   })
 
   it('重放时已经不能访问那份文档：REQUEST_ID_CONFLICT', async () => {
@@ -185,7 +203,7 @@ describe('DocumentCreationService.create 的目标文件夹（M2-P4）', () => {
     await service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID, folderId: folder.id }, HTTP_ORIGIN)
 
     expect(store.treeLocks).toEqual([[ALICE_SPACE]])
-    const request = store.repositories.revisions.lockCreateRequest.mock.invocationCallOrder[0] ?? Number.NaN
+    const request = store.repositories.revisions.lockRequest.mock.invocationCallOrder[0] ?? Number.NaN
     const tree = store.tree.lock.mock.invocationCallOrder[0] ?? Number.NaN
     const held = store.spaces.holdSpace.mock.invocationCallOrder[0] ?? Number.NaN
     const checked = store.repositories.folders.findById.mock.invocationCallOrder[0] ?? Number.NaN

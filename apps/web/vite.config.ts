@@ -1,10 +1,12 @@
 import type { Connect, Plugin } from 'vite'
 import { resolve } from 'node:path'
+import process from 'node:process'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defaultClientConditions, defineConfig } from 'vite'
 // 配置文件由 Vite 打包后执行：直接引用 contracts 的源码，开发时不需要先构建 contracts
 import { DOCUMENT_PAGE_PATTERN } from '../../packages/contracts/src/documents/document-page.ts'
+import { clientBuild } from './build/client-build.ts'
 import { moduleSources } from './build/module-sources.ts'
 import { thirdPartyLicenses } from './build/third-party-licenses.ts'
 
@@ -51,6 +53,8 @@ export default defineConfig(({ mode }) => {
   const testBuild = mode === 'e2e'
   return {
     plugins: [react(), tailwindcss(), licenses.emit, sources.emit, editorPageRewrite()],
+    // 页面的构建版本（M3-P3 设计 §3.5，见 build/client-build.ts）：编辑器页经 features/sheet-editor/client-format.ts 读它
+    define: { __NERVE_CLIENT_BUILD__: JSON.stringify(clientBuild(resolve(import.meta.dirname, '../..'), process.env)) },
     // 工作区的包（contracts）直接读源码，开发时不需要先构建（ADR-003）
     resolve: { conditions: ['@nerve-office/source', ...defaultClientConditions] },
     build: {

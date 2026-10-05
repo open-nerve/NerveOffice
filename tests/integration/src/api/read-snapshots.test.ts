@@ -18,6 +18,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount, createPassiveAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
+import { acquireBody } from '../support/client-format.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
 import { setGrants } from '../support/grants.ts'
@@ -107,7 +108,7 @@ beforeAll(async () => {
   const trashed = (await seedDocument(database, { spaceId: amy.personalSpaceId, createdBy: amy.id, title: '快照：删掉的', folderId: ((await folder.json()) as { id: string }).id })).id
   expect((await asUser(app.baseUrl, session, `/api/documents/${trashed}`, { method: 'DELETE' })).status).toBe(204)
   // 艾米的文档上有她的有效租约（M3-P1）：编辑状态要判断持有者的登录与编辑权，那两条查询同样在快照里
-  expect((await asUser(app.baseUrl, session, `/api/documents/${document}/edit-lease`, { method: 'POST', body: { clientInstanceId: randomUUID() } })).status).toBe(201)
+  expect((await asUser(app.baseUrl, session, `/api/documents/${document}/edit-lease`, { method: 'POST', body: acquireBody(randomUUID()) })).status).toBe(201)
   w = { amy, root, leaver: leaver.id, document, team }
   routes = routesOf(app)
   capture = captureStatements(database.name)

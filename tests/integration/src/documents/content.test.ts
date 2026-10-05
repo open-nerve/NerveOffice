@@ -239,11 +239,13 @@ describe('US-M1-05 保存', () => {
     expect(audits).toEqual([{ actor_id: alice.id, details: { revision: 2 } }])
   })
 
-  it('没有修改也可以保存：修订号照常加一', async () => {
+  it('US-M3-14 没有修改的保存（M3-P3 设计 §3.7）：存量（没有内容哈希）的第一次保存照常加一、补上哈希；之后内容相同的保存不加修订号——给出当前修订与它的时间，unchanged 为真', async () => {
     const document = await aliceDocument()
     const raw = Buffer.from(sheetSnapshotFor(document.unitId), 'utf8')
-    expect((await saved(await put(aliceSession, document.id, raw, { baseRevision: 1 }))).revision).toBe(2)
-    expect((await saved(await put(aliceSession, document.id, raw, { baseRevision: 2 }))).revision).toBe(3)
+    const first = await saved(await put(aliceSession, document.id, raw, { baseRevision: 1 }))
+    expect(first).toMatchObject({ revision: 2, unchanged: false })
+    expect(await saved(await put(aliceSession, document.id, raw, { baseRevision: 2 }))).toEqual({ revision: 2, savedAt: first.savedAt, unchanged: true })
+    expect(await storedRevision(document.id)).toBe(2)
   })
 
   it('解压后恰好 5 MiB 可以保存', async () => {
@@ -270,9 +272,10 @@ describe('US-M1-05 同一次保存重发不会保存两次', () => {
   it('并发的相同请求：只保存一次，每个请求都拿到同一个结果', async () => {
     const document = await aliceDocument()
     const raw = snapshotOf(document.unitId, '并发')
-    // 同一个页面的几次重发（M3-P1 起保存要求租约）：共用这个页面申请到的一份租约，各自申请会互相改写成新的一代
+    // 同一个页面的重发赶上了还在路上的原请求（M3-P1 起保存要求租约）：共用这个页面申请到的一份租约，各自申请会互相改写成新的一代。
+    // 同时发两次：同一个人在快照检查池里至多两份（INSPECTIONS_PER_ACCOUNT，M3-P3 审查 A2），多出来的立即 503、由页面过一会儿重发
     const params = { baseRevision: 1, requestId: randomUUID(), lease: await acquireLease(app.baseUrl, aliceSession, document.id, TAB_A) }
-    const results = await Promise.all(Array.from({ length: 5 }, async () => saved(await put(aliceSession, document.id, raw, params))))
+    const results = await Promise.all(Array.from({ length: 2 }, async () => saved(await put(aliceSession, document.id, raw, params))))
     expect(new Set(results.map(result => JSON.stringify(result))).size).toBe(1)
     expect(await storedRevision(document.id)).toBe(2)
   })
@@ -340,10 +343,11 @@ describe('US-M1-07 旧页面的保存不覆盖新内容', () => {
 
   it('同一个基准修订号的并发保存（各自的 requestId）：只有一个成功，其余都是冲突，来源指向成功的那一次', async () => {
     const document = await aliceDocument()
-    // M3-P1 起同一时刻只有一个标签页能写：原来六个标签页同时保存，改成持有租约的那一个页面并发发出六次保存（各自的 requestId 与本地序号）。
-    // 要验证的仍是修订号的条件写入在文档行的锁下只放过一个，其余都是冲突、来源指向成功的那一次
+    // M3-P1 起同一时刻只有一个标签页能写：原来六个标签页同时保存，改成持有租约的那一个页面并发发出几次保存（各自的 requestId 与本地序号）。
+    // 要验证的仍是修订号的条件写入在文档行的锁下只放过一个，其余都是冲突、来源指向成功的那一次。
+    // 同时发两次：同一个人在快照检查池里至多两份（INSPECTIONS_PER_ACCOUNT，M3-P3 审查 A2），多出来的立即 503、由页面过一会儿重发
     const lease = await acquireLease(app.baseUrl, aliceSession, document.id)
-    const tabs = Array.from<string>({ length: 6 }).fill(lease.clientInstanceId)
+    const tabs = Array.from<string>({ length: 2 }).fill(lease.clientInstanceId)
     const responses = await Promise.all(tabs.map(async (tab, index) => put(aliceSession, document.id, snapshotOf(document.unitId, `并发 ${index}`), { baseRevision: 1, clientInstanceId: tab, localSeq: index, lease })))
     const statuses = responses.map(response => response.status)
     expect(statuses.filter(status => status === 200)).toHaveLength(1)
@@ -471,19 +475,19 @@ describe('保存的请求体：上限、压缩与内容类型', () => {
   })
 })
 
-describe('保存的基本校验：422 SNAPSHOT_INVALID', () => {
+describe('保存的快照检查：422 SNAPSHOT_INVALID，details 是违反的规则（M3-P3；每条规则的阳性与阴性见 save-protocol.test.ts）', () => {
   it.each([
-    ['不是 JSON', (_unitId: string) => Buffer.from('{"id":', 'utf8')],
-    ['不是 UTF-8', (_unitId: string) => Buffer.from([0x7B, 0xFF, 0x7D])],
-    ['顶层是数组', (unitId: string) => Buffer.from(JSON.stringify([unitId]), 'utf8')],
-    ['sheets 不是对象', (unitId: string) => Buffer.from(JSON.stringify({ id: unitId, sheetOrder: [], sheets: [] }), 'utf8')],
-    ['嵌套超过 64 层', (unitId: string) => Buffer.from(`{"id":"${unitId}","sheetOrder":[],"sheets":{"a":${'['.repeat(80)}${']'.repeat(80)}}}`, 'utf8')],
-    ['unitId 是别的文档的', (_unitId: string) => snapshotOf(randomUUID(), 'x')],
-  ])('%s', async (_case, build) => {
+    ['不是 JSON', 'json', (_unitId: string) => Buffer.from('{"id":', 'utf8')],
+    ['不是 UTF-8', 'encoding', (_unitId: string) => Buffer.from([0x7B, 0xFF, 0x7D])],
+    ['顶层是数组', 'structure', (unitId: string) => Buffer.from(JSON.stringify([unitId]), 'utf8')],
+    ['sheets 不是对象', 'structure', (unitId: string) => Buffer.from(JSON.stringify({ id: unitId, sheetOrder: [], sheets: [] }), 'utf8')],
+    ['嵌套超过 64 层', 'depth', (unitId: string) => Buffer.from(`{"id":"${unitId}","sheetOrder":[],"sheets":{"a":${'['.repeat(80)}${']'.repeat(80)}}}`, 'utf8')],
+    ['unitId 是别的文档的', 'unit-id', (_unitId: string) => snapshotOf(randomUUID(), 'x')],
+  ])('%s：%s', async (_case, rule, build) => {
     const document = await aliceDocument()
     const response = await put(aliceSession, document.id, build(document.unitId))
     expect(response.status).toBe(422)
-    expect((await errorOf(response)).code).toBe('SNAPSHOT_INVALID')
+    expect(await errorOf(response)).toMatchObject({ code: 'SNAPSHOT_INVALID', details: { rule } })
     expect(await storedRevision(document.id)).toBe(1)
   })
 })

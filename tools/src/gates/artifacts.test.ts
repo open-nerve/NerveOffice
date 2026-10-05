@@ -505,10 +505,14 @@ describe('US-M1-11 A01 产物扫描：外部地址与关键字', () => {
     ['样式的 url()', (n: number) => 'a{b:url(http://www.w3.org/2000/svg)}'.repeat(n), 'assets/x.css'],
     ['SVG 样式里的 url()', (n: number) => `<svg><style>${'a{b:url(http://www.w3.org/2000/svg)}'.repeat(n)}</style></svg>`, 'assets/a.svg'],
   ])('不是平方级（复验 TA7）：%s', (_case, build, path) => {
+    // 按这个线程用掉的 CPU 时间计（process.threadCpuUsage，毫秒），不按墙上时间：机器忙时等 CPU 的时间不算进去，比值不受别的进程
+    // 抢 CPU 的影响。墙上时间在两路子 Agent 同时跑 E2E 与集成测试时实测到 88 倍（M3-P3），超过下面的上限；扫描是同步的，
+    // 全在这个线程上，与测试池用进程还是线程无关
     const once = (content: string): number => {
-      const start = performance.now()
+      const start = process.threadCpuUsage()
       expect(scan(content, path).violations).toEqual([])
-      return performance.now() - start
+      const used = process.threadCpuUsage(start)
+      return (used.user + used.system) / 1000
     }
     once(build(1000))
     // 大小两种数量交替测，各取五次里最快的一次：两者经历同样的负载，比值不受机器忙闲的影响（原来先后分开测、

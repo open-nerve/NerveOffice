@@ -1,14 +1,17 @@
 // 另存为副本（M3-P2 设计 §3.2，00 号计划书 §7.5）：只要求能读原文档、放在哪里（锁下决定）、unitId、新文档的各列、不带授权、
 // requestId 的幂等与取锁的顺序。真实的 SQL、HTTP 的正文读取与确定交错的锁由集成测试覆盖（documents/conflict-copies.test.ts），
 // 这里的假仓储只保持同样的语义。
+import type { ConflictCopyQuery } from '@nerve-office/contracts'
 import type { GzipBody } from '../security/index.ts'
 import { Buffer } from 'node:buffer'
+import { createHash } from 'node:crypto'
 import zlib from 'node:zlib'
-import { UNIVER_SDK_VERSION } from '@nerve-office/contracts'
+import { canonicalContentText, contentHashInput, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
+import { documentTooNew } from './client-format-gate.ts'
 import { DocumentConflictCopyService } from './document-conflict-copy.service.ts'
-import { ALICE, ALICE_SPACE, BOB, BOB_SPACE, FakeStore, HTTP_ORIGIN, member, TEAM_SPACE } from './documents.test-support.ts'
+import { ALICE, ALICE_SPACE, BOB, BOB_SPACE, CURRENT_CLIENT, FakeStore, HTTP_ORIGIN, member, TEAM_SPACE } from './documents.test-support.ts'
 import { conflictCopyPayloadDigest } from './payload-digest.ts'
 
 const MISSING_ID = '0199a2c4-0000-7000-8000-0000000000fd'
@@ -16,8 +19,8 @@ const TITLE = '周报（冲突副本 2026-10-04 14:30）'
 
 function setup() {
   const store = new FakeStore()
-  const { transactions, documents, contents, revisions, folders, tree, spaces, policy, audit } = store.deps
-  return { store, service: new DocumentConflictCopyService(transactions, documents, contents, revisions, folders, tree, spaces, policy, audit) }
+  const { transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit, clientFormats, inspector, logger } = store.deps
+  return { store, service: new DocumentConflictCopyService(transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit, clientFormats, inspector, logger) }
 }
 
 let requests = 0
@@ -26,11 +29,21 @@ function nextRequestId(): string {
   return `0199a2c4-0000-7000-8000-${String(requests).padStart(12, '0')}`
 }
 
+/** 另存为副本的查询参数：新的 requestId、标题，页面上报的是现在的构建与数据格式（M3-P3） */
+function copyCommand(overrides: Partial<ConflictCopyQuery> = {}): ConflictCopyQuery {
+  return { requestId: nextRequestId(), title: TITLE, ...CURRENT_CLIENT, ...overrides }
+}
+
 /** 团队空间里的一份原文档（可以放在文件夹里）；艾米在团队空间的角色由用例给出 */
 function teamSource(store: FakeStore, options: { folderId?: string } = {}) {
   const document = store.addDocument({ spaceId: TEAM_SPACE, createdBy: BOB, title: '周报', ...(options.folderId === undefined ? {} : { folderId: options.folderId }) })
-  store.contents.set(document.id, { snapshot: zlib.gzipSync('{}'), rawBytes: 2 })
+  store.contents.set(document.id, { snapshot: zlib.gzipSync('{}'), rawBytes: 2, contentHash: null, resourceNames: null })
   return document
+}
+
+/** 规范化的内容哈希（contracts 的口径） */
+function hashOf(body: GzipBody): Buffer {
+  return createHash('sha256').update(contentHashInput(canonicalContentText(body.decompressed.toString('utf8')))).digest()
 }
 
 /** 本页捕获的快照（顶层 id 默认是原文档的 unitId），上传的是它的 gzip */
@@ -56,17 +69,25 @@ describe('DocumentConflictCopyService.copy：新文档', () => {
     store.documents.set(source.id, { ...source, writeEpoch: 5, revision: 7 })
     const body = upload(source.unitId)
     const requestId = nextRequestId()
-    const copy = await service.copy(member(ALICE), source.id, { requestId, title: TITLE }, body, HTTP_ORIGIN)
+    const copy = await service.copy(member(ALICE), source.id, copyCommand({ requestId }), body, HTTP_ORIGIN)
 
     expect(copy.id).not.toBe(source.id)
     expect(copy).toMatchObject({ title: TITLE, spaceId: TEAM_SPACE, folderId: folder.id, revision: 1, type: 'sheet', profile: 'sheet@1', formatVersion: 1, accessVia: 'space', replayed: false })
     expect(copy.permissions).toMatchObject({ canEdit: true, canRename: true })
     const stored = store.documents.get(copy.id)
     expect(stored).toMatchObject({ unitId: source.unitId, writeEpoch: 0, createdBy: ALICE, revision: 1 })
-    // 元数据照原文档（INSERT … SELECT），SDK 版本是平台内置的：内容由它写出
-    expect(store.repositories.documents.copyFrom).toHaveBeenCalledExactlyOnceWith(source.id, { spaceId: TEAM_SPACE, folderId: folder.id, title: TITLE, createdBy: ALICE, sdkVersion: UNIVER_SDK_VERSION }, expect.anything())
-    // 内容是上传的压缩字节（原样存下，与保存一样），解压前的字节数
-    expect(store.contents.get(copy.id)).toEqual({ snapshot: body.compressed, rawBytes: body.decompressed.length })
+    // 类型与 unitId 照原文档（INSERT … SELECT），信封是这次上传的、核对过的页面的（M3-P3，审查 A7）：档案、格式版本、SDK 版本、客户端构建，"公式待更新"
+    expect(store.repositories.documents.copyFrom).toHaveBeenCalledExactlyOnceWith(source.id, {
+      spaceId: TEAM_SPACE,
+      folderId: folder.id,
+      title: TITLE,
+      createdBy: ALICE,
+      envelope: { profile: 'sheet@1', formatVersion: 1, sdkVersion: UNIVER_SDK_VERSION, clientBuild: '0.1.0', formulasPending: false },
+    }, expect.anything())
+    // 内容是上传的压缩字节（原样存下，与保存一样），解压前的字节数，连同规范化的哈希与非空的资源名（没有资源）
+    expect(store.contents.get(copy.id)).toEqual({ snapshot: body.compressed, rawBytes: body.decompressed.length, contentHash: hashOf(body), resourceNames: [] })
+    // 检查池按发起的账户限份数（审查 A2）：传的是另存的人
+    expect(store.inspector.inspect).toHaveBeenCalledExactlyOnceWith(body.decompressed, 'sheet@1', ALICE)
     expect(store.revisions.filter(row => row.documentId === copy.id)).toEqual([expect.objectContaining({
       revision: 1,
       kind: 'created',
@@ -74,6 +95,8 @@ describe('DocumentConflictCopyService.copy：新文档', () => {
       source: null,
       savedBy: ALICE,
       payloadDigest: conflictCopyPayloadDigest(source.id, TITLE, body.decompressed),
+      contentHash: hashOf(body),
+      clientBuild: '0.1.0',
     })])
     // 原文档一点不动
     expect(store.documents.get(source.id)).toMatchObject({ revision: 7, writeEpoch: 5 })
@@ -87,11 +110,22 @@ describe('DocumentConflictCopyService.copy：新文档', () => {
     }])
   })
 
+  it('原文档由更新的版本写过（回滚之后：档案、格式版本、SDK 版本都比服务端新）：副本的信封是本页的（核对过、等于服务端的），不照抄原文档——副本不是"比服务端新"（审查 A7）', async () => {
+    const { store, service } = setup()
+    const source = store.addDocument({ spaceId: ALICE_SPACE, profile: 'sheet@2' as 'sheet@1', formatVersion: 2, sdkVersion: '99.0.0', formulasPending: true })
+    const copy = await service.copy(member(ALICE), source.id, copyCommand(), upload(source.unitId), HTTP_ORIGIN)
+    expect(copy).toMatchObject({ profile: 'sheet@1', formatVersion: 1, sdkVersion: UNIVER_SDK_VERSION, formulasPending: false })
+    expect(store.documents.get(copy.id)).toMatchObject({ type: 'sheet', unitId: source.unitId, profile: 'sheet@1', formatVersion: 1, sdkVersion: UNIVER_SDK_VERSION, formulasPending: false })
+    expect(documentTooNew(store.documents.get(copy.id) ?? source)).toBe(false)
+    // 原文档不动
+    expect(store.documents.get(source.id)).toMatchObject({ profile: 'sheet@2', formatVersion: 2, sdkVersion: '99.0.0' })
+  })
+
   it('原文档在空间的根目录：副本也在根目录', async () => {
     const { store, service } = setup()
     store.setMember(TEAM_SPACE, ALICE, 'admin')
     const source = teamSource(store)
-    const copy = await service.copy(member(ALICE), source.id, { requestId: nextRequestId(), title: TITLE }, upload(source.unitId), HTTP_ORIGIN)
+    const copy = await service.copy(member(ALICE), source.id, copyCommand(), upload(source.unitId), HTTP_ORIGIN)
     expect([copy.spaceId, copy.folderId]).toEqual([TEAM_SPACE, null])
   })
 
@@ -99,7 +133,7 @@ describe('DocumentConflictCopyService.copy：新文档', () => {
     const { store, service } = setup()
     const folder = store.addFolder({ spaceId: ALICE_SPACE, name: '草稿' })
     const source = store.addDocument({ spaceId: ALICE_SPACE, folderId: folder.id })
-    const copy = await service.copy(member(ALICE), source.id, { requestId: nextRequestId(), title: TITLE }, upload(source.unitId), HTTP_ORIGIN)
+    const copy = await service.copy(member(ALICE), source.id, copyCommand(), upload(source.unitId), HTTP_ORIGIN)
     expect([copy.spaceId, copy.folderId]).toEqual([ALICE_SPACE, folder.id])
     expect(store.spaces.holdSpace.mock.calls.map(call => call[0])).toEqual([ALICE_SPACE])
   })
@@ -110,7 +144,7 @@ describe('DocumentConflictCopyService.copy：新文档', () => {
     const folder = store.addFolder({ spaceId: TEAM_SPACE, name: '资料' })
     const source = teamSource(store, { folderId: folder.id })
     store.repositories.folders.findById.mockResolvedValueOnce(undefined)
-    const copy = await service.copy(member(ALICE), source.id, { requestId: nextRequestId(), title: TITLE }, upload(source.unitId), HTTP_ORIGIN)
+    const copy = await service.copy(member(ALICE), source.id, copyCommand(), upload(source.unitId), HTTP_ORIGIN)
     expect([copy.spaceId, copy.folderId]).toEqual([TEAM_SPACE, null])
   })
 
@@ -128,7 +162,7 @@ describe('DocumentConflictCopyService.copy：新文档', () => {
     const folder = store.addFolder({ spaceId: TEAM_SPACE, name: '资料' })
     const source = teamSource(store, { folderId: folder.id })
     arrange(store)
-    const copy = await service.copy(member(ALICE), source.id, { requestId: nextRequestId(), title: TITLE }, upload(source.unitId), HTTP_ORIGIN)
+    const copy = await service.copy(member(ALICE), source.id, copyCommand(), upload(source.unitId), HTTP_ORIGIN)
     expect(copy).toMatchObject({ spaceId: ALICE_SPACE, folderId: null, space: { id: ALICE_SPACE, type: 'personal' }, accessVia: 'space', permissions: { canEdit: true, canShare: true } })
     expect(store.audits.at(-1)?.details).toEqual({ sourceId: source.id, spaceId: ALICE_SPACE })
     // 不放进原文档所在的空间就不取它的树锁
@@ -140,7 +174,7 @@ describe('DocumentConflictCopyService.copy：新文档', () => {
     const source = teamSource(store)
     store.setGrant(source.id, ALICE, role)
     store.setGrant(source.id, BOB, 'editor', ALICE)
-    const copy = await service.copy(member(ALICE), source.id, { requestId: nextRequestId(), title: TITLE }, upload(source.unitId), HTTP_ORIGIN)
+    const copy = await service.copy(member(ALICE), source.id, copyCommand(), upload(source.unitId), HTTP_ORIGIN)
     expect([copy.spaceId, copy.folderId, copy.accessVia]).toEqual([ALICE_SPACE, null, 'space'])
     expect([...store.grantRecords.values()].filter(grant => grant.documentId === copy.id)).toEqual([])
     // 别人（原文档上的被授权人）看不到副本
@@ -152,8 +186,8 @@ describe('DocumentConflictCopyService.copy：拒绝', () => {
   it('US-M3-12 读不到原文档（看不到、不存在）：同一个 NOT_FOUND，不取任何锁，什么也不写', async () => {
     const { store, service } = setup()
     const source = store.addDocument({ spaceId: BOB_SPACE, createdBy: BOB })
-    const hidden = await errorOf(service.copy(member(ALICE), source.id, { requestId: nextRequestId(), title: TITLE }, upload(source.unitId), HTTP_ORIGIN))
-    const missing = await errorOf(service.copy(member(ALICE), MISSING_ID, { requestId: nextRequestId(), title: TITLE }, upload(source.unitId), HTTP_ORIGIN))
+    const hidden = await errorOf(service.copy(member(ALICE), source.id, copyCommand(), upload(source.unitId), HTTP_ORIGIN))
+    const missing = await errorOf(service.copy(member(ALICE), MISSING_ID, copyCommand(), upload(source.unitId), HTTP_ORIGIN))
     expect([hidden.code, missing.code]).toEqual(['NOT_FOUND', 'NOT_FOUND'])
     expect(hidden.message).toBe(missing.message)
     // 不存在的也判断了一次权限（全零的空间）：两次都查了空间事实
@@ -169,19 +203,36 @@ describe('DocumentConflictCopyService.copy：拒绝', () => {
     const { store, service } = setup()
     store.setMember(TEAM_SPACE, ALICE, 'editor')
     const source = teamSource(store)
-    const error = await errorOf(service.copy(member(ALICE), source.id, { requestId: nextRequestId(), title: TITLE }, upload('unit-of-another-document'), HTTP_ORIGIN))
-    expect([error.code, error.message]).toEqual(['SNAPSHOT_INVALID', '表格内容不属于这份文档'])
+    const error = await errorOf(service.copy(member(ALICE), source.id, copyCommand(), upload('unit-of-another-document'), HTTP_ORIGIN))
+    expect([error.code, error.message, error.details]).toEqual(['SNAPSHOT_INVALID', '表格内容不属于这份文档', { rule: 'unit-id' }])
     expect(store.treeLocks).toEqual([])
     expect(store.spaces.holdSpace).not.toHaveBeenCalled()
     expect(store.documents.size).toBe(1)
   })
 
-  it('快照不合格（基本校验，与保存相同）：SNAPSHOT_INVALID，在事务之前，不开事务', async () => {
+  it('快照不合格（完整的检查，与保存相同，M3-P3）：SNAPSHOT_INVALID（details 是违反的规则），在事务之前，不开事务；记 warn', async () => {
     const { store, service } = setup()
     const source = teamSource(store)
     const decompressed = Buffer.from('[]', 'utf8')
-    const error = await errorOf(service.copy(member(ALICE), source.id, { requestId: nextRequestId(), title: TITLE }, { compressed: zlib.gzipSync(decompressed), decompressed }, HTTP_ORIGIN))
-    expect(error.code).toBe('SNAPSHOT_INVALID')
+    const error = await errorOf(service.copy(member(ALICE), source.id, copyCommand(), { compressed: zlib.gzipSync(decompressed), decompressed }, HTTP_ORIGIN))
+    expect([error.code, error.details]).toEqual(['SNAPSHOT_INVALID', { rule: 'structure' }])
+    expect(store.transactions.run).not.toHaveBeenCalled()
+    // 资源、图片与链接的规则同样适用：例如非平台的图片地址
+    const image = Buffer.from(JSON.stringify({ id: source.unitId, sheetOrder: [], sheets: { s1: { cellData: { 0: { 0: { p: { drawings: { d: { source: 'https://example.com/a.png' } } } } } } } } }), 'utf8')
+    expect((await errorOf(service.copy(member(ALICE), source.id, copyCommand(), { compressed: zlib.gzipSync(image), decompressed: image }, HTTP_ORIGIN))).details).toEqual({ rule: 'image-source' })
+    expect(store.logs().filter(entry => entry.msg === '快照不合格，拒绝写入').map(entry => [entry.level, entry.rule, entry.documentId])).toEqual([['warn', 'structure', source.id], ['warn', 'image-source', source.id]])
+  })
+
+  it('页面过旧（M3-P3 设计 §3.5）：CLIENT_OUTDATED（details.reason），在快照检查与事务之前；别人的与不存在的文档同样', async () => {
+    const { store, service } = setup()
+    const source = teamSource(store)
+    for (const [overrides, reason] of [[{ univerVersion: '0.9.0' }, 'format'], [{ clientBuild: undefined }, 'build']] as const) {
+      for (const target of [source.id, MISSING_ID]) {
+        const error = await errorOf(service.copy(member(ALICE), target, copyCommand(overrides), upload(source.unitId), HTTP_ORIGIN))
+        expect([error.code, error.details]).toEqual(['CLIENT_OUTDATED', { reason }])
+      }
+    }
+    expect(store.inspector.inspect).not.toHaveBeenCalled()
     expect(store.transactions.run).not.toHaveBeenCalled()
   })
 
@@ -190,7 +241,7 @@ describe('DocumentConflictCopyService.copy：拒绝', () => {
     store.setMember(TEAM_SPACE, ALICE, 'editor')
     const source = teamSource(store)
     store.repositories.documents.copyFrom.mockResolvedValueOnce(undefined)
-    await expect(service.copy(member(ALICE), source.id, { requestId: nextRequestId(), title: TITLE }, upload(source.unitId), HTTP_ORIGIN)).rejects.toThrow(`锁住的原文档建不出副本：${source.id}`)
+    await expect(service.copy(member(ALICE), source.id, copyCommand(), upload(source.unitId), HTTP_ORIGIN)).rejects.toThrow(`锁住的原文档建不出副本：${source.id}`)
   })
 
   it('写修订记录时 requestId 刚被一次保存用掉：REQUEST_ID_CONFLICT', async () => {
@@ -198,7 +249,7 @@ describe('DocumentConflictCopyService.copy：拒绝', () => {
     store.setMember(TEAM_SPACE, ALICE, 'editor')
     const source = teamSource(store)
     store.repositories.revisions.insert.mockResolvedValueOnce(undefined)
-    expect((await errorOf(service.copy(member(ALICE), source.id, { requestId: nextRequestId(), title: TITLE }, upload(source.unitId), HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+    expect((await errorOf(service.copy(member(ALICE), source.id, copyCommand(), upload(source.unitId), HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
     expect(store.audits).toEqual([])
   })
 })
@@ -208,10 +259,10 @@ describe('DocumentConflictCopyService.copy：锁与锁下的判断', () => {
     const { store, service } = setup()
     store.setMember(TEAM_SPACE, ALICE, 'editor')
     const source = teamSource(store)
-    await service.copy(member(ALICE), source.id, { requestId: nextRequestId(), title: TITLE }, upload(source.unitId), HTTP_ORIGIN)
+    await service.copy(member(ALICE), source.id, copyCommand(), upload(source.unitId), HTTP_ORIGIN)
     expect(store.treeLocks).toEqual([[TEAM_SPACE]])
     expect(store.spaces.holdSpace.mock.calls.map(call => call[0])).toEqual([ALICE_SPACE, TEAM_SPACE].toSorted())
-    const request = store.repositories.revisions.lockCreateRequest.mock.invocationCallOrder[0] ?? 0
+    const request = store.repositories.revisions.lockRequest.mock.invocationCallOrder[0] ?? 0
     const tree = store.tree.lock.mock.invocationCallOrder[0] ?? 0
     const spaceRows = store.spaces.holdSpace.mock.invocationCallOrder
     const sourceRow = store.repositories.documents.holdById.mock.invocationCallOrder
@@ -233,7 +284,7 @@ describe('DocumentConflictCopyService.copy：锁与锁下的判断', () => {
         store.setMember(TEAM_SPACE, ALICE, 'viewer')
       return undefined
     })
-    const copy = await service.copy(member(ALICE), source.id, { requestId: nextRequestId(), title: TITLE }, upload(source.unitId), HTTP_ORIGIN)
+    const copy = await service.copy(member(ALICE), source.id, copyCommand(), upload(source.unitId), HTTP_ORIGIN)
     expect([copy.spaceId, copy.folderId]).toEqual([ALICE_SPACE, null])
   })
 
@@ -247,7 +298,7 @@ describe('DocumentConflictCopyService.copy：锁与锁下的判断', () => {
         store.setMember(TEAM_SPACE, ALICE, 'editor')
       return undefined
     })
-    const copy = await service.copy(member(ALICE), source.id, { requestId: nextRequestId(), title: TITLE }, upload(source.unitId), HTTP_ORIGIN)
+    const copy = await service.copy(member(ALICE), source.id, copyCommand(), upload(source.unitId), HTTP_ORIGIN)
     expect([copy.spaceId, copy.folderId]).toEqual([ALICE_SPACE, null])
     expect(store.treeLocks).toEqual([])
   })
@@ -261,7 +312,7 @@ describe('DocumentConflictCopyService.copy：锁与锁下的判断', () => {
         store.setMember(TEAM_SPACE, ALICE, undefined)
       return undefined
     })
-    const error = await errorOf(service.copy(member(ALICE), source.id, { requestId: nextRequestId(), title: TITLE }, upload(source.unitId), HTTP_ORIGIN))
+    const error = await errorOf(service.copy(member(ALICE), source.id, copyCommand(), upload(source.unitId), HTTP_ORIGIN))
     expect(error.code).toBe('NOT_FOUND')
     expect(store.repositories.documents.copyFrom).not.toHaveBeenCalled()
     expect(store.audits).toEqual([])
@@ -274,7 +325,7 @@ describe('DocumentConflictCopyService.copy：锁与锁下的判断', () => {
     const after = store.addFolder({ spaceId: TEAM_SPACE, name: '现在的' })
     const source = teamSource(store, { folderId: before.id })
     store.repositories.documents.holdById.mockImplementationOnce(async () => ({ ...source, folderId: after.id }))
-    const copy = await service.copy(member(ALICE), source.id, { requestId: nextRequestId(), title: TITLE }, upload(source.unitId), HTTP_ORIGIN)
+    const copy = await service.copy(member(ALICE), source.id, copyCommand(), upload(source.unitId), HTTP_ORIGIN)
     expect(copy.folderId).toBe(after.id)
   })
 
@@ -283,7 +334,7 @@ describe('DocumentConflictCopyService.copy：锁与锁下的判断', () => {
     store.setMember(TEAM_SPACE, ALICE, 'editor')
     const source = teamSource(store)
     store.repositories.documents.holdById.mockImplementationOnce(async () => ({ ...source, spaceId: ALICE_SPACE }))
-    expect((await errorOf(service.copy(member(ALICE), source.id, { requestId: nextRequestId(), title: TITLE }, upload(source.unitId), HTTP_ORIGIN))).code).toBe('NOT_FOUND')
+    expect((await errorOf(service.copy(member(ALICE), source.id, copyCommand(), upload(source.unitId), HTTP_ORIGIN))).code).toBe('NOT_FOUND')
     expect(store.repositories.documents.copyFrom).not.toHaveBeenCalled()
   })
 
@@ -292,7 +343,7 @@ describe('DocumentConflictCopyService.copy：锁与锁下的判断', () => {
     store.setMember(TEAM_SPACE, ALICE, 'editor')
     const source = teamSource(store)
     store.repositories.documents.holdById.mockResolvedValueOnce(undefined)
-    expect((await errorOf(service.copy(member(ALICE), source.id, { requestId: nextRequestId(), title: TITLE }, upload(source.unitId), HTTP_ORIGIN))).code).toBe('NOT_FOUND')
+    expect((await errorOf(service.copy(member(ALICE), source.id, copyCommand(), upload(source.unitId), HTTP_ORIGIN))).code).toBe('NOT_FOUND')
     expect(store.repositories.documents.copyFrom).not.toHaveBeenCalled()
   })
 })
@@ -302,7 +353,7 @@ describe('DocumentConflictCopyService.copy：requestId 幂等（与新建、复�
     const { store, service } = setup()
     store.setMember(TEAM_SPACE, ALICE, 'editor')
     const source = teamSource(store)
-    const command = { requestId: nextRequestId(), title: TITLE }
+    const command = copyCommand()
     const first = await service.copy(member(ALICE), source.id, command, upload(source.unitId), HTTP_ORIGIN)
     // 重新压缩的字节不同、解压后相同：同一个请求
     const again = upload(source.unitId)
@@ -317,7 +368,7 @@ describe('DocumentConflictCopyService.copy：requestId 幂等（与新建、复�
     const { store, service } = setup()
     store.setMember(TEAM_SPACE, ALICE, 'editor')
     const source = teamSource(store)
-    const command = { requestId: nextRequestId(), title: TITLE }
+    const command = copyCommand()
     const first = await service.copy(member(ALICE), source.id, command, upload(source.unitId), HTTP_ORIGIN)
     store.setMember(TEAM_SPACE, ALICE, 'viewer')
     const replayed = await service.copy(member(ALICE), source.id, command, upload(source.unitId), HTTP_ORIGIN)
@@ -332,7 +383,7 @@ describe('DocumentConflictCopyService.copy：requestId 幂等（与新建、复�
     store.setMember(TEAM_SPACE, BOB, 'editor')
     const source = teamSource(store)
     const other = teamSource(store)
-    const command = { requestId: nextRequestId(), title: TITLE }
+    const command = copyCommand()
     await service.copy(member(ALICE), source.id, command, upload(source.unitId), HTTP_ORIGIN)
     const conflicts = [
       service.copy(member(ALICE), source.id, { ...command, title: '另一个标题' }, upload(source.unitId), HTTP_ORIGIN),
@@ -345,20 +396,58 @@ describe('DocumentConflictCopyService.copy：requestId 幂等（与新建、复�
     expect(store.documents.size).toBe(3)
   })
 
+  it('重放先于格式拦截与快照检查（M3-P3 设计 §3.1）：副本建好之后客户端被判为过旧、规则收紧，原样的重试照样拿到那份副本，不检查快照、不开事务', async () => {
+    const { store, service } = setup()
+    store.setMember(TEAM_SPACE, ALICE, 'editor')
+    const source = teamSource(store)
+    const command = copyCommand()
+    const first = await service.copy(member(ALICE), source.id, command, upload(source.unitId), HTTP_ORIGIN)
+    store.inspector.inspect.mockClear()
+    store.transactions.run.mockClear()
+    // 旧页面（P3 之前的写法）重试：不带构建与数据格式；摘要只看原文档、标题、内容与"公式待更新"
+    const { clientBuild: _build, univerVersion: _version, profile: _profile, formatVersion: _format, ...oldPage } = command
+    expect(await service.copy(member(ALICE), source.id, oldPage, upload(source.unitId), HTTP_ORIGIN)).toEqual({ ...first, replayed: true })
+    expect(store.inspector.inspect).not.toHaveBeenCalled()
+    expect(store.transactions.run).not.toHaveBeenCalled()
+  })
+
+  it('"公式待更新"（M3-P3 设计 §3.8）：记在副本上；计入摘要，同一个 requestId 而标记不同就是另一个请求', async () => {
+    const { store, service } = setup()
+    store.setMember(TEAM_SPACE, ALICE, 'editor')
+    const source = teamSource(store)
+    const command = copyCommand({ formulasPending: true })
+    const body = upload(source.unitId)
+    const copy = await service.copy(member(ALICE), source.id, command, body, HTTP_ORIGIN)
+    expect(copy.formulasPending).toBe(true)
+    expect(store.revisions.find(row => row.documentId === copy.id)?.payloadDigest).toEqual(conflictCopyPayloadDigest(source.id, TITLE, body.decompressed, true))
+    expect((await errorOf(service.copy(member(ALICE), source.id, { ...command, formulasPending: false }, body, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+  })
+
+  it('用在一次内容相同的保存上（回执）的 requestId：REQUEST_ID_CONFLICT，不建副本（审查 A3）', async () => {
+    const { store, service } = setup()
+    store.setMember(TEAM_SPACE, ALICE, 'editor')
+    const source = teamSource(store)
+    const requestId = nextRequestId()
+    store.receipts.push({ requestId, documentId: source.id, revision: 1, payloadDigest: Buffer.alloc(32), savedBy: ALICE, savedAt: new Date('2026-09-27T08:00:00.000Z') })
+    expect((await errorOf(service.copy(member(ALICE), source.id, copyCommand({ requestId }), upload(source.unitId), HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+    expect([...store.documents.keys()]).toEqual([source.id])
+    expect(store.audits).toEqual([])
+  })
+
   it('新建、复制用过的 requestId：REQUEST_ID_CONFLICT（摘要以种类开头，不会相同）', async () => {
     const { store, service } = setup()
     store.setMember(TEAM_SPACE, ALICE, 'editor')
     const source = teamSource(store)
     const requestId = nextRequestId()
     store.addRevision({ documentId: source.id, revision: 1, kind: 'created', requestId, payloadDigest: Buffer.alloc(32), source: null, savedBy: ALICE })
-    expect((await errorOf(service.copy(member(ALICE), source.id, { requestId, title: TITLE }, upload(source.unitId), HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+    expect((await errorOf(service.copy(member(ALICE), source.id, copyCommand({ requestId }), upload(source.unitId), HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
   })
 
   it('重放时那份副本已经看不到了（进了回收站、被移走）：REQUEST_ID_CONFLICT，不透露它', async () => {
     const { store, service } = setup()
     store.setMember(TEAM_SPACE, ALICE, 'editor')
     const source = teamSource(store)
-    const command = { requestId: nextRequestId(), title: TITLE }
+    const command = copyCommand()
     const first = await service.copy(member(ALICE), source.id, command, upload(source.unitId), HTTP_ORIGIN)
     store.documentEntries.set(first.id, 'trash-entry')
     expect((await errorOf(service.copy(member(ALICE), source.id, command, upload(source.unitId), HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')

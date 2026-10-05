@@ -15,6 +15,7 @@ import type { SaveView } from './save-coordinator.ts'
 import { DOCUMENT_PROFILES, PLATFORM_FORMAT_VERSIONS } from '@nerve-office/contracts'
 import { isAuthenticationError, isMissingResource, setCsrfToken } from '../../shared/api/index.ts'
 import { loginPath } from '../../shared/lib/login-path.ts'
+import { documentIsNewer } from './client-format.ts'
 import { trackActivity } from './edit-lease.ts'
 import { createEditMode } from './edit-mode.ts'
 import { blockInteractions } from './interaction-barrier.ts'
@@ -511,7 +512,9 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       // 载入期间别的标签页换了人或者退出了：按确认的结果开始（不是本人时不续租、不检查）
       opened.setSession(session)
       const canEdit = document.permissions.canEdit
-      const outcome = await opened.open({ snapshot: content.snapshot, revision: content.revision, canEdit }, { enterEdit: options.editIntent.requested && canEdit })
+      // 这份文档由比本页新的版本写过（服务端回滚之后，M3-P3 设计 §3.5）：一开始就只能阅读、说明，不直接进入编辑
+      const blocked = documentIsNewer(document) ? 'document-too-new' : undefined
+      const outcome = await opened.open({ snapshot: content.snapshot, revision: content.revision, canEdit }, { enterEdit: options.editIntent.requested && canEdit, blocked })
       if (disposed)
         return
       if (outcome.kind === 'load-failed') {

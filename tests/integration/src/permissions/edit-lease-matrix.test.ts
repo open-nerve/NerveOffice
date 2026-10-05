@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto'
 import { acquiredEditLeaseSchema, EDIT_LEASE_HEADER, editStatusSchema, renewedEditLeaseSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { startTestApp } from '../support/api-app.ts'
+import { acquireBody, renewBody } from '../support/client-format.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { asUser } from '../support/session-client.ts'
@@ -85,7 +86,7 @@ function leasePath(documentId: string): string {
 
 /** 以这个人申请一次：申请得到的令牌；申请不了（看不到、不能编辑）时为 undefined */
 async function tokenOf(actor: MatrixActor, documentId: string): Promise<string | undefined> {
-  const response = await asUser(app.baseUrl, actor.session, leasePath(documentId), { method: 'POST', body: { clientInstanceId: randomUUID() } })
+  const response = await asUser(app.baseUrl, actor.session, leasePath(documentId), { method: 'POST', body: acquireBody(randomUUID()) })
   return response.status === 201 ? parseExact(acquiredEditLeaseSchema, await response.json()).token : undefined
 }
 
@@ -94,13 +95,13 @@ const OPERATIONS: Readonly<Record<Operation, MatrixOperation>> = {
   acquireLease: async (actor, target) => {
     const document = await world.freshDocument(target)
     lastWrite = { documentId: document.id, token: undefined }
-    return asUser(app.baseUrl, actor.session, leasePath(document.id), { method: 'POST', body: { clientInstanceId: randomUUID() } })
+    return asUser(app.baseUrl, actor.session, leasePath(document.id), { method: 'POST', body: acquireBody(randomUUID()) })
   },
   renewLease: async (actor, target) => {
     const document = await world.freshDocument(target)
     const token = await tokenOf(actor, document.id)
     lastWrite = { documentId: document.id, token }
-    return asUser(app.baseUrl, actor.session, leasePath(document.id), { method: 'PUT', body: { idleSeconds: 0 }, headers: { [EDIT_LEASE_HEADER]: token ?? STRAY_TOKEN } })
+    return asUser(app.baseUrl, actor.session, leasePath(document.id), { method: 'PUT', body: renewBody(0), headers: { [EDIT_LEASE_HEADER]: token ?? STRAY_TOKEN } })
   },
   releaseLease: async (actor, target) => {
     const document = await world.freshDocument(target)
@@ -130,7 +131,7 @@ const VERIFY: Readonly<Record<Operation, CellOptions['verify']>> = {
   // 取表里申请那一行的预期（MATRIX.acquireLease，逐格手写），不调用生产代码的规则
   editStatus: async (response, target, actor) => {
     const canEdit = MATRIX.acquireLease[target][columnOf(actor)] === 201
-    expect(parseExact(editStatusSchema, await response.json())).toEqual({ revision: 1, editor: null, canEdit })
+    expect(parseExact(editStatusSchema, await response.json())).toEqual({ revision: 1, editor: null, canEdit, formulasPending: false })
   },
   // 申请：第一代（新文档的代次是 0），租约在这个人手里
   acquireLease: async (response, _target, actor) => {

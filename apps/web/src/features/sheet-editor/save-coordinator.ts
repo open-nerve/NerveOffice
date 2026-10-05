@@ -1,7 +1,13 @@
 // 保存的状态机（P4 设计 §3.7.2）：输入是用户的保存、编辑器的修改与接口的结果，不依赖 Univer 与界面，用假的编辑器与假的接口做单元测试。
+// M3-P3（设计 §3.7、§3.8、§3.10）：请求带"公式待更新"（原样重发的判断连它一起比）；服务端回答内容相同（unchanged）照"已保存"处理；
+// 本页与服务端不兼容（CLIENT_OUTDATED、DOCUMENT_TOO_NEW）是终态——停住保存，页面说明需要刷新（或只能阅读）；转入时还有一次结果未知的
+// 保存就先原样重发它一次，核对完再定"修改存上了没有"的说法（审查 B5，重放先于拦截；续租得知时在途的那一次先等它的结果，复验 C1）；
+// 视图带最近一次捕获的大小（与服务端解压后的字节同一个口径），页面据此在达到容量的 80% 时提示。
 import type { RevisionConflictDetails, RevisionSource, SaveContentResponse } from '@nerve-office/contracts'
+import type { Incompatibility } from './client-format.ts'
 import { revisionConflictDetailsSchema, SNAPSHOT_MAX_RAW_BYTES } from '@nerve-office/contracts'
 import { ApiError, isAuthenticationError, isCsrfTokenError, isDefiniteRejection, isNotFoundError } from '../../shared/api/index.ts'
+import { incompatibilityOf } from './client-format.ts'
 
 /** 保存用到的编辑器能力（SheetEditor 的子集）。 */
 export interface SaveEditor {
@@ -24,6 +30,8 @@ export interface SaveRequest {
   readonly localSeq: number
   /** 捕获的快照 JSON 文本 */
   readonly snapshot: string
+  /** "公式待更新"（M3-P3 设计 §3.8）：捕获时公式还没收齐，服务端记在文档上 */
+  readonly formulasPending: boolean
 }
 
 /** 压缩快照（gzip）：本地的一步，出错是意外的错误（复验 RB8） */
@@ -32,8 +40,14 @@ export type CompressSnapshot = (snapshot: string) => Promise<Uint8Array<ArrayBuf
 /** 上传压缩后的快照；失败时抛出请求层的错误（ApiError、NetworkError、ResponseFormatError），结果按"确定被拒"或"未知"归类。 */
 export type SendSave = (request: SaveRequest, body: Uint8Array<ArrayBuffer>) => Promise<SaveContentResponse>
 
-/** 已保存到云端、有未保存的修改、保存中、版本冲突、保存失败。 */
-export type SaveStatus = 'clean' | 'dirty' | 'saving' | 'conflict' | 'failed'
+/**
+ * 已保存到云端、有未保存的修改、保存中、版本冲突、保存失败；本页与服务端不兼容（M3-P3）：本页的版本过旧，需要刷新（outdated）；
+ * 文档由更新的版本写过，不能再保存（too-new）。版本冲突与后两个都是终态
+ */
+export type SaveStatus = 'clean' | 'dirty' | 'saving' | 'conflict' | 'failed' | 'outdated' | 'too-new'
+
+/** 不兼容的两种对应的状态 */
+const BLOCKED_STATUS: Readonly<Record<Incompatibility, SaveStatus>> = { 'client-outdated': 'outdated', 'document-too-new': 'too-new' }
 
 /** 最近一次保存没有完成的原因。 */
 export type SaveProblem
@@ -53,13 +67,28 @@ export interface SaveView {
   readonly problem: SaveProblem | undefined
   /** 版本冲突的详情（服务端没给出能认出的详情时为 null） */
   readonly conflict: RevisionConflictDetails | null | undefined
-  /** 能不能保存：保存中、冲突之后、被页面停用时不能 */
+  /** 能不能保存：保存中、冲突之后、与服务端不兼容之后、被页面停用时不能 */
   readonly canSave: boolean
+  /**
+   * 最近一次捕获的快照的大小（UTF-8 字节，与服务端解压后的字节同一个口径）；还没捕获过时是进入编辑时载入的内容的大小
+   * （initialSnapshotBytes），都没有时为 undefined。页面据此在达到容量的 80%（SNAPSHOT_WARN_RAW_BYTES）时给一条提示（US-M3-14）
+   */
+  readonly snapshotBytes: number | undefined
   /**
    * 本页有没有服务端还没确认的内容（只看内容，不看保存的状态，M3-P1 审查 B3）：确认过的修改序号之后又有修改、
    * 公式结果尚未保存、单元格里还有没提交的输入，或者冲突之后本页的内容。按了保存却失败、而内容本来都已保存的，不算
    */
   readonly unsaved: boolean
+  /**
+   * 同上，不算"公式结果尚未保存"那一项：unsaved 为真而它为假时，本页的修改都已保存、只有公式的结果没有存上
+   * （与服务端不兼容时页面据此单说一句，M3-P3 审查 B5）
+   */
+  readonly unsavedEdits: boolean
+  /**
+   * 转入与服务端不兼容的终态时还有一次结果未知的保存：正在原样重发它、核对它其实提交了没有（M3-P3 审查 B5）；续租得知时正有一次保存在途的，
+   * 先等它的结果，以结果未知结束的同样原样重发（复验 C1）。核对完之前说不准本页的修改存上了没有，页面先说正在核对
+   */
+  readonly checking: boolean
 }
 
 export interface SaveCoordinatorOptions {
@@ -81,6 +110,8 @@ export interface SaveCoordinatorOptions {
   readonly settleTimeoutMs?: number
   /** 快照的上限（解压后，字节） */
   readonly maxSnapshotBytes?: number
+  /** 进入编辑时载入的内容的大小（UTF-8 字节）：第一次保存之前，80% 的提示按它算 */
+  readonly initialSnapshotBytes?: number
 }
 
 export interface SaveCoordinator {
@@ -96,7 +127,10 @@ export interface SaveCoordinator {
   readonly adoptOwnRevision: (revision: number, source: RevisionSource | null) => boolean
   /** 保存一次（按钮或快捷键）。同一时间只有一个保存在途，保存中再按不做任何事 */
   readonly save: () => Promise<void>
-  /** 进行中的保存结束之后兑现（没有在途的保存时立即兑现），从不失败：失去编辑权时先等它，再看本页还有没有没保存的内容 */
+  /**
+   * 进行中的保存结束之后兑现（没有在途的保存时立即兑现；转入不兼容的终态之后正在核对结果未知的那次保存时，也等它核对完），从不失败：
+   * 失去编辑权、退出编辑时先等它，再看本页还有没有没保存的内容
+   */
   readonly settled: () => Promise<void>
   /** 有一次结果未知的保存（网络错误、5xx、回包读不出来）还没有答案：它可能其实已经提交 */
   readonly hasUnknownOutcome: () => boolean
@@ -109,6 +143,12 @@ export interface SaveCoordinator {
   readonly replayUnknownOutcome: () => Promise<'none' | 'committed' | 'not-committed' | 'unknown'>
   /** 离开页面会丢掉内容：有未保存的修改、正在编辑的单元格、保存中、冲突之后本页的内容 */
   readonly hasUnsavedWork: () => boolean
+  /**
+   * 本页与服务端不兼容（续租得知，M3-P3）：转入终态（outdated、too-new），之后不再保存。保存自己得知时（请求得到 CLIENT_OUTDATED、
+   * DOCUMENT_TOO_NEW）同样转入。已经在终态（冲突、不兼容）时不变。转入时还有一次结果未知的保存：先原样重发它一次再定说法（审查 B5，
+   * 见 SaveView.checking）；正有一次保存在途时先等它，以结果未知结束的同样原样重发（复验 C1）
+   */
+  readonly block: (kind: Incompatibility) => void
   /** 停止保存（例如别的标签页换了人）：之后的保存都不做，直到 resume */
   readonly stop: () => void
   /** 恢复保存（原来的人又登录回来了） */
@@ -167,30 +207,58 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
   let stopped = false
   let problem: SaveProblem | undefined
   let conflict: RevisionConflictDetails | null | undefined
+  /** 与服务端不兼容（终态） */
+  let blocked: Incompatibility | undefined
+  /** 最近一次捕获的大小：还没捕获过时是载入的内容的 */
+  let snapshotBytes = options.initialSnapshotBytes
   /** 结果未知的保存，按 requestId：冲突的来源是其中之一时，说明它其实已经提交（自己追自己） */
   const unconfirmed = new Map<string, UnconfirmedSave>()
   /** 最近一次结果未知的请求：内容与基准都没变时，重试原样再发它（requestId 与请求的各项都不变） */
   let retryable: SaveRequest | undefined
   /** 进行中的保存（save 里的那一次）：settled 等它 */
   let running: Promise<void> | undefined
+  /** 转入不兼容的终态之后，正在核对结果没有着落的那次保存（等在途的、原样重发结果未知的，审查 B5、复验 C1，SaveView.checking）：settled 也等它 */
+  let verifying: Promise<void> | undefined
   let current = computeView()
 
   function computeView(): SaveView {
     let status: SaveStatus
     if (conflict !== undefined)
       status = 'conflict'
+    else if (blocked !== undefined)
+      status = BLOCKED_STATUS[blocked]
     else if (inFlight)
       status = 'saving'
     else if (problem !== undefined && problem.kind !== 'cell-editing')
       status = 'failed'
     else
       status = contentUnsaved() ? 'dirty' : 'clean'
-    return { status, formulasPending, problem, conflict, canSave: !inFlight && !stopped && conflict === undefined, unsaved: conflict !== undefined || contentUnsaved() }
+    return {
+      status,
+      formulasPending,
+      problem,
+      conflict,
+      canSave: !inFlight && !stopped && conflict === undefined && blocked === undefined,
+      unsaved: conflict !== undefined || contentUnsaved(),
+      unsavedEdits: conflict !== undefined || editsUnsaved(),
+      checking: verifying !== undefined,
+      snapshotBytes,
+    }
   }
 
-  /** 内容有服务端还没确认的部分：确认过的修改序号之后又有修改、公式结果尚未保存、单元格里还有没提交的输入 */
+  /** 终态：版本冲突之后、与服务端不兼容之后都不再保存 */
+  function ended(): boolean {
+    return conflict !== undefined || blocked !== undefined
+  }
+
+  /** 修改有服务端还没确认的部分（不算"公式结果尚未保存"）：确认过的修改序号之后又有修改、单元格里还有没提交的输入 */
+  function editsUnsaved(): boolean {
+    return editor.changeSeq() > savedSeq || editor.hasPendingCellInput()
+  }
+
+  /** 内容有服务端还没确认的部分：修改没确认完，或者公式结果尚未保存 */
   function contentUnsaved(): boolean {
-    return editor.changeSeq() > savedSeq || formulasPending || editor.hasPendingCellInput()
+    return editsUnsaved() || formulasPending
   }
 
   function update(): void {
@@ -216,13 +284,15 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
   }
 
   /**
-   * 这次的请求。内容与基准都没变：原样再发结果未知的那个请求（服务端按幂等返回原来的结果，或者照常处理）。
-   * 同一个 requestId 的请求不变，序号也不换成这次捕获的：服务端记下的来源是第一次的序号，换了就认不出自己追自己（Codex 评审 CX2）
+   * 这次的请求。内容、基准与"公式待更新"都没变：原样再发结果未知的那个请求（服务端按幂等返回原来的结果，或者照常处理）。
+   * 同一个 requestId 的请求不变，序号也不换成这次捕获的：服务端记下的来源是第一次的序号，换了就认不出自己追自己（Codex 评审 CX2）。
+   * 标记不同就是另一个请求（服务端把它算进负载摘要，M3-P3 设计 §3.8）：换新的 requestId，否则同一个 requestId 会被当成冲突
    */
   function prepare(snapshot: string, capture: Capture): SaveRequest {
-    if (retryable !== undefined && retryable.snapshot === snapshot && retryable.baseRevision === baseRevision)
+    const pending = !capture.settled
+    if (retryable !== undefined && retryable.snapshot === snapshot && retryable.baseRevision === baseRevision && retryable.formulasPending === pending)
       return retryable
-    return { baseRevision, requestId: newRequestId(), clientInstanceId, localSeq: capture.seq, snapshot }
+    return { baseRevision, requestId: newRequestId(), clientInstanceId, localSeq: capture.seq, snapshot, formulasPending: pending }
   }
 
   /**
@@ -254,11 +324,80 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
       conflict = details
       return
     }
+    // 本页与服务端不兼容（M3-P3）：终态，不再保存；说明由状态给出（需要刷新、只能阅读），不另记失败。在途的就是这一次，结果确定
+    const incompatible = incompatibilityOf(error)
+    if (incompatible !== undefined) {
+      enterBlocked(incompatible, false)
+      return
+    }
     problem = { kind: 'request', error }
     if (isAuthenticationError(error))
       options.onUnauthenticated(error)
     else if (isCsrfTokenError(error))
       options.onSessionStale()
+  }
+
+  /**
+   * 原样重发最近一次结果未知的保存（见 SaveCoordinator.replayUnknownOutcome）：先等进行中的保存，交回核对的结果，从不失败
+   */
+  async function replay(): Promise<'none' | 'committed' | 'not-committed' | 'unknown'> {
+    await running
+    const request = retryable
+    if (request === undefined)
+      return 'none'
+    const record = unconfirmed.get(request.requestId)
+    let body: Uint8Array<ArrayBuffer>
+    try {
+      body = await options.compress(request.snapshot)
+    }
+    catch (error) {
+      options.reportError(error)
+      return 'unknown'
+    }
+    try {
+      const result = await send(request, body)
+      // 那一次其实已经提交（重放给出原来的结果）：按它的捕获确认，之前"保存失败"的说明随之不再成立
+      if (record !== undefined)
+        confirm(record.capture, result.revision)
+      if (problem?.kind === 'request' && !isDefiniteRejection(problem.error))
+        problem = undefined
+      update()
+      return 'committed'
+    }
+    catch (error) {
+      // 读不到了（重放也要求能访问）、登录或令牌的问题（到不了重放那一步）：说不准它有没有提交
+      if (!isDefiniteRejection(error) || isNotFoundError(error) || isAuthenticationError(error) || isCsrfTokenError(error))
+        return 'unknown'
+      // 别的确定拒绝（编辑权已失效、不能编辑、修订号冲突、本页过旧等）说明它没有提交：提交过的话重放先于这些检查，会给出原来的结果
+      unconfirmed.delete(request.requestId)
+      retryable = undefined
+      update()
+      return 'not-committed'
+    }
+  }
+
+  /**
+   * 转入与服务端不兼容的终态（M3-P3），之后不再保存；已经在终态（冲突、不兼容）时不变。还有一次保存的结果没有着落时先核对它再定说法
+   * （审查 B5）：结果未知的那次原样重发一次——重放先于拦截旧客户端与文档的数据格式（设计 §3.1），它其实已经提交时拿到原来的结果、
+   * 按它确认（本页的修改可能就都已保存了），没有提交时得到同样的拒绝。saveInFlight：续租得知时正有一次保存在途，它的结果还没有着落，
+   * 也要核对（复验 C1）——先等它（replay 先等进行中的保存）：成功了就是答案，不重发；以结果未知结束的照样原样重发一次。
+   * 保存自己得知时（fail）在途的就是得到拒绝的这一次，结果是确定的，不算。核对期间页面先说正在核对（SaveView.checking）。
+   * 不核对的话，提交了的那次也按"没有保存"说，让人去复制其实已经存上的内容
+   */
+  function enterBlocked(kind: Incompatibility, saveInFlight: boolean): void {
+    if (ended())
+      return
+    blocked = kind
+    if ((retryable !== undefined || saveInFlight) && verifying === undefined) {
+      verifying = replay().then(
+        () => undefined,
+        (error: unknown) => options.reportError(error),
+      ).finally(() => {
+        verifying = undefined
+        update()
+      })
+    }
+    update()
   }
 
   async function attempt(): Promise<void> {
@@ -269,7 +408,8 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
     const settled = (await editor.settleFormulas(settleTimeoutMs)) === 'settled'
     const capture: Capture = { seq: editor.changeSeq(), settled }
     const snapshot = editor.capture()
-    if (utf8Length(snapshot) > maxSnapshotBytes) {
+    snapshotBytes = utf8Length(snapshot)
+    if (snapshotBytes > maxSnapshotBytes) {
       problem = { kind: 'too-large' }
       return
     }
@@ -315,7 +455,7 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
     },
     baseRevision: () => baseRevision,
     adoptOwnRevision: (revision, source) => {
-      if (conflict !== undefined)
+      if (ended())
         return false
       const own = ownUnconfirmedSave(source)
       if (own === undefined)
@@ -333,7 +473,7 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
       return true
     },
     save: async () => {
-      if (inFlight || stopped || conflict !== undefined)
+      if (inFlight || stopped || ended())
         return
       inFlight = true
       problem = undefined
@@ -358,44 +498,12 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
     },
     settled: async () => {
       await running
+      await verifying
     },
     hasUnknownOutcome: () => retryable !== undefined,
-    replayUnknownOutcome: async () => {
-      await running
-      const request = retryable
-      if (request === undefined)
-        return 'none'
-      const record = unconfirmed.get(request.requestId)
-      let body: Uint8Array<ArrayBuffer>
-      try {
-        body = await options.compress(request.snapshot)
-      }
-      catch (error) {
-        options.reportError(error)
-        return 'unknown'
-      }
-      try {
-        const result = await send(request, body)
-        // 那一次其实已经提交（重放给出原来的结果）：按它的捕获确认，之前"保存失败"的说明随之不再成立
-        if (record !== undefined)
-          confirm(record.capture, result.revision)
-        if (problem?.kind === 'request' && !isDefiniteRejection(problem.error))
-          problem = undefined
-        update()
-        return 'committed'
-      }
-      catch (error) {
-        // 读不到了（重放也要求能访问）、登录或令牌的问题（到不了重放那一步）：说不准它有没有提交
-        if (!isDefiniteRejection(error) || isNotFoundError(error) || isAuthenticationError(error) || isCsrfTokenError(error))
-          return 'unknown'
-        // 别的确定拒绝（编辑权已失效、不能编辑、修订号冲突等）说明它没有提交：提交过的话重放先于这些检查，会给出原来的结果
-        unconfirmed.delete(request.requestId)
-        retryable = undefined
-        update()
-        return 'not-committed'
-      }
-    },
+    replayUnknownOutcome: replay,
     hasUnsavedWork: () => conflict !== undefined || inFlight || editor.isCellEditing() || editor.changeSeq() > savedSeq || formulasPending,
+    block: kind => enterBlocked(kind, running !== undefined),
     stop: () => {
       stopped = true
       update()

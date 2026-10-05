@@ -1,10 +1,12 @@
 // 另存为副本（M3-P2 设计 §3.2）：POST /api/documents/{id}/conflict-copies?requestId&title，正文是 gzip 压缩的快照
 // （与保存同一个读取方式），元数据只能放在查询串里。功能用例、"看不到与不存在"的探测与权限矩阵共用这里的写法。
+import type { ClientFormat } from '@nerve-office/contracts'
 import type { LoggedIn } from './session-client.ts'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
 import { conflictCopyTitle, SHEET_TEMPLATE, SNAPSHOT_UPLOAD_CONTENT_TYPE } from '@nerve-office/contracts'
+import { clientFormatQuery } from './client-format.ts'
 import { asUser } from './session-client.ts'
 
 /** 页面按所在的时区写到分钟的时间：用例里固定一个 */
@@ -22,13 +24,16 @@ export interface ConflictCopyRequest {
   readonly title?: string
   /** 另加或覆盖的查询参数（反向用例） */
   readonly query?: Readonly<Record<string, string>>
+  /** 页面上报的构建与数据格式（M3-P3）：默认是现在的页面；旧页面给 {} 或者改写其中的一项 */
+  readonly clientFormat?: ClientFormat
 }
 
-/** 另存为副本的地址：查询参数里带着 requestId 与标题 */
+/** 另存为副本的地址：查询参数里带着 requestId 与标题，与现在的页面的构建与数据格式（M3-P3） */
 export function conflictCopyPath(documentId: string, request: ConflictCopyRequest = {}): string {
   const query = new URLSearchParams({
     requestId: request.requestId ?? randomUUID(),
     title: request.title ?? conflictCopyTitle('周报', CONFLICT_COPY_LABEL),
+    ...clientFormatQuery(request.clientFormat),
     ...request.query,
   })
   return `/api/documents/${documentId}/conflict-copies?${query.toString()}`

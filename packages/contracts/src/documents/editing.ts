@@ -3,6 +3,7 @@
 import { z } from 'zod'
 import { uuidSchema } from '../ids/ids.ts'
 import { userSummarySchema } from '../users/users.ts'
+import { clientFormatBodyShape } from './client-format.ts'
 import { revisionSourceSchema } from './content.ts'
 
 /**
@@ -40,10 +41,12 @@ export const editLeaseTokenSchema = z.string().regex(/^[\w-]{43}$/)
 
 /**
  * 申请编辑权（POST /api/documents/{id}/edit-lease，要能编辑）：clientInstanceId 是编辑器页每次加载生成的标识
- * （保存一直带着它），租约绑定它与这次登录
+ * （保存一直带着它），租约绑定它与这次登录。客户端的构建与数据格式（clientBuild、univerVersion、profile、formatVersion，
+ * M3-P3 设计 §3.5）可选：过旧的页面不让进入编辑（CLIENT_OUTDATED），缺了由服务端按过旧处理
  */
 export const acquireEditLeaseRequestSchema = z.strictObject({
   clientInstanceId: uuidSchema,
+  ...clientFormatBodyShape,
 })
 
 export type AcquireEditLeaseRequest = z.infer<typeof acquireEditLeaseRequestSchema>
@@ -67,7 +70,8 @@ export type EditInterruption = z.infer<typeof editInterruptionSchema>
  * - source：文档当前修订的来源——产生它的那次保存的标签页与本地序号；当前修订是新建、复制出来的，或者不是调用者本人保存的，为 null。
  *   续上时（编辑权中断之后同一个页面重新申请），修订号比本页的基准新，页面据此认出期间的那一版是不是本页自己一次结果未知的保存：
  *   是的话以它为基准接着编辑，不当成别处的修改（00 号计划书 §7.5）。取法与修订号冲突的详情相同；
- * - expiresAt：到期时间；interruption：上一个租约异常结束的提醒，没有时为 null。
+ * - expiresAt：到期时间；interruption：上一个租约异常结束的提醒，没有时为 null；
+ * - formulasPending：文档的"公式待更新"（M3-P3 设计 §3.8，最近一次写入时页面带来的标记）：P4 据此在进入编辑时先全量重算。
  * 响应的结构宽松（多出的字段被丢弃），见 auth 的会话信息
  */
 export const acquiredEditLeaseSchema = z.object({
@@ -77,16 +81,19 @@ export const acquiredEditLeaseSchema = z.object({
   source: revisionSourceSchema.nullable(),
   expiresAt: z.iso.datetime(),
   interruption: editInterruptionSchema.nullable(),
+  formulasPending: z.boolean(),
 })
 
 export type AcquiredEditLease = z.infer<typeof acquiredEditLeaseSchema>
 
 /**
  * 心跳续租（PUT /api/documents/{id}/edit-lease，要能编辑，带令牌）：idleSeconds 是距离本页最后一次键盘、鼠标操作的秒数，
- * 服务端据此算出最后活动时间（不早于申请的时间、不晚于数据库的 now()），空闲满 12 分钟就回收
+ * 服务端据此算出最后活动时间（不早于申请的时间、不晚于数据库的 now()），空闲满 12 分钟就回收。
+ * 客户端的构建与数据格式与申请相同、可选（M3-P3 设计 §3.5）：服务端升级之后，正在编辑的页面在一次心跳之内就知道需要刷新
  */
 export const renewEditLeaseRequestSchema = z.strictObject({
   idleSeconds: z.number().int().min(0).max(EDIT_IDLE_SECONDS_MAX),
+  ...clientFormatBodyShape,
 })
 
 export type RenewEditLeaseRequest = z.infer<typeof renewEditLeaseRequestSchema>
@@ -112,13 +119,15 @@ export type DocumentEditor = z.infer<typeof documentEditorSchema>
 
 /**
  * 编辑状态（GET /api/documents/{id}/edit-lease，能读就能看，在只读快照里读，ADR-017）：文档当前的修订号，
- * 正在编辑的人——没有有效的租约时为 null，以及调用者现在能不能编辑这份文档（canEdit，M3-P2 设计 §3.2：与详情的
- * permissions.canEdit 同一个规则、同一个快照里算；阅读页每 30 秒读一次，据此显示或隐藏"编辑"——权限在阅读期间可能变化）
+ * 正在编辑的人——没有有效的租约时为 null，调用者现在能不能编辑这份文档（canEdit，M3-P2 设计 §3.2：与详情的
+ * permissions.canEdit 同一个规则、同一个快照里算；阅读页每 30 秒读一次，据此显示或隐藏"编辑"——权限在阅读期间可能变化），
+ * 以及文档的"公式待更新"（formulasPending，M3-P3 设计 §3.8：阅读页据此说明公式结果可能还没更新，P4）
  */
 export const editStatusSchema = z.object({
   revision: z.number().int().min(1),
   editor: documentEditorSchema.nullable(),
   canEdit: z.boolean(),
+  formulasPending: z.boolean(),
 })
 
 export type EditStatus = z.infer<typeof editStatusSchema>

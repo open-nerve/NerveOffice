@@ -14,6 +14,7 @@ import { acquiredEditLeaseSchema, createdDocumentSchema, documentDetailSchema, E
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
+import { acquireBody, renewBody } from '../support/client-format.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
@@ -85,7 +86,7 @@ function leasePath(documentId: string): string {
 }
 
 async function acquire(session: LoggedIn, documentId: string, clientInstanceId: string = randomUUID()): Promise<Response> {
-  return asUser(app.baseUrl, session, leasePath(documentId), { method: 'POST', body: { clientInstanceId } })
+  return asUser(app.baseUrl, session, leasePath(documentId), { method: 'POST', body: acquireBody(clientInstanceId) })
 }
 
 async function acquired(session: LoggedIn, documentId: string, clientInstanceId?: string): Promise<AcquiredEditLease> {
@@ -100,7 +101,7 @@ function leaseHeaders(token: string | undefined): Record<string, string> {
 }
 
 async function renew(session: LoggedIn, documentId: string, token: string | undefined, idleSeconds = 0): Promise<Response> {
-  return asUser(app.baseUrl, session, leasePath(documentId), { method: 'PUT', body: { idleSeconds }, headers: leaseHeaders(token) })
+  return asUser(app.baseUrl, session, leasePath(documentId), { method: 'PUT', body: renewBody(idleSeconds), headers: leaseHeaders(token) })
 }
 
 async function release(session: LoggedIn, documentId: string, token: string | undefined): Promise<Response> {
@@ -255,13 +256,13 @@ describe('申请、心跳、释放与编辑状态（P1 设计 §3.4.2、§3.4.3�
 
   it('US-M3-04 编辑状态：能读就能看；有效的租约给出持有者（"人"的结构）、最后活动时间与是不是调用者自己；没有时为 null', async () => {
     const document = await freshDocument()
-    expect(await status(sessionOf(vic), document.id)).toEqual({ revision: 1, editor: null, canEdit: false })
+    expect(await status(sessionOf(vic), document.id)).toEqual({ revision: 1, editor: null, canEdit: false, formulasPending: false })
     await acquired(sessionOf(amy), document.id)
     const row = await leaseOf(document.id)
     const editor = { holder: summaryOf(amy), lastActiveAt: row?.last_active_at.toISOString() }
-    expect(await status(sessionOf(ben), document.id)).toEqual({ revision: 1, editor: { ...editor, sameUser: false }, canEdit: true })
-    expect(await status(sessionOf(vic), document.id)).toEqual({ revision: 1, editor: { ...editor, sameUser: false }, canEdit: false })
-    expect(await status(sessionOf(amy), document.id)).toEqual({ revision: 1, editor: { ...editor, sameUser: true }, canEdit: true })
+    expect(await status(sessionOf(ben), document.id)).toEqual({ revision: 1, editor: { ...editor, sameUser: false }, canEdit: true, formulasPending: false })
+    expect(await status(sessionOf(vic), document.id)).toEqual({ revision: 1, editor: { ...editor, sameUser: false }, canEdit: false, formulasPending: false })
+    expect(await status(sessionOf(amy), document.id)).toEqual({ revision: 1, editor: { ...editor, sameUser: true }, canEdit: true, formulasPending: false })
   })
 
   it('US-M3-05 编辑状态带上调用者现在能不能编辑（M3-P2 设计 §3.2）：与详情的 permissions.canEdit 一致；阅读期间被降级、空间被归档、被升为编辑者，下一次读就跟着变', async () => {

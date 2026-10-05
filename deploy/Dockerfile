@@ -32,8 +32,12 @@ COPY packages/contracts packages/contracts
 COPY apps/api apps/api
 COPY apps/web apps/web
 COPY tools tools
-# contracts、api 与 web 的生产构建（web 不是 dist-e2e：测试构建里的 CSP 探针不能进镜像）
-RUN pnpm run build
+# contracts、api 与 web 的生产构建（web 不是 dist-e2e：测试构建里的 CSP 探针不能进镜像）。
+# 页面的构建版本附上提交号作诊断信息（0.1.0+<提交号>，M3-P3 设计 §3.5，见 apps/web/vite.config.ts 的 clientBuild）：取与 OCI 标签同一个
+# REVISION 构建参数，没传或不是十六进制的提交号时不附。代价：提交号每次都不同，这一步与之后的一步不再命中缓存——依赖安装那一层不受影响，
+# 源码改了这一步本来也要重跑，多出来的只是"只改了文档与测试"的提交也重新构建
+ARG REVISION=unknown
+RUN CLIENT_BUILD_REVISION="${REVISION}" pnpm run build
 # 服务端的第三方许可清单：按 api 的生产依赖图，本平台装上的包（P5 设计 §3.2.1）
 RUN node tools/src/deploy/cli.ts server-licenses --out /app/licenses/THIRD-PARTY-LICENSES-server.md
 

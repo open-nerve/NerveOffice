@@ -1,15 +1,18 @@
 // 更新表格的模板快照（P4 设计 §3.4）：只经产品本身，不另写测试钩子。
-// 用 E2E 的服务新建一份文档，在编辑器页里打开到 steady、保存；重开再保存，直到连续两次保存的快照逐字节相同（收敛），
-// 把结果（id 换回占位值）写回 contracts 的 sheet-template.ts，再用 ESLint 整理写法。E2E 的"模板收敛"用例随后回归。
+// 用 E2E 的服务新建一份文档，在编辑器页里打开到 steady、保存，看本页上传的快照：与打开的逐字节相同就是收敛。
+// 看上传的正文、不看服务器上的（M3-P3 设计 §3.11）：内容相同（规范化之后）的保存服务端不存这次的字节，服务器上的字节不变不说明收敛。
+// 不同时把上传的写成新的一份文档（直接写库）再打开、保存，直到相同；把结果（id 换回占位值）写回 contracts 的 sheet-template.ts，
+// 再用 ESLint 整理写法。E2E 的"模板收敛"用例随后回归。
 import type { Page } from '@playwright/test'
+import type { TestUser } from '../support/database.ts'
 import { execFileSync } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { SHEET_TEMPLATE_UNIT_ID } from '@nerve-office/contracts'
-import { createUser } from '../support/database.ts'
+import { createDocument, createUser } from '../support/database.ts'
 import { expect, test } from '../support/fixtures.ts'
 import { loginThroughApi } from '../support/session.ts'
-import { createSheetThroughApi, openAndEnterEditing, saveAndWait, savedContent } from '../support/sheet.ts'
+import { createSheetThroughApi, openAndEnterEditing, saveAndCapture, savedContent } from '../support/sheet.ts'
 
 const REPO_ROOT = resolve(import.meta.dirname, '../../..')
 const TEMPLATE_FILE = resolve(REPO_ROOT, 'packages/contracts/src/documents/sheet-template.ts')
@@ -36,24 +39,36 @@ export function sheetSnapshotFor(unitId: string): string {
 `
 }
 
-/** 打开、保存，直到连续两次保存的快照相同；返回收敛的快照，MAX_ROUNDS 轮之内没有收敛时为 undefined */
-async function saveUntilStable(page: Page, documentId: string): Promise<string | undefined> {
-  let previous = (await savedContent(page, documentId)).text
+/** 快照换上另一个 unitId：只有顶层的 id 是它（与模板的 sheetSnapshotFor 相同）；展开再覆盖已有的键，键的位置不变 */
+function withUnitId(text: string, unitId: string): string {
+  return JSON.stringify({ ...JSON.parse(text) as Record<string, unknown>, id: unitId })
+}
+
+/** 打开到 steady、保存，返回本页上传的快照 */
+async function openAndUpload(page: Page, documentId: string): Promise<string> {
+  await openAndEnterEditing(page, documentId, 'steady')
+  return (await saveAndCapture(page)).uploaded
+}
+
+/** 从新建的文档出发，打开、保存，直到上传的与打开的逐字节相同；返回收敛的快照，MAX_ROUNDS 轮之内没有收敛时为 undefined */
+async function saveUntilStable(page: Page, author: TestUser): Promise<string | undefined> {
+  let documentId = await createSheetThroughApi(page)
   for (let round = 1; round <= MAX_ROUNDS; round += 1) {
-    await openAndEnterEditing(page, documentId, 'steady')
-    await saveAndWait(page)
-    const saved = (await savedContent(page, documentId)).text
-    if (saved === previous)
-      return saved
-    previous = saved
+    const opened = (await savedContent(page, documentId)).text
+    const uploaded = await openAndUpload(page, documentId)
+    if (uploaded === opened)
+      return uploaded
+    // 下一轮打开上传的这一份：直接写成新的文档（它与打开的内容相同时服务端不存这次的字节）
+    documentId = await createDocument(author, '模板', unitId => withUnitId(uploaded, unitId))
   }
   return undefined
 }
 
 test('更新表格的模板快照', async ({ page }) => {
   test.setTimeout(MAX_ROUNDS * 60_000)
-  await loginThroughApi(page, await createUser('template-update'))
-  const converged = await saveUntilStable(page, await createSheetThroughApi(page))
+  const author = await createUser('template-update')
+  await loginThroughApi(page, author)
+  const converged = await saveUntilStable(page, author)
   expect(converged, `${MAX_ROUNDS} 轮之内没有收敛`).toBeDefined()
   writeFileSync(TEMPLATE_FILE, renderModule(JSON.parse(converged ?? '{}') as Record<string, unknown>))
   execFileSync('pnpm', ['exec', 'eslint', '--fix', TEMPLATE_FILE], { cwd: REPO_ROOT, stdio: 'inherit' })

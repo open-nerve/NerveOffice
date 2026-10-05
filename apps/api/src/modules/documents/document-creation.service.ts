@@ -20,6 +20,8 @@ import { DocumentsRepository } from './documents.repository.ts'
 import { folderIdIn } from './folder-location.ts'
 import { FoldersRepository } from './folders.repository.ts'
 import { createdPayloadDigest } from './payload-digest.ts'
+import { RequestLedger } from './request-ledger.ts'
+import { inspectSnapshot } from './snapshot-inspection.ts'
 import { SpaceTreeRepository } from './space-tree.repository.ts'
 
 /** 新建请求（已经过 contracts 的校验）。 */
@@ -36,6 +38,27 @@ export interface CreateDocumentCommand {
 /** 各类型的模板快照：换上文档的 unitId 之后的 JSON 文本（P4 设计 §3.4）。 */
 const TEMPLATES: Readonly<Record<DocumentType, (unitId: string) => string>> = { sheet: sheetSnapshotFor }
 
+/** 新文档的内容：模板换上 unitId 之后 gzip 压缩的字节，连同它的规范化哈希与非空的资源名（M3-P3 设计 §3.1） */
+interface TemplateContent {
+  readonly snapshot: Buffer
+  readonly rawBytes: number
+  readonly contentHash: Buffer
+  readonly resourceNames: readonly string[]
+}
+
+/**
+ * 一份新文档的模板内容（M3-P3 设计 §3.1：新建也写哈希与非空的资源名，下一次保存按它们判断"内容相同"与"不缩水"）。
+ * 哈希按每份文档单独算：模板的顶层 id 换成了这份文档的 unitId，unitId 不同哈希就不同。在主线程里调快照的检查（不经子进程）：
+ * 模板约 1 KiB，检查与规范化不到一毫秒；模板过不了检查是平台自己的数据错了（模板的更新工具与 E2E 会先发现），按意外错误处理
+ */
+function templateContent(type: DocumentType, unitId: string): TemplateContent {
+  const raw = Buffer.from(TEMPLATES[type](unitId), 'utf8')
+  const inspected = inspectSnapshot(raw, DOCUMENT_PROFILE_OF[type])
+  if (!inspected.ok)
+    throw new Error(`新建用的模板过不了快照的检查：${inspected.rule}`)
+  return { snapshot: zlib.gzipSync(raw), rawBytes: raw.length, contentHash: Buffer.from(inspected.contentHash), resourceNames: inspected.nonEmptyResources }
+}
+
 /**
  * 新建文档（M1-P4 设计 §3.4，M2-P2 设计 §3.6，M2-P4 加上目标文件夹）：
  * 在指定的空间（没有指定时是个人空间）的指定文件夹（没有指定时是空间的根目录）里建文档，
@@ -50,6 +73,7 @@ export class DocumentCreationService {
     private readonly documents: DocumentsRepository,
     private readonly contents: DocumentContentsRepository,
     private readonly revisions: DocumentRevisionsRepository,
+    private readonly ledger: RequestLedger,
     private readonly folders: FoldersRepository,
     private readonly tree: SpaceTreeRepository,
     private readonly spaces: SpacesService,
@@ -62,9 +86,9 @@ export class DocumentCreationService {
     const title = command.title ?? DEFAULT_DOCUMENT_TITLES[command.type]
     const digest = createdPayloadDigest(command.type, title, command.spaceId, command.folderId)
     return this.transactions.run(async (transaction) => {
-      // 同一个 requestId 的两个请求排队执行：后到的一方在下面就能看到前一方的修订记录，按重放处理
-      await this.revisions.lockCreateRequest(command.requestId, transaction)
-      const previous = await this.revisions.findByRequestId(command.requestId, transaction)
+      // 同一个 requestId 的写入排队执行（事务的第一把锁，RequestLedger）：后到的一方在下面就能看到前一方的修订记录，按重放处理；
+      // 它用在一次内容相同的保存上（回执）时 REQUEST_ID_CONFLICT
+      const previous = await this.ledger.lockForCreated(command.requestId, transaction)
       if (previous !== undefined)
         return this.replay(userId, previous, digest, transaction)
 
@@ -94,8 +118,8 @@ export class DocumentCreationService {
         formatVersion: PLATFORM_FORMAT_VERSION,
         sdkVersion: UNIVER_SDK_VERSION,
       }, transaction)
-      const raw = Buffer.from(TEMPLATES[command.type](unitId), 'utf8')
-      await this.contents.insert(document.id, { snapshot: zlib.gzipSync(raw), rawBytes: raw.length }, transaction)
+      const content = templateContent(command.type, unitId)
+      await this.contents.insert(document.id, content, transaction)
       const revision = await this.revisions.insert({
         documentId: document.id,
         revision: 1,
@@ -104,8 +128,11 @@ export class DocumentCreationService {
         payloadDigest: digest,
         source: null,
         savedBy: userId,
+        contentHash: content.contentHash,
+        // 新建的内容是服务端写的模板，没有客户端构建
+        clientBuild: null,
       }, transaction)
-      // 同一个 requestId 同时被一次保存用掉了（advisory lock 只让新建之间排队）
+      // requestId 已经被用掉（在它的锁下查过两张表，走到这里不会撞上；留作兜底）
       if (revision === undefined)
         throw new AppError('REQUEST_ID_CONFLICT')
       await this.audit.record({

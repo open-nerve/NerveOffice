@@ -83,6 +83,17 @@ export type {
   LinkInvalidReason,
   OneTimeLinkPurpose,
 } from './auth/links.ts'
+export { isPlatformAssetAddress } from './documents/asset-address.ts'
+export {
+  CLIENT_BUILD_MAX_LENGTH,
+  CLIENT_OUTDATED_REASONS,
+  clientBuildSchema,
+  clientOutdatedDetailsSchema,
+  compareVersions,
+  parseVersion,
+} from './documents/client-format.ts'
+export type { ClientFormat, ClientOutdatedDetails, ClientOutdatedReason } from './documents/client-format.ts'
+export { canonicalContentText, canonicalContentTextOf, contentHashInput, SHEET_VIEW_STATE_FIELDS } from './documents/content-canonical.ts'
 export {
   revisionConflictDetailsSchema,
   revisionEtag,
@@ -93,6 +104,7 @@ export {
   SNAPSHOT_MAX_DEPTH,
   SNAPSHOT_MAX_RAW_BYTES,
   SNAPSHOT_UPLOAD_CONTENT_TYPE,
+  SNAPSHOT_WARN_RAW_BYTES,
   UNIVER_SDK_VERSION,
 } from './documents/content.ts'
 export type { RevisionConflictDetails, RevisionSource, SaveContentQuery, SaveContentResponse } from './documents/content.ts'
@@ -178,7 +190,13 @@ export type {
   RenewedEditLease,
   RenewEditLeaseRequest,
 } from './documents/editing.ts'
+export { canonicalLink, checkCellLinks, HYPERLINK_RANGE_TYPE, LINK_ADDRESS_INVALID_REASONS, LINK_ADDRESS_MAX_LENGTH, normalizeCellLinks } from './documents/link-address.ts'
+export type { CanonicalLink, CellLinkRule, LinkAddressInvalidReason } from './documents/link-address.ts'
+export { checkResources, isDeepEmpty, PROFILE_RESOURCES, profileResourceNames, shrunkResources } from './documents/profile-resources.ts'
+export type { ProfileResourceName, ResourceCheck, ResourceEntryKind, ResourceRule, ResourceRuleId } from './documents/profile-resources.ts'
 export { SHEET_TEMPLATE, SHEET_TEMPLATE_UNIT_ID, sheetSnapshotFor } from './documents/sheet-template.ts'
+export { SNAPSHOT_RULES, snapshotInvalidDetailsSchema } from './documents/snapshot-rules.ts'
+export type { RuleCheck, SnapshotInvalidDetails, SnapshotRule } from './documents/snapshot-rules.ts'
 export { ERROR_CODES, errorStatus, RETIRED_ERROR_CODES } from './errors/error-codes.ts'
 export type { ErrorCode } from './errors/error-codes.ts'
 export { errorCodeSchema, errorResponseSchema } from './errors/error-response.ts'

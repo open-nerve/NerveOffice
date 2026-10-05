@@ -17,6 +17,7 @@ import { acquiredEditLeaseSchema, createdFolderSchema, SHEET_TEMPLATE, trashList
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
+import { acquireBody } from '../support/client-format.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
@@ -93,7 +94,7 @@ async function holderOutcomes(user: LoggedIn, document: SeededDocument, lease: H
 
 /** 别人申请：状态码，成功时连同异常中断的提醒里是谁（没有提醒为 null） */
 async function acquisitionBy(user: LoggedIn, documentId: string): Promise<{ readonly status: number, readonly interruption?: string | null }> {
-  const response = await asUser(app.baseUrl, user, `/api/documents/${documentId}/edit-lease`, { method: 'POST', body: { clientInstanceId: randomUUID() } })
+  const response = await asUser(app.baseUrl, user, `/api/documents/${documentId}/edit-lease`, { method: 'POST', body: acquireBody(randomUUID()) })
   if (response.status !== 201) {
     await response.arrayBuffer()
     return { status: response.status }

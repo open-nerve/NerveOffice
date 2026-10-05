@@ -1,5 +1,6 @@
 import type { AppConfig } from '../config/index.ts'
 import type { ExpiredTrashEntry } from '../documents/index.ts'
+import type { JobSchedule, ScheduledJob } from './scheduled-job.ts'
 import { Inject, Injectable } from '@nestjs/common'
 import { APP_CONFIG } from '../config/index.ts'
 import { ExclusiveRunner } from '../database/index.ts'
@@ -8,6 +9,9 @@ import { AppLogger } from '../logging/index.ts'
 
 /** 防止多个实例同时清理的锁名（DEF-024 的多实例；单实例时它总是拿得到）。 */
 export const TRASH_PURGE_LOCK = 'nerve-office:trash-purge'
+
+/** 日志里的 job 字段 */
+const JOB_NAME = 'trash-purge'
 
 /** 一轮清理的结果。`ran` 为 false 说明锁在别处，这一轮什么都没做。 */
 export interface TrashPurgeRound {
@@ -33,9 +37,10 @@ interface FailingEntry {
 
 /**
  * 回收站里到期的删除单元的清理（M2-P4 设计 §3.4 第 6 条）：**一轮**做什么。
- * 什么时候跑由 TrashPurgeScheduler 决定，删除的语义在 documents 里（TrashPurgeService），这里只有编排：
+ * 什么时候跑由 JobScheduler 决定，删除的语义在 documents 里（TrashPurgeService），这里只有编排：
  *
- * 1. 先取会话级的 advisory lock，拿不到就跳过这一轮（将来多实例时，同一时刻只有一个实例在清理）；
+ * 1. 先取会话级的 advisory lock，拿不到就跳过这一轮（将来多实例时，同一时刻只有一个实例在清理）：一轮的各项在各自的短事务里，
+ *    锁要跨这些事务一直持有（ExclusiveRunner.run）。一轮至多一批（默认 50 项），退出时不中途停下，等这一批做完；
  * 2. 按到期时间取一批（默认 50 个），**逐个在各自的短事务里**永久删除；
  * 3. 单个失败只记日志，不影响这一轮的其他条目，也不让定时器与进程出问题；
  * 4. 失败过的条目暂缓重试（M2-P6 复核 A 的 S-1、B 的 G2）：一直失败的条目到期最早，每一批都从它们取起，
@@ -44,7 +49,12 @@ interface FailingEntry {
  *    日志带着连续失败的次数（consecutiveFailures），将来据此告警（M7）。只记在内存里：重启之后重新试一次，可以接受。
  */
 @Injectable()
-export class TrashPurgeJob {
+export class TrashPurgeJob implements ScheduledJob {
+  readonly name = JOB_NAME
+  readonly title = '回收站的自动清理'
+  readonly schedule: JobSchedule
+  readonly disabled = { variable: 'NERVE_TRASH_PURGE_ENABLED', consequence: '到期的东西要人工永久删除' }
+  readonly settings: Readonly<Record<string, unknown>>
   readonly #logger: AppLogger
   readonly #batchSize: number
   /** 暂缓最多几轮：约一天，至少一轮 */
@@ -60,9 +70,12 @@ export class TrashPurgeJob {
     @Inject(APP_CONFIG) config: AppConfig,
     logger: AppLogger,
   ) {
-    this.#logger = logger.with({ module: 'jobs', job: 'trash-purge' })
-    this.#batchSize = config.jobs.trashPurge.batchSize
-    this.#maxDeferredRounds = Math.max(1, Math.floor(MAX_RETRY_DEFERRAL_MS / config.jobs.trashPurge.intervalMs))
+    const { enabled, intervalMs, batchSize } = config.jobs.trashPurge
+    this.schedule = { enabled, intervalMs }
+    this.settings = { batchSize }
+    this.#logger = logger.with({ module: 'jobs', job: JOB_NAME })
+    this.#batchSize = batchSize
+    this.#maxDeferredRounds = Math.max(1, Math.floor(MAX_RETRY_DEFERRAL_MS / intervalMs))
   }
 
   /** 跑一轮：清理到 now 为止已经到期的删除单元（now 由调用方从时钟取，测试因此能把时间推到 30 天之后）。 */

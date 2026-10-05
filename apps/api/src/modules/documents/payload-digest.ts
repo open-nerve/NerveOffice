@@ -42,9 +42,14 @@ export function folderCreatedPayloadDigest(spaceId: string, parentId: string | u
   return createHash('sha256').update(`folder-created\n${spaceId}\n${parentId ?? ''}\n${name}`, 'utf8').digest()
 }
 
-/** 保存：基准修订号与解压后的快照字节。按解压后的字节算，同一份内容重试时，客户端不必保证压缩结果逐字节相同。 */
-export function savedPayloadDigest(baseRevision: number, raw: Buffer): Buffer {
-  return createHash('sha256').update(`saved\n${baseRevision}\n`, 'utf8').update(raw).digest()
+/**
+ * 保存：基准修订号与解压后的快照字节。按解压后的字节算，同一份内容重试时，客户端不必保证压缩结果逐字节相同。
+ * "公式待更新"（M3-P3 设计 §3.8）也算在里面：同一个 requestId 而标记不同就是另一个请求。没有标记时与 P3 之前的写法逐字节相同：
+ * 升级之前提交了、回包丢了的保存，旧页面在升级之后重试（它不带标记）照样按重放处理（A07）；有标记时开头一行换成另一种，
+ * 两种写法的第一行不同，不会相撞
+ */
+export function savedPayloadDigest(baseRevision: number, raw: Buffer, formulasPending = false): Buffer {
+  return createHash('sha256').update(`${formulasPending ? 'saved-formulas-pending' : 'saved'}\n${baseRevision}\n`, 'utf8').update(raw).digest()
 }
 
 /**
@@ -53,8 +58,9 @@ export function savedPayloadDigest(baseRevision: number, raw: Buffer): Buffer {
  *   原样的重试照样是重放，不因为这次本该放到别处而被当成另一个请求；
  * - 与保存一样按解压后的字节算：重试时客户端不必保证压缩结果逐字节相同，同一份内容就是同一个请求；内容不同（重试之前又捕获了一次）
  *   就是另一个请求，同一个 requestId 拒绝（REQUEST_ID_CONFLICT），不把新内容当成上一次的结果。
- * 标题不含控制字符（契约），按换行分段不会与标题混淆，快照字节接在最后一个换行之后；id 已由契约统一成小写
+ * 标题不含控制字符（契约），按换行分段不会与标题混淆，快照字节接在最后一个换行之后；id 已由契约统一成小写。
+ * "公式待更新"与保存的写法相同（M3-P3 设计 §3.8）：有标记时开头一行换成另一种
  */
-export function conflictCopyPayloadDigest(sourceId: string, title: string, raw: Buffer): Buffer {
-  return createHash('sha256').update(`conflict-copied\n${sourceId}\n${title}\n`, 'utf8').update(raw).digest()
+export function conflictCopyPayloadDigest(sourceId: string, title: string, raw: Buffer, formulasPending = false): Buffer {
+  return createHash('sha256').update(`${formulasPending ? 'conflict-copied-formulas-pending' : 'conflict-copied'}\n${sourceId}\n${title}\n`, 'utf8').update(raw).digest()
 }

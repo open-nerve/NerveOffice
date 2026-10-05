@@ -4,8 +4,8 @@
 // 顺序：
 // 1. 创建公式 Worker（模块 Worker），先挂上它的回报与错误的监听；
 // 2. new Univer（身份替换：授权服务按 access 回答，ADR-009），按档案注册插件（界面的配置按 access）；FUniver.newAPI；
-// 3. 在创建工作簿之前挂上入口守卫、只读守卫（只读时：防火墙与撤销拦截）、变更检测、单元格编辑与生命周期的监听，
-//    加载过程中的命令也看得到、拦得住；更要紧的是执行前监听的先后，见 mount 里的不变量（M2-P6 复核 F3）；
+// 3. 在创建工作簿之前挂上入口守卫、链接的改写（M3-P3）、只读守卫（只读时：防火墙与撤销拦截）、变更检测、单元格编辑与生命周期的监听，
+//    加载过程中的命令也看得到、拦得住、改得到；更要紧的是执行前监听的先后，见 mount 里的不变量（M2-P6 复核 F3）；
 // 4. createWorkbook，核对 unitId；只读时把每张工作表的权限点设为只读（read-only/read-only-guard.ts）；
 // 5. 等渲染完成（Rendered）、主线程到 Ready 后装上 IMAGE() 的限制、Worker 回报它那边也装上了；只读时装上渲染之后才有的界面处理
 //    （冻结线、编辑栏的焦点）、清空撤销栈，才返回；
@@ -35,6 +35,7 @@ import { installRestrictedImageFunction } from './image-function/install-image-p
 import { watchWorkerImagePolicy } from './image-function/worker-image-policy.ts'
 import { watchLifecycle } from './lifecycle-watch.ts'
 import { installEntryGuards } from './profile/entry-guards.ts'
+import { installLinkPolicy } from './profile/link-policy.ts'
 import { SHEET_ZH_CN } from './profile/locale.ts'
 import { CHANGE_DETECTION_EXCLUDED_MUTATIONS, sheetPluginEntries } from './profile/sheet-profile.ts'
 import { installReadOnlyGuard } from './read-only/read-only-guard.ts'
@@ -170,6 +171,11 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   // 或者入口守卫中途退订）都会破坏它：E2E read-only.spec.ts 的用例"经 Facade 直接执行写公式的 mutation"核对（被取消、单元格不变）
   const guards = installEntryGuards(univerAPI)
   cleanup.defer(() => guards.dispose())
+  // 链接的改写（profile/link-policy.ts，M3-P3 设计 §3.6，DEF-021）：阅读与编辑都装，订阅在入口守卫之后，不改变上面的不变量
+  // （入口守卫仍是第一个订阅者、直到销毁才退订；改写器随编辑器销毁，先于入口守卫退订）。在创建工作簿之前装上：
+  // 打开过程中的写入（公式的初次计算写回的 HYPERLINK() 结果）同样经过它。它与只读的防火墙互不影响：Facade 先调完全部订阅者再看取消
+  const links = installLinkPolicy(univerAPI)
+  cleanup.defer(() => links.dispose())
   // 变更检测与只读的防火墙用同一份判定的配置：只读时，变更检测会认作修改的一律取消（M2-P3 设计 §3.3）
   const classifier: ChangeClassifierConfig = { unitId: snapshot.unitId, excludedMutationIds: CHANGE_DETECTION_EXCLUDED_MUTATIONS }
   const readOnly = access === 'read' ? installReadOnlyGuard(univer, univerAPI, classifier) : undefined

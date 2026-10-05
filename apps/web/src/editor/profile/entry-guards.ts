@@ -20,8 +20,9 @@ export const IMAGE_GUARDED_COMMANDS: readonly GuardedCommand[] = [
 ]
 
 /**
- * 超链接：地址白名单在 M5（计划书 §11.3）。取消链接（cancel-hyper-link）只删除数据，不拦。
- * 键入网址时 SDK 的自动识别不经这些命令（sheets-hyper-link 的写入拦截器），M1 保留，与粘贴带来的链接一样由 M3、M5 的链接地址判定处理（DEF-021）
+ * 超链接：插入链接的入口在 M5（计划书 §11.3）。取消链接（cancel-hyper-link）只删除数据，不拦。
+ * 键入网址时 SDK 的自动识别不经这些命令（sheets-hyper-link 的写入拦截器），照常保留：它与粘贴带来的链接、HYPERLINK() 的结果一样，
+ * 写进单元格之前由链接的改写器改成规范写法、不合法的去掉链接（link-policy.ts，M3-P3，DEF-021）
  */
 export const HYPERLINK_GUARDED_COMMANDS: readonly GuardedCommand[] = [
   { id: 'sheet.operation.insert-hyper-link-toolbar', source: 'sheets-hyper-link-ui/src/commands/operations/popup.operations.ts:94（工具栏，快捷键 Ctrl/Cmd+K 绑定它：menu/menu.ts:156-160）' },

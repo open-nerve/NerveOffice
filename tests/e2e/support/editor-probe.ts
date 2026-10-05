@@ -4,7 +4,9 @@
 //   不用固定时长的等待（规范 §8.1）；
 // - Facade：M0 的 Facade 入口经它逐项调用；单元格在画布上的位置也经它取（只读样本的列宽、隐藏的列与行高不是模板的默认值）。
 //   入口用到的部分与测试构建的页面自检共用一份声明（editor/testing/read-only-entries.ts 的 Entry*），这里在它上面加 E2E 另外用到的。
+// - 页面里打包的链接地址判定（M3-P3 S2）：跨引擎的同一组用例在三个浏览器里经它核对。
 // 用到探针的用例打上 @test-build：外部模式测生产镜像，里面没有探针，按标签排除（playwright.config.ts）
+import type { CanonicalLink } from '@nerve-office/contracts'
 import type { Locator, Page } from '@playwright/test'
 import type { LoggedCommand } from '../../../apps/web/src/editor/testing/content-compare.ts'
 import type { EntryApi, EntryImage, EntryRange, EntryScope, EntrySheet, EntryWorkbook } from '../../../apps/web/src/editor/testing/read-only-entries.ts'
@@ -96,6 +98,7 @@ interface EditorProbe {
   readonly commands: (after?: number) => readonly ProbeCommand[]
   readonly shortcuts: () => readonly ProbeShortcut[]
   readonly formulaBarText: () => string
+  readonly canonicalLink: (url: string) => CanonicalLink
 }
 
 declare global {
@@ -142,6 +145,20 @@ export async function formulaBarText(page: Page): Promise<string> {
       throw new Error('页面里没有编辑器的探针')
     return probe.formulaBarText()
   })
+}
+
+/**
+ * 页面里打包的链接地址判定（contracts 的 canonicalLink，与链接的改写器用的同一份代码；M3-P3 S2）：按顺序给出每个地址的结果。
+ * 规范写法依赖浏览器的 WHATWG URL，跨引擎的用例经它在每个浏览器里核对
+ */
+export async function probeCanonicalLinks(page: Page, urls: readonly string[]): Promise<readonly CanonicalLink[]> {
+  await probeIn(page)
+  return page.evaluate((inputs) => {
+    const probe = window.__nerveEditorProbe
+    if (probe === undefined)
+      throw new Error('页面里没有编辑器的探针')
+    return inputs.map(url => probe.canonicalLink(url))
+  }, [...urls])
 }
 
 /** 命令日志：序号大于 after 的各条 */

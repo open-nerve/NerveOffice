@@ -1,4 +1,6 @@
 export { Clock, DatabaseClock } from './clock.ts'
 export { JobsModule } from './jobs.module.ts'
+export { REVISION_PURGE_LOCK, RevisionPurgeJob } from './revision-purge.job.ts'
+export type { RevisionPurgeEnding, RevisionPurgeRound } from './revision-purge.job.ts'
 export { TRASH_PURGE_LOCK, TrashPurgeJob } from './trash-purge.job.ts'
 export type { TrashPurgeRound } from './trash-purge.job.ts'

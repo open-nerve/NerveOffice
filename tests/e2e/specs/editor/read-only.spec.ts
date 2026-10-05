@@ -32,13 +32,14 @@ import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
 import { SNAPSHOT_UPLOAD_CONTENT_TYPE } from '@nerve-office/contracts'
+import { clientFormatQuery } from '../../support/client-format.ts'
 import { archiveSpace } from '../../support/database.ts'
 import { cellCenter, clickCell, commandMark, contentOf, nameBox, probeCommands, probeSnapshot, runFacade, waitForCommand } from '../../support/editor-probe.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { pressUniverShortcut } from '../../support/keyboard.ts'
 import { allSheetsMenuButton, expectEntriesUnchanged, findApple, FORMULA_BAR_UNIT, formulaBarEditor, formulaBarInput, grantClipboard, OTHER_READ_ONLY_ENTRIES, OTHER_UI_ENTRIES, PROBE_FACADE_ENTRIES, showSheet, slipOntoFormulaBar, step, TYPING, UI_ENTRIES } from '../../support/read-only-checks.ts'
-import { SAMPLE_CELLS, SAMPLE_FORMULAS, SAMPLE_SHEETS, sampleWithoutFormulaValuesFor } from '../../support/read-only-sample.ts'
+import { SAMPLE_CELLS, SAMPLE_FORMULAS, SAMPLE_SHEETS, sampleWithoutFormulaValuesFor, sampleWithoutImagesFor } from '../../support/read-only-sample.ts'
 import { ALERT, closePermissionAlert, documentChangeAttempts, expectUnchanged, FORMULA_MUTATION_CELL, LOOK_ONCE, nextFrames, OPENED, openReadOnly, scene, SHORTCUT_OUTCOMES, unitIdOf, watch, writeFormulaMutation } from '../../support/read-only.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { EDITOR_TEST_TIMEOUT, openAndEnterEditing, resourceOf, saveButton, savedContent, selectCell, sheetCanvas, sheetTab, waitForEditorAccess } from '../../support/sheet.ts'
@@ -86,10 +87,12 @@ test.describe('US-M2-11 查看者打开有阅读权限的表格，只能看不�
     expect(watched.pageErrors).toEqual([])
 
     // 前端的只读只是体验层，写入的边界在服务端（ADR-011）：查看者直接调保存的接口也被拒绝，内容不变。
-    // 代次是必填的参数（M3-P1）；查看者申请不了编辑权，没有租约照样发出：先被"能编辑"拒绝（403），到不了租约那一步
+    // 代次是必填的参数（M3-P1）；查看者申请不了编辑权，没有租约照样发出：先被"能编辑"拒绝（403），到不了租约那一步。
+    // 快照的检查与格式的拦截都在判断访问之前（M3-P3 设计 §3.1）：照现在的页面带上构建与数据格式，传去掉图片的样本
+    // （样本的 data: 图片过不了快照的检查），才走得到"能编辑"那一步
     const { csrfToken } = await (await page.request.get('/api/auth/session')).json() as { csrfToken: string }
-    const edited = { ...workbook, name: '查看者改过' }
-    const query = new URLSearchParams({ baseRevision: String(stored.revision), requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1', writeEpoch: '0' })
+    const edited = { ...JSON.parse(sampleWithoutImagesFor(unitIdOf(snapshot))) as Workbook, name: '查看者改过' }
+    const query = new URLSearchParams({ baseRevision: String(stored.revision), requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1', writeEpoch: '0', formulasPending: 'false', ...clientFormatQuery() })
     const response = await page.request.put(`/api/documents/${s.documentId}/content?${query.toString()}`, {
       data: zlib.gzipSync(Buffer.from(JSON.stringify(edited), 'utf8')),
       headers: { 'content-type': SNAPSHOT_UPLOAD_CONTENT_TYPE, 'origin': e2eOrigin(), 'x-csrf-token': csrfToken },

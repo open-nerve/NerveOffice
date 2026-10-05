@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs'
 import { isIP } from 'node:net'
 import { isAbsolute } from 'node:path'
 import process from 'node:process'
+import { parseVersion } from '@nerve-office/contracts'
 import { z } from 'zod'
 import { Secret } from '../../shared/secret.ts'
 
@@ -88,6 +89,23 @@ export interface AppConfig {
       /** 一轮最多清理多少个删除单元 */
       readonly batchSize: number
     }
+    /** 修订记录与保存回执的保留期清理（M3-P3 设计 §3.9）：与回收站的清理同一个调度器 */
+    readonly revisionPurge: {
+      /** 关掉之后不再起定时器：过了保留期的修订记录与回执留着（不影响使用），重新打开之后下一轮一起清。默认开启 */
+      readonly enabled: boolean
+      /** 两轮之间的间隔；实际触发时间带随机抖动 */
+      readonly intervalMs: number
+      /** 一批最多删多少条（修订记录与回执各算）：每批一个短事务，一轮删到不满一批为止 */
+      readonly batchSize: number
+    }
+  }
+  /** 修订记录与保存回执（M3-P3 设计 §3.9） */
+  readonly revisions: {
+    /**
+     * 保留多少天（每份文档当前修订的那一行一直保留）。保留期同时是保存、新建、复制、另存为副本的幂等窗口：这么多天之内
+     * 重发同一个请求得到原来的结果，之后按新的请求处理。下限见 REVISION_RETENTION_MIN_DAYS
+     */
+    readonly retentionDays: number
   }
   readonly password: {
     /** Argon2id 的参数（00 号计划书 §11.1）：按部署机器的基准测试调整；改了之后，下次登录成功时重新哈希 */
@@ -102,6 +120,34 @@ export interface AppConfig {
      * 登录洪水下延迟与内存不再无限增长
      */
     readonly hashQueue: { readonly maxWaiting: number, readonly maxWaitMs: number }
+  }
+  /**
+   * 页面（客户端）的版本（M3-P3 设计 §3.5，M3 总设计 §2.1 第 3 条）：数据格式不同的页面一律拦下（CLIENT_OUTDATED），
+   * 另有这个运维开关——客户端有严重缺陷时，构建低于它的页面在保存、另存为副本、申请编辑权与心跳时都被拦下，提示刷新
+   */
+  readonly clients: {
+    /** 最低的客户端构建（x.y.z）；不设时不按构建拦（只按数据格式）。改了要重启：严重缺陷本来就伴随一次修复发布 */
+    readonly minimumBuild: string | undefined
+  }
+  /**
+   * 快照的检查（M3-P3 设计 §3.3，DEF-018）：保存与另存为副本的快照在子进程池里解析、检查与规范化，主进程的事件循环不被阻塞，
+   * 子进程的内存超限不影响主进程
+   */
+  readonly snapshotInspection: {
+    /**
+     * 子进程数：同时检查的快照数的上限。子进程按需创建，空闲 60 秒之后退出；空闲时每个独占约 30 MiB，检查过一份 5 MiB 的
+     * 真实快照之后约 120 MiB；最费的形状接近堆上限加 48 MiB 的新生代再加 Node 本身（DEF-018 的测量：堆上限 512 时约 600 MiB）
+     */
+    readonly processes: number
+    /**
+     * 等待检查的排队：排队的请求超过 maxWaiting，或者等待超过 maxWaitMs，立即返回 503（带 Retry-After）。
+     * 排队的请求各自占着上传的正文（压缩前后各最多 5 MiB），所以排队的上限也是内存的上限
+     */
+    readonly queue: { readonly maxWaiting: number, readonly maxWaitMs: number }
+    /** 一份快照的检查时限（子进程的加载另有同样的时限）：超时就结束那个子进程，这次返回 503 */
+    readonly timeoutMs: number
+    /** 每个子进程的堆上限（MiB，V8 的 --max-old-space-size）：超出时 V8 中止那个子进程，这份快照按"过于复杂"拒绝 */
+    readonly heapMb: number
   }
 }
 
@@ -124,8 +170,9 @@ function text() {
   return z.string({ error: issue => (issue.input === undefined ? '缺少' : '必须是文本') })
 }
 
-function integer(min: number, max: number) {
-  const problem = `必须是 ${min}–${max} 之间的整数`
+/** 整数的范围；reason 是范围的理由，跟在说明后面（例如下限为什么是它） */
+function integer(min: number, max: number, reason?: string) {
+  const problem = `必须是 ${min}–${max} 之间的整数${reason === undefined ? '' : `：${reason}`}`
   return text()
     .regex(/^\d+$/, problem)
     .transform(Number)
@@ -153,6 +200,10 @@ const publicOrigin = text().transform((value, ctx): string => {
   }
   return url.origin
 })
+
+/** 最低客户端构建的写法：x.y.z（不带前导零的十进制，与 contracts 的版本比较同一个写法）；不带 + 之后的诊断信息（比较时本来就不看） */
+const MINIMUM_BUILD_PROBLEM = '必须是 x.y.z 的版本号（例如 0.1.3：不带前导零，不带 + 之后的诊断信息）'
+const minimumBuild = text().refine(value => !value.includes('+') && parseVersion(value) !== undefined, MINIMUM_BUILD_PROBLEM)
 
 const TRUST_PROXY_NAMES: ReadonlySet<string> = new Set(['loopback', 'linklocal', 'uniquelocal'])
 const TRUST_PROXY_PROBLEM = '必须是 1–10 的跳数，或者由 IP 地址、网段与 loopback、linklocal、uniquelocal 组成的逗号分隔列表'
@@ -185,6 +236,19 @@ const trustProxy = text().transform((value, ctx): number | string[] => {
   ctx.issues.push({ code: 'custom', message: TRUST_PROXY_PROBLEM, input: value })
   return z.NEVER
 })
+
+/**
+ * 本机发件箱里一条记录最长留多少天（00 号计划书 §7.5，M4 实现发件箱）：一次结果未知的保存，页面最晚在这么多天之后还会原样重发
+ */
+const OUTBOX_RECORD_MAX_DAYS = 14
+
+/**
+ * 修订记录与回执的保留期的下限（M3-P3 设计 §3.9）：比发件箱的最长留存多一天。保留期是保存的幂等窗口——发件箱里一次结果未知的保存
+ * 在第 14 天重发时，服务端要还找得到原来的修订记录或回执，才能把原来的结果交回（A07）；找不到时它按一次新的保存处理，
+ * 基准修订号多半已经落后，得到修订号冲突，页面会误以为"没有保存"
+ */
+const REVISION_RETENTION_MIN_DAYS = OUTBOX_RECORD_MAX_DAYS + 1
+const REVISION_RETENTION_REASON = `保留期要长于本机发件箱一条记录的最长留存（${OUTBOX_RECORD_MAX_DAYS} 天，M4），否则发件箱里结果未知的保存重发时找不到原来的结果、重放不了`
 
 const environmentSchema = z.object({
   NERVE_DATABASE_URL: text().pipe(z.url({ protocol: /^postgres(?:ql)?$/, error: '必须是 postgres:// 或 postgresql:// 开头的连接串' })),
@@ -228,6 +292,24 @@ const environmentSchema = z.object({
   NERVE_TRASH_PURGE_ENABLED: flag().default(true),
   NERVE_TRASH_PURGE_INTERVAL_MS: integer(1_000, 86_400_000).default(3_600_000),
   NERVE_TRASH_PURGE_BATCH: integer(1, 1_000).default(50),
+  // 修订记录与回执的保留期（M3-P3 设计 §3.9）：默认 30 天，下限见 REVISION_RETENTION_MIN_DAYS，上限 10 年只是兜底（要一直留着就关掉清理）
+  NERVE_REVISION_RETENTION_DAYS: integer(REVISION_RETENTION_MIN_DAYS, 3_650, REVISION_RETENTION_REASON).default(30),
+  // 保留期的清理：与回收站的清理同一个调度器，默认每小时一轮；一批最多 1000 条（修订记录与回执各算），一轮删到不满一批为止。
+  // 自动保存每 2–15 秒写一版（M3 总设计 US-M3-02）：一轮只删一批跟不上，所以一轮之内分批删完，每批一个短事务
+  NERVE_REVISION_PURGE_ENABLED: flag().default(true),
+  NERVE_REVISION_PURGE_INTERVAL_MS: integer(1_000, 86_400_000).default(3_600_000),
+  NERVE_REVISION_PURGE_BATCH: integer(1, 10_000).default(1_000),
+  // 最低客户端构建（M3-P3 设计 §3.5）：运维开关，不设时不按构建拦
+  NERVE_MIN_CLIENT_BUILD: minimumBuild.optional(),
+  // 快照的检查（M3-P3 设计 §3.3，DEF-018）：默认 2 个子进程。数字的依据是 DEF-018 的测量（apps/api/scripts/measure-snapshot-inspection.ts）：
+  // 5 MiB 以内最费的形状检查一份约 0.6 秒；子进程的堆（老生代）要 96 MiB 才检查得完 5 MiB 的真实形状，数量上限之内最费的形状要 256 MiB。
+  // 堆超限时 V8 中止的只是那个子进程（这一份按"过于复杂"拒绝），服务照常：下限 128 保证真实形状的大表格不被误拒，
+  // 默认 512 给数量上限之内最费的形状留两倍余量
+  NERVE_SNAPSHOT_INSPECTION_PROCESSES: integer(1, 64).default(2),
+  NERVE_SNAPSHOT_INSPECTION_QUEUE_MAX: integer(0, 1_000).default(8),
+  NERVE_SNAPSHOT_INSPECTION_QUEUE_TIMEOUT_MS: integer(100, 600_000).default(10_000),
+  NERVE_SNAPSHOT_INSPECTION_TIMEOUT_MS: integer(1_000, 600_000).default(10_000),
+  NERVE_SNAPSHOT_INSPECTION_HEAP_MB: integer(128, 16_384).default(512),
 })
 
 type Environment = z.output<typeof environmentSchema>
@@ -265,7 +347,11 @@ function threadpoolOf(value: string | undefined): Threadpool | undefined {
 
 /**
  * 开启回收站的自动清理时连接池至少要有几个连接（M2-P6 复核 A 的 G-3）：清理的一轮用一个连接持着防重复执行的会话级锁
- * （ExclusiveRunner），每一项的删除在另一个连接的短事务里。只有一个连接时，第二个连接永远等不到，每一轮都失败
+ * （ExclusiveRunner.run），每一项的删除在另一个连接的短事务里。只有一个连接时，第二个连接永远等不到，每一轮都失败。
+ *
+ * 修订记录与回执的保留期清理（M3-P3 设计 §3.9）不改变这个下限：它每一批是一个短事务，防重复执行的锁是这个事务里的事务级锁
+ * （ExclusiveRunner.runTransaction），任何时刻只占一个连接，而且从不拿着一个连接去等另一个。两个清理同时在跑、连接池只有 2 时：
+ * 回收站的清理持着一个、另一个由它每一项的事务与保留期清理的一批轮流用，各自很快归还，谁也不会一直等不到
  */
 const TRASH_PURGE_MIN_POOL = 2
 
@@ -359,7 +445,13 @@ function toAppConfig(env: Environment): AppConfig {
         intervalMs: env.NERVE_TRASH_PURGE_INTERVAL_MS,
         batchSize: env.NERVE_TRASH_PURGE_BATCH,
       },
+      revisionPurge: {
+        enabled: env.NERVE_REVISION_PURGE_ENABLED,
+        intervalMs: env.NERVE_REVISION_PURGE_INTERVAL_MS,
+        batchSize: env.NERVE_REVISION_PURGE_BATCH,
+      },
     },
+    revisions: { retentionDays: env.NERVE_REVISION_RETENTION_DAYS },
     password: {
       argon2: {
         memoryKib: env.NERVE_PASSWORD_ARGON2_MEMORY_KIB,
@@ -368,6 +460,13 @@ function toAppConfig(env: Environment): AppConfig {
       },
       hashConcurrency: env.NERVE_PASSWORD_HASH_CONCURRENCY,
       hashQueue: { maxWaiting: env.NERVE_PASSWORD_HASH_QUEUE_MAX, maxWaitMs: env.NERVE_PASSWORD_HASH_QUEUE_TIMEOUT_MS },
+    },
+    clients: { minimumBuild: env.NERVE_MIN_CLIENT_BUILD },
+    snapshotInspection: {
+      processes: env.NERVE_SNAPSHOT_INSPECTION_PROCESSES,
+      queue: { maxWaiting: env.NERVE_SNAPSHOT_INSPECTION_QUEUE_MAX, maxWaitMs: env.NERVE_SNAPSHOT_INSPECTION_QUEUE_TIMEOUT_MS },
+      timeoutMs: env.NERVE_SNAPSHOT_INSPECTION_TIMEOUT_MS,
+      heapMb: env.NERVE_SNAPSHOT_INSPECTION_HEAP_MB,
     },
   }
 }

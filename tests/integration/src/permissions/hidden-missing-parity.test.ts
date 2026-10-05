@@ -20,6 +20,7 @@ import { EDIT_LEASE_HEADER, sheetSnapshotFor } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount, createPassiveAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
+import { acquireBody, clientFormatQuery, renewBody } from '../support/client-format.ts'
 import { comparableOf } from '../support/comparable-response.ts'
 import { conflictCopyPath, pageSnapshot } from '../support/conflict-copies.ts'
 import { createTestDatabase } from '../support/database.ts'
@@ -204,11 +205,12 @@ const missing = (): string => randomUUID()
 const pick = (hidden: boolean, id: string): string => (hidden ? id : missing())
 
 /**
- * 保存：带上格式合法的令牌与代次（M3-P1 起保存要求编辑租约，writeEpoch 必填），请求本身合法、只看访问的判断；
- * 不先申请（看不到的人也申请不了），要比较的语句只有保存这一个请求的。判断访问在租约之前，看不到与不存在一样 404
+ * 保存：带上格式合法的令牌与代次（M3-P1 起保存要求编辑租约，writeEpoch 必填）与现在的页面的构建与数据格式（M3-P3），请求本身合法、
+ * 只看访问的判断；不先申请（看不到的人也申请不了），要比较的语句只有保存这一个请求的。判断访问在租约之前，看不到与不存在一样 404；
+ * 事务之外的重放预检（M3-P3：按新的 requestId 查修订记录与回执，都查不到）、格式的核对与快照的检查（与文档无关）两边一样
  */
 async function save(session: LoggedIn, documentId: string, unitId: string): Promise<Response> {
-  const query = new URLSearchParams({ baseRevision: '1', requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1', writeEpoch: '1' })
+  const query = new URLSearchParams({ baseRevision: '1', requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: '1', writeEpoch: '1', ...clientFormatQuery() })
   const path = `/api/documents/${documentId}/content?${query.toString()}`
   return recorded('PUT', path) ?? asUser(app.baseUrl, session, path, {
     method: 'PUT',
@@ -352,15 +354,15 @@ const PROBES: readonly Probe[] = [
   { name: '只有查看授权 POST 复制回收站里有授权的文档', actor: 'grantViewer', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/copy`, 'POST', { spaceId: w.grantViewer.personalSpaceId, requestId: randomUUID() }) },
   // ---- 编辑权（M3-P1 设计 §3.2、§3.5）：先判断访问与编辑权，看不到的文档与不存在的一样，不读租约、不取任何锁 ----
   { name: 'GET 编辑状态', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease`) },
-  { name: 'POST 申请编辑权', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease`, 'POST', { clientInstanceId: randomUUID() }) },
-  { name: 'PUT 续租', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease`, 'PUT', { idleSeconds: 0 }, LEASE_TOKEN) },
+  { name: 'POST 申请编辑权', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease`, 'POST', acquireBody(randomUUID())) },
+  { name: 'PUT 续租', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease`, 'PUT', renewBody(0), LEASE_TOKEN) },
   { name: 'DELETE 释放', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease`, 'DELETE', undefined, LEASE_TOKEN) },
-  { name: 'POST 申请个人空间文档的编辑权', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.personalDocument.id)}/edit-lease`, 'POST', { clientInstanceId: randomUUID() }) },
+  { name: 'POST 申请个人空间文档的编辑权', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.personalDocument.id)}/edit-lease`, 'POST', acquireBody(randomUUID())) },
   { name: 'GET 回收站里的文档的编辑状态（空间管理员自己）', actor: 'admin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/edit-lease`) },
-  { name: 'POST 申请回收站里的文档的编辑权（空间管理员自己）', actor: 'admin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/edit-lease`, 'POST', { clientInstanceId: randomUUID() }) },
-  { name: 'PUT 续租回收站里的文档（空间管理员自己）', actor: 'admin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/edit-lease`, 'PUT', { idleSeconds: 0 }, LEASE_TOKEN) },
-  { name: '系统管理员 POST 申请团队空间文档的编辑权', actor: 'systemAdmin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease`, 'POST', { clientInstanceId: randomUUID() }) },
-  { name: '只有编辑授权 POST 申请没分享的文档的编辑权', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/edit-lease`, 'POST', { clientInstanceId: randomUUID() }) },
+  { name: 'POST 申请回收站里的文档的编辑权（空间管理员自己）', actor: 'admin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/edit-lease`, 'POST', acquireBody(randomUUID())) },
+  { name: 'PUT 续租回收站里的文档（空间管理员自己）', actor: 'admin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/edit-lease`, 'PUT', renewBody(0), LEASE_TOKEN) },
+  { name: '系统管理员 POST 申请团队空间文档的编辑权', actor: 'systemAdmin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease`, 'POST', acquireBody(randomUUID())) },
+  { name: '只有编辑授权 POST 申请没分享的文档的编辑权', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/edit-lease`, 'POST', acquireBody(randomUUID())) },
   { name: '只有编辑授权 DELETE 释放没分享的文档', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/edit-lease`, 'DELETE', undefined, LEASE_TOKEN) },
   { name: '只有查看授权 GET 没分享的文档的编辑状态', actor: 'grantViewer', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/edit-lease`) },
   // ---- 另存为副本与读取的条件请求（M3-P2 设计 §3.2、§3.6）：只要求能读原文档，读不到的与不存在的一样；304 之前照样判断权限 ----

@@ -20,11 +20,12 @@ import { acquiredEditLeaseSchema, CSRF_TOKEN_HEADER, EDIT_LEASE_HEADER, SHEET_TE
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp, TEST_PUBLIC_ORIGIN } from '../support/api-app.ts'
+import { acquireBody } from '../support/client-format.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
 import { acquireLease, contentPathWithLease, leaseStateOf, outcomeOf, releaseLease, renewLease, saveContent } from '../support/edit-leases.ts'
-import { completesWithoutWaiting, raceAgainstHeldLock } from '../support/held-lock.ts'
+import { completesWithoutWaiting, raceAgainstHeldLock, whileHolding } from '../support/held-lock.ts'
 import { asUser, login, SESSION_COOKIE } from '../support/session-client.ts'
 import { createTeamSpace, setMember } from '../support/spaces.ts'
 
@@ -65,9 +66,14 @@ async function freshDocument(): Promise<SeededDocument> {
   return seedDocument(database, { spaceId: team, createdBy: root.id, title: '登录与编辑权' })
 }
 
-function snapshotOf(document: SeededDocument, value: string): Uint8Array {
+/** 模板换上 unitId、A1 写入 value 的快照原文（解压之后的字节） */
+function rawSnapshotOf(document: SeededDocument, value: string): Buffer {
   const sheet = SHEET_TEMPLATE.sheets['sheet-1']
-  return zlib.gzipSync(Buffer.from(JSON.stringify({ ...SHEET_TEMPLATE, id: document.unitId, sheets: { 'sheet-1': { ...sheet, cellData: { 0: { 0: { v: value } } } } } }), 'utf8'))
+  return Buffer.from(JSON.stringify({ ...SHEET_TEMPLATE, id: document.unitId, sheets: { 'sheet-1': { ...sheet, cellData: { 0: { 0: { v: value } } } } } }), 'utf8')
+}
+
+function snapshotOf(document: SeededDocument, value: string): Uint8Array {
+  return zlib.gzipSync(rawSnapshotOf(document, value))
 }
 
 /** 这份文档的修订号、修订记录的条数与保存的审计条数：被拒的保存一样也不多 */
@@ -186,8 +192,36 @@ describe('US-M3-09 登录被撤销之后，已经过了会话守卫的在途请�
     expect(await writesOf(document.id)).toEqual(UNTOUCHED)
   })
 
-  it('US-M3-13 重放先于登录的再核对（M3-P1 复验 C2）：已经提交的保存原样重发、等在文档行上时本人退出登录——放行之后是重放，拿到原来的结果（200），不重复写入，不是 401', async () => {
+  it('US-M3-13 重放先于登录的再核对（M3-P1 复验 C2）：同一次保存的两份请求并发——重发在事务之外的重放预检时前一份还没提交（看不到），停在文档行上；前一份随后提交、其间本人退出了登录——拿到锁之后锁下再查是重放，拿到原来的结果（200），不重复写入，不是 401', async () => {
     const { account, session } = await editor()
+    const document = await freshDocument()
+    const lease = await acquireLease(app.baseUrl, session, document.id)
+    const requestId = randomUUID()
+    const raw = rawSnapshotOf(document, '提交过一次的')
+    // 持锁的事务就是前一份请求：锁着文档行，写下它的修订记录与修订号（还没提交），重发的预检看不到它
+    const replayed = await raceAgainstHeldLock(database, {
+      hold: async (client) => {
+        await holdDocument(document.id)(client)
+        await client.query(
+          `INSERT INTO document_revisions (document_id, revision, kind, request_id, payload_digest, client_instance_id, local_seq, saved_by)
+           VALUES ($1, 2, 'saved', $2, $3, $4, 1, $5)`,
+          [document.id, requestId, createHash('sha256').update('saved\n1\n', 'utf8').update(raw).digest(), lease.clientInstanceId, account.id],
+        )
+        await client.query('UPDATE documents SET revision = 2, updated_at = now() WHERE id = $1', [document.id])
+      },
+      request: async () => saveContent(app.baseUrl, session, document.id, zlib.gzipSync(raw), { baseRevision: 1, lease, requestId }),
+      change: async () => {
+        expect((await asUser(app.baseUrl, session, '/api/auth/logout', { method: 'POST' })).status).toBe(204)
+        expect(await activeSessionsOf(account.id)).toBe(0)
+      },
+    })
+    const createdAt = await database.query(async client => (await client.query<{ created_at: Date }>('SELECT created_at FROM document_revisions WHERE request_id = $1', [requestId])).rows[0]?.created_at)
+    expect({ status: replayed.status, body: await replayed.json() }).toEqual({ status: 200, body: { revision: 2, savedAt: createdAt?.toISOString(), unchanged: false } })
+    expect(await writesOf(document.id)).toEqual({ revision: 2, revisions: 2, saves: 0 })
+  })
+
+  it('US-M3-13 已经提交的保存原样重发（M3-P3 设计 §3.1 第 2 步）：事务之外的重放预检就给出原来的结果（200）——文档行被别的事务锁着也不等，不重复写入', async () => {
+    const { session } = await editor()
     const document = await freshDocument()
     const lease = await acquireLease(app.baseUrl, session, document.id)
     const requestId = randomUUID()
@@ -195,15 +229,8 @@ describe('US-M3-09 登录被撤销之后，已经过了会话守卫的在途请�
     const first = await saveContent(app.baseUrl, session, document.id, body, { baseRevision: 1, lease, requestId })
     expect(first.status, await first.clone().text()).toBe(200)
     const original: unknown = await first.json()
-    // 回包丢了，页面原样重发；重发停在文档行上时本人退出登录（先提交）
-    const replayed = await raceAgainstHeldLock(database, {
-      hold: holdDocument(document.id),
-      request: async () => saveContent(app.baseUrl, session, document.id, body, { baseRevision: 1, lease, requestId }),
-      change: async () => {
-        expect((await asUser(app.baseUrl, session, '/api/auth/logout', { method: 'POST' })).status).toBe(204)
-        expect(await activeSessionsOf(account.id)).toBe(0)
-      },
-    })
+    // 持着文档行的锁直到重发结束：重发要是走到事务里等这把锁，就会等满应用的等锁时限、得到 503
+    const replayed = await whileHolding(database, holdDocument(document.id), async () => saveContent(app.baseUrl, session, document.id, body, { baseRevision: 1, lease, requestId }))
     expect({ status: replayed.status, body: await replayed.json() }).toEqual({ status: 200, body: original })
     expect(await writesOf(document.id)).toEqual({ revision: 2, revisions: 2, saves: 1 })
   })
@@ -236,12 +263,12 @@ describe('US-M3-09 登录被撤销之后，已经过了会话守卫的在途请�
     const document = await freshDocument()
     const acquired = await raceAgainstHeldLock(database, {
       hold: holdDocument(document.id),
-      request: async () => asUser(app.baseUrl, session, `/api/documents/${document.id}/edit-lease`, { method: 'POST', body: { clientInstanceId: randomUUID() } }),
+      request: async () => asUser(app.baseUrl, session, `/api/documents/${document.id}/edit-lease`, { method: 'POST', body: acquireBody(randomUUID()) }),
       change: async () => issueReset(account),
     })
     expect(await outcomeOf(acquired)).toBe('401 SESSION_EXPIRED')
     expect(await leaseStateOf(database, document.id)).toBeUndefined()
-    const taken = parseExact(acquiredEditLeaseSchema, await (await asUser(app.baseUrl, catSession, `/api/documents/${document.id}/edit-lease`, { method: 'POST', body: { clientInstanceId: randomUUID() } })).json())
+    const taken = parseExact(acquiredEditLeaseSchema, await (await asUser(app.baseUrl, catSession, `/api/documents/${document.id}/edit-lease`, { method: 'POST', body: acquireBody(randomUUID()) })).json())
     expect([taken.writeEpoch, taken.interruption]).toEqual([1, null])
   })
 
@@ -255,7 +282,7 @@ describe('US-M3-09 登录被撤销之后，已经过了会话守卫的在途请�
     let disabledWithoutWaiting: boolean | undefined
     const acquired = await raceAgainstHeldLock(database, {
       hold: holdLeaseRow(document.id),
-      request: async () => asUser(app.baseUrl, session, `/api/documents/${document.id}/edit-lease`, { method: 'POST', body: { clientInstanceId: earlier.clientInstanceId } }),
+      request: async () => asUser(app.baseUrl, session, `/api/documents/${document.id}/edit-lease`, { method: 'POST', body: acquireBody(earlier.clientInstanceId) }),
       change: async () => {
         // 他没有没结束的租约（先前那一代已经释放）：停用不碰这份文档的行，不等申请
         disabling = asUser(app.baseUrl, rootSession, `/api/admin/users/${account.id}/disable`, { method: 'POST' })

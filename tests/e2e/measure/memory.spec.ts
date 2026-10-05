@@ -1,7 +1,7 @@
 // 反复切换的内存实测（M3-P2 设计 §7 的第二行：一律重建让一页里反复创建、销毁 Univer 实例；§6 的 S5）。只在 Chromium 上（CDP），
 // 不进常规的 E2E 与 CI：pnpm --filter @nerve-office/e2e run measure:memory（先构建，同 pnpm test:e2e）。中等文档（只读样本）：
 // 1. 作者打开到阅读的 steady，连续 ROUNDS 次"进入编辑 → 退出编辑"（每次都等到 steady）；
-// 2. 查看者打开，ROUNDS 次"有更新，点击刷新"（作者经接口保存一版、页面立即读一次编辑状态）。
+// 2. 查看者打开，ROUNDS 次"有更新，点击刷新"（作者存一版——直接写库，measure-scene.ts——页面立即读一次编辑状态）。
 // 每次之后（与打开之后）经 CDP 强制回收（HeapProfiler.collectGarbage，两次），再读已用堆（Runtime.getHeapUsage）、
 // DOM 的计数（Memory.getDOMCounters：文档、节点、事件监听）与 Worker 的个数（page.workers()，公式 Worker 每个编辑器一个）。
 // 结果写在 measure/test-results/memory/<场景>.json 与 .md（序列与第 2 次之后的斜率）。
@@ -15,7 +15,7 @@ import { loadavg } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { expect, test } from '../support/fixtures.ts'
-import { authorApi, checkEditStatusNow, installTiming, measureOpen, measureScene, measureSwitch, updateButton } from '../support/measure-scene.ts'
+import { authorVersions, checkEditStatusNow, installTiming, measureOpen, measureScene, measureSwitch, updateButton } from '../support/measure-scene.ts'
 import { memoryTable, memoryTrend } from '../support/measure-stats.ts'
 import { readOnlySampleFor } from '../support/read-only-sample.ts'
 import { loginThroughApi } from '../support/session.ts'
@@ -90,20 +90,15 @@ test.describe('反复切换的内存（中等文档，Chromium）', () => {
     await measureOpen(page, async () => page.goto(`/documents/${scene.documentId}`))
     const cdp = await page.context().newCDPSession(page)
     const readings = [await reading(page, cdp, 0)]
-    const author = await authorApi(scene.author)
-    try {
-      for (let round = 1; round <= ROUNDS; round += 1) {
-        await author.saveVersion(scene.documentId, `第 ${round} 版`)
-        await checkEditStatusNow(page)
-        await expect(updateButton(page)).toBeVisible()
-        await measureSwitch(page, 'refresh', async () => updateButton(page).click())
-        await expect(updateButton(page)).toHaveCount(0)
-        readings.push(await reading(page, cdp, round))
-        await heapSnapshot(cdp, 'refresh', round)
-      }
-    }
-    finally {
-      await author.dispose()
+    const author = authorVersions(scene.author)
+    for (let round = 1; round <= ROUNDS; round += 1) {
+      await author.saveVersion(scene.documentId, `第 ${round} 版`)
+      await checkEditStatusNow(page)
+      await expect(updateButton(page)).toBeVisible()
+      await measureSwitch(page, 'refresh', async () => updateButton(page).click())
+      await expect(updateButton(page)).toHaveCount(0)
+      readings.push(await reading(page, cdp, round))
+      await heapSnapshot(cdp, 'refresh', round)
     }
     await record('refresh', readings, { ...load, after: loadavg() })
     expect(readings.every(item => item.workers === 1), '每次之后只剩一个公式 Worker').toBe(true)
