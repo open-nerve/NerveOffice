@@ -35,7 +35,7 @@
 apps/api/src/
   app/            应用的组装：根模块（含全局守卫）、HTTP 管线、优雅退出、进程入口 main.ts；
                   index.ts 是命令行与集成测试共用的程序接口（含不带 HTTP 的 initializeAdmin）
-  shared/         AppError、@Public()、@SystemAdminOnly()、按时间排序的游标、LIKE 的"包含关键词"等共用的内核；子进程池 process-pool（M3-P3）
+  shared/         AppError、@Public()、@SystemAdminOnly()、按时间排序的游标、LIKE 的"包含关键词"等共用的内核；子进程池 process-pool（M3-P3）、按键限份数的 keyed-quota（M3-P3 审查之后）
   modules/
     config/       环境变量（NERVE_*，机密可以用 _FILE），启动时校验；只有这里读 process.env
     logging/      pino 根日志、请求日志与请求标识、脱敏、请求上下文（认证后带 userId）、注入的 AppLogger、Nest 日志适配
@@ -63,7 +63,7 @@ apps/api/src/
                   编辑租约（M3-P1，ADR-018：`document_edit_leases`、有效条件的纯函数、申请与心跳与释放与编辑状态、保存时核对租约、收回写入权接入租约；为判断别人的租约绑定的登录引入 auth）；
                   另存为副本与读取内容的条件请求（M3-P2，ADR-011、ADR-014 的补充：DocumentConflictCopyService、@IfNoneMatch()）；
                   保存协议加固（M3-P3，ADR-011 的修订）：重放预检与回执（save-outcomes、document-save-receipts）、拦截旧客户端（ClientFormatGate）、
-                  快照的检查（SnapshotInspector：子进程池；snapshot-checks、snapshot-inspection）、不缩水（legacy-resources）、保留期清理的入口（RevisionPurgeService）
+                  快照的检查（SnapshotInspector：子进程池，每个账户至多 2 份；snapshot-checks、snapshot-inspection）、requestId 的锁与两张表的记录（RequestLedger）、不缩水（legacy-resources）、保留期清理的入口（RevisionPurgeService）
     jobs/         应用内的定时任务（M2-P4，ADR-016）：回收站到期的自动清理、修订记录与回执的保留期清理（M3-P3，事务级 advisory lock）；共用的调度器 JobScheduler。
                   只做"按时触发 + 防重复执行"（回收站清理用会话级 advisory lock），
                   删除的语义在 documents；时钟可注入，测试不必等 30 天
@@ -167,7 +167,7 @@ apps/api/src/
 - **编辑租约**（M3-P1，ADR-018）：每份文档至多一行；有效条件按顺序判断（有这一行、没有明确结束、代次是文档当前的、没有到期、没有空闲 12 分钟、绑定的登录有效、持有者仍能编辑），第一条不满足的就是失效的原因；有效期 90 秒、心跳 10 秒，时间取数据库的 `now()`；申请产生新的一代（代次加一，不动 `updated_at`）；令牌只存 SHA-256 摘要，经请求头传递。
 - 读取内容支持 `If-None-Match`（M3-P2）：读快照里先判断权限，修订号对得上回 304、不读内容。
 - **另存为副本**（M3-P2）：失去编辑权、还读得到原文档的人把本页的内容存成新文档（修订号 1、`unitId` 与原文档相同、不继承授权）；锁与复制同一套顺序（`requestId` 的 advisory lock → 原文档所在空间的树锁（只在放进那里时）→ 两个空间行 → 原文档行），锁下重新判断能读、重新决定位置。
-- **保存协议加固**（M3-P3，ADR-011 的修订）：写入（保存与另存为副本）的顺序是重放预检（事务外、不提前回答）→ 客户端的数据格式（`CLIENT_OUTDATED`）→ 快照的检查（子进程池：解析之前先数嵌套与元素，规则见 contracts 的 `SNAPSHOT_RULES`，`SNAPSHOT_INVALID` 带规则）→ 事务（访问、锁、再查重放、登录、文档过新 `DOCUMENT_TOO_NEW`、能编辑、租约、基准修订号、`unitId`、不缩水、内容相同只写回执）；规范化的内容哈希（规格在 contracts 的 `content-canonical.ts`）；平台信封（内容哈希、客户端构建、SDK 版本取上报并核对过的）；"公式待更新"；申请编辑权与心跳同样拦截旧客户端；修订记录与回执保留 30 天。
+- **保存协议加固**（M3-P3，ADR-011 的修订）：写入（保存与另存为副本）的顺序是重放预检（事务外、不提前回答）→ 客户端的数据格式（`CLIENT_OUTDATED`）→ 快照的检查（子进程池：解析之前先数嵌套与元素，规则见 contracts 的 `SNAPSHOT_RULES`，`SNAPSHOT_INVALID` 带规则）→ 事务（`requestId` 的锁、访问、锁文档行、再查重放（修订记录与回执）、登录、文档过新 `DOCUMENT_TOO_NEW`、能编辑、租约、基准修订号、`unitId`、不缩水、内容相同只写回执、"公式待更新"只清不设）；规范化的内容哈希（规格在 contracts 的 `content-canonical.ts`，空值等价只在资源 `data` 的第一层）；平台信封（内容哈希、客户端构建、SDK 版本取上报并核对过的）；"公式待更新"；申请编辑权与心跳同样拦截旧客户端；修订记录与回执保留 30 天。
 
 **运行与退出**：
 - 就绪探针检查接收请求、数据库可达与库结构版本，整体限时 2 秒。
