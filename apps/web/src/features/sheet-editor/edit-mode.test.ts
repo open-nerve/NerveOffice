@@ -1791,6 +1791,21 @@ describe('与服务端不兼容（M3-P3 设计 §3.5、§3.10）', () => {
     expect(context.api.save).not.toHaveBeenCalled()
   })
 
+  it('心跳得知过旧时有一次结果未知的保存：原样重发它一次（重放先于拦截旧客户端），其实已经提交时说修改都已保存、离开不再提示（审查 B5）', async () => {
+    const context = setup({ editLease: { renew: async () => Promise.reject(OUTDATED) } })
+    await editing(context)
+    context.factory.last().edit('本页的修改')
+    context.api.save.mockRejectedValueOnce(new NetworkError('断网'))
+    await context.mode.save()
+    expect(context.mode.view().save).toMatchObject({ status: 'failed', unsaved: true })
+    await context.time.advance(HEARTBEAT_MS)
+    await settle()
+    expect(context.api.save).toHaveBeenCalledTimes(2)
+    expect(context.api.save.mock.calls[1]?.[1]).toEqual(context.api.save.mock.calls[0]?.[1])
+    expect(context.mode.view().save).toMatchObject({ status: 'outdated', checking: false, unsaved: false, problem: undefined })
+    expect(context.mode.hasUnsavedWork()).toBe(false)
+  })
+
   it('正在以可编辑重建时心跳就得知不兼容：建好之后保存的状态随即是"需要刷新"', async () => {
     const context = setup({ editLease: { renew: async () => Promise.reject(OUTDATED) } })
     await opened(context)

@@ -188,21 +188,36 @@ function editingBlock(save: SaveView): Incompatibility | undefined {
 }
 
 /**
- * 与服务端不兼容的说明（M3-P3 设计 §3.10）：本页过旧时给"重新加载"（重新加载就是新的页面；编辑时本页的修改没保存的话先说明复制出来）；
- * 文档由更新的版本保存过时只说明——重新加载拿到的还是同一个版本，不提示刷新（那会死循环）
+ * 与服务端不兼容时本页的修改存上了没有（M3-P3 审查 B5）：正在核对结果未知的那次保存时先不下结论；修改没有保存；修改都已保存、
+ * 只有公式的结果没有存上；都已保存
  */
-function IncompatibleNotice({ kind, editing, unsaved, onReload }: { kind: Incompatibility, editing: boolean, unsaved: boolean, onReload: () => void }) {
+type PendingWork = 'checking' | 'edits' | 'formulas' | 'none'
+
+function pendingWorkOf(save: SaveView): PendingWork {
+  if (save.checking)
+    return 'checking'
+  if (save.unsavedEdits)
+    return 'edits'
+  return save.unsaved ? 'formulas' : 'none'
+}
+
+/**
+ * 与服务端不兼容的说明（M3-P3 设计 §3.10）：本页过旧时给"重新加载"（重新加载就是新的页面；编辑时本页的修改没保存的话先说明复制出来）；
+ * 文档由更新的版本保存过时只说明——重新加载拿到的还是同一个版本，不提示刷新（那会死循环）。editing 是编辑时本页的修改存上了没有，
+ * 阅读时为 undefined
+ */
+function IncompatibleNotice({ kind, editing, onReload }: { kind: Incompatibility, editing: PendingWork | undefined, onReload: () => void }) {
   if (kind === 'document-too-new') {
     return (
-      <Alert variant={editing ? 'destructive' : 'default'}>
-        <AlertDescription>{editing ? editorMessages.incompatible.tooNewEditing(unsaved) : editorMessages.incompatible.tooNewReading}</AlertDescription>
+      <Alert variant={editing === undefined ? 'default' : 'destructive'}>
+        <AlertDescription>{editing === undefined ? editorMessages.incompatible.tooNewReading : editorMessages.incompatible.tooNewEditing(editing)}</AlertDescription>
       </Alert>
     )
   }
   return (
     <Alert variant="destructive">
       <AlertDescription>
-        <p>{editing ? editorMessages.incompatible.outdatedEditing(unsaved) : editorMessages.incompatible.outdatedReading}</p>
+        <p>{editing === undefined ? editorMessages.incompatible.outdatedReading : editorMessages.incompatible.outdatedEditing(editing)}</p>
         <Button variant="outline" size="sm" className="mt-2" onClick={onReload}>{editorMessages.reload}</Button>
       </AlertDescription>
     </Alert>
@@ -222,7 +237,7 @@ function SaveNotices({ view, save, onReload }: { view: EditorPageView, save: Sav
   const notices: ReactNode[] = []
   const block = editingBlock(save)
   if (block !== undefined)
-    notices.push(<IncompatibleNotice key="incompatible" kind={block} editing unsaved={save.unsaved} onReload={onReload} />)
+    notices.push(<IncompatibleNotice key="incompatible" kind={block} editing={pendingWorkOf(save)} onReload={onReload} />)
   if (save.conflict !== undefined) {
     notices.push(
       <Alert key="conflict" variant="destructive">
@@ -570,7 +585,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
             </Alert>
           )}
           {/* 阅读时与服务端不兼容（M3-P3）：打开时就看得出、申请编辑权时得知，或者编辑时得知之后退出了编辑 */}
-          {reading?.blocked !== undefined && <IncompatibleNotice kind={reading.blocked} editing={false} unsaved={false} onReload={page.reload} />}
+          {reading?.blocked !== undefined && <IncompatibleNotice kind={reading.blocked} editing={undefined} onReload={page.reload} />}
           {lost !== undefined && <LostNotice page={page} lost={lost} onDiscard={confirmDiscard} fallbackFocus={backRef} />}
           {/* 版本冲突之后本页不能再保存：会话的提示（"登录之后回到这里保存"）不成立，只显示冲突的说明（复验 SB9；换了人时那条说明里另有一句，复验 TB8）；
               读不到了（404）之后没有要做的事，不提登录 */}

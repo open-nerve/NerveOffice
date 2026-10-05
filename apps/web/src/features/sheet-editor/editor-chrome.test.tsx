@@ -18,7 +18,7 @@ const READY: EditorPageReady = {
   canShare: false,
   userId: '0199a2c4-0000-7000-8000-00000000000a',
 }
-const CLEAN: SaveView = { status: 'clean', formulasPending: false, problem: undefined, conflict: undefined, canSave: true, unsaved: false, snapshotBytes: undefined }
+const CLEAN: SaveView = { status: 'clean', formulasPending: false, problem: undefined, conflict: undefined, canSave: true, unsaved: false, unsavedEdits: false, checking: false, snapshotBytes: undefined }
 const EDITING: EditModeState = { kind: 'editing' }
 const READING: ReadingMode = { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined }
 const AMY = { id: '0199a2c4-0000-7000-8000-0000000000e1', username: 'amy', displayName: '艾米' }
@@ -913,7 +913,7 @@ describe('模式切换与按钮消失时的焦点（审查 A2，规范 §2.4）'
 
 describe('与服务端不兼容与容量（M3-P3 设计 §3.10）', () => {
   it('编辑时本页过旧（保存的状态 outdated）：页头说需要刷新；说明本页的修改没有保存、先复制出来，给"重新加载"；"保存"不可用、不说公式没保存', () => {
-    const fake = renderChrome({ save: { ...CLEAN, status: 'outdated', canSave: false, unsaved: true, formulasPending: true } })
+    const fake = renderChrome({ save: { ...CLEAN, status: 'outdated', canSave: false, unsaved: true, unsavedEdits: true, formulasPending: true } })
     expect(headerStatus()).toHaveTextContent('需要刷新')
     const alert = screen.getByRole('alert')
     expect(alert).toHaveTextContent('页面的版本过旧，本页的修改没有保存，也不能再保存。需要的话先把内容复制出来，再重新加载页面')
@@ -928,11 +928,32 @@ describe('与服务端不兼容与容量（M3-P3 设计 §3.10）', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('页面的版本过旧，不能再保存。本页的修改都已保存，重新加载页面之后可以接着编辑')
   })
 
+  it('编辑时本页过旧、修改都已保存，只有公式的结果没有存上（审查 B5）：单说这一句，不说"本页的修改没有保存"', () => {
+    renderChrome({ save: { ...CLEAN, status: 'outdated', canSave: false, unsaved: true, unsavedEdits: false, formulasPending: true } })
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('页面的版本过旧，不能再保存。本页的修改都已保存，只是公式的结果没有存上；重新加载页面之后可以接着编辑')
+    expect(alert).not.toHaveTextContent('没有保存')
+  })
+
+  it('编辑时本页过旧、正在核对结果未知的那次保存（审查 B5）：先说正在核对，不下"有没有保存"的结论；核对出其实已经提交时说都已保存', () => {
+    const fake = renderChrome({ save: { ...CLEAN, status: 'outdated', canSave: false, unsaved: true, unsavedEdits: true, checking: true } })
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('页面的版本过旧，不能再保存。正在核对最后一次保存的结果…')
+    expect(alert).not.toHaveTextContent('没有保存')
+    fake.set({ save: { ...CLEAN, status: 'outdated', canSave: false } })
+    expect(screen.getByRole('alert')).toHaveTextContent('本页的修改都已保存，重新加载页面之后可以接着编辑')
+  })
+
   it('编辑时文档由更新的版本保存过（too-new）：页头说不能保存；只说明，不给"重新加载"（重新加载拿到的还是同一个版本）', () => {
-    renderChrome({ save: { ...CLEAN, status: 'too-new', canSave: false, unsaved: true } })
+    const fake = renderChrome({ save: { ...CLEAN, status: 'too-new', canSave: false, unsaved: true, unsavedEdits: true } })
     expect(headerStatus()).toHaveTextContent('不能保存')
     expect(screen.getByRole('alert')).toHaveTextContent('这份文档由更新的版本保存过，本页的修改不能再保存。需要的话先把内容复制出来')
     expect(screen.queryByRole('button', { name: '重新加载' })).toBeNull()
+    // 核对中、只有公式的结果没存上：同样的几种说法（审查 B5）
+    fake.set({ save: { ...CLEAN, status: 'too-new', canSave: false, unsaved: true, unsavedEdits: true, checking: true } })
+    expect(screen.getByRole('alert')).toHaveTextContent('这份文档由更新的版本保存过，不能再保存。正在核对最后一次保存的结果…')
+    fake.set({ save: { ...CLEAN, status: 'too-new', canSave: false, unsaved: true, formulasPending: true } })
+    expect(screen.getByRole('alert')).toHaveTextContent('这份文档由更新的版本保存过，当前只能阅读，不能再保存。本页的修改都已保存，只是公式的结果没有存上')
   })
 
   it('阅读时本页过旧（申请编辑权时得知）：页头说需要刷新，不给"编辑"，说明并给"重新加载"', () => {
