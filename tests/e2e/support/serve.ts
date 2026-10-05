@@ -152,6 +152,12 @@ async function main(): Promise<void> {
     NERVE_LOG_LEVEL: 'info',
     // 所有测试都来自本机：按地址的限流调高，免得互相影响；按用户名（与来源）的限流照常测（集成测试覆盖按地址的限流与换来源的情形）
     NERVE_LOGIN_IP_MAX_FAILURES: '100000',
+    // 空闲连接的超时调到上限（10 分钟）：测试进程的请求（page.request 等，Playwright 的 APIRequestContext）用 keepAlive 的 Node agent，
+    // 空闲的连接没有时限、一直复用；服务端按默认 5 秒关掉空闲连接时，恰好在 5 秒的边界上发出的请求会写进服务端正在关的连接，
+    // 得到 ECONNRESET、服务端的日志里没有这次请求（M3-P3 审查 B 的修复者实测：WebKit 的 reopen.spec.ts，距上一次请求 6.07 秒）。
+    // 客户端必须先于服务端关掉空闲连接：请求上下文随每条用例结束而销毁，10 分钟长于任何一条用例，竞态就不会发生。
+    // 生产里的客户端是反向代理，部署说明要求它先于 5 秒回收空闲连接（容器 E2E 经 Caddy，照生产的配置）
+    NERVE_HTTP_KEEP_ALIVE_TIMEOUT_MS: '600000',
   }
   const runCommand = (script: string, args: readonly string[], stdin = ''): void => {
     const result = spawnSync(process.execPath, [script, ...args], { env, input: stdin, stdio: ['pipe', log, log] })
