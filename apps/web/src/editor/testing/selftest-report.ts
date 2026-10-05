@@ -18,6 +18,19 @@ export const NEXT_PARAM = 'next'
 export const RESULT_PARAM = 'result'
 
 /**
+ * 测试构建里选公式模式的地址参数（M3-P4 设计 §3.14，US-M3-03 的两种模式）：编辑器页的地址带 formula=main 时编辑器以主线程模式创建
+ * （编辑器的开关 ./formula-mode.ts 读它），不带或者 formula=worker 时用公式 Worker。页面自检的入口页按步骤带上它（selftestEditorUrl）；
+ * E2E 打开编辑器页时同样可以带。生产构建里没有这个开关
+ */
+export const FORMULA_MODE_PARAM = 'formula'
+
+/** 两种公式模式在地址里的写法（键与编辑器的 FormulaMode 相同） */
+export const FORMULA_MODE_VALUES = { 'worker': 'worker', 'main-thread': 'main' } as const
+
+/** 公式在哪里计算（与编辑器的 FormulaMode 相同；这个文件不引用任何模块，在这里另写一份，单元测试核对两边一致） */
+export type SelftestFormulaMode = keyof typeof FORMULA_MODE_VALUES
+
+/**
  * 自检的场景：
  * - read-only：查看者打开只读样本，逐项试只读入口（Facade、撤销与重做、合成的快捷键、界面）；
  * - read-only-formulas：查看者打开去掉公式缓存值的样本，公式在 Worker 里算出结果、没有被防火墙取消；
@@ -187,14 +200,25 @@ export function reportUrl(next: string, encoded: string): string {
 }
 
 /**
- * 入口页登录之后整页跳去的编辑器页：/documents/<文档 id>?selftest=<场景>&next=<…>。路径与 contracts 的 documentPagePath 相同
- * （单元测试对照）：入口页不引用 contracts 与平台页面、编辑器页共用的任何模块（M3-P2 复核 B4），所以在这里就地写
+ * 入口页登录之后整页跳去的编辑器页：/documents/<文档 id>?selftest=<场景>&next=<…>，给了公式模式时另带 formula=<…>。
+ * 路径与 contracts 的 documentPagePath 相同（单元测试对照）：入口页不引用 contracts 与平台页面、编辑器页共用的任何模块
+ * （M3-P2 复核 B4），所以在这里就地写
  */
-export function selftestEditorUrl(origin: string, documentId: string, scenario: string, next: string): string {
+export function selftestEditorUrl(origin: string, documentId: string, scenario: string, next: string, formula?: SelftestFormulaMode): string {
   const url = new URL(`/documents/${encodeURIComponent(documentId)}`, origin)
   url.searchParams.set(SELFTEST_PARAM, scenario)
   url.searchParams.set(NEXT_PARAM, next)
+  if (formula !== undefined)
+    url.searchParams.set(FORMULA_MODE_PARAM, FORMULA_MODE_VALUES[formula])
   return url.href
+}
+
+/** 地址里的公式模式（入口页从 # 片段读）：认识的写法交回模式，没有时是 undefined，不认识时是 null（入口页按登录失败一样交回原因） */
+export function formulaModeOfValue(value: string | null): SelftestFormulaMode | undefined | null {
+  if (value === null)
+    return undefined
+  const found = (Object.keys(FORMULA_MODE_VALUES) as SelftestFormulaMode[]).find(mode => FORMULA_MODE_VALUES[mode] === value)
+  return found ?? null
 }
 
 // ---- 读回时的校验：字段与类型都对才算这个格式（收集端收到的是地址里的任意文字）----

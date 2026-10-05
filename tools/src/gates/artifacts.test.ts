@@ -586,9 +586,15 @@ describe('US-M1-09 生产构建里没有测试构建的模块：按来源认（M
     expect(violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/unlisted-script', 'assets/extra-b.js'], ['artifacts/unlisted-script', 'assets/worker-c.mjs']])
   })
 
-  it('名字的兜底：与 E2E 共用的文件被单独动态引入时自成的分块（入口清单、比较口径、切换的计时）同样按名字认', () => {
-    expect(checkTestOnlyArtifacts(['assets/switch-timing-BFKYlR0-.js', 'assets/read-only-entries-x.js', 'assets/content-compare-y.js', 'assets/timing-z.js']).map(v => v.subject))
-      .toEqual(['assets/switch-timing-BFKYlR0-.js', 'assets/read-only-entries-x.js', 'assets/content-compare-y.js'])
+  it('名字的兜底：与 E2E 共用的文件被单独动态引入时自成的分块（入口清单、比较口径、切换的计时、捕获时机的样本与参考规则）同样按名字认', () => {
+    expect(checkTestOnlyArtifacts(['assets/switch-timing-BFKYlR0-.js', 'assets/read-only-entries-x.js', 'assets/content-compare-y.js', 'assets/timing-z.js', 'assets/capture-samples-a.js', 'assets/capture-reference-b.js', 'assets/capture-c.js']).map(v => v.subject))
+      .toEqual(['assets/switch-timing-BFKYlR0-.js', 'assets/read-only-entries-x.js', 'assets/content-compare-y.js', 'assets/capture-samples-a.js', 'assets/capture-reference-b.js'])
+  })
+
+  it('M3-P4：公式模式的开关（测试构建里地址参数选主线程模式）按来源与分块名都认得出；生产的公式档案不算', () => {
+    expect(isTestOnlySource('src/editor/testing/formula-mode.ts')).toBe(true)
+    expect(isTestOnlySource('src/editor/profile/sheet-profile.ts')).toBe(false)
+    expect(checkTestOnlyArtifacts(['assets/formula-mode-Dx1.js', 'assets/formula-D2.js', 'assets/my-formula-mode-x.js']).map(v => v.subject)).toEqual(['assets/formula-mode-Dx1.js'])
   })
 })
 

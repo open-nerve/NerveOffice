@@ -1,7 +1,8 @@
 // 表格编辑器以 E2E 为主（规范 §8.3）；这里只测 E2E 做不出来的部分：创建过程中出错时，已经创建的都要销毁（审查 B8）；
 // 按打开方式组合的是哪些（M2-P3 设计 §3.1–§3.4：授权服务、插件档案、只读守卫在创建工作簿之前装上）；
 // 只读时的编排（P3 审查 A3）：防火墙与变更检测用同一份判定的配置，创建工作簿之后设权限点，就绪时装界面的处理、清空撤销栈；
-// 链接的改写（M3-P3 设计 §3.6）：阅读与编辑都在入口守卫之后、创建工作簿之前装上
+// 链接的改写（M3-P3 设计 §3.6）：阅读与编辑都在入口守卫之后、创建工作簿之前装上；
+// 公式的模式（M3-P4 设计 §3.14）：生产只有 Worker 模式，测试构建里地址参数可以选主线程模式（不建 Worker、不等它的回报）
 import type { EditorAccess } from './editor-access.ts'
 import type { PluginEntry } from './profile/plugin-entry.ts'
 import type { ReadOnlyGuard } from './read-only/read-only-guard.ts'
@@ -373,5 +374,59 @@ describe('模式切换一律重建（M3-P2 设计 §3.1、§3.3）', () => {
     editor.dispose()
     expect(editor.viewState()).toBeUndefined()
     expect(vi.mocked(readViewState)).toHaveBeenCalledOnce()
+  })
+})
+
+describe('公式在哪里计算（M3-P4 设计 §3.14）', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    history.replaceState(null, '', '/')
+    delete window.__nerveEditorProbe
+  })
+
+  it('不是测试构建（MODE 不是 e2e）：只有 Worker 模式，地址里带 formula=main 也照样建 Worker、等它回报', async () => {
+    history.replaceState(null, '', '/documents/doc-1?formula=main')
+    const facade = steppingFacade([], 'unit-f')
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-f'), access: 'edit' })
+    expect(FakeWorker.created).toHaveLength(1)
+    expect(vi.mocked(sheetPluginEntries)).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ formula: { kind: 'worker', worker: FakeWorker.created[0] } }))
+    await reachReady(facade)
+    const editor = await creating
+    editor.dispose()
+    expect(FakeWorker.created[0]?.terminate).toHaveBeenCalledOnce()
+  })
+
+  it('测试构建、地址带 formula=main：以主线程模式创建——不建 Worker、不等 Worker 的回报，档案拿到 main-thread，探针报告它', async () => {
+    vi.stubEnv('MODE', 'e2e')
+    history.replaceState(null, '', '/documents/doc-1?formula=main')
+    const log: string[] = []
+    const facade = steppingFacade(log, 'unit-f')
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-f'), access: 'edit' })
+    // 测试构建先载入开关的分块，再开始挂载
+    await vi.waitFor(() => expect(log).toEqual(['createWorkbook']))
+    expect(FakeWorker.created).toHaveLength(0)
+    expect(vi.mocked(sheetPluginEntries)).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ formula: { kind: 'main-thread' } }))
+    facade.reach(LifecycleStages.Ready)
+    facade.reach(LifecycleStages.Rendered)
+    const editor = await creating
+    expect(window.__nerveEditorProbe?.formulaMode).toBe('main-thread')
+    editor.dispose()
+  })
+
+  it('测试构建、地址不带 formula：照常是 Worker 模式（探针报告 worker）', async () => {
+    vi.stubEnv('MODE', 'e2e')
+    history.replaceState(null, '', '/documents/doc-1')
+    const log: string[] = []
+    const facade = steppingFacade(log, 'unit-f')
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-f'), access: 'edit' })
+    await vi.waitFor(() => expect(log).toEqual(['createWorkbook']))
+    expect(FakeWorker.created).toHaveLength(1)
+    await reachReady(facade)
+    const editor = await creating
+    expect(window.__nerveEditorProbe?.formulaMode).toBe('worker')
+    editor.dispose()
   })
 })
