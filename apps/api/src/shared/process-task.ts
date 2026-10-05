@@ -34,8 +34,10 @@ export type FileWriter = (path: string, content: string) => void
 
 /**
  * 子进程把自己的 oom_score_adj 调到最大（Linux）：容器的 cgroup 内存用尽时，内核的 OOM killer 先结束子进程，保住主进程——
- * 子进程处理的是外来的快照，内存的峰值在它这里；结束的只是这一个检查（主进程按 crashed 处理、回 503，下一个任务起新的子进程），
- * 主进程被挑中则整个服务中断。只调高不需要特权（调低才要 CAP_SYS_RESOURCE），主进程的值不受影响（只改子进程自己）。
+ * 子进程处理的是外来的快照，内存的峰值在它这里；结束的只是这一个检查，主进程被挑中则整个服务中断。池子怎样处理被结束的子进程
+ * （process-pool.ts 的 exitReason）：执行任务期间被 SIGKILL 的按 killed，快照检查把这一份按 too-complex 拒绝（422：同一份重发
+ * 多半还是这样，审查 A4）；加载时被结束的按 crashed（这一次回 503）；空闲时被结束的只是丢弃。下一个任务起新的子进程。
+ * 只调高不需要特权（调低才要 CAP_SYS_RESOURCE），主进程的值不受影响（只改子进程自己）。
  * 写不了就跳过（不是 Linux、/proc 只读、被沙箱拦下）：这只是 OOM 时的偏好，不影响检查本身。返回是否调成了
  */
 export function preferOomKill(platform: NodeJS.Platform = process.platform, write: FileWriter = writeFileSync): boolean {

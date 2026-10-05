@@ -20,6 +20,8 @@ const BEN = '0199a2c4-0000-7000-8000-00000000000b'
 const SETTINGS: SnapshotInspectionSettings = { processes: 2, queue: { maxWaiting: 8, maxWaitMs: 2_500 }, timeoutMs: 10_000, heapMb: 512 }
 /** 假的子进程入口：按交来的字节（一个假任务的 JSON）做假的工作，用来核对子进程池的失败怎样换成回答 */
 const FAKE_ENTRY = { script: new URL('../../shared/process-pool-fake-child.test-support.ts', import.meta.url), execArgv: [] }
+/** 假的子进程入口：加载时（回 ready 之前）以 SIGKILL 结束自己 */
+const KILLED_ON_LOAD_ENTRY = { script: new URL('../../shared/process-pool-killed-on-load-child.test-support.ts', import.meta.url), execArgv: [] }
 const MIB = 1024 * 1024
 /** 用例起真的子进程：慢机器上（CI 比本机慢几倍）加载要更久，留足余量 */
 const SPAWNING = { timeout: 30_000 }
@@ -138,7 +140,7 @@ describe('子进程池没有给出结果时的回答', SPAWNING, () => {
 
   it('子进程在检查期间被系统结束（SIGKILL，多半是容器的内存用尽、内核的 OOM killer，审查 A4）：这份按 too-complex 拒绝（不回 503：同一份重发多半还是这样），记 error、指向部署说明的内存规则；之后照常检查', async () => {
     const { inspector, error: logged } = setup({ processes: 1 }, FAKE_ENTRY)
-    const task = fake({ kind: 'sigkill' })
+    const task = fake({ kind: 'signal', signal: 'SIGKILL' })
     expect(await inspector.inspect(task, 'sheet@1', AMY)).toEqual({ ok: false, rule: 'too-complex' })
     const [message, fields] = logged.mock.calls[0] ?? []
     expect(message).toContain('多半是容器的内存不够')
@@ -147,6 +149,16 @@ describe('子进程池没有给出结果时的回答', SPAWNING, () => {
     expect((fields?.err as { reason?: string } | undefined)?.reason).toBe('killed')
     expect(inspector.liveProcesses).toBe(0)
     expect(await inspector.inspect(fake({ kind: 'echo', value: 'next' }), 'sheet@1', AMY)).toBe('next')
+  })
+
+  it('子进程在加载时（回 ready 之前，还没有拿到这一份）被系统结束：503（不是 too-complex——与这一份无关，重试可能就好了），记 error', async () => {
+    const { inspector, error: logged } = setup({ processes: 1 }, KILLED_ON_LOAD_ENTRY)
+    const error = await rejection(inspector.inspect(fake({ kind: 'echo', value: 1 }), 'sheet@1', AMY))
+    expect([error.code, error.headers]).toEqual(['SERVICE_UNAVAILABLE', { 'Retry-After': '3' }])
+    const [message, fields] = logged.mock.calls[0] ?? []
+    expect(message).toContain('子进程出错')
+    expect((fields?.err as { reason?: string } | undefined)?.reason).toBe('crashed')
+    expect(inspector.liveProcesses).toBe(0)
   })
 
   it('排队满了：503 带 Retry-After（排队等待的时限，向上取整到秒）', async () => {
@@ -230,7 +242,7 @@ describe('同一个账户在检查池里的份数（审查 A2）', SPAWNING, () 
     const { inspector } = setup({ processes: 1, heapMb: 64 }, FAKE_ENTRY)
     for (const task of [{ kind: 'throw' }, { kind: 'exit' }] as const)
       expect((await rejection(inspector.inspect(fake(task), 'sheet@1', AMY))).code).toBe('SERVICE_UNAVAILABLE')
-    for (const task of [{ kind: 'allocate' }, { kind: 'sigkill' }] as const)
+    for (const task of [{ kind: 'allocate' }, { kind: 'signal', signal: 'SIGKILL' }] as const)
       expect(await inspector.inspect(fake(task), 'sheet@1', AMY)).toEqual({ ok: false, rule: 'too-complex' })
     expect(await Promise.all([inspector.inspect(fake({ kind: 'echo', value: 'a' }), 'sheet@1', AMY), inspector.inspect(fake({ kind: 'echo', value: 'b' }), 'sheet@1', AMY)])).toEqual(['a', 'b'])
   })

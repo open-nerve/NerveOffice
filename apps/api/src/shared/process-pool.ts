@@ -103,6 +103,8 @@ interface PooledChild {
   /** 标准错误的开头 */
   stderr: string
   idleTimer: ReturnType<typeof setTimeout> | undefined
+  /** 丢弃的原因：丢弃之后才有（#discard）。之后再要等它的一方立即按它失败（#await，复验 C10） */
+  discarded: ProcessPoolError | undefined
 }
 
 /** 一个子进程的位置：子进程按需创建，丢弃之后回到 undefined */
@@ -202,8 +204,15 @@ export class ProcessPool<Task, Result> {
     }
   }
 
-  /** 等子进程回 expect（message 不是 undefined 时先交出它）；时限之内没回就结束这个子进程 */
+  /**
+   * 等子进程回 expect（message 不是 undefined 时先交出它）；时限之内没回就结束这个子进程。
+   * 已经丢弃了的子进程立即按丢弃的原因失败（复验 C10）：子进程在回 ready 的同一轮里又发来一条消息时，主进程接连处理这两条——
+   * ready 交给等它的一方、第二条没有人等而丢弃它（crashed）——之后 #execute 才接着交任务。这时再等，丢弃之后的结束、超时与退出
+   * 都不会再交出结果（#discard 对同一个子进程只处理一次），run() 永不结束，名额与调用方按它占着的份数随之泄漏
+   */
   async #await(slot: Slot, child: PooledChild, expect: 'ready' | 'result', message: TaskMessage<Task> | undefined): Promise<unknown> {
+    if (child.discarded !== undefined)
+      throw child.discarded
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => this.#discard(slot, child, new ProcessPoolError('timeout')), this.#options.taskTimeoutMs)
       timer.unref()
@@ -250,7 +259,7 @@ export class ProcessPool<Task, Result> {
     const exited = new Promise<void>((resolve) => {
       subprocess.once('close', () => resolve())
     })
-    const child: PooledChild = { process: subprocess, exited, ready: false, waiting: undefined, stderr: '', idleTimer: undefined }
+    const child: PooledChild = { process: subprocess, exited, ready: false, waiting: undefined, stderr: '', idleTimer: undefined, discarded: undefined }
     slot.child = child
     subprocess.stderr?.setEncoding('utf8')
     subprocess.stderr?.on('data', (chunk: string) => {
@@ -303,13 +312,14 @@ export class ProcessPool<Task, Result> {
   }
 
   /**
-   * 丢弃这个子进程（结束它），等着它的一方按 error 失败。同一个子进程只处理一次：出错之后还会有 close。
-   * 结束之前重新留住主进程，直到它退出（close 事件）：关闭时要等到它，空闲时的 unref 会让主进程不等它就退出
+   * 丢弃这个子进程（结束它），等着它的一方按 error 失败，之后再要等它的一方同样按 error 失败（记在 discarded）。同一个子进程只处理一次：
+   * 出错之后还会有 close。结束之前重新留住主进程，直到它退出（close 事件）：关闭时要等到它，空闲时的 unref 会让主进程不等它就退出
    */
   #discard(slot: Slot, child: PooledChild, error: ProcessPoolError): void {
     if (slot.child !== child)
       return
     slot.child = undefined
+    child.discarded = error
     clearTimeout(child.idleTimer)
     this.#hold(child, true)
     // 已经退出的再结束一次什么也不做；SIGKILL：子进程里没有要收尾的东西，同步执行中的任务也立即停下

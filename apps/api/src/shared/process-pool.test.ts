@@ -2,17 +2,19 @@ import type { FakeTask } from './process-pool-fakes.test-support.ts'
 import type { ProcessPoolOptions } from './process-pool.ts'
 import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import { ownOomScoreAdjustment, RELEASE_FILE, STARTED_PREFIX } from './process-pool-fakes.test-support.ts'
+import { GATE_ENV, ownOomScoreAdjustment, RELEASE_FILE, SENT_FILE, STARTED_PREFIX } from './process-pool-fakes.test-support.ts'
 import { ChildProcessExitError, ProcessPool, ProcessPoolError } from './process-pool.ts'
 
 const SCRIPT = new URL('./process-pool-fake-child.test-support.ts', import.meta.url)
 const BROKEN_SCRIPT = new URL('./process-pool-broken-child.test-support.ts', import.meta.url)
+const KILLED_ON_LOAD_SCRIPT = new URL('./process-pool-killed-on-load-child.test-support.ts', import.meta.url)
+const DOUBLE_READY_SCRIPT = new URL('./process-pool-double-ready-child.test-support.ts', import.meta.url)
 const PARENT_SCRIPT = fileURLToPath(new URL('./process-pool-parent.test-support.ts', import.meta.url))
 const MIB = 1024 * 1024
 /** 用例起真的子进程（与真的主进程）：慢机器上（CI 比本机慢几倍）加载与退出都要更久，留足余量 */
@@ -65,6 +67,17 @@ async function until(predicate: () => boolean, timeoutMs = 10_000): Promise<void
     if (performance.now() > deadline)
       throw new Error('等不到条件成立')
     await sleep(10)
+  }
+}
+
+/** 同步地等到文件出现：不让出事件循环（这期间主进程不读子进程的 IPC 通道），至多 timeoutMs */
+function waitForFileSynchronously(path: string, timeoutMs: number): void {
+  const deadline = performance.now() + timeoutMs
+  const cell = new Int32Array(new SharedArrayBuffer(4))
+  while (!existsSync(path)) {
+    if (performance.now() > deadline)
+      throw new Error(`等不到文件：${path}`)
+    Atomics.wait(cell, 0, 0, 5)
   }
 }
 
@@ -217,10 +230,27 @@ describe('ProcessPool', SPAWNING, () => {
 
   it('子进程在任务里以 SIGKILL 结束自己（与被外部结束一样，不写标准错误）：同样是 killed；池子自己结束的（超时、关闭）不算，见上下几条', async () => {
     const children = pool({ processes: 1 })
-    const error = await failure(children.run({ kind: 'sigkill' }))
+    const error = await failure(children.run({ kind: 'signal', signal: 'SIGKILL' }))
     expect(error.reason).toBe('killed')
     expect(exitOf(error).stderr).toBe('')
     expect(await children.run({ kind: 'echo', value: 'next' })).toBe('next')
+  })
+
+  it.each(['SIGTERM', 'SIGABRT'] as const)('执行任务期间以别的信号结束（%s，标准错误里没有内存超限的说明）：crashed——只有 SIGKILL 算 killed（内核的 OOM killer 发的就是它，审查 A4）', async (signal) => {
+    const children = pool({ processes: 1 })
+    const error = await failure(children.run({ kind: 'signal', signal }))
+    expect(error.reason).toBe('crashed')
+    expect(exitOf(error)).toMatchObject({ exitCode: null, signal, stderr: '' })
+    expect(children.liveProcesses).toBe(0)
+    expect(await children.run({ kind: 'echo', value: 'next' })).toBe('next')
+  })
+
+  it('子进程在加载时（回 ready 之前）被结束（SIGKILL）：crashed，不是 killed——还没有在执行任务，与任务无关（审查 A4 只把执行任务期间的算 killed）', async () => {
+    const children = pool({ processes: 1, script: KILLED_ON_LOAD_SCRIPT })
+    const error = await failure(children.run({ kind: 'echo', value: 1 }))
+    expect(error.reason).toBe('crashed')
+    expect(exitOf(error)).toMatchObject({ exitCode: null, signal: 'SIGKILL', stderr: '' })
+    expect(children.liveProcesses).toBe(0)
   })
 
   it.each([{ type: 'ready' }, null, 'result'])('子进程回了不该回的消息（%j）：丢弃它（crashed），主进程不抛出', async (message) => {
@@ -231,6 +261,27 @@ describe('ProcessPool', SPAWNING, () => {
     expect((error.cause as Error).message).toContain('不该回的消息')
     await until(() => !isRunning(before))
     expect(await children.run({ kind: 'echo', value: 'next' })).toBe('next')
+  })
+
+  // 时限短：没有这条防御时 run() 永不结束，用例按超时失败
+  it('子进程在回 ready 的同一轮里又回一条（复验 C10）：第二条让池子丢弃了它，#execute 接着交任务时立即按丢弃的原因失败（crashed），run() 不挂住，名额照常交回', { timeout: 10_000 }, async () => {
+    const blocking = gate()
+    const environment = join(blocking.directory, 'gate.env')
+    writeFileSync(environment, `${GATE_ENV}=${JSON.stringify(blocking.directory)}\n`)
+    const children = pool({ processes: 1, script: DOUBLE_READY_SCRIPT, execArgv: [`--env-file=${environment}`] })
+    const running = failure(children.run({ kind: 'echo', value: 1 }))
+    // 名额到手、建起子进程只要几个微任务：只让出微任务，主进程还不读 IPC 通道
+    for (let turn = 0; turn < 100 && children.liveProcesses === 0; turn += 1)
+      await Promise.resolve()
+    expect(children.liveProcesses).toBe(1)
+    // 两条 ready 都写进通道之后才让出事件循环：主进程一次读到这两条，第二条在 #execute 接着交任务之前处理
+    waitForFileSynchronously(join(blocking.directory, SENT_FILE), 8_000)
+    const error = await running
+    expect(error.reason).toBe('crashed')
+    expect((error.cause as Error).message).toContain('不该回的消息：ready')
+    expect(children.liveProcesses).toBe(0)
+    // 名额交回了：下一个任务照常拿到它（这个入口照样回两条 ready，同样失败），而不是排在挂住的那一个后面
+    expect((await failure(children.run({ kind: 'echo', value: 2 }))).reason).toBe('crashed')
   })
 
   it('入口加载不了：任务失败（crashed，cause 带标准错误里的原因），不自己反复重建', async () => {
