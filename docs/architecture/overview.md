@@ -35,7 +35,7 @@
 apps/api/src/
   app/            应用的组装：根模块（含全局守卫）、HTTP 管线、优雅退出、进程入口 main.ts；
                   index.ts 是命令行与集成测试共用的程序接口（含不带 HTTP 的 initializeAdmin）
-  shared/         AppError、@Public()、@SystemAdminOnly()、按时间排序的游标、LIKE 的"包含关键词"等共用的内核
+  shared/         AppError、@Public()、@SystemAdminOnly()、按时间排序的游标、LIKE 的"包含关键词"等共用的内核；子进程池 process-pool（M3-P3）
   modules/
     config/       环境变量（NERVE_*，机密可以用 _FILE），启动时校验；只有这里读 process.env
     logging/      pino 根日志、请求日志与请求标识、脱敏、请求上下文（认证后带 userId）、注入的 AppLogger、Nest 日志适配
@@ -61,8 +61,11 @@ apps/api/src/
                   同一个空间里的结构性改动由空间树的 advisory lock 串行，保存内容不取这把锁；
                   单独授权（M2-P5：`document_grants` 与仓储、有效权限并上授权、分享在事务里的锁下复核与写入、收回写入权的 userDocuments）；
                   编辑租约（M3-P1，ADR-018：`document_edit_leases`、有效条件的纯函数、申请与心跳与释放与编辑状态、保存时核对租约、收回写入权接入租约；为判断别人的租约绑定的登录引入 auth）；
-                  另存为副本与读取内容的条件请求（M3-P2，ADR-011、ADR-014 的补充：DocumentConflictCopyService、@IfNoneMatch()）
-    jobs/         应用内的定时任务（M2-P4，ADR-016）：回收站到期的自动清理。只做"按时触发 + 防重复执行"（会话级 advisory lock），
+                  另存为副本与读取内容的条件请求（M3-P2，ADR-011、ADR-014 的补充：DocumentConflictCopyService、@IfNoneMatch()）；
+                  保存协议加固（M3-P3，ADR-011 的修订）：重放预检与回执（save-outcomes、document-save-receipts）、拦截旧客户端（ClientFormatGate）、
+                  快照的检查（SnapshotInspector：子进程池；snapshot-checks、snapshot-inspection）、不缩水（legacy-resources）、保留期清理的入口（RevisionPurgeService）
+    jobs/         应用内的定时任务（M2-P4，ADR-016）：回收站到期的自动清理、修订记录与回执的保留期清理（M3-P3，事务级 advisory lock）；共用的调度器 JobScheduler。
+                  只做"按时触发 + 防重复执行"（回收站清理用会话级 advisory lock），
                   删除的语义在 documents；时钟可注入，测试不必等 30 天
     web-hosting/  托管前端产物；/api 以外的其他请求得到统一的 404
   db/
@@ -114,7 +117,7 @@ apps/api/src/
 | `POST /api/documents` | 新建（`{ type, title?, requestId, spaceId? }`）：建在指定空间（要有新建权限；没有指定时是个人空间），内容是收敛的模板换上新的 `unitId`，修订号 1；同一个 `requestId` 的重放同样 201，返回同一份文档 |
 | `GET /api/documents/{id}` | 文档元数据（含修订号、档案、格式版本、所在的空间）与调用者的权限；看不到的与不存在的文档都是 404 |
 | `GET /api/documents/{id}/content` | 当前快照：gzip 字节原样下发（`Content-Encoding: gzip`），修订号作 ETag；带 `If-None-Match` 而修订号对得上时 304，只带 ETag（M3-P2，DEF-017） |
-| `PUT /api/documents/{id}/content?baseRevision&requestId&clientInstanceId&localSeq&writeEpoch` | 保存（正文是 gzip 压缩的快照，请求头 `X-Edit-Lease` 带编辑租约的令牌）：压缩前后都限 5 MiB、基本校验、锁文档行、按 `requestId` 幂等、锁下核对登录、要求有效的编辑租约（M3-P1）、按基准修订号条件写入；冲突时 409，`details` 带当前修订号及其来源 |
+| `PUT /api/documents/{id}/content?baseRevision&requestId&clientInstanceId&localSeq&writeEpoch` | 保存（正文是 gzip 压缩的快照，请求头 `X-Edit-Lease` 带编辑租约的令牌）：压缩前后都限 5 MiB、基本校验、锁文档行、按 `requestId` 幂等、锁下核对登录、要求有效的编辑租约（M3-P1）、按基准修订号条件写入；冲突时 409，`details` 带当前修订号及其来源。M3-P3 起另带客户端的构建与数据格式（`clientBuild`、`univerVersion`、`profile`、`formatVersion`）与 `formulasPending`，内容与当前相同时不递增（`unchanged: true`，留回执），见 ADR-011 的修订 |
 | `GET/POST/PUT/DELETE /api/documents/{id}/edit-lease` | 编辑租约（M3-P1，ADR-018）：编辑状态（能读就能看）、申请（要能编辑；别人持有时 409 `EDIT_LEASE_HELD`；成功时给令牌、代次、修订号与当前修订的来源）、心跳续租（失效时 409 `EDIT_LEASE_LOST`）、释放（持有者本人、令牌是当前这一行的才结束，一律 204）；M3-P2 起编辑状态带调用者能否编辑（`canEdit`），编辑状态与心跳不顺延登录（`@BackgroundRequest()`） |
 | `POST /api/documents/{id}/conflict-copies?requestId&title` | 另存为副本（M3-P2，ADR-011、ADR-014 的补充）：正文是 gzip 压缩的快照（与保存同一个读取方式），`unitId` 要等于原文档的；只要求能读原文档；本人在原文档所在的空间能新建就放进原文档的文件夹，否则本人个人空间的根目录；不继承授权；`requestId` 幂等；响应同复制 |
 | `GET /api/health/live`、`GET /api/health/ready` | 存活与就绪探针（公开） |
@@ -164,7 +167,7 @@ apps/api/src/
 - **编辑租约**（M3-P1，ADR-018）：每份文档至多一行；有效条件按顺序判断（有这一行、没有明确结束、代次是文档当前的、没有到期、没有空闲 12 分钟、绑定的登录有效、持有者仍能编辑），第一条不满足的就是失效的原因；有效期 90 秒、心跳 10 秒，时间取数据库的 `now()`；申请产生新的一代（代次加一，不动 `updated_at`）；令牌只存 SHA-256 摘要，经请求头传递。
 - 读取内容支持 `If-None-Match`（M3-P2）：读快照里先判断权限，修订号对得上回 304、不读内容。
 - **另存为副本**（M3-P2）：失去编辑权、还读得到原文档的人把本页的内容存成新文档（修订号 1、`unitId` 与原文档相同、不继承授权）；锁与复制同一套顺序（`requestId` 的 advisory lock → 原文档所在空间的树锁（只在放进那里时）→ 两个空间行 → 原文档行），锁下重新判断能读、重新决定位置。
-- 完整的快照校验、内容哈希与拦截旧客户端在 M3 的后续 Phase。
+- **保存协议加固**（M3-P3，ADR-011 的修订）：写入（保存与另存为副本）的顺序是重放预检（事务外、不提前回答）→ 客户端的数据格式（`CLIENT_OUTDATED`）→ 快照的检查（子进程池：解析之前先数嵌套与元素，规则见 contracts 的 `SNAPSHOT_RULES`，`SNAPSHOT_INVALID` 带规则）→ 事务（访问、锁、再查重放、登录、文档过新 `DOCUMENT_TOO_NEW`、能编辑、租约、基准修订号、`unitId`、不缩水、内容相同只写回执）；规范化的内容哈希（规格在 contracts 的 `content-canonical.ts`）；平台信封（内容哈希、客户端构建、SDK 版本取上报并核对过的）；"公式待更新"；申请编辑权与心跳同样拦截旧客户端；修订记录与回执保留 30 天。
 
 **运行与退出**：
 - 就绪探针检查接收请求、数据库可达与库结构版本，整体限时 2 秒。
@@ -299,8 +302,9 @@ A01 等检查（`pnpm gate <名称>`）：
 | `folders` | documents | 文件夹（M2-P4，迁移 0010）：空间、父文件夹（可空即根目录，RESTRICT）、名称、创建人、状态（正常、在回收站）、删除单元、层数（存列，CHECK 1–10、根目录即第 1 层）、新建的 `requestId`；CHECK "在回收站 ⇔ 有删除单元"；"与父文件夹同一空间""层数 = 父 + 1""回收站的文件夹下没有正常的东西"由服务在空间树锁下保证，集成测试删库之前扫一遍 |
 | `trash_entries` | documents | 回收站的删除单元（M2-P4，迁移 0010）：空间、种类（文档、文件夹）、删除人、删除与到期时间（CHECK 到期晚于删除）、原来的父文件夹（不做外键）、删除时的标题；按空间与删除时间、按到期时间的索引。原来另有 `origin_space_id`，总是等于 `space_id`，M2-P6 删掉（迁移 0018） |
 | `documents` | documents | 文档的元数据：所属空间、所在文件夹（M2-P4，可空即根目录）、类型、标题、创建者、状态（正常、在回收站，M2-P4 起有删除单元，CHECK 两者一致）、当前修订号、`unit_id`（不唯一：复制文档时不改写 unitId，迁移 0007）、插件档案、平台格式版本、写入时的 SDK 版本、写入代次 `write_epoch`（M2-P2；只增不减由触发器兜底，M2-P6 迁移 0019）；按空间与更新时间、按空间与文件夹的索引 |
-| `document_contents` | documents | 每份文档一份当前快照：gzip 的 `bytea`、解压前后的字节数（CHECK 核对压缩后的字节数与上限） |
-| `document_revisions` | documents | 每次新建或保存一行：修订号（与文档联合唯一）、种类（新建即修订号 1）、`request_id`（唯一，幂等的依据）、负载摘要、保存的来源（`clientInstanceId`、`localSeq`）、保存人；不存正文 |
+| `document_contents` | documents | 每份文档一份当前快照：gzip 的 `bytea`、解压前后的字节数（CHECK 核对压缩后的字节数与上限）；规范化的内容哈希（32 字节）与非空资源的名称（M3-P3，迁移 0024，同空同有；存量为空） |
+| `document_revisions` | documents | 每次新建或保存一行：修订号（与文档联合唯一）、种类（新建即修订号 1）、`request_id`（唯一，幂等的依据）、负载摘要、保存的来源（`clientInstanceId`、`localSeq`）、保存人；不存正文。M3-P3 加内容哈希、客户端构建与 `created_at` 的索引；保留 30 天（当前修订那一行一直保留） |
+| `document_save_receipts` | documents | 内容相同、修订号没变的保存的回执（M3-P3，迁移 0024）：`request_id`（主键）、文档、修订号、负载摘要、保存人、保存的时间、写下的时间；重放时与修订记录一起查；保留 30 天 |
 | `document_edit_leases` | documents | 编辑租约（M3-P1，迁移 0022，ADR-018）：每份文档一行（主键，外键级联删除）、持有者（按它的索引）、绑定的登录与标签页、令牌摘要（CHECK 32 字节）、这一代的代次（CHECK 至少 1）、申请/续租/到期/最后活动的时间（CHECK 到期晚于续租、最后活动不晚于续租）、明确结束的时间与原因（`released`、`revoked`，CHECK 同空同有） |
 | `document_grants` | documents | 单独授权（M2-P5，迁移 0020）：文档（外键级联删除）、被授权人、角色（查看者、编辑者）、最后设置它的人（CHECK 不是被授权人）、建立与最后设置的时间；主键（文档，被授权人），按被授权人的索引（"与我共享"与"可访问文档"的授权那一半） |
 
@@ -336,6 +340,7 @@ A01 等检查（`pnpm gate <名称>`）：
 | 2026-09-30 | M2-P4（M2-P6 复核时补记） | 文件夹、文档管理与搜索（ADR-016，迁移 0010–0013）：documents 的文件夹（层数存列、最多 10 层）、改名移动复制、删除单元与回收站、恢复与永久删除、按标题搜索；空间树的 advisory lock 串行化结构性改动；jobs 模块与回收站 30 天的自动清理（会话级 advisory lock 防重复执行）；前端的文件夹导航与行内操作、回收站页、顶栏搜索；CI 的门禁分片。P4 收尾时这一行与表清单漏记，M2-P6 第 3 片补上 |
 | 2026-10-02 | M2-P6（M2 复核） | 六片复核之后的改动（`reviews/P6-总结.md`）：登录限流的三个维度与解除锁定、签发人离任作废链接、修改密码换令牌（ADR-007、ADR-013）；团队空间名称的判重键（迁移 0016、0017）、复制在锁下重新判断、看不到与不存在的语句序列核对（ADR-014）；空间树锁下 8 处核对的确定交错用例、永久删除前的核对、数据库繁忙回 503 与请求级的提交记录、迁移与表定义的整体核对、写入代次的触发器（迁移 0018、0019）、定时清理按数据库时间（ADR-005、ADR-006、ADR-016）；编辑器只读的全部快捷键回归、SDK 值引用的白名单与 internal-api 的出口（ADR-010、ADR-015）；前端的请求标识记账、人名组件、写操作结果未知的共用做法、焦点与读屏、按需加载失败的边界、文案按范围拆出首屏（ADR-008）；门禁限定平台页面首屏的文件数、CI 上 E2E 出现重试即失败、门禁各步与 `ci.yml` 接线的核对、全部路由的未登录与"看不到/不存在"核对（01 号规范）；容器 E2E 的空闲内存取中位数（ADR-001）；第 6 片合并之后的 CI 修复：失败登录的哈希计算两条路径相同，取代按耗时补齐（ADR-007） |
 | 2026-10-04 | M3-P1 | 编辑租约（ADR-018，迁移 0022）：documents 的租约表、有效条件、申请/心跳/释放/编辑状态（接口在 workspace）、保存要求租约（重放先于租约）、收回写入权接入租约（ADR-014 的补充：锁的顺序加租约行，M2-P2 审查 A3 的窗口收口）、持有者的请求在锁下另核对登录（ADR-017 的补充）；编辑器页的租约管理（申请、心跳、续上、失效、释放）；新错误码 `EDIT_LEASE_HELD`、`EDIT_LEASE_LOST` |
+| 2026-10-05 | M3-P3 | 保存协议加固（ADR-011 修订，迁移 0024）：重放预检先于一切检查、拦截旧客户端（保存、副本、申请、心跳；`CLIENT_OUTDATED`、`DOCUMENT_TOO_NEW`）、完整的快照检查放进子进程池（需求方决定；ADR-001 的内存上界，DEF-018 关闭）、规范化的内容哈希与"内容相同不递增"（回执表）、平台信封、"公式待更新"、修订记录与回执保留 30 天（ADR-016：第二个定时任务与共用的调度器）；contracts 的资源规则、链接判定、平台图片地址与规范化；页面在写入之前改写链接（ADR-010，DEF-021）、上报构建与数据格式、"需要刷新"与"文档太新"、80% 提示；DEF-046、DEF-047 |
 | 2026-10-04 | M3-P2 | 阅读模式与编辑权的界面：打开即阅读、进入与退出编辑一律重建编辑器（需求方决定；ADR-015 修订、计划书 r15）、视图状态；编辑器页的阅读与编辑的状态机 `edit-mode.ts`；阅读时 30 秒的编辑状态检查与"有更新"；失去编辑权时另存为副本（新接口，ADR-011、ADR-014 的补充，迁移 0023 重列审计动作）或放弃，结果未知的保存先重发；读取内容的条件请求（304，DEF-017）；编辑状态带 `canEdit`；后台请求不顺延登录（`@BackgroundRequest()`，ADR-007 的补充，DEF-043）；只读的行列分隔线（DEF-027）、"高级查找"（DEF-028）、带图片的粘贴（DEF-035 的旁支）；真实 Safari 的页面自检（测试构建）；ADR-010、017、018 的补充 |
 | 2026-10-02 | M2-P5 | 分享（US-M2-10）与越权访问的全面验证（US-M2-14）：`document_grants`（迁移 0020）；有效权限分开带空间角色、内容权限与访问途径，结构性的操作只看空间角色；"可访问文档"的两半；分享的写入由 workspace 编排（账户行 → 空间行 → 文档行，锁下核对仍在持住的空间）、"与我共享"、搜索并上授权；个人空间存的名称不对别人给出（`spaceIdentitySchema`）；前端的分享对话框、"与我共享"页；权限矩阵 8 个角色、看不到与不存在 108 个探测（ADR-014、ADR-016） |
 | 2026-10-03 | M2 收尾（Codex 评审） | 合并之前 Codex 的 M 级对抗评审的修复：登录之后的读请求在一个只读快照里判断权限与读数据（`TransactionRunner.readSnapshot`，开场核对由 auth 登记，请求级的身份记录 `RequestIdentities`，ADR-017），按路由表核对；同一个连接上不并发查询（集成测试核对）；现存哈希的参数没读全之前不进入验证（ADR-007）；新建文件夹存下请求摘要（迁移 0021）；"与我共享"的复制与改名（一行文档与行内操作两处共用）；写操作成功之后的刷新有时限、列表刷新失败看得见 |
