@@ -160,7 +160,9 @@ export const LINK_ADDRESS_CASES: readonly LinkAddressCase[] = [
  * 逐字符扫描用的字符（审查 B 的 make-inputs3 的扩充）：可打印的 ASCII，几种空白、零宽与看不见的字符，几个常见的非 ASCII 字母、全角字符、
  * 汉字与 emoji。不放：孤立的代理项（E2E 经 JSON 交给页面时被换成 U+FFFD，两边判定的不是同一个字符串；随机拼接在 Node 里另放）、
  * 新近分配的 Unicode 字符（各引擎 IDN 的 Unicode 版本不同，主机里收不收不一样——只影响收不收，Node 对 LDH 的主机原样接受，
- * 浏览器给出的结果 Node 照收，见 link-address.ts 的 HOST）
+ * 浏览器给出的结果 Node 照收，见 link-address.ts 的 HOST）、RTL 字符（希伯来文、阿拉伯文等：IDNA 的 Bidi 规则只有浏览器核对到
+ * 同一个域名里其余的标签，Node 收、浏览器不收，同样只影响收不收；E2E 里"每个地址的结果与 Node 相同"那一条随之要放宽。
+ * U+202E 是方向控制符，不是 RTL 字符，IDNA 本来就不收）。随机拼接的片段（LINK_RANDOM_PIECES）同样不放
  */
 const SCAN_CHARACTERS: readonly string[] = [...Array.from({ length: 0x7F - 0x20 }, (_, offset) => String.fromCharCode(0x20 + offset)), '\u00A0', '\u3000', '\u2028', '\u0085', '\u00AD', '\u200B', '\u200C', '\u200D', '\uFEFF', '\u202E', '\u0308', 'é', 'ß', 'ς', 'İ', '例', '😀', '．', '。', 'Ａ', '１']
 

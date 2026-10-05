@@ -375,7 +375,9 @@ test.describe('US-M3-14 写入之前把自动识别的链接改成规范写法�
     const hrefs = [...new Set(results.flatMap(result => result.ok ? [result.href] : []))]
     expect(hrefs.length).toBeGreaterThan(1500)
     expect(await probeCanonicalLinks(page, hrefs)).toEqual(hrefs.map(href => ({ ok: true, href })))
-    // 更强的一条：同一个地址，浏览器与 Node 的结果相同（同一个公式在哪个浏览器里重算，存下的都一样）
+    // 更强的一条：同一个地址，浏览器与 Node 的结果相同（同一个公式在哪个浏览器里重算，存下的都一样）。
+    // 它成立的前提：扫描与随机拼接的片段里没有 RTL 字符（希伯来文、阿拉伯文等）。IDNA 的 Bidi 规则只有浏览器核对到同一个域名里
+    // 其余的标签，这样的地址 Node 收、浏览器不收（contracts 的 link-address.ts 的 HOST）；以后加进 RTL 字符时，这条要允许"Node 收、浏览器不收"
     const differing = inputs.flatMap((input, index) => {
       const node = canonicalLink(input)
       return sameAsNode(results[index], node, node.ok || node.reason !== 'unparsable' ? undefined : 'host') ? [] : [{ input, browser: results[index], node }]

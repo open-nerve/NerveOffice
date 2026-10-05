@@ -57,7 +57,10 @@ const ALLOWED_PROTOCOLS: ReadonlySet<string> = new Set(['http:', 'https:', 'mail
  *   转成半角，WebKit 收结尾多一个冒号的写法，Node 都拒绝），同一个地址在一个浏览器里留着链接、在另一个里被去掉；SDK 的自动识别
  *   本来也不认 IPv6 的地址（core 的 common/url.ts 的 isLegalUrl）。
  * - Node 对 LDH 的主机原样接受（punycode 的标签不再按它的 Unicode 表核对解码出的字符），所以浏览器给出的合法写法 Node 一定照收、
- *   结果相等；IDN 的 Unicode 版本不同（新近分配的字符 Node 收、浏览器不收）只影响收不收，不会让 Node 拒绝浏览器的结果
+ *   结果相等。反过来"Node 收、浏览器不收"的有两类，都只影响收不收，不会让 Node 拒绝浏览器的结果（这样的地址在页面里去掉链接、保留文字）：
+ *   IDN 的 Unicode 版本不同（新近分配的字符）；IDNA 的 Bidi 规则（RFC 5893）——域名里有含 RTL 字符（希伯来文、阿拉伯文等）的标签时，
+ *   其余的标签也要合这条规则，不能以数字开头、不能以 - 结尾等（1.א.example、א.a-.example、4294967295.ض）：三个浏览器都这样核对，
+ *   Node 只核对含 RTL 字符的标签本身（复验在 27,576 个随机地址里实测到 62–63 个）
  */
 const HOST = /^[\da-z_-]+(?:\.[\da-z_-]+)*\.?$/
 
