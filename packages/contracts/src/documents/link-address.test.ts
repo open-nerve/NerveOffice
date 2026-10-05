@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { LINK_ADDRESS_CASES } from './link-address.test-support.ts'
+import { LINK_ADDRESS_CASES, LINK_RANDOM_PIECES, LINK_SCAN_INPUTS, randomLinkAddresses } from './link-address.test-support.ts'
 import { canonicalLink, checkCellLinks, HYPERLINK_RANGE_TYPE, LINK_ADDRESS_INVALID_REASONS, LINK_ADDRESS_MAX_LENGTH, normalizeCellLinks } from './link-address.ts'
+
+/** 规范写法里不能有的字符：复制单元格时 SDK 把地址原样拼进 href="…"，它们能改写剪贴板 HTML 的结构（00 号计划书 §11.3） */
+const CLIPBOARD_UNSAFE = /[\s"<>`]/
+
+/** 逐字符扫描与随机拼出的地址（在 Node 里另放孤立的代理项：E2E 不放，见 test-support） */
+const GENERATED = [...LINK_SCAN_INPUTS, ...randomLinkAddresses(4000, 7, [...LINK_RANDOM_PIECES, '\uD800', '\uDC00'])]
 
 describe('链接地址的规范写法（跨引擎的同一组用例，link-address.test-support.ts）', () => {
   it('用例覆盖每一种不合法的原因，输入不重复', () => {
@@ -11,6 +17,13 @@ describe('链接地址的规范写法（跨引擎的同一组用例，link-addre
 
   it.each(LINK_ADDRESS_CASES.map(item => [item.note, item] as const))('%s', (_note, item) => {
     expect(canonicalLink(item.input)).toEqual(item.expected)
+  })
+
+  it('另一个引擎的原因只用在不合法的用例上、与 Node 的不同', () => {
+    const declared = LINK_ADDRESS_CASES.filter(entry => entry.alsoReason !== undefined)
+    expect(declared.length).toBeGreaterThan(0)
+    for (const item of declared)
+      expect(!item.expected.ok && item.expected.reason !== item.alsoReason, item.input).toBe(true)
   })
 
   it('规范写法是不动点：再判定一次不变', () => {
@@ -24,18 +37,37 @@ describe('链接地址的规范写法（跨引擎的同一组用例，link-addre
     expect(LINK_ADDRESS_MAX_LENGTH).toBe(2048)
   })
 
-  it('任何字符串都不抛出，合法时结果是不动点（随机拼出的地址）', () => {
-    const pieces = ['https:', 'http:', 'mailto:', '//', '/', '\\', '#', '?', '@', ':', '.', '..', '%', '%2e', '%zz', '|', ' ', ' ', '"', '\'', '<', '`', '[', ']', '::1', 'a', 'B', '例', '😀', '\uD800', '\t', 'example.com', 'xn--', '0x7f', ':443', 'user:pw@']
-    let seed = 7
-    const next = (): number => {
-      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648
-      return seed
-    }
-    for (let round = 0; round < 3000; round += 1) {
-      const input = Array.from({ length: 1 + (next() % 8) }, () => pieces[next() % pieces.length]).join('')
+  it('逐字符扫描与随机拼出的地址：任何字符串都不抛出，合法时结果是不动点', () => {
+    expect(GENERATED.length).toBeGreaterThan(6000)
+    let valid = 0
+    for (const input of GENERATED) {
       const result = canonicalLink(input)
-      if (result.ok)
-        expect(canonicalLink(result.href), JSON.stringify(input)).toEqual(result)
+      if (!result.ok)
+        continue
+      valid += 1
+      expect(canonicalLink(result.href), JSON.stringify(input)).toEqual(result)
+    }
+    // 不是空的核对：扫描里合法的占多数
+    expect(valid).toBeGreaterThan(2000)
+  })
+
+  it('规范写法里没有空白、双引号、尖括号与反引号（复制时不会改写剪贴板 HTML 的结构；单引号可以有：SDK 写的是双引号的属性）', () => {
+    const inputs = [...LINK_ADDRESS_CASES.map(item => item.input), ...GENERATED]
+    const hrefs = inputs.flatMap((input) => {
+      const result = canonicalLink(input)
+      return result.ok ? [result.href] : []
+    })
+    expect(hrefs.filter(href => CLIPBOARD_UNSAFE.test(href))).toEqual([])
+    // 输入里有这些字符、照样合法的不少：它们被编码了，而不是被拒绝了
+    expect(inputs.filter(input => /["<>`]/.test(input) && canonicalLink(input).ok).length).toBeGreaterThan(50)
+  })
+
+  it('LDH 写法的主机（含任意的 punycode 标签）Node 原样接受、结果不变：浏览器给出的合法写法 Node 一定照收（IDN 的 Unicode 版本各引擎不同也一样）', () => {
+    const labels = randomLinkAddresses(2000, 23, ['a', 'z', '0', '9', '-', '_', 'xn--', 'xn--a', 'ab', 'x'])
+    for (const [index, label] of labels.entries()) {
+      // 最后一个标签是 example：以数字结尾的主机按 IPv4 解析（WHATWG URL 的 ends-in-a-number），合法的规范写法里不会是那样的 LDH 主机
+      const href = `https://${label}.${labels[(index + 1) % labels.length]}.example${index % 3 === 0 ? '.' : ''}/p`
+      expect(canonicalLink(href), href).toEqual({ ok: true, href })
     }
   })
 })
@@ -86,6 +118,7 @@ describe('页面写入之前的改写（normalizeCellLinks，DEF-021）', () => 
     ['javascript', 'javascript:alert(1)', 'javascript:alert(1)'],
     ['粘贴 HTML 写出的相对地址，文字是本站相对地址（不算绝对地址）', 'relative-no-slash', '/x'],
     ['文字是锚点', 'x y', '#top'],
+    ['主机不是各引擎一致的写法（HYPERLINK() 的结果原样当作地址），文字也一样', 'https://a*b.example/', 'https://a*b.example/'],
   ])('仍不合法就去掉这一段链接、保留文字：%s', (_case, url, text) => {
     const other = { startIndex: 0, endIndex: 0, rangeId: 'c1', rangeType: 6, properties: { url: 'javascript:void(0)' } }
     const p = cell(text, [other, link(url, { endIndex: text.length - 1 })])
@@ -168,6 +201,9 @@ describe('服务端的核对（checkCellLinks）：只判定、不改写', () =>
     ['没有协议', 'example.org'],
     ['路径里的 |（规范写法是 %7C）', 'https://example.com/a|b'],
     ['首尾空白', ' https://example.com/'],
+    ['主机不是各引擎一致的写法（Chromium 写出的 %2A，或者 Node 与 WebKit 留着的 *）', 'https://a%2Ab.example/'],
+    ['mailto 的地址里没编码的空格（规范写法是 %20：Chromium 在 ? 之前原样保留）', 'mailto:a ?subject=x'],
+    ['查询里没编码的反引号（规范写法是 %60）', 'https://example.com/?a`b'],
   ])('link-address：%s', (_case, url) => {
     expect(checkCellLinks(cell('abcd', [link(url)]))).toEqual({ ok: false, rule: 'link-address' })
   })

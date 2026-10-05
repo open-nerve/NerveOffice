@@ -2,8 +2,21 @@
 // - 服务端：快照里每个单元格的链接，地址合法并且等于它的规范写法、rangeId 合写法（checkCellLinks）；
 // - 页面：写入之前把 SDK 自动识别出的链接改成规范写法，不合法的去掉链接、保留文字（normalizeCellLinks，DEF-021）。
 // 表格的链接只在单元格富文本里：cell.p.body.customRanges 里 rangeType 为 0（CustomRangeType.HYPERLINK）的区间，地址在 properties.url。
-// 规范写法用 WHATWG URL 解析（Node 与浏览器都有）：同一组用例（link-address.test-support.ts）在 Node 的单元测试与三个浏览器的 E2E 里
-// 得到同样的结果，并且规范写法再判定一次不变（不动点）
+//
+// 规范写法用 WHATWG URL 解析（Node 与浏览器都有），但只信任各引擎必然一致的部分（M3-P3 审查 B 的逐字符扫描：可打印的 ASCII 与几种空白
+// 放进主机、路径、查询、片段、mailto 与本站相对地址，Node 与 Chromium、Chrome、WebKit 逐个比较）。页面按本引擎的结果改写，服务端（Node）
+// 要求存下的等于规范写法，所以要保证"任何引擎判为合法的结果，Node 也判为合法且相等"，否则那份表格在某些浏览器里从此存不进去：
+// - http(s) 的主机只接受 LDH 标签（另放 _）与点、IPv4、[…] 的 IPv6（HOST）。Chromium 把主机里的空白编成 %20、* 编成 %2A，
+//   Node 与 WebKit 解析失败或原样保留 *；引号、括号、= 等四个引擎都原样保留。别的写法一律不合法（host）；
+// - 规范写法里空白、双引号、尖括号、反引号与 | 一律百分号编码，查询里的单引号编成 %27（settled）：mailto 的不透明路径里这几个字符
+//   各引擎都原样保留，只有 ?、# 之前的空格 Node 与 WebKit 编码、Chromium 不编码；查询里的反引号各引擎都不编码；路径里的 | Chromium 编码、
+//   Node 与 WebKit 保留；mailto 的查询里的单引号 Chromium 编码、Node 与 WebKit 不编码。统一编码之后各引擎的结果相同，含义不变
+//   （这几个字符在地址里本来就只能以编码的形式出现，RFC 3986、RFC 6068）。
+// 规范写法因此不含会改写剪贴板 HTML 结构的字符（00 号计划书 §11.3"复制时不会注入 HTML"）：SDK 复制带链接的单元格时把地址原样拼进
+// href="…"（docs-ui 的 udm-to-html 不转义）。单引号在路径与片段里四个引擎都不编码、规范写法里照样保留——前提是 SDK 写的是双引号的属性，
+// 单引号改不了它的结构（SDK 升级改了写法时这一条要重新核对）。
+// 同一组用例（link-address.test-support.ts）在 Node 的单元测试与三个浏览器的 E2E 里得到同样的结果，规范写法再判定一次不变（不动点）；
+// E2E 另把逐字符扫描与随机拼出的地址交给每个浏览器，浏览器判为合法的规范写法交给 Node 再判定一次，要求合法且相等
 import type { RuleCheck, SnapshotRule } from './snapshot-rules.ts'
 import { isJsonObject } from './json-values.ts'
 
@@ -37,13 +50,34 @@ const RELATIVE_BASE = 'https://relative-link.invalid'
 const ALLOWED_PROTOCOLS: ReadonlySet<string> = new Set(['http:', 'https:', 'mailto:'])
 
 /**
+ * http(s) 解析之后的主机（hostname）只接受各引擎必然一致的写法（见文件开头）：LDH 标签（小写字母、数字与 -，另放 _）与点——IDN 已转成
+ * punycode、IPv4 已写成点分十进制，都在其中，结尾可以有一个点。含 %、大写字母（各引擎都转成小写，留着的就不是一致的写法）、空标签
+ * 或别的字符的一律不合法。
+ * - IPv6（[…]）也不收：写得不规整的 IPv6 各引擎收不收不一样（修复时的实测：Chromium 忽略方括号里的软连字符、零宽空格并把全角字母
+ *   转成半角，WebKit 收结尾多一个冒号的写法，Node 都拒绝），同一个地址在一个浏览器里留着链接、在另一个里被去掉；SDK 的自动识别
+ *   本来也不认 IPv6 的地址（core 的 common/url.ts 的 isLegalUrl）。
+ * - Node 对 LDH 的主机原样接受（punycode 的标签不再按它的 Unicode 表核对解码出的字符），所以浏览器给出的合法写法 Node 一定照收、
+ *   结果相等；IDN 的 Unicode 版本不同（新近分配的字符 Node 收、浏览器不收）只影响收不收，不会让 Node 拒绝浏览器的结果
+ */
+const HOST = /^[\da-z_-]+(?:\.[\da-z_-]+)*\.?$/
+
+/**
+ * 规范写法里一律百分号编码的字符（见文件开头）：空格、双引号、尖括号、反引号与 |。WHATWG URL 的 href 只有 ASCII，控制字符先已拒绝，
+ * 空白只会是空格
+ */
+const ENCODED_IN_CANONICAL = /[ "<>`|]/g
+
+/**
  * 不合法的原因：
  * - empty：去掉首尾空白之后是空的；too-long：超过 LINK_ADDRESS_MAX_LENGTH；control-character：含控制字符；
  * - unparsable：解析不了，包括没有协议、也不以 / 或 # 开头的写法（example.org、user@example.com）；scheme：协议不是 http、https、mailto；
- * - credentials：http(s) 带用户名或密码；mailto-host：mailto 带主机部分（mailto://x@y，SDK 键入邮箱时这样写，页面改写成 mailto:x@y）；
- * - off-site：相对地址解析之后换了主机（//host、/\host、点段化简出 //）；anchor：锚点含空白、引号、尖括号或反引号
+ * - credentials：http(s) 带用户名或密码；host：http(s) 的主机不是各引擎一致的写法（HOST）；
+ * - mailto-host：mailto 带主机部分（mailto://x@y，SDK 键入邮箱时这样写，页面改写成 mailto:x@y）；
+ * - off-site：相对地址解析之后换了主机（//host、/\host、点段化简出 //）；anchor：锚点含空白、引号、尖括号或反引号。
+ * 原因只用来说明，各引擎可以在不同的一步拒绝同一个地址（主机里有空白：Node 与 WebKit 解析不了，Chromium 解析出带 %20 的主机），
+ * 合法与否、规范写法各引擎相同
  */
-export const LINK_ADDRESS_INVALID_REASONS = ['empty', 'too-long', 'control-character', 'unparsable', 'scheme', 'credentials', 'mailto-host', 'off-site', 'anchor'] as const
+export const LINK_ADDRESS_INVALID_REASONS = ['empty', 'too-long', 'control-character', 'unparsable', 'scheme', 'credentials', 'host', 'mailto-host', 'off-site', 'anchor'] as const
 export type LinkAddressInvalidReason = (typeof LINK_ADDRESS_INVALID_REASONS)[number]
 
 /** 判定的结果：合法时是规范写法，不合法时是原因 */
@@ -53,12 +87,29 @@ function invalid(reason: LinkAddressInvalidReason): CanonicalLink {
   return { ok: false, reason }
 }
 
+function percentEncoded(character: string): string {
+  return `%${character.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`
+}
+
 /**
- * 规范写法里的 | 一律编成 %7C：Chromium 把路径里的 | 编码、Node 与 WebKit 保留，统一之后各引擎的结果相同（P3 设计前的跨引擎实测）。
- * 规范写法里 | 只会出现在路径、查询与片段里（主机不能含 |，用户名与密码一律拒绝），%7C 与 | 指的是同一个地址
+ * 查询（第一个 ? 起、# 之前）里的单引号编成 %27。href 里第一个 ? 就是查询的开头：路径里的 ? 一律编码（不透明路径遇到 ? 就结束），
+ * 主机里不会有；查询里不会有 #（遇到就是片段），片段里的 ? 不算
+ */
+function withQueryApostrophesEncoded(href: string): string {
+  const hash = href.indexOf('#')
+  const end = hash === -1 ? href.length : hash
+  const query = href.indexOf('?')
+  if (query === -1 || query > end)
+    return href
+  return `${href.slice(0, query)}${href.slice(query, end).replaceAll('\'', '%27')}${href.slice(end)}`
+}
+
+/**
+ * 解析之后的写法收成规范写法（见文件开头）：空格、双引号、尖括号、反引号与 | 编码，查询里的单引号编成 %27——各引擎只在这几个字符编不编码上
+ * 不同，统一之后结果相同，再解析一次也不变（% 开头的序列各引擎都原样保留）。之后才算长度（编码会变长）
  */
 function settled(href: string): CanonicalLink {
-  const encoded = href.replaceAll('|', '%7C')
+  const encoded = withQueryApostrophesEncoded(href).replace(ENCODED_IN_CANONICAL, percentEncoded)
   return encoded.length > LINK_ADDRESS_MAX_LENGTH ? invalid('too-long') : { ok: true, href: encoded }
 }
 
@@ -101,7 +152,7 @@ function absoluteLink(text: string): CanonicalLink {
   // 带用户名或密码的 http(s)：钓鱼常用的写法（https://bank.example@evil.example/）
   if (url.username !== '' || url.password !== '')
     return invalid('credentials')
-  return settled(url.href)
+  return HOST.test(url.hostname) ? settled(url.href) : invalid('host')
 }
 
 /**
@@ -111,9 +162,9 @@ function absoluteLink(text: string): CanonicalLink {
  * 3. # 开头是文档内锚点：不含空白、引号、尖括号与反引号，原样就是规范写法（不解析）；
  * 4. / 开头是本站相对地址：按占位的站点解析，主机必须不变，规范写法是解析之后的路径、查询与片段；
  * 5. 其余必须带协议、只允许 http、https、mailto：http(s) 取 WHATWG URL 的 href（协议与主机小写、主机按 IDN 转成 punycode、
- *    去掉默认端口、点段化简、百分号编码），带用户名或密码的拒绝；mailto 只接受没有主机部分的写法；
- * 6. 规范写法里的 | 一律编成 %7C（跨引擎一致）。
- * 合法时 canonicalLink(href) 给出同一个 href（不动点）；任何字符串都不抛出
+ *    去掉默认端口、点段化简、百分号编码），带用户名或密码的拒绝，主机只接受各引擎一致的写法（HOST）；mailto 只接受没有主机部分的写法；
+ * 6. 规范写法里的空格、双引号、尖括号、反引号与 | 一律编码，查询里的单引号编成 %27（跨引擎一致，复制时不会改写剪贴板 HTML 的结构）。
+ * 合法时 canonicalLink(href) 给出同一个 href（不动点），任何引擎给出的合法结果都与 Node 的相同；任何字符串都不抛出
  */
 export function canonicalLink(url: string): CanonicalLink {
   if (CONTROL_CHARACTER.test(url))

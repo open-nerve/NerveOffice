@@ -6,13 +6,17 @@
 // - 保存之后服务器上的内容与页面里的相同，其中每个链接都通过服务端的核对（contracts 的 checkCellLinks）；
 // - HYPERLINK() 的结果：链接的 rangeId 与段落的 paragraphId 由位置与序号确定，强制重算、撤销重做、重开（打开时要重算）之后内容不变。
 // 改写依赖 SDK 的内部约定（执行前事件的参数就是处理器与撤销栈用的同一个对象，internal-api 的 CELL_LINK_PROTOCOL）：SDK 升级之后改成复制参数时，
-// 这组用例先失败。另有跨引擎的同一组地址：经探针调用页面里打包的 canonicalLink，每个浏览器的结果都等于 Node 的单元测试用的那张表。
+// 这组用例先失败。另有跨引擎的同一组地址：经探针调用页面里打包的 canonicalLink，每个浏览器的结果都等于 Node 的单元测试用的那张表；
+// 以及跨引擎的性质检验：逐字符扫描与随机拼出的地址交给每个浏览器，浏览器判为合法的规范写法交给测试进程里的 contracts（与服务端同一份判定）
+// 再判定一次，要求合法且相等——页面按本引擎的结果改写，服务端只收等于规范写法的地址，不相等的那份表格在这个浏览器里就存不进去（审查 B1）。
 // 合成的 paste 事件派发在获得焦点的元素上（SDK 在那里监听粘贴，与真实的粘贴走同一条路，paste-images.spec.ts 同样的做法）。
 // 用到探针（只在测试构建里）：标签 @test-build
+import type { CanonicalLink, LinkAddressInvalidReason } from '@nerve-office/contracts'
 import type { Page } from '@playwright/test'
+import type { LinkAddressCase } from '../../../../packages/contracts/src/documents/link-address.test-support.ts'
 import type { Workbook } from '../../support/sheet.ts'
-import { canonicalContentText, checkCellLinks } from '@nerve-office/contracts'
-import { LINK_ADDRESS_CASES } from '../../../../packages/contracts/src/documents/link-address.test-support.ts'
+import { canonicalContentText, canonicalLink, checkCellLinks } from '@nerve-office/contracts'
+import { LINK_ADDRESS_CASES, LINK_SCAN_INPUTS, randomLinkAddresses } from '../../../../packages/contracts/src/documents/link-address.test-support.ts'
 import { createUser } from '../../support/database.ts'
 import { commandMark, probeCanonicalLinks, probeCommands, probeSnapshot, runFacade, waitForCommand } from '../../support/editor-probe.ts'
 import { expect, test } from '../../support/fixtures.ts'
@@ -154,6 +158,21 @@ async function recalculate(page: Page): Promise<void> {
 /** HYPERLINK() 用例里的四个公式格 */
 function formulaCells(workbook: Workbook): Cell[] {
   return ['A1', 'A2', 'A3', 'A4'].map(a1 => cellOf(workbook, a1))
+}
+
+/**
+ * 浏览器给出的结果与 Node 的相同：合法与否、规范写法都相同；不合法时原因相同，或者是 alsoReason——各引擎在不同的一步拒绝同一个地址
+ * （主机里有空白：Node 与 WebKit 解析不了，Chromium 编成 %20、按主机的写法拒绝，contracts 的 link-address.ts）
+ */
+function sameAsNode(browser: CanonicalLink | undefined, node: CanonicalLink, alsoReason: LinkAddressInvalidReason | undefined): boolean {
+  if (JSON.stringify(browser) === JSON.stringify(node))
+    return true
+  return browser?.ok === false && !node.ok && browser.reason === alsoReason
+}
+
+/** 跨引擎用例表的一条：浏览器的结果等于表里（Node）的，或者是表里声明的另一个原因 */
+function matchesCase(browser: CanonicalLink | undefined, item: LinkAddressCase): boolean {
+  return sameAsNode(browser, item.expected, item.alsoReason)
 }
 
 /** 撤销两步：两格回到空的；再重做两步：与之前完全相同（改写之后的写法就在撤销栈里） */
@@ -331,10 +350,36 @@ test.describe('US-M3-14 写入之前把自动识别的链接改成规范写法�
     await loginThroughApi(page, await createUser('links-parity'))
     await openReader(page, await createSheetThroughApi(page))
     const results = await probeCanonicalLinks(page, LINK_ADDRESS_CASES.map(item => item.input))
-    const mismatched = LINK_ADDRESS_CASES.flatMap((item, index) => JSON.stringify(results[index]) === JSON.stringify(item.expected) ? [] : [{ note: item.note, input: item.input, expected: item.expected, actual: results[index] }])
+    const mismatched = LINK_ADDRESS_CASES.flatMap((item, index) => matchesCase(results[index], item) ? [] : [{ note: item.note, input: item.input, expected: item.expected, actual: results[index] }])
     expect(mismatched).toEqual([])
     const hrefs = LINK_ADDRESS_CASES.flatMap(item => item.expected.ok ? [item.expected.href] : [])
     expect(hrefs.length).toBeGreaterThan(40)
     expect(await probeCanonicalLinks(page, hrefs)).toEqual(hrefs.map(href => ({ ok: true, href })))
+  })
+
+  test('US-M3-14 跨引擎的性质检验：逐字符扫描与随机拼出的地址，浏览器判为合法的规范写法交给 Node（与服务端同一份判定）仍合法且相等，也是浏览器里的不动点；每个地址的结果与 Node 相同', async ({ page }) => {
+    await loginThroughApi(page, await createUser('links-property'))
+    await openReader(page, await createSheetThroughApi(page))
+    const inputs = [...LINK_SCAN_INPUTS, ...randomLinkAddresses(3000, 2026)]
+    const results = await probeCanonicalLinks(page, inputs)
+    expect(results).toHaveLength(inputs.length)
+    // 承重的一条：浏览器写下的规范写法，服务端（Node）判为合法、而且就等于它的规范写法
+    const refusedByNode = results.flatMap((result, index) => {
+      if (!result.ok)
+        return []
+      const server = canonicalLink(result.href)
+      return server.ok && server.href === result.href ? [] : [{ input: inputs[index], browser: result.href, node: server }]
+    })
+    expect(refusedByNode).toEqual([])
+    // 浏览器里也是不动点；不是空的核对
+    const hrefs = [...new Set(results.flatMap(result => result.ok ? [result.href] : []))]
+    expect(hrefs.length).toBeGreaterThan(1500)
+    expect(await probeCanonicalLinks(page, hrefs)).toEqual(hrefs.map(href => ({ ok: true, href })))
+    // 更强的一条：同一个地址，浏览器与 Node 的结果相同（同一个公式在哪个浏览器里重算，存下的都一样）
+    const differing = inputs.flatMap((input, index) => {
+      const node = canonicalLink(input)
+      return sameAsNode(results[index], node, node.ok || node.reason !== 'unparsable' ? undefined : 'host') ? [] : [{ input, browser: results[index], node }]
+    })
+    expect(differing).toEqual([])
   })
 })
