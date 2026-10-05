@@ -50,6 +50,8 @@ interface FakeEditor {
   disposed: boolean
   cellEditing: boolean
   failCapture: boolean
+  /** 公式的结果收齐了没有（settleFormulas 的回答）：默认收齐 */
+  formulasSettled: boolean
   edit: (value: string) => void
   enter: (stage: SheetEditorLifecycle) => void
 }
@@ -83,6 +85,7 @@ function fakeFactory() {
       disposed: false,
       cellEditing: false,
       failCapture: false,
+      formulasSettled: true,
       editor: {
         unitId: 'unit-1',
         changeSeq: () => seq,
@@ -106,7 +109,7 @@ function fakeFactory() {
           }
           return true
         }),
-        settleFormulas: async () => 'settled',
+        settleFormulas: vi.fn(async () => fake.formulasSettled ? 'settled' as const : 'timeout' as const),
         capture: vi.fn(() => {
           if (fake.failCapture)
             throw new Error('SDK 出错')
@@ -1145,6 +1148,23 @@ describe('另存为副本与放弃（M3-P2 设计 §3.2、§3.4）', () => {
     expect(context.factory.last()).toMatchObject({ access: 'read', snapshot: snapshotOf('最新的') })
     expect(readingOf(context.mode)).toMatchObject({ canEdit: false, notice: { kind: 'copied', document: { ...COPY, replayed: false } } })
     expect(context.mode.hasUnsavedWork()).toBe(false)
+  })
+
+  it.each([
+    ['公式还没收齐：带上', false, true],
+    ['公式收齐了：不带', true, false],
+  ])('副本的"公式待更新"（M3-P3 设计 §3.8，审查 B6）：按失去编辑权那一刻公式收齐没有（不等）——%s', async (_case, settled, pending) => {
+    const context = setup()
+    await editing(context)
+    const writer = context.factory.last()
+    writer.edit('本页的')
+    writer.formulasSettled = settled
+    loseOnNextHeartbeat(context, DENIED)
+    await context.time.advance(HEARTBEAT_MS)
+    await settle()
+    expect(writer.editor.settleFormulas).toHaveBeenLastCalledWith(0)
+    await context.mode.saveCopy()
+    expect(context.api.conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, expect.objectContaining({ formulasPending: pending }), expect.anything())
   })
 
   it('副本的标题里的时间是失去编辑权的那一刻，不是点"另存为副本"的那一刻（审查 A5）', async () => {
