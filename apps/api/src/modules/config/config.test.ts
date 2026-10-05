@@ -53,8 +53,8 @@ describe('loadConfig', () => {
       jobs: { trashPurge: { enabled: true, intervalMs: 3_600_000, batchSize: 50 } },
       // 页面的版本：默认不按构建拦（只按数据格式，M3-P3 设计 §3.5）
       clients: { minimumBuild: undefined },
-      // 快照的检查：2 个工作线程，排队 8 个、等 10 秒，一份 10 秒，每个线程的堆 512 MiB（DEF-018 的测量）
-      snapshotInspection: { threads: 2, queue: { maxWaiting: 8, maxWaitMs: 10_000 }, timeoutMs: 10_000, heapMb: 512 },
+      // 快照的检查：2 个子进程，排队 8 个、等 10 秒，一份 10 秒，每个子进程的堆 512 MiB（DEF-018 的测量）
+      snapshotInspection: { processes: 2, queue: { maxWaiting: 8, maxWaitMs: 10_000 }, timeoutMs: 10_000, heapMb: 512 },
     })
   })
 
@@ -96,7 +96,7 @@ describe('loadConfig', () => {
       NERVE_TRASH_PURGE_ENABLED: 'false',
       NERVE_TRASH_PURGE_INTERVAL_MS: '900000',
       NERVE_TRASH_PURGE_BATCH: '10',
-      NERVE_SNAPSHOT_INSPECTION_THREADS: '4',
+      NERVE_SNAPSHOT_INSPECTION_PROCESSES: '4',
       NERVE_SNAPSHOT_INSPECTION_QUEUE_MAX: '0',
       NERVE_SNAPSHOT_INSPECTION_QUEUE_TIMEOUT_MS: '1500',
       NERVE_SNAPSHOT_INSPECTION_TIMEOUT_MS: '20000',
@@ -131,7 +131,7 @@ describe('loadConfig', () => {
     expect(config.oneTimeLinks).toEqual({ recordMaxFailures: 7 })
     expect(config.web.root).toBe('/srv/nerve-office/web')
     expect(config.jobs).toEqual({ trashPurge: { enabled: false, intervalMs: 900_000, batchSize: 10 } })
-    expect(config.snapshotInspection).toEqual({ threads: 4, queue: { maxWaiting: 0, maxWaitMs: 1_500 }, timeoutMs: 20_000, heapMb: 1_024 })
+    expect(config.snapshotInspection).toEqual({ processes: 4, queue: { maxWaiting: 0, maxWaitMs: 1_500 }, timeoutMs: 20_000, heapMb: 1_024 })
     expect(config.clients).toEqual({ minimumBuild: '0.2.10' })
   })
 
@@ -143,20 +143,20 @@ describe('loadConfig', () => {
     expect(loadConfig({ ...REQUIRED, NERVE_MIN_CLIENT_BUILD: '' }).clients.minimumBuild).toBeUndefined()
   })
 
-  it('快照检查的工作线程按整数范围校验；每个线程的堆至少 256 MiB（更低时有的快照在 JSON.parse 里撞上上限，整个进程中止，DEF-018）', () => {
+  it('快照检查的子进程按整数范围校验；每个子进程的堆至少 128 MiB（5 MiB 的真实形状要 96 MiB，更低时大表格被误拒为过于复杂，DEF-018）', () => {
     const variablesOf = (extra: Record<string, string>) => issuesOf(() => loadConfig({ ...REQUIRED, ...extra })).map(issue => issue.variable)
-    expect(variablesOf({ NERVE_SNAPSHOT_INSPECTION_THREADS: '0' })).toEqual(['NERVE_SNAPSHOT_INSPECTION_THREADS'])
-    expect(variablesOf({ NERVE_SNAPSHOT_INSPECTION_THREADS: '65' })).toEqual(['NERVE_SNAPSHOT_INSPECTION_THREADS'])
+    expect(variablesOf({ NERVE_SNAPSHOT_INSPECTION_PROCESSES: '0' })).toEqual(['NERVE_SNAPSHOT_INSPECTION_PROCESSES'])
+    expect(variablesOf({ NERVE_SNAPSHOT_INSPECTION_PROCESSES: '65' })).toEqual(['NERVE_SNAPSHOT_INSPECTION_PROCESSES'])
     expect(variablesOf({ NERVE_SNAPSHOT_INSPECTION_QUEUE_MAX: '1001' })).toEqual(['NERVE_SNAPSHOT_INSPECTION_QUEUE_MAX'])
     expect(variablesOf({ NERVE_SNAPSHOT_INSPECTION_QUEUE_TIMEOUT_MS: '99' })).toEqual(['NERVE_SNAPSHOT_INSPECTION_QUEUE_TIMEOUT_MS'])
     expect(variablesOf({ NERVE_SNAPSHOT_INSPECTION_TIMEOUT_MS: '999' })).toEqual(['NERVE_SNAPSHOT_INSPECTION_TIMEOUT_MS'])
-    expect(variablesOf({ NERVE_SNAPSHOT_INSPECTION_HEAP_MB: '255' })).toEqual(['NERVE_SNAPSHOT_INSPECTION_HEAP_MB'])
+    expect(variablesOf({ NERVE_SNAPSHOT_INSPECTION_HEAP_MB: '127' })).toEqual(['NERVE_SNAPSHOT_INSPECTION_HEAP_MB'])
     expect(variablesOf({ NERVE_SNAPSHOT_INSPECTION_HEAP_MB: '16385' })).toEqual(['NERVE_SNAPSHOT_INSPECTION_HEAP_MB'])
-    expect(loadConfig({ ...REQUIRED, NERVE_SNAPSHOT_INSPECTION_HEAP_MB: '256', NERVE_SNAPSHOT_INSPECTION_THREADS: '1' }).snapshotInspection).toEqual({
-      threads: 1,
+    expect(loadConfig({ ...REQUIRED, NERVE_SNAPSHOT_INSPECTION_HEAP_MB: '128', NERVE_SNAPSHOT_INSPECTION_PROCESSES: '1' }).snapshotInspection).toEqual({
+      processes: 1,
       queue: { maxWaiting: 8, maxWaitMs: 10_000 },
       timeoutMs: 10_000,
-      heapMb: 256,
+      heapMb: 128,
     })
   })
 

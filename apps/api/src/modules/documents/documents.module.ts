@@ -79,7 +79,7 @@ import { WriteAccessRevocation } from './write-access.ts'
     { provide: WriteAccessRevocation, useClass: LeaseWriteAccessRevocation },
     // 拦截旧客户端（M3-P3 设计 §3.5）：按运维开关核对页面上报的构建与数据格式；保存、另存为副本与编辑租约的服务用
     ClientFormatGate,
-    // 快照的检查（M3-P3 设计 §3.3）：工作线程池，线程按需创建、退出时结束；只在本模块里用（保存与另存为副本）
+    // 快照的检查（M3-P3 设计 §3.3）：子进程池，子进程按需创建、空闲到期与退出时结束；只在本模块里用（保存与另存为副本）
     {
       provide: SnapshotInspector,
       inject: [APP_CONFIG, AppLogger],

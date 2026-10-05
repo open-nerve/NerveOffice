@@ -1,12 +1,13 @@
-// 快照检查的执行（M3-P3 设计 §3.3、§3.12，DEF-018）：保存与另存为副本把解压之后的字节交给这里，在工作线程池里解码、解析、
-// 按规则检查、规范化、算哈希（snapshot-inspection.ts），主线程只拿回小结果。
-// - 线程数、排队、时限与每个线程的堆上限来自配置（NERVE_SNAPSHOT_INSPECTION_*）；
-// - 排队满了、等待超时、线程崩溃或超时、正在退出：503 SERVICE_UNAVAILABLE 带 Retry-After（与数据库繁忙、等待密码哈希同一个做法，
-//   页面的保存照"结果未知"重试）；线程的堆超过上限：这份快照按"过于复杂"拒绝（规则 too-complex）；
-// - 应用退出时结束全部线程（onApplicationShutdown：在途的请求已经排空，ADR-004）。
-// 工作线程的入口按这个文件自己的扩展名找：源码运行（单元测试、集成测试按源码条件引用 api）时是 snapshot-inspection.worker.ts，
+// 快照检查的执行（M3-P3 设计 §3.3、§3.12，DEF-018）：保存与另存为副本把解压之后的字节交给这里，在子进程池里解码、解析、
+// 按规则检查、规范化、算哈希（snapshot-inspection.ts），主进程只拿回小结果。用子进程而不用工作线程（需求方 2026-10-05 决定）：
+// 子进程的堆撞上上限时 V8 中止的只是那个子进程，服务照常；工作线程在 V8 的内置函数里撞上上限时整个进程中止（S3 实测）。
+// - 子进程数、排队、时限与每个子进程的堆上限来自配置（NERVE_SNAPSHOT_INSPECTION_*）；空闲超过 IDLE_PROCESS_TIMEOUT_MS 的子进程结束掉；
+// - 排队满了、等待超时、子进程崩溃或超时、正在退出：503 SERVICE_UNAVAILABLE 带 Retry-After（与数据库繁忙、等待密码哈希同一个做法，
+//   页面的保存照"结果未知"重试）；子进程的堆超过上限：这份快照按"过于复杂"拒绝（规则 too-complex）；
+// - 应用退出时结束全部子进程（onApplicationShutdown：在途的请求已经排空，ADR-004）；应用被强制结束时子进程随 IPC 断开退出。
+// 子进程的入口按这个文件自己的扩展名找：源码运行（单元测试、集成测试按源码条件引用 api）时是 snapshot-inspection.child.ts，
 // 由 Node 直接剥离类型执行，contracts 也按源码条件解析；构建产物与镜像里是同一个目录下的 .js。找不到入口时建不起来（启动即失败），
-// 不退回主线程
+// 不退回主进程
 import type { DocumentProfile, SnapshotRule } from '@nerve-office/contracts'
 import type { OnApplicationShutdown } from '@nestjs/common'
 import type { AppConfig } from '../config/index.ts'
@@ -16,29 +17,36 @@ import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { SNAPSHOT_MAX_DEPTH } from '@nerve-office/contracts'
 import { AppError } from '../../shared/errors/app-error.ts'
-import { WorkerPool, WorkerPoolError } from '../../shared/worker-pool.ts'
+import { ProcessPool, ProcessPoolError } from '../../shared/process-pool.ts'
 import { SNAPSHOT_MAX_ENTRIES } from './snapshot-checks.ts'
 
-/** 工作线程的设置（AppConfig 的 snapshotInspection） */
+/** 子进程池的设置（AppConfig 的 snapshotInspection） */
 export type SnapshotInspectionSettings = AppConfig['snapshotInspection']
+
+/**
+ * 子进程空闲多久之后结束（毫秒）。保存是几秒一次的后台请求：有人在编辑时子进程一直热着（后进先出，忙时总是同一个先接活）；
+ * 停下来一分钟就把内存全部还给系统。DEF-018 的测量（容器里）：空闲的子进程独占约 26 MiB，检查过一份 5 MiB 的真实快照之后约 119 MiB，
+ * 而且不会自己回落（空闲的进程里 V8 不还堆，手动回收也只回落一点），只有结束进程才还干净；代价是之后的第一次检查多一次冷启动（约 50–65 ms）
+ */
+export const IDLE_PROCESS_TIMEOUT_MS = 60_000
 
 /** 检查的结果：通过，或者违反的规则（与文档无关的，加上 too-complex） */
 export type InspectionOutcome = PassedSnapshot | { readonly ok: false, readonly rule: Exclude<SnapshotRule, 'unit-id' | 'resource-missing'> }
 
-/** 工作线程的入口与它的 Node 选项：与这个文件同一个目录、同一个扩展名 */
-export interface InspectionWorkerEntry {
+/** 子进程的入口与它的 Node 选项：与这个文件同一个目录、同一个扩展名 */
+export interface InspectionChildEntry {
   readonly script: URL
   readonly execArgv: readonly string[]
 }
 
 /**
- * 按这个模块自己的地址找工作线程的入口。源码运行时（.ts）Node 直接执行入口的源码，要按源码条件（@nerve-office/source）解析
+ * 按这个模块自己的地址找子进程的入口。源码运行时（.ts）Node 直接执行入口的源码，要按源码条件（@nerve-office/source）解析
  * contracts，与测试进程对工作区的包的解析一致；构建产物里（.js）按默认条件解析到 contracts 的构建产物
  */
-export function inspectionWorkerEntry(moduleUrl: string = import.meta.url): InspectionWorkerEntry {
+export function inspectionChildEntry(moduleUrl: string = import.meta.url): InspectionChildEntry {
   const fromSource = new URL(moduleUrl).pathname.endsWith('.ts')
   return {
-    script: new URL(`./snapshot-inspection.worker.${fromSource ? 'ts' : 'js'}`, moduleUrl),
+    script: new URL(`./snapshot-inspection.child.${fromSource ? 'ts' : 'js'}`, moduleUrl),
     execArgv: fromSource ? ['--conditions=@nerve-office/source'] : [],
   }
 }
@@ -74,43 +82,44 @@ export function snapshotInvalid(rule: SnapshotRule): AppError {
   return new AppError('SNAPSHOT_INVALID', SNAPSHOT_INVALID_MESSAGES[rule], { details: { rule } })
 }
 
-/** 快照的检查：在工作线程池里执行（见文件开头）。由 DocumentsModule 按配置建（工厂），退出时关闭 */
+/** 快照的检查：在子进程池里执行（见文件开头）。由 DocumentsModule 按配置建（工厂），退出时关闭 */
 export class SnapshotInspector implements OnApplicationShutdown {
-  readonly #pool: WorkerPool<InspectionTask, SnapshotInspection>
+  readonly #pool: ProcessPool<InspectionTask, SnapshotInspection>
   readonly #logger: AppLogger
   /** 503 时建议多久之后再试：排队等待的时限（向上取整到秒，至少 1 秒） */
   readonly #retryAfterSeconds: number
 
-  constructor(settings: SnapshotInspectionSettings, logger: AppLogger, entry: InspectionWorkerEntry = inspectionWorkerEntry()) {
+  constructor(settings: SnapshotInspectionSettings, logger: AppLogger, entry: InspectionChildEntry = inspectionChildEntry()) {
     if (!existsSync(fileURLToPath(entry.script)))
-      throw new Error(`快照检查的工作线程入口不存在：${fileURLToPath(entry.script)}`)
-    this.#pool = new WorkerPool({
+      throw new Error(`快照检查的子进程入口不存在：${fileURLToPath(entry.script)}`)
+    this.#pool = new ProcessPool({
       script: entry.script,
       execArgv: entry.execArgv,
-      threads: settings.threads,
+      processes: settings.processes,
       queue: settings.queue,
       taskTimeoutMs: settings.timeoutMs,
-      resourceLimits: { maxOldGenerationSizeMb: settings.heapMb },
+      heapMb: settings.heapMb,
+      idleTimeoutMs: IDLE_PROCESS_TIMEOUT_MS,
     })
     this.#logger = logger.with({ module: 'documents', component: 'snapshot-inspector' })
     this.#retryAfterSeconds = Math.max(1, Math.ceil(settings.queue.maxWaitMs / 1000))
   }
 
-  /** 现有的工作线程数（按需创建，出错之后丢弃） */
-  get liveThreads(): number {
-    return this.#pool.liveThreads
+  /** 现有的子进程数（按需创建，出错或空闲到期之后丢弃） */
+  get liveProcesses(): number {
+    return this.#pool.liveProcesses
   }
 
   /**
    * 检查解压之后的快照（profile 是文档的档案）：通过时给出 unitId、内容哈希、资源名与字节数，不通过时给出规则。
-   * 没有得到结果（繁忙、线程崩溃或超时、正在退出）时抛出 503 的 AppError
+   * 没有得到结果（繁忙、子进程崩溃或超时、正在退出）时抛出 503 的 AppError
    */
   async inspect(raw: Uint8Array, profile: DocumentProfile): Promise<InspectionOutcome> {
     try {
       return await this.#pool.run({ bytes: raw, profile })
     }
     catch (error) {
-      if (!(error instanceof WorkerPoolError))
+      if (!(error instanceof ProcessPoolError))
         throw error
       return this.#failed(error, raw.byteLength)
     }
@@ -120,16 +129,16 @@ export class SnapshotInspector implements OnApplicationShutdown {
     await this.#pool.close()
   }
 
-  #failed(error: WorkerPoolError, rawBytes: number): InspectionOutcome {
+  #failed(error: ProcessPoolError, rawBytes: number): InspectionOutcome {
     switch (error.reason) {
       case 'out-of-memory':
-        this.#logger.warn('快照过于复杂：检查时工作线程的内存超过上限，按 too-complex 拒绝', { rawBytes })
+        this.#logger.warn('快照过于复杂：检查时子进程的堆超过上限，按 too-complex 拒绝', { rawBytes })
         return { ok: false, rule: 'too-complex' }
       case 'crashed':
-        this.#logger.error('快照检查的工作线程出错，这次回 503', { err: error, rawBytes })
+        this.#logger.error('快照检查的子进程出错，这次回 503', { err: error, rawBytes })
         break
       case 'timeout':
-        this.#logger.warn('快照检查超过时限，结束这个工作线程，这次回 503', { rawBytes })
+        this.#logger.warn('快照检查超过时限，结束这个子进程，这次回 503', { rawBytes })
         break
       case 'queue-full':
       case 'wait-timeout':

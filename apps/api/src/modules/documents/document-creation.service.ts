@@ -47,7 +47,7 @@ interface TemplateContent {
 
 /**
  * 一份新文档的模板内容（M3-P3 设计 §3.1：新建也写哈希与非空的资源名，下一次保存按它们判断"内容相同"与"不缩水"）。
- * 哈希按每份文档单独算：模板的顶层 id 换成了这份文档的 unitId，unitId 不同哈希就不同。在主线程里调快照的检查（不经工作线程）：
+ * 哈希按每份文档单独算：模板的顶层 id 换成了这份文档的 unitId，unitId 不同哈希就不同。在主线程里调快照的检查（不经子进程）：
  * 模板约 1 KiB，检查与规范化不到一毫秒；模板过不了检查是平台自己的数据错了（模板的更新工具与 E2E 会先发现），按意外错误处理
  */
 function templateContent(type: DocumentType, unitId: string): TemplateContent {

@@ -1,4 +1,4 @@
-// 上传的快照的检查结果怎样交给保存与另存为副本（M3-P3 设计 §3.1 第 4 步、§3.12）：与文档无关的规则在工作线程里查（SnapshotInspector），
+// 上传的快照的检查结果怎样交给保存与另存为副本（M3-P3 设计 §3.1 第 4 步、§3.12）：与文档无关的规则在子进程里查（SnapshotInspector），
 // 不合格时记一条 warn——规则与文档 id，不记快照的内容——再回答 SNAPSHOT_INVALID（details.rule）；与文档有关的两条（unitId、不缩水）
 // 在事务里查，被拒时同样记 warn。快照的档案用服务端的（DOCUMENT_PROFILE_OF.sheet）：v0.1 只有表格，事务里另核对文档的档案
 // （client-format-gate.ts 的 requireWritableDocument；M6 有了文字文档之后按文档的类型选档案）

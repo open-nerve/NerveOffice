@@ -115,7 +115,7 @@ export class DocumentContentService {
    * 1. 重放预检（事务之外，不解析快照）：按 requestId 查修订记录与回执，同一个人、同一份文档、负载摘要一致、仍能访问，就返回原来的结果。
    *    其余情况一律往下走，不提前回答：看不到的、不存在的、另一份文档的 requestId 都留给事务里的再查（"看不到与不存在"的语句序列照旧）；
    * 2. 客户端的数据格式（与文档无关）：过旧时 CLIENT_OUTDATED（ClientFormatGate）；
-   * 3. 快照的检查（与文档无关，工作线程）：不合格时 SNAPSHOT_INVALID（details.rule），通过时得到 unitId、内容哈希与资源名；
+   * 3. 快照的检查（与文档无关，子进程）：不合格时 SNAPSHOT_INVALID（details.rule），通过时得到 unitId、内容哈希与资源名；
    * 4. 一个事务：能否访问 → 能编辑时锁文档行、锁下再判断 → 再查一次重放（并发的同一次请求）→ 这次登录仍然有效 → 文档的格式
    *    （比服务端新：DOCUMENT_TOO_NEW）→ 能编辑 → 编辑租约 → 基准修订号 → unitId → 不缩水 → 内容哈希与当前相同：写回执、设"公式待更新"，
    *    修订号不变（unchanged）→ 否则写内容（连同哈希与非空的资源名）、修订号加一、修订记录（哈希与客户端构建）、文档的信封、审计。
@@ -196,7 +196,7 @@ export class DocumentContentService {
 
   /**
    * 不缩水（00 号计划书 §8.2，M3-P3 设计 §3.3）：上一版非空的资源里、在档案白名单之内的，这一版都要在（变空不算缩水）。
-   * 上一版的非空资源名存在 document_contents 里；存量为空时解析上一版得到（legacy-resources.ts，写明了不经工作线程的理由），
+   * 上一版的非空资源名存在 document_contents 里；存量为空时解析上一版得到（legacy-resources.ts，写明了不经子进程的理由），
    * 解析不了的存量没有可核对的上一版，记一条警告、照常往下走
    */
   private requireNoShrink(id: string, current: ContentEnvelope, snapshot: PassedSnapshot): void {
