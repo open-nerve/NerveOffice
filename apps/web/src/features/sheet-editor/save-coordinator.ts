@@ -1,7 +1,7 @@
 // 保存的状态机（P4 设计 §3.7.2）：输入是用户的保存、编辑器的修改与接口的结果，不依赖 Univer 与界面，用假的编辑器与假的接口做单元测试。
 // M3-P3（设计 §3.7、§3.8、§3.10）：请求带"公式待更新"（原样重发的判断连它一起比）；服务端回答内容相同（unchanged）照"已保存"处理；
 // 本页与服务端不兼容（CLIENT_OUTDATED、DOCUMENT_TOO_NEW）是终态——停住保存，页面说明需要刷新（或只能阅读）；转入时还有一次结果未知的
-// 保存就先原样重发它一次，核对完再定"修改存上了没有"的说法（审查 B5，重放先于拦截）；
+// 保存就先原样重发它一次，核对完再定"修改存上了没有"的说法（审查 B5，重放先于拦截；续租得知时在途的那一次先等它的结果，复验 C1）；
 // 视图带最近一次捕获的大小（与服务端解压后的字节同一个口径），页面据此在达到容量的 80% 时提示。
 import type { RevisionConflictDetails, RevisionSource, SaveContentResponse } from '@nerve-office/contracts'
 import type { Incompatibility } from './client-format.ts'
@@ -85,8 +85,8 @@ export interface SaveView {
    */
   readonly unsavedEdits: boolean
   /**
-   * 转入与服务端不兼容的终态时还有一次结果未知的保存：正在原样重发它、核对它其实提交了没有（M3-P3 审查 B5）。核对完之前说不准本页的
-   * 修改存上了没有，页面先说正在核对
+   * 转入与服务端不兼容的终态时还有一次结果未知的保存：正在原样重发它、核对它其实提交了没有（M3-P3 审查 B5）；续租得知时正有一次保存在途的，
+   * 先等它的结果，以结果未知结束的同样原样重发（复验 C1）。核对完之前说不准本页的修改存上了没有，页面先说正在核对
    */
   readonly checking: boolean
 }
@@ -146,7 +146,7 @@ export interface SaveCoordinator {
   /**
    * 本页与服务端不兼容（续租得知，M3-P3）：转入终态（outdated、too-new），之后不再保存。保存自己得知时（请求得到 CLIENT_OUTDATED、
    * DOCUMENT_TOO_NEW）同样转入。已经在终态（冲突、不兼容）时不变。转入时还有一次结果未知的保存：先原样重发它一次再定说法（审查 B5，
-   * 见 SaveView.checking）
+   * 见 SaveView.checking）；正有一次保存在途时先等它，以结果未知结束的同样原样重发（复验 C1）
    */
   readonly block: (kind: Incompatibility) => void
   /** 停止保存（例如别的标签页换了人）：之后的保存都不做，直到 resume */
@@ -217,7 +217,7 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
   let retryable: SaveRequest | undefined
   /** 进行中的保存（save 里的那一次）：settled 等它 */
   let running: Promise<void> | undefined
-  /** 转入不兼容的终态之后，正在原样重发结果未知的那次保存（审查 B5，SaveView.checking）：settled 也等它 */
+  /** 转入不兼容的终态之后，正在核对结果没有着落的那次保存（等在途的、原样重发结果未知的，审查 B5、复验 C1，SaveView.checking）：settled 也等它 */
   let verifying: Promise<void> | undefined
   let current = computeView()
 
@@ -324,10 +324,10 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
       conflict = details
       return
     }
-    // 本页与服务端不兼容（M3-P3）：终态，不再保存；说明由状态给出（需要刷新、只能阅读），不另记失败
+    // 本页与服务端不兼容（M3-P3）：终态，不再保存；说明由状态给出（需要刷新、只能阅读），不另记失败。在途的就是这一次，结果确定
     const incompatible = incompatibilityOf(error)
     if (incompatible !== undefined) {
-      enterBlocked(incompatible)
+      enterBlocked(incompatible, false)
       return
     }
     problem = { kind: 'request', error }
@@ -377,16 +377,18 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
   }
 
   /**
-   * 转入与服务端不兼容的终态（M3-P3），之后不再保存；已经在终态（冲突、不兼容）时不变。还有一次结果未知的保存时先原样重发它一次再定
-   * 说法（审查 B5）：重放先于拦截旧客户端与文档的数据格式（设计 §3.1），它其实已经提交时拿到原来的结果、按它确认（本页的修改可能就都
-   * 已保存了），没有提交时得到同样的拒绝；核对期间页面先说正在核对（SaveView.checking）。不重发的话，提交了的那次也按"没有保存"说，
-   * 让人去复制其实已经存上的内容
+   * 转入与服务端不兼容的终态（M3-P3），之后不再保存；已经在终态（冲突、不兼容）时不变。还有一次保存的结果没有着落时先核对它再定说法
+   * （审查 B5）：结果未知的那次原样重发一次——重放先于拦截旧客户端与文档的数据格式（设计 §3.1），它其实已经提交时拿到原来的结果、
+   * 按它确认（本页的修改可能就都已保存了），没有提交时得到同样的拒绝。saveInFlight：续租得知时正有一次保存在途，它的结果还没有着落，
+   * 也要核对（复验 C1）——先等它（replay 先等进行中的保存）：成功了就是答案，不重发；以结果未知结束的照样原样重发一次。
+   * 保存自己得知时（fail）在途的就是得到拒绝的这一次，结果是确定的，不算。核对期间页面先说正在核对（SaveView.checking）。
+   * 不核对的话，提交了的那次也按"没有保存"说，让人去复制其实已经存上的内容
    */
-  function enterBlocked(kind: Incompatibility): void {
+  function enterBlocked(kind: Incompatibility, saveInFlight: boolean): void {
     if (ended())
       return
     blocked = kind
-    if (retryable !== undefined && verifying === undefined) {
+    if ((retryable !== undefined || saveInFlight) && verifying === undefined) {
       verifying = replay().then(
         () => undefined,
         (error: unknown) => options.reportError(error),
@@ -501,7 +503,7 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
     hasUnknownOutcome: () => retryable !== undefined,
     replayUnknownOutcome: replay,
     hasUnsavedWork: () => conflict !== undefined || inFlight || editor.isCellEditing() || editor.changeSeq() > savedSeq || formulasPending,
-    block: enterBlocked,
+    block: kind => enterBlocked(kind, running !== undefined),
     stop: () => {
       stopped = true
       update()
