@@ -4,7 +4,7 @@ import type { EditLeaseApi, EditLeaseOptions, LeaseLoss } from './edit-lease.ts'
 import { EDIT_IDLE_SECONDS_MAX, EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError, ResponseFormatError } from '../../shared/api/index.ts'
-import { acquireEditLease, leaseLossOf, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS, trackActivity, UNKNOWN_OUTCOME_RETRY_DELAY_MS } from './edit-lease.ts'
+import { acquireEditLease, browserLeaseClock, leaseLossOf, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS, trackActivity, UNKNOWN_OUTCOME_RETRY_DELAY_MS } from './edit-lease.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
@@ -743,6 +743,103 @@ describe('会话：暂停与恢复', () => {
     reply.reject(lostError('revoked'))
     await settle()
     expect(context.onLost).toHaveBeenCalledExactlyOnceWith({ kind: 'lease', reason: 'revoked' })
+  })
+
+  /** 页面的样子：每次得知会话问题都向服务端确认（一个来回，50 毫秒），确认是本人之后恢复续租 */
+  function resumeAfterConfirm(context: ReturnType<typeof setup>, lease: Awaited<ReturnType<typeof held>>): void {
+    context.onSessionProblem.mockImplementation(() => {
+      context.time.clock.schedule(() => void lease.resume(), 50)
+    })
+  }
+
+  it('续租一直得到令牌失效（例如网关剥掉了 CSRF 的请求头）、页面每次确认都是本人（复验 C1）：只有连着的第一次之后立即续租，之后按心跳的节奏——不按网络往返的速度连着发', async () => {
+    const renewedAt: number[] = []
+    const context = setup({ renew: vi.fn(async () => {
+      renewedAt.push(context.time.now())
+      throw new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
+    }) })
+    const lease = await held(context)
+    resumeAfterConfirm(context, lease)
+    const start = context.time.now()
+    await context.time.advance(40_000)
+    // 10 秒的心跳被拒、确认之后立即再续一次（10.05 秒）仍被拒；之后每次确认之后按心跳的节奏：20.1、30.15 秒
+    expect(renewedAt.map(at => at - start)).toEqual([10_000, 10_050, 20_100, 30_150])
+    expect(context.onSessionProblem).toHaveBeenCalledTimes(4)
+    expect(context.onLost).not.toHaveBeenCalled()
+  })
+
+  it('连着的会话类失败在续租成功之后清零：之后再遇到，确认之后照样立即续租', async () => {
+    const csrf = new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
+    const renewedAt: number[] = []
+    const outcomes: (RenewedEditLease | ApiError)[] = [csrf, csrf, RENEWED, csrf, RENEWED]
+    const context = setup({ renew: vi.fn(async () => {
+      renewedAt.push(context.time.now())
+      const outcome = outcomes[renewedAt.length - 1] ?? RENEWED
+      if (outcome instanceof ApiError)
+        throw outcome
+      return outcome
+    }) })
+    const lease = await held(context)
+    resumeAfterConfirm(context, lease)
+    const start = context.time.now()
+    await context.time.advance(31_000)
+    // 第 2 次（10.05 秒）是连着的第二次，之后按心跳（20.1 秒成功，清零）；30.1 秒被拒是新的第一次，确认之后立即续租（30.15 秒）
+    expect(renewedAt.map(at => at - start)).toEqual([10_000, 10_050, 20_100, 30_100, 30_150])
+  })
+
+  it('续上的申请成功了同样清零：连着两次被拒之后编辑权到期、续上成功，之后再遇到会话类失败，确认之后照样立即续租', async () => {
+    const csrf = new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
+    const renewedAt: number[] = []
+    const outcomes: (RenewedEditLease | ApiError)[] = [csrf, csrf, lostError('expired'), csrf, RENEWED]
+    const context = setup({ renew: vi.fn(async () => {
+      renewedAt.push(context.time.now())
+      const outcome = outcomes[renewedAt.length - 1] ?? RENEWED
+      if (outcome instanceof ApiError)
+        throw outcome
+      return outcome
+    }) })
+    const lease = await held(context)
+    resumeAfterConfirm(context, lease)
+    const start = context.time.now()
+    await context.time.advance(31_000)
+    // 20.1 秒得知到期、续上成功（换成下一代、清零）；30.1 秒被拒是新的第一次，确认之后立即续租（30.15 秒）
+    expect(lease.credentials().token).toBe(NEXT_TOKEN)
+    expect(renewedAt.map(at => at - start)).toEqual([10_000, 10_050, 20_100, 30_100, 30_150])
+  })
+
+  it('续上的申请得到令牌失效也算连着的会话类失败（复验 C1）：失效 → 续上被拒 → 恢复 → 续租又失效 → 续上又被拒，第二轮起按心跳的节奏', async () => {
+    const csrf = new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
+    const renewedAt: number[] = []
+    const context = setup({
+      renew: vi.fn(async () => {
+        renewedAt.push(context.time.now())
+        throw lostError('session')
+      }),
+      acquire: vi.fn<EditLeaseApi['acquire']>().mockResolvedValueOnce(ACQUIRED).mockRejectedValue(csrf),
+    })
+    const lease = await held(context)
+    resumeAfterConfirm(context, lease)
+    const start = context.time.now()
+    await context.time.advance(25_000)
+    expect(renewedAt.map(at => at - start)).toEqual([10_000, 10_050, 20_100])
+    // 申请：取得那一次之外，每次续上一次
+    expect(context.api.acquire).toHaveBeenCalledTimes(4)
+    expect(context.onLost).not.toHaveBeenCalled()
+  })
+})
+
+describe('浏览器的计时器（browserLeaseClock）', () => {
+  it('延迟超过浏览器计时器的上限（约 24.8 天）时按上限：否则溢出成立即触发，按它排的调度在原地空转（复验 C2）', () => {
+    const timeout = vi.spyOn(globalThis, 'setTimeout')
+    try {
+      browserLeaseClock.schedule(() => {}, 30 * 24 * 3600 * 1000)()
+      expect(timeout).toHaveBeenLastCalledWith(expect.any(Function), 2 ** 31 - 1)
+      browserLeaseClock.schedule(() => {}, 1500)()
+      expect(timeout).toHaveBeenLastCalledWith(expect.any(Function), 1500)
+    }
+    finally {
+      timeout.mockRestore()
+    }
   })
 })
 

@@ -650,6 +650,52 @@ describe('编辑器页的会话（P4 设计 §3.7.3，审查 B1）', () => {
     expect(api.session).toHaveBeenCalledTimes(checks + 3)
   })
 
+  it('确认有了结果之后退避清零（复验 C3）：之后再遇到确认失败，又从 2 秒起定时再确认', async () => {
+    const { editorPage, api, fromOtherTab, time } = setup()
+    await editorPage.load()
+    vi.mocked(api.session).mockRejectedValue(new NetworkError('断网'))
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().sessionProblem).toBeInstanceOf(NetworkError))
+    // 第一轮：2、4 秒之后各再确认一次（都失败），8 秒之后的那一次是本人
+    await time.advance(6000)
+    vi.mocked(api.session).mockResolvedValue(ALICE)
+    await time.advance(8000)
+    expect(editorPage.view().sessionProblem).toBeUndefined()
+    // 第二轮：又一次确认失败，第一次定时再确认仍在 2 秒之后（不接着第一轮的 16 秒）
+    vi.mocked(api.session).mockRejectedValue(new NetworkError('断网'))
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().sessionProblem).toBeInstanceOf(NetworkError))
+    const checks = vi.mocked(api.session).mock.calls.length
+    await time.advance(1999)
+    expect(api.session).toHaveBeenCalledTimes(checks)
+    await time.advance(1)
+    expect(api.session).toHaveBeenCalledTimes(checks + 1)
+  })
+
+  it('续租一直得到令牌失效（例如网关剥掉了 CSRF 的请求头）、确认会话一直是本人（复验 C1）：只有第一次确认之后立即续租，之后按心跳的节奏——续租与确认都不按网络往返的速度连着发', async () => {
+    const csrf = new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
+    const { editorPage, api, editLease, time } = setup()
+    await editorPage.load()
+    expect(modeOf(editorPage)?.kind).toBe('editing')
+    // 每个请求一个来回（50 毫秒）
+    const renewedAt: number[] = []
+    const confirmedAt: number[] = []
+    editLease.renew.mockImplementation(async () => {
+      renewedAt.push(time.now())
+      return new Promise<RenewedEditLease>((_resolve, reject) => time.clock.schedule(() => reject(csrf), 50))
+    })
+    vi.mocked(api.session).mockImplementation(async () => {
+      confirmedAt.push(time.now())
+      return new Promise<SessionResponse>(resolve => time.clock.schedule(() => resolve(ALICE), 50))
+    })
+    const start = time.now()
+    await time.advance(30_000)
+    // 10 秒的心跳被拒 → 确认（10.05）→ 立即再续（10.1）仍被拒 → 确认（10.15）→ 按心跳：20.2 秒被拒 → 确认（20.25）→ 30.3 秒
+    expect(renewedAt.map(at => at - start)).toEqual([10_000, 10_100, 20_200])
+    expect(confirmedAt.map(at => at - start)).toEqual([10_050, 10_150, 20_250])
+    expect(editorPage.view()).toMatchObject({ session: 'active', mode: { kind: 'editing' } })
+  })
+
   it('保存得到 CSRF_TOKEN_INVALID：向服务端确认会话，换了人就停止保存', async () => {
     const { editorPage, api } = setup({ api: { save: async () => Promise.reject(new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')) } })
     await editorPage.load()

@@ -13,9 +13,10 @@
 //   （Safari 约 6 秒之后停计时器）；恢复联网时不等上传的静默；
 // - 会话内去重（设计 §3.7）：上传带上快照的摘要（注入的 digest，生产是 crypto.subtle 的 SHA-256），由保存的状态机比较；显式保存不去重；
 // - 失败（设计 §3.8）：按保存的状态机给的归类——会自动重试的退避（AUTOSAVE_RETRY_INITIAL_MS 起翻倍，至多 AUTOSAVE_RETRY_MAX_MS，
-//   服务端给了 Retry-After 时取两者较大的，切到后台也不提前重发）；要等新内容的，同一个捕获不再自动上传，有新的捕获才再试；要等会话的
-//   同样退避，会话回到本人时连着的第一次立即重试、之后照退避（页面每次都确认会话，不能每次都跳过）；终态停下。捕获或压缩出了意外：
-//   退避之后再试一次，仍错就等新的修改（保存的状态机显示保存失败）；
+//   服务端给了 Retry-After 时取两者较大的——Retry-After 至多按 AUTOSAVE_RETRY_AFTER_MAX_MS 算，恢复联网、会话回来与切到后台
+//   都不早于它）；要等新内容的，同一个捕获不再自动上传，有新的捕获才再试；要等会话的同样退避，会话回到本人时连着的第一次立即重试、
+//   之后照退避（页面每次都确认会话，不能每次都跳过）；终态停下。捕获或压缩出了意外：退避之后再试一次，仍错就等新的修改
+//   （保存的状态机显示保存失败）；
 // - 测试构建的控制（设计 §3.14，S4 实现）：节奏与暂停经 AutosaveTuning 注入（hold 时定时触发的上传不发，立即上传照常；setLimits 换上限），
 //   每次捕获与上传经 observe 交出（log）；立即上传的 control 与切到后台同样的规则。
 import type { CaptureLimits, CaptureReason } from './capture-policy.ts'
@@ -26,6 +27,7 @@ import {
   AUTOSAVE_CAPTURE_MAX_MS,
   AUTOSAVE_CAPTURE_QUIET_MS,
   AUTOSAVE_CAPTURE_SPACING_FACTOR,
+  AUTOSAVE_RETRY_AFTER_MAX_MS,
   AUTOSAVE_RETRY_INITIAL_MS,
   AUTOSAVE_RETRY_MAX_MS,
   AUTOSAVE_UPLOAD_MAX_MS,
@@ -632,11 +634,14 @@ export function createAutosave(options: AutosaveOptions): Autosave {
     lastFailure = failure.kind
     sessionFailures = failure.kind === 'session' ? sessionFailures + 1 : 0
     switch (failure.kind) {
-      case 'retry':
+      case 'retry': {
         failures += 1
-        retryNotBefore = failure.retryAfterMs === undefined ? undefined : now + failure.retryAfterMs
-        retryAt = now + Math.max(retryDelay(failures, limits), failure.retryAfterMs ?? 0)
+        // 服务端给的 Retry-After 至多按 AUTOSAVE_RETRY_AFTER_MAX_MS 算：异常的大值不让自动保存停上几天，计时器也不溢出（复验 C2）
+        const retryAfterMs = failure.retryAfterMs === undefined ? undefined : Math.min(failure.retryAfterMs, AUTOSAVE_RETRY_AFTER_MAX_MS)
+        retryNotBefore = retryAfterMs === undefined ? undefined : now + retryAfterMs
+        retryAt = now + Math.max(retryDelay(failures, limits), retryAfterMs ?? 0)
         return
+      }
       case 'session':
         // 页面在确认会话（会话不对时不发）；会话回到本人时只有连着的第一次不等退避（onPageChange），之后与一直显示可写时一样按退避再试
         failures += 1
@@ -759,15 +764,16 @@ export function createAutosave(options: AutosaveOptions): Autosave {
     wasOnline = online
     wasWritable = writable
     const now = clock.now()
-    // 恢复联网：立即上传，不等退避（服务端给的 Retry-After 照旧）；会话回到本人：连着的会话类失败的第一次不等退避（多半是令牌换过了），
-    // 之后照退避（审查 A3：确认照常成功而服务端一直拒绝时，不能每次都跳过）
+    // 恢复联网：立即上传，不等退避；会话回到本人：连着的会话类失败的第一次不等退避（多半是令牌换过了），之后照退避（审查 A3：确认照常成功
+    // 而服务端一直拒绝时，不能每次都跳过）。两处都不早于服务端给的 Retry-After（复验 C7）
+    const notBeforeRetryAfter = retryNotBefore !== undefined && retryNotBefore > now ? retryNotBefore : now
     if (cameOnline) {
       immediate = true
       if (retryAt !== undefined)
-        retryAt = retryNotBefore !== undefined && retryNotBefore > now ? retryNotBefore : now
+        retryAt = notBeforeRetryAfter
     }
     if (cameBack && lastFailure === 'session' && sessionFailures === 1 && retryAt !== undefined)
-      retryAt = now
+      retryAt = notBeforeRetryAfter
     if (hidden)
       onHidden()
     notify()

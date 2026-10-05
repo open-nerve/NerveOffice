@@ -19,8 +19,14 @@ export const AUTOSAVE_UPLOAD_MAX_MS = 15_000
 /** 自动重试的退避起点（毫秒）：之后每次失败翻倍（P4 设计 §3.8） */
 export const AUTOSAVE_RETRY_INITIAL_MS = 2000
 
-/** 自动重试的退避上限（毫秒）：503 带的 Retry-After 更长时按它（P4 设计 §3.8） */
+/** 自动重试的退避上限（毫秒）：503 带的 Retry-After 更长时按它，至多 AUTOSAVE_RETRY_AFTER_MAX_MS（P4 设计 §3.8） */
 export const AUTOSAVE_RETRY_MAX_MS = 60_000
+
+/**
+ * 服务端给的 Retry-After 至多按多久算（毫秒，P4 设计 §3.8，复验 C2）：本服务给的是几秒；更长的（反向代理的维护页、写错的值）
+ * 按它，到点照常再试——自动保存不因一个异常的值停上几小时、几天，浏览器的计时器也不会溢出（超过 2^31−1 毫秒立即触发，页面空转）
+ */
+export const AUTOSAVE_RETRY_AFTER_MAX_MS = 300_000
 
 /**
  * 大文档拉长捕获的间隔（计划书 §7.2 的"大文档"一行）：上一次捕获结束之后，至少隔开它的耗时的这么多倍才再捕获，

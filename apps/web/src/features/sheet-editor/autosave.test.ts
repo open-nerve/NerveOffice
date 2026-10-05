@@ -1,6 +1,7 @@
 import type { SaveContentResponse } from '@nerve-office/contracts'
 import type { AutosaveEditor, AutosaveEvent, AutosaveLimits, AutosavePage, AutosaveTuning, UploadState } from './autosave.ts'
 import type { SaveEditor, SaveRequest } from './save-coordinator.ts'
+import { AUTOSAVE_RETRY_AFTER_MAX_MS } from '@nerve-office/contracts'
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { createAutosave, decideUpload, DEFAULT_AUTOSAVE_LIMITS, retryDelay } from './autosave.ts'
@@ -1116,6 +1117,21 @@ describe('失败与重试（设计 §3.8）', () => {
     expect((await sent(context, 2)).request).toEqual(first.request)
   })
 
+  it('503 带一个异常大的 Retry-After（30 天：反向代理的维护页、写错的值）：至多按 5 分钟等，到点原样重发；断网又恢复也不早于它（复验 C2）', async () => {
+    const context = setup()
+    context.control.edit('甲')
+    await context.time.advance(2000)
+    const first = await sent(context, 1)
+    first.reject(new ApiError(503, 'SERVICE_UNAVAILABLE', '维护中', { retryAfterSeconds: 30 * 24 * 3600 }))
+    await drain(context)
+    context.page.set({ online: false })
+    context.page.set({ online: true })
+    await context.time.advance(AUTOSAVE_RETRY_AFTER_MAX_MS - 1)
+    expect(context.calls).toHaveLength(1)
+    await context.time.advance(1)
+    expect((await sent(context, 2)).request).toEqual(first.request)
+  })
+
   it('要等新内容（快照不合格）：同一份不再自动重传（不退避、页头不说会重试）；有新的修改才再试', async () => {
     const context = setup()
     context.control.edit('坏')
@@ -1393,6 +1409,27 @@ describe('离线与会话（设计 §3.3 第 5 条、§3.8）', () => {
     context.page.set({ writable: true })
     await drain(context)
     expect(await sent(context, 2)).toMatchObject({ at: T0 + 2000, request: { localSeq: 2, snapshot: '{"content":"甲乙"}' } })
+  })
+
+  it('503 带 Retry-After 之后、到点之前按保存得到令牌失效：会话回来时不等退避，但服务端给的 Retry-After 照旧（复验 C7）', async () => {
+    const context = setup({ onSessionStale: page => page.set({ writable: false }) })
+    context.control.edit('甲')
+    await context.time.advance(2000)
+    ;(await sent(context, 1)).reject(new ApiError(503, 'SERVICE_UNAVAILABLE', '繁忙', { retryAfterSeconds: 30 }))
+    await drain(context)
+    await context.time.advance(3000)
+    context.control.edit('甲乙')
+    const flushing = context.autosave.flush('save-button')
+    ;(await sent(context, 2)).reject(new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效'))
+    await flushing
+    await drain(context)
+    context.page.set({ writable: true })
+    await drain(context)
+    // Retry-After 在 32 秒时到（第一次失败在 2 秒）：会话回来（5 秒）时不提前
+    await context.time.advance(26_999)
+    expect(context.calls).toHaveLength(2)
+    await context.time.advance(1)
+    expect(await sent(context, 3)).toMatchObject({ at: T0 + 32_000, request: { localSeq: 2 } })
   })
 
   it('保存得到 401、会话却一直显示可写：照样按退避再试，不连着发', async () => {

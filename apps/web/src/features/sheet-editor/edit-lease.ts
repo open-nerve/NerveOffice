@@ -22,7 +22,9 @@
 //   人不在时不续（本页空闲已经到了服务端的回收阈值 EDIT_LEASE_IDLE_RECLAIM_SECONDS），等本页再有操作：人走开之后断网、休眠回来，
 //   服务端给的原因是到期而不是空闲，这时续上会让服务端的空闲回收重新计时，别人要多等一轮（审查 B8）；
 // - 暂停与恢复：页面的会话不是本人时暂停（不带着别人的登录发续租）；回到本人时恢复并立即续租一次——租约绑定登录，
-//   登录换过之后它已经失效，随即续上；
+//   登录换过之后它已经失效，随即续上。连着的会话类失败（续租、续上的申请得到未登录或令牌失效，中间没有成功过）只有第一次之后
+//   立即续租，之后的恢复按心跳的节奏再续（M3-P4 复验 C1：服务端一直拒绝、页面的确认照常成功时，每次恢复都立即续租，
+//   续租与确认会话就按网络往返的速度连着发）；
 // - 释放：页面隐藏、关闭时用 keepalive，结果不管（没送到时服务端按到期回收）；退出编辑时等它有了结果（结果未知也算结束，M3-P2 设计 §3.4；
 //   等多久由 edit-mode.ts 设上限），结果交回服务端确认了没有（没确认时那一代可能还在，阅读页如实说明，审查 A13）。
 // - 与服务端不兼容（M3-P3 设计 §3.5）：续租或续上的申请得到 CLIENT_OUTDATED（本页过旧）或 DOCUMENT_TOO_NEW（文档比服务端新）——
@@ -67,10 +69,14 @@ export interface LeaseClock {
   readonly schedule: (callback: () => void, delayMs: number) => () => void
 }
 
+/** 浏览器计时器的上限（毫秒）：setTimeout 的延迟超过它会溢出、立即触发 */
+const TIMER_DELAY_MAX_MS = 2 ** 31 - 1
+
 export const browserLeaseClock: LeaseClock = {
   now: () => performance.now(),
   schedule: (callback, delayMs) => {
-    const timer = setTimeout(callback, delayMs)
+    // 超过上限时按上限（约 24.8 天）：否则溢出成立即触发，按它排的调度就在原地空转（纵深防御，M3-P4 复验 C2）
+    const timer = setTimeout(callback, Math.min(delayMs, TIMER_DELAY_MAX_MS))
     return () => clearTimeout(timer)
   },
 }
@@ -154,7 +160,10 @@ export interface EditLease {
   readonly credentials: () => LeaseCredentials
   /** 页面的会话不是本人：暂停续租 */
   readonly pause: () => void
-  /** 页面的会话确认是本人：恢复续租并立即续租一次（登录可能换过，失效了就随即续上）；这一次有了结果之后兑现 */
+  /**
+   * 页面的会话确认是本人：恢复续租并立即续租一次（登录可能换过，失效了就随即续上）；这一次有了结果之后兑现。
+   * 连着的会话类失败的第二次起不立即续租：按心跳的节奏再续，立即兑现（M3-P4 复验 C1）
+   */
   readonly resume: () => Promise<void>
   /** 别的请求（保存）得知编辑权已经失效，used 是那个请求带的编辑权：与续租失效同一个处理 */
   readonly lose: (loss: LeaseLoss, used: LeaseCredentials) => Promise<LeaseOutcome>
@@ -285,6 +294,11 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
   let renewAgain = false
   /** 恢复的次数：在它之前发出的续租回来的"未登录、令牌失效"已经过时（页面刚确认过会话），不再暂停 */
   let resumes = 0
+  /**
+   * 连着的会话类失败（续租、续上的申请得到未登录或令牌失效）：续租或申请成功了才清零——别的失败说明不了会话，不清零
+   * （续上之前先失效的那次续租也不清：否则"失效 → 续上的申请被拒 → 恢复 → 续租又失效"每一轮都从头算，复验 C1）
+   */
+  let sessionFailures = 0
   /** 进行中的续上：同时只有一个，续租与保存得知的失效都等它 */
   let recovery: Promise<LeaseOutcome> | undefined
   /** 释放的那一次：服务端确认了没有（再调用 release 时交回它） */
@@ -387,6 +401,7 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
         return LOST
       }
       if (isAuthenticationError(error) || isCsrfTokenError(error)) {
+        sessionFailures += 1
         if (state === 'holding')
           state = 'paused'
         options.onSessionProblem(error)
@@ -397,6 +412,7 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
         scheduleRenewal(HEARTBEAT_MS)
       return { kind: 'unknown', error }
     }
+    sessionFailures = 0
     if (ended()) {
       releaseQuietly(next.token)
       return LOST
@@ -462,6 +478,7 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
     const used = credentials.token
     try {
       await api.renew(documentId, used, idleSeconds())
+      sessionFailures = 0
     }
     catch (error) {
       const incompatible = incompatibilityOf(error)
@@ -478,6 +495,7 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
         // 发出之后页面又确认过会话（恢复过）：这个回答说的是确认之前的登录，已经过时，照常接着续租
         if (round !== resumes)
           return
+        sessionFailures += 1
         if (state === 'holding') {
           state = 'paused'
           stopTimer()
@@ -530,6 +548,12 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
       state = 'holding'
       resumes += 1
       stopTimer()
+      // 连着的会话类失败的第二次起：确认会话照常成功、服务端却一直拒绝（例如网关剥掉了 CSRF 的请求头），立即续租只会再被拒、
+      // 再要页面确认一次——按心跳的节奏再续（复验 C1）。第一次多半是登录换过了，立即续租随即续上
+      if (sessionFailures > 1) {
+        scheduleRenewal(HEARTBEAT_MS)
+        return
+      }
       return renew()
     },
     lose: async (loss, used) => handleLoss(loss, used.token),

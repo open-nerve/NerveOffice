@@ -2009,6 +2009,24 @@ describe('自动保存的接线（M3-P4 设计 §3.10）', () => {
     expect(savedRequests(context).map(request => request?.snapshot)).toEqual([snapshotOf('甲'), snapshotOf('乙')])
   })
 
+  it('按保存要先确认会话，确认期间开始了退出（复验 C4）：确认之后这次按下不另外上传——退出自己存', async () => {
+    const context = setup()
+    await editing(context)
+    const reply = deferred<SaveContentResponse>()
+    context.api.save.mockImplementationOnce(async () => reply.promise)
+    context.factory.last().edit('甲')
+    const confirmed = deferred<boolean>()
+    const saving = context.mode.save(async () => confirmed.promise)
+    const exiting = context.mode.exit()
+    await settle()
+    expect(modeOf(context.mode).kind).toBe('exiting')
+    confirmed.resolve(true)
+    await settle()
+    reply.resolve(SAVED)
+    await Promise.all([saving, exiting])
+    expect(savedRequests(context).map(request => request?.snapshot)).toEqual([snapshotOf('甲')])
+  })
+
   it('带"公式待更新"进入编辑（申请的响应）：以强制全量重算重建；保存的状态机以它起步（离开会提示）；公式收齐之后补存，请求不带标记', async () => {
     const context = setup({ autosave: 'running', editLease: { acquire: async () => ({ ...ACQUIRED, formulasPending: true }) } })
     await opened(context)
