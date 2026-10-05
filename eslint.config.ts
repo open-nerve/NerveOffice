@@ -81,7 +81,9 @@ const UNIVER_INTERNAL_SYMBOLS = [
     // IPermissionService、IUndoRedoService：只读守卫的本地权限点与撤销栈（M2-P3 设计 §3.6）；
     // IContextService、FOCUSING_FX_BAR_EDITOR、DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY：只读守卫放开编辑栏的编辑器（P3 审查 A1）；
     // CustomRangeType：链接的改写认链接用的区间种类（M3-P3 S2，internal-api 的 CELL_LINK_PROTOCOL，与 contracts 的 HYPERLINK_RANGE_TYPE 核对）；
-    // LocaleService：语言服务换成销毁之后不抛错的子类（internal-api 的 disposalSafeLocaleOverride），别处不直接取它、不另换
+    // LocaleService：语言服务换成销毁之后不抛错的子类（internal-api 的 disposalSafeLocaleOverride），别处不直接取它、不另换；
+    // ILogService、IResourceHook、IResourceManagerService、ResourceManagerService：打开自检的资源守卫（M3-P4，internal-api 的
+    // createResourceLoadGuard）——资源管理服务的子类与 hook 的形状，类型也只在 internal-api 里
     importNames: [
       'AuthzIoLocalService',
       'CustomRangeType',
@@ -89,10 +91,14 @@ const UNIVER_INTERNAL_SYMBOLS = [
       'FOCUSING_FX_BAR_EDITOR',
       'IAuthzIoService',
       'IContextService',
+      'ILogService',
       'IPermissionService',
+      'IResourceHook',
+      'IResourceManagerService',
       'IUndoRedoService',
       'LifecycleService',
       'LocaleService',
+      'ResourceManagerService',
       'UserManagerService',
     ],
     message: INTERNAL_API_MESSAGE,

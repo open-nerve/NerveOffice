@@ -3,17 +3,21 @@
 // 能不能编辑在创建时决定（access，M2-P3 设计 §3.1）：只读的文档一开始就以只读创建，没有"就绪之后再设"的第二条路。
 // 顺序：
 // 1. 创建公式 Worker（模块 Worker），先挂上它的回报与错误的监听；
-// 2. new Univer（身份替换：授权服务按 access 回答，ADR-009；语言服务换成销毁之后不抛错的实现，internal-api 的 disposalSafeLocaleOverride），
+// 2. new Univer（身份替换：授权服务按 access 回答，ADR-009；语言服务换成销毁之后不抛错的实现，internal-api 的 disposalSafeLocaleOverride；
+//    资源守卫：资源管理服务换成只观察的子类，M3-P4 的打开自检），
 //    按档案注册插件（界面的配置按 access）；FUniver.newAPI；
 // 3. 在创建工作簿之前挂上入口守卫、链接的改写（M3-P3）、只读守卫（只读时：防火墙与撤销拦截）、变更检测、单元格编辑与生命周期的监听，
 //    加载过程中的命令也看得到、拦得住、改得到；更要紧的是执行前监听的先后，见 mount 里的不变量（M2-P6 复核 F3）；
-// 4. createWorkbook，核对 unitId；只读时把每张工作表的权限点设为只读（read-only/read-only-guard.ts）；
+// 4. 取出载入的快照里的资源（打开自检的"之前"）；createWorkbook，核对 unitId；刚返回时做打开自检的第一次核对（档案完整性、
+//    加载问题、资源比较与序列化，profile/open-check.ts）；只读时把每张工作表的权限点设为只读（read-only/read-only-guard.ts）；
 // 5. 等渲染完成（Rendered）、主线程到 Ready 后装上 IMAGE() 的限制、Worker 回报它那边也装上了；只读时装上渲染之后才有的界面处理
-//    （冻结线、编辑栏的焦点）、清空撤销栈，才返回；
+//    （冻结线、编辑栏的焦点）、清空撤销栈；打开自检再核对一次 hook 集合与之后的加载问题，才返回；
 //    任何一步失败（包括创建 Univer、注册插件）都按相反的顺序销毁已经创建的一切并抛出，页面显示"编辑器加载失败"（审查 B8）。
+//    打开自检的失败不是加载失败：编辑器照常返回，结果在 openCheck 上，能不能编辑由编辑器页决定（M3-P4 设计 §3.11 第 4 条）。
 // 返回之前（就绪之前）不允许输入（M1 总设计 §6.6）由编辑器页的交互屏障保证（interaction-barrier.ts，Codex 评审 CX1）：
 // 能编辑的文档从创建起就是可编辑的（授权服务一律允许），就绪之前的输入只能靠屏障拦住。
-// 测试构建（vite build --mode e2e）另在就绪之后装上 E2E 的探针（testing/e2e-probe.ts），生产构建里没有这一步。
+// 测试构建（vite build --mode e2e）另在就绪之后装上 E2E 的探针（testing/e2e-probe.ts），注册插件之前看档案故障开关
+// （testing/profile-fault.ts，地址带 profileFault=<组> 时不注册这几组，M3-P4 设计 §3.14），生产构建里没有这两步。
 // 模式切换一律重建（M3-P2 设计 §3.1）：编辑器页销毁旧的、以目标的 access 新建一个；重建之前取出视图状态（viewState），
 // 新建时交回来，就绪之后恢复（view-state.ts）。容器上写着这一个编辑器的打开方式（data-editor-access，读 / 写），销毁时去掉。
 import type { CellEditingWatch } from './cell-editing-watch.ts'
@@ -22,6 +26,7 @@ import type { ChangeTracker } from './change-tracking/change-tracker.ts'
 import type { CleanupStack } from './cleanup-stack.ts'
 import type { EditorAccess } from './editor-access.ts'
 import type { LifecycleWatch, SheetEditorLifecycle } from './lifecycle-watch.ts'
+import type { OpenCheck } from './profile/open-check.ts'
 import type { SheetViewState } from './view-state.ts'
 import type { WorkbookSnapshot } from './workbook-snapshot.ts'
 import { LocaleType, LogLevel, Univer } from '@univerjs/core'
@@ -34,12 +39,13 @@ import { createCleanupStack } from './cleanup-stack.ts'
 import { editorIdentityOverride } from './identity/editor-authz-io.service.ts'
 import { installRestrictedImageFunction } from './image-function/install-image-policy.ts'
 import { watchWorkerImagePolicy } from './image-function/worker-image-policy.ts'
-import { disposalSafeLocaleOverride } from './internal-api/index.ts'
+import { createResourceLoadGuard, disposalSafeLocaleOverride } from './internal-api/index.ts'
 import { watchLifecycle } from './lifecycle-watch.ts'
 import { installEntryGuards } from './profile/entry-guards.ts'
 import { installLinkPolicy } from './profile/link-policy.ts'
 import { SHEET_ZH_CN } from './profile/locale.ts'
-import { CHANGE_DETECTION_EXCLUDED_MUTATIONS, sheetPluginEntries } from './profile/sheet-profile.ts'
+import { checkCreated, recheckReady } from './profile/open-check.ts'
+import { CHANGE_DETECTION_EXCLUDED_MUTATIONS, SHEET_PROFILE_ID, sheetPluginEntries } from './profile/sheet-profile.ts'
 import { installReadOnlyGuard } from './read-only/read-only-guard.ts'
 import { SheetEditorLoadError } from './sheet-editor-error.ts'
 import { readViewState, restoreViewState } from './view-state.ts'
@@ -77,6 +83,12 @@ export interface SheetEditor {
    * 取不出来（Facade 出错，已报告）或已经销毁时为 undefined
    */
   readonly viewState: () => SheetViewState | undefined
+  /**
+   * 打开自检的结果（M3-P4 设计 §3.11）：创建工作簿时的核对（档案完整性、资源的加载、资源比较与序列化）与就绪之后的再核对合在一起，
+   * createSheetEditor 返回时就定了、之后不变。失败时这份文档的数据没有完整载入（或者编辑器没有完整载入）：适配层只报告，
+   * 能不能编辑由编辑器页决定——失败的可编辑编辑器整个丢弃、以只读重建，绝不保存（ADR-015 的"能不能编辑在创建时决定"）
+   */
+  readonly openCheck: OpenCheck
   /** 销毁实例、终止 Worker；可以重复调用 */
   readonly dispose: () => void
 }
@@ -107,15 +119,21 @@ const READY_TIMEOUT_MS = 20_000
 /** 公式收齐每 20 ms 判断一次（P4 设计 §3.6.6） */
 const SETTLE_POLL_INTERVAL_MS = 20
 
-function createUniver(access: EditorAccess): Univer {
+/**
+ * override：编辑器身份（授权服务按 access 回答）、销毁之后不抛错的语言服务（internal-api 的 disposalSafeLocaleOverride）与资源守卫
+ * （资源管理服务只能在这里换掉：注入器构造时就被资源加载服务取走，internal-api 的 createResourceLoadGuard）。三者互不相干，
+ * 都早于插件注册与 Facade 的订阅
+ */
+function createUniver(access: EditorAccess, resourceGuard: ReturnType<typeof createResourceLoadGuard>): Univer {
   return new Univer({
     locale: LocaleType.ZH_CN,
     locales: { [LocaleType.ZH_CN]: SHEET_ZH_CN },
     theme: defaultTheme,
     logLevel: LogLevel.WARN,
-    // 核心注入器里换掉的两项：授权服务按打开方式回答（ADR-009）；语言服务销毁之后不抛错——SDK 有销毁之后才到点、还会调用它的计时器
-    // （公式计算的进度），切换一律重建，旧的编辑器销毁之后到点就是一条没接住的页面异常（internal-api 的 disposalSafeLocaleOverride）
-    override: [...editorIdentityOverride(access), ...disposalSafeLocaleOverride()],
+    // 核心注入器里换掉的三项：授权服务按打开方式回答（ADR-009）；语言服务销毁之后不抛错——SDK 有销毁之后才到点、还会调用它的计时器
+    // （公式计算的进度），切换一律重建，旧的编辑器销毁之后到点就是一条没接住的页面异常（internal-api 的 disposalSafeLocaleOverride）；
+    // 资源管理服务换成只观察的资源守卫（M3-P4 的打开自检，internal-api 的 createResourceLoadGuard）
+    override: [...editorIdentityOverride(access), ...disposalSafeLocaleOverride(), ...resourceGuard.override],
   })
 }
 
@@ -141,10 +159,16 @@ interface MountedEditor {
   readonly changes: ChangeTracker
   readonly cellEditing: CellEditingWatch
   readonly lifecycle: LifecycleWatch
+  readonly openCheck: OpenCheck
 }
 
 /** 按顺序创建、等到就绪；每创建一样就在 cleanup 里登记它的销毁，失败时由调用方统一销毁 */
 async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapshot, cleanup: CleanupStack): Promise<MountedEditor> {
+  // 测试构建：档案故障开关（M3-P4 设计 §3.14，testing/profile-fault.ts）。注册哪些插件必须在注册之前决定，所以在创建任何东西之前引入；
+  // 生产构建里 MODE 是 production，这个分支与开关的分块都被去掉（门禁 artifacts 按来源核对）。只能动态引入（lint，与探针同一个理由）
+  const pluginEntries = import.meta.env.MODE === 'e2e'
+    ? (await import('./testing/profile-fault.ts')).sheetPluginEntriesUnderFault(location.search)
+    : sheetPluginEntries
   const { container, access } = options
   container.setAttribute(EDITOR_ACCESS_ATTRIBUTE, access)
   cleanup.defer(() => container.removeAttribute(EDITOR_ACCESS_ATTRIBUTE))
@@ -155,9 +179,11 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   const workerImagePolicy = watchWorkerImagePolicy(worker)
   cleanup.defer(workerImagePolicy.dispose)
 
-  const univer = createUniver(access)
+  // 资源守卫（打开自检，M3-P4 设计 §3.11 第 1 条）：一个编辑器一个，随 Univer 一起销毁（它就是 Univer 里的资源管理服务）
+  const resourceGuard = createResourceLoadGuard()
+  const univer = createUniver(access, resourceGuard)
   cleanup.defer(() => univer.dispose())
-  for (const entry of sheetPluginEntries({ container, formulaWorker: worker, access }))
+  for (const entry of pluginEntries({ container, formulaWorker: worker, access }))
     entry.register(univer)
   const univerAPI = FUniver.newAPI(univer)
   // 不变量（M2-P6 复核 F3）：Facade 的执行前事件（BeforeCommandExecute）在创建工作簿之前就要有订阅者，而且直到销毁都不能减到零。
@@ -192,7 +218,18 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   const lifecycle = watchLifecycle({ univerAPI, installImagePolicy: async () => installRestrictedImageFunction(univer, location.origin) })
   cleanup.defer(lifecycle.dispose)
 
+  // 打开自检的"之前"一侧（M3-P4 设计 §3.11 第 3 条）：SDK 会改动交给 createWorkbook 的对象，先把载入的快照里的资源取出一份
+  const resourcesBefore = structuredClone(snapshot.data.resources)
   const workbook = createWorkbook(univerAPI, snapshot)
+  // createWorkbook() 刚返回：表格的十个资源 hook 都已注册并加载完（6 个在 Starting 经 loadResources，4 个在 Ready 经晚注册），
+  // 这时还没有渲染、没有公式的写回、也不可能有用户输入，资源比较最纯；只捕获资源（逐个 hook 的 toJson），与文档大小无关
+  const created = checkCreated({
+    profile: SHEET_PROFILE_ID,
+    hookNames: resourceGuard.sheetHookNames(),
+    loadFailures: resourceGuard.loadFailures(),
+    resourcesBefore,
+    captured: resourceGuard.captureSheetResources(snapshot.unitId),
+  })
   // 工作表的权限点在创建工作簿时由 SDK 加入（初值允许），所以在这之后设
   readOnly?.applyWorksheetPoints()
   await withDeadline(
@@ -204,7 +241,9 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   workerImagePolicy.dispose()
   readOnly?.applyRenderedGuards()
   readOnly?.clearUndoStack()
-  return { univer, univerAPI, workbook, changes, cellEditing, lifecycle }
+  // 就绪之后再核对一次 hook 集合与这之前记下的加载问题：防 SDK 把注册挪到更晚（1.0.1 里两次的 hook 集合相同）
+  const openCheck = recheckReady(created, { profile: SHEET_PROFILE_ID, hookNames: resourceGuard.sheetHookNames(), loadFailures: resourceGuard.loadFailures() })
+  return { univer, univerAPI, workbook, changes, cellEditing, lifecycle, openCheck }
 }
 
 export async function createSheetEditor(options: CreateSheetEditorOptions): Promise<SheetEditor> {
@@ -228,7 +267,7 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
     cleanup.run()
     throw error
   }
-  const { workbook, changes, cellEditing, lifecycle } = mounted
+  const { workbook, changes, cellEditing, lifecycle, openCheck } = mounted
 
   let disposed = false
   const dispose = (): void => {
@@ -276,6 +315,7 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
       return JSON.stringify(workbook.save())
     },
     viewState: () => disposed ? undefined : readViewState(workbook),
+    openCheck,
     dispose,
   }
 }

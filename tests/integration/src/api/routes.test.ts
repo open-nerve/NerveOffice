@@ -28,12 +28,14 @@ const PUBLIC_ROUTES: readonly string[] = [
 ]
 
 /**
- * 后台请求（@BackgroundRequest()，M3-P2 设计 §3.2，DEF-043）：页面在后台定时发的，只有阅读页每 30 秒读一次编辑状态与编辑时每 10 秒的心跳。
+ * 后台请求（@BackgroundRequest()，M3-P2 设计 §3.2，DEF-043）：页面自己发的，不是用户的操作——阅读页每 30 秒读一次编辑状态、编辑时每 10 秒的心跳，
+ * 以及打开自检失败的上报（M3-P4 设计 §3.13：编辑器打开时页面自己报，用户什么也没做）。
  * 申请、释放编辑权与保存都是用户的操作，照常顺延登录；P4 的自动保存是编辑的结果，同样要顺延，不能标它
  */
 const BACKGROUND_ROUTES: readonly string[] = [
   'GET /api/documents/:id/edit-lease',
   'PUT /api/documents/:id/edit-lease',
+  'POST /api/documents/:id/open-check-failures',
 ]
 
 let database: TestDatabase
@@ -80,6 +82,8 @@ describe('全部接口的认证：没有 @Public() 的都要求登录，公开�
     expect(names).toEqual(expect.arrayContaining(['GET /api/documents/:id/edit-lease', 'POST /api/documents/:id/edit-lease', 'PUT /api/documents/:id/edit-lease', 'DELETE /api/documents/:id/edit-lease']))
     // 另存为副本（M3-P2）：未登录同样一律 401
     expect(names).toContain('POST /api/documents/:id/conflict-copies')
+    // 打开自检失败的上报（M3-P4）
+    expect(names).toContain('POST /api/documents/:id/open-check-failures')
   })
 
   it('未登录：公开清单之外的每个接口都回 401 UNAUTHENTICATED；清单里的接口不回它', async () => {
@@ -94,7 +98,7 @@ describe('全部接口的认证：没有 @Public() 的都要求登录，公开�
   })
 })
 
-describe('后台请求：标了 @BackgroundRequest() 的接口恰好是编辑状态与心跳（M3-P2 设计 §3.2，复核 B5）', () => {
+describe('后台请求：标了 @BackgroundRequest() 的接口恰好是编辑状态、心跳与打开自检的上报（M3-P2 设计 §3.2，复核 B5；M3-P4 设计 §3.13）', () => {
   it('从控制器的元数据列出的接口与路由表相同；按会话守卫的读法（方法上的覆盖控制器上的）带着这个标记的，恰好是写明的两个', () => {
     const handled = controllerRoutesOf(app)
     expect(handled.map(nameOf)).toEqual(routes.map(nameOf))

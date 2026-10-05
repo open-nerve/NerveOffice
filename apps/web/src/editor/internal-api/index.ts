@@ -12,6 +12,7 @@ export { FIND_ADVANCED_LINK_SELECTOR, FORMULA_BAR_INPUT_SELECTOR, NOTE_TEXTAREA_
 export { FORMULA_PROTOCOL } from './formula-protocol.ts'
 export { injectorOf } from './injector.ts'
 export { disposalSafeLocaleOverride } from './locale-service.ts'
+export { createResourceLoadGuard } from './resource-load-guard.ts'
 export { DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY, FOCUSING_FX_BAR_EDITOR, IAuthzIoService, IContextService, IPermissionService, IUndoRedoService, LifecycleService } from '@univerjs/core'
 export { IDrawingManagerService } from '@univerjs/drawing'
 export { BaseFunction, ErrorType, ErrorValueObject, IActiveDirtyManagerService, IFunctionService } from '@univerjs/engine-formula'

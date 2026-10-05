@@ -27,8 +27,8 @@ export const SNAPSHOT_UPLOAD_CONTENT_TYPE = 'application/gzip'
  */
 export const UNIVER_SDK_VERSION = '1.0.1'
 
-/** 修订号与数据库的 integer 一致。 */
-const REVISION_MAX = 2_147_483_647
+/** 修订号与数据库的 integer 一致（请求里的修订号以它为上限；打开自检的上报同样用它，open-check.ts）。 */
+export const REVISION_MAX = 2_147_483_647
 
 /** 查询串里的整数：只接受不带前导零的十进制数字（空串、正负号、小数、指数与十六进制都不接受）。 */
 function integerParam(min: number) {

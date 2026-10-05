@@ -79,6 +79,7 @@ function fakeEditor(stage: SheetEditorLifecycle = 'rendered') {
     settleFormulas: async () => 'settled',
     capture: () => '{"id":"unit-1"}',
     viewState: () => undefined,
+    openCheck: { ok: true },
     dispose: vi.fn(),
   }
   return {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { CLIENT_BUILD_MAX_LENGTH, CLIENT_OUTDATED_REASONS, clientBuildSchema, clientFormatBodyShape, clientFormatQueryShape, clientOutdatedDetailsSchema, compareVersions, parseVersion } from './client-format.ts'
+import { CLIENT_BUILD_MAX_LENGTH, CLIENT_OUTDATED_REASONS, clientBuildSchema, clientFormatBodyShape, clientFormatQueryShape, clientFormatRequiredBodyShape, clientOutdatedDetailsSchema, compareVersions, parseVersion } from './client-format.ts'
 
 describe('客户端构建与 SDK 版本的写法（x.y.z，可带 + 之后的诊断信息）', () => {
   it.each([
@@ -89,6 +89,21 @@ describe('上报的字段：都可选（重放先于拦截旧客户端，旧页�
   it('构建按写法校验', () => {
     expect(body.safeParse({ clientBuild: 'abc1234' }).success).toBe(false)
     expect(query.safeParse({ clientBuild: '0.1' }).success).toBe(false)
+  })
+})
+
+describe('上报的字段都必填的写法（打开自检的上报，M3-P4 设计 §3.13）', () => {
+  const required = z.strictObject(clientFormatRequiredBodyShape)
+  const reported = { clientBuild: '0.1.0+abc1234', univerVersion: '1.0.1', profile: 'sheet@1', formatVersion: 1 }
+
+  it('四项都带上才通过，每一项的写法与可选的那一份相同', () => {
+    expect(required.parse(reported)).toEqual(reported)
+    for (const field of Object.keys(reported)) {
+      const { [field as keyof typeof reported]: _omitted, ...rest } = reported
+      expect(required.safeParse(rest).success, field).toBe(false)
+    }
+    for (const [field, value] of [['clientBuild', 'abc1234'], ['univerVersion', 'a b'], ['profile', ''], ['formatVersion', '1']] as const)
+      expect(required.safeParse({ ...reported, [field]: value }).success, field).toBe(false)
   })
 })
 

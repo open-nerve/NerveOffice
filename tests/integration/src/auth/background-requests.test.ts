@@ -18,6 +18,7 @@ import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
 import { acquireLease, renewLease, saveContent } from '../support/edit-leases.ts'
+import { postOpenCheckReport } from '../support/open-check.ts'
 import { asUser, login, SESSION_COOKIE } from '../support/session-client.ts'
 
 let database: TestDatabase
@@ -105,6 +106,11 @@ describe('US-M3-05 后台请求不顺延登录（DEF-043）', () => {
     expect(await keptAlive(session, async () => saveContent(app.baseUrl, session, document.id, raw, { baseRevision: 1, lease }), 200)).toBe(true)
     expect(await keptAlive(session, async () => asUser(app.baseUrl, session, leasePath(document.id), { method: 'DELETE', headers: { [EDIT_LEASE_HEADER]: lease.token } }), 204)).toBe(true)
     expect(await keptAlive(session, async () => asUser(app.baseUrl, session, leasePath(document.id), { method: 'POST', body: acquireBody(randomUUID()) }), 201)).toBe(true)
+  })
+
+  it('US-M3-15 打开自检失败的上报（页面自己发的，M3-P4 设计 §3.13）：204，不顺延', async () => {
+    const { session, document } = await fresh()
+    expect(await keptAlive(session, async () => postOpenCheckReport(app.baseUrl, session, document.id), 204)).toBe(false)
   })
 
   it('标记只影响顺延，不放宽认证与 CSRF：心跳缺 CSRF 令牌 403；空闲过期的登录发编辑状态 401', async () => {

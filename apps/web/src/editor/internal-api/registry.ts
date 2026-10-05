@@ -55,6 +55,15 @@ const CELL_LINK_REGRESSION = [
   'template.spec.ts（键入、粘贴网址之后保存的是规范写法）',
 ].join('')
 
+/** 打开自检的资源守卫（M3-P4 设计 §3.11）：单元测试与三个浏览器的 E2E。SDK 升级改了资源 hook 的注册时机、名字或加载路径时这组先失败 */
+const RESOURCE_LOAD_GUARD_REGRESSION = [
+  '单元测试 internal-api/resource-load-guard.test.ts（真实的 Univer core 带上守卫，假 hook 分别走单元加入时的 loadResources 与晚注册的 loadHookResource：',
+  '解析抛错、吞成空值、加载抛错、序列化抛错各一类，空串与深层为空的输入不误报；包装只观察——异常原样抛出、返回值原样返回、this 与 toJson 的第二个参数原样交给插件）、',
+  'profile/open-check.test.ts（判定）、sheet-editor.test.ts（jsdom 里真实的 Univer core 与带资源 hook 的十个数据插件：模板与各项资源都非空的快照 openCheck 通过，',
+  '截断的条件格式、截断的筛选、{表:5} 的筛选给出预期的失败；守卫在 new Univer 里、捕获在 createWorkbook 刚返回时）；',
+  'E2E tests/e2e/specs/editor/open-check.spec.ts（模板、只读样本与大表在本机三个浏览器里 openCheck 通过，经测试构建的探针读出）与 US-M3-15 的用例（S5）',
+].join('')
+
 export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
   {
     name: 'injectorOf',
@@ -114,6 +123,35 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
       '（初次计算是 WHEN_EMPTY，HYPERLINK() 的格子没有 v，每次打开都重算：sheets-formula 的 trigger-calculation.controller.ts:291-322、engine-formula 的 formula-data.model.ts:758-796）',
     ].join(''),
     regression: CELL_LINK_REGRESSION,
+  },
+  {
+    name: 'createResourceLoadGuard',
+    origin: '@univerjs/core 的资源管理服务（IResourceManagerService 与它的实现 ResourceManagerService）、资源 hook 的形状（IResourceHook）、ILogService、UniverInstanceType.UNIVER_SHEET；平台对资源加载与序列化的观察的封装（Facade 之外，Facade 没有资源相关的 API）',
+    // resource-load-guard.ts：子类、工厂的覆盖与 hook 的类型
+    sdk: { '@univerjs/core': ['DependencyOverride', 'IDisposable', 'ILogService', 'IResourceHook', 'IResourceManagerService', 'ResourceManagerService', 'UniverInstanceType'] },
+    purpose: [
+      '打开自检（M3-P4 设计 §3.11，US-M3-15）：new Univer({ override }) 以 useFactory（deps: ILogService）换上 ResourceManagerService 的子类，只覆盖 registerPluginResource，',
+      '把每个 hook 的 parseJson、onLoad 包一层只观察的委托，记下 parse-threw（非空的输入解析时抛错）、parse-swallowed（非空的输入解析成深层为空的值）、load-threw（onLoad 抛错），',
+      '只记资源名、种类与异常的构造器名；另给出表格 hook 的名字（档案完整性）与逐个 hook 的 toJson（资源比较与 serialize-threw）。依赖的约定：',
+      '(1) 资源管理服务在注入器创建时就被资源加载服务取走，只能在构造 Univer 时覆盖；(2) 两条加载路径——单元加入时的 loadResources 与之后注册的 hook 经 register$ 的 loadHookResource——',
+      '调的都是登记进来的 hook（getAllResourceHooks 与 register$ 交出的都是交给 registerPluginResource 的那一个）；(3) loadResources 跳过空串，晚注册的路径照样把空串交给 parseJson；',
+      '(4) SDK 自己吞掉 parseJson、onLoad 的异常，只记日志；(5) 保存输出的正是 business 含 UNIVER_SHEET 的各 hook 的 toJson(unitId)；',
+      '(6) 表格的十个 hook 都在 createWorkbook() 同步返回之前注册并加载完（6 个在 Starting 走 loadResources，4 个在 Ready 走晚注册），之后不再注册；',
+      '(7) 各 hook 的 parseJson 返回 JSON 值（JSON.parse 的结果或 {}，无环的普通对象与数组），"吞成空值"用深层为空判断才成立',
+    ].join(''),
+    evidence: [
+      '1.0.1 的 core lib/es/index.js：ResourceManagerService :26688-26760（getResourcesByType :26709 按 business 过滤、registerPluginResource :26723 先放进表再经 register$ 发出、',
+      'loadResources :26733 按名称找第一条、data 为空串时跳过、catch 只记日志）；ResourceLoaderService :28452-28548（loadHookResource :28460 找到同名的就解析、不看是否为空，',
+      'catch 只打 console.error；handleHookAdd :28469；register$ 的订阅 :28501；单元加入时 loadResources :28502；saveUnit :28539 取 getResources(unitId, unit.type)）；',
+      'createUniverInjector :28681-28721（默认 [IResourceManagerService, { useClass: ResourceManagerService, lazy: true }] :28705，mergeOverrideWithDependencies 按标识替换，',
+      ':28719 touchDependencies 资源加载服务）；sheets 的 facade.js:7240 FWorkbook.save() 走 saveUnit。各 hook 的 parseJson（1.0.1 的 lib/es/index.js）：sheets 的区域主题 :1498、',
+      '工作表保护 :16277、保护点 :16325、定义名称 :17905、区域保护 :20714，sheets-drawing :804（toJson 另有第二个参数 model），sheets-conditional-formatting :2701，',
+      'sheets-note :487，data-validation :328——都是"空串给 {}、解析不了给 {}"；sheets-filter :726 是裸 JSON.parse（空串与截断的 JSON 都抛错）。',
+      'P4 设计前的探索 B 的探针（三个浏览器一致，scratchpad 的 p4b-probe-summary.txt）：两条路径都经过包装，十个表格 hook 在 createWorkbook 返回之前注册并加载完、之后没有再注册；',
+      '截断的筛选是解析抛错，截断的条件格式、数据验证、图片、备注、定义名称是吞成空值，{表:5} 与 {表:{a:1}} 的条件格式、数据验证是加载抛错，{表:5} 的备注静默装不进（只有资源比较认得出），',
+      '{表:5} 的筛选加载不报错、之后 toJson 抛错；筛选的 data 为空串时晚注册的路径照样解析而抛错（所以空串不算）；模板、只读样本、大表无误报；只捕获资源 ≤1 ms',
+    ].join(''),
+    regression: RESOURCE_LOAD_GUARD_REGRESSION,
   },
   {
     name: 'IAuthzIoService',

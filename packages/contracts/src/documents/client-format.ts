@@ -40,12 +40,26 @@ export const clientBuildSchema = z.string().max(CLIENT_BUILD_MAX_LENGTH).regex(V
  */
 const formatTokenSchema = z.string().regex(/^[\w.@+-]{1,64}$/)
 
+/** JSON 请求体里的格式版本：整数 */
+const formatVersionSchema = z.number().int().min(1).max(999_999_999)
+
 /** 申请编辑权与心跳（JSON 的请求体）里的上报字段，都可选 */
 export const clientFormatBodyShape = {
   clientBuild: clientBuildSchema.optional(),
   univerVersion: formatTokenSchema.optional(),
   profile: formatTokenSchema.optional(),
-  formatVersion: z.number().int().min(1).max(999_999_999).optional(),
+  formatVersion: formatVersionSchema.optional(),
+}
+
+/**
+ * 同样的四项都必填（JSON 的请求体）：打开自检的上报（M3-P4 设计 §3.13）。上报只作诊断、不经格式的拦截（旧页面打不开新格式的文档，
+ * 正是要看到的），缺了就分不出是哪个版本的页面报的
+ */
+export const clientFormatRequiredBodyShape = {
+  clientBuild: clientBuildSchema,
+  univerVersion: formatTokenSchema,
+  profile: formatTokenSchema,
+  formatVersion: formatVersionSchema,
 }
 
 /** 保存与另存为副本（查询参数）里的上报字段，都可选；格式版本是不带前导零的十进制 */

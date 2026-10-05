@@ -141,6 +141,30 @@ describe('US-M1-11 lint 规则的自测：内部 API 只经 internal-api 引用�
     expect(await rulesFor(code, INTERNAL_API_FILE)).not.toContain('no-restricted-imports')
   })
 
+  describe('打开自检的资源守卫用到的内部符号（M3-P4）在 internal-api 之外引用会失败：值、类型与再导出都算；internal-api 里照常引用', () => {
+    const cases = [
+      'import { ResourceManagerService } from \'@univerjs/core\'\n\nexport class Guard extends ResourceManagerService {}\n',
+      'import { IResourceManagerService } from \'@univerjs/core\'\n\nexport const s = IResourceManagerService\n',
+      'import type { IResourceManagerService } from \'@univerjs/core\'\n\nexport type S = IResourceManagerService\n',
+      'import type { IResourceHook } from \'@univerjs/core\'\n\nexport type H = IResourceHook\n',
+      'import { ILogService } from \'@univerjs/core\'\n\nexport const s = ILogService\n',
+      'export { ResourceManagerService as Resources } from \'@univerjs/core\'\n',
+    ]
+
+    it.each([EDITOR_FILE, 'apps/web/src/editor/profile/open-check.ts'])('%s', async (file) => {
+      for (const code of cases) {
+        const report = await lint(code, file)
+        expect(report.rules, code).toContain('no-restricted-imports')
+        expect(report.messages.join('\n'), code).toContain(INTERNAL_MESSAGE)
+      }
+    })
+
+    it('internal-api 里照常引用', async () => {
+      const code = 'import type { IResourceHook } from \'@univerjs/core\'\nimport { ILogService, IResourceManagerService, ResourceManagerService } from \'@univerjs/core\'\n\nexport const used = [ILogService, IResourceManagerService, ResourceManagerService]\nexport type H = IResourceHook\n'
+      expect(await rulesFor(code, INTERNAL_API_FILE)).not.toContain('no-restricted-imports')
+    })
+  })
+
   it('internal-api 里可以引用链接的改写用到的内部符号（M3-P3 S2）', async () => {
     const code = 'import { CustomRangeType } from \'@univerjs/core\'\nimport { SetRangeValuesMutation } from \'@univerjs/sheets\'\n\nexport const used = [CustomRangeType.HYPERLINK, SetRangeValuesMutation.id]\n'
     expect(await rulesFor(code, INTERNAL_API_FILE)).not.toContain('no-restricted-imports')
@@ -175,6 +199,8 @@ describe('US-M1-11 lint 规则的自测：内部 API 只经 internal-api 引用�
     expect(editor.paths?.find(path => path.name === '@univerjs/core')?.importNames).toEqual(expect.arrayContaining(['IContextService', 'FOCUSING_FX_BAR_EDITOR', 'DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY']))
     // 链接的改写（M3-P3 S2）
     expect(editor.paths?.find(path => path.name === '@univerjs/core')?.importNames).toEqual(expect.arrayContaining(['CustomRangeType']))
+    // 打开自检的资源守卫（M3-P4）
+    expect(editor.paths?.find(path => path.name === '@univerjs/core')?.importNames).toEqual(expect.arrayContaining(['ILogService', 'IResourceHook', 'IResourceManagerService', 'ResourceManagerService']))
     expect(editor.paths?.find(path => path.name === '@univerjs/sheets')?.importNames).toEqual(expect.arrayContaining(['SetRangeValuesMutation']))
     expect(editor.paths?.find(path => path.name === '@univerjs/docs-ui')?.importNames).toEqual(['IEditorService'])
     expect(editor.paths?.find(path => path.name === '@univerjs/engine-render')?.importNames).toEqual(['IRenderManagerService'])

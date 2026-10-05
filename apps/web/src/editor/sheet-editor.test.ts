@@ -2,17 +2,20 @@
 // 按打开方式组合的是哪些（M2-P3 设计 §3.1–§3.4：授权服务、插件档案、只读守卫在创建工作簿之前装上）；
 // 只读时的编排（P3 审查 A3）：防火墙与变更检测用同一份判定的配置，创建工作簿之后设权限点，就绪时装界面的处理、清空撤销栈；
 // 链接的改写（M3-P3 设计 §3.6）：阅读与编辑都在入口守卫之后、创建工作簿之前装上；
-// 语言服务换成销毁之后不抛错的实现（internal-api 的 disposalSafeLocaleOverride，子类本身的行为由 locale-service.test.ts 测）
+// 语言服务换成销毁之后不抛错的实现（internal-api 的 disposalSafeLocaleOverride，子类本身的行为由 locale-service.test.ts 测）；
+// 打开自检（M3-P4 设计 §3.11）：jsdom 里真实的 Univer core 与档案的数据插件，模板与正常的快照通过，损坏的给出失败；两次核对的时机
+import type { UnitModel } from '@univerjs/core'
 import type { EditorAccess } from './editor-access.ts'
 import type { PluginEntry } from './profile/plugin-entry.ts'
 import type { ReadOnlyGuard } from './read-only/read-only-guard.ts'
-import { sheetSnapshotFor } from '@nerve-office/contracts'
-import { LifecycleStages, Univer } from '@univerjs/core'
+import { profileResourceNames, sheetSnapshotFor } from '@nerve-office/contracts'
+import { LifecycleStages, Univer, UniverInstanceType } from '@univerjs/core'
 import { FUniver } from '@univerjs/core/facade'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createChangeTracker } from './change-tracking/change-tracker.ts'
 import { imagePolicyReport } from './image-function/worker-report.ts'
-import { disposalSafeLocaleOverride, IAuthzIoService, injectorOf, WorkbookViewPermission } from './internal-api/index.ts'
+import { createResourceLoadGuard, disposalSafeLocaleOverride, IAuthzIoService, injectorOf, WorkbookViewPermission } from './internal-api/index.ts'
+import { dataPluginEntries, snapshotWithResources } from './profile/data-plugins.test-support.ts'
 import { installEntryGuards } from './profile/entry-guards.ts'
 import { installLinkPolicy } from './profile/link-policy.ts'
 import { CHANGE_DETECTION_EXCLUDED_MUTATIONS, sheetPluginEntries } from './profile/sheet-profile.ts'
@@ -51,6 +54,11 @@ vi.mock('./profile/link-policy.ts', async (importOriginal) => {
 })
 // 没有注册插件时装不上 IMAGE() 的限制（没有函数服务）：编排的用例要走到就绪，这里当作装上了
 vi.mock('./image-function/install-image-policy.ts', () => ({ installRestrictedImageFunction: vi.fn(() => true) }))
+// 资源守卫照常创建；打开自检的时机由用例换成记录调用顺序的守卫核对
+vi.mock('./internal-api/index.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./internal-api/index.ts')>()
+  return { ...actual, createResourceLoadGuard: vi.fn(actual.createResourceLoadGuard) }
+})
 // 视图状态的取出与恢复本身由 view-state.test.ts 测；这里只核对编排（何时恢复、交给谁）
 vi.mock('./view-state.ts', () => ({ readViewState: vi.fn(() => undefined), restoreViewState: vi.fn(() => 'restored') }))
 
@@ -84,6 +92,7 @@ beforeEach(() => {
   vi.mocked(installLinkPolicy).mockClear()
   vi.mocked(readViewState).mockClear()
   vi.mocked(restoreViewState).mockClear()
+  vi.mocked(createResourceLoadGuard).mockClear()
 })
 
 afterEach(() => {
@@ -316,7 +325,7 @@ describe('链接的改写（M3-P3 设计 §3.6，DEF-021）', () => {
 })
 
 /** 走到就绪：推进生命周期、Worker 回报装好了 IMAGE() 的限制 */
-async function reachReady(facade: ReturnType<typeof steppingFacade>): Promise<void> {
+async function reachReady(facade: Pick<ReturnType<typeof steppingFacade>, 'reach'>): Promise<void> {
   facade.reach(LifecycleStages.Ready)
   facade.reach(LifecycleStages.Rendered)
   await new Promise(resolve => setTimeout(resolve, 0))
@@ -409,5 +418,160 @@ describe('模式切换一律重建（M3-P2 设计 §3.1、§3.3）', () => {
     editor.dispose()
     expect(editor.viewState()).toBeUndefined()
     expect(vi.mocked(readViewState)).toHaveBeenCalledOnce()
+  })
+})
+
+/**
+ * 真实插件下的假 Facade：createWorkbook 用这个 Univer 建表格单元（档案的数据插件照常注册资源 hook、加载资源），
+ * 记下"创建工作簿"；生命周期由用例推进（与 steppingFacade 相同）
+ */
+function realUnitFacade(log: string[]) {
+  const lifecycle = new Set<(event: { stage: LifecycleStages }) => void>()
+  vi.spyOn(FUniver, 'newAPI').mockImplementation(univer => ({
+    Event: new Proxy({}, { get: (_target, name) => String(name) }),
+    addEvent: (name: string, listener: (event: { stage: LifecycleStages }) => void) => {
+      if (name === 'LifeCycleChanged')
+        lifecycle.add(listener)
+      return { dispose: () => lifecycle.delete(listener) }
+    },
+    createWorkbook: (data: object) => {
+      log.push('createWorkbook')
+      const unit = (univer as Univer).createUnit<object, UnitModel>(UniverInstanceType.UNIVER_SHEET, data)
+      return { getId: () => unit.getUnitId() }
+    },
+  }) as unknown as FUniver)
+  return {
+    reach(stage: LifecycleStages): void {
+      if (stage === LifecycleStages.Rendered)
+        log.push('rendered')
+      for (const listener of [...lifecycle])
+        listener({ stage })
+    },
+  }
+}
+
+/** 真实的资源守卫（被 vi.mock 包了一层的那一个的原样） */
+const { createResourceLoadGuard: realResourceGuard } = await vi.importActual<typeof import('./internal-api/index.ts')>('./internal-api/index.ts')
+
+/** 记下打开自检取事实的时机的资源守卫：其余照常；readyHookNames 给出时，第二次取 hook 名换成它（就绪之后 hook 集合变了） */
+function recordingResourceGuard(log: string[], readyHookNames?: readonly string[]): void {
+  vi.mocked(createResourceLoadGuard).mockImplementationOnce(() => {
+    const guard = realResourceGuard()
+    let asked = 0
+    return {
+      ...guard,
+      sheetHookNames: () => {
+        asked += 1
+        log.push('sheetHookNames')
+        return asked > 1 && readyHookNames !== undefined ? readyHookNames : guard.sheetHookNames()
+      },
+      captureSheetResources: (unitId) => {
+        log.push('captureSheetResources')
+        return guard.captureSheetResources(unitId)
+      },
+    }
+  })
+}
+
+describe('打开自检（M3-P4 设计 §3.11）：jsdom 里真实的 Univer core 与档案的数据插件', () => {
+  beforeEach(() => {
+    vi.mocked(sheetPluginEntries).mockReturnValue(dataPluginEntries())
+  })
+
+  it.each([
+    ['edit', '模板', sheetSnapshotFor('unit-oc')],
+    ['edit', '六项内容资源都非空的快照', snapshotWithResources('unit-oc')],
+    ['read', '模板', sheetSnapshotFor('unit-oc')],
+    ['read', '六项内容资源都非空的快照', snapshotWithResources('unit-oc')],
+  ] as const)('%s：%s 的 openCheck 通过（无误报）', async (access, _name, snapshot) => {
+    const facade = realUnitFacade([])
+    if (access === 'read')
+      vi.mocked(installReadOnlyGuard).mockImplementationOnce(() => recordingGuard([]))
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot, access })
+    await reachReady(facade)
+    const editor = await creating
+    expect(editor.openCheck).toEqual({ ok: true })
+    editor.dispose()
+  })
+
+  it('截断的筛选：openCheck 给出 parse-threw（SyntaxError）与 resource-emptied；编辑器照常返回（不是加载失败，能不能编辑由编辑器页决定）', async () => {
+    const facade = realUnitFacade([])
+    const filter = (JSON.parse(snapshotWithResources('unit-oc')) as { resources: { name: string, data: string }[] }).resources.find(item => item.name === 'SHEET_FILTER_PLUGIN')?.data ?? ''
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: snapshotWithResources('unit-oc', { SHEET_FILTER_PLUGIN: filter.slice(0, 30) }), access: 'edit' })
+    await reachReady(facade)
+    const editor = await creating
+    expect(editor.openCheck).toEqual({ ok: false, failures: [
+      { kind: 'parse-threw', resource: 'SHEET_FILTER_PLUGIN', error: 'SyntaxError' },
+      { kind: 'resource-emptied', resource: 'SHEET_FILTER_PLUGIN' },
+    ] })
+    editor.dispose()
+  })
+
+  it('第一次核对在 createWorkbook 刚返回时（只读守卫设权限点之前），就绪之后再核对一次 hook 集合', async () => {
+    const log: string[] = []
+    const facade = realUnitFacade(log)
+    recordingResourceGuard(log)
+    vi.mocked(installReadOnlyGuard).mockImplementationOnce(() => recordingGuard(log))
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-oc'), access: 'read' })
+    expect(log).toEqual(['createWorkbook', 'sheetHookNames', 'captureSheetResources', 'applyWorksheetPoints'])
+    await reachReady(facade)
+    const editor = await creating
+    expect(log).toEqual(['createWorkbook', 'sheetHookNames', 'captureSheetResources', 'applyWorksheetPoints', 'rendered', 'applyRenderedGuards', 'clearUndoStack', 'sheetHookNames'])
+    expect(editor.openCheck).toEqual({ ok: true })
+    editor.dispose()
+  })
+
+  it('就绪之后 hook 集合少了一个：openCheck 带上 profile-missing-hook（再核对接在结果上）', async () => {
+    const facade = realUnitFacade([])
+    recordingResourceGuard([], profileResourceNames('sheet@1').filter(name => name !== 'SHEET_NOTE_PLUGIN'))
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-oc'), access: 'edit' })
+    await reachReady(facade)
+    const editor = await creating
+    expect(editor.openCheck).toEqual({ ok: false, failures: [{ kind: 'profile-missing-hook', resource: 'SHEET_NOTE_PLUGIN' }] })
+    editor.dispose()
+  })
+
+  it('比较的"之前"一侧是载入的原样：SDK 改动交给 createWorkbook 的对象（这里在建出单元之后往里写进一项资源）不影响结果', async () => {
+    const lifecycle = new Set<(event: { stage: LifecycleStages }) => void>()
+    vi.spyOn(FUniver, 'newAPI').mockImplementation(univer => ({
+      Event: new Proxy({}, { get: (_target, name) => String(name) }),
+      addEvent: (name: string, listener: (event: { stage: LifecycleStages }) => void) => {
+        if (name === 'LifeCycleChanged')
+          lifecycle.add(listener)
+        return { dispose: () => lifecycle.delete(listener) }
+      },
+      createWorkbook: (data: { resources: { name: string, data: string }[] }) => {
+        const unit = (univer as Univer).createUnit<object, UnitModel>(UniverInstanceType.UNIVER_SHEET, data)
+        const note = data.resources.find(item => item.name === 'SHEET_NOTE_PLUGIN')
+        if (note !== undefined)
+          note.data = '{"sheet-1":{"0":{"0":{"note":"SDK 写进来的"}}}}'
+        return { getId: () => unit.getUnitId() }
+      },
+    }) as unknown as FUniver)
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-oc'), access: 'edit' })
+    await reachReady({
+      reach: (stage) => {
+        for (const listener of [...lifecycle])
+          listener({ stage })
+      },
+    })
+    const editor = await creating
+    expect(editor.openCheck).toEqual({ ok: true })
+    editor.dispose()
+  })
+
+  it('打开自检取不到事实（资源守卫没有生效）：按加载失败处理，已经创建的都销毁', async () => {
+    realUnitFacade([])
+    const failure = new Error('资源守卫没有生效')
+    vi.mocked(createResourceLoadGuard).mockImplementationOnce(() => ({
+      ...realResourceGuard(),
+      sheetHookNames: () => {
+        throw failure
+      },
+    }))
+    const univerDispose = vi.spyOn(Univer.prototype, 'dispose')
+    await expect(createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-oc'), access: 'edit' })).rejects.toBe(failure)
+    expect(univerDispose).toHaveBeenCalledOnce()
+    expect(FakeWorker.created[0]?.terminate).toHaveBeenCalledOnce()
   })
 })
