@@ -25,10 +25,11 @@ function listenerSet() {
 
 /**
  * 假的编辑器：edit 是一次修改（工作簿的内容换成 text）；公式收齐、组字、单元格编辑可设，各自发出信号。单元格里键入的内容在提交
- * （等同回车）之前不在工作簿里、捕获不到。captureCost 是一次捕获的耗时（同步地拨快假时钟，大文档的间隔用）
+ * （等同回车）之前不在工作簿里、捕获不到。captureCost 是一次捕获的耗时（同步地拨快假时钟，大文档的间隔用）。
+ * 修改的信号与 SDK 一样在"命令执行的过程中"同步发出：这期间的捕获记进 capturesInCommand（调度不该在信号里捕获）
  */
-function fakeEditor(elapse: (ms: number) => void, initial: { settled?: boolean } = {}) {
-  const state = { seq: 0, content: '初始', cellInput: '', settled: initial.settled ?? true, composing: false, editing: false, pendingInput: false, captureCost: 0 }
+function fakeEditor(elapse: (ms: number) => void, initial: { settled?: boolean, seq?: number } = {}) {
+  const state = { seq: initial.seq ?? 0, content: '初始', cellInput: '', settled: initial.settled ?? true, composing: false, editing: false, pendingInput: false, captureCost: 0, inCommand: false, capturesInCommand: 0 }
   const changes = listenerSet()
   const formulas = listenerSet()
   const composition = listenerSet()
@@ -50,6 +51,8 @@ function fakeEditor(elapse: (ms: number) => void, initial: { settled?: boolean }
     }),
     settleFormulas: vi.fn(async () => state.settled ? 'settled' as const : 'timeout' as const),
     capture: vi.fn(() => {
+      if (state.inCommand)
+        state.capturesInCommand += 1
       elapse(state.captureCost)
       return JSON.stringify({ content: state.content })
     }),
@@ -62,8 +65,15 @@ function fakeEditor(elapse: (ms: number) => void, initial: { settled?: boolean }
     edit(text: string): void {
       state.content = text
       state.seq += 1
-      changes.notify()
+      state.inCommand = true
+      try {
+        changes.notify()
+      }
+      finally {
+        state.inCommand = false
+      }
     },
+    capturesInCommand: () => state.capturesInCommand,
     settle(settled: boolean): void {
       state.settled = settled
       formulas.notify()
@@ -139,9 +149,9 @@ function saved(revision: number, unchanged = false): SaveContentResponse {
 
 let idSequence = 0
 
-function setup(options: { initialFormulasPending?: boolean, settled?: boolean } = {}) {
+function setup(options: { initialFormulasPending?: boolean, settled?: boolean, seq?: number } = {}) {
   const time = fakeLeaseClock(T0)
-  const { editor, control } = fakeEditor(time.elapse, { settled: options.settled })
+  const { editor, control } = fakeEditor(time.elapse, { settled: options.settled, seq: options.seq })
   const calls: PendingSend[] = []
   const send = vi.fn(async (request: SaveRequest) => new Promise<SaveContentResponse>((resolve, reject) => {
     calls.push({ request, at: time.now(), resolve, reject })
@@ -304,6 +314,46 @@ describe('节奏（设计 §3.2、§3.3）', () => {
     await drain(context)
     expect(await sent(context, 2)).toMatchObject({ request: { baseRevision: 2, localSeq: 2 } })
     expect(context.coordinator.view()).toMatchObject({ status: 'saving', unsavedEdits: true })
+  })
+
+  it('在途期间到了下一次上传的时刻、回包之前又改了：不把排着的旧捕获在回包时立即发出，回包之后按规则重新判断（等新的修改被捕获、停满 2 秒）', async () => {
+    const context = setup()
+    context.control.edit('甲')
+    await context.time.advance(2000)
+    const first = await sent(context, 1)
+    // 在途期间：T0 + 3 秒静默捕获"甲乙"，T0 + 4 秒本该上传它；T0 + 4.5 秒又改
+    context.control.edit('甲乙')
+    await context.time.advance(2500)
+    context.control.edit('甲乙丙')
+    await context.time.advance(500)
+    first.resolve(saved(2))
+    await drain(context)
+    expect(context.calls).toHaveLength(1)
+    // "甲乙丙"在 T0 + 5.5 秒捕获，最后一处修改之后 2 秒（T0 + 6.5 秒）上传
+    await context.time.advance(1499)
+    expect(context.calls).toHaveLength(1)
+    await context.time.advance(1)
+    expect(await sent(context, 2)).toMatchObject({ at: T0 + 6500, request: { localSeq: 3 } })
+  })
+
+  it('修改的信号在 SDK 执行命令的过程中同步到达：不在信号里捕获，排到下一个宏任务', async () => {
+    const context = setup()
+    context.tuning.setLimits({ captureQuietMs: 0, uploadQuietMs: 0 })
+    context.control.edit('甲')
+    expect(context.captures()).toHaveLength(0)
+    await drain(context)
+    expect(context.captures()).toHaveLength(1)
+    expect(context.control.capturesInCommand()).toBe(0)
+  })
+
+  it('建起来时编辑器里已经有修改（打开不算修改的基线是 0，与保存的状态机相同）：按此刻有了修改算，停 1 秒捕获、停 2 秒上传', async () => {
+    const context = setup({ seq: 2 })
+    await context.time.advance(999)
+    expect(context.captures()).toHaveLength(0)
+    await context.time.advance(1)
+    expect(context.captures()).toEqual([expect.objectContaining({ trigger: 'quiet', at: T0 + 1000, seq: 2 })])
+    await context.time.advance(1000)
+    expect(await sent(context, 1)).toMatchObject({ at: T0 + 2000, request: { localSeq: 2 } })
   })
 
   it('打开之后不改：不捕获、不上传', async () => {
@@ -569,9 +619,13 @@ describe('切到后台（设计 §3.4：不等公式、不提交单元格，全�
     context.control.edit('甲乙')
     context.page.set({ visible: false })
     inFlight.resolve(saved(2))
-    expect((await sent(context, 2)).request.localSeq).toBe(2)
+    const second = await sent(context, 2)
+    expect(second.request.localSeq).toBe(2)
+    second.resolve(saved(3))
     await drain(context)
     expect(context.calls).toHaveLength(2)
+    // 第一次切到后台时在途的就是最近一次捕获：没有另排一次（连去重掉的也没有）
+    expect(context.uploads().map(event => event.trigger)).toEqual(['quiet', 'hidden'])
   })
 })
 
@@ -593,6 +647,8 @@ describe('失败与重试（设计 §3.8）', () => {
       const retry = await sent(context, count + 1)
       expect(retry.request).toEqual(first.request)
       expect(context.coordinator.view().problem).toMatchObject({ kind: 'request' })
+      // 排着的那次重试已经开始：不再有"等着重试"，页头照常说保存中
+      expect(context.autosave.view().retrying).toBe(false)
       count += 1
       if (delay < 8000) {
         retry.reject(new ApiError(502, 'BAD_GATEWAY', '网关出错'))
@@ -605,6 +661,8 @@ describe('失败与重试（设计 §3.8）', () => {
     }
     expect(context.autosave.view().retrying).toBe(false)
     expect(context.coordinator.view()).toMatchObject({ status: 'clean', problem: undefined })
+    // 同一份重试了三次，摘要只算了一次（5 MiB 的快照不必每次重算）
+    expect(context.digest).toHaveBeenCalledOnce()
     // 退避清零：下一次失败又从 2 秒起
     context.control.edit('甲乙')
     await context.time.advance(2000)
@@ -762,6 +820,18 @@ describe('离线与会话（设计 §3.3 第 5 条、§3.8）', () => {
     expect(context.autosave.view()).toMatchObject({ offline: false })
   })
 
+  it('恢复联网时没有要传的：之后的修改照常等静默（"立即上传"只对恢复那一刻有待传的内容）', async () => {
+    const context = setup()
+    context.page.set({ online: false })
+    context.page.set({ online: true })
+    await drain(context)
+    context.control.edit('甲')
+    await context.time.advance(1999)
+    expect(context.calls).toHaveLength(0)
+    await context.time.advance(1)
+    await sent(context, 1)
+  })
+
   it('断网之后在退避中恢复联网：立即重试，不等退避；服务端给的 Retry-After 照旧', async () => {
     const context = setup()
     context.control.edit('甲')
@@ -812,6 +882,19 @@ describe('离线与会话（设计 §3.3 第 5 条、§3.8）', () => {
     context.page.set({ writable: true })
     await drain(context)
     await sent(context, 2)
+  })
+
+  it('保存得到 401、页面很快确认了是本人（退避还没到）：会话回来时立即重试，不等退避', async () => {
+    const context = setup()
+    context.control.edit('甲')
+    await context.time.advance(2000)
+    ;(await sent(context, 1)).reject(new ApiError(401, 'SESSION_EXPIRED', '登录已过期'))
+    await drain(context)
+    context.page.set({ writable: false })
+    await context.time.advance(500)
+    context.page.set({ writable: true })
+    await drain(context)
+    expect(await sent(context, 2)).toMatchObject({ at: T0 + 2500 })
   })
 
   it('保存得到 401、会话却一直显示可写：照样按退避再试，不连着发', async () => {
