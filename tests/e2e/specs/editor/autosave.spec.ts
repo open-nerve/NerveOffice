@@ -1,15 +1,18 @@
 // 自动保存接上页面之后的冒烟（M3-P4 S4；完整的 US-M3-02、03 用例在 S6）：放开之后停 2 秒自动上传、切到后台立即上传、
-// pagehide 有在途的保存不释放编辑权、带"公式待更新"的文档进入编辑时强制重算并补存、DEF-020 的回归、面板的防抖（退出编辑之前先写进模型）。
+// pagehide 有在途的保存不释放编辑权、带"公式待更新"的文档进入编辑时强制重算并补存（公式在 Worker 里与在主线程两种模式，主线程模式经
+// 测试构建的地址参数选，M3-P4 设计 §3.14）、DEF-020 的回归、面板的防抖（退出编辑之前先写进模型）。
 // 节奏经测试构建的自动保存控制（support/autosave.ts）与 Playwright 的时钟（page.clock）把握，不等真实的 2 秒（规范 §8.1）；
 // 控制只在测试构建里：标签 @test-build。
 import type { Page, Request } from '@playwright/test'
+import type { SelftestFormulaMode } from '../../../../apps/web/src/editor/testing/selftest-report.ts'
 import { SHEET_TEMPLATE } from '@nerve-office/contracts'
+import { FORMULA_MODE_PARAM, FORMULA_MODE_VALUES } from '../../../../apps/web/src/editor/testing/selftest-report.ts'
 import { autosaveLog, capturesOf, clearAutosaveLog, releaseAutosave, setAutosaveLimits, uploadsOf } from '../../support/autosave.ts'
 import { createDocument, createUser, editLeaseEndReason, revisionOf, withDatabase } from '../../support/database.ts'
-import { commandMark, waitForCommand } from '../../support/editor-probe.ts'
+import { commandMark, probeFormulaMode, waitForCommand } from '../../support/editor-probe.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditing, exitEditButton, exitEditing, openAndEnterEditing, openReader, resourceOf, ribbon, saveButton, savedContent, saveStatus, selectCell, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, exitEditButton, exitEditing, openAndEnterEditing, resourceOf, ribbon, saveButton, savedContent, saveStatus, selectCell, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -49,6 +52,16 @@ async function openNewSheet(page: Page, prefix: string, stage: 'ready' | 'steady
 /** 文档的"公式待更新"（服务端记在文档上，M3-P3） */
 async function formulasPendingOf(documentId: string): Promise<boolean | undefined> {
   return withDatabase(async client => (await client.query<{ formulas_pending: boolean }>('SELECT formulas_pending FROM documents WHERE id = $1', [documentId])).rows[0]?.formulas_pending)
+}
+
+/** 公式的两种模式（测试构建的开关，S1 的 testing/formula-mode.ts）在用例标题里的说法 */
+const FORMULA_MODES: Readonly<Record<SelftestFormulaMode, string>> = { 'worker': '公式在 Worker 里算', 'main-thread': '公式在主线程算' }
+
+/** 以只读打开（打开即阅读），地址带上公式模式的开关；等到页头有了"编辑" */
+async function openReaderIn(page: Page, documentId: string, mode: SelftestFormulaMode): Promise<void> {
+  await page.goto(`/documents/${documentId}?${new URLSearchParams({ [FORMULA_MODE_PARAM]: FORMULA_MODE_VALUES[mode] }).toString()}`)
+  await waitForEditorAccess(page, 'read')
+  await expect(enterEditButton(page)).toBeVisible()
 }
 
 /** A1 是 1，A2 是 =A1*2 而缓存值是错的（上次保存时公式还没算完）：按定义 A2 = 2 */
@@ -137,34 +150,39 @@ test.describe('US-M3-02 修改自动保存（S4 冒烟）', { tag: '@test-build'
 })
 
 test.describe('US-M3-03 保存下来的公式结果与重新计算的一致（S4 冒烟）', { tag: '@test-build' }, () => {
-  test('带"公式待更新"的文档：阅读页说明；进入编辑时强制全量重算，算完之后自动补存（没改也存一次），服务端清掉标记，存下的是重算的结果', async ({ page }) => {
-    const owner = await createUser('autosave-forced')
-    const documentId = await createDocument(owner, '公式待更新', staleFormulas)
-    await withDatabase(async client => client.query('UPDATE documents SET formulas_pending = true WHERE id = $1', [documentId]))
-    await loginThroughApi(page, owner)
-    await openReader(page, documentId)
-    const info = page.locator('#editor-chrome [data-slot="status-region"]')
-    await expect(info).toContainText('这份表格的公式结果可能还没更新（上次保存时公式还没算完），进入编辑之后会自动重算并保存')
+  for (const [mode, label] of Object.entries(FORMULA_MODES) as [SelftestFormulaMode, string][]) {
+    test(`带"公式待更新"的文档（${label}）：阅读页说明；进入编辑时强制全量重算，算完之后自动补存（没改也存一次），服务端清掉标记，存下的是重算的结果`, async ({ page }) => {
+      const owner = await createUser('autosave-forced')
+      const documentId = await createDocument(owner, '公式待更新', staleFormulas)
+      await withDatabase(async client => client.query('UPDATE documents SET formulas_pending = true WHERE id = $1', [documentId]))
+      await loginThroughApi(page, owner)
+      await openReaderIn(page, documentId, mode)
+      expect(await probeFormulaMode(page)).toBe(mode)
+      const info = page.locator('#editor-chrome [data-slot="status-region"]')
+      await expect(info).toContainText('这份表格的公式结果可能还没更新（上次保存时公式还没算完），进入编辑之后会自动重算并保存')
 
-    const writes = recordWrites(page, documentId)
-    await enterEditing(page)
-    await releaseAutosave(page)
-    // 补存不等用户的修改：公式收齐就补捕获，照上传的规则上传（没有修改时不等静默）
-    await expect.poll(() => writes.saves.length).toBe(1)
-    await expect(saveStatus(page)).toHaveText('已保存到云端')
-    expect(new URL(writes.saves[0]?.url() ?? '').searchParams.get('formulasPending')).toBe('false')
-    const saved = (await savedContent(page, documentId)).snapshot
-    expect(cellOf(saved, 'A2')).toMatchObject({ f: '=A1*2', v: 2 })
-    expect(await formulasPendingOf(documentId)).toBe(false)
-    expect(await revisionOf(documentId)).toBe(2)
-    // 没有修改：那一次是公式收齐之后的补捕获（强制重算那一轮算完之前不算收齐），不带标记
-    const log = await autosaveLog(page)
-    expect(capturesOf(log)).toMatchObject([{ trigger: 'formulas', seq: 0, formulasPending: false }])
-    expect(uploadsOf(log)).toMatchObject([{ outcome: { kind: 'saved' } }])
+      const writes = recordWrites(page, documentId)
+      await enterEditing(page)
+      // 进入编辑一律重建：同一个地址，模式不变
+      expect(await probeFormulaMode(page)).toBe(mode)
+      await releaseAutosave(page)
+      // 补存不等用户的修改：公式收齐就补捕获，照上传的规则上传（没有修改时不等静默）
+      await expect.poll(() => writes.saves.length).toBe(1)
+      await expect(saveStatus(page)).toHaveText('已保存到云端')
+      expect(new URL(writes.saves[0]?.url() ?? '').searchParams.get('formulasPending')).toBe('false')
+      const saved = (await savedContent(page, documentId)).snapshot
+      expect(cellOf(saved, 'A2')).toMatchObject({ f: '=A1*2', v: 2 })
+      expect(await formulasPendingOf(documentId)).toBe(false)
+      expect(await revisionOf(documentId)).toBe(2)
+      // 没有修改：那一次是公式收齐之后的补捕获（强制重算那一轮算完之前不算收齐），不带标记
+      const log = await autosaveLog(page)
+      expect(capturesOf(log)).toMatchObject([{ trigger: 'formulas', seq: 0, formulasPending: false }])
+      expect(uploadsOf(log)).toMatchObject([{ outcome: { kind: 'saved' } }])
 
-    await exitEditing(page)
-    await expect(info).not.toContainText('公式结果可能还没更新')
-  })
+      await exitEditing(page)
+      await expect(info).not.toContainText('公式结果可能还没更新')
+    })
+  }
 
   test('DEF-020：Cmd/Ctrl+K 被入口守卫取消之后（执行栈里留着它）改公式的依赖，自动保存存下的公式值正确', async ({ page }) => {
     // 快捷键要等 SDK 到 steady（之前不可用）

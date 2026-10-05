@@ -5,11 +5,13 @@
 // - Facade：M0 的 Facade 入口经它逐项调用；单元格在画布上的位置也经它取（只读样本的列宽、隐藏的列与行高不是模板的默认值）。
 //   入口用到的部分与测试构建的页面自检共用一份声明（editor/testing/read-only-entries.ts 的 Entry*），这里在它上面加 E2E 另外用到的。
 // - 页面里打包的链接地址判定（M3-P3 S2）：跨引擎的同一组用例在三个浏览器里经它核对。
+// - 公式在哪里计算（M3-P4 设计 §3.14）：测试构建经地址参数选主线程模式，用例据此核对开关确实生效。
 // 用到探针的用例打上 @test-build：外部模式测生产镜像，里面没有探针，按标签排除（playwright.config.ts）
 import type { CanonicalLink, OpenCheckFailure } from '@nerve-office/contracts'
 import type { Locator, Page } from '@playwright/test'
 import type { LoggedCommand } from '../../../apps/web/src/editor/testing/content-compare.ts'
 import type { EntryApi, EntryImage, EntryRange, EntryScope, EntrySheet, EntryWorkbook } from '../../../apps/web/src/editor/testing/read-only-entries.ts'
+import type { SelftestFormulaMode } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import type { Workbook } from './sheet.ts'
 import { expect } from './fixtures.ts'
 import { cellOf, sheetCanvas } from './sheet.ts'
@@ -105,6 +107,8 @@ interface EditorProbe {
   readonly formulaBarText: () => string
   readonly canonicalLink: (url: string) => CanonicalLink
   readonly openCheck: ProbeOpenCheck
+  /** 公式在哪里计算（worker 或 main-thread） */
+  readonly formulaMode: SelftestFormulaMode
 }
 
 declare global {
@@ -175,6 +179,17 @@ export async function probeOpenCheck(page: Page): Promise<ProbeOpenCheck> {
     if (probe === undefined)
       throw new Error('页面里没有编辑器的探针')
     return probe.openCheck
+  })
+}
+
+/** 现在这个编辑器的公式在哪里计算（M3-P4 设计 §3.14）：页面里没有探针时失败 */
+export async function probeFormulaMode(page: Page): Promise<SelftestFormulaMode> {
+  await probeIn(page)
+  return page.evaluate(() => {
+    const probe = window.__nerveEditorProbe
+    if (probe === undefined)
+      throw new Error('页面里没有编辑器的探针')
+    return probe.formulaMode
   })
 }
 
