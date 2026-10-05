@@ -2,13 +2,16 @@
 // 检查由编辑器页里编译进测试构建的自检自己做（apps/web/src/editor/testing/selftest.ts，与 E2E 共用入口清单），这里只负责：
 // 1. 起 E2E 的后端：与 Playwright 同一个服务脚本（support/serve.ts：本次运行专用的库、迁移、托管测试构建），端口按次挑选，
 //    库名带本进程的进程号（服务脚本停下时删库；本进程被强制结束时，下一次 E2E 或自检启动时按进程号清理）；
-// 2. 写库造场景（support/selftest-plan.ts：查看者、作者、只读样本与去掉公式缓存值的样本）；
+// 2. 写库造场景（support/selftest-plan.ts：查看者、作者，每一步一份文档——只读样本、去掉公式缓存值的样本、模板、公式样本与 5 万行的大表）；
 // 3. 起收集端（本机的另一个端口）：每一步做完，页面整页跳到收集端，结果在查询参数里（页面的 CSP 只许同源连接、E2E 的后端是生产的后端，
 //    没有收结果的接口；顶层跳转不受 CSP 限制）。收集端收下这一步的结果，把页面带到下一步的入口页，最后停在结束页；
 // 4. open -g -a Safari 在后台打开第一步的入口页（M0 的做法），--front 时 open -a Safari 把 Safari 带到前台：不改 Safari 的设置，
 //    不用"允许远程自动化"；
-// 5. 等全部的结果（总时限，--timeout 秒），核对服务器上的文档（只读的几步没有保存过；enter-exit 恰好保存了一次、内容里有改的那一格），
-//    写 tests/e2e/test-results/safari/<时间>.json（Safari 与 macOS 的版本、每步每项的结果、页面错误、切换的耗时），打印汇总；
+// 5. 等全部的结果（总时限，--timeout 秒），核对服务器上的文档（只读与捕获时机的几步没有保存过；enter-exit 恰好保存了一次、内容里有改的那一格），
+//    写 tests/e2e/test-results/safari/<时间>.json（Safari 与 macOS 的版本、每步每项的结果、页面错误、计时与时间线），打印汇总；
+//    最后一步 hidden-save（M3-P4 S1）由这里编排：在库里看到它第一次保存（修订号 2）之后，open -a Safari 另开收集端的空白页（HIDE_PATH），
+//    编辑器页随之真的变成隐藏，页面在隐藏的那一刻保存；按库里的证据判定（修订号 3、内容里有隐藏的那一刻写的那一格）与用时，
+//    页面在后台交不回结果也不算超时；
 // 6. 停后端、删库。Safari 里留下一个停在结束页的标签页（与 M0 相同），可以关掉。
 // 退出码：0 全部通过；1 有不通过的检查、页面错误或服务器上的核对不对；2 超时（有的步没有交回结果）；3 准备阶段失败（没有构建、
 // 库连不上、Safari 打不开）。
@@ -28,9 +31,10 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { decodeSelftestReport } from '../../../apps/web/src/editor/testing/selftest-report.ts'
+import { revisionOf } from '../support/database.ts'
 import { databaseUrl, E2E_DATABASE_PREFIX, pickFreePort } from '../support/environment.ts'
-import { selftestScene, selftestSteps, serverProblemsOf } from '../support/selftest-plan.ts'
-import { chainOf, DONE_PATH, exitCodeOf, nextAfter, outcomeOf, parseReportRequest, resultFileName, timingLines } from './run-plan.ts'
+import { selftestScene, serverProblemsOf } from '../support/selftest-plan.ts'
+import { chainOf, DONE_PATH, exitCodeOf, HIDE_PATH, nextAfter, outcomeOf, parseReportRequest, resultFileName, serverJudgedOutcome, timingLines } from './run-plan.ts'
 
 const SERVE_SCRIPT = fileURLToPath(new URL('../support/serve.ts', import.meta.url))
 const SELFTEST_PAGE = fileURLToPath(new URL('../../../apps/web/dist-e2e/selftest.html', import.meta.url))
@@ -117,6 +121,11 @@ async function startCollector(chainFor: (collector: string) => readonly ChainLin
       response.end('<!doctype html><meta charset="utf-8"><title>页面自检结束</title><p>页面自检结束，结果已交给驱动脚本。可以关掉这个标签页。</p>')
       return
     }
+    if (url.pathname === HIDE_PATH) {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+      response.end('<!doctype html><meta charset="utf-8"><title>让编辑器页隐藏</title><p>页面自检（hidden-save）：这个标签页让编辑器页变成隐藏。驱动脚本结束之后可以关掉。</p>')
+      return
+    }
     const parsed = parseReportRequest(url, chain.length)
     if ('error' in parsed) {
       response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end(parsed.error)
@@ -160,10 +169,54 @@ async function startCollector(chainFor: (collector: string) => readonly ChainLin
   }
 }
 
-async function waitForResults(collector: Collector, steps: number, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (collector.received.size < steps && Date.now() < deadline)
+/** 等前 steps 步的结果都交回（或者到 deadline） */
+async function waitForResults(collector: Collector, steps: number, deadline: number): Promise<void> {
+  const delivered = (): boolean => Array.from({ length: steps }, (_, index) => index).every(index => collector.received.has(index))
+  while (!delivered() && Date.now() < deadline)
     await new Promise(resolve => setTimeout(resolve, 500))
+}
+
+/** 等这份文档的修订号到 revision（每 100 毫秒查一次库）；到了返回那一刻（Date.now()），到 deadline 还没到返回 undefined */
+async function waitForRevision(documentId: string, revision: number, deadline: number): Promise<number | undefined> {
+  while (Date.now() < deadline) {
+    if (((await revisionOf(documentId)) ?? 0) >= revision)
+      return Date.now()
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+  return undefined
+}
+
+/** hidden-save 等第一次保存最多多久（这一步的页面要登录、打开、进入编辑、保存） */
+const HIDDEN_FIRST_SAVE_TIMEOUT_MS = 120_000
+
+/** 另开标签页之后，等隐藏的那一刻的保存最多多久（Safari 约 6 秒之后停隐藏页面的计时器：保存要在那之前发出） */
+const HIDDEN_SAVE_TIMEOUT_MS = 60_000
+
+/** 隐藏的那一刻的保存存下之后，再等页面交回结果多久（交不回也不算失败：页面在后台） */
+const HIDDEN_REPORT_GRACE_MS = 30_000
+
+/**
+ * 编排 hidden-save（最后一步）：等它第一次保存（修订号 2）→ open -a Safari 另开收集端的空白页，编辑器页随之变成隐藏 →
+ * 等隐藏的那一刻的保存（修订号 3）→ 再等一会儿页面的结果。返回证据的说明
+ */
+async function driveHiddenSave(collector: Collector, step: SelftestStep, index: number, deadline: number): Promise<string> {
+  const first = await waitForRevision(step.documentId, 2, Math.min(deadline, Date.now() + HIDDEN_FIRST_SAVE_TIMEOUT_MS))
+  if (first === undefined)
+    return `${HIDDEN_FIRST_SAVE_TIMEOUT_MS / 1000} 秒内没有等到第一次保存（修订号 2），没有另开标签页`
+  say('hidden-save：库里有了第一次保存，另开标签页让编辑器页隐藏')
+  const opened = Date.now()
+  try {
+    execFileSync('open', ['-a', 'Safari', new URL(HIDE_PATH, collector.origin).href])
+  }
+  catch (error) {
+    return `另开标签页失败：${error instanceof Error ? error.message : String(error)}`
+  }
+  const second = await waitForRevision(step.documentId, 3, Math.min(deadline, opened + HIDDEN_SAVE_TIMEOUT_MS))
+  if (second === undefined)
+    return `另开标签页之后 ${HIDDEN_SAVE_TIMEOUT_MS / 1000} 秒内库里没有隐藏的那一刻的保存（修订号 3）`
+  say(`hidden-save：另开标签页之后 ${second - opened} ms 库里有了隐藏的那一刻的保存`)
+  await waitForResults(collector, index + 1, Math.min(deadline, Date.now() + HIDDEN_REPORT_GRACE_MS))
+  return `库里看到第一次保存之后另开标签页；另开之后 ${second - opened} ms 库里有了隐藏的那一刻的保存（每 100 毫秒查一次库）；页面的结果${collector.received.has(index) ? '交回了' : `在 ${HIDDEN_REPORT_GRACE_MS / 1000} 秒内没有交回（页面在后台）`}`
 }
 
 /** 服务器上的核对（每一步的文档）：只读的几步没有保存过（修订号仍是 1）；enter-exit 恰好保存了一次、内容里有改的那一格 */
@@ -183,7 +236,9 @@ const STATUS_TEXT = { passed: '通过', failed: '不通过', missing: '没有结
 function printSummary(outcomes: readonly StepOutcome[], serverProblems: readonly string[]): void {
   for (const outcome of outcomes) {
     const checks = outcome.report?.checks ?? []
-    say(`${STATUS_TEXT[outcome.status]}：${outcome.scenario}（${checks.filter(check => check.pass).length}/${checks.length} 项）`)
+    say(`${STATUS_TEXT[outcome.status]}：${outcome.id}（${checks.filter(check => check.pass).length}/${checks.length} 项）`)
+    if (outcome.evidence !== undefined)
+      say(`  库里的证据：${outcome.evidence}`)
     for (const problem of outcome.problems)
       say(`  - ${problem}`)
     for (const line of timingLines(outcome.report?.timings ?? []))
@@ -194,7 +249,7 @@ function printSummary(outcomes: readonly StepOutcome[], serverProblems: readonly
 }
 
 async function main(): Promise<number> {
-  const { values } = parseArgs({ options: { timeout: { type: 'string', default: '900' }, front: { type: 'boolean', default: false } } })
+  const { values } = parseArgs({ options: { timeout: { type: 'string', default: '1800' }, front: { type: 'boolean', default: false } } })
   const timeoutMs = Number(values.timeout) * 1000
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0)
     throw new SetupError(`--timeout 要是正的秒数：${values.timeout}`)
@@ -220,7 +275,7 @@ async function main(): Promise<number> {
   try {
     await waitUntilReady(origin, server)
     const scene = await selftestScene('safari')
-    const steps = selftestSteps(scene)
+    const { steps } = scene
     collector = await startCollector(collectorOrigin => chainOf(steps, origin, collectorOrigin))
     const first = collector.chain[0]
     if (first === undefined)
@@ -232,10 +287,19 @@ async function main(): Promise<number> {
     catch (error) {
       throw new SetupError(`Safari 打不开：${error instanceof Error ? error.message : String(error)}`)
     }
-    await waitForResults(collector, steps.length, timeoutMs)
+    const deadline = Date.now() + timeoutMs
+    // hidden-save 在最后：之前的各步交回之后由这里编排它（页面在后台，按库里的证据判定）
+    const hiddenIndex = steps.findIndex(step => step.scenario === 'hidden-save')
+    if (hiddenIndex >= 0 && hiddenIndex !== steps.length - 1)
+      throw new SetupError('hidden-save 要是最后一步')
+    await waitForResults(collector, hiddenIndex >= 0 ? hiddenIndex : steps.length, deadline)
+    const hiddenStep = steps[hiddenIndex]
+    const evidence = hiddenStep === undefined ? undefined : await driveHiddenSave(collector, hiddenStep, hiddenIndex, deadline)
     const { received } = collector
-    const outcomes = steps.map((step, index) => outcomeOf(step, received.get(index)))
     const stored = await checkServer(steps)
+    const outcomes = steps.map((step, index) => index === hiddenIndex
+      ? serverJudgedOutcome(step, received.get(index), stored.problems.filter(problem => problem.startsWith(`${step.id}：`)), evidence ?? '')
+      : outcomeOf(step, received.get(index)))
     const exitCode = exitCodeOf(outcomes, stored.problems)
     mkdirSync(RESULTS_DIR, { recursive: true })
     const file = `${RESULTS_DIR}${resultFileName(startedAt)}`

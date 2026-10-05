@@ -36,9 +36,14 @@ export type SelftestFormulaMode = keyof typeof FORMULA_MODE_VALUES
  * - read-only-formulas：查看者打开去掉公式缓存值的样本，公式在 Worker 里算出结果、没有被防火墙取消；
  * - edit-chrome：能编辑的人打开同一份样本，界面检查的对照（工具栏、右键菜单、底栏在能编辑时都在，合成的右键与按键确实有效）；
  * - enter-exit：作者打开自己的一份样本（M3-P2 S5）：阅读 → 点页头的"编辑"→ 经 Facade 改一格（ENTER_EXIT_EDIT）→ 点"退出编辑"
- *   （先保存）→ 回到阅读之后再试 Facade 的只读入口、撤销与重做（撤销栈已清空）与界面；两次切换的耗时记进 timings
+ *   （先保存）→ 回到阅读之后再试 Facade 的只读入口、撤销与重做（撤销栈已清空）与界面；两次切换的耗时记进 timings；
+ * - 捕获时机的复核（CAPTURE_SCENARIOS，M3-P4 S1，DEF-003 的其余部分；都在编辑时跑，见 ./selftest-capture.ts）
  */
-export const SELFTEST_SCENARIOS = ['read-only', 'read-only-formulas', 'edit-chrome', 'enter-exit'] as const
+export const CAPTURE_SCENARIOS = ['environment', 'change-detection', 'formula-timing', 'auto-height', 'large-copy', 'composition', 'hidden-save'] as const
+
+export type CaptureScenario = (typeof CAPTURE_SCENARIOS)[number]
+
+export const SELFTEST_SCENARIOS = ['read-only', 'read-only-formulas', 'edit-chrome', 'enter-exit', ...CAPTURE_SCENARIOS] as const
 
 export type SelftestScenario = (typeof SELFTEST_SCENARIOS)[number]
 
@@ -51,6 +56,15 @@ export function isSelftestScenario(value: string): value is SelftestScenario {
  * 驱动脚本与 E2E 核对服务器上的那份文档恰好多了一个修订、内容里有它
  */
 export const ENTER_EXIT_EDIT = { sheetName: '数据', sheetId: 'sheet-1', cell: 'K45', row: 44, column: 10, value: '进入、退出编辑的自检' } as const
+
+/**
+ * hidden-save（M3-P4 S1）在编辑时写的两格（模板的第一张表 sheet-1）：先写第一格并保存，页面变成隐藏的那一刻写第二格并保存。
+ * 驱动脚本与 E2E 核对服务器上的那份文档：第一次保存之后修订号 2、内容里有第一格；隐藏之后修订号 3、内容里有第二格
+ */
+export const HIDDEN_SAVE_EDITS = [
+  { sheetId: 'sheet-1', cell: 'A1', row: 0, column: 0, value: '隐藏之前保存的' },
+  { sheetId: 'sheet-1', cell: 'A2', row: 1, column: 0, value: '隐藏的那一刻保存的' },
+] as const
 
 /** 一项计时（例如 switch.enter：一次切换的各段耗时，毫秒；缺的是 null）。各段的含义见 ./switch-timing.ts 的 switchDurations */
 export interface SelftestTiming {
