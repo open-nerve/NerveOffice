@@ -244,7 +244,7 @@ describe('US-M1-11 lint 规则的自测：后端不取本机的"现在"，与时
     'export function expired(at: Date): boolean {\n  return at.getTime() <= Date.now()\n}\n',
   ]
 
-  it.each([API_SERVICE, API_CONTROLLER, 'apps/api/src/modules/documents/trash.service.ts', 'apps/api/src/modules/jobs/trash-purge.scheduler.ts', 'apps/api/src/modules/database/database-time.ts', 'apps/api/src/app/validation.test.ts'])('%s', async (file) => {
+  it.each([API_SERVICE, API_CONTROLLER, 'apps/api/src/modules/documents/trash.service.ts', 'apps/api/src/modules/jobs/job-scheduler.ts', 'apps/api/src/modules/database/database-time.ts', 'apps/api/src/app/validation.test.ts'])('%s', async (file) => {
     for (const code of CASES) {
       const report = await lint(code, file)
       expect(report.rules, code).toContain('no-restricted-syntax')
@@ -453,6 +453,29 @@ describe('US-M1-11 lint 规则的自测：绕过权限的服务只给指定的�
       const report = await lint(code, file)
       expect(report.rules, `${file}：${code}`).toContain(rule)
       expect(report.messages.join('\n'), `${file}：${code}`).toContain(message)
+    }
+  })
+
+  it('修订记录与回执的保留期清理（RevisionPurgeService）只给 jobs：别的模块、app 层与集成测试专用的入口引用都失败，documents 模块自己不受影响（M3-P3 设计 §3.9）', async () => {
+    const RETENTION_MESSAGE = '修订记录与回执的保留期清理（RevisionPurgeService）不判断人的权限'
+    const importRetention = 'import { RevisionPurgeService } from \'../documents/index.ts\'\n\nexport const service = RevisionPurgeService\n'
+    // jobs 经公开入口引用；documents 模块自己经相对路径引用
+    expect(await rulesFor(importRetention, 'apps/api/src/modules/jobs/revision-purge.job.ts')).not.toContain('no-restricted-imports')
+    expect(await rulesFor('import { RevisionPurgeService } from \'./revision-purge.service.ts\'\n\nexport const service = RevisionPurgeService\n', 'apps/api/src/modules/documents/documents.module.ts')).not.toContain('no-restricted-imports')
+    // 同一个公开入口里的类型照常引用（它只是一批的结果）
+    expect(await rulesFor('import type { PurgedRecords } from \'../documents/index.ts\'\n\nexport type Batch = PurgedRecords\n', 'apps/api/src/modules/workspace/trash-directory.service.ts')).not.toContain('no-restricted-imports')
+    const violations: [string, string][] = [
+      [importRetention, 'apps/api/src/modules/workspace/trash-directory.service.ts'],
+      [importRetention, 'apps/api/src/modules/admin/admin-spaces.service.ts'],
+      ['import type { RevisionPurgeService } from \'../documents/index.ts\'\n\nexport type Service = RevisionPurgeService\n', 'apps/api/src/modules/workspace/space-membership.service.ts'],
+      ['import * as documents from \'../documents/index.ts\'\n\nexport const service = documents.RevisionPurgeService\n', 'apps/api/src/modules/workspace/space-membership.service.ts'],
+      ['export { RevisionPurgeService } from \'../modules/documents/index.ts\'\n', 'apps/api/src/app/index.ts'],
+      ['export { RevisionPurgeService } from \'../modules/documents/index.ts\'\n', API_INTEGRATION_ENTRY],
+    ]
+    for (const [code, file] of violations) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain('no-restricted-imports')
+      expect(report.messages.join('\n'), `${file}：${code}`).toContain(RETENTION_MESSAGE)
     }
   })
 

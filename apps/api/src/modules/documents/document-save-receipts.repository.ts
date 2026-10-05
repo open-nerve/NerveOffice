@@ -1,7 +1,7 @@
 import type { Buffer } from 'node:buffer'
 import type { Database, Transaction } from '../database/index.ts'
 import { Inject, Injectable } from '@nestjs/common'
-import { eq } from 'drizzle-orm'
+import { asc, eq, lt, sql } from 'drizzle-orm'
 import { documentSaveReceipts } from '../../db/schema/documents/index.ts'
 import { DATABASE, executorOf } from '../database/index.ts'
 
@@ -45,5 +45,24 @@ export class DocumentSaveReceiptsRepository {
   async insert(receipt: ReceiptRow, transaction: Transaction): Promise<ReceiptRow | undefined> {
     const [row] = await executorOf(this.db, transaction).insert(t).values(receipt).onConflictDoNothing({ target: t.requestId }).returning(COLUMNS)
     return row
+  }
+
+  /**
+   * 保留期的清理（M3-P3 设计 §3.9）：删掉至多 limit 条早于保留期（写下回执的时间早于 now 减 retentionDays 天）的回执，返回删了几条。
+   * 按写下的时间算，不按回执里记的保存时间（那是当时当前修订的时间，可能早得多）：保留期是这次请求的幂等窗口。
+   * 只锁要删的行、跳过别人正锁着的（与 DocumentRevisionsRepository.deleteExpired 相同）；回执写下之后不再改，删除时不必再核对
+   */
+  async deleteExpired(now: Date, retentionDays: number, limit: number, transaction: Transaction): Promise<number> {
+    const executor = executorOf(this.db, transaction)
+    const expired = executor
+      .select({ requestId: t.requestId })
+      .from(t)
+      .where(lt(t.createdAt, sql`${now}::timestamptz - make_interval(days => ${retentionDays})`))
+      .orderBy(asc(t.createdAt))
+      .limit(limit)
+      .for('update', { skipLocked: true })
+    // 子查询嵌进 sql 时 drizzle 自己加括号
+    const deleted = await executor.delete(t).where(sql`${t.requestId} IN ${expired}`).returning({ requestId: t.requestId })
+    return deleted.length
   }
 }

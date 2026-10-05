@@ -600,6 +600,13 @@ const API_TRASH_PURGE = {
   importNames: ['TrashPurgeService'],
   message: '到期的回收站清理（TrashPurgeService）不判断人的权限，只由定时任务的模块（modules/jobs）调用（M2-P4 设计 §3.1）',
 }
+// 修订记录与回执的保留期清理（RevisionPurgeService）同样不判断人的权限，删掉的是别人的请求记录（M3-P3 设计 §3.9）：
+// 只由定时任务的模块调用，写法同上
+const API_REVISION_PURGE = {
+  regex: String.raw`(?:^|/)documents/index\.ts$`,
+  importNames: ['RevisionPurgeService'],
+  message: '修订记录与回执的保留期清理（RevisionPurgeService）不判断人的权限，只由定时任务的模块（modules/jobs）调用（M3-P3 设计 §3.9）',
+}
 // 永久删除一个删除单元的本体（TrashEntryPurger）不判断任何人的权限：只在 documents 模块内部由 TrashService.purge（锁下判断过权限之后）
 // 与 TrashPurgeService（到期的清理）调用，不从公开入口导出。别的模块直接引用它的文件由模块边界拦下；这里再拦下经公开入口的引用，
 // 将来有人把它加进入口也拦得住。jobs 也不例外：它只经 TrashPurgeService（M2-P6 复核 A 的 G1）
@@ -672,8 +679,11 @@ interface ApiFileKind {
   processEnv?: boolean
   /** 引用停用者文档的转移 DocumentTransferService（管理界面的模块与 documents 模块） */
   documentTransfer?: boolean
-  /** 引用到期的回收站清理 TrashPurgeService（定时任务的模块与 documents 模块） */
-  trashPurge?: boolean
+  /**
+   * 引用 documents 只给定时任务的入口：到期的回收站清理 TrashPurgeService、修订记录与回执的保留期清理 RevisionPurgeService
+   * （定时任务的模块与 documents 模块）
+   */
+  jobEntries?: boolean
   /** 经别的模块的公开入口引用它的仓储（只有集成测试专用的入口，为集成测试转出 documents 的仓储） */
   foreignRepositories?: boolean
   /** 一串 id 只用一个数组参数，不用 drizzle 的 inArray、notInArray（documents 与 users 的仓储） */
@@ -696,7 +706,7 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
     ...(kind.tables === true ? [] : [API_TABLES]),
     ...(kind.controller === true ? [API_REPOSITORY_FROM_CONTROLLER, API_TRANSACTIONS_FROM_CONTROLLER] : []),
     ...(kind.documentTransfer === true ? [] : [API_DOCUMENT_TRANSFER]),
-    ...(kind.trashPurge === true ? [] : [API_TRASH_PURGE]),
+    ...(kind.jobEntries === true ? [] : [API_TRASH_PURGE, API_REVISION_PURGE]),
     API_TRASH_ENTRY_PURGER,
     ...(kind.foreignRepositories === true ? [] : [API_FOREIGN_REPOSITORIES]),
     ...(kind.idArraysOnly === true ? [API_ID_LISTS] : []),
@@ -942,11 +952,11 @@ export default antfu(
   },
   // 后端：先是所有文件的限制，后面的块按文件类型放开各自需要的部分（后面的块覆盖前面的同名规则）
   { name: 'nerve/api', files: ['apps/api/src/**/*.ts'], rules: apiRules() },
-  // 管理界面的模块可以引用停用者文档的转移（M2-P2 审查 A9），定时任务的模块可以引用到期的回收站清理（M2-P4 设计 §3.1）；
-  // documents 模块自己两样都可以。紧跟在上一块之后：后面按文件类型的块（控制器、仓储等）照常拦下，它们不需要
+  // 管理界面的模块可以引用停用者文档的转移（M2-P2 审查 A9），定时任务的模块可以引用到期的回收站清理与修订记录、回执的保留期清理
+  // （M2-P4 设计 §3.1，M3-P3 设计 §3.9）；documents 模块自己都可以。紧跟在上一块之后：后面按文件类型的块（控制器、仓储等）照常拦下，它们不需要
   { name: 'nerve/api-document-transfer', files: ['apps/api/src/modules/admin/**/*.ts'], rules: apiRules({ documentTransfer: true }) },
-  { name: 'nerve/api-trash-purge', files: ['apps/api/src/modules/jobs/**/*.ts'], rules: apiRules({ trashPurge: true }) },
-  { name: 'nerve/api-documents', files: ['apps/api/src/modules/documents/**/*.ts'], rules: apiRules({ documentTransfer: true, trashPurge: true }) },
+  { name: 'nerve/api-jobs', files: ['apps/api/src/modules/jobs/**/*.ts'], rules: apiRules({ jobEntries: true }) },
+  { name: 'nerve/api-documents', files: ['apps/api/src/modules/documents/**/*.ts'], rules: apiRules({ documentTransfer: true, jobEntries: true }) },
   // 集成测试专用的入口为集成测试转出数据库句柄、documents 的仓储与全部的表定义；app 层的程序接口（index.ts）与 app 层的其他文件同样拿不到
   // （复验 N6，M2-P6 复核 A 的 S3、复验 R-S4、复核 B 的 B4）
   { name: 'nerve/api-integration-entry-exports', files: [API_INTEGRATION_ENTRY], rules: apiRules({ databaseHandles: true, foreignRepositories: true, tables: true }) },

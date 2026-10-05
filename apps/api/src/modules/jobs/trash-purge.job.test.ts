@@ -104,6 +104,17 @@ describe('TrashPurgeJob.runOnce', () => {
   })
 })
 
+describe('TrashPurgeJob 作为定时任务（JobScheduler 排程）', () => {
+  it('名字、开关与间隔取自配置；启动日志另带一批的数量；关掉时说明到期的要人工永久删除', () => {
+    const { job } = setup({ batchSize: 20, intervalMs: 900_000 })
+    expect(job.name).toBe('trash-purge')
+    expect(job.title).toBe('回收站的自动清理')
+    expect(job.schedule).toEqual({ enabled: true, intervalMs: 900_000 })
+    expect(job.settings).toEqual({ batchSize: 20 })
+    expect(job.disabled).toEqual({ variable: 'NERVE_TRASH_PURGE_ENABLED', consequence: '到期的东西要人工永久删除' })
+  })
+})
+
 /** 让这些条目每次永久删除都失败（例如数据不一致），别的照常清掉 */
 function alwaysFailing(trash: ReturnType<typeof setup>['trash'], ids: readonly string[]): void {
   trash.purgeExpired.mockImplementation(async (target: ExpiredTrashEntry) => {

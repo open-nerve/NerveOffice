@@ -89,6 +89,23 @@ export interface AppConfig {
       /** 一轮最多清理多少个删除单元 */
       readonly batchSize: number
     }
+    /** 修订记录与保存回执的保留期清理（M3-P3 设计 §3.9）：与回收站的清理同一个调度器 */
+    readonly revisionPurge: {
+      /** 关掉之后不再起定时器：过了保留期的修订记录与回执留着（不影响使用），重新打开之后下一轮一起清。默认开启 */
+      readonly enabled: boolean
+      /** 两轮之间的间隔；实际触发时间带随机抖动 */
+      readonly intervalMs: number
+      /** 一批最多删多少条（修订记录与回执各算）：每批一个短事务，一轮删到不满一批为止 */
+      readonly batchSize: number
+    }
+  }
+  /** 修订记录与保存回执（M3-P3 设计 §3.9） */
+  readonly revisions: {
+    /**
+     * 保留多少天（每份文档当前修订的那一行一直保留）。保留期同时是保存、新建、复制、另存为副本的幂等窗口：这么多天之内
+     * 重发同一个请求得到原来的结果，之后按新的请求处理。下限见 REVISION_RETENTION_MIN_DAYS
+     */
+    readonly retentionDays: number
   }
   readonly password: {
     /** Argon2id 的参数（00 号计划书 §11.1）：按部署机器的基准测试调整；改了之后，下次登录成功时重新哈希 */
@@ -153,8 +170,9 @@ function text() {
   return z.string({ error: issue => (issue.input === undefined ? '缺少' : '必须是文本') })
 }
 
-function integer(min: number, max: number) {
-  const problem = `必须是 ${min}–${max} 之间的整数`
+/** 整数的范围；reason 是范围的理由，跟在说明后面（例如下限为什么是它） */
+function integer(min: number, max: number, reason?: string) {
+  const problem = `必须是 ${min}–${max} 之间的整数${reason === undefined ? '' : `：${reason}`}`
   return text()
     .regex(/^\d+$/, problem)
     .transform(Number)
@@ -219,6 +237,19 @@ const trustProxy = text().transform((value, ctx): number | string[] => {
   return z.NEVER
 })
 
+/**
+ * 本机发件箱里一条记录最长留多少天（00 号计划书 §7.5，M4 实现发件箱）：一次结果未知的保存，页面最晚在这么多天之后还会原样重发
+ */
+const OUTBOX_RECORD_MAX_DAYS = 14
+
+/**
+ * 修订记录与回执的保留期的下限（M3-P3 设计 §3.9）：比发件箱的最长留存多一天。保留期是保存的幂等窗口——发件箱里一次结果未知的保存
+ * 在第 14 天重发时，服务端要还找得到原来的修订记录或回执，才能把原来的结果交回（A07）；找不到时它按一次新的保存处理，
+ * 基准修订号多半已经落后，得到修订号冲突，页面会误以为"没有保存"
+ */
+const REVISION_RETENTION_MIN_DAYS = OUTBOX_RECORD_MAX_DAYS + 1
+const REVISION_RETENTION_REASON = `保留期要长于本机发件箱一条记录的最长留存（${OUTBOX_RECORD_MAX_DAYS} 天，M4），否则发件箱里结果未知的保存重发时找不到原来的结果、重放不了`
+
 const environmentSchema = z.object({
   NERVE_DATABASE_URL: text().pipe(z.url({ protocol: /^postgres(?:ql)?$/, error: '必须是 postgres:// 或 postgresql:// 开头的连接串' })),
   NERVE_DATABASE_POOL_MAX: integer(1, 100).default(10),
@@ -261,6 +292,13 @@ const environmentSchema = z.object({
   NERVE_TRASH_PURGE_ENABLED: flag().default(true),
   NERVE_TRASH_PURGE_INTERVAL_MS: integer(1_000, 86_400_000).default(3_600_000),
   NERVE_TRASH_PURGE_BATCH: integer(1, 1_000).default(50),
+  // 修订记录与回执的保留期（M3-P3 设计 §3.9）：默认 30 天，下限见 REVISION_RETENTION_MIN_DAYS，上限 10 年只是兜底（要一直留着就关掉清理）
+  NERVE_REVISION_RETENTION_DAYS: integer(REVISION_RETENTION_MIN_DAYS, 3_650, REVISION_RETENTION_REASON).default(30),
+  // 保留期的清理：与回收站的清理同一个调度器，默认每小时一轮；一批最多 1000 条（修订记录与回执各算），一轮删到不满一批为止。
+  // 自动保存每 2–15 秒写一版（M3 总设计 US-M3-02）：一轮只删一批跟不上，所以一轮之内分批删完，每批一个短事务
+  NERVE_REVISION_PURGE_ENABLED: flag().default(true),
+  NERVE_REVISION_PURGE_INTERVAL_MS: integer(1_000, 86_400_000).default(3_600_000),
+  NERVE_REVISION_PURGE_BATCH: integer(1, 10_000).default(1_000),
   // 最低客户端构建（M3-P3 设计 §3.5）：运维开关，不设时不按构建拦
   NERVE_MIN_CLIENT_BUILD: minimumBuild.optional(),
   // 快照的检查（M3-P3 设计 §3.3，DEF-018）：默认 2 个子进程。数字的依据是 DEF-018 的测量（apps/api/scripts/measure-snapshot-inspection.ts）：
@@ -309,7 +347,11 @@ function threadpoolOf(value: string | undefined): Threadpool | undefined {
 
 /**
  * 开启回收站的自动清理时连接池至少要有几个连接（M2-P6 复核 A 的 G-3）：清理的一轮用一个连接持着防重复执行的会话级锁
- * （ExclusiveRunner），每一项的删除在另一个连接的短事务里。只有一个连接时，第二个连接永远等不到，每一轮都失败
+ * （ExclusiveRunner.run），每一项的删除在另一个连接的短事务里。只有一个连接时，第二个连接永远等不到，每一轮都失败。
+ *
+ * 修订记录与回执的保留期清理（M3-P3 设计 §3.9）不改变这个下限：它每一批是一个短事务，防重复执行的锁是这个事务里的事务级锁
+ * （ExclusiveRunner.runTransaction），任何时刻只占一个连接，而且从不拿着一个连接去等另一个。两个清理同时在跑、连接池只有 2 时：
+ * 回收站的清理持着一个、另一个由它每一项的事务与保留期清理的一批轮流用，各自很快归还，谁也不会一直等不到
  */
 const TRASH_PURGE_MIN_POOL = 2
 
@@ -403,7 +445,13 @@ function toAppConfig(env: Environment): AppConfig {
         intervalMs: env.NERVE_TRASH_PURGE_INTERVAL_MS,
         batchSize: env.NERVE_TRASH_PURGE_BATCH,
       },
+      revisionPurge: {
+        enabled: env.NERVE_REVISION_PURGE_ENABLED,
+        intervalMs: env.NERVE_REVISION_PURGE_INTERVAL_MS,
+        batchSize: env.NERVE_REVISION_PURGE_BATCH,
+      },
     },
+    revisions: { retentionDays: env.NERVE_REVISION_RETENTION_DAYS },
     password: {
       argon2: {
         memoryKib: env.NERVE_PASSWORD_ARGON2_MEMORY_KIB,
