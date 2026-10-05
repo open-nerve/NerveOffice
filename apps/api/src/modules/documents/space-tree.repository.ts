@@ -14,9 +14,9 @@ import { DATABASE, executorOf } from '../database/index.ts'
  * 不取树锁：不牵涉任何文件夹（DocumentCreationService）。
  * 保存文档内容**不取**它：保存与结构改动互不阻塞（保存只锁 requestId 与文档行，M1-P4，M3-P3 审查 A3）。
  *
- * 锁的顺序（ADR-007 的补充，M2-P2 交接单第 53 行据此扩展）：
+ * 锁的顺序（ADR-007 的补充，M2-P2 交接单第 53 行据此扩展；与 ADR-014 一致）：
+ * **按 requestId 的 advisory lock（保存、新建、复制、另存为副本的事务的第一把锁，排在最前，每个事务至多一把）** →
  * system-admins → 按登录名 → 账户行 → 重置或邀请行 → 限流计数 → 会话行 →
- * **按 requestId 的 advisory lock（写入文档的事务的第一把锁，每个事务至多一把）** →
  * **空间树的 advisory lock（按空间 id 排序）** → 空间行（按 id）→ 成员行 → 树里的行（文件夹行、文档行（按 id）、回收站行）→ 审计。
  * 跨空间的操作按空间 id 排序取两把，两个方向的跨空间移动同时发生时不成环。
  *
