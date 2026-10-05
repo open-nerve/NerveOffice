@@ -495,6 +495,35 @@ describe('打开自检（M3-P4 设计 §3.11）：jsdom 里真实的 Univer core
     editor.dispose()
   })
 
+  it('比较的"之前"一侧是载入的原样：SDK 改动交给 createWorkbook 的对象（这里在建出单元之后往里写进一项资源）不影响结果', async () => {
+    const lifecycle = new Set<(event: { stage: LifecycleStages }) => void>()
+    vi.spyOn(FUniver, 'newAPI').mockImplementation(univer => ({
+      Event: new Proxy({}, { get: (_target, name) => String(name) }),
+      addEvent: (name: string, listener: (event: { stage: LifecycleStages }) => void) => {
+        if (name === 'LifeCycleChanged')
+          lifecycle.add(listener)
+        return { dispose: () => lifecycle.delete(listener) }
+      },
+      createWorkbook: (data: { resources: { name: string, data: string }[] }) => {
+        const unit = (univer as Univer).createUnit<object, UnitModel>(UniverInstanceType.UNIVER_SHEET, data)
+        const note = data.resources.find(item => item.name === 'SHEET_NOTE_PLUGIN')
+        if (note !== undefined)
+          note.data = '{"sheet-1":{"0":{"0":{"note":"SDK 写进来的"}}}}'
+        return { getId: () => unit.getUnitId() }
+      },
+    }) as unknown as FUniver)
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-oc'), access: 'edit' })
+    await reachReady({
+      reach: (stage) => {
+        for (const listener of [...lifecycle])
+          listener({ stage })
+      },
+    })
+    const editor = await creating
+    expect(editor.openCheck).toEqual({ ok: true })
+    editor.dispose()
+  })
+
   it('打开自检取不到事实（资源守卫没有生效）：按加载失败处理，已经创建的都销毁', async () => {
     realUnitFacade([])
     const failure = new Error('资源守卫没有生效')
