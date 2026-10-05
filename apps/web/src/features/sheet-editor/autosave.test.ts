@@ -894,6 +894,46 @@ describe('切到后台（设计 §3.4：不等公式、不提交单元格，全�
     expect(suspended.events).toHaveLength(0)
   })
 
+  it('退避期内切到后台（服务端给了 Retry-After，审查 A4）：只捕获、不立即重发；回到前台也不提前，到点才重发', async () => {
+    const context = setup()
+    context.control.edit('甲')
+    await context.time.advance(2000)
+    ;(await sent(context, 1)).reject(new ApiError(503, 'SERVICE_UNAVAILABLE', '繁忙', { retryAfterSeconds: 30 }))
+    await drain(context)
+    await context.time.advance(1000)
+    context.control.edit('甲乙')
+    context.page.set({ visible: false })
+    expect(context.captures().at(-1)).toMatchObject({ trigger: 'hidden', seq: 2 })
+    await drain(context)
+    expect(context.calls).toHaveLength(1)
+    context.page.set({ visible: true })
+    await context.time.advance(28_999)
+    expect(context.calls).toHaveLength(1)
+    await context.time.advance(1)
+    expect(await sent(context, 2)).toMatchObject({ at: T0 + 32_000, request: { localSeq: 2 } })
+  })
+
+  it('退避期内切到后台（网络错误之后的退避）：不立即重发，到点照常重试；不在退避期时切到后台照常立即上传', async () => {
+    const context = setup()
+    context.control.edit('甲')
+    await context.time.advance(2000)
+    ;(await sent(context, 1)).reject(new NetworkError('断网'))
+    await drain(context)
+    await context.time.advance(1000)
+    context.page.set({ visible: false })
+    await drain(context)
+    expect(context.calls).toHaveLength(1)
+    await context.time.advance(1000)
+    const retry = await sent(context, 2)
+    expect(retry.at).toBe(T0 + 4000)
+    retry.resolve(saved(2))
+    await drain(context)
+    context.page.set({ visible: true })
+    context.control.edit('甲乙')
+    context.page.set({ visible: false })
+    expect(await sent(context, 3)).toMatchObject({ at: T0 + 4000, request: { localSeq: 2 } })
+  })
+
   it('在途时切到后台：有新的修改就当场捕获，排在在途的后面上传；在途的就是最近一次捕获时不重复排', async () => {
     const context = setup()
     context.control.edit('甲')
@@ -1202,6 +1242,72 @@ describe('离线与会话（设计 §3.3 第 5 条、§3.8）', () => {
     context.page.set({ writable: true })
     await drain(context)
     expect(await sent(context, 2)).toMatchObject({ at: T0 + 2500 })
+  })
+
+  /**
+   * 真实接线的样子（编辑器页）：每一次会话类的保存失败都让页面确认会话——令牌已知失效（不可写）→ 向服务端确认（一个来回，50 毫秒）→
+   * 是本人、换上令牌 → 可写。send 交回每次请求的结果（抛出即失败）
+   */
+  function flippingSetup(send: (attempt: number) => SaveContentResponse) {
+    const time = fakeLeaseClock(T0)
+    const { editor, control } = fakeEditor(time.elapse)
+    const page = fakePage()
+    const sends: number[] = []
+    const coordinator = createSaveCoordinator({
+      editor,
+      compress: async snapshot => new TextEncoder().encode(snapshot),
+      send: async () => {
+        sends.push(time.now() - T0)
+        return send(sends.length)
+      },
+      baseRevision: 1,
+      clientInstanceId: ME,
+      newRequestId: () => {
+        idSequence += 1
+        return `request-${idSequence}`
+      },
+      onUnauthenticated: () => {
+        page.set({ writable: false })
+        time.clock.schedule(() => page.set({ writable: true }), 50)
+      },
+      onSessionStale: () => {
+        page.set({ writable: false })
+        time.clock.schedule(() => page.set({ writable: true }), 50)
+      },
+      reportError: vi.fn(),
+    })
+    createAutosave({ editor, page: page.page, uploader: coordinator, clock: time.clock, digest: async snapshot => snapshot, initialFormulasPending: false, reportError: vi.fn() })
+    return { time, control, sends }
+  }
+
+  const CSRF_REJECTED = new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
+
+  it('服务端一直拒绝会话（令牌失效）而页面每次确认都照常成功（审查 A3）：只有第一次在会话回来时立即重试，之后按 4、8、16……秒退避，不按网络往返的速度连着发', async () => {
+    const { time, control, sends } = flippingSetup(() => {
+      throw CSRF_REJECTED
+    })
+    control.edit('甲')
+    await time.advance(60_000)
+    // 2 秒静默上传；被拒、确认之后立即重试一次（2.05 秒）；之后连着的会话类失败按退避：+4、+8、+16 秒（下一次在 62.05 秒，60 秒之外）
+    expect(sends).toEqual([2000, 2050, 6050, 14_050, 30_050])
+  })
+
+  it('连着的会话类失败的计数在成功、或者别的失败之后清零：之后再遇到会话类失败，会话回来时照样立即重试', async () => {
+    const outcomes: (SaveContentResponse | ApiError | NetworkError)[] = [CSRF_REJECTED, saved(2), CSRF_REJECTED, new NetworkError('断网'), new ApiError(401, 'SESSION_EXPIRED', '登录已过期'), saved(3)]
+    const { time, control, sends } = flippingSetup((attempt) => {
+      const outcome = outcomes[attempt - 1]
+      if (outcome === undefined || outcome instanceof Error)
+        throw outcome ?? new Error('多出来的请求')
+      return outcome
+    })
+    control.edit('甲')
+    await time.advance(2050)
+    expect(sends).toEqual([2000, 2050])
+    control.edit('甲乙')
+    await time.advance(2050)
+    // 第 3 次（4.05 秒）被拒，确认之后立即重试（4.1 秒）得到网络错误（退避 4 秒：连着的第 2 次失败），8.1 秒重试得到 401、确认之后立即重试
+    await time.advance(10_000)
+    expect(sends).toEqual([2000, 2050, 4050, 4100, 8100, 8150])
   })
 
   it('保存得到 401、会话却一直显示可写：照样按退避再试，不连着发', async () => {
