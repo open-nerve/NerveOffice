@@ -32,6 +32,7 @@ export type RoundStop = 'idle' | 'ended' | 'timeout'
 
 /**
  * 有一轮在算就请求停下，等它结束（收到结束的通知），至多 timeoutMs。没有在算时立即交回 idle、什么也不做。
+ * 先订阅、再请求停下：结束的通知本来是之后的命令（引擎在下一个让出点停下），万一在停下的这一步里就到来也接得住。
  * stop 抛出时照样抛出（退订与计时器都已清掉）
  */
 export async function stopRunningRound(round: FormulaRound, timeoutMs: number = ROUND_STOP_TIMEOUT_MS): Promise<RoundStop> {
@@ -45,9 +46,6 @@ export async function stopRunningRound(round: FormulaRound, timeoutMs: number = 
   const timer = setTimeout(() => outcome.resolve('timeout'), timeoutMs)
   try {
     round.stop()
-    // 先订阅、再请求停下：结束的通知一定接得住。它本来是之后的命令（引擎在让出点停下）；万一在停下的这一步里就结束了，这里接住
-    if (!round.running())
-      outcome.resolve('ended')
     return await outcome.promise
   }
   finally {

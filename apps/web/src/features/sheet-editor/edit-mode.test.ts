@@ -2416,12 +2416,20 @@ describe('打开自检（M3-P4 设计 §3.11–§3.13，US-M3-15）', () => {
     expect(context.api.reportOpenCheck).not.toHaveBeenCalled()
   })
 
-  it('上报失败（网络）：不看结果、不重试，也不当作页面错误', async () => {
-    const context = setup({ api: { reportOpenCheck: async () => Promise.reject(new NetworkError('断网')) } })
+  it('上报失败（网络）：不看结果、不重试，也不当作页面错误（没有没处理的拒绝）', async () => {
+    const context = setup()
+    let calls = 0
+    // 不经 vi.fn：它会接住返回的 Promise（记下 settledResults），没处理的拒绝就看不出来了
+    Object.assign(context.api, {
+      reportOpenCheck: async (): Promise<void> => {
+        calls += 1
+        throw new NetworkError('断网')
+      },
+    })
     context.factory.checkWith(() => FILTER_BROKEN)
     await opened(context)
     await context.time.advance(60_000)
-    expect(context.api.reportOpenCheck).toHaveBeenCalledOnce()
+    expect(calls).toBe(1)
     expect(context.reportError).not.toHaveBeenCalled()
   })
 })

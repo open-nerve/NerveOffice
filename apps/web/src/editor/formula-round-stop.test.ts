@@ -51,7 +51,8 @@ describe('停下正在算的一轮', () => {
     })
     expect(fake.round.stop).toHaveBeenCalledOnce()
     fake.progress(true)
-    await Promise.resolve()
+    // 让排着的 Promise 回调都跑完（借一个宏任务）：进度变了而还在算时不当作结束
+    await new Promise(resolve => setTimeout(resolve, 0))
     expect(outcome).toBeUndefined()
     fake.progress(false)
     await stopping
@@ -59,7 +60,7 @@ describe('停下正在算的一轮', () => {
     expect(fake.listeners()).toBe(0)
   })
 
-  it('请求停下的这一步里就结束了：交回 ended', async () => {
+  it('请求停下的这一步里就结束了（通知同步到来）：已经订阅了，交回 ended', async () => {
     const fake = fakeRound(true)
     fake.round.stop.mockImplementation(() => fake.progress(false))
     expect(await stopRunningRound(fake.round)).toBe('ended')

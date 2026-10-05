@@ -86,15 +86,6 @@ export function createEditorSlot(options: EditorSlotOptions): EditorSlot {
     retiring = Promise.all([retiring, editor.dispose()]).then(() => undefined)
   }
 
-  /** 等已经开始的销毁都完成（等的期间又有新的销毁时接着等） */
-  async function retired(): Promise<void> {
-    for (let waiting = retiring; ; waiting = retiring) {
-      await waiting
-      if (waiting === retiring)
-        return
-    }
-  }
-
   /** 销毁现在的编辑器与交回了还没接上的那一个；交回现在的视图状态（没有接上的编辑器时是上一次取出的） */
   function takeDown(): SheetViewState | undefined {
     if (attached !== undefined) {
@@ -129,8 +120,9 @@ export function createEditorSlot(options: EditorSlotOptions): EditorSlot {
         finish = resolve
       })
       try {
-        // 旧的编辑器销毁完才新建（主线程模式下可能要等正在算的一轮公式停下）：同一个容器里不同时有两个实例。等的期间被取代就不建了
-        await retired()
+        // 旧的编辑器销毁完才新建（主线程模式下可能要等正在算的一轮公式停下）：同一个容器里不同时有两个实例。等的期间被取代就不建了。
+        // 等的期间不会再有新的销毁：同一时刻至多一次创建在途（别的 replace 先等这一次结束），清空时这里已经没有编辑器了
+        await retiring
         if (mine !== ticket)
           return undefined
         const created = await options.createEditor(replaceOptions.recalculate === true ? { snapshot, access, viewState, recalculate: true } : { snapshot, access, viewState })
