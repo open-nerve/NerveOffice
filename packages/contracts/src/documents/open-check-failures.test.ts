@@ -36,6 +36,11 @@ describe('异常的构造器名（errorNameOf）：只取构造器名，不读 m
     class Ce extends Error {}
     expect(errorNameOf(new Ce('机密'))).toBe('Ce')
     expect(errorNameOf({})).toBe('Object')
+    // 写法不区分大小写：压缩之后的类名常是小写开头（M3-P4 审查 B6）
+    const minified = Object.create({ constructor: { name: 'e' } }) as object
+    expect(errorNameOf(minified)).toBe('e')
+    const minifiedLonger = Object.create({ constructor: { name: 'tA$1' } }) as object
+    expect(errorNameOf(minifiedLonger)).toBe('tA$1')
   })
 
   it('取不到或不合写法时没有：原始值、null、没有原型的对象、构造器名带空格或很长、取原型时抛错', () => {
