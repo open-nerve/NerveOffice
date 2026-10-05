@@ -17,6 +17,8 @@ export interface FakeLeaseClock {
   readonly clock: LeaseClock
   /** 时间前进 ms 毫秒，途中到点的计时器依次执行 */
   readonly advance: (ms: number) => Promise<void>
+  /** 时间同步地前进 ms 毫秒，不执行计时器：模拟一段同步的耗时（例如自动保存的捕获），到点的计时器在下一次 advance 时执行 */
+  readonly elapse: (ms: number) => void
   /** 还没执行、没取消的计时器个数 */
   readonly pending: () => number
   /** 现在（毫秒） */
@@ -46,13 +48,17 @@ export function fakeLeaseClock(start = 1_000): FakeLeaseClock {
         const due = live().filter(timer => timer.at <= target).sort((a, b) => a.at - b.at)[0]
         if (due === undefined)
           break
-        now = due.at
+        // 计时器里可能用 elapse 拨快过：时间只往前走
+        now = Math.max(now, due.at)
         due.cancelled = true
         due.callback()
         await settle()
       }
-      now = target
+      now = Math.max(now, target)
       await settle()
+    },
+    elapse: (ms) => {
+      now += ms
     },
     pending: () => live().length,
     now: () => now,

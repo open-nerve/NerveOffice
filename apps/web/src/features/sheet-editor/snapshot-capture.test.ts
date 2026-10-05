@@ -64,11 +64,10 @@ describe('立即上传的准备：先提交单元格、再等公式，然后捕�
     await expect(prepareCapture(editor, { settleTimeoutMs: 3000, take: pending => takeSnapshot(editor, pending) })).resolves.toMatchObject({ formulasPending: true })
   })
 
-  it('给了摘要的算法：按快照算出，放进捕获（会话内去重的键）', async () => {
+  it('交回 take 给出的那一份（自动保存记进"最近一次捕获"的同一个对象）', async () => {
     const { editor } = fakeEditor({ content: '乙' })
-    const digest = vi.fn(async (snapshot: string) => `sha:${snapshot}`)
-    await expect(prepareCapture(editor, { settleTimeoutMs: 0, take: pending => takeSnapshot(editor, pending), digest })).resolves.toMatchObject({ digest: 'sha:{"content":"乙"}' })
-    expect(digest).toHaveBeenCalledOnce()
+    const entry = { ...takeSnapshot(editor, false), serial: 7 }
+    await expect(prepareCapture(editor, { settleTimeoutMs: 0, take: () => entry })).resolves.toBe(entry)
   })
 
   it('出错原样抛出（保存的状态机按意外的错误处理）', async () => {

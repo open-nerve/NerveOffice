@@ -105,6 +105,15 @@ export async function gzipText(text: string): Promise<Uint8Array<ArrayBuffer>> {
   return new Uint8Array(await new Response(source.pipeThrough(new CompressionStream('gzip'))).arrayBuffer())
 }
 
+/**
+ * 快照 UTF-8 字节的 SHA-256（十六进制）：自动保存会话内去重的键（M3-P4 设计 §3.7）。不用弱哈希——碰撞会让改过的内容不上传，就是丢数据。
+ * crypto.subtle 只在安全上下文里有（HTTPS 与本机地址）；没有时抛出，自动保存这一次不去重（照常上传）
+ */
+export async function snapshotDigest(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+}
+
 /** 保存（带上编辑租约的代次与令牌、"公式待更新"、本页的构建与数据格式）：内容与当前相同时服务端回答 unchanged，照"已保存"处理 */
 export async function saveContent(documentId: string, request: SaveRequest, compressed: Uint8Array<ArrayBuffer>, lease: LeaseCredentials): Promise<SaveContentResponse> {
   const query = new URLSearchParams({
