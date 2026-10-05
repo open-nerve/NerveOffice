@@ -1,4 +1,5 @@
 // 编辑器槽位：同一个容器里至多一个编辑器、至多一次创建在途（审查 A1）；视图状态交给下一个；接上之后随编辑器的生命周期。
+// 销毁可能要等（M3-P4 设计 §3.14：主线程模式下先停下正在算的一轮）：旧的销毁完才新建，同一个容器里不同时有两个实例。
 import type { EditorAccess, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { createEditorSlot } from './editor-slot.ts'
@@ -9,8 +10,14 @@ interface FakeEditor {
   readonly access: EditorAccess
   readonly snapshot: string
   readonly viewState: SheetViewState | undefined
+  /** dispose 被调用了 */
   disposed: boolean
+  /** 真正销毁完了（holdDispose 时要等 finishDispose） */
+  gone: boolean
   enter: (stage: SheetEditorLifecycle) => void
+  /** 之后的 dispose 要等 finishDispose 才销毁完（主线程模式下等正在算的一轮停下） */
+  holdDispose: () => void
+  finishDispose: () => void
 }
 
 /** 第 n 个编辑器给出的视图状态 */
@@ -18,13 +25,20 @@ function viewStateOf(index: number): SheetViewState {
   return { sheetId: `sheet-${index}`, topLeft: { row: index, column: index }, selection: undefined }
 }
 
-/** 由测试决定何时建好、建成什么样的工厂：每次创建排一个"闸"，release 放行、fail 让它失败；记下同时在建的个数 */
+/**
+ * 由测试决定何时建好、建成什么样的工厂：每次创建排一个"闸"，release 放行、fail 让它失败；记下同时在建的个数，
+ * 以及开始新建的那一刻还没销毁完的编辑器（应当一直是 0）
+ */
 function fakeFactory() {
   const created: FakeEditor[] = []
   const gates: { release: () => void, fail: (error: unknown) => void }[] = []
   let building = 0
   let mostBuilding = 0
+  const aliveAtCreate: number[] = []
+  /** 第几次创建出的编辑器一开始就让销毁要等 */
+  const heldFromStart = new Set<number>()
   const createEditor = vi.fn(async (options: { snapshot: string, access: EditorAccess, viewState?: SheetViewState | undefined }): Promise<SheetEditor> => {
+    aliveAtCreate.push(created.filter(fake => fake.disposed && !fake.gone).length)
     building += 1
     mostBuilding = Math.max(mostBuilding, building)
     try {
@@ -38,15 +52,22 @@ function fakeFactory() {
     const index = created.length
     let stage: SheetEditorLifecycle = 'rendered'
     const listeners = new Set<(stage: SheetEditorLifecycle) => void>()
+    let held = heldFromStart.has(index)
+    let finish: () => void = () => {}
     const fake: FakeEditor = {
       access: options.access,
       snapshot: options.snapshot,
       viewState: options.viewState,
       disposed: false,
+      gone: false,
       enter: (next) => {
         stage = next
         listeners.forEach(listener => listener(next))
       },
+      holdDispose: () => {
+        held = true
+      },
+      finishDispose: () => finish(),
       editor: {
         unitId: 'unit-1',
         changeSeq: () => 0,
@@ -69,8 +90,14 @@ function fakeFactory() {
         capture: () => options.snapshot,
         viewState: () => fake.disposed ? undefined : viewStateOf(index),
         openCheck: { ok: true },
-        dispose: () => {
+        dispose: async () => {
           fake.disposed = true
+          if (held) {
+            await new Promise<void>((resolve) => {
+              finish = resolve
+            })
+          }
+          fake.gone = true
         },
       },
     }
@@ -89,6 +116,12 @@ function fakeFactory() {
     },
     /** 同时在建的最多个数 */
     mostBuilding: () => mostBuilding,
+    /** 每次开始新建的那一刻，已经开始销毁、还没销毁完的编辑器个数 */
+    aliveAtCreate: () => [...aliveAtCreate],
+    /** 第 n 次创建（从 0 数）出的编辑器，销毁要等它的 finishDispose */
+    holdDisposeOf: (index: number) => {
+      heldFromStart.add(index)
+    },
   }
 }
 
@@ -256,5 +289,81 @@ describe('编辑器槽位（审查 A1）', () => {
     expect(await replacing).toBeUndefined()
     expect(context.factory.created[1]?.disposed).toBe(true)
     expect(context.slot.surface()).toBe('none')
+  })
+})
+
+describe('销毁要等时（M3-P4 设计 §3.14：主线程模式下先停下正在算的一轮）', () => {
+  it('换编辑器：旧的销毁完才新建，等的期间 surface 已是 creating；同一个容器里不同时有两个实例', async () => {
+    const context = setup()
+    const reader = await replaced(context, 'read', 'A')
+    reader.holdDispose()
+    const entering = context.slot.replace('edit', 'A')
+    expect(context.slot.surface()).toBe('creating')
+    await settle()
+    // 旧的还在销毁：没有开始新建
+    expect(reader.disposed).toBe(true)
+    expect(context.factory.createEditor).toHaveBeenCalledTimes(1)
+    reader.finishDispose()
+    await settle()
+    expect(context.factory.createEditor).toHaveBeenCalledTimes(2)
+    context.factory.gate(1).release()
+    expect(await entering).toBeDefined()
+    expect(context.factory.aliveAtCreate()).toEqual([0, 0])
+  })
+
+  it('等旧的销毁的期间又换了一次：这一次不建了（交回 undefined），最后一次在旧的销毁完之后才建', async () => {
+    const context = setup()
+    const reader = await replaced(context, 'read', 'A')
+    reader.holdDispose()
+    const first = context.slot.replace('edit', 'A')
+    await settle()
+    const second = context.slot.replace('read', 'B')
+    await settle()
+    expect(context.factory.createEditor).toHaveBeenCalledTimes(1)
+    reader.finishDispose()
+    expect(await first).toBeUndefined()
+    await settle()
+    expect(context.factory.createEditor).toHaveBeenCalledTimes(2)
+    context.factory.gate(1).release()
+    expect(await second).toBeDefined()
+    expect(context.factory.createEditor.mock.calls.map(call => call[0].snapshot)).toEqual(['A', 'B'])
+    expect(context.factory.aliveAtCreate()).toEqual([0, 0])
+  })
+
+  it('被取代的那次创建建好之后由槽位销毁：它销毁完之前不新建', async () => {
+    const context = setup()
+    context.factory.holdDisposeOf(0)
+    const first = context.slot.replace('read', 'A')
+    await settle()
+    const second = context.slot.replace('read', 'B')
+    context.factory.gate(0).release()
+    expect(await first).toBeUndefined()
+    await settle()
+    // 第一次建好时已被取代：槽位开始销毁它，它还没销毁完，第二次还没开始建
+    const stale = context.factory.created[0] as FakeEditor
+    expect([stale.disposed, stale.gone]).toEqual([true, false])
+    expect(context.factory.createEditor).toHaveBeenCalledTimes(1)
+    stale.finishDispose()
+    await settle()
+    expect(context.factory.createEditor).toHaveBeenCalledTimes(2)
+    context.factory.gate(1).release()
+    expect(await second).toBeDefined()
+    expect(context.factory.aliveAtCreate()).toEqual([0, 0])
+  })
+
+  it('清空之后的销毁还没完：之后的换编辑器等它销毁完再建', async () => {
+    const context = setup()
+    const reader = await replaced(context, 'read', 'A')
+    reader.holdDispose()
+    context.slot.clear()
+    expect([context.slot.surface(), context.slot.editor()]).toEqual(['none', undefined])
+    const replacing = context.slot.replace('read', 'B')
+    await settle()
+    expect(context.factory.createEditor).toHaveBeenCalledTimes(1)
+    reader.finishDispose()
+    await settle()
+    context.factory.gate(1).release()
+    expect(await replacing).toBeDefined()
+    expect(context.factory.aliveAtCreate()).toEqual([0, 0])
   })
 })

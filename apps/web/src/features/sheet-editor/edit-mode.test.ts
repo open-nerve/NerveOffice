@@ -133,7 +133,7 @@ function fakeFactory() {
         }),
         viewState: () => fake.disposed ? undefined : viewStateOf(fake.index),
         openCheck: { ok: true },
-        dispose: vi.fn(() => {
+        dispose: vi.fn(async () => {
           fake.disposed = true
         }),
       },
@@ -933,7 +933,7 @@ describe('失去编辑权（M3-P2 设计 §3.4）', () => {
       order.push('capture')
       return snapshotOf('本页的')
     })
-    vi.mocked(writer.editor.dispose).mockImplementation(() => {
+    vi.mocked(writer.editor.dispose).mockImplementation(async () => {
       order.push('dispose')
       writer.disposed = true
     })

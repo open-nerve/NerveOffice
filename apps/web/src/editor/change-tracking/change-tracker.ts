@@ -26,6 +26,8 @@ export interface ChangeTracker {
   readonly formulaProgress: () => FormulaProgress
   /** 公式的进度变了（开始一轮、停止、结果、写回、完成，或者会触发计算的命令）：收齐与否可能变了 */
   readonly onFormulaProgress: (listener: () => void) => () => void
+  /** 有一轮公式正在算（开始了、还没有结束的通知，formula-settle-tracker.ts 的 roundRunning）：主线程模式下销毁之前先停下它 */
+  readonly formulaRoundRunning: () => boolean
   readonly dispose: () => void
 }
 
@@ -83,6 +85,7 @@ export function createChangeTracker(univer: Univer, univerAPI: FUniver, config: 
       progressListeners.add(listener)
       return () => progressListeners.delete(listener)
     },
+    formulaRoundRunning: () => formulas.roundRunning(),
     dispose() {
       listeners.clear()
       progressListeners.clear()

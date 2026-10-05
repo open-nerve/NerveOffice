@@ -87,7 +87,7 @@ function fakeEditor(stage: SheetEditorLifecycle = 'rendered') {
     capture: () => '{"id":"unit-1"}',
     viewState: () => undefined,
     openCheck: { ok: true },
-    dispose: vi.fn(),
+    dispose: vi.fn(async () => {}),
   }
   return {
     editor,

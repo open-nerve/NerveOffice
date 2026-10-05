@@ -237,6 +237,40 @@ describe('公式收齐：observe 交回收齐与否可能变了（公式进度�
   })
 })
 
+describe('有一轮在算（roundRunning，M3-P4 设计 §3.14：主线程模式下销毁之前先停下它）', () => {
+  it('还没开始过：不在算；开始之后到收到结束的通知之前都在算（被请求停下、有了结果、写回了、计算中的进度通知都还在算）', () => {
+    const tracker = createFormulaSettleTracker({ unitId: UNIT, triggerCheck: () => null })
+    expect(tracker.roundRunning()).toBe(false)
+    const steps = [START, STOP, result({ [UNIT]: { 'sheet-1': {} } }), writeBack('sheet-1'), mutation('formula.mutation.set-formula-calculation-notification', { stageInfo: {} }), completed(0)]
+    expect(steps.map((record) => {
+      tracker.observe(record)
+      return tracker.roundRunning()
+    })).toEqual([true, true, true, true, true, true])
+    tracker.observe(completed(1))
+    expect(tracker.roundRunning()).toBe(false)
+  })
+
+  it.each([
+    ['停止', 1],
+    ['没有执行', 2],
+    ['算完', 3],
+  ])('结束的通知（%s）之后不在算；下一轮开始又在算', (_, state) => {
+    const tracker = createFormulaSettleTracker({ unitId: UNIT, triggerCheck: () => null })
+    tracker.observe(START)
+    tracker.observe(completed(state))
+    expect(tracker.roundRunning()).toBe(false)
+    tracker.observe(START)
+    expect(tracker.roundRunning()).toBe(true)
+  })
+
+  it('排队不算在算（还没开始的一轮随编辑器销毁）', () => {
+    const tracker = createFormulaSettleTracker({ unitId: UNIT, triggerCheck: editsQueue })
+    tracker.observe(edit())
+    expect(tracker.progress().queued).toBe(true)
+    expect(tracker.roundRunning()).toBe(false)
+  })
+})
+
 describe('DEF-020：判定不看 trigger（M3-P4 设计 §3.16）', () => {
   /** 被入口守卫取消的命令留在 SDK 的执行栈里，之后命令之外的 mutation 带上它的 trigger（M1-P4 S2 探针 e 实测的那一个） */
   const TRIGGERS = [undefined, 'sheet.operation.insert-hyper-link-toolbar', 'sheet.command.set-range-bold', 'sheet.command.clear-selection-format', 'x']

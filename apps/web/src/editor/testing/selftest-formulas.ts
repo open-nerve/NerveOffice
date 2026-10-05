@@ -2,10 +2,10 @@
 // × Worker/主线程（地址参数选，./formula-mode.ts）。打开时算全部公式；五类（依赖链、聚合、跨表、SUMPRODUCT、易变函数）各改输入、
 // "静默窗口内再改一次"、"计算进行中再改一次"（M0 的情形 A、C：同一范围走 stop、别的范围排队）、"超过上限"（上限调到 50 毫秒，
 // 带标记捕获、收齐之后补捕获）——按规则捕获（./selftest-capture-rule.ts），捕获里的公式值与按定义算出的一致；每次交回时间线。
-// 最后一项"计算进行中重建"（主会话 2026-10-05 追加，要核实的说法：主线程模式下 Univer 实例销毁时正在算的那一轮会继续跑完，把只会得出
-// #NAME? 的语法树写进 engine-formula 模块级的缓存 FORMULA_AST_CACHE，之后同一页里新建的实例打开同一份文档会命中它们）：退出编辑，
-// 阅读时强制重算，这一轮还在算时点"编辑"重建，新的编辑器里再强制重算一遍，全部公式按定义核对。Worker 模式是对照（缓存在 Worker 里，
-// 重建时 Worker 随旧的编辑器终止）
+// 最后一项"计算进行中重建"（主会话 2026-10-05 追加。S1 核实成立：主线程模式下 Univer 实例销毁时正在算的那一轮会继续跑完，把只会得出
+// #NAME? 的语法树写进 engine-formula 模块级的缓存 FORMULA_AST_CACHE，之后同一页里新建的实例打开同一份文档会命中它们；S5 规避：
+// 主线程模式下销毁之前先停下这一轮、等它结束，formula-round-stop.ts）：退出编辑，阅读时强制重算，这一轮还在算时点"编辑"重建，
+// 新的编辑器里再强制重算一遍，全部公式按定义核对——两种模式都要求全部正确。Worker 模式是对照（缓存在 Worker 里，重建时 Worker 随旧的编辑器终止）
 import type { CaptureLimits } from './capture-reference.ts'
 import type { EditorProbe, ProbeCommand } from './e2e-probe.ts'
 import type { Session } from './selftest-session.ts'

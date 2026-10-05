@@ -22,6 +22,8 @@ export { contentOf } from '../../../apps/web/src/editor/testing/content-compare.
 export interface ProbeCommand extends LoggedCommand {
   /** 从 1 开始的序号，按发生的顺序 */
   readonly seq: number
+  /** 记下的时刻（页面里的 performance.now()） */
+  readonly at: number
 }
 
 /** 单元格在画布上的范围（FRange.getCell，相对画布的左上角，含行列表头） */
@@ -109,6 +111,8 @@ interface EditorProbe {
   readonly openCheck: ProbeOpenCheck
   /** 公式在哪里计算（worker 或 main-thread） */
   readonly formulaMode: SelftestFormulaMode
+  /** 公式收齐了没有（与保存等的是同一个判断） */
+  readonly formulasSettled: () => boolean
 }
 
 declare global {
@@ -190,6 +194,17 @@ export async function probeFormulaMode(page: Page): Promise<SelftestFormulaMode>
     if (probe === undefined)
       throw new Error('页面里没有编辑器的探针')
     return probe.formulaMode
+  })
+}
+
+/** 现在这个编辑器的公式收齐了没有（M3-P4）：页面里没有探针时失败 */
+export async function probeFormulasSettled(page: Page): Promise<boolean> {
+  await probeIn(page)
+  return page.evaluate(() => {
+    const probe = window.__nerveEditorProbe
+    if (probe === undefined)
+      throw new Error('页面里没有编辑器的探针')
+    return probe.formulasSettled()
   })
 }
 
