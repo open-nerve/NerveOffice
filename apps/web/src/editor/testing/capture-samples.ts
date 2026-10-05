@@ -2,7 +2,8 @@
 // 页面自检（./selftest-capture.ts）按这里推算公式该有的值、认出大表。两边用同一份定义，样本与核对不会各自漂移。
 // - 公式样本：M0-P3 V07 的 formula-scenarios（spikes/m0/src/experiments/p3-samples/sheet-builders.ts 的 buildFormulaScenarios）——
 //   依赖链、大范围聚合、跨表、SUMPRODUCT 的慢计算、易变函数；公式不带缓存值（打开时 SDK 只算没有结果的公式，打开即全部算一遍）。
-//   规模按自检的时限缩放（FORMULA_SAMPLE 的注释）；
+//   规模按自检的时限缩放（FORMULA_SAMPLE 的注释）；生成与核对都可以另给一个规模（FormulaSample：US-M3-03 的 E2E 用更小的一份，
+//   tests/e2e/support/capture-samples.ts 的 AUTOSAVE_FORMULA_SAMPLE），"重"表的公式个数为 0 时不生成它；
 // - 大表：5 万行的一列文字（自动行高的迟到、大表复制）。
 // 这个文件不引用任何模块：E2E 经模块边界的例外引用它（eslint.config.ts 的 SELFTEST_SHARED_FILES），Playwright 的进程里不能带进 Univer。
 
@@ -42,6 +43,17 @@ function mulberry32(seed: number): () => number {
 
 // ---- 公式样本 ----
 
+/** 公式样本的规模：各张表的 id、名称与大小（FORMULA_SAMPLE 是自检用的那一份） */
+export interface FormulaSample {
+  readonly chain: { readonly id: string, readonly name: string, readonly length: number }
+  readonly aggregate: { readonly id: string, readonly name: string, readonly rows: number }
+  readonly cross: { readonly id: string, readonly name: string }
+  readonly slow: { readonly id: string, readonly name: string, readonly count: number, readonly step: number }
+  readonly volatile: { readonly id: string, readonly name: string }
+  /** 公式个数为 0 时没有这张表 */
+  readonly heavy: { readonly id: string, readonly name: string, readonly rows: number, readonly count: number, readonly step: number }
+}
+
 /**
  * 公式样本的规模。M0 的是：链 200 层、聚合 2 万行、200 个 2 万行的 SUMPRODUCT（一次牵动它们的修改在 M0 的本机上 Chromium 约 1.2–1.4 秒、
  * WebKit 不到 1 秒）。自检在编辑时要做十来次牵动 SUMPRODUCT 的修改（两种公式模式各一遍），CI 比本机慢好几倍，场景的总时限 180 秒，
@@ -56,7 +68,7 @@ export const FORMULA_SAMPLE = {
   slow: { id: 'f-slow', name: '慢', count: 100, step: 10 },
   volatile: { id: 'f-volatile', name: '易变' },
   heavy: { id: 'f-heavy', name: '重', rows: 10_000, count: 500, step: 2 },
-} as const
+} as const satisfies FormulaSample
 
 /**
  * "计算进行中重建"的那一轮计算（formula-timing 的 formula.rebuild-during-calc，主会话 2026-10-05 追加：主线程模式下 Univer 实例销毁时
@@ -65,9 +77,9 @@ export const FORMULA_SAMPLE = {
  * 与别的公式一起算，让那一轮在各浏览器里都长过 1 秒（自检在这一轮开始 1 秒之后才点"编辑"，避开 sheets-formula 的 1 秒进度计时器，
  * 那是另一个已修的问题，main 的 f755729），重建发生在计算中
  */
-export function heavyValues(): number[] {
+export function heavyValues(rows: number = FORMULA_SAMPLE.heavy.rows): number[] {
   const random = mulberry32(11)
-  return Array.from({ length: FORMULA_SAMPLE.heavy.rows }, () => Math.floor(random() * 1001))
+  return Array.from({ length: rows }, () => Math.floor(random() * 1001))
 }
 
 /** 一组数里大于 threshold 的之和（SUMPRODUCT((range>threshold)*range) 的定义） */
@@ -75,15 +87,14 @@ function sumAbove(values: readonly number[], threshold: number): number {
   return values.filter(value => value > threshold).reduce((total, value) => total + value, 0)
 }
 
-/** 聚合表 B 列的值：0–1000 的整数（固定的种子，每次生成的字节相同） */
-export function aggregateValues(): number[] {
+/** 聚合表 B 列的值：0–1000 的整数（固定的种子，每次生成的字节相同；行数少的是同一串的前面几个） */
+export function aggregateValues(rows: number = FORMULA_SAMPLE.aggregate.rows): number[] {
   const random = mulberry32(7)
-  return Array.from({ length: FORMULA_SAMPLE.aggregate.rows }, () => Math.floor(random() * 1001))
+  return Array.from({ length: rows }, () => Math.floor(random() * 1001))
 }
 
 /** 聚合表 B 列的范围（A1 写法的行号从 1 起） */
-function aggregateRange(absolute: boolean): string {
-  const rows = FORMULA_SAMPLE.aggregate.rows
+function aggregateRange(rows: number, absolute: boolean): string {
   return absolute ? `$B$1:$B$${rows}` : `B1:B${rows}`
 }
 
@@ -92,19 +103,19 @@ function sheetRef(name: string, range: string): string {
   return `'${name}'!${range}`
 }
 
-/** 公式样本的六张表（"重"表之外的公式都不带缓存值） */
-export function formulaSampleSheets(): SampleSheet[] {
-  const { chain, aggregate, cross, slow, volatile, heavy } = FORMULA_SAMPLE
+/** 公式样本的六张表（"重"表之外的公式都不带缓存值；"重"表的公式个数为 0 时只有五张） */
+export function formulaSampleSheets(sample: FormulaSample = FORMULA_SAMPLE): SampleSheet[] {
+  const { chain, aggregate, cross, slow, volatile, heavy } = sample
   const chainCells: SampleCells = { 0: { 0: { v: 1, t: NUMBER } } }
   for (let row = 1; row < chain.length; row += 1)
     chainCells[row] = { 0: { f: `=A${row}+1` } }
 
-  const values = aggregateValues()
+  const values = aggregateValues(aggregate.rows)
   const aggregateCells: SampleCells = {}
   values.forEach((value, row) => {
     aggregateCells[row] = { 1: { v: value, t: NUMBER } }
   })
-  const range = aggregateRange(false)
+  const range = aggregateRange(aggregate.rows, false)
   const formulas = [`=SUM(${range})`, `=AVERAGE(${range})`, `=COUNTIF(${range},">500")`, `=MAX(${range})`]
   formulas.forEach((formula, row) => {
     aggregateCells[row] = { ...aggregateCells[row], 2: { f: formula } }
@@ -117,7 +128,7 @@ export function formulaSampleSheets(): SampleSheet[] {
   }
 
   const slowCells: SampleCells = {}
-  const absolute = sheetRef(aggregate.name, aggregateRange(true))
+  const absolute = sheetRef(aggregate.name, aggregateRange(aggregate.rows, true))
   for (let index = 0; index < slow.count; index += 1)
     slowCells[index] = { 0: { f: `=SUMPRODUCT((${absolute}>${index * slow.step})*${absolute})` } }
 
@@ -129,7 +140,7 @@ export function formulaSampleSheets(): SampleSheet[] {
     4: { 0: { f: '=A3*2' } },
   }
 
-  const heavyData = heavyValues()
+  const heavyData = heavyValues(heavy.rows)
   const heavyCells: SampleCells = {}
   heavyData.forEach((value, row) => {
     heavyCells[row] = { 0: { v: value, t: NUMBER } }
@@ -146,7 +157,7 @@ export function formulaSampleSheets(): SampleSheet[] {
     { id: cross.id, name: cross.name, rowCount: 20, columnCount: 5, cellData: crossCells },
     { id: slow.id, name: slow.name, rowCount: slow.count + 20, columnCount: 5, cellData: slowCells },
     { id: volatile.id, name: volatile.name, rowCount: 20, columnCount: 5, cellData: volatileCells },
-    { id: heavy.id, name: heavy.name, rowCount: heavy.rows + 100, columnCount: 5, cellData: heavyCells },
+    ...(heavy.count > 0 ? [{ id: heavy.id, name: heavy.name, rowCount: heavy.rows + 100, columnCount: 5, cellData: heavyCells }] : []),
   ]
 }
 
@@ -201,9 +212,9 @@ function columnValues(snapshot: SnapshotCells, sheetId: string, rows: number, co
  * 易变函数只能核对内部一致：A5 = A3 × 2、RAND 在 [0, 1)、RANDBETWEEN 是 1–1000000 的整数。不依赖 SDK。
  * 错了的格里不是数的值（公式出错时是 #NAME? 这样的写法）另外按写法计数
  */
-export function verifyFormulaSnapshot(snapshotText: string, limit = 8): FormulaVerdict {
+export function verifyFormulaSnapshot(snapshotText: string, limit = 8, sample: FormulaSample = FORMULA_SAMPLE): FormulaVerdict {
   const snapshot = JSON.parse(snapshotText) as SnapshotCells
-  const { chain, aggregate, cross, slow, volatile, heavy } = FORMULA_SAMPLE
+  const { chain, aggregate, cross, slow, volatile, heavy } = sample
   const kinds: Record<keyof FormulaVerdict['byKind'], FormulaCheck[]> = { chain: [], aggregate: [], cross: [], slow: [], volatile: [], heavy: [] }
   const errors: Record<string, number> = {}
   /** 核对一格：kind 这一类、label 是给人看的写法；不对而且不是数时记下它的写法 */
