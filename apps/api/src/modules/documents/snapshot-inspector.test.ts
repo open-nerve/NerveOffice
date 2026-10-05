@@ -225,11 +225,13 @@ describe('同一个账户在检查池里的份数（审查 A2）', SPAWNING, () 
     expect(await Promise.all([inspector.inspect(fake({ kind: 'echo', value: 1 }), 'sheet@1', AMY), inspector.inspect(fake({ kind: 'echo', value: 2 }), 'sheet@1', AMY)])).toEqual([1, 2])
   })
 
-  it('没有结果（子进程出错、超过时限）的同样交回份数：之后这个人照常提交', async () => {
-    const { inspector } = setup({ processes: 1, timeoutMs: 2_000 }, FAKE_ENTRY)
-    for (const task of [{ kind: 'throw' }, { kind: 'exit' }, { kind: 'spin' }] as const)
+  it('没有通过的（子进程出错、退出、堆超限、被系统结束）同样交回份数：之后这个人照常同时提交两份', async () => {
+    // 交回在 finally 里，与结局无关；超过时限的那一种不在这里（加载另有同样的时限，负载高时会把别的结局也变成超时），见上面"超过时限"
+    const { inspector } = setup({ processes: 1, heapMb: 64 }, FAKE_ENTRY)
+    for (const task of [{ kind: 'throw' }, { kind: 'exit' }] as const)
       expect((await rejection(inspector.inspect(fake(task), 'sheet@1', AMY))).code).toBe('SERVICE_UNAVAILABLE')
-    expect(await inspector.inspect(fake({ kind: 'allocate' }), 'sheet@1', AMY)).toEqual({ ok: false, rule: 'too-complex' })
+    for (const task of [{ kind: 'allocate' }, { kind: 'sigkill' }] as const)
+      expect(await inspector.inspect(fake(task), 'sheet@1', AMY)).toEqual({ ok: false, rule: 'too-complex' })
     expect(await Promise.all([inspector.inspect(fake({ kind: 'echo', value: 'a' }), 'sheet@1', AMY), inspector.inspect(fake({ kind: 'echo', value: 'b' }), 'sheet@1', AMY)])).toEqual(['a', 'b'])
   })
 })
