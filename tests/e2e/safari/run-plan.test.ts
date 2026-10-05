@@ -107,14 +107,14 @@ describe('每步的结论与退出码', () => {
     expect(exitCodeOf([serverJudgedOutcome(hidden, undefined, [], '证据')], [])).toBe(0)
   })
 
-  it('已知的问题（KNOWN_PROBLEMS）单独列出、不算不通过；别的问题照常', () => {
+  it('主线程模式在计算中重建之后公式不对（M3-P4 S5 规避之前的已知问题）：不再豁免，算不通过', () => {
     const main = ALL_STEPS.find(item => item.id === 'formula-timing-main')
     if (main === undefined)
       throw new Error('没有 formula-timing-main 这一步')
-    const known = { id: 'formula.rebuild-during-calc', pass: false, detail: '在计算中重建之后，新的编辑器里强制重算，170/811 个与定义不同（其中 #NAME? ×170）：重!C331', ms: 9000 }
+    const poisoned = { id: 'formula.rebuild-during-calc', pass: false, detail: '在计算中重建之后，新的编辑器里强制重算，170/811 个与定义不同（其中 #NAME? ×170）：重!C331', ms: 9000 }
     const base = { scenario: 'formula-timing', documentId: main.documentId, page: { state: 'ready', readOnly: false } } as const
-    expect(outcomeOf(main, report({ ...base, checks: [known] }))).toMatchObject({ status: 'passed', problems: [], known: [`formula.rebuild-during-calc：${known.detail}`] })
-    expect(outcomeOf(main, report({ ...base, checks: [known, { id: 'formula.chain', pass: false, detail: '错了', ms: 1 }] }))).toMatchObject({ status: 'failed', problems: ['formula.chain：错了'] })
+    expect(outcomeOf(main, report({ ...base, checks: [poisoned] }))).toEqual(expect.objectContaining({ status: 'failed', problems: [`formula.rebuild-during-calc：${poisoned.detail}`] }))
+    expect(outcomeOf(main, report({ ...base, checks: [poisoned] }))).not.toHaveProperty('known')
   })
 
   it('结果文件按开始的时刻命名（UTC，没有冒号与毫秒）', () => {

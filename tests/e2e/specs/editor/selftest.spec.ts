@@ -18,7 +18,7 @@ import { decodeSelftestReport, RESULT_PARAM } from '../../../../apps/web/src/edi
 import { revisionOf } from '../../support/database.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
-import { KNOWN_PROBLEMS, problemsOf, SELFTEST_STEPS, selftestPageUrl, selftestScene, serverProblemsOf, splitKnown } from '../../support/selftest-plan.ts'
+import { problemsOf, SELFTEST_STEPS, selftestPageUrl, selftestScene, serverProblemsOf } from '../../support/selftest-plan.ts'
 import { EDITOR_TEST_TIMEOUT } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
@@ -60,17 +60,15 @@ async function stepOf(definition: SelftestStepDefinition): Promise<SelftestStep>
 }
 
 /**
- * 结果的要点：场景、页面怎么打开的、有没有检查、问题（页面上的检查之外，驱动脚本另外核对的）、已知的问题（KNOWN_PROBLEMS，
- * 恰好那几条：规避落地、它不再出现时这里跟着要求通过）与服务器上的文档
+ * 结果的要点：场景、页面怎么打开的、有没有检查、问题（页面上的检查之外，驱动脚本另外核对的）与服务器上的文档。
+ * 没有豁免的问题：主线程模式在计算中重建（formula-timing-main 的 formula.rebuild-during-calc）在 M3-P4 S5 规避之后同样要求通过
  */
 async function summaryOf(report: SelftestReport, step: SelftestStep): Promise<unknown> {
-  const { problems, known } = splitKnown(step.id, problemsOf(report))
   return {
     scenario: report.scenario,
     page: report.page,
     hasChecks: report.checks.length > 0,
-    problems,
-    known: known.length,
+    problems: problemsOf(report),
     server: (await serverProblemsOf(step)).problems,
   }
 }
@@ -79,7 +77,7 @@ async function summaryOf(report: SelftestReport, step: SelftestStep): Promise<un
 const READ_ONLY_SCENARIOS: ReadonlySet<string> = new Set(['read-only', 'read-only-formulas', 'enter-exit'])
 
 function passed(step: SelftestStep): unknown {
-  return { scenario: step.scenario, page: { state: 'ready', readOnly: READ_ONLY_SCENARIOS.has(step.scenario) }, hasChecks: true, problems: [], known: KNOWN_PROBLEMS[step.id]?.length ?? 0, server: [] }
+  return { scenario: step.scenario, page: { state: 'ready', readOnly: READ_ONLY_SCENARIOS.has(step.scenario) }, hasChecks: true, problems: [], server: [] }
 }
 
 /** hidden-save（Playwright 里模拟隐藏，单独一条用例） */

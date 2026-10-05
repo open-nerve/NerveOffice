@@ -42,14 +42,21 @@
 //   编辑租约停止续租、放掉手里那一代；编辑器留着（本页的修改还能复制出来），页头说明并给"重新加载"（过旧时）；
 // - 申请编辑权得到它们：留在阅读并说明，不再给"编辑"（blocked）；打开时就看得出文档比本页新（详情的 sdkVersion）同样只能阅读；
 // - 不兼容的阅读不会因为检查读到能编辑就恢复"编辑"：重新加载才是新的页面。
-import type { ConflictCopyQuery, CreatedDocument, DocumentDetail, SaveContentResponse } from '@nerve-office/contracts'
-import type { SheetEditor } from '../../editor/index.ts'
+//
+// 打开自检（M3-P4 设计 §3.11–§3.13）：任何一次新建都看新编辑器的 openCheck（打开、?edit=new、"编辑"、退出编辑、"有更新"、失去编辑权之后、
+// 放弃与副本之后），失败的上报服务端（每次创建至多一次，会话不是本人时不发，不看结果）。阅读时失败：阅读态带上 damaged（与 blocked 分开），
+// 不给"编辑"、页头说明；不因检查读到能编辑而恢复，"有更新"重建之后按新内容的结果覆盖。失败的编辑器绝不保存：以可编辑新建的编辑器
+// 先看打开自检、再建保存的状态机与调度——失败时释放编辑权、以只读重建、以 damaged 回到阅读（?edit=new 与"编辑"只能先取得编辑权再按它
+// 选内容，所以是"先取后放"）。失去编辑权之后的重建失败只上报，不改失去编辑权之后的选项（副本是本页的内容，服务端照常检查）。
+import type { ConflictCopyQuery, CreatedDocument, DocumentDetail, OpenCheckReport, SaveContentResponse } from '@nerve-office/contracts'
+import type { OpenCheck, SheetEditor } from '../../editor/index.ts'
 import type { Autosave, AutosaveEvent, AutosavePage, AutosaveTuning, AutosaveView } from './autosave.ts'
 import type { Incompatibility } from './client-format.ts'
 import type { EditLease, EditLeaseApi, LeaseAcquisition, LeaseClock, LeaseHolder, LeaseLoss } from './edit-lease.ts'
 import type { FetchedEditStatus, LeaseCredentials, LoadedContent } from './editor-api.ts'
 import type { CreateModeEditor, EditorSurface } from './editor-slot.ts'
 import type { LostCopy } from './lost-copy.ts'
+import type { OpenCheckContext } from './open-check-report.ts'
 import type { PageVisibility, ReadingCheckResult } from './reading-checks.ts'
 import type { CompressSnapshot, SaveCoordinator, SaveRequest, SaveStatus, SaveView } from './save-coordinator.ts'
 import { EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
@@ -60,6 +67,7 @@ import { acquireEditLease, leaseHolderOf, leaseLossOf } from './edit-lease.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { createEditorSlot } from './editor-slot.ts'
 import { createLostCopy } from './lost-copy.ts'
+import { openCheckReportOf } from './open-check-report.ts'
 import { createReadingChecks } from './reading-checks.ts'
 import { createSaveCoordinator } from './save-coordinator.ts'
 
@@ -77,11 +85,17 @@ interface ShownContent {
   readonly revision: number
 }
 
-/** 服务端最近一次说的某一版的"公式待更新"（载入时的详情、阅读时的编辑状态）：阅读页只认本页显示的那一版的 */
+/** 服务端最近一次说的某一版的"公式待更新"（载入时的详情、阅读时的编辑状态、申请编辑权的回答）：阅读页只认本页显示的那一版的 */
 interface FormulasFlag {
   readonly revision: number
   readonly formulasPending: boolean
 }
+
+/**
+ * 打开自检的失败清单（不空，按种类与资源名排好）：编辑器没有完整载入这份文档的数据，或者编辑器自己没有完整载入（档案不全，
+ * contracts 的 isProfileFailure）。M3-P4 设计 §3.11、§3.12
+ */
+export type OpenCheckFailures = Extract<OpenCheck, { readonly ok: false }>['failures']
 
 /** 阅读时上一次操作留下的说明 */
 export type ReadingNotice
@@ -127,6 +141,11 @@ export interface ReadingMode {
    * 页面放进一直在的读屏状态区说明，进入编辑时强制重算
    */
   readonly formulasPending: boolean
+  /**
+   * 本页显示的这一版没能完整载入（打开自检失败，M3-P4 设计 §3.12）：失败清单。不给"编辑"，页头说明（数据不完整，或者编辑器没有完整载入）；
+   * 不因检查读到能编辑而恢复；"有更新"重建之后按新内容的结果覆盖。与 blocked（不兼容）分开：原因与处理都不同。没有时为 undefined
+   */
+  readonly damaged: OpenCheckFailures | undefined
 }
 
 /**
@@ -211,6 +230,8 @@ export interface EditModeApi {
   readonly save: (documentId: string, request: SaveRequest, body: Uint8Array<ArrayBuffer>, lease: LeaseCredentials) => Promise<SaveContentResponse>
   /** 另存为副本：上传本页的快照，新建一份文档（M3-P2 设计 §3.2） */
   readonly conflictCopy: (documentId: string, query: ConflictCopyQuery, body: Uint8Array<ArrayBuffer>) => Promise<CreatedDocument>
+  /** 打开自检失败的上报（M3-P4 设计 §3.13）：204；失败时抛出请求层的错误（这里不看结果、不重试） */
+  readonly reportOpenCheck: (documentId: string, report: OpenCheckReport) => Promise<void>
 }
 
 /** 会话类的问题交给页面确认现在是谁（editor-page.ts）：不同的来源确认的方式不同 */
@@ -262,9 +283,12 @@ export interface EditModeAutosave {
   readonly attach?: ((autosave: Autosave | undefined) => void) | undefined
 }
 
-/** 打开的结果：编辑器就绪了（entered：直接进入了编辑）；编辑器建不起来；载入失败（直接进入编辑时申请得到读不到、未登录） */
+/**
+ * 打开的结果：编辑器就绪了（entered：直接进入了编辑；damaged：打开自检失败、只能阅读——?edit=new 这时已经释放了编辑权，地址里的标记
+ * 也该去掉，刷新不再"先取后放"一次）；编辑器建不起来；载入失败（直接进入编辑时申请得到读不到、未登录）
+ */
 export type OpenOutcome
-  = | { readonly kind: 'opened', readonly entered: boolean }
+  = | { readonly kind: 'opened', readonly entered: boolean, readonly damaged: boolean }
     | { readonly kind: 'editor-failed', readonly error: unknown }
     | { readonly kind: 'load-failed', readonly error: unknown }
 
@@ -274,7 +298,8 @@ export interface EditMode {
   /**
    * 打开（载入之后）：以只读创建，进入阅读。enterEdit（地址带 ?edit=new、而且能编辑）时直接申请编辑权、以可编辑创建
    * （新建的表格不必先阅读，M3 总设计 §2.1 的细化）；被占用、不能编辑了或请求失败就照常阅读、说明原因（与"编辑"相同，审查 A11），
-   * 读不到了（404）、未登录按载入失败。blocked（打开时就看得出与服务端不兼容，M3-P3）：只能阅读，不直接进入编辑
+   * 读不到了（404）、未登录按载入失败。blocked（打开时就看得出与服务端不兼容，M3-P3）：只能阅读，不直接进入编辑。
+   * 新建的编辑器打开自检失败（M3-P4）：只能阅读（damaged）；直接进入编辑时已经取得的编辑权随即释放（先取后放），结果的 damaged 为真
    */
   readonly open: (initial: { readonly snapshot: string, readonly revision: number, readonly canEdit: boolean, readonly formulasPending?: boolean }, options: { readonly enterEdit: boolean, readonly blocked?: Incompatibility | undefined }) => Promise<OpenOutcome>
   /** 进入编辑（阅读、能编辑、没有在按新的版本重建时；"编辑"按钮，会话由页面先确认） */
@@ -314,7 +339,7 @@ type SettledReading = ReadingMode & { readonly update: 'none' | 'available' }
 /** 失去编辑权之后的阅读：被收回、不能编辑了时没有"编辑"（之后随编辑状态更新）；别处在编辑时说明是谁 */
 function readingAfter(loss: LeaseLoss, notice: ReadingNotice | undefined): ReadingMode {
   const canEdit = loss.kind !== 'denied' && !(loss.kind === 'lease' && loss.reason === 'revoked')
-  return { kind: 'reading', canEdit, holder: loss.kind === 'held' ? loss.holder : undefined, update: 'none', gone: false, notice, releaseUnconfirmed: false, blocked: undefined, formulasPending: false }
+  return { kind: 'reading', canEdit, holder: loss.kind === 'held' ? loss.holder : undefined, update: 'none', gone: false, notice, releaseUnconfirmed: false, blocked: undefined, formulasPending: false, damaged: undefined }
 }
 
 /** 副本的失败是不是"再试也一样"（见 CopyRefusal）：是的话给出是哪一种与那次的错误 */
@@ -352,7 +377,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
   /** 保存的状态机建好之前保存的基准（进入编辑时选定的那一份内容的修订号）：续上时比较 */
   let editingBase = 0
   /** 进入编辑之前的阅读：没有进入成功时回到它 */
-  let readingBefore: SettledReading = { kind: 'reading', canEdit: false, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined, formulasPending: false }
+  let readingBefore: SettledReading = { kind: 'reading', canEdit: false, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined, formulasPending: false, damaged: undefined }
   /** 失去编辑权之后的那一份（捕获的内容、失去的时刻与副本的请求）：按最新的内容回到阅读之后丢掉 */
   let lostCopy: LostCopy | undefined
   /** 正在新建可编辑的编辑器（进入编辑、直接进入编辑的打开）：这期间得知的失效等编辑器建好、进入编辑之后再处理 */
@@ -422,6 +447,20 @@ export function createEditMode(options: EditModeOptions): EditMode {
   /** 编辑器建不起来：页面说明"编辑器加载失败"（可以重新加载） */
   function fail(error: unknown): void {
     begin({ kind: 'failed', error })
+  }
+
+  /**
+   * 新建的编辑器的打开自检（M3-P4 设计 §3.11–§3.13）：交回失败清单，通过时 undefined。每一次新建都在新建它的那条路径上调这里一次，
+   * 所以每次创建的结果至多上报一次。会话不是本人时不发（这一次就不报了）；不看结果、不重试（上报只作诊断，不改任何状态）
+   */
+  function openCheckOf(created: SheetEditor, context: OpenCheckContext): OpenCheckFailures | undefined {
+    const check = created.openCheck
+    if (check.ok)
+      return undefined
+    const report = session === 'active' ? openCheckReportOf(check, context) : undefined
+    if (report !== undefined)
+      api.reportOpenCheck(documentId, report).catch(() => undefined)
+    return check.failures
   }
 
   /** 接上只读的编辑器（撤掉屏障），进入阅读（随即检查一次） */
@@ -631,14 +670,40 @@ export function createEditMode(options: EditModeOptions): EditMode {
   }
 
   /**
+   * 没能以可编辑的编辑器进入（以编辑方式重建失败，或者新建的编辑器打开自检失败，M3-P4 设计 §3.12）：编辑权没用上——释放它；以只读重建
+   * 选定的那一份内容、回到阅读（reading 按只读的编辑器的打开自检给出阅读的样子）。期间续租得知的与服务端不兼容随之带进阅读。
+   * 只读的也建不起来就是 failed
+   */
+  async function backToReading(token: number, content: ShownContent, reading: (damaged: OpenCheckFailures | undefined) => ReadingMode): Promise<'not-entered'> {
+    pendingLoss = undefined
+    const blocked = pendingBlock
+    pendingBlock = undefined
+    dropLease()
+    const fallback = await slot.replace('read', content.snapshot)
+    if (!still(token))
+      return 'not-entered'
+    if (fallback === undefined) {
+      fail(new Error('以编辑方式重建编辑器失败，回到阅读时也没能建好'))
+      return 'not-entered'
+    }
+    const damaged = openCheckOf(fallback, { access: 'read', trigger: 'enter', revision: content.revision })
+    const next = reading(damaged)
+    enterReading(fallback, content, blocked === undefined ? next : { ...next, blocked })
+    return 'not-entered'
+  }
+
+  /**
    * 取得了编辑权之后：选定内容（申请得到的修订号等于本页的就用本页的，否则按条件读取取服务端的）、以可编辑重建（带"公式待更新"时
-   * 强制全量重算，M3-P4 设计 §3.5）、建好保存的状态机与自动保存的调度再接上编辑器。读取失败时已经释放编辑权，交回错误（调用方按它说明）；
-   * 重建失败时释放编辑权、以只读重建选定的那一份内容、回到阅读并说明（再失败就是 failed）
+   * 强制全量重算，M3-P4 设计 §3.5）、看过打开自检，再建好保存的状态机与自动保存的调度、接上编辑器。读取失败时已经释放编辑权，交回错误
+   * （调用方按它说明）；重建失败、打开自检失败时（失败的编辑器绝不保存：保存的状态机根本不建）释放编辑权、以只读重建选定的那一份内容、
+   * 回到阅读并说明（backToReading）
    */
   async function startEditing(token: number, held: EditLease, acquired: { readonly revision: number, readonly formulasPending: boolean }): Promise<'entered' | 'not-entered' | { readonly error: unknown }> {
     const { revision, formulasPending } = acquired
     lease = held
     editingBase = revision
+    // 申请的回答是服务端最近一次说的这一版的"公式待更新"：没能进入、回到阅读时按它说明
+    latestFlag = { revision, formulasPending }
     if (session !== 'active')
       held.pause()
     let content: ShownContent = shown
@@ -663,18 +728,16 @@ export function createEditMode(options: EditModeOptions): EditMode {
     const created = await slot.replace('edit', content.snapshot, { recalculate: formulasPending })
     if (!still(token))
       return 'not-entered'
+    const formulasShown = formulasPendingOf(content.revision)
     if (created === undefined) {
-      pendingLoss = undefined
-      dropLease()
-      const fallback = await slot.replace('read', content.snapshot)
-      if (!still(token))
-        return 'not-entered'
-      if (fallback === undefined)
-        fail(new Error('以编辑方式重建编辑器失败，回到阅读时也没能建好'))
-      else
-        enterReading(fallback, content, { ...readingBefore, update: 'none', notice: { kind: 'editor-failed' } })
-      return 'not-entered'
+      // 只读的也没完整载入时不说"可以再试"（没有"编辑"）：页头说明数据不完整
+      return backToReading(token, content, damaged => ({ ...readingBefore, update: 'none', notice: damaged === undefined ? { kind: 'editor-failed' } : undefined, formulasPending: formulasShown, damaged }))
     }
+    // 打开自检失败（M3-P4 设计 §3.12）：这个编辑器绝不保存——不建保存的状态机与调度，释放编辑权、以只读重建、以 damaged 进入阅读。
+    // 只读的那一个照常自检、照常上报；它竟然通过了（与可编辑的不一致）也按可编辑时的结果阻止编辑，不来回"先取后放"
+    const failures = openCheckOf(created, { access: 'edit', trigger: 'enter', revision: content.revision })
+    if (failures !== undefined)
+      return backToReading(token, content, damaged => ({ ...readingBefore, update: 'none', notice: undefined, formulasPending: formulasShown, damaged: damaged ?? failures }))
     shown = content
     // 先建保存的状态机，再建自动保存的调度，再接上编辑器（撤掉屏障）：放开之后的每一处修改都有人接着。80% 的提示在第一次保存之前按
     // 载入的内容算（M3-P3）。"公式待更新"两边以同一个初值起步：页头说公式结果尚未保存、离开会提示，收齐之后补存
@@ -730,12 +793,12 @@ export function createEditMode(options: EditModeOptions): EditMode {
       acquisition = await acquire()
     }
     catch (error) {
-      return still(token) ? notEnteredOnOpen(error) : { kind: 'opened', entered: false }
+      return still(token) ? notEnteredOnOpen(error) : { kind: 'opened', entered: false, damaged: false }
     }
     if (!still(token)) {
       if (acquisition.kind === 'acquired')
         void acquisition.lease.release()
-      return { kind: 'opened', entered: false }
+      return { kind: 'opened', entered: false, damaged: false }
     }
     if (acquisition.kind === 'held') {
       readingBefore = { ...readingBefore, holder: acquisition.holder }
@@ -743,10 +806,13 @@ export function createEditMode(options: EditModeOptions): EditMode {
     }
     const started = await startEditing(token, acquisition.lease, acquisition)
     if (started === 'entered')
-      return { kind: 'opened', entered: true }
+      return { kind: 'opened', entered: true, damaged: false }
     if (typeof started === 'object')
       return notEnteredOnOpen(started.error)
-    return mode.kind === 'failed' ? { kind: 'editor-failed', error: mode.error } : { kind: 'opened', entered: false }
+    if (mode.kind === 'failed')
+      return { kind: 'editor-failed', error: mode.error }
+    // 打开自检失败（先取后放）：已经释放编辑权、以只读回到阅读
+    return { kind: 'opened', entered: false, damaged: mode.kind === 'reading' && mode.damaged !== undefined }
   }
 
   /**
@@ -812,8 +878,11 @@ export function createEditMode(options: EditModeOptions): EditMode {
     const created = await slot.replace('read', snapshot)
     if (!still(token))
       return
-    if (created !== undefined)
+    if (created !== undefined) {
+      // 打开自检失败只上报（M3-P4 设计 §3.12）：显示的是本页自己捕获的内容，副本照常给（服务端照常检查），不改失去编辑权之后的选项
+      openCheckOf(created, { access: 'read', trigger: 'lost', revision: saver?.baseRevision() ?? editingBase })
       slot.attach(created)
+    }
     // 结果未知的保存：还读得到时先原样重发它，核对它其实提交了没有（读不到了时核对不了：重放也要求能访问）
     const checkFirst = readable && saver?.hasUnknownOutcome() === true
     const checkToken = begin({ ...lostMode, unsaved, checking: checkFirst, reopenFailed: created === undefined })
@@ -868,7 +937,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
     }
     disposeCoordinator()
     lostCopy = undefined
-    enterReading(created, content, { ...readingAfter(from.loss, copied === undefined ? undefined : { kind: 'copied', document: copied }), formulasPending: formulasPendingOf(content.revision) })
+    const damaged = openCheckOf(created, { access: 'read', trigger: 'reload', revision: content.revision })
+    enterReading(created, content, { ...readingAfter(from.loss, copied === undefined ? undefined : { kind: 'copied', document: copied }), formulasPending: formulasPendingOf(content.revision), damaged })
   }
 
   // ---- 对外 ----
@@ -884,7 +954,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
       shown = { snapshot: initial.snapshot, revision: initial.revision }
       const formulasPending = initial.formulasPending === true
       latestFlag = { revision: initial.revision, formulasPending }
-      readingBefore = { kind: 'reading', canEdit: initial.canEdit, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked, formulasPending }
+      readingBefore = { kind: 'reading', canEdit: initial.canEdit, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked, formulasPending, damaged: undefined }
       const token = generation
       if (enterEdit && initial.canEdit && blocked === undefined) {
         const outcome = await enterOnOpen(token)
@@ -893,20 +963,21 @@ export function createEditMode(options: EditModeOptions): EditMode {
       }
       const created = await slot.replace('read', shown.snapshot)
       if (!still(token))
-        return { kind: 'opened', entered: false }
+        return { kind: 'opened', entered: false, damaged: false }
       if (created === undefined) {
         const error = new Error('编辑器加载失败')
         fail(error)
         return { kind: 'editor-failed', error }
       }
-      enterReading(created, shown, readingBefore)
-      return { kind: 'opened', entered: false }
+      const damaged = openCheckOf(created, { access: 'read', trigger: 'open', revision: shown.revision })
+      enterReading(created, shown, { ...readingBefore, damaged })
+      return { kind: 'opened', entered: false, damaged: damaged !== undefined }
     },
 
     enter: async () => {
       // 正在按新的版本取内容、重建（update 为 loading）时不进入：两次重建会叠在一起，而回到阅读时也说不清显示的是哪一版（审查 A1）。
-      // 阅读时一定有接上的编辑器，没有就是还在换
-      if (mode.kind !== 'reading' || !mode.canEdit || mode.gone || mode.blocked !== undefined || mode.update === 'loading' || slot.editor() === undefined || disposed)
+      // 阅读时一定有接上的编辑器，没有就是还在换。打开自检失败的阅读不进入（M3-P4 设计 §3.12）
+      if (mode.kind !== 'reading' || !mode.canEdit || mode.gone || mode.blocked !== undefined || mode.damaged !== undefined || mode.update === 'loading' || slot.editor() === undefined || disposed)
         return
       readingBefore = { ...mode, update: mode.update, notice: undefined }
       const token = begin({ kind: 'entering' })
@@ -998,7 +1069,9 @@ export function createEditMode(options: EditModeOptions): EditMode {
       // 退出时都已存上（含公式的结果）：这一版不带"公式待更新"——补存的内容与上一版相同时修订号不变（服务端只清标记），
       // 之前记下的这一版的标记随之作废
       latestFlag = { revision, formulasPending: false }
-      enterReading(created, { snapshot, revision }, { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: !released, blocked, formulasPending: formulasPendingOf(revision) })
+      // 刚存下的内容自己读不回来（打开自检失败）：照样以 damaged 阅读、上报
+      const damaged = openCheckOf(created, { access: 'read', trigger: 'exit', revision })
+      enterReading(created, { snapshot, revision }, { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: !released, blocked, formulasPending: formulasPendingOf(revision), damaged })
     },
 
     save: async () => {
@@ -1042,7 +1115,9 @@ export function createEditMode(options: EditModeOptions): EditMode {
         fail(new Error('按新的版本重建编辑器失败'))
         return
       }
-      enterReading(created, fetched, { ...mode, update: 'none', notice: undefined, formulasPending: formulasPendingOf(fetched.revision) })
+      // 打开自检按新内容的结果覆盖（M3-P4 设计 §3.12）：之前坏、新版好时恢复"编辑"
+      const damaged = openCheckOf(created, { access: 'read', trigger: 'refresh', revision: fetched.revision })
+      enterReading(created, fetched, { ...mode, update: 'none', notice: undefined, formulasPending: formulasPendingOf(fetched.revision), damaged })
     },
 
     saveCopy: async () => {

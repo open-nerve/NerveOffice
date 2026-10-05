@@ -96,6 +96,16 @@ describe('变更检测的订阅', () => {
     expect(tracker.formulaProgress()).toMatchObject({ round: 1, started: true, completed: true })
   })
 
+  it('有一轮在算取自同一个跟踪器（M3-P4 设计 §3.14：主线程模式下销毁之前先停下它）', () => {
+    const facade = fakeFacade()
+    const tracker = createChangeTracker(facade.univer, facade.api, config)
+    expect(tracker.formulaRoundRunning()).toBe(false)
+    facade.fire({ id: 'formula.mutation.set-formula-calculation-start', type: CommandType.MUTATION, params: {}, options: { onlyLocal: true } })
+    expect(tracker.formulaRoundRunning()).toBe(true)
+    facade.fire({ id: 'formula.mutation.set-formula-calculation-notification', type: CommandType.MUTATION, params: { functionsExecutedState: 1 }, options: { onlyLocal: true } })
+    expect(tracker.formulaRoundRunning()).toBe(false)
+  })
+
   it('销毁之后不再订阅', () => {
     const facade = fakeFacade()
     const tracker = createChangeTracker(facade.univer, facade.api, config)

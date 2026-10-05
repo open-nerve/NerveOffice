@@ -1,6 +1,7 @@
 // 编辑器页（P4 设计 §3.7）：载入、会话与页头的编排。阅读与编辑、编辑权与保存交给 edit-mode.ts（M3-P2 设计 §3.4）；
 // 界面（editor-chrome.tsx）只订阅这里的状态。编辑器在 React 之外创建：一页一份文档，模式切换一律重建（M3-P2 设计 §3.1）。
-// 打开即阅读：载入之后以只读创建；地址带 ?edit=new（新建表格之后的跳转）而且能编辑时直接进入编辑，进入之后去掉这个参数。
+// 打开即阅读：载入之后以只读创建；地址带 ?edit=new（新建表格之后的跳转）而且能编辑时直接进入编辑，进入之后去掉这个参数
+// （打开自检失败、只能阅读时同样去掉，M3-P4 设计 §3.12）。
 // 交互屏障：载入期间、进入与退出编辑、失去编辑权的过程中，以及每次新建编辑器时，页头之外的输入一律拦下（interaction-barrier.ts）。
 // 自动保存（M3-P4 设计 §3.10）：页面把可见性、联网与"会话是本人、令牌不是已知失效"（confirmedForWrite 的口径）交给编辑模式里的调度——
 // 可见性在 visibilitychange 里同步通知（切到后台的捕获与上传不靠计时器），confirmedForWrite 的每次变化都通知（确认开始与结束、会话、
@@ -600,8 +601,9 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       }
       if (outcome.kind === 'editor-failed')
         return
-      // 刚由自己新建的表格进入了编辑：去掉地址里的标记，刷新不再自动进入
-      if (outcome.entered)
+      // 刚由自己新建的表格进入了编辑：去掉地址里的标记，刷新不再自动进入。打开自检失败（只能阅读，M3-P4 设计 §3.12）时同样去掉：
+      // 编辑权已经放掉，刷新不再"先取后放"一次
+      if (options.editIntent.requested && (outcome.entered || outcome.damaged))
         options.editIntent.clear()
       load = { kind: 'ready', ...heading }
       modeChanged()

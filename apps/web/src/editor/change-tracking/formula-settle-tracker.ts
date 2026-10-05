@@ -15,7 +15,8 @@
 //   trigger-calculation.controller.ts:291-297，1.0.1 的 lib/es/index.js 同样），都在 createSheetEditor 返回之前；这里不靠这个先后——
 //   万一更晚，收齐也不会先为真（否则自动保存的补捕获存下重算之前的旧值、清掉服务端的标记）。看到之后它就是排队的一轮（候选），照三个条件；
 // - observe 交回收齐与否可能因这条命令而变（开始、停止、结果、完成通知、本文档的写回，或者会触发计算的命令）：变更检测据此发出
-//   公式进度的信号，自动保存随即再看（autosave.ts）。计算中的进度通知（只有 stageInfo）不算
+//   公式进度的信号，自动保存随即再看（autosave.ts）。计算中的进度通知（只有 stageInfo）不算；
+// - roundRunning：有一轮开始了、还没有结束的通知——主线程模式下销毁编辑器之前先停下它（formula-round-stop.ts，设计 §3.14）
 import type { CommandRecord } from './command-record.ts'
 import { FORMULA_PROTOCOL } from '../internal-api/index.ts'
 import { stringParam } from './command-record.ts'
@@ -46,6 +47,12 @@ export interface FormulaSettleTracker {
   observe: (record: CommandRecord) => boolean
   isSettled: () => boolean
   progress: () => FormulaProgress
+  /**
+   * 有一轮正在算：最近一轮开始了、还没有收到它结束的通知（停止、完成或没有执行，completedStates）。被请求停下的一轮在收到停止的
+   * 通知之前也算在算（引擎只在让出点检查停止标记）。不看排队：还没开始的一轮随编辑器销毁（触发服务的计时器随之清掉）。
+   * 主线程模式下销毁编辑器之前据此决定要不要先停下这一轮（formula-round-stop.ts，M3-P4 设计 §3.14）
+   */
+  roundRunning: () => boolean
 }
 
 export interface FormulaSettleTrackerOptions {
@@ -151,6 +158,7 @@ export function createFormulaSettleTracker(options: FormulaSettleTrackerOptions)
         return completed
       return resultSheets.every(sheetId => appliedSheets.has(sheetId))
     },
+    roundRunning: () => started && !completed,
     progress: () => ({
       round,
       started,

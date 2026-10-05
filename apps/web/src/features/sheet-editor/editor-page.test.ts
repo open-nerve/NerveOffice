@@ -1,5 +1,5 @@
 import type { AcquiredEditLease, CreatedDocument, DocumentDetail, RenewedEditLease, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
-import type { EditorAccess, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
+import type { EditorAccess, OpenCheck, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
 import type { Autosave, AutosaveTuning } from './autosave.ts'
@@ -38,6 +38,9 @@ const NEXT_CREDENTIALS = { token: NEXT_TOKEN, writeEpoch: 8 }
 
 /** 另存为副本得到的新文档 */
 const COPY_ID = '0199a2c4-1f2e-7a3b-8c4d-0000000000c1'
+
+/** 打开自检失败（M3-P4）：编辑器没有完整载入（批注的插件没有注册） */
+const NOTE_MISSING = { ok: false, failures: [{ kind: 'profile-missing-hook', resource: 'SHEET_NOTE_PLUGIN' }] } as const satisfies OpenCheck
 
 const DETAIL: DocumentDetail = {
   id: DOCUMENT_ID,
@@ -87,7 +90,7 @@ function fakeEditor(stage: SheetEditorLifecycle = 'rendered') {
     capture: () => '{"id":"unit-1"}',
     viewState: () => undefined,
     openCheck: { ok: true },
-    dispose: vi.fn(),
+    dispose: vi.fn(async () => {}),
   }
   return {
     editor,
@@ -204,6 +207,7 @@ function setup(options: Setup = {}) {
     compress: vi.fn(overrides.compress ?? (async (snapshot: string) => new TextEncoder().encode(snapshot))),
     save: vi.fn(overrides.save ?? (async (): Promise<SaveContentResponse> => ({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false }))),
     conflictCopy: vi.fn(overrides.conflictCopy ?? (async (): Promise<CreatedDocument> => ({ ...DETAIL, id: COPY_ID, title: '周报（冲突副本 2026-10-04 15:30）', revision: 1, replayed: false }))),
+    reportOpenCheck: vi.fn(overrides.reportOpenCheck ?? (async (): Promise<void> => {})),
     editLease,
   } satisfies EditorPageApi
   const createEditor = vi.fn(options.createEditor ?? (async () => {
@@ -486,6 +490,25 @@ describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
     await editorPage.save()
     expect(api.compress).not.toHaveBeenCalled()
     expect(api.save).not.toHaveBeenCalled()
+  })
+
+  it('?edit=new、新建的编辑器打开自检失败（M3-P4 设计 §3.12）：释放编辑权、以只读重建，只能阅读（damaged）；去掉地址里的标记（刷新不再"先取后放"一次）；两个编辑器各上报一次', async () => {
+    const { editorPage, createEditor, editLease, editIntent, api } = setup({ createEditor: async () => ({ ...fakeEditor().editor, openCheck: NOTE_MISSING }) })
+    await editorPage.load()
+    expect(createEditor.mock.calls.map(call => call[0].access)).toEqual(['edit', 'read'])
+    expect(editLease.release).toHaveBeenCalledOnce()
+    expect(editorPage.view()).toMatchObject({ load: { kind: 'ready' }, mode: { kind: 'reading', canEdit: true, damaged: NOTE_MISSING.failures }, save: undefined })
+    expect(editIntent.clear).toHaveBeenCalledOnce()
+    expect(api.reportOpenCheck.mock.calls.map(call => [call[0], call[1].access, call[1].trigger])).toEqual([[DOCUMENT_ID, 'edit', 'enter'], [DOCUMENT_ID, 'read', 'enter']])
+    expect(api.save).not.toHaveBeenCalled()
+  })
+
+  it('打开即阅读、打开自检失败：只能阅读（damaged），地址里没有标记时不去动它', async () => {
+    const { editorPage, editIntent, editLease } = setup({ editIntent: false, createEditor: async () => ({ ...fakeEditor().editor, openCheck: NOTE_MISSING }) })
+    await editorPage.load()
+    expect(editorPage.view()).toMatchObject({ load: { kind: 'ready' }, mode: { kind: 'reading', damaged: NOTE_MISSING.failures } })
+    expect(editLease.acquire).not.toHaveBeenCalled()
+    expect(editIntent.clear).not.toHaveBeenCalled()
   })
 
   it('载入期间页面已经卸载：创建出的编辑器立即销毁', async () => {

@@ -7,7 +7,7 @@
 import type { SelftestReport, SelftestTiming } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import type { SelftestStep } from '../support/selftest-plan.ts'
 import { RESULT_PARAM } from '../../../apps/web/src/editor/testing/selftest-report.ts'
-import { problemsOf, selftestPageUrl, splitKnown } from '../support/selftest-plan.ts'
+import { problemsOf, selftestPageUrl } from '../support/selftest-plan.ts'
 
 /** 收集端收结果的路径 */
 export const REPORT_PATH = '/report'
@@ -69,8 +69,6 @@ export interface StepOutcome {
   readonly status: StepStatus
   readonly problems: readonly string[]
   readonly report?: SelftestReport | undefined
-  /** 已知的问题（selftest-plan.ts 的 KNOWN_PROBLEMS）：单独列出，不算这一步不通过 */
-  readonly known?: readonly string[] | undefined
   /** 按库里的证据判定的一步（hidden-save）：证据的说明 */
   readonly evidence?: string | undefined
 }
@@ -87,8 +85,8 @@ export function outcomeOf(step: SelftestStep, received: Received | undefined): S
     return { ...base, status: 'failed', problems: [`交回的结果解不开：${received.undecodable}`] }
   if (received.scenario !== step.scenario || received.documentId !== step.documentId)
     return { ...base, status: 'failed', problems: [`交回的是别的一步（${received.scenario}，文档 ${received.documentId}）`], report: received }
-  const { problems, known } = splitKnown(step.id, problemsOf(received))
-  return { ...base, status: problems.length === 0 ? 'passed' : 'failed', problems, report: received, ...(known.length === 0 ? {} : { known }) }
+  const problems = problemsOf(received)
+  return { ...base, status: problems.length === 0 ? 'passed' : 'failed', problems, report: received }
 }
 
 /**

@@ -24,12 +24,16 @@
 // M3-P4（设计 §3.2、§3.4–§3.6、§3.10）：自动保存要的信号——公式的进度（变更检测的跟踪器）、组合输入（composition-watch.ts）、
 // 面板的防抖（panel-debounce-watch.ts）；创建参数 recalculate：带"公式待更新"的文档进入编辑时强制全量重算（档案的表格公式插件以
 // CalculationMode.FORCED 创建），收齐的跟踪器在看到它的触发命令之前不算收齐（formula-settle-tracker.ts）。
+// 销毁（M3-P4 设计 §3.14）：主线程公式模式下有一轮公式正在算时，先停下它、等它结束再销毁（formula-round-stop.ts：否则旧的一轮在销毁之后
+// 接着跑，把坏的语法树写进 engine-formula 模块级的缓存，之后新建的编辑器里公式得出 #NAME?）；创建失败的销毁同样如此。所以 dispose 交回
+// Promise，编辑器槽位等它销毁完才在同一个容器里新建下一个。Worker 模式与没有在算时照旧立即销毁。
 import type { CellEditingWatch } from './cell-editing-watch.ts'
 import type { ChangeClassifierConfig } from './change-tracking/change-classifier.ts'
 import type { ChangeTracker } from './change-tracking/change-tracker.ts'
 import type { CleanupStack } from './cleanup-stack.ts'
 import type { CompositionWatch } from './composition-watch.ts'
 import type { EditorAccess } from './editor-access.ts'
+import type { FormulaRound } from './formula-round-stop.ts'
 import type { LifecycleWatch, SheetEditorLifecycle } from './lifecycle-watch.ts'
 import type { PanelDebounceWatch } from './panel-debounce-watch.ts'
 import type { OpenCheck } from './profile/open-check.ts'
@@ -44,10 +48,11 @@ import { watchCellEditing } from './cell-editing-watch.ts'
 import { createChangeTracker } from './change-tracking/change-tracker.ts'
 import { createCleanupStack } from './cleanup-stack.ts'
 import { watchComposition } from './composition-watch.ts'
+import { ROUND_STOP_TIMEOUT_MS, stopRunningRound } from './formula-round-stop.ts'
 import { editorIdentityOverride } from './identity/editor-authz-io.service.ts'
 import { installRestrictedImageFunction } from './image-function/install-image-policy.ts'
 import { watchWorkerImagePolicy } from './image-function/worker-image-policy.ts'
-import { createResourceLoadGuard, disposalSafeLocaleOverride } from './internal-api/index.ts'
+import { createResourceLoadGuard, disposalSafeLocaleOverride, FORMULA_PROTOCOL } from './internal-api/index.ts'
 import { watchLifecycle } from './lifecycle-watch.ts'
 import { watchPanelDebounces } from './panel-debounce-watch.ts'
 import { installEntryGuards } from './profile/entry-guards.ts'
@@ -114,8 +119,12 @@ export interface SheetEditor {
    * 能不能编辑由编辑器页决定——失败的可编辑编辑器整个丢弃、以只读重建，绝不保存（ADR-015 的"能不能编辑在创建时决定"）
    */
   readonly openCheck: OpenCheck
-  /** 销毁实例、终止 Worker；可以重复调用 */
-  readonly dispose: () => void
+  /**
+   * 销毁实例、终止 Worker；调用之后编辑器就不能再用了。交回的 Promise 在真正销毁完之后兑现，从不失败；可以重复调用（等的是同一次销毁）。
+   * 主线程公式模式下有一轮公式正在算时，先停下它、等它结束再销毁（M3-P4 设计 §3.14，至多一个让出间隔）：同一个容器里新建下一个编辑器
+   * 之前要等它（编辑器槽位）。Worker 模式、没有在算时，调用的这一刻就销毁完
+   */
+  readonly dispose: () => Promise<void>
 }
 
 export interface CreateSheetEditorOptions {
@@ -222,8 +231,49 @@ function createFormulaHost(mode: FormulaMode, cleanup: CleanupStack): FormulaHos
   return { execution: { kind: 'worker', worker }, ready: imagePolicy.installed, settle: imagePolicy.dispose }
 }
 
-/** 按顺序创建、等到就绪；每创建一样就在 cleanup 里登记它的销毁，失败时由调用方统一销毁 */
-async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapshot, formulaMode: FormulaMode, cleanup: CleanupStack): Promise<MountedEditor> {
+/**
+ * 主线程模式下销毁之前要停下的公式计算（formula-round-stop.ts）：mount 建好变更检测之后填上——之后的步骤出错（编辑器加载失败）时
+ * 同样先停下再销毁；Worker 模式一直为空
+ */
+interface FormulaRoundRef {
+  round: FormulaRound | undefined
+}
+
+/**
+ * 这个编辑器的一轮公式计算：在不在算、进度的信号取自变更检测的跟踪器；停下是执行停止的 mutation，与 SDK 的触发服务停下一轮同一个写法
+ * （engine-formula 的 formula-calculation-trigger.service.ts：带 onlyLocal，不算修改，只读的防火墙也不取消它）。同步执行：执行完时
+ * 运行时的停止标记已经设上
+ */
+function formulaRoundOf(univerAPI: FUniver, changes: ChangeTracker): FormulaRound {
+  return {
+    running: changes.formulaRoundRunning,
+    onProgress: changes.onFormulaProgress,
+    stop: () => {
+      univerAPI.syncExecuteCommand(FORMULA_PROTOCOL.stopMutationId, {}, { onlyLocal: true })
+    },
+  }
+}
+
+/**
+ * 销毁已经创建的一切（创建失败与 dispose 都经这里）：主线程模式下有一轮公式正在算时，先停下它、等它结束（formula-round-stop.ts），
+ * 再按创建的相反顺序销毁；没有在算时调用的这一刻就销毁完。从不失败：停不下、到了时限都照样销毁，交给浏览器的错误报告
+ * （之后同一页里新建的编辑器里公式的结果可能不对，要让人看得见）
+ */
+async function tearDown(cleanup: CleanupStack, round: FormulaRound | undefined): Promise<void> {
+  if (round?.running() === true) {
+    try {
+      if (await stopRunningRound(round) === 'timeout')
+        reportError(new Error(`主线程模式下销毁编辑器之前，正在算的一轮公式 ${ROUND_STOP_TIMEOUT_MS / 1000} 秒没有停下：之后同一页里新建的编辑器，公式的结果可能不对`))
+    }
+    catch (error) {
+      reportError(error)
+    }
+  }
+  cleanup.run()
+}
+
+/** 按顺序创建、等到就绪；每创建一样就在 cleanup 里登记它的销毁，失败时由调用方统一销毁（主线程模式下先停下 rounds 里的那一轮） */
+async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapshot, formulaMode: FormulaMode, cleanup: CleanupStack, rounds: FormulaRoundRef): Promise<MountedEditor> {
   // 测试构建：档案故障开关（M3-P4 设计 §3.14，testing/profile-fault.ts）。注册哪些插件必须在注册之前决定，所以在创建任何东西之前引入；
   // 生产构建里 MODE 是 production，这个分支与开关的分块都被去掉（门禁 artifacts 按来源核对）。只能动态引入（lint，与探针同一个理由）
   const pluginEntries = import.meta.env.MODE === 'e2e'
@@ -269,6 +319,9 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
     cleanup.defer(readOnly.dispose)
   const changes = createChangeTracker(univer, univerAPI, classifier, { forcedRound: recalculate })
   cleanup.defer(changes.dispose)
+  // 主线程模式：从这时起销毁之前都要先停下正在算的一轮（计算要到创建工作簿之后才开始；跟踪器从这里起看得到每一轮）
+  if (formula.execution.kind === 'main-thread')
+    rounds.round = formulaRoundOf(univerAPI, changes)
   const cellEditing = watchCellEditing(univerAPI, snapshot.unitId, changes.onChange)
   cleanup.defer(cellEditing.dispose)
   const lifecycle = watchLifecycle({ univerAPI, installImagePolicy: async () => installRestrictedImageFunction(univer, location.origin) })
@@ -325,9 +378,10 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
   // 生产构建里不等：这个表达式只剩 'worker'
   const formulaMode = import.meta.env.MODE === 'e2e' ? await formulaModeOf() : 'worker'
   const cleanup = createCleanupStack()
+  const rounds: FormulaRoundRef = { round: undefined }
   let mounted: MountedEditor
   try {
-    mounted = await mount(options, snapshot, formulaMode, cleanup)
+    mounted = await mount(options, snapshot, formulaMode, cleanup, rounds)
     // 重建之前的视图状态：就绪之后恢复（出错时 restoreViewState 报告、停在默认视图，不让创建失败）
     if (options.viewState !== undefined)
       restoreViewState(mounted.workbook, options.viewState)
@@ -340,17 +394,20 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
     }
   }
   catch (error) {
-    cleanup.run()
+    await tearDown(cleanup, rounds.round)
     throw error
   }
   const { workbook, changes, cellEditing, lifecycle, composition, panels, openCheck } = mounted
 
   let disposed = false
-  const dispose = (): void => {
-    if (disposed)
-      return
-    disposed = true
-    cleanup.run()
+  /** 这一次销毁（第一次调用 dispose 时开始）：重复调用等的都是它，不再销毁一次 */
+  let disposal: Promise<void> | undefined
+  const dispose = async (): Promise<void> => {
+    if (disposal === undefined) {
+      disposed = true
+      disposal = tearDown(cleanup, rounds.round)
+    }
+    return disposal
   }
 
   const usable = (): void => {

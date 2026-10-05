@@ -4,18 +4,20 @@
 // 链接的改写（M3-P3 设计 §3.6）：阅读与编辑都在入口守卫之后、创建工作簿之前装上；
 // 语言服务换成销毁之后不抛错的实现（internal-api 的 disposalSafeLocaleOverride，子类本身的行为由 locale-service.test.ts 测）；
 // 打开自检（M3-P4 设计 §3.11）：jsdom 里真实的 Univer core 与档案的数据插件，模板与正常的快照通过，损坏的给出失败；两次核对的时机；
-// 公式的模式（M3-P4 设计 §3.14）：生产只有 Worker 模式，测试构建里地址参数可以选主线程模式（不建 Worker、不等它的回报）
+// 公式的模式（M3-P4 设计 §3.14）：生产只有 Worker 模式，测试构建里地址参数可以选主线程模式（不建 Worker、不等它的回报）；
+// 主线程模式下销毁之前先停下正在算的一轮、等它结束（formula-round-stop.ts，创建失败的销毁同样），Worker 模式照旧立即销毁
 import type { UnitModel } from '@univerjs/core'
 import type { EditorAccess } from './editor-access.ts'
 import type { PluginEntry } from './profile/plugin-entry.ts'
 import type { ReadOnlyGuard } from './read-only/read-only-guard.ts'
 import { profileResourceNames, sheetSnapshotFor } from '@nerve-office/contracts'
-import { LifecycleStages, Univer, UniverInstanceType } from '@univerjs/core'
+import { CommandType, LifecycleStages, Univer, UniverInstanceType } from '@univerjs/core'
 import { FUniver } from '@univerjs/core/facade'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createChangeTracker } from './change-tracking/change-tracker.ts'
+import { ROUND_STOP_TIMEOUT_MS } from './formula-round-stop.ts'
 import { imagePolicyReport } from './image-function/worker-report.ts'
-import { createResourceLoadGuard, disposalSafeLocaleOverride, IAuthzIoService, injectorOf, WorkbookViewPermission } from './internal-api/index.ts'
+import { createResourceLoadGuard, disposalSafeLocaleOverride, FORMULA_PROTOCOL, IAuthzIoService, injectorOf, WorkbookViewPermission } from './internal-api/index.ts'
 import { dataPluginEntries, snapshotWithResources } from './profile/data-plugins.test-support.ts'
 import { installEntryGuards } from './profile/entry-guards.ts'
 import { installLinkPolicy } from './profile/link-policy.ts'
@@ -209,24 +211,43 @@ describe('按打开方式创建（M2-P3 设计 §3.1–§3.4）', () => {
   })
 })
 
+/** Facade 的命令事件（CommandExecuted 送出的样子） */
+interface FakeCommandEvent {
+  readonly id: string
+  readonly type: CommandType
+  readonly params?: unknown
+  readonly options?: Readonly<Record<string, unknown>> | undefined
+}
+
 /**
  * 能走到就绪的假 Facade：createWorkbook 记下"创建工作簿"，给出 id 对得上的工作簿；生命周期由用例推进（reach），
- * 到 Rendered 时记下"渲染完成"
+ * 到 Rendered 时记下"渲染完成"。命令由用例派发（fire，送给 CommandExecuted 的订阅者：变更检测的跟踪器、探针）；
+ * syncExecuteCommand 记下调用，并像 SDK 一样执行完就送出 CommandExecuted
  */
 function steppingFacade(log: string[], unitId: string) {
-  const lifecycle = new Set<(event: { stage: LifecycleStages }) => void>()
+  const listeners = new Map<string, Set<(event: never) => void>>()
   const workbook = { getId: () => unitId }
+  const subscribers = <T>(name: string): ((event: T) => void)[] => [...(listeners.get(name) ?? [])] as ((event: T) => void)[]
+  const fire = (event: FakeCommandEvent): void => {
+    for (const listener of subscribers<FakeCommandEvent>('CommandExecuted'))
+      listener(event)
+  }
   const api = {
     Event: new Proxy({}, { get: (_target, name) => String(name) }),
-    addEvent: (name: string, listener: (event: { stage: LifecycleStages }) => void) => {
-      if (name === 'LifeCycleChanged')
-        lifecycle.add(listener)
-      return { dispose: () => lifecycle.delete(listener) }
+    addEvent: (name: string, listener: (event: never) => void) => {
+      const named = listeners.get(name) ?? new Set()
+      listeners.set(name, named)
+      named.add(listener)
+      return { dispose: () => named.delete(listener) }
     },
     createWorkbook: () => {
       log.push('createWorkbook')
       return workbook
     },
+    syncExecuteCommand: vi.fn((id: string, params?: object, options?: Readonly<Record<string, unknown>>) => {
+      fire({ id, type: CommandType.MUTATION, params, options })
+      return true
+    }),
   }
   let created: Univer | undefined
   vi.spyOn(FUniver, 'newAPI').mockImplementation((univer) => {
@@ -245,9 +266,13 @@ function steppingFacade(log: string[], unitId: string) {
     reach(stage: LifecycleStages): void {
       if (stage === LifecycleStages.Rendered)
         log.push('rendered')
-      for (const listener of [...lifecycle])
+      for (const listener of subscribers<{ stage: LifecycleStages }>('LifeCycleChanged'))
         listener({ stage })
     },
+    /** SDK 执行了一条命令（送给 CommandExecuted 的订阅者） */
+    fire,
+    /** 编辑器经 Facade 同步执行的命令 */
+    syncExecuteCommand: api.syncExecuteCommand,
   }
 }
 
@@ -288,7 +313,7 @@ describe('只读时的编排（M2-P3 设计 §3.3，P3 审查 A3）', () => {
     expect(guardConfig).toBe(vi.mocked(createChangeTracker).mock.calls[0]?.[2])
     expect(guardConfig).toEqual({ unitId: 'unit-p3', excludedMutationIds: CHANGE_DETECTION_EXCLUDED_MUTATIONS })
 
-    editor.dispose()
+    await editor.dispose()
     expect(log.at(-1)).toBe('dispose')
   })
 })
@@ -320,7 +345,7 @@ describe('链接的改写（M3-P3 设计 §3.6，DEF-021）', () => {
     expect(vi.mocked(installLinkPolicy)).toHaveBeenCalledOnce()
     await reachReady(facade)
     const editor = await creating
-    editor.dispose()
+    await editor.dispose()
     expect(log.filter(step => step.startsWith('dispose') && step !== 'dispose')).toEqual(['disposeLinkPolicy', 'disposeEntryGuards'])
   })
 })
@@ -353,7 +378,7 @@ describe('销毁之后的语言服务（internal-api 的 disposalSafeLocaleOverr
     const editor = await creating
     const locale = localeServiceOf(facade.univer())
     expect(locale.t(ANALYZING)).toBe('正在分析公式...')
-    editor.dispose()
+    await editor.dispose()
     expect(locale.t(ANALYZING)).toBe(ANALYZING)
   })
 })
@@ -371,7 +396,7 @@ describe('模式切换一律重建（M3-P2 设计 §3.1、§3.3）', () => {
     await reachReady(facade)
     const editor = await creating
     expect(container.getAttribute(EDITOR_ACCESS_ATTRIBUTE)).toBe('read')
-    editor.dispose()
+    await editor.dispose()
     expect(container.hasAttribute(EDITOR_ACCESS_ATTRIBUTE)).toBe(false)
 
     fakeFacade()
@@ -394,7 +419,7 @@ describe('模式切换一律重建（M3-P2 设计 §3.1、§3.3）', () => {
     const editor = await creating
     expect(log).toEqual(['createWorkbook', 'rendered', 'restoreViewState'])
     expect(vi.mocked(restoreViewState)).toHaveBeenCalledExactlyOnceWith(facade.workbook, STATE)
-    editor.dispose()
+    await editor.dispose()
   })
 
   it('没有给视图状态：不恢复（默认视图）', async () => {
@@ -404,7 +429,7 @@ describe('模式切换一律重建（M3-P2 设计 §3.1、§3.3）', () => {
     await reachReady(facade)
     const editor = await creating
     expect(vi.mocked(restoreViewState)).not.toHaveBeenCalled()
-    editor.dispose()
+    await editor.dispose()
   })
 
   it('viewState()：取这个工作簿现在的视图状态；销毁之后为 undefined', async () => {
@@ -416,7 +441,7 @@ describe('模式切换一律重建（M3-P2 设计 §3.1、§3.3）', () => {
     const editor = await creating
     expect(editor.viewState()).toEqual(STATE)
     expect(vi.mocked(readViewState)).toHaveBeenCalledExactlyOnceWith(facade.workbook)
-    editor.dispose()
+    await editor.dispose()
     expect(editor.viewState()).toBeUndefined()
     expect(vi.mocked(readViewState)).toHaveBeenCalledOnce()
   })
@@ -437,7 +462,7 @@ describe('自动保存要的信号与强制全量重算（M3-P4 设计 §3.2、�
     expect(vi.mocked(createChangeTracker)).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.anything(), expect.anything(), { forcedRound: forced })
     // 档案里没有公式插件，触发命令不会来：要求了强制重算时一直不算收齐
     expect(editor.formulasSettled()).toBe(!forced)
-    editor.dispose()
+    await editor.dispose()
   })
 
   it('组合输入：容器所在的页面上的组字（页头里的除外）；销毁之后不再算', async () => {
@@ -460,7 +485,7 @@ describe('自动保存要的信号与强制全量重算（M3-P4 设计 §3.2、�
     input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
     expect(editor.composing()).toBe(true)
     expect(listener).toHaveBeenCalledOnce()
-    editor.dispose()
+    await editor.dispose()
     expect(editor.composing()).toBe(false)
     input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
     expect(listener).toHaveBeenCalledOnce()
@@ -484,7 +509,7 @@ describe('自动保存要的信号与强制全量重算（M3-P4 设计 §3.2、�
     const started = performance.now()
     await editor.settlePanels()
     expect(performance.now() - started).toBeGreaterThanOrEqual(250)
-    editor.dispose()
+    await editor.dispose()
     note.remove()
     container.remove()
   })
@@ -497,7 +522,7 @@ describe('自动保存要的信号与强制全量重算（M3-P4 设计 §3.2、�
     const editor = await creating
     const tracker = vi.mocked(createChangeTracker).mock.results[0]?.value as ReturnType<typeof createChangeTracker>
     expect(editor.onFormulaProgress).toBe(tracker.onFormulaProgress)
-    editor.dispose()
+    await editor.dispose()
     expect(editor.formulasSettled()).toBe(false)
   })
 })
@@ -572,7 +597,7 @@ describe('打开自检（M3-P4 设计 §3.11）：jsdom 里真实的 Univer core
     await reachReady(facade)
     const editor = await creating
     expect(editor.openCheck).toEqual({ ok: true })
-    editor.dispose()
+    await editor.dispose()
   })
 
   it('截断的筛选：openCheck 给出 parse-threw（SyntaxError）与 resource-emptied；编辑器照常返回（不是加载失败，能不能编辑由编辑器页决定）', async () => {
@@ -585,7 +610,7 @@ describe('打开自检（M3-P4 设计 §3.11）：jsdom 里真实的 Univer core
       { kind: 'parse-threw', resource: 'SHEET_FILTER_PLUGIN', error: 'SyntaxError' },
       { kind: 'resource-emptied', resource: 'SHEET_FILTER_PLUGIN' },
     ] })
-    editor.dispose()
+    await editor.dispose()
   })
 
   it('第一次核对在 createWorkbook 刚返回时（只读守卫设权限点之前），就绪之后再核对一次 hook 集合', async () => {
@@ -599,7 +624,7 @@ describe('打开自检（M3-P4 设计 §3.11）：jsdom 里真实的 Univer core
     const editor = await creating
     expect(log).toEqual(['createWorkbook', 'sheetHookNames', 'captureSheetResources', 'applyWorksheetPoints', 'rendered', 'applyRenderedGuards', 'clearUndoStack', 'sheetHookNames'])
     expect(editor.openCheck).toEqual({ ok: true })
-    editor.dispose()
+    await editor.dispose()
   })
 
   it('就绪之后 hook 集合少了一个：openCheck 带上 profile-missing-hook（再核对接在结果上）', async () => {
@@ -609,7 +634,7 @@ describe('打开自检（M3-P4 设计 §3.11）：jsdom 里真实的 Univer core
     await reachReady(facade)
     const editor = await creating
     expect(editor.openCheck).toEqual({ ok: false, failures: [{ kind: 'profile-missing-hook', resource: 'SHEET_NOTE_PLUGIN' }] })
-    editor.dispose()
+    await editor.dispose()
   })
 
   it('比较的"之前"一侧是载入的原样：SDK 改动交给 createWorkbook 的对象（这里在建出单元之后往里写进一项资源）不影响结果', async () => {
@@ -638,7 +663,7 @@ describe('打开自检（M3-P4 设计 §3.11）：jsdom 里真实的 Univer core
     })
     const editor = await creating
     expect(editor.openCheck).toEqual({ ok: true })
-    editor.dispose()
+    await editor.dispose()
   })
 
   it('打开自检取不到事实（资源守卫没有生效）：按加载失败处理，已经创建的都销毁', async () => {
@@ -673,7 +698,7 @@ describe('公式在哪里计算（M3-P4 设计 §3.14）', () => {
     expect(vi.mocked(sheetPluginEntries)).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ formula: { kind: 'worker', worker: FakeWorker.created[0] } }))
     await reachReady(facade)
     const editor = await creating
-    editor.dispose()
+    await editor.dispose()
     expect(FakeWorker.created[0]?.terminate).toHaveBeenCalledOnce()
   })
 
@@ -692,7 +717,7 @@ describe('公式在哪里计算（M3-P4 设计 §3.14）', () => {
     facade.reach(LifecycleStages.Rendered)
     const editor = await creating
     expect(window.__nerveEditorProbe?.formulaMode).toBe('main-thread')
-    editor.dispose()
+    await editor.dispose()
   })
 
   it('测试构建、地址不带 formula：照常是 Worker 模式（探针报告 worker）', async () => {
@@ -707,6 +732,119 @@ describe('公式在哪里计算（M3-P4 设计 §3.14）', () => {
     await reachReady(facade)
     const editor = await creating
     expect(window.__nerveEditorProbe?.formulaMode).toBe('worker')
-    editor.dispose()
+    await editor.dispose()
+  })
+})
+
+describe('主线程模式下销毁之前停下正在算的一轮（M3-P4 设计 §3.14，S1 复核的 F2）', () => {
+  const START: FakeCommandEvent = { id: FORMULA_PROTOCOL.startMutationId, type: CommandType.MUTATION, params: {}, options: { onlyLocal: true } }
+  /** 计算中的进度通知：不是这一轮结束 */
+  const PROGRESS: FakeCommandEvent = { id: FORMULA_PROTOCOL.notificationMutationId, type: CommandType.MUTATION, params: { stageInfo: { stage: 4 } }, options: { onlyLocal: true } }
+  /** 这一轮结束的通知：被停下（completedStates 的第一项是 STOP_EXECUTION）、算完（第二项是 SUCCESS） */
+  const STOPPED: FakeCommandEvent = { id: FORMULA_PROTOCOL.notificationMutationId, type: CommandType.MUTATION, params: { functionsExecutedState: FORMULA_PROTOCOL.completedStates[0] }, options: { onlyLocal: true } }
+  const COMPLETED: FakeCommandEvent = { id: FORMULA_PROTOCOL.notificationMutationId, type: CommandType.MUTATION, params: { functionsExecutedState: FORMULA_PROTOCOL.completedStates[1] }, options: { onlyLocal: true } }
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllEnvs()
+    history.replaceState(null, '', '/')
+    delete window.__nerveEditorProbe
+  })
+
+  /** 主线程模式：测试构建、地址带 formula=main（testing/formula-mode.ts） */
+  function chooseMainThread(): void {
+    vi.stubEnv('MODE', 'e2e')
+    history.replaceState(null, '', '/documents/doc-1?formula=main')
+  }
+
+  /** 以 mode 创建、走到就绪；之后才盯着 Univer 的销毁 */
+  async function createdIn(mode: 'worker' | 'main-thread') {
+    if (mode === 'main-thread')
+      chooseMainThread()
+    const log: string[] = []
+    const facade = steppingFacade(log, 'unit-s')
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    const container = document.createElement('div')
+    const creating = createSheetEditor({ container, snapshot: sheetSnapshotFor('unit-s'), access: 'edit' })
+    await vi.waitFor(() => expect(log).toEqual(['createWorkbook']))
+    await reachReady(facade)
+    const editor = await creating
+    return { editor, facade, container, univerDispose: vi.spyOn(Univer.prototype, 'dispose') }
+  }
+
+  it('一轮在算：先同步执行停止的 mutation（onlyLocal），收到这一轮结束的通知之前不销毁（计算中的进度通知不算）；dispose 交回的 Promise 在销毁完时兑现，重复调用等的是同一次销毁', async () => {
+    const { editor, facade, container, univerDispose } = await createdIn('main-thread')
+    facade.fire(START)
+    const disposal = editor.dispose()
+    const again = editor.dispose()
+    expect(facade.syncExecuteCommand).toHaveBeenCalledExactlyOnceWith(FORMULA_PROTOCOL.stopMutationId, {}, { onlyLocal: true })
+    // 调用之后就不能再用了（等着销毁的这段时间里也是）
+    expect(() => editor.capture()).toThrow('表格编辑器已经销毁')
+    facade.fire(PROGRESS)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(univerDispose).not.toHaveBeenCalled()
+    expect(container.getAttribute(EDITOR_ACCESS_ATTRIBUTE)).toBe('edit')
+    facade.fire(STOPPED)
+    await disposal
+    await again
+    expect(univerDispose).toHaveBeenCalledOnce()
+    expect(container.hasAttribute(EDITOR_ACCESS_ATTRIBUTE)).toBe(false)
+  })
+
+  it('没有在算（这一轮已经结束）：调用的这一刻就销毁完，不执行停止的 mutation', async () => {
+    const { editor, facade, univerDispose } = await createdIn('main-thread')
+    facade.fire(START)
+    facade.fire(COMPLETED)
+    const disposal = editor.dispose()
+    expect(univerDispose).toHaveBeenCalledOnce()
+    expect(facade.syncExecuteCommand).not.toHaveBeenCalled()
+    await disposal
+  })
+
+  it('Worker 模式：一轮在算也照旧立即销毁（语法树的缓存在 Worker 里，随它终止），不执行停止的 mutation', async () => {
+    const { editor, facade, univerDispose } = await createdIn('worker')
+    facade.fire(START)
+    const disposal = editor.dispose()
+    expect(univerDispose).toHaveBeenCalledOnce()
+    expect(FakeWorker.created[0]?.terminate).toHaveBeenCalledOnce()
+    expect(facade.syncExecuteCommand).not.toHaveBeenCalled()
+    await disposal
+  })
+
+  it('到了时限还没结束：照样销毁，报告页面错误（之后同一页里新建的编辑器，公式的结果可能不对）', async () => {
+    const report = vi.fn()
+    vi.stubGlobal('reportError', report)
+    const { editor, facade, univerDispose } = await createdIn('main-thread')
+    vi.useFakeTimers()
+    facade.fire(START)
+    const disposal = editor.dispose()
+    await vi.advanceTimersByTimeAsync(ROUND_STOP_TIMEOUT_MS - 1)
+    expect(univerDispose).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    await disposal
+    expect(univerDispose).toHaveBeenCalledOnce()
+    expect(report).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message: expect.stringContaining('没有停下') as unknown }))
+  })
+
+  it('创建的过程中出错时一轮在算：同样先停下、等它结束再销毁，然后抛出原来的错误', async () => {
+    chooseMainThread()
+    const log: string[] = []
+    const facade = steppingFacade(log, 'unit-s')
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    const failure = new Error('就绪之后的一步出错')
+    vi.mocked(restoreViewState).mockImplementationOnce(() => {
+      throw failure
+    })
+    const univerDispose = vi.spyOn(Univer.prototype, 'dispose')
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-s'), access: 'edit', viewState: { sheetId: 'sheet-1', topLeft: { row: 0, column: 0 }, selection: undefined } })
+      .catch((error: unknown) => error)
+    await vi.waitFor(() => expect(log).toEqual(['createWorkbook']))
+    facade.fire(START)
+    await reachReady(facade)
+    await vi.waitFor(() => expect(facade.syncExecuteCommand).toHaveBeenCalledExactlyOnceWith(FORMULA_PROTOCOL.stopMutationId, {}, { onlyLocal: true }))
+    expect(univerDispose).not.toHaveBeenCalled()
+    facade.fire(STOPPED)
+    expect(await creating).toBe(failure)
+    expect(univerDispose).toHaveBeenCalledOnce()
   })
 })

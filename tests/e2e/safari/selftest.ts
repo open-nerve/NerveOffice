@@ -241,8 +241,6 @@ function printSummary(outcomes: readonly StepOutcome[], serverProblems: readonly
       say(`  库里的证据：${outcome.evidence}`)
     for (const problem of outcome.problems)
       say(`  - ${problem}`)
-    for (const problem of outcome.known ?? [])
-      say(`  - 已知的问题（不算不通过）：${problem}`)
     for (const line of timingLines(outcome.report?.timings ?? []))
       say(`  ${line}`)
   }

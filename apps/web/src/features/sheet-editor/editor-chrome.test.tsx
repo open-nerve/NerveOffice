@@ -1,6 +1,6 @@
 import type { AutosaveView } from './autosave.ts'
 import type { LeaseLoss } from './edit-lease.ts'
-import type { EditModeState, LostMode, ReadingMode } from './edit-mode.ts'
+import type { EditModeState, LostMode, OpenCheckFailures, ReadingMode } from './edit-mode.ts'
 import type { EditorPage, EditorPageReady, EditorPageView } from './editor-page.ts'
 import type { SaveView } from './save-coordinator.ts'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -22,7 +22,7 @@ const READY: EditorPageReady = {
 }
 const CLEAN: SaveView = { status: 'clean', formulasPending: false, problem: undefined, conflict: undefined, canSave: true, unsaved: false, unsavedEdits: false, checking: false, snapshotBytes: undefined }
 const EDITING: EditModeState = { kind: 'editing' }
-const READING: ReadingMode = { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined, formulasPending: false }
+const READING: ReadingMode = { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined, formulasPending: false, damaged: undefined }
 const AMY = { id: '0199a2c4-0000-7000-8000-0000000000e1', username: 'amy', displayName: '艾米' }
 const COPY = {
   id: '0199a2c4-0000-7000-8000-0000000000c9',
@@ -1140,5 +1140,78 @@ describe('阅读页的"公式待更新"（M3-P4 设计 §3.5 第 4 条）', () =
     expect(infoRegion()).not.toHaveTextContent('公式结果')
     fake.set({ mode: { ...READING, gone: true, canEdit: false, formulasPending: true } })
     expect(infoRegion()).not.toHaveTextContent('公式结果')
+  })
+})
+
+describe('打开自检失败的阅读（M3-P4 设计 §3.12，US-M3-15）', () => {
+  /** 数据没能完整载入：截断的筛选，另有保护类的两项（同一个说法） */
+  const FILTER_DAMAGED: OpenCheckFailures = [
+    { kind: 'parse-threw', resource: 'SHEET_FILTER_PLUGIN', error: 'SyntaxError' },
+    { kind: 'resource-emptied', resource: 'SHEET_FILTER_PLUGIN' },
+    { kind: 'resource-emptied', resource: 'SHEET_RANGE_PROTECTION_PLUGIN' },
+    { kind: 'resource-missing', resource: 'SHEET_WORKSHEET_PROTECTION_PLUGIN' },
+  ]
+  /** 编辑器没有完整载入：批注的插件没有注册（样本里的批注随之不在了） */
+  const NOTE_MISSING: OpenCheckFailures = [{ kind: 'profile-missing-hook', resource: 'SHEET_NOTE_PLUGIN' }, { kind: 'resource-missing', resource: 'SHEET_NOTE_PLUGIN' }]
+
+  function backLink(): HTMLElement {
+    return screen.getByRole('link', { name: '我的空间' })
+  }
+
+  it('数据不完整、能编辑的人：没有"编辑"，页头只能查看；提示条（role="alert"）说已阻止编辑，哪些部分没能载入（同一个说法只说一次）、继续编辑会让它们丢失、已通知管理员', () => {
+    renderChrome({ mode: { ...READING, damaged: FILTER_DAMAGED }, save: undefined })
+    expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
+    expect(headerStatus()).toHaveTextContent(/^只能查看$/)
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('文档数据不完整，已阻止编辑')
+    expect(alert).toHaveTextContent('部分数据没能载入（筛选、保护设置），继续编辑会让它们丢失。已通知管理员')
+    expect(within(alert).queryByRole('button')).toBeNull()
+    expect(infoRegion()).not.toHaveTextContent('部分数据')
+  })
+
+  it('数据不完整、查看者：不打断，一直在的读屏状态区里说显示的内容可能不完整；没有提示条', () => {
+    renderChrome({ mode: { ...READING, canEdit: false, damaged: FILTER_DAMAGED }, save: undefined })
+    expect(infoRegion()).toHaveTextContent(/^文档的部分数据没能载入，显示的内容可能不完整$/)
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(headerStatus()).toHaveTextContent(/^只能查看$/)
+  })
+
+  it('编辑器没有完整载入（档案不全）：能编辑的人说已阻止编辑、请重新加载页面，给"重新加载"（整页）；查看者不说已阻止编辑', () => {
+    const fake = renderChrome({ mode: { ...READING, damaged: NOTE_MISSING }, save: undefined })
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent(/^编辑器没有完整载入，已阻止编辑。请重新加载页面重新加载$/)
+    fireEvent.click(within(alert).getByRole('button', { name: '重新加载' }))
+    expect(fake.page.reload).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
+    fake.set({ mode: { ...READING, canEdit: false, damaged: NOTE_MISSING } })
+    expect(screen.getByRole('alert')).toHaveTextContent(/^编辑器没有完整载入，显示的内容可能不完整。请重新加载页面重新加载$/)
+    expect(infoRegion()).not.toHaveTextContent('部分数据')
+  })
+
+  it('白名单之外的资源名说成"其他数据"', () => {
+    renderChrome({ mode: { ...READING, damaged: [{ kind: 'parse-swallowed', resource: 'SHEET_SOMETHING_NEW_PLUGIN' }] }, save: undefined })
+    expect(screen.getByRole('alert')).toHaveTextContent('部分数据没能载入（其他数据）')
+  })
+
+  it('"公式待更新"不说进入编辑之后会重算（数据不完整的不能进入编辑）', () => {
+    renderChrome({ mode: { ...READING, formulasPending: true, damaged: FILTER_DAMAGED }, save: undefined })
+    expect(infoRegion()).toHaveTextContent('这份表格的公式结果可能还没更新（上次保存时公式还没算完）')
+    expect(infoRegion()).not.toHaveTextContent('进入编辑之后')
+  })
+
+  it('"有更新"重建之后新版通过（damaged 清掉）：说明随之消失，"编辑"回来', () => {
+    const fake = renderChrome({ mode: { ...READING, damaged: FILTER_DAMAGED }, save: undefined })
+    fake.set({ mode: READING })
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByRole('button', { name: '编辑' })).toBeInTheDocument()
+  })
+
+  it('"编辑"随打开自检失败消失（进入编辑时新内容没能完整载入）：焦点交给返回链接，不落到 body', async () => {
+    const fake = renderChrome({ mode: READING, save: undefined })
+    screen.getByRole('button', { name: '编辑' }).focus()
+    fake.set({ mode: { kind: 'entering' } })
+    fake.set({ mode: { ...READING, damaged: FILTER_DAMAGED } })
+    expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
+    await waitFor(() => expect(document.activeElement).toBe(backLink()))
   })
 })
