@@ -5,6 +5,7 @@
 //   toJson 与 onLoad（refer/univer 1.0）：种类不对时 SDK 加载就出错（例如条件格式展开每个键下的规则表，筛选按对象反序列化）。
 //   逐字段的结构不做：没有证据支撑时误拒的风险高（M0-P2 报告 §3，M3 总设计 §7）。
 // "空"按深层为空判断：null、空串、空对象、空数组，或者每一层都为空——规则删光之后的区域保护是 { 工作表 id: [] }，不能误拒（M0 的 resource-guard）。
+// 页面的打开自检（M3-P4 设计 §3.11）用同一个口径比较加载前后的资源（lostResources）：与服务端的"不缩水"同一份白名单与"空"的定义。
 // 按档案组织：以后的 doc@1（M6）在 PROFILE_RESOURCES 里加一项
 import type { DocumentProfile } from './documents.ts'
 import type { SnapshotRule } from './snapshot-rules.ts'
@@ -165,4 +166,72 @@ export function shrunkResources(previousNonEmpty: readonly string[], present: re
   const rules: Readonly<Record<string, ResourceRule>> = PROFILE_RESOURCES[profile]
   const now = new Set(present)
   return [...new Set(previousNonEmpty)].filter(name => Object.hasOwn(rules, name) && !now.has(name)).sort(compareCodeUnits)
+}
+
+// ---- 打开自检的资源比较（M3-P4 设计 §3.11 第 3 条）：载入的快照里原来非空的资源，加载之后立即捕获时消失或变空 ----
+// 容错：之前一侧是没经过检查的原样数据（损坏的文档正是要比的），任何输入都不抛出。"空"与服务端的资源检查、P3 的规范化同一个口径
+// （isDeepEmpty，"在而为空"与"不在"等价）；"内容有变化"不算（DEF-002 等会合法地改变内容），只看非空的有没有丢
+
+/**
+ * 一项资源的 data 有没有内容：字符串里空串是空，解析得出的按 isDeepEmpty，解析不了的算有内容（SDK 照样交给插件解析，坏掉的那一项
+ * 正是自检要比的）；不是字符串的（只在没经过服务端检查的数据里出现）按 isDeepEmpty。任何输入都不抛出
+ */
+export function hasResourceContent(data: unknown): boolean {
+  if (typeof data !== 'string')
+    return !isDeepEmpty(data)
+  if (data === '')
+    return false
+  const value = parseData(data)
+  return value === undefined || !isDeepEmpty(value.value)
+}
+
+/**
+ * 载入的快照里非空的白名单资源名，按名称排序。按 SDK 加载时的读法（core 的 resource-manager.service.ts 的 loadResources 与
+ * resource-loader.service.ts 的 loadHookResource 都按名称找第一条）：同名的取第一条，只算档案白名单里的名字，data 按 hasResourceContent。
+ * resources 不是数组、某一项不是对象或名称不是字符串都跳过（SDK 也读不到它们），任何输入都不抛出
+ */
+export function nonEmptyResourceNames(resources: unknown, profile: DocumentProfile): string[] {
+  if (!Array.isArray(resources))
+    return []
+  const rules: Readonly<Record<string, ResourceRule>> = PROFILE_RESOURCES[profile]
+  const first = new Map<string, unknown>()
+  for (const entry of resources as readonly unknown[]) {
+    if (isJsonObject(entry) && typeof entry.name === 'string' && !first.has(entry.name))
+      first.set(entry.name, entry.data)
+  }
+  return [...first].filter(([name, data]) => Object.hasOwn(rules, name) && hasResourceContent(data)).map(([name]) => name).sort(compareCodeUnits)
+}
+
+/** 加载之后一项资源的序列化：逐个 hook 的 toJson 的输出（名称是 hook 的资源名） */
+export interface ResourceOutput {
+  readonly name: string
+  readonly data: string
+}
+
+/** 原来非空的资源：加载之后不在了的（missing）与变空了的（emptied），都按名称排序 */
+export interface LostResources {
+  readonly missing: readonly string[]
+  readonly emptied: readonly string[]
+}
+
+/**
+ * 打开自检的资源比较：before 是载入的快照的 resources（原样，见 nonEmptyResourceNames），after 是加载之后逐个 hook 的输出
+ * （同名的取第一条）。before 里非空的白名单资源，after 里没有的是 missing，有而没有内容（hasResourceContent）的是 emptied；
+ * 内容变了而仍有内容的不算。任何输入都不抛出
+ */
+export function lostResources(before: unknown, after: readonly ResourceOutput[], profile: DocumentProfile): LostResources {
+  const outputs = new Map<string, string>()
+  for (const { name, data } of after) {
+    if (!outputs.has(name))
+      outputs.set(name, data)
+  }
+  const missing: string[] = []
+  const emptied: string[] = []
+  for (const name of nonEmptyResourceNames(before, profile)) {
+    if (!outputs.has(name))
+      missing.push(name)
+    else if (!hasResourceContent(outputs.get(name)))
+      emptied.push(name)
+  }
+  return { missing, emptied }
 }
