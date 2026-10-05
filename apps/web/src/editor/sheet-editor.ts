@@ -1,4 +1,3 @@
-import type { DependencyOverride } from '@univerjs/core'
 // 表格编辑器（P4 设计 §3.6.1、§3.6.3）：这份快照在 Univer 里怎么编辑、怎么捕获。请求、保存状态与界面由编辑器页负责。
 // 一页一份文档、整页加载与卸载（计划书 §10.2）：同一个实例里不能创建两份 unitId 相同的文档，反复创建销毁也会泄漏内存。
 // 能不能编辑在创建时决定（access，M2-P3 设计 §3.1）：只读的文档一开始就以只读创建，没有"就绪之后再设"的第二条路。
@@ -123,13 +122,13 @@ const SETTLE_POLL_INTERVAL_MS = 20
  * override：编辑器身份（授权服务按 access 回答）与资源守卫（资源管理服务只能在这里换掉：注入器构造时就被资源加载服务取走，
  * internal-api 的 createResourceLoadGuard）。两者互不相干，都早于插件注册与 Facade 的订阅
  */
-function createUniver(access: EditorAccess, resourceGuard: DependencyOverride): Univer {
+function createUniver(access: EditorAccess, resourceGuard: ReturnType<typeof createResourceLoadGuard>): Univer {
   return new Univer({
     locale: LocaleType.ZH_CN,
     locales: { [LocaleType.ZH_CN]: SHEET_ZH_CN },
     theme: defaultTheme,
     logLevel: LogLevel.WARN,
-    override: [...editorIdentityOverride(access), ...resourceGuard],
+    override: [...editorIdentityOverride(access), ...resourceGuard.override],
   })
 }
 
@@ -177,7 +176,7 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
 
   // 资源守卫（打开自检，M3-P4 设计 §3.11 第 1 条）：一个编辑器一个，随 Univer 一起销毁（它就是 Univer 里的资源管理服务）
   const resourceGuard = createResourceLoadGuard()
-  const univer = createUniver(access, resourceGuard.override)
+  const univer = createUniver(access, resourceGuard)
   cleanup.defer(() => univer.dispose())
   for (const entry of pluginEntries({ container, formulaWorker: worker, access }))
     entry.register(univer)
