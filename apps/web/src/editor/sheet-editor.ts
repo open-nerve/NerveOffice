@@ -3,7 +3,8 @@
 // 能不能编辑在创建时决定（access，M2-P3 设计 §3.1）：只读的文档一开始就以只读创建，没有"就绪之后再设"的第二条路。
 // 顺序：
 // 1. 创建公式 Worker（模块 Worker），先挂上它的回报与错误的监听；
-// 2. new Univer（身份替换：授权服务按 access 回答，ADR-009），按档案注册插件（界面的配置按 access）；FUniver.newAPI；
+// 2. new Univer（身份替换：授权服务按 access 回答，ADR-009；语言服务换成销毁之后不抛错的实现，internal-api 的 disposalSafeLocaleOverride），
+//    按档案注册插件（界面的配置按 access）；FUniver.newAPI；
 // 3. 在创建工作簿之前挂上入口守卫、链接的改写（M3-P3）、只读守卫（只读时：防火墙与撤销拦截）、变更检测、单元格编辑与生命周期的监听，
 //    加载过程中的命令也看得到、拦得住、改得到；更要紧的是执行前监听的先后，见 mount 里的不变量（M2-P6 复核 F3）；
 // 4. createWorkbook，核对 unitId；只读时把每张工作表的权限点设为只读（read-only/read-only-guard.ts）；
@@ -33,6 +34,7 @@ import { createCleanupStack } from './cleanup-stack.ts'
 import { editorIdentityOverride } from './identity/editor-authz-io.service.ts'
 import { installRestrictedImageFunction } from './image-function/install-image-policy.ts'
 import { watchWorkerImagePolicy } from './image-function/worker-image-policy.ts'
+import { disposalSafeLocaleOverride } from './internal-api/index.ts'
 import { watchLifecycle } from './lifecycle-watch.ts'
 import { installEntryGuards } from './profile/entry-guards.ts'
 import { installLinkPolicy } from './profile/link-policy.ts'
@@ -111,7 +113,9 @@ function createUniver(access: EditorAccess): Univer {
     locales: { [LocaleType.ZH_CN]: SHEET_ZH_CN },
     theme: defaultTheme,
     logLevel: LogLevel.WARN,
-    override: editorIdentityOverride(access),
+    // 核心注入器里换掉的两项：授权服务按打开方式回答（ADR-009）；语言服务销毁之后不抛错——SDK 有销毁之后才到点、还会调用它的计时器
+    // （公式计算的进度），切换一律重建，旧的编辑器销毁之后到点就是一条没接住的页面异常（internal-api 的 disposalSafeLocaleOverride）
+    override: [...editorIdentityOverride(access), ...disposalSafeLocaleOverride()],
   })
 }
 

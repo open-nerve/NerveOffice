@@ -5,16 +5,19 @@
 //   页面的 Worker 回到 1 个；
 // - 进入、退出没有成功（403、被占用、退出时保存失败）时焦点留在页头：按钮留着或者交给返回链接（审查 A2）；
 // - 以服务端当前的修订为基准：阅读期间别人保存过，点"编辑"先按 If-None-Match 取最新的内容再进入；
-// - 重建之前取出视图状态（当前工作表、左上角可见的行列、主选区），就绪之后恢复（风险表"重建丢掉用户的视图"）。
+// - 重建之前取出视图状态（当前工作表、左上角可见的行列、主选区），就绪之后恢复（风险表"重建丢掉用户的视图"）；
+// - 公式计算进行中切换：销毁的旧编辑器留下的计时器到点时不再抛出没接住的异常（SDK 的进度计时器调已销毁的语言服务，
+//   internal-api 的 disposalSafeLocaleOverride）。
 // 失去编辑权之后另存为副本：上传本页捕获的内容（服务端按快照新建，M3-P2 S2 的接口），本页按服务器上的最新版本回到阅读。
 // 编辑器没能重新打开（以只读重建失败，审查 A3）时留在失去编辑权，焦点交给"另存为副本"；副本之后按最新的内容重建又失败也留着，
 // 副本的说明与链接照旧（复验 C1、C2）。
 // 两个人与同一个人的多个标签页（US-M3-04）在 lease-acquire.spec.ts，阅读者的更新提示（US-M3-05）在 reading-updates.spec.ts，
 // 失去编辑权的各种情形（US-M3-11、12、13）在 conflict.spec.ts、access.spec.ts 与 lease-recovery.spec.ts。
 import type { Page, Request } from '@playwright/test'
-import { revisionEtag } from '@nerve-office/contracts'
-import { archiveSpace, createDocumentIn, createTeamSpace, createUser, editLeaseEndReason, withDatabase } from '../../support/database.ts'
-import { editorView, scrollAndSelect } from '../../support/editor-probe.ts'
+import type { ProbeCommand } from '../../support/editor-probe.ts'
+import { revisionEtag, SHEET_TEMPLATE } from '@nerve-office/contracts'
+import { archiveSpace, createDocument, createDocumentIn, createTeamSpace, createUser, editLeaseEndReason, withDatabase } from '../../support/database.ts'
+import { commandMark, editorView, probeCommands, runFacade, scrollAndSelect } from '../../support/editor-probe.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { pressUniverShortcut } from '../../support/keyboard.ts'
 import { expectEntriesUnchanged, grantClipboard, OTHER_READ_ONLY_ENTRIES, PROBE_FACADE_ENTRIES, UI_ENTRIES } from '../../support/read-only-checks.ts'
@@ -263,6 +266,74 @@ test.describe('阅读与编辑的切换保留视图（M3-P2 设计 §3.3）', { 
     await expect(sheetTab(page, '工作表2')).toHaveAttribute('aria-selected', 'true')
     expect(await editorView(page)).toEqual(expected)
     await expect(saveStatus(page)).toHaveText('已保存到云端')
+  })
+})
+
+/** 计算进行中切换用的表：A 列的公式个数与 E 列的行数 */
+const HEAVY_ROWS = 1000
+
+/** 第 i 个公式（从 0 开始）按定义算出的值：E 列第 i 行以下（不含）的和，再加 i */
+function heavyFormulaValue(i: number): number {
+  return HEAVY_ROWS * (HEAVY_ROWS + 1) / 2 - i * (i + 1) / 2 + i
+}
+
+/**
+ * A1:A1000 是 =SUMPRODUCT($E$1:$E$1000*(ROW($E$1:$E$1000)>i))+i，E1:E1000 是 1…1000。公式都带缓存值（按定义算出），
+ * 打开时那一轮不用重算（打开时只算没有值的公式，WHEN_EMPTY）；强制重算这 1000 个公式（各算 1000 格）本机要 0.9 秒（WebKit）
+ * 到 1.7 秒（Chromium、Chrome）
+ */
+function sheetWithHeavyRecalculation(unitId: string): string {
+  const cellData: Record<number, Record<number, { f?: string, v: number, t: number }>> = {}
+  for (let i = 0; i < HEAVY_ROWS; i += 1) {
+    cellData[i] = {
+      0: { f: `=SUMPRODUCT($E$1:$E$${HEAVY_ROWS}*(ROW($E$1:$E$${HEAVY_ROWS})>${i}))+${i}`, v: heavyFormulaValue(i), t: 2 },
+      4: { v: i + 1, t: 2 },
+    }
+  }
+  const sheet = SHEET_TEMPLATE.sheets['sheet-1']
+  return JSON.stringify({ ...SHEET_TEMPLATE, id: unitId, sheets: { 'sheet-1': { ...sheet, cellData } } })
+}
+
+const CALCULATION_START = 'formula.mutation.set-formula-calculation-start'
+const CALCULATION_NOTIFICATION = 'formula.mutation.set-formula-calculation-notification'
+const CALCULATION_RESULT = 'formula.mutation.set-formula-calculation-result'
+
+/**
+ * 命令日志里一轮计算已经开始：开始计算的 mutation 执行之后的第一条通知就是 Worker 送回的开始通知（engine-formula 的
+ * calculate-formula.service.ts:146-147 在计算的最前面送出）。探针的执行后事件排在 SDK 的监听之后，看到它时 SDK 已经设下了计时器
+ */
+function calculationStarted(commands: readonly ProbeCommand[]): boolean {
+  const executed = commands.filter(command => command.phase === 'executed').map(command => command.id)
+  const start = executed.indexOf(CALCULATION_START)
+  return start >= 0 && executed.includes(CALCULATION_NOTIFICATION, start + 1)
+}
+
+// 公式计算进行中切换（main 16f8a1d 的 CI 上 save.spec.ts"计算进行中又改了一处"偶发的页面异常）：sheets-formula 的 TriggerCalculationController
+// 收到一轮计算的开始通知时设一个 1 秒的计时器（到点显示"正在分析公式..."的进度），这一轮算完时清掉，销毁时却不清（trigger-calculation.controller.ts
+// 的 _initialExecuteFormulaProcessListener 与 dispose）。切换一律重建：旧的编辑器在这 1 秒里被销毁、这一轮又还没算完，到点时计时器调用已销毁的
+// 语言服务（LocaleService.t），抛出"Locale not initialized"，页面里一条没接住的异常——打开含公式的表格马上点"编辑"就会遇到。
+// 构造要确定：打开时那一轮在渲染完成之后就开始，探针在就绪之后才装上，看不到它的开始；所以阅读时经探针让全部公式重算（与 links.spec.ts 的
+// recalculate 相同，执行选项带 onlyLocal，阅读时同样执行），看到这一轮的开始通知就点"编辑"。本机实测（三个浏览器）开始到旧的编辑器销毁约 0.1 秒，
+// 远在 1 秒之内；重算要 0.9–1.7 秒，销毁时这一轮还没算完——用例核对这一点（旧的编辑器的命令日志里没有结果），不成立时这条用例什么也没测到
+test.describe('US-M3-01 公式计算进行中点"编辑"：销毁的旧编辑器留下的计时器不再抛出异常', { tag: '@test-build' }, () => {
+  test('US-M3-01 阅读时一轮计算刚开始就点"编辑"：旧的编辑器销毁时这一轮还没算完；进入编辑、过了 SDK 的 1 秒计时器之后，页面里没有没接住的异常', async ({ page, pageErrors }) => {
+    const owner = await createUser('switch-calculating')
+    const documentId = await createDocument(owner, '计算中切换', sheetWithHeavyRecalculation)
+    await loginThroughApi(page, owner)
+    await openReader(page, documentId)
+    // 阅读的编辑器的探针：销毁时它退订命令事件，日志停在销毁的那一刻
+    const reading = await page.evaluateHandle(() => window.__nerveEditorProbe)
+    const mark = await commandMark(page)
+    expect(await runFacade(page, async ({ api }) => api.executeCommand('formula.mutation.set-trigger-formula-calculation-start', { forceCalculation: true }, { onlyLocal: true }))).toEqual({})
+    await expect.poll(async () => calculationStarted(await probeCommands(page, mark)), { intervals: [10], message: '这一轮计算开始了（SDK 收到开始的通知就设下 1 秒的计时器）' }).toBe(true)
+
+    // 立即点"编辑"。steady 在新的编辑器画完之后 3 秒：那时旧的编辑器的计时器早已到点
+    await enterEditing(page, 'steady')
+    const executed = await reading.evaluate((probe, after) => probe?.commands(after).filter(command => command.phase === 'executed').map(command => command.id) ?? [], mark)
+    await reading.dispose()
+    expect(executed).toContain(CALCULATION_START)
+    expect(executed, '旧的编辑器销毁时这一轮还没算完（没有结果写回），它的计时器还挂着').not.toContain(CALCULATION_RESULT)
+    expect(pageErrors.list(), '页面里没有没接住的异常（旧的编辑器的计时器调用已销毁的语言服务）').toEqual([])
   })
 })
 

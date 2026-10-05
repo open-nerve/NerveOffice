@@ -80,7 +80,8 @@ const UNIVER_INTERNAL_SYMBOLS = [
     name: '@univerjs/core',
     // IPermissionService、IUndoRedoService：只读守卫的本地权限点与撤销栈（M2-P3 设计 §3.6）；
     // IContextService、FOCUSING_FX_BAR_EDITOR、DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY：只读守卫放开编辑栏的编辑器（P3 审查 A1）；
-    // CustomRangeType：链接的改写认链接用的区间种类（M3-P3 S2，internal-api 的 CELL_LINK_PROTOCOL，与 contracts 的 HYPERLINK_RANGE_TYPE 核对）
+    // CustomRangeType：链接的改写认链接用的区间种类（M3-P3 S2，internal-api 的 CELL_LINK_PROTOCOL，与 contracts 的 HYPERLINK_RANGE_TYPE 核对）；
+    // LocaleService：语言服务换成销毁之后不抛错的子类（internal-api 的 disposalSafeLocaleOverride），别处不直接取它、不另换
     importNames: [
       'AuthzIoLocalService',
       'CustomRangeType',
@@ -91,6 +92,7 @@ const UNIVER_INTERNAL_SYMBOLS = [
       'IPermissionService',
       'IUndoRedoService',
       'LifecycleService',
+      'LocaleService',
       'UserManagerService',
     ],
     message: INTERNAL_API_MESSAGE,
