@@ -2,6 +2,7 @@
 // 按规则检查、规范化、算哈希（snapshot-inspection.ts），主进程只拿回小结果。用子进程而不用工作线程（需求方 2026-10-05 决定）：
 // 子进程的堆撞上上限时 V8 中止的只是那个子进程，服务照常；工作线程在 V8 的内置函数里撞上上限时整个进程中止（S3 实测）。
 // - 子进程数、排队、时限与每个子进程的堆上限来自配置（NERVE_SNAPSHOT_INSPECTION_*）；空闲超过 IDLE_PROCESS_TIMEOUT_MS 的子进程结束掉；
+// - 同一个账户在执行与排队里合计至多 INSPECTIONS_PER_ACCOUNT 份（审查 A2）：多出来的只对这个人回 503，别人照常排进来；
 // - 排队满了、等待超时、子进程崩溃或超时、正在退出：503 SERVICE_UNAVAILABLE 带 Retry-After（与数据库繁忙、等待密码哈希同一个做法，
 //   页面的保存照"结果未知"重试）；子进程的堆超过上限：这份快照按"过于复杂"拒绝（规则 too-complex）；
 // - 应用退出时结束全部子进程（onApplicationShutdown：在途的请求已经排空，ADR-004）；应用被强制结束时子进程随 IPC 断开退出。
@@ -17,6 +18,7 @@ import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { SNAPSHOT_MAX_DEPTH } from '@nerve-office/contracts'
 import { AppError } from '../../shared/errors/app-error.ts'
+import { KeyedQuota } from '../../shared/keyed-quota.ts'
 import { ProcessPool, ProcessPoolError } from '../../shared/process-pool.ts'
 import { SNAPSHOT_MAX_ENTRIES } from './snapshot-checks.ts'
 
@@ -29,6 +31,15 @@ export type SnapshotInspectionSettings = AppConfig['snapshotInspection']
  * 而且不会自己回落（空闲的进程里 V8 不还堆，手动回收也只回落一点），只有结束进程才还干净；代价是之后的第一次检查多一次冷启动（约 50–65 ms）
  */
 export const IDLE_PROCESS_TIMEOUT_MS = 60_000
+
+/**
+ * 同一个账户在检查池里（执行中与排队中合计）至多几份（M3-P3 审查 A2）。快照的检查在判断访问之前（与文档无关，看不到与不存在得到同样的回答），
+ * 整个池子所有人共用：没有这个上限时，任何一个登录的账户并发提交重的快照（目标可以是随机的 id），就能占满子进程与排队，
+ * 让所有人的保存一直得到 503。取 2：一个页面的保存是串行的（上一次有结果之前不发下一次），另存为副本只在失去编辑权之后、
+ * 也不与那一页的保存同时；一个人同时开着两个页面、同一刻各自保存时正好 2 份。第三份起只对这个人回 503（带 Retry-After，
+ * 与池子繁忙同一个回答，页面照"结果未知"重试），别人照常排进来。按账户计、不看文档：判断与文档无关，"看不到与不存在一致"不变
+ */
+export const INSPECTIONS_PER_ACCOUNT = 2
 
 /** 检查的结果：通过，或者违反的规则（与文档无关的，加上 too-complex） */
 export type InspectionOutcome = PassedSnapshot | { readonly ok: false, readonly rule: Exclude<SnapshotRule, 'unit-id' | 'resource-missing'> }
@@ -85,6 +96,8 @@ export function snapshotInvalid(rule: SnapshotRule): AppError {
 /** 快照的检查：在子进程池里执行（见文件开头）。由 DocumentsModule 按配置建（工厂），退出时关闭 */
 export class SnapshotInspector implements OnApplicationShutdown {
   readonly #pool: ProcessPool<InspectionTask, SnapshotInspection>
+  /** 每个账户在池子里占着的份数（INSPECTIONS_PER_ACCOUNT） */
+  readonly #accounts = new KeyedQuota(INSPECTIONS_PER_ACCOUNT)
   readonly #logger: AppLogger
   /** 503 时建议多久之后再试：排队等待的时限（向上取整到秒，至少 1 秒） */
   readonly #retryAfterSeconds: number
@@ -111,10 +124,16 @@ export class SnapshotInspector implements OnApplicationShutdown {
   }
 
   /**
-   * 检查解压之后的快照（profile 是文档的档案）：通过时给出 unitId、内容哈希、资源名与字节数，不通过时给出规则。
-   * 没有得到结果（繁忙、子进程崩溃或超时、正在退出）时抛出 503 的 AppError
+   * 检查解压之后的快照（profile 是文档的档案，requester 是发起的账户）：通过时给出 unitId、内容哈希、资源名与字节数，不通过时给出规则。
+   * 没有得到结果（这个账户的份数已满、繁忙、子进程崩溃或超时、正在退出）时抛出 503 的 AppError
    */
-  async inspect(raw: Uint8Array, profile: DocumentProfile): Promise<InspectionOutcome> {
+  async inspect(raw: Uint8Array, profile: DocumentProfile, requester: string): Promise<InspectionOutcome> {
+    const release = this.#accounts.tryAcquire(requester)
+    if (release === undefined) {
+      // 请求的日志带着这个人的 userId（会话守卫之后），这里不另记
+      this.#logger.warn('同一个账户在快照检查里的份数已满（执行中与排队中合计），这次回 503', { limit: INSPECTIONS_PER_ACCOUNT, rawBytes: raw.byteLength })
+      throw this.#unavailable()
+    }
     try {
       return await this.#pool.run({ bytes: raw, profile })
     }
@@ -122,6 +141,9 @@ export class SnapshotInspector implements OnApplicationShutdown {
       if (!(error instanceof ProcessPoolError))
         throw error
       return this.#failed(error, raw.byteLength)
+    }
+    finally {
+      release()
     }
   }
 
@@ -146,6 +168,11 @@ export class SnapshotInspector implements OnApplicationShutdown {
         // 排队满了、等待超时、正在退出：繁忙，请求日志按 503 带 Retry-After 记 warn
         break
     }
-    throw new AppError('SERVICE_UNAVAILABLE', undefined, { cause: error, headers: { 'Retry-After': String(this.#retryAfterSeconds) } })
+    throw this.#unavailable(error)
+  }
+
+  /** 503 SERVICE_UNAVAILABLE 带 Retry-After（排队等待的时限）：池子繁忙与这个账户的份数已满是同一个回答 */
+  #unavailable(cause?: ProcessPoolError): AppError {
+    return new AppError('SERVICE_UNAVAILABLE', undefined, { ...(cause === undefined ? {} : { cause }), headers: { 'Retry-After': String(this.#retryAfterSeconds) } })
   }
 }

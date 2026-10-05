@@ -272,9 +272,10 @@ describe('US-M1-05 同一次保存重发不会保存两次', () => {
   it('并发的相同请求：只保存一次，每个请求都拿到同一个结果', async () => {
     const document = await aliceDocument()
     const raw = snapshotOf(document.unitId, '并发')
-    // 同一个页面的几次重发（M3-P1 起保存要求租约）：共用这个页面申请到的一份租约，各自申请会互相改写成新的一代
+    // 同一个页面的重发赶上了还在路上的原请求（M3-P1 起保存要求租约）：共用这个页面申请到的一份租约，各自申请会互相改写成新的一代。
+    // 同时发两次：同一个人在快照检查池里至多两份（INSPECTIONS_PER_ACCOUNT，M3-P3 审查 A2），多出来的立即 503、由页面过一会儿重发
     const params = { baseRevision: 1, requestId: randomUUID(), lease: await acquireLease(app.baseUrl, aliceSession, document.id, TAB_A) }
-    const results = await Promise.all(Array.from({ length: 5 }, async () => saved(await put(aliceSession, document.id, raw, params))))
+    const results = await Promise.all(Array.from({ length: 2 }, async () => saved(await put(aliceSession, document.id, raw, params))))
     expect(new Set(results.map(result => JSON.stringify(result))).size).toBe(1)
     expect(await storedRevision(document.id)).toBe(2)
   })
@@ -342,10 +343,11 @@ describe('US-M1-07 旧页面的保存不覆盖新内容', () => {
 
   it('同一个基准修订号的并发保存（各自的 requestId）：只有一个成功，其余都是冲突，来源指向成功的那一次', async () => {
     const document = await aliceDocument()
-    // M3-P1 起同一时刻只有一个标签页能写：原来六个标签页同时保存，改成持有租约的那一个页面并发发出六次保存（各自的 requestId 与本地序号）。
-    // 要验证的仍是修订号的条件写入在文档行的锁下只放过一个，其余都是冲突、来源指向成功的那一次
+    // M3-P1 起同一时刻只有一个标签页能写：原来六个标签页同时保存，改成持有租约的那一个页面并发发出几次保存（各自的 requestId 与本地序号）。
+    // 要验证的仍是修订号的条件写入在文档行的锁下只放过一个，其余都是冲突、来源指向成功的那一次。
+    // 同时发两次：同一个人在快照检查池里至多两份（INSPECTIONS_PER_ACCOUNT，M3-P3 审查 A2），多出来的立即 503、由页面过一会儿重发
     const lease = await acquireLease(app.baseUrl, aliceSession, document.id)
-    const tabs = Array.from<string>({ length: 6 }).fill(lease.clientInstanceId)
+    const tabs = Array.from<string>({ length: 2 }).fill(lease.clientInstanceId)
     const responses = await Promise.all(tabs.map(async (tab, index) => put(aliceSession, document.id, snapshotOf(document.unitId, `并发 ${index}`), { baseRevision: 1, clientInstanceId: tab, localSeq: index, lease })))
     const statuses = responses.map(response => response.status)
     expect(statuses.filter(status => status === 200)).toHaveLength(1)

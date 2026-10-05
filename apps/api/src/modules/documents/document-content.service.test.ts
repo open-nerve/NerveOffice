@@ -177,8 +177,10 @@ describe('DocumentContentService.save', () => {
     const error = await rejection(service.save(saver(ALICE), document.id, query(), bodyOf('[1]'), HTTP_ORIGIN))
     expect([error.code, error.status, error.details]).toEqual(['SNAPSHOT_INVALID', 422, { rule: 'structure' }])
     expect(store.transactions.run).not.toHaveBeenCalled()
-    expect(store.inspector.inspect).toHaveBeenCalledWith(expect.anything(), 'sheet@1')
+    // 检查池按发起的账户限份数（审查 A2）：传的是保存的人
+    expect(store.inspector.inspect).toHaveBeenCalledWith(expect.anything(), 'sheet@1', ALICE)
     const others = await rejection(service.save(saver(BOB), document.id, query(), bodyOf('[1]'), HTTP_ORIGIN))
+    expect(store.inspector.inspect).toHaveBeenLastCalledWith(expect.anything(), 'sheet@1', BOB)
     const missing = await rejection(service.save(saver(ALICE), '0199a2c4-0000-7000-8000-0000000000ff', query(), bodyOf('[1]'), HTTP_ORIGIN))
     expect([others.details, missing.details]).toEqual([{ rule: 'structure' }, { rule: 'structure' }])
     expect(store.logs().filter(entry => entry.msg === '快照不合格，拒绝写入').map(entry => [entry.level, entry.rule, entry.documentId])).toEqual([

@@ -141,7 +141,7 @@ export class DocumentContentService {
     if (replayed !== undefined)
       return replayed
     const client = this.clients.require(query)
-    const snapshot = await requirePassingSnapshot(this.inspector, this.#logger, upload, id)
+    const snapshot = await requirePassingSnapshot(this.inspector, this.#logger, upload, id, saver.userId)
     const attempt: SaveAttempt = { saver, query, upload, digest, formulasPending, client, snapshot, origin }
     return this.transactions.run(async (transaction) => {
       // 第一把锁：看不到与不存在的请求同样取它（与文档无关，语句序列照旧一致）

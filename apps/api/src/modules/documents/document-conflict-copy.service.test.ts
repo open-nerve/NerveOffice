@@ -86,6 +86,8 @@ describe('DocumentConflictCopyService.copy：新文档', () => {
     }, expect.anything())
     // 内容是上传的压缩字节（原样存下，与保存一样），解压前的字节数，连同规范化的哈希与非空的资源名（没有资源）
     expect(store.contents.get(copy.id)).toEqual({ snapshot: body.compressed, rawBytes: body.decompressed.length, contentHash: hashOf(body), resourceNames: [] })
+    // 检查池按发起的账户限份数（审查 A2）：传的是另存的人
+    expect(store.inspector.inspect).toHaveBeenCalledExactlyOnceWith(body.decompressed, 'sheet@1', ALICE)
     expect(store.revisions.filter(row => row.documentId === copy.id)).toEqual([expect.objectContaining({
       revision: 1,
       kind: 'created',

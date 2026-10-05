@@ -75,6 +75,13 @@ const SETTINGS: SnapshotInspectionSettings = {
 const CONCURRENCY = Number(args.concurrency)
 const ROUNDS = Number(args.rounds)
 const PROFILE: DocumentProfile = 'sheet@1'
+/**
+ * 发起检查的账户：检查池按账户限份数（INSPECTIONS_PER_ACCOUNT，M3-P3 审查 A2）。同时提交的每一份算不同的人（第 index 份），
+ * 测的是池子本身的并发与内存，与改动之前的数字可比
+ */
+function account(index = 0): string {
+  return `measure-account-${index}`
+}
 const UNIT_ID = '0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0d'
 const MIB = 1024 * 1024
 const SCRIPT = fileURLToPath(import.meta.url)
@@ -366,7 +373,7 @@ type Inspector = InstanceType<InspectorModule['SnapshotInspector']>
 /** 子进程池的子进程都起来、加载好 */
 async function warmed(settings: SnapshotInspectionSettings = SETTINGS): Promise<Inspector> {
   const inspector = new SnapshotInspector(settings, logger)
-  await Promise.all(Array.from({ length: settings.processes }, async () => inspector.inspect(Buffer.from('{}'), PROFILE)))
+  await Promise.all(Array.from({ length: settings.processes }, async (_, index) => inspector.inspect(Buffer.from('{}'), PROFILE, account(index))))
   return inspector
 }
 
@@ -380,7 +387,7 @@ if (args['child-shape'] !== undefined) {
   const bytes = bytesOf(shapeNamed(args['child-shape']))
   const inspector = await warmed({ ...SETTINGS, processes: 1, heapMb: Number(args['child-heap']), timeoutMs: 120_000 })
   const start = performance.now()
-  const outcome = await inspector.inspect(bytes, PROFILE).then(describe, failed)
+  const outcome = await inspector.inspect(bytes, PROFILE, account()).then(describe, failed)
   write(`${outcome} ${(performance.now() - start).toFixed(0)}ms`)
   await inspector.onApplicationShutdown()
   process.exit(0)
@@ -421,9 +428,9 @@ async function round(bytes: Buffer, inspector: Inspector | undefined): Promise<R
   const taskMs: number[] = []
   const outcomes: string[] = []
   if (inspector !== undefined) {
-    await Promise.all(Array.from({ length: CONCURRENCY }, async () => {
+    await Promise.all(Array.from({ length: CONCURRENCY }, async (_, index) => {
       const submitted = performance.now()
-      const outcome = await inspector.inspect(bytes, PROFILE).then(describe, failed)
+      const outcome = await inspector.inspect(bytes, PROFILE, account(index)).then(describe, failed)
       taskMs.push(performance.now() - submitted)
       outcomes.push(outcome)
     }))
@@ -490,7 +497,7 @@ if (args['child-idle'] === true) {
   for (let index = 0; index < 5; index += 1) {
     const inspector = new SnapshotInspector({ ...SETTINGS, processes: 1 }, logger)
     const start = performance.now()
-    await inspector.inspect(Buffer.from('{}'), PROFILE)
+    await inspector.inspect(Buffer.from('{}'), PROFILE, account())
     coldStartMs.push(performance.now() - start)
     await inspector.onApplicationShutdown()
   }
@@ -519,7 +526,7 @@ interface RetentionResult {
 if (args['child-retention'] === true) {
   const inspector = await warmed({ ...SETTINGS, processes: 1 })
   const [idle] = await childMemory()
-  await inspector.inspect(bytesOf(shapeNamed('real-5mib')), PROFILE)
+  await inspector.inspect(bytesOf(shapeNamed('real-5mib')), PROFILE, account())
   const finished = performance.now()
   const samples: { readonly seconds: number, readonly memory: ChildMemory | undefined }[] = []
   for (const seconds of [0, 1, 5, 10, 20, 30, 45, (IDLE_PROCESS_TIMEOUT_MS / 1000) - 5]) {

@@ -643,9 +643,12 @@ export class FakeStore {
   readonly logger = new AppLogger(createRootLogger({ level: 'debug', destination: { write: (line: string) => void this.logLines.push(line) } }), new RequestContextStore())
   /** 拦截旧客户端（M3-P3）：真实的规则，运维开关不设 */
   readonly clientFormats = clientFormatGate()
-  /** 快照的检查（M3-P3）：真实的规则，在测试的线程里直接执行（子进程池本身在 snapshot-inspector.test.ts 与 shared/process-pool.test.ts） */
+  /**
+   * 快照的检查（M3-P3）：真实的规则，在测试的线程里直接执行（子进程池本身与按账户的份数在 snapshot-inspector.test.ts 与
+   * shared/process-pool.test.ts）；requester 是发起的账户，用例据此核对传的是谁
+   */
   readonly inspector = {
-    inspect: vi.fn(async (raw: Uint8Array, profile: DocumentProfile) => inspectSnapshot(raw, profile)),
+    inspect: vi.fn(async (raw: Uint8Array, profile: DocumentProfile, _requester: string) => inspectSnapshot(raw, profile)),
   }
 
   /**

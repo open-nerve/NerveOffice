@@ -88,7 +88,7 @@ export class DocumentConflictCopyService {
       return replayed
     // 与文档无关的两步在事务之前（与保存相同）：别人的与不存在的文档得到相同的结果
     const client = this.clients.require(command)
-    const snapshot = await requirePassingSnapshot(this.inspector, this.#logger, upload, id)
+    const snapshot = await requirePassingSnapshot(this.inspector, this.#logger, upload, id, userId)
     const contentHash = Buffer.from(snapshot.contentHash)
     return this.transactions.run(async (transaction) => {
       // 同一个 requestId 的写入排队执行：后到的一方在下面就能看到前一方的修订记录，按重放处理（与新建、复制相同，锁排在最前，RequestLedger）；

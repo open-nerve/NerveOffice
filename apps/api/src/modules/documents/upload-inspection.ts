@@ -24,10 +24,11 @@ export function rejectedSnapshot(logger: AppLogger, rule: SnapshotRule, document
 
 /**
  * 上传的快照过一遍与文档无关的检查：通过时交回结果（unitId、内容哈希、资源名）；不合格时抛 SNAPSHOT_INVALID（见 rejectedSnapshot）。
- * 检查器繁忙、线程崩溃或超时时它自己抛 503（带 Retry-After）
+ * requesterId 是发起的账户：检查池按账户限份数（INSPECTIONS_PER_ACCOUNT，审查 A2）。
+ * 这个账户的份数已满、检查器繁忙、子进程崩溃或超时时它自己抛 503（带 Retry-After）
  */
-export async function requirePassingSnapshot(inspector: SnapshotInspector, logger: AppLogger, upload: GzipBody, documentId: string): Promise<PassedSnapshot> {
-  const outcome = await inspector.inspect(upload.decompressed, INSPECTED_PROFILE)
+export async function requirePassingSnapshot(inspector: SnapshotInspector, logger: AppLogger, upload: GzipBody, documentId: string, requesterId: string): Promise<PassedSnapshot> {
+  const outcome = await inspector.inspect(upload.decompressed, INSPECTED_PROFILE, requesterId)
   if (!outcome.ok)
     throw rejectedSnapshot(logger, outcome.rule, documentId, { rawBytes: upload.decompressed.length })
   return outcome
