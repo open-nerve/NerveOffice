@@ -596,6 +596,60 @@ describe('编辑器页的会话（P4 设计 §3.7.3，审查 B1）', () => {
     expect(editorPage.view().session).toBe('active')
   })
 
+  it('确认会话因为断网失败之后（别的标签页的消息触发，审查 A6）：自动保存暂停；恢复联网、回到前台时立即再确认，是本人就恢复', async () => {
+    const { editorPage, api, fromOtherTab, online, hidden } = setup()
+    await editorPage.load()
+    vi.mocked(api.session).mockRejectedValueOnce(new NetworkError('断网'))
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().sessionProblem).toBeInstanceOf(NetworkError))
+    expect(editorPage.view()).toMatchObject({ session: 'active', autosave: { paused: true } })
+    const checks = vi.mocked(api.session).mock.calls.length
+    // 断网、恢复联网：立即再确认（这一次仍然失败）
+    vi.mocked(api.session).mockRejectedValueOnce(new NetworkError('断网'))
+    online.set(false)
+    expect(api.session).toHaveBeenCalledTimes(checks)
+    online.set(true)
+    await vi.waitFor(() => expect(api.session).toHaveBeenCalledTimes(checks + 1))
+    await vi.waitFor(() => expect(editorPage.view().sessionProblem).toBeInstanceOf(NetworkError))
+    // 切到后台、回到前台：立即再确认，这一次是本人：自动保存恢复
+    hidden.set(true)
+    expect(api.session).toHaveBeenCalledTimes(checks + 1)
+    hidden.set(false)
+    await vi.waitFor(() => expect(editorPage.view().sessionProblem).toBeUndefined())
+    expect(api.session).toHaveBeenCalledTimes(checks + 2)
+    expect(editorPage.view()).toMatchObject({ session: 'active', autosave: { paused: false } })
+    // 确认过了：之后恢复联网、回到前台不再确认
+    online.set(false)
+    online.set(true)
+    hidden.set(true)
+    hidden.set(false)
+    await settle()
+    expect(api.session).toHaveBeenCalledTimes(checks + 2)
+  })
+
+  it('确认会话失败之后按自动保存的退避定时再确认（2、4、8……秒，审查 A6）；确认是本人之后不再定时', async () => {
+    const { editorPage, api, fromOtherTab, time } = setup()
+    await editorPage.load()
+    vi.mocked(api.session).mockRejectedValue(new NetworkError('断网'))
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().sessionProblem).toBeInstanceOf(NetworkError))
+    const checks = vi.mocked(api.session).mock.calls.length
+    await time.advance(1999)
+    expect(api.session).toHaveBeenCalledTimes(checks)
+    await time.advance(1)
+    expect(api.session).toHaveBeenCalledTimes(checks + 1)
+    await time.advance(3999)
+    expect(api.session).toHaveBeenCalledTimes(checks + 1)
+    await time.advance(1)
+    expect(api.session).toHaveBeenCalledTimes(checks + 2)
+    vi.mocked(api.session).mockResolvedValue(ALICE)
+    await time.advance(8000)
+    expect(api.session).toHaveBeenCalledTimes(checks + 3)
+    expect(editorPage.view()).toMatchObject({ session: 'active', sessionProblem: undefined, autosave: { paused: false } })
+    await time.advance(120_000)
+    expect(api.session).toHaveBeenCalledTimes(checks + 3)
+  })
+
   it('保存得到 CSRF_TOKEN_INVALID：向服务端确认会话，换了人就停止保存', async () => {
     const { editorPage, api } = setup({ api: { save: async () => Promise.reject(new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')) } })
     await editorPage.load()

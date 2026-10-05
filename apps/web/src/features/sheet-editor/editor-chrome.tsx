@@ -106,6 +106,33 @@ function indicatorOf(view: EditorPageView, save: SaveView): SaveIndicator {
 }
 
 /**
+ * 自动保存暂停的原因（审查 A6）：会话不是本人（没有人登录、换了人）——登录回来之后自动保存；本人在登录中，只是在向服务端确认
+ * （checking）或者上一次确认失败了（unconfirmed：网络等，页面恢复联网、回到前台与定时都会再确认）——不能说"登录回来之后"
+ */
+type PausedReason = 'session' | 'checking' | 'unconfirmed'
+
+function pausedReasonOf(view: EditorPageView): PausedReason {
+  if (view.session !== 'active')
+    return 'session'
+  return view.sessionProblem === undefined ? 'checking' : 'unconfirmed'
+}
+
+/** 编辑时页头的保存状态的说法：暂停按原因说 */
+function saveStateText(view: EditorPageView, save: SaveView): string {
+  const indicator = indicatorOf(view, save)
+  if (indicator !== 'paused')
+    return editorMessages.saveState[indicator]
+  switch (pausedReasonOf(view)) {
+    case 'session':
+      return editorMessages.saveState.paused
+    case 'checking':
+      return messages.auth.checkingSession
+    case 'unconfirmed':
+      return editorMessages.pausedUnconfirmed
+  }
+}
+
+/**
  * 页头看得见的状态：模式（打开中、只能查看、进入与退出编辑、编辑权已失效……）与编辑时的保存状态。它本身不是读屏的播报区：
  * 读屏播的是 SaveAnnouncer 的那一句（只播有意义的变化）
  */
@@ -129,7 +156,7 @@ function headerStatus(view: EditorPageView): string {
     case 'editing':
       if (view.confirmingSession)
         return messages.auth.checkingSession
-      return save === undefined ? '' : editorMessages.saveState[indicatorOf(view, save)]
+      return save === undefined ? '' : saveStateText(view, save)
     case 'exiting':
       return editorMessages.mode.exiting
     case 'losing':
@@ -150,12 +177,18 @@ interface Announcement {
 
 /**
  * 读屏要播的那一句（设计 §3.9）：模式的切换、会话的确认照旧每次都播（key 就是那句话）；编辑时按保存状态的 announcementKey
- * （save-indicator.ts：只播有意义的变化，例行的"有未保存的修改""保存中…"不改播报区）
+ * （save-indicator.ts：只播有意义的变化，例行的"有未保存的修改""保存中…"不改播报区）。暂停按原因分开播（审查 A6）：
+ * 不是用户按了保存的那种确认（例如别的标签页的消息触发的）不播，确认失败了才播
  */
 function announcementOf(view: EditorPageView): Announcement {
   const text = headerStatus(view)
   if (view.mode?.kind === 'editing' && !view.confirmingSession && view.save !== undefined) {
-    const key = announcementKey(indicatorOf(view, view.save))
+    const indicator = indicatorOf(view, view.save)
+    if (indicator === 'paused') {
+      const reason = pausedReasonOf(view)
+      return { key: reason === 'checking' ? undefined : `save:paused:${reason}`, text }
+    }
+    const key = announcementKey(indicator)
     return { key: key === undefined ? undefined : `save:${key}`, text }
   }
   return { key: `page:${text}`, text }
