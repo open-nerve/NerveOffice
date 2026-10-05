@@ -61,7 +61,7 @@ function sheetWithSlowFormulas(unitId: string): string {
 }
 
 test.describe('US-M1-05 保存到云端，看到真实的保存状态', () => {
-  test('修改之后有未保存的修改 → 保存中 → 已保存到云端（保存按钮）', async ({ page }) => {
+  test('修改之后有未保存的修改 → 保存中 → 已保存到云端（保存按钮）；保存中"保存"不变灰（在途时按下排一次，M3-P4 设计 §3.9）', async ({ page }) => {
     const documentId = await openNewSheet(page, 'save-button')
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     await typeInCell(page, 'A1', '42')
@@ -69,7 +69,7 @@ test.describe('US-M1-05 保存到云端，看到真实的保存状态', () => {
     const release = await holdSaves(page)
     await saveButton(page).click()
     await expect(saveStatus(page)).toHaveText('保存中…')
-    await expect(saveButton(page)).toHaveAttribute('aria-disabled', 'true')
+    await expect(saveButton(page)).toHaveAttribute('aria-disabled', 'false')
     release()
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe(42)
@@ -130,12 +130,13 @@ test.describe('US-M1-05 保存到云端，看到真实的保存状态', () => {
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A2')?.v).toBe('second')
   })
 
-  test('断网时保存：显示保存失败与原因，内容仍算未保存；恢复之后再保存成功', async ({ page, context }) => {
+  test('断网时保存：页头说已离线（修改还在本页，不说已保存在本机），说明保存失败与原因，内容仍算未保存；恢复之后再保存成功', async ({ page, context }) => {
     const documentId = await openNewSheet(page, 'save-offline')
     await typeInCell(page, 'A1', 'offline')
     await context.setOffline(true)
     await saveButton(page).click()
-    await expect(saveStatus(page)).toHaveText('保存失败')
+    // 离线（navigator.onLine 为假）时页头说已离线（M3-P4 设计 §3.8、§3.9）；按下的那一次照样发出、失败的原因照旧说明
+    await expect(saveStatus(page)).toHaveText('已离线：修改还在本页，恢复网络之后自动保存')
     await expect(page.getByRole('alert')).toHaveText('保存失败：网络连接失败，请检查网络后重试')
     await context.setOffline(false)
     await saveAndWait(page)

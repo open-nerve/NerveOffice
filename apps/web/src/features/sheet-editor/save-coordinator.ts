@@ -54,6 +54,12 @@ export interface SaveOptions {
    * 看不见的改动，在途时排一次
    */
   readonly dedupe: boolean
+  /**
+   * 这一次的结果出来时、视图随之更新之前同步调用（M3-P4 S4）：调度据此先记下退避与"传过了没有"，页头连同两边的状态一起变——
+   * 否则视图先变成"保存失败"、调度的"会自动重试"晚一拍，页头与读屏先说"保存失败"再说"稍后自动重试"。
+   * 停住、终态时直接交回的结果（skipped）与并进排着的那一次时不调用（调用方等 save 兑现再处理）；抛出的错误上报，不影响保存
+   */
+  readonly onOutcome?: ((outcome: SaveOutcome) => void) | undefined
 }
 
 export interface SaveRequest {
@@ -663,17 +669,24 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
       const run = async (): Promise<SaveOutcome> => {
         if (!saveOptions.dedupe)
           queuedExplicit = undefined
+        let outcome: SaveOutcome
         try {
-          return await attempt(source, saveOptions)
+          outcome = await attempt(source, saveOptions)
         }
         catch (error) {
           // 保存流程本身出了意外（请求本身的失败在 attempt 里已经归类）：显示保存失败，save 不会被拒绝，链也不断
-          return unexpected(error)
+          outcome = unexpected(error)
         }
-        finally {
-          pendingSaves -= 1
-          update()
+        pendingSaves -= 1
+        // 调用方先记下结果，视图再更新（见 SaveOptions.onOutcome）
+        try {
+          saveOptions.onOutcome?.(outcome)
         }
+        catch (error) {
+          options.reportError(error)
+        }
+        update()
+        return outcome
       }
       const outcome = tail.then(run)
       tail = outcome.then(() => undefined)

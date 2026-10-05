@@ -1,5 +1,5 @@
 import type { SaveContentResponse } from '@nerve-office/contracts'
-import type { PreparedCapture, SaveEditor, SaveFailure, SaveOptions, SaveRequest, SnapshotCapture } from './save-coordinator.ts'
+import type { PreparedCapture, SaveEditor, SaveFailure, SaveOptions, SaveOutcome, SaveRequest, SnapshotCapture } from './save-coordinator.ts'
 import type { CaptureEditor } from './snapshot-capture.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError, ResponseFormatError } from '../../shared/api/index.ts'
@@ -1427,6 +1427,55 @@ describe('上传给定的捕获（M3-P4 设计 §3.1：保存的状态机不自�
     expect(send).not.toHaveBeenCalled()
     expect(reportError).toHaveBeenCalledWith(failure)
     expect(real.view()).toMatchObject({ status: 'failed', problem: { kind: 'unexpected', error: failure } })
+  })
+})
+
+describe('结果交给调用方的时机（onOutcome，M3-P4 S4）', () => {
+  it('结果出来时、视图更新之前同步交给调用方：调用方此刻读到的视图还是保存中，之后的视图变化里已经有它记下的', async () => {
+    const { real, control, calls } = setup()
+    control.edit('甲')
+    const order: string[] = []
+    real.subscribe(() => order.push(`view:${real.view().status}`))
+    const onOutcome = vi.fn((outcome: SaveOutcome) => order.push(`outcome:${outcome.kind}:${real.view().status}`))
+    const saving = real.save(given(captureOf(1, '甲')), { ...AUTO, onOutcome })
+    ;(await sent(calls, 1)).reject(new NetworkError('断网'))
+    const outcome = await saving
+    expect(onOutcome).toHaveBeenCalledExactlyOnceWith(outcome)
+    expect(order).toEqual(['view:saving', 'outcome:failed:saving', 'view:failed'])
+  })
+
+  it('调用方出错：上报，保存照常收尾', async () => {
+    const { real, control, calls, reportError } = setup()
+    control.edit('甲')
+    const failure = new Error('调用方出错')
+    const saving = real.save(given(captureOf(1, '甲')), { ...AUTO, onOutcome: () => {
+      throw failure
+    } })
+    ;(await sent(calls, 1)).resolve(saved(2))
+    await expect(saving).resolves.toMatchObject({ kind: 'saved' })
+    expect(reportError).toHaveBeenCalledWith(failure)
+    expect(real.view().status).toBe('clean')
+  })
+
+  it('停住、终态时直接交回的结果与并进排着的那一次：不调用（调用方等 save 兑现再处理）', async () => {
+    const { real, control, calls } = setup()
+    control.edit('甲')
+    const first = real.save(given(captureOf(1, '甲')), EXPLICIT)
+    const inFlight = await sent(calls, 1)
+    const queued = vi.fn()
+    const merged = vi.fn()
+    void real.save(given(captureOf(1, '甲')), { ...EXPLICIT, onOutcome: queued })
+    const joined = real.save(given(captureOf(1, '甲')), { ...EXPLICIT, onOutcome: merged })
+    inFlight.resolve(saved(2))
+    await first
+    ;(await sent(calls, 2)).resolve(saved(3))
+    await joined
+    expect(queued).toHaveBeenCalledOnce()
+    expect(merged).not.toHaveBeenCalled()
+    real.stop()
+    const stopped = vi.fn()
+    await expect(real.save(given(captureOf(1, '甲')), { ...AUTO, onOutcome: stopped })).resolves.toEqual({ kind: 'skipped', reason: 'stopped' })
+    expect(stopped).not.toHaveBeenCalled()
   })
 })
 

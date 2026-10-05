@@ -155,7 +155,7 @@ test.describe('US-M2-09 A14 编辑器页：打开之后文档被删除、移走�
     await page.getByRole('alert').getByRole('button', { name: '重新加载' }).click()
     await expect(lostNotice(page)).toHaveCount(0)
     await waitForEditorAccess(page, 'read')
-    await expect(page.locator('#editor-chrome').getByRole('banner').getByText('只能查看', { exact: true })).toBeVisible()
+    await expect(saveStatus(page)).toHaveText('只能查看')
     await expect(saveButton(page)).toHaveCount(0)
   })
 })

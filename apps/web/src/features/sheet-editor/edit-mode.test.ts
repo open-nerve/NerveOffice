@@ -2074,6 +2074,19 @@ describe('自动保存的接线（M3-P4 设计 §3.10）', () => {
     expect(context.editLease.release).toHaveBeenCalledOnce()
   })
 
+  it('退出编辑：先等面板的防抖——之前没有别的修改、只有面板里还没写进模型的改动时，它写进来之后照样上传再退出', async () => {
+    const context = setup()
+    await editing(context)
+    const writer = context.factory.last()
+    // 批注浮层里刚键入的字：SDK 的防抖到点时才写进模型（这里在等面板时写进来）
+    vi.mocked(writer.editor.settlePanels).mockImplementationOnce(async () => {
+      writer.edit('批注')
+    })
+    await context.mode.exit()
+    expect(savedRequests(context)).toMatchObject([{ snapshot: snapshotOf('批注') }])
+    expect(modeOf(context.mode).kind).toBe('reading')
+  })
+
   it('退出编辑：都已存上时不上传；去重——内容与确认过的相同（改了又撤销）就不发', async () => {
     const context = setup()
     await editing(context)

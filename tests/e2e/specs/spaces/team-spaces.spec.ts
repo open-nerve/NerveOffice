@@ -7,6 +7,7 @@ import { expect, test } from '../../support/fixtures.ts'
 import { searchList } from '../../support/list-search.ts'
 import { shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
+import { saveStatus } from '../../support/sheet.ts'
 
 /** 管理界面的团队空间页：按名称找到这一行。等搜索的过滤完成再返回，之后的操作不会赶上表格换成加载状态（support/list-search.ts） */
 async function spaceRow(page: Page, name: string) {
@@ -85,7 +86,7 @@ test.describe('US-M2-05 团队空间', () => {
     await expect(anotherDevice.getByText('我的角色：查看者')).toBeVisible()
     await expect(anotherDevice.getByRole('button', { name: '新建表格', exact: true })).toHaveCount(0)
     await anotherDevice.getByRole('link', { name: /放假通知/ }).click()
-    await expect(anotherDevice.getByText('只能查看')).toBeVisible()
+    await expect(saveStatus(anotherDevice)).toHaveText('只能查看')
 
     await confirmOnRow(page, space.name, '取消全员可见')
     await anotherDevice.goto(`/spaces/${space.id}`)
@@ -107,7 +108,7 @@ test.describe('US-M2-05 团队空间', () => {
     await expect(spaceNav(anotherDevice).getByRole('link', { name: `${space.name}（已归档）` })).toBeVisible()
     // 归档空间里的文档：空间管理员打开也只能查看（审查 B7）
     await anotherDevice.getByRole('link', { name: /旧方案/ }).click()
-    await expect(anotherDevice.getByText('只能查看')).toBeVisible()
+    await expect(saveStatus(anotherDevice)).toHaveText('只能查看')
 
     await confirmOnRow(page, space.name, '恢复')
     await anotherDevice.goto(`/spaces/${space.id}`)

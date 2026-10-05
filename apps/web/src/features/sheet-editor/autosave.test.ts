@@ -673,6 +673,28 @@ describe('失败与重试（设计 §3.8）', () => {
     await sent(context, 6)
   })
 
+  it('失败时保存的状态机的视图变成"保存失败"的那一刻，调度已经记下会自动重试（页头不先说"保存失败"再说"稍后自动重试"，S4）', async () => {
+    const context = setup()
+    const seen: [string, boolean][] = []
+    context.coordinator.subscribe(() => seen.push([context.coordinator.view().status, context.autosave.view().retrying]))
+    context.control.edit('甲')
+    await context.time.advance(2000)
+    ;(await sent(context, 1)).reject(new NetworkError('断网'))
+    await drain(context)
+    expect(seen.filter(([status]) => status === 'failed')).toEqual([['failed', true]])
+  })
+
+  it('要等新内容的失败（快照不合格）：视图变成"保存失败"的那一刻调度不说会重试', async () => {
+    const context = setup()
+    const seen: [string, boolean][] = []
+    context.coordinator.subscribe(() => seen.push([context.coordinator.view().status, context.autosave.view().retrying]))
+    context.control.edit('甲')
+    await context.time.advance(2000)
+    ;(await sent(context, 1)).reject(new ApiError(422, 'SNAPSHOT_INVALID', '不合格'))
+    await drain(context)
+    expect(seen.filter(([status]) => status === 'failed')).toEqual([['failed', false]])
+  })
+
   it('重试之前又改了：重试的是新的捕获（新的请求）', async () => {
     const context = setup()
     context.control.edit('甲')

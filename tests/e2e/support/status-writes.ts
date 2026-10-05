@@ -48,10 +48,19 @@ export async function recordStatusWrites(regions: Locator): Promise<void> {
   expect(count, '没有找到要记下的状态区').toBeGreaterThan(0)
 }
 
+/** 记下的全部变化（从 recordStatusWrites 起） */
+async function allWrites(page: Page): Promise<StatusWrite[]> {
+  return page.evaluate(store => (window as unknown as Record<string, StatusWrite[] | undefined>)[store] ?? [], STORE)
+}
+
 /** 记下的、变化之后文字恰好是 text 的那几次（从 recordStatusWrites 起） */
 export async function statusWrites(page: Page, text: string): Promise<StatusWrite[]> {
-  const writes = await page.evaluate(store => (window as unknown as Record<string, StatusWrite[] | undefined>)[store] ?? [], STORE)
-  return writes.filter(write => write.text === text)
+  return (await allWrites(page)).filter(write => write.text === text)
+}
+
+/** 记下的、写进了话的那几次（清空的不算：页头的播报区播完一段时间之后清空，M3-P4） */
+export async function spokenWrites(page: Page): Promise<StatusWrite[]> {
+  return (await allWrites(page)).filter(write => write.text !== '')
 }
 
 /**

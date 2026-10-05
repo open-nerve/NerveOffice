@@ -478,6 +478,20 @@ export function createAutosave(options: AutosaveOptions): Autosave {
       retryAt = undefined
     immediate = false
     notify()
+    let finished = false
+    /** 结果出来之后（保存的状态机在视图更新之前同步交来，或者 save 兑现时）：只做一次 */
+    const finish = (outcome: SaveOutcome): void => {
+      if (finished)
+        return
+      finished = true
+      runs.delete(run)
+      if (disposed)
+        return
+      observe({ kind: 'upload', trigger, startedAt, at: clock.now(), seq: run.seq, outcome })
+      afterUpload(outcome, run.serial)
+      notify()
+      kick()
+    }
     const outcome = await uploader.save(async (): Promise<PreparedCapture> => {
       run.started = true
       const entry = await source()
@@ -488,14 +502,8 @@ export function createAutosave(options: AutosaveOptions): Autosave {
       // 这一份是此刻最近的捕获，之后的修改不在里面：上传的上限从它们之中的第一处算
       firstUnuploadedAt = firstUncapturedAt
       return { seq: entry.seq, snapshot: entry.snapshot, bytes: entry.bytes, formulasPending: entry.formulasPending, digest: await digestOf(entry) }
-    }, { dedupe })
-    runs.delete(run)
-    if (!disposed) {
-      observe({ kind: 'upload', trigger, startedAt, at: clock.now(), seq: run.seq, outcome })
-      afterUpload(outcome, run.serial)
-      notify()
-      kick()
-    }
+    }, { dedupe, onOutcome: finish })
+    finish(outcome)
     return outcome
   }
 

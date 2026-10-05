@@ -949,7 +949,11 @@ export function createEditMode(options: EditModeOptions): EditMode {
         scheduler.resume()
         begin({ kind: 'editing' })
       }
-      // 有没存的就立即上传一次（先等面板的防抖、提交单元格、等公式；内容与确认过的相同时不发），在途的那一次先有结果
+      // 面板里防抖中的改动先写进模型（批注浮层、数据验证面板，M3-P4 设计 §3.4）：之前没有别的修改时，它们是"有没有没存的"的全部
+      await page.settlePanels()
+      if (!still(token))
+        return
+      // 有没存的就立即上传一次（提交单元格、等公式；内容与确认过的相同时不发），在途的那一次先有结果
       if (saver.hasUnsavedWork()) {
         await scheduler.flush('exit')
         if (!still(token))

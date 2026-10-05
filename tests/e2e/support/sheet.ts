@@ -59,8 +59,16 @@ function chrome(page: Page): Locator {
   return page.locator('#editor-chrome')
 }
 
-/** 页头里的保存状态（role="status"） */
+/**
+ * 页头里看得见的状态（保存状态、只能查看、正在进入编辑……）：它不是读屏的播报区（M3-P4 设计 §3.9：例行的保存状态只改文字、不播报），
+ * 播报区另见 headerAnnouncement
+ */
 export function saveStatus(page: Page): Locator {
+  return chrome(page).getByRole('banner').locator('[data-slot="header-status"]')
+}
+
+/** 页头里读屏的播报区（role="status"，只播有意义的变化，播完 7 秒之后清空） */
+export function headerAnnouncement(page: Page): Locator {
   return chrome(page).getByRole('banner').getByRole('status')
 }
 
