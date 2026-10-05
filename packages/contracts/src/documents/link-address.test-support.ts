@@ -52,6 +52,7 @@ export const LINK_ADDRESS_CASES: readonly LinkAddressCase[] = [
   valid('路径里的空白、引号、尖括号、反引号、花括号、^ 编码，单引号不编码；| 统一编成 %7C（Chromium 编码、Node 与 WebKit 保留）', 'https://example.com/a b"c<d>e\'f`g{h}i|j^k', 'https://example.com/a%20b%22c%3Cd%3Ee\'f%60g%7Bh%7Di%7Cj%5Ek'),
   valid('查询里的空白、双引号、尖括号、单引号编码；反引号统一编成 %60（各引擎都不编码），花括号不编码', 'https://example.com/?a b"c<d>e\'f`g{h}', 'https://example.com/?a%20b%22c%3Cd%3Ee%27f%60g{h}'),
   valid('查询里的 | 编成 %7C', 'https://example.com/?a|b', 'https://example.com/?a%7Cb'),
+  valid('单引号只在查询里编码，路径与片段里照样保留（复制时 SDK 写的是双引号的属性）', 'https://example.com/a\'b?c\'d#e\'f', 'https://example.com/a\'b?c%27d#e\'f'),
   valid('片段里的空白、双引号、尖括号、反引号编码，单引号不编码', 'https://example.com/#a b"c<d>e\'f`g', 'https://example.com/#a%20b%22c%3Cd%3Ee\'f%60g'),
   valid('片段里的 | 编成 %7C', 'https://example.com/#a|b', 'https://example.com/#a%7Cb'),
   valid('空的查询与片段保留', 'https://example.com/?', 'https://example.com/?'),
@@ -99,6 +100,7 @@ export const LINK_ADDRESS_CASES: readonly LinkAddressCase[] = [
   valid('mailto 的地址里的双引号、尖括号、反引号编码（各引擎都原样保留，复制时能改写剪贴板 HTML 的结构）', 'mailto:"a"<b>`c`@example.com', 'mailto:%22a%22%3Cb%3E%60c%60@example.com'),
   valid('mailto 的查询里的单引号编成 %27（Chromium 编码，Node 与 WebKit 不编码），反引号编成 %60', 'mailto:x@y?a\'b`c', 'mailto:x@y?a%27b%60c'),
   valid('mailto 的片段：空白、双引号、尖括号、反引号编码，单引号不编码', 'mailto:x@y#a b"c<d>e\'f`g', 'mailto:x@y#a%20b%22c%3Cd%3Ee\'f%60g'),
+  valid('mailto 的单引号只在查询里编码，地址与片段里照样保留', 'mailto:a\'b@y?c\'d#e\'f', 'mailto:a\'b@y?c%27d#e\'f'),
   invalid('SDK 键入邮箱写出的 mailto://（页面改写成 mailto:）', 'mailto://user@example.com', 'mailto-host'),
   invalid('空的主机部分', 'mailto:///x', 'mailto-host'),
 
