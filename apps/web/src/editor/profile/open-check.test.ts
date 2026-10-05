@@ -143,6 +143,13 @@ describe('就绪之后的再核对', () => {
     expect(ready.ok).toBe(false)
   })
 
+  it('白名单之外的名字的加载问题（审查 B3）：创建时与就绪时累计的清单里都有，就绪之后的再核对同样不算——仍然通过', () => {
+    const loadFailures = [{ kind: 'parse-threw', resource: 'DOC_DRAWING_PLUGIN', error: 'SyntaxError' }] as const
+    const created = checkCreated(facts({ loadFailures }))
+    expect(created).toEqual({ ok: true })
+    expect(recheckReady(created, { profile: 'sheet@1', hookNames: ALL_HOOKS, loadFailures: [...loadFailures, { kind: 'load-threw', resource: 'DOC_NOTE_PLUGIN', error: 'TypeError' }] })).toEqual({ ok: true })
+  })
+
   it('就绪之前才记下的加载问题（晚注册的 hook）：合进结果；与创建时重复的只留一条', () => {
     const loadFailures = [{ kind: 'load-threw', resource: 'SHEET_DATA_VALIDATION_PLUGIN', error: 'TypeError' }] as const
     const created = checkCreated(facts({ loadFailures }))
