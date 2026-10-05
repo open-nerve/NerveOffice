@@ -1,7 +1,7 @@
 // 测试用的假任务（process-pool.test.ts 与 snapshot-inspector.test.ts）：原样回、挡住直到放行、忙一会儿、死循环（超时）、抛出（崩溃）、
-// 退出、回不该回的消息、在 JS 里一路分配（堆超限）、子进程的 pid、堆的实际上限、Node 选项与环境变量。子进程一侧的入口是 process-pool-fake-child.test-support.ts。
-// 在子进程里由 Node 直接剥离类型执行：只用可擦除的写法
-import { existsSync, writeFileSync } from 'node:fs'
+// 退出、回不该回的消息、在 JS 里一路分配（堆超限）、子进程的 pid、堆的实际上限、Node 选项与环境变量、自己的 oom_score_adj。
+// 子进程一侧的入口是 process-pool-fake-child.test-support.ts。在子进程里由 Node 直接剥离类型执行：只用可擦除的写法
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import process from 'node:process'
 import v8 from 'node:v8'
@@ -19,6 +19,17 @@ export type FakeTask
     | { readonly kind: 'pid' }
     | { readonly kind: 'heap-limit' }
     | { readonly kind: 'environment' }
+    | { readonly kind: 'oom-score' }
+
+/** 这个进程的 oom_score_adj（Linux 的 /proc）；读不到（不是 Linux）时为 null */
+export function ownOomScoreAdjustment(): number | null {
+  try {
+    return Number(readFileSync('/proc/self/oom_score_adj', 'utf8').trim())
+  }
+  catch {
+    return null
+  }
+}
 
 /** 挡住的任务放在 gate 目录里的文件名的前缀（后面是 pid） */
 export const STARTED_PREFIX = 'started-'
@@ -75,5 +86,7 @@ export function handleFakeTask(received: FakeTask | { readonly bytes: Uint8Array
     case 'environment':
       // eslint-disable-next-line node/no-process-env -- 测试核对子进程的环境变量是空的（不继承主进程的）
       return { execArgv: process.execArgv, env: Object.keys(process.env) }
+    case 'oom-score':
+      return ownOomScoreAdjustment()
   }
 }

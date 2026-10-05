@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import { RELEASE_FILE, STARTED_PREFIX } from './process-pool-fakes.test-support.ts'
+import { ownOomScoreAdjustment, RELEASE_FILE, STARTED_PREFIX } from './process-pool-fakes.test-support.ts'
 import { ChildProcessExitError, ProcessPool, ProcessPoolError } from './process-pool.ts'
 
 const SCRIPT = new URL('./process-pool-fake-child.test-support.ts', import.meta.url)
@@ -245,6 +245,15 @@ describe('ProcessPool', SPAWNING, () => {
     await until(() => children.liveProcesses === 0)
     await until(() => !isRunning(first))
     expect(await children.run({ kind: 'pid' })).not.toBe(first)
+  })
+
+  it('子进程把自己的 oom_score_adj 调到 1000（Linux；别的平台没有 /proc，读到 null），主进程的不变：容器的内存用尽时内核先结束子进程', async () => {
+    const before = ownOomScoreAdjustment()
+    const children = pool({ processes: 1 })
+    expect(await children.run({ kind: 'oom-score' })).toBe(process.platform === 'linux' ? 1000 : null)
+    // 主进程（这个测试进程）不受影响：调的只是子进程自己
+    expect(ownOomScoreAdjustment()).toBe(before)
+    expect(before).not.toBe(1000)
   })
 
   it('子进程不继承主进程的 Node 选项与环境变量：只带给的选项、堆与新生代的上限', async () => {
