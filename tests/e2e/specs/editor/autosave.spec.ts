@@ -2,14 +2,17 @@
 // autosave-formulas.spec.ts。
 // 节奏经测试构建的自动保存控制（support/autosave.ts：夹具默认暂停定时的上传，用例放开；日志记下每次捕获与上传的原因、序号与时刻）与
 // Playwright 的时钟（page.clock）把握：要看节奏的用例在打开之前装上时钟（之后时间照常流动，页面照常载入、渲染），修改之前停住时间，
-// 之后只在 runFor 往前拨的时候走——机器多忙，修改、捕获、上传与断言之间都不会有计时器自己到点，捕获与上传的时刻按调度的日志断言到毫秒
+// 之后只在往前拨的时候走——机器多忙，修改、捕获、上传与断言之间都不会有计时器自己到点，捕获与上传的时刻按调度的日志断言到毫秒
 // （规范 §8.1：不等真实的计时）。公式在 Worker 里算、请求在途是真实的时间：停住时让到点的计时器执行再看（support/autosave.ts 的 logNow）。
+// 往前拨的两种：runFor 逐个执行其间到点的计时器（动画帧每 16 毫秒一次，编辑器每帧都画：停住的 1 秒约合 1.5 秒真实时间）；
+// skipAhead（support/autosave.ts）最初的 10 毫秒逐个执行、其余一跳到终点——要看的时刻正好是终点（上传在修改之后 2 秒、退避到点）或者
+// 这段时间里什么也不该发生时用它
 // 立即上传（保存按钮、快捷键、退出编辑、切到后台）在定时上传暂停时照常，那几条不放开。
 // 控制只在测试构建里：标签 @test-build（容器 E2E 测生产镜像，按标签排除；生产镜像里自动保存照常运行，现有用例按此改写，见 S6 的汇报）
 import type { Page, Route } from '@playwright/test'
 import type { Workbook } from '../../support/sheet.ts'
 import { canonicalContentText } from '@nerve-office/contracts'
-import { autosaveLog, capturesOf, clearAutosaveLog, holdSaves, logNow, pauseTime, recordWrites, releaseAutosave, saveParam, setPageHidden, settleAfterEdit, uploadedText, uploadsOf } from '../../support/autosave.ts'
+import { autosaveLog, capturesOf, clearAutosaveLog, holdSaves, logNow, pauseTime, recordWrites, releaseAutosave, saveParam, setPageHidden, settleAfterEdit, skipAhead, uploadedText, uploadsOf } from '../../support/autosave.ts'
 import { archiveSpace, createDocument, createDocumentIn, createTeamSpace, createUser, editLeaseEndReason, expireSessions, revisionOf } from '../../support/database.ts'
 import { probeSnapshot, setCellValue } from '../../support/editor-probe.ts'
 import { expect, test } from '../../support/fixtures.ts'
@@ -78,11 +81,12 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     const writes = recordWrites(page, documentId)
     await releaseAutosave(page)
     const start = await pauseTime(page)
-    // 第 k 处修改在 start + 500k（k = 0…32）：改完让 SDK 的这一轮算完（上限到时的捕获不因公式没收齐带标记），再拨到下一处
+    // 第 k 处修改在 start + 500k（k = 0…32）：改完让 SDK 的这一轮算完（上限到时的捕获不因公式没收齐带标记），再拨到下一处。
+    // 捕获与上传该到的时刻都是 500 毫秒的整数倍，正是每一步的终点：skipAhead
     const editAndAdvance = async (edit: number): Promise<void> => {
       await setCellValue(page, `A${edit + 1}`, edit)
       await settleAfterEdit(page)
-      await page.clock.runFor(490)
+      await skipAhead(page, 490)
     }
     for (let edit = 0; edit <= 28; edit += 1)
       await editAndAdvance(edit)
@@ -90,8 +94,9 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     expect(writes.saves).toHaveLength(0)
     for (let edit = 29; edit <= 32; edit += 1)
       await editAndAdvance(edit)
-    // 停在 start + 16500：最后一处在 start + 16000，再拨到 start + 18000（停下 2 秒）
-    await page.clock.runFor(1_500)
+    // 停在 start + 16500：最后一处在 start + 16000，再拨到 start + 17000（停 1 秒捕获）、start + 18000（停 2 秒上传）
+    await skipAhead(page, 500)
+    await skipAhead(page, 1_000)
     await expect.poll(async () => uploadsOf(await logNow(page)).length).toBe(2)
     const log = await autosaveLog(page)
     expect(capturesOf(log).map(({ trigger, at, seq, formulasPending }) => ({ trigger, at: at - start, seq, formulasPending }))).toEqual([
@@ -171,7 +176,7 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     await releaseAutosave(page)
     const start = await pauseTime(page)
     await typeInCell(page, 'A1', 'first')
-    await page.clock.runFor(2_000)
+    await skipAhead(page, 2_000)
     await expect.poll(held.held).toBe(1)
     await expect(saveStatus(page)).toHaveText('保存中…')
     // 上传在途（拦着）时继续输入
@@ -184,7 +189,7 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     const first = (await savedContent(page, documentId)).snapshot
     expect([cellOf(first, 'A1')?.v, cellOf(first, 'A2')]).toEqual(['first', undefined])
     // 后来的那一处：停 1 秒捕获、2 秒上传
-    await page.clock.runFor(2_000)
+    await skipAhead(page, 2_000)
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     expect(uploadsOf(await autosaveLog(page)).map(({ trigger, startedAt, seq }) => ({ trigger, startedAt: startedAt - start, seq }))).toEqual([
       { trigger: 'quiet', startedAt: 2_000, seq: 1 },
@@ -202,7 +207,7 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     const start = await pauseTime(page)
     await typeInCell(page, 'A1', 'done')
     await typeInCell(page, 'B1', 'typing', false)
-    await page.clock.runFor(2_000)
+    await skipAhead(page, 2_000)
     await expect.poll(async () => uploadsOf(await logNow(page))).toMatchObject([{ trigger: 'quiet', startedAt: start + 2_000, seq: 1, outcome: { kind: 'saved' } }])
     await expect(saveStatus(page)).toHaveText('有未保存的修改')
     const first = (await savedContent(page, documentId)).snapshot
@@ -210,7 +215,7 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     // 输入没被打断：接着键入落在同一个单元格里，回车之后是连在一起的一段
     await page.keyboard.type('more')
     await page.keyboard.press('Enter')
-    await page.clock.runFor(2_000)
+    await skipAhead(page, 2_000)
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     await page.clock.resume()
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'B1')?.v).toBe('typingmore')
@@ -226,11 +231,11 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     const changeAndUndo = async (text: string): Promise<void> => {
       await typeInCell(page, 'A1', text)
       await pressUniverShortcut(page, 'Z')
-      await page.clock.runFor(2_000)
+      await skipAhead(page, 2_000)
     }
     const outcomes = async (): Promise<string[]> => uploadsOf(await logNow(page)).map(upload => upload.outcome.kind)
     await typeInCell(page, 'A1', 'kept')
-    await page.clock.runFor(2_000)
+    await skipAhead(page, 2_000)
     await expect.poll(outcomes).toEqual(['saved'])
     expect(await revisionOf(documentId)).toBe(2)
     // 改了又撤销：与刚确认过的那一份相同，不上传（按这次的序号确认）
@@ -265,7 +270,7 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
       sheet.scrollToCell(40, 8)
       sheet.getRange('C7').activate()
     })
-    await page.clock.runFor(5_000)
+    await skipAhead(page, 5_000)
     expect(capturesOf(await logNow(page))).toHaveLength(captures)
     expect(reopened.saves).toHaveLength(1)
     await expect(saveStatus(page)).toHaveText('已保存到云端')
@@ -283,7 +288,7 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     await releaseAutosave(page)
     const start = await pauseTime(page)
     await setCellValue(page, 'K20', '经自动保存')
-    await page.clock.runFor(2_000)
+    await skipAhead(page, 2_000)
     await expect.poll(async () => uploadsOf(await logNow(page))).toMatchObject([{ trigger: 'quiet', startedAt: start + 2_000, outcome: { kind: 'saved' } }])
     await page.clock.resume()
     // 服务器上存下的就是本页捕获、上传的那一份；各插件的资源都在，按内容的口径（规范化：SDK 改过一张表之后给它补上空的规则表，
@@ -317,19 +322,21 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     await context.setOffline(true)
     await typeInCell(page, 'A1', 'offline')
     await expect(saveStatus(page)).toHaveText('已离线：修改还在本页，恢复网络之后自动保存')
-    // 照常捕获，过了上传的静默也不上传
-    await page.clock.runFor(5_000)
+    // 照常捕获（修改之后 1 秒），过了上传的静默也不上传
+    await page.clock.runFor(1_000)
+    await skipAhead(page, 4_000)
     await expect.poll(async () => capturesOf(await logNow(page))).toMatchObject([{ trigger: 'quiet', at: start + 1_000, seq: 1 }])
     expect(writes.saves).toHaveLength(0)
     expect(uploadsOf(await autosaveLog(page))).toEqual([])
     await expect(saveStatus(page)).toHaveText('已离线：修改还在本页，恢复网络之后自动保存')
     // 离线时又改了一处（start + 5000），0.5 秒之后恢复联网：不等这一处的静默，立即上传最近一次捕获（第一处）
     await typeInCell(page, 'A2', 'later')
-    await page.clock.runFor(500)
+    await skipAhead(page, 500)
     await context.setOffline(false)
     await expect.poll(async () => uploadsOf(await logNow(page))).toMatchObject([{ trigger: 'online', startedAt: start + 5_500, seq: 1, outcome: { kind: 'saved' } }])
     // 后来的那一处照常：停 1 秒捕获、2 秒上传
-    await page.clock.runFor(1_500)
+    await skipAhead(page, 500)
+    await skipAhead(page, 1_000)
     await expect.poll(async () => uploadsOf(await logNow(page)).length).toBe(2)
     expect(uploadsOf(await autosaveLog(page))[1]).toMatchObject({ trigger: 'quiet', startedAt: start + 7_000, seq: 2, outcome: { kind: 'saved' } })
     await expect(saveStatus(page)).toHaveText('已保存到云端')
@@ -358,21 +365,21 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     await releaseAutosave(page)
     const start = await pauseTime(page)
     await typeInCell(page, 'A1', 'busy')
-    await page.clock.runFor(2_000)
+    await skipAhead(page, 2_000)
     await expect.poll(async () => uploadsOf(await logNow(page))).toMatchObject([{ trigger: 'quiet', startedAt: start + 2_000, outcome: { kind: 'failed', failure: { kind: 'retry', retryAfterMs: 7_000 } } }])
     await expect(saveStatus(page)).toHaveText('保存失败，稍后自动重试')
     await expect(alertWith(page, '保存失败：')).toBeVisible()
     // 按 Retry-After 等：7 秒之前不重发
-    await page.clock.runFor(6_999)
+    await skipAhead(page, 6_999)
     expect(writes.saves).toHaveLength(1)
-    await page.clock.runFor(1)
+    await skipAhead(page, 1)
     await expect.poll(async () => uploadsOf(await logNow(page)).length).toBe(2)
     expect(uploadsOf(await autosaveLog(page))[1]).toMatchObject({ trigger: 'retry', startedAt: start + 9_000, outcome: { kind: 'failed', failure: { kind: 'retry' } } })
     await expect(saveStatus(page)).toHaveText('保存失败，稍后自动重试')
     // 第二次失败：退避翻倍到 4 秒（服务端这次没给 Retry-After）
-    await page.clock.runFor(3_999)
+    await skipAhead(page, 3_999)
     expect(writes.saves).toHaveLength(2)
-    await page.clock.runFor(1)
+    await skipAhead(page, 1)
     await expect.poll(async () => uploadsOf(await logNow(page)).length).toBe(3)
     expect(uploadsOf(await autosaveLog(page))[2]).toMatchObject({ trigger: 'retry', startedAt: start + 13_000, outcome: { kind: 'saved' } })
     expect(writes.saves).toHaveLength(3)
@@ -401,23 +408,24 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
         throw new Error('页面里没有编辑器的探针')
       sheet.getRange('B2').setCustomMetaData(deep)
     })
-    await page.clock.runFor(2_000)
+    await skipAhead(page, 2_000)
     await expect.poll(async () => uploadsOf(await logNow(page))).toMatchObject([{ outcome: { kind: 'failed', failure: { kind: 'content' } } }])
     await expect(saveStatus(page)).toHaveText('保存失败')
     await expect(alertWith(page, '保存失败：表格的内容过于复杂（嵌套太深）')).toBeVisible()
     // 同一份内容不再自动重传：会自动重试的失败第一次退避 2 秒、之后翻倍，过了几轮也没有发
-    await page.clock.runFor(10_000)
+    await skipAhead(page, 5_000)
+    await skipAhead(page, 5_000)
     expect(writes.saves).toHaveLength(1)
     // 有了新的修改（内容仍不合格）：再试一次，照样被拒
     await setCellValue(page, 'A1', '新的修改')
-    await page.clock.runFor(2_000)
+    await skipAhead(page, 2_000)
     await expect.poll(() => writes.saves.length).toBe(2)
     await expect.poll(async () => uploadsOf(await logNow(page)).map(upload => upload.outcome.kind)).toEqual(['failed', 'failed'])
     // 改对（去掉嵌套的数据）：存上
     await page.evaluate(() => {
       window.__nerveEditorProbe?.univerAPI.getActiveWorkbook().getActiveSheet().getRange('B2').setCustomMetaData({})
     })
-    await page.clock.runFor(2_000)
+    await skipAhead(page, 2_000)
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     expect(writes.saves).toHaveLength(3)
     await page.clock.resume()
@@ -442,7 +450,7 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     expect(await wouldPromptOnLeave(page)).toBe(false)
   })
 
-  test('US-M3-02 登录过期期间不自动上传（不发请求，没有 401 接连不断）：页头说暂停保存、登录回来之后自动保存；本人在新标签页登录回来之后自动上传', async ({ page, context }) => {
+  test('US-M3-02 登录过期：自动保存的上传得到 401 之后暂停（页头说暂停保存、登录回来之后自动保存），之后不再发请求——没有 401 接连不断；本人在新标签页登录回来之后自动上传', async ({ page, context }) => {
     const owner = await createUser('autosave-session')
     await loginThroughApi(page, owner)
     const documentId = await createSheetThroughApi(page)
@@ -451,21 +459,25 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     const writes = recordWrites(page, documentId)
     await releaseAutosave(page)
     await pauseTime(page)
-    // 登录过期：心跳（每 10 秒）先得知，页面确认会话之后说明本页的修改还在、在新标签页登录
+    // 登录过期之后的一处修改：停 2 秒上传，得到 401；页面确认会话之后说明本页的修改还在、在新标签页登录
     await expireSessions(owner)
-    await page.clock.runFor(10_000)
+    await typeInCell(page, 'A1', 'kept')
+    await skipAhead(page, 2_000)
     const signedOut = alertWith(page, '本页的修改还在')
     await expect.poll(async () => {
       await page.clock.runFor(0)
       return signedOut.count()
     }).toBe(1)
-    // 期间的修改：照常捕获，不上传
-    await typeInCell(page, 'A1', 'kept')
     await expect(saveStatus(page)).toHaveText('暂停保存：登录回来之后自动保存')
-    await page.clock.runFor(10_000)
-    await expect.poll(async () => capturesOf(await logNow(page)).length).toBe(1)
-    expect(writes.saves).toHaveLength(0)
-    expect(uploadsOf(await autosaveLog(page))).toEqual([])
+    expect(writes.saves).toHaveLength(1)
+    expect(uploadsOf(await autosaveLog(page))).toMatchObject([{ outcome: { kind: 'failed', failure: { kind: 'session' } } }])
+    // 之后的修改：照常捕获，不上传（会话不对时不发；会话类的失败照样退避，到点也不发）
+    await typeInCell(page, 'A2', 'also kept')
+    await skipAhead(page, 5_000)
+    await skipAhead(page, 5_000)
+    await expect.poll(async () => capturesOf(await logNow(page)).length).toBe(2)
+    expect(writes.saves).toHaveLength(1)
+    await expect(saveStatus(page)).toHaveText('暂停保存：登录回来之后自动保存')
     // 本人在新标签页登录：本页确认是本人、续上编辑权，随即自动上传（不用按保存）
     await page.clock.resume()
     const [loginPage] = await Promise.all([context.waitForEvent('page'), signedOut.getByRole('link', { name: '在新标签页中登录' }).click()])
@@ -474,8 +486,9 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     await expect(loginPage.getByRole('heading', { name: '我的空间' })).toBeVisible()
     await expect(signedOut).toBeHidden()
     await expect(saveStatus(page)).toHaveText('已保存到云端')
-    expect(writes.saves.length).toBeGreaterThan(0)
-    expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('kept')
+    expect(writes.saves.length).toBeGreaterThan(1)
+    const saved = (await savedContent(page, documentId)).snapshot
+    expect([cellOf(saved, 'A1')?.v, cellOf(saved, 'A2')?.v]).toEqual(['kept', 'also kept'])
   })
 
   test('US-M3-02 失去编辑权（空间刚被归档，自动保存得知 403）：自动保存停下，之后不再发；本页的内容另存为副本照常', async ({ page }) => {
@@ -490,12 +503,12 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     await releaseAutosave(page)
     await pauseTime(page)
     await typeInCell(page, 'A1', '存上了的')
-    await page.clock.runFor(2_000)
+    await skipAhead(page, 2_000)
     await expect.poll(async () => uploadsOf(await logNow(page)).map(upload => upload.outcome.kind)).toEqual(['saved'])
     // 归档之后的修改：自动保存上传得到 403，本页失去编辑权、以只读重建（渲染靠动画帧，往前拨让它走完）
     await typeInCell(page, 'B1', '没存上的')
     await archiveSpace(space.id)
-    await page.clock.runFor(2_000)
+    await skipAhead(page, 2_000)
     await expect.poll(() => writes.saves.length).toBe(2)
     const lost = lostNotice(page)
     await expect.poll(async () => {
@@ -503,7 +516,8 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
       return (await lost.count()) === 1 ? lost.textContent() : null
     }).toContain('本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
     // 停下了：会自动重试的失败第一次退避 2 秒、之后翻倍，过了几轮也没有再发保存
-    await page.clock.runFor(10_000)
+    await skipAhead(page, 5_000)
+    await skipAhead(page, 5_000)
     expect(writes.saves).toHaveLength(2)
     await page.clock.resume()
     await waitForEditorAccess(page, 'read')
@@ -536,7 +550,7 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     await releaseAutosave(page)
     await pauseTime(page)
     await typeInCell(page, 'A1', '旧页面的修改')
-    await page.clock.runFor(2_000)
+    await skipAhead(page, 2_000)
     await expect.poll(() => writes.saves.length).toBe(1)
     await expect.poll(async () => {
       await page.clock.runFor(0)
@@ -545,7 +559,8 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     await expect(alertWith(page, /^页面的版本过旧/)).toContainText('本页的修改没有保存，也不能再保存')
     // 之后的修改：不再上传
     await typeInCell(page, 'A2', '之后的修改')
-    await page.clock.runFor(10_000)
+    await skipAhead(page, 5_000)
+    await skipAhead(page, 5_000)
     expect(writes.saves).toHaveLength(1)
     await page.clock.resume()
     await expect.poll(async () => editLeaseEndReason(documentId)).toBe('released')

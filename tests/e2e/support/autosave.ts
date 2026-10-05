@@ -176,8 +176,27 @@ export async function advanceUntil(page: Page, check: () => Promise<boolean>, me
   }, { message, intervals: [50], timeout: 60_000 }).toBe(true)
 }
 
+/** 停住的时间里拨到 at（调度的时钟；已经过了就不动）：一跳过去（skipAhead），之后要等真实时间的再用 advanceUntil 一步步走 */
+export async function advanceTo(page: Page, at: number): Promise<void> {
+  const now = await pausedNow(page)
+  if (at > now)
+    await skipAhead(page, at - now)
+}
+
 /** SDK 的计算防抖（engine-formula 的 CALCULATION_DEBOUNCE_TIME）：修改之后过这么久才开始一轮 */
 export const SDK_CALCULATION_DEBOUNCE_MS = 10
+
+/**
+ * 停住的时间里往前拨 ms：最初的 10 毫秒逐个执行计时器（键入之后提交单元格的 0 毫秒计时器、SDK 的计算防抖都在这里按原来的时刻到点），
+ * 其余一跳到终点（fastForward：其间到点的计时器挪到终点执行一次，动画帧不逐帧画——runFor 逐帧画，停住的 1 秒约合 1.5 秒真实时间）。
+ * 要看的时刻正好是终点（上传在修改之后 2 秒、退避到点）或者这段时间里什么也不该发生时用它；终点之前要看准时刻的用 runFor
+ */
+export async function skipAhead(page: Page, ms: number): Promise<void> {
+  const head = Math.min(ms, SDK_CALCULATION_DEBOUNCE_MS)
+  await page.clock.runFor(head)
+  if (ms > head)
+    await page.clock.fastForward(ms - head)
+}
 
 /**
  * 停住的时间里改了一处之后：往前拨过 SDK 的计算防抖（这一轮开始），等它算完（公式在 Worker 或主线程里算，真实的时间）。
@@ -186,7 +205,7 @@ export const SDK_CALCULATION_DEBOUNCE_MS = 10
 export async function settleAfterEdit(page: Page): Promise<void> {
   await page.clock.runFor(SDK_CALCULATION_DEBOUNCE_MS)
   // 编辑器的探针（support/editor-probe.ts 声明它）：与自动保存读的是同一个"公式收齐"
-  await expect.poll(async () => page.evaluate(() => window.__nerveEditorProbe?.formulasSettled() ?? false), { message: '这一处修改引起的一轮公式算完了' }).toBe(true)
+  await expect.poll(async () => page.evaluate(() => window.__nerveEditorProbe?.formulasSettled() ?? false), { message: '这一处修改引起的一轮公式算完了', intervals: [10] }).toBe(true)
 }
 
 /** 拦住这个页面的保存（PUT …/content），直到 release；拦住的请求照常发出（route.continue），之后的不拦 */

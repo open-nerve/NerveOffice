@@ -5,7 +5,8 @@
 // 样本是 M0 的五类公式场景缩小的一份（support/capture-samples.ts 的 AUTOSAVE_FORMULA_SAMPLE：链、聚合、跨表、SUMPRODUCT、易变函数，
 // 公式不带缓存值），存下的值按定义独立核对（apps/web/src/editor/testing/capture-samples.ts 的 verifyFormulaSnapshot，与页面自检同一份）。
 // 主线程模式下在一轮计算进行中重建编辑器会让公式得出 #NAME?（S1 的 F2，S5 规避）：这里阅读、进入编辑之前都等公式收齐。
-// 节奏与 autosave.spec.ts 相同：Playwright 的时钟停住时间，只在 runFor 往前拨时走，捕获与上传的时刻按调度的日志断言到毫秒；
+// 节奏与 autosave.spec.ts 相同：Playwright 的时钟停住时间，只在往前拨时走（runFor 逐帧；support/autosave.ts 的 skipAhead 一跳到终点），
+// 捕获与上传的时刻按调度的日志断言；
 // 公式在 Worker 或主线程里算是真实的时间（主线程模式按 MessageChannel 让出，不受时钟影响），停住时让到点的计时器执行再看。
 // 控制与探针只在测试构建里：标签 @test-build
 import type { Page } from '@playwright/test'
@@ -14,7 +15,7 @@ import type { SelftestFormulaMode } from '../../../../apps/web/src/editor/testin
 import { SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { verifyFormulaSnapshot } from '../../../../apps/web/src/editor/testing/capture-samples.ts'
 import { FORMULA_MODE_PARAM, FORMULA_MODE_VALUES } from '../../../../apps/web/src/editor/testing/selftest-report.ts'
-import { advanceUntil, autosaveLog, capturesOf, logNow, pausedNow, pauseTime, recordWrites, releaseAutosave, saveParam, SDK_CALCULATION_DEBOUNCE_MS, setAutosaveLimits, settleAfterEdit, uploadedText, uploadsOf } from '../../support/autosave.ts'
+import { advanceTo, advanceUntil, autosaveLog, capturesOf, logNow, pausedNow, pauseTime, recordWrites, releaseAutosave, saveParam, SDK_CALCULATION_DEBOUNCE_MS, setAutosaveLimits, settleAfterEdit, skipAhead, uploadedText, uploadsOf } from '../../support/autosave.ts'
 import { AUTOSAVE_FORMULA_SAMPLE, AUTOSAVE_STOP_SAMPLE, autosaveFormulaSampleFor, autosaveStopSampleFor } from '../../support/capture-samples.ts'
 import { createDocument, createDocumentIn, createTeamSpace, createUser, revisionOf, withDatabase } from '../../support/database.ts'
 import { commandMark, probeCommands, probeFormulaMode, probeFormulasSettled, probeSnapshot, setCellValue, waitForCommand } from '../../support/editor-probe.ts'
@@ -73,8 +74,8 @@ async function openReaderIn(page: Page, documentId: string, mode: SelftestFormul
 
 /** 这个编辑器打开时算的公式都算完了，而且都对（样本的公式不带缓存值，打开时全部算一遍） */
 async function formulasComputed(page: Page, sample: FormulaSample): Promise<void> {
-  await expect.poll(async () => probeFormulasSettled(page), { message: '打开时的计算收齐了' }).toBe(true)
-  await expect.poll(async () => staleIn(await probeSnapshot(page), sample), { message: '打开时算出的公式都与定义一致' }).toEqual([])
+  await expect.poll(async () => probeFormulasSettled(page), { message: '打开时的计算收齐了', intervals: [50] }).toBe(true)
+  await expect.poll(async () => staleIn(await probeSnapshot(page), sample), { message: '打开时算出的公式都与定义一致', intervals: [50] }).toEqual([])
 }
 
 /**
@@ -161,12 +162,13 @@ test.describe('US-M3-03 保存下来的公式结果与重新计算的一致', { 
       for (const [index, [sheet, cell, value]] of ([[CHAIN.name, 'A1', 7], [AGGREGATE.name, 'B1', 1_000]] as const).entries()) {
         const changedAt = await pausedNow(page)
         await setCellValue(page, cell, value, sheet)
-        await page.clock.runFor(999)
+        await skipAhead(page, 999)
         expect(capturesOf(await logNow(page))).toHaveLength(index)
         await advanceUntil(page, async () => capturesOf(await autosaveLog(page)).length === index + 1, '这一处修改捕获了')
         const capture = capturesOf(await autosaveLog(page))[index]
         expect(capture).toMatchObject({ trigger: 'quiet', seq: index + 1, formulasPending: false })
         expect(capture?.at).toBeGreaterThanOrEqual(changedAt + 1_000)
+        await advanceTo(page, changedAt + 2_000)
         await advanceUntil(page, async () => uploadsOf(await autosaveLog(page)).length === index + 1, '这一处修改上传了')
         expect(uploadsOf(await autosaveLog(page))[index]).toMatchObject({ trigger: 'quiet', seq: index + 1, outcome: { kind: 'saved' } })
         expect(uploadsOf(await autosaveLog(page))[index]?.startedAt).toBeGreaterThanOrEqual(changedAt + 2_000)
@@ -186,15 +188,16 @@ test.describe('US-M3-03 保存下来的公式结果与重新计算的一致', { 
       const writes = recordWrites(page, documentId)
       const start = await pauseTime(page)
       await setCellValue(page, 'A1', 11, CHAIN.name)
-      await page.clock.runFor(500)
+      await skipAhead(page, 500)
       await setCellValue(page, 'B1', 5, AGGREGATE.name)
       // 第一处之后 1 秒多、第二处之后不到 1 秒：没有捕获
-      await page.clock.runFor(999)
+      await skipAhead(page, 999)
       expect(capturesOf(await logNow(page))).toEqual([])
       await advanceUntil(page, async () => capturesOf(await autosaveLog(page)).length === 1, '两处修改捕获了')
       const [capture] = capturesOf(await autosaveLog(page))
       expect(capture).toMatchObject({ trigger: 'quiet', seq: 2, formulasPending: false })
       expect(capture?.at).toBeGreaterThanOrEqual(start + 1_500)
+      await advanceTo(page, start + 2_500)
       await advanceUntil(page, async () => writes.saves.length === 1, '两处修改上传了')
       const uploaded = uploadedText(writes.saves[0])
       expect(staleIn(uploaded)).toEqual([])
@@ -212,12 +215,13 @@ test.describe('US-M3-03 保存下来的公式结果与重新计算的一致', { 
       // SDK 的计算防抖到点：这一轮开始，紧接着改第二处（修改的时刻是 start + 10）
       await page.clock.runFor(10)
       await expect.poll(async () => secondEditDone(page)).toBe(true)
-      await page.clock.runFor(999)
+      await skipAhead(page, 999)
       expect(capturesOf(await logNow(page))).toEqual([])
       await advanceUntil(page, async () => capturesOf(await autosaveLog(page)).length === 1, '两轮都算完之后捕获了')
       const [capture] = capturesOf(await autosaveLog(page))
       expect(capture).toMatchObject({ trigger: 'quiet', seq: 2, formulasPending: false })
       expect(capture?.at).toBeGreaterThanOrEqual(start + 1_010)
+      await advanceTo(page, start + 2_010)
       await advanceUntil(page, async () => writes.saves.length === 1, '两处修改上传了')
       expect(staleIn(uploadedText(writes.saves[0]))).toEqual([])
       const executed = (await probeCommands(page, mark)).filter(command => command.phase === 'executed').map(command => command.id)
@@ -235,12 +239,13 @@ test.describe('US-M3-03 保存下来的公式结果与重新计算的一致', { 
       await editDuringCalculation(page, [HEAVY.name, 'A1', 1_000], [HEAVY.name, 'A1', 5], true)
       await page.clock.runFor(10)
       await expect.poll(async () => secondEditDone(page)).toBe(true)
-      await page.clock.runFor(999)
+      await skipAhead(page, 999)
       expect(capturesOf(await logNow(page))).toEqual([])
       await advanceUntil(page, async () => capturesOf(await autosaveLog(page)).length === 1, '重新开始的一轮算完之后捕获了')
       const [capture] = capturesOf(await autosaveLog(page))
       expect(capture).toMatchObject({ trigger: 'quiet', seq: 2, formulasPending: false })
       expect(capture?.at).toBeGreaterThanOrEqual(start + 1_010)
+      await advanceTo(page, start + 2_010)
       await advanceUntil(page, async () => writes.saves.length === 1, '第二次的值上传了')
       const uploaded = uploadedText(writes.saves[0])
       expect(staleIn(uploaded, AUTOSAVE_STOP_SAMPLE)).toEqual([])
@@ -273,7 +278,7 @@ test.describe('US-M3-03 保存下来的公式结果与重新计算的一致', { 
       expect(JSON.parse(await probeSnapshot(page))).toMatchObject({ sheets: { [FIRST_SHEET]: { cellData: { 1: { 0: { v: 999 } } } } } })
       // 静默到点（start + 1000）之前 1 毫秒强制重算（与带"公式待更新"的文档进入编辑时同一条 mutation，带 onlyLocal：不算修改）：
       // 这一轮在 SDK 的计算防抖之后（start + 1009）才开始，到点的那一刻公式还在排队、没收齐
-      await page.clock.runFor(1_000 - SDK_CALCULATION_DEBOUNCE_MS - 1)
+      await skipAhead(page, 1_000 - SDK_CALCULATION_DEBOUNCE_MS - 1)
       await page.evaluate(async (id) => {
         await window.__nerveEditorProbe?.univerAPI.executeCommand(id, { forceCalculation: true }, { onlyLocal: true })
       }, FORMULA_FORCE_TRIGGER)
@@ -285,6 +290,7 @@ test.describe('US-M3-03 保存下来的公式结果与重新计算的一致', { 
       const [capture] = capturesOf(await autosaveLog(page))
       expect(capture).toMatchObject({ trigger: 'quiet', seq: 1, formulasPending: false })
       expect(capture?.at).toBeGreaterThanOrEqual(start + 1_009)
+      await advanceTo(page, start + 2_000)
       await advanceUntil(page, async () => writes.saves.length === 1, '捕获的那一份上传了')
       const uploaded = JSON.parse(uploadedText(writes.saves[0])) as { sheets: Record<string, { cellData: Record<string, Record<string, unknown>> }> }
       expect(uploaded.sheets[FIRST_SHEET]?.cellData[1]?.[0]).toMatchObject({ f: '=A1*2', v: 2 })
@@ -383,7 +389,7 @@ test.describe('US-M3-03 保存下来的公式结果与重新计算的一致', { 
       await releaseAutosave(page)
       const start = await pauseTime(page)
       await typeInCell(page, 'A1', '5')
-      await page.clock.runFor(1_999)
+      await skipAhead(page, 1_999)
       expect(uploadsOf(await logNow(page))).toEqual([])
       await advanceUntil(page, async () => uploadsOf(await autosaveLog(page)).length === 1, '改了依赖之后上传了')
       expect(uploadsOf(await autosaveLog(page))[0]).toMatchObject({ trigger: 'quiet', outcome: { kind: 'saved' } })
@@ -438,9 +444,12 @@ test.describe('US-M3-03 保存下来的公式结果与重新计算的一致', { 
     await selectCell(page, 'D4', { button: 'right' })
     await page.getByRole('button', { name: '添加批注' }).click()
     await page.getByRole('textbox', { name: '在此输入' }).click()
-    // 打开时浮层按输入框的尺寸写回批注（SDK 的 300 ms 防抖），可能是一处修改：停住时间、拨过它，让它捕获、上传完，之后的修改都来自组字
+    // 打开时浮层按输入框的尺寸写回批注（SDK 的 300 ms 防抖），可能是一处修改：停住时间、拨过它（500 毫秒），让它捕获（1 秒）、
+    // 上传完（2 秒），之后的修改都来自组字
     await pauseTime(page)
-    await page.clock.runFor(3_000)
+    await skipAhead(page, 500)
+    await skipAhead(page, 1_000)
+    await skipAhead(page, 1_000)
     await expect.poll(async () => {
       await page.clock.runFor(0)
       return saveStatus(page).textContent()
@@ -453,21 +462,21 @@ test.describe('US-M3-03 保存下来的公式结果与重新计算的一致', { 
     const composition = await startComposition(page, browserName)
     await composition.update('ni hao')
     // SDK 的防抖到点：组字中的拼音写进了批注（模型里有它，这是一处修改）
-    await page.clock.runFor(300)
+    await skipAhead(page, 300)
     await expect.poll(async () => noteOf(await probeSnapshot(page))).toBe('ni hao')
     // 那一处修改之后 1 秒的静默已经过了：组字中不捕获（3 秒的上限还没到）
-    await page.clock.runFor(1_200)
+    await skipAhead(page, 1_200)
     expect(capturesOf(await logNow(page))).toHaveLength(captured)
     // 选定"你好"、组合结束（start + 1500）；SDK 的防抖到点写进批注（start + 1800），停 1 秒之后捕获
     await composition.commit('你好')
-    await page.clock.runFor(300)
+    await skipAhead(page, 300)
     await expect.poll(async () => noteOf(await probeSnapshot(page))).toBe('你好')
-    await page.clock.runFor(999)
+    await skipAhead(page, 999)
     expect(capturesOf(await logNow(page))).toHaveLength(captured)
     await page.clock.runFor(1)
     await expect.poll(async () => capturesOf(await logNow(page)).length).toBe(captured + 1)
     expect(capturesOf(await autosaveLog(page)).at(-1)).toMatchObject({ trigger: 'quiet', at: start + 2_800 })
-    await page.clock.runFor(1_000)
+    await skipAhead(page, 1_000)
     await expect.poll(async () => uploadsOf(await logNow(page)).slice(uploaded)).toMatchObject([{ trigger: 'quiet', startedAt: start + 3_800, outcome: { kind: 'saved' } }])
     expect(writes.saves).toHaveLength(saves + 1)
     expect(noteOf(uploadedText(writes.saves.at(-1)))).toBe('你好')
