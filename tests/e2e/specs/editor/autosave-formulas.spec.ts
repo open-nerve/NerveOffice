@@ -20,6 +20,7 @@ import { AUTOSAVE_FORMULA_SAMPLE, AUTOSAVE_STOP_SAMPLE, autosaveFormulaSampleFor
 import { createDocument, createDocumentIn, createTeamSpace, createUser, revisionOf, withDatabase } from '../../support/database.ts'
 import { commandMark, probeCommands, probeFormulaMode, probeFormulasSettled, probeSnapshot, setCellValue, waitForCommand } from '../../support/editor-probe.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { pressUniverShortcut } from '../../support/keyboard.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, exitEditing, openAndEnterEditing, openReader, savedContent, saveStatus, selectCell, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 
@@ -230,7 +231,7 @@ test.describe('US-M3-03 保存下来的公式结果与重新计算的一致', { 
       await page.clock.resume()
     })
 
-    test(`US-M3-03 计算进行中再改一次、改的是同一处（${label}）：重表的一格引起的一轮（520 个 SUMPRODUCT）开始的那一刻再改同一格，这一轮被 stop——被 stop 的一轮不算收齐，等重新开始的一轮算完才捕获，存下的是第二次的值`, async ({ page }) => {
+    test(`US-M3-03 计算进行中再改一次、改的是同一处（${label}）：重表的一格引起的一轮（1,020 个 SUMPRODUCT）开始的那一刻再改同一格，这一轮被 stop——被 stop 的一轮不算收齐，等重新开始的一轮算完才捕获，存下的是第二次的值`, async ({ page }) => {
       const documentId = await formulaSample(page, 'formulas-during-stop', autosaveStopSampleFor)
       await editFormulaSample(page, documentId, mode, AUTOSAVE_STOP_SAMPLE)
       const writes = recordWrites(page, documentId)
@@ -383,7 +384,8 @@ test.describe('US-M3-03 保存下来的公式结果与重新计算的一致', { 
       // 入口守卫取消插入超链接（M5 之前没有它）：被取消的命令留在 SDK 的执行栈里，之后命令之外的 mutation（Worker 的写回等）带上它的 trigger
       await selectCell(page, 'C3')
       const mark = await commandMark(page)
-      await page.keyboard.press('ControlOrMeta+k')
+      // Univer 按页面的平台取主修饰键（Linux 上的 WebKit 也自称 Mac），不用 ControlOrMeta（M3-P4 合并之后的 CI：WebKit 上按下的 Control+K 没有反应）
+      await pressUniverShortcut(page, 'K')
       await waitForCommand(page, mark, { phase: 'before', id: 'sheet.operation.insert-hyper-link-toolbar', canceled: true })
       const writes = recordWrites(page, documentId)
       await releaseAutosave(page)
