@@ -331,18 +331,23 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('offline')
   })
 
-  test('US-M3-02 服务繁忙（503 带 Retry-After）：页头说保存失败、稍后自动重试，按服务端给的时间等，到点原样重发同一个 requestId', async ({ page }) => {
+  test('US-M3-02 服务繁忙（503 带 Retry-After）与服务端出错（502）：页头说保存失败、稍后自动重试；503 按服务端给的时间等，之后按退避等（第二次失败之后 4 秒），到点原样重发同一个 requestId', async ({ page }) => {
     await page.clock.install()
     const documentId = await openNewSheet(page, 'autosave-busy')
     const writes = recordWrites(page, documentId)
-    // 第一次保存：服务繁忙，7 秒之后再试（比退避的 2 秒长）
+    // 第一次保存：服务繁忙，7 秒之后再试（比退避的 2 秒长）；第二次：代理出错（结果未知，没有 Retry-After）；之后照常
+    let failed = 0
     await page.route('**/api/documents/*/content?*', async (route: Route) => {
-      if (route.request().method() !== 'PUT') {
+      if (route.request().method() !== 'PUT' || failed >= 2) {
         await route.continue()
         return
       }
-      await route.fulfill({ status: 503, headers: { 'retry-after': '7' }, contentType: 'application/json', json: { error: { code: 'SERVICE_UNAVAILABLE', message: '服务暂时不可用，请稍后重试', requestId: 'e2e-busy' } } })
-    }, { times: 1 })
+      failed += 1
+      if (failed === 1)
+        await route.fulfill({ status: 503, headers: { 'retry-after': '7' }, contentType: 'application/json', json: { error: { code: 'SERVICE_UNAVAILABLE', message: '服务暂时不可用，请稍后重试', requestId: 'e2e-busy' } } })
+      else
+        await route.fulfill({ status: 502, contentType: 'text/html', body: 'bad gateway' })
+    })
     await releaseAutosave(page)
     const start = await pauseTime(page)
     await typeInCell(page, 'A1', 'busy')
@@ -355,11 +360,18 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     expect(writes.saves).toHaveLength(1)
     await page.clock.runFor(1)
     await expect.poll(async () => uploadsOf(await logNow(page)).length).toBe(2)
-    expect(uploadsOf(await autosaveLog(page))[1]).toMatchObject({ trigger: 'retry', startedAt: start + 9_000, outcome: { kind: 'saved' } })
+    expect(uploadsOf(await autosaveLog(page))[1]).toMatchObject({ trigger: 'retry', startedAt: start + 9_000, outcome: { kind: 'failed', failure: { kind: 'retry' } } })
+    await expect(saveStatus(page)).toHaveText('保存失败，稍后自动重试')
+    // 第二次失败：退避翻倍到 4 秒（服务端这次没给 Retry-After）
+    await page.clock.runFor(3_999)
     expect(writes.saves).toHaveLength(2)
+    await page.clock.runFor(1)
+    await expect.poll(async () => uploadsOf(await logNow(page)).length).toBe(3)
+    expect(uploadsOf(await autosaveLog(page))[2]).toMatchObject({ trigger: 'retry', startedAt: start + 13_000, outcome: { kind: 'saved' } })
+    expect(writes.saves).toHaveLength(3)
     // 原样重发：同一个 requestId、同样的正文
-    expect(saveParam(writes.saves[1], 'requestId')).toBe(saveParam(writes.saves[0], 'requestId'))
-    expect(uploadedText(writes.saves[1])).toBe(uploadedText(writes.saves[0]))
+    expect(new Set(writes.saves.map(save => saveParam(save, 'requestId')))).toEqual(new Set([saveParam(writes.saves[0], 'requestId')]))
+    expect(new Set(writes.saves.map(save => uploadedText(save)))).toEqual(new Set([uploadedText(writes.saves[0])]))
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     await expect(alertWith(page, '保存失败：')).toHaveCount(0)
     await page.clock.resume()

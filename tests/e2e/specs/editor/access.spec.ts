@@ -5,7 +5,9 @@
 // M3-P2 起失去编辑权之后本页换成只读（没有保存按钮）：还读得到而且有修改时给"另存为副本"与"放弃本页的修改"，没有修改时给"重新加载"。
 // 编辑中被收回写入权（US-M3-12，M3 总设计 §2.1 第 4 条）：另一个人经接口降级、取消分享、删除、移动（收回写入权的入口，租约随之结束或过时）——
 // 还能阅读（降为查看者，403）时给副本或放弃；读不到了（取消分享、删除，404）就说明并丢弃；被移到仍能编辑的空间时自动续上、接着保存。
-// 空间被归档时另存为副本的用例在 edit-mode.spec.ts。核对保存那一步的用例拦下心跳（support/sheet.ts 的 blockLeaseRenewals），免得它先一步
+// 空间被归档时另存为副本的用例在 edit-mode.spec.ts。核对保存那一步的用例拦下心跳（support/sheet.ts 的 blockLeaseRenewals），免得它先一步。
+// M3-P4 起修改自动保存（生产构建里停 2 秒就上传；测试构建的夹具暂停了定时的上传，生产镜像里没有这个控制）："本页的修改没有保存"的几条
+// 先收回、再改，按保存用快捷键——修改一定没存进去，自动保存与按的保存哪个先发出，得知的都一样
 import type { Page } from '@playwright/test'
 import type { TestUser } from '../../support/database.ts'
 import { randomUUID } from 'node:crypto'
@@ -67,9 +69,10 @@ test.describe('US-M2-09 A14 编辑器页：打开之后文档被删除、移走�
     const documentId = await createDocument(owner, '要被删的表')
     await loginThroughApi(page, owner)
     await openAndEnterEditing(page, documentId)
-    await typeInCell(page, 'A1', '还没保存的内容')
+    await blockLeaseRenewals(page)
     await deleteThroughApi(page, documentId)
-    await saveButton(page).click()
+    await typeInCell(page, 'A1', '还没保存的内容')
+    await page.keyboard.press('ControlOrMeta+s')
     await expect(saveStatus(page)).toHaveText('编辑权已失效')
     await expect(page.getByRole('alert')).toContainText(GONE)
     await expect(page.getByRole('alert').getByRole('button')).toHaveCount(0)
@@ -99,9 +102,10 @@ test.describe('US-M2-09 A14 编辑器页：打开之后文档被删除、移走�
     const documentId = await createDocumentIn(space.id, lead, '共同的表')
     await loginThroughApi(page, editor)
     await openAndEnterEditing(page, documentId)
-    await typeInCell(page, 'A1', '还没保存的内容')
+    await blockLeaseRenewals(page)
     await removeMember(space.id, editor)
-    await saveButton(page).click()
+    await typeInCell(page, 'A1', '还没保存的内容')
+    await page.keyboard.press('ControlOrMeta+s')
     await expect(saveStatus(page)).toHaveText('编辑权已失效')
     await expect(page.getByRole('alert')).toContainText(GONE)
     await expect(page.getByRole('alert').getByRole('button')).toHaveCount(0)
@@ -114,9 +118,10 @@ test.describe('US-M2-09 A14 编辑器页：打开之后文档被删除、移走�
     const documentId = await createDocumentIn(space.id, lead, '共同的表')
     await loginThroughApi(page, editor)
     await openAndEnterEditing(page, documentId)
-    await typeInCell(page, 'A1', '还没保存的内容')
+    await blockLeaseRenewals(page)
     await archiveSpace(space.id)
-    await saveButton(page).click()
+    await typeInCell(page, 'A1', '还没保存的内容')
+    await page.keyboard.press('ControlOrMeta+s')
     await expect(saveStatus(page)).toHaveText('编辑权已失效')
     await expect(page.getByRole('alert')).toContainText('编辑权已失效：你已没有编辑这份文档的权限（空间已归档，只能查看）。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
     await expect(page.getByText('你没有执行这个操作的权限')).toHaveCount(0)
@@ -212,12 +217,11 @@ test.describe('US-M3-12 编辑中失去访问或被移走：读不到了就说�
       await grantDocument(documentId, me, 'editor', owner)
       await loginThroughApi(page, me)
       await openAndEnterEditing(page, documentId)
-      await typeInCell(page, 'B1', '本页的修改')
-
       await blockLeaseRenewals(page)
       await loginThroughApi(anotherDevice, owner)
       await revocation.revoke(anotherDevice, documentId, me)
-      await saveButton(page).click()
+      await typeInCell(page, 'B1', '本页的修改')
+      await page.keyboard.press('ControlOrMeta+s')
       const lost = lostNotice(page)
       await expect(lost).toHaveText(GONE)
       await expect(lost.getByRole('button')).toHaveCount(0)
