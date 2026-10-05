@@ -4,7 +4,7 @@
 // 控制只在测试构建里：标签 @test-build。
 import type { Page, Request } from '@playwright/test'
 import { SHEET_TEMPLATE } from '@nerve-office/contracts'
-import { autosaveLog, clearAutosaveLog, releaseAutosave, setAutosaveLimits, uploadsOf } from '../../support/autosave.ts'
+import { autosaveLog, capturesOf, clearAutosaveLog, releaseAutosave, setAutosaveLimits, uploadsOf } from '../../support/autosave.ts'
 import { createDocument, createUser, editLeaseEndReason, revisionOf, withDatabase } from '../../support/database.ts'
 import { commandMark, waitForCommand } from '../../support/editor-probe.ts'
 import { expect, test } from '../../support/fixtures.ts'
@@ -67,11 +67,16 @@ test.describe('US-M3-02 修改自动保存（S4 冒烟）', { tag: '@test-build'
     await releaseAutosave(page)
     await typeInCell(page, 'A1', 'auto')
     await expect(saveStatus(page)).toHaveText('有未保存的修改')
-    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 10))
-    await page.clock.runFor(1_500)
+    // 停住时间：跳到改完之后约 1 秒（停 1 秒的捕获随之到点执行）；目标留足 1 秒，忙的机器上也不会是"过去"的时刻
+    await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1_000)
+    const [capture] = capturesOf(await autosaveLog(page))
+    expect(capture).toMatchObject({ trigger: 'quiet', seq: 1, formulasPending: false })
+    // 上传在修改之后 2 秒，即捕获之后 1 秒（捕获的时刻在调度的时钟上，与页面的 performance.now 同一个）：拨到它之前 100 ms，还没传
+    const now = await page.evaluate(() => performance.now())
+    await page.clock.runFor(Math.max(0, (capture?.at ?? now) + 1_000 - now - 100))
     expect(writes.saves).toHaveLength(0)
     expect(uploadsOf(await autosaveLog(page))).toEqual([])
-    await page.clock.runFor(700)
+    await page.clock.runFor(200)
     await expect.poll(() => writes.saves.length).toBe(1)
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     await page.clock.resume()
@@ -145,7 +150,10 @@ test.describe('US-M3-03 保存下来的公式结果与重新计算的一致（S4
     expect(cellOf(saved, 'A2')).toMatchObject({ f: '=A1*2', v: 2 })
     expect(await formulasPendingOf(documentId)).toBe(false)
     expect(await revisionOf(documentId)).toBe(2)
-    expect(uploadsOf(await autosaveLog(page))).toMatchObject([{ outcome: { kind: 'saved' } }])
+    // 没有修改：那一次是公式收齐之后的补捕获（强制重算那一轮算完之前不算收齐），不带标记
+    const log = await autosaveLog(page)
+    expect(capturesOf(log)).toMatchObject([{ trigger: 'formulas', seq: 0, formulasPending: false }])
+    expect(uploadsOf(log)).toMatchObject([{ outcome: { kind: 'saved' } }])
 
     await exitEditing(page)
     await expect(info).not.toContainText('公式结果可能还没更新')
