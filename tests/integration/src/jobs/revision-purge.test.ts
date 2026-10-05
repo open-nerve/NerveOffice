@@ -381,7 +381,9 @@ describe('与并发的写入交错', () => {
 
   it('几份文档同时保存的同时跑几轮：保存都成功，每一轮都正常结束，最后只剩当前修订', async () => {
     await drain()
-    const sheets = await Promise.all(['甲', '乙', '丙'].map(async title => newSheet(title)))
+    // 两份文档同时保存：保存的都是艾米，同一个账户在快照检查池里至多两份（INSPECTIONS_PER_ACCOUNT，M3-P3 审查 A2），
+    // 第三份同时到达的立即 503（页面过一会儿原样重发）。原来三份，本机检查快、三份很少同时在池子里，CI 上同时到达就 503
+    const sheets = await Promise.all(['甲', '乙'].map(async title => newSheet(title)))
     const later = await daysLater(31)
     const saving = Promise.all(sheets.map(async (sheet) => {
       const results: number[] = []
@@ -395,7 +397,7 @@ describe('与并发的写入交错', () => {
         rounds.push(await purge(later))
     })()
     const [revisions] = await Promise.all([saving, purging])
-    expect(revisions).toEqual([[2, 3, 4], [2, 3, 4], [2, 3, 4]])
+    expect(revisions).toEqual([[2, 3, 4], [2, 3, 4]])
     expect(rounds.map(round => [round.ran, round.ending])).toEqual(Array.from({ length: 6 }, () => [true, 'drained']))
     await purge(later)
     for (const sheet of sheets)
