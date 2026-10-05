@@ -475,8 +475,8 @@ export class DocumentsRepository {
   }
 
   /**
-   * 只改"公式待更新"（调用方已锁住这一行，M3-P3 设计 §3.7、§3.8）：内容与当前相同、修订号不变的保存照样把标记设成请求里的值——
-   * 公式等到超时、其实值没变时，收齐之后的再保存要清掉它。更新时间不变：内容没有改，列表的排序与游标不动
+   * 只改"公式待更新"（调用方已锁住这一行，M3-P3 设计 §3.7、§3.8）：内容与当前相同、修订号不变的保存照样要清掉它——
+   * 公式等到超时、其实值没变时，收齐之后的再保存（DocumentContentService.confirmUnchanged 只清不设）。更新时间不变：内容没有改，列表的排序与游标不动
    */
   async setFormulasPending(id: string, formulasPending: boolean, transaction: Transaction): Promise<void> {
     const updated = await executorOf(this.db, transaction).update(d).set({ formulasPending }).where(eq(d.id, id)).returning({ id: d.id })

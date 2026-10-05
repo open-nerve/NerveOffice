@@ -513,6 +513,16 @@ describe('信封（00 号计划书 §8.1）与"公式待更新"（M3-P3 设计 �
     expect((await save(document, raw, { baseRevision: 2, query: { formulasPending: '1' } })).status).toBe(400)
   })
 
+  it('"公式待更新"在内容相同时只清不设：库里的内容已经收齐，又一次捕获没等到收齐、内容相同（公式的结果也相同），标记不变', async () => {
+    const document = await amyDocument()
+    const raw = bytesOf(workbookOf(document.unitId))
+    await saved(await save(document, raw))
+    expect((await envelopeOf(document.id)).formulasPending).toBe(false)
+    expect(await saved(await save(document, raw, { baseRevision: 2, query: { formulasPending: 'true' } }))).toMatchObject({ revision: 2, unchanged: true })
+    expect((await envelopeOf(document.id)).formulasPending).toBe(false)
+    expect(await receiptsOf(document.id)).toHaveLength(1)
+  })
+
   it('"公式待更新"计入负载摘要：同一个 requestId 而标记不同是另一个请求（409 REQUEST_ID_CONFLICT）；同样的标记是重放', async () => {
     const document = await amyDocument()
     const raw = bytesOf(workbookOf(document.unitId))

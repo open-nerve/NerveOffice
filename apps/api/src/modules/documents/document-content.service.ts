@@ -117,8 +117,9 @@ export class DocumentContentService {
    * 2. 客户端的数据格式（与文档无关）：过旧时 CLIENT_OUTDATED（ClientFormatGate）；
    * 3. 快照的检查（与文档无关，子进程）：不合格时 SNAPSHOT_INVALID（details.rule），通过时得到 unitId、内容哈希与资源名；
    * 4. 一个事务：能否访问 → 能编辑时锁文档行、锁下再判断 → 再查一次重放（并发的同一次请求）→ 这次登录仍然有效 → 文档的格式
-   *    （比服务端新：DOCUMENT_TOO_NEW）→ 能编辑 → 编辑租约 → 基准修订号 → unitId → 不缩水 → 内容哈希与当前相同：写回执、设"公式待更新"，
-   *    修订号不变（unchanged）→ 否则写内容（连同哈希与非空的资源名）、修订号加一、修订记录（哈希与客户端构建）、文档的信封、审计。
+   *    （比服务端新：DOCUMENT_TOO_NEW）→ 能编辑 → 编辑租约 → 基准修订号 → unitId → 不缩水 → 内容哈希与当前相同：写回执、"公式待更新"
+   *    只清不设（两边都为真才留着），修订号不变（unchanged）→ 否则写内容（连同哈希与非空的资源名）、修订号加一、修订记录（哈希与客户端构建）、
+   *    文档的信封（"公式待更新"设成请求里的值）、审计。
    * 先判断再加锁：看不到的请求不在文档上取锁，响应的时序与不存在的文档相同（审查 A2）；只能查看的请求同样不取锁，
    * 不让能编辑的人的保存排队（复验 RA7）——它能得到的只有重放，不加锁查一次请求标识就有结论，到不了租约这一步。
    * 能编辑时先锁文档再查幂等：同一个请求的两次并发重试，后到的一方拿到锁时前一方已经提交，按幂等返回原结果，而不是误报冲突。
@@ -219,8 +220,11 @@ export class DocumentContentService {
   }
 
   /**
-   * 内容与当前相同（§3.7）：修订号不变，不写内容、修订记录与审计；写一条回执（重试照样拿到这个结果），把"公式待更新"设成请求里的值（§3.8），
-   * 给出当前修订与它的时间，unchanged 为真。回执的 requestId 被同时进行的、另一份文档上的同一个 requestId 用掉了：REQUEST_ID_CONFLICT
+   * 内容与当前相同（§3.7）：修订号不变，不写内容、修订记录与审计；写一条回执（重试照样拿到这个结果），给出当前修订与它的时间，unchanged 为真。
+   * "公式待更新"（§3.8）在这里只会清掉、不会设上——两边都为真才留着：公式的结果存在单元格里、参与内容哈希，内容相同就是结果相同。
+   * 库里已经收齐（为假）时这份内容就是收齐的那一版，这次捕获没等到收齐（为真）也不把它改成待更新（审查 A6）；
+   * 库里待更新、这次收齐了（为假）时清掉：公式等到超时、其实值没变时，收齐之后的再保存要清掉它。
+   * 回执的 requestId 被同时进行的、另一份文档上的同一个 requestId 用掉了：REQUEST_ID_CONFLICT
    */
   private async confirmUnchanged(attempt: SaveAttempt, document: DocumentRow, transaction: Transaction): Promise<SaveContentResponse> {
     const current = await this.revisions.findByRevision(document.id, document.revision, transaction)
@@ -236,8 +240,9 @@ export class DocumentContentService {
     }, transaction)
     if (receipt === undefined)
       throw new AppError('REQUEST_ID_CONFLICT')
-    if (document.formulasPending !== attempt.formulasPending)
-      await this.documents.setFormulasPending(document.id, attempt.formulasPending, transaction)
+    const formulasPending = document.formulasPending && attempt.formulasPending
+    if (formulasPending !== document.formulasPending)
+      await this.documents.setFormulasPending(document.id, formulasPending, transaction)
     return { revision: receipt.revision, savedAt: receipt.savedAt.toISOString(), unchanged: true }
   }
 

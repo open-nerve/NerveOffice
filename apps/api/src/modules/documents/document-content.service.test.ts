@@ -721,24 +721,43 @@ describe('DocumentContentService.save：内容相同不递增与回执（M3-P3 �
 
   it('回执的 requestId 刚被别处用掉：REQUEST_ID_CONFLICT，标记不改', async () => {
     const { store, service, document } = setup()
-    await service.save(saver(ALICE), document.id, query(), upload(document.unitId), HTTP_ORIGIN)
+    await service.save(saver(ALICE), document.id, query({ formulasPending: true }), upload(document.unitId), HTTP_ORIGIN)
     store.repositories.receipts.insert.mockResolvedValueOnce(undefined)
-    expect((await rejection(service.save(saver(ALICE), document.id, query({ baseRevision: 2, formulasPending: true }), upload(document.unitId), HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+    // 收齐之后的再保存本该清掉标记：回执没写成，标记照旧
+    expect((await rejection(service.save(saver(ALICE), document.id, query({ baseRevision: 2 }), upload(document.unitId), HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
     expect(store.repositories.documents.setFormulasPending).not.toHaveBeenCalled()
+    expect(store.documents.get(document.id)?.formulasPending).toBe(true)
   })
 })
 
 describe('DocumentContentService.save："公式待更新"（M3-P3 设计 §3.8）', () => {
-  it('写入时设成请求里的值；内容相同、修订号不变时照样设（收齐之后的再保存清掉它）', async () => {
+  it('写入时设成请求里的值；内容相同、修订号不变时照样清掉（收齐之后的再保存）', async () => {
     const { store, service, document } = setup()
     await service.save(saver(ALICE), document.id, query({ formulasPending: true }), upload(document.unitId), HTTP_ORIGIN)
     expect(store.documents.get(document.id)?.formulasPending).toBe(true)
+    // 内容相同、这次也没收齐：留着
+    expect(await service.save(saver(ALICE), document.id, query({ baseRevision: 2, formulasPending: true }), upload(document.unitId), HTTP_ORIGIN)).toMatchObject({ revision: 2, unchanged: true })
+    expect(store.repositories.documents.setFormulasPending).not.toHaveBeenCalled()
     expect(await service.save(saver(ALICE), document.id, query({ baseRevision: 2, formulasPending: false }), upload(document.unitId), HTTP_ORIGIN)).toMatchObject({ revision: 2, unchanged: true })
     expect(store.documents.get(document.id)?.formulasPending).toBe(false)
     expect(store.repositories.documents.setFormulasPending).toHaveBeenCalledTimes(1)
     // 标记没变时不改
     await service.save(saver(ALICE), document.id, query({ baseRevision: 2 }), upload(document.unitId), HTTP_ORIGIN)
     expect(store.repositories.documents.setFormulasPending).toHaveBeenCalledTimes(1)
+  })
+
+  it('内容相同时只清不设（审查 A6）：库里已经收齐，这次捕获没等到收齐（标记为真）——内容相同就是公式的结果相同，这份就是收齐的那一版，标记不变；回执照写', async () => {
+    const { store, service, document } = setup()
+    await service.save(saver(ALICE), document.id, query(), upload(document.unitId), HTTP_ORIGIN)
+    expect(store.documents.get(document.id)?.formulasPending).toBe(false)
+    const request = query({ baseRevision: 2, formulasPending: true })
+    expect(await service.save(saver(ALICE), document.id, request, upload(document.unitId), HTTP_ORIGIN)).toMatchObject({ revision: 2, unchanged: true })
+    expect(store.documents.get(document.id)?.formulasPending).toBe(false)
+    expect(store.repositories.documents.setFormulasPending).not.toHaveBeenCalled()
+    expect(store.receipts.map(receipt => receipt.requestId)).toEqual([request.requestId])
+    // 内容变了的写入照样按请求设上
+    expect(await service.save(saver(ALICE), document.id, query({ baseRevision: 2, formulasPending: true }), upload(document.unitId, ',"z":1'), HTTP_ORIGIN)).toMatchObject({ revision: 3, unchanged: false })
+    expect(store.documents.get(document.id)?.formulasPending).toBe(true)
   })
 
   it('计入负载摘要：同一个 requestId 而标记不同，是另一个请求（REQUEST_ID_CONFLICT）；不带标记等于否', async () => {
