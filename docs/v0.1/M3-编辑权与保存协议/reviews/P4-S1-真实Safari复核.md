@@ -212,4 +212,4 @@ pnpm --filter @nerve-office/e2e run safari:selftest --front    # 12 步，约 3 
 - **S3**：`capture-policy.ts` 照 `capture-reference.ts` 的规则写（它的表驱动用例可以直接搬过去）；正式实现就绪之后，自检的 `selftest-capture-rule.ts` 改用它、删掉参考实现。修改的时刻用编辑器的信号（§五 第 2 点）。
 - **S4**：`SheetEditor` 的公式进度可以直接取 `ChangeTracker.formulaProgress`（这次已加）；组合输入的跟踪照 `selftest-capture-rule.ts` 的 `watchComposition`（document 捕获阶段、失焦与隐藏复位、页头除外）；主线程模式的重建按 §四 F2 的推荐做法规避（或者 S6 避开）。
 - **S6**：主线程模式用 `?formula=main`（`selftest-report.ts` 的 `FORMULA_MODE_PARAM`）；E2E 的离开提示与脚本跳转见 F1。
-- **S7**：实现之后再跑：hidden-save 改为由自动保存自己在隐藏时上传（去掉第二次显式保存），formula-timing 改为核对服务器上的公式值；规避 F2 之后删掉 `KNOWN_PROBLEMS`。
+- **S7**：实现之后再跑：hidden-save 改为由自动保存自己在隐藏时上传（去掉第二次显式保存），formula-timing 改为核对服务器上的公式值；规避 F2 之后删掉 `KNOWN_PROBLEMS`。（主会话补记：S5 已规避 F2 并删掉 `KNOWN_PROBLEMS`，页面自检与校准恢复为全部要求通过。）
