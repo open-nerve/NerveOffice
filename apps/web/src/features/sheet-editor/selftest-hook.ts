@@ -74,6 +74,23 @@ function watchPage(target: Window): PageLog {
   return log
 }
 
+/**
+ * 自检交回结果时整页跳走：捕获时机的场景在编辑时改了内容、没有保存，编辑器页的离开提示（page-guards.ts 的 beforeunload）会拦下这次跳转。
+ * 真实 Safari 27 对脚本发起的跳转同样弹出"确定离开"的对话框（2026-10-05 第一次 S1 运行：change-detection 做完、跳走时页面停住，
+ * 之后再没有请求与结果），对话框是模态的，结果交不回去；Playwright 的浏览器里没有用户手势就不弹。所以自检自己跳走的那一刻
+ * （allowLeave 之后）在捕获阶段先于页面的监听拦下这个事件，离开提示不生效；别的时候照常（DOM 规范：目标上捕获阶段的监听先于冒泡阶段的）
+ */
+function allowLeaveForReport(target: Window): () => void {
+  let leaving = false
+  target.addEventListener('beforeunload', (event) => {
+    if (leaving)
+      event.stopImmediatePropagation()
+  }, { capture: true })
+  return () => {
+    leaving = true
+  }
+}
+
 /** 载入失败时的说明 */
 function failureOf(load: EditorPageLoad): string {
   return 'error' in load ? `${load.kind}：${describe(load.error)}` : load.kind
@@ -84,6 +101,7 @@ export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElem
   const startedAt = new Date().toISOString()
   const documentId = documentIdFromPagePath(window.location.pathname)
   const log = watchPage(window)
+  const allowLeave = allowLeaveForReport(window)
   let started = false
   let unsubscribe: (() => void) | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -106,6 +124,7 @@ export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElem
         return { mode: mode?.kind, surface, save: save?.status }
       },
       visibility: () => log.visibility,
+      allowLeave,
       pageErrors: () => log.pageErrors,
       consoleErrors: () => log.consoleErrors,
       ignoredNotices: () => log.ignoredNotices,

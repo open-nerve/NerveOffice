@@ -6,7 +6,7 @@
 // - 每一步的地址（selftestPageUrl）：自检的入口页（测试构建的 selftest.html）带上 # 片段——账户、文档、场景、公式模式与结果交回的地址；
 // - 结果的核对（problemsOf）：页面上的检查之外，驱动脚本与用例另外核对的（公式算出的值与样本的预期相同；enter-exit 交回了两次切换的耗时）；
 // - 服务器上的核对（serverProblemsOf，直接查库）：只看不改的步骤没有保存过；enter-exit 恰好多了一个修订、内容里有改的那一格；
-//   hidden-save 保存了两次、内容里有隐藏之前与隐藏的那一刻写的两格。
+//   formula-timing 最后退出编辑时保存了一次；hidden-save 保存了两次、内容里有隐藏之前与隐藏的那一刻写的两格。
 // 这里只有纯函数与读写库的辅助，不起浏览器
 import type { SelftestFormulaMode, SelftestReport, SelftestScenario } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import type { SnapshotFor, TestUser } from './database.ts'
@@ -117,6 +117,24 @@ export function selftestPageUrl(origin: string, step: SelftestStep, next: string
   return `${new URL(SELFTEST_PAGE, origin).href}#${fragment.toString()}`
 }
 
+/**
+ * 已知的问题（不算这一步不通过，单独列出）：M3-P4 S1 核实的 SDK 问题——主线程模式下在计算中重建编辑器，旧的实例正在算的那一轮
+ * 继续跑完（销毁时运行时的停止标记被复位，计算的循环在让出点之后接着走），用已经清空的函数表解析剩下的公式，把只会得出 #NAME? 的
+ * 语法树写进 engine-formula 模块级的缓存 FORMULA_AST_CACHE（键是"unitId:表:列:行:公式"），同一页里新建的实例算到这些格时命中它们。
+ * Worker 模式下缓存在 Worker 里、随旧的编辑器终止，没有这个问题。主线程模式在 M3 只有测试在用（M4 才是生产的退路）：规避落地
+ * （见 reviews/P4-S1-真实Safari复核.md）之前，formula-timing 的主线程那一步恰好是这一项不通过；规避之后删掉这一条，校准用例随之要求它通过
+ */
+export const KNOWN_PROBLEMS: Readonly<Record<string, readonly RegExp[]>> = {
+  'formula-timing-main': [/^formula\.rebuild-during-calc：在计算中重建之后，新的编辑器里强制重算，\d+\/\d+ 个与定义不同（其中 #NAME\? ×\d+）/],
+}
+
+/** 一步的问题分成已知的（KNOWN_PROBLEMS）与别的 */
+export function splitKnown(stepId: string, problems: readonly string[]): { readonly problems: string[], readonly known: string[] } {
+  const patterns = KNOWN_PROBLEMS[stepId] ?? []
+  const isKnown = (problem: string): boolean => patterns.some(pattern => pattern.test(problem))
+  return { problems: problems.filter(problem => !isKnown(problem)), known: problems.filter(isKnown) }
+}
+
 /** 公式算出的值的键（与自检的 formulaValues 相同："工作表 id!A1"） */
 function formulaKey(sheetId: string, cell: string): string {
   return `${sheetId}!${cell}`
@@ -184,6 +202,8 @@ interface ServerExpectation {
 function serverExpectation(step: SelftestStep): ServerExpectation {
   if (step.scenario === 'enter-exit')
     return { revision: 2, why: '退出编辑时保存了一次', cells: [ENTER_EXIT_EDIT] }
+  if (step.scenario === 'formula-timing')
+    return { revision: 2, why: '最后的"计算进行中重建"退出编辑时保存了一次', cells: [] }
   if (step.scenario === 'hidden-save')
     return { revision: 3, why: '隐藏之前保存一次、隐藏的那一刻又保存一次', cells: HIDDEN_SAVE_EDITS }
   return { revision: 1, why: '没有保存过', cells: [] }
@@ -191,7 +211,8 @@ function serverExpectation(step: SelftestStep): ServerExpectation {
 
 /**
  * 一步在服务器上该有的样子（空数组就是对的）：自检只看不改的几步，文档还是修订号 1（没有保存过）；enter-exit 恰好保存了一次
- * （修订号 2），内容里有它改的那一格（ENTER_EXIT_EDIT）；hidden-save 保存了两次（修订号 3），内容里有它写的两格（HIDDEN_SAVE_EDITS）。
+ * （修订号 2），内容里有它改的那一格（ENTER_EXIT_EDIT）；formula-timing 最后退出编辑时保存了一次（修订号 2）；hidden-save 保存了两次
+ * （修订号 3），内容里有它写的两格（HIDDEN_SAVE_EDITS）。
  * 返回修订号与问题
  */
 export async function serverProblemsOf(step: SelftestStep): Promise<{ readonly revision: number | undefined, readonly problems: string[] }> {

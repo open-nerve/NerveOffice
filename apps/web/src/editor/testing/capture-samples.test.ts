@@ -7,7 +7,7 @@ import { aggregateValues, BIG_SHEET, bigSheet, cellCount, FORMULA_SAMPLE, formul
 function computedSnapshot(edit: (sheets: Record<string, SampleCells>) => void = () => {}): Record<string, { cellData: SampleCells }> {
   const sheets = Object.fromEntries(formulaSampleSheets().map(sheet => [sheet.id, structuredClone(sheet.cellData)]))
   edit(sheets)
-  const { chain, aggregate, cross, slow, volatile } = FORMULA_SAMPLE
+  const { chain, aggregate, cross, slow, volatile, heavy } = FORMULA_SAMPLE
   const cells = (id: string): SampleCells => sheets[id] ?? {}
   const start = cells(chain.id)[0]?.[0]?.v as number
   for (let row = 1; row < chain.length; row += 1)
@@ -22,6 +22,9 @@ function computedSnapshot(edit: (sheets: Record<string, SampleCells>) => void = 
   })
   for (let index = 0; index < slow.count; index += 1)
     Object.assign(cells(slow.id)[index]?.[0] ?? {}, { v: values.filter(value => value > index * slow.step).reduce((total, value) => total + value, 0), t: 2 })
+  const heavyData = Array.from({ length: heavy.rows }, (_, row) => cells(heavy.id)[row]?.[0]?.v as number)
+  for (let index = 0; index < heavy.count; index += 1)
+    Object.assign(cells(heavy.id)[index]?.[2] ?? {}, { v: heavyData.filter(value => value > index * heavy.step).reduce((total, value) => total + value, 0), t: 2 })
   ;[46000.5, 46000, 0.25, 4242, 0.5].forEach((value, row) => {
     Object.assign(cells(volatile.id)[row]?.[0] ?? {}, { v: value, t: 2 })
   })
@@ -33,12 +36,18 @@ function text(sheets: Record<string, { cellData: SampleCells }>): string {
 }
 
 describe('公式样本（M0-P3 V07 的 formula-scenarios，按自检的时限缩放）', () => {
-  it('五张表：链 200 层、聚合 1 万行与 4 个聚合公式、跨表 3 个、SUMPRODUCT 100 个、易变 5 个；公式都不带缓存值', () => {
+  it('六张表：链 200 层、聚合 1 万行与 4 个聚合公式、跨表 3 个、SUMPRODUCT 100 个、易变 5 个（都不带缓存值）；"重"表 500 个带缓存值的 SUMPRODUCT', () => {
     const sheets = formulaSampleSheets()
-    expect(sheets.map(sheet => [sheet.id, sheet.name])).toEqual([['f-chain', '链'], ['f-aggregate', '聚合'], ['f-cross', '跨表'], ['f-slow', '慢'], ['f-volatile', '易变']])
-    const formulas = sheets.flatMap(sheet => Object.values(sheet.cellData).flatMap(row => Object.values(row))).filter(cell => cell.f !== undefined)
-    expect(formulas).toHaveLength(199 + 4 + 3 + 100 + 5)
-    expect(formulas.every(cell => cell.v === undefined)).toBe(true)
+    expect(sheets.map(sheet => [sheet.id, sheet.name])).toEqual([['f-chain', '链'], ['f-aggregate', '聚合'], ['f-cross', '跨表'], ['f-slow', '慢'], ['f-volatile', '易变'], ['f-heavy', '重']])
+    const formulasOf = (sheetIds: readonly string[]) => sheets.filter(sheet => sheetIds.includes(sheet.id)).flatMap(sheet => Object.values(sheet.cellData).flatMap(row => Object.values(row))).filter(cell => cell.f !== undefined)
+    const uncached = formulasOf(['f-chain', 'f-aggregate', 'f-cross', 'f-slow', 'f-volatile'])
+    expect(uncached).toHaveLength(199 + 4 + 3 + 100 + 5)
+    expect(uncached.every(cell => cell.v === undefined)).toBe(true)
+    const heavy = formulasOf(['f-heavy'])
+    expect(heavy).toHaveLength(500)
+    expect(heavy.every(cell => typeof cell.v === 'number')).toBe(true)
+    // 带的缓存值就是按定义算出的
+    expect(verifyFormulaSnapshot(JSON.stringify({ sheets: Object.fromEntries(sheets.map(sheet => [sheet.id, { cellData: sheet.cellData }])) })).byKind.heavy).toBe('0/500')
     const slow = sheets.find(sheet => sheet.id === 'f-slow')?.cellData
     expect(slow?.[3]?.[0]?.f).toBe('=SUMPRODUCT((\'聚合\'!$B$1:$B$10000>30)*\'聚合\'!$B$1:$B$10000)')
     expect(sheets.find(sheet => sheet.id === 'f-cross')?.cellData[1]?.[0]?.f).toBe('=SUM(\'聚合\'!B1:B10000)+\'链\'!A1')
@@ -55,7 +64,7 @@ describe('公式样本（M0-P3 V07 的 formula-scenarios，按自检的时限缩
 describe('按定义核对公式的值（verifyFormulaSnapshot）', () => {
   it('值都按定义算出时全部一致', () => {
     const verdict = verifyFormulaSnapshot(text(computedSnapshot()))
-    expect(verdict).toEqual({ checked: 311, stale: [], staleCount: 0, byKind: { chain: '0/199', aggregate: '0/4', cross: '0/3', slow: '0/100', volatile: '0/5' } })
+    expect(verdict).toEqual({ checked: 811, stale: [], staleCount: 0, byKind: { chain: '0/199', aggregate: '0/4', cross: '0/3', slow: '0/100', volatile: '0/5', heavy: '0/500' }, errors: {} })
   })
 
   it('改了输入、公式还是旧值：认出过期的（链!A1 改了，链与依赖它的跨表都过期；最多列出 limit 个）', () => {
@@ -97,9 +106,19 @@ describe('按定义核对公式的值（verifyFormulaSnapshot）', () => {
     expect(randOf(text(sheets))).toBe(0.25)
   })
 
-  it('公式的值缺了（还没算出来）也算过期', () => {
+  it('公式的值缺了（还没算出来）也算过期（"重"表带着缓存值，是对的）', () => {
     const verdict = verifyFormulaSnapshot(text(Object.fromEntries(formulaSampleSheets().map(sheet => [sheet.id, { cellData: sheet.cellData }]))))
-    expect(verdict.staleCount).toBe(verdict.checked)
+    expect(verdict.staleCount).toBe(verdict.checked - 500)
+  })
+
+  it('错了的格里不是数的值按写法计数（例如重建之后命中坏掉的语法树时的 #NAME?）', () => {
+    const sheets = computedSnapshot()
+    const slow = sheets[FORMULA_SAMPLE.slow.id]?.cellData
+    const heavy = sheets[FORMULA_SAMPLE.heavy.id]?.cellData
+    for (const cell of [slow?.[0]?.[0], slow?.[1]?.[0], heavy?.[7]?.[2]])
+      Object.assign(cell ?? {}, { v: '#NAME?', t: 1 })
+    const verdict = verifyFormulaSnapshot(text(sheets))
+    expect([verdict.staleCount, verdict.errors, verdict.byKind.slow, verdict.byKind.heavy]).toEqual([3, { '#NAME?': 3 }, '2/100', '1/500'])
   })
 })
 

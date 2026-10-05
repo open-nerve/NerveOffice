@@ -5,7 +5,7 @@ import type { EditorProbe, ProbeCommand } from './e2e-probe.ts'
 import type { EntryApi, EntryRange, EntrySheet, EntryWorkbook } from './read-only-entries.ts'
 import type { SelftestCheck, SelftestPage, SelftestTiming } from './selftest-report.ts'
 import { canonicalJson, contentOf } from './content-compare.ts'
-import { byRole, isVisible } from './selftest-dom.ts'
+import { byRole, isVisible, waitFor } from './selftest-dom.ts'
 
 /**
  * 编辑器页现在的样子：阅读还是编辑（edit-mode.ts 的状态，例如 reading、entering、editing、exiting）、编辑器容器的状态（loading、ready、
@@ -28,6 +28,8 @@ export interface SelftestHost {
   /** 编辑器页现在的样子：场景里点了"编辑""退出编辑""保存"之后按它等 */
   readonly view: () => SelftestPageView
   readonly visibility: () => readonly string[]
+  /** 自检要整页跳走交回结果了：之后编辑器页的离开提示不拦（编辑时改过内容的场景留着没保存的修改） */
+  readonly allowLeave: () => void
   readonly pageErrors: () => readonly string[]
   readonly consoleErrors: () => readonly string[]
   readonly ignoredNotices: () => readonly string[]
@@ -203,4 +205,41 @@ export function chromeButton(session: Session, name: string): HTMLElement | unde
 export function describeView(session: Session): string {
   const view = session.host.view()
   return `页面 ${view.mode ?? '没有状态'}，编辑器 ${view.surface}，容器上是 ${session.host.surface.getAttribute('data-editor-access') ?? '没有编辑器'}`
+}
+
+// ---- 进入、退出编辑（M3-P2 S5；M3-P4 S1 的公式时序也用）----
+
+/** 一次切换最多等多久：申请编辑权或保存、释放，重建，再到 steady（渲染完成之后 3 秒）。Playwright 的三个浏览器里 4 秒上下 */
+export const SWITCH_TIMEOUT_MS = 60_000
+
+/**
+ * 点了"编辑""退出编辑"之后等页面到 target（editing 或 reading）的 steady，而且容器上是那一种编辑器（edit、read）。
+ * 先等切换开始（页面进入过程中的状态 passing：entering、exiting；页头的处理是异步的，退出编辑先确认会话，点下去的那一刻还没开始）；
+ * 之后离开了过程中的状态却没有到 target 时不再等：进入没有成功、退出时保存失败、失去编辑权
+ */
+export async function untilSwitched(session: Session, target: 'editing' | 'reading', passing: 'entering' | 'exiting'): Promise<void> {
+  const access = target === 'editing' ? 'edit' : 'read'
+  const mode = (): string | undefined => session.host.view().mode
+  if (!await waitFor(() => mode() === passing || mode() === target, SIGNAL_TIMEOUT_MS))
+    fail(`点了之后没有开始切换（${describeView(session)}）`)
+  const settled = (): boolean => {
+    const view = session.host.view()
+    if (view.mode === target)
+      return view.surface === 'steady' && session.host.surface.getAttribute('data-editor-access') === access
+    return view.mode !== passing
+  }
+  if (!await waitFor(settled, SWITCH_TIMEOUT_MS, 50))
+    fail(`${SWITCH_TIMEOUT_MS / 1000} 秒内没有到 steady（${describeView(session)}）`)
+  if (mode() !== target)
+    fail(`没有到${target === 'editing' ? '编辑' : '阅读'}（${describeView(session)}）`)
+}
+
+/** 切换之后换上新的编辑器：探针随编辑器重建（旧的销毁时撤掉，新的就绪时装上） */
+export function adoptEditor(session: Session, previous: EditorProbe): void {
+  const probe = window.__nerveEditorProbe
+  if (probe === undefined || probe === previous)
+    fail('页面里没有换上新的编辑器的探针')
+  session.probe = probe
+  session.api = probe.univerAPI as unknown as SelftestApi
+  session.unitId = session.api.getActiveWorkbook().getId()
 }

@@ -26,16 +26,13 @@ import { FACADE_ENTRIES, FORMULA_MUTATION_CELL, FORMULA_MUTATION_ID, PERMISSION_
 import { CAPTURE_SCENARIO_RUNNERS, EXPECTS_HIDDEN } from './selftest-capture.ts'
 import { accessibleName, byExactText, byRole, centerOf, clickAt, dialogTitled, isShown, isVisible, keyboardTarget, nextFrames, pressKeys, rightClickAt, sheetCanvas, sheetTab, univerIsMac, waitFor } from './selftest-dom.ts'
 import { encodeSelftestReport, ENTER_EXIT_EDIT, isSelftestScenario, NEXT_PARAM, nextProblem, reportUrl, SELFTEST_PARAM, SELFTEST_REPORT_FORMAT } from './selftest-report.ts'
-import { check, CHECK_TIMEOUT_MS, chromeButton, describe, describeCommand, describeView, differences, fail, has, lastSeq, SCENARIO_BUDGET_MS, seenSince, SIGNAL_TIMEOUT_MS, truncate } from './selftest-session.ts'
+import { adoptEditor, check, CHECK_TIMEOUT_MS, chromeButton, describe, describeCommand, describeView, differences, fail, has, lastSeq, SCENARIO_BUDGET_MS, seenSince, SIGNAL_TIMEOUT_MS, SWITCH_TIMEOUT_MS, truncate, untilSwitched } from './selftest-session.ts'
 import { installSwitchTiming, summarizeSwitch, SWITCH_TIMING_OPTIONS, switchDurations } from './switch-timing.ts'
 
 export type { SelftestHost, SelftestPageView } from './selftest-session.ts'
 
 /** 公式在 Worker 里算出结果最多等多久（Worker 的启动与第一次计算） */
 const FORMULA_TIMEOUT_MS = 30_000
-
-/** 一次切换最多等多久：申请编辑权或保存、释放，重建，再到 steady（渲染完成之后 3 秒）。Playwright 的三个浏览器里 4 秒上下 */
-const SWITCH_TIMEOUT_MS = 60_000
 
 // ---- 界面 ----
 
@@ -562,38 +559,6 @@ async function editChromeScenario(session: Session): Promise<void> {
 
 // ---- 进入、退出编辑（M3-P2 S5） ----
 
-/**
- * 点了"编辑""退出编辑"之后等页面到 target（editing 或 reading）的 steady，而且容器上是那一种编辑器（edit、read）。
- * 先等切换开始（页面进入过程中的状态 passing：entering、exiting；页头的处理是异步的，退出编辑先确认会话，点下去的那一刻还没开始）；
- * 之后离开了过程中的状态却没有到 target 时不再等：进入没有成功、退出时保存失败、失去编辑权
- */
-async function untilSwitched(session: Session, target: 'editing' | 'reading', passing: 'entering' | 'exiting'): Promise<void> {
-  const access = target === 'editing' ? 'edit' : 'read'
-  const mode = (): string | undefined => session.host.view().mode
-  if (!await waitFor(() => mode() === passing || mode() === target, SIGNAL_TIMEOUT_MS))
-    fail(`点了之后没有开始切换（${describeView(session)}）`)
-  const settled = (): boolean => {
-    const view = session.host.view()
-    if (view.mode === target)
-      return view.surface === 'steady' && session.host.surface.getAttribute('data-editor-access') === access
-    return view.mode !== passing
-  }
-  if (!await waitFor(settled, SWITCH_TIMEOUT_MS, 50))
-    fail(`${SWITCH_TIMEOUT_MS / 1000} 秒内没有到 steady（${describeView(session)}）`)
-  if (mode() !== target)
-    fail(`没有到${target === 'editing' ? '编辑' : '阅读'}（${describeView(session)}）`)
-}
-
-/** 切换之后换上新的编辑器：探针随编辑器重建（旧的销毁时撤掉，新的就绪时装上） */
-function adoptEditor(session: Session, previous: EditorProbe): void {
-  const probe = window.__nerveEditorProbe
-  if (probe === undefined || probe === previous)
-    fail('页面里没有换上新的编辑器的探针')
-  session.probe = probe
-  session.api = probe.univerAPI as unknown as SelftestApi
-  session.unitId = session.api.getActiveWorkbook().getId()
-}
-
 /** 点页头里的按钮（真实的按钮，合成的点击），等切换完；记下这次切换的耗时，返回说明 */
 async function switchBy(session: Session, timing: SwitchTimingRecorder, button: string, direction: Extract<SwitchDirection, 'enter' | 'exit'>): Promise<string> {
   const target = chromeButton(session, button)
@@ -760,7 +725,10 @@ export async function runSelftestAndReport(host: SelftestHost): Promise<Selftest
     return undefined
   }
   const report = await runEditorSelftest(host, params.get(SELFTEST_PARAM) ?? '')
-  if (next !== null)
-    window.location.replace(reportUrl(next, await encodeSelftestReport(report)))
+  if (next !== null) {
+    const url = reportUrl(next, await encodeSelftestReport(report))
+    host.allowLeave()
+    window.location.replace(url)
+  }
   return report
 }

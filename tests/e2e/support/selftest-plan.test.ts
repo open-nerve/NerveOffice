@@ -4,7 +4,7 @@ import type { TestUser } from './database.ts'
 import { describe, expect, it } from 'vitest'
 import { CAPTURE_SCENARIOS, SELFTEST_REPORT_FORMAT, SELFTEST_SCENARIOS } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import { SAMPLE_FORMULAS } from './read-only-sample.ts'
-import { problemsOf, SELFTEST_PAGE, SELFTEST_STEPS, selftestPageUrl, stepsOf } from './selftest-plan.ts'
+import { KNOWN_PROBLEMS, problemsOf, SELFTEST_PAGE, SELFTEST_STEPS, selftestPageUrl, splitKnown, stepsOf } from './selftest-plan.ts'
 
 function user(username: string): TestUser {
   return { id: `${username}-id`, username, displayName: username, password: `${username} 的密码 &=#`, personalSpaceId: 'space' }
@@ -114,5 +114,21 @@ describe('页面自检的结果有什么问题', () => {
     expect(problemsOf(report({ scenario: 'enter-exit' }))).toEqual(['没有交回 switch.enter 的耗时', '没有交回 switch.exit 的耗时'])
     // 没跑完时只说没跑完的原因
     expect(problemsOf(report({ scenario: 'enter-exit', failure: '自检中途出错' }))).toEqual(['没能跑完：自检中途出错'])
+  })
+})
+
+describe('已知的问题（KNOWN_PROBLEMS）', () => {
+  const POISONED = 'formula.rebuild-during-calc：在计算中重建之后，新的编辑器里强制重算，350/811 个与定义不同（其中 #NAME? ×350）：重!C151（{}）'
+
+  it('只有公式时序的主线程那一步有：主线程模式在计算中重建、命中坏掉的语法树（M3-P4 S1 核实的 SDK 问题）', () => {
+    expect(Object.keys(KNOWN_PROBLEMS)).toEqual(['formula-timing-main'])
+    expect(SELFTEST_STEPS.some(step => step.id === 'formula-timing-main' && step.formula === 'main-thread')).toBe(true)
+  })
+
+  it('那一步里认出那一条，别的照常算问题；别的步骤里同一条也照常算问题', () => {
+    expect(splitKnown('formula-timing-main', [POISONED, 'formula.chain：错了'])).toEqual({ problems: ['formula.chain：错了'], known: [POISONED] })
+    expect(splitKnown('formula-timing-worker', [POISONED])).toEqual({ problems: [POISONED], known: [] })
+    // 别的说法（例如没能在计算中重建）不是那一条
+    expect(splitKnown('formula-timing-main', ['formula.rebuild-during-calc：阅读时的这一轮在 900 ms 时已经算完，没能在计算中重建：样本要加大']).known).toEqual([])
   })
 })
