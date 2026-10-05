@@ -1,7 +1,8 @@
 // 表格编辑器以 E2E 为主（规范 §8.3）；这里只测 E2E 做不出来的部分：创建过程中出错时，已经创建的都要销毁（审查 B8）；
 // 按打开方式组合的是哪些（M2-P3 设计 §3.1–§3.4：授权服务、插件档案、只读守卫在创建工作簿之前装上）；
 // 只读时的编排（P3 审查 A3）：防火墙与变更检测用同一份判定的配置，创建工作簿之后设权限点，就绪时装界面的处理、清空撤销栈；
-// 链接的改写（M3-P3 设计 §3.6）：阅读与编辑都在入口守卫之后、创建工作簿之前装上
+// 链接的改写（M3-P3 设计 §3.6）：阅读与编辑都在入口守卫之后、创建工作簿之前装上；
+// 语言服务换成销毁之后不抛错的实现（internal-api 的 disposalSafeLocaleOverride，子类本身的行为由 locale-service.test.ts 测）
 import type { EditorAccess } from './editor-access.ts'
 import type { PluginEntry } from './profile/plugin-entry.ts'
 import type { ReadOnlyGuard } from './read-only/read-only-guard.ts'
@@ -11,7 +12,7 @@ import { FUniver } from '@univerjs/core/facade'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createChangeTracker } from './change-tracking/change-tracker.ts'
 import { imagePolicyReport } from './image-function/worker-report.ts'
-import { IAuthzIoService, injectorOf, WorkbookViewPermission } from './internal-api/index.ts'
+import { disposalSafeLocaleOverride, IAuthzIoService, injectorOf, WorkbookViewPermission } from './internal-api/index.ts'
 import { installEntryGuards } from './profile/entry-guards.ts'
 import { installLinkPolicy } from './profile/link-policy.ts'
 import { CHANGE_DETECTION_EXCLUDED_MUTATIONS, sheetPluginEntries } from './profile/sheet-profile.ts'
@@ -217,10 +218,20 @@ function steppingFacade(log: string[], unitId: string) {
       return workbook
     },
   }
-  vi.spyOn(FUniver, 'newAPI').mockReturnValue(api as unknown as FUniver)
+  let created: Univer | undefined
+  vi.spyOn(FUniver, 'newAPI').mockImplementation((univer) => {
+    created = univer as Univer
+    return api as unknown as FUniver
+  })
   return {
     /** createWorkbook 给出的工作簿 */
     workbook,
+    /** 编辑器创建的 Univer 实例（FUniver.newAPI 收到的） */
+    univer(): Univer {
+      if (created === undefined)
+        throw new Error('编辑器还没有创建 Univer')
+      return created
+    },
     reach(stage: LifecycleStages): void {
       if (stage === LifecycleStages.Rendered)
         log.push('rendered')
@@ -311,6 +322,31 @@ async function reachReady(facade: ReturnType<typeof steppingFacade>): Promise<vo
   await new Promise(resolve => setTimeout(resolve, 0))
   FakeWorker.created[0]?.dispatchEvent(new MessageEvent('message', { data: imagePolicyReport(true) }))
 }
+
+/** 编辑器的 Univer 里的语言服务：标识符取自依赖替换本身（internal-api 之外不直接引用 LocaleService，lint 拦着） */
+function localeServiceOf(univer: Univer): { readonly t: (key: string) => string } {
+  const identifier = disposalSafeLocaleOverride()[0]?.[0]
+  if (identifier === undefined)
+    throw new Error('依赖替换里没有语言服务')
+  return injectorOf(univer).get(identifier) as { readonly t: (key: string) => string }
+}
+
+describe('销毁之后的语言服务（internal-api 的 disposalSafeLocaleOverride）', () => {
+  // sheets-formula 的进度计时器在计算开始 1 秒后调用它（取"正在分析公式..."），编辑器销毁时不清（main 16f8a1d 的 CI 上的页面异常）
+  const ANALYZING = 'sheets-formula.progress.analyzing'
+
+  it('编辑器的 Univer 用的是销毁之后不抛错的语言服务：销毁之前照常翻译，销毁之后 t() 交回键本身', async () => {
+    const facade = steppingFacade([], 'unit-l1')
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-l1'), access: 'edit' })
+    await reachReady(facade)
+    const editor = await creating
+    const locale = localeServiceOf(facade.univer())
+    expect(locale.t(ANALYZING)).toBe('正在分析公式...')
+    editor.dispose()
+    expect(locale.t(ANALYZING)).toBe(ANALYZING)
+  })
+})
 
 describe('模式切换一律重建（M3-P2 设计 §3.1、§3.3）', () => {
   const STATE = { sheetId: 'sheet-2', topLeft: { row: 40, column: 3 }, selection: undefined }

@@ -5,6 +5,7 @@ import formulaProtocolSource from './formula-protocol.ts?raw'
 import * as internalApi from './index.ts'
 import source from './index.ts?raw'
 import injectorSource from './injector.ts?raw'
+import localeServiceSource from './locale-service.ts?raw'
 import { INTERNAL_API_REGISTRY } from './registry.ts'
 import registrySource from './registry.ts?raw'
 import * as uiApi from './ui.ts'
@@ -56,6 +57,7 @@ const SOURCES: Readonly<Record<string, string>> = {
   'dom-markers.ts': domMarkersSource,
   'formula-protocol.ts': formulaProtocolSource,
   'injector.ts': injectorSource,
+  'locale-service.ts': localeServiceSource,
   'registry.ts': registrySource,
 }
 /** 两个出口 */
