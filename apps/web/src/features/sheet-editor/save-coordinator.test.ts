@@ -1142,6 +1142,23 @@ describe('保存协议加固（M3-P3 设计 §3.7、§3.8、§3.10）', () => {
       return first
     }
 
+    it('busy（M3-P4：页面关闭时有保存在途不释放编辑权）：在途、排着与转入终态之后核对（原样重发）的期间都为真，都结束了为假', async () => {
+      const context = setup({ baseRevision: 3 })
+      expect(context.coordinator.busy()).toBe(false)
+      context.control.edit('甲')
+      const saving = context.coordinator.save()
+      expect(context.coordinator.busy()).toBe(true)
+      ;(await sent(context.calls, 1)).reject(new NetworkError('断网'))
+      await saving
+      expect(context.coordinator.busy()).toBe(false)
+      context.coordinator.block('client-outdated')
+      expect(context.coordinator.view().checking).toBe(true)
+      expect(context.coordinator.busy()).toBe(true)
+      ;(await sent(context.calls, 2)).resolve(saved(4))
+      await context.coordinator.settled()
+      expect(context.coordinator.busy()).toBe(false)
+    })
+
     it('续租得知过旧（block）：核对期间 checking 为真、还说不准；原样重发拿到原来的结果（其实已经提交）——按它确认，修改都已保存，"保存失败"不再说；settled 等核对完', async () => {
       const context = setup({ baseRevision: 3 })
       const first = await unknownSave(context)

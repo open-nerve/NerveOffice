@@ -117,8 +117,11 @@ export interface EditorPageOptions {
   /** 页头：交互屏障挂着时只有它可以交互（interaction-barrier.ts） */
   readonly chrome: HTMLElement
   readonly api: EditorPageApi
-  /** 新建编辑器（适配层的 createSheetEditor）：容器由这里绑定 */
-  readonly createEditor: (options: Parameters<CreateModeEditor>[0] & { readonly container: HTMLElement }) => ReturnType<CreateModeEditor>
+  /**
+   * 新建编辑器（适配层的 createSheetEditor）：容器由这里绑定；页面自己的界面（页头）也交过去——组合输入与面板防抖的输入目标在页头里的
+   * 不算文档的输入（M3-P4 设计 §3.6）
+   */
+  readonly createEditor: (options: Parameters<CreateModeEditor>[0] & { readonly container: HTMLElement, readonly pageUi: Node }) => ReturnType<CreateModeEditor>
   readonly page: PageLocation
   readonly sessionChannel: SessionChannel
   /** 单调的"现在"与计时器：编辑租约的心跳、阅读时的检查 */
@@ -500,7 +503,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       documentId: id,
       clientInstanceId,
       api,
-      createEditor: async editorOptions => options.createEditor({ ...editorOptions, container: surface }),
+      createEditor: async editorOptions => options.createEditor({ ...editorOptions, container: surface, pageUi: options.chrome }),
       clock,
       visibility: options.visibility,
       lastActivity: () => lastActivity,

@@ -159,6 +159,8 @@ interface CreateOptions {
   readonly snapshot: string
   readonly access: EditorAccess
   readonly viewState?: SheetViewState | undefined
+  readonly recalculate?: boolean
+  readonly pageUi: Node
 }
 
 interface Setup {
@@ -370,7 +372,7 @@ describe('就绪之前页头之外的交互一律拦下（Codex 评审 CX1，独
 
 describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
   it('打开即阅读（M3-P2 设计 §3.4）：先确认会话，再读取元数据与内容，以只读创建编辑器；能编辑时进入阅读、有"编辑"，不申请编辑权', async () => {
-    const { editorPage, surface, api, createEditor, fake, editLease, editIntent } = setup({ editIntent: false })
+    const { editorPage, surface, api, createEditor, fake, editLease, editIntent, chrome } = setup({ editIntent: false })
     expect(surface.dataset.editorState).toBeUndefined()
     const loading = editorPage.load()
     expect(surface.dataset.editorState).toBe('loading')
@@ -378,7 +380,7 @@ describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
     expect(api.session).toHaveBeenCalledOnce()
     expect(api.document).toHaveBeenCalledWith(DOCUMENT_ID)
     expect(api.content).toHaveBeenCalledWith(DOCUMENT_ID)
-    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, snapshot: '{"id":"unit-1"}', access: 'read' })
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'read' })
     expect(editorPage.view()).toMatchObject({ load: { kind: 'ready', title: '周报' }, mode: { kind: 'reading', canEdit: true }, save: undefined, session: 'active' })
     expect(editLease.acquire).not.toHaveBeenCalled()
     expect(editIntent.clear).not.toHaveBeenCalled()
@@ -388,9 +390,9 @@ describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
   })
 
   it('新建的表格（?edit=new）：载入之后直接申请、以可编辑创建，进入之后去掉地址里的标记；就绪之后可以保存，基准是内容的修订号', async () => {
-    const { editorPage, surface, api, createEditor, fake, editIntent } = setup()
+    const { editorPage, surface, api, createEditor, fake, editIntent, chrome } = setup()
     await editorPage.load()
-    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, snapshot: '{"id":"unit-1"}', access: 'edit' })
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'edit' })
     expect(editorPage.view()).toMatchObject({ load: { kind: 'ready', title: '周报' }, mode: { kind: 'editing' }, save: { status: 'clean' }, session: 'active' })
     expect(editIntent.clear).toHaveBeenCalledOnce()
     expect(surface.dataset.editorState).toBe('ready')
@@ -474,9 +476,9 @@ describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
   })
 
   it('只能查看：以只读创建编辑器（M2-P3 设计 §3.5），不建保存状态机，不能保存；?edit=new 也不申请、不去掉标记', async () => {
-    const { editorPage, surface, api, createEditor, editLease, editIntent } = setup({ api: { document: async () => ({ ...DETAIL, permissions: { ...DETAIL.permissions, canEdit: false } }), editStatus: VIEWER_STATUS } })
+    const { editorPage, surface, api, createEditor, editLease, editIntent, chrome } = setup({ api: { document: async () => ({ ...DETAIL, permissions: { ...DETAIL.permissions, canEdit: false } }), editStatus: VIEWER_STATUS } })
     await editorPage.load()
-    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, snapshot: '{"id":"unit-1"}', access: 'read' })
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'read' })
     expect(editorPage.view()).toMatchObject({ load: { kind: 'ready' }, mode: { kind: 'reading', canEdit: false }, save: undefined })
     expect(editLease.acquire).not.toHaveBeenCalled()
     expect(editIntent.clear).not.toHaveBeenCalled()
@@ -1036,11 +1038,11 @@ function leaseLost(reason: string): ApiError {
 
 describe('编辑权（M3-P1 设计 §3.4.7）', () => {
   it('能编辑：载入元数据与内容之后申请（本页这次加载的标识，保存也带着它），取得了按可编辑创建；保存带上令牌与代次；每 10 秒续租', async () => {
-    const { editorPage, api, editLease, createEditor, surface, time } = setup()
+    const { editorPage, api, editLease, createEditor, surface, time, chrome } = setup()
     await editorPage.load()
     expect(editLease.acquire).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, 'id-1')
     expect(editLease.acquire.mock.invocationCallOrder[0]).toBeGreaterThan(Math.max(...vi.mocked(api.content).mock.invocationCallOrder))
-    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, snapshot: '{"id":"unit-1"}', access: 'edit' })
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'edit' })
     expect(editorPage.view()).toMatchObject({ mode: { kind: 'editing' }, save: { canSave: true } })
     await editorPage.save()
     expect(api.save).toHaveBeenCalledWith(DOCUMENT_ID, expect.objectContaining<Partial<SaveRequest>>({ clientInstanceId: 'id-1' }), expect.anything(), CREDENTIALS)
@@ -1064,10 +1066,10 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
 
   it('申请得到的修订号比载入的内容新（这期间有人保存过）：按条件读取（本页的修订号）取服务端的内容，按它创建，以它的修订号作保存的基准', async () => {
     const contentIfChanged = vi.fn<EditorPageApi['contentIfChanged']>().mockResolvedValueOnce({ snapshot: '{"id":"unit-1","v":5}', revision: 5 })
-    const { editorPage, api, createEditor, surface } = setup({ api: { content: async () => ({ snapshot: '{"id":"unit-1","v":3}', revision: 3 }), contentIfChanged }, editLease: { acquire: vi.fn(async () => ({ ...ACQUIRED, revision: 5 })) } })
+    const { editorPage, api, createEditor, surface, chrome } = setup({ api: { content: async () => ({ snapshot: '{"id":"unit-1","v":3}', revision: 3 }), contentIfChanged }, editLease: { acquire: vi.fn(async () => ({ ...ACQUIRED, revision: 5 })) } })
     await editorPage.load()
     expect(contentIfChanged).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, 3)
-    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, snapshot: '{"id":"unit-1","v":5}', access: 'edit' })
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, pageUi: chrome, snapshot: '{"id":"unit-1","v":5}', access: 'edit' })
     await editorPage.save()
     expect(api.save).toHaveBeenCalledWith(DOCUMENT_ID, expect.objectContaining<Partial<SaveRequest>>({ baseRevision: 5 }), expect.anything(), CREDENTIALS)
   })
@@ -1080,10 +1082,10 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
   })
 
   it('重新载入内容失败（网络）：释放已经取得的编辑权，以只读打开载入的内容，说明没能进入编辑（与"编辑"时相同，审查 A11）；地址里的标记留着', async () => {
-    const { editorPage, editLease, createEditor, surface, editIntent } = setup({ api: { contentIfChanged: async () => Promise.reject(new NetworkError('断网')) }, editLease: { acquire: vi.fn(async () => ({ ...ACQUIRED, revision: 4 })) } })
+    const { editorPage, editLease, createEditor, surface, editIntent, chrome } = setup({ api: { contentIfChanged: async () => Promise.reject(new NetworkError('断网')) }, editLease: { acquire: vi.fn(async () => ({ ...ACQUIRED, revision: 4 })) } })
     await editorPage.load()
     expect(editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
-    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, snapshot: '{"id":"unit-1"}', access: 'read', viewState: undefined })
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'read', viewState: undefined })
     expect(editorPage.view()).toMatchObject({ load: { kind: 'ready' }, mode: { kind: 'reading', canEdit: true, notice: { kind: 'enter-failed' } }, save: undefined })
     expect(editIntent.clear).not.toHaveBeenCalled()
   })
@@ -1091,10 +1093,10 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
   it('别人正在编辑：按只读创建，页头说明持有者与最后活动几分钟之前（按服务端的时间算）；没有保存，不续租；地址里的标记留着', async () => {
     const serverTime = Date.UTC(2026, 8, 27, 3, 2, 30)
     const editStatus = async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: { holder: AMY, lastActiveAt: '2026-09-27T02:55:00.000Z', sameUser: false }, canEdit: true, formulasPending: false }, serverTime })
-    const { editorPage, editLease, createEditor, surface, time, editIntent } = setup({ api: { editStatus }, editLease: { acquire: vi.fn(async () => Promise.reject(heldBy(false, serverTime))) } })
+    const { editorPage, editLease, createEditor, surface, time, editIntent, chrome } = setup({ api: { editStatus }, editLease: { acquire: vi.fn(async () => Promise.reject(heldBy(false, serverTime))) } })
     await editorPage.load()
     await settle()
-    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, snapshot: '{"id":"unit-1"}', access: 'read' })
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'read' })
     expect(editorPage.view()).toMatchObject({
       load: { kind: 'ready' },
       save: undefined,
@@ -1111,13 +1113,13 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
 
   it('自己在别处正在编辑（例如刷新时旧页面的释放还没到，P1 设计 §7）：隔一小会儿再试，旧页面的释放到了就取得', async () => {
     const acquire = vi.fn<EditLeaseApi['acquire']>().mockRejectedValueOnce(heldBy(true)).mockResolvedValueOnce(ACQUIRED)
-    const { editorPage, createEditor, surface, time } = setup({ editLease: { acquire } })
+    const { editorPage, createEditor, surface, time, chrome } = setup({ editLease: { acquire } })
     const loading = editorPage.load()
     await vi.waitFor(() => expect(acquire).toHaveBeenCalledOnce())
     await time.advance(500)
     await loading
     expect(acquire).toHaveBeenCalledTimes(2)
-    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, snapshot: '{"id":"unit-1"}', access: 'edit' })
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'edit' })
     expect(modeOf(editorPage)).toEqual({ kind: 'editing' })
   })
 
@@ -1151,13 +1153,13 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
 
   it('申请的结果未知（回包丢了，服务端其实已经批给了本页）：隔一小会儿用同一个标识再试一次，取得就照常编辑，不留下没人用的一代（审查 B7）', async () => {
     const acquire = vi.fn<EditLeaseApi['acquire']>().mockRejectedValueOnce(new NetworkError('断网')).mockResolvedValueOnce(ACQUIRED)
-    const { editorPage, createEditor, surface, time } = setup({ editLease: { acquire } })
+    const { editorPage, createEditor, surface, time, chrome } = setup({ editLease: { acquire } })
     const loading = editorPage.load()
     await vi.waitFor(() => expect(acquire).toHaveBeenCalledOnce())
     await time.advance(500)
     await loading
     expect(acquire.mock.calls).toEqual([[DOCUMENT_ID, 'id-1'], [DOCUMENT_ID, 'id-1']])
-    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, snapshot: '{"id":"unit-1"}', access: 'edit' })
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'edit' })
     expect(modeOf(editorPage)).toEqual({ kind: 'editing' })
   })
 
@@ -1166,12 +1168,12 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     ['服务端出错（5xx）', new ApiError(503, 'SERVICE_UNAVAILABLE', '繁忙')],
   ])('申请的%s：内容已经读到、文档本身没有问题——以只读打开，说明没能进入编辑（与"编辑"时相同，审查 A11），不整页加载失败；地址里的标记留着', async (_case, error) => {
     const acquire = vi.fn(async () => Promise.reject(error))
-    const { editorPage, createEditor, surface, time, editIntent } = setup({ editLease: { acquire } })
+    const { editorPage, createEditor, surface, time, editIntent, chrome } = setup({ editLease: { acquire } })
     const loading = editorPage.load()
     await vi.waitFor(() => expect(acquire).toHaveBeenCalledOnce())
     await time.advance(500)
     await loading
-    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, snapshot: '{"id":"unit-1"}', access: 'read', viewState: undefined })
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'read', viewState: undefined })
     expect(editorPage.view()).toMatchObject({ load: { kind: 'ready' }, mode: { kind: 'reading', canEdit: true, notice: { kind: 'enter-failed', error } } })
     expect(surface.dataset.editorState).toBe('ready')
     expect(editIntent.clear).not.toHaveBeenCalled()
@@ -1979,6 +1981,12 @@ describe('自动保存要的页面信号（M3-P4 设计 §3.10）', () => {
     await saving
     window.dispatchEvent(new Event('pagehide'))
     expect(editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
+  })
+
+  it('新建编辑器时交上容器与页面自己的界面（页头）：组合输入与面板防抖的输入在页头里的不算', async () => {
+    const { editorPage, createEditor, surface, chrome } = setup()
+    await editorPage.load()
+    expect(createEditor).toHaveBeenCalledWith(expect.objectContaining({ container: surface, pageUi: chrome, access: 'edit' }))
   })
 
   it('测试构建的控制拿到当前的调度：进入编辑时交来，退出编辑之后交回 undefined', async () => {
