@@ -157,6 +157,25 @@ export async function logNow(page: Page): Promise<AutosaveLogEntry[]> {
   return autosaveLog(page)
 }
 
+/** 停住的时间里页面现在的时刻（调度的时钟） */
+export async function pausedNow(page: Page): Promise<number> {
+  return page.evaluate(() => performance.now())
+}
+
+/**
+ * 停住的时间里等到 check 为真：每次先看一眼，不行就往前拨 stepMs 再看。公式在 Worker 或主线程里算是真实的时间，算完之后 SDK 可能还要
+ * 一个正的计时器才往下走（排着的下一轮、被 stop 的一轮重新开始都要等 10 ms 的计算防抖；主线程模式下还有别的），只让到点的计时器执行
+ * 会停在那里——公式的用例用它等捕获与上传，时刻只断言"不早于规则允许的那一刻"
+ */
+export async function advanceUntil(page: Page, check: () => Promise<boolean>, message: string, stepMs = 5): Promise<void> {
+  await expect.poll(async () => {
+    if (await check())
+      return true
+    await page.clock.runFor(stepMs)
+    return check()
+  }, { message, intervals: [50], timeout: 60_000 }).toBe(true)
+}
+
 /** SDK 的计算防抖（engine-formula 的 CALCULATION_DEBOUNCE_TIME）：修改之后过这么久才开始一轮 */
 export const SDK_CALCULATION_DEBOUNCE_MS = 10
 
