@@ -43,8 +43,11 @@ export interface SnapshotCapture {
   readonly digest: string | undefined
 }
 
-/** 准备好的捕获；提交不了正在编辑的单元格时为 'cell-editing'（保存中止，只是提示） */
-export type PreparedCapture = SnapshotCapture | 'cell-editing'
+/**
+ * 准备好的捕获；提交不了正在编辑的单元格时为 'cell-editing'（保存中止，只是提示）；轮到时会话已知不对（令牌失效、正在确认、不是本人）
+ * 时为 'session'：不发（带着它发一定被拒），这一次交回 skipped，会话回来时由调用方再传（autosave.ts）
+ */
+export type PreparedCapture = SnapshotCapture | 'cell-editing' | 'session'
 
 /** 捕获的来源：轮到这一次保存时才调用（同步或异步）；抛出的错误按意外的错误处理 */
 export type CaptureSource = () => PreparedCapture | Promise<PreparedCapture>
@@ -128,8 +131,8 @@ export type SaveOutcome
     | { readonly kind: 'deduped' }
   /** 没有成功；发过请求时 requestId 是最后发出的那一个 */
     | { readonly kind: 'failed', readonly failure: SaveFailure, readonly requestId: string | undefined }
-  /** 没有做：停住了（stop），或者在终态 */
-    | { readonly kind: 'skipped', readonly reason: 'stopped' | 'ended' }
+  /** 没有做：停住了（stop），或者在终态；轮到时会话已知不对，没有发（session，来源给出） */
+    | { readonly kind: 'skipped', readonly reason: 'stopped' | 'ended' | 'session' }
 
 export interface SaveView {
   readonly status: SaveStatus
@@ -282,6 +285,7 @@ const RETRIED_REJECTIONS: ReadonlySet<string> = new Set(['REQUEST_ID_CONFLICT', 
 
 const SKIPPED_STOPPED: SaveOutcome = { kind: 'skipped', reason: 'stopped' }
 const SKIPPED_ENDED: SaveOutcome = { kind: 'skipped', reason: 'ended' }
+const SKIPPED_SESSION: SaveOutcome = { kind: 'skipped', reason: 'session' }
 const DEDUPED: SaveOutcome = { kind: 'deduped' }
 
 function conflictDetails(error: unknown): RevisionConflictDetails | null | undefined {
@@ -595,6 +599,9 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
       problem = { kind: 'cell-editing' }
       return { kind: 'failed', failure: { kind: 'cell-editing' }, requestId: undefined }
     }
+    // 会话已知不对：不发，说明照旧（页面的会话确认在说明）
+    if (prepared === 'session')
+      return SKIPPED_SESSION
     // 准备期间（提交单元格、等公式）停住了或者到了终态：不发
     if (stopped)
       return SKIPPED_STOPPED

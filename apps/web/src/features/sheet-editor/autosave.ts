@@ -518,6 +518,8 @@ export function createAutosave(options: AutosaveOptions): Autosave {
     const run: UploadRun = { started: false, serial: undefined, seq: undefined }
     runs.add(run)
     const startedAt = clock.now()
+    /** 交给保存的状态机的这一刻会话可写（定时、切到后台的上传只在可写时发起；立即上传由调用方确认过会话） */
+    const writableAtStart = page.sessionWritable()
     if (trigger === 'retry')
       retryAt = undefined
     immediate = false
@@ -543,6 +545,11 @@ export function createAutosave(options: AutosaveOptions): Autosave {
       const entry = await source()
       if (entry === 'cell-editing')
         return entry
+      // 轮到时会话比交给保存的状态机时变差了（期间得知令牌失效、开始确认会话、换了人）：不带着它发（令牌失效时一定被拒，P3 复验 UB1）——
+      // 排在在途后面的上传会遇到：在途的那一次得到令牌失效，页面随即确认会话。捕获留着、不算一次失败（不另加会话类失败的次数），
+      // 会话回来时照常上传。交出时本来就不可写的（调用方确认会话失败、但令牌没有失效时照常保存，P3）不在此列
+      if (writableAtStart && !page.sessionWritable())
+        return 'session'
       run.serial = entry.serial
       run.seq = entry.seq
       // 这一份是此刻最近的捕获，之后的修改不在里面：上传的上限从它们之中的第一处算

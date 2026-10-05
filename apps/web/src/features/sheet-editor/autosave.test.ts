@@ -158,7 +158,8 @@ function saved(revision: number, unchanged = false): SaveContentResponse {
 
 let idSequence = 0
 
-function setup(options: { initialFormulasPending?: boolean, settled?: boolean, seq?: number } = {}) {
+/** onSessionStale：保存得到令牌失效时页面做的（编辑器页：令牌已知失效、不可写，随即确认会话） */
+function setup(options: { initialFormulasPending?: boolean, settled?: boolean, seq?: number, onSessionStale?: (page: ReturnType<typeof fakePage>) => void } = {}) {
   const time = fakeLeaseClock(T0)
   const { editor, control } = fakeEditor(time.elapse, { settled: options.settled, seq: options.seq })
   const calls: PendingSend[] = []
@@ -168,6 +169,7 @@ function setup(options: { initialFormulasPending?: boolean, settled?: boolean, s
   const compress = vi.fn(async (snapshot: string) => new TextEncoder().encode(snapshot))
   const reportError = vi.fn()
   const onUnauthenticated = vi.fn()
+  const page = fakePage()
   const coordinator = createSaveCoordinator({
     editor,
     compress,
@@ -179,11 +181,10 @@ function setup(options: { initialFormulasPending?: boolean, settled?: boolean, s
       return `request-${idSequence}`
     },
     onUnauthenticated,
-    onSessionStale: vi.fn(),
+    onSessionStale: () => options.onSessionStale?.(page),
     reportError,
     initialFormulasPending: options.initialFormulasPending,
   })
-  const page = fakePage()
   const tuning = fakeTuning()
   const events: AutosaveEvent[] = []
   const digest = vi.fn(async (snapshot: string) => `sha256:${snapshot}`)
@@ -1374,6 +1375,24 @@ describe('离线与会话（设计 §3.3 第 5 条、§3.8）', () => {
     // 第 3 次（4.05 秒）被拒，确认之后立即重试（4.1 秒）得到网络错误（退避 4 秒：连着的第 2 次失败），8.1 秒重试得到 401、确认之后立即重试
     await time.advance(10_000)
     expect(sends).toEqual([2000, 2050, 4050, 4100, 8100, 8150])
+  })
+
+  it('排在在途后面的上传轮到时会话已知不对（在途的那一次得到令牌失效、页面随即确认会话）：不带着失效的令牌再发、不算一次失败；会话回来之后立即上传按下时的那一份', async () => {
+    const context = setup({ onSessionStale: page => page.set({ writable: false }) })
+    context.control.edit('甲')
+    await context.time.advance(2000)
+    const inFlight = await sent(context, 1)
+    context.control.edit('甲乙')
+    const flushing = context.autosave.flush('save-button')
+    inFlight.reject(new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效'))
+    await expect(flushing).resolves.toMatchObject({ outcome: { kind: 'skipped', reason: 'session' } })
+    await drain(context)
+    expect(context.calls).toHaveLength(1)
+    // 轮到时照样捕获了（按下时提交之后的内容）：会话回来时是连着的第一次会话类失败，立即重试，上传的就是这一份
+    expect(context.captures().at(-1)).toMatchObject({ trigger: 'save-button', seq: 2 })
+    context.page.set({ writable: true })
+    await drain(context)
+    expect(await sent(context, 2)).toMatchObject({ at: T0 + 2000, request: { localSeq: 2, snapshot: '{"content":"甲乙"}' } })
   })
 
   it('保存得到 401、会话却一直显示可写：照样按退避再试，不连着发', async () => {
