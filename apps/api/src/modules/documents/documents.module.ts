@@ -29,6 +29,7 @@ import { EditLeasesRepository } from './edit-leases.repository.ts'
 import { FoldersRepository } from './folders.repository.ts'
 import { FoldersService } from './folders.service.ts'
 import { LeaseWriteAccessRevocation } from './lease-write-access.ts'
+import { RequestLedger } from './request-ledger.ts'
 import { RevisionPurgeService } from './revision-purge.service.ts'
 import { SharedDocumentsService } from './shared-documents.service.ts'
 import { SnapshotInspector } from './snapshot-inspector.ts'
@@ -49,6 +50,8 @@ import { WriteAccessRevocation } from './write-access.ts'
     DocumentRevisionsRepository,
     // 保存的回执（M3-P3）：内容相同、修订号没变的确认，只给本模块的保存
     DocumentSaveReceiptsRepository,
+    // 写入的 requestId（M3-P3 审查 A3）：requestId 的锁与修订记录、回执两张表里的记录；保存、新建、复制、另存为副本都经它
+    RequestLedger,
     FoldersRepository,
     TrashEntriesRepository,
     SpaceTreeRepository,

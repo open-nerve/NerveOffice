@@ -22,6 +22,7 @@ import { toDetail } from './document-views.ts'
 import { DocumentsRepository } from './documents.repository.ts'
 import { FoldersRepository } from './folders.repository.ts'
 import { conflictCopyPayloadDigest } from './payload-digest.ts'
+import { RequestLedger } from './request-ledger.ts'
 import { SnapshotInspector } from './snapshot-inspector.ts'
 import { SpaceTreeRepository } from './space-tree.repository.ts'
 import { rejectedSnapshot, requirePassingSnapshot } from './upload-inspection.ts'
@@ -63,6 +64,7 @@ export class DocumentConflictCopyService {
     private readonly documents: DocumentsRepository,
     private readonly contents: DocumentContentsRepository,
     private readonly revisions: DocumentRevisionsRepository,
+    private readonly ledger: RequestLedger,
     private readonly folders: FoldersRepository,
     private readonly tree: SpaceTreeRepository,
     private readonly spaces: SpacesService,
@@ -89,9 +91,9 @@ export class DocumentConflictCopyService {
     const snapshot = await requirePassingSnapshot(this.inspector, this.#logger, upload, id)
     const contentHash = Buffer.from(snapshot.contentHash)
     return this.transactions.run(async (transaction) => {
-      // 同一个 requestId 的两次请求排队执行：后到的一方在下面就能看到前一方的修订记录，按重放处理（与新建、复制相同，锁排在最前）
-      await this.revisions.lockCreateRequest(command.requestId, transaction)
-      const previous = await this.revisions.findByRequestId(command.requestId, transaction)
+      // 同一个 requestId 的写入排队执行：后到的一方在下面就能看到前一方的修订记录，按重放处理（与新建、复制相同，锁排在最前，RequestLedger）；
+      // 它用在一次内容相同的保存上（回执）时 REQUEST_ID_CONFLICT
+      const previous = await this.ledger.lockForCreated(command.requestId, transaction)
       if (previous !== undefined)
         return this.replay(userId, previous, digest, transaction)
 
@@ -137,7 +139,7 @@ export class DocumentConflictCopyService {
         contentHash,
         clientBuild: client.clientBuild,
       }, transaction)
-      // 同一个 requestId 同时被一次保存用掉了（advisory lock 只让新建、复制与另存为副本之间排队）
+      // requestId 已经被用掉（在它的锁下查过两张表，走到这里不会撞上；留作兜底）
       if (revision === undefined)
         throw new AppError('REQUEST_ID_CONFLICT')
       // 明细里的 id 用数据库返回的（ADR-014 的"请求里的 id"）

@@ -2,7 +2,7 @@ import type { RevisionRow } from './document-revisions.repository.ts'
 import type { ReceiptRow } from './document-save-receipts.repository.ts'
 import { Buffer } from 'node:buffer'
 import { describe, expect, it } from 'vitest'
-import { isRecorded, replayedSave } from './save-outcomes.ts'
+import { replayedSave } from './save-outcomes.ts'
 
 const DOCUMENT = '0199a2c4-0000-7000-8000-0000000000d1'
 const OTHER_DOCUMENT = '0199a2c4-0000-7000-8000-0000000000d2'
@@ -34,11 +34,5 @@ describe('保存的 requestId 幂等（M3-P3 设计 §3.7）', () => {
       expect(replayedSave(recorded, AMY, DOCUMENT, other)).toBeUndefined()
     }
     expect(replayedSave({ revision: { ...REVISION, kind: 'created' }, receipt: undefined }, AMY, DOCUMENT, DIGEST)).toBeUndefined()
-  })
-
-  it('两边都没有：没有记录；有任何一边就是用过了（不论是不是这一次）', () => {
-    expect(isRecorded({ revision: undefined, receipt: undefined })).toBe(false)
-    expect(isRecorded({ revision: REVISION, receipt: undefined })).toBe(true)
-    expect(isRecorded({ revision: undefined, receipt: RECEIPT })).toBe(true)
   })
 })

@@ -8,7 +8,6 @@ import type { ContentEnvelope } from './document-contents.repository.ts'
 import type { DocumentRow } from './documents.repository.ts'
 import type { EditingActor } from './edit-lease.service.ts'
 import type { RevisionNoneMatch } from './if-none-match.ts'
-import type { RecordedRequest } from './save-outcomes.ts'
 import type { PassedSnapshot } from './upload-inspection.ts'
 import { Buffer } from 'node:buffer'
 import { shrunkResources } from '@nerve-office/contracts'
@@ -30,8 +29,9 @@ import { EditLeasesRepository } from './edit-leases.repository.ts'
 import { matchesNoneMatch } from './if-none-match.ts'
 import { legacyNonEmptyResources } from './legacy-resources.ts'
 import { savedPayloadDigest } from './payload-digest.ts'
+import { isRecorded, RequestLedger } from './request-ledger.ts'
 import { revisionSourceFor } from './revision-source.ts'
-import { isRecorded, replayedSave, savedOutcome } from './save-outcomes.ts'
+import { replayedSave, savedOutcome } from './save-outcomes.ts'
 import { SnapshotInspector } from './snapshot-inspector.ts'
 import { INSPECTED_PROFILE, rejectedSnapshot, requirePassingSnapshot } from './upload-inspection.ts'
 
@@ -79,6 +79,7 @@ export class DocumentContentService {
     private readonly contents: DocumentContentsRepository,
     private readonly revisions: DocumentRevisionsRepository,
     private readonly receipts: DocumentSaveReceiptsRepository,
+    private readonly ledger: RequestLedger,
     private readonly leases: EditLeasesRepository,
     private readonly sessions: SessionService,
     private readonly policy: DocumentAccessPolicy,
@@ -116,13 +117,17 @@ export class DocumentContentService {
    *    其余情况一律往下走，不提前回答：看不到的、不存在的、另一份文档的 requestId 都留给事务里的再查（"看不到与不存在"的语句序列照旧）；
    * 2. 客户端的数据格式（与文档无关）：过旧时 CLIENT_OUTDATED（ClientFormatGate）；
    * 3. 快照的检查（与文档无关，子进程）：不合格时 SNAPSHOT_INVALID（details.rule），通过时得到 unitId、内容哈希与资源名；
-   * 4. 一个事务：能否访问 → 能编辑时锁文档行、锁下再判断 → 再查一次重放（并发的同一次请求）→ 这次登录仍然有效 → 文档的格式
+   * 4. 一个事务：requestId 的锁（RequestLedger：事务的第一把锁，同一个 requestId 的写入排队，审查 A3）→ 能否访问 → 能编辑时锁文档行、
+   *    锁下再判断 → 再查一次重放（并发的同一次请求；查修订记录与回执两张表）→ 这次登录仍然有效 → 文档的格式
    *    （比服务端新：DOCUMENT_TOO_NEW）→ 能编辑 → 编辑租约 → 基准修订号 → unitId → 不缩水 → 内容哈希与当前相同：写回执、"公式待更新"
    *    只清不设（两边都为真才留着），修订号不变（unchanged）→ 否则写内容（连同哈希与非空的资源名）、修订号加一、修订记录（哈希与客户端构建）、
    *    文档的信封（"公式待更新"设成请求里的值）、审计。
-   * 先判断再加锁：看不到的请求不在文档上取锁，响应的时序与不存在的文档相同（审查 A2）；只能查看的请求同样不取锁，
-   * 不让能编辑的人的保存排队（复验 RA7）——它能得到的只有重放，不加锁查一次请求标识就有结论，到不了租约这一步。
-   * 能编辑时先锁文档再查幂等：同一个请求的两次并发重试，后到的一方拿到锁时前一方已经提交，按幂等返回原结果，而不是误报冲突。
+   * 先判断再加锁：看不到的请求不在文档上取锁，响应的时序与不存在的文档相同（审查 A2）；只能查看的请求同样不锁文档行，
+   * 不让能编辑的人的保存排队（复验 RA7）——它能得到的只有重放，不锁文档行查一次请求标识就有结论，到不了租约这一步
+   * （requestId 的锁只与同一个 requestId 的写入排队，不挡别人的保存）。
+   * 先取 requestId 的锁再锁文档行（与新建、复制、另存为副本取锁的先后一致，等这把锁的事务手里没有别的锁，不成环）：同一个 requestId 的
+   * 两次并发的写入，后到的一方拿到锁时前一方已经提交——同一份文档上的同一次重试按幂等返回原结果，而不是误报冲突；别的文档上、
+   * 别的种类（新建、复制、另存为副本）用了它的，在下面的再查里看到，REQUEST_ID_CONFLICT：一个 requestId 不会同时出现在回执与修订记录里。
    * 重放只要求仍能访问：被降为查看者、空间被归档、租约失效之后重发同一个请求，照样拿到原来的结果（M2-P6 复核 A 的 S-4；A07）。
    * 登录在锁下再核对一次（M3-P1 审查 A1，requireActiveLogin）：会话守卫之后还隔着上传正文、检查与等锁，这期间的撤销挡在这里；失效时 401。
    * 租约在基准修订号之前：失去编辑权的页面得到"编辑权已失效"而不是修订号冲突；unitId 与不缩水在基准修订号之后：落后的页面先得到冲突，
@@ -139,11 +144,13 @@ export class DocumentContentService {
     const snapshot = await requirePassingSnapshot(this.inspector, this.#logger, upload, id)
     const attempt: SaveAttempt = { saver, query, upload, digest, formulasPending, client, snapshot, origin }
     return this.transactions.run(async (transaction) => {
+      // 第一把锁：看不到与不存在的请求同样取它（与文档无关，语句序列照旧一致）
+      await this.ledger.lock(query.requestId, transaction)
       const accessible = await this.lockIfEditable(saver.userId, id, transaction)
       const { document } = accessible
 
-      // 并发的同一次请求：后到的一方拿到锁时前一方已经提交。requestId 用过、却不是这一次保存的：REQUEST_ID_CONFLICT
-      const recorded = await this.recorded(query.requestId, transaction)
+      // 并发的同一个 requestId：后到的一方拿到锁时前一方已经提交。用过、却不是这一次保存的（别的文档、别的种类）：REQUEST_ID_CONFLICT
+      const recorded = await this.ledger.recorded(query.requestId, transaction)
       if (isRecorded(recorded)) {
         const original = replayedSave(recorded, saver.userId, document.id, digest)
         if (original === undefined)
@@ -179,20 +186,12 @@ export class DocumentContentService {
    * 判断时能访问，原来的结果（修订号与时间）就是他有权知道的
    */
   private async replayBeforeChecks(userId: string, id: string, requestId: string, digest: Buffer): Promise<SaveContentResponse | undefined> {
-    const original = replayedSave(await this.recorded(requestId), userId, id, digest)
+    const original = replayedSave(await this.ledger.recorded(requestId), userId, id, digest)
     if (original === undefined)
       return undefined
     const document = await this.documents.findById(id)
     const access = document === undefined ? undefined : await this.policy.accessOf(userId, document)
     return access === undefined ? undefined : original
-  }
-
-  /** 这个 requestId 的修订记录与回执（不带事务时在连接池上读，见 replayBeforeChecks） */
-  private async recorded(requestId: string, transaction?: Transaction): Promise<RecordedRequest> {
-    return {
-      revision: await this.revisions.findByRequestId(requestId, transaction),
-      receipt: await this.receipts.findByRequestId(requestId, transaction),
-    }
   }
 
   /**
@@ -224,7 +223,7 @@ export class DocumentContentService {
    * "公式待更新"（§3.8）在这里只会清掉、不会设上——两边都为真才留着：公式的结果存在单元格里、参与内容哈希，内容相同就是结果相同。
    * 库里已经收齐（为假）时这份内容就是收齐的那一版，这次捕获没等到收齐（为真）也不把它改成待更新（审查 A6）；
    * 库里待更新、这次收齐了（为假）时清掉：公式等到超时、其实值没变时，收齐之后的再保存要清掉它。
-   * 回执的 requestId 被同时进行的、另一份文档上的同一个 requestId 用掉了：REQUEST_ID_CONFLICT
+   * 回执的 requestId 已经被用掉：REQUEST_ID_CONFLICT（同一个 requestId 的写入在它的锁上排队、锁下查过两张表，走到这里不会撞上；留作兜底）
    */
   private async confirmUnchanged(attempt: SaveAttempt, document: DocumentRow, transaction: Transaction): Promise<SaveContentResponse> {
     const current = await this.revisions.findByRevision(document.id, document.revision, transaction)
@@ -264,7 +263,7 @@ export class DocumentContentService {
       contentHash,
       clientBuild: client.clientBuild,
     }, transaction)
-    // 同一个 requestId 同时被另一份文档的保存或一次新建用掉了（它们锁的不是这一行）
+    // requestId 已经被用掉（在它的锁下查过两张表，走到这里不会撞上；留作兜底）
     if (revision === undefined)
       throw new AppError('REQUEST_ID_CONFLICT')
     await this.documents.advanceRevision(document.id, next, { sdkVersion: client.univerVersion, clientBuild: client.clientBuild, formulasPending: attempt.formulasPending }, transaction)

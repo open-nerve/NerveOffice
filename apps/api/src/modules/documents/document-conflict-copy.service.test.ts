@@ -19,8 +19,8 @@ const TITLE = '周报（冲突副本 2026-10-04 14:30）'
 
 function setup() {
   const store = new FakeStore()
-  const { transactions, documents, contents, revisions, folders, tree, spaces, policy, audit, clientFormats, inspector, logger } = store.deps
-  return { store, service: new DocumentConflictCopyService(transactions, documents, contents, revisions, folders, tree, spaces, policy, audit, clientFormats, inspector, logger) }
+  const { transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit, clientFormats, inspector, logger } = store.deps
+  return { store, service: new DocumentConflictCopyService(transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit, clientFormats, inspector, logger) }
 }
 
 let requests = 0
@@ -260,7 +260,7 @@ describe('DocumentConflictCopyService.copy：锁与锁下的判断', () => {
     await service.copy(member(ALICE), source.id, copyCommand(), upload(source.unitId), HTTP_ORIGIN)
     expect(store.treeLocks).toEqual([[TEAM_SPACE]])
     expect(store.spaces.holdSpace.mock.calls.map(call => call[0])).toEqual([ALICE_SPACE, TEAM_SPACE].toSorted())
-    const request = store.repositories.revisions.lockCreateRequest.mock.invocationCallOrder[0] ?? 0
+    const request = store.repositories.revisions.lockRequest.mock.invocationCallOrder[0] ?? 0
     const tree = store.tree.lock.mock.invocationCallOrder[0] ?? 0
     const spaceRows = store.spaces.holdSpace.mock.invocationCallOrder
     const sourceRow = store.repositories.documents.holdById.mock.invocationCallOrder
@@ -419,6 +419,17 @@ describe('DocumentConflictCopyService.copy：requestId 幂等（与新建、复�
     expect(copy.formulasPending).toBe(true)
     expect(store.revisions.find(row => row.documentId === copy.id)?.payloadDigest).toEqual(conflictCopyPayloadDigest(source.id, TITLE, body.decompressed, true))
     expect((await errorOf(service.copy(member(ALICE), source.id, { ...command, formulasPending: false }, body, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+  })
+
+  it('用在一次内容相同的保存上（回执）的 requestId：REQUEST_ID_CONFLICT，不建副本（审查 A3）', async () => {
+    const { store, service } = setup()
+    store.setMember(TEAM_SPACE, ALICE, 'editor')
+    const source = teamSource(store)
+    const requestId = nextRequestId()
+    store.receipts.push({ requestId, documentId: source.id, revision: 1, payloadDigest: Buffer.alloc(32), savedBy: ALICE, savedAt: new Date('2026-09-27T08:00:00.000Z') })
+    expect((await errorOf(service.copy(member(ALICE), source.id, copyCommand({ requestId }), upload(source.unitId), HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+    expect([...store.documents.keys()]).toEqual([source.id])
+    expect(store.audits).toEqual([])
   })
 
   it('新建、复制用过的 requestId：REQUEST_ID_CONFLICT（摘要以种类开头，不会相同）', async () => {

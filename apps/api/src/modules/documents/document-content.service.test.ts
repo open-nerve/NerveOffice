@@ -47,8 +47,8 @@ function holding(store: FakeStore, documentId: string, userId: string, clientIns
 
 /** 保存的服务：运维开关（最低客户端构建）按用例给 */
 function serviceOf(store: FakeStore, minimumBuild?: string): DocumentContentService {
-  const { transactions, documents, contents, revisions, receipts, leases, sessions, policy, audit, inspector, logger } = store.deps
-  return new DocumentContentService(transactions, documents, contents, revisions, receipts, leases, sessions, policy, audit, clientFormatGate(minimumBuild), inspector, logger)
+  const { transactions, documents, contents, revisions, receipts, ledger, leases, sessions, policy, audit, inspector, logger } = store.deps
+  return new DocumentContentService(transactions, documents, contents, revisions, receipts, ledger, leases, sessions, policy, audit, clientFormatGate(minimumBuild), inspector, logger)
 }
 
 /** 存量（P3 之前写的）内容：gzip 的快照，没有内容哈希与资源名 */
@@ -197,6 +197,36 @@ describe('DocumentContentService.save', () => {
     expect(store.spaces.accessFactsOf).toHaveBeenCalledTimes(2)
     expect(store.spaces.accessFactsOf).toHaveBeenLastCalledWith(ALICE, '00000000-0000-0000-0000-000000000000', expect.anything())
     expect(store.revisions).toHaveLength(1)
+  })
+
+  it('requestId 的锁是事务的第一把锁（审查 A3）：先于判断访问与锁文档行，与新建、复制、另存为副本取锁的先后一致；看不到与不存在的同样取它', async () => {
+    const { store, service, document } = setup()
+    const request = query()
+    await service.save(saver(ALICE), document.id, request, upload(document.unitId), HTTP_ORIGIN)
+    expect(store.repositories.revisions.lockRequest).toHaveBeenCalledExactlyOnceWith(request.requestId, expect.anything())
+    const lock = store.repositories.revisions.lockRequest.mock.invocationCallOrder[0] ?? Number.NaN
+    const checked = store.repositories.documents.findById.mock.invocationCallOrder[0] ?? Number.NaN
+    const locked = store.repositories.documents.lockById.mock.invocationCallOrder[0] ?? Number.NaN
+    expect(lock).toBeLessThan(checked)
+    expect(lock).toBeLessThan(locked)
+    // 再查重放在锁下（锁之后）
+    const rechecked = store.repositories.receipts.findByRequestId.mock.invocationCallOrder.at(-1) ?? Number.NaN
+    expect(lock).toBeLessThan(rechecked)
+    // 看不到的与不存在的：同样先取这把锁（与文档无关），再得到 NOT_FOUND
+    store.repositories.revisions.lockRequest.mockClear()
+    expect((await rejection(service.save(saver(BOB), document.id, query(), upload(document.unitId), HTTP_ORIGIN))).code).toBe('NOT_FOUND')
+    expect((await rejection(service.save(saver(ALICE), '0199a2c4-0000-7000-8000-0000000000ff', query(), upload(document.unitId), HTTP_ORIGIN))).code).toBe('NOT_FOUND')
+    expect(store.repositories.revisions.lockRequest).toHaveBeenCalledTimes(2)
+  })
+
+  it('别的文档上的回执用了这个 requestId：内容不同的保存同样 REQUEST_ID_CONFLICT，不写修订记录（两张表之间也只用一次，审查 A3）', async () => {
+    const { store, service, document } = setup()
+    const other = store.addDocument({ revision: 1 })
+    const request = query()
+    store.receipts.push({ requestId: request.requestId, documentId: other.id, revision: 1, payloadDigest: Buffer.alloc(32), savedBy: ALICE, savedAt: new Date('2026-09-27T08:00:00.000Z') })
+    expect((await rejection(service.save(saver(ALICE), document.id, request, upload(document.unitId, ',"z":1'), HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+    expect(store.revisions).toHaveLength(1)
+    expect(store.documents.get(document.id)?.revision).toBe(1)
   })
 
   it('先判断权限再加锁：没有权限的请求不在别人的文档上取锁（审查 A2）', async () => {

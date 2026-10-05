@@ -37,8 +37,11 @@ export interface NewRevision {
   readonly clientBuild: string | null
 }
 
-/** advisory lock 的命名空间（两个 int4 的形式，与单个 bigint 的形式互不冲突）：新建文档按 requestId 排队。 */
-const CREATE_REQUEST_LOCK_SPACE = 1_020_401
+/**
+ * advisory lock 的命名空间（两个 int4 的形式，与单个 bigint 的形式互不冲突）：写入按 requestId 排队（RequestLedger）。
+ * 数值沿用 M1 起新建文档的那一把，升级前后在途的请求取的是同一把锁
+ */
+const REQUEST_LOCK_SPACE = 1_020_401
 
 const r = documentRevisions
 const COLUMNS = {
@@ -70,13 +73,13 @@ export class DocumentRevisionsRepository {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
 
   /**
-   * 事务级的 advisory lock：同一个 requestId 的新建排队执行，后到的一方在查修订记录时就能看到前一方的结果（P4 设计 §3.4）。
-   * 不同的 requestId 哈希相同时只是多排一次队。
+   * 事务级的 advisory lock：同一个 requestId 的写入（保存、新建、复制、另存为副本）排队执行，后到的一方在查修订记录与回执时就能看到
+   * 前一方的结果（P4 设计 §3.4；M3-P3 审查 A3 起保存也取，见 RequestLedger——只经它调用）。不同的 requestId 哈希相同时只是多排一次队。
    * 锁键用数据库规范化之后的 UUID：同一个 UUID 的大写与小写写法，唯一约束（uuid 类型）认作同一个 requestId，
-   * 锁也必须认作同一个，否则两者各拿一把锁、同时越过"是否已经新建"的检查（Codex 评审 CX7）
+   * 锁也必须认作同一个，否则两者各拿一把锁、同时越过"是否已经用过"的检查（Codex 评审 CX7）
    */
-  async lockCreateRequest(requestId: string, transaction: Transaction): Promise<void> {
-    await executorOf(this.db, transaction).execute(sql`SELECT pg_advisory_xact_lock(${CREATE_REQUEST_LOCK_SPACE}, hashtext((${requestId})::uuid::text))`)
+  async lockRequest(requestId: string, transaction: Transaction): Promise<void> {
+    await executorOf(this.db, transaction).execute(sql`SELECT pg_advisory_xact_lock(${REQUEST_LOCK_SPACE}, hashtext((${requestId})::uuid::text))`)
   }
 
   /**
@@ -122,8 +125,8 @@ export class DocumentRevisionsRepository {
   }
 
   /**
-   * 写一行修订记录。requestId 已经被别的请求用掉（例如同时进行的、另一份文档的保存）时不写，返回 undefined：
-   * 用 ON CONFLICT 而不是等唯一约束报错，事务不会因此中止。
+   * 写一行修订记录。requestId 已经被别的请求用掉时不写，返回 undefined：用 ON CONFLICT 而不是等唯一约束报错，事务不会因此中止。
+   * 写入都在 requestId 的锁下、查过两张表之后才写（RequestLedger），走到这里不会撞上；留作兜底
    */
   async insert(revision: NewRevision, transaction: Transaction): Promise<RevisionRow | undefined> {
     const { source, ...columns } = revision

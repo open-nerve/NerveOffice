@@ -39,8 +39,8 @@ export class DocumentSaveReceiptsRepository {
   }
 
   /**
-   * 写一条回执（调用方锁着这份文档的行）。同一个 requestId 已经有回执（同时进行的、另一份文档上的同一个 requestId）时不写，
-   * 返回 undefined：用 ON CONFLICT 而不是等主键报错，事务不会因此中止
+   * 写一条回执（调用方锁着这份文档的行）。同一个 requestId 已经有回执时不写，返回 undefined：用 ON CONFLICT 而不是等主键报错，
+   * 事务不会因此中止。写入都在 requestId 的锁下、查过两张表之后才写（RequestLedger），走到这里不会撞上；留作兜底
    */
   async insert(receipt: ReceiptRow, transaction: Transaction): Promise<ReceiptRow | undefined> {
     const [row] = await executorOf(this.db, transaction).insert(t).values(receipt).onConflictDoNothing({ target: t.requestId }).returning(COLUMNS)

@@ -20,6 +20,7 @@ import { DocumentsRepository } from './documents.repository.ts'
 import { folderIdIn } from './folder-location.ts'
 import { FoldersRepository } from './folders.repository.ts'
 import { createdPayloadDigest } from './payload-digest.ts'
+import { RequestLedger } from './request-ledger.ts'
 import { inspectSnapshot } from './snapshot-inspection.ts'
 import { SpaceTreeRepository } from './space-tree.repository.ts'
 
@@ -72,6 +73,7 @@ export class DocumentCreationService {
     private readonly documents: DocumentsRepository,
     private readonly contents: DocumentContentsRepository,
     private readonly revisions: DocumentRevisionsRepository,
+    private readonly ledger: RequestLedger,
     private readonly folders: FoldersRepository,
     private readonly tree: SpaceTreeRepository,
     private readonly spaces: SpacesService,
@@ -84,9 +86,9 @@ export class DocumentCreationService {
     const title = command.title ?? DEFAULT_DOCUMENT_TITLES[command.type]
     const digest = createdPayloadDigest(command.type, title, command.spaceId, command.folderId)
     return this.transactions.run(async (transaction) => {
-      // 同一个 requestId 的两个请求排队执行：后到的一方在下面就能看到前一方的修订记录，按重放处理
-      await this.revisions.lockCreateRequest(command.requestId, transaction)
-      const previous = await this.revisions.findByRequestId(command.requestId, transaction)
+      // 同一个 requestId 的写入排队执行（事务的第一把锁，RequestLedger）：后到的一方在下面就能看到前一方的修订记录，按重放处理；
+      // 它用在一次内容相同的保存上（回执）时 REQUEST_ID_CONFLICT
+      const previous = await this.ledger.lockForCreated(command.requestId, transaction)
       if (previous !== undefined)
         return this.replay(userId, previous, digest, transaction)
 
@@ -130,7 +132,7 @@ export class DocumentCreationService {
         // 新建的内容是服务端写的模板，没有客户端构建
         clientBuild: null,
       }, transaction)
-      // 同一个 requestId 同时被一次保存用掉了（advisory lock 只让新建之间排队）
+      // requestId 已经被用掉（在它的锁下查过两张表，走到这里不会撞上；留作兜底）
       if (revision === undefined)
         throw new AppError('REQUEST_ID_CONFLICT')
       await this.audit.record({

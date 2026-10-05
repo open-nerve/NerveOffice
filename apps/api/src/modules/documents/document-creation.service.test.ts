@@ -13,8 +13,8 @@ const MISSING_ID = '0199a2c4-0000-7000-8000-0000000000fe'
 
 function setup() {
   const store = new FakeStore()
-  const { transactions, documents, contents, revisions, folders, tree, spaces, policy, audit } = store.deps
-  const service = new DocumentCreationService(transactions, documents, contents, revisions, folders, tree, spaces, policy, audit)
+  const { transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit } = store.deps
+  const service = new DocumentCreationService(transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit)
   return { store, service }
 }
 
@@ -57,13 +57,15 @@ describe('DocumentCreationService.create', () => {
     expect(store.contents.get(first.id)?.contentHash).not.toEqual(store.contents.get(second.id)?.contentHash)
   })
 
-  it('先按 requestId 排队，再查修订记录', async () => {
+  it('先按 requestId 排队，再查修订记录与回执', async () => {
     const { store, service } = setup()
     await service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID }, HTTP_ORIGIN)
-    const lock = store.repositories.revisions.lockCreateRequest.mock.invocationCallOrder[0] ?? Number.NaN
+    const lock = store.repositories.revisions.lockRequest.mock.invocationCallOrder[0] ?? Number.NaN
     const lookup = store.repositories.revisions.findByRequestId.mock.invocationCallOrder[0] ?? Number.NaN
-    expect(store.repositories.revisions.lockCreateRequest).toHaveBeenCalledWith(REQUEST_ID, expect.anything())
+    const receipts = store.repositories.receipts.findByRequestId.mock.invocationCallOrder[0] ?? Number.NaN
+    expect(store.repositories.revisions.lockRequest).toHaveBeenCalledWith(REQUEST_ID, expect.anything())
     expect(lock).toBeLessThan(lookup)
+    expect(lock).toBeLessThan(receipts)
   })
 
   it('同一个请求重放：返回同一份文档的当前元数据，标为重放（M2-P6 复核第二批 S-1），不再新建', async () => {
@@ -98,6 +100,16 @@ describe('DocumentCreationService.create', () => {
     const document = store.addDocument()
     store.addRevision({ documentId: document.id, revision: 2, kind: 'saved', requestId: REQUEST_ID, payloadDigest: createdPayloadDigest('sheet', '未命名表格'), source: { clientInstanceId: REQUEST_ID, localSeq: 1 }, savedBy: ALICE })
     expect((await rejection(service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID }, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+  })
+
+  it('用在一次内容相同的保存上（回执）的 requestId：REQUEST_ID_CONFLICT，不建文档——一个 requestId 不同时出现在回执与修订记录里（审查 A3）', async () => {
+    const { store, service } = setup()
+    const document = store.addDocument()
+    store.receipts.push({ requestId: REQUEST_ID, documentId: document.id, revision: 1, payloadDigest: createdPayloadDigest('sheet', '未命名表格'), savedBy: ALICE, savedAt: new Date('2026-09-27T08:00:00.000Z') })
+    expect((await rejection(service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID }, HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+    expect(store.documents.size).toBe(1)
+    expect(store.revisions).toEqual([])
+    expect(store.audits).toEqual([])
   })
 
   it('重放时已经不能访问那份文档：REQUEST_ID_CONFLICT', async () => {
@@ -191,7 +203,7 @@ describe('DocumentCreationService.create 的目标文件夹（M2-P4）', () => {
     await service.create(member(ALICE), { type: 'sheet', requestId: REQUEST_ID, folderId: folder.id }, HTTP_ORIGIN)
 
     expect(store.treeLocks).toEqual([[ALICE_SPACE]])
-    const request = store.repositories.revisions.lockCreateRequest.mock.invocationCallOrder[0] ?? Number.NaN
+    const request = store.repositories.revisions.lockRequest.mock.invocationCallOrder[0] ?? Number.NaN
     const tree = store.tree.lock.mock.invocationCallOrder[0] ?? Number.NaN
     const held = store.spaces.holdSpace.mock.invocationCallOrder[0] ?? Number.NaN
     const checked = store.repositories.folders.findById.mock.invocationCallOrder[0] ?? Number.NaN

@@ -26,6 +26,7 @@ import { parseAuditEvent } from '../audit/index.ts'
 import { AppLogger, createRootLogger, RequestContextStore } from '../logging/index.ts'
 import { ClientFormatGate } from './client-format-gate.ts'
 import { EffectiveAccessPolicy } from './document-access-policy.ts'
+import { RequestLedger } from './request-ledger.ts'
 import { inspectSnapshot } from './snapshot-inspection.ts'
 import { coversWriter } from './write-access.ts'
 
@@ -416,7 +417,8 @@ export class FakeStore {
       }),
     },
     revisions: {
-      lockCreateRequest: vi.fn(async () => {}),
+      /** requestId 的锁（RequestLedger 经它取）：只记下取过哪些 requestId，用例据此核对取锁的先后 */
+      lockRequest: vi.fn(async (_requestId: string) => {}),
       findByRequestId: vi.fn(async (requestId: string) => this.revisions.find(revision => revision.requestId === requestId)),
       findByRevision: vi.fn(async (documentId: string, revision: number) => this.revisions.find(row => row.documentId === documentId && row.revision === revision)),
       insert: vi.fn(async (revision: NewRevision): Promise<RevisionRow | undefined> =>
@@ -725,6 +727,8 @@ export class FakeStore {
 
   /** 真实的访问策略 */
   readonly policy = new EffectiveAccessPolicy(this.spaces as unknown as SpacesService, this.grants as unknown as DocumentGrantsRepository)
+  /** 真实的 requestId 记录（锁与两张表的查询经上面的假仓储） */
+  readonly ledger = new RequestLedger(this.repositories.revisions as unknown as DocumentRevisionsRepository, this.repositories.receipts as unknown as DocumentSaveReceiptsRepository)
   /** 与真实的 AuditService 一样按严格的结构校验（明细多一个键，例如标题，就抛出，M2-P6 复核 M-1），记下原样的事件 */
   readonly audit = {
     record: vi.fn(async (event: AuditEvent) => {
@@ -750,6 +754,7 @@ export class FakeStore {
       leases: this.leases as unknown as EditLeasesRepository,
       sessions: this.sessions as unknown as SessionService,
       receipts: this.repositories.receipts as unknown as DocumentSaveReceiptsRepository,
+      ledger: this.ledger,
       clientFormats: this.clientFormats,
       inspector: this.inspector as unknown as SnapshotInspector,
       logger: this.logger,
