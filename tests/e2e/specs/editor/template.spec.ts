@@ -6,6 +6,7 @@
 import { sheetSnapshotFor } from '@nerve-office/contracts'
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { pressUniverShortcut } from '../../support/keyboard.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openAndEnterEditing, saveAndCapture, saveAndWait, savedContent, selectCell, typeInCell } from '../../support/sheet.ts'
 
@@ -54,7 +55,8 @@ test.describe('US-M1-09 M5 之前没有图片与超链接的入口', () => {
     await expect(page.getByText('选择性复制')).toBeHidden()
 
     await selectCell(page, 'B2')
-    await page.keyboard.press('ControlOrMeta+k')
+    // Univer 按页面的平台取主修饰键（Linux 上的 WebKit 也自称 Mac）：ControlOrMeta 在那里按下的 Control+K 根本不是它的快捷键，这一步就白测了
+    await pressUniverShortcut(page, 'K')
     await expect(page.getByRole('dialog')).toHaveCount(0)
     await expect(page.getByText(/链接/).filter({ visible: true })).toHaveCount(0)
   })
