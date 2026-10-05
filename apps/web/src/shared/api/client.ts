@@ -4,7 +4,7 @@ import { CSRF_TOKEN_HEADER, errorResponseSchema } from '@nerve-office/contracts'
 
 export interface ApiErrorDetails {
   readonly requestId?: string
-  /** 429 的 Retry-After（秒） */
+  /** 响应头 Retry-After（秒）：429，与服务繁忙的 503（快照检查池满、每个账户 2 份、数据库繁忙，M3-P3）；自动保存按它退避（M3-P4） */
   readonly retryAfterSeconds?: number
   /** 错误响应的 details：结构按错误码约定，使用方按错误码用 contracts 里的结构再校验（ADR-006） */
   readonly details?: Readonly<Record<string, unknown>>

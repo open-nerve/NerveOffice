@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError, ResponseFormatError, setCsrfToken } from '../../shared/api/index.ts'
 import { apiError, installFakeApi, json, networkFailure } from '../../shared/testing/fake-api.test-support.ts'
 import { PAGE_CLIENT_FORMAT } from './client-format.ts'
-import { acquireEditLease, CONTENT_UNCHANGED, fetchContent, fetchContentIfChanged, fetchEditStatus, releaseEditLease, renewEditLease, saveConflictCopy, saveContent } from './editor-api.ts'
+import { acquireEditLease, CONTENT_UNCHANGED, fetchContent, fetchContentIfChanged, fetchEditStatus, releaseEditLease, renewEditLease, saveConflictCopy, saveContent, snapshotDigest } from './editor-api.ts'
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 const PAGE_ID = '0199a2c4-1f2e-4a3b-8c4d-00000000aaaa'
@@ -164,5 +164,22 @@ describe('编辑状态与另存为副本（M3-P2 设计 §3.2）', () => {
     await expect(saveConflictCopy(DOCUMENT_ID, query, new Uint8Array([1]))).rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' })
     api.on(path, () => apiError(409, 'REQUEST_ID_CONFLICT'))
     await expect(saveConflictCopy(DOCUMENT_ID, query, new Uint8Array([1]))).rejects.toMatchObject({ status: 409, code: 'REQUEST_ID_CONFLICT' })
+  })
+})
+
+describe('快照的摘要（自动保存会话内去重的键，M3-P4 设计 §3.7）', () => {
+  it('UTF-8 字节的 SHA-256，十六进制小写（与标准的测试向量一致）', async () => {
+    await expect(snapshotDigest('abc')).resolves.toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
+    await expect(snapshotDigest('')).resolves.toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')
+  })
+
+  it('按 UTF-8 字节算：汉字与码点相同的内容摘要相同，差一个字就不同', async () => {
+    const digest = await snapshotDigest('{"content":"甲"}')
+    expect(digest).toMatch(/^[0-9a-f]{64}$/)
+    await expect(snapshotDigest('{"content":"甲"}')).resolves.toBe(digest)
+    await expect(snapshotDigest('{"content":"乙"}')).resolves.not.toBe(digest)
+    // "甲"的 UTF-8 是 E7 94 B2：与按这三个字节算的一致
+    const bytes = await crypto.subtle.digest('SHA-256', new Uint8Array([0xE7, 0x94, 0xB2]))
+    await expect(snapshotDigest('甲')).resolves.toBe(Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, '0')).join(''))
   })
 })

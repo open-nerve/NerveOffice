@@ -85,6 +85,15 @@ export type {
 } from './auth/links.ts'
 export { isPlatformAssetAddress } from './documents/asset-address.ts'
 export {
+  AUTOSAVE_CAPTURE_MAX_MS,
+  AUTOSAVE_CAPTURE_QUIET_MS,
+  AUTOSAVE_CAPTURE_SPACING_FACTOR,
+  AUTOSAVE_RETRY_INITIAL_MS,
+  AUTOSAVE_RETRY_MAX_MS,
+  AUTOSAVE_UPLOAD_MAX_MS,
+  AUTOSAVE_UPLOAD_QUIET_MS,
+} from './documents/autosave.ts'
+export {
   CLIENT_BUILD_MAX_LENGTH,
   CLIENT_OUTDATED_REASONS,
   clientBuildSchema,

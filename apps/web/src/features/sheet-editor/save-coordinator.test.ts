@@ -1,11 +1,16 @@
 import type { SaveContentResponse } from '@nerve-office/contracts'
-import type { SaveEditor, SaveRequest } from './save-coordinator.ts'
+import type { PreparedCapture, SaveEditor, SaveFailure, SaveOptions, SaveRequest, SnapshotCapture } from './save-coordinator.ts'
+import type { CaptureEditor } from './snapshot-capture.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError, ResponseFormatError } from '../../shared/api/index.ts'
-import { createSaveCoordinator } from './save-coordinator.ts'
+import { classifySaveError, createSaveCoordinator } from './save-coordinator.ts'
+import { explicitCaptureSource } from './snapshot-capture.ts'
 
 const ME = '0199a2c4-1f2e-4a3b-8c4d-00000000aaaa'
 const OTHER_TAB = '0199a2c4-1f2e-4a3b-8c4d-00000000bbbb'
+
+/** 显式保存（保存按钮、快捷键）：一律上传，在途时排一次 */
+const EXPLICIT: SaveOptions = { dedupe: false }
 
 /**
  * 假的编辑器：edit() 是一次修改；可以设定正在编辑、提交的结果与公式收齐的结果。
@@ -46,7 +51,7 @@ function fakeEditor() {
       setPendingInput(false)
     },
   }
-  const editor: SaveEditor = {
+  const editor: SaveEditor & CaptureEditor = {
     changeSeq: () => seq,
     onChange: (listener) => {
       listeners.add(listener)
@@ -94,14 +99,15 @@ function fakeSend() {
 const fakeCompress = vi.fn(async (snapshot: string) => new TextEncoder().encode(snapshot))
 
 let idSequence = 0
-function setup(overrides: { baseRevision?: number, maxSnapshotBytes?: number } = {}) {
+function setup(overrides: { baseRevision?: number, maxSnapshotBytes?: number, initialFormulasPending?: boolean } = {}) {
   const { editor, control } = fakeEditor()
   const { send, calls } = fakeSend()
   const onUnauthenticated = vi.fn()
   const onSessionStale = vi.fn()
   const reportError = vi.fn()
-  const compress = vi.fn(fakeCompress)
-  const coordinator = createSaveCoordinator({
+  // 每次新建：模块级的 fakeCompress 是同一个 mock，包一层的调用次数会跨用例累计
+  const compress = vi.fn(async (snapshot: string) => new TextEncoder().encode(snapshot))
+  const real = createSaveCoordinator({
     editor,
     compress,
     send,
@@ -115,8 +121,12 @@ function setup(overrides: { baseRevision?: number, maxSnapshotBytes?: number } =
     onSessionStale,
     reportError,
     maxSnapshotBytes: overrides.maxSnapshotBytes,
+    initialFormulasPending: overrides.initialFormulasPending,
   })
-  return { coordinator, editor, control, compress, send, calls, onUnauthenticated, onSessionStale, reportError }
+  // 下面的用例大多按"按一次保存"写：coordinator.save() 是显式保存——先提交单元格、等公式至多 3 秒再捕获（snapshot-capture.ts 的来源），
+  // 一律上传。M3-P4 起保存的状态机不自己捕获，捕获由来源给出（设计 §3.1），新入口的用例直接用 real.save(来源, 选项)
+  const coordinator = { ...real, save: async () => real.save(explicitCaptureSource(editor), EXPLICIT) }
+  return { coordinator, real, editor, control, compress, send, calls, onUnauthenticated, onSessionStale, reportError }
 }
 
 /** 等保存流程走到发出请求（提交编辑、等公式收齐都是异步的） */
@@ -144,7 +154,8 @@ describe('保存状态', () => {
     expect(coordinator.view().status).toBe('dirty')
 
     const saving = coordinator.save()
-    expect(coordinator.view()).toMatchObject({ status: 'saving', canSave: false })
+    // 保存中仍可以再按（排一次，M3-P4 设计 §3.9：保存按钮不再随"保存中"变灰）
+    expect(coordinator.view()).toMatchObject({ status: 'saving', canSave: true })
     const first = await sent(calls, 1)
     expect(first.request).toMatchObject({ baseRevision: 4, clientInstanceId: ME, localSeq: 1, snapshot: '{"content":"甲"}' })
     first.resolve(saved(5))
@@ -159,14 +170,28 @@ describe('保存状态', () => {
     expect(calls[1]?.request.requestId).not.toBe(calls[0]?.request.requestId)
   })
 
-  it('保存中再按：不做任何事，同一时间只有一个保存在途', async () => {
+  // M3-P4 设计 §3.4、§3.9：原来"保存中再按不做任何事"，改为在途时按下排一次——在途的那一次结束之后立即再存一次（捕获的是那一刻的内容），
+  // 再按几次也只排一次；同一时间仍只有一个请求在途
+  it('保存中再按：排一次，在途的结束之后立即再存一次；再按几次也只排一次，同一时间只有一个请求在途', async () => {
     const { coordinator, control, calls, send } = setup()
     control.edit('甲')
     const saving = coordinator.save()
-    await coordinator.save()
-    ;(await sent(calls, 1)).resolve(saved(2))
-    await saving
+    const first = await sent(calls, 1)
+    control.edit('甲乙')
+    const again = coordinator.save()
+    const thrice = coordinator.save()
+    await Promise.resolve()
     expect(send).toHaveBeenCalledTimes(1)
+    first.resolve(saved(2))
+    await saving
+    const second = await sent(calls, 2)
+    expect(second.request).toMatchObject({ baseRevision: 2, localSeq: 2, snapshot: '{"content":"甲乙"}' })
+    expect(coordinator.view().status).toBe('saving')
+    second.resolve(saved(3))
+    await expect(again).resolves.toEqual({ kind: 'saved', requestId: second.request.requestId })
+    await expect(thrice).resolves.toEqual({ kind: 'saved', requestId: second.request.requestId })
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(coordinator.view().status).toBe('clean')
   })
 
   it('保存期间继续修改：回包后仍是有未保存的修改（已保存的序号只前进到捕获时，A08）', async () => {
@@ -780,15 +805,24 @@ describe('保存失败', () => {
     expect(coordinator.view().status).toBe('failed')
   })
 
-  it('失败之后再保存：先清掉上一次的原因', async () => {
+  // M3-P4 设计 §3.9：原来"再保存时先清掉上一次的原因"，改为原因保留到这一次有结果——自动重试期间失败的说明不清掉再出现；
+  // 页头照常说保存中（状态先看在途），成功之后清掉，又失败时换成这一次的原因
+  it('失败之后再保存：保存中照样说保存中，上一次的原因留到这一次有结果；成功之后清掉，又失败换成新的原因', async () => {
     const { coordinator, calls } = setup()
+    const offline = new NetworkError('断网')
     const first = coordinator.save()
-    ;(await sent(calls, 1)).reject(new NetworkError('断网'))
+    ;(await sent(calls, 1)).reject(offline)
     await first
     const retry = coordinator.save()
-    expect(coordinator.view()).toMatchObject({ status: 'saving', problem: undefined })
-    ;(await sent(calls, 2)).resolve(saved(2))
+    expect(coordinator.view()).toMatchObject({ status: 'saving', problem: { kind: 'request', error: offline } })
+    const busy = new ApiError(503, 'SERVICE_UNAVAILABLE', '服务暂时不可用')
+    ;(await sent(calls, 2)).reject(busy)
     await retry
+    expect(coordinator.view()).toMatchObject({ status: 'failed', problem: { kind: 'request', error: busy } })
+    const last = coordinator.save()
+    ;(await sent(calls, 3)).resolve(saved(2))
+    await last
+    expect(coordinator.view()).toMatchObject({ status: 'clean', problem: undefined })
   })
 })
 
@@ -800,7 +834,8 @@ describe('保存流程本身出错（审查 B5）', () => {
     vi.mocked(editor.capture).mockImplementationOnce(() => {
       throw failure
     })
-    await expect(coordinator.save()).resolves.toBeUndefined()
+    // save 不会被拒绝：结果里是意外的错误（M3-P4 起 save 交回这一次的结果，调度据此决定之后怎么办）
+    await expect(coordinator.save()).resolves.toEqual({ kind: 'failed', failure: { kind: 'unexpected' }, requestId: undefined })
     expect(send).not.toHaveBeenCalled()
     expect(coordinator.view()).toMatchObject({ status: 'failed', problem: { kind: 'unexpected', error: failure }, canSave: true })
     expect(reportError).toHaveBeenCalledWith(failure)
@@ -1173,7 +1208,7 @@ describe('保存协议加固（M3-P3 设计 §3.7、§3.8、§3.10）', () => {
 
     describe('续租得知时正有一次保存在途（复验 C1）：它的结果还没有着落，同样先核对——等它结束，以结果未知结束的原样重发一次', () => {
       /** 改一处、保存，在途时续租得知过旧：核对随即开始（checking 为真），交回在途的那一次与 save 的结果 */
-      async function blockedWhileSaving(context: ReturnType<typeof setup>): Promise<{ readonly inFlight: PendingSend, readonly saving: Promise<void> }> {
+      async function blockedWhileSaving(context: ReturnType<typeof setup>): Promise<{ readonly inFlight: PendingSend, readonly saving: Promise<unknown> }> {
         context.control.edit('甲')
         const saving = context.coordinator.save()
         const inFlight = await sent(context.calls, 1)
@@ -1283,13 +1318,409 @@ describe('保存协议加固（M3-P3 设计 §3.7、§3.8、§3.10）', () => {
     })
     expect(coordinator.view().snapshotBytes).toBe(4_200_000)
     control.edit('甲乙')
-    const saving = coordinator.save()
+    const saving = coordinator.save(explicitCaptureSource(editor), EXPLICIT)
     ;(await sent(calls, 1)).resolve(saved(2))
     await saving
     // {"content":"甲乙"}：14 个 ASCII 字符加两个汉字各 3 字节
     expect(coordinator.view().snapshotBytes).toBe(20)
     control.edit('很长的内容超过了上限的字节数')
-    await coordinator.save()
+    await coordinator.save(explicitCaptureSource(editor), EXPLICIT)
     expect(coordinator.view()).toMatchObject({ problem: { kind: 'too-large' }, snapshotBytes: new TextEncoder().encode('{"content":"很长的内容超过了上限的字节数"}').byteLength })
+  })
+})
+
+/** 自动保存、切到后台、退出编辑与交出：会话内去重 */
+const AUTO: SaveOptions = { dedupe: true }
+
+/** 一次给定的捕获：内容 content，摘要按内容（同样的内容同样的摘要） */
+function captureOf(seq: number, content: string, extra: Partial<SnapshotCapture> = {}): SnapshotCapture {
+  const snapshot = JSON.stringify({ content })
+  return { seq, snapshot, bytes: new TextEncoder().encode(snapshot).byteLength, formulasPending: false, digest: `sha256:${content}`, ...extra }
+}
+
+/** 来源：交回给定的捕获，记下被调用了几次 */
+function given(capture: PreparedCapture) {
+  return vi.fn((): PreparedCapture => capture)
+}
+
+describe('上传给定的捕获（M3-P4 设计 §3.1：保存的状态机不自己捕获，捕获由来源给出）', () => {
+  it('请求按捕获的序号、快照与"公式待更新"发出，不调用编辑器的捕获；大小按捕获的；确认只到捕获时的序号（之后的修改仍算没保存，A08）', async () => {
+    const { real, control, editor, calls } = setup({ baseRevision: 3 })
+    control.edit('甲')
+    control.edit('甲乙')
+    const saving = real.save(given(captureOf(1, '甲', { formulasPending: true })), AUTO)
+    const request = await sent(calls, 1)
+    expect(request.request).toMatchObject({ baseRevision: 3, localSeq: 1, snapshot: '{"content":"甲"}', formulasPending: true })
+    expect(editor.capture).not.toHaveBeenCalled()
+    request.resolve(saved(4))
+    await expect(saving).resolves.toEqual({ kind: 'saved', requestId: request.request.requestId })
+    // {"content":"甲"}：14 个 ASCII 字符加一个汉字 3 字节
+    expect(real.view()).toMatchObject({ status: 'dirty', unsavedEdits: true, formulasPending: true, snapshotBytes: 17 })
+    expect(real.baseRevision()).toBe(4)
+  })
+
+  it('一个接一个：前面还有保存时排着，轮到时才向来源要捕获（上传的总是那一刻最新的，先后不会颠倒）', async () => {
+    const { real, control, calls } = setup()
+    control.edit('甲')
+    const first = real.save(given(captureOf(1, '甲')), AUTO)
+    const inFlight = await sent(calls, 1)
+    control.edit('甲乙')
+    const source = given(captureOf(2, '甲乙'))
+    const second = real.save(source, AUTO)
+    expect(real.view().status).toBe('saving')
+    await Promise.resolve()
+    expect(source).not.toHaveBeenCalled()
+    inFlight.resolve(saved(2))
+    await first
+    const next = await sent(calls, 2)
+    expect(source).toHaveBeenCalledOnce()
+    expect(next.request).toMatchObject({ baseRevision: 2, localSeq: 2 })
+    next.resolve(saved(3))
+    await second
+    expect(real.view().status).toBe('clean')
+  })
+
+  it('排着的时候不算已保存：settled 等排着的那一次也结束，离开照样提示', async () => {
+    const { real, control, calls } = setup()
+    control.edit('甲')
+    void real.save(given(captureOf(1, '甲')), AUTO)
+    const inFlight = await sent(calls, 1)
+    void real.save(given(captureOf(1, '甲')), EXPLICIT)
+    let settled = false
+    const waiting = real.settled().then(() => {
+      settled = true
+    })
+    inFlight.resolve(saved(2))
+    const queued = await sent(calls, 2)
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    expect(real.hasUnsavedWork()).toBe(true)
+    queued.resolve(saved(2))
+    await waiting
+    expect(real.hasUnsavedWork()).toBe(false)
+  })
+
+  it('来源说单元格的编辑提交不了：中止，提示先完成单元格的编辑，不上传', async () => {
+    const { real, send } = setup()
+    await expect(real.save(given('cell-editing'), EXPLICIT)).resolves.toEqual({ kind: 'failed', failure: { kind: 'cell-editing' }, requestId: undefined })
+    expect(send).not.toHaveBeenCalled()
+    expect(real.view()).toMatchObject({ status: 'clean', problem: { kind: 'cell-editing' } })
+  })
+
+  it('捕获超过上限：不压缩、不上传，提示容量上限；归为要等新内容', async () => {
+    const { real, control, compress, send } = setup({ maxSnapshotBytes: 10 })
+    control.edit('超过十个字节的内容')
+    await expect(real.save(given(captureOf(1, '超过十个字节的内容')), AUTO)).resolves.toEqual({ kind: 'failed', failure: { kind: 'content' }, requestId: undefined })
+    expect(compress).not.toHaveBeenCalled()
+    expect(send).not.toHaveBeenCalled()
+    expect(real.view()).toMatchObject({ status: 'failed', problem: { kind: 'too-large' } })
+  })
+
+  it('来源出错：按意外的错误处理（上报、保存失败），交回 unexpected，不发请求', async () => {
+    const { real, send, reportError } = setup()
+    const failure = new Error('SDK 的 save() 出错')
+    const outcome = await real.save(() => {
+      throw failure
+    }, AUTO)
+    expect(outcome).toEqual({ kind: 'failed', failure: { kind: 'unexpected' }, requestId: undefined })
+    expect(send).not.toHaveBeenCalled()
+    expect(reportError).toHaveBeenCalledWith(failure)
+    expect(real.view()).toMatchObject({ status: 'failed', problem: { kind: 'unexpected', error: failure } })
+  })
+})
+
+describe('停住与终态时不做（skipped）', () => {
+  it('停住时：不向来源要捕获，交回 skipped；恢复之后照常', async () => {
+    const { real, control, calls } = setup()
+    control.edit('甲')
+    real.stop()
+    const source = given(captureOf(1, '甲'))
+    await expect(real.save(source, AUTO)).resolves.toEqual({ kind: 'skipped', reason: 'stopped' })
+    expect(source).not.toHaveBeenCalled()
+    real.resume()
+    const saving = real.save(source, AUTO)
+    ;(await sent(calls, 1)).resolve(saved(2))
+    await expect(saving).resolves.toMatchObject({ kind: 'saved' })
+  })
+
+  it('排着的时候停住了：轮到时不做', async () => {
+    const { real, control, calls } = setup()
+    control.edit('甲')
+    void real.save(given(captureOf(1, '甲')), AUTO)
+    const inFlight = await sent(calls, 1)
+    const source = given(captureOf(1, '甲'))
+    const queued = real.save(source, EXPLICIT)
+    real.stop()
+    inFlight.resolve(saved(2))
+    await expect(queued).resolves.toEqual({ kind: 'skipped', reason: 'stopped' })
+    expect(source).not.toHaveBeenCalled()
+    expect(calls).toHaveLength(1)
+  })
+
+  it('准备期间（提交单元格、等公式）停住了：捕获了也不发', async () => {
+    const { real, control, send } = setup()
+    control.edit('甲')
+    let finish: ((capture: PreparedCapture) => void) | undefined
+    const saving = real.save(async () => new Promise<PreparedCapture>((resolve) => {
+      finish = resolve
+    }), EXPLICIT)
+    await vi.waitFor(() => expect(finish).toBeDefined())
+    real.stop()
+    finish?.(captureOf(1, '甲'))
+    await expect(saving).resolves.toEqual({ kind: 'skipped', reason: 'stopped' })
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it('终态（版本冲突、不兼容）之后：交回 ended，不向来源要捕获', async () => {
+    const { real, control, calls } = setup()
+    control.edit('甲')
+    const saving = real.save(given(captureOf(1, '甲')), AUTO)
+    ;(await sent(calls, 1)).reject(conflictError(5, { clientInstanceId: OTHER_TAB, localSeq: 2 }))
+    await expect(saving).resolves.toEqual({ kind: 'failed', failure: { kind: 'terminal' }, requestId: calls[0]?.request.requestId })
+    const source = given(captureOf(1, '甲'))
+    await expect(real.save(source, EXPLICIT)).resolves.toEqual({ kind: 'skipped', reason: 'ended' })
+    expect(source).not.toHaveBeenCalled()
+
+    const blocked = setup()
+    blocked.real.block('client-outdated')
+    await expect(blocked.real.save(source, AUTO)).resolves.toEqual({ kind: 'skipped', reason: 'ended' })
+  })
+
+  it('续租得知不兼容时有保存排着：在途与排着的都算"结果没有着落"，先等它们（排着的轮到时不做），在途的以结果未知结束就原样重发一次', async () => {
+    const { real, control, calls } = setup({ baseRevision: 3 })
+    control.edit('甲')
+    void real.save(given(captureOf(1, '甲')), AUTO)
+    const inFlight = await sent(calls, 1)
+    // 排着的是显式保存：轮到时已经是终态，不向来源要捕获（不提交用户正在编辑的单元格、不捕获）
+    const source = given(captureOf(1, '甲'))
+    const queued = real.save(source, EXPLICIT)
+    real.block('client-outdated')
+    expect(real.view()).toMatchObject({ status: 'outdated', checking: true })
+    inFlight.reject(new NetworkError('断网'))
+    await expect(queued).resolves.toEqual({ kind: 'skipped', reason: 'ended' })
+    expect(source).not.toHaveBeenCalled()
+    const replay = await sent(calls, 2)
+    expect(replay.request).toEqual(inFlight.request)
+    replay.resolve(saved(4))
+    await real.settled()
+    expect(real.view()).toMatchObject({ status: 'outdated', checking: false, unsaved: false })
+  })
+})
+
+describe('会话内去重（M3-P4 设计 §3.7：键是快照字节的摘要连同"公式待更新"，与最近一次确认过的相同就不上传）', () => {
+  /** 改一处、自动保存确认（摘要 sha256:甲，修订 2）：交回状态机与假接口 */
+  async function confirmedOnce(extra: Partial<SnapshotCapture> = {}) {
+    const context = setup()
+    context.control.edit('甲')
+    const saving = context.real.save(given(captureOf(1, '甲', extra)), AUTO)
+    ;(await sent(context.calls, 1)).resolve(saved(2))
+    await saving
+    return context
+  }
+
+  it('打开时不知道服务端的键：第一次照常上传', async () => {
+    const { real, control, calls } = setup()
+    control.edit('甲')
+    void real.save(given(captureOf(1, '甲')), AUTO)
+    expect((await sent(calls, 1)).request.localSeq).toBe(1)
+  })
+
+  it('改了又撤销（内容与最近一次确认过的相同）：不压缩、不上传，按这次捕获的序号确认，基准不变', async () => {
+    const { real, control, calls, compress } = await confirmedOnce()
+    control.edit('甲乙')
+    control.edit('甲')
+    expect(real.view().status).toBe('dirty')
+    await expect(real.save(given(captureOf(3, '甲')), AUTO)).resolves.toEqual({ kind: 'deduped' })
+    expect(calls).toHaveLength(1)
+    expect(compress).toHaveBeenCalledOnce()
+    expect(real.view()).toMatchObject({ status: 'clean', unsaved: false, problem: undefined })
+    expect(real.baseRevision()).toBe(2)
+  })
+
+  it('内容相同、"公式待更新"不同：不被挡（补存要清掉服务端的标记）', async () => {
+    const { real, calls } = await confirmedOnce({ formulasPending: true })
+    expect(real.view()).toMatchObject({ formulasPending: true, unsaved: true })
+    const saving = real.save(given(captureOf(1, '甲')), AUTO)
+    const recapture = await sent(calls, 2)
+    expect(recapture.request).toMatchObject({ localSeq: 1, formulasPending: false })
+    recapture.resolve({ revision: 2, savedAt: '2026-09-27T08:00:00.000Z', unchanged: true })
+    await saving
+    expect(real.view()).toMatchObject({ status: 'clean', formulasPending: false })
+  })
+
+  it('显式保存不去重：内容相同也上传（服务端只写回执，不加修订号）', async () => {
+    const { real, calls } = await confirmedOnce()
+    const saving = real.save(given(captureOf(1, '甲')), EXPLICIT)
+    ;(await sent(calls, 2)).resolve({ revision: 2, savedAt: '2026-09-27T08:00:00.000Z', unchanged: true })
+    await expect(saving).resolves.toMatchObject({ kind: 'saved' })
+  })
+
+  it('没有摘要（算不出）：这一次不去重；确认之后也不留键，下一次相同的内容照常上传', async () => {
+    const { real, control, calls } = await confirmedOnce()
+    control.edit('乙')
+    const first = real.save(given(captureOf(2, '乙', { digest: undefined })), AUTO)
+    ;(await sent(calls, 2)).resolve(saved(3))
+    await first
+    const second = real.save(given(captureOf(2, '乙')), AUTO)
+    ;(await sent(calls, 3)).resolve({ revision: 3, savedAt: '2026-09-27T08:00:00.000Z', unchanged: true })
+    await expect(second).resolves.toMatchObject({ kind: 'saved' })
+  })
+
+  it('有一次结果未知的请求（服务端上可能是它的内容）：内容回到确认过的那样也照常上传，不当作已确认；冲突的来源是它时照常自己追自己', async () => {
+    const { real, control, calls } = await confirmedOnce()
+    control.edit('甲乙')
+    const lost = real.save(given(captureOf(2, '甲乙')), AUTO)
+    const unknown = await sent(calls, 2)
+    unknown.reject(new NetworkError('回包丢了'))
+    await lost
+    control.edit('甲')
+    const undo = real.save(given(captureOf(3, '甲')), AUTO)
+    const stale = await sent(calls, 3)
+    expect(stale.request).toMatchObject({ baseRevision: 2, localSeq: 3, snapshot: '{"content":"甲"}' })
+    stale.reject(conflictError(3, { clientInstanceId: ME, localSeq: 2 }))
+    const rebased = await sent(calls, 4)
+    expect(rebased.request).toMatchObject({ baseRevision: 3, localSeq: 3 })
+    rebased.resolve(saved(4))
+    await expect(undo).resolves.toEqual({ kind: 'saved', requestId: rebased.request.requestId })
+    expect(real.view()).toMatchObject({ status: 'clean', unsaved: false })
+  })
+
+  it('原样重发核对出那一次其实已经提交：按它的键确认，之后同样的内容去重', async () => {
+    const { real, control, calls } = await confirmedOnce()
+    control.edit('甲乙')
+    const lost = real.save(given(captureOf(2, '甲乙')), AUTO)
+    ;(await sent(calls, 2)).reject(new NetworkError('回包丢了'))
+    await lost
+    const replaying = real.replayUnknownOutcome()
+    ;(await sent(calls, 3)).resolve(saved(3))
+    await expect(replaying).resolves.toBe('committed')
+    await expect(real.save(given(captureOf(2, '甲乙')), AUTO)).resolves.toEqual({ kind: 'deduped' })
+    expect(calls).toHaveLength(3)
+  })
+})
+
+describe('被拒、再试也一样的内容（M3-P4 设计 §3.8：同一个去重键不重试，有新的捕获才再试）', () => {
+  const INVALID = new ApiError(422, 'SNAPSHOT_INVALID', '表格内容的格式不正确')
+
+  it('同样的内容不再发（说明照旧），显式保存照发；新的内容照常发，成功之后忘掉被拒的那个', async () => {
+    const { real, control, calls } = setup()
+    control.edit('坏')
+    const first = real.save(given(captureOf(1, '坏')), AUTO)
+    ;(await sent(calls, 1)).reject(INVALID)
+    await expect(first).resolves.toEqual({ kind: 'failed', failure: { kind: 'content' }, requestId: calls[0]?.request.requestId })
+    await expect(real.save(given(captureOf(1, '坏')), AUTO)).resolves.toEqual({ kind: 'failed', failure: { kind: 'content' }, requestId: undefined })
+    expect(calls).toHaveLength(1)
+    expect(real.view()).toMatchObject({ status: 'failed', problem: { kind: 'request', error: INVALID } })
+    // 显式保存一律上传（用户在强制同步）
+    const forced = real.save(given(captureOf(1, '坏')), EXPLICIT)
+    ;(await sent(calls, 2)).reject(INVALID)
+    await forced
+    control.edit('好')
+    const fixed = real.save(given(captureOf(2, '好')), AUTO)
+    ;(await sent(calls, 3)).resolve(saved(2))
+    await fixed
+    expect(real.view()).toMatchObject({ status: 'clean', problem: undefined })
+    control.edit('坏')
+    void real.save(given(captureOf(3, '坏')), AUTO)
+    await sent(calls, 4)
+  })
+
+  it('同样的内容但"公式待更新"不同：键不同，照常发', async () => {
+    const { real, control, calls } = setup()
+    control.edit('坏')
+    const first = real.save(given(captureOf(1, '坏')), AUTO)
+    ;(await sent(calls, 1)).reject(INVALID)
+    await first
+    void real.save(given(captureOf(1, '坏', { formulasPending: true })), AUTO)
+    await sent(calls, 2)
+  })
+})
+
+describe('"公式待更新"的初值（M3-P4 设计 §3.5：进入编辑时申请编辑权的响应里的标记）', () => {
+  it('带标记进入编辑：修改都已保存、只差公式（离开会提示）；重算收齐之后的补存确认了，标记随之清掉', async () => {
+    const { real, calls } = setup({ initialFormulasPending: true })
+    expect(real.view()).toMatchObject({ status: 'dirty', formulasPending: true, unsaved: true, unsavedEdits: false })
+    expect(real.hasUnsavedWork()).toBe(true)
+    const saving = real.save(given(captureOf(0, '重算之后')), AUTO)
+    const recapture = await sent(calls, 1)
+    expect(recapture.request).toMatchObject({ localSeq: 0, formulasPending: false })
+    recapture.resolve(saved(2))
+    await saving
+    expect(real.view()).toMatchObject({ status: 'clean', formulasPending: false, unsaved: false })
+    expect(real.hasUnsavedWork()).toBe(false)
+  })
+
+  it('不带标记（默认）：打开时已保存到云端', () => {
+    expect(setup().real.view()).toMatchObject({ status: 'clean', formulasPending: false })
+  })
+})
+
+describe('失败的归类（M3-P4 设计 §3.8：会自动重试 / 要等新内容 / 要等会话 / 终态）', () => {
+  it.each<[string, unknown, SaveFailure]>([
+    ['网络错误', new NetworkError('断网'), { kind: 'retry', retryAfterMs: undefined }],
+    ['5xx', new ApiError(500, 'INTERNAL_ERROR', '出错了'), { kind: 'retry', retryAfterMs: undefined }],
+    ['回包读不出来', new ResponseFormatError('回包不对'), { kind: 'retry', retryAfterMs: undefined }],
+    ['503 带 Retry-After（检查池满、每个账户 2 份、数据库繁忙）', new ApiError(503, 'SERVICE_UNAVAILABLE', '繁忙', { retryAfterSeconds: 7 }), { kind: 'retry', retryAfterMs: 7000 }],
+    ['503 不带 Retry-After', new ApiError(503, 'SERVICE_UNAVAILABLE', '繁忙'), { kind: 'retry', retryAfterMs: undefined }],
+    ['429 带 Retry-After', new ApiError(429, 'TOO_MANY_REQUESTS', '太频繁', { retryAfterSeconds: 3 }), { kind: 'retry', retryAfterMs: 3000 }],
+    ['requestId 被占用（下次换新的）', new ApiError(409, 'REQUEST_ID_CONFLICT', '被占用'), { kind: 'retry', retryAfterMs: undefined }],
+    ['编辑权中断（编辑租约在续上）', new ApiError(409, 'EDIT_LEASE_LOST', '编辑权已失效', { details: { reason: 'expired' } }), { kind: 'retry', retryAfterMs: undefined }],
+    ['不能编辑了（编辑租约处理，失效了页面停住保存）', new ApiError(403, 'PERMISSION_DENIED', '只能查看'), { kind: 'retry', retryAfterMs: undefined }],
+    ['读不到了（同上）', new ApiError(404, 'NOT_FOUND', '不存在'), { kind: 'retry', retryAfterMs: undefined }],
+    ['未登录', new ApiError(401, 'UNAUTHENTICATED', '未登录'), { kind: 'session' }],
+    ['登录已过期', new ApiError(401, 'SESSION_EXPIRED', '登录已过期'), { kind: 'session' }],
+    ['令牌失效', new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效'), { kind: 'session' }],
+    ['快照不合格', new ApiError(422, 'SNAPSHOT_INVALID', '格式不正确'), { kind: 'content' }],
+    ['超过上限', new ApiError(413, 'PAYLOAD_TOO_LARGE', '太大'), { kind: 'content' }],
+    ['请求不合法', new ApiError(400, 'REQUEST_INVALID', '不合法'), { kind: 'content' }],
+    ['版本冲突', conflictError(3, null), { kind: 'terminal' }],
+    ['本页过旧', new ApiError(409, 'CLIENT_OUTDATED', '过旧'), { kind: 'terminal' }],
+    ['文档太新', new ApiError(409, 'DOCUMENT_TOO_NEW', '太新'), { kind: 'terminal' }],
+  ])('%s', (_case, error, expected) => {
+    expect(classifySaveError(error)).toEqual(expected)
+  })
+
+  it('保存的结果带上归类与发出的 requestId', async () => {
+    const { real, control, calls } = setup()
+    control.edit('甲')
+    const busy = new ApiError(503, 'SERVICE_UNAVAILABLE', '繁忙', { retryAfterSeconds: 5 })
+    const saving = real.save(given(captureOf(1, '甲')), AUTO)
+    ;(await sent(calls, 1)).reject(busy)
+    await expect(saving).resolves.toEqual({ kind: 'failed', failure: { kind: 'retry', retryAfterMs: 5000 }, requestId: calls[0]?.request.requestId })
+    // 503 是服务端说没有生效，但原样重发同一个 requestId 也安全（P3 交接单）：内容没变就原样重发
+    const retry = real.save(given(captureOf(1, '甲')), AUTO)
+    const again = await sent(calls, 2)
+    expect(again.request).toEqual(calls[0]?.request)
+    again.resolve(saved(2))
+    await expect(retry).resolves.toEqual({ kind: 'saved', requestId: calls[0]?.request.requestId })
+  })
+})
+
+describe('定时捕获的大小与出错（autosave.ts 在保存之外捕获）', () => {
+  it('捕获了一次：视图的大小随之更新（80% 的提示不等上传），通知订阅者', () => {
+    const { real } = setup()
+    const listener = vi.fn()
+    real.subscribe(listener)
+    real.noteCapture(captureOf(1, '甲'))
+    expect(real.view().snapshotBytes).toBe(17)
+    expect(listener).toHaveBeenCalledOnce()
+  })
+
+  it('捕获出错：上报，显示保存失败（意外的错误）；之后一次保存成功时清掉；终态之后只上报', async () => {
+    const { real, control, calls, reportError } = setup()
+    control.edit('甲')
+    const failure = new Error('捕获出错')
+    real.captureFailed(failure)
+    expect(reportError).toHaveBeenCalledWith(failure)
+    expect(real.view()).toMatchObject({ status: 'failed', problem: { kind: 'unexpected', error: failure } })
+    const saving = real.save(given(captureOf(1, '甲')), AUTO)
+    ;(await sent(calls, 1)).resolve(saved(2))
+    await saving
+    expect(real.view()).toMatchObject({ status: 'clean', problem: undefined })
+
+    real.block('document-too-new')
+    real.captureFailed(failure)
+    expect(reportError).toHaveBeenCalledTimes(2)
+    expect(real.view()).toMatchObject({ status: 'too-new', problem: undefined })
   })
 })
