@@ -60,28 +60,35 @@ function staleFormulas(unitId: string): string {
 
 test.describe('US-M3-02 修改自动保存（S4 冒烟）', { tag: '@test-build' }, () => {
   test('放开定时的自动保存：修改停下 2 秒之后自动上传（没按保存），不到 2 秒不传；页头随之回到已保存到云端', async ({ page }) => {
-    // 打开之前装上 Playwright 的时钟（时间照常流动，页面照常载入、渲染）；改完之后停住时间，按需往前拨
+    // 打开之前装上 Playwright 的时钟（时间照常流动，页面照常载入、渲染）。改之前停住时间，之后只在往前拨的时候走：机器多忙，
+    // 修改、捕获、上传与断言之间都不会有计时器自己到点；停住时做的修改，时刻就是停住的那一刻（调度的时钟是页面的 performance.now）
     await page.clock.install()
     const documentId = await openNewSheet(page, 'autosave-quiet')
     const writes = recordWrites(page, documentId)
     await releaseAutosave(page)
+    // 目标留足 1 秒：忙的机器上也不会是"过去"的时刻
+    await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1_000)
+    const changedAt = await page.evaluate(() => performance.now())
     await typeInCell(page, 'A1', 'auto')
     await expect(saveStatus(page)).toHaveText('有未保存的修改')
-    // 停住时间：跳到改完之后约 1 秒（停 1 秒的捕获随之到点执行）；目标留足 1 秒，忙的机器上也不会是"过去"的时刻
-    await page.clock.pauseAt(await page.evaluate(() => Date.now()) + 1_000)
-    const [capture] = capturesOf(await autosaveLog(page))
-    expect(capture).toMatchObject({ trigger: 'quiet', seq: 1, formulasPending: false })
-    // 上传在修改之后 2 秒，即捕获之后 1 秒（捕获的时刻在调度的时钟上，与页面的 performance.now 同一个）：拨到它之前 100 ms，还没传
-    const now = await page.evaluate(() => performance.now())
-    await page.clock.runFor(Math.max(0, (capture?.at ?? now) + 1_000 - now - 100))
+    // 停下不到 1 秒：不捕获。到 1 秒：捕获——公式在 Worker 里算完（真实的时间）才算收齐，没算完时捕获推迟到算完；算完的通知排下的计时器
+    // 在停住的这一刻，所以只让到点的计时器执行、不拨时间（runFor(0)），等它出来：捕获的时刻照样是修改之后 1 秒
+    await page.clock.runFor(999)
+    expect(capturesOf(await autosaveLog(page))).toEqual([])
+    await page.clock.runFor(1)
+    await expect.poll(async () => {
+      await page.clock.runFor(0)
+      return capturesOf(await autosaveLog(page))
+    }).toMatchObject([{ trigger: 'quiet', seq: 1, formulasPending: false, at: changedAt + 1_000 }])
+    // 上传在修改之后 2 秒：拨到它之前 1 ms，还没传；再拨 1 ms，传了（摘要与请求是真实的异步，不靠计时器）
+    await page.clock.runFor(999)
     expect(writes.saves).toHaveLength(0)
     expect(uploadsOf(await autosaveLog(page))).toEqual([])
-    await page.clock.runFor(200)
+    await page.clock.runFor(1)
     await expect.poll(() => writes.saves.length).toBe(1)
     await expect(saveStatus(page)).toHaveText('已保存到云端')
+    expect(uploadsOf(await autosaveLog(page))).toMatchObject([{ trigger: 'quiet', startedAt: changedAt + 2_000, seq: 1, outcome: { kind: 'saved' } }])
     await page.clock.resume()
-    const uploads = uploadsOf(await autosaveLog(page))
-    expect(uploads).toMatchObject([{ trigger: 'quiet', outcome: { kind: 'saved' } }])
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('auto')
   })
 
