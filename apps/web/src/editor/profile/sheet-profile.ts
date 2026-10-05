@@ -4,7 +4,8 @@
 // 资源的白名单与规则在 contracts（documents/profile-resources.ts，服务端的快照检查共用，M3-P3 设计 §3.2）：各组按那里的名称声明资源
 // （写错名字类型检查不通过），单元测试核对各组声明的合起来等于白名单。
 // 插件按组注册，组内与组间的顺序按官方 preset；不注册 @univerjs/network、评论、水印、table、十字高亮等，不注册任何遥测实现。
-// 界面的配置按这次的打开方式（EditorAccess）组合：只读时一开始就以只读的界面创建（插件档案 v1 §5.2 的"销毁重建"一栏，M2-P3 设计 §3.4）
+// 界面的配置按这次的打开方式（EditorAccess）组合：只读时一开始就以只读的界面创建（插件档案 v1 §5.2 的"销毁重建"一栏，M2-P3 设计 §3.4）。
+// 公式由谁执行按 FormulaExecution 组合（M3-P4 设计 §3.14）：生产用公式 Worker；主线程模式是同一份档案的变体（M4 的退路，M3 只给测试构建用）
 import type { DocumentProfile, ProfileResourceName } from '@nerve-office/contracts'
 import type { EditorAccess } from '../editor-access.ts'
 import type { PluginEntry } from './plugin-entry.ts'
@@ -46,11 +47,31 @@ import { pluginEntry } from './plugin-entry.ts'
 /** 插件档案的标识与版本，写进平台的元数据（00 号计划书 §8.1）；是 contracts 登记的档案之一 */
 export const SHEET_PROFILE_ID = 'sheet@1' satisfies DocumentProfile
 
+/**
+ * 公式在哪里计算（插件档案 v1 §1，M0-P3 报告 §6.3，M3-P4 设计 §3.14）。两种都是 sheet@1：插件的组与顺序、资源、影响数据的配置相同，
+ * 只差公式由谁执行，存下的数据一样（档案的标识不变）：
+ * - worker（生产）：公式 Worker 由适配层以模块 Worker 创建后传入；插件不负责终止传入的实例（rpc/src/plugin.ts:74-87）；
+ * - main-thread：主线程的引擎执行公式，不注册 RPC，让出间隔调到 MAIN_THREAD_FORMULA_INTERVAL_COUNT。这是 M0 推荐、M4 要用的退路
+ *   （Worker 起不来时以它重建，计划书 §10.2、§13.2）；M3 里只有测试构建经地址参数选用它（US-M3-03 的两种模式），生产构建里没有开关
+ */
+export type FormulaExecution
+  = | { readonly kind: 'worker', readonly worker: Worker }
+    | { readonly kind: 'main-thread' }
+
+export type FormulaMode = FormulaExecution['kind']
+
+/**
+ * 主线程模式下公式引擎每执行多少个公式让出一次主线程（UniverFormulaEnginePlugin 的 intervalCount，默认 500）：
+ * M0-P3 报告 §3.3 第 5 条、§6.3——默认值时一次牵动约 320 个公式的修改冻结界面 0.66–0.83 秒，调到 20 降到 67–88 ms；
+ * 让出时计算中的修改与 stop 也才有机会执行
+ */
+export const MAIN_THREAD_FORMULA_INTERVAL_COUNT = 20
+
 export interface SheetProfileContext {
   /** 编辑器挂载的容器 */
   readonly container: HTMLElement
-  /** 公式 Worker：由适配层以模块 Worker 创建后传入；插件不负责终止传入的实例（rpc/src/plugin.ts:74-87） */
-  readonly formulaWorker: Worker
+  /** 公式在哪里计算：只影响谁执行公式，不影响数据 */
+  readonly formula: FormulaExecution
   /** 这次以什么方式打开：只影响界面的配置，不影响数据（插件、顺序、影响数据的配置与资源两种方式相同） */
   readonly access: EditorAccess
   /**
@@ -68,8 +89,18 @@ export interface PluginGroup {
   readonly plugins: (context: SheetProfileContext) => readonly PluginEntry[]
 }
 
-/** 公式在 Worker 里计算（插件档案 v1 §1，M0-P3 报告 §6.3）：主线程的引擎、表格与表格公式都不执行公式 */
-const NOT_EXECUTE_FORMULA = true
+/**
+ * 主线程的引擎、表格与表格公式这三处执不执行公式：Worker 模式下都不执行（插件档案 v1 §1，M0-P3 报告 §6.3），主线程模式下都执行。
+ * 三处写明 true 或 false（不靠默认值），单元测试逐项核对
+ */
+function notExecuteFormula(formula: FormulaExecution): boolean {
+  return formula.kind === 'worker'
+}
+
+/** 公式引擎的配置：主线程模式另把让出间隔调小 */
+function formulaEngineConfig(formula: FormulaExecution): ConstructorParameters<typeof UniverFormulaEnginePlugin>[0] {
+  return formula.kind === 'worker' ? { notExecuteFormula: true } : { notExecuteFormula: false, intervalCount: MAIN_THREAD_FORMULA_INTERVAL_COUNT }
+}
 
 type UIConfig = ConstructorParameters<typeof UniverUIPlugin>[0]
 type SheetsUIConfig = ConstructorParameters<typeof UniverSheetsUIPlugin>[0]
@@ -105,18 +136,18 @@ export const SHEET_PLUGIN_GROUPS: readonly PluginGroup[] = [
       'SHEET_WORKSHEET_PROTECTION_PLUGIN',
       'SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN',
     ],
-    plugins: ({ container, formulaWorker, access }) => [
+    plugins: ({ container, formula, access }) => [
       pluginEntry(UniverDocsPlugin),
       pluginEntry(UniverRenderEnginePlugin),
       pluginEntry(UniverUIPlugin, uiConfig(container, access)),
       pluginEntry(UniverDocsUIPlugin),
-      // 传 Worker 实例：传地址时插件会建一个不带 type: 'module' 的经典 Worker（rpc/src/plugin.ts:86）
-      pluginEntry(UniverRPCMainThreadPlugin, { workerURL: formulaWorker }),
-      pluginEntry(UniverFormulaEnginePlugin, { notExecuteFormula: NOT_EXECUTE_FORMULA }),
+      // 传 Worker 实例：传地址时插件会建一个不带 type: 'module' 的经典 Worker（rpc/src/plugin.ts:86）。主线程模式不注册 RPC
+      ...(formula.kind === 'worker' ? [pluginEntry(UniverRPCMainThreadPlugin, { workerURL: formula.worker })] : []),
+      pluginEntry(UniverFormulaEnginePlugin, formulaEngineConfig(formula)),
       // onlyRegisterFormulaRelatedMutations 的类型只允许 true，官方 preset 写的 false 等同于不写，这里不写。
       // 关掉大表操作的拆分：复制大表同步执行，立即捕获也完整（插件档案 v1 §1，M0-P3 报告 §2.2）
       pluginEntry(UniverSheetsPlugin, {
-        notExecuteFormula: NOT_EXECUTE_FORMULA,
+        notExecuteFormula: notExecuteFormula(formula),
         largeSheetOperation: { largeSheetCellCountThreshold: Number.MAX_SAFE_INTEGER },
       }),
       pluginEntry(UniverSheetsUIPlugin, sheetsUIConfig(access)),
@@ -130,10 +161,10 @@ export const SHEET_PLUGIN_GROUPS: readonly PluginGroup[] = [
   {
     id: 'formula',
     resources: [],
-    plugins: ({ recalculate }) => [
+    plugins: ({ formula, recalculate }) => [
       pluginEntry(UniverSheetsFormulaPlugin, recalculate === true
-        ? { notExecuteFormula: NOT_EXECUTE_FORMULA, initialFormulaComputing: CalculationMode.FORCED }
-        : { notExecuteFormula: NOT_EXECUTE_FORMULA }),
+        ? { notExecuteFormula: notExecuteFormula(formula), initialFormulaComputing: CalculationMode.FORCED }
+        : { notExecuteFormula: notExecuteFormula(formula) }),
       pluginEntry(UniverSheetsFormulaUIPlugin),
     ],
   },

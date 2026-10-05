@@ -86,6 +86,16 @@ describe('变更检测的订阅', () => {
     expect(tracker.changeSeq()).toBe(0)
   })
 
+  it('公式的进度取自同一个跟踪器：轮数、开始、完成（M3-P4 设计 §3.10、§3.15）', () => {
+    const facade = fakeFacade()
+    const tracker = createChangeTracker(facade.univer, facade.api, config)
+    expect(tracker.formulaProgress()).toEqual({ round: 0, started: false, stopped: false, completed: false, resultSheets: null, appliedSheets: [], queued: false, awaitingForcedRound: false })
+    facade.fire({ id: 'formula.mutation.set-formula-calculation-start', type: CommandType.MUTATION, params: {}, options: { onlyLocal: true } })
+    expect(tracker.formulaProgress()).toMatchObject({ round: 1, started: true, completed: false })
+    facade.fire({ id: 'formula.mutation.set-formula-calculation-notification', type: CommandType.MUTATION, params: { functionsExecutedState: 2 }, options: { onlyLocal: true } })
+    expect(tracker.formulaProgress()).toMatchObject({ round: 1, started: true, completed: true })
+  })
+
   it('销毁之后不再订阅', () => {
     const facade = fakeFacade()
     const tracker = createChangeTracker(facade.univer, facade.api, config)

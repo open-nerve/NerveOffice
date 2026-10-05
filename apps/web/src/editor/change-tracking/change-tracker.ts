@@ -7,6 +7,7 @@
 import type { Univer } from '@univerjs/core'
 import type { FUniver } from '@univerjs/core/facade'
 import type { ChangeClassifierConfig } from './change-classifier.ts'
+import type { FormulaProgress } from './formula-settle-tracker.ts'
 import { createCalculationTriggerCheck } from './calculation-trigger.ts'
 import { isDocumentChange } from './change-classifier.ts'
 import { toCommandRecord } from './command-event.ts'
@@ -18,6 +19,11 @@ export interface ChangeTracker {
   readonly onChange: (listener: () => void) => () => void
   /** 公式是否收齐（formula-settle-tracker.ts 的三个条件） */
   readonly formulasSettled: () => boolean
+  /**
+   * 公式计算的进度（轮数、这一轮开始、被停、完成、带结果与已写回的表、有没有排队）：测试构建的探针读它（M3-P4 设计 §3.15）；
+   * 自动保存读的是收齐与否（formulasSettled）与进度变了的信号（onFormulaProgress，设计 §3.10）
+   */
+  readonly formulaProgress: () => FormulaProgress
   /** 公式的进度变了（开始一轮、停止、结果、写回、完成，或者会触发计算的命令）：收齐与否可能变了 */
   readonly onFormulaProgress: (listener: () => void) => () => void
   readonly dispose: () => void
@@ -72,6 +78,7 @@ export function createChangeTracker(univer: Univer, univerAPI: FUniver, config: 
       return () => listeners.delete(listener)
     },
     formulasSettled: () => formulas.isSettled(),
+    formulaProgress: () => formulas.progress(),
     onFormulaProgress(listener) {
       progressListeners.add(listener)
       return () => progressListeners.delete(listener)

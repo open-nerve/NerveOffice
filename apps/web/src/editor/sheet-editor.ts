@@ -2,7 +2,7 @@
 // 一页一份文档、整页加载与卸载（计划书 §10.2）：同一个实例里不能创建两份 unitId 相同的文档，反复创建销毁也会泄漏内存。
 // 能不能编辑在创建时决定（access，M2-P3 设计 §3.1）：只读的文档一开始就以只读创建，没有"就绪之后再设"的第二条路。
 // 顺序：
-// 1. 创建公式 Worker（模块 Worker），先挂上它的回报与错误的监听；
+// 1. 创建公式 Worker（模块 Worker），先挂上它的回报与错误的监听（主线程模式没有 Worker，M3-P4 设计 §3.14）；
 // 2. new Univer（身份替换：授权服务按 access 回答，ADR-009；语言服务换成销毁之后不抛错的实现，internal-api 的 disposalSafeLocaleOverride；
 //    资源守卫：资源管理服务换成只观察的子类，M3-P4 的打开自检），
 //    按档案注册插件（界面的配置按 access）；FUniver.newAPI；
@@ -17,7 +17,8 @@
 // 返回之前（就绪之前）不允许输入（M1 总设计 §6.6）由编辑器页的交互屏障保证（interaction-barrier.ts，Codex 评审 CX1）：
 // 能编辑的文档从创建起就是可编辑的（授权服务一律允许），就绪之前的输入只能靠屏障拦住。
 // 测试构建（vite build --mode e2e）另在就绪之后装上 E2E 的探针（testing/e2e-probe.ts），注册插件之前看档案故障开关
-// （testing/profile-fault.ts，地址带 profileFault=<组> 时不注册这几组，M3-P4 设计 §3.14），生产构建里没有这两步。
+// （testing/profile-fault.ts，地址带 profileFault=<组> 时不注册这几组），地址参数还可以选主线程的公式模式（testing/formula-mode.ts）
+// （M3-P4 设计 §3.14）；生产构建里没有这几步与开关，只有 Worker 模式。
 // 模式切换一律重建（M3-P2 设计 §3.1）：编辑器页销毁旧的、以目标的 access 新建一个；重建之前取出视图状态（viewState），
 // 新建时交回来，就绪之后恢复（view-state.ts）。容器上写着这一个编辑器的打开方式（data-editor-access，读 / 写），销毁时去掉。
 // M3-P4（设计 §3.2、§3.4–§3.6、§3.10）：自动保存要的信号——公式的进度（变更检测的跟踪器）、组合输入（composition-watch.ts）、
@@ -32,6 +33,7 @@ import type { EditorAccess } from './editor-access.ts'
 import type { LifecycleWatch, SheetEditorLifecycle } from './lifecycle-watch.ts'
 import type { PanelDebounceWatch } from './panel-debounce-watch.ts'
 import type { OpenCheck } from './profile/open-check.ts'
+import type { FormulaExecution, FormulaMode } from './profile/sheet-profile.ts'
 import type { SheetViewState } from './view-state.ts'
 import type { WorkbookSnapshot } from './workbook-snapshot.ts'
 import { LocaleType, LogLevel, Univer } from '@univerjs/core'
@@ -194,10 +196,34 @@ interface MountedEditor {
   readonly composition: CompositionWatch
   readonly panels: PanelDebounceWatch
   readonly openCheck: OpenCheck
+  /** 公式在哪里计算（测试构建的探针报告它，页面自检据此核对选中的模式确实生效） */
+  readonly formulaMode: FormulaMode
+}
+
+/** 公式由谁执行，以及就绪要等的那一方：Worker 模式等 Worker 回报装好了 IMAGE() 的限制，主线程模式没有 Worker、不用等 */
+interface FormulaHost {
+  readonly execution: FormulaExecution
+  /** Worker 那边装好了 IMAGE() 的限制（主线程模式立即完成；主线程的那一份由生命周期的监听装，两种模式相同） */
+  readonly ready: Promise<void>
+  /** 就绪之后不再需要 Worker 回报的监听 */
+  readonly settle: () => void
+}
+
+/** 按公式的模式准备执行公式的一方；创建的东西在 cleanup 里登记销毁 */
+function createFormulaHost(mode: FormulaMode, cleanup: CleanupStack): FormulaHost {
+  if (mode === 'main-thread')
+    return { execution: { kind: 'main-thread' }, ready: Promise.resolve(), settle: () => {} }
+  // 静态的 new Worker(new URL(...)) 才会被打包成同源的 Worker 脚本；传地址给插件会建出经典 Worker（rpc/src/plugin.ts:86）
+  const worker = new Worker(new URL('./workers/formula.worker.ts', import.meta.url), { type: 'module', name: 'nerve-formula' })
+  // 传入的 Worker 由我们终止（插件只终止它自己创建的，rpc/src/plugin.ts:71-78）
+  cleanup.defer(() => worker.terminate())
+  const imagePolicy = watchWorkerImagePolicy(worker)
+  cleanup.defer(imagePolicy.dispose)
+  return { execution: { kind: 'worker', worker }, ready: imagePolicy.installed, settle: imagePolicy.dispose }
 }
 
 /** 按顺序创建、等到就绪；每创建一样就在 cleanup 里登记它的销毁，失败时由调用方统一销毁 */
-async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapshot, cleanup: CleanupStack): Promise<MountedEditor> {
+async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapshot, formulaMode: FormulaMode, cleanup: CleanupStack): Promise<MountedEditor> {
   // 测试构建：档案故障开关（M3-P4 设计 §3.14，testing/profile-fault.ts）。注册哪些插件必须在注册之前决定，所以在创建任何东西之前引入；
   // 生产构建里 MODE 是 production，这个分支与开关的分块都被去掉（门禁 artifacts 按来源核对）。只能动态引入（lint，与探针同一个理由）
   const pluginEntries = import.meta.env.MODE === 'e2e'
@@ -207,18 +233,13 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   const recalculate = options.recalculate === true
   container.setAttribute(EDITOR_ACCESS_ATTRIBUTE, access)
   cleanup.defer(() => container.removeAttribute(EDITOR_ACCESS_ATTRIBUTE))
-  // 静态的 new Worker(new URL(...)) 才会被打包成同源的 Worker 脚本；传地址给插件会建出经典 Worker（rpc/src/plugin.ts:86）
-  const worker = new Worker(new URL('./workers/formula.worker.ts', import.meta.url), { type: 'module', name: 'nerve-formula' })
-  // 传入的 Worker 由我们终止（插件只终止它自己创建的，rpc/src/plugin.ts:71-78）
-  cleanup.defer(() => worker.terminate())
-  const workerImagePolicy = watchWorkerImagePolicy(worker)
-  cleanup.defer(workerImagePolicy.dispose)
+  const formula = createFormulaHost(formulaMode, cleanup)
 
   // 资源守卫（打开自检，M3-P4 设计 §3.11 第 1 条）：一个编辑器一个，随 Univer 一起销毁（它就是 Univer 里的资源管理服务）
   const resourceGuard = createResourceLoadGuard()
   const univer = createUniver(access, resourceGuard)
   cleanup.defer(() => univer.dispose())
-  for (const entry of pluginEntries({ container, formulaWorker: worker, access, recalculate }))
+  for (const entry of pluginEntries({ container, formula: formula.execution, access, recalculate }))
     entry.register(univer)
   const univerAPI = FUniver.newAPI(univer)
   // 不变量（M2-P6 复核 F3）：Facade 的执行前事件（BeforeCommandExecute）在创建工作簿之前就要有订阅者，而且直到销毁都不能减到零。
@@ -273,25 +294,40 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   // 工作表的权限点在创建工作簿时由 SDK 加入（初值允许），所以在这之后设
   readOnly?.applyWorksheetPoints()
   await withDeadline(
-    Promise.all([lifecycle.rendered, lifecycle.imagePolicyInstalled, workerImagePolicy.installed]),
+    Promise.all([lifecycle.rendered, lifecycle.imagePolicyInstalled, formula.ready]),
     READY_TIMEOUT_MS,
     () => new SheetEditorLoadError('ready-timeout', `${READY_TIMEOUT_MS / 1000} 秒内没有全部就绪（渲染、主线程与 Worker 的 IMAGE() 限制）`),
   )
   // 就绪之后不再需要 Worker 回报的监听：Worker 之后出错按 M4 的设计处理（M1 里公式收齐会超时，页面提示公式结果尚未保存）
-  workerImagePolicy.dispose()
+  formula.settle()
   readOnly?.applyRenderedGuards()
   readOnly?.clearUndoStack()
   // 就绪之后再核对一次 hook 集合与这之前记下的加载问题：防 SDK 把注册挪到更晚（1.0.1 里两次的 hook 集合相同）
   const openCheck = recheckReady(created, { profile: SHEET_PROFILE_ID, hookNames: resourceGuard.sheetHookNames(), loadFailures: resourceGuard.loadFailures() })
-  return { univer, univerAPI, workbook, changes, cellEditing, lifecycle, composition, panels, openCheck }
+  return { univer, univerAPI, workbook, changes, cellEditing, lifecycle, composition, panels, openCheck, formulaMode }
+}
+
+/**
+ * 公式在哪里计算：生产构建只有 Worker 模式。测试构建里地址参数可以选主线程模式（testing/formula-mode.ts，M3-P4 设计 §3.14，
+ * US-M3-03 的两种模式）：生产构建里 MODE 是 production，这个分支与开关的分块都被去掉（门禁 artifacts 按模块来源核对）
+ */
+async function formulaModeOf(): Promise<FormulaMode> {
+  if (import.meta.env.MODE === 'e2e') {
+    const { formulaModeFromSearch } = await import('./testing/formula-mode.ts')
+    return formulaModeFromSearch(window.location.search)
+  }
+  return 'worker'
 }
 
 export async function createSheetEditor(options: CreateSheetEditorOptions): Promise<SheetEditor> {
   const snapshot = parseWorkbookSnapshot(options.snapshot)
+  // 在开始挂载之前定下（测试构建里要等开关的分块载入）：挂载的同步部分不被拆开，测试构建的切换计时照旧（switch-timing.ts 的 sync-end）。
+  // 生产构建里不等：这个表达式只剩 'worker'
+  const formulaMode = import.meta.env.MODE === 'e2e' ? await formulaModeOf() : 'worker'
   const cleanup = createCleanupStack()
   let mounted: MountedEditor
   try {
-    mounted = await mount(options, snapshot, cleanup)
+    mounted = await mount(options, snapshot, formulaMode, cleanup)
     // 重建之前的视图状态：就绪之后恢复（出错时 restoreViewState 报告、停在默认视图，不让创建失败）
     if (options.viewState !== undefined)
       restoreViewState(mounted.workbook, options.viewState)

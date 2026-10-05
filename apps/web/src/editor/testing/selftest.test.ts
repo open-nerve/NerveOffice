@@ -16,6 +16,7 @@ function host(): SelftestHost {
     page: { state: 'ready', readOnly: true },
     view: () => ({ mode: 'reading', surface: 'steady' }),
     visibility: () => ['2026-10-04T06:13:41.488Z visible', '2026-10-04T06:13:43.320Z hidden'],
+    allowLeave: () => {},
     pageErrors: () => [],
     consoleErrors: () => [],
     ignoredNotices: () => [],

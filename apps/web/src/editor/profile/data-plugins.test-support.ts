@@ -13,7 +13,7 @@ const NOT_IN_JSDOM = /(?:^|_)UI_PLUGIN$|^UNIVER_RENDER_ENGINE_PLUGIN$|^UNIVER_RP
 
 /** 档案里的数据插件，按档案的顺序 */
 export function dataPluginEntries(): PluginEntry[] {
-  const context = { container: document.createElement('div'), formulaWorker: {} as Worker, access: 'edit' as const }
+  const context = { container: document.createElement('div'), formula: { kind: 'worker' as const, worker: {} as Worker }, access: 'edit' as const }
   return SHEET_PLUGIN_GROUPS.flatMap(group => group.plugins(context))
     .filter(entry => !NOT_IN_JSDOM.test(entry.plugin.pluginName))
     .map(entry => (entry.plugin.pluginName === UniverSheetsFormulaPlugin.pluginName ? pluginEntry(UniverSheetsFormulaPlugin) : entry))

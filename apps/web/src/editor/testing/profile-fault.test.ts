@@ -8,7 +8,7 @@ vi.hoisted(() => {
   globalThis.Path2D ??= class {} as unknown as typeof Path2D
 })
 
-const context = { container: document.createElement('div'), formulaWorker: {} as Worker, access: 'edit' as const }
+const context = { container: document.createElement('div'), formula: { kind: 'worker' as const, worker: {} as Worker }, access: 'edit' as const }
 
 function names(entries: readonly PluginEntry[]): string[] {
   return entries.map(entry => entry.plugin.pluginName)

@@ -1,6 +1,8 @@
 import type { Univer } from '@univerjs/core'
 import type { CommandEvent } from '../change-tracking/command-event.ts'
+import type { FormulaProgress } from '../change-tracking/formula-settle-tracker.ts'
 import type { OpenCheck } from '../profile/open-check.ts'
+import type { ProbeTarget } from './e2e-probe.ts'
 import { canonicalLink } from '@nerve-office/contracts'
 import { CommandType } from '@univerjs/core'
 import { FUniver } from '@univerjs/core/facade'
@@ -72,8 +74,22 @@ function fakeUniver({ shortcuts = [], formulaBar = { body: { dataStream: '\r\n' 
   } as unknown as Univer
 }
 
-function installEditorProbe(univerAPI: FUniver, workbook: Workbook, services?: FakeServices, openCheck: OpenCheck = { ok: true }): () => void {
-  return install({ univer: fakeUniver(services), univerAPI, workbook, openCheck })
+/** 跟踪器的假实现：本地修改序号、公式收齐与进度由用例给出 */
+const IDLE_PROGRESS: FormulaProgress = { round: 0, started: false, stopped: false, completed: false, resultSheets: null, appliedSheets: [], queued: false, awaitingForcedRound: false }
+
+function fakeChanges(state: { seq: number, settled: boolean, progress: FormulaProgress } = { seq: 0, settled: true, progress: IDLE_PROGRESS }): ProbeTarget['changes'] {
+  return { changeSeq: () => state.seq, formulasSettled: () => state.settled, formulaProgress: () => state.progress }
+}
+
+function installEditorProbe(univerAPI: FUniver, workbook: Workbook, services?: FakeServices, target: Partial<Pick<ProbeTarget, 'changes' | 'formulaMode' | 'openCheck'>> = {}): () => void {
+  return install({
+    univer: fakeUniver(services),
+    univerAPI,
+    workbook,
+    changes: target.changes ?? fakeChanges(),
+    formulaMode: target.formulaMode ?? 'worker',
+    openCheck: target.openCheck ?? ({ ok: true } satisfies OpenCheck),
+  })
 }
 
 const mutation: FakeEvent = { id: 'sheet.mutation.set-range-values', type: CommandType.MUTATION, params: { unitId: 'unit-1', subUnitId: 'sheet-1' } }
@@ -108,11 +124,23 @@ describe('E2E 的探针（M2-P3 设计 §3.7）', () => {
     fire('BeforeCommandExecute', { ...mutation, options: { onlyLocal: false, fromFormula: true } })
     fire('CommandExecuted', { ...command, options: {} })
 
-    expect(window.__nerveEditorProbe?.commands()).toEqual([
+    // 时刻（at）另有一条用例核对
+    expect(window.__nerveEditorProbe?.commands().map(({ seq, phase, id, kind, canceled, unitId, flags }) => ({ seq, phase, id, kind, canceled, unitId, flags }))).toEqual([
       { seq: 1, phase: 'before', id: command.id, kind: 'command', canceled: false, unitId: undefined, flags: [] },
       { seq: 2, phase: 'before', id: mutation.id, kind: 'mutation', canceled: true, unitId: 'unit-1', flags: ['fromFormula'] },
       { seq: 3, phase: 'executed', id: command.id, kind: 'command', canceled: false, unitId: undefined, flags: [] },
     ])
+  })
+
+  it('命令日志的每条带记下时的时刻（performance.now()，M3-P4 设计 §3.15）', () => {
+    const { api, fire } = fakeFacade()
+    installEditorProbe(api, fakeWorkbook(() => ({})))
+    const now = vi.spyOn(performance, 'now')
+    now.mockReturnValueOnce(1200.5)
+    fire('BeforeCommandExecute', { ...command })
+    now.mockReturnValueOnce(1203.25)
+    fire('CommandExecuted', { ...command })
+    expect(window.__nerveEditorProbe?.commands().map(entry => [entry.seq, entry.at])).toEqual([[1, 1200.5], [2, 1203.25]])
   })
 
   it('撤销与重做：Facade 另有专门的事件，同样记下（取消的结果来自之前订阅的只读守卫）', () => {
@@ -203,6 +231,30 @@ describe('探针的快捷键清单与编辑栏（M2-P6 复核 F1、F2 之后）'
   })
 })
 
+describe('探针露出变更检测、公式收齐与进度、公式在哪里计算（M3-P4 设计 §3.15）', () => {
+  it('命令日志的每条带记下时的本地修改序号（变更检测先于探针订阅：执行完的那一条记下时序号已经加过了）', () => {
+    const { api, fire } = fakeFacade()
+    const state = { seq: 0, settled: true, progress: IDLE_PROGRESS }
+    installEditorProbe(api, fakeWorkbook(() => ({})), undefined, { changes: fakeChanges(state) })
+    fire('BeforeCommandExecute', { ...mutation })
+    state.seq = 1
+    fire('CommandExecuted', { ...mutation })
+    fire('CommandExecuted', { ...command })
+    expect(window.__nerveEditorProbe?.commands().map(entry => [entry.phase, entry.changeSeq])).toEqual([['before', 0], ['executed', 1], ['executed', 1]])
+  })
+
+  it('读的是编辑器的跟踪器（每次调用时现读）与创建时定下的公式模式', () => {
+    const { api } = fakeFacade()
+    const state = { seq: 0, settled: true, progress: IDLE_PROGRESS }
+    installEditorProbe(api, fakeWorkbook(() => ({})), undefined, { changes: fakeChanges(state), formulaMode: 'main-thread' })
+    const probe = window.__nerveEditorProbe
+    expect([probe?.changeSeq(), probe?.formulasSettled(), probe?.formulaProgress(), probe?.formulaMode]).toEqual([0, true, IDLE_PROGRESS, 'main-thread'])
+    const running: FormulaProgress = { ...IDLE_PROGRESS, round: 1, started: true }
+    Object.assign(state, { seq: 3, settled: false, progress: running })
+    expect([probe?.changeSeq(), probe?.formulasSettled(), probe?.formulaProgress()]).toEqual([3, false, running])
+  })
+})
+
 describe('探针给出页面里打包的链接地址判定（M3-P3 S2）', () => {
   it('canonicalLink 就是 contracts 的那一个（链接的改写器经 normalizeCellLinks 用的同一份代码）', () => {
     const { api } = fakeFacade()
@@ -216,7 +268,7 @@ describe('探针给出这个编辑器的打开自检的结果（M3-P4 设计 §3
   it('openCheck 就是创建时交来的那一个', () => {
     const { api } = fakeFacade()
     const openCheck: OpenCheck = { ok: false, failures: [{ kind: 'resource-emptied', resource: 'SHEET_NOTE_PLUGIN' }] }
-    installEditorProbe(api, fakeWorkbook(() => ({})), undefined, openCheck)
+    installEditorProbe(api, fakeWorkbook(() => ({})), undefined, { openCheck })
     expect(window.__nerveEditorProbe?.openCheck).toBe(openCheck)
   })
 })

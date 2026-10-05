@@ -25,9 +25,10 @@ const RESIZE_OBSERVER_LOOP_NOTICE = /^ResizeObserver loop (?:completed with unde
 
 /**
  * 要在编辑时跑的场景（地址里 selftest 的值）：M3-P2 起打开即阅读，到了阅读的 steady 之后先进入编辑（与页头的"编辑"同一个入口），
- * 到了编辑的 steady 再跑自检。enter-exit 在阅读时开始，场景里自己点页头的"编辑""退出编辑"（S5），按 host.view 等页面的状态变化
+ * 到了编辑的 steady 再跑自检。enter-exit 在阅读时开始，场景里自己点页头的"编辑""退出编辑"（S5），按 host.view 等页面的状态变化。
+ * 捕获时机的复核（M3-P4 S1）都在编辑时跑
  */
-const EDITING_SCENARIOS: ReadonlySet<string> = new Set(['edit-chrome'])
+const EDITING_SCENARIOS: ReadonlySet<string> = new Set(['edit-chrome', 'environment', 'change-detection', 'formula-timing', 'auto-height', 'large-copy', 'composition', 'hidden-save'])
 
 function describe(value: unknown): string {
   if (value instanceof Error)
@@ -73,6 +74,24 @@ function watchPage(target: Window): PageLog {
   return log
 }
 
+/**
+ * 自检交回结果时整页跳走：捕获时机的场景在编辑时改了内容、没有保存，编辑器页的离开提示（page-guards.ts 的 beforeunload）会拦这次跳转。
+ * 浏览器只在这一页有过可信的用户操作时才弹"确定离开"的对话框（合成的事件不算），而一旦弹出，对话框是模态的，页面停住、结果交不回去：
+ * 2026-10-05 第一次 S1 运行就卡在 change-detection 交回结果的那一刻（Safari 的日志里跳转刚开始、窗口随即失去活动状态，之后再没有心跳
+ * 与请求；最小的探针页只有合成事件时 Safari 27 不弹，那一页之前可能有人点过窗口，复核报告 F1）。所以自检自己跳走的那一刻（allowLeave 之后）
+ * 在捕获阶段先于页面的监听拦下这个事件，离开提示不生效；别的时候照常（DOM 规范：目标上捕获阶段的监听先于冒泡阶段的）
+ */
+function allowLeaveForReport(target: Window): () => void {
+  let leaving = false
+  target.addEventListener('beforeunload', (event) => {
+    if (leaving)
+      event.stopImmediatePropagation()
+  }, { capture: true })
+  return () => {
+    leaving = true
+  }
+}
+
 /** 载入失败时的说明 */
 function failureOf(load: EditorPageLoad): string {
   return 'error' in load ? `${load.kind}：${describe(load.error)}` : load.kind
@@ -83,6 +102,7 @@ export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElem
   const startedAt = new Date().toISOString()
   const documentId = documentIdFromPagePath(window.location.pathname)
   const log = watchPage(window)
+  const allowLeave = allowLeaveForReport(window)
   let started = false
   let unsubscribe: (() => void) | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -101,10 +121,11 @@ export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElem
       startedAt,
       page: state,
       view: () => {
-        const { mode, surface } = page.view()
-        return { mode: mode?.kind, surface }
+        const { mode, surface, save } = page.view()
+        return { mode: mode?.kind, surface, save: save?.status }
       },
       visibility: () => log.visibility,
+      allowLeave,
       pageErrors: () => log.pageErrors,
       consoleErrors: () => log.consoleErrors,
       ignoredNotices: () => log.ignoredNotices,
