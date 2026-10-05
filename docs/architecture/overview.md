@@ -12,7 +12,7 @@
 | 后端 `apps/api` | 横切能力（M1-P2）；账户、个人空间、会话与登录、默认拒绝的认证与 CSRF 防护、文档元数据的列表与读取、命令行初始化管理员、托管前端产物（M1-P3）；新建文档、读取内容、按修订号保存（M1-P4）；修改密码、邀请注册与重置密码的一次性令牌、停用与启用、系统管理员的授予与取消、同事目录、系统管理的接口与审计查询、运维的重置链接命令（M2-P1）；团队空间与成员、有效权限与"可访问文档"、按空间列出与新建、收回写入权的入口、停用者文档的转移（M2-P2，ADR-014）；文件夹、改名移动复制、回收站与恢复、永久删除与 jobs 模块的 30 天自动清理、按标题搜索（M2-P4，ADR-016）；复核之后的加固（M2-P6：登录限流的三个维度与解除锁定、签发人离任作废链接、团队空间名称的判重键、复制在锁下重新判断、数据库繁忙的回答等，见各节） |
 | 共享契约 `packages/contracts` | 错误响应（含可选的 `details`）与错误码、审计动作、健康检查、请求头；账户与空间的规则、登录与会话、文档的列表与元数据、新建与保存、快照的常量、收敛的模板快照、编辑器页的地址；文件夹、文档的整理、回收站与搜索（M2-P4）；名称的空白与判重规则（M2-P6） |
 | 数据库 | PostgreSQL 18；`audit_events`、`users`、`spaces`、`auth_sessions`、`auth_login_throttles`、`auth_invitations`、`auth_password_resets`、`space_members`、`folders`、`trash_entries`、`documents`、`document_contents`、`document_revisions`（§7 的表清单）；迁移由单独的命令执行 |
-| 编辑器适配层 | `apps/web/src/editor/`（M1-P4，ADR-010）：插件档案 `sheet@1`、公式 Worker、身份替换（ADR-009）、变更检测、公式收齐、`IMAGE()` 的限制、M5 之前的入口守卫、内部 API 的登记；能不能编辑在创建时决定，只读守卫与只读的界面（M2-P3，ADR-015） |
+| 编辑器适配层 | `apps/web/src/editor/`（M1-P4，ADR-010）：插件档案 `sheet@1`、公式 Worker、身份替换（ADR-009）、变更检测、公式收齐、`IMAGE()` 的限制、M5 之前的入口守卫、内部 API 的登记；销毁之后不抛错的语言服务、打开自检的资源守卫与判定（M3-P4）；能不能编辑在创建时决定，只读守卫与只读的界面（M2-P3，ADR-015） |
 | 部署 | 生产镜像（多阶段构建、非 root、健康检查）；测试环境：应用 + PostgreSQL 18 + Caddy（HTTPS）；迁移是一次性任务；数据库两个角色；容器 E2E（M1-P5，ADR-012，§8） |
 
 ## 2. 仓库结构
@@ -119,6 +119,7 @@ apps/api/src/
 | `GET /api/documents/{id}/content` | 当前快照：gzip 字节原样下发（`Content-Encoding: gzip`），修订号作 ETag；带 `If-None-Match` 而修订号对得上时 304，只带 ETag（M3-P2，DEF-017） |
 | `PUT /api/documents/{id}/content?baseRevision&requestId&clientInstanceId&localSeq&writeEpoch` | 保存（正文是 gzip 压缩的快照，请求头 `X-Edit-Lease` 带编辑租约的令牌）：压缩前后都限 5 MiB、基本校验、锁文档行、按 `requestId` 幂等、锁下核对登录、要求有效的编辑租约（M3-P1）、按基准修订号条件写入；冲突时 409，`details` 带当前修订号及其来源。M3-P3 起另带客户端的构建与数据格式（`clientBuild`、`univerVersion`、`profile`、`formatVersion`）与 `formulasPending`，内容与当前相同时不递增（`unchanged: true`，留回执），见 ADR-011 的修订 |
 | `GET/POST/PUT/DELETE /api/documents/{id}/edit-lease` | 编辑租约（M3-P1，ADR-018）：编辑状态（能读就能看）、申请（要能编辑；别人持有时 409 `EDIT_LEASE_HELD`；成功时给令牌、代次、修订号与当前修订的来源）、心跳续租（失效时 409 `EDIT_LEASE_LOST`）、释放（持有者本人、令牌是当前这一行的才结束，一律 204）；M3-P2 起编辑状态带调用者能否编辑（`canEdit`），编辑状态与心跳不顺延登录（`@BackgroundRequest()`） |
+| `POST /api/documents/{id}/open-check-failures` | 打开自检失败的上报（M3-P4，ADR-011 的补充）：只带失败的种类、资源名、异常的构造器名、修订号、打开方式与版本四项，不带内容；能读就能报、看不到与不存在一致；后台请求；进程内去重与按账户限量，记 warn（`event: open-check-failed`），不记审计；204 |
 | `POST /api/documents/{id}/conflict-copies?requestId&title` | 另存为副本（M3-P2，ADR-011、ADR-014 的补充）：正文是 gzip 压缩的快照（与保存同一个读取方式），`unitId` 要等于原文档的；只要求能读原文档；本人在原文档所在的空间能新建就放进原文档的文件夹，否则本人个人空间的根目录；不继承授权；`requestId` 幂等；响应同复制 |
 | `GET /api/health/live`、`GET /api/health/ready` | 存活与就绪探针（公开） |
 | `PUT /api/auth/password` | 修改密码（M2-P1）：本人其他地方的登录全部退出；M2-P6 起连当前会话的令牌一起换掉，响应与登录相同（新的会话与 CSRF 令牌，写回 Cookie） |
