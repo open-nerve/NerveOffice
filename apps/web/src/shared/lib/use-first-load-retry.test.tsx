@@ -3,10 +3,10 @@
 // 页面另有说明的错误（retryable）不算加载失败，重试之后得到它时焦点同样有去处；失败时不显示数据的（hidesDataOnError）有数据也按失败算。
 // 各页面的用法见 app/first-load-retry.test.tsx 与各组件的测试。
 import type { FirstLoadRetryOptions } from './use-first-load-retry.ts'
-import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
+import { notifyManager, QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useRef, useState } from 'react'
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { useFirstLoadRetry } from './use-first-load-retry.ts'
 
 /** 由测试决定每一次请求的结果 */
@@ -21,8 +21,10 @@ class Answers {
   }
 
   /**
-   * 最早那一次还没有结果的请求：成功（value）或者失败（error）。等它发出；给出结果之后再等一个任务：
-   * TanStack Query 经 setTimeout(0) 通知界面
+   * 最早那一次还没有结果的请求：成功（value）或者失败（error）。等它发出；给出结果之后再等一个宏任务：
+   * TanStack Query 的通知在这个文件里改成微任务（见 beforeAll），一个宏任务的边界之前它们一定都已执行、界面已经更新。
+   * 原来固定等 10 毫秒、让 TanStack 自己的 setTimeout(0) 先到：机器很忙时请求结果的微任务链跑得比 10 毫秒还久，
+   * 它的 setTimeout(0) 排在这 10 毫秒之后，断言先于通知执行（M3 的修复者在两路测试同时跑时遇到）
    */
   async settle(outcome: { readonly value: string } | { readonly error: Error }): Promise<void> {
     await waitFor(() => expect(this.pending.length).toBeGreaterThan(0))
@@ -34,7 +36,7 @@ class Answers {
         next.resolve(outcome.value)
       else
         next.reject(outcome.error)
-      await new Promise(resolve => setTimeout(resolve, 10))
+      await new Promise(resolve => setTimeout(resolve, 0))
     })
   }
 }
@@ -104,6 +106,14 @@ function renderHost(options?: FirstLoadRetryOptions) {
 function retryButton(): HTMLElement {
   return screen.getByRole('button', { name: /重试/ })
 }
+
+// TanStack Query 默认经 setTimeout(0) 批量通知界面；这里改成微任务，settle 只要等一个宏任务的边界（见上）
+beforeAll(() => {
+  notifyManager.setScheduler(queueMicrotask)
+})
+afterAll(() => {
+  notifyManager.setScheduler(callback => setTimeout(callback, 0))
+})
 
 describe('useFirstLoadRetry', () => {
   it('失败、按"重试"：重新请求期间说明与同一个按钮留着（正在重试）；又失败时换成新的原因，焦点还在按钮上；取到之后焦点交给 fallbackFocus', async () => {
