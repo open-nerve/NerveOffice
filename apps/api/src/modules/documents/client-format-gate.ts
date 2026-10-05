@@ -6,7 +6,7 @@
 // - 与文档有关的一半（documentTooNew、requireWritableDocument）：文档记录的 SDK 版本比服务端的新（回滚之后），或者档案、平台格式版本
 //   不是服务端对这类文档写的——DOCUMENT_TOO_NEW。刷新拿到的还是同一个版本，提示"刷新"会死循环，所以与 CLIENT_OUTDATED 分开；
 //   页面按详情的 sdkVersion 一开始就只能阅读。
-import type { ClientFormat, ClientOutdatedReason, DocumentProfile, DocumentType } from '@nerve-office/contracts'
+import type { ClientFormat, ClientOutdatedReason, DocumentProfile, DocumentType, PlatformFormatVersion } from '@nerve-office/contracts'
 import type { AppConfig } from '../config/index.ts'
 import { compareVersions, DOCUMENT_PROFILE_OF, PLATFORM_FORMAT_VERSION, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { Inject, Injectable } from '@nestjs/common'
@@ -16,12 +16,15 @@ import { APP_CONFIG } from '../config/index.ts'
 /** 服务端现在写的插件档案（各类文档各一个）：页面上报的档案必须是其中之一 */
 const CURRENT_PROFILES: ReadonlySet<string> = new Set<string>(Object.values(DOCUMENT_PROFILE_OF))
 
-/** 核对过的页面：四项都上报了，数据格式等于服务端的，构建不低于运维开关。写入时记进信封（SDK 版本、客户端构建） */
+/**
+ * 核对过的页面：四项都上报了，数据格式等于服务端的，构建不低于运维开关。写入时记进信封（SDK 版本、客户端构建；
+ * 另存为副本另记档案与格式版本，documents.repository.ts 的 UploadEnvelope）
+ */
 export interface CurrentClient {
   readonly clientBuild: string
   readonly univerVersion: string
   readonly profile: DocumentProfile
-  readonly formatVersion: number
+  readonly formatVersion: PlatformFormatVersion
 }
 
 /** 核对的结果：核对过的页面，或者过旧的原因 */

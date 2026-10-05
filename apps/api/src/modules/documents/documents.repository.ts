@@ -120,17 +120,28 @@ export interface WriteEnvelope {
   readonly formulasPending: boolean
 }
 
-/** 复制出来的文档要写的列：其余的列（类型、unitId、档案、格式版本，信封没给时也是）由数据库从源文档原样复制。 */
+/**
+ * 页面上传的一份内容的信封（另存为副本，M3-P3 设计 §3.1）：写入的信封之外，插件档案与平台格式版本也是核对过的页面的。
+ * 副本的内容是页面上传的，信封描述的是这份内容，不照抄原文档的——原文档可能由更新的版本写过（回滚之后），照抄就会让旧格式的内容
+ * 标着新的档案（审查 A7）。页面的这几项在核对时已经要求等于服务端的（client-format-gate.ts 的 checkClient）。
+ * 与保存一致：保存记下页面上报的 SDK 版本；档案与格式版本不改，是因为写入之前已经要求文档的这两项等于服务端的（requireWritableDocument）
+ */
+export interface UploadEnvelope extends WriteEnvelope {
+  readonly profile: DocumentProfile
+  readonly formatVersion: PlatformFormatVersion
+}
+
+/** 复制出来的文档要写的列：其余的列（类型、unitId，信封没给时还有档案、格式版本与写入的信封）由数据库从源文档原样复制。 */
 export interface CopiedDocument {
   readonly spaceId: string
   readonly folderId: string | null
   readonly title: string
   readonly createdBy: string
   /**
-   * 写入的信封（SDK 版本、客户端构建、"公式待更新"）：复制不给，照源文档（内容原样复制，信封跟着内容走）；
-   * 另存为副本给这次上传的（内容是页面上传的，M3-P2 设计 §3.2、M3-P3 设计 §3.1）
+   * 内容的信封（档案、格式版本、SDK 版本、客户端构建、"公式待更新"）：复制不给，照源文档（内容原样复制，信封跟着内容走）；
+   * 另存为副本给这次上传的、核对过的页面的（内容是页面上传的，M3-P2 设计 §3.2、M3-P3 设计 §3.1）
    */
-  readonly envelope?: WriteEnvelope | undefined
+  readonly envelope?: UploadEnvelope | undefined
 }
 
 const d = documents
@@ -439,10 +450,10 @@ export class DocumentsRepository {
   }
 
   /**
-   * 按源文档建一份副本（M2-P4 设计 §3.4 第 4 条）：类型、unitId、档案、格式版本与写入的信封（SDK 版本、客户端构建、"公式待更新"，
-   * M3-P3）由 INSERT … SELECT 从源文档原样复制（unitId 相同是有意的，00 号计划书 §8.3；信封跟着内容走：公式结果没算完的内容，复制出去也没算完）；
+   * 按源文档建一份副本（M2-P4 设计 §3.4 第 4 条）：类型、unitId 与内容的信封（档案、格式版本、SDK 版本、客户端构建、"公式待更新"，M3-P3）
+   * 由 INSERT … SELECT 从源文档原样复制（unitId 相同是有意的，00 号计划书 §8.3；信封跟着内容走：公式结果没算完的内容，复制出去也没算完）；
    * 修订号、写入代次、状态与时间用列的默认值（修订号 1、代次 0、正常状态）。
-   * 另存为副本（M3-P2 设计 §3.2）同样经这里：元数据照原文档，信封换成这次上传的（copy.envelope，M3-P3 设计 §3.1）。
+   * 另存为副本（M3-P2 设计 §3.2）同样经这里：类型与 unitId 照原文档，信封换成这次上传的（copy.envelope，M3-P3 设计 §3.1、审查 A7）。
    * 源文档已经不在（被删或进了回收站）时什么也不写，返回 undefined（调用方持着源文档行的共享锁时不会发生）。
    * 内容的复制见 DocumentContentsRepository.copyFrom（另存为副本的内容是上传的，调用方另写）
    */
@@ -451,7 +462,8 @@ export class DocumentsRepository {
     const envelope = copy.envelope
     const inserted = await executor.execute<{ id: string }>(sql`
       INSERT INTO ${d} (space_id, folder_id, title, created_by, type, unit_id, profile, format_version, sdk_version, client_build, formulas_pending)
-      SELECT ${copy.spaceId}::uuid, ${copy.folderId}::uuid, ${copy.title}, ${copy.createdBy}::uuid, ${d.type}, ${d.unitId}, ${d.profile}, ${d.formatVersion},
+      SELECT ${copy.spaceId}::uuid, ${copy.folderId}::uuid, ${copy.title}, ${copy.createdBy}::uuid, ${d.type}, ${d.unitId},
+        ${envelope?.profile ?? d.profile}::text, ${envelope?.formatVersion ?? d.formatVersion}::integer,
         ${envelope?.sdkVersion ?? d.sdkVersion}::text, ${envelope?.clientBuild ?? d.clientBuild}::text, ${envelope?.formulasPending ?? d.formulasPending}::boolean
       FROM ${d} WHERE ${d.id} = ${sourceId}::uuid AND ${d.status} = 'active'
       RETURNING ${d.id}`)

@@ -556,10 +556,43 @@ describe('信封（00 号计划书 §8.1）与"公式待更新"（M3-P3 设计 �
     const bad = bytesOf(workbookOf(source.unitId, 'x', withCell({ p: { id: 'd', body: { dataStream: '\b\r\n' }, drawings: { img: { source: 'https://example.com/a.png' } } } })))
     expect(await errorOf(await postConflictCopy(app.baseUrl, amySession, source.id, source.unitId, { raw: bad }))).toEqual({ status: 422, code: 'SNAPSHOT_INVALID', details: { rule: 'image-source' } })
     const raw = bytesOf(workbookOf(source.unitId, '本页的修改', withResources([{ name: 'SHEET_NOTE_PLUGIN', data: '{"sheet-1":{"0":{"0":{"note":"n"}}}}' }])))
+    // 原文档由更新的版本写过（回滚之后）：副本的信封是本页的（核对过、等于服务端的），不照抄原文档（审查 A7）
+    await database.query(async client => client.query('UPDATE documents SET sdk_version = \'99.0.0\' WHERE id = $1', [source.id]))
     const copy = parseExact(createdDocumentSchema, await (await postConflictCopy(app.baseUrl, amySession, source.id, source.unitId, { raw, query: { formulasPending: 'true', clientBuild: `${CLIENT_BUILD}+copy` } })).json())
-    expect(copy.formulasPending).toBe(true)
+    expect(copy).toMatchObject({ formulasPending: true, sdkVersion: UNIVER_SDK_VERSION, profile: CURRENT_CLIENT.profile, formatVersion: CURRENT_CLIENT.formatVersion })
     expect(await envelopeOf(copy.id)).toMatchObject({ sdkVersion: UNIVER_SDK_VERSION, clientBuild: `${CLIENT_BUILD}+copy`, formulasPending: true, contentHash: hashOf(raw), resourceNames: ['SHEET_NOTE_PLUGIN'] })
+    expect(await database.query(async client => (await client.query<{ profile: string, format_version: number }>('SELECT profile, format_version FROM documents WHERE id = $1', [copy.id])).rows[0]))
+      .toEqual({ profile: CURRENT_CLIENT.profile, format_version: CURRENT_CLIENT.formatVersion })
     expect((await revisionsOf(copy.id))[0]).toEqual({ revision: 1, content_hash: hashOf(raw), client_build: `${CLIENT_BUILD}+copy` })
+  })
+
+  it('另存为副本的档案与格式版本同样取本页的（审查 A7）：原文档由别的版本写过、档案与格式版本不是服务端的，副本照样标着本页的', async () => {
+    const source = await amyDocument('别的版本写的')
+    // 现在的库只认这一版的档案与格式版本（CHECK 约束）：暂时去掉这两条约束，摆下别的版本写的原文档，做完改回、再加回约束
+    const constraints = ['documents_profile_check', 'documents_format_version_check']
+    const definitions = await database.query(async client => (await client.query<{ name: string, definition: string }>(
+      'SELECT conname AS name, pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE conrelid = \'documents\'::regclass AND conname = ANY($1) ORDER BY conname',
+      [constraints],
+    )).rows)
+    expect(definitions.map(row => row.name)).toEqual([...constraints].sort())
+    await database.query(async (client) => {
+      for (const { name } of definitions)
+        await client.query(`ALTER TABLE documents DROP CONSTRAINT ${name}`)
+      await client.query('UPDATE documents SET profile = \'sheet@2\', format_version = 2, sdk_version = \'99.0.0\' WHERE id = $1', [source.id])
+    })
+    try {
+      const raw = bytesOf(workbookOf(source.unitId, '本页的修改'))
+      const copy = parseExact(createdDocumentSchema, await (await postConflictCopy(app.baseUrl, amySession, source.id, source.unitId, { raw })).json())
+      expect(await database.query(async client => (await client.query<{ profile: string, format_version: number, sdk_version: string }>('SELECT profile, format_version, sdk_version FROM documents WHERE id = $1', [copy.id])).rows[0]))
+        .toEqual({ profile: CURRENT_CLIENT.profile, format_version: CURRENT_CLIENT.formatVersion, sdk_version: UNIVER_SDK_VERSION })
+    }
+    finally {
+      await database.query(async (client) => {
+        await client.query('UPDATE documents SET profile = $2, format_version = $3, sdk_version = $4 WHERE id = $1', [source.id, CURRENT_CLIENT.profile, CURRENT_CLIENT.formatVersion, UNIVER_SDK_VERSION])
+        for (const { name, definition } of definitions)
+          await client.query(`ALTER TABLE documents ADD CONSTRAINT ${name} ${definition}`)
+      })
+    }
   })
 })
 

@@ -40,7 +40,9 @@ interface Placement {
  * - 处理的顺序与保存相同（M3-P3 设计 §3.1）：重放预检（事务之外）→ 客户端的数据格式（CLIENT_OUTDATED）→ 快照的完整检查
  *   （SNAPSHOT_INVALID，子进程）→ 事务；快照的顶层 id 要等于原文档的 unitId（副本的 unitId 与原文档相同，与复制一样不改写，
  *   00 号计划书 §8.3）。不做"不缩水"与"内容相同"：副本是一份新文档；
- * - 新文档：类型、档案、平台格式版本照原文档；信封是这次上传的（SDK 版本是页面上报、核对过的，客户端构建，"公式待更新"，M3-P3）；
+ * - 新文档：类型照原文档；信封是这次上传的、核对过的页面的（插件档案、平台格式版本、SDK 版本、客户端构建，"公式待更新"，M3-P3）——
+ *   内容是页面上传的，信封描述的是这份内容：原文档可能由更新的版本写过（回滚之后），照抄它的档案与格式版本，旧格式的内容就会标着新的
+ *   （审查 A7）；与保存记信封的做法一致（documents.repository.ts 的 UploadEnvelope）。
  *   内容连同规范化的哈希与非空的资源名；修订号 1、代次 0，修订记录 created（带哈希与客户端构建）；
  *   不继承原文档的单独授权（与复制相同：副本是一份新文档，授权只给原文档）；
  * - requestId 幂等，与新建、复制同一个做法：同一个人的同一次请求（摘要一致）返回那份副本现在的样子，带 replayed。
@@ -113,13 +115,13 @@ export class DocumentConflictCopyService {
         throw new AppError('NOT_FOUND')
       const placement = await this.placementOf(actor, source.document, intoSource, personalSpaceId, transaction)
 
-      // 元数据照原文档（锁下确认过是正常状态），信封是这次上传的；建不出来是数据不一致，按意外错误处理
+      // 类型与 unitId 照原文档（锁下确认过是正常状态），信封是这次上传的、核对过的页面的；建不出来是数据不一致，按意外错误处理
       const copy = await this.documents.copyFrom(id, {
         spaceId: placement.target.space.id,
         folderId: placement.folderId,
         title: command.title,
         createdBy: userId,
-        envelope: { sdkVersion: client.univerVersion, clientBuild: client.clientBuild, formulasPending },
+        envelope: { profile: client.profile, formatVersion: client.formatVersion, sdkVersion: client.univerVersion, clientBuild: client.clientBuild, formulasPending },
       }, transaction)
       if (copy === undefined)
         throw new Error(`锁住的原文档建不出副本：${id}`)

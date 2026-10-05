@@ -9,6 +9,7 @@ import zlib from 'node:zlib'
 import { canonicalContentText, contentHashInput, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
+import { documentTooNew } from './client-format-gate.ts'
 import { DocumentConflictCopyService } from './document-conflict-copy.service.ts'
 import { ALICE, ALICE_SPACE, BOB, BOB_SPACE, CURRENT_CLIENT, FakeStore, HTTP_ORIGIN, member, TEAM_SPACE } from './documents.test-support.ts'
 import { conflictCopyPayloadDigest } from './payload-digest.ts'
@@ -75,8 +76,14 @@ describe('DocumentConflictCopyService.copy：新文档', () => {
     expect(copy.permissions).toMatchObject({ canEdit: true, canRename: true })
     const stored = store.documents.get(copy.id)
     expect(stored).toMatchObject({ unitId: source.unitId, writeEpoch: 0, createdBy: ALICE, revision: 1 })
-    // 元数据照原文档（INSERT … SELECT），信封是这次上传的（M3-P3）：SDK 版本是页面上报、核对过的，客户端构建，"公式待更新"
-    expect(store.repositories.documents.copyFrom).toHaveBeenCalledExactlyOnceWith(source.id, { spaceId: TEAM_SPACE, folderId: folder.id, title: TITLE, createdBy: ALICE, envelope: { sdkVersion: UNIVER_SDK_VERSION, clientBuild: '0.1.0', formulasPending: false } }, expect.anything())
+    // 类型与 unitId 照原文档（INSERT … SELECT），信封是这次上传的、核对过的页面的（M3-P3，审查 A7）：档案、格式版本、SDK 版本、客户端构建，"公式待更新"
+    expect(store.repositories.documents.copyFrom).toHaveBeenCalledExactlyOnceWith(source.id, {
+      spaceId: TEAM_SPACE,
+      folderId: folder.id,
+      title: TITLE,
+      createdBy: ALICE,
+      envelope: { profile: 'sheet@1', formatVersion: 1, sdkVersion: UNIVER_SDK_VERSION, clientBuild: '0.1.0', formulasPending: false },
+    }, expect.anything())
     // 内容是上传的压缩字节（原样存下，与保存一样），解压前的字节数，连同规范化的哈希与非空的资源名（没有资源）
     expect(store.contents.get(copy.id)).toEqual({ snapshot: body.compressed, rawBytes: body.decompressed.length, contentHash: hashOf(body), resourceNames: [] })
     expect(store.revisions.filter(row => row.documentId === copy.id)).toEqual([expect.objectContaining({
@@ -99,6 +106,17 @@ describe('DocumentConflictCopyService.copy：新文档', () => {
       origin: HTTP_ORIGIN,
       details: { sourceId: source.id, spaceId: TEAM_SPACE },
     }])
+  })
+
+  it('原文档由更新的版本写过（回滚之后：档案、格式版本、SDK 版本都比服务端新）：副本的信封是本页的（核对过、等于服务端的），不照抄原文档——副本不是"比服务端新"（审查 A7）', async () => {
+    const { store, service } = setup()
+    const source = store.addDocument({ spaceId: ALICE_SPACE, profile: 'sheet@2' as 'sheet@1', formatVersion: 2, sdkVersion: '99.0.0', formulasPending: true })
+    const copy = await service.copy(member(ALICE), source.id, copyCommand(), upload(source.unitId), HTTP_ORIGIN)
+    expect(copy).toMatchObject({ profile: 'sheet@1', formatVersion: 1, sdkVersion: UNIVER_SDK_VERSION, formulasPending: false })
+    expect(store.documents.get(copy.id)).toMatchObject({ type: 'sheet', unitId: source.unitId, profile: 'sheet@1', formatVersion: 1, sdkVersion: UNIVER_SDK_VERSION, formulasPending: false })
+    expect(documentTooNew(store.documents.get(copy.id) ?? source)).toBe(false)
+    // 原文档不动
+    expect(store.documents.get(source.id)).toMatchObject({ profile: 'sheet@2', formatVersion: 2, sdkVersion: '99.0.0' })
   })
 
   it('原文档在空间的根目录：副本也在根目录', async () => {

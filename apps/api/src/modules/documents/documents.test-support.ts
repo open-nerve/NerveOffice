@@ -340,8 +340,9 @@ export class FakeStore {
         return ids.length
       }),
       /**
-       * 按源文档建一份副本：类型、unitId、档案与格式版本原样复制，修订号 1、代次 0（与真实仓储一样用列的默认值），新的 id。
-       * 写入的信封与真实仓储一样：给了（另存为副本）用给的，没给（复制）照源文档；客户端构建另记在 clientBuilds 里（行上没有）
+       * 按源文档建一份副本：类型与 unitId 原样复制，修订号 1、代次 0（与真实仓储一样用列的默认值），新的 id。
+       * 内容的信封（档案、格式版本、SDK 版本、"公式待更新"）与真实仓储一样：给了（另存为副本）用给的，没给（复制）照源文档；
+       * 客户端构建另记在 clientBuilds 里（行上没有）
        */
       copyFrom: vi.fn(async (sourceId: string, copy: CopiedDocument): Promise<DocumentRow | undefined> => {
         const source = this.documents.get(sourceId)
@@ -349,7 +350,16 @@ export class FakeStore {
           return undefined
         const { id: _id, ...columns } = source
         const { envelope, ...placement } = copy
-        const row = this.addDocument({ ...columns, ...placement, sdkVersion: envelope?.sdkVersion ?? source.sdkVersion, formulasPending: envelope?.formulasPending ?? source.formulasPending, revision: 1, writeEpoch: 0 })
+        const row = this.addDocument({
+          ...columns,
+          ...placement,
+          profile: envelope?.profile ?? source.profile,
+          formatVersion: envelope?.formatVersion ?? source.formatVersion,
+          sdkVersion: envelope?.sdkVersion ?? source.sdkVersion,
+          formulasPending: envelope?.formulasPending ?? source.formulasPending,
+          revision: 1,
+          writeEpoch: 0,
+        })
         const build = envelope === undefined ? this.clientBuilds.get(sourceId) : envelope.clientBuild
         if (build !== undefined)
           this.clientBuilds.set(row.id, build)
