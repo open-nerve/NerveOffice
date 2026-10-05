@@ -3,7 +3,7 @@ import type { SaveView } from './save-coordinator.ts'
 import type { SaveIndicator } from './save-indicator.ts'
 import { describe, expect, it } from 'vitest'
 import { NetworkError } from '../../shared/api/index.ts'
-import { saveIndicator } from './save-indicator.ts'
+import { ANNOUNCEMENT_MS, announcementKey, saveIndicator } from './save-indicator.ts'
 
 const CLEAN: SaveView = { status: 'clean', formulasPending: false, problem: undefined, conflict: undefined, canSave: true, unsaved: false, unsavedEdits: false, checking: false, snapshotBytes: undefined }
 const DIRTY: SaveView = { ...CLEAN, status: 'dirty', unsaved: true, unsavedEdits: true }
@@ -39,5 +39,27 @@ describe('编辑时的保存状态（设计 §3.9 的全集）', () => {
     ['自动保存没接上：有未保存的修改', DIRTY, undefined, 'unsaved'],
   ])('%s', (_case, save, autosave, expected) => {
     expect(saveIndicator(save, autosave)).toBe(expected)
+  })
+})
+
+describe('读屏的播报（设计 §3.9）：只播有意义的变化', () => {
+  it.each<[SaveIndicator, string | undefined]>([
+    ['saved', 'saved'],
+    ['unsaved', undefined],
+    ['saving', undefined],
+    ['formulas-pending', 'formulas-pending'],
+    ['retrying', 'retrying'],
+    ['failed', 'failed'],
+    ['offline', 'offline'],
+    ['paused', 'paused'],
+    ['conflict', 'conflict'],
+    ['outdated', 'outdated'],
+    ['too-new', 'too-new'],
+  ])('%s → %s（undefined：不改播报区）', (indicator, key) => {
+    expect(announcementKey(indicator)).toBe(key)
+  })
+
+  it('播报区里的话留 7 秒', () => {
+    expect(ANNOUNCEMENT_MS).toBe(7_000)
   })
 })

@@ -75,7 +75,7 @@ function fakeUniver({ shortcuts = [], formulaBar = { body: { dataStream: '\r\n' 
 }
 
 /** 跟踪器的假实现：本地修改序号、公式收齐与进度由用例给出 */
-const IDLE_PROGRESS: FormulaProgress = { round: 0, started: false, stopped: false, completed: false, resultSheets: null, appliedSheets: [], queued: false }
+const IDLE_PROGRESS: FormulaProgress = { round: 0, started: false, stopped: false, completed: false, resultSheets: null, appliedSheets: [], queued: false, awaitingForcedRound: false }
 
 function fakeChanges(state: { seq: number, settled: boolean, progress: FormulaProgress } = { seq: 0, settled: true, progress: IDLE_PROGRESS }): ProbeTarget['changes'] {
   return { changeSeq: () => state.seq, formulasSettled: () => state.settled, formulaProgress: () => state.progress }

@@ -52,7 +52,8 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     await expect(saveStatus(page)).toHaveText('正在确认登录状态…')
     await expect(page.getByRole('alert')).toHaveCount(0)
     checks.release()
-    await expect(saveStatus(page)).toHaveText('保存失败')
+    // 没有人登录了：自动保存暂停，页头说登录回来之后自动保存（M3-P4 设计 §3.9）；失败的原因由会话的提示说明
+    await expect(saveStatus(page)).toHaveText('暂停保存：登录回来之后自动保存')
     const alert = page.getByRole('alert').filter({ hasText: '本页的修改还在' })
     await expect(alert).toBeVisible()
     // 会话的提示已经说明：不再重复"登录已过期"的失败说明（复验 RB2、SB3）
@@ -193,7 +194,8 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     await expect(other.getByRole('heading', { name: '我的空间' })).toBeVisible()
     await expect(page.getByRole('alert').filter({ hasText: '别的标签页登录了另一个账户，本页不能再保存' })).toBeVisible()
     await expect(saveButton(page)).toHaveAttribute('aria-disabled', 'true')
-    await expect(saveStatus(page)).toHaveText('有未保存的修改')
+    // 换了人：自动保存暂停（M3-P4 设计 §3.9）
+    await expect(saveStatus(page)).toHaveText('暂停保存：登录回来之后自动保存')
 
     await other.getByRole('button', { name: '退出', exact: true }).click()
     await loginThroughUi(other, owner)

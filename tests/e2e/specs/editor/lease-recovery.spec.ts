@@ -76,7 +76,8 @@ async function saveWithLostReply(page: Page, documentId: string): Promise<number
   }, { times: 1 })
   await typeInCell(page, 'A1', 'first')
   await saveButton(page).click()
-  await expect(saveStatus(page)).toHaveText('保存失败')
+  // 结果未知的失败会自动重试（M3-P4 设计 §3.8；测试构建暂停了定时的上传，这里不会真的重试）
+  await expect(saveStatus(page)).toHaveText('保存失败，稍后自动重试')
   expect((await savedContent(page, documentId)).revision).toBe(2)
   await typeInCell(page, 'A2', 'second')
   return epoch
@@ -148,7 +149,7 @@ test.describe('US-M3-13 没收到保存的确认，随后失去编辑权（还�
     }, { times: 1 })
     await typeInCell(page, 'A1', 'first')
     await saveButton(page).click()
-    await expect(saveStatus(page)).toHaveText('保存失败')
+    await expect(saveStatus(page)).toHaveText('保存失败，稍后自动重试')
     expect(await revisionOf(documentId)).toBe(2)
 
     // 空间管理员把我降为查看者（收回写入权）：下一次心跳得知不能编辑了（403），编辑权失效，本页换成只读。还读得到：给副本之前，

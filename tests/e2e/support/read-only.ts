@@ -15,7 +15,7 @@ import { expect } from './fixtures.ts'
 import { collectPageErrors } from './page-errors.ts'
 import { readOnlySampleFor } from './read-only-sample.ts'
 import { loginThroughApi } from './session.ts'
-import { openReader } from './sheet.ts'
+import { openReader, saveStatus } from './sheet.ts'
 
 export interface Scene {
   readonly author: TestUser
@@ -64,7 +64,8 @@ export const OPENED = 'steady'
 export async function openReadOnly(page: Page, user: TestUser, documentId: string): Promise<void> {
   await loginThroughApi(page, user)
   await openReader(page, documentId, OPENED)
-  await expect(page.locator('#editor-chrome').getByText('只能查看', { exact: true })).toBeVisible()
+  // 页头里看得见的状态（读屏的播报区是视觉隐藏的副本，M3-P4）
+  await expect(saveStatus(page)).toHaveText('只能查看')
 }
 
 /** 快照的 unitId（本文档的 mutation 按它认） */

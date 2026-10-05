@@ -503,7 +503,8 @@ test.describe('US-M3-01 进入、退出编辑没有成功时焦点留在页头�
     await page.route(isContent, async route => route.request().method() === 'PUT' ? route.abort('internetdisconnected') : route.continue())
     await exitEditButton(page).focus()
     await page.keyboard.press('Enter')
-    await expect(saveStatus(page)).toHaveText('保存失败')
+    // 网络错误：会自动重试（M3-P4 设计 §3.8），留在编辑
+    await expect(saveStatus(page)).toHaveText('保存失败，稍后自动重试')
     await expect(exitEditButton(page)).toBeFocused()
     await page.unroute(isContent)
   })

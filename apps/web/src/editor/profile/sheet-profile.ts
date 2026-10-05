@@ -29,7 +29,7 @@ import { UniverSheetsDrawingUIPlugin } from '@univerjs/sheets-drawing-ui'
 import { UniverSheetsFilterPlugin } from '@univerjs/sheets-filter'
 import { UniverSheetsFilterUIPlugin } from '@univerjs/sheets-filter-ui'
 import { UniverSheetsFindReplacePlugin } from '@univerjs/sheets-find-replace'
-import { UniverSheetsFormulaPlugin } from '@univerjs/sheets-formula'
+import { CalculationMode, UniverSheetsFormulaPlugin } from '@univerjs/sheets-formula'
 import { UniverSheetsFormulaUIPlugin } from '@univerjs/sheets-formula-ui'
 import { UniverSheetsHyperLinkPlugin } from '@univerjs/sheets-hyper-link'
 import { UniverSheetsHyperLinkUIPlugin } from '@univerjs/sheets-hyper-link-ui'
@@ -74,6 +74,12 @@ export interface SheetProfileContext {
   readonly formula: FormulaExecution
   /** 这次以什么方式打开：只影响界面的配置，不影响数据（插件、顺序、影响数据的配置与资源两种方式相同） */
   readonly access: EditorAccess
+  /**
+   * 打开时强制全量重算（M3-P4 设计 §3.5 第 3 条：带"公式待更新"的文档进入编辑）：表格公式插件以
+   * initialFormulaComputing: CalculationMode.FORCED 创建（公开配置），工作簿加入与渲染完成时重算全部公式、写回带 onlyLocal（不算修改），
+   * 收齐之后由自动保存补存。不影响数据的格式与资源；不给时按 SDK 的默认（WHEN_EMPTY：只算没有缓存值的公式）
+   */
+  readonly recalculate?: boolean
 }
 
 export interface PluginGroup {
@@ -155,8 +161,10 @@ export const SHEET_PLUGIN_GROUPS: readonly PluginGroup[] = [
   {
     id: 'formula',
     resources: [],
-    plugins: ({ formula }) => [
-      pluginEntry(UniverSheetsFormulaPlugin, { notExecuteFormula: notExecuteFormula(formula) }),
+    plugins: ({ formula, recalculate }) => [
+      pluginEntry(UniverSheetsFormulaPlugin, recalculate === true
+        ? { notExecuteFormula: notExecuteFormula(formula), initialFormulaComputing: CalculationMode.FORCED }
+        : { notExecuteFormula: notExecuteFormula(formula) }),
       pluginEntry(UniverSheetsFormulaUIPlugin),
     ],
   },

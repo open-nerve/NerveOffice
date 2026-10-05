@@ -109,8 +109,9 @@ test.describe('US-M1-10 API 重启后已确认的数据不丢', () => {
     })
     await expect.poll(async () => sessionsAlive(waiting), { timeout: 15_000 }).toBe(0)
 
-    // 要么完整提交、要么没有提交：修订号、修订记录与内容都没有变
-    await expect(saveStatus(page)).toHaveText('保存失败')
+    // 要么完整提交、要么没有提交：修订号、修订记录与内容都没有变。结果未知的失败会自动重试（M3-P4 设计 §3.8；测试构建暂停了定时的上传，
+    // 这里不会真的重试，下面按保存原样重发）
+    await expect(saveStatus(page)).toHaveText('保存失败，稍后自动重试')
     const afterInterruption = await savedContent(page, documentId)
     expect(afterInterruption.revision).toBe(before.revision)
     expect(afterInterruption.text).toBe(before.text)

@@ -9,6 +9,11 @@
 // 保存过），阅读时不给"编辑"；快照达到容量的 80% 时在一直在的读屏状态区里给一条不打断的说明；保存被拒（SNAPSHOT_INVALID）按违反的规则说。
 // 有焦点的按钮随状态消失时（"编辑"随权限消失、"有更新"载入之后、失去编辑权时的"保存""退出编辑"等），焦点交给一直在的返回链接
 // （规范 §2.4，审查 A2）；编辑器没能重新打开时，从销毁的编辑器落到 body 的焦点交给失效说明里的按钮（复验 C2）。
+// M3-P4（设计 §3.5、§3.9）：编辑时页头的保存状态是 save-indicator.ts 的全集（已保存到云端、有未保存的修改、保存中、公式结果尚未保存、
+// 自动重试中、保存失败、已离线、暂停与终态）；看得见的状态照常变，读屏只播有意义的变化（SaveAnnouncer）——模式的切换照旧都播，编辑时
+// 例行的"有未保存的修改 → 保存中… → 已保存到云端"只改看得见的文字。失败的说明在自动重试期间保留（保存的状态机留着上一次的原因）；
+// "保存"不随保存中变灰（在途时按下排一次）。阅读时本页显示的这一版"公式待更新"时，在读屏状态区里说明（能编辑的人另说进入编辑之后会重算）。
+// 页头的文档详情没能刷新时，"重试"在重新取的过程中说正在重试（DEF-045）。
 // 编辑器本身挂在页头之外的容器里（editor.html 的 #sheet-editor），不归 React 管。
 import type { SnapshotRule } from '@nerve-office/contracts'
 import type { ReactNode, RefObject } from 'react'
@@ -19,6 +24,7 @@ import type { LeaseHolder, LeaseLoss } from './edit-lease.ts'
 import type { CopyState, LostMode, ReadingMode, ReadingNotice } from './edit-mode.ts'
 import type { EditorPage, EditorPageLoad, EditorPageReady, EditorPageSession, EditorPageView } from './editor-page.ts'
 import type { SaveProblem, SaveView } from './save-coordinator.ts'
+import type { SaveIndicator } from './save-indicator.ts'
 import { documentPagePath, SNAPSHOT_MAX_RAW_BYTES, SNAPSHOT_WARN_RAW_BYTES, snapshotInvalidDetailsSchema } from '@nerve-office/contracts'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { ArrowLeft } from 'lucide-react'
@@ -35,6 +41,7 @@ import { DetailRefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { StatusRegion } from '../../shared/ui/status-region.tsx'
 import { ConfirmDialog } from '../confirmation/index.ts'
 import { editorQueryClient } from './editor-query-client.ts'
+import { ANNOUNCEMENT_MS, announcementKey, saveIndicator } from './save-indicator.ts'
 import { EditorShareEntry } from './share-entry.tsx'
 
 /**
@@ -90,10 +97,14 @@ function problemMessage(problem: SaveProblem, sessionProblem: unknown): { text: 
   return { text: editorMessages.saveFailed(error.message), requestId: error.requestId, destructive: true }
 }
 
+/** 编辑时页头的保存状态（设计 §3.9）：保存的状态机连同自动保存这一侧的状态 */
+function indicatorOf(view: EditorPageView, save: SaveView): SaveIndicator {
+  return saveIndicator(save, view.autosave)
+}
+
 /**
- * 页头的状态（一直在的 role="status"，模式切换、保存状态的变化随之播报）。显式写 aria-live（语义不变：role="status" 本来就是 polite，
- * M2-P5 复验第二轮 G1）：保存在后台进行，分享对话框（模态）开着时也会完成或失败；Radix 的模态弹窗打开时把弹窗之外的内容都标为
- * aria-hidden，只跳过那一刻已经在的、显式写了 aria-live 的元素（aria-hidden 库的 hideOthers）
+ * 页头看得见的状态：模式（打开中、只能查看、进入与退出编辑、编辑权已失效……）与编辑时的保存状态。它本身不是读屏的播报区：
+ * 读屏播的是 SaveAnnouncer 的那一句（只播有意义的变化）
  */
 function headerStatus(view: EditorPageView): string {
   const { load, mode, save } = view
@@ -115,7 +126,7 @@ function headerStatus(view: EditorPageView): string {
     case 'editing':
       if (view.confirmingSession)
         return messages.auth.checkingSession
-      return save === undefined ? '' : editorMessages.status[save.status]
+      return save === undefined ? '' : editorMessages.saveState[indicatorOf(view, save)]
     case 'exiting':
       return editorMessages.mode.exiting
     case 'losing':
@@ -128,9 +139,52 @@ function headerStatus(view: EditorPageView): string {
   }
 }
 
+/** 读屏的播报：key 一样就不再播（undefined 是不改播报区，见 announcementOf）；text 是要播的那一句 */
+interface Announcement {
+  readonly key: string | undefined
+  readonly text: string
+}
+
+/**
+ * 读屏要播的那一句（设计 §3.9）：模式的切换、会话的确认照旧每次都播（key 就是那句话）；编辑时按保存状态的 announcementKey
+ * （save-indicator.ts：只播有意义的变化，例行的"有未保存的修改""保存中…"不改播报区）
+ */
+function announcementOf(view: EditorPageView): Announcement {
+  const text = headerStatus(view)
+  if (view.mode?.kind === 'editing' && !view.confirmingSession && view.save !== undefined) {
+    const key = announcementKey(indicatorOf(view, view.save))
+    return { key: key === undefined ? undefined : `save:${key}`, text }
+  }
+  return { key: `page:${text}`, text }
+}
+
+/**
+ * 读屏的播报区（role="status"，一直在、只做视觉隐藏）：announcementOf 的 key 变了才换上新的一句，ANNOUNCEMENT_MS 之后清空。
+ * 显式写 aria-live（语义不变：role="status" 本来就是 polite，M2-P5 复验第二轮 G1）：保存在后台进行，分享对话框（模态）开着时也会完成或失败；
+ * Radix 的模态弹窗打开时把弹窗之外的内容都标为 aria-hidden，只跳过那一刻已经在的、显式写了 aria-live 的元素（aria-hidden 库的 hideOthers）
+ */
+function SaveAnnouncer({ view }: { view: EditorPageView }) {
+  const next = announcementOf(view)
+  const [spoken, setSpoken] = useState<Announcement>(() => (next.key === undefined ? { key: undefined, text: '' } : next))
+  const [cleared, setCleared] = useState(false)
+  // 渲染中按这一次的结果调整（React 的写法：随即重新渲染，不经 effect 多渲染一轮）
+  if (next.key !== undefined && next.key !== spoken.key) {
+    setSpoken(next)
+    setCleared(false)
+  }
+  useEffect(() => {
+    if (cleared || spoken.text === '')
+      return
+    const timer = setTimeout(setCleared, ANNOUNCEMENT_MS, true)
+    return () => clearTimeout(timer)
+  }, [spoken, cleared])
+  return <p role="status" aria-live="polite" className="sr-only">{cleared ? '' : spoken.text}</p>
+}
+
 /**
  * 编辑时（与退出编辑的过程中）页头里能做的事。不可用一律用 aria-disabled：按钮变成 disabled 时焦点会丢（审查 B13），重复点击由
- * 保存的状态机、页面挡住。退出中两个按钮都留着（"退出编辑"说正在退出）：没有退出成功（保存失败、公式没收齐）时焦点还在它上面（审查 A2）
+ * 保存的状态机、页面挡住。"保存"不随保存中变灰：在途时按下排一次（M3-P4 设计 §3.9）。退出中两个按钮都留着（"退出编辑"说正在退出）：
+ * 没有退出成功（保存失败、公式没收齐）时焦点还在它上面（审查 A2）
  */
 function SaveControls({ page, save, confirming, exiting, apple }: { page: EditorPage, save: SaveView, confirming: boolean, exiting: boolean, apple: boolean }) {
   return (
@@ -261,14 +315,7 @@ function SaveNotices({ view, save, onReload }: { view: EditorPageView, save: Sav
       </Alert>,
     )
   }
-  // 会话不是本人时本页不能保存，"稍后再保存一次"不成立（复验 SB9）；与服务端不兼容之后同样不成立
-  if (save.formulasPending && save.status !== 'saving' && session === 'active' && block === undefined) {
-    notices.push(
-      <Alert key="formulas">
-        <AlertDescription>{editorMessages.formulasPending}</AlertDescription>
-      </Alert>,
-    )
-  }
+  // "公式结果尚未保存"由页头的保存状态说（算完之后自动保存，M3-P4 设计 §3.9），不另给说明
   return notices
 }
 
@@ -422,7 +469,8 @@ function elsewhereNotice(holder: LeaseHolder | undefined, canEdit: boolean, rele
 
 /**
  * 阅读时的说明，放进一直在的读屏状态区（规范 §2.4）：谁在编辑（能不能编辑都说：US-M3-04 的"其他人"包括查看者，编辑状态能读就能看；
- * P2 的定期检查会让它变化）、文档读不到了、有更新与正在载入（页头的按钮之外读屏也听得到，审查 A6）、另存为副本成功
+ * P2 的定期检查会让它变化）、文档读不到了、有更新与正在载入（页头的按钮之外读屏也听得到，审查 A6）、另存为副本成功、
+ * 本页显示的这一版"公式待更新"（M3-P4 设计 §3.5 第 4 条：能编辑的人另说进入编辑之后会重算并保存）
  */
 function readingInfo(reading: ReadingMode | undefined): ReactNode {
   if (reading === undefined)
@@ -436,6 +484,9 @@ function readingInfo(reading: ReadingMode | undefined): ReactNode {
     lines.push(<span key="update">{reading.update === 'loading' ? editorMessages.mode.updating : editorMessages.mode.updateAvailable}</span>)
   if (reading.notice?.kind === 'copied')
     lines.push(<span key="copied"><CopiedNote title={reading.notice.document.title} documentId={reading.notice.document.id} /></span>)
+  // 读不到了时不说（之前打开的内容，进入编辑也不可能）
+  if (reading.formulasPending && !reading.gone)
+    lines.push(<span key="formulas">{editorMessages.mode.formulasPending(reading.canEdit && reading.blocked === undefined)}</span>)
   return lines.length === 0 ? undefined : <>{lines.flatMap((line, index) => index === 0 ? [line] : [' ', line])}</>
 }
 
@@ -565,7 +616,9 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
           <div className="ml-auto flex items-center gap-3">
             {/* 分享（M2-P5）：只在能分享时出现 */}
             {ready !== undefined && <EditorShareEntry page={page} ready={ready} fallbackFocus={() => backRef.current?.focus()} />}
-            <p role="status" aria-live="polite" className="text-sm whitespace-nowrap text-muted-foreground">{headerStatus(view)}</p>
+            {/* 看得见的状态（不是播报区：例行的变化只改文字）与读屏的播报区（只播有意义的变化） */}
+            <p data-slot="header-status" className="text-sm whitespace-nowrap text-muted-foreground">{headerStatus(view)}</p>
+            <SaveAnnouncer view={view} />
             {(reading !== undefined || entering) && <ReadingControls page={page} reading={reading} session={view.session} confirming={view.confirmingSession} />}
             {editing !== undefined && <SaveControls page={page} save={editing} confirming={view.confirmingSession} exiting={mode?.kind === 'exiting'} apple={apple} />}
           </div>
@@ -575,7 +628,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
         <div className="flex flex-col gap-2 px-3 empty:hidden [&:not(:empty)]:py-2">
           {/* 一直渲染（没有问题时什么也不画）：重试成功、说明连同"重试"一起消失时它才能把焦点交给返回链接（DEF-040） */}
           <DetailRefreshProblem
-            query={{ isRefetchError: view.detailProblem !== undefined, error: view.detailProblem, refetch: page.refreshDetail }}
+            query={{ isRefetchError: view.detailProblem !== undefined, isRefetching: view.detailRefreshing, error: view.detailProblem, refetch: page.refreshDetail }}
             detail={editorMessages.detail}
             fallbackFocus={backRef}
           />

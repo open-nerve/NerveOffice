@@ -6,7 +6,8 @@
 // - 上传（设计 §3.3）：最近一次捕获还没传过时，修改停下 AUTOSAVE_UPLOAD_QUIET_MS、捕获覆盖了全部修改就上传；持续编辑时从第一处没上传的修改算起
 //   最长 AUTOSAVE_UPLOAD_MAX_MS 上传一次；同时至多一个在途（保存的状态机一个接一个，这里在它结束之前不再发起），在途期间照常捕获，回包之后立即再看。
 //   只在联网、会话是本人且令牌不是已知失效、没被停住、不在终态时上传；会话回到本人、恢复联网、回到前台时立即再看；
-// - 立即上传（设计 §3.4，flush）：保存按钮、退出编辑、交出与空闲释放（P5）先提交单元格、等公式（至多捕获的上限，从按下算）再捕获、上传；
+// - 立即上传（设计 §3.4，flush）：保存按钮、退出编辑、交出与空闲释放（P5）先等面板里防抖中的改动写进模型、提交单元格、
+//   等公式（至多捕获的上限，从按下算）再捕获、上传；
 //   切到后台（可见性变成 hidden）由这里按页面的信号同步捕获（不提交单元格、不等公式，没收齐就带标记）、立刻发起上传——全程不靠计时器
 //   （Safari 约 6 秒之后停计时器）；恢复联网时不等上传的静默；
 // - 会话内去重（设计 §3.7）：上传带上快照的摘要（注入的 digest，生产是 crypto.subtle 的 SHA-256），由保存的状态机比较；显式保存不去重；
@@ -477,6 +478,20 @@ export function createAutosave(options: AutosaveOptions): Autosave {
       retryAt = undefined
     immediate = false
     notify()
+    let finished = false
+    /** 结果出来之后（保存的状态机在视图更新之前同步交来，或者 save 兑现时）：只做一次 */
+    const finish = (outcome: SaveOutcome): void => {
+      if (finished)
+        return
+      finished = true
+      runs.delete(run)
+      if (disposed)
+        return
+      observe({ kind: 'upload', trigger, startedAt, at: clock.now(), seq: run.seq, outcome })
+      afterUpload(outcome, run.serial)
+      notify()
+      kick()
+    }
     const outcome = await uploader.save(async (): Promise<PreparedCapture> => {
       run.started = true
       const entry = await source()
@@ -487,14 +502,8 @@ export function createAutosave(options: AutosaveOptions): Autosave {
       // 这一份是此刻最近的捕获，之后的修改不在里面：上传的上限从它们之中的第一处算
       firstUnuploadedAt = firstUncapturedAt
       return { seq: entry.seq, snapshot: entry.snapshot, bytes: entry.bytes, formulasPending: entry.formulasPending, digest: await digestOf(entry) }
-    }, { dedupe })
-    runs.delete(run)
-    if (!disposed) {
-      observe({ kind: 'upload', trigger, startedAt, at: clock.now(), seq: run.seq, outcome })
-      afterUpload(outcome, run.serial)
-      notify()
-      kick()
-    }
+    }, { dedupe, onOutcome: finish })
+    finish(outcome)
     return outcome
   }
 
@@ -706,10 +715,10 @@ export function createAutosave(options: AutosaveOptions): Autosave {
         return { ...savedState(), outcome: undefined }
       const rule = FLUSH_RULES[reason]
       if (rule.prepare) {
-        // 等公式至多捕获的上限，从按下算（排在在途的保存后面时，等过的时间也算在里面）
+        // 等公式至多捕获的上限，从按下算（排在在途的保存后面、等面板的防抖、提交单元格时，用掉的时间也算在里面）
         const deadline = clock.now() + tuning.limits().captureMaxMs
         const outcome = await runUpload(reason, async () => prepareCapture(editor, {
-          settleTimeoutMs: Math.max(0, deadline - clock.now()),
+          settleTimeoutMs: () => deadline - clock.now(),
           take: formulasPending => captureNow(reason, formulasPending),
         }), rule.dedupe)
         return { ...savedState(), outcome }

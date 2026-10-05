@@ -9,6 +9,13 @@
 // 删除工作表会触发新的一轮（它的脏区转换清掉依赖缓存，sheets-formula 的 active-dirty.controller.ts:260-273），
 // 所以"等一张已删除的表写回"只会停留到下一轮开始，不必在捕获前调用 Facade 查询工作表是否还在。
 // 不用 onCalculationResultApplied：Worker 模式下它在第一张表写回后就返回，也不等排队的下一轮（M0-P3 报告 §3.3）
+// M3-P4：
+// - 进入编辑时强制全量重算（带"公式待更新"的文档，设计 §3.5 第 3 条，forcedRound）：看到强制重算的触发命令之前一律不算收齐。
+//   SDK 在工作簿加入与渲染完成时执行它（initialFormulaComputing 为 FORCED，sheets-formula 的 update-formula.controller.ts:265-287、
+//   trigger-calculation.controller.ts:291-297，1.0.1 的 lib/es/index.js 同样），都在 createSheetEditor 返回之前；这里不靠这个先后——
+//   万一更晚，收齐也不会先为真（否则自动保存的补捕获存下重算之前的旧值、清掉服务端的标记）。看到之后它就是排队的一轮（候选），照三个条件；
+// - observe 交回收齐与否可能因这条命令而变（开始、停止、结果、完成通知、本文档的写回，或者会触发计算的命令）：变更检测据此发出
+//   公式进度的信号，自动保存随即再看（autosave.ts）。计算中的进度通知（只有 stageInfo）不算
 import type { CommandRecord } from './command-record.ts'
 import { FORMULA_PROTOCOL } from '../internal-api/index.ts'
 import { stringParam } from './command-record.ts'
@@ -30,10 +37,13 @@ export interface FormulaProgress {
   readonly appliedSheets: readonly string[]
   /** 最近一轮开始之后，有会触发计算的命令 */
   readonly queued: boolean
+  /** 要求了强制全量重算（forcedRound），还没看到它的触发命令 */
+  readonly awaitingForcedRound: boolean
 }
 
 export interface FormulaSettleTracker {
-  observe: (record: CommandRecord) => void
+  /** 记下一条命令；交回收齐与否可能因它而变（见文件头） */
+  observe: (record: CommandRecord) => boolean
   isSettled: () => boolean
   progress: () => FormulaProgress
 }
@@ -41,6 +51,8 @@ export interface FormulaSettleTracker {
 export interface FormulaSettleTrackerOptions {
   readonly unitId: string
   readonly triggerCheck: CalculationTriggerCheck
+  /** 以强制全量重算创建（带"公式待更新"的文档进入编辑）：看到带 forceCalculation 的触发命令之前一律不算收齐（见文件头） */
+  readonly forcedRound?: boolean
 }
 
 /** 结果里带结果的本文档的表：与写回控制器的遍历一致，cellData 为 null 的跳过 */
@@ -50,6 +62,14 @@ function resultSheetsOf(record: CommandRecord, unitId: string): string[] {
   if (sheets == null)
     return []
   return Object.entries(sheets).filter(([, cellData]) => cellData != null).map(([sheetId]) => sheetId)
+}
+
+/** 强制全量重算的触发命令：SetTriggerFormulaCalculationStartMutation，参数（脏区）里 forceCalculation 为真 */
+function isForcedTrigger(record: CommandRecord): boolean {
+  if (record.id !== FORMULA_PROTOCOL.forceTriggerMutationId)
+    return false
+  const params = record.params as Record<string, unknown> | null | undefined
+  return params?.[FORMULA_PROTOCOL.forceCalculationParam] === true
 }
 
 function memoize(evaluate: () => boolean): () => boolean {
@@ -67,10 +87,12 @@ export function createFormulaSettleTracker(options: FormulaSettleTrackerOptions)
   let appliedSheets = new Set<string>()
   // 最近一轮开始之后执行的、会触发计算的命令；开始新的一轮时清空（之前的命令都并进了这一轮）
   let candidates: (() => boolean)[] = []
+  let awaitingForced = options.forcedRound === true
 
   const queued = (): boolean => candidates.some(isDirty => isDirty())
 
-  function trackProgress(record: CommandRecord): void {
+  /** 一轮的进展；交回收齐与否可能因此而变 */
+  function trackProgress(record: CommandRecord): boolean {
     switch (record.id) {
       case FORMULA_PROTOCOL.startMutationId:
         round += 1
@@ -80,36 +102,46 @@ export function createFormulaSettleTracker(options: FormulaSettleTrackerOptions)
         resultSheets = null
         appliedSheets = new Set()
         candidates = []
-        return
+        return true
       case FORMULA_PROTOCOL.stopMutationId:
         stopped = true
-        return
+        return true
       case FORMULA_PROTOCOL.resultMutationId:
         resultSheets = resultSheetsOf(record, unitId)
-        return
+        return true
       case FORMULA_PROTOCOL.notificationMutationId: {
         const state = (record.params as Record<string, unknown> | null | undefined)?.[FORMULA_PROTOCOL.executedStateParam]
-        if (typeof state === 'number' && FORMULA_PROTOCOL.completedStates.includes(state))
-          completed = true
-        return
+        if (typeof state !== 'number' || !FORMULA_PROTOCOL.completedStates.includes(state))
+          return false
+        completed = true
+        return true
       }
       case FORMULA_PROTOCOL.setRangeValuesMutationId: {
         const sheetId = stringParam(record, 'subUnitId')
-        if (record.options?.[FORMULA_PROTOCOL.applyResultOption] === true && stringParam(record, 'unitId') === unitId && sheetId !== undefined)
-          appliedSheets.add(sheetId)
+        if (record.options?.[FORMULA_PROTOCOL.applyResultOption] !== true || stringParam(record, 'unitId') !== unitId || sheetId === undefined)
+          return false
+        appliedSheets.add(sheetId)
+        return true
       }
+      default:
+        return false
     }
   }
 
   return {
     observe(record) {
-      trackProgress(record)
+      let progressed = trackProgress(record)
+      if (awaitingForced && isForcedTrigger(record)) {
+        awaitingForced = false
+        progressed = true
+      }
       const candidate = triggerCheck(record)
       if (candidate !== null)
         candidates.push(memoize(candidate))
+      return progressed || candidate !== null
     },
     isSettled() {
-      if (queued())
+      if (awaitingForced || queued())
         return false
       if (!started)
         return true
@@ -119,6 +151,15 @@ export function createFormulaSettleTracker(options: FormulaSettleTrackerOptions)
         return completed
       return resultSheets.every(sheetId => appliedSheets.has(sheetId))
     },
-    progress: () => ({ round, started, stopped, completed, resultSheets: resultSheets === null ? null : [...resultSheets], appliedSheets: [...appliedSheets], queued: queued() }),
+    progress: () => ({
+      round,
+      started,
+      stopped,
+      completed,
+      resultSheets: resultSheets === null ? null : [...resultSheets],
+      appliedSheets: [...appliedSheets],
+      queued: queued(),
+      awaitingForcedRound: awaitingForced,
+    }),
   }
 }

@@ -105,7 +105,8 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     }, { times: 1 })
     await typeInCell(page, 'A1', 'first')
     await saveButton(page).click()
-    await expect(saveStatus(page)).toHaveText('保存失败')
+    // 结果未知的失败会自动重试（M3-P4 设计 §3.8；测试构建暂停了定时的上传，这里不会真的重试）
+    await expect(saveStatus(page)).toHaveText('保存失败，稍后自动重试')
     expect((await savedContent(page, documentId)).revision).toBe(2)
 
     // 接着修改再保存：基准修订号已经过时，冲突的来源是本页那一次保存，换上当前修订号重发

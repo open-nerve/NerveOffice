@@ -60,6 +60,8 @@ export function useFolderTrail(spaceId: string, folderIds: readonly string[]): F
     }),
     location: {
       isRefetchError: staleLevels.length > 0,
+      // 失败的那几层有一层在重新请求：重试进行中（DEF-045）
+      isRefetching: staleLevels.some(level => level.isRefetching),
       error: staleLevels[0]?.error ?? null,
       refetch: async () => Promise.all(staleLevels.map(async level => level.refetch())),
     },

@@ -422,6 +422,86 @@ describe('模式切换一律重建（M3-P2 设计 §3.1、§3.3）', () => {
   })
 })
 
+describe('自动保存要的信号与强制全量重算（M3-P4 设计 §3.2、§3.4–§3.6、§3.10）', () => {
+  it.each([
+    [true, true],
+    [false, false],
+    [undefined, false],
+  ] as const)('recalculate = %s：档案的上下文与收齐的跟踪器都拿到它（强制重算 = %s）', async (recalculate, forced) => {
+    const facade = steppingFacade([], 'unit-p4')
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-p4'), access: 'edit', recalculate })
+    await reachReady(facade)
+    const editor = await creating
+    expect(vi.mocked(sheetPluginEntries)).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ recalculate: forced }))
+    expect(vi.mocked(createChangeTracker)).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.anything(), expect.anything(), { forcedRound: forced })
+    // 档案里没有公式插件，触发命令不会来：要求了强制重算时一直不算收齐
+    expect(editor.formulasSettled()).toBe(!forced)
+    editor.dispose()
+  })
+
+  it('组合输入：容器所在的页面上的组字（页头里的除外）；销毁之后不再算', async () => {
+    const facade = steppingFacade([], 'unit-p4')
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    const chrome = document.createElement('header')
+    const field = document.createElement('input')
+    chrome.append(field)
+    const container = document.createElement('div')
+    const input = document.createElement('textarea')
+    container.append(input)
+    document.body.append(chrome, container)
+    const creating = createSheetEditor({ container, snapshot: sheetSnapshotFor('unit-p4'), access: 'edit', pageUi: chrome })
+    await reachReady(facade)
+    const editor = await creating
+    const listener = vi.fn()
+    editor.onCompositionChange(listener)
+    field.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    expect(editor.composing()).toBe(false)
+    input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    expect(editor.composing()).toBe(true)
+    expect(listener).toHaveBeenCalledOnce()
+    editor.dispose()
+    expect(editor.composing()).toBe(false)
+    input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+    expect(listener).toHaveBeenCalledOnce()
+    chrome.remove()
+    container.remove()
+  })
+
+  it('面板的防抖：没有面板开着时立即兑现；批注浮层开着时键入，等它的防抖到点', async () => {
+    const facade = steppingFacade([], 'unit-p4')
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    const container = document.createElement('div')
+    document.body.append(container)
+    const creating = createSheetEditor({ container, snapshot: sheetSnapshotFor('unit-p4'), access: 'edit' })
+    await reachReady(facade)
+    const editor = await creating
+    await editor.settlePanels()
+    const note = document.createElement('textarea')
+    note.dataset.uComp = 'note-textarea'
+    document.body.append(note)
+    note.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    const started = performance.now()
+    await editor.settlePanels()
+    expect(performance.now() - started).toBeGreaterThanOrEqual(250)
+    editor.dispose()
+    note.remove()
+    container.remove()
+  })
+
+  it('公式进度的信号就是变更检测的跟踪器的', async () => {
+    const facade = steppingFacade([], 'unit-p4')
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-p4'), access: 'edit' })
+    await reachReady(facade)
+    const editor = await creating
+    const tracker = vi.mocked(createChangeTracker).mock.results[0]?.value as ReturnType<typeof createChangeTracker>
+    expect(editor.onFormulaProgress).toBe(tracker.onFormulaProgress)
+    editor.dispose()
+    expect(editor.formulasSettled()).toBe(false)
+  })
+})
+
 /**
  * 真实插件下的假 Facade：createWorkbook 用这个 Univer 建表格单元（档案的数据插件照常注册资源 hook、加载资源），
  * 记下"创建工作簿"；生命周期由用例推进（与 steppingFacade 相同）

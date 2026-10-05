@@ -2,12 +2,17 @@
 // 界面（editor-chrome.tsx）只订阅这里的状态。编辑器在 React 之外创建：一页一份文档，模式切换一律重建（M3-P2 设计 §3.1）。
 // 打开即阅读：载入之后以只读创建；地址带 ?edit=new（新建表格之后的跳转）而且能编辑时直接进入编辑，进入之后去掉这个参数。
 // 交互屏障：载入期间、进入与退出编辑、失去编辑权的过程中，以及每次新建编辑器时，页头之外的输入一律拦下（interaction-barrier.ts）。
+// 自动保存（M3-P4 设计 §3.10）：页面把可见性、联网与"会话是本人、令牌不是已知失效"（confirmedForWrite 的口径）交给编辑模式里的调度——
+// 可见性在 visibilitychange 里同步通知（切到后台的捕获与上传不靠计时器），confirmedForWrite 的每次变化都通知（确认开始与结束、会话、
+// 确认失败的原因、令牌失效）；页面关闭（pagehide）时有保存在途不释放编辑权（edit-mode.ts 的 releaseOnHide）；按保存在保存中照样做
+// （在途时排一次）。阅读页的"公式待更新"取载入时的详情（与内容是同一版时）。页头的文档详情正在重新取时给出进行中（DEF-045）。
 import type { DocumentAccessVia, DocumentDetail, DocumentSpace, SessionResponse } from '@nerve-office/contracts'
 import type { ApiError } from '../../shared/api/index.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
+import type { AutosavePage, AutosaveView } from './autosave.ts'
 import type { LeaseClock } from './edit-lease.ts'
-import type { EditMode, EditModeApi, EditModeState } from './edit-mode.ts'
+import type { EditMode, EditModeApi, EditModeAutosave, EditModeState } from './edit-mode.ts'
 import type { LoadedContent } from './editor-api.ts'
 import type { CreateModeEditor } from './editor-slot.ts'
 import type { PageVisibility } from './reading-checks.ts'
@@ -59,6 +64,8 @@ export interface EditorPageView {
   readonly mode: EditModeState | undefined
   /** 编辑时（与退出编辑的过程中）才有：保存的状态 */
   readonly save: SaveView | undefined
+  /** 同上：自动保存这一侧的状态（联网、会话、会不会自动重试），页头连同 save 给出保存状态的全集（save-indicator.ts） */
+  readonly autosave: AutosaveView | undefined
   readonly session: EditorPageSession
   /**
    * 最近一次向服务端确认会话失败的原因（网络错误等）；确认成功之后清掉。会话不是 active 时显示在会话的提示里（复验 RB7）；
@@ -72,6 +79,8 @@ export interface EditorPageView {
   readonly confirmingSession: boolean
   /** 页头的文档详情没能刷新（DEF-040）：原因；页头留着之前的信息，可以重试。成功之后清掉 */
   readonly detailProblem: unknown
+  /** 正在重新取文档详情（DEF-045：没能刷新的说明里"重试"说正在重试） */
+  readonly detailRefreshing: boolean
   /**
    * 编辑器容器的状态（与 data-editor-state 相同）：loading 是载入或换编辑器期间（交互屏障挂着），ready 是渲染完成，steady 是
    * 渲染完成之后 3 秒，failed 是没有编辑器。测试构建的页面自检按它等到 steady（selftest-hook.ts）
@@ -83,6 +92,16 @@ export interface EditorPageApi extends EditModeApi {
   readonly session: () => Promise<SessionResponse>
   readonly document: (documentId: string) => Promise<DocumentDetail>
 }
+
+/** 页面联网与否（navigator.onLine 与 online、offline 事件）：离线时自动保存不发，恢复时立即上传（M3-P4 设计 §3.8） */
+export interface PageNetwork {
+  readonly online: () => boolean
+  /** 联网与否变了；返回退订的函数 */
+  readonly onChange: (listener: () => void) => () => void
+}
+
+/** 测试构建的自动保存控制（M3-P4 设计 §3.14）交给编辑模式的部分：节奏与暂停、日志、当前的调度 */
+export type AutosaveControlHooks = Pick<EditModeAutosave, 'tuning' | 'observe' | 'attach'>
 
 /** 地址里"新建之后直接编辑"的标记（?edit=new）：进入编辑之后去掉，刷新不再自动进入 */
 export interface EditIntent {
@@ -98,14 +117,23 @@ export interface EditorPageOptions {
   /** 页头：交互屏障挂着时只有它可以交互（interaction-barrier.ts） */
   readonly chrome: HTMLElement
   readonly api: EditorPageApi
-  /** 新建编辑器（适配层的 createSheetEditor）：容器由这里绑定 */
-  readonly createEditor: (options: Parameters<CreateModeEditor>[0] & { readonly container: HTMLElement }) => ReturnType<CreateModeEditor>
+  /**
+   * 新建编辑器（适配层的 createSheetEditor）：容器由这里绑定；页面自己的界面（页头）也交过去——组合输入与面板防抖的输入目标在页头里的
+   * 不算文档的输入（M3-P4 设计 §3.6）
+   */
+  readonly createEditor: (options: Parameters<CreateModeEditor>[0] & { readonly container: HTMLElement, readonly pageUi: Node }) => ReturnType<CreateModeEditor>
   readonly page: PageLocation
   readonly sessionChannel: SessionChannel
   /** 单调的"现在"与计时器：编辑租约的心跳、阅读时的检查 */
   readonly clock: LeaseClock
-  /** 页面的可见性：隐藏时暂停阅读时的检查 */
+  /** 页面的可见性：隐藏时暂停阅读时的检查；切到后台时自动保存立即上传（监听在 visibilitychange 里同步调用） */
   readonly visibility: PageVisibility
+  /** 联网与否（自动保存） */
+  readonly network: PageNetwork
+  /** 快照 UTF-8 字节的摘要（自动保存的会话内去重，editor-api.ts 的 snapshotDigest） */
+  readonly digest: (snapshot: string) => Promise<string>
+  /** 测试构建的自动保存控制（start.tsx 只在测试构建里给出）；生产为 undefined */
+  readonly autosaveControl?: AutosaveControlHooks | undefined
   readonly editIntent: EditIntent
   /** 当前的地址（路径与查询）：转到登录页时带上，登录之后回到这里 */
   readonly currentPath: () => string
@@ -203,6 +231,12 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   let staleAfter: number | undefined
   let sessionProblem: unknown
   let confirmingSession = false
+  /** 在途的重新取页头文档详情的次数（DEF-045：大于 0 时"重试"说正在重试） */
+  let detailRefreshes = 0
+  /** 自动保存要的页面信号（可见性、联网、confirmedForWrite）变了：通知编辑模式里的调度 */
+  const pageSignalListeners = new Set<() => void>()
+  /** 上一次通知时的 confirmedForWrite()：变了才通知 */
+  let writable = true
   const cleanups: (() => void)[] = []
   /** 交互屏障：撤掉它的函数 */
   let releaseBarrier: (() => void) | undefined
@@ -212,10 +246,32 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
 
   function computeView(): EditorPageView {
     const modeView = mode?.view()
-    return { load, mode: modeView?.mode, save: modeView?.save, session, sessionProblem, confirmingSession, detailProblem, surface: surfaceState }
+    return { load, mode: modeView?.mode, save: modeView?.save, autosave: modeView?.autosave, session, sessionProblem, confirmingSession, detailProblem, detailRefreshing: detailRefreshes > 0, surface: surfaceState }
+  }
+
+  /** 页面信号变了：在调用者的同步段里通知（可见性在 visibilitychange 里，切到后台的上传不靠计时器） */
+  function signalPage(): void {
+    for (const listener of [...pageSignalListeners]) {
+      try {
+        listener()
+      }
+      catch (error) {
+        options.reportError(error)
+      }
+    }
+  }
+
+  /** confirmedForWrite() 变了就通知（确认开始与结束、会话、确认失败的原因、令牌失效）：自动保存在它为假时不发 */
+  function syncWritable(): void {
+    const next = confirmedForWrite()
+    if (next === writable)
+      return
+    writable = next
+    signalPage()
   }
 
   function update(): void {
+    syncWritable()
     const next = computeView()
     const changed = (Object.keys(next) as (keyof EditorPageView)[]).some(key => next[key] !== current[key])
     if (!changed)
@@ -306,6 +362,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       unauthenticatedPending = true
     else
       staleAfter = checksStarted
+    syncWritable()
     void recheckSession()
   }
 
@@ -342,6 +399,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       }
       finally {
         checkInFlight = undefined
+        syncWritable()
         // 与保存有关的确认结束：会话的结果已经更新，这时才显示会话类的保存失败（复验 TB1）
         if (confirmingSession) {
           confirmingSession = false
@@ -350,6 +408,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       }
     }
     checkInFlight = run()
+    syncWritable()
     return checkInFlight
   }
 
@@ -428,12 +487,23 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     return checkInFlight === undefined && session === 'active' && sessionProblem === undefined && staleAfter === undefined
   }
 
+  /** 自动保存要的页面一侧（M3-P4 设计 §3.10） */
+  const autosavePage: AutosavePage = {
+    visible: () => !options.visibility.hidden(),
+    online: () => options.network.online(),
+    sessionWritable: confirmedForWrite,
+    onChange: (listener) => {
+      pageSignalListeners.add(listener)
+      return () => pageSignalListeners.delete(listener)
+    },
+  }
+
   function createMode(id: string): EditMode {
     const created = createEditMode({
       documentId: id,
       clientInstanceId,
       api,
-      createEditor: async editorOptions => options.createEditor({ ...editorOptions, container: surface }),
+      createEditor: async editorOptions => options.createEditor({ ...editorOptions, container: surface, pageUi: options.chrome }),
       clock,
       visibility: options.visibility,
       lastActivity: () => lastActivity,
@@ -448,11 +518,13 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         },
         saveStale: () => {
           staleAfter = checksStarted
+          syncWritable()
           void confirmForSave(true)
         },
         writeProblem,
         readProblem: () => void recheckSession(),
       },
+      autosave: { page: autosavePage, digest: options.digest, ...options.autosaveControl },
       reportError: options.reportError,
     })
     cleanups.push(created.subscribe(modeChanged))
@@ -477,9 +549,12 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         lastActivity = clock.now()
         mode?.noteActivity()
       }))
+      // 关闭时有保存在途不释放（edit-mode.ts 的 releaseOnHide，M3-P4 设计 §3.4）
       const onPageHide = (): void => mode?.releaseOnHide()
       pageWindow.addEventListener('pagehide', onPageHide)
       cleanups.push(() => pageWindow.removeEventListener('pagehide', onPageHide))
+      // 自动保存的页面信号：可见性（同步通知）与联网
+      cleanups.push(options.visibility.onChange(signalPage), options.network.onChange(signalPage))
       setSurface('loading')
       cleanups.push(sessionChannel.subscribe(() => void recheckSession()))
       let signedIn: SessionResponse
@@ -514,7 +589,9 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       const canEdit = document.permissions.canEdit
       // 这份文档由比本页新的版本写过（服务端回滚之后，M3-P3 设计 §3.5）：一开始就只能阅读、说明，不直接进入编辑
       const blocked = documentIsNewer(document) ? 'document-too-new' : undefined
-      const outcome = await opened.open({ snapshot: content.snapshot, revision: content.revision, canEdit }, { enterEdit: options.editIntent.requested && canEdit, blocked })
+      // 阅读页的"公式待更新"（M3-P4 设计 §3.5 第 4 条）：详情说的是它那一版的，与载入的内容是同一版时才用（并行读取之间有人保存过时下一次检查补上）
+      const formulasPending = document.formulasPending && document.revision === content.revision
+      const outcome = await opened.open({ snapshot: content.snapshot, revision: content.revision, canEdit, formulasPending }, { enterEdit: options.editIntent.requested && canEdit, blocked })
       if (disposed)
         return
       if (outcome.kind === 'load-failed') {
@@ -533,8 +610,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       const view = mode?.view()
       if (view?.mode.kind !== 'editing' || view.save === undefined)
         return
-      // 保存中、版本冲突之后再按：不做任何事（P4 设计 §3.7.2）；不因为有确认在途就把"保存中"换成"正在确认"（复验 TB9）
-      if (view.save.status === 'saving' || view.save.status === 'conflict')
+      // 版本冲突之后再按：不做任何事（P4 设计 §3.7.2）。保存中照样做：在途的结束之后立即再存一次（M3-P4 设计 §3.4、§3.9）
+      if (view.save.status === 'conflict')
         return
       if (await readyToWrite())
         await mode?.save()
@@ -569,11 +646,14 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     refreshDetail: async () => {
       if (documentId === undefined || heading === undefined || disposed)
         return
+      detailRefreshes += 1
+      update()
       let document: DocumentDetail
       try {
         document = await api.document(documentId)
       }
       catch (error) {
+        detailRefreshes -= 1
         if (disposed || heading === undefined)
           return
         // 看不到了（已经删除、移走，或者自己被移出、授权被取消）：不再能分享。未登录交给会话的确认（页头随之说明）；
@@ -583,6 +663,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
           detailProblem = undefined
         }
         else if (isAuthenticationError(error)) {
+          update()
           void recheckSession()
           return
         }
@@ -594,6 +675,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         update()
         return
       }
+      detailRefreshes -= 1
       if (disposed || heading === undefined)
         return
       heading = headingOf(document, heading.userId)
@@ -612,6 +694,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         cleanup()
       mode?.dispose()
       listeners.clear()
+      pageSignalListeners.clear()
     },
   }
 }

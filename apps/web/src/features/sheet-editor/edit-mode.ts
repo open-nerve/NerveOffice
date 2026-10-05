@@ -29,6 +29,14 @@
 // - failed：编辑器建不起来（页面按"编辑器加载失败"说明，可以重新加载）；unavailable：放弃本页的修改时读不到了（"内容不存在"）。
 // 每开始一件事（进入、退出、失去编辑权、刷新、放弃）都换一个标识：之前那件事在等待之后发现标识变了，就不再接着做。
 //
+// 自动保存（M3-P4 设计 §3.1–§3.10）：调度（autosave.ts）跟保存的状态机同生命周期——进入编辑时先建保存的状态机、再建调度、再接上编辑器；
+// 去掉保存的状态机时一并去掉；失去编辑权开始时立即去掉（在途的那一次由保存的状态机收尾）；终态之后它自己停。退出编辑：先挂起调度，
+// 有没存的就立即上传一次（flush('exit')：先等面板的防抖、提交单元格、等公式），等在途的都有结果，仍有没存的就恢复调度、留在编辑。
+// 保存按钮与快捷键是立即上传（flush('save-button')：不去重，在途时排一次）。进入编辑时申请编辑权的响应带"公式待更新"：以强制全量重算
+// 重建（slot.replace 的 recalculate），保存的状态机与调度都以它起步，收齐之后补存、服务端清掉标记。阅读时说明"公式待更新"（ReadingMode 的
+// formulasPending：载入时详情的、之后每 30 秒的编辑状态里的，只认本页显示的那一版的）。页面关闭（pagehide）时有保存在途就不释放编辑权，
+// 让它到期——否则释放多半先提交、那次保存被拒（releaseOnHide）。
+//
 // 与服务端不兼容（M3-P3 设计 §3.5、§3.10）：
 // - 编辑时保存或续租得到 CLIENT_OUTDATED（本页过旧）、DOCUMENT_TOO_NEW（文档比服务端新）：保存的状态机转入终态（需要刷新、不能保存），
 //   编辑租约停止续租、放掉手里那一代；编辑器留着（本页的修改还能复制出来），页头说明并给"重新加载"（过旧时）；
@@ -36,15 +44,17 @@
 // - 不兼容的阅读不会因为检查读到能编辑就恢复"编辑"：重新加载才是新的页面。
 import type { ConflictCopyQuery, CreatedDocument, DocumentDetail, SaveContentResponse } from '@nerve-office/contracts'
 import type { SheetEditor } from '../../editor/index.ts'
+import type { Autosave, AutosaveEvent, AutosavePage, AutosaveTuning, AutosaveView } from './autosave.ts'
 import type { Incompatibility } from './client-format.ts'
 import type { EditLease, EditLeaseApi, LeaseAcquisition, LeaseClock, LeaseHolder, LeaseLoss } from './edit-lease.ts'
 import type { FetchedEditStatus, LeaseCredentials, LoadedContent } from './editor-api.ts'
 import type { CreateModeEditor, EditorSurface } from './editor-slot.ts'
 import type { LostCopy } from './lost-copy.ts'
 import type { PageVisibility, ReadingCheckResult } from './reading-checks.ts'
-import type { CompressSnapshot, SaveCoordinator, SaveOptions, SaveRequest, SaveStatus, SaveView } from './save-coordinator.ts'
+import type { CompressSnapshot, SaveCoordinator, SaveRequest, SaveStatus, SaveView } from './save-coordinator.ts'
 import { EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
 import { ApiError, isAuthenticationError, isCsrfTokenError, isNotFoundError, isPermissionDeniedError } from '../../shared/api/index.ts'
+import { createAutosave } from './autosave.ts'
 import { incompatibilityOf } from './client-format.ts'
 import { acquireEditLease, leaseHolderOf, leaseLossOf } from './edit-lease.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
@@ -52,13 +62,6 @@ import { createEditorSlot } from './editor-slot.ts'
 import { createLostCopy } from './lost-copy.ts'
 import { createReadingChecks } from './reading-checks.ts'
 import { createSaveCoordinator } from './save-coordinator.ts'
-import { explicitCaptureSource } from './snapshot-capture.ts'
-
-/**
- * 显式保存（保存按钮、快捷键与退出编辑之前的那一次）：先提交单元格、等公式至多 3 秒再捕获，一律上传（不去重）。
- * M3-P4 设计 §6 的 S4 改由自动保存的立即上传（autosave.ts 的 flush）给出捕获
- */
-const EXPLICIT_SAVE: SaveOptions = { dedupe: false }
 
 /**
  * 退出编辑时等释放的结果，至多这么久（审查 A7）：释放只是让别人早一点能编辑，不影响正确性——没送到的那一代至多一个有效期
@@ -72,6 +75,12 @@ export const EXIT_RELEASE_WAIT_MS = 5_000
 interface ShownContent {
   readonly snapshot: string
   readonly revision: number
+}
+
+/** 服务端最近一次说的某一版的"公式待更新"（载入时的详情、阅读时的编辑状态）：阅读页只认本页显示的那一版的 */
+interface FormulasFlag {
+  readonly revision: number
+  readonly formulasPending: boolean
 }
 
 /** 阅读时上一次操作留下的说明 */
@@ -112,6 +121,12 @@ export interface ReadingMode {
    * 或者申请时得到 DOCUMENT_TOO_NEW）。不给"编辑"，页头说明；不因检查读到能编辑而恢复。没有时为 undefined
    */
   readonly blocked: Incompatibility | undefined
+  /**
+   * 本页显示的这一版带"公式待更新"（M3-P4 设计 §3.5 第 4 条）：上次保存时公式还没算完，显示的公式结果可能不对。载入时取详情的，
+   * 之后每 30 秒的编辑状态里修订号就是本页这一版时随之更新；"有更新"重建之后按那一版的（不知道时为假，下一次检查补上）。
+   * 页面放进一直在的读屏状态区说明，进入编辑时强制重算
+   */
+  readonly formulasPending: boolean
 }
 
 /**
@@ -178,6 +193,8 @@ export interface EditModeView {
   readonly mode: EditModeState
   /** 编辑时（与退出编辑的过程中）才有：保存的状态 */
   readonly save: SaveView | undefined
+  /** 同上：自动保存这一侧的状态（联网、会话、会不会自动重试），页头连同 save 给出保存状态的全集（save-indicator.ts） */
+  readonly autosave: AutosaveView | undefined
   readonly surface: EditorSurface
 }
 
@@ -225,8 +242,24 @@ export interface EditModeOptions {
   /** 原文档现在的标题：另存为副本的标题以它开头 */
   readonly title: () => string
   readonly session: EditModeSessionHooks
+  /** 自动保存（M3-P4）：页面的信号、快照的摘要与测试构建的控制 */
+  readonly autosave: EditModeAutosave
   /** 意外的错误：上报（浏览器的 reportError） */
   readonly reportError: (error: unknown) => void
+}
+
+/** 自动保存要的页面一侧（编辑器页给出，M3-P4 设计 §3.10） */
+export interface EditModeAutosave {
+  /** 可见性、联网与会话（confirmedForWrite 的口径）：可见性的变化在 visibilitychange 里同步通知 */
+  readonly page: AutosavePage
+  /** 快照 UTF-8 字节的摘要（会话内去重，editor-api.ts 的 snapshotDigest） */
+  readonly digest: (snapshot: string) => Promise<string>
+  /** 测试构建的控制（M3-P4 设计 §3.14）：节奏与暂停；生产不给（固定的默认值） */
+  readonly tuning?: AutosaveTuning | undefined
+  /** 测试构建的控制：每次捕获与上传的日志 */
+  readonly observe?: ((event: AutosaveEvent) => void) | undefined
+  /** 测试构建的控制：当前的调度（控制的 flush 调它）；建好时交出，去掉时交出 undefined */
+  readonly attach?: ((autosave: Autosave | undefined) => void) | undefined
 }
 
 /** 打开的结果：编辑器就绪了（entered：直接进入了编辑）；编辑器建不起来；载入失败（直接进入编辑时申请得到读不到、未登录） */
@@ -243,12 +276,12 @@ export interface EditMode {
    * （新建的表格不必先阅读，M3 总设计 §2.1 的细化）；被占用、不能编辑了或请求失败就照常阅读、说明原因（与"编辑"相同，审查 A11），
    * 读不到了（404）、未登录按载入失败。blocked（打开时就看得出与服务端不兼容，M3-P3）：只能阅读，不直接进入编辑
    */
-  readonly open: (initial: { readonly snapshot: string, readonly revision: number, readonly canEdit: boolean }, options: { readonly enterEdit: boolean, readonly blocked?: Incompatibility | undefined }) => Promise<OpenOutcome>
+  readonly open: (initial: { readonly snapshot: string, readonly revision: number, readonly canEdit: boolean, readonly formulasPending?: boolean }, options: { readonly enterEdit: boolean, readonly blocked?: Incompatibility | undefined }) => Promise<OpenOutcome>
   /** 进入编辑（阅读、能编辑、没有在按新的版本重建时；"编辑"按钮，会话由页面先确认） */
   readonly enter: () => Promise<void>
   /** 退出编辑（"退出编辑"按钮，会话由页面先确认） */
   readonly exit: () => Promise<void>
-  /** 保存一次（编辑时；按钮与快捷键，会话由页面先确认） */
+  /** 立即保存一次（编辑时；按钮与快捷键，会话由页面先确认）：自动保存的立即上传，不去重，在途时排一次 */
   readonly save: () => Promise<void>
   /** "有更新，点击刷新"：按条件读取取最新的内容，重建为阅读（保留视图） */
   readonly refresh: () => Promise<void>
@@ -266,7 +299,10 @@ export interface EditMode {
   readonly updateCanEdit: (canEdit: boolean) => void
   /** 本页有键盘、鼠标操作 */
   readonly noteActivity: () => void
-  /** 页面隐藏、关闭：尽力释放编辑权（不等结果） */
+  /**
+   * 页面关闭（pagehide）：尽力释放编辑权（不等结果）。有保存在途（含终态之后核对的原样重发）时不释放，让租约到期（M3-P4 设计 §3.4）：
+   * 服务端处理保存先在子进程里检查快照、再进事务读租约，晚几毫秒发出的释放多半先提交，那次保存就被拒（released）
+   */
   readonly releaseOnHide: () => void
   /** 停止计时器，尽力释放编辑权，销毁保存的状态机与编辑器 */
   readonly dispose: () => void
@@ -278,7 +314,7 @@ type SettledReading = ReadingMode & { readonly update: 'none' | 'available' }
 /** 失去编辑权之后的阅读：被收回、不能编辑了时没有"编辑"（之后随编辑状态更新）；别处在编辑时说明是谁 */
 function readingAfter(loss: LeaseLoss, notice: ReadingNotice | undefined): ReadingMode {
   const canEdit = loss.kind !== 'denied' && !(loss.kind === 'lease' && loss.reason === 'revoked')
-  return { kind: 'reading', canEdit, holder: loss.kind === 'held' ? loss.holder : undefined, update: 'none', gone: false, notice, releaseUnconfirmed: false, blocked: undefined }
+  return { kind: 'reading', canEdit, holder: loss.kind === 'held' ? loss.holder : undefined, update: 'none', gone: false, notice, releaseUnconfirmed: false, blocked: undefined, formulasPending: false }
 }
 
 /** 副本的失败是不是"再试也一样"（见 CopyRefusal）：是的话给出是哪一种与那次的错误 */
@@ -306,12 +342,17 @@ export function createEditMode(options: EditModeOptions): EditMode {
   let lease: EditLease | undefined
   let coordinator: SaveCoordinator | undefined
   let stopWatchingCoordinator: (() => void) | undefined
+  /** 自动保存的调度（与保存的状态机同生命周期）与对它的视图的订阅 */
+  let autosave: Autosave | undefined
+  let stopWatchingAutosave: (() => void) | undefined
+  /** 服务端最近一次说的某一版的"公式待更新"（阅读页的说明只认本页显示的那一版，ReadingMode.formulasPending） */
+  let latestFlag: FormulasFlag | undefined
   /** 本页显示的内容（阅读时）：进入编辑时与申请得到的修订号比较，"有更新"时作条件读取的基准 */
   let shown: ShownContent = { snapshot: '', revision: 0 }
   /** 保存的状态机建好之前保存的基准（进入编辑时选定的那一份内容的修订号）：续上时比较 */
   let editingBase = 0
   /** 进入编辑之前的阅读：没有进入成功时回到它 */
-  let readingBefore: SettledReading = { kind: 'reading', canEdit: false, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined }
+  let readingBefore: SettledReading = { kind: 'reading', canEdit: false, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined, formulasPending: false }
   /** 失去编辑权之后的那一份（捕获的内容、失去的时刻与副本的请求）：按最新的内容回到阅读之后丢掉 */
   let lostCopy: LostCopy | undefined
   /** 正在新建可编辑的编辑器（进入编辑、直接进入编辑的打开）：这期间得知的失效等编辑器建好、进入编辑之后再处理 */
@@ -337,12 +378,13 @@ export function createEditMode(options: EditModeOptions): EditMode {
 
   /** 保存的状态只在编辑与退出编辑的过程中给出：失去编辑权之后保存的状态机还留着（核对结果未知的保存），但它的说明不再成立 */
   function computeView(): EditModeView {
-    return { mode, save: mode.kind === 'editing' || mode.kind === 'exiting' ? coordinator?.view() : undefined, surface: slot.surface() }
+    const saving = mode.kind === 'editing' || mode.kind === 'exiting'
+    return { mode, save: saving ? coordinator?.view() : undefined, autosave: saving ? autosave?.view() : undefined, surface: slot.surface() }
   }
 
   function notify(): void {
     const next = computeView()
-    if (next.mode === current.mode && next.save === current.save && next.surface === current.surface)
+    if (next.mode === current.mode && next.save === current.save && next.autosave === current.autosave && next.surface === current.surface)
       return
     current = next
     for (const listener of [...listeners])
@@ -372,6 +414,11 @@ export function createEditMode(options: EditModeOptions): EditMode {
     return !disposed && token === generation
   }
 
+  /** 服务端说的这一版的"公式待更新"（不知道时为假：下一次检查补上） */
+  function formulasPendingOf(revision: number): boolean {
+    return latestFlag?.revision === revision && latestFlag.formulasPending
+  }
+
   /** 编辑器建不起来：页面说明"编辑器加载失败"（可以重新加载） */
   function fail(error: unknown): void {
     begin({ kind: 'failed', error })
@@ -396,8 +443,11 @@ export function createEditMode(options: EditModeOptions): EditMode {
     if (result.kind === 'status') {
       const { status, serverTime } = result.fetched
       const holder = status.editor === null ? undefined : leaseHolderOf(status.editor, serverTime)
+      latestFlag = { revision: status.revision, formulasPending: status.formulasPending }
       setMode({
         ...reading,
+        // 只认本页显示的那一版的："有更新"时服务端的标记说的是更新的那一版
+        formulasPending: status.revision === shown.revision ? status.formulasPending : reading.formulasPending,
         canEdit: status.canEdit,
         holder,
         update: loading ? 'loading' : (status.revision > shown.revision ? 'available' : 'none'),
@@ -457,7 +507,19 @@ export function createEditMode(options: EditModeOptions): EditMode {
     }
   }
 
+  /** 去掉自动保存的调度（在途的上传由保存的状态机收尾）：失去编辑权开始时、去掉保存的状态机时 */
+  function disposeAutosave(): void {
+    if (autosave === undefined)
+      return
+    stopWatchingAutosave?.()
+    stopWatchingAutosave = undefined
+    autosave.dispose()
+    autosave = undefined
+    options.autosave.attach?.(undefined)
+  }
+
   function disposeCoordinator(): void {
+    disposeAutosave()
     stopWatchingCoordinator?.()
     stopWatchingCoordinator = undefined
     coordinator?.dispose()
@@ -569,11 +631,12 @@ export function createEditMode(options: EditModeOptions): EditMode {
   }
 
   /**
-   * 取得了编辑权之后：选定内容（申请得到的修订号等于本页的就用本页的，否则按条件读取取服务端的）、以可编辑重建、
-   * 建好保存的状态机再接上编辑器。读取失败时已经释放编辑权，交回错误（调用方按它说明）；重建失败时释放编辑权、以只读重建
-   * 选定的那一份内容、回到阅读并说明（再失败就是 failed）
+   * 取得了编辑权之后：选定内容（申请得到的修订号等于本页的就用本页的，否则按条件读取取服务端的）、以可编辑重建（带"公式待更新"时
+   * 强制全量重算，M3-P4 设计 §3.5）、建好保存的状态机与自动保存的调度再接上编辑器。读取失败时已经释放编辑权，交回错误（调用方按它说明）；
+   * 重建失败时释放编辑权、以只读重建选定的那一份内容、回到阅读并说明（再失败就是 failed）
    */
-  async function startEditing(token: number, held: EditLease, revision: number): Promise<'entered' | 'not-entered' | { readonly error: unknown }> {
+  async function startEditing(token: number, held: EditLease, acquired: { readonly revision: number, readonly formulasPending: boolean }): Promise<'entered' | 'not-entered' | { readonly error: unknown }> {
+    const { revision, formulasPending } = acquired
     lease = held
     editingBase = revision
     if (session !== 'active')
@@ -596,7 +659,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
         content = fetched
       editingBase = content.revision
     }
-    const created = await slot.replace('edit', content.snapshot)
+    // 申请时服务端说这份文档"公式待更新"（选定的内容就是申请时的那一版）：强制全量重算，收齐之后由自动保存补存（服务端随之清掉标记）
+    const created = await slot.replace('edit', content.snapshot, { recalculate: formulasPending })
     if (!still(token))
       return 'not-entered'
     if (created === undefined) {
@@ -612,8 +676,9 @@ export function createEditMode(options: EditModeOptions): EditMode {
       return 'not-entered'
     }
     shown = content
-    // 先建保存的状态机，再接上编辑器（撤掉屏障）：放开之后的每一处修改都有人接着。80% 的提示在第一次保存之前按载入的内容算（M3-P3）
-    coordinator = createSaveCoordinator({
+    // 先建保存的状态机，再建自动保存的调度，再接上编辑器（撤掉屏障）：放开之后的每一处修改都有人接着。80% 的提示在第一次保存之前按
+    // 载入的内容算（M3-P3）。"公式待更新"两边以同一个初值起步：页头说公式结果尚未保存、离开会提示，收齐之后补存
+    const saver = createSaveCoordinator({
       editor: created,
       compress: api.compress,
       send: async (request, body) => sendSave(held, request, body),
@@ -624,11 +689,27 @@ export function createEditMode(options: EditModeOptions): EditMode {
       onSessionStale: hooks.saveStale,
       reportError: options.reportError,
       initialSnapshotBytes: UTF8.encode(content.snapshot).byteLength,
+      initialFormulasPending: formulasPending,
     })
+    coordinator = saver
     if (pendingBlock !== undefined)
-      coordinator.block(pendingBlock)
+      saver.block(pendingBlock)
     pendingBlock = undefined
-    stopWatchingCoordinator = coordinator.subscribe(notify)
+    stopWatchingCoordinator = saver.subscribe(notify)
+    const scheduler = createAutosave({
+      editor: created,
+      page: options.autosave.page,
+      uploader: saver,
+      clock,
+      digest: options.autosave.digest,
+      initialFormulasPending: formulasPending,
+      tuning: options.autosave.tuning,
+      observe: options.autosave.observe,
+      reportError: options.reportError,
+    })
+    autosave = scheduler
+    stopWatchingAutosave = scheduler.subscribe(notify)
+    options.autosave.attach?.(scheduler)
     slot.attach(created)
     setMode({ kind: 'editing' })
     syncSaving()
@@ -660,7 +741,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
       readingBefore = { ...readingBefore, holder: acquisition.holder }
       return undefined
     }
-    const started = await startEditing(token, acquisition.lease, acquisition.revision)
+    const started = await startEditing(token, acquisition.lease, acquisition)
     if (started === 'entered')
       return { kind: 'opened', entered: true }
     if (typeof started === 'object')
@@ -688,6 +769,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
   async function lose(loss: LeaseLoss): Promise<void> {
     const token = begin({ kind: 'losing', loss })
     lease = undefined
+    // 自动保存立即停下（在途的那一次由保存的状态机收尾）：捕获本页的内容时不再起一次上传
+    disposeAutosave()
     // 副本的标题里的时间是失去编辑权的这一刻，不是点"另存为副本"的那一刻
     const lostAt = options.now()
     const saver = coordinator
@@ -698,6 +781,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
     // 副本的"公式待更新"（M3-P3 设计 §3.8）：捕获时公式还没收齐就带上标记（这里不等，按此刻的状态）；查不出时保守地带上
     let formulasPending = true
     try {
+      // 面板里防抖中的改动先写进模型（批注浮层、数据验证面板，M3-P4 设计 §3.4），副本里才有它
+      await page?.settlePanels()
       // 提交不了（SDK 提交之后仍在编辑）：这次输入不在捕获里，照实说明（审查 A4）
       if (page?.isCellEditing() === true)
         inputLeft = !(await page.commitCellEditing())
@@ -783,7 +868,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
     }
     disposeCoordinator()
     lostCopy = undefined
-    enterReading(created, content, readingAfter(from.loss, copied === undefined ? undefined : { kind: 'copied', document: copied }))
+    enterReading(created, content, { ...readingAfter(from.loss, copied === undefined ? undefined : { kind: 'copied', document: copied }), formulasPending: formulasPendingOf(content.revision) })
   }
 
   // ---- 对外 ----
@@ -797,7 +882,9 @@ export function createEditMode(options: EditModeOptions): EditMode {
 
     open: async (initial, { enterEdit, blocked }) => {
       shown = { snapshot: initial.snapshot, revision: initial.revision }
-      readingBefore = { kind: 'reading', canEdit: initial.canEdit, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked }
+      const formulasPending = initial.formulasPending === true
+      latestFlag = { revision: initial.revision, formulasPending }
+      readingBefore = { kind: 'reading', canEdit: initial.canEdit, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked, formulasPending }
       const token = generation
       if (enterEdit && initial.canEdit && blocked === undefined) {
         const outcome = await enterOnOpen(token)
@@ -842,31 +929,43 @@ export function createEditMode(options: EditModeOptions): EditMode {
         begin({ ...readingBefore, holder: acquisition.holder, releaseUnconfirmed: false })
         return
       }
-      const started = await startEditing(token, acquisition.lease, acquisition.revision)
+      const started = await startEditing(token, acquisition.lease, acquisition)
       if (typeof started === 'object' && still(token))
         begin(readingAfterFailure(started.error))
     },
 
     exit: async () => {
       const saver = coordinator
+      const scheduler = autosave
       const held = lease
       const page = slot.editor()
-      if (mode.kind !== 'editing' || saver === undefined || held === undefined || page === undefined)
+      if (mode.kind !== 'editing' || saver === undefined || scheduler === undefined || held === undefined || page === undefined)
         return
       const token = begin({ kind: 'exiting' })
-      // 先保存（在途的那一次先有结果）：没有全部存上（保存失败、版本冲突、提交不了正在编辑的单元格、公式结果还没收齐）就留在编辑，
-      // 说明由保存的状态给出
+      // 开始退出就挂起自动保存的调度（定时的捕获与上传、切到后台的上传，M3-P4 设计 §3.4）：退出用的那一次是立即上传
+      scheduler.suspend()
+      /** 留在编辑：恢复调度（立即再看），说明由保存的状态给出 */
+      const stay = (): void => {
+        scheduler.resume()
+        begin({ kind: 'editing' })
+      }
+      // 面板里防抖中的改动先写进模型（批注浮层、数据验证面板，M3-P4 设计 §3.4）：之前没有别的修改时，它们是"有没有没存的"的全部
+      await page.settlePanels()
+      if (!still(token))
+        return
+      // 有没存的就立即上传一次（提交单元格、等公式；内容与确认过的相同时不发），在途的那一次先有结果
+      if (saver.hasUnsavedWork()) {
+        await scheduler.flush('exit')
+        if (!still(token))
+          return
+      }
       await saver.settled()
       if (!still(token))
         return
+      // 没有全部存上（保存失败、版本冲突、提交不了正在编辑的单元格、公式结果还没收齐）就留在编辑
       if (saver.hasUnsavedWork()) {
-        await saver.save(explicitCaptureSource(page), EXPLICIT_SAVE)
-        if (!still(token))
-          return
-        if (saver.hasUnsavedWork()) {
-          begin({ kind: 'editing' })
-          return
-        }
+        stay()
+        return
       }
       let snapshot: string
       try {
@@ -875,7 +974,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
       catch (error) {
         options.reportError(error)
         if (still(token))
-          begin({ kind: 'editing' })
+          stay()
         return
       }
       // 释放：等它的结果，至多 EXIT_RELEASE_WAIT_MS（结果未知、到了时限也照样退出：那一代至多 90 秒内自行到期）
@@ -896,13 +995,15 @@ export function createEditMode(options: EditModeOptions): EditMode {
         fail(new Error('退出编辑时以只读重建编辑器失败'))
         return
       }
-      enterReading(created, { snapshot, revision }, { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: !released, blocked })
+      // 退出时都已存上（含公式的结果）：这一版不带"公式待更新"——补存的内容与上一版相同时修订号不变（服务端只清标记），
+      // 之前记下的这一版的标记随之作废
+      latestFlag = { revision, formulasPending: false }
+      enterReading(created, { snapshot, revision }, { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: !released, blocked, formulasPending: formulasPendingOf(revision) })
     },
 
     save: async () => {
-      const page = slot.editor()
-      if (mode.kind === 'editing' && page !== undefined)
-        await coordinator?.save(explicitCaptureSource(page), EXPLICIT_SAVE)
+      if (mode.kind === 'editing')
+        await autosave?.flush('save-button')
     },
 
     refresh: async () => {
@@ -941,7 +1042,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
         fail(new Error('按新的版本重建编辑器失败'))
         return
       }
-      enterReading(created, fetched, { ...mode, update: 'none', notice: undefined })
+      enterReading(created, fetched, { ...mode, update: 'none', notice: undefined, formulasPending: formulasPendingOf(fetched.revision) })
     },
 
     saveCopy: async () => {
@@ -1026,6 +1127,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
     noteActivity: () => lease?.noteActivity(),
 
     releaseOnHide: () => {
+      if (coordinator?.busy() === true)
+        return
       void lease?.release()
     },
 

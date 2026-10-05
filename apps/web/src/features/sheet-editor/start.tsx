@@ -1,5 +1,7 @@
-import type { EditIntent } from './editor-page.ts'
+import type { AutosaveControlHooks, EditIntent, PageNetwork } from './editor-page.ts'
 // 编辑器页的组装：真实的接口、编辑器、整页跳转与标签页之间的会话消息；挂上页头、快捷键与离开提示，然后载入。
+// 测试构建（MODE === 'e2e'）先动态引入自动保存的控制（editor/testing/autosave-control.ts，M3-P4 设计 §3.14）再组装：
+// 第一个调度建起来之前它就在（?edit=new 直接进入编辑也一样）；生产构建里这个分支与控制的分块都被去掉（门禁 artifacts 核对）。
 import type { PageVisibility } from './reading-checks.ts'
 import { documentIdFromPagePath } from '@nerve-office/contracts'
 import { StrictMode } from 'react'
@@ -9,8 +11,9 @@ import { requestSession } from '../../shared/api/index.ts'
 import { hasEditIntent, withoutEditIntent } from '../../shared/lib/edit-intent.ts'
 import { browserPageLocation } from '../../shared/lib/page-location.ts'
 import { openSessionChannel } from '../../shared/lib/session-channel.ts'
+import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
 import { browserLeaseClock } from './edit-lease.ts'
-import { acquireEditLease, fetchContent, fetchContentIfChanged, fetchDocument, fetchEditStatus, gzipText, releaseEditLease, renewEditLease, saveConflictCopy, saveContent } from './editor-api.ts'
+import { acquireEditLease, fetchContent, fetchContentIfChanged, fetchDocument, fetchEditStatus, gzipText, releaseEditLease, renewEditLease, saveConflictCopy, saveContent, snapshotDigest } from './editor-api.ts'
 import { EditorChrome } from './editor-chrome.tsx'
 import { createEditorPage } from './editor-page.ts'
 import { installPageGuards, isApplePlatform } from './page-guards.ts'
@@ -31,6 +34,19 @@ const browserVisibility: PageVisibility = {
   },
 }
 
+/** 联网与否：navigator.onLine 与 online、offline 事件（自动保存离线时不发，恢复时立即上传） */
+const browserNetwork: PageNetwork = {
+  online: () => navigator.onLine,
+  onChange: (listener) => {
+    window.addEventListener('online', listener)
+    window.addEventListener('offline', listener)
+    return () => {
+      window.removeEventListener('online', listener)
+      window.removeEventListener('offline', listener)
+    }
+  },
+}
+
 /** ?edit=new（shared/lib/edit-intent.ts）：进入编辑之后用 history.replaceState 去掉它（不留历史记录、不重新加载），刷新不再自动进入 */
 function editIntentOf(location: Location): EditIntent {
   return {
@@ -40,6 +56,21 @@ function editIntentOf(location: Location): EditIntent {
 }
 
 export function startSheetEditorPage(elements: SheetEditorPageElements): void {
+  if (import.meta.env.MODE === 'e2e') {
+    // 引入失败（分块下载失败）：照常组装，没有控制（用到它的 E2E 随之失败），错误交给浏览器的错误报告
+    void import('../../editor/testing/autosave-control.ts').then(
+      ({ installAutosaveControl }) => assemble(elements, installAutosaveControl(window, DEFAULT_AUTOSAVE_LIMITS)),
+      (error: unknown) => {
+        reportError(error)
+        assemble(elements, undefined)
+      },
+    )
+    return
+  }
+  assemble(elements, undefined)
+}
+
+function assemble(elements: SheetEditorPageElements, autosaveControl: AutosaveControlHooks | undefined): void {
   const page = createEditorPage({
     // 托管只把编辑器页的地址交给这个页面；万一不是，页面显示内容不存在
     documentId: documentIdFromPagePath(window.location.pathname),
@@ -65,6 +96,9 @@ export function startSheetEditorPage(elements: SheetEditorPageElements): void {
     sessionChannel: openSessionChannel(),
     clock: browserLeaseClock,
     visibility: browserVisibility,
+    network: browserNetwork,
+    digest: async snapshot => snapshotDigest(snapshot),
+    autosaveControl,
     editIntent: editIntentOf(window.location),
     currentPath: () => `${window.location.pathname}${window.location.search}`,
     newId: () => crypto.randomUUID(),

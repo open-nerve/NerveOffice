@@ -129,7 +129,7 @@ test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
     expect(await revisionOf(documentId)).toBe(1)
 
     await openReader(page, documentId)
-    await expect(page.locator('#editor-chrome').getByRole('banner').getByText('只能查看', { exact: true })).toBeVisible()
+    await expect(saveStatus(page)).toHaveText('只能查看')
     await expect(saveButton(page)).toHaveCount(0)
   })
 
@@ -173,7 +173,7 @@ test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
     await expect(page).toHaveURL(new RegExp(`/documents/${sharedId}$`))
     await waitForEditor(page)
     const header = page.locator('#editor-chrome').getByRole('banner')
-    await expect(header.getByText('只能查看', { exact: true })).toBeVisible()
+    await expect(saveStatus(page)).toHaveText('只能查看')
     await expect(header.getByRole('link', { name: '与我共享', exact: true })).toHaveAttribute('href', '/shared')
     await expect(header).not.toContainText('部门目录')
     await expect(saveButton(page)).toHaveCount(0)
@@ -195,11 +195,10 @@ test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
     await actAs(anotherDevice, 'POST', `/api/admin/users/${me.id}/disable`)
 
     // 编辑器页：会话已经撤销，说明登录已失效、本页的修改还在（不整页跳走），什么也没存进去。
-    // 保存与心跳续租都会得知（M3-P1）：保存先到时页头的保存状态是"保存失败"，心跳先到时按保存只确认会话、不发保存，仍是"有未保存的修改"；
-    // 两条路的说明相同，不断言是哪一条
+    // 保存与心跳续租都会得知（M3-P1）；两条路最后都是没有人登录了：自动保存暂停，页头说登录回来之后自动保存（M3-P4 设计 §3.9）
     await saveButton(page).click()
     await expect(page.getByRole('alert').filter({ hasText: '本页的修改还在' })).toBeVisible()
-    await expect(saveStatus(page)).toHaveText(/^(?:保存失败|有未保存的修改)$/)
+    await expect(saveStatus(page)).toHaveText('暂停保存：登录回来之后自动保存')
     expect(await revisionOf(documentId)).toBe(1)
 
     // 平台页面：下一次请求回到登录页；原来的密码登录不了，说法与密码错误相同

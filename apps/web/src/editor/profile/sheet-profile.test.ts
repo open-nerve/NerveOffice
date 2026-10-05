@@ -88,8 +88,18 @@ describe.each(['edit', 'read'] as const)('插件档案 sheet@1：影响数据的
 
   it('公式在 Worker 里计算：主线程的引擎、表格与表格公式都不执行公式，RPC 插件拿到传入的 Worker 实例', () => {
     expect(configOf(entries, 'UNIVER_ENGINE_FORMULA_PLUGIN')).toEqual({ notExecuteFormula: true })
-    expect(configOf(entries, 'SHEETS_FORMULA_PLUGIN')).toEqual({ notExecuteFormula: true })
+    expect(configOf(entries, 'SHEETS_FORMULA_PLUGIN')).toStrictEqual({ notExecuteFormula: true })
     expect((configOf(entries, 'UNIVER_RPC_MAIN_THREAD_PLUGIN') as { workerURL: unknown }).workerURL).toBe(formulaWorker)
+  })
+
+  it('打开时强制全量重算（recalculate，M3-P4 设计 §3.5）：只有表格公式插件多一项公开配置 initialFormulaComputing: FORCED，插件与顺序、别的配置不变', () => {
+    const recalculating = sheetPluginEntries({ container, formula, access, recalculate: true })
+    // CalculationMode.FORCED（sheets-formula 的 config/config.ts：FORCED = 0、WHEN_EMPTY = 1、NO_CALCULATION = 2）
+    expect(configOf(recalculating, 'SHEETS_FORMULA_PLUGIN')).toStrictEqual({ notExecuteFormula: true, initialFormulaComputing: 0 })
+    expect(names(recalculating)).toEqual(names(entries))
+    expect(recalculating.filter(entry => entry.plugin.pluginName !== 'SHEETS_FORMULA_PLUGIN').map(entry => entry.config))
+      .toEqual(entries.filter(entry => entry.plugin.pluginName !== 'SHEETS_FORMULA_PLUGIN').map(entry => entry.config))
+    expect(configOf(sheetPluginEntries({ container, formula, access, recalculate: false }), 'SHEETS_FORMULA_PLUGIN')).toStrictEqual({ notExecuteFormula: true })
   })
 
   it('表格插件关掉大表操作的拆分，不写 onlyRegisterFormulaRelatedMutations（它的类型只允许 true）', () => {
@@ -113,6 +123,14 @@ describe('插件档案 sheet@1：主线程的公式模式（M3-P4 设计 §3.14�
     const worker = names(sheetPluginEntries({ container, formula, access }))
     expect(names(sheetPluginEntries({ container, formula: mainThread, access }))).toEqual(worker.filter(name => name !== 'UNIVER_RPC_MAIN_THREAD_PLUGIN'))
     expect(worker).toContain('UNIVER_RPC_MAIN_THREAD_PLUGIN')
+  })
+
+  it('强制全量重算（recalculate）在主线程模式下同样只给表格公式插件加 initialFormulaComputing: FORCED', () => {
+    const entries = sheetPluginEntries({ container, formula: mainThread, access: 'edit' })
+    const recalculating = sheetPluginEntries({ container, formula: mainThread, access: 'edit', recalculate: true })
+    expect(configOf(recalculating, 'SHEETS_FORMULA_PLUGIN')).toStrictEqual({ notExecuteFormula: false, initialFormulaComputing: 0 })
+    expect(recalculating.filter(entry => entry.plugin.pluginName !== 'SHEETS_FORMULA_PLUGIN').map(entry => entry.config))
+      .toEqual(entries.filter(entry => entry.plugin.pluginName !== 'SHEETS_FORMULA_PLUGIN').map(entry => entry.config))
   })
 
   it('三处 notExecuteFormula 为假，引擎的让出间隔调到 20（M0-P3 报告 §6.3）；大表操作照样不拆分', () => {

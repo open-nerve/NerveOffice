@@ -54,6 +54,12 @@ export interface SaveOptions {
    * 看不见的改动，在途时排一次
    */
   readonly dedupe: boolean
+  /**
+   * 这一次的结果出来时、视图随之更新之前同步调用（M3-P4 S4）：调度据此先记下退避与"传过了没有"，页头连同两边的状态一起变——
+   * 否则视图先变成"保存失败"、调度的"会自动重试"晚一拍，页头与读屏先说"保存失败"再说"稍后自动重试"。
+   * 停住、终态时直接交回的结果（skipped）与并进排着的那一次时不调用（调用方等 save 兑现再处理）；抛出的错误上报，不影响保存
+   */
+  readonly onOutcome?: ((outcome: SaveOutcome) => void) | undefined
 }
 
 export interface SaveRequest {
@@ -211,6 +217,11 @@ export interface SaveCoordinator {
   readonly settled: () => Promise<void>
   /** 有一次结果未知的保存（网络错误、5xx、回包读不出来）还没有答案：它可能其实已经提交 */
   readonly hasUnknownOutcome: () => boolean
+  /**
+   * 有保存在途或排着，或者转入不兼容的终态之后正在核对（原样重发结果未知的那一次）：这时释放编辑权会让它被拒（M3-P4 设计 §3.4：
+   * 页面关闭时 pagehide 据此不释放，让租约到期——服务端处理保存先在子进程里检查快照再进事务读租约，晚几毫秒发出的释放多半先提交）
+   */
+  readonly busy: () => boolean
   /**
    * 原样重发最近一次结果未知的保存（M3-P2 设计 §3.4：失去编辑权、给副本之前）。服务端的重放先于登录的再核对与租约（P1）：
    * 它其实已经提交时拿到原来的结果——按那次捕获确认（committed），本页可能就没有没保存的内容了；确定被拒绝说明它没有提交
@@ -658,17 +669,24 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
       const run = async (): Promise<SaveOutcome> => {
         if (!saveOptions.dedupe)
           queuedExplicit = undefined
+        let outcome: SaveOutcome
         try {
-          return await attempt(source, saveOptions)
+          outcome = await attempt(source, saveOptions)
         }
         catch (error) {
           // 保存流程本身出了意外（请求本身的失败在 attempt 里已经归类）：显示保存失败，save 不会被拒绝，链也不断
-          return unexpected(error)
+          outcome = unexpected(error)
         }
-        finally {
-          pendingSaves -= 1
-          update()
+        pendingSaves -= 1
+        // 调用方先记下结果，视图再更新（见 SaveOptions.onOutcome）
+        try {
+          saveOptions.onOutcome?.(outcome)
         }
+        catch (error) {
+          options.reportError(error)
+        }
+        update()
+        return outcome
       }
       const outcome = tail.then(run)
       tail = outcome.then(() => undefined)
@@ -692,6 +710,7 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
       await verifying
     },
     hasUnknownOutcome: () => retryable !== undefined,
+    busy: () => pendingSaves > 0 || verifying !== undefined,
     replayUnknownOutcome: replay,
     hasUnsavedWork: () => conflict !== undefined || pendingSaves > 0 || editor.isCellEditing() || editor.changeSeq() > savedSeq || formulasPending,
     block: kind => enterBlocked(kind, pendingSaves > 0),

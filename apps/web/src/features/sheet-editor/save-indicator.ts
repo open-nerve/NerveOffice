@@ -1,5 +1,5 @@
 // 编辑时页头的保存状态（M3-P4 设计 §3.9）：保存的状态机的视图连同自动保存这一侧的状态（联网、会话、会不会自动重试），给出状态的全集。
-// 纯函数；怎么说、读屏播不播（只播有意义的变化）、失败的说明怎么留由页头决定（editor-chrome.tsx）。
+// 纯函数；怎么说、失败的说明怎么留由页头决定（editor-chrome.tsx）。读屏只播有意义的变化：announcementKey 给出哪些状态的变化要播。
 import type { AutosaveView } from './autosave.ts'
 import type { SaveView } from './save-coordinator.ts'
 
@@ -49,3 +49,15 @@ export function saveIndicator(save: SaveView, autosave: AutosaveView | undefined
     return 'unsaved'
   return save.formulasPending ? 'formulas-pending' : 'saved'
 }
+
+/**
+ * 读屏的播报（设计 §3.9）：这个保存状态要不要播。有意义的——失败（自动重试中、再试也一样）、离线、暂停、终态、"公式结果尚未保存"，
+ * 以及"已保存到云端"（从它们恢复、公式的补存之后）——给出一个键，键变了才播；例行的"有未保存的修改""保存中…"给 undefined，不改播报区：
+ * 往返"有未保存的修改 → 保存中… → 已保存到云端"回到的还是同一个键，不再播；失败之后自动重试（保存中）也不播，重试成功回到"已保存到云端"才播
+ */
+export function announcementKey(indicator: SaveIndicator): string | undefined {
+  return indicator === 'unsaved' || indicator === 'saving' ? undefined : indicator
+}
+
+/** 播报区里的话留多久（毫秒）：之后清空，不留着过时的话（读屏的浏览模式读得到它），下一次同样的话照样播报 */
+export const ANNOUNCEMENT_MS = 7_000

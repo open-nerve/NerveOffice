@@ -6,6 +6,7 @@ import * as internalApi from './index.ts'
 import source from './index.ts?raw'
 import injectorSource from './injector.ts?raw'
 import localeServiceSource from './locale-service.ts?raw'
+import panelDebouncesSource from './panel-debounces.ts?raw'
 import { INTERNAL_API_REGISTRY } from './registry.ts'
 import registrySource from './registry.ts?raw'
 import resourceLoadGuardSource from './resource-load-guard.ts?raw'
@@ -59,6 +60,7 @@ const SOURCES: Readonly<Record<string, string>> = {
   'formula-protocol.ts': formulaProtocolSource,
   'injector.ts': injectorSource,
   'locale-service.ts': localeServiceSource,
+  'panel-debounces.ts': panelDebouncesSource,
   'registry.ts': registrySource,
   'resource-load-guard.ts': resourceLoadGuardSource,
 }

@@ -15,6 +15,11 @@ export const FORMULA_PROTOCOL = Object.freeze({
   notificationMutationId: SetFormulaCalculationNotificationMutation.id,
   /** 强制重算的触发命令：执行它就一定会开始新的一轮 */
   forceTriggerMutationId: SetTriggerFormulaCalculationStartMutation.id,
+  /**
+   * 触发命令的参数（脏区）里"强制全量重算"的键：initialFormulaComputing 为 FORCED 时为真（sheets-formula 的
+   * update-formula.controller.ts:290-305、trigger-calculation.controller.ts:299-315 的 _getDirtyDataByCalculationMode，M3-P4）
+   */
+  forceCalculationParam: 'forceCalculation',
   /** 结果写回：每张表一条，执行选项带 applyFormulaCalculationResult */
   setRangeValuesMutationId: SetRangeValuesMutation.id,
   applyResultOption: 'applyFormulaCalculationResult',

@@ -17,8 +17,8 @@ import { expect, test } from '../../support/fixtures.ts'
 import { searchList } from '../../support/list-search.ts'
 import { plainName, shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, EDITOR_TEST_TIMEOUT, enterEditing, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
-import { expectWrittenAfterClose, recordStatusWrites, statusWrites } from '../../support/status-writes.ts'
+import { cellOf, EDITOR_TEST_TIMEOUT, enterEditing, headerAnnouncement, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
+import { expectWrittenAfterClose, recordStatusWrites, spokenWrites } from '../../support/status-writes.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -189,7 +189,7 @@ test.describe('US-M2-10 单独分享', () => {
     await expect(page).toHaveURL(new RegExp(`/documents/${documentId}$`))
     await expect(page.locator('#sheet-editor')).toHaveAttribute('data-editor-state', /^(?:ready|steady)$/, { timeout: 30_000 })
     const header = page.locator('#editor-chrome').getByRole('banner')
-    await expect(header.getByText('只能查看', { exact: true })).toBeVisible()
+    await expect(saveStatus(page)).toHaveText('只能查看')
     await expect(saveButton(page)).toHaveCount(0)
     await expect(header.getByRole('link', { name: '与我共享', exact: true })).toHaveAttribute('href', '/shared')
     await expect(header).not.toContainText(space.name)
@@ -303,15 +303,17 @@ test.describe('US-M2-10 单独分享', () => {
   })
 
   // 保存在后台进行，分享对话框（模态）开着时也会完成或失败（M2-P5 复验第二轮 G1）：Radix 打开模态弹窗时把它之外的内容都标为 aria-hidden，
-  // 只跳过那一刻已经在的、显式写了 aria-live 的元素。页头的保存状态显式写了它：结果写进去的那一刻不在 aria-hidden 之下，读屏照样播报。
+  // 只跳过那一刻已经在的、显式写了 aria-live 的元素。页头读屏的播报区显式写了它：播报写进去的那一刻不在 aria-hidden 之下，读屏照样播报。
   // 这时焦点在对话框里是对的（结果不是对话框里的操作引起的），只看写进去的那一刻在不在无障碍树里（support/status-writes.ts 的 hidden）。
-  // 被拦住的保存放行时（respond）：完成照常发出；失败回 502（代理出错），另有一条详细说明的提示条（role="alert"）随失败插入
+  // 被拦住的保存放行时（respond）：完成照常发出；失败回 502（代理出错），另有一条详细说明的提示条（role="alert"）随失败插入。
+  // M3-P4（设计 §3.9）：看得见的保存状态与读屏的播报区分开，读屏只播有意义的变化——例行的"保存中… → 已保存到云端"只改看得见的文字、
+  // 不播（announcements 为空）；失败（会自动重试）要播
   const BACKGROUND_SAVES = [
-    { outcome: '完成', user: 'sh-modal-saved', respond: async (route: Route) => route.continue(), status: '已保存到云端', failureNotices: 0 },
-    { outcome: '失败', user: 'sh-modal-failed', respond: async (route: Route) => route.fulfill({ status: 502, contentType: 'text/html', body: 'bad gateway' }), status: '保存失败', failureNotices: 1 },
+    { outcome: '完成', user: 'sh-modal-saved', respond: async (route: Route) => route.continue(), status: '已保存到云端', announcements: [], failureNotices: 0 },
+    { outcome: '失败', user: 'sh-modal-failed', respond: async (route: Route) => route.fulfill({ status: 502, contentType: 'text/html', body: 'bad gateway' }), status: '保存失败，稍后自动重试', announcements: ['保存失败，稍后自动重试'], failureNotices: 1 },
   ] as const
   for (const save of BACKGROUND_SAVES) {
-    test(`编辑器页开着分享对话框时保存${save.outcome}：页头的保存状态写进结果的那一刻不在 aria-hidden 之下；保存失败的详细说明在对话框关掉之后读得到`, async ({ page }) => {
+    test(`编辑器页开着分享对话框时保存${save.outcome}：要播的结果写进页头的播报区的那一刻不在 aria-hidden 之下；保存失败的详细说明在对话框关掉之后读得到`, async ({ page }) => {
       const owner = await createUser(save.user, '所有者')
       const title = `开着对话框保存${save.outcome}的表`
       const documentId = await createDocument(owner, title)
@@ -333,7 +335,7 @@ test.describe('US-M2-10 单独分享', () => {
         await released
         await save.respond(route)
       })
-      await recordStatusWrites(saveStatus(page))
+      await recordStatusWrites(headerAnnouncement(page))
       await saveButton(page).click()
       await expect(saveStatus(page)).toHaveText('保存中…')
       await page.locator('#editor-chrome').getByRole('button', { name: '分享', exact: true }).click()
@@ -342,11 +344,11 @@ test.describe('US-M2-10 单独分享', () => {
       // 前提：对话框开着，页头的其余部分已经对读屏隐藏（保存按钮按角色找不到）
       await expect(saveButton(page)).toHaveCount(0)
       release()
-      await expect.poll(async () => (await statusWrites(page, save.status)).length).toBe(1)
-      // 写进去的那一刻对话框还开着，保存状态不在 aria-hidden、inert、hidden 之下；对话框开着时按角色读得到
-      await expect(dialog).toBeVisible()
-      expect((await statusWrites(page, save.status)).map(write => write.hidden)).toEqual([false])
       await expect(saveStatus(page)).toHaveText(save.status)
+      // 播报区写过的话（例行的完成一句也没有）；写进去的那一刻对话框还开着，播报区不在 aria-hidden、inert、hidden 之下
+      await expect.poll(async () => (await spokenWrites(page)).map(write => write.text)).toEqual(save.announcements)
+      await expect(dialog).toBeVisible()
+      expect((await spokenWrites(page)).map(write => write.hidden)).toEqual(save.announcements.map(() => false))
       await dialog.getByRole('button', { name: '关闭', exact: true }).click()
       await expect(dialog).toHaveCount(0)
       // 保存失败的详细说明（提示条，随失败插入）：对话框开着时在 aria-hidden 之下，关掉之后读得到
